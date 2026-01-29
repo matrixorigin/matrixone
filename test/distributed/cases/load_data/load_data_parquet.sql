@@ -37,6 +37,11 @@ create table t7(id int, name varchar(100), scores json, address json, metadata j
 load data infile {'filepath'='$resources/load_data/nested_types.parq', 'format'='parquet'} into table t7;
 select * from t7;
 
+-- deep nested types (list<list>, list<struct>, nested struct, map<string, list>)
+create table t8(id int, nested_list json, list_struct json, nested_struct json, map_list json);
+load data infile {'filepath'='$resources/load_data/nested_types_deep.parq', 'format'='parquet'} into table t8;
+select * from t8;
+
 -- nullable columns
 drop table if exists pq_nullable_test;
 CREATE TABLE pq_nullable_test (

@@ -575,11 +575,13 @@ func reconstructMap(ctx context.Context, col *parquet.Column, values []parquet.V
 	if valueCol != nil && !valueCol.Leaf() {
 		valueLeafCols := collectLeafColumns(valueCol)
 
-		// Collect all keys
+		// Collect all keys with their positions
 		var keys []parquet.Value
-		for _, v := range values {
+		var keyPositions []int // position in the values slice
+		for i, v := range values {
 			if v.Column() == keyColIdx {
 				keys = append(keys, v)
+				keyPositions = append(keyPositions, i)
 			}
 		}
 
@@ -588,41 +590,95 @@ func reconstructMap(ctx context.Context, col *parquet.Column, values []parquet.V
 			return result, nil
 		}
 
-		// Group values by column for struct values
-		valuesByCol := make(map[int][]parquet.Value)
+		// Collect value column values
+		var valueColValues []parquet.Value
 		for _, v := range values {
 			colIdx := v.Column()
 			for _, leaf := range valueLeafCols {
 				if colIdx == leaf.Index() {
-					valuesByCol[colIdx] = append(valuesByCol[colIdx], v)
+					valueColValues = append(valueColValues, v)
 					break
 				}
 			}
 		}
 
-		// Build value groups by interleaving
-		for i := 0; i < numKeys; i++ {
-			keyStr := stringifyMapKey(keys[i])
-			if _, exists := result[keyStr]; exists {
-				return nil, moerr.NewInternalErrorf(ctx, "duplicate map key: %s", keyStr)
-			}
+		// For map<K, list<T>>, we need to group values by RepetitionLevel
+		// rep=0 means new row, rep=1 means new map entry, rep=2 means continue list
+		if len(valueLeafCols) == 1 {
+			// Single leaf column (e.g., map<string, list<int>>)
+			// Group values by key using RepetitionLevel
+			valueGroups := make([][]parquet.Value, numKeys)
+			currentKeyIdx := -1
 
-			group := make([]parquet.Value, 0, len(valueLeafCols))
-			for _, leaf := range valueLeafCols {
-				colValues := valuesByCol[leaf.Index()]
-				if i < len(colValues) {
-					group = append(group, colValues[i])
+			for _, v := range valueColValues {
+				rep := v.RepetitionLevel()
+				// rep <= 1 means new map entry (new key)
+				if rep <= 1 {
+					currentKeyIdx++
+					if currentKeyIdx >= numKeys {
+						break
+					}
+					valueGroups[currentKeyIdx] = make([]parquet.Value, 0)
+				}
+				if currentKeyIdx >= 0 && currentKeyIdx < numKeys {
+					valueGroups[currentKeyIdx] = append(valueGroups[currentKeyIdx], v)
 				}
 			}
 
-			if len(group) == 0 {
-				result[keyStr] = nil
-			} else {
-				nested, err := reconstructNestedByType(ctx, valueCol, group)
-				if err != nil {
-					return nil, err
+			for i := 0; i < numKeys; i++ {
+				keyStr := stringifyMapKey(keys[i])
+				if _, exists := result[keyStr]; exists {
+					return nil, moerr.NewInternalErrorf(ctx, "duplicate map key: %s", keyStr)
 				}
-				result[keyStr] = nested
+
+				if i < len(valueGroups) && len(valueGroups[i]) > 0 {
+					nested, err := reconstructNestedByType(ctx, valueCol, valueGroups[i])
+					if err != nil {
+						return nil, err
+					}
+					result[keyStr] = nested
+				} else {
+					result[keyStr] = nil
+				}
+			}
+		} else {
+			// Multiple leaf columns (e.g., map<string, struct>)
+			// Group values by column for struct values
+			valuesByCol := make(map[int][]parquet.Value)
+			for _, v := range values {
+				colIdx := v.Column()
+				for _, leaf := range valueLeafCols {
+					if colIdx == leaf.Index() {
+						valuesByCol[colIdx] = append(valuesByCol[colIdx], v)
+						break
+					}
+				}
+			}
+
+			// Build value groups by interleaving
+			for i := 0; i < numKeys; i++ {
+				keyStr := stringifyMapKey(keys[i])
+				if _, exists := result[keyStr]; exists {
+					return nil, moerr.NewInternalErrorf(ctx, "duplicate map key: %s", keyStr)
+				}
+
+				group := make([]parquet.Value, 0, len(valueLeafCols))
+				for _, leaf := range valueLeafCols {
+					colValues := valuesByCol[leaf.Index()]
+					if i < len(colValues) {
+						group = append(group, colValues[i])
+					}
+				}
+
+				if len(group) == 0 {
+					result[keyStr] = nil
+				} else {
+					nested, err := reconstructNestedByType(ctx, valueCol, group)
+					if err != nil {
+						return nil, err
+					}
+					result[keyStr] = nested
+				}
 			}
 		}
 	}
