@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -543,7 +544,7 @@ func appendListValue(builder array.Builder, jsonStr, schemaStr string) error {
 	}
 
 	var arr []any
-	if err := json.Unmarshal([]byte(jsonStr), &arr); err != nil {
+	if err := unmarshalJSONWithNumber(jsonStr, &arr); err != nil {
 		return err
 	}
 
@@ -556,7 +557,9 @@ func appendListValue(builder array.Builder, jsonStr, schemaStr string) error {
 			valueBuilder.AppendNull()
 			continue
 		}
-		appendBasicValue(valueBuilder, v, elementType)
+		if err := appendValue(valueBuilder, v, elementType); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -573,19 +576,31 @@ func appendMapValue(builder array.Builder, jsonStr, schemaStr string) error {
 		return err
 	}
 
+	// Handle empty map
+	if len(m) == 0 {
+		mapBuilder.Append(true)
+		return nil
+	}
+
 	inner := schemaStr[4 : len(schemaStr)-1]
-	_, valueType := splitMapTypesForConvert(inner)
+	keyType, valueType := splitMapTypesForConvert(inner)
 
 	mapBuilder.Append(true)
 	keyBuilder := mapBuilder.KeyBuilder()
 	itemBuilder := mapBuilder.ItemBuilder()
 
 	for k, v := range m {
-		appendBasicValue(keyBuilder, k, "string")
+		// Append key with proper type conversion
+		if err := appendValue(keyBuilder, k, keyType); err != nil {
+			return err
+		}
+		// Append value
 		if v == nil {
 			itemBuilder.AppendNull()
 		} else {
-			appendBasicValue(itemBuilder, v, valueType)
+			if err := appendValue(itemBuilder, v, valueType); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -617,14 +632,35 @@ func appendStructValue(builder array.Builder, jsonStr, schemaStr string) error {
 		if !exists || v == nil {
 			fieldBuilder.AppendNull()
 		} else {
-			appendBasicValue(fieldBuilder, v, typeStr)
+			if err := appendValue(fieldBuilder, v, typeStr); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
+// appendValue appends a value to the Arrow builder, handling both basic and nested types
+func appendValue(builder array.Builder, v any, typeStr string) error {
+	typeStr = strings.TrimSpace(typeStr)
+
+	// Check if this is a nested type that needs recursive handling
+	if strings.HasPrefix(typeStr, "list<") || strings.HasPrefix(typeStr, "map<") || strings.HasPrefix(typeStr, "struct<") {
+		// For nested types, we need to convert v back to JSON and recurse
+		jsonBytes, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		return appendComplexValue(builder, string(jsonBytes), typeStr)
+	}
+
+	// Handle basic types
+	appendBasicValue(builder, v, typeStr)
+	return nil
+}
+
 // appendBasicValue appends a basic value to the Arrow builder
-func appendBasicValue(builder array.Builder, v any, _ string) {
+func appendBasicValue(builder array.Builder, v any, typeStr string) {
 	switch b := builder.(type) {
 	case *array.BooleanBuilder:
 		if bv, ok := v.(bool); ok {
@@ -633,61 +669,110 @@ func appendBasicValue(builder array.Builder, v any, _ string) {
 			b.AppendNull()
 		}
 	case *array.Int8Builder:
-		if f, ok := v.(float64); ok {
+		if f, ok := toFloat64(v); ok {
 			b.Append(int8(f))
+		} else if s, ok := v.(string); ok {
+			// Handle string to int conversion for map keys
+			if i, err := parseInt64(s); err == nil {
+				b.Append(int8(i))
+			} else {
+				b.AppendNull()
+			}
 		} else {
 			b.AppendNull()
 		}
 	case *array.Int16Builder:
-		if f, ok := v.(float64); ok {
+		if f, ok := toFloat64(v); ok {
 			b.Append(int16(f))
+		} else if s, ok := v.(string); ok {
+			if i, err := parseInt64(s); err == nil {
+				b.Append(int16(i))
+			} else {
+				b.AppendNull()
+			}
 		} else {
 			b.AppendNull()
 		}
 	case *array.Int32Builder:
-		if f, ok := v.(float64); ok {
+		if f, ok := toFloat64(v); ok {
 			b.Append(int32(f))
+		} else if s, ok := v.(string); ok {
+			if i, err := parseInt64(s); err == nil {
+				b.Append(int32(i))
+			} else {
+				b.AppendNull()
+			}
 		} else {
 			b.AppendNull()
 		}
 	case *array.Int64Builder:
-		if f, ok := v.(float64); ok {
-			b.Append(int64(f))
+		if i, ok := toInt64(v); ok {
+			b.Append(i)
+		} else if s, ok := v.(string); ok {
+			if i, err := parseInt64(s); err == nil {
+				b.Append(i)
+			} else {
+				b.AppendNull()
+			}
 		} else {
 			b.AppendNull()
 		}
 	case *array.Uint8Builder:
-		if f, ok := v.(float64); ok {
+		if f, ok := toFloat64(v); ok {
 			b.Append(uint8(f))
+		} else if s, ok := v.(string); ok {
+			if i, err := parseUint64(s); err == nil {
+				b.Append(uint8(i))
+			} else {
+				b.AppendNull()
+			}
 		} else {
 			b.AppendNull()
 		}
 	case *array.Uint16Builder:
-		if f, ok := v.(float64); ok {
+		if f, ok := toFloat64(v); ok {
 			b.Append(uint16(f))
+		} else if s, ok := v.(string); ok {
+			if i, err := parseUint64(s); err == nil {
+				b.Append(uint16(i))
+			} else {
+				b.AppendNull()
+			}
 		} else {
 			b.AppendNull()
 		}
 	case *array.Uint32Builder:
-		if f, ok := v.(float64); ok {
+		if f, ok := toFloat64(v); ok {
 			b.Append(uint32(f))
+		} else if s, ok := v.(string); ok {
+			if i, err := parseUint64(s); err == nil {
+				b.Append(uint32(i))
+			} else {
+				b.AppendNull()
+			}
 		} else {
 			b.AppendNull()
 		}
 	case *array.Uint64Builder:
-		if f, ok := v.(float64); ok {
-			b.Append(uint64(f))
+		if i, ok := toUint64(v); ok {
+			b.Append(i)
+		} else if s, ok := v.(string); ok {
+			if i, err := parseUint64(s); err == nil {
+				b.Append(i)
+			} else {
+				b.AppendNull()
+			}
 		} else {
 			b.AppendNull()
 		}
 	case *array.Float32Builder:
-		if f, ok := v.(float64); ok {
+		if f, ok := toFloat64(v); ok {
 			b.Append(float32(f))
 		} else {
 			b.AppendNull()
 		}
 	case *array.Float64Builder:
-		if f, ok := v.(float64); ok {
+		if f, ok := toFloat64(v); ok {
 			b.Append(f)
 		} else {
 			b.AppendNull()
@@ -712,6 +797,71 @@ func appendBasicValue(builder array.Builder, v any, _ string) {
 			builder.AppendNull()
 		}
 	}
+}
+
+// toFloat64 converts a value to float64, handling json.Number for precision
+func toFloat64(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case json.Number:
+		if f, err := n.Float64(); err == nil {
+			return f, true
+		}
+	}
+	return 0, false
+}
+
+// toInt64 converts a value to int64, handling json.Number for large integers
+func toInt64(v any) (int64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return int64(n), true
+	case int:
+		return int64(n), true
+	case int64:
+		return n, true
+	case json.Number:
+		if i, err := n.Int64(); err == nil {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// toUint64 converts a value to uint64, handling json.Number for large integers
+func toUint64(v any) (uint64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return uint64(n), true
+	case int:
+		return uint64(n), true
+	case int64:
+		return uint64(n), true
+	case uint64:
+		return n, true
+	case json.Number:
+		if i, err := n.Int64(); err == nil {
+			return uint64(i), true
+		}
+	}
+	return 0, false
+}
+
+// parseInt64 parses a string to int64
+func parseInt64(s string) (int64, error) {
+	return strconv.ParseInt(s, 10, 64)
+}
+
+// parseUint64 parses a string to uint64
+func parseUint64(s string) (uint64, error) {
+	return strconv.ParseUint(s, 10, 64)
 }
 
 // Helper functions for type conversion
@@ -761,4 +911,11 @@ func splitFieldNameTypeForConvert(field string) (string, string) {
 		return field, "string"
 	}
 	return strings.TrimSpace(field[:idx]), strings.TrimSpace(field[idx+1:])
+}
+
+// unmarshalJSONWithNumber unmarshals JSON using json.Number to preserve int64 precision
+func unmarshalJSONWithNumber(jsonStr string, v any) error {
+	dec := json.NewDecoder(strings.NewReader(jsonStr))
+	dec.UseNumber()
+	return dec.Decode(v)
 }

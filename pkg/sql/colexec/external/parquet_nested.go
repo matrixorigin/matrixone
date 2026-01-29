@@ -16,6 +16,7 @@ package external
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -378,41 +379,66 @@ func reconstructListOfNested(ctx context.Context, elementCol *parquet.Column, va
 		return result, nil
 	}
 
-	expectedCols := make(map[int]bool)
-	for _, leaf := range leafCols {
-		expectedCols[leaf.Index()] = true
+	// Check if this is list<list> (single leaf column) or list<struct> (multiple leaf columns)
+	if len(leafCols) == 1 {
+		// list<list<T>> case: group by RepetitionLevel
+		// rep=0 means new row, rep=1 means new outer list element, rep=2 means continue inner list
+		var groups [][]parquet.Value
+		currentGroup := make([]parquet.Value, 0)
+
+		for _, v := range values {
+			rep := v.RepetitionLevel()
+			// rep <= 1 means new element in outer list
+			if rep <= 1 && len(currentGroup) > 0 {
+				groups = append(groups, currentGroup)
+				currentGroup = make([]parquet.Value, 0)
+			}
+			currentGroup = append(currentGroup, v)
+		}
+		if len(currentGroup) > 0 {
+			groups = append(groups, currentGroup)
+		}
+
+		for _, group := range groups {
+			nested, err := reconstructNestedByType(ctx, elementCol, group)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, nested)
+		}
+		return result, nil
 	}
 
-	// Group values by column repetition - when we see a column again, new element starts
-	var groups [][]parquet.Value
-	currentGroup := make([]parquet.Value, 0, len(leafCols))
-	seenCols := make(map[int]bool)
-
+	// list<struct> case: values are stored column-wise
+	valuesByCol := make(map[int][]parquet.Value)
 	for _, v := range values {
 		colIdx := v.Column()
-		if !expectedCols[colIdx] {
-			continue
-		}
-		if seenCols[colIdx] {
-			if len(currentGroup) > 0 {
-				groups = append(groups, currentGroup)
-			}
-			currentGroup = make([]parquet.Value, 0, len(leafCols))
-			seenCols = make(map[int]bool)
-		}
-		currentGroup = append(currentGroup, v)
-		seenCols[colIdx] = true
-	}
-	if len(currentGroup) > 0 {
-		groups = append(groups, currentGroup)
+		valuesByCol[colIdx] = append(valuesByCol[colIdx], v)
 	}
 
-	for _, group := range groups {
-		nested, err := reconstructNestedByType(ctx, elementCol, group)
-		if err != nil {
-			return nil, err
+	firstLeafIdx := leafCols[0].Index()
+	firstColValues := valuesByCol[firstLeafIdx]
+	if len(firstColValues) == 0 {
+		return result, nil
+	}
+
+	numElements := len(firstColValues)
+
+	for i := 0; i < numElements; i++ {
+		group := make([]parquet.Value, 0, len(leafCols))
+		for _, leaf := range leafCols {
+			colValues := valuesByCol[leaf.Index()]
+			if i < len(colValues) {
+				group = append(group, colValues[i])
+			}
 		}
-		result = append(result, nested)
+		if len(group) > 0 {
+			nested, err := reconstructNestedByType(ctx, elementCol, group)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, nested)
+		}
 	}
 
 	return result, nil
@@ -429,6 +455,29 @@ func reconstructList(ctx context.Context, col *parquet.Column, values []parquet.
 	if len(values) == 1 && values[0].IsNull() && values[0].RepetitionLevel() == 0 {
 		return result, nil
 	}
+
+	// Check if this is a list of nested types (list<list>, list<struct>, list<map>)
+	// For List with LogicalType, structure is: col (List) -> list (repeated) -> element
+	children := col.Columns()
+	if len(children) > 0 {
+		listChild := children[0]
+		// Check if list has element child that is nested
+		elementChildren := listChild.Columns()
+		if len(elementChildren) > 0 {
+			elementCol := elementChildren[0]
+			// If element is not a leaf, it's a nested type - use special handling
+			if !elementCol.Leaf() {
+				return reconstructListOfNested(ctx, elementCol, values)
+			}
+			// Check if element itself is a List/Map (has LogicalType)
+			elemLogicalType := elementCol.Type().LogicalType()
+			if elemLogicalType != nil && (elemLogicalType.List != nil || elemLogicalType.Map != nil) {
+				return reconstructListOfNested(ctx, elementCol, values)
+			}
+		}
+	}
+
+	// Simple list of primitive values
 	for _, v := range values {
 		if v.IsNull() {
 			result = append(result, nil)
@@ -443,9 +492,37 @@ func reconstructList(ctx context.Context, col *parquet.Column, values []parquet.
 func reconstructMap(ctx context.Context, col *parquet.Column, values []parquet.Value) (map[string]any, error) {
 	result := make(map[string]any)
 
+	// Handle empty map: no values or only NULL placeholder values
+	if len(values) == 0 {
+		return result, nil
+	}
+	// Check if all values are NULL with low definition level (empty map indicator)
+	allNull := true
+	for _, v := range values {
+		if !v.IsNull() || v.DefinitionLevel() > 1 {
+			allNull = false
+			break
+		}
+	}
+	if allNull {
+		return result, nil
+	}
+
+	// For Map with LogicalType, structure is: map -> key_value -> key/value
+	// We need to navigate to the key_value group first
+	searchCol := col
+	children := col.Columns()
+	if len(children) == 1 {
+		// This is likely the key_value group
+		kvChild := children[0]
+		if kvChild.Name() == "key_value" || kvChild.Name() == "entries" {
+			searchCol = kvChild
+		}
+	}
+
 	// Find key and value columns
 	var keyCol, valueCol *parquet.Column
-	for _, child := range col.Columns() {
+	for _, child := range searchCol.Columns() {
 		if child.Name() == "key" {
 			keyCol = child
 		} else if child.Name() == "value" {
@@ -468,10 +545,10 @@ func reconstructMap(ctx context.Context, col *parquet.Column, values []parquet.V
 
 		var keys, vals []parquet.Value
 		for _, v := range values {
-			switch v.Column() {
-			case keyColIdx:
+			// Skip NULL keys (they indicate empty entries or padding)
+			if v.Column() == keyColIdx && !v.IsNull() {
 				keys = append(keys, v)
-			case valColIdx:
+			} else if v.Column() == valColIdx {
 				vals = append(vals, v)
 			}
 		}
@@ -496,11 +573,7 @@ func reconstructMap(ctx context.Context, col *parquet.Column, values []parquet.V
 
 	// Complex case: value is nested (List/Struct/Map)
 	if valueCol != nil && !valueCol.Leaf() {
-		valueStartIdx, valueEndIdx := getNestedColumnIndexRange(valueCol)
-		groupCap := valueEndIdx - valueStartIdx
-		if groupCap < 0 {
-			groupCap = 0
-		}
+		valueLeafCols := collectLeafColumns(valueCol)
 
 		// Collect all keys
 		var keys []parquet.Value
@@ -510,36 +583,42 @@ func reconstructMap(ctx context.Context, col *parquet.Column, values []parquet.V
 			}
 		}
 
-		// Group values by RepetitionLevel
-		// Rep=0 or Rep=1 starts a new map entry, Rep>=2 continues current entry
-		valueGroups := make([][]parquet.Value, 0)
-		currentGroup := make([]parquet.Value, 0, groupCap)
+		numKeys := len(keys)
+		if numKeys == 0 {
+			return result, nil
+		}
 
+		// Group values by column for struct values
+		valuesByCol := make(map[int][]parquet.Value)
 		for _, v := range values {
 			colIdx := v.Column()
-			if colIdx >= valueStartIdx && colIdx < valueEndIdx {
-				rep := v.RepetitionLevel()
-				// Rep <= 1 means new map entry (0=new row, 1=new key_value)
-				if rep <= 1 && len(currentGroup) > 0 {
-					valueGroups = append(valueGroups, currentGroup)
-					currentGroup = make([]parquet.Value, 0, groupCap)
+			for _, leaf := range valueLeafCols {
+				if colIdx == leaf.Index() {
+					valuesByCol[colIdx] = append(valuesByCol[colIdx], v)
+					break
 				}
-				currentGroup = append(currentGroup, v)
 			}
 		}
-		if len(currentGroup) > 0 {
-			valueGroups = append(valueGroups, currentGroup)
-		}
 
-		for i, key := range keys {
-			keyStr := stringifyMapKey(key)
+		// Build value groups by interleaving
+		for i := 0; i < numKeys; i++ {
+			keyStr := stringifyMapKey(keys[i])
 			if _, exists := result[keyStr]; exists {
 				return nil, moerr.NewInternalErrorf(ctx, "duplicate map key: %s", keyStr)
 			}
-			if i >= len(valueGroups) || len(valueGroups[i]) == 0 {
+
+			group := make([]parquet.Value, 0, len(valueLeafCols))
+			for _, leaf := range valueLeafCols {
+				colValues := valuesByCol[leaf.Index()]
+				if i < len(colValues) {
+					group = append(group, colValues[i])
+				}
+			}
+
+			if len(group) == 0 {
 				result[keyStr] = nil
 			} else {
-				nested, err := reconstructNestedByType(ctx, valueCol, valueGroups[i])
+				nested, err := reconstructNestedByType(ctx, valueCol, group)
 				if err != nil {
 					return nil, err
 				}
@@ -647,10 +726,50 @@ func parquetValueToGo(v parquet.Value) any {
 	case parquet.Double:
 		return v.Double()
 	case parquet.ByteArray, parquet.FixedLenByteArray:
-		return string(v.ByteArray())
+		data := v.ByteArray()
+		// Check if this is valid UTF-8 string
+		if isValidUTF8(data) {
+			return string(data)
+		}
+		// For binary data, encode as base64 to ensure valid JSON
+		return base64.StdEncoding.EncodeToString(data)
 	default:
 		return nil
 	}
+}
+
+// isValidUTF8 checks if byte slice is valid UTF-8 string
+func isValidUTF8(data []byte) bool {
+	for i := 0; i < len(data); {
+		if data[i] < 0x80 {
+			// ASCII
+			i++
+			continue
+		}
+		// Multi-byte sequence
+		if data[i]&0xE0 == 0xC0 {
+			// 2-byte sequence
+			if i+1 >= len(data) || data[i+1]&0xC0 != 0x80 {
+				return false
+			}
+			i += 2
+		} else if data[i]&0xF0 == 0xE0 {
+			// 3-byte sequence
+			if i+2 >= len(data) || data[i+1]&0xC0 != 0x80 || data[i+2]&0xC0 != 0x80 {
+				return false
+			}
+			i += 3
+		} else if data[i]&0xF8 == 0xF0 {
+			// 4-byte sequence
+			if i+3 >= len(data) || data[i+1]&0xC0 != 0x80 || data[i+2]&0xC0 != 0x80 || data[i+3]&0xC0 != 0x80 {
+				return false
+			}
+			i += 4
+		} else {
+			return false
+		}
+	}
+	return true
 }
 
 // writeNestedToVector writes nested structure to vector

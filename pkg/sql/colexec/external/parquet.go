@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -979,7 +980,14 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				}
 			}
 		}
-	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob, types.T_json:
+	case types.T_json:
+		if st.Kind() != parquet.ByteArray && st.Kind() != parquet.FixedLenByteArray {
+			break
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processStringToJSON(proc.Ctx, mp, page, proc, vec)
+		}
+	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob:
 		if st.Kind() != parquet.ByteArray && st.Kind() != parquet.FixedLenByteArray {
 			break
 		}
@@ -1998,4 +2006,74 @@ func getParquetExpectedColCnt(param *ExternalParam) int {
 		}
 	}
 	return cnt
+}
+
+// processStringToJSON converts parquet string data to JSON format
+func processStringToJSON(ctx context.Context, mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+	numRows := int(page.NumRows())
+	if numRows == 0 {
+		return nil
+	}
+
+	nc, err := prepareNullCheck(ctx, mp, page)
+	if err != nil {
+		return err
+	}
+
+	if err := vec.PreExtend(numRows, proc.Mp()); err != nil {
+		return err
+	}
+
+	var loader strLoader
+	var indices []int32
+	dict := page.Dictionary()
+	if dict == nil {
+		loader.init(page.Data())
+		if err := validateStringDataCount(ctx, &loader, nc.actualNonNulls); err != nil {
+			return err
+		}
+	} else {
+		loader.init(dict.Page().Data())
+		data := page.Data()
+		indices = data.Int32()
+		dictLen := int(dict.Len())
+		if err := validateDictionaryIndicesCount(ctx, indices, nc.actualNonNulls); err != nil {
+			return err
+		}
+		if err := ensureDictionaryIndexes(ctx, dictLen, indices); err != nil {
+			return err
+		}
+	}
+
+	for i := 0; i < numRows; i++ {
+		if nc.isNull(i) {
+			if err := vector.AppendBytes(vec, nil, true, proc.Mp()); err != nil {
+				return err
+			}
+			continue
+		}
+
+		var data []byte
+		if dict == nil {
+			data = loader.loadNext()
+		} else {
+			idx := indices[loader.next]
+			loader.next++
+			data = loader.loadAt(idx)
+		}
+
+		// Parse JSON string and encode to internal format
+		bj, err := bytejson.ParseFromString(string(data))
+		if err != nil {
+			return moerr.NewInternalErrorf(ctx, "invalid JSON: %v", err)
+		}
+		jsonBytes, err := types.EncodeJson(bj)
+		if err != nil {
+			return moerr.NewInternalErrorf(ctx, "failed to encode JSON: %v", err)
+		}
+		if err := vector.AppendBytes(vec, jsonBytes, false, proc.Mp()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
