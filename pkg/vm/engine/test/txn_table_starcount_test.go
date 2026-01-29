@@ -340,7 +340,71 @@ func TestStarCountWithPersistedInserts(t *testing.T) {
 
 // TestStarCountReadonlyLarge tests readonly transaction with large dataset
 func TestStarCountReadonlyLarge(t *testing.T) {
-	t.Skip("Large dataset test requires full table metadata - covered by BVT tests")
+	catalog.SetupDefines("")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	ctx, cancel = context.WithTimeout(ctx, time.Minute*2)
+	defer cancel()
+
+	// Create database and table
+	txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	err = disttaeEngine.Engine.Create(ctx, "testdb", txn)
+	require.NoError(t, err)
+
+	db, err := disttaeEngine.Engine.Database(ctx, "testdb", txn)
+	require.NoError(t, err)
+
+	schema := catalog2.MockSchemaAll(3, -1)
+	schema.Name = "test_table"
+	defs, err := testutil.EngineTableDefBySchema(schema)
+	require.NoError(t, err)
+
+	err = db.Create(ctx, "test_table", defs)
+	require.NoError(t, err)
+
+	rel, err := db.Relation(ctx, "test_table", nil)
+	require.NoError(t, err)
+
+	// Insert 10k rows (reduced from 1M to keep test fast)
+	totalRows := 10000
+	batchSize := 1000
+	for i := 0; i < totalRows/batchSize; i++ {
+		bat := catalog2.MockBatch(schema, batchSize)
+		err = rel.Write(ctx, containers.ToCNBatch(bat))
+		require.NoError(t, err)
+	}
+
+	err = txn.Commit(ctx)
+	require.NoError(t, err)
+
+	// Readonly transaction
+	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	db, err = disttaeEngine.Engine.Database(ctx, "testdb", txn)
+	require.NoError(t, err)
+
+	rel, err = db.Relation(ctx, "test_table", nil)
+	require.NoError(t, err)
+
+	count, err := rel.StarCount(ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint64(totalRows), count)
+
+	err = txn.Commit(ctx)
+	require.NoError(t, err)
 }
 
 // TestStarCountInMemoryEmpty tests in-memory inserts on empty table
@@ -406,7 +470,76 @@ func TestStarCountInMemoryEmpty(t *testing.T) {
 
 // TestStarCountInMemoryLarge tests in-memory inserts with large dataset
 func TestStarCountInMemoryLarge(t *testing.T) {
-	t.Skip("Large dataset test requires full table metadata - covered by BVT tests")
+	catalog.SetupDefines("")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	ctx, cancel = context.WithTimeout(ctx, time.Minute*2)
+	defer cancel()
+
+	// Create table with 10k rows
+	txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	err = disttaeEngine.Engine.Create(ctx, "testdb", txn)
+	require.NoError(t, err)
+
+	db, err := disttaeEngine.Engine.Database(ctx, "testdb", txn)
+	require.NoError(t, err)
+
+	schema := catalog2.MockSchemaAll(3, -1)
+	schema.Name = "test_table"
+	defs, err := testutil.EngineTableDefBySchema(schema)
+	require.NoError(t, err)
+
+	err = db.Create(ctx, "test_table", defs)
+	require.NoError(t, err)
+
+	rel, err := db.Relation(ctx, "test_table", nil)
+	require.NoError(t, err)
+
+	// Insert 10k rows
+	totalRows := 10000
+	batchSize := 1000
+	for i := 0; i < totalRows/batchSize; i++ {
+		bat := catalog2.MockBatch(schema, batchSize)
+		err = rel.Write(ctx, containers.ToCNBatch(bat))
+		require.NoError(t, err)
+	}
+
+	err = txn.Commit(ctx)
+	require.NoError(t, err)
+
+	// Add 1k uncommitted rows
+	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	db, err = disttaeEngine.Engine.Database(ctx, "testdb", txn)
+	require.NoError(t, err)
+
+	rel, err = db.Relation(ctx, "test_table", nil)
+	require.NoError(t, err)
+
+	uncommittedRows := 1000
+	bat := catalog2.MockBatch(schema, uncommittedRows)
+	err = rel.Write(ctx, containers.ToCNBatch(bat))
+	require.NoError(t, err)
+
+	count, err := rel.StarCount(ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint64(totalRows+uncommittedRows), count, "10k committed + 1k uncommitted = 11k")
+
+	err = txn.Commit(ctx)
+	require.NoError(t, err)
 }
 
 // TestStarCountMixedInMemoryAndPersisted tests mixed in-memory and persisted inserts
