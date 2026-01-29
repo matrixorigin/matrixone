@@ -48,10 +48,10 @@ func TestNewMemPKFilter_WithBF(t *testing.T) {
 	ts := types.MaxTs().ToTimestamp()
 	packerPool := fileservice.NewPool(8, func() *types.Packer { return types.NewPacker() }, func(p *types.Packer) { p.Reset() }, func(p *types.Packer) { p.Close() })
 
-	bf := bloomfilter.New(100, 0.01)
+	bf := bloomfilter.NewCBloomFilterWithProbability(100, 0.01)
 	defer bf.Free()
 
-	hint := engine.FilterHint{BF: &bf}
+	hint := engine.FilterHint{BF: bf}
 	base := BasePKFilter{Op: function.EQUAL, Valid: true, Oid: types.T_int64, LB: types.EncodeFixed(int64(1))}
 
 	filter, err := NewMemPKFilter(tableDef, ts, packerPool, base, hint)

@@ -74,6 +74,8 @@ type SqlProcess struct {
 	Proc   *process.Process
 	SqlCtx *SqlContext
 
+	// Optional RuntimeFilterSpec
+	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	// Optional BloomFilter bytes attached by vector index runtime.
 	// Used to drive additional filtering in internal SQL executor (e.g. ivf entries scan).
 	BloomFilter []byte

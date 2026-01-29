@@ -1978,9 +1978,9 @@ func (tbl *txnTable) BuildReaders(
 	def := tbl.GetTableDef(ctx)
 	shards := relData.Split(newNum)
 
-	var mainBF *bloomfilter.BloomFilter
+	var mainBF *bloomfilter.CBloomFilter
 	if len(filterHint.BloomFilter) > 0 {
-		mainBF = &bloomfilter.BloomFilter{}
+		mainBF = &bloomfilter.CBloomFilter{}
 		if err := mainBF.Unmarshal(filterHint.BloomFilter); err != nil {
 			mainBF = nil
 		}
@@ -1989,7 +1989,8 @@ func (tbl *txnTable) BuildReaders(
 	for i := 0; i < newNum; i++ {
 		hint := filterHint
 		if mainBF != nil {
-			hint.BF = mainBF.NewHandle()
+			// CBloomFilter is thread safe for Test and TestVector
+			hint.BF = mainBF.SharePointer()
 		}
 		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shards[i], tombstonePolicy, engine.GeneralLocalDataSource)
 		if err != nil {

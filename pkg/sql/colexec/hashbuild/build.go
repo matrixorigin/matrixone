@@ -17,7 +17,6 @@ package hashbuild
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -196,14 +195,8 @@ func (ctr *container) handleRuntimeFilter(ap *HashBuild, proc *process.Process) 
 		keyVec := ctr.hashmapBuilder.UniqueJoinKeys[0]
 		rowCount := keyVec.Length()
 
-		// Use common/bloomfilter to build BloomFilter
-		// Reference fuzzyfilter experience, choose different false positive rates based on row count
-		probability := calculateBloomFilterProbability(rowCount)
-
-		bf := bloomfilter.New(int64(rowCount), probability)
-		bf.Add(keyVec)
-
-		data, err := bf.Marshal()
+		// Send UniqueJoinKeys instead of Bloomfilter
+		data, err := keyVec.MarshalBinary()
 		if err != nil {
 			return err
 		}
