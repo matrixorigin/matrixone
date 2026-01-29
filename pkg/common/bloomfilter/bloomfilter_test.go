@@ -125,12 +125,15 @@ func BenchmarkBloomFiltrerAddVarlena(b *testing.B) {
 	for i := 0; i < vecCount; i++ {
 		vecs[i] = newVector(testCount/vecCount, types.New(types.T_varchar, 0, 0), mp)
 	}
-	var boom BloomFilter
 	for i := 0; i < b.N; i++ {
-		boom = New(testCount, testRate)
+		boom := New(testCount, testRate)
 		for j := 0; j < vecCount; j++ {
 			boom.Add(vecs[j])
 		}
+		boom.Free()
+	}
+	for i := 0; i < vecCount; i++ {
+		vecs[i].Free(mp)
 	}
 }
 
@@ -210,12 +213,15 @@ func BenchmarkBloomFiltrerTestAndAddVarlena(b *testing.B) {
 	for i := 0; i < vecCount; i++ {
 		vecs[i] = newVector(testCount/vecCount, types.New(types.T_varchar, 0, 0), mp)
 	}
-	var boom BloomFilter
 	for i := 0; i < b.N; i++ {
-		boom = New(testCount, testRate)
+		boom := New(testCount, testRate)
 		for j := 0; j < vecCount; j++ {
 			boom.TestAndAdd(vecs[j], func(_ bool, _ int) {})
 		}
+		boom.Free()
+	}
+	for i := 0; i < vecCount; i++ {
+		vecs[i].Free(mp)
 	}
 }
 

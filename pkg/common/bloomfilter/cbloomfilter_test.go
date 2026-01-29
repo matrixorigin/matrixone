@@ -107,6 +107,43 @@ func TestCBloomFilterWithVector(t *testing.T) {
 	require.Equal(t, allAdd, false)
 }
 
+func TestCBloomFilterWithSeed(t *testing.T) {
+	nbits := uint64(1000)
+	k := uint32(3)
+	seed := uint64(12345)
+
+	bf1 := NewCBloomFilterWithSeed(nbits, k, seed)
+	require.NotNil(t, bf1)
+	defer bf1.Free()
+
+	bf2 := NewCBloomFilterWithSeed(nbits, k, seed)
+	require.NotNil(t, bf2)
+	defer bf2.Free()
+
+	bf3 := NewCBloomFilterWithSeed(nbits, k, seed+1)
+	require.NotNil(t, bf3)
+	defer bf3.Free()
+
+	key := []byte("test_key")
+
+	bf1.Add(key)
+	bf2.Add(key)
+	bf3.Add(key)
+
+	assert.True(t, bf1.Test(key))
+	assert.True(t, bf2.Test(key))
+	assert.True(t, bf3.Test(key))
+
+	// Marshal and compare bitmaps
+	data1, _ := bf1.Marshal()
+	data2, _ := bf2.Marshal()
+	data3, _ := bf3.Marshal()
+
+	assert.Equal(t, data1, data2, "Filters with same seed should have identical bitmaps")
+	// bf3 might have same bitmap by chance, but unlikely
+	assert.NotEqual(t, data1, data3, "Filters with different seeds should likely have different bitmaps")
+}
+
 func TestCBloomFilter_Free(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := newVector(int(cTestCount*1.2), types.New(types.T_int64, 0, 0), mp)
@@ -537,4 +574,115 @@ func TestCBloomFilter_TestZeroRowCount(t *testing.T) {
 	bf2 := NewCBloomFilterWithProbability(5000, 0.001)
 	require.NotNil(t, bf)
 	defer bf2.Free()
+}
+
+func TestCBloomFilter_SharePointer(t *testing.T) {
+	bf := NewCBloomFilter(1000, 3)
+	require.NotNil(t, bf)
+	
+	// Initial refcnt should be 1
+	assert.Equal(t, int32(1), bf.refcnt)
+	assert.NotNil(t, bf.ptr)
+
+	// SharePointer should increment refcnt
+	sharedBf1 := bf.SharePointer()
+	assert.Equal(t, int32(2), bf.refcnt)
+	assert.Equal(t, bf.ptr, sharedBf1.ptr)
+
+	sharedBf2 := bf.SharePointer()
+	assert.Equal(t, int32(3), bf.refcnt)
+	assert.Equal(t, bf.ptr, sharedBf2.ptr)
+
+	// Free should decrement refcnt, but not free C memory until 0
+	sharedBf1.Free()
+	assert.Equal(t, int32(2), bf.refcnt)
+	assert.NotNil(t, bf.ptr) // C memory still allocated
+
+	sharedBf2.Free()
+	assert.Equal(t, int32(1), bf.refcnt)
+	assert.NotNil(t, bf.ptr) // C memory still allocated
+
+	// Last Free should free C memory
+	bf.Free()
+	assert.Equal(t, int32(0), bf.refcnt)
+	assert.Nil(t, bf.ptr) // C memory should be freed
+}
+
+func TestCBloomFilter_Getters(t *testing.T) {
+	nbits := uint64(2048) // next_pow2_64 will make this 2048
+	k := uint32(5)
+	seed := uint64(888)
+
+	bf := NewCBloomFilterWithSeed(nbits, k, seed)
+	require.NotNil(t, bf)
+	defer bf.Free()
+
+	// nbits is adjusted to the next power of 2
+	assert.Equal(t, nbits, bf.GetNbits())
+	assert.Equal(t, k, bf.GetK())
+	assert.Equal(t, seed, bf.GetSeed())
+
+	// Test with NewCBloomFilter where seed is random
+	bf2 := NewCBloomFilter(1000, 3)
+	require.NotNil(t, bf2)
+	defer bf2.Free()
+
+	// nbits should be 1024
+	assert.Equal(t, uint64(1024), bf2.GetNbits())
+	assert.Equal(t, uint32(3), bf2.GetK())
+	// We can't know the exact seed, but it should be non-zero
+	assert.NotEqual(t, uint64(0), bf2.GetSeed())
+}
+
+
+func TestCBloomFilter_Merge(t *testing.T) {
+	nbits := uint64(1024)
+	k := uint32(3)
+	seed := uint64(42)
+
+	bf1 := NewCBloomFilterWithSeed(nbits, k, seed)
+	require.NotNil(t, bf1)
+	defer bf1.Free()
+
+	bf2 := NewCBloomFilterWithSeed(nbits, k, seed)
+	require.NotNil(t, bf2)
+	defer bf2.Free()
+
+	key1 := []byte("key1")
+	key2 := []byte("key2")
+	key3 := []byte("key3")
+
+	bf1.Add(key1)
+	bf2.Add(key2)
+
+	err := bf1.Merge(bf2)
+	require.NoError(t, err)
+
+	assert.True(t, bf1.Test(key1))
+	assert.True(t, bf1.Test(key2))
+	assert.False(t, bf1.Test(key3))
+
+	// Test with different seed
+	bf3 := NewCBloomFilterWithSeed(nbits, k, seed+1)
+	require.NotNil(t, bf3)
+	defer bf3.Free()
+	err = bf1.Merge(bf3)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "error code: 2")
+
+	// Test with different k
+	bf4 := NewCBloomFilterWithSeed(nbits, k+1, seed)
+	require.NotNil(t, bf4)
+	defer bf4.Free()
+	err = bf1.Merge(bf4)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "error code: 3")
+
+	// Test with different nbits
+	bf5 := NewCBloomFilterWithSeed(nbits*2, k, seed)
+	require.NotNil(t, bf5)
+	defer bf5.Free()
+	err = bf1.Merge(bf5)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "error code: 1")
 }

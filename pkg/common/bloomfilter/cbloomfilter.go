@@ -21,6 +21,7 @@ package bloomfilter
 */
 import "C"
 import (
+	"fmt"
 	"math"
 	"runtime"
 	"sync/atomic"
@@ -87,6 +88,16 @@ func NewCBloomFilterWithProbability(rowcnt int64, probability float64) *CBloomFi
 // and number of hash functions (k).
 func NewCBloomFilter(nbits uint64, k uint32) *CBloomFilter {
 	ptr := C.bloomfilter_init(C.uint64_t(nbits), C.uint32_t(k))
+	if ptr == nil {
+		return nil
+	}
+	return &CBloomFilter{ptr: ptr, refcnt: 1}
+}
+
+// NewCBloomFilterWithSeed creates a new CBloomFilter with a specific number of bits (nbits),
+// number of hash functions (k), and a specific seed.
+func NewCBloomFilterWithSeed(nbits uint64, k uint32, seed uint64) *CBloomFilter {
+	ptr := C.bloomfilter_init_with_seed(C.uint64_t(nbits), C.uint32_t(k), C.uint64_t(seed))
 	if ptr == nil {
 		return nil
 	}
@@ -380,4 +391,45 @@ func (bf *CBloomFilter) addVarlenaVector(v *vector.Vector) {
 	runtime.KeepAlive(varlenData)
 	runtime.KeepAlive(area)
 	runtime.KeepAlive(nullptr)
+}
+
+// Merge merges another bloom filter into this one (bf becomes bf OR other).
+// The nbits, seed, and k MUST be the same for both bloom filters.
+func (bf *CBloomFilter) Merge(other *CBloomFilter) error {
+	if bf == nil || bf.ptr == nil {
+		return moerr.NewInternalErrorNoCtx("CBloomFilter:Merge called on a nil or invalid bloom filter")
+	}
+	if other == nil || other.ptr == nil {
+		return moerr.NewInternalErrorNoCtx("CBloomFilter:Merge called with a nil or invalid 'other' bloom filter")
+	}
+
+	// The C function expects nbits, seed, and k to be the same.
+	// The C implementation already checks this and returns an error code if they differ.
+	ret := C.bloomfilter_or(bf.ptr, bf.ptr, other.ptr)
+	runtime.KeepAlive(other)
+	if ret != 0 {
+		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to merge bloom filters, error code: %d", ret))
+	}
+	return nil
+}
+
+func (bf *CBloomFilter) GetNbits() uint64 {
+	if bf == nil || bf.ptr == nil {
+		return 0
+	}
+	return uint64(C.bloomfilter_get_nbits(bf.ptr))
+}
+
+func (bf *CBloomFilter) GetSeed() uint64 {
+	if bf == nil || bf.ptr == nil {
+		return 0
+	}
+	return uint64(C.bloomfilter_get_seed(bf.ptr))
+}
+
+func (bf *CBloomFilter) GetK() uint32 {
+	if bf == nil || bf.ptr == nil {
+		return 0
+	}
+	return uint32(C.bloomfilter_get_k(bf.ptr))
 }
