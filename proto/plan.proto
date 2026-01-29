@@ -916,6 +916,8 @@ message Node {
 
   // compile time performance setting
   int64 spill_mem = 70;
+  repeated string origin_views = 71;
+  string direct_view = 72;
 }
 
 message SnapshotExtraInfo {
