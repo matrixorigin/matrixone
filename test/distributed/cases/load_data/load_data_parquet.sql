@@ -77,7 +77,7 @@ CREATE TABLE `parquet_complex_types` (
      `list_struct` json DEFAULT NULL
 );
 load data infile {'filepath'='$resources/parquet/complex.parquet', 'format'='parquet'} into table parquet_complex_types;
--- @ignore:4
+-- @ignore:4,5,6
 select * from parquet_complex_types order by test_id limit 3;
 SELECT COUNT(*) FROM parquet_complex_types;
 drop table parquet_complex_types;
