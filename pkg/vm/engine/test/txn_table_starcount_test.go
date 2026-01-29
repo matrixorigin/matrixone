@@ -731,7 +731,8 @@ func TestStarCountWithInMemoryTombstones(t *testing.T) {
 	}
 
 	// Wait for logtail to sync
-	time.Sleep(200 * time.Millisecond)
+	_, err := p.D.GetPartitionStateStats(p.Ctx, dbID, tableID)
+	require.NoError(t, err)
 
 	// Step 2: Collect rowids from TAE for deletion
 	var deleteRowIDs []types.Rowid
@@ -847,7 +848,8 @@ func TestStarCountWithMixedInsertsAndTombstones(t *testing.T) {
 	}
 
 	// Wait for logtail to sync
-	time.Sleep(200 * time.Millisecond)
+	_, err := p.D.GetPartitionStateStats(p.Ctx, dbID, tableID)
+	require.NoError(t, err)
 
 	// Step 2: Collect rowids for deletion
 	var deleteRowIDs []types.Rowid
@@ -959,7 +961,8 @@ func TestStarCountWithPersistedTombstones(t *testing.T) {
 	}
 
 	// Wait for logtail to sync
-	time.Sleep(200 * time.Millisecond)
+	_, err := p.D.GetPartitionStateStats(p.Ctx, dbID, tableID)
+	require.NoError(t, err)
 
 	// Step 2: Collect rowids from TAE for deletion
 	var deleteRowIDs []types.Rowid
@@ -1077,7 +1080,8 @@ func TestStarCountDeleteUncommittedInserts(t *testing.T) {
 		require.NoError(t, txn.Commit(p.Ctx))
 	}
 
-	time.Sleep(200 * time.Millisecond)
+	_, err := p.D.GetPartitionStateStats(p.Ctx, dbID, tableID)
+	require.NoError(t, err)
 
 	// Step 2: Start CN transaction, insert 50 rows, then delete 30 of them
 	txnop = p.StartCNTxn()
@@ -1154,6 +1158,163 @@ func TestStarCountDeleteUncommittedInserts(t *testing.T) {
 
 	vec1.Free(p.Mp)
 	vec2.Free(p.Mp)
+
+	require.NoError(t, txnop.Commit(p.Ctx))
+}
+
+// TestStarCountMixedInMemoryAndPersistedTombstones tests StarCount with both in-memory and persisted tombstones.
+//
+// Scenario:
+// 1. Insert 100 rows via TAE (committed)
+// 2. Start CN transaction
+// 3. Delete 10 rows (in-memory tombstones)
+// 4. Force workspace flush to persist tombstones
+// 5. Delete another 15 rows (persisted tombstones)
+// 6. Verify StarCount = 100 - 10 - 15 = 75
+//
+// This tests the formula: StarCount = CommittedRows - InMemoryTombstones - PersistedTombstones
+func TestStarCountMixedInMemoryAndPersistedTombstones(t *testing.T) {
+	p := testutil.InitEnginePack(testutil.TestOptions{}, t)
+	defer p.Close()
+
+	tae := p.T.GetDB()
+
+	schema := catalog2.MockSchemaAll(3, 0)
+	schema.Name = "test_table"
+
+	// Step 1: Create table via CN and insert 100 rows via TAE
+	txnop := p.StartCNTxn()
+	_, rel := p.CreateDBAndTable(txnop, "db", schema)
+	dbID := rel.GetDBID(p.Ctx)
+	tableID := rel.GetTableID(p.Ctx)
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	require.NoError(t, p.D.SubscribeTable(p.Ctx, dbID, tableID, "db", schema.Name, false))
+
+	{
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		rel, _ := db.GetRelationByName(schema.Name)
+		bat := catalog2.MockBatch(schema, 100)
+		require.NoError(t, rel.Append(p.Ctx, bat))
+		require.NoError(t, txn.Commit(p.Ctx))
+	}
+
+	_, err := p.D.GetPartitionStateStats(p.Ctx, dbID, tableID)
+	require.NoError(t, err)
+
+	// Step 2: Collect rowids for first batch of deletes (10 rows)
+	var firstBatchRowIDs []types.Rowid
+	{
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		rel, _ := db.GetRelationByName(schema.Name)
+
+		it := rel.MakeObjectIt(false)
+		for it.Next() {
+			obj := it.GetObject()
+			objID := obj.GetMeta().(*catalog2.ObjectEntry).ID()
+
+			for blkIdx := 0; blkIdx < obj.BlkCnt(); blkIdx++ {
+				blkID := objectio.NewBlockidWithObjectID(objID, uint16(blkIdx))
+				for rowIdx := uint32(0); rowIdx < 10 && len(firstBatchRowIDs) < 10; rowIdx++ {
+					rowid := objectio.NewRowid(&blkID, rowIdx)
+					firstBatchRowIDs = append(firstBatchRowIDs, rowid)
+				}
+				if len(firstBatchRowIDs) >= 10 {
+					break
+				}
+			}
+			if len(firstBatchRowIDs) >= 10 {
+				break
+			}
+		}
+		require.NoError(t, txn.Commit(p.Ctx))
+	}
+	require.Equal(t, 10, len(firstBatchRowIDs))
+
+	// Step 3: Start CN transaction and delete first batch (in-memory)
+	txnop = p.StartCNTxn()
+	db, _ := p.D.Engine.Database(p.Ctx, "db", txnop)
+	rel, _ = db.Relation(p.Ctx, schema.Name, nil)
+
+	vec1 := vector.NewVec(types.T_Rowid.ToType())
+	vec2 := vector.NewVec(types.T_int64.ToType())
+	for _, rowID := range firstBatchRowIDs {
+		vector.AppendFixed(vec1, rowID, false, p.Mp)
+		vector.AppendFixed(vec2, int64(0), false, p.Mp)
+	}
+
+	delBatch1 := batch.NewWithSize(2)
+	delBatch1.SetRowCount(len(firstBatchRowIDs))
+	delBatch1.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
+	delBatch1.Vecs[0] = vec1
+	delBatch1.Vecs[1] = vec2
+
+	require.NoError(t, rel.Delete(p.Ctx, delBatch1, catalog.Row_ID))
+
+	// Step 4: Force workspace flush to persist first batch tombstones
+	fault.Enable()
+	defer fault.Disable()
+	fault.AddFaultPoint(p.Ctx, objectio.FJ_CNWorkspaceForceFlush, ":::", "return", 0, "", false)
+	defer fault.RemoveFaultPoint(p.Ctx, objectio.FJ_CNWorkspaceForceFlush)
+
+	// Step 5: Collect rowids for second batch of deletes (15 rows, starting from row 10)
+	var secondBatchRowIDs []types.Rowid
+	{
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		rel, _ := db.GetRelationByName(schema.Name)
+
+		it := rel.MakeObjectIt(false)
+		for it.Next() {
+			obj := it.GetObject()
+			objID := obj.GetMeta().(*catalog2.ObjectEntry).ID()
+
+			for blkIdx := 0; blkIdx < obj.BlkCnt(); blkIdx++ {
+				blkID := objectio.NewBlockidWithObjectID(objID, uint16(blkIdx))
+				for rowIdx := uint32(10); rowIdx < 25 && len(secondBatchRowIDs) < 15; rowIdx++ {
+					rowid := objectio.NewRowid(&blkID, rowIdx)
+					secondBatchRowIDs = append(secondBatchRowIDs, rowid)
+				}
+				if len(secondBatchRowIDs) >= 15 {
+					break
+				}
+			}
+			if len(secondBatchRowIDs) >= 15 {
+				break
+			}
+		}
+		require.NoError(t, txn.Commit(p.Ctx))
+	}
+	require.Equal(t, 15, len(secondBatchRowIDs))
+
+	// Step 6: Delete second batch (persisted tombstones)
+	vec3 := vector.NewVec(types.T_Rowid.ToType())
+	vec4 := vector.NewVec(types.T_int64.ToType())
+	for _, rowID := range secondBatchRowIDs {
+		vector.AppendFixed(vec3, rowID, false, p.Mp)
+		vector.AppendFixed(vec4, int64(0), false, p.Mp)
+	}
+
+	delBatch2 := batch.NewWithSize(2)
+	delBatch2.SetRowCount(len(secondBatchRowIDs))
+	delBatch2.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
+	delBatch2.Vecs[0] = vec3
+	delBatch2.Vecs[1] = vec4
+
+	require.NoError(t, rel.Delete(p.Ctx, delBatch2, catalog.Row_ID))
+
+	// Step 7: Verify StarCount
+	count, err := rel.StarCount(p.Ctx)
+	require.NoError(t, err)
+	t.Logf("StarCount: %d, expected: 75 (100 committed - 10 in-memory deletes - 15 persisted deletes)", count)
+	require.Equal(t, uint64(75), count, "StarCount should be 100 - 10 - 15 = 75")
+
+	vec1.Free(p.Mp)
+	vec2.Free(p.Mp)
+	vec3.Free(p.Mp)
+	vec4.Free(p.Mp)
 
 	require.NoError(t, txnop.Commit(p.Ctx))
 }
