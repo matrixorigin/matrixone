@@ -374,6 +374,15 @@ func reconstructListOfNested(ctx context.Context, elementCol *parquet.Column, va
 		return result, nil
 	}
 
+	// Check if elementCol is a Map type (has LogicalType.Map or matches Map pattern)
+	elemLogicalType := elementCol.Type().LogicalType()
+	isMap := (elemLogicalType != nil && elemLogicalType.Map != nil) || isParquetMapPattern(elementCol)
+
+	if isMap {
+		// list<map> case: group by repetition level for Map boundaries
+		return reconstructListOfMaps(ctx, elementCol, values)
+	}
+
 	leafCols := collectLeafColumns(elementCol)
 	if len(leafCols) == 0 {
 		return result, nil
@@ -382,14 +391,18 @@ func reconstructListOfNested(ctx context.Context, elementCol *parquet.Column, va
 	// Check if this is list<list> (single leaf column) or list<struct> (multiple leaf columns)
 	if len(leafCols) == 1 {
 		// list<list<T>> case: group by RepetitionLevel
-		// rep=0 means new row, rep=1 means new outer list element, rep=2 means continue inner list
+		// Calculate the repetition level threshold based on nesting depth
+		// For list<list<T>>: threshold = 1 (rep <= 1 means new element)
+		// For list<list<list<T>>>: threshold = 1 (rep <= 1 means new element in outer list)
+		repThreshold := calculateListRepThreshold(elementCol)
+
 		var groups [][]parquet.Value
 		currentGroup := make([]parquet.Value, 0)
 
 		for _, v := range values {
 			rep := v.RepetitionLevel()
-			// rep <= 1 means new element in outer list
-			if rep <= 1 && len(currentGroup) > 0 {
+			// rep <= threshold means new element in this list level
+			if rep <= repThreshold && len(currentGroup) > 0 {
 				groups = append(groups, currentGroup)
 				currentGroup = make([]parquet.Value, 0)
 			}
@@ -409,7 +422,96 @@ func reconstructListOfNested(ctx context.Context, elementCol *parquet.Column, va
 		return result, nil
 	}
 
-	// list<struct> case: values are stored column-wise
+	// list<struct> case: group by repetition level using first column
+	return reconstructListOfStructs(ctx, elementCol, leafCols, values)
+}
+
+// calculateListRepThreshold calculates the repetition level threshold for list element boundaries
+// This is the repetition level at which a new list element starts
+func calculateListRepThreshold(elementCol *parquet.Column) int {
+	// The maxRepetitionLevel of the elementCol indicates the repetition level
+	// at which elements of this list are separated.
+	// For list<list<T>>: elementCol (inner list) has maxRep=1, so threshold=1
+	// For list<list<list<T>>>: elementCol (middle list) has maxRep=1, so threshold=1
+	return elementCol.MaxRepetitionLevel()
+}
+
+// reconstructListOfMaps reconstructs a list of Map elements
+func reconstructListOfMaps(ctx context.Context, elementCol *parquet.Column, values []parquet.Value) ([]any, error) {
+	result := make([]any, 0)
+	if len(values) == 0 {
+		return result, nil
+	}
+
+	// For List<Map>, values contain both key and value columns interleaved
+	// We need to group by the Map boundaries using repetition level
+	// rep=0: new row
+	// rep=1: new Map in the list
+	// rep=2+: continue current Map (more key-value pairs)
+
+	// First, separate values by column
+	leafCols := collectLeafColumns(elementCol)
+	if len(leafCols) == 0 {
+		return result, nil
+	}
+
+	valuesByCol := make(map[int][]parquet.Value)
+	for _, v := range values {
+		colIdx := v.Column()
+		valuesByCol[colIdx] = append(valuesByCol[colIdx], v)
+	}
+
+	// Use the first leaf column (key column) to determine Map boundaries
+	firstLeafIdx := leafCols[0].Index()
+	keyValues := valuesByCol[firstLeafIdx]
+	if len(keyValues) == 0 {
+		return result, nil
+	}
+
+	// Group by repetition level - rep <= 1 means new Map
+	var mapGroups [][]int // indices into keyValues for each Map
+	currentIndices := make([]int, 0)
+
+	for i, v := range keyValues {
+		rep := v.RepetitionLevel()
+		if rep <= 1 && len(currentIndices) > 0 {
+			mapGroups = append(mapGroups, currentIndices)
+			currentIndices = make([]int, 0)
+		}
+		currentIndices = append(currentIndices, i)
+	}
+	if len(currentIndices) > 0 {
+		mapGroups = append(mapGroups, currentIndices)
+	}
+
+	// Reconstruct each Map
+	for _, indices := range mapGroups {
+		group := make([]parquet.Value, 0)
+		for _, idx := range indices {
+			// Add values from all columns at this index
+			for _, leaf := range leafCols {
+				colValues := valuesByCol[leaf.Index()]
+				if idx < len(colValues) {
+					group = append(group, colValues[idx])
+				}
+			}
+		}
+		if len(group) > 0 {
+			nested, err := reconstructNestedByType(ctx, elementCol, group)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, nested)
+		}
+	}
+	return result, nil
+}
+
+// reconstructListOfStructs reconstructs a list of Struct elements
+func reconstructListOfStructs(ctx context.Context, elementCol *parquet.Column, leafCols []*parquet.Column, values []parquet.Value) ([]any, error) {
+	result := make([]any, 0)
+
+	// Group values by column
 	valuesByCol := make(map[int][]parquet.Value)
 	for _, v := range values {
 		colIdx := v.Column()
@@ -422,14 +524,32 @@ func reconstructListOfNested(ctx context.Context, elementCol *parquet.Column, va
 		return result, nil
 	}
 
-	numElements := len(firstColValues)
+	// Use repetition level from first column to determine struct boundaries
+	// rep <= 1 indicates a new struct element
+	var structGroups [][]int // indices for each struct
+	currentIndices := make([]int, 0)
 
-	for i := 0; i < numElements; i++ {
-		group := make([]parquet.Value, 0, len(leafCols))
-		for _, leaf := range leafCols {
-			colValues := valuesByCol[leaf.Index()]
-			if i < len(colValues) {
-				group = append(group, colValues[i])
+	for i, v := range firstColValues {
+		rep := v.RepetitionLevel()
+		if rep <= 1 && len(currentIndices) > 0 {
+			structGroups = append(structGroups, currentIndices)
+			currentIndices = make([]int, 0)
+		}
+		currentIndices = append(currentIndices, i)
+	}
+	if len(currentIndices) > 0 {
+		structGroups = append(structGroups, currentIndices)
+	}
+
+	// Reconstruct each struct
+	for _, indices := range structGroups {
+		group := make([]parquet.Value, 0)
+		for _, idx := range indices {
+			for _, leaf := range leafCols {
+				colValues := valuesByCol[leaf.Index()]
+				if idx < len(colValues) {
+					group = append(group, colValues[idx])
+				}
 			}
 		}
 		if len(group) > 0 {
@@ -442,6 +562,25 @@ func reconstructListOfNested(ctx context.Context, elementCol *parquet.Column, va
 	}
 
 	return result, nil
+}
+
+func hasValues(m map[int][]parquet.Value) bool {
+	for _, v := range m {
+		if len(v) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func flattenValuesByCol(valuesByCol map[int][]parquet.Value, leafCols []*parquet.Column) []parquet.Value {
+	result := make([]parquet.Value, 0)
+	for _, leaf := range leafCols {
+		if vals, ok := valuesByCol[leaf.Index()]; ok {
+			result = append(result, vals...)
+		}
+	}
+	return result
 }
 
 func reconstructList(ctx context.Context, col *parquet.Column, values []parquet.Value) ([]any, error) {
