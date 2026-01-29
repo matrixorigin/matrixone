@@ -828,3 +828,409 @@ func TestBuildConnWithServer_AllCNServersBusy(t *testing.T) {
 	// Should have tried both CN servers
 	require.Equal(t, 2, router.callCount)
 }
+
+// testMixedErrorRouter simulates a router where some CN servers timeout and some have other errors.
+type testMixedErrorRouter struct {
+	servers      []*CNServer
+	callCount    int
+	timeoutFirst bool // if true, first server times out, second has other error
+}
+
+func (r *testMixedErrorRouter) Route(ctx context.Context, sid string, client clientInfo, filter func(string) bool) (*CNServer, error) {
+	for _, s := range r.servers {
+		if filter == nil || !filter(s.addr) {
+			return s, nil
+		}
+	}
+	return nil, noCNServerErr
+}
+
+func (r *testMixedErrorRouter) SelectByConnID(connID uint32) (*CNServer, error) {
+	return nil, noCNServerErr
+}
+
+func (r *testMixedErrorRouter) AllServers(sid string) ([]*CNServer, error) {
+	return r.servers, nil
+}
+
+func (r *testMixedErrorRouter) Connect(c *CNServer, handshakeResp *frontend.Packet, t *tunnel) (ServerConn, []byte, error) {
+	r.callCount++
+	if r.timeoutFirst {
+		if r.callCount == 1 {
+			return nil, nil, newTimeoutConnectErr(moerr.NewInternalErrorNoCtx("timeout"))
+		}
+		return nil, nil, newConnectErr(moerr.NewInternalErrorNoCtx("connection refused"))
+	}
+	// First non-timeout, second timeout
+	if r.callCount == 1 {
+		return nil, nil, newConnectErr(moerr.NewInternalErrorNoCtx("connection refused"))
+	}
+	return nil, nil, newTimeoutConnectErr(moerr.NewInternalErrorNoCtx("timeout"))
+}
+
+// TestBuildConnWithServer_MixedErrors tests when some CN servers timeout and some have other errors.
+// In this case, it should return noCNServerErr instead of allCNServersBusyErr.
+func TestBuildConnWithServer_MixedErrors(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	logger := rt.Logger()
+
+	router := &testMixedErrorRouter{
+		servers: []*CNServer{
+			{uuid: "cn1", addr: "127.0.0.1:6001"},
+			{uuid: "cn2", addr: "127.0.0.1:6002"},
+		},
+		timeoutFirst: true,
+	}
+
+	local, _ := net.Pipe()
+	mockConn := newMockNetConn("127.0.0.1", 30001, "127.0.0.1", 30010, local)
+	mockIOSession := goetty.NewIOSession(
+		goetty.WithSessionConn(1, mockConn),
+		goetty.WithSessionCodec(WithProxyProtocolCodec(frontend.NewSqlCodec())),
+	)
+
+	cc := &clientConn{
+		ctx:        context.Background(),
+		router:     router,
+		conn:       mockIOSession,
+		mysqlProto: &frontend.MysqlProtocolImpl{},
+		log:        logger,
+		clientInfo: clientInfo{
+			labelInfo: labelInfo{
+				Tenant: "test_tenant",
+			},
+		},
+	}
+
+	sc, err := cc.connectToBackend("")
+	require.Error(t, err)
+	require.Nil(t, sc)
+	// Should return noCNServerErr since not all errors were timeouts
+	require.False(t, moerr.IsMoErrCode(err, moerr.ErrAllCNServersBusy),
+		"should not be ErrAllCNServersBusy when errors are mixed")
+	require.Equal(t, 2, router.callCount)
+}
+
+// testNonRetryableErrorRouter returns a non-retryable error.
+type testNonRetryableErrorRouter struct {
+	servers []*CNServer
+}
+
+func (r *testNonRetryableErrorRouter) Route(ctx context.Context, sid string, client clientInfo, filter func(string) bool) (*CNServer, error) {
+	for _, s := range r.servers {
+		if filter == nil || !filter(s.addr) {
+			return s, nil
+		}
+	}
+	return nil, noCNServerErr
+}
+
+func (r *testNonRetryableErrorRouter) SelectByConnID(connID uint32) (*CNServer, error) {
+	return nil, nil
+}
+
+func (r *testNonRetryableErrorRouter) AllServers(sid string) ([]*CNServer, error) {
+	return r.servers, nil
+}
+
+func (r *testNonRetryableErrorRouter) Connect(c *CNServer, handshakeResp *frontend.Packet, t *tunnel) (ServerConn, []byte, error) {
+	// Return a non-retryable error (not wrapped in connectErr)
+	return nil, nil, moerr.NewInternalErrorNoCtx("fatal error")
+}
+
+// TestBuildConnWithServer_NonRetryableError tests when CN server returns a non-retryable error.
+func TestBuildConnWithServer_NonRetryableError(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	logger := rt.Logger()
+
+	router := &testNonRetryableErrorRouter{
+		servers: []*CNServer{
+			{uuid: "cn1", addr: "127.0.0.1:6001"},
+		},
+	}
+
+	local, _ := net.Pipe()
+	mockConn := newMockNetConn("127.0.0.1", 30001, "127.0.0.1", 30010, local)
+	mockIOSession := goetty.NewIOSession(
+		goetty.WithSessionConn(1, mockConn),
+		goetty.WithSessionCodec(WithProxyProtocolCodec(frontend.NewSqlCodec())),
+	)
+
+	cc := &clientConn{
+		ctx:        context.Background(),
+		router:     router,
+		conn:       mockIOSession,
+		mysqlProto: &frontend.MysqlProtocolImpl{},
+		log:        logger,
+		clientInfo: clientInfo{
+			labelInfo: labelInfo{
+				Tenant: "test_tenant",
+			},
+		},
+	}
+
+	sc, err := cc.connectToBackend("")
+	require.Error(t, err)
+	require.Nil(t, sc)
+	require.Contains(t, err.Error(), "fatal error")
+}
+
+// TestBuildConnWithServer_NoRouter tests when router is nil.
+func TestBuildConnWithServer_NoRouter(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	rt := runtime.DefaultRuntime()
+	logger := rt.Logger()
+
+	cc := &clientConn{
+		ctx:        context.Background(),
+		router:     nil,
+		mysqlProto: &frontend.MysqlProtocolImpl{},
+		log:        logger,
+	}
+
+	sc, err := cc.connectToBackend("")
+	require.Error(t, err)
+	require.Nil(t, sc)
+	require.Contains(t, err.Error(), "no router available")
+}
+
+// testKillRouter is a router for testing handleKill.
+type testKillRouter struct {
+	connIDToServer map[uint32]*CNServer
+	connectErr     error
+	execResult     bool
+}
+
+func (r *testKillRouter) Route(ctx context.Context, sid string, client clientInfo, filter func(string) bool) (*CNServer, error) {
+	return nil, nil
+}
+
+func (r *testKillRouter) SelectByConnID(connID uint32) (*CNServer, error) {
+	if s, ok := r.connIDToServer[connID]; ok {
+		return s, nil
+	}
+	return nil, noCNServerErr
+}
+
+func (r *testKillRouter) AllServers(sid string) ([]*CNServer, error) {
+	return nil, nil
+}
+
+func (r *testKillRouter) Connect(c *CNServer, handshakeResp *frontend.Packet, t *tunnel) (ServerConn, []byte, error) {
+	if r.connectErr != nil {
+		return nil, nil, r.connectErr
+	}
+	sc := newMockServerConn(nil)
+	return sc, makeOKPacket(8), nil
+}
+
+// TestHandleKill_ServerNotFound tests handleKill when server is not found.
+func TestHandleKill_ServerNotFound(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	rt := runtime.DefaultRuntime()
+	logger := rt.Logger()
+
+	router := &testKillRouter{
+		connIDToServer: make(map[uint32]*CNServer),
+	}
+
+	cc := &clientConn{
+		ctx:        context.Background(),
+		router:     router,
+		mysqlProto: &frontend.MysqlProtocolImpl{},
+		log:        logger,
+	}
+
+	resp := make(chan []byte, 1)
+	e := &killEvent{
+		baseEvent: baseEvent{waitC: make(chan struct{}, 1)},
+		connID:    12345,
+		stmt:      "KILL 12345",
+	}
+
+	err := cc.handleKill(e, resp)
+	require.NoError(t, err)
+	// Should receive OK packet since server not found means query already terminated
+	r := <-resp
+	require.True(t, isOKPacket(r))
+}
+
+// TestHandleEvent_Default tests HandleEvent with unknown event type.
+func TestHandleEvent_Default(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	cc := &clientConn{}
+	resp := make(chan []byte, 1)
+
+	// Create a custom event type that doesn't match any case
+	err := cc.HandleEvent(context.Background(), nil, resp)
+	require.NoError(t, err)
+}
+
+// TestSendErr tests the sendErr function.
+func TestSendErr(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	cc, cleanup := createNewClientConn(t)
+	defer cleanup()
+	c, ok := cc.(*clientConn)
+	require.True(t, ok)
+
+	resp := make(chan []byte, 1)
+	testErr := moerr.NewInternalErrorNoCtx("test error message")
+	c.sendErr(testErr, resp)
+
+	r := <-resp
+	require.NotNil(t, r)
+	// The response should be an error packet
+	require.True(t, len(r) > 4)
+}
+
+// testUpgradeRouter is a router for testing handleUpgradeEvent.
+type testUpgradeRouter struct {
+	servers    []*CNServer
+	connectErr error
+	execResult bool
+}
+
+func (r *testUpgradeRouter) Route(ctx context.Context, sid string, client clientInfo, filter func(string) bool) (*CNServer, error) {
+	return nil, nil
+}
+
+func (r *testUpgradeRouter) SelectByConnID(connID uint32) (*CNServer, error) {
+	return nil, nil
+}
+
+func (r *testUpgradeRouter) AllServers(sid string) ([]*CNServer, error) {
+	return r.servers, nil
+}
+
+func (r *testUpgradeRouter) Connect(c *CNServer, handshakeResp *frontend.Packet, t *tunnel) (ServerConn, []byte, error) {
+	if r.connectErr != nil {
+		return nil, nil, r.connectErr
+	}
+	sc := newMockServerConn(nil)
+	if !r.execResult {
+		sc.setReturnErr(moerr.NewInternalErrorNoCtx("exec error"))
+	}
+	return sc, makeOKPacket(8), nil
+}
+
+// TestHandleUpgradeEvent_NotSuperTenant tests handleUpgradeEvent when not super tenant.
+func TestHandleUpgradeEvent_NotSuperTenant(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	rt := runtime.DefaultRuntime()
+	logger := rt.Logger()
+
+	cc, cleanup := createNewClientConn(t)
+	defer cleanup()
+	c, ok := cc.(*clientConn)
+	require.True(t, ok)
+	c.log = logger
+	c.clientInfo.labelInfo.Tenant = "regular_tenant"
+
+	resp := make(chan []byte, 1)
+	e := &upgradeEvent{
+		baseEvent: baseEvent{waitC: make(chan struct{}, 1)},
+		stmt:      "UPGRADE",
+	}
+
+	err := c.handleUpgradeEvent(e, resp)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "privilege")
+}
+
+// TestHandleUpgradeEvent_Success tests handleUpgradeEvent success path.
+func TestHandleUpgradeEvent_Success(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	rt := runtime.DefaultRuntime()
+	logger := rt.Logger()
+
+	router := &testUpgradeRouter{
+		servers: []*CNServer{
+			{uuid: "cn1", addr: "127.0.0.1:6001"},
+		},
+		execResult: true,
+	}
+
+	cc, cleanup := createNewClientConn(t)
+	defer cleanup()
+	c, ok := cc.(*clientConn)
+	require.True(t, ok)
+	c.log = logger
+	c.router = router
+	c.clientInfo.labelInfo.Tenant = "sys" // super tenant
+
+	resp := make(chan []byte, 1)
+	e := &upgradeEvent{
+		baseEvent: baseEvent{waitC: make(chan struct{}, 1)},
+		stmt:      "UPGRADE",
+	}
+
+	err := c.handleUpgradeEvent(e, resp)
+	require.NoError(t, err)
+	r := <-resp
+	require.True(t, isOKPacket(r))
+}
+
+// TestConnAndExec_ConnectError tests connAndExec when connect fails.
+func TestConnAndExec_ConnectError(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	rt := runtime.DefaultRuntime()
+	logger := rt.Logger()
+
+	router := &testUpgradeRouter{
+		connectErr: moerr.NewInternalErrorNoCtx("connect failed"),
+	}
+
+	cc, cleanup := createNewClientConn(t)
+	defer cleanup()
+	c, ok := cc.(*clientConn)
+	require.True(t, ok)
+	c.log = logger
+	c.router = router
+
+	cn := &CNServer{uuid: "cn1", addr: "127.0.0.1:6001"}
+	resp := make(chan []byte, 1)
+
+	err := c.connAndExec(cn, "SELECT 1", resp)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "connect failed")
+}
+
+// TestConnAndExec_ExecError tests connAndExec when exec returns false.
+func TestConnAndExec_ExecError(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	rt := runtime.DefaultRuntime()
+	logger := rt.Logger()
+
+	router := &testUpgradeRouter{
+		execResult: false, // ExecStmt returns false
+	}
+
+	cc, cleanup := createNewClientConn(t)
+	defer cleanup()
+	c, ok := cc.(*clientConn)
+	require.True(t, ok)
+	c.log = logger
+	c.router = router
+
+	cn := &CNServer{uuid: "cn1", addr: "127.0.0.1:6001"}
+	resp := make(chan []byte, 1)
+
+	err := c.connAndExec(cn, "SELECT 1", resp)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "exec error")
+}
