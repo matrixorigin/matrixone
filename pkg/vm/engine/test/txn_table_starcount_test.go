@@ -1318,3 +1318,108 @@ func TestStarCountMixedInMemoryAndPersistedTombstones(t *testing.T) {
 
 	require.NoError(t, txnop.Commit(p.Ctx))
 }
+
+// TestStarCountEmptyTableWithTombstones tests StarCount with uncommitted inserts and deletes (no initial committed data).
+//
+// Scenario:
+// 1. Create empty table
+// 2. Insert 100 rows via TAE (committed)
+// 3. Start CN transaction, delete 30 rows (uncommitted)
+// 4. Verify StarCount = 100 - 30 = 70
+//
+// This tests uncommitted deletes on a table that starts empty (no data before the test).
+func TestStarCountEmptyTableWithTombstones(t *testing.T) {
+	p := testutil.InitEnginePack(testutil.TestOptions{}, t)
+	defer p.Close()
+
+	tae := p.T.GetDB()
+
+	schema := catalog2.MockSchemaAll(3, 0)
+	schema.Name = "test_table"
+
+	// Step 1: Create empty table via CN
+	txnop := p.StartCNTxn()
+	_, rel := p.CreateDBAndTable(txnop, "db", schema)
+	dbID := rel.GetDBID(p.Ctx)
+	tableID := rel.GetTableID(p.Ctx)
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	require.NoError(t, p.D.SubscribeTable(p.Ctx, dbID, tableID, "db", schema.Name, false))
+
+	// Step 2: Insert 100 rows via TAE (committed)
+	{
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		rel, _ := db.GetRelationByName(schema.Name)
+		bat := catalog2.MockBatch(schema, 100)
+		require.NoError(t, rel.Append(p.Ctx, bat))
+		require.NoError(t, txn.Commit(p.Ctx))
+	}
+
+	_, err := p.D.GetPartitionStateStats(p.Ctx, dbID, tableID)
+	require.NoError(t, err)
+
+	// Step 3: Collect rowids for deletion
+	var deleteRowIDs []types.Rowid
+	{
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		taeRel, _ := db.GetRelationByName(schema.Name)
+
+		it := taeRel.MakeObjectIt(false)
+		for it.Next() {
+			obj := it.GetObject()
+			objID := obj.GetMeta().(*catalog2.ObjectEntry).ID()
+
+			for blkIdx := 0; blkIdx < obj.BlkCnt(); blkIdx++ {
+				blkID := objectio.NewBlockidWithObjectID(objID, uint16(blkIdx))
+				for rowIdx := uint32(0); rowIdx < 30 && len(deleteRowIDs) < 30; rowIdx++ {
+					rowid := objectio.NewRowid(&blkID, rowIdx)
+					deleteRowIDs = append(deleteRowIDs, rowid)
+				}
+				if len(deleteRowIDs) >= 30 {
+					break
+				}
+			}
+			if len(deleteRowIDs) >= 30 {
+				break
+			}
+		}
+		it.Close()
+		require.NoError(t, txn.Commit(p.Ctx))
+	}
+	require.Equal(t, 30, len(deleteRowIDs))
+
+	// Step 4: Start CN transaction and delete 30 rows
+	txnop = p.StartCNTxn()
+	db, err := p.D.Engine.Database(p.Ctx, "db", txnop)
+	require.NoError(t, err)
+	rel, err = db.Relation(p.Ctx, schema.Name, nil)
+	require.NoError(t, err)
+
+	vec1 := vector.NewVec(types.T_Rowid.ToType())
+	vec2 := vector.NewVec(types.T_int64.ToType())
+	for _, rowID := range deleteRowIDs {
+		vector.AppendFixed(vec1, rowID, false, p.Mp)
+		vector.AppendFixed(vec2, int64(0), false, p.Mp)
+	}
+
+	delBatch := batch.NewWithSize(2)
+	delBatch.SetRowCount(len(deleteRowIDs))
+	delBatch.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
+	delBatch.Vecs[0] = vec1
+	delBatch.Vecs[1] = vec2
+
+	require.NoError(t, rel.Delete(p.Ctx, delBatch, catalog.Row_ID))
+
+	// Step 5: Verify StarCount
+	count, err := rel.StarCount(p.Ctx)
+	require.NoError(t, err)
+	t.Logf("StarCount: %d, expected: 70 (100 committed - 30 uncommitted deletes)", count)
+	require.Equal(t, uint64(70), count, "StarCount should be 100 - 30 = 70")
+
+	vec1.Free(p.Mp)
+	vec2.Free(p.Mp)
+
+	require.NoError(t, txnop.Commit(p.Ctx))
+}
