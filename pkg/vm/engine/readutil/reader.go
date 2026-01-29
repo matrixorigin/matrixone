@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -54,6 +53,10 @@ func (mixin *withFilterMixin) reset() {
 	// Cleanup reusableTempVec and other resources before resetting filter
 	if mixin.filterState.filter.Cleanup != nil {
 		mixin.filterState.filter.Cleanup()
+	}
+	if mixin.filterHint.BF != nil {
+		mixin.filterHint.BF.Free()
+		mixin.filterHint.BF = nil
 	}
 	mixin.filterState.filter = objectio.BlockReadFilter{}
 	mixin.filterState.memFilter = MemPKFilter{}
@@ -274,6 +277,7 @@ type withFilterMixin struct {
 	}
 
 	orderByLimit *objectio.IndexReaderTopOp
+	filterHint   engine.FilterHint
 }
 
 type reader struct {
@@ -359,7 +363,7 @@ func (r *mergeReader) Read(
 			r.rds = r.rds[1:]
 		} else {
 			if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-				logutil.Debug(testutil.OperatorCatchBatch("merge reader", outBatch))
+				logutil.Debug("merge reader catch batch")
 			}
 			return false, nil
 		}
@@ -405,7 +409,7 @@ func NewReader(
 	blockFilter, err := ConstructBlockPKFilter(
 		catalog.IsFakePkName(tableDef.Pkey.PkeyColName),
 		baseFilter,
-		filterHint.BloomFilter,
+		filterHint.BF,
 	)
 	if err != nil {
 		return nil, err
@@ -413,10 +417,11 @@ func NewReader(
 
 	r := &reader{
 		withFilterMixin: withFilterMixin{
-			fs:       fs,
-			ts:       ts,
-			tableDef: tableDef,
-			name:     tableDef.Name,
+			fs:         fs,
+			ts:         ts,
+			tableDef:   tableDef,
+			name:       tableDef.Name,
+			filterHint: filterHint,
 		},
 		source: source,
 	}
@@ -424,7 +429,7 @@ func NewReader(
 	r.filterState.expr = expr
 	r.filterState.filter = blockFilter
 	r.filterState.memFilter = memFilter
-	r.filterState.hasBF = len(filterHint.BloomFilter) > 0
+	r.filterState.hasBF = filterHint.BF != nil && filterHint.BF.Valid()
 	r.threshHold = threshHold
 	return r, nil
 }
