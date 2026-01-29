@@ -1635,7 +1635,11 @@ func (c *Compile) compileExternScanParallelWrite(n *plan.Node, param *tree.Exter
 	scope := c.constructScopeForExternal("", false)
 	currentFirstFlag := c.anal.isFirst
 	extern := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
-	extern.Es.ParallelLoad = true
+	parallelLoad := true
+	if len(fileList) > 0 && external.GetCompressType(param, fileList[0]) != tree.NOCOMPRESS {
+		parallelLoad = false
+	}
+	extern.Es.ParallelLoad = parallelLoad
 	extern.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	scope.setRootOperator(extern)
 	c.anal.isFirst = false
