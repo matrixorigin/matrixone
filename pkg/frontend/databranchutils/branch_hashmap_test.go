@@ -741,21 +741,19 @@ func TestBranchHashmapForEach(t *testing.T) {
 
 	collected := make(map[int64][]string)
 	err = bhIface.ForEachShardParallel(func(cursor ShardCursor) error {
-		return cursor.ForEach(func(key []byte, rows [][]byte) error {
+		return cursor.ForEach(func(key []byte, row []byte) error {
 			tuple, _, err := bhIface.DecodeRow(key)
 			require.NoError(t, err)
 			require.Len(t, tuple, 1)
 			keyVal, ok := tuple[0].(int64)
 			require.True(t, ok)
 
-			for _, rowBytes := range rows {
-				rowTuple, _, err := bhIface.DecodeRow(rowBytes)
-				require.NoError(t, err)
-				require.Len(t, rowTuple, 2)
-				valueBytes, ok := rowTuple[1].([]byte)
-				require.True(t, ok)
-				collected[keyVal] = append(collected[keyVal], string(valueBytes))
-			}
+			rowTuple, _, err := bhIface.DecodeRow(row)
+			require.NoError(t, err)
+			require.Len(t, rowTuple, 2)
+			valueBytes, ok := rowTuple[1].([]byte)
+			require.True(t, ok)
+			collected[keyVal] = append(collected[keyVal], string(valueBytes))
 			return nil
 		})
 	}, 1)
@@ -825,12 +823,12 @@ func TestBranchHashmapForEachShardPop(t *testing.T) {
 	require.NoError(t, bh.PutByVectors([]*vector.Vector{keyVec, valVec}, []int{0}))
 
 	err = bh.ForEachShardParallel(func(cursor ShardCursor) error {
-		return cursor.ForEach(func(key []byte, rows [][]byte) error {
+		return cursor.ForEach(func(key []byte, _ []byte) error {
 			keyCopy := append([]byte(nil), key...)
 			res, err := cursor.PopByEncodedKey(keyCopy, true)
 			require.NoError(t, err)
 			require.True(t, res.Exists)
-			require.Len(t, res.Rows, len(rows))
+			require.Len(t, res.Rows, 1)
 			return nil
 		})
 	}, 1)
@@ -866,12 +864,12 @@ func testBranchHashmapForEachShardParallelPop(t *testing.T, parallelism int) {
 	require.NoError(t, bh.PutByVectors([]*vector.Vector{keyVec, valVec}, []int{0}))
 
 	err = bh.ForEachShardParallel(func(cursor ShardCursor) error {
-		return cursor.ForEach(func(key []byte, rows [][]byte) error {
+		return cursor.ForEach(func(key []byte, _ []byte) error {
 			keyCopy := append([]byte(nil), key...)
 			res, err := cursor.PopByEncodedKey(keyCopy, true)
 			require.NoError(t, err)
 			require.True(t, res.Exists)
-			require.Len(t, res.Rows, len(rows))
+			require.Len(t, res.Rows, 1)
 			return nil
 		})
 	}, parallelism)
@@ -1011,12 +1009,12 @@ func TestBranchHashmapPopByEncodedKeyValue(t *testing.T) {
 		removedValue string
 	)
 	err = bh.ForEachShardParallel(func(cursor ShardCursor) error {
-		return cursor.ForEach(func(key []byte, rows [][]byte) error {
-			if len(rows) < 2 || len(keyCopy) > 0 {
+		return cursor.ForEach(func(key []byte, row []byte) error {
+			if len(row) == 0 || len(keyCopy) > 0 {
 				return nil
 			}
 			keyCopy = append([]byte(nil), key...)
-			valueCopy = append([]byte(nil), rows[1]...)
+			valueCopy = append([]byte(nil), row...)
 			tuple, _, err := bh.DecodeRow(valueCopy)
 			require.NoError(t, err)
 			valueBytes, ok := tuple[1].([]byte)
@@ -1071,11 +1069,11 @@ func TestBranchHashmapPopByEncodedFullValueExact(t *testing.T) {
 		removedValue string
 	)
 	err = bh.ForEachShardParallel(func(cursor ShardCursor) error {
-		return cursor.ForEach(func(_ []byte, rows [][]byte) error {
-			if len(rows) == 0 || len(valueCopy) > 0 {
+		return cursor.ForEach(func(_ []byte, row []byte) error {
+			if len(row) == 0 || len(valueCopy) > 0 {
 				return nil
 			}
-			valueCopy = append([]byte(nil), rows[0]...)
+			valueCopy = append([]byte(nil), row...)
 			tuple, _, err := bh.DecodeRow(valueCopy)
 			require.NoError(t, err)
 			valueBytes, ok := tuple[1].([]byte)
@@ -1509,8 +1507,7 @@ func collectInt64EncodedKeys(t *testing.T, bh BranchHashmap) map[int64][]byte {
 
 	result := make(map[int64][]byte)
 	err := bh.ForEachShardParallel(func(cursor ShardCursor) error {
-		return cursor.ForEach(func(key []byte, rows [][]byte) error {
-			_ = rows
+		return cursor.ForEach(func(key []byte, _ []byte) error {
 			tuple, _, err := bh.DecodeRow(key)
 			require.NoError(t, err)
 			require.Len(t, tuple, 1)
@@ -1710,7 +1707,7 @@ func BenchmarkForEachShardParallel(b *testing.B) {
 
 		for i := 0; i < b.N; i++ {
 			err := bh.ForEachShardParallel(func(cursor ShardCursor) error {
-				return cursor.ForEach(func(key []byte, rows [][]byte) error {
+				return cursor.ForEach(func(_ []byte, _ []byte) error {
 					return nil
 				})
 			}, 1)
@@ -1727,7 +1724,7 @@ func BenchmarkForEachShardParallel(b *testing.B) {
 		b.RunParallel(func(pb *testing.PB) {
 			for pb.Next() {
 				err = bh.ForEachShardParallel(func(cursor ShardCursor) error {
-					return cursor.ForEach(func(key []byte, rows [][]byte) error {
+					return cursor.ForEach(func(_ []byte, _ []byte) error {
 						return nil
 					})
 				}, -1)

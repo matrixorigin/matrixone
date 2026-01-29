@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -69,6 +70,71 @@ const (
 	diffDelete = "DELETE"
 	diffUpdate = "UPDATE"
 )
+
+const branchHashmapMemoryLimit = 500 * 200 * mpool.MB
+
+type branchHashmapAllocator struct {
+	upstream malloc.Allocator
+	max      uint64
+	inUse    atomic.Uint64
+}
+
+type branchHashmapDeallocator struct {
+	upstream malloc.Deallocator
+	inUse    *atomic.Uint64
+	size     uint64
+}
+
+func newBranchHashmapAllocator(max uint64) *branchHashmapAllocator {
+	return &branchHashmapAllocator{
+		upstream: malloc.GetDefault(nil),
+		max:      max,
+	}
+}
+
+func (a *branchHashmapAllocator) Allocate(size uint64, hints malloc.Hints) ([]byte, malloc.Deallocator, error) {
+	for {
+		cur := a.inUse.Load()
+		next := cur + size
+		if next > a.max {
+			// Treat limit as a spill signal, not an error.
+			return nil, nil, nil
+		}
+		if !a.inUse.CompareAndSwap(cur, next) {
+			continue
+		}
+		buf, dec, err := a.upstream.Allocate(size, hints)
+		if err != nil {
+			a.inUse.Add(^uint64(size - 1))
+			return nil, nil, err
+		}
+		if buf == nil {
+			a.inUse.Add(^uint64(size - 1))
+			return nil, nil, nil
+		}
+		return buf, &branchHashmapDeallocator{
+			upstream: dec,
+			inUse:    &a.inUse,
+			size:     size,
+		}, nil
+	}
+}
+
+func (d *branchHashmapDeallocator) Deallocate() {
+	if d.upstream != nil {
+		d.upstream.Deallocate()
+	}
+	if d.size > 0 && d.inUse != nil {
+		d.inUse.Add(^uint64(d.size - 1))
+	}
+}
+
+func (d *branchHashmapDeallocator) As(target malloc.Trait) bool {
+	if d.upstream != nil {
+		return d.upstream.As(target)
+	}
+	return false
+}
 
 var diffTempTableSeq uint64
 
@@ -3325,7 +3391,7 @@ func hashDiffIfNoLCA(
 ) (err error) {
 
 	if err = tarTombstoneHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
-		return cursor.ForEach(func(key []byte, rows [][]byte) error {
+		return cursor.ForEach(func(key []byte, _ []byte) error {
 			_, err2 := tarDataHashmap.PopByEncodedKey(key, true)
 			return err2
 		})
@@ -3335,7 +3401,7 @@ func hashDiffIfNoLCA(
 	}
 
 	if err = baseTombstoneHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
-		return cursor.ForEach(func(key []byte, rows [][]byte) error {
+		return cursor.ForEach(func(key []byte, _ []byte) error {
 			_, err2 := baseDataHashmap.PopByEncodedKey(key, true)
 			return err2
 		})
@@ -3415,24 +3481,21 @@ func findDeleteAndUpdateBat(
 			}
 		}
 
-		if err2 = cursor.ForEach(func(key []byte, rows [][]byte) error {
-			for range rows {
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				default:
-				}
-
-				if tuple, _, err2 = tombstoneHashmap.DecodeRow(key); err2 != nil {
-					return err2
-				} else {
-					if err2 = vector.AppendAny(tBat1.Vecs[0], tuple[0], false, ses.proc.Mp()); err2 != nil {
-						return err2
-					}
-
-					tBat1.SetRowCount(tBat1.Vecs[0].Length())
-				}
+		if err2 = cursor.ForEach(func(key []byte, _ []byte) error {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
 			}
+
+			if tuple, _, err2 = tombstoneHashmap.DecodeRow(key); err2 != nil {
+				return err2
+			}
+			if err2 = vector.AppendAny(tBat1.Vecs[0], tuple[0], false, ses.proc.Mp()); err2 != nil {
+				return err2
+			}
+
+			tBat1.SetRowCount(tBat1.Vecs[0].Length())
 			return nil
 		}); err2 != nil {
 			return err2
@@ -3655,83 +3718,81 @@ func diffDataHelper(
 		tarBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
 		baseBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
 
-		if err2 = cursor.ForEach(func(key []byte, rows [][]byte) error {
+		if err2 = cursor.ForEach(func(key []byte, row []byte) error {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
 			default:
 			}
 
-			for _, row := range rows {
-				if tblStuff.def.pkKind == fakeKind {
-					if checkRet, err2 = baseDataHashmap.PopByEncodedFullValue(row, false); err2 != nil {
-						return err2
-					}
-				} else {
-					if checkRet, err2 = baseDataHashmap.PopByEncodedKey(key, false); err2 != nil {
-						return err2
-					}
+			if tblStuff.def.pkKind == fakeKind {
+				if checkRet, err2 = baseDataHashmap.PopByEncodedFullValue(row, false); err2 != nil {
+					return err2
+				}
+			} else {
+				if checkRet, err2 = baseDataHashmap.PopByEncodedKey(key, false); err2 != nil {
+					return err2
+				}
+			}
+
+			if !checkRet.Exists {
+				if tarTuple, _, err2 = tarDataHashmap.DecodeRow(row); err2 != nil {
+					return err2
 				}
 
-				if !checkRet.Exists {
+				if err2 = appendTupleToBat(ses, tarBat, tarTuple, tblStuff); err2 != nil {
+					return err2
+				}
+
+			} else {
+				// both has the key, we continue compare the left columns,
+				// if all columns are equal, exactly the same row, ignore.
+				if tblStuff.def.pkKind == fakeKind {
+					// all columns already compared.
+					// ignore
+				} else {
 					if tarTuple, _, err2 = tarDataHashmap.DecodeRow(row); err2 != nil {
 						return err2
 					}
 
-					if err2 = appendTupleToBat(ses, tarBat, tarTuple, tblStuff); err2 != nil {
+					if baseTuple, _, err2 = baseDataHashmap.DecodeRow(checkRet.Rows[0]); err2 != nil {
 						return err2
 					}
 
-				} else {
-					// both has the key, we continue compare the left columns,
-					// if all columns are equal, exactly the same row, ignore.
-					if tblStuff.def.pkKind == fakeKind {
-						// all columns already compared.
-						// ignore
-					} else {
-						if tarTuple, _, err2 = tarDataHashmap.DecodeRow(row); err2 != nil {
-							return err2
+					notSame := false
+					for _, idx := range tblStuff.def.visibleIdxes {
+						if slices.Index(tblStuff.def.pkColIdxes, idx) != -1 {
+							// pk columns already compared
+							continue
 						}
 
-						if baseTuple, _, err2 = baseDataHashmap.DecodeRow(checkRet.Rows[0]); err2 != nil {
-							return err2
+						if types.CompareValue(
+							tarTuple[idx], baseTuple[idx],
+						) != 0 {
+							notSame = true
+							break
 						}
+					}
 
-						notSame := false
-						for _, idx := range tblStuff.def.visibleIdxes {
-							if slices.Index(tblStuff.def.pkColIdxes, idx) != -1 {
-								// pk columns already compared
-								continue
+					if notSame {
+						if copt.conflictOpt != nil &&
+							copt.conflictOpt.Opt == tree.CONFLICT_ACCEPT &&
+							copt.expandUpdate {
+							if baseDeleteBat == nil {
+								baseDeleteBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
 							}
-
-							if types.CompareValue(
-								tarTuple[idx], baseTuple[idx],
-							) != 0 {
-								notSame = true
-								break
+							if err2 = appendTupleToBat(ses, baseDeleteBat, baseTuple, tblStuff); err2 != nil {
+								return err2
 							}
-						}
-
-						if notSame {
-							if copt.conflictOpt != nil &&
-								copt.conflictOpt.Opt == tree.CONFLICT_ACCEPT &&
-								copt.expandUpdate {
-								if baseDeleteBat == nil {
-									baseDeleteBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
-								}
-								if err2 = appendTupleToBat(ses, baseDeleteBat, baseTuple, tblStuff); err2 != nil {
-									return err2
-								}
-								if err2 = appendTupleToBat(ses, tarBat, tarTuple, tblStuff); err2 != nil {
-									return err2
-								}
-							} else {
-								// conflict happened
-								if err2 = checkConflictAndAppendToBat(
-									ses, copt, tblStuff, tarBat, baseBat, tarTuple, baseTuple,
-								); err2 != nil {
-									return err2
-								}
+							if err2 = appendTupleToBat(ses, tarBat, tarTuple, tblStuff); err2 != nil {
+								return err2
+							}
+						} else {
+							// conflict happened
+							if err2 = checkConflictAndAppendToBat(
+								ses, copt, tblStuff, tarBat, baseBat, tarTuple, baseTuple,
+							); err2 != nil {
+								return err2
 							}
 						}
 					}
@@ -3801,21 +3862,19 @@ func diffDataHelper(
 
 		bat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
 
-		if err2 = cursor.ForEach(func(key []byte, rows [][]byte) error {
+		if err2 = cursor.ForEach(func(_ []byte, row []byte) error {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
 			default:
 			}
 
-			for _, row := range rows {
-				if tuple, _, err2 = baseDataHashmap.DecodeRow(row); err2 != nil {
-					return err2
-				}
+			if tuple, _, err2 = baseDataHashmap.DecodeRow(row); err2 != nil {
+				return err2
+			}
 
-				if err2 = appendTupleToBat(ses, bat, tuple, tblStuff); err2 != nil {
-					return err2
-				}
+			if err2 = appendTupleToBat(ses, bat, tuple, tblStuff); err2 != nil {
+				return err2
 			}
 			return nil
 		}); err2 != nil {
@@ -4294,11 +4353,17 @@ func buildHashmapForTable(
 		}
 	}()
 
-	if dataHashmap, err = databranchutils.NewBranchHashmap(); err != nil {
+	// Share one bounded allocator so both hashmaps spill instead of erroring.
+	sharedAllocator := newBranchHashmapAllocator(branchHashmapMemoryLimit)
+	if dataHashmap, err = databranchutils.NewBranchHashmap(
+		databranchutils.WithBranchHashmapAllocator(sharedAllocator),
+	); err != nil {
 		return
 	}
 
-	if tombstoneHashmap, err = databranchutils.NewBranchHashmap(); err != nil {
+	if tombstoneHashmap, err = databranchutils.NewBranchHashmap(
+		databranchutils.WithBranchHashmapAllocator(sharedAllocator),
+	); err != nil {
 		return
 	}
 
@@ -4306,28 +4371,39 @@ func buildHashmapForTable(
 		if bat == nil {
 			return nil
 		}
+		select {
+		case <-ctx.Done():
+			bat.Clean(mp)
+			return ctx.Err()
+		default:
+		}
 
 		wg.Add(1)
 
 		if err = tblStuff.worker.Submit(func() {
 			defer wg.Done()
+			defer bat.Clean(mp)
 
 			ll := bat.VectorCount()
 			var taskErr error
-			if isTombstone {
-				// keep the commit ts
-				taskErr = tombstoneHashmap.PutByVectors(bat.Vecs[:ll], []int{0})
-			} else {
-				// keep the commit ts
-				taskErr = dataHashmap.PutByVectors(bat.Vecs[:ll], []int{tblStuff.def.pkColIdx})
+			select {
+			case <-ctx.Done():
+				taskErr = ctx.Err()
+			default:
+				if isTombstone {
+					// keep the commit ts
+					taskErr = tombstoneHashmap.PutByVectors(bat.Vecs[:ll], []int{0})
+				} else {
+					// keep the commit ts
+					taskErr = dataHashmap.PutByVectors(bat.Vecs[:ll], []int{tblStuff.def.pkColIdx})
+				}
 			}
-
-			bat.Clean(mp)
 			if taskErr != nil {
 				atomicErr.Store(taskErr)
 			}
 		}); err != nil {
 			wg.Done()
+			bat.Clean(mp)
 		}
 
 		return err
@@ -4335,6 +4411,12 @@ func buildHashmapForTable(
 
 	for _, handle := range handles {
 		for {
+			select {
+			case <-ctx.Done():
+				err = ctx.Err()
+				return
+			default:
+			}
 			if dataBat, tombstoneBat, _, err = handle.Next(
 				ctx, mp,
 			); err != nil {
@@ -4363,6 +4445,12 @@ func buildHashmapForTable(
 
 	if atomicErr.Load() != nil {
 		err = atomicErr.Load().(error)
+	} else {
+		select {
+		case <-ctx.Done():
+			err = ctx.Err()
+		default:
+		}
 	}
 
 	if err != nil {
@@ -4408,52 +4496,63 @@ func buildHashmapForTable(
 			tuple   types.Tuple
 			dataRet databranchutils.GetResult
 		)
-		if err2 = cursor.ForEach(func(key []byte, rows [][]byte) error {
-			if len(rows) > 1 {
-				//tsMap := make(map[types.TS]struct{})
-				maxIdx = 0
-				maxTs = types.MinTs()
-				for i := 0; i < len(rows); i++ {
-					if tuple, _, err3 = tombstoneHashmap.DecodeRow(rows[i]); err3 != nil {
+		if err2 = cursor.ForEach(func(key []byte, _ []byte) error {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+			var tombstoneRet databranchutils.GetResult
+			if tombstoneRet, err3 = cursor.GetByEncodedKey(key); err3 != nil {
+				return err3
+			}
+			if len(tombstoneRet.Rows) <= 1 {
+				return nil
+			}
+
+			//tsMap := make(map[types.TS]struct{})
+			maxIdx = 0
+			maxTs = types.MinTs()
+			for i := 0; i < len(tombstoneRet.Rows); i++ {
+				if tuple, _, err3 = tombstoneHashmap.DecodeRow(tombstoneRet.Rows[i]); err3 != nil {
+					return err3
+				}
+				cur := types.TS(tuple[len(tuple)-1].([]uint8))
+				if cur.GT(&maxTs) {
+					maxTs = cur
+					maxIdx = i
+				}
+				//tsMap[cur] = struct{}{}
+			}
+			//delete(tsMap, maxTs)
+
+			for i := range tombstoneRet.Rows {
+				if i != maxIdx {
+					if _, err3 = cursor.PopByEncodedKeyValue(
+						key, tombstoneRet.Rows[i], false,
+					); err3 != nil {
+						return err3
+					}
+				}
+			}
+
+			if dataRet, err3 = dataHashmap.GetByEncodedKey(key); err3 != nil {
+				return err3
+			}
+
+			if dataRet.Exists {
+				for i := range dataRet.Rows {
+					if tuple, _, err3 = dataHashmap.DecodeRow(dataRet.Rows[i]); err3 != nil {
 						return err3
 					}
 					cur := types.TS(tuple[len(tuple)-1].([]uint8))
-					if cur.GT(&maxTs) {
-						maxTs = cur
-						maxIdx = i
-					}
-					//tsMap[cur] = struct{}{}
-				}
-				//delete(tsMap, maxTs)
-
-				for i := range rows {
-					if i != maxIdx {
-						if _, err3 = cursor.PopByEncodedKeyValue(
-							key, rows[i], false,
+					// cannot use tsMap to filter, why?
+					// cannot use cur != maxTS to filter, why?
+					if cur.LT(&maxTs) {
+						if _, err3 = dataHashmap.PopByEncodedKeyValue(
+							key, dataRet.Rows[i], false,
 						); err3 != nil {
 							return err3
-						}
-					}
-				}
-
-				if dataRet, err3 = dataHashmap.GetByEncodedKey(key); err3 != nil {
-					return err3
-				}
-
-				if dataRet.Exists {
-					for i := range dataRet.Rows {
-						if tuple, _, err3 = dataHashmap.DecodeRow(dataRet.Rows[i]); err3 != nil {
-							return err3
-						}
-						cur := types.TS(tuple[len(tuple)-1].([]uint8))
-						// cannot use tsMap to filter, why?
-						// cannot use cur != maxTS to filter, why?
-						if cur.LT(&maxTs) {
-							if _, err3 = dataHashmap.PopByEncodedKeyValue(
-								key, dataRet.Rows[i], false,
-							); err3 != nil {
-								return err3
-							}
 						}
 					}
 				}
