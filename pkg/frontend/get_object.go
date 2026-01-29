@@ -17,7 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"io"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -26,6 +26,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
+
+const (
+	// getObjectChunkSize is the size of each chunk for GetObject (100MB)
+	getObjectChunkSize = 100 * 1024 * 1024
+	// getObjectMaxMemory is the maximum memory for concurrent GetObject operations (5GB)
+	getObjectMaxMemory = 5 * 1024 * 1024 * 1024
+	// getObjectMaxConcurrent is the maximum concurrent chunk reads (5GB / 100MB = 50)
+	getObjectMaxConcurrent = getObjectMaxMemory / getObjectChunkSize
+)
+
+// chunkBufferPool is a pool for reusing 100MB buffers in GetObject
+var chunkBufferPool = sync.Pool{
+	New: func() interface{} {
+		buf := make([]byte, getObjectChunkSize)
+		return &buf
+	},
+}
+
+// chunkSemaphore limits concurrent memory usage for GetObject (5GB max)
+var chunkSemaphore = make(chan struct{}, getObjectMaxConcurrent)
 
 // GetObjectPermissionChecker is the function to check publication permission for GetObject
 // This is exported as a variable to allow stubbing in tests
@@ -70,11 +90,19 @@ func readObjectFromFS(ctx context.Context, ses *Session, objectName string, offs
 
 // ReadObjectFromEngine reads the object file from engine's fileservice and returns its content as []byte
 // offset: 读取偏移，>=0
-// size: 读取大小，-1 表示读到末尾
+// size: 读取大小，必须 > 0 且 <= 100MB (getObjectChunkSize)
 // This is a version that doesn't require Session
 func ReadObjectFromEngine(ctx context.Context, eng engine.Engine, objectName string, offset int64, size int64) ([]byte, error) {
 	if eng == nil {
 		return nil, moerr.NewInternalError(ctx, "engine is not available")
+	}
+
+	// Validate size: must be positive and within chunk size limit
+	if size <= 0 {
+		return nil, moerr.NewInternalError(ctx, "size must be positive")
+	}
+	if size > getObjectChunkSize {
+		return nil, moerr.NewInternalError(ctx, "size exceeds maximum chunk size (100MB)")
 	}
 
 	var de *disttae.Engine
@@ -94,34 +122,40 @@ func ReadObjectFromEngine(ctx context.Context, eng engine.Engine, objectName str
 		return nil, moerr.NewInternalError(ctx, "fileservice is not available")
 	}
 
-	var r io.ReadCloser
+	// Acquire semaphore for memory control (blocks if 5GB limit reached)
+	select {
+	case chunkSemaphore <- struct{}{}:
+		// acquired
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-chunkSemaphore }()
+
+	// Get buffer from pool for reuse
+	bufPtr := chunkBufferPool.Get().(*[]byte)
+	buf := *bufPtr
+	defer chunkBufferPool.Put(bufPtr)
+
+	// Use pre-allocated buffer in IOEntry.Data to avoid fileservice internal allocation
+	entry := fileservice.IOEntry{
+		Offset: offset,
+		Size:   size,
+		Data:   buf[:size],
+	}
+
 	err := fs.Read(ctx, &fileservice.IOVector{
 		FilePath: objectName,
-		Entries: []fileservice.IOEntry{
-			{
-				Offset:            offset,
-				Size:              size,
-				ReadCloserForRead: &r,
-			},
-		},
+		Entries:  []fileservice.IOEntry{entry},
 	})
 	if err != nil {
-		// If ReadCloser was set even on error, close it to release resources
-		if r != nil {
-			r.Close()
-		}
-		return nil, err
-	}
-	// Ensure ReadCloser is closed to release memory allocated by fileservice
-	// The ReadCloser now properly manages memory lifecycle (see io_entry.go fix)
-	defer r.Close()
-
-	content, err := io.ReadAll(r)
-	if err != nil {
 		return nil, err
 	}
 
-	return content, nil
+	// Copy result to a new slice (buffer will be returned to pool)
+	result := make([]byte, size)
+	copy(result, entry.Data[:size])
+
+	return result, nil
 }
 
 func handleGetObject(
@@ -192,12 +226,11 @@ func handleGetObject(
 	fileSize := dirEntry.Size
 
 	// Calculate total data chunks (chunk 0 is metadata, chunks 1+ are data)
-	const chunkSize = 100 * 1024 * 1024 // 100MB
 	var totalChunks int64
-	if fileSize <= chunkSize {
+	if fileSize <= getObjectChunkSize {
 		totalChunks = 1
 	} else {
-		totalChunks = (fileSize + chunkSize - 1) / chunkSize // 向上取整
+		totalChunks = (fileSize + getObjectChunkSize - 1) / getObjectChunkSize // 向上取整
 	}
 
 	// Validate chunk index
@@ -219,9 +252,9 @@ func handleGetObject(
 
 	} else {
 		// Data chunk request (chunkIndex >= 1)
-		// Calculate offset: chunk 1 starts at offset 0, chunk 2 at chunkSize, etc.
-		offset := (chunkIndex - 1) * chunkSize
-		size := int64(chunkSize)
+		// Calculate offset: chunk 1 starts at offset 0, chunk 2 at getObjectChunkSize, etc.
+		offset := (chunkIndex - 1) * getObjectChunkSize
+		size := int64(getObjectChunkSize)
 		if chunkIndex == totalChunks {
 			// Last chunk may be smaller
 			size = fileSize - offset
