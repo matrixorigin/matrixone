@@ -514,18 +514,18 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 		return nil, moerr.NewInternalErrorNoCtx("no router available")
 	}
 
-	var sconn ServerConn
+	var sc ServerConn
 	// If connCache is enabled, try to get connection from the cache.
 	if c.connCache != nil {
-		sconn = c.connCache.Pop(c.clientInfo.hash, c.connID, c.mysqlProto.GetSalt(), c.mysqlProto.GetAuthResponse())
-		if sconn != nil {
+		sc = c.connCache.Pop(c.clientInfo.hash, c.connID, c.mysqlProto.GetSalt(), c.mysqlProto.GetAuthResponse())
+		if sc != nil {
 			// get the response from the cn server.
-			re := sconn.GetConnResponse()
-			if err := c.sendPacketToClient(re, sconn); err != nil {
+			re := sc.GetConnResponse()
+			if err := c.sendPacketToClient(re, sc); err != nil {
 				return nil, err
 			}
 			v2.ProxyConnectSuccessCounter.Inc()
-			return sconn, nil
+			return sc, nil
 		}
 	}
 
@@ -576,7 +576,7 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 
 		// After select a CN server, we try to connect to it. If connect
 		// fails, and it is a retryable error, we reselect another CN server.
-		sconn, r, err = c.router.Connect(cn, c.handshakePack, c.tun)
+		sc, r, err = c.router.Connect(cn, c.handshakePack, c.tun)
 		if err != nil {
 			if isRetryableErr(err) {
 				v2.ProxyConnectRetryCounter.Inc()
@@ -607,8 +607,8 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 			if len(r) < 5 {
 				c.log.Error("the response from cn server is not correct",
 					zap.Int("length", len(r)))
-				if sconn != nil {
-					closeErr := sconn.Close()
+				if sc != nil {
+					closeErr := sc.Close()
 					if closeErr != nil {
 						c.log.Error("failed to close server connection", zap.Error(closeErr))
 					}
@@ -616,17 +616,17 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 			}
 
 			// set the response from the cn server.
-			sconn.SetConnResponse(r[4:])
+			sc.SetConnResponse(r[4:])
 
 			// whatever the response is, we always send it to client.
-			if err := c.sendPacketToClient(r[4:], sconn); err != nil {
+			if err := c.sendPacketToClient(r[4:], sc); err != nil {
 				return nil, err
 			}
 		} else {
 			// The connection has been transferred to a new server, but migration fails,
 			// but we don't return error, which will cause unknown issue.
-			if err := c.migrateConn(prevAdd, sconn); err != nil {
-				closeErr := sconn.Close()
+			if err := c.migrateConn(prevAdd, sc); err != nil {
+				closeErr := sc.Close()
 				if closeErr != nil {
 					c.log.Error("failed to close server connection", zap.Error(closeErr))
 				}
@@ -651,8 +651,8 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 		c.log.Error("response is not OK", zap.Any("packet", err))
 		// If we do not close here, there will be a lot of unused connections
 		// in connManager.
-		if sconn != nil {
-			if closeErr := sconn.Close(); closeErr != nil {
+		if sc != nil {
+			if closeErr := sc.Close(); closeErr != nil {
 				c.log.Error("failed to close server connection", zap.Error(closeErr))
 			}
 		}
@@ -661,7 +661,7 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 			codeAuthFailed)
 	}
 	v2.ProxyConnectSuccessCounter.Inc()
-	return sconn, nil
+	return sc, nil
 }
 
 func (c *clientConn) sendPacketToClient(r []byte, sc ServerConn) error {
