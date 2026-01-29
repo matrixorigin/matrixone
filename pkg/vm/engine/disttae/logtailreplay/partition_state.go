@@ -1410,7 +1410,7 @@ func (p *PartitionState) CollectTombstoneStats(
 	return p.countTombstoneStatsWithMap(ctx, snapshot, fs, visibleObjects, stats)
 }
 
-// isDataObjectVisible checks if a data object is visible at the given snapshot.
+// IsDataObjectVisible checks if a data object is visible at the given snapshot.
 //
 // Background:
 // - CN can delete rows on both appendable and non-appendable data objects
@@ -1420,7 +1420,7 @@ func (p *PartitionState) CollectTombstoneStats(
 // This function checks:
 // 1. Non-appendable objects in dataObjectsNameIndex (O(log n) lookup)
 // 2. Appendable objects in rows btree (O(n) scan, but cached by caller)
-func (p *PartitionState) isDataObjectVisible(objId *types.Objectid, snapshot types.TS) bool {
+func (p *PartitionState) IsDataObjectVisible(objId *types.Objectid, snapshot types.TS) bool {
 	// Build a dummy ObjectEntry with the target objectid for lookup
 	var stats objectio.ObjectStats
 	objectio.SetObjectStatsObjectName(&stats, objectio.BuildObjectNameWithObjectID(objId))
@@ -1530,7 +1530,7 @@ func (p *PartitionState) countTombstoneStatsLinear(
 				if !lastObjIdSet || !objId.EQ(&lastObjId) {
 					lastObjId = *objId
 					lastObjIdSet = true
-					lastVisible = p.isDataObjectVisible(objId, snapshot)
+					lastVisible = p.IsDataObjectVisible(objId, snapshot)
 				}
 
 				if lastVisible {
@@ -1626,7 +1626,7 @@ func (p *PartitionState) countTombstoneStatsWithMap(
 					if !lastObjIdSet || !objId.EQ(&lastObjId) {
 						lastObjId = *objId
 						lastObjIdSet = true
-						lastVisible = p.isDataObjectVisible(objId, snapshot)
+						lastVisible = p.IsDataObjectVisible(objId, snapshot)
 					}
 
 					if lastVisible {
@@ -1673,7 +1673,7 @@ func (p *PartitionState) countTombstoneStatsWithMap(
 		if !lastObjIdSet || !objId.EQ(&lastObjId) {
 			lastObjId = *objId
 			lastObjIdSet = true
-			lastVisible = p.isDataObjectVisible(objId, snapshot)
+			lastVisible = p.IsDataObjectVisible(objId, snapshot)
 		}
 
 		if lastVisible {
@@ -1757,7 +1757,7 @@ func (it *tombstoneBlockIterator) next() bool {
 			}
 
 			objId := it.inMemEntry.RowID.BorrowObjectID()
-			if !it.p.isDataObjectVisible(objId, it.snapshot) {
+			if !it.p.IsDataObjectVisible(objId, it.snapshot) {
 				continue
 			}
 
@@ -1774,7 +1774,7 @@ func (it *tombstoneBlockIterator) next() bool {
 			}
 
 			objId := it.rowIds[it.rowIdx].BorrowObjectID()
-			if !it.p.isDataObjectVisible(objId, it.snapshot) {
+			if !it.p.IsDataObjectVisible(objId, it.snapshot) {
 				it.rowIdx++
 				continue
 			}
