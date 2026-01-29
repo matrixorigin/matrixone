@@ -36,6 +36,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+var kAlwaysFalseExpr = &plan.Expr{
+	Typ: plan.Type{
+		Id:          int32(types.T_bool),
+		Width:       1,
+		Scale:       0,
+		NotNullable: true,
+	},
+	Expr: &plan.Expr_Lit{
+		Lit: &plan.Literal{
+			Value: &plan.Literal_Bval{
+				Bval: false,
+			},
+		},
+	},
+}
+
 func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (expr *Expr, err error) {
 	switch exprImpl := astExpr.(type) {
 	case *tree.NumVal:
@@ -819,6 +835,11 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		return b.bindFuncExprImplByAstExpr("not", []tree.Expr{newExpr}, depth)
 
 	case tree.IN:
+		if leftTuple, ok := astExpr.Left.(*tree.Tuple); ok {
+			if rightTuple, ok := astExpr.Right.(*tree.Tuple); ok {
+				return b.bindTupleInByAst(leftTuple, rightTuple, depth, false)
+			}
+		}
 		switch r := astExpr.Right.(type) {
 		case *tree.Tuple:
 			op = "in"
@@ -863,6 +884,11 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		}
 
 	case tree.NOT_IN:
+		if leftTuple, ok := astExpr.Left.(*tree.Tuple); ok {
+			if rightTuple, ok := astExpr.Right.(*tree.Tuple); ok {
+				return b.bindTupleInByAst(leftTuple, rightTuple, depth, true)
+			}
+		}
 		switch astExpr.Right.(type) {
 		case *tree.Tuple:
 			op = "not_in"
@@ -959,6 +985,51 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 	}
 
 	return b.bindFuncExprImplByAstExpr(op, []tree.Expr{astExpr.Left, astExpr.Right}, depth)
+}
+
+func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tuple, depth int32, isNot bool) (*plan.Expr, error) {
+	var newExpr *plan.Expr
+
+	for _, rightVal := range rightTuple.Exprs {
+		rightTupleVal, ok := rightVal.(*tree.Tuple)
+		if !ok {
+			return nil, moerr.NewInternalError(b.GetContext(), "IN list must contain tuples")
+		}
+		if len(leftTuple.Exprs) != len(rightTupleVal.Exprs) {
+			return nil, moerr.NewInternalError(b.GetContext(), "tuple length mismatch")
+		}
+
+		var andExpr *plan.Expr
+		for i := 0; i < len(leftTuple.Exprs); i++ {
+			eqExpr, err := b.bindFuncExprImplByAstExpr("=", []tree.Expr{leftTuple.Exprs[i], rightTupleVal.Exprs[i]}, depth)
+			if err != nil {
+				return nil, err
+			}
+			if andExpr == nil {
+				andExpr = eqExpr
+			} else {
+				andExpr, err = BindFuncExprImplByPlanExpr(b.GetContext(), "and", []*plan.Expr{andExpr, eqExpr})
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+
+		if newExpr == nil {
+			newExpr = andExpr
+		} else {
+			var err error
+			newExpr, err = BindFuncExprImplByPlanExpr(b.GetContext(), "or", []*plan.Expr{newExpr, andExpr})
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	if isNot {
+		return BindFuncExprImplByPlanExpr(b.GetContext(), "not", []*plan.Expr{newExpr})
+	}
+	return newExpr, nil
 }
 
 func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bool) (*Expr, error) {
@@ -1261,6 +1332,7 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 		}
 
 		fnArgs := retExpr.GetF().Args
+
 		arg1, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[1], proc, false, true)
 		if err != nil {
 			goto between_fallback
@@ -1297,6 +1369,63 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 		}
 
 		retExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false, true)
+
+	case "in_range":
+		if proc == nil {
+			return nil, moerr.NewInvalidInput(ctx, "can't use in_range without proc")
+		}
+
+		fnArgs := retExpr.GetF().Args
+
+		arg3, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[3], proc, false, true)
+		if err != nil {
+			return nil, err
+		}
+		fnArgs[3] = arg3
+
+		flagLit := arg3.GetLit()
+		if arg3.Typ.Id != int32(types.T_uint8) || flagLit == nil {
+			return nil, moerr.NewInvalidInput(ctx, "4th argument of in_range must be unsigned tinyint literal")
+		}
+		flag := flagLit.GetU8Val()
+
+		arg1, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[1], proc, false, true)
+		if err != nil {
+			return nil, err
+		}
+		fnArgs[1] = arg1
+
+		lit1 := arg1.GetLit()
+		if arg1.Typ.Id == int32(types.T_any) || lit1 == nil {
+			return nil, moerr.NewInvalidInput(ctx, "2nd argument of in_range must be constant")
+		}
+
+		arg2, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[2], proc, false, true)
+		if err != nil {
+			return nil, err
+		}
+		fnArgs[2] = arg2
+
+		lit2 := arg2.GetLit()
+		if arg2.Typ.Id == int32(types.T_any) || lit2 == nil {
+			return nil, moerr.NewInvalidInput(ctx, "3rd argument of in_range must be constant")
+		}
+
+		fnName := "<="
+		if flag != 0 {
+			fnName = "<"
+		}
+		rangeCheckFn, _ := BindFuncExprImplByPlanExpr(ctx, fnName, []*plan.Expr{arg1, arg2})
+		rangeCheckRes, _ := ConstantFold(batch.EmptyForConstFoldBatch, rangeCheckFn, proc, false, true)
+		rangeCheckVal := rangeCheckRes.GetLit()
+		if rangeCheckVal == nil {
+			return nil, moerr.NewInvalidInput(ctx, "2nd and 3rd arguments not comparable")
+		}
+		if !rangeCheckVal.GetBval() {
+			retExpr = DeepCopyExpr(kAlwaysFalseExpr)
+		} else {
+			retExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false, true)
+		}
 	}
 
 	return retExpr, nil
@@ -1524,6 +1653,18 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			args[0], err = appendCastBeforeExpr(ctx, args[0], plan.Type{
 				Id:          int32(types.T_decimal128),
 				NotNullable: args[0].Typ.NotNullable,
+			})
+			if err != nil {
+				return nil, err
+			}
+		}
+	case "in_range":
+		if len(args) != 4 {
+			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
+		}
+		if args[3].Typ.Id != int32(types.T_any) && args[3].Typ.Id != int32(types.T_uint8) {
+			args[3], err = appendCastBeforeExpr(ctx, args[3], plan.Type{
+				Id: int32(types.T_uint8),
 			})
 			if err != nil {
 				return nil, err
@@ -1909,6 +2050,16 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	case "between":
 		if checkNoNeedCast(argsType[1], argsType[0], args[1]) && checkNoNeedCast(argsType[2], argsType[0], args[2]) {
 			argsCastType = []types.Type{argsType[0], argsType[0], argsType[0]}
+			fGet, err = function.GetFunctionByName(ctx, name, argsCastType)
+			if err != nil {
+				return nil, err
+			}
+			funcID = fGet.GetEncodedOverloadID()
+		}
+
+	case "in_range":
+		if checkNoNeedCast(argsType[1], argsType[0], args[1]) && checkNoNeedCast(argsType[2], argsType[0], args[2]) {
+			argsCastType = []types.Type{argsType[0], argsType[0], argsType[0], argsType[3]}
 			fGet, err = function.GetFunctionByName(ctx, name, argsCastType)
 			if err != nil {
 				return nil, err

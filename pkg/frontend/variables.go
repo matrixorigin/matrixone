@@ -970,6 +970,18 @@ func useTomlConfigOverOtherConfigs(CNServiceConfig *config.FrontendParameters, s
 	sysVarsMp["version"] = verPrefix + verVal
 }
 
+func resolveServerID(ses *Session) string {
+	if ses == nil {
+		return ""
+	}
+	rm := ses.getRoutineManager()
+	if rm == nil || rm.baseService == nil {
+		return ""
+	}
+	serviceID := rm.baseService.ID()
+	return serviceID
+}
+
 // Get return sys vars of accountId
 func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Context, bh BackgroundExec) (*SystemVariables, error) {
 	sysVarsMp, err := ses.getGlobalSysVars(ctx, bh)
@@ -979,6 +991,7 @@ func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Conte
 
 	CNServiceConfig := getPu(ses.service).SV
 	useTomlConfigOverOtherConfigs(CNServiceConfig, sysVarsMp)
+	sysVarsMp["server_id"] = resolveServerID(ses)
 
 	m.Lock()
 	defer m.Unlock()
@@ -1068,6 +1081,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableStringType("version_comment"),
 		Default:           "MatrixOne",
+	},
+	"server_id": {
+		Name:              "server_id",
+		Scope:             ScopeGlobal,
+		Dynamic:           false,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("server_id"),
+		Default:           "",
 	},
 	"tx_isolation": {
 		Name:              "tx_isolation",
@@ -3824,7 +3845,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("agg_spill_mem", 0, common.TiB, false),
-		Default:           int64(common.GiB),
+		Default:           int64(0),
 	},
 	"max_dop": {
 		Name:              "max_dop",

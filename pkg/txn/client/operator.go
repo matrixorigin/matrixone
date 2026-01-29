@@ -164,7 +164,7 @@ func WithTxnCreateBy(
 func WithTxnCacheWrite() TxnOption {
 	return func(tc *txnOperator) {
 		tc.opts.options = tc.opts.options.WithEnableCacheWrite()
-		tc.mu.cachedWrites = make(map[uint64][]txn.TxnRequest)
+		// Lazy init: only allocate when actually caching writes
 	}
 }
 
@@ -246,6 +246,14 @@ func WithWaitActiveHandle(fn func()) TxnOption {
 	}
 }
 
+// WithFootPrints sets external footPrints for debugging.
+// The footPrints is typically owned by session and shared across transactions.
+func WithFootPrints(fp *footPrints) TxnOption {
+	return func(tc *txnOperator) {
+		tc.reset.fprints = fp
+	}
+}
+
 type txnOperator struct {
 	sid             string
 	logger          *log.MOLogger
@@ -288,7 +296,7 @@ type txnOperator struct {
 		runSQLTracker        runSQLTracker
 		incrStmtCounter      counter
 		rollbackStmtCounter  counter
-		fprints              footPrints
+		fprints              *footPrints
 		runningSQL           atomic.Bool
 		commitErr            error
 		cache                sync.Map
@@ -328,9 +336,13 @@ func (t *runSQLTracker) ensureInitLocked() {
 }
 
 func (t *runSQLTracker) reset() {
-	t.activeTokens = make(map[uint64]runSQLInfo)
+	if t.activeTokens != nil {
+		for k := range t.activeTokens {
+			delete(t.activeTokens, k)
+		}
+	}
 	t.nextID = 0
-	t.cond = sync.NewCond(&t.mu)
+	// Keep cond, no need to recreate
 }
 
 func (t *runSQLTracker) notifyLocked() {
@@ -522,7 +534,7 @@ func (tc *txnOperator) initReset() {
 	tc.reset.runSQLTracker.reset()
 	tc.reset.incrStmtCounter = counter{}
 	tc.reset.rollbackStmtCounter = counter{}
-	tc.reset.fprints = footPrints{}
+	// fprints is external pointer, don't reset here
 	tc.reset.runningSQL.Store(false)
 	tc.reset.commitErr = nil
 	tc.reset.cache = sync.Map{}
@@ -1128,6 +1140,9 @@ func (tc *txnOperator) maybeCacheWrites(requests []txn.TxnRequest, locked bool) 
 			defer tc.mu.Unlock()
 		}
 
+		if tc.mu.cachedWrites == nil {
+			tc.mu.cachedWrites = make(map[uint64][]txn.TxnRequest)
+		}
 		for idx := range requests {
 			requests[idx].Flag |= txn.SkipResponseFlag
 			tn := requests[idx].CNRequest.Target.ShardID
@@ -1702,6 +1717,10 @@ func (tc *txnOperator) inRollbackStmt() bool {
 }
 
 func (tc *txnOperator) counter() string {
+	fpStr := ""
+	if tc.reset.fprints != nil {
+		fpStr = tc.reset.fprints.String()
+	}
 	return fmt.Sprintf("commit: %s rollback: %s runSql: %s incrStmt: %s rollbackStmt: %s txnMeta: %s footPrints: %s",
 		tc.reset.commitCounter.String(),
 		tc.reset.rollbackCounter.String(),
@@ -1709,11 +1728,13 @@ func (tc *txnOperator) counter() string {
 		tc.reset.incrStmtCounter.String(),
 		tc.reset.rollbackStmtCounter.String(),
 		tc.Txn().DebugString(),
-		tc.reset.fprints.String())
+		fpStr)
 }
 
 func (tc *txnOperator) SetFootPrints(id int, enter bool) {
-	tc.reset.fprints.add(id, enter)
+	if tc.reset.fprints != nil {
+		tc.reset.fprints.add(id, enter)
+	}
 }
 
 func (tc *txnOperator) addFlag(flags ...uint32) {

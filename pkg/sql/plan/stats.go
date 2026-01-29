@@ -22,7 +22,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -78,76 +77,58 @@ const (
 	ExecTypeAP_MULTICN
 )
 
-// The StatsInfoWrapper is mainly for the timeSeconds to avoid
-// the data race on it.
+// The StatsInfoWrapper caches the stats query result for a table.
 type StatsInfoWrapper struct {
-	Stats       *pb.StatsInfo
-	timeSeconds int64
-	sync.Mutex
+	stats     *pb.StatsInfo // last query result (may be nil)
+	lastVisit int64         // last visit time (unix seconds), 0 means not cached
 }
 
-// IsRecentlyVisitIn checks that if now - last_visit < limit,
-// if so, do nothing and return true, or update the last_visit and return false.
-func (w *StatsInfoWrapper) IsRecentlyVisitIn(limit int64) bool {
-	w.Lock()
-	defer w.Unlock()
+// Exists returns true if the wrapper has been set (lastVisit > 0).
+func (w *StatsInfoWrapper) Exists() bool {
+	return w.lastVisit > 0
+}
 
-	now := time.Now().Unix()
-	recently := w.timeSeconds
+// GetStats returns the cached stats.
+func (w *StatsInfoWrapper) GetStats() *pb.StatsInfo {
+	return w.stats
+}
 
-	if now-recently < limit {
-		return true
-	}
-
-	// update
-	w.timeSeconds = now
-	return false
+// GetLastVisit returns the last visit time (unix seconds).
+func (w *StatsInfoWrapper) GetLastVisit() int64 {
+	return w.lastVisit
 }
 
 type StatsCache struct {
-	cache map[uint64]*StatsInfoWrapper
+	cache map[uint64]StatsInfoWrapper
 }
 
 func NewStatsCache() *StatsCache {
 	return &StatsCache{
-		cache: make(map[uint64]*StatsInfoWrapper, statsCacheInitSize),
+		cache: make(map[uint64]StatsInfoWrapper, statsCacheInitSize),
 	}
 }
 
-// GetStatsInfo returns the stats info and if the info in the cache needs to be updated.
-func (sc *StatsCache) GetStatsInfo(tableID uint64, create bool) *StatsInfoWrapper {
+// Get returns the cached wrapper for the table.
+// Use wrapper.Exists() to check if it was actually cached.
+func (sc *StatsCache) Get(tableID uint64) StatsInfoWrapper {
 	if sc == nil {
-		return nil
+		return StatsInfoWrapper{}
 	}
-	if w, ok := sc.cache[tableID]; ok {
-		return w
-	}
-
-	if create {
-		if len(sc.cache) > statsCacheMaxSize {
-			sc.cache = make(map[uint64]*StatsInfoWrapper, statsCacheInitSize)
-			logutil.Infof("statscache entries more than %v in long session, release memory and create new cachepool", statsCacheMaxSize)
-		}
-		s := NewStatsInfo()
-		sc.cache[tableID] = &StatsInfoWrapper{
-			Stats:       s,
-			timeSeconds: 0,
-		}
-		return sc.cache[tableID]
-	} else {
-		return nil
-	}
+	return sc.cache[tableID]
 }
 
-// SetStatsInfo updates the stats info in the cache.
-func (sc *StatsCache) SetStatsInfo(tableID uint64, s *pb.StatsInfo) {
-	if sc == nil || s == nil {
+// Set caches the stats result for the table.
+func (sc *StatsCache) Set(tableID uint64, stats *pb.StatsInfo) {
+	if sc == nil {
 		return
 	}
-
-	sc.cache[tableID] = &StatsInfoWrapper{
-		Stats:       s,
-		timeSeconds: 0,
+	if len(sc.cache) > statsCacheMaxSize {
+		sc.cache = make(map[uint64]StatsInfoWrapper, statsCacheInitSize)
+		logutil.Infof("statscache entries more than %v in long session, release memory", statsCacheMaxSize)
+	}
+	sc.cache[tableID] = StatsInfoWrapper{
+		stats:     stats,
+		lastVisit: time.Now().Unix(),
 	}
 }
 
@@ -335,6 +316,12 @@ func UpdateStatsInfo(info *TableStatsInfo, tableDef *plan.TableDef, s *pb.StatsI
 		case types.T_uint64:
 			s.MinValMap[colName] = float64(types.DecodeUint64(info.ColumnZMs[i].GetMinBuf()))
 			s.MaxValMap[colName] = float64(types.DecodeUint64(info.ColumnZMs[i].GetMaxBuf()))
+		case types.T_float32:
+			s.MinValMap[colName] = float64(types.DecodeFloat32(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeFloat32(info.ColumnZMs[i].GetMaxBuf()))
+		case types.T_float64:
+			s.MinValMap[colName] = float64(types.DecodeFloat64(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeFloat64(info.ColumnZMs[i].GetMaxBuf()))
 		case types.T_date:
 			s.MinValMap[colName] = float64(types.DecodeDate(info.ColumnZMs[i].GetMinBuf()))
 			s.MaxValMap[colName] = float64(types.DecodeDate(info.ColumnZMs[i].GetMaxBuf()))
@@ -402,14 +389,15 @@ func isHighNdvCols(cols []int32, tableDef *TableDef, builder *QueryBuilder) bool
 	}
 
 	w := builder.getStatsInfoByTableID(tableDef.TblId)
-	if w == nil {
+	if w == nil || w.GetStats() == nil {
 		return false
 	}
+	s := w.GetStats()
 	var totalNDV float64 = 1
 	for i := range cols {
-		totalNDV *= w.Stats.NdvMap[tableDef.Cols[cols[i]].Name]
+		totalNDV *= s.NdvMap[tableDef.Cols[cols[i]].Name]
 	}
-	return totalNDV > w.Stats.TableCnt*highNDVcolumnThreshHold
+	return totalNDV > s.TableCnt*highNDVcolumnThreshHold
 }
 
 func (builder *QueryBuilder) getColNDVRatio(cols []int32, tableDef *TableDef) float64 {
@@ -422,14 +410,15 @@ func (builder *QueryBuilder) getColNDVRatio(cols []int32, tableDef *TableDef) fl
 	}
 
 	w := builder.getStatsInfoByTableID(tableDef.TblId)
-	if w.Stats == nil {
+	if w == nil || w.GetStats() == nil {
 		return 0
 	}
+	s := w.GetStats()
 	var totalNDV float64 = 1
 	for i := range cols {
-		totalNDV *= w.Stats.NdvMap[tableDef.Cols[cols[i]].Name]
+		totalNDV *= s.NdvMap[tableDef.Cols[cols[i]].Name]
 	}
-	result := totalNDV / w.Stats.TableCnt
+	result := totalNDV / s.TableCnt
 	if result > 1 {
 		result = 1
 	}
@@ -444,7 +433,11 @@ func (builder *QueryBuilder) getStatsInfoByTableID(tableID uint64) *StatsInfoWra
 	if sc == nil {
 		return nil
 	}
-	return sc.GetStatsInfo(tableID, false)
+	w := sc.Get(tableID)
+	if !w.Exists() {
+		return nil
+	}
+	return &w
 }
 
 func (builder *QueryBuilder) getStatsInfoByCol(col *plan.ColRef) *StatsInfoWrapper {
@@ -463,15 +456,19 @@ func (builder *QueryBuilder) getStatsInfoByCol(col *plan.ColRef) *StatsInfoWrapp
 	if len(col.Name) == 0 {
 		col.Name = tableDef.Cols[col.ColPos].Name
 	}
-	return sc.GetStatsInfo(tableDef.TblId, false)
+	w := sc.Get(tableDef.TblId)
+	if !w.Exists() {
+		return nil
+	}
+	return &w
 }
 
 func (builder *QueryBuilder) getColNdv(col *plan.ColRef) float64 {
 	w := builder.getStatsInfoByCol(col)
-	if w == nil {
+	if w == nil || w.GetStats() == nil {
 		return -1
 	}
-	return w.Stats.NdvMap[col.Name]
+	return w.GetStats().NdvMap[col.Name]
 }
 
 //func (builder *QueryBuilder) getColOverlap(col *plan.ColRef) float64 {
@@ -487,14 +484,15 @@ func getNullSelectivity(arg *plan.Expr, builder *QueryBuilder, isnull bool) floa
 	case *plan.Expr_Col:
 		col := exprImpl.Col
 		w := builder.getStatsInfoByCol(col)
-		if w == nil {
+		if w == nil || w.GetStats() == nil {
 			break
 		}
-		nullCnt := float64(w.Stats.NullCntMap[col.Name])
+		s := w.GetStats()
+		nullCnt := float64(s.NullCntMap[col.Name])
 		if isnull {
-			return nullCnt / w.Stats.TableCnt
+			return nullCnt / s.TableCnt
 		} else {
-			return 1 - (nullCnt / w.Stats.TableCnt)
+			return 1 - (nullCnt / s.TableCnt)
 		}
 	}
 
@@ -651,7 +649,7 @@ func calcSelectivityByMinMaxForDecimal(funcName string, min, max float64, expr *
 			ret = (val1 - min + 1) / (max - min)
 		}
 
-	case "between":
+	case "between", "in_range":
 		lit1 := fn.Args[1].GetLit()
 		lit2 := fn.Args[2].GetLit()
 		if lit1 == nil || lit2 == nil {
@@ -668,6 +666,7 @@ func calcSelectivityByMinMaxForDecimal(funcName string, min, max float64, expr *
 			return 0.1
 		}
 		ret = (val2 - val1 + 1) / (max - min)
+
 	default:
 		return 0.1
 	}
@@ -714,7 +713,7 @@ func calcSelectivityByMinMax(funcName string, min, max float64, typ types.T, val
 		if val1, ok = getFloat64Value(typ, vals[0]); ok {
 			ret = (val1 - min + 1) / (max - min)
 		}
-	case "between":
+	case "between", "in_range":
 		if val1, ok = getFloat64Value(typ, vals[0]); ok {
 			if val2, ok = getFloat64Value(typ, vals[1]); ok {
 				ret = (val2 - val1 + 1) / (max - min)
@@ -817,7 +816,7 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 		return 0.1
 	}
 	w := builder.getStatsInfoByCol(colRef)
-	if w == nil {
+	if w == nil || w.GetStats() == nil {
 		return 0.1
 	}
 
@@ -825,14 +824,15 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 	colRef, litType, literals, colFnName, hasDynamicParam := extractColRefAndLiteralsInFilter(expr)
 	if hasDynamicParam {
 		// assume dynamic parameter always has low selectivity
-		if funcName == "between" {
+		if funcName == "between" || funcName == "in_range" {
 			return 0.0001
 		} else {
 			return 0.01
 		}
 	}
+	s := w.GetStats()
 	if colRef != nil && len(literals) > 0 {
-		typ := types.T(w.Stats.DataTypeMap[colRef.Name])
+		typ := types.T(s.DataTypeMap[colRef.Name])
 
 		switch colFnName {
 		case "":
@@ -840,15 +840,15 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 			// Decimal literals store internal scaled values, need proper conversion
 			if typ == types.T_decimal64 || typ == types.T_decimal128 {
 				return calcSelectivityByMinMaxForDecimal(
-					funcName, w.Stats.MinValMap[colRef.Name], w.Stats.MaxValMap[colRef.Name], expr)
+					funcName, s.MinValMap[colRef.Name], s.MaxValMap[colRef.Name], expr)
 			}
 			return calcSelectivityByMinMax(
-				funcName, w.Stats.MinValMap[colRef.Name], w.Stats.MaxValMap[colRef.Name], typ, literals)
+				funcName, s.MinValMap[colRef.Name], s.MaxValMap[colRef.Name], typ, literals)
 		case "year":
 			switch typ {
 			case types.T_date:
-				minVal := types.Date(w.Stats.MinValMap[colRef.Name])
-				maxVal := types.Date(w.Stats.MaxValMap[colRef.Name])
+				minVal := types.Date(s.MinValMap[colRef.Name])
+				maxVal := types.Date(s.MaxValMap[colRef.Name])
 				return calcSelectivityByMinMax(funcName, float64(minVal.Year()), float64(maxVal.Year()), litType, literals)
 			case types.T_datetime:
 				// TODO
@@ -876,7 +876,7 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.Stats
 			ret = estimateEqualitySelectivity(expr, builder, s)
 		case "!=", "<>":
 			ret = 0.9
-		case ">", "<", ">=", "<=", "between":
+		case ">", "<", ">=", "<=", "between", "in_range":
 			ret = estimateNonEqualitySelectivity(expr, funcName, builder)
 		case "and":
 			ret = estimateExprSelectivity(exprImpl.F.Args[0], builder, s)
@@ -1350,21 +1350,15 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 
 	// if there is a limit, outcnt is limit number
 	if node.Limit != nil && node.NodeType != plan.Node_TABLE_SCAN {
-		limitExpr := DeepCopyExpr(node.Limit)
-		if _, ok := limitExpr.Expr.(*plan.Expr_F); ok {
-			if !hasParam(limitExpr) {
-				limitExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, limitExpr, builder.compCtx.GetProcess(), true, true)
-			}
-		}
-		if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
+		// Fast path: if Limit is already a literal, no need to deep copy
+		if cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit); ok {
 			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
 				node.Stats.Outcnt = float64(c.U64Val)
 				node.Stats.Selectivity = node.Stats.Outcnt / node.Stats.Cost
 			}
-		}
-	} else if node.NodeType == plan.Node_FUNCTION_SCAN && node.IndexReaderParam != nil {
-		if node.IndexReaderParam.Limit != nil {
-			limitExpr := DeepCopyExpr(node.IndexReaderParam.Limit)
+		} else {
+			// Slow path: need to fold the expression
+			limitExpr := DeepCopyExpr(node.Limit)
 			if _, ok := limitExpr.Expr.(*plan.Expr_F); ok {
 				if !hasParam(limitExpr) {
 					limitExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, limitExpr, builder.compCtx.GetProcess(), true, true)
@@ -1374,6 +1368,30 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 				if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
 					node.Stats.Outcnt = float64(c.U64Val)
 					node.Stats.Selectivity = node.Stats.Outcnt / node.Stats.Cost
+				}
+			}
+		}
+	} else if node.NodeType == plan.Node_FUNCTION_SCAN && node.IndexReaderParam != nil {
+		if node.IndexReaderParam.Limit != nil {
+			// Fast path: if Limit is already a literal, no need to deep copy
+			if cExpr, ok := node.IndexReaderParam.Limit.Expr.(*plan.Expr_Lit); ok {
+				if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+					node.Stats.Outcnt = float64(c.U64Val)
+					node.Stats.Selectivity = node.Stats.Outcnt / node.Stats.Cost
+				}
+			} else {
+				// Slow path: need to fold the expression
+				limitExpr := DeepCopyExpr(node.IndexReaderParam.Limit)
+				if _, ok := limitExpr.Expr.(*plan.Expr_F); ok {
+					if !hasParam(limitExpr) {
+						limitExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, limitExpr, builder.compCtx.GetProcess(), true, true)
+					}
+				}
+				if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
+					if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+						node.Stats.Outcnt = float64(c.U64Val)
+						node.Stats.Selectivity = node.Stats.Outcnt / node.Stats.Cost
+					}
 				}
 			}
 		}
@@ -1761,13 +1779,13 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 		if leftChild.NodeType == plan.Node_TABLE_SCAN && rightChild.NodeType == plan.Node_TABLE_SCAN {
 			w1 := builder.getStatsInfoByTableID(leftChild.TableDef.TblId)
 			w2 := builder.getStatsInfoByTableID(rightChild.TableDef.TblId)
-			if w1 != nil && w2 != nil {
+			if w1 != nil && w2 != nil && w1.GetStats() != nil && w2.GetStats() != nil {
 				var t1size, t2size uint64
-				for _, v := range w1.Stats.SizeMap {
+				for _, v := range w1.GetStats().SizeMap {
 					t1size += v
 				}
 				factor1 = math.Pow(float64(t1size), 0.1)
-				for _, v := range w2.Stats.SizeMap {
+				for _, v := range w2.GetStats().SizeMap {
 					t2size += v
 				}
 				factor2 = math.Pow(float64(t2size), 0.1)

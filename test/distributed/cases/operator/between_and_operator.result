@@ -10,6 +10,24 @@ b between a and c
 SELECT 2 BETWEEN 2 AND '3';
 2 between 2 and 3
 1
+SELECT TRUE BETWEEN FALSE AND TRUE;
+true between false and true
+1
+SELECT FALSE BETWEEN TRUE AND FALSE;
+false between true and false
+0
+SELECT TRUE NOT BETWEEN FALSE AND TRUE;
+true not between false and true
+0
+SELECT FALSE NOT BETWEEN TRUE AND FALSE;
+false not between true and false
+1
+SELECT NULL BETWEEN FALSE AND TRUE;
+null between false and true
+null
+SELECT NULL NOT BETWEEN FALSE AND TRUE;
+null not between false and true
+null
 DROP TABLE IF EXISTS between_and_test;
 CREATE TABLE between_and_test(
 int_test_max INT,
@@ -312,3 +330,19 @@ SELECT * FROM t1 WHERE DATE_ADD(d2, INTERVAL 2 HOUR) NOT BETWEEN '2028-11-06' AN
 d1    d2
 2022-09-11    2029-12-16 01:21:34
 2222-12-11    1999-05-16 21:21:34
+DROP TABLE IF EXISTS bool_test;
+CREATE TABLE bool_test(flag_primary BOOL PRIMARY KEY, flag_normal BOOL);
+INSERT INTO bool_test VALUES(TRUE, TRUE), (FALSE, FALSE);
+SELECT * FROM bool_test WHERE flag_primary BETWEEN FALSE AND TRUE;
+flag_primary    flag_normal
+1    1
+0    0
+SELECT * FROM bool_test WHERE flag_normal BETWEEN FALSE AND TRUE;
+flag_primary    flag_normal
+1    1
+0    0
+SELECT * FROM bool_test WHERE flag_primary NOT BETWEEN FALSE AND TRUE;
+flag_primary    flag_normal
+SELECT * FROM bool_test WHERE flag_normal NOT BETWEEN FALSE AND TRUE;
+flag_primary    flag_normal
+DROP TABLE IF EXISTS bool_test;
