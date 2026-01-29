@@ -1,0 +1,77 @@
+drop database if exists test_union_order_field;
+create database test_union_order_field;
+use test_union_order_field;
+create table t1 (
+id int auto_increment primary key,
+name varchar(100),
+value1 decimal(18,2),
+value2 decimal(18,2)
+);
+insert into t1 (name, value1, value2) values
+('apple', 100.00, 120.00),
+('banana', 50.00, 60.00),
+('cherry', 80.00, 90.00),
+('date', 200.00, 210.00);
+select name, value1, value2 from t1 where name = 'apple'
+union all
+select name, value1, value2 from t1 where name = 'banana'
+order by field(name, 'apple', 'banana', 'cherry', 'date');
+➤ name[12,-1,0]  ¦  value1[3,18,2]  ¦  value2[3,18,2]  𝄀
+apple  ¦  100.00  ¦  120.00  𝄀
+banana  ¦  50.00  ¦  60.00
+select name, value1, value2 from t1 where name = 'apple'
+union all
+select name, value1, value2 from t1 where name = 'banana'
+order by field(name, 'apple', 'banana', 'cherry', 'date') desc;
+➤ name[12,-1,0]  ¦  value1[3,18,2]  ¦  value2[3,18,2]  𝄀
+banana  ¦  50.00  ¦  60.00  𝄀
+apple  ¦  100.00  ¦  120.00
+select name, value1, value2 from t1 where name = 'apple'
+union all
+select name, value1, value2 from t1 where name = 'banana'
+union all
+select name, value1, value2 from t1 where name = 'cherry'
+order by field(name, 'apple', 'banana', 'cherry', 'date');
+➤ name[12,-1,0]  ¦  value1[3,18,2]  ¦  value2[3,18,2]  𝄀
+apple  ¦  100.00  ¦  120.00  𝄀
+banana  ¦  50.00  ¦  60.00  𝄀
+cherry  ¦  80.00  ¦  90.00
+select name, value1, value2 from t1 where name = 'apple'
+union
+select name, value1, value2 from t1 where name = 'banana'
+order by field(name, 'apple', 'banana', 'cherry', 'date');
+➤ name[12,-1,0]  ¦  value1[3,18,2]  ¦  value2[3,18,2]  𝄀
+apple  ¦  100.00  ¦  120.00  𝄀
+banana  ¦  50.00  ¦  60.00
+select name, value1, value2 from t1 where name = 'apple'
+union all
+select name, value1, value2 from t1 where name = 'banana'
+order by value2 - value1;
+➤ name[12,-1,0]  ¦  value1[3,18,2]  ¦  value2[3,18,2]  𝄀
+banana  ¦  50.00  ¦  60.00  𝄀
+apple  ¦  100.00  ¦  120.00
+select name, value1, value2 from t1 where name = 'apple'
+union all
+select name, value1, value2 from t1 where name = 'banana'
+order by value1;
+➤ name[12,-1,0]  ¦  value1[3,18,2]  ¦  value2[3,18,2]  𝄀
+banana  ¦  50.00  ¦  60.00  𝄀
+apple  ¦  100.00  ¦  120.00
+select name, value1, value2 from t1 where name = 'apple'
+union all
+select name, value1, value2 from t1 where name = 'banana'
+order by 2;
+➤ name[12,-1,0]  ¦  value1[3,18,2]  ¦  value2[3,18,2]  𝄀
+banana  ¦  50.00  ¦  60.00  𝄀
+apple  ¦  100.00  ¦  120.00
+select name, value1, value2 from t1 where name = 'apple'
+union all
+select name, value1, value2 from t1 where name = 'banana'
+union all
+select name, value1, value2 from t1 where name = 'cherry'
+order by field(name, 'cherry', 'banana', 'apple', 'date')
+limit 2;
+➤ name[12,-1,0]  ¦  value1[3,18,2]  ¦  value2[3,18,2]  𝄀
+cherry  ¦  80.00  ¦  90.00  𝄀
+banana  ¦  50.00  ¦  60.00
+drop database test_union_order_field;
