@@ -26,12 +26,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1597,4 +1601,272 @@ func TestStarCountMultipleDeletes(t *testing.T) {
 	require.Equal(t, uint64(55), count, "StarCount should be 100 - 20 - 15 - 10 = 55")
 
 	require.NoError(t, txnop.Commit(p.Ctx))
+}
+
+// TestStarCountTransferredTombstones tests StarCount with transferred tombstones after merge.
+//
+// Scenario:
+// 1. Insert 10 rows via TAE (committed, in appendable object)
+// 2. Start CN transaction, delete 2 rows
+// 3. Force flush tombstones (persisted, pointing to appendable object)
+// 4. Trigger merge: appendable object → non-appendable object (new objectID)
+// 5. Transfer happens: old tombstones → new tombstones (pointing to new object)
+// 6. Verify StarCount = 10 - 2 = 8
+//
+// This tests that visibility check correctly filters old tombstones (pointing to deleted appendable object)
+// and only counts new tombstones (pointing to new non-appendable object).
+
+// TestStarCountTransferredTombstones tests StarCount with transferred tombstones after merge.
+//
+// Scenario:
+// 1. Insert 10 rows via TAE (committed, in appendable object)
+// 2. Start CN transaction
+// 3. Construct persisted tombstone object (2 rows) and write to workspace
+// 4. Verify StarCount = 10 - 2 = 8 before merge
+// 5. Trigger merge: appendable object → non-appendable object
+// 6. Transfer happens: old tombstones → new tombstones
+// 7. Verify StarCount = 10 - 2 = 8 after merge (visibility check filters old tombstones)
+
+// TestStarCountTransferredTombstones tests StarCount with transferred tombstones after merge.
+//
+// Scenario:
+// 1. Insert 10 rows via TAE (committed, in appendable object)
+// 2. Start CN transaction
+// 3. Construct persisted tombstone object (2 rows) and write to workspace
+// 4. Verify StarCount = 10 - 2 = 8 before merge
+// 5. Trigger merge: appendable object → non-appendable object
+// 6. Transfer happens: old tombstones → new tombstones
+// 7. Verify StarCount = 10 - 2 = 8 after merge (visibility check filters old tombstones)
+//
+// This tests that visibility check correctly handles transferred tombstones:
+// - Old tombstones point to deleted appendable object (invisible) → filtered out
+// - New tombstones point to new non-appendable object (visible) → counted
+
+// TestStarCountTransferredTombstones tests StarCount with transferred tombstones after merge.
+//
+// Scenario:
+// 1. Insert 10 rows and flush (create appendable object)
+// 2. Start CN transaction (snapshot before merge)
+// 3. Delete 2 rows in CN transaction (in-memory tombstones)
+// 4. Trigger merge in background (appendable → non-appendable, old object deleted)
+// 5. Force transfer check on commit
+// 6. Verify StarCount = 8 in new transaction
+//
+// This tests that transfer correctly handles tombstones when data objects change:
+// - Old in-memory tombstones point to deleted appendable object
+// - Transfer creates new persisted tombstones pointing to new non-appendable object
+// - Visibility check filters old tombstones, counts new ones
+
+// TestStarCountWithTransferredTombstones tests StarCount with tombstone object transfer.
+// Scenario: tombstone objects point to old data objects, merge creates new data objects,
+// transfer updates tombstone objects to point to new data objects.
+func TestStarCountWithTransferredTombstones(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
+	defer p.Close()
+
+	schema := catalog2.MockSchemaEnhanced(1, 0, 2)
+	schema.Name = "test_table"
+
+	// Create table
+	txnop := p.StartCNTxn()
+	_, rel := p.CreateDBAndTable(txnop, "db", schema)
+	dbID := rel.GetDBID(p.Ctx)
+	tableID := rel.GetTableID(p.Ctx)
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	bat := catalog2.MockBatch(schema, 10)
+
+	// Insert data via TN and compact
+	{
+		tnTxn, _ := p.T.GetDB().StartTxn(nil)
+		tnDB, _ := tnTxn.GetDatabase("db")
+		tnRel, _ := tnDB.GetRelationByName(schema.Name)
+		require.NoError(t, tnRel.Append(p.Ctx, bat))
+		require.NoError(t, tnTxn.Commit(p.Ctx))
+
+		testutil2.CompactBlocks(t, 0, p.T.GetDB(), "db", schema, true)
+	}
+
+	// Start CN transaction
+	_, _, cnTxnOp, err := p.D.GetTable(p.Ctx, "db", schema.Name)
+	require.NoError(t, err)
+	cnTxnOp.GetWorkspace().StartStatement()
+	require.NoError(t, cnTxnOp.GetWorkspace().IncrStatementID(p.Ctx, false))
+
+	// Read rowids and PKs for tombstones
+	tombstoneBat := batch.NewWithSize(2)
+	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	{
+		txn, _, reader, err := testutil.GetTableTxnReader(p.Ctx, p.D, "db", schema.Name, nil, p.Mp, t)
+		require.NoError(t, err)
+		ret := testutil.EmptyBatchFromSchema(schema)
+		for {
+			done, err := reader.Read(p.Ctx, []string{schema.GetPrimaryKey().Name, catalog.Row_ID}, nil, p.Mp, ret)
+			if done {
+				break
+			}
+			require.NoError(t, err)
+			// Only delete 5 rows (half)
+			for i := 0; i < ret.RowCount() && tombstoneBat.Vecs[0].Length() < 5; i++ {
+				vector.AppendFixed[types.Rowid](tombstoneBat.Vecs[0],
+					vector.GetFixedAtNoTypeCheck[types.Rowid](ret.Vecs[1], i), false, p.Mp)
+				vector.AppendFixed[int32](tombstoneBat.Vecs[1],
+					vector.GetFixedAtNoTypeCheck[int32](ret.Vecs[0], i), false, p.Mp)
+			}
+		}
+		require.NoError(t, txn.Commit(p.Ctx))
+		tombstoneBat.SetRowCount(tombstoneBat.Vecs[0].Length())
+		require.Equal(t, 5, tombstoneBat.RowCount())
+	}
+
+	// Merge data objects (creates new object, deletes old)
+	testutil2.MergeBlocks(t, 0, p.T.GetDB(), "db", schema, true)
+	_, err = p.D.GetPartitionStateStats(p.Ctx, dbID, tableID)
+	require.NoError(t, err)
+
+	// Create tombstone object and write to workspace
+	{
+		db, _ := p.D.Engine.Database(p.Ctx, "db", cnTxnOp)
+		rel, _ := db.Relation(p.Ctx, schema.Name, nil)
+		proc := rel.GetProcess().(*process.Process)
+
+		w := colexec.NewCNS3TombstoneWriter(proc.Mp(), proc.GetFileService(), types.T_int32.ToType(), -1)
+		require.NoError(t, w.Write(p.Ctx, tombstoneBat))
+		ss, err := w.Sync(p.Ctx)
+		require.NoError(t, err)
+		require.Equal(t, 1, len(ss))
+
+		tbat := batch.NewWithSize(1)
+		tbat.Attrs = []string{catalog.ObjectMeta_ObjectStats}
+		tbat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+		vector.AppendBytes(tbat.Vecs[0], ss[0].Marshal(), false, p.Mp)
+		tbat.SetRowCount(1)
+
+		transaction := cnTxnOp.GetWorkspace().(*disttae.Transaction)
+		require.NoError(t, transaction.WriteFile(
+			disttae.DELETE, 0, dbID, tableID, "db", schema.Name,
+			ss[0].ObjectLocation().String(), tbat, p.D.Engine.GetTNServices()[0]))
+
+		require.NoError(t, cnTxnOp.UpdateSnapshot(p.Ctx, p.D.Now()))
+	}
+
+	// Note: tombstone objects don't affect StarCount until commit
+	// This is different from in-memory tombstones
+
+	// Commit with force transfer
+	ctx := context.WithValue(p.Ctx, disttae.UT_ForceTransCheck{}, "yes")
+	require.NoError(t, cnTxnOp.Commit(ctx))
+
+	// Verify in new transaction after transfer: 10 - 5 = 5
+	{
+		txnop := p.StartCNTxn()
+		db, _ := p.D.Engine.Database(p.Ctx, "db", txnop)
+		rel, _ := db.Relation(p.Ctx, schema.Name, nil)
+		count, err := rel.StarCount(p.Ctx)
+		require.NoError(t, err)
+		require.Equal(t, uint64(5), count)
+		require.NoError(t, txnop.Commit(p.Ctx))
+	}
+}
+
+// TestStarCountWithTransferredInMemoryTombstones tests StarCount with in-memory tombstone transfer.
+// Scenario: CN deletes rows (in-memory tombstones), then merge happens, transfer updates rowids.
+func TestStarCountWithTransferredInMemoryTombstones(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
+	defer p.Close()
+
+	schema := catalog2.MockSchemaEnhanced(1, 0, 2)
+	schema.Name = "test_table"
+
+	// Create table
+	txnop := p.StartCNTxn()
+	_, _ = p.CreateDBAndTable(txnop, "db", schema)
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	bat := catalog2.MockBatch(schema, 10)
+
+	// Insert data via TN and compact
+	{
+		tnTxn, _ := p.T.GetDB().StartTxn(nil)
+		tnDB, _ := tnTxn.GetDatabase("db")
+		tnRel, _ := tnDB.GetRelationByName(schema.Name)
+		require.NoError(t, tnRel.Append(p.Ctx, bat))
+		require.NoError(t, tnTxn.Commit(p.Ctx))
+		testutil2.CompactBlocks(t, 0, p.T.GetDB(), "db", schema, true)
+	}
+
+	// Start CN transaction
+	_, _, cnTxnOp, err := p.D.GetTable(p.Ctx, "db", schema.Name)
+	require.NoError(t, err)
+	cnTxnOp.GetWorkspace().StartStatement()
+	require.NoError(t, cnTxnOp.GetWorkspace().IncrStatementID(p.Ctx, false))
+
+	// Delete 5 rows using in-memory tombstones
+	{
+		txn, _, reader, err := testutil.GetTableTxnReader(p.Ctx, p.D, "db", schema.Name, nil, p.Mp, t)
+		require.NoError(t, err)
+		ret := testutil.EmptyBatchFromSchema(schema)
+
+		vec1 := vector.NewVec(types.T_Rowid.ToType())
+		vec2 := vector.NewVec(types.T_int32.ToType())
+		for {
+			done, err := reader.Read(p.Ctx, []string{schema.GetPrimaryKey().Name, catalog.Row_ID}, nil, p.Mp, ret)
+			if done {
+				break
+			}
+			require.NoError(t, err)
+			for i := 0; i < ret.RowCount() && vec1.Length() < 5; i++ {
+				vector.AppendFixed[types.Rowid](vec1,
+					vector.GetFixedAtNoTypeCheck[types.Rowid](ret.Vecs[1], i), false, p.Mp)
+				vector.AppendFixed[int32](vec2,
+					vector.GetFixedAtNoTypeCheck[int32](ret.Vecs[0], i), false, p.Mp)
+			}
+		}
+		require.NoError(t, txn.Commit(p.Ctx))
+
+		delBatch := batch.NewWithSize(2)
+		delBatch.SetRowCount(5)
+		delBatch.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
+		delBatch.Vecs[0] = vec1
+		delBatch.Vecs[1] = vec2
+
+		db, _ := p.D.Engine.Database(p.Ctx, "db", cnTxnOp)
+		rel, _ := db.Relation(p.Ctx, schema.Name, nil)
+		require.NoError(t, rel.Delete(p.Ctx, delBatch, catalog.Row_ID))
+
+		// Verify StarCount before merge: 10 - 5 = 5
+		count, err := rel.StarCount(p.Ctx)
+		require.NoError(t, err)
+		require.Equal(t, uint64(5), count)
+	}
+
+	// Merge data objects (creates new object, deletes old)
+	testutil2.MergeBlocks(t, 0, p.T.GetDB(), "db", schema, true)
+
+	// Wait for logtail sync and update snapshot to see the merge
+	{
+		db, _ := p.D.Engine.Database(p.Ctx, "db", cnTxnOp)
+		rel, _ := db.Relation(p.Ctx, schema.Name, nil)
+		_, err := p.D.GetPartitionStateStats(p.Ctx, rel.GetDBID(p.Ctx), rel.GetTableID(p.Ctx))
+		require.NoError(t, err)
+	}
+	require.NoError(t, cnTxnOp.UpdateSnapshot(p.Ctx, p.D.Now()))
+
+	// Commit with force transfer
+	ctx := context.WithValue(p.Ctx, disttae.UT_ForceTransCheck{}, "yes")
+	require.NoError(t, cnTxnOp.Commit(ctx))
+
+	// Verify in new transaction after transfer: 10 - 5 = 5
+	{
+		txnop := p.StartCNTxn()
+		db, _ := p.D.Engine.Database(p.Ctx, "db", txnop)
+		rel, _ := db.Relation(p.Ctx, schema.Name, nil)
+		count, err := rel.StarCount(p.Ctx)
+		require.NoError(t, err)
+		require.Equal(t, uint64(5), count)
+		require.NoError(t, txnop.Commit(p.Ctx))
+	}
 }
