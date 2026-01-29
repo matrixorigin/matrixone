@@ -92,7 +92,7 @@ func NewS3FS(
 		}
 
 	case args.IsMinio ||
-		// 天翼云，使用SignatureV2验证，其他SDK不再支持
+		// China Telecom Cloud, uses SignatureV2 verification, other SDKs no longer support it
 		strings.Contains(args.Endpoint, "ctyunapi.cn"):
 		// MinIO SDK
 		fs.storage, err = NewMinioSDK(ctx, args, perfCounterSets)

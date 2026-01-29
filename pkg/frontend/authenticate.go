@@ -935,6 +935,7 @@ var (
 		catalog.MO_ISCP_LOG:           0,
 		catalog.MO_INDEX_UPDATE:       0,
 		catalog.MO_BRANCH_METADATA:    0,
+		catalog.MO_CCPR_LOG:           0,
 		catalog.MO_FEATURE_LIMIT:      0,
 		catalog.MO_FEATURE_REGISTRY:   0,
 	}
@@ -984,6 +985,7 @@ var (
 		catalog.MO_ISCP_LOG:           0,
 		catalog.MO_INDEX_UPDATE:       0,
 		catalog.MO_BRANCH_METADATA:    0,
+		catalog.MO_CCPR_LOG:           0,
 		catalog.MO_FEATURE_LIMIT:      0,
 		catalog.MO_FEATURE_REGISTRY:   0,
 	}
@@ -1029,6 +1031,7 @@ var (
 		MoCatalogMoISCPLogDDL,
 		MoCatalogMoIndexUpdateDDL,
 		MoCatalogBranchMetadataDDL,
+		MoCatalogMoCcprLogDDL,
 		MoCatalogFeatureLimitDDL,
 		MoCatalogFeatureRegistryDDL,
 		MoCatalogFeatureRegistryInitData,
@@ -5877,7 +5880,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex,
 		*tree.ShowTableNumber, *tree.ShowColumnNumber,
 		*tree.ShowTableValues, *tree.ShowNodeList, *tree.ShowRolesStmt,
-		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus, *tree.ShowPublications, *tree.ShowSubscriptions,
+		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus, *tree.ShowPublications, *tree.ShowSubscriptions, *tree.ShowCcprSubscriptions, *tree.ShowPublicationCoverage,
 		*tree.ShowBackendServers, *tree.ShowStages, *tree.ShowConnectors, *tree.DropConnector,
 		*tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask, *tree.ShowRecoveryWindow:
 		objType = objectTypeNone
@@ -5927,7 +5930,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.ValuesStatement:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeValues, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
-	case *tree.ShowSnapShots, *tree.ShowPitr:
+	case *tree.ShowSnapShots, *tree.ShowPitr, *tree.ObjectList, *tree.GetObject, *tree.GetDdl:
 		typs = append(typs, PrivilegeTypeAccountAll)
 		objType = objectTypeDatabase
 		kind = privilegeKindNone
@@ -5935,6 +5938,11 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeAccountAll)
 		objType = objectTypeDatabase
 		kind = privilegeKindNone
+	case *tree.CheckSnapshotFlushed:
+		typs = append(typs, PrivilegeTypeAccountAll)
+		objType = objectTypeDatabase
+		kind = privilegeKindNone
+		canExecInRestricted = true
 	case *tree.RestoreSnapShot:
 		typs = append(typs, PrivilegeTypeAccountAll)
 		objType = objectTypeDatabase
@@ -5959,7 +5967,11 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.LockTableStmt, *tree.UnLockTableStmt:
 		objType = objectTypeNone
 		kind = privilegeKindNone
-	case *tree.CreatePublication, *tree.DropPublication, *tree.AlterPublication:
+	case *tree.CreatePublication, *tree.DropPublication, *tree.AlterPublication, *tree.DropCcprSubscription, *tree.PauseCcprSubscription, *tree.ResumeCcprSubscription:
+		typs = append(typs, PrivilegeTypeAccountAll)
+		objType = objectTypeDatabase
+		kind = privilegeKindNone
+	case *tree.CreateSubscription:
 		typs = append(typs, PrivilegeTypeAccountAll)
 		objType = objectTypeDatabase
 		kind = privilegeKindNone
@@ -8046,6 +8058,9 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 			return true
 		}
 		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_ISCP_LOG)) {
+			return true
+		}
+		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_CCPR_LOG)) {
 			return true
 		}
 		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_INDEX_UPDATE)) {

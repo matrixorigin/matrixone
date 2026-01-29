@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -253,8 +254,25 @@ func (h *Handle) handleRequests(
 			var wr *cmd_util.WriteReq
 			if ae, ok := req.(*api.Entry); ok {
 				wr = h.apiEntryToWriteEntry(ctx, txnMeta, ae, true)
+				// Check if this is a soft delete object request
+				if wr.FileName != "" && strings.HasPrefix(wr.FileName, "soft_delete_object:") {
+					// Handle soft delete object separately
+					err = h.HandleSoftDeleteObject(ctx, txn, wr)
+					if err != nil {
+						return
+					}
+					continue
+				}
 			} else {
 				wr = req.(*cmd_util.WriteReq)
+				// Check if this is a soft delete object request
+				if wr.Type == cmd_util.EntrySoftDeleteObject {
+					err = h.HandleSoftDeleteObject(ctx, txn, wr)
+					if err != nil {
+						return
+					}
+					continue
+				}
 			}
 
 			if delM == nil {
@@ -344,6 +362,7 @@ func (h *Handle) apiEntryToWriteEntry(
 	if err != nil {
 		panic(err)
 	}
+
 	req := &cmd_util.WriteReq{
 		Type:         cmd_util.EntryType(pe.EntryType),
 		DatabaseId:   pe.GetDatabaseId(),
@@ -355,14 +374,52 @@ func (h *Handle) apiEntryToWriteEntry(
 		PkCheck:      cmd_util.PKCheckType(pe.GetPkCheckByTn()),
 	}
 
-	if req.FileName != "" {
-		col := req.Batch.Vecs[0]
-		for i := 0; i < req.Batch.RowCount(); i++ {
-			stats := objectio.ObjectStats(col.GetBytesAt(i))
-			if req.Type == cmd_util.EntryInsert {
-				req.DataObjectStats = append(req.DataObjectStats, stats)
+	// Handle soft delete object: parse ObjectID from batch and IsTombstone from FileName
+	// FileName format: "soft_delete_object:<is_tombstone>"
+	// Batch contains ObjectID in first column (binary, 18 bytes)
+	isSoftDeleteObject := req.FileName != "" && strings.HasPrefix(req.FileName, "soft_delete_object:")
+	if isSoftDeleteObject {
+		// Parse ObjectID from batch
+		if req.Batch != nil && req.Batch.RowCount() > 0 && len(req.Batch.Vecs) > 0 {
+			objIDVec := req.Batch.Vecs[0]
+			if objIDVec.Length() > 0 {
+				objIDBytes := objIDVec.GetBytesAt(0)
+				if len(objIDBytes) == types.ObjectidSize {
+					objID := objectio.ObjectId(objIDBytes)
+					req.ObjectID = &objID
+					// Parse IsTombstone from FileName (format: "soft_delete_object:<bool>")
+					parts := strings.Split(req.FileName, ":")
+					if len(parts) == 2 && parts[0] == "soft_delete_object" {
+						req.IsTombstone = parts[1] == "true"
+					}
+					logutil.Info("TN parsed soft delete object from batch",
+						zap.String("object_id", objID.ShortStringEx()),
+						zap.Bool("is_tombstone", req.IsTombstone),
+					)
+				} else {
+					logutil.Errorf("TN invalid ObjectID size in batch: %d (expected %d)", len(objIDBytes), types.ObjectidSize)
+				}
 			} else {
-				req.TombstoneStats = append(req.TombstoneStats, stats)
+				logutil.Errorf("TN batch vector is empty for soft delete object")
+			}
+		} else {
+			logutil.Errorf("TN batch is empty or invalid for soft delete object")
+		}
+		// Set type to EntrySoftDeleteObject so it can be detected later
+		req.Type = cmd_util.EntrySoftDeleteObject
+	}
+
+	// Skip parsing batch for soft delete object as it only contains ObjectID
+	if req.FileName != "" && !isSoftDeleteObject {
+		if req.Batch != nil && req.Batch.RowCount() > 0 && len(req.Batch.Vecs) > 0 {
+			col := req.Batch.Vecs[0]
+			for i := 0; i < req.Batch.RowCount(); i++ {
+				stats := objectio.ObjectStats(col.GetBytesAt(i))
+				if req.Type == cmd_util.EntryInsert {
+					req.DataObjectStats = append(req.DataObjectStats, stats)
+				} else {
+					req.TombstoneStats = append(req.TombstoneStats, stats)
+				}
 			}
 		}
 	}
@@ -754,6 +811,9 @@ func (h *Handle) HandleWrite(
 		}
 	case cmd_util.FullSkipWorkspaceDedup:
 		txn.SetDedupType(txnif.DedupPolicy_SkipWorkspace)
+	case cmd_util.SkipAllDedup:
+		// Skip all deduplication: workspace, committed data (old and new), and persisted source
+		txn.SetDedupType(txnif.DedupPolicy_SkipAll | txnif.DedupPolicy_SkipSourcePersisted)
 	}
 	common.DoIfDebugEnabled(func() {
 		logutil.Debugf("[precommit] handle write typ: %v, %d-%s, %d-%s txn: %s",
@@ -965,6 +1025,48 @@ func (h *Handle) HandleWrite(
 	//}
 	err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_Normal)
 	return
+}
+
+// HandleSoftDeleteObject handles soft delete object request
+// It sets the object's deleteat timestamp to the transaction's commit timestamp
+// Similar to merge's soft delete mechanism
+func (h *Handle) HandleSoftDeleteObject(
+	ctx context.Context,
+	txn txnif.AsyncTxn,
+	req *cmd_util.WriteReq,
+) error {
+	// Check if ObjectID is valid
+	if req.ObjectID == nil {
+		return moerr.NewInternalErrorf(ctx, "ObjectID is nil for soft delete object request, FileName: %s", req.FileName)
+	}
+
+	dbase, err := txn.GetDatabaseByID(req.DatabaseId)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to get database %d: %v", req.DatabaseId, err)
+	}
+
+	tb, err := dbase.GetRelationByID(req.TableID)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to get relation %d: %v", req.TableID, err)
+	}
+
+	// objectio.ObjectId is a type alias for types.Objectid, so we can use it directly
+	// But we need to convert the pointer type: *objectio.ObjectId -> *types.Objectid
+	objIDPtr := (*types.Objectid)(req.ObjectID)
+	err = tb.SoftDeleteObject(objIDPtr, req.IsTombstone)
+	if err != nil {
+		// If object is not found (ExpectedEOB), just log a warning and return nil
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			logutil.Warnf("object %s not found when soft deleting, skipping: %v", req.ObjectID.ShortStringEx(), err)
+			return nil
+		}
+		logutil.Errorf("failed to soft delete object %s: %v", req.ObjectID.ShortStringEx(), err)
+		return moerr.NewInternalErrorf(ctx, "failed to soft delete object %s: %v", req.ObjectID.ShortStringEx(), err)
+	}
+
+	logutil.Debugf("[precommit] soft delete object %s, isTombstone: %v, txn: %s",
+		req.ObjectID.ShortStringEx(), req.IsTombstone, txn.String())
+	return nil
 }
 
 func parse_merge_settings_set(

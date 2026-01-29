@@ -105,6 +105,7 @@ const (
 	FPCreatePublication
 	FPAlterPublication
 	FPDropPublication
+	FPCreateSubscription
 	FPShowSubscriptions
 	FPCreateStage
 	FPDropStage
@@ -135,6 +136,7 @@ const (
 	FPBackupStart
 	FPCreateSnapShot
 	FPDropSnapShot
+	FPCheckSnapshotFlushed
 	FPRestoreSnapShot
 	FPUpgradeStatement
 	FPCreatePitr
@@ -193,6 +195,9 @@ const (
 	FPShowRecoveryWindow
 	FPCloneDatabase
 	FPCloneTable
+	FPObjectList
+	FPGetDdl
+	FPGetObject
 	FPDataBranch
 )
 

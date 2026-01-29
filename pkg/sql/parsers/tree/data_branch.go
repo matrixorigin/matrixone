@@ -14,7 +14,11 @@
 
 package tree
 
-import "github.com/matrixorigin/matrixone/pkg/common/reuse"
+import (
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+)
 
 func init() {
 	reuse.CreatePool[DataBranchCreateTable](
@@ -69,6 +73,36 @@ func init() {
 			c.reset()
 		},
 		reuse.DefaultOptions[DataBranchMerge](),
+	)
+
+	reuse.CreatePool[ObjectList](
+		func() *ObjectList {
+			return &ObjectList{}
+		},
+		func(c *ObjectList) {
+			c.reset()
+		},
+		reuse.DefaultOptions[ObjectList](),
+	)
+
+	reuse.CreatePool[GetObject](
+		func() *GetObject {
+			return &GetObject{}
+		},
+		func(c *GetObject) {
+			c.reset()
+		},
+		reuse.DefaultOptions[GetObject](),
+	)
+
+	reuse.CreatePool[GetDdl](
+		func() *GetDdl {
+			return &GetDdl{}
+		},
+		func(c *GetDdl) {
+			c.reset()
+		},
+		reuse.DefaultOptions[GetDdl](),
 	)
 
 }
@@ -393,4 +427,153 @@ func (s *DataBranchMerge) GetQueryType() string {
 
 func (s *DataBranchMerge) Free() {
 	reuse.Free[DataBranchMerge](s, nil)
+}
+
+type ObjectList struct {
+	statementImpl
+
+	Database        Identifier  // optional database name
+	Table           Identifier  // optional table name
+	Snapshot        Identifier  // snapshot name
+	AgainstSnapshot *Identifier // optional against snapshot name
+}
+
+func (s *ObjectList) TypeName() string {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s *ObjectList) reset() {
+	*s = ObjectList{}
+}
+
+func NewObjectList() *ObjectList {
+	return reuse.Alloc[ObjectList](nil)
+}
+
+func (s *ObjectList) StmtKind() StmtKind {
+	return compositeResRowType
+}
+
+func (s *ObjectList) Format(ctx *FmtCtx) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s *ObjectList) String() string {
+	return s.GetStatementType()
+}
+
+func (s *ObjectList) GetStatementType() string {
+	return "object list"
+}
+
+func (s *ObjectList) GetQueryType() string {
+	return QueryTypeOth
+}
+
+func (s *ObjectList) Free() {
+	reuse.Free[ObjectList](s, nil)
+}
+
+type GetObject struct {
+	statementImpl
+
+	ObjectName Identifier // object name
+	ChunkIndex int64      // -1 means only get metadata, >=0 means request which chunk
+}
+
+func (s *GetObject) TypeName() string {
+	return "get object"
+}
+
+func (s *GetObject) reset() {
+	*s = GetObject{}
+}
+
+func NewGetObject() *GetObject {
+	return reuse.Alloc[GetObject](nil)
+}
+
+func (s *GetObject) StmtKind() StmtKind {
+	return compositeResRowType
+}
+
+func (s *GetObject) Format(ctx *FmtCtx) {
+	ctx.WriteString("GET OBJECT ")
+	ctx.WriteString(string(s.ObjectName))
+	ctx.WriteString(" OFFSET ")
+	ctx.WriteString(fmt.Sprintf("%d", s.ChunkIndex))
+}
+
+func (s *GetObject) String() string {
+	return s.GetStatementType()
+}
+
+func (s *GetObject) GetStatementType() string {
+	return "get object"
+}
+
+func (s *GetObject) GetQueryType() string {
+	return QueryTypeOth
+}
+
+func (s *GetObject) Free() {
+	reuse.Free[GetObject](s, nil)
+}
+
+type GetDdl struct {
+	statementImpl
+
+	Database *Identifier // optional database name
+	Table    *Identifier // optional table name
+	Snapshot *Identifier // optional snapshot name
+}
+
+func (s *GetDdl) TypeName() string {
+	return "get ddl"
+}
+
+func (s *GetDdl) reset() {
+	*s = GetDdl{}
+}
+
+func NewGetDdl() *GetDdl {
+	return reuse.Alloc[GetDdl](nil)
+}
+
+func (s *GetDdl) StmtKind() StmtKind {
+	return compositeResRowType
+}
+
+func (s *GetDdl) Format(ctx *FmtCtx) {
+	ctx.WriteString("GETDDL")
+	if s.Database != nil {
+		ctx.WriteString(" DATABASE ")
+		ctx.WriteString(string(*s.Database))
+	}
+	if s.Table != nil {
+		ctx.WriteString(" TABLE ")
+		ctx.WriteString(string(*s.Table))
+	}
+	if s.Snapshot != nil {
+		ctx.WriteString(" SNAPSHOT ")
+		ctx.WriteString(string(*s.Snapshot))
+	}
+}
+
+func (s *GetDdl) String() string {
+	return s.GetStatementType()
+}
+
+func (s *GetDdl) GetStatementType() string {
+	return "get ddl"
+}
+
+func (s *GetDdl) GetQueryType() string {
+	return QueryTypeOth
+}
+
+func (s *GetDdl) Free() {
+	reuse.Free[GetDdl](s, nil)
 }

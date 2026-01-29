@@ -1249,12 +1249,28 @@ func handleCreatePublication(ses FeSession, execCtx *ExecCtx, cp *tree.CreatePub
 	return doCreatePublication(execCtx.reqCtx, ses.(*Session), cp)
 }
 
+func handleCreateSubscription(ses FeSession, execCtx *ExecCtx, cs *tree.CreateSubscription) error {
+	return doCreateSubscription(execCtx.reqCtx, ses.(*Session), cs)
+}
+
 func handleAlterPublication(ses FeSession, execCtx *ExecCtx, ap *tree.AlterPublication) error {
 	return doAlterPublication(execCtx.reqCtx, ses.(*Session), ap)
 }
 
 func handleDropPublication(ses FeSession, execCtx *ExecCtx, dp *tree.DropPublication) error {
 	return doDropPublication(execCtx.reqCtx, ses.(*Session), dp)
+}
+
+func handleDropCcprSubscription(ses FeSession, execCtx *ExecCtx, dcs *tree.DropCcprSubscription) error {
+	return doDropCcprSubscription(execCtx.reqCtx, ses.(*Session), dcs)
+}
+
+func handleResumeCcprSubscription(ses FeSession, execCtx *ExecCtx, rcs *tree.ResumeCcprSubscription) error {
+	return doResumeCcprSubscription(execCtx.reqCtx, ses.(*Session), rcs)
+}
+
+func handlePauseCcprSubscription(ses FeSession, execCtx *ExecCtx, pcs *tree.PauseCcprSubscription) error {
+	return doPauseCcprSubscription(execCtx.reqCtx, ses.(*Session), pcs)
 }
 
 func handleCreateStage(ses FeSession, execCtx *ExecCtx, cs *tree.CreateStage) error {
@@ -1797,6 +1813,14 @@ func handleShowPublications(ses FeSession, execCtx *ExecCtx, sp *tree.ShowPublic
 
 func handleShowSubscriptions(ses FeSession, execCtx *ExecCtx, ss *tree.ShowSubscriptions) error {
 	return doShowSubscriptions(execCtx.reqCtx, ses.(*Session), ss)
+}
+
+func handleShowPublicationCoverage(ses FeSession, execCtx *ExecCtx, spc *tree.ShowPublicationCoverage) error {
+	return doShowPublicationCoverage(execCtx.reqCtx, ses.(*Session), spc)
+}
+
+func handleShowCcprSubscriptions(ses FeSession, execCtx *ExecCtx, scs *tree.ShowCcprSubscriptions) error {
+	return doShowCcprSubscriptions(execCtx.reqCtx, ses.(*Session), scs)
 }
 
 func doShowBackendServers(ses *Session, execCtx *ExecCtx) error {

@@ -7,6 +7,7 @@ mo_columns    Tae    Dynamic    1409    0    78035    0    0    NULL    0    202
 mo_account    Tae    Dynamic    1    0    1398    0    0    NULL    0    2025-11-21 09:44:39    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_branch_metadata    Tae    Dynamic    102    0    3845    0    0    NULL    0    2025-11-21 09:44:39    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_cache    null    null    null    null    null    null    null    null    null    2025-11-21 09:44:39    null    null    null    null    null    VIEW    0    moadmin
+mo_ccpr_log    Tae    Dynamic    0    0    0    0    0    NULL    0    2026-01-13 08:38:02    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_cdc_task    Tae    Dynamic    0    0    0    0    0    NULL    0    2025-11-21 09:44:39    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_cdc_watermark    Tae    Dynamic    0    0    0    0    0    NULL    0    2025-11-21 09:44:39    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_configurations    null    null    null    null    null    null    null    null    null    2025-11-21 09:44:39    null    null    null    null    null    VIEW    0    moadmin

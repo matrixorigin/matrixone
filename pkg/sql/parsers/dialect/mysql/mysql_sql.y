@@ -235,6 +235,8 @@ import (
     toAccountOpt *tree.ToAccountOpt
     conflictOpt *tree.ConflictOpt
     diffOutputOpt   *tree.DiffOutputOpt
+    objectList      *tree.ObjectList
+    getObject       *tree.GetObject
     statementOption tree.StatementOption
 
     tableLock tree.TableLock
@@ -365,12 +367,12 @@ import (
 %token <str> EXTENSION
 %token <str> RETENTION PERIOD
 %token <str> CLONE BRANCH LOG REVERT REBASE DIFF
-%token <str> CONFLICT CONFLICT_FAIL CONFLICT_SKIP CONFLICT_ACCEPT OUTPUT
+%token <str> CONFLICT CONFLICT_FAIL CONFLICT_SKIP CONFLICT_ACCEPT OUTPUT OBJECTLIST GETOBJECT GETDDL
 
 // Sequence
 %token <str> INCREMENT CYCLE MINVALUE
 // publication
-%token <str> PUBLICATION SUBSCRIPTIONS PUBLICATIONS
+%token <str> PUBLICATION SUBSCRIPTION SUBSCRIPTIONS PUBLICATIONS SYNC_INTERVAL SYNC COVERAGE CCPR
 
 // MO table option
 %token <str> PROPERTIES
@@ -466,6 +468,9 @@ import (
 
 // Insert
 %token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE PARALLEL STRICT SPLITSIZE
+
+// Snapshot
+%token <str> CHECKSNAPSHOTFLUSHED
 
 %token <str> UNUSED BINDINGS
 
@@ -564,9 +569,9 @@ import (
 
 // iteration
 %type <statement> loop_stmt iterate_stmt leave_stmt repeat_stmt while_stmt
-%type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
+%type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt show_publication_coverage_stmt show_ccpr_subscriptions_stmt drop_ccpr_subscription_stmt resume_ccpr_subscription_stmt pause_ccpr_subscription_stmt
 %type <statement> create_stage_stmt drop_stage_stmt alter_stage_stmt remove_stage_files_stmt
-%type <statement> create_snapshot_stmt drop_snapshot_stmt
+%type <statement> create_snapshot_stmt drop_snapshot_stmt check_snapshot_flushed_stmt
 %type <statement> create_pitr_stmt drop_pitr_stmt show_pitr_stmt alter_pitr_stmt restore_pitr_stmt show_recovery_window_stmt
 %type <str> urlparams
 %type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type
@@ -574,7 +579,10 @@ import (
 %type <accountsSetOption> alter_publication_accounts_opt create_publication_accounts
 %type <str> alter_publication_db_name_opt
 %type <statement> branch_stmt
+%type <objectList> objectlist_opt
+%type <str> against_snapshot_opt getddl_snapshot_opt
 %type <toAccountOpt> to_account_opt
+%type <statement> getddl_opts
 %type <conflictOpt> conflict_opt
 %type <diffOutputOpt> diff_output_opt
 
@@ -744,7 +752,7 @@ import (
 %type <frameBound> frame_bound frame_bound_start
 %type <frameType> frame_type
 %type <str> fields_or_columns
-%type <int64Val> algorithm_opt partition_num_opt sub_partition_num_opt opt_retry pitr_value
+%type <int64Val> algorithm_opt partition_num_opt sub_partition_num_opt opt_retry pitr_value sync_interval_opt
 %type <boolVal> linear_opt
 %type <partition> partition
 %type <partitions> partition_list_opt partition_list
@@ -974,7 +982,10 @@ normal_stmt:
 |   pause_cdc_stmt
 |   resume_cdc_stmt
 |   restart_cdc_stmt
+|   resume_ccpr_subscription_stmt
+|   pause_ccpr_subscription_stmt
 |   branch_stmt
+|   check_snapshot_flushed_stmt
 
 backup_stmt:
     BACKUP STRING FILESYSTEM STRING PARALLELISM STRING backup_type_opt backup_timestamp_opt
@@ -4236,6 +4247,8 @@ show_stmt:
 |   show_upgrade_stmt
 |   show_publications_stmt
 |   show_subscriptions_stmt
+|   show_publication_coverage_stmt
+|   show_ccpr_subscriptions_stmt
 |   show_servers_stmt
 |   show_stages_stmt
 |   show_connectors_stmt
@@ -4633,6 +4646,12 @@ show_publications_stmt:
 	$$ = &tree.ShowPublications{Like: $3}
     }
 
+show_publication_coverage_stmt:
+    SHOW PUBLICATION COVERAGE db_name
+    {
+	$$ = &tree.ShowPublicationCoverage{Name: $4}
+    }
+
 show_upgrade_stmt:
     SHOW UPGRADE
     {
@@ -4647,6 +4666,20 @@ show_subscriptions_stmt:
 |   SHOW SUBSCRIPTIONS ALL like_opt
     {
 	    $$ = &tree.ShowSubscriptions{All: true, Like: $4}
+    }
+
+show_ccpr_subscriptions_stmt:
+    SHOW CCPR SUBSCRIPTION db_name like_opt
+    {
+	    $$ = &tree.ShowCcprSubscriptions{Name: $4, Like: $5}
+    }
+|   SHOW CCPR SUBSCRIPTION like_opt
+    {
+	    $$ = &tree.ShowCcprSubscriptions{Like: $4}
+    }
+|   SHOW CCPR SUBSCRIPTIONS like_opt
+    {
+	    $$ = &tree.ShowCcprSubscriptions{Like: $4}
     }
 
 like_opt:
@@ -4790,6 +4823,7 @@ drop_ddl_stmt:
 |   drop_function_stmt
 |   drop_sequence_stmt
 |   drop_publication_stmt
+|   drop_ccpr_subscription_stmt
 |   drop_procedure_stmt
 |   drop_stage_stmt
 |   drop_connector_stmt
@@ -6913,6 +6947,21 @@ create_account_stmt:
             Comment,
     	)
     }
+|   CREATE ACCOUNT FROM STRING PUBLICATION ident sync_interval_opt
+    {
+        var FromUri = $4
+        var PubName = tree.Identifier($6.Compare())
+        var SyncInterval = $7
+        var cs = tree.NewCreateSubscription(
+            true,  // isDatabase
+            tree.Identifier(""),  // dbName (empty for account level)
+            "",  // tableName
+            FromUri,
+            PubName,
+            SyncInterval,
+        )
+        $$ = cs
+    }
 
 view_list_opt:
     view_opt
@@ -7139,6 +7188,22 @@ create_publication_stmt:
             Comment,
         )
     }
+|   CREATE PUBLICATION not_exists_opt ident DATABASE '*' create_publication_accounts comment_opt
+    {
+        var IfNotExists = $3
+        var Name = tree.Identifier($4.Compare())
+        var Database = tree.Identifier("*")
+        var AccountsSet = $7
+        var Comment = $8
+        $$ = tree.NewCreatePublication(
+            IfNotExists,
+            Name,
+            Database,
+            nil,
+            AccountsSet,
+            Comment,
+        )
+    }
 
 create_publication_accounts:
     ACCOUNT ALL
@@ -7205,6 +7270,23 @@ stage_comment_opt:
         $$ = tree.StageComment{
             Exist: true,
             Comment: $3,
+        }
+    }
+
+
+sync_interval_opt:
+    {
+        $$ = int64(0)
+    }
+|   SYNC INTERVAL INTEGRAL
+    {
+        switch v := $3.(type) {
+        case int64:
+            $$ = v
+        case uint64:
+            $$ = int64(v)
+        default:
+            $$ = int64(0)
         }
     }
 
@@ -7350,6 +7432,28 @@ drop_publication_stmt:
         $$ = tree.NewDropPublication(ifExists, name)
     }
 
+drop_ccpr_subscription_stmt:
+    DROP CCPR SUBSCRIPTION exists_opt ident
+    {
+        var ifExists = $4
+        var name = tree.Identifier($5.Compare())
+        $$ = tree.NewDropCcprSubscription(ifExists, name)
+    }
+
+resume_ccpr_subscription_stmt:
+    RESUME CCPR SUBSCRIPTION ident
+    {
+        var name = tree.Identifier($4.Compare())
+        $$ = tree.NewResumeCcprSubscription(name)
+    }
+
+pause_ccpr_subscription_stmt:
+    PAUSE CCPR SUBSCRIPTION ident
+    {
+        var name = tree.Identifier($4.Compare())
+        $$ = tree.NewPauseCcprSubscription(name)
+    }
+
 drop_stage_stmt:
     DROP STAGE exists_opt ident
     {
@@ -7372,6 +7476,14 @@ drop_snapshot_stmt:
         var ifExists = $3
         var name = tree.Identifier($4.Compare())
         $$ = tree.NewDropSnapShot(ifExists, name)
+    }
+
+check_snapshot_flushed_stmt:
+    CHECKSNAPSHOTFLUSHED ident
+    {
+        $$ = &tree.CheckSnapshotFlushed{
+            Name: tree.Identifier($2.Compare()),
+        }
     }
 
 drop_pitr_stmt:
@@ -8005,6 +8117,21 @@ create_database_stmt:
     	t.ToAccountOpt = $8
     	$$ = t
     }
+|   CREATE database_or_schema not_exists_opt db_name FROM STRING PUBLICATION ident sync_interval_opt
+    {
+        var DbName = tree.Identifier($4)
+        var FromUri = $6
+        var PubName = tree.Identifier($8.Compare())
+        var SyncInterval = $9
+        $$ = tree.NewCreateSubscription(
+            true,  // isDatabase
+            DbName,
+            "",
+            FromUri,
+            PubName,
+            SyncInterval,
+        )
+    }
 
 subscription_opt:
     {
@@ -8237,6 +8364,29 @@ branch_stmt:
     	t.ConflictOpt = $7
     	$$ = t
     }
+|   OBJECTLIST objectlist_opt SNAPSHOT ident against_snapshot_opt
+    {
+    	t := tree.NewObjectList()
+    	t.Database = $2.Database
+    	t.Table = $2.Table
+    	t.Snapshot = tree.Identifier($4.Compare())
+    	if len($5) > 0 {
+    		snapshot := tree.Identifier($5)
+    		t.AgainstSnapshot = &snapshot
+    	}
+    	$$ = t
+    }
+|   GETOBJECT ident OFFSET INTEGRAL
+    {
+    	t := tree.NewGetObject()
+    	t.ObjectName = tree.Identifier($2.Compare())
+    	t.ChunkIndex = $4.(int64)
+    	$$ = t
+    }
+|   GETDDL getddl_opts
+    {
+    	$$ = $2
+    }
 
 diff_output_opt:
     {
@@ -8290,6 +8440,111 @@ conflict_opt:
     	$$ = &tree.ConflictOpt {
             Opt: tree.CONFLICT_ACCEPT,
     	}
+    }
+
+objectlist_opt:
+    {
+    	$$ = &tree.ObjectList{
+    		Database: "",
+    		Table: "",
+    	}
+    }
+    | DATABASE ident
+    {
+    	$$ = &tree.ObjectList{
+    		Database: tree.Identifier($2.Compare()),
+    		Table: "",
+    	}
+    }
+    | DATABASE ident TABLE ident
+    {
+    	$$ = &tree.ObjectList{
+    		Database: tree.Identifier($2.Compare()),
+    		Table: tree.Identifier($4.Compare()),
+    	}
+    }
+
+getddl_snapshot_opt:
+    {
+    	$$ = ""
+    }
+    | SNAPSHOT ident
+    {
+    	$$ = $2.Compare()
+    }
+
+getddl_opts:
+    {
+    	t := tree.NewGetDdl()
+    	$$ = t
+    }
+    | DATABASE ident
+    {
+    	t := tree.NewGetDdl()
+    	dbName := tree.Identifier($2.Compare())
+    	t.Database = &dbName
+    	$$ = t
+    }
+    | DATABASE ident TABLE ident
+    {
+    	t := tree.NewGetDdl()
+    	dbName := tree.Identifier($2.Compare())
+    	t.Database = &dbName
+    	tableName := tree.Identifier($4.Compare())
+    	t.Table = &tableName
+    	$$ = t
+    }
+    | DATABASE ident SNAPSHOT ident
+    {
+    	t := tree.NewGetDdl()
+    	dbName := tree.Identifier($2.Compare())
+    	t.Database = &dbName
+    	snapshot := tree.Identifier($4.Compare())
+    	t.Snapshot = &snapshot
+    	$$ = t
+    }
+    | DATABASE ident TABLE ident SNAPSHOT ident
+    {
+    	t := tree.NewGetDdl()
+    	dbName := tree.Identifier($2.Compare())
+    	t.Database = &dbName
+    	tableName := tree.Identifier($4.Compare())
+    	t.Table = &tableName
+    	snapshot := tree.Identifier($6.Compare())
+    	t.Snapshot = &snapshot
+    	$$ = t
+    }
+    | TABLE ident
+    {
+    	t := tree.NewGetDdl()
+    	tableName := tree.Identifier($2.Compare())
+    	t.Table = &tableName
+    	$$ = t
+    }
+    | TABLE ident SNAPSHOT ident
+    {
+    	t := tree.NewGetDdl()
+    	tableName := tree.Identifier($2.Compare())
+    	t.Table = &tableName
+    	snapshot := tree.Identifier($4.Compare())
+    	t.Snapshot = &snapshot
+    	$$ = t
+    }
+    | SNAPSHOT ident
+    {
+    	t := tree.NewGetDdl()
+    	snapshot := tree.Identifier($2.Compare())
+    	t.Snapshot = &snapshot
+    	$$ = t
+    }
+
+against_snapshot_opt:
+    {
+    	$$ = ""
+    }
+    | AGAINST SNAPSHOT ident
+    {
+    	$$ = $3.Compare()
     }
 
 to_account_opt:
@@ -8416,6 +8671,27 @@ create_table_stmt:
 	t.SrcTable = *$7
 	t.ToAccountOpt = $8
 	$$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name FROM STRING PUBLICATION ident sync_interval_opt
+    {
+        var TableName = $5
+        var FromUri = $7
+        var PubName = tree.Identifier($9.Compare())
+        var SyncInterval = $10
+        var TableNameStr = string(TableName.ObjectName)
+        var DbName = tree.Identifier("")
+        // Extract database name from table name if explicitly specified
+        if TableName.ExplicitSchema {
+            DbName = TableName.SchemaName
+        }
+        $$ = tree.NewCreateSubscription(
+            false,  // isDatabase
+            DbName,
+            TableNameStr,
+            FromUri,
+            PubName,
+            SyncInterval,
+        )
     }
 
 load_param_opt_2:

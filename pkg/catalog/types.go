@@ -29,7 +29,8 @@ import (
 
 const (
 	// for schema
-	PropSchemaExtra = "schema_extra"
+	PropSchemaExtra     = "schema_extra"
+	PropFromPublication = "from_publication"
 
 	Row_ID           = objectio.PhysicalAddr_Attr
 	PrefixPriColName = "__mo_cpkey_"
@@ -173,6 +174,8 @@ const (
 
 	MO_ISCP_LOG         = "mo_iscp_log"
 	MO_STORED_PROCEDURE = "mo_stored_procedure"
+
+	MO_CCPR_LOG = "mo_ccpr_log"
 
 	MO_INDEX_UPDATE = "mo_index_update"
 

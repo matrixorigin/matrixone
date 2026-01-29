@@ -16,18 +16,22 @@ package frontend
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/publication"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
@@ -164,6 +168,81 @@ var (
 			},
 		},
 	}
+
+	showCcprSubscriptionsOutputColumns = [12]Column{
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "pub_name",
+				columnType: defines.MYSQL_TYPE_VARCHAR,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "pub_account",
+				columnType: defines.MYSQL_TYPE_VARCHAR,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "pub_database",
+				columnType: defines.MYSQL_TYPE_VARCHAR,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "pub_tables",
+				columnType: defines.MYSQL_TYPE_VARCHAR,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "create_time",
+				columnType: defines.MYSQL_TYPE_TIMESTAMP,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "drop_time",
+				columnType: defines.MYSQL_TYPE_TIMESTAMP,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "state",
+				columnType: defines.MYSQL_TYPE_TINY,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "sync_level",
+				columnType: defines.MYSQL_TYPE_VARCHAR,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "upstream_conn",
+				columnType: defines.MYSQL_TYPE_VARCHAR,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "iteration_lsn",
+				columnType: defines.MYSQL_TYPE_LONGLONG,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "error_message",
+				columnType: defines.MYSQL_TYPE_VARCHAR,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "watermark",
+				columnType: defines.MYSQL_TYPE_TIMESTAMP,
+			},
+		},
+	}
 )
 
 func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePublication) (err error) {
@@ -212,6 +291,15 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 	// delete current tenant
 	delete(accIdInfoMap, int32(accountId))
 
+	// Check if trying to publish to self (before validating other accounts)
+	if !cp.AccountsSet.All {
+		for _, acc := range cp.AccountsSet.SetAccounts {
+			if string(acc) == accountName {
+				return moerr.NewInternalError(ctx, "can't publish to self")
+			}
+		}
+	}
+
 	var subAccounts map[int32]*pubsub.AccountInfo
 	if cp.AccountsSet.All {
 		if accountId != sysAccountID && !pubsub.CanPubToAll(accountName, getPu(bh.Service()).SV.PubAllAccounts) {
@@ -234,8 +322,34 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 		return
 	}
 
-	if dbId, dbType, err = getDbIdAndType(ctx, bh, dbName); err != nil {
-		return
+	// Try to find database in current account first
+	dbId, dbType, err = getDbIdAndType(ctx, bh, dbName)
+	if err != nil {
+		// If not found in current account and ACCOUNT clause is specified, try to find in target accounts
+		if !cp.AccountsSet.All && len(cp.AccountsSet.SetAccounts) > 0 {
+			for _, accName := range cp.AccountsSet.SetAccounts {
+				if accInfo, ok := accNameInfoMap[string(accName)]; ok {
+					var foundDbId uint64
+					var foundDbType string
+					foundDbId, foundDbType, err = getDbIdAndTypeForAccount(ctx, bh, dbName, uint32(accInfo.Id))
+					if err == nil {
+						// Found database in target account, use it
+						dbId = foundDbId
+						dbType = foundDbType
+						// Update context to the account where database exists for subsequent operations
+						ctx = defines.AttachAccountId(ctx, uint32(accInfo.Id))
+						break
+					}
+				}
+			}
+			// If still not found after checking all target accounts, return error
+			if err != nil {
+				return
+			}
+		} else {
+			// No target accounts specified or ACCOUNT ALL, return the original error
+			return
+		}
 	}
 	if dbType != "" { //TODO: check the dat_type
 		return moerr.NewInternalErrorf(ctx, "database '%s' is not a user database", cp.Database)
@@ -310,7 +424,7 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 		ctx, bh,
 		int32(accountId), accountName,
 		pubName, dbName, tablesStr, comment,
-		insertSubAccounts, accIdInfoMap,
+		insertSubAccounts, subAccounts,
 	); err != nil {
 		return
 	}
@@ -520,7 +634,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 		ctx, bh,
 		int32(accountId), accountName,
 		pubName, dbName, tablesStr, comment,
-		insertSubAccounts, accIdInfoMap,
+		insertSubAccounts, newSubAccounts,
 	); err != nil {
 		return
 	}
@@ -550,6 +664,216 @@ func doDropPublication(ctx context.Context, ses *Session, dp *tree.DropPublicati
 	}()
 
 	return dropPublication(ctx, bh, dp.IfExists, tenantInfo.Tenant, string(dp.Name))
+}
+
+func doDropCcprSubscription(ctx context.Context, ses *Session, dcs *tree.DropCcprSubscription) (err error) {
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Switch to system account context to update mo_catalog
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+
+	if err = bh.Exec(ctx, "begin;"); err != nil {
+		return err
+	}
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+
+	pubName := string(dcs.Name)
+	escapedPubName := strings.ReplaceAll(pubName, "'", "''")
+
+	// Check if subscription exists
+	checkSQL := fmt.Sprintf(
+		"SELECT COUNT(1) FROM mo_catalog.mo_ccpr_log WHERE subscription_name = '%s' AND drop_at IS NULL",
+		escapedPubName,
+	)
+	if accountId != catalog.System_Account {
+		checkSQL += fmt.Sprintf(" AND account_id = %d", accountId)
+	}
+
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, checkSQL); err != nil {
+		return err
+	}
+
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return err
+	}
+
+	var count int64
+	if execResultArrayHasData(erArray) {
+		count, err = erArray[0].GetInt64(ctx, 0, 0)
+		if err != nil {
+			return err
+		}
+	}
+
+	if count == 0 {
+		if !dcs.IfExists {
+			return moerr.NewInternalErrorf(ctx, "subscription '%s' does not exist", pubName)
+		}
+		return nil
+	}
+
+	// Update mo_ccpr_log to set drop_at = now()
+	updateSQL := fmt.Sprintf(
+		"UPDATE mo_catalog.mo_ccpr_log SET drop_at = now() WHERE subscription_name = '%s' AND drop_at IS NULL",
+		escapedPubName,
+	)
+	if accountId != catalog.System_Account {
+		updateSQL += fmt.Sprintf(" AND account_id = %d", accountId)
+	}
+
+	if err = bh.Exec(ctx, updateSQL); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func doResumeCcprSubscription(ctx context.Context, ses *Session, rcs *tree.ResumeCcprSubscription) (err error) {
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Switch to system account context to update mo_catalog
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+
+	if err = bh.Exec(ctx, "begin;"); err != nil {
+		return err
+	}
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+
+	pubName := string(rcs.Name)
+	escapedPubName := strings.ReplaceAll(pubName, "'", "''")
+
+	// Check if subscription exists
+	checkSQL := fmt.Sprintf(
+		"SELECT COUNT(1) FROM mo_catalog.mo_ccpr_log WHERE subscription_name = '%s' AND drop_at IS NULL",
+		escapedPubName,
+	)
+	if accountId != catalog.System_Account {
+		checkSQL += fmt.Sprintf(" AND account_id = %d", accountId)
+	}
+
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, checkSQL); err != nil {
+		return err
+	}
+
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return err
+	}
+
+	var count int64
+	if execResultArrayHasData(erArray) {
+		count, err = erArray[0].GetInt64(ctx, 0, 0)
+		if err != nil {
+			return err
+		}
+	}
+
+	if count == 0 {
+		return moerr.NewInternalErrorf(ctx, "subscription '%s' does not exist", pubName)
+	}
+
+	// Update mo_ccpr_log: set state to running (0)
+	updateSQL := fmt.Sprintf(
+		"UPDATE mo_catalog.mo_ccpr_log SET state = 0 WHERE subscription_name = '%s' AND drop_at IS NULL",
+		escapedPubName,
+	)
+	if accountId != catalog.System_Account {
+		updateSQL += fmt.Sprintf(" AND account_id = %d", accountId)
+	}
+
+	if err = bh.Exec(ctx, updateSQL); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func doPauseCcprSubscription(ctx context.Context, ses *Session, pcs *tree.PauseCcprSubscription) (err error) {
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Switch to system account context to update mo_catalog
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+
+	if err = bh.Exec(ctx, "begin;"); err != nil {
+		return err
+	}
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+
+	pubName := string(pcs.Name)
+	escapedPubName := strings.ReplaceAll(pubName, "'", "''")
+
+	// Check if subscription exists
+	checkSQL := fmt.Sprintf(
+		"SELECT COUNT(1) FROM mo_catalog.mo_ccpr_log WHERE subscription_name = '%s' AND drop_at IS NULL",
+		escapedPubName,
+	)
+	if accountId != catalog.System_Account {
+		checkSQL += fmt.Sprintf(" AND account_id = %d", accountId)
+	}
+
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, checkSQL); err != nil {
+		return err
+	}
+
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return err
+	}
+
+	var count int64
+	if execResultArrayHasData(erArray) {
+		count, err = erArray[0].GetInt64(ctx, 0, 0)
+		if err != nil {
+			return err
+		}
+	}
+
+	if count == 0 {
+		return moerr.NewInternalErrorf(ctx, "subscription '%s' does not exist", pubName)
+	}
+
+	// Update mo_ccpr_log: set state to pause (2)
+	updateSQL := fmt.Sprintf(
+		"UPDATE mo_catalog.mo_ccpr_log SET state = 2 WHERE subscription_name = '%s' AND drop_at IS NULL",
+		escapedPubName,
+	)
+	if accountId != catalog.System_Account {
+		updateSQL += fmt.Sprintf(" AND account_id = %d", accountId)
+	}
+
+	if err = bh.Exec(ctx, updateSQL); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // dropPublication drops a publication, bh should be in a transaction
@@ -857,6 +1181,50 @@ func getPubInfo(ctx context.Context, bh BackgroundExec, pubName string) (pubInfo
 		sql = fmt.Sprintf(getPubInfoSql, accountId) + fmt.Sprintf(" and pub_name = '%s'", pubName)
 	} else {
 		sql = fmt.Sprintf(getPubInfoSqlOld, accountId) + fmt.Sprintf(" and pub_name = '%s'", pubName)
+	}
+
+	bh.ClearExecResultSet()
+	if err = bh.Exec(defines.AttachAccountId(ctx, catalog.System_Account), sql); err != nil {
+		return
+	}
+
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return
+	}
+
+	var pubInfos []*pubsub.PubInfo
+	if accountNameColExists {
+		if pubInfos, err = extractPubInfosFromExecResult(ctx, erArray); err != nil {
+			return
+		}
+	} else {
+		if pubInfos, err = extractPubInfosFromExecResultOld(ctx, erArray); err != nil {
+			return
+		}
+	}
+	if len(pubInfos) > 0 {
+		pubInfo = pubInfos[0]
+	}
+	return
+}
+
+// getPubInfoByName gets publication info by name only, without filtering by account_id.
+// This allows non-sys tenants to query publications created by any account (e.g., sys tenant).
+func getPubInfoByName(ctx context.Context, bh BackgroundExec, pubName string) (pubInfo *pubsub.PubInfo, err error) {
+	accountNameColExists, err := checkColExists(ctx, bh, "mo_catalog", "mo_pubs", "account_name")
+	if err != nil {
+		return
+	}
+
+	// Query by pub_name only, without account_id filter
+	var sql string
+	if accountNameColExists {
+		sql = getAllPubInfoSql + fmt.Sprintf(" where pub_name = '%s'", pubName)
+	} else {
+		// For old schema without account_name column
+		sql = "select account_id, pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs" +
+			fmt.Sprintf(" where pub_name = '%s'", pubName)
 	}
 
 	bh.ClearExecResultSet()
@@ -1368,6 +1736,422 @@ func doShowSubscriptions(ctx context.Context, ses *Session, ss *tree.ShowSubscri
 	return trySaveQueryResult(ctx, ses, rs)
 }
 
+// maskPasswordInUri masks the password in a MySQL URI
+// Format: mysql://[account#]user:password@host:port
+// Returns: mysql://[account#]user:***@host:port
+func maskPasswordInUri(uri string) string {
+	const uriPrefix = "mysql://"
+	if !strings.HasPrefix(uri, uriPrefix) {
+		return uri
+	}
+
+	rest := uri[len(uriPrefix):]
+	parts := strings.Split(rest, "@")
+	if len(parts) != 2 {
+		return uri
+	}
+
+	credPart := parts[0]
+	hostPortPart := parts[1]
+
+	// Check if there's a # separator for account
+	var userPassPart string
+	if strings.Contains(credPart, "#") {
+		credParts := strings.SplitN(credPart, "#", 2)
+		accountPart := credParts[0]
+		userPassPart = credParts[1]
+		// Replace password with ***
+		if strings.Contains(userPassPart, ":") {
+			userPassParts := strings.SplitN(userPassPart, ":", 2)
+			user := userPassParts[0]
+			maskedCredPart := accountPart + "#" + user + ":***"
+			return uriPrefix + maskedCredPart + "@" + hostPortPart
+		}
+	} else {
+		// Replace password with ***
+		if strings.Contains(credPart, ":") {
+			userPassParts := strings.SplitN(credPart, ":", 2)
+			user := userPassParts[0]
+			maskedCredPart := user + ":***"
+			return uriPrefix + maskedCredPart + "@" + hostPortPart
+		}
+	}
+
+	return uri
+}
+
+// extractWatermarkFromContext extracts watermark timestamp from context JSON
+func extractWatermarkFromContext(contextJSON string) interface{} {
+	if contextJSON == "" {
+		return nil
+	}
+
+	var contextData map[string]interface{}
+	if err := json.Unmarshal([]byte(contextJSON), &contextData); err != nil {
+		return nil
+	}
+
+	// Try to find watermark in various possible locations
+	if watermark, ok := contextData["watermark"]; ok {
+		if ts, ok := watermark.(float64); ok {
+			// Convert timestamp to time.Time
+			return time.Unix(0, int64(ts))
+		}
+		if tsStr, ok := watermark.(string); ok {
+			// Try parsing as timestamp string
+			if t, err := time.Parse(time.RFC3339, tsStr); err == nil {
+				return t
+			}
+		}
+	}
+
+	// Check for current_snapshot_ts as watermark
+	if snapshotData, ok := contextData["current_snapshot_ts"]; ok {
+		if ts, ok := snapshotData.(float64); ok {
+			return time.Unix(0, int64(ts))
+		}
+	}
+
+	return nil
+}
+
+func doShowCcprSubscriptions(ctx context.Context, ses *Session, scs *tree.ShowCcprSubscriptions) (err error) {
+	start := time.Now()
+	defer func() {
+		v2.ShowSubHistogram.Observe(time.Since(start).Seconds())
+	}()
+
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// Switch to system account context to query mo_catalog
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+
+	if err = bh.Exec(ctx, "begin;"); err != nil {
+		return err
+	}
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+
+	// Build SQL query
+	sql := "SELECT subscription_name, sync_level, account_id, db_name, table_name, upstream_conn, iteration_state, iteration_lsn, context, error_message, created_at, drop_at FROM mo_catalog.mo_ccpr_log WHERE 1=1"
+
+	// Filter by account_id: sys account sees all, others see only their own
+	if accountId != catalog.System_Account {
+		sql += fmt.Sprintf(" AND account_id = %d", accountId)
+	}
+
+	// Handle pub_name filter if specified (exact match takes priority over LIKE)
+	if scs.Name != "" {
+		// Escape single quotes to prevent SQL injection
+		escapedName := strings.ReplaceAll(scs.Name, "'", "''")
+		sql += fmt.Sprintf(" AND subscription_name = '%s'", escapedName)
+	} else {
+		// Handle LIKE clause only if Name is not specified
+		like := scs.Like
+		if like != nil {
+			right, ok := like.Right.(*tree.NumVal)
+			if !ok || right.Kind() != tree.Str {
+				err = moerr.NewInternalError(ctx, "like clause must be a string")
+				return
+			}
+			// Escape single quotes to prevent SQL injection
+			likePattern := strings.ReplaceAll(right.String(), "'", "''")
+			sql += fmt.Sprintf(" AND subscription_name LIKE '%s'", likePattern)
+		}
+	}
+
+	sql += " ORDER BY created_at DESC;"
+
+	if err = bh.Exec(ctx, sql); err != nil {
+		return
+	}
+
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return
+	}
+
+	// Get account name mapping
+	accIdInfoMap, _, err := getAccounts(ctx, bh, false)
+	if err != nil {
+		return
+	}
+
+	var rs = &MysqlResultSet{}
+	for _, column := range showCcprSubscriptionsOutputColumns {
+		rs.AddColumn(column)
+	}
+
+	for _, result := range erArray {
+		for i := uint64(0); i < result.GetRowCount(); i++ {
+			var (
+				subscriptionName string
+				syncLevel        string
+				accountIdVal     int64
+				dbName           string
+				tableName        string
+				upstreamConn     string
+				iterationState   int64
+				iterationLsn     int64
+				contextJSON      string
+				errorMessage     string
+				createdAt        string
+				dropAt           string
+				isNull           bool
+			)
+
+			// Extract values from result
+			if subscriptionName, err = result.GetString(ctx, i, 0); err != nil {
+				return err
+			}
+			if syncLevel, err = result.GetString(ctx, i, 1); err != nil {
+				return err
+			}
+			if accountIdVal, err = result.GetInt64(ctx, i, 2); err != nil {
+				return err
+			}
+			// Handle nullable db_name
+			if isNull, err = result.ColumnIsNull(ctx, i, 3); err != nil {
+				return err
+			}
+			if !isNull {
+				if dbName, err = result.GetString(ctx, i, 3); err != nil {
+					return err
+				}
+			}
+			// Handle nullable table_name
+			if isNull, err = result.ColumnIsNull(ctx, i, 4); err != nil {
+				return err
+			}
+			if !isNull {
+				if tableName, err = result.GetString(ctx, i, 4); err != nil {
+					return err
+				}
+			}
+			if upstreamConn, err = result.GetString(ctx, i, 5); err != nil {
+				return err
+			}
+			if iterationState, err = result.GetInt64(ctx, i, 6); err != nil {
+				return err
+			}
+			if iterationLsn, err = result.GetInt64(ctx, i, 7); err != nil {
+				return err
+			}
+			// Handle nullable context
+			if isNull, err = result.ColumnIsNull(ctx, i, 8); err != nil {
+				return err
+			}
+			if !isNull {
+				if contextJSON, err = result.GetString(ctx, i, 8); err != nil {
+					return err
+				}
+			}
+			// Handle nullable error_message
+			if isNull, err = result.ColumnIsNull(ctx, i, 9); err != nil {
+				return err
+			}
+			if !isNull {
+				if errorMessage, err = result.GetString(ctx, i, 9); err != nil {
+					return err
+				}
+			}
+			if createdAt, err = result.GetString(ctx, i, 10); err != nil {
+				return err
+			}
+			// Handle nullable drop_at
+			if isNull, err = result.ColumnIsNull(ctx, i, 11); err != nil {
+				return err
+			}
+			if !isNull {
+				if dropAt, err = result.GetString(ctx, i, 11); err != nil {
+					return err
+				}
+			}
+
+			// Get account name
+			accountName := ""
+			if accInfo, ok := accIdInfoMap[int32(accountIdVal)]; ok {
+				accountName = accInfo.Name
+			}
+
+			// Mask password in upstream_conn
+			maskedUpstreamConn := maskPasswordInUri(upstreamConn)
+
+			// Map iteration_state to state (0=pending, 1=running, 2=complete, 3=error, 4=cancel)
+			state := int8(iterationState)
+			if state < 0 {
+				state = 0
+			}
+			if state > 4 {
+				state = 4
+			}
+
+			// Extract watermark from context JSON
+			watermarkVal := extractWatermarkFromContext(contextJSON)
+			// Convert watermark time.Time to string if needed
+			var watermark interface{}
+			if watermarkVal != nil {
+				if t, ok := watermarkVal.(time.Time); ok {
+					watermark = t.Format("2006-01-02 15:04:05")
+				} else {
+					watermark = watermarkVal
+				}
+			}
+
+			// Use timestamps as strings (MySQL result set expects strings for TIMESTAMP columns)
+			var createTime interface{}
+			if createdAt != "" {
+				createTime = createdAt
+			}
+
+			var dropTime interface{}
+			if dropAt != "" {
+				dropTime = dropAt
+			}
+
+			// Handle NULL values for db_name and table_name
+			var dbNameVal interface{}
+			if dbName != "" {
+				dbNameVal = dbName
+			}
+
+			var tableNameVal interface{}
+			if tableName != "" {
+				tableNameVal = tableName
+			}
+
+			rs.AddRow([]interface{}{
+				subscriptionName,   // pub_name
+				accountName,        // pub_account
+				dbNameVal,          // pub_database
+				tableNameVal,       // pub_tables
+				createTime,         // create_time
+				dropTime,           // drop_time
+				state,              // state
+				syncLevel,          // sync_level
+				maskedUpstreamConn, // upstream_conn
+				iterationLsn,       // iteration_lsn
+				errorMessage,       // error_message
+				watermark,          // watermark
+			})
+		}
+	}
+
+	ses.SetMysqlResultSet(rs)
+
+	return trySaveQueryResult(ctx, ses, rs)
+}
+
+func doShowPublicationCoverage(ctx context.Context, ses *Session, spc *tree.ShowPublicationCoverage) (err error) {
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// Get current account name from session
+	tenantInfo := ses.GetTenantInfo()
+	if tenantInfo == nil {
+		return moerr.NewInternalError(ctx, "failed to get tenant info")
+	}
+	accountName := tenantInfo.GetTenant()
+
+	// Get publication info by name only (without filtering by current account_id)
+	// This allows non-sys tenants to query publications created by sys tenant
+	pubInfo, err := getPubInfoByName(ctx, bh, spc.Name)
+	if err != nil {
+		return err
+	}
+	if pubInfo == nil {
+		return moerr.NewInternalErrorf(ctx, "publication '%s' does not exist", spc.Name)
+	}
+
+	// Check if current account is in subscribed accounts
+	if !pubInfo.InSubAccounts(accountName) {
+		return moerr.NewInternalErrorf(ctx, "account '%s' is not allowed to access publication '%s'", accountName, spc.Name)
+	}
+
+	// Build result set with columns: Database, Table
+	var rs = &MysqlResultSet{}
+	rs.AddColumn(&MysqlColumn{
+		ColumnImpl: ColumnImpl{
+			name:       "Database",
+			columnType: defines.MYSQL_TYPE_VARCHAR,
+		},
+	})
+	rs.AddColumn(&MysqlColumn{
+		ColumnImpl: ColumnImpl{
+			name:       "Table",
+			columnType: defines.MYSQL_TYPE_VARCHAR,
+		},
+	})
+
+	// Get database name
+	dbName := pubInfo.DbName
+
+	// Check if this is account level (dbName == "*") or database level (dbName is specific but tables is "*")
+	isAccountLevel := dbName == pubsub.TableAll
+	isDatabaseLevel := dbName != pubsub.TableAll && pubInfo.TablesStr == pubsub.TableAll
+
+	// Add marker row for account level or database level
+	if isAccountLevel {
+		// Account level: add db * table *
+		rs.AddRow([]interface{}{pubsub.TableAll, pubsub.TableAll})
+	} else if isDatabaseLevel {
+		// Database level: add db dbname table *
+		rs.AddRow([]interface{}{dbName, pubsub.TableAll})
+	}
+
+	// Get table list
+	if pubInfo.TablesStr == pubsub.TableAll {
+		// If table_list is "*", query all tables from mo_tables
+		// For account level, we don't query tables since dbName is "*"
+		if !isAccountLevel {
+			systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+			querySQL := fmt.Sprintf(
+				`SELECT relname FROM mo_catalog.mo_tables WHERE reldatabase = '%s' AND account_id = %d AND relkind != '%s' ORDER BY relname`,
+				dbName, pubInfo.PubAccountId, catalog.SystemViewRel,
+			)
+
+			bh.ClearExecResultSet()
+			if err = bh.Exec(systemCtx, querySQL); err != nil {
+				return err
+			}
+
+			erArray, err := getResultSet(systemCtx, bh)
+			if err != nil {
+				return err
+			}
+
+			for _, result := range erArray {
+				for i := uint64(0); i < result.GetRowCount(); i++ {
+					tableName, err := result.GetString(systemCtx, i, 0)
+					if err != nil {
+						return err
+					}
+					rs.AddRow([]interface{}{dbName, tableName})
+				}
+			}
+		}
+	} else {
+		// If table_list is specific tables, split by comma
+		tableNames := strings.Split(pubInfo.TablesStr, pubsub.Sep)
+		for _, tableName := range tableNames {
+			tableName = strings.TrimSpace(tableName)
+			if tableName != "" {
+				rs.AddRow([]interface{}{dbName, tableName})
+			}
+		}
+	}
+
+	ses.SetMysqlResultSet(rs)
+	return trySaveQueryResult(ctx, ses, rs)
+}
+
 func getDbIdAndType(ctx context.Context, bh BackgroundExec, dbName string) (dbId uint64, dbType string, err error) {
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -1392,6 +2176,41 @@ func getDbIdAndType(ctx context.Context, bh BackgroundExec, dbName string) (dbId
 	if !execResultArrayHasData(erArray) {
 		err = moerr.NewInternalErrorf(ctx, "database '%s' does not exist", dbName)
 		return
+	}
+
+	if dbId, err = erArray[0].GetUint64(ctx, 0, 0); err != nil {
+		return
+	}
+
+	if dbType, err = erArray[0].GetString(ctx, 0, 1); err != nil {
+		return
+	}
+
+	return
+}
+
+// getDbIdAndTypeForAccount tries to find database in the specified account
+func getDbIdAndTypeForAccount(ctx context.Context, bh BackgroundExec, dbName string, accountId uint32) (dbId uint64, dbType string, err error) {
+	sql, err := getSqlForGetDbIdAndType(ctx, dbName, true, uint64(accountId))
+	if err != nil {
+		return
+	}
+
+	// Use System_Account context to query mo_catalog.mo_database, as it's a system table
+	// but filter by the specified accountId in SQL
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, sql); err != nil {
+		return
+	}
+
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return
+	}
+
+	if !execResultArrayHasData(erArray) {
+		return 0, "", moerr.NewInternalErrorf(ctx, "database '%s' does not exist", dbName)
 	}
 
 	if dbId, err = erArray[0].GetUint64(ctx, 0, 0); err != nil {
@@ -1467,10 +2286,6 @@ func getSetAccounts(
 	for _, acc := range setAccounts {
 		accName := string(acc)
 
-		if accName == curAccName {
-			return nil, moerr.NewInternalError(ctx, "can't publish to self")
-		}
-
 		accInfo, ok := accNameInfoMap[accName]
 		if !ok {
 			return nil, moerr.NewInternalErrorf(ctx, "not existed account name '%s'", accName)
@@ -1494,10 +2309,6 @@ func getAddAccounts(
 
 	for _, acc := range addAccounts {
 		accName := string(acc)
-
-		if accName == curAccName {
-			return nil, moerr.NewInternalError(ctx, "can't publish to self")
-		}
 
 		accInfo, ok := accNameInfoMap[accName]
 		if !ok {
@@ -1859,4 +2670,320 @@ func checkColExists(ctx context.Context, bh BackgroundExec, dbName, tblName, col
 	}
 
 	return execResultArrayHasData(erArray), nil
+}
+
+// parseSubscriptionUri parses URI in format: mysql://<account>#<user>:<password>@<host>:<port>
+// Returns account, user, password, host, port
+func parseSubscriptionUri(uri string) (account, user, password, host string, port int, err error) {
+	const uriPrefix = "mysql://"
+	if !strings.HasPrefix(uri, uriPrefix) {
+		return "", "", "", "", 0, moerr.NewInternalErrorNoCtx("invalid URI format, must start with mysql://")
+	}
+
+	rest := uri[len(uriPrefix):]
+	// Split by @ to separate credentials from host:port
+	parts := strings.Split(rest, "@")
+	if len(parts) != 2 {
+		return "", "", "", "", 0, moerr.NewInternalErrorNoCtx("invalid URI format, missing @ separator")
+	}
+
+	// Parse credentials part: account#user:password or user:password
+	credPart := parts[0]
+	var accountPart, userPassPart string
+	if strings.Contains(credPart, "#") {
+		credParts := strings.SplitN(credPart, "#", 2)
+		accountPart = credParts[0]
+		userPassPart = credParts[1]
+	} else {
+		userPassPart = credPart
+	}
+
+	// Parse user:password
+	userPassParts := strings.SplitN(userPassPart, ":", 2)
+	if len(userPassParts) != 2 {
+		return "", "", "", "", 0, moerr.NewInternalErrorNoCtx("invalid URI format, missing password")
+	}
+	user = userPassParts[0]
+	password = userPassParts[1]
+
+	// Parse host:port
+	hostPortPart := parts[1]
+	hostPortParts := strings.Split(hostPortPart, ":")
+	if len(hostPortParts) != 2 {
+		return "", "", "", "", 0, moerr.NewInternalErrorNoCtx("invalid URI format, missing port")
+	}
+	host = hostPortParts[0]
+	portInt, err := strconv.Atoi(hostPortParts[1])
+	if err != nil {
+		return "", "", "", "", 0, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid port: %v", err))
+	}
+	port = portInt
+
+	return accountPart, user, password, host, port, nil
+}
+
+// checkUpstreamPublicationCoverage checks if the database/table is covered by the publication in upstream cluster
+func checkUpstreamPublicationCoverage(
+	ctx context.Context,
+	account, user, password, host string,
+	port int,
+	pubName string,
+	syncLevel string,
+	dbName string,
+	tableName string,
+) error {
+	// Create upstream executor to connect to upstream cluster
+	upstreamExecutor, err := publication.NewUpstreamExecutor(account, user, password, host, port, 3, 30*time.Second, "30s", publication.NewUpstreamConnectionClassifier())
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to connect to upstream cluster: %v", err)
+	}
+	defer upstreamExecutor.Close()
+
+	// Execute SHOW PUBLICATION COVERAGE on upstream
+	coverageSQL := fmt.Sprintf("SHOW PUBLICATION COVERAGE %s", pubName)
+	result, err := upstreamExecutor.ExecSQL(ctx, nil, coverageSQL, false, false)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to check publication coverage on upstream: %v", err)
+	}
+	defer result.Close()
+
+	// Read coverage results
+	coverageMap := make(map[string]map[string]bool) // dbName -> tableName -> exists
+	for result.Next() {
+		var coverageDbName, coverageTableName string
+		if err := result.Scan(&coverageDbName, &coverageTableName); err != nil {
+			return moerr.NewInternalErrorf(ctx, "failed to read coverage results: %v", err)
+		}
+
+		if coverageMap[coverageDbName] == nil {
+			coverageMap[coverageDbName] = make(map[string]bool)
+		}
+		coverageMap[coverageDbName][coverageTableName] = true
+	}
+
+	// Check for errors during iteration
+	if err := result.Err(); err != nil {
+		return moerr.NewInternalErrorf(ctx, "error while reading coverage results: %v", err)
+	}
+
+	// Check if the requested database/table is covered based on sync level
+	if syncLevel == "account" {
+		// For account level, must find db * table * marker row
+		if tables, exists := coverageMap[pubsub.TableAll]; !exists || !tables[pubsub.TableAll] {
+			return moerr.NewInternalErrorf(ctx, "publication '%s' is not account level in upstream cluster", pubName)
+		}
+	} else if syncLevel == "database" {
+		// For database level, must find db dbname table * marker row
+		if tables, exists := coverageMap[dbName]; !exists || !tables[pubsub.TableAll] {
+			return moerr.NewInternalErrorf(ctx, "database '%s' is not covered by publication '%s' in upstream cluster", dbName, pubName)
+		}
+	} else if syncLevel == "table" {
+		// Check if table is covered
+		if tables, exists := coverageMap[dbName]; !exists {
+			return moerr.NewInternalErrorf(ctx, "database '%s' is not covered by publication '%s' in upstream cluster", dbName, pubName)
+		} else if !tables[tableName] {
+			return moerr.NewInternalErrorf(ctx, "table '%s.%s' is not covered by publication '%s' in upstream cluster", dbName, tableName, pubName)
+		}
+	}
+
+	return nil
+}
+
+func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubscription) (err error) {
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	tenantInfo := ses.GetTenantInfo()
+	if !tenantInfo.IsAdminRole() {
+		return moerr.NewInternalError(ctx, "only admin can create subscription")
+	}
+
+	if err = bh.Exec(ctx, "begin;"); err != nil {
+		return
+	}
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+
+	ctx = defines.AttachAccount(ctx, tenantInfo.TenantID, tenantInfo.GetUserID(), tenantInfo.GetDefaultRoleID())
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Parse URI
+	account, user, password, host, port, err := parseSubscriptionUri(cs.FromUri)
+	if err != nil {
+		return err
+	}
+
+	// Initialize AES key for encryption (similar to CDC)
+	// Query the data key from mo_data_key table
+	querySql := cdc.CDCSQLBuilder.GetDataKeySQL(uint64(catalog.System_Account), cdc.InitKeyId)
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, querySql); err != nil {
+		return err
+	}
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return err
+	}
+	if len(erArray) == 0 || erArray[0].GetRowCount() == 0 {
+		return moerr.NewInternalError(ctx, "no data key")
+	}
+	encryptedKey, err := erArray[0].GetString(ctx, 0, 0)
+	if err != nil {
+		return err
+	}
+	// Get KeyEncryptionKey from service
+	pu := getPu(ses.GetService())
+	cdc.AesKey, err = cdc.AesCFBDecodeWithKey(
+		ctx,
+		encryptedKey,
+		[]byte(pu.SV.KeyEncryptionKey),
+	)
+	if err != nil {
+		return err
+	}
+
+	// Create UriInfo and encrypt password
+	uriInfo := cdc.UriInfo{
+		User:     user,
+		Password: password,
+		Ip:       host,
+		Port:     port,
+	}
+	encodedPassword, err := uriInfo.GetEncodedPassword()
+	if err != nil {
+		return err
+	}
+
+	// Build encrypted URI (similar to CDC format)
+	// Format: mysql://account#user:encrypted_password@host:port
+	// Always use account#user format for consistency, even if account is empty
+	var encryptedUri string
+	if account != "" {
+		encryptedUri = fmt.Sprintf("mysql://%s#%s:%s@%s:%d", account, user, encodedPassword, host, port)
+	} else {
+		// Use empty account prefix for consistency
+		encryptedUri = fmt.Sprintf("mysql://#%s:%s@%s:%d", user, encodedPassword, host, port)
+	}
+
+	// Determine sync_level
+	var syncLevel string
+	if cs.IsDatabase {
+		if string(cs.DbName) == "" {
+			syncLevel = "account"
+		} else {
+			syncLevel = "database"
+		}
+	} else {
+		syncLevel = "table"
+	}
+
+	// Validate level and corresponding names
+	if syncLevel == "account" {
+		// For account level, dbName and tableName should be empty
+		// No validation needed as they are already empty
+		// Use current account ID (already set above)
+	} else if syncLevel == "database" {
+		// For database level, check dbName is not empty
+		if string(cs.DbName) == "" {
+			return moerr.NewInternalError(ctx, "database name cannot be empty for database level subscription")
+		}
+	} else {
+		// For table level, check tableName is not empty
+		if cs.TableName == "" {
+			return moerr.NewInternalError(ctx, "table name cannot be empty for table level subscription")
+		}
+	}
+
+	// Build sync_config JSON
+	syncConfig := map[string]interface{}{}
+	if cs.SyncInterval > 0 {
+		syncConfig["sync_interval"] = cs.SyncInterval
+	}
+	syncConfigJSON, err := json.Marshal(syncConfig)
+	if err != nil {
+		return err
+	}
+
+	// Build INSERT SQL
+	var dbName, tableName string
+	if syncLevel == "account" {
+		// For account level, both dbName and tableName should be empty
+		dbName = ""
+		tableName = ""
+	} else if syncLevel == "database" {
+		// For database level, dbName is required, tableName is empty
+		dbName = string(cs.DbName)
+		tableName = ""
+	} else {
+		// For table level, both dbName and tableName are required
+		tableName = cs.TableName
+		// First try to use database name from table name (e.g., `t`.`t`)
+		if string(cs.DbName) != "" {
+			dbName = string(cs.DbName)
+		} else {
+			// Fall back to current database context if not specified in table name
+			dbName = ses.GetDatabaseName()
+		}
+		// For table level, check dbName is not empty after getting current database
+		if dbName == "" {
+			return moerr.NewInternalError(ctx, "database name cannot be empty for table level subscription")
+		}
+	}
+
+	// Check upstream publication coverage before inserting into mo_ccpr_log
+	if err = checkUpstreamPublicationCoverage(ctx, account, user, password, host, port, string(cs.PubName), syncLevel, dbName, tableName); err != nil {
+		return err
+	}
+
+	// iteration_state: 2 = complete (based on design.md: 0='pending', 1='running', 2='complete', 3='error', 4='cancel')
+	iterationState := int8(2) // complete
+	// state: 0 = running (subscription state: 0=running, 1=error, 2=pause, 3=dropped)
+	subscriptionState := int8(0) // running
+
+	sql := fmt.Sprintf(
+		`INSERT INTO mo_catalog.mo_ccpr_log (
+			subscription_name,
+			sync_level,
+			account_id,
+			db_name,
+			table_name,
+			upstream_conn,
+			sync_config,
+			state,
+			iteration_state,
+			iteration_lsn
+		) VALUES (
+			'%s',
+			'%s',
+			%d,
+			'%s',
+			'%s',
+			'%s',
+			'%s',
+			%d,
+			%d,
+			0
+		)`,
+		string(cs.PubName),
+		syncLevel,
+		accountId,
+		dbName,
+		tableName,
+		encryptedUri,
+		string(syncConfigJSON),
+		subscriptionState,
+		iterationState,
+	)
+
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+	if err = bh.Exec(ctx, sql); err != nil {
+		return err
+	}
+
+	return nil
 }

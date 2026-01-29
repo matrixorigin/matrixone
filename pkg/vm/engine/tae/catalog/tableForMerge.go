@@ -79,6 +79,7 @@ type MergeTable interface {
 	HasDropCommitted() bool
 
 	IsSpecialBigTable() bool // upgrade: old objects in big table is not merged by default
+	IsFromPublication() bool // check if table is created by publication, should skip merge
 }
 
 type TNTombstoneItem struct {
@@ -164,6 +165,16 @@ func (t TNMergeTable) IsSpecialBigTable() bool {
 		return true
 	}
 	return false
+}
+
+// IsFromPublication checks if the table is created by publication
+// This flag is set when parsing properties in DefsToSchema
+func (t TNMergeTable) IsFromPublication() bool {
+	schema := t.GetLastestSchema(false)
+	if schema == nil {
+		return false
+	}
+	return schema.FromPublication
 }
 
 func (t TNMergeTable) IterDataItem() iter.Seq[MergeDataItem] {

@@ -284,6 +284,24 @@ var (
 				primary key(account_id, table_id, job_name, job_id)
 			)`
 
+	MoCatalogMoCcprLogDDL = `CREATE TABLE mo_catalog.mo_ccpr_log (
+				task_id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+				subscription_name VARCHAR(5000) NOT NULL,
+				sync_level VARCHAR(16) NOT NULL,
+				account_id INT UNSIGNED NOT NULL,
+				db_name VARCHAR(5000),
+				table_name VARCHAR(5000),
+				upstream_conn VARCHAR(5000) NOT NULL,
+				sync_config JSON NOT NULL,
+				state TINYINT NOT NULL DEFAULT 0,
+				iteration_state TINYINT NOT NULL DEFAULT 0,
+				iteration_lsn BIGINT DEFAULT 0,
+				context JSON,
+				cn_uuid VARCHAR(64),
+				error_message VARCHAR(5000),
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				drop_at TIMESTAMP
+			)`
 	MoCatalogMoIndexUpdateDDL = `CREATE TABLE mo_catalog.mo_index_update (
                                 account_id INT UNSIGNED NOT NULL,
                                 table_id BIGINT UNSIGNED NOT NULL,

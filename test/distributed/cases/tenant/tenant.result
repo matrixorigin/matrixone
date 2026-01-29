@@ -16,6 +16,7 @@ account_id    relname    relkind
 0    mo_account    r
 0    mo_branch_metadata    r
 0    mo_cache    v
+0    mo_ccpr_log    r
 0    mo_cdc_task    r
 0    mo_cdc_watermark    r
 0    mo_columns    r

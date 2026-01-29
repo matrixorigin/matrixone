@@ -189,6 +189,12 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleCreatePublication(ses, execCtx, st); err != nil {
 			return
 		}
+	case *tree.CreateSubscription:
+		ses.EnterFPrint(FPCreateSubscription)
+		defer ses.ExitFPrint(FPCreateSubscription)
+		if err = handleCreateSubscription(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.AlterPublication:
 		ses.EnterFPrint(FPAlterPublication)
 		defer ses.ExitFPrint(FPAlterPublication)
@@ -201,6 +207,18 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleDropPublication(ses, execCtx, st); err != nil {
 			return
 		}
+	case *tree.DropCcprSubscription:
+		if err = handleDropCcprSubscription(ses, execCtx, st); err != nil {
+			return
+		}
+	case *tree.ResumeCcprSubscription:
+		if err = handleResumeCcprSubscription(ses, execCtx, st); err != nil {
+			return
+		}
+	case *tree.PauseCcprSubscription:
+		if err = handlePauseCcprSubscription(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.ShowPublications:
 		ses.EnterFPrint(FPShowPublications)
 		defer ses.ExitFPrint(FPShowPublications)
@@ -211,6 +229,14 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		ses.EnterFPrint(FPShowSubscriptions)
 		defer ses.ExitFPrint(FPShowSubscriptions)
 		if err = handleShowSubscriptions(ses, execCtx, st); err != nil {
+			return
+		}
+	case *tree.ShowPublicationCoverage:
+		if err = handleShowPublicationCoverage(ses, execCtx, st); err != nil {
+			return
+		}
+	case *tree.ShowCcprSubscriptions:
+		if err = handleShowCcprSubscriptions(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.CreateStage:
@@ -432,6 +458,12 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleDropSnapshot(ses, execCtx, st); err != nil {
 			return
 		}
+	case *tree.CheckSnapshotFlushed:
+		ses.EnterFPrint(FPCheckSnapshotFlushed)
+		defer ses.ExitFPrint(FPCheckSnapshotFlushed)
+		if err = handleCheckSnapshotFlushed(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.RestoreSnapShot:
 		ses.EnterFPrint(FPRestoreSnapShot)
 		defer ses.ExitFPrint(FPRestoreSnapShot)
@@ -549,6 +581,27 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		ses.EnterFPrint(FPCloneTable)
 		defer ses.ExitFPrint(FPCloneTable)
 		if _, err = handleCloneTable(execCtx, ses, st, nil); err != nil {
+			return
+		}
+
+	case *tree.ObjectList:
+		ses.EnterFPrint(FPObjectList)
+		defer ses.ExitFPrint(FPObjectList)
+		if err = handleObjectList(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+
+	case *tree.GetDdl:
+		ses.EnterFPrint(FPGetDdl)
+		defer ses.ExitFPrint(FPGetDdl)
+		if err = handleGetDdl(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+
+	case *tree.GetObject:
+		ses.EnterFPrint(FPGetObject)
+		defer ses.ExitFPrint(FPGetObject)
+		if err = handleGetObject(execCtx.reqCtx, ses, st); err != nil {
 			return
 		}
 

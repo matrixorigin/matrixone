@@ -227,6 +227,7 @@ Tables_in_mo_catalog
 mo_account
 mo_branch_metadata
 mo_cache
+mo_ccpr_log
 mo_cdc_task
 mo_cdc_watermark
 mo_columns
@@ -269,7 +270,7 @@ mo_variables
 mo_version
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-43
+44
 show column_number from mo_database;
 Number of columns in mo_database
 9
