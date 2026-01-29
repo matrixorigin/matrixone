@@ -16,16 +16,19 @@ package test
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/stretchr/testify/require"
 )
 
@@ -255,7 +258,6 @@ func TestStarCountReadonly(t *testing.T) {
 	require.NoError(t, err)
 }
 
-
 // TestStarCountWithPersistedInserts tests StarCount with persisted uncommitted inserts
 func TestStarCountWithPersistedInserts(t *testing.T) {
 	catalog.SetupDefines("")
@@ -338,7 +340,6 @@ func TestStarCountWithPersistedInserts(t *testing.T) {
 	err = txn.Commit(ctx)
 	require.NoError(t, err)
 }
-
 
 // TestStarCountReadonlyLarge tests readonly transaction with large dataset
 func TestStarCountReadonlyLarge(t *testing.T) {
@@ -628,6 +629,61 @@ func TestStarCountMixedInMemoryAndPersisted(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(210), count, "Should count all rows including mixed in-memory and persisted")
 
+	// Verify workspace state: should have both in-memory and persisted writes
+	inMemory, persisted := countWorkspaceWrites(txn)
+	t.Logf("Workspace state: in-memory writes=%d, persisted writes=%d", inMemory, persisted)
+	require.Greater(t, inMemory, 0, "Should have in-memory writes")
+	require.Greater(t, persisted, 0, "Should have persisted writes")
+
 	err = txn.Commit(ctx)
 	require.NoError(t, err)
+}
+
+// countWorkspaceWrites counts in-memory and persisted writes in the transaction workspace
+func countWorkspaceWrites(txn client.TxnOperator) (inMemory, persisted int) {
+	// Access the internal transaction workspace
+	workspace := txn.GetWorkspace()
+	dtxn, ok := workspace.(*disttae.Transaction)
+	if !ok {
+		return 0, 0
+	}
+
+	// Use reflection to access the writes slice since there's no public API
+	// to iterate all writes across all tables
+	txnValue := reflect.ValueOf(dtxn).Elem()
+	writesField := txnValue.FieldByName("writes")
+	if !writesField.IsValid() {
+		return 0, 0
+	}
+
+	// Count all INSERT writes
+	for i := 0; i < writesField.Len(); i++ {
+		entry := writesField.Index(i)
+
+		// Get typ field
+		typField := entry.FieldByName("typ")
+		if !typField.IsValid() || typField.Int() != int64(disttae.INSERT) {
+			continue
+		}
+
+		// Get fileName field
+		fileNameField := entry.FieldByName("fileName")
+		if !fileNameField.IsValid() {
+			continue
+		}
+
+		// Get bat field
+		batField := entry.FieldByName("bat")
+		if !batField.IsValid() {
+			continue
+		}
+
+		if fileNameField.String() != "" {
+			persisted++
+		} else if !batField.IsNil() {
+			inMemory++
+		}
+	}
+
+	return inMemory, persisted
 }

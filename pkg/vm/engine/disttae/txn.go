@@ -630,7 +630,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 	sort.Slice(keys, func(i, j int) bool {
 		return tbSize[keys[i]] < tbSize[keys[j]]
 	})
-	
+
 	// Skip the skipTable logic if force flush is enabled
 	if !forceFlush {
 		sum := 0

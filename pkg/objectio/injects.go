@@ -65,8 +65,8 @@ const (
 	FJ_CDCAddExecErr             = "fj/cdc/addexecerr"
 	FJ_CDCAddExecConsumeTruncate = "fj/cdc/addexecconsumetruncate"
 
-	FJ_CNFlushSmallObjs     = "fj/cn/flush_small_objs"
-	FJ_CNSubscribeTableFail = "fj/cn/subscribe_table_fail"
+	FJ_CNFlushSmallObjs      = "fj/cn/flush_small_objs"
+	FJ_CNSubscribeTableFail  = "fj/cn/subscribe_table_fail"
 	FJ_CNWorkspaceForceFlush = "fj/cn/workspace_force_flush"
 
 	FJ_CNCLONEFailed    = "fj/cn/clone_fails"
