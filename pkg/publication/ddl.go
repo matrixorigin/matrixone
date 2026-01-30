@@ -87,7 +87,7 @@ func GetUpstreamDDLUsingGetDdl(
 	}
 
 	// Build GETDDL SQL
-	querySQL := PublicationSQLBuilder.GetDdlSQL(dbName, tableName, snapshotName)
+	querySQL := PublicationSQLBuilder.GetDdlSQL(dbName, tableName, snapshotName, iterationCtx.SubscriptionAccountName, iterationCtx.SubscriptionName)
 
 	// Execute GETDDL SQL
 	result, cancel, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true, time.Minute)

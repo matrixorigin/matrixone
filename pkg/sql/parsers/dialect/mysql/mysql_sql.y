@@ -8368,7 +8368,7 @@ branch_stmt:
     	t.ConflictOpt = $7
     	$$ = t
     }
-|   OBJECTLIST objectlist_opt SNAPSHOT ident against_snapshot_opt
+|   OBJECTLIST objectlist_opt SNAPSHOT ident against_snapshot_opt from_publication_opt
     {
     	t := tree.NewObjectList()
     	t.Database = $2.Database
@@ -8378,18 +8378,28 @@ branch_stmt:
     		snapshot := tree.Identifier($5)
     		t.AgainstSnapshot = &snapshot
     	}
+    	t.SubscriptionAccountName = $6.SubscriptionAccountName
+    	t.PubName = $6.PubName
     	$$ = t
     }
-|   GETOBJECT ident OFFSET INTEGRAL
+|   GETOBJECT ident OFFSET INTEGRAL from_publication_opt
     {
     	t := tree.NewGetObject()
     	t.ObjectName = tree.Identifier($2.Compare())
     	t.ChunkIndex = $4.(int64)
+    	t.SubscriptionAccountName = $5.SubscriptionAccountName
+    	t.PubName = $5.PubName
     	$$ = t
     }
-|   GETDDL getddl_opts
+|   GETDDL getddl_opts from_publication_opt
     {
-    	$$ = $2
+    	t := $2.(*tree.GetDdl)
+    	t.SubscriptionAccountName = $3.SubscriptionAccountName
+    	pubName := $3.PubName
+    	if pubName != "" {
+    		t.PubName = &pubName
+    	}
+    	$$ = t
     }
 
 diff_output_opt:
@@ -8549,6 +8559,21 @@ against_snapshot_opt:
     | AGAINST SNAPSHOT ident
     {
     	$$ = $3.Compare()
+    }
+
+from_publication_opt:
+    {
+    	$$ = &tree.ObjectList{
+    		SubscriptionAccountName: "",
+    		PubName: "",
+    	}
+    }
+    | FROM ident PUBLICATION ident
+    {
+    	$$ = &tree.ObjectList{
+    		SubscriptionAccountName: $2.Compare(),
+    		PubName: tree.Identifier($4.Compare()),
+    	}
     }
 
 to_account_opt:

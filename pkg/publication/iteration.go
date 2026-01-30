@@ -182,6 +182,7 @@ func InitializeIterationContext(
 
 	// Scan the result
 	var subscriptionName sql.NullString
+	var subscriptionAccountName sql.NullString
 	var syncLevel sql.NullString
 	var accountID sql.NullInt64
 	var dbName sql.NullString
@@ -198,7 +199,7 @@ func InitializeIterationContext(
 		return nil, moerr.NewInternalErrorf(ctx, "no rows returned for task_id %s", taskID)
 	}
 
-	if err := result.Scan(&subscriptionName, &syncLevel, &accountID, &dbName, &tableName, &upstreamConn, &contextJSON, &errorMessage, &subscriptionState); err != nil {
+	if err := result.Scan(&subscriptionName, &subscriptionAccountName, &syncLevel, &accountID, &dbName, &tableName, &upstreamConn, &contextJSON, &errorMessage, &subscriptionState); err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to scan query result: %v", err)
 	}
 
@@ -257,17 +258,18 @@ func InitializeIterationContext(
 
 	// Initialize IterationContext
 	iterationCtx := &IterationContext{
-		TaskID:             taskID,
-		SubscriptionName:   subscriptionName.String,
-		SrcInfo:            srcInfo,
-		LocalExecutor:      localExecutor,
-		UpstreamExecutor:   upstreamExecutor,
-		IterationLSN:       iterationLSN,
-		SubscriptionState:  subscriptionState,
-		ActiveAObj:         make(map[objectio.ObjectId]AObjMapping),
-		TableIDs:           make(map[TableKey]uint64),
-		IndexTableMappings: make(map[string]string),
-		ErrorMetadata:      errorMetadata,
+		TaskID:                  taskID,
+		SubscriptionName:        subscriptionName.String,
+		SubscriptionAccountName: subscriptionAccountName.String,
+		SrcInfo:                 srcInfo,
+		LocalExecutor:           localExecutor,
+		UpstreamExecutor:        upstreamExecutor,
+		IterationLSN:            iterationLSN,
+		SubscriptionState:       subscriptionState,
+		ActiveAObj:              make(map[objectio.ObjectId]AObjMapping),
+		TableIDs:                make(map[TableKey]uint64),
+		IndexTableMappings:      make(map[string]string),
+		ErrorMetadata:           errorMetadata,
 	}
 
 	// Parse context JSON if available
@@ -1009,6 +1011,8 @@ func GetObjectListFromSnapshotDiff(
 		tableName,
 		iterationCtx.CurrentSnapshotName,
 		againstSnapshotName,
+		iterationCtx.SubscriptionAccountName,
+		iterationCtx.SubscriptionName,
 	)
 
 	// Execute SQL through upstream executor and return result directly
@@ -1357,6 +1361,8 @@ func ExecuteIteration(
 		cnEngine.(*disttae.Engine).FS(),
 		filterObjectWorker,
 		getChunkWorker,
+		iterationCtx.SubscriptionAccountName,
+		iterationCtx.SubscriptionName,
 	)
 	if err != nil {
 		err = moerr.NewInternalErrorf(ctx, "failed to apply object list: %v", err)

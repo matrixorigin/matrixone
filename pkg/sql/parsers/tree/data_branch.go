@@ -432,10 +432,12 @@ func (s *DataBranchMerge) Free() {
 type ObjectList struct {
 	statementImpl
 
-	Database        Identifier  // optional database name
-	Table           Identifier  // optional table name
-	Snapshot        Identifier  // snapshot name
-	AgainstSnapshot *Identifier // optional against snapshot name
+	Database                Identifier  // optional database name
+	Table                   Identifier  // optional table name
+	Snapshot                Identifier  // snapshot name
+	AgainstSnapshot         *Identifier // optional against snapshot name
+	SubscriptionAccountName string      // optional subscription account name for FROM clause
+	PubName                 Identifier  // optional publication name for FROM clause
 }
 
 func (s *ObjectList) TypeName() string {
@@ -456,8 +458,27 @@ func (s *ObjectList) StmtKind() StmtKind {
 }
 
 func (s *ObjectList) Format(ctx *FmtCtx) {
-	//TODO implement me
-	panic("implement me")
+	ctx.WriteString("OBJECTLIST")
+	if s.Database != "" {
+		ctx.WriteString(" DATABASE ")
+		ctx.WriteString(string(s.Database))
+	}
+	if s.Table != "" {
+		ctx.WriteString(" TABLE ")
+		ctx.WriteString(string(s.Table))
+	}
+	ctx.WriteString(" SNAPSHOT ")
+	ctx.WriteString(string(s.Snapshot))
+	if s.AgainstSnapshot != nil {
+		ctx.WriteString(" AGAINST SNAPSHOT ")
+		ctx.WriteString(string(*s.AgainstSnapshot))
+	}
+	if s.SubscriptionAccountName != "" && s.PubName != "" {
+		ctx.WriteString(" FROM ")
+		ctx.WriteString(s.SubscriptionAccountName)
+		ctx.WriteString(" PUBLICATION ")
+		ctx.WriteString(string(s.PubName))
+	}
 }
 
 func (s *ObjectList) String() string {
@@ -479,8 +500,10 @@ func (s *ObjectList) Free() {
 type GetObject struct {
 	statementImpl
 
-	ObjectName Identifier // object name
-	ChunkIndex int64      // -1 means only get metadata, >=0 means request which chunk
+	ObjectName              Identifier // object name
+	ChunkIndex              int64      // -1 means only get metadata, >=0 means request which chunk
+	SubscriptionAccountName string     // optional subscription account name for FROM clause
+	PubName                 Identifier // optional publication name for FROM clause
 }
 
 func (s *GetObject) TypeName() string {
@@ -500,10 +523,16 @@ func (s *GetObject) StmtKind() StmtKind {
 }
 
 func (s *GetObject) Format(ctx *FmtCtx) {
-	ctx.WriteString("GET OBJECT ")
+	ctx.WriteString("GETOBJECT ")
 	ctx.WriteString(string(s.ObjectName))
 	ctx.WriteString(" OFFSET ")
 	ctx.WriteString(fmt.Sprintf("%d", s.ChunkIndex))
+	if s.SubscriptionAccountName != "" && s.PubName != "" {
+		ctx.WriteString(" FROM ")
+		ctx.WriteString(s.SubscriptionAccountName)
+		ctx.WriteString(" PUBLICATION ")
+		ctx.WriteString(string(s.PubName))
+	}
 }
 
 func (s *GetObject) String() string {
@@ -525,9 +554,11 @@ func (s *GetObject) Free() {
 type GetDdl struct {
 	statementImpl
 
-	Database *Identifier // optional database name
-	Table    *Identifier // optional table name
-	Snapshot *Identifier // optional snapshot name
+	Database                *Identifier // optional database name
+	Table                   *Identifier // optional table name
+	Snapshot                *Identifier // optional snapshot name
+	SubscriptionAccountName string      // optional subscription account name for FROM clause
+	PubName                 *Identifier // optional publication name for FROM clause
 }
 
 func (s *GetDdl) TypeName() string {
@@ -559,6 +590,12 @@ func (s *GetDdl) Format(ctx *FmtCtx) {
 	if s.Snapshot != nil {
 		ctx.WriteString(" SNAPSHOT ")
 		ctx.WriteString(string(*s.Snapshot))
+	}
+	if s.SubscriptionAccountName != "" && s.PubName != nil {
+		ctx.WriteString(" FROM ")
+		ctx.WriteString(s.SubscriptionAccountName)
+		ctx.WriteString(" PUBLICATION ")
+		ctx.WriteString(string(*s.PubName))
 	}
 }
 

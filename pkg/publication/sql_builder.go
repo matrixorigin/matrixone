@@ -83,13 +83,13 @@ const (
 		`WHERE 1=1%s`
 
 	// Object list SQL template
-	PublicationObjectListSqlTemplate = `OBJECTLIST%s SNAPSHOT %s%s`
+	PublicationObjectListSqlTemplate = `OBJECTLIST%s SNAPSHOT %s%s%s`
 
 	// Get object SQL template
-	PublicationGetObjectSqlTemplate = `GETOBJECT %s OFFSET %d`
+	PublicationGetObjectSqlTemplate = `GETOBJECT %s OFFSET %d%s`
 
 	// Get DDL SQL template
-	PublicationGetDdlSqlTemplate = `GETDDL%s`
+	PublicationGetDdlSqlTemplate = `GETDDL%s%s`
 
 	// Drop snapshot SQL templates
 	PublicationDropSnapshotSqlTemplate         = `DROP SNAPSHOT %s`
@@ -104,9 +104,10 @@ const (
 		`FROM mo_catalog.mo_ccpr_log ` +
 		`WHERE task_id = '%s'`
 
-	// Query mo_ccpr_log full SQL template (includes subscription_name, sync_level, account_id, db_name, table_name, upstream_conn, context, error_message, state)
+	// Query mo_ccpr_log full SQL template (includes subscription_name, subscription_account_name, sync_level, account_id, db_name, table_name, upstream_conn, context, error_message, state)
 	PublicationQueryMoCcprLogFullSqlTemplate = `SELECT ` +
 		`subscription_name, ` +
+		`subscription_account_name, ` +
 		`sync_level, ` +
 		`account_id, ` +
 		`db_name, ` +
@@ -297,6 +298,7 @@ var PublicationSQLTemplates = [PublicationSqlTemplateCount]struct {
 		SQL: PublicationQueryMoCcprLogFullSqlTemplate,
 		OutputAttrs: []string{
 			"subscription_name",
+			"subscription_account_name",
 			"sync_level",
 			"account_id",
 			"db_name",
@@ -498,14 +500,16 @@ func (b publicationSQLBuilder) QueryMoIndexesSQL(
 // ------------------------------------------------------------------------------------------------
 
 // ObjectListSQL creates SQL for object list statement
-// Example: OBJECTLIST DATABASE db1 TABLE t1 SNAPSHOT sp2 AGAINST SNAPSHOT sp1
-// Example: OBJECTLIST DATABASE db1 SNAPSHOT sp2
-// Example: OBJECTLIST SNAPSHOT sp2
+// Example: OBJECTLIST DATABASE db1 TABLE t1 SNAPSHOT sp2 AGAINST SNAPSHOT sp1 FROM acc1 PUBLICATION pub1
+// Example: OBJECTLIST DATABASE db1 SNAPSHOT sp2 FROM acc1 PUBLICATION pub1
+// Example: OBJECTLIST SNAPSHOT sp2 FROM acc1 PUBLICATION pub1
 func (b publicationSQLBuilder) ObjectListSQL(
 	dbName string,
 	tableName string,
 	snapshotName string,
 	againstSnapshotName string,
+	subscriptionAccountName string,
+	pubName string,
 ) string {
 	var parts []string
 
@@ -524,11 +528,17 @@ func (b publicationSQLBuilder) ObjectListSQL(
 		againstPart = fmt.Sprintf(" AGAINST SNAPSHOT %s", escapeSQLIdentifier(againstSnapshotName))
 	}
 
+	var fromPart string
+	if subscriptionAccountName != "" && pubName != "" {
+		fromPart = fmt.Sprintf(" FROM %s PUBLICATION %s", escapeSQLIdentifier(subscriptionAccountName), escapeSQLIdentifier(pubName))
+	}
+
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationObjectListSqlTemplate_Idx].SQL,
 		dbTablePart,
 		escapeSQLIdentifier(snapshotName),
 		againstPart,
+		fromPart,
 	)
 }
 
@@ -537,26 +547,36 @@ func (b publicationSQLBuilder) ObjectListSQL(
 // ------------------------------------------------------------------------------------------------
 
 // GetObjectSQL creates SQL for get object statement
-// Example: GETOBJECT object_name OFFSET 0
+// Example: GETOBJECT object_name OFFSET 0 FROM acc1 PUBLICATION pub1
 func (b publicationSQLBuilder) GetObjectSQL(
 	objectName string,
 	chunkIndex int64,
+	subscriptionAccountName string,
+	pubName string,
 ) string {
+	var fromPart string
+	if subscriptionAccountName != "" && pubName != "" {
+		fromPart = fmt.Sprintf(" FROM %s PUBLICATION %s", escapeSQLIdentifier(subscriptionAccountName), escapeSQLIdentifier(pubName))
+	}
+
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationGetObjectSqlTemplate_Idx].SQL,
 		escapeSQLIdentifier(objectName),
 		chunkIndex,
+		fromPart,
 	)
 }
 
 // GetDdlSQL creates SQL for get DDL statement
-// Example: GETDDL DATABASE db1 TABLE t1 SNAPSHOT sp1
-// Example: GETDDL DATABASE db1 SNAPSHOT sp1
-// Example: GETDDL SNAPSHOT sp1
+// Example: GETDDL DATABASE db1 TABLE t1 SNAPSHOT sp1 FROM acc1 PUBLICATION pub1
+// Example: GETDDL DATABASE db1 SNAPSHOT sp1 FROM acc1 PUBLICATION pub1
+// Example: GETDDL SNAPSHOT sp1 FROM acc1 PUBLICATION pub1
 func (b publicationSQLBuilder) GetDdlSQL(
 	dbName string,
 	tableName string,
 	snapshotName string,
+	subscriptionAccountName string,
+	pubName string,
 ) string {
 	var parts []string
 
@@ -573,9 +593,16 @@ func (b publicationSQLBuilder) GetDdlSQL(
 	}
 
 	optsPart := strings.Join(parts, "")
+
+	var fromPart string
+	if subscriptionAccountName != "" && pubName != "" {
+		fromPart = fmt.Sprintf(" FROM %s PUBLICATION %s", escapeSQLIdentifier(subscriptionAccountName), escapeSQLIdentifier(pubName))
+	}
+
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationGetDdlSqlTemplate_Idx].SQL,
 		optsPart,
+		fromPart,
 	)
 }
 

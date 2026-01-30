@@ -82,26 +82,30 @@ type GetMetaJobResult struct {
 
 // GetMetaJob is a job for getting metadata (chunk 0)
 type GetMetaJob struct {
-	ctx              context.Context
-	upstreamExecutor SQLExecutor
-	objectName       string
-	result           chan *GetMetaJobResult
+	ctx                     context.Context
+	upstreamExecutor        SQLExecutor
+	objectName              string
+	subscriptionAccountName string
+	pubName                 string
+	result                  chan *GetMetaJobResult
 }
 
 // NewGetMetaJob creates a new GetMetaJob
-func NewGetMetaJob(ctx context.Context, upstreamExecutor SQLExecutor, objectName string) *GetMetaJob {
+func NewGetMetaJob(ctx context.Context, upstreamExecutor SQLExecutor, objectName string, subscriptionAccountName string, pubName string) *GetMetaJob {
 	return &GetMetaJob{
-		ctx:              ctx,
-		upstreamExecutor: upstreamExecutor,
-		objectName:       objectName,
-		result:           make(chan *GetMetaJobResult, 1),
+		ctx:                     ctx,
+		upstreamExecutor:        upstreamExecutor,
+		objectName:              objectName,
+		subscriptionAccountName: subscriptionAccountName,
+		pubName:                 pubName,
+		result:                  make(chan *GetMetaJobResult, 1),
 	}
 }
 
 // Execute runs the GetMetaJob
 func (j *GetMetaJob) Execute() {
 	res := &GetMetaJobResult{}
-	getChunk0SQL := PublicationSQLBuilder.GetObjectSQL(j.objectName, 0)
+	getChunk0SQL := PublicationSQLBuilder.GetObjectSQL(j.objectName, 0, j.subscriptionAccountName, j.pubName)
 
 	result, cancel, err := j.upstreamExecutor.ExecSQL(j.ctx, nil, getChunk0SQL, false, true, time.Second*10)
 	if err != nil {
@@ -155,21 +159,25 @@ type GetChunkJobResult struct {
 
 // GetChunkJob is a job for getting a single chunk
 type GetChunkJob struct {
-	ctx              context.Context
-	upstreamExecutor SQLExecutor
-	objectName       string
-	chunkIndex       int64
-	result           chan *GetChunkJobResult
+	ctx                     context.Context
+	upstreamExecutor        SQLExecutor
+	objectName              string
+	chunkIndex              int64
+	subscriptionAccountName string
+	pubName                 string
+	result                  chan *GetChunkJobResult
 }
 
 // NewGetChunkJob creates a new GetChunkJob
-func NewGetChunkJob(ctx context.Context, upstreamExecutor SQLExecutor, objectName string, chunkIndex int64) *GetChunkJob {
+func NewGetChunkJob(ctx context.Context, upstreamExecutor SQLExecutor, objectName string, chunkIndex int64, subscriptionAccountName string, pubName string) *GetChunkJob {
 	return &GetChunkJob{
-		ctx:              ctx,
-		upstreamExecutor: upstreamExecutor,
-		objectName:       objectName,
-		chunkIndex:       chunkIndex,
-		result:           make(chan *GetChunkJobResult, 1),
+		ctx:                     ctx,
+		upstreamExecutor:        upstreamExecutor,
+		objectName:              objectName,
+		chunkIndex:              chunkIndex,
+		subscriptionAccountName: subscriptionAccountName,
+		pubName:                 pubName,
+		result:                  make(chan *GetChunkJobResult, 1),
 	}
 }
 
@@ -188,7 +196,7 @@ func (j *GetChunkJob) Execute() {
 	}
 	defer func() { <-getChunkSemaphore }()
 
-	getChunkSQL := PublicationSQLBuilder.GetObjectSQL(j.objectName, j.chunkIndex)
+	getChunkSQL := PublicationSQLBuilder.GetObjectSQL(j.objectName, j.chunkIndex, j.subscriptionAccountName, j.pubName)
 	result, cancel, err := j.upstreamExecutor.ExecSQL(j.ctx, nil, getChunkSQL, false, true, time.Minute)
 	if err != nil {
 		res.Err = moerr.NewInternalErrorf(j.ctx, "failed to execute GETOBJECT query for offset %d: %v, sql: %v", j.chunkIndex, err, getChunkSQL)
@@ -252,16 +260,18 @@ type FilterObjectJobResult struct {
 
 // FilterObjectJob is a job for filtering an object
 type FilterObjectJob struct {
-	ctx              context.Context
-	objectStatsBytes []byte
-	snapshotTS       types.TS
-	aobjectMap       map[objectio.ObjectId]AObjMapping
-	upstreamExecutor SQLExecutor
-	isTombstone      bool
-	localFS          fileservice.FileService
-	mp               *mpool.MPool
-	getChunkWorker   GetChunkWorker
-	result           chan *FilterObjectJobResult
+	ctx                     context.Context
+	objectStatsBytes        []byte
+	snapshotTS              types.TS
+	aobjectMap              map[objectio.ObjectId]AObjMapping
+	upstreamExecutor        SQLExecutor
+	isTombstone             bool
+	localFS                 fileservice.FileService
+	mp                      *mpool.MPool
+	getChunkWorker          GetChunkWorker
+	subscriptionAccountName string
+	pubName                 string
+	result                  chan *FilterObjectJobResult
 }
 
 // NewFilterObjectJob creates a new FilterObjectJob
@@ -275,18 +285,22 @@ func NewFilterObjectJob(
 	localFS fileservice.FileService,
 	mp *mpool.MPool,
 	getChunkWorker GetChunkWorker,
+	subscriptionAccountName string,
+	pubName string,
 ) *FilterObjectJob {
 	return &FilterObjectJob{
-		ctx:              ctx,
-		objectStatsBytes: objectStatsBytes,
-		snapshotTS:       snapshotTS,
-		aobjectMap:       aobjectMap,
-		upstreamExecutor: upstreamExecutor,
-		isTombstone:      isTombstone,
-		localFS:          localFS,
-		mp:               mp,
-		getChunkWorker:   getChunkWorker,
-		result:           make(chan *FilterObjectJobResult, 1),
+		ctx:                     ctx,
+		objectStatsBytes:        objectStatsBytes,
+		snapshotTS:              snapshotTS,
+		aobjectMap:              aobjectMap,
+		upstreamExecutor:        upstreamExecutor,
+		isTombstone:             isTombstone,
+		localFS:                 localFS,
+		mp:                      mp,
+		getChunkWorker:          getChunkWorker,
+		subscriptionAccountName: subscriptionAccountName,
+		pubName:                 pubName,
+		result:                  make(chan *FilterObjectJobResult, 1),
 	}
 }
 
@@ -303,6 +317,8 @@ func (j *FilterObjectJob) Execute() {
 		j.localFS,
 		j.mp,
 		j.getChunkWorker,
+		j.subscriptionAccountName,
+		j.pubName,
 	)
 	res.Err = err
 	if filterResult != nil {
@@ -347,6 +363,8 @@ func FilterObject(
 	localFS fileservice.FileService,
 	mp *mpool.MPool,
 	getChunkWorker GetChunkWorker,
+	subscriptionAccountName string,
+	pubName string,
 ) (*FilterObjectResult, error) {
 	if len(objectStatsBytes) != objectio.ObjectStatsLen {
 		return nil, moerr.NewInternalErrorf(ctx, "invalid object stats length: expected %d, got %d", objectio.ObjectStatsLen, len(objectStatsBytes))
@@ -360,10 +378,10 @@ func FilterObject(
 	isAObj := stats.GetAppendable()
 	if isAObj {
 		// Handle appendable object
-		return filterAppendableObject(ctx, &stats, snapshotTS, aobjectMap, upstreamExecutor, localFS, isTombstone, mp, getChunkWorker)
+		return filterAppendableObject(ctx, &stats, snapshotTS, aobjectMap, upstreamExecutor, localFS, isTombstone, mp, getChunkWorker, subscriptionAccountName, pubName)
 	} else {
 		// Handle non-appendable object - write directly to fileservice
-		err := filterNonAppendableObject(ctx, &stats, upstreamExecutor, localFS, getChunkWorker)
+		err := filterNonAppendableObject(ctx, &stats, upstreamExecutor, localFS, getChunkWorker, subscriptionAccountName, pubName)
 		return nil, err
 	}
 }
@@ -381,6 +399,8 @@ func filterAppendableObject(
 	isTombstone bool,
 	mp *mpool.MPool,
 	getChunkWorker GetChunkWorker,
+	subscriptionAccountName string,
+	pubName string,
 ) (*FilterObjectResult, error) {
 	// Get object name from stats (upstream aobj UUID)
 	upstreamAObjUUID := stats.ObjectName().ObjectId()
@@ -392,7 +412,7 @@ func filterAppendableObject(
 	mapping := aobjectMap[*upstreamAObjUUID]
 
 	// Get object file from upstream using GETOBJECT
-	objectContent, err := GetObjectFromUpstreamWithWorker(ctx, upstreamExecutor, stats.ObjectName().String(), getChunkWorker)
+	objectContent, err := GetObjectFromUpstreamWithWorker(ctx, upstreamExecutor, stats.ObjectName().String(), getChunkWorker, subscriptionAccountName, pubName)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to get object from upstream: %v", err)
 	}
@@ -441,12 +461,14 @@ func filterNonAppendableObject(
 	upstreamExecutor SQLExecutor,
 	localFS fileservice.FileService,
 	getChunkWorker GetChunkWorker,
+	subscriptionAccountName string,
+	pubName string,
 ) error {
 	// Get object name from stats
 	objectName := stats.ObjectName().String()
 
 	// Get object file from upstream
-	objectContent, err := GetObjectFromUpstreamWithWorker(ctx, upstreamExecutor, objectName, getChunkWorker)
+	objectContent, err := GetObjectFromUpstreamWithWorker(ctx, upstreamExecutor, objectName, getChunkWorker, subscriptionAccountName, pubName)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to get object from upstream: %v", err)
 	}
@@ -506,6 +528,8 @@ var GetObjectFromUpstreamWithWorker = func(
 	upstreamExecutor SQLExecutor,
 	objectName string,
 	getChunkWorker GetChunkWorker,
+	subscriptionAccountName string,
+	pubName string,
 ) ([]byte, error) {
 	if upstreamExecutor == nil {
 		return nil, moerr.NewInternalError(ctx, "upstream executor is nil")
@@ -514,7 +538,7 @@ var GetObjectFromUpstreamWithWorker = func(
 	// First, get offset 0 to get metadata (total_chunks, total_size, etc.)
 	// GETOBJECT returns: data, total_size, chunk_index, total_chunks, is_complete
 	// offset 0 returns metadata with data = nil
-	metaJob := NewGetMetaJob(ctx, upstreamExecutor, objectName)
+	metaJob := NewGetMetaJob(ctx, upstreamExecutor, objectName, subscriptionAccountName, pubName)
 	if getChunkWorker != nil {
 		getChunkWorker.SubmitGetChunk(metaJob)
 	} else {
@@ -534,7 +558,7 @@ var GetObjectFromUpstreamWithWorker = func(
 	// Submit all chunk jobs to worker pool
 	chunkJobs := make([]*GetChunkJob, totalChunks)
 	for i := int64(1); i <= totalChunks; i++ {
-		chunkJob := NewGetChunkJob(ctx, upstreamExecutor, objectName, i)
+		chunkJob := NewGetChunkJob(ctx, upstreamExecutor, objectName, i, subscriptionAccountName, pubName)
 		chunkJobs[i-1] = chunkJob
 		if getChunkWorker != nil {
 			getChunkWorker.SubmitGetChunk(chunkJob)
@@ -1327,6 +1351,8 @@ func ApplyObjects(
 	fs fileservice.FileService,
 	filterObjectWorker FilterObjectWorker,
 	getChunkWorker GetChunkWorker,
+	subscriptionAccountName string,
+	pubName string,
 ) (err error) {
 
 	var collectedTombstoneDeleteStats []*ObjectWithTableInfo
@@ -1338,7 +1364,7 @@ func ApplyObjects(
 	for _, info := range objectMap {
 		if !info.Delete {
 			statsBytes := info.Stats.Marshal()
-			filterJob := NewFilterObjectJob(ctx, statsBytes, currentTS, aobjectMap, upstreamExecutor, info.IsTombstone, fs, mp, getChunkWorker)
+			filterJob := NewFilterObjectJob(ctx, statsBytes, currentTS, aobjectMap, upstreamExecutor, info.IsTombstone, fs, mp, getChunkWorker, subscriptionAccountName, pubName)
 			if filterObjectWorker != nil {
 				filterObjectWorker.SubmitFilterObject(filterJob)
 			} else {

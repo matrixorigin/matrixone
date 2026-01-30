@@ -74,9 +74,10 @@ type TableKey struct {
 // IterationContext contains context information for an iteration
 type IterationContext struct {
 	// Task identification
-	TaskID           string
-	SubscriptionName string
-	SrcInfo          SrcInfo
+	TaskID                  string
+	SubscriptionName        string
+	SubscriptionAccountName string // The subscription account name for FROM clause
+	SrcInfo                 SrcInfo
 
 	// Upstream connection
 	LocalTxn         client.TxnOperator
