@@ -53,7 +53,7 @@ static inline bool bitmap_test(uint64_t *p, uint64_t pos) {
 
 static inline void bitmap_set(uint64_t *p, uint64_t pos) {
     p[bitmap_pos2idx(pos)] |= bitmap_pos2mask(pos);
- }
+}
 
 static inline void bitmap_set_atomic(uint64_t *p, uint64_t pos) {
     __sync_or_and_fetch(&p[bitmap_pos2idx(pos)], bitmap_pos2mask(pos));
