@@ -615,36 +615,47 @@ func (rs *regexpSet) getRegularMatcher(pat string) (*regexp.Regexp, error) {
 
 func (rs *regexpSet) regularMatchForLikeOp(pat []byte, str []byte) (match bool, err error) {
 	replace := func(s string) string {
-		var oldCharactor rune
+		isRegexMeta := func(r rune) bool {
+			switch r {
+			case '.', '+', '*', '?', '^', '$', '(', ')', '[', ']', '{', '}', '|', '\\':
+				return true
+			default:
+				return false
+			}
+		}
+		appendLiteral := func(buf *bytes.Buffer, r rune) {
+			if isRegexMeta(r) {
+				buf.WriteByte('\\')
+			}
+			buf.WriteRune(r)
+		}
 
-		r := make([]byte, len(s)*2)
-		w := 0
-		start := 0
-		for len(s) > start {
-			character, wid := utf8.DecodeRuneInString(s[start:])
-			if oldCharactor == '\\' {
-				w += copy(r[w:], s[start:start+wid])
-				start += wid
-				oldCharactor = 0
+		var escaped bool
+		var buf bytes.Buffer
+		buf.Grow(len(s) * 2)
+		for len(s) > 0 {
+			r, size := utf8.DecodeRuneInString(s)
+			s = s[size:]
+			if escaped {
+				appendLiteral(&buf, r)
+				escaped = false
 				continue
 			}
-			switch character {
-			case '_':
-				w += copy(r[w:], []byte{'.'})
-			case '%':
-				w += copy(r[w:], []byte{'.', '*'})
-			case '(':
-				w += copy(r[w:], []byte{'\\', '('})
-			case ')':
-				w += copy(r[w:], []byte{'\\', ')'})
+			switch r {
 			case '\\':
+				escaped = true
+			case '_':
+				buf.WriteByte('.')
+			case '%':
+				buf.WriteString(".*")
 			default:
-				w += copy(r[w:], s[start:start+wid])
+				appendLiteral(&buf, r)
 			}
-			start += wid
-			oldCharactor = character
 		}
-		return string(r[:w])
+		if escaped {
+			appendLiteral(&buf, '\\')
+		}
+		return buf.String()
 	}
 	convert := func(expr []byte) string {
 		return fmt.Sprintf("^(?s:%s)$", replace(util.UnsafeBytesToString(expr)))
