@@ -5445,22 +5445,24 @@ func (node *CreatePublication) Free() {
 
 type CreateSubscription struct {
 	statementImpl
-	IsDatabase   bool
-	DbName       Identifier
-	TableName    string
-	AccountName  string // For account-level subscription
-	IfNotExists  bool   // For account-level subscription
-	FromUri      string
-	PubName      Identifier
-	SyncInterval int64
+	IsDatabase              bool
+	DbName                  Identifier
+	TableName               string
+	AccountName             string // For account-level subscription
+	IfNotExists             bool   // For account-level subscription
+	FromUri                 string
+	SubscriptionAccountName string // The account name for the subscription
+	PubName                 Identifier
+	SyncInterval            int64
 }
 
-func NewCreateSubscription(isDb bool, dbName Identifier, tableName string, fromUri string, pubName Identifier, syncInterval int64) *CreateSubscription {
+func NewCreateSubscription(isDb bool, dbName Identifier, tableName string, fromUri string, subscriptionAccountName string, pubName Identifier, syncInterval int64) *CreateSubscription {
 	cs := reuse.Alloc[CreateSubscription](nil)
 	cs.IsDatabase = isDb
 	cs.DbName = dbName
 	cs.TableName = tableName
 	cs.FromUri = fromUri
+	cs.SubscriptionAccountName = subscriptionAccountName
 	cs.PubName = pubName
 	cs.SyncInterval = syncInterval
 	cs.AccountName = ""
@@ -5489,6 +5491,10 @@ func (node *CreateSubscription) Format(ctx *FmtCtx) {
 	}
 	ctx.WriteString(" from ")
 	ctx.WriteString(fmt.Sprintf("'%s'", node.FromUri))
+	if node.SubscriptionAccountName != "" {
+		ctx.WriteString(" ")
+		ctx.WriteString(node.SubscriptionAccountName)
+	}
 	ctx.WriteString(" publication ")
 	node.PubName.Format(ctx)
 	if node.SyncInterval > 0 {
@@ -5508,6 +5514,7 @@ func (node CreateSubscription) TypeName() string { return "tree.CreateSubscripti
 func (node *CreateSubscription) reset() {
 	*node = CreateSubscription{}
 	node.AccountName = ""
+	node.SubscriptionAccountName = ""
 	node.IfNotExists = false
 }
 

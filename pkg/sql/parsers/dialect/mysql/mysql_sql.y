@@ -6947,16 +6947,18 @@ create_account_stmt:
             Comment,
     	)
     }
-|   CREATE ACCOUNT FROM STRING PUBLICATION ident sync_interval_opt
+|   CREATE ACCOUNT FROM STRING ident PUBLICATION ident sync_interval_opt
     {
         var FromUri = $4
-        var PubName = tree.Identifier($6.Compare())
-        var SyncInterval = $7
+        var SubscriptionAccountName = $5.Compare()
+        var PubName = tree.Identifier($7.Compare())
+        var SyncInterval = $8
         var cs = tree.NewCreateSubscription(
             true,  // isDatabase
             tree.Identifier(""),  // dbName (empty for account level)
             "",  // tableName
             FromUri,
+            SubscriptionAccountName,
             PubName,
             SyncInterval,
         )
@@ -8117,17 +8119,19 @@ create_database_stmt:
     	t.ToAccountOpt = $8
     	$$ = t
     }
-|   CREATE database_or_schema not_exists_opt db_name FROM STRING PUBLICATION ident sync_interval_opt
+|   CREATE database_or_schema not_exists_opt db_name FROM STRING ident PUBLICATION ident sync_interval_opt
     {
         var DbName = tree.Identifier($4)
         var FromUri = $6
-        var PubName = tree.Identifier($8.Compare())
-        var SyncInterval = $9
+        var SubscriptionAccountName = $7.Compare()
+        var PubName = tree.Identifier($9.Compare())
+        var SyncInterval = $10
         $$ = tree.NewCreateSubscription(
             true,  // isDatabase
             DbName,
             "",
             FromUri,
+            SubscriptionAccountName,
             PubName,
             SyncInterval,
         )
@@ -8672,12 +8676,13 @@ create_table_stmt:
 	t.ToAccountOpt = $8
 	$$ = t
     }
-|   CREATE temporary_opt TABLE not_exists_opt table_name FROM STRING PUBLICATION ident sync_interval_opt
+|   CREATE temporary_opt TABLE not_exists_opt table_name FROM STRING ident PUBLICATION ident sync_interval_opt
     {
         var TableName = $5
         var FromUri = $7
-        var PubName = tree.Identifier($9.Compare())
-        var SyncInterval = $10
+        var SubscriptionAccountName = $8.Compare()
+        var PubName = tree.Identifier($10.Compare())
+        var SyncInterval = $11
         var TableNameStr = string(TableName.ObjectName)
         var DbName = tree.Identifier("")
         // Extract database name from table name if explicitly specified
@@ -8689,6 +8694,7 @@ create_table_stmt:
             DbName,
             TableNameStr,
             FromUri,
+            SubscriptionAccountName,
             PubName,
             SyncInterval,
         )
