@@ -231,6 +231,7 @@ func (DefaultClassifier) IsRetryable(err error) bool {
 		"rpc error",
 		"backend",
 		"unavailable",
+		"invalid connection",
 	}
 
 	for _, pattern := range retryablePatterns {

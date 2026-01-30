@@ -51,6 +51,18 @@ const (
 	JobTypeFilterObject int8 = 3
 )
 
+const (
+	// getChunkMaxMemory is the maximum memory for concurrent GetChunkJob operations (1GB)
+	GetChunkMaxMemory = 3 * 1024 * 1024 * 1024
+	// getChunkSize is the size of each chunk (100MB)
+	GetChunkSize = 100 * 1024 * 1024
+	// getChunkMaxConcurrent is the maximum concurrent chunk reads (1GB / 100MB = 10)
+	getChunkMaxConcurrent = GetChunkMaxMemory / GetChunkSize
+)
+
+// getChunkSemaphore limits concurrent memory usage for GetChunkJob (1GB max)
+var getChunkSemaphore = make(chan struct{}, getChunkMaxConcurrent)
+
 // Job is an interface for async jobs
 type Job interface {
 	Execute()
@@ -164,10 +176,22 @@ func NewGetChunkJob(ctx context.Context, upstreamExecutor SQLExecutor, objectNam
 // Execute runs the GetChunkJob
 func (j *GetChunkJob) Execute() {
 	res := &GetChunkJobResult{ChunkIndex: j.chunkIndex}
+
+	// Acquire semaphore for memory control (blocks if 1GB limit reached)
+	select {
+	case getChunkSemaphore <- struct{}{}:
+		// acquired
+	case <-j.ctx.Done():
+		res.Err = j.ctx.Err()
+		j.result <- res
+		return
+	}
+	defer func() { <-getChunkSemaphore }()
+
 	getChunkSQL := PublicationSQLBuilder.GetObjectSQL(j.objectName, j.chunkIndex)
 	result, cancel, err := j.upstreamExecutor.ExecSQL(j.ctx, nil, getChunkSQL, false, true, time.Minute)
 	if err != nil {
-		res.Err = moerr.NewInternalErrorf(j.ctx, "failed to execute GETOBJECT query for offset %d: %v", j.chunkIndex, err)
+		res.Err = moerr.NewInternalErrorf(j.ctx, "failed to execute GETOBJECT query for offset %d: %v, sql: %v", j.chunkIndex, err, getChunkSQL)
 		j.result <- res
 		return
 	}

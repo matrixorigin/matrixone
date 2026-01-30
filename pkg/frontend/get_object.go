@@ -15,23 +15,43 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"runtime"
+	"strconv"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/publication"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
 
+func init() {
+	// Periodically log chunkSemaphore statistics
+	go func() {
+		for {
+			time.Sleep(10 * time.Second)
+			waiting := atomic.LoadInt64(&chunkSemaphoreWaiting)
+			holding := atomic.LoadInt64(&chunkSemaphoreHolding)
+			finished := atomic.LoadInt64(&chunkSemaphoreFinished)
+			logutil.Infof("[chunkSemaphore] STATS: waiting=%d, holding=%d, finished=%d, max=%d", waiting, holding, finished, getObjectMaxConcurrent)
+		}
+	}()
+}
+
 const (
 	// getObjectChunkSize is the size of each chunk for GetObject (100MB)
-	getObjectChunkSize = 100 * 1024 * 1024
+	getObjectChunkSize = publication.GetChunkSize
 	// getObjectMaxMemory is the maximum memory for concurrent GetObject operations (5GB)
-	getObjectMaxMemory = 5 * 1024 * 1024 * 1024
+	getObjectMaxMemory = publication.GetChunkMaxMemory
 	// getObjectMaxConcurrent is the maximum concurrent chunk reads (5GB / 100MB = 50)
 	getObjectMaxConcurrent = getObjectMaxMemory / getObjectChunkSize
 )
@@ -46,6 +66,23 @@ var chunkBufferPool = sync.Pool{
 
 // chunkSemaphore limits concurrent memory usage for GetObject (5GB max)
 var chunkSemaphore = make(chan struct{}, getObjectMaxConcurrent)
+
+// Counters for tracking semaphore usage (only counts goroutines currently waiting or holding)
+var (
+	chunkSemaphoreWaiting  int64 // goroutines currently waiting for semaphore
+	chunkSemaphoreHolding  int64 // goroutines currently holding semaphore
+	chunkSemaphoreFinished int64 // total finished requests
+)
+
+// getGoroutineID extracts goroutine ID from runtime stack
+func getGoroutineID() int64 {
+	var buf [64]byte
+	n := runtime.Stack(buf[:], false)
+	// Stack format: "goroutine 123 [running]:\n..."
+	idField := bytes.Fields(buf[:n])[1]
+	id, _ := strconv.ParseInt(string(idField), 10, 64)
+	return id
+}
 
 // GetObjectPermissionChecker is the function to check publication permission for GetObject
 // This is exported as a variable to allow stubbing in tests
@@ -122,14 +159,24 @@ func ReadObjectFromEngine(ctx context.Context, eng engine.Engine, objectName str
 		return nil, moerr.NewInternalError(ctx, "fileservice is not available")
 	}
 
-	// Acquire semaphore for memory control (blocks if 5GB limit reached)
+	atomic.AddInt64(&chunkSemaphoreWaiting, 1)
+	atomic.LoadInt64(&chunkSemaphoreHolding)
+
 	select {
 	case chunkSemaphore <- struct{}{}:
-		// acquired
+		// acquired - remove from waiting, add to holding
+		atomic.AddInt64(&chunkSemaphoreWaiting, -1)
+		atomic.AddInt64(&chunkSemaphoreHolding, 1)
+		atomic.LoadInt64(&chunkSemaphoreWaiting)
 	case <-ctx.Done():
+		atomic.AddInt64(&chunkSemaphoreWaiting, -1)
 		return nil, ctx.Err()
 	}
-	defer func() { <-chunkSemaphore }()
+	defer func() {
+		<-chunkSemaphore
+		atomic.AddInt64(&chunkSemaphoreHolding, -1)
+		atomic.AddInt64(&chunkSemaphoreFinished, 1)
+	}()
 
 	// Get buffer from pool for reuse
 	bufPtr := chunkBufferPool.Get().(*[]byte)

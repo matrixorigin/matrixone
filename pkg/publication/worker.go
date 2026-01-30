@@ -34,7 +34,7 @@ import (
 const (
 	PublicationWorkerThread  = 10
 	FilterObjectWorkerThread = 1000
-	GetChunkWorkerThread     = 10000
+	GetChunkWorkerThread     = 10
 
 	SubmitRetryTimes    = 1000
 	SubmitRetryDuration = time.Hour
@@ -494,7 +494,8 @@ func NewGetChunkWorker() GetChunkWorker {
 }
 
 func (w *getChunkWorker) Run() {
-	for i := 0; i < GetChunkWorkerThread; i++ {
+	workerThreadCount := GetChunkWorkerThread
+	for i := 0; i < workerThreadCount; i++ {
 		w.wg.Add(1)
 		go func() {
 			defer w.wg.Done()
