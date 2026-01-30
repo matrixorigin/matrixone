@@ -127,7 +127,8 @@ const (
 		`WHERE sname = '%s'`
 
 	// Check snapshot flushed SQL template
-	PublicationCheckSnapshotFlushedSqlTemplate = `CHECKSNAPSHOTFLUSHED %s`
+	// Parameters: snapshot_name, account_name, publication_name
+	PublicationCheckSnapshotFlushedSqlTemplate = `CHECKSNAPSHOTFLUSHED %s ACCOUNT %s PUBLICATION %s`
 
 	// Update mo_ccpr_log SQL template
 	PublicationUpdateMoCcprLogSqlTemplate = `UPDATE mo_catalog.mo_ccpr_log ` +
@@ -656,13 +657,17 @@ func (b publicationSQLBuilder) QuerySnapshotTsSQL(
 
 // CheckSnapshotFlushedSQL creates SQL for checking if snapshot is flushed
 // Returns result (bool)
-// Example: CHECKSNAPSHOTFLUSHED sp1
+// Example: CHECKSNAPSHOTFLUSHED sp1 ACCOUNT account1 PUBLICATION pub1
 func (b publicationSQLBuilder) CheckSnapshotFlushedSQL(
 	snapshotName string,
+	accountName string,
+	publicationName string,
 ) string {
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationCheckSnapshotFlushedSqlTemplate_Idx].SQL,
 		escapeSQLIdentifier(snapshotName),
+		escapeSQLIdentifier(accountName),
+		escapeSQLIdentifier(publicationName),
 	)
 }
 

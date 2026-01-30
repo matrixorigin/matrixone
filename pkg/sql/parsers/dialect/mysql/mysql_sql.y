@@ -7527,7 +7527,15 @@ drop_snapshot_stmt:
     }
 
 check_snapshot_flushed_stmt:
-    CHECKSNAPSHOTFLUSHED ident
+    CHECKSNAPSHOTFLUSHED ident ACCOUNT ident PUBLICATION ident
+    {
+        $$ = &tree.CheckSnapshotFlushed{
+            Name:            tree.Identifier($2.Compare()),
+            AccountName:     tree.Identifier($4.Compare()),
+            PublicationName: tree.Identifier($6.Compare()),
+        }
+    }
+|   CHECKSNAPSHOTFLUSHED ident
     {
         $$ = &tree.CheckSnapshotFlushed{
             Name: tree.Identifier($2.Compare()),

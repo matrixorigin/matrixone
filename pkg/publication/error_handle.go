@@ -297,6 +297,9 @@ func (CommitErrorClassifier) IsRetryable(err error) bool {
 		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 		return true
 	}
+	if strings.Contains(err.Error(), "txn need retry in rc mode") {
+		return true
+	}
 
 	return false
 }

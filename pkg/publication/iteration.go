@@ -905,7 +905,9 @@ func WaitForSnapshotFlushed(
 	}
 
 	snapshotName := iterationCtx.CurrentSnapshotName
-	checkSQL := PublicationSQLBuilder.CheckSnapshotFlushedSQL(snapshotName)
+	accountName := iterationCtx.SubscriptionAccountName
+	publicationName := iterationCtx.SubscriptionName
+	checkSQL := PublicationSQLBuilder.CheckSnapshotFlushedSQL(snapshotName, accountName, publicationName)
 
 	startTime := time.Now()
 	attempt := 0

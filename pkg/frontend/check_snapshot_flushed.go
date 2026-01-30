@@ -64,17 +64,53 @@ func doCheckSnapshotFlushed(ctx context.Context, ses *Session, stmt *tree.CheckS
 
 	// Get snapshot by name and retrieve ts
 	snapshotName := string(stmt.Name)
+	accountName := string(stmt.AccountName)
+	publicationName := string(stmt.PublicationName)
+
 	bh := ses.GetShareTxnBackgroundExec(ctx, false)
 	defer bh.Close()
 
-	record, err := getSnapshotByNameFunc(ctx, bh, snapshotName)
+	// If accountName is provided, use it for authorization context
+	queryCtx := ctx
+	if accountName != "" {
+		// Get account_id by account_name
+		systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+		getAccountIdSQL := fmt.Sprintf(`SELECT account_id FROM mo_catalog.mo_account WHERE account_name = '%s';`, accountName)
+		bh.ClearExecResultSet()
+		if err := bh.Exec(systemCtx, getAccountIdSQL); err != nil {
+			return moerr.NewInternalErrorf(ctx, "failed to get account_id for account %s: %v", accountName, err)
+		}
+
+		erArray, err := getResultSet(systemCtx, bh)
+		if err != nil {
+			return err
+		}
+
+		var accountId uint32
+		if execResultArrayHasData(erArray) {
+			accountIdVal, err := erArray[0].GetUint64(systemCtx, 0, 0)
+			if err != nil {
+				return err
+			}
+			accountId = uint32(accountIdVal)
+		} else {
+			return moerr.NewInternalErrorf(ctx, "account %s not found", accountName)
+		}
+
+		// Use the authorized account context for snapshot query
+		queryCtx = defines.AttachAccountId(ctx, accountId)
+
+		logutil.Info("check_snapshot_flushed using authorized account",
+			zap.String("snapshot_name", snapshotName),
+			zap.String("account_name", accountName),
+			zap.String("publication_name", publicationName),
+			zap.Uint32("account_id", accountId),
+		)
+	}
+
+	record, err := getSnapshotByNameFunc(queryCtx, bh, snapshotName)
 	if err != nil {
-		// If snapshot not found, return false
-		result := false
-		row := []interface{}{result}
-		mrs.AddRow(row)
-		ses.SetMysqlResultSet(mrs)
-		return nil
+		return err
 	}
 
 	// Print snapshot ts using logutil
@@ -83,9 +119,8 @@ func doCheckSnapshotFlushed(ctx context.Context, ses *Session, stmt *tree.CheckS
 	}
 
 	// Check publication permission based on snapshot level
-	// For cluster level, no permission check needed (all accounts can access)
-	// For account/database/table level, check permission
-	if record.level != "cluster" {
+	// Skip permission check if accountName is provided (already authorized via publication)
+	if accountName == "" && record.level != "cluster" {
 		var dbName, tblName string
 		if record.level == "database" || record.level == "table" {
 			dbName = record.databaseName

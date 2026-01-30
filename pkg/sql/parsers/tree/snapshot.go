@@ -242,12 +242,22 @@ func (node *RestoreSnapShot) GetQueryType() string { return QueryTypeOth }
 
 type CheckSnapshotFlushed struct {
 	statementImpl
-	Name Identifier // snapshot name
+	Name            Identifier // snapshot name
+	AccountName     Identifier // account name for authorization
+	PublicationName Identifier // publication name
 }
 
 func (node *CheckSnapshotFlushed) Format(ctx *FmtCtx) {
 	ctx.WriteString("checkSnapshotFlushed ")
 	node.Name.Format(ctx)
+	if node.AccountName != "" {
+		ctx.WriteString(" account ")
+		node.AccountName.Format(ctx)
+	}
+	if node.PublicationName != "" {
+		ctx.WriteString(" publication ")
+		node.PublicationName.Format(ctx)
+	}
 }
 
 func (node *CheckSnapshotFlushed) GetStatementType() string { return "Check Snapshot Flushed" }
