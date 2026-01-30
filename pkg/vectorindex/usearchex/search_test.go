@@ -104,3 +104,51 @@ func TestFilteredSearch(t *testing.T) {
 	require.Equal(t, len(keys), 1)
 	require.Equal(t, keys[0], foundkey)
 }
+
+func TestFilteredSearchEdges(t *testing.T) {
+	index := createTestIndex(t, defaultTestDimensions, usearch.F32)
+	defer func() {
+		if err := index.Destroy(); err != nil {
+			t.Errorf("Failed to destroy index: %v", err)
+		}
+	}()
+
+	if err := index.Reserve(1); err != nil {
+		t.Fatalf("Failed to reserve capacity: %v", err)
+	}
+
+	vector := generateTestVector(defaultTestDimensions)
+	foundkey := uint64(100)
+	err := index.Add(foundkey, vector)
+	require.NoError(t, err)
+
+	// Case 1: Nil query pointer
+	_, _, err = FilteredSearchUnsafeWithBloomFilter(index, nil, 10, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "query pointer cannot be nil")
+
+	// Case 2: Limit 0
+	keys, distances, err := FilteredSearchUnsafeWithBloomFilter(index, unsafe.Pointer(&vector[0]), 0, nil)
+	require.NoError(t, err)
+	require.Empty(t, keys)
+	require.Empty(t, distances)
+
+	// Case 3: Nil BloomFilter (should act as normal search)
+	keys, _, err = FilteredSearchUnsafeWithBloomFilter(index, unsafe.Pointer(&vector[0]), 10, nil)
+	require.NoError(t, err)
+	require.Contains(t, keys, foundkey)
+
+	// Case 4: BloomFilter excluding the key
+	bf := bloomfilter.NewCBloomFilterWithProbability(100, 0.001)
+	require.NotNil(t, bf)
+	defer bf.Free()
+
+	// Add a different key to BF
+	b := make([]byte, 8)
+	binary.LittleEndian.PutUint64(b, uint64(999))
+	bf.Add(b)
+
+	keys, _, err = FilteredSearchUnsafeWithBloomFilter(index, unsafe.Pointer(&vector[0]), 10, bf)
+	require.NoError(t, err)
+	require.NotContains(t, keys, foundkey)
+}
