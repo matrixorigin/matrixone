@@ -2409,18 +2409,16 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	havingBinder := NewHavingBinder(builder, ctx)
 	projectionBinder := NewProjectionBinder(builder, ctx, havingBinder)
 
-	// append a project node
-	lastNodeID = builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_PROJECT,
-		ProjectList: ctx.projects,
-		Children:    []int32{lastNodeID},
-		BindingTags: []int32{ctx.projectTag},
-	}, ctx)
+	// Track the original number of columns before ORDER BY binding
+	// ORDER BY may add new expressions to ctx.projects, but these should not be in the final output
+	resultLen := len(ctx.projects)
 
-	// append orderBy
+	// bind orderBy BEFORE creating PROJECT node, so that any new expressions
+	// added to ctx.projects by ORDER BY are included in the PROJECT node
+	var orderBys []*plan.OrderBySpec
 	if astOrderBy != nil {
 		orderBinder := NewOrderBinder(projectionBinder, nil)
-		orderBys := make([]*plan.OrderBySpec, 0, len(astOrderBy))
+		orderBys = make([]*plan.OrderBySpec, 0, len(astOrderBy))
 
 		for _, order := range astOrderBy {
 			expr, err := orderBinder.BindExpr(order.Expr)
@@ -2449,7 +2447,18 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 
 			orderBys = append(orderBys, orderBy)
 		}
+	}
 
+	// append a project node (after ORDER BY binding to include any new expressions)
+	lastNodeID = builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		ProjectList: ctx.projects,
+		Children:    []int32{lastNodeID},
+		BindingTags: []int32{ctx.projectTag},
+	}, ctx)
+
+	// append orderBy (SORT node)
+	if len(orderBys) > 0 {
 		lastNodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_SORT,
 			Children: []int32{lastNodeID},
@@ -2497,8 +2506,9 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	}
 
 	// append result PROJECT node
+	// Use resultLen to exclude ORDER BY expressions from the final output
 	if builder.qry.Nodes[lastNodeID].NodeType != plan.Node_PROJECT {
-		for i := 0; i < len(ctx.projects); i++ {
+		for i := 0; i < resultLen; i++ {
 			ctx.results = append(ctx.results, &plan.Expr{
 				Typ: ctx.projects[i].Typ,
 				Expr: &plan.Expr_Col{
@@ -2518,7 +2528,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 			BindingTags: []int32{ctx.resultTag},
 		}, ctx)
 	} else {
-		ctx.results = ctx.projects
+		ctx.results = ctx.projects[:resultLen]
 	}
 
 	// set heading
