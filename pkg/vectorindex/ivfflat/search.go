@@ -17,7 +17,6 @@ package ivfflat
 import (
 	"fmt"
 	"math/rand/v2"
-	"os"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -59,6 +58,7 @@ type IvfflatMeta struct {
 	SmallCenterThreshold int64
 }
 
+// LoadStats get the number of entries per centroid
 func (idx *IvfflatSearchIndex[T]) LoadStats(
 	sqlproc *sqlexec.SqlProcess,
 	idxcfg vectorindex.IndexConfig,
@@ -102,11 +102,13 @@ func (idx *IvfflatSearchIndex[T]) LoadStats(
 		}
 	}
 
-	//os.Stderr.WriteString(fmt.Sprintf("Stats %v\n", stats))
 	idx.Meta.CenterStats = stats
 	return nil
 }
 
+// load all entries primary key per centroid and build bloomfilter per centroids
+// make sure bloomfilters MUST share the same nbits, k and seed so that
+// they can be merged together to form centroid bloomfilter
 func (idx *IvfflatSearchIndex[T]) LoadBloomFilters(
 	sqlproc *sqlexec.SqlProcess,
 	idxcfg vectorindex.IndexConfig,
@@ -135,8 +137,6 @@ func (idx *IvfflatSearchIndex[T]) LoadBloomFilters(
 		// no entries found
 		return
 	}
-
-	//os.Stderr.WriteString(fmt.Sprintf("max row = %d\n", maxv))
 
 	idx.Meta.Nbits, idx.Meta.K = bloomfilter.ComputeMemAndHashCountC(maxv, 0.0001)
 	idx.Meta.Seed = rand.Uint64()
@@ -348,6 +348,20 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(sqlproc *sqlexec.SqlProcess, que
 	return keys.([]int64), nil
 }
 
+// prepare runtime bloomfilter for pre-filtering
+// Centroids are C1, C2,...CN (Lists)
+// Preload centroid bloomfilter are BF1, BF2, ..., BFN
+// Selected centroids lists is [C1, C2,..., Cj]
+//
+// 1.   get the unique join keys from hashbuild
+// 2.   if there is no pre-loaded centroid bloomfilters
+// 2.1.    get the entries primary keys from selected centroids by SQL (Slow)
+// 2.2.    build the centroid bloomfilter (CBJ) with the entries primary keys
+// 2.3. else
+// 2.4.    generate the centroid bloomfilter (CBJ) by merge the centroid bloomfilter with bitmap_pr(BF1, BF2,.., BFj)  (Very fast)
+// 2.5. end
+// 3.   Test the unqiue join keys with CBJ. i.e. UniqueJoinKeys JOIN Selected Centroids
+// 4.   Build the final bloomfilter with the exists key from 3.
 func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 	sqlproc *sqlexec.SqlProcess,
 	idxcfg vectorindex.IndexConfig,
@@ -373,13 +387,6 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 	}
 
 	if len(vecbytes) == 0 {
-		return
-	}
-
-	if len(vecbytes) > 4 && string(vecbytes[0:4]) == "XXBF" {
-		os.Stderr.WriteString("vecbytes is bloomfilter\n")
-		// vecbytes is a bloomfilter
-		sqlproc.BloomFilter = vecbytes
 		return
 	}
 
@@ -487,13 +494,8 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 	}
 	sqlproc.BloomFilter = bfbytes
 
-	/*
-		end := time.Now()
-		elapsed := end.Sub(start)
-		_ = elapsed
-		os.Stderr.WriteString(fmt.Sprintf("IVF BloomFilter Build: #Entries for selected centers =  %d, #UniqueKey = %d, #ExistAfterFilter = %d,  Built Time = %v\n", rowCount, keyvec.Length(), nexist, elapsed))
+	//os.Stderr.WriteString(fmt.Sprintf("IVF BloomFilter Build: #Entries for selected centers =  %d, #UniqueKey = %d, #ExistAfterFilter = %d,  Built Time = %v\n", rowCount, keyvec.Length(), nexist, elapsed))
 
-	*/
 	return
 }
 
