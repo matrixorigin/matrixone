@@ -579,7 +579,7 @@ func TestCBloomFilter_TestZeroRowCount(t *testing.T) {
 func TestCBloomFilter_SharePointer(t *testing.T) {
 	bf := NewCBloomFilter(1000, 3)
 	require.NotNil(t, bf)
-	
+
 	// Initial refcnt should be 1
 	assert.Equal(t, int32(1), bf.refcnt)
 	assert.NotNil(t, bf.ptr)
@@ -633,7 +633,6 @@ func TestCBloomFilter_Getters(t *testing.T) {
 	// We can't know the exact seed, but it should be non-zero
 	assert.NotEqual(t, uint64(0), bf2.GetSeed())
 }
-
 
 func TestCBloomFilter_Merge(t *testing.T) {
 	nbits := uint64(1024)
