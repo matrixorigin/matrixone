@@ -32,6 +32,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
+const bfProbability = 0.001
+
 var runSql = sqlexec.RunSql
 
 // Ivf search index struct to hold the usearch index
@@ -138,7 +140,18 @@ func (idx *IvfflatSearchIndex[T]) LoadBloomFilters(
 		return
 	}
 
-	idx.Meta.Nbits, idx.Meta.K = bloomfilter.ComputeMemAndHashCountC(maxv, 0.0001)
+	nprobe := int64(5)
+	if sqlproc.GetResolveVariableFunc() != nil {
+		val, err := sqlproc.GetResolveVariableFunc()("probe_limit", true, false)
+		if err != nil {
+			return err
+		}
+		nprobe = val.(int64)
+	}
+
+	// set the size of bloomfilter to max centroid size * probe so that the final
+	// centroid bloomfilter have enough room after merge with nprobe centroids
+	idx.Meta.Nbits, idx.Meta.K = bloomfilter.ComputeMemAndHashCountC(maxv*nprobe, bfProbability)
 	idx.Meta.Seed = rand.Uint64()
 
 	bloomfilters := make([]*bloomfilter.CBloomFilter, idxcfg.Ivfflat.Lists)
@@ -435,7 +448,7 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 			rowCount += int64(bat.RowCount())
 		}
 
-		bf = bloomfilter.NewCBloomFilterWithProbability(rowCount, 0.0001)
+		bf = bloomfilter.NewCBloomFilterWithProbability(rowCount, bfProbability)
 		if bf == nil {
 			panic("failed to create CBloomFilter")
 		}
@@ -474,7 +487,7 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 		}
 	}
 
-	bf2 := bloomfilter.NewCBloomFilterWithProbability(int64(nexist), 0.0001)
+	bf2 := bloomfilter.NewCBloomFilterWithProbability(int64(nexist), bfProbability)
 	if bf2 == nil {
 		panic("failed to create CBloomFilter")
 	}
