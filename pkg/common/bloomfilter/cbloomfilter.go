@@ -39,8 +39,8 @@ type CBloomFilter struct {
 	refcnt int32
 }
 
-func computeMemAndHashCountC(rowCount int64, probability float64) (int64, int) {
-	k := 1
+func ComputeMemAndHashCountC(rowCount int64, probability float64) (uint64, uint32) {
+	k := uint32(1)
 	if rowCount < 10001 {
 		k = 1
 	} else if rowCount < 10_0001 {
@@ -60,7 +60,7 @@ func computeMemAndHashCountC(rowCount int64, probability float64) (int64, int) {
 	}
 	k *= 3
 	m_float := -float64(k) * float64(rowCount) / math.Log(1-math.Pow(probability, 1.0/float64(k)))
-	m := int64(m_float)
+	m := uint64(m_float)
 
 	/*
 		m_float = -float64(rowCount) * math.Log(probability) / math.Pow(math.Log(2), 2)
@@ -79,7 +79,7 @@ func NewCBloomFilterWithProbability(rowcnt int64, probability float64) *CBloomFi
 	if rowcnt <= 0 {
 		rowcnt = 2
 	}
-	nbit, k := computeMemAndHashCountC(rowcnt, probability)
+	nbit, k := ComputeMemAndHashCountC(rowcnt, probability)
 	//os.Stderr.WriteString(fmt.Sprintf("bloom k %d m %d\n", k, nbit))
 	return NewCBloomFilter(uint64(nbit), uint32(k))
 }

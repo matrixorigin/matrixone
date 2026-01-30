@@ -16,8 +16,9 @@ package ivfflat
 
 import (
 	"fmt"
+	"math/rand/v2"
+	"os"
 	"strconv"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
@@ -36,8 +37,10 @@ var runSql = sqlexec.RunSql
 
 // Ivf search index struct to hold the usearch index
 type IvfflatSearchIndex[T types.RealNumbers] struct {
-	Version   int64
-	Centroids cache.VectorIndexSearchIf
+	Version      int64
+	Centroids    cache.VectorIndexSearchIf
+	BloomFilters []*bloomfilter.CBloomFilter
+	Meta         IvfflatMeta
 }
 
 // This is the Ivf search implementation that implement VectorIndexSearchIf interface
@@ -48,9 +51,160 @@ type IvfflatSearch[T types.RealNumbers] struct {
 	ThreadsSearch int64
 }
 
-func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *sqlexec.SqlProcess, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64) error {
+type IvfflatMeta struct {
+	CenterStats          map[int64]int64
+	Nbits                uint64
+	K                    uint32
+	Seed                 uint64
+	SmallCenterThreshold int64
+}
 
-	idx.Version = idxcfg.Ivfflat.Version
+func (idx *IvfflatSearchIndex[T]) LoadStats(
+	sqlproc *sqlexec.SqlProcess,
+	idxcfg vectorindex.IndexConfig,
+	tblcfg vectorindex.IndexTableConfig,
+	nthread int64) error {
+
+	idx.Meta.SmallCenterThreshold = int64(0)
+	if sqlproc.GetResolveVariableFunc() != nil {
+		val, err := sqlproc.GetResolveVariableFunc()("ivf_small_centroid_threshold", true, false)
+		if err != nil {
+			return err
+		}
+		idx.Meta.SmallCenterThreshold = val.(int64)
+	}
+
+	stats := make(map[int64]int64)
+
+	sql := fmt.Sprintf("SELECT `%s`, COUNT(`%s`) FROM `%s`.`%s` WHERE `%s` = %d GROUP BY `%s`",
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
+		tblcfg.DbName, tblcfg.EntriesTable,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+		idx.Version,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
+	)
+
+	res, err := runSql(sqlproc, sql)
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+
+	for _, bat := range res.Batches {
+		cntvec := bat.Vecs[1]
+		idvec := bat.Vecs[0]
+
+		for i := 0; i < bat.RowCount(); i++ {
+			cid := vector.GetFixedAtNoTypeCheck[int64](idvec, i)
+			cnt := vector.GetFixedAtNoTypeCheck[int64](cntvec, i)
+			stats[cid] = cnt
+		}
+	}
+
+	//os.Stderr.WriteString(fmt.Sprintf("Stats %v\n", stats))
+	idx.Meta.CenterStats = stats
+	return nil
+}
+
+func (idx *IvfflatSearchIndex[T]) LoadBloomFilters(
+	sqlproc *sqlexec.SqlProcess,
+	idxcfg vectorindex.IndexConfig,
+	tblcfg vectorindex.IndexTableConfig,
+	nthread int64) (err error) {
+
+	if idx.Centroids == nil {
+		// no centroid
+		return
+	}
+
+	// calculate the row count for bloomfilter
+	if idx.Meta.CenterStats == nil {
+		// no stats
+		return
+	}
+
+	maxv := int64(0)
+	for _, v := range idx.Meta.CenterStats {
+		if v > maxv {
+			maxv = v
+		}
+	}
+
+	if maxv == 0 {
+		// no entries found
+		return
+	}
+
+	//os.Stderr.WriteString(fmt.Sprintf("max row = %d\n", maxv))
+
+	idx.Meta.Nbits, idx.Meta.K = bloomfilter.ComputeMemAndHashCountC(maxv, 0.0001)
+	idx.Meta.Seed = rand.Uint64()
+
+	bloomfilters := make([]*bloomfilter.CBloomFilter, idxcfg.Ivfflat.Lists)
+	for i := 0; i < int(idxcfg.Ivfflat.Lists); i++ {
+		bf := bloomfilter.NewCBloomFilterWithSeed(idx.Meta.Nbits, idx.Meta.K, idx.Meta.Seed)
+		if bf == nil {
+			panic("failed to create CBloomFilter")
+		}
+		bloomfilters[i] = bf
+	}
+	idx.BloomFilters = bloomfilters
+
+	defer func() {
+		if err != nil {
+			if idx.BloomFilters != nil {
+				for i := range idx.BloomFilters {
+					if idx.BloomFilters[i] != nil {
+						idx.BloomFilters[i].Free()
+					}
+				}
+				idx.BloomFilters = nil
+			}
+		}
+	}()
+
+	for i := 0; i < int(idxcfg.Ivfflat.Lists); i++ {
+		err = func() error {
+			bf := bloomfilters[i]
+			sql := fmt.Sprintf("SELECT `%s` FROM `%s`.`%s` WHERE `%s` = %d AND `%s` = %d",
+				catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
+				tblcfg.DbName, tblcfg.EntriesTable,
+				catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+				idx.Version,
+				catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
+				i,
+			)
+
+			res, err2 := runSql(sqlproc, sql)
+			if err2 != nil {
+				return err2
+			}
+			defer res.Close()
+
+			var rowCount int64
+			for _, bat := range res.Batches {
+				rowCount += int64(bat.RowCount())
+			}
+			for _, bat := range res.Batches {
+				bf.AddVector(bat.Vecs[0])
+			}
+
+			return nil
+
+		}()
+
+		if err != nil {
+			return
+		}
+	}
+
+	return
+}
+
+func (idx *IvfflatSearchIndex[T]) LoadCentroids(proc *sqlexec.SqlProcess, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64) error {
+
+	// load centroids
 	sql := fmt.Sprintf(
 		"SELECT `%s`, `%s` FROM `%s`.`%s` WHERE `%s` = %d",
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
@@ -108,22 +262,87 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *sqlexec.SqlProcess, idxcfg vec
 	}
 
 	idx.Centroids = bfidx
+
+	return nil
+}
+
+func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *sqlexec.SqlProcess, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64) (err error) {
+
+	idx.Version = idxcfg.Ivfflat.Version
+
+	// load stats
+	err = idx.LoadStats(proc, idxcfg, tblcfg, nthread)
+	if err != nil {
+		return err
+	}
+
+	err = idx.LoadCentroids(proc, idxcfg, tblcfg, nthread)
+	if err != nil {
+		return err
+	}
+
+	if proc.GetResolveVariableFunc() != nil {
+		val, err := proc.GetResolveVariableFunc()("ivf_preload_entries", true, false)
+		if err != nil {
+			return err
+		}
+
+		if val != 0 {
+			err = idx.LoadBloomFilters(proc, idxcfg, tblcfg, nthread)
+			if err != nil {
+				return err
+			}
+		}
+	}
 	//os.Stderr.WriteString(fmt.Sprintf("%d centroids loaded... lists = %d, centroid %v\n", len(idx.Centroids), idxcfg.Ivfflat.Lists, idx.Centroids))
 	return nil
 }
 
-func (idx *IvfflatSearchIndex[T]) findCentroids(sqlproc *sqlexec.SqlProcess, query []T, distfn metric.DistanceFunction[T], _ vectorindex.IndexConfig, probe uint, _ int64) ([]int64, error) {
+func (idx *IvfflatSearchIndex[T]) findCentroids(sqlproc *sqlexec.SqlProcess, query []T, distfn metric.DistanceFunction[T], idxcfg vectorindex.IndexConfig, probe uint, _ int64) ([]int64, error) {
 
 	if idx.Centroids == nil {
 		// empty index has id = 1
 		return []int64{1}, nil
 	}
 
+	if probe > idxcfg.Ivfflat.Lists {
+		probe = idxcfg.Ivfflat.Lists
+	}
+
+	rtprobe := probe
+	if idx.Meta.CenterStats != nil {
+		rtprobe := probe * 2
+		if rtprobe > idxcfg.Ivfflat.Lists {
+			rtprobe = idxcfg.Ivfflat.Lists
+		}
+	}
+
 	queries := [][]T{query}
-	rt := vectorindex.RuntimeConfig{Limit: probe, NThreads: 1}
+	rt := vectorindex.RuntimeConfig{Limit: rtprobe, NThreads: 1}
 	keys, _, err := idx.Centroids.Search(sqlproc, queries, rt)
 	if err != nil {
 		return nil, err
+	}
+
+	if idx.Meta.CenterStats != nil {
+		// merge the small centroids
+		i64keys := keys.([]int64)
+		n := 0
+		nprobe := uint(0)
+
+		for _, k := range i64keys {
+			n++
+			nprobe++
+			cnt, ok := idx.Meta.CenterStats[k]
+			if ok && cnt < idx.Meta.SmallCenterThreshold {
+				nprobe--
+			}
+			if nprobe == probe {
+				break
+			}
+
+		}
+		return i64keys[:n], nil
 	}
 
 	return keys.([]int64), nil
@@ -133,7 +352,7 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 	sqlproc *sqlexec.SqlProcess,
 	idxcfg vectorindex.IndexConfig,
 	tblcfg vectorindex.IndexTableConfig,
-	centroids_ids string) (err error) {
+	centroids_ids []int64) (err error) {
 
 	if sqlproc.Proc == nil {
 		return
@@ -157,56 +376,79 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 		return
 	}
 
+	if len(vecbytes) > 4 && string(vecbytes[0:4]) == "XXBF" {
+		os.Stderr.WriteString("vecbytes is bloomfilter\n")
+		// vecbytes is a bloomfilter
+		sqlproc.BloomFilter = vecbytes
+		return
+	}
+
 	keyvec := new(vector.Vector)
 	err = keyvec.UnmarshalBinary(vecbytes)
 	if err != nil {
 		return
 	}
 
-	start := time.Now()
+	var bf *bloomfilter.CBloomFilter
 
-	sql := fmt.Sprintf("SELECT `%s` FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)",
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
-		tblcfg.DbName, tblcfg.EntriesTable,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
-		idx.Version,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
-		centroids_ids,
-	)
+	if len(idx.BloomFilters) == 0 {
+		// get centroid ids on the fly
+		var instr string
+		for i, c := range centroids_ids {
+			if i > 0 {
+				instr += ","
+			}
+			instr += strconv.FormatInt(c, 10)
+		}
 
-	//os.Stderr.WriteString(sql)
-	//os.Stderr.WriteString("\n")
+		sql := fmt.Sprintf("SELECT `%s` FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)",
+			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
+			tblcfg.DbName, tblcfg.EntriesTable,
+			catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+			idx.Version,
+			catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
+			instr,
+		)
 
-	res, err := runSql(sqlproc, sql)
-	if err != nil {
-		return
-	}
-	defer res.Close()
+		//os.Stderr.WriteString(sql)
+		//os.Stderr.WriteString("\n")
 
-	end1 := time.Now()
-	elapsed1 := end1.Sub(start)
-	_ = elapsed1
-	//os.Stderr.WriteString(fmt.Sprintf("IVF BloomFilter Build: Sql time = %v\n", elapsed1))
-	start = time.Now()
+		res, err := runSql(sqlproc, sql)
+		if err != nil {
+			return err
+		}
+		defer res.Close()
 
-	if len(res.Batches) == 0 {
-		return
-	}
+		if len(res.Batches) == 0 {
+			return nil
+		}
 
-	var rowCount int64
-	for _, bat := range res.Batches {
-		rowCount += int64(bat.RowCount())
-	}
+		var rowCount int64
+		for _, bat := range res.Batches {
+			rowCount += int64(bat.RowCount())
+		}
 
-	bf := bloomfilter.NewCBloomFilterWithProbability(rowCount, 0.0001)
-	if bf == nil {
-		panic("failed to create CBloomFilter")
-	}
+		bf = bloomfilter.NewCBloomFilterWithProbability(rowCount, 0.0001)
+		if bf == nil {
+			panic("failed to create CBloomFilter")
+		}
 
-	defer bf.Free()
+		defer bf.Free()
 
-	for _, bat := range res.Batches {
-		bf.AddVector(bat.Vecs[0])
+		for _, bat := range res.Batches {
+			bf.AddVector(bat.Vecs[0])
+		}
+	} else {
+		// use preload bloomfilter
+		bf = bloomfilter.NewCBloomFilterWithSeed(idx.Meta.Nbits, idx.Meta.K, idx.Meta.Seed)
+		if bf == nil {
+			panic("failed to create CBloomFilter")
+		}
+		defer bf.Free()
+
+		for _, c := range centroids_ids {
+			bf.Merge(idx.BloomFilters[c])
+		}
 	}
 
 	exists := bf.TestVector(keyvec, nil)
@@ -242,11 +484,13 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 	}
 	sqlproc.BloomFilter = bfbytes
 
-	end := time.Now()
-	elapsed := end.Sub(start)
-	_ = elapsed
-	//os.Stderr.WriteString(fmt.Sprintf("IVF BloomFilter Build: #Entries for selected centers =  %d, #UniqueKey = %d, #ExistAfterFilter = %d,  Built Time = %v\n", rowCount, keyvec.Length(), nexist, elapsed))
+	/*
+		end := time.Now()
+		elapsed := end.Sub(start)
+		_ = elapsed
+		os.Stderr.WriteString(fmt.Sprintf("IVF BloomFilter Build: #Entries for selected centers =  %d, #UniqueKey = %d, #ExistAfterFilter = %d,  Built Time = %v\n", rowCount, keyvec.Length(), nexist, elapsed))
 
+	*/
 	return
 }
 
@@ -278,7 +522,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		instr += strconv.FormatInt(c, 10)
 	}
 
-	err = idx.getBloomFilter(sqlproc, idxcfg, tblcfg, instr)
+	err = idx.getBloomFilter(sqlproc, idxcfg, tblcfg, centroids_ids)
 	if err != nil {
 		return
 	}
@@ -346,6 +590,14 @@ func (idx *IvfflatSearchIndex[T]) Destroy() {
 	if idx.Centroids != nil {
 		idx.Centroids.Destroy()
 		idx.Centroids = nil
+	}
+
+	if idx.BloomFilters != nil {
+		for _, bf := range idx.BloomFilters {
+			if bf != nil {
+				bf.Free()
+			}
+		}
 	}
 }
 
