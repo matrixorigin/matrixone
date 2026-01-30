@@ -722,6 +722,8 @@ func GenerateSnapshotName(taskID string, iterationLSN uint64) string {
 
 // RequestUpstreamSnapshot requests a snapshot from upstream cluster
 // It creates a snapshot based on the srcinfo in IterationContext and stores the snapshot name in the context
+// Uses publication-based snapshot creation to properly check subscription/publication permissions
+// and use the publisher's account (授权账户) instead of the subscriber's account (被授权账户)
 func RequestUpstreamSnapshot(
 	ctx context.Context,
 	iterationCtx *IterationContext,
@@ -734,10 +736,21 @@ func RequestUpstreamSnapshot(
 		return moerr.NewInternalError(ctx, "upstream executor is nil")
 	}
 
+	// Validate required fields for publication-based snapshot
+	if iterationCtx.SubscriptionAccountName == "" {
+		return moerr.NewInternalError(ctx, "subscription_account_name is required for publication snapshot")
+	}
+	if iterationCtx.SubscriptionName == "" {
+		return moerr.NewInternalError(ctx, "subscription_name (publication name) is required for publication snapshot")
+	}
+
 	// Generate snapshot name using rule-based encoding
 	snapshotName := GenerateSnapshotName(iterationCtx.TaskID, iterationCtx.IterationLSN)
 
-	// Build SQL based on srcinfo
+	// Build SQL based on sync level with publication info
+	// This uses the publisher's account (授权账户) for snapshot creation
+	// SubscriptionAccountName is the publisher's account name
+	// SubscriptionName is the publication name
 	var createSnapshotSQL string
 	switch iterationCtx.SrcInfo.SyncLevel {
 	case SyncLevelTable:
@@ -748,7 +761,9 @@ func RequestUpstreamSnapshot(
 			snapshotName,
 			iterationCtx.SrcInfo.DBName,
 			iterationCtx.SrcInfo.TableName,
-			true, // Use IF NOT EXISTS to handle existing snapshots gracefully
+			iterationCtx.SubscriptionAccountName,
+			iterationCtx.SubscriptionName,
+			true,
 		)
 	case SyncLevelDatabase:
 		if iterationCtx.SrcInfo.DBName == "" {
@@ -757,16 +772,16 @@ func RequestUpstreamSnapshot(
 		createSnapshotSQL = PublicationSQLBuilder.CreateSnapshotForDatabaseSQL(
 			snapshotName,
 			iterationCtx.SrcInfo.DBName,
-			true, // Use IF NOT EXISTS to handle existing snapshots gracefully
+			iterationCtx.SubscriptionAccountName,
+			iterationCtx.SubscriptionName,
+			true,
 		)
 	case SyncLevelAccount:
-		// Note: CreateSnapshotForAccountSQL currently uses account name, not account ID
-		// This is for upstream snapshot creation, which may require account name
-		// For now, we use empty string to create snapshot for current account
 		createSnapshotSQL = PublicationSQLBuilder.CreateSnapshotForAccountSQL(
 			snapshotName,
-			"",   // Empty account name means current account
-			true, // Use IF NOT EXISTS to handle existing snapshots gracefully
+			iterationCtx.SubscriptionAccountName,
+			iterationCtx.SubscriptionName,
+			true,
 		)
 	default:
 		return moerr.NewInternalErrorf(ctx, "unsupported sync_level: %s", iterationCtx.SrcInfo.SyncLevel)

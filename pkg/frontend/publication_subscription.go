@@ -2949,6 +2949,7 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 		`INSERT INTO mo_catalog.mo_ccpr_log (
 			task_id,
 			subscription_name,
+			subscription_account_name,
 			sync_level,
 			account_id,
 			db_name,
@@ -2962,6 +2963,7 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 			uuid(),
 			'%s',
 			'%s',
+			'%s',
 			%d,
 			'%s',
 			'%s',
@@ -2972,6 +2974,7 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 			0
 		)`,
 		string(cs.PubName),
+		cs.SubscriptionAccountName,
 		syncLevel,
 		accountId,
 		dbName,

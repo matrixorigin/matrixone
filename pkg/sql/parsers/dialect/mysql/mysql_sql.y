@@ -579,7 +579,7 @@ import (
 %type <accountsSetOption> alter_publication_accounts_opt create_publication_accounts
 %type <str> alter_publication_db_name_opt
 %type <statement> branch_stmt
-%type <objectList> objectlist_opt
+%type <objectList> objectlist_opt from_publication_opt
 %type <str> against_snapshot_opt getddl_snapshot_opt
 %type <toAccountOpt> to_account_opt
 %type <statement> getddl_opts
@@ -1176,6 +1176,52 @@ snapshot_object_opt:
         $$ = tree.ObjectInfo{
             SLevel: spLevel,
             ObjName: tree.Identifier($2.Compare() + "." + $3.Compare()),
+        }
+    }
+|   TABLE ident ident FROM ident PUBLICATION ident
+    {
+        spLevel := tree.SnapshotLevelType{
+            Level: tree.SNAPSHOTLEVELTABLE,
+        }
+        $$ = tree.ObjectInfo{
+            SLevel: spLevel,
+            ObjName: tree.Identifier($2.Compare() + "." + $3.Compare()),
+            AccountName: tree.Identifier($5.Compare()),
+            PubName: tree.Identifier($7.Compare()),
+        }
+    }
+|   DATABASE ident FROM ident PUBLICATION ident
+    {
+        spLevel := tree.SnapshotLevelType{
+            Level: tree.SNAPSHOTLEVELDATABASE,
+        }
+        $$ = tree.ObjectInfo{
+            SLevel: spLevel,
+            ObjName: tree.Identifier($2.Compare()),
+            AccountName: tree.Identifier($4.Compare()),
+            PubName: tree.Identifier($6.Compare()),
+        }
+    }
+|   ACCOUNT FROM ident PUBLICATION ident
+    {
+        spLevel := tree.SnapshotLevelType{
+            Level: tree.SNAPSHOTLEVELACCOUNT,
+        }
+        $$ = tree.ObjectInfo{
+            SLevel: spLevel,
+            AccountName: tree.Identifier($3.Compare()),
+            PubName: tree.Identifier($5.Compare()),
+        }
+    }
+|   ACCOUNT ident PUBLICATION ident
+    {
+        spLevel := tree.SnapshotLevelType{
+            Level: tree.SNAPSHOTLEVELPUBLICATION,
+        }
+        $$ = tree.ObjectInfo{
+            SLevel: spLevel,
+            AccountName: tree.Identifier($2.Compare()),
+            PubName: tree.Identifier($4.Compare()),
         }
     }
 

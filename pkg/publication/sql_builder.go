@@ -22,10 +22,11 @@ import (
 var PublicationSQLBuilder = publicationSQLBuilder{}
 
 const (
-	// Create snapshot SQL templates
-	PublicationCreateSnapshotForAccountSqlTemplate  = `CREATE SNAPSHOT%s %s FOR ACCOUNT%s`
-	PublicationCreateSnapshotForDatabaseSqlTemplate = `CREATE SNAPSHOT%s %s FOR DATABASE %s`
-	PublicationCreateSnapshotForTableSqlTemplate    = `CREATE SNAPSHOT%s %s FOR TABLE %s %s`
+	// Create snapshot SQL templates with publication support (for CCPR subscription)
+	// These templates use the publisher's account (授权账户) for snapshot creation
+	PublicationCreateSnapshotForAccountSqlTemplate  = `CREATE SNAPSHOT%s %s FOR ACCOUNT FROM %s PUBLICATION %s`
+	PublicationCreateSnapshotForDatabaseSqlTemplate = `CREATE SNAPSHOT%s %s FOR DATABASE %s FROM %s PUBLICATION %s`
+	PublicationCreateSnapshotForTableSqlTemplate    = `CREATE SNAPSHOT%s %s FOR TABLE %s %s FROM %s PUBLICATION %s`
 
 	// Query mo_catalog tables SQL templates
 	PublicationQueryMoTablesSqlTemplate = `SELECT ` +
@@ -348,38 +349,38 @@ type publicationSQLBuilder struct{}
 // Snapshot SQL
 // ------------------------------------------------------------------------------------------------
 
-// CreateSnapshotForAccountSQL creates SQL for creating snapshot for an account
-// If accountName is empty, creates snapshot for the current account
-// Example: CREATE SNAPSHOT sp1 FOR ACCOUNT
-// Example: CREATE SNAPSHOT sp1 FOR ACCOUNT acc01
-// Example: CREATE SNAPSHOT IF NOT EXISTS sp1 FOR ACCOUNT
+// CreateSnapshotForAccountSQL creates SQL for creating account-level snapshot with publication
+// This is used for CCPR subscription to create snapshot using the publisher's account (授权账户)
+// Example: CREATE SNAPSHOT sp1 FOR ACCOUNT FROM acc01 PUBLICATION pub01
+// Example: CREATE SNAPSHOT IF NOT EXISTS sp1 FOR ACCOUNT FROM acc01 PUBLICATION pub01
 func (b publicationSQLBuilder) CreateSnapshotForAccountSQL(
 	snapshotName string,
 	accountName string,
+	pubName string,
 	ifNotExists bool,
 ) string {
 	var ifNotExistsPart string
 	if ifNotExists {
 		ifNotExistsPart = " IF NOT EXISTS"
 	}
-	var accountPart string
-	if accountName != "" {
-		accountPart = " " + escapeSQLIdentifier(accountName)
-	}
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationCreateSnapshotForAccountSqlTemplate_Idx].SQL,
 		ifNotExistsPart,
 		escapeSQLIdentifier(snapshotName),
-		accountPart,
+		escapeSQLIdentifier(accountName),
+		escapeSQLIdentifier(pubName),
 	)
 }
 
-// CreateSnapshotForDatabaseSQL creates SQL for creating snapshot for a database
-// Example: CREATE SNAPSHOT sp1 FOR DATABASE db1
-// Example: CREATE SNAPSHOT IF NOT EXISTS sp1 FOR DATABASE db1
+// CreateSnapshotForDatabaseSQL creates SQL for creating database-level snapshot with publication
+// This is used for CCPR subscription to create snapshot using the publisher's account (授权账户)
+// Example: CREATE SNAPSHOT sp1 FOR DATABASE db1 FROM acc01 PUBLICATION pub01
+// Example: CREATE SNAPSHOT IF NOT EXISTS sp1 FOR DATABASE db1 FROM acc01 PUBLICATION pub01
 func (b publicationSQLBuilder) CreateSnapshotForDatabaseSQL(
 	snapshotName string,
 	dbName string,
+	accountName string,
+	pubName string,
 	ifNotExists bool,
 ) string {
 	var ifNotExistsPart string
@@ -391,16 +392,21 @@ func (b publicationSQLBuilder) CreateSnapshotForDatabaseSQL(
 		ifNotExistsPart,
 		escapeSQLIdentifier(snapshotName),
 		escapeSQLIdentifier(dbName),
+		escapeSQLIdentifier(accountName),
+		escapeSQLIdentifier(pubName),
 	)
 }
 
-// CreateSnapshotForTableSQL creates SQL for creating snapshot for a table
-// Example: CREATE SNAPSHOT sp1 FOR TABLE db1 t1
-// Example: CREATE SNAPSHOT IF NOT EXISTS sp1 FOR TABLE db1 t1
+// CreateSnapshotForTableSQL creates SQL for creating table-level snapshot with publication
+// This is used for CCPR subscription to create snapshot using the publisher's account (授权账户)
+// Example: CREATE SNAPSHOT sp1 FOR TABLE db1 t1 FROM acc01 PUBLICATION pub01
+// Example: CREATE SNAPSHOT IF NOT EXISTS sp1 FOR TABLE db1 t1 FROM acc01 PUBLICATION pub01
 func (b publicationSQLBuilder) CreateSnapshotForTableSQL(
 	snapshotName string,
 	dbName string,
 	tableName string,
+	accountName string,
+	pubName string,
 	ifNotExists bool,
 ) string {
 	var ifNotExistsPart string
@@ -413,6 +419,8 @@ func (b publicationSQLBuilder) CreateSnapshotForTableSQL(
 		escapeSQLIdentifier(snapshotName),
 		escapeSQLIdentifier(dbName),
 		escapeSQLIdentifier(tableName),
+		escapeSQLIdentifier(accountName),
+		escapeSQLIdentifier(pubName),
 	)
 }
 

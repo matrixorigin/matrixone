@@ -266,51 +266,54 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 			return err
 		}
 	case tree.SNAPSHOTLEVELACCOUNT:
-		snapshotForAccount = string(stmt.Object.ObjName)
-		if len(snapshotForAccount) == 0 {
-			snapshotForAccount = currentAccount
-		}
-		// check account exists or not and get accountId
-		getAccountIdFunc := func(accountName string) (accountId uint64, rtnErr error) {
-			var erArray []ExecResult
-			sql, rtnErr = getSqlForCheckTenant(ctx, accountName)
-			if rtnErr != nil {
-				return 0, rtnErr
-			}
-			bh.ClearExecResultSet()
-			rtnErr = bh.Exec(ctx, sql)
-			if rtnErr != nil {
-				return 0, rtnErr
-			}
+		pubAccountName := string(stmt.Object.AccountName)
+		pubName := string(stmt.Object.PubName)
+		// Query mo_pubs to get publication info and verify permission
+		systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+		queryPubSQL := fmt.Sprintf(`SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+				FROM mo_catalog.mo_pubs 
+				WHERE account_name = '%s' AND pub_name = '%s'`, pubAccountName, pubName)
 
-			erArray, rtnErr = getResultSet(ctx, bh)
-			if rtnErr != nil {
-				return 0, rtnErr
-			}
-
-			if execResultArrayHasData(erArray) {
-				for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-					accountId, rtnErr = erArray[0].GetUint64(ctx, i, 0)
-					if rtnErr != nil {
-						return 0, rtnErr
-					}
-				}
-			} else {
-				return 0, moerr.NewInternalErrorf(ctx, "account %s does not exist", accountName)
-			}
-			return accountId, rtnErr
+		bh.ClearExecResultSet()
+		err = bh.Exec(systemCtx, queryPubSQL)
+		if err != nil {
+			return moerr.NewInternalErrorf(ctx, "failed to query publication info: %v", err)
 		}
 
-		// if sys tenant create snapshots for other tenant, get the account id
-		// otherwise, get the account id from tenantInfo
-		if currentAccount == sysAccountName && currentAccount != snapshotForAccount {
-			objId, err = getAccountIdFunc(snapshotForAccount)
+		erArray, err := getResultSet(systemCtx, bh)
+		if err != nil {
+			return err
+		}
+
+		if !execResultArrayHasData(erArray) {
+			return moerr.NewInternalErrorf(ctx, "publication %s.%s does not exist", pubAccountName, pubName)
+		}
+
+		// Get publication info
+		var pubAccountId uint64
+		var accountList string
+		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+			pubAccountId, err = erArray[0].GetUint64(ctx, i, 0)
 			if err != nil {
 				return err
 			}
-		} else {
-			objId = uint64(tenantInfo.GetTenantID())
+			accountList, err = erArray[0].GetString(ctx, i, 6)
+			if err != nil {
+				return err
+			}
 		}
+
+		// Check if current account has permission to access this publication
+		pubInfo := &pubsub.PubInfo{
+			SubAccountsStr: accountList,
+		}
+		if !pubInfo.InSubAccounts(currentAccount) {
+			return moerr.NewInternalErrorf(ctx, "account %s does not have permission to access publication %s.%s", currentAccount, pubAccountName, pubName)
+		}
+
+		// Use publisher's account for snapshot
+		objId = pubAccountId
+		snapshotForAccount = pubAccountName
 
 		sql, err = getSqlForCreateSnapshot(
 			ctx,
@@ -332,53 +335,157 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 			return moerr.NewInternalError(ctx, fmt.Sprintf("can not create snapshot for system database %s", databaseName))
 		}
 
-		getDatabaseIdFunc := func(dbName string) (dbId uint64, rtnErr error) {
-			var erArray []ExecResult
-			sql, rtnErr = getSqlForCheckDatabase(ctx, dbName)
-			if rtnErr != nil {
-				return 0, rtnErr
-			}
+		pubAccountName := string(stmt.Object.AccountName)
+		pubName := string(stmt.Object.PubName)
+
+		// Check if this is a publication-based snapshot (FROM account PUBLICATION pub syntax)
+		if len(pubAccountName) > 0 && len(pubName) > 0 {
+			// Query mo_pubs to get publication info and verify permission
+			systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+			queryPubSQL := fmt.Sprintf(`SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+				FROM mo_catalog.mo_pubs 
+				WHERE account_name = '%s' AND pub_name = '%s'`, pubAccountName, pubName)
+
 			bh.ClearExecResultSet()
-			rtnErr = bh.Exec(ctx, sql)
-			if rtnErr != nil {
-				return 0, rtnErr
+			err = bh.Exec(systemCtx, queryPubSQL)
+			if err != nil {
+				return moerr.NewInternalErrorf(ctx, "failed to query publication info: %v", err)
 			}
 
-			erArray, rtnErr = getResultSet(ctx, bh)
-			if rtnErr != nil {
-				return 0, rtnErr
+			erArray, err := getResultSet(systemCtx, bh)
+			if err != nil {
+				return err
 			}
 
-			if execResultArrayHasData(erArray) {
-				for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-					dbId, rtnErr = erArray[0].GetUint64(ctx, i, 0)
-					if rtnErr != nil {
-						return 0, rtnErr
-					}
+			if !execResultArrayHasData(erArray) {
+				return moerr.NewInternalErrorf(ctx, "publication %s.%s does not exist", pubAccountName, pubName)
+			}
+
+			// Get publication info
+			var pubAccountId uint64
+			var accountList string
+			for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+				pubAccountId, err = erArray[0].GetUint64(ctx, i, 0)
+				if err != nil {
+					return err
 				}
-			} else {
-				return 0, moerr.NewInternalErrorf(ctx, "database %s does not exist", dbName)
+				accountList, err = erArray[0].GetString(ctx, i, 6)
+				if err != nil {
+					return err
+				}
 			}
-			return dbId, rtnErr
-		}
-		objId, err = getDatabaseIdFunc(databaseName)
-		if err != nil {
-			return err
-		}
 
-		sql, err = getSqlForCreateSnapshot(
-			ctx,
-			snapshotId,
-			snapshotName,
-			snapshotTS,
-			snapshotLevel.String(),
-			currentAccount,
-			databaseName,
-			"",
-			objId,
-		)
-		if err != nil {
-			return err
+			// Check if current account has permission to access this publication
+			pubInfo := &pubsub.PubInfo{
+				SubAccountsStr: accountList,
+			}
+			if !pubInfo.InSubAccounts(currentAccount) {
+				return moerr.NewInternalErrorf(ctx, "account %s does not have permission to access publication %s.%s", currentAccount, pubAccountName, pubName)
+			}
+
+			// Use publisher's account context to check database exists
+			publisherCtx := defines.AttachAccountId(ctx, uint32(pubAccountId))
+			getDatabaseIdFunc := func(dbName string) (dbId uint64, rtnErr error) {
+				var erArray []ExecResult
+				sql, rtnErr = getSqlForCheckDatabase(publisherCtx, dbName)
+				if rtnErr != nil {
+					return 0, rtnErr
+				}
+				bh.ClearExecResultSet()
+				rtnErr = bh.Exec(publisherCtx, sql)
+				if rtnErr != nil {
+					return 0, rtnErr
+				}
+
+				erArray, rtnErr = getResultSet(publisherCtx, bh)
+				if rtnErr != nil {
+					return 0, rtnErr
+				}
+
+				if execResultArrayHasData(erArray) {
+					for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+						dbId, rtnErr = erArray[0].GetUint64(publisherCtx, i, 0)
+						if rtnErr != nil {
+							return 0, rtnErr
+						}
+					}
+				} else {
+					return 0, moerr.NewInternalErrorf(ctx, "database %s does not exist", dbName)
+				}
+				return dbId, rtnErr
+			}
+			objId, err = getDatabaseIdFunc(databaseName)
+			if err != nil {
+				return err
+			}
+
+			// Use publisher's account for snapshot
+			snapshotForAccount = pubAccountName
+
+			sql, err = getSqlForCreateSnapshot(
+				ctx,
+				snapshotId,
+				snapshotName,
+				snapshotTS,
+				snapshotLevel.String(),
+				snapshotForAccount,
+				databaseName,
+				"",
+				objId,
+			)
+			if err != nil {
+				return err
+			}
+		} else {
+			// Original logic for non-publication snapshot
+			getDatabaseIdFunc := func(dbName string) (dbId uint64, rtnErr error) {
+				var erArray []ExecResult
+				sql, rtnErr = getSqlForCheckDatabase(ctx, dbName)
+				if rtnErr != nil {
+					return 0, rtnErr
+				}
+				bh.ClearExecResultSet()
+				rtnErr = bh.Exec(ctx, sql)
+				if rtnErr != nil {
+					return 0, rtnErr
+				}
+
+				erArray, rtnErr = getResultSet(ctx, bh)
+				if rtnErr != nil {
+					return 0, rtnErr
+				}
+
+				if execResultArrayHasData(erArray) {
+					for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+						dbId, rtnErr = erArray[0].GetUint64(ctx, i, 0)
+						if rtnErr != nil {
+							return 0, rtnErr
+						}
+					}
+				} else {
+					return 0, moerr.NewInternalErrorf(ctx, "database %s does not exist", dbName)
+				}
+				return dbId, rtnErr
+			}
+			objId, err = getDatabaseIdFunc(databaseName)
+			if err != nil {
+				return err
+			}
+
+			sql, err = getSqlForCreateSnapshot(
+				ctx,
+				snapshotId,
+				snapshotName,
+				snapshotTS,
+				snapshotLevel.String(),
+				currentAccount,
+				databaseName,
+				"",
+				objId,
+			)
+			if err != nil {
+				return err
+			}
 		}
 
 	case tree.SNAPSHOTLEVELTABLE:
@@ -396,49 +503,221 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 			return moerr.NewInternalError(ctx, fmt.Sprintf("can not create pitr for system table %s.%s", databaseName, tableName))
 		}
 
-		getTableIdFunc := func(dbName, tblName string) (tblId uint64, rtnErr error) {
-			var erArray []ExecResult
-			sql, rtnErr = getSqlForCheckDatabaseTable(ctx, dbName, tblName)
-			if rtnErr != nil {
-				return 0, rtnErr
-			}
+		pubAccountName := string(stmt.Object.AccountName)
+		pubName := string(stmt.Object.PubName)
+
+		// Check if this is a publication-based snapshot (FROM account PUBLICATION pub syntax)
+		if len(pubAccountName) > 0 && len(pubName) > 0 {
+			// Query mo_pubs to get publication info and verify permission
+			systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+			queryPubSQL := fmt.Sprintf(`SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+				FROM mo_catalog.mo_pubs 
+				WHERE account_name = '%s' AND pub_name = '%s'`, pubAccountName, pubName)
+
 			bh.ClearExecResultSet()
-			rtnErr = bh.Exec(ctx, sql)
-			if rtnErr != nil {
-				return 0, rtnErr
+			err = bh.Exec(systemCtx, queryPubSQL)
+			if err != nil {
+				return moerr.NewInternalErrorf(ctx, "failed to query publication info: %v", err)
 			}
 
-			erArray, rtnErr = getResultSet(ctx, bh)
-			if rtnErr != nil {
-				return 0, rtnErr
+			erArray, err := getResultSet(systemCtx, bh)
+			if err != nil {
+				return err
 			}
 
-			if execResultArrayHasData(erArray) {
-				for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-					tblId, rtnErr = erArray[0].GetUint64(ctx, i, 0)
-					if rtnErr != nil {
-						return 0, rtnErr
-					}
+			if !execResultArrayHasData(erArray) {
+				return moerr.NewInternalErrorf(ctx, "publication %s.%s does not exist", pubAccountName, pubName)
+			}
+
+			// Get publication info
+			var pubAccountId uint64
+			var accountList string
+			for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+				pubAccountId, err = erArray[0].GetUint64(ctx, i, 0)
+				if err != nil {
+					return err
 				}
-			} else {
-				return 0, moerr.NewInternalErrorf(ctx, "table %s.%s does not exist", dbName, tblName)
+				accountList, err = erArray[0].GetString(ctx, i, 6)
+				if err != nil {
+					return err
+				}
 			}
-			return tblId, rtnErr
+
+			// Check if current account has permission to access this publication
+			pubInfo := &pubsub.PubInfo{
+				SubAccountsStr: accountList,
+			}
+			if !pubInfo.InSubAccounts(currentAccount) {
+				return moerr.NewInternalErrorf(ctx, "account %s does not have permission to access publication %s.%s", currentAccount, pubAccountName, pubName)
+			}
+
+			// Use publisher's account context to check table exists
+			publisherCtx := defines.AttachAccountId(ctx, uint32(pubAccountId))
+			getTableIdFunc := func(dbName, tblName string) (tblId uint64, rtnErr error) {
+				var erArray []ExecResult
+				sql, rtnErr = getSqlForCheckDatabaseTable(publisherCtx, dbName, tblName)
+				if rtnErr != nil {
+					return 0, rtnErr
+				}
+				bh.ClearExecResultSet()
+				rtnErr = bh.Exec(publisherCtx, sql)
+				if rtnErr != nil {
+					return 0, rtnErr
+				}
+
+				erArray, rtnErr = getResultSet(publisherCtx, bh)
+				if rtnErr != nil {
+					return 0, rtnErr
+				}
+
+				if execResultArrayHasData(erArray) {
+					for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+						tblId, rtnErr = erArray[0].GetUint64(publisherCtx, i, 0)
+						if rtnErr != nil {
+							return 0, rtnErr
+						}
+					}
+				} else {
+					return 0, moerr.NewInternalErrorf(ctx, "table %s.%s does not exist", dbName, tblName)
+				}
+				return tblId, rtnErr
+			}
+			objId, err = getTableIdFunc(databaseName, tableName)
+			if err != nil {
+				return err
+			}
+
+			// Use publisher's account for snapshot
+			snapshotForAccount = pubAccountName
+
+			sql, err = getSqlForCreateSnapshot(
+				ctx,
+				snapshotId,
+				snapshotName,
+				snapshotTS,
+				snapshotLevel.String(),
+				snapshotForAccount,
+				databaseName,
+				tableName,
+				objId,
+			)
+			if err != nil {
+				return err
+			}
+		} else {
+			// Original logic for non-publication snapshot
+			getTableIdFunc := func(dbName, tblName string) (tblId uint64, rtnErr error) {
+				var erArray []ExecResult
+				sql, rtnErr = getSqlForCheckDatabaseTable(ctx, dbName, tblName)
+				if rtnErr != nil {
+					return 0, rtnErr
+				}
+				bh.ClearExecResultSet()
+				rtnErr = bh.Exec(ctx, sql)
+				if rtnErr != nil {
+					return 0, rtnErr
+				}
+
+				erArray, rtnErr = getResultSet(ctx, bh)
+				if rtnErr != nil {
+					return 0, rtnErr
+				}
+
+				if execResultArrayHasData(erArray) {
+					for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+						tblId, rtnErr = erArray[0].GetUint64(ctx, i, 0)
+						if rtnErr != nil {
+							return 0, rtnErr
+						}
+					}
+				} else {
+					return 0, moerr.NewInternalErrorf(ctx, "table %s.%s does not exist", dbName, tblName)
+				}
+				return tblId, rtnErr
+			}
+			objId, err = getTableIdFunc(databaseName, tableName)
+			if err != nil {
+				return err
+			}
+
+			sql, err = getSqlForCreateSnapshot(
+				ctx,
+				snapshotId,
+				snapshotName,
+				snapshotTS,
+				snapshotLevel.String(),
+				currentAccount,
+				databaseName,
+				tableName,
+				objId,
+			)
+			if err != nil {
+				return err
+			}
 		}
-		objId, err = getTableIdFunc(databaseName, tableName)
+	case tree.SNAPSHOTLEVELPUBLICATION:
+		// For publication level snapshot:
+		// 1. Query mo_pubs to get publication info and verify permission
+		// 2. Use the publisher's account (授权账户) instead of subscriber's account (被授权账户)
+		pubAccountName := string(stmt.Object.AccountName)
+		pubName := string(stmt.Object.PubName)
+
+		// Query mo_pubs to get publication info
+		systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+		queryPubSQL := fmt.Sprintf(`SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			FROM mo_catalog.mo_pubs 
+			WHERE account_name = '%s' AND pub_name = '%s'`, pubAccountName, pubName)
+
+		bh.ClearExecResultSet()
+		err = bh.Exec(systemCtx, queryPubSQL)
+		if err != nil {
+			return moerr.NewInternalErrorf(ctx, "failed to query publication info: %v", err)
+		}
+
+		erArray, err := getResultSet(systemCtx, bh)
 		if err != nil {
 			return err
 		}
+
+		if !execResultArrayHasData(erArray) {
+			return moerr.NewInternalErrorf(ctx, "publication %s.%s does not exist", pubAccountName, pubName)
+		}
+
+		// Get publication info
+		var pubAccountId uint64
+		var accountList string
+		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+			pubAccountId, err = erArray[0].GetUint64(ctx, i, 0)
+			if err != nil {
+				return err
+			}
+			accountList, err = erArray[0].GetString(ctx, i, 6)
+			if err != nil {
+				return err
+			}
+		}
+
+		// Check if current account has permission to access this publication
+		pubInfo := &pubsub.PubInfo{
+			SubAccountsStr: accountList,
+		}
+		if !pubInfo.InSubAccounts(currentAccount) {
+			return moerr.NewInternalErrorf(ctx, "account %s does not have permission to access publication %s.%s", currentAccount, pubAccountName, pubName)
+		}
+
+		// Use the publisher's account ID (授权账户) for snapshot
+		objId = pubAccountId
+		snapshotForAccount = pubAccountName
 
 		sql, err = getSqlForCreateSnapshot(
 			ctx,
 			snapshotId,
 			snapshotName,
 			snapshotTS,
-			snapshotLevel.String(),
-			currentAccount,
-			databaseName,
-			tableName,
+			tree.SNAPSHOTLEVELACCOUNT.String(), // Store as account level in mo_snapshots
+			snapshotForAccount,
+			"",
+			"",
 			objId,
 		)
 		if err != nil {
@@ -474,6 +753,18 @@ func doCheckCreateSnapshotPriv(ctx context.Context, ses *Session, stmt *tree.Cre
 		}
 		if currentAccount != sysAccountName && currentAccount != snapshotForAccount {
 			return moerr.NewInternalError(ctx, "only sys tenant can create tenant level snapshot for other tenant")
+		}
+	case tree.SNAPSHOTLEVELPUBLICATION:
+		// For publication level snapshot, check if current account has permission to the publication
+		// The permission check is done in doCreateSnapshot where we query mo_pubs
+		// Here we just verify the basic parameters are provided
+		pubAccountName := string(stmt.Object.AccountName)
+		pubName := string(stmt.Object.PubName)
+		if len(pubAccountName) == 0 {
+			return moerr.NewInternalError(ctx, "account name is required for publication level snapshot")
+		}
+		if len(pubName) == 0 {
+			return moerr.NewInternalError(ctx, "publication name is required for publication level snapshot")
 		}
 	}
 	return err
