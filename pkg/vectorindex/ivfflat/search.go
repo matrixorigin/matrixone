@@ -447,7 +447,10 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 		defer bf.Free()
 
 		for _, c := range centroids_ids {
-			bf.Merge(idx.BloomFilters[c])
+			err = bf.Merge(idx.BloomFilters[c])
+			if err != nil {
+				return
+			}
 		}
 	}
 
