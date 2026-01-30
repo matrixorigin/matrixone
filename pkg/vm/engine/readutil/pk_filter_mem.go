@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -42,7 +43,9 @@ type MemPKFilter struct {
 		hit bool
 	}
 
-	filterHint engine.FilterHint
+	FilterHint engine.FilterHint
+	HasBF      bool
+	BFSeqNum   int16
 }
 
 func (f *MemPKFilter) Valid() bool {
@@ -232,7 +235,17 @@ func NewMemPKFilter(
 		return
 	}
 
-	filter.filterHint = filterHint
+	filter.FilterHint = filterHint
+	if filter.FilterHint.BF != nil && filter.FilterHint.BF.Valid() {
+		filter.HasBF = true
+		filter.BFSeqNum = -1
+		for _, col := range tableDef.Cols {
+			if col.Name == catalog.IndexTablePrimaryColName {
+				filter.BFSeqNum = int16(col.Seqnum)
+				break
+			}
+		}
+	}
 
 	return
 }
@@ -256,7 +269,7 @@ func (f *MemPKFilter) RecordExactHit() bool {
 }
 
 func (f *MemPKFilter) Must() bool {
-	return f.filterHint.Must
+	return f.FilterHint.Must
 }
 
 func (f *MemPKFilter) String() string {
