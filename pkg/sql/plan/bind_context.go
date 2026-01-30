@@ -458,7 +458,12 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 			col := exprImpl.ColName()
 			if expandAlias == AliasBeforeColumn {
 				if selectItem, ok := bc.aliasMap[col]; ok {
-					return selectItem.astExpr, nil
+					if selectItem.astExpr != nil {
+						return selectItem.astExpr, nil
+					}
+					// aliasMap entry exists but astExpr is nil (e.g., UNION context)
+					// Return the original expression unchanged - let the binder handle it
+					return astExpr, nil
 				}
 			}
 
@@ -474,7 +479,12 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 
 			if expandAlias == AliasAfterColumn {
 				if selectItem, ok := bc.aliasMap[col]; ok {
-					return selectItem.astExpr, nil
+					if selectItem.astExpr != nil {
+						return selectItem.astExpr, nil
+					}
+					// aliasMap entry exists but astExpr is nil (e.g., UNION context)
+					// Return the original expression unchanged - let the binder handle it
+					return astExpr, nil
 				}
 			}
 		}

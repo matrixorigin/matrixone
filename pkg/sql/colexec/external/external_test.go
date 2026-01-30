@@ -16,6 +16,7 @@ package external
 
 import (
 	"bytes"
+	"compress/zlib"
 	"context"
 	"encoding/json"
 	"io"
@@ -26,6 +27,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -172,6 +174,45 @@ func Test_Prepare(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestReadFileOffsetCompressedUnsafe(t *testing.T) {
+	fs := testutil.NewFS(t)
+	content := []byte("0,0,1,2,0,0,3,4,0,0,abc,2024-01-01,2024-01-01 00:00:01,2024-01-01 00:00:01,1,1.23,txt,aaa,bbb,ccc\n")
+	var buf bytes.Buffer
+	zw := zlib.NewWriter(&buf)
+	_, err := zw.Write(content)
+	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+
+	filePath := "etl:/test.csv.lz"
+	data := buf.Bytes()
+	vec := fileservice.IOVector{
+		FilePath: filePath,
+		Entries: []fileservice.IOEntry{
+			{
+				Offset:         0,
+				Size:           int64(len(data)),
+				ReaderForWrite: bytes.NewReader(data),
+			},
+		},
+	}
+	require.NoError(t, fs.Write(context.Background(), vec))
+
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Filepath:     filePath,
+			CompressType: tree.ZLIB,
+			ScanType:     tree.INFILE,
+		},
+		ExParam: tree.ExParam{
+			FileService: fs,
+			Ctx:         context.Background(),
+		},
+	}
+
+	_, err = ReadFileOffset(param, 2, int64(len(data)), nil)
+	require.Error(t, err)
 }
 
 func Test_Call(t *testing.T) {
@@ -527,21 +568,30 @@ func TestReadDirSymlink(t *testing.T) {
 
 	path1 := filepath.Join(root, "a", "b", "..", "b", "c", "foo")
 	t.Logf("Testing ReadDir with path containing '..': %s", path1)
-	files1, _, err := plan2.ReadDir(&tree.ExternParam{
-		ExParamConst: tree.ExParamConst{
-			Filepath: path1,
-		},
-		ExParam: tree.ExParam{
-			Ctx: ctx,
-		},
-	})
-	assert.Nil(t, err)
-	pathWant1 := filepath.Join(root, "a", "b", "c", "foo")
-	assert.Equal(t, 1, len(files1))
-	if len(files1) > 0 {
-		t.Logf("ReadDir with '..' returned: %s (expected: %s)", files1[0], pathWant1)
+	var files1 []string
+	var maxRetries2 = 3
+	for i := 0; i < maxRetries2; i++ {
+		files1, _, err = plan2.ReadDir(&tree.ExternParam{
+			ExParamConst: tree.ExParamConst{
+				Filepath: path1,
+			},
+			ExParam: tree.ExParam{
+				Ctx: ctx,
+			},
+		})
+		if err == nil {
+			break
+		}
+		if i < maxRetries2-1 {
+			t.Logf("ReadDir with '..' attempt %d failed: %v, retrying in 100ms...", i+1, err)
+			time.Sleep(100 * time.Millisecond)
+		}
 	}
-	assert.Equal(t, pathWant1, files1[0])
+	require.NoError(t, err)
+	pathWant1 := filepath.Join(root, "a", "b", "c", "foo")
+	require.Equal(t, 1, len(files1))
+	t.Logf("ReadDir with '..' returned: %s (expected: %s)", files1[0], pathWant1)
+	require.Equal(t, pathWant1, files1[0])
 
 	err = os.Remove(filepath.Join(root, "a", "b", "c", "foo"))
 	assert.Nil(t, err)
