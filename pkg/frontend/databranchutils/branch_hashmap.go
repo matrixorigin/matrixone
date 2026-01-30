@@ -55,6 +55,11 @@ type BranchHashmap interface {
 	// When removeAll is false, only a single row is removed. Returned rows are
 	// detached copies because the underlying entries have been removed.
 	PopByVectors(keyVecs []*vector.Vector, removeAll bool) ([]GetResult, error)
+	// PopByVectorsStream removes rows like PopByVectors but streams each matched
+	// row to the callback. The callback receives the original key row index plus
+	// the encoded key/value; the slices are detached copies and safe to keep.
+	// The returned integer counts removed rows.
+	PopByVectorsStream(keyVecs []*vector.Vector, removeAll bool, fn func(idx int, key []byte, row []byte) error) (int, error)
 	// PopByEncodedKey removes rows using a pre-encoded key such as one obtained
 	// from ForEachShardParallel. It mirrors PopByVectors semantics.
 	PopByEncodedKey(encodedKey []byte, removeAll bool) (GetResult, error)
@@ -463,6 +468,108 @@ func (bh *branchHashmap) GetByEncodedKey(encodedKey []byte) (GetResult, error) {
 
 func (bh *branchHashmap) PopByVectors(keyVecs []*vector.Vector, removeAll bool) ([]GetResult, error) {
 	return bh.lookupByVectors(keyVecs, &removeAll)
+}
+
+func (bh *branchHashmap) PopByVectorsStream(keyVecs []*vector.Vector, removeAll bool, fn func(idx int, key []byte, row []byte) error) (int, error) {
+	if len(keyVecs) == 0 {
+		return 0, nil
+	}
+
+	rowCount := keyVecs[0].Length()
+
+	bh.metaMu.RLock()
+	if bh.closed {
+		bh.metaMu.RUnlock()
+		return 0, moerr.NewInternalErrorNoCtx("branchHashmap is closed")
+	}
+	keyTypes := bh.keyTypes
+	shardCount := bh.shardCount
+	bh.metaMu.RUnlock()
+
+	if len(keyTypes) == 0 {
+		return 0, nil
+	}
+	if len(keyVecs) != len(keyTypes) {
+		return 0, moerr.NewInvalidInputNoCtxf("expected %d key vectors, got %d", len(keyTypes), len(keyVecs))
+	}
+	for i := 1; i < len(keyVecs); i++ {
+		if keyVecs[i].Length() != rowCount {
+			return 0, moerr.NewInvalidInputNoCtxf("key vector length mismatch at column %d", i)
+		}
+	}
+	for i, vec := range keyVecs {
+		if *vec.GetType() != keyTypes[i] {
+			return 0, moerr.NewInvalidInputNoCtxf("key vector type mismatch at column %d", i)
+		}
+	}
+
+	keyIndexes := make([]int, len(keyVecs))
+	for i := range keyVecs {
+		keyIndexes[i] = i
+	}
+
+	packer := bh.getPacker()
+	defer bh.putPacker(packer)
+	probesByShard := make(map[*hashShard][]*keyProbe, shardCount)
+	for idx := 0; idx < rowCount; idx++ {
+		packer.Reset()
+		if err := encodeRow(packer, keyVecs, keyIndexes, idx); err != nil {
+			return 0, err
+		}
+		keyBytes := packer.Bytes()
+		keyCopy := make([]byte, len(keyBytes))
+		copy(keyCopy, keyBytes)
+		hash := hashKey(keyCopy)
+		shard := bh.shards[int(hash%uint64(shardCount))]
+		probe := &keyProbe{
+			idx:    idx,
+			key:    keyCopy,
+			keyStr: string(keyCopy),
+			hash:   hash,
+			plan:   newRemovalPlan(removeAll),
+		}
+		probesByShard[shard] = append(probesByShard[shard], probe)
+	}
+
+	var totalRemoved int64
+	collectValues := fn != nil
+	for shard, probes := range probesByShard {
+		if shard == nil {
+			continue
+		}
+		shard.lock()
+		var removedTotal int64
+		for _, probe := range probes {
+			rows, removedBytes, removedCount := shard.mem.collect(probe.hash, probe.key, probe.plan, true, collectValues)
+			if removedBytes > 0 {
+				shard.memInUse -= removedBytes
+			}
+			if removedCount > 0 {
+				removedTotal += int64(removedCount)
+			}
+			if collectValues {
+				for _, row := range rows {
+					if err := fn(probe.idx, probe.key, row); err != nil {
+						shard.unlock()
+						return int(totalRemoved), err
+					}
+				}
+			}
+		}
+		if shard.spill != nil {
+			if err := collectSpillPopStream(shard, probes, removeAll, fn, &removedTotal, collectValues); err != nil {
+				shard.unlock()
+				return int(totalRemoved), err
+			}
+		}
+		if removedTotal > 0 {
+			atomic.AddInt64(&shard.items, -removedTotal)
+			totalRemoved += removedTotal
+		}
+		shard.unlock()
+	}
+
+	return int(totalRemoved), nil
 }
 
 func (bh *branchHashmap) lookupByVectors(keyVecs []*vector.Vector, removeAll *bool) ([]GetResult, error) {
@@ -2792,6 +2899,114 @@ func collectSpillPop(shard *hashShard, probes []*keyProbe, results []GetResult, 
 				payload := make([]byte, len(entryValue))
 				copy(payload, entryValue)
 				results[group.indices[group.next]].Rows = append(results[group.indices[group.next]].Rows, payload)
+				if !plan.hasRemaining() {
+					group.next++
+					remaining--
+					if remaining <= 0 {
+						return true, nil
+					}
+				}
+			}
+			return false, nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func collectSpillPopStream(shard *hashShard, probes []*keyProbe, removeAll bool, fn func(idx int, key []byte, row []byte) error, removedTotal *int64, collectValues bool) error {
+	buckets := make(map[uint32][]*keyProbe, len(probes))
+	seenKeys := map[string]struct{}{}
+	for _, probe := range probes {
+		if probe.plan == nil || !probe.plan.hasRemaining() {
+			continue
+		}
+		if removeAll {
+			if _, ok := seenKeys[probe.keyStr]; ok {
+				continue
+			}
+			seenKeys[probe.keyStr] = struct{}{}
+		}
+		bucketID := shard.spill.bucketID(probe.hash)
+		buckets[bucketID] = append(buckets[bucketID], probe)
+	}
+
+	var scratch []byte
+	for bucketID, bucketProbes := range buckets {
+		if len(bucketProbes) == 0 {
+			continue
+		}
+		shard.spill.stats.recordProbe(scanReasonPop, len(bucketProbes), 1)
+		groupsByHash := make(map[uint64]map[string]*probeGroup, len(bucketProbes))
+		remaining := 0
+		for _, probe := range bucketProbes {
+			groups, ok := groupsByHash[probe.hash]
+			if !ok {
+				groups = make(map[string]*probeGroup, 1)
+				groupsByHash[probe.hash] = groups
+			}
+			group, ok := groups[probe.keyStr]
+			if !ok {
+				group = &probeGroup{}
+				groups[probe.keyStr] = group
+			}
+			group.indices = append(group.indices, probe.idx)
+			group.plans = append(group.plans, probe.plan)
+			if !removeAll && probe.plan.hasRemaining() {
+				remaining++
+			}
+		}
+
+		err := shard.spill.scanBucket(bucketID, scanReasonPop, &scratch, func(entryHash uint64, entryKey []byte, entryValue []byte, rid uint64) (bool, error) {
+			groups := groupsByHash[entryHash]
+			if len(groups) == 0 {
+				return false, nil
+			}
+			group := groups[string(entryKey)]
+			if group == nil {
+				return false, nil
+			}
+			if removeAll {
+				plan := group.plans[0]
+				if plan.matchesValue(entryValue) && plan.take() {
+					shard.spill.buckets[bucketID].setTombstone(rid)
+					shard.spill.stats.recordMatch(len(entryValue), true)
+					if removedTotal != nil {
+						*removedTotal = *removedTotal + 1
+					}
+					if collectValues {
+						payload := make([]byte, len(entryValue))
+						copy(payload, entryValue)
+						if err := fn(group.indices[0], entryKey, payload); err != nil {
+							return true, err
+						}
+					}
+				}
+				return false, nil
+			}
+
+			for group.next < len(group.plans) && !group.plans[group.next].hasRemaining() {
+				group.next++
+			}
+			if group.next >= len(group.plans) {
+				return false, nil
+			}
+			plan := group.plans[group.next]
+			if plan.matchesValue(entryValue) && plan.take() {
+				shard.spill.buckets[bucketID].setTombstone(rid)
+				shard.spill.stats.recordMatch(len(entryValue), true)
+				if removedTotal != nil {
+					*removedTotal = *removedTotal + 1
+				}
+				if collectValues {
+					payload := make([]byte, len(entryValue))
+					copy(payload, entryValue)
+					if err := fn(group.indices[group.next], entryKey, payload); err != nil {
+						return true, err
+					}
+				}
 				if !plan.hasRemaining() {
 					group.next++
 					remaining--

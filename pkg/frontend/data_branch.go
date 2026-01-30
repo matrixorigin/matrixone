@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -71,61 +72,70 @@ const (
 	diffUpdate = "UPDATE"
 )
 
-const branchHashmapMemoryLimit = 500 * 200 * mpool.MB
+const dataBranchHashmapLimitRate = 0.8
 
 type branchHashmapAllocator struct {
-	upstream malloc.Allocator
-	max      uint64
-	inUse    atomic.Uint64
+	upstream  malloc.Allocator
+	throttler rscthrottler.RSCThrottler
 }
 
 type branchHashmapDeallocator struct {
-	upstream malloc.Deallocator
-	inUse    *atomic.Uint64
-	size     uint64
+	upstream  malloc.Deallocator
+	throttler rscthrottler.RSCThrottler
+	size      uint64
 }
 
-func newBranchHashmapAllocator(max uint64) *branchHashmapAllocator {
+func newBranchHashmapAllocator(limitRate float64) *branchHashmapAllocator {
+	throttler := rscthrottler.NewMemThrottler(
+		"DataBranchHashmap",
+		limitRate,
+		rscthrottler.WithAcquirePolicy(rscthrottler.AcquirePolicyForDataBranch),
+	)
 	return &branchHashmapAllocator{
-		upstream: malloc.GetDefault(nil),
-		max:      max,
+		upstream:  malloc.GetDefault(nil),
+		throttler: throttler,
 	}
 }
 
-func (a *branchHashmapAllocator) Allocate(size uint64, hints malloc.Hints) ([]byte, malloc.Deallocator, error) {
-	for {
-		cur := a.inUse.Load()
-		next := cur + size
-		if next > a.max {
-			// Treat limit as a spill signal, not an error.
-			return nil, nil, nil
-		}
-		if !a.inUse.CompareAndSwap(cur, next) {
-			continue
-		}
-		buf, dec, err := a.upstream.Allocate(size, hints)
-		if err != nil {
-			a.inUse.Add(^uint64(size - 1))
-			return nil, nil, err
-		}
-		if buf == nil {
-			a.inUse.Add(^uint64(size - 1))
-			return nil, nil, nil
-		}
-		return buf, &branchHashmapDeallocator{
-			upstream: dec,
-			inUse:    &a.inUse,
-			size:     size,
-		}, nil
+func (a *branchHashmapAllocator) Allocate(
+	size uint64,
+	hints malloc.Hints,
+) ([]byte, malloc.Deallocator, error) {
+
+	if size == 0 {
+		return nil, nil, nil
 	}
+	if a.throttler != nil {
+		if _, ok := a.throttler.Acquire(int64(size)); !ok {
+			return nil, nil, nil
+		}
+	}
+	buf, dec, err := a.upstream.Allocate(size, hints)
+	if err != nil {
+		if a.throttler != nil {
+			a.throttler.Release(int64(size))
+		}
+		return nil, nil, err
+	}
+	if buf == nil {
+		if a.throttler != nil {
+			a.throttler.Release(int64(size))
+		}
+		return nil, nil, nil
+	}
+	return buf, &branchHashmapDeallocator{
+		upstream:  dec,
+		throttler: a.throttler,
+		size:      size,
+	}, nil
 }
 
 func (d *branchHashmapDeallocator) Deallocate() {
 	if d.upstream != nil {
 		d.upstream.Deallocate()
 	}
-	if d.size > 0 && d.inUse != nil {
-		d.inUse.Add(^uint64(d.size - 1))
+	if d.throttler != nil && d.size > 0 {
+		d.throttler.Release(int64(d.size))
 	}
 }
 
@@ -3468,7 +3478,6 @@ func findDeleteAndUpdateBat(
 			tBat2           *batch.Batch
 			updateBat       *batch.Batch
 			updateDeleteBat *batch.Batch
-			checkRet        []databranchutils.GetResult
 		)
 
 		send := func(bwk batchWithKind) error {
@@ -3515,8 +3524,8 @@ func findDeleteAndUpdateBat(
 		// merge inserts and deletes on the tar
 		// this deletes is not on the lca
 		if tBat1.RowCount() > 0 {
-			if _, err2 = dataHashmap.PopByVectors(
-				[]*vector.Vector{tBat1.Vecs[0]}, false,
+			if _, err2 = dataHashmap.PopByVectorsStream(
+				[]*vector.Vector{tBat1.Vecs[0]}, false, nil,
 			); err2 != nil {
 				return err2
 			}
@@ -3526,14 +3535,11 @@ func findDeleteAndUpdateBat(
 		// find update
 		if dBat.RowCount() > 0 {
 			tBat2 = tblStuff.retPool.acquireRetBatch(tblStuff, false)
-			if checkRet, err2 = dataHashmap.PopByVectors(
+			seen := make([]bool, dBat.RowCount())
+			if _, err2 = dataHashmap.PopByVectorsStream(
 				[]*vector.Vector{dBat.Vecs[tblStuff.def.pkColIdx]}, false,
-			); err2 != nil {
-				return err2
-			}
-
-			for i, check := range checkRet {
-				if check.Exists {
+				func(idx int, _ []byte, row []byte) error {
+					seen[idx] = true
 					// delete on lca and insert into tar ==> update
 					if updateBat == nil {
 						updateBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
@@ -3542,12 +3548,12 @@ func findDeleteAndUpdateBat(
 						updateDeleteBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
 					}
 
-					if tuple, _, err2 = dataHashmap.DecodeRow(check.Rows[0]); err2 != nil {
+					if tuple, _, err2 = dataHashmap.DecodeRow(row); err2 != nil {
 						return err2
 					}
 
 					if expandUpdate {
-						if err2 = updateDeleteBat.UnionOne(dBat, int64(i), ses.proc.Mp()); err2 != nil {
+						if err2 = updateDeleteBat.UnionOne(dBat, int64(idx), ses.proc.Mp()); err2 != nil {
 							return err2
 						}
 					}
@@ -3555,12 +3561,19 @@ func findDeleteAndUpdateBat(
 					if err2 = appendTupleToBat(ses, updateBat, tuple, tblStuff); err2 != nil {
 						return err2
 					}
+					return nil
+				},
+			); err2 != nil {
+				return err2
+			}
 
-				} else {
-					// delete on lca
-					if err2 = tBat2.UnionOne(dBat, int64(i), ses.proc.Mp()); err2 != nil {
-						return err2
-					}
+			for i := 0; i < dBat.RowCount(); i++ {
+				if seen[i] {
+					continue
+				}
+				// delete on lca
+				if err2 = tBat2.UnionOne(dBat, int64(i), ses.proc.Mp()); err2 != nil {
+					return err2
 				}
 			}
 
@@ -3609,7 +3622,7 @@ func findDeleteAndUpdateBat(
 
 		return nil
 
-	}, -1); err != nil {
+	}, 2); err != nil {
 		return
 	}
 
@@ -4353,8 +4366,7 @@ func buildHashmapForTable(
 		}
 	}()
 
-	// Share one bounded allocator so both hashmaps spill instead of erroring.
-	sharedAllocator := newBranchHashmapAllocator(branchHashmapMemoryLimit)
+	sharedAllocator := newBranchHashmapAllocator(dataBranchHashmapLimitRate)
 	if dataHashmap, err = databranchutils.NewBranchHashmap(
 		databranchutils.WithBranchHashmapAllocator(sharedAllocator),
 	); err != nil {
