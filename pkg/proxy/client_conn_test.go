@@ -749,9 +749,8 @@ func TestHandleSetVar(t *testing.T) {
 
 // testTimeoutRouter is a router that simulates timeout errors for all CN servers.
 type testTimeoutRouter struct {
-	servers    []*CNServer
-	callCount  int
-	maxRetries int
+	servers   []*CNServer
+	callCount int
 }
 
 func (r *testTimeoutRouter) Route(ctx context.Context, sid string, client clientInfo, filter func(string) bool) (*CNServer, error) {
@@ -794,7 +793,6 @@ func TestBuildConnWithServer_AllCNServersBusy(t *testing.T) {
 			{uuid: "cn1", addr: "127.0.0.1:6001"},
 			{uuid: "cn2", addr: "127.0.0.1:6002"},
 		},
-		maxRetries: 2,
 	}
 
 	// Create a mock connection for RawConn()
