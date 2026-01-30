@@ -1100,9 +1100,7 @@ func collectTableStats(
 
 		meta := objMeta.MustDataMeta()
 		sampledObjectCount++
-		info.BlockNumber += int64(objBlkCnt)
 		objectRowCount := meta.BlockHeader().Rows()
-		info.TableRowCount += float64(objectRowCount)
 		sampledRowCount += float64(objectRowCount)
 
 		if !init {
@@ -1268,10 +1266,6 @@ func collectTableStats(
 			// NDV: scale up by inverse of sampling ratio, cap at row count
 			upper := info.TableRowCount * 0.99
 			info.ColumnNDVs[i] = math.Min(info.ColumnNDVs[i]*rowScaleFactor, upper)
-			info.MaxNDVs[i] = math.Min(info.MaxNDVs[i]*rowScaleFactor, upper)
-			// Keep NDVinMax/MinObject as sampled (do not scale), so the rate
-			// calculations in AdjustNDV stay consistent with sampled
-			// MaxObjectRowCount/MinObjectRowCount.
 		}
 	}
 
