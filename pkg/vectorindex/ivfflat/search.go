@@ -311,7 +311,7 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(sqlproc *sqlexec.SqlProcess, que
 
 	rtprobe := probe
 	if idx.Meta.CenterStats != nil {
-		rtprobe := probe * 2
+		rtprobe = probe * 2
 		if rtprobe > idxcfg.Ivfflat.Lists {
 			rtprobe = idxcfg.Ivfflat.Lists
 		}
