@@ -401,14 +401,14 @@ func (node DropPublication) TypeName() string { return "tree.DropPublication" }
 
 type DropCcprSubscription struct {
 	statementImpl
-	Name     Identifier
+	TaskID   string
 	IfExists bool
 }
 
-func NewDropCcprSubscription(ife bool, n Identifier) *DropCcprSubscription {
+func NewDropCcprSubscription(ife bool, taskID string) *DropCcprSubscription {
 	dropCcprSubscription := reuse.Alloc[DropCcprSubscription](nil)
 	dropCcprSubscription.IfExists = ife
-	dropCcprSubscription.Name = n
+	dropCcprSubscription.TaskID = taskID
 	return dropCcprSubscription
 }
 
@@ -417,8 +417,9 @@ func (node *DropCcprSubscription) Format(ctx *FmtCtx) {
 	if node.IfExists {
 		ctx.WriteString(" if exists")
 	}
-	ctx.WriteByte(' ')
-	node.Name.Format(ctx)
+	ctx.WriteString(" '")
+	ctx.WriteString(node.TaskID)
+	ctx.WriteByte('\'')
 }
 
 func (node *DropCcprSubscription) GetStatementType() string { return "Drop Ccpr Subscription" }
@@ -436,18 +437,19 @@ func (node DropCcprSubscription) TypeName() string { return "tree.DropCcprSubscr
 
 type ResumeCcprSubscription struct {
 	statementImpl
-	Name Identifier
+	TaskID string
 }
 
-func NewResumeCcprSubscription(n Identifier) *ResumeCcprSubscription {
+func NewResumeCcprSubscription(taskID string) *ResumeCcprSubscription {
 	resumeCcprSubscription := reuse.Alloc[ResumeCcprSubscription](nil)
-	resumeCcprSubscription.Name = n
+	resumeCcprSubscription.TaskID = taskID
 	return resumeCcprSubscription
 }
 
 func (node *ResumeCcprSubscription) Format(ctx *FmtCtx) {
-	ctx.WriteString("resume ccpr subscription ")
-	node.Name.Format(ctx)
+	ctx.WriteString("resume ccpr subscription '")
+	ctx.WriteString(node.TaskID)
+	ctx.WriteByte('\'')
 }
 
 func (node *ResumeCcprSubscription) GetStatementType() string { return "Resume Ccpr Subscription" }
@@ -465,18 +467,19 @@ func (node ResumeCcprSubscription) TypeName() string { return "tree.ResumeCcprSu
 
 type PauseCcprSubscription struct {
 	statementImpl
-	Name Identifier
+	TaskID string
 }
 
-func NewPauseCcprSubscription(n Identifier) *PauseCcprSubscription {
+func NewPauseCcprSubscription(taskID string) *PauseCcprSubscription {
 	pauseCcprSubscription := reuse.Alloc[PauseCcprSubscription](nil)
-	pauseCcprSubscription.Name = n
+	pauseCcprSubscription.TaskID = taskID
 	return pauseCcprSubscription
 }
 
 func (node *PauseCcprSubscription) Format(ctx *FmtCtx) {
-	ctx.WriteString("pause ccpr subscription ")
-	node.Name.Format(ctx)
+	ctx.WriteString("pause ccpr subscription '")
+	ctx.WriteString(node.TaskID)
+	ctx.WriteByte('\'')
 }
 
 func (node *PauseCcprSubscription) GetStatementType() string { return "Pause Ccpr Subscription" }

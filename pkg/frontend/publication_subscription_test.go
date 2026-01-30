@@ -761,7 +761,7 @@ func Test_doDropCcprSubscription(t *testing.T) {
 		// update drop_at
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
-		dcs := tree.NewDropCcprSubscription(false, tree.Identifier("test_sub"))
+		dcs := tree.NewDropCcprSubscription(false, "550e8400-e29b-41d4-a716-446655440000")
 		err := doDropCcprSubscription(ctx, ses, dcs)
 		convey.So(err, convey.ShouldBeNil)
 	})
@@ -809,7 +809,7 @@ func Test_doDropCcprSubscription(t *testing.T) {
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return(mockedCountResult(ctrl))
 
-		dcs := tree.NewDropCcprSubscription(false, tree.Identifier("test_sub"))
+		dcs := tree.NewDropCcprSubscription(false, "550e8400-e29b-41d4-a716-446655440000")
 		err := doDropCcprSubscription(ctx, ses, dcs)
 		convey.So(err, convey.ShouldBeError)
 	})
@@ -857,7 +857,7 @@ func Test_doDropCcprSubscription(t *testing.T) {
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return(mockedCountResult(ctrl))
 
-		dcs := tree.NewDropCcprSubscription(true, tree.Identifier("test_sub"))
+		dcs := tree.NewDropCcprSubscription(true, "550e8400-e29b-41d4-a716-446655440000")
 		err := doDropCcprSubscription(ctx, ses, dcs)
 		convey.So(err, convey.ShouldBeNil)
 	})
@@ -909,7 +909,7 @@ func Test_doResumeCcprSubscription(t *testing.T) {
 		// update state
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
-		rcs := tree.NewResumeCcprSubscription(tree.Identifier("test_sub"))
+		rcs := tree.NewResumeCcprSubscription("550e8400-e29b-41d4-a716-446655440000")
 		err := doResumeCcprSubscription(ctx, ses, rcs)
 		convey.So(err, convey.ShouldBeNil)
 	})
@@ -957,7 +957,7 @@ func Test_doResumeCcprSubscription(t *testing.T) {
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return(mockedCountResult(ctrl))
 
-		rcs := tree.NewResumeCcprSubscription(tree.Identifier("test_sub"))
+		rcs := tree.NewResumeCcprSubscription("550e8400-e29b-41d4-a716-446655440000")
 		err := doResumeCcprSubscription(ctx, ses, rcs)
 		convey.So(err, convey.ShouldBeError)
 	})
@@ -1009,7 +1009,7 @@ func Test_doPauseCcprSubscription(t *testing.T) {
 		// update state
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
-		pcs := tree.NewPauseCcprSubscription(tree.Identifier("test_sub"))
+		pcs := tree.NewPauseCcprSubscription("550e8400-e29b-41d4-a716-446655440000")
 		err := doPauseCcprSubscription(ctx, ses, pcs)
 		convey.So(err, convey.ShouldBeNil)
 	})
@@ -1057,7 +1057,7 @@ func Test_doPauseCcprSubscription(t *testing.T) {
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return(mockedCountResult(ctrl))
 
-		pcs := tree.NewPauseCcprSubscription(tree.Identifier("test_sub"))
+		pcs := tree.NewPauseCcprSubscription("550e8400-e29b-41d4-a716-446655440000")
 		err := doPauseCcprSubscription(ctx, ses, pcs)
 		convey.So(err, convey.ShouldBeError)
 	})

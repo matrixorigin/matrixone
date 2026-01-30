@@ -7435,25 +7435,25 @@ drop_publication_stmt:
     }
 
 drop_ccpr_subscription_stmt:
-    DROP CCPR SUBSCRIPTION exists_opt ident
+    DROP CCPR SUBSCRIPTION exists_opt STRING
     {
         var ifExists = $4
-        var name = tree.Identifier($5.Compare())
-        $$ = tree.NewDropCcprSubscription(ifExists, name)
+        var taskID = $5
+        $$ = tree.NewDropCcprSubscription(ifExists, taskID)
     }
 
 resume_ccpr_subscription_stmt:
-    RESUME CCPR SUBSCRIPTION ident
+    RESUME CCPR SUBSCRIPTION STRING
     {
-        var name = tree.Identifier($4.Compare())
-        $$ = tree.NewResumeCcprSubscription(name)
+        var taskID = $4
+        $$ = tree.NewResumeCcprSubscription(taskID)
     }
 
 pause_ccpr_subscription_stmt:
-    PAUSE CCPR SUBSCRIPTION ident
+    PAUSE CCPR SUBSCRIPTION STRING
     {
-        var name = tree.Identifier($4.Compare())
-        $$ = tree.NewPauseCcprSubscription(name)
+        var taskID = $4
+        $$ = tree.NewPauseCcprSubscription(taskID)
     }
 
 drop_stage_stmt:

@@ -20457,8 +20457,8 @@ yydefault:
 //line mysql_sql.y:7439
 		{
 			var ifExists = yyDollar[4].boolValUnion()
-			var name = tree.Identifier(yyDollar[5].cstrUnion().Compare())
-			yyLOCAL = tree.NewDropCcprSubscription(ifExists, name)
+			var taskID = yyDollar[5].str
+			yyLOCAL = tree.NewDropCcprSubscription(ifExists, taskID)
 		}
 		yyVAL.union = yyLOCAL
 	case 1150:
@@ -20466,8 +20466,8 @@ yydefault:
 		var yyLOCAL tree.Statement
 //line mysql_sql.y:7447
 		{
-			var name = tree.Identifier(yyDollar[4].cstrUnion().Compare())
-			yyLOCAL = tree.NewResumeCcprSubscription(name)
+			var taskID = yyDollar[4].str
+			yyLOCAL = tree.NewResumeCcprSubscription(taskID)
 		}
 		yyVAL.union = yyLOCAL
 	case 1151:
@@ -20475,8 +20475,8 @@ yydefault:
 		var yyLOCAL tree.Statement
 //line mysql_sql.y:7454
 		{
-			var name = tree.Identifier(yyDollar[4].cstrUnion().Compare())
-			yyLOCAL = tree.NewPauseCcprSubscription(name)
+			var taskID = yyDollar[4].str
+			yyLOCAL = tree.NewPauseCcprSubscription(taskID)
 		}
 		yyVAL.union = yyLOCAL
 	case 1152:

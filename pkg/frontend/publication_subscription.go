@@ -685,13 +685,13 @@ func doDropCcprSubscription(ctx context.Context, ses *Session, dcs *tree.DropCcp
 		err = finishTxn(ctx, bh, err)
 	}()
 
-	pubName := string(dcs.Name)
-	escapedPubName := strings.ReplaceAll(pubName, "'", "''")
+	taskID := dcs.TaskID
+	escapedTaskID := strings.ReplaceAll(taskID, "'", "''")
 
 	// Check if subscription exists
 	checkSQL := fmt.Sprintf(
-		"SELECT COUNT(1) FROM mo_catalog.mo_ccpr_log WHERE subscription_name = '%s' AND drop_at IS NULL",
-		escapedPubName,
+		"SELECT COUNT(1) FROM mo_catalog.mo_ccpr_log WHERE task_id = '%s' AND drop_at IS NULL",
+		escapedTaskID,
 	)
 	if accountId != catalog.System_Account {
 		checkSQL += fmt.Sprintf(" AND account_id = %d", accountId)
@@ -717,15 +717,15 @@ func doDropCcprSubscription(ctx context.Context, ses *Session, dcs *tree.DropCcp
 
 	if count == 0 {
 		if !dcs.IfExists {
-			return moerr.NewInternalErrorf(ctx, "subscription '%s' does not exist", pubName)
+			return moerr.NewInternalErrorf(ctx, "subscription with task_id '%s' does not exist", taskID)
 		}
 		return nil
 	}
 
 	// Update mo_ccpr_log to set drop_at = now()
 	updateSQL := fmt.Sprintf(
-		"UPDATE mo_catalog.mo_ccpr_log SET drop_at = now() WHERE subscription_name = '%s' AND drop_at IS NULL",
-		escapedPubName,
+		"UPDATE mo_catalog.mo_ccpr_log SET drop_at = now() WHERE task_id = '%s' AND drop_at IS NULL",
+		escapedTaskID,
 	)
 	if accountId != catalog.System_Account {
 		updateSQL += fmt.Sprintf(" AND account_id = %d", accountId)
@@ -757,13 +757,13 @@ func doResumeCcprSubscription(ctx context.Context, ses *Session, rcs *tree.Resum
 		err = finishTxn(ctx, bh, err)
 	}()
 
-	pubName := string(rcs.Name)
-	escapedPubName := strings.ReplaceAll(pubName, "'", "''")
+	taskID := rcs.TaskID
+	escapedTaskID := strings.ReplaceAll(taskID, "'", "''")
 
 	// Check if subscription exists
 	checkSQL := fmt.Sprintf(
-		"SELECT COUNT(1) FROM mo_catalog.mo_ccpr_log WHERE subscription_name = '%s' AND drop_at IS NULL",
-		escapedPubName,
+		"SELECT COUNT(1) FROM mo_catalog.mo_ccpr_log WHERE task_id = '%s' AND drop_at IS NULL",
+		escapedTaskID,
 	)
 	if accountId != catalog.System_Account {
 		checkSQL += fmt.Sprintf(" AND account_id = %d", accountId)
@@ -788,13 +788,13 @@ func doResumeCcprSubscription(ctx context.Context, ses *Session, rcs *tree.Resum
 	}
 
 	if count == 0 {
-		return moerr.NewInternalErrorf(ctx, "subscription '%s' does not exist", pubName)
+		return moerr.NewInternalErrorf(ctx, "subscription with task_id '%s' does not exist", taskID)
 	}
 
 	// Update mo_ccpr_log: set state to running (0)
 	updateSQL := fmt.Sprintf(
-		"UPDATE mo_catalog.mo_ccpr_log SET state = 0 WHERE subscription_name = '%s' AND drop_at IS NULL",
-		escapedPubName,
+		"UPDATE mo_catalog.mo_ccpr_log SET state = 0 WHERE task_id = '%s' AND drop_at IS NULL",
+		escapedTaskID,
 	)
 	if accountId != catalog.System_Account {
 		updateSQL += fmt.Sprintf(" AND account_id = %d", accountId)
@@ -826,13 +826,13 @@ func doPauseCcprSubscription(ctx context.Context, ses *Session, pcs *tree.PauseC
 		err = finishTxn(ctx, bh, err)
 	}()
 
-	pubName := string(pcs.Name)
-	escapedPubName := strings.ReplaceAll(pubName, "'", "''")
+	taskID := pcs.TaskID
+	escapedTaskID := strings.ReplaceAll(taskID, "'", "''")
 
 	// Check if subscription exists
 	checkSQL := fmt.Sprintf(
-		"SELECT COUNT(1) FROM mo_catalog.mo_ccpr_log WHERE subscription_name = '%s' AND drop_at IS NULL",
-		escapedPubName,
+		"SELECT COUNT(1) FROM mo_catalog.mo_ccpr_log WHERE task_id = '%s' AND drop_at IS NULL",
+		escapedTaskID,
 	)
 	if accountId != catalog.System_Account {
 		checkSQL += fmt.Sprintf(" AND account_id = %d", accountId)
@@ -857,13 +857,13 @@ func doPauseCcprSubscription(ctx context.Context, ses *Session, pcs *tree.PauseC
 	}
 
 	if count == 0 {
-		return moerr.NewInternalErrorf(ctx, "subscription '%s' does not exist", pubName)
+		return moerr.NewInternalErrorf(ctx, "subscription with task_id '%s' does not exist", taskID)
 	}
 
 	// Update mo_ccpr_log: set state to pause (2)
 	updateSQL := fmt.Sprintf(
-		"UPDATE mo_catalog.mo_ccpr_log SET state = 2 WHERE subscription_name = '%s' AND drop_at IS NULL",
-		escapedPubName,
+		"UPDATE mo_catalog.mo_ccpr_log SET state = 2 WHERE task_id = '%s' AND drop_at IS NULL",
+		escapedTaskID,
 	)
 	if accountId != catalog.System_Account {
 		updateSQL += fmt.Sprintf(" AND account_id = %d", accountId)
