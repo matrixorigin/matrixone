@@ -1025,7 +1025,6 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		if err != nil {
 			return nil, err
 		}
-
 		groupInfo := constructGroup(c.proc.Ctx, node, nodes[node.Children[0]], false, 0, c.proc)
 		defer groupInfo.Release()
 		anyDistinctAgg := groupInfo.AnyDistinctAgg()
@@ -4201,11 +4200,18 @@ func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
 				}
 				return nil, nil, nil
 			} else {
-				// Check if column is NOT NULL
+				if node.TableDef == nil {
+					return nil, nil, nil
+				}
 				colPos := int(col.Col.ColPos)
+				if colPos < 0 || colPos >= len(node.TableDef.Cols) {
+					return nil, nil, nil
+				}
+				// Check if column is NOT NULL
 				if node.TableDef.Cols[colPos].Typ.NotNullable {
-					// Rewrite COUNT(not_null_col) to STARCOUNT
+					// Rewrite COUNT(not_null_col) to STARCOUNT so runtime uses countStarExec
 					agg.F.Func.ObjName = "starcount"
+					agg.F.Func.Obj = function.EncodeOverloadID(function.STARCOUNT, 0)
 				} else {
 					columnMap[colPos] = int(node.TableDef.Cols[colPos].Seqnum)
 				}
@@ -4214,6 +4220,9 @@ func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
 			partialResults[i] = nil
 			col, ok := args.Expr.(*plan.Expr_Col)
 			if !ok {
+				return nil, nil, nil
+			}
+			if node.TableDef == nil {
 				return nil, nil, nil
 			}
 			columnMap[int(col.Col.ColPos)] = int(node.TableDef.Cols[int(col.Col.ColPos)].Seqnum)
