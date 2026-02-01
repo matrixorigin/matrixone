@@ -4195,7 +4195,9 @@ func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
 			col, ok := args.Expr.(*plan.Expr_Col)
 			if !ok {
 				if _, ok := args.Expr.(*plan.Expr_Lit); ok {
+					// COUNT(lit) e.g. count(1) from count(*): set ObjName+Obj so runtime uses countStarExec
 					agg.F.Func.ObjName = "starcount"
+					agg.F.Func.Obj = function.EncodeOverloadID(int32(function.STARCOUNT), 0)
 					return partialResults, partialResultTypes, columnMap
 				}
 				return nil, nil, nil
@@ -4211,7 +4213,7 @@ func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
 				if node.TableDef.Cols[colPos].Typ.NotNullable {
 					// Rewrite COUNT(not_null_col) to STARCOUNT so runtime uses countStarExec
 					agg.F.Func.ObjName = "starcount"
-					agg.F.Func.Obj = function.EncodeOverloadID(function.STARCOUNT, 0)
+					agg.F.Func.Obj = function.EncodeOverloadID(int32(function.STARCOUNT), 0)
 				} else {
 					columnMap[colPos] = int(node.TableDef.Cols[colPos].Seqnum)
 				}
