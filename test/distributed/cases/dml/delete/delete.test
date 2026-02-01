@@ -103,6 +103,7 @@ drop table if exists t1;
 create table t1(a int primary key);
 delete from t1;
 select * from t1;
+select count(*) from t1;
 
 drop table if exists t1;
 create table t1 (a char(20));
@@ -385,5 +386,6 @@ delete from repro_delete_error where a=1;
 select * from repro_delete_error;
 commit;
 select * from repro_delete_error;
+select count(*) from repro_delete_error;
 drop database if exists db1;
 drop database if exists db2;

@@ -125,6 +125,9 @@ create table t1(a int primary key);
 delete from t1;
 select * from t1;
 ➤ a[4,32,0]
+select count(*) from t1;
+➤ count(*)[-5,64,0]  𝄀
+0
 drop table if exists t1;
 create table t1 (a char(20));
 insert into t1 values ('heelo'), ('sub'), ('none'), (null);
@@ -543,5 +546,8 @@ select * from repro_delete_error;
 ➤ a[4,32,0]  𝄀
 2  𝄀
 3
+select count(*) from repro_delete_error;
+➤ count(*)[-5,64,0]  𝄀
+2
 drop database if exists db1;
 drop database if exists db2;
