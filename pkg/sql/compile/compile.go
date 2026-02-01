@@ -2093,11 +2093,6 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 		s.DataSource.Rel = rel
 	} else {
 		s.DataSource.Rel.Reset(txnOp)
-		// Reuse: clear StarCount cache so this run re-executes StarCount with new snapshot.
-		s.StarCountOnly = false
-		if mg := findMergeGroup(s.RootOp); mg != nil {
-			mg.PartialResults = nil
-		}
 		tblDef = s.DataSource.Rel.GetTableDef(ctx)
 	}
 

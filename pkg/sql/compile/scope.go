@@ -122,6 +122,12 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 		s.ScopeAnalyzer.Reset()
 	}
 
+	// Reset StarCount cache so next run re-executes StarCount with new snapshot.
+	s.StarCountOnly = false
+	if s.StarCountMergeGroup != nil {
+		s.StarCountMergeGroup.PartialResults = nil
+	}
+
 	return nil
 }
 
@@ -976,6 +982,7 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 				if mergeGroup != nil {
 					mergeGroup.PartialResults = partialResults
 					mergeGroup.PartialResultTypes = partialResultTypes
+					s.StarCountMergeGroup = mergeGroup
 				} else {
 					panic("can't find merge group operator for agg optimize!")
 				}
@@ -1044,16 +1051,23 @@ func findMergeGroup(op vm.Operator) *group.MergeGroup {
 	if op == nil {
 		return nil
 	}
+	base := op.GetOperatorBase()
+	if base == nil || base.NumChildren() == 0 {
+		return nil
+	}
 	if mergeGroup, ok := op.(*group.MergeGroup); ok {
-		child := op.GetOperatorBase().GetChildren(0)
+		child := base.GetChildren(0)
 		if _, ok = child.(*group.Group); ok {
-			child = child.GetOperatorBase().GetChildren(0)
-			if _, ok = child.(*table_scan.TableScan); ok {
-				return mergeGroup
+			childBase := child.GetOperatorBase()
+			if childBase != nil && childBase.NumChildren() > 0 {
+				child = childBase.GetChildren(0)
+				if _, ok = child.(*table_scan.TableScan); ok {
+					return mergeGroup
+				}
 			}
 		}
 	}
-	return findMergeGroup(op.GetOperatorBase().GetChildren(0))
+	return findMergeGroup(base.GetChildren(0))
 }
 
 func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
