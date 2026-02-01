@@ -1265,6 +1265,33 @@ func (p *PartitionState) CountRows(
 	return dataStats.Rows - tombstoneStats.Rows, nil
 }
 
+// EstimateCommittedTombstoneCount returns an estimated count of committed tombstone rows
+// by summing up the row counts from visible tombstone object metadata.
+// This is very lightweight (only reads metadata, no S3 I/O) and can be used to decide
+// whether to use StarCount optimization.
+//
+// Note: This is an upper bound estimate because:
+// - It includes duplicate rowids (not deduplicated)
+// - It includes tombstones pointing to invisible data objects
+// The actual count from CollectTombstoneStats will be lower after deduplication and visibility filtering.
+func (p *PartitionState) EstimateCommittedTombstoneCount(snapshot types.TS) int {
+	iter := p.tombstoneObjectsNameIndex.Iter()
+	defer iter.Release()
+
+	estimatedRows := 0
+	for ok := iter.First(); ok; ok = iter.Next() {
+		obj := iter.Item()
+		if obj.CreateTime.GT(&snapshot) {
+			continue
+		}
+		if !obj.DeleteTime.IsEmpty() && obj.DeleteTime.LE(&snapshot) {
+			continue
+		}
+		estimatedRows += int(obj.Rows())
+	}
+	return estimatedRows
+}
+
 // DataStats contains statistics for data objects and rows.
 type DataStats struct {
 	// Rows: exact count of visible data rows at snapshot

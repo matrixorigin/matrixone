@@ -175,6 +175,9 @@ type Scope struct {
 	IsTbFunc bool
 
 	HasPartialResults bool
+	// StarCountOnly: when true, aggOptimize took the single-starcount fast path.
+	// buildReaders should return EmptyReaders and no data should flow.
+	StarCountOnly bool
 
 	Plan *plan.Plan
 	// DataSource stores information about data source.

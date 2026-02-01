@@ -700,12 +700,15 @@ func (tbl *txnTable) StarCount(ctx context.Context) (uint64, error) {
 				return
 			}
 
-			// Persisted inserts have ObjectStats in column 1.
+			// Persisted inserts have ObjectStats in column 1 (one row per object; batch may have multiple objects).
 			// In-memory inserts have raw data rows.
 			if len(entry.bat.Attrs) >= 2 && entry.bat.Attrs[1] == catalog.ObjectMeta_ObjectStats {
-				var stats objectio.ObjectStats
-				stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(0))
-				uncommittedInserts += uint64(stats.Rows())
+				vec := entry.bat.Vecs[1]
+				for i := 0; i < vec.Length(); i++ {
+					var stats objectio.ObjectStats
+					stats.UnMarshal(vec.GetBytesAt(i))
+					uncommittedInserts += uint64(stats.Rows())
+				}
 			} else {
 				uncommittedInserts += uint64(entry.bat.RowCount())
 			}
@@ -726,6 +729,7 @@ func (tbl *txnTable) StarCount(ctx context.Context) (uint64, error) {
 	//    after transfer, both old (pointing to deleted objects) and new
 	//    (pointing to new objects) tombstone entries exist in workspace.
 	uncommittedDeletes := uint64(0)
+	inMemoryDeletes := uint64(0)
 	tbl.getTxn().ForEachTableWrites(
 		tbl.db.databaseId,
 		tbl.tableId,
@@ -738,7 +742,9 @@ func (tbl *txnTable) StarCount(ctx context.Context) (uint64, error) {
 			if entry.fileName == "" {
 				// In-memory tombstones: direct count without visibility check.
 				// Transfer updates rowids in-place, so all rowids point to visible objects.
-				uncommittedDeletes += uint64(entry.bat.RowCount())
+				count := uint64(entry.bat.RowCount())
+				uncommittedDeletes += count
+				inMemoryDeletes += count
 			}
 			// Persisted tombstones are handled separately below
 		})
@@ -774,7 +780,6 @@ func (tbl *txnTable) countUncommittedPersistedTombstones(
 	txnOffset int,
 ) (uint64, error) {
 	count := uint64(0)
-
 	var firstErr error
 	tbl.getTxn().ForEachTableWrites(
 		tbl.db.databaseId,
@@ -796,12 +801,12 @@ func (tbl *txnTable) countUncommittedPersistedTombstones(
 				var stats objectio.ObjectStats
 				stats.UnMarshal(entry.bat.Vecs[0].GetBytesAt(i))
 
-				objCount, err := tbl.countSingleTombstoneObject(ctx, part, snapshot, fs, stats)
+				objDeleteCount, err := tbl.countSingleTombstoneObject(ctx, part, snapshot, fs, stats)
 				if err != nil {
 					firstErr = err
 					return
 				}
-				count += objCount
+				count += objDeleteCount
 			}
 		})
 
@@ -868,6 +873,18 @@ func (tbl *txnTable) countSingleTombstoneObject(
 		}, stats)
 
 	return count, readErr
+}
+
+// EstimateCommittedTombstoneCount returns an estimated count of committed tombstone rows.
+// This is very lightweight (only reads metadata, no S3 I/O) and can be used to decide
+// whether to use StarCount optimization.
+func (tbl *txnTable) EstimateCommittedTombstoneCount(ctx context.Context) (int, error) {
+	part, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return 0, err
+	}
+	snapshot := tbl.db.op.SnapshotTS()
+	return part.EstimateCommittedTombstoneCount(types.TimestampToTS(snapshot)), nil
 }
 
 func (tbl *txnTable) getObjList(ctx context.Context, rangesParam engine.RangesParam) (data engine.RelData, err error) {
@@ -2183,8 +2200,9 @@ func (tbl *txnTable) BuildReaders(
 	//	return nil, moerr.NewInternalErrorNoCtx("orderBy only support one reader")
 	//}
 
-	//relData maybe is nil, indicate that only read data from memory.
-	if relData == nil || relData.DataCnt() == 0 {
+	// relData maybe is nil, indicate that only read data from memory.
+	// When relData is non-nil but DataCnt()==0, caller explicitly requests no blocks (e.g. StarCount optimization: only relation.StarCount() is used, no scan).
+	if relData == nil {
 		part, err := tbl.getPartitionState(ctx)
 		if err != nil {
 			return nil, err
@@ -2193,6 +2211,12 @@ func (tbl *txnTable) BuildReaders(
 		relData = readutil.NewBlockListRelationData(
 			1,
 			readutil.WithPartitionState(part))
+	} else if relData.DataCnt() == 0 {
+		// No blocks to read — return only EmptyReaders so no data flows.
+		for i := 0; i < num; i++ {
+			rds = append(rds, new(readutil.EmptyReader))
+		}
+		return rds, nil
 	}
 
 	blkCnt := relData.DataCnt()

@@ -348,6 +348,114 @@ func TestStarCountWithPersistedInserts(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// TestStarCountPersistedInsertsMultipleObjectStatsInOneBatch tests that StarCount
+// sums rows from all ObjectStats in a single persisted-insert batch, not just the first.
+// This covers the bug where one flush produced multiple S3 objects (multiple ObjectStats
+// in one workspace entry) and only the first was counted.
+//
+// Regression: if the bug is reintroduced (only reading entry.bat.Vecs[1].GetBytesAt(0)),
+// StarCount would return 100+10=110 instead of 100+10+20+30=160, and this assertion would fail.
+//
+// Stability: no rand/sleep/parallel; result depends only on controlled workspace state and
+// fixed row counts (100+10+20+30). Safe for CI.
+func TestStarCountPersistedInsertsMultipleObjectStatsInOneBatch(t *testing.T) {
+	catalog.SetupDefines("")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+
+	// Setup: Create database and table with 100 committed rows
+	txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	err = disttaeEngine.Engine.Create(ctx, "testdb", txn)
+	require.NoError(t, err)
+
+	db, err := disttaeEngine.Engine.Database(ctx, "testdb", txn)
+	require.NoError(t, err)
+
+	schema := catalog2.MockSchemaAll(3, -1)
+	schema.Name = "test_table"
+	defs, err := testutil.EngineTableDefBySchema(schema)
+	require.NoError(t, err)
+
+	err = db.Create(ctx, "test_table", defs)
+	require.NoError(t, err)
+
+	rel, err := db.Relation(ctx, "test_table", nil)
+	require.NoError(t, err)
+
+	bat := catalog2.MockBatch(schema, 100)
+	err = rel.Write(ctx, containers.ToCNBatch(bat))
+	require.NoError(t, err)
+
+	err = txn.Commit(ctx)
+	require.NoError(t, err)
+
+	// New txn: inject one persisted-insert entry with multiple ObjectStats in one batch
+	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	db, err = disttaeEngine.Engine.Database(ctx, "testdb", txn)
+	require.NoError(t, err)
+
+	rel, err = db.Relation(ctx, "test_table", nil)
+	require.NoError(t, err)
+
+	proc := rel.GetProcess().(*process.Process)
+	insertBat := colexec.AllocCNS3ResultBat(false, false)
+	defer insertBat.Clean(proc.Mp())
+
+	// One batch with 3 ObjectStats (10 + 20 + 30 = 60 rows total)
+	rowCounts := []uint32{10, 20, 30}
+	for _, cnt := range rowCounts {
+		objID := objectio.NewObjectid()
+		stats := objectio.NewObjectStatsWithObjectID(&objID, false, false, false)
+		require.NoError(t, objectio.SetObjectStatsRowCnt(stats, cnt))
+		require.NoError(t, vector.AppendBytes(insertBat.Vecs[1], stats.Marshal(), false, proc.Mp()))
+		require.NoError(t, vector.AppendBytes(insertBat.Vecs[0], []byte{}, false, proc.Mp()))
+	}
+	insertBat.SetRowCount(len(rowCounts))
+
+	dtxn := txn.GetWorkspace().(*disttae.Transaction)
+	require.NoError(t, dtxn.WriteFile(
+		disttae.INSERT,
+		catalog.System_Account,
+		rel.GetDBID(ctx),
+		rel.GetTableID(ctx),
+		"testdb",
+		"test_table",
+		"fake_multi_obj",
+		insertBat,
+		disttaeEngine.Engine.GetTNServices()[0],
+	))
+
+	// Guarantee workspace state: one persisted INSERT entry with exactly 3 ObjectStats in one batch.
+	dbID, tableID := rel.GetDBID(ctx), rel.GetTableID(ctx)
+	assertWorkspaceHasPersistedInsertWithMultipleObjectStats(t, txn, dbID, tableID, 3)
+
+	// StarCount must sum all 3 objects: 100 + 10 + 20 + 30 = 160.
+	// Bug would only count first ObjectStats -> 100+10=110.
+	count, err := rel.StarCount(ctx)
+	require.NoError(t, err)
+	t.Logf("StarCount with multiple ObjectStats in one batch: %d, expected: 160", count)
+	require.Equal(t, uint64(160), count, "StarCount must sum all ObjectStats in the batch (100+10+20+30=160); bug would return 110")
+
+	err = txn.Commit(ctx)
+	require.NoError(t, err)
+}
+
 // TestStarCountReadonlyLarge tests readonly transaction with large dataset
 func TestStarCountReadonlyLarge(t *testing.T) {
 	catalog.SetupDefines("")
@@ -644,6 +752,41 @@ func TestStarCountMixedInMemoryAndPersisted(t *testing.T) {
 
 	err = txn.Commit(ctx)
 	require.NoError(t, err)
+}
+
+// assertWorkspaceHasPersistedInsertWithMultipleObjectStats ensures the txn workspace
+// contains at least one persisted INSERT entry for the table whose batch has exactly
+// wantObjectStatsRows rows in Vecs[1] (ObjectStats). This guarantees the test scenario
+// that triggers the bug: one batch with multiple ObjectStats.
+func assertWorkspaceHasPersistedInsertWithMultipleObjectStats(
+	t *testing.T,
+	txn client.TxnOperator,
+	dbID, tableID uint64,
+	wantObjectStatsRows int,
+) {
+	dtxn, ok := txn.GetWorkspace().(*disttae.Transaction)
+	require.True(t, ok, "workspace must be *disttae.Transaction")
+	txnValue := reflect.ValueOf(dtxn).Elem()
+	writesField := txnValue.FieldByName("writes")
+	require.True(t, writesField.IsValid(), "writes field must exist")
+	writesLen := writesField.Len()
+
+	var found bool
+	dtxn.ForEachTableWrites(dbID, tableID, writesLen, func(entry disttae.Entry) {
+		if entry.Type() != disttae.INSERT || entry.FileName() == "" || entry.Bat() == nil {
+			return
+		}
+		bat := entry.Bat()
+		if len(bat.Attrs) < 2 || bat.Attrs[1] != catalog.ObjectMeta_ObjectStats {
+			return
+		}
+		if bat.Vecs[1].Length() == wantObjectStatsRows {
+			found = true
+		}
+	})
+	require.True(t, found,
+		"workspace must contain one persisted INSERT entry with exactly %d ObjectStats rows (Vecs[1].Length()=%d); this guarantees the bug scenario is exercised",
+		wantObjectStatsRows, wantObjectStatsRows)
 }
 
 // countWorkspaceWrites counts in-memory and persisted writes in the transaction workspace

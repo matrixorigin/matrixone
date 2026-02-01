@@ -613,7 +613,6 @@ func (mr *MockTxnOperatorMockRecorder) ExitRunSqlWithToken(token interface{}) *g
 }
 
 // Get mocks base method.
-
 func (m *MockTxnOperator) Get(key string) (any, bool) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Get", key)

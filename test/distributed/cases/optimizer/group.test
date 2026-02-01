@@ -4,10 +4,18 @@ use d1;
 drop table if exists t1;
 create table t1(c1 bigint primary key, c2 varchar(64) not null);
 insert into t1 select result, result%10 from generate_series(1,100000)g;
+select count(*) from t1;
+
 select sum(c1),c2 from t1 group by c2 order by c2;
 delete from t1 where c2=1;
+select count(*) from t1;
+
 insert into t1 select result, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' from generate_series(100001,200000)g;
+select count(*) from t1;
+
 insert into t1 select result, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' from generate_series(200001,300000)g;
+select count(*) from t1;
+
 select sum(c1),c2 from t1 group by c2 order by c2;
 drop table if exists t1;
 create table t1(c1 bigint, c2 varchar(64)) cluster by c1;
