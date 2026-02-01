@@ -102,6 +102,7 @@ const (
 	FPAnalyzeStmt
 	FPExplainStmt
 	FPInternalCmdFieldList
+	FPInternalCmdGetSnapshotTs
 	FPCreatePublication
 	FPAlterPublication
 	FPDropPublication
@@ -298,6 +299,8 @@ Disguise the COMMAND CMD_FIELD_LIST as sql query.
 const (
 	cmdFieldListSql           = "__++__internal_cmd_field_list"
 	cmdFieldListSqlLen        = len(cmdFieldListSql)
+	cmdGetSnapshotTsSql       = "__++__internal_get_snapshot_ts"
+	cmdGetSnapshotTsSqlLen    = len(cmdGetSnapshotTsSql)
 	cloudUserTag              = "cloud_user"
 	cloudNoUserTag            = "cloud_nonuser"
 	saveResultTag             = "save_result"
@@ -331,6 +334,34 @@ func (icfl *InternalCmdFieldList) StmtKind() tree.StmtKind {
 
 func (icfl *InternalCmdFieldList) GetStatementType() string { return "InternalCmd" }
 func (icfl *InternalCmdFieldList) GetQueryType() string     { return tree.QueryTypeDQL }
+
+var _ tree.Statement = &InternalCmdGetSnapshotTs{}
+
+// InternalCmdGetSnapshotTs the internal command to get snapshot ts by publication permission
+type InternalCmdGetSnapshotTs struct {
+	snapshotName    string
+	accountName     string
+	publicationName string
+}
+
+// Free implements tree.Statement.
+func (ic *InternalCmdGetSnapshotTs) Free() {
+}
+
+func (ic *InternalCmdGetSnapshotTs) String() string {
+	return makeGetSnapshotTsSql(ic.snapshotName, ic.accountName, ic.publicationName)
+}
+
+func (ic *InternalCmdGetSnapshotTs) Format(ctx *tree.FmtCtx) {
+	ctx.WriteString(makeGetSnapshotTsSql(ic.snapshotName, ic.accountName, ic.publicationName))
+}
+
+func (ic *InternalCmdGetSnapshotTs) StmtKind() tree.StmtKind {
+	return tree.MakeStmtKind(tree.OUTPUT_RESULT_ROW, tree.RESP_PREBUILD_RESULT_ROW, tree.EXEC_IN_FRONTEND)
+}
+
+func (ic *InternalCmdGetSnapshotTs) GetStatementType() string { return "InternalCmd" }
+func (ic *InternalCmdGetSnapshotTs) GetQueryType() string     { return tree.QueryTypeDQL }
 
 // ExecResult is the result interface of the execution
 type ExecResult interface {

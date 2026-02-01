@@ -818,7 +818,7 @@ func RequestUpstreamSnapshot(
 	iterationCtx.CurrentSnapshotName = snapshotName
 	ctxWithTimeout2, cancel2 := context.WithTimeout(ctx, time.Minute)
 	defer cancel2()
-	iterationCtx.CurrentSnapshotTS, err = querySnapshotTS(ctxWithTimeout2, iterationCtx.UpstreamExecutor, snapshotName)
+	iterationCtx.CurrentSnapshotTS, err = querySnapshotTS(ctxWithTimeout2, iterationCtx.UpstreamExecutor, snapshotName, iterationCtx.SubscriptionAccountName, iterationCtx.SubscriptionName)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to query current snapshot TS: %v", err)
 	}
@@ -827,7 +827,7 @@ func RequestUpstreamSnapshot(
 		iterationCtx.PrevSnapshotName = prevSnapshotName
 		ctxWithTimeout3, cancel3 := context.WithTimeout(ctx, time.Minute)
 		defer cancel3()
-		iterationCtx.PrevSnapshotTS, err = querySnapshotTS(ctxWithTimeout3, iterationCtx.UpstreamExecutor, prevSnapshotName)
+		iterationCtx.PrevSnapshotTS, err = querySnapshotTS(ctxWithTimeout3, iterationCtx.UpstreamExecutor, prevSnapshotName, iterationCtx.SubscriptionAccountName, iterationCtx.SubscriptionName)
 		if err != nil {
 			return moerr.NewInternalErrorf(ctx, "failed to query previous snapshot TS: %v", err)
 		}
@@ -835,8 +835,8 @@ func RequestUpstreamSnapshot(
 	return nil
 }
 
-func querySnapshotTS(ctx context.Context, upstreamExecutor SQLExecutor, snapshotName string) (types.TS, error) {
-	querySnapshotTsSQL := PublicationSQLBuilder.QuerySnapshotTsSQL(snapshotName)
+func querySnapshotTS(ctx context.Context, upstreamExecutor SQLExecutor, snapshotName, accountName, publicationName string) (types.TS, error) {
+	querySnapshotTsSQL := PublicationSQLBuilder.QuerySnapshotTsSQL(snapshotName, accountName, publicationName)
 	tsResult, cancel, err := upstreamExecutor.ExecSQL(ctx, nil, querySnapshotTsSQL, false, true, time.Minute)
 	if err != nil {
 		return types.TS{}, moerr.NewInternalErrorf(ctx, "failed to query snapshot TS: %v", err)

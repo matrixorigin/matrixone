@@ -162,7 +162,7 @@ func doCheckSnapshotFlushed(ctx context.Context, ses *Session, stmt *tree.CheckS
 		LogicalTime:  0,
 	})
 	// Mock result: always return true for now
-	result, err := checkSnapshotFlushedFunc(ctx, txn, types.BuildTS(record.ts, 0), de, record, fs)
+	result, err := checkSnapshotFlushedFunc(queryCtx, txn, types.BuildTS(record.ts, 0), de, record, fs)
 	if err != nil {
 		return err
 	}

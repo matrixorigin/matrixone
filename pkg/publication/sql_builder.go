@@ -120,11 +120,9 @@ const (
 		`FROM mo_catalog.mo_ccpr_log ` +
 		`WHERE task_id = '%s'`
 
-	// Query snapshot TS SQL template
-	PublicationQuerySnapshotTsSqlTemplate = `SELECT ` +
-		`ts ` +
-		`FROM mo_catalog.mo_snapshots ` +
-		`WHERE sname = '%s'`
+	// Query snapshot TS SQL template using internal command with publication permission check
+	// Format: __++__internal_get_snapshot_ts <snapshotName> <accountName> <publicationName>
+	PublicationQuerySnapshotTsSqlTemplate = `__++__internal_get_snapshot_ts %s %s %s`
 
 	// Check snapshot flushed SQL template
 	// Parameters: snapshot_name, account_name, publication_name
@@ -643,15 +641,21 @@ func (b publicationSQLBuilder) QueryMoCcprLogFullSQL(
 	)
 }
 
-// QuerySnapshotTsSQL creates SQL for querying snapshot TS by snapshot name
+// QuerySnapshotTsSQL creates SQL for querying snapshot TS by snapshot name with publication permission check
+// Uses internal command: __++__internal_get_snapshot_ts <snapshotName> <accountName> <publicationName>
+// This command checks if the current account has permission to access the publication,
+// then uses the authorized account to query mo_snapshots table
 // Returns ts (bigint)
-// Example: SELECT ts FROM mo_catalog.mo_snapshots WHERE sname = 'sp1'
 func (b publicationSQLBuilder) QuerySnapshotTsSQL(
 	snapshotName string,
+	accountName string,
+	publicationName string,
 ) string {
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationQuerySnapshotTsSqlTemplate_Idx].SQL,
 		escapeSQLString(snapshotName),
+		escapeSQLString(accountName),
+		escapeSQLString(publicationName),
 	)
 }
 

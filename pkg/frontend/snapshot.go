@@ -210,7 +210,6 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		}
 	}
 
-
 	pubAccountName := string(stmt.Object.AccountName)
 	pubName := string(stmt.Object.PubName)
 
@@ -2928,4 +2927,60 @@ func getAccountFromPublication(ctx context.Context, bh BackgroundExec, pubAccoun
 	}
 
 	return
+}
+
+// handleGetSnapshotTs handles the internal command getsnapshotts
+// It checks permission via publication and returns snapshot ts
+func handleGetSnapshotTs(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetSnapshotTs) error {
+	var err error
+	ctx := execCtx.reqCtx
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// Get current account name
+	currentAccount := ses.GetTenantInfo().GetTenant()
+
+	// Check permission via publication and get authorized account
+	accountID, _, err := getAccountFromPublication(ctx, bh, ic.accountName, ic.publicationName, currentAccount)
+	if err != nil {
+		return err
+	}
+
+	// Query mo_snapshots using the authorized account
+	snapshotCtx := defines.AttachAccountId(ctx, uint32(accountID))
+	sql := fmt.Sprintf("SELECT ts FROM mo_catalog.mo_snapshots WHERE sname = '%s'", ic.snapshotName)
+
+	bh.ClearExecResultSet()
+	if err = bh.Exec(snapshotCtx, sql); err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to query snapshot ts: %v", err)
+	}
+
+	erArray, err := getResultSet(snapshotCtx, bh)
+	if err != nil {
+		return err
+	}
+
+	if !execResultArrayHasData(erArray) {
+		return moerr.NewInternalErrorf(ctx, "snapshot %s does not exist", ic.snapshotName)
+	}
+
+	// Get the snapshot ts
+	snapshotTs, err := erArray[0].GetInt64(ctx, 0, 0)
+	if err != nil {
+		return err
+	}
+
+	// Build result set with single column "snapshotts"
+	col := new(MysqlColumn)
+	col.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	col.SetName("snapshotts")
+
+	mrs := ses.GetMysqlResultSet()
+	mrs.AddColumn(col)
+
+	row := make([]interface{}, 1)
+	row[0] = snapshotTs
+	mrs.AddRow(row)
+
+	return nil
 }

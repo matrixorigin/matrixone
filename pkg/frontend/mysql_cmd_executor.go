@@ -2248,6 +2248,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 
 	var stmts []tree.Statement = nil
 	var cmdFieldStmt *InternalCmdFieldList
+	var cmdGetSnapshotTsStmt *InternalCmdGetSnapshotTs
 	var err error
 	// if the input is an option ast, we should use it directly
 	if execCtx.input.getStmt() != nil {
@@ -2258,6 +2259,12 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 			return nil, err
 		}
 		stmts = append(stmts, cmdFieldStmt)
+	} else if isCmdGetSnapshotTsSql(execCtx.input.getSql()) {
+		cmdGetSnapshotTsStmt, err = parseCmdGetSnapshotTs(execCtx.reqCtx, execCtx.input.getSql())
+		if err != nil {
+			return nil, err
+		}
+		stmts = append(stmts, cmdGetSnapshotTsStmt)
 	} else {
 		stmts, err = parseSql(execCtx, ses.GetMySQLParser())
 		if err != nil {

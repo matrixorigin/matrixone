@@ -183,6 +183,12 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleCmdFieldList(ses, execCtx, st); err != nil {
 			return
 		}
+	case *InternalCmdGetSnapshotTs:
+		ses.EnterFPrint(FPInternalCmdGetSnapshotTs)
+		defer ses.ExitFPrint(FPInternalCmdGetSnapshotTs)
+		if err = handleGetSnapshotTs(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.CreatePublication:
 		ses.EnterFPrint(FPCreatePublication)
 		defer ses.ExitFPrint(FPCreatePublication)

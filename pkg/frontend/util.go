@@ -531,6 +531,38 @@ func parseCmdFieldList(ctx context.Context, sql string) (*InternalCmdFieldList, 
 	return &InternalCmdFieldList{tableName: tableName}, nil
 }
 
+// isCmdGetSnapshotTsSql checks the sql is the cmdGetSnapshotTsSql or not.
+func isCmdGetSnapshotTsSql(sql string) bool {
+	if len(sql) < cmdGetSnapshotTsSqlLen {
+		return false
+	}
+	prefix := sql[:cmdGetSnapshotTsSqlLen]
+	return strings.Compare(strings.ToLower(prefix), cmdGetSnapshotTsSql) == 0
+}
+
+// makeGetSnapshotTsSql makes the internal getsnapshotts sql
+func makeGetSnapshotTsSql(snapshotName, accountName, publicationName string) string {
+	return fmt.Sprintf("%s %s %s %s", cmdGetSnapshotTsSql, snapshotName, accountName, publicationName)
+}
+
+// parseCmdGetSnapshotTs parses the internal cmd getsnapshotts
+// format: getsnapshotts <snapshotName> <accountName> <publicationName>
+func parseCmdGetSnapshotTs(ctx context.Context, sql string) (*InternalCmdGetSnapshotTs, error) {
+	if !isCmdGetSnapshotTsSql(sql) {
+		return nil, moerr.NewInternalError(ctx, "it is not the GET_SNAPSHOT_TS command")
+	}
+	params := strings.TrimSpace(sql[cmdGetSnapshotTsSqlLen:])
+	parts := strings.Fields(params)
+	if len(parts) != 3 {
+		return nil, moerr.NewInternalError(ctx, "invalid getsnapshotts command format, expected: getsnapshotts <snapshotName> <accountName> <publicationName>")
+	}
+	return &InternalCmdGetSnapshotTs{
+		snapshotName:    parts[0],
+		accountName:     parts[1],
+		publicationName: parts[2],
+	}, nil
+}
+
 func getVariableValue(varDefault interface{}) string {
 	switch val := varDefault.(type) {
 	case int64:
