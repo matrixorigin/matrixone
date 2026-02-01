@@ -206,7 +206,6 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	if c.proc.GetTxnOperator() != nil {
 		c.proc.GetTxnOperator().GetWorkspace().UpdateSnapshotWriteOffset()
 		c.TxnOffset = c.proc.GetTxnOperator().GetWorkspace().GetSnapshotWriteOffset()
-
 		// all scopes should update the txn offset, or the reader will receive a 0 txnOffset,
 		// that cause a dml statement can not see the previous statements' operations.
 		if len(c.scopes) > 0 {
@@ -2094,6 +2093,11 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 		s.DataSource.Rel = rel
 	} else {
 		s.DataSource.Rel.Reset(txnOp)
+		// Reuse: clear StarCount cache so this run re-executes StarCount with new snapshot.
+		s.StarCountOnly = false
+		if mg := findMergeGroup(s.RootOp); mg != nil {
+			mg.PartialResults = nil
+		}
 		tblDef = s.DataSource.Rel.GetTableDef(ctx)
 	}
 
