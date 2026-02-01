@@ -2984,3 +2984,82 @@ func handleGetSnapshotTs(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetSnap
 
 	return nil
 }
+
+// handleGetDatabases handles the internal command getdatabases
+// It checks permission via publication and returns database names covered by the snapshot
+func handleGetDatabases(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetDatabases) error {
+	var err error
+	ctx := execCtx.reqCtx
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// Get current account name
+	currentAccount := ses.GetTenantInfo().GetTenant()
+
+	// Check permission via publication and get authorized account
+	accountID, _, err := getAccountFromPublication(ctx, bh, ic.accountName, ic.publicationName, currentAccount)
+	if err != nil {
+		return err
+	}
+
+	// Query mo_snapshots to get snapshot ts using the authorized account
+	snapshotCtx := defines.AttachAccountId(ctx, uint32(accountID))
+	snapshotSql := fmt.Sprintf("SELECT ts FROM mo_catalog.mo_snapshots WHERE sname = '%s'", ic.snapshotName)
+
+	bh.ClearExecResultSet()
+	if err = bh.Exec(snapshotCtx, snapshotSql); err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to query snapshot ts: %v", err)
+	}
+
+	erArray, err := getResultSet(snapshotCtx, bh)
+	if err != nil {
+		return err
+	}
+
+	if !execResultArrayHasData(erArray) {
+		return moerr.NewInternalErrorf(ctx, "snapshot %s does not exist", ic.snapshotName)
+	}
+
+	// Get the snapshot ts
+	snapshotTs, err := erArray[0].GetInt64(ctx, 0, 0)
+	if err != nil {
+		return err
+	}
+
+	// Query mo_database using the snapshot timestamp to get databases covered by the snapshot
+	// Use {SNAPSHOT = 'snapshot_name'} syntax to query databases at the snapshot point
+	dbSql := fmt.Sprintf("SELECT datname FROM mo_catalog.mo_database{MO_TS = %d} WHERE account_id = %d", snapshotTs, accountID)
+
+	bh.ClearExecResultSet()
+	if err = bh.Exec(snapshotCtx, dbSql); err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to query databases: %v", err)
+	}
+
+	erArray, err = getResultSet(snapshotCtx, bh)
+	if err != nil {
+		return err
+	}
+
+	// Build result set with single column "datname"
+	col := new(MysqlColumn)
+	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col.SetName("datname")
+
+	mrs := ses.GetMysqlResultSet()
+	mrs.AddColumn(col)
+
+	// Add each database name as a row
+	if execResultArrayHasData(erArray) {
+		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+			dbName, err := erArray[0].GetString(ctx, i, 0)
+			if err != nil {
+				return err
+			}
+			row := make([]interface{}, 1)
+			row[0] = dbName
+			mrs.AddRow(row)
+		}
+	}
+
+	return nil
+}

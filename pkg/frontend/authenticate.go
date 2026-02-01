@@ -5930,6 +5930,9 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *InternalCmdGetSnapshotTs:
 		objType = objectTypeNone
 		kind = privilegeKindNone
+	case *InternalCmdGetDatabases:
+		objType = objectTypeNone
+		kind = privilegeKindNone
 	case *tree.ValuesStatement:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeValues, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)

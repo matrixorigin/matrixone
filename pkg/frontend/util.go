@@ -563,6 +563,38 @@ func parseCmdGetSnapshotTs(ctx context.Context, sql string) (*InternalCmdGetSnap
 	}, nil
 }
 
+// isCmdGetDatabasesSql checks the sql is the cmdGetDatabasesSql or not.
+func isCmdGetDatabasesSql(sql string) bool {
+	if len(sql) < cmdGetDatabasesSqlLen {
+		return false
+	}
+	prefix := sql[:cmdGetDatabasesSqlLen]
+	return strings.Compare(strings.ToLower(prefix), cmdGetDatabasesSql) == 0
+}
+
+// makeGetDatabasesSql makes the internal getdatabases sql
+func makeGetDatabasesSql(snapshotName, accountName, publicationName string) string {
+	return fmt.Sprintf("%s %s %s %s", cmdGetDatabasesSql, snapshotName, accountName, publicationName)
+}
+
+// parseCmdGetDatabases parses the internal cmd getdatabases
+// format: getdatabases <snapshotName> <accountName> <publicationName>
+func parseCmdGetDatabases(ctx context.Context, sql string) (*InternalCmdGetDatabases, error) {
+	if !isCmdGetDatabasesSql(sql) {
+		return nil, moerr.NewInternalError(ctx, "it is not the GET_DATABASES command")
+	}
+	params := strings.TrimSpace(sql[cmdGetDatabasesSqlLen:])
+	parts := strings.Fields(params)
+	if len(parts) != 3 {
+		return nil, moerr.NewInternalError(ctx, "invalid getdatabases command format, expected: getdatabases <snapshotName> <accountName> <publicationName>")
+	}
+	return &InternalCmdGetDatabases{
+		snapshotName:    parts[0],
+		accountName:     parts[1],
+		publicationName: parts[2],
+	}, nil
+}
+
 func getVariableValue(varDefault interface{}) string {
 	switch val := varDefault.(type) {
 	case int64:

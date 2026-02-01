@@ -124,6 +124,10 @@ const (
 	// Format: __++__internal_get_snapshot_ts <snapshotName> <accountName> <publicationName>
 	PublicationQuerySnapshotTsSqlTemplate = `__++__internal_get_snapshot_ts %s %s %s`
 
+	// Query databases covered by snapshot using internal command with publication permission check
+	// Format: __++__internal_get_databases <snapshotName> <accountName> <publicationName>
+	PublicationGetDatabasesSqlTemplate = `__++__internal_get_databases %s %s %s`
+
 	// Check snapshot flushed SQL template
 	// Parameters: snapshot_name, account_name, publication_name
 	PublicationCheckSnapshotFlushedSqlTemplate = `CHECKSNAPSHOTFLUSHED %s ACCOUNT %s PUBLICATION %s`
@@ -188,6 +192,7 @@ const (
 	PublicationQueryMoCcprLogSqlTemplate_Idx
 	PublicationQueryMoCcprLogFullSqlTemplate_Idx
 	PublicationQuerySnapshotTsSqlTemplate_Idx
+	PublicationGetDatabasesSqlTemplate_Idx
 	PublicationUpdateMoCcprLogSqlTemplate_Idx
 	PublicationUpdateMoCcprLogStateSqlTemplate_Idx
 	PublicationCheckSnapshotFlushedSqlTemplate_Idx
@@ -312,6 +317,12 @@ var PublicationSQLTemplates = [PublicationSqlTemplateCount]struct {
 		SQL: PublicationQuerySnapshotTsSqlTemplate,
 		OutputAttrs: []string{
 			"ts",
+		},
+	},
+	PublicationGetDatabasesSqlTemplate_Idx: {
+		SQL: PublicationGetDatabasesSqlTemplate,
+		OutputAttrs: []string{
+			"datname",
 		},
 	},
 	PublicationUpdateMoCcprLogSqlTemplate_Idx: {
@@ -653,6 +664,24 @@ func (b publicationSQLBuilder) QuerySnapshotTsSQL(
 ) string {
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationQuerySnapshotTsSqlTemplate_Idx].SQL,
+		escapeSQLString(snapshotName),
+		escapeSQLString(accountName),
+		escapeSQLString(publicationName),
+	)
+}
+
+// GetDatabasesSQL creates SQL for querying databases covered by snapshot with publication permission check
+// Uses internal command: __++__internal_get_databases <snapshotName> <accountName> <publicationName>
+// This command checks if the current account has permission to access the publication,
+// then uses the authorized account to query mo_database at the snapshot timestamp
+// Returns datname (varchar)
+func (b publicationSQLBuilder) GetDatabasesSQL(
+	snapshotName string,
+	accountName string,
+	publicationName string,
+) string {
+	return fmt.Sprintf(
+		PublicationSQLTemplates[PublicationGetDatabasesSqlTemplate_Idx].SQL,
 		escapeSQLString(snapshotName),
 		escapeSQLString(accountName),
 		escapeSQLString(publicationName),

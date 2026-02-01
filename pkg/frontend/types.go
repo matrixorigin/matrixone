@@ -103,6 +103,7 @@ const (
 	FPExplainStmt
 	FPInternalCmdFieldList
 	FPInternalCmdGetSnapshotTs
+	FPInternalCmdGetDatabases
 	FPCreatePublication
 	FPAlterPublication
 	FPDropPublication
@@ -301,6 +302,8 @@ const (
 	cmdFieldListSqlLen        = len(cmdFieldListSql)
 	cmdGetSnapshotTsSql       = "__++__internal_get_snapshot_ts"
 	cmdGetSnapshotTsSqlLen    = len(cmdGetSnapshotTsSql)
+	cmdGetDatabasesSql        = "__++__internal_get_databases"
+	cmdGetDatabasesSqlLen     = len(cmdGetDatabasesSql)
 	cloudUserTag              = "cloud_user"
 	cloudNoUserTag            = "cloud_nonuser"
 	saveResultTag             = "save_result"
@@ -362,6 +365,36 @@ func (ic *InternalCmdGetSnapshotTs) StmtKind() tree.StmtKind {
 
 func (ic *InternalCmdGetSnapshotTs) GetStatementType() string { return "InternalCmd" }
 func (ic *InternalCmdGetSnapshotTs) GetQueryType() string     { return tree.QueryTypeDQL }
+
+var _ tree.Statement = &InternalCmdGetDatabases{}
+
+// InternalCmdGetDatabases the internal command to get databases by publication permission
+// Parameters: snapshotName, accountName, publicationName
+// Returns: list of database names covered by the snapshot
+type InternalCmdGetDatabases struct {
+	snapshotName    string
+	accountName     string
+	publicationName string
+}
+
+// Free implements tree.Statement.
+func (ic *InternalCmdGetDatabases) Free() {
+}
+
+func (ic *InternalCmdGetDatabases) String() string {
+	return makeGetDatabasesSql(ic.snapshotName, ic.accountName, ic.publicationName)
+}
+
+func (ic *InternalCmdGetDatabases) Format(ctx *tree.FmtCtx) {
+	ctx.WriteString(makeGetDatabasesSql(ic.snapshotName, ic.accountName, ic.publicationName))
+}
+
+func (ic *InternalCmdGetDatabases) StmtKind() tree.StmtKind {
+	return tree.MakeStmtKind(tree.OUTPUT_RESULT_ROW, tree.RESP_PREBUILD_RESULT_ROW, tree.EXEC_IN_FRONTEND)
+}
+
+func (ic *InternalCmdGetDatabases) GetStatementType() string { return "InternalCmd" }
+func (ic *InternalCmdGetDatabases) GetQueryType() string     { return tree.QueryTypeDQL }
 
 // ExecResult is the result interface of the execution
 type ExecResult interface {

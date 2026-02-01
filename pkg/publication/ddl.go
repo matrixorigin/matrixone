@@ -158,6 +158,9 @@ func GetUpstreamDDLUsingGetDdl(
 //   - If db level: checks if the database exists upstream and locally, returns appropriate lists
 //   - If account level: queries all databases for the account upstream, compares with local databases,
 //     and returns databases that exist upstream but not locally (to create) and databases that exist locally but not upstream (to drop)
+//
+// Uses GETDATABASES internal command which checks publication permission and uses the authorized account
+// to query databases covered by the snapshot
 func getDatabaseDiff(
 	ctx context.Context,
 	iterationCtx *IterationContext,
@@ -184,31 +187,47 @@ func getDatabaseDiff(
 	// Use downstream account ID from iterationCtx.SrcInfo
 	downstreamCtx := context.WithValue(ctx, defines.TenantIDKey{}, iterationCtx.SrcInfo.AccountID)
 
+	// Query upstream databases using GETDATABASES command
+	// This command checks publication permission and uses the authorized account
+	// to query databases covered by the snapshot
+	snapshotName := iterationCtx.CurrentSnapshotName
+	querySQL := PublicationSQLBuilder.GetDatabasesSQL(
+		snapshotName,
+		iterationCtx.SubscriptionAccountName,
+		iterationCtx.SubscriptionName,
+	)
+	result, cancel, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true, time.Minute)
+	if err != nil {
+		return nil, nil, moerr.NewInternalErrorf(ctx, "failed to query upstream databases using GETDATABASES: %v", err)
+	}
+	defer cancel()
+	defer result.Close()
+
+	// Collect upstream database names
+	upstreamDBs := make(map[string]bool)
+	for result.Next() {
+		var datName sql.NullString
+
+		if err := result.Scan(&datName); err != nil {
+			return nil, nil, moerr.NewInternalErrorf(ctx, "failed to scan upstream database result: %v", err)
+		}
+
+		if datName.Valid {
+			upstreamDBs[datName.String] = true
+		}
+	}
+	if err := result.Err(); err != nil {
+		return nil, nil, moerr.NewInternalErrorf(ctx, "error reading upstream database query results: %v", err)
+	}
+
 	// If db level, check if the database exists upstream and locally
 	if iterationCtx.SrcInfo.SyncLevel == SyncLevelDatabase {
 		if iterationCtx.SrcInfo.DBName == "" {
 			return nil, nil, moerr.NewInternalError(ctx, "database name is empty for database level sync")
 		}
 
-		// Query upstream to check if database exists
-		snapshotName := iterationCtx.CurrentSnapshotName
-		querySQL := PublicationSQLBuilder.QueryMoDatabasesSQL(0, iterationCtx.SrcInfo.DBName, snapshotName)
-		result, cancel, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true, time.Minute)
-		if err != nil {
-			return nil, nil, moerr.NewInternalErrorf(ctx, "failed to query upstream database: %v", err)
-		}
-		defer cancel()
-		defer result.Close()
-
-		// Check if database exists upstream
-		existsUpstream := false
-		for result.Next() {
-			existsUpstream = true
-			break
-		}
-		if err := result.Err(); err != nil {
-			return nil, nil, moerr.NewInternalErrorf(ctx, "error reading upstream database query results: %v", err)
-		}
+		// Check if database exists upstream (in the GETDATABASES result)
+		existsUpstream := upstreamDBs[iterationCtx.SrcInfo.DBName]
 
 		// Check if database exists locally
 		_, err = cnEngine.Database(downstreamCtx, iterationCtx.SrcInfo.DBName, iterationCtx.LocalTxn)
@@ -226,38 +245,8 @@ func getDatabaseDiff(
 		return dbToCreate, dbToDrop, nil
 	}
 
-	// If account level, query all databases for the account upstream and compare with local databases
+	// If account level, compare upstream databases with local databases
 	if iterationCtx.SrcInfo.SyncLevel == SyncLevelAccount {
-		// Query upstream databases for the account
-		snapshotName := iterationCtx.CurrentSnapshotName
-		querySQL := PublicationSQLBuilder.QueryMoDatabasesSQL(0, "", snapshotName)
-		result, cancel, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true, time.Minute)
-		if err != nil {
-			return nil, nil, moerr.NewInternalErrorf(ctx, "failed to query upstream databases: %v", err)
-		}
-		defer cancel()
-		defer result.Close()
-
-		// Collect upstream database names
-		upstreamDBs := make(map[string]bool)
-		for result.Next() {
-			var datID sql.NullInt64
-			var datName sql.NullString
-			var datCreateSQL sql.NullString
-			var accountID sql.NullInt64
-
-			if err := result.Scan(&datID, &datName, &datCreateSQL, &accountID); err != nil {
-				return nil, nil, moerr.NewInternalErrorf(ctx, "failed to scan upstream database result: %v", err)
-			}
-
-			if datName.Valid {
-				upstreamDBs[datName.String] = true
-			}
-		}
-		if err := result.Err(); err != nil {
-			return nil, nil, moerr.NewInternalErrorf(ctx, "error reading upstream database query results: %v", err)
-		}
-
 		// Get local databases
 		localDBs, err := cnEngine.Databases(downstreamCtx, iterationCtx.LocalTxn)
 		if err != nil {

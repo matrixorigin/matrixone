@@ -189,6 +189,12 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleGetSnapshotTs(ses, execCtx, st); err != nil {
 			return
 		}
+	case *InternalCmdGetDatabases:
+		ses.EnterFPrint(FPInternalCmdGetDatabases)
+		defer ses.ExitFPrint(FPInternalCmdGetDatabases)
+		if err = handleGetDatabases(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.CreatePublication:
 		ses.EnterFPrint(FPCreatePublication)
 		defer ses.ExitFPrint(FPCreatePublication)
