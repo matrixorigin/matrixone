@@ -4,19 +4,14 @@
 package mysql
 
 import (
-	__yyfmt__ "fmt"
-	__yyunsafe__ "unsafe"
-)
-
-//line mysql_sql.y:16
-
-import (
 	"fmt"
+	__yyfmt__ "fmt"
 	"strings"
+	__yyunsafe__ "unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/util"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/util" //line mysql_sql.y:16
 )
 
 const LEX_ERROR = 57346
@@ -11969,21 +11964,6 @@ yydefault:
 				SLevel:      spLevel,
 				AccountName: tree.Identifier(yyDollar[3].cstrUnion().Compare()),
 				PubName:     tree.Identifier(yyDollar[5].cstrUnion().Compare()),
-			}
-		}
-		yyVAL.union = yyLOCAL
-	case 91:
-		yyDollar = yyS[yypt-4 : yypt+1]
-		var yyLOCAL tree.ObjectInfo
-//line mysql_sql.y:1217
-		{
-			spLevel := tree.SnapshotLevelType{
-				Level: tree.SNAPSHOTLEVELPUBLICATION,
-			}
-			yyLOCAL = tree.ObjectInfo{
-				SLevel:      spLevel,
-				AccountName: tree.Identifier(yyDollar[2].cstrUnion().Compare()),
-				PubName:     tree.Identifier(yyDollar[4].cstrUnion().Compare()),
 			}
 		}
 		yyVAL.union = yyLOCAL

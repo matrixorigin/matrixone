@@ -1213,17 +1213,6 @@ snapshot_object_opt:
             PubName: tree.Identifier($5.Compare()),
         }
     }
-|   ACCOUNT ident PUBLICATION ident
-    {
-        spLevel := tree.SnapshotLevelType{
-            Level: tree.SNAPSHOTLEVELPUBLICATION,
-        }
-        $$ = tree.ObjectInfo{
-            SLevel: spLevel,
-            AccountName: tree.Identifier($2.Compare()),
-            PubName: tree.Identifier($4.Compare()),
-        }
-    }
 
 create_pitr_stmt:
     CREATE PITR not_exists_opt ident FOR ACCOUNT RANGE pitr_value STRING internal_opt

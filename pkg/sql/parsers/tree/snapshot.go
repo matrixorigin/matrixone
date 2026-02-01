@@ -31,7 +31,6 @@ const (
 	SNAPSHOTLEVELACCOUNT
 	SNAPSHOTLEVELDATABASE
 	SNAPSHOTLEVELTABLE
-	SNAPSHOTLEVELPUBLICATION // account publication level - for CCPR subscription snapshot
 )
 
 func (s SnapshotLevel) String() string {
@@ -44,8 +43,6 @@ func (s SnapshotLevel) String() string {
 		return "database"
 	case SNAPSHOTLEVELTABLE:
 		return "table"
-	case SNAPSHOTLEVELPUBLICATION:
-		return "publication"
 	}
 	return "unknown"
 }
@@ -66,14 +63,6 @@ type ObjectInfo struct {
 }
 
 func (node *ObjectInfo) Format(ctx *FmtCtx) {
-	if node.SLevel.Level == SNAPSHOTLEVELPUBLICATION {
-		ctx.WriteString("account ")
-		node.AccountName.Format(ctx)
-		ctx.WriteString(" publication ")
-		node.PubName.Format(ctx)
-		return
-	}
-
 	node.SLevel.Format(ctx)
 
 	if node.SLevel.Level != SNAPSHOTLEVELCLUSTER {
