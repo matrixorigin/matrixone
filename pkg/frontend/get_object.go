@@ -86,8 +86,16 @@ func getGoroutineID() int64 {
 
 // GetObjectPermissionChecker is the function to check publication permission for GetObject
 // This is exported as a variable to allow stubbing in tests
-var GetObjectPermissionChecker = func(ctx context.Context, ses *Session) error {
-	return checkPublicationPermissionForGetObject(ctx, ses)
+// Returns the authorized account ID for execution
+var GetObjectPermissionChecker = func(ctx context.Context, ses *Session, pubAccountName, pubName string) (uint64, error) {
+	if len(pubAccountName) == 0 || len(pubName) == 0 {
+		return 0, moerr.NewInternalError(ctx, "publication account name and publication name are required for GET OBJECT")
+	}
+	bh := ses.GetShareTxnBackgroundExec(ctx, false)
+	defer bh.Close()
+	currentAccount := ses.GetTenantInfo().GetTenant()
+	accountID, _, err := getAccountFromPublication(ctx, bh, pubAccountName, pubName, currentAccount)
+	return accountID, err
 }
 
 // GetObjectFSProvider is the function to get fileservice for GetObject
@@ -252,12 +260,16 @@ func handleGetObject(
 	objectName := stmt.ObjectName.String()
 	chunkIndex := stmt.ChunkIndex
 
-	// Check publication permission
-	// For GET OBJECT, we check if the account has permission to access any publication
-	// since objectName doesn't contain database/table information
-	if err := GetObjectPermissionChecker(ctx, ses); err != nil {
+	// Check publication permission using getAccountFromPublication and get account ID
+	pubAccountName := stmt.SubscriptionAccountName
+	pubName := string(stmt.PubName)
+	accountID, err := GetObjectPermissionChecker(ctx, ses, pubAccountName, pubName)
+	if err != nil {
 		return err
 	}
+
+	// Use the authorized account context for execution
+	ctx = defines.AttachAccountId(ctx, uint32(accountID))
 
 	// Get fileservice
 	fs, err := GetObjectFSProvider(ses)

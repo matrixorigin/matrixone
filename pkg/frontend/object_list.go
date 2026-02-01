@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -35,8 +36,16 @@ import (
 
 // ObjectListPermissionChecker is the function to check publication permission for ObjectList
 // This is exported as a variable to allow stubbing in tests
-var ObjectListPermissionChecker = func(ctx context.Context, ses *Session, dbname, tablename string) error {
-	return checkPublicationPermission(ctx, ses, dbname, tablename)
+// Returns the authorized account ID for execution
+var ObjectListPermissionChecker = func(ctx context.Context, ses *Session, pubAccountName, pubName string) (uint64, error) {
+	if len(pubAccountName) == 0 || len(pubName) == 0 {
+		return 0, moerr.NewInternalError(ctx, "publication account name and publication name are required for OBJECT LIST")
+	}
+	bh := ses.GetShareTxnBackgroundExec(ctx, false)
+	defer bh.Close()
+	currentAccount := ses.GetTenantInfo().GetTenant()
+	accountID, _, err := getAccountFromPublication(ctx, bh, pubAccountName, pubName, currentAccount)
+	return accountID, err
 }
 
 // ProcessObjectList is the core function that processes OBJECTLIST statement
@@ -117,10 +126,16 @@ func handleObjectList(
 	}
 	tablename := string(stmt.Table)
 
-	// Check publication permission
-	if err := ObjectListPermissionChecker(ctx, ses, dbname, tablename); err != nil {
+	// Check publication permission using getAccountFromPublication and get account ID
+	pubAccountName := stmt.SubscriptionAccountName
+	pubName := string(stmt.PubName)
+	accountID, err := ObjectListPermissionChecker(ctx, ses, pubAccountName, pubName)
+	if err != nil {
 		return err
 	}
+
+	// Use the authorized account context for execution
+	ctx = defines.AttachAccountId(ctx, uint32(accountID))
 
 	// Resolve snapshot using session
 	resolveSnapshot := func(ctx context.Context, snapshotName string) (*timestamp.Timestamp, error) {

@@ -16,27 +16,21 @@ package frontend
 
 import (
 	"context"
-
-	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
-
-// PublicationPermissionChecker is a function type for checking publication permission
-// This type allows dependency injection for testing
-type PublicationPermissionChecker func(ctx context.Context, ses *Session, databaseName, tableName string) error
 
 // SnapshotResolver is a function type for resolving snapshot by name
 // This type allows dependency injection for testing
@@ -52,16 +46,15 @@ func handleGetDdl(
 	ses *Session,
 	stmt *tree.GetDdl,
 ) error {
-	return handleGetDdlWithChecker(ctx, ses, stmt, checkPublicationPermission, defaultSnapshotResolver)
+	return handleGetDdlWithChecker(ctx, ses, stmt, defaultSnapshotResolver)
 }
 
-// handleGetDdlWithChecker is the internal implementation that accepts a permission checker
+// handleGetDdlWithChecker is the internal implementation that accepts a snapshot resolver
 // This allows dependency injection for testing
 func handleGetDdlWithChecker(
 	ctx context.Context,
 	ses *Session,
 	stmt *tree.GetDdl,
-	permChecker PublicationPermissionChecker,
 	snapshotResolver SnapshotResolver,
 ) error {
 	var (
@@ -115,10 +108,27 @@ func handleGetDdlWithChecker(
 		tableName = string(*stmt.Table)
 	}
 
-	// Check publication permission
-	if err := permChecker(ctx, ses, databaseName, tableName); err != nil {
+	// Check publication permission using getAccountFromPublication and get account ID
+	pubAccountName := stmt.SubscriptionAccountName
+	pubName := ""
+	if stmt.PubName != nil {
+		pubName = string(*stmt.PubName)
+	}
+
+	if len(pubAccountName) == 0 || len(pubName) == 0 {
+		return moerr.NewInternalError(ctx, "publication account name and publication name are required for GET DDL")
+	}
+
+	bh := ses.GetShareTxnBackgroundExec(ctx, false)
+	defer bh.Close()
+	currentAccount := ses.GetTenantInfo().GetTenant()
+	accountID, _, err := getAccountFromPublication(ctx, bh, pubAccountName, pubName, currentAccount)
+	if err != nil {
 		return err
 	}
+
+	// Use the authorized account context for execution
+	ctx = defines.AttachAccountId(ctx, uint32(accountID))
 
 	// Get engine, mpool, and txn from session
 	eng := ses.GetTxnHandler().GetStorage()
@@ -146,17 +156,16 @@ func handleGetDdlWithChecker(
 	}
 
 	// Resolve snapshot if provided
-	var snapshot *plan2.Snapshot
 	if stmt.Snapshot != nil {
 		snapshotName := string(*stmt.Snapshot)
 		var err error
-		snapshot, err = snapshotResolver(ses, snapshotName)
+		record, err := getSnapshotByNameFunc(ctx, bh, snapshotName)
 		if err != nil {
 			return moerr.NewInternalErrorf(ctx, "failed to resolve snapshot %s: %v", snapshotName, err)
 		}
-		if snapshot != nil && snapshot.TS != nil {
+		if record != nil && record.ts != 0 {
 			// Clone txn with snapshot timestamp
-			txn = txn.CloneSnapshotOp(*snapshot.TS)
+			txn = txn.CloneSnapshotOp(timestamp.Timestamp{PhysicalTime: record.ts})
 		}
 	}
 
@@ -468,241 +477,4 @@ func GetDdlBatchWithoutSession(
 
 	// Call getddlbatch with the txn (which may have been cloned with snapshot)
 	return getddlbatch(ctx, databaseName, tableName, eng, mp, txn)
-}
-
-// checkPublicationPermission checks if the current account has permission to access the specified database/table
-// based on publication table (mo_pubs) configuration
-func checkPublicationPermission(
-	ctx context.Context,
-	ses *Session,
-	databaseName string,
-	tableName string,
-) error {
-	bh := ses.GetShareTxnBackgroundExec(ctx, false)
-	defer bh.Close()
-	return checkPublicationPermissionWithBh(ctx, bh, databaseName, tableName)
-}
-
-// checkPublicationPermissionWithBh is the internal implementation that accepts a BackgroundExec
-// This is useful for testing
-func checkPublicationPermissionWithBh(
-	ctx context.Context,
-	bh BackgroundExec,
-	databaseName string,
-	tableName string,
-) error {
-	// Get current account ID and name
-	accountID, err := defines.GetAccountId(ctx)
-	if err != nil {
-		return err
-	}
-
-	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
-	getAccountNameSQL := fmt.Sprintf(`select account_name from mo_catalog.mo_account where account_id = %d;`, accountID)
-	bh.ClearExecResultSet()
-	if err = bh.Exec(systemCtx, getAccountNameSQL); err != nil {
-		return err
-	}
-
-	erArray, err := getResultSet(systemCtx, bh)
-	if err != nil {
-		return err
-	}
-
-	var accountName string
-	if execResultArrayHasData(erArray) {
-		if accountName, err = erArray[0].GetString(systemCtx, 0, 0); err != nil {
-			return err
-		}
-	}
-
-	if accountName == "" {
-		return moerr.NewInternalError(ctx, "failed to get account name")
-	}
-
-	// Query mo_pubs table to find matching publications
-	var querySQL string
-	if databaseName != "" && tableName != "" {
-		// Table level: check database_name and table_list
-		querySQL = fmt.Sprintf(`select account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
-			from mo_catalog.mo_pubs 
-			where database_name = "%s" 
-			order by account_id, pub_name;`, databaseName)
-	} else if databaseName != "" {
-		// Database level: check database_name
-		querySQL = fmt.Sprintf(`select account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
-			from mo_catalog.mo_pubs 
-			where database_name = "%s" 
-			order by account_id, pub_name;`, databaseName)
-	} else {
-		// Account level: check all publications
-		querySQL = `select account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
-			from mo_catalog.mo_pubs 
-			order by account_id, pub_name;`
-	}
-
-	bh.ClearExecResultSet()
-	if err = bh.Exec(systemCtx, querySQL); err != nil {
-		return err
-	}
-
-	erArray, err = getResultSet(systemCtx, bh)
-	if err != nil {
-		return err
-	}
-
-	var hasPermission bool
-	if execResultArrayHasData(erArray) {
-		for _, er := range erArray {
-			for row := uint64(0); row < er.GetRowCount(); row++ {
-				// Parse publication info
-				var pubDbName, tableList, accountList string
-				if pubDbName, err = er.GetString(systemCtx, row, 3); err != nil {
-					continue
-				}
-				if tableList, err = er.GetString(systemCtx, row, 5); err != nil {
-					continue
-				}
-				if accountList, err = er.GetString(systemCtx, row, 6); err != nil {
-					continue
-				}
-
-				// Check if account is allowed
-				pubInfo := &pubsub.PubInfo{
-					SubAccountsStr: accountList,
-				}
-				if !pubInfo.InSubAccounts(accountName) {
-					continue
-				}
-
-				// Check database match
-				if databaseName != "" && pubDbName != databaseName {
-					continue
-				}
-
-				// Check table match
-				if tableName != "" {
-					if strings.ToLower(tableList) == pubsub.TableAll {
-						hasPermission = true
-						break
-					}
-					// Check if table is in the list
-					tableFound := false
-					for _, tbl := range strings.Split(tableList, pubsub.Sep) {
-						if strings.TrimSpace(tbl) == tableName {
-							tableFound = true
-							break
-						}
-					}
-					if !tableFound {
-						continue
-					}
-				}
-
-				hasPermission = true
-				break
-			}
-			if hasPermission {
-				break
-			}
-		}
-	}
-
-	if !hasPermission {
-		if tableName != "" {
-			return moerr.NewInternalErrorf(ctx, "account %s does not have permission to access table %s.%s", accountName, databaseName, tableName)
-		} else if databaseName != "" {
-			return moerr.NewInternalErrorf(ctx, "account %s does not have permission to access database %s", accountName, databaseName)
-		} else {
-			return moerr.NewInternalErrorf(ctx, "account %s does not have permission to access account level resources", accountName)
-		}
-	}
-
-	return nil
-}
-
-// checkPublicationPermissionForGetObject checks if the current account has permission to access any publication
-// This is used for GET OBJECT where we don't have database/table information from objectName
-func checkPublicationPermissionForGetObject(
-	ctx context.Context,
-	ses *Session,
-) error {
-	// Get current account ID and name
-	accountID, err := defines.GetAccountId(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Get account name
-	bh := ses.GetShareTxnBackgroundExec(ctx, false)
-	defer bh.Close()
-
-	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
-	getAccountNameSQL := fmt.Sprintf(`select account_name from mo_catalog.mo_account where account_id = %d;`, accountID)
-	bh.ClearExecResultSet()
-	if err = bh.Exec(systemCtx, getAccountNameSQL); err != nil {
-		return err
-	}
-
-	erArray, err := getResultSet(systemCtx, bh)
-	if err != nil {
-		return err
-	}
-
-	var accountName string
-	if execResultArrayHasData(erArray) {
-		if accountName, err = erArray[0].GetString(systemCtx, 0, 0); err != nil {
-			return err
-		}
-	}
-
-	if accountName == "" {
-		return moerr.NewInternalError(ctx, "failed to get account name")
-	}
-
-	// Query all publications to check if account has access to any
-	querySQL := `select account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
-		from mo_catalog.mo_pubs 
-		order by account_id, pub_name;`
-
-	bh.ClearExecResultSet()
-	if err = bh.Exec(systemCtx, querySQL); err != nil {
-		return err
-	}
-
-	erArray, err = getResultSet(systemCtx, bh)
-	if err != nil {
-		return err
-	}
-
-	var hasPermission bool
-	if execResultArrayHasData(erArray) {
-		for _, er := range erArray {
-			for row := uint64(0); row < er.GetRowCount(); row++ {
-				// Parse publication info
-				var accountList string
-				if accountList, err = er.GetString(systemCtx, row, 6); err != nil {
-					continue
-				}
-
-				// Check if account is allowed
-				pubInfo := &pubsub.PubInfo{
-					SubAccountsStr: accountList,
-				}
-				if pubInfo.InSubAccounts(accountName) {
-					hasPermission = true
-					break
-				}
-			}
-			if hasPermission {
-				break
-			}
-		}
-	}
-
-	if !hasPermission {
-		return moerr.NewInternalErrorf(ctx, "account %s does not have permission to access any publication", accountName)
-	}
-
-	return nil
 }

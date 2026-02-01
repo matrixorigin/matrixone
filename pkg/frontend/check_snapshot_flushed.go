@@ -70,42 +70,26 @@ func doCheckSnapshotFlushed(ctx context.Context, ses *Session, stmt *tree.CheckS
 	bh := ses.GetShareTxnBackgroundExec(ctx, false)
 	defer bh.Close()
 
-	// If accountName is provided, use it for authorization context
+	// Check publication permission using getAccountFromPublication
 	queryCtx := ctx
-	if accountName != "" {
-		// Get account_id by account_name
-		systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
-		getAccountIdSQL := fmt.Sprintf(`SELECT account_id FROM mo_catalog.mo_account WHERE account_name = '%s';`, accountName)
-		bh.ClearExecResultSet()
-		if err := bh.Exec(systemCtx, getAccountIdSQL); err != nil {
-			return moerr.NewInternalErrorf(ctx, "failed to get account_id for account %s: %v", accountName, err)
-		}
-
-		erArray, err := getResultSet(systemCtx, bh)
+	if accountName != "" && publicationName != "" {
+		currentAccount := ses.GetTenantInfo().GetTenant()
+		accountId, _, err := getAccountFromPublication(ctx, bh, accountName, publicationName, currentAccount)
 		if err != nil {
 			return err
 		}
 
-		var accountId uint32
-		if execResultArrayHasData(erArray) {
-			accountIdVal, err := erArray[0].GetUint64(systemCtx, 0, 0)
-			if err != nil {
-				return err
-			}
-			accountId = uint32(accountIdVal)
-		} else {
-			return moerr.NewInternalErrorf(ctx, "account %s not found", accountName)
-		}
-
 		// Use the authorized account context for snapshot query
-		queryCtx = defines.AttachAccountId(ctx, accountId)
+		queryCtx = defines.AttachAccountId(ctx, uint32(accountId))
 
-		logutil.Info("check_snapshot_flushed using authorized account",
+		logutil.Info("check_snapshot_flushed using authorized account via publication",
 			zap.String("snapshot_name", snapshotName),
 			zap.String("account_name", accountName),
 			zap.String("publication_name", publicationName),
-			zap.Uint32("account_id", accountId),
+			zap.Uint64("account_id", accountId),
 		)
+	} else {
+		return moerr.NewInternalError(ctx, "publication account name and publication name are required for CHECK SNAPSHOT FLUSHED")
 	}
 
 	record, err := getSnapshotByNameFunc(queryCtx, bh, snapshotName)
@@ -116,21 +100,6 @@ func doCheckSnapshotFlushed(ctx context.Context, ses *Session, stmt *tree.CheckS
 	// Print snapshot ts using logutil
 	if record == nil {
 		return moerr.NewInternalError(ctx, "snapshot not found")
-	}
-
-	// Check publication permission based on snapshot level
-	// Skip permission check if accountName is provided (already authorized via publication)
-	if accountName == "" && record.level != "cluster" {
-		var dbName, tblName string
-		if record.level == "database" || record.level == "table" {
-			dbName = record.databaseName
-		}
-		if record.level == "table" {
-			tblName = record.tableName
-		}
-		if err := checkPublicationPermission(ctx, ses, dbName, tblName); err != nil {
-			return err
-		}
 	}
 
 	// Get fileservice from session
