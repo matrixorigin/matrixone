@@ -97,6 +97,13 @@ func newBranchHashmapAllocator(limitRate float64) *branchHashmapAllocator {
 	}
 }
 
+func (a *branchHashmapAllocator) Available() int64 {
+	if a == nil || a.throttler == nil {
+		return 0
+	}
+	return a.throttler.Available()
+}
+
 func (a *branchHashmapAllocator) Allocate(
 	size uint64,
 	hints malloc.Hints,
@@ -156,8 +163,11 @@ const (
 )
 
 const (
-	maxSqlBatchCnt  = objectio.BlockMaxRows * 10
-	maxSqlBatchSize = mpool.MB * 32
+	maxSqlBatchCnt   = objectio.BlockMaxRows * 10
+	maxSqlBatchSize  = mpool.MB * 32
+	defaultRowBytes  = int64(128)
+	tombstoneRowMult = int64(3)
+	tombstoneRowDiv  = int64(2)
 )
 
 func acquireBuffer(pool *sync.Pool) *bytes.Buffer {
@@ -209,7 +219,9 @@ type tableStuff struct {
 		pkKind       int
 	}
 
-	worker *ants.Pool
+	worker               *ants.Pool
+	hashmapAllocator     *branchHashmapAllocator
+	maxTombstoneBatchCnt int
 
 	retPool *retBatchList
 
@@ -2779,6 +2791,7 @@ func getTableStuff(
 			return &bytes.Buffer{}
 		},
 	}
+	tblStuff.hashmapAllocator = newBranchHashmapAllocator(dataBranchHashmapLimitRate)
 
 	return
 
@@ -3013,13 +3026,13 @@ func hashDiff(
 	}()
 
 	if baseDataHashmap, baseTombstoneHashmap, err = buildHashmapForTable(
-		ctx, ses.proc.Mp(), dagInfo.lcaType, tblStuff, baseHandle,
+		ctx, ses.proc.Mp(), dagInfo.lcaType, &tblStuff, baseHandle,
 	); err != nil {
 		return
 	}
 
 	if tarDataHashmap, tarTombstoneHashmap, err = buildHashmapForTable(
-		ctx, ses.proc.Mp(), dagInfo.lcaType, tblStuff, tarHandle,
+		ctx, ses.proc.Mp(), dagInfo.lcaType, &tblStuff, tarHandle,
 	); err != nil {
 		return
 	}
@@ -3469,15 +3482,16 @@ func findDeleteAndUpdateBat(
 	dataHashmap, tombstoneHashmap databranchutils.BranchHashmap,
 ) (err error) {
 
+	maxTombstoneBatchCnt := tblStuff.maxTombstoneBatchCnt
+	if maxTombstoneBatchCnt <= 0 {
+		maxTombstoneBatchCnt = maxSqlBatchCnt
+	}
+
 	if err = tombstoneHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
 		var (
-			err2            error
-			tuple           types.Tuple
-			dBat            *batch.Batch
-			tBat1           = tblStuff.retPool.acquireRetBatch(tblStuff, true)
-			tBat2           *batch.Batch
-			updateBat       *batch.Batch
-			updateDeleteBat *batch.Batch
+			err2  error
+			tuple types.Tuple
+			tBat1 = tblStuff.retPool.acquireRetBatch(tblStuff, true)
 		)
 
 		send := func(bwk batchWithKind) error {
@@ -3488,6 +3502,144 @@ func findDeleteAndUpdateBat(
 			case tmpCh <- bwk:
 				return nil
 			}
+		}
+
+		processBatch := func(tombBat *batch.Batch) error {
+			if tombBat.RowCount() == 0 {
+				tblStuff.retPool.releaseRetBatch(tombBat, true)
+				return nil
+			}
+
+			dBat, err2 := handleDelsOnLCA(
+				ctx, ses, bh, tombBat, tblStuff, branchTS.ToTimestamp(),
+			)
+			if err2 != nil {
+				tblStuff.retPool.releaseRetBatch(tombBat, true)
+				return err2
+			}
+
+			// merge inserts and deletes on the tar
+			// this deletes is not on the lca
+			if tombBat.RowCount() > 0 {
+				if _, err2 = dataHashmap.PopByVectorsStream(
+					[]*vector.Vector{tombBat.Vecs[0]}, false, nil,
+				); err2 != nil {
+					tblStuff.retPool.releaseRetBatch(tombBat, true)
+					tblStuff.retPool.releaseRetBatch(dBat, false)
+					return err2
+				}
+				tblStuff.retPool.releaseRetBatch(tombBat, true)
+			}
+
+			// find update
+			if dBat.RowCount() > 0 {
+				tBat2 := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+				seen := make([]bool, dBat.RowCount())
+				var updateBat *batch.Batch
+				var updateDeleteBat *batch.Batch
+				if _, err2 = dataHashmap.PopByVectorsStream(
+					[]*vector.Vector{dBat.Vecs[tblStuff.def.pkColIdx]}, false,
+					func(idx int, _ []byte, row []byte) error {
+						seen[idx] = true
+						// delete on lca and insert into tar ==> update
+						if updateBat == nil {
+							updateBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
+						}
+						if expandUpdate && updateDeleteBat == nil {
+							updateDeleteBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
+						}
+
+						if tuple, _, err2 = dataHashmap.DecodeRow(row); err2 != nil {
+							return err2
+						}
+
+						if expandUpdate {
+							if err2 = updateDeleteBat.UnionOne(dBat, int64(idx), ses.proc.Mp()); err2 != nil {
+								return err2
+							}
+						}
+
+						if err2 = appendTupleToBat(ses, updateBat, tuple, tblStuff); err2 != nil {
+							return err2
+						}
+						return nil
+					},
+				); err2 != nil {
+					tblStuff.retPool.releaseRetBatch(dBat, false)
+					tblStuff.retPool.releaseRetBatch(tBat2, false)
+					if updateBat != nil {
+						tblStuff.retPool.releaseRetBatch(updateBat, false)
+					}
+					if updateDeleteBat != nil {
+						tblStuff.retPool.releaseRetBatch(updateDeleteBat, false)
+					}
+					return err2
+				}
+
+				for i := 0; i < dBat.RowCount(); i++ {
+					if seen[i] {
+						continue
+					}
+					// delete on lca
+					if err2 = tBat2.UnionOne(dBat, int64(i), ses.proc.Mp()); err2 != nil {
+						tblStuff.retPool.releaseRetBatch(dBat, false)
+						tblStuff.retPool.releaseRetBatch(tBat2, false)
+						if updateBat != nil {
+							tblStuff.retPool.releaseRetBatch(updateBat, false)
+						}
+						if updateDeleteBat != nil {
+							tblStuff.retPool.releaseRetBatch(updateDeleteBat, false)
+						}
+						return err2
+					}
+				}
+
+				tblStuff.retPool.releaseRetBatch(dBat, false)
+				tBat2.SetRowCount(tBat2.Vecs[0].Length())
+
+				if updateBat != nil {
+					updateBat.SetRowCount(updateBat.Vecs[0].Length())
+					if expandUpdate {
+						if updateDeleteBat != nil {
+							updateDeleteBat.SetRowCount(updateDeleteBat.Vecs[0].Length())
+							if err2 = send(batchWithKind{
+								name:  tblName,
+								batch: updateDeleteBat,
+								kind:  diffDelete,
+							}); err2 != nil {
+								return err2
+							}
+						}
+						if err2 = send(batchWithKind{
+							name:  tblName,
+							batch: updateBat,
+							kind:  diffInsert,
+						}); err2 != nil {
+							return err2
+						}
+					} else {
+						if err2 = send(batchWithKind{
+							name:  tblName,
+							batch: updateBat,
+							kind:  diffUpdate,
+						}); err2 != nil {
+							return err2
+						}
+					}
+				}
+
+				if err2 = send(batchWithKind{
+					name:  tblName,
+					batch: tBat2,
+					kind:  diffDelete,
+				}); err2 != nil {
+					return err2
+				}
+				return nil
+			}
+
+			tblStuff.retPool.releaseRetBatch(dBat, false)
+			return nil
 		}
 
 		if err2 = cursor.ForEach(func(key []byte, _ []byte) error {
@@ -3505,124 +3657,28 @@ func findDeleteAndUpdateBat(
 			}
 
 			tBat1.SetRowCount(tBat1.Vecs[0].Length())
-			return nil
-		}); err2 != nil {
-			return err2
-		}
-
-		if tBat1.RowCount() == 0 {
-			tblStuff.retPool.releaseRetBatch(tBat1, true)
-			return nil
-		}
-
-		if dBat, err2 = handleDelsOnLCA(
-			ctx, ses, bh, tBat1, tblStuff, branchTS.ToTimestamp(),
-		); err2 != nil {
-			return err2
-		}
-
-		// merge inserts and deletes on the tar
-		// this deletes is not on the lca
-		if tBat1.RowCount() > 0 {
-			if _, err2 = dataHashmap.PopByVectorsStream(
-				[]*vector.Vector{tBat1.Vecs[0]}, false, nil,
-			); err2 != nil {
-				return err2
-			}
-			tblStuff.retPool.releaseRetBatch(tBat1, true)
-		}
-
-		// find update
-		if dBat.RowCount() > 0 {
-			tBat2 = tblStuff.retPool.acquireRetBatch(tblStuff, false)
-			seen := make([]bool, dBat.RowCount())
-			if _, err2 = dataHashmap.PopByVectorsStream(
-				[]*vector.Vector{dBat.Vecs[tblStuff.def.pkColIdx]}, false,
-				func(idx int, _ []byte, row []byte) error {
-					seen[idx] = true
-					// delete on lca and insert into tar ==> update
-					if updateBat == nil {
-						updateBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
-					}
-					if expandUpdate && updateDeleteBat == nil {
-						updateDeleteBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
-					}
-
-					if tuple, _, err2 = dataHashmap.DecodeRow(row); err2 != nil {
-						return err2
-					}
-
-					if expandUpdate {
-						if err2 = updateDeleteBat.UnionOne(dBat, int64(idx), ses.proc.Mp()); err2 != nil {
-							return err2
-						}
-					}
-
-					if err2 = appendTupleToBat(ses, updateBat, tuple, tblStuff); err2 != nil {
-						return err2
-					}
-					return nil
-				},
-			); err2 != nil {
-				return err2
-			}
-
-			for i := 0; i < dBat.RowCount(); i++ {
-				if seen[i] {
-					continue
-				}
-				// delete on lca
-				if err2 = tBat2.UnionOne(dBat, int64(i), ses.proc.Mp()); err2 != nil {
+			if tBat1.RowCount() >= maxTombstoneBatchCnt {
+				tombBat := tBat1
+				tBat1 = nil
+				if err2 = processBatch(tombBat); err2 != nil {
 					return err2
 				}
+				tBat1 = tblStuff.retPool.acquireRetBatch(tblStuff, true)
 			}
-
-			tblStuff.retPool.releaseRetBatch(dBat, false)
-			tBat2.SetRowCount(tBat2.Vecs[0].Length())
-
-			if updateBat != nil {
-				updateBat.SetRowCount(updateBat.Vecs[0].Length())
-				if expandUpdate {
-					if updateDeleteBat != nil {
-						updateDeleteBat.SetRowCount(updateDeleteBat.Vecs[0].Length())
-						if err2 = send(batchWithKind{
-							name:  tblName,
-							batch: updateDeleteBat,
-							kind:  diffDelete,
-						}); err2 != nil {
-							return err2
-						}
-					}
-					if err2 = send(batchWithKind{
-						name:  tblName,
-						batch: updateBat,
-						kind:  diffInsert,
-					}); err2 != nil {
-						return err2
-					}
-				} else {
-					if err2 = send(batchWithKind{
-						name:  tblName,
-						batch: updateBat,
-						kind:  diffUpdate,
-					}); err2 != nil {
-						return err2
-					}
-				}
+			return nil
+		}); err2 != nil {
+			if tBat1 != nil {
+				tblStuff.retPool.releaseRetBatch(tBat1, true)
 			}
-
-			if err2 = send(batchWithKind{
-				name:  tblName,
-				batch: tBat2,
-				kind:  diffDelete,
-			}); err2 != nil {
-				return err2
-			}
+			return err2
 		}
 
+		if tBat1 != nil {
+			return processBatch(tBat1)
+		}
 		return nil
 
-	}, 2); err != nil {
+	}, -1); err != nil {
 		return
 	}
 
@@ -4339,7 +4395,7 @@ func buildHashmapForTable(
 	ctx context.Context,
 	mp *mpool.MPool,
 	lcaType int,
-	tblStuff tableStuff,
+	tblStuff *tableStuff,
 	handles []engine.ChangesHandle,
 ) (
 	dataHashmap databranchutils.BranchHashmap,
@@ -4352,6 +4408,8 @@ func buildHashmapForTable(
 		dataBat      *batch.Batch
 		tombstoneBat *batch.Batch
 		wg           sync.WaitGroup
+		totalRows    int64
+		totalBytes   int64
 	)
 
 	defer func() {
@@ -4366,15 +4424,14 @@ func buildHashmapForTable(
 		}
 	}()
 
-	sharedAllocator := newBranchHashmapAllocator(dataBranchHashmapLimitRate)
 	if dataHashmap, err = databranchutils.NewBranchHashmap(
-		databranchutils.WithBranchHashmapAllocator(sharedAllocator),
+		databranchutils.WithBranchHashmapAllocator(tblStuff.hashmapAllocator),
 	); err != nil {
 		return
 	}
 
 	if tombstoneHashmap, err = databranchutils.NewBranchHashmap(
-		databranchutils.WithBranchHashmapAllocator(sharedAllocator),
+		databranchutils.WithBranchHashmapAllocator(tblStuff.hashmapAllocator),
 	); err != nil {
 		return
 	}
@@ -4438,6 +4495,11 @@ func buildHashmapForTable(
 				break
 			}
 
+			if dataBat != nil && dataBat.RowCount() > 0 {
+				totalRows += int64(dataBat.RowCount())
+				totalBytes += int64(dataBat.Size())
+			}
+
 			if atomicErr.Load() != nil {
 				err = atomicErr.Load().(error)
 				return
@@ -4467,6 +4529,39 @@ func buildHashmapForTable(
 
 	if err != nil {
 		return
+	}
+
+	if tombstoneHashmap.ItemCount() == 0 && dataHashmap.ItemCount() == 0 {
+		return
+	}
+
+	if tblStuff.maxTombstoneBatchCnt == 0 {
+		rowBytes := defaultRowBytes
+		if totalRows > 0 {
+			rowBytes = totalBytes / totalRows
+			if rowBytes <= 0 {
+				rowBytes = defaultRowBytes
+			}
+		}
+		rowBytes = rowBytes * tombstoneRowMult / tombstoneRowDiv
+
+		available := tblStuff.hashmapAllocator.Available() / 3
+
+		shardCount := 0
+		if tombstoneHashmap != nil {
+			shardCount = tombstoneHashmap.ShardCount()
+		} else if dataHashmap != nil {
+			shardCount = dataHashmap.ShardCount()
+		}
+
+		maxByMem := int(available / int64(shardCount) / rowBytes)
+		if maxByMem < 1 {
+			maxByMem = 1
+		} else if maxByMem > maxSqlBatchCnt {
+			maxByMem = maxSqlBatchCnt
+		}
+
+		tblStuff.maxTombstoneBatchCnt = maxByMem
 	}
 
 	if tblStuff.def.pkKind == fakeKind {

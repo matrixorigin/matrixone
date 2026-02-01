@@ -91,6 +91,8 @@ type BranchHashmap interface {
 	Migrate(keyCols []int, parallelism int) (BranchHashmap, error)
 	// ItemCount reports the number of rows currently stored in the hashmap.
 	ItemCount() int64
+	// ShardCount reports the number of shards in the hashmap.
+	ShardCount() int
 	// DecodeRow turns the encoded row emitted by Put/Get/Pop/ForEach back into a
 	// tuple of column values in the same order that was originally supplied.
 	DecodeRow(data []byte) (types.Tuple, []types.Type, error)
@@ -1064,6 +1066,15 @@ func (bh *branchHashmap) ItemCount() int64 {
 		total += shard.itemCount()
 	}
 	return total
+}
+
+func (bh *branchHashmap) ShardCount() int {
+	bh.metaMu.RLock()
+	defer bh.metaMu.RUnlock()
+	if bh.closed {
+		return 0
+	}
+	return len(bh.shards)
 }
 
 type shardCursor struct {
