@@ -1365,12 +1365,12 @@ func ExecuteIteration(
 	}
 	err = ApplyObjects(
 		ctx,
-		iterationCtx.String(),
+		iterationCtx.TaskID,
 		iterationCtx.SrcInfo.AccountID,
 		iterationCtx.IndexTableMappings,
-		iterationCtx.ActiveAObj,
 		objectMap,
 		iterationCtx.UpstreamExecutor,
+		iterationCtx.LocalExecutor,
 		iterationCtx.CurrentSnapshotTS,
 		iterationCtx.LocalTxn,
 		cnEngine,

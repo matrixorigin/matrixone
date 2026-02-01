@@ -256,6 +256,8 @@ type FilterObjectJobResult struct {
 	UpstreamAObjUUID *objectio.ObjectId
 	PreviousStats    objectio.ObjectStats
 	CurrentStats     objectio.ObjectStats
+	// DownstreamStats holds the stats for non-appendable objects that were written to fileservice
+	DownstreamStats objectio.ObjectStats
 }
 
 // FilterObjectJob is a job for filtering an object
@@ -263,7 +265,6 @@ type FilterObjectJob struct {
 	ctx                     context.Context
 	objectStatsBytes        []byte
 	snapshotTS              types.TS
-	aobjectMap              map[objectio.ObjectId]AObjMapping
 	upstreamExecutor        SQLExecutor
 	isTombstone             bool
 	localFS                 fileservice.FileService
@@ -279,7 +280,6 @@ func NewFilterObjectJob(
 	ctx context.Context,
 	objectStatsBytes []byte,
 	snapshotTS types.TS,
-	aobjectMap map[objectio.ObjectId]AObjMapping,
 	upstreamExecutor SQLExecutor,
 	isTombstone bool,
 	localFS fileservice.FileService,
@@ -292,7 +292,6 @@ func NewFilterObjectJob(
 		ctx:                     ctx,
 		objectStatsBytes:        objectStatsBytes,
 		snapshotTS:              snapshotTS,
-		aobjectMap:              aobjectMap,
 		upstreamExecutor:        upstreamExecutor,
 		isTombstone:             isTombstone,
 		localFS:                 localFS,
@@ -311,7 +310,6 @@ func (j *FilterObjectJob) Execute() {
 		j.ctx,
 		j.objectStatsBytes,
 		j.snapshotTS,
-		j.aobjectMap,
 		j.upstreamExecutor,
 		j.isTombstone,
 		j.localFS,
@@ -326,6 +324,7 @@ func (j *FilterObjectJob) Execute() {
 		res.UpstreamAObjUUID = filterResult.UpstreamAObjUUID
 		res.PreviousStats = filterResult.PreviousStats
 		res.CurrentStats = filterResult.CurrentStats
+		res.DownstreamStats = filterResult.DownstreamStats
 	}
 	j.result <- res
 }
@@ -346,18 +345,19 @@ type FilterObjectResult struct {
 	UpstreamAObjUUID *objectio.ObjectId
 	PreviousStats    objectio.ObjectStats
 	CurrentStats     objectio.ObjectStats
+	// DownstreamStats holds the stats for non-appendable objects that were written to fileservice
+	DownstreamStats objectio.ObjectStats
 }
 
 // FilterObject filters an object based on snapshot TS
 // Input: object stats (as bytes), snapshot TS, and whether it's an aobj (checked from object stats)
 // For aobj: gets object file, converts to batch, filters by snapshot TS, creates new object
-// The mapping between new UUID and upstream aobj is recorded in iterationCtx.ActiveAObj
+// The mapping between new UUID and upstream aobj is recorded in mo_ccpr_objects table
 // For nobj: writes directly to fileservice
 func FilterObject(
 	ctx context.Context,
 	objectStatsBytes []byte,
 	snapshotTS types.TS,
-	aobjectMap map[objectio.ObjectId]AObjMapping,
 	upstreamExecutor SQLExecutor,
 	isTombstone bool,
 	localFS fileservice.FileService,
@@ -378,22 +378,27 @@ func FilterObject(
 	isAObj := stats.GetAppendable()
 	if isAObj {
 		// Handle appendable object
-		return filterAppendableObject(ctx, &stats, snapshotTS, aobjectMap, upstreamExecutor, localFS, isTombstone, mp, getChunkWorker, subscriptionAccountName, pubName)
+		return filterAppendableObject(ctx, &stats, snapshotTS, upstreamExecutor, localFS, isTombstone, mp, getChunkWorker, subscriptionAccountName, pubName)
 	} else {
-		// Handle non-appendable object - write directly to fileservice
-		err := filterNonAppendableObject(ctx, &stats, upstreamExecutor, localFS, getChunkWorker, subscriptionAccountName, pubName)
-		return nil, err
+		// Handle non-appendable object - write directly to fileservice with new UUID
+		newStats, err := filterNonAppendableObject(ctx, &stats, upstreamExecutor, localFS, getChunkWorker, subscriptionAccountName, pubName)
+		if err != nil {
+			return nil, err
+		}
+		// Return the new downstream stats with new object name
+		return &FilterObjectResult{
+			DownstreamStats: newStats,
+		}, nil
 	}
 }
 
 // filterAppendableObject handles appendable objects
 // Gets object file from upstream, converts to batch, filters by snapshot TS, creates new object
-// Returns the mapping update info instead of directly updating aobjectMap
+// Returns the mapping update info for storage in mo_ccpr_objects table
 func filterAppendableObject(
 	ctx context.Context,
 	stats *objectio.ObjectStats,
 	snapshotTS types.TS,
-	aobjectMap map[objectio.ObjectId]AObjMapping,
 	upstreamExecutor SQLExecutor,
 	localFS fileservice.FileService,
 	isTombstone bool,
@@ -404,12 +409,6 @@ func filterAppendableObject(
 ) (*FilterObjectResult, error) {
 	// Get object name from stats (upstream aobj UUID)
 	upstreamAObjUUID := stats.ObjectName().ObjectId()
-
-	// Record mapping in iteration context
-	// Map from upstream aobj UUID to both current and previous object stats
-
-	// Get previous stats if exists, otherwise use zero value
-	mapping := aobjectMap[*upstreamAObjUUID]
 
 	// Get object file from upstream using GETOBJECT
 	objectContent, err := GetObjectFromUpstreamWithWorker(ctx, upstreamExecutor, stats.ObjectName().String(), getChunkWorker, subscriptionAccountName, pubName)
@@ -444,17 +443,17 @@ func filterAppendableObject(
 		return nil, moerr.NewInternalErrorf(ctx, "failed to create object from batch: %v", err)
 	}
 
-	// Return mapping update info instead of directly updating aobjectMap
+	// Return mapping update info for storage in mo_ccpr_objects table
 	return &FilterObjectResult{
 		HasMappingUpdate: true,
 		UpstreamAObjUUID: upstreamAObjUUID,
-		PreviousStats:    mapping.Current, // Previous is the old current
-		CurrentStats:     objStats,        // New current stats
+		CurrentStats:     objStats, // New current stats
 	}, nil
 }
 
 // filterNonAppendableObject handles non-appendable objects
-// Writes directly to fileservice
+// Writes directly to fileservice with a new UUID
+// Returns the new ObjectStats with the new object name
 func filterNonAppendableObject(
 	ctx context.Context,
 	stats *objectio.ObjectStats,
@@ -463,19 +462,24 @@ func filterNonAppendableObject(
 	getChunkWorker GetChunkWorker,
 	subscriptionAccountName string,
 	pubName string,
-) error {
-	// Get object name from stats
-	objectName := stats.ObjectName().String()
+) (objectio.ObjectStats, error) {
+	// Get upstream object name from stats
+	upstreamObjectName := stats.ObjectName().String()
+
+	// Generate new segment ID and build new object name
+	newSegID := objectio.NewSegmentid()
+	newObjectName := objectio.BuildObjectName(newSegID, 0)
 
 	// Get object file from upstream
-	objectContent, err := GetObjectFromUpstreamWithWorker(ctx, upstreamExecutor, objectName, getChunkWorker, subscriptionAccountName, pubName)
+	objectContent, err := GetObjectFromUpstreamWithWorker(ctx, upstreamExecutor, upstreamObjectName, getChunkWorker, subscriptionAccountName, pubName)
 	if err != nil {
-		return moerr.NewInternalErrorf(ctx, "failed to get object from upstream: %v", err)
+		return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to get object from upstream: %v", err)
 	}
 
-	// Write directly to local fileservice
+	// Write to local fileservice with new object name
+	newObjectNameStr := newObjectName.String()
 	err = localFS.Write(ctx, fileservice.IOVector{
-		FilePath: objectName,
+		FilePath: newObjectNameStr,
 		Entries: []fileservice.IOEntry{
 			{
 				Offset: 0,
@@ -489,20 +493,20 @@ func filterNonAppendableObject(
 		if moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
 			// Log warning instead of returning error
 			logutil.Warn("file already exists, deleting and rewriting",
-				zap.String("file", objectName),
+				zap.String("file", newObjectNameStr),
 				logutil.ErrorField(err))
 
 			// Delete the existing file
-			deleteErr := localFS.Delete(ctx, objectName)
+			deleteErr := localFS.Delete(ctx, newObjectNameStr)
 			if deleteErr != nil {
 				logutil.Warn("failed to delete existing file, ignoring",
-					zap.String("file", objectName),
+					zap.String("file", newObjectNameStr),
 					logutil.ErrorField(deleteErr))
 			}
 
 			// Retry writing after deletion
 			err = localFS.Write(ctx, fileservice.IOVector{
-				FilePath: objectName,
+				FilePath: newObjectNameStr,
 				Entries: []fileservice.IOEntry{
 					{
 						Offset: 0,
@@ -512,14 +516,24 @@ func filterNonAppendableObject(
 				},
 			})
 			if err != nil {
-				return moerr.NewInternalErrorf(ctx, "failed to write object to fileservice after deletion: %v", err)
+				return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to write object to fileservice after deletion: %v", err)
 			}
 		} else {
-			return moerr.NewInternalErrorf(ctx, "failed to write object to fileservice: %v", err)
+			return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to write object to fileservice: %v", err)
 		}
 	}
 
-	return nil
+	// Create new ObjectStats with the new object name
+	var newStats objectio.ObjectStats
+	// Copy original stats
+	statsBytes := stats.Marshal()
+	newStats.UnMarshal(statsBytes)
+	// Update with new object name
+	if err := objectio.SetObjectStatsObjectName(&newStats, newObjectName); err != nil {
+		return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to set new object name: %v", err)
+	}
+
+	return newStats, nil
 }
 
 // GetObjectFromUpstreamWithWorker gets object file from upstream using GETOBJECT SQL with worker pool
@@ -1338,12 +1352,12 @@ func GetObjectListMap(ctx context.Context, iterationCtx *IterationContext, cnEng
 
 func ApplyObjects(
 	ctx context.Context,
-	tastID string,
+	taskID string,
 	accountID uint32,
 	indexTableMappings map[string]string,
-	aobjectMap map[objectio.ObjectId]AObjMapping,
 	objectMap map[objectio.ObjectId]*ObjectWithTableInfo,
 	upstreamExecutor SQLExecutor,
+	localExecutor SQLExecutor,
 	currentTS types.TS,
 	txn client.TxnOperator,
 	cnEngine engine.Engine,
@@ -1364,7 +1378,7 @@ func ApplyObjects(
 	for _, info := range objectMap {
 		if !info.Delete {
 			statsBytes := info.Stats.Marshal()
-			filterJob := NewFilterObjectJob(ctx, statsBytes, currentTS, aobjectMap, upstreamExecutor, info.IsTombstone, fs, mp, getChunkWorker, subscriptionAccountName, pubName)
+			filterJob := NewFilterObjectJob(ctx, statsBytes, currentTS, upstreamExecutor, info.IsTombstone, fs, mp, getChunkWorker, subscriptionAccountName, pubName)
 			if filterObjectWorker != nil {
 				filterObjectWorker.SubmitFilterObject(filterJob)
 			} else {
@@ -1388,211 +1402,172 @@ func ApplyObjects(
 		info.TableName = downstreamTableName
 
 		if info.Stats.GetAppendable() {
-			if !info.Delete {
+			upstreamObjID := info.Stats.ObjectName().ObjectId()
+			upstreamIDStr := upstreamObjID.String()
+
+			if info.Delete {
+				// Query existing mapping from mo_ccpr_objects table
+				existingStats, exists, queryErr := queryCcprObjectMapping(ctx, localExecutor, taskID, upstreamIDStr)
+				if queryErr != nil {
+					err = moerr.NewInternalErrorf(ctx, "failed to query ccpr object mapping: %v", queryErr)
+					return
+				}
+				if exists {
+					// Add existing downstream object to delete stats
+					if info.IsTombstone {
+						collectedTombstoneDeleteStats = append(collectedTombstoneDeleteStats, &ObjectWithTableInfo{
+							Stats:       existingStats,
+							DBName:      info.DBName,
+							TableName:   info.TableName,
+							IsTombstone: info.IsTombstone,
+							Delete:      true,
+						})
+					} else {
+						collectedDataDeleteStats = append(collectedDataDeleteStats, &ObjectWithTableInfo{
+							Stats:       existingStats,
+							DBName:      info.DBName,
+							TableName:   info.TableName,
+							IsTombstone: info.IsTombstone,
+							Delete:      true,
+						})
+					}
+					// Delete the mapping from mo_ccpr_objects table
+					if deleteErr := deleteCcprObjectMapping(ctx, localExecutor, taskID, upstreamIDStr); deleteErr != nil {
+						err = moerr.NewInternalErrorf(ctx, "failed to delete ccpr object mapping: %v", deleteErr)
+						return
+					}
+				}
+			} else {
 				filterResult := info.FilterJob.WaitDone().(*FilterObjectJobResult)
 				if filterResult.Err != nil {
 					err = moerr.NewInternalErrorf(ctx, "failed to filter object: %v", filterResult.Err)
 					return
 				}
-				// Update aobjectMap with the result
-				if filterResult.HasMappingUpdate && filterResult.UpstreamAObjUUID != nil {
-					mapping := aobjectMap[*filterResult.UpstreamAObjUUID]
-					mapping.Previous = filterResult.PreviousStats
-					mapping.Current = filterResult.CurrentStats
-					aobjectMap[*filterResult.UpstreamAObjUUID] = mapping
+				// Query existing mapping from mo_ccpr_objects table
+				existingStats, exists, queryErr := queryCcprObjectMapping(ctx, localExecutor, taskID, upstreamIDStr)
+				if queryErr != nil {
+					err = moerr.NewInternalErrorf(ctx, "failed to query ccpr object mapping: %v", queryErr)
+					return
+				}
+				if exists {
+					// Add existing downstream object to delete stats
+					if info.IsTombstone {
+						collectedTombstoneDeleteStats = append(collectedTombstoneDeleteStats, &ObjectWithTableInfo{
+							Stats:       existingStats,
+							DBName:      info.DBName,
+							TableName:   info.TableName,
+							IsTombstone: info.IsTombstone,
+							Delete:      true,
+						})
+					} else {
+						collectedDataDeleteStats = append(collectedDataDeleteStats, &ObjectWithTableInfo{
+							Stats:       existingStats,
+							DBName:      info.DBName,
+							TableName:   info.TableName,
+							IsTombstone: info.IsTombstone,
+							Delete:      true,
+						})
+					}
+				}
+				// Insert/update new mapping to mo_ccpr_objects table
+				if filterResult.HasMappingUpdate && filterResult.CurrentStats.ObjectName() != nil {
+					downstreamIDStr := filterResult.CurrentStats.ObjectName().ObjectId().String()
+					if insertErr := insertCcprObjectMapping(ctx, localExecutor, taskID, upstreamIDStr, downstreamIDStr, filterResult.CurrentStats, info.IsTombstone, info.DBName, info.TableName); insertErr != nil {
+						err = moerr.NewInternalErrorf(ctx, "failed to insert ccpr object mapping: %v", insertErr)
+						return
+					}
+					// Add new downstream object to insert stats
+					if info.IsTombstone {
+						collectedTombstoneInsertStats = append(collectedTombstoneInsertStats, &ObjectWithTableInfo{
+							Stats:       filterResult.CurrentStats,
+							DBName:      info.DBName,
+							TableName:   info.TableName,
+							IsTombstone: info.IsTombstone,
+							Delete:      false,
+						})
+					} else {
+						collectedDataInsertStats = append(collectedDataInsertStats, &ObjectWithTableInfo{
+							Stats:       filterResult.CurrentStats,
+							DBName:      info.DBName,
+							TableName:   info.TableName,
+							IsTombstone: info.IsTombstone,
+							Delete:      false,
+						})
+					}
 				}
 			}
 			continue
 		}
 
+		// Handle non-appendable objects
+		upstreamObjID := info.Stats.ObjectName().ObjectId()
+		upstreamIDStr := upstreamObjID.String()
+
 		if info.Delete {
-			// Object to delete
+			// Query mo_ccpr_objects table to get the downstream stats before deleting
+			downstreamStats, _, queryErr := queryCcprObjectMapping(ctx, localExecutor, taskID, upstreamIDStr)
+			if queryErr != nil {
+				err = moerr.NewInternalErrorf(ctx, "failed to query ccpr object mapping: %v", queryErr)
+				return
+			}
+			// Delete from mo_ccpr_objects table
+			if deleteErr := deleteCcprObjectMapping(ctx, localExecutor, taskID, upstreamIDStr); deleteErr != nil {
+				err = moerr.NewInternalErrorf(ctx, "failed to delete ccpr object mapping: %v", deleteErr)
+				return
+			}
+			// Use downstream stats from the table for delete operation
 			if info.IsTombstone {
-				collectedTombstoneDeleteStats = append(collectedTombstoneDeleteStats, info)
+				collectedTombstoneDeleteStats = append(collectedTombstoneDeleteStats, &ObjectWithTableInfo{
+					Stats:       downstreamStats,
+					DBName:      info.DBName,
+					TableName:   info.TableName,
+					IsTombstone: info.IsTombstone,
+					Delete:      true,
+				})
 			} else {
-				collectedDataDeleteStats = append(collectedDataDeleteStats, info)
+				collectedDataDeleteStats = append(collectedDataDeleteStats, &ObjectWithTableInfo{
+					Stats:       downstreamStats,
+					DBName:      info.DBName,
+					TableName:   info.TableName,
+					IsTombstone: info.IsTombstone,
+					Delete:      true,
+				})
 			}
 		} else {
 			// Wait for pre-submitted FilterObject job to handle the object
 			// FilterObject will:
-			// - For aobj: get object from upstream, convert to batch, filter by snapshot TS, create new object
-			//   For delete: mark object for deletion in ActiveAObj
 			// - For nobj: get object from upstream and write directly to fileservice
 			filterResult := info.FilterJob.WaitDone().(*FilterObjectJobResult)
 			if filterResult.Err != nil {
 				err = moerr.NewInternalErrorf(ctx, "failed to filter object: %v", filterResult.Err)
 				return
 			}
-			// Update aobjectMap with the result
-			if filterResult.HasMappingUpdate && filterResult.UpstreamAObjUUID != nil {
-				mapping := aobjectMap[*filterResult.UpstreamAObjUUID]
-				mapping.Previous = filterResult.PreviousStats
-				mapping.Current = filterResult.CurrentStats
-				aobjectMap[*filterResult.UpstreamAObjUUID] = mapping
-			}
-			// Object to insert
-			if info.IsTombstone {
-				collectedTombstoneInsertStats = append(collectedTombstoneInsertStats, info)
-			} else {
-				collectedDataInsertStats = append(collectedDataInsertStats, info)
-			}
-		}
-	}
-
-	// Process ActiveAObj and merge into collected stats
-	// All objects (aobj and nobj) will be submitted together after processing
-	if aobjectMap != nil {
-		var objectsToDelete []objectio.ObjectId // Track UUIDs to delete from map
-		var addedObjects []struct {
-			upstream objectio.ObjectId
-			current  objectio.ObjectId
-		}
-		var deletedObjects []objectio.ObjectId
-
-		for upstreamUUID, mapping := range aobjectMap {
-			upstreamInfo, ok := objectMap[upstreamUUID]
-			if !ok {
-				continue
-			}
-			isTombstone := upstreamInfo.IsTombstone
-			dbName := upstreamInfo.DBName
-			tableName := upstreamInfo.TableName
-
-			if !mapping.Current.IsZero() {
-				currentChanged := false
-				if mapping.Previous.IsZero() {
-					// New mapping (no previous)
-					currentChanged = true
-				} else {
-					// Check if current is different from previous by comparing object names
-					currentName := mapping.Current.ObjectName().String()
-					previousName := mapping.Previous.ObjectName().String()
-					if currentName != previousName {
-						currentChanged = true
-					}
+			// Insert mapping to mo_ccpr_objects table for non-appendable objects
+			if !filterResult.DownstreamStats.IsZero() {
+				downstreamIDStr := filterResult.DownstreamStats.ObjectName().ObjectId().String()
+				if insertErr := insertCcprObjectMapping(ctx, localExecutor, taskID, upstreamIDStr, downstreamIDStr, filterResult.DownstreamStats, info.IsTombstone, info.DBName, info.TableName); insertErr != nil {
+					err = moerr.NewInternalErrorf(ctx, "failed to insert ccpr object mapping: %v", insertErr)
+					return
 				}
-				if currentChanged {
-					addedObjects = append(addedObjects, struct {
-						upstream objectio.ObjectId
-						current  objectio.ObjectId
-					}{
-						upstream: upstreamUUID,
-						current:  *mapping.Current.ObjectName().ObjectId(),
-					})
-				}
-			}
-
-			// If delete is true, delete the object and remove from map
-			if upstreamInfo.Delete {
-				// Delete previous object if it exists (previous object was created in earlier iteration)
-				if !mapping.Current.IsZero() {
-					// Track deleted object
-					deletedObjects = append(deletedObjects, *mapping.Current.ObjectName().ObjectId())
-					// Delete the previous object (assume data object, not tombstone)
-					// Use srcInfo for dbName and tableName since ActiveAObj doesn't have table info
-					if isTombstone {
-						collectedTombstoneDeleteStats = append(collectedTombstoneDeleteStats, &ObjectWithTableInfo{
-							Stats:       mapping.Current,
-							DBName:      dbName,
-							TableName:   tableName,
-							IsTombstone: isTombstone,
-							Delete:      true,
-						})
-
-					} else {
-						collectedDataDeleteStats = append(collectedDataDeleteStats, &ObjectWithTableInfo{
-							Stats:       mapping.Current,
-							DBName:      dbName,
-							TableName:   tableName,
-							IsTombstone: isTombstone,
-							Delete:      true,
-						})
-					}
-				}
-				// Mark for removal from map (no need to record in table)
-				objectsToDelete = append(objectsToDelete, upstreamUUID)
-				continue
-			}
-
-			// Check if current stats is valid (not zero value)
-			if !mapping.Current.IsZero() {
-				// New object to insert (not tombstone by default for ActiveAObj)
-				// Use srcInfo for dbName and tableName since ActiveAObj doesn't have table info
-				if isTombstone {
+				// Use downstream stats for insert operation
+				if info.IsTombstone {
 					collectedTombstoneInsertStats = append(collectedTombstoneInsertStats, &ObjectWithTableInfo{
-						Stats:       mapping.Current,
-						DBName:      dbName,
-						TableName:   tableName,
-						IsTombstone: isTombstone,
+						Stats:       filterResult.DownstreamStats,
+						DBName:      info.DBName,
+						TableName:   info.TableName,
+						IsTombstone: info.IsTombstone,
 						Delete:      false,
 					})
 				} else {
 					collectedDataInsertStats = append(collectedDataInsertStats, &ObjectWithTableInfo{
-						Stats:       mapping.Current,
-						DBName:      dbName,
-						TableName:   tableName,
-						IsTombstone: isTombstone,
+						Stats:       filterResult.DownstreamStats,
+						DBName:      info.DBName,
+						TableName:   info.TableName,
+						IsTombstone: info.IsTombstone,
 						Delete:      false,
 					})
 				}
 			}
-
-			// Check if previous stats is valid (not zero value)
-			if !mapping.Previous.IsZero() {
-				// Track deleted previous object
-				deletedObjects = append(deletedObjects, *mapping.Previous.ObjectName().ObjectId())
-				// Previous object to delete (assume data object, not tombstone)
-				// Use srcInfo for dbName and tableName since ActiveAObj doesn't have table info
-				if isTombstone {
-					collectedTombstoneDeleteStats = append(collectedTombstoneDeleteStats, &ObjectWithTableInfo{
-						Stats:       mapping.Previous,
-						DBName:      dbName,
-						TableName:   tableName,
-						IsTombstone: isTombstone,
-						Delete:      true,
-					})
-				} else {
-					collectedDataDeleteStats = append(collectedDataDeleteStats, &ObjectWithTableInfo{
-						Stats:       mapping.Previous,
-						DBName:      dbName,
-						TableName:   tableName,
-						IsTombstone: isTombstone,
-						Delete:      true,
-					})
-				}
-			}
-		}
-
-		// Remove objects marked for deletion from map
-		for _, uuid := range objectsToDelete {
-			delete(aobjectMap, uuid)
-		}
-
-		// Log aobjectmap updates
-		if len(addedObjects) > 0 {
-			var upstreamObjs []string
-			var currentObjs []string
-			for _, obj := range addedObjects {
-				upstreamObjs = append(upstreamObjs, obj.upstream.ShortStringEx())
-				currentObjs = append(currentObjs, obj.current.ShortStringEx())
-			}
-			logutil.Info("ccpr-iteration-aobjectmap",
-				zap.String("task_id", tastID),
-				zap.String("action", "add"),
-				zap.Strings("upstream_objects", upstreamObjs),
-				zap.Strings("current_objects", currentObjs),
-			)
-		}
-		if len(deletedObjects) > 0 {
-			var deletedObjs []string
-			for _, obj := range deletedObjects {
-				deletedObjs = append(deletedObjs, obj.ShortStringEx())
-			}
-			logutil.Info("ccpr-iteration-aobjectmap",
-				zap.String("task_id", tastID),
-				zap.String("action", "delete"),
-				zap.Strings("objects", deletedObjs),
-			)
 		}
 	}
 
@@ -1604,7 +1579,7 @@ func ApplyObjects(
 
 	// 1. Submit tombstone delete objects (soft delete)
 	if len(collectedTombstoneDeleteStats) > 0 {
-		if err = submitObjectsAsDelete(downstreamCtx, tastID, txn, cnEngine, collectedTombstoneDeleteStats, mp); err != nil {
+		if err = submitObjectsAsDelete(downstreamCtx, taskID, txn, cnEngine, collectedTombstoneDeleteStats, mp); err != nil {
 			err = moerr.NewInternalErrorf(ctx, "failed to submit tombstone delete objects: %v", err)
 			return
 		}
@@ -1612,7 +1587,7 @@ func ApplyObjects(
 
 	// 2. Submit tombstone insert objects
 	if len(collectedTombstoneInsertStats) > 0 {
-		if err = submitObjectsAsInsert(downstreamCtx, tastID, txn, cnEngine, collectedTombstoneInsertStats, nil, mp); err != nil {
+		if err = submitObjectsAsInsert(downstreamCtx, taskID, txn, cnEngine, collectedTombstoneInsertStats, nil, mp); err != nil {
 			err = moerr.NewInternalErrorf(ctx, "failed to submit tombstone insert objects: %v", err)
 			return
 		}
@@ -1620,7 +1595,7 @@ func ApplyObjects(
 
 	// 3. Submit data delete objects (soft delete)
 	if len(collectedDataDeleteStats) > 0 {
-		if err = submitObjectsAsDelete(downstreamCtx, tastID, txn, cnEngine, collectedDataDeleteStats, mp); err != nil {
+		if err = submitObjectsAsDelete(downstreamCtx, taskID, txn, cnEngine, collectedDataDeleteStats, mp); err != nil {
 			err = moerr.NewInternalErrorf(ctx, "failed to submit data delete objects: %v", err)
 			return
 		}
@@ -1628,10 +1603,127 @@ func ApplyObjects(
 
 	// 4. Submit data insert objects
 	if len(collectedDataInsertStats) > 0 {
-		if err = submitObjectsAsInsert(downstreamCtx, tastID, txn, cnEngine, nil, collectedDataInsertStats, mp); err != nil {
+		if err = submitObjectsAsInsert(downstreamCtx, taskID, txn, cnEngine, nil, collectedDataInsertStats, mp); err != nil {
 			err = moerr.NewInternalErrorf(ctx, "failed to submit data insert objects: %v", err)
 			return
 		}
 	}
 	return
+}
+
+// queryCcprObjectMapping queries the mo_ccpr_objects table for an existing mapping
+// Returns the downstream object stats if found, along with a boolean indicating existence
+func queryCcprObjectMapping(
+	ctx context.Context,
+	localExecutor SQLExecutor,
+	ccprID string,
+	upstreamID string,
+) (objectio.ObjectStats, bool, error) {
+	querySQL := PublicationSQLBuilder.QueryMoCcprObjectsSQL(ccprID, upstreamID)
+
+	// Execute query using system account context
+	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	result, cancel, err := localExecutor.ExecSQL(systemCtx, nil, querySQL, true, false, time.Minute)
+	if err != nil {
+		return objectio.ObjectStats{}, false, moerr.NewInternalErrorf(ctx, "failed to query mo_ccpr_objects: %v", err)
+	}
+	defer func() {
+		result.Close()
+		if cancel != nil {
+			cancel()
+		}
+	}()
+
+	// Check if record exists
+	if !result.Next() {
+		if err := result.Err(); err != nil {
+			return objectio.ObjectStats{}, false, moerr.NewInternalErrorf(ctx, "failed to read query result: %v", err)
+		}
+		return objectio.ObjectStats{}, false, nil
+	}
+
+	// Scan the result
+	var downstreamID string
+	var downstreamStatsBytes []byte
+	var isTombstone bool
+	var dbName, tableName string
+
+	if err := result.Scan(&downstreamID, &downstreamStatsBytes, &isTombstone, &dbName, &tableName); err != nil {
+		return objectio.ObjectStats{}, false, moerr.NewInternalErrorf(ctx, "failed to scan query result: %v", err)
+	}
+
+	// Parse ObjectStats from bytes
+	var stats objectio.ObjectStats
+	if len(downstreamStatsBytes) == objectio.ObjectStatsLen {
+		stats.UnMarshal(downstreamStatsBytes)
+	}
+
+	return stats, true, nil
+}
+
+// insertCcprObjectMapping inserts or updates a mapping in the mo_ccpr_objects table
+func insertCcprObjectMapping(
+	ctx context.Context,
+	localExecutor SQLExecutor,
+	ccprID string,
+	upstreamID string,
+	downstreamID string,
+	downstreamStats objectio.ObjectStats,
+	isTombstone bool,
+	dbName string,
+	tableName string,
+) error {
+	// Convert stats to hex string
+	statsBytes := downstreamStats.Marshal()
+	statsHex := fmt.Sprintf("%x", statsBytes)
+
+	insertSQL := PublicationSQLBuilder.InsertMoCcprObjectsSQL(
+		ccprID,
+		upstreamID,
+		downstreamID,
+		statsHex,
+		isTombstone,
+		dbName,
+		tableName,
+	)
+
+	// Execute insert using system account context
+	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	result, cancel, err := localExecutor.ExecSQL(systemCtx, nil, insertSQL, true, false, time.Minute)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to insert into mo_ccpr_objects: %v", err)
+	}
+	defer func() {
+		result.Close()
+		if cancel != nil {
+			cancel()
+		}
+	}()
+
+	return nil
+}
+
+// deleteCcprObjectMapping deletes a mapping from the mo_ccpr_objects table
+func deleteCcprObjectMapping(
+	ctx context.Context,
+	localExecutor SQLExecutor,
+	ccprID string,
+	upstreamID string,
+) error {
+	deleteSQL := PublicationSQLBuilder.DeleteMoCcprObjectsSQL(ccprID, upstreamID)
+
+	// Execute delete using system account context
+	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	result, cancel, err := localExecutor.ExecSQL(systemCtx, nil, deleteSQL, true, false, time.Minute)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to delete from mo_ccpr_objects: %v", err)
+	}
+	defer func() {
+		result.Close()
+		if cancel != nil {
+			cancel()
+		}
+	}()
+
+	return nil
 }

@@ -175,7 +175,8 @@ const (
 	MO_ISCP_LOG         = "mo_iscp_log"
 	MO_STORED_PROCEDURE = "mo_stored_procedure"
 
-	MO_CCPR_LOG = "mo_ccpr_log"
+	MO_CCPR_LOG     = "mo_ccpr_log"
+	MO_CCPR_OBJECTS = "mo_ccpr_objects"
 
 	MO_INDEX_UPDATE = "mo_index_update"
 

@@ -2940,6 +2940,60 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 		return err
 	}
 
+	// Check for duplicate CCPR task based on sync level
+	// - account level: check if same account_id exists
+	// - database level: check if same account_id + db_name exists
+	// - table level: check if same account_id + db_name + table_name exists
+	var duplicateCheckSQL string
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+	switch syncLevel {
+	case "account":
+		duplicateCheckSQL = fmt.Sprintf(
+			"SELECT COUNT(1) FROM mo_catalog.mo_ccpr_log WHERE account_id = %d AND drop_at IS NULL",
+			accountId,
+		)
+	case "database":
+		escapedDbName := strings.ReplaceAll(dbName, "'", "''")
+		// Check if account level subscription exists OR same db_name subscription exists
+		duplicateCheckSQL = fmt.Sprintf(
+			"SELECT COUNT(1) FROM mo_catalog.mo_ccpr_log WHERE account_id = %d AND (db_name = '' OR db_name = '%s') AND drop_at IS NULL",
+			accountId, escapedDbName,
+		)
+	case "table":
+		escapedDbName := strings.ReplaceAll(dbName, "'", "''")
+		escapedTableName := strings.ReplaceAll(tableName, "'", "''")
+		// Check if account level subscription exists OR same db level subscription exists OR same table subscription exists
+		duplicateCheckSQL = fmt.Sprintf(
+			"SELECT COUNT(1) FROM mo_catalog.mo_ccpr_log WHERE account_id = %d AND (db_name = '' OR (db_name = '%s' AND table_name = '') OR (db_name = '%s' AND table_name = '%s')) AND drop_at IS NULL",
+			accountId, escapedDbName, escapedDbName, escapedTableName,
+		)
+	}
+
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, duplicateCheckSQL); err != nil {
+		return err
+	}
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return err
+	}
+	if len(erArray) > 0 && erArray[0].GetRowCount() > 0 {
+		count, err := erArray[0].GetInt64(ctx, 0, 0)
+		if err != nil {
+			return err
+		}
+		if count > 0 {
+			switch syncLevel {
+			case "account":
+				return moerr.NewInternalErrorf(ctx, "a subscription with account level for account_id %d already exists", accountId)
+			case "database":
+				return moerr.NewInternalErrorf(ctx, "a subscription with database level for account_id %d and database '%s' already exists", accountId, dbName)
+			case "table":
+				return moerr.NewInternalErrorf(ctx, "a subscription with table level for account_id %d and table '%s.%s' already exists", accountId, dbName, tableName)
+			}
+		}
+	}
+
 	// iteration_state: 2 = complete (based on design.md: 0='pending', 1='running', 2='complete', 3='error', 4='cancel')
 	iterationState := int8(2) // complete
 	// state: 0 = running (subscription state: 0=running, 1=error, 2=pause, 3=dropped)

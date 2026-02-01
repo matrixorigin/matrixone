@@ -464,8 +464,7 @@ func runApplyObjects(
 	objectMap, err := loadObjectMapFromDir(ctx, exportDir)
 	require.NoError(t, err)
 
-	// Create empty aobjectMap and indexTableMappings
-	aobjectMap := make(map[objectio.ObjectId]publication.AObjMapping)
+	// Create empty indexTableMappings
 	indexTableMappings := make(map[string]string)
 
 	// Get fileservice from taeHandler (which has the fileservice)
@@ -502,21 +501,25 @@ func runApplyObjects(
 	// Call ApplyObjects
 	taskID := "test-task-1"
 	currentTS := types.TimestampToTS(disttaeEngine.Now())
+	// Note: localExecutor is nil since this test doesn't test appendable objects that require mo_ccpr_objects queries
+	var localExecutor publication.SQLExecutor
 	err = publication.ApplyObjects(
 		ctxWithTimeout,
 		taskID,
 		accountID,
 		indexTableMappings,
-		aobjectMap,
 		objectMap,
 		upstreamExecutor,
+		localExecutor,
 		currentTS,
 		cnTxn,
 		disttaeEngine.Engine,
 		mp,
 		fs,
-		nil,                  // FilterObjectWorker
-		nil,                  // GetChunkWorker
+		nil, // FilterObjectWorker
+		nil, // GetChunkWorker
+		"",  // subscriptionAccountName
+		"",  // pubName
 	)
 	require.NoError(t, err)
 
