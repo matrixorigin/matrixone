@@ -122,6 +122,8 @@ func TestCheckIterationStatus(t *testing.T) {
 	systemCtx := context.WithValue(ctxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
 	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprObjectsDDL)
+	require.NoError(t, err)
 
 	// Create InternalSQLExecutor (only once)
 	// Pass nil for txnClient - transactions will be managed externally via ExecTxn
@@ -215,7 +217,8 @@ func TestCheckIterationStatus(t *testing.T) {
 				insertSQL := fmt.Sprintf(
 					`INSERT INTO mo_catalog.mo_ccpr_log (
 					task_id, 
-					subscription_name, 
+					subscription_name,
+					subscription_account_name,
 					sync_level, 
 					account_id,
 					db_name, 
@@ -228,7 +231,8 @@ func TestCheckIterationStatus(t *testing.T) {
 					cn_uuid
 				) VALUES (
 					'%s', 
-					'test_subscription', 
+					'test_subscription',
+					'test_account',
 					'full', 
 					%d,
 					'test_db', 
@@ -319,6 +323,8 @@ func TestExecuteIteration1(t *testing.T) {
 	systemCtx := context.WithValue(srcCtxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
 	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprObjectsDDL)
+	require.NoError(t, err)
 
 	// Create mo_snapshots table for source account
 	moSnapshotsDDL := frontend.MoCatalogMoSnapshotsDDL
@@ -340,6 +346,28 @@ func TestExecuteIteration1(t *testing.T) {
 	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoSnapshotsDDL)
+	require.NoError(t, err)
+
+	// Create mo_account table (system table for account management)
+	moAccountDDL := `CREATE TABLE IF NOT EXISTS mo_catalog.mo_account (
+		account_id INT UNSIGNED PRIMARY KEY,
+		account_name VARCHAR(300) NOT NULL,
+		status VARCHAR(300) NOT NULL,
+		created_time TIMESTAMP NOT NULL,
+		comments VARCHAR(256) NOT NULL,
+		version BIGINT UNSIGNED NOT NULL DEFAULT 0,
+		suspended_time TIMESTAMP DEFAULT NULL
+	)`
+	err = exec_sql(disttaeEngine, systemCtx, moAccountDDL)
+	require.NoError(t, err)
+
+	// Insert test_account into mo_account (maps to destAccountID)
+	insertAccountSQL := fmt.Sprintf(
+		`INSERT INTO mo_catalog.mo_account (account_id, account_name, status, created_time, comments, version) 
+		VALUES (%d, 'test_account', 'open', now(), 'test account', 0)`,
+		destAccountID,
+	)
+	err = exec_sql(disttaeEngine, systemCtx, insertAccountSQL)
 	require.NoError(t, err)
 
 	// Step 1: Create source database and table in source account
@@ -386,7 +414,8 @@ func TestExecuteIteration1(t *testing.T) {
 	insertSQL := fmt.Sprintf(
 		`INSERT INTO mo_catalog.mo_ccpr_log (
 			task_id, 
-			subscription_name, 
+			subscription_name,
+			subscription_account_name,
 			sync_level, 
 			account_id,
 			db_name, 
@@ -399,7 +428,8 @@ func TestExecuteIteration1(t *testing.T) {
 			cn_uuid
 		) VALUES (
 			'%s', 
-			'%s', 
+			'%s',
+			'test_account',
 			'table', 
 			%d,
 			'%s', 
@@ -475,7 +505,7 @@ func TestExecuteIteration1(t *testing.T) {
 	// Step 5: Verify that the iteration state was updated
 	// Query mo_ccpr_log to check iteration_state using system account
 	querySQL := fmt.Sprintf(
-		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = '%s'`,
 		taskID,
 	)
 
@@ -542,7 +572,7 @@ func TestExecuteIteration1(t *testing.T) {
 	updateSQL := fmt.Sprintf(
 		`UPDATE mo_catalog.mo_ccpr_log 
 		SET iteration_state = %d, iteration_lsn = %d 
-		WHERE task_id = %d`,
+		WHERE task_id = '%s'`,
 		publication.IterationStateRunning,
 		iterationLSN2,
 		taskID,
@@ -585,7 +615,7 @@ func TestExecuteIteration1(t *testing.T) {
 
 	// Step 8: Verify that the second iteration state was updated
 	querySQL2 := fmt.Sprintf(
-		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = '%s'`,
 		taskID,
 	)
 
@@ -671,7 +701,7 @@ func TestExecuteIteration1(t *testing.T) {
 	updateSQL3 := fmt.Sprintf(
 		`UPDATE mo_catalog.mo_ccpr_log 
 		SET iteration_state = %d, iteration_lsn = %d 
-		WHERE task_id = %d`,
+		WHERE task_id = '%s'`,
 		publication.IterationStateRunning,
 		iterationLSN3,
 		taskID,
@@ -714,7 +744,7 @@ func TestExecuteIteration1(t *testing.T) {
 
 	// Step 11: Verify that the third iteration state was updated
 	querySQL3 := fmt.Sprintf(
-		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = '%s'`,
 		taskID,
 	)
 
@@ -813,6 +843,8 @@ func TestExecuteIterationDatabaseLevel(t *testing.T) {
 	systemCtx := context.WithValue(srcCtxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
 	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprObjectsDDL)
+	require.NoError(t, err)
 
 	// Create mo_snapshots table for source account
 	moSnapshotsDDL := frontend.MoCatalogMoSnapshotsDDL
@@ -901,7 +933,8 @@ func TestExecuteIterationDatabaseLevel(t *testing.T) {
 	insertSQL := fmt.Sprintf(
 		`INSERT INTO mo_catalog.mo_ccpr_log (
 			task_id, 
-			subscription_name, 
+			subscription_name,
+			subscription_account_name,
 			sync_level, 
 			account_id,
 			db_name, 
@@ -914,7 +947,8 @@ func TestExecuteIterationDatabaseLevel(t *testing.T) {
 			cn_uuid
 		) VALUES (
 			'%s', 
-			'%s', 
+			'%s',
+			'test_account',
 			'database', 
 			%d,
 			'%s', 
@@ -989,7 +1023,7 @@ func TestExecuteIterationDatabaseLevel(t *testing.T) {
 	// Step 5: Verify that the iteration state was updated
 	// Query mo_ccpr_log to check iteration_state using system account
 	querySQL := fmt.Sprintf(
-		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = '%s'`,
 		taskID,
 	)
 
@@ -1144,6 +1178,8 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 
 	err = exec_sql(disttaeEngine, systemCtxWithTimeout, frontend.MoCatalogMoCcprLogDDL)
 	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtxWithTimeout, frontend.MoCatalogMoCcprObjectsDDL)
+	require.NoError(t, err)
 
 	moSnapshotsDDLSystem := frontend.MoCatalogMoSnapshotsDDL
 	err = exec_sql(disttaeEngine, systemCtxWithTimeout, moSnapshotsDDLSystem)
@@ -1207,7 +1243,8 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 	insertSQL := fmt.Sprintf(
 		`INSERT INTO mo_catalog.mo_ccpr_log (
 			task_id, 
-			subscription_name, 
+			subscription_name,
+			subscription_account_name,
 			sync_level, 
 			account_id,
 			db_name, 
@@ -1220,7 +1257,8 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 			cn_uuid
 		) VALUES (
 			'%s', 
-			'%s', 
+			'%s',
+			'test_account',
 			'database', 
 			%d,
 			'%s', 
@@ -1297,7 +1335,7 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 	// Step 5: Verify that the iteration state was updated
 	// Query mo_ccpr_log to check iteration_state using system account
 	querySQL := fmt.Sprintf(
-		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = '%s'`,
 		taskID,
 	)
 
@@ -1410,7 +1448,7 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 	updateSQL := fmt.Sprintf(
 		`UPDATE mo_catalog.mo_ccpr_log 
 		SET iteration_state = %d, iteration_lsn = %d 
-		WHERE task_id = %d`,
+		WHERE task_id = '%s'`,
 		publication.IterationStateRunning,
 		iterationLSN2,
 		taskID,
@@ -1452,7 +1490,7 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 
 	// Step 12: Verify that the second iteration state was updated
 	querySQL2 := fmt.Sprintf(
-		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = '%s'`,
 		taskID,
 	)
 
@@ -1662,6 +1700,8 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 	systemCtx := context.WithValue(srcCtxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
 	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprObjectsDDL)
+	require.NoError(t, err)
 
 	// Create system tables for source account
 	moSnapshotsDDL := frontend.MoCatalogMoSnapshotsDDL
@@ -1731,7 +1771,8 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 	insertSQL := fmt.Sprintf(
 		`INSERT INTO mo_catalog.mo_ccpr_log (
 			task_id, 
-			subscription_name, 
+			subscription_name,
+			subscription_account_name,
 			sync_level, 
 			account_id,
 			db_name, 
@@ -1744,7 +1785,8 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 			cn_uuid
 		) VALUES (
 			'%s', 
-			'%s', 
+			'%s',
+			'test_account',
 			'table', 
 			%d,
 			'%s', 
@@ -1833,7 +1875,7 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 	updateSQL := fmt.Sprintf(
 		`UPDATE mo_catalog.mo_ccpr_log 
 		SET iteration_state = %d, iteration_lsn = %d 
-		WHERE task_id = %d`,
+		WHERE task_id = '%s'`,
 		publication.IterationStateRunning,
 		iterationLSN,
 		taskID,
@@ -1875,7 +1917,7 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 
 	// Step 6: Verify that the iteration state was updated
 	querySQL := fmt.Sprintf(
-		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = '%s'`,
 		taskID,
 	)
 
@@ -1977,6 +2019,8 @@ func TestExecuteIterationWithCommitFailedInjection(t *testing.T) {
 	systemCtx := context.WithValue(srcCtxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
 	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprObjectsDDL)
+	require.NoError(t, err)
 
 	// Create mo_snapshots table for source account
 	moSnapshotsDDL := frontend.MoCatalogMoSnapshotsDDL
@@ -2040,7 +2084,8 @@ func TestExecuteIterationWithCommitFailedInjection(t *testing.T) {
 	insertSQL := fmt.Sprintf(
 		`INSERT INTO mo_catalog.mo_ccpr_log (
 			task_id, 
-			subscription_name, 
+			subscription_name,
+			subscription_account_name,
 			sync_level, 
 			account_id,
 			db_name, 
@@ -2053,7 +2098,8 @@ func TestExecuteIterationWithCommitFailedInjection(t *testing.T) {
 			cn_uuid
 		) VALUES (
 			'%s', 
-			'%s', 
+			'%s',
+			'test_account',
 			'table', 
 			%d,
 			'%s', 
@@ -2135,7 +2181,7 @@ func TestExecuteIterationWithCommitFailedInjection(t *testing.T) {
 
 	// Step 5: Query mo_ccpr_log to check error_message using system account
 	querySQL := fmt.Sprintf(
-		`SELECT error_message FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+		`SELECT error_message FROM mo_catalog.mo_ccpr_log WHERE task_id = '%s'`,
 		taskID,
 	)
 
@@ -2207,6 +2253,8 @@ func TestCCPRGC(t *testing.T) {
 	// Create mo_ccpr_log table using system account context
 	systemCtx := context.WithValue(ctxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
+	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprObjectsDDL)
 	require.NoError(t, err)
 
 	// Create mo_snapshots table
@@ -2383,7 +2431,8 @@ func TestCCPRGC(t *testing.T) {
 				insertCcprLogSQL = fmt.Sprintf(
 					`INSERT INTO mo_catalog.mo_ccpr_log (
 						task_id, 
-						subscription_name, 
+						subscription_name,
+						subscription_account_name,
 						sync_level, 
 						account_id,
 						db_name, 
@@ -2397,7 +2446,8 @@ func TestCCPRGC(t *testing.T) {
 						drop_at
 					) VALUES (
 						'%s', 
-						'%s', 
+						'%s',
+						'test_account',
 						'table', 
 						%d,
 						'test_db', 
@@ -2425,7 +2475,8 @@ func TestCCPRGC(t *testing.T) {
 				insertCcprLogSQL = fmt.Sprintf(
 					`INSERT INTO mo_catalog.mo_ccpr_log (
 						task_id, 
-						subscription_name, 
+						subscription_name,
+						subscription_account_name,
 						sync_level, 
 						account_id,
 						db_name, 
@@ -2438,7 +2489,8 @@ func TestCCPRGC(t *testing.T) {
 						cn_uuid
 					) VALUES (
 						'%s', 
-						'%s', 
+						'%s',
+						'test_account',
 						'table', 
 						%d,
 						'test_db', 
@@ -2638,6 +2690,8 @@ func TestCCPRCreateDelete(t *testing.T) {
 	systemCtx := context.WithValue(srcCtxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
 	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprObjectsDDL)
+	require.NoError(t, err)
 
 	// Create mo_snapshots table for source account
 	moSnapshotsDDL := frontend.MoCatalogMoSnapshotsDDL
@@ -2703,7 +2757,8 @@ func TestCCPRCreateDelete(t *testing.T) {
 	insertSQL := fmt.Sprintf(
 		`INSERT INTO mo_catalog.mo_ccpr_log (
 			task_id, 
-			subscription_name, 
+			subscription_name,
+			subscription_account_name,
 			sync_level, 
 			account_id,
 			db_name, 
@@ -2716,7 +2771,8 @@ func TestCCPRCreateDelete(t *testing.T) {
 			cn_uuid
 		) VALUES (
 			'%s', 
-			'%s', 
+			'%s',
+			'test_account',
 			'database', 
 			%d,
 			'%s', 
@@ -2790,7 +2846,7 @@ func TestCCPRCreateDelete(t *testing.T) {
 
 	// Step 6: Verify that the first iteration state was updated
 	querySQL := fmt.Sprintf(
-		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = '%s'`,
 		taskID,
 	)
 
@@ -2868,7 +2924,7 @@ func TestCCPRCreateDelete(t *testing.T) {
 	updateSQL := fmt.Sprintf(
 		`UPDATE mo_catalog.mo_ccpr_log 
 		SET iteration_state = %d, iteration_lsn = %d 
-		WHERE task_id = %d`,
+		WHERE task_id = '%s'`,
 		publication.IterationStateRunning,
 		iterationLSN2,
 		taskID,
@@ -2910,7 +2966,7 @@ func TestCCPRCreateDelete(t *testing.T) {
 
 	// Step 12: Verify that the second iteration state was updated
 	querySQL2 := fmt.Sprintf(
-		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = '%s'`,
 		taskID,
 	)
 
@@ -3015,6 +3071,8 @@ func TestCCPRAlterTable(t *testing.T) {
 	systemCtx := context.WithValue(srcCtxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
 	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprObjectsDDL)
+	require.NoError(t, err)
 
 	// Create mo_snapshots table for source account
 	moSnapshotsDDL := frontend.MoCatalogMoSnapshotsDDL
@@ -3080,7 +3138,8 @@ func TestCCPRAlterTable(t *testing.T) {
 	insertSQL := fmt.Sprintf(
 		`INSERT INTO mo_catalog.mo_ccpr_log (
 			task_id, 
-			subscription_name, 
+			subscription_name,
+			subscription_account_name,
 			sync_level, 
 			account_id,
 			db_name, 
@@ -3093,7 +3152,8 @@ func TestCCPRAlterTable(t *testing.T) {
 			cn_uuid
 		) VALUES (
 			'%s', 
-			'%s', 
+			'%s',
+			'test_account',
 			'table', 
 			%d,
 			'%s', 
@@ -3168,7 +3228,7 @@ func TestCCPRAlterTable(t *testing.T) {
 
 	// Step 6: Verify that the first iteration state was updated
 	querySQL := fmt.Sprintf(
-		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = '%s'`,
 		taskID,
 	)
 
@@ -3273,7 +3333,7 @@ func TestCCPRAlterTable(t *testing.T) {
 	updateSQL2 := fmt.Sprintf(
 		`UPDATE mo_catalog.mo_ccpr_log 
 		SET iteration_state = %d, iteration_lsn = %d 
-		WHERE task_id = %d`,
+		WHERE task_id = '%s'`,
 		publication.IterationStateRunning,
 		iterationLSN2,
 		taskID,
@@ -3316,7 +3376,7 @@ func TestCCPRAlterTable(t *testing.T) {
 
 	// Step 13: Verify that the second iteration state was updated
 	querySQL2 := fmt.Sprintf(
-		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = '%s'`,
 		taskID,
 	)
 
@@ -3440,6 +3500,8 @@ func TestCCPRErrorHandling1(t *testing.T) {
 	systemCtx := context.WithValue(srcCtxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
 	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprObjectsDDL)
+	require.NoError(t, err)
 
 	// Create mo_snapshots table for source account
 	moSnapshotsDDL := frontend.MoCatalogMoSnapshotsDDL
@@ -3504,7 +3566,8 @@ func TestCCPRErrorHandling1(t *testing.T) {
 	insertSQL := fmt.Sprintf(
 		`INSERT INTO mo_catalog.mo_ccpr_log (
 			task_id, 
-			subscription_name, 
+			subscription_name,
+			subscription_account_name,
 			sync_level, 
 			account_id,
 			db_name, 
@@ -3517,7 +3580,8 @@ func TestCCPRErrorHandling1(t *testing.T) {
 			cn_uuid
 		) VALUES (
 			'%s', 
-			'%s', 
+			'%s',
+			'test_account',
 			'table', 
 			%d,
 			'%s', 
@@ -3602,7 +3666,7 @@ func TestCCPRErrorHandling1(t *testing.T) {
 	// Verify lsn, state, iteration_state, and error_message
 	querySQL1 := fmt.Sprintf(
 		`SELECT iteration_lsn, state, iteration_state, error_message 
-		FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+		FROM mo_catalog.mo_ccpr_log WHERE task_id = '%s'`,
 		taskID,
 	)
 
@@ -3659,7 +3723,7 @@ func TestCCPRErrorHandling1(t *testing.T) {
 	updateSQL2 := fmt.Sprintf(
 		`UPDATE mo_catalog.mo_ccpr_log 
 		SET iteration_state = %d, iteration_lsn = %d, error_message = ''
-		WHERE task_id = %d`,
+		WHERE task_id = '%s'`,
 		publication.IterationStateRunning,
 		iterationLSN1,
 		taskID,
@@ -3705,7 +3769,7 @@ func TestCCPRErrorHandling1(t *testing.T) {
 	// Verify second iteration error message
 	querySQL2 := fmt.Sprintf(
 		`SELECT iteration_lsn, state, iteration_state, error_message 
-		FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+		FROM mo_catalog.mo_ccpr_log WHERE task_id = '%s'`,
 		taskID,
 	)
 
@@ -3756,7 +3820,7 @@ func TestCCPRErrorHandling1(t *testing.T) {
 	updateSQL3 := fmt.Sprintf(
 		`UPDATE mo_catalog.mo_ccpr_log 
 		SET iteration_state = %d, iteration_lsn = %d, error_message = ''
-		WHERE task_id = %d`,
+		WHERE task_id = '%s'`,
 		publication.IterationStateRunning,
 		iterationLSN1,
 		taskID,
@@ -3802,7 +3866,7 @@ func TestCCPRErrorHandling1(t *testing.T) {
 	// Verify third iteration error message and state
 	querySQL3 := fmt.Sprintf(
 		`SELECT iteration_lsn, state, iteration_state, error_message 
-		FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+		FROM mo_catalog.mo_ccpr_log WHERE task_id = '%s'`,
 		taskID,
 	)
 
@@ -3925,6 +3989,8 @@ func TestCCPRDDLAccountLevel(t *testing.T) {
 	// Create mo_ccpr_log table using system account context
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
 	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprObjectsDDL)
+	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoAccountDDL)
 	require.NoError(t, err)
@@ -3973,7 +4039,8 @@ func TestCCPRDDLAccountLevel(t *testing.T) {
 	insertSQL := fmt.Sprintf(
 		`INSERT INTO mo_catalog.mo_ccpr_log (
 			task_id, 
-			subscription_name, 
+			subscription_name,
+			subscription_account_name,
 			sync_level, 
 			account_id,
 			db_name, 
@@ -3986,7 +4053,8 @@ func TestCCPRDDLAccountLevel(t *testing.T) {
 			cn_uuid
 		) VALUES (
 			'%s', 
-			'%s', 
+			'%s',
+			'test_account',
 			'account', 
 			%d,
 			'', 
@@ -4059,7 +4127,7 @@ func TestCCPRDDLAccountLevel(t *testing.T) {
 
 	// Step 6: Verify that the iteration state was updated
 	querySQL := fmt.Sprintf(
-		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = '%s'`,
 		taskID,
 	)
 
@@ -4121,7 +4189,7 @@ func TestCCPRDDLAccountLevel(t *testing.T) {
 	updateSQL := fmt.Sprintf(
 		`UPDATE mo_catalog.mo_ccpr_log 
 		SET iteration_state = %d, iteration_lsn = %d 
-		WHERE task_id = %d`,
+		WHERE task_id = '%s'`,
 		publication.IterationStateRunning,
 		iterationLSN2,
 		taskID,
@@ -4163,7 +4231,7 @@ func TestCCPRDDLAccountLevel(t *testing.T) {
 
 	// Step 12: Verify that the second iteration state was updated
 	querySQL2 := fmt.Sprintf(
-		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = '%s'`,
 		taskID,
 	)
 
@@ -4311,6 +4379,8 @@ func TestCCPRExecutorWithGC(t *testing.T) {
 	// Create mo_ccpr_log table using system account context
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
 	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprObjectsDDL)
+	require.NoError(t, err)
 	// Create mo_foreign_keys table using system account context
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoForeignKeysDDL)
 	require.NoError(t, err)
@@ -4423,6 +4493,7 @@ func TestCCPRExecutorWithGC(t *testing.T) {
 		`INSERT INTO mo_catalog.mo_ccpr_log (
 			task_id,
 			subscription_name,
+			subscription_account_name,
 			sync_level,
 			account_id,
 			db_name,
@@ -4436,6 +4507,7 @@ func TestCCPRExecutorWithGC(t *testing.T) {
 		) VALUES (
 			'%s',
 			'%s',
+			'test_account',
 			'table',
 			%d,
 			'%s',
@@ -4476,7 +4548,7 @@ func TestCCPRExecutorWithGC(t *testing.T) {
 
 	for time.Since(startTime) < maxWaitTime {
 		querySQL := fmt.Sprintf(
-			`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+			`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = '%s'`,
 			taskID,
 		)
 
@@ -4518,7 +4590,7 @@ func TestCCPRExecutorWithGC(t *testing.T) {
 	updateSQL := fmt.Sprintf(
 		`UPDATE mo_catalog.mo_ccpr_log
 		SET drop_at = '%s'
-		WHERE task_id = %d`,
+		WHERE task_id = '%s'`,
 		dropAtStr,
 		taskID,
 	)
@@ -4674,6 +4746,8 @@ func TestCCPRErrorHandling2(t *testing.T) {
 	systemCtx := context.WithValue(srcCtxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
 	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprObjectsDDL)
+	require.NoError(t, err)
 
 	// Create mo_snapshots table for source account
 	moSnapshotsDDL := frontend.MoCatalogMoSnapshotsDDL
@@ -4737,7 +4811,8 @@ func TestCCPRErrorHandling2(t *testing.T) {
 	insertSQL := fmt.Sprintf(
 		`INSERT INTO mo_catalog.mo_ccpr_log (
 			task_id, 
-			subscription_name, 
+			subscription_name,
+			subscription_account_name,
 			sync_level, 
 			account_id,
 			db_name, 
@@ -4750,7 +4825,8 @@ func TestCCPRErrorHandling2(t *testing.T) {
 			cn_uuid
 		) VALUES (
 			'%s', 
-			'%s', 
+			'%s',
+			'test_account',
 			'table', 
 			%d,
 			'%s', 
@@ -4837,7 +4913,7 @@ func TestCCPRErrorHandling2(t *testing.T) {
 	// Verify error_message was written
 	querySQL1 := fmt.Sprintf(
 		`SELECT iteration_state, iteration_lsn, error_message 
-		FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+		FROM mo_catalog.mo_ccpr_log WHERE task_id = '%s'`,
 		taskID,
 	)
 
@@ -4879,7 +4955,7 @@ func TestCCPRErrorHandling2(t *testing.T) {
 	updateSQL := fmt.Sprintf(
 		`UPDATE mo_catalog.mo_ccpr_log 
 		SET iteration_state = %d, error_message = '' , state = %d 
-		WHERE task_id = %d`,
+		WHERE task_id = '%s'`,
 		publication.IterationStateRunning,
 		publication.SubscriptionStateRunning,
 		taskID,
@@ -4924,7 +5000,7 @@ func TestCCPRErrorHandling2(t *testing.T) {
 	// Verify error_message is empty (not written)
 	querySQL2 := fmt.Sprintf(
 		`SELECT iteration_state, iteration_lsn, error_message 
-		FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+		FROM mo_catalog.mo_ccpr_log WHERE task_id = '%s'`,
 		taskID,
 	)
 

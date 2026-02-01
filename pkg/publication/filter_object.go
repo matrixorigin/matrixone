@@ -1619,6 +1619,9 @@ func queryCcprObjectMapping(
 	ccprID string,
 	upstreamID string,
 ) (objectio.ObjectStats, bool, error) {
+	if localExecutor == nil {
+		return objectio.ObjectStats{}, false, moerr.NewInternalError(ctx, "local executor is nil, cannot query ccpr object mapping")
+	}
 	querySQL := PublicationSQLBuilder.QueryMoCcprObjectsSQL(ccprID, upstreamID)
 
 	// Execute query using system account context
@@ -1710,6 +1713,9 @@ func deleteCcprObjectMapping(
 	ccprID string,
 	upstreamID string,
 ) error {
+	if localExecutor == nil {
+		return moerr.NewInternalError(ctx, "local executor is nil, cannot delete ccpr object mapping")
+	}
 	deleteSQL := PublicationSQLBuilder.DeleteMoCcprObjectsSQL(ccprID, upstreamID)
 
 	// Execute delete using system account context

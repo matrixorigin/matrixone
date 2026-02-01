@@ -238,12 +238,29 @@ func (e *InternalSQLExecutor) ExecSQL(
 
 	// Check if upstreamSQLHelper can handle this SQL
 	if e.upstreamSQLHelper != nil {
-		handled, result, err := e.upstreamSQLHelper.HandleSpecialSQL(baseCtx, query)
+		// Apply timeout to context for HandleSpecialSQL if specified
+		specialCtx := baseCtx
+		var specialCancel context.CancelFunc
+		if timeout > 0 {
+			specialCtx, specialCancel = context.WithTimeout(baseCtx, timeout)
+		}
+		handled, result, err := e.upstreamSQLHelper.HandleSpecialSQL(specialCtx, query)
 		if err != nil {
+			if specialCancel != nil {
+				specialCancel()
+			}
 			return nil, nil, err
 		}
 		if handled {
+			// Return the cancel function so caller can clean up
+			if specialCancel != nil {
+				return result, specialCancel, nil
+			}
 			return result, func() {}, nil
+		}
+		// If not handled, cancel the timeout context
+		if specialCancel != nil {
+			specialCancel()
 		}
 	}
 	// For other statements, use internal executor with retry logic

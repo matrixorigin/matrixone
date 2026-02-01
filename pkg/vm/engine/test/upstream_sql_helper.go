@@ -83,6 +83,12 @@ func NewUpstreamSQLHelper(
 	}
 }
 
+// Internal command prefixes
+const (
+	cmdGetSnapshotTsPrefix  = "__++__internal_get_snapshot_ts"
+	cmdGetDatabasesPrefix   = "__++__internal_get_databases"
+)
+
 // HandleSpecialSQL checks if the SQL is a special statement and handles it directly
 // Returns (handled, result, error) where handled indicates if the statement was handled
 // If a new transaction was created (because there was no txn initially), it will be committed on success or rolled back on error
@@ -90,6 +96,14 @@ func (h *UpstreamSQLHelper) HandleSpecialSQL(
 	ctx context.Context,
 	query string,
 ) (bool, *publication.Result, error) {
+	// Check for internal commands BEFORE parsing (they are not valid SQL)
+	if strings.HasPrefix(strings.ToLower(query), cmdGetSnapshotTsPrefix) {
+		return h.handleGetSnapshotTsCmd(ctx, query)
+	}
+	if strings.HasPrefix(strings.ToLower(query), cmdGetDatabasesPrefix) {
+		return h.handleGetDatabasesCmd(ctx, query)
+	}
+
 	// Parse SQL to check if it's a special statement
 	stmts, err := parsers.Parse(ctx, dialect.MYSQL, query, 0)
 	if err != nil || len(stmts) == 0 {
@@ -698,50 +712,8 @@ func (h *UpstreamSQLHelper) handleCheckSnapshotFlushedDirectly(
 		return nil, err
 	}
 
-	snapshotName := string(stmt.Name)
-	accountName := string(stmt.AccountName)
-	publicationName := string(stmt.PublicationName)
-
-	// If accountName is provided, use it for authorization context
-	queryCtx := ctx
-	if accountName != "" {
-		// Get account_id by account_name
-		systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
-		getAccountIdSQL := fmt.Sprintf(`SELECT account_id FROM mo_catalog.mo_account WHERE account_name = '%s';`, accountName)
-		opts := executor.Options{}.WithDisableIncrStatement().WithTxn(txnOp)
-		queryResult, err := h.executor.Exec(systemCtx, getAccountIdSQL, opts)
-		if err != nil {
-			return nil, moerr.NewInternalErrorf(ctx, "failed to get account_id for account %s: %v", accountName, err)
-		}
-		defer queryResult.Close()
-
-		var accountId uint32
-		var found bool
-		queryResult.ReadRows(func(rows int, cols []*vector.Vector) bool {
-			if rows > 0 && len(cols) >= 1 && cols[0].Length() > 0 {
-				accountId = vector.GetFixedAtWithTypeCheck[uint32](cols[0], 0)
-				found = true
-			}
-			return true
-		})
-
-		if !found {
-			return nil, moerr.NewInternalErrorf(ctx, "account %s not found", accountName)
-		}
-
-		// Use the authorized account context for snapshot query
-		queryCtx = defines.AttachAccountId(ctx, accountId)
-
-		logutil.Info("check_snapshot_flushed using authorized account",
-			zap.String("snapshot_name", snapshotName),
-			zap.String("account_name", accountName),
-			zap.String("publication_name", publicationName),
-			zap.Uint32("account_id", accountId),
-		)
-	}
-
 	// Get snapshot record by name (similar to getSnapshotByName in doCheckSnapshotFlushed)
-	record, err := frontend.GetSnapshotRecordByName(queryCtx, h.executor, txnOp, snapshotName)
+	record, err := frontend.GetSnapshotRecordByName(ctx, h.executor, txnOp, string(stmt.Name))
 	if err != nil {
 		// If snapshot not found, return false
 		mp := mpool.MustNewZero()
@@ -928,4 +900,85 @@ func (h *UpstreamSQLHelper) handleGetDdlDirectly(
 // convertExecutorResult converts executor.Result to publication.Result
 func (h *UpstreamSQLHelper) convertExecutorResult(execResult executor.Result) *publication.Result {
 	return publication.NewResultFromExecutorResult(execResult)
+}
+
+// handleGetSnapshotTsCmd handles the internal __++__internal_get_snapshot_ts command
+// Format: __++__internal_get_snapshot_ts <snapshotName> <accountName> <publicationName>
+func (h *UpstreamSQLHelper) handleGetSnapshotTsCmd(
+	ctx context.Context,
+	query string,
+) (bool, *publication.Result, error) {
+	// Parse the command parameters
+	params := strings.TrimSpace(query[len(cmdGetSnapshotTsPrefix):])
+	parts := strings.Fields(params)
+	if len(parts) != 3 {
+		return true, nil, moerr.NewInternalError(ctx, "invalid get_snapshot_ts command format, expected: __++__internal_get_snapshot_ts <snapshotName> <accountName> <publicationName>")
+	}
+	snapshotName := parts[0]
+	// accountName and publicationName are not used in test helper since we don't check publication permissions
+
+	logutil.Info("UpstreamSQLHelper: handling internal get_snapshot_ts command",
+		zap.String("snapshotName", snapshotName),
+	)
+
+	// Ensure we have a transaction
+	txnOp, err := h.ensureTxnOp(ctx)
+	if err != nil {
+		return true, nil, err
+	}
+
+	// Query mo_snapshots for the timestamp
+	sql := fmt.Sprintf("SELECT ts FROM mo_catalog.mo_snapshots WHERE sname = '%s'", snapshotName)
+
+	// Create context with account ID
+	queryCtx := context.WithValue(ctx, defines.TenantIDKey{}, h.accountID)
+
+	// Execute using internal executor
+	execResult, err := h.executor.Exec(queryCtx, sql, executor.Options{}.WithTxn(txnOp))
+	if err != nil {
+		return true, nil, moerr.NewInternalErrorf(ctx, "failed to query snapshot ts: %v", err)
+	}
+
+	return true, h.convertExecutorResult(execResult), nil
+}
+
+// handleGetDatabasesCmd handles the internal __++__internal_get_databases command
+// Format: __++__internal_get_databases <snapshotName> <accountName> <publicationName>
+func (h *UpstreamSQLHelper) handleGetDatabasesCmd(
+	ctx context.Context,
+	query string,
+) (bool, *publication.Result, error) {
+	// Parse the command parameters
+	params := strings.TrimSpace(query[len(cmdGetDatabasesPrefix):])
+	parts := strings.Fields(params)
+	if len(parts) != 3 {
+		return true, nil, moerr.NewInternalError(ctx, "invalid get_databases command format, expected: __++__internal_get_databases <snapshotName> <accountName> <publicationName>")
+	}
+	snapshotName := parts[0]
+	// accountName and publicationName are not used in test helper since we don't check publication permissions
+
+	logutil.Info("UpstreamSQLHelper: handling internal get_databases command",
+		zap.String("snapshotName", snapshotName),
+	)
+
+	// Ensure we have a transaction
+	txnOp, err := h.ensureTxnOp(ctx)
+	if err != nil {
+		return true, nil, err
+	}
+
+	// Query mo_snapshots for databases covered by this snapshot
+	// The database_name field contains the database name for the snapshot
+	sql := fmt.Sprintf("SELECT database_name FROM mo_catalog.mo_snapshots WHERE sname = '%s'", snapshotName)
+
+	// Create context with account ID
+	queryCtx := context.WithValue(ctx, defines.TenantIDKey{}, h.accountID)
+
+	// Execute using internal executor
+	execResult, err := h.executor.Exec(queryCtx, sql, executor.Options{}.WithTxn(txnOp))
+	if err != nil {
+		return true, nil, moerr.NewInternalErrorf(ctx, "failed to query databases: %v", err)
+	}
+
+	return true, h.convertExecutorResult(execResult), nil
 }

@@ -50,6 +50,18 @@ func min(a, b int) int {
 	return b
 }
 
+// mockLocalExecutor implements SQLExecutor for testing
+// It returns empty results for all queries (simulating no existing mappings)
+type mockLocalExecutor struct{}
+
+func (m *mockLocalExecutor) Close() error                                  { return nil }
+func (m *mockLocalExecutor) Connect() error                                { return nil }
+func (m *mockLocalExecutor) EndTxn(ctx context.Context, commit bool) error { return nil }
+func (m *mockLocalExecutor) ExecSQL(ctx context.Context, ar *publication.ActiveRoutine, query string, useTxn bool, needRetry bool, timeout time.Duration) (*publication.Result, context.CancelFunc, error) {
+	// Return empty Result - all nil fields means Next() returns false (no rows)
+	return &publication.Result{}, nil, nil
+}
+
 // ObjectMapJSON represents the serializable format of objectmap
 type ObjectMapJSON struct {
 	ObjectID    string `json:"object_id"`
@@ -483,7 +495,7 @@ func runApplyObjects(
 	// Stub GetObjectFromUpstream to read from directory
 	stub := gostub.Stub(
 		&publication.GetObjectFromUpstreamWithWorker,
-		func(ctx context.Context, executor publication.SQLExecutor, objectName string, getChunkWorker publication.GetChunkWorker) ([]byte, error) {
+		func(ctx context.Context, executor publication.SQLExecutor, objectName string, getChunkWorker publication.GetChunkWorker, subscriptionAccountName string, pubName string) ([]byte, error) {
 			// Read object file from directory
 			objectPath := filepath.Join(exportDir, objectName)
 			data, err := os.ReadFile(objectPath)
@@ -501,8 +513,8 @@ func runApplyObjects(
 	// Call ApplyObjects
 	taskID := "test-task-1"
 	currentTS := types.TimestampToTS(disttaeEngine.Now())
-	// Note: localExecutor is nil since this test doesn't test appendable objects that require mo_ccpr_objects queries
-	var localExecutor publication.SQLExecutor
+	// Use mock localExecutor that returns empty results for appendable object queries
+	localExecutor := &mockLocalExecutor{}
 	err = publication.ApplyObjects(
 		ctxWithTimeout,
 		taskID,
