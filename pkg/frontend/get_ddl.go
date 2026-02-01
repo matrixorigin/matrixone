@@ -119,7 +119,7 @@ func handleGetDdlWithChecker(
 		return moerr.NewInternalError(ctx, "publication account name and publication name are required for GET DDL")
 	}
 
-	bh := ses.GetShareTxnBackgroundExec(ctx, false)
+	bh := NewShareTxnBackgroundExec(ctx, ses, false)
 	defer bh.Close()
 	currentAccount := ses.GetTenantInfo().GetTenant()
 	accountID, _, err := getAccountFromPublication(ctx, bh, pubAccountName, pubName, currentAccount)

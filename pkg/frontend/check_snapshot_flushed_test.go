@@ -45,6 +45,18 @@ func Test_handleCheckSnapshotFlushed(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
+		// Stub getAccountFromPublicationFunc to bypass publication check
+		pubStub := gostub.Stub(&getAccountFromPublicationFunc, func(ctx context.Context, bh BackgroundExec, pubAccountName string, pubName string, currentAccount string) (uint64, string, error) {
+			return uint64(catalog.System_Account), "sys", nil
+		})
+		defer pubStub.Reset()
+
+		// Stub getSnapshotByNameFunc to return nil (snapshot not found)
+		snapshotStub := gostub.Stub(&getSnapshotByNameFunc, func(ctx context.Context, bh BackgroundExec, snapshotName string) (*snapshotRecord, error) {
+			return nil, nil
+		})
+		defer snapshotStub.Reset()
+
 		// Mock engine
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
@@ -147,14 +159,15 @@ func Test_handleCheckSnapshotFlushed(t *testing.T) {
 
 		ec := newTestExecCtx(ctx, ctrl)
 		stmt := &tree.CheckSnapshotFlushed{
-			Name: tree.Identifier("test_snapshot"),
+			Name:            tree.Identifier("test_snapshot"),
+			AccountName:     tree.Identifier("sys"),
+			PublicationName: tree.Identifier("test_pub"),
 		}
 
-		// Test with snapshot not found - should return false
+		// Test with snapshot not found - should return error
 		err = handleCheckSnapshotFlushed(ses, ec, stmt)
-		convey.So(err, convey.ShouldBeNil)
-		// Result should be false (snapshot not found)
-		convey.So(ses.mrs.GetRowCount(), convey.ShouldEqual, 1)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "snapshot not found")
 	})
 }
 
@@ -292,6 +305,12 @@ func Test_doCheckSnapshotFlushed_PermissionCheck(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
+		// Stub getAccountFromPublicationFunc to return error (permission denied)
+		pubStub := gostub.Stub(&getAccountFromPublicationFunc, func(ctx context.Context, bh BackgroundExec, pubAccountName string, pubName string, currentAccount string) (uint64, string, error) {
+			return 0, "", moerr.NewInternalError(ctx, "publication permission denied")
+		})
+		defer pubStub.Reset()
+
 		// Mock engine
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
@@ -416,16 +435,16 @@ func Test_doCheckSnapshotFlushed_PermissionCheck(t *testing.T) {
 
 		ec := newTestExecCtx(ctx, ctrl)
 		stmt := &tree.CheckSnapshotFlushed{
-			Name: tree.Identifier("test_snapshot"),
+			Name:            tree.Identifier("test_snapshot"),
+			AccountName:     tree.Identifier("test_account"),
+			PublicationName: tree.Identifier("test_pub"),
 		}
 
 		// Test with database level snapshot but no permission
-		// Note: This test may need adjustment based on how checkPublicationPermission works
 		err = handleCheckSnapshotFlushed(ses, ec, stmt)
-		// Permission check should fail, but the exact error depends on implementation
-		// For now, we just verify that an error occurs before reaching engine check
-		// The actual permission check logic is complex and may need more detailed mocking
-		_ = err // Error expected due to permission check or engine conversion
+		// Permission check should fail
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "publication permission denied")
 	})
 }
 
@@ -436,6 +455,18 @@ func Test_doCheckSnapshotFlushed_SnapshotQueryError(t *testing.T) {
 	convey.Convey("doCheckSnapshotFlushed snapshot query error", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
+
+		// Stub getAccountFromPublicationFunc to bypass publication check
+		pubStub := gostub.Stub(&getAccountFromPublicationFunc, func(ctx context.Context, bh BackgroundExec, pubAccountName string, pubName string, currentAccount string) (uint64, string, error) {
+			return uint64(catalog.System_Account), "sys", nil
+		})
+		defer pubStub.Reset()
+
+		// Stub getSnapshotByNameFunc to return error
+		snapshotStub := gostub.Stub(&getSnapshotByNameFunc, func(ctx context.Context, bh BackgroundExec, snapshotName string) (*snapshotRecord, error) {
+			return nil, moerr.NewInternalErrorNoCtx("snapshot query failed")
+		})
+		defer snapshotStub.Reset()
 
 		// Mock engine
 		eng := mock_frontend.NewMockEngine(ctrl)
@@ -516,14 +547,15 @@ func Test_doCheckSnapshotFlushed_SnapshotQueryError(t *testing.T) {
 
 		ec := newTestExecCtx(ctx, ctrl)
 		stmt := &tree.CheckSnapshotFlushed{
-			Name: tree.Identifier("test_snapshot"),
+			Name:            tree.Identifier("test_snapshot"),
+			AccountName:     tree.Identifier("sys"),
+			PublicationName: tree.Identifier("test_pub"),
 		}
 
-		// When getSnapshotByName returns error, handleCheckSnapshotFlushed returns false (line 57-64)
+		// When getSnapshotByName returns error, handleCheckSnapshotFlushed returns error
 		err = handleCheckSnapshotFlushed(ses, ec, stmt)
-		convey.So(err, convey.ShouldBeNil)
-		// Result should be false (snapshot query failed, returns false at line 59-63)
-		convey.So(ses.mrs.GetRowCount(), convey.ShouldEqual, 1)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "snapshot query failed")
 	})
 }
 
@@ -731,6 +763,18 @@ func Test_doCheckSnapshotFlushed_SnapshotNotFound(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
+		// Stub getAccountFromPublicationFunc to bypass publication check
+		pubStub := gostub.Stub(&getAccountFromPublicationFunc, func(ctx context.Context, bh BackgroundExec, pubAccountName string, pubName string, currentAccount string) (uint64, string, error) {
+			return uint64(catalog.System_Account), "sys", nil
+		})
+		defer pubStub.Reset()
+
+		// Stub getSnapshotByNameFunc to return nil (snapshot not found)
+		snapshotStub := gostub.Stub(&getSnapshotByNameFunc, func(ctx context.Context, bh BackgroundExec, snapshotName string) (*snapshotRecord, error) {
+			return nil, nil
+		})
+		defer snapshotStub.Reset()
+
 		// Mock engine
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
@@ -798,15 +842,15 @@ func Test_doCheckSnapshotFlushed_SnapshotNotFound(t *testing.T) {
 
 		ec := newTestExecCtx(ctx, ctrl)
 		stmt := &tree.CheckSnapshotFlushed{
-			Name: tree.Identifier("nonexistent_snapshot"),
+			Name:            tree.Identifier("nonexistent_snapshot"),
+			AccountName:     tree.Identifier("sys"),
+			PublicationName: tree.Identifier("test_pub"),
 		}
 
-		// When getSnapshotByName cannot find snapshot, handleCheckSnapshotFlushed returns nil
-		// with result set containing false (line 57-64)
+		// When getSnapshotByName returns nil record, handleCheckSnapshotFlushed returns error
 		err = handleCheckSnapshotFlushed(ses, ec, stmt)
-		convey.So(err, convey.ShouldBeNil)
-		// Result should be false (snapshot not found)
-		convey.So(ses.mrs.GetRowCount(), convey.ShouldEqual, 1)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "snapshot not found")
 	})
 }
 
@@ -817,6 +861,12 @@ func Test_doCheckSnapshotFlushed_GoodPath(t *testing.T) {
 	convey.Convey("doCheckSnapshotFlushed good path - cluster level snapshot", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
+
+		// Stub getAccountFromPublicationFunc to bypass publication check
+		pubStub := gostub.Stub(&getAccountFromPublicationFunc, func(ctx context.Context, bh BackgroundExec, pubAccountName string, pubName string, currentAccount string) (uint64, string, error) {
+			return uint64(catalog.System_Account), "sys", nil
+		})
+		defer pubStub.Reset()
 
 		// Stub getSnapshotByNameFunc to return a cluster level snapshot record
 		// This bypasses permission check (line 74: if record.level != "cluster")
@@ -914,7 +964,9 @@ func Test_doCheckSnapshotFlushed_GoodPath(t *testing.T) {
 
 		ec := newTestExecCtx(ctx, ctrl)
 		stmt := &tree.CheckSnapshotFlushed{
-			Name: tree.Identifier("test_snapshot"),
+			Name:            tree.Identifier("test_snapshot"),
+			AccountName:     tree.Identifier("sys"),
+			PublicationName: tree.Identifier("test_pub"),
 		}
 
 		// Test good path: snapshot found, cluster level (no permission check), returns true

@@ -277,8 +277,8 @@ func Test_handleGetObject_WithMockCheckers(t *testing.T) {
 		proto.SetSession(ses)
 
 		// Stub GetObjectPermissionChecker - permission passes
-		permStub := gostub.Stub(&GetObjectPermissionChecker, func(ctx context.Context, ses *Session) error {
-			return nil
+		permStub := gostub.Stub(&GetObjectPermissionChecker, func(ctx context.Context, ses *Session, pubAccountName, pubName string) (uint64, error) {
+			return 0, nil
 		})
 		defer permStub.Reset()
 
@@ -365,9 +365,11 @@ func Test_handleGetObject_WithMockCheckers(t *testing.T) {
 		})
 
 		// Test case 3: Multi-chunk file - chunk index = 1 (not last chunk)
+		// Note: getObjectChunkSize is 100MB (100 * 1024 * 1024)
 		convey.Convey("chunk index 1 - multi chunk file, not complete", func() {
-			// File size = 2.5MB, so totalChunks = 3
-			fileSize := int64(2.5 * 1024 * 1024)
+			// File size = 250MB, so totalChunks = 3 (with 100MB chunk size)
+			chunkSize := int64(100 * 1024 * 1024) // 100MB
+			fileSize := int64(250 * 1024 * 1024)  // 250MB, totalChunks = 3
 			stubFS := &stubFileService{
 				statFileFunc: func(ctx context.Context, filePath string) (*fileservice.DirEntry, error) {
 					return &fileservice.DirEntry{
@@ -382,10 +384,10 @@ func Test_handleGetObject_WithMockCheckers(t *testing.T) {
 			})
 			defer fsStub.Reset()
 
-			testData := make([]byte, 1024*1024) // 1MB chunk
+			testData := make([]byte, chunkSize) // 100MB chunk
 			dataStub := gostub.Stub(&GetObjectDataReader, func(ctx context.Context, ses *Session, objectName string, offset int64, size int64) ([]byte, error) {
-				convey.So(offset, convey.ShouldEqual, 0)              // chunk 1 starts at offset 0
-				convey.So(size, convey.ShouldEqual, int64(1024*1024)) // 1MB chunk size
+				convey.So(offset, convey.ShouldEqual, 0)         // chunk 1 starts at offset 0
+				convey.So(size, convey.ShouldEqual, chunkSize)   // 100MB chunk size
 				return testData, nil
 			})
 			defer dataStub.Reset()
@@ -405,14 +407,16 @@ func Test_handleGetObject_WithMockCheckers(t *testing.T) {
 			convey.So(row[0], convey.ShouldResemble, testData) // data
 			convey.So(row[1], convey.ShouldEqual, fileSize)    // fileSize
 			convey.So(row[2], convey.ShouldEqual, int64(1))    // chunkIndex
-			convey.So(row[3], convey.ShouldEqual, int64(3))    // totalChunks (2.5MB / 1MB = 3)
+			convey.So(row[3], convey.ShouldEqual, int64(3))    // totalChunks (250MB / 100MB = 3)
 			convey.So(row[4], convey.ShouldEqual, false)       // isComplete (not last chunk)
 		})
 
 		// Test case 4: Multi-chunk file - last chunk (isComplete = true)
+		// Note: getObjectChunkSize is 100MB (100 * 1024 * 1024)
 		convey.Convey("last chunk - is complete", func() {
-			// File size = 2.5MB, so totalChunks = 3, last chunk is 0.5MB
-			fileSize := int64(2.5 * 1024 * 1024)
+			// File size = 250MB, so totalChunks = 3, last chunk is 50MB
+			chunkSize := int64(100 * 1024 * 1024) // 100MB
+			fileSize := int64(250 * 1024 * 1024)  // 250MB
 			stubFS := &stubFileService{
 				statFileFunc: func(ctx context.Context, filePath string) (*fileservice.DirEntry, error) {
 					return &fileservice.DirEntry{
@@ -427,11 +431,11 @@ func Test_handleGetObject_WithMockCheckers(t *testing.T) {
 			})
 			defer fsStub.Reset()
 
-			lastChunkSize := fileSize - 2*1024*1024 // 0.5MB
+			lastChunkSize := fileSize - 2*chunkSize // 50MB (250MB - 200MB)
 			testData := make([]byte, lastChunkSize)
 			dataStub := gostub.Stub(&GetObjectDataReader, func(ctx context.Context, ses *Session, objectName string, offset int64, size int64) ([]byte, error) {
-				convey.So(offset, convey.ShouldEqual, int64(2*1024*1024)) // chunk 3 starts at 2MB
-				convey.So(size, convey.ShouldEqual, lastChunkSize)        // remaining size
+				convey.So(offset, convey.ShouldEqual, 2*chunkSize)  // chunk 3 starts at 200MB
+				convey.So(size, convey.ShouldEqual, lastChunkSize)  // remaining size (50MB)
 				return testData, nil
 			})
 			defer dataStub.Reset()
@@ -512,8 +516,8 @@ func Test_handleGetObject_WithMockCheckers(t *testing.T) {
 		convey.Convey("permission check failed", func() {
 			// Temporarily replace permission checker to return error
 			permStub.Reset()
-			permStub = gostub.Stub(&GetObjectPermissionChecker, func(ctx context.Context, ses *Session) error {
-				return moerr.NewInternalError(ctx, "permission denied")
+			permStub = gostub.Stub(&GetObjectPermissionChecker, func(ctx context.Context, ses *Session, pubAccountName, pubName string) (uint64, error) {
+				return 0, moerr.NewInternalError(ctx, "permission denied")
 			})
 			defer permStub.Reset()
 
@@ -532,8 +536,8 @@ func Test_handleGetObject_WithMockCheckers(t *testing.T) {
 		convey.Convey("fileservice provider failed", func() {
 			// Restore permission checker
 			permStub.Reset()
-			permStub = gostub.Stub(&GetObjectPermissionChecker, func(ctx context.Context, ses *Session) error {
-				return nil
+			permStub = gostub.Stub(&GetObjectPermissionChecker, func(ctx context.Context, ses *Session, pubAccountName, pubName string) (uint64, error) {
+				return 0, nil
 			})
 
 			fsStub := gostub.Stub(&GetObjectFSProvider, func(ses *Session) (fileservice.FileService, error) {

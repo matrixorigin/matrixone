@@ -401,8 +401,8 @@ func Test_handleObjectList_WithMockPermissionChecker(t *testing.T) {
 		proto.SetSession(ses)
 
 		// Stub ObjectListPermissionChecker - permission passes
-		permStub := gostub.Stub(&ObjectListPermissionChecker, func(ctx context.Context, ses *Session, dbname, tablename string) error {
-			return nil
+		permStub := gostub.Stub(&ObjectListPermissionChecker, func(ctx context.Context, ses *Session, pubAccountName, pubName string) (uint64, error) {
+			return 0, nil
 		})
 		defer permStub.Reset()
 
@@ -423,8 +423,8 @@ func Test_handleObjectList_WithMockPermissionChecker(t *testing.T) {
 		// Test case 2: Permission check failed
 		convey.Convey("permission check failed", func() {
 			permStub.Reset()
-			permStub = gostub.Stub(&ObjectListPermissionChecker, func(ctx context.Context, ses *Session, dbname, tablename string) error {
-				return moerr.NewInternalError(ctx, "permission denied for test_db.test_table")
+			permStub = gostub.Stub(&ObjectListPermissionChecker, func(ctx context.Context, ses *Session, pubAccountName, pubName string) (uint64, error) {
+				return 0, moerr.NewInternalError(ctx, "permission denied for test_db.test_table")
 			})
 			defer permStub.Reset()
 
@@ -442,10 +442,9 @@ func Test_handleObjectList_WithMockPermissionChecker(t *testing.T) {
 		// Test case 3: Use session database name when not specified
 		convey.Convey("use session database name", func() {
 			permStub.Reset()
-			permStub = gostub.Stub(&ObjectListPermissionChecker, func(ctx context.Context, ses *Session, dbname, tablename string) error {
+			permStub = gostub.Stub(&ObjectListPermissionChecker, func(ctx context.Context, ses *Session, pubAccountName, pubName string) (uint64, error) {
 				// Verify that session database name is used
-				convey.So(dbname, convey.ShouldEqual, "test_db")
-				return nil
+				return 0, nil
 			})
 			defer permStub.Reset()
 

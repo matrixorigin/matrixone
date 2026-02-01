@@ -48,6 +48,10 @@ var getFileServiceFunc = func(de *disttae.Engine) fileservice.FileService {
 	return de.FS()
 }
 
+// getAccountFromPublicationFunc is a function variable for getAccountFromPublication
+// This allows mocking in unit tests
+var getAccountFromPublicationFunc = getAccountFromPublication
+
 func handleCheckSnapshotFlushed(ses *Session, execCtx *ExecCtx, stmt *tree.CheckSnapshotFlushed) error {
 	return doCheckSnapshotFlushed(execCtx.reqCtx, ses, stmt)
 }
@@ -74,7 +78,7 @@ func doCheckSnapshotFlushed(ctx context.Context, ses *Session, stmt *tree.CheckS
 	queryCtx := ctx
 	if accountName != "" && publicationName != "" {
 		currentAccount := ses.GetTenantInfo().GetTenant()
-		accountId, _, err := getAccountFromPublication(ctx, bh, accountName, publicationName, currentAccount)
+		accountId, _, err := getAccountFromPublicationFunc(ctx, bh, accountName, publicationName, currentAccount)
 		if err != nil {
 			return err
 		}

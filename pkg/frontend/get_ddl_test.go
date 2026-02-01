@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -416,6 +417,22 @@ func Test_handleGetDdlWithChecker_GoodPath(t *testing.T) {
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
+		// Mock mo_catalog database (used by getAccountFromPublication)
+		mockMoCatalogDb := mock_frontend.NewMockDatabase(ctrl)
+		mockMoCatalogDb.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
+		eng.EXPECT().Database(gomock.Any(), catalog.MO_CATALOG, gomock.Any()).Return(mockMoCatalogDb, nil).AnyTimes()
+
+		// Mock mo_pubs relation (used by getAccountFromPublication)
+		mockMoPubsRel := mock_frontend.NewMockRelation(ctrl)
+		mockMoPubsRel.EXPECT().CopyTableDef(gomock.Any()).Return(&plan2.TableDef{
+			Name:      "mo_pubs",
+			DbName:    catalog.MO_CATALOG,
+			TableType: catalog.SystemOrdinaryRel,
+			Defs:      []*plan2.TableDefType{},
+		}).AnyTimes()
+		mockMoPubsRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(0)).AnyTimes()
+		mockMoCatalogDb.EXPECT().Relation(gomock.Any(), "mo_pubs", nil).Return(mockMoPubsRel, nil).AnyTimes()
+
 		// Mock database
 		mockDb := mock_frontend.NewMockDatabase(ctrl)
 		eng.EXPECT().Database(gomock.Any(), "test_db", gomock.Any()).Return(mockDb, nil).AnyTimes()
@@ -456,10 +473,10 @@ func Test_handleGetDdlWithChecker_GoodPath(t *testing.T) {
 		bh.init()
 
 		// Setup mock result for getAccountFromPublication query
-		// The function queries: SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list FROM mo_catalog.mo_pubs WHERE account_name = 'pub_account' AND pub_name = 'test_pub'
-		pubQuerySQL := `SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+		// The SQL must match exactly what getAccountFromPublication generates
+		pubQuerySQL := fmt.Sprintf(`SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
 			FROM mo_catalog.mo_pubs 
-			WHERE account_name = 'pub_account' AND pub_name = 'test_pub'`
+			WHERE account_name = '%s' AND pub_name = '%s'`, "pub_account", "test_pub")
 		bh.sql2result[pubQuerySQL] = newMrsForGetAccountFromPublication(uint64(1), "pub_account", "test_pub", "test_db", uint64(1), "*", "all")
 
 		// Stub NewShareTxnBackgroundExec
