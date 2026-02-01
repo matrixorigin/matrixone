@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
+	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -1262,7 +1263,34 @@ func (p *PartitionState) CountRows(
 	if tombstoneStats.Rows > dataStats.Rows {
 		return 0, nil
 	}
+	// Record estimate/actual ratio: high ratio (e.g. 100x) means estimate is much larger than actual (bad signal).
+	estimateRows, _ := p.estimateTombstoneRowsOnly(snapshot)
+	actual := tombstoneStats.Rows
+	if actual == 0 {
+		actual = 1 // avoid div by zero; ratio is still meaningful (estimate/1)
+	}
+	ratio := float64(estimateRows) / float64(actual)
+	metricv2.StarcountEstimateOverActualRatioHistogram.Observe(ratio)
 	return dataStats.Rows - tombstoneStats.Rows, nil
+}
+
+// estimateTombstoneRowsOnly returns (estimated rows, object count) from metadata only (no S3 I/O).
+// Same visibility logic as EstimateCommittedTombstoneCount; used by CountRows to compute estimate/actual ratio.
+func (p *PartitionState) estimateTombstoneRowsOnly(snapshot types.TS) (estimatedRows int, objectCount int) {
+	iter := p.tombstoneObjectsNameIndex.Iter()
+	defer iter.Release()
+	for ok := iter.First(); ok; ok = iter.Next() {
+		obj := iter.Item()
+		if obj.CreateTime.GT(&snapshot) {
+			continue
+		}
+		if !obj.DeleteTime.IsEmpty() && obj.DeleteTime.LE(&snapshot) {
+			continue
+		}
+		estimatedRows += int(obj.Rows())
+		objectCount++
+	}
+	return estimatedRows, objectCount
 }
 
 // EstimateCommittedTombstoneCount returns an estimated count of committed tombstone rows
@@ -1275,20 +1303,8 @@ func (p *PartitionState) CountRows(
 // - It includes tombstones pointing to invisible data objects
 // The actual count from CollectTombstoneStats will be lower after deduplication and visibility filtering.
 func (p *PartitionState) EstimateCommittedTombstoneCount(snapshot types.TS) int {
-	iter := p.tombstoneObjectsNameIndex.Iter()
-	defer iter.Release()
-
-	estimatedRows := 0
-	for ok := iter.First(); ok; ok = iter.Next() {
-		obj := iter.Item()
-		if obj.CreateTime.GT(&snapshot) {
-			continue
-		}
-		if !obj.DeleteTime.IsEmpty() && obj.DeleteTime.LE(&snapshot) {
-			continue
-		}
-		estimatedRows += int(obj.Rows())
-	}
+	estimatedRows, objectCount := p.estimateTombstoneRowsOnly(snapshot)
+	metricv2.StarcountEstimateTombstoneObjectsHistogram.Observe(float64(objectCount))
 	return estimatedRows
 }
 

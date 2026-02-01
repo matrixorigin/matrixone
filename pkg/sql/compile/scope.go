@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -952,13 +953,20 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 			if err != nil {
 				return err
 			}
+			metricv2.StarcountEstimateTombstoneRowsHistogram.Observe(float64(estimatedTombstoneRows))
+
 			if estimatedTombstoneRows > defaultStarCountTombstoneThreshold {
+				metricv2.StarcountPathPerBlockCounter.Inc()
 				// Fall through to per-block aggOptimize (only scan blocks with tombstones)
 			} else {
+				metricv2.StarcountPathFastCounter.Inc()
+				fastStart := time.Now()
 				totalRows, err := rel.StarCount(ctx)
 				if err != nil {
 					return err
 				}
+				metricv2.StarcountDurationHistogram.Observe(time.Since(fastStart).Seconds())
+				metricv2.StarcountResultRowsHistogram.Observe(float64(totalRows))
 
 				newRelData := s.NodeInfo.Data.BuildEmptyRelData(0)
 				s.NodeInfo.Data = newRelData
