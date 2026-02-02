@@ -48,6 +48,12 @@ SELECT
   HEX(AES_ENCRYPT('text2', 'key2')) AS enc2,
   HEX(AES_ENCRYPT('text3', 'key3')) AS enc3;
 
+# CBC mode (3-arg) tests
+SET block_encryption_mode = 'aes-256-cbc';
+SELECT HEX(AES_ENCRYPT('Hello CBC', 'mykey', '0123456789abcdef')) AS cbc_enc;
+SELECT AES_DECRYPT(AES_ENCRYPT('Hello CBC', 'mykey', '0123456789abcdef'), 'mykey', '0123456789abcdef') AS cbc_dec;
+SET block_encryption_mode = 'aes-128-ecb';
+
 # Round-trip test with different data types
 SELECT AES_DECRYPT(AES_ENCRYPT('12345', 'numeric'), 'numeric') AS numeric_string;
 SELECT AES_DECRYPT(AES_ENCRYPT('2024-01-01', 'date'), 'date') AS date_string;

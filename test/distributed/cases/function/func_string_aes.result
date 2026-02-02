@@ -71,6 +71,14 @@ HEX(AES_ENCRYPT('text2', 'key2')) AS enc2,
 HEX(AES_ENCRYPT('text3', 'key3')) AS enc3;
 enc1    enc2    enc3
 64E3CB59806228C959089B4311FCD2CF    AC603AB838183ABEC50B7ABB3D7EFBFC    8CA7108F65725E5F33271FACB0C1096C
+SET block_encryption_mode = 'aes-256-cbc';
+SELECT HEX(AES_ENCRYPT('Hello CBC', 'mykey', '0123456789abcdef')) AS cbc_enc;
+cbc_enc
+93C0CE75E453EA90AC08993E1E3CDB55
+SELECT AES_DECRYPT(AES_ENCRYPT('Hello CBC', 'mykey', '0123456789abcdef'), 'mykey', '0123456789abcdef') AS cbc_dec;
+cbc_dec
+Hello CBC
+SET block_encryption_mode = 'aes-128-ecb';
 SELECT AES_DECRYPT(AES_ENCRYPT('12345', 'numeric'), 'numeric') AS numeric_string;
 numeric_string
 12345

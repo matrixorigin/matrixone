@@ -120,3 +120,102 @@ func TestAESEncryptCBCMissingIV(t *testing.T) {
 	ok, info := encryptCase.Run()
 	require.True(t, ok, fmt.Sprintf("encrypt cbc missing iv failed: %s", info))
 }
+
+func TestAESInvalidModeReturnsNull(t *testing.T) {
+	proc := newAESProcess(t, "aes-999-foo")
+
+	encryptCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"abc"}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"key"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_blob.ToType(), false, []string{""}, []bool{true}),
+		AESEncrypt,
+	)
+	ok, info := encryptCase.Run()
+	require.True(t, ok, fmt.Sprintf("encrypt invalid mode failed: %s", info))
+
+	decryptCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_blob.ToType(), []string{"abc"}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"key"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+		AESDecrypt,
+	)
+	ok, info = decryptCase.Run()
+	require.True(t, ok, fmt.Sprintf("decrypt invalid mode failed: %s", info))
+}
+
+func TestAESDecryptInvalidCiphertextReturnsNull(t *testing.T) {
+	proc := newAESProcess(t, "aes-128-ecb")
+	invalid := string(make([]byte, 15))
+
+	decryptCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_blob.ToType(), []string{invalid}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"key"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+		AESDecrypt,
+	)
+	ok, info := decryptCase.Run()
+	require.True(t, ok, fmt.Sprintf("decrypt invalid ciphertext failed: %s", info))
+}
+
+func TestAESCBCIVTooShortReturnsNull(t *testing.T) {
+	proc := newAESProcess(t, "aes-256-cbc")
+	iv := "short"
+
+	encryptCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"abc"}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"key"}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{iv}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_blob.ToType(), false, []string{""}, []bool{true}),
+		AESEncrypt,
+	)
+	ok, info := encryptCase.Run()
+	require.True(t, ok, fmt.Sprintf("encrypt short iv failed: %s", info))
+
+	decryptCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_blob.ToType(), []string{"abc"}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"key"}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{iv}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+		AESDecrypt,
+	)
+	ok, info = decryptCase.Run()
+	require.True(t, ok, fmt.Sprintf("decrypt short iv failed: %s", info))
+}
+
+func TestGenerateAESKeyEdgeCases(t *testing.T) {
+	zero, err := generateAESKey([]byte{}, 16)
+	require.NoError(t, err)
+	require.Equal(t, make([]byte, 16), zero)
+
+	key16 := []byte("0123456789abcdef")
+	k16, err := generateAESKey(key16, 16)
+	require.NoError(t, err)
+	require.Equal(t, key16, k16)
+
+	key32 := []byte("0123456789abcdef0123456789abcdef")
+	k32, err := generateAESKey(key32, 32)
+	require.NoError(t, err)
+	require.Equal(t, key32, k32)
+
+	longKey := make([]byte, 32)
+	for i := 0; i < 32; i++ {
+		longKey[i] = byte(i)
+	}
+	expect := make([]byte, 16)
+	for i := 0; i < 16; i++ {
+		expect[i] = byte(i) ^ byte(i+16)
+	}
+	kfold, err := generateAESKey(longKey, 16)
+	require.NoError(t, err)
+	require.Equal(t, expect, kfold)
+}
