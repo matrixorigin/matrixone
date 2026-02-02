@@ -1585,10 +1585,24 @@ func TestGetObjectChunk(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Test ReadObjectFromEngine with chunk 0 (should return full content)
-	content, err := frontend.ReadObjectFromEngine(ctxWithTimeout, de, testObjectName1, 0, -1)
+	// Test ReadObjectFromEngine with exact file size (should return full content)
+	content, err := frontend.ReadObjectFromEngine(ctxWithTimeout, de, testObjectName1, 0, int64(len(testContent1)))
 	require.NoError(t, err)
 	require.Equal(t, testContent1, content)
+
+	// Test ReadObjectFromEngine with invalid size (size <= 0)
+	_, err = frontend.ReadObjectFromEngine(ctxWithTimeout, de, testObjectName1, 0, -1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "size must be positive")
+
+	_, err = frontend.ReadObjectFromEngine(ctxWithTimeout, de, testObjectName1, 0, 0)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "size must be positive")
+
+	// Test ReadObjectFromEngine with size exceeding chunk limit (100MB)
+	_, err = frontend.ReadObjectFromEngine(ctxWithTimeout, de, testObjectName1, 0, 101*1024*1024)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "size exceeds maximum chunk size")
 
 	// Test case 2: Large file (> 100MB) - should have multiple chunks
 	// Create a file larger than 100MB (e.g., 150MB)

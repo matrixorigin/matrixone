@@ -936,7 +936,6 @@ var (
 		catalog.MO_INDEX_UPDATE:       0,
 		catalog.MO_BRANCH_METADATA:    0,
 		catalog.MO_CCPR_LOG:           0,
-		catalog.MO_CCPR_OBJECTS:       0,
 		catalog.MO_FEATURE_LIMIT:      0,
 		catalog.MO_FEATURE_REGISTRY:   0,
 	}
@@ -987,7 +986,6 @@ var (
 		catalog.MO_INDEX_UPDATE:       0,
 		catalog.MO_BRANCH_METADATA:    0,
 		catalog.MO_CCPR_LOG:           0,
-		catalog.MO_CCPR_OBJECTS:       0,
 		catalog.MO_FEATURE_LIMIT:      0,
 		catalog.MO_FEATURE_REGISTRY:   0,
 	}
@@ -1034,7 +1032,6 @@ var (
 		MoCatalogMoIndexUpdateDDL,
 		MoCatalogBranchMetadataDDL,
 		MoCatalogMoCcprLogDDL,
-		MoCatalogMoCcprObjectsDDL,
 		MoCatalogFeatureLimitDDL,
 		MoCatalogFeatureRegistryDDL,
 		MoCatalogFeatureRegistryInitData,
@@ -8070,9 +8067,6 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 			return true
 		}
 		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_CCPR_LOG)) {
-			return true
-		}
-		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_CCPR_OBJECTS)) {
 			return true
 		}
 		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_INDEX_UPDATE)) {
