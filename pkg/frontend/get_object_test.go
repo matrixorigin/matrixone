@@ -386,8 +386,8 @@ func Test_handleGetObject_WithMockCheckers(t *testing.T) {
 
 			testData := make([]byte, chunkSize) // 100MB chunk
 			dataStub := gostub.Stub(&GetObjectDataReader, func(ctx context.Context, ses *Session, objectName string, offset int64, size int64) ([]byte, error) {
-				convey.So(offset, convey.ShouldEqual, 0)         // chunk 1 starts at offset 0
-				convey.So(size, convey.ShouldEqual, chunkSize)   // 100MB chunk size
+				convey.So(offset, convey.ShouldEqual, 0)       // chunk 1 starts at offset 0
+				convey.So(size, convey.ShouldEqual, chunkSize) // 100MB chunk size
 				return testData, nil
 			})
 			defer dataStub.Reset()
@@ -434,8 +434,8 @@ func Test_handleGetObject_WithMockCheckers(t *testing.T) {
 			lastChunkSize := fileSize - 2*chunkSize // 50MB (250MB - 200MB)
 			testData := make([]byte, lastChunkSize)
 			dataStub := gostub.Stub(&GetObjectDataReader, func(ctx context.Context, ses *Session, objectName string, offset int64, size int64) ([]byte, error) {
-				convey.So(offset, convey.ShouldEqual, 2*chunkSize)  // chunk 3 starts at 200MB
-				convey.So(size, convey.ShouldEqual, lastChunkSize)  // remaining size (50MB)
+				convey.So(offset, convey.ShouldEqual, 2*chunkSize) // chunk 3 starts at 200MB
+				convey.So(size, convey.ShouldEqual, lastChunkSize) // remaining size (50MB)
 				return testData, nil
 			})
 			defer dataStub.Reset()

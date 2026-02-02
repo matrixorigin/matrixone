@@ -174,7 +174,6 @@ const (
 		`SET iteration_state = %d, ` +
 		`cn_uuid = '%s' ` +
 		`WHERE task_id = '%s'`
-
 )
 
 const (
@@ -798,4 +797,3 @@ func escapeSQLIdentifier(s string) string {
 	}
 	return s
 }
-

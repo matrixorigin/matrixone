@@ -528,11 +528,11 @@ func runApplyObjects(
 		disttaeEngine.Engine,
 		mp,
 		fs,
-		nil, // FilterObjectWorker
-		nil, // GetChunkWorker
-		"",  // subscriptionAccountName
-		"",  // pubName
-		nil, // ccprCache
+		nil,                         // FilterObjectWorker
+		nil,                         // GetChunkWorker
+		"",                          // subscriptionAccountName
+		"",                          // pubName
+		nil,                         // ccprCache
 		publication.NewAObjectMap(), // aobjectMap
 	)
 	require.NoError(t, err)

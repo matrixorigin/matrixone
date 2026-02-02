@@ -971,7 +971,6 @@ func (h *UpstreamSQLHelper) handleGetDatabasesCmd(
 	// The database_name field contains the database name for the snapshot
 	sql := fmt.Sprintf("SELECT datname FROM mo_catalog.mo_database WHERE account_id = %d", h.accountID)
 
-
 	// Create context with account ID
 	queryCtx := context.WithValue(ctx, defines.TenantIDKey{}, h.accountID)
 

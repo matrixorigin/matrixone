@@ -523,7 +523,7 @@ func (s *GetObject) StmtKind() StmtKind {
 }
 
 func (s *GetObject) Format(ctx *FmtCtx) {
-	ctx.WriteString("GETOBJECT ")
+	ctx.WriteString("GET OBJECT ")
 	ctx.WriteString(string(s.ObjectName))
 	ctx.WriteString(" OFFSET ")
 	ctx.WriteString(fmt.Sprintf("%d", s.ChunkIndex))
