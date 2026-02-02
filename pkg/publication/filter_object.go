@@ -452,8 +452,8 @@ func filterAppendableObject(
 }
 
 // filterNonAppendableObject handles non-appendable objects
-// Writes directly to fileservice with a new UUID
-// Returns the new ObjectStats with the new object name
+// Writes directly to fileservice with the original object name
+// Returns the original ObjectStats
 func filterNonAppendableObject(
 	ctx context.Context,
 	stats *objectio.ObjectStats,
@@ -466,20 +466,15 @@ func filterNonAppendableObject(
 	// Get upstream object name from stats
 	upstreamObjectName := stats.ObjectName().String()
 
-	// Generate new segment ID and build new object name
-	newSegID := objectio.NewSegmentid()
-	newObjectName := objectio.BuildObjectName(newSegID, 0)
-
 	// Get object file from upstream
 	objectContent, err := GetObjectFromUpstreamWithWorker(ctx, upstreamExecutor, upstreamObjectName, getChunkWorker, subscriptionAccountName, pubName)
 	if err != nil {
 		return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to get object from upstream: %v", err)
 	}
 
-	// Write to local fileservice with new object name
-	newObjectNameStr := newObjectName.String()
+	// Write to local fileservice with original object name
 	err = localFS.Write(ctx, fileservice.IOVector{
-		FilePath: newObjectNameStr,
+		FilePath: upstreamObjectName,
 		Entries: []fileservice.IOEntry{
 			{
 				Offset: 0,
@@ -493,20 +488,20 @@ func filterNonAppendableObject(
 		if moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
 			// Log warning instead of returning error
 			logutil.Warn("file already exists, deleting and rewriting",
-				zap.String("file", newObjectNameStr),
+				zap.String("file", upstreamObjectName),
 				logutil.ErrorField(err))
 
 			// Delete the existing file
-			deleteErr := localFS.Delete(ctx, newObjectNameStr)
+			deleteErr := localFS.Delete(ctx, upstreamObjectName)
 			if deleteErr != nil {
 				logutil.Warn("failed to delete existing file, ignoring",
-					zap.String("file", newObjectNameStr),
+					zap.String("file", upstreamObjectName),
 					logutil.ErrorField(deleteErr))
 			}
 
 			// Retry writing after deletion
 			err = localFS.Write(ctx, fileservice.IOVector{
-				FilePath: newObjectNameStr,
+				FilePath: upstreamObjectName,
 				Entries: []fileservice.IOEntry{
 					{
 						Offset: 0,
@@ -523,17 +518,8 @@ func filterNonAppendableObject(
 		}
 	}
 
-	// Create new ObjectStats with the new object name
-	var newStats objectio.ObjectStats
-	// Copy original stats
-	statsBytes := stats.Marshal()
-	newStats.UnMarshal(statsBytes)
-	// Update with new object name
-	if err := objectio.SetObjectStatsObjectName(&newStats, newObjectName); err != nil {
-		return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to set new object name: %v", err)
-	}
-
-	return newStats, nil
+	// Return original stats (no need to create new stats since we use the same object name)
+	return *stats, nil
 }
 
 // GetObjectFromUpstreamWithWorker gets object file from upstream using GETOBJECT SQL with worker pool
@@ -1500,25 +1486,13 @@ func ApplyObjects(
 		}
 
 		// Handle non-appendable objects
-		upstreamObjID := info.Stats.ObjectName().ObjectId()
-		upstreamIDStr := upstreamObjID.String()
+		// Non-appendable objects use the original object name, no need to query/update mo_ccpr_objects table
 
 		if info.Delete {
-			// Query mo_ccpr_objects table to get the downstream stats before deleting
-			downstreamStats, _, queryErr := queryCcprObjectMapping(ctx, localExecutor, taskID, upstreamIDStr)
-			if queryErr != nil {
-				err = moerr.NewInternalErrorf(ctx, "failed to query ccpr object mapping: %v", queryErr)
-				return
-			}
-			// Delete from mo_ccpr_objects table
-			if deleteErr := deleteCcprObjectMapping(ctx, localExecutor, taskID, upstreamIDStr); deleteErr != nil {
-				err = moerr.NewInternalErrorf(ctx, "failed to delete ccpr object mapping: %v", deleteErr)
-				return
-			}
-			// Use downstream stats from the table for delete operation
+			// Use original stats directly for delete operation
 			if info.IsTombstone {
 				collectedTombstoneDeleteStats = append(collectedTombstoneDeleteStats, &ObjectWithTableInfo{
-					Stats:       downstreamStats,
+					Stats:       info.Stats,
 					DBName:      info.DBName,
 					TableName:   info.TableName,
 					IsTombstone: info.IsTombstone,
@@ -1526,7 +1500,7 @@ func ApplyObjects(
 				})
 			} else {
 				collectedDataDeleteStats = append(collectedDataDeleteStats, &ObjectWithTableInfo{
-					Stats:       downstreamStats,
+					Stats:       info.Stats,
 					DBName:      info.DBName,
 					TableName:   info.TableName,
 					IsTombstone: info.IsTombstone,
@@ -1536,20 +1510,14 @@ func ApplyObjects(
 		} else {
 			// Wait for pre-submitted FilterObject job to handle the object
 			// FilterObject will:
-			// - For nobj: get object from upstream and write directly to fileservice
+			// - For nobj: get object from upstream and write directly to fileservice with original name
 			filterResult := info.FilterJob.WaitDone().(*FilterObjectJobResult)
 			if filterResult.Err != nil {
 				err = moerr.NewInternalErrorf(ctx, "failed to filter object: %v", filterResult.Err)
 				return
 			}
-			// Insert mapping to mo_ccpr_objects table for non-appendable objects
+			// Use original stats for insert operation (no mo_ccpr_objects mapping needed for nobj)
 			if !filterResult.DownstreamStats.IsZero() {
-				downstreamIDStr := filterResult.DownstreamStats.ObjectName().ObjectId().String()
-				if insertErr := insertCcprObjectMapping(ctx, localExecutor, taskID, upstreamIDStr, downstreamIDStr, filterResult.DownstreamStats, info.IsTombstone, info.DBName, info.TableName); insertErr != nil {
-					err = moerr.NewInternalErrorf(ctx, "failed to insert ccpr object mapping: %v", insertErr)
-					return
-				}
-				// Use downstream stats for insert operation
 				if info.IsTombstone {
 					collectedTombstoneInsertStats = append(collectedTombstoneInsertStats, &ObjectWithTableInfo{
 						Stats:       filterResult.DownstreamStats,

@@ -304,6 +304,9 @@ type Engine struct {
 	skipConsume bool
 
 	cloneTxnCache *CloneTxnCache
+
+	// ccprTxnCache tracks CCPR objects and their associated transactions
+	ccprTxnCache *CCPRTxnCache
 }
 
 func (e *Engine) getPrefetchOnSubscribed() []*regexp.Regexp {
@@ -320,6 +323,11 @@ func (e *Engine) SetService(svr string) {
 func (e *Engine) ResetGCWorkerPool(pool *ants.Pool) {
 	e.gcPool.Release()
 	e.gcPool = pool
+}
+
+// GetCCPRTxnCache returns the CCPR transaction cache
+func (e *Engine) GetCCPRTxnCache() *CCPRTxnCache {
+	return e.ccprTxnCache
 }
 
 func (txn *Transaction) String() string {

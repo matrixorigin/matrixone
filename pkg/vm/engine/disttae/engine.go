@@ -158,6 +158,7 @@ func New(
 	}
 
 	e.cloneTxnCache = newCloneTxnCache()
+	e.ccprTxnCache = NewCCPRTxnCache(e.gcPool, e.fs)
 
 	logutil.Info(
 		"INIT-ENGINE-CONFIG",
@@ -178,6 +179,7 @@ func (e *Engine) Close() error {
 
 	e.dynamicCtx.Close()
 	e.cloneTxnCache = nil
+	e.ccprTxnCache = nil
 
 	return nil
 }
