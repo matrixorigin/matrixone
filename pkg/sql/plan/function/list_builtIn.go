@@ -3047,6 +3047,46 @@ var supportedStringBuiltIns = []FuncNew{
 					return AESEncrypt
 				},
 			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return AESEncrypt
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_char, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return AESEncrypt
+				},
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_text, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return AESEncrypt
+				},
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_blob, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return AESEncrypt
+				},
+			},
 		},
 	},
 
@@ -3091,6 +3131,46 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 3,
 				args:       []types.T{types.T_text, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return AESDecrypt
+				},
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_blob, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return AESDecrypt
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return AESDecrypt
+				},
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_char, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return AESDecrypt
+				},
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_text, types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
