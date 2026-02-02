@@ -157,9 +157,6 @@ func (idx *IvfflatSearchIndex[T]) LoadBloomFilters(
 	bloomfilters := make([]*bloomfilter.CBloomFilter, idxcfg.Ivfflat.Lists)
 	for i := 0; i < int(idxcfg.Ivfflat.Lists); i++ {
 		bf := bloomfilter.NewCBloomFilterWithSeed(idx.Meta.Nbits, idx.Meta.K, idx.Meta.Seed)
-		if bf == nil {
-			panic("failed to create CBloomFilter")
-		}
 		bloomfilters[i] = bf
 	}
 	idx.BloomFilters = bloomfilters
@@ -457,10 +454,6 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 		}
 
 		bf = bloomfilter.NewCBloomFilterWithProbability(rowCount, bfProbability)
-		if bf == nil {
-			panic("failed to create CBloomFilter")
-		}
-
 		for _, bat := range res.Batches {
 			bf.AddVector(bat.Vecs[0])
 		}
@@ -468,10 +461,6 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 	} else {
 		// use preload bloomfilter
 		bf = bloomfilter.NewCBloomFilterWithSeed(idx.Meta.Nbits, idx.Meta.K, idx.Meta.Seed)
-		if bf == nil {
-			panic("failed to create CBloomFilter")
-		}
-
 		for _, c := range centroids_ids {
 			err = bf.Merge(idx.BloomFilters[c])
 			if err != nil {
@@ -494,9 +483,6 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 	}
 
 	bf2 := bloomfilter.NewCBloomFilterWithProbability(int64(nexist), bfProbability)
-	if bf2 == nil {
-		panic("failed to create CBloomFilter")
-	}
 	defer func() {
 		if bf2 != nil {
 			bf2.Free()

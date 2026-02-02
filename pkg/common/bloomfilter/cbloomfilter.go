@@ -89,7 +89,7 @@ func NewCBloomFilterWithProbability(rowcnt int64, probability float64) *CBloomFi
 func NewCBloomFilter(nbits uint64, k uint32) *CBloomFilter {
 	ptr := C.bloomfilter_init(C.uint64_t(nbits), C.uint32_t(k))
 	if ptr == nil {
-		return nil
+		panic("C.bloomfilter_init: Failed to allocate C.bloomfilter_t")
 	}
 	return &CBloomFilter{ptr: ptr, refcnt: 1}
 }
@@ -99,7 +99,7 @@ func NewCBloomFilter(nbits uint64, k uint32) *CBloomFilter {
 func NewCBloomFilterWithSeed(nbits uint64, k uint32, seed uint64) *CBloomFilter {
 	ptr := C.bloomfilter_init_with_seed(C.uint64_t(nbits), C.uint32_t(k), C.uint64_t(seed))
 	if ptr == nil {
-		return nil
+		panic("C.bloomfilter_init_with_seed: Failed to allocate C.bloomfilter_t")
 	}
 	return &CBloomFilter{ptr: ptr, refcnt: 1}
 }
