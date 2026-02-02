@@ -36,6 +36,8 @@ const (
 var (
 	// noCNServerErr indicates that there are no available CN servers.
 	noCNServerErr = moerr.NewInternalErrorNoCtx("no available CN server")
+	// allCNServersBusyErr indicates that all CN servers are busy, possibly due to too many active transactions
+	allCNServersBusyErr = moerr.NewAllCNServersBusyNoCtx()
 )
 
 // Router is an interface to select CN server and connects to it.
