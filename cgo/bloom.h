@@ -65,7 +65,7 @@ void bloomfilter_free(bloomfilter_t *bf);
 /*
  * Adds a single key of given length to the bloom filter.
  */
-void bloomfilter_add(const bloomfilter_t *bf, const void *key, size_t len);
+void bloomfilter_add(bloomfilter_t *bf, const void *key, size_t len);
 
 /*
  * Adds multiple fixed-length keys to the bloom filter.
@@ -76,7 +76,7 @@ void bloomfilter_add(const bloomfilter_t *bf, const void *key, size_t len);
  * nullmap: optional bitmap indicating which items are NULL.
  * nullmaplen: length of the nullmap.
  */
-void bloomfilter_add_fixed(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem, const void *nullmap, size_t nullmaplen);
+void bloomfilter_add_fixed(bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem, const void *nullmap, size_t nullmaplen);
 
 /*
  * Tests if a key might be in the bloom filter.
@@ -99,23 +99,23 @@ void bloomfilter_test_varlena_4b(const bloomfilter_t *bf, const void *key, size_
  * Adds multiple variable-length keys to the bloom filter.
  * Keys are expected to be prefixed with a 4-byte length.
  */
-void bloomfilter_add_varlena_4b(const bloomfilter_t *bf, const void *key, size_t len, size_t nitem, const void *nullmap, size_t nullmaplen);
+void bloomfilter_add_varlena_4b(bloomfilter_t *bf, const void *key, size_t len, size_t nitem, const void *nullmap, size_t nullmaplen);
 
 /*
  * Tests if a key is in the bloom filter and then adds it.
  * Returns true if the key was already potentially in the filter.
  */
-bool bloomfilter_test_and_add(const bloomfilter_t *bf, const void *key, size_t len);
+bool bloomfilter_test_and_add(bloomfilter_t *bf, const void *key, size_t len);
 
 /*
  * Tests and adds multiple fixed-length keys, storing results in the result buffer.
  */
-void bloomfilter_test_and_add_fixed(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem, const void *nullmap, size_t nullmaplen,void *result);
+void bloomfilter_test_and_add_fixed(bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem, const void *nullmap, size_t nullmaplen,void *result);
 
 /*
  * Tests and adds multiple variable-length keys, storing results in the result buffer.
  */
-void bloomfilter_test_and_add_varlena_4b(const bloomfilter_t *bf, const void *key, size_t len, size_t nitem, const void *nullmap, size_t nullmaplen,void *result);
+void bloomfilter_test_and_add_varlena_4b(bloomfilter_t *bf, const void *key, size_t len, size_t nitem, const void *nullmap, size_t nullmaplen,void *result);
 
 /*
  * Returns a pointer to the raw bytes of the bloom filter for serialization.
@@ -134,7 +134,7 @@ bloomfilter_t* bloomfilter_unmarshal(const uint8_t *buf, size_t len);
  * keys: pointer to the start of Varlena array.
  * area: pointer to the start of area buffer.
  */
-void bloomfilter_add_varlena(const bloomfilter_t *bf, const void *keys, size_t len, size_t elemsz, size_t nitem, const void *area, size_t area_len, const void *nullmap, size_t nullmaplen);
+void bloomfilter_add_varlena(bloomfilter_t *bf, const void *keys, size_t len, size_t elemsz, size_t nitem, const void *area, size_t area_len, const void *nullmap, size_t nullmaplen);
 
 /*
  * Tests multiple variable-length keys and stores boolean results in the result buffer.
@@ -148,7 +148,7 @@ void bloomfilter_test_varlena(const bloomfilter_t *bf, const void *keys, size_t 
  * keys: pointer to the start of Varlena array.
  * area: pointer to the start of area buffer.
  */
-void bloomfilter_test_and_add_varlena(const bloomfilter_t *bf, const void *keys, size_t len, size_t elemsz, size_t nitem, const void *area, size_t area_len, const void *nullmap, size_t nullmaplen, void *result);
+void bloomfilter_test_and_add_varlena(bloomfilter_t *bf, const void *keys, size_t len, size_t elemsz, size_t nitem, const void *area, size_t area_len, const void *nullmap, size_t nullmaplen, void *result);
 
 /*
  * Merge two bloomfilter into dst. nbits, seed and k MUST be same

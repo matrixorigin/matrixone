@@ -133,7 +133,7 @@ void bloomfilter_free(bloomfilter_t *bf) {
     }
 }
 
-void bloomfilter_add(const bloomfilter_t *bf, const void *key, size_t len) {
+void bloomfilter_add(bloomfilter_t *bf, const void *key, size_t len) {
     if (bf->nbits == 0) return;
 
     uint64_t stack_pos[MAX_K_SEED];
@@ -146,7 +146,7 @@ void bloomfilter_add(const bloomfilter_t *bf, const void *key, size_t len) {
     }
 }
 
-void bloomfilter_add_fixed(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem, const void *nullmap, size_t nullmaplen) {
+void bloomfilter_add_fixed(bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem, const void *nullmap, size_t nullmaplen) {
     char *k = (char *) key;
     for (int i = 0, j = 0; i < nitem && j < len; i++, j += elemsz, k += elemsz) {
         if (!nullmap || !bitmap_test((uint64_t *) nullmap, i)) {
@@ -155,7 +155,7 @@ void bloomfilter_add_fixed(const bloomfilter_t *bf, const void *key, size_t len,
     }
 }
 
-void bloomfilter_add_varlena_4b(const bloomfilter_t *bf, const void *key, size_t len, size_t nitem, const void *nullmap, size_t nullmaplen) {
+void bloomfilter_add_varlena_4b(bloomfilter_t *bf, const void *key, size_t len, size_t nitem, const void *nullmap, size_t nullmaplen) {
     char *k = (char *) key;
     char *start = k;
 
@@ -237,7 +237,7 @@ void bloomfilter_test_varlena_4b(const bloomfilter_t *bf, const void *key, size_
     }
 }
 
-bool bloomfilter_test_and_add(const bloomfilter_t *bf, const void *key, size_t len) {
+bool bloomfilter_test_and_add(bloomfilter_t *bf, const void *key, size_t len) {
     if (bf->nbits == 0) return false;
 
     uint64_t stack_pos[MAX_K_SEED];
@@ -259,7 +259,7 @@ bool bloomfilter_test_and_add(const bloomfilter_t *bf, const void *key, size_t l
     return all_set;
 }
 
-void bloomfilter_test_and_add_fixed(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem,  const void *nullmap, size_t nullmaplen, void *result) {
+void bloomfilter_test_and_add_fixed(bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem,  const void *nullmap, size_t nullmaplen, void *result) {
     char *k = (char *) key;
     bool *br = (bool *) result;
     for (int i = 0, j = 0; i < nitem && j < len; i++, j += elemsz, k += elemsz) {
@@ -272,7 +272,7 @@ void bloomfilter_test_and_add_fixed(const bloomfilter_t *bf, const void *key, si
     }
 }
 
-void bloomfilter_test_and_add_varlena_4b(const bloomfilter_t *bf, const void *key, size_t len, size_t nitem,  const void *nullmap, size_t nullmaplen, void *result) {
+void bloomfilter_test_and_add_varlena_4b(bloomfilter_t *bf, const void *key, size_t len, size_t nitem,  const void *nullmap, size_t nullmaplen, void *result) {
     char *k = (char *) key;
     char *start = k;
     bool *br = (bool *) result;
@@ -293,7 +293,7 @@ void bloomfilter_test_and_add_varlena_4b(const bloomfilter_t *bf, const void *ke
     }
 }
 
-void bloomfilter_add_varlena(const bloomfilter_t *bf, const void *keys, size_t len, size_t elemsz, size_t nitem, const void *area, size_t area_len, const void *nullmap, size_t nullmaplen) {
+void bloomfilter_add_varlena(bloomfilter_t *bf, const void *keys, size_t len, size_t elemsz, size_t nitem, const void *area, size_t area_len, const void *nullmap, size_t nullmaplen) {
     const uint8_t *v = (const uint8_t *)keys;
 
     for (int i = 0, j = 0; i < nitem && j < len; i++, j += elemsz) {
@@ -322,7 +322,7 @@ void bloomfilter_test_varlena(const bloomfilter_t *bf, const void *keys, size_t 
     }
 }
 
-void bloomfilter_test_and_add_varlena(const bloomfilter_t *bf, const void *keys, size_t len, size_t elemsz, size_t nitem, const void *area, size_t area_len, const void *nullmap, size_t nullmaplen, void *result) {
+void bloomfilter_test_and_add_varlena(bloomfilter_t *bf, const void *keys, size_t len, size_t elemsz, size_t nitem, const void *area, size_t area_len, const void *nullmap, size_t nullmaplen, void *result) {
     const uint8_t *v = (const uint8_t *)keys;
     bool *br = (bool *) result;
 
