@@ -288,6 +288,10 @@ type Workspace interface {
 	PPString() string
 
 	SetCloneTxn(snapshot int64)
+
+	// SetCCPRTxn marks this transaction as a CCPR transaction.
+	// CCPR transactions will call CCPRTxnCache.OnTxnCommit/OnTxnRollback when committing/rolling back.
+	SetCCPRTxn()
 }
 
 // TxnOverview txn overview include meta and status

@@ -425,6 +425,7 @@ type Transaction struct {
 
 	haveDDL    atomic.Bool
 	isCloneTxn bool
+	isCCPRTxn  bool
 
 	writeWorkspaceThreshold      uint64
 	commitWorkspaceThreshold     uint64
@@ -434,6 +435,17 @@ type Transaction struct {
 func (txn *Transaction) SetCloneTxn(snapshot int64) {
 	txn.isCloneTxn = true
 	txn.engine.cloneTxnCache.AddTxn(txn.op.Txn().ID, snapshot)
+}
+
+// SetCCPRTxn marks this transaction as a CCPR transaction.
+// CCPR transactions will call CCPRTxnCache.OnTxnCommit/OnTxnRollback when committing/rolling back.
+func (txn *Transaction) SetCCPRTxn() {
+	txn.isCCPRTxn = true
+}
+
+// IsCCPRTxn returns true if this transaction is a CCPR transaction.
+func (txn *Transaction) IsCCPRTxn() bool {
+	return txn.isCCPRTxn
 }
 
 type Summary struct {

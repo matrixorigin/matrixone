@@ -1279,6 +1279,18 @@ func (mr *MockWorkspaceMockRecorder) SetCloneTxn(snapshot interface{}) *gomock.C
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetCloneTxn", reflect.TypeOf((*MockWorkspace)(nil).SetCloneTxn), snapshot)
 }
 
+// SetCCPRTxn mocks base method.
+func (m *MockWorkspace) SetCCPRTxn() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetCCPRTxn")
+}
+
+// SetCCPRTxn indicates an expected call of SetCCPRTxn.
+func (mr *MockWorkspaceMockRecorder) SetCCPRTxn() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetCCPRTxn", reflect.TypeOf((*MockWorkspace)(nil).SetCCPRTxn))
+}
+
 // SetHaveDDL mocks base method.
 func (m *MockWorkspace) SetHaveDDL(flag bool) {
 	m.ctrl.T.Helper()

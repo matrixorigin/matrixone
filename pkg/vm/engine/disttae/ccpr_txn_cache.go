@@ -19,6 +19,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/panjf2000/ants/v2"
@@ -57,49 +58,76 @@ func NewCCPRTxnCache(gcPool *ants.Pool, fs fileservice.FileService) *CCPRTxnCach
 	}
 }
 
-// WriteObject registers a new object with the given transaction ID.
-// If the object already exists in the cache, the txnID is added to the list.
-// If the object doesn't exist, a new entry is created.
+// WriteObject writes an object to fileservice and registers it with the given transaction ID.
+// This method ensures atomicity between writing the object and registering in the cache.
 //
-// This method should be called atomically with the actual object write operation.
+// If the object already exists in fileservice, the txnID is added to the cache entry.
+// If the object is newly created, a new cache entry is created.
 //
 // Parameters:
+//   - ctx: context for the operation
 //   - objectName: the name of the object being written
+//   - objectContent: the content of the object to write
 //   - txnID: the ID of the transaction writing this object
-//   - isNewObject: true if this is a newly created object, false if the object already exists
 //
 // Returns:
-//   - bool: true if this is a new entry (first txnID for this object), false if txnID was added to existing entry
-func (c *CCPRTxnCache) WriteObject(objectName string, txnID []byte, isNewObject bool) bool {
+//   - isNewFile: true if this is a newly created file, false if file already existed
+//   - error: error if write operation failed
+func (c *CCPRTxnCache) WriteObject(ctx context.Context, objectName string, objectContent []byte, txnID []byte) (isNewFile bool, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	if c.fs == nil {
+		return false, moerr.NewInternalError(ctx, "fileservice is nil in CCPRTxnCache")
+	}
 
 	txnIDCopy := make([]byte, len(txnID))
 	copy(txnIDCopy, txnID)
 
-	if isNewObject {
-		// New object: create a new entry with this txnID
-		c.items[objectName] = [][]byte{txnIDCopy}
-		return true
-	}
+	// Write to local fileservice
+	err = c.fs.Write(ctx, fileservice.IOVector{
+		FilePath: objectName,
+		Entries: []fileservice.IOEntry{
+			{
+				Offset: 0,
+				Size:   int64(len(objectContent)),
+				Data:   objectContent,
+			},
+		},
+	})
 
-	// Object already exists: add txnID to the list if not already present
-	existingTxnIDs, exists := c.items[objectName]
-	if !exists {
-		// Object exists in fileservice but not in cache, don't add entry
-		return false
-	}
-
-	// Check if txnID already exists
-	for _, id := range existingTxnIDs {
-		if bytes.Equal(id, txnIDCopy) {
-			return false
+	isNewFile = true
+	if err != nil {
+		// Check if the error is due to file already exists
+		if moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
+			isNewFile = false
+			err = nil
+		} else {
+			return false, moerr.NewInternalErrorf(ctx, "failed to write object to fileservice: %v", err)
 		}
 	}
 
-	// Add txnID to existing entry
-	c.items[objectName] = append(existingTxnIDs, txnIDCopy)
-	return false
+	if isNewFile {
+		// New object: create a new entry with this txnID
+		c.items[objectName] = [][]byte{txnIDCopy}
+	} else {
+		// Object already exists: add txnID to the list if not already present
+		existingTxnIDs, exists := c.items[objectName]
+		if exists {
+			// Check if txnID already exists
+			for _, id := range existingTxnIDs {
+				if bytes.Equal(id, txnIDCopy) {
+					return isNewFile, nil
+				}
+			}
+			// Add txnID to existing entry
+			c.items[objectName] = append(existingTxnIDs, txnIDCopy)
+		}
+		// If not exists in cache but file exists, don't add to cache
+		// This means the file was created by a committed txn
+	}
+
+	return isNewFile, nil
 }
 
 // OnTxnCommit is called when a transaction commits successfully.

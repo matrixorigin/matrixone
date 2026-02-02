@@ -1150,6 +1150,10 @@ func ExecuteIteration(
 		return moerr.NewInternalErrorf(ctx, "failed to register transaction with engine: %v", err)
 	}
 
+	// Mark this transaction as a CCPR transaction
+	// This will trigger CCPRTxnCache.OnTxnCommit/OnTxnRollback when the txn commits/rolls back
+	localTxn.GetWorkspace().SetCCPRTxn()
+
 	iterationCtx.LocalTxn = localTxn
 	iterationCtx.LocalExecutor.(*InternalSQLExecutor).SetTxn(localTxn)
 
@@ -1380,6 +1384,7 @@ func ExecuteIteration(
 		getChunkWorker,
 		iterationCtx.SubscriptionAccountName,
 		iterationCtx.SubscriptionName,
+		cnEngine.(*disttae.Engine).GetCCPRTxnCache(),
 	)
 	if err != nil {
 		err = moerr.NewInternalErrorf(ctx, "failed to apply object list: %v", err)

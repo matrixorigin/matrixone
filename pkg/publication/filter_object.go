@@ -272,6 +272,8 @@ type FilterObjectJob struct {
 	getChunkWorker          GetChunkWorker
 	subscriptionAccountName string
 	pubName                 string
+	ccprCache               CCPRTxnCacheWriter
+	txnID                   []byte
 	result                  chan *FilterObjectJobResult
 }
 
@@ -287,6 +289,8 @@ func NewFilterObjectJob(
 	getChunkWorker GetChunkWorker,
 	subscriptionAccountName string,
 	pubName string,
+	ccprCache CCPRTxnCacheWriter,
+	txnID []byte,
 ) *FilterObjectJob {
 	return &FilterObjectJob{
 		ctx:                     ctx,
@@ -299,6 +303,8 @@ func NewFilterObjectJob(
 		getChunkWorker:          getChunkWorker,
 		subscriptionAccountName: subscriptionAccountName,
 		pubName:                 pubName,
+		ccprCache:               ccprCache,
+		txnID:                   txnID,
 		result:                  make(chan *FilterObjectJobResult, 1),
 	}
 }
@@ -317,6 +323,8 @@ func (j *FilterObjectJob) Execute() {
 		j.getChunkWorker,
 		j.subscriptionAccountName,
 		j.pubName,
+		j.ccprCache,
+		j.txnID,
 	)
 	res.Err = err
 	if filterResult != nil {
@@ -354,6 +362,8 @@ type FilterObjectResult struct {
 // For aobj: gets object file, converts to batch, filters by snapshot TS, creates new object
 // The mapping between new UUID and upstream aobj is recorded in mo_ccpr_objects table
 // For nobj: writes directly to fileservice
+// ccprCache: optional CCPR transaction cache for atomic write and registration (can be nil)
+// txnID: transaction ID for CCPR cache registration (can be nil)
 func FilterObject(
 	ctx context.Context,
 	objectStatsBytes []byte,
@@ -365,6 +375,8 @@ func FilterObject(
 	getChunkWorker GetChunkWorker,
 	subscriptionAccountName string,
 	pubName string,
+	ccprCache CCPRTxnCacheWriter,
+	txnID []byte,
 ) (*FilterObjectResult, error) {
 	if len(objectStatsBytes) != objectio.ObjectStatsLen {
 		return nil, moerr.NewInternalErrorf(ctx, "invalid object stats length: expected %d, got %d", objectio.ObjectStatsLen, len(objectStatsBytes))
@@ -381,7 +393,7 @@ func FilterObject(
 		return filterAppendableObject(ctx, &stats, snapshotTS, upstreamExecutor, localFS, isTombstone, mp, getChunkWorker, subscriptionAccountName, pubName)
 	} else {
 		// Handle non-appendable object - write directly to fileservice with new UUID
-		newStats, err := filterNonAppendableObject(ctx, &stats, upstreamExecutor, localFS, getChunkWorker, subscriptionAccountName, pubName)
+		newStats, err := filterNonAppendableObject(ctx, &stats, upstreamExecutor, localFS, getChunkWorker, subscriptionAccountName, pubName, ccprCache, txnID)
 		if err != nil {
 			return nil, err
 		}
@@ -451,6 +463,14 @@ func filterAppendableObject(
 	}, nil
 }
 
+// CCPRTxnCacheWriter is an interface for writing objects to CCPR transaction cache
+// This interface is implemented by disttae.CCPRTxnCache
+type CCPRTxnCacheWriter interface {
+	// WriteObject writes an object to fileservice and registers it in the cache
+	// Returns isNewFile (true if newly created) and any error
+	WriteObject(ctx context.Context, objectName string, objectContent []byte, txnID []byte) (isNewFile bool, err error)
+}
+
 // filterNonAppendableObject handles non-appendable objects
 // Writes directly to fileservice with the original object name
 // Returns the original ObjectStats
@@ -462,6 +482,8 @@ func filterNonAppendableObject(
 	getChunkWorker GetChunkWorker,
 	subscriptionAccountName string,
 	pubName string,
+	ccprCache CCPRTxnCacheWriter,
+	txnID []byte,
 ) (objectio.ObjectStats, error) {
 	// Get upstream object name from stats
 	upstreamObjectName := stats.ObjectName().String()
@@ -472,49 +494,32 @@ func filterNonAppendableObject(
 		return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to get object from upstream: %v", err)
 	}
 
-	// Write to local fileservice with original object name
-	err = localFS.Write(ctx, fileservice.IOVector{
-		FilePath: upstreamObjectName,
-		Entries: []fileservice.IOEntry{
-			{
-				Offset: 0,
-				Size:   int64(len(objectContent)),
-				Data:   objectContent,
-			},
-		},
-	})
-	if err != nil {
-		// Check if the error is due to file already exists
-		if moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
-			// Log warning instead of returning error
-			logutil.Warn("file already exists, deleting and rewriting",
-				zap.String("file", upstreamObjectName),
-				logutil.ErrorField(err))
-
-			// Delete the existing file
-			deleteErr := localFS.Delete(ctx, upstreamObjectName)
-			if deleteErr != nil {
-				logutil.Warn("failed to delete existing file, ignoring",
-					zap.String("file", upstreamObjectName),
-					logutil.ErrorField(deleteErr))
-			}
-
-			// Retry writing after deletion
-			err = localFS.Write(ctx, fileservice.IOVector{
-				FilePath: upstreamObjectName,
-				Entries: []fileservice.IOEntry{
-					{
-						Offset: 0,
-						Size:   int64(len(objectContent)),
-						Data:   objectContent,
-					},
+	// Use CCPRTxnCache.WriteObject if cache is available, otherwise write directly
+	if ccprCache != nil && len(txnID) > 0 {
+		// Write to fileservice and register in cache atomically
+		_, err = ccprCache.WriteObject(ctx, upstreamObjectName, objectContent, txnID)
+		if err != nil {
+			return objectio.ObjectStats{}, err
+		}
+	} else {
+		// Fallback: Write to local fileservice with original object name
+		err = localFS.Write(ctx, fileservice.IOVector{
+			FilePath: upstreamObjectName,
+			Entries: []fileservice.IOEntry{
+				{
+					Offset: 0,
+					Size:   int64(len(objectContent)),
+					Data:   objectContent,
 				},
-			})
-			if err != nil {
-				return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to write object to fileservice after deletion: %v", err)
+			},
+		})
+		if err != nil {
+			// Check if the error is due to file already exists
+			if moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
+				// File already exists, this is ok
+			} else {
+				return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to write object to fileservice: %v", err)
 			}
-		} else {
-			return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to write object to fileservice: %v", err)
 		}
 	}
 
@@ -1353,6 +1358,7 @@ func ApplyObjects(
 	getChunkWorker GetChunkWorker,
 	subscriptionAccountName string,
 	pubName string,
+	ccprCache CCPRTxnCacheWriter,
 ) (err error) {
 
 	var collectedTombstoneDeleteStats []*ObjectWithTableInfo
@@ -1360,11 +1366,17 @@ func ApplyObjects(
 	var collectedDataDeleteStats []*ObjectWithTableInfo
 	var collectedDataInsertStats []*ObjectWithTableInfo
 
+	// Get txnID from txn operator for CCPR cache
+	var txnID []byte
+	if txn != nil {
+		txnID = txn.Txn().ID
+	}
+
 	// Pre-submit filter object jobs for all non-delete objects
 	for _, info := range objectMap {
 		if !info.Delete {
 			statsBytes := info.Stats.Marshal()
-			filterJob := NewFilterObjectJob(ctx, statsBytes, currentTS, upstreamExecutor, info.IsTombstone, fs, mp, getChunkWorker, subscriptionAccountName, pubName)
+			filterJob := NewFilterObjectJob(ctx, statsBytes, currentTS, upstreamExecutor, info.IsTombstone, fs, mp, getChunkWorker, subscriptionAccountName, pubName, ccprCache, txnID)
 			if filterObjectWorker != nil {
 				filterObjectWorker.SubmitFilterObject(filterJob)
 			} else {

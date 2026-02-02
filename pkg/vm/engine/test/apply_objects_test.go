@@ -532,6 +532,7 @@ func runApplyObjects(
 		nil, // GetChunkWorker
 		"",  // subscriptionAccountName
 		"",  // pubName
+		nil, // ccprCache
 	)
 	require.NoError(t, err)
 

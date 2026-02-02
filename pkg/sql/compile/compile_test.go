@@ -68,6 +68,8 @@ type Ws struct {
 
 func (w *Ws) SetCloneTxn(snapshot int64) {}
 
+func (w *Ws) SetCCPRTxn() {}
+
 func (w *Ws) Readonly() bool {
 	return false
 }
