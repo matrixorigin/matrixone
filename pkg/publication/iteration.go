@@ -1079,6 +1079,7 @@ func ExecuteIteration(
 	snapshotFlushInterval time.Duration,
 	filterObjectWorker FilterObjectWorker,
 	getChunkWorker GetChunkWorker,
+	writeObjectWorker WriteObjectWorker,
 	sqlExecutorRetryOpts ...*SQLExecutorRetryOption,
 ) (err error) {
 	var iterationCtx *IterationContext
@@ -1366,6 +1367,7 @@ func ExecuteIteration(
 		cnEngine.(*disttae.Engine).FS(),
 		filterObjectWorker,
 		getChunkWorker,
+		writeObjectWorker,
 		iterationCtx.SubscriptionAccountName,
 		iterationCtx.SubscriptionName,
 		cnEngine.(*disttae.Engine).GetCCPRTxnCache(),

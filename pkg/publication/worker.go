@@ -35,6 +35,7 @@ const (
 	PublicationWorkerThread  = 10
 	FilterObjectWorkerThread = 1000
 	GetChunkWorkerThread     = 10
+	WriteObjectWorkerThread  = 100
 
 	SubmitRetryTimes    = 1000
 	SubmitRetryDuration = time.Hour
@@ -46,6 +47,13 @@ const (
 type GetChunkJobDuration struct {
 	ObjectName string
 	ChunkIndex int64
+	Duration   time.Duration
+}
+
+// WriteObjectJobDuration holds duration info for a WriteObject job
+type WriteObjectJobDuration struct {
+	ObjectName string
+	Size       int64
 	Duration   time.Duration
 }
 
@@ -70,6 +78,10 @@ type JobStats struct {
 	// Top 3 longest GetChunk jobs
 	getChunkDurationMu   sync.Mutex
 	getChunkTopDurations []*GetChunkJobDuration
+
+	// Top 3 longest WriteObject jobs
+	writeObjectDurationMu   sync.Mutex
+	writeObjectTopDurations []*WriteObjectJobDuration
 }
 
 // Global job stats instance
@@ -194,6 +206,52 @@ func (s *JobStats) ResetTopGetChunkDurations() {
 	s.getChunkTopDurations = nil
 }
 
+// RecordWriteObjectDuration records a WriteObject job duration and keeps top 3 longest
+func (s *JobStats) RecordWriteObjectDuration(objectName string, size int64, duration time.Duration) {
+	s.writeObjectDurationMu.Lock()
+	defer s.writeObjectDurationMu.Unlock()
+
+	newEntry := &WriteObjectJobDuration{
+		ObjectName: objectName,
+		Size:       size,
+		Duration:   duration,
+	}
+
+	// Add new entry
+	s.writeObjectTopDurations = append(s.writeObjectTopDurations, newEntry)
+
+	// Sort by duration descending
+	for i := len(s.writeObjectTopDurations) - 1; i > 0; i-- {
+		if s.writeObjectTopDurations[i].Duration > s.writeObjectTopDurations[i-1].Duration {
+			s.writeObjectTopDurations[i], s.writeObjectTopDurations[i-1] = s.writeObjectTopDurations[i-1], s.writeObjectTopDurations[i]
+		} else {
+			break
+		}
+	}
+
+	// Keep only top 3
+	if len(s.writeObjectTopDurations) > 3 {
+		s.writeObjectTopDurations = s.writeObjectTopDurations[:3]
+	}
+}
+
+// GetTopWriteObjectDurations returns a copy of top 3 longest WriteObject job durations
+func (s *JobStats) GetTopWriteObjectDurations() []*WriteObjectJobDuration {
+	s.writeObjectDurationMu.Lock()
+	defer s.writeObjectDurationMu.Unlock()
+
+	result := make([]*WriteObjectJobDuration, len(s.writeObjectTopDurations))
+	copy(result, s.writeObjectTopDurations)
+	return result
+}
+
+// ResetTopWriteObjectDurations resets the top durations (called after printing)
+func (s *JobStats) ResetTopWriteObjectDurations() {
+	s.writeObjectDurationMu.Lock()
+	defer s.writeObjectDurationMu.Unlock()
+	s.writeObjectTopDurations = nil
+}
+
 type Worker interface {
 	Submit(taskID string, lsn uint64, state int8) error
 	Stop()
@@ -211,10 +269,22 @@ type GetChunkWorker interface {
 	Stop()
 }
 
+// WriteObjectWorker is the interface for write object worker pool
+type WriteObjectWorker interface {
+	SubmitWriteObject(job Job) error
+	Stop()
+}
+
 // GetChunkJobInfo is the interface for jobs that have object name and chunk index
 type GetChunkJobInfo interface {
 	GetObjectName() string
 	GetChunkIndex() int64
+}
+
+// WriteObjectJobInfo is the interface for jobs that have object name and size
+type WriteObjectJobInfo interface {
+	GetObjectName() string
+	GetObjectSize() int64
 }
 
 type worker struct {
@@ -230,6 +300,7 @@ type worker struct {
 	closed                   atomic.Bool
 	filterObjectWorker       FilterObjectWorker
 	getChunkWorker           GetChunkWorker
+	writeObjectWorker        WriteObjectWorker
 }
 
 type TaskContext struct {
@@ -253,6 +324,7 @@ func NewWorker(
 		upstreamSQLHelperFactory: upstreamSQLHelperFactory,
 		filterObjectWorker:       NewFilterObjectWorker(),
 		getChunkWorker:           NewGetChunkWorker(),
+		writeObjectWorker:        NewWriteObjectWorker(),
 	}
 	worker.ctx, worker.cancel = context.WithCancel(context.Background())
 	go worker.Run()
@@ -300,8 +372,24 @@ func (w *worker) RunStatsPrinter() {
 				logutil.Info("ccpr-worker-stats-top3-get-chunk-duration", fields...)
 			}
 
+			// Print top 3 longest WriteObject jobs
+			topWriteDurations := stats.GetTopWriteObjectDurations()
+			if len(topWriteDurations) > 0 {
+				fields := make([]zap.Field, 0, len(topWriteDurations)*3)
+				for i, d := range topWriteDurations {
+					idx := i + 1
+					fields = append(fields,
+						zap.String(fmt.Sprintf("object_name_%d", idx), d.ObjectName),
+						zap.Int64(fmt.Sprintf("size_%d", idx), d.Size),
+						zap.Duration(fmt.Sprintf("duration_%d", idx), d.Duration),
+					)
+				}
+				logutil.Info("ccpr-worker-stats-top3-write-object-duration", fields...)
+			}
+
 			// Reset top durations for next interval
 			stats.ResetTopGetChunkDurations()
+			stats.ResetTopWriteObjectDurations()
 		}
 	}
 }
@@ -375,6 +463,7 @@ func (w *worker) onItem(taskCtx *TaskContext) {
 		0,   // snapshotFlushInterval (use default 1min)
 		w.filterObjectWorker,
 		w.getChunkWorker,
+		w.writeObjectWorker,
 		nil, // sqlExecutorRetryOpt (use default)
 	)
 	// Task failure is usually caused by CN UUID or LSN validation errors.
@@ -399,6 +488,9 @@ func (w *worker) Stop() {
 	}
 	if w.getChunkWorker != nil {
 		w.getChunkWorker.Stop()
+	}
+	if w.writeObjectWorker != nil {
+		w.writeObjectWorker.Stop()
 	}
 }
 
@@ -534,10 +626,6 @@ func (w *getChunkWorker) Run() {
 						globalJobStats.IncrementGetMetaRunning()
 						job.Execute()
 						globalJobStats.DecrementGetMetaRunning()
-					case JobTypeWriteObject:
-						globalJobStats.IncrementWriteObjectRunning()
-						job.Execute()
-						globalJobStats.DecrementWriteObjectRunning()
 					default:
 						// JobTypeGetChunk
 						globalJobStats.IncrementGetChunkRunning()
@@ -569,8 +657,6 @@ func (w *getChunkWorker) SubmitGetChunk(job Job) error {
 	switch jobType {
 	case JobTypeGetMeta:
 		globalJobStats.IncrementGetMetaPending()
-	case JobTypeWriteObject:
-		globalJobStats.IncrementWriteObjectPending()
 	default:
 		globalJobStats.IncrementGetChunkPending()
 	}
@@ -583,4 +669,121 @@ func (w *getChunkWorker) Stop() {
 	w.cancel()
 	w.wg.Wait()
 	close(w.jobChan)
+}
+
+// ============================================================================
+// simpleJobWorker - generic worker implementation for reuse
+// ============================================================================
+
+type simpleJobWorker struct {
+	name             string
+	jobChan          chan Job
+	wg               sync.WaitGroup
+	cancel           context.CancelFunc
+	ctx              context.Context
+	closed           atomic.Bool
+	onPending        func()
+	onRunningStart   func()
+	onRunningFinish  func()
+	onRecordDuration func(job Job, duration time.Duration)
+}
+
+// newSimpleJobWorker creates a new simple job worker pool
+func newSimpleJobWorker(
+	name string,
+	threadCount int,
+	onPending func(),
+	onRunningStart func(),
+	onRunningFinish func(),
+	onRecordDuration func(job Job, duration time.Duration),
+) *simpleJobWorker {
+	w := &simpleJobWorker{
+		name:             name,
+		jobChan:          make(chan Job, 10000),
+		onPending:        onPending,
+		onRunningStart:   onRunningStart,
+		onRunningFinish:  onRunningFinish,
+		onRecordDuration: onRecordDuration,
+	}
+	w.ctx, w.cancel = context.WithCancel(context.Background())
+	go w.run(threadCount)
+	return w
+}
+
+func (w *simpleJobWorker) run(threadCount int) {
+	for i := 0; i < threadCount; i++ {
+		w.wg.Add(1)
+		go func() {
+			defer w.wg.Done()
+			for {
+				select {
+				case <-w.ctx.Done():
+					return
+				case job := <-w.jobChan:
+					w.onRunningStart()
+					startTime := time.Now()
+					job.Execute()
+					duration := time.Since(startTime)
+					w.onRunningFinish()
+					if w.onRecordDuration != nil {
+						w.onRecordDuration(job, duration)
+					}
+				}
+			}
+		}()
+	}
+}
+
+func (w *simpleJobWorker) submit(job Job) error {
+	if w.closed.Load() {
+		return moerr.NewInternalErrorf(context.Background(), "%s is closed", w.name)
+	}
+	w.onPending()
+	w.jobChan <- job
+	return nil
+}
+
+func (w *simpleJobWorker) stop() {
+	w.closed.Store(true)
+	w.cancel()
+	w.wg.Wait()
+	close(w.jobChan)
+}
+
+// ============================================================================
+// WriteObjectWorker implementation using simpleJobWorker
+// ============================================================================
+
+type writeObjectWorker struct {
+	*simpleJobWorker
+}
+
+// NewWriteObjectWorker creates a new write object worker pool
+func NewWriteObjectWorker() WriteObjectWorker {
+	return &writeObjectWorker{
+		simpleJobWorker: newSimpleJobWorker(
+			"WriteObjectWorker",
+			WriteObjectWorkerThread,
+			globalJobStats.IncrementWriteObjectPending,
+			globalJobStats.IncrementWriteObjectRunning,
+			globalJobStats.DecrementWriteObjectRunning,
+			func(job Job, duration time.Duration) {
+				if writeJobInfo, ok := job.(WriteObjectJobInfo); ok {
+					globalJobStats.RecordWriteObjectDuration(
+						writeJobInfo.GetObjectName(),
+						writeJobInfo.GetObjectSize(),
+						duration,
+					)
+				}
+			},
+		),
+	}
+}
+
+func (w *writeObjectWorker) SubmitWriteObject(job Job) error {
+	return w.submit(job)
+}
+
+func (w *writeObjectWorker) Stop() {
+	w.stop()
 }

@@ -290,6 +290,8 @@ func NewWriteObjectJob(
 func (j *WriteObjectJob) Execute() {
 	res := &WriteObjectJobResult{}
 
+	t0 := time.Now()
+	t1 := time.Now()
 	// Use CCPRTxnCache.WriteObject if cache is available, otherwise write directly
 	if j.ccprCache != nil && len(j.txnID) > 0 {
 		// Check if file needs to be written and register in cache
@@ -299,6 +301,8 @@ func (j *WriteObjectJob) Execute() {
 			j.result <- res
 			return
 		}
+		isNewDuration := time.Since(t1)
+		t1 = time.Now()
 		if isNewFile {
 			// File needs to be written - do it outside the cache lock
 			err = j.localFS.Write(j.ctx, fileservice.IOVector{
@@ -318,6 +322,11 @@ func (j *WriteObjectJob) Execute() {
 			}
 			// Notify cache that file has been written
 			j.ccprCache.OnFileWritten(j.objectName)
+		}
+		totalDuration := time.Since(t0)
+		writeDuration := time.Since(t1)
+		if totalDuration > time.Second*30 {
+			logutil.Infof("ccpr-worker write object duration is too long, total duration: %v, is new file duration: %v, write duration: %v", totalDuration, isNewDuration, writeDuration)
 		}
 	} else {
 		// Fallback: Write to local fileservice with original object name
@@ -356,6 +365,16 @@ func (j *WriteObjectJob) GetType() int8 {
 	return JobTypeWriteObject
 }
 
+// GetObjectName returns the object name for WriteObjectJobInfo interface
+func (j *WriteObjectJob) GetObjectName() string {
+	return j.objectName
+}
+
+// GetObjectSize returns the object content size for WriteObjectJobInfo interface
+func (j *WriteObjectJob) GetObjectSize() int64 {
+	return int64(len(j.objectContent))
+}
+
 // FilterObjectJobResult holds the result of FilterObjectJob
 type FilterObjectJobResult struct {
 	Err              error
@@ -377,6 +396,7 @@ type FilterObjectJob struct {
 	localFS                 fileservice.FileService
 	mp                      *mpool.MPool
 	getChunkWorker          GetChunkWorker
+	writeObjectWorker       WriteObjectWorker
 	subscriptionAccountName string
 	pubName                 string
 	ccprCache               CCPRTxnCacheWriter
@@ -395,6 +415,7 @@ func NewFilterObjectJob(
 	localFS fileservice.FileService,
 	mp *mpool.MPool,
 	getChunkWorker GetChunkWorker,
+	writeObjectWorker WriteObjectWorker,
 	subscriptionAccountName string,
 	pubName string,
 	ccprCache CCPRTxnCacheWriter,
@@ -410,6 +431,7 @@ func NewFilterObjectJob(
 		localFS:                 localFS,
 		mp:                      mp,
 		getChunkWorker:          getChunkWorker,
+		writeObjectWorker:       writeObjectWorker,
 		subscriptionAccountName: subscriptionAccountName,
 		pubName:                 pubName,
 		ccprCache:               ccprCache,
@@ -431,6 +453,7 @@ func (j *FilterObjectJob) Execute() {
 		j.localFS,
 		j.mp,
 		j.getChunkWorker,
+		j.writeObjectWorker,
 		j.subscriptionAccountName,
 		j.pubName,
 		j.ccprCache,
@@ -485,6 +508,7 @@ func FilterObject(
 	localFS fileservice.FileService,
 	mp *mpool.MPool,
 	getChunkWorker GetChunkWorker,
+	writeObjectWorker WriteObjectWorker,
 	subscriptionAccountName string,
 	pubName string,
 	ccprCache CCPRTxnCacheWriter,
@@ -506,7 +530,7 @@ func FilterObject(
 		return filterAppendableObject(ctx, &stats, snapshotTS, upstreamExecutor, localFS, isTombstone, mp, getChunkWorker, subscriptionAccountName, pubName, aobjectMap)
 	} else {
 		// Handle non-appendable object - write directly to fileservice with new UUID
-		newStats, err := filterNonAppendableObject(ctx, &stats, upstreamExecutor, localFS, getChunkWorker, subscriptionAccountName, pubName, ccprCache, txnID)
+		newStats, err := filterNonAppendableObject(ctx, &stats, upstreamExecutor, localFS, getChunkWorker, writeObjectWorker, subscriptionAccountName, pubName, ccprCache, txnID)
 		if err != nil {
 			return nil, err
 		}
@@ -689,6 +713,7 @@ func filterNonAppendableObject(
 	upstreamExecutor SQLExecutor,
 	localFS fileservice.FileService,
 	getChunkWorker GetChunkWorker,
+	writeObjectWorker WriteObjectWorker,
 	subscriptionAccountName string,
 	pubName string,
 	ccprCache CCPRTxnCacheWriter,
@@ -705,8 +730,8 @@ func filterNonAppendableObject(
 
 	// Use WriteObjectJob to write to fileservice via worker pool
 	writeJob := NewWriteObjectJob(ctx, localFS, upstreamObjectName, objectContent, ccprCache, txnID)
-	if getChunkWorker != nil {
-		getChunkWorker.SubmitGetChunk(writeJob)
+	if writeObjectWorker != nil {
+		writeObjectWorker.SubmitWriteObject(writeJob)
 	} else {
 		writeJob.Execute()
 	}
@@ -1548,6 +1573,7 @@ func ApplyObjects(
 	fs fileservice.FileService,
 	filterObjectWorker FilterObjectWorker,
 	getChunkWorker GetChunkWorker,
+	writeObjectWorker WriteObjectWorker,
 	subscriptionAccountName string,
 	pubName string,
 	ccprCache CCPRTxnCacheWriter,
@@ -1588,7 +1614,7 @@ func ApplyObjects(
 		if !info.Delete {
 			statsBytes := info.Stats.Marshal()
 			// Data objects don't need aobjectMap for rewriting, pass nil
-			filterJob := NewFilterObjectJob(ctx, statsBytes, currentTS, upstreamExecutor, false, fs, mp, getChunkWorker, subscriptionAccountName, pubName, ccprCache, txnID, nil)
+			filterJob := NewFilterObjectJob(ctx, statsBytes, currentTS, upstreamExecutor, false, fs, mp, getChunkWorker, writeObjectWorker, subscriptionAccountName, pubName, ccprCache, txnID, nil)
 			if filterObjectWorker != nil {
 				filterObjectWorker.SubmitFilterObject(filterJob)
 			} else {
@@ -1691,7 +1717,7 @@ func ApplyObjects(
 		if !info.Delete {
 			statsBytes := info.Stats.Marshal()
 			// Tombstone objects need aobjectMap for rowid rewriting
-			filterJob := NewFilterObjectJob(ctx, statsBytes, currentTS, upstreamExecutor, true, fs, mp, getChunkWorker, subscriptionAccountName, pubName, ccprCache, txnID, aobjectMap)
+			filterJob := NewFilterObjectJob(ctx, statsBytes, currentTS, upstreamExecutor, true, fs, mp, getChunkWorker, writeObjectWorker, subscriptionAccountName, pubName, ccprCache, txnID, aobjectMap)
 			if filterObjectWorker != nil {
 				filterObjectWorker.SubmitFilterObject(filterJob)
 			} else {
