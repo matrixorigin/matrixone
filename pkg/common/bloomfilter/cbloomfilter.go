@@ -157,7 +157,7 @@ func (bf *CBloomFilter) TestAndAdd(data []byte) bool {
 // Marshal serializes the bloom filter into a byte slice.
 func (bf *CBloomFilter) Marshal() ([]byte, error) {
 	if bf == nil || bf.ptr == nil {
-		return nil, nil
+		return nil, moerr.NewInternalErrorNoCtx("CBloomFilter.Marshal: CBloomFilter or C.bloomfilter_t is nil")
 	}
 	var clen C.size_t
 	dataPtr := C.bloomfilter_marshal(bf.ptr, &clen)
