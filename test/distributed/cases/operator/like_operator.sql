@@ -11,6 +11,11 @@ SELECT 'David!' LIKE 'David_';
 SELECT 'David!' LIKE '%D%v%';
 SELECT 'David!' LIKE 'David\_';
 SELECT 'David_' LIKE 'David\_';
+-- @bvt:issue#15087
+SELECT '__++' LIKE '__++%';
+SELECT '__++__' LIKE '__\\+';
+SELECT '__++__' LIKE '__+';
+-- @bvt:issue
 
 DROP TABLE IF EXISTS like_test;
 CREATE TABLE like_test(
