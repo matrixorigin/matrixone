@@ -277,19 +277,14 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 	}
 
 	if hashOnPK || hb.IsDedup {
-		// Prealloc improves performance, but for dedup with huge inputs it can OOM.
-		// Cap the initial prealloc so the hashmap can still grow incrementally.
-		preAllocCount := uint64(hb.InputBatchRowCount)
-		if hb.IsDedup && preAllocCount > uint64(hashmap.HashMapSizeThreshHold) {
-			preAllocCount = uint64(hashmap.HashMapSizeThreshHold)
-		}
+		// if hash on primary key, prealloc hashmap size to the count of batch
 		if hb.keyWidth <= 8 {
-			err = hb.IntHashMap.PreAlloc(preAllocCount)
+			err = hb.IntHashMap.PreAlloc(uint64(hb.InputBatchRowCount))
 			if err != nil {
 				return err
 			}
 		} else {
-			err = hb.StrHashMap.PreAlloc(preAllocCount)
+			err = hb.StrHashMap.PreAlloc(uint64(hb.InputBatchRowCount))
 			if err != nil {
 				return err
 			}
