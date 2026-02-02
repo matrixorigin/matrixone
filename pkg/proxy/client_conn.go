@@ -530,6 +530,9 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 	}
 
 	badCNServers := make(map[string]struct{})
+	// timeoutCNServers tracks CN servers that failed due to timeout.
+	// This helps distinguish between "CN is busy" vs "CN is down".
+	timeoutCNServers := make(map[string]struct{})
 	if prevAdd != "" {
 		badCNServers[prevAdd] = struct{}{}
 	}
@@ -550,6 +553,14 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 		cn, err = c.router.Route(c.ctx, c.sid, c.clientInfo, filterFn)
 		if err != nil {
 			v2.ProxyConnectRouteFailCounter.Inc()
+			// Check if all failed CN servers were due to timeout.
+			// If so, return a more specific error message.
+			if len(timeoutCNServers) > 0 && len(timeoutCNServers) == len(badCNServers) {
+				c.log.Error("all CN servers are busy (timeout)",
+					zap.Int("timeout_count", len(timeoutCNServers)),
+					zap.Any("timeout_servers", timeoutCNServers))
+				return nil, allCNServersBusyErr
+			}
 			c.log.Error("route failed", zap.Error(err))
 			return nil, err
 		}
@@ -570,9 +581,14 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 			if isRetryableErr(err) {
 				v2.ProxyConnectRetryCounter.Inc()
 				badCNServers[cn.addr] = struct{}{}
+				// Track if this failure was due to timeout.
+				if isTimeoutErr(err) {
+					timeoutCNServers[cn.addr] = struct{}{}
+				}
 				c.log.Warn("failed to connect to CN server, will retry",
 					zap.String("current server uuid", cn.uuid),
 					zap.String("current server address", cn.addr),
+					zap.Bool("timeout", isTimeoutErr(err)),
 					zap.Any("bad backend servers", badCNServers),
 					zap.String("client->proxy",
 						fmt.Sprintf("%s -> %s", c.RawConn().RemoteAddr(),
