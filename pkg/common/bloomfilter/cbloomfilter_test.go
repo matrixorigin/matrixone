@@ -381,10 +381,9 @@ func TestCBloomFilter_MarshalUnmarshalWithVector(t *testing.T) {
 func TestCBloomFilter_UnmarshalError(t *testing.T) {
 	bf := &CBloomFilter{}
 	// C function will return null and go code will panic
-	assert.Panics(t, func() {
-		// malformed data, first 8 bytes is nbits, next 4 bytes is k, but data is too short
-		_ = bf.Unmarshal([]byte{1, 2, 3})
-	})
+	// malformed data, first 8 bytes is nbits, next 4 bytes is k, but data is too short
+	err := bf.Unmarshal([]byte{1, 2, 3})
+	require.Error(t, err)
 }
 
 func TestCBloomFilter_AddVectorWithNulls(t *testing.T) {

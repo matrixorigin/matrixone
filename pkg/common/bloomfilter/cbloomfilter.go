@@ -185,7 +185,7 @@ func (bf *CBloomFilter) Unmarshal(data []byte) error {
 	ptr := C.bloomfilter_unmarshal((*C.uint8_t)(cData), C.size_t(len(data)))
 	if ptr == nil {
 		C.free(cData)
-		panic("failed to alloc memory for CBloomFilter")
+		return moerr.NewInternalErrorNoCtx("Failed to unmarshal bloomfilter")
 	}
 	bf.ptr = ptr
 	atomic.StoreInt32(&bf.refcnt, 1)
