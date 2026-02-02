@@ -131,27 +131,19 @@ func Start(sid string) {
 }
 
 func Stop(sid string) {
-	v, ok := rt.ServiceRuntime(sid).GetGlobalVariables("blockio")
+	val, ok := rt.ServiceRuntime(sid).GetGlobalVariables("blockio")
 	if !ok {
 		return
 	}
-	v.(*IoPipeline).Stop()
+	val.(*IoPipeline).Stop()
 }
 
 func MustGetPipeline(sid string) *IoPipeline {
-	v, ok := rt.ServiceRuntime(sid).GetGlobalVariables("blockio")
+	val, ok := rt.ServiceRuntime(sid).GetGlobalVariables("blockio")
 	if !ok {
 		panic("blockio not started for " + sid)
 	}
-	return v.(*IoPipeline)
-}
-
-func GetPipeline(sid string) *IoPipeline {
-	v, ok := rt.ServiceRuntime(sid).GetGlobalVariables("blockio")
-	if !ok {
-		return nil
-	}
-	return v.(*IoPipeline)
+	return val.(*IoPipeline)
 }
 
 func makeName(location string) string {
@@ -338,18 +330,24 @@ func (p *IoPipeline) Start() {
 
 func (p *IoPipeline) Stop() {
 	p.onceStop.Do(func() {
-		p.printer.Stop()
+		// 1. First mark as inactive to stop accepting new tasks
 		p.active.Store(false)
 
+		// 2. Stop the printer
+		p.printer.Stop()
+
+		// 3. Stop queues (they will drain remaining items)
 		p.prefetch.queue.Stop()
 		p.fetch.queue.Stop()
+		p.waitQ.Stop()
 
+		// 4. Release the pools after queues are stopped
 		p.prefetch.scheduler.Stop()
 		p.fetch.scheduler.Stop()
 
-		p.waitQ.Stop()
-
-		p.pool.ReleaseTimeout(time.Second)
+		if p.pool != nil {
+			p.pool.ReleaseTimeout(time.Second)
+		}
 	})
 }
 
@@ -403,8 +401,8 @@ func (p *IoPipeline) doPrefetch(params PrefetchParams) (err error) {
 }
 
 func (p *IoPipeline) onFetch(jobs ...any) {
-	for _, j := range jobs {
-		job := j.(*tasks.Job)
+	for _, item := range jobs {
+		job := item.(*tasks.Job)
 		if err := p.fetch.scheduler.Schedule(job); err != nil {
 			job.DoneWithErr(err)
 		}
@@ -460,29 +458,45 @@ func (p *IoPipeline) onPrefetch(items ...any) {
 		processes []PrefetchParams,
 		onJob func(context.Context, PrefetchParams) *tasks.Job,
 	) {
+		// check active again before scheduling
+		if !p.active.Load() {
+			return
+		}
 		merged := mergePrefetch(processes)
 		for _, option := range merged {
+			if !p.active.Load() {
+				return
+			}
 			job := onJob(context.Background(), option)
 			p.schedulerPrefetch(job)
 		}
 	}
 
+	// check if pool is closed before submitting
+	if p.pool == nil || p.pool.IsClosed() {
+		return
+	}
+
 	if len(metaProcesses) > 0 {
-		p.pool.Submit(func() {
+		if err := p.pool.Submit(func() {
 			schedulerJobs(metaProcesses, prefetchMetaJob)
-		})
+		}); err != nil {
+			logutil.Debugf("submit meta prefetch job failed: %v", err)
+		}
 	}
 
 	if len(filesProcesses) > 0 {
-		p.pool.Submit(func() {
+		if err := p.pool.Submit(func() {
 			schedulerJobs(filesProcesses, prefetchJob)
-		})
+		}); err != nil {
+			logutil.Debugf("submit file prefetch job failed: %v", err)
+		}
 	}
 }
 
 func (p *IoPipeline) onWait(jobs ...any) {
-	for _, j := range jobs {
-		job := j.(*tasks.Job)
+	for _, item := range jobs {
+		job := item.(*tasks.Job)
 		res := job.WaitDone()
 		if res == nil {
 			logutil.Infof("job is %v", job.String())
