@@ -746,3 +746,83 @@ func TestHandleSetVar(t *testing.T) {
 	require.Equal(t, 2, len(cc.migration.setVarStmts))
 	require.Equal(t, e1.stmt, cc.migration.setVarStmts[len(cc.migration.setVarStmts)-1])
 }
+
+// testTimeoutRouter is a router that simulates timeout errors for all CN servers.
+type testTimeoutRouter struct {
+	servers   []*CNServer
+	callCount int
+}
+
+func (r *testTimeoutRouter) Route(ctx context.Context, sid string, client clientInfo, filter func(string) bool) (*CNServer, error) {
+	// Filter out bad servers
+	for _, s := range r.servers {
+		if filter == nil || !filter(s.addr) {
+			return s, nil
+		}
+	}
+	// All servers filtered out
+	return nil, noCNServerErr
+}
+
+func (r *testTimeoutRouter) SelectByConnID(connID uint32) (*CNServer, error) {
+	return nil, nil
+}
+
+func (r *testTimeoutRouter) AllServers(sid string) ([]*CNServer, error) {
+	return r.servers, nil
+}
+
+func (r *testTimeoutRouter) Connect(c *CNServer, handshakeResp *frontend.Packet, t *tunnel) (ServerConn, []byte, error) {
+	r.callCount++
+	// Always return timeout error to simulate busy CN servers
+	return nil, nil, newTimeoutConnectErr(moerr.NewInternalErrorNoCtx("handshake timeout"))
+}
+
+// TestBuildConnWithServer_AllCNServersBusy tests the scenario where all CN servers
+// are busy (timeout during handshake), which should return allCNServersBusyErr.
+func TestBuildConnWithServer_AllCNServersBusy(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	logger := rt.Logger()
+
+	// Create a router with multiple CN servers that all timeout
+	router := &testTimeoutRouter{
+		servers: []*CNServer{
+			{uuid: "cn1", addr: "127.0.0.1:6001"},
+			{uuid: "cn2", addr: "127.0.0.1:6002"},
+		},
+	}
+
+	// Create a mock connection for RawConn()
+	local, _ := net.Pipe()
+	mockConn := newMockNetConn("127.0.0.1", 30001, "127.0.0.1", 30010, local)
+	mockIOSession := goetty.NewIOSession(
+		goetty.WithSessionConn(1, mockConn),
+		goetty.WithSessionCodec(WithProxyProtocolCodec(frontend.NewSqlCodec())),
+	)
+
+	cc := &clientConn{
+		ctx:        context.Background(),
+		router:     router,
+		conn:       mockIOSession,
+		mysqlProto: &frontend.MysqlProtocolImpl{},
+		log:        logger,
+		clientInfo: clientInfo{
+			labelInfo: labelInfo{
+				Tenant: "test_tenant",
+			},
+		},
+	}
+
+	// Call connectToBackend which should try all CN servers and fail with timeout
+	sc, err := cc.connectToBackend("")
+	require.Error(t, err)
+	require.Nil(t, sc)
+	// Should return allCNServersBusyErr since all servers timed out
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrAllCNServersBusy),
+		"expected ErrAllCNServersBusy, got: %v", err)
+	// Should have tried both CN servers
+	require.Equal(t, 2, router.callCount)
+}
