@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
+	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -1262,7 +1263,49 @@ func (p *PartitionState) CountRows(
 	if tombstoneStats.Rows > dataStats.Rows {
 		return 0, nil
 	}
+	// Record estimate/actual ratio: high ratio (e.g. 100x) means estimate is much larger than actual (bad signal).
+	estimateRows, _ := p.estimateTombstoneRowsOnly(snapshot)
+	actual := tombstoneStats.Rows
+	if actual == 0 {
+		actual = 1 // avoid div by zero; ratio is still meaningful (estimate/1)
+	}
+	ratio := float64(estimateRows) / float64(actual)
+	metricv2.StarcountEstimateOverActualRatioHistogram.Observe(ratio)
 	return dataStats.Rows - tombstoneStats.Rows, nil
+}
+
+// estimateTombstoneRowsOnly returns (estimated rows, object count) from metadata only (no S3 I/O).
+// Same visibility logic as EstimateCommittedTombstoneCount; used by CountRows to compute estimate/actual ratio.
+func (p *PartitionState) estimateTombstoneRowsOnly(snapshot types.TS) (estimatedRows int, objectCount int) {
+	iter := p.tombstoneObjectsNameIndex.Iter()
+	defer iter.Release()
+	for ok := iter.First(); ok; ok = iter.Next() {
+		obj := iter.Item()
+		if obj.CreateTime.GT(&snapshot) {
+			continue
+		}
+		if !obj.DeleteTime.IsEmpty() && obj.DeleteTime.LE(&snapshot) {
+			continue
+		}
+		estimatedRows += int(obj.Rows())
+		objectCount++
+	}
+	return estimatedRows, objectCount
+}
+
+// EstimateCommittedTombstoneCount returns an estimated count of committed tombstone rows
+// by summing up the row counts from visible tombstone object metadata.
+// This is very lightweight (only reads metadata, no S3 I/O) and can be used to decide
+// whether to use StarCount optimization.
+//
+// Note: This is an upper bound estimate because:
+// - It includes duplicate rowids (not deduplicated)
+// - It includes tombstones pointing to invisible data objects
+// The actual count from CollectTombstoneStats will be lower after deduplication and visibility filtering.
+func (p *PartitionState) EstimateCommittedTombstoneCount(snapshot types.TS) int {
+	estimatedRows, objectCount := p.estimateTombstoneRowsOnly(snapshot)
+	metricv2.StarcountEstimateTombstoneObjectsHistogram.Observe(float64(objectCount))
+	return estimatedRows
 }
 
 // DataStats contains statistics for data objects and rows.
@@ -1410,7 +1453,7 @@ func (p *PartitionState) CollectTombstoneStats(
 	return p.countTombstoneStatsWithMap(ctx, snapshot, fs, visibleObjects, stats)
 }
 
-// isDataObjectVisible checks if a data object is visible at the given snapshot.
+// IsDataObjectVisible checks if a data object is visible at the given snapshot.
 //
 // Background:
 // - CN can delete rows on both appendable and non-appendable data objects
@@ -1420,7 +1463,7 @@ func (p *PartitionState) CollectTombstoneStats(
 // This function checks:
 // 1. Non-appendable objects in dataObjectsNameIndex (O(log n) lookup)
 // 2. Appendable objects in rows btree (O(n) scan, but cached by caller)
-func (p *PartitionState) isDataObjectVisible(objId *types.Objectid, snapshot types.TS) bool {
+func (p *PartitionState) IsDataObjectVisible(objId *types.Objectid, snapshot types.TS) bool {
 	// Build a dummy ObjectEntry with the target objectid for lookup
 	var stats objectio.ObjectStats
 	objectio.SetObjectStatsObjectName(&stats, objectio.BuildObjectNameWithObjectID(objId))
@@ -1530,7 +1573,7 @@ func (p *PartitionState) countTombstoneStatsLinear(
 				if !lastObjIdSet || !objId.EQ(&lastObjId) {
 					lastObjId = *objId
 					lastObjIdSet = true
-					lastVisible = p.isDataObjectVisible(objId, snapshot)
+					lastVisible = p.IsDataObjectVisible(objId, snapshot)
 				}
 
 				if lastVisible {
@@ -1626,7 +1669,7 @@ func (p *PartitionState) countTombstoneStatsWithMap(
 					if !lastObjIdSet || !objId.EQ(&lastObjId) {
 						lastObjId = *objId
 						lastObjIdSet = true
-						lastVisible = p.isDataObjectVisible(objId, snapshot)
+						lastVisible = p.IsDataObjectVisible(objId, snapshot)
 					}
 
 					if lastVisible {
@@ -1673,7 +1716,7 @@ func (p *PartitionState) countTombstoneStatsWithMap(
 		if !lastObjIdSet || !objId.EQ(&lastObjId) {
 			lastObjId = *objId
 			lastObjIdSet = true
-			lastVisible = p.isDataObjectVisible(objId, snapshot)
+			lastVisible = p.IsDataObjectVisible(objId, snapshot)
 		}
 
 		if lastVisible {
@@ -1757,7 +1800,7 @@ func (it *tombstoneBlockIterator) next() bool {
 			}
 
 			objId := it.inMemEntry.RowID.BorrowObjectID()
-			if !it.p.isDataObjectVisible(objId, it.snapshot) {
+			if !it.p.IsDataObjectVisible(objId, it.snapshot) {
 				continue
 			}
 
@@ -1774,7 +1817,7 @@ func (it *tombstoneBlockIterator) next() bool {
 			}
 
 			objId := it.rowIds[it.rowIdx].BorrowObjectID()
-			if !it.p.isDataObjectVisible(objId, it.snapshot) {
+			if !it.p.IsDataObjectVisible(objId, it.snapshot) {
 				it.rowIdx++
 				continue
 			}
