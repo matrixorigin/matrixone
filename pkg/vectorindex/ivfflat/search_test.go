@@ -91,15 +91,9 @@ func TestFindMergedCentroids(t *testing.T) {
 	idx := &IvfflatSearchIndex[float32]{}
 	idxcfg := vectorindex.IndexConfig{}
 
-	// Case 1: CenterStats is nil
-	idx.Meta.CenterStats = nil
+	// Case 1: CenterStats set, SmallCenterThreshold = 0
 	input := []int64{1, 2, 3, 4, 5}
 	probe := uint(2)
-	res, err := idx.findMergedCentroids(nil, input, idxcfg, probe)
-	require.Nil(t, err)
-	require.Equal(t, input, res)
-
-	// Case 2: CenterStats set, SmallCenterThreshold = 0
 	idx.Meta.CenterStats = map[int64]int64{
 		1: 100,
 		2: 100,
@@ -108,11 +102,11 @@ func TestFindMergedCentroids(t *testing.T) {
 		5: 100,
 	}
 	idx.Meta.SmallCenterThreshold = 0
-	res, err = idx.findMergedCentroids(nil, input, idxcfg, probe)
+	res, err := idx.findMergedCentroids(nil, input, idxcfg, probe)
 	require.Nil(t, err)
 	require.Equal(t, []int64{1, 2}, res)
 
-	// Case 3: CenterStats set, with small centers
+	// Case 2: CenterStats set, with small centers
 	idx.Meta.SmallCenterThreshold = 50
 	idx.Meta.CenterStats = map[int64]int64{
 		1: 100, // Big
@@ -130,7 +124,7 @@ func TestFindMergedCentroids(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, []int64{1, 2, 3}, res)
 
-	// Case 4: All small
+	// Case 3: All small
 	idx.Meta.CenterStats = map[int64]int64{
 		1: 10, 2: 10, 3: 10, 4: 10, 5: 10,
 	}
@@ -138,7 +132,7 @@ func TestFindMergedCentroids(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, input, res)
 
-	// Case 5: probe is large
+	// Case 4: probe is large
 	idx.Meta.CenterStats = map[int64]int64{
 		1: 100, 2: 100, 3: 100, 4: 100, 5: 100,
 	}

@@ -300,7 +300,8 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *sqlexec.SqlProcess, idxcfg vec
 			return err
 		}
 
-		if val != 0 {
+		preload := val.(int8)
+		if preload != 0 {
 			err = idx.LoadBloomFilters(proc, idxcfg, tblcfg, nthread)
 			if err != nil {
 				return err
@@ -311,29 +312,24 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *sqlexec.SqlProcess, idxcfg vec
 	return nil
 }
 
+// merge the small centroids
 func (idx *IvfflatSearchIndex[T]) findMergedCentroids(sqlproc *sqlexec.SqlProcess, centroids_ids []int64, idxcfg vectorindex.IndexConfig, probe uint) ([]int64, error) {
+	n := 0
+	nprobe := uint(0)
 
-	if idx.Meta.CenterStats != nil {
-		// merge the small centroids
-		n := 0
-		nprobe := uint(0)
-
-		for _, k := range centroids_ids {
-			n++
-			nprobe++
-			cnt, ok := idx.Meta.CenterStats[k]
-			if ok && cnt < idx.Meta.SmallCenterThreshold {
-				nprobe--
-			}
-			if nprobe == probe {
-				break
-			}
-
+	for _, k := range centroids_ids {
+		n++
+		nprobe++
+		cnt, ok := idx.Meta.CenterStats[k]
+		if ok && cnt < idx.Meta.SmallCenterThreshold {
+			nprobe--
 		}
-		return centroids_ids[:n], nil
-	}
+		if nprobe == probe {
+			break
+		}
 
-	return centroids_ids, nil
+	}
+	return centroids_ids[:n], nil
 }
 
 func (idx *IvfflatSearchIndex[T]) findCentroids(sqlproc *sqlexec.SqlProcess, query []T, distfn metric.DistanceFunction[T], idxcfg vectorindex.IndexConfig, probe uint, _ int64) ([]int64, error) {
@@ -348,7 +344,7 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(sqlproc *sqlexec.SqlProcess, que
 	}
 
 	rtprobe := probe
-	if idx.Meta.CenterStats != nil {
+	if idx.Meta.CenterStats != nil && idx.Meta.SmallCenterThreshold > 0 {
 		rtprobe = probe * 2
 		if rtprobe > idxcfg.Ivfflat.Lists {
 			rtprobe = idxcfg.Ivfflat.Lists
@@ -362,7 +358,10 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(sqlproc *sqlexec.SqlProcess, que
 		return nil, err
 	}
 
-	return idx.findMergedCentroids(sqlproc, keys.([]int64), idxcfg, probe)
+	if idx.Meta.CenterStats != nil && idx.Meta.SmallCenterThreshold > 0 {
+		return idx.findMergedCentroids(sqlproc, keys.([]int64), idxcfg, probe)
+	}
+	return keys.([]int64), nil
 }
 
 // prepare runtime bloomfilter for pre-filtering
@@ -462,6 +461,7 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 		for _, bat := range res.Batches {
 			bf.AddVector(bat.Vecs[0])
 		}
+
 	} else {
 		// use preload bloomfilter
 		bf = bloomfilter.NewCBloomFilterWithSeed(idx.Meta.Nbits, idx.Meta.K, idx.Meta.Seed)
