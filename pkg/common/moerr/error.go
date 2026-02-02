@@ -194,6 +194,9 @@ const (
 	// ErrConnectionReset connection was reset by peer
 	// Indicates the connection was forcibly closed by remote.
 	ErrConnectionReset uint16 = 20507
+	// ErrAllCNServersBusy all CN servers are busy
+	// Indicates all CN servers are overloaded, typically due to too many active transactions.
+	ErrAllCNServersBusy uint16 = 20508
 
 	// Group 6: txn
 	// ErrTxnAborted read and write a transaction that has been rolled back.
@@ -455,6 +458,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrBackendCannotConnect: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot connect to backend: %v"},
 	ErrServiceUnavailable:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "service unavailable: %s"},
 	ErrConnectionReset:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "connection reset by peer"},
+	ErrAllCNServersBusy:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "all CN servers are busy, possibly due to too many active transactions"},
 
 	// Group 6: txn
 	ErrTxnClosed:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "the transaction %s has been committed or aborted"},
@@ -1094,6 +1098,10 @@ func NewServiceUnavailable(ctx context.Context, reason string) *Error {
 
 func NewConnectionReset(ctx context.Context) *Error {
 	return newError(ctx, ErrConnectionReset)
+}
+
+func NewAllCNServersBusyNoCtx() *Error {
+	return newError(Context(), ErrAllCNServersBusy)
 }
 
 // IsConnectionRelatedRPCError returns true if the error is related to network/connection
