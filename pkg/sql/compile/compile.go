@@ -1629,7 +1629,11 @@ func (c *Compile) compileExternScanParallelWrite(node *plan.Node, param *tree.Ex
 	scope := c.constructScopeForExternal("", false)
 	currentFirstFlag := c.anal.isFirst
 	extern := constructExternal(node, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
-	extern.Es.ParallelLoad = true
+	parallelLoad := true
+	if len(fileList) > 0 && crt.GetCompressType(param.CompressType, fileList[0]) != tree.NOCOMPRESS {
+		parallelLoad = false
+	}
+	extern.Es.ParallelLoad = parallelLoad
 	extern.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	scope.setRootOperator(extern)
 	c.anal.isFirst = false
@@ -4197,7 +4201,14 @@ func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
 				}
 				return nil, nil, nil
 			} else {
-				columnMap[int(col.Col.ColPos)] = int(node.TableDef.Cols[int(col.Col.ColPos)].Seqnum)
+				// Check if column is NOT NULL
+				colPos := int(col.Col.ColPos)
+				if node.TableDef.Cols[colPos].Typ.NotNullable {
+					// Rewrite COUNT(not_null_col) to STARCOUNT
+					agg.F.Func.ObjName = "starcount"
+				} else {
+					columnMap[colPos] = int(node.TableDef.Cols[colPos].Seqnum)
+				}
 			}
 		case "min", "max":
 			partialResults[i] = nil

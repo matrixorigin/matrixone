@@ -341,6 +341,39 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			} else {
 				return nil, moerr.NewInvalidInputf(b.GetContext(), "ambiguous column reference '%v'", name)
 			}
+		} else if selectItem, ok := b.ctx.aliasMap[col]; ok {
+			// Handle UNION aliases: aliasMap entry exists but column is not in bindingByCol
+			// This happens when ORDER BY references a UNION result column inside a function
+			if int(selectItem.idx) < len(b.ctx.projects) {
+				// Get the tag from the existing project expression
+				// In UNION context, ctx.projects[i] references the UNION node's output (lastTag)
+				// We need to use the same tag, not ctx.projectTag
+				projExpr := b.ctx.projects[selectItem.idx]
+				if colExpr, ok := projExpr.Expr.(*plan.Expr_Col); ok {
+					return &plan.Expr{
+						Typ: projExpr.Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: colExpr.Col.RelPos,
+								ColPos: colExpr.Col.ColPos,
+								Name:   col,
+							},
+						},
+					}, nil
+				}
+				// Fallback to projectTag if the project expression is not a column reference
+				return &plan.Expr{
+					Typ: projExpr.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: b.ctx.projectTag,
+							ColPos: selectItem.idx,
+							Name:   col,
+						},
+					},
+				}, nil
+			}
+			err = moerr.NewInvalidInputf(localErrCtx, "column %s does not exist", name)
 		} else {
 			err = moerr.NewInvalidInputf(localErrCtx, "column %s does not exist", name)
 		}
@@ -835,6 +868,11 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		return b.bindFuncExprImplByAstExpr("not", []tree.Expr{newExpr}, depth)
 
 	case tree.IN:
+		if leftTuple, ok := astExpr.Left.(*tree.Tuple); ok {
+			if rightTuple, ok := astExpr.Right.(*tree.Tuple); ok {
+				return b.bindTupleInByAst(leftTuple, rightTuple, depth, false)
+			}
+		}
 		switch r := astExpr.Right.(type) {
 		case *tree.Tuple:
 			op = "in"
@@ -879,6 +917,11 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		}
 
 	case tree.NOT_IN:
+		if leftTuple, ok := astExpr.Left.(*tree.Tuple); ok {
+			if rightTuple, ok := astExpr.Right.(*tree.Tuple); ok {
+				return b.bindTupleInByAst(leftTuple, rightTuple, depth, true)
+			}
+		}
 		switch astExpr.Right.(type) {
 		case *tree.Tuple:
 			op = "not_in"
@@ -975,6 +1018,51 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 	}
 
 	return b.bindFuncExprImplByAstExpr(op, []tree.Expr{astExpr.Left, astExpr.Right}, depth)
+}
+
+func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tuple, depth int32, isNot bool) (*plan.Expr, error) {
+	var newExpr *plan.Expr
+
+	for _, rightVal := range rightTuple.Exprs {
+		rightTupleVal, ok := rightVal.(*tree.Tuple)
+		if !ok {
+			return nil, moerr.NewInternalError(b.GetContext(), "IN list must contain tuples")
+		}
+		if len(leftTuple.Exprs) != len(rightTupleVal.Exprs) {
+			return nil, moerr.NewInternalError(b.GetContext(), "tuple length mismatch")
+		}
+
+		var andExpr *plan.Expr
+		for i := 0; i < len(leftTuple.Exprs); i++ {
+			eqExpr, err := b.bindFuncExprImplByAstExpr("=", []tree.Expr{leftTuple.Exprs[i], rightTupleVal.Exprs[i]}, depth)
+			if err != nil {
+				return nil, err
+			}
+			if andExpr == nil {
+				andExpr = eqExpr
+			} else {
+				andExpr, err = BindFuncExprImplByPlanExpr(b.GetContext(), "and", []*plan.Expr{andExpr, eqExpr})
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+
+		if newExpr == nil {
+			newExpr = andExpr
+		} else {
+			var err error
+			newExpr, err = BindFuncExprImplByPlanExpr(b.GetContext(), "or", []*plan.Expr{newExpr, andExpr})
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	if isNot {
+		return BindFuncExprImplByPlanExpr(b.GetContext(), "not", []*plan.Expr{newExpr})
+	}
+	return newExpr, nil
 }
 
 func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bool) (*Expr, error) {
