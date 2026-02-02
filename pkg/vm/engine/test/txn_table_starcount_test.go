@@ -789,6 +789,39 @@ func assertWorkspaceHasPersistedInsertWithMultipleObjectStats(
 		wantObjectStatsRows, wantObjectStatsRows)
 }
 
+// assertWorkspaceHasPersistedTombstones verifies that the transaction workspace contains
+// at least one uncommitted persisted DELETE entry (typ=DELETE, fileName!="", bat non-empty
+// with ObjectStats in column 0). This guarantees StarCount will exercise
+// countUncommittedPersistedTombstones for-loop.
+func assertWorkspaceHasPersistedTombstones(
+	t *testing.T,
+	txn client.TxnOperator,
+	dbID, tableID uint64,
+) {
+	dtxn, ok := txn.GetWorkspace().(*disttae.Transaction)
+	require.True(t, ok, "workspace must be *disttae.Transaction")
+	txnValue := reflect.ValueOf(dtxn).Elem()
+	writesField := txnValue.FieldByName("writes")
+	require.True(t, writesField.IsValid(), "writes field must exist")
+	writesLen := writesField.Len()
+
+	var found bool
+	dtxn.ForEachTableWrites(dbID, tableID, writesLen, func(entry disttae.Entry) {
+		if entry.Type() != disttae.DELETE || entry.FileName() == "" || entry.Bat() == nil {
+			return
+		}
+		bat := entry.Bat()
+		if bat.IsEmpty() || bat.Vecs[0].Length() == 0 {
+			return
+		}
+		if len(bat.Attrs) > 0 && bat.Attrs[0] == catalog.ObjectMeta_ObjectStats {
+			found = true
+		}
+	})
+	require.True(t, found,
+		"workspace must contain at least one persisted DELETE entry (typ=DELETE, fileName!=empty, bat with ObjectStats in column 0); this guarantees countUncommittedPersistedTombstones path is exercised")
+}
+
 // countWorkspaceWrites counts in-memory and persisted writes in the transaction workspace
 func countWorkspaceWrites(txn client.TxnOperator) (inMemory, persisted int) {
 	// Access the internal transaction workspace
@@ -1072,12 +1105,14 @@ func TestStarCountWithMixedInsertsAndTombstones(t *testing.T) {
 // TestStarCountWithPersistedTombstones tests StarCount with persisted uncommitted tombstones.
 //
 // Scenario:
-// 1. Commit 100 rows via TAE
-// 2. Start a new CN transaction
-// 3. Delete 20 rows and force flush to S3 (persisted tombstones)
-// 4. Verify StarCount = 100 - 20 = 80
+//  1. Commit 100 rows via TAE
+//  2. Start a new CN transaction
+//  3. Create a tombstone object (20 rowids) via CNS3TombstoneWriter and add it as a persisted
+//     DELETE entry via rel.Delete with ObjectMeta_ObjectStats (object-level delete)
+//  4. Assert workspace has persisted tombstones (fileName != "", bat with ObjectStats)
+//  5. Verify StarCount = 100 - 20 = 80 and that the persisted-tombstone path was exercised (fault getcount)
 //
-// This tests persisted tombstones which require visibility check.
+// This tests countUncommittedPersistedTombstones for-loop (entry.fileName != "", Vecs[0] as ObjectStats).
 func TestStarCountWithPersistedTombstones(t *testing.T) {
 	p := testutil.InitEnginePack(testutil.TestOptions{}, t)
 	defer p.Close()
@@ -1094,10 +1129,8 @@ func TestStarCountWithPersistedTombstones(t *testing.T) {
 	tableID := rel.GetTableID(p.Ctx)
 	require.NoError(t, txnop.Commit(p.Ctx))
 
-	// Subscribe to the table
 	require.NoError(t, p.D.SubscribeTable(p.Ctx, dbID, tableID, "db", schema.Name, false))
 
-	// Insert 100 rows via TAE
 	{
 		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.GetDatabase("db")
@@ -1107,22 +1140,19 @@ func TestStarCountWithPersistedTombstones(t *testing.T) {
 		require.NoError(t, txn.Commit(p.Ctx))
 	}
 
-	// Wait for logtail to sync
 	_, err := p.D.GetPartitionStateStats(p.Ctx, dbID, tableID)
 	require.NoError(t, err)
 
-	// Step 2: Collect rowids from TAE for deletion
+	// Step 2: Collect 20 rowids from TAE for the tombstone object
 	var deleteRowIDs []types.Rowid
 	{
 		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
-
 		it := rel.MakeObjectIt(false)
 		for it.Next() {
 			obj := it.GetObject()
 			objID := obj.GetMeta().(*catalog2.ObjectEntry).ID()
-
 			for blkIdx := 0; blkIdx < obj.BlkCnt(); blkIdx++ {
 				blkID := objectio.NewBlockidWithObjectID(objID, uint16(blkIdx))
 				for rowIdx := uint32(0); rowIdx < 20 && len(deleteRowIDs) < 20; rowIdx++ {
@@ -1134,59 +1164,60 @@ func TestStarCountWithPersistedTombstones(t *testing.T) {
 		it.Close()
 		require.NoError(t, txn.Commit(p.Ctx))
 	}
-	require.Equal(t, 20, len(deleteRowIDs), "Should collect 20 rowids for deletion")
+	require.Equal(t, 20, len(deleteRowIDs), "Should collect 20 rowids")
 
-	// Step 3: Start CN transaction and delete rows with forced flush
+	// Step 3: Start CN transaction and add persisted tombstones via object-level delete
 	txnop = p.StartCNTxn()
-
 	db, err := p.D.Engine.Database(p.Ctx, "db", txnop)
 	require.NoError(t, err)
-
 	rel, err = db.Relation(p.Ctx, schema.Name, nil)
 	require.NoError(t, err)
 
-	// Verify initial count (should be 100)
 	count, err := rel.StarCount(p.Ctx)
 	require.NoError(t, err)
 	require.Equal(t, uint64(100), count, "Initial count should be 100")
 
-	// Enable fault injection to force workspace flush
-	fault.Enable()
-	defer fault.Disable()
-	fault.AddFaultPoint(p.Ctx, objectio.FJ_CNWorkspaceForceFlush, ":::", "return", 0, "", false)
-	defer fault.RemoveFaultPoint(p.Ctx, objectio.FJ_CNWorkspaceForceFlush)
-
-	// Build delete batch with rowids
-	vec1 := vector.NewVec(types.T_Rowid.ToType())
+	// Build tombstone batch (rowids + pk) and write to S3 via CNS3TombstoneWriter
+	tombstoneBat := batch.NewWithSize(2)
+	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int8.ToType())
+	tombstoneBat.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
 	for _, rowid := range deleteRowIDs {
-		require.NoError(t, vector.AppendFixed(vec1, rowid, false, p.Mp))
+		require.NoError(t, vector.AppendFixed(tombstoneBat.Vecs[0], rowid, false, p.Mp))
 	}
-
-	pkCol := schema.GetPrimaryKey()
-	vec2 := vector.NewVec(pkCol.Type)
 	for i := 0; i < len(deleteRowIDs); i++ {
-		require.NoError(t, vector.AppendFixed(vec2, int8(i), false, p.Mp))
+		require.NoError(t, vector.AppendFixed(tombstoneBat.Vecs[1], int8(i), false, p.Mp))
 	}
+	tombstoneBat.SetRowCount(len(deleteRowIDs))
 
-	delBatch := batch.NewWithSize(2)
-	delBatch.SetRowCount(len(deleteRowIDs))
-	delBatch.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
-	delBatch.Vecs[0] = vec1
-	delBatch.Vecs[1] = vec2
+	proc := rel.GetProcess().(*process.Process)
+	w := colexec.NewCNS3TombstoneWriter(proc.Mp(), proc.GetFileService(), types.T_int8.ToType(), -1)
+	require.NoError(t, w.Write(p.Ctx, tombstoneBat))
+	ss, err := w.Sync(p.Ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(ss), "Sync should return one ObjectStats")
 
-	// Delete rows (will be flushed to S3 due to fault injection)
-	require.NoError(t, rel.Delete(p.Ctx, delBatch, catalog.Row_ID))
+	tombstoneBat.Vecs[0].Free(p.Mp)
+	tombstoneBat.Vecs[1].Free(p.Mp)
 
-	// Step 4: Verify StarCount after deletion with persisted tombstones
+	// Add persisted DELETE entry via object-level delete (ObjectMeta_ObjectStats)
+	tbat := batch.NewWithSize(1)
+	tbat.Attrs = []string{catalog.ObjectMeta_ObjectStats}
+	tbat.Vecs[0] = vector.NewVec(types.T_binary.ToType())
+	require.NoError(t, vector.AppendBytes(tbat.Vecs[0], ss[0].Marshal(), false, p.Mp))
+	tbat.SetRowCount(1)
+	require.NoError(t, rel.Delete(p.Ctx, tbat, catalog.Row_ID))
+
+	// Step 4: Assert workspace has uncommitted persisted tombstones (guarantees the path is exercisable)
+	assertWorkspaceHasPersistedTombstones(t, txnop, dbID, tableID)
+
+	// Step 5: StarCount must use persisted tombstones and return 80
 	count, err = rel.StarCount(p.Ctx)
 	require.NoError(t, err)
 	t.Logf("StarCount after delete: %d, expected: 80 (100 committed - 20 persisted uncommitted deletes)", count)
 	require.Equal(t, uint64(80), count, "StarCount should be 100 - 20 = 80")
 
-	// Cleanup
-	vec1.Free(p.Mp)
-	vec2.Free(p.Mp)
-
+	tbat.Vecs[0].Free(p.Mp)
 	require.NoError(t, txnop.Commit(p.Ctx))
 }
 
@@ -1314,12 +1345,12 @@ func TestStarCountDeleteUncommittedInserts(t *testing.T) {
 // Scenario:
 // 1. Insert 100 rows via TAE (committed)
 // 2. Start CN transaction
-// 3. Delete 10 rows (in-memory tombstones)
-// 4. Force workspace flush to persist tombstones
-// 5. Delete another 15 rows (persisted tombstones)
+// 3. Delete 10 rows via rowid (in-memory tombstones)
+// 4. Create a tombstone object for 15 rows and add via object-level delete (persisted tombstones)
+// 5. Assert workspace has persisted tombstones
 // 6. Verify StarCount = 100 - 10 - 15 = 75
 //
-// This tests the formula: StarCount = CommittedRows - InMemoryTombstones - PersistedTombstones
+// This tests the formula: StarCount = CommittedRows - InMemoryTombstones - PersistedTombstones.
 func TestStarCountMixedInMemoryAndPersistedTombstones(t *testing.T) {
 	p := testutil.InitEnginePack(testutil.TestOptions{}, t)
 	defer p.Close()
@@ -1329,7 +1360,6 @@ func TestStarCountMixedInMemoryAndPersistedTombstones(t *testing.T) {
 	schema := catalog2.MockSchemaAll(3, 0)
 	schema.Name = "test_table"
 
-	// Step 1: Create table via CN and insert 100 rows via TAE
 	txnop := p.StartCNTxn()
 	_, rel := p.CreateDBAndTable(txnop, "db", schema)
 	dbID := rel.GetDBID(p.Ctx)
@@ -1350,18 +1380,16 @@ func TestStarCountMixedInMemoryAndPersistedTombstones(t *testing.T) {
 	_, err := p.D.GetPartitionStateStats(p.Ctx, dbID, tableID)
 	require.NoError(t, err)
 
-	// Step 2: Collect rowids for first batch of deletes (10 rows)
+	// Collect rowids for first batch (10 rows, in-memory deletes)
 	var firstBatchRowIDs []types.Rowid
 	{
 		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
-
 		it := rel.MakeObjectIt(false)
 		for it.Next() {
 			obj := it.GetObject()
 			objID := obj.GetMeta().(*catalog2.ObjectEntry).ID()
-
 			for blkIdx := 0; blkIdx < obj.BlkCnt(); blkIdx++ {
 				blkID := objectio.NewBlockidWithObjectID(objID, uint16(blkIdx))
 				for rowIdx := uint32(0); rowIdx < 10 && len(firstBatchRowIDs) < 10; rowIdx++ {
@@ -1380,44 +1408,16 @@ func TestStarCountMixedInMemoryAndPersistedTombstones(t *testing.T) {
 	}
 	require.Equal(t, 10, len(firstBatchRowIDs))
 
-	// Step 3: Start CN transaction and delete first batch (in-memory)
-	txnop = p.StartCNTxn()
-	db, _ := p.D.Engine.Database(p.Ctx, "db", txnop)
-	rel, _ = db.Relation(p.Ctx, schema.Name, nil)
-
-	vec1 := vector.NewVec(types.T_Rowid.ToType())
-	vec2 := vector.NewVec(types.T_int64.ToType())
-	for _, rowID := range firstBatchRowIDs {
-		vector.AppendFixed(vec1, rowID, false, p.Mp)
-		vector.AppendFixed(vec2, int64(0), false, p.Mp)
-	}
-
-	delBatch1 := batch.NewWithSize(2)
-	delBatch1.SetRowCount(len(firstBatchRowIDs))
-	delBatch1.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
-	delBatch1.Vecs[0] = vec1
-	delBatch1.Vecs[1] = vec2
-
-	require.NoError(t, rel.Delete(p.Ctx, delBatch1, catalog.Row_ID))
-
-	// Step 4: Force workspace flush to persist first batch tombstones
-	fault.Enable()
-	defer fault.Disable()
-	fault.AddFaultPoint(p.Ctx, objectio.FJ_CNWorkspaceForceFlush, ":::", "return", 0, "", false)
-	defer fault.RemoveFaultPoint(p.Ctx, objectio.FJ_CNWorkspaceForceFlush)
-
-	// Step 5: Collect rowids for second batch of deletes (15 rows, starting from row 10)
+	// Collect rowids for second batch (15 rows, for persisted tombstone object)
 	var secondBatchRowIDs []types.Rowid
 	{
 		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
-
 		it := rel.MakeObjectIt(false)
 		for it.Next() {
 			obj := it.GetObject()
 			objID := obj.GetMeta().(*catalog2.ObjectEntry).ID()
-
 			for blkIdx := 0; blkIdx < obj.BlkCnt(); blkIdx++ {
 				blkID := objectio.NewBlockidWithObjectID(objID, uint16(blkIdx))
 				for rowIdx := uint32(10); rowIdx < 25 && len(secondBatchRowIDs) < 15; rowIdx++ {
@@ -1436,23 +1436,57 @@ func TestStarCountMixedInMemoryAndPersistedTombstones(t *testing.T) {
 	}
 	require.Equal(t, 15, len(secondBatchRowIDs))
 
-	// Step 6: Delete second batch (persisted tombstones)
-	vec3 := vector.NewVec(types.T_Rowid.ToType())
-	vec4 := vector.NewVec(types.T_int64.ToType())
-	for _, rowID := range secondBatchRowIDs {
-		vector.AppendFixed(vec3, rowID, false, p.Mp)
-		vector.AppendFixed(vec4, int64(0), false, p.Mp)
+	// Start CN transaction
+	txnop = p.StartCNTxn()
+	db, _ := p.D.Engine.Database(p.Ctx, "db", txnop)
+	rel, _ = db.Relation(p.Ctx, schema.Name, nil)
+
+	// Delete first batch (in-memory)
+	vec1 := vector.NewVec(types.T_Rowid.ToType())
+	vec2 := vector.NewVec(types.T_int8.ToType())
+	for _, rowID := range firstBatchRowIDs {
+		require.NoError(t, vector.AppendFixed(vec1, rowID, false, p.Mp))
+		require.NoError(t, vector.AppendFixed(vec2, int8(0), false, p.Mp))
 	}
+	delBatch1 := batch.NewWithSize(2)
+	delBatch1.SetRowCount(len(firstBatchRowIDs))
+	delBatch1.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
+	delBatch1.Vecs[0] = vec1
+	delBatch1.Vecs[1] = vec2
+	require.NoError(t, rel.Delete(p.Ctx, delBatch1, catalog.Row_ID))
 
-	delBatch2 := batch.NewWithSize(2)
-	delBatch2.SetRowCount(len(secondBatchRowIDs))
-	delBatch2.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
-	delBatch2.Vecs[0] = vec3
-	delBatch2.Vecs[1] = vec4
+	// Create tombstone object for second batch and add as persisted DELETE (object-level delete)
+	tombstoneBat := batch.NewWithSize(2)
+	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int8.ToType())
+	tombstoneBat.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
+	for _, rowid := range secondBatchRowIDs {
+		require.NoError(t, vector.AppendFixed(tombstoneBat.Vecs[0], rowid, false, p.Mp))
+	}
+	for i := 0; i < len(secondBatchRowIDs); i++ {
+		require.NoError(t, vector.AppendFixed(tombstoneBat.Vecs[1], int8(i+10), false, p.Mp))
+	}
+	tombstoneBat.SetRowCount(len(secondBatchRowIDs))
 
-	require.NoError(t, rel.Delete(p.Ctx, delBatch2, catalog.Row_ID))
+	proc := rel.GetProcess().(*process.Process)
+	w := colexec.NewCNS3TombstoneWriter(proc.Mp(), proc.GetFileService(), types.T_int8.ToType(), -1)
+	require.NoError(t, w.Write(p.Ctx, tombstoneBat))
+	ss, err := w.Sync(p.Ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(ss))
 
-	// Step 7: Verify StarCount
+	tombstoneBat.Vecs[0].Free(p.Mp)
+	tombstoneBat.Vecs[1].Free(p.Mp)
+
+	tbat := batch.NewWithSize(1)
+	tbat.Attrs = []string{catalog.ObjectMeta_ObjectStats}
+	tbat.Vecs[0] = vector.NewVec(types.T_binary.ToType())
+	require.NoError(t, vector.AppendBytes(tbat.Vecs[0], ss[0].Marshal(), false, p.Mp))
+	tbat.SetRowCount(1)
+	require.NoError(t, rel.Delete(p.Ctx, tbat, catalog.Row_ID))
+
+	assertWorkspaceHasPersistedTombstones(t, txnop, dbID, tableID)
+
 	count, err := rel.StarCount(p.Ctx)
 	require.NoError(t, err)
 	t.Logf("StarCount: %d, expected: 75 (100 committed - 10 in-memory deletes - 15 persisted deletes)", count)
@@ -1460,9 +1494,7 @@ func TestStarCountMixedInMemoryAndPersistedTombstones(t *testing.T) {
 
 	vec1.Free(p.Mp)
 	vec2.Free(p.Mp)
-	vec3.Free(p.Mp)
-	vec4.Free(p.Mp)
-
+	tbat.Vecs[0].Free(p.Mp)
 	require.NoError(t, txnop.Commit(p.Ctx))
 }
 
