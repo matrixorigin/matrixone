@@ -75,7 +75,6 @@ func doCheckSnapshotFlushed(ctx context.Context, ses *Session, stmt *tree.CheckS
 	defer bh.Close()
 
 	// Check publication permission using getAccountFromPublication
-	queryCtx := ctx
 	if accountName != "" && publicationName != "" {
 		currentAccount := ses.GetTenantInfo().GetTenant()
 		accountId, _, err := getAccountFromPublicationFunc(ctx, bh, accountName, publicationName, currentAccount)
@@ -84,7 +83,7 @@ func doCheckSnapshotFlushed(ctx context.Context, ses *Session, stmt *tree.CheckS
 		}
 
 		// Use the authorized account context for snapshot query
-		queryCtx = defines.AttachAccountId(ctx, uint32(accountId))
+		ctx = defines.AttachAccountId(ctx, uint32(accountId))
 
 		logutil.Info("check_snapshot_flushed using authorized account via publication",
 			zap.String("snapshot_name", snapshotName),
@@ -96,7 +95,7 @@ func doCheckSnapshotFlushed(ctx context.Context, ses *Session, stmt *tree.CheckS
 		return moerr.NewInternalError(ctx, "publication account name and publication name are required for CHECK SNAPSHOT FLUSHED")
 	}
 
-	record, err := getSnapshotByNameFunc(queryCtx, bh, snapshotName)
+	record, err := getSnapshotByNameFunc(ctx, bh, snapshotName)
 	if err != nil {
 		return err
 	}
@@ -135,7 +134,7 @@ func doCheckSnapshotFlushed(ctx context.Context, ses *Session, stmt *tree.CheckS
 		LogicalTime:  0,
 	})
 	// Mock result: always return true for now
-	result, err := checkSnapshotFlushedFunc(queryCtx, txn, types.BuildTS(record.ts, 0), de, record, fs)
+	result, err := checkSnapshotFlushedFunc(ctx, txn, types.BuildTS(record.ts, 0), de, record, fs)
 	if err != nil {
 		return err
 	}

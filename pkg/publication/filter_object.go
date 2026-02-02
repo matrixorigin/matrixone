@@ -49,6 +49,7 @@ const (
 	JobTypeGetMeta      int8 = 1
 	JobTypeGetChunk     int8 = 2
 	JobTypeFilterObject int8 = 3
+	JobTypeWriteObject  int8 = 4
 )
 
 const (
@@ -247,6 +248,112 @@ func (j *GetChunkJob) GetObjectName() string {
 // GetChunkIndex returns the chunk index
 func (j *GetChunkJob) GetChunkIndex() int64 {
 	return j.chunkIndex
+}
+
+// WriteObjectJobResult holds the result of WriteObjectJob
+type WriteObjectJobResult struct {
+	Err error
+}
+
+// WriteObjectJob is a job for writing object to fileservice
+type WriteObjectJob struct {
+	ctx           context.Context
+	localFS       fileservice.FileService
+	objectName    string
+	objectContent []byte
+	ccprCache     CCPRTxnCacheWriter
+	txnID         []byte
+	result        chan *WriteObjectJobResult
+}
+
+// NewWriteObjectJob creates a new WriteObjectJob
+func NewWriteObjectJob(
+	ctx context.Context,
+	localFS fileservice.FileService,
+	objectName string,
+	objectContent []byte,
+	ccprCache CCPRTxnCacheWriter,
+	txnID []byte,
+) *WriteObjectJob {
+	return &WriteObjectJob{
+		ctx:           ctx,
+		localFS:       localFS,
+		objectName:    objectName,
+		objectContent: objectContent,
+		ccprCache:     ccprCache,
+		txnID:         txnID,
+		result:        make(chan *WriteObjectJobResult, 1),
+	}
+}
+
+// Execute runs the WriteObjectJob
+func (j *WriteObjectJob) Execute() {
+	res := &WriteObjectJobResult{}
+
+	// Use CCPRTxnCache.WriteObject if cache is available, otherwise write directly
+	if j.ccprCache != nil && len(j.txnID) > 0 {
+		// Check if file needs to be written and register in cache
+		isNewFile, err := j.ccprCache.WriteObject(j.ctx, j.objectName, j.txnID)
+		if err != nil {
+			res.Err = err
+			j.result <- res
+			return
+		}
+		if isNewFile {
+			// File needs to be written - do it outside the cache lock
+			err = j.localFS.Write(j.ctx, fileservice.IOVector{
+				FilePath: j.objectName,
+				Entries: []fileservice.IOEntry{
+					{
+						Offset: 0,
+						Size:   int64(len(j.objectContent)),
+						Data:   j.objectContent,
+					},
+				},
+			})
+			if err != nil {
+				res.Err = moerr.NewInternalErrorf(j.ctx, "failed to write object to fileservice: %v", err)
+				j.result <- res
+				return
+			}
+			// Notify cache that file has been written
+			j.ccprCache.OnFileWritten(j.objectName)
+		}
+	} else {
+		// Fallback: Write to local fileservice with original object name
+		err := j.localFS.Write(j.ctx, fileservice.IOVector{
+			FilePath: j.objectName,
+			Entries: []fileservice.IOEntry{
+				{
+					Offset: 0,
+					Size:   int64(len(j.objectContent)),
+					Data:   j.objectContent,
+				},
+			},
+		})
+		if err != nil {
+			// Check if the error is due to file already exists
+			if moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
+				// File already exists, this is ok
+			} else {
+				res.Err = moerr.NewInternalErrorf(j.ctx, "failed to write object to fileservice: %v", err)
+				j.result <- res
+				return
+			}
+		}
+	}
+
+	j.result <- res
+}
+
+// WaitDone waits for the job to complete and returns the result
+func (j *WriteObjectJob) WaitDone() any {
+	return <-j.result
+}
+
+// GetType returns the job type
+func (j *WriteObjectJob) GetType() int8 {
+	return JobTypeWriteObject
 }
 
 // FilterObjectJobResult holds the result of FilterObjectJob
@@ -596,51 +703,16 @@ func filterNonAppendableObject(
 		return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to get object from upstream: %v", err)
 	}
 
-	// Use CCPRTxnCache.WriteObject if cache is available, otherwise write directly
-	if ccprCache != nil && len(txnID) > 0 {
-		// Check if file needs to be written and register in cache
-		isNewFile, err := ccprCache.WriteObject(ctx, upstreamObjectName, txnID)
-		if err != nil {
-			return objectio.ObjectStats{}, err
-		}
-		if isNewFile {
-			// File needs to be written - do it outside the cache lock
-			err = localFS.Write(ctx, fileservice.IOVector{
-				FilePath: upstreamObjectName,
-				Entries: []fileservice.IOEntry{
-					{
-						Offset: 0,
-						Size:   int64(len(objectContent)),
-						Data:   objectContent,
-					},
-				},
-			})
-			if err != nil {
-				return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to write object to fileservice: %v", err)
-			}
-			// Notify cache that file has been written
-			ccprCache.OnFileWritten(upstreamObjectName)
-		}
+	// Use WriteObjectJob to write to fileservice via worker pool
+	writeJob := NewWriteObjectJob(ctx, localFS, upstreamObjectName, objectContent, ccprCache, txnID)
+	if getChunkWorker != nil {
+		getChunkWorker.SubmitGetChunk(writeJob)
 	} else {
-		// Fallback: Write to local fileservice with original object name
-		err = localFS.Write(ctx, fileservice.IOVector{
-			FilePath: upstreamObjectName,
-			Entries: []fileservice.IOEntry{
-				{
-					Offset: 0,
-					Size:   int64(len(objectContent)),
-					Data:   objectContent,
-				},
-			},
-		})
-		if err != nil {
-			// Check if the error is due to file already exists
-			if moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
-				// File already exists, this is ok
-			} else {
-				return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to write object to fileservice: %v", err)
-			}
-		}
+		writeJob.Execute()
+	}
+	writeResult := writeJob.WaitDone().(*WriteObjectJobResult)
+	if writeResult.Err != nil {
+		return objectio.ObjectStats{}, writeResult.Err
 	}
 
 	// Return original stats (no need to create new stats since we use the same object name)

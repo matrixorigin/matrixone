@@ -63,6 +63,10 @@ type JobStats struct {
 	GetMetaRunning   atomic.Int64
 	GetMetaCompleted atomic.Int64
 
+	WriteObjectPending   atomic.Int64
+	WriteObjectRunning   atomic.Int64
+	WriteObjectCompleted atomic.Int64
+
 	// Top 3 longest GetChunk jobs
 	getChunkDurationMu   sync.Mutex
 	getChunkTopDurations []*GetChunkJobDuration
@@ -125,6 +129,23 @@ func (s *JobStats) IncrementGetMetaRunning() {
 func (s *JobStats) DecrementGetMetaRunning() {
 	s.GetMetaRunning.Add(-1)
 	s.GetMetaCompleted.Add(1)
+}
+
+// IncrementWriteObjectPending increments the write object pending counter
+func (s *JobStats) IncrementWriteObjectPending() {
+	s.WriteObjectPending.Add(1)
+}
+
+// IncrementWriteObjectRunning increments the write object running counter and decrements pending
+func (s *JobStats) IncrementWriteObjectRunning() {
+	s.WriteObjectPending.Add(-1)
+	s.WriteObjectRunning.Add(1)
+}
+
+// DecrementWriteObjectRunning decrements the write object running counter
+func (s *JobStats) DecrementWriteObjectRunning() {
+	s.WriteObjectRunning.Add(-1)
+	s.WriteObjectCompleted.Add(1)
 }
 
 // RecordGetChunkDuration records a GetChunk job duration and keeps top 3 longest
@@ -259,6 +280,9 @@ func (w *worker) RunStatsPrinter() {
 				zap.Int64("get_meta_pending", stats.GetMetaPending.Load()),
 				zap.Int64("get_meta_running", stats.GetMetaRunning.Load()),
 				zap.Int64("get_meta_completed", stats.GetMetaCompleted.Load()),
+				zap.Int64("write_object_pending", stats.WriteObjectPending.Load()),
+				zap.Int64("write_object_running", stats.WriteObjectRunning.Load()),
+				zap.Int64("write_object_completed", stats.WriteObjectCompleted.Load()),
 			)
 
 			// Print top 3 longest GetChunk jobs
@@ -505,11 +529,17 @@ func (w *getChunkWorker) Run() {
 					return
 				case job := <-w.jobChan:
 					jobType := job.GetType()
-					if jobType == JobTypeGetMeta {
+					switch jobType {
+					case JobTypeGetMeta:
 						globalJobStats.IncrementGetMetaRunning()
 						job.Execute()
 						globalJobStats.DecrementGetMetaRunning()
-					} else {
+					case JobTypeWriteObject:
+						globalJobStats.IncrementWriteObjectRunning()
+						job.Execute()
+						globalJobStats.DecrementWriteObjectRunning()
+					default:
+						// JobTypeGetChunk
 						globalJobStats.IncrementGetChunkRunning()
 						startTime := time.Now()
 						job.Execute()
@@ -536,9 +566,12 @@ func (w *getChunkWorker) SubmitGetChunk(job Job) error {
 		return moerr.NewInternalError(context.Background(), "GetChunkWorker is closed")
 	}
 	jobType := job.GetType()
-	if jobType == JobTypeGetMeta {
+	switch jobType {
+	case JobTypeGetMeta:
 		globalJobStats.IncrementGetMetaPending()
-	} else {
+	case JobTypeWriteObject:
+		globalJobStats.IncrementWriteObjectPending()
+	default:
 		globalJobStats.IncrementGetChunkPending()
 	}
 	w.jobChan <- job

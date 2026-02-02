@@ -15,11 +15,8 @@
 package frontend
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"runtime"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -73,16 +70,6 @@ var (
 	chunkSemaphoreHolding  int64 // goroutines currently holding semaphore
 	chunkSemaphoreFinished int64 // total finished requests
 )
-
-// getGoroutineID extracts goroutine ID from runtime stack
-func getGoroutineID() int64 {
-	var buf [64]byte
-	n := runtime.Stack(buf[:], false)
-	// Stack format: "goroutine 123 [running]:\n..."
-	idField := bytes.Fields(buf[:n])[1]
-	id, _ := strconv.ParseInt(string(idField), 10, 64)
-	return id
-}
 
 // GetObjectPermissionChecker is the function to check publication permission for GetObject
 // This is exported as a variable to allow stubbing in tests
