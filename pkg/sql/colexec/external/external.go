@@ -354,6 +354,13 @@ func readFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error
 }
 
 func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, visibleCols []*plan.ColDef) ([]int64, error) {
+	if crt.GetCompressType(param.CompressType, param.Filepath) != tree.NOCOMPRESS {
+		ctx := param.Ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		return nil, moerr.NewInvalidInputf(ctx, "parallel read is not supported for compressed file %s", param.Filepath)
+	}
 	arr := make([]int64, 0)
 
 	fs, readPath, err := plan2.GetForETLWithType(param, param.Filepath)

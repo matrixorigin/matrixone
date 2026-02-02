@@ -59,7 +59,6 @@ drop table pq_nullable_test;
 
 
 -- Map、Struct、List、Decimal、timestamp-no-zone
--- @bvt:issue#23583
 drop table if exists parquet_complex_types;
 CREATE TABLE `parquet_complex_types` (
      `test_id` bigint NOT NULL,
@@ -78,10 +77,10 @@ CREATE TABLE `parquet_complex_types` (
      `list_struct` json DEFAULT NULL
 );
 load data infile {'filepath'='$resources/parquet/complex.parquet', 'format'='parquet'} into table parquet_complex_types;
+-- @ignore:4,5,6
 select * from parquet_complex_types order by test_id limit 3;
 SELECT COUNT(*) FROM parquet_complex_types;
 drop table parquet_complex_types;
--- @bvt:issue
 
 drop table if exists ts_test;
 CREATE TABLE ts_test (
@@ -185,7 +184,6 @@ select * from pq_stats_check;
 select 'no_stats' as source, count(*), MIN(id), MAX(score) from pq_stats_check;
 
 -- empty file
--- @bvt:issue#23601
 -- parquet file column number equal to table column number, and column name is not same
 drop table if exists empty_table;
 create table empty_table(col1 bigint, col2 varchar);
@@ -197,16 +195,12 @@ drop table if exists empty_table01;
 create table empty_table01(id bigint, name varchar);
 load data infile {'filepath'='$resources/parquet/empty_test.parquet', 'format'='parquet'} into table empty_table01;
 select * from empty_table;
--- @bvt:issue
 
--- @bvt:issue#23601
 -- parquet file's column number is not equal to table's column number
 drop table if exists empty_table02;
 create table empty_table02(col1 int);
 load data infile {'filepath'='$resources/parquet/empty_test.parquet', 'format'='parquet'} into table empty_table02;
 select * from empty_table02;
--- @bvt:issue
-
 
 -- wide tables
 drop table if exists wide_100_columns;
