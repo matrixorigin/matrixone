@@ -169,47 +169,23 @@ var (
 		},
 	}
 
-	showCcprSubscriptionsOutputColumns = [12]Column{
+	showCcprSubscriptionsOutputColumns = [7]Column{
 		&MysqlColumn{
 			ColumnImpl: ColumnImpl{
-				name:       "pub_name",
+				name:       "task_id",
 				columnType: defines.MYSQL_TYPE_VARCHAR,
 			},
 		},
 		&MysqlColumn{
 			ColumnImpl: ColumnImpl{
-				name:       "pub_account",
+				name:       "database_name",
 				columnType: defines.MYSQL_TYPE_VARCHAR,
 			},
 		},
 		&MysqlColumn{
 			ColumnImpl: ColumnImpl{
-				name:       "pub_database",
+				name:       "table_name",
 				columnType: defines.MYSQL_TYPE_VARCHAR,
-			},
-		},
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "pub_tables",
-				columnType: defines.MYSQL_TYPE_VARCHAR,
-			},
-		},
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "create_time",
-				columnType: defines.MYSQL_TYPE_TIMESTAMP,
-			},
-		},
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "drop_time",
-				columnType: defines.MYSQL_TYPE_TIMESTAMP,
-			},
-		},
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "state",
-				columnType: defines.MYSQL_TYPE_TINY,
 			},
 		},
 		&MysqlColumn{
@@ -220,14 +196,8 @@ var (
 		},
 		&MysqlColumn{
 			ColumnImpl: ColumnImpl{
-				name:       "upstream_conn",
-				columnType: defines.MYSQL_TYPE_VARCHAR,
-			},
-		},
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "iteration_lsn",
-				columnType: defines.MYSQL_TYPE_LONGLONG,
+				name:       "state",
+				columnType: defines.MYSQL_TYPE_TINY,
 			},
 		},
 		&MysqlColumn{
@@ -1840,7 +1810,7 @@ func doShowCcprSubscriptions(ctx context.Context, ses *Session, scs *tree.ShowCc
 	}()
 
 	// Build SQL query
-	sql := "SELECT subscription_name, sync_level, account_id, db_name, table_name, upstream_conn, iteration_state, iteration_lsn, context, error_message, created_at, drop_at FROM mo_catalog.mo_ccpr_log WHERE 1=1"
+	sql := "SELECT subscription_name, db_name, table_name, sync_level, iteration_state, error_message, context FROM mo_catalog.mo_ccpr_log WHERE 1=1"
 
 	// Filter by account_id: sys account sees all, others see only their own
 	if accountId != catalog.System_Account {
@@ -1878,12 +1848,6 @@ func doShowCcprSubscriptions(ctx context.Context, ses *Session, scs *tree.ShowCc
 		return
 	}
 
-	// Get account name mapping
-	accIdInfoMap, _, err := getAccounts(ctx, bh, false)
-	if err != nil {
-		return
-	}
-
 	var rs = &MysqlResultSet{}
 	for _, column := range showCcprSubscriptionsOutputColumns {
 		rs.AddColumn(column)
@@ -1893,96 +1857,62 @@ func doShowCcprSubscriptions(ctx context.Context, ses *Session, scs *tree.ShowCc
 		for i := uint64(0); i < result.GetRowCount(); i++ {
 			var (
 				subscriptionName string
-				syncLevel        string
-				accountIdVal     int64
 				dbName           string
 				tableName        string
-				upstreamConn     string
+				syncLevel        string
 				iterationState   int64
-				iterationLsn     int64
-				contextJSON      string
 				errorMessage     string
-				createdAt        string
-				dropAt           string
+				contextJSON      string
 				isNull           bool
 			)
 
 			// Extract values from result
+			// SELECT subscription_name, db_name, table_name, sync_level, iteration_state, error_message, context
 			if subscriptionName, err = result.GetString(ctx, i, 0); err != nil {
 				return err
 			}
-			if syncLevel, err = result.GetString(ctx, i, 1); err != nil {
-				return err
-			}
-			if accountIdVal, err = result.GetInt64(ctx, i, 2); err != nil {
-				return err
-			}
 			// Handle nullable db_name
-			if isNull, err = result.ColumnIsNull(ctx, i, 3); err != nil {
+			if isNull, err = result.ColumnIsNull(ctx, i, 1); err != nil {
 				return err
 			}
 			if !isNull {
-				if dbName, err = result.GetString(ctx, i, 3); err != nil {
+				if dbName, err = result.GetString(ctx, i, 1); err != nil {
 					return err
 				}
 			}
 			// Handle nullable table_name
-			if isNull, err = result.ColumnIsNull(ctx, i, 4); err != nil {
+			if isNull, err = result.ColumnIsNull(ctx, i, 2); err != nil {
 				return err
 			}
 			if !isNull {
-				if tableName, err = result.GetString(ctx, i, 4); err != nil {
+				if tableName, err = result.GetString(ctx, i, 2); err != nil {
 					return err
 				}
 			}
-			if upstreamConn, err = result.GetString(ctx, i, 5); err != nil {
+			if syncLevel, err = result.GetString(ctx, i, 3); err != nil {
 				return err
 			}
-			if iterationState, err = result.GetInt64(ctx, i, 6); err != nil {
+			if iterationState, err = result.GetInt64(ctx, i, 4); err != nil {
 				return err
-			}
-			if iterationLsn, err = result.GetInt64(ctx, i, 7); err != nil {
-				return err
-			}
-			// Handle nullable context
-			if isNull, err = result.ColumnIsNull(ctx, i, 8); err != nil {
-				return err
-			}
-			if !isNull {
-				if contextJSON, err = result.GetString(ctx, i, 8); err != nil {
-					return err
-				}
 			}
 			// Handle nullable error_message
-			if isNull, err = result.ColumnIsNull(ctx, i, 9); err != nil {
+			if isNull, err = result.ColumnIsNull(ctx, i, 5); err != nil {
 				return err
 			}
 			if !isNull {
-				if errorMessage, err = result.GetString(ctx, i, 9); err != nil {
+				if errorMessage, err = result.GetString(ctx, i, 5); err != nil {
 					return err
 				}
 			}
-			if createdAt, err = result.GetString(ctx, i, 10); err != nil {
-				return err
-			}
-			// Handle nullable drop_at
-			if isNull, err = result.ColumnIsNull(ctx, i, 11); err != nil {
+			// Handle nullable context
+			if isNull, err = result.ColumnIsNull(ctx, i, 6); err != nil {
 				return err
 			}
 			if !isNull {
-				if dropAt, err = result.GetString(ctx, i, 11); err != nil {
+				if contextJSON, err = result.GetString(ctx, i, 6); err != nil {
 					return err
 				}
 			}
-
-			// Get account name
-			accountName := ""
-			if accInfo, ok := accIdInfoMap[int32(accountIdVal)]; ok {
-				accountName = accInfo.Name
-			}
-
-			// Mask password in upstream_conn
-			maskedUpstreamConn := maskPasswordInUri(upstreamConn)
 
 			// Map iteration_state to state (0=pending, 1=running, 2=complete, 3=error, 4=cancel)
 			state := int8(iterationState)
@@ -2005,17 +1935,6 @@ func doShowCcprSubscriptions(ctx context.Context, ses *Session, scs *tree.ShowCc
 				}
 			}
 
-			// Use timestamps as strings (MySQL result set expects strings for TIMESTAMP columns)
-			var createTime interface{}
-			if createdAt != "" {
-				createTime = createdAt
-			}
-
-			var dropTime interface{}
-			if dropAt != "" {
-				dropTime = dropAt
-			}
-
 			// Handle NULL values for db_name and table_name
 			var dbNameVal interface{}
 			if dbName != "" {
@@ -2028,18 +1947,13 @@ func doShowCcprSubscriptions(ctx context.Context, ses *Session, scs *tree.ShowCc
 			}
 
 			rs.AddRow([]interface{}{
-				subscriptionName,   // pub_name
-				accountName,        // pub_account
-				dbNameVal,          // pub_database
-				tableNameVal,       // pub_tables
-				createTime,         // create_time
-				dropTime,           // drop_time
-				state,              // state
-				syncLevel,          // sync_level
-				maskedUpstreamConn, // upstream_conn
-				iterationLsn,       // iteration_lsn
-				errorMessage,       // error_message
-				watermark,          // watermark
+				subscriptionName, // task_id
+				dbNameVal,        // database_name
+				tableNameVal,     // table_name
+				syncLevel,        // sync_level
+				state,            // state
+				errorMessage,     // error_message
+				watermark,        // watermark
 			})
 		}
 	}
