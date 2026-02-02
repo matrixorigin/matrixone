@@ -565,9 +565,12 @@ func rewriteTombstoneRowids(
 // CCPRTxnCacheWriter is an interface for writing objects to CCPR transaction cache
 // This interface is implemented by disttae.CCPRTxnCache
 type CCPRTxnCacheWriter interface {
-	// WriteObject writes an object to fileservice and registers it in the cache
-	// Returns isNewFile (true if newly created) and any error
-	WriteObject(ctx context.Context, objectName string, objectContent []byte, txnID []byte) (isNewFile bool, err error)
+	// WriteObject checks if an object needs to be written and registers it in the cache.
+	// Does NOT write the file - caller should write the file when isNewFile=true.
+	// Returns isNewFile (true if file needs to be written) and any error.
+	WriteObject(ctx context.Context, objectName string, txnID []byte) (isNewFile bool, err error)
+	// OnFileWritten is called after the file has been successfully written to fileservice.
+	OnFileWritten(objectName string)
 }
 
 // filterNonAppendableObject handles non-appendable objects
@@ -595,10 +598,28 @@ func filterNonAppendableObject(
 
 	// Use CCPRTxnCache.WriteObject if cache is available, otherwise write directly
 	if ccprCache != nil && len(txnID) > 0 {
-		// Write to fileservice and register in cache atomically
-		_, err = ccprCache.WriteObject(ctx, upstreamObjectName, objectContent, txnID)
+		// Check if file needs to be written and register in cache
+		isNewFile, err := ccprCache.WriteObject(ctx, upstreamObjectName, txnID)
 		if err != nil {
 			return objectio.ObjectStats{}, err
+		}
+		if isNewFile {
+			// File needs to be written - do it outside the cache lock
+			err = localFS.Write(ctx, fileservice.IOVector{
+				FilePath: upstreamObjectName,
+				Entries: []fileservice.IOEntry{
+					{
+						Offset: 0,
+						Size:   int64(len(objectContent)),
+						Data:   objectContent,
+					},
+				},
+			})
+			if err != nil {
+				return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to write object to fileservice: %v", err)
+			}
+			// Notify cache that file has been written
+			ccprCache.OnFileWritten(upstreamObjectName)
 		}
 	} else {
 		// Fallback: Write to local fileservice with original object name

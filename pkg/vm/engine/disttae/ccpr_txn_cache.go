@@ -43,6 +43,11 @@ type CCPRTxnCache struct {
 	// value: list of transaction IDs ([][]byte)
 	items map[string][][]byte
 
+	// writingObjects tracks objects that are currently being written to fileservice
+	// key: object name (string)
+	// value: txnID that is writing this object
+	writingObjects map[string][]byte
+
 	// gcPool is the pool for async GC operations
 	gcPool *ants.Pool
 	// fs is the file service for deleting object files
@@ -52,28 +57,30 @@ type CCPRTxnCache struct {
 // NewCCPRTxnCache creates a new CCPRTxnCache instance
 func NewCCPRTxnCache(gcPool *ants.Pool, fs fileservice.FileService) *CCPRTxnCache {
 	return &CCPRTxnCache{
-		items:  make(map[string][][]byte),
-		gcPool: gcPool,
-		fs:     fs,
+		items:          make(map[string][][]byte),
+		writingObjects: make(map[string][]byte),
+		gcPool:         gcPool,
+		fs:             fs,
 	}
 }
 
-// WriteObject writes an object to fileservice and registers it with the given transaction ID.
-// This method ensures atomicity between writing the object and registering in the cache.
+// WriteObject checks if an object needs to be written and registers it with the given transaction ID.
+// This method DOES NOT write the file - it only checks and registers in the cache.
+// The caller is responsible for writing the file when isNewFile is true.
 //
-// If the object already exists in fileservice, the txnID is added to the cache entry.
-// If the object is newly created, a new cache entry is created.
+// If the object already exists in fileservice or is currently being written, returns isNewFile=false.
+// If the object needs to be written, registers it and returns isNewFile=true.
+// After the caller writes the file, it should call OnFileWritten to complete the registration.
 //
 // Parameters:
 //   - ctx: context for the operation
 //   - objectName: the name of the object being written
-//   - objectContent: the content of the object to write
 //   - txnID: the ID of the transaction writing this object
 //
 // Returns:
-//   - isNewFile: true if this is a newly created file, false if file already existed
-//   - error: error if write operation failed
-func (c *CCPRTxnCache) WriteObject(ctx context.Context, objectName string, objectContent []byte, txnID []byte) (isNewFile bool, err error) {
+//   - isNewFile: true if file needs to be written, false if file already exists or is being written
+//   - error: error if operation failed
+func (c *CCPRTxnCache) WriteObject(ctx context.Context, objectName string, txnID []byte) (isNewFile bool, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -81,53 +88,55 @@ func (c *CCPRTxnCache) WriteObject(ctx context.Context, objectName string, objec
 		return false, moerr.NewInternalError(ctx, "fileservice is nil in CCPRTxnCache")
 	}
 
+	// Check if object is currently being written
+	if _, isWriting := c.writingObjects[objectName]; isWriting {
+		return false, nil
+	}
+
+	// Check if object already exists in cache (already written by uncommitted txn)
+	if existingTxnIDs, exists := c.items[objectName]; exists {
+		// Object exists in cache, add txnID if not already present
+		txnIDCopy := make([]byte, len(txnID))
+		copy(txnIDCopy, txnID)
+		for _, id := range existingTxnIDs {
+			if bytes.Equal(id, txnIDCopy) {
+				return false, nil
+			}
+		}
+		c.items[objectName] = append(existingTxnIDs, txnIDCopy)
+		return false, nil
+	}
+
+	// Check if file already exists in fileservice
+	_, err = c.fs.StatFile(ctx, objectName)
+	if err == nil {
+		// File exists in fileservice, no need to write
+		return false, nil
+	}
+	if !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+		// Other error occurred
+		return false, moerr.NewInternalErrorf(ctx, "failed to stat object in fileservice: %v", err)
+	}
+
+	// File does not exist, mark as writing and register txnID
 	txnIDCopy := make([]byte, len(txnID))
 	copy(txnIDCopy, txnID)
 
-	// Write to local fileservice
-	err = c.fs.Write(ctx, fileservice.IOVector{
-		FilePath: objectName,
-		Entries: []fileservice.IOEntry{
-			{
-				Offset: 0,
-				Size:   int64(len(objectContent)),
-				Data:   objectContent,
-			},
-		},
-	})
+	c.writingObjects[objectName] = txnIDCopy
+	c.items[objectName] = [][]byte{txnIDCopy}
 
-	isNewFile = true
-	if err != nil {
-		// Check if the error is due to file already exists
-		if moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
-			isNewFile = false
-			err = nil
-		} else {
-			return false, moerr.NewInternalErrorf(ctx, "failed to write object to fileservice: %v", err)
-		}
-	}
+	return true, nil
+}
 
-	if isNewFile {
-		// New object: create a new entry with this txnID
-		c.items[objectName] = [][]byte{txnIDCopy}
-	} else {
-		// Object already exists: add txnID to the list if not already present
-		existingTxnIDs, exists := c.items[objectName]
-		if exists {
-			// Check if txnID already exists
-			for _, id := range existingTxnIDs {
-				if bytes.Equal(id, txnIDCopy) {
-					return isNewFile, nil
-				}
-			}
-			// Add txnID to existing entry
-			c.items[objectName] = append(existingTxnIDs, txnIDCopy)
-		}
-		// If not exists in cache but file exists, don't add to cache
-		// This means the file was created by a committed txn
-	}
-
-	return isNewFile, nil
+// OnFileWritten is called after the file has been successfully written to fileservice.
+// It removes the object from the writingObjects set.
+//
+// Parameters:
+//   - objectName: the name of the object that was written
+func (c *CCPRTxnCache) OnFileWritten(objectName string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.writingObjects, objectName)
 }
 
 // OnTxnCommit is called when a transaction commits successfully.
@@ -235,18 +244,23 @@ func (c *CCPRTxnCache) gcObjectsAsync(objectNames []string) {
 	}
 }
 
-// HasObject checks if an object exists in the cache
+// HasObject checks if an object exists in the cache or is currently being written
 //
 // Parameters:
 //   - objectName: the name of the object to check
 //
 // Returns:
-//   - bool: true if the object exists in the cache
+//   - bool: true if the object exists in the cache or is being written
 func (c *CCPRTxnCache) HasObject(objectName string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	_, exists := c.items[objectName]
-	return exists
+	if _, exists := c.items[objectName]; exists {
+		return true
+	}
+	if _, isWriting := c.writingObjects[objectName]; isWriting {
+		return true
+	}
+	return false
 }
 
 // GetTxnIDs returns the list of txnIDs associated with an object
@@ -284,4 +298,5 @@ func (c *CCPRTxnCache) Clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.items = make(map[string][][]byte)
+	c.writingObjects = make(map[string][]byte)
 }
