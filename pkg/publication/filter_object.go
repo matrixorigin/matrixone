@@ -274,6 +274,7 @@ type FilterObjectJob struct {
 	pubName                 string
 	ccprCache               CCPRTxnCacheWriter
 	txnID                   []byte
+	aobjectMap              AObjectMap // Used for tombstone rowid rewriting
 	result                  chan *FilterObjectJobResult
 }
 
@@ -291,6 +292,7 @@ func NewFilterObjectJob(
 	pubName string,
 	ccprCache CCPRTxnCacheWriter,
 	txnID []byte,
+	aobjectMap AObjectMap,
 ) *FilterObjectJob {
 	return &FilterObjectJob{
 		ctx:                     ctx,
@@ -305,6 +307,7 @@ func NewFilterObjectJob(
 		pubName:                 pubName,
 		ccprCache:               ccprCache,
 		txnID:                   txnID,
+		aobjectMap:              aobjectMap,
 		result:                  make(chan *FilterObjectJobResult, 1),
 	}
 }
@@ -325,6 +328,7 @@ func (j *FilterObjectJob) Execute() {
 		j.pubName,
 		j.ccprCache,
 		j.txnID,
+		j.aobjectMap,
 	)
 	res.Err = err
 	if filterResult != nil {
@@ -364,6 +368,7 @@ type FilterObjectResult struct {
 // For nobj: writes directly to fileservice
 // ccprCache: optional CCPR transaction cache for atomic write and registration (can be nil)
 // txnID: transaction ID for CCPR cache registration (can be nil)
+// aobjectMap: mapping from upstream aobj to downstream object stats (used for tombstone rowid rewriting)
 func FilterObject(
 	ctx context.Context,
 	objectStatsBytes []byte,
@@ -377,6 +382,7 @@ func FilterObject(
 	pubName string,
 	ccprCache CCPRTxnCacheWriter,
 	txnID []byte,
+	aobjectMap AObjectMap,
 ) (*FilterObjectResult, error) {
 	if len(objectStatsBytes) != objectio.ObjectStatsLen {
 		return nil, moerr.NewInternalErrorf(ctx, "invalid object stats length: expected %d, got %d", objectio.ObjectStatsLen, len(objectStatsBytes))
@@ -390,7 +396,7 @@ func FilterObject(
 	isAObj := stats.GetAppendable()
 	if isAObj {
 		// Handle appendable object
-		return filterAppendableObject(ctx, &stats, snapshotTS, upstreamExecutor, localFS, isTombstone, mp, getChunkWorker, subscriptionAccountName, pubName)
+		return filterAppendableObject(ctx, &stats, snapshotTS, upstreamExecutor, localFS, isTombstone, mp, getChunkWorker, subscriptionAccountName, pubName, aobjectMap)
 	} else {
 		// Handle non-appendable object - write directly to fileservice with new UUID
 		newStats, err := filterNonAppendableObject(ctx, &stats, upstreamExecutor, localFS, getChunkWorker, subscriptionAccountName, pubName, ccprCache, txnID)
@@ -407,6 +413,7 @@ func FilterObject(
 // filterAppendableObject handles appendable objects
 // Gets object file from upstream, converts to batch, filters by snapshot TS, creates new object
 // Returns the mapping update info for storage in ccprCache.aobjectMap
+// For tombstone objects, rewrites delete rowids using aobjectMap
 func filterAppendableObject(
 	ctx context.Context,
 	stats *objectio.ObjectStats,
@@ -418,6 +425,7 @@ func filterAppendableObject(
 	getChunkWorker GetChunkWorker,
 	subscriptionAccountName string,
 	pubName string,
+	aobjectMap AObjectMap,
 ) (*FilterObjectResult, error) {
 	// Get object name from stats (upstream aobj UUID)
 	upstreamAObjUUID := stats.ObjectName().ObjectId()
@@ -447,6 +455,13 @@ func filterAppendableObject(
 		return nil, moerr.NewInternalErrorf(ctx, "failed to filter batch by snapshot TS: %v", err)
 	}
 	defer filteredBat.Close()
+
+	// For tombstone objects, rewrite delete rowids using aobjectMap
+	if isTombstone && aobjectMap != nil {
+		if err := rewriteTombstoneRowids(ctx, filteredBat, aobjectMap, mp); err != nil {
+			return nil, moerr.NewInternalErrorf(ctx, "failed to rewrite tombstone rowids: %v", err)
+		}
+	}
 
 	// Sort batch by primary key, remove commit TS column, write to file, and record ObjectStats
 	// This is data object (not tombstone), so use SchemaData
@@ -495,6 +510,56 @@ func (m AObjectMap) Set(upstreamID string, mapping *AObjectMapping) {
 // Delete removes the mapping for an upstream aobj
 func (m AObjectMap) Delete(upstreamID string) {
 	delete(m, upstreamID)
+}
+
+// rewriteTombstoneRowids rewrites delete rowids in tombstone batch using aobjectMap
+// For each rowid, extract the object ID and check if it exists in aobjectMap
+// If found, replace the segment ID in rowid with the downstream object's segment ID
+func rewriteTombstoneRowids(
+	ctx context.Context,
+	bat *containers.Batch,
+	aobjectMap AObjectMap,
+	mp *mpool.MPool,
+) error {
+	if bat == nil || bat.Length() == 0 || aobjectMap == nil {
+		return nil
+	}
+
+	// Tombstone schema: first column is delete rowid (TombstoneAttr_Rowid_Attr)
+	// The rowid contains the object ID of the data object being deleted
+	rowidVec := bat.Vecs[0]
+	if rowidVec == nil || rowidVec.Length() == 0 {
+		return nil
+	}
+
+	// Verify the column type is Rowid
+	if rowidVec.GetType().Oid != types.T_Rowid {
+		return moerr.NewInternalErrorf(ctx, "first column of tombstone should be rowid, got %s", rowidVec.GetType().String())
+	}
+
+	// Get rowid values from the vector
+	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](rowidVec.GetDownstreamVector())
+
+	// Iterate through each rowid and rewrite if mapping exists
+	for i := range rowids {
+		// Extract object ID from rowid
+		upstreamObjID := rowids[i].BorrowObjectID()
+		upstreamIDStr := upstreamObjID.String()
+
+		// Check if this object ID has a mapping in aobjectMap
+		if mapping, exists := aobjectMap.Get(upstreamIDStr); exists {
+			// Get downstream object ID from mapping
+			downstreamObjID := mapping.DownstreamStats.ObjectName().ObjectId()
+
+			// Replace the segment ID in rowid with downstream object's segment ID
+			// Rowid structure: [SegmentID (16 bytes)][ObjOffset (2 bytes)][BlkOffset (2 bytes)][RowOffset (4 bytes)]
+			// We need to replace the first 18 bytes (SegmentID + ObjOffset) with downstream object ID
+			rowids[i].SetSegment(types.Segmentid(*downstreamObjID.Segment()))
+			rowids[i].SetObjOffset(downstreamObjID.Offset())
+		}
+	}
+
+	return nil
 }
 
 // CCPRTxnCacheWriter is an interface for writing objects to CCPR transaction cache
@@ -1407,11 +1472,30 @@ func ApplyObjects(
 		txnID = txn.Txn().ID
 	}
 
-	// Pre-submit filter object jobs for all non-delete objects
+	// Separate data objects and tombstone objects
+	var dataObjects []*ObjectWithTableInfo
+	var tombstoneObjects []*ObjectWithTableInfo
 	for _, info := range objectMap {
+		// Apply index table name mapping
+		if indexTableMappings != nil {
+			if downstreamName, exists := indexTableMappings[info.TableName]; exists {
+				info.TableName = downstreamName
+			}
+		}
+		if info.IsTombstone {
+			tombstoneObjects = append(tombstoneObjects, info)
+		} else {
+			dataObjects = append(dataObjects, info)
+		}
+	}
+
+	// Phase 1: Submit and process all DATA objects first (without aobjectMap for tombstone rewriting)
+	// This ensures aobjectMap is populated with data object mappings before tombstone processing
+	for _, info := range dataObjects {
 		if !info.Delete {
 			statsBytes := info.Stats.Marshal()
-			filterJob := NewFilterObjectJob(ctx, statsBytes, currentTS, upstreamExecutor, info.IsTombstone, fs, mp, getChunkWorker, subscriptionAccountName, pubName, ccprCache, txnID)
+			// Data objects don't need aobjectMap for rewriting, pass nil
+			filterJob := NewFilterObjectJob(ctx, statsBytes, currentTS, upstreamExecutor, false, fs, mp, getChunkWorker, subscriptionAccountName, pubName, ccprCache, txnID, nil)
 			if filterObjectWorker != nil {
 				filterObjectWorker.SubmitFilterObject(filterJob)
 			} else {
@@ -1421,19 +1505,8 @@ func ApplyObjects(
 		}
 	}
 
-	// Extract objects from map to collected stats lists
-	// Apply index table name mapping before collecting
-	for _, info := range objectMap {
-		// Check if this is an index table and apply mapping
-		downstreamTableName := info.TableName
-		if indexTableMappings != nil {
-			if downstreamName, exists := indexTableMappings[info.TableName]; exists {
-				downstreamTableName = downstreamName
-			}
-		}
-		// Update table name in info
-		info.TableName = downstreamTableName
-
+	// Phase 2: Wait for all DATA filter jobs to complete and update aobjectMap
+	for _, info := range dataObjects {
 		if info.Stats.GetAppendable() {
 			upstreamObjID := info.Stats.ObjectName().ObjectId()
 			upstreamIDStr := upstreamObjID.String()
@@ -1443,23 +1516,13 @@ func ApplyObjects(
 				if aobjectMap != nil {
 					if existingMapping, exists := aobjectMap.Get(upstreamIDStr); exists {
 						// Add existing downstream object to delete stats
-						if existingMapping.IsTombstone {
-							collectedTombstoneDeleteStats = append(collectedTombstoneDeleteStats, &ObjectWithTableInfo{
-								Stats:       existingMapping.DownstreamStats,
-								DBName:      existingMapping.DBName,
-								TableName:   existingMapping.TableName,
-								IsTombstone: existingMapping.IsTombstone,
-								Delete:      true,
-							})
-						} else {
-							collectedDataDeleteStats = append(collectedDataDeleteStats, &ObjectWithTableInfo{
-								Stats:       existingMapping.DownstreamStats,
-								DBName:      existingMapping.DBName,
-								TableName:   existingMapping.TableName,
-								IsTombstone: existingMapping.IsTombstone,
-								Delete:      true,
-							})
-						}
+						collectedDataDeleteStats = append(collectedDataDeleteStats, &ObjectWithTableInfo{
+							Stats:       existingMapping.DownstreamStats,
+							DBName:      existingMapping.DBName,
+							TableName:   existingMapping.TableName,
+							IsTombstone: false,
+							Delete:      true,
+						})
 						// Delete the mapping from aobjectMap
 						aobjectMap.Delete(upstreamIDStr)
 					}
@@ -1467,110 +1530,162 @@ func ApplyObjects(
 			} else {
 				filterResult := info.FilterJob.WaitDone().(*FilterObjectJobResult)
 				if filterResult.Err != nil {
-					err = moerr.NewInternalErrorf(ctx, "failed to filter object: %v", filterResult.Err)
+					err = moerr.NewInternalErrorf(ctx, "failed to filter data object: %v", filterResult.Err)
 					return
 				}
-				// Query existing mapping from aobjectMap
+				// Query existing mapping from aobjectMap and delete old downstream object
 				if aobjectMap != nil {
 					if existingMapping, exists := aobjectMap.Get(upstreamIDStr); exists {
-						// Add existing downstream object to delete stats
-						if existingMapping.IsTombstone {
-							collectedTombstoneDeleteStats = append(collectedTombstoneDeleteStats, &ObjectWithTableInfo{
-								Stats:       existingMapping.DownstreamStats,
-								DBName:      existingMapping.DBName,
-								TableName:   existingMapping.TableName,
-								IsTombstone: existingMapping.IsTombstone,
-								Delete:      true,
-							})
-						} else {
-							collectedDataDeleteStats = append(collectedDataDeleteStats, &ObjectWithTableInfo{
-								Stats:       existingMapping.DownstreamStats,
-								DBName:      existingMapping.DBName,
-								TableName:   existingMapping.TableName,
-								IsTombstone: existingMapping.IsTombstone,
-								Delete:      true,
-							})
-						}
+						collectedDataDeleteStats = append(collectedDataDeleteStats, &ObjectWithTableInfo{
+							Stats:       existingMapping.DownstreamStats,
+							DBName:      existingMapping.DBName,
+							TableName:   existingMapping.TableName,
+							IsTombstone: false,
+							Delete:      true,
+						})
 					}
 				}
 				// Insert/update new mapping to aobjectMap
 				if filterResult.HasMappingUpdate && filterResult.CurrentStats.ObjectName() != nil && aobjectMap != nil {
 					aobjectMap.Set(upstreamIDStr, &AObjectMapping{
 						DownstreamStats: filterResult.CurrentStats,
-						IsTombstone:     info.IsTombstone,
+						IsTombstone:     false,
 						DBName:          info.DBName,
 						TableName:       info.TableName,
 					})
 					// Add new downstream object to insert stats
-					if info.IsTombstone {
-						collectedTombstoneInsertStats = append(collectedTombstoneInsertStats, &ObjectWithTableInfo{
-							Stats:       filterResult.CurrentStats,
-							DBName:      info.DBName,
-							TableName:   info.TableName,
-							IsTombstone: info.IsTombstone,
-							Delete:      false,
-						})
-					} else {
-						collectedDataInsertStats = append(collectedDataInsertStats, &ObjectWithTableInfo{
-							Stats:       filterResult.CurrentStats,
-							DBName:      info.DBName,
-							TableName:   info.TableName,
-							IsTombstone: info.IsTombstone,
-							Delete:      false,
-						})
-					}
+					collectedDataInsertStats = append(collectedDataInsertStats, &ObjectWithTableInfo{
+						Stats:       filterResult.CurrentStats,
+						DBName:      info.DBName,
+						TableName:   info.TableName,
+						IsTombstone: false,
+						Delete:      false,
+					})
 				}
 			}
-			continue
-		}
-
-		// Handle non-appendable objects
-		// Non-appendable objects use the original object name, no need to query/update aobjectMap
-
-		if info.Delete {
-			// Use original stats directly for delete operation
-			if info.IsTombstone {
-				collectedTombstoneDeleteStats = append(collectedTombstoneDeleteStats, &ObjectWithTableInfo{
-					Stats:       info.Stats,
-					DBName:      info.DBName,
-					TableName:   info.TableName,
-					IsTombstone: info.IsTombstone,
-					Delete:      true,
-				})
-			} else {
+		} else {
+			// Handle non-appendable data objects
+			if info.Delete {
 				collectedDataDeleteStats = append(collectedDataDeleteStats, &ObjectWithTableInfo{
 					Stats:       info.Stats,
 					DBName:      info.DBName,
 					TableName:   info.TableName,
-					IsTombstone: info.IsTombstone,
+					IsTombstone: false,
 					Delete:      true,
 				})
-			}
-		} else {
-			// Wait for pre-submitted FilterObject job to handle the object
-			// FilterObject will:
-			// - For nobj: get object from upstream and write directly to fileservice with original name
-			filterResult := info.FilterJob.WaitDone().(*FilterObjectJobResult)
-			if filterResult.Err != nil {
-				err = moerr.NewInternalErrorf(ctx, "failed to filter object: %v", filterResult.Err)
-				return
-			}
-			// Use original stats for insert operation (no aobjectMap mapping needed for nobj)
-			if !filterResult.DownstreamStats.IsZero() {
-				if info.IsTombstone {
-					collectedTombstoneInsertStats = append(collectedTombstoneInsertStats, &ObjectWithTableInfo{
-						Stats:       filterResult.DownstreamStats,
-						DBName:      info.DBName,
-						TableName:   info.TableName,
-						IsTombstone: info.IsTombstone,
-						Delete:      false,
-					})
-				} else {
+			} else {
+				filterResult := info.FilterJob.WaitDone().(*FilterObjectJobResult)
+				if filterResult.Err != nil {
+					err = moerr.NewInternalErrorf(ctx, "failed to filter data object: %v", filterResult.Err)
+					return
+				}
+				if !filterResult.DownstreamStats.IsZero() {
 					collectedDataInsertStats = append(collectedDataInsertStats, &ObjectWithTableInfo{
 						Stats:       filterResult.DownstreamStats,
 						DBName:      info.DBName,
 						TableName:   info.TableName,
-						IsTombstone: info.IsTombstone,
+						IsTombstone: false,
+						Delete:      false,
+					})
+				}
+			}
+		}
+	}
+
+	// Phase 3: Now submit all TOMBSTONE objects (with aobjectMap for rowid rewriting)
+	// At this point, aobjectMap contains all data object mappings
+	for _, info := range tombstoneObjects {
+		if !info.Delete {
+			statsBytes := info.Stats.Marshal()
+			// Tombstone objects need aobjectMap for rowid rewriting
+			filterJob := NewFilterObjectJob(ctx, statsBytes, currentTS, upstreamExecutor, true, fs, mp, getChunkWorker, subscriptionAccountName, pubName, ccprCache, txnID, aobjectMap)
+			if filterObjectWorker != nil {
+				filterObjectWorker.SubmitFilterObject(filterJob)
+			} else {
+				filterJob.Execute()
+			}
+			info.FilterJob = filterJob
+		}
+	}
+
+	// Phase 4: Wait for all TOMBSTONE filter jobs to complete
+	for _, info := range tombstoneObjects {
+		if info.Stats.GetAppendable() {
+			upstreamObjID := info.Stats.ObjectName().ObjectId()
+			upstreamIDStr := upstreamObjID.String()
+
+			if info.Delete {
+				// Query existing mapping from aobjectMap
+				if aobjectMap != nil {
+					if existingMapping, exists := aobjectMap.Get(upstreamIDStr); exists {
+						collectedTombstoneDeleteStats = append(collectedTombstoneDeleteStats, &ObjectWithTableInfo{
+							Stats:       existingMapping.DownstreamStats,
+							DBName:      existingMapping.DBName,
+							TableName:   existingMapping.TableName,
+							IsTombstone: true,
+							Delete:      true,
+						})
+						// Delete the mapping from aobjectMap
+						aobjectMap.Delete(upstreamIDStr)
+					}
+				}
+			} else {
+				filterResult := info.FilterJob.WaitDone().(*FilterObjectJobResult)
+				if filterResult.Err != nil {
+					err = moerr.NewInternalErrorf(ctx, "failed to filter tombstone object: %v", filterResult.Err)
+					return
+				}
+				// Query existing mapping from aobjectMap and delete old downstream object
+				if aobjectMap != nil {
+					if existingMapping, exists := aobjectMap.Get(upstreamIDStr); exists {
+						collectedTombstoneDeleteStats = append(collectedTombstoneDeleteStats, &ObjectWithTableInfo{
+							Stats:       existingMapping.DownstreamStats,
+							DBName:      existingMapping.DBName,
+							TableName:   existingMapping.TableName,
+							IsTombstone: true,
+							Delete:      true,
+						})
+					}
+				}
+				// Insert/update new mapping to aobjectMap
+				if filterResult.HasMappingUpdate && filterResult.CurrentStats.ObjectName() != nil && aobjectMap != nil {
+					aobjectMap.Set(upstreamIDStr, &AObjectMapping{
+						DownstreamStats: filterResult.CurrentStats,
+						IsTombstone:     true,
+						DBName:          info.DBName,
+						TableName:       info.TableName,
+					})
+					collectedTombstoneInsertStats = append(collectedTombstoneInsertStats, &ObjectWithTableInfo{
+						Stats:       filterResult.CurrentStats,
+						DBName:      info.DBName,
+						TableName:   info.TableName,
+						IsTombstone: true,
+						Delete:      false,
+					})
+				}
+			}
+		} else {
+			// Handle non-appendable tombstone objects
+			if info.Delete {
+				collectedTombstoneDeleteStats = append(collectedTombstoneDeleteStats, &ObjectWithTableInfo{
+					Stats:       info.Stats,
+					DBName:      info.DBName,
+					TableName:   info.TableName,
+					IsTombstone: true,
+					Delete:      true,
+				})
+			} else {
+				filterResult := info.FilterJob.WaitDone().(*FilterObjectJobResult)
+				if filterResult.Err != nil {
+					err = moerr.NewInternalErrorf(ctx, "failed to filter tombstone object: %v", filterResult.Err)
+					return
+				}
+				if !filterResult.DownstreamStats.IsZero() {
+					collectedTombstoneInsertStats = append(collectedTombstoneInsertStats, &ObjectWithTableInfo{
+						Stats:       filterResult.DownstreamStats,
+						DBName:      info.DBName,
+						TableName:   info.TableName,
+						IsTombstone: true,
 						Delete:      false,
 					})
 				}
