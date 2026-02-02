@@ -248,6 +248,8 @@ const (
 	ErrTxnUnknown                uint16 = 20638
 	ErrTxnControl                uint16 = 20639
 	ErrOfflineTxnWrite           uint16 = 20640
+	// ErrSchedulerClosed scheduler has been closed, cannot schedule new jobs
+	ErrSchedulerClosed uint16 = 20641
 
 	// Group 7: lock service
 	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
@@ -501,6 +503,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTxnUnknown:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn commit status is unknown: %s"},
 	ErrTxnControl:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn control error: %s"},
 	ErrOfflineTxnWrite:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "write offline txn: %s"},
+	ErrSchedulerClosed:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "scheduler closed"},
 
 	// Group 7: lock service
 	ErrDeadLockDetected:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
