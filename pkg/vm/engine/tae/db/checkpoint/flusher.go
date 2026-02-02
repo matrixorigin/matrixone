@@ -826,8 +826,9 @@ func (flusher *flushImpl) FlushTable(
 		// debug logging for mo_columns
 		if tableID == 3 {
 			debugCounter++
-			if debugCounter%10 == 0 {
-				flusher.debugPrintTableObjects(dbID, tableID, ts)
+			did, tid := tableTree.DbID, tableTree.ID
+			if debugCounter%15 == 0 {
+				flusher.debugPrintTableObjects(did, tid, ts)
 			}
 		}
 
@@ -883,6 +884,12 @@ func (flusher *flushImpl) debugPrintTableObjects(dbID, tableID uint64, ts types.
 	var buf bytes.Buffer
 	buf.WriteString(fmt.Sprintf("debug.flush.mo_columns ts=%s\n", ts.ToString()))
 
+	ready, notFlushed := table.IsTableTailFlushed(types.TS{}, ts)
+	buf.WriteString(fmt.Sprintf("ready=%v\n", ready))
+	if notFlushed != nil {
+		buf.WriteString(fmt.Sprintf("not flushed: %s\n", notFlushed.StringWithLevel(common.PPL2)))
+	}
+
 	// print data objects
 	buf.WriteString("=== Data Objects ===\n")
 	dataIt := table.MakeDataObjectIt()
@@ -894,8 +901,9 @@ func (flusher *flushImpl) debugPrintTableObjects(dbID, tableID uint64, ts types.
 		if next := obj.GetNextVersion(); next != nil {
 			nextCommitted = next.IsCommitted()
 		}
+		buf.WriteString("  " + obj.StringWithLevel(common.PPL2) + "\n")
 		buf.WriteString(fmt.Sprintf(
-			"  obj=%s appendable=%v isCEntry=%v isDEntry=%v createdAt=%s deletedAt=%s hasDCounterpart=%v nextCommitted=%v\n",
+			"    obj=%s appendable=%v isCEntry=%v isDEntry=%v createdAt=%s deletedAt=%s hasDCounterpart=%v nextCommitted=%v\n",
 			obj.ID().ShortStringEx(),
 			obj.IsAppendable(),
 			obj.IsCEntry(),
@@ -918,8 +926,9 @@ func (flusher *flushImpl) debugPrintTableObjects(dbID, tableID uint64, ts types.
 		if next := obj.GetNextVersion(); next != nil {
 			nextCommitted = next.IsCommitted()
 		}
+		buf.WriteString("  " + obj.StringWithLevel(common.PPL2) + "\n")
 		buf.WriteString(fmt.Sprintf(
-			"  obj=%s appendable=%v isCEntry=%v isDEntry=%v createdAt=%s deletedAt=%s hasDCounterpart=%v nextCommitted=%v\n",
+			"    obj=%s appendable=%v isCEntry=%v isDEntry=%v createdAt=%s deletedAt=%s hasDCounterpart=%v nextCommitted=%v\n",
 			obj.ID().ShortStringEx(),
 			obj.IsAppendable(),
 			obj.IsCEntry(),
