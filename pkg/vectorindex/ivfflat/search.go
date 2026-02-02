@@ -192,16 +192,10 @@ func (idx *IvfflatSearchIndex[T]) LoadBloomFilters(
 			}
 			defer res.Close()
 
-			var rowCount int64
-			for _, bat := range res.Batches {
-				rowCount += int64(bat.RowCount())
-			}
 			for _, bat := range res.Batches {
 				bf.AddVector(bat.Vecs[0])
 			}
-
 			return nil
-
 		}()
 
 		if err != nil {

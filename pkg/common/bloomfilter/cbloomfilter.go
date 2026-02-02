@@ -39,7 +39,31 @@ type CBloomFilter struct {
 	refcnt int32
 }
 
+// MAX_K_SEED is the maximum number of hash functions allowed by the C implementation.
+const MAX_K_SEED = 64
+
+// nextPow2 returns the next power of 2 greater than or equal to v.
+// If v is 0, it returns 0. If the next power of 2 overflows uint64, it also returns 0.
+// nextPow2 returns the next power of 2 greater than or equal to v.
+// If v is 0, it returns 0. If the next power of 2 overflows uint64, it also returns 0.
+func nextPow2(v uint64) uint64 {
+	if v == 0 {
+		return 0
+	}
+	v--
+	v |= v >> 1
+	v |= v >> 2
+	v |= v >> 4
+	v |= v >> 8
+	v |= v >> 16
+	v |= v >> 32
+	v++
+	return v
+}
+
 func ComputeMemAndHashCountC(rowCount int64, probability float64) (uint64, uint32) {
+	// This is a heuristic to keep k small for performance reasons.
+	// It may result in a higher false positive rate than the given probability.
 	k := uint32(1)
 	if rowCount < 10001 {
 		k = 1
@@ -59,17 +83,20 @@ func ComputeMemAndHashCountC(rowCount int64, probability float64) (uint64, uint3
 		panic("unsupport rowCount")
 	}
 	k *= 3
+
+	if probability <= 0 {
+		probability = 0.001
+	}
 	m_float := -float64(k) * float64(rowCount) / math.Log(1-math.Pow(probability, 1.0/float64(k)))
+	//m_float := -float64(rowCount) * math.Log(probability) / (math.Ln2 * math.Ln2)
 	m := uint64(m_float)
 
-	/*
-		m_float = -float64(rowCount) * math.Log(probability) / math.Pow(math.Log(2), 2)
-		m := uint64(math.Ceil(m_float))
-		k_float := (float64(m) / float64(rowCount)) * math.Log2(2)
-		k = int(math.Ceil(k_float))
-	*/
+	m = nextPow2(m)
+	if m == 0 && m_float > 0 {
+		// This means nextPow2 overflowed. Use the max power of 2.
+		m = 1 << 63
+	}
 
-	//fmt.Printf("m %d k %d\n", m, k)
 	return m, k
 }
 
