@@ -3597,7 +3597,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("ivf_preload_entries"),
-		Default:           int8(0),
+		Default:           int8(1),
 	},
 	"ivf_small_centroid_threshold": {
 		Name:              "ivf_small_centroid_threshold",
