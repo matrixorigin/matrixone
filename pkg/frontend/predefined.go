@@ -304,17 +304,6 @@ var (
 				drop_at TIMESTAMP
 			)`
 
-	MoCatalogMoCcprObjectsDDL = `CREATE TABLE mo_catalog.mo_ccpr_objects (
-				ccpr_id UUID NOT NULL,
-				upstream_id VARCHAR(64) NOT NULL,
-				downstream_id VARCHAR(64) NOT NULL,
-				downstream_stats VARBINARY(256) NOT NULL,
-				is_tombstone BOOL NOT NULL DEFAULT FALSE,
-				db_name VARCHAR(5000) NOT NULL,
-				table_name VARCHAR(5000) NOT NULL,
-				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-				PRIMARY KEY(ccpr_id, upstream_id)
-			)`
 	MoCatalogMoIndexUpdateDDL = `CREATE TABLE mo_catalog.mo_index_update (
                                 account_id INT UNSIGNED NOT NULL,
                                 table_id BIGINT UNSIGNED NOT NULL,

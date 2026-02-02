@@ -360,7 +360,7 @@ type FilterObjectResult struct {
 // FilterObject filters an object based on snapshot TS
 // Input: object stats (as bytes), snapshot TS, and whether it's an aobj (checked from object stats)
 // For aobj: gets object file, converts to batch, filters by snapshot TS, creates new object
-// The mapping between new UUID and upstream aobj is recorded in mo_ccpr_objects table
+// The mapping between new UUID and upstream aobj is stored in ccprCache.aobjectMap
 // For nobj: writes directly to fileservice
 // ccprCache: optional CCPR transaction cache for atomic write and registration (can be nil)
 // txnID: transaction ID for CCPR cache registration (can be nil)
@@ -406,7 +406,7 @@ func FilterObject(
 
 // filterAppendableObject handles appendable objects
 // Gets object file from upstream, converts to batch, filters by snapshot TS, creates new object
-// Returns the mapping update info for storage in mo_ccpr_objects table
+// Returns the mapping update info for storage in ccprCache.aobjectMap
 func filterAppendableObject(
 	ctx context.Context,
 	stats *objectio.ObjectStats,
@@ -455,12 +455,46 @@ func filterAppendableObject(
 		return nil, moerr.NewInternalErrorf(ctx, "failed to create object from batch: %v", err)
 	}
 
-	// Return mapping update info for storage in mo_ccpr_objects table
+	// Return mapping update info for storage in ccprCache.aobjectMap
 	return &FilterObjectResult{
 		HasMappingUpdate: true,
 		UpstreamAObjUUID: upstreamAObjUUID,
 		CurrentStats:     objStats, // New current stats
 	}, nil
+}
+
+// AObjectMapping represents a mapping from upstream aobj to downstream object stats
+type AObjectMapping struct {
+	DownstreamStats objectio.ObjectStats
+	IsTombstone     bool
+	DBName          string
+	TableName       string
+}
+
+// AObjectMap stores the mapping from upstream aobj to downstream object stats
+// Key: upstreamID (string), Value: *AObjectMapping
+// This map is used to track appendable object transformations during CCPR sync
+type AObjectMap map[string]*AObjectMapping
+
+// NewAObjectMap creates a new AObjectMap instance
+func NewAObjectMap() AObjectMap {
+	return make(AObjectMap)
+}
+
+// Get retrieves the mapping for an upstream aobj
+func (m AObjectMap) Get(upstreamID string) (*AObjectMapping, bool) {
+	mapping, exists := m[upstreamID]
+	return mapping, exists
+}
+
+// Set stores or updates the mapping for an upstream aobj
+func (m AObjectMap) Set(upstreamID string, mapping *AObjectMapping) {
+	m[upstreamID] = mapping
+}
+
+// Delete removes the mapping for an upstream aobj
+func (m AObjectMap) Delete(upstreamID string) {
+	delete(m, upstreamID)
 }
 
 // CCPRTxnCacheWriter is an interface for writing objects to CCPR transaction cache
@@ -1359,6 +1393,7 @@ func ApplyObjects(
 	subscriptionAccountName string,
 	pubName string,
 	ccprCache CCPRTxnCacheWriter,
+	aobjectMap AObjectMap,
 ) (err error) {
 
 	var collectedTombstoneDeleteStats []*ObjectWithTableInfo
@@ -1404,35 +1439,29 @@ func ApplyObjects(
 			upstreamIDStr := upstreamObjID.String()
 
 			if info.Delete {
-				// Query existing mapping from mo_ccpr_objects table
-				existingStats, exists, queryErr := queryCcprObjectMapping(ctx, localExecutor, taskID, upstreamIDStr)
-				if queryErr != nil {
-					err = moerr.NewInternalErrorf(ctx, "failed to query ccpr object mapping: %v", queryErr)
-					return
-				}
-				if exists {
-					// Add existing downstream object to delete stats
-					if info.IsTombstone {
-						collectedTombstoneDeleteStats = append(collectedTombstoneDeleteStats, &ObjectWithTableInfo{
-							Stats:       existingStats,
-							DBName:      info.DBName,
-							TableName:   info.TableName,
-							IsTombstone: info.IsTombstone,
-							Delete:      true,
-						})
-					} else {
-						collectedDataDeleteStats = append(collectedDataDeleteStats, &ObjectWithTableInfo{
-							Stats:       existingStats,
-							DBName:      info.DBName,
-							TableName:   info.TableName,
-							IsTombstone: info.IsTombstone,
-							Delete:      true,
-						})
-					}
-					// Delete the mapping from mo_ccpr_objects table
-					if deleteErr := deleteCcprObjectMapping(ctx, localExecutor, taskID, upstreamIDStr); deleteErr != nil {
-						err = moerr.NewInternalErrorf(ctx, "failed to delete ccpr object mapping: %v", deleteErr)
-						return
+				// Query existing mapping from aobjectMap
+				if aobjectMap != nil {
+					if existingMapping, exists := aobjectMap.Get(upstreamIDStr); exists {
+						// Add existing downstream object to delete stats
+						if existingMapping.IsTombstone {
+							collectedTombstoneDeleteStats = append(collectedTombstoneDeleteStats, &ObjectWithTableInfo{
+								Stats:       existingMapping.DownstreamStats,
+								DBName:      existingMapping.DBName,
+								TableName:   existingMapping.TableName,
+								IsTombstone: existingMapping.IsTombstone,
+								Delete:      true,
+							})
+						} else {
+							collectedDataDeleteStats = append(collectedDataDeleteStats, &ObjectWithTableInfo{
+								Stats:       existingMapping.DownstreamStats,
+								DBName:      existingMapping.DBName,
+								TableName:   existingMapping.TableName,
+								IsTombstone: existingMapping.IsTombstone,
+								Delete:      true,
+							})
+						}
+						// Delete the mapping from aobjectMap
+						aobjectMap.Delete(upstreamIDStr)
 					}
 				}
 			} else {
@@ -1441,39 +1470,37 @@ func ApplyObjects(
 					err = moerr.NewInternalErrorf(ctx, "failed to filter object: %v", filterResult.Err)
 					return
 				}
-				// Query existing mapping from mo_ccpr_objects table
-				existingStats, exists, queryErr := queryCcprObjectMapping(ctx, localExecutor, taskID, upstreamIDStr)
-				if queryErr != nil {
-					err = moerr.NewInternalErrorf(ctx, "failed to query ccpr object mapping: %v", queryErr)
-					return
-				}
-				if exists {
-					// Add existing downstream object to delete stats
-					if info.IsTombstone {
-						collectedTombstoneDeleteStats = append(collectedTombstoneDeleteStats, &ObjectWithTableInfo{
-							Stats:       existingStats,
-							DBName:      info.DBName,
-							TableName:   info.TableName,
-							IsTombstone: info.IsTombstone,
-							Delete:      true,
-						})
-					} else {
-						collectedDataDeleteStats = append(collectedDataDeleteStats, &ObjectWithTableInfo{
-							Stats:       existingStats,
-							DBName:      info.DBName,
-							TableName:   info.TableName,
-							IsTombstone: info.IsTombstone,
-							Delete:      true,
-						})
+				// Query existing mapping from aobjectMap
+				if aobjectMap != nil {
+					if existingMapping, exists := aobjectMap.Get(upstreamIDStr); exists {
+						// Add existing downstream object to delete stats
+						if existingMapping.IsTombstone {
+							collectedTombstoneDeleteStats = append(collectedTombstoneDeleteStats, &ObjectWithTableInfo{
+								Stats:       existingMapping.DownstreamStats,
+								DBName:      existingMapping.DBName,
+								TableName:   existingMapping.TableName,
+								IsTombstone: existingMapping.IsTombstone,
+								Delete:      true,
+							})
+						} else {
+							collectedDataDeleteStats = append(collectedDataDeleteStats, &ObjectWithTableInfo{
+								Stats:       existingMapping.DownstreamStats,
+								DBName:      existingMapping.DBName,
+								TableName:   existingMapping.TableName,
+								IsTombstone: existingMapping.IsTombstone,
+								Delete:      true,
+							})
+						}
 					}
 				}
-				// Insert/update new mapping to mo_ccpr_objects table
-				if filterResult.HasMappingUpdate && filterResult.CurrentStats.ObjectName() != nil {
-					downstreamIDStr := filterResult.CurrentStats.ObjectName().ObjectId().String()
-					if insertErr := insertCcprObjectMapping(ctx, localExecutor, taskID, upstreamIDStr, downstreamIDStr, filterResult.CurrentStats, info.IsTombstone, info.DBName, info.TableName); insertErr != nil {
-						err = moerr.NewInternalErrorf(ctx, "failed to insert ccpr object mapping: %v", insertErr)
-						return
-					}
+				// Insert/update new mapping to aobjectMap
+				if filterResult.HasMappingUpdate && filterResult.CurrentStats.ObjectName() != nil && aobjectMap != nil {
+					aobjectMap.Set(upstreamIDStr, &AObjectMapping{
+						DownstreamStats: filterResult.CurrentStats,
+						IsTombstone:     info.IsTombstone,
+						DBName:          info.DBName,
+						TableName:       info.TableName,
+					})
 					// Add new downstream object to insert stats
 					if info.IsTombstone {
 						collectedTombstoneInsertStats = append(collectedTombstoneInsertStats, &ObjectWithTableInfo{
@@ -1498,7 +1525,7 @@ func ApplyObjects(
 		}
 
 		// Handle non-appendable objects
-		// Non-appendable objects use the original object name, no need to query/update mo_ccpr_objects table
+		// Non-appendable objects use the original object name, no need to query/update aobjectMap
 
 		if info.Delete {
 			// Use original stats directly for delete operation
@@ -1528,7 +1555,7 @@ func ApplyObjects(
 				err = moerr.NewInternalErrorf(ctx, "failed to filter object: %v", filterResult.Err)
 				return
 			}
-			// Use original stats for insert operation (no mo_ccpr_objects mapping needed for nobj)
+			// Use original stats for insert operation (no aobjectMap mapping needed for nobj)
 			if !filterResult.DownstreamStats.IsZero() {
 				if info.IsTombstone {
 					collectedTombstoneInsertStats = append(collectedTombstoneInsertStats, &ObjectWithTableInfo{
@@ -1589,127 +1616,4 @@ func ApplyObjects(
 		}
 	}
 	return
-}
-
-// queryCcprObjectMapping queries the mo_ccpr_objects table for an existing mapping
-// Returns the downstream object stats if found, along with a boolean indicating existence
-func queryCcprObjectMapping(
-	ctx context.Context,
-	localExecutor SQLExecutor,
-	ccprID string,
-	upstreamID string,
-) (objectio.ObjectStats, bool, error) {
-	if localExecutor == nil {
-		return objectio.ObjectStats{}, false, moerr.NewInternalError(ctx, "local executor is nil, cannot query ccpr object mapping")
-	}
-	querySQL := PublicationSQLBuilder.QueryMoCcprObjectsSQL(ccprID, upstreamID)
-
-	// Execute query using system account context
-	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	result, cancel, err := localExecutor.ExecSQL(systemCtx, nil, querySQL, true, false, time.Minute)
-	if err != nil {
-		return objectio.ObjectStats{}, false, moerr.NewInternalErrorf(ctx, "failed to query mo_ccpr_objects: %v", err)
-	}
-	defer func() {
-		result.Close()
-		if cancel != nil {
-			cancel()
-		}
-	}()
-
-	// Check if record exists
-	if !result.Next() {
-		if err := result.Err(); err != nil {
-			return objectio.ObjectStats{}, false, moerr.NewInternalErrorf(ctx, "failed to read query result: %v", err)
-		}
-		return objectio.ObjectStats{}, false, nil
-	}
-
-	// Scan the result
-	var downstreamID string
-	var downstreamStatsBytes []byte
-	var isTombstone bool
-	var dbName, tableName string
-
-	if err := result.Scan(&downstreamID, &downstreamStatsBytes, &isTombstone, &dbName, &tableName); err != nil {
-		return objectio.ObjectStats{}, false, moerr.NewInternalErrorf(ctx, "failed to scan query result: %v", err)
-	}
-
-	// Parse ObjectStats from bytes
-	var stats objectio.ObjectStats
-	if len(downstreamStatsBytes) == objectio.ObjectStatsLen {
-		stats.UnMarshal(downstreamStatsBytes)
-	}
-
-	return stats, true, nil
-}
-
-// insertCcprObjectMapping inserts or updates a mapping in the mo_ccpr_objects table
-func insertCcprObjectMapping(
-	ctx context.Context,
-	localExecutor SQLExecutor,
-	ccprID string,
-	upstreamID string,
-	downstreamID string,
-	downstreamStats objectio.ObjectStats,
-	isTombstone bool,
-	dbName string,
-	tableName string,
-) error {
-	// Convert stats to hex string
-	statsBytes := downstreamStats.Marshal()
-	statsHex := fmt.Sprintf("%x", statsBytes)
-
-	insertSQL := PublicationSQLBuilder.InsertMoCcprObjectsSQL(
-		ccprID,
-		upstreamID,
-		downstreamID,
-		statsHex,
-		isTombstone,
-		dbName,
-		tableName,
-	)
-
-	// Execute insert using system account context
-	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	result, cancel, err := localExecutor.ExecSQL(systemCtx, nil, insertSQL, true, false, time.Minute)
-	if err != nil {
-		return moerr.NewInternalErrorf(ctx, "failed to insert into mo_ccpr_objects: %v", err)
-	}
-	defer func() {
-		result.Close()
-		if cancel != nil {
-			cancel()
-		}
-	}()
-
-	return nil
-}
-
-// deleteCcprObjectMapping deletes a mapping from the mo_ccpr_objects table
-func deleteCcprObjectMapping(
-	ctx context.Context,
-	localExecutor SQLExecutor,
-	ccprID string,
-	upstreamID string,
-) error {
-	if localExecutor == nil {
-		return moerr.NewInternalError(ctx, "local executor is nil, cannot delete ccpr object mapping")
-	}
-	deleteSQL := PublicationSQLBuilder.DeleteMoCcprObjectsSQL(ccprID, upstreamID)
-
-	// Execute delete using system account context
-	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	result, cancel, err := localExecutor.ExecSQL(systemCtx, nil, deleteSQL, true, false, time.Minute)
-	if err != nil {
-		return moerr.NewInternalErrorf(ctx, "failed to delete from mo_ccpr_objects: %v", err)
-	}
-	defer func() {
-		result.Close()
-		if cancel != nil {
-			cancel()
-		}
-	}()
-
-	return nil
 }

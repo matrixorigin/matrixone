@@ -175,26 +175,6 @@ const (
 		`cn_uuid = '%s' ` +
 		`WHERE task_id = '%s'`
 
-	// Query mo_ccpr_objects by ccpr_id and upstream_id
-	PublicationQueryMoCcprObjectsSqlTemplate = `SELECT ` +
-		`downstream_id, ` +
-		`downstream_stats, ` +
-		`is_tombstone, ` +
-		`db_name, ` +
-		`table_name ` +
-		`FROM mo_catalog.mo_ccpr_objects ` +
-		`WHERE ccpr_id = '%s' AND upstream_id = '%s'`
-
-	// Insert into mo_ccpr_objects
-	PublicationInsertMoCcprObjectsSqlTemplate = `INSERT INTO mo_catalog.mo_ccpr_objects ` +
-		`(ccpr_id, upstream_id, downstream_id, downstream_stats, is_tombstone, db_name, table_name) ` +
-		`VALUES ('%s', '%s', '%s', X'%s', %t, '%s', '%s') ` +
-		`ON DUPLICATE KEY UPDATE ` +
-		`downstream_id = '%s', downstream_stats = X'%s'`
-
-	// Delete from mo_ccpr_objects
-	PublicationDeleteMoCcprObjectsSqlTemplate = `DELETE FROM mo_catalog.mo_ccpr_objects ` +
-		`WHERE ccpr_id = '%s' AND upstream_id = '%s'`
 )
 
 const (
@@ -221,9 +201,6 @@ const (
 	PublicationUpdateMoCcprLogNoStateSqlTemplate_Idx
 	PublicationUpdateMoCcprLogIterationStateOnlySqlTemplate_Idx
 	PublicationUpdateMoCcprLogIterationStateAndCnUuidSqlTemplate_Idx
-	PublicationQueryMoCcprObjectsSqlTemplate_Idx
-	PublicationInsertMoCcprObjectsSqlTemplate_Idx
-	PublicationDeleteMoCcprObjectsSqlTemplate_Idx
 
 	PublicationSqlTemplateCount
 )
@@ -374,22 +351,6 @@ var PublicationSQLTemplates = [PublicationSqlTemplateCount]struct {
 	},
 	PublicationUpdateMoCcprLogIterationStateAndCnUuidSqlTemplate_Idx: {
 		SQL: PublicationUpdateMoCcprLogIterationStateAndCnUuidSqlTemplate,
-	},
-	PublicationQueryMoCcprObjectsSqlTemplate_Idx: {
-		SQL: PublicationQueryMoCcprObjectsSqlTemplate,
-		OutputAttrs: []string{
-			"downstream_id",
-			"downstream_stats",
-			"is_tombstone",
-			"db_name",
-			"table_name",
-		},
-	},
-	PublicationInsertMoCcprObjectsSqlTemplate_Idx: {
-		SQL: PublicationInsertMoCcprObjectsSqlTemplate,
-	},
-	PublicationDeleteMoCcprObjectsSqlTemplate_Idx: {
-		SQL: PublicationDeleteMoCcprObjectsSqlTemplate,
 	},
 }
 
@@ -838,56 +799,3 @@ func escapeSQLIdentifier(s string) string {
 	return s
 }
 
-// ------------------------------------------------------------------------------------------------
-// mo_ccpr_objects SQL
-// ------------------------------------------------------------------------------------------------
-
-// QueryMoCcprObjectsSQL creates SQL for querying mo_ccpr_objects by ccpr_id and upstream_id
-// Returns downstream_id, downstream_stats, is_tombstone, db_name, table_name
-func (b publicationSQLBuilder) QueryMoCcprObjectsSQL(
-	ccprID string,
-	upstreamID string,
-) string {
-	return fmt.Sprintf(
-		PublicationSQLTemplates[PublicationQueryMoCcprObjectsSqlTemplate_Idx].SQL,
-		ccprID,
-		escapeSQLString(upstreamID),
-	)
-}
-
-// InsertMoCcprObjectsSQL creates SQL for inserting into mo_ccpr_objects
-// Uses ON DUPLICATE KEY UPDATE to handle existing records
-func (b publicationSQLBuilder) InsertMoCcprObjectsSQL(
-	ccprID string,
-	upstreamID string,
-	downstreamID string,
-	downstreamStatsHex string,
-	isTombstone bool,
-	dbName string,
-	tableName string,
-) string {
-	return fmt.Sprintf(
-		PublicationSQLTemplates[PublicationInsertMoCcprObjectsSqlTemplate_Idx].SQL,
-		ccprID,
-		escapeSQLString(upstreamID),
-		escapeSQLString(downstreamID),
-		downstreamStatsHex,
-		isTombstone,
-		escapeSQLString(dbName),
-		escapeSQLString(tableName),
-		escapeSQLString(downstreamID),
-		downstreamStatsHex,
-	)
-}
-
-// DeleteMoCcprObjectsSQL creates SQL for deleting from mo_ccpr_objects by ccpr_id and upstream_id
-func (b publicationSQLBuilder) DeleteMoCcprObjectsSQL(
-	ccprID string,
-	upstreamID string,
-) string {
-	return fmt.Sprintf(
-		PublicationSQLTemplates[PublicationDeleteMoCcprObjectsSqlTemplate_Idx].SQL,
-		ccprID,
-		escapeSQLString(upstreamID),
-	)
-}

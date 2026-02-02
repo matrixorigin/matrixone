@@ -16,7 +16,6 @@ package publication
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
@@ -59,12 +58,6 @@ type ObjectStats struct {
 	IsTombstone bool     // Whether this is a tombstone (deleted object)
 }
 
-// AObjMapping contains both current and previous object stats for an upstream aobj
-type AObjMapping struct {
-	Current  objectio.ObjectStats // Newly written object stats in current iteration
-	Previous objectio.ObjectStats // Object stats written in previous iteration (zero value if not exists)
-}
-
 // TableKey represents a key for TableIDs map
 type TableKey struct {
 	DBName    string // Database name
@@ -93,10 +86,9 @@ type IterationContext struct {
 	PrevSnapshotTS      types.TS
 	CurrentSnapshotName string
 	CurrentSnapshotTS   types.TS
-	// ActiveAObj maps upstream aobj UUID to both current and previous object stats
-	// Current stats: the newly written object stats in this iteration
-	// Previous stats: the object stats written in the previous iteration (if exists)
-	ActiveAObj         map[objectio.ObjectId]AObjMapping
+	// AObjectMap stores the mapping from upstream aobj to downstream object stats
+	// This map is used to track appendable object transformations during CCPR sync
+	AObjectMap         AObjectMap
 	TableIDs           map[TableKey]uint64
 	IndexTableMappings map[string]string // Maps upstream_index_table_name to downstream_index_table_name
 	ErrorMetadata      *ErrorMetadata    // Error metadata parsed from error_message

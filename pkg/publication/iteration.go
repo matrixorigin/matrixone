@@ -20,7 +20,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -72,10 +71,12 @@ type ObjectWithTableInfo struct {
 	FilterJob   *FilterObjectJob
 }
 
-// AObjMappingJSON represents the serializable part of AObjMapping
-type AObjMappingJSON struct {
-	Current  string `json:"current"`  // ObjectStats as base64-encoded string
-	Previous string `json:"previous"` // ObjectStats as base64-encoded string
+// AObjectMappingJSON represents the serializable part of AObjectMapping
+type AObjectMappingJSON struct {
+	DownstreamStats string `json:"downstream_stats"` // ObjectStats as base64-encoded string
+	IsTombstone     bool   `json:"is_tombstone"`
+	DBName          string `json:"db_name"`
+	TableName       string `json:"table_name"`
 }
 
 // IterationContextJSON represents the serializable part of IterationContext
@@ -87,9 +88,9 @@ type IterationContextJSON struct {
 	SrcInfo          SrcInfo `json:"src_info"`
 
 	// Context information
-	ActiveAObj         map[string]AObjMappingJSON `json:"active_aobj"` // ActiveAObj as serializable map (key is ObjectId as string)
-	TableIDs           map[string]uint64          `json:"table_ids"`
-	IndexTableMappings map[string]string          `json:"index_table_mappings"` // IndexTableMappings as serializable map (key is upstream_index_table_name, value is downstream_index_table_name)
+	AObjectMap         map[string]AObjectMappingJSON `json:"aobject_map"` // AObjectMap as serializable map (key is upstream ObjectId as string)
+	TableIDs           map[string]uint64             `json:"table_ids"`
+	IndexTableMappings map[string]string             `json:"index_table_mappings"` // IndexTableMappings as serializable map (key is upstream_index_table_name, value is downstream_index_table_name)
 }
 
 func (iterCtx *IterationContext) String() string {
@@ -101,7 +102,7 @@ func (iterCtx *IterationContext) String() string {
 // creates local executor and upstream executor, creates a local transaction,
 // and sets up the local executor to use that transaction.
 // iterationLSN is passed in as a parameter.
-// ActiveAObj and TableIDs are read from the context JSON field.
+// AObjectMap and TableIDs are read from the context JSON field.
 // sqlExecutorRetryOpt: retry options for SQL executor operations (nil to use default)
 // utHelper: optional unit test helper for injecting errors
 func InitializeIterationContext(
@@ -266,7 +267,7 @@ func InitializeIterationContext(
 		UpstreamExecutor:        upstreamExecutor,
 		IterationLSN:            iterationLSN,
 		SubscriptionState:       subscriptionState,
-		ActiveAObj:              make(map[objectio.ObjectId]AObjMapping),
+		AObjectMap:              NewAObjectMap(),
 		TableIDs:                make(map[TableKey]uint64),
 		IndexTableMappings:      make(map[string]string),
 		ErrorMetadata:           errorMetadata,
@@ -279,37 +280,25 @@ func InitializeIterationContext(
 			return nil, moerr.NewInternalErrorf(ctx, "failed to unmarshal context JSON: %v", err)
 		}
 
-		// Restore ActiveAObj from JSON
-		if ctxJSON.ActiveAObj != nil {
-			for uuidStr, mappingJSON := range ctxJSON.ActiveAObj {
-				// Parse ObjectId from string
-				uuid, err := parseObjectIdFromString(uuidStr)
-				if err != nil {
-					return nil, moerr.NewInternalErrorf(ctx, "failed to parse object id from string %s: %v", uuidStr, err)
+		// Restore AObjectMap from JSON
+		if ctxJSON.AObjectMap != nil {
+			for upstreamIDStr, mappingJSON := range ctxJSON.AObjectMap {
+				mapping := &AObjectMapping{
+					IsTombstone: mappingJSON.IsTombstone,
+					DBName:      mappingJSON.DBName,
+					TableName:   mappingJSON.TableName,
 				}
-				mapping := AObjMapping{}
-				// Deserialize Current ObjectStats from base64
-				if mappingJSON.Current != "" {
-					currentBytes, err := base64.StdEncoding.DecodeString(mappingJSON.Current)
+				// Deserialize DownstreamStats from base64
+				if mappingJSON.DownstreamStats != "" {
+					statsBytes, err := base64.StdEncoding.DecodeString(mappingJSON.DownstreamStats)
 					if err != nil {
-						return nil, moerr.NewInternalErrorf(ctx, "failed to decode current object stats for uuid %s: %v", uuidStr, err)
+						return nil, moerr.NewInternalErrorf(ctx, "failed to decode downstream stats for upstream id %s: %v", upstreamIDStr, err)
 					}
-					if len(currentBytes) == objectio.ObjectStatsLen {
-						mapping.Current.UnMarshal(currentBytes)
-					}
-				}
-				// Deserialize Previous ObjectStats from base64
-				if mappingJSON.Previous != "" {
-					previousBytes, err := base64.StdEncoding.DecodeString(mappingJSON.Previous)
-					if err != nil {
-						return nil, moerr.NewInternalErrorf(ctx, "failed to decode previous object stats for uuid %s: %v", uuidStr, err)
-					}
-					if len(previousBytes) == objectio.ObjectStatsLen {
-						mapping.Previous.UnMarshal(previousBytes)
+					if len(statsBytes) == objectio.ObjectStatsLen {
+						mapping.DownstreamStats.UnMarshal(statsBytes)
 					}
 				}
-				// Delete flag is not persisted, it's only used in current iteration
-				iterationCtx.ActiveAObj[uuid] = mapping
+				iterationCtx.AObjectMap.Set(upstreamIDStr, mapping)
 			}
 		}
 
@@ -397,24 +386,21 @@ func UpdateIterationState(
 	// Serialize IterationContext to JSON
 	var contextJSON string
 	if iterationCtx != nil {
-		// Convert ActiveAObj to serializable format
-		activeAObjJSON := make(map[string]AObjMappingJSON)
-		if iterationCtx.ActiveAObj != nil {
-			for uuid, mapping := range iterationCtx.ActiveAObj {
-				mappingJSON := AObjMappingJSON{}
-				// Serialize Current ObjectStats to base64
-				if !mapping.Current.IsZero() {
-					currentBytes := mapping.Current.Marshal()
-					mappingJSON.Current = base64.StdEncoding.EncodeToString(currentBytes)
+		// Convert AObjectMap to serializable format
+		aobjectMapJSON := make(map[string]AObjectMappingJSON)
+		if iterationCtx.AObjectMap != nil {
+			for upstreamIDStr, mapping := range iterationCtx.AObjectMap {
+				mappingJSON := AObjectMappingJSON{
+					IsTombstone: mapping.IsTombstone,
+					DBName:      mapping.DBName,
+					TableName:   mapping.TableName,
 				}
-				// Serialize Previous ObjectStats to base64
-				if !mapping.Previous.IsZero() {
-					previousBytes := mapping.Previous.Marshal()
-					mappingJSON.Previous = base64.StdEncoding.EncodeToString(previousBytes)
+				// Serialize DownstreamStats to base64
+				if !mapping.DownstreamStats.IsZero() {
+					statsBytes := mapping.DownstreamStats.Marshal()
+					mappingJSON.DownstreamStats = base64.StdEncoding.EncodeToString(statsBytes)
 				}
-				// Delete flag is not persisted, it's only used in current iteration
-				// Convert ObjectId to string for JSON serialization
-				activeAObjJSON[uuid.String()] = mappingJSON
+				aobjectMapJSON[upstreamIDStr] = mappingJSON
 			}
 		}
 
@@ -438,7 +424,7 @@ func UpdateIterationState(
 			TaskID:             iterationCtx.TaskID,
 			SubscriptionName:   iterationCtx.SubscriptionName,
 			SrcInfo:            iterationCtx.SrcInfo,
-			ActiveAObj:         activeAObjJSON,
+			AObjectMap:         aobjectMapJSON,
 			TableIDs:           tableIDsJSON,
 			IndexTableMappings: indexTableMappingsJSON,
 		}
@@ -498,23 +484,21 @@ func UpdateIterationStateNoSubscriptionState(
 	// Serialize IterationContext to JSON
 	var contextJSON string
 	if iterationCtx != nil {
-		// Convert ActiveAObj to serializable format
-		activeAObjJSON := make(map[string]AObjMappingJSON)
-		if iterationCtx.ActiveAObj != nil {
-			for uuid, mapping := range iterationCtx.ActiveAObj {
-				mappingJSON := AObjMappingJSON{}
-				// Serialize Current ObjectStats to base64
-				if !mapping.Current.IsZero() {
-					currentBytes := mapping.Current.Marshal()
-					mappingJSON.Current = base64.StdEncoding.EncodeToString(currentBytes)
+		// Convert AObjectMap to serializable format
+		aobjectMapJSON := make(map[string]AObjectMappingJSON)
+		if iterationCtx.AObjectMap != nil {
+			for upstreamIDStr, mapping := range iterationCtx.AObjectMap {
+				mappingJSON := AObjectMappingJSON{
+					IsTombstone: mapping.IsTombstone,
+					DBName:      mapping.DBName,
+					TableName:   mapping.TableName,
 				}
-				// Serialize Previous ObjectStats to base64
-				if !mapping.Previous.IsZero() {
-					previousBytes := mapping.Previous.Marshal()
-					mappingJSON.Previous = base64.StdEncoding.EncodeToString(previousBytes)
+				// Serialize DownstreamStats to base64
+				if !mapping.DownstreamStats.IsZero() {
+					statsBytes := mapping.DownstreamStats.Marshal()
+					mappingJSON.DownstreamStats = base64.StdEncoding.EncodeToString(statsBytes)
 				}
-				// Convert ObjectId to string for JSON serialization
-				activeAObjJSON[uuid.String()] = mappingJSON
+				aobjectMapJSON[upstreamIDStr] = mappingJSON
 			}
 		}
 
@@ -538,7 +522,7 @@ func UpdateIterationStateNoSubscriptionState(
 			TaskID:             iterationCtx.TaskID,
 			SubscriptionName:   iterationCtx.SubscriptionName,
 			SrcInfo:            iterationCtx.SrcInfo,
-			ActiveAObj:         activeAObjJSON,
+			AObjectMap:         aobjectMapJSON,
 			TableIDs:           tableIDsJSON,
 			IndexTableMappings: indexTableMappingsJSON,
 		}
@@ -1385,6 +1369,7 @@ func ExecuteIteration(
 		iterationCtx.SubscriptionAccountName,
 		iterationCtx.SubscriptionName,
 		cnEngine.(*disttae.Engine).GetCCPRTxnCache(),
+		iterationCtx.AObjectMap,
 	)
 	if err != nil {
 		err = moerr.NewInternalErrorf(ctx, "failed to apply object list: %v", err)
@@ -1416,33 +1401,4 @@ func parseTableKeyFromString(keyStr string) TableKey {
 	}
 	// Invalid format, return empty key
 	return TableKey{}
-}
-
-// parseObjectIdFromString parses ObjectId from string format
-// Format: "{segment}_{offset}" where segment is UUID string and offset is uint16
-func parseObjectIdFromString(str string) (objectio.ObjectId, error) {
-	parts := strings.SplitN(str, "_", 2)
-	if len(parts) != 2 {
-		return objectio.ObjectId{}, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid object id format: %s, expected format: {uuid}_{offset}", str))
-	}
-
-	// Parse segment (UUID)
-	segment, err := types.ParseUuid(parts[0])
-	if err != nil {
-		return objectio.ObjectId{}, moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to parse segment UUID %s: %v", parts[0], err))
-	}
-
-	// Parse offset (uint16)
-	offsetUint, err := strconv.ParseUint(parts[1], 10, 16)
-	if err != nil {
-		return objectio.ObjectId{}, moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to parse offset %s: %v", parts[1], err))
-	}
-	offset := uint16(offsetUint)
-
-	// Build ObjectId
-	var objID objectio.ObjectId
-	copy(objID[:types.UuidSize], segment[:])
-	copy(objID[types.UuidSize:types.UuidSize+2], types.EncodeUint16(&offset))
-
-	return objID, nil
 }

@@ -533,6 +533,7 @@ func runApplyObjects(
 		"",  // subscriptionAccountName
 		"",  // pubName
 		nil, // ccprCache
+		publication.NewAObjectMap(), // aobjectMap
 	)
 	require.NoError(t, err)
 

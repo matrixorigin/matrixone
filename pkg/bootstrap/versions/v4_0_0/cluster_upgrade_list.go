@@ -29,7 +29,6 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_iscp_task,
 	upg_mo_publication_task,
 	upg_mo_ccpr_log_new,
-	upg_mo_ccpr_objects_new,
 	upg_mo_index_update_new,
 	upg_create_mo_branch_metadata,
 	upg_rename_system_stmt_info_4000,
@@ -70,16 +69,6 @@ var upg_mo_ccpr_log_new = versions.UpgradeEntry{
 	UpgSql:    frontend.MoCatalogMoCcprLogDDL,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_CCPR_LOG)
-	},
-}
-
-var upg_mo_ccpr_objects_new = versions.UpgradeEntry{
-	Schema:    catalog.MO_CATALOG,
-	TableName: catalog.MO_CCPR_OBJECTS,
-	UpgType:   versions.CREATE_NEW_TABLE,
-	UpgSql:    frontend.MoCatalogMoCcprObjectsDDL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-		return versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_CCPR_OBJECTS)
 	},
 }
 
