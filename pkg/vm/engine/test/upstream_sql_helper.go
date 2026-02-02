@@ -85,8 +85,8 @@ func NewUpstreamSQLHelper(
 
 // Internal command prefixes
 const (
-	cmdGetSnapshotTsPrefix  = "__++__internal_get_snapshot_ts"
-	cmdGetDatabasesPrefix   = "__++__internal_get_databases"
+	cmdGetSnapshotTsPrefix = "__++__internal_get_snapshot_ts"
+	cmdGetDatabasesPrefix  = "__++__internal_get_databases"
 )
 
 // HandleSpecialSQL checks if the SQL is a special statement and handles it directly
@@ -969,7 +969,8 @@ func (h *UpstreamSQLHelper) handleGetDatabasesCmd(
 
 	// Query mo_snapshots for databases covered by this snapshot
 	// The database_name field contains the database name for the snapshot
-	sql := fmt.Sprintf("SELECT database_name FROM mo_catalog.mo_snapshots WHERE sname = '%s'", snapshotName)
+	sql := fmt.Sprintf("SELECT datname FROM mo_catalog.mo_database WHERE account_id = %d", h.accountID)
+
 
 	// Create context with account ID
 	queryCtx := context.WithValue(ctx, defines.TenantIDKey{}, h.accountID)
