@@ -579,9 +579,7 @@ SELECT * FROM south_sales
 ORDER BY region;
 
 
--- ========================================
--- 测试用例 19: 无聚合的 CTE + Rewrite (对照组 - 应该正常)
--- ========================================
+-- 无聚合的 CTE + Rewrite (对照组 - 应该正常)
 /*+ {
     "rewrites" : {
         "test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"
@@ -600,9 +598,7 @@ SELECT * FROM recent_sales
 ORDER BY sale_date;
 
 
--- ========================================
--- 测试用例 20: CTE + 聚合但无 Rewrite (对照组 - 应该正常)
--- ========================================
+-- CTE + 聚合但无 Rewrite (对照组 - 应该正常)
 WITH sales_summary AS (
     SELECT
         product,
