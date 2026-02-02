@@ -264,6 +264,10 @@ func (resper *MysqlResp) respStatus(ses *Session,
 		if len(execCtx.proc.GetSessionInfo().SeqDeleteKeys) != 0 {
 			ses.DeleteSeqValues(execCtx.proc)
 		}
+		if len(execCtx.proc.GetSessionInfo().SeqAddValues) != 0 {
+			ses.AddSeqValues(execCtx.proc)
+		}
+		ses.SetSeqLastValue(execCtx.proc)
 
 		isIssue3482 := false
 		localFileName := ""
