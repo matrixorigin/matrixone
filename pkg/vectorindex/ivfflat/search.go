@@ -413,6 +413,11 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 	}
 
 	var bf *bloomfilter.CBloomFilter
+	defer func() {
+		if bf != nil {
+			bf.Free()
+		}
+	}()
 
 	if len(idx.BloomFilters) == 0 {
 		// get centroid ids on the fly
@@ -456,8 +461,6 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 			panic("failed to create CBloomFilter")
 		}
 
-		defer bf.Free()
-
 		for _, bat := range res.Batches {
 			bf.AddVector(bat.Vecs[0])
 		}
@@ -468,7 +471,6 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 		if bf == nil {
 			panic("failed to create CBloomFilter")
 		}
-		defer bf.Free()
 
 		for _, c := range centroids_ids {
 			err = bf.Merge(idx.BloomFilters[c])
@@ -495,7 +497,11 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 	if bf2 == nil {
 		panic("failed to create CBloomFilter")
 	}
-	defer bf2.Free()
+	defer func() {
+		if bf2 != nil {
+			bf2.Free()
+		}
+	}()
 
 	// Add filtered key to bloomfilter
 	if nexist > 0 {
