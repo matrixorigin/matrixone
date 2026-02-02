@@ -945,6 +945,11 @@ func (s *TableChangeStream) determineRetryable(err error) bool {
 		return true
 	}
 
+	// Table not found errors are retryable (may occur during flush when table is being modified)
+	if strings.Contains(errMsg, "can not find table by id") {
+		return true
+	}
+
 	// Watermark stall errors are retryable
 	if strings.Contains(errMsg, "stuck") || strings.Contains(errMsg, "stall") {
 		return true
