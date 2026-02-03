@@ -21,6 +21,7 @@ package usearchex
 */
 import "C"
 import (
+	"runtime"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -159,6 +160,7 @@ func FilteredSearchUnsafeWithBitmap(
 		return nil, nil, moerr.NewInternalErrorNoCtx(C.GoString(errorMessage))
 	}
 
+	runtime.KeepAlive(bm)
 	keys = keys[:resultCount]
 	distances = distances[:resultCount]
 	return keys, distances, nil
