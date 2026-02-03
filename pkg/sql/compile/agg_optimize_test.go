@@ -18,18 +18,23 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
+
+// wantObj: expected overload id after rewrite; 0 means do not assert (e.g. count unchanged).
+var wantCountStarObj = function.EncodeOverloadID(int32(function.STARCOUNT), 0)
 
 func TestCheckAggOptimize_CountNotNull(t *testing.T) {
 	tests := []struct {
 		name              string
 		node              *plan.Node
 		wantObjName       string
+		wantObj           int64 // 0 = skip assert (e.g. count unchanged)
 		wantColumnMapSize int
 	}{
 		{
-			name: "COUNT(not_null_col) should rewrite to starcount",
+			name: "COUNT(not_null_col) should rewrite to starcount and set Obj to CountStar",
 			node: &plan.Node{
 				TableDef: &plan.TableDef{
 					Cols: []*plan.ColDef{
@@ -55,6 +60,28 @@ func TestCheckAggOptimize_CountNotNull(t *testing.T) {
 				},
 			},
 			wantObjName:       "starcount",
+			wantObj:           wantCountStarObj,
+			wantColumnMapSize: 0,
+		},
+		{
+			name: "COUNT(lit) should rewrite to starcount and set Obj to CountStar",
+			node: &plan.Node{
+				TableDef: &plan.TableDef{Cols: []*plan.ColDef{}},
+				AggList: []*plan.Expr{
+					{
+						Expr: &plan.Expr_F{
+							F: &plan.Function{
+								Func: &plan.ObjectRef{ObjName: "count"},
+								Args: []*plan.Expr{
+									{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 1}}}},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantObjName:       "starcount",
+			wantObj:           wantCountStarObj,
 			wantColumnMapSize: 0,
 		},
 		{
@@ -84,6 +111,7 @@ func TestCheckAggOptimize_CountNotNull(t *testing.T) {
 				},
 			},
 			wantObjName:       "count",
+			wantObj:           0,
 			wantColumnMapSize: 1,
 		},
 		{
@@ -115,6 +143,7 @@ func TestCheckAggOptimize_CountNotNull(t *testing.T) {
 				},
 			},
 			wantObjName:       "",
+			wantObj:           0,
 			wantColumnMapSize: 0,
 		},
 	}
@@ -139,6 +168,10 @@ func TestCheckAggOptimize_CountNotNull(t *testing.T) {
 
 				actualObjName := tt.node.AggList[0].Expr.(*plan.Expr_F).F.Func.ObjName
 				require.Equal(t, tt.wantObjName, actualObjName)
+				if tt.wantObj != 0 {
+					actualObj := tt.node.AggList[0].Expr.(*plan.Expr_F).F.Func.Obj
+					require.Equal(t, tt.wantObj, actualObj, "Obj (overload id) must be CountStar so runtime uses countStarExec")
+				}
 				require.Equal(t, tt.wantColumnMapSize, len(columnMap))
 			}
 		})
