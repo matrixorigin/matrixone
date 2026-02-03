@@ -156,7 +156,7 @@ func TestFilteredSearchEdges(t *testing.T) {
 	require.NotContains(t, keys, foundkey)
 }
 
-func TestFilteredSearchWithUniqueJoinKeys(t *testing.T) {
+func TestFilteredSearchWithBitmap(t *testing.T) {
 	mp := mpool.MustNewZero()
 	index := createTestIndex(t, defaultTestDimensions, usearch.F32)
 	defer func() {
@@ -193,7 +193,7 @@ func TestFilteredSearchWithUniqueJoinKeys(t *testing.T) {
 	bm, err := CreateBitSetFromInt64Vector(uniqkeys)
 	require.NoError(t, err)
 
-	keys, distances, err := FilteredSearchUnsafeWithUniqueJoinKeys(index, unsafe.Pointer(&vectorData[0]), limit, bm)
+	keys, distances, err := FilteredSearchUnsafeWithBitmap(index, unsafe.Pointer(&vectorData[0]), limit, bm)
 	require.NoError(t, err)
 	_ = distances
 
@@ -209,7 +209,7 @@ func TestFilteredSearchWithUniqueJoinKeys(t *testing.T) {
 	bm2, err := CreateBitSetFromInt64Vector(uniqkeys2)
 	require.NoError(t, err)
 
-	keys2, _, err := FilteredSearchUnsafeWithUniqueJoinKeys(index, unsafe.Pointer(&vectorData[0]), limit, bm2)
+	keys2, _, err := FilteredSearchUnsafeWithBitmap(index, unsafe.Pointer(&vectorData[0]), limit, bm2)
 	require.NoError(t, err)
 	require.Empty(t, keys2)
 
@@ -220,7 +220,7 @@ func TestFilteredSearchWithUniqueJoinKeys(t *testing.T) {
 	bm3, err := CreateBitSetFromInt64Vector(uniqkeys3)
 	require.NoError(t, err)
 
-	keys3, _, err := FilteredSearchUnsafeWithUniqueJoinKeys(index, unsafe.Pointer(&vectorData[0]), limit, bm3)
+	keys3, _, err := FilteredSearchUnsafeWithBitmap(index, unsafe.Pointer(&vectorData[0]), limit, bm3)
 	require.NoError(t, err)
 	require.Empty(t, keys3)
 
@@ -233,12 +233,12 @@ func TestFilteredSearchWithUniqueJoinKeys(t *testing.T) {
 	require.Contains(t, err.Error(), "vector type is not int64")
 
 	// Case 5: Nil query pointer
-	_, _, err = FilteredSearchUnsafeWithUniqueJoinKeys(index, nil, limit, bm)
+	_, _, err = FilteredSearchUnsafeWithBitmap(index, nil, limit, bm)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "query pointer cannot be nil")
 
 	// Case 6: Zero limit
-	keys4, distances4, err := FilteredSearchUnsafeWithUniqueJoinKeys(index, unsafe.Pointer(&vectorData[0]), 0, bm)
+	keys4, distances4, err := FilteredSearchUnsafeWithBitmap(index, unsafe.Pointer(&vectorData[0]), 0, bm)
 	require.NoError(t, err)
 	require.Empty(t, keys4)
 	require.Empty(t, distances4)

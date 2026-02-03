@@ -112,7 +112,7 @@ func CreateBitSetFromInt64Vector(vec *vector.Vector) (*bitmap.Bitmap, error) {
 	return &bm, nil
 }
 
-func FilteredSearchUnsafeWithUniqueJoinKeys(
+func FilteredSearchUnsafeWithBitmap(
 	index *usearch.Index,
 	query unsafe.Pointer,
 	limit uint,
