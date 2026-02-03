@@ -65,8 +65,9 @@ const (
 	FJ_CDCAddExecErr             = "fj/cdc/addexecerr"
 	FJ_CDCAddExecConsumeTruncate = "fj/cdc/addexecconsumetruncate"
 
-	FJ_CNFlushSmallObjs     = "fj/cn/flush_small_objs"
-	FJ_CNSubscribeTableFail = "fj/cn/subscribe_table_fail"
+	FJ_CNFlushSmallObjs      = "fj/cn/flush_small_objs"
+	FJ_CNSubscribeTableFail  = "fj/cn/subscribe_table_fail"
+	FJ_CNWorkspaceForceFlush = "fj/cn/workspace_force_flush"
 
 	FJ_CNCLONEFailed    = "fj/cn/clone_fails"
 	FJ_CNNeedRetryError = "fj/cn/need_retry_error"
@@ -191,6 +192,11 @@ func LogCNFlushSmallObjsInjected(args ...string) (bool, int) {
 
 	ok, level := checkLoggingArgs(int(iarg), sarg, args...)
 	return ok, level
+}
+
+func CNWorkspaceForceFlushInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_CNWorkspaceForceFlush)
+	return injected
 }
 
 func LogCNNeedRetryErrorInjected(args ...string) (bool, int) {
