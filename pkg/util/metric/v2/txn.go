@@ -536,3 +536,65 @@ var (
 	// Disk read size: actual bytes read from disk cache (excluding rowid tombstone)
 	TxnDiskReadSizeHistogram = txnReadSizeHistogram.WithLabelValues("disk")
 )
+
+// StarCount (SELECT COUNT(*) optimization) metrics
+var (
+	starcountPathCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "starcount_path_total",
+			Help:      "Total number of StarCount path taken: fast (metadata only) or per_block (scan blocks with tombstones).",
+		}, []string{"path"})
+	StarcountPathFastCounter     = starcountPathCounter.WithLabelValues("fast")
+	StarcountPathPerBlockCounter = starcountPathCounter.WithLabelValues("per_block")
+
+	// StarCount total duration (rel.StarCount() on fast path)
+	StarcountDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "starcount_duration_seconds",
+			Help:      "Duration of StarCount() on fast path (metadata only, no block scan).",
+			Buckets:   getDurationBuckets(),
+		})
+
+	// StarCount result: visible row count (per fast-path call)
+	StarcountResultRowsHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "starcount_result_rows",
+			Help:      "StarCount result: total visible row count (per fast-path call).",
+			Buckets:   prometheus.ExponentialBuckets(1, 10, 14), // 1 to 1e13
+		})
+
+	// Estimated tombstone stats (upper bound, no dedup) when deciding path
+	StarcountEstimateTombstoneRowsHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "starcount_estimate_tombstone_rows",
+			Help:      "Estimated committed tombstone row count when deciding StarCount path (upper bound, no dedup).",
+			Buckets:   prometheus.ExponentialBuckets(1, 10, 12), // 1 to 1e11
+		})
+
+	StarcountEstimateTombstoneObjectsHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "starcount_estimate_tombstone_objects",
+			Help:      "Number of committed tombstone objects when estimating (used for StarCount path decision).",
+			Buckets:   prometheus.ExponentialBuckets(1, 5, 10), // 1 to ~2e6
+		})
+
+	// Ratio estimate/actual when both are available (e.g. in CountRows). High ratio = estimate much larger than actual (bad signal).
+	StarcountEstimateOverActualRatioHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "starcount_estimate_over_actual_ratio",
+			Help:      "Ratio of estimated tombstone rows over actual (dedup) tombstone rows. High ratio (e.g. 100x) means estimate is loose.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 14), // 1, 2, 4, ..., 8192
+		})
+)

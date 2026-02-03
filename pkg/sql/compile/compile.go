@@ -206,7 +206,6 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	if c.proc.GetTxnOperator() != nil {
 		c.proc.GetTxnOperator().GetWorkspace().UpdateSnapshotWriteOffset()
 		c.TxnOffset = c.proc.GetTxnOperator().GetWorkspace().GetSnapshotWriteOffset()
-
 		// all scopes should update the txn offset, or the reader will receive a 0 txnOffset,
 		// that cause a dml statement can not see the previous statements' operations.
 		if len(c.scopes) > 0 {
@@ -1025,7 +1024,6 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		if err != nil {
 			return nil, err
 		}
-
 		groupInfo := constructGroup(c.proc.Ctx, node, nodes[node.Children[0]], false, 0, c.proc)
 		defer groupInfo.Release()
 		anyDistinctAgg := groupInfo.AnyDistinctAgg()
@@ -4196,16 +4194,25 @@ func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
 			col, ok := args.Expr.(*plan.Expr_Col)
 			if !ok {
 				if _, ok := args.Expr.(*plan.Expr_Lit); ok {
+					// COUNT(lit) e.g. count(1) from count(*): set ObjName+Obj so runtime uses countStarExec
 					agg.F.Func.ObjName = "starcount"
+					agg.F.Func.Obj = function.EncodeOverloadID(int32(function.STARCOUNT), 0)
 					return partialResults, partialResultTypes, columnMap
 				}
 				return nil, nil, nil
 			} else {
-				// Check if column is NOT NULL
+				if node.TableDef == nil {
+					return nil, nil, nil
+				}
 				colPos := int(col.Col.ColPos)
+				if colPos < 0 || colPos >= len(node.TableDef.Cols) {
+					return nil, nil, nil
+				}
+				// Check if column is NOT NULL
 				if node.TableDef.Cols[colPos].Typ.NotNullable {
-					// Rewrite COUNT(not_null_col) to STARCOUNT
+					// Rewrite COUNT(not_null_col) to STARCOUNT so runtime uses countStarExec
 					agg.F.Func.ObjName = "starcount"
+					agg.F.Func.Obj = function.EncodeOverloadID(int32(function.STARCOUNT), 0)
 				} else {
 					columnMap[colPos] = int(node.TableDef.Cols[colPos].Seqnum)
 				}
@@ -4214,6 +4221,9 @@ func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
 			partialResults[i] = nil
 			col, ok := args.Expr.(*plan.Expr_Col)
 			if !ok {
+				return nil, nil, nil
+			}
+			if node.TableDef == nil {
 				return nil, nil, nil
 			}
 			columnMap[int(col.Col.ColPos)] = int(node.TableDef.Cols[int(col.Col.ColPos)].Seqnum)
