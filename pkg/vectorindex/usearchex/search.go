@@ -100,7 +100,7 @@ func CreateBitSetFromInt64Vector(vec *vector.Vector) (*bitmap.Bitmap, error) {
 		}
 
 		// create bitmap
-		bm.InitWithSize(maxID)
+		bm.InitWithSize(maxID + 1)
 		for i := 0; i < vec.Length(); i++ {
 			if vec.IsNull(uint64(i)) {
 				continue
