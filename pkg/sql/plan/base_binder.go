@@ -1036,7 +1036,7 @@ func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tu
 	var newExpr *plan.Expr
 
 	for _, rightVal := range rightTuple.Exprs {
-		rightTupleVal, ok := rightVal.(*tree.Tuple)
+		rightTupleVal, ok := unwrapParenExpr(rightVal).(*tree.Tuple)
 		if !ok {
 			return nil, moerr.NewInternalError(b.GetContext(), "IN list must contain tuples")
 		}
