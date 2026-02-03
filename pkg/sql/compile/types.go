@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -175,6 +176,11 @@ type Scope struct {
 	IsTbFunc bool
 
 	HasPartialResults bool
+	// StarCountOnly: when true, aggOptimize took the single-starcount fast path.
+	// buildReaders should return EmptyReaders and no data should flow.
+	StarCountOnly bool
+	// StarCountMergeGroup: set when StarCountOnly is true; resetForReuse clears its PartialResults.
+	StarCountMergeGroup *group.MergeGroup
 
 	Plan *plan.Plan
 	// DataSource stores information about data source.

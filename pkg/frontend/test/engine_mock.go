@@ -1144,6 +1144,21 @@ func (mr *MockRelationMockRecorder) Delete(arg0, arg1, arg2 interface{}) *gomock
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockRelation)(nil).Delete), arg0, arg1, arg2)
 }
 
+// EstimateCommittedTombstoneCount mocks base method.
+func (m *MockRelation) EstimateCommittedTombstoneCount(ctx context.Context) (int, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "EstimateCommittedTombstoneCount", ctx)
+	ret0, _ := ret[0].(int)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// EstimateCommittedTombstoneCount indicates an expected call of EstimateCommittedTombstoneCount.
+func (mr *MockRelationMockRecorder) EstimateCommittedTombstoneCount(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EstimateCommittedTombstoneCount", reflect.TypeOf((*MockRelation)(nil).EstimateCommittedTombstoneCount), ctx)
+}
+
 // GetColumMetadataScanInfo mocks base method.
 func (m *MockRelation) GetColumMetadataScanInfo(ctx context.Context, name string, visitTombstone bool) ([]*plan.MetadataScanInfo, error) {
 	m.ctrl.T.Helper()
@@ -1405,6 +1420,21 @@ func (m *MockRelation) Size(ctx context.Context, columnName string) (uint64, err
 func (mr *MockRelationMockRecorder) Size(ctx, columnName interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Size", reflect.TypeOf((*MockRelation)(nil).Size), ctx, columnName)
+}
+
+// StarCount mocks base method.
+func (m *MockRelation) StarCount(ctx context.Context) (uint64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "StarCount", ctx)
+	ret0, _ := ret[0].(uint64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// StarCount indicates an expected call of StarCount.
+func (mr *MockRelationMockRecorder) StarCount(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StarCount", reflect.TypeOf((*MockRelation)(nil).StarCount), ctx)
 }
 
 // Stats mocks base method.
@@ -1784,21 +1814,6 @@ func (m *MockDatabase) Relations(arg0 context.Context) ([]string, error) {
 func (mr *MockDatabaseMockRecorder) Relations(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Relations", reflect.TypeOf((*MockDatabase)(nil).Relations), arg0)
-}
-
-// Truncate mocks base method.
-func (m *MockDatabase) Truncate(arg0 context.Context, arg1 string) (uint64, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Truncate", arg0, arg1)
-	ret0, _ := ret[0].(uint64)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// Truncate indicates an expected call of Truncate.
-func (mr *MockDatabaseMockRecorder) Truncate(arg0, arg1 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Truncate", reflect.TypeOf((*MockDatabase)(nil).Truncate), arg0, arg1)
 }
 
 // MockLogtailEngine is a mock of LogtailEngine interface.
