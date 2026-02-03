@@ -2250,6 +2250,9 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 	var cmdFieldStmt *InternalCmdFieldList
 	var cmdGetSnapshotTsStmt *InternalCmdGetSnapshotTs
 	var cmdGetDatabasesStmt *InternalCmdGetDatabases
+	var cmdGetMoIndexesStmt *InternalCmdGetMoIndexes
+	var cmdGetDdlStmt *InternalCmdGetDdl
+	var cmdGetObjectStmt *InternalCmdGetObject
 	var err error
 	// if the input is an option ast, we should use it directly
 	if execCtx.input.getStmt() != nil {
@@ -2272,6 +2275,24 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 			return nil, err
 		}
 		stmts = append(stmts, cmdGetDatabasesStmt)
+	} else if isCmdGetMoIndexesSql(execCtx.input.getSql()) {
+		cmdGetMoIndexesStmt, err = parseCmdGetMoIndexes(execCtx.reqCtx, execCtx.input.getSql())
+		if err != nil {
+			return nil, err
+		}
+		stmts = append(stmts, cmdGetMoIndexesStmt)
+	} else if isCmdGetDdlSql(execCtx.input.getSql()) {
+		cmdGetDdlStmt, err = parseCmdGetDdl(execCtx.reqCtx, execCtx.input.getSql())
+		if err != nil {
+			return nil, err
+		}
+		stmts = append(stmts, cmdGetDdlStmt)
+	} else if isCmdGetObjectSql(execCtx.input.getSql()) {
+		cmdGetObjectStmt, err = parseCmdGetObject(execCtx.reqCtx, execCtx.input.getSql())
+		if err != nil {
+			return nil, err
+		}
+		stmts = append(stmts, cmdGetObjectStmt)
 	} else {
 		stmts, err = parseSql(execCtx, ses.GetMySQLParser())
 		if err != nil {

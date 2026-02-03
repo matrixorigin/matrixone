@@ -22,6 +22,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -592,6 +593,112 @@ func parseCmdGetDatabases(ctx context.Context, sql string) (*InternalCmdGetDatab
 		snapshotName:    parts[0],
 		accountName:     parts[1],
 		publicationName: parts[2],
+	}, nil
+}
+
+// isCmdGetMoIndexesSql checks the sql is the cmdGetMoIndexesSql or not.
+func isCmdGetMoIndexesSql(sql string) bool {
+	if len(sql) < cmdGetMoIndexesSqlLen {
+		return false
+	}
+	prefix := sql[:cmdGetMoIndexesSqlLen]
+	return strings.Compare(strings.ToLower(prefix), cmdGetMoIndexesSql) == 0
+}
+
+// makeGetMoIndexesSql makes the internal getmoindexes sql
+func makeGetMoIndexesSql(tableId uint64, subscriptionAccountName, publicationName, snapshotName string) string {
+	return fmt.Sprintf("%s %d %s %s %s", cmdGetMoIndexesSql, tableId, subscriptionAccountName, publicationName, snapshotName)
+}
+
+// parseCmdGetMoIndexes parses the internal cmd getmoindexes
+// format: getmoindexes <tableId> <subscriptionAccountName> <publicationName> <snapshotName>
+func parseCmdGetMoIndexes(ctx context.Context, sql string) (*InternalCmdGetMoIndexes, error) {
+	if !isCmdGetMoIndexesSql(sql) {
+		return nil, moerr.NewInternalError(ctx, "it is not the GET_MO_INDEXES command")
+	}
+	params := strings.TrimSpace(sql[cmdGetMoIndexesSqlLen:])
+	parts := strings.Fields(params)
+	if len(parts) != 4 {
+		return nil, moerr.NewInternalError(ctx, "invalid getmoindexes command format, expected: getmoindexes <tableId> <subscriptionAccountName> <publicationName> <snapshotName>")
+	}
+	tableId, err := strconv.ParseUint(parts[0], 10, 64)
+	if err != nil {
+		return nil, moerr.NewInternalErrorf(ctx, "invalid tableId: %s", parts[0])
+	}
+	return &InternalCmdGetMoIndexes{
+		tableId:                 tableId,
+		subscriptionAccountName: parts[1],
+		publicationName:         parts[2],
+		snapshotName:            parts[3],
+	}, nil
+}
+
+// isCmdGetDdlSql checks the sql is the cmdGetDdlSql or not.
+func isCmdGetDdlSql(sql string) bool {
+	if len(sql) < cmdGetDdlSqlLen {
+		return false
+	}
+	prefix := sql[:cmdGetDdlSqlLen]
+	return strings.Compare(strings.ToLower(prefix), cmdGetDdlSql) == 0
+}
+
+// makeGetDdlSql makes the internal getddl sql
+func makeGetDdlSql(snapshotName, subscriptionAccountName, publicationName string) string {
+	return fmt.Sprintf("%s %s %s %s", cmdGetDdlSql, snapshotName, subscriptionAccountName, publicationName)
+}
+
+// parseCmdGetDdl parses the internal cmd getddl
+// format: getddl <snapshotName> <subscriptionAccountName> <publicationName>
+func parseCmdGetDdl(ctx context.Context, sql string) (*InternalCmdGetDdl, error) {
+	if !isCmdGetDdlSql(sql) {
+		return nil, moerr.NewInternalError(ctx, "it is not the GET_DDL command")
+	}
+	params := strings.TrimSpace(sql[cmdGetDdlSqlLen:])
+	parts := strings.Fields(params)
+	if len(parts) != 3 {
+		return nil, moerr.NewInternalError(ctx, "invalid getddl command format, expected: getddl <snapshotName> <subscriptionAccountName> <publicationName>")
+	}
+	return &InternalCmdGetDdl{
+		snapshotName:            parts[0],
+		subscriptionAccountName: parts[1],
+		publicationName:         parts[2],
+	}, nil
+}
+
+// isCmdGetObjectSql checks the sql is the cmdGetObjectSql or not.
+func isCmdGetObjectSql(sql string) bool {
+	if len(sql) < cmdGetObjectSqlLen {
+		return false
+	}
+	prefix := sql[:cmdGetObjectSqlLen]
+	return strings.Compare(strings.ToLower(prefix), cmdGetObjectSql) == 0
+}
+
+// makeGetObjectSql makes the internal getobject sql
+func makeGetObjectSql(subscriptionAccountName, publicationName, objectName string, chunkIndex int64) string {
+	return fmt.Sprintf("%s %s %s %s %d", cmdGetObjectSql, subscriptionAccountName, publicationName, objectName, chunkIndex)
+}
+
+// parseCmdGetObject parses the internal cmd getobject
+// format: getobject <subscriptionAccountName> <publicationName> <objectName> <chunkIndex>
+func parseCmdGetObject(ctx context.Context, sql string) (*InternalCmdGetObject, error) {
+	if !isCmdGetObjectSql(sql) {
+		return nil, moerr.NewInternalError(ctx, "it is not the GET_OBJECT command")
+	}
+	params := strings.TrimSpace(sql[cmdGetObjectSqlLen:])
+	parts := strings.Fields(params)
+	if len(parts) != 4 {
+		return nil, moerr.NewInternalError(ctx, "invalid getobject command format, expected: getobject <subscriptionAccountName> <publicationName> <objectName> <chunkIndex>")
+	}
+	chunkIndex, err := strconv.ParseInt(parts[3], 10, 64)
+	if err != nil {
+		return nil, moerr.NewInternalErrorf(ctx, "invalid chunkIndex: %s", parts[3])
+	}
+	return &InternalCmdGetObject{
+		subscriptionAccountName: parts[0],
+		publicationName:         parts[1],
+		objectName:              parts[2],
+		chunkIndex:              chunkIndex,
 	}, nil
 }
 

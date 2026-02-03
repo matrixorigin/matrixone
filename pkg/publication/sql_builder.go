@@ -28,24 +28,20 @@ const (
 	PublicationCreateSnapshotForDatabaseSqlTemplate = `CREATE SNAPSHOT%s %s FOR DATABASE %s FROM %s PUBLICATION %s`
 	PublicationCreateSnapshotForTableSqlTemplate    = `CREATE SNAPSHOT%s %s FOR TABLE %s %s FROM %s PUBLICATION %s`
 
-	// Query mo_catalog tables SQL templates
-
-	PublicationQueryMoIndexesSqlTemplate = `SELECT ` +
-		`table_id, ` +
-		`name, ` +
-		`algo_table_type, ` +
-		`index_table_name ` +
-		`FROM mo_catalog.mo_indexes ` +
-		`WHERE 1=1%s`
+	// Query mo_catalog tables SQL templates using internal command with publication permission check
+	// Format: __++__internal_get_mo_indexes <tableId> <subscriptionAccountName> <publicationName> <snapshotName>
+	PublicationQueryMoIndexesSqlTemplate = `__++__internal_get_mo_indexes %d %s %s %s`
 
 	// Object list SQL template
 	PublicationObjectListSqlTemplate = `OBJECTLIST%s SNAPSHOT %s%s%s`
 
-	// Get object SQL template
-	PublicationGetObjectSqlTemplate = `GETOBJECT %s OFFSET %d%s`
+	// Get object SQL template using internal command with publication permission check
+	// Format: __++__internal_get_object <subscriptionAccountName> <publicationName> <objectName> <chunkIndex>
+	PublicationGetObjectSqlTemplate = `__++__internal_get_object %s %s %s %d`
 
-	// Get DDL SQL template
-	PublicationGetDdlSqlTemplate = `GETDDL%s%s`
+	// Get DDL SQL template using internal command with publication permission check
+	// Format: __++__internal_get_ddl <snapshotName> <subscriptionAccountName> <publicationName>
+	PublicationGetDdlSqlTemplate = `__++__internal_get_ddl %s %s %s`
 
 	// Drop snapshot SQL templates
 	PublicationDropSnapshotIfExistsSqlTemplate = `DROP SNAPSHOT IF EXISTS %s`
@@ -347,35 +343,23 @@ func (b publicationSQLBuilder) DropSnapshotIfExistsSQL(
 // Query mo_catalog tables SQL
 // ------------------------------------------------------------------------------------------------
 
-// QueryMoIndexesSQL creates SQL for querying mo_indexes
-// Note: mo_indexes table does not have account_id field
-// Supports filtering by table_id, index_name, and algo_table_type
+// QueryMoIndexesSQL creates SQL for querying mo_indexes using internal command with publication permission check
+// Uses internal command: __++__internal_get_mo_indexes <tableId> <subscriptionAccountName> <publicationName> <snapshotName>
+// This command checks if the current account has permission to access the publication,
+// then uses the authorized account to query mo_indexes table at the snapshot timestamp
+// Returns table_id, name, algo_table_type, index_table_name
 func (b publicationSQLBuilder) QueryMoIndexesSQL(
-	accountID uint32,
 	tableID uint64,
-	indexName string,
-	algoTableType string,
+	subscriptionAccountName string,
+	publicationName string,
+	snapshotName string,
 ) string {
-	var conditions []string
-
-	// Note: mo_indexes table does not have account_id field, so we ignore accountID parameter
-
-	if tableID > 0 {
-		conditions = append(conditions, fmt.Sprintf(" AND table_id = %d", tableID))
-	}
-
-	if indexName != "" {
-		conditions = append(conditions, fmt.Sprintf(" AND name = '%s'", escapeSQLString(indexName)))
-	}
-
-	if algoTableType != "" {
-		conditions = append(conditions, fmt.Sprintf(" AND algo_table_type = '%s'", escapeSQLString(algoTableType)))
-	}
-
-	whereClause := strings.Join(conditions, "")
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationQueryMoIndexesSqlTemplate_Idx].SQL,
-		whereClause,
+		tableID,
+		escapeSQLString(subscriptionAccountName),
+		escapeSQLString(publicationName),
+		escapeSQLString(snapshotName),
 	)
 }
 
@@ -432,61 +416,41 @@ func (b publicationSQLBuilder) ObjectListSQL(
 
 // GetObjectSQL creates SQL for get object statement
 // Example: GETOBJECT object_name OFFSET 0 FROM acc1 PUBLICATION pub1
+// GetObjectSQL creates SQL for get object statement using internal command with publication permission check
+// Uses internal command: __++__internal_get_object <subscriptionAccountName> <publicationName> <objectName> <chunkIndex>
+// This command checks if the current account has permission to access the publication,
+// then reads the object data chunk from fileservice
+// Returns data, total_size, chunk_index, total_chunks, is_complete
 func (b publicationSQLBuilder) GetObjectSQL(
-	objectName string,
-	chunkIndex int64,
 	subscriptionAccountName string,
 	pubName string,
+	objectName string,
+	chunkIndex int64,
 ) string {
-	var fromPart string
-	if subscriptionAccountName != "" && pubName != "" {
-		fromPart = fmt.Sprintf(" FROM %s PUBLICATION %s", escapeSQLIdentifier(subscriptionAccountName), escapeSQLIdentifier(pubName))
-	}
-
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationGetObjectSqlTemplate_Idx].SQL,
-		escapeSQLIdentifier(objectName),
+		escapeSQLString(subscriptionAccountName),
+		escapeSQLString(pubName),
+		escapeSQLString(objectName),
 		chunkIndex,
-		fromPart,
 	)
 }
 
-// GetDdlSQL creates SQL for get DDL statement
-// Example: GETDDL DATABASE db1 TABLE t1 SNAPSHOT sp1 FROM acc1 PUBLICATION pub1
-// Example: GETDDL DATABASE db1 SNAPSHOT sp1 FROM acc1 PUBLICATION pub1
-// Example: GETDDL SNAPSHOT sp1 FROM acc1 PUBLICATION pub1
+// GetDdlSQL creates SQL for get DDL statement using internal command with publication permission check
+// Uses internal command: __++__internal_get_ddl <snapshotName> <subscriptionAccountName> <publicationName>
+// This command checks if the current account has permission to access the publication,
+// then uses the snapshot's level to determine dbName and tableName scope
+// Returns dbname, tablename, tableid, tablesql
 func (b publicationSQLBuilder) GetDdlSQL(
-	dbName string,
-	tableName string,
 	snapshotName string,
 	subscriptionAccountName string,
 	pubName string,
 ) string {
-	var parts []string
-
-	if dbName != "" {
-		parts = append(parts, fmt.Sprintf(" DATABASE %s", escapeSQLIdentifier(dbName)))
-	}
-
-	if tableName != "" {
-		parts = append(parts, fmt.Sprintf(" TABLE %s", escapeSQLIdentifier(tableName)))
-	}
-
-	if snapshotName != "" {
-		parts = append(parts, fmt.Sprintf(" SNAPSHOT %s", escapeSQLIdentifier(snapshotName)))
-	}
-
-	optsPart := strings.Join(parts, "")
-
-	var fromPart string
-	if subscriptionAccountName != "" && pubName != "" {
-		fromPart = fmt.Sprintf(" FROM %s PUBLICATION %s", escapeSQLIdentifier(subscriptionAccountName), escapeSQLIdentifier(pubName))
-	}
-
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationGetDdlSqlTemplate_Idx].SQL,
-		optsPart,
-		fromPart,
+		escapeSQLString(snapshotName),
+		escapeSQLString(subscriptionAccountName),
+		escapeSQLString(pubName),
 	)
 }
 

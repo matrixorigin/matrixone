@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -3057,6 +3058,237 @@ func handleGetDatabases(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetDatab
 			}
 			row := make([]interface{}, 1)
 			row[0] = dbName
+			mrs.AddRow(row)
+		}
+	}
+
+	return nil
+}
+
+// handleGetMoIndexes handles the internal command getmoindexes
+// It checks permission via publication and returns mo_indexes records at the snapshot timestamp
+func handleGetMoIndexes(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetMoIndexes) error {
+	var err error
+	ctx := execCtx.reqCtx
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// Get current account name
+	currentAccount := ses.GetTenantInfo().GetTenant()
+
+	// Check permission via publication and get authorized account
+	accountID, _, err := getAccountFromPublication(ctx, bh, ic.subscriptionAccountName, ic.publicationName, currentAccount)
+	if err != nil {
+		return err
+	}
+
+	// Query mo_snapshots to get snapshot ts using the authorized account
+	snapshotCtx := defines.AttachAccountId(ctx, uint32(accountID))
+	snapshotSql := fmt.Sprintf("SELECT ts FROM mo_catalog.mo_snapshots WHERE sname = '%s'", ic.snapshotName)
+
+	bh.ClearExecResultSet()
+	if err = bh.Exec(snapshotCtx, snapshotSql); err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to query snapshot ts: %v", err)
+	}
+
+	erArray, err := getResultSet(snapshotCtx, bh)
+	if err != nil {
+		return err
+	}
+
+	if !execResultArrayHasData(erArray) {
+		return moerr.NewInternalErrorf(ctx, "snapshot %s does not exist", ic.snapshotName)
+	}
+
+	// Get the snapshot ts
+	snapshotTs, err := erArray[0].GetInt64(ctx, 0, 0)
+	if err != nil {
+		return err
+	}
+
+	// Query mo_indexes using the snapshot timestamp
+	// Use {MO_TS = ts} syntax to query indexes at the snapshot point
+	indexSql := fmt.Sprintf("SELECT table_id, name, algo_table_type, index_table_name FROM mo_catalog.mo_indexes{MO_TS = %d} WHERE table_id = %d", snapshotTs, ic.tableId)
+
+	bh.ClearExecResultSet()
+	if err = bh.Exec(snapshotCtx, indexSql); err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to query mo_indexes: %v", err)
+	}
+
+	erArray, err = getResultSet(snapshotCtx, bh)
+	if err != nil {
+		return err
+	}
+
+	// Build result set with four columns: table_id, name, algo_table_type, index_table_name
+	colTableId := new(MysqlColumn)
+	colTableId.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	colTableId.SetName("table_id")
+
+	colName := new(MysqlColumn)
+	colName.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	colName.SetName("name")
+
+	colAlgoTableType := new(MysqlColumn)
+	colAlgoTableType.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	colAlgoTableType.SetName("algo_table_type")
+
+	colIndexTableName := new(MysqlColumn)
+	colIndexTableName.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	colIndexTableName.SetName("index_table_name")
+
+	mrs := ses.GetMysqlResultSet()
+	mrs.AddColumn(colTableId)
+	mrs.AddColumn(colName)
+	mrs.AddColumn(colAlgoTableType)
+	mrs.AddColumn(colIndexTableName)
+
+	// Add each index record as a row
+	if execResultArrayHasData(erArray) {
+		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+			tableId, err := erArray[0].GetUint64(ctx, i, 0)
+			if err != nil {
+				return err
+			}
+			name, err := erArray[0].GetString(ctx, i, 1)
+			if err != nil {
+				return err
+			}
+			algoTableType, err := erArray[0].GetString(ctx, i, 2)
+			if err != nil {
+				return err
+			}
+			indexTableName, err := erArray[0].GetString(ctx, i, 3)
+			if err != nil {
+				return err
+			}
+			row := make([]interface{}, 4)
+			row[0] = tableId
+			row[1] = name
+			row[2] = algoTableType
+			row[3] = indexTableName
+			mrs.AddRow(row)
+		}
+	}
+
+	return nil
+}
+
+// handleInternalGetDdl handles the internal command getddl
+// It checks permission via publication and returns DDL records using the snapshot's level to determine scope
+func handleInternalGetDdl(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetDdl) error {
+	var err error
+	ctx := execCtx.reqCtx
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// Get current account name
+	currentAccount := ses.GetTenantInfo().GetTenant()
+
+	// Check permission via publication and get authorized account
+	accountID, _, err := getAccountFromPublication(ctx, bh, ic.subscriptionAccountName, ic.publicationName, currentAccount)
+	if err != nil {
+		return err
+	}
+
+	// Query mo_snapshots to get snapshot record using the authorized account
+	snapshotCtx := defines.AttachAccountId(ctx, uint32(accountID))
+
+	// Get snapshot record to retrieve level, databaseName, tableName
+	record, err := getSnapshotByName(snapshotCtx, bh, ic.snapshotName)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to query snapshot: %v", err)
+	}
+	if record == nil {
+		return moerr.NewInternalErrorf(ctx, "snapshot %s does not exist", ic.snapshotName)
+	}
+
+	// Determine dbName and tableName based on snapshot level
+	var databaseName, tableName string
+	switch record.level {
+	case tree.RESTORELEVELTABLE.String():
+		// Table level: use both databaseName and tableName from snapshot
+		databaseName = record.databaseName
+		tableName = record.tableName
+	case tree.RESTORELEVELDATABASE.String():
+		// Database level: use only databaseName from snapshot
+		databaseName = record.databaseName
+		tableName = ""
+	case tree.RESTORELEVELACCOUNT.String(), tree.RESTORELEVELCLUSTER.String():
+		// Account or cluster level: iterate all databases
+		databaseName = ""
+		tableName = ""
+	default:
+		return moerr.NewInternalErrorf(ctx, "unsupported snapshot level: %s", record.level)
+	}
+
+	// Get engine and mpool
+	session := ses.(*Session)
+	eng := session.GetTxnHandler().GetStorage()
+	if eng == nil {
+		return moerr.NewInternalError(ctx, "engine is nil")
+	}
+	mp := session.GetMemPool()
+	if mp == nil {
+		return moerr.NewInternalError(ctx, "mpool is nil")
+	}
+
+	// Get txn
+	txn := session.GetTxnHandler().GetTxn()
+	if txn == nil && session.GetProc() != nil {
+		txn = session.GetProc().GetTxnOperator()
+	}
+	if txn == nil {
+		return moerr.NewInternalError(ctx, "transaction is required for internal getddl")
+	}
+
+	// Clone txn with snapshot timestamp
+	if record.ts != 0 {
+		txn = txn.CloneSnapshotOp(timestamp.Timestamp{PhysicalTime: record.ts})
+	}
+
+	// Call getddlbatch to get the DDL information
+	resultBatch, err := getddlbatch(snapshotCtx, databaseName, tableName, eng, mp, txn)
+	if err != nil {
+		return err
+	}
+	defer resultBatch.Clean(mp)
+
+	// Build result set with four columns: dbname, tablename, tableid, tablesql
+	colDbName := new(MysqlColumn)
+	colDbName.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	colDbName.SetName("dbname")
+
+	colTableName := new(MysqlColumn)
+	colTableName.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	colTableName.SetName("tablename")
+
+	colTableId := new(MysqlColumn)
+	colTableId.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	colTableId.SetName("tableid")
+
+	colTableSql := new(MysqlColumn)
+	colTableSql.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	colTableSql.SetName("tablesql")
+
+	mrs := ses.GetMysqlResultSet()
+	mrs.AddColumn(colDbName)
+	mrs.AddColumn(colTableName)
+	mrs.AddColumn(colTableId)
+	mrs.AddColumn(colTableSql)
+
+	// Fill result set from batch
+	if resultBatch != nil && resultBatch.RowCount() > 0 {
+		for i := 0; i < resultBatch.RowCount(); i++ {
+			row := make([]interface{}, 4)
+			// dbname
+			row[0] = resultBatch.Vecs[0].GetBytesAt(i)
+			// tablename
+			row[1] = resultBatch.Vecs[1].GetBytesAt(i)
+			// tableid
+			row[2] = vector.GetFixedAtNoTypeCheck[int64](resultBatch.Vecs[2], i)
+			// tablesql
+			row[3] = resultBatch.Vecs[3].GetBytesAt(i)
 			mrs.AddRow(row)
 		}
 	}

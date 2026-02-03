@@ -104,6 +104,9 @@ const (
 	FPInternalCmdFieldList
 	FPInternalCmdGetSnapshotTs
 	FPInternalCmdGetDatabases
+	FPInternalCmdGetMoIndexes
+	FPInternalCmdGetDdl
+	FPInternalCmdGetObject
 	FPCreatePublication
 	FPAlterPublication
 	FPDropPublication
@@ -304,6 +307,12 @@ const (
 	cmdGetSnapshotTsSqlLen    = len(cmdGetSnapshotTsSql)
 	cmdGetDatabasesSql        = "__++__internal_get_databases"
 	cmdGetDatabasesSqlLen     = len(cmdGetDatabasesSql)
+	cmdGetMoIndexesSql        = "__++__internal_get_mo_indexes"
+	cmdGetMoIndexesSqlLen     = len(cmdGetMoIndexesSql)
+	cmdGetDdlSql              = "__++__internal_get_ddl"
+	cmdGetDdlSqlLen           = len(cmdGetDdlSql)
+	cmdGetObjectSql           = "__++__internal_get_object"
+	cmdGetObjectSqlLen        = len(cmdGetObjectSql)
 	cloudUserTag              = "cloud_user"
 	cloudNoUserTag            = "cloud_nonuser"
 	saveResultTag             = "save_result"
@@ -395,6 +404,99 @@ func (ic *InternalCmdGetDatabases) StmtKind() tree.StmtKind {
 
 func (ic *InternalCmdGetDatabases) GetStatementType() string { return "InternalCmd" }
 func (ic *InternalCmdGetDatabases) GetQueryType() string     { return tree.QueryTypeDQL }
+
+var _ tree.Statement = &InternalCmdGetMoIndexes{}
+
+// InternalCmdGetMoIndexes the internal command to get mo_indexes by publication permission
+// Parameters: tableId, subscriptionAccountName, publicationName, snapshotName
+// Returns: list of index records from mo_indexes table
+type InternalCmdGetMoIndexes struct {
+	tableId                 uint64
+	subscriptionAccountName string
+	publicationName         string
+	snapshotName            string
+}
+
+// Free implements tree.Statement.
+func (ic *InternalCmdGetMoIndexes) Free() {
+}
+
+func (ic *InternalCmdGetMoIndexes) String() string {
+	return makeGetMoIndexesSql(ic.tableId, ic.subscriptionAccountName, ic.publicationName, ic.snapshotName)
+}
+
+func (ic *InternalCmdGetMoIndexes) Format(ctx *tree.FmtCtx) {
+	ctx.WriteString(makeGetMoIndexesSql(ic.tableId, ic.subscriptionAccountName, ic.publicationName, ic.snapshotName))
+}
+
+func (ic *InternalCmdGetMoIndexes) StmtKind() tree.StmtKind {
+	return tree.MakeStmtKind(tree.OUTPUT_RESULT_ROW, tree.RESP_PREBUILD_RESULT_ROW, tree.EXEC_IN_FRONTEND)
+}
+
+func (ic *InternalCmdGetMoIndexes) GetStatementType() string { return "InternalCmd" }
+func (ic *InternalCmdGetMoIndexes) GetQueryType() string     { return tree.QueryTypeDQL }
+
+var _ tree.Statement = &InternalCmdGetDdl{}
+
+// InternalCmdGetDdl the internal command to get DDL by publication permission
+// Parameters: snapshotName, subscriptionAccountName, publicationName
+// The handler will use the snapshot's level to determine dbName and tableName scope
+// Returns: list of DDL records (dbname, tablename, tableid, tablesql)
+type InternalCmdGetDdl struct {
+	snapshotName            string
+	subscriptionAccountName string
+	publicationName         string
+}
+
+// Free implements tree.Statement.
+func (ic *InternalCmdGetDdl) Free() {
+}
+
+func (ic *InternalCmdGetDdl) String() string {
+	return makeGetDdlSql(ic.snapshotName, ic.subscriptionAccountName, ic.publicationName)
+}
+
+func (ic *InternalCmdGetDdl) Format(ctx *tree.FmtCtx) {
+	ctx.WriteString(makeGetDdlSql(ic.snapshotName, ic.subscriptionAccountName, ic.publicationName))
+}
+
+func (ic *InternalCmdGetDdl) StmtKind() tree.StmtKind {
+	return tree.MakeStmtKind(tree.OUTPUT_RESULT_ROW, tree.RESP_PREBUILD_RESULT_ROW, tree.EXEC_IN_FRONTEND)
+}
+
+func (ic *InternalCmdGetDdl) GetStatementType() string { return "InternalCmd" }
+func (ic *InternalCmdGetDdl) GetQueryType() string     { return tree.QueryTypeDQL }
+
+var _ tree.Statement = &InternalCmdGetObject{}
+
+// InternalCmdGetObject the internal command to get object data by publication permission
+// Parameters: subscriptionAccountName, publicationName, objectName, chunkIndex
+// Returns: data chunk from the object file
+type InternalCmdGetObject struct {
+	subscriptionAccountName string
+	publicationName         string
+	objectName              string
+	chunkIndex              int64
+}
+
+// Free implements tree.Statement.
+func (ic *InternalCmdGetObject) Free() {
+}
+
+func (ic *InternalCmdGetObject) String() string {
+	return makeGetObjectSql(ic.subscriptionAccountName, ic.publicationName, ic.objectName, ic.chunkIndex)
+}
+
+func (ic *InternalCmdGetObject) Format(ctx *tree.FmtCtx) {
+	ctx.WriteString(makeGetObjectSql(ic.subscriptionAccountName, ic.publicationName, ic.objectName, ic.chunkIndex))
+}
+
+func (ic *InternalCmdGetObject) StmtKind() tree.StmtKind {
+	return tree.MakeStmtKind(tree.OUTPUT_RESULT_ROW, tree.RESP_PREBUILD_RESULT_ROW, tree.EXEC_IN_FRONTEND)
+}
+
+func (ic *InternalCmdGetObject) GetStatementType() string { return "InternalCmd" }
+func (ic *InternalCmdGetObject) GetQueryType() string     { return tree.QueryTypeDQL }
 
 // ExecResult is the result interface of the execution
 type ExecResult interface {

@@ -327,3 +327,128 @@ func handleGetObject(
 	// Save query result if needed
 	return trySaveQueryResult(ctx, ses, mrs)
 }
+
+// handleInternalGetObject handles the internal command getobject
+// It checks permission via publication and returns object data chunk
+func handleInternalGetObject(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetObject) error {
+	ctx := execCtx.reqCtx
+	session := ses.(*Session)
+
+	var (
+		mrs      = ses.GetMysqlResultSet()
+		showCols []*MysqlColumn
+	)
+
+	session.ClearAllMysqlResultSet()
+	session.ClearResultBatches()
+
+	// Create columns: data, total_size, chunk_index, total_chunks, is_complete
+	colData := new(MysqlColumn)
+	colData.SetName("data")
+	colData.SetColumnType(defines.MYSQL_TYPE_BLOB)
+	showCols = append(showCols, colData)
+
+	colTotalSize := new(MysqlColumn)
+	colTotalSize.SetName("total_size")
+	colTotalSize.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	showCols = append(showCols, colTotalSize)
+
+	colChunkIndex := new(MysqlColumn)
+	colChunkIndex.SetName("chunk_index")
+	colChunkIndex.SetColumnType(defines.MYSQL_TYPE_LONG)
+	showCols = append(showCols, colChunkIndex)
+
+	colTotalChunks := new(MysqlColumn)
+	colTotalChunks.SetName("total_chunks")
+	colTotalChunks.SetColumnType(defines.MYSQL_TYPE_LONG)
+	showCols = append(showCols, colTotalChunks)
+
+	colIsComplete := new(MysqlColumn)
+	colIsComplete.SetName("is_complete")
+	colIsComplete.SetColumnType(defines.MYSQL_TYPE_TINY)
+	showCols = append(showCols, colIsComplete)
+
+	for _, col := range showCols {
+		mrs.AddColumn(col)
+	}
+
+	// Read object from fileservice
+	objectName := ic.objectName
+	chunkIndex := ic.chunkIndex
+
+	// Check publication permission using getAccountFromPublication and get account ID
+	pubAccountName := ic.subscriptionAccountName
+	pubName := ic.publicationName
+	accountID, err := GetObjectPermissionChecker(ctx, session, pubAccountName, pubName)
+	if err != nil {
+		return err
+	}
+
+	// Use the authorized account context for execution
+	ctx = defines.AttachAccountId(ctx, uint32(accountID))
+
+	// Get fileservice
+	fs, err := GetObjectFSProvider(session)
+	if err != nil {
+		return err
+	}
+
+	// Get file size
+	dirEntry, err := fs.StatFile(ctx, objectName)
+	if err != nil {
+		return err
+	}
+	fileSize := dirEntry.Size
+
+	// Calculate total data chunks (chunk 0 is metadata, chunks 1+ are data)
+	var totalChunks int64
+	if fileSize <= getObjectChunkSize {
+		totalChunks = 1
+	} else {
+		totalChunks = (fileSize + getObjectChunkSize - 1) / getObjectChunkSize
+	}
+
+	// Validate chunk index
+	if chunkIndex < 0 {
+		return moerr.NewInvalidInput(ctx, "invalid chunk_index: must be >= 0")
+	}
+	if chunkIndex > totalChunks {
+		return moerr.NewInvalidInput(ctx, fmt.Sprintf("invalid chunk_index: %d, file has only %d data chunks (chunk 0 is metadata)", chunkIndex, totalChunks))
+	}
+
+	var data []byte
+	var isComplete bool
+
+	if chunkIndex == 0 {
+		// Metadata only request - return nil data with metadata information
+		data = nil
+		isComplete = false
+	} else {
+		// Data chunk request (chunkIndex >= 1)
+		offset := (chunkIndex - 1) * getObjectChunkSize
+		size := int64(getObjectChunkSize)
+		if chunkIndex == totalChunks {
+			size = fileSize - offset
+		}
+
+		// Read the chunk data
+		data, err = GetObjectDataReader(ctx, session, objectName, offset, size)
+		if err != nil {
+			return err
+		}
+
+		isComplete = (chunkIndex == totalChunks)
+	}
+
+	// Add row with the result
+	row := make([]any, 5)
+	row[0] = data
+	row[1] = fileSize
+	row[2] = chunkIndex
+	row[3] = totalChunks
+	row[4] = isComplete
+	mrs.AddRow(row)
+
+	// Save query result if needed
+	return trySaveQueryResult(ctx, session, mrs)
+}

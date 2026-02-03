@@ -56,8 +56,9 @@ type TableDDLInfo struct {
 	Operation      int8 // DDLOperationCreate (1), DDLOperationAlter (2), or DDLOperationDrop (3), 0 means no operation
 }
 
-// GetUpstreamDDLUsingGetDdl queries upstream DDL using GETDDL statement
-// It uses the format: GETDDL [DATABASE dbname] [TABLE tablename] SNAPSHOT <current snapshot>
+// GetUpstreamDDLUsingGetDdl queries upstream DDL using internal GETDDL command
+// Uses internal command: __++__internal_get_ddl <snapshotName> <subscriptionAccountName> <publicationName>
+// The internal command checks publication permission and uses the snapshot's level to determine dbName and tableName scope
 // Returns a map: map[dbname][table name] *TableDDLInfo{TableID, TableCreateSQL}
 func GetUpstreamDDLUsingGetDdl(
 	ctx context.Context,
@@ -71,23 +72,19 @@ func GetUpstreamDDLUsingGetDdl(
 		return nil, moerr.NewInternalError(ctx, "upstream executor is nil")
 	}
 
-	// Get database name and table name from sync level
-	var dbName, tableName string
-	if iterationCtx.SrcInfo.SyncLevel == SyncLevelDatabase || iterationCtx.SrcInfo.SyncLevel == SyncLevelTable {
-		dbName = iterationCtx.SrcInfo.DBName
-	}
-	if iterationCtx.SrcInfo.SyncLevel == SyncLevelTable {
-		tableName = iterationCtx.SrcInfo.TableName
-	}
-
 	// Get snapshot name from iteration context
 	snapshotName := iterationCtx.CurrentSnapshotName
 	if snapshotName == "" {
 		return nil, moerr.NewInternalError(ctx, "current snapshot name is required for GETDDL")
 	}
 
-	// Build GETDDL SQL
-	querySQL := PublicationSQLBuilder.GetDdlSQL(dbName, tableName, snapshotName, iterationCtx.SubscriptionAccountName, iterationCtx.SubscriptionName)
+	// Build GETDDL SQL using internal command
+	// The internal command uses the snapshot's level to determine dbName and tableName scope
+	querySQL := PublicationSQLBuilder.GetDdlSQL(
+		snapshotName,
+		iterationCtx.SubscriptionAccountName,
+		iterationCtx.SubscriptionName,
+	)
 
 	// Execute GETDDL SQL
 	result, cancel, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true, time.Minute)
@@ -891,6 +888,7 @@ func processIndexTableMappings(
 }
 
 // queryUpstreamIndexInfo queries upstream index information from mo_indexes table
+// Uses internal command with publication permission check and snapshot support
 // Returns a map: key is "indexName:algoTableType", value is index_table_name
 func queryUpstreamIndexInfo(
 	ctx context.Context,
@@ -901,9 +899,14 @@ func queryUpstreamIndexInfo(
 		return nil, nil
 	}
 
-	// Build SQL to query upstream mo_indexes
-	// Format: SELECT name, algo_table_type, index_table_name FROM mo_catalog.mo_indexes WHERE table_id = ?
-	querySQL := PublicationSQLBuilder.QueryMoIndexesSQL(0, tableID, "", "")
+	// Build SQL to query upstream mo_indexes using internal command
+	// Format: __++__internal_get_mo_indexes <tableId> <subscriptionAccountName> <publicationName> <snapshotName>
+	querySQL := PublicationSQLBuilder.QueryMoIndexesSQL(
+		tableID,
+		iterationCtx.SubscriptionAccountName,
+		iterationCtx.SubscriptionName,
+		iterationCtx.CurrentSnapshotName,
+	)
 
 	// Execute query
 	result, cancel, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true, time.Minute)

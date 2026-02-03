@@ -195,6 +195,24 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleGetDatabases(ses, execCtx, st); err != nil {
 			return
 		}
+	case *InternalCmdGetMoIndexes:
+		ses.EnterFPrint(FPInternalCmdGetMoIndexes)
+		defer ses.ExitFPrint(FPInternalCmdGetMoIndexes)
+		if err = handleGetMoIndexes(ses, execCtx, st); err != nil {
+			return
+		}
+	case *InternalCmdGetDdl:
+		ses.EnterFPrint(FPInternalCmdGetDdl)
+		defer ses.ExitFPrint(FPInternalCmdGetDdl)
+		if err = handleInternalGetDdl(ses, execCtx, st); err != nil {
+			return
+		}
+	case *InternalCmdGetObject:
+		ses.EnterFPrint(FPInternalCmdGetObject)
+		defer ses.ExitFPrint(FPInternalCmdGetObject)
+		if err = handleInternalGetObject(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.CreatePublication:
 		ses.EnterFPrint(FPCreatePublication)
 		defer ses.ExitFPrint(FPCreatePublication)
