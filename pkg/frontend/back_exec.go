@@ -815,7 +815,11 @@ type backSession struct {
 
 func newBackSession(ses FeSession, txnOp TxnOperator, db string, callBack outputCallBackFunc) *backSession {
 	service := ses.GetService()
-	txnHandler := InitTxnHandler(ses.GetService(), getPu(service).StorageEngine, ses.GetTxnHandler().GetConnCtx(), txnOp)
+	var connCtx context.Context
+	if ses.GetTxnHandler() != nil {
+		connCtx = ses.GetTxnHandler().GetConnCtx()
+	}
+	txnHandler := InitTxnHandler(ses.GetService(), getPu(service).StorageEngine, connCtx, txnOp)
 	backSes := &backSession{}
 	backSes.initFeSes(ses, txnHandler, db, callBack)
 	u, _ := util.FastUuid()
