@@ -403,6 +403,23 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 		return
 	}
 
+	if idx.Centroids == nil {
+		// sometimes user create index with empty data and lead to have single NIL centroid
+		// all entries will have centroid_id = 1. i.e. whole table scan
+		// In this case, build bloomfilter with unique join keys
+
+		ukeybf := bloomfilter.NewCBloomFilterWithProbability(int64(keyvec.Length()), bfProbability)
+		defer ukeybf.Free()
+		ukeybf.AddVector(keyvec)
+
+		ukeybfbytes, err := ukeybf.Marshal()
+		if err != nil {
+			return err
+		}
+		sqlproc.BloomFilter = ukeybfbytes
+		return nil
+	}
+
 	var bf *bloomfilter.CBloomFilter
 	defer func() {
 		if bf != nil {
