@@ -303,6 +303,22 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *sqlexec.SqlProcess, idxcfg vec
 	return nil
 }
 
+func (idx *IvfflatSearchIndex[T]) getCentroidsSum(centroids_ids []int64) uint64 {
+	total := uint64(0)
+
+	if idx.Meta.CenterStats == nil {
+		return total
+	}
+
+	for _, k := range centroids_ids {
+		cnt, ok := idx.Meta.CenterStats[k]
+		if ok {
+			total += uint64(cnt)
+		}
+	}
+	return total
+}
+
 // merge the small centroids
 func (idx *IvfflatSearchIndex[T]) findMergedCentroids(sqlproc *sqlexec.SqlProcess, centroids_ids []int64, idxcfg vectorindex.IndexConfig, probe uint) ([]int64, error) {
 	n := 0
@@ -408,14 +424,14 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 		return
 	}
 
-	if idx.Centroids == nil {
+	buildBloomFilterWithUniqueJoinKeys := func(vec *vector.Vector) error {
 		// sometimes user create index with empty data and lead to have single NIL centroid
 		// all entries will have centroid_id = 1. i.e. whole table scan
 		// In this case, build bloomfilter with unique join keys
 
-		ukeybf := bloomfilter.NewCBloomFilterWithProbability(int64(keyvec.Length()), bfProbability)
+		ukeybf := bloomfilter.NewCBloomFilterWithProbability(int64(vec.Length()), bfProbability)
 		defer ukeybf.Free()
-		ukeybf.AddVector(keyvec)
+		ukeybf.AddVector(vec)
 
 		ukeybfbytes, err := ukeybf.Marshal()
 		if err != nil {
@@ -423,6 +439,10 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 		}
 		sqlproc.BloomFilter = ukeybfbytes
 		return nil
+	}
+
+	if idx.Centroids == nil {
+		return buildBloomFilterWithUniqueJoinKeys(keyvec)
 	}
 
 	var bf *bloomfilter.CBloomFilter
@@ -433,6 +453,13 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 	}()
 
 	if len(idx.BloomFilters) == 0 {
+
+		sum := idx.getCentroidsSum(centroids_ids)
+		if uint64(keyvec.Length()) < sum {
+			// unique join keys size is smaller than entries in centroids
+			return buildBloomFilterWithUniqueJoinKeys(keyvec)
+		}
+
 		// get centroid ids on the fly
 		var instr string
 		for i, c := range centroids_ids {
