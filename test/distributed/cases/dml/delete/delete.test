@@ -103,6 +103,7 @@ drop table if exists t1;
 create table t1(a int primary key);
 delete from t1;
 select * from t1;
+select count(*) from t1;
 
 drop table if exists t1;
 create table t1 (a char(20));
@@ -207,18 +208,26 @@ insert into temp select * from generate_series(1,8192) g;
 create table t(a int);
 insert into t select * from temp;
 insert into t select * from t;
+select count(*) from t;
+
 begin;
 insert into t select * from t;
+select count(*) from t;
 delete from t where a > 1;
 select count(*) from t;
 rollback;
+
 select count(*) from t;
+
 begin;
 insert into t select * from t;
+select count(*) from t;
 delete from t where a > 1;
+select count(*) from t;
 delete from t where a = 1;
 select count(*) from t;
 commit;
+
 select count(*) from t;
 
 drop table if exists t2;
@@ -231,8 +240,20 @@ drop table if exists t7;
 create table t7(a int primary key, b int unique key, c varchar(20) unique key);
 insert into t7 select result, result, "a"||result from generate_series(1,20000) g;
 select count(*) from t7;
+
+delete from t7 where a <= 2000;
+select count(*) from t7;
+
+delete from t7 where a <= 10000;
+select count(*) from t7;
+
+delete from t7 where a <= 18000;
+select count(*) from t7;
+
 delete from t7;
 select count(*) from t7;
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(1\)",true)
+explain analyze select count(*) from t7;
 
 drop database if exists `delete`;
 
@@ -365,5 +386,6 @@ delete from repro_delete_error where a=1;
 select * from repro_delete_error;
 commit;
 select * from repro_delete_error;
+select count(*) from repro_delete_error;
 drop database if exists db1;
 drop database if exists db2;

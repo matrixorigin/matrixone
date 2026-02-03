@@ -241,7 +241,12 @@ func (matcher *OutputMatcher) DeepMatch(ctx context.Context, node *plan.Node, al
 		for _, projExpr := range node.ProjectList {
 			name := projExpr.GetCol().Name
 			if strings.Contains(name, "(") {
-				found = strings.HasPrefix(strings.ToLower(name), ref)
+				lower := strings.ToLower(name)
+				found = strings.HasPrefix(lower, ref)
+				// Plan rewrites COUNT(not_null_col) to starcount; PROJECT output name may still be "count(...)".
+				if !found && ref == "starcount" && strings.HasPrefix(lower, "count(") {
+					found = true
+				}
 			} else {
 				names := strings.Split(name, ".")
 				if len(names) != 2 {

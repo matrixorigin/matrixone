@@ -19,6 +19,15 @@ David! like David\_
 SELECT 'David_' LIKE 'David\_';
 David_ like David\_
 0
+SELECT '__++' LIKE '__++%';
+__++ like __++%
+1
+SELECT '__++__' LIKE '__\\+';
+__++__ like __+
+0
+SELECT '__++__' LIKE '__+';
+__++__ like __+
+0
 DROP TABLE IF EXISTS like_test;
 CREATE TABLE like_test(
 str1 VARCHAR(50)
