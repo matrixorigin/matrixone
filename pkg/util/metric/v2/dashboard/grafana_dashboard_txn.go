@@ -52,6 +52,8 @@ func (c *DashboardCreator) initTxnDashboard() error {
 			c.initTxnPKMayBeChangedRow(),
 			// Tombstone operations
 			c.initTxnTombstoneRow(),
+			// StarCount (SELECT COUNT(*) optimization)
+			c.initTxnStarcountRow(),
 			// Resource management
 			c.initTxnMpoolRow(),
 			c.initTxnExtraWorkspaceQuota(),
@@ -220,6 +222,60 @@ func (c *DashboardCreator) initTxnTombstoneRow() dashboard.Option {
 
 	return dashboard.Row(
 		"Tombstone Operations",
+		options...,
+	)
+}
+
+func (c *DashboardCreator) initTxnStarcountRow() dashboard.Option {
+	pathRate := c.getTimeSeries(
+		"StarCount Path Rate",
+		[]string{
+			fmt.Sprintf(`sum(rate(%s[$interval])) by (path)`, c.getMetricWithFilter("mo_txn_starcount_path_total", "")),
+		},
+		[]string{"path"},
+		timeseries.Span(4))
+
+	durationHistogram := c.getHistogram(
+		"StarCount Duration (总耗时)",
+		c.getMetricWithFilter(`mo_txn_starcount_duration_seconds_bucket`, ``),
+		[]float64{0.50, 0.8, 0.90, 0.99},
+		6,
+		axis.Unit("s"),
+		axis.Min(0))
+
+	resultRowsHistogram := c.getHistogram(
+		"StarCount Result Rows (总行数)",
+		c.getMetricWithFilter(`mo_txn_starcount_result_rows_bucket`, ``),
+		[]float64{0.50, 0.8, 0.90, 0.99},
+		6,
+		axis.Min(0))
+
+	estimateHistograms := c.getMultiHistogram(
+		[]string{
+			c.getMetricWithFilter(`mo_txn_starcount_estimate_tombstone_rows_bucket`, ``),
+			c.getMetricWithFilter(`mo_txn_starcount_estimate_tombstone_objects_bucket`, ``),
+		},
+		[]string{
+			"Estimated Tombstone Rows (Tombstone总行数, upper bound)",
+			"Estimated Tombstone Objects (Tombstone objects 数量)",
+		},
+		[]float64{0.50, 0.8, 0.90, 0.99},
+		[]float32{6, 6},
+		axis.Min(0))
+
+	// High ratio = estimate much larger than actual (e.g. 100x) = bad signal
+	ratioHistogram := c.getHistogram(
+		"Estimate / Actual Ratio (estimate 远大于 actual 时比值大)",
+		c.getMetricWithFilter(`mo_txn_starcount_estimate_over_actual_ratio_bucket`, ``),
+		[]float64{0.50, 0.8, 0.90, 0.99},
+		6,
+		axis.Min(1))
+
+	options := []row.Option{pathRate, durationHistogram, resultRowsHistogram, ratioHistogram}
+	options = append(options, estimateHistograms...)
+
+	return dashboard.Row(
+		"StarCount (SELECT COUNT(*) Optimization)",
 		options...,
 	)
 }

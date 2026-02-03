@@ -1002,6 +1002,17 @@ type Relation interface {
 
 	CollectTombstones(ctx context.Context, txnOffset int, policy TombstoneCollectPolicy) (Tombstoner, error)
 
+	// StarCount returns the total number of visible rows at the current transaction snapshot.
+	// Optimized for COUNT(*) queries by using metadata (total rows - deleted rows)
+	// instead of scanning data blocks.
+	StarCount(ctx context.Context) (uint64, error)
+
+	// EstimateCommittedTombstoneCount returns an estimated count of committed tombstone rows.
+	// This is very lightweight (only reads metadata, no S3 I/O) and can be used to decide
+	// whether to use StarCount optimization.
+	// Returns an upper bound estimate (includes duplicates and invisible data object references).
+	EstimateCommittedTombstoneCount(ctx context.Context) (int, error)
+
 	CollectChanges(ctx context.Context, from, to types.TS, skipDeletes bool, mp *mpool.MPool) (ChangesHandle, error)
 
 	TableDefs(context.Context) ([]TableDef, error)
