@@ -29,51 +29,6 @@ const (
 	PublicationCreateSnapshotForTableSqlTemplate    = `CREATE SNAPSHOT%s %s FOR TABLE %s %s FROM %s PUBLICATION %s`
 
 	// Query mo_catalog tables SQL templates
-	PublicationQueryMoTablesSqlTemplate = `SELECT ` +
-		`rel_id, ` +
-		`relname, ` +
-		`reldatabase_id, ` +
-		`reldatabase, ` +
-		`rel_createsql, ` +
-		`account_id ` +
-		`FROM mo_catalog.mo_tables ` +
-		`WHERE 1=1%s`
-
-	PublicationQueryMoDatabasesSqlTemplate = `SELECT ` +
-		`dat_id, ` +
-		`datname, ` +
-		`dat_createsql, ` +
-		`account_id ` +
-		`FROM mo_catalog.mo_database%s ` +
-		`WHERE 1=1%s`
-
-	PublicationQueryMoColumnsSqlTemplate = `SELECT ` +
-		`account_id, ` +
-		`att_database_id, ` +
-		`att_database, ` +
-		`att_relname_id, ` +
-		`att_relname, ` +
-		`attname, ` +
-		`atttyp, ` +
-		`attnum, ` +
-		`att_length, ` +
-		`attnotnull, ` +
-		`atthasdef, ` +
-		`att_default, ` +
-		`attisdropped, ` +
-		`att_constraint_type, ` +
-		`att_is_unsigned, ` +
-		`att_is_auto_increment, ` +
-		`att_comment, ` +
-		`att_is_hidden, ` +
-		`att_has_update, ` +
-		`att_update, ` +
-		`att_has_cluster_by, ` +
-		`att_cluster_by, ` +
-		`att_seqnum, ` +
-		`att_enum_values ` +
-		`FROM mo_catalog.mo_columns ` +
-		`WHERE 1=1%s`
 
 	PublicationQueryMoIndexesSqlTemplate = `SELECT ` +
 		`table_id, ` +
@@ -93,7 +48,6 @@ const (
 	PublicationGetDdlSqlTemplate = `GETDDL%s%s`
 
 	// Drop snapshot SQL templates
-	PublicationDropSnapshotSqlTemplate         = `DROP SNAPSHOT %s`
 	PublicationDropSnapshotIfExistsSqlTemplate = `DROP SNAPSHOT IF EXISTS %s`
 
 	// Query mo_ccpr_log SQL template
@@ -180,14 +134,10 @@ const (
 	PublicationCreateSnapshotForAccountSqlTemplate_Idx = iota
 	PublicationCreateSnapshotForDatabaseSqlTemplate_Idx
 	PublicationCreateSnapshotForTableSqlTemplate_Idx
-	PublicationQueryMoTablesSqlTemplate_Idx
-	PublicationQueryMoDatabasesSqlTemplate_Idx
-	PublicationQueryMoColumnsSqlTemplate_Idx
 	PublicationQueryMoIndexesSqlTemplate_Idx
 	PublicationObjectListSqlTemplate_Idx
 	PublicationGetObjectSqlTemplate_Idx
 	PublicationGetDdlSqlTemplate_Idx
-	PublicationDropSnapshotSqlTemplate_Idx
 	PublicationDropSnapshotIfExistsSqlTemplate_Idx
 	PublicationQueryMoCcprLogSqlTemplate_Idx
 	PublicationQueryMoCcprLogFullSqlTemplate_Idx
@@ -217,55 +167,6 @@ var PublicationSQLTemplates = [PublicationSqlTemplateCount]struct {
 	PublicationCreateSnapshotForTableSqlTemplate_Idx: {
 		SQL: PublicationCreateSnapshotForTableSqlTemplate,
 	},
-	PublicationQueryMoTablesSqlTemplate_Idx: {
-		SQL: PublicationQueryMoTablesSqlTemplate,
-		OutputAttrs: []string{
-			"rel_id",
-			"relname",
-			"reldatabase_id",
-			"reldatabase",
-			"rel_createsql",
-			"account_id",
-		},
-	},
-	PublicationQueryMoDatabasesSqlTemplate_Idx: {
-		SQL: PublicationQueryMoDatabasesSqlTemplate,
-		OutputAttrs: []string{
-			"dat_id",
-			"datname",
-			"dat_createsql",
-			"account_id",
-		},
-	},
-	PublicationQueryMoColumnsSqlTemplate_Idx: {
-		SQL: PublicationQueryMoColumnsSqlTemplate,
-		OutputAttrs: []string{
-			"account_id",
-			"att_database_id",
-			"att_database",
-			"att_relname_id",
-			"att_relname",
-			"attname",
-			"atttyp",
-			"attnum",
-			"att_length",
-			"attnotnull",
-			"atthasdef",
-			"att_default",
-			"attisdropped",
-			"att_constraint_type",
-			"att_is_unsigned",
-			"att_is_auto_increment",
-			"att_comment",
-			"att_is_hidden",
-			"att_has_update",
-			"att_update",
-			"att_has_cluster_by",
-			"att_cluster_by",
-			"att_seqnum",
-			"att_enum_values",
-		},
-	},
 	PublicationQueryMoIndexesSqlTemplate_Idx: {
 		SQL: PublicationQueryMoIndexesSqlTemplate,
 		OutputAttrs: []string{
@@ -283,9 +184,6 @@ var PublicationSQLTemplates = [PublicationSqlTemplateCount]struct {
 	},
 	PublicationGetDdlSqlTemplate_Idx: {
 		SQL: PublicationGetDdlSqlTemplate,
-	},
-	PublicationDropSnapshotSqlTemplate_Idx: {
-		SQL: PublicationDropSnapshotSqlTemplate,
 	},
 	PublicationDropSnapshotIfExistsSqlTemplate_Idx: {
 		SQL: PublicationDropSnapshotIfExistsSqlTemplate,
@@ -448,38 +346,6 @@ func (b publicationSQLBuilder) DropSnapshotIfExistsSQL(
 // ------------------------------------------------------------------------------------------------
 // Query mo_catalog tables SQL
 // ------------------------------------------------------------------------------------------------
-
-// QueryMoDatabasesSQL creates SQL for querying mo_databases
-// Supports filtering by db_name and snapshot
-func (b publicationSQLBuilder) QueryMoDatabasesSQL(
-	accountID uint32,
-	dbName string,
-	snapshotName string,
-) string {
-	var conditions []string
-
-	if accountID > 0 {
-		conditions = append(conditions, fmt.Sprintf(" AND account_id = %d", accountID))
-	}
-
-	if dbName != "" {
-		conditions = append(conditions, fmt.Sprintf(" AND datname = '%s'", escapeSQLString(dbName)))
-	}
-
-	whereClause := strings.Join(conditions, "")
-
-	// Add snapshot clause if provided
-	var snapshotClause string
-	if snapshotName != "" {
-		snapshotClause = fmt.Sprintf("{SNAPSHOT = '%s'}", escapeSQLString(snapshotName))
-	}
-
-	return fmt.Sprintf(
-		PublicationSQLTemplates[PublicationQueryMoDatabasesSqlTemplate_Idx].SQL,
-		snapshotClause,
-		whereClause,
-	)
-}
 
 // QueryMoIndexesSQL creates SQL for querying mo_indexes
 // Note: mo_indexes table does not have account_id field

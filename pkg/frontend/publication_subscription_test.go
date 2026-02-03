@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/publication"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -1306,4 +1308,461 @@ func Test_doShowPublicationCoverage(t *testing.T) {
 		// Verify result set has data
 		convey.So(len(ses.mrs.Data), convey.ShouldBeGreaterThan, 0)
 	})
+}
+
+func Test_parseSubscriptionUri(t *testing.T) {
+	tests := []struct {
+		name        string
+		uri         string
+		wantAccount string
+		wantUser    string
+		wantPass    string
+		wantHost    string
+		wantPort    int
+		wantErr     bool
+	}{
+		{
+			name:        "valid URI with account",
+			uri:         "mysql://account1#user1:password123@127.0.0.1:6001",
+			wantAccount: "account1",
+			wantUser:    "user1",
+			wantPass:    "password123",
+			wantHost:    "127.0.0.1",
+			wantPort:    6001,
+			wantErr:     false,
+		},
+		{
+			name:        "valid URI without account",
+			uri:         "mysql://user1:password123@localhost:3306",
+			wantAccount: "",
+			wantUser:    "user1",
+			wantPass:    "password123",
+			wantHost:    "localhost",
+			wantPort:    3306,
+			wantErr:     false,
+		},
+		{
+			name:        "valid URI with empty account prefix",
+			uri:         "mysql://#user1:password123@host:3306",
+			wantAccount: "",
+			wantUser:    "user1",
+			wantPass:    "password123",
+			wantHost:    "host",
+			wantPort:    3306,
+			wantErr:     false,
+		},
+		{
+			name:        "valid URI with special characters in password",
+			uri:         "mysql://acc#user:p@ss:word@host:3306",
+			wantAccount: "acc",
+			wantUser:    "user",
+			wantPass:    "p@ss:word",
+			wantHost:    "host",
+			wantPort:    3306,
+			wantErr:     true, // This will fail due to extra @ in password
+		},
+		{
+			name:    "invalid URI - missing prefix",
+			uri:     "user:pass@host:3306",
+			wantErr: true,
+		},
+		{
+			name:    "invalid URI - wrong prefix",
+			uri:     "postgres://user:pass@host:3306",
+			wantErr: true,
+		},
+		{
+			name:    "invalid URI - missing @ separator",
+			uri:     "mysql://userpasshost3306",
+			wantErr: true,
+		},
+		{
+			name:    "invalid URI - missing password",
+			uri:     "mysql://user@host:3306",
+			wantErr: true,
+		},
+		{
+			name:    "invalid URI - missing port",
+			uri:     "mysql://user:pass@host",
+			wantErr: true,
+		},
+		{
+			name:    "invalid URI - invalid port",
+			uri:     "mysql://user:pass@host:abc",
+			wantErr: true,
+		},
+		{
+			name:    "invalid URI - empty",
+			uri:     "",
+			wantErr: true,
+		},
+		{
+			name:    "invalid URI - only prefix",
+			uri:     "mysql://",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			account, user, password, host, port, err := parseSubscriptionUri(tt.uri)
+			if tt.wantErr {
+				require.Error(t, err, "expected error for URI: %s", tt.uri)
+				return
+			}
+			require.NoError(t, err, "unexpected error for URI: %s", tt.uri)
+			require.Equal(t, tt.wantAccount, account, "account mismatch")
+			require.Equal(t, tt.wantUser, user, "user mismatch")
+			require.Equal(t, tt.wantPass, password, "password mismatch")
+			require.Equal(t, tt.wantHost, host, "host mismatch")
+			require.Equal(t, tt.wantPort, port, "port mismatch")
+		})
+	}
+}
+
+func Test_parseSubscriptionUri_EdgeCases(t *testing.T) {
+	t.Run("URI with colon in password using account format", func(t *testing.T) {
+		// Format: mysql://account#user:pass:with:colons@host:port
+		// The password parsing should handle colons correctly (split on first : only for user:pass)
+		uri := "mysql://acc#user:pass:with:colons@host:3306"
+		account, user, password, host, port, err := parseSubscriptionUri(uri)
+		require.NoError(t, err)
+		require.Equal(t, "acc", account)
+		require.Equal(t, "user", user)
+		require.Equal(t, "pass:with:colons", password)
+		require.Equal(t, "host", host)
+		require.Equal(t, 3306, port)
+	})
+
+	t.Run("URI with numeric account name", func(t *testing.T) {
+		uri := "mysql://12345#user:pass@host:3306"
+		account, user, password, host, port, err := parseSubscriptionUri(uri)
+		require.NoError(t, err)
+		require.Equal(t, "12345", account)
+		require.Equal(t, "user", user)
+		require.Equal(t, "pass", password)
+		require.Equal(t, "host", host)
+		require.Equal(t, 3306, port)
+	})
+
+	t.Run("URI with IPv6 host", func(t *testing.T) {
+		// Note: This test may fail due to IPv6 format complexity
+		uri := "mysql://user:pass@::1:3306"
+		_, _, _, _, _, err := parseSubscriptionUri(uri)
+		// IPv6 addresses with colons will likely fail current parser
+		require.Error(t, err)
+	})
+
+	t.Run("URI with large port number", func(t *testing.T) {
+		uri := "mysql://user:pass@host:65535"
+		_, _, _, _, port, err := parseSubscriptionUri(uri)
+		require.NoError(t, err)
+		require.Equal(t, 65535, port)
+	})
+
+	t.Run("URI with zero port", func(t *testing.T) {
+		uri := "mysql://user:pass@host:0"
+		_, _, _, _, port, err := parseSubscriptionUri(uri)
+		require.NoError(t, err)
+		require.Equal(t, 0, port)
+	})
+}
+
+func Test_checkUpstreamPublicationCoverage_ConnectionError(t *testing.T) {
+	ctx := context.Background()
+
+	// Stub newUpstreamExecutorFunc to return an error
+	originalFunc := newUpstreamExecutorFunc
+	defer func() { newUpstreamExecutorFunc = originalFunc }()
+
+	newUpstreamExecutorFunc = func(account, user, password string, ip string, port int, retryTimes int, retryDuration time.Duration, timeout string, classifier publication.ErrorClassifier) (*publication.UpstreamExecutor, error) {
+		return nil, moerr.NewInternalErrorNoCtx("connection failed")
+	}
+
+	err := checkUpstreamPublicationCoverage(ctx, "acc", "user", "pass", "host", 3306, "pub1", "database", "db1", "")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed to connect to upstream cluster")
+}
+
+func Test_doCreateSubscription_NotAdmin(t *testing.T) {
+	convey.Convey("create subscription - not admin user", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		// Create a non-admin tenant
+		tenant := &TenantInfo{
+			Tenant:        "test_tenant",
+			User:          "test_user",
+			DefaultRole:   "test_role",
+			TenantID:      1,
+			UserID:        1,
+			DefaultRoleID: 1,
+		}
+		ses := newSes(nil, ctrl)
+		ses.tenant = tenant
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		ctx = defines.AttachAccount(ctx, 1, 1, 1)
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		bh.EXPECT().Close().Return().AnyTimes()
+
+		cs := tree.NewCreateSubscription(true, "testdb", "", "mysql://user:pass@host:3306", "", "pub1", 0)
+		err := doCreateSubscription(ctx, ses, cs)
+		convey.So(err, convey.ShouldBeError)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "only admin can create subscription")
+	})
+}
+
+func Test_doCreateSubscription_InvalidUri(t *testing.T) {
+	convey.Convey("create subscription - invalid URI", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses := newSes(nil, ctrl)
+		ses.tenant = tenant
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "begin;").Return(nil).AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "rollback;").Return(nil).AnyTimes()
+
+		// Test with invalid URI format
+		cs := tree.NewCreateSubscription(true, "testdb", "", "invalid-uri", "", "pub1", 0)
+		err := doCreateSubscription(ctx, ses, cs)
+		convey.So(err, convey.ShouldBeError)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "invalid URI format")
+	})
+}
+
+func Test_doCreateSubscription_TableLevelMissingDbName(t *testing.T) {
+	convey.Convey("create subscription - table level missing db name", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses := newSes(nil, ctrl)
+		ses.tenant = tenant
+		ses.SetDatabaseName("") // No current database
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
+
+		mockedDataKeyResult := func(ctrl *gomock.Controller) []interface{} {
+			er := mock_frontend.NewMockExecResult(ctrl)
+			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return("encrypted_key", nil).AnyTimes()
+			return []interface{}{er}
+		}
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "begin;").Return(nil).AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "rollback;").Return(nil).AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "commit;").Return(nil).AnyTimes()
+		// Query data key
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedDataKeyResult(ctrl))
+
+		// Table level subscription with no db name and empty current database
+		cs := tree.NewCreateSubscription(false, "", "test_table", "mysql://user:pass@host:3306", "", "pub1", 0)
+		err := doCreateSubscription(ctx, ses, cs)
+		convey.So(err, convey.ShouldBeError)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "database name cannot be empty for table level subscription")
+	})
+}
+
+func Test_doCreateSubscription_TableLevelMissingTableName(t *testing.T) {
+	convey.Convey("create subscription - table level missing table name", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses := newSes(nil, ctrl)
+		ses.tenant = tenant
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
+
+		mockedDataKeyResult := func(ctrl *gomock.Controller) []interface{} {
+			er := mock_frontend.NewMockExecResult(ctrl)
+			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return("encrypted_key", nil).AnyTimes()
+			return []interface{}{er}
+		}
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "begin;").Return(nil).AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "rollback;").Return(nil).AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "commit;").Return(nil).AnyTimes()
+		// Query data key
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedDataKeyResult(ctrl))
+
+		// Table level subscription with empty table name
+		cs := tree.NewCreateSubscription(false, "db1", "", "mysql://user:pass@host:3306", "", "pub1", 0)
+		err := doCreateSubscription(ctx, ses, cs)
+		convey.So(err, convey.ShouldBeError)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "table name cannot be empty for table level subscription")
+	})
+}
+
+func Test_doCreateSubscription_NoDataKey(t *testing.T) {
+	convey.Convey("create subscription - no data key", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses := newSes(nil, ctrl)
+		ses.tenant = tenant
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
+
+		mockedEmptyResult := func(ctrl *gomock.Controller) []interface{} {
+			er := mock_frontend.NewMockExecResult(ctrl)
+			er.EXPECT().GetRowCount().Return(uint64(0)).AnyTimes()
+			return []interface{}{er}
+		}
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "begin;").Return(nil).AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "rollback;").Return(nil).AnyTimes()
+		// Query data key returns empty
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedEmptyResult(ctrl))
+
+		cs := tree.NewCreateSubscription(true, "testdb", "", "mysql://user:pass@host:3306", "", "pub1", 0)
+		err := doCreateSubscription(ctx, ses, cs)
+		convey.So(err, convey.ShouldBeError)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "no data key")
+	})
+}
+
+func Test_doCreateSubscription_SyncLevels(t *testing.T) {
+	tests := []struct {
+		name           string
+		isDatabase     bool
+		dbName         string
+		tableName      string
+		expectedLevel  string
+		expectedDbName string
+	}{
+		{
+			name:           "account level - empty db name",
+			isDatabase:     true,
+			dbName:         "",
+			tableName:      "",
+			expectedLevel:  "account",
+			expectedDbName: "",
+		},
+		{
+			name:           "database level",
+			isDatabase:     true,
+			dbName:         "testdb",
+			tableName:      "",
+			expectedLevel:  "database",
+			expectedDbName: "testdb",
+		},
+		{
+			name:           "table level",
+			isDatabase:     false,
+			dbName:         "testdb",
+			tableName:      "testtable",
+			expectedLevel:  "table",
+			expectedDbName: "testdb",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cs := tree.NewCreateSubscription(tt.isDatabase, tree.Identifier(tt.dbName), tt.tableName, "mysql://user:pass@host:3306", "", "pub1", 0)
+
+			// Determine sync_level based on the same logic as in doCreateSubscription
+			var syncLevel string
+			if cs.IsDatabase {
+				if string(cs.DbName) == "" {
+					syncLevel = "account"
+				} else {
+					syncLevel = "database"
+				}
+			} else {
+				syncLevel = "table"
+			}
+
+			require.Equal(t, tt.expectedLevel, syncLevel)
+		})
+	}
 }

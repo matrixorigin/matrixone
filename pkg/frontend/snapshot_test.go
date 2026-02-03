@@ -278,3 +278,748 @@ func Test_dropExistsAccount_InRestoreTransaction(t *testing.T) {
 		convey.So(bh.hasExecuted("begin;"), convey.ShouldBeFalse)
 	})
 }
+
+// newMrsForSnapshotTs creates a MysqlResultSet for snapshot ts query
+func newMrsForSnapshotTs(ts int64) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("ts")
+	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	mrs.AddColumn(col1)
+
+	if ts >= 0 {
+		mrs.AddRow([]interface{}{ts})
+	}
+
+	return mrs
+}
+
+// newMrsForDatabaseNames creates a MysqlResultSet for database names query
+func newMrsForDatabaseNames(dbNames []string) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("datname")
+	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col1)
+
+	for _, dbName := range dbNames {
+		mrs.AddRow([]interface{}{dbName})
+	}
+
+	return mrs
+}
+
+// newMrsForPublicationInfo creates a MysqlResultSet for publication info query
+func newMrsForPublicationInfo(accountID uint64, accountName, pubName, dbName string, dbID uint64, tableList, accountList string) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("account_id")
+	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	mrs.AddColumn(col1)
+
+	col2 := &MysqlColumn{}
+	col2.SetName("account_name")
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col2)
+
+	col3 := &MysqlColumn{}
+	col3.SetName("pub_name")
+	col3.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col3)
+
+	col4 := &MysqlColumn{}
+	col4.SetName("database_name")
+	col4.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col4)
+
+	col5 := &MysqlColumn{}
+	col5.SetName("database_id")
+	col5.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	mrs.AddColumn(col5)
+
+	col6 := &MysqlColumn{}
+	col6.SetName("table_list")
+	col6.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col6)
+
+	col7 := &MysqlColumn{}
+	col7.SetName("account_list")
+	col7.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col7)
+
+	mrs.AddRow([]interface{}{accountID, accountName, pubName, dbName, dbID, tableList, accountList})
+
+	return mrs
+}
+
+// newMrsEmpty creates an empty MysqlResultSet
+func newMrsEmpty() *MysqlResultSet {
+	return &MysqlResultSet{}
+}
+
+func Test_handleGetSnapshotTs(t *testing.T) {
+	convey.Convey("handleGetSnapshotTs success case", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        "test_tenant",
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      1,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+		ses.mrs = &MysqlResultSet{}
+
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(1))
+
+		// Setup mock result for publication info query (permission check)
+		// account_list contains "test_tenant" so permission check should pass
+		pubQuerySQL := fmt.Sprintf(`SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			FROM mo_catalog.mo_pubs 
+			WHERE account_name = '%s' AND pub_name = '%s'`, "pub_account", "test_pub")
+		bh.sql2result[pubQuerySQL] = newMrsForPublicationInfo(
+			uint64(100), "pub_account", "test_pub", "test_db", uint64(1), "*", "test_tenant,all",
+		)
+
+		// Setup mock result for snapshot ts query
+		snapshotTsSQL := fmt.Sprintf("SELECT ts FROM mo_catalog.mo_snapshots WHERE sname = '%s'", "test_snapshot")
+		bh.sql2result[snapshotTsSQL] = newMrsForSnapshotTs(int64(1234567890))
+
+		ic := &InternalCmdGetSnapshotTs{
+			snapshotName:    "test_snapshot",
+			accountName:     "pub_account",
+			publicationName: "test_pub",
+		}
+
+		execCtx := &ExecCtx{
+			reqCtx: ctx,
+			ses:    ses,
+		}
+
+		err := handleGetSnapshotTs(ses, execCtx, ic)
+		convey.So(err, convey.ShouldBeNil)
+
+		// Verify result set contains the snapshot ts
+		mrs := ses.GetMysqlResultSet()
+		convey.So(mrs.GetColumnCount(), convey.ShouldEqual, 1)
+		convey.So(mrs.GetRowCount(), convey.ShouldEqual, 1)
+	})
+
+	convey.Convey("handleGetSnapshotTs snapshot not found", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        "test_tenant",
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      1,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+		ses.mrs = &MysqlResultSet{}
+
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(1))
+
+		// Setup mock result for publication info query
+		pubQuerySQL := fmt.Sprintf(`SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			FROM mo_catalog.mo_pubs 
+			WHERE account_name = '%s' AND pub_name = '%s'`, "pub_account", "test_pub")
+		bh.sql2result[pubQuerySQL] = newMrsForPublicationInfo(
+			uint64(100), "pub_account", "test_pub", "test_db", uint64(1), "*", "test_tenant,all",
+		)
+
+		// Setup mock result for snapshot ts query - empty result (snapshot not found)
+		snapshotTsSQL := fmt.Sprintf("SELECT ts FROM mo_catalog.mo_snapshots WHERE sname = '%s'", "nonexistent_snapshot")
+		bh.sql2result[snapshotTsSQL] = newMrsEmpty()
+
+		ic := &InternalCmdGetSnapshotTs{
+			snapshotName:    "nonexistent_snapshot",
+			accountName:     "pub_account",
+			publicationName: "test_pub",
+		}
+
+		execCtx := &ExecCtx{
+			reqCtx: ctx,
+			ses:    ses,
+		}
+
+		err := handleGetSnapshotTs(ses, execCtx, ic)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "does not exist")
+	})
+
+	convey.Convey("handleGetSnapshotTs publication permission denied", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        "unauthorized_tenant",
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      1,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+		ses.mrs = &MysqlResultSet{}
+
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(1))
+
+		// Setup mock result for publication info query
+		// account_list does NOT contain "unauthorized_tenant" so permission check should fail
+		pubQuerySQL := fmt.Sprintf(`SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			FROM mo_catalog.mo_pubs 
+			WHERE account_name = '%s' AND pub_name = '%s'`, "pub_account", "test_pub")
+		bh.sql2result[pubQuerySQL] = newMrsForPublicationInfo(
+			uint64(100), "pub_account", "test_pub", "test_db", uint64(1), "*", "other_tenant",
+		)
+
+		ic := &InternalCmdGetSnapshotTs{
+			snapshotName:    "test_snapshot",
+			accountName:     "pub_account",
+			publicationName: "test_pub",
+		}
+
+		execCtx := &ExecCtx{
+			reqCtx: ctx,
+			ses:    ses,
+		}
+
+		err := handleGetSnapshotTs(ses, execCtx, ic)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "does not have permission")
+	})
+
+	convey.Convey("handleGetSnapshotTs publication not found", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        "test_tenant",
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      1,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+		ses.mrs = &MysqlResultSet{}
+
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(1))
+
+		// Setup mock result for publication info query - empty result (publication not found)
+		pubQuerySQL := fmt.Sprintf(`SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			FROM mo_catalog.mo_pubs 
+			WHERE account_name = '%s' AND pub_name = '%s'`, "pub_account", "nonexistent_pub")
+		bh.sql2result[pubQuerySQL] = newMrsEmpty()
+
+		ic := &InternalCmdGetSnapshotTs{
+			snapshotName:    "test_snapshot",
+			accountName:     "pub_account",
+			publicationName: "nonexistent_pub",
+		}
+
+		execCtx := &ExecCtx{
+			reqCtx: ctx,
+			ses:    ses,
+		}
+
+		err := handleGetSnapshotTs(ses, execCtx, ic)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "does not exist")
+	})
+}
+
+func Test_handleGetDatabases(t *testing.T) {
+	convey.Convey("handleGetDatabases success case", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        "test_tenant",
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      1,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+		ses.mrs = &MysqlResultSet{}
+
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(1))
+
+		// Setup mock result for publication info query (permission check)
+		pubQuerySQL := fmt.Sprintf(`SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			FROM mo_catalog.mo_pubs 
+			WHERE account_name = '%s' AND pub_name = '%s'`, "pub_account", "test_pub")
+		bh.sql2result[pubQuerySQL] = newMrsForPublicationInfo(
+			uint64(100), "pub_account", "test_pub", "test_db", uint64(1), "*", "test_tenant,all",
+		)
+
+		// Setup mock result for snapshot ts query
+		snapshotTsSQL := fmt.Sprintf("SELECT ts FROM mo_catalog.mo_snapshots WHERE sname = '%s'", "test_snapshot")
+		bh.sql2result[snapshotTsSQL] = newMrsForSnapshotTs(int64(1234567890))
+
+		// Setup mock result for database names query
+		dbSQL := fmt.Sprintf("SELECT datname FROM mo_catalog.mo_database{MO_TS = %d} WHERE account_id = %d", int64(1234567890), 100)
+		bh.sql2result[dbSQL] = newMrsForDatabaseNames([]string{"db1", "db2", "db3"})
+
+		ic := &InternalCmdGetDatabases{
+			snapshotName:    "test_snapshot",
+			accountName:     "pub_account",
+			publicationName: "test_pub",
+		}
+
+		execCtx := &ExecCtx{
+			reqCtx: ctx,
+			ses:    ses,
+		}
+
+		err := handleGetDatabases(ses, execCtx, ic)
+		convey.So(err, convey.ShouldBeNil)
+
+		// Verify result set contains the database names
+		mrs := ses.GetMysqlResultSet()
+		convey.So(mrs.GetColumnCount(), convey.ShouldEqual, 1)
+		convey.So(mrs.GetRowCount(), convey.ShouldEqual, 3)
+	})
+
+	convey.Convey("handleGetDatabases snapshot not found", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        "test_tenant",
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      1,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+		ses.mrs = &MysqlResultSet{}
+
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(1))
+
+		// Setup mock result for publication info query
+		pubQuerySQL := fmt.Sprintf(`SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			FROM mo_catalog.mo_pubs 
+			WHERE account_name = '%s' AND pub_name = '%s'`, "pub_account", "test_pub")
+		bh.sql2result[pubQuerySQL] = newMrsForPublicationInfo(
+			uint64(100), "pub_account", "test_pub", "test_db", uint64(1), "*", "test_tenant,all",
+		)
+
+		// Setup mock result for snapshot ts query - empty result (snapshot not found)
+		snapshotTsSQL := fmt.Sprintf("SELECT ts FROM mo_catalog.mo_snapshots WHERE sname = '%s'", "nonexistent_snapshot")
+		bh.sql2result[snapshotTsSQL] = newMrsEmpty()
+
+		ic := &InternalCmdGetDatabases{
+			snapshotName:    "nonexistent_snapshot",
+			accountName:     "pub_account",
+			publicationName: "test_pub",
+		}
+
+		execCtx := &ExecCtx{
+			reqCtx: ctx,
+			ses:    ses,
+		}
+
+		err := handleGetDatabases(ses, execCtx, ic)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "does not exist")
+	})
+
+	convey.Convey("handleGetDatabases permission denied", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        "unauthorized_tenant",
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      1,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+		ses.mrs = &MysqlResultSet{}
+
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(1))
+
+		// Setup mock result for publication info query
+		// account_list does NOT contain "unauthorized_tenant"
+		pubQuerySQL := fmt.Sprintf(`SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			FROM mo_catalog.mo_pubs 
+			WHERE account_name = '%s' AND pub_name = '%s'`, "pub_account", "test_pub")
+		bh.sql2result[pubQuerySQL] = newMrsForPublicationInfo(
+			uint64(100), "pub_account", "test_pub", "test_db", uint64(1), "*", "other_tenant",
+		)
+
+		ic := &InternalCmdGetDatabases{
+			snapshotName:    "test_snapshot",
+			accountName:     "pub_account",
+			publicationName: "test_pub",
+		}
+
+		execCtx := &ExecCtx{
+			reqCtx: ctx,
+			ses:    ses,
+		}
+
+		err := handleGetDatabases(ses, execCtx, ic)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "does not have permission")
+	})
+
+	convey.Convey("handleGetDatabases empty database list", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        "test_tenant",
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      1,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+		ses.mrs = &MysqlResultSet{}
+
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(1))
+
+		// Setup mock result for publication info query
+		pubQuerySQL := fmt.Sprintf(`SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			FROM mo_catalog.mo_pubs 
+			WHERE account_name = '%s' AND pub_name = '%s'`, "pub_account", "test_pub")
+		bh.sql2result[pubQuerySQL] = newMrsForPublicationInfo(
+			uint64(100), "pub_account", "test_pub", "test_db", uint64(1), "*", "test_tenant,all",
+		)
+
+		// Setup mock result for snapshot ts query
+		snapshotTsSQL := fmt.Sprintf("SELECT ts FROM mo_catalog.mo_snapshots WHERE sname = '%s'", "test_snapshot")
+		bh.sql2result[snapshotTsSQL] = newMrsForSnapshotTs(int64(1234567890))
+
+		// Setup mock result for database names query - empty result
+		dbSQL := fmt.Sprintf("SELECT datname FROM mo_catalog.mo_database{MO_TS = %d} WHERE account_id = %d", int64(1234567890), 100)
+		bh.sql2result[dbSQL] = newMrsForDatabaseNames([]string{})
+
+		ic := &InternalCmdGetDatabases{
+			snapshotName:    "test_snapshot",
+			accountName:     "pub_account",
+			publicationName: "test_pub",
+		}
+
+		execCtx := &ExecCtx{
+			reqCtx: ctx,
+			ses:    ses,
+		}
+
+		err := handleGetDatabases(ses, execCtx, ic)
+		convey.So(err, convey.ShouldBeNil)
+
+		// Verify result set is empty but has correct column
+		mrs := ses.GetMysqlResultSet()
+		convey.So(mrs.GetColumnCount(), convey.ShouldEqual, 1)
+		convey.So(mrs.GetRowCount(), convey.ShouldEqual, 0)
+	})
+
+	convey.Convey("handleGetDatabases publication not found", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        "test_tenant",
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      1,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+		ses.mrs = &MysqlResultSet{}
+
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(1))
+
+		// Setup mock result for publication info query - empty result
+		pubQuerySQL := fmt.Sprintf(`SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			FROM mo_catalog.mo_pubs 
+			WHERE account_name = '%s' AND pub_name = '%s'`, "pub_account", "nonexistent_pub")
+		bh.sql2result[pubQuerySQL] = newMrsEmpty()
+
+		ic := &InternalCmdGetDatabases{
+			snapshotName:    "test_snapshot",
+			accountName:     "pub_account",
+			publicationName: "nonexistent_pub",
+		}
+
+		execCtx := &ExecCtx{
+			reqCtx: ctx,
+			ses:    ses,
+		}
+
+		err := handleGetDatabases(ses, execCtx, ic)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "does not exist")
+	})
+}
+
+func Test_getAccountFromPublication(t *testing.T) {
+	convey.Convey("getAccountFromPublication success case", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(1))
+
+		// Setup mock result for publication info query
+		pubQuerySQL := fmt.Sprintf(`SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			FROM mo_catalog.mo_pubs 
+			WHERE account_name = '%s' AND pub_name = '%s'`, "pub_account", "test_pub")
+		bh.sql2result[pubQuerySQL] = newMrsForPublicationInfo(
+			uint64(100), "pub_account", "test_pub", "test_db", uint64(1), "*", "test_tenant,all",
+		)
+
+		accountID, accountName, err := getAccountFromPublication(ctx, bh, "pub_account", "test_pub", "test_tenant")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(accountID, convey.ShouldEqual, uint64(100))
+		convey.So(accountName, convey.ShouldEqual, "pub_account")
+	})
+
+	convey.Convey("getAccountFromPublication publication not found", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(1))
+
+		// Setup mock result for publication info query - empty result
+		pubQuerySQL := fmt.Sprintf(`SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			FROM mo_catalog.mo_pubs 
+			WHERE account_name = '%s' AND pub_name = '%s'`, "pub_account", "nonexistent_pub")
+		bh.sql2result[pubQuerySQL] = newMrsEmpty()
+
+		_, _, err := getAccountFromPublication(ctx, bh, "pub_account", "nonexistent_pub", "test_tenant")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "does not exist")
+	})
+
+	convey.Convey("getAccountFromPublication permission denied", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(1))
+
+		// Setup mock result for publication info query
+		// account_list does NOT contain "unauthorized_tenant"
+		pubQuerySQL := fmt.Sprintf(`SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			FROM mo_catalog.mo_pubs 
+			WHERE account_name = '%s' AND pub_name = '%s'`, "pub_account", "test_pub")
+		bh.sql2result[pubQuerySQL] = newMrsForPublicationInfo(
+			uint64(100), "pub_account", "test_pub", "test_db", uint64(1), "*", "other_tenant",
+		)
+
+		_, _, err := getAccountFromPublication(ctx, bh, "pub_account", "test_pub", "unauthorized_tenant")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "does not have permission")
+	})
+
+	convey.Convey("getAccountFromPublication with 'all' in account_list", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(1))
+
+		// Setup mock result for publication info query with "all" in account_list
+		pubQuerySQL := fmt.Sprintf(`SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			FROM mo_catalog.mo_pubs 
+			WHERE account_name = '%s' AND pub_name = '%s'`, "pub_account", "test_pub")
+		bh.sql2result[pubQuerySQL] = newMrsForPublicationInfo(
+			uint64(100), "pub_account", "test_pub", "test_db", uint64(1), "*", "all",
+		)
+
+		// Any tenant should be able to access when account_list contains "all"
+		accountID, accountName, err := getAccountFromPublication(ctx, bh, "pub_account", "test_pub", "any_tenant")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(accountID, convey.ShouldEqual, uint64(100))
+		convey.So(accountName, convey.ShouldEqual, "pub_account")
+	})
+}

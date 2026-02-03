@@ -2636,6 +2636,9 @@ func parseSubscriptionUri(uri string) (account, user, password, host string, por
 	return accountPart, user, password, host, port, nil
 }
 
+// newUpstreamExecutorFunc is a variable to allow mocking in tests
+var newUpstreamExecutorFunc = publication.NewUpstreamExecutor
+
 // checkUpstreamPublicationCoverage checks if the database/table is covered by the publication in upstream cluster
 func checkUpstreamPublicationCoverage(
 	ctx context.Context,
@@ -2647,7 +2650,7 @@ func checkUpstreamPublicationCoverage(
 	tableName string,
 ) error {
 	// Create upstream executor to connect to upstream cluster
-	upstreamExecutor, err := publication.NewUpstreamExecutor(account, user, password, host, port, 3, 30*time.Second, "30s", publication.NewUpstreamConnectionClassifier())
+	upstreamExecutor, err := newUpstreamExecutorFunc(account, user, password, host, port, 3, 30*time.Second, "30s", publication.NewUpstreamConnectionClassifier())
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to connect to upstream cluster: %v", err)
 	}
