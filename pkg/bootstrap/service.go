@@ -200,7 +200,13 @@ func (s *service) Bootstrap(ctx context.Context) error {
 }
 
 func (s *service) checkAlreadyBootstrapped(ctx context.Context) (bool, error) {
-	res, err := s.exec.Exec(ctx, "show databases", executor.Options{}.WithMinCommittedTS(s.now()))
+	res, err := s.exec.Exec(
+		ctx,
+		"show databases",
+		executor.Options{}.
+			WithMinCommittedTS(s.now()).
+			WithWaitCommittedLogApplied(),
+	)
 	if err != nil {
 		return false, err
 	}
