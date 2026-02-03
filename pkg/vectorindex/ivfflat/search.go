@@ -355,20 +355,25 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(sqlproc *sqlexec.SqlProcess, que
 	return keys.([]int64), nil
 }
 
-// prepare runtime bloomfilter for pre-filtering
-// Centroids are C1, C2,...CN (Lists)
-// Preload centroid bloomfilter are BF1, BF2, ..., BFN
-// Selected centroids lists is [C1, C2,..., Cj]
-//
-// 1.   get the unique join keys from hashbuild
-// 2.   if there is no pre-loaded centroid bloomfilters
-// 2.1.    get the entries primary keys from selected centroids by SQL (Slow)
-// 2.2.    build the centroid bloomfilter (CBJ) with the entries primary keys
-// 2.3. else
-// 2.4.    generate the centroid bloomfilter (CBJ) by merge the centroid bloomfilter with bitmap_pr(BF1, BF2,.., BFj)  (Very fast)
-// 2.5. end
-// 3.   Test the unqiue join keys with CBJ. i.e. UniqueJoinKeys JOIN Selected Centroids
-// 4.   Build the final bloomfilter with the exists key from 3.
+/*
+prepare runtime bloomfilter for pre-filtering
+Centroids are C1, C2,...CN (Lists)
+Preload centroid bloomfilter are BF1, BF2, ..., BFN
+Selected centroids lists is [C1, C2,..., Cj]
+
+1.   get the unique join keys from hashbuild
+2.1  if cache centroid is nil then
+2.2     build bloomfilter with unique join keys and return
+2.3  endif
+3.1  if there is no pre-loaded centroid bloomfilters then
+3.2.    get the entries primary keys from selected centroids by SQL (Slow)
+3.3.    build the centroid bloomfilter (CBJ) with the entries primary keys
+3.4. else
+3.5.    generate the centroid bloomfilter (CBJ) by merge the centroid bloomfilter with bitmap_pr(BF1, BF2,.., BFj)  (Very fast)
+3.5. end
+4.   Test the unqiue join keys with CBJ. i.e. UniqueJoinKeys JOIN Selected Centroids
+5.   Build the final bloomfilter with the exists key from 3.
+*/
 func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 	sqlproc *sqlexec.SqlProcess,
 	idxcfg vectorindex.IndexConfig,
