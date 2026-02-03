@@ -202,6 +202,44 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	nextSourceStep := builder.appendStep(lastNodeId)
 	updatePlanCtx.sourceStep = nextSourceStep
 
+	// For INSERT ... ON DUPLICATE KEY UPDATE (old planner path), the update stream contains both:
+	// - update rows (origin row_id is NOT NULL)
+	// - insert-only rows (origin row_id is NULL)
+	//
+	// The unique index update plan (built under buildDeletePlans -> buildDeleteRegularIndex in update mode)
+	// will insert new index entries for insert-only rows as well. For tables without a user PK, those entries
+	// rely on __mo_fake_pk_col (auto-incr). We must ensure __mo_fake_pk_col is generated before index maintenance
+	// runs, while keeping the full batch shape required by delete/index plans.
+	//
+	// Add a PRE_INSERT node in "new update" mode to fill auto-incr columns on the *new values segment* without
+	// pruning or reshaping the batch.
+	if builder.haveOnDuplicateKey {
+		hasAutoCol := false
+		for _, col := range updatePlanCtx.tableDef.Cols {
+			if col.Typ.AutoIncr {
+				hasAutoCol = true
+				break
+			}
+		}
+		if hasAutoCol {
+			preNodeId := appendSinkScanNode(builder, bindCtx, updatePlanCtx.sourceStep)
+			colOffset := int32(len(updatePlanCtx.tableDef.Cols))
+			preNodeId = builder.appendNode(&plan.Node{
+				NodeType: plan.Node_PRE_INSERT,
+				Children: []int32{preNodeId},
+				PreInsertCtx: &plan.PreInsertCtx{
+					Ref:         updatePlanCtx.objRef,
+					TableDef:    DeepCopyTableDef(updatePlanCtx.tableDef, true),
+					HasAutoCol:  true,
+					ColOffset:   colOffset,
+					IsNewUpdate: true,
+				},
+			}, bindCtx)
+			preNodeId = appendSinkNode(builder, bindCtx, preNodeId)
+			updatePlanCtx.sourceStep = builder.appendStep(preNodeId)
+		}
+	}
+
 	// build delete plans
 	err = buildDeletePlans(ctx, builder, bindCtx, updatePlanCtx)
 	if err != nil {
