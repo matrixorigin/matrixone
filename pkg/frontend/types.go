@@ -107,6 +107,8 @@ const (
 	FPInternalCmdGetMoIndexes
 	FPInternalCmdGetDdl
 	FPInternalCmdGetObject
+	FPInternalCmdObjectList
+	FPInternalCmdCheckSnapshotFlushed
 	FPCreatePublication
 	FPAlterPublication
 	FPDropPublication
@@ -313,7 +315,11 @@ const (
 	cmdGetDdlSqlLen           = len(cmdGetDdlSql)
 	cmdGetObjectSql           = "__++__internal_get_object"
 	cmdGetObjectSqlLen        = len(cmdGetObjectSql)
-	cloudUserTag              = "cloud_user"
+	cmdObjectListSql                = "__++__internal_object_list"
+	cmdObjectListSqlLen             = len(cmdObjectListSql)
+	cmdCheckSnapshotFlushedSql      = "__++__internal_check_snapshot_flushed"
+	cmdCheckSnapshotFlushedSqlLen   = len(cmdCheckSnapshotFlushedSql)
+	cloudUserTag                    = "cloud_user"
 	cloudNoUserTag            = "cloud_nonuser"
 	saveResultTag             = "save_result"
 	validatePasswordPolicyTag = "validate_password.policy"
@@ -497,6 +503,68 @@ func (ic *InternalCmdGetObject) StmtKind() tree.StmtKind {
 
 func (ic *InternalCmdGetObject) GetStatementType() string { return "InternalCmd" }
 func (ic *InternalCmdGetObject) GetQueryType() string     { return tree.QueryTypeDQL }
+
+var _ tree.Statement = &InternalCmdObjectList{}
+
+// InternalCmdObjectList the internal command to get object list by publication permission
+// Parameters: snapshotName, againstSnapshotName, subscriptionAccountName, publicationName
+// The handler will use the snapshot's level to determine dbName and tableName scope
+// Returns: object list records
+type InternalCmdObjectList struct {
+	snapshotName            string
+	againstSnapshotName     string
+	subscriptionAccountName string
+	publicationName         string
+}
+
+// Free implements tree.Statement.
+func (ic *InternalCmdObjectList) Free() {
+}
+
+func (ic *InternalCmdObjectList) String() string {
+	return makeObjectListSql(ic.snapshotName, ic.againstSnapshotName, ic.subscriptionAccountName, ic.publicationName)
+}
+
+func (ic *InternalCmdObjectList) Format(ctx *tree.FmtCtx) {
+	ctx.WriteString(makeObjectListSql(ic.snapshotName, ic.againstSnapshotName, ic.subscriptionAccountName, ic.publicationName))
+}
+
+func (ic *InternalCmdObjectList) StmtKind() tree.StmtKind {
+	return tree.MakeStmtKind(tree.OUTPUT_RESULT_ROW, tree.RESP_PREBUILD_RESULT_ROW, tree.EXEC_IN_FRONTEND)
+}
+
+func (ic *InternalCmdObjectList) GetStatementType() string { return "InternalCmd" }
+func (ic *InternalCmdObjectList) GetQueryType() string     { return tree.QueryTypeDQL }
+
+var _ tree.Statement = &InternalCmdCheckSnapshotFlushed{}
+
+// InternalCmdCheckSnapshotFlushed the internal command to check if snapshot is flushed by publication permission
+// Parameters: snapshotName, subscriptionAccountName, publicationName
+// Returns: result (bool)
+type InternalCmdCheckSnapshotFlushed struct {
+	snapshotName            string
+	subscriptionAccountName string
+	publicationName         string
+}
+
+// Free implements tree.Statement.
+func (ic *InternalCmdCheckSnapshotFlushed) Free() {
+}
+
+func (ic *InternalCmdCheckSnapshotFlushed) String() string {
+	return makeCheckSnapshotFlushedSql(ic.snapshotName, ic.subscriptionAccountName, ic.publicationName)
+}
+
+func (ic *InternalCmdCheckSnapshotFlushed) Format(ctx *tree.FmtCtx) {
+	ctx.WriteString(makeCheckSnapshotFlushedSql(ic.snapshotName, ic.subscriptionAccountName, ic.publicationName))
+}
+
+func (ic *InternalCmdCheckSnapshotFlushed) StmtKind() tree.StmtKind {
+	return tree.MakeStmtKind(tree.OUTPUT_RESULT_ROW, tree.RESP_PREBUILD_RESULT_ROW, tree.EXEC_IN_FRONTEND)
+}
+
+func (ic *InternalCmdCheckSnapshotFlushed) GetStatementType() string { return "InternalCmd" }
+func (ic *InternalCmdCheckSnapshotFlushed) GetQueryType() string     { return tree.QueryTypeDQL }
 
 // ExecResult is the result interface of the execution
 type ExecResult interface {

@@ -16,69 +16,19 @@ package frontend
 
 import (
 	"context"
-	"fmt"
 	"testing"
-	"time"
 
 	"github.com/golang/mock/gomock"
-	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
-
-// newMrsForGetAccountFromPublication creates a MysqlResultSet for getAccountFromPublication query
-func newMrsForGetAccountFromPublication(accountID uint64, accountName, pubName, dbName string, dbID uint64, tableList, accountList string) *MysqlResultSet {
-	mrs := &MysqlResultSet{}
-
-	col1 := &MysqlColumn{}
-	col1.SetName("account_id")
-	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-	mrs.AddColumn(col1)
-
-	col2 := &MysqlColumn{}
-	col2.SetName("account_name")
-	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	mrs.AddColumn(col2)
-
-	col3 := &MysqlColumn{}
-	col3.SetName("pub_name")
-	col3.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	mrs.AddColumn(col3)
-
-	col4 := &MysqlColumn{}
-	col4.SetName("database_name")
-	col4.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	mrs.AddColumn(col4)
-
-	col5 := &MysqlColumn{}
-	col5.SetName("database_id")
-	col5.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-	mrs.AddColumn(col5)
-
-	col6 := &MysqlColumn{}
-	col6.SetName("table_list")
-	col6.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	mrs.AddColumn(col6)
-
-	col7 := &MysqlColumn{}
-	col7.SetName("account_list")
-	col7.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	mrs.AddColumn(col7)
-
-	mrs.AddRow([]interface{}{accountID, accountName, pubName, dbName, dbID, tableList, accountList})
-	return mrs
-}
 
 // Test_visitTableDdl_GoodPath tests all good paths in visitTableDdl function
 func Test_visitTableDdl_GoodPath(t *testing.T) {
@@ -400,171 +350,6 @@ func Test_GetDdlBatchWithoutSession_GoodPath(t *testing.T) {
 			convey.So(bat, convey.ShouldNotBeNil)
 			convey.So(bat.RowCount(), convey.ShouldEqual, 1)
 			bat.Clean(mp)
-		})
-	})
-}
-
-// Test_handleGetDdlWithChecker_GoodPath tests the good path of handleGetDdlWithChecker
-// by mocking getAccountFromPublication and getSnapshotByNameFunc
-func Test_handleGetDdlWithChecker_GoodPath(t *testing.T) {
-	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
-
-	convey.Convey("handleGetDdlWithChecker good path", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		// Mock engine
-		eng := mock_frontend.NewMockEngine(ctrl)
-		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-
-		// Mock mo_catalog database (used by getAccountFromPublication)
-		mockMoCatalogDb := mock_frontend.NewMockDatabase(ctrl)
-		mockMoCatalogDb.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
-		eng.EXPECT().Database(gomock.Any(), catalog.MO_CATALOG, gomock.Any()).Return(mockMoCatalogDb, nil).AnyTimes()
-
-		// Mock mo_pubs relation (used by getAccountFromPublication)
-		mockMoPubsRel := mock_frontend.NewMockRelation(ctrl)
-		mockMoPubsRel.EXPECT().CopyTableDef(gomock.Any()).Return(&plan2.TableDef{
-			Name:      "mo_pubs",
-			DbName:    catalog.MO_CATALOG,
-			TableType: catalog.SystemOrdinaryRel,
-			Defs:      []*plan2.TableDefType{},
-		}).AnyTimes()
-		mockMoPubsRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(0)).AnyTimes()
-		mockMoCatalogDb.EXPECT().Relation(gomock.Any(), "mo_pubs", nil).Return(mockMoPubsRel, nil).AnyTimes()
-
-		// Mock database
-		mockDb := mock_frontend.NewMockDatabase(ctrl)
-		eng.EXPECT().Database(gomock.Any(), "test_db", gomock.Any()).Return(mockDb, nil).AnyTimes()
-
-		// Mock relation
-		mockRel := mock_frontend.NewMockRelation(ctrl)
-		mockDb.EXPECT().Relation(gomock.Any(), "test_table", nil).Return(mockRel, nil).AnyTimes()
-		mockRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan2.TableDef{TableType: catalog.SystemOrdinaryRel}).AnyTimes()
-		mockRel.EXPECT().CopyTableDef(gomock.Any()).Return(&plan2.TableDef{
-			Name:      "test_table",
-			DbName:    "test_db",
-			TableType: catalog.SystemOrdinaryRel,
-			Defs:      []*plan2.TableDefType{},
-		}).AnyTimes()
-		mockRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(123)).AnyTimes()
-
-		// Mock txn operator
-		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
-		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
-		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
-		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-		txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
-		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
-		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
-		txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
-		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
-		txnOperator.EXPECT().CloneSnapshotOp(gomock.Any()).Return(txnOperator).AnyTimes()
-		txnMeta := &txn.TxnMeta{Mode: txn.TxnMode_Optimistic}
-		txnOperator.EXPECT().Txn().Return(*txnMeta).AnyTimes()
-		txnOperator.EXPECT().GetWaitActiveCost().Return(time.Duration(0)).AnyTimes()
-
-		// Mock txn client
-		txnClient := mock_frontend.NewMockTxnClient(ctrl)
-		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
-
-		// Mock background exec with proper result set for getAccountFromPublication
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		// Setup mock result for getAccountFromPublication query
-		// The SQL must match exactly what getAccountFromPublication generates
-		pubQuerySQL := fmt.Sprintf(`SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
-			FROM mo_catalog.mo_pubs 
-			WHERE account_name = '%s' AND pub_name = '%s'`, "pub_account", "test_pub")
-		bh.sql2result[pubQuerySQL] = newMrsForGetAccountFromPublication(uint64(1), "pub_account", "test_pub", "test_db", uint64(1), "*", "all")
-
-		// Stub NewShareTxnBackgroundExec
-		bhStub := gostub.StubFunc(&NewShareTxnBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		// Setup system variables
-		sv, err := getSystemVariables("test/system_vars_config.toml")
-		if err != nil {
-			t.Error(err)
-		}
-		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
-		pu.SV.SkipCheckUser = true
-		setPu("", pu)
-		setSessionAlloc("", NewLeakCheckAllocator())
-		ioses, err := NewIOSession(&testConn{}, pu, "")
-		convey.So(err, convey.ShouldBeNil)
-		pu.StorageEngine = eng
-		pu.TxnClient = txnClient
-		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
-
-		ses := NewSession(ctx, "", proto, nil)
-		tenant := &TenantInfo{
-			Tenant:   "test_tenant",
-			TenantID: uint32(100),
-			User:     DefaultTenantMoAdmin,
-		}
-		ses.SetTenantInfo(tenant)
-		ses.mrs = &MysqlResultSet{}
-		ses.SetDatabaseName("test_db")
-
-		// Mock TxnHandler
-		txnHandler := InitTxnHandler("", eng, ctx, txnOperator)
-		ses.txnHandler = txnHandler
-
-		// Mock GetMemPool
-		mp := mpool.MustNewZero()
-		ses.SetMemPool(mp)
-
-		proto.SetSession(ses)
-
-		// Test 1: Without snapshot
-		convey.Convey("without snapshot", func() {
-			dbName := tree.Identifier("test_db")
-			tableName := tree.Identifier("test_table")
-			pubName := tree.Identifier("test_pub")
-			stmt := &tree.GetDdl{
-				Database:                &dbName,
-				Table:                   &tableName,
-				PubName:                 &pubName,
-				SubscriptionAccountName: "pub_account",
-			}
-
-			err := handleGetDdlWithChecker(ctx, ses, stmt, defaultSnapshotResolver)
-			convey.So(err, convey.ShouldBeNil)
-			convey.So(ses.GetMysqlResultSet().GetRowCount(), convey.ShouldBeGreaterThan, uint64(0))
-		})
-
-		// Test 2: With snapshot
-		convey.Convey("with snapshot", func() {
-			// Stub getSnapshotByNameFunc to return a valid snapshot record
-			snapshotStub := gostub.Stub(&getSnapshotByNameFunc, func(ctx context.Context, bh BackgroundExec, snapshotName string) (*snapshotRecord, error) {
-				return &snapshotRecord{
-					snapshotId:   "test-snapshot-id",
-					snapshotName: "test_snapshot",
-					ts:           1000,
-					level:        "cluster",
-					accountName:  "sys",
-				}, nil
-			})
-			defer snapshotStub.Reset()
-
-			dbName := tree.Identifier("test_db")
-			tableName := tree.Identifier("test_table")
-			pubName := tree.Identifier("test_pub")
-			snapshotName := tree.Identifier("test_snapshot")
-			stmt := &tree.GetDdl{
-				Database:                &dbName,
-				Table:                   &tableName,
-				PubName:                 &pubName,
-				SubscriptionAccountName: "pub_account",
-				Snapshot:                &snapshotName,
-			}
-
-			ses.ClearAllMysqlResultSet()
-			err := handleGetDdlWithChecker(ctx, ses, stmt, defaultSnapshotResolver)
-			convey.So(err, convey.ShouldBeNil)
-			convey.So(ses.GetMysqlResultSet().GetRowCount(), convey.ShouldBeGreaterThan, uint64(0))
 		})
 	})
 }

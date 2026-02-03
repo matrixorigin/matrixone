@@ -5942,10 +5942,16 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *InternalCmdGetObject:
 		objType = objectTypeNone
 		kind = privilegeKindNone
+	case *InternalCmdObjectList:
+		objType = objectTypeNone
+		kind = privilegeKindNone
+	case *InternalCmdCheckSnapshotFlushed:
+		objType = objectTypeNone
+		kind = privilegeKindNone
 	case *tree.ValuesStatement:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeValues, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
-	case *tree.ShowSnapShots, *tree.ShowPitr, *tree.ObjectList, *tree.GetObject, *tree.GetDdl:
+	case *tree.ShowSnapShots, *tree.ShowPitr:
 		typs = append(typs, PrivilegeTypeAccountAll)
 		objType = objectTypeDatabase
 		kind = privilegeKindNone
@@ -5953,11 +5959,6 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeAccountAll)
 		objType = objectTypeDatabase
 		kind = privilegeKindNone
-	case *tree.CheckSnapshotFlushed:
-		typs = append(typs, PrivilegeTypeAccountAll)
-		objType = objectTypeDatabase
-		kind = privilegeKindNone
-		canExecInRestricted = true
 	case *tree.RestoreSnapShot:
 		typs = append(typs, PrivilegeTypeAccountAll)
 		objType = objectTypeDatabase

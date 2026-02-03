@@ -39,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -85,8 +84,13 @@ func NewUpstreamSQLHelper(
 
 // Internal command prefixes
 const (
-	cmdGetSnapshotTsPrefix = "__++__internal_get_snapshot_ts"
-	cmdGetDatabasesPrefix  = "__++__internal_get_databases"
+	cmdGetSnapshotTsPrefix        = "__++__internal_get_snapshot_ts"
+	cmdGetDatabasesPrefix         = "__++__internal_get_databases"
+	cmdGetDdlPrefix               = "__++__internal_get_ddl"
+	cmdGetMoIndexesPrefix         = "__++__internal_get_mo_indexes"
+	cmdObjectListPrefix           = "__++__internal_object_list"
+	cmdGetObjectPrefix            = "__++__internal_get_object"
+	cmdCheckSnapshotFlushedPrefix = "__++__internal_check_snapshot_flushed"
 )
 
 // HandleSpecialSQL checks if the SQL is a special statement and handles it directly
@@ -97,11 +101,27 @@ func (h *UpstreamSQLHelper) HandleSpecialSQL(
 	query string,
 ) (bool, *publication.Result, error) {
 	// Check for internal commands BEFORE parsing (they are not valid SQL)
-	if strings.HasPrefix(strings.ToLower(query), cmdGetSnapshotTsPrefix) {
+	lowerQuery := strings.ToLower(query)
+	if strings.HasPrefix(lowerQuery, cmdGetSnapshotTsPrefix) {
 		return h.handleGetSnapshotTsCmd(ctx, query)
 	}
-	if strings.HasPrefix(strings.ToLower(query), cmdGetDatabasesPrefix) {
+	if strings.HasPrefix(lowerQuery, cmdGetDatabasesPrefix) {
 		return h.handleGetDatabasesCmd(ctx, query)
+	}
+	if strings.HasPrefix(lowerQuery, cmdGetDdlPrefix) {
+		return h.handleGetDdlCmd(ctx, query)
+	}
+	if strings.HasPrefix(lowerQuery, cmdGetMoIndexesPrefix) {
+		return h.handleGetMoIndexesCmd(ctx, query)
+	}
+	if strings.HasPrefix(lowerQuery, cmdObjectListPrefix) {
+		return h.handleObjectListCmd(ctx, query)
+	}
+	if strings.HasPrefix(lowerQuery, cmdGetObjectPrefix) {
+		return h.handleGetObjectCmd(ctx, query)
+	}
+	if strings.HasPrefix(lowerQuery, cmdCheckSnapshotFlushedPrefix) {
+		return h.handleCheckSnapshotFlushedCmd(ctx, query)
 	}
 
 	// Parse SQL to check if it's a special statement
@@ -194,15 +214,6 @@ func (h *UpstreamSQLHelper) HandleSpecialSQL(
 			zap.String("sql", query),
 		)
 		result, handleErr = h.handleGetObjectDirectly(ctx, s)
-		if handleErr != nil {
-			return true, nil, handleErr
-		}
-
-	case *tree.GetDdl:
-		logutil.Info("UpstreamSQLHelper: routing GETDDL to frontend",
-			zap.String("sql", query),
-		)
-		result, handleErr = h.handleGetDdlDirectly(ctx, s)
 		if handleErr != nil {
 			return true, nil, handleErr
 		}
@@ -712,8 +723,8 @@ func (h *UpstreamSQLHelper) handleCheckSnapshotFlushedDirectly(
 		return nil, err
 	}
 
-	// Get snapshot record by name (similar to getSnapshotByName in doCheckSnapshotFlushed)
-	record, err := frontend.GetSnapshotRecordByName(ctx, h.executor, txnOp, string(stmt.Name))
+	// Get snapshot info by name
+	snapshotInfo, err := frontend.GetSnapshotInfoByName(ctx, h.executor, txnOp, string(stmt.Name))
 	if err != nil {
 		// If snapshot not found, return false
 		mp := mpool.MustNewZero()
@@ -731,11 +742,11 @@ func (h *UpstreamSQLHelper) handleCheckSnapshotFlushedDirectly(
 		}), nil
 	}
 
-	if record == nil {
+	if snapshotInfo == nil {
 		return nil, moerr.NewInternalError(ctx, "snapshot not found")
 	}
 
-	// Get disttae.Engine from engine (similar to doCheckSnapshotFlushed)
+	// Get disttae.Engine from engine
 	var de *disttae.Engine
 	var ok bool
 	if de, ok = h.engine.(*disttae.Engine); !ok {
@@ -748,23 +759,14 @@ func (h *UpstreamSQLHelper) handleCheckSnapshotFlushedDirectly(
 		}
 	}
 
-	// Get fileservice from engine
-	fs := de.FS()
-	if fs == nil {
-		return nil, moerr.NewInternalError(ctx, "fileservice is not available")
-	}
-
-	// Get snapshot ts from record
-	snapshotTS := frontend.GetSnapshotTS(record)
-
-	// Create txn with snapshot timestamp (similar to doCheckSnapshotFlushed)
+	// Create txn with snapshot timestamp
 	txn := txnOp.CloneSnapshotOp(timestamp.Timestamp{
-		PhysicalTime: snapshotTS,
+		PhysicalTime: snapshotInfo.Ts,
 		LogicalTime:  0,
 	})
 
 	// Call frontend.CheckSnapshotFlushed with all required parameters
-	result, err := frontend.CheckSnapshotFlushed(ctx, txn, types.BuildTS(snapshotTS, 0), de, record, fs)
+	result, err := frontend.CheckSnapshotFlushed(ctx, txn, snapshotInfo.Ts, de, snapshotInfo.Level, snapshotInfo.DatabaseName, snapshotInfo.TableName)
 	if err != nil {
 		return nil, err
 	}
@@ -838,60 +840,72 @@ func (h *UpstreamSQLHelper) tryToIncreaseTxnPhysicalTS(ctx context.Context) (int
 	return txnOp.SnapshotTS().PhysicalTime, nil
 }
 
-// handleGetDdlDirectly handles GETDDL by directly calling frontend logic
-func (h *UpstreamSQLHelper) handleGetDdlDirectly(
+// handleGetDdlCmd handles the internal __++__internal_get_ddl command
+// Format: __++__internal_get_ddl <snapshotName> <subscriptionAccountName> <publicationName>
+func (h *UpstreamSQLHelper) handleGetDdlCmd(
 	ctx context.Context,
-	stmt *tree.GetDdl,
-) (*publication.Result, error) {
+	query string,
+) (bool, *publication.Result, error) {
+	// Parse the command parameters
+	params := strings.TrimSpace(query[len(cmdGetDdlPrefix):])
+	parts := strings.Fields(params)
+	if len(parts) != 3 {
+		return true, nil, moerr.NewInternalError(ctx, "invalid get_ddl command format, expected: __++__internal_get_ddl <snapshotName> <subscriptionAccountName> <publicationName>")
+	}
+	snapshotName := parts[0]
+	// subscriptionAccountName and publicationName are not used in test helper since we don't check publication permissions
+
+	logutil.Info("UpstreamSQLHelper: handling internal get_ddl command",
+		zap.String("snapshotName", snapshotName),
+	)
+
 	if h.engine == nil {
-		return nil, moerr.NewInternalError(ctx, "engine is required for GETDDL")
+		return true, nil, moerr.NewInternalError(ctx, "engine is required for internal get_ddl")
 	}
 
+	// Ensure we have a transaction
 	txnOp, err := h.ensureTxnOp(ctx)
 	if err != nil {
-		return nil, err
+		return true, nil, err
 	}
 
-	// Get database name and table name
-	var databaseName string
-	var tableName string
-	if stmt.Database != nil {
-		databaseName = string(*stmt.Database)
-	}
-	if stmt.Table != nil {
-		tableName = string(*stmt.Table)
-	}
-
-	// Get mpool
-	mp := mpool.MustNewZero()
-
-	// Resolve snapshot if provided
-	var snapshot *plan2.Snapshot
-	if stmt.Snapshot != nil {
-		snapshotName := string(*stmt.Snapshot)
-		ts, err := frontend.ResolveSnapshotWithSnapshotNameWithoutSession(ctx, snapshotName, h.executor, txnOp)
-		if err != nil {
-			return nil, err
-		}
-		if ts != nil {
-			// Create snapshot with timestamp and account ID
-			snapshot = &plan2.Snapshot{
-				TS: ts,
-				Tenant: &plan2.SnapshotTenant{
-					TenantID: h.accountID,
-				},
-			}
-		}
-	}
-
-	// Call GetDdlBatchWithoutSession
-	resultBatch, err := frontend.GetDdlBatchWithoutSession(ctx, databaseName, tableName, h.engine, txnOp, mp, snapshot)
+	// Step 1: Get snapshot info (ts, level, databaseName, tableName)
+	snapshotInfo, err := frontend.GetSnapshotInfoByName(ctx, h.executor, txnOp, snapshotName)
 	if err != nil {
-		return nil, err
+		return true, nil, moerr.NewInternalErrorf(ctx, "failed to get snapshot info: %v", err)
+	}
+	if snapshotInfo == nil {
+		return true, nil, moerr.NewInternalErrorf(ctx, "snapshot %s does not exist", snapshotName)
+	}
+
+	// Step 2: Determine database name and table name based on snapshot level
+	var databaseName, tableName string
+	switch snapshotInfo.Level {
+	case "table":
+		databaseName = snapshotInfo.DatabaseName
+		tableName = snapshotInfo.TableName
+	case "database":
+		databaseName = snapshotInfo.DatabaseName
+		tableName = ""
+	case "account", "cluster":
+		databaseName = ""
+		tableName = ""
+	default:
+		return true, nil, moerr.NewInternalErrorf(ctx, "unsupported snapshot level: %s", snapshotInfo.Level)
+	}
+
+	// Step 3: Get snapshot timestamp
+	snapshotTs := snapshotInfo.Ts
+
+	// Step 4: Compute DDL batch
+	mp := mpool.MustNewZero()
+	resultBatch, err := frontend.ComputeDdlBatchWithSnapshot(ctx, databaseName, tableName, h.engine, mp, txnOp, snapshotTs)
+	if err != nil {
+		return true, nil, err
 	}
 
 	// Convert batch to result
-	return h.convertExecutorResult(executor.Result{
+	return true, h.convertExecutorResult(executor.Result{
 		Batches: []*batch.Batch{resultBatch},
 		Mp:      mp,
 	}), nil
@@ -967,9 +981,15 @@ func (h *UpstreamSQLHelper) handleGetDatabasesCmd(
 		return true, nil, err
 	}
 
-	// Query mo_snapshots for databases covered by this snapshot
-	// The database_name field contains the database name for the snapshot
-	sql := fmt.Sprintf("SELECT datname FROM mo_catalog.mo_database WHERE account_id = %d", h.accountID)
+	// Get snapshot info
+	snapshotInfo, err := frontend.GetSnapshotInfoByName(ctx, h.executor, txnOp, snapshotName)
+	if err != nil {
+		return true, nil, moerr.NewInternalErrorf(ctx, "failed to get snapshot info: %v", err)
+	}
+	snapshotTs := snapshotInfo.Ts
+
+	// Query mo_database for databases covered by this snapshot using the snapshot timestamp
+	sql := fmt.Sprintf("SELECT datname FROM mo_catalog.mo_database{MO_TS = %d} WHERE account_id = %d", snapshotTs, h.accountID)
 
 	// Create context with account ID
 	queryCtx := context.WithValue(ctx, defines.TenantIDKey{}, h.accountID)
@@ -981,4 +1001,383 @@ func (h *UpstreamSQLHelper) handleGetDatabasesCmd(
 	}
 
 	return true, h.convertExecutorResult(execResult), nil
+}
+
+// handleGetMoIndexesCmd handles the internal __++__internal_get_mo_indexes command
+// Format: __++__internal_get_mo_indexes <tableId> <subscriptionAccountName> <publicationName> <snapshotName>
+func (h *UpstreamSQLHelper) handleGetMoIndexesCmd(
+	ctx context.Context,
+	query string,
+) (bool, *publication.Result, error) {
+	// Parse the command parameters
+	params := strings.TrimSpace(query[len(cmdGetMoIndexesPrefix):])
+	parts := strings.Fields(params)
+	if len(parts) != 4 {
+		return true, nil, moerr.NewInternalError(ctx, "invalid get_mo_indexes command format, expected: __++__internal_get_mo_indexes <tableId> <subscriptionAccountName> <publicationName> <snapshotName>")
+	}
+
+	// Parse tableId
+	var tableId uint64
+	_, err := fmt.Sscanf(parts[0], "%d", &tableId)
+	if err != nil {
+		return true, nil, moerr.NewInternalErrorf(ctx, "invalid tableId format: %v", err)
+	}
+	snapshotName := parts[3]
+
+	logutil.Info("UpstreamSQLHelper: handling internal get_mo_indexes command",
+		zap.Uint64("tableId", tableId),
+		zap.String("snapshotName", snapshotName),
+	)
+
+	// Ensure we have a transaction
+	txnOp, err := h.ensureTxnOp(ctx)
+	if err != nil {
+		return true, nil, err
+	}
+
+	// Get snapshot info
+	snapshotInfo, err := frontend.GetSnapshotInfoByName(ctx, h.executor, txnOp, snapshotName)
+	if err != nil {
+		return true, nil, moerr.NewInternalErrorf(ctx, "failed to get snapshot info: %v", err)
+	}
+	snapshotTs := snapshotInfo.Ts
+
+	// Query mo_indexes using the snapshot timestamp
+	sql := fmt.Sprintf("SELECT table_id, name, algo_table_type, index_table_name FROM mo_catalog.mo_indexes{MO_TS = %d} WHERE table_id = %d", snapshotTs, tableId)
+
+	// Create context with account ID
+	queryCtx := context.WithValue(ctx, defines.TenantIDKey{}, h.accountID)
+
+	// Execute using internal executor
+	execResult, err := h.executor.Exec(queryCtx, sql, executor.Options{}.WithTxn(txnOp))
+	if err != nil {
+		return true, nil, moerr.NewInternalErrorf(ctx, "failed to query mo_indexes: %v", err)
+	}
+
+	return true, h.convertExecutorResult(execResult), nil
+}
+
+// handleObjectListCmd handles the internal __++__internal_object_list command
+// Format: __++__internal_object_list <snapshotName> <againstSnapshotName> <subscriptionAccountName> <publicationName>
+func (h *UpstreamSQLHelper) handleObjectListCmd(
+	ctx context.Context,
+	query string,
+) (bool, *publication.Result, error) {
+	// Parse the command parameters
+	params := strings.TrimSpace(query[len(cmdObjectListPrefix):])
+	parts := strings.Fields(params)
+	if len(parts) != 4 {
+		return true, nil, moerr.NewInternalError(ctx, "invalid object_list command format, expected: __++__internal_object_list <snapshotName> <againstSnapshotName> <subscriptionAccountName> <publicationName>")
+	}
+	snapshotName := parts[0]
+	againstSnapshotName := parts[1]
+
+	logutil.Info("UpstreamSQLHelper: handling internal object_list command",
+		zap.String("snapshotName", snapshotName),
+		zap.String("againstSnapshotName", againstSnapshotName),
+	)
+
+	if h.engine == nil {
+		return true, nil, moerr.NewInternalError(ctx, "engine is required for internal object_list")
+	}
+
+	// Ensure we have a transaction
+	txnOp, err := h.ensureTxnOp(ctx)
+	if err != nil {
+		return true, nil, err
+	}
+
+	// Get snapshot info to get scope (database name, table name, level)
+	snapshotInfo, err := frontend.GetSnapshotInfoByName(ctx, h.executor, txnOp, snapshotName)
+	if err != nil {
+		return true, nil, moerr.NewInternalErrorf(ctx, "failed to get snapshot info: %v", err)
+	}
+
+	// Determine dbName and tableName based on snapshot level
+	var dbname, tablename string
+	switch snapshotInfo.Level {
+	case "table":
+		dbname = snapshotInfo.DatabaseName
+		tablename = snapshotInfo.TableName
+	case "database":
+		dbname = snapshotInfo.DatabaseName
+		tablename = ""
+	case "account", "cluster":
+		dbname = ""
+		tablename = ""
+	default:
+		return true, nil, moerr.NewInternalErrorf(ctx, "unsupported snapshot level: %s", snapshotInfo.Level)
+	}
+
+	// Build tree.ObjectList statement for ProcessObjectList
+	stmt := &tree.ObjectList{
+		Database: tree.Identifier(dbname),
+		Table:    tree.Identifier(tablename),
+		Snapshot: tree.Identifier(snapshotName),
+	}
+	if againstSnapshotName != "" && againstSnapshotName != "_" {
+		againstName := tree.Identifier(againstSnapshotName)
+		stmt.AgainstSnapshot = &againstName
+	}
+
+	// Get mpool
+	mp := mpool.MustNewZero()
+
+	// Resolve snapshot using executor
+	resolveSnapshot := func(ctx context.Context, snapshotName string) (*timestamp.Timestamp, error) {
+		return frontend.ResolveSnapshotWithSnapshotNameWithoutSession(ctx, snapshotName, h.executor, txnOp)
+	}
+
+	// Get current timestamp from txn
+	getCurrentTS := func() types.TS {
+		return types.TimestampToTS(txnOp.SnapshotTS())
+	}
+
+	// Process object list using core function
+	resultBatch, err := frontend.ProcessObjectList(ctx, stmt, h.engine, txnOp, mp, resolveSnapshot, getCurrentTS, dbname, tablename)
+	if err != nil {
+		return true, nil, err
+	}
+
+	// Convert batch to result
+	return true, h.convertExecutorResult(executor.Result{
+		Batches: []*batch.Batch{resultBatch},
+		Mp:      mp,
+	}), nil
+}
+
+// handleGetObjectCmd handles the internal __++__internal_get_object command
+// Format: __++__internal_get_object <subscriptionAccountName> <publicationName> <objectName> <chunkIndex>
+func (h *UpstreamSQLHelper) handleGetObjectCmd(
+	ctx context.Context,
+	query string,
+) (bool, *publication.Result, error) {
+	// Parse the command parameters
+	params := strings.TrimSpace(query[len(cmdGetObjectPrefix):])
+	parts := strings.Fields(params)
+	if len(parts) != 4 {
+		return true, nil, moerr.NewInternalError(ctx, "invalid get_object command format, expected: __++__internal_get_object <subscriptionAccountName> <publicationName> <objectName> <chunkIndex>")
+	}
+	objectName := parts[2]
+	var chunkIndex int64
+	_, err := fmt.Sscanf(parts[3], "%d", &chunkIndex)
+	if err != nil {
+		return true, nil, moerr.NewInternalErrorf(ctx, "invalid chunkIndex format: %v", err)
+	}
+
+	logutil.Info("UpstreamSQLHelper: handling internal get_object command",
+		zap.String("objectName", objectName),
+		zap.Int64("chunkIndex", chunkIndex),
+	)
+
+	if h.engine == nil {
+		return true, nil, moerr.NewInternalError(ctx, "engine is required for internal get_object")
+	}
+
+	// Get fileservice from engine
+	fs, err := h.getFileserviceFromEngine()
+	if err != nil {
+		return true, nil, moerr.NewInternalErrorf(ctx, "failed to get fileservice: %v", err)
+	}
+
+	// Get file size
+	dirEntry, err := fs.StatFile(ctx, objectName)
+	if err != nil {
+		return true, nil, moerr.NewInternalErrorf(ctx, "failed to stat file: %v", err)
+	}
+	fileSize := dirEntry.Size
+
+	// Calculate total chunks (matching frontend/get_object.go chunk size)
+	const chunkSize = publication.GetChunkSize // 100MB
+	var totalChunks int64
+	if fileSize <= chunkSize {
+		totalChunks = 1
+	} else {
+		totalChunks = (fileSize + chunkSize - 1) / chunkSize
+	}
+
+	// Validate chunk index
+	if chunkIndex < 0 {
+		return true, nil, moerr.NewInvalidInput(ctx, "invalid chunk_index: must be >= 0")
+	}
+	if chunkIndex > totalChunks {
+		return true, nil, moerr.NewInvalidInput(ctx, fmt.Sprintf("invalid chunk_index: %d, file has only %d data chunks (chunk 0 is metadata)", chunkIndex, totalChunks))
+	}
+
+	var data []byte
+	var isComplete bool
+
+	if chunkIndex == 0 {
+		// Metadata only request
+		data = nil
+		isComplete = false
+	} else {
+		// Data chunk request
+		offset := (chunkIndex - 1) * chunkSize
+		size := int64(chunkSize)
+		if chunkIndex == totalChunks {
+			// Last chunk may be smaller
+			size = fileSize - offset
+		}
+
+		// Read object chunk from engine using frontend function
+		content, err := frontend.ReadObjectFromEngine(ctx, h.engine, objectName, offset, size)
+		if err != nil {
+			return true, nil, moerr.NewInternalErrorf(ctx, "failed to read object chunk: %v", err)
+		}
+		data = content
+		isComplete = (chunkIndex == totalChunks)
+	}
+
+	// Create a batch with 5 columns: data, total_size, chunk_index, total_chunks, is_complete
+	mp := mpool.MustNewZero()
+	bat := batch.New([]string{"data", "total_size", "chunk_index", "total_chunks", "is_complete"})
+
+	// Column 0: data (BLOB)
+	bat.Vecs[0] = vector.NewVec(types.T_blob.ToType())
+	if data != nil {
+		err = vector.AppendBytes(bat.Vecs[0], data, false, mp)
+		if err != nil {
+			bat.Clean(mp)
+			return true, nil, err
+		}
+	} else {
+		err = vector.AppendBytes(bat.Vecs[0], nil, true, mp)
+		if err != nil {
+			bat.Clean(mp)
+			return true, nil, err
+		}
+	}
+
+	// Column 1: total_size (LONGLONG)
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	err = vector.AppendFixed(bat.Vecs[1], fileSize, false, mp)
+	if err != nil {
+		bat.Clean(mp)
+		return true, nil, err
+	}
+
+	// Column 2: chunk_index (LONG)
+	bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	err = vector.AppendFixed(bat.Vecs[2], chunkIndex, false, mp)
+	if err != nil {
+		bat.Clean(mp)
+		return true, nil, err
+	}
+
+	// Column 3: total_chunks (LONG)
+	bat.Vecs[3] = vector.NewVec(types.T_int64.ToType())
+	err = vector.AppendFixed(bat.Vecs[3], totalChunks, false, mp)
+	if err != nil {
+		bat.Clean(mp)
+		return true, nil, err
+	}
+
+	// Column 4: is_complete (bool)
+	bat.Vecs[4] = vector.NewVec(types.T_bool.ToType())
+	err = vector.AppendFixed(bat.Vecs[4], isComplete, false, mp)
+	if err != nil {
+		bat.Clean(mp)
+		return true, nil, err
+	}
+
+	bat.SetRowCount(1)
+
+	return true, h.convertExecutorResult(executor.Result{
+		Batches: []*batch.Batch{bat},
+		Mp:      mp,
+	}), nil
+}
+
+// handleCheckSnapshotFlushedCmd handles the internal __++__internal_check_snapshot_flushed command
+// Format: __++__internal_check_snapshot_flushed <snapshotName> <subscriptionAccountName> <publicationName>
+func (h *UpstreamSQLHelper) handleCheckSnapshotFlushedCmd(
+	ctx context.Context,
+	query string,
+) (bool, *publication.Result, error) {
+	// Parse the command parameters
+	params := strings.TrimSpace(query[len(cmdCheckSnapshotFlushedPrefix):])
+	parts := strings.Fields(params)
+	if len(parts) != 3 {
+		return true, nil, moerr.NewInternalError(ctx, "invalid check_snapshot_flushed command format, expected: __++__internal_check_snapshot_flushed <snapshotName> <subscriptionAccountName> <publicationName>")
+	}
+	snapshotName := parts[0]
+
+	logutil.Info("UpstreamSQLHelper: handling internal check_snapshot_flushed command",
+		zap.String("snapshotName", snapshotName),
+	)
+
+	if h.engine == nil {
+		return true, nil, moerr.NewInternalError(ctx, "engine is required for internal check_snapshot_flushed")
+	}
+
+	// Ensure we have a transaction
+	txnOp, err := h.ensureTxnOp(ctx)
+	if err != nil {
+		return true, nil, err
+	}
+
+	// Get snapshot info by name
+	snapshotInfo, err := frontend.GetSnapshotInfoByName(ctx, h.executor, txnOp, snapshotName)
+	if err != nil {
+		// If snapshot not found, return false
+		mp := mpool.MustNewZero()
+		bat := batch.New([]string{"result"})
+		bat.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+		err = vector.AppendFixed(bat.Vecs[0], false, false, mp)
+		if err != nil {
+			bat.Clean(mp)
+			return true, nil, err
+		}
+		bat.SetRowCount(1)
+		return true, h.convertExecutorResult(executor.Result{
+			Batches: []*batch.Batch{bat},
+			Mp:      mp,
+		}), nil
+	}
+
+	if snapshotInfo == nil {
+		return true, nil, moerr.NewInternalError(ctx, "snapshot not found")
+	}
+
+	// Get disttae.Engine from engine
+	var de *disttae.Engine
+	var ok bool
+	if de, ok = h.engine.(*disttae.Engine); !ok {
+		var entireEngine *engine.EntireEngine
+		if entireEngine, ok = h.engine.(*engine.EntireEngine); ok {
+			de, ok = entireEngine.Engine.(*disttae.Engine)
+		}
+		if !ok {
+			return true, nil, moerr.NewInternalError(ctx, "failed to get disttae engine")
+		}
+	}
+
+	// Create txn with snapshot timestamp
+	txn := txnOp.CloneSnapshotOp(timestamp.Timestamp{
+		PhysicalTime: snapshotInfo.Ts,
+		LogicalTime:  0,
+	})
+
+	// Call frontend.CheckSnapshotFlushed with all required parameters
+	result, err := frontend.CheckSnapshotFlushed(ctx, txn, snapshotInfo.Ts, de, snapshotInfo.Level, snapshotInfo.DatabaseName, snapshotInfo.TableName)
+	if err != nil {
+		return true, nil, err
+	}
+
+	// Create a batch with one column containing the result
+	mp := mpool.MustNewZero()
+	bat := batch.New([]string{"result"})
+	bat.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+	err = vector.AppendFixed(bat.Vecs[0], result, false, mp)
+	if err != nil {
+		bat.Clean(mp)
+		return true, nil, err
+	}
+	bat.SetRowCount(1)
+
+	return true, h.convertExecutorResult(executor.Result{
+		Batches: []*batch.Batch{bat},
+		Mp:      mp,
+	}), nil
 }

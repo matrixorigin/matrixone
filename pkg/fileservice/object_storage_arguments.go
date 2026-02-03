@@ -189,7 +189,7 @@ func (o *ObjectStorageArguments) validate() error {
 	if o.Region == "" {
 
 		if o.Endpoint != "" && strings.Contains(o.Endpoint, "myqcloud.com") {
-			// Tencent Cloud
+			// 腾讯云
 			matches := qcloudEndpointPattern.FindStringSubmatch(o.Endpoint)
 			if len(matches) > 0 {
 				o.Region = matches[1]

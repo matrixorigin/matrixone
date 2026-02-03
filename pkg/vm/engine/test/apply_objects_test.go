@@ -530,6 +530,7 @@ func runApplyObjects(
 		fs,
 		nil,                         // FilterObjectWorker
 		nil,                         // GetChunkWorker
+		nil,
 		"",                          // subscriptionAccountName
 		"",                          // pubName
 		nil,                         // ccprCache

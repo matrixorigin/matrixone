@@ -466,3 +466,120 @@ func ResolveSnapshotWithSnapshotNameWithoutSession(
 
 	return &timestamp.Timestamp{PhysicalTime: snapshotTS}, nil
 }
+
+// handleInternalObjectList handles the internal command objectlist
+// It checks permission via publication and returns object list using the snapshot's level to determine scope
+func handleInternalObjectList(ses FeSession, execCtx *ExecCtx, ic *InternalCmdObjectList) error {
+	ctx := execCtx.reqCtx
+	session := ses.(*Session)
+
+	var (
+		mrs      = ses.GetMysqlResultSet()
+		showCols []*MysqlColumn
+	)
+
+	session.ClearAllMysqlResultSet()
+	session.ClearResultBatches()
+
+	bh := session.GetShareTxnBackgroundExec(ctx, false)
+	defer bh.Close()
+
+	// Get current account name
+	currentAccount := ses.GetTenantInfo().GetTenant()
+
+	// Step 1: Check permission via publication and get authorized account
+	accountID, _, err := GetAccountIDFromPublication(ctx, bh, ic.subscriptionAccountName, ic.publicationName, currentAccount)
+	if err != nil {
+		return err
+	}
+
+	// Use the authorized account context for execution
+	ctx = defines.AttachAccountId(ctx, uint32(accountID))
+
+	// Step 2: Get snapshot covered scope (database name, table name, level)
+	scope, _, err := GetSnapshotCoveredScope(ctx, bh, ic.snapshotName)
+	if err != nil {
+		return err
+	}
+
+	// Build tree.ObjectList statement for ProcessObjectList
+	stmt := &tree.ObjectList{
+		Database: tree.Identifier(scope.DatabaseName),
+		Table:    tree.Identifier(scope.TableName),
+		Snapshot: tree.Identifier(ic.snapshotName),
+	}
+	if ic.againstSnapshotName != "" {
+		againstName := tree.Identifier(ic.againstSnapshotName)
+		stmt.AgainstSnapshot = &againstName
+	}
+
+	// Resolve snapshot using session
+	resolveSnapshot := func(ctx context.Context, snapshotName string) (*timestamp.Timestamp, error) {
+		snapshot, err := session.GetTxnCompileCtx().ResolveSnapshotWithSnapshotName(snapshotName)
+		if err != nil || snapshot == nil || snapshot.TS == nil {
+			return nil, err
+		}
+		return snapshot.TS, nil
+	}
+
+	// Get current timestamp from session
+	getCurrentTS := func() types.TS {
+		if session.GetProc() != nil && session.GetProc().GetTxnOperator() != nil {
+			return types.TimestampToTS(session.GetProc().GetTxnOperator().SnapshotTS())
+		}
+		return types.MaxTs()
+	}
+
+	// Get engine and txn from session
+	eng := session.GetTxnHandler().GetStorage()
+	txn := session.GetTxnHandler().GetTxn()
+	mp := session.GetMemPool()
+
+	// Step 3: Process object list using core function
+	resultBatch, err := ProcessObjectList(ctx, stmt, eng, txn, mp, resolveSnapshot, getCurrentTS, scope.DatabaseName, scope.TableName)
+	if err != nil {
+		return err
+	}
+	defer resultBatch.Clean(mp)
+
+	// Step 4: Build columns from result batch
+	if resultBatch != nil && resultBatch.Attrs != nil {
+		for i := 0; i < len(resultBatch.Attrs); i++ {
+			attr := resultBatch.Attrs[i]
+			col := new(MysqlColumn)
+			if attr == "dbname" {
+				col.SetName("db name")
+			} else if attr == "tablename" {
+				col.SetName("table name")
+			} else {
+				col.SetName(attr)
+			}
+			if i < len(resultBatch.Vecs) {
+				typ := resultBatch.Vecs[i].GetType()
+				err := convertEngineTypeToMysqlType(ctx, typ.Oid, col)
+				if err != nil {
+					return err
+				}
+			}
+			showCols = append(showCols, col)
+		}
+	}
+
+	for _, col := range showCols {
+		mrs.AddColumn(col)
+	}
+
+	// Fill result set from batch
+	if resultBatch != nil && resultBatch.RowCount() > 0 {
+		n := resultBatch.RowCount()
+		for j := 0; j < n; j++ {
+			row := make([]any, len(showCols))
+			if err := extractRowFromEveryVector(ctx, session, resultBatch, j, row, false); err != nil {
+				return err
+			}
+			mrs.AddRow(row)
+		}
+	}
+
+	return trySaveQueryResult(ctx, session, mrs)
+}

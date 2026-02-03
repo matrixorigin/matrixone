@@ -115,7 +115,6 @@ func init() {
 		"subpartitions":              SUBPARTITIONS,
 		"snapshot":                   SNAPSHOT,
 		"snapshots":                  SNAPSHOTS,
-		"checksnapshotflushed":       CHECKSNAPSHOTFLUSHED,
 		"sysdate":                    SYSDATE,
 		"create":                     CREATE,
 		"cluster":                    CLUSTER,
@@ -681,8 +680,5 @@ func init() {
 		"diff":                       DIFF,
 		"conflict":                   CONFLICT,
 		"output":                     OUTPUT,
-		"objectlist":                 OBJECTLIST,
-		"getobject":                  GETOBJECT,
-		"getddl":                     GETDDL,
 	}
 }

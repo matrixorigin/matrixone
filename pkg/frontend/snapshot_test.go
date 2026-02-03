@@ -295,6 +295,56 @@ func newMrsForSnapshotTs(ts int64) *MysqlResultSet {
 	return mrs
 }
 
+// newMrsForSnapshotRecord creates a MysqlResultSet for full snapshot record query (select * from mo_snapshots)
+// columns: snapshot_id, sname, ts, level, account_name, database_name, table_name, obj_id
+func newMrsForSnapshotRecord(snapshotId, snapshotName string, ts int64, level, accountName, databaseName, tableName string, objId uint64) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("snapshot_id")
+	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col1)
+
+	col2 := &MysqlColumn{}
+	col2.SetName("sname")
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col2)
+
+	col3 := &MysqlColumn{}
+	col3.SetName("ts")
+	col3.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	mrs.AddColumn(col3)
+
+	col4 := &MysqlColumn{}
+	col4.SetName("level")
+	col4.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col4)
+
+	col5 := &MysqlColumn{}
+	col5.SetName("account_name")
+	col5.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col5)
+
+	col6 := &MysqlColumn{}
+	col6.SetName("database_name")
+	col6.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col6)
+
+	col7 := &MysqlColumn{}
+	col7.SetName("table_name")
+	col7.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col7)
+
+	col8 := &MysqlColumn{}
+	col8.SetName("obj_id")
+	col8.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	mrs.AddColumn(col8)
+
+	mrs.AddRow([]interface{}{snapshotId, snapshotName, ts, level, accountName, databaseName, tableName, objId})
+
+	return mrs
+}
+
 // newMrsForDatabaseNames creates a MysqlResultSet for database names query
 func newMrsForDatabaseNames(dbNames []string) *MysqlResultSet {
 	mrs := &MysqlResultSet{}
@@ -403,9 +453,11 @@ func Test_handleGetSnapshotTs(t *testing.T) {
 			uint64(100), "pub_account", "test_pub", "test_db", uint64(1), "*", "test_tenant,all",
 		)
 
-		// Setup mock result for snapshot ts query
-		snapshotTsSQL := fmt.Sprintf("SELECT ts FROM mo_catalog.mo_snapshots WHERE sname = '%s'", "test_snapshot")
-		bh.sql2result[snapshotTsSQL] = newMrsForSnapshotTs(int64(1234567890))
+		// Setup mock result for snapshot record query (select * from mo_snapshots)
+		snapshotRecordSQL := fmt.Sprintf("select * from mo_catalog.mo_snapshots where sname = '%s'", "test_snapshot")
+		bh.sql2result[snapshotRecordSQL] = newMrsForSnapshotRecord(
+			"snap-001", "test_snapshot", int64(1234567890), "account", "", "", "", uint64(1),
+		)
 
 		ic := &InternalCmdGetSnapshotTs{
 			snapshotName:    "test_snapshot",
@@ -468,9 +520,9 @@ func Test_handleGetSnapshotTs(t *testing.T) {
 			uint64(100), "pub_account", "test_pub", "test_db", uint64(1), "*", "test_tenant,all",
 		)
 
-		// Setup mock result for snapshot ts query - empty result (snapshot not found)
-		snapshotTsSQL := fmt.Sprintf("SELECT ts FROM mo_catalog.mo_snapshots WHERE sname = '%s'", "nonexistent_snapshot")
-		bh.sql2result[snapshotTsSQL] = newMrsEmpty()
+		// Setup mock result for snapshot record query - empty result (snapshot not found)
+		snapshotRecordSQL := fmt.Sprintf("select * from mo_catalog.mo_snapshots where sname = '%s'", "nonexistent_snapshot")
+		bh.sql2result[snapshotRecordSQL] = newMrsEmpty()
 
 		ic := &InternalCmdGetSnapshotTs{
 			snapshotName:    "nonexistent_snapshot",
@@ -485,7 +537,7 @@ func Test_handleGetSnapshotTs(t *testing.T) {
 
 		err := handleGetSnapshotTs(ses, execCtx, ic)
 		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(err.Error(), convey.ShouldContainSubstring, "does not exist")
+		convey.So(err.Error(), convey.ShouldContainSubstring, "find 0 snapshot records")
 	})
 
 	convey.Convey("handleGetSnapshotTs publication permission denied", t, func() {
@@ -644,9 +696,11 @@ func Test_handleGetDatabases(t *testing.T) {
 			uint64(100), "pub_account", "test_pub", "test_db", uint64(1), "*", "test_tenant,all",
 		)
 
-		// Setup mock result for snapshot ts query
-		snapshotTsSQL := fmt.Sprintf("SELECT ts FROM mo_catalog.mo_snapshots WHERE sname = '%s'", "test_snapshot")
-		bh.sql2result[snapshotTsSQL] = newMrsForSnapshotTs(int64(1234567890))
+		// Setup mock result for snapshot record query
+		snapshotRecordSQL := fmt.Sprintf("select * from mo_catalog.mo_snapshots where sname = '%s'", "test_snapshot")
+		bh.sql2result[snapshotRecordSQL] = newMrsForSnapshotRecord(
+			"snap-001", "test_snapshot", int64(1234567890), "account", "", "", "", uint64(1),
+		)
 
 		// Setup mock result for database names query
 		dbSQL := fmt.Sprintf("SELECT datname FROM mo_catalog.mo_database{MO_TS = %d} WHERE account_id = %d", int64(1234567890), 100)
@@ -713,9 +767,9 @@ func Test_handleGetDatabases(t *testing.T) {
 			uint64(100), "pub_account", "test_pub", "test_db", uint64(1), "*", "test_tenant,all",
 		)
 
-		// Setup mock result for snapshot ts query - empty result (snapshot not found)
-		snapshotTsSQL := fmt.Sprintf("SELECT ts FROM mo_catalog.mo_snapshots WHERE sname = '%s'", "nonexistent_snapshot")
-		bh.sql2result[snapshotTsSQL] = newMrsEmpty()
+		// Setup mock result for snapshot record query - empty result (snapshot not found)
+		snapshotRecordSQL := fmt.Sprintf("select * from mo_catalog.mo_snapshots where sname = '%s'", "nonexistent_snapshot")
+		bh.sql2result[snapshotRecordSQL] = newMrsEmpty()
 
 		ic := &InternalCmdGetDatabases{
 			snapshotName:    "nonexistent_snapshot",
@@ -730,7 +784,7 @@ func Test_handleGetDatabases(t *testing.T) {
 
 		err := handleGetDatabases(ses, execCtx, ic)
 		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(err.Error(), convey.ShouldContainSubstring, "does not exist")
+		convey.So(err.Error(), convey.ShouldContainSubstring, "find 0 snapshot records")
 	})
 
 	convey.Convey("handleGetDatabases permission denied", t, func() {
@@ -832,9 +886,11 @@ func Test_handleGetDatabases(t *testing.T) {
 			uint64(100), "pub_account", "test_pub", "test_db", uint64(1), "*", "test_tenant,all",
 		)
 
-		// Setup mock result for snapshot ts query
-		snapshotTsSQL := fmt.Sprintf("SELECT ts FROM mo_catalog.mo_snapshots WHERE sname = '%s'", "test_snapshot")
-		bh.sql2result[snapshotTsSQL] = newMrsForSnapshotTs(int64(1234567890))
+		// Setup mock result for snapshot record query
+		snapshotRecordSQL := fmt.Sprintf("select * from mo_catalog.mo_snapshots where sname = '%s'", "test_snapshot")
+		bh.sql2result[snapshotRecordSQL] = newMrsForSnapshotRecord(
+			"snap-001", "test_snapshot", int64(1234567890), "account", "", "", "", uint64(1),
+		)
 
 		// Setup mock result for database names query - empty result
 		dbSQL := fmt.Sprintf("SELECT datname FROM mo_catalog.mo_database{MO_TS = %d} WHERE account_id = %d", int64(1234567890), 100)

@@ -376,10 +376,14 @@ func handleInternalGetObject(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGet
 	objectName := ic.objectName
 	chunkIndex := ic.chunkIndex
 
-	// Check publication permission using getAccountFromPublication and get account ID
-	pubAccountName := ic.subscriptionAccountName
-	pubName := ic.publicationName
-	accountID, err := GetObjectPermissionChecker(ctx, session, pubAccountName, pubName)
+	bh := session.GetShareTxnBackgroundExec(ctx, false)
+	defer bh.Close()
+
+	// Get current account name
+	currentAccount := ses.GetTenantInfo().GetTenant()
+
+	// Step 1: Check permission via publication and get authorized account
+	accountID, _, err := GetAccountIDFromPublication(ctx, bh, ic.subscriptionAccountName, ic.publicationName, currentAccount)
 	if err != nil {
 		return err
 	}
@@ -387,7 +391,7 @@ func handleInternalGetObject(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGet
 	// Use the authorized account context for execution
 	ctx = defines.AttachAccountId(ctx, uint32(accountID))
 
-	// Get fileservice
+	// Step 2: Get fileservice
 	fs, err := GetObjectFSProvider(session)
 	if err != nil {
 		return err

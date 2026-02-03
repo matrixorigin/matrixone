@@ -590,6 +590,7 @@ var GetComputationWrapperInBack = func(execCtx *ExecCtx, db string, input *UserI
 	var cmdGetMoIndexesStmt *InternalCmdGetMoIndexes
 	var cmdGetDdlStmt *InternalCmdGetDdl
 	var cmdGetObjectStmt *InternalCmdGetObject
+	var cmdObjectListStmt *InternalCmdObjectList
 	var err error
 	// if the input is an option ast, we should use it directly
 	if input.getStmt() != nil {
@@ -630,6 +631,18 @@ var GetComputationWrapperInBack = func(execCtx *ExecCtx, db string, input *UserI
 			return nil, err
 		}
 		stmts = append(stmts, cmdGetObjectStmt)
+	} else if isCmdObjectListSql(input.getSql()) {
+		cmdObjectListStmt, err = parseCmdObjectList(execCtx.reqCtx, input.getSql())
+		if err != nil {
+			return nil, err
+		}
+		stmts = append(stmts, cmdObjectListStmt)
+	} else if isCmdCheckSnapshotFlushedSql(input.getSql()) {
+		cmdCheckSnapshotFlushedStmt, err := parseCmdCheckSnapshotFlushed(execCtx.reqCtx, input.getSql())
+		if err != nil {
+			return nil, err
+		}
+		stmts = append(stmts, cmdCheckSnapshotFlushedStmt)
 	} else {
 		stmts, err = parseSql(execCtx, ses.GetMySQLParser())
 		if err != nil {

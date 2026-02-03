@@ -702,6 +702,76 @@ func parseCmdGetObject(ctx context.Context, sql string) (*InternalCmdGetObject, 
 	}, nil
 }
 
+// isCmdObjectListSql checks the sql is the cmdObjectListSql or not.
+func isCmdObjectListSql(sql string) bool {
+	if len(sql) < cmdObjectListSqlLen {
+		return false
+	}
+	prefix := sql[:cmdObjectListSqlLen]
+	return strings.Compare(strings.ToLower(prefix), cmdObjectListSql) == 0
+}
+
+// makeObjectListSql makes the internal objectlist sql
+func makeObjectListSql(snapshotName, againstSnapshotName, subscriptionAccountName, publicationName string) string {
+	return fmt.Sprintf("%s %s %s %s %s", cmdObjectListSql, snapshotName, againstSnapshotName, subscriptionAccountName, publicationName)
+}
+
+// parseCmdObjectList parses the internal cmd objectlist
+// format: objectlist <snapshotName> <againstSnapshotName> <subscriptionAccountName> <publicationName>
+// Note: againstSnapshotName can be "-" to indicate empty
+func parseCmdObjectList(ctx context.Context, sql string) (*InternalCmdObjectList, error) {
+	if !isCmdObjectListSql(sql) {
+		return nil, moerr.NewInternalError(ctx, "it is not the OBJECT_LIST command")
+	}
+	params := strings.TrimSpace(sql[cmdObjectListSqlLen:])
+	parts := strings.Fields(params)
+	if len(parts) != 4 {
+		return nil, moerr.NewInternalError(ctx, "invalid objectlist command format, expected: objectlist <snapshotName> <againstSnapshotName> <subscriptionAccountName> <publicationName>")
+	}
+	againstSnapshotName := parts[1]
+	if againstSnapshotName == "-" {
+		againstSnapshotName = ""
+	}
+	return &InternalCmdObjectList{
+		snapshotName:            parts[0],
+		againstSnapshotName:     againstSnapshotName,
+		subscriptionAccountName: parts[2],
+		publicationName:         parts[3],
+	}, nil
+}
+
+// isCmdCheckSnapshotFlushedSql checks the sql is the cmdCheckSnapshotFlushedSql or not.
+func isCmdCheckSnapshotFlushedSql(sql string) bool {
+	if len(sql) < cmdCheckSnapshotFlushedSqlLen {
+		return false
+	}
+	prefix := sql[:cmdCheckSnapshotFlushedSqlLen]
+	return strings.Compare(strings.ToLower(prefix), cmdCheckSnapshotFlushedSql) == 0
+}
+
+// makeCheckSnapshotFlushedSql makes the internal checksnapshotflushed sql
+func makeCheckSnapshotFlushedSql(snapshotName, subscriptionAccountName, publicationName string) string {
+	return fmt.Sprintf("%s %s %s %s", cmdCheckSnapshotFlushedSql, snapshotName, subscriptionAccountName, publicationName)
+}
+
+// parseCmdCheckSnapshotFlushed parses the internal cmd checksnapshotflushed
+// format: checksnapshotflushed <snapshotName> <subscriptionAccountName> <publicationName>
+func parseCmdCheckSnapshotFlushed(ctx context.Context, sql string) (*InternalCmdCheckSnapshotFlushed, error) {
+	if !isCmdCheckSnapshotFlushedSql(sql) {
+		return nil, moerr.NewInternalError(ctx, "it is not the CHECK_SNAPSHOT_FLUSHED command")
+	}
+	params := strings.TrimSpace(sql[cmdCheckSnapshotFlushedSqlLen:])
+	parts := strings.Fields(params)
+	if len(parts) != 3 {
+		return nil, moerr.NewInternalError(ctx, "invalid checksnapshotflushed command format, expected: checksnapshotflushed <snapshotName> <subscriptionAccountName> <publicationName>")
+	}
+	return &InternalCmdCheckSnapshotFlushed{
+		snapshotName:            parts[0],
+		subscriptionAccountName: parts[1],
+		publicationName:         parts[2],
+	}, nil
+}
+
 func getVariableValue(varDefault interface{}) string {
 	switch val := varDefault.(type) {
 	case int64:

@@ -235,8 +235,6 @@ import (
     toAccountOpt *tree.ToAccountOpt
     conflictOpt *tree.ConflictOpt
     diffOutputOpt   *tree.DiffOutputOpt
-    objectList      *tree.ObjectList
-    getObject       *tree.GetObject
     statementOption tree.StatementOption
 
     tableLock tree.TableLock
@@ -367,7 +365,7 @@ import (
 %token <str> EXTENSION
 %token <str> RETENTION PERIOD
 %token <str> CLONE BRANCH LOG REVERT REBASE DIFF
-%token <str> CONFLICT CONFLICT_FAIL CONFLICT_SKIP CONFLICT_ACCEPT OUTPUT OBJECTLIST GETOBJECT GETDDL
+%token <str> CONFLICT CONFLICT_FAIL CONFLICT_SKIP CONFLICT_ACCEPT OUTPUT
 
 // Sequence
 %token <str> INCREMENT CYCLE MINVALUE
@@ -469,9 +467,6 @@ import (
 // Insert
 %token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE PARALLEL STRICT SPLITSIZE
 
-// Snapshot
-%token <str> CHECKSNAPSHOTFLUSHED
-
 %token <str> UNUSED BINDINGS
 
 // Do
@@ -571,7 +566,7 @@ import (
 %type <statement> loop_stmt iterate_stmt leave_stmt repeat_stmt while_stmt
 %type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt show_publication_coverage_stmt show_ccpr_subscriptions_stmt drop_ccpr_subscription_stmt resume_ccpr_subscription_stmt pause_ccpr_subscription_stmt
 %type <statement> create_stage_stmt drop_stage_stmt alter_stage_stmt remove_stage_files_stmt
-%type <statement> create_snapshot_stmt drop_snapshot_stmt check_snapshot_flushed_stmt
+%type <statement> create_snapshot_stmt drop_snapshot_stmt
 %type <statement> create_pitr_stmt drop_pitr_stmt show_pitr_stmt alter_pitr_stmt restore_pitr_stmt show_recovery_window_stmt
 %type <str> urlparams
 %type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type
@@ -579,10 +574,7 @@ import (
 %type <accountsSetOption> alter_publication_accounts_opt create_publication_accounts
 %type <str> alter_publication_db_name_opt
 %type <statement> branch_stmt
-%type <objectList> objectlist_opt from_publication_opt
-%type <str> against_snapshot_opt getddl_snapshot_opt
 %type <toAccountOpt> to_account_opt
-%type <statement> getddl_opts
 %type <conflictOpt> conflict_opt
 %type <diffOutputOpt> diff_output_opt
 
@@ -985,7 +977,6 @@ normal_stmt:
 |   resume_ccpr_subscription_stmt
 |   pause_ccpr_subscription_stmt
 |   branch_stmt
-|   check_snapshot_flushed_stmt
 
 backup_stmt:
     BACKUP STRING FILESYSTEM STRING PARALLELISM STRING backup_type_opt backup_timestamp_opt
@@ -7515,22 +7506,6 @@ drop_snapshot_stmt:
         $$ = tree.NewDropSnapShot(ifExists, name)
     }
 
-check_snapshot_flushed_stmt:
-    CHECKSNAPSHOTFLUSHED ident ACCOUNT ident PUBLICATION ident
-    {
-        $$ = &tree.CheckSnapshotFlushed{
-            Name:            tree.Identifier($2.Compare()),
-            AccountName:     tree.Identifier($4.Compare()),
-            PublicationName: tree.Identifier($6.Compare()),
-        }
-    }
-|   CHECKSNAPSHOTFLUSHED ident
-    {
-        $$ = &tree.CheckSnapshotFlushed{
-            Name: tree.Identifier($2.Compare()),
-        }
-    }
-
 drop_pitr_stmt:
    DROP PITR exists_opt ident internal_opt
    {
@@ -8411,39 +8386,6 @@ branch_stmt:
     	t.ConflictOpt = $7
     	$$ = t
     }
-|   OBJECTLIST objectlist_opt SNAPSHOT ident against_snapshot_opt from_publication_opt
-    {
-    	t := tree.NewObjectList()
-    	t.Database = $2.Database
-    	t.Table = $2.Table
-    	t.Snapshot = tree.Identifier($4.Compare())
-    	if len($5) > 0 {
-    		snapshot := tree.Identifier($5)
-    		t.AgainstSnapshot = &snapshot
-    	}
-    	t.SubscriptionAccountName = $6.SubscriptionAccountName
-    	t.PubName = $6.PubName
-    	$$ = t
-    }
-|   GETOBJECT ident OFFSET INTEGRAL from_publication_opt
-    {
-    	t := tree.NewGetObject()
-    	t.ObjectName = tree.Identifier($2.Compare())
-    	t.ChunkIndex = $4.(int64)
-    	t.SubscriptionAccountName = $5.SubscriptionAccountName
-    	t.PubName = $5.PubName
-    	$$ = t
-    }
-|   GETDDL getddl_opts from_publication_opt
-    {
-    	t := $2.(*tree.GetDdl)
-    	t.SubscriptionAccountName = $3.SubscriptionAccountName
-    	pubName := $3.PubName
-    	if pubName != "" {
-    		t.PubName = &pubName
-    	}
-    	$$ = t
-    }
 
 diff_output_opt:
     {
@@ -8496,126 +8438,6 @@ conflict_opt:
     {
     	$$ = &tree.ConflictOpt {
             Opt: tree.CONFLICT_ACCEPT,
-    	}
-    }
-
-objectlist_opt:
-    {
-    	$$ = &tree.ObjectList{
-    		Database: "",
-    		Table: "",
-    	}
-    }
-    | DATABASE ident
-    {
-    	$$ = &tree.ObjectList{
-    		Database: tree.Identifier($2.Compare()),
-    		Table: "",
-    	}
-    }
-    | DATABASE ident TABLE ident
-    {
-    	$$ = &tree.ObjectList{
-    		Database: tree.Identifier($2.Compare()),
-    		Table: tree.Identifier($4.Compare()),
-    	}
-    }
-
-getddl_snapshot_opt:
-    {
-    	$$ = ""
-    }
-    | SNAPSHOT ident
-    {
-    	$$ = $2.Compare()
-    }
-
-getddl_opts:
-    {
-    	t := tree.NewGetDdl()
-    	$$ = t
-    }
-    | DATABASE ident
-    {
-    	t := tree.NewGetDdl()
-    	dbName := tree.Identifier($2.Compare())
-    	t.Database = &dbName
-    	$$ = t
-    }
-    | DATABASE ident TABLE ident
-    {
-    	t := tree.NewGetDdl()
-    	dbName := tree.Identifier($2.Compare())
-    	t.Database = &dbName
-    	tableName := tree.Identifier($4.Compare())
-    	t.Table = &tableName
-    	$$ = t
-    }
-    | DATABASE ident SNAPSHOT ident
-    {
-    	t := tree.NewGetDdl()
-    	dbName := tree.Identifier($2.Compare())
-    	t.Database = &dbName
-    	snapshot := tree.Identifier($4.Compare())
-    	t.Snapshot = &snapshot
-    	$$ = t
-    }
-    | DATABASE ident TABLE ident SNAPSHOT ident
-    {
-    	t := tree.NewGetDdl()
-    	dbName := tree.Identifier($2.Compare())
-    	t.Database = &dbName
-    	tableName := tree.Identifier($4.Compare())
-    	t.Table = &tableName
-    	snapshot := tree.Identifier($6.Compare())
-    	t.Snapshot = &snapshot
-    	$$ = t
-    }
-    | TABLE ident
-    {
-    	t := tree.NewGetDdl()
-    	tableName := tree.Identifier($2.Compare())
-    	t.Table = &tableName
-    	$$ = t
-    }
-    | TABLE ident SNAPSHOT ident
-    {
-    	t := tree.NewGetDdl()
-    	tableName := tree.Identifier($2.Compare())
-    	t.Table = &tableName
-    	snapshot := tree.Identifier($4.Compare())
-    	t.Snapshot = &snapshot
-    	$$ = t
-    }
-    | SNAPSHOT ident
-    {
-    	t := tree.NewGetDdl()
-    	snapshot := tree.Identifier($2.Compare())
-    	t.Snapshot = &snapshot
-    	$$ = t
-    }
-
-against_snapshot_opt:
-    {
-    	$$ = ""
-    }
-    | AGAINST SNAPSHOT ident
-    {
-    	$$ = $3.Compare()
-    }
-
-from_publication_opt:
-    {
-    	$$ = &tree.ObjectList{
-    		SubscriptionAccountName: "",
-    		PubName: "",
-    	}
-    }
-    | FROM ident PUBLICATION ident
-    {
-    	$$ = &tree.ObjectList{
-    		SubscriptionAccountName: $2.Compare(),
-    		PubName: tree.Identifier($4.Compare()),
     	}
     }
 

@@ -26,164 +26,176 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-// SnapshotResolver is a function type for resolving snapshot by name
-// This type allows dependency injection for testing
-type SnapshotResolver func(ses *Session, snapshotName string) (*plan2.Snapshot, error)
-
-// defaultSnapshotResolver is the default implementation of SnapshotResolver
-func defaultSnapshotResolver(ses *Session, snapshotName string) (*plan2.Snapshot, error) {
-	return ses.GetTxnCompileCtx().ResolveSnapshotWithSnapshotName(snapshotName)
+// SnapshotCoveredScope represents the scope of databases/tables covered by a snapshot
+type SnapshotCoveredScope struct {
+	DatabaseName string
+	TableName    string
+	Level        string
 }
 
-func handleGetDdl(
-	ctx context.Context,
-	ses *Session,
-	stmt *tree.GetDdl,
-) error {
-	return handleGetDdlWithChecker(ctx, ses, stmt, defaultSnapshotResolver)
+// GetAccountIDFromPublication verifies publication permission and returns the upstream account ID
+// Parameters:
+//   - ctx: context
+//   - bh: background executor
+//   - pubAccountName: publication account name
+//   - pubName: publication name
+//   - currentAccount: current tenant account name
+//
+// Returns:
+//   - accountID: the upstream account ID
+//   - accountName: the upstream account name
+//   - err: error if permission denied or publication not found
+func GetAccountIDFromPublication(ctx context.Context, bh BackgroundExec, pubAccountName string, pubName string, currentAccount string) (uint64, string, error) {
+	return getAccountFromPublication(ctx, bh, pubAccountName, pubName, currentAccount)
 }
 
-// handleGetDdlWithChecker is the internal implementation that accepts a snapshot resolver
-// This allows dependency injection for testing
-func handleGetDdlWithChecker(
-	ctx context.Context,
-	ses *Session,
-	stmt *tree.GetDdl,
-	snapshotResolver SnapshotResolver,
-) error {
-	var (
-		mrs      = ses.GetMysqlResultSet()
-		showCols []*MysqlColumn
-	)
-
-	ses.ClearAllMysqlResultSet()
-	ses.ClearResultBatches()
-
-	// Create columns: dbname, tablename, tableid, tablesql
-	col1 := new(MysqlColumn)
-	col1.SetName("dbname")
-	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	col1.SetCharset(charsetVarchar)
-	col1.SetLength(255) // reasonable default length
-	showCols = append(showCols, col1)
-
-	col2 := new(MysqlColumn)
-	col2.SetName("tablename")
-	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	col2.SetCharset(charsetVarchar)
-	col2.SetLength(255) // reasonable default length
-	showCols = append(showCols, col2)
-
-	col3 := new(MysqlColumn)
-	col3.SetName("tableid")
-	col3.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-	col3.SetSigned(true)           // tableid is signed integer
-	col3.SetCharset(charsetBinary) // integer types use binary charset
-	showCols = append(showCols, col3)
-
-	col4 := new(MysqlColumn)
-	col4.SetName("tablesql")
-	col4.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	col4.SetCharset(charsetVarchar)
-	col4.SetLength(5000) // SQL can be long
-	showCols = append(showCols, col4)
-
-	for _, col := range showCols {
-		mrs.AddColumn(col)
-	}
-
-	// Get database name and table name from statement
-	var databaseName string
-	var tableName string
-	if stmt.Database != nil {
-		databaseName = string(*stmt.Database)
-	}
-	if stmt.Table != nil {
-		tableName = string(*stmt.Table)
-	}
-
-	// Check publication permission using getAccountFromPublication and get account ID
-	pubAccountName := stmt.SubscriptionAccountName
-	pubName := ""
-	if stmt.PubName != nil {
-		pubName = string(*stmt.PubName)
-	}
-
-	if len(pubAccountName) == 0 || len(pubName) == 0 {
-		return moerr.NewInternalError(ctx, "publication account name and publication name are required for GET DDL")
-	}
-
-	bh := NewShareTxnBackgroundExec(ctx, ses, false)
-	defer bh.Close()
-	currentAccount := ses.GetTenantInfo().GetTenant()
-	accountID, _, err := getAccountFromPublication(ctx, bh, pubAccountName, pubName, currentAccount)
+// GetSnapshotTsByName gets the snapshot timestamp by snapshot name
+// Parameters:
+//   - ctx: context with account ID attached
+//   - bh: background executor
+//   - snapshotName: the snapshot name
+//
+// Returns:
+//   - ts: snapshot timestamp (physical time in nanoseconds)
+//   - err: error if snapshot not found or query failed
+func GetSnapshotTsByName(ctx context.Context, bh BackgroundExec, snapshotName string) (int64, error) {
+	record, err := getSnapshotByName(ctx, bh, snapshotName)
 	if err != nil {
-		return err
+		return 0, moerr.NewInternalErrorf(ctx, "failed to query snapshot: %v", err)
+	}
+	if record == nil {
+		return 0, moerr.NewInternalErrorf(ctx, "snapshot %s does not exist", snapshotName)
+	}
+	return record.ts, nil
+}
+
+// GetSnapshotCoveredScope gets the database/table scope covered by a snapshot
+// Parameters:
+//   - ctx: context with account ID attached
+//   - bh: background executor
+//   - snapshotName: the snapshot name
+//
+// Returns:
+//   - scope: the covered scope containing database name, table name and level
+//   - snapshotTs: snapshot timestamp
+//   - err: error if snapshot not found or query failed
+func GetSnapshotCoveredScope(ctx context.Context, bh BackgroundExec, snapshotName string) (*SnapshotCoveredScope, int64, error) {
+	record, err := getSnapshotByName(ctx, bh, snapshotName)
+	if err != nil {
+		return nil, 0, moerr.NewInternalErrorf(ctx, "failed to query snapshot: %v", err)
+	}
+	if record == nil {
+		return nil, 0, moerr.NewInternalErrorf(ctx, "snapshot %s does not exist", snapshotName)
 	}
 
-	// Use the authorized account context for execution
-	ctx = defines.AttachAccountId(ctx, uint32(accountID))
+	scope := &SnapshotCoveredScope{
+		Level: record.level,
+	}
 
-	// Get engine, mpool, and txn from session
-	eng := ses.GetTxnHandler().GetStorage()
+	switch record.level {
+	case "table":
+		scope.DatabaseName = record.databaseName
+		scope.TableName = record.tableName
+	case "database":
+		scope.DatabaseName = record.databaseName
+		scope.TableName = ""
+	case "account", "cluster":
+		scope.DatabaseName = ""
+		scope.TableName = ""
+	default:
+		return nil, 0, moerr.NewInternalErrorf(ctx, "unsupported snapshot level: %s", record.level)
+	}
+
+	return scope, record.ts, nil
+}
+
+// ComputeDdlBatch computes the DDL batch for given scope
+// This is the core function that can be used by both frontend handlers and upstream sql helper
+// Parameters:
+//   - ctx: context with account ID attached
+//   - databaseName: database name (empty to iterate all databases)
+//   - tableName: table name (empty to iterate all tables in database)
+//   - eng: storage engine
+//   - mp: memory pool
+//   - txn: transaction operator (should already have snapshot timestamp applied if needed)
+//
+// Returns:
+//   - batch: the result batch with columns (dbname, tablename, tableid, tablesql)
+//   - err: error if failed
+func ComputeDdlBatch(
+	ctx context.Context,
+	databaseName string,
+	tableName string,
+	eng engine.Engine,
+	mp *mpool.MPool,
+	txn TxnOperator,
+) (*batch.Batch, error) {
+	return getddlbatch(ctx, databaseName, tableName, eng, mp, txn)
+}
+
+// ComputeDdlBatchWithSnapshot computes the DDL batch with snapshot applied
+// Parameters:
+//   - ctx: context with account ID attached
+//   - databaseName: database name (empty to iterate all databases)
+//   - tableName: table name (empty to iterate all tables in database)
+//   - eng: storage engine
+//   - mp: memory pool
+//   - txn: transaction operator
+//   - snapshotTs: snapshot timestamp (0 means no snapshot)
+//
+// Returns:
+//   - batch: the result batch with columns (dbname, tablename, tableid, tablesql)
+//   - err: error if failed
+func ComputeDdlBatchWithSnapshot(
+	ctx context.Context,
+	databaseName string,
+	tableName string,
+	eng engine.Engine,
+	mp *mpool.MPool,
+	txn TxnOperator,
+	snapshotTs int64,
+) (*batch.Batch, error) {
+	// Apply snapshot timestamp if provided
+	if snapshotTs != 0 {
+		txn = txn.CloneSnapshotOp(timestamp.Timestamp{PhysicalTime: snapshotTs})
+	}
+	return getddlbatch(ctx, databaseName, tableName, eng, mp, txn)
+}
+
+// GetDdlBatchWithoutSession gets DDL batch without requiring Session
+// This is a version that can be used by test utilities or other components
+// If snapshot is provided, it will be applied to the transaction
+func GetDdlBatchWithoutSession(
+	ctx context.Context,
+	databaseName string,
+	tableName string,
+	eng engine.Engine,
+	txn client.TxnOperator,
+	mp *mpool.MPool,
+	snapshot *plan2.Snapshot,
+) (*batch.Batch, error) {
 	if eng == nil {
-		return moerr.NewInternalError(ctx, "engine is nil")
-	}
-	mp := ses.GetMemPool()
-	if mp == nil {
-		return moerr.NewInternalError(ctx, "mpool is nil")
-	}
-
-	// Get or create txn
-	// Try to get txn from TxnHandler first
-	txn := ses.GetTxnHandler().GetTxn()
-	// If no txn from TxnHandler, try to get from proc
-	if txn == nil && ses.GetProc() != nil {
-		txn = ses.GetProc().GetTxnOperator()
+		return nil, moerr.NewInternalError(ctx, "engine is nil")
 	}
 	if txn == nil {
-		// If no txn exists, we need to create one
-		// For read-only operations, we can use a snapshot read txn
-		// But creating a new txn requires ExecCtx which we don't have here
-		// So we return an error for now
-		return moerr.NewInternalError(ctx, "transaction is required for GETDDL")
+		return nil, moerr.NewInternalError(ctx, "txn is nil")
+	}
+	if mp == nil {
+		return nil, moerr.NewInternalError(ctx, "mpool is nil")
 	}
 
-	// Resolve snapshot if provided
-	if stmt.Snapshot != nil {
-		snapshotName := string(*stmt.Snapshot)
-		var err error
-		record, err := getSnapshotByNameFunc(ctx, bh, snapshotName)
-		if err != nil {
-			return moerr.NewInternalErrorf(ctx, "failed to resolve snapshot %s: %v", snapshotName, err)
-		}
-		if record != nil && record.ts != 0 {
-			// Clone txn with snapshot timestamp
-			txn = txn.CloneSnapshotOp(timestamp.Timestamp{PhysicalTime: record.ts})
-		}
+	// Apply snapshot to txn if provided
+	if snapshot != nil && snapshot.TS != nil {
+		txn = txn.CloneSnapshotOp(*snapshot.TS)
 	}
 
-	// Call getddlbatch to get the batch with DDL information
-	resultBatch, err := getddlbatch(ctx, databaseName, tableName, eng, mp, txn)
-	if err != nil {
-		return err
-	}
-	defer resultBatch.Clean(mp)
-
-	// Fill MySQL result set from batch
-	err = fillResultSet(ctx, resultBatch, ses, mrs)
-	if err != nil {
-		return err
-	}
-
-	// Save query result if needed
-	return trySaveQueryResult(ctx, ses, mrs)
+	// Call getddlbatch with the txn (which may have been cloned with snapshot)
+	return getddlbatch(ctx, databaseName, tableName, eng, mp, txn)
 }
 
 // visitTableDdl fills the batch with table DDL information
@@ -448,33 +460,44 @@ func getddlbatch(
 	return resultBatch, nil
 }
 
-// GetDdlBatchWithoutSession gets DDL batch without requiring Session
-// This is a version that can be used by test utilities or other components
-// If snapshot is provided, it will be applied to the transaction
-func GetDdlBatchWithoutSession(
-	ctx context.Context,
-	databaseName string,
-	tableName string,
-	eng engine.Engine,
-	txn client.TxnOperator,
-	mp *mpool.MPool,
-	snapshot *plan2.Snapshot,
-) (*batch.Batch, error) {
-	if eng == nil {
-		return nil, moerr.NewInternalError(ctx, "engine is nil")
-	}
-	if txn == nil {
-		return nil, moerr.NewInternalError(ctx, "txn is nil")
-	}
-	if mp == nil {
-		return nil, moerr.NewInternalError(ctx, "mpool is nil")
-	}
+// BuildDdlMysqlResultSet builds the MySQL result set columns for DDL query
+func BuildDdlMysqlResultSet(mrs *MysqlResultSet) {
+	colDbName := new(MysqlColumn)
+	colDbName.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	colDbName.SetName("dbname")
 
-	// Apply snapshot to txn if provided
-	if snapshot != nil && snapshot.TS != nil {
-		txn = txn.CloneSnapshotOp(*snapshot.TS)
-	}
+	colTableName := new(MysqlColumn)
+	colTableName.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	colTableName.SetName("tablename")
 
-	// Call getddlbatch with the txn (which may have been cloned with snapshot)
-	return getddlbatch(ctx, databaseName, tableName, eng, mp, txn)
+	colTableId := new(MysqlColumn)
+	colTableId.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	colTableId.SetName("tableid")
+
+	colTableSql := new(MysqlColumn)
+	colTableSql.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	colTableSql.SetName("tablesql")
+
+	mrs.AddColumn(colDbName)
+	mrs.AddColumn(colTableName)
+	mrs.AddColumn(colTableId)
+	mrs.AddColumn(colTableSql)
+}
+
+// FillDdlMysqlResultSet fills the MySQL result set from the DDL batch
+func FillDdlMysqlResultSet(resultBatch *batch.Batch, mrs *MysqlResultSet) {
+	if resultBatch != nil && resultBatch.RowCount() > 0 {
+		for i := 0; i < resultBatch.RowCount(); i++ {
+			row := make([]interface{}, 4)
+			// dbname
+			row[0] = resultBatch.Vecs[0].GetBytesAt(i)
+			// tablename
+			row[1] = resultBatch.Vecs[1].GetBytesAt(i)
+			// tableid
+			row[2] = vector.GetFixedAtNoTypeCheck[int64](resultBatch.Vecs[2], i)
+			// tablesql
+			row[3] = resultBatch.Vecs[3].GetBytesAt(i)
+			mrs.AddRow(row)
+		}
+	}
 }

@@ -32,8 +32,10 @@ const (
 	// Format: __++__internal_get_mo_indexes <tableId> <subscriptionAccountName> <publicationName> <snapshotName>
 	PublicationQueryMoIndexesSqlTemplate = `__++__internal_get_mo_indexes %d %s %s %s`
 
-	// Object list SQL template
-	PublicationObjectListSqlTemplate = `OBJECTLIST%s SNAPSHOT %s%s%s`
+	// Object list SQL template using internal command with publication permission check
+	// Format: __++__internal_object_list <snapshotName> <againstSnapshotName> <subscriptionAccountName> <publicationName>
+	// Note: againstSnapshotName can be "-" to indicate empty
+	PublicationObjectListSqlTemplate = `__++__internal_object_list %s %s %s %s`
 
 	// Get object SQL template using internal command with publication permission check
 	// Format: __++__internal_get_object <subscriptionAccountName> <publicationName> <objectName> <chunkIndex>
@@ -78,9 +80,9 @@ const (
 	// Format: __++__internal_get_databases <snapshotName> <accountName> <publicationName>
 	PublicationGetDatabasesSqlTemplate = `__++__internal_get_databases %s %s %s`
 
-	// Check snapshot flushed SQL template
-	// Parameters: snapshot_name, account_name, publication_name
-	PublicationCheckSnapshotFlushedSqlTemplate = `CHECKSNAPSHOTFLUSHED %s ACCOUNT %s PUBLICATION %s`
+	// Check snapshot flushed SQL template using internal command with publication permission check
+	// Format: __++__internal_check_snapshot_flushed <snapshotName> <subscriptionAccountName> <publicationName>
+	PublicationCheckSnapshotFlushedSqlTemplate = `__++__internal_check_snapshot_flushed %s %s %s`
 
 	// Update mo_ccpr_log SQL template
 	PublicationUpdateMoCcprLogSqlTemplate = `UPDATE mo_catalog.mo_ccpr_log ` +
@@ -367,46 +369,28 @@ func (b publicationSQLBuilder) QueryMoIndexesSQL(
 // Object List SQL
 // ------------------------------------------------------------------------------------------------
 
-// ObjectListSQL creates SQL for object list statement
-// Example: OBJECTLIST DATABASE db1 TABLE t1 SNAPSHOT sp2 AGAINST SNAPSHOT sp1 FROM acc1 PUBLICATION pub1
-// Example: OBJECTLIST DATABASE db1 SNAPSHOT sp2 FROM acc1 PUBLICATION pub1
-// Example: OBJECTLIST SNAPSHOT sp2 FROM acc1 PUBLICATION pub1
+// ObjectListSQL creates SQL for object list statement using internal command with publication permission check
+// Uses internal command: __++__internal_object_list <snapshotName> <againstSnapshotName> <subscriptionAccountName> <publicationName>
+// This command checks if the current account has permission to access the publication,
+// then uses the snapshot's level to determine dbName and tableName scope
+// Note: againstSnapshotName can be "-" to indicate empty
+// Returns object list records
 func (b publicationSQLBuilder) ObjectListSQL(
-	dbName string,
-	tableName string,
 	snapshotName string,
 	againstSnapshotName string,
 	subscriptionAccountName string,
 	pubName string,
 ) string {
-	var parts []string
-
-	if dbName != "" {
-		parts = append(parts, fmt.Sprintf(" DATABASE %s", escapeSQLIdentifier(dbName)))
+	// Use "-" to indicate empty against snapshot name
+	if againstSnapshotName == "" {
+		againstSnapshotName = "-"
 	}
-
-	if tableName != "" {
-		parts = append(parts, fmt.Sprintf(" TABLE %s", escapeSQLIdentifier(tableName)))
-	}
-
-	dbTablePart := strings.Join(parts, "")
-
-	var againstPart string
-	if againstSnapshotName != "" {
-		againstPart = fmt.Sprintf(" AGAINST SNAPSHOT %s", escapeSQLIdentifier(againstSnapshotName))
-	}
-
-	var fromPart string
-	if subscriptionAccountName != "" && pubName != "" {
-		fromPart = fmt.Sprintf(" FROM %s PUBLICATION %s", escapeSQLIdentifier(subscriptionAccountName), escapeSQLIdentifier(pubName))
-	}
-
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationObjectListSqlTemplate_Idx].SQL,
-		dbTablePart,
-		escapeSQLIdentifier(snapshotName),
-		againstPart,
-		fromPart,
+		escapeSQLString(snapshotName),
+		escapeSQLString(againstSnapshotName),
+		escapeSQLString(subscriptionAccountName),
+		escapeSQLString(pubName),
 	)
 }
 
@@ -518,19 +502,21 @@ func (b publicationSQLBuilder) GetDatabasesSQL(
 	)
 }
 
-// CheckSnapshotFlushedSQL creates SQL for checking if snapshot is flushed
+// CheckSnapshotFlushedSQL creates SQL for checking if snapshot is flushed using internal command
+// Uses internal command: __++__internal_check_snapshot_flushed <snapshotName> <subscriptionAccountName> <publicationName>
+// This command checks if the current account has permission to access the publication,
+// then checks if the snapshot is flushed
 // Returns result (bool)
-// Example: CHECKSNAPSHOTFLUSHED sp1 ACCOUNT account1 PUBLICATION pub1
 func (b publicationSQLBuilder) CheckSnapshotFlushedSQL(
 	snapshotName string,
-	accountName string,
+	subscriptionAccountName string,
 	publicationName string,
 ) string {
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationCheckSnapshotFlushedSqlTemplate_Idx].SQL,
-		escapeSQLIdentifier(snapshotName),
-		escapeSQLIdentifier(accountName),
-		escapeSQLIdentifier(publicationName),
+		escapeSQLString(snapshotName),
+		escapeSQLString(subscriptionAccountName),
+		escapeSQLString(publicationName),
 	)
 }
 

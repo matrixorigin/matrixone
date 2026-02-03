@@ -989,15 +989,6 @@ func GetObjectListFromSnapshotDiff(
 		return nil, nil, moerr.NewInternalError(ctx, "current snapshot name is empty")
 	}
 
-	// Determine database and table names based on sync level
-	var dbName, tableName string
-	if iterationCtx.SrcInfo.SyncLevel == SyncLevelDatabase || iterationCtx.SrcInfo.SyncLevel == SyncLevelTable {
-		dbName = iterationCtx.SrcInfo.DBName
-	}
-	if iterationCtx.SrcInfo.SyncLevel == SyncLevelTable {
-		tableName = iterationCtx.SrcInfo.TableName
-	}
-
 	// Determine against snapshot name
 	var againstSnapshotName string
 	if iterationCtx.PrevSnapshotName != "" {
@@ -1006,10 +997,9 @@ func GetObjectListFromSnapshotDiff(
 	}
 	// For first sync, againstSnapshotName is empty, which means get all objects from current snapshot
 
-	// Build OBJECTLIST SQL
+	// Build OBJECTLIST SQL using internal command
+	// The internal command uses the snapshot's level to determine dbName and tableName scope
 	objectListSQL := PublicationSQLBuilder.ObjectListSQL(
-		dbName,
-		tableName,
 		iterationCtx.CurrentSnapshotName,
 		againstSnapshotName,
 		iterationCtx.SubscriptionAccountName,

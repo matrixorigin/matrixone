@@ -39,9 +39,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
 
-func Test_handleCheckSnapshotFlushed(t *testing.T) {
+func Test_doCheckSnapshotFlushed(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
-	convey.Convey("handleCheckSnapshotFlushed succ", t, func() {
+	convey.Convey("doCheckSnapshotFlushed succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -157,7 +157,6 @@ func Test_handleCheckSnapshotFlushed(t *testing.T) {
 
 		proto.SetSession(ses)
 
-		ec := newTestExecCtx(ctx, ctrl)
 		stmt := &tree.CheckSnapshotFlushed{
 			Name:            tree.Identifier("test_snapshot"),
 			AccountName:     tree.Identifier("sys"),
@@ -165,7 +164,7 @@ func Test_handleCheckSnapshotFlushed(t *testing.T) {
 		}
 
 		// Test with snapshot not found - should return error
-		err = handleCheckSnapshotFlushed(ses, ec, stmt)
+		err = doCheckSnapshotFlushed(ctx, ses, stmt)
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err.Error(), convey.ShouldContainSubstring, "snapshot not found")
 	})
@@ -178,26 +177,31 @@ func Test_CheckSnapshotFlushed(t *testing.T) {
 		defer ctrl.Finish()
 
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
-		snapshotTS := types.BuildTS(1000, 0)
-		record := &snapshotRecord{
-			level: "invalid_level",
-			ts:    1000,
-		}
+		snapshotTs := int64(1000)
 		de := &disttae.Engine{}
 
-		_, err := CheckSnapshotFlushed(ctx, txnOperator, snapshotTS, de, record, nil)
+		_, err := CheckSnapshotFlushed(ctx, txnOperator, snapshotTs, de, "invalid_level", "", "")
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(moerr.IsMoErrCode(err, moerr.ErrInternal), convey.ShouldBeTrue)
 	})
 }
 
-func Test_GetSnapshotTS(t *testing.T) {
-	convey.Convey("GetSnapshotTS succ", t, func() {
-		record := &snapshotRecord{
-			ts: 12345,
+func Test_SnapshotInfo(t *testing.T) {
+	convey.Convey("SnapshotInfo fields", t, func() {
+		info := &SnapshotInfo{
+			SnapshotId:   "snap-001",
+			SnapshotName: "test_snapshot",
+			Ts:           12345,
+			Level:        "account",
+			AccountName:  "test_account",
+			DatabaseName: "test_db",
+			TableName:    "test_table",
+			ObjId:        100,
 		}
-		ts := GetSnapshotTS(record)
-		convey.So(ts, convey.ShouldEqual, int64(12345))
+		convey.So(info.Ts, convey.ShouldEqual, int64(12345))
+		convey.So(info.Level, convey.ShouldEqual, "account")
+		convey.So(info.DatabaseName, convey.ShouldEqual, "test_db")
+		convey.So(info.TableName, convey.ShouldEqual, "test_table")
 	})
 }
 
@@ -236,8 +240,8 @@ func (s checkSnapshotStubFS) PrefetchFile(ctx context.Context, filePath string) 
 func (s checkSnapshotStubFS) Cost() *fileservice.CostAttr                             { return nil }
 func (s checkSnapshotStubFS) Close(ctx context.Context)                               {}
 
-func Test_GetSnapshotRecordByName(t *testing.T) {
-	convey.Convey("GetSnapshotRecordByName invalid executor", t, func() {
+func Test_GetSnapshotInfoByName(t *testing.T) {
+	convey.Convey("GetSnapshotInfoByName invalid executor", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -245,7 +249,7 @@ func Test_GetSnapshotRecordByName(t *testing.T) {
 
 		// Use stub executor that returns an error to test error handling
 		stubExecutor := &errorStubExecutor{}
-		_, err := GetSnapshotRecordByName(context.Background(), stubExecutor, txnOperator, "test_snapshot")
+		_, err := GetSnapshotInfoByName(context.Background(), stubExecutor, txnOperator, "test_snapshot")
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
@@ -259,9 +263,7 @@ func Test_checkTableFlushTS(t *testing.T) {
 		mockDb := mock_frontend.NewMockDatabase(ctrl)
 		mockRel := mock_frontend.NewMockRelation(ctrl)
 
-		record := &snapshotRecord{
-			ts: 1000,
-		}
+		snapshotTs := int64(1000)
 
 		// Relation is called twice: once for getting table def, once in the loop for GetFlushTS
 		mockDb.EXPECT().Relation(ctx, "test_table", nil).Return(mockRel, nil).Times(2)
@@ -271,7 +273,7 @@ func Test_checkTableFlushTS(t *testing.T) {
 		mockRel.EXPECT().GetTableDef(ctx).Return(tableDef)
 		mockRel.EXPECT().GetFlushTS(ctx).Return(types.BuildTS(2000, 0), nil)
 
-		flushed, err := checkTableFlushTS(ctx, mockDb, "test_table", record)
+		flushed, err := checkTableFlushTS(ctx, mockDb, "test_table", snapshotTs)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(flushed, convey.ShouldBeTrue)
 	})
@@ -287,13 +289,11 @@ func Test_checkDBFlushTS(t *testing.T) {
 		txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 
-		record := &snapshotRecord{
-			ts: 1000,
-		}
+		snapshotTs := int64(1000)
 
 		// Note: checkDBFlushTS requires *disttae.Engine, not mock engine
 		// For now, we'll test the error path with nil engine
-		_, err := checkDBFlushTS(ctx, txnOperator, "test_db", nil, record)
+		_, err := checkDBFlushTS(ctx, txnOperator, "test_db", nil, snapshotTs)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
@@ -433,7 +433,6 @@ func Test_doCheckSnapshotFlushed_PermissionCheck(t *testing.T) {
 
 		proto.SetSession(ses)
 
-		ec := newTestExecCtx(ctx, ctrl)
 		stmt := &tree.CheckSnapshotFlushed{
 			Name:            tree.Identifier("test_snapshot"),
 			AccountName:     tree.Identifier("test_account"),
@@ -441,7 +440,7 @@ func Test_doCheckSnapshotFlushed_PermissionCheck(t *testing.T) {
 		}
 
 		// Test with database level snapshot but no permission
-		err = handleCheckSnapshotFlushed(ses, ec, stmt)
+		err = doCheckSnapshotFlushed(ctx, ses, stmt)
 		// Permission check should fail
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err.Error(), convey.ShouldContainSubstring, "publication permission denied")
@@ -545,7 +544,6 @@ func Test_doCheckSnapshotFlushed_SnapshotQueryError(t *testing.T) {
 
 		proto.SetSession(ses)
 
-		ec := newTestExecCtx(ctx, ctrl)
 		stmt := &tree.CheckSnapshotFlushed{
 			Name:            tree.Identifier("test_snapshot"),
 			AccountName:     tree.Identifier("sys"),
@@ -553,7 +551,7 @@ func Test_doCheckSnapshotFlushed_SnapshotQueryError(t *testing.T) {
 		}
 
 		// When getSnapshotByName returns error, handleCheckSnapshotFlushed returns error
-		err = handleCheckSnapshotFlushed(ses, ec, stmt)
+		err = doCheckSnapshotFlushed(ctx, ses, stmt)
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err.Error(), convey.ShouldContainSubstring, "snapshot query failed")
 	})
@@ -709,7 +707,6 @@ func Test_doCheckSnapshotFlushed_CheckSnapshotFlushedError(t *testing.T) {
 		defer ctrl.Finish()
 
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
-		snapshotTS := types.BuildTS(1000, 0)
 
 		// Test various invalid levels that cause CheckSnapshotFlushed to return error
 		testCases := []struct {
@@ -721,13 +718,10 @@ func Test_doCheckSnapshotFlushed_CheckSnapshotFlushedError(t *testing.T) {
 		}
 
 		for _, tc := range testCases {
-			record := &snapshotRecord{
-				level: tc.level,
-				ts:    1000,
-			}
+			snapshotTs := int64(1000)
 			de := &disttae.Engine{}
 
-			_, err := CheckSnapshotFlushed(ctx, txnOperator, snapshotTS, de, record, nil)
+			_, err := CheckSnapshotFlushed(ctx, txnOperator, snapshotTs, de, tc.level, "", "")
 			convey.So(err, convey.ShouldNotBeNil)
 			convey.So(moerr.IsMoErrCode(err, moerr.ErrInternal), convey.ShouldBeTrue)
 		}
@@ -742,15 +736,11 @@ func Test_doCheckSnapshotFlushed_AccountLevelSnapshot(t *testing.T) {
 		defer ctrl.Finish()
 
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
-		snapshotTS := types.BuildTS(1000, 0)
-		record := &snapshotRecord{
-			level: "account",
-			ts:    1000,
-		}
+		snapshotTs := int64(1000)
 
 		// Account level requires calling engine.Databases which will fail with nil engine
 		de := &disttae.Engine{}
-		_, err := CheckSnapshotFlushed(ctx, txnOperator, snapshotTS, de, record, nil)
+		_, err := CheckSnapshotFlushed(ctx, txnOperator, snapshotTs, de, "account", "", "")
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
@@ -840,7 +830,6 @@ func Test_doCheckSnapshotFlushed_SnapshotNotFound(t *testing.T) {
 
 		proto.SetSession(ses)
 
-		ec := newTestExecCtx(ctx, ctrl)
 		stmt := &tree.CheckSnapshotFlushed{
 			Name:            tree.Identifier("nonexistent_snapshot"),
 			AccountName:     tree.Identifier("sys"),
@@ -848,7 +837,7 @@ func Test_doCheckSnapshotFlushed_SnapshotNotFound(t *testing.T) {
 		}
 
 		// When getSnapshotByName returns nil record, handleCheckSnapshotFlushed returns error
-		err = handleCheckSnapshotFlushed(ses, ec, stmt)
+		err = doCheckSnapshotFlushed(ctx, ses, stmt)
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err.Error(), convey.ShouldContainSubstring, "snapshot not found")
 	})
@@ -886,11 +875,10 @@ func Test_doCheckSnapshotFlushed_GoodPath(t *testing.T) {
 		defer snapshotStub.Reset()
 
 		// Stub checkSnapshotFlushedFunc to return true (good path)
-		checkStub := gostub.Stub(&checkSnapshotFlushedFunc, func(ctx context.Context, txn client.TxnOperator, snapshotTS types.TS, engine *disttae.Engine, record *snapshotRecord, fs fileservice.FileService) (bool, error) {
-			// Verify the record passed is correct
-			convey.So(record.snapshotName, convey.ShouldEqual, "test_snapshot")
-			convey.So(record.level, convey.ShouldEqual, "cluster")
-			convey.So(record.ts, convey.ShouldEqual, int64(1000))
+		checkStub := gostub.Stub(&checkSnapshotFlushedFunc, func(ctx context.Context, txn client.TxnOperator, snapshotTs int64, engine *disttae.Engine, level, databaseName, tableName string) (bool, error) {
+			// Verify the parameters passed are correct
+			convey.So(level, convey.ShouldEqual, "cluster")
+			convey.So(snapshotTs, convey.ShouldEqual, int64(1000))
 			return true, nil
 		})
 		defer checkStub.Reset()
@@ -962,7 +950,6 @@ func Test_doCheckSnapshotFlushed_GoodPath(t *testing.T) {
 
 		proto.SetSession(ses)
 
-		ec := newTestExecCtx(ctx, ctrl)
 		stmt := &tree.CheckSnapshotFlushed{
 			Name:            tree.Identifier("test_snapshot"),
 			AccountName:     tree.Identifier("sys"),
@@ -970,7 +957,7 @@ func Test_doCheckSnapshotFlushed_GoodPath(t *testing.T) {
 		}
 
 		// Test good path: snapshot found, cluster level (no permission check), returns true
-		err = handleCheckSnapshotFlushed(ses, ec, stmt)
+		err = doCheckSnapshotFlushed(ctx, ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
 		// Result should be true (snapshot flushed)
 		convey.So(ses.mrs.GetRowCount(), convey.ShouldEqual, 1)

@@ -191,7 +191,7 @@ func statementCanBeExecutedInUncommittedTransaction(
 		*tree.SetLogserviceSettings:
 		return true, nil
 		//others
-	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList, *InternalCmdGetSnapshotTs, *InternalCmdGetDatabases, *InternalCmdGetMoIndexes, *InternalCmdGetDdl, *InternalCmdGetObject:
+	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList, *InternalCmdGetSnapshotTs, *InternalCmdGetDatabases, *InternalCmdGetMoIndexes, *InternalCmdGetDdl, *InternalCmdGetObject, *InternalCmdObjectList, *InternalCmdCheckSnapshotFlushed:
 		return true, nil
 	case *tree.PrepareStmt:
 		return statementCanBeExecutedInUncommittedTransaction(ctx, ses, st.Stmt)
@@ -241,13 +241,6 @@ func statementCanBeExecutedInUncommittedTransaction(
 	case *tree.CallStmt:
 		// Call procedure can be executed in an uncommitted transaction, usually used in
 		// nested procedure call.
-		return true, nil
-	case *tree.CheckSnapshotFlushed,
-		*tree.ObjectList,
-		*tree.GetDdl,
-		*tree.GetObject:
-		// CheckSnapshotFlushed is a read-only operation that checks if a snapshot is flushed.
-		// It can be safely executed in an uncommitted transaction.
 		return true, nil
 	}
 

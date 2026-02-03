@@ -213,6 +213,18 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleInternalGetObject(ses, execCtx, st); err != nil {
 			return
 		}
+	case *InternalCmdObjectList:
+		ses.EnterFPrint(FPInternalCmdObjectList)
+		defer ses.ExitFPrint(FPInternalCmdObjectList)
+		if err = handleInternalObjectList(ses, execCtx, st); err != nil {
+			return
+		}
+	case *InternalCmdCheckSnapshotFlushed:
+		ses.EnterFPrint(FPInternalCmdCheckSnapshotFlushed)
+		defer ses.ExitFPrint(FPInternalCmdCheckSnapshotFlushed)
+		if err = handleInternalCheckSnapshotFlushed(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.CreatePublication:
 		ses.EnterFPrint(FPCreatePublication)
 		defer ses.ExitFPrint(FPCreatePublication)
@@ -488,12 +500,6 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleDropSnapshot(ses, execCtx, st); err != nil {
 			return
 		}
-	case *tree.CheckSnapshotFlushed:
-		ses.EnterFPrint(FPCheckSnapshotFlushed)
-		defer ses.ExitFPrint(FPCheckSnapshotFlushed)
-		if err = handleCheckSnapshotFlushed(ses, execCtx, st); err != nil {
-			return
-		}
 	case *tree.RestoreSnapShot:
 		ses.EnterFPrint(FPRestoreSnapShot)
 		defer ses.ExitFPrint(FPRestoreSnapShot)
@@ -614,26 +620,6 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 			return
 		}
 
-	case *tree.ObjectList:
-		ses.EnterFPrint(FPObjectList)
-		defer ses.ExitFPrint(FPObjectList)
-		if err = handleObjectList(execCtx.reqCtx, ses, st); err != nil {
-			return
-		}
-
-	case *tree.GetDdl:
-		ses.EnterFPrint(FPGetDdl)
-		defer ses.ExitFPrint(FPGetDdl)
-		if err = handleGetDdl(execCtx.reqCtx, ses, st); err != nil {
-			return
-		}
-
-	case *tree.GetObject:
-		ses.EnterFPrint(FPGetObject)
-		defer ses.ExitFPrint(FPGetObject)
-		if err = handleGetObject(execCtx.reqCtx, ses, st); err != nil {
-			return
-		}
 
 	case *tree.DataBranchDiff,
 		*tree.DataBranchMerge,
