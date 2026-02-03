@@ -23,8 +23,11 @@ import "C"
 import (
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
@@ -63,6 +66,85 @@ func FilteredSearchUnsafeWithBloomFilter(
 		C.usearch_scalar_kind_t(index.GetConfig().Quantization.CValue()),
 		C.size_t(limit),
 		bfptr,
+		(*C.usearch_key_t)(&keys[0]),
+		(*C.usearch_distance_t)(&distances[0]),
+		(*C.usearch_error_t)(&errorMessage)))
+
+	if errorMessage != nil {
+		return nil, nil, moerr.NewInternalErrorNoCtx(C.GoString(errorMessage))
+	}
+
+	keys = keys[:resultCount]
+	distances = distances[:resultCount]
+	return keys, distances, nil
+}
+
+func FilteredSearchUnsafeWithUniqueJoinKeys(
+	index *usearch.Index,
+	query unsafe.Pointer,
+	limit uint,
+	uniqkeys *vector.Vector,
+) (keys []usearch.Key, distances []float32, err error) {
+	var errorMessage *C.char
+
+	if index.GetHandle() == nil {
+		panic("index is uninitialized")
+	}
+	handle := C.usearch_index_t(index.GetHandle())
+
+	if uniqkeys.GetType().Oid != types.T_int64 {
+		return nil, nil, moerr.NewInternalErrorNoCtx("unique join key vector type is not int64")
+	}
+
+	var bmptr *C.uint64_t
+	var bmsize uint64
+
+	if uniqkeys.Length() > 0 {
+		maxID := int64(0)
+		for i := 0; i < uniqkeys.Length(); i++ {
+			if uniqkeys.IsNull(uint64(i)) {
+				continue
+			}
+			id := vector.GetFixedAtNoTypeCheck[int64](uniqkeys, i)
+			if id > maxID {
+				maxID = id
+			}
+		}
+
+		// create bitmap
+		var bm bitmap.Bitmap
+		bm.InitWithSize(maxID)
+		for i := 0; i < uniqkeys.Length(); i++ {
+			if uniqkeys.IsNull(uint64(i)) {
+				continue
+			}
+			id := vector.GetFixedAtNoTypeCheck[int64](uniqkeys, i)
+			bm.Add(uint64(id))
+		}
+
+		bmptr = (*C.uint64_t)(unsafe.Pointer(bm.Ptr()))
+		bmsize = uint64(bm.Size() / 8) // number of uint64
+
+	}
+
+	if query == nil {
+		return nil, nil, moerr.NewInternalErrorNoCtx("query pointer cannot be nil")
+	}
+
+	if limit == 0 {
+		return []usearch.Key{}, []float32{}, nil
+	}
+
+	keys = make([]usearch.Key, limit)
+	distances = make([]float32, limit)
+
+	resultCount := uint(C.usearchex_filtered_search_with_bitmap(
+		handle,
+		query,
+		C.usearch_scalar_kind_t(index.GetConfig().Quantization.CValue()),
+		C.size_t(limit),
+		bmptr,
+		C.size_t(bmsize),
 		(*C.usearch_key_t)(&keys[0]),
 		(*C.usearch_distance_t)(&distances[0]),
 		(*C.usearch_error_t)(&errorMessage)))

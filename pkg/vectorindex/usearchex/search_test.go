@@ -20,6 +20,9 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
@@ -151,4 +154,82 @@ func TestFilteredSearchEdges(t *testing.T) {
 	keys, _, err = FilteredSearchUnsafeWithBloomFilter(index, unsafe.Pointer(&vector[0]), 10, bf)
 	require.NoError(t, err)
 	require.NotContains(t, keys, foundkey)
+}
+
+func TestFilteredSearchWithUniqueJoinKeys(t *testing.T) {
+	mp := mpool.MustNewZero()
+	index := createTestIndex(t, defaultTestDimensions, usearch.F32)
+	defer func() {
+		if err := index.Destroy(); err != nil {
+			t.Errorf("Failed to destroy index: %v", err)
+		}
+	}()
+
+	// Ensure capacity before first add
+	if err := index.Reserve(1); err != nil {
+		t.Fatalf("Failed to reserve capacity: %v", err)
+	}
+
+	// Add a vector
+	vectorData := generateTestVector(defaultTestDimensions)
+	vectorData[0] = 42.0
+	vectorData[1] = 24.0
+
+	foundkey := uint64(100)
+
+	err := index.Add(foundkey, vectorData)
+	if err != nil {
+		t.Fatalf("Failed to add vector: %v", err)
+	}
+
+	limit := uint(10)
+
+	// Case 1: Filter includes the key
+	uniqkeys := vector.NewVec(types.T_int64.ToType())
+	defer uniqkeys.Free(mp)
+	err = vector.AppendFixed(uniqkeys, int64(foundkey), false, mp)
+	require.NoError(t, err)
+
+	keys, distances, err := FilteredSearchUnsafeWithUniqueJoinKeys(index, unsafe.Pointer(&vectorData[0]), limit, uniqkeys)
+	require.NoError(t, err)
+	_ = distances
+
+	require.Equal(t, 1, len(keys))
+	require.Equal(t, foundkey, keys[0])
+
+	// Case 2: Filter excludes the key
+	uniqkeys2 := vector.NewVec(types.T_int64.ToType())
+	defer uniqkeys2.Free(mp)
+	err = vector.AppendFixed(uniqkeys2, int64(999), false, mp) // Different key
+	require.NoError(t, err)
+
+	keys2, _, err := FilteredSearchUnsafeWithUniqueJoinKeys(index, unsafe.Pointer(&vectorData[0]), limit, uniqkeys2)
+	require.NoError(t, err)
+	require.Empty(t, keys2)
+
+	// Case 3: Empty filter. Should return no results as the filter set is empty.
+	uniqkeys3 := vector.NewVec(types.T_int64.ToType())
+	defer uniqkeys3.Free(mp)
+
+	keys3, _, err := FilteredSearchUnsafeWithUniqueJoinKeys(index, unsafe.Pointer(&vectorData[0]), limit, uniqkeys3)
+	require.NoError(t, err)
+	require.Empty(t, keys3)
+
+	// Case 4: Incorrect vector type for unique keys
+	badVec := vector.NewVec(types.T_int32.ToType())
+	defer badVec.Free(mp)
+	_, _, err = FilteredSearchUnsafeWithUniqueJoinKeys(index, unsafe.Pointer(&vectorData[0]), limit, badVec)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unique join key vector type is not int64")
+
+	// Case 5: Nil query pointer
+	_, _, err = FilteredSearchUnsafeWithUniqueJoinKeys(index, nil, limit, uniqkeys)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "query pointer cannot be nil")
+
+	// Case 6: Zero limit
+	keys4, distances4, err := FilteredSearchUnsafeWithUniqueJoinKeys(index, unsafe.Pointer(&vectorData[0]), 0, uniqkeys)
+	require.NoError(t, err)
+	require.Empty(t, keys4)
+	require.Empty(t, distances4)
 }
