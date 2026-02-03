@@ -35,8 +35,12 @@ drop table t1;
 #EXTREME VALUE
 create table t1(a int);
 select count(*) from t1;
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(1\)",true)
+explain analyze select count(*) from t1;
+
 insert into t1 values(null),(null),(null),(null);
 select count(*) from t1;
+select count(a) from t1;
 drop table t1;
 
 

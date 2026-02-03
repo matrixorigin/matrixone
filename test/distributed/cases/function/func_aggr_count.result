@@ -50,10 +50,24 @@ create table t1(a int);
 select count(*) from t1;
 ➤ count(*)[-5,64,0]  𝄀
 0
+explain analyze select count(*) from t1;
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(1\)", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on func_aggr_count.t1  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=0 inputRows=0 outputRows=0 (min=0, max=0) InputSize=0 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+              Aggregate Functions: starcount(1)
 insert into t1 values(null),(null),(null),(null);
 select count(*) from t1;
 ➤ count(*)[-5,64,0]  𝄀
 4
+select count(a) from t1;
+➤ count(a)[-5,64,0]  𝄀
+0
 drop table t1;
 CREATE TABLE t1 (
 bug_id bigint(9) NOT NULL,
@@ -138,10 +152,10 @@ explain analyze select count(*) from t1;
 Project  𝄀
   Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
   ->  Aggregate  𝄀
-        Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=1 (min=1, max=1) InputSize=6 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on func_aggr_count.t1  𝄀
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=3 outputRows=3 (min=3, max=3) InputSize=6 bytes OutputSize=6 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=12 bytes (min=12 bytes, max=12 bytes)  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=0 inputRows=0 outputRows=0 (min=0, max=0) InputSize=0 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
               Aggregate Functions: starcount(1)
 explain analyze select count(a) from t1;
 -- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(t1\.a\)", true)
@@ -149,10 +163,10 @@ explain analyze select count(a) from t1;
 Project  𝄀
   Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
   ->  Aggregate  𝄀
-        Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=1 (min=1, max=1) InputSize=6 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
         Aggregate Functions: count(t1.a)  𝄀
         ->  Table Scan on func_aggr_count.t1  𝄀
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=3 outputRows=3 (min=3, max=3) InputSize=6 bytes OutputSize=6 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=12 bytes (min=12 bytes, max=12 bytes)  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=0 inputRows=0 outputRows=0 (min=0, max=0) InputSize=0 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
               Aggregate Functions: starcount(t1.a)
 explain analyze select count(a) from t1 where a = 1;
 -- @regex("(?s)Table Scan.*Filter Cond", true)
@@ -228,10 +242,10 @@ explain analyze select count(*) from t1;
 Project  𝄀
   Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
   ->  Aggregate  𝄀
-        Analyze: timeConsumed=0ms waitTime=0ms inputRows=6 outputRows=1 (min=1, max=1) InputSize=20 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on func_aggr_count.t1  𝄀
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=5 outputRows=5 (min=5, max=5) InputSize=20 bytes OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=40 bytes (min=40 bytes, max=40 bytes)  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=0 inputRows=0 outputRows=0 (min=0, max=0) InputSize=0 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
               Aggregate Functions: starcount(1)
 drop table t1;
 CREATE TABLE t1 (a INT, b INT);
@@ -465,7 +479,7 @@ SELECT COUNT(*) FROM t1;
 ➤ COUNT(*)[-5,64,0]  𝄀
 100000
 explain analyze SELECT COUNT(*) FROM t1;
--- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(\*\)", true)
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(1\)", true)
 ➤ tp query plan[12,-1,0]  𝄀
 Project  𝄀
   Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀

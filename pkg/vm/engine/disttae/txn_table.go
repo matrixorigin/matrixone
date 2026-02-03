@@ -641,6 +641,252 @@ func (tbl *txnTable) Ranges(ctx context.Context, rangesParam engine.RangesParam)
 	return tbl.doRanges(ctx, rangesParam)
 }
 
+func (tbl *txnTable) StarCount(ctx context.Context) (uint64, error) {
+	part, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	snapshot := tbl.db.op.SnapshotTS()
+	fs, err := fileservice.Get[fileservice.FileService](
+		tbl.getTxn().proc.Base.FileService,
+		defines.SharedFileServiceName)
+	if err != nil {
+		return 0, err
+	}
+
+	// Fast path: readonly transaction has no uncommitted data
+	if tbl.getTxn().ReadOnly() {
+		return part.CountRows(ctx, types.TimestampToTS(snapshot), fs)
+	}
+
+	// Determine the range of workspace entries to scan.
+	// For snapshot operations, only scan entries before the snapshot offset.
+	// For normal operations, scan all entries.
+	txnOffset := len(tbl.getTxn().writes)
+	if tbl.db.op.IsSnapOp() {
+		txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
+	}
+
+	// Check if there are uncommitted tombstones in the workspace.
+	// This determines whether we can use the fast path (inserts only) or
+	// need the slow path (inserts minus tombstones).
+	hasUncommittedTombstones := false
+	tbl.getTxn().ForEachTableWrites(
+		tbl.db.databaseId,
+		tbl.tableId,
+		txnOffset,
+		func(entry Entry) {
+			if entry.typ == DELETE && entry.bat != nil && !entry.bat.IsEmpty() {
+				hasUncommittedTombstones = true
+			}
+		})
+
+	// Get committed row count from PartitionState.
+	// This already accounts for committed inserts minus committed tombstones.
+	committedRows, err := part.CountRows(ctx, types.TimestampToTS(snapshot), fs)
+	if err != nil {
+		return 0, err
+	}
+
+	// Count uncommitted inserts from workspace (both in-memory and persisted).
+	uncommittedInserts := uint64(0)
+	tbl.getTxn().ForEachTableWrites(
+		tbl.db.databaseId,
+		tbl.tableId,
+		txnOffset,
+		func(entry Entry) {
+			if entry.typ != INSERT || entry.bat == nil || entry.bat.IsEmpty() {
+				return
+			}
+
+			// Persisted inserts have ObjectStats in column 1 (one row per object; batch may have multiple objects).
+			// In-memory inserts have raw data rows.
+			if len(entry.bat.Attrs) >= 2 && entry.bat.Attrs[1] == catalog.ObjectMeta_ObjectStats {
+				vec := entry.bat.Vecs[1]
+				for i := 0; i < vec.Length(); i++ {
+					var stats objectio.ObjectStats
+					stats.UnMarshal(vec.GetBytesAt(i))
+					uncommittedInserts += uint64(stats.Rows())
+				}
+			} else {
+				uncommittedInserts += uint64(entry.bat.RowCount())
+			}
+		})
+
+	// Fast path: no uncommitted tombstones, just add uncommitted inserts
+	if !hasUncommittedTombstones {
+		return committedRows + uncommittedInserts, nil
+	}
+
+	// Slow path: has uncommitted tombstones.
+	// Formula: CommittedRows + UncommittedInserts - UncommittedTombstones
+	//
+	// Uncommitted tombstones come in two forms:
+	// 1. In-memory: rowids stored directly in batch, no visibility check needed
+	//    because transfer mechanism updates rowids in-place when compaction happens.
+	// 2. Persisted: tombstone objects on S3, need visibility check because
+	//    after transfer, both old (pointing to deleted objects) and new
+	//    (pointing to new objects) tombstone entries exist in workspace.
+	uncommittedDeletes := uint64(0)
+	inMemoryDeletes := uint64(0)
+	tbl.getTxn().ForEachTableWrites(
+		tbl.db.databaseId,
+		tbl.tableId,
+		txnOffset,
+		func(entry Entry) {
+			if entry.typ != DELETE || entry.bat == nil || entry.bat.IsEmpty() {
+				return
+			}
+
+			if entry.fileName == "" {
+				// In-memory tombstones: direct count without visibility check.
+				// Transfer updates rowids in-place, so all rowids point to visible objects.
+				count := uint64(entry.bat.RowCount())
+				uncommittedDeletes += count
+				inMemoryDeletes += count
+			}
+			// Persisted tombstones are handled separately below
+		})
+
+	// Count persisted uncommitted tombstones with visibility check.
+	// These require reading from S3 and checking if target data objects are visible.
+	persistedTombstoneCount, err := tbl.countUncommittedPersistedTombstones(
+		ctx, part, types.TimestampToTS(snapshot), fs, txnOffset)
+	if err != nil {
+		return 0, err
+	}
+	uncommittedDeletes += persistedTombstoneCount
+
+	return committedRows + uncommittedInserts - uncommittedDeletes, nil
+}
+
+// countUncommittedPersistedTombstones counts tombstones from persisted tombstone objects
+// in the transaction workspace.
+//
+// Unlike committed tombstones, uncommitted tombstones do not need:
+// - Timestamp check: uncommitted data has no commit timestamp, always visible to current txn
+// - Deduplication: visibility check automatically filters out old tombstones after transfer
+//
+// However, they do need visibility check because:
+// - After transfer, old tombstone entries (pointing to deleted objects) remain in workspace
+// - New tombstone entries (pointing to new objects) are added
+// - We must only count tombstones pointing to visible data objects
+func (tbl *txnTable) countUncommittedPersistedTombstones(
+	ctx context.Context,
+	part *logtailreplay.PartitionState,
+	snapshot types.TS,
+	fs fileservice.FileService,
+	txnOffset int,
+) (uint64, error) {
+	count := uint64(0)
+	var firstErr error
+	tbl.getTxn().ForEachTableWrites(
+		tbl.db.databaseId,
+		tbl.tableId,
+		txnOffset,
+		func(entry Entry) {
+			if firstErr != nil {
+				return
+			}
+			if entry.typ != DELETE || entry.fileName == "" {
+				return
+			}
+			if entry.bat == nil || entry.bat.IsEmpty() {
+				return
+			}
+
+			// Persisted tombstones have ObjectStats in column 0
+			for i := 0; i < entry.bat.Vecs[0].Length(); i++ {
+				var stats objectio.ObjectStats
+				stats.UnMarshal(entry.bat.Vecs[0].GetBytesAt(i))
+
+				objDeleteCount, err := tbl.countSingleTombstoneObject(ctx, part, snapshot, fs, stats)
+				if err != nil {
+					firstErr = err
+					return
+				}
+				count += objDeleteCount
+			}
+		})
+
+	return count, firstErr
+}
+
+// countSingleTombstoneObject counts visible tombstones from a single tombstone object.
+//
+// For each rowid in the tombstone object:
+// 1. Check if the target data object is visible at snapshot
+// 2. If visible, count the tombstone
+//
+// No timestamp check is needed because uncommitted tombstones have no commit timestamp.
+// No deduplication is needed because visibility check filters out duplicates from transfer.
+func (tbl *txnTable) countSingleTombstoneObject(
+	ctx context.Context,
+	part *logtailreplay.PartitionState,
+	snapshot types.TS,
+	fs fileservice.FileService,
+	stats objectio.ObjectStats,
+) (uint64, error) {
+	count := uint64(0)
+
+	// Read only rowid column, no need for commit timestamp
+	attrs := objectio.GetTombstoneAttrs(objectio.HiddenColumnSelection_None)
+	persistedDeletes := containers.NewVectors(len(attrs))
+
+	var readErr error
+
+	objectio.ForeachBlkInObjStatsList(true, nil,
+		func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
+			var release func()
+			// cnCreated=true because uncommitted tombstones are always CN-created
+			if _, release, readErr = ioutil.ReadDeletes(
+				ctx, blk.MetaLoc[:], fs, true, persistedDeletes, nil,
+			); readErr != nil {
+				return false
+			}
+			defer release()
+
+			rowIds := vector.MustFixedColNoTypeCheck[types.Rowid](&persistedDeletes[0])
+
+			// Cache visibility check result for consecutive rowids from same object
+			var lastObjId types.Objectid
+			var lastVisible bool
+			var lastObjIdSet bool
+
+			for j := 0; j < len(rowIds); j++ {
+				objId := rowIds[j].BorrowObjectID()
+
+				// Optimization: cache visibility result for same object
+				if !lastObjIdSet || !objId.EQ(&lastObjId) {
+					lastObjId = *objId
+					lastObjIdSet = true
+					lastVisible = part.IsDataObjectVisible(objId, snapshot)
+				}
+
+				if lastVisible {
+					count++
+				}
+			}
+
+			return true
+		}, stats)
+
+	return count, readErr
+}
+
+// EstimateCommittedTombstoneCount returns an estimated count of committed tombstone rows.
+// This is very lightweight (only reads metadata, no S3 I/O) and can be used to decide
+// whether to use StarCount optimization.
+func (tbl *txnTable) EstimateCommittedTombstoneCount(ctx context.Context) (int, error) {
+	part, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return 0, err
+	}
+	snapshot := tbl.db.op.SnapshotTS()
+	return part.EstimateCommittedTombstoneCount(types.TimestampToTS(snapshot)), nil
+}
+
 func (tbl *txnTable) getObjList(ctx context.Context, rangesParam engine.RangesParam) (data engine.RelData, err error) {
 	needUncommited := rangesParam.Policy&engine.Policy_CollectUncommittedData != 0
 
@@ -1954,8 +2200,9 @@ func (tbl *txnTable) BuildReaders(
 	//	return nil, moerr.NewInternalErrorNoCtx("orderBy only support one reader")
 	//}
 
-	//relData maybe is nil, indicate that only read data from memory.
-	if relData == nil || relData.DataCnt() == 0 {
+	// relData maybe is nil, indicate that only read data from memory.
+	// When relData is non-nil but DataCnt()==0, caller explicitly requests no blocks (e.g. StarCount optimization: only relation.StarCount() is used, no scan).
+	if relData == nil {
 		part, err := tbl.getPartitionState(ctx)
 		if err != nil {
 			return nil, err
@@ -1964,6 +2211,12 @@ func (tbl *txnTable) BuildReaders(
 		relData = readutil.NewBlockListRelationData(
 			1,
 			readutil.WithPartitionState(part))
+	} else if relData.DataCnt() == 0 {
+		// No blocks to read — return only EmptyReaders so no data flows.
+		for i := 0; i < num; i++ {
+			rds = append(rds, new(readutil.EmptyReader))
+		}
+		return rds, nil
 	}
 
 	blkCnt := relData.DataCnt()
