@@ -495,3 +495,7 @@ func NewReplicaNotMatch(current, received string) *Error {
 func NewCantCompileForPrepareNoCtx() *Error {
 	return newError(Context(), ErrCantCompileForPrepare)
 }
+
+func NewSchedulerClosedNoCtx() *Error {
+	return newError(Context(), ErrSchedulerClosed)
+}
