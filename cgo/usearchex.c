@@ -13,11 +13,17 @@
 // limitations under the License.
 
 #include "usearchex.h"
+#include "bitmap.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdint.h>
 
-static int filtered_search_cb(usearch_key_t key, void *data) {
+typedef struct bitmap_int_t {
+    uint64_t *bitmap;
+    size_t len;
+} bitmap_int_t;
+
+static int filtered_search_bf_cb(usearch_key_t key, void *data) {
     bloomfilter_t *bf = (bloomfilter_t*) data;
     if (bf) {
         return bloomfilter_test(bf, (const char *)&key, sizeof(usearch_key_t));
@@ -35,9 +41,38 @@ size_t usearchex_filtered_search_with_bloomfilter(
             query_vector, 
             (usearch_scalar_kind_t)query_kind, 
             count, 
-            filtered_search_cb, 
+            filtered_search_bf_cb, 
             bf, 
             keys, 
             distances, 
+            error);
+}
+
+static int filtered_search_bitmap_cb(usearch_key_t key, void *data) {
+    bitmap_int_t *bm = (bitmap_int_t*) data;
+    if (bm) {
+        return bitmap_test_with_len(bm->bitmap, bm->len, key);
+    }
+    return 1;
+}
+
+size_t usearchex_filtered_search_with_bitmap(
+    usearch_index_t index,
+    void const* query_vector, usearch_scalar_kind_t query_kind, size_t count,
+    uint64_t *bitmap, size_t bmlen,
+    usearch_key_t* keys, usearch_distance_t* distances, usearch_error_t* error) {
+
+    bitmap_int_t bm;
+    bm.bitmap = bitmap;
+    bm.len = bmlen;
+
+    return usearch_filtered_search((usearch_index_t)index,
+            query_vector,
+            (usearch_scalar_kind_t)query_kind,
+            count,
+            filtered_search_bitmap_cb,
+            &bm,
+            keys,
+            distances,
             error);
 }

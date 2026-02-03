@@ -21,10 +21,19 @@
 typedef char const *mo_error_t;
 
 /* usearch */
+
+/* filtered search with bloomfilter */
 size_t usearchex_filtered_search_with_bloomfilter(
     usearch_index_t index,
     void const* query_vector, usearch_scalar_kind_t query_kind, size_t count,
     void *bf,
+    usearch_key_t* keys, usearch_distance_t* distances, usearch_error_t* error);
+
+/* filtered search with bitmap */
+size_t usearchex_filtered_search_with_bitmap(
+    usearch_index_t index,
+    void const* query_vector, usearch_scalar_kind_t query_kind, size_t count,
+    uint64_t *bitmap, size_t bmlen,
     usearch_key_t* keys, usearch_distance_t* distances, usearch_error_t* error);
 
 #endif

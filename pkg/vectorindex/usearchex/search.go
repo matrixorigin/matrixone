@@ -79,11 +79,44 @@ func FilteredSearchUnsafeWithBloomFilter(
 	return keys, distances, nil
 }
 
+func CreateBitSetFromInt64Vector(vec *vector.Vector) (*bitmap.Bitmap, error) {
+
+	if vec.GetType().Oid != types.T_int64 {
+		return nil, moerr.NewInternalErrorNoCtx("CreateBitSetFromInt64Vector: vector type is not int64")
+	}
+
+	var bm bitmap.Bitmap
+	if vec.Length() > 0 {
+		maxID := int64(0)
+		for i := 0; i < vec.Length(); i++ {
+			if vec.IsNull(uint64(i)) {
+				continue
+			}
+			id := vector.GetFixedAtNoTypeCheck[int64](vec, i)
+			if id > maxID {
+				maxID = id
+			}
+		}
+
+		// create bitmap
+		bm.InitWithSize(maxID)
+		for i := 0; i < vec.Length(); i++ {
+			if vec.IsNull(uint64(i)) {
+				continue
+			}
+			id := vector.GetFixedAtNoTypeCheck[int64](vec, i)
+			bm.Add(uint64(id))
+		}
+	}
+
+	return &bm, nil
+}
+
 func FilteredSearchUnsafeWithUniqueJoinKeys(
 	index *usearch.Index,
 	query unsafe.Pointer,
 	limit uint,
-	uniqkeys *vector.Vector,
+	bm *bitmap.Bitmap,
 ) (keys []usearch.Key, distances []float32, err error) {
 	var errorMessage *C.char
 
@@ -92,39 +125,12 @@ func FilteredSearchUnsafeWithUniqueJoinKeys(
 	}
 	handle := C.usearch_index_t(index.GetHandle())
 
-	if uniqkeys.GetType().Oid != types.T_int64 {
-		return nil, nil, moerr.NewInternalErrorNoCtx("unique join key vector type is not int64")
-	}
-
 	var bmptr *C.uint64_t
 	var bmsize uint64
 
-	if uniqkeys.Length() > 0 {
-		maxID := int64(0)
-		for i := 0; i < uniqkeys.Length(); i++ {
-			if uniqkeys.IsNull(uint64(i)) {
-				continue
-			}
-			id := vector.GetFixedAtNoTypeCheck[int64](uniqkeys, i)
-			if id > maxID {
-				maxID = id
-			}
-		}
-
-		// create bitmap
-		var bm bitmap.Bitmap
-		bm.InitWithSize(maxID)
-		for i := 0; i < uniqkeys.Length(); i++ {
-			if uniqkeys.IsNull(uint64(i)) {
-				continue
-			}
-			id := vector.GetFixedAtNoTypeCheck[int64](uniqkeys, i)
-			bm.Add(uint64(id))
-		}
-
+	if bm != nil {
 		bmptr = (*C.uint64_t)(unsafe.Pointer(bm.Ptr()))
 		bmsize = uint64(bm.Size() / 8) // number of uint64
-
 	}
 
 	if query == nil {

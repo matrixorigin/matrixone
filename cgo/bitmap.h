@@ -51,6 +51,18 @@ static inline bool bitmap_test(uint64_t *p, uint64_t pos) {
     return (p[bitmap_pos2idx(pos)] & bitmap_pos2mask(pos)) != 0;
 }
 
+/* len - number of uint64 that holds nbits */
+static inline bool bitmap_test_with_len(uint64_t *p, uint64_t len, uint64_t pos) {
+    if (p == NULL) {
+        return false;
+    }
+    uint64_t idx = bitmap_pos2idx(pos);
+    if (idx >= len) {
+        return false;
+    }
+    return (p[bitmap_pos2idx(pos)] & bitmap_pos2mask(pos)) != 0;
+}
+
 static inline void bitmap_set(uint64_t *p, uint64_t pos) {
     p[bitmap_pos2idx(pos)] |= bitmap_pos2mask(pos);
 }
