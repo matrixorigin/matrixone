@@ -44,9 +44,11 @@ const (
 	HashJoin
 	LoopJoin
 	IndexJoin
-	IndexBuild
 	DedupJoin
 	RightDedupJoin
+
+	HashBuild
+	IndexBuild
 
 	Merge
 	MergeTop
@@ -71,9 +73,6 @@ const (
 	Intersect
 	IntersectAll
 	UnionAll
-
-	HashBuild
-	ShuffleBuild
 
 	TableFunction
 	TableScan
@@ -152,7 +151,6 @@ func init() {
 		IntersectAll:            "IntersectAll",
 		UnionAll:                "UnionAll",
 		HashBuild:               "HashBuild",
-		ShuffleBuild:            "ShuffleBuild",
 		TableFunction:           "TableFunction",
 		TableScan:               "TableScan",
 		ValueScan:               "ValueScan",
@@ -181,12 +179,11 @@ func init() {
 
 	// Initialize MinorOpMap (small impact on time consumption)
 	MinorOpMap = map[string]bool{
-		OperatorToStrMap[HashBuild]:    true,
-		OperatorToStrMap[ShuffleBuild]: true,
-		OperatorToStrMap[IndexBuild]:   true,
-		OperatorToStrMap[Filter]:       true,
-		OperatorToStrMap[MergeGroup]:   true,
-		OperatorToStrMap[MergeOrder]:   true,
+		OperatorToStrMap[HashBuild]:  true,
+		OperatorToStrMap[IndexBuild]: true,
+		OperatorToStrMap[Filter]:     true,
+		OperatorToStrMap[MergeGroup]: true,
+		OperatorToStrMap[MergeOrder]: true,
 	}
 
 	// Initialize MajorOpMap (large impact on time consumption)
@@ -436,7 +433,7 @@ func doHandleAllOp(parentOp Operator, op Operator, opHandle func(parentOp Operat
 	}
 	numChildren := op.GetOperatorBase().NumChildren()
 
-	for i := 0; i < numChildren; i++ {
+	for i := range numChildren {
 		if err = doHandleAllOp(op, op.GetOperatorBase().GetChildren(i), opHandle); err != nil {
 			return err
 		}
@@ -456,7 +453,7 @@ func HandleLeafOp(parentOp Operator, op Operator, opHandle func(leafOpParent Ope
 	if numChildren == 0 {
 		return opHandle(parentOp, op)
 	}
-	for i := 0; i < numChildren; i++ {
+	for i := range numChildren {
 		if err := HandleLeafOp(op, op.GetOperatorBase().GetChildren(i), opHandle); err != nil {
 			return err
 		}
