@@ -83,6 +83,21 @@ FROM (
     ORDER BY department
 ) dept_summary;
 
+SELECT CONCAT('[',
+              GROUP_CONCAT(
+                      JSON_OBJECT('name', department, 'count', dept_count)
+                          SEPARATOR ','
+                  ),
+              ']') as department_stats
+FROM (
+         SELECT
+             department,
+             COUNT(*) as dept_count
+         FROM employees
+         GROUP BY department
+         ORDER BY department
+) dept_summary;
+
 -- 部门员工的完整信息结构
 SELECT
     JSON_OBJECT(
@@ -276,6 +291,22 @@ FROM (
 ) role_permissions_grouped
 GROUP BY user_id;
 
+SELECT
+    user_id,
+    JSON_OBJECTAGG(
+            role_name,
+            permissions_array
+        ) as user_permissions
+FROM (
+         SELECT
+             ur.user_id,
+             ur.role_name,
+             JSON_ARRAYAGG(rp.permission) as permissions_array
+         FROM user_roles ur
+                  JOIN role_permissions rp ON ur.role_name = rp.role_name
+         GROUP BY ur.user_id, ur.role_name
+     ) role_permissions_grouped
+GROUP BY user_id;
 
 
 drop table if exists products;
