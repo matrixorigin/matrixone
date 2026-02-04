@@ -22,11 +22,14 @@ import (
 var PublicationSQLBuilder = publicationSQLBuilder{}
 
 const (
-	// Create snapshot SQL templates with publication support (for CCPR subscription)
-	// These templates use the publisher's account (授权账户) for snapshot creation
-	PublicationCreateSnapshotForAccountSqlTemplate  = `CREATE SNAPSHOT%s %s FOR ACCOUNT FROM %s PUBLICATION %s`
-	PublicationCreateSnapshotForDatabaseSqlTemplate = `CREATE SNAPSHOT%s %s FOR DATABASE %s FROM %s PUBLICATION %s`
-	PublicationCreateSnapshotForTableSqlTemplate    = `CREATE SNAPSHOT%s %s FOR TABLE %s %s FROM %s PUBLICATION %s`
+
+	// Create CCPR snapshot internal command template
+	// Format: __++__internal_create_ccpr_snapshot <taskID> <lsn> <subscriptionAccountName> <publicationName> <level> <dbName> <tableName>
+	// This command:
+	// 1. Checks permission via subscription_account_name and publication_name
+	// 2. Creates snapshot IF NOT EXISTS using the authorized account
+	// 3. Deletes snapshots with LSN smaller than the current one
+	PublicationCreateCcprSnapshotSqlTemplate = `__++__internal_create_ccpr_snapshot %s %d %s %s %s %s %s`
 
 	// Query mo_catalog tables SQL templates using internal command with publication permission check
 	// Format: __++__internal_get_mo_indexes <tableId> <subscriptionAccountName> <publicationName> <snapshotName>
@@ -44,9 +47,6 @@ const (
 	// Get DDL SQL template using internal command with publication permission check
 	// Format: __++__internal_get_ddl <snapshotName> <subscriptionAccountName> <publicationName> <level> <dbName> <tableName>
 	PublicationGetDdlSqlTemplate = `__++__internal_get_ddl %s %s %s %s %s %s`
-
-	// Drop snapshot SQL templates
-	PublicationDropSnapshotIfExistsSqlTemplate = `DROP SNAPSHOT IF EXISTS %s`
 
 	// Query mo_ccpr_log SQL template
 	PublicationQueryMoCcprLogSqlTemplate = `SELECT ` +
@@ -130,14 +130,10 @@ const (
 )
 
 const (
-	PublicationCreateSnapshotForAccountSqlTemplate_Idx = iota
-	PublicationCreateSnapshotForDatabaseSqlTemplate_Idx
-	PublicationCreateSnapshotForTableSqlTemplate_Idx
-	PublicationQueryMoIndexesSqlTemplate_Idx
+	PublicationQueryMoIndexesSqlTemplate_Idx= iota
 	PublicationObjectListSqlTemplate_Idx
 	PublicationGetObjectSqlTemplate_Idx
 	PublicationGetDdlSqlTemplate_Idx
-	PublicationDropSnapshotIfExistsSqlTemplate_Idx
 	PublicationQueryMoCcprLogSqlTemplate_Idx
 	PublicationQueryMoCcprLogFullSqlTemplate_Idx
 	PublicationQuerySnapshotTsSqlTemplate_Idx
@@ -149,6 +145,7 @@ const (
 	PublicationUpdateMoCcprLogNoStateSqlTemplate_Idx
 	PublicationUpdateMoCcprLogIterationStateOnlySqlTemplate_Idx
 	PublicationUpdateMoCcprLogIterationStateAndCnUuidSqlTemplate_Idx
+	PublicationCreateCcprSnapshotSqlTemplate_Idx
 
 	PublicationSqlTemplateCount
 )
@@ -157,15 +154,6 @@ var PublicationSQLTemplates = [PublicationSqlTemplateCount]struct {
 	SQL         string
 	OutputAttrs []string
 }{
-	PublicationCreateSnapshotForAccountSqlTemplate_Idx: {
-		SQL: PublicationCreateSnapshotForAccountSqlTemplate,
-	},
-	PublicationCreateSnapshotForDatabaseSqlTemplate_Idx: {
-		SQL: PublicationCreateSnapshotForDatabaseSqlTemplate,
-	},
-	PublicationCreateSnapshotForTableSqlTemplate_Idx: {
-		SQL: PublicationCreateSnapshotForTableSqlTemplate,
-	},
 	PublicationQueryMoIndexesSqlTemplate_Idx: {
 		SQL: PublicationQueryMoIndexesSqlTemplate,
 		OutputAttrs: []string{
@@ -183,9 +171,6 @@ var PublicationSQLTemplates = [PublicationSqlTemplateCount]struct {
 	},
 	PublicationGetDdlSqlTemplate_Idx: {
 		SQL: PublicationGetDdlSqlTemplate,
-	},
-	PublicationDropSnapshotIfExistsSqlTemplate_Idx: {
-		SQL: PublicationDropSnapshotIfExistsSqlTemplate,
 	},
 	PublicationQueryMoCcprLogSqlTemplate_Idx: {
 		SQL: PublicationQueryMoCcprLogSqlTemplate,
@@ -248,6 +233,9 @@ var PublicationSQLTemplates = [PublicationSqlTemplateCount]struct {
 	PublicationUpdateMoCcprLogIterationStateAndCnUuidSqlTemplate_Idx: {
 		SQL: PublicationUpdateMoCcprLogIterationStateAndCnUuidSqlTemplate,
 	},
+	PublicationCreateCcprSnapshotSqlTemplate_Idx: {
+		SQL: PublicationCreateCcprSnapshotSqlTemplate,
+	},
 }
 
 type publicationSQLBuilder struct{}
@@ -256,89 +244,31 @@ type publicationSQLBuilder struct{}
 // Snapshot SQL
 // ------------------------------------------------------------------------------------------------
 
-// CreateSnapshotForAccountSQL creates SQL for creating account-level snapshot with publication
-// This is used for CCPR subscription to create snapshot using the publisher's account (授权账户)
-// Example: CREATE SNAPSHOT sp1 FOR ACCOUNT FROM acc01 PUBLICATION pub01
-// Example: CREATE SNAPSHOT IF NOT EXISTS sp1 FOR ACCOUNT FROM acc01 PUBLICATION pub01
-func (b publicationSQLBuilder) CreateSnapshotForAccountSQL(
-	snapshotName string,
-	accountName string,
-	pubName string,
-	ifNotExists bool,
-) string {
-	var ifNotExistsPart string
-	if ifNotExists {
-		ifNotExistsPart = " IF NOT EXISTS"
-	}
-	return fmt.Sprintf(
-		PublicationSQLTemplates[PublicationCreateSnapshotForAccountSqlTemplate_Idx].SQL,
-		ifNotExistsPart,
-		escapeSQLIdentifier(snapshotName),
-		escapeSQLIdentifier(accountName),
-		escapeSQLIdentifier(pubName),
-	)
-}
-
-// CreateSnapshotForDatabaseSQL creates SQL for creating database-level snapshot with publication
-// This is used for CCPR subscription to create snapshot using the publisher's account (授权账户)
-// Example: CREATE SNAPSHOT sp1 FOR DATABASE db1 FROM acc01 PUBLICATION pub01
-// Example: CREATE SNAPSHOT IF NOT EXISTS sp1 FOR DATABASE db1 FROM acc01 PUBLICATION pub01
-func (b publicationSQLBuilder) CreateSnapshotForDatabaseSQL(
-	snapshotName string,
-	dbName string,
-	accountName string,
-	pubName string,
-	ifNotExists bool,
-) string {
-	var ifNotExistsPart string
-	if ifNotExists {
-		ifNotExistsPart = " IF NOT EXISTS"
-	}
-	return fmt.Sprintf(
-		PublicationSQLTemplates[PublicationCreateSnapshotForDatabaseSqlTemplate_Idx].SQL,
-		ifNotExistsPart,
-		escapeSQLIdentifier(snapshotName),
-		escapeSQLIdentifier(dbName),
-		escapeSQLIdentifier(accountName),
-		escapeSQLIdentifier(pubName),
-	)
-}
-
-// CreateSnapshotForTableSQL creates SQL for creating table-level snapshot with publication
-// This is used for CCPR subscription to create snapshot using the publisher's account (授权账户)
-// Example: CREATE SNAPSHOT sp1 FOR TABLE db1 t1 FROM acc01 PUBLICATION pub01
-// Example: CREATE SNAPSHOT IF NOT EXISTS sp1 FOR TABLE db1 t1 FROM acc01 PUBLICATION pub01
-func (b publicationSQLBuilder) CreateSnapshotForTableSQL(
-	snapshotName string,
+// CreateCcprSnapshotSQL creates SQL for creating CCPR snapshot using internal command
+// Uses internal command: __++__internal_create_ccpr_snapshot <taskID> <lsn> <subscriptionAccountName> <publicationName> <level> <dbName> <tableName>
+// This command:
+// 1. Checks permission via subscription_account_name and publication_name
+// 2. Creates snapshot IF NOT EXISTS using the authorized account
+// 3. Deletes snapshots with LSN smaller than the current one
+// Returns snapshot_name, snapshot_ts
+func (b publicationSQLBuilder) CreateCcprSnapshotSQL(
+	taskID string,
+	lsn uint64,
+	subscriptionAccountName string,
+	publicationName string,
+	level string,
 	dbName string,
 	tableName string,
-	accountName string,
-	pubName string,
-	ifNotExists bool,
-) string {
-	var ifNotExistsPart string
-	if ifNotExists {
-		ifNotExistsPart = " IF NOT EXISTS"
-	}
-	return fmt.Sprintf(
-		PublicationSQLTemplates[PublicationCreateSnapshotForTableSqlTemplate_Idx].SQL,
-		ifNotExistsPart,
-		escapeSQLIdentifier(snapshotName),
-		escapeSQLIdentifier(dbName),
-		escapeSQLIdentifier(tableName),
-		escapeSQLIdentifier(accountName),
-		escapeSQLIdentifier(pubName),
-	)
-}
-
-// DropSnapshotIfExistsSQL creates SQL for dropping a snapshot if it exists
-// Example: DROP SNAPSHOT IF EXISTS sp1
-func (b publicationSQLBuilder) DropSnapshotIfExistsSQL(
-	snapshotName string,
 ) string {
 	return fmt.Sprintf(
-		PublicationSQLTemplates[PublicationDropSnapshotIfExistsSqlTemplate_Idx].SQL,
-		escapeSQLIdentifier(snapshotName),
+		PublicationSQLTemplates[PublicationCreateCcprSnapshotSqlTemplate_Idx].SQL,
+		escapeSQLString(taskID),
+		lsn,
+		escapeSQLString(subscriptionAccountName),
+		escapeSQLString(publicationName),
+		escapeSQLString(level),
+		escapeOrPlaceholder(dbName),
+		escapeOrPlaceholder(tableName),
 	)
 }
 

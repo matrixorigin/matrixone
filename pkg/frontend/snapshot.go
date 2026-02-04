@@ -20,6 +20,7 @@ import (
 	"math"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -3229,6 +3230,150 @@ func handleInternalGetDdl(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetDdl
 
 	// Step 6: Fill result set from batch
 	FillDdlMysqlResultSet(resultBatch, mrs)
+
+	return nil
+}
+
+// handleInternalCreateCcprSnapshot handles the internal command create_ccpr_snapshot
+// It creates a CCPR snapshot using the authorized account from publication permission check
+// and deletes old snapshots with smaller LSN
+func handleInternalCreateCcprSnapshot(ses FeSession, execCtx *ExecCtx, ic *InternalCmdCreateCcprSnapshot) error {
+	ctx := execCtx.reqCtx
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// Get current account name
+	currentAccount := ses.GetTenantInfo().GetTenant()
+
+	// Step 1: Check permission via publication and get authorized account
+	accountID, _, err := GetAccountIDFromPublication(ctx, bh, ic.subscriptionAccountName, ic.publicationName, currentAccount)
+	if err != nil {
+		return err
+	}
+
+	// Step 2: Generate snapshot name: ccpr_<taskID>_<lsn>
+	snapshotName := fmt.Sprintf("ccpr_%s_%d", ic.taskID, ic.lsn)
+
+	// Step 3: Build CREATE SNAPSHOT IF NOT EXISTS SQL based on level
+	// Use the authorized account context
+	snapshotCtx := defines.AttachAccountId(ctx, uint32(accountID))
+
+	var createSnapshotSQL string
+	switch ic.level {
+	case "table":
+		if ic.dbName == "" || ic.tableName == "" {
+			return moerr.NewInternalError(ctx, "db_name and table_name are required for table level snapshot")
+		}
+		createSnapshotSQL = fmt.Sprintf(
+			"CREATE SNAPSHOT IF NOT EXISTS `%s` FOR TABLE `%s` `%s`",
+			snapshotName, ic.dbName, ic.tableName,
+		)
+	case "database":
+		if ic.dbName == "" {
+			return moerr.NewInternalError(ctx, "db_name is required for database level snapshot")
+		}
+		createSnapshotSQL = fmt.Sprintf(
+			"CREATE SNAPSHOT IF NOT EXISTS `%s` FOR DATABASE `%s`",
+			snapshotName, ic.dbName,
+		)
+	case "account":
+		createSnapshotSQL = fmt.Sprintf(
+			"CREATE SNAPSHOT IF NOT EXISTS `%s` FOR ACCOUNT",
+			snapshotName,
+		)
+	default:
+		return moerr.NewInternalErrorf(ctx, "unsupported sync_level: %s", ic.level)
+	}
+
+	// Execute CREATE SNAPSHOT
+	if err = bh.Exec(snapshotCtx, createSnapshotSQL); err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to create snapshot: %v", err)
+	}
+
+	// Step 4: Query snapshot timestamp
+	querySnapshotTsSQL := fmt.Sprintf(
+		"SELECT ts FROM mo_catalog.mo_snapshots WHERE sname = '%s'",
+		snapshotName,
+	)
+	bh.ClearExecResultSet()
+	if err = bh.Exec(snapshotCtx, querySnapshotTsSQL); err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to query snapshot ts: %v", err)
+	}
+
+	tsResult, err := getResultSet(snapshotCtx, bh)
+	if err != nil {
+		return err
+	}
+
+	var snapshotTs int64
+	if len(tsResult) > 0 && tsResult[0].GetRowCount() > 0 {
+		snapshotTs, err = tsResult[0].GetInt64(ctx, 0, 0)
+		if err != nil {
+			return moerr.NewInternalErrorf(ctx, "failed to get snapshot ts: %v", err)
+		}
+	} else {
+		return moerr.NewInternalErrorf(ctx, "snapshot '%s' not found after creation", snapshotName)
+	}
+
+	// Step 5: Delete old snapshots with smaller LSN
+	// Query snapshots with pattern ccpr_<taskID>_*
+	snapshotPattern := fmt.Sprintf("ccpr_%s_%%", ic.taskID)
+	queryOldSnapshotsSQL := fmt.Sprintf(
+		"SELECT sname FROM mo_catalog.mo_snapshots WHERE sname LIKE '%s'",
+		snapshotPattern,
+	)
+	bh.ClearExecResultSet()
+	if err = bh.Exec(snapshotCtx, queryOldSnapshotsSQL); err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to query old snapshots: %v", err)
+	}
+
+	oldSnapshotsResult, err := getResultSet(snapshotCtx, bh)
+	if err != nil {
+		return err
+	}
+
+	// Parse and delete old snapshots
+	if len(oldSnapshotsResult) > 0 {
+		for i := uint64(0); i < oldSnapshotsResult[0].GetRowCount(); i++ {
+			oldSnapshotName, err := oldSnapshotsResult[0].GetString(ctx, i, 0)
+			if err != nil {
+				continue
+			}
+			// Parse LSN from snapshot name: ccpr_<taskID>_<lsn>
+			prefix := fmt.Sprintf("ccpr_%s_", ic.taskID)
+			if !strings.HasPrefix(oldSnapshotName, prefix) {
+				continue
+			}
+			lsnStr := oldSnapshotName[len(prefix):]
+			oldLsn, err := strconv.ParseUint(lsnStr, 10, 64)
+			if err != nil {
+				continue
+			}
+			// Keep 2 snapshots
+			if oldLsn < ic.lsn-1 {
+				dropSnapshotSQL := fmt.Sprintf("DROP SNAPSHOT IF EXISTS `%s`", oldSnapshotName)
+				_ = bh.Exec(snapshotCtx, dropSnapshotSQL) // Ignore errors for cleanup
+			}
+		}
+	}
+
+	// Step 6: Build result set with snapshot_name and snapshot_ts
+	colSnapshotName := new(MysqlColumn)
+	colSnapshotName.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	colSnapshotName.SetName("snapshot_name")
+
+	colSnapshotTs := new(MysqlColumn)
+	colSnapshotTs.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	colSnapshotTs.SetName("snapshot_ts")
+
+	mrs := ses.GetMysqlResultSet()
+	mrs.AddColumn(colSnapshotName)
+	mrs.AddColumn(colSnapshotTs)
+
+	row := make([]interface{}, 2)
+	row[0] = snapshotName
+	row[1] = snapshotTs
+	mrs.AddRow(row)
 
 	return nil
 }

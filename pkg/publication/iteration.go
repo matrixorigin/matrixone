@@ -707,9 +707,12 @@ func GenerateSnapshotName(taskID string, iterationLSN uint64) string {
 }
 
 // RequestUpstreamSnapshot requests a snapshot from upstream cluster
-// It creates a snapshot based on the srcinfo in IterationContext and stores the snapshot name in the context
-// Uses publication-based snapshot creation to properly check subscription/publication permissions
-// and use the publisher's account (授权账户) instead of the subscriber's account (被授权账户)
+// It creates a snapshot using internal command and stores the snapshot name in the context
+// Uses __++__internal_create_ccpr_snapshot to:
+// 1. Check publication permission
+// 2. Create snapshot IF NOT EXISTS using authorized account
+// 3. Delete old snapshots with smaller LSN
+// 4. Return snapshot_name and snapshot_ts
 func RequestUpstreamSnapshot(
 	ctx context.Context,
 	iterationCtx *IterationContext,
@@ -730,90 +733,52 @@ func RequestUpstreamSnapshot(
 		return moerr.NewInternalError(ctx, "subscription_name (publication name) is required for publication snapshot")
 	}
 
-	// Generate snapshot name using rule-based encoding
-	snapshotName := GenerateSnapshotName(iterationCtx.TaskID, iterationCtx.IterationLSN)
+	// Use internal command to create CCPR snapshot
+	// This command handles: permission check, IF NOT EXISTS, delete old snapshots
+	createSnapshotSQL := PublicationSQLBuilder.CreateCcprSnapshotSQL(
+		iterationCtx.TaskID,
+		iterationCtx.IterationLSN,
+		iterationCtx.SubscriptionAccountName,
+		iterationCtx.SubscriptionName,
+		iterationCtx.SrcInfo.SyncLevel,
+		iterationCtx.SrcInfo.DBName,
+		iterationCtx.SrcInfo.TableName,
+	)
 
-	// Build SQL based on sync level with publication info
-	// This uses the publisher's account (授权账户) for snapshot creation
-	// SubscriptionAccountName is the publisher's account name
-	// SubscriptionName is the publication name
-	var createSnapshotSQL string
-	switch iterationCtx.SrcInfo.SyncLevel {
-	case SyncLevelTable:
-		if iterationCtx.SrcInfo.DBName == "" || iterationCtx.SrcInfo.TableName == "" {
-			return moerr.NewInternalError(ctx, "db_name and table_name are required for table level snapshot")
-		}
-		createSnapshotSQL = PublicationSQLBuilder.CreateSnapshotForTableSQL(
-			snapshotName,
-			iterationCtx.SrcInfo.DBName,
-			iterationCtx.SrcInfo.TableName,
-			iterationCtx.SubscriptionAccountName,
-			iterationCtx.SubscriptionName,
-			true,
-		)
-	case SyncLevelDatabase:
-		if iterationCtx.SrcInfo.DBName == "" {
-			return moerr.NewInternalError(ctx, "db_name is required for database level snapshot")
-		}
-		createSnapshotSQL = PublicationSQLBuilder.CreateSnapshotForDatabaseSQL(
-			snapshotName,
-			iterationCtx.SrcInfo.DBName,
-			iterationCtx.SubscriptionAccountName,
-			iterationCtx.SubscriptionName,
-			true,
-		)
-	case SyncLevelAccount:
-		createSnapshotSQL = PublicationSQLBuilder.CreateSnapshotForAccountSQL(
-			snapshotName,
-			iterationCtx.SubscriptionAccountName,
-			iterationCtx.SubscriptionName,
-			true,
-		)
-	default:
-		return moerr.NewInternalErrorf(ctx, "unsupported sync_level: %s", iterationCtx.SrcInfo.SyncLevel)
-	}
-
-	// Execute SQL through upstream executor (account ID is handled internally)
+	// Execute SQL through upstream executor
 	result, cancel, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, createSnapshotSQL, false, true, time.Minute)
 	if err != nil {
-		// Check if error is due to snapshot already existing
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "already exists") && strings.Contains(errMsg, "snapshot") {
-			// Snapshot already exists, this is acceptable, continue execution
-			logutil.Info("ccpr-iteration-snapshot already exists, continuing",
-				zap.String("snapshot_name", snapshotName),
-				zap.Error(err),
-			)
-			if result != nil {
-				result.Close()
-			}
-			if cancel != nil {
-				cancel()
-			}
-		} else {
-			// Other errors, return as before
-			return moerr.NewInternalErrorf(ctx, "failed to create snapshot: %v", err)
-		}
-	} else {
+		return moerr.NewInternalErrorf(ctx, "failed to create snapshot: %v", err)
+	}
+	defer func() {
 		result.Close()
 		if cancel != nil {
 			cancel()
 		}
+	}()
+
+	// Parse result: snapshot_name, snapshot_ts
+	if !result.Next() {
+		return moerr.NewInternalError(ctx, "no result from create_ccpr_snapshot")
 	}
-	// Store snapshot name in iteration context
+
+	var snapshotName string
+	var snapshotTsInt64 int64
+	if err := result.Scan(&snapshotName, &snapshotTsInt64); err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to scan create_ccpr_snapshot result: %v", err)
+	}
+
+	// Store snapshot name and TS in iteration context
 	iterationCtx.CurrentSnapshotName = snapshotName
-	ctxWithTimeout2, cancel2 := context.WithTimeout(ctx, time.Minute)
-	defer cancel2()
-	iterationCtx.CurrentSnapshotTS, err = querySnapshotTS(ctxWithTimeout2, iterationCtx.UpstreamExecutor, snapshotName, iterationCtx.SubscriptionAccountName, iterationCtx.SubscriptionName)
-	if err != nil {
-		return moerr.NewInternalErrorf(ctx, "failed to query current snapshot TS: %v", err)
-	}
+	iterationCtx.CurrentSnapshotTS = types.BuildTS(snapshotTsInt64, 0)
+
+	// Query previous snapshot TS if LSN > 0
 	if iterationCtx.IterationLSN > 0 {
 		prevSnapshotName := GenerateSnapshotName(iterationCtx.TaskID, iterationCtx.IterationLSN-1)
 		iterationCtx.PrevSnapshotName = prevSnapshotName
-		ctxWithTimeout3, cancel3 := context.WithTimeout(ctx, time.Minute)
-		defer cancel3()
-		iterationCtx.PrevSnapshotTS, err = querySnapshotTS(ctxWithTimeout3, iterationCtx.UpstreamExecutor, prevSnapshotName, iterationCtx.SubscriptionAccountName, iterationCtx.SubscriptionName)
+		ctxWithTimeout, cancelTimeout := context.WithTimeout(ctx, time.Minute)
+		defer cancelTimeout()
+		iterationCtx.PrevSnapshotTS, err = querySnapshotTS(ctxWithTimeout, iterationCtx.UpstreamExecutor, prevSnapshotName, iterationCtx.SubscriptionAccountName, iterationCtx.SubscriptionName)
 		if err != nil {
 			return moerr.NewInternalErrorf(ctx, "failed to query previous snapshot TS: %v", err)
 		}
@@ -1274,6 +1239,10 @@ func ExecuteIteration(
 	}()
 
 	// 1.1 Request upstream snapshot (includes 1.1.2 request upstream snapshot TS)
+	// The internal command __++__internal_create_ccpr_snapshot handles:
+	// - Permission check via publication
+	// - Create snapshot IF NOT EXISTS
+	// - Delete old snapshots with smaller LSN
 	if err = RequestUpstreamSnapshot(ctx, iterationCtx); err != nil {
 		err = moerr.NewInternalErrorf(ctx, "failed to request upstream snapshot: %v", err)
 		return
@@ -1284,25 +1253,6 @@ func ExecuteIteration(
 		err = moerr.NewInternalErrorNoCtx(msg)
 		return
 	}
-
-	// Defer to drop snapshot if error occurs
-	defer func() {
-		if err != nil && iterationCtx.CurrentSnapshotName != "" {
-			// Drop the snapshot that was created if there's an error
-			dropSnapshotSQL := PublicationSQLBuilder.DropSnapshotIfExistsSQL(iterationCtx.CurrentSnapshotName)
-			if dropResult, dropCancel, dropErr := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, dropSnapshotSQL, false, true, time.Minute); dropErr != nil {
-				logutil.Error("ccpr-iteration error",
-					zap.String("task_id", iterationCtx.String()),
-					zap.Error(dropErr),
-				)
-			} else {
-				dropResult.Close()
-				if dropCancel != nil {
-					dropCancel()
-				}
-			}
-		}
-	}()
 
 	// Call OnSnapshotCreated callback if utHelper is provided
 	if utHelper != nil {

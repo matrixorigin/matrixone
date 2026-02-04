@@ -5429,7 +5429,8 @@ func checkCCPRTableBeforeDrop(c *Compile, tableID uint64) (bool, error) {
 	var taskID string
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		if rows > 0 {
-			taskID = cols[0].GetStringAt(0)
+			// taskid is UUID type, use GetFixedAtWithTypeCheck to read it properly
+			taskID = vector.GetFixedAtWithTypeCheck[types.Uuid](cols[0], 0).String()
 		}
 		return false
 	})
@@ -5517,7 +5518,8 @@ func checkCCPRDbBeforeDrop(c *Compile, dbID uint64) (bool, error) {
 	var taskID string
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		if rows > 0 {
-			taskID = cols[0].GetStringAt(0)
+			// taskid is UUID type, use GetFixedAtWithTypeCheck to read it properly
+			taskID = vector.GetFixedAtWithTypeCheck[types.Uuid](cols[0], 0).String()
 		}
 		return false
 	})

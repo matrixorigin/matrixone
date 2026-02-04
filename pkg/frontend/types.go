@@ -109,6 +109,7 @@ const (
 	FPInternalCmdGetObject
 	FPInternalCmdObjectList
 	FPInternalCmdCheckSnapshotFlushed
+	FPInternalCmdCreateCcprSnapshot
 	FPCreatePublication
 	FPAlterPublication
 	FPDropPublication
@@ -317,9 +318,11 @@ const (
 	cmdGetObjectSqlLen        = len(cmdGetObjectSql)
 	cmdObjectListSql                = "__++__internal_object_list"
 	cmdObjectListSqlLen             = len(cmdObjectListSql)
-	cmdCheckSnapshotFlushedSql      = "__++__internal_check_snapshot_flushed"
-	cmdCheckSnapshotFlushedSqlLen   = len(cmdCheckSnapshotFlushedSql)
-	cloudUserTag                    = "cloud_user"
+	cmdCheckSnapshotFlushedSql         = "__++__internal_check_snapshot_flushed"
+	cmdCheckSnapshotFlushedSqlLen      = len(cmdCheckSnapshotFlushedSql)
+	cmdCreateCcprSnapshotSql           = "__++__internal_create_ccpr_snapshot"
+	cmdCreateCcprSnapshotSqlLen        = len(cmdCreateCcprSnapshotSql)
+	cloudUserTag                       = "cloud_user"
 	cloudNoUserTag            = "cloud_nonuser"
 	saveResultTag             = "save_result"
 	validatePasswordPolicyTag = "validate_password.policy"
@@ -477,6 +480,44 @@ func (ic *InternalCmdGetDdl) StmtKind() tree.StmtKind {
 
 func (ic *InternalCmdGetDdl) GetStatementType() string { return "InternalCmd" }
 func (ic *InternalCmdGetDdl) GetQueryType() string     { return tree.QueryTypeDQL }
+
+var _ tree.Statement = &InternalCmdCreateCcprSnapshot{}
+
+// InternalCmdCreateCcprSnapshot the internal command to create CCPR snapshot
+// Parameters: taskID, lsn, subscriptionAccountName, publicationName, level, dbName, tableName
+// This command:
+// 1. Checks permission via subscription_account_name and publication_name
+// 2. Creates snapshot IF NOT EXISTS using the authorized account
+// 3. Deletes snapshots with LSN smaller than the current one
+// Returns: snapshot_name, snapshot_ts
+type InternalCmdCreateCcprSnapshot struct {
+	taskID                  string
+	lsn                     uint64
+	subscriptionAccountName string
+	publicationName         string
+	level                   string
+	dbName                  string
+	tableName               string
+}
+
+// Free implements tree.Statement.
+func (ic *InternalCmdCreateCcprSnapshot) Free() {
+}
+
+func (ic *InternalCmdCreateCcprSnapshot) String() string {
+	return makeCreateCcprSnapshotSql(ic.taskID, ic.lsn, ic.subscriptionAccountName, ic.publicationName, ic.level, ic.dbName, ic.tableName)
+}
+
+func (ic *InternalCmdCreateCcprSnapshot) Format(ctx *tree.FmtCtx) {
+	ctx.WriteString(makeCreateCcprSnapshotSql(ic.taskID, ic.lsn, ic.subscriptionAccountName, ic.publicationName, ic.level, ic.dbName, ic.tableName))
+}
+
+func (ic *InternalCmdCreateCcprSnapshot) StmtKind() tree.StmtKind {
+	return tree.MakeStmtKind(tree.OUTPUT_RESULT_ROW, tree.RESP_PREBUILD_RESULT_ROW, tree.EXEC_IN_FRONTEND)
+}
+
+func (ic *InternalCmdCreateCcprSnapshot) GetStatementType() string { return "InternalCmd" }
+func (ic *InternalCmdCreateCcprSnapshot) GetQueryType() string     { return tree.QueryTypeDQL }
 
 var _ tree.Statement = &InternalCmdGetObject{}
 

@@ -56,7 +56,8 @@ const (
 	DefaultRetryTimes       = 5
 	DefaultRetryInterval    = time.Second
 	DefaultRetryDuration    = time.Minute * 10
-	SnapshotThreshold       = time.Hour * 24 // 1 day
+	SnapshotThreshold       = time.Hour * 24     // 1 day
+	SnapshotGCThreshold     = time.Hour * 24 * 3 // 3 days for ccpr snapshot GC
 )
 
 // ExecutorRetryOption configures retry behavior for executor operations
@@ -854,6 +855,12 @@ func GC(
 		gcRecord(ctx, txnEngine, cnTxnClient, cnUUID, upstreamSQLHelperFactory, record, gcTime, snapshotThresholdTime)
 	}
 
+	// GC old ccpr snapshots (older than 3 days)
+	if err := GCSnapshots(ctx, txnEngine, cnTxnClient, cnUUID); err != nil {
+		logutil.Error("Publication-Task GC failed to gc snapshots", zap.Error(err))
+		// Don't return error, continue with other GC operations
+	}
+
 	return nil
 }
 
@@ -886,29 +893,6 @@ func gcRecord(
 		return
 	}
 	defer upstreamExecutor.Close()
-
-	// Query all snapshots for this task
-	snapshots, err := queryTaskSnapshots(ctx, upstreamExecutor, record.taskID)
-	if err != nil {
-		logutil.Error("Publication-Task GC failed to query snapshots",
-			zap.String("taskID", record.taskID),
-			zap.Error(err),
-		)
-		return
-	}
-
-	// Determine which snapshots to delete
-	snapshotsToDelete := determineSnapshotsToDelete(
-		record,
-		snapshots,
-		gcTime,
-		snapshotThresholdTime,
-	)
-
-	// Delete snapshots (each in a separate transaction)
-	for _, snapshotName := range snapshotsToDelete {
-		deleteSnapshotInSeparateTxn(ctx, upstreamExecutor, snapshotName, record.taskID)
-	}
 
 	// For dropped records, check if we should delete the record itself
 	if record.dropAt != nil && record.state == SubscriptionStateDropped {
@@ -1180,29 +1164,105 @@ func determineSnapshotsToDelete(
 	return toDelete
 }
 
+// GCSnapshots deletes old ccpr snapshots that are older than the threshold (3 days)
+func GCSnapshots(
+	ctx context.Context,
+	txnEngine engine.Engine,
+	cnTxnClient client.TxnClient,
+	cnUUID string,
+) error {
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	// Query all ccpr snapshots
+	txn, err := getTxn(ctx, txnEngine, cnTxnClient, "publication gc snapshots read")
+	if err != nil {
+		logutil.Error("Publication-Task GCSnapshots failed to create txn for reading", zap.Error(err))
+		return err
+	}
+	defer txn.Commit(ctx)
+
+	sql := `SELECT sname, ts FROM mo_catalog.mo_snapshots WHERE sname LIKE 'ccpr%'`
+	result, err := ExecWithResult(ctx, sql, cnUUID, txn)
+	if err != nil {
+		logutil.Error("Publication-Task GCSnapshots failed to query mo_snapshots", zap.Error(err))
+		return err
+	}
+	defer result.Close()
+
+	// Calculate threshold: now - 3 days, convert to nanoseconds
+	threshold := time.Now().Add(-SnapshotGCThreshold).UnixNano()
+
+	var snapshotsToDelete []string
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		snameVector := cols[0]
+		tsVector := cols[1]
+		tss := vector.MustFixedColWithTypeCheck[int64](tsVector)
+
+		for i := 0; i < rows; i++ {
+			sname := snameVector.GetStringAt(i)
+			ts := tss[i]
+
+			// If ts is older than threshold, mark for deletion
+			if ts < threshold {
+				snapshotsToDelete = append(snapshotsToDelete, sname)
+				logutil.Info("Publication-Task GCSnapshots marking snapshot for deletion",
+					zap.String("sname", sname),
+					zap.Int64("ts", ts),
+					zap.Int64("threshold", threshold),
+				)
+			}
+		}
+		return true
+	})
+
+	// Delete each snapshot in separate transaction
+	for _, sname := range snapshotsToDelete {
+		deleteSnapshotInSeparateTxn(ctx, txnEngine, cnTxnClient, cnUUID, sname)
+	}
+
+	if len(snapshotsToDelete) > 0 {
+		logutil.Info("Publication-Task GCSnapshots completed",
+			zap.Int("deletedCount", len(snapshotsToDelete)),
+		)
+	}
+
+	return nil
+}
+
+// deleteSnapshotInSeparateTxn deletes a snapshot by executing DROP SNAPSHOT SQL
 func deleteSnapshotInSeparateTxn(
 	ctx context.Context,
-	upstreamExecutor SQLExecutor,
+	txnEngine engine.Engine,
+	cnTxnClient client.TxnClient,
+	cnUUID string,
 	snapshotName string,
-	taskID string,
 ) {
-	// Each SQL operation in a separate transaction, no retry
-	// If error occurs, just log and continue
-	dropSQL := PublicationSQLBuilder.DropSnapshotIfExistsSQL(snapshotName)
-	result, cancel, err := upstreamExecutor.ExecSQL(ctx, nil, dropSQL, false, false, time.Minute)
+	txn, err := getTxn(ctx, txnEngine, cnTxnClient, "publication gc delete snapshot")
 	if err != nil {
-		logutil.Error("Publication-Task GC failed to delete snapshot",
-			zap.String("taskID", taskID),
-			zap.String("snapshotName", snapshotName),
+		logutil.Error("Publication-Task GCSnapshots failed to create txn for deleting snapshot",
+			zap.String("sname", snapshotName),
 			zap.Error(err),
 		)
 		return
 	}
-	defer cancel()
+	defer txn.Commit(ctx)
+
+	// Use DROP SNAPSHOT to properly delete the snapshot
+	dropSQL := fmt.Sprintf(`DROP SNAPSHOT IF EXISTS %s`, snapshotName)
+	result, err := ExecWithResult(ctx, dropSQL, cnUUID, txn)
+	if err != nil {
+		logutil.Error("Publication-Task GCSnapshots failed to drop snapshot",
+			zap.String("sname", snapshotName),
+			zap.Error(err),
+		)
+		return
+	}
 	defer result.Close()
-	logutil.Info("Publication-Task GC deleted snapshot",
-		zap.String("taskID", taskID),
-		zap.String("snapshotName", snapshotName),
+
+	logutil.Info("Publication-Task GCSnapshots deleted snapshot",
+		zap.String("sname", snapshotName),
 	)
 }
 

@@ -671,6 +671,55 @@ func parseCmdGetDdl(ctx context.Context, sql string) (*InternalCmdGetDdl, error)
 	}, nil
 }
 
+// isCmdCreateCcprSnapshotSql checks the sql is the cmdCreateCcprSnapshotSql or not.
+func isCmdCreateCcprSnapshotSql(sql string) bool {
+	if len(sql) < cmdCreateCcprSnapshotSqlLen {
+		return false
+	}
+	prefix := sql[:cmdCreateCcprSnapshotSqlLen]
+	return strings.Compare(strings.ToLower(prefix), cmdCreateCcprSnapshotSql) == 0
+}
+
+// makeCreateCcprSnapshotSql makes the internal create_ccpr_snapshot sql
+func makeCreateCcprSnapshotSql(taskID string, lsn uint64, subscriptionAccountName, publicationName, level, dbName, tableName string) string {
+	return fmt.Sprintf("%s %s %d %s %s %s %s %s", cmdCreateCcprSnapshotSql, taskID, lsn, subscriptionAccountName, publicationName, level, dbName, tableName)
+}
+
+// parseCmdCreateCcprSnapshot parses the internal cmd create_ccpr_snapshot
+// format: create_ccpr_snapshot <taskID> <lsn> <subscriptionAccountName> <publicationName> <level> <dbName> <tableName>
+func parseCmdCreateCcprSnapshot(ctx context.Context, sql string) (*InternalCmdCreateCcprSnapshot, error) {
+	if !isCmdCreateCcprSnapshotSql(sql) {
+		return nil, moerr.NewInternalError(ctx, "it is not the CREATE_CCPR_SNAPSHOT command")
+	}
+	params := strings.TrimSpace(sql[cmdCreateCcprSnapshotSqlLen:])
+	parts := strings.Fields(params)
+	if len(parts) != 7 {
+		return nil, moerr.NewInternalError(ctx, "invalid create_ccpr_snapshot command format, expected: create_ccpr_snapshot <taskID> <lsn> <subscriptionAccountName> <publicationName> <level> <dbName> <tableName>")
+	}
+	lsn, err := strconv.ParseUint(parts[1], 10, 64)
+	if err != nil {
+		return nil, moerr.NewInternalErrorf(ctx, "invalid lsn: %s", parts[1])
+	}
+	// Convert placeholder "-" back to empty string
+	dbName := parts[5]
+	if dbName == "-" {
+		dbName = ""
+	}
+	tableName := parts[6]
+	if tableName == "-" {
+		tableName = ""
+	}
+	return &InternalCmdCreateCcprSnapshot{
+		taskID:                  parts[0],
+		lsn:                     lsn,
+		subscriptionAccountName: parts[2],
+		publicationName:         parts[3],
+		level:                   parts[4],
+		dbName:                  dbName,
+		tableName:               tableName,
+	}, nil
+}
+
 // isCmdGetObjectSql checks the sql is the cmdGetObjectSql or not.
 func isCmdGetObjectSql(sql string) bool {
 	if len(sql) < cmdGetObjectSqlLen {
