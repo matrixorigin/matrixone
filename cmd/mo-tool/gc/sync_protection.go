@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package gc
 
 import (
 	"database/sql"
@@ -56,7 +56,7 @@ type SyncProtectionTester struct {
 	waitTime       int
 }
 
-func NewSyncProtectionTester(dsn, dataDir string, sampleCount int, verbose bool, waitTime int) (*SyncProtectionTester, error) {
+func newSyncProtectionTester(dsn, dataDir string, sampleCount int, verbose bool, waitTime int) (*SyncProtectionTester, error) {
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return nil, moerr.NewInternalErrorNoCtxf("failed to connect to database: %v", err)
@@ -484,7 +484,7 @@ This command will:
 4. Trigger GC and verify protected files are not deleted
 5. Test renewal and unregister functionality`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			tester, err := NewSyncProtectionTester(dsn, dataDir, sampleCount, verbose, waitTime)
+			tester, err := newSyncProtectionTester(dsn, dataDir, sampleCount, verbose, waitTime)
 			if err != nil {
 				return err
 			}

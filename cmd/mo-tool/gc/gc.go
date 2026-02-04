@@ -12,24 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package gc
 
 import (
-	"os"
-
 	"github.com/spf13/cobra"
 )
 
-func main() {
-	var rootCmd = &cobra.Command{
-		Use:   "gc-tool",
-		Short: "GC testing tool",
-		Long:  "GC testing tool for MatrixOne garbage collection",
+// PrepareCommand prepares the gc command
+func PrepareCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "gc",
+		Short: "GC related tools",
+		Long:  "GC related tools for testing and debugging",
 	}
 
-	rootCmd.AddCommand(PrepareSyncProtectionCommand())
+	cmd.AddCommand(PrepareSyncProtectionCommand())
 
-	if err := rootCmd.Execute(); err != nil {
-		os.Exit(1)
-	}
+	return cmd
 }
