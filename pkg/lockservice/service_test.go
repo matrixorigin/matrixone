@@ -1497,14 +1497,20 @@ func TestAbortRemoteDeadlockTxn(t *testing.T) {
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrDeadLockDetected))
 			}()
 
-			for {
+			// Wait until txn2's waiter is queued on l1 (one blocked waiter). Poll with
+			// timeout to avoid unbounded spin or hang; small sleep avoids busy loop.
+			deadline := time.Now().Add(time.Second * 5)
+			var n int
+			for time.Now().Before(deadline) {
 				l1.events.mu.RLock()
-				if len(l1.events.mu.blockedWaiters) == 1 {
-					l1.events.mu.RUnlock()
+				n = len(l1.events.mu.blockedWaiters)
+				l1.events.mu.RUnlock()
+				if n == 1 {
 					break
 				}
-				l1.events.mu.RUnlock()
+				time.Sleep(time.Millisecond * 5)
 			}
+			require.Equal(t, 1, n, "expected exactly one blocked waiter on l1 before abort")
 
 			wait := pb.WaitTxn{TxnID: []byte("txn2"), WaiterAddress: l1.serviceID}
 			l2.abortDeadlockTxn(wait, ErrDeadLockDetected)
