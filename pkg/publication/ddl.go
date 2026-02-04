@@ -367,38 +367,10 @@ func ProcessDDLChanges(
 
 	// Step 5: Execute DDL operations for tables with non-empty operations
 	// Use downstream account ID from iterationCtx.SrcInfo
-	// Log DDL operations to be executed
-	var ddlOperations []string
-	for dbName, tables := range ddlMap {
-		for tableName, ddlInfo := range tables {
-			if ddlInfo.Operation == 0 {
-				// Skip tables with no operation needed
-				continue
-			}
-
-			var operationStr string
-			switch ddlInfo.Operation {
-			case DDLOperationCreate:
-				operationStr = "CREATE"
-			case DDLOperationAlter:
-				operationStr = "ALTER"
-			case DDLOperationDrop:
-				operationStr = "DROP"
-			default:
-				operationStr = fmt.Sprintf("UNKNOWN(%d)", ddlInfo.Operation)
-			}
-			ddlOperations = append(ddlOperations, fmt.Sprintf("%s TABLE %s.%s", operationStr, dbName, tableName))
-		}
-	}
-
-	// Log DDL operations with task id and lsn
-	if len(ddlOperations) > 0 {
-		logutil.Info("ccpr-iteration DDL operations to execute",
-			zap.String("task_id", iterationCtx.TaskID),
-			zap.Uint64("lsn", iterationCtx.IterationLSN),
-			zap.Strings("ddl_operations", ddlOperations),
-		)
-	}
+	// Collect DDL operation results for logging
+	var createOps []string
+	var dropOps []string
+	var alterOps []string
 
 	// drop/create tables
 	// update index table mappings
@@ -416,12 +388,34 @@ func ProcessDDLChanges(
 				if err := createTable(downstreamCtx, iterationCtx.LocalExecutor, dbName, tableName, ddlInfo.TableCreateSQL, iterationCtx, ddlInfo, cnEngine); err != nil {
 					return moerr.NewInternalErrorf(ctx, "failed to create table %s.%s: %v", dbName, tableName, err)
 				}
+				// Get new table ID for logging
+				if db, err := cnEngine.Database(downstreamCtx, dbName, iterationCtx.LocalTxn); err == nil {
+					if rel, err := db.Relation(downstreamCtx, tableName, nil); err == nil {
+						newTableID := rel.GetTableID(downstreamCtx)
+						createOps = append(createOps, fmt.Sprintf("%s.%s-%d", dbName, tableName, newTableID))
+					}
+				}
 			case DDLOperationDrop:
+				// Get old table ID before drop for logging
+				var oldTableID uint64
+				if db, err := cnEngine.Database(downstreamCtx, dbName, iterationCtx.LocalTxn); err == nil {
+					if rel, err := db.Relation(downstreamCtx, tableName, nil); err == nil {
+						oldTableID = rel.GetTableID(downstreamCtx)
+					}
+				}
 				// Execute DROP TABLE
 				if err := dropTable(downstreamCtx, iterationCtx.LocalExecutor, dbName, tableName, iterationCtx, ddlInfo.TableID, cnEngine); err != nil {
 					return moerr.NewInternalErrorf(ctx, "failed to drop table %s.%s: %v", dbName, tableName, err)
 				}
+				dropOps = append(dropOps, fmt.Sprintf("%s.%s-%d", dbName, tableName, oldTableID))
 			case DDLOperationAlter:
+				// Get old table ID before drop for logging
+				var oldTableID uint64
+				if db, err := cnEngine.Database(downstreamCtx, dbName, iterationCtx.LocalTxn); err == nil {
+					if rel, err := db.Relation(downstreamCtx, tableName, nil); err == nil {
+						oldTableID = rel.GetTableID(downstreamCtx)
+					}
+				}
 				// For alter, drop first then create
 				if err := dropTable(downstreamCtx, iterationCtx.LocalExecutor, dbName, tableName, iterationCtx, ddlInfo.TableID, cnEngine); err != nil {
 					return moerr.NewInternalErrorf(ctx, "failed to drop table %s.%s for alter: %v", dbName, tableName, err)
@@ -429,8 +423,41 @@ func ProcessDDLChanges(
 				if err := createTable(downstreamCtx, iterationCtx.LocalExecutor, dbName, tableName, ddlInfo.TableCreateSQL, iterationCtx, ddlInfo, cnEngine); err != nil {
 					return moerr.NewInternalErrorf(ctx, "failed to create table %s.%s after alter: %v", dbName, tableName, err)
 				}
+				// Get new table ID after create for logging
+				var newTableID uint64
+				if db, err := cnEngine.Database(downstreamCtx, dbName, iterationCtx.LocalTxn); err == nil {
+					if rel, err := db.Relation(downstreamCtx, tableName, nil); err == nil {
+						newTableID = rel.GetTableID(downstreamCtx)
+					}
+				}
+				alterOps = append(alterOps, fmt.Sprintf("%s.%s-%d->%d", dbName, tableName, oldTableID, newTableID))
 			}
 		}
+	}
+
+	// Log DDL operations after execution with downstream table IDs
+	if len(createOps) > 0 || len(dropOps) > 0 || len(alterOps) > 0 {
+		var ddlSummary string
+		if len(createOps) > 0 {
+			ddlSummary += "create " + strings.Join(createOps, ", ")
+		}
+		if len(dropOps) > 0 {
+			if ddlSummary != "" {
+				ddlSummary += "; "
+			}
+			ddlSummary += "drop " + strings.Join(dropOps, ", ")
+		}
+		if len(alterOps) > 0 {
+			if ddlSummary != "" {
+				ddlSummary += "; "
+			}
+			ddlSummary += "alter " + strings.Join(alterOps, ", ")
+		}
+		logutil.Info("ccpr-iteration DDL executed",
+			zap.String("task_id", iterationCtx.TaskID),
+			zap.Uint64("lsn", iterationCtx.IterationLSN),
+			zap.String("ddl_summary", ddlSummary),
+		)
 	}
 
 	logutil.Info("ccpr-iteration DDL",
