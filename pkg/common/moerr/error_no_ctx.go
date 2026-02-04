@@ -496,6 +496,10 @@ func NewCantCompileForPrepareNoCtx() *Error {
 	return newError(Context(), ErrCantCompileForPrepare)
 }
 
+func NewSchedulerClosedNoCtx() *Error {
+	return newError(Context(), ErrSchedulerClosed)
+}
+
 // GC sync protection errors
 func NewGCIsRunningNoCtx() *Error {
 	return newError(Context(), ErrGCIsRunning)

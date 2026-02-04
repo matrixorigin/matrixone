@@ -481,15 +481,18 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 	var size uint64
 	var pkCount int
 
+	// Check fault injection first - if enabled, force flush
+	forceFlush := objectio.CNWorkspaceForceFlushInjected()
+
 	//offset < 0 indicates commit.
 	if offset < 0 {
-		if txn.approximateInMemInsertSize < txn.commitWorkspaceThreshold &&
+		if !forceFlush && txn.approximateInMemInsertSize < txn.commitWorkspaceThreshold &&
 			txn.approximateInMemInsertCnt < txn.engine.config.insertEntryMaxCount &&
 			txn.approximateInMemDeleteCnt < txn.engine.config.insertEntryMaxCount {
 			return nil
 		}
 	} else {
-		if txn.approximateInMemInsertSize < txn.writeWorkspaceThreshold {
+		if !forceFlush && txn.approximateInMemInsertSize < txn.writeWorkspaceThreshold {
 			return nil
 		}
 	}
@@ -499,7 +502,7 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 		offset = 0
 	}
 
-	if !dumpAll {
+	if !dumpAll && !forceFlush {
 		for i := offset; i < len(txn.writes); i++ {
 			if txn.writes[i].isCatalog() {
 				continue
@@ -600,6 +603,9 @@ func (txn *Transaction) dumpInsertBatchLocked(
 	pkCount *int,
 ) error {
 
+	// Check if force flush is enabled
+	forceFlush := objectio.CNWorkspaceForceFlushInjected()
+
 	tbSize := make(map[uint64]int)
 	tbCount := make(map[uint64]int)
 	skipTable := make(map[uint64]bool)
@@ -624,16 +630,20 @@ func (txn *Transaction) dumpInsertBatchLocked(
 	sort.Slice(keys, func(i, j int) bool {
 		return tbSize[keys[i]] < tbSize[keys[j]]
 	})
-	sum := 0
-	for _, k := range keys {
-		if tbCount[k] >= txn.engine.config.insertEntryMaxCount {
-			continue
+
+	// Skip the skipTable logic if force flush is enabled
+	if !forceFlush {
+		sum := 0
+		for _, k := range keys {
+			if tbCount[k] >= txn.engine.config.insertEntryMaxCount {
+				continue
+			}
+			if uint64(sum+tbSize[k]) >= txn.commitWorkspaceThreshold {
+				break
+			}
+			sum += tbSize[k]
+			skipTable[k] = true
 		}
-		if uint64(sum+tbSize[k]) >= txn.commitWorkspaceThreshold {
-			break
-		}
-		sum += tbSize[k]
-		skipTable[k] = true
 	}
 
 	lastWriteIndex := offset

@@ -615,27 +615,27 @@ dev-restart:
 .PHONY: dev-restart-cn1
 dev-restart-cn1:
 	@echo "Restarting CN1..."
-	@cd $(DEV_DIR) && docker compose restart mo-cn1
+	@cd $(DEV_DIR) && ./start.sh up -d --force-recreate mo-cn1
 
 .PHONY: dev-restart-cn2
 dev-restart-cn2:
 	@echo "Restarting CN2..."
-	@cd $(DEV_DIR) && docker compose restart mo-cn2
+	@cd $(DEV_DIR) && ./start.sh up -d --force-recreate mo-cn2
 
 .PHONY: dev-restart-proxy
 dev-restart-proxy:
 	@echo "Restarting Proxy..."
-	@cd $(DEV_DIR) && docker compose restart mo-proxy
+	@cd $(DEV_DIR) && ./start.sh up -d --force-recreate mo-proxy
 
 .PHONY: dev-restart-log
 dev-restart-log:
 	@echo "Restarting Log service..."
-	@cd $(DEV_DIR) && docker compose restart mo-log
+	@cd $(DEV_DIR) && ./start.sh up -d --force-recreate mo-log
 
 .PHONY: dev-restart-tn
 dev-restart-tn:
 	@echo "Restarting TN..."
-	@cd $(DEV_DIR) && docker compose restart mo-tn
+	@cd $(DEV_DIR) && ./start.sh up -d --force-recreate mo-tn
 
 .PHONY: dev-down-grafana-local
 dev-down-grafana-local:
@@ -828,6 +828,26 @@ dev-edit-tn:
 .PHONY: dev-edit-common
 dev-edit-common:
 	@cd $(DEV_DIR) && ./edit-config.sh common
+
+.PHONY: dev-edit-cn1-docker
+dev-edit-cn1-docker:
+	@cd $(DEV_DIR) && ./edit-docker.sh cn1
+
+.PHONY: dev-edit-cn2-docker
+dev-edit-cn2-docker:
+	@cd $(DEV_DIR) && ./edit-docker.sh cn2
+
+.PHONY: dev-edit-tn-docker
+dev-edit-tn-docker:
+	@cd $(DEV_DIR) && ./edit-docker.sh tn
+
+.PHONY: dev-edit-log-docker
+dev-edit-log-docker:
+	@cd $(DEV_DIR) && ./edit-docker.sh log
+
+.PHONY: dev-edit-proxy-docker
+dev-edit-proxy-docker:
+	@cd $(DEV_DIR) && ./edit-docker.sh proxy
 
 ###############################################################################
 # Dashboard Creation

@@ -248,14 +248,16 @@ const (
 	ErrTxnUnknown                uint16 = 20638
 	ErrTxnControl                uint16 = 20639
 	ErrOfflineTxnWrite           uint16 = 20640
+	// ErrSchedulerClosed scheduler has been closed, cannot schedule new jobs
+	ErrSchedulerClosed uint16 = 20641
 
 	// GC sync protection errors
-	ErrGCIsRunning              uint16 = 20641
-	ErrSyncProtectionNotFound   uint16 = 20642
-	ErrSyncProtectionExists     uint16 = 20643
-	ErrSyncProtectionMaxCount   uint16 = 20644
-	ErrSyncProtectionSoftDelete uint16 = 20645
-	ErrSyncProtectionInvalid    uint16 = 20646
+	ErrGCIsRunning              uint16 = 20642
+	ErrSyncProtectionNotFound   uint16 = 20643
+	ErrSyncProtectionExists     uint16 = 20644
+	ErrSyncProtectionMaxCount   uint16 = 20645
+	ErrSyncProtectionSoftDelete uint16 = 20646
+	ErrSyncProtectionInvalid    uint16 = 20647
 
 	// Group 7: lock service
 	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
@@ -509,6 +511,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTxnUnknown:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn commit status is unknown: %s"},
 	ErrTxnControl:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn control error: %s"},
 	ErrOfflineTxnWrite:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "write offline txn: %s"},
+	ErrSchedulerClosed:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "scheduler closed"},
 
 	// GC sync protection errors
 	ErrGCIsRunning:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "GC is running, please retry later"},
