@@ -17,6 +17,7 @@ package hashbuild
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -46,6 +47,10 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 		return nil
 	}
 
+	if hashBuild.IsShuffle && hashBuild.RuntimeFilterSpec == nil {
+		return moerr.NewInternalError(proc.Ctx, "shuffle hash build must have runtime filter")
+	}
+
 	hashBuild.ctr.hashmapBuilder.IsDedup = hashBuild.IsDedup
 	hashBuild.ctr.hashmapBuilder.OnDuplicateAction = hashBuild.OnDuplicateAction
 	hashBuild.ctr.hashmapBuilder.DedupColName = hashBuild.DedupColName
@@ -57,37 +62,45 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer := hashBuild.OpAnalyzer
 	result := vm.NewCallResult()
-	ap := hashBuild
-	ctr := &ap.ctr
+	ctr := &hashBuild.ctr
 	for {
 		switch ctr.state {
 		case BuildHashMap:
-			if err := ctr.build(ap, proc, analyzer); err != nil {
+			if err := ctr.build(hashBuild, proc, analyzer); err != nil {
 				return result, err
 			}
-			analyzer.Alloc(ctr.hashmapBuilder.GetSize())
+
 			ctr.state = HandleRuntimeFilter
 
 		case HandleRuntimeFilter:
-			if err := ctr.handleRuntimeFilter(ap, proc); err != nil {
+			if err := ctr.handleRuntimeFilter(hashBuild, proc); err != nil {
 				return result, err
 			}
+
 			ctr.state = SendJoinMap
 
 		case SendJoinMap:
+			if hashBuild.JoinMapTag <= 0 {
+				return result, moerr.NewInternalError(proc.Ctx, "wrong joinmap message tag!")
+			}
+
 			var jm *message.JoinMap
 			if ctr.hashmapBuilder.InputBatchRowCount > 0 {
 				jm = message.NewJoinMap(ctr.hashmapBuilder.MultiSels, ctr.hashmapBuilder.IntHashMap, ctr.hashmapBuilder.StrHashMap, ctr.hashmapBuilder.DelRows, ctr.hashmapBuilder.Batches.Buf, proc.Mp())
 				jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
-				if ap.NeedBatches {
+				if hashBuild.NeedBatches {
 					jm.SetRowCount(int64(ctr.hashmapBuilder.InputBatchRowCount))
 				}
-				jm.IncRef(ap.JoinMapRefCnt)
+				jm.IncRef(hashBuild.JoinMapRefCnt)
 			}
-			if ap.JoinMapTag <= 0 {
-				panic("wrong joinmap message tag!")
-			}
-			message.SendMessage(message.JoinMapMsg{JoinMapPtr: jm, Tag: ap.JoinMapTag}, proc.GetMessageBoard())
+
+			message.SendMessage(message.JoinMapMsg{
+				JoinMapPtr: jm,
+				IsShuffle:  hashBuild.IsShuffle,
+				ShuffleIdx: hashBuild.ShuffleIdx,
+				Tag:        hashBuild.JoinMapTag,
+			}, proc.GetMessageBoard())
+
 			ctr.state = SendSucceed
 
 		case SendSucceed:
@@ -121,25 +134,30 @@ func (ctr *container) collectBuildBatches(hashBuild *HashBuild, proc *process.Pr
 	return nil
 }
 
-func (ctr *container) build(ap *HashBuild, proc *process.Process, analyzer process.Analyzer) error {
-	err := ctr.collectBuildBatches(ap, proc, analyzer)
+func (ctr *container) build(hashBuild *HashBuild, proc *process.Process, analyzer process.Analyzer) error {
+	err := ctr.collectBuildBatches(hashBuild, proc, analyzer)
 	if err != nil {
 		return err
 	}
-	if ap.NeedHashMap {
+
+	if hashBuild.NeedHashMap {
 		needUniqueVec := true
-		if ap.RuntimeFilterSpec == nil || ap.RuntimeFilterSpec.Expr == nil {
+		if hashBuild.IsShuffle || hashBuild.RuntimeFilterSpec == nil || hashBuild.RuntimeFilterSpec.Expr == nil {
 			needUniqueVec = false
 		}
-		err = ctr.hashmapBuilder.BuildHashmap(ap.HashOnPK, ap.NeedAllocateSels, needUniqueVec, proc)
+
+		err = ctr.hashmapBuilder.BuildHashmap(hashBuild.HashOnPK, hashBuild.NeedAllocateSels, needUniqueVec, proc)
+		if err != nil {
+			return err
+		}
 	}
-	if err != nil {
-		return err
-	}
-	if !ap.NeedBatches {
+
+	if !hashBuild.NeedBatches {
 		// if do not need merged batch, free it now to save memory
 		ctr.hashmapBuilder.Batches.Clean(proc.Mp())
 	}
+
+	analyzer.Alloc(ctr.hashmapBuilder.GetSize())
 	return nil
 }
 
@@ -163,15 +181,24 @@ func calculateBloomFilterProbability(rowCount int) float64 {
 	}
 }
 
-func (ctr *container) handleRuntimeFilter(ap *HashBuild, proc *process.Process) error {
-	if ap.RuntimeFilterSpec == nil {
+func (ctr *container) handleRuntimeFilter(hashBuild *HashBuild, proc *process.Process) error {
+	if hashBuild.IsShuffle {
+		//only support runtime filter pass for now in shuffle join
+		var runtimeFilter message.RuntimeFilterMessage
+		runtimeFilter.Tag = hashBuild.RuntimeFilterSpec.Tag
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
+		message.SendRuntimeFilter(runtimeFilter, hashBuild.RuntimeFilterSpec, proc.GetMessageBoard())
+		return nil
+	}
+
+	if hashBuild.RuntimeFilterSpec == nil {
 		return nil
 	}
 
 	var runtimeFilter message.RuntimeFilterMessage
-	runtimeFilter.Tag = ap.RuntimeFilterSpec.Tag
+	runtimeFilter.Tag = hashBuild.RuntimeFilterSpec.Tag
 
-	spec := ap.RuntimeFilterSpec
+	spec := hashBuild.RuntimeFilterSpec
 
 	// use bloom filter runtime filter when requested
 	if spec.UseBloomFilter {
@@ -221,14 +248,7 @@ func (ctr *container) handleRuntimeFilter(ap *HashBuild, proc *process.Process) 
 	}
 
 	hashmapCount := ctr.hashmapBuilder.GetGroupCount()
-
 	inFilterCardLimit := spec.UpperLimit
-	//inFilterCardLimit := plan.GetInFilterCardLimit()
-	//bloomFilterCardLimit := int64(plan.BloomFilterCardLimit)
-	//v, ok = runtime.ProcessLevelRuntime().GetGlobalVariables("runtime_filter_limit_bloom_filter")
-	//if ok {
-	//	bloomFilterCardLimit = v.(int64)
-	//}
 
 	defer func() {
 		for i := range ctr.hashmapBuilder.UniqueJoinKeys {

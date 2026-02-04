@@ -179,6 +179,13 @@ func initTxnMetrics() {
 	registry.MustRegister(txnSelectivityHistogram)
 	registry.MustRegister(txnColumnReadHistogram)
 	registry.MustRegister(txnReadSizeHistogram)
+
+	registry.MustRegister(starcountPathCounter)
+	registry.MustRegister(StarcountDurationHistogram)
+	registry.MustRegister(StarcountResultRowsHistogram)
+	registry.MustRegister(StarcountEstimateTombstoneRowsHistogram)
+	registry.MustRegister(StarcountEstimateTombstoneObjectsHistogram)
+	registry.MustRegister(StarcountEstimateOverActualRatioHistogram)
 }
 
 func initRPCMetrics() {

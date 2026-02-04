@@ -184,6 +184,432 @@ FROM yearly_revenue r1
 LEFT JOIN yearly_revenue r2 ON r1.`年份` = r2.`年份` + 1
 ORDER BY r1.`年份`;
 
+DROP DATABASE IF EXISTS test_cte_rewrite;
+CREATE DATABASE test_cte_rewrite;
+USE test_cte_rewrite;
+
+-- 创建测试表
+CREATE TABLE sales (
+                       id INT,
+                       product VARCHAR(50),
+                       amount DECIMAL(10,2),
+                       sale_date DATE,
+                       region VARCHAR(20)
+);
+
+INSERT INTO sales VALUES
+                      (1, 'Product A', 100.00, '2023-01-15', 'North'),
+                      (2, 'Product B', 200.00, '2023-01-20', 'South'),
+                      (3, 'Product A', 150.00, '2023-02-10', 'North'),
+                      (4, 'Product C', 300.00, '2023-02-15', 'East'),
+                      (5, 'Product B', 250.00, '2023-03-05', 'South'),
+                      (6, 'Product A', 180.00, '2023-03-20', 'West'),
+                      (7, 'Product C', 350.00, '2023-04-10', 'East'),
+                      (8, 'Product B', 220.00, '2023-04-25', 'North');
+
+CREATE TABLE employees (
+                           emp_id INT,
+                           emp_name VARCHAR(50),
+                           department VARCHAR(50),
+                           salary DECIMAL(10,2)
+);
+
+INSERT INTO employees VALUES
+                          (1, 'Alice', 'Sales', 5000.00),
+                          (2, 'Bob', 'IT', 6000.00),
+                          (3, 'Charlie', 'Sales', 5500.00),
+                          (4, 'David', 'IT', 6500.00),
+                          (5, 'Eve', 'HR', 4500.00);
+
+
+-- 基础 CTE + SUM 聚合 + Rewrite (原始 bug)
+/*+ {
+    "rewrites" : {
+        "test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"
+    }
+} */
+WITH sales_summary AS (
+    SELECT
+        product,
+        SUM(amount) AS total_amount
+    FROM test_cte_rewrite.sales
+    GROUP BY product
+)
+SELECT * FROM sales_summary
+ORDER BY product;
+
+
+-- CTE + COUNT 聚合 + Rewrite
+/*+ {
+    "rewrites" : {
+        "test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"
+    }
+} */
+WITH product_count AS (
+    SELECT
+        product,
+        COUNT(*) AS sale_count
+    FROM test_cte_rewrite.sales
+    GROUP BY product
+)
+SELECT * FROM product_count
+ORDER BY sale_count DESC;
+
+
+-- CTE + AVG 聚合 + Rewrite
+/*+ {
+    "rewrites" : {
+        "test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"
+    }
+} */
+WITH avg_sales AS (
+    SELECT
+        region,
+        AVG(amount) AS avg_amount
+    FROM test_cte_rewrite.sales
+    GROUP BY region
+)
+SELECT * FROM avg_sales
+ORDER BY avg_amount DESC;
+
+
+-- CTE + MAX/MIN 聚合 + Rewrite
+/*+ {
+    "rewrites" : {
+        "test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"
+    }
+} */
+WITH sales_range AS (
+    SELECT
+        product,
+        MAX(amount) AS max_amount,
+        MIN(amount) AS min_amount
+    FROM test_cte_rewrite.sales
+    GROUP BY product
+)
+SELECT * FROM sales_range
+ORDER BY product;
+
+
+-- CTE + 多个聚合函数 + Rewrite
+/*+ {
+    "rewrites" : {
+        "test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"
+    }
+} */
+WITH sales_stats AS (
+    SELECT
+        region,
+        COUNT(*) AS sale_count,
+        SUM(amount) AS total_amount,
+        AVG(amount) AS avg_amount,
+        MAX(amount) AS max_amount,
+        MIN(amount) AS min_amount
+    FROM test_cte_rewrite.sales
+    GROUP BY region
+)
+SELECT * FROM sales_stats
+ORDER BY region;
+
+
+-- CTE + GROUP BY HAVING + 聚合 + Rewrite
+/*+ {
+    "rewrites" : {
+        "test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"
+    }
+} */
+WITH high_sales AS (
+    SELECT
+        product,
+        SUM(amount) AS total_amount
+    FROM test_cte_rewrite.sales
+    GROUP BY product
+    HAVING SUM(amount) > 300
+)
+SELECT * FROM high_sales
+ORDER BY total_amount DESC;
+
+
+-- 嵌套 CTE + 聚合 + Rewrite
+/*+ {
+    "rewrites" : {
+        "test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"
+    }
+} */
+WITH monthly_sales AS (
+    SELECT
+        DATE_FORMAT(sale_date, '%Y-%m') AS month,
+    SUM(amount) AS monthly_total
+FROM test_cte_rewrite.sales
+GROUP BY DATE_FORMAT(sale_date, '%Y-%m')
+    ),
+    avg_monthly AS (
+SELECT
+    AVG(monthly_total) AS avg_monthly_sales
+FROM monthly_sales
+    )
+SELECT * FROM avg_monthly;
+
+
+-- CTE 自连接 + 聚合 + Rewrite (原始 issue 场景)
+/*+ {
+    "rewrites" : {
+        "test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"
+    }
+} */
+WITH monthly_revenue AS (
+    SELECT
+    YEAR(sale_date) AS year,
+    MONTH(sale_date) AS month,
+    SUM(amount) AS revenue
+FROM test_cte_rewrite.sales
+GROUP BY YEAR(sale_date), MONTH(sale_date)
+    )
+SELECT
+    r1.year,
+    r1.month,
+    r1.revenue,
+    r2.revenue AS prev_month_revenue,
+    CASE
+        WHEN r2.revenue IS NOT NULL AND r2.revenue != 0
+        THEN ROUND((r1.revenue - r2.revenue) / r2.revenue * 100, 2)
+        ELSE NULL
+        END AS growth_rate
+FROM monthly_revenue r1
+         LEFT JOIN monthly_revenue r2
+                   ON r1.year = r2.year
+                       AND r1.month = r2.month + 1
+ORDER BY r1.year, r1.month;
+
+
+-- CTE + 聚合 + WHERE 条件 + Rewrite
+/*+ {
+    "rewrites" : {
+        "test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"
+    }
+} */
+WITH filtered_sales AS (
+    SELECT
+        product,
+        SUM(amount) AS total_amount
+    FROM test_cte_rewrite.sales
+    WHERE sale_date >= '2023-02-01'
+    GROUP BY product
+)
+SELECT * FROM filtered_sales
+WHERE total_amount > 200
+ORDER BY total_amount DESC;
+
+
+-- CTE + COUNT DISTINCT + Rewrite
+/*+ {
+    "rewrites" : {
+        "test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"
+    }
+} */
+WITH unique_products AS (
+    SELECT
+        region,
+        COUNT(DISTINCT product) AS product_count
+    FROM test_cte_rewrite.sales
+    GROUP BY region
+)
+SELECT * FROM unique_products
+ORDER BY product_count DESC;
+
+
+-- 多表 CTE + 聚合 + Rewrite
+/*+ {
+    "rewrites" : {
+        "test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales",
+        "test_cte_rewrite.employees" : "SELECT * FROM test_cte_rewrite.employees"
+    }
+} */
+WITH dept_stats AS (
+    SELECT
+        department,
+        COUNT(*) AS emp_count,
+        AVG(salary) AS avg_salary
+    FROM test_cte_rewrite.employees
+    GROUP BY department
+)
+SELECT * FROM dept_stats
+ORDER BY avg_salary DESC;
+
+
+-- CTE + 聚合 + 子查询 + Rewrite
+/*+ {
+    "rewrites" : {
+        "test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"
+    }
+} */
+WITH product_sales AS (
+    SELECT
+        product,
+        SUM(amount) AS total_amount
+    FROM test_cte_rewrite.sales
+    GROUP BY product
+)
+SELECT
+    product,
+    total_amount,
+    (SELECT AVG(total_amount) FROM product_sales) AS avg_total
+FROM product_sales
+ORDER BY total_amount DESC;
+
+
+-- CTE + GROUP_CONCAT/STRING_AGG + Rewrite
+/*+ {
+    "rewrites" : {
+        "test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"
+    }
+} */
+WITH region_products AS (
+    SELECT
+        region,
+        GROUP_CONCAT(DISTINCT product ORDER BY product) AS products
+    FROM test_cte_rewrite.sales
+    GROUP BY region
+)
+SELECT * FROM region_products
+ORDER BY region;
+
+
+-- CTE + 窗口函数 + 聚合 + Rewrite
+-- @bvt:issue#23644
+/*+ {
+    "rewrites" : {
+        "test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"
+    }
+} */
+WITH ranked_sales AS (
+    SELECT
+        product,
+        amount,
+        SUM(amount) OVER (PARTITION BY product) AS product_total,
+            ROW_NUMBER() OVER (PARTITION BY product ORDER BY amount DESC) AS rank_in_product
+    FROM test_cte_rewrite.sales
+)
+SELECT * FROM ranked_sales
+WHERE rank_in_product = 1
+ORDER BY product;
+-- @bvt:issue
+
+
+-- CTE + CASE 表达式 + 聚合 + Rewrite
+/*+ {
+    "rewrites" : {
+        "test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"
+    }
+} */
+WITH categorized_sales AS (
+    SELECT
+        product,
+        SUM(CASE WHEN amount > 200 THEN amount ELSE 0 END) AS high_value_sales,
+        SUM(CASE WHEN amount <= 200 THEN amount ELSE 0 END) AS low_value_sales,
+        COUNT(CASE WHEN amount > 200 THEN 1 END) AS high_value_count
+    FROM test_cte_rewrite.sales
+    GROUP BY product
+)
+SELECT * FROM categorized_sales
+ORDER BY product;
+
+
+-- 递归 CTE + 聚合 + Rewrite (如果支持)
+/*+ {
+    "rewrites" : {
+        "test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"
+    }
+} */
+WITH RECURSIVE numbers AS (
+    SELECT 1 AS n
+    UNION ALL
+    SELECT n + 1 FROM numbers WHERE n < 5
+),
+               sales_with_numbers AS (
+                   SELECT
+                       n,
+                       (SELECT COUNT(*) FROM test_cte_rewrite.sales WHERE id <= n) AS cumulative_count
+                   FROM numbers
+               )
+SELECT * FROM sales_with_numbers;
+
+
+-- CTE + ROLLUP/CUBE + 聚合 + Rewrite
+/*+ {
+    "rewrites" : {
+        "test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"
+    }
+} */
+WITH sales_rollup AS (
+    SELECT
+        region,
+        product,
+        SUM(amount) AS total_amount
+    FROM test_cte_rewrite.sales
+    GROUP BY region, product WITH ROLLUP
+    )
+SELECT * FROM sales_rollup
+ORDER BY region, product;
+
+
+-- CTE + 聚合 + UNION + Rewrite
+/*+ {
+    "rewrites" : {
+        "test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"
+    }
+} */
+WITH north_sales AS (
+    SELECT
+        'North' AS region,
+        SUM(amount) AS total
+    FROM test_cte_rewrite.sales
+    WHERE region = 'North'
+),
+     south_sales AS (
+         SELECT
+             'South' AS region,
+             SUM(amount) AS total
+         FROM test_cte_rewrite.sales
+         WHERE region = 'South'
+     )
+SELECT * FROM north_sales
+UNION ALL
+SELECT * FROM south_sales
+ORDER BY region;
+
+
+-- 无聚合的 CTE + Rewrite (对照组 - 应该正常)
+/*+ {
+    "rewrites" : {
+        "test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"
+    }
+} */
+WITH recent_sales AS (
+    SELECT
+        id,
+        product,
+        amount,
+        sale_date
+    FROM test_cte_rewrite.sales
+    WHERE sale_date >= '2023-03-01'
+)
+SELECT * FROM recent_sales
+ORDER BY sale_date;
+
+
+-- CTE + 聚合但无 Rewrite (对照组 - 应该正常)
+WITH sales_summary AS (
+    SELECT
+        product,
+        SUM(amount) AS total_amount
+    FROM test_cte_rewrite.sales
+    GROUP BY product
+)
+SELECT * FROM sales_summary
+ORDER BY product;
+DROP DATABASE test_cte_rewrite;
+
 drop database jst_flat_table1;
 use hint_cte_test;
 drop database hint_cte_test;

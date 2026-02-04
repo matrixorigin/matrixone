@@ -1121,7 +1121,7 @@ func (c *PushClient) doGCPartitionState(ctx context.Context, e *Engine) {
 		parts[ids] = part
 	}
 	e.Unlock()
-	ts := types.BuildTS(time.Now().UTC().UnixNano()-gcPartitionStateTimer.Nanoseconds()*5, 0)
+	ts := types.BuildTS(time.Now().UTC().UnixNano()-gcPartitionStateTimer.Nanoseconds()*1, 0)
 	collector := logtailreplay.NewTruncateCollector()
 	for ids, part := range parts {
 		part.Truncate(ctx, ids, ts, collector)

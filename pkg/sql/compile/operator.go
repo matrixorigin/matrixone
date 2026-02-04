@@ -75,7 +75,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffleV2"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
@@ -127,22 +126,28 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		ParallelID:  int32(index),
 	}
 	switch sourceOp.OpType() {
-	case vm.ShuffleBuild:
-		t := sourceOp.(*shufflebuild.ShuffleBuild)
-		op := shufflebuild.NewArgument()
+	case vm.HashBuild:
+		t := sourceOp.(*hashbuild.HashBuild)
+		op := hashbuild.NewArgument()
+		op.NeedHashMap = t.NeedHashMap
 		op.HashOnPK = t.HashOnPK
 		op.NeedBatches = t.NeedBatches
 		op.NeedAllocateSels = t.NeedAllocateSels
+		op.IsShuffle = t.IsShuffle
 		op.Conditions = t.Conditions
-		op.RuntimeFilterSpec = t.RuntimeFilterSpec
 		op.JoinMapTag = t.JoinMapTag
-		if t.ShuffleIdx == -1 { // shuffleV2
+		op.JoinMapRefCnt = t.JoinMapRefCnt
+		if t.IsShuffle && t.ShuffleIdx == -1 { // shuffleV2
 			op.ShuffleIdx = int32(index)
+		} else {
+			op.ShuffleIdx = t.ShuffleIdx
 		}
+		op.RuntimeFilterSpec = t.RuntimeFilterSpec
 		op.IsDedup = t.IsDedup
 		op.OnDuplicateAction = t.OnDuplicateAction
 		op.DedupColTypes = t.DedupColTypes
 		op.DedupColName = t.DedupColName
+		op.DelColIdx = t.DelColIdx
 		return op
 
 	case vm.Group:
@@ -1494,7 +1499,7 @@ func constructJoinBuildOperator(c *Compile, op vm.Operator, mcpu int32) vm.Opera
 		ret.SetIsFirst(true)
 		return ret
 	default:
-		res := constructHashBuild(op, c.proc, mcpu)
+		res := constructBroadcastHashBuild(op, c.proc, mcpu)
 		res.SetIdx(op.GetOperatorBase().GetIdx())
 		res.SetIsFirst(true)
 		return res
@@ -1530,8 +1535,9 @@ func rewriteJoinExprToHashBuildExpr(src []*plan.Expr) []*plan.Expr {
 	return dst
 }
 
-func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hashbuild.HashBuild {
+func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hashbuild.HashBuild {
 	ret := hashbuild.NewArgument()
+	ret.IsShuffle = false
 
 	switch op.OpType() {
 	case vm.HashJoin:
@@ -1620,8 +1626,12 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 	return ret
 }
 
-func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.ShuffleBuild {
-	ret := shufflebuild.NewArgument()
+func constructShuffleHashBuild(op vm.Operator, proc *process.Process) *hashbuild.HashBuild {
+	ret := hashbuild.NewArgument()
+	ret.NeedHashMap = true
+	ret.IsShuffle = true
+	ret.JoinMapRefCnt = 1
+	ret.DelColIdx = -1
 
 	switch op.OpType() {
 	case vm.HashJoin:

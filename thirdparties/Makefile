@@ -84,7 +84,9 @@ install/include/usearch.h:
 	cp -r $(FP16_DIR)/* $(USEARCH_DIR)/fp16
 	cp -r $(SIMSIMD_DIR)/* $(USEARCH_DIR)/simsimd
 	cp -r $(STRINGZILLA_DIR)/* $(USEARCH_DIR)/stringzilla
-	sed -i -e "s/march=native/march=haswell/g" $(USEARCH_DIR)/CMakeLists.txt
+	@if $(CC) -march=haswell -E - < /dev/null > /dev/null 2>&1; then \
+		sed -i -e "s/march=native/march=haswell/g" $(USEARCH_DIR)/CMakeLists.txt; \
+	fi
 	(cd $(USEARCH_DIR) && cmake -B build $(USEARCH_CMAKE_FLAG) && cmake --build build --config Release)
 ifeq ($(UNAME_S),darwin)
 	cp $(USEARCH_DIR)/build/*.dylib install/lib
