@@ -96,6 +96,22 @@ ORDER BY department
 ) dept_summary;
 ➤ department_stats[12,-1,0]  𝄀
 [{"count": 3, "name": "Engineering"},{"count": 2, "name": "Marketing"},{"count": 2, "name": "Sales"}]
+SELECT CONCAT('[',
+GROUP_CONCAT(
+JSON_OBJECT('name', department, 'count', dept_count)
+SEPARATOR ','
+),
+']') as department_stats
+FROM (
+SELECT
+department,
+COUNT(*) as dept_count
+FROM employees
+GROUP BY department
+ORDER BY department
+) dept_summary;
+➤ department_stats[12,-1,0]  𝄀
+[{"count": 3, "name": "Engineering"},{"count": 2, "name": "Marketing"},{"count": 2, "name": "Sales"}]
 SELECT
 JSON_OBJECT(
 'departments', JSON_OBJECTAGG(
@@ -257,6 +273,26 @@ INSERT INTO user_roles VALUES
 (2, 'editor'),
 (2, 'viewer'),
 (3, 'viewer');
+SELECT
+user_id,
+JSON_OBJECTAGG(
+role_name,
+permissions_array
+) as user_permissions
+FROM (
+SELECT
+ur.user_id,
+ur.role_name,
+JSON_ARRAYAGG(rp.permission) as permissions_array
+FROM user_roles ur
+JOIN role_permissions rp ON ur.role_name = rp.role_name
+GROUP BY ur.user_id, ur.role_name
+) role_permissions_grouped
+GROUP BY user_id;
+➤ user_id[4,32,0]  ¦  user_permissions[-1,2147483647,0]  𝄀
+1  ¦  {"admin": ["read_users", "write_users", "delete_users", "admin_panel"]}  𝄀
+2  ¦  {"editor": ["read_users", "write_reports"], "viewer": ["read_users", "read_reports"]}  𝄀
+3  ¦  {"viewer": ["read_users", "read_reports"]}
 SELECT
 user_id,
 JSON_OBJECTAGG(
