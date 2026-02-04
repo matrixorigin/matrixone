@@ -373,7 +373,7 @@ func newMessageSenderOnClient(
 		sender.receiveCh, err = sender.streamSender.Receive()
 	}
 
-	v2.PipelineMessageSenderCounter.Inc()
+	v2.PipelineMessageSenderGauge.Inc()
 	return sender, moerr.AttachCause(ctx, err)
 }
 
@@ -555,5 +555,5 @@ func (sender *messageSenderOnClient) close() {
 	}
 	_ = sender.streamSender.Close(true)
 
-	v2.PipelineMessageSenderCounter.Desc()
+	v2.PipelineMessageSenderGauge.Dec()
 }
