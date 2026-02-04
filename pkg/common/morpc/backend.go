@@ -147,7 +147,7 @@ type remoteBackend struct {
 	remote          string
 	metrics         *metrics
 	logger          *zap.Logger
-	logID           uint64 // stable id for log fields, set in adjust(); avoids per-backend zap Logger clone
+	logID           uint64      // stable id for log fields, set in adjust(); avoids per-backend zap Logger clone
 	logFieldsCache  []zap.Field // cached for logFields(), set once in adjust() to avoid alloc per log call
 	rateLimitLogger *logutil.RateLimitedLogger
 	codec           Codec
