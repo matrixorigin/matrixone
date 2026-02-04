@@ -16,3 +16,10 @@ create function db1.helloworld5 () returns int language sql as 'select id from t
 drop function db1.helloworld5();
 drop function db2.helloworld5();
 drop database db1;
+
+-- bvt: preserve backslash in $$...$$ string for UDF body
+create database if not exists udf_bvt;
+use udf_bvt;
+create function sql_nl() returns varchar language sql as $$select '\\n'$$;
+select hex(body) as body_hex from mo_catalog.mo_user_defined_function where name = 'sql_nl' and db = 'udf_bvt';
+drop database udf_bvt;
