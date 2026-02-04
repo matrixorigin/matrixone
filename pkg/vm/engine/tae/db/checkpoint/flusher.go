@@ -15,7 +15,6 @@
 package checkpoint
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"math"
@@ -813,22 +812,11 @@ func (flusher *flushImpl) FlushTable(
 		return moerr.NewInternalError(ctx, sarg)
 	}
 
-	// debug counter for mo_columns (tableID == 3)
-	var debugCounter int
-
 	makeRequest := func() *FlushRequest {
 		tree := flusher.sourcer.ScanInRangePruned(types.TS{}, ts)
 		tableTree := tree.GetTree().GetTable(tableID)
 		if tableTree == nil {
 			return nil
-		}
-
-		// debug logging for mo_columns
-		if tableID == 3 {
-			debugCounter++
-			if debugCounter%10 == 0 {
-				flusher.debugPrintTableObjects(dbID, tableID, ts)
-			}
 		}
 
 		nTree := model.NewTree()
@@ -860,78 +848,6 @@ func (flusher *flushImpl) FlushTable(
 		cfg.ForceFlushCheckInterval,
 	)
 	return
-}
-
-func (flusher *flushImpl) debugPrintTableObjects(dbID, tableID uint64, ts types.TS) {
-	db, err := flusher.catalogCache.GetDatabaseByID(dbID)
-	if err != nil {
-		logutil.Warn("debug.flush.table.get.db.failed",
-			zap.Uint64("dbID", dbID),
-			zap.Error(err),
-		)
-		return
-	}
-	table, err := db.GetTableEntryByID(tableID)
-	if err != nil {
-		logutil.Warn("debug.flush.table.get.table.failed",
-			zap.Uint64("tableID", tableID),
-			zap.Error(err),
-		)
-		return
-	}
-
-	var buf bytes.Buffer
-	buf.WriteString(fmt.Sprintf("debug.flush.mo_columns ts=%s\n", ts.ToString()))
-
-	// print data objects
-	buf.WriteString("=== Data Objects ===\n")
-	dataIt := table.MakeDataObjectIt()
-	defer dataIt.Release()
-	for ok := dataIt.Last(); ok; ok = dataIt.Prev() {
-		obj := dataIt.Item()
-		hasDCounterpart := obj.HasDCounterpart()
-		nextCommitted := false
-		if next := obj.GetNextVersion(); next != nil {
-			nextCommitted = next.IsCommitted()
-		}
-		buf.WriteString(fmt.Sprintf(
-			"  obj=%s appendable=%v isCEntry=%v isDEntry=%v createdAt=%s deletedAt=%s hasDCounterpart=%v nextCommitted=%v\n",
-			obj.ID().ShortStringEx(),
-			obj.IsAppendable(),
-			obj.IsCEntry(),
-			obj.IsDEntry(),
-			obj.CreatedAt.ToString(),
-			obj.DeletedAt.ToString(),
-			hasDCounterpart,
-			nextCommitted,
-		))
-	}
-
-	// print tombstone objects
-	buf.WriteString("=== Tombstone Objects ===\n")
-	tombIt := table.MakeTombstoneObjectIt()
-	defer tombIt.Release()
-	for ok := tombIt.Last(); ok; ok = tombIt.Prev() {
-		obj := tombIt.Item()
-		hasDCounterpart := obj.HasDCounterpart()
-		nextCommitted := false
-		if next := obj.GetNextVersion(); next != nil {
-			nextCommitted = next.IsCommitted()
-		}
-		buf.WriteString(fmt.Sprintf(
-			"  obj=%s appendable=%v isCEntry=%v isDEntry=%v createdAt=%s deletedAt=%s hasDCounterpart=%v nextCommitted=%v\n",
-			obj.ID().ShortStringEx(),
-			obj.IsAppendable(),
-			obj.IsCEntry(),
-			obj.IsDEntry(),
-			obj.CreatedAt.ToString(),
-			obj.DeletedAt.ToString(),
-			hasDCounterpart,
-			nextCommitted,
-		))
-	}
-
-	logutil.Info(buf.String())
 }
 
 func (flusher *flushImpl) IsAllChangesFlushed(
