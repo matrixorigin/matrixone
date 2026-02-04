@@ -66,7 +66,7 @@ func IsValidArg(parameter string, proc *process.Process) (*cmd_util.DiskCleaner,
 			// Join remaining parts as JSON value (in case JSON contains dots)
 			value = strings.Join(parameters[1:], ".")
 		}
-		
+
 		// Debug: print parameter info
 		logutil.Info(
 			"GC-Sync-Protection-CMD-Parse",
@@ -75,7 +75,7 @@ func IsValidArg(parameter string, proc *process.Process) (*cmd_util.DiskCleaner,
 			zap.Int("parts-count", len(parameters)),
 			zap.Int("value-len", len(value)),
 		)
-		
+
 		return &cmd_util.DiskCleaner{
 			Op:    op,
 			Value: value,

@@ -73,7 +73,7 @@ type CheckpointBasedGCJob struct {
 	ts             *types.TS
 	globalCkpLoc   objectio.Location
 	globalCkpVer   uint32
-	checkpointCli  checkpoint.Runner    // Added to access catalog
+	checkpointCli  checkpoint.Runner      // Added to access catalog
 	syncProtection *SyncProtectionManager // Sync protection manager for cross-cluster sync
 
 	result struct {

@@ -37,7 +37,7 @@ import (
 // SyncProtectionRequest represents a sync protection request
 type SyncProtectionRequest struct {
 	JobID      string `json:"job_id"`
-	BF         string `json:"bf"`          // Base64 encoded BloomFilter
+	BF         string `json:"bf"` // Base64 encoded BloomFilter
 	ValidTS    int64  `json:"valid_ts"`
 	TestObject string `json:"test_object"` // Test object name (for debugging)
 }
