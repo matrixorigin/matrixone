@@ -466,6 +466,7 @@ type Binding struct {
 	tableID uint64
 	// lower case
 	cols        []string
+	originCols  []string
 	colIsHidden []bool
 	types       []*plan.Type
 	refCnts     []uint
