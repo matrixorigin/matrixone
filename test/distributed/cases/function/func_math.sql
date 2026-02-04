@@ -59,8 +59,9 @@ insert into ceil values(2,-1,-99999999999999999.9,1.23,-1.23);
 -- @case
 -- @desc:test for abs
 -- @label:bvt
+-- @bvt:issue#10748
 select ceil(d),ceil(dl),ceil(fl) from ceil;
-
+-- @bvt:issue
 
 drop table t1;
 drop table ceil;
