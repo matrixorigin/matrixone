@@ -384,12 +384,15 @@ func (ic *InternalCmdGetSnapshotTs) GetQueryType() string     { return tree.Quer
 var _ tree.Statement = &InternalCmdGetDatabases{}
 
 // InternalCmdGetDatabases the internal command to get databases by publication permission
-// Parameters: snapshotName, accountName, publicationName
+// Parameters: snapshotName, accountName, publicationName, level, dbName, tableName
 // Returns: list of database names covered by the snapshot
 type InternalCmdGetDatabases struct {
 	snapshotName    string
 	accountName     string
 	publicationName string
+	level           string
+	dbName          string
+	tableName       string
 }
 
 // Free implements tree.Statement.
@@ -397,11 +400,11 @@ func (ic *InternalCmdGetDatabases) Free() {
 }
 
 func (ic *InternalCmdGetDatabases) String() string {
-	return makeGetDatabasesSql(ic.snapshotName, ic.accountName, ic.publicationName)
+	return makeGetDatabasesSql(ic.snapshotName, ic.accountName, ic.publicationName, ic.level, ic.dbName, ic.tableName)
 }
 
 func (ic *InternalCmdGetDatabases) Format(ctx *tree.FmtCtx) {
-	ctx.WriteString(makeGetDatabasesSql(ic.snapshotName, ic.accountName, ic.publicationName))
+	ctx.WriteString(makeGetDatabasesSql(ic.snapshotName, ic.accountName, ic.publicationName, ic.level, ic.dbName, ic.tableName))
 }
 
 func (ic *InternalCmdGetDatabases) StmtKind() tree.StmtKind {
@@ -445,13 +448,15 @@ func (ic *InternalCmdGetMoIndexes) GetQueryType() string     { return tree.Query
 var _ tree.Statement = &InternalCmdGetDdl{}
 
 // InternalCmdGetDdl the internal command to get DDL by publication permission
-// Parameters: snapshotName, subscriptionAccountName, publicationName
-// The handler will use the snapshot's level to determine dbName and tableName scope
+// Parameters: snapshotName, subscriptionAccountName, publicationName, level, dbName, tableName
 // Returns: list of DDL records (dbname, tablename, tableid, tablesql)
 type InternalCmdGetDdl struct {
 	snapshotName            string
 	subscriptionAccountName string
 	publicationName         string
+	level                   string
+	dbName                  string
+	tableName               string
 }
 
 // Free implements tree.Statement.
@@ -459,11 +464,11 @@ func (ic *InternalCmdGetDdl) Free() {
 }
 
 func (ic *InternalCmdGetDdl) String() string {
-	return makeGetDdlSql(ic.snapshotName, ic.subscriptionAccountName, ic.publicationName)
+	return makeGetDdlSql(ic.snapshotName, ic.subscriptionAccountName, ic.publicationName, ic.level, ic.dbName, ic.tableName)
 }
 
 func (ic *InternalCmdGetDdl) Format(ctx *tree.FmtCtx) {
-	ctx.WriteString(makeGetDdlSql(ic.snapshotName, ic.subscriptionAccountName, ic.publicationName))
+	ctx.WriteString(makeGetDdlSql(ic.snapshotName, ic.subscriptionAccountName, ic.publicationName, ic.level, ic.dbName, ic.tableName))
 }
 
 func (ic *InternalCmdGetDdl) StmtKind() tree.StmtKind {

@@ -2985,15 +2985,43 @@ func handleGetDatabases(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetDatab
 		return err
 	}
 
-	// Step 2: Get snapshot ts using authorized account context
+	// Step 2: Get snapshot ts using authorized account context - if snapshot name is empty, use current timestamp (0)
 	snapshotCtx := defines.AttachAccountId(ctx, uint32(accountID))
-	snapshotTs, err := GetSnapshotTsByName(snapshotCtx, bh, ic.snapshotName)
-	if err != nil {
-		return err
+	var snapshotTs int64
+	if ic.snapshotName == "" {
+		// Use 0 to indicate current timestamp
+		snapshotTs = 0
+	} else {
+		snapshotTs, err = GetSnapshotTsByName(snapshotCtx, bh, ic.snapshotName)
+		if err != nil {
+			return err
+		}
 	}
 
-	// Step 3: Query mo_database using the snapshot timestamp
-	dbSql := fmt.Sprintf("SELECT datname FROM mo_catalog.mo_database{MO_TS = %d} WHERE account_id = %d", snapshotTs, accountID)
+	// Step 3: Build result set based on level, dbName, tableName
+	col := new(MysqlColumn)
+	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col.SetName("datname")
+
+	mrs := ses.GetMysqlResultSet()
+	mrs.AddColumn(col)
+
+	// For database or table level, directly use the provided dbName
+	if ic.level == "database" || ic.level == "table" {
+		row := make([]interface{}, 1)
+		row[0] = ic.dbName
+		mrs.AddRow(row)
+		return nil
+	}
+
+	// For account level, query mo_database using the snapshot timestamp
+	var dbSql string
+	if snapshotTs == 0 {
+		// Use current timestamp - no MO_TS hint
+		dbSql = fmt.Sprintf("SELECT datname FROM mo_catalog.mo_database WHERE account_id = %d", accountID)
+	} else {
+		dbSql = fmt.Sprintf("SELECT datname FROM mo_catalog.mo_database{MO_TS = %d} WHERE account_id = %d", snapshotTs, accountID)
+	}
 
 	bh.ClearExecResultSet()
 	if err = bh.Exec(snapshotCtx, dbSql); err != nil {
@@ -3004,14 +3032,6 @@ func handleGetDatabases(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetDatab
 	if err != nil {
 		return err
 	}
-
-	// Step 4: Build result set
-	col := new(MysqlColumn)
-	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	col.SetName("datname")
-
-	mrs := ses.GetMysqlResultSet()
-	mrs.AddColumn(col)
 
 	// Add each database name as a row
 	if execResultArrayHasData(erArray) {
@@ -3120,7 +3140,7 @@ func handleGetMoIndexes(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetMoInd
 }
 
 // handleInternalGetDdl handles the internal command getddl
-// It checks permission via publication and returns DDL records using the snapshot's level to determine scope
+// It checks permission via publication and returns DDL records using the provided level, dbName, tableName
 func handleInternalGetDdl(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetDdl) error {
 	var err error
 	ctx := execCtx.reqCtx
@@ -3139,10 +3159,16 @@ func handleInternalGetDdl(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetDdl
 	// Query mo_snapshots using the authorized account context
 	snapshotCtx := defines.AttachAccountId(ctx, uint32(accountID))
 
-	// Step 2: Get snapshot covered scope (database name, table name, level) and timestamp
-	scope, snapshotTs, err := GetSnapshotCoveredScope(snapshotCtx, bh, ic.snapshotName)
-	if err != nil {
-		return err
+	// Step 2: Get snapshot timestamp - if snapshot name is empty, use current timestamp (0)
+	var snapshotTs int64
+	if ic.snapshotName == "" {
+		// Use 0 to indicate current timestamp
+		snapshotTs = 0
+	} else {
+		snapshotTs, err = GetSnapshotTsByName(snapshotCtx, bh, ic.snapshotName)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Step 3: Get engine, mpool, and txn from session
@@ -3164,8 +3190,8 @@ func handleInternalGetDdl(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetDdl
 		return moerr.NewInternalError(ctx, "transaction is required for internal getddl")
 	}
 
-	// Step 4: Compute DDL batch with snapshot timestamp
-	resultBatch, err := ComputeDdlBatchWithSnapshot(snapshotCtx, scope.DatabaseName, scope.TableName, eng, mp, txn, snapshotTs)
+	// Step 4: Compute DDL batch with snapshot timestamp using provided dbName and tableName
+	resultBatch, err := ComputeDdlBatchWithSnapshot(snapshotCtx, ic.dbName, ic.tableName, eng, mp, txn, snapshotTs)
 	if err != nil {
 		return err
 	}

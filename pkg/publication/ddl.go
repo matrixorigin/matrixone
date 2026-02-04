@@ -80,11 +80,14 @@ func GetUpstreamDDLUsingGetDdl(
 	}
 
 	// Build GETDDL SQL using internal command
-	// The internal command uses the snapshot's level to determine dbName and tableName scope
+	// The internal command uses the provided level, dbName and tableName to determine scope
 	querySQL := PublicationSQLBuilder.GetDdlSQL(
 		snapshotName,
 		iterationCtx.SubscriptionAccountName,
 		iterationCtx.SubscriptionName,
+		iterationCtx.SrcInfo.SyncLevel,
+		iterationCtx.SrcInfo.DBName,
+		iterationCtx.SrcInfo.TableName,
 	)
 
 	// Execute GETDDL SQL
@@ -193,6 +196,9 @@ func getDatabaseDiff(
 		snapshotName,
 		iterationCtx.SubscriptionAccountName,
 		iterationCtx.SubscriptionName,
+		iterationCtx.SrcInfo.SyncLevel,
+		iterationCtx.SrcInfo.DBName,
+		iterationCtx.SrcInfo.TableName,
 	)
 	result, cancel, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true, time.Minute)
 	if err != nil {
@@ -606,6 +612,7 @@ func FillDDLOperation(
 			} else if ddlInfo.TableCreateSQL != "" {
 				// Table ID matches, check if create SQL changed
 				currentCreateSQL, err := getCurrentTableCreateSQL(ctx, rel, dbName, tableName)
+				logutil.Infof("lalala create sql is %v")
 				if err != nil {
 					return moerr.NewInternalErrorf(ctx, "failed to get current table create SQL for %s.%s: %v", dbName, tableName, err)
 				}

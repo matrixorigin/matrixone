@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -2857,6 +2858,19 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 		return err
 	}
 
+	// Query upstream DDL and create local DB/Table using internal commands
+	// Returns: tableIDs map[dbName.tableName] -> tableID, indexTableMappings map[upstreamIndexTableName] -> downstreamIndexTableName
+	tableIDs, indexTableMappings, err := queryUpstreamAndCreateLocalDBTables(ctx, ses, bh, account, user, password, host, port, syncLevel, dbName, tableName, accountId, string(cs.PubName), cs.SubscriptionAccountName)
+	if err != nil {
+		return err
+	}
+
+	// Build context JSON with tableIDs and indexTableMappings
+	contextJSON, err := buildSubscriptionContextJSON(tableIDs, indexTableMappings)
+	if err != nil {
+		return err
+	}
+
 	// Check for duplicate CCPR task based on sync level
 	// - account level: check if same account_id exists
 	// - database level: check if same account_id + db_name exists
@@ -2916,6 +2930,9 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 	// state: 0 = running (subscription state: 0=running, 1=error, 2=pause, 3=dropped)
 	subscriptionState := int8(0) // running
 
+	// Generate task_id first for ccpr_db and ccpr_table records
+	taskID := uuid.New().String()
+
 	sql := fmt.Sprintf(
 		`INSERT INTO mo_catalog.mo_ccpr_log (
 			task_id,
@@ -2929,21 +2946,24 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 			sync_config,
 			state,
 			iteration_state,
-			iteration_lsn
+			iteration_lsn,
+			context
 		) VALUES (
-			uuid(),
-			'%s',
-			'%s',
-			'%s',
-			%d,
 			'%s',
 			'%s',
 			'%s',
 			'%s',
 			%d,
+			'%s',
+			'%s',
+			'%s',
+			'%s',
 			%d,
-			0
+			%d,
+			0,
+			'%s'
 		)`,
+		taskID,
 		string(cs.PubName),
 		cs.SubscriptionAccountName,
 		syncLevel,
@@ -2954,11 +2974,420 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 		string(syncConfigJSON),
 		subscriptionState,
 		iterationState,
+		strings.ReplaceAll(contextJSON, "'", "''"),
 	)
 
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	if err = bh.Exec(ctx, sql); err != nil {
 		return err
+	}
+
+	// Insert records into mo_ccpr_dbs and mo_ccpr_tables
+	if err = insertCCPRDbAndTableRecords(ctx, bh, tableIDs, taskID); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// TableIDInfo contains table ID and database ID information
+type TableIDInfo struct {
+	TableID uint64
+	DbID    uint64
+}
+
+// queryUpstreamAndCreateLocalDBTables queries upstream for DDL using internal commands and creates local DB/Tables
+// Uses GetDatabasesSQL and GetDdlSQL internal commands with level, dbName, tableName parameters
+// Returns: tableIDs map[dbName.tableName] -> TableIDInfo, indexTableMappings map[upstreamIndexTableName] -> downstreamIndexTableName
+func queryUpstreamAndCreateLocalDBTables(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	account, user, password, host string,
+	port int,
+	syncLevel string,
+	dbName string,
+	tableName string,
+	accountId uint32,
+	pubName string,
+	subscriptionAccountName string,
+) (map[string]TableIDInfo, map[string]string, error) {
+	tableIDs := make(map[string]TableIDInfo)
+	indexTableMappings := make(map[string]string)
+
+	// Create upstream executor to connect to upstream cluster
+	upstreamExecutor, err := newUpstreamExecutorFunc(account, user, password, host, port, 3, 30*time.Second, "30s", publication.NewUpstreamConnectionClassifier())
+	if err != nil {
+		return nil, nil, moerr.NewInternalErrorf(ctx, "failed to connect to upstream cluster: %v", err)
+	}
+	defer upstreamExecutor.Close()
+
+	// Set context for downstream operations
+	downstreamCtx := defines.AttachAccountId(ctx, accountId)
+
+	// Use empty snapshot name - frontend will use current timestamp if snapshot is empty
+	snapshotName := ""
+
+	// Step 1: Get databases from upstream using internal command
+	getDatabasesSQL := publication.PublicationSQLBuilder.GetDatabasesSQL(snapshotName, subscriptionAccountName, pubName, syncLevel, dbName, tableName)
+	dbResult, cancelDb, err := upstreamExecutor.ExecSQL(ctx, nil, getDatabasesSQL, false, true, time.Minute)
+	if err != nil {
+		return nil, nil, moerr.NewInternalErrorf(ctx, "failed to get databases from upstream: %v", err)
+	}
+	defer cancelDb()
+	defer dbResult.Close()
+
+	// Collect database names and check/create locally
+	createdDbs := make(map[string]uint64) // dbName -> dbID
+	for dbResult.Next() {
+		var upstreamDbName string
+		if err := dbResult.Scan(&upstreamDbName); err != nil {
+			return nil, nil, moerr.NewInternalErrorf(ctx, "failed to scan database result: %v", err)
+		}
+
+		// Check if database exists locally
+		dbExists, err := checkDatabaseExists(downstreamCtx, bh, upstreamDbName)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		if dbExists {
+			return nil, nil, moerr.NewInternalErrorf(ctx, "db '%s' already exists locally", upstreamDbName)
+		}
+
+		// Get CREATE DATABASE DDL from upstream and create locally
+		createDbSQL, err := getUpstreamCreateDatabaseDDL(ctx, upstreamExecutor, upstreamDbName)
+		if err != nil {
+			return nil, nil, err
+		}
+		if err = bh.Exec(downstreamCtx, createDbSQL); err != nil {
+			return nil, nil, moerr.NewInternalErrorf(ctx, "failed to create database '%s': %v", upstreamDbName, err)
+		}
+
+		// Get database ID
+		dbID, err := getDatabaseID(downstreamCtx, bh, upstreamDbName)
+		if err != nil {
+			return nil, nil, err
+		}
+		createdDbs[upstreamDbName] = dbID
+	}
+
+	// Step 2: Get DDL from upstream using internal command
+	// GetDdlSQL returns: dbname, tablename, tableid, tablesql
+	getDdlSQL := publication.PublicationSQLBuilder.GetDdlSQL(snapshotName, subscriptionAccountName, pubName, syncLevel, dbName, tableName)
+	ddlResult, cancelDdl, err := upstreamExecutor.ExecSQL(ctx, nil, getDdlSQL, false, true, time.Minute)
+	if err != nil {
+		return nil, nil, moerr.NewInternalErrorf(ctx, "failed to get DDL from upstream: %v", err)
+	}
+	defer cancelDdl()
+	defer ddlResult.Close()
+
+	// Iterate through DDL results and create tables locally
+	for ddlResult.Next() {
+		var upstreamDbName, upstreamTableName, tableSQL string
+		var upstreamTableID int64
+		if err := ddlResult.Scan(&upstreamDbName, &upstreamTableName, &upstreamTableID, &tableSQL); err != nil {
+			return nil, nil, moerr.NewInternalErrorf(ctx, "failed to scan DDL result: %v", err)
+		}
+
+		// Skip if table SQL is empty (might be system table or filtered out)
+		if tableSQL == "" {
+			continue
+		}
+
+		// Check if table exists locally
+		tableExists, err := checkTableExists(downstreamCtx, bh, upstreamDbName, upstreamTableName)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		if tableExists {
+			return nil, nil, moerr.NewInternalErrorf(ctx, "table '%s.%s' already exists locally", upstreamDbName, upstreamTableName)
+		}
+
+		// Create table locally (need to switch to the database first)
+		useDbSQL := fmt.Sprintf("USE `%s`", upstreamDbName)
+		if err = bh.Exec(downstreamCtx, useDbSQL); err != nil {
+			return nil, nil, moerr.NewInternalErrorf(ctx, "failed to use database '%s': %v", upstreamDbName, err)
+		}
+
+		if err = bh.Exec(downstreamCtx, tableSQL); err != nil {
+			return nil, nil, moerr.NewInternalErrorf(ctx, "failed to create table '%s.%s': %v", upstreamDbName, upstreamTableName, err)
+		}
+
+		// Get local table ID
+		localTableID, err := getTableID(downstreamCtx, bh, upstreamDbName, upstreamTableName)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// Get database ID (should already be in createdDbs)
+		dbID, ok := createdDbs[upstreamDbName]
+		if !ok {
+			dbID, err = getDatabaseID(downstreamCtx, bh, upstreamDbName)
+			if err != nil {
+				return nil, nil, err
+			}
+		}
+
+		key := fmt.Sprintf("%s.%s", upstreamDbName, upstreamTableName)
+		tableIDs[key] = TableIDInfo{TableID: localTableID, DbID: dbID}
+
+		// Get index table mappings (upstream index table name -> downstream index table name)
+		upstreamIndexTables, err := getUpstreamIndexTables(ctx, upstreamExecutor, upstreamDbName, upstreamTableName)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		downstreamIndexTables, err := getDownstreamIndexTables(downstreamCtx, bh, upstreamDbName, upstreamTableName)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// Match index tables by index name
+		for upstreamIndexTable, upstreamIndexName := range upstreamIndexTables {
+			for downstreamIndexTable, downstreamIndexName := range downstreamIndexTables {
+				if upstreamIndexName == downstreamIndexName {
+					indexTableMappings[upstreamIndexTable] = downstreamIndexTable
+				}
+			}
+		}
+	}
+
+	return tableIDs, indexTableMappings, nil
+}
+
+// checkDatabaseExists checks if a database exists locally
+func checkDatabaseExists(ctx context.Context, bh BackgroundExec, dbName string) (bool, error) {
+	sql := fmt.Sprintf("SELECT 1 FROM mo_catalog.mo_database WHERE datname = '%s' LIMIT 1", strings.ReplaceAll(dbName, "'", "''"))
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, sql); err != nil {
+		return false, err
+	}
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return false, err
+	}
+	return len(erArray) > 0 && erArray[0].GetRowCount() > 0, nil
+}
+
+// checkTableExists checks if a table exists locally
+func checkTableExists(ctx context.Context, bh BackgroundExec, dbName, tableName string) (bool, error) {
+	sql := fmt.Sprintf(
+		"SELECT 1 FROM mo_catalog.mo_tables WHERE reldatabase = '%s' AND relname = '%s' LIMIT 1",
+		strings.ReplaceAll(dbName, "'", "''"),
+		strings.ReplaceAll(tableName, "'", "''"),
+	)
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, sql); err != nil {
+		return false, err
+	}
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return false, err
+	}
+	return len(erArray) > 0 && erArray[0].GetRowCount() > 0, nil
+}
+
+// getDatabaseID gets the database ID
+func getDatabaseID(ctx context.Context, bh BackgroundExec, dbName string) (uint64, error) {
+	sql := fmt.Sprintf("SELECT dat_id FROM mo_catalog.mo_database WHERE datname = '%s'", strings.ReplaceAll(dbName, "'", "''"))
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, sql); err != nil {
+		return 0, err
+	}
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return 0, err
+	}
+	if len(erArray) == 0 || erArray[0].GetRowCount() == 0 {
+		return 0, moerr.NewInternalErrorf(ctx, "database '%s' not found", dbName)
+	}
+	return erArray[0].GetUint64(ctx, 0, 0)
+}
+
+// getTableID gets the table ID
+func getTableID(ctx context.Context, bh BackgroundExec, dbName, tableName string) (uint64, error) {
+	sql := fmt.Sprintf(
+		"SELECT rel_id FROM mo_catalog.mo_tables WHERE reldatabase = '%s' AND relname = '%s'",
+		strings.ReplaceAll(dbName, "'", "''"),
+		strings.ReplaceAll(tableName, "'", "''"),
+	)
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, sql); err != nil {
+		return 0, err
+	}
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return 0, err
+	}
+	if len(erArray) == 0 || erArray[0].GetRowCount() == 0 {
+		return 0, moerr.NewInternalErrorf(ctx, "table '%s.%s' not found", dbName, tableName)
+	}
+	return erArray[0].GetUint64(ctx, 0, 0)
+}
+
+// getUpstreamCreateDatabaseDDL gets CREATE DATABASE DDL from upstream
+func getUpstreamCreateDatabaseDDL(ctx context.Context, executor publication.SQLExecutor, dbName string) (string, error) {
+	sql := fmt.Sprintf("SHOW CREATE DATABASE `%s`", dbName)
+	result, cancel, err := executor.ExecSQL(ctx, nil, sql, false, false, 0)
+	if err != nil {
+		return "", moerr.NewInternalErrorf(ctx, "failed to get CREATE DATABASE DDL for '%s': %v", dbName, err)
+	}
+	defer cancel()
+	defer result.Close()
+
+	if result.Next() {
+		var dbNameResult, createSQL string
+		if err := result.Scan(&dbNameResult, &createSQL); err != nil {
+			return "", moerr.NewInternalErrorf(ctx, "failed to scan CREATE DATABASE result: %v", err)
+		}
+		return createSQL, nil
+	}
+
+	return "", moerr.NewInternalErrorf(ctx, "no CREATE DATABASE result for '%s'", dbName)
+}
+
+// getUpstreamCreateTableDDL gets CREATE TABLE DDL from upstream
+func getUpstreamCreateTableDDL(ctx context.Context, executor publication.SQLExecutor, dbName, tableName string) (string, error) {
+	sql := fmt.Sprintf("SHOW CREATE TABLE `%s`.`%s`", dbName, tableName)
+	result, cancel, err := executor.ExecSQL(ctx, nil, sql, false, false, 0)
+	if err != nil {
+		return "", moerr.NewInternalErrorf(ctx, "failed to get CREATE TABLE DDL for '%s.%s': %v", dbName, tableName, err)
+	}
+	defer cancel()
+	defer result.Close()
+
+	if result.Next() {
+		var tableNameResult, createSQL string
+		if err := result.Scan(&tableNameResult, &createSQL); err != nil {
+			return "", moerr.NewInternalErrorf(ctx, "failed to scan CREATE TABLE result: %v", err)
+		}
+		return createSQL, nil
+	}
+
+	return "", moerr.NewInternalErrorf(ctx, "no CREATE TABLE result for '%s.%s'", dbName, tableName)
+}
+
+// getUpstreamIndexTables gets index tables from upstream for a given table
+// Returns map[indexTableName] -> indexName
+func getUpstreamIndexTables(ctx context.Context, executor publication.SQLExecutor, dbName, tableName string) (map[string]string, error) {
+	indexTables := make(map[string]string)
+
+	// Query mo_indexes to get index table names
+	sql := fmt.Sprintf(
+		"SELECT index_table_name, name FROM mo_catalog.mo_indexes WHERE reldatabase = '%s' AND relname = '%s' AND index_table_name != ''",
+		strings.ReplaceAll(dbName, "'", "''"),
+		strings.ReplaceAll(tableName, "'", "''"),
+	)
+	result, cancel, err := executor.ExecSQL(ctx, nil, sql, false, false, 0)
+	if err != nil {
+		return nil, moerr.NewInternalErrorf(ctx, "failed to query upstream index tables: %v", err)
+	}
+	defer cancel()
+	defer result.Close()
+
+	for result.Next() {
+		var indexTableName, indexName string
+		if err := result.Scan(&indexTableName, &indexName); err != nil {
+			return nil, moerr.NewInternalErrorf(ctx, "failed to scan upstream index table result: %v", err)
+		}
+		indexTables[indexTableName] = indexName
+	}
+
+	return indexTables, nil
+}
+
+// getDownstreamIndexTables gets index tables from downstream for a given table
+// Returns map[indexTableName] -> indexName
+func getDownstreamIndexTables(ctx context.Context, bh BackgroundExec, dbName, tableName string) (map[string]string, error) {
+	indexTables := make(map[string]string)
+
+	sql := fmt.Sprintf(
+		"SELECT index_table_name, name FROM mo_catalog.mo_indexes WHERE reldatabase = '%s' AND relname = '%s' AND index_table_name != ''",
+		strings.ReplaceAll(dbName, "'", "''"),
+		strings.ReplaceAll(tableName, "'", "''"),
+	)
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, sql); err != nil {
+		return nil, err
+	}
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(erArray) > 0 {
+		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+			indexTableName, err := erArray[0].GetString(ctx, i, 0)
+			if err != nil {
+				return nil, err
+			}
+			indexName, err := erArray[0].GetString(ctx, i, 1)
+			if err != nil {
+				return nil, err
+			}
+			indexTables[indexTableName] = indexName
+		}
+	}
+
+	return indexTables, nil
+}
+
+// buildSubscriptionContextJSON builds the context JSON for mo_ccpr_log
+func buildSubscriptionContextJSON(tableIDs map[string]TableIDInfo, indexTableMappings map[string]string) (string, error) {
+	// Convert tableIDs map to string keys for JSON serialization
+	tableIDsForJSON := make(map[string]uint64)
+	for key, info := range tableIDs {
+		tableIDsForJSON[key] = info.TableID
+	}
+
+	contextData := map[string]interface{}{
+		"table_ids":            tableIDsForJSON,
+		"index_table_mappings": indexTableMappings,
+		"aobject_map":          map[string]interface{}{}, // Empty initially
+	}
+
+	contextBytes, err := json.Marshal(contextData)
+	if err != nil {
+		return "", err
+	}
+
+	return string(contextBytes), nil
+}
+
+// insertCCPRDbAndTableRecords inserts records into mo_ccpr_dbs and mo_ccpr_tables
+func insertCCPRDbAndTableRecords(ctx context.Context, bh BackgroundExec, tableIDs map[string]TableIDInfo, taskID string) error {
+	// Track which database IDs we've already inserted
+	insertedDbIDs := make(map[uint64]bool)
+
+	for _, info := range tableIDs {
+		// Insert into mo_ccpr_dbs if not already inserted
+		if !insertedDbIDs[info.DbID] {
+			sql := fmt.Sprintf(
+				"INSERT INTO %s.%s (dbid, taskid) VALUES (%d, '%s')",
+				catalog.MO_CATALOG,
+				catalog.MO_CCPR_DBS,
+				info.DbID,
+				taskID,
+			)
+			if err := bh.Exec(ctx, sql); err != nil {
+				return moerr.NewInternalErrorf(ctx, "failed to insert ccpr db record: %v", err)
+			}
+			insertedDbIDs[info.DbID] = true
+		}
+
+		// Insert into mo_ccpr_tables
+		sql := fmt.Sprintf(
+			"INSERT INTO %s.%s (tableid, taskid) VALUES (%d, '%s')",
+			catalog.MO_CATALOG,
+			catalog.MO_CCPR_TABLES,
+			info.TableID,
+			taskID,
+		)
+		if err := bh.Exec(ctx, sql); err != nil {
+			return moerr.NewInternalErrorf(ctx, "failed to insert ccpr table record: %v", err)
+		}
 	}
 
 	return nil

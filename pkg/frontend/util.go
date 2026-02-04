@@ -574,25 +574,28 @@ func isCmdGetDatabasesSql(sql string) bool {
 }
 
 // makeGetDatabasesSql makes the internal getdatabases sql
-func makeGetDatabasesSql(snapshotName, accountName, publicationName string) string {
-	return fmt.Sprintf("%s %s %s %s", cmdGetDatabasesSql, snapshotName, accountName, publicationName)
+func makeGetDatabasesSql(snapshotName, accountName, publicationName, level, dbName, tableName string) string {
+	return fmt.Sprintf("%s %s %s %s %s %s %s", cmdGetDatabasesSql, snapshotName, accountName, publicationName, level, dbName, tableName)
 }
 
 // parseCmdGetDatabases parses the internal cmd getdatabases
-// format: getdatabases <snapshotName> <accountName> <publicationName>
+// format: getdatabases <snapshotName> <accountName> <publicationName> <level> <dbName> <tableName>
 func parseCmdGetDatabases(ctx context.Context, sql string) (*InternalCmdGetDatabases, error) {
 	if !isCmdGetDatabasesSql(sql) {
 		return nil, moerr.NewInternalError(ctx, "it is not the GET_DATABASES command")
 	}
 	params := strings.TrimSpace(sql[cmdGetDatabasesSqlLen:])
 	parts := strings.Fields(params)
-	if len(parts) != 3 {
-		return nil, moerr.NewInternalError(ctx, "invalid getdatabases command format, expected: getdatabases <snapshotName> <accountName> <publicationName>")
+	if len(parts) != 6 {
+		return nil, moerr.NewInternalError(ctx, "invalid getdatabases command format, expected: getdatabases <snapshotName> <accountName> <publicationName> <level> <dbName> <tableName>")
 	}
 	return &InternalCmdGetDatabases{
 		snapshotName:    parts[0],
 		accountName:     parts[1],
 		publicationName: parts[2],
+		level:           parts[3],
+		dbName:          parts[4],
+		tableName:       parts[5],
 	}, nil
 }
 
@@ -643,25 +646,28 @@ func isCmdGetDdlSql(sql string) bool {
 }
 
 // makeGetDdlSql makes the internal getddl sql
-func makeGetDdlSql(snapshotName, subscriptionAccountName, publicationName string) string {
-	return fmt.Sprintf("%s %s %s %s", cmdGetDdlSql, snapshotName, subscriptionAccountName, publicationName)
+func makeGetDdlSql(snapshotName, subscriptionAccountName, publicationName, level, dbName, tableName string) string {
+	return fmt.Sprintf("%s %s %s %s %s %s %s", cmdGetDdlSql, snapshotName, subscriptionAccountName, publicationName, level, dbName, tableName)
 }
 
 // parseCmdGetDdl parses the internal cmd getddl
-// format: getddl <snapshotName> <subscriptionAccountName> <publicationName>
+// format: getddl <snapshotName> <subscriptionAccountName> <publicationName> <level> <dbName> <tableName>
 func parseCmdGetDdl(ctx context.Context, sql string) (*InternalCmdGetDdl, error) {
 	if !isCmdGetDdlSql(sql) {
 		return nil, moerr.NewInternalError(ctx, "it is not the GET_DDL command")
 	}
 	params := strings.TrimSpace(sql[cmdGetDdlSqlLen:])
 	parts := strings.Fields(params)
-	if len(parts) != 3 {
-		return nil, moerr.NewInternalError(ctx, "invalid getddl command format, expected: getddl <snapshotName> <subscriptionAccountName> <publicationName>")
+	if len(parts) != 6 {
+		return nil, moerr.NewInternalError(ctx, "invalid getddl command format, expected: getddl <snapshotName> <subscriptionAccountName> <publicationName> <level> <dbName> <tableName>")
 	}
 	return &InternalCmdGetDdl{
 		snapshotName:            parts[0],
 		subscriptionAccountName: parts[1],
 		publicationName:         parts[2],
+		level:                   parts[3],
+		dbName:                  parts[4],
+		tableName:               parts[5],
 	}, nil
 }
 

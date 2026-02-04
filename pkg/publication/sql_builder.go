@@ -42,8 +42,8 @@ const (
 	PublicationGetObjectSqlTemplate = `__++__internal_get_object %s %s %s %d`
 
 	// Get DDL SQL template using internal command with publication permission check
-	// Format: __++__internal_get_ddl <snapshotName> <subscriptionAccountName> <publicationName>
-	PublicationGetDdlSqlTemplate = `__++__internal_get_ddl %s %s %s`
+	// Format: __++__internal_get_ddl <snapshotName> <subscriptionAccountName> <publicationName> <level> <dbName> <tableName>
+	PublicationGetDdlSqlTemplate = `__++__internal_get_ddl %s %s %s %s %s %s`
 
 	// Drop snapshot SQL templates
 	PublicationDropSnapshotIfExistsSqlTemplate = `DROP SNAPSHOT IF EXISTS %s`
@@ -77,8 +77,8 @@ const (
 	PublicationQuerySnapshotTsSqlTemplate = `__++__internal_get_snapshot_ts %s %s %s`
 
 	// Query databases covered by snapshot using internal command with publication permission check
-	// Format: __++__internal_get_databases <snapshotName> <accountName> <publicationName>
-	PublicationGetDatabasesSqlTemplate = `__++__internal_get_databases %s %s %s`
+	// Format: __++__internal_get_databases <snapshotName> <accountName> <publicationName> <level> <dbName> <tableName>
+	PublicationGetDatabasesSqlTemplate = `__++__internal_get_databases %s %s %s %s %s %s`
 
 	// Check snapshot flushed SQL template using internal command with publication permission check
 	// Format: __++__internal_check_snapshot_flushed <snapshotName> <subscriptionAccountName> <publicationName>
@@ -421,20 +421,26 @@ func (b publicationSQLBuilder) GetObjectSQL(
 }
 
 // GetDdlSQL creates SQL for get DDL statement using internal command with publication permission check
-// Uses internal command: __++__internal_get_ddl <snapshotName> <subscriptionAccountName> <publicationName>
+// Uses internal command: __++__internal_get_ddl <snapshotName> <subscriptionAccountName> <publicationName> <level> <dbName> <tableName>
 // This command checks if the current account has permission to access the publication,
-// then uses the snapshot's level to determine dbName and tableName scope
+// then uses the provided level, dbName and tableName to determine scope
 // Returns dbname, tablename, tableid, tablesql
 func (b publicationSQLBuilder) GetDdlSQL(
 	snapshotName string,
 	subscriptionAccountName string,
 	pubName string,
+	level string,
+	dbName string,
+	tableName string,
 ) string {
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationGetDdlSqlTemplate_Idx].SQL,
 		escapeSQLString(snapshotName),
 		escapeSQLString(subscriptionAccountName),
 		escapeSQLString(pubName),
+		escapeSQLString(level),
+		escapeSQLString(dbName),
+		escapeSQLString(tableName),
 	)
 }
 
@@ -485,20 +491,26 @@ func (b publicationSQLBuilder) QuerySnapshotTsSQL(
 }
 
 // GetDatabasesSQL creates SQL for querying databases covered by snapshot with publication permission check
-// Uses internal command: __++__internal_get_databases <snapshotName> <accountName> <publicationName>
+// Uses internal command: __++__internal_get_databases <snapshotName> <accountName> <publicationName> <level> <dbName> <tableName>
 // This command checks if the current account has permission to access the publication,
-// then uses the authorized account to query mo_database at the snapshot timestamp
+// then uses the provided level, dbName and tableName to determine scope
 // Returns datname (varchar)
 func (b publicationSQLBuilder) GetDatabasesSQL(
 	snapshotName string,
 	accountName string,
 	publicationName string,
+	level string,
+	dbName string,
+	tableName string,
 ) string {
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationGetDatabasesSqlTemplate_Idx].SQL,
 		escapeSQLString(snapshotName),
 		escapeSQLString(accountName),
 		escapeSQLString(publicationName),
+		escapeSQLString(level),
+		escapeSQLString(dbName),
+		escapeSQLString(tableName),
 	)
 }
 
