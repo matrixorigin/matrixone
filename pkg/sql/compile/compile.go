@@ -1151,6 +1151,10 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		ss = c.compileSort(node, c.compileUnionAll(node, left, right))
 		return ss, nil
 	case plan.Node_DELETE:
+		// Check if target table is a CCPR shared table (from publication)
+		if node.DeleteCtx != nil && isTableFromPublication(node.DeleteCtx.TableDef) {
+			return nil, moerr.NewCCPRReadOnly(c.proc.Ctx)
+		}
 		if node.DeleteCtx.CanTruncate {
 			s := newScope(TruncateTable)
 			s.Plan = &plan.Plan{
@@ -1226,6 +1230,10 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		return c.compilePreInsert(nodes, node, ss)
 	case plan.Node_INSERT:
+		// Check if target table is a CCPR shared table (from publication)
+		if node.InsertCtx != nil && isTableFromPublication(node.InsertCtx.TableDef) {
+			return nil, moerr.NewCCPRReadOnly(c.proc.Ctx)
+		}
 		c.appendMetaTables(node.ObjRef)
 		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
@@ -1236,7 +1244,11 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		return c.compileInsert(nodes, node, ss)
 	case plan.Node_MULTI_UPDATE:
+		// Check if any target table is a CCPR shared table (from publication)
 		for _, updateCtx := range node.UpdateCtxList {
+			if isTableFromPublication(updateCtx.TableDef) {
+				return nil, moerr.NewCCPRReadOnly(c.proc.Ctx)
+			}
 			c.appendMetaTables(updateCtx.ObjRef)
 		}
 		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
@@ -4779,4 +4791,21 @@ func (c *Compile) compileTableClone(
 	s1.setRootOperator(copyOp)
 
 	return []*Scope{s1}, nil
+}
+
+// isTableFromPublication checks if a table is a CCPR shared table (from publication)
+func isTableFromPublication(tableDef *plan.TableDef) bool {
+	if tableDef == nil {
+		return false
+	}
+	for _, def := range tableDef.Defs {
+		if propDef, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
+			for _, prop := range propDef.Properties.Properties {
+				if prop.Key == catalog.PropFromPublication && prop.Value == "true" {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }

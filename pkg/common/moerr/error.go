@@ -316,6 +316,9 @@ const (
 	// Group 14: TaskService
 	ErrExecutorRunning uint16 = 22201
 
+	// Group 15: CCPR
+	ErrCCPRReadOnly uint16 = 22301
+
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
 )
@@ -559,6 +562,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 
 	// Group 14: Task Service
 	ErrExecutorRunning: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "TaskService: executor %s is already running"},
+
+	// Group 15: CCPR
+	ErrCCPRReadOnly: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "ccpr shared object is read-only"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
@@ -1667,6 +1673,10 @@ func NewErrExecutorRunning(ctx context.Context, executor string) *Error {
 
 func NewErrTooBigPrecision(ctx context.Context, precision int32, funcName string, maxPrecision uint64) *Error {
 	return newError(ctx, ErrTooBigPrecision, precision, funcName, maxPrecision)
+}
+
+func NewCCPRReadOnly(ctx context.Context) *Error {
+	return newError(ctx, ErrCCPRReadOnly)
 }
 
 var contextFunc atomic.Value

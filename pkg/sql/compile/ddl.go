@@ -2497,6 +2497,11 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		return err
 	}
 
+	// Check if target table is a CCPR shared table (from publication)
+	if isTableFromPublication(rel.GetTableDef(c.proc.Ctx)) {
+		return moerr.NewCCPRReadOnly(c.proc.Ctx)
+	}
+
 	if rel.GetTableDef(c.proc.Ctx).TableType == catalog.SystemExternalRel {
 		return nil
 	}

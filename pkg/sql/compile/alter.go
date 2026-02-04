@@ -464,6 +464,11 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 
 	qry := s.Plan.GetDdl().GetAlterTable()
 
+	// Check if target table is a CCPR shared table (from publication)
+	if isTableFromPublication(qry.TableDef) {
+		return moerr.NewCCPRReadOnly(c.proc.Ctx)
+	}
+
 	ps := c.proc.GetPartitionService()
 	if !ps.Enabled() ||
 		!features.IsPartitioned(qry.TableDef.FeatureFlag) {
