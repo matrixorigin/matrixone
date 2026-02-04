@@ -3959,6 +3959,13 @@ func (builder *QueryBuilder) appendAggNode(
 		SpillMem:     builder.aggSpillMem,
 	}, ctx)
 
+	// Plan-level rewrite: count(not_null_col) -> starcount (ObjName + Obj) so compile uses countStarExec.
+	if aggNode := builder.qry.Nodes[nodeID]; len(aggNode.Children) > 0 {
+		if childNode := builder.qry.Nodes[aggNode.Children[0]]; childNode.NodeType == plan.Node_TABLE_SCAN && childNode.TableDef != nil {
+			RewriteCountNotNullColToStarcount(aggNode, childNode.TableDef)
+		}
+	}
+
 	if len(boundHavingList) > 0 {
 		var newFilterList []*plan.Expr
 		var expr *plan.Expr

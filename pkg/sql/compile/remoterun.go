@@ -68,7 +68,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
@@ -681,28 +680,15 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *hashbuild.HashBuild:
 		in.HashBuild = &pipeline.HashBuild{
 			NeedHashMap:       t.NeedHashMap,
-			HashOnPK:          t.HashOnPK,
+			HashOnPk:          t.HashOnPK,
 			NeedBatches:       t.NeedBatches,
 			NeedAllocateSels:  t.NeedAllocateSels,
+			IsShuffle:         t.IsShuffle,
 			Conditions:        t.Conditions,
 			JoinMapTag:        t.JoinMapTag,
 			JoinMapRefCnt:     t.JoinMapRefCnt,
-			RuntimeFilterSpec: t.RuntimeFilterSpec,
-			IsDedup:           t.IsDedup,
-			OnDuplicateAction: t.OnDuplicateAction,
-			DedupColName:      t.DedupColName,
-			DedupColTypes:     t.DedupColTypes,
-			DelColIdx:         t.DelColIdx,
-		}
-	case *shufflebuild.ShuffleBuild:
-		in.ShuffleBuild = &pipeline.Shufflebuild{
-			HashOnPK:          t.HashOnPK,
-			NeedBatches:       t.NeedBatches,
-			NeedAllocateSels:  t.NeedAllocateSels,
-			Conditions:        t.Conditions,
-			RuntimeFilterSpec: t.RuntimeFilterSpec,
-			JoinMapTag:        t.JoinMapTag,
 			ShuffleIdx:        t.ShuffleIdx,
+			RuntimeFilterSpec: t.RuntimeFilterSpec,
 			IsDedup:           t.IsDedup,
 			OnDuplicateAction: t.OnDuplicateAction,
 			DedupColName:      t.DedupColName,
@@ -1140,29 +1126,15 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg := hashbuild.NewArgument()
 		t := opr.GetHashBuild()
 		arg.NeedHashMap = t.NeedHashMap
-		arg.HashOnPK = t.HashOnPK
+		arg.HashOnPK = t.HashOnPk
 		arg.NeedBatches = t.NeedBatches
 		arg.NeedAllocateSels = t.NeedAllocateSels
+		arg.IsShuffle = t.IsShuffle
 		arg.Conditions = t.Conditions
 		arg.JoinMapTag = t.JoinMapTag
 		arg.JoinMapRefCnt = t.JoinMapRefCnt
-		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
-		arg.IsDedup = t.IsDedup
-		arg.OnDuplicateAction = t.OnDuplicateAction
-		arg.DedupColName = t.DedupColName
-		arg.DedupColTypes = t.DedupColTypes
-		arg.DelColIdx = t.DelColIdx
-		op = arg
-	case vm.ShuffleBuild:
-		arg := shufflebuild.NewArgument()
-		t := opr.GetShuffleBuild()
-		arg.HashOnPK = t.HashOnPK
-		arg.NeedBatches = t.NeedBatches
-		arg.NeedAllocateSels = t.NeedAllocateSels
-		arg.Conditions = t.Conditions
-		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
-		arg.JoinMapTag = t.JoinMapTag
 		arg.ShuffleIdx = t.ShuffleIdx
+		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
 		arg.IsDedup = t.IsDedup
 		arg.OnDuplicateAction = t.OnDuplicateAction
 		arg.DedupColName = t.DedupColName

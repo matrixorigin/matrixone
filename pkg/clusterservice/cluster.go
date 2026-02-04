@@ -86,9 +86,9 @@ type cluster struct {
 	// which causes significant contention under high concurrency (observed 241s/5.79%
 	// mutex contention in production). Using atomic.Bool eliminates this overhead.
 	//
-	// Correctness: readyOnce.Do guarantees that close(readyC) happens before
-	// ready.Store(true), so if ready.Load() returns true, readyC is guaranteed
-	// to be closed. If ready.Load() returns false, we fall back to channel wait.
+	// Correctness: readyOnce.Do guarantees that ready.Store(true) happens before
+	// close(readyC), so if readyC is closed (i.e., <-readyC returns), ready is
+	// guaranteed to be true. If ready.Load() returns false, we fall back to channel wait.
 	ready       atomic.Bool
 	services    atomic.Pointer[services]
 	regexpCache *regexpCache
@@ -129,8 +129,8 @@ func NewMOCluster(
 		}
 	} else {
 		c.readyOnce.Do(func() {
-			close(c.readyC)
 			c.ready.Store(true)
+			close(c.readyC)
 		})
 	}
 	if err := c.stopper.RunTask(c.regexpCacheGC); err != nil {
@@ -389,8 +389,8 @@ func (c *cluster) refresh() {
 	}
 	c.services.Store(new)
 	c.readyOnce.Do(func() {
-		close(c.readyC)
 		c.ready.Store(true)
+		close(c.readyC)
 	})
 }
 
