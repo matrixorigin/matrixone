@@ -62,6 +62,9 @@ type noReportKeyType int
 const noReportKey noReportKeyType = iota
 
 func ContextWithNoReport(parent context.Context, no bool) context.Context {
+	if parent == nil {
+		parent = context.Background()
+	}
 	return context.WithValue(parent, noReportKey, no)
 }
 
