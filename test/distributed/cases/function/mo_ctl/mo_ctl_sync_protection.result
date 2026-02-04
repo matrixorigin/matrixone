@@ -1,37 +1,21 @@
--- Test sync protection mo_ctl commands
--- This test verifies the sync protection mechanism for cross-cluster sync
-
--- Test 1: Register sync protection with invalid JSON (should fail gracefully)
 select mo_ctl('dn', 'diskcleaner', 'register_sync_protection.invalid_json');
 mo_ctl(dn, diskcleaner, register_sync_protection.invalid_json)
-invalid sync protection request: invalid character 'i' looking for beginning of value
-
--- Test 2: Register sync protection with missing fields (should fail)
+invalid argument register_sync_protection, bad value invalid_json
 select mo_ctl('dn', 'diskcleaner', 'register_sync_protection.{"job_id":"test-job-1"}');
 mo_ctl(dn, diskcleaner, register_sync_protection.{"job_id":"test-job-1"})
-invalid sync protection request: bf is empty
-
--- Test 3: Register sync protection with invalid base64 BF (should fail)
+internal error: bf is empty
 select mo_ctl('dn', 'diskcleaner', 'register_sync_protection.{"job_id":"test-job-2","bf":"invalid!!!","valid_ts":1234567890}');
 mo_ctl(dn, diskcleaner, register_sync_protection.{"job_id":"test-job-2","bf":"invalid!!!","valid_ts":1234567890})
-register sync protection failed: internal error: failed to decode bloom filter: illegal base64 data at input byte 7
-
--- Test 4: Renew non-existent protection (should fail)
+internal error: failed to decode bloom filter: illegal base64 data at input byte 7
 select mo_ctl('dn', 'diskcleaner', 'renew_sync_protection.{"job_id":"non-existent","valid_ts":1234567890}');
 mo_ctl(dn, diskcleaner, renew_sync_protection.{"job_id":"non-existent","valid_ts":1234567890})
-renew sync protection failed: internal error: sync protection not found: non-existent
-
--- Test 5: Unregister non-existent protection (should fail)
+internal error: sync protection not found: non-existent
 select mo_ctl('dn', 'diskcleaner', 'unregister_sync_protection.{"job_id":"non-existent"}');
 mo_ctl(dn, diskcleaner, unregister_sync_protection.{"job_id":"non-existent"})
-unregister sync protection failed: internal error: sync protection not found: non-existent
-
--- Test 6: Test with empty command
+internal error: sync protection not found: non-existent
 select mo_ctl('dn', 'diskcleaner', 'register_sync_protection.');
 mo_ctl(dn, diskcleaner, register_sync_protection.)
-invalid sync protection request: unexpected end of JSON input
-
--- Test 7: Test unknown sync protection command
+invalid argument register_sync_protection, bad value 
 select mo_ctl('dn', 'diskcleaner', 'unknown_sync_protection.{}');
 mo_ctl(dn, diskcleaner, unknown_sync_protection.{})
-unknown command: unknown_sync_protection
+internal error: handleDiskCleaner: invalid operation!

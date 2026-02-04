@@ -368,8 +368,13 @@ func TestSyncProtectionManager_InvalidBFData(t *testing.T) {
 	jobID := "job-1"
 	validTS := time.Now().UnixNano()
 
+	// Test empty BF
+	err := mgr.RegisterSyncProtection(jobID, "", validTS)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "bf is empty")
+
 	// Test invalid base64
-	err := mgr.RegisterSyncProtection(jobID, "invalid-base64!!!", validTS)
+	err = mgr.RegisterSyncProtection(jobID, "invalid-base64!!!", validTS)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "decode")
 

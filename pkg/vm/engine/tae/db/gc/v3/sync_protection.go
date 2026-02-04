@@ -121,6 +121,15 @@ func (m *SyncProtectionManager) RegisterSyncProtection(
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("sync protection max count reached: %d", m.maxCount))
 	}
 
+	// Check if BF data is empty
+	if bfData == "" {
+		logutil.Error(
+			"GC-Sync-Protection-Register-Empty-BF",
+			zap.String("job-id", jobID),
+		)
+		return moerr.NewInternalErrorNoCtx("bf is empty")
+	}
+
 	// Decode base64 BloomFilter data
 	bfBytes, err := base64.StdEncoding.DecodeString(bfData)
 	if err != nil {
