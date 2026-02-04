@@ -137,29 +137,25 @@ func (m *SyncProtectionManager) RegisterSyncProtection(
 	}
 
 	// Unmarshal BloomFilter (using index.BloomFilter which is based on xorfilter - deterministic)
-	// Use recover to handle panic from invalid data
+	// Validate minimum buffer length before unmarshal to avoid panic
+	// Minimum size: 8 (Seed) + 4*4 (SegmentLength, SegmentLengthMask, SegmentCount, SegmentCountLength) = 24 bytes
+	if len(bfBytes) < 24 {
+		logutil.Error(
+			"GC-Sync-Protection-Register-Invalid-BF-Size",
+			zap.String("job-id", jobID),
+			zap.Int("size", len(bfBytes)),
+		)
+		return moerr.NewSyncProtectionInvalidNoCtx()
+	}
+
 	var bf index.BloomFilter
-	var unmarshalErr error
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logutil.Error(
-					"GC-Sync-Protection-Register-Unmarshal-Panic",
-					zap.String("job-id", jobID),
-					zap.Any("panic", r),
-				)
-				unmarshalErr = moerr.NewSyncProtectionInvalidNoCtx()
-			}
-		}()
-		unmarshalErr = bf.Unmarshal(bfBytes)
-	}()
-	if unmarshalErr != nil {
+	if err = bf.Unmarshal(bfBytes); err != nil {
 		logutil.Error(
 			"GC-Sync-Protection-Register-Unmarshal-Error",
 			zap.String("job-id", jobID),
-			zap.Error(unmarshalErr),
+			zap.Error(err),
 		)
-		return unmarshalErr
+		return moerr.NewSyncProtectionInvalidNoCtx()
 	}
 
 	m.protections[jobID] = &SyncProtection{

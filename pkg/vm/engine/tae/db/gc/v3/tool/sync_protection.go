@@ -28,8 +28,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"go.uber.org/zap"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/spf13/cobra"
@@ -153,7 +155,10 @@ func (t *SyncProtectionTester) BuildBloomFilter(objects []string) (string, error
 	base64Data := base64.StdEncoding.EncodeToString(data)
 
 	if t.verbose {
-		fmt.Printf("  BloomFilter: %d objects, %d bytes, base64 len=%d\n", len(objects), len(data), len(base64Data))
+		logutil.Info("GC-Tool-BloomFilter-Built",
+			zap.Int("objects", len(objects)),
+			zap.Int("bytes", len(data)),
+			zap.Int("base64-len", len(base64Data)))
 	}
 
 	return base64Data, nil
@@ -188,7 +193,7 @@ func (t *SyncProtectionTester) RegisterProtection(objects []string) error {
 	query := fmt.Sprintf("SELECT mo_ctl('dn', 'diskcleaner', 'register_sync_protection.%s')", string(jsonData))
 
 	if t.verbose {
-		fmt.Printf("  SQL length: %d\n", len(query))
+		logutil.Info("GC-Tool-Register-SQL", zap.Int("length", len(query)))
 	}
 
 	var result string
@@ -198,7 +203,7 @@ func (t *SyncProtectionTester) RegisterProtection(objects []string) error {
 	}
 
 	if t.verbose {
-		fmt.Printf("  Result: %s\n", result)
+		logutil.Info("GC-Tool-Register-Result", zap.String("result", result))
 	}
 
 	// Check if successful
@@ -225,7 +230,7 @@ func (t *SyncProtectionTester) RenewProtection() error {
 	query := fmt.Sprintf("SELECT mo_ctl('dn', 'diskcleaner', 'renew_sync_protection.%s')", string(jsonData))
 
 	if t.verbose {
-		fmt.Printf("  SQL: %s\n", query)
+		logutil.Info("GC-Tool-Renew-SQL", zap.String("query", query))
 	}
 
 	var result string
@@ -235,7 +240,7 @@ func (t *SyncProtectionTester) RenewProtection() error {
 	}
 
 	if t.verbose {
-		fmt.Printf("  Result: %s\n", result)
+		logutil.Info("GC-Tool-Renew-Result", zap.String("result", result))
 	}
 
 	return nil
@@ -255,7 +260,7 @@ func (t *SyncProtectionTester) UnregisterProtection() error {
 	query := fmt.Sprintf("SELECT mo_ctl('dn', 'diskcleaner', 'unregister_sync_protection.%s')", string(jsonData))
 
 	if t.verbose {
-		fmt.Printf("  SQL: %s\n", query)
+		logutil.Info("GC-Tool-Unregister-SQL", zap.String("query", query))
 	}
 
 	var result string
@@ -265,7 +270,7 @@ func (t *SyncProtectionTester) UnregisterProtection() error {
 	}
 
 	if t.verbose {
-		fmt.Printf("  Result: %s\n", result)
+		logutil.Info("GC-Tool-Unregister-Result", zap.String("result", result))
 	}
 
 	return nil
@@ -276,7 +281,7 @@ func (t *SyncProtectionTester) TriggerGC() error {
 	query := "SELECT mo_ctl('dn', 'diskcleaner', 'force_gc')"
 
 	if t.verbose {
-		fmt.Printf("  SQL: %s\n", query)
+		logutil.Info("GC-Tool-TriggerGC-SQL", zap.String("query", query))
 	}
 
 	var result string
@@ -286,7 +291,7 @@ func (t *SyncProtectionTester) TriggerGC() error {
 	}
 
 	if t.verbose {
-		fmt.Printf("  Result: %s\n", result)
+		logutil.Info("GC-Tool-TriggerGC-Result", zap.String("result", result))
 	}
 
 	return nil
@@ -318,88 +323,89 @@ func (t *SyncProtectionTester) CheckFilesExist() (existing, deleted []string) {
 
 // RunTest runs the test
 func (t *SyncProtectionTester) RunTest() error {
-	fmt.Println("========================================")
-	fmt.Println("Sync Protection Test (BloomFilter)")
-	fmt.Println("========================================")
-	fmt.Printf("Job ID: %s\n", t.jobID)
-	fmt.Printf("Data directory: %s\n", t.dataDir)
-	fmt.Printf("Sample count: %d\n", t.sampleCount)
-	fmt.Printf("Wait time: %d seconds\n", t.waitTime)
-	fmt.Println()
+	logutil.Info("GC-Tool-Test-Start",
+		zap.String("job-id", t.jobID),
+		zap.String("data-dir", t.dataDir),
+		zap.Int("sample-count", t.sampleCount),
+		zap.Int("wait-time", t.waitTime))
 
 	// Ensure cleanup on exit
 	registered := false
 	defer func() {
 		if registered {
-			fmt.Println("[Cleanup] Ensuring protection is unregistered...")
+			logutil.Info("GC-Tool-Cleanup", zap.String("job-id", t.jobID))
 			if err := t.UnregisterProtection(); err != nil {
-				// Ignore error if already unregistered
-				fmt.Printf("  (Already unregistered or error: %v)\n", err)
+				logutil.Warn("GC-Tool-Cleanup-Error", zap.Error(err))
 			} else {
-				fmt.Println("  ✓ Cleanup successful!")
+				logutil.Info("GC-Tool-Cleanup-Success")
 			}
 		}
 	}()
 
 	// Step 1: Scan object files
-	fmt.Println("[Step 1] Scanning object files...")
+	logutil.Info("GC-Tool-Step1-Scanning")
 	objects, err := t.ScanObjectFiles()
 	if err != nil {
 		return err
 	}
-	fmt.Printf("  Found %d object files\n", len(objects))
+	logutil.Info("GC-Tool-Step1-Found", zap.Int("count", len(objects)))
 
 	if len(objects) == 0 {
 		return moerr.NewInternalErrorNoCtxf("no object files found, please check data directory: %s", t.dataDir)
 	}
 
 	// Step 2: Randomly select objects
-	fmt.Println("[Step 2] Randomly selecting objects...")
+	logutil.Info("GC-Tool-Step2-Selecting")
 	selected := t.SelectRandomObjects(objects, t.sampleCount)
-	fmt.Printf("  Selected %d objects:\n", len(selected))
+	logutil.Info("GC-Tool-Step2-Selected", zap.Int("count", len(selected)))
 	for i, obj := range selected {
 		if i < 5 {
-			fmt.Printf("    - %s\n", obj)
+			logutil.Info("GC-Tool-Selected-Object", zap.String("name", obj))
 		} else if i == 5 {
-			fmt.Printf("    - ... (%d more)\n", len(selected)-5)
+			logutil.Info("GC-Tool-Selected-More", zap.Int("remaining", len(selected)-5))
 			break
 		}
 	}
 
 	// Step 3: Build BloomFilter and register protection
-	fmt.Println("[Step 3] Building BloomFilter and registering sync protection...")
+	logutil.Info("GC-Tool-Step3-Registering")
 	if err := t.RegisterProtection(selected); err != nil {
 		return moerr.NewInternalErrorNoCtxf("failed to register protection: %v", err)
 	}
 	registered = true
-	fmt.Println("  ✓ Registration successful!")
+	logutil.Info("GC-Tool-Step3-Success")
 
 	// Step 4: Check initial file status
-	fmt.Println("[Step 4] Checking initial file status...")
+	logutil.Info("GC-Tool-Step4-CheckingInitial")
 	existingBefore, deletedBefore := t.CheckFilesExist()
-	fmt.Printf("  Existing: %d, Deleted: %d\n", len(existingBefore), len(deletedBefore))
+	logutil.Info("GC-Tool-Step4-Status",
+		zap.Int("existing", len(existingBefore)),
+		zap.Int("deleted", len(deletedBefore)))
 
 	// Step 5: Trigger GC
-	fmt.Println("[Step 5] Triggering GC...")
+	logutil.Info("GC-Tool-Step5-TriggeringGC")
 	if err := t.TriggerGC(); err != nil {
-		fmt.Printf("  ⚠ Warning: Failed to trigger GC: %v\n", err)
+		logutil.Warn("GC-Tool-Step5-Warning", zap.Error(err))
 	} else {
-		fmt.Println("  ✓ GC triggered successfully!")
+		logutil.Info("GC-Tool-Step5-Success")
 	}
 
 	// Wait for GC to complete
-	fmt.Printf("[Step 6] Waiting for GC to complete (%d seconds)...\n", t.waitTime)
+	logutil.Info("GC-Tool-Step6-Waiting", zap.Int("seconds", t.waitTime))
 	time.Sleep(time.Duration(t.waitTime) * time.Second)
 
 	// Step 7: Check file protection status
-	fmt.Println("[Step 7] Checking file protection status...")
+	logutil.Info("GC-Tool-Step7-CheckingProtection")
 	existingAfter, deletedAfter := t.CheckFilesExist()
-	fmt.Printf("  Existing: %d, Deleted: %d\n", len(existingAfter), len(deletedAfter))
+	logutil.Info("GC-Tool-Step7-Status",
+		zap.Int("existing", len(existingAfter)),
+		zap.Int("deleted", len(deletedAfter)))
 
 	// Compare results
 	newlyDeleted := len(deletedAfter) - len(deletedBefore)
 	if newlyDeleted > 0 {
-		fmt.Printf("  ✗ [FAILED] %d protected files were deleted!\n", newlyDeleted)
+		logutil.Error("GC-Tool-Step7-FAILED",
+			zap.Int("deleted-count", newlyDeleted))
 		for _, f := range deletedAfter {
 			found := false
 			for _, bf := range deletedBefore {
@@ -409,54 +415,50 @@ func (t *SyncProtectionTester) RunTest() error {
 				}
 			}
 			if !found {
-				fmt.Printf("    - Deleted: %s\n", f)
+				logutil.Error("GC-Tool-Deleted-File", zap.String("name", f))
 			}
 		}
-		// Validation failed, stop test
 		return moerr.NewInternalErrorNoCtxf("protection mechanism validation failed: %d protected files were deleted", newlyDeleted)
-	} else {
-		fmt.Println("  ✓ [SUCCESS] All protected files were not deleted!")
 	}
+	logutil.Info("GC-Tool-Step7-SUCCESS")
 
 	// Step 8: Test renewal
-	fmt.Println("[Step 8] Testing renewal...")
+	logutil.Info("GC-Tool-Step8-Renewing")
 	if err := t.RenewProtection(); err != nil {
-		fmt.Printf("  ⚠ Warning: Renewal failed: %v\n", err)
+		logutil.Warn("GC-Tool-Step8-Warning", zap.Error(err))
 	} else {
-		fmt.Println("  ✓ Renewal successful!")
+		logutil.Info("GC-Tool-Step8-Success")
 	}
 
 	// Step 9: Unregister protection
-	fmt.Println("[Step 9] Unregistering protection (soft delete)...")
+	logutil.Info("GC-Tool-Step9-Unregistering")
 	if err := t.UnregisterProtection(); err != nil {
-		fmt.Printf("  ⚠ Warning: Unregister failed: %v\n", err)
+		logutil.Warn("GC-Tool-Step9-Warning", zap.Error(err))
 	} else {
-		registered = false // Mark as unregistered so defer won't try again
-		fmt.Println("  ✓ Unregister successful!")
+		registered = false
+		logutil.Info("GC-Tool-Step9-Success")
 	}
 
 	// Step 10: Trigger GC again
-	fmt.Println("[Step 10] Triggering GC again...")
+	logutil.Info("GC-Tool-Step10-TriggeringGC")
 	if err := t.TriggerGC(); err != nil {
-		fmt.Printf("  ⚠ Warning: Failed to trigger GC: %v\n", err)
+		logutil.Warn("GC-Tool-Step10-Warning", zap.Error(err))
 	} else {
-		fmt.Println("  ✓ GC triggered successfully!")
+		logutil.Info("GC-Tool-Step10-Success")
 	}
 
 	// Wait for GC to complete
-	fmt.Printf("[Step 11] Waiting for GC to complete (%d seconds)...\n", t.waitTime)
+	logutil.Info("GC-Tool-Step11-Waiting", zap.Int("seconds", t.waitTime))
 	time.Sleep(time.Duration(t.waitTime) * time.Second)
 
 	// Step 12: Final check
-	fmt.Println("[Step 12] Final check...")
+	logutil.Info("GC-Tool-Step12-FinalCheck")
 	existingFinal, deletedFinal := t.CheckFilesExist()
-	fmt.Printf("  Existing: %d, Deleted: %d\n", len(existingFinal), len(deletedFinal))
+	logutil.Info("GC-Tool-Step12-Status",
+		zap.Int("existing", len(existingFinal)),
+		zap.Int("deleted", len(deletedFinal)))
 
-	fmt.Println()
-	fmt.Println("========================================")
-	fmt.Println("Test completed!")
-	fmt.Println("========================================")
-
+	logutil.Info("GC-Tool-Test-Completed")
 	return nil
 }
 
