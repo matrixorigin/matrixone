@@ -591,7 +591,6 @@ var GetComputationWrapperInBack = func(execCtx *ExecCtx, db string, input *UserI
 	var cmdGetDdlStmt *InternalCmdGetDdl
 	var cmdGetObjectStmt *InternalCmdGetObject
 	var cmdObjectListStmt *InternalCmdObjectList
-	var cmdCreateCcprSnapshotStmt *InternalCmdCreateCcprSnapshot
 	var err error
 	// if the input is an option ast, we should use it directly
 	if input.getStmt() != nil {
@@ -638,12 +637,6 @@ var GetComputationWrapperInBack = func(execCtx *ExecCtx, db string, input *UserI
 			return nil, err
 		}
 		stmts = append(stmts, cmdObjectListStmt)
-	} else if isCmdCreateCcprSnapshotSql(input.getSql()) {
-		cmdCreateCcprSnapshotStmt, err = parseCmdCreateCcprSnapshot(execCtx.reqCtx, input.getSql())
-		if err != nil {
-			return nil, err
-		}
-		stmts = append(stmts, cmdCreateCcprSnapshotStmt)
 	} else if isCmdCheckSnapshotFlushedSql(input.getSql()) {
 		cmdCheckSnapshotFlushedStmt, err := parseCmdCheckSnapshotFlushed(execCtx.reqCtx, input.getSql())
 		if err != nil {

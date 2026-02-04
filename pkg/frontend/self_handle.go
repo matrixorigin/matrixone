@@ -225,12 +225,6 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleInternalCheckSnapshotFlushed(ses, execCtx, st); err != nil {
 			return
 		}
-	case *InternalCmdCreateCcprSnapshot:
-		ses.EnterFPrint(FPInternalCmdCreateCcprSnapshot)
-		defer ses.ExitFPrint(FPInternalCmdCreateCcprSnapshot)
-		if err = handleInternalCreateCcprSnapshot(ses, execCtx, st); err != nil {
-			return
-		}
 	case *tree.CreatePublication:
 		ses.EnterFPrint(FPCreatePublication)
 		defer ses.ExitFPrint(FPCreatePublication)

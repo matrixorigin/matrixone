@@ -23,13 +23,16 @@ var PublicationSQLBuilder = publicationSQLBuilder{}
 
 const (
 
-	// Create CCPR snapshot internal command template
-	// Format: __++__internal_create_ccpr_snapshot <taskID> <lsn> <subscriptionAccountName> <publicationName> <level> <dbName> <tableName>
-	// This command:
-	// 1. Checks permission via subscription_account_name and publication_name
-	// 2. Creates snapshot IF NOT EXISTS using the authorized account
-	// 3. Deletes snapshots with LSN smaller than the current one
-	PublicationCreateCcprSnapshotSqlTemplate = `__++__internal_create_ccpr_snapshot %s %d %s %s %s %s %s`
+	// Create CCPR snapshot SQL template
+	// Uses standard CREATE SNAPSHOT syntax with FROM account PUBLICATION
+	// Format: CREATE SNAPSHOT IF NOT EXISTS `snapshotName` FOR {ACCOUNT|DATABASE db|TABLE db table} FROM account PUBLICATION pubname
+	PublicationCreateCcprSnapshotForAccountSqlTemplate  = "CREATE SNAPSHOT IF NOT EXISTS `%s` FOR ACCOUNT FROM %s PUBLICATION %s"
+	PublicationCreateCcprSnapshotForDatabaseSqlTemplate = "CREATE SNAPSHOT IF NOT EXISTS `%s` FOR DATABASE %s FROM %s PUBLICATION %s"
+	PublicationCreateCcprSnapshotForTableSqlTemplate    = "CREATE SNAPSHOT IF NOT EXISTS `%s` FOR TABLE %s %s FROM %s PUBLICATION %s"
+
+	// Drop CCPR snapshot SQL template
+	// Uses DROP SNAPSHOT FROM account PUBLICATION pubname syntax
+	PublicationDropCcprSnapshotSqlTemplate = "DROP SNAPSHOT IF EXISTS `%s` FROM %s PUBLICATION %s"
 
 	// Query mo_catalog tables SQL templates using internal command with publication permission check
 	// Format: __++__internal_get_mo_indexes <tableId> <subscriptionAccountName> <publicationName> <snapshotName>
@@ -86,11 +89,11 @@ const (
 
 	// Update mo_ccpr_log SQL template
 	PublicationUpdateMoCcprLogSqlTemplate = `UPDATE mo_catalog.mo_ccpr_log ` +
-		`SET state = %d, ` +
+		`SET iteration_state = %d, ` +
 		`iteration_lsn = %d, ` +
 		`context = '%s', ` +
 		`error_message = '%s', ` +
-		`iteration_state = %d ` +
+		`state = %d ` +
 		`WHERE task_id = '%s'`
 
 	// Update mo_ccpr_log iteration_state (and lsn) only
@@ -130,7 +133,7 @@ const (
 )
 
 const (
-	PublicationQueryMoIndexesSqlTemplate_Idx= iota
+	PublicationQueryMoIndexesSqlTemplate_Idx = iota
 	PublicationObjectListSqlTemplate_Idx
 	PublicationGetObjectSqlTemplate_Idx
 	PublicationGetDdlSqlTemplate_Idx
@@ -145,7 +148,6 @@ const (
 	PublicationUpdateMoCcprLogNoStateSqlTemplate_Idx
 	PublicationUpdateMoCcprLogIterationStateOnlySqlTemplate_Idx
 	PublicationUpdateMoCcprLogIterationStateAndCnUuidSqlTemplate_Idx
-	PublicationCreateCcprSnapshotSqlTemplate_Idx
 
 	PublicationSqlTemplateCount
 )
@@ -233,9 +235,6 @@ var PublicationSQLTemplates = [PublicationSqlTemplateCount]struct {
 	PublicationUpdateMoCcprLogIterationStateAndCnUuidSqlTemplate_Idx: {
 		SQL: PublicationUpdateMoCcprLogIterationStateAndCnUuidSqlTemplate,
 	},
-	PublicationCreateCcprSnapshotSqlTemplate_Idx: {
-		SQL: PublicationCreateCcprSnapshotSqlTemplate,
-	},
 }
 
 type publicationSQLBuilder struct{}
@@ -244,32 +243,57 @@ type publicationSQLBuilder struct{}
 // Snapshot SQL
 // ------------------------------------------------------------------------------------------------
 
-// CreateCcprSnapshotSQL creates SQL for creating CCPR snapshot using internal command
-// Uses internal command: __++__internal_create_ccpr_snapshot <taskID> <lsn> <subscriptionAccountName> <publicationName> <level> <dbName> <tableName>
-// This command:
-// 1. Checks permission via subscription_account_name and publication_name
-// 2. Creates snapshot IF NOT EXISTS using the authorized account
-// 3. Deletes snapshots with LSN smaller than the current one
-// Returns snapshot_name, snapshot_ts
+// CreateCcprSnapshotSQL creates SQL for creating CCPR snapshot using CREATE SNAPSHOT syntax
+// Uses: CREATE SNAPSHOT IF NOT EXISTS `snapshotName` FOR {ACCOUNT|DATABASE db|TABLE db table} FROM account PUBLICATION pubname
+// Returns the SQL string to create the snapshot
 func (b publicationSQLBuilder) CreateCcprSnapshotSQL(
-	taskID string,
-	lsn uint64,
+	snapshotName string,
 	subscriptionAccountName string,
 	publicationName string,
 	level string,
 	dbName string,
 	tableName string,
 ) string {
-	return fmt.Sprintf(
-		PublicationSQLTemplates[PublicationCreateCcprSnapshotSqlTemplate_Idx].SQL,
-		escapeSQLString(taskID),
-		lsn,
-		escapeSQLString(subscriptionAccountName),
-		escapeSQLString(publicationName),
-		escapeSQLString(level),
-		escapeOrPlaceholder(dbName),
-		escapeOrPlaceholder(tableName),
-	)
+	switch level {
+	case "account":
+		return fmt.Sprintf(
+			PublicationCreateCcprSnapshotForAccountSqlTemplate,
+			snapshotName,
+			escapeSQLString(subscriptionAccountName),
+			escapeSQLString(publicationName),
+		)
+	case "database":
+		return fmt.Sprintf(
+			PublicationCreateCcprSnapshotForDatabaseSqlTemplate,
+			snapshotName,
+			escapeSQLString(dbName),
+			escapeSQLString(subscriptionAccountName),
+			escapeSQLString(publicationName),
+		)
+	case "table":
+		return fmt.Sprintf(
+			PublicationCreateCcprSnapshotForTableSqlTemplate,
+			snapshotName,
+			escapeSQLString(dbName),
+			escapeSQLString(tableName),
+			escapeSQLString(subscriptionAccountName),
+			escapeSQLString(publicationName),
+		)
+	default:
+		// Default to account level
+		return fmt.Sprintf(
+			PublicationCreateCcprSnapshotForAccountSqlTemplate,
+			snapshotName,
+			escapeSQLString(subscriptionAccountName),
+			escapeSQLString(publicationName),
+		)
+	}
+}
+
+// DropCcprSnapshotSQL creates SQL for dropping a CCPR snapshot
+// Uses: DROP SNAPSHOT IF EXISTS `snapshotName` FROM account PUBLICATION pubname
+func (b publicationSQLBuilder) DropCcprSnapshotSQL(snapshotName string, subscriptionAccountName string, publicationName string) string {
+	return fmt.Sprintf(PublicationDropCcprSnapshotSqlTemplate, snapshotName, escapeSQLString(subscriptionAccountName), escapeSQLString(publicationName))
 }
 
 // ------------------------------------------------------------------------------------------------

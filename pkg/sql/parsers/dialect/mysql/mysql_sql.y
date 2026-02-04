@@ -7503,7 +7503,15 @@ drop_snapshot_stmt:
    {
         var ifExists = $3
         var name = tree.Identifier($4.Compare())
-        $$ = tree.NewDropSnapShot(ifExists, name)
+        $$ = tree.NewDropSnapShot(ifExists, name, "", "")
+    }
+|   DROP SNAPSHOT exists_opt ident FROM ident PUBLICATION ident
+   {
+        var ifExists = $3
+        var name = tree.Identifier($4.Compare())
+        var accountName = tree.Identifier($6.Compare())
+        var pubName = tree.Identifier($8.Compare())
+        $$ = tree.NewDropSnapShot(ifExists, name, accountName, pubName)
     }
 
 drop_pitr_stmt:

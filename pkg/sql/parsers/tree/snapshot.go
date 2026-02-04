@@ -104,8 +104,10 @@ func (node *CreateSnapShot) GetQueryType() string { return QueryTypeOth }
 type DropSnapShot struct {
 	statementImpl
 
-	IfExists bool
-	Name     Identifier // snapshot name
+	IfExists    bool
+	Name        Identifier // snapshot name
+	AccountName Identifier // account name for publication-based drop
+	PubName     Identifier // publication name for publication-based drop
 }
 
 func (node *DropSnapShot) Free() { reuse.Free[DropSnapShot](node, nil) }
@@ -114,10 +116,12 @@ func (node *DropSnapShot) reset() { *node = DropSnapShot{} }
 
 func (node DropSnapShot) TypeName() string { return "tree.DropSnapShot" }
 
-func NewDropSnapShot(ifExists bool, Name Identifier) *DropSnapShot {
+func NewDropSnapShot(ifExists bool, Name Identifier, accountName Identifier, pubName Identifier) *DropSnapShot {
 	drop := reuse.Alloc[DropSnapShot](nil)
 	drop.IfExists = ifExists
 	drop.Name = Name
+	drop.AccountName = accountName
+	drop.PubName = pubName
 	return drop
 }
 
@@ -129,6 +133,14 @@ func (node *DropSnapShot) Format(ctx *FmtCtx) {
 	}
 
 	node.Name.Format(ctx)
+
+	// Handle publication info for cross-cluster drop
+	if node.AccountName != "" && node.PubName != "" {
+		ctx.WriteString(" from ")
+		node.AccountName.Format(ctx)
+		ctx.WriteString(" publication ")
+		node.PubName.Format(ctx)
+	}
 }
 
 func (node *DropSnapShot) GetStatementType() string { return "Drop Snapshot" }

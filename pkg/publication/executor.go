@@ -1249,8 +1249,8 @@ func deleteSnapshotInSeparateTxn(
 	}
 	defer txn.Commit(ctx)
 
-	// Use DROP SNAPSHOT to properly delete the snapshot
-	dropSQL := fmt.Sprintf(`DROP SNAPSHOT IF EXISTS %s`, snapshotName)
+	// Use direct delete since GC doesn't have publication context
+	dropSQL := fmt.Sprintf("delete from mo_catalog.mo_snapshots where sname = '%s'", snapshotName)
 	result, err := ExecWithResult(ctx, dropSQL, cnUUID, txn)
 	if err != nil {
 		logutil.Error("Publication-Task GCSnapshots failed to drop snapshot",

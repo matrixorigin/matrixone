@@ -1811,7 +1811,7 @@ func doShowCcprSubscriptions(ctx context.Context, ses *Session, scs *tree.ShowCc
 	}()
 
 	// Build SQL query
-	sql := "SELECT task_id, db_name, table_name, sync_level, iteration_state, error_message, watermark FROM mo_catalog.mo_ccpr_log WHERE 1=1"
+	sql := "SELECT task_id, db_name, table_name, sync_level, state, error_message, watermark FROM mo_catalog.mo_ccpr_log WHERE 1=1"
 
 	// Filter by account_id: sys account sees all, others see only their own
 	if accountId != catalog.System_Account {
