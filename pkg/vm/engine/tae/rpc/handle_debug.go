@@ -801,18 +801,6 @@ func (h *Handle) HandleDiskCleaner(
 			return nil, moerr.NewInvalidArgNoCtx(op, "empty value")
 		}
 
-		// Debug: print received value info
-		logutil.Info(
-			"GC-Sync-Protection-Register-Value-Received",
-			zap.Int("value-len", len(value)),
-			zap.String("value-prefix", func() string {
-				if len(value) > 200 {
-					return value[:200] + "..."
-				}
-				return value
-			}()),
-		)
-
 		var req cmd_util.SyncProtection
 		if err = json.Unmarshal([]byte(value), &req); err != nil {
 			logutil.Error(
@@ -822,15 +810,6 @@ func (h *Handle) HandleDiskCleaner(
 			)
 			return nil, moerr.NewInvalidArgNoCtx(op, value)
 		}
-
-		// Debug: print parsed request info
-		logutil.Info(
-			"GC-Sync-Protection-Register-Parsed",
-			zap.String("job-id", req.JobID),
-			zap.Int("bf-len", len(req.BF)),
-			zap.Int64("valid-ts", req.ValidTS),
-			zap.String("test-object", req.TestObject),
-		)
 
 		syncMgr := h.db.DiskCleaner.GetCleaner().GetSyncProtectionManager()
 		if err = syncMgr.RegisterSyncProtection(req.JobID, req.BF, req.ValidTS); err != nil {
