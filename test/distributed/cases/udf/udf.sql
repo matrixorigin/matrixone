@@ -15,7 +15,8 @@ use db1;
 create function db1.helloworld5 () returns int language sql as 'select id from tbl1 limit 1';
 drop function db1.helloworld5();
 drop function db2.helloworld5();
-drop database db1;
+use mo_catalog;
+drop database if exists db1;
 
 -- bvt: preserve backslash in $$...$$ string for UDF body
 create database if not exists udf_bvt;
