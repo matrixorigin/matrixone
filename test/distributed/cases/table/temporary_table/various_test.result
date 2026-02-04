@@ -46,3 +46,4 @@ null    null    null    null    null    null    null    null
 127    32767    2147483647    9223372036854775807    255    65535    4294967295    18446744073709551615
 delete from t1;
 drop table t1;
+drop database test_temporary;

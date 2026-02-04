@@ -29,3 +29,4 @@ load data infile '$resources/load_data/integer_numbers_2.csv' into table t1 fiel
 select * from t1;
 delete from t1;
 drop table t1;
+drop database test_temporary;

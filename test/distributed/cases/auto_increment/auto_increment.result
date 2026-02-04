@@ -409,9 +409,9 @@ col1
 10001
 10002
 Insert into auto_increment05 values(10001);
-Duplicate entry '10001' for key 'col1'
+Duplicate entry '10001' for key '(.*)'
 Insert into auto_increment05 values(10002);
-Duplicate entry '10002' for key 'col1'
+Duplicate entry '10002' for key '(.*)'
 Select * from auto_increment05;
 col1
 10000

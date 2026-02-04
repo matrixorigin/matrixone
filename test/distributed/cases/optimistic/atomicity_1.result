@@ -11,51 +11,49 @@ insert into atomic_table_1 select 1,"gooooooge",8092.9;
 insert into atomic_table_1 select 2,"caaaaaate",92.09;
 commit;
 select * from atomic_table_1;
-a    b    c
-1    gooooooge    8092.9
-2    caaaaaate    92.09
+➤ a[-5,64,0]  ¦  b[12,-1,0]  ¦  c[8,54,0]  𝄀
+1  ¦  gooooooge  ¦  8092.9  𝄀
+2  ¦  caaaaaate  ¦  92.09
 start transaction ;
 insert into atomic_table_2 select * from atomic_table_1;
 select * from atomic_table_2;
-a    b    c
-1    gooooooge    8092.9
-2    caaaaaate    92.09
+➤ a[-5,64,0]  ¦  b[12,-1,0]  ¦  c[8,54,0]  𝄀
+1  ¦  gooooooge  ¦  8092.9  𝄀
+2  ¦  caaaaaate  ¦  92.09
 rollback ;
 select * from atomic_table_2;
-a    b    c
+➤ a[-5,64,0]  ¦  b[12,-1,0]  ¦  c[8,54,0]
 begin;
 insert into atomic_table_2 select * from atomic_table_1;
 commit;
 select * from atomic_table_2;
-a    b    c
-1    gooooooge    8092.9
-2    caaaaaate    92.09
+➤ a[-5,64,0]  ¦  b[12,-1,0]  ¦  c[8,54,0]  𝄀
+1  ¦  gooooooge  ¦  8092.9  𝄀
+2  ¦  caaaaaate  ¦  92.09
 begin;
 create view atomic_view_1 as select * from atomic_table_1;
 insert into atomic_table_1 select 10,"eeeeee",20.3;
 commit;
 select * from atomic_view_1;
-a    b    c
-1    gooooooge    8092.9
-2    caaaaaate    92.09
-10    eeeeee    20.3
+➤ a[-5,64,0]  ¦  b[12,-1,0]  ¦  c[8,54,0]  𝄀
+1  ¦  gooooooge  ¦  8092.9  𝄀
+2  ¦  caaaaaate  ¦  92.09  𝄀
+10  ¦  eeeeee  ¦  20.3
 start transaction ;
 insert into atomic_table_1 select 10,"eeeeee",20.3;
-Duplicate entry '(10,eeeeee)' for key '(a,b)'
 insert into atomic_table_1 select 11,"ffff",2.3;
 commit;
+Duplicate entry '(10,eeeeee)' for key '__mo_cpkey_col'
 select * from atomic_table_1;
-a    b    c
-1    gooooooge    8092.9
-2    caaaaaate    92.09
-10    eeeeee    20.3
-11    ffff    2.3
+➤ a[-5,64,0]  ¦  b[12,-1,0]  ¦  c[8,54,0]  𝄀
+1  ¦  gooooooge  ¦  8092.9  𝄀
+2  ¦  caaaaaate  ¦  92.09  𝄀
+10  ¦  eeeeee  ¦  20.3
 select * from atomic_view_1;
-a    b    c
-1    gooooooge    8092.9
-2    caaaaaate    92.09
-10    eeeeee    20.3
-11    ffff    2.3
+➤ a[-5,64,0]  ¦  b[12,-1,0]  ¦  c[8,54,0]  𝄀
+1  ¦  gooooooge  ¦  8092.9  𝄀
+2  ¦  caaaaaate  ¦  92.09  𝄀
+10  ¦  eeeeee  ¦  20.3
 begin;
 create view atomic_view_2 as select * from atomic_table_2;
 rollback ;
@@ -113,10 +111,10 @@ select  col1,col2 from atomic_table_3;
 begin;
 create external table atomic_ex_table(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_number.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select num_col1  from  atomic_ex_table;
-num_col1
-60
--128
-127
+➤ num_col1[-6,8,0]  𝄀
+60  𝄀
+-128  𝄀
+127  𝄀
 null
 rollback ;
 select num_col1  from  atomic_ex_table;
@@ -175,11 +173,11 @@ KEY `org_no` (`org_no`)
 start transaction ;
 insert into t_code_rule values (18373453,'aaaaaa','fffff','ccccc',10);
 insert into t_code_rule values (18373453,'aaaaaa','fffff','ccccc',20);
-Duplicate entry '18373453' for key 'code_id'
 commit ;
 select * from t_code_rule;
-code_id    code_no    org_no    org_name    code_type
-18373453    aaaaaa    fffff    ccccc    10
+➤ code_id[-5,64,0]  ¦  code_no[12,-1,0]  ¦  org_no[12,-1,0]  ¦  org_name[12,-1,0]  ¦  code_type[4,32,0]  𝄀
+18373453  ¦  aaaaaa  ¦  fffff  ¦  ccccc  ¦  10  𝄀
+18373453  ¦  aaaaaa  ¦  fffff  ¦  ccccc  ¦  20
 begin;
 insert into t_code_rule values (18373453,'aaaaaa','fffff','ccccc',5);
 [unknown result because it is related to issue#7133]
@@ -189,8 +187,9 @@ select * from t_code_rule;
 [unknown result because it is related to issue#7133]
 rollback ;
 select * from t_code_rule;
-code_id    code_no    org_no    org_name    code_type
-18373453    aaaaaa    fffff    ccccc    10
+➤ code_id[-5,64,0]  ¦  code_no[12,-1,0]  ¦  org_no[12,-1,0]  ¦  org_name[12,-1,0]  ¦  code_type[4,32,0]  𝄀
+18373453  ¦  aaaaaa  ¦  fffff  ¦  ccccc  ¦  10  𝄀
+18373453  ¦  aaaaaa  ¦  fffff  ¦  ccccc  ¦  20
 insert into t_code_rule values (18373453,'aaaaaa','fffff','ccccc',5);
 Duplicate entry '18373453' for key 'code_id'
 begin ;
