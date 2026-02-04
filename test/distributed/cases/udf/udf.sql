@@ -7,7 +7,7 @@ use db1;
 select name, db from mo_catalog.mo_user_defined_function where db = 'db1';
 create function helloworld () returns int language sql as 'select id from tbl1 limit 1';
 select name, db from mo_catalog.mo_user_defined_function where db = 'db1';
-drop database db1;
+drop database if exists db1;
 select name, db from mo_catalog.mo_user_defined_function where db = 'db1';
 create function db1.helloworld5 () returns int language sql as 'select id from tbl1 limit 1';
 create database db1;
