@@ -16,7 +16,6 @@ package gc
 
 import (
 	"encoding/base64"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -98,7 +97,7 @@ func (m *SyncProtectionManager) RegisterSyncProtection(
 			"GC-Sync-Protection-Register-Rejected-GC-Running",
 			zap.String("job-id", jobID),
 		)
-		return moerr.NewInternalErrorNoCtx("GC is running, please retry later")
+		return moerr.NewGCIsRunningNoCtx()
 	}
 
 	// Check if job already exists
@@ -107,7 +106,7 @@ func (m *SyncProtectionManager) RegisterSyncProtection(
 			"GC-Sync-Protection-Register-Already-Exists",
 			zap.String("job-id", jobID),
 		)
-		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("sync protection already exists: %s", jobID))
+		return moerr.NewSyncProtectionExistsNoCtx(jobID)
 	}
 
 	// Check max count
@@ -118,7 +117,7 @@ func (m *SyncProtectionManager) RegisterSyncProtection(
 			zap.Int("current-count", len(m.protections)),
 			zap.Int("max-count", m.maxCount),
 		)
-		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("sync protection max count reached: %d", m.maxCount))
+		return moerr.NewSyncProtectionMaxCountNoCtx(m.maxCount)
 	}
 
 	// Check if BF data is empty
@@ -127,7 +126,7 @@ func (m *SyncProtectionManager) RegisterSyncProtection(
 			"GC-Sync-Protection-Register-Empty-BF",
 			zap.String("job-id", jobID),
 		)
-		return moerr.NewInternalErrorNoCtx("bf is empty")
+		return moerr.NewSyncProtectionInvalidNoCtx()
 	}
 
 	// Decode base64 BloomFilter data
@@ -138,7 +137,7 @@ func (m *SyncProtectionManager) RegisterSyncProtection(
 			zap.String("job-id", jobID),
 			zap.Error(err),
 		)
-		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to decode bloom filter: %v", err))
+		return moerr.NewSyncProtectionInvalidNoCtx()
 	}
 
 	// Unmarshal BloomFilter (using index.BloomFilter which is based on xorfilter - deterministic)
@@ -148,7 +147,12 @@ func (m *SyncProtectionManager) RegisterSyncProtection(
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
-				unmarshalErr = moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to unmarshal bloom filter (panic): %v", r))
+				logutil.Error(
+					"GC-Sync-Protection-Register-Unmarshal-Panic",
+					zap.String("job-id", jobID),
+					zap.Any("panic", r),
+				)
+				unmarshalErr = moerr.NewSyncProtectionInvalidNoCtx()
 			}
 		}()
 		unmarshalErr = bf.Unmarshal(bfBytes)
@@ -159,7 +163,7 @@ func (m *SyncProtectionManager) RegisterSyncProtection(
 			zap.String("job-id", jobID),
 			zap.Error(unmarshalErr),
 		)
-		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to unmarshal bloom filter: %v", unmarshalErr))
+		return unmarshalErr
 	}
 
 	m.protections[jobID] = &SyncProtection{
@@ -191,7 +195,7 @@ func (m *SyncProtectionManager) RenewSyncProtection(jobID string, validTS int64)
 			"GC-Sync-Protection-Renew-Not-Found",
 			zap.String("job-id", jobID),
 		)
-		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("sync protection not found: %s", jobID))
+		return moerr.NewSyncProtectionNotFoundNoCtx(jobID)
 	}
 
 	if p.SoftDelete {
@@ -199,7 +203,7 @@ func (m *SyncProtectionManager) RenewSyncProtection(jobID string, validTS int64)
 			"GC-Sync-Protection-Renew-Already-Soft-Deleted",
 			zap.String("job-id", jobID),
 		)
-		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("sync protection is soft deleted: %s", jobID))
+		return moerr.NewSyncProtectionSoftDeleteNoCtx(jobID)
 	}
 
 	oldValidTS := p.ValidTS
@@ -226,7 +230,7 @@ func (m *SyncProtectionManager) UnregisterSyncProtection(jobID string) error {
 			"GC-Sync-Protection-Unregister-Not-Found",
 			zap.String("job-id", jobID),
 		)
-		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("sync protection not found: %s", jobID))
+		return moerr.NewSyncProtectionNotFoundNoCtx(jobID)
 	}
 
 	p.SoftDelete = true

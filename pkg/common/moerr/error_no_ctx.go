@@ -495,3 +495,28 @@ func NewReplicaNotMatch(current, received string) *Error {
 func NewCantCompileForPrepareNoCtx() *Error {
 	return newError(Context(), ErrCantCompileForPrepare)
 }
+
+// GC sync protection errors
+func NewGCIsRunningNoCtx() *Error {
+	return newError(Context(), ErrGCIsRunning)
+}
+
+func NewSyncProtectionNotFoundNoCtx(jobID string) *Error {
+	return newError(Context(), ErrSyncProtectionNotFound, jobID)
+}
+
+func NewSyncProtectionExistsNoCtx(jobID string) *Error {
+	return newError(Context(), ErrSyncProtectionExists, jobID)
+}
+
+func NewSyncProtectionMaxCountNoCtx(maxCount int) *Error {
+	return newError(Context(), ErrSyncProtectionMaxCount, maxCount)
+}
+
+func NewSyncProtectionSoftDeleteNoCtx(jobID string) *Error {
+	return newError(Context(), ErrSyncProtectionSoftDelete, jobID)
+}
+
+func NewSyncProtectionInvalidNoCtx() *Error {
+	return newError(Context(), ErrSyncProtectionInvalid)
+}

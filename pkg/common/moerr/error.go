@@ -249,6 +249,14 @@ const (
 	ErrTxnControl                uint16 = 20639
 	ErrOfflineTxnWrite           uint16 = 20640
 
+	// GC sync protection errors
+	ErrGCIsRunning              uint16 = 20641
+	ErrSyncProtectionNotFound   uint16 = 20642
+	ErrSyncProtectionExists     uint16 = 20643
+	ErrSyncProtectionMaxCount   uint16 = 20644
+	ErrSyncProtectionSoftDelete uint16 = 20645
+	ErrSyncProtectionInvalid    uint16 = 20646
+
 	// Group 7: lock service
 	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
 	ErrDeadLockDetected uint16 = 20701
@@ -501,6 +509,14 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTxnUnknown:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn commit status is unknown: %s"},
 	ErrTxnControl:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn control error: %s"},
 	ErrOfflineTxnWrite:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "write offline txn: %s"},
+
+	// GC sync protection errors
+	ErrGCIsRunning:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "GC is running, please retry later"},
+	ErrSyncProtectionNotFound:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "sync protection not found: %s"},
+	ErrSyncProtectionExists:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "sync protection already exists: %s"},
+	ErrSyncProtectionMaxCount:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "sync protection max count reached: %d"},
+	ErrSyncProtectionSoftDelete: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "sync protection is soft deleted: %s"},
+	ErrSyncProtectionInvalid:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid sync protection request"},
 
 	// Group 7: lock service
 	ErrDeadLockDetected:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},

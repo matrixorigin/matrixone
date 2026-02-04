@@ -371,18 +371,18 @@ func TestSyncProtectionManager_InvalidBFData(t *testing.T) {
 	// Test empty BF
 	err := mgr.RegisterSyncProtection(jobID, "", validTS)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "bf is empty")
+	assert.Contains(t, err.Error(), "invalid sync protection")
 
 	// Test invalid base64
 	err = mgr.RegisterSyncProtection(jobID, "invalid-base64!!!", validTS)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "decode")
+	assert.Contains(t, err.Error(), "invalid sync protection")
 
 	// Test invalid BloomFilter data
 	invalidBF := base64.StdEncoding.EncodeToString([]byte("not a bloom filter"))
 	err = mgr.RegisterSyncProtection(jobID, invalidBF, validTS)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unmarshal")
+	assert.Contains(t, err.Error(), "invalid sync protection")
 }
 
 
