@@ -131,10 +131,10 @@ select count(*), a, sum(distinct d) d, sum(distinct f) f from t where a < 10000 
 
 -- A much better way is to run explain analyze, but these all depends on issue 22721
 
-
+-- @bvt:issue#22721
 explain analyze select a, b, c from t group by a, b, c;
 explain analyze select a, c, avg(d) d, avg(f) f from t group by a, c;
 explain analyze select count(*), a, sum(distinct d) d, sum(distinct f) f from t where a < 10000 group by a;
-
+-- @bvt:issue
 
 drop database qetest;
