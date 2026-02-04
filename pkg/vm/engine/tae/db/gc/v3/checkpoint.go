@@ -1210,35 +1210,6 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 		return
 	}
 
-	// Filter out files protected by sync protection before deletion
-	// This ensures cross-cluster sync operations don't lose their referenced objects
-	originalCount := len(filesToGC)
-
-	// Debug: print first few files to be deleted
-	if originalCount > 0 {
-		logutil.Info(
-			"GC-Files-To-Delete-Before-Filter",
-			zap.Int("count", originalCount),
-			zap.Strings("sample-files", func() []string {
-				if originalCount <= 5 {
-					return filesToGC
-				}
-				return filesToGC[:5]
-			}()),
-		)
-	}
-
-	filesToGC = c.syncProtection.FilterProtectedFiles(filesToGC)
-	if originalCount != len(filesToGC) {
-		logutil.Info(
-			"GC-Sync-Protection-Filtered",
-			zap.String("task", c.TaskNameLocked()),
-			zap.Int("original-count", originalCount),
-			zap.Int("filtered-count", len(filesToGC)),
-			zap.Int("protected-count", originalCount-len(filesToGC)),
-		)
-	}
-
 	// Delete files after doGCAgainstGlobalCheckpointLocked
 	// TODO:Requires Physical Removal Policy
 	// Note: Data files are GC'ed normally even when backup protection is active.

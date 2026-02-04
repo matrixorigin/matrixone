@@ -204,8 +204,8 @@ message FaultInjectReq {
 
 message SyncProtection {
     option (gogoproto.typedecl)     = false;
-    string Op                       = 1;  // Operation: register_sync_protection, renew_sync_protection, unregister_sync_protection
-    string JobID                    = 2;  // Sync job ID
-    repeated string Objects         = 3;  // Protected object names (for register)
-    int64 ValidTS                   = 4;  // Valid timestamp in nanoseconds (for register and renew)
+    string JobID                    = 1;  // Sync job ID
+    string BF                       = 2;  // Base64 encoded BloomFilter data (for register)
+    int64 ValidTS                   = 3;  // Valid timestamp in nanoseconds (for register and renew)
+    string TestObject               = 4;  // Test object name for debugging (optional)
 }
