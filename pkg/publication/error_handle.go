@@ -329,6 +329,22 @@ func (UTInjectionClassifier) IsRetryable(err error) bool {
 	return false
 }
 
+// StaleReadClassifier recognises stale read errors that are retryable.
+type StaleReadClassifier struct{}
+
+// IsRetryable implements ErrorClassifier.
+func (StaleReadClassifier) IsRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if strings.Contains(err.Error(), "stale read") {
+		return true
+	}
+
+	return false
+}
+
 // DownstreamCommitClassifier is used when committing to downstream.
 // It combines default, mysql, commit, and ut injection classifiers.
 type DownstreamCommitClassifier struct {
@@ -343,6 +359,7 @@ func NewDownstreamCommitClassifier() *DownstreamCommitClassifier {
 			MySQLErrorClassifier{},
 			CommitErrorClassifier{},
 			UTInjectionClassifier{},
+			StaleReadClassifier{},
 		},
 	}
 }

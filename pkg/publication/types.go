@@ -92,4 +92,5 @@ type IterationContext struct {
 	TableIDs           map[TableKey]uint64
 	IndexTableMappings map[string]string // Maps upstream_index_table_name to downstream_index_table_name
 	ErrorMetadata      *ErrorMetadata    // Error metadata parsed from error_message
+	IsStale            bool              // Whether the iteration is stale
 }

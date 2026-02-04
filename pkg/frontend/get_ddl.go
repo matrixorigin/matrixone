@@ -242,6 +242,10 @@ func visitTableDdl(
 		return nil
 	}
 
+	if strings.HasPrefix(tableName, catalog.IndexTableNamePrefix) {
+		return nil
+	}
+
 	// Get tableDef from relation
 	tableDef := table.CopyTableDef(ctx)
 	if tableDef == nil {

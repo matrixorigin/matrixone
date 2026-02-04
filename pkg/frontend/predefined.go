@@ -307,12 +307,15 @@ var (
 
 	MoCatalogMoCcprTablesDDL = fmt.Sprintf(`CREATE TABLE %s.%s (
 				tableid BIGINT UNSIGNED PRIMARY KEY,
-				taskid UUID NOT NULL
+				taskid UUID NOT NULL,
+				dbname VARCHAR(256) NOT NULL,
+				tablename VARCHAR(256) NOT NULL
 			)`, catalog.MO_CATALOG, catalog.MO_CCPR_TABLES)
 
 	MoCatalogMoCcprDbsDDL = fmt.Sprintf(`CREATE TABLE %s.%s (
 				dbid BIGINT UNSIGNED PRIMARY KEY,
-				taskid UUID NOT NULL
+				taskid UUID NOT NULL,
+				dbname VARCHAR(256) NOT NULL
 			)`, catalog.MO_CATALOG, catalog.MO_CCPR_DBS)
 
 	MoCatalogMoIndexUpdateDDL = `CREATE TABLE mo_catalog.mo_index_update (

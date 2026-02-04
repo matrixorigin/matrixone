@@ -765,13 +765,16 @@ func RequestUpstreamSnapshot(
 	iterationCtx.CurrentSnapshotTS = snapshotTS
 
 	// Query previous snapshot TS if LSN > 0
-	if iterationCtx.IterationLSN > 0 {
+	if iterationCtx.IterationLSN > 0 && !iterationCtx.IsStale {
 		prevSnapshotName := GenerateSnapshotName(iterationCtx.TaskID, iterationCtx.IterationLSN-1)
 		iterationCtx.PrevSnapshotName = prevSnapshotName
 		ctxWithTimeout2, cancelTimeout2 := context.WithTimeout(ctx, time.Minute)
 		defer cancelTimeout2()
 		iterationCtx.PrevSnapshotTS, err = querySnapshotTS(ctxWithTimeout2, iterationCtx.UpstreamExecutor, prevSnapshotName, iterationCtx.SubscriptionAccountName, iterationCtx.SubscriptionName)
 		if err != nil {
+			if strings.Contains(err.Error(), "find 0 snapshot records by name") {
+				return moerr.NewErrStaleReadNoCtx("", "")
+			}
 			return moerr.NewInternalErrorf(ctx, "failed to query previous snapshot TS: %v", err)
 		}
 	}
@@ -1229,7 +1232,7 @@ func ExecuteIteration(
 				} else {
 					// Retryable error: don't change subscription state
 					// Use current snapshot ts as watermark
-					watermark := int64(iterationCtx.CurrentSnapshotTS.Physical())
+					watermark := int64(iterationCtx.PrevSnapshotTS.Physical())
 					updateErr = UpdateIterationStateNoSubscriptionState(ctx, iterationCtx.LocalExecutor, taskID, finalState, nextLSN, watermark, iterationCtx, true, errorMsg)
 				}
 			} else {
@@ -1249,6 +1252,14 @@ func ExecuteIteration(
 			}
 		}
 	}()
+
+	iterationCtx.IsStale = isStale(iterationCtx.ErrorMetadata)
+	if iterationCtx.IsStale {
+		if err = CleanPrevData(ctx, cnEngine, iterationCtx.LocalExecutor, iterationCtx.LocalTxn, taskID, iterationCtx.SrcInfo.AccountID); err != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to clean previous data: %v", err)
+			return
+		}
+	}
 
 	// 1.1 Request upstream snapshot (includes 1.1.2 request upstream snapshot TS)
 	// Uses CREATE SNAPSHOT IF NOT EXISTS ... FROM account PUBLICATION syntax
@@ -1359,4 +1370,209 @@ func parseTableKeyFromString(keyStr string) TableKey {
 	}
 	// Invalid format, return empty key
 	return TableKey{}
+}
+
+func isStale(errMetadata *ErrorMetadata) bool {
+	if errMetadata == nil {
+		return false
+	}
+	return strings.Contains(errMetadata.Message, "stale read")
+}
+
+// CleanPrevData cleans previous data by dropping all tables and databases
+// associated with the given task_id. It queries mo_ccpr_tables and mo_ccpr_dbs
+// to get the table IDs, database IDs, and their names, then drops them.
+// Tables are dropped first, then databases.
+func CleanPrevData(
+	ctx context.Context,
+	cnEngine engine.Engine,
+	executor SQLExecutor,
+	txn client.TxnOperator,
+	taskID string,
+	accountID uint32,
+) error {
+	if executor == nil {
+		return moerr.NewInternalError(ctx, "executor is nil")
+	}
+	if cnEngine == nil {
+		return moerr.NewInternalError(ctx, "engine is nil")
+	}
+	if txn == nil {
+		return moerr.NewInternalError(ctx, "transaction is nil")
+	}
+
+	// Use system account context for querying system tables
+	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	// Use downstream account context for dropping tables and databases
+	downstreamCtx := context.WithValue(ctx, defines.TenantIDKey{}, accountID)
+
+	// Step 1: Query mo_ccpr_tables to get all tables for this task
+	queryTablesSQL := fmt.Sprintf(
+		"SELECT tableid, dbname, tablename FROM `%s`.`%s` WHERE taskid = '%s'",
+		catalog.MO_CATALOG,
+		catalog.MO_CCPR_TABLES,
+		taskID,
+	)
+
+	tablesResult, tablesCancel, err := executor.ExecSQL(systemCtx, nil, queryTablesSQL, false, false, time.Minute)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to query mo_ccpr_tables: %v", err)
+	}
+
+	// Collect tables to drop
+	type tableInfo struct {
+		tableID   uint64
+		dbName    string
+		tableName string
+	}
+	var tablesToDrop []tableInfo
+
+	for tablesResult.Next() {
+		var tableID uint64
+		var dbName, tableName sql.NullString
+		if err := tablesResult.Scan(&tableID, &dbName, &tableName); err != nil {
+			tablesResult.Close()
+			if tablesCancel != nil {
+				tablesCancel()
+			}
+			return moerr.NewInternalErrorf(ctx, "failed to scan table result: %v", err)
+		}
+		if dbName.Valid && tableName.Valid {
+			tablesToDrop = append(tablesToDrop, tableInfo{
+				tableID:   tableID,
+				dbName:    dbName.String,
+				tableName: tableName.String,
+			})
+		}
+	}
+	tablesResult.Close()
+	if tablesCancel != nil {
+		tablesCancel()
+	}
+
+	// Step 2: Query mo_ccpr_dbs to get all databases for this task
+	queryDbsSQL := fmt.Sprintf(
+		"SELECT dbid, dbname FROM `%s`.`%s` WHERE taskid = '%s'",
+		catalog.MO_CATALOG,
+		catalog.MO_CCPR_DBS,
+		taskID,
+	)
+
+	dbsResult, dbsCancel, err := executor.ExecSQL(systemCtx, nil, queryDbsSQL, false, false, time.Minute)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to query mo_ccpr_dbs: %v", err)
+	}
+
+	// Collect databases to drop
+	type dbInfo struct {
+		dbID   uint64
+		dbName string
+	}
+	var dbsToDrop []dbInfo
+
+	for dbsResult.Next() {
+		var dbID uint64
+		var dbName sql.NullString
+		if err := dbsResult.Scan(&dbID, &dbName); err != nil {
+			dbsResult.Close()
+			if dbsCancel != nil {
+				dbsCancel()
+			}
+			return moerr.NewInternalErrorf(ctx, "failed to scan database result: %v", err)
+		}
+		if dbName.Valid {
+			dbsToDrop = append(dbsToDrop, dbInfo{
+				dbID:   dbID,
+				dbName: dbName.String,
+			})
+		}
+	}
+	dbsResult.Close()
+	if dbsCancel != nil {
+		dbsCancel()
+	}
+
+	// Step 3: Drop all tables first
+	for _, tbl := range tablesToDrop {
+		// Get database
+		db, err := cnEngine.Database(downstreamCtx, tbl.dbName, txn)
+		if err != nil {
+			// Database doesn't exist, skip this table
+			logutil.Warn("CCPR: database not found when dropping table",
+				zap.String("task_id", taskID),
+				zap.String("db_name", tbl.dbName),
+				zap.String("table_name", tbl.tableName),
+				zap.Error(err))
+			continue
+		}
+
+		// Drop table
+		err = db.Delete(downstreamCtx, tbl.tableName)
+		if err != nil {
+			// Log warning but continue with other tables
+			logutil.Warn("CCPR: failed to drop table",
+				zap.String("task_id", taskID),
+				zap.String("db_name", tbl.dbName),
+				zap.String("table_name", tbl.tableName),
+				zap.Error(err))
+			continue
+		}
+
+		logutil.Info("CCPR: dropped table",
+			zap.String("task_id", taskID),
+			zap.String("db_name", tbl.dbName),
+			zap.String("table_name", tbl.tableName),
+			zap.Uint64("table_id", tbl.tableID))
+
+		// Delete record from mo_ccpr_tables
+		deleteTableSQL := fmt.Sprintf(
+			"DELETE FROM `%s`.`%s` WHERE tableid = %d",
+			catalog.MO_CATALOG,
+			catalog.MO_CCPR_TABLES,
+			tbl.tableID,
+		)
+		if _, _, err := executor.ExecSQL(systemCtx, nil, deleteTableSQL, true, true, time.Minute); err != nil {
+			logutil.Warn("CCPR: failed to delete record from mo_ccpr_tables",
+				zap.Uint64("tableID", tbl.tableID),
+				zap.Error(err))
+		}
+	}
+
+	// Step 4: Drop all databases
+	for _, database := range dbsToDrop {
+		err := cnEngine.Delete(downstreamCtx, database.dbName, txn)
+		if err != nil {
+			// Log warning but continue with other databases
+			logutil.Warn("CCPR: failed to drop database",
+				zap.String("task_id", taskID),
+				zap.String("db_name", database.dbName),
+				zap.Error(err))
+			continue
+		}
+
+		logutil.Info("CCPR: dropped database",
+			zap.String("task_id", taskID),
+			zap.String("db_name", database.dbName),
+			zap.Uint64("db_id", database.dbID))
+
+		// Delete record from mo_ccpr_dbs
+		deleteDbSQL := fmt.Sprintf(
+			"DELETE FROM `%s`.`%s` WHERE dbid = %d",
+			catalog.MO_CATALOG,
+			catalog.MO_CCPR_DBS,
+			database.dbID,
+		)
+		if _, _, err := executor.ExecSQL(systemCtx, nil, deleteDbSQL, true, true, time.Minute); err != nil {
+			logutil.Warn("CCPR: failed to delete record from mo_ccpr_dbs",
+				zap.Uint64("dbID", database.dbID),
+				zap.Error(err))
+		}
+	}
+
+	logutil.Info("CCPR: CleanPrevData completed",
+		zap.String("task_id", taskID),
+		zap.Int("tables_dropped", len(tablesToDrop)),
+		zap.Int("dbs_dropped", len(dbsToDrop)))
+
+	return nil
 }

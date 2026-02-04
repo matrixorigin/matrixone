@@ -2979,8 +2979,10 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 
 // TableIDInfo contains table ID and database ID information
 type TableIDInfo struct {
-	TableID uint64
-	DbID    uint64
+	TableID   uint64
+	DbID      uint64
+	DbName    string
+	TableName string
 }
 
 // queryUpstreamAndCreateLocalDBTables queries upstream for DDL using internal commands and creates local DB/Tables
@@ -3118,7 +3120,7 @@ func queryUpstreamAndCreateLocalDBTables(
 		}
 
 		key := fmt.Sprintf("%s.%s", upstreamDbName, upstreamTableName)
-		tableIDs[key] = TableIDInfo{TableID: localTableID, DbID: dbID}
+		tableIDs[key] = TableIDInfo{TableID: localTableID, DbID: dbID, DbName: upstreamDbName, TableName: upstreamTableName}
 
 		// Get index table mappings (upstream index table name -> downstream index table name)
 		upstreamIndexTables, err := getUpstreamIndexTables(ctx, upstreamExecutor, uint64(upstreamTableID), subscriptionAccountName, pubName, snapshotName)
@@ -3378,11 +3380,12 @@ func insertCCPRDbAndTableRecords(ctx context.Context, bh BackgroundExec, tableID
 		// Insert into mo_ccpr_dbs if not already inserted
 		if !insertedDbIDs[info.DbID] {
 			sql := fmt.Sprintf(
-				"INSERT INTO %s.%s (dbid, taskid) VALUES (%d, '%s')",
+				"INSERT INTO %s.%s (dbid, taskid, dbname) VALUES (%d, '%s', '%s')",
 				catalog.MO_CATALOG,
 				catalog.MO_CCPR_DBS,
 				info.DbID,
 				taskID,
+				info.DbName,
 			)
 			if err := bh.Exec(ctx, sql); err != nil {
 				return moerr.NewInternalErrorf(ctx, "failed to insert ccpr db record: %v", err)
@@ -3392,11 +3395,13 @@ func insertCCPRDbAndTableRecords(ctx context.Context, bh BackgroundExec, tableID
 
 		// Insert into mo_ccpr_tables
 		sql := fmt.Sprintf(
-			"INSERT INTO %s.%s (tableid, taskid) VALUES (%d, '%s')",
+			"INSERT INTO %s.%s (tableid, taskid, dbname, tablename) VALUES (%d, '%s', '%s', '%s')",
 			catalog.MO_CATALOG,
 			catalog.MO_CCPR_TABLES,
 			info.TableID,
 			taskID,
+			info.DbName,
+			info.TableName,
 		)
 		if err := bh.Exec(ctx, sql); err != nil {
 			return moerr.NewInternalErrorf(ctx, "failed to insert ccpr table record: %v", err)

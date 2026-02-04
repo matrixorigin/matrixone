@@ -799,24 +799,30 @@ var (
 		types.New(types.T_TS, 0, 0),                        // flush_point
 	}
 
-	// mo_ccpr_tables schema: tableid (pk), taskid
+	// mo_ccpr_tables schema: tableid (pk), taskid, dbname, tablename
 	MoCCPRTablesSchema = []string{
 		"tableid",
 		"taskid",
+		"dbname",
+		"tablename",
 	}
 	MoCCPRTablesTypes = []types.Type{
-		types.New(types.T_uint64, 0, 0), // tableid (primary key)
-		types.New(types.T_uuid, 0, 0),   // taskid
+		types.New(types.T_uint64, 0, 0),    // tableid (primary key)
+		types.New(types.T_uuid, 0, 0),      // taskid
+		types.New(types.T_varchar, 256, 0), // dbname
+		types.New(types.T_varchar, 256, 0), // tablename
 	}
 
-	// mo_ccpr_dbs schema: dbid (pk), taskid
+	// mo_ccpr_dbs schema: dbid (pk), taskid, dbname
 	MoCCPRDbsSchema = []string{
 		"dbid",
 		"taskid",
+		"dbname",
 	}
 	MoCCPRDbsTypes = []types.Type{
-		types.New(types.T_uint64, 0, 0), // dbid (primary key)
-		types.New(types.T_uuid, 0, 0),   // taskid
+		types.New(types.T_uint64, 0, 0),    // dbid (primary key)
+		types.New(types.T_uuid, 0, 0),      // taskid
+		types.New(types.T_varchar, 256, 0), // dbname
 	}
 )
 
