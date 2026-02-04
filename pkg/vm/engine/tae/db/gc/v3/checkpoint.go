@@ -1235,14 +1235,6 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 		v2.GCSnapshotDeleteDurationHistogram.Observe(time.Since(deleteStart).Seconds())
 	}
 
-	// Cleanup soft-deleted sync protections when checkpoint watermark > validTS
-	// This ensures protections are only removed after the checkpoint has recorded the commit
-	gcWaterMarkEntry := c.GetGCWaterMark()
-	if gcWaterMarkEntry != nil {
-		checkpointWatermark := gcWaterMarkEntry.GetEnd().ToTimestamp().PhysicalTime
-		c.syncProtection.CleanupSoftDeleted(checkpointWatermark)
-	}
-
 	if c.GetGCWaterMark() == nil {
 		return nil
 	}
@@ -1855,6 +1847,14 @@ func (c *checkpointCleaner) tryScanLocked(
 		)
 		v2.GCErrorIOErrorCounter.Inc()
 		return
+	}
+
+	// Cleanup soft-deleted sync protections when checkpoint watermark > validTS
+	// This ensures protections are only removed after the checkpoint has recorded the commit
+	scanWaterMarkEntry := c.GetScanWaterMark()
+	if scanWaterMarkEntry != nil {
+		checkpointWatermark := scanWaterMarkEntry.GetEnd().ToTimestamp().PhysicalTime
+		c.syncProtection.CleanupSoftDeleted(checkpointWatermark)
 	}
 	return
 }
