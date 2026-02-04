@@ -1234,7 +1234,7 @@ func Test_doShowCcprSubscriptions(t *testing.T) {
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return(mockedAccountsResults(ctrl))
 
-		scs := &tree.ShowCcprSubscriptions{}
+		scs := &tree.ShowCcprSubscriptions{TaskId: "test-task-id"}
 		err := doShowCcprSubscriptions(ctx, ses, scs)
 		convey.So(err, convey.ShouldBeNil)
 	})

@@ -806,21 +806,15 @@ func (node *ShowPublicationCoverage) GetQueryType() string     { return QueryTyp
 
 type ShowCcprSubscriptions struct {
 	showImpl
-	Name string
-	Like *ComparisonExpr
+	TaskId string
 }
 
 func (node *ShowCcprSubscriptions) Format(ctx *FmtCtx) {
-	ctx.WriteString("show ccpr subscription")
-	if node.Name != "" {
-		ctx.WriteByte(' ')
-		ctx.WriteString(node.Name)
+	if node.TaskId != "" {
+		ctx.WriteString("show ccpr subscription ")
+		ctx.WriteString(node.TaskId)
 	} else {
-		ctx.WriteString("s")
-	}
-	if node.Like != nil {
-		ctx.WriteByte(' ')
-		node.Like.Format(ctx)
+		ctx.WriteString("show ccpr subscriptions")
 	}
 }
 func (node *ShowCcprSubscriptions) GetStatementType() string { return "Show Ccpr Subscriptions" }

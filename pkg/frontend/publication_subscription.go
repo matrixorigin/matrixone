@@ -1813,29 +1813,15 @@ func doShowCcprSubscriptions(ctx context.Context, ses *Session, scs *tree.ShowCc
 	// Build SQL query
 	sql := "SELECT task_id, db_name, table_name, sync_level, state, error_message, watermark FROM mo_catalog.mo_ccpr_log WHERE 1=1"
 
+	// Filter by task_id if specified
+	if scs.TaskId != "" {
+		escapedTaskId := strings.ReplaceAll(scs.TaskId, "'", "''")
+		sql += fmt.Sprintf(" AND task_id = '%s'", escapedTaskId)
+	}
+
 	// Filter by account_id: sys account sees all, others see only their own
 	if accountId != catalog.System_Account {
 		sql += fmt.Sprintf(" AND account_id = %d", accountId)
-	}
-
-	// Handle pub_name filter if specified (exact match takes priority over LIKE)
-	if scs.Name != "" {
-		// Escape single quotes to prevent SQL injection
-		escapedName := strings.ReplaceAll(scs.Name, "'", "''")
-		sql += fmt.Sprintf(" AND task_id = '%s'", escapedName)
-	} else {
-		// Handle LIKE clause only if Name is not specified
-		like := scs.Like
-		if like != nil {
-			right, ok := like.Right.(*tree.NumVal)
-			if !ok || right.Kind() != tree.Str {
-				err = moerr.NewInternalError(ctx, "like clause must be a string")
-				return
-			}
-			// Escape single quotes to prevent SQL injection
-			likePattern := strings.ReplaceAll(right.String(), "'", "''")
-			sql += fmt.Sprintf(" AND task_id LIKE '%s'", likePattern)
-		}
 	}
 
 	sql += " ORDER BY created_at DESC;"

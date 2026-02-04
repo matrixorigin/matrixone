@@ -896,19 +896,7 @@ func gcRecord(
 
 	// For dropped records, check if we should delete the record itself
 	if record.dropAt != nil && record.state == SubscriptionStateDropped {
-		// Check if all snapshots are deleted
-		remainingSnapshots, err := queryTaskSnapshots(ctx, upstreamExecutor, record.taskID)
-		if err != nil {
-			logutil.Error("Publication-Task GC failed to query remaining snapshots",
-				zap.String("taskID", record.taskID),
-				zap.Error(err),
-			)
-			return
-		}
-
-		if len(remainingSnapshots) == 0 && record.dropAt.Before(gcTime) {
-			deleteCcprLogRecordInSeparateTxn(ctx, txnEngine, cnTxnClient, cnUUID, record.taskID)
-		}
+		deleteCcprLogRecordInSeparateTxn(ctx, txnEngine, cnTxnClient, cnUUID, record.taskID)
 	}
 }
 
@@ -1049,73 +1037,6 @@ type snapshotInfo struct {
 	name string
 	lsn  uint64
 	ts   time.Time
-}
-
-func queryTaskSnapshots(
-	ctx context.Context,
-	upstreamExecutor SQLExecutor,
-	taskID string,
-) ([]snapshotInfo, error) {
-	// Query snapshots with pattern ccpr_<taskID>_*
-	snapshotPattern := fmt.Sprintf("ccpr_%s_%%", taskID)
-	sql := fmt.Sprintf(`SELECT sname, ts FROM mo_catalog.mo_snapshots WHERE sname LIKE '%s' ORDER BY sname`, snapshotPattern)
-
-	result, cancel, err := upstreamExecutor.ExecSQL(ctx, nil, sql, false, false, time.Minute)
-	if err != nil {
-		return nil, err
-	}
-	defer cancel()
-	defer result.Close()
-
-	var snapshots []snapshotInfo
-	for result.Next() {
-		var snapshotName string
-		var tsValue int64
-		if err := result.Scan(&snapshotName, &tsValue); err != nil {
-			return nil, err
-		}
-
-		// Parse LSN from snapshot name: ccpr_<taskID>_<lsn>
-		var parsedTaskID string
-		var lsn uint64
-		// Use strings.Cut to parse the snapshot name format: ccpr_<uuid>_<lsn>
-		prefix := "ccpr_"
-		if !strings.HasPrefix(snapshotName, prefix) {
-			logutil.Warn("Publication-Task GC failed to parse snapshot name: invalid prefix",
-				zap.String("snapshotName", snapshotName),
-			)
-			continue
-		}
-		rest := snapshotName[len(prefix):]
-		// Find the last underscore to separate uuid from lsn
-		lastUnderscore := strings.LastIndex(rest, "_")
-		if lastUnderscore == -1 {
-			logutil.Warn("Publication-Task GC failed to parse snapshot name: no underscore found",
-				zap.String("snapshotName", snapshotName),
-			)
-			continue
-		}
-		parsedTaskID = rest[:lastUnderscore]
-		_, err := fmt.Sscanf(rest[lastUnderscore+1:], "%d", &lsn)
-		if err != nil {
-			logutil.Warn("Publication-Task GC failed to parse snapshot name",
-				zap.String("snapshotName", snapshotName),
-				zap.Error(err),
-			)
-			continue
-		}
-		_ = parsedTaskID // unused but kept for clarity
-
-		// Convert ts (nanoseconds) to time.Time
-		ts := time.Unix(0, tsValue).UTC()
-		snapshots = append(snapshots, snapshotInfo{
-			name: snapshotName,
-			lsn:  lsn,
-			ts:   ts,
-		})
-	}
-
-	return snapshots, nil
 }
 
 func determineSnapshotsToDelete(

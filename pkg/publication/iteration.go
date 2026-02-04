@@ -777,7 +777,7 @@ func RequestUpstreamSnapshot(
 	}
 
 	// Delete old snapshots with LSN smaller than current - 1 (keep last 2 snapshots)
-	if iterationCtx.IterationLSN > 2 {
+	if iterationCtx.IterationLSN >= 2 {
 		oldSnapshotName := GenerateSnapshotName(iterationCtx.TaskID, iterationCtx.IterationLSN-2)
 		dropSQL := PublicationSQLBuilder.DropCcprSnapshotSQL(oldSnapshotName, iterationCtx.SubscriptionAccountName, iterationCtx.SubscriptionName)
 		dropResult, dropCancel, dropErr := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, dropSQL, false, true, time.Minute)

@@ -4695,17 +4695,13 @@ show_subscriptions_stmt:
     }
 
 show_ccpr_subscriptions_stmt:
-    SHOW CCPR SUBSCRIPTION db_name like_opt
+    SHOW CCPR SUBSCRIPTION STRING
     {
-	    $$ = &tree.ShowCcprSubscriptions{Name: $4, Like: $5}
+	    $$ = &tree.ShowCcprSubscriptions{TaskId: $4}
     }
-|   SHOW CCPR SUBSCRIPTION like_opt
+|   SHOW CCPR SUBSCRIPTIONS
     {
-	    $$ = &tree.ShowCcprSubscriptions{Like: $4}
-    }
-|   SHOW CCPR SUBSCRIPTIONS like_opt
-    {
-	    $$ = &tree.ShowCcprSubscriptions{Like: $4}
+	    $$ = &tree.ShowCcprSubscriptions{}
     }
 
 like_opt:
