@@ -182,6 +182,9 @@ const (
 	MO_BRANCH_METADATA  = "mo_branch_metadata"
 	MO_FEATURE_LIMIT    = "mo_feature_limit"
 	MO_FEATURE_REGISTRY = "mo_feature_registry"
+
+	MO_CCPR_TABLES = "mo_ccpr_tables"
+	MO_CCPR_DBS    = "mo_ccpr_dbs"
 )
 
 func IsSystemTable(id uint64) bool {
@@ -794,6 +797,26 @@ var (
 		types.New(types.T_TS, 0, 0),                        // committs
 		types.New(types.T_uuid, 0, 0),                      // segment_id
 		types.New(types.T_TS, 0, 0),                        // flush_point
+	}
+
+	// mo_ccpr_tables schema: tableid (pk), taskid
+	MoCCPRTablesSchema = []string{
+		"tableid",
+		"taskid",
+	}
+	MoCCPRTablesTypes = []types.Type{
+		types.New(types.T_uint64, 0, 0), // tableid (primary key)
+		types.New(types.T_uuid, 0, 0),   // taskid
+	}
+
+	// mo_ccpr_dbs schema: dbid (pk), taskid
+	MoCCPRDbsSchema = []string{
+		"dbid",
+		"taskid",
+	}
+	MoCCPRDbsTypes = []types.Type{
+		types.New(types.T_uint64, 0, 0), // dbid (primary key)
+		types.New(types.T_uuid, 0, 0),   // taskid
 	}
 )
 

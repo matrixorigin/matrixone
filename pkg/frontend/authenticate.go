@@ -1032,6 +1032,8 @@ var (
 		MoCatalogMoIndexUpdateDDL,
 		MoCatalogBranchMetadataDDL,
 		MoCatalogMoCcprLogDDL,
+		MoCatalogMoCcprTablesDDL,
+		MoCatalogMoCcprDbsDDL,
 		MoCatalogFeatureLimitDDL,
 		MoCatalogFeatureRegistryDDL,
 		MoCatalogFeatureRegistryInitData,

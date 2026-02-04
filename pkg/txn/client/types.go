@@ -292,6 +292,9 @@ type Workspace interface {
 	// SetCCPRTxn marks this transaction as a CCPR transaction.
 	// CCPR transactions will call CCPRTxnCache.OnTxnCommit/OnTxnRollback when committing/rolling back.
 	SetCCPRTxn()
+
+	// IsCCPRTxn returns true if this is a CCPR transaction.
+	IsCCPRTxn() bool
 }
 
 // TxnOverview txn overview include meta and status
