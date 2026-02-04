@@ -271,7 +271,21 @@ func (c *DashboardCreator) initTxnStarcountRow() dashboard.Option {
 		6,
 		axis.Min(1))
 
-	options := []row.Option{pathRate, durationHistogram, resultRowsHistogram, ratioHistogram}
+	// Appendable data object scan (S3 I/O when counting rows by commit_ts)
+	appendableScanDurationHistogram := c.getHistogram(
+		"StarCount Appendable Scan Duration (appendable 块扫描 S3 耗时)",
+		c.getMetricWithFilter(`mo_txn_starcount_appendable_scan_duration_seconds_bucket`, ``),
+		[]float64{0.50, 0.8, 0.90, 0.99},
+		6,
+		axis.Unit("s"), axis.Min(0))
+	appendableObjectsScannedHistogram := c.getHistogram(
+		"StarCount Appendable Objects Scanned (每次调用扫描的 appendable 对象数)",
+		c.getMetricWithFilter(`mo_txn_starcount_appendable_objects_scanned_bucket`, ``),
+		[]float64{0.50, 0.8, 0.90, 0.99},
+		6,
+		axis.Min(0))
+
+	options := []row.Option{pathRate, durationHistogram, resultRowsHistogram, ratioHistogram, appendableScanDurationHistogram, appendableObjectsScannedHistogram}
 	options = append(options, estimateHistograms...)
 
 	return dashboard.Row(
