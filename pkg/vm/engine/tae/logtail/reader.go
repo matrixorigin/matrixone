@@ -50,8 +50,8 @@ func (r *Reader) GetDirty() (tree *model.Tree, count int) {
 		} else if memo.HasAnyTableDataChanges() {
 			row.GetTxnState(true)
 			tree.Merge(memo.GetDirty())
-			count++
 		}
+		count++
 		return true
 	}
 
@@ -66,7 +66,6 @@ func (r *Reader) GetDirty() (tree *model.Tree, count int) {
 			summary = blk.summary.Load()
 		}
 		mergeSummary(tree, summary)
-		count += len(blk.rows)
 		iterateOnCompact = false
 	}
 
