@@ -32,7 +32,9 @@ const (
 	DefaultSyncProtectionTTL = 20 * time.Minute
 
 	// DefaultMaxSyncProtections is the default maximum number of sync protections
-	DefaultMaxSyncProtections = 100
+	// Set to a large value to support many concurrent sync jobs
+	// Jobs may take ~1.5 hours to be cleaned up after completion
+	DefaultMaxSyncProtections = 1000000
 )
 
 // SyncProtection represents a single sync protection entry

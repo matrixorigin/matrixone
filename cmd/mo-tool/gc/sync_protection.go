@@ -37,6 +37,25 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// DBQuerier is an interface for database query operations
+type DBQuerier interface {
+	QueryRow(query string, args ...any) *sql.Row
+	Close() error
+}
+
+// dbWrapper wraps *sql.DB to implement DBQuerier
+type dbWrapper struct {
+	db *sql.DB
+}
+
+func (w *dbWrapper) QueryRow(query string, args ...any) *sql.Row {
+	return w.db.QueryRow(query, args...)
+}
+
+func (w *dbWrapper) Close() error {
+	return w.db.Close()
+}
+
 // SyncProtectionRequest represents a sync protection request
 type SyncProtectionRequest struct {
 	JobID      string `json:"job_id"`
@@ -47,7 +66,7 @@ type SyncProtectionRequest struct {
 
 // SyncProtectionTester tests the sync protection mechanism
 type SyncProtectionTester struct {
-	db             *sql.DB
+	db             DBQuerier
 	dataDir        string
 	jobID          string
 	protectedFiles []string
@@ -67,7 +86,7 @@ func newSyncProtectionTester(dsn, dataDir string, sampleCount int, verbose bool,
 	}
 
 	return &SyncProtectionTester{
-		db:          db,
+		db:          &dbWrapper{db: db},
 		dataDir:     dataDir,
 		jobID:       fmt.Sprintf("sync-test-%d", time.Now().UnixNano()),
 		sampleCount: sampleCount,
