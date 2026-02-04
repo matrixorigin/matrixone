@@ -405,7 +405,7 @@ func (rb *remoteBackend) doSend(f *Future) error {
 }
 
 func (rb *remoteBackend) Close() {
-	rb.metrics.closeCounter.Inc()
+	// closeCounter is incremented once per backend in doClose() to avoid double-counting when Close() is called multiple times.
 	rb.cancelOnce.Do(func() {
 		rb.cancel()
 	})
@@ -819,6 +819,9 @@ func (rb *remoteBackend) doClose() {
 		rb.closeConn(false)
 		// TODO: re create when reconnect
 		rb.conn = nil
+		if rb.metrics != nil {
+			rb.metrics.closeCounter.Inc()
+		}
 	})
 }
 
