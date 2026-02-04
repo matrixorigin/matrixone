@@ -409,9 +409,9 @@ col1
 10001
 10002
 Insert into auto_increment05 values(10001);
-Duplicate entry '10001' for key '(.*)'
+Duplicate entry '10001' for key '(__\w{2}_\w{5}_\w{3}_\w{3})|(\w{4})'
 Insert into auto_increment05 values(10002);
-Duplicate entry '10002' for key '(.*)'
+Duplicate entry '10002' for key '(__\w{2}_\w{5}_\w{3}_\w{3})|(\w{4})'
 Select * from auto_increment05;
 col1
 10000
