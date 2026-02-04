@@ -59,7 +59,7 @@ commit;
 select * from atomic_table_11;
 -- @bvt:issue
 
--- @bvt:issue#10491
+
 drop table if exists atomic_table_11;
 create table atomic_table_11(c1 int,c2 varchar(25));
 insert into atomic_table_11 values (3,"a"),(4,"b"),(5,"c");
@@ -74,7 +74,7 @@ select * from atomic_table_11;
 -- @session}
 rollback ;
 select * from atomic_table_11;
--- @bvt:issue
+
 
 drop table if exists atomic_table_11;
 create table atomic_table_11(c1 int,c2 varchar(25));

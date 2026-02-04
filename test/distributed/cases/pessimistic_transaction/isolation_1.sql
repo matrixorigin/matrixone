@@ -177,7 +177,6 @@ select * from test_11;
 select * from test_11;
 
 -- -------------------------------------------------------
--- @bvt:issue#10585
 drop table if exists test_11;
 create table test_11 (c int primary key,d int);
 Insert into test_11 values(1,1);
@@ -209,9 +208,8 @@ commit;
 select * from test_11;
 -- @session}
 select * from test_11;
--- @bvt:issue
+
 -- -------------------------------------------------------
--- @bvt:issue#10585
 drop table if exists test_11;
 create table test_11 (c int primary key,d int);
 Insert into test_11 values(1,1);
@@ -243,9 +241,8 @@ commit;
 select * from test_11;
 -- @session}
 select * from test_11;
--- @bvt:issue
+
 -- -------------------------------------------------------
--- @bvt:issue#10585
 drop table if exists test_11;
 create table test_11 (c int primary key,d int);
 Insert into test_11 values(1,1);
@@ -277,7 +274,6 @@ commit;
 select * from test_11;
 -- @session}
 select * from test_11;
--- @bvt:issue
 
 -- -------------------------------------------------------
 drop table if exists test_11;
