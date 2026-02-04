@@ -612,7 +612,6 @@ func FillDDLOperation(
 			} else if ddlInfo.TableCreateSQL != "" {
 				// Table ID matches, check if create SQL changed
 				currentCreateSQL, err := getCurrentTableCreateSQL(ctx, rel, dbName, tableName)
-				logutil.Infof("lalala create sql is %v")
 				if err != nil {
 					return moerr.NewInternalErrorf(ctx, "failed to get current table create SQL for %s.%s: %v", dbName, tableName, err)
 				}

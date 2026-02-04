@@ -112,6 +112,7 @@ const (
 	PublicationUpdateMoCcprLogNoStateSqlTemplate = `UPDATE mo_catalog.mo_ccpr_log ` +
 		`SET iteration_state = %d, ` +
 		`iteration_lsn = %d, ` +
+		`watermark = %d, ` +
 		`context = '%s', ` +
 		`error_message = '%s' ` +
 		`WHERE task_id = '%s'`
@@ -435,12 +436,12 @@ func (b publicationSQLBuilder) GetDdlSQL(
 ) string {
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationGetDdlSqlTemplate_Idx].SQL,
-		escapeSQLString(snapshotName),
+		escapeOrPlaceholder(snapshotName),
 		escapeSQLString(subscriptionAccountName),
 		escapeSQLString(pubName),
 		escapeSQLString(level),
-		escapeSQLString(dbName),
-		escapeSQLString(tableName),
+		escapeOrPlaceholder(dbName),
+		escapeOrPlaceholder(tableName),
 	)
 }
 
@@ -505,12 +506,12 @@ func (b publicationSQLBuilder) GetDatabasesSQL(
 ) string {
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationGetDatabasesSqlTemplate_Idx].SQL,
-		escapeSQLString(snapshotName),
+		escapeOrPlaceholder(snapshotName),
 		escapeSQLString(accountName),
 		escapeSQLString(publicationName),
 		escapeSQLString(level),
-		escapeSQLString(dbName),
-		escapeSQLString(tableName),
+		escapeOrPlaceholder(dbName),
+		escapeOrPlaceholder(tableName),
 	)
 }
 
@@ -565,11 +566,12 @@ func (b publicationSQLBuilder) QueryMoCcprLogStateBeforeUpdateSQL(taskID string)
 
 // UpdateMoCcprLogNoStateSQL creates SQL for updating mo_ccpr_log without state field
 // Used for successful iterations where we don't need to change the subscription state
-// Example: UPDATE mo_catalog.mo_ccpr_log SET iteration_state = 2, iteration_lsn = 1001, context = '...', error_message = " WHERE task_id = 'uuid'
+// Example: UPDATE mo_catalog.mo_ccpr_log SET iteration_state = 2, iteration_lsn = 1001, watermark = 12345, context = '...', error_message = " WHERE task_id = 'uuid'
 func (b publicationSQLBuilder) UpdateMoCcprLogNoStateSQL(
 	taskID string,
 	iterationState int8,
 	iterationLSN uint64,
+	watermark int64,
 	contextJSON string,
 	errorMessage string,
 ) string {
@@ -577,6 +579,7 @@ func (b publicationSQLBuilder) UpdateMoCcprLogNoStateSQL(
 		PublicationSQLTemplates[PublicationUpdateMoCcprLogNoStateSqlTemplate_Idx].SQL,
 		iterationState,
 		iterationLSN,
+		watermark,
 		escapeSQLString(contextJSON),
 		escapeSQLString(errorMessage),
 		taskID,
@@ -612,6 +615,15 @@ func escapeSQLString(s string) string {
 	// Replace single quotes with double single quotes (SQL standard escaping)
 	s = strings.ReplaceAll(s, "'", "''")
 	return s
+}
+
+// escapeOrPlaceholder returns "-" if the string is empty, otherwise escapes the string
+// This is used for internal command parameters where empty string would cause parsing issues
+func escapeOrPlaceholder(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return escapeSQLString(s)
 }
 
 // escapeSQLIdentifier escapes SQL identifiers (table names, column names, etc.)

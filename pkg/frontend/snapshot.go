@@ -2985,10 +2985,10 @@ func handleGetDatabases(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetDatab
 		return err
 	}
 
-	// Step 2: Get snapshot ts using authorized account context - if snapshot name is empty, use current timestamp (0)
+	// Step 2: Get snapshot ts using authorized account context - if snapshot name is empty or "-", use current timestamp (0)
 	snapshotCtx := defines.AttachAccountId(ctx, uint32(accountID))
 	var snapshotTs int64
-	if ic.snapshotName == "" {
+	if ic.snapshotName == "" || ic.snapshotName == "-" {
 		// Use 0 to indicate current timestamp
 		snapshotTs = 0
 	} else {
@@ -3007,9 +3007,14 @@ func handleGetDatabases(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetDatab
 	mrs.AddColumn(col)
 
 	// For database or table level, directly use the provided dbName
+	// Note: "-" is used as placeholder for empty dbName in internal command
 	if ic.level == "database" || ic.level == "table" {
+		dbNameValue := ic.dbName
+		if dbNameValue == "-" {
+			dbNameValue = ""
+		}
 		row := make([]interface{}, 1)
-		row[0] = ic.dbName
+		row[0] = dbNameValue
 		mrs.AddRow(row)
 		return nil
 	}
@@ -3065,15 +3070,27 @@ func handleGetMoIndexes(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetMoInd
 		return err
 	}
 
-	// Step 2: Get snapshot ts using authorized account context
+	// Step 2: Get snapshot ts using authorized account context - if snapshot name is empty or "-", use current timestamp (0)
 	snapshotCtx := defines.AttachAccountId(ctx, uint32(accountID))
-	snapshotTs, err := GetSnapshotTsByName(snapshotCtx, bh, ic.snapshotName)
-	if err != nil {
-		return err
+	var snapshotTs int64
+	if ic.snapshotName == "" || ic.snapshotName == "-" {
+		// Use 0 to indicate current timestamp
+		snapshotTs = 0
+	} else {
+		snapshotTs, err = GetSnapshotTsByName(snapshotCtx, bh, ic.snapshotName)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Step 3: Query mo_indexes using the snapshot timestamp
-	indexSql := fmt.Sprintf("SELECT table_id, name, algo_table_type, index_table_name FROM mo_catalog.mo_indexes{MO_TS = %d} WHERE table_id = %d", snapshotTs, ic.tableId)
+	var indexSql string
+	if snapshotTs == 0 {
+		// Use current timestamp - no MO_TS hint
+		indexSql = fmt.Sprintf("SELECT table_id, name, algo_table_type, index_table_name FROM mo_catalog.mo_indexes WHERE table_id = %d", ic.tableId)
+	} else {
+		indexSql = fmt.Sprintf("SELECT table_id, name, algo_table_type, index_table_name FROM mo_catalog.mo_indexes{MO_TS = %d} WHERE table_id = %d", snapshotTs, ic.tableId)
+	}
 
 	bh.ClearExecResultSet()
 	if err = bh.Exec(snapshotCtx, indexSql); err != nil {
@@ -3159,9 +3176,9 @@ func handleInternalGetDdl(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetDdl
 	// Query mo_snapshots using the authorized account context
 	snapshotCtx := defines.AttachAccountId(ctx, uint32(accountID))
 
-	// Step 2: Get snapshot timestamp - if snapshot name is empty, use current timestamp (0)
+	// Step 2: Get snapshot timestamp - if snapshot name is empty or "-", use current timestamp (0)
 	var snapshotTs int64
-	if ic.snapshotName == "" {
+	if ic.snapshotName == "" || ic.snapshotName == "-" {
 		// Use 0 to indicate current timestamp
 		snapshotTs = 0
 	} else {
@@ -3191,7 +3208,16 @@ func handleInternalGetDdl(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetDdl
 	}
 
 	// Step 4: Compute DDL batch with snapshot timestamp using provided dbName and tableName
-	resultBatch, err := ComputeDdlBatchWithSnapshot(snapshotCtx, ic.dbName, ic.tableName, eng, mp, txn, snapshotTs)
+	// Note: "-" is used as placeholder for empty values in internal command
+	dbNameValue := ic.dbName
+	if dbNameValue == "-" {
+		dbNameValue = ""
+	}
+	tableNameValue := ic.tableName
+	if tableNameValue == "-" {
+		tableNameValue = ""
+	}
+	resultBatch, err := ComputeDdlBatchWithSnapshot(snapshotCtx, dbNameValue, tableNameValue, eng, mp, txn, snapshotTs)
 	if err != nil {
 		return err
 	}

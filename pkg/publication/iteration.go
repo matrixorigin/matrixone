@@ -473,6 +473,7 @@ func UpdateIterationStateNoSubscriptionState(
 	taskID string,
 	iterationState int8,
 	iterationLSN uint64,
+	watermark int64,
 	iterationCtx *IterationContext,
 	useTxn bool,
 	errorMessage string,
@@ -541,6 +542,7 @@ func UpdateIterationStateNoSubscriptionState(
 		taskID,
 		iterationState,
 		iterationLSN,
+		watermark,
 		contextJSON,
 		errorMessage,
 	)
@@ -1249,11 +1251,15 @@ func ExecuteIteration(
 					updateErr = UpdateIterationState(ctx, iterationCtx.LocalExecutor, taskID, finalState, nextLSN, iterationCtx, errorMsg, true, SubscriptionStateError)
 				} else {
 					// Retryable error: don't change subscription state
-					updateErr = UpdateIterationStateNoSubscriptionState(ctx, iterationCtx.LocalExecutor, taskID, finalState, nextLSN, iterationCtx, true, errorMsg)
+					// Use current snapshot ts as watermark
+					watermark := int64(iterationCtx.CurrentSnapshotTS.Physical())
+					updateErr = UpdateIterationStateNoSubscriptionState(ctx, iterationCtx.LocalExecutor, taskID, finalState, nextLSN, watermark, iterationCtx, true, errorMsg)
 				}
 			} else {
 				// Success case: don't set subscription state
-				updateErr = UpdateIterationStateNoSubscriptionState(ctx, iterationCtx.LocalExecutor, taskID, finalState, nextLSN, iterationCtx, true, errorMsg)
+				// Use current snapshot ts as watermark
+				watermark := int64(iterationCtx.CurrentSnapshotTS.Physical())
+				updateErr = UpdateIterationStateNoSubscriptionState(ctx, iterationCtx.LocalExecutor, taskID, finalState, nextLSN, watermark, iterationCtx, true, errorMsg)
 			}
 
 			if updateErr != nil {

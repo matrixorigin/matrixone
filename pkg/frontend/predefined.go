@@ -297,6 +297,7 @@ var (
 				state TINYINT NOT NULL DEFAULT 0,
 				iteration_state TINYINT NOT NULL DEFAULT 0,
 				iteration_lsn BIGINT DEFAULT 0,
+				watermark BIGINT DEFAULT 0,
 				context JSON,
 				cn_uuid VARCHAR(64),
 				error_message VARCHAR(5000),

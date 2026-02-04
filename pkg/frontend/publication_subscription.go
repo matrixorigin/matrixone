@@ -1811,7 +1811,7 @@ func doShowCcprSubscriptions(ctx context.Context, ses *Session, scs *tree.ShowCc
 	}()
 
 	// Build SQL query
-	sql := "SELECT subscription_name, db_name, table_name, sync_level, iteration_state, error_message, context FROM mo_catalog.mo_ccpr_log WHERE 1=1"
+	sql := "SELECT subscription_name, db_name, table_name, sync_level, iteration_state, error_message, watermark FROM mo_catalog.mo_ccpr_log WHERE 1=1"
 
 	// Filter by account_id: sys account sees all, others see only their own
 	if accountId != catalog.System_Account {
@@ -1863,12 +1863,12 @@ func doShowCcprSubscriptions(ctx context.Context, ses *Session, scs *tree.ShowCc
 				syncLevel        string
 				iterationState   int64
 				errorMessage     string
-				contextJSON      string
+				watermarkTs      int64
 				isNull           bool
 			)
 
 			// Extract values from result
-			// SELECT subscription_name, db_name, table_name, sync_level, iteration_state, error_message, context
+			// SELECT subscription_name, db_name, table_name, sync_level, iteration_state, error_message, watermark
 			if subscriptionName, err = result.GetString(ctx, i, 0); err != nil {
 				return err
 			}
@@ -1905,12 +1905,12 @@ func doShowCcprSubscriptions(ctx context.Context, ses *Session, scs *tree.ShowCc
 					return err
 				}
 			}
-			// Handle nullable context
+			// Handle nullable watermark
 			if isNull, err = result.ColumnIsNull(ctx, i, 6); err != nil {
 				return err
 			}
 			if !isNull {
-				if contextJSON, err = result.GetString(ctx, i, 6); err != nil {
+				if watermarkTs, err = result.GetInt64(ctx, i, 6); err != nil {
 					return err
 				}
 			}
@@ -1924,16 +1924,11 @@ func doShowCcprSubscriptions(ctx context.Context, ses *Session, scs *tree.ShowCc
 				state = 4
 			}
 
-			// Extract watermark from context JSON
-			watermarkVal := extractWatermarkFromContext(contextJSON)
-			// Convert watermark time.Time to string if needed
+			// Convert watermark timestamp to time string
 			var watermark interface{}
-			if watermarkVal != nil {
-				if t, ok := watermarkVal.(time.Time); ok {
-					watermark = t.Format("2006-01-02 15:04:05")
-				} else {
-					watermark = watermarkVal
-				}
+			if watermarkTs > 0 {
+				// watermarkTs is physical timestamp in nanoseconds
+				watermark = time.Unix(0, watermarkTs).Format("2006-01-02 15:04:05")
 			}
 
 			// Handle NULL values for db_name and table_name
@@ -3025,8 +3020,8 @@ func queryUpstreamAndCreateLocalDBTables(
 	// Set context for downstream operations
 	downstreamCtx := defines.AttachAccountId(ctx, accountId)
 
-	// Use empty snapshot name - frontend will use current timestamp if snapshot is empty
-	snapshotName := ""
+	// Use "-" as snapshot name placeholder - frontend will use current timestamp if snapshot is "-"
+	snapshotName := "-"
 
 	// Step 1: Get databases from upstream using internal command
 	getDatabasesSQL := publication.PublicationSQLBuilder.GetDatabasesSQL(snapshotName, subscriptionAccountName, pubName, syncLevel, dbName, tableName)
@@ -3134,7 +3129,7 @@ func queryUpstreamAndCreateLocalDBTables(
 		tableIDs[key] = TableIDInfo{TableID: localTableID, DbID: dbID}
 
 		// Get index table mappings (upstream index table name -> downstream index table name)
-		upstreamIndexTables, err := getUpstreamIndexTables(ctx, upstreamExecutor, upstreamDbName, upstreamTableName)
+		upstreamIndexTables, err := getUpstreamIndexTables(ctx, upstreamExecutor, uint64(upstreamTableID), subscriptionAccountName, pubName, snapshotName)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -3269,17 +3264,14 @@ func getUpstreamCreateTableDDL(ctx context.Context, executor publication.SQLExec
 	return "", moerr.NewInternalErrorf(ctx, "no CREATE TABLE result for '%s.%s'", dbName, tableName)
 }
 
-// getUpstreamIndexTables gets index tables from upstream for a given table
+// getUpstreamIndexTables gets index tables from upstream for a given table using internal command
+// Uses __++__internal_get_mo_indexes <tableId> <subscriptionAccountName> <publicationName> <snapshotName>
 // Returns map[indexTableName] -> indexName
-func getUpstreamIndexTables(ctx context.Context, executor publication.SQLExecutor, dbName, tableName string) (map[string]string, error) {
+func getUpstreamIndexTables(ctx context.Context, executor publication.SQLExecutor, tableID uint64, subscriptionAccountName, pubName, snapshotName string) (map[string]string, error) {
 	indexTables := make(map[string]string)
 
-	// Query mo_indexes to get index table names
-	sql := fmt.Sprintf(
-		"SELECT index_table_name, name FROM mo_catalog.mo_indexes WHERE reldatabase = '%s' AND relname = '%s' AND index_table_name != ''",
-		strings.ReplaceAll(dbName, "'", "''"),
-		strings.ReplaceAll(tableName, "'", "''"),
-	)
+	// Query mo_indexes using internal command
+	sql := publication.PublicationSQLBuilder.QueryMoIndexesSQL(tableID, subscriptionAccountName, pubName, snapshotName)
 	result, cancel, err := executor.ExecSQL(ctx, nil, sql, false, false, 0)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to query upstream index tables: %v", err)
@@ -3287,12 +3279,16 @@ func getUpstreamIndexTables(ctx context.Context, executor publication.SQLExecuto
 	defer cancel()
 	defer result.Close()
 
+	// QueryMoIndexesSQL returns: table_id, name, algo_table_type, index_table_name
 	for result.Next() {
-		var indexTableName, indexName string
-		if err := result.Scan(&indexTableName, &indexName); err != nil {
+		var resTableID int64
+		var indexName, algoTableType, indexTableName string
+		if err := result.Scan(&resTableID, &indexName, &algoTableType, &indexTableName); err != nil {
 			return nil, moerr.NewInternalErrorf(ctx, "failed to scan upstream index table result: %v", err)
 		}
-		indexTables[indexTableName] = indexName
+		if indexTableName != "" {
+			indexTables[indexTableName] = indexName
+		}
 	}
 
 	return indexTables, nil
@@ -3303,10 +3299,35 @@ func getUpstreamIndexTables(ctx context.Context, executor publication.SQLExecuto
 func getDownstreamIndexTables(ctx context.Context, bh BackgroundExec, dbName, tableName string) (map[string]string, error) {
 	indexTables := make(map[string]string)
 
-	sql := fmt.Sprintf(
-		"SELECT index_table_name, name FROM mo_catalog.mo_indexes WHERE reldatabase = '%s' AND relname = '%s' AND index_table_name != ''",
+	// First get table_id from mo_tables
+	tableIdSql := fmt.Sprintf(
+		"SELECT rel_id FROM mo_catalog.mo_tables WHERE reldatabase = '%s' AND relname = '%s'",
 		strings.ReplaceAll(dbName, "'", "''"),
 		strings.ReplaceAll(tableName, "'", "''"),
+	)
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, tableIdSql); err != nil {
+		return nil, err
+	}
+	tableIdResult, err := getResultSet(ctx, bh)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(tableIdResult) == 0 || tableIdResult[0].GetRowCount() == 0 {
+		// Table not found, return empty map
+		return indexTables, nil
+	}
+
+	tableId, err := tableIdResult[0].GetInt64(ctx, 0, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	// Query mo_indexes using table_id
+	sql := fmt.Sprintf(
+		"SELECT index_table_name, name FROM mo_catalog.mo_indexes WHERE table_id = %d AND index_table_name != ''",
+		tableId,
 	)
 	bh.ClearExecResultSet()
 	if err := bh.Exec(ctx, sql); err != nil {
