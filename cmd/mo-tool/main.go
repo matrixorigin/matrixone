@@ -37,6 +37,7 @@ func main() {
 	rootCmd.AddCommand(dashboard.PrepareCommand())
 	rootCmd.AddCommand(object.PrepareCommand())
 	rootCmd.AddCommand(ckp.PrepareCommand())
+	rootCmd.AddCommand(PrepareSyncProtectionCommand())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

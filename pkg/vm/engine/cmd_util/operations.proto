@@ -201,3 +201,11 @@ message FaultInjectReq {
     string method = 1;
     string parameter = 2;
 }
+
+message SyncProtection {
+    option (gogoproto.typedecl)     = false;
+    string Op                       = 1;  // Operation: register_sync_protection, renew_sync_protection, unregister_sync_protection
+    string JobID                    = 2;  // Sync job ID
+    repeated string Objects         = 3;  // Protected object names (for register)
+    int64 ValidTS                   = 4;  // Valid timestamp in nanoseconds (for register and renew)
+}

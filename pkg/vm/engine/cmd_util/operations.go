@@ -424,3 +424,11 @@ func (f *FaultInjectReq) MarshalBinary() ([]byte, error) {
 func (f *FaultInjectReq) UnmarshalBinary(data []byte) error {
 	return f.Unmarshal(data)
 }
+
+// SyncProtection is the request for sync protection operations
+type SyncProtection struct {
+	JobID      string `json:"job_id"`      // Sync job ID
+	BF         string `json:"bf"`          // Base64 encoded BloomFilter data (for register)
+	ValidTS    int64  `json:"valid_ts"`    // Valid timestamp in nanoseconds (for register and renew)
+	TestObject string `json:"test_object"` // Test object name for debugging (optional)
+}

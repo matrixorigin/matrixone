@@ -18,21 +18,26 @@ import (
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 	"strings"
 )
 
 func IsValidArg(parameter string, proc *process.Process) (*cmd_util.DiskCleaner, error) {
 	parameters := strings.Split(parameter, ".")
-	if len(parameters) > 3 || len(parameters) < 1 {
+	if len(parameters) < 1 {
 		return nil, moerr.NewInternalError(proc.Ctx, "handleDiskCleaner: invalid argument!")
 	}
 	op := parameters[0]
 	switch op {
 	case cmd_util.AddChecker, cmd_util.RemoveChecker:
-		break
+		// These operations need key validation, check parameter count later
+		if len(parameters) > 3 {
+			return nil, moerr.NewInternalError(proc.Ctx, "handleDiskCleaner: invalid argument!")
+		}
 	case cmd_util.StopGC, cmd_util.StartGC:
 		return &cmd_util.DiskCleaner{
 			Op: op,
@@ -51,6 +56,29 @@ func IsValidArg(parameter string, proc *process.Process) (*cmd_util.DiskCleaner,
 		return &cmd_util.DiskCleaner{
 			Op:  op,
 			Key: cmd_util.GCVerify,
+		}, nil
+	case cmd_util.RegisterSyncProtection, cmd_util.RenewSyncProtection, cmd_util.UnregisterSyncProtection:
+		// Sync protection operations expect JSON value in the second parameter
+		// Format: register_sync_protection.{"job_id":"xxx","objects":["obj1"],"valid_ts":123}
+		// Note: JSON may contain dots, so we join all remaining parts
+		value := ""
+		if len(parameters) > 1 {
+			// Join remaining parts as JSON value (in case JSON contains dots)
+			value = strings.Join(parameters[1:], ".")
+		}
+		
+		// Debug: print parameter info
+		logutil.Info(
+			"GC-Sync-Protection-CMD-Parse",
+			zap.String("op", op),
+			zap.Int("parameter-len", len(parameter)),
+			zap.Int("parts-count", len(parameters)),
+			zap.Int("value-len", len(value)),
+		)
+		
+		return &cmd_util.DiskCleaner{
+			Op:    op,
+			Value: value,
 		}, nil
 	default:
 		return nil, moerr.NewInternalError(proc.Ctx, "handleDiskCleaner: invalid operation!")

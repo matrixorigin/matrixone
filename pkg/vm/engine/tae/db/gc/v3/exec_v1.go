@@ -65,15 +65,16 @@ type CheckpointBasedGCJob struct {
 		coarseProbility    float64
 		canGCCacheSize     int
 	}
-	sourcer       engine.BaseReader
-	snapshotMeta  *logtail.SnapshotMeta
-	snapshots     *logtail.SnapshotInfo
-	iscpTables    map[uint64]types.TS
-	pitr          *logtail.PitrInfo
-	ts            *types.TS
-	globalCkpLoc  objectio.Location
-	globalCkpVer  uint32
-	checkpointCli checkpoint.Runner // Added to access catalog
+	sourcer        engine.BaseReader
+	snapshotMeta   *logtail.SnapshotMeta
+	snapshots      *logtail.SnapshotInfo
+	iscpTables     map[uint64]types.TS
+	pitr           *logtail.PitrInfo
+	ts             *types.TS
+	globalCkpLoc   objectio.Location
+	globalCkpVer   uint32
+	checkpointCli  checkpoint.Runner    // Added to access catalog
+	syncProtection *SyncProtectionManager // Sync protection manager for cross-cluster sync
 
 	result struct {
 		vecToGC    *vector.Vector
@@ -91,6 +92,7 @@ func NewCheckpointBasedGCJob(
 	iscpTables map[uint64]types.TS,
 	snapshotMeta *logtail.SnapshotMeta,
 	checkpointCli checkpoint.Runner,
+	syncProtection *SyncProtectionManager,
 	buffer *containers.OneSchemaBatchBuffer,
 	isOwner bool,
 	mp *mpool.MPool,
@@ -99,15 +101,16 @@ func NewCheckpointBasedGCJob(
 	opts ...GCJobExecutorOption,
 ) *CheckpointBasedGCJob {
 	e := &CheckpointBasedGCJob{
-		sourcer:       sourcer,
-		snapshotMeta:  snapshotMeta,
-		snapshots:     snapshots,
-		pitr:          pitr,
-		ts:            ts,
-		globalCkpLoc:  globalCkpLoc,
-		globalCkpVer:  gckpVersion,
-		iscpTables:    iscpTables,
-		checkpointCli: checkpointCli,
+		sourcer:        sourcer,
+		snapshotMeta:   snapshotMeta,
+		snapshots:      snapshots,
+		pitr:           pitr,
+		ts:             ts,
+		globalCkpLoc:   globalCkpLoc,
+		globalCkpVer:   gckpVersion,
+		iscpTables:     iscpTables,
+		checkpointCli:  checkpointCli,
+		syncProtection: syncProtection,
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -164,6 +167,7 @@ func (e *CheckpointBasedGCJob) Execute(ctx context.Context) error {
 		e.globalCkpVer,
 		e.ts,
 		&transObjects,
+		e.syncProtection,
 		e.mp,
 		e.fs,
 	)
@@ -235,6 +239,7 @@ func MakeBloomfilterCoarseFilter(
 	ckpVersion uint32,
 	ts *types.TS,
 	transObjects *map[string]map[uint64]*ObjectEntry,
+	syncProtection *SyncProtectionManager,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (
@@ -291,10 +296,19 @@ func MakeBloomfilterCoarseFilter(
 				if !createTS.LT(ts) || !dropTS.LT(ts) {
 					return
 				}
-				bm.Add(uint64(i))
+
+				// Check if the object is protected by sync protection
+				// If protected, skip marking it for GC so it stays in filesNotGC
 				buf := bat.Vecs[0].GetRawBytesAt(i)
 				stats := (objectio.ObjectStats)(buf)
 				name := stats.ObjectName().UnsafeString()
+
+				if syncProtection != nil && syncProtection.IsProtected(name) {
+					// Protected file: don't mark for GC, it will stay in filesNotGC
+					return
+				}
+
+				bm.Add(uint64(i))
 				tid := tableIDs[i]
 				if (*transObjects)[name] == nil ||
 					(*transObjects)[name][tableIDs[i]] == nil {
