@@ -30,5 +30,5 @@ use udf_bvt;
 create function sql_nl() returns varchar language sql as $$select '\\n'$$;
 select hex(body) as body_hex from mo_catalog.mo_user_defined_function where name = 'sql_nl' and db = 'udf_bvt';
 body_hex
-73656c65637420275c6e27
+73656C65637420275C6E27
 drop database udf_bvt;
