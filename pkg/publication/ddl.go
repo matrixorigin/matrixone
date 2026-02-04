@@ -441,6 +441,14 @@ func ProcessDDLChanges(
 	)
 	// Step 6: Drop databases that exist locally but not upstream
 	for _, dbName := range dbToDrop {
+		// Get database ID before deletion
+		var dbID uint64
+		db, dbErr := cnEngine.Database(downstreamCtx, dbName, iterationCtx.LocalTxn)
+		if dbErr == nil {
+			dbIDStr := db.GetDatabaseId(downstreamCtx)
+			dbID, _ = strconv.ParseUint(dbIDStr, 10, 64)
+		}
+
 		err := cnEngine.Delete(downstreamCtx, dbName, iterationCtx.LocalTxn)
 		if err != nil {
 			// Check if error is due to database not existing (similar to IF EXISTS behavior)
@@ -453,6 +461,21 @@ func ProcessDDLChanges(
 				continue
 			}
 			return moerr.NewInternalErrorf(ctx, "failed to drop database %s: %v", dbName, err)
+		}
+
+		// Delete the record from mo_ccpr_dbs if we got the database ID
+		if dbID > 0 {
+			deleteCcprSql := fmt.Sprintf(
+				"DELETE FROM `%s`.`%s` WHERE dbid = %d",
+				catalog.MO_CATALOG,
+				catalog.MO_CCPR_DBS,
+				dbID,
+			)
+			if _, _, err := iterationCtx.LocalExecutor.ExecSQL(ctx, nil, deleteCcprSql, true, true, time.Minute); err != nil {
+				logutil.Warn("CCPR: failed to delete record from mo_ccpr_dbs",
+					zap.Uint64("dbID", dbID),
+					zap.Error(err))
+			}
 		}
 	}
 
@@ -776,10 +799,26 @@ func dropTable(
 		return moerr.NewInternalErrorf(ctx, "failed to remove index table mappings: %v", err)
 	}
 
+	// Get the actual table ID before deletion
+	actualTableID := rel.GetTableID(ctx)
+
 	// Delete table using database API
 	err = db.Delete(ctx, tableName)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to drop table %s.%s: %v", dbName, tableName, err)
+	}
+
+	// Delete the record from mo_ccpr_tables
+	deleteCcprSql := fmt.Sprintf(
+		"DELETE FROM `%s`.`%s` WHERE tableid = %d",
+		catalog.MO_CATALOG,
+		catalog.MO_CCPR_TABLES,
+		actualTableID,
+	)
+	if _, _, err := executor.ExecSQL(ctx, nil, deleteCcprSql, true, true, time.Minute); err != nil {
+		logutil.Warn("CCPR: failed to delete record from mo_ccpr_tables",
+			zap.Uint64("tableID", actualTableID),
+			zap.Error(err))
 	}
 
 	delete(iterationCtx.TableIDs, TableKey{DBName: dbName, TableName: tableName})
