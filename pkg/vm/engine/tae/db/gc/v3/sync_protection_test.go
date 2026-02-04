@@ -379,3 +379,130 @@ func TestSyncProtectionManager_InvalidBFData(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unmarshal")
 }
+
+
+func TestSyncProtectionManager_DebugTestFile(t *testing.T) {
+	mgr := NewSyncProtectionManager()
+
+	// Test with no protections
+	assert.False(t, mgr.DebugTestFile("any-file"))
+
+	// Register protection
+	jobID := "job-1"
+	bfData := buildTestBF(t, []string{"protected-file"})
+	validTS := time.Now().UnixNano()
+
+	err := mgr.RegisterSyncProtection(jobID, bfData, validTS)
+	require.NoError(t, err)
+
+	// Test protected file
+	assert.True(t, mgr.DebugTestFile("protected-file"))
+
+	// Test unprotected file (may have false positives due to BloomFilter)
+	// We can't assert False here due to BloomFilter characteristics
+}
+
+func TestSyncProtectionManager_FilterProtectedFiles_EmptyFiles(t *testing.T) {
+	mgr := NewSyncProtectionManager()
+
+	jobID := "job-1"
+	bfData := buildTestBF(t, []string{"protected1"})
+	validTS := time.Now().UnixNano()
+
+	err := mgr.RegisterSyncProtection(jobID, bfData, validTS)
+	require.NoError(t, err)
+
+	// Test with empty files list
+	result := mgr.FilterProtectedFiles([]string{})
+	assert.Empty(t, result)
+}
+
+func TestSyncProtectionManager_MultipleProtections(t *testing.T) {
+	mgr := NewSyncProtectionManager()
+
+	// Register multiple protections
+	bfData1 := buildTestBF(t, []string{"obj1", "obj2"})
+	bfData2 := buildTestBF(t, []string{"obj3", "obj4"})
+
+	validTS := time.Now().UnixNano()
+
+	err := mgr.RegisterSyncProtection("job-1", bfData1, validTS)
+	require.NoError(t, err)
+	err = mgr.RegisterSyncProtection("job-2", bfData2, validTS)
+	require.NoError(t, err)
+
+	// All objects should be protected
+	assert.True(t, mgr.IsProtected("obj1"))
+	assert.True(t, mgr.IsProtected("obj2"))
+	assert.True(t, mgr.IsProtected("obj3"))
+	assert.True(t, mgr.IsProtected("obj4"))
+
+	// Filter should protect all
+	files := []string{"obj1", "obj2", "obj3", "obj4", "obj5"}
+	canDelete := mgr.FilterProtectedFiles(files)
+	assert.NotContains(t, canDelete, "obj1")
+	assert.NotContains(t, canDelete, "obj2")
+	assert.NotContains(t, canDelete, "obj3")
+	assert.NotContains(t, canDelete, "obj4")
+}
+
+func TestSyncProtectionManager_IsProtected_NoProtections(t *testing.T) {
+	mgr := NewSyncProtectionManager()
+
+	// No protections registered
+	assert.False(t, mgr.IsProtected("any-file"))
+}
+
+func TestSyncProtectionManager_SetGCRunning(t *testing.T) {
+	mgr := NewSyncProtectionManager()
+
+	// Initial state
+	assert.False(t, mgr.IsGCRunning())
+
+	// Set running
+	mgr.SetGCRunning(true)
+	assert.True(t, mgr.IsGCRunning())
+
+	// Set not running
+	mgr.SetGCRunning(false)
+	assert.False(t, mgr.IsGCRunning())
+}
+
+func TestSyncProtectionManager_GetProtectionCountByState_Empty(t *testing.T) {
+	mgr := NewSyncProtectionManager()
+
+	active, softDeleted := mgr.GetProtectionCountByState()
+	assert.Equal(t, 0, active)
+	assert.Equal(t, 0, softDeleted)
+}
+
+func TestSyncProtectionManager_CleanupExpired_NoExpired(t *testing.T) {
+	mgr := NewSyncProtectionManager()
+	mgr.ttl = time.Hour // Long TTL
+
+	jobID := "test-job-1"
+	bfData := buildTestBF(t, []string{"object1"})
+	validTS := time.Now().UnixNano()
+
+	err := mgr.RegisterSyncProtection(jobID, bfData, validTS)
+	require.NoError(t, err)
+
+	// Cleanup should not remove anything
+	mgr.CleanupExpired()
+	assert.Equal(t, 1, mgr.GetProtectionCount())
+}
+
+func TestSyncProtectionManager_CleanupSoftDeleted_NoSoftDeleted(t *testing.T) {
+	mgr := NewSyncProtectionManager()
+
+	jobID := "job-1"
+	bfData := buildTestBF(t, []string{"obj"})
+	validTS := int64(1000)
+
+	err := mgr.RegisterSyncProtection(jobID, bfData, validTS)
+	require.NoError(t, err)
+
+	// Not soft deleted, cleanup should not remove
+	mgr.CleanupSoftDeleted(2000)
+	assert.Equal(t, 1, mgr.GetProtectionCount())
+}

@@ -326,6 +326,20 @@ func (t *SyncProtectionTester) RunTest() error {
 	fmt.Printf("Wait time: %d seconds\n", t.waitTime)
 	fmt.Println()
 
+	// Ensure cleanup on exit
+	registered := false
+	defer func() {
+		if registered {
+			fmt.Println("[Cleanup] Ensuring protection is unregistered...")
+			if err := t.UnregisterProtection(); err != nil {
+				// Ignore error if already unregistered
+				fmt.Printf("  (Already unregistered or error: %v)\n", err)
+			} else {
+				fmt.Println("  ✓ Cleanup successful!")
+			}
+		}
+	}()
+
 	// Step 1: Scan object files
 	fmt.Println("[Step 1] Scanning object files...")
 	objects, err := t.ScanObjectFiles()
@@ -356,6 +370,7 @@ func (t *SyncProtectionTester) RunTest() error {
 	if err := t.RegisterProtection(selected); err != nil {
 		return fmt.Errorf("failed to register protection: %w", err)
 	}
+	registered = true
 	fmt.Println("  ✓ Registration successful!")
 
 	// Step 4: Check initial file status
@@ -415,6 +430,7 @@ func (t *SyncProtectionTester) RunTest() error {
 	if err := t.UnregisterProtection(); err != nil {
 		fmt.Printf("  ⚠ Warning: Unregister failed: %v\n", err)
 	} else {
+		registered = false // Mark as unregistered so defer won't try again
 		fmt.Println("  ✓ Unregister successful!")
 	}
 
