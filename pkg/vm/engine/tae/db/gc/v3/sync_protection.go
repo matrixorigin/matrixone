@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"go.uber.org/zap"
@@ -52,17 +51,14 @@ type SyncProtectionManager struct {
 	gcRunning   atomic.Bool                // Whether GC is running
 	ttl         time.Duration              // TTL for non-soft-deleted protections
 	maxCount    int                        // Maximum number of protections
-	mp          *mpool.MPool               // Memory pool for vector operations
 }
 
 // NewSyncProtectionManager creates a new SyncProtectionManager
 func NewSyncProtectionManager() *SyncProtectionManager {
-	mp, _ := mpool.NewMPool("sync_protection", 0, mpool.NoFixed)
 	return &SyncProtectionManager{
 		protections: make(map[string]*SyncProtection),
 		ttl:         DefaultSyncProtectionTTL,
 		maxCount:    DefaultMaxSyncProtections,
-		mp:          mp,
 	}
 }
 
@@ -345,20 +341,6 @@ func (m *SyncProtectionManager) FilterProtectedFiles(files []string) []string {
 		return files
 	}
 
-	// Collect all BloomFilters
-	type bfEntry struct {
-		jobID string
-		bf    *index.BloomFilter
-	}
-	var bfs []bfEntry
-	for jobID, p := range m.protections {
-		bfs = append(bfs, bfEntry{jobID: jobID, bf: &p.BF})
-	}
-
-	if len(bfs) == 0 {
-		return files
-	}
-
 	// Build result: files that are NOT protected
 	result := make([]string, 0, len(files))
 	protectedCount := 0
@@ -367,8 +349,8 @@ func (m *SyncProtectionManager) FilterProtectedFiles(files []string) []string {
 		protected := false
 
 		// Check against each BloomFilter
-		for _, entry := range bfs {
-			if contains, err := entry.bf.MayContainsKey([]byte(f)); err == nil && contains {
+		for _, p := range m.protections {
+			if contains, err := p.BF.MayContainsKey([]byte(f)); err == nil && contains {
 				protected = true
 				break
 			}
@@ -391,22 +373,4 @@ func (m *SyncProtectionManager) FilterProtectedFiles(files []string) []string {
 	}
 
 	return result
-}
-
-// DebugTestFile tests if a single file is protected (for debugging purposes)
-func (m *SyncProtectionManager) DebugTestFile(fileName string) bool {
-	m.RLock()
-	defer m.RUnlock()
-
-	if len(m.protections) == 0 {
-		return false
-	}
-
-	for _, p := range m.protections {
-		if result, err := p.BF.MayContainsKey([]byte(fileName)); err == nil && result {
-			return true
-		}
-	}
-
-	return false
 }

@@ -385,28 +385,6 @@ func TestSyncProtectionManager_InvalidBFData(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid sync protection")
 }
 
-
-func TestSyncProtectionManager_DebugTestFile(t *testing.T) {
-	mgr := NewSyncProtectionManager()
-
-	// Test with no protections
-	assert.False(t, mgr.DebugTestFile("any-file"))
-
-	// Register protection
-	jobID := "job-1"
-	bfData := buildTestBF(t, []string{"protected-file"})
-	validTS := time.Now().UnixNano()
-
-	err := mgr.RegisterSyncProtection(jobID, bfData, validTS)
-	require.NoError(t, err)
-
-	// Test protected file
-	assert.True(t, mgr.DebugTestFile("protected-file"))
-
-	// Test unprotected file (may have false positives due to BloomFilter)
-	// We can't assert False here due to BloomFilter characteristics
-}
-
 func TestSyncProtectionManager_FilterProtectedFiles_EmptyFiles(t *testing.T) {
 	mgr := NewSyncProtectionManager()
 

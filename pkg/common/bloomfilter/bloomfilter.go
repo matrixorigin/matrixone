@@ -183,59 +183,6 @@ func (bf *BloomFilter) TestRow(v *vector.Vector, row int) bool {
 	return true
 }
 
-// TestRowDebug tests if a single row might be in the bloom filter with debug info.
-// Returns (result, encodedKey, hashVals)
-func (bf *BloomFilter) TestRowDebug(v *vector.Vector, row int) (bool, []byte, []uint64) {
-	if row < 0 || row >= v.Length() {
-		return false, nil, nil
-	}
-
-	bf.keys[0] = bf.keys[0][:0]
-	encodeHashKeys(bf.keys[:1], v, row, 1)
-
-	// Copy the encoded key for debugging
-	encodedKey := make([]byte, len(bf.keys[0]))
-	copy(encodedKey, bf.keys[0])
-
-	bitSize := uint64(bf.shared.bitmap.Len())
-	lastSeed := len(bf.shared.hashSeed) - 1
-
-	getIdxVal := func(v uint64) uint64 {
-		if bitSize == 0 || v < bitSize {
-			return v
-		} else {
-			return v % bitSize
-		}
-	}
-
-	for k := 0; k < lastSeed; k++ {
-		hashtable.BytesBatchGenHashStatesWithSeed(&bf.keys[0], &bf.states[0], 1, bf.shared.hashSeed[k])
-		idx := k * 3
-		bf.vals[0][idx] = getIdxVal(bf.states[0][0])
-		bf.vals[0][idx+1] = getIdxVal(bf.states[0][1])
-		bf.vals[0][idx+2] = getIdxVal(bf.states[0][2])
-	}
-	hashtable.BytesBatchGenHashStatesWithSeed(&bf.keys[0], &bf.states[0], 1, bf.shared.hashSeed[lastSeed])
-	idx := lastSeed * 3
-	bf.vals[0][idx] = getIdxVal(bf.states[0][0])
-	bf.vals[0][idx+1] = getIdxVal(bf.states[0][1])
-	bf.vals[0][idx+2] = getIdxVal(bf.states[0][2])
-
-	bf.keys[0] = bf.keys[0][:0]
-
-	// Copy hash values for debugging
-	hashVals := make([]uint64, bf.valLength)
-	copy(hashVals, bf.vals[0][:bf.valLength])
-
-	vals := bf.vals[0]
-	for j := 0; j < bf.valLength; j++ {
-		if !bf.shared.bitmap.Contains(vals[j]) {
-			return false, encodedKey, hashVals
-		}
-	}
-	return true, encodedKey, hashVals
-}
-
 func (bf *BloomFilter) TestAndAdd(v *vector.Vector, callBack func(bool, int)) {
 	bf.handle(v, func(idx, beginIdx int) {
 		var contains bool
@@ -324,46 +271,6 @@ func (bf *BloomFilter) Unmarshal(data []byte) error {
 	bf.valLength = len(hashSeed) * 3
 
 	return nil
-}
-
-// GetBitmapLen returns the length of the bitmap for debugging
-func (bf *BloomFilter) GetBitmapLen() int64 {
-	if bf == nil || bf.shared == nil {
-		return 0
-	}
-	return bf.shared.bitmap.Len()
-}
-
-// GetSeedCount returns the number of hash seeds for debugging
-func (bf *BloomFilter) GetSeedCount() int {
-	if bf == nil || bf.shared == nil {
-		return 0
-	}
-	return len(bf.shared.hashSeed)
-}
-
-// GetFirstSeed returns the first hash seed for debugging
-func (bf *BloomFilter) GetFirstSeed() uint64 {
-	if bf == nil || bf.shared == nil || len(bf.shared.hashSeed) == 0 {
-		return 0
-	}
-	return bf.shared.hashSeed[0]
-}
-
-// GetAllSeeds returns all hash seeds for debugging
-func (bf *BloomFilter) GetAllSeeds() []uint64 {
-	if bf == nil || bf.shared == nil {
-		return nil
-	}
-	return bf.shared.hashSeed
-}
-
-// GetBitmapCount returns the number of bits set in the bitmap for debugging
-func (bf *BloomFilter) GetBitmapCount() int {
-	if bf == nil || bf.shared == nil {
-		return 0
-	}
-	return bf.shared.bitmap.Count()
 }
 
 // handle computes the hash value of each element and executes the callback.
