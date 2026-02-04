@@ -3265,7 +3265,7 @@ func handleInternalCreateCcprSnapshot(ses FeSession, execCtx *ExecCtx, ic *Inter
 			return moerr.NewInternalError(ctx, "db_name and table_name are required for table level snapshot")
 		}
 		createSnapshotSQL = fmt.Sprintf(
-			"CREATE SNAPSHOT IF NOT EXISTS `%s` FOR TABLE `%s` `%s`",
+			"CREATE SNAPSHOT `%s` FOR TABLE `%s` `%s`",
 			snapshotName, ic.dbName, ic.tableName,
 		)
 	case "database":
@@ -3273,12 +3273,12 @@ func handleInternalCreateCcprSnapshot(ses FeSession, execCtx *ExecCtx, ic *Inter
 			return moerr.NewInternalError(ctx, "db_name is required for database level snapshot")
 		}
 		createSnapshotSQL = fmt.Sprintf(
-			"CREATE SNAPSHOT IF NOT EXISTS `%s` FOR DATABASE `%s`",
+			"CREATE SNAPSHOT `%s` FOR DATABASE `%s`",
 			snapshotName, ic.dbName,
 		)
 	case "account":
 		createSnapshotSQL = fmt.Sprintf(
-			"CREATE SNAPSHOT IF NOT EXISTS `%s` FOR ACCOUNT",
+			"CREATE SNAPSHOT `%s` FOR ACCOUNT",
 			snapshotName,
 		)
 	default:

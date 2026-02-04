@@ -86,11 +86,11 @@ const (
 
 	// Update mo_ccpr_log SQL template
 	PublicationUpdateMoCcprLogSqlTemplate = `UPDATE mo_catalog.mo_ccpr_log ` +
-		`SET iteration_state = %d, ` +
+		`SET state = %d, ` +
 		`iteration_lsn = %d, ` +
 		`context = '%s', ` +
 		`error_message = '%s', ` +
-		`state = %d ` +
+		`iteration_state = %d ` +
 		`WHERE task_id = '%s'`
 
 	// Update mo_ccpr_log iteration_state (and lsn) only

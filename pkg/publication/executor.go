@@ -534,8 +534,8 @@ func (exec *PublicationTaskExecutor) applyCcprLogWithRel(ctx context.Context, re
 		// Parse mo_ccpr_log columns:
 		// 0: task_id (UUID), 1: subscription_name, 2: subscription_account_name, 3: sync_level,
 		// 4: account_id, 5: db_name, 6: table_name, 7: upstream_conn, 8: sync_config (JSON),
-		// 9: state, 10: iteration_state, 11: iteration_lsn, 12: context, 13: cn_uuid,
-		// 14: error_message, 15: created_at, 16: drop_at
+		// 9: state, 10: iteration_state, 11: iteration_lsn, 12: watermark, 13: context, 14: cn_uuid,
+		// 15: error_message, 16: created_at, 17: drop_at
 		taskIDVector := insertData.Vecs[0]
 		taskIDs := vector.MustFixedColWithTypeCheck[types.Uuid](taskIDVector)
 		subscriptionStateVector := insertData.Vecs[9]
@@ -544,13 +544,13 @@ func (exec *PublicationTaskExecutor) applyCcprLogWithRel(ctx context.Context, re
 		states := vector.MustFixedColWithTypeCheck[int8](iterationStateVector)
 		iterationLSNVector := insertData.Vecs[11]
 		lsns := vector.MustFixedColWithTypeCheck[int64](iterationLSNVector)
-		// drop_at is at index 16
-		dropAtVector := insertData.Vecs[16]
+		// drop_at is at index 17
+		dropAtVector := insertData.Vecs[17]
 		// commit_ts is typically the last column (after all data columns)
-		// The number of columns in mo_ccpr_log is 17 (0-16), so commit_ts should be at index 17
+		// The number of columns in mo_ccpr_log is 18 (0-17), so commit_ts should be at index 18
 		var commitTSs []types.TS
-		if len(insertData.Vecs) > 17 {
-			commitTSVector := insertData.Vecs[17]
+		if len(insertData.Vecs) > 18 {
+			commitTSVector := insertData.Vecs[18]
 			commitTSs = vector.MustFixedColWithTypeCheck[types.TS](commitTSVector)
 		} else {
 			// If commit_ts is not available, use empty TS

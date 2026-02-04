@@ -198,7 +198,7 @@ var (
 		&MysqlColumn{
 			ColumnImpl: ColumnImpl{
 				name:       "state",
-				columnType: defines.MYSQL_TYPE_TINY,
+				columnType: defines.MYSQL_TYPE_VARCHAR,
 			},
 		},
 		&MysqlColumn{
@@ -762,9 +762,9 @@ func doResumeCcprSubscription(ctx context.Context, ses *Session, rcs *tree.Resum
 		return moerr.NewInternalErrorf(ctx, "subscription with task_id '%s' does not exist", taskID)
 	}
 
-	// Update mo_ccpr_log: set state to running (0)
+	// Update mo_ccpr_log: set state to running (0), reset iteration_state and error_message
 	updateSQL := fmt.Sprintf(
-		"UPDATE mo_catalog.mo_ccpr_log SET state = 0 WHERE task_id = '%s' AND drop_at IS NULL",
+		"UPDATE mo_catalog.mo_ccpr_log SET state = 0, iteration_state = 0, error_message = NULL WHERE task_id = '%s' AND drop_at IS NULL",
 		escapedTaskID,
 	)
 	if accountId != catalog.System_Account {
@@ -1811,7 +1811,7 @@ func doShowCcprSubscriptions(ctx context.Context, ses *Session, scs *tree.ShowCc
 	}()
 
 	// Build SQL query
-	sql := "SELECT subscription_name, db_name, table_name, sync_level, iteration_state, error_message, watermark FROM mo_catalog.mo_ccpr_log WHERE 1=1"
+	sql := "SELECT task_id, db_name, table_name, sync_level, iteration_state, error_message, watermark FROM mo_catalog.mo_ccpr_log WHERE 1=1"
 
 	// Filter by account_id: sys account sees all, others see only their own
 	if accountId != catalog.System_Account {
@@ -1822,7 +1822,7 @@ func doShowCcprSubscriptions(ctx context.Context, ses *Session, scs *tree.ShowCc
 	if scs.Name != "" {
 		// Escape single quotes to prevent SQL injection
 		escapedName := strings.ReplaceAll(scs.Name, "'", "''")
-		sql += fmt.Sprintf(" AND subscription_name = '%s'", escapedName)
+		sql += fmt.Sprintf(" AND task_id = '%s'", escapedName)
 	} else {
 		// Handle LIKE clause only if Name is not specified
 		like := scs.Like
@@ -1834,7 +1834,7 @@ func doShowCcprSubscriptions(ctx context.Context, ses *Session, scs *tree.ShowCc
 			}
 			// Escape single quotes to prevent SQL injection
 			likePattern := strings.ReplaceAll(right.String(), "'", "''")
-			sql += fmt.Sprintf(" AND subscription_name LIKE '%s'", likePattern)
+			sql += fmt.Sprintf(" AND task_id LIKE '%s'", likePattern)
 		}
 	}
 
@@ -1857,19 +1857,19 @@ func doShowCcprSubscriptions(ctx context.Context, ses *Session, scs *tree.ShowCc
 	for _, result := range erArray {
 		for i := uint64(0); i < result.GetRowCount(); i++ {
 			var (
-				subscriptionName string
-				dbName           string
-				tableName        string
-				syncLevel        string
-				iterationState   int64
-				errorMessage     string
-				watermarkTs      int64
-				isNull           bool
+				taskId         string
+				dbName         string
+				tableName      string
+				syncLevel      string
+				iterationState int64
+				errorMessage   string
+				watermarkTs    int64
+				isNull         bool
 			)
 
 			// Extract values from result
-			// SELECT subscription_name, db_name, table_name, sync_level, iteration_state, error_message, watermark
-			if subscriptionName, err = result.GetString(ctx, i, 0); err != nil {
+			// SELECT task_id, db_name, table_name, sync_level, iteration_state, error_message, watermark
+			if taskId, err = result.GetString(ctx, i, 0); err != nil {
 				return err
 			}
 			// Handle nullable db_name
@@ -1915,13 +1915,19 @@ func doShowCcprSubscriptions(ctx context.Context, ses *Session, scs *tree.ShowCc
 				}
 			}
 
-			// Map iteration_state to state (0=pending, 1=running, 2=complete, 3=error, 4=cancel)
-			state := int8(iterationState)
-			if state < 0 {
-				state = 0
-			}
-			if state > 4 {
-				state = 4
+			// Map iteration_state to state string (0=running, 1=error, 2=pause, 3=dropped)
+			var stateStr string
+			switch int8(iterationState) {
+			case 0:
+				stateStr = "running"
+			case 1:
+				stateStr = "error"
+			case 2:
+				stateStr = "pause"
+			case 3:
+				stateStr = "dropped"
+			default:
+				stateStr = "unknown"
 			}
 
 			// Convert watermark timestamp to time string
@@ -1943,13 +1949,13 @@ func doShowCcprSubscriptions(ctx context.Context, ses *Session, scs *tree.ShowCc
 			}
 
 			rs.AddRow([]interface{}{
-				subscriptionName, // task_id
-				dbNameVal,        // database_name
-				tableNameVal,     // table_name
-				syncLevel,        // sync_level
-				state,            // state
-				errorMessage,     // error_message
-				watermark,        // watermark
+				taskId,       // task_id
+				dbNameVal,    // database_name
+				tableNameVal, // table_name
+				syncLevel,    // sync_level
+				stateStr,     // state
+				errorMessage, // error_message
+				watermark,    // watermark
 			})
 		}
 	}
