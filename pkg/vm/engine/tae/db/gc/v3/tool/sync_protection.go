@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -56,11 +57,11 @@ type SyncProtectionTester struct {
 func NewSyncProtectionTester(dsn, dataDir string, sampleCount int, verbose bool, waitTime int) (*SyncProtectionTester, error) {
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to database: %w", err)
+		return nil, moerr.NewInternalErrorNoCtxf("failed to connect to database: %v", err)
 	}
 
 	if err := db.Ping(); err != nil {
-		return nil, fmt.Errorf("failed to ping database: %w", err)
+		return nil, moerr.NewInternalErrorNoCtxf("failed to ping database: %v", err)
 	}
 
 	return &SyncProtectionTester{
@@ -102,7 +103,7 @@ func (t *SyncProtectionTester) ScanObjectFiles() ([]string, error) {
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to scan directory: %w", err)
+		return nil, moerr.NewInternalErrorNoCtxf("failed to scan directory: %v", err)
 	}
 
 	return objects, nil
@@ -139,13 +140,13 @@ func (t *SyncProtectionTester) BuildBloomFilter(objects []string) (string, error
 	// Create BloomFilter using index.NewBloomFilter (xorfilter based)
 	bf, err := index.NewBloomFilter(vec)
 	if err != nil {
-		return "", fmt.Errorf("failed to create BloomFilter: %w", err)
+		return "", moerr.NewInternalErrorNoCtxf("failed to create BloomFilter: %v", err)
 	}
 
 	// Marshal BloomFilter
 	data, err := bf.Marshal()
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal BloomFilter: %w", err)
+		return "", moerr.NewInternalErrorNoCtxf("failed to marshal BloomFilter: %v", err)
 	}
 
 	// Base64 encode
@@ -163,7 +164,7 @@ func (t *SyncProtectionTester) RegisterProtection(objects []string) error {
 	// Build BloomFilter
 	bfData, err := t.BuildBloomFilter(objects)
 	if err != nil {
-		return fmt.Errorf("failed to build BloomFilter: %w", err)
+		return moerr.NewInternalErrorNoCtxf("failed to build BloomFilter: %v", err)
 	}
 
 	// Send first protected object name for testing
@@ -181,7 +182,7 @@ func (t *SyncProtectionTester) RegisterProtection(objects []string) error {
 
 	jsonData, err := json.Marshal(req)
 	if err != nil {
-		return fmt.Errorf("failed to marshal request: %w", err)
+		return moerr.NewInternalErrorNoCtxf("failed to marshal request: %v", err)
 	}
 
 	query := fmt.Sprintf("SELECT mo_ctl('dn', 'diskcleaner', 'register_sync_protection.%s')", string(jsonData))
@@ -193,7 +194,7 @@ func (t *SyncProtectionTester) RegisterProtection(objects []string) error {
 	var result string
 	err = t.db.QueryRow(query).Scan(&result)
 	if err != nil {
-		return fmt.Errorf("failed to register protection: %w", err)
+		return moerr.NewInternalErrorNoCtxf("failed to register protection: %v", err)
 	}
 
 	if t.verbose {
@@ -202,7 +203,7 @@ func (t *SyncProtectionTester) RegisterProtection(objects []string) error {
 
 	// Check if successful
 	if strings.Contains(strings.ToLower(result), "error") {
-		return fmt.Errorf("register protection returned error: %s", result)
+		return moerr.NewInternalErrorNoCtxf("register protection returned error: %s", result)
 	}
 
 	t.protectedFiles = objects
@@ -218,7 +219,7 @@ func (t *SyncProtectionTester) RenewProtection() error {
 
 	jsonData, err := json.Marshal(req)
 	if err != nil {
-		return fmt.Errorf("failed to marshal request: %w", err)
+		return moerr.NewInternalErrorNoCtxf("failed to marshal request: %v", err)
 	}
 
 	query := fmt.Sprintf("SELECT mo_ctl('dn', 'diskcleaner', 'renew_sync_protection.%s')", string(jsonData))
@@ -230,7 +231,7 @@ func (t *SyncProtectionTester) RenewProtection() error {
 	var result string
 	err = t.db.QueryRow(query).Scan(&result)
 	if err != nil {
-		return fmt.Errorf("failed to renew protection: %w", err)
+		return moerr.NewInternalErrorNoCtxf("failed to renew protection: %v", err)
 	}
 
 	if t.verbose {
@@ -248,7 +249,7 @@ func (t *SyncProtectionTester) UnregisterProtection() error {
 
 	jsonData, err := json.Marshal(req)
 	if err != nil {
-		return fmt.Errorf("failed to marshal request: %w", err)
+		return moerr.NewInternalErrorNoCtxf("failed to marshal request: %v", err)
 	}
 
 	query := fmt.Sprintf("SELECT mo_ctl('dn', 'diskcleaner', 'unregister_sync_protection.%s')", string(jsonData))
@@ -260,7 +261,7 @@ func (t *SyncProtectionTester) UnregisterProtection() error {
 	var result string
 	err = t.db.QueryRow(query).Scan(&result)
 	if err != nil {
-		return fmt.Errorf("failed to unregister protection: %w", err)
+		return moerr.NewInternalErrorNoCtxf("failed to unregister protection: %v", err)
 	}
 
 	if t.verbose {
@@ -281,7 +282,7 @@ func (t *SyncProtectionTester) TriggerGC() error {
 	var result string
 	err := t.db.QueryRow(query).Scan(&result)
 	if err != nil {
-		return fmt.Errorf("failed to trigger GC: %w", err)
+		return moerr.NewInternalErrorNoCtxf("failed to trigger GC: %v", err)
 	}
 
 	if t.verbose {
@@ -349,7 +350,7 @@ func (t *SyncProtectionTester) RunTest() error {
 	fmt.Printf("  Found %d object files\n", len(objects))
 
 	if len(objects) == 0 {
-		return fmt.Errorf("no object files found, please check data directory: %s", t.dataDir)
+		return moerr.NewInternalErrorNoCtxf("no object files found, please check data directory: %s", t.dataDir)
 	}
 
 	// Step 2: Randomly select objects
@@ -368,7 +369,7 @@ func (t *SyncProtectionTester) RunTest() error {
 	// Step 3: Build BloomFilter and register protection
 	fmt.Println("[Step 3] Building BloomFilter and registering sync protection...")
 	if err := t.RegisterProtection(selected); err != nil {
-		return fmt.Errorf("failed to register protection: %w", err)
+		return moerr.NewInternalErrorNoCtxf("failed to register protection: %v", err)
 	}
 	registered = true
 	fmt.Println("  ✓ Registration successful!")
@@ -412,7 +413,7 @@ func (t *SyncProtectionTester) RunTest() error {
 			}
 		}
 		// Validation failed, stop test
-		return fmt.Errorf("protection mechanism validation failed: %d protected files were deleted", newlyDeleted)
+		return moerr.NewInternalErrorNoCtxf("protection mechanism validation failed: %d protected files were deleted", newlyDeleted)
 	} else {
 		fmt.Println("  ✓ [SUCCESS] All protected files were not deleted!")
 	}

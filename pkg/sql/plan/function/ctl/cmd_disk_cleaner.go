@@ -18,11 +18,9 @@ import (
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 	"strings"
 )
 
@@ -66,15 +64,6 @@ func IsValidArg(parameter string, proc *process.Process) (*cmd_util.DiskCleaner,
 			// Join remaining parts as JSON value (in case JSON contains dots)
 			value = strings.Join(parameters[1:], ".")
 		}
-
-		// Debug: print parameter info
-		logutil.Info(
-			"GC-Sync-Protection-CMD-Parse",
-			zap.String("op", op),
-			zap.Int("parameter-len", len(parameter)),
-			zap.Int("parts-count", len(parameters)),
-			zap.Int("value-len", len(value)),
-		)
 
 		return &cmd_util.DiskCleaner{
 			Op:    op,
