@@ -23,11 +23,8 @@ create function udf_db1.helloworld5 () returns int language sql as 'select id fr
 drop function udf_db1.helloworld5();
 drop function db2.helloworld5();
 Unknown database db2
-create database if not exists udf_bvt;
-use udf_bvt;
 -- bvt: preserve backslash in $$...$$ string for UDF body
 create function sql_nl() returns varchar language sql as $$select '\n'$$;
-select hex(body) as body_hex from mo_catalog.mo_user_defined_function where name = 'sql_nl' and db = 'udf_bvt';
+select hex(body) as body_hex from mo_catalog.mo_user_defined_function where name = 'sql_nl' and db = 'db1';
 body_hex
 73656C65637420275C6E27
-drop database udf_bvt;
