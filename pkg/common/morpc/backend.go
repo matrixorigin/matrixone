@@ -28,7 +28,6 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -148,6 +147,8 @@ type remoteBackend struct {
 	remote          string
 	metrics         *metrics
 	logger          *zap.Logger
+	logID           uint64      // stable id for log fields, set in adjust(); avoids per-backend zap Logger clone
+	logFieldsCache  []zap.Field // cached for logFields(), set once in adjust() to avoid alloc per log call
 	rateLimitLogger *logutil.RateLimitedLogger
 	codec           Codec
 	conn            goetty.IOSession
@@ -252,7 +253,7 @@ func NewRemoteBackend(
 	rb.conn = goetty.NewIOSession(rb.options.goettyOptions...)
 
 	if err := rb.resetConn(); err != nil {
-		rb.logger.Error("connect to remote failed")
+		rb.logger.Error("connect to remote failed", rb.logFields()...)
 		return nil, err
 	}
 	rb.activeReadLoop(false)
@@ -290,14 +291,24 @@ func (rb *remoteBackend) adjust() {
 		}
 	}
 
-	uid, _ := uuid.NewV7()
-	rb.logger = logutil.Adjust(rb.logger).With(zap.String("remote", rb.remote),
-		zap.String("backend-id", uid.String()))
+	// Use shared logger and add remote/logID at log sites to avoid cloning the zap core
+	// chain per backend. Each Logger.With() can trigger zapcore.newCounters (Sampler);
+	// under sysbench this path reached ~102GB with newCounters alone ~83.4GB. See
+	// docs/worklog_morpc_backend_logger_memory.md.
+	rb.logger = logutil.Adjust(rb.logger)
+	rb.logID = rb.nextID()
+	rb.logFieldsCache = []zap.Field{zap.String("remote", rb.remote), zap.Uint64("backend-id", rb.logID)}
 	rb.rateLimitLogger = logutil.NewRateLimitedLogger(rb.logger)
 	rb.options.goettyOptions = append(rb.options.goettyOptions,
 		goetty.WithSessionCodec(rb.codec))
 	// Don't pass logger to goetty to avoid noisy error logs from goetty library
 	// (e.g., "close connection failed" which is expected during normal connection lifecycle)
+}
+
+// logFields returns zap fields for this backend; use at log sites instead of a per-backend Logger.With().
+// Returns cached slice (set once in adjust()) to avoid allocating per log call.
+func (rb *remoteBackend) logFields() []zap.Field {
+	return rb.logFieldsCache
 }
 
 func (rb *remoteBackend) Send(ctx context.Context, request Message) (*Future, error) {
@@ -394,7 +405,7 @@ func (rb *remoteBackend) doSend(f *Future) error {
 }
 
 func (rb *remoteBackend) Close() {
-	rb.metrics.closeCounter.Inc()
+	// closeCounter is incremented once per backend in doClose() to avoid double-counting when Close() is called multiple times.
 	rb.cancelOnce.Do(func() {
 		rb.cancel()
 	})
@@ -462,14 +473,14 @@ func (rb *remoteBackend) changeToStopping() {
 }
 
 func (rb *remoteBackend) writeLoop(ctx context.Context) {
-	rb.logger.Debug("write loop started")
+	rb.logger.Debug("write loop started", rb.logFields()...)
 	defer func() {
 		rb.pingTimer.Stop()
 		rb.closeConn(false)
 		rb.readStopper.Stop()
 		rb.closeConn(true)
 		close(rb.waitWriteC)
-		rb.logger.Debug("write loop stopped")
+		rb.logger.Debug("write loop stopped", rb.logFields()...)
 	}()
 
 	defer func() {
@@ -481,7 +492,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	defer func() {
 		if err := recover(); err != nil {
 			rb.logger.Fatal("write loop failed",
-				zap.Any("err", err))
+				append(rb.logFields(), zap.Any("err", err))...)
 		}
 	}()
 
@@ -553,8 +564,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 						id := f.getSendMessageID()
 						rb.rateLimitLogger.Error("write-flush",
 							"write request failed",
-							zap.Uint64("request-id", id),
-							zap.Error(err))
+							append(rb.logFields(), zap.Uint64("request-id", id), zap.Error(err))...)
 						f.messageSent(err)
 					}
 				} else {
@@ -597,13 +607,13 @@ func (rb *remoteBackend) doWrite(id uint64, f *Future) time.Duration {
 		conn.SetWriteDeadline(time.Now().Add(v))
 	}
 	if ce := rb.logger.Check(zap.DebugLevel, "write request"); ce != nil {
-		ce.Write(zap.Uint64("request-id", id),
-			zap.String("request", f.send.Message.DebugString()))
+		ce.Write(append(rb.logFields(), zap.Uint64("request-id", id),
+			zap.String("request", f.send.Message.DebugString()))...)
 	}
 	if err := rb.conn.Write(f.send, goetty.WriteOptions{}); err != nil {
 		rb.rateLimitLogger.Error("write-conn",
 			"write request failed",
-			zap.Uint64("request-id", id), zap.Error(err))
+			append(rb.logFields(), zap.Uint64("request-id", id), zap.Error(err))...)
 		f.messageSent(err)
 		return 0
 	}
@@ -611,13 +621,13 @@ func (rb *remoteBackend) doWrite(id uint64, f *Future) time.Duration {
 }
 
 func (rb *remoteBackend) readLoop(ctx context.Context) {
-	rb.logger.Debug("read loop started")
+	rb.logger.Debug("read loop started", rb.logFields()...)
 	normalExit := false
 	defer func() {
 		if normalExit {
-			rb.logger.Debug("read loop stopped")
+			rb.logger.Debug("read loop stopped", rb.logFields()...)
 		} else {
-			rb.logger.Error("read loop stopped")
+			rb.logger.Error("read loop stopped", rb.logFields()...)
 		}
 	}()
 
@@ -631,7 +641,7 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 	defer func() {
 		if err := recover(); err != nil {
 			rb.logger.Fatal("read loop failed",
-				zap.Any("err", err))
+				append(rb.logFields(), zap.Any("err", err))...)
 		}
 	}()
 
@@ -658,7 +668,7 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 				} else {
 					rb.rateLimitLogger.Error("read-loop",
 						"read from backend failed",
-						zap.Error(err))
+						append(rb.logFields(), zap.Error(err))...)
 				}
 				rb.inactiveReadLoop()
 				rb.cancelActiveStreams()
@@ -796,7 +806,7 @@ func (rb *remoteBackend) handleResetConn() error {
 	if err := rb.resetConn(); err != nil {
 		rb.rateLimitLogger.Error("reset-conn",
 			"fail to reset backend connection",
-			zap.Error(err))
+			append(rb.logFields(), zap.Error(err))...)
 		rb.inactive()
 		return err
 	}
@@ -809,6 +819,9 @@ func (rb *remoteBackend) doClose() {
 		rb.closeConn(false)
 		// TODO: re create when reconnect
 		rb.conn = nil
+		if rb.metrics != nil {
+			rb.metrics.closeCounter.Inc()
+		}
 	})
 }
 
@@ -873,8 +886,8 @@ func (rb *remoteBackend) requestDone(
 		if response != nil {
 			debugStr = response.DebugString()
 		}
-		ce.Write(zap.Uint64("request-id", id),
-			zap.String("response", debugStr))
+		ce.Write(append(rb.logFields(), zap.Uint64("request-id", id),
+			zap.String("response", debugStr))...)
 	}
 
 	rb.mu.Lock()
@@ -954,12 +967,12 @@ func (rb *remoteBackend) resetConn() error {
 		default:
 		}
 
-		rb.logger.Debug("start connect to remote")
+		rb.logger.Debug("start connect to remote", rb.logFields()...)
 		rb.closeConn(false)
 		rb.metrics.connectCounter.Inc()
 		err := rb.conn.Connect(rb.remote, rb.options.connectTimeout)
 		if err == nil {
-			rb.logger.Debug("connect to remote succeed")
+			rb.logger.Debug("connect to remote succeed", rb.logFields()...)
 			rb.activeReadLoop(false)
 			return nil
 		}
@@ -973,8 +986,7 @@ func (rb *remoteBackend) resetConn() error {
 		}
 		rb.rateLimitLogger.Error("connect-retry",
 			"init remote connection failed, retry later",
-			zap.Bool("can-retry", canRetry),
-			zap.Error(err))
+			append(rb.logFields(), zap.Bool("can-retry", canRetry), zap.Error(err))...)
 
 		if !canRetry {
 			return moerr.NewBackendCannotConnectNoCtx(err)
@@ -1024,7 +1036,7 @@ func (rb *remoteBackend) activeReadLoop(locked bool) {
 	}
 
 	if err := rb.readStopper.RunTask(rb.readLoop); err != nil {
-		rb.logger.Error("active read loop failed", zap.Error(err))
+		rb.logger.Error("active read loop failed", append(rb.logFields(), zap.Error(err))...)
 		return
 	}
 	rb.stateMu.readLoopActive = true
@@ -1051,7 +1063,7 @@ func (rb *remoteBackend) scheduleResetConn(err error) {
 
 	select {
 	case rb.resetConnC <- err:
-		rb.logger.Debug("schedule reset remote connection")
+		rb.logger.Debug("schedule reset remote connection", rb.logFields()...)
 	default:
 	}
 }
@@ -1064,10 +1076,11 @@ func (rb *remoteBackend) closeConn(close bool) {
 
 	if err := fn(); err != nil {
 		// Filter out expected errors when closing already closed connections
+		fields := append(rb.logFields(), zap.Error(err))
 		if rb.isExpectedCloseError(err) {
-			rb.logger.Debug("close remote conn failed", zap.Error(err))
+			rb.logger.Debug("close remote conn failed", fields...)
 		} else {
-			rb.logger.Error("close remote conn failed", zap.Error(err))
+			rb.logger.Error("close remote conn failed", fields...)
 		}
 	}
 }
@@ -1243,7 +1256,7 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 	s.mu.RLock()
 	if s.mu.closed {
 		s.mu.RUnlock()
-		s.rb.logger.Warn("stream is closed on send", zap.Uint64("stream-id", s.id))
+		s.rb.logger.Warn("stream is closed on send", append(s.rb.logFields(), zap.Uint64("stream-id", s.id))...)
 		return moerr.NewStreamClosedNoCtx()
 	}
 
@@ -1281,7 +1294,7 @@ func (s *stream) Receive() (chan Message, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.mu.closed {
-		s.rb.logger.Warn("stream is closed on receive", zap.Uint64("stream-id", s.id))
+		s.rb.logger.Warn("stream is closed on receive", append(s.rb.logFields(), zap.Uint64("stream-id", s.id))...)
 		return nil, moerr.NewStreamClosedNoCtx()
 	}
 	return s.c, nil
@@ -1289,7 +1302,7 @@ func (s *stream) Receive() (chan Message, error) {
 
 func (s *stream) Close(closeConn bool) error {
 	if closeConn {
-		s.rb.logger.Info("stream call closed on client", zap.Uint64("stream-id", s.id))
+		s.rb.logger.Info("stream call closed on client", append(s.rb.logFields(), zap.Uint64("stream-id", s.id))...)
 		s.rb.Close()
 	}
 	s.mu.Lock()
@@ -1332,8 +1345,8 @@ func (s *stream) done(
 	}
 	if response != nil &&
 		message.streamSequence != s.lastReceivedSequence+1 {
-		s.rb.logger.Warn("sequence out of order", zap.Uint32("new", message.streamSequence),
-			zap.Uint32("last", s.lastReceivedSequence))
+		s.rb.logger.Warn("sequence out of order", append(s.rb.logFields(),
+			zap.Uint32("new", message.streamSequence), zap.Uint32("last", s.lastReceivedSequence))...)
 		response = nil
 	}
 
