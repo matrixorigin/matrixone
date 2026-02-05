@@ -698,7 +698,7 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 				0 as 'Max_data_length',
 				0 as 'Index_length',
 				'NULL' as 'Data_free',
-				0 as 'Auto_increment',
+				if(relkind = 'v', NULL, coalesce(internal_auto_increment(reldatabase, relname), 0)) as 'Auto_increment',
 				created_time as 'Create_time',
 				'NULL' as 'Update_time',
 				'NULL' as 'Check_time',
