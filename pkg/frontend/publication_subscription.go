@@ -2970,7 +2970,7 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 	}
 
 	// Insert records into mo_ccpr_dbs and mo_ccpr_tables
-	if err = insertCCPRDbAndTableRecords(ctx, bh, tableIDs, taskID); err != nil {
+	if err = insertCCPRDbAndTableRecords(ctx, bh, tableIDs, taskID, accountId); err != nil {
 		return err
 	}
 
@@ -3372,7 +3372,7 @@ func buildSubscriptionContextJSON(tableIDs map[string]TableIDInfo, indexTableMap
 }
 
 // insertCCPRDbAndTableRecords inserts records into mo_ccpr_dbs and mo_ccpr_tables
-func insertCCPRDbAndTableRecords(ctx context.Context, bh BackgroundExec, tableIDs map[string]TableIDInfo, taskID string) error {
+func insertCCPRDbAndTableRecords(ctx context.Context, bh BackgroundExec, tableIDs map[string]TableIDInfo, taskID string, accountId uint32) error {
 	// Track which database IDs we've already inserted
 	insertedDbIDs := make(map[uint64]bool)
 
@@ -3380,12 +3380,13 @@ func insertCCPRDbAndTableRecords(ctx context.Context, bh BackgroundExec, tableID
 		// Insert into mo_ccpr_dbs if not already inserted
 		if !insertedDbIDs[info.DbID] {
 			sql := fmt.Sprintf(
-				"INSERT INTO %s.%s (dbid, taskid, dbname) VALUES (%d, '%s', '%s')",
+				"INSERT INTO %s.%s (dbid, taskid, dbname, account_id) VALUES (%d, '%s', '%s', %d)",
 				catalog.MO_CATALOG,
 				catalog.MO_CCPR_DBS,
 				info.DbID,
 				taskID,
 				info.DbName,
+				accountId,
 			)
 			if err := bh.Exec(ctx, sql); err != nil {
 				return moerr.NewInternalErrorf(ctx, "failed to insert ccpr db record: %v", err)
@@ -3395,13 +3396,14 @@ func insertCCPRDbAndTableRecords(ctx context.Context, bh BackgroundExec, tableID
 
 		// Insert into mo_ccpr_tables
 		sql := fmt.Sprintf(
-			"INSERT INTO %s.%s (tableid, taskid, dbname, tablename) VALUES (%d, '%s', '%s', '%s')",
+			"INSERT INTO %s.%s (tableid, taskid, dbname, tablename, account_id) VALUES (%d, '%s', '%s', '%s', %d)",
 			catalog.MO_CATALOG,
 			catalog.MO_CCPR_TABLES,
 			info.TableID,
 			taskID,
 			info.DbName,
 			info.TableName,
+			accountId,
 		)
 		if err := bh.Exec(ctx, sql); err != nil {
 			return moerr.NewInternalErrorf(ctx, "failed to insert ccpr table record: %v", err)

@@ -351,7 +351,7 @@ func ProcessDDLChanges(
 		if err != nil {
 			return moerr.NewInternalErrorf(ctx, "failed to get database %s after creation: %v", dbName, err)
 		}
-		if err := insertCCPRDb(ctx, iterationCtx.LocalExecutor, db.GetDatabaseId(downstreamCtx), iterationCtx.TaskID, dbName); err != nil {
+		if err := insertCCPRDb(ctx, iterationCtx.LocalExecutor, db.GetDatabaseId(downstreamCtx), iterationCtx.TaskID, dbName, iterationCtx.SrcInfo.AccountID); err != nil {
 			return moerr.NewInternalErrorf(ctx, "failed to insert ccpr db record for %s: %v", dbName, err)
 		}
 	}
@@ -831,7 +831,7 @@ func createTable(
 		return moerr.NewInternalErrorf(ctx, "failed to get relation %s.%s: %v", dbName, tableName, err)
 	}
 	tableID := rel.GetTableID(ctx)
-	if err := insertCCPRTable(ctx, executor, tableID, iterationCtx.TaskID, dbName, tableName); err != nil {
+	if err := insertCCPRTable(ctx, executor, tableID, iterationCtx.TaskID, dbName, tableName, iterationCtx.SrcInfo.AccountID); err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to insert ccpr table record for %s.%s: %v", dbName, tableName, err)
 	}
 
@@ -1114,15 +1114,16 @@ func escapeSQLIdentifierForDDL(s string) string {
 }
 
 // insertCCPRTable inserts a record into mo_ccpr_tables for CCPR transactions
-func insertCCPRTable(ctx context.Context, executor SQLExecutor, tableID uint64, taskID string, dbName string, tableName string) error {
+func insertCCPRTable(ctx context.Context, executor SQLExecutor, tableID uint64, taskID string, dbName string, tableName string, accountID uint32) error {
 	sql := fmt.Sprintf(
-		"INSERT INTO `%s`.`%s` (tableid, taskid, dbname, tablename) VALUES (%d, '%s', '%s', '%s')",
+		"INSERT INTO `%s`.`%s` (tableid, taskid, dbname, tablename, account_id) VALUES (%d, '%s', '%s', '%s', %d)",
 		catalog.MO_CATALOG,
 		catalog.MO_CCPR_TABLES,
 		tableID,
 		taskID,
 		dbName,
 		tableName,
+		accountID,
 	)
 	result, cancel, err := executor.ExecSQL(ctx, nil, catalog.System_Account, sql, true, true, time.Minute)
 	if err != nil {
@@ -1136,18 +1137,19 @@ func insertCCPRTable(ctx context.Context, executor SQLExecutor, tableID uint64, 
 }
 
 // insertCCPRDb inserts a record into mo_ccpr_dbs for CCPR transactions
-func insertCCPRDb(ctx context.Context, executor SQLExecutor, dbIDStr string, taskID string, dbName string) error {
+func insertCCPRDb(ctx context.Context, executor SQLExecutor, dbIDStr string, taskID string, dbName string, accountID uint32) error {
 	dbID, err := strconv.ParseUint(dbIDStr, 10, 64)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to parse database ID: %v", err)
 	}
 	sql := fmt.Sprintf(
-		"INSERT INTO `%s`.`%s` (dbid, taskid, dbname) VALUES (%d, '%s', '%s')",
+		"INSERT INTO `%s`.`%s` (dbid, taskid, dbname, account_id) VALUES (%d, '%s', '%s', %d)",
 		catalog.MO_CATALOG,
 		catalog.MO_CCPR_DBS,
 		dbID,
 		taskID,
 		dbName,
+		accountID,
 	)
 	result, cancel, err := executor.ExecSQL(ctx, nil, catalog.System_Account, sql, true, true, time.Minute)
 	if err != nil {
