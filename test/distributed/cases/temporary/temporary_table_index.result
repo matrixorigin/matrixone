@@ -1,0 +1,293 @@
+drop database if exists temp_index;
+create database temp_index;
+use temp_index;
+create temporary table temp_idx1 (
+id int,
+name varchar(50),
+age int,
+index idx_name (name)
+);
+insert into temp_idx1 values (1, 'alice', 25);
+insert into temp_idx1 values (2, 'bob', 30);
+insert into temp_idx1 values (3, 'charlie', 25);
+select * from temp_idx1 where name = 'bob';
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  𝄀
+2  ¦  bob  ¦  30
+show index from temp_idx1;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_idx1  ¦  1  ¦  idx_name  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  name
+drop table temp_idx1;
+create temporary table temp_idx2 (
+id int,
+name varchar(50),
+age int
+);
+create index idx_name on temp_idx2(name);
+create index idx_age on temp_idx2(age);
+insert into temp_idx2 values (1, 'alice', 25);
+insert into temp_idx2 values (2, 'bob', 30);
+insert into temp_idx2 values (3, 'charlie', 25);
+select * from temp_idx2 where name = 'alice';
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  𝄀
+1  ¦  alice  ¦  25
+select * from temp_idx2 where age = 25;
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  𝄀
+1  ¦  alice  ¦  25  𝄀
+3  ¦  charlie  ¦  25
+show index from temp_idx2;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_idx2  ¦  1  ¦  idx_name  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  name  𝄀
+temp_idx2  ¦  1  ¦  idx_age  ¦  1  ¦  age  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  age
+drop table temp_idx2;
+create temporary table temp_unique (
+id int,
+email varchar(100)
+);
+create unique index idx_email on temp_unique(email);
+insert into temp_unique values (1, 'alice@example.com');
+insert into temp_unique values (2, 'bob@example.com');
+insert into temp_unique values (3, 'alice@example.com');
+Duplicate entry 'alice@example.com' for key 'email'
+select * from temp_unique;
+➤ id[4,32,0]  ¦  email[12,-1,0]  𝄀
+1  ¦  alice@example.com  𝄀
+2  ¦  bob@example.com
+drop table temp_unique;
+create temporary table temp_unique2 (
+id int,
+username varchar(50),
+unique index idx_username (username)
+);
+insert into temp_unique2 values (1, 'user1');
+insert into temp_unique2 values (2, 'user2');
+insert into temp_unique2 values (3, 'user1');  -- 应该失败
+Duplicate entry 'user1' for key 'username'
+select * from temp_unique2;
+➤ id[4,32,0]  ¦  username[12,-1,0]  𝄀
+1  ¦  user1  𝄀
+2  ¦  user2
+drop table temp_unique2;
+create temporary table temp_composite (
+id int,
+first_name varchar(50),
+last_name varchar(50),
+age int
+);
+create index idx_name on temp_composite(first_name, last_name);
+create index idx_name_age on temp_composite(first_name, last_name, age);
+insert into temp_composite values (1, 'john', 'doe', 30);
+insert into temp_composite values (2, 'jane', 'smith', 25);
+insert into temp_composite values (3, 'john', 'smith', 35);
+select * from temp_composite where first_name = 'john';
+➤ id[4,32,0]  ¦  first_name[12,-1,0]  ¦  last_name[12,-1,0]  ¦  age[4,32,0]  𝄀
+1  ¦  john  ¦  doe  ¦  30  𝄀
+3  ¦  john  ¦  smith  ¦  35
+select * from temp_composite where first_name = 'john' and last_name = 'doe';
+➤ id[4,32,0]  ¦  first_name[12,-1,0]  ¦  last_name[12,-1,0]  ¦  age[4,32,0]  𝄀
+1  ¦  john  ¦  doe  ¦  30
+select * from temp_composite where first_name = 'john' and last_name = 'smith' and age = 35;
+➤ id[4,32,0]  ¦  first_name[12,-1,0]  ¦  last_name[12,-1,0]  ¦  age[4,32,0]  𝄀
+3  ¦  john  ¦  smith  ¦  35
+show index from temp_composite;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_composite  ¦  1  ¦  idx_name  ¦  1  ¦  first_name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  first_name  𝄀
+temp_composite  ¦  1  ¦  idx_name  ¦  2  ¦  last_name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  last_name  𝄀
+temp_composite  ¦  1  ¦  idx_name_age  ¦  1  ¦  first_name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  first_name  𝄀
+temp_composite  ¦  1  ¦  idx_name_age  ¦  2  ¦  last_name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  last_name  𝄀
+temp_composite  ¦  1  ¦  idx_name_age  ¦  3  ¦  age  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  age
+drop table temp_composite;
+create temporary table temp_alter_idx (
+id int,
+name varchar(50),
+email varchar(100),
+age int
+);
+insert into temp_alter_idx values (1, 'alice', 'alice@example.com', 25);
+insert into temp_alter_idx values (2, 'bob', 'bob@example.com', 30);
+alter table temp_alter_idx add index idx_name (name);
+alter table temp_alter_idx add unique index idx_email (email);
+alter table temp_alter_idx add index idx_name_age (name, age);
+show index from temp_alter_idx;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_alter_idx  ¦  1  ¦  idx_name  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  name  𝄀
+temp_alter_idx  ¦  0  ¦  idx_email  ¦  1  ¦  email  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  email  𝄀
+temp_alter_idx  ¦  1  ¦  idx_name_age  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  name  𝄀
+temp_alter_idx  ¦  1  ¦  idx_name_age  ¦  2  ¦  age  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  age
+select * from temp_alter_idx where name = 'alice';
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  email[12,-1,0]  ¦  age[4,32,0]  𝄀
+1  ¦  alice  ¦  alice@example.com  ¦  25
+select * from temp_alter_idx where email = 'bob@example.com';
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  email[12,-1,0]  ¦  age[4,32,0]  𝄀
+2  ¦  bob  ¦  bob@example.com  ¦  30
+drop table temp_alter_idx;
+create temporary table temp_drop_idx (
+id int,
+name varchar(50),
+age int,
+index idx_name (name),
+index idx_age (age)
+);
+insert into temp_drop_idx values (1, 'alice', 25);
+insert into temp_drop_idx values (2, 'bob', 30);
+show index from temp_drop_idx;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_drop_idx  ¦  1  ¦  idx_name  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  name  𝄀
+temp_drop_idx  ¦  1  ¦  idx_age  ¦  1  ¦  age  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  age
+alter table temp_drop_idx drop index idx_name;
+show index from temp_drop_idx;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_drop_idx  ¦  1  ¦  idx_age  ¦  1  ¦  age  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  age
+alter table temp_drop_idx drop index idx_age;
+show index from temp_drop_idx;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]
+drop table temp_drop_idx;
+create temporary table temp_drop_idx2 (
+id int,
+name varchar(50),
+email varchar(100)
+);
+create index idx_name on temp_drop_idx2(name);
+create index idx_email on temp_drop_idx2(email);
+show index from temp_drop_idx2;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_drop_idx2  ¦  1  ¦  idx_name  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  name  𝄀
+temp_drop_idx2  ¦  1  ¦  idx_email  ¦  1  ¦  email  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  email
+drop index idx_name on temp_drop_idx2;
+show index from temp_drop_idx2;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_drop_idx2  ¦  1  ¦  idx_email  ¦  1  ¦  email  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  email
+drop index idx_email on temp_drop_idx2;
+show index from temp_drop_idx2;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]
+drop table temp_drop_idx2;
+create temporary table temp_fulltext (
+id int primary key,
+title varchar(100),
+content text
+);
+create fulltext index idx_ft_title on temp_fulltext(title);
+create fulltext index idx_ft_content on temp_fulltext(content);
+insert into temp_fulltext values (1, 'introduction to matrixone', 'matrixone is a hyperconverged database');
+no such table temp_index.temp_fulltext
+insert into temp_fulltext values (2, 'temporary tables guide', 'learn how to use temporary tables');
+no such table temp_index.temp_fulltext
+insert into temp_fulltext values (3, 'index management', 'creating and managing indexes in matrixone');
+no such table temp_index.temp_fulltext
+show index from temp_fulltext;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_fulltext  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+temp_fulltext  ¦  1  ¦  idx_ft_title  ¦  1  ¦  title  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  title  𝄀
+temp_fulltext  ¦  1  ¦  idx_ft_content  ¦  1  ¦  content  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  content
+drop table temp_fulltext;
+create temporary table temp_fulltext2 (
+id int primary key,
+title varchar(100),
+body text
+);
+create fulltext index idx_ft_multi on temp_fulltext2(title, body);
+insert into temp_fulltext2 values (1, 'database tutorial', 'learn about databases and sql');
+no such table temp_index.temp_fulltext2
+insert into temp_fulltext2 values (2, 'matrixone features', 'explore the features of matrixone');
+no such table temp_index.temp_fulltext2
+show index from temp_fulltext2;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_fulltext2  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+temp_fulltext2  ¦  1  ¦  idx_ft_multi  ¦  1  ¦  title  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  title  𝄀
+temp_fulltext2  ¦  1  ¦  idx_ft_multi  ¦  2  ¦  body  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  body
+drop table temp_fulltext2;
+set experimental_ivf_index = 1;
+create temporary table temp_vector (
+id int primary key,
+embedding vecf32(3)
+);
+create index idx_ivf using ivfflat on temp_vector(embedding) lists=1 op_type "vector_l2_ops";
+insert into temp_vector values (1, '[1.0, 2.0, 3.0]');
+no such table temp_index.temp_vector
+insert into temp_vector values (2, '[4.0, 5.0, 6.0]');
+no such table temp_index.temp_vector
+insert into temp_vector values (3, '[7.0, 8.0, 9.0]');
+no such table temp_index.temp_vector
+show index from temp_vector;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_vector  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+temp_vector  ¦  1  ¦  idx_ivf  ¦  1  ¦  embedding  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"1","op_type":"vector_l2_ops"}  ¦  YES  ¦  embedding
+drop table temp_vector;
+create temporary table temp_vector2 (
+id int primary key,
+vec128 vecf32(128)
+);
+create index idx_vec128 using ivfflat on temp_vector2(vec128) lists=2 op_type "vector_l2_ops";
+show index from temp_vector2;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_vector2  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+temp_vector2  ¦  1  ¦  idx_vec128  ¦  1  ¦  vec128  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"2","op_type":"vector_l2_ops"}  ¦  YES  ¦  vec128
+drop table temp_vector2;
+set experimental_ivf_index = 0;
+create temporary table temp_multi_idx (
+id int primary key,
+username varchar(50),
+email varchar(100),
+age int,
+bio text,
+created_at timestamp
+);
+create index idx_username on temp_multi_idx(username);
+create unique index idx_email on temp_multi_idx(email);
+create index idx_age_created on temp_multi_idx(age, created_at);
+create fulltext index idx_bio on temp_multi_idx(bio);
+show index from temp_multi_idx;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_multi_idx  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+temp_multi_idx  ¦  1  ¦  idx_username  ¦  1  ¦  username  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  username  𝄀
+temp_multi_idx  ¦  0  ¦  idx_email  ¦  1  ¦  email  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  email  𝄀
+temp_multi_idx  ¦  1  ¦  idx_age_created  ¦  1  ¦  age  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  age  𝄀
+temp_multi_idx  ¦  1  ¦  idx_age_created  ¦  2  ¦  created_at  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  created_at  𝄀
+temp_multi_idx  ¦  1  ¦  idx_bio  ¦  1  ¦  bio  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  bio
+insert into temp_multi_idx values
+(1, 'alice', 'alice@example.com', 25, 'software engineer', '2024-01-01 10:00:00'),
+(2, 'bob', 'bob@example.com', 30, 'data scientist', '2024-01-02 11:00:00'),
+(3, 'charlie', 'charlie@example.com', 25, 'product manager', '2024-01-03 12:00:00');
+no such table temp_index.temp_multi_idx
+select * from temp_multi_idx where username = 'alice';
+➤ id[4,32,0]  ¦  username[12,-1,0]  ¦  email[12,-1,0]  ¦  age[4,32,0]  ¦  bio[12,0,0]  ¦  created_at[93,64,0]
+select * from temp_multi_idx where email = 'bob@example.com';
+➤ id[4,32,0]  ¦  username[12,-1,0]  ¦  email[12,-1,0]  ¦  age[4,32,0]  ¦  bio[12,0,0]  ¦  created_at[93,64,0]
+select * from temp_multi_idx where age = 25;
+➤ id[4,32,0]  ¦  username[12,-1,0]  ¦  email[12,-1,0]  ¦  age[4,32,0]  ¦  bio[12,0,0]  ¦  created_at[93,64,0]
+drop table temp_multi_idx;
+create temporary table temp_empty_idx (
+id int,
+name varchar(50)
+);
+create index idx_name on temp_empty_idx(name);
+show index from temp_empty_idx;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_empty_idx  ¦  1  ¦  idx_name  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  name
+insert into temp_empty_idx values (1, 'test');
+select * from temp_empty_idx where name = 'test';
+➤ id[4,32,0]  ¦  name[12,-1,0]  𝄀
+1  ¦  test
+drop table temp_empty_idx;
+create temporary table temp_data_idx (
+id int,
+value varchar(50)
+);
+insert into temp_data_idx values (1, 'value1');
+insert into temp_data_idx values (2, 'value2');
+insert into temp_data_idx values (3, 'value3');
+create index idx_value on temp_data_idx(value);
+show index from temp_data_idx;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_data_idx  ¦  1  ¦  idx_value  ¦  1  ¦  value  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  value
+select * from temp_data_idx where value = 'value2';
+➤ id[4,32,0]  ¦  value[12,-1,0]  𝄀
+2  ¦  value2
+drop table temp_data_idx;
+create temporary table temp_no_idx (
+id int,
+name varchar(50)
+);
+drop index idx_nonexistent on temp_no_idx;  -- 应该失败
+internal error: not found index: idx_nonexistent
+drop table temp_no_idx;
+drop database temp_index;
