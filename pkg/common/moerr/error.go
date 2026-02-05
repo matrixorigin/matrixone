@@ -1024,11 +1024,13 @@ func NewLogServiceNotReady(ctx context.Context) *Error {
 }
 
 func NewBadDB(ctx context.Context, name string) *Error {
-	return newError(ctx, ErrBadDB, name)
+	noReportCtx := errutil.ContextWithNoReport(ctx, true)
+	return newError(noReportCtx, ErrBadDB, name)
 }
 
 func NewNoDB(ctx context.Context) *Error {
-	return newError(ctx, ErrNoDB)
+	noReportCtx := errutil.ContextWithNoReport(ctx, true)
+	return newError(noReportCtx, ErrNoDB)
 }
 
 func NewNoWorkingStore(ctx context.Context) *Error {
@@ -1060,11 +1062,13 @@ func NewNotLeaseHolder(ctx context.Context, holderId uint64) *Error {
 }
 
 func NewNoSuchTable(ctx context.Context, db, tbl string) *Error {
-	return newError(ctx, ErrNoSuchTable, db, tbl)
+	noReportCtx := errutil.ContextWithNoReport(ctx, true)
+	return newError(noReportCtx, ErrNoSuchTable, db, tbl)
 }
 
 func NewNoSuchSequence(ctx context.Context, db, tbl string) *Error {
-	return newError(ctx, ErrNoSuchSequence, db, tbl)
+	noReportCtx := errutil.ContextWithNoReport(ctx, true)
+	return newError(noReportCtx, ErrNoSuchSequence, db, tbl)
 }
 
 func NewBadView(ctx context.Context, db, v string) *Error {

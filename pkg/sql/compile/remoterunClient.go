@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -341,6 +342,10 @@ type messageSenderOnClient struct {
 	safeToClose bool
 	// alreadyClose should be true once we get a stream closed signal.
 	alreadyClose bool
+
+	// gaugeDecOnce ensures PipelineMessageSenderGauge.Dec() is called at most once when close() runs
+	// (including when close() returns early because alreadyClose is true, so the gauge still decrements).
+	gaugeDecOnce sync.Once
 }
 
 func newMessageSenderOnClient(
@@ -373,7 +378,11 @@ func newMessageSenderOnClient(
 		sender.receiveCh, err = sender.streamSender.Receive()
 	}
 
-	v2.PipelineMessageSenderCounter.Inc()
+	// Only Inc() when we return a valid sender that the caller will eventually close();
+	// when Receive() fails, remoteRun returns nil and never calls close(), so we must not Inc() to avoid gauge leak.
+	if err == nil {
+		v2.PipelineMessageSenderGauge.Inc()
+	}
 	return sender, moerr.AttachCause(ctx, err)
 }
 
@@ -545,6 +554,10 @@ func (sender *messageSenderOnClient) dealRemoteAnalysis(p models.PhyPlan) {
 }
 
 func (sender *messageSenderOnClient) close() {
+	// Ensure Gauge is decremented exactly once when this sender is torn down, including when
+	// alreadyClose is true (stream already closed by remote); otherwise we'd leak the gauge.
+	defer sender.gaugeDecOnce.Do(func() { v2.PipelineMessageSenderGauge.Dec() })
+
 	sender.waitingTheStopResponse()
 
 	if sender.ctxCancel != nil {
@@ -554,6 +567,4 @@ func (sender *messageSenderOnClient) close() {
 		return
 	}
 	_ = sender.streamSender.Close(true)
-
-	v2.PipelineMessageSenderCounter.Desc()
 }
