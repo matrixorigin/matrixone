@@ -841,7 +841,7 @@ func (h *UpstreamSQLHelper) tryToIncreaseTxnPhysicalTS(ctx context.Context) (int
 }
 
 // handleGetDdlCmd handles the internal __++__internal_get_ddl command
-// Format: __++__internal_get_ddl <snapshotName> <subscriptionAccountName> <publicationName>
+// Format: __++__internal_get_ddl <snapshotName> <subscriptionAccountName> <publicationName> <level> <dbName> <tableName>
 func (h *UpstreamSQLHelper) handleGetDdlCmd(
 	ctx context.Context,
 	query string,
@@ -849,14 +849,20 @@ func (h *UpstreamSQLHelper) handleGetDdlCmd(
 	// Parse the command parameters
 	params := strings.TrimSpace(query[len(cmdGetDdlPrefix):])
 	parts := strings.Fields(params)
-	if len(parts) != 3 {
-		return true, nil, moerr.NewInternalError(ctx, "invalid get_ddl command format, expected: __++__internal_get_ddl <snapshotName> <subscriptionAccountName> <publicationName>")
+	if len(parts) != 6 {
+		return true, nil, moerr.NewInternalError(ctx, "invalid get_ddl command format, expected: __++__internal_get_ddl <snapshotName> <subscriptionAccountName> <publicationName> <level> <dbName> <tableName>")
 	}
 	snapshotName := parts[0]
-	// subscriptionAccountName and publicationName are not used in test helper since we don't check publication permissions
+	// subscriptionAccountName (parts[1]) and publicationName (parts[2]) are not used in test helper since we don't check publication permissions
+	level := parts[3]
+	databaseName := parts[4]
+	tableName := parts[5]
 
 	logutil.Info("UpstreamSQLHelper: handling internal get_ddl command",
 		zap.String("snapshotName", snapshotName),
+		zap.String("level", level),
+		zap.String("databaseName", databaseName),
+		zap.String("tableName", tableName),
 	)
 
 	if h.engine == nil {
@@ -869,7 +875,7 @@ func (h *UpstreamSQLHelper) handleGetDdlCmd(
 		return true, nil, err
 	}
 
-	// Step 1: Get snapshot info (ts, level, databaseName, tableName)
+	// Step 1: Get snapshot info to get the timestamp
 	snapshotInfo, err := frontend.GetSnapshotInfoByName(ctx, h.executor, txnOp, snapshotName)
 	if err != nil {
 		return true, nil, moerr.NewInternalErrorf(ctx, "failed to get snapshot info: %v", err)
@@ -878,23 +884,7 @@ func (h *UpstreamSQLHelper) handleGetDdlCmd(
 		return true, nil, moerr.NewInternalErrorf(ctx, "snapshot %s does not exist", snapshotName)
 	}
 
-	// Step 2: Determine database name and table name based on snapshot level
-	var databaseName, tableName string
-	switch snapshotInfo.Level {
-	case "table":
-		databaseName = snapshotInfo.DatabaseName
-		tableName = snapshotInfo.TableName
-	case "database":
-		databaseName = snapshotInfo.DatabaseName
-		tableName = ""
-	case "account", "cluster":
-		databaseName = ""
-		tableName = ""
-	default:
-		return true, nil, moerr.NewInternalErrorf(ctx, "unsupported snapshot level: %s", snapshotInfo.Level)
-	}
-
-	// Step 3: Get snapshot timestamp
+	// Step 2: Get snapshot timestamp
 	snapshotTs := snapshotInfo.Ts
 
 	// Step 4: Compute DDL batch

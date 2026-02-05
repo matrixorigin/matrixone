@@ -123,6 +123,12 @@ func TestCheckIterationStatus(t *testing.T) {
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
 	require.NoError(t, err)
 
+	// Create mo_ccpr_tables and mo_ccpr_dbs tables using system account context
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprTablesDDL)
+	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprDbsDDL)
+	require.NoError(t, err)
+
 	// Create InternalSQLExecutor (only once)
 	// Pass nil for txnClient - transactions will be managed externally via ExecTxn
 	executor, err := publication.NewInternalSQLExecutor("", nil, nil, accountId, &publication.SQLExecutorRetryOption{
@@ -320,6 +326,12 @@ func TestExecuteIteration1(t *testing.T) {
 	// Create mo_ccpr_log table using system account context
 	systemCtx := context.WithValue(srcCtxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
+	require.NoError(t, err)
+
+	// Create mo_ccpr_tables and mo_ccpr_dbs tables using system account context
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprTablesDDL)
+	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprDbsDDL)
 	require.NoError(t, err)
 
 	// Create mo_snapshots table for source account
@@ -843,6 +855,12 @@ func TestExecuteIterationDatabaseLevel(t *testing.T) {
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
 	require.NoError(t, err)
 
+	// Create mo_ccpr_tables and mo_ccpr_dbs tables using system account context
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprTablesDDL)
+	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprDbsDDL)
+	require.NoError(t, err)
+
 	// Create mo_snapshots table for source account
 	moSnapshotsDDL := frontend.MoCatalogMoSnapshotsDDL
 	err = exec_sql(disttaeEngine, srcCtxWithTimeout, moSnapshotsDDL)
@@ -1175,6 +1193,12 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 	require.NoError(t, err)
 
 	err = exec_sql(disttaeEngine, systemCtxWithTimeout, frontend.MoCatalogMoCcprLogDDL)
+	require.NoError(t, err)
+
+	// Create mo_ccpr_tables and mo_ccpr_dbs tables using system account context
+	err = exec_sql(disttaeEngine, systemCtxWithTimeout, frontend.MoCatalogMoCcprTablesDDL)
+	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtxWithTimeout, frontend.MoCatalogMoCcprDbsDDL)
 	require.NoError(t, err)
 
 	moSnapshotsDDLSystem := frontend.MoCatalogMoSnapshotsDDL
@@ -1713,6 +1737,12 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
 	require.NoError(t, err)
 
+	// Create mo_ccpr_tables and mo_ccpr_dbs tables using system account context
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprTablesDDL)
+	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprDbsDDL)
+	require.NoError(t, err)
+
 	// Create system tables for source account
 	moSnapshotsDDL := frontend.MoCatalogMoSnapshotsDDL
 	err = exec_sql(disttaeEngine, srcCtxWithTimeout, moSnapshotsDDL)
@@ -2032,6 +2062,12 @@ func TestExecuteIterationWithCommitFailedInjection(t *testing.T) {
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
 	require.NoError(t, err)
 
+	// Create mo_ccpr_tables and mo_ccpr_dbs tables using system account context
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprTablesDDL)
+	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprDbsDDL)
+	require.NoError(t, err)
+
 	// Create mo_snapshots table for source account
 	moSnapshotsDDL := frontend.MoCatalogMoSnapshotsDDL
 	err = exec_sql(disttaeEngine, srcCtxWithTimeout, moSnapshotsDDL)
@@ -2264,6 +2300,12 @@ func TestCCPRGC(t *testing.T) {
 	// Create mo_ccpr_log table using system account context
 	systemCtx := context.WithValue(ctxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
+	require.NoError(t, err)
+
+	// Create mo_ccpr_tables and mo_ccpr_dbs tables using system account context
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprTablesDDL)
+	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprDbsDDL)
 	require.NoError(t, err)
 
 	// Create mo_snapshots table
@@ -2700,6 +2742,12 @@ func TestCCPRCreateDelete(t *testing.T) {
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
 	require.NoError(t, err)
 
+	// Create mo_ccpr_tables and mo_ccpr_dbs tables using system account context
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprTablesDDL)
+	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprDbsDDL)
+	require.NoError(t, err)
+
 	// Create mo_snapshots table for source account
 	moSnapshotsDDL := frontend.MoCatalogMoSnapshotsDDL
 	err = exec_sql(disttaeEngine, srcCtxWithTimeout, moSnapshotsDDL)
@@ -3079,6 +3127,12 @@ func TestCCPRAlterTable(t *testing.T) {
 	// Create mo_ccpr_log table using system account context
 	systemCtx := context.WithValue(srcCtxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
+	require.NoError(t, err)
+
+	// Create mo_ccpr_tables and mo_ccpr_dbs tables using system account context
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprTablesDDL)
+	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprDbsDDL)
 	require.NoError(t, err)
 
 	// Create mo_snapshots table for source account
@@ -3508,6 +3562,12 @@ func TestCCPRErrorHandling1(t *testing.T) {
 	// Create mo_ccpr_log table using system account context
 	systemCtx := context.WithValue(srcCtxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
+	require.NoError(t, err)
+
+	// Create mo_ccpr_tables and mo_ccpr_dbs tables using system account context
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprTablesDDL)
+	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprDbsDDL)
 	require.NoError(t, err)
 
 	// Create mo_snapshots table for source account
@@ -4001,6 +4061,12 @@ func TestCCPRDDLAccountLevel(t *testing.T) {
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
 	require.NoError(t, err)
 
+	// Create mo_ccpr_tables and mo_ccpr_dbs tables using system account context
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprTablesDDL)
+	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprDbsDDL)
+	require.NoError(t, err)
+
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoAccountDDL)
 	require.NoError(t, err)
 
@@ -4390,6 +4456,13 @@ func TestCCPRExecutorWithGC(t *testing.T) {
 	// Create mo_ccpr_log table using system account context
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
 	require.NoError(t, err)
+
+	// Create mo_ccpr_tables and mo_ccpr_dbs tables using system account context
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprTablesDDL)
+	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprDbsDDL)
+	require.NoError(t, err)
+
 	// Create mo_foreign_keys table using system account context
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoForeignKeysDDL)
 	require.NoError(t, err)
@@ -4754,6 +4827,12 @@ func TestCCPRErrorHandling2(t *testing.T) {
 	// Create mo_ccpr_log table using system account context
 	systemCtx := context.WithValue(srcCtxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
+	require.NoError(t, err)
+
+	// Create mo_ccpr_tables and mo_ccpr_dbs tables using system account context
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprTablesDDL)
+	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprDbsDDL)
 	require.NoError(t, err)
 
 	// Create mo_snapshots table for source account
