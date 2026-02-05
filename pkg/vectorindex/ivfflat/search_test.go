@@ -86,3 +86,58 @@ func TestIvfSearchParserError(t *testing.T) {
 	_, _, err := idx.Search(sqlproc, idxcfg, tblcfg, v, rt, 4)
 	require.NotNil(t, err)
 }
+
+func TestFindMergedCentroids(t *testing.T) {
+	idx := &IvfflatSearchIndex[float32]{}
+	idxcfg := vectorindex.IndexConfig{}
+
+	// Case 1: CenterStats set, SmallCenterThreshold = 0
+	input := []int64{1, 2, 3, 4, 5}
+	probe := uint(2)
+	idx.Meta.CenterStats = map[int64]int64{
+		1: 100,
+		2: 100,
+		3: 100,
+		4: 100,
+		5: 100,
+	}
+	idx.Meta.SmallCenterThreshold = 0
+	res, err := idx.findMergedCentroids(nil, input, idxcfg, probe)
+	require.Nil(t, err)
+	require.Equal(t, []int64{1, 2}, res)
+
+	// Case 2: CenterStats set, with small centers
+	idx.Meta.SmallCenterThreshold = 50
+	idx.Meta.CenterStats = map[int64]int64{
+		1: 100, // Big
+		2: 10,  // Small
+		3: 100, // Big
+		4: 10,  // Small
+		5: 100, // Big
+	}
+
+	// probe = 2
+	// 1 (Big) -> nprobe=1
+	// 2 (Small) -> nprobe=1
+	// 3 (Big) -> nprobe=2 -> break
+	res, err = idx.findMergedCentroids(nil, input, idxcfg, probe)
+	require.Nil(t, err)
+	require.Equal(t, []int64{1, 2, 3}, res)
+
+	// Case 3: All small
+	idx.Meta.CenterStats = map[int64]int64{
+		1: 10, 2: 10, 3: 10, 4: 10, 5: 10,
+	}
+	res, err = idx.findMergedCentroids(nil, input, idxcfg, probe)
+	require.Nil(t, err)
+	require.Equal(t, input, res)
+
+	// Case 4: probe is large
+	idx.Meta.CenterStats = map[int64]int64{
+		1: 100, 2: 100, 3: 100, 4: 100, 5: 100,
+	}
+	probe = 10
+	res, err = idx.findMergedCentroids(nil, input, idxcfg, probe)
+	require.Nil(t, err)
+	require.Equal(t, input, res)
+}
