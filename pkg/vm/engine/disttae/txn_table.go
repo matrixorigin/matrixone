@@ -657,7 +657,7 @@ func (tbl *txnTable) StarCount(ctx context.Context) (uint64, error) {
 
 	// Fast path: readonly transaction has no uncommitted data
 	if tbl.getTxn().ReadOnly() {
-		return part.CountRows(ctx, types.TimestampToTS(snapshot), fs)
+		return part.CountRows(ctx, types.TimestampToTS(snapshot), fs, tbl.getTxn().proc.Mp())
 	}
 
 	// Determine the range of workspace entries to scan.
@@ -684,7 +684,7 @@ func (tbl *txnTable) StarCount(ctx context.Context) (uint64, error) {
 
 	// Get committed row count from PartitionState.
 	// This already accounts for committed inserts minus committed tombstones.
-	committedRows, err := part.CountRows(ctx, types.TimestampToTS(snapshot), fs)
+	committedRows, err := part.CountRows(ctx, types.TimestampToTS(snapshot), fs, tbl.getTxn().proc.Mp())
 	if err != nil {
 		return 0, err
 	}
