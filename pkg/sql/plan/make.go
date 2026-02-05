@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -564,6 +565,9 @@ func MakePlan2NullTextConstExprWithType(v string) *plan.Expr {
 
 func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
 	var err error
+	if expr == nil {
+		return nil, moerr.NewInvalidInput(ctx, "nil expression in cast")
+	}
 	if isSameColumnType(expr.Typ, targetType) {
 		return expr, nil
 	}
