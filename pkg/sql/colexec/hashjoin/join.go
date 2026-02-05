@@ -70,7 +70,7 @@ func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
 	}
 
 	ctr := &hashJoin.ctr
-	if len(ctr.joinBats) == 0 {
+	if hashJoin.NonEqCond != nil && len(ctr.joinBats) == 0 {
 		ctr.joinBats = make([]*batch.Batch, 2)
 	}
 
@@ -275,11 +275,13 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 		return err
 	}
 
-	if ctr.joinBats[0] == nil {
-		ctr.joinBats[0], ctr.cfs1 = colexec.NewJoinBatch(ctr.leftBat, proc.Mp())
-	}
-	if ctr.joinBats[1] == nil && ctr.rightRowCnt > 0 {
-		ctr.joinBats[1], ctr.cfs2 = colexec.NewJoinBatch(ctr.rightBats[0], proc.Mp())
+	if hashJoin.NonEqCond != nil {
+		if ctr.joinBats[0] == nil {
+			ctr.joinBats[0], ctr.cfs1 = colexec.NewJoinBatch(ctr.leftBat, proc.Mp())
+		}
+		if ctr.joinBats[1] == nil && ctr.rightRowCnt > 0 {
+			ctr.joinBats[1], ctr.cfs2 = colexec.NewJoinBatch(ctr.rightBats[0], proc.Mp())
+		}
 	}
 
 	if ctr.itr == nil {
