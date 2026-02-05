@@ -1546,22 +1546,21 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 		ret.Conditions = rewriteJoinExprToHashBuildExpr(arg.EqConds[1])
 
 		// to find if hashmap need to keep build batches for probe
-		//var needMergedBatch bool
-		//if arg.NonEqCond != nil {
-		//	needMergedBatch = true
-		//} else {
-		//	for _, rp := range arg.ResultCols {
-		//		if rp.Rel == 1 {
-		//			needMergedBatch = true
-		//			break
-		//		}
-		//	}
-		//}
-		//ret.NeedBatches = needMergedBatch
+		var needMergedBatch bool
+		if arg.NonEqCond != nil {
+			needMergedBatch = true
+		} else {
+			for _, rp := range arg.ResultCols {
+				if rp.Rel == 1 {
+					needMergedBatch = true
+					break
+				}
+			}
+		}
+		ret.NeedBatches = needMergedBatch
 
-		ret.NeedBatches = true
 		ret.HashOnPK = arg.HashOnPK
-		ret.NeedAllocateSels = true
+		ret.NeedAllocateSels = !arg.HashOnPK
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}
@@ -1638,21 +1637,21 @@ func constructShuffleHashBuild(op vm.Operator, proc *process.Process) *hashbuild
 		arg := op.(*hashjoin.HashJoin)
 		ret.Conditions = rewriteJoinExprToHashBuildExpr(arg.EqConds[1])
 		// to find if hashmap need to keep build batches for probe
-		//var needMergedBatch bool
-		//if arg.NonEqCond != nil {
-		//	needMergedBatch = true
-		//} else {
-		//	for _, rp := range arg.ResultCols {
-		//		if rp.Rel == 1 {
-		//			needMergedBatch = true
-		//			break
-		//		}
-		//	}
-		//}
-		//ret.NeedBatches = needMergedBatch
-		ret.NeedBatches = true
+		var needMergedBatch bool
+		if arg.NonEqCond != nil {
+			needMergedBatch = true
+		} else {
+			for _, rp := range arg.ResultCols {
+				if rp.Rel == 1 {
+					needMergedBatch = true
+					break
+				}
+			}
+		}
+		ret.NeedBatches = needMergedBatch
+
 		ret.HashOnPK = arg.HashOnPK
-		ret.NeedAllocateSels = true
+		ret.NeedAllocateSels = !arg.HashOnPK
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
