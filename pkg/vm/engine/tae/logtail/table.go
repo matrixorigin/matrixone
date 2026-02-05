@@ -277,6 +277,7 @@ func (table *TxnTable) TruncateByTimeStamp(ts types.TS) (cnt int) {
 func (table *TxnTable) ForeachRowInBetween(
 	from, to types.TS,
 	skipBlkOp func(blk BlockT) bool,
+	postBlkOp func(blk BlockT),
 	rowOp func(row RowT) (goNext bool),
 ) (readRows int) {
 	snapshot := table.Snapshot()
@@ -313,6 +314,10 @@ func (table *TxnTable) ForeachRowInBetween(
 			rowOp,
 		)
 		readRows += cnt
+
+		if postBlkOp != nil {
+			postBlkOp(blk)
+		}
 
 		return !outOfRange
 	})
