@@ -268,6 +268,16 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 	return
 }
 
+func unwrapParenExpr(astExpr tree.Expr) tree.Expr {
+	for {
+		paren, ok := astExpr.(*tree.ParenExpr)
+		if !ok {
+			return astExpr
+		}
+		astExpr = paren.Expr
+	}
+}
+
 func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
 	typ := types.T_text.ToType()
 	return &Expr{
@@ -627,13 +637,15 @@ func (b *baseBinder) bindBinaryExpr(astExpr *tree.BinaryExpr, depth int32, isRoo
 
 func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int32, isRoot bool) (*Expr, error) {
 	var op string
+	leftAst := unwrapParenExpr(astExpr.Left)
+	rightAst := unwrapParenExpr(astExpr.Right)
 
 	switch astExpr.Op {
 	case tree.EQUAL:
 		op = "="
-		switch leftexpr := astExpr.Left.(type) {
+		switch leftexpr := leftAst.(type) {
 		case *tree.Tuple:
-			switch rightexpr := astExpr.Right.(type) {
+			switch rightexpr := rightAst.(type) {
 			case *tree.Tuple:
 				if len(leftexpr.Exprs) == len(rightexpr.Exprs) {
 					var expr1, expr2 *plan.Expr
@@ -663,9 +675,9 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 
 	case tree.LESS_THAN:
 		op = "<"
-		switch leftexpr := astExpr.Left.(type) {
+		switch leftexpr := leftAst.(type) {
 		case *tree.Tuple:
-			switch rightexpr := astExpr.Right.(type) {
+			switch rightexpr := rightAst.(type) {
 			case *tree.Tuple:
 				if len(leftexpr.Exprs) == len(rightexpr.Exprs) {
 					var expr1, expr2 *plan.Expr
@@ -703,9 +715,9 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 
 	case tree.LESS_THAN_EQUAL:
 		op = "<="
-		switch leftexpr := astExpr.Left.(type) {
+		switch leftexpr := leftAst.(type) {
 		case *tree.Tuple:
-			switch rightexpr := astExpr.Right.(type) {
+			switch rightexpr := rightAst.(type) {
 			case *tree.Tuple:
 				if len(leftexpr.Exprs) == len(rightexpr.Exprs) {
 					var expr1, expr2 *plan.Expr
@@ -743,9 +755,9 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 
 	case tree.GREAT_THAN:
 		op = ">"
-		switch leftexpr := astExpr.Left.(type) {
+		switch leftexpr := leftAst.(type) {
 		case *tree.Tuple:
-			switch rightexpr := astExpr.Right.(type) {
+			switch rightexpr := rightAst.(type) {
 			case *tree.Tuple:
 				if len(leftexpr.Exprs) == len(rightexpr.Exprs) {
 					var expr1, expr2 *plan.Expr
@@ -783,9 +795,9 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 
 	case tree.GREAT_THAN_EQUAL:
 		op = ">="
-		switch leftexpr := astExpr.Left.(type) {
+		switch leftexpr := leftAst.(type) {
 		case *tree.Tuple:
-			switch rightexpr := astExpr.Right.(type) {
+			switch rightexpr := rightAst.(type) {
 			case *tree.Tuple:
 				if len(leftexpr.Exprs) == len(rightexpr.Exprs) {
 					var expr1, expr2 *plan.Expr
@@ -823,9 +835,9 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 
 	case tree.NOT_EQUAL:
 		op = "<>"
-		switch leftexpr := astExpr.Left.(type) {
+		switch leftexpr := leftAst.(type) {
 		case *tree.Tuple:
-			switch rightexpr := astExpr.Right.(type) {
+			switch rightexpr := rightAst.(type) {
 			case *tree.Tuple:
 				if len(leftexpr.Exprs) == len(rightexpr.Exprs) {
 					var expr1, expr2 *plan.Expr
@@ -868,12 +880,12 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		return b.bindFuncExprImplByAstExpr("not", []tree.Expr{newExpr}, depth)
 
 	case tree.IN:
-		if leftTuple, ok := astExpr.Left.(*tree.Tuple); ok {
-			if rightTuple, ok := astExpr.Right.(*tree.Tuple); ok {
+		if leftTuple, ok := leftAst.(*tree.Tuple); ok {
+			if rightTuple, ok := rightAst.(*tree.Tuple); ok {
 				return b.bindTupleInByAst(leftTuple, rightTuple, depth, false)
 			}
 		}
-		switch r := astExpr.Right.(type) {
+		switch r := rightAst.(type) {
 		case *tree.Tuple:
 			op = "in"
 			if r.Partition {
@@ -917,12 +929,12 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		}
 
 	case tree.NOT_IN:
-		if leftTuple, ok := astExpr.Left.(*tree.Tuple); ok {
-			if rightTuple, ok := astExpr.Right.(*tree.Tuple); ok {
+		if leftTuple, ok := leftAst.(*tree.Tuple); ok {
+			if rightTuple, ok := rightAst.(*tree.Tuple); ok {
 				return b.bindTupleInByAst(leftTuple, rightTuple, depth, true)
 			}
 		}
-		switch astExpr.Right.(type) {
+		switch rightAst.(type) {
 		case *tree.Tuple:
 			op = "not_in"
 
@@ -1024,7 +1036,7 @@ func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tu
 	var newExpr *plan.Expr
 
 	for _, rightVal := range rightTuple.Exprs {
-		rightTupleVal, ok := rightVal.(*tree.Tuple)
+		rightTupleVal, ok := unwrapParenExpr(rightVal).(*tree.Tuple)
 		if !ok {
 			return nil, moerr.NewInternalError(b.GetContext(), "IN list must contain tuples")
 		}

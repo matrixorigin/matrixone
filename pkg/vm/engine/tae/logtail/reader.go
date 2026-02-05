@@ -15,6 +15,8 @@
 package logtail
 
 import (
+	"runtime"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
@@ -26,54 +28,64 @@ type Reader struct {
 	table    *TxnTable
 }
 
+func mergeSummary(tree *model.Tree, summary *summary) {
+	for record := range summary.tids {
+		if _, ok := tree.Tables[record.ID]; !ok {
+			tree.Tables[record.ID] = model.NewTableTree(record.DbID, record.ID)
+		}
+	}
+}
+
 // Merge all dirty table/object/block into one dirty tree
 func (r *Reader) GetDirty() (tree *model.Tree, count int) {
 	tree = model.NewTree()
+	iterateOnCompact := false
+
 	op := func(row RowT) (moveOn bool) {
-		if memo := row.GetMemo(); memo != nil && memo.HasAnyTableDataChanges() {
+		memo := row.GetMemo()
+		if memo == nil {
+			// current block is compacted during iterating
+			// retrieve the memo from blk summary, only once.
+			iterateOnCompact = true
+		} else if memo.HasAnyTableDataChanges() {
 			row.GetTxnState(true)
 			tree.Merge(memo.GetDirty())
 		}
 		count++
 		return true
 	}
+
+	postBlkOp := func(blk BlockT) {
+		if !iterateOnCompact {
+			return
+		}
+		summary := blk.summary.Load()
+		// wait TryCompact to finish
+		for summary == nil {
+			runtime.Gosched()
+			summary = blk.summary.Load()
+		}
+		mergeSummary(tree, summary)
+		iterateOnCompact = false
+	}
+
 	skipBlkOp := func(blk BlockT) (moveOn bool) {
 		summary := blk.summary.Load()
 		if summary == nil {
 			return false
 		}
-		for record := range summary.tids {
-			if _, ok := tree.Tables[record.ID]; !ok {
-				tree.Tables[record.ID] = model.NewTableTree(record.DbID, record.ID)
-			}
-		}
+		mergeSummary(tree, summary)
 		count += len(blk.rows)
 		return true
 	}
-	r.table.ForeachRowInBetween(r.from, r.to, skipBlkOp, op)
+	r.table.ForeachRowInBetween(r.from, r.to, skipBlkOp, postBlkOp, op)
 	return
 }
 
 func (r *Reader) IsDirtyOnTable(DbID, id uint64) bool {
-	found := false
-	record := model.TableRecord{DbID: DbID, ID: id}
-	op := func(row RowT) (moveOn bool) {
-		if memo := row.GetMemo(); memo != nil && memo.HasTableDataChanges(id) {
-			found = true
-			return false
-		}
-		return true
-	}
-	skipFn := func(blk BlockT) bool {
-		summary := blk.summary.Load()
-		if summary == nil {
-			return false
-		}
-		_, exist := summary.tids[record]
-		return !exist
-	}
-	r.table.ForeachRowInBetween(r.from, r.to, skipFn, op)
-	return found
+	// TODO: optimize if needed
+	tree, _ := r.GetDirty()
+	return tree.HasTable(id)
 }
 
 // TODO: optimize
@@ -81,6 +93,7 @@ func (r *Reader) GetMaxLSN() (maxLsn uint64) {
 	r.table.ForeachRowInBetween(
 		r.from,
 		r.to,
+		nil,
 		nil,
 		func(row RowT) (moveOn bool) {
 			lsn := row.GetLSN()
