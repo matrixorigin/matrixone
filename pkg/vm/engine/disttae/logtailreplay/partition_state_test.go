@@ -170,11 +170,13 @@ func TestScanRows(t *testing.T) {
 
 func TestCountRows(t *testing.T) {
 	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
 	fs := testutil.NewSharedFS()
 	state := NewPartitionState("", false, 42, false)
 
 	// Test empty state
-	count, err := state.CountRows(ctx, types.BuildTS(10, 0), fs)
+	count, err := state.CountRows(ctx, types.BuildTS(10, 0), fs, mp)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(0), count)
 
@@ -189,7 +191,7 @@ func TestCountRows(t *testing.T) {
 	})
 
 	// Count at TS=10, should see 100 rows
-	count, err = state.CountRows(ctx, types.BuildTS(10, 0), fs)
+	count, err = state.CountRows(ctx, types.BuildTS(10, 0), fs, mp)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(100), count)
 
@@ -207,7 +209,7 @@ func TestCountRows(t *testing.T) {
 	}
 
 	// Count at TS=10, should see 100 + 5 = 105 rows
-	count, err = state.CountRows(ctx, types.BuildTS(10, 0), fs)
+	count, err = state.CountRows(ctx, types.BuildTS(10, 0), fs, mp)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(105), count)
 
@@ -236,22 +238,22 @@ func TestCountRows(t *testing.T) {
 	}
 
 	// Count at TS=10, should see 85 - 0 = 85 rows (deletes filtered out due to no matching objects)
-	count, err = state.CountRows(ctx, types.BuildTS(10, 0), nil)
+	count, err = state.CountRows(ctx, types.BuildTS(10, 0), nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(105), count)
 
 	// Test snapshot visibility: count at TS=1 (before tombstone)
-	count, err = state.CountRows(ctx, types.BuildTS(1, 0), nil)
+	count, err = state.CountRows(ctx, types.BuildTS(1, 0), nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(100), count)
 
 	// Test snapshot visibility: count at TS=2 (before inserts)
-	count, err = state.CountRows(ctx, types.BuildTS(2, 0), fs)
+	count, err = state.CountRows(ctx, types.BuildTS(2, 0), fs, mp)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(100), count)
 
 	// Test snapshot visibility: count at TS=3 (after some inserts)
-	count, err = state.CountRows(ctx, types.BuildTS(3, 2), fs)
+	count, err = state.CountRows(ctx, types.BuildTS(3, 2), fs, mp)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(103), count) // 100 + 3 inserts visible
 }
@@ -260,7 +262,9 @@ func TestCountDataRows(t *testing.T) {
 	state := NewPartitionState("", false, 42, false)
 
 	// Test empty state
-	count := state.CollectDataStats(types.BuildTS(10, 0)).Rows
+	dataStats, err := state.CollectDataStats(context.Background(), types.BuildTS(10, 0), nil, nil)
+	require.NoError(t, err)
+	count := dataStats.Rows
 	assert.Equal(t, uint64(0), count)
 
 	// Add non-appendable data object with 100 rows
@@ -273,7 +277,9 @@ func TestCountDataRows(t *testing.T) {
 		DeleteTime:  types.TS{},
 	})
 
-	count = state.CollectDataStats(types.BuildTS(10, 0)).Rows
+	dataStats, err = state.CollectDataStats(context.Background(), types.BuildTS(10, 0), nil, nil)
+	require.NoError(t, err)
+	count = dataStats.Rows
 	assert.Equal(t, uint64(100), count)
 
 	// Add another non-appendable data object with 50 rows
@@ -286,7 +292,9 @@ func TestCountDataRows(t *testing.T) {
 		DeleteTime:  types.TS{},
 	})
 
-	count = state.CollectDataStats(types.BuildTS(10, 0)).Rows
+	dataStats, err = state.CollectDataStats(context.Background(), types.BuildTS(10, 0), nil, nil)
+	require.NoError(t, err)
+	count = dataStats.Rows
 	assert.Equal(t, uint64(150), count)
 
 	// Add in-memory inserts
@@ -301,15 +309,21 @@ func TestCountDataRows(t *testing.T) {
 		})
 	}
 
-	count = state.CollectDataStats(types.BuildTS(10, 0)).Rows
+	dataStats, err = state.CollectDataStats(context.Background(), types.BuildTS(10, 0), nil, nil)
+	require.NoError(t, err)
+	count = dataStats.Rows
 	assert.Equal(t, uint64(160), count)
 
 	// Test snapshot visibility: count at TS=1
-	count = state.CollectDataStats(types.BuildTS(1, 0)).Rows
+	dataStats, err = state.CollectDataStats(context.Background(), types.BuildTS(1, 0), nil, nil)
+	require.NoError(t, err)
+	count = dataStats.Rows
 	assert.Equal(t, uint64(100), count)
 
 	// Test snapshot visibility: count at TS=2
-	count = state.CollectDataStats(types.BuildTS(2, 0)).Rows
+	dataStats, err = state.CollectDataStats(context.Background(), types.BuildTS(2, 0), nil, nil)
+	require.NoError(t, err)
+	count = dataStats.Rows
 	assert.Equal(t, uint64(150), count)
 
 	// Test deleted object visibility
@@ -323,11 +337,15 @@ func TestCountDataRows(t *testing.T) {
 	})
 
 	// At TS=4, object is visible (100 + 50 + 10 in-mem + 30 new obj = 190)
-	count = state.CollectDataStats(types.BuildTS(4, 0)).Rows
+	dataStats, err = state.CollectDataStats(context.Background(), types.BuildTS(4, 0), nil, nil)
+	require.NoError(t, err)
+	count = dataStats.Rows
 	assert.Equal(t, uint64(190), count)
 
 	// At TS=5, object is deleted (100 + 50 + 10 in-mem = 160)
-	count = state.CollectDataStats(types.BuildTS(5, 0)).Rows
+	dataStats, err = state.CollectDataStats(context.Background(), types.BuildTS(5, 0), nil, nil)
+	require.NoError(t, err)
+	count = dataStats.Rows
 	assert.Equal(t, uint64(160), count)
 }
 
@@ -509,7 +527,9 @@ func TestCountRowsAppendableObjects(t *testing.T) {
 	})
 
 	// Should be 0 since appendable objects are not counted
-	count := state.CollectDataStats(types.BuildTS(10, 0)).Rows
+	dataStats, err := state.CollectDataStats(context.Background(), types.BuildTS(10, 0), nil, nil)
+	require.NoError(t, err)
+	count := dataStats.Rows
 	assert.Equal(t, uint64(0), count)
 
 	// Add appendable tombstone object (should not be counted)
@@ -559,7 +579,9 @@ func TestCountRowsSnapshotIsolation(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		count := state.CollectDataStats(tt.ts).Rows
+		dataStats, err := state.CollectDataStats(context.Background(), tt.ts, nil, nil)
+		require.NoError(t, err)
+		count := dataStats.Rows
 		assert.Equal(t, tt.expected, count, "Failed at TS=%v", tt.ts)
 	}
 }
@@ -605,13 +627,17 @@ func TestCountRowsInMemoryMixedOperations(t *testing.T) {
 	}
 
 	// Count: 100 (base) + 13 inserts - 0 deletes = 113 (deletes filtered out due to no matching objects)
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
 	fs := testutil.NewSharedFS()
-	count, err := state.CountRows(ctx, types.BuildTS(10, 0), fs)
+	count, err := state.CountRows(ctx, types.BuildTS(10, 0), fs, mp)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(113), count)
 
 	// Verify individual counts
-	dataCount := state.CollectDataStats(types.BuildTS(10, 0)).Rows
+	dataStats, err := state.CollectDataStats(context.Background(), types.BuildTS(10, 0), nil, nil)
+	require.NoError(t, err)
+	dataCount := dataStats.Rows
 	assert.Equal(t, uint64(113), dataCount) // 100 + 13
 
 	tombStats, err := state.CollectTombstoneStats(ctx, types.BuildTS(10, 0), fs)
@@ -665,7 +691,9 @@ func TestCountRowsMultipleObjectDeletions(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		count := state.CollectDataStats(tt.ts).Rows
+		dataStats, err := state.CollectDataStats(context.Background(), tt.ts, nil, nil)
+		require.NoError(t, err)
+		count := dataStats.Rows
 		assert.Equal(t, tt.expected, count, "Failed at TS=%v", tt.ts)
 	}
 }
@@ -684,10 +712,12 @@ func TestCountRowsZeroRowObjects(t *testing.T) {
 		DeleteTime:  types.TS{},
 	})
 
-	count := state.CollectDataStats(types.BuildTS(10, 0)).Rows
+	dataStats, err := state.CollectDataStats(context.Background(), types.BuildTS(10, 0), nil, nil)
+	require.NoError(t, err)
+	count := dataStats.Rows
 	assert.Equal(t, uint64(0), count)
 
-	totalCount, err := state.CountRows(ctx, types.BuildTS(10, 0), nil)
+	totalCount, err := state.CountRows(ctx, types.BuildTS(10, 0), nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(0), totalCount)
 }
@@ -711,10 +741,12 @@ func TestCountRowsLargeNumbers(t *testing.T) {
 		})
 	}
 
-	count := state.CollectDataStats(types.BuildTS(1000, 0)).Rows
+	dataStats, err := state.CollectDataStats(context.Background(), types.BuildTS(1000, 0), nil, nil)
+	require.NoError(t, err)
+	count := dataStats.Rows
 	assert.Equal(t, uint64(numObjects*rowsPerObject), count)
 
-	totalCount, err := state.CountRows(ctx, types.BuildTS(1000, 0), nil)
+	totalCount, err := state.CountRows(ctx, types.BuildTS(1000, 0), nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(numObjects*rowsPerObject), totalCount)
 }
@@ -747,7 +779,9 @@ func TestCountRowsTimestampBoundaries(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		count := state.CollectDataStats(tt.ts).Rows
+		dataStats, err := state.CollectDataStats(context.Background(), tt.ts, nil, nil)
+		require.NoError(t, err)
+		count := dataStats.Rows
 		assert.Equal(t, tt.expected, count, "Failed: %s at TS=%v", tt.desc, tt.ts)
 	}
 }
@@ -775,7 +809,7 @@ func TestCountRowsConcurrentRead(t *testing.T) {
 	for i := 0; i < numReaders; i++ {
 		go func() {
 			for j := 0; j < 100; j++ {
-				count, err := state.CountRows(ctx, types.BuildTS(100, 0), nil)
+				count, err := state.CountRows(ctx, types.BuildTS(100, 0), nil, nil)
 				require.NoError(t, err)
 				assert.Equal(t, uint64(1000), count)
 			}
@@ -2008,7 +2042,9 @@ func TestCalculateTableStatsEmpty(t *testing.T) {
 	state := NewPartitionState("test", false, 0, false)
 	snapshot := types.BuildTS(100, 0)
 
-	stats, err := state.CalculateTableStats(ctx, snapshot, fs)
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	stats, err := state.CalculateTableStats(ctx, snapshot, fs, mp)
 	require.NoError(t, err)
 
 	assert.Equal(t, float64(0), stats.TotalRows)
@@ -2045,7 +2081,9 @@ func TestCalculateTableStatsNonAppendableOnly(t *testing.T) {
 		DeleteTime:  types.TS{},
 	})
 
-	stats, err := state.CalculateTableStats(ctx, snapshot, fs)
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	stats, err := state.CalculateTableStats(ctx, snapshot, fs, mp)
 	require.NoError(t, err)
 
 	assert.Equal(t, float64(300), stats.TotalRows)
@@ -2095,7 +2133,7 @@ func TestCalculateTableStatsWithAppendableRows(t *testing.T) {
 		})
 	}
 
-	stats, err := state.CalculateTableStats(ctx, snapshot, fs)
+	stats, err := state.CalculateTableStats(ctx, snapshot, fs, mp)
 	require.NoError(t, err)
 
 	// Total rows = 100 (object) + 50 (appendable)
@@ -2151,7 +2189,9 @@ func TestCalculateTableStatsWithInMemoryDeletes(t *testing.T) {
 		})
 	}
 
-	stats, err := state.CalculateTableStats(ctx, snapshot, fs)
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	stats, err := state.CalculateTableStats(ctx, snapshot, fs, mp)
 	require.NoError(t, err)
 
 	// Total rows = 100 - 20 = 80 (visible rows after deletions)
@@ -2178,6 +2218,7 @@ func TestCalculateTableStatsPairedInsertDelete(t *testing.T) {
 
 	// Add in-memory insert and delete for same rowid (should be paired and skipped)
 	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
 	vector.AppendFixed(bat.Vecs[0], int32(0), false, mp)
@@ -2216,7 +2257,7 @@ func TestCalculateTableStatsPairedInsertDelete(t *testing.T) {
 		Deleted:    true,
 	})
 
-	stats, err := state.CalculateTableStats(ctx, snapshot, fs)
+	stats, err := state.CalculateTableStats(ctx, snapshot, fs, mp)
 	require.NoError(t, err)
 
 	// Total rows = 100 + 1 - 1 = 100 (visible rows after deletion)
@@ -2243,6 +2284,7 @@ func TestCalculateTableStatsFilterByObjectVisibility(t *testing.T) {
 
 	// Add appendable inserts on objID1
 	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
 	for i := 0; i < 20; i++ {
@@ -2286,7 +2328,7 @@ func TestCalculateTableStatsFilterByObjectVisibility(t *testing.T) {
 		})
 	}
 
-	_, err := state.CalculateTableStats(ctx, snapshot, fs)
+	_, err := state.CalculateTableStats(ctx, snapshot, fs, mp)
 	require.NoError(t, err)
 
 	// All deletes on objID1 are paired with inserts, so no net deletions
@@ -2313,6 +2355,7 @@ func TestCalculateTableStatsIntegration(t *testing.T) {
 
 	// Add appendable rows
 	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
 	for i := 0; i < 50; i++ {
@@ -2356,7 +2399,7 @@ func TestCalculateTableStatsIntegration(t *testing.T) {
 		})
 	}
 
-	stats, err := state.CalculateTableStats(ctx, snapshot, fs)
+	stats, err := state.CalculateTableStats(ctx, snapshot, fs, mp)
 	require.NoError(t, err)
 
 	// Total rows = 100 + 50 - 20 = 130 (visible rows after deletions)
@@ -2577,7 +2620,7 @@ func TestCollectTombstoneStats_AppendableDataWithAppendableTombstone(t *testing.
 	assert.Equal(t, uint64(10), stats.Rows, "All deletions visible at CreateTime")
 
 	// Verify CountRows: 20 inserts - 10 deletes = 10 visible rows
-	count, err := state.CountRows(ctx, types.BuildTS(10, 0), fs)
+	count, err := state.CountRows(ctx, types.BuildTS(10, 0), fs, mp)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(10), count, "Visible rows = inserts - deletes")
 
@@ -2585,4 +2628,189 @@ func TestCollectTombstoneStats_AppendableDataWithAppendableTombstone(t *testing.
 	stats, err = state.CollectTombstoneStats(ctx, types.BuildTS(15, 0), fs)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(10), stats.Rows, "All deletions visible after CreateTime")
+}
+
+// TestCountRows_VisibleAppendableDataObjects covers:
+// 1) Multiple appendable data objects in the index, some visible and some invisible at snapshot.
+// 2) With fs=nil, appendable objects contribute 0 (no block read) — only non-appendable + p.rows count.
+// 3) With fs set but no real object files, appendable block read fails and contributes 0.
+// Full coverage of "persisted appendable on disk with commit_ts" is exercised by BVT (e.g. 11_select_count_snapshot).
+func TestCountRows_VisibleAppendableDataObjects(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	snapshot := types.BuildTS(10, 0)
+
+	t.Run("multiple_aobj_only_fs_nil", func(t *testing.T) {
+		state := NewPartitionState("", false, 42, false)
+		// Appendable A: visible (CreateTime=1, no DeleteTime)
+		objA := objectio.NewObjectid()
+		statsA := objectio.NewObjectStatsWithObjectID(&objA, true, false, false)
+		require.NoError(t, objectio.SetObjectStatsRowCnt(statsA, 5))
+		state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+			ObjectStats: *statsA,
+			CreateTime:  types.BuildTS(1, 0),
+			DeleteTime:  types.TS{},
+		})
+		// Appendable B: invisible (CreateTime > snapshot)
+		objB := objectio.NewObjectid()
+		statsB := objectio.NewObjectStatsWithObjectID(&objB, true, false, false)
+		require.NoError(t, objectio.SetObjectStatsRowCnt(statsB, 3))
+		state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+			ObjectStats: *statsB,
+			CreateTime:  types.BuildTS(20, 0),
+			DeleteTime:  types.TS{},
+		})
+		// Appendable C: invisible (DeleteTime <= snapshot)
+		objC := objectio.NewObjectid()
+		statsC := objectio.NewObjectStatsWithObjectID(&objC, true, false, false)
+		require.NoError(t, objectio.SetObjectStatsRowCnt(statsC, 2))
+		state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+			ObjectStats: *statsC,
+			CreateTime:  types.BuildTS(1, 0),
+			DeleteTime:  types.BuildTS(5, 0),
+		})
+		// No p.rows, no non-appendable. With fs=nil we do not read blocks → appendable contribute 0.
+		dataStats, err := state.CollectDataStats(ctx, snapshot, nil, nil)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(0), dataStats.Rows, "fs=nil: appendable objects not read, count stays 0")
+		// With fs but object has no blocks in stats (never flushed), ForeachBlkInObjStatsList iterates 0 blocks → count stays 0, no error.
+		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
+		dataStats2, err := state.CollectDataStats(ctx, snapshot, fs, mp)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(0), dataStats2.Rows, "no blocks in appendable object so 0 rows, no I/O")
+	})
+
+	t.Run("multiple_aobj_plus_non_appendable", func(t *testing.T) {
+		state := NewPartitionState("", false, 42, false)
+		// Non-appendable: 10 rows
+		objN := objectio.NewObjectid()
+		statsN := objectio.NewObjectStatsWithObjectID(&objN, false, false, false)
+		require.NoError(t, objectio.SetObjectStatsRowCnt(statsN, 10))
+		state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+			ObjectStats: *statsN,
+			CreateTime:  types.BuildTS(1, 0),
+			DeleteTime:  types.TS{},
+		})
+		// Appendable visible (no real file)
+		objA := objectio.NewObjectid()
+		statsA := objectio.NewObjectStatsWithObjectID(&objA, true, false, false)
+		require.NoError(t, objectio.SetObjectStatsRowCnt(statsA, 5))
+		state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+			ObjectStats: *statsA,
+			CreateTime:  types.BuildTS(2, 0),
+			DeleteTime:  types.TS{},
+		})
+		// CountRows with fs: appendable has no blocks in stats so no I/O, only non-appendable 10 counted.
+		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
+		total, err := state.CountRows(ctx, snapshot, fs, mp)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(10), total, "only non-appendable counted when appendable has no blocks")
+		// With fs=nil same: 10 from non-appendable only.
+		totalNil, err := state.CountRows(ctx, snapshot, nil, nil)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(10), totalNil)
+	})
+
+	t.Run("only_visible_appendable_in_loop", func(t *testing.T) {
+		state := NewPartitionState("", false, 42, false)
+		// One visible appendable (CreateTime=1), one invisible (CreateTime=15). Snapshot=10.
+		objVis := objectio.NewObjectid()
+		statsVis := objectio.NewObjectStatsWithObjectID(&objVis, true, false, false)
+		require.NoError(t, objectio.SetObjectStatsRowCnt(statsVis, 4))
+		state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+			ObjectStats: *statsVis,
+			CreateTime:  types.BuildTS(1, 0),
+			DeleteTime:  types.TS{},
+		})
+		objInvis := objectio.NewObjectid()
+		statsInvis := objectio.NewObjectStatsWithObjectID(&objInvis, true, false, false)
+		require.NoError(t, objectio.SetObjectStatsRowCnt(statsInvis, 6))
+		state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+			ObjectStats: *statsInvis,
+			CreateTime:  types.BuildTS(15, 0),
+			DeleteTime:  types.TS{},
+		})
+		// Without blocks in stats, no I/O is done for appendable objects → 0 rows, no error.
+		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
+		dataStats, err := state.CollectDataStats(ctx, snapshot, fs, mp)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(0), dataStats.Rows, "no blocks in appendable objects so 0 from appendable path")
+	})
+
+	// appendableDataObjectWithCommitTS writes one appendable data object to fs with a single block
+	// containing one int32 column and one commit_ts column; returns object stats and the number of
+	// rows with commit_ts <= snapshot (for assertion).
+	t.Run("persisted_appendable_with_commit_ts", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
+		// Write one appendable data object: 5 rows with commit_ts 2,4,6,8,10
+		writer := ioutil.ConstructWriter(0, []uint16{0, objectio.SEQNUM_COMMITTS}, -1, false, false, fs)
+		writer.SetAppendable()
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+		commitTSs := []types.TS{
+			types.BuildTS(2, 0), types.BuildTS(4, 0), types.BuildTS(6, 0), types.BuildTS(8, 0), types.BuildTS(10, 0),
+		}
+		for i := 0; i < 5; i++ {
+			require.NoError(t, vector.AppendFixed[int32](bat.Vecs[0], int32(i), false, mp))
+			require.NoError(t, vector.AppendFixed[types.TS](bat.Vecs[1], commitTSs[i], false, mp))
+		}
+		_, err := writer.WriteBatch(bat)
+		require.NoError(t, err)
+		_, _, err = writer.Sync(ctx)
+		require.NoError(t, err)
+		stats := writer.GetObjectStats(objectio.WithAppendable())
+
+		state := NewPartitionState("", false, 42, false)
+		state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+			ObjectStats: stats,
+			CreateTime:  types.BuildTS(1, 0),
+			DeleteTime:  types.TS{},
+		})
+		// snapshot=10: rows with commit_ts 2,4,6,8,10 are visible (all 5)
+		dataStats, err := state.CollectDataStats(ctx, types.BuildTS(10, 0), fs, mp)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(5), dataStats.Rows, "all 5 rows have commit_ts <= 10")
+		// snapshot=7: only 2,4,6 visible (3 rows)
+		dataStats2, err := state.CollectDataStats(ctx, types.BuildTS(7, 0), fs, mp)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(3), dataStats2.Rows, "only 3 rows have commit_ts <= 7")
+	})
+
+	// Cover error path: appendable object has blocks in stats but we read from a different fs
+	// (no data there) → LoadColumnsData fails → CollectDataStats and CountRows return error.
+	t.Run("appendable_with_blocks_wrong_fs_returns_error", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
+		fsWithData := testutil.NewSharedFS()
+		writer := ioutil.ConstructWriter(0, []uint16{0, objectio.SEQNUM_COMMITTS}, -1, false, false, fsWithData)
+		writer.SetAppendable()
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+		require.NoError(t, vector.AppendFixed[int32](bat.Vecs[0], 1, false, mp))
+		require.NoError(t, vector.AppendFixed[types.TS](bat.Vecs[1], types.BuildTS(1, 0), false, mp))
+		_, err := writer.WriteBatch(bat)
+		require.NoError(t, err)
+		_, _, err = writer.Sync(ctx)
+		require.NoError(t, err)
+		stats := writer.GetObjectStats(objectio.WithAppendable())
+
+		state := NewPartitionState("", false, 42, false)
+		state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+			ObjectStats: stats,
+			CreateTime:  types.BuildTS(1, 0),
+			DeleteTime:  types.TS{},
+		})
+		// Read with a different, empty fs → block not found → error.
+		emptyFs := testutil.NewSharedFS()
+		_, err = state.CollectDataStats(ctx, types.BuildTS(10, 0), emptyFs, mp)
+		require.Error(t, err, "CollectDataStats must return error when appendable block read fails")
+		_, err = state.CountRows(ctx, types.BuildTS(10, 0), emptyFs, mp)
+		require.Error(t, err, "CountRows must return error when CollectDataStats fails")
+	})
 }
