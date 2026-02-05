@@ -759,6 +759,50 @@ func TestIssue7678(t *testing.T) {
 	assert.Equal(t, uint32(0), s.lastReceivedSequence)
 }
 
+// TestRemoteBackendUsesSharedLogger ensures we do not clone the logger per backend
+// (no Logger.With()), which would cause large allocations under many backends (e.g. sysbench).
+func TestRemoteBackendUsesSharedLogger(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	logger := logutil.GetPanicLoggerWithLevel(zap.DebugLevel)
+	app := newTestApp(t, func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+		return conn.Write(msg, goetty.WriteOptions{Flush: true})
+	})
+	require.NoError(t, app.Start())
+	defer func() { assert.NoError(t, app.Stop()) }()
+
+	opts := []BackendOption{
+		WithBackendMetrics(newMetrics("")),
+		WithBackendBufferSize(1),
+		WithBackendLogger(logger),
+	}
+	rb, err := NewRemoteBackend(testAddr, newTestCodec(), opts...)
+	require.NoError(t, err)
+	b := rb.(*remoteBackend)
+	defer b.Close()
+
+	// Backend must use the same logger instance (no per-backend With() clone).
+	assert.Same(t, logger, b.logger, "backend should use shared logger, not a With() clone")
+}
+
+// TestRemoteBackendLogFields ensures logFields() returns "remote" and "backend-id"
+// so that shared-logger logs still have backend identity (regression test for the memory fix).
+func TestRemoteBackendLogFields(t *testing.T) {
+	rb := &remoteBackend{remote: "unix:///tmp/test", logID: 42}
+	rb.logFieldsCache = []zap.Field{zap.String("remote", rb.remote), zap.Uint64("backend-id", rb.logID)}
+	fields := rb.logFields()
+	var hasRemote, hasBackendID bool
+	for _, f := range fields {
+		switch f.Key {
+		case "remote":
+			hasRemote = true
+		case "backend-id":
+			hasBackendID = true
+		}
+	}
+	assert.True(t, hasRemote, "logFields() should contain remote")
+	assert.True(t, hasBackendID, "logFields() should contain backend-id")
+}
+
 func TestIsExpectedCloseError(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
