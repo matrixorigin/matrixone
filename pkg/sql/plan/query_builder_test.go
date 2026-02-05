@@ -1564,6 +1564,18 @@ func TestBaseBinder_bindComparisonExpr(t *testing.T) {
 			},
 		},
 		{
+			name:      "Tuple IN with Paren: ((a, b)) IN (((1, 2)), ((3, 4)))",
+			sql:       "((a, b)) IN (((1, 2)), ((3, 4)))",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "or", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
 			name:      "Tuple NOT IN: (a, b) NOT IN ((1, 2), (3, 4))",
 			sql:       "(a, b) NOT IN ((1, 2), (3, 4))",
 			expectErr: false,

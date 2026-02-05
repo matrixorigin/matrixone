@@ -26,12 +26,14 @@ var (
 			Buckets:   getDurationBuckets(),
 		})
 
-	pipelineStreamCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
+	// Gauge (not Counter): "living" senders must Inc() on create and Dec() on close.
+	// Counter only ever increases; calling .Desc() does not decrement (Desc is metric metadata).
+	pipelineStreamGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
 			Namespace: "mo",
 			Subsystem: "pipeline",
 			Name:      "stream_connection",
-			Help:      "Total number of stream connections to send messages to other CN.",
+			Help:      "Current number of stream connections to send messages to other CN (living senders).",
 		}, []string{"type"})
-	PipelineMessageSenderCounter = pipelineStreamCounter.WithLabelValues("living")
+	PipelineMessageSenderGauge = pipelineStreamGauge.WithLabelValues("living")
 )

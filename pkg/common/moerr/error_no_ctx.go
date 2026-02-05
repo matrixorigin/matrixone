@@ -180,11 +180,11 @@ func NewInvalidServiceIndexNoCtx(idx int) *Error {
 }
 
 func NewBadDBNoCtx(name string) *Error {
-	return newError(Context(), ErrBadDB, name)
+	return newError(NoReportContext(), ErrBadDB, name)
 }
 
 func NewNoDBNoCtx() *Error {
-	return newError(Context(), ErrNoDB)
+	return newError(NoReportContext(), ErrNoDB)
 }
 
 func NewNoWorkingStoreNoCtx() *Error {
@@ -204,7 +204,7 @@ func NewWrongServiceNoCtx(exp, got string) *Error {
 }
 
 func NewNoSuchTableNoCtx(db, tbl string) *Error {
-	return newError(Context(), ErrNoSuchTable, db, tbl)
+	return newError(NoReportContext(), ErrNoSuchTable, db, tbl)
 }
 
 // NewClientClosedNoCtx creates a client closed error without logging.
