@@ -26,6 +26,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -52,9 +55,10 @@ type TableMetadata struct {
 
 // TableDDLInfo contains table DDL information
 type TableDDLInfo struct {
-	TableID        uint64
-	TableCreateSQL string
-	Operation      int8 // DDLOperationCreate (1), DDLOperationAlter (2), or DDLOperationDrop (3), 0 means no operation
+	TableID         uint64
+	TableCreateSQL  string
+	Operation       int8     // DDLOperationCreate (1), DDLOperationAlter (2), DDLOperationDrop (3), DDLOperationAlterInplace (4), 0 means no operation
+	AlterStatements []string // ALTER TABLE statements for inplace alter operations
 }
 
 // GetUpstreamDDLUsingGetDdl queries upstream DDL using internal GETDDL command
@@ -437,6 +441,37 @@ func ProcessDDLChanges(
 					}
 				}
 				alterOps = append(alterOps, fmt.Sprintf("%s.%s-%d->%d", dbName, tableName, oldTableID, newTableID))
+			case DDLOperationAlterInplace:
+				// Execute ALTER TABLE statements inplace without drop+create
+				var tableID uint64
+				db, err := cnEngine.Database(downstreamCtx, dbName, iterationCtx.LocalTxn)
+				if err != nil {
+					return moerr.NewInternalErrorf(ctx, "failed to get database %s.%s: %v", dbName, tableName, err)
+				}
+				rel, err := db.Relation(downstreamCtx, tableName, nil)
+				if err != nil {
+					return moerr.NewInternalErrorf(ctx, "failed to get relation %s.%s: %v", dbName, tableName, err)
+				}
+				tableID = rel.GetTableID(downstreamCtx)
+				if err := removeIndexTableMappings(ctx, iterationCtx, tableID, rel); err != nil {
+					return moerr.NewInternalErrorf(ctx, "failed to remove index table mappings: %v", err)
+				}
+				// Execute each ALTER statement
+				for _, alterSQL := range ddlInfo.AlterStatements {
+					result, cancel, err := iterationCtx.LocalExecutor.ExecSQL(downstreamCtx, nil, alterSQL, true, true, time.Minute)
+					if err != nil {
+						return moerr.NewInternalErrorf(ctx, "failed to execute alter inplace for %s.%s: %v, SQL: %s", dbName, tableName, err, alterSQL)
+					}
+					if result != nil {
+						result.Close()
+					}
+					cancel()
+				}
+				// Process index table mappings after table creation
+				if err := processIndexTableMappings(ctx, iterationCtx, cnEngine, dbName, tableName, ddlInfo.TableID); err != nil {
+					return moerr.NewInternalErrorf(ctx, "failed to process index table mappings: %v", err)
+				}
+				alterOps = append(alterOps, fmt.Sprintf("%s.%s-%d(inplace:%d)", dbName, tableName, tableID, len(ddlInfo.AlterStatements)))
 			}
 		}
 	}
@@ -616,8 +651,29 @@ func FillDDLOperation(
 					return moerr.NewInternalErrorf(ctx, "failed to get current table create SQL for %s.%s: %v", dbName, tableName, err)
 				}
 				if currentCreateSQL != ddlInfo.TableCreateSQL {
-					// Create SQL changed, need to alter
-					ddlInfo.Operation = DDLOperationAlter
+					// Create SQL changed, try to use inplace alter if possible
+					alterStmts, _, err := compareTableDefsAndGenerateAlterStatements(
+						ctx, dbName, tableName, currentCreateSQL, ddlInfo.TableCreateSQL)
+					if err != nil {
+						// Log the error but fall back to drop+create
+						logutil.Warn("ccpr-iteration failed to compare table defs, falling back to drop+create",
+							zap.String("db", dbName),
+							zap.String("table", tableName),
+							zap.Error(err),
+						)
+						ddlInfo.Operation = DDLOperationAlter
+					} else if len(alterStmts) > 0 {
+						// Can do inplace alter
+						ddlInfo.Operation = DDLOperationAlterInplace
+						ddlInfo.AlterStatements = alterStmts
+						logutil.Info("ccpr-iteration using inplace alter",
+							zap.String("db", dbName),
+							zap.String("table", tableName),
+							zap.Int("alter_count", len(alterStmts)),
+							zap.Strings("statements", alterStmts),
+						)
+					}
+					// If canInplace && len(alterStmts) == 0, no operation needed (DDL normalized to same result)
 				}
 			}
 		}
@@ -1102,4 +1158,440 @@ func insertCCPRDb(ctx context.Context, executor SQLExecutor, dbIDStr string, tas
 	}
 	cancel()
 	return nil
+}
+
+// parseCreateTableSQL parses CREATE TABLE SQL and returns the AST
+func parseCreateTableSQL(ctx context.Context, createSQL string) (*tree.CreateTable, error) {
+	stmts, err := parsers.Parse(ctx, dialect.MYSQL, createSQL, 1)
+	if err != nil {
+		return nil, moerr.NewInternalErrorf(ctx, "failed to parse CREATE TABLE SQL: %v", err)
+	}
+	if len(stmts) == 0 {
+		return nil, moerr.NewInternalError(ctx, "no statement parsed from CREATE TABLE SQL")
+	}
+	createTableStmt, ok := stmts[0].(*tree.CreateTable)
+	if !ok {
+		return nil, moerr.NewInternalError(ctx, "parsed statement is not CREATE TABLE")
+	}
+	return createTableStmt, nil
+}
+
+// AlterInplaceType represents the type of inplace alter operation
+type AlterInplaceType int
+
+const (
+	AlterInplaceDropForeignKey AlterInplaceType = iota
+	AlterInplaceAddForeignKey
+	AlterInplaceDropIndex
+	AlterInplaceAddIndex
+	AlterInplaceAlterIndexVisibility
+	AlterInplaceAlterComment
+	AlterInplaceRenameColumn
+)
+
+// compareTableDefsAndGenerateAlterStatements compares old and new TableDef and generates ALTER TABLE statements
+// for supported inplace operations. Returns the ALTER statements and whether all changes can be done inplace.
+// Supported inplace operations:
+// - Drop/Add Foreign Key
+// - Drop/Add Index (including unique, fulltext, etc.)
+// - Alter Index Visibility
+// - Alter Table Comment
+// - Rename Column
+func compareTableDefsAndGenerateAlterStatements(
+	ctx context.Context,
+	dbName string,
+	tableName string,
+	oldCreateSQL string,
+	newCreateSQL string,
+) ([]string, bool, error) {
+	// Parse both CREATE TABLE statements
+	oldStmt, err := parseCreateTableSQL(ctx, oldCreateSQL)
+	if err != nil {
+		return nil, false, moerr.NewInternalErrorf(ctx, "failed to parse old CREATE TABLE: %v", err)
+	}
+	newStmt, err := parseCreateTableSQL(ctx, newCreateSQL)
+	if err != nil {
+		return nil, false, moerr.NewInternalErrorf(ctx, "failed to parse new CREATE TABLE: %v", err)
+	}
+
+	var alterStatements []string
+	fullTableName := fmt.Sprintf("`%s`.`%s`", escapeSQLIdentifierForDDL(dbName), escapeSQLIdentifierForDDL(tableName))
+
+	// Build column maps for comparison
+	oldCols := buildColumnMap(oldStmt)
+	newCols := buildColumnMap(newStmt)
+
+	// Build index maps for comparison
+	oldIndexes := buildIndexMap(oldStmt)
+	newIndexes := buildIndexMap(newStmt)
+
+	// Build foreign key maps for comparison
+	oldFKs := buildForeignKeyMap(oldStmt)
+	newFKs := buildForeignKeyMap(newStmt)
+
+	// Check for column changes that cannot be done inplace
+	// Only rename is supported inplace
+	if !canDoColumnChangesInplace(oldCols, newCols) {
+		return nil, false, nil
+	}
+
+	// Generate column rename statements
+	renameStmts := generateColumnRenameStatements(ctx, fullTableName, oldCols, newCols)
+	alterStatements = append(alterStatements, renameStmts...)
+
+	// Generate foreign key drop statements
+	for fkName := range oldFKs {
+		if _, exists := newFKs[fkName]; !exists {
+			stmt := fmt.Sprintf("ALTER TABLE %s DROP FOREIGN KEY `%s`", fullTableName, escapeSQLIdentifierForDDL(fkName))
+			alterStatements = append(alterStatements, stmt)
+		}
+	}
+
+	// Generate foreign key add statements
+	for fkName, fkDef := range newFKs {
+		if _, exists := oldFKs[fkName]; !exists {
+			stmt := generateAddForeignKeyStatement(fullTableName, fkName, fkDef)
+			alterStatements = append(alterStatements, stmt)
+		}
+	}
+
+	// Generate index drop statements
+	for idxName := range oldIndexes {
+		if _, exists := newIndexes[idxName]; !exists {
+			stmt := fmt.Sprintf("ALTER TABLE %s DROP INDEX `%s`", fullTableName, escapeSQLIdentifierForDDL(idxName))
+			alterStatements = append(alterStatements, stmt)
+		}
+	}
+
+	// Generate index add statements
+	for idxName, idxDef := range newIndexes {
+		if _, exists := oldIndexes[idxName]; !exists {
+			stmt := generateAddIndexStatement(fullTableName, idxName, idxDef)
+			alterStatements = append(alterStatements, stmt)
+		}
+	}
+
+	// Check for index visibility changes
+	for idxName, newIdx := range newIndexes {
+		if oldIdx, exists := oldIndexes[idxName]; exists {
+			if oldIdx.visible != newIdx.visible {
+				var visStr string
+				if newIdx.visible {
+					visStr = "VISIBLE"
+				} else {
+					visStr = "INVISIBLE"
+				}
+				stmt := fmt.Sprintf("ALTER TABLE %s ALTER INDEX `%s` %s", fullTableName, escapeSQLIdentifierForDDL(idxName), visStr)
+				alterStatements = append(alterStatements, stmt)
+			}
+		}
+	}
+
+	// Check for table comment change
+	oldComment := getTableComment(oldStmt)
+	newComment := getTableComment(newStmt)
+	if oldComment != newComment {
+		stmt := fmt.Sprintf("ALTER TABLE %s COMMENT '%s'", fullTableName, strings.ReplaceAll(newComment, "'", "''"))
+		alterStatements = append(alterStatements, stmt)
+	}
+
+	return alterStatements, true, nil
+}
+
+// columnInfo stores column information for comparison
+type columnInfo struct {
+	name       string
+	typ        string
+	defaultVal string
+	nullable   bool
+	comment    string
+	position   int
+}
+
+// indexInfo stores index information for comparison
+type indexInfo struct {
+	name      string
+	unique    bool
+	columns   []string
+	indexType string // BTREE, FULLTEXT, etc.
+	visible   bool
+}
+
+// foreignKeyInfo stores foreign key information for comparison
+type foreignKeyInfo struct {
+	name       string
+	columns    []string
+	refTable   string
+	refColumns []string
+	onDelete   string
+	onUpdate   string
+}
+
+// buildColumnMap builds a map of column name to column info from CREATE TABLE statement
+func buildColumnMap(stmt *tree.CreateTable) map[string]*columnInfo {
+	result := make(map[string]*columnInfo)
+	position := 0
+	for _, def := range stmt.Defs {
+		if colDef, ok := def.(*tree.ColumnTableDef); ok {
+			info := &columnInfo{
+				name:     string(colDef.Name.ColName()),
+				position: position,
+				nullable: true,
+			}
+			if colDef.Type != nil {
+				info.typ = formatTypeReference(colDef.Type)
+			}
+			for _, attr := range colDef.Attributes {
+				switch a := attr.(type) {
+				case *tree.AttributeNull:
+					info.nullable = !a.Is
+				case *tree.AttributeDefault:
+					if a.Expr != nil {
+						info.defaultVal = tree.String(a.Expr, dialect.MYSQL)
+					}
+				case *tree.AttributeComment:
+					info.comment = tree.String(a.CMT, dialect.MYSQL)
+				}
+			}
+			result[strings.ToLower(info.name)] = info
+			position++
+		}
+	}
+	return result
+}
+
+// formatTypeReference formats a ResolvableTypeReference to string
+func formatTypeReference(t tree.ResolvableTypeReference) string {
+	if t == nil {
+		return ""
+	}
+	// Use tree.String to format the type
+	if nf, ok := t.(tree.NodeFormatter); ok {
+		return tree.String(nf, dialect.MYSQL)
+	}
+	return fmt.Sprintf("%v", t)
+}
+
+// buildIndexMap builds a map of index name to index info from CREATE TABLE statement
+func buildIndexMap(stmt *tree.CreateTable) map[string]*indexInfo {
+	result := make(map[string]*indexInfo)
+	for _, def := range stmt.Defs {
+		var info *indexInfo
+		switch idx := def.(type) {
+		case *tree.Index:
+			info = &indexInfo{
+				name:    string(idx.Name),
+				unique:  false,
+				visible: true,
+			}
+			for _, col := range idx.KeyParts {
+				if col.ColName != nil {
+					info.columns = append(info.columns, string(col.ColName.ColName()))
+				}
+			}
+			if idx.IndexOption != nil {
+				info.visible = idx.IndexOption.Visible == tree.VISIBLE_TYPE_VISIBLE
+			}
+		case *tree.UniqueIndex:
+			info = &indexInfo{
+				name:    string(idx.Name),
+				unique:  true,
+				visible: true,
+			}
+			for _, col := range idx.KeyParts {
+				if col.ColName != nil {
+					info.columns = append(info.columns, string(col.ColName.ColName()))
+				}
+			}
+			if idx.IndexOption != nil {
+				info.visible = idx.IndexOption.Visible == tree.VISIBLE_TYPE_VISIBLE
+			}
+		case *tree.FullTextIndex:
+			info = &indexInfo{
+				name:      string(idx.Name),
+				unique:    false,
+				indexType: "FULLTEXT",
+				visible:   true,
+			}
+			for _, col := range idx.KeyParts {
+				if col.ColName != nil {
+					info.columns = append(info.columns, string(col.ColName.ColName()))
+				}
+			}
+		}
+		if info != nil && info.name != "" {
+			result[strings.ToLower(info.name)] = info
+		}
+	}
+	return result
+}
+
+// buildForeignKeyMap builds a map of foreign key name to foreign key info from CREATE TABLE statement
+func buildForeignKeyMap(stmt *tree.CreateTable) map[string]*foreignKeyInfo {
+	result := make(map[string]*foreignKeyInfo)
+	for _, def := range stmt.Defs {
+		if fk, ok := def.(*tree.ForeignKey); ok {
+			info := &foreignKeyInfo{
+				name: string(fk.Name),
+			}
+			for _, col := range fk.KeyParts {
+				if col.ColName != nil {
+					info.columns = append(info.columns, string(col.ColName.ColName()))
+				}
+			}
+			if fk.Refer != nil {
+				info.refTable = formatTableName(fk.Refer.TableName)
+				for _, col := range fk.Refer.KeyParts {
+					if col.ColName != nil {
+						info.refColumns = append(info.refColumns, string(col.ColName.ColName()))
+					}
+				}
+				info.onDelete = fk.Refer.OnDelete.ToString()
+				info.onUpdate = fk.Refer.OnUpdate.ToString()
+			}
+			if info.name != "" {
+				result[strings.ToLower(info.name)] = info
+			}
+		}
+	}
+	return result
+}
+
+// formatTableName formats a TableName to string
+func formatTableName(tn *tree.TableName) string {
+	if tn == nil {
+		return ""
+	}
+	return tree.String(tn, dialect.MYSQL)
+}
+
+// canDoColumnChangesInplace checks if column changes can be done inplace
+// Only column rename is supported; adding/dropping/modifying columns requires drop+create
+func canDoColumnChangesInplace(oldCols, newCols map[string]*columnInfo) bool {
+	// Check if column count is the same
+	if len(oldCols) != len(newCols) {
+		return false
+	}
+
+	// Check if all columns in old table exist in new table (possibly renamed)
+	// and their types/defaults/nullable are the same
+	for oldName, oldCol := range oldCols {
+		// Try to find matching column by position or by name
+		found := false
+		for newName, newCol := range newCols {
+			// Skip if already matched
+			if oldCol.position == newCol.position {
+				// Same position, check if types match
+				if oldCol.typ != newCol.typ ||
+					oldCol.defaultVal != newCol.defaultVal ||
+					oldCol.nullable != newCol.nullable {
+					return false
+				}
+				found = true
+				break
+			} else if oldName == newName {
+				// Same name but different position - not inplace
+				return false
+			}
+		}
+		if !found {
+			// Check if column was renamed (same position, different name, same type)
+			for _, newCol := range newCols {
+				if oldCol.position == newCol.position {
+					if oldCol.typ == newCol.typ &&
+						oldCol.defaultVal == newCol.defaultVal &&
+						oldCol.nullable == newCol.nullable {
+						found = true
+						break
+					}
+				}
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+// generateColumnRenameStatements generates ALTER TABLE RENAME COLUMN statements
+func generateColumnRenameStatements(ctx context.Context, fullTableName string, oldCols, newCols map[string]*columnInfo) []string {
+	var stmts []string
+	for oldName, oldCol := range oldCols {
+		for newName, newCol := range newCols {
+			if oldCol.position == newCol.position && oldName != newName {
+				// Column was renamed
+				stmt := fmt.Sprintf("ALTER TABLE %s RENAME COLUMN `%s` TO `%s`",
+					fullTableName,
+					escapeSQLIdentifierForDDL(oldCol.name),
+					escapeSQLIdentifierForDDL(newCol.name))
+				stmts = append(stmts, stmt)
+			}
+		}
+	}
+	return stmts
+}
+
+// generateAddForeignKeyStatement generates ADD FOREIGN KEY statement
+func generateAddForeignKeyStatement(fullTableName string, fkName string, fk *foreignKeyInfo) string {
+	cols := make([]string, len(fk.columns))
+	for i, col := range fk.columns {
+		cols[i] = fmt.Sprintf("`%s`", escapeSQLIdentifierForDDL(col))
+	}
+	refCols := make([]string, len(fk.refColumns))
+	for i, col := range fk.refColumns {
+		refCols[i] = fmt.Sprintf("`%s`", escapeSQLIdentifierForDDL(col))
+	}
+
+	stmt := fmt.Sprintf("ALTER TABLE %s ADD CONSTRAINT `%s` FOREIGN KEY (%s) REFERENCES %s (%s)",
+		fullTableName,
+		escapeSQLIdentifierForDDL(fkName),
+		strings.Join(cols, ", "),
+		fk.refTable,
+		strings.Join(refCols, ", "))
+
+	if fk.onDelete != "" && fk.onDelete != "RESTRICT" {
+		stmt += " ON DELETE " + fk.onDelete
+	}
+	if fk.onUpdate != "" && fk.onUpdate != "RESTRICT" {
+		stmt += " ON UPDATE " + fk.onUpdate
+	}
+	return stmt
+}
+
+// generateAddIndexStatement generates ADD INDEX statement
+func generateAddIndexStatement(fullTableName string, idxName string, idx *indexInfo) string {
+	cols := make([]string, len(idx.columns))
+	for i, col := range idx.columns {
+		cols[i] = fmt.Sprintf("`%s`", escapeSQLIdentifierForDDL(col))
+	}
+
+	var stmt string
+	if idx.indexType == "FULLTEXT" {
+		stmt = fmt.Sprintf("ALTER TABLE %s ADD FULLTEXT INDEX `%s` (%s)",
+			fullTableName,
+			escapeSQLIdentifierForDDL(idxName),
+			strings.Join(cols, ", "))
+	} else if idx.unique {
+		stmt = fmt.Sprintf("ALTER TABLE %s ADD UNIQUE INDEX `%s` (%s)",
+			fullTableName,
+			escapeSQLIdentifierForDDL(idxName),
+			strings.Join(cols, ", "))
+	} else {
+		stmt = fmt.Sprintf("ALTER TABLE %s ADD INDEX `%s` (%s)",
+			fullTableName,
+			escapeSQLIdentifierForDDL(idxName),
+			strings.Join(cols, ", "))
+	}
+	return stmt
+}
+
+// getTableComment extracts table comment from CREATE TABLE statement
+func getTableComment(stmt *tree.CreateTable) string {
+	for _, opt := range stmt.Options {
+		if comment, ok := opt.(*tree.TableOptionComment); ok {
+			return comment.Comment
+		}
+	}
+	return ""
 }

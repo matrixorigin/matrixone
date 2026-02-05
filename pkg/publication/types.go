@@ -28,9 +28,10 @@ const (
 
 // DDL operation types
 const (
-	DDLOperationCreate int8 = 1
-	DDLOperationAlter  int8 = 2
-	DDLOperationDrop   int8 = 3
+	DDLOperationCreate       int8 = 1
+	DDLOperationAlter        int8 = 2
+	DDLOperationDrop         int8 = 3
+	DDLOperationAlterInplace int8 = 4
 )
 
 // Subscription state types
