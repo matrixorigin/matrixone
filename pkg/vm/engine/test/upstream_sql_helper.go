@@ -93,6 +93,15 @@ const (
 	cmdCheckSnapshotFlushedPrefix = "__++__internal_check_snapshot_flushed"
 )
 
+// placeholderToEmpty converts the "-" placeholder back to empty string
+// This is the inverse of escapeOrPlaceholder in sql_builder.go
+func placeholderToEmpty(s string) string {
+	if s == "-" {
+		return ""
+	}
+	return s
+}
+
 // HandleSpecialSQL checks if the SQL is a special statement and handles it directly
 // Returns (handled, result, error) where handled indicates if the statement was handled
 // If a new transaction was created (because there was no txn initially), it will be committed on success or rolled back on error
@@ -855,8 +864,8 @@ func (h *UpstreamSQLHelper) handleGetDdlCmd(
 	snapshotName := parts[0]
 	// subscriptionAccountName (parts[1]) and publicationName (parts[2]) are not used in test helper since we don't check publication permissions
 	level := parts[3]
-	databaseName := parts[4]
-	tableName := parts[5]
+	databaseName := placeholderToEmpty(parts[4])
+	tableName := placeholderToEmpty(parts[5])
 
 	logutil.Info("UpstreamSQLHelper: handling internal get_ddl command",
 		zap.String("snapshotName", snapshotName),
@@ -947,7 +956,7 @@ func (h *UpstreamSQLHelper) handleGetSnapshotTsCmd(
 }
 
 // handleGetDatabasesCmd handles the internal __++__internal_get_databases command
-// Format: __++__internal_get_databases <snapshotName> <accountName> <publicationName>
+// Format: __++__internal_get_databases <snapshotName> <accountName> <publicationName> <level> <dbName> <tableName>
 func (h *UpstreamSQLHelper) handleGetDatabasesCmd(
 	ctx context.Context,
 	query string,
@@ -955,15 +964,25 @@ func (h *UpstreamSQLHelper) handleGetDatabasesCmd(
 	// Parse the command parameters
 	params := strings.TrimSpace(query[len(cmdGetDatabasesPrefix):])
 	parts := strings.Fields(params)
-	if len(parts) != 3 {
-		return true, nil, moerr.NewInternalError(ctx, "invalid get_databases command format, expected: __++__internal_get_databases <snapshotName> <accountName> <publicationName>")
+	if len(parts) != 6 {
+		return true, nil, moerr.NewInternalError(ctx, "invalid get_databases command format, expected: __++__internal_get_databases <snapshotName> <accountName> <publicationName> <level> <dbName> <tableName>")
 	}
 	snapshotName := parts[0]
 	// accountName and publicationName are not used in test helper since we don't check publication permissions
+	level := parts[3]
+	dbName := placeholderToEmpty(parts[4])
+	// tableName := placeholderToEmpty(parts[5]) // not used for database query
 
 	logutil.Info("UpstreamSQLHelper: handling internal get_databases command",
 		zap.String("snapshotName", snapshotName),
+		zap.String("level", level),
+		zap.String("dbName", dbName),
 	)
+
+	// If table level, return empty result (no databases to create/drop)
+	if level == publication.SyncLevelTable {
+		return true, h.convertExecutorResult(executor.Result{}), nil
+	}
 
 	// Ensure we have a transaction
 	txnOp, err := h.ensureTxnOp(ctx)
@@ -978,11 +997,18 @@ func (h *UpstreamSQLHelper) handleGetDatabasesCmd(
 	}
 	snapshotTs := snapshotInfo.Ts
 
-	// Query mo_database for databases covered by this snapshot using the snapshot timestamp
-	sql := fmt.Sprintf("SELECT datname FROM mo_catalog.mo_database{MO_TS = %d} WHERE account_id = %d", snapshotTs, h.accountID)
-
 	// Create context with account ID
 	queryCtx := context.WithValue(ctx, defines.TenantIDKey{}, h.accountID)
+
+	var sql string
+	if level == publication.SyncLevelDatabase {
+		// Database level: only check/return the specific database if it exists
+		sql = fmt.Sprintf("SELECT datname FROM mo_catalog.mo_database{MO_TS = %d} WHERE account_id = %d AND datname = '%s'",
+			snapshotTs, h.accountID, dbName)
+	} else {
+		// Account level: return all databases for the account
+		sql = fmt.Sprintf("SELECT datname FROM mo_catalog.mo_database{MO_TS = %d} WHERE account_id = %d", snapshotTs, h.accountID)
+	}
 
 	// Execute using internal executor
 	execResult, err := h.executor.Exec(queryCtx, sql, executor.Options{}.WithTxn(txnOp))

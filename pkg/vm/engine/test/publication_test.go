@@ -2308,10 +2308,6 @@ func TestCCPRGC(t *testing.T) {
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprDbsDDL)
 	require.NoError(t, err)
 
-	// Create mo_snapshots table
-	err = exec_sql(disttaeEngine, ctxWithTimeout, frontend.MoCatalogMoSnapshotsDDL)
-	require.NoError(t, err)
-
 	// Create upstream SQL helper factory
 	upstreamSQLHelperFactory := func(
 		txnOp client.TxnOperator,
@@ -2325,128 +2321,55 @@ func TestCCPRGC(t *testing.T) {
 
 	// Define test cases
 	testCases := []struct {
-		name                       string
-		iterationLSN               uint64
-		dropAtHoursAgo             float64 // Hours ago for drop_at (negative means future)
-		state                      int8    // subscription state
-		snapshotLSNs               []uint64
-		snapshotHoursAgo           float64 // Hours ago for snapshot timestamp (default: 0 = current time)
-		gcThresholdHours           float64
-		expectedSnapshotCountAfter int64
-		expectedRecordExists       bool // Whether mo_ccpr_log record should exist after GC
+		name                 string
+		iterationLSN         uint64
+		dropAtHoursAgo       float64 // Hours ago for drop_at (negative means future)
+		state                int8    // subscription state
+		gcThresholdHours     float64
+		expectedRecordExists bool // Whether mo_ccpr_log record should exist after GC
 	}{
 		{
-			name:                       "DroppedTaskOlderThanThreshold",
-			iterationLSN:               10,
-			dropAtHoursAgo:             48, // 2 days ago
-			state:                      publication.SubscriptionStateDropped,
-			snapshotLSNs:               []uint64{5, 8, 9},
-			snapshotHoursAgo:           0,  // Current time
-			gcThresholdHours:           24, // 1 day threshold
-			expectedSnapshotCountAfter: 0,  // All snapshots should be deleted
-			expectedRecordExists:       false,
+			name:                 "DroppedTaskOlderThanThreshold",
+			iterationLSN:         10,
+			dropAtHoursAgo:       48, // 2 days ago
+			state:                publication.SubscriptionStateDropped,
+			gcThresholdHours:     24, // 1 day threshold
+			expectedRecordExists: false,
 		},
 		// Running task cases
 		{
-			name:                       "RunningTask_SnapshotEqualToCurrentLSN",
-			iterationLSN:               10,
-			dropAtHoursAgo:             -1, // No drop_at
-			state:                      publication.SubscriptionStateRunning,
-			snapshotLSNs:               []uint64{10}, // Equal to current LSN
-			snapshotHoursAgo:           0,
-			gcThresholdHours:           24,
-			expectedSnapshotCountAfter: 1, // Should keep (lsn >= current_lsn - 1)
-			expectedRecordExists:       true,
-		},
-		{
-			name:                       "RunningTask_SnapshotLessThanCurrentLSN",
-			iterationLSN:               10,
-			dropAtHoursAgo:             -1, // No drop_at
-			state:                      publication.SubscriptionStateRunning,
-			snapshotLSNs:               []uint64{8, 9}, // Less than current LSN (10)
-			snapshotHoursAgo:           0,
-			gcThresholdHours:           24,
-			expectedSnapshotCountAfter: 1, // Should delete (lsn < current_lsn - 1, i.e., lsn < 9)
-			expectedRecordExists:       true,
+			name:                 "RunningTask",
+			iterationLSN:         10,
+			dropAtHoursAgo:       -1, // No drop_at
+			state:                publication.SubscriptionStateRunning,
+			gcThresholdHours:     24,
+			expectedRecordExists: true,
 		},
 		// Error/Pause task cases
 		{
-			name:                       "ErrorTask_SnapshotEqualToCurrentLSN",
-			iterationLSN:               10,
-			dropAtHoursAgo:             -1, // No drop_at
-			state:                      publication.SubscriptionStateError,
-			snapshotLSNs:               []uint64{10}, // Equal to current LSN
-			snapshotHoursAgo:           0,
-			gcThresholdHours:           24,
-			expectedSnapshotCountAfter: 1, // Should keep (lsn >= current_lsn - 1)
-			expectedRecordExists:       true,
+			name:                 "ErrorTask",
+			iterationLSN:         10,
+			dropAtHoursAgo:       -1, // No drop_at
+			state:                publication.SubscriptionStateError,
+			gcThresholdHours:     24,
+			expectedRecordExists: true,
 		},
 		{
-			name:                       "ErrorTask_SnapshotLessThanCurrentLSN",
-			iterationLSN:               10,
-			dropAtHoursAgo:             -1, // No drop_at
-			state:                      publication.SubscriptionStateError,
-			snapshotLSNs:               []uint64{8, 9}, // Less than current LSN (10)
-			snapshotHoursAgo:           0,
-			gcThresholdHours:           24,
-			expectedSnapshotCountAfter: 1, // Should delete (lsn < current_lsn - 1)
-			expectedRecordExists:       true,
-		},
-		{
-			name:                       "ErrorTask_OldSnapshotEqualToCurrentLSN",
-			iterationLSN:               10,
-			dropAtHoursAgo:             -1, // No drop_at
-			state:                      publication.SubscriptionStateError,
-			snapshotLSNs:               []uint64{10}, // Equal to current LSN
-			snapshotHoursAgo:           48,           // 2 days ago (older than snapshot_threshold = 1 day)
-			gcThresholdHours:           24,
-			expectedSnapshotCountAfter: 0, // Should delete (old snapshot, even if lsn equals current)
-			expectedRecordExists:       true,
-		},
-		{
-			name:                       "PauseTask_SnapshotEqualToCurrentLSN",
-			iterationLSN:               10,
-			dropAtHoursAgo:             -1, // No drop_at
-			state:                      publication.SubscriptionStatePause,
-			snapshotLSNs:               []uint64{10}, // Equal to current LSN
-			snapshotHoursAgo:           0,
-			gcThresholdHours:           24,
-			expectedSnapshotCountAfter: 1, // Should keep (lsn >= current_lsn - 1)
-			expectedRecordExists:       true,
-		},
-		{
-			name:                       "PauseTask_SnapshotLessThanCurrentLSN",
-			iterationLSN:               10,
-			dropAtHoursAgo:             -1, // No drop_at
-			state:                      publication.SubscriptionStatePause,
-			snapshotLSNs:               []uint64{8, 9}, // Less than current LSN (10)
-			snapshotHoursAgo:           0,
-			gcThresholdHours:           24,
-			expectedSnapshotCountAfter: 1, // Should delete (lsn < current_lsn - 1)
-			expectedRecordExists:       true,
+			name:                 "PauseTask",
+			iterationLSN:         10,
+			dropAtHoursAgo:       -1, // No drop_at
+			state:                publication.SubscriptionStatePause,
+			gcThresholdHours:     24,
+			expectedRecordExists: true,
 		},
 		// Dropped task cases
 		{
-			name:                       "DroppedTask_SnapshotEqualToCurrentLSN",
-			iterationLSN:               10,
-			dropAtHoursAgo:             48, // 2 days ago
-			state:                      publication.SubscriptionStateDropped,
-			snapshotLSNs:               []uint64{10}, // Equal to current LSN
-			snapshotHoursAgo:           0,
-			gcThresholdHours:           24,
-			expectedSnapshotCountAfter: 0, // Should delete (dropped deletes all)
-			expectedRecordExists:       false,
-		},
-		{
-			name:                       "DroppedTask_SnapshotLessThanCurrentLSN",
-			iterationLSN:               10,
-			dropAtHoursAgo:             48, // 2 days ago
-			state:                      publication.SubscriptionStateDropped,
-			snapshotLSNs:               []uint64{8, 9}, // Less than current LSN (10)
-			snapshotHoursAgo:           0,
-			gcThresholdHours:           24,
-			expectedSnapshotCountAfter: 0, // Should delete (dropped deletes all)
-			expectedRecordExists:       false,
+			name:                 "DroppedTask",
+			iterationLSN:         10,
+			dropAtHoursAgo:       48, // 2 days ago
+			state:                publication.SubscriptionStateDropped,
+			gcThresholdHours:     24,
+			expectedRecordExists: false,
 		},
 	}
 
@@ -2456,11 +2379,6 @@ func TestCCPRGC(t *testing.T) {
 			// Clean up mo_ccpr_log before each test case
 			cleanupSQL := `DELETE FROM mo_catalog.mo_ccpr_log`
 			err := exec_sql(disttaeEngine, systemCtx, cleanupSQL)
-			require.NoError(t, err)
-
-			// Clean up mo_snapshots before each test case
-			cleanupSnapshotSQL := `DELETE FROM mo_catalog.mo_snapshots WHERE sname LIKE 'ccpr_%'`
-			err = exec_sql(disttaeEngine, ctxWithTimeout, cleanupSnapshotSQL)
 			require.NoError(t, err)
 
 			subscriptionName := "test_subscription_gc"
@@ -2573,64 +2491,6 @@ func TestCCPRGC(t *testing.T) {
 			require.True(t, ok)
 			exec := v.(executor.SQLExecutor)
 
-			// Insert test snapshots into mo_snapshots
-			// Calculate snapshot timestamp based on snapshotHoursAgo
-			snapshotTime := time.Now().Add(-time.Duration(tc.snapshotHoursAgo) * time.Hour)
-			snapshotTS := snapshotTime.UnixNano()
-			for _, lsn := range tc.snapshotLSNs {
-				snapshotName := fmt.Sprintf("ccpr_%s_%d", taskID, lsn)
-				snapshotID, err := uuid.NewV7()
-				require.NoError(t, err)
-
-				insertSnapshotSQL := fmt.Sprintf(
-					`INSERT INTO mo_catalog.mo_snapshots(
-						snapshot_id,
-						sname,
-						ts,
-						level,
-						account_name,
-						database_name,
-						table_name,
-						obj_id
-					) VALUES ('%s', '%s', %d, '%s', '%s', '%s', '%s', %d)`,
-					snapshotID.String(),
-					snapshotName,
-					snapshotTS,
-					"table",
-					"",
-					"test_db",
-					"test_table",
-					0,
-				)
-
-				err = exec_sql(disttaeEngine, ctxWithTimeout, insertSnapshotSQL)
-				require.NoError(t, err)
-			}
-
-			// Verify snapshots exist before GC
-			checkSnapshotSQL := fmt.Sprintf(
-				`SELECT COUNT(*) FROM mo_catalog.mo_snapshots WHERE sname LIKE 'ccpr_%s_%%'`,
-				taskID,
-			)
-
-			txn, err := disttaeEngine.NewTxnOperator(ctxWithTimeout, disttaeEngine.Now())
-			require.NoError(t, err)
-
-			res, err := exec.Exec(ctxWithTimeout, checkSnapshotSQL, executor.Options{}.WithTxn(txn))
-			require.NoError(t, err)
-			defer res.Close()
-
-			var snapshotCountBefore int64
-			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-				require.Equal(t, 1, rows)
-				snapshotCountBefore = vector.GetFixedAtWithTypeCheck[int64](cols[0], 0)
-				return true
-			})
-			require.Equal(t, int64(len(tc.snapshotLSNs)), snapshotCountBefore, "should have correct number of snapshots before GC")
-
-			err = txn.Commit(ctxWithTimeout)
-			require.NoError(t, err)
-
 			// Call GC
 			gcThreshold := time.Duration(tc.gcThresholdHours) * time.Hour
 			err = publication.GC(
@@ -2643,36 +2503,16 @@ func TestCCPRGC(t *testing.T) {
 			)
 			require.NoError(t, err)
 
-			// Verify snapshots after GC
-			txn, err = disttaeEngine.NewTxnOperator(ctxWithTimeout, disttaeEngine.Now())
-			require.NoError(t, err)
-
-			res, err = exec.Exec(ctxWithTimeout, checkSnapshotSQL, executor.Options{}.WithTxn(txn))
-			require.NoError(t, err)
-			defer res.Close()
-
-			var snapshotCountAfter int64
-			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-				require.Equal(t, 1, rows)
-				snapshotCountAfter = vector.GetFixedAtWithTypeCheck[int64](cols[0], 0)
-				return true
-			})
-			require.Equal(t, tc.expectedSnapshotCountAfter, snapshotCountAfter,
-				"snapshot count after GC should match expected value")
-
-			err = txn.Commit(ctxWithTimeout)
-			require.NoError(t, err)
-
 			// Verify mo_ccpr_log record exists or not after GC
 			checkRecordSQL := fmt.Sprintf(
 				`SELECT COUNT(*) FROM mo_catalog.mo_ccpr_log WHERE task_id = '%s'`,
 				taskID,
 			)
 
-			txn, err = disttaeEngine.NewTxnOperator(ctxWithTimeout, disttaeEngine.Now())
+			txn, err := disttaeEngine.NewTxnOperator(ctxWithTimeout, disttaeEngine.Now())
 			require.NoError(t, err)
 
-			res, err = exec.Exec(ctxWithTimeout, checkRecordSQL, executor.Options{}.WithTxn(txn))
+			res, err := exec.Exec(ctxWithTimeout, checkRecordSQL, executor.Options{}.WithTxn(txn))
 			require.NoError(t, err)
 			defer res.Close()
 
