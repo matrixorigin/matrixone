@@ -195,10 +195,21 @@ func (mo *MOServer) cleanOrphanTempTables() error {
 	if mo.rm == nil || mo.rm.sessionManager == nil {
 		return nil
 	}
-	ctx := mo.rm.ctx
+
+	var (
+		ctx    = mo.rm.ctx
+		cancel context.CancelFunc
+	)
+
 	if ctx == nil {
 		return nil
 	}
+
+	ctx, cancel = context.WithTimeoutCause(ctx, time.Second*60, context.DeadlineExceeded)
+	defer func() {
+		cancel()
+	}()
+
 	if _, ok := moruntime.ServiceRuntime(mo.service).GetGlobalVariables(moruntime.InternalSQLExecutor); !ok {
 		logutil.Warn("temp-table-cleanup: internal sql executor not ready")
 		return nil
