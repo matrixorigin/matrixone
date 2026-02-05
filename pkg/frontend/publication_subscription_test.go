@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
@@ -1174,47 +1175,26 @@ func Test_doShowCcprSubscriptions(t *testing.T) {
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
 
-		// Mock accounts result
-		mockedAccountsResults := func(ctrl *gomock.Controller) []interface{} {
-			er := mock_frontend.NewMockExecResult(ctrl)
-			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
-			er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(0), nil).AnyTimes()
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("sys", nil).AnyTimes()
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("open", nil).AnyTimes()
-			er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(3)).Return(uint64(1), nil).AnyTimes()
-			er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(4)).Return(true, nil).AnyTimes()
-			return []interface{}{er}
-		}
-
 		// Mock ccpr subscriptions result
+		// SQL: SELECT task_id, db_name, table_name, sync_level, state, error_message, watermark
 		mockedCcprSubResults := func(ctrl *gomock.Controller) []interface{} {
 			er := mock_frontend.NewMockExecResult(ctrl)
 			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
-			// subscription_name
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return("test_sub", nil).AnyTimes()
-			// sync_level
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("database", nil).AnyTimes()
-			// account_id
-			er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(2)).Return(int64(0), nil).AnyTimes()
-			// db_name (nullable)
-			er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(3)).Return(false, nil).AnyTimes()
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(3)).Return("testdb", nil).AnyTimes()
-			// table_name (nullable)
-			er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(4)).Return(true, nil).AnyTimes()
-			// upstream_conn
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("mysql://user:pass@host:3306", nil).AnyTimes()
-			// iteration_state
-			er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(6)).Return(int64(1), nil).AnyTimes()
-			// iteration_lsn
-			er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(7)).Return(int64(100), nil).AnyTimes()
-			// context (nullable)
-			er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(8)).Return(true, nil).AnyTimes()
-			// error_message (nullable)
-			er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(9)).Return(true, nil).AnyTimes()
-			// created_at
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(10)).Return("2024-01-01 00:00:00", nil).AnyTimes()
-			// drop_at (nullable)
-			er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(11)).Return(true, nil).AnyTimes()
+			// task_id (col 0)
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return("test-task-id", nil).AnyTimes()
+			// db_name (col 1, nullable)
+			er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(1)).Return(false, nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("testdb", nil).AnyTimes()
+			// table_name (col 2, nullable)
+			er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(2)).Return(true, nil).AnyTimes()
+			// sync_level (col 3)
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(3)).Return("database", nil).AnyTimes()
+			// state (col 4)
+			er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(4)).Return(int64(0), nil).AnyTimes()
+			// error_message (col 5, nullable)
+			er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(5)).Return(true, nil).AnyTimes()
+			// watermark (col 6, nullable)
+			er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(6)).Return(true, nil).AnyTimes()
 			return []interface{}{er}
 		}
 
@@ -1230,9 +1210,6 @@ func Test_doShowCcprSubscriptions(t *testing.T) {
 		// query ccpr subscriptions
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return(mockedCcprSubResults(ctrl))
-		// get accounts
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		bh.EXPECT().GetExecResultSet().Return(mockedAccountsResults(ctrl))
 
 		scs := &tree.ShowCcprSubscriptions{TaskId: "test-task-id"}
 		err := doShowCcprSubscriptions(ctx, ses, scs)
@@ -1595,6 +1572,12 @@ func Test_doCreateSubscription_TableLevelMissingDbName(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
+		// Mock AesCFBDecodeWithKey to bypass actual decryption (AES key must be 16, 24, or 32 bytes)
+		decryptStub := gostub.Stub(&cdc.AesCFBDecodeWithKey, func(context.Context, string, []byte) (string, error) {
+			return "0123456789abcdef", nil // 16 bytes for AES-128
+		})
+		defer decryptStub.Reset()
+
 		bh.EXPECT().Close().Return().AnyTimes()
 		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
 		bh.EXPECT().Exec(gomock.Any(), "begin;").Return(nil).AnyTimes()
@@ -1645,6 +1628,12 @@ func Test_doCreateSubscription_TableLevelMissingTableName(t *testing.T) {
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
+
+		// Mock AesCFBDecodeWithKey to bypass actual decryption (AES key must be 16, 24, or 32 bytes)
+		decryptStub := gostub.Stub(&cdc.AesCFBDecodeWithKey, func(context.Context, string, []byte) (string, error) {
+			return "0123456789abcdef", nil // 16 bytes for AES-128
+		})
+		defer decryptStub.Reset()
 
 		bh.EXPECT().Close().Return().AnyTimes()
 		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
