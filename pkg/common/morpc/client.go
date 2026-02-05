@@ -1060,6 +1060,31 @@ func (c *client) doRemoveInactive(remote string) {
 	c.updatePoolSizeMetricsLocked()
 }
 
+// doRemoveInactiveAll removes all explicitly closed (inactive) backends for every remote.
+// Used by the periodic GC to clean up closed backends within ~10s without waiting for
+// the idle timeout (e.g. 1 minute). Safe to call on closed client (no-op).
+func (c *client) doRemoveInactiveAll() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.mu.closed {
+		return
+	}
+
+	for remote, backends := range c.mu.backends {
+		newBackends := backends[:0]
+		for _, backend := range backends {
+			if backend.LastActiveTime() == (time.Time{}) {
+				backend.Close()
+				continue
+			}
+			newBackends = append(newBackends, backend)
+		}
+		c.mu.backends[remote] = newBackends
+	}
+	c.updatePoolSizeMetricsLocked()
+}
+
 func (c *client) closeIdleBackends() int {
 	// Check if client is closed before processing
 	c.mu.Lock()
