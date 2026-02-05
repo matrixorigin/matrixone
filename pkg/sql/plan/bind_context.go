@@ -297,7 +297,7 @@ func (bc *BindContext) unfoldStar(ctx context.Context, table string, isSysAccoun
 		}
 
 		displayCols := binding.originCols
-		if len(displayCols) == 0 {
+		if len(displayCols) != len(binding.cols) {
 			displayCols = binding.cols
 		}
 
@@ -330,7 +330,7 @@ func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, 
 	}
 	if root.binding != nil {
 		displayCols := root.binding.originCols
-		if len(displayCols) == 0 {
+		if len(displayCols) != len(root.binding.cols) {
 			displayCols = root.binding.cols
 		}
 
