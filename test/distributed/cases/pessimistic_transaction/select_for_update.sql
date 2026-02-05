@@ -600,6 +600,7 @@ select * from su_05;
 commit;
 drop table su_05;
 
+-- @bvt:issue#11009
 create table su_05_1(c1 int auto_increment primary key,c2 varchar(25),c3 decimal(6,2))partition by key(c1)partitions 4;;
 insert into  su_05_1(c2,c3) values ('mod',78.9),('proto',0.34),('mod',6.5),('mode',9.0),('make',662.9),('io',88.92);
 select * from `%!%p0%!%su_05_1`;
@@ -659,6 +660,7 @@ drop table su_05_1;
 select * from su_05_1;
 -- @session}
 commit;
+-- @bvt:issue
 set autocommit=1;
 
 
