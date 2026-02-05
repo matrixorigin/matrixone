@@ -3,9 +3,9 @@ UNAME_M := $(shell uname -m)
 
 # Yeah, fast math.  We want it to be fast, for all xcall, 
 # IEEE compliance should not be an issue.
-OPT_LV := -O3 -ffast-math
-CFLAGS=-std=c99 -g ${OPT_LV} -Wall -Werror
-OBJS=mo.o arith.o compare.o logic.o xcall.o
+OPT_LV := -O3 -ffast-math -ftree-vectorize -funroll-loops
+CFLAGS=-std=c99 -g ${OPT_LV} -Wall -Werror -I../thirdparties/install/include
+OBJS=mo.o arith.o compare.o logic.o xcall.o usearchex.o bloom.o
 CUDA_OBJS=
 
 ifeq ($(UNAME_M), x86_64)
@@ -32,6 +32,8 @@ endif
 #	$(CC) -o libmo.a $(OBJS) $(CUDA_OBJS) $(CUDA_LDFLAGS)
 
 
+test: libmo.a
+	make -C test
 
 .PHONY: debug
 debug: override OPT_LV := -O0
