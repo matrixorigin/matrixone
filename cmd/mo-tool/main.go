@@ -22,7 +22,6 @@ import (
 	inspect "github.com/matrixorigin/matrixone/cmd/mo-inspect"
 	object "github.com/matrixorigin/matrixone/cmd/mo-object-tool"
 	ckp "github.com/matrixorigin/matrixone/cmd/mo-object-tool/ckp"
-	gc "github.com/matrixorigin/matrixone/cmd/mo-tool/gc"
 	"github.com/spf13/cobra"
 )
 
@@ -38,7 +37,6 @@ func main() {
 	rootCmd.AddCommand(dashboard.PrepareCommand())
 	rootCmd.AddCommand(object.PrepareCommand())
 	rootCmd.AddCommand(ckp.PrepareCommand())
-	rootCmd.AddCommand(gc.PrepareCommand())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
