@@ -79,7 +79,7 @@ select nextval('seq_03');
 ➤ nextval(seq_03)[12,-1,0]  𝄀
 10
 select * from seq_03;
-➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[12,4,0]  ¦  is_called[12,4,0]  𝄀
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
 10  ¦  1  ¦  9223372036854775807  ¦  1  ¦  3  ¦  0  ¦  1
 create sequence seq_04 increment by -10;
 select nextval('seq_04');
@@ -126,7 +126,7 @@ select nextval('seq_06');
 ➤ nextval(seq_06)[12,-1,0]  𝄀
 10004
 select * from seq_06;
-➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[12,4,0]  ¦  is_called[12,4,0]  𝄀
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
 10004  ¦  1  ¦  9223372036854775807  ¦  10000  ¦  1  ¦  0  ¦  1
 truncate table seq_table_01;
 insert into seq_table_01 values(nextval('seq_06')),(nextval('seq_06'));
@@ -199,7 +199,7 @@ select nextval('seq_09');
 ➤ nextval(seq_09)[12,-1,0]  𝄀
 12
 select * from seq_09;
-➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[12,4,0]  ¦  is_called[12,4,0]  𝄀
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
 12  ¦  10  ¦  12  ¦  10  ¦  2  ¦  1  ¦  1
 create sequence seq_10 minvalue 1000;
 select nextval('seq_10');
@@ -244,7 +244,7 @@ select nextval('seq_12');
 ➤ nextval(seq_12)[12,-1,0]  𝄀
 30500
 select * from seq_12;
-➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[12,4,0]  ¦  is_called[12,4,0]  𝄀
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
 30500  ¦  500  ¦  9223372036854775807  ¦  500  ¦  10000  ¦  1  ¦  1
 truncate table seq_table_01;
 insert into seq_table_01 select nextval('seq_12');
@@ -386,49 +386,3 @@ select nextval('seq_17'),currval('seq_17');
 select lastval();
 ➤ lastval()[12,-1,0]  𝄀
 28
-begin;
-[unknown result because it is related to issue#8890]
-create sequence seq_18 minvalue 1000;
-[unknown result because it is related to issue#8890]
-select nextval('seq_18');
-[unknown result because it is related to issue#8890]
-select nextval('seq_18');
-[unknown result because it is related to issue#8890]
-create sequence seq_18;
-[unknown result because it is related to issue#8890]
-select nextval('seq_18');
-[unknown result because it is related to issue#8890]
-commit;
-[unknown result because it is related to issue#8890]
-select nextval('seq_18'),currval('seq_18');
-[unknown result because it is related to issue#8890]
-drop sequence seq_18;
-[unknown result because it is related to issue#8890]
-begin;
-[unknown result because it is related to issue#8890]
-create sequence seq_19 minvalue 1000;
-[unknown result because it is related to issue#8890]
-select nextval('seq_19');
-[unknown result because it is related to issue#8890]
-select nextval('seq_19');
-[unknown result because it is related to issue#8890]
-create sequence seq_19;
-[unknown result because it is related to issue#8890]
-rollback;
-[unknown result because it is related to issue#8890]
-select nextval('seq_19');
-[unknown result because it is related to issue#8890]
-drop sequence seq_19;
-[unknown result because it is related to issue#8890]
-start transaction ;
-[unknown result because it is related to issue#8890]
-create sequence seq_20 increment by -10;
-[unknown result because it is related to issue#8890]
-select nextval('seq_20');
-[unknown result because it is related to issue#8890]
-rollback;
-[unknown result because it is related to issue#8890]
-select nextval('seq_20');
-[unknown result because it is related to issue#8890]
-drop sequence seq_20;
-[unknown result because it is related to issue#8890]
