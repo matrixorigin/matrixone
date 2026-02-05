@@ -186,6 +186,8 @@ func initTxnMetrics() {
 	registry.MustRegister(StarcountEstimateTombstoneRowsHistogram)
 	registry.MustRegister(StarcountEstimateTombstoneObjectsHistogram)
 	registry.MustRegister(StarcountEstimateOverActualRatioHistogram)
+	registry.MustRegister(StarcountAppendableScanDurationSecondsHistogram)
+	registry.MustRegister(StarcountAppendableObjectsScannedHistogram)
 }
 
 func initRPCMetrics() {
@@ -250,7 +252,7 @@ func initFrontendMetrics() {
 
 func initPipelineMetrics() {
 	registry.MustRegister(PipelineServerDurationHistogram)
-	registry.MustRegister(pipelineStreamCounter)
+	registry.MustRegister(pipelineStreamGauge)
 }
 
 func initLogServiceMetrics() {

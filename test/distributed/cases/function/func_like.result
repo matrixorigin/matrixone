@@ -71,6 +71,9 @@ str1    str2
 select * from t1 where str1 like "\%%";
 str1    str2
 %str1%    %str2%
+select 'a\\+b' like 'a\\\\+b' as result;
+result
+1
 select json_extract('{"a":1}', '$.a') like '1' as result;
 result
 1

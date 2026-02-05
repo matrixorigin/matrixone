@@ -18,7 +18,7 @@ David! like David\_
 0
 SELECT 'David_' LIKE 'David\_';
 David_ like David\_
-0
+1
 SELECT '__++' LIKE '__++%';
 __++ like __++%
 1
