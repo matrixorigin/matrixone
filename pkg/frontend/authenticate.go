@@ -1097,7 +1097,7 @@ var (
 			set owner = %d, 
 			    args = '%s',
 			    retType = '%s',
-			    body = '%s',
+			    body = "%s",
 			    language = '%s',
 			    definer = '%s',
 			    modified_time = '%s',
