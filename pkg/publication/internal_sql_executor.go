@@ -189,6 +189,7 @@ func (e *InternalSQLExecutor) EndTxn(ctx context.Context, commit bool) error {
 }
 
 // ExecSQL executes a SQL statement with options
+// accountID: the account ID to use for tenant context; use InvalidAccountID to use executor's default accountID
 // useTxn: if true, execute within a transaction (requires active transaction, will error if txnOp is nil)
 // if false, execute as autocommit (will create and commit transaction automatically)
 // It supports automatic retry for RC mode transaction errors (txn need retry errors)
@@ -200,6 +201,7 @@ func (e *InternalSQLExecutor) EndTxn(ctx context.Context, commit bool) error {
 func (e *InternalSQLExecutor) ExecSQL(
 	ctx context.Context,
 	ar *ActiveRoutine,
+	accountID uint32,
 	query string,
 	useTxn bool,
 	needRetry bool,
@@ -220,9 +222,13 @@ func (e *InternalSQLExecutor) ExecSQL(
 		}
 	}
 
-	// Create base context with account ID if specified
+	// Create base context with account ID
+	// Priority: 1. Use provided accountID if valid (not InvalidAccountID)
+	//           2. Otherwise use executor's accountID if useAccountID is true
 	baseCtx := ctx
-	if e.useAccountID {
+	if accountID != InvalidAccountID {
+		baseCtx = context.WithValue(ctx, defines.TenantIDKey{}, accountID)
+	} else if e.useAccountID {
 		baseCtx = context.WithValue(ctx, defines.TenantIDKey{}, e.accountID)
 	}
 

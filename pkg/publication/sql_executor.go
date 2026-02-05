@@ -163,17 +163,21 @@ func (r *Result) Err() error {
 	return nil
 }
 
+// InvalidAccountID represents an invalid account ID that should be ignored
+const InvalidAccountID uint32 = 0xFFFFFFFF
+
 type SQLExecutor interface {
 	Close() error
 	Connect() error
 	EndTxn(ctx context.Context, commit bool) error
 	// ExecSQL executes a SQL statement with options
+	// accountID: the account ID to use for tenant context; use InvalidAccountID if not applicable (e.g., for UpstreamExecutor)
 	// useTxn: if true, execute within a transaction (must have active transaction for InternalSQLExecutor, not allowed for UpstreamExecutor)
 	// if false, execute as autocommit (will create and commit transaction automatically for InternalSQLExecutor)
 	// timeout: if > 0, each retry attempt will use a new context with this timeout; if 0, use the provided ctx directly
 	// Returns: result, cancel function (may be nil if no timeout context was created), error
 	// IMPORTANT: caller MUST call the cancel function after finishing with the result (if cancel is not nil)
-	ExecSQL(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool, timeout time.Duration) (*Result, context.CancelFunc, error)
+	ExecSQL(ctx context.Context, ar *ActiveRoutine, accountID uint32, query string, useTxn bool, needRetry bool, timeout time.Duration) (*Result, context.CancelFunc, error)
 }
 
 var _ SQLExecutor = (*UpstreamExecutor)(nil)
@@ -307,7 +311,7 @@ func initAesKeyForPublication(ctx context.Context, executor SQLExecutor, cnUUID 
 	// Query the data key from mo_data_key table
 	querySQL := cdc.CDCSQLBuilder.GetDataKeySQL(uint64(catalog.System_Account), cdc.InitKeyId)
 	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	result, cancel, err := executor.ExecSQL(systemCtx, nil, querySQL, false, false, time.Minute)
+	result, cancel, err := executor.ExecSQL(systemCtx, nil, InvalidAccountID, querySQL, false, false, time.Minute)
 	if err != nil {
 		return err
 	}
@@ -552,6 +556,7 @@ func (e *UpstreamExecutor) EndTxn(ctx context.Context, commit bool) error {
 }
 
 // ExecSQL executes a SQL statement with options
+// accountID: ignored for UpstreamExecutor (upstream account ID is invalid/not applicable)
 // useTxn: must be false for UpstreamExecutor (transaction not supported, will error if true)
 // UpstreamExecutor always uses connection-level autocommit (no explicit transactions)
 // timeout: if > 0, each retry attempt will use a new context with this timeout; if 0, use the provided ctx directly
@@ -560,11 +565,13 @@ func (e *UpstreamExecutor) EndTxn(ctx context.Context, commit bool) error {
 func (e *UpstreamExecutor) ExecSQL(
 	ctx context.Context,
 	ar *ActiveRoutine,
+	accountID uint32,
 	query string,
 	useTxn bool,
 	needRetry bool,
 	timeout time.Duration,
 ) (*Result, context.CancelFunc, error) {
+	// Note: accountID is ignored for UpstreamExecutor as it connects to external database
 	// UpstreamExecutor does not support explicit transactions
 	if useTxn {
 		return nil, nil, moerr.NewInternalError(ctx, "UpstreamExecutor does not support transactions. Use useTxn=false")

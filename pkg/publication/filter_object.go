@@ -108,7 +108,7 @@ func (j *GetMetaJob) Execute() {
 	res := &GetMetaJobResult{}
 	getChunk0SQL := PublicationSQLBuilder.GetObjectSQL(j.subscriptionAccountName, j.pubName, j.objectName, 0)
 
-	result, cancel, err := j.upstreamExecutor.ExecSQL(j.ctx, nil, getChunk0SQL, false, true, time.Second*10)
+	result, cancel, err := j.upstreamExecutor.ExecSQL(j.ctx, nil, InvalidAccountID, getChunk0SQL, false, true, time.Second*10)
 	if err != nil {
 		res.Err = moerr.NewInternalErrorf(j.ctx, "failed to execute GETOBJECT query for offset 0: %v", err)
 		j.result <- res
@@ -198,7 +198,7 @@ func (j *GetChunkJob) Execute() {
 	defer func() { <-getChunkSemaphore }()
 
 	getChunkSQL := PublicationSQLBuilder.GetObjectSQL(j.subscriptionAccountName, j.pubName, j.objectName, j.chunkIndex)
-	result, cancel, err := j.upstreamExecutor.ExecSQL(j.ctx, nil, getChunkSQL, false, true, time.Minute)
+	result, cancel, err := j.upstreamExecutor.ExecSQL(j.ctx, nil, InvalidAccountID, getChunkSQL, false, true, time.Minute)
 	if err != nil {
 		res.Err = moerr.NewInternalErrorf(j.ctx, "failed to execute GETOBJECT query for offset %d: %v, sql: %v", j.chunkIndex, err, getChunkSQL)
 		j.result <- res

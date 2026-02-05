@@ -2646,7 +2646,7 @@ func checkUpstreamPublicationCoverage(
 
 	// Execute SHOW PUBLICATION COVERAGE on upstream
 	coverageSQL := fmt.Sprintf("SHOW PUBLICATION COVERAGE %s", pubName)
-	result, cancel, err := upstreamExecutor.ExecSQL(ctx, nil, coverageSQL, false, false, 0)
+	result, cancel, err := upstreamExecutor.ExecSQL(ctx, nil, publication.InvalidAccountID, coverageSQL, false, false, 0)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to check publication coverage on upstream: %v", err)
 	}
@@ -3019,7 +3019,7 @@ func queryUpstreamAndCreateLocalDBTables(
 
 	// Step 1: Get databases from upstream using internal command
 	getDatabasesSQL := publication.PublicationSQLBuilder.GetDatabasesSQL(snapshotName, subscriptionAccountName, pubName, syncLevel, dbName, tableName)
-	dbResult, cancelDb, err := upstreamExecutor.ExecSQL(ctx, nil, getDatabasesSQL, false, true, time.Minute)
+	dbResult, cancelDb, err := upstreamExecutor.ExecSQL(ctx, nil, publication.InvalidAccountID, getDatabasesSQL, false, true, time.Minute)
 	if err != nil {
 		return nil, nil, moerr.NewInternalErrorf(ctx, "failed to get databases from upstream: %v", err)
 	}
@@ -3064,7 +3064,7 @@ func queryUpstreamAndCreateLocalDBTables(
 	// Step 2: Get DDL from upstream using internal command
 	// GetDdlSQL returns: dbname, tablename, tableid, tablesql
 	getDdlSQL := publication.PublicationSQLBuilder.GetDdlSQL(snapshotName, subscriptionAccountName, pubName, syncLevel, dbName, tableName)
-	ddlResult, cancelDdl, err := upstreamExecutor.ExecSQL(ctx, nil, getDdlSQL, false, true, time.Minute)
+	ddlResult, cancelDdl, err := upstreamExecutor.ExecSQL(ctx, nil, publication.InvalidAccountID, getDdlSQL, false, true, time.Minute)
 	if err != nil {
 		return nil, nil, moerr.NewInternalErrorf(ctx, "failed to get DDL from upstream: %v", err)
 	}
@@ -3219,7 +3219,7 @@ func getTableID(ctx context.Context, bh BackgroundExec, dbName, tableName string
 // getUpstreamCreateDatabaseDDL gets CREATE DATABASE DDL from upstream
 func getUpstreamCreateDatabaseDDL(ctx context.Context, executor publication.SQLExecutor, dbName string) (string, error) {
 	sql := fmt.Sprintf("SHOW CREATE DATABASE `%s`", dbName)
-	result, cancel, err := executor.ExecSQL(ctx, nil, sql, false, false, 0)
+	result, cancel, err := executor.ExecSQL(ctx, nil, publication.InvalidAccountID, sql, false, false, 0)
 	if err != nil {
 		return "", moerr.NewInternalErrorf(ctx, "failed to get CREATE DATABASE DDL for '%s': %v", dbName, err)
 	}
@@ -3240,7 +3240,7 @@ func getUpstreamCreateDatabaseDDL(ctx context.Context, executor publication.SQLE
 // getUpstreamCreateTableDDL gets CREATE TABLE DDL from upstream
 func getUpstreamCreateTableDDL(ctx context.Context, executor publication.SQLExecutor, dbName, tableName string) (string, error) {
 	sql := fmt.Sprintf("SHOW CREATE TABLE `%s`.`%s`", dbName, tableName)
-	result, cancel, err := executor.ExecSQL(ctx, nil, sql, false, false, 0)
+	result, cancel, err := executor.ExecSQL(ctx, nil, publication.InvalidAccountID, sql, false, false, 0)
 	if err != nil {
 		return "", moerr.NewInternalErrorf(ctx, "failed to get CREATE TABLE DDL for '%s.%s': %v", dbName, tableName, err)
 	}
@@ -3266,7 +3266,7 @@ func getUpstreamIndexTables(ctx context.Context, executor publication.SQLExecuto
 
 	// Query mo_indexes using internal command
 	sql := publication.PublicationSQLBuilder.QueryMoIndexesSQL(tableID, subscriptionAccountName, pubName, snapshotName)
-	result, cancel, err := executor.ExecSQL(ctx, nil, sql, false, false, 0)
+	result, cancel, err := executor.ExecSQL(ctx, nil, publication.InvalidAccountID, sql, false, false, 0)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to query upstream index tables: %v", err)
 	}

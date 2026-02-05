@@ -95,7 +95,7 @@ func GetUpstreamDDLUsingGetDdl(
 	)
 
 	// Execute GETDDL SQL
-	result, cancel, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true, time.Minute)
+	result, cancel, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, InvalidAccountID, querySQL, false, true, time.Minute)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to execute GETDDL: %v", err)
 	}
@@ -204,7 +204,7 @@ func getDatabaseDiff(
 		iterationCtx.SrcInfo.DBName,
 		iterationCtx.SrcInfo.TableName,
 	)
-	result, cancel, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true, time.Minute)
+	result, cancel, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, InvalidAccountID, querySQL, false, true, time.Minute)
 	if err != nil {
 		return nil, nil, moerr.NewInternalErrorf(ctx, "failed to query upstream databases using GETDATABASES: %v", err)
 	}
@@ -458,7 +458,7 @@ func ProcessDDLChanges(
 				}
 				// Execute each ALTER statement
 				for _, alterSQL := range ddlInfo.AlterStatements {
-					result, cancel, err := iterationCtx.LocalExecutor.ExecSQL(downstreamCtx, nil, alterSQL, true, true, time.Minute)
+					result, cancel, err := iterationCtx.LocalExecutor.ExecSQL(downstreamCtx, nil, iterationCtx.SrcInfo.AccountID, alterSQL, true, true, time.Minute)
 					if err != nil {
 						return moerr.NewInternalErrorf(ctx, "failed to execute alter inplace for %s.%s: %v, SQL: %s", dbName, tableName, err, alterSQL)
 					}
@@ -539,7 +539,7 @@ func ProcessDDLChanges(
 				catalog.MO_CCPR_DBS,
 				dbID,
 			)
-			if _, _, err := iterationCtx.LocalExecutor.ExecSQL(ctx, nil, deleteCcprSql, true, true, time.Minute); err != nil {
+			if _, _, err := iterationCtx.LocalExecutor.ExecSQL(ctx, nil, catalog.System_Account, deleteCcprSql, true, true, time.Minute); err != nil {
 				logutil.Warn("CCPR: failed to delete record from mo_ccpr_dbs",
 					zap.Uint64("dbID", dbID),
 					zap.Error(err))
@@ -796,7 +796,7 @@ func createTable(
 
 	// Create database if not exists
 	createDBSQL := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", escapeSQLIdentifierForDDL(dbName))
-	result, cancel, err := executor.ExecSQL(ctx, nil, createDBSQL, true, false, time.Minute)
+	result, cancel, err := executor.ExecSQL(ctx, nil, iterationCtx.SrcInfo.AccountID, createDBSQL, true, false, time.Minute)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to create database %s: %v", dbName, err)
 	}
@@ -808,7 +808,7 @@ func createTable(
 	// Create table
 	// Note: The "from_publication" property is already added in GetUpstreamDDLUsingGetDdl
 	// when processing the CREATE SQL from upstream
-	result, cancel, err = executor.ExecSQL(ctx, nil, createSQL, true, false, time.Minute)
+	result, cancel, err = executor.ExecSQL(ctx, nil, iterationCtx.SrcInfo.AccountID, createSQL, true, false, time.Minute)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to create table %s.%s: %v", dbName, tableName, err)
 	}
@@ -904,7 +904,7 @@ func dropTable(
 		catalog.MO_CCPR_TABLES,
 		actualTableID,
 	)
-	if _, _, err := executor.ExecSQL(ctx, nil, deleteCcprSql, true, true, time.Minute); err != nil {
+	if _, _, err := executor.ExecSQL(ctx, nil, catalog.System_Account, deleteCcprSql, true, true, time.Minute); err != nil {
 		logutil.Warn("CCPR: failed to delete record from mo_ccpr_tables",
 			zap.Uint64("tableID", actualTableID),
 			zap.Error(err))
@@ -1061,7 +1061,7 @@ func queryUpstreamIndexInfo(
 	)
 
 	// Execute query
-	result, cancel, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true, time.Minute)
+	result, cancel, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, InvalidAccountID, querySQL, false, true, time.Minute)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to execute query upstream index info: %v", err)
 	}
@@ -1124,7 +1124,7 @@ func insertCCPRTable(ctx context.Context, executor SQLExecutor, tableID uint64, 
 		dbName,
 		tableName,
 	)
-	result, cancel, err := executor.ExecSQL(ctx, nil, sql, true, true, time.Minute)
+	result, cancel, err := executor.ExecSQL(ctx, nil, catalog.System_Account, sql, true, true, time.Minute)
 	if err != nil {
 		return err
 	}
@@ -1149,7 +1149,7 @@ func insertCCPRDb(ctx context.Context, executor SQLExecutor, dbIDStr string, tas
 		taskID,
 		dbName,
 	)
-	result, cancel, err := executor.ExecSQL(ctx, nil, sql, true, true, time.Minute)
+	result, cancel, err := executor.ExecSQL(ctx, nil, catalog.System_Account, sql, true, true, time.Minute)
 	if err != nil {
 		return err
 	}

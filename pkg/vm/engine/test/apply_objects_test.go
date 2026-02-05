@@ -57,7 +57,7 @@ type mockLocalExecutor struct{}
 func (m *mockLocalExecutor) Close() error                                  { return nil }
 func (m *mockLocalExecutor) Connect() error                                { return nil }
 func (m *mockLocalExecutor) EndTxn(ctx context.Context, commit bool) error { return nil }
-func (m *mockLocalExecutor) ExecSQL(ctx context.Context, ar *publication.ActiveRoutine, query string, useTxn bool, needRetry bool, timeout time.Duration) (*publication.Result, context.CancelFunc, error) {
+func (m *mockLocalExecutor) ExecSQL(ctx context.Context, ar *publication.ActiveRoutine, accountID uint32, query string, useTxn bool, needRetry bool, timeout time.Duration) (*publication.Result, context.CancelFunc, error) {
 	// Return empty Result - all nil fields means Next() returns false (no rows)
 	return &publication.Result{}, nil, nil
 }
@@ -528,8 +528,8 @@ func runApplyObjects(
 		disttaeEngine.Engine,
 		mp,
 		fs,
-		nil,                         // FilterObjectWorker
-		nil,                         // GetChunkWorker
+		nil, // FilterObjectWorker
+		nil, // GetChunkWorker
 		nil,
 		"",                          // subscriptionAccountName
 		"",                          // pubName
