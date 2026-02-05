@@ -153,10 +153,11 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 			switch {
 			case !(c0 == '%' || c0 == '_') && !(c1 == '%' || c1 == '_'):
 				// Rule 4.1: no wild card, so it is a simple compare eq.
+				literal := functionUtil.RemoveEscapeChar(pat, DefaultEscapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
-					if err := rs.Append(len(v1) == n && bytes.Equal(pat, v1), null1); err != nil {
+					if err := rs.Append(len(v1) == len(literal) && bytes.Equal(literal, v1), null1); err != nil {
 						return true, err
 					}
 				}
@@ -164,10 +165,11 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 
 			case c0 == '_' && !(c1 == '%' || c1 == '_'):
 				// Rule 4.2: _foobarzoo,
+				literal := functionUtil.RemoveEscapeChar(pat[1:], DefaultEscapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
-					if err := rs.Append(len(v1) == n && bytes.Equal(pat[1:], v1[1:]), null1); err != nil {
+					if err := rs.Append(len(v1) == len(literal)+1 && bytes.Equal(literal, v1[1:]), null1); err != nil {
 						return true, err
 					}
 				}
@@ -191,7 +193,7 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 				for i := uint64(0); i < uint64(length); i++ {
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
-					if err := rs.Append(len(v1) == n && bytes.Equal(prefix, v1[:n-1]), null1); err != nil {
+					if err := rs.Append(len(v1) == len(prefix)+1 && bytes.Equal(prefix, v1[:len(prefix)]), null1); err != nil {
 						return true, err
 					}
 				}
