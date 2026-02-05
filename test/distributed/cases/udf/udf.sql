@@ -15,7 +15,5 @@ use udf_db1;
 create function udf_db1.helloworld5 () returns int language sql as 'select id from tbl1 limit 1';
 drop function udf_db1.helloworld5();
 drop function db2.helloworld5();
-
--- bvt: preserve backslash in $$...$$ string for UDF body
 create function sql_nl() returns varchar language sql as $$select '\n'$$;
-select hex(body) as body_hex from mo_catalog.mo_user_defined_function where name = 'sql_nl' and db = 'db1';
+select hex(body) as body_hex from mo_catalog.mo_user_defined_function where name = 'sql_nl' and db = 'udf_db1';
