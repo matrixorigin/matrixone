@@ -3237,27 +3237,6 @@ func getUpstreamCreateDatabaseDDL(ctx context.Context, executor publication.SQLE
 	return "", moerr.NewInternalErrorf(ctx, "no CREATE DATABASE result for '%s'", dbName)
 }
 
-// getUpstreamCreateTableDDL gets CREATE TABLE DDL from upstream
-func getUpstreamCreateTableDDL(ctx context.Context, executor publication.SQLExecutor, dbName, tableName string) (string, error) {
-	sql := fmt.Sprintf("SHOW CREATE TABLE `%s`.`%s`", dbName, tableName)
-	result, cancel, err := executor.ExecSQL(ctx, nil, publication.InvalidAccountID, sql, false, false, 0)
-	if err != nil {
-		return "", moerr.NewInternalErrorf(ctx, "failed to get CREATE TABLE DDL for '%s.%s': %v", dbName, tableName, err)
-	}
-	defer cancel()
-	defer result.Close()
-
-	if result.Next() {
-		var tableNameResult, createSQL string
-		if err := result.Scan(&tableNameResult, &createSQL); err != nil {
-			return "", moerr.NewInternalErrorf(ctx, "failed to scan CREATE TABLE result: %v", err)
-		}
-		return createSQL, nil
-	}
-
-	return "", moerr.NewInternalErrorf(ctx, "no CREATE TABLE result for '%s.%s'", dbName, tableName)
-}
-
 // getUpstreamIndexTables gets index tables from upstream for a given table using internal command
 // Uses __++__internal_get_mo_indexes <tableId> <subscriptionAccountName> <publicationName> <snapshotName>
 // Returns map[indexTableName] -> indexName

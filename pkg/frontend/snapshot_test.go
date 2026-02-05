@@ -279,22 +279,6 @@ func Test_dropExistsAccount_InRestoreTransaction(t *testing.T) {
 	})
 }
 
-// newMrsForSnapshotTs creates a MysqlResultSet for snapshot ts query
-func newMrsForSnapshotTs(ts int64) *MysqlResultSet {
-	mrs := &MysqlResultSet{}
-
-	col1 := &MysqlColumn{}
-	col1.SetName("ts")
-	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-	mrs.AddColumn(col1)
-
-	if ts >= 0 {
-		mrs.AddRow([]interface{}{ts})
-	}
-
-	return mrs
-}
-
 // newMrsForSnapshotRecord creates a MysqlResultSet for full snapshot record query (select * from mo_snapshots)
 // columns: snapshot_id, sname, ts, level, account_name, database_name, table_name, obj_id
 func newMrsForSnapshotRecord(snapshotId, snapshotName string, ts int64, level, accountName, databaseName, tableName string, objId uint64) *MysqlResultSet {

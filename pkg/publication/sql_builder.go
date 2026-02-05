@@ -579,15 +579,3 @@ func escapeOrPlaceholder(s string) string {
 	}
 	return escapeSQLString(s)
 }
-
-// escapeSQLIdentifier escapes SQL identifiers (table names, column names, etc.)
-// For identifiers that contain special characters or are reserved words, wrap them in backticks
-func escapeSQLIdentifier(s string) string {
-	// If identifier contains special characters or spaces, wrap in backticks
-	if strings.ContainsAny(s, " `\"'()[]{},.;:+-*/=<>!@#$%^&|\\") {
-		// Escape backticks inside the identifier
-		s = strings.ReplaceAll(s, "`", "``")
-		return "`" + s + "`"
-	}
-	return s
-}

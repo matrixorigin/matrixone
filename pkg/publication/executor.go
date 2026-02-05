@@ -1033,58 +1033,6 @@ func createUpstreamExecutorForGC(
 	return executor, err
 }
 
-type snapshotInfo struct {
-	name string
-	lsn  uint64
-	ts   time.Time
-}
-
-func determineSnapshotsToDelete(
-	record ccprLogRecord,
-	snapshots []snapshotInfo,
-	gcTime time.Time,
-	snapshotThresholdTime time.Time,
-) []string {
-	var toDelete []string
-
-	if record.dropAt != nil && record.state == SubscriptionStateDropped {
-		// For dropped: delete all snapshots
-		for _, snap := range snapshots {
-			toDelete = append(toDelete, snap.name)
-		}
-		return toDelete
-	}
-
-	// For running, error, pause: delete snapshots with lsn < current_lsn - 1
-	currentLSN := record.iterationLSN
-	for _, snap := range snapshots {
-		if snap.lsn < currentLSN-1 {
-			toDelete = append(toDelete, snap.name)
-		}
-	}
-
-	// For error and pause: also delete snapshots older than snapshot_threshold
-	if record.state == SubscriptionStateError || record.state == SubscriptionStatePause {
-		for _, snap := range snapshots {
-			if snap.ts.Before(snapshotThresholdTime) {
-				// Check if not already in toDelete
-				alreadyInList := false
-				for _, name := range toDelete {
-					if name == snap.name {
-						alreadyInList = true
-						break
-					}
-				}
-				if !alreadyInList {
-					toDelete = append(toDelete, snap.name)
-				}
-			}
-		}
-	}
-
-	return toDelete
-}
-
 // GCSnapshots deletes old ccpr snapshots that are older than the threshold (3 days)
 func GCSnapshots(
 	ctx context.Context,
