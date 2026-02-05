@@ -1110,6 +1110,8 @@ func ExecuteIteration(
 	// Mark this transaction as a CCPR transaction
 	// This will trigger CCPRTxnCache.OnTxnCommit/OnTxnRollback when the txn commits/rolls back
 	localTxn.GetWorkspace().SetCCPRTxn()
+	// Set the CCPR task ID to allow the transaction to bypass shared object read-only checks
+	localTxn.GetWorkspace().SetCCPRTaskID(iterationCtx.TaskID)
 
 	iterationCtx.LocalTxn = localTxn
 	iterationCtx.LocalExecutor.(*InternalSQLExecutor).SetTxn(localTxn)

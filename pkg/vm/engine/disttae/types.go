@@ -426,6 +426,7 @@ type Transaction struct {
 	haveDDL    atomic.Bool
 	isCloneTxn bool
 	isCCPRTxn  bool
+	ccprTaskID string
 
 	writeWorkspaceThreshold      uint64
 	commitWorkspaceThreshold     uint64
@@ -446,6 +447,18 @@ func (txn *Transaction) SetCCPRTxn() {
 // IsCCPRTxn returns true if this transaction is a CCPR transaction.
 func (txn *Transaction) IsCCPRTxn() bool {
 	return txn.isCCPRTxn
+}
+
+// SetCCPRTaskID sets the CCPR task ID for this transaction.
+// When a CCPR task ID is set, the transaction can bypass shared object read-only checks.
+func (txn *Transaction) SetCCPRTaskID(taskID string) {
+	txn.ccprTaskID = taskID
+}
+
+// GetCCPRTaskID returns the CCPR task ID for this transaction.
+// Returns empty string if no task ID is set.
+func (txn *Transaction) GetCCPRTaskID() string {
+	return txn.ccprTaskID
 }
 
 type Summary struct {

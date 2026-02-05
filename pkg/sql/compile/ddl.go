@@ -2513,7 +2513,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	}
 
 	// Check if target table is a CCPR shared table (from publication)
-	if isTableFromPublication(rel.GetTableDef(c.proc.Ctx)) {
+	if c.shouldBlockCCPRReadOnly(rel.GetTableDef(c.proc.Ctx)) {
 		return moerr.NewCCPRReadOnly(c.proc.Ctx)
 	}
 

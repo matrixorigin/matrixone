@@ -1152,7 +1152,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		return ss, nil
 	case plan.Node_DELETE:
 		// Check if target table is a CCPR shared table (from publication)
-		if node.DeleteCtx != nil && isTableFromPublication(node.DeleteCtx.TableDef) {
+		if node.DeleteCtx != nil && c.shouldBlockCCPRReadOnly(node.DeleteCtx.TableDef) {
 			return nil, moerr.NewCCPRReadOnly(c.proc.Ctx)
 		}
 		if node.DeleteCtx.CanTruncate {
@@ -1231,7 +1231,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		return c.compilePreInsert(nodes, node, ss)
 	case plan.Node_INSERT:
 		// Check if target table is a CCPR shared table (from publication)
-		if node.InsertCtx != nil && isTableFromPublication(node.InsertCtx.TableDef) {
+		if node.InsertCtx != nil && c.shouldBlockCCPRReadOnly(node.InsertCtx.TableDef) {
 			return nil, moerr.NewCCPRReadOnly(c.proc.Ctx)
 		}
 		c.appendMetaTables(node.ObjRef)
@@ -1246,7 +1246,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 	case plan.Node_MULTI_UPDATE:
 		// Check if any target table is a CCPR shared table (from publication)
 		for _, updateCtx := range node.UpdateCtxList {
-			if isTableFromPublication(updateCtx.TableDef) {
+			if c.shouldBlockCCPRReadOnly(updateCtx.TableDef) {
 				return nil, moerr.NewCCPRReadOnly(c.proc.Ctx)
 			}
 			c.appendMetaTables(updateCtx.ObjRef)
@@ -4808,4 +4808,21 @@ func isTableFromPublication(tableDef *plan.TableDef) bool {
 		}
 	}
 	return false
+}
+
+// shouldBlockCCPRReadOnly checks if the CCPR read-only check should block the operation.
+// Returns true if the operation should be blocked (table is from publication AND this is NOT a CCPR task transaction).
+func (c *Compile) shouldBlockCCPRReadOnly(tableDef *plan.TableDef) bool {
+	if !isTableFromPublication(tableDef) {
+		return false
+	}
+	// If this is a CCPR task transaction with a valid task ID, allow the operation
+	if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
+		if ws := txnOp.GetWorkspace(); ws != nil {
+			if ws.GetCCPRTaskID() != "" {
+				return false
+			}
+		}
+	}
+	return true
 }

@@ -70,6 +70,12 @@ func (w *Ws) SetCloneTxn(snapshot int64) {}
 
 func (w *Ws) SetCCPRTxn() {}
 
+func (w *Ws) IsCCPRTxn() bool { return false }
+
+func (w *Ws) SetCCPRTaskID(taskID string) {}
+
+func (w *Ws) GetCCPRTaskID() string { return "" }
+
 func (w *Ws) Readonly() bool {
 	return false
 }

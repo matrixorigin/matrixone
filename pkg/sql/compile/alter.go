@@ -465,7 +465,7 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 	qry := s.Plan.GetDdl().GetAlterTable()
 
 	// Check if target table is a CCPR shared table (from publication)
-	if isTableFromPublication(qry.TableDef) {
+	if c.shouldBlockCCPRReadOnly(qry.TableDef) {
 		return moerr.NewCCPRReadOnly(c.proc.Ctx)
 	}
 

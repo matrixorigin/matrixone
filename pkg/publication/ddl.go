@@ -468,7 +468,7 @@ func ProcessDDLChanges(
 					cancel()
 				}
 				// Process index table mappings after table creation
-				if err := processIndexTableMappings(ctx, iterationCtx, cnEngine, dbName, tableName, ddlInfo.TableID); err != nil {
+				if err := processIndexTableMappings(downstreamCtx, iterationCtx, cnEngine, dbName, tableName, ddlInfo.TableID); err != nil {
 					return moerr.NewInternalErrorf(ctx, "failed to process index table mappings: %v", err)
 				}
 				alterOps = append(alterOps, fmt.Sprintf("%s.%s-%d(inplace:%d)", dbName, tableName, tableID, len(ddlInfo.AlterStatements)))
@@ -1232,7 +1232,7 @@ func compareTableDefsAndGenerateAlterStatements(
 	// Check for column changes that cannot be done inplace
 	// Only rename is supported inplace
 	if !canDoColumnChangesInplace(oldCols, newCols) {
-		return nil, false, nil
+		return nil, false, moerr.NewInternalErrorf(ctx, "column changes cannot be done inplace")
 	}
 
 	// Generate column rename statements
@@ -1365,11 +1365,14 @@ func formatTypeReference(t tree.ResolvableTypeReference) string {
 	if t == nil {
 		return ""
 	}
-	// Use tree.String to format the type
-	if nf, ok := t.(tree.NodeFormatter); ok {
+	switch nf := t.(type) {
+	case tree.NodeFormatter:
 		return tree.String(nf, dialect.MYSQL)
+	case *tree.T:
+		return nf.InternalType.FamilyString
+	default:
+		return fmt.Sprintf("%T %v", t, t)
 	}
-	return fmt.Sprintf("%v", t)
 }
 
 // buildIndexMap builds a map of index name to index info from CREATE TABLE statement
