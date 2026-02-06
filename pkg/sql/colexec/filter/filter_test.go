@@ -24,8 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -55,7 +55,7 @@ func makeTestCases(t *testing.T) []filterTestCase {
 			arg: &Filter{
 				FilterExprs: []*plan.Expr{
 					{
-						Typ: plan2.MakePlan2Type(&boolType),
+						Typ: planner.MakePlan2Type(&boolType),
 						Expr: &plan.Expr_F{
 							F: &plan.Function{
 								Func: &plan.ObjectRef{
@@ -65,7 +65,7 @@ func makeTestCases(t *testing.T) []filterTestCase {
 
 								Args: []*plan.Expr{
 									{
-										Typ: plan2.MakePlan2Type(&int32Type),
+										Typ: planner.MakePlan2Type(&int32Type),
 										Expr: &plan.Expr_Col{
 											Col: &plan.ColRef{
 												RelPos: 0,
@@ -96,7 +96,7 @@ func makeTestCases(t *testing.T) []filterTestCase {
 			arg: &Filter{
 				FilterExprs: []*plan.Expr{
 					{
-						Typ: plan2.MakePlan2Type(&boolType),
+						Typ: planner.MakePlan2Type(&boolType),
 						Expr: &plan.Expr_F{
 							F: &plan.Function{
 								Func: &plan.ObjectRef{
@@ -106,7 +106,7 @@ func makeTestCases(t *testing.T) []filterTestCase {
 
 								Args: []*plan.Expr{
 									{
-										Typ: plan2.MakePlan2Type(&int32Type),
+										Typ: planner.MakePlan2Type(&int32Type),
 										Expr: &plan.Expr_Col{
 											Col: &plan.ColRef{
 												RelPos: 0,
@@ -121,7 +121,7 @@ func makeTestCases(t *testing.T) []filterTestCase {
 						},
 					},
 					{
-						Typ: plan2.MakePlan2Type(&boolType),
+						Typ: planner.MakePlan2Type(&boolType),
 						Expr: &plan.Expr_F{
 							F: &plan.Function{
 								Func: &plan.ObjectRef{
@@ -131,7 +131,7 @@ func makeTestCases(t *testing.T) []filterTestCase {
 
 								Args: []*plan.Expr{
 									{
-										Typ: plan2.MakePlan2Type(&int32Type),
+										Typ: planner.MakePlan2Type(&int32Type),
 										Expr: &plan.Expr_Col{
 											Col: &plan.ColRef{
 												RelPos: 0,
@@ -390,7 +390,7 @@ func BenchmarkPlanConstandFold1(b *testing.B) {
 	expr := generateFoldCase1()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		filterExpr, err := plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(expr), proc, true, true)
+		filterExpr, err := planner.ConstantFold(batch.EmptyForConstFoldBatch, plan.DeepCopyExpr(expr), proc, true, true)
 		require.NoError(b, err)
 		executor, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filterExpr}))
 		require.NoError(b, err)
@@ -715,17 +715,17 @@ func TestConstantTranspose(t *testing.T) {
 	}
 
 	makeAddExpr := func(left, right *plan.Expr) *plan.Expr {
-		expr, _ := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "+", []*plan.Expr{left, right})
+		expr, _ := planner.BindFuncExprImplByPlanExpr(proc.Ctx, "+", []*plan.Expr{left, right})
 		return expr
 	}
 
 	makeSubExpr := func(left, right *plan.Expr) *plan.Expr {
-		expr, _ := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "-", []*plan.Expr{left, right})
+		expr, _ := planner.BindFuncExprImplByPlanExpr(proc.Ctx, "-", []*plan.Expr{left, right})
 		return expr
 	}
 
 	colExpr := &plan.Expr{
-		Typ: plan2.MakePlan2Type(&int32Type),
+		Typ: planner.MakePlan2Type(&int32Type),
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{RelPos: 0, ColPos: 0},
 		},
@@ -739,7 +739,7 @@ func TestConstantTranspose(t *testing.T) {
 		{
 			name: "simple-const-right",
 			input: &plan.Expr{
-				Typ: plan2.MakePlan2Type(&boolType),
+				Typ: planner.MakePlan2Type(&boolType),
 				Expr: &plan.Expr_F{
 					F: &plan.Function{
 						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
@@ -755,7 +755,7 @@ func TestConstantTranspose(t *testing.T) {
 		{
 			name: "complex-expr",
 			input: &plan.Expr{
-				Typ: plan2.MakePlan2Type(&boolType),
+				Typ: planner.MakePlan2Type(&boolType),
 				Expr: &plan.Expr_F{
 					F: &plan.Function{
 						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
@@ -770,7 +770,7 @@ func TestConstantTranspose(t *testing.T) {
 				},
 			},
 			expect: &plan.Expr{
-				Typ: plan2.MakePlan2Type(&boolType),
+				Typ: planner.MakePlan2Type(&boolType),
 				Expr: &plan.Expr_F{
 					F: &plan.Function{
 						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
@@ -788,7 +788,7 @@ func TestConstantTranspose(t *testing.T) {
 		{
 			name: "only-swap-already-simple",
 			input: &plan.Expr{
-				Typ: plan2.MakePlan2Type(&boolType),
+				Typ: planner.MakePlan2Type(&boolType),
 				Expr: &plan.Expr_F{
 					F: &plan.Function{
 						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
@@ -800,7 +800,7 @@ func TestConstantTranspose(t *testing.T) {
 				},
 			},
 			expect: &plan.Expr{
-				Typ: plan2.MakePlan2Type(&boolType),
+				Typ: planner.MakePlan2Type(&boolType),
 				Expr: &plan.Expr_F{
 					F: &plan.Function{
 						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
@@ -815,7 +815,7 @@ func TestConstantTranspose(t *testing.T) {
 		{
 			name: "complex-expression-with-multiple-ops",
 			input: &plan.Expr{
-				Typ: plan2.MakePlan2Type(&boolType),
+				Typ: planner.MakePlan2Type(&boolType),
 				Expr: &plan.Expr_F{
 					F: &plan.Function{
 						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
@@ -839,7 +839,7 @@ func TestConstantTranspose(t *testing.T) {
 				},
 			},
 			expect: &plan.Expr{
-				Typ: plan2.MakePlan2Type(&boolType),
+				Typ: planner.MakePlan2Type(&boolType),
 				Expr: &plan.Expr_F{
 					F: &plan.Function{
 						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
@@ -866,7 +866,7 @@ func TestConstantTranspose(t *testing.T) {
 		{
 			name: "multiple-constants-in-both-sides",
 			input: &plan.Expr{
-				Typ: plan2.MakePlan2Type(&boolType),
+				Typ: planner.MakePlan2Type(&boolType),
 				Expr: &plan.Expr_F{
 					F: &plan.Function{
 						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
@@ -884,7 +884,7 @@ func TestConstantTranspose(t *testing.T) {
 				},
 			},
 			expect: &plan.Expr{
-				Typ: plan2.MakePlan2Type(&boolType),
+				Typ: planner.MakePlan2Type(&boolType),
 				Expr: &plan.Expr_F{
 					F: &plan.Function{
 						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
@@ -905,7 +905,7 @@ func TestConstantTranspose(t *testing.T) {
 		{
 			name: "nested-expressions",
 			input: &plan.Expr{
-				Typ: plan2.MakePlan2Type(&boolType),
+				Typ: planner.MakePlan2Type(&boolType),
 				Expr: &plan.Expr_F{
 					F: &plan.Function{
 						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
@@ -923,7 +923,7 @@ func TestConstantTranspose(t *testing.T) {
 				},
 			},
 			expect: &plan.Expr{
-				Typ: plan2.MakePlan2Type(&boolType),
+				Typ: planner.MakePlan2Type(&boolType),
 				Expr: &plan.Expr_F{
 					F: &plan.Function{
 						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
@@ -944,7 +944,7 @@ func TestConstantTranspose(t *testing.T) {
 		{
 			name: "unsupported-expression",
 			input: &plan.Expr{
-				Typ: plan2.MakePlan2Type(&boolType),
+				Typ: planner.MakePlan2Type(&boolType),
 				Expr: &plan.Expr_F{
 					F: &plan.Function{
 						Func: &plan.ObjectRef{ObjName: "*", Obj: fid},
@@ -960,7 +960,7 @@ func TestConstantTranspose(t *testing.T) {
 		{
 			name: "more-complex-expression-with-multiple-operations",
 			input: &plan.Expr{
-				Typ: plan2.MakePlan2Type(&boolType),
+				Typ: planner.MakePlan2Type(&boolType),
 				Expr: &plan.Expr_F{
 					F: &plan.Function{
 						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
@@ -993,7 +993,7 @@ func TestConstantTranspose(t *testing.T) {
 				},
 			},
 			expect: &plan.Expr{
-				Typ: plan2.MakePlan2Type(&boolType),
+				Typ: planner.MakePlan2Type(&boolType),
 				Expr: &plan.Expr_F{
 					F: &plan.Function{
 						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
@@ -1030,9 +1030,9 @@ func TestConstantTranspose(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			input := plan2.DeepCopyExpr(tt.input)
+			input := plan.DeepCopyExpr(tt.input)
 
-			result, err := plan2.ConstantTranspose(input, proc)
+			result, err := planner.ConstantTranspose(input, proc)
 			require.NoError(t, err)
 
 			if tt.expect == nil {

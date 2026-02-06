@@ -18,9 +18,6 @@ import (
 	"context"
 	"time"
 
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -30,8 +27,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -140,7 +139,7 @@ func FilterObjects(
 	}
 	onObject := func(objStats *objectio.ObjectStats) (err error) {
 		//if need to shuffle objects
-		if plan2.ShouldSkipObjByShuffle(rangesParam.Rsp, objStats) {
+		if planner.ShouldSkipObjByShuffle(rangesParam.Rsp, objStats) {
 			return
 		}
 		var ok bool

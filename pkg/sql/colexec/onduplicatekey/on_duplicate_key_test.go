@@ -27,7 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -108,7 +108,7 @@ func newTestCase(t *testing.T) onDupTestCase {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	pkType := types.T_int64.ToType()
 	leftExpr := &plan.Expr{
-		Typ: plan2.MakePlan2Type(&pkType),
+		Typ: planner.MakePlan2Type(&pkType),
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: 0,
@@ -117,7 +117,7 @@ func newTestCase(t *testing.T) onDupTestCase {
 		},
 	}
 	rightExpr := &plan.Expr{
-		Typ: plan2.MakePlan2Type(&pkType),
+		Typ: planner.MakePlan2Type(&pkType),
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: 1,
@@ -125,10 +125,10 @@ func newTestCase(t *testing.T) onDupTestCase {
 			},
 		},
 	}
-	eqExpr, _ := plan2.BindFuncExprImplByPlanExpr(context.TODO(), "=", []*plan.Expr{leftExpr, rightExpr})
+	eqExpr, _ := planner.BindFuncExprImplByPlanExpr(context.TODO(), "=", []*plan.Expr{leftExpr, rightExpr})
 
 	onDupMap := make(map[string]*plan.Expr)
-	onDupMap["b"] = plan2.MakePlan2Int64ConstExprWithType(10)
+	onDupMap["b"] = planner.MakePlan2Int64ConstExprWithType(10)
 
 	return onDupTestCase{
 		proc: proc,

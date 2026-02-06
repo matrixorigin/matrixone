@@ -74,7 +74,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -858,7 +858,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		t := opr.GetLockOp()
 		lockArg := lockop.NewArgumentByEngine(eng)
 		for _, target := range t.Targets {
-			typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
+			typ := planner.MakeTypeByPlan2Type(target.PrimaryColTyp)
 			lockArg.AddLockTarget(target.GetTableId(), target.GetObjRef(), target.GetPrimaryColIdxInBat(), typ, target.PartitionColIdxInBat, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
 		}
 		for _, target := range t.Targets {

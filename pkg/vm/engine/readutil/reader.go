@@ -35,7 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -72,7 +72,7 @@ func (mixin *withFilterMixin) tryUpdateTombstoneColumns(cols []string) {
 	mixin.columns.seqnums = []uint16{0, 1}
 	mixin.columns.colTypes = []types.Type{
 		types.T_Rowid.ToType(),
-		plan2.ExprType2Type(&pkCol.Typ)}
+		planner.ExprType2Type(&pkCol.Typ)}
 
 	mixin.columns.colTypes[1].Scale = pkCol.Typ.Scale
 	mixin.columns.colTypes[1].Width = pkCol.Typ.Width
@@ -128,7 +128,7 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 			mixin.columns.colTypes[i] = objectio.RowidType
 			mixin.columns.phyAddrPos = i
 		} else {
-			if plan2.GetSortOrderByName(mixin.tableDef, column) == 0 {
+			if planner.GetSortOrderByName(mixin.tableDef, column) == 0 {
 				mixin.columns.indexOfFirstSortedColumn = i
 			}
 			colIdx := mixin.tableDef.Name2ColIndex[column]
@@ -139,7 +139,7 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 				// primary key is in the cols
 				pkPos = i
 			}
-			mixin.columns.colTypes[i] = plan2.ExprType2Type(&colDef.Typ)
+			mixin.columns.colTypes[i] = planner.ExprType2Type(&colDef.Typ)
 			mixin.columns.colTypes[i].Scale = colDef.Typ.Scale
 			mixin.columns.colTypes[i].Width = colDef.Typ.Width
 		}

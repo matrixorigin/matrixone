@@ -30,7 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
@@ -55,7 +55,7 @@ func TestCheckExprIsZonemappable(t *testing.T) {
 		// a > 1  -> true
 		{true, readutil.MakeFunctionExprForTest(">", []*plan.Expr{
 			readutil.MakeColExprForTest(0, types.T_int64),
-			plan2.MakePlan2Int64ConstExprWithType(10),
+			planner.MakePlan2Int64ConstExprWithType(10),
 		})},
 		// a >= b -> true
 		{true, readutil.MakeFunctionExprForTest(">=", []*plan.Expr{
@@ -70,7 +70,7 @@ func TestCheckExprIsZonemappable(t *testing.T) {
 
 	t.Run("test checkExprIsZonemappable", func(t *testing.T) {
 		for i, testCase := range testCases {
-			zonemappable := plan2.ExprIsZonemappable(context.TODO(), testCase.expr)
+			zonemappable := planner.ExprIsZonemappable(context.TODO(), testCase.expr)
 			if zonemappable != testCase.result {
 				t.Fatalf("checkExprIsZonemappable testExprs[%d] is different with expected", i)
 			}
@@ -109,54 +109,54 @@ func TestEvalZonemapFilter(t *testing.T) {
 			exprs: []*plan.Expr{
 				readutil.MakeFunctionExprForTest(">", []*plan.Expr{
 					readutil.MakeColExprForTest(0, types.T_float64),
-					plan2.MakePlan2Float64ConstExprWithType(10),
+					planner.MakePlan2Float64ConstExprWithType(10),
 				}),
 				readutil.MakeFunctionExprForTest(">", []*plan.Expr{
 					readutil.MakeColExprForTest(0, types.T_float64),
-					plan2.MakePlan2Float64ConstExprWithType(30),
+					planner.MakePlan2Float64ConstExprWithType(30),
 				}),
 				readutil.MakeFunctionExprForTest("<=", []*plan.Expr{
 					readutil.MakeColExprForTest(0, types.T_float64),
-					plan2.MakePlan2Float64ConstExprWithType(-10),
+					planner.MakePlan2Float64ConstExprWithType(-10),
 				}),
 				readutil.MakeFunctionExprForTest("<", []*plan.Expr{
 					readutil.MakeColExprForTest(0, types.T_float64),
-					plan2.MakePlan2Float64ConstExprWithType(-10),
+					planner.MakePlan2Float64ConstExprWithType(-10),
 				}),
 				readutil.MakeFunctionExprForTest(">", []*plan.Expr{
 					readutil.MakeFunctionExprForTest("+", []*plan.Expr{
 						readutil.MakeColExprForTest(0, types.T_float64),
 						readutil.MakeColExprForTest(1, types.T_float64),
 					}),
-					plan2.MakePlan2Float64ConstExprWithType(60),
+					planner.MakePlan2Float64ConstExprWithType(60),
 				}),
 				readutil.MakeFunctionExprForTest("<", []*plan.Expr{
 					readutil.MakeFunctionExprForTest("+", []*plan.Expr{
 						readutil.MakeColExprForTest(0, types.T_float64),
 						readutil.MakeColExprForTest(1, types.T_float64),
 					}),
-					plan2.MakePlan2Float64ConstExprWithType(-5),
+					planner.MakePlan2Float64ConstExprWithType(-5),
 				}),
 				readutil.MakeFunctionExprForTest("<", []*plan.Expr{
 					readutil.MakeFunctionExprForTest("-", []*plan.Expr{
 						readutil.MakeColExprForTest(0, types.T_float64),
 						readutil.MakeColExprForTest(1, types.T_float64),
 					}),
-					plan2.MakePlan2Float64ConstExprWithType(-34),
+					planner.MakePlan2Float64ConstExprWithType(-34),
 				}),
 				readutil.MakeFunctionExprForTest("<", []*plan.Expr{
 					readutil.MakeFunctionExprForTest("-", []*plan.Expr{
 						readutil.MakeColExprForTest(0, types.T_float64),
 						readutil.MakeColExprForTest(1, types.T_float64),
 					}),
-					plan2.MakePlan2Float64ConstExprWithType(-35),
+					planner.MakePlan2Float64ConstExprWithType(-35),
 				}),
 				readutil.MakeFunctionExprForTest("<=", []*plan.Expr{
 					readutil.MakeFunctionExprForTest("-", []*plan.Expr{
 						readutil.MakeColExprForTest(0, types.T_float64),
 						readutil.MakeColExprForTest(1, types.T_float64),
 					}),
-					plan2.MakePlan2Float64ConstExprWithType(-35),
+					planner.MakePlan2Float64ConstExprWithType(-35),
 				}),
 				readutil.MakeFunctionExprForTest(">", []*plan.Expr{
 					readutil.MakeColExprForTest(0, types.T_float64),
@@ -166,47 +166,47 @@ func TestEvalZonemapFilter(t *testing.T) {
 					readutil.MakeColExprForTest(0, types.T_float64),
 					readutil.MakeFunctionExprForTest("+", []*plan.Expr{
 						readutil.MakeColExprForTest(1, types.T_float64),
-						plan2.MakePlan2Float64ConstExprWithType(15),
+						planner.MakePlan2Float64ConstExprWithType(15),
 					}),
 				}),
 				readutil.MakeFunctionExprForTest(">=", []*plan.Expr{
 					readutil.MakeColExprForTest(0, types.T_float64),
 					readutil.MakeFunctionExprForTest("+", []*plan.Expr{
 						readutil.MakeColExprForTest(1, types.T_float64),
-						plan2.MakePlan2Float64ConstExprWithType(15),
+						planner.MakePlan2Float64ConstExprWithType(15),
 					}),
 				}),
 				readutil.MakeFunctionExprForTest("or", []*plan.Expr{
 					readutil.MakeFunctionExprForTest(">", []*plan.Expr{
 						readutil.MakeColExprForTest(0, types.T_float64),
-						plan2.MakePlan2Float64ConstExprWithType(100),
+						planner.MakePlan2Float64ConstExprWithType(100),
 					}),
 					readutil.MakeFunctionExprForTest(">", []*plan.Expr{
 						readutil.MakeColExprForTest(1, types.T_float64),
-						plan2.MakePlan2Float64ConstExprWithType(10),
+						planner.MakePlan2Float64ConstExprWithType(10),
 					}),
 				}),
 				readutil.MakeFunctionExprForTest("and", []*plan.Expr{
 					readutil.MakeFunctionExprForTest(">", []*plan.Expr{
 						readutil.MakeColExprForTest(0, types.T_float64),
-						plan2.MakePlan2Float64ConstExprWithType(100),
+						planner.MakePlan2Float64ConstExprWithType(100),
 					}),
 					readutil.MakeFunctionExprForTest("<", []*plan.Expr{
 						readutil.MakeColExprForTest(1, types.T_float64),
-						plan2.MakePlan2Float64ConstExprWithType(0),
+						planner.MakePlan2Float64ConstExprWithType(0),
 					}),
 				}),
 				readutil.MakeFunctionExprForTest(">", []*plan.Expr{
 					readutil.MakeColExprForTest(3, types.T_varchar),
-					plan2.MakePlan2StringConstExprWithType("xyz"),
+					planner.MakePlan2StringConstExprWithType("xyz"),
 				}),
 				readutil.MakeFunctionExprForTest("<=", []*plan.Expr{
 					readutil.MakeColExprForTest(3, types.T_varchar),
-					plan2.MakePlan2StringConstExprWithType("efg"),
+					planner.MakePlan2StringConstExprWithType("efg"),
 				}),
 				readutil.MakeFunctionExprForTest("<", []*plan.Expr{
 					readutil.MakeColExprForTest(3, types.T_varchar),
-					plan2.MakePlan2StringConstExprWithType("efg"),
+					planner.MakePlan2StringConstExprWithType("efg"),
 				}),
 				readutil.MakeFunctionExprForTest(">", []*plan.Expr{
 					readutil.MakeColExprForTest(2, types.T_varchar),
@@ -237,7 +237,7 @@ func TestEvalZonemapFilter(t *testing.T) {
 
 	for _, tc := range cases {
 		for i, expr := range tc.exprs {
-			cnt := plan2.AssignAuxIdForExpr(expr, 0)
+			cnt := planner.AssignAuxIdForExpr(expr, 0)
 			zms := make([]objectio.ZoneMap, cnt)
 			vecs := make([]*vector.Vector, cnt)
 			zm := colexec.EvaluateFilterByZoneMap(context.Background(), proc, expr, tc.meta, columnMap, zms, vecs)

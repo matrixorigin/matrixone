@@ -19,30 +19,26 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/pb/lock"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/prashantv/gostub"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-
 	"github.com/golang/mock/gomock"
-	"github.com/smartystreets/goconvey/convey"
-	"github.com/stretchr/testify/assert"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/prashantv/gostub"
+	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
 )
 
 func Test_lockIndexTable(t *testing.T) {
@@ -127,7 +123,7 @@ func TestScope_CreateTable(t *testing.T) {
 			{
 				ColId: 0,
 				Name:  "deptno",
-				Alg:   plan2.CompressType_Lz4,
+				Alg:   plan.CompressType_Lz4,
 				Typ: plan.Type{
 					Id:          27,
 					NotNullable: false,
@@ -135,7 +131,7 @@ func TestScope_CreateTable(t *testing.T) {
 					Width:       32,
 					Scale:       -1,
 				},
-				Default: &plan2.Default{},
+				Default: &plan.Default{},
 				NotNull: true,
 				Primary: true,
 				Pkidx:   0,
@@ -143,7 +139,7 @@ func TestScope_CreateTable(t *testing.T) {
 			{
 				ColId: 1,
 				Name:  "dname",
-				Alg:   plan2.CompressType_Lz4,
+				Alg:   plan.CompressType_Lz4,
 				Typ: plan.Type{
 					Id:          61,
 					NotNullable: false,
@@ -151,7 +147,7 @@ func TestScope_CreateTable(t *testing.T) {
 					Width:       15,
 					Scale:       0,
 				},
-				Default: &plan2.Default{},
+				Default: &plan.Default{},
 				NotNull: false,
 				Primary: false,
 				Pkidx:   0,
@@ -159,7 +155,7 @@ func TestScope_CreateTable(t *testing.T) {
 			{
 				ColId: 2,
 				Name:  "loc",
-				Alg:   plan2.CompressType_Lz4,
+				Alg:   plan.CompressType_Lz4,
 				Typ: plan.Type{
 					Id:          61,
 					NotNullable: false,
@@ -167,7 +163,7 @@ func TestScope_CreateTable(t *testing.T) {
 					Width:       50,
 					Scale:       0,
 				},
-				Default: &plan2.Default{},
+				Default: &plan.Default{},
 				NotNull: false,
 				Primary: false,
 				Pkidx:   0,
@@ -179,7 +175,7 @@ func TestScope_CreateTable(t *testing.T) {
 			PkeyColName: "deptno",
 			Names:       []string{"deptno"},
 		},
-		Defs: []*plan2.TableDef_DefType{
+		Defs: []*plan.TableDef_DefType{
 			{
 				Def: &plan.TableDef_DefType_Properties{
 					Properties: &plan.PropertiesDef{
@@ -195,7 +191,7 @@ func TestScope_CreateTable(t *testing.T) {
 		},
 	}
 
-	createTableDef := &plan2.CreateTable{
+	createTableDef := &plan.CreateTable{
 		IfNotExists: false,
 		Database:    "test",
 		Replace:     false,
@@ -203,10 +199,10 @@ func TestScope_CreateTable(t *testing.T) {
 	}
 
 	cplan := &plan.Plan{
-		Plan: &plan2.Plan_Ddl{
-			Ddl: &plan2.DataDefinition{
-				DdlType: plan2.DataDefinition_CREATE_TABLE,
-				Definition: &plan2.DataDefinition_CreateTable{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_CREATE_TABLE,
+				Definition: &plan.DataDefinition_CreateTable{
 					CreateTable: createTableDef,
 				},
 			},
@@ -357,7 +353,7 @@ func TestScope_CreateView(t *testing.T) {
 		Cols: []*plan.ColDef{
 			{
 				Name: "deptno",
-				Alg:  plan2.CompressType_Lz4,
+				Alg:  plan.CompressType_Lz4,
 				Typ: plan.Type{
 					Id:          27,
 					NotNullable: true,
@@ -365,13 +361,13 @@ func TestScope_CreateView(t *testing.T) {
 					Width:       32,
 					Scale:       -1,
 				},
-				Default: &plan2.Default{},
+				Default: &plan.Default{},
 				NotNull: false,
 				Primary: false,
 			},
 			{
 				Name: "dname",
-				Alg:  plan2.CompressType_Lz4,
+				Alg:  plan.CompressType_Lz4,
 				Typ: plan.Type{
 					Id:          61,
 					NotNullable: false,
@@ -379,13 +375,13 @@ func TestScope_CreateView(t *testing.T) {
 					Width:       15,
 					Scale:       0,
 				},
-				Default: &plan2.Default{},
+				Default: &plan.Default{},
 				NotNull: false,
 				Primary: false,
 			},
 			{
 				Name: "loc",
-				Alg:  plan2.CompressType_Lz4,
+				Alg:  plan.CompressType_Lz4,
 				Typ: plan.Type{
 					Id:          61,
 					NotNullable: false,
@@ -393,15 +389,15 @@ func TestScope_CreateView(t *testing.T) {
 					Width:       50,
 					Scale:       0,
 				},
-				Default: &plan2.Default{},
+				Default: &plan.Default{},
 				NotNull: false,
 				Primary: false,
 			},
 		},
-		ViewSql: &plan2.ViewDef{
+		ViewSql: &plan.ViewDef{
 			View: `{"Stmt":"create view v1 as select * from dept","DefaultDatabase":"db1"}`,
 		},
-		Defs: []*plan2.TableDef_DefType{
+		Defs: []*plan.TableDef_DefType{
 			{
 				Def: &plan.TableDef_DefType_Properties{
 					Properties: &plan.PropertiesDef{
@@ -417,7 +413,7 @@ func TestScope_CreateView(t *testing.T) {
 		},
 	}
 
-	createViewDef := &plan2.CreateView{
+	createViewDef := &plan.CreateView{
 		IfNotExists: false,
 		Database:    "test",
 		Replace:     false,
@@ -425,10 +421,10 @@ func TestScope_CreateView(t *testing.T) {
 	}
 
 	cplan := &plan.Plan{
-		Plan: &plan2.Plan_Ddl{
-			Ddl: &plan2.DataDefinition{
-				DdlType: plan2.DataDefinition_CREATE_VIEW,
-				Definition: &plan2.DataDefinition_CreateView{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_CREATE_VIEW,
+				Definition: &plan.DataDefinition_CreateView{
 					CreateView: createViewDef,
 				},
 			},
@@ -507,16 +503,16 @@ func TestScope_CreateView(t *testing.T) {
 }
 
 func TestScope_Database(t *testing.T) {
-	dropDbDef := &plan2.DropDatabase{
+	dropDbDef := &plan.DropDatabase{
 		IfExists: false,
 		Database: "test",
 	}
 
 	cplan := &plan.Plan{
-		Plan: &plan2.Plan_Ddl{
-			Ddl: &plan2.DataDefinition{
-				DdlType: plan2.DataDefinition_DROP_DATABASE,
-				Definition: &plan2.DataDefinition_DropDatabase{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_DROP_DATABASE,
+				Definition: &plan.DataDefinition_DropDatabase{
 					DropDatabase: dropDbDef,
 				},
 			},
@@ -579,8 +575,8 @@ func Test_addTimeSpan(t *testing.T) {
 }
 
 func Test_getSqlForCheckPitrDup(t *testing.T) {
-	mk := func(level int32, origin bool) *plan2.CreatePitr {
-		return &plan2.CreatePitr{
+	mk := func(level int32, origin bool) *plan.CreatePitr {
+		return &plan.CreatePitr{
 			Level:             level,
 			CurrentAccountId:  1,
 			AccountName:       "acc",
@@ -656,7 +652,7 @@ func TestPitrDupError(t *testing.T) {
 		{int32(tree.PITRLEVELTABLE), "", "db", "tb", "table db.tb does not exist"},
 	}
 	for _, c := range cases {
-		p := &plan2.CreatePitr{
+		p := &plan.CreatePitr{
 			Level:        c.level,
 			AccountName:  c.accountName,
 			DatabaseName: c.dbName,

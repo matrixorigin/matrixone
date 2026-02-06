@@ -20,9 +20,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -123,7 +122,7 @@ func NewMergeSample(rowSampleArg *Sample, outputRowCount bool) *Sample {
 	newSampleExpr := make([]*plan.Expr, len(rowSampleArg.SampleExprs))
 	for i, expr := range rowSampleArg.GroupExprs {
 		newGroupExpr[i] = &plan.Expr{
-			Expr: &planpb.Expr_Col{
+			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 0,
 					ColPos: int32(i),
@@ -134,7 +133,7 @@ func NewMergeSample(rowSampleArg *Sample, outputRowCount bool) *Sample {
 	}
 	for i, expr := range rowSampleArg.SampleExprs {
 		newSampleExpr[i] = &plan.Expr{
-			Expr: &planpb.Expr_Col{
+			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 0,
 					ColPos: int32(i + len(rowSampleArg.GroupExprs)),

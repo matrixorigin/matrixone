@@ -38,7 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
@@ -1126,7 +1126,7 @@ func (backSes *backSession) GetStorage() engine.Engine {
 	return getPu(backSes.GetService()).StorageEngine
 }
 
-func (backSes *backSession) GetStatsCache() *plan2.StatsCache {
+func (backSes *backSession) GetStatsCache() *planner.StatsCache {
 	return nil
 }
 

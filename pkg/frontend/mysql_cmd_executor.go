@@ -61,8 +61,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner/explain"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -936,7 +936,7 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 		if err != nil {
 			return err
 		}
-		binder := plan2.NewDefaultBinder(execCtx.reqCtx, nil, nil, plan2.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, []string{"variable_name", "value"})
+		binder := planner.NewDefaultBinder(execCtx.reqCtx, nil, nil, plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, []string{"variable_name", "value"})
 		planExpr, err := binder.BindExpr(sv.Where.Expr, 0, false)
 		if err != nil {
 			return err
@@ -1061,7 +1061,7 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 		paramVals := ses.GetTxnCompileCtx().tcw.ParamVals()
 		if len(paramVals) > 0 {
 			//replace the param var in the plan by the param value
-			exPlan, err = plan2.FillValuesOfParamsInPlan(reqCtx, exPlan, paramVals)
+			exPlan, err = planner.FillValuesOfParamsInPlan(reqCtx, exPlan, paramVals)
 			if err != nil {
 				return err
 			}
@@ -1092,7 +1092,7 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 	}
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
-	col1.SetName(plan2.GetPlanTitle(explainQuery.QueryPlan, txnHaveDDL))
+	col1.SetName(planner.GetPlanTitle(explainQuery.QueryPlan, txnHaveDDL))
 
 	mrs := ses.GetMysqlResultSet()
 	mrs.AddColumn(col1)
@@ -1209,7 +1209,7 @@ func createPrepareStmt(
 
 	dcPrepare, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)
 	if ok {
-		columns := plan2.GetResultColumnsFromPlan(dcPrepare.Prepare.Plan)
+		columns := planner.GetResultColumnsFromPlan(dcPrepare.Prepare.Plan)
 		if prepareStmt.ColDefData, err = execCtx.resper.MysqlRrWr().MakeColumnDefData(execCtx.reqCtx, columns); err != nil {
 			logutil.Errorf("Error make column def data for prepare statement: %v", err)
 		}
@@ -1712,7 +1712,7 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 	}
 
 	if sc.Where != nil {
-		binder := plan2.NewDefaultBinder(execCtx.reqCtx, nil, nil, plan2.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, []string{"collation", "charset", "id", "default", "compiled", "sortlen", "pad_attribute"})
+		binder := planner.NewDefaultBinder(execCtx.reqCtx, nil, nil, plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, []string{"collation", "charset", "id", "default", "compiled", "sortlen", "pad_attribute"})
 		planExpr, err := binder.BindExpr(sc.Where.Expr, 0, false)
 		if err != nil {
 			return err
@@ -2005,8 +2005,8 @@ func buildMoExplainPhyPlan(execCtx *ExecCtx, explainColName string, reader *bufi
 	return err
 }
 
-func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
-	var ret *plan2.Plan
+func buildPlan(reqCtx context.Context, ses FeSession, ctx planner.CompilerContext, stmt tree.Statement) (*plan.Plan, error) {
+	var ret *plan.Plan
 	var err error
 
 	txnOp := ctx.GetProcess().GetTxnOperator()
@@ -2073,7 +2073,7 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 	// Handle specific statement types
 	if s, ok := stmt.(*tree.Insert); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
-			ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
+			ret, err = planner.BuildPlan(ctx, stmt, isPrepareStmt)
 			if err != nil {
 				return nil, err
 			}
@@ -2092,19 +2092,19 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber,
 		*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
 		*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
-		opt := plan2.NewBaseOptimizer(ctx)
+		opt := planner.NewBaseOptimizer(ctx)
 		optimized, err := opt.Optimize(stmt, isPrepareStmt)
 		if err != nil {
 			return nil, err
 		}
 
-		ret = &plan2.Plan{
-			Plan: &plan2.Plan_Query{
+		ret = &plan.Plan{
+			Plan: &plan.Plan_Query{
 				Query: optimized,
 			},
 		}
 	default:
-		ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
+		ret, err = planner.BuildPlan(ctx, stmt, isPrepareStmt)
 	}
 
 	if ret != nil {
@@ -2115,7 +2115,7 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 
 // buildPlanWithAuthorization wraps the buildPlan function to perform permission checks
 // after the plan has been successfully built.
-var buildPlanWithAuthorization = func(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+var buildPlanWithAuthorization = func(reqCtx context.Context, ses FeSession, ctx planner.CompilerContext, stmt tree.Statement) (*plan.Plan, error) {
 	planContext := ctx.GetContext()
 	stats := statistic.StatsInfoFromContext(planContext)
 
@@ -2137,7 +2137,7 @@ var buildPlanWithAuthorization = func(reqCtx context.Context, ses FeSession, ctx
 	return plan, nil
 }
 
-func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, error)) (bool, error) {
+func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error)) (bool, error) {
 	if plan0 == nil {
 		return true, nil
 	}
@@ -2492,7 +2492,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 		//free load local buffer anyway
 		mysqlRwer.FreeLoadLocal()
 	}()
-	err = plan2.InitInfileParam(param)
+	err = planner.InitInfileParam(param)
 	if err != nil {
 		return
 	}
@@ -3297,11 +3297,11 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	return nil
 }
 
-func checkNodeCanCache(p *plan2.Plan) bool {
+func checkNodeCanCache(p *plan.Plan) bool {
 	if p == nil {
 		return true
 	}
-	if q, ok := p.Plan.(*plan2.Plan_Query); ok {
+	if q, ok := p.Plan.(*plan.Plan_Query); ok {
 		for _, node := range q.Query.Nodes {
 			if node.NotCacheable {
 				return false
@@ -3673,7 +3673,7 @@ type jsonPlanHandler struct {
 	buffer     *bytes.Buffer
 }
 
-func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, ses FeSession, plan *plan2.Plan, phyPlan *models.PhyPlan, opts ...marshalPlanOptions) *jsonPlanHandler {
+func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, ses FeSession, plan *plan.Plan, phyPlan *models.PhyPlan, opts ...marshalPlanOptions) *jsonPlanHandler {
 	h := NewMarshalPlanHandler(ctx, stmt, plan, phyPlan, opts...)
 	jsonBytes := h.Marshal(ctx)
 	statsBytes, stats := h.Stats(ctx, ses)
@@ -3725,7 +3725,7 @@ type marshalPlanHandler struct {
 	marshalPlanConfig
 }
 
-func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan, phyPlan *models.PhyPlan, opts ...marshalPlanOptions) *marshalPlanHandler {
+func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan.Plan, phyPlan *models.PhyPlan, opts ...marshalPlanOptions) *marshalPlanHandler {
 	// TODO: need mem improvement
 	uuid := uuid.UUID(stmt.StatementID)
 	stmt.MarkResponseAt()

@@ -20,8 +20,6 @@ import (
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -32,7 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
+	"github.com/matrixorigin/matrixone/pkg/sql/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -40,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 // tryAdjustSysTablesCreatedTimeWithBatch analyzes the mo_tables batch and tries to adjust the created time of the system tables.

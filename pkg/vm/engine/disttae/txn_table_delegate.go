@@ -33,7 +33,7 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -576,7 +576,7 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 	var rds []engine.Reader
 	proc := p.(*process.Process)
 
-	if plan2.IsFalseExpr(expr) {
+	if planner.IsFalseExpr(expr) {
 		return []engine.Reader{new(readutil.EmptyReader)}, nil
 	}
 

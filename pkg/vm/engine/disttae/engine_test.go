@@ -83,12 +83,12 @@ func TestTransaction(t *testing.T) {
 
 	_, _ = txn.getRow(ctx, 0, 0, nil, nil, MakeFunctionExprForTest(">", []*plan.Expr{
 		MakeColExprForTest(0, types.T_int64),
-		plan2.MakePlan2Int64ConstExprWithType(20),
+		planner.MakePlan2Int64ConstExprWithType(20),
 	}), nil)
 
 	_, _ = txn.getRows(ctx, 0, 0, nil, nil, MakeFunctionExprForTest(">", []*plan.Expr{
 		MakeColExprForTest(0, types.T_int64),
-		plan2.MakePlan2Int64ConstExprWithType(20),
+		planner.MakePlan2Int64ConstExprWithType(20),
 	}), nil)
 
 }

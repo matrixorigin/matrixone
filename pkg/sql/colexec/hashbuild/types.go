@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashmap_util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -36,7 +35,7 @@ const (
 type container struct {
 	state           int
 	runtimeFilterIn bool
-	hashmapBuilder  hashmap_util.HashmapBuilder
+	hashmapBuilder  HashmapBuilder
 }
 
 type HashBuild struct {

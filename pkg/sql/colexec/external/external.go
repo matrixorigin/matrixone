@@ -46,7 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -99,7 +99,7 @@ func (external *External) Prepare(proc *process.Process) error {
 		if err := json.Unmarshal([]byte(param.CreateSql), param.Extern); err != nil {
 			return err
 		}
-		if err := plan2.InitS3Param(param.Extern); err != nil {
+		if err := planner.InitS3Param(param.Extern); err != nil {
 			return err
 		}
 		param.Extern.FileService = proc.Base.FileService
@@ -133,8 +133,8 @@ func (external *External) Prepare(proc *process.Process) error {
 	param.tableDef = &plan.TableDef{
 		Name2ColIndex: name2ColIndex,
 	}
-	param.Filter.columnMap, _, _, _ = plan2.GetColumnsByExpr(param.Filter.FilterExpr, param.tableDef)
-	param.Filter.zonemappable = plan2.ExprIsZonemappable(proc.Ctx, param.Filter.FilterExpr)
+	param.Filter.columnMap, _, _, _ = planner.GetColumnsByExpr(param.Filter.FilterExpr, param.tableDef)
+	param.Filter.zonemappable = planner.ExprIsZonemappable(proc.Ctx, param.Filter.FilterExpr)
 	if external.ProjectList != nil {
 		err := external.PrepareProjection(proc)
 		if err != nil {
@@ -363,7 +363,7 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, visibleCo
 	}
 	arr := make([]int64, 0)
 
-	fs, readPath, err := plan2.GetForETLWithType(param, param.Filepath)
+	fs, readPath, err := planner.GetForETLWithType(param, param.Filepath)
 	if err != nil {
 		return nil, err
 	}
@@ -922,8 +922,8 @@ func needRead(ctx context.Context, param *ExternalParam, proc *process.Process) 
 		vecs []*vector.Vector
 	)
 
-	if isMonoExpr := plan2.ExprIsZonemappable(proc.Ctx, expr); isMonoExpr {
-		cnt := plan2.AssignAuxIdForExpr(expr, 0)
+	if isMonoExpr := planner.ExprIsZonemappable(proc.Ctx, expr); isMonoExpr {
+		cnt := planner.AssignAuxIdForExpr(expr, 0)
 		zms = make([]objectio.ZoneMap, cnt)
 		vecs = make([]*vector.Vector, cnt)
 	}

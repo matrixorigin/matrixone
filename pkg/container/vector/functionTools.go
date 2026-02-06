@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	functionUtil "github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
+	functionUtil "github.com/matrixorigin/matrixone/pkg/sql/function/functionUtil"
 )
 
 // FunctionParameterWrapper is generated from a vector.

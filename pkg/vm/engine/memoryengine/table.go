@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -254,25 +254,25 @@ func (t *Table) GetTableDef(ctx context.Context) *plan.TableDef {
 		return nil
 	}
 
-	var clusterByDef *plan2.ClusterByDef
-	var cols []*plan2.ColDef
+	var clusterByDef *plan.ClusterByDef
+	var cols []*plan.ColDef
 	var schemaVersion uint32
-	var defs []*plan2.TableDefType
-	var properties []*plan2.Property
+	var defs []*plan.TableDef_DefType
+	var properties []*plan.Property
 	var TableType, Createsql string
-	var viewSql *plan2.ViewDef
-	var foreignKeys []*plan2.ForeignKeyDef
-	var primarykey *plan2.PrimaryKeyDef
-	var indexes []*plan2.IndexDef
+	var viewSql *plan.ViewDef
+	var foreignKeys []*plan.ForeignKeyDef
+	var primarykey *plan.PrimaryKeyDef
+	var indexes []*plan.IndexDef
 	var refChildTbls []uint64
 
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
-			col := &plan2.ColDef{
+			col := &plan.ColDef{
 				ColId:      attr.Attr.ID,
 				Name:       strings.ToLower(attr.Attr.Name),
 				OriginName: attr.Attr.Name,
-				Typ: plan2.Type{
+				Typ: plan.Type{
 					Id:          int32(attr.Attr.Type.Oid),
 					Width:       attr.Attr.Type.Width,
 					Scale:       attr.Attr.Type.Scale,
@@ -304,13 +304,13 @@ func (t *Table) GetTableDef(ctx context.Context) *plan.TableDef {
 					Createsql = p.Value
 				default:
 				}
-				properties = append(properties, &plan2.Property{
+				properties = append(properties, &plan.Property{
 					Key:   p.Key,
 					Value: p.Value,
 				})
 			}
 		} else if viewDef, ok := def.(*engine.ViewDef); ok {
-			viewSql = &plan2.ViewDef{
+			viewSql = &plan.ViewDef{
 				View: viewDef.View,
 			}
 		} else if c, ok := def.(*engine.ConstraintDef); ok {
@@ -329,7 +329,7 @@ func (t *Table) GetTableDef(ctx context.Context) *plan.TableDef {
 				}
 			}
 		} else if commnetDef, ok := def.(*engine.CommentDef); ok {
-			properties = append(properties, &plan2.Property{
+			properties = append(properties, &plan.Property{
 				Key:   catalog.SystemRelAttr_Comment,
 				Value: commnetDef.Comment,
 			})
@@ -338,9 +338,9 @@ func (t *Table) GetTableDef(ctx context.Context) *plan.TableDef {
 		}
 	}
 	if len(properties) > 0 {
-		defs = append(defs, &plan2.TableDefType{
-			Def: &plan2.TableDef_DefType_Properties{
-				Properties: &plan2.PropertiesDef{
+		defs = append(defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{
 					Properties: properties,
 				},
 			},
@@ -348,15 +348,15 @@ func (t *Table) GetTableDef(ctx context.Context) *plan.TableDef {
 	}
 
 	if primarykey != nil && primarykey.PkeyColName == catalog.CPrimaryKeyColName {
-		primarykey.CompPkeyCol = plan2.GetColDefFromTable(cols, catalog.CPrimaryKeyColName)
+		primarykey.CompPkeyCol = planner.GetColDefFromTable(cols, catalog.CPrimaryKeyColName)
 	}
 	if clusterByDef != nil && util.JudgeIsCompositeClusterByColumn(clusterByDef.Name) {
-		clusterByDef.CompCbkeyCol = plan2.GetColDefFromTable(cols, clusterByDef.Name)
+		clusterByDef.CompCbkeyCol = planner.GetColDefFromTable(cols, clusterByDef.Name)
 	}
-	rowIdCol := plan2.MakeRowIdColDef()
+	rowIdCol := planner.MakeRowIdColDef()
 	cols = append(cols, rowIdCol)
 
-	tableDef := &plan2.TableDef{
+	tableDef := &plan.TableDef{
 		TblId:        t.GetTableID(ctx),
 		Name:         t.tableName,
 		Cols:         cols,

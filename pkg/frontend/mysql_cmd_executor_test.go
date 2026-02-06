@@ -25,11 +25,6 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
-	"github.com/prashantv/gostub"
-	"github.com/smartystreets/goconvey/convey"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -44,20 +39,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	plan0 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner/explain"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/prashantv/gostub"
+	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func init() {
@@ -1013,7 +1012,7 @@ func TestSerializePlanToJson(t *testing.T) {
 	}
 
 	for _, sql := range sqls {
-		mock := plan.NewMockOptimizer(false)
+		mock := planner.NewMockOptimizer(false)
 		plan, err := buildSingleSql(mock, t, sql)
 		if err != nil {
 			t.Fatalf("%+v", err)
@@ -1029,14 +1028,14 @@ func TestSerializePlanToJson(t *testing.T) {
 	}
 }
 
-func buildSingleSql(opt plan.Optimizer, t *testing.T, sql string) (*plan.Plan, error) {
+func buildSingleSql(opt planner.Optimizer, t *testing.T, sql string) (*plan.Plan, error) {
 	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
 	// this sql always return one stmt
 	ctx := opt.CurrentContext()
-	return plan.BuildPlan(ctx, stmts[0], false)
+	return planner.BuildPlan(ctx, stmts[0], false)
 }
 
 func Test_getSqlType(t *testing.T) {
@@ -1829,35 +1828,35 @@ func Test_checkModify(t *testing.T) {
 		},
 		{
 			node: &plan.Node{
-				InsertCtx: &plan0.InsertCtx{},
+				InsertCtx: &plan.InsertCtx{},
 			},
 			expected_flag: true,
 			expected_err:  false,
 		},
 		{
 			node: &plan.Node{
-				ReplaceCtx: &plan0.ReplaceCtx{},
+				ReplaceCtx: &plan.ReplaceCtx{},
 			},
 			expected_flag: true,
 			expected_err:  false,
 		},
 		{
 			node: &plan.Node{
-				DeleteCtx: &plan0.DeleteCtx{},
+				DeleteCtx: &plan.DeleteCtx{},
 			},
 			expected_flag: true,
 			expected_err:  false,
 		},
 		{
 			node: &plan.Node{
-				PreInsertCtx: &plan0.PreInsertCtx{},
+				PreInsertCtx: &plan.PreInsertCtx{},
 			},
 			expected_flag: true,
 			expected_err:  false,
 		},
 		{
 			node: &plan.Node{
-				OnDuplicateKey: &plan0.OnDuplicateKeyCtx{},
+				OnDuplicateKey: &plan.OnDuplicateKeyCtx{},
 			},
 			expected_flag: true,
 			expected_err:  false,

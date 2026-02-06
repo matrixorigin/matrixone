@@ -48,7 +48,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -3430,18 +3429,18 @@ func Test_determineDropTable(t *testing.T) {
 func Test_determineDML(t *testing.T) {
 	type arg struct {
 		stmt tree.Statement
-		p    *plan2.Plan
+		p    *plan.Plan
 	}
 
 	args := []arg{
 		{
 			stmt: &tree.Select{},
-			p: &plan2.Plan{
-				Plan: &plan2.Plan_Query{
-					Query: &plan2.Query{
-						Nodes: []*plan2.Node{
-							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan2.ObjectRef{SchemaName: "t", ObjName: "a"}},
-							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan2.ObjectRef{SchemaName: "s", ObjName: "b"}},
+			p: &plan.Plan{
+				Plan: &plan.Plan_Query{
+					Query: &plan.Query{
+						Nodes: []*plan.Node{
+							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan.ObjectRef{SchemaName: "t", ObjName: "a"}},
+							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan.ObjectRef{SchemaName: "s", ObjName: "b"}},
 						},
 					},
 				},
@@ -3449,12 +3448,12 @@ func Test_determineDML(t *testing.T) {
 		},
 		{
 			stmt: &tree.Update{},
-			p: &plan2.Plan{
-				Plan: &plan2.Plan_Query{
-					Query: &plan2.Query{
-						Nodes: []*plan2.Node{
-							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan2.ObjectRef{SchemaName: "t", ObjName: "a"}},
-							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan2.ObjectRef{SchemaName: "s", ObjName: "b"}},
+			p: &plan.Plan{
+				Plan: &plan.Plan_Query{
+					Query: &plan.Query{
+						Nodes: []*plan.Node{
+							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan.ObjectRef{SchemaName: "t", ObjName: "a"}},
+							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan.ObjectRef{SchemaName: "s", ObjName: "b"}},
 							{NodeType: plan.Node_INSERT},
 						},
 					},
@@ -3463,12 +3462,12 @@ func Test_determineDML(t *testing.T) {
 		},
 		{
 			stmt: &tree.Delete{},
-			p: &plan2.Plan{
-				Plan: &plan2.Plan_Query{
-					Query: &plan2.Query{
-						Nodes: []*plan2.Node{
-							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan2.ObjectRef{SchemaName: "t", ObjName: "a"}},
-							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan2.ObjectRef{SchemaName: "s", ObjName: "b"}},
+			p: &plan.Plan{
+				Plan: &plan.Plan_Query{
+					Query: &plan.Query{
+						Nodes: []*plan.Node{
+							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan.ObjectRef{SchemaName: "t", ObjName: "a"}},
+							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan.ObjectRef{SchemaName: "s", ObjName: "b"}},
 							{NodeType: plan.Node_DELETE},
 						},
 					},
@@ -3477,13 +3476,13 @@ func Test_determineDML(t *testing.T) {
 		},
 		{ //insert into select
 			stmt: &tree.Insert{},
-			p: &plan2.Plan{
-				Plan: &plan2.Plan_Query{
-					Query: &plan2.Query{
-						Nodes: []*plan2.Node{
-							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan2.ObjectRef{SchemaName: "t", ObjName: "a"}},
-							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan2.ObjectRef{SchemaName: "s", ObjName: "b"}},
-							{NodeType: plan.Node_INSERT, ObjRef: &plan2.ObjectRef{SchemaName: "s", ObjName: "b"}},
+			p: &plan.Plan{
+				Plan: &plan.Plan_Query{
+					Query: &plan.Query{
+						Nodes: []*plan.Node{
+							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan.ObjectRef{SchemaName: "t", ObjName: "a"}},
+							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan.ObjectRef{SchemaName: "s", ObjName: "b"}},
+							{NodeType: plan.Node_INSERT, ObjRef: &plan.ObjectRef{SchemaName: "s", ObjName: "b"}},
 						},
 					},
 				},

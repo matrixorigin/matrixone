@@ -50,7 +50,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -2454,7 +2454,7 @@ func diffOnBase(
 		} else if dagInfo.lcaTableId == tblStuff.baseRel.GetTableID(ctx) {
 			tblStuff.lcaRel = tblStuff.baseRel
 		} else {
-			lcaSnapshot := &plan2.Snapshot{
+			lcaSnapshot := &plan.Snapshot{
 				Tenant: &plan.SnapshotTenant{
 					TenantID: ses.GetAccountId(),
 				},
@@ -2496,7 +2496,7 @@ func diffOnBase(
 	//	lcaSnapshot *plan.Snapshot
 	//)
 	//
-	//lcaSnapshot = &plan2.Snapshot{
+	//lcaSnapshot = &planner.Snapshot{
 	//	Tenant: &plan.SnapshotTenant{
 	//		TenantID: ses.GetAccountId(),
 	//	},
@@ -2838,7 +2838,7 @@ func hashDiffIfHasLCA(
 			return
 		}
 
-		baseDeleteBatches = plan2.RemoveIf(baseDeleteBatches, func(t batchWithKind) bool {
+		baseDeleteBatches = planner.RemoveIf(baseDeleteBatches, func(t batchWithKind) bool {
 			if t.batch.RowCount() == 0 {
 				tblStuff.retPool.releaseRetBatch(t.batch, false)
 				return true
@@ -2850,7 +2850,7 @@ func hashDiffIfHasLCA(
 			return
 		}
 
-		baseUpdateBatches = plan2.RemoveIf(baseUpdateBatches, func(t batchWithKind) bool {
+		baseUpdateBatches = planner.RemoveIf(baseUpdateBatches, func(t batchWithKind) bool {
 			if t.batch.RowCount() == 0 {
 				tblStuff.retPool.releaseRetBatch(t.batch, false)
 				return true
@@ -4308,7 +4308,7 @@ func decideCollectRange(
 			// do nothing
 		} else {
 			if lcaRel, err = getRelationById(
-				ctx, ses, bh, dagInfo.lcaTableId, &plan2.Snapshot{
+				ctx, ses, bh, dagInfo.lcaTableId, &plan.Snapshot{
 					Tenant: &plan.SnapshotTenant{TenantID: ses.GetAccountId()},
 					TS:     &timestamp.Timestamp{PhysicalTime: tarSp.Physical()},
 				}); err != nil {

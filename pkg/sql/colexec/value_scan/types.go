@@ -17,7 +17,7 @@ package value_scan
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -32,10 +32,10 @@ type ValueScan struct {
 	runningCtx container
 
 	ColCount int
-	NodeType plan2.Node_NodeType
+	NodeType plan.Node_NodeType
 
 	Batchs        []*batch.Batch
-	RowsetData    *plan2.RowsetData
+	RowsetData    *plan.RowsetData
 	ExprExecLists [][]colexec.ExpressionExecutor
 }
 

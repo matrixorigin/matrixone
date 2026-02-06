@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -243,7 +243,7 @@ func (g *generateSeriesArg) start(tf *TableFunction, proc *process.Process, nthR
 		// reset schema
 		typ := types.T_datetime.ToType()
 		typ.Scale = g.dtState.scale
-		tf.Rets[0].Typ = plan2.MakePlan2Type(&typ)
+		tf.Rets[0].Typ = planner.MakePlan2Type(&typ)
 		tf.ctr.retSchema[0] = typ
 	default:
 		return moerr.NewNotSupportedf(proc.Ctx, "generate_series not support type %s", resTyp.Oid.String())

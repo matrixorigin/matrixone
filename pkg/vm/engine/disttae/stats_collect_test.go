@@ -19,12 +19,11 @@ import (
 	"testing"
 
 	"github.com/lni/goutils/leaktest"
-	"github.com/stretchr/testify/assert"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/stretchr/testify/assert"
 )
 
 // TestCollectTableStats_ShuffleRanges_DynamicCreation tests that ShuffleRanges
@@ -39,7 +38,7 @@ func TestCollectTableStats_ShuffleRanges_DynamicCreation(t *testing.T) {
 		// Expected: ShuffleRanges should be created when processing the second object
 
 		lenCols := 1
-		info := plan2.NewTableStatsInfo(lenCols)
+		info := planner.NewTableStatsInfo(lenCols)
 		info.DataTypes[0] = types.New(types.T_int64, 0, 0)
 
 		// Simulate first object: 50 rows, NDV=5 (doesn't meet condition: 5 <= 100 && 5 <= 0.1*50=5, but 5 > 5 is false)
@@ -111,7 +110,7 @@ func TestCollectTableStats_ShuffleRanges_DynamicCreation(t *testing.T) {
 
 		// Simulate the fix: Create ShuffleRanges if nil and condition is met
 		if info.ShuffleRanges[0] == nil && shouldCreate {
-			info.ShuffleRanges[0] = plan2.NewShuffleRange(false)
+			info.ShuffleRanges[0] = planner.NewShuffleRange(false)
 			if info.ColumnZMs[0].IsInited() {
 				minValue := getMinMaxValueByFloat64(info.DataTypes[0], info.ColumnZMs[0].GetMinBuf())
 				maxValue := getMinMaxValueByFloat64(info.DataTypes[0], info.ColumnZMs[0].GetMaxBuf())
@@ -127,7 +126,7 @@ func TestCollectTableStats_ShuffleRanges_DynamicCreation(t *testing.T) {
 	t.Run("create_on_third_object_when_first_two_dont_meet_condition", func(t *testing.T) {
 		// Scenario: First two objects are small, third object makes cumulative stats meet condition
 		lenCols := 1
-		info := plan2.NewTableStatsInfo(lenCols)
+		info := planner.NewTableStatsInfo(lenCols)
 		info.DataTypes[0] = types.New(types.T_int64, 0, 0)
 
 		// First object: 30 rows, NDV=2 (doesn't meet: 2 > 100 (false) || 2 > 0.1*30=3 (false))
@@ -159,7 +158,7 @@ func TestCollectTableStats_ShuffleRanges_DynamicCreation(t *testing.T) {
 
 		// Simulate the fix
 		if info.ShuffleRanges[0] == nil && shouldCreate {
-			info.ShuffleRanges[0] = plan2.NewShuffleRange(false)
+			info.ShuffleRanges[0] = planner.NewShuffleRange(false)
 		}
 		assert.NotNil(t, info.ShuffleRanges[0], "ShuffleRanges should be created on third object")
 	})
@@ -167,7 +166,7 @@ func TestCollectTableStats_ShuffleRanges_DynamicCreation(t *testing.T) {
 	t.Run("dont_create_when_never_meets_condition", func(t *testing.T) {
 		// Scenario: Multiple small objects that never meet the condition
 		lenCols := 1
-		info := plan2.NewTableStatsInfo(lenCols)
+		info := planner.NewTableStatsInfo(lenCols)
 		info.DataTypes[0] = types.New(types.T_int64, 0, 0)
 
 		// Process 10 objects, each with 10 rows and NDV=10
@@ -176,7 +175,7 @@ func TestCollectTableStats_ShuffleRanges_DynamicCreation(t *testing.T) {
 			info.ColumnNDVs[0] += 10
 			shouldCreate := info.ColumnNDVs[0] > 100 || info.ColumnNDVs[0] > 0.1*float64(info.TableRowCount)
 			if info.ShuffleRanges[0] == nil && shouldCreate {
-				info.ShuffleRanges[0] = plan2.NewShuffleRange(false)
+				info.ShuffleRanges[0] = planner.NewShuffleRange(false)
 			}
 		}
 
@@ -186,7 +185,7 @@ func TestCollectTableStats_ShuffleRanges_DynamicCreation(t *testing.T) {
 		shouldCreate := info.ColumnNDVs[0] > 100 || info.ColumnNDVs[0] > 0.1*float64(info.TableRowCount)
 		assert.True(t, shouldCreate, "Should meet condition: 100 > 10")
 		if info.ShuffleRanges[0] == nil && shouldCreate {
-			info.ShuffleRanges[0] = plan2.NewShuffleRange(false)
+			info.ShuffleRanges[0] = planner.NewShuffleRange(false)
 		}
 		assert.NotNil(t, info.ShuffleRanges[0], "ShuffleRanges should be created when NDV=100 and rows=100")
 	})
@@ -204,7 +203,7 @@ func TestCollectTableStats_ColumnSize_OriginSize(t *testing.T) {
 		// This test simulates that behavior with realistic data
 
 		lenCols := 1
-		info := plan2.NewTableStatsInfo(lenCols)
+		info := planner.NewTableStatsInfo(lenCols)
 
 		// Simulate first object: OriginSize = 4000 bytes
 		// This matches the real logic: info.ColumnSize[idx] = int64(columnMeta.Location().OriginSize())
@@ -217,7 +216,7 @@ func TestCollectTableStats_ColumnSize_OriginSize(t *testing.T) {
 	t.Run("subsequent_objects_accumulate_origin_size", func(t *testing.T) {
 		// This test verifies that subsequent objects accumulate OriginSize()
 		lenCols := 1
-		info := plan2.NewTableStatsInfo(lenCols)
+		info := planner.NewTableStatsInfo(lenCols)
 
 		// First object
 		firstObjectOriginSize := int64(4000)
@@ -238,7 +237,7 @@ func TestCollectTableStats_ColumnSize_OriginSize(t *testing.T) {
 	t.Run("consistent_calculation_for_all_objects", func(t *testing.T) {
 		// Verify that first and subsequent objects use the same calculation (OriginSize)
 		lenCols := 1
-		info := plan2.NewTableStatsInfo(lenCols)
+		info := planner.NewTableStatsInfo(lenCols)
 
 		objects := []int64{4000, 8000, 12000, 16000}
 		for i, size := range objects {
@@ -266,7 +265,7 @@ func TestCollectTableStats_NDV_IndependentOfZoneMap(t *testing.T) {
 	t.Run("ndv_accumulated_when_zonemap_not_initialized", func(t *testing.T) {
 		// Scenario: Object has valid NDV but ZoneMap is not initialized (e.g., all NULL values)
 		lenCols := 1
-		info := plan2.NewTableStatsInfo(lenCols)
+		info := planner.NewTableStatsInfo(lenCols)
 		info.DataTypes[0] = types.New(types.T_int64, 0, 0)
 
 		// First object: NDV=50, ZoneMap not initialized
@@ -305,7 +304,7 @@ func TestCollectTableStats_NDV_IndependentOfZoneMap(t *testing.T) {
 
 	t.Run("ndv_accumulated_for_multiple_objects_with_mixed_zonemap_status", func(t *testing.T) {
 		lenCols := 1
-		info := plan2.NewTableStatsInfo(lenCols)
+		info := planner.NewTableStatsInfo(lenCols)
 		info.DataTypes[0] = types.New(types.T_int64, 0, 0)
 
 		// Object 1: NDV=30, ZoneMap initialized
@@ -348,7 +347,7 @@ func TestCollectTableStats_MaxMinObjectRowCount(t *testing.T) {
 
 	t.Run("max_object_row_count_tracking", func(t *testing.T) {
 		lenCols := 2
-		info := plan2.NewTableStatsInfo(lenCols)
+		info := planner.NewTableStatsInfo(lenCols)
 
 		// First object: 100 rows
 		firstObjectRows := uint32(100)
@@ -388,7 +387,7 @@ func TestCollectTableStats_MaxMinObjectRowCount(t *testing.T) {
 	t.Run("ndvin_max_min_object_tracking", func(t *testing.T) {
 		// Test that NDVinMaxObject and NDVinMinObject are updated based on MaxObjectRowCount/MinObjectRowCount
 		lenCols := 1
-		info := plan2.NewTableStatsInfo(lenCols)
+		info := planner.NewTableStatsInfo(lenCols)
 		info.DataTypes[0] = types.New(types.T_int64, 0, 0)
 
 		// First object: 100 rows, NDV=50
@@ -430,7 +429,7 @@ func TestCollectTableStats_MaxMinObjectRowCount(t *testing.T) {
 	t.Run("same_row_count_different_ndv", func(t *testing.T) {
 		// Test handling when multiple objects have the same row count but different NDV
 		lenCols := 1
-		info := plan2.NewTableStatsInfo(lenCols)
+		info := planner.NewTableStatsInfo(lenCols)
 		info.DataTypes[0] = types.New(types.T_int64, 0, 0)
 
 		// First object: 100 rows, NDV=50
@@ -460,7 +459,7 @@ func TestCollectTableStats_ShuffleRanges_StringType(t *testing.T) {
 
 	t.Run("create_string_shuffle_range_on_second_object", func(t *testing.T) {
 		lenCols := 1
-		info := plan2.NewTableStatsInfo(lenCols)
+		info := planner.NewTableStatsInfo(lenCols)
 		info.DataTypes[0] = types.New(types.T_varchar, 100, 0)
 
 		// First object: 50 rows, NDV=50 (doesn't meet condition)
@@ -493,7 +492,7 @@ func TestCollectTableStats_ShuffleRanges_StringType(t *testing.T) {
 		// Simulate the fix: Create ShuffleRanges for string type
 		shouldCreate := info.ColumnNDVs[0] > 100 || info.ColumnNDVs[0] > 0.1*float64(info.TableRowCount)
 		if info.ShuffleRanges[0] == nil && shouldCreate {
-			info.ShuffleRanges[0] = plan2.NewShuffleRange(true)
+			info.ShuffleRanges[0] = planner.NewShuffleRange(true)
 			if info.ColumnZMs[0].IsInited() {
 				info.ShuffleRanges[0].UpdateString(
 					info.ColumnZMs[0].GetMinBuf(),
@@ -515,7 +514,7 @@ func TestCollectTableStats_MultipleColumns(t *testing.T) {
 
 	t.Run("multiple_columns_shuffle_range_creation", func(t *testing.T) {
 		lenCols := 3
-		info := plan2.NewTableStatsInfo(lenCols)
+		info := planner.NewTableStatsInfo(lenCols)
 		info.DataTypes[0] = types.New(types.T_int64, 0, 0)
 		info.DataTypes[1] = types.New(types.T_varchar, 100, 0)
 		info.DataTypes[2] = types.New(types.T_int32, 0, 0)
@@ -540,10 +539,10 @@ func TestCollectTableStats_MultipleColumns(t *testing.T) {
 			if info.ShuffleRanges[idx] == nil && shouldCreate {
 				if idx == 1 {
 					// String type
-					info.ShuffleRanges[idx] = plan2.NewShuffleRange(true)
+					info.ShuffleRanges[idx] = planner.NewShuffleRange(true)
 				} else {
 					// Numeric types
-					info.ShuffleRanges[idx] = plan2.NewShuffleRange(false)
+					info.ShuffleRanges[idx] = planner.NewShuffleRange(false)
 				}
 			}
 		}
@@ -561,7 +560,7 @@ func TestCollectTableStats_EdgeCases(t *testing.T) {
 	t.Run("exactly_100_ndv", func(t *testing.T) {
 		// Test boundary: NDV exactly 100
 		lenCols := 1
-		info := plan2.NewTableStatsInfo(lenCols)
+		info := planner.NewTableStatsInfo(lenCols)
 		info.DataTypes[0] = types.New(types.T_int64, 0, 0)
 
 		info.TableRowCount = 1000
@@ -581,7 +580,7 @@ func TestCollectTableStats_EdgeCases(t *testing.T) {
 	t.Run("exactly_10_percent_ndv", func(t *testing.T) {
 		// Test boundary: NDV exactly 10% of rows
 		lenCols := 1
-		info := plan2.NewTableStatsInfo(lenCols)
+		info := planner.NewTableStatsInfo(lenCols)
 		info.DataTypes[0] = types.New(types.T_int64, 0, 0)
 
 		info.TableRowCount = 1000
@@ -599,7 +598,7 @@ func TestCollectTableStats_EdgeCases(t *testing.T) {
 	t.Run("very_large_ndv_small_rows", func(t *testing.T) {
 		// Test: Very large NDV but small number of rows
 		lenCols := 1
-		info := plan2.NewTableStatsInfo(lenCols)
+		info := planner.NewTableStatsInfo(lenCols)
 		info.DataTypes[0] = types.New(types.T_int64, 0, 0)
 
 		info.TableRowCount = 50
@@ -611,7 +610,7 @@ func TestCollectTableStats_EdgeCases(t *testing.T) {
 	t.Run("very_large_rows_small_ndv", func(t *testing.T) {
 		// Test: Very large number of rows but small NDV
 		lenCols := 1
-		info := plan2.NewTableStatsInfo(lenCols)
+		info := planner.NewTableStatsInfo(lenCols)
 		info.DataTypes[0] = types.New(types.T_int64, 0, 0)
 
 		info.TableRowCount = 100000
@@ -628,7 +627,7 @@ func TestCollectTableStats_EdgeCases(t *testing.T) {
 	t.Run("zero_rows", func(t *testing.T) {
 		// Test: Zero rows edge case
 		lenCols := 1
-		info := plan2.NewTableStatsInfo(lenCols)
+		info := planner.NewTableStatsInfo(lenCols)
 		info.DataTypes[0] = types.New(types.T_int64, 0, 0)
 
 		info.TableRowCount = 0
@@ -650,7 +649,7 @@ func TestCollectTableStats_ShuffleRanges_DynamicCreation_Real(t *testing.T) {
 		// to verify that ShuffleRanges can be created dynamically in subsequent objects
 
 		lenCols := 1
-		info := plan2.NewTableStatsInfo(lenCols)
+		info := planner.NewTableStatsInfo(lenCols)
 		info.DataTypes[0] = types.New(types.T_int64, 0, 0)
 
 		var init bool
@@ -679,7 +678,7 @@ func TestCollectTableStats_ShuffleRanges_DynamicCreation_Real(t *testing.T) {
 
 				// Real logic from collectTableStats line 675
 				if info.ColumnNDVs[idx] > 100 || info.ColumnNDVs[idx] > 0.1*float64(rows) {
-					info.ShuffleRanges[idx] = plan2.NewShuffleRange(false)
+					info.ShuffleRanges[idx] = planner.NewShuffleRange(false)
 					if info.ColumnZMs[idx].IsInited() {
 						minValue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMinBuf())
 						maxValue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMaxBuf())
@@ -733,7 +732,7 @@ func TestCollectTableStats_ShuffleRanges_DynamicCreation_Real(t *testing.T) {
 			// Real logic from collectTableStats lines 735-758 (THE FIX)
 			if info.ShuffleRanges[idx] == nil {
 				if info.ColumnNDVs[idx] > 100 || info.ColumnNDVs[idx] > 0.1*float64(info.TableRowCount) {
-					info.ShuffleRanges[idx] = plan2.NewShuffleRange(false)
+					info.ShuffleRanges[idx] = planner.NewShuffleRange(false)
 					if info.ColumnZMs[idx].IsInited() {
 						minValue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMinBuf())
 						maxValue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMaxBuf())
@@ -772,7 +771,7 @@ func TestCollectTableStats_ShuffleRanges_DynamicCreation_Real(t *testing.T) {
 
 	t.Run("create_on_third_object_when_first_two_dont_meet_condition", func(t *testing.T) {
 		lenCols := 1
-		info := plan2.NewTableStatsInfo(lenCols)
+		info := planner.NewTableStatsInfo(lenCols)
 		info.DataTypes[0] = types.New(types.T_int64, 0, 0)
 
 		var init bool
@@ -786,7 +785,7 @@ func TestCollectTableStats_ShuffleRanges_DynamicCreation_Real(t *testing.T) {
 			info.ColumnSize[0] = 2400
 			// Condition: 2 > 100 (false) || 2 > 0.1*30=3 (false) -> false
 			if info.ColumnNDVs[0] > 100 || info.ColumnNDVs[0] > 0.1*float64(30) {
-				info.ShuffleRanges[0] = plan2.NewShuffleRange(false)
+				info.ShuffleRanges[0] = planner.NewShuffleRange(false)
 			}
 		}
 		assert.Nil(t, info.ShuffleRanges[0], "Should not create after first object")
@@ -801,7 +800,7 @@ func TestCollectTableStats_ShuffleRanges_DynamicCreation_Real(t *testing.T) {
 		// Condition: 5 > 100 (false) || 5 > 0.1*70=7 (false) -> false
 		if info.ShuffleRanges[0] == nil {
 			if info.ColumnNDVs[0] > 100 || info.ColumnNDVs[0] > 0.1*float64(info.TableRowCount) {
-				info.ShuffleRanges[0] = plan2.NewShuffleRange(false)
+				info.ShuffleRanges[0] = planner.NewShuffleRange(false)
 			}
 		}
 		assert.Nil(t, info.ShuffleRanges[0], "Should not create after second object")
@@ -816,7 +815,7 @@ func TestCollectTableStats_ShuffleRanges_DynamicCreation_Real(t *testing.T) {
 		// Condition: 905 > 100 (true) -> true
 		if info.ShuffleRanges[0] == nil {
 			if info.ColumnNDVs[0] > 100 || info.ColumnNDVs[0] > 0.1*float64(info.TableRowCount) {
-				info.ShuffleRanges[0] = plan2.NewShuffleRange(false)
+				info.ShuffleRanges[0] = planner.NewShuffleRange(false)
 			}
 		}
 		assert.NotNil(t, info.ShuffleRanges[0], "ShuffleRanges should be created on third object")
@@ -833,7 +832,7 @@ func TestCollectTableStats_NDV_IndependentOfZoneMap_Real(t *testing.T) {
 		// to verify that NDV is accumulated even when ZoneMap is not initialized
 
 		lenCols := 1
-		info := plan2.NewTableStatsInfo(lenCols)
+		info := planner.NewTableStatsInfo(lenCols)
 		info.DataTypes[0] = types.New(types.T_int64, 0, 0)
 
 		var init bool
