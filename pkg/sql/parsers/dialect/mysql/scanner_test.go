@@ -147,6 +147,10 @@ func TestString(t *testing.T) {
 		in:   "'C:\\\\Program Files(x86)'",
 		id:   STRING,
 		want: "C:\\Program Files(x86)",
+	}, {
+		in:   "$$a\\n$$",
+		id:   STRING,
+		want: "a\\n",
 	}}
 
 	for _, tcase := range testcases {

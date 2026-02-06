@@ -10,6 +10,12 @@ select * from result_scan(last_query_id()) as u;
 a
 1
 2
+/* save_result */select 1 as AbC, 2 as DeF;
+AbC	DeF
+1	2
+select * from result_scan(last_query_id()) as u;
+AbC	DeF
+1	2
 /* save_result */select * from tt;
 a
 1
@@ -41,7 +47,7 @@ a
 1
 2
 select * from result_scan(last_query_id()) as u;
-
+no configure: save query result
 set save_query_result = on;
 drop table if exists t2;
 create table t2 (a int, b int, c int);
@@ -159,7 +165,7 @@ system
 system_metrics
 test
 select * from result_scan(last_query_id()) as u;
-Database
+database
 information_schema
 mo_catalog
 mysql
@@ -189,17 +195,17 @@ count(*)
 Tables_in_test
 tt
 select * from result_scan(last_query_id()) as u;
-Tables_in_test
+tables_in_test
 tt
 /* save_result */show variables like 'tx_isolation';
-
+[unknown result because it is related to issue#17598]
 select * from result_scan(last_query_id()) as u;
-
+[unknown result because it is related to issue#17598]
 /* save_result */show columns from tt;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES        null        
 select * from result_scan(last_query_id()) as u;
-Field    Type    Null    Key    Default    Extra    Comment
+field    type    null    key    default    extra    comment
 a    INT(32)    YES        null        
 /* save_result */show grants;
 Grants for admin@localhost
@@ -235,7 +241,7 @@ GRANT table ownership ON table *.* `admin`@`localhost`
 GRANT values ON table *.* `admin`@`localhost`
 GRANT connect ON account  `admin`@`localhost`
 select * from result_scan(last_query_id()) as u;
-Grants for admin@localhost
+grants for admin@localhost
 GRANT create user ON account  `admin`@`localhost`
 GRANT drop user ON account  `admin`@`localhost`
 GRANT alter user ON account  `admin`@`localhost`
@@ -281,15 +287,15 @@ select * from result_scan(last_query_id()) as u;
 table    non_unique    key_name    seq_in_index    column_name    collation    cardinality    sub_part    packed    null    index_type    comment    index_comment    index_params    visible    expression
 tt    0    id    1    a    A    0    NULL    NULL    YES                    YES    a
 /* save_result */show node list;
-
+[unknown result because it is related to issue#17598]
 select * from result_scan(last_query_id()) as u;
-
+[unknown result because it is related to issue#17598]
 create sequence seq_an_03  increment 10 start with 1 no cycle;
 /* save_result */show sequences;
 Names    Data Type
 seq_an_03    BIGINT
 select * from result_scan(last_query_id()) as u;
-Names    Data Type
+names    data type
 seq_an_03    BIGINT
 CREATE TABLE t1 (S1 INT);
 CREATE TABLE t2 (S1 INT);
@@ -302,7 +308,7 @@ select * from result_scan(last_query_id()) as u;
 s1_0    s1_1
 4    4
 /* save_result */select t2.S1 from t2 left join t1 on t1.S1 =t2.S1;
-s1
+S1
 2
 4
 5
@@ -312,7 +318,7 @@ s1
 4
 5
 /* save_result */select t2.S1 from t2 right join t1 on t1.S1 =t2.S1;
-s1
+S1
 null
 null
 4
@@ -524,14 +530,14 @@ s1    s1
 select * from result_scan(last_query_id()) as u;
 no configure: save query result
 /* save_result */select t2.S1 from t2 left join t1 on t1.S1 =t2.S1;
-s1
+S1
 2
 4
 5
 select * from result_scan(last_query_id()) as u;
 no configure: save query result
 /* save_result */select t2.S1 from t2 right join t1 on t1.S1 =t2.S1;
-s1
+S1
 null
 null
 4

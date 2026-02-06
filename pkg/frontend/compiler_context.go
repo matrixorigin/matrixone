@@ -950,10 +950,6 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 	vec = bats[0].Vecs[1]
 	str := vec.GetStringAt(0)
 
-	// lower col name
-	for _, col := range r.ResultCols {
-		col.Name = strings.ToLower(col.Name)
-	}
 	return r.ResultCols, str, nil
 }
 

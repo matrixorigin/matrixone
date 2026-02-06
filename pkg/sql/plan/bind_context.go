@@ -296,6 +296,11 @@ func (bc *BindContext) unfoldStar(ctx context.Context, table string, isSysAccoun
 			return nil, nil, moerr.NewInvalidInputf(ctx, "missing FROM-clause entry for table '%s'", table)
 		}
 
+		displayCols := binding.originCols
+		if len(displayCols) != len(binding.cols) {
+			displayCols = binding.cols
+		}
+
 		exprs := make([]tree.SelectExpr, 0)
 		names := make([]string, 0)
 
@@ -312,7 +317,7 @@ func (bc *BindContext) unfoldStar(ctx context.Context, table string, isSysAccoun
 			}
 			expr := tree.NewUnresolvedName(tree.NewCStr(table, bc.lower), tree.NewCStr(col, 1))
 			exprs = append(exprs, tree.SelectExpr{Expr: expr})
-			names = append(names, col)
+			names = append(names, displayCols[i])
 		}
 
 		return exprs, names, nil
@@ -324,6 +329,11 @@ func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, 
 		return
 	}
 	if root.binding != nil {
+		displayCols := root.binding.originCols
+		if len(displayCols) != len(root.binding.cols) {
+			displayCols = root.binding.cols
+		}
+
 		for i, col := range root.binding.cols {
 			if root.binding.colIsHidden[i] {
 				continue
@@ -338,7 +348,7 @@ func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, 
 			if !visitedUsingCols[col] {
 				expr := tree.NewUnresolvedName(tree.NewCStr(root.binding.table, bc.lower), tree.NewCStr(col, 1))
 				*exprs = append(*exprs, tree.SelectExpr{Expr: expr})
-				*names = append(*names, col)
+				*names = append(*names, displayCols[i])
 			}
 		}
 
