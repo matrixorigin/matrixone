@@ -322,6 +322,8 @@ func (mp *MysqlProtocolImpl) GetU32(id PropertyID) uint32 {
 	switch id {
 	case CONNID:
 		return mp.ConnectionID()
+	case CAPABILITY:
+		return mp.GetCapability()
 	}
 	return math.MaxUint32
 }
