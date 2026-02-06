@@ -11,10 +11,8 @@ create table db1.t1(a int);
 insert into db1.t1 values(1);
 select * from db1.t1;
 truncate table db1.t1;
--- @bvt:issue#10126
 insert into db1.t1 values(2);
 select * from db1.t1;
--- @bvt:issue
 -- @session
 drop account default_1;
 

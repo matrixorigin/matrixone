@@ -2081,8 +2081,9 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		if capacity < 100 {
 			capacity = 100
 		}
-		bf := bloomfilter.New(capacity, 0.001) // Use lower false positive rate
-		bf.Add(vec)
+		bf := bloomfilter.NewCBloomFilterWithProbability(capacity, 0.001) // Use lower false positive rate
+		bf.AddVector(vec)
+		defer bf.Free()
 		vec.Free(mp)
 
 		return bf.Marshal()
@@ -2119,7 +2120,7 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 			Valid: false,
 		}
 
-		var bf bloomfilter.BloomFilter
+		bf := &bloomfilter.CBloomFilter{}
 		if len(bfData) > 0 {
 			err = bf.Unmarshal(bfData)
 			require.NoError(t, err)
@@ -2129,7 +2130,7 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		readFilter, err := ConstructBlockPKFilter(
 			false,
 			basePKFilter,
-			&bf,
+			bf,
 		)
 		require.NoError(t, err)
 		require.True(t, readFilter.Valid)
@@ -2158,7 +2159,7 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 			Valid: false,
 		}
 
-		var bf bloomfilter.BloomFilter
+		bf := &bloomfilter.CBloomFilter{}
 		if len(bfData) > 0 {
 			err = bf.Unmarshal(bfData)
 			require.NoError(t, err)
@@ -2168,7 +2169,7 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		readFilter, err := ConstructBlockPKFilter(
 			false,
 			basePKFilter,
-			&bf,
+			bf,
 		)
 		require.NoError(t, err)
 		require.True(t, readFilter.Valid)
@@ -2197,7 +2198,7 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 			LB:    types.EncodeFixed(int64(20)),
 		}
 
-		var bf bloomfilter.BloomFilter
+		bf := &bloomfilter.CBloomFilter{}
 		if len(bfData) > 0 {
 			err = bf.Unmarshal(bfData)
 			require.NoError(t, err)
@@ -2207,7 +2208,7 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		readFilter, err := ConstructBlockPKFilter(
 			false,
 			basePKFilter,
-			&bf,
+			bf,
 		)
 		require.NoError(t, err)
 		require.True(t, readFilter.Valid)
@@ -2240,7 +2241,7 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 			Valid: false,
 		}
 
-		var bf bloomfilter.BloomFilter
+		bf := &bloomfilter.CBloomFilter{}
 		if len(bfData) > 0 {
 			err = bf.Unmarshal(bfData)
 			require.NoError(t, err)
@@ -2250,7 +2251,7 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		readFilter, err := ConstructBlockPKFilter(
 			false,
 			basePKFilter,
-			&bf,
+			bf,
 		)
 		require.NoError(t, err)
 		require.True(t, readFilter.Valid)
@@ -2291,7 +2292,7 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 			Valid: false,
 		}
 
-		var bf bloomfilter.BloomFilter
+		bf := &bloomfilter.CBloomFilter{}
 		if len(bfData) > 0 {
 			err = bf.Unmarshal(bfData)
 			require.NoError(t, err)
@@ -2301,7 +2302,7 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		readFilter, err := ConstructBlockPKFilter(
 			false,
 			basePKFilter,
-			&bf,
+			bf,
 		)
 		require.NoError(t, err)
 
@@ -2338,7 +2339,7 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 			Valid: false,
 		}
 
-		var bf bloomfilter.BloomFilter
+		bf := &bloomfilter.CBloomFilter{}
 		if len(bfData) > 0 {
 			err = bf.Unmarshal(bfData)
 			require.NoError(t, err)
@@ -2348,7 +2349,7 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		readFilter, err := ConstructBlockPKFilter(
 			false,
 			basePKFilter,
-			&bf,
+			bf,
 		)
 		require.NoError(t, err)
 
@@ -2394,7 +2395,7 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 			Valid: false,
 		}
 
-		var bf bloomfilter.BloomFilter
+		bf := &bloomfilter.CBloomFilter{}
 		if len(bfData) > 0 {
 			err = bf.Unmarshal(bfData)
 			require.NoError(t, err)
@@ -2404,7 +2405,7 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		readFilter, err := ConstructBlockPKFilter(
 			false,
 			basePKFilter,
-			&bf,
+			bf,
 		)
 		require.NoError(t, err)
 		require.True(t, readFilter.Valid)
@@ -2443,7 +2444,7 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 			Valid: false,
 		}
 
-		var bf bloomfilter.BloomFilter
+		bf := &bloomfilter.CBloomFilter{}
 		if len(bfData) > 0 {
 			err = bf.Unmarshal(bfData)
 			require.NoError(t, err)
@@ -2453,7 +2454,7 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		readFilter, err := ConstructBlockPKFilter(
 			false,
 			basePKFilter,
-			&bf,
+			bf,
 		)
 		require.NoError(t, err)
 
@@ -2481,7 +2482,7 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 			Valid: false,
 		}
 
-		var bf bloomfilter.BloomFilter
+		bf := &bloomfilter.CBloomFilter{}
 		if len(bfData) > 0 {
 			err = bf.Unmarshal(bfData)
 			require.NoError(t, err)
@@ -2491,7 +2492,7 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		readFilter, err := ConstructBlockPKFilter(
 			false,
 			basePKFilter,
-			&bf,
+			bf,
 		)
 		require.NoError(t, err)
 
@@ -2517,7 +2518,7 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 			Valid: false,
 		}
 
-		var bf bloomfilter.BloomFilter
+		bf := &bloomfilter.CBloomFilter{}
 		if len(bfData) > 0 {
 			err = bf.Unmarshal(bfData)
 			require.NoError(t, err)
@@ -2527,7 +2528,7 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		readFilter, err := ConstructBlockPKFilter(
 			false,
 			basePKFilter,
-			&bf,
+			bf,
 		)
 		require.NoError(t, err)
 
