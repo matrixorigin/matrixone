@@ -5327,6 +5327,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = builder.buildParseJsonlFile(tbl, ctx, exprs, children)
 	case "table_stats":
 		nodeId = builder.buildTableStats(tbl, ctx, exprs, children)
+	case "load_file_chunks":
+		nodeId = builder.buildLoadFileChunks(tbl, ctx, exprs, children)
 	default:
 		err = moerr.NewNotSupportedf(builder.GetContext(), "table function '%s' not supported", id)
 	}

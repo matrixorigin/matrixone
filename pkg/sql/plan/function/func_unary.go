@@ -880,6 +880,24 @@ func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		if err != nil {
 			return err
 		}
+		size := dl.Size
+		if size < 0 {
+			etlFS, readPath, err := fileservice.GetForETL(proc.Ctx, proc.GetFileService(), dl.MoPath)
+			if err != nil {
+				return err
+			}
+			entry, err := etlFS.StatFile(proc.Ctx, readPath)
+			if err != nil {
+				return err
+			}
+			if dl.Offset > entry.Size {
+				return moerr.NewInternalError(proc.Ctx, "offset exceeds file size")
+			}
+			size = entry.Size - dl.Offset
+		}
+		if size > int64(types.MaxBlobLen) {
+			return moerr.NewInternalError(proc.Ctx, "Data too long for blob")
+		}
 		fileBytes, err := dl.GetBytes(proc)
 		if err != nil {
 			return err
