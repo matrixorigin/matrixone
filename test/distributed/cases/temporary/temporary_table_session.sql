@@ -360,3 +360,4 @@ select * from temp_long_session;  -- 预期结果: 返回2条记录
 
 drop table temp_long_session;
 drop database temp_session;
+drop database session2;
