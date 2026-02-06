@@ -1330,55 +1330,57 @@ func ExecuteIteration(
 	var syncProtectionJobID string
 	syncProtectionRegistered := false
 
-	// Register sync protection on downstream with retry for retryable errors
-	// Retryable errors: GC is running, max count reached
-	const syncProtectionMaxRetries = 5
-	const syncProtectionRetryInterval = 10 * time.Second
-	for attempt := 0; attempt < syncProtectionMaxRetries; attempt++ {
-		var syncProtectionRetryable bool
-		syncProtectionJobID, currentTTLExpireTS, syncProtectionRetryable, err = RegisterSyncProtectionOnDownstream(
-			ctx,
-			iterationCtx.LocalExecutor,
-			objectMap,
-		)
-		if err == nil {
-			break // Success
-		}
-		if !syncProtectionRetryable {
-			// Non-retryable error, return immediately
-			err = moerr.NewInternalErrorf(ctx, "failed to register sync protection on downstream: %v", err)
-			return
-		}
-		// Retryable error, log and retry
-		logutil.Warn("ccpr-iteration sync protection registration retryable error, will retry",
-			zap.String("task_id", iterationCtx.TaskID),
-			zap.Int("attempt", attempt+1),
-			zap.Int("max_retries", syncProtectionMaxRetries),
-			zap.Error(err),
-		)
-		if attempt < syncProtectionMaxRetries-1 {
-			select {
-			case <-ctx.Done():
-				err = ctx.Err()
+	// Only register sync protection if worker is provided
+	// When syncProtectionWorker is nil (e.g., in tests), skip sync protection entirely
+	if syncProtectionWorker != nil {
+		// Register sync protection on downstream with retry for retryable errors
+		// Retryable errors: GC is running, max count reached
+		const syncProtectionMaxRetries = 5
+		const syncProtectionRetryInterval = 10 * time.Second
+		for attempt := 0; attempt < syncProtectionMaxRetries; attempt++ {
+			var syncProtectionRetryable bool
+			syncProtectionJobID, currentTTLExpireTS, syncProtectionRetryable, err = RegisterSyncProtectionOnDownstream(
+				ctx,
+				iterationCtx.LocalExecutor,
+				objectMap,
+			)
+			if err == nil {
+				break // Success
+			}
+			if !syncProtectionRetryable {
+				// Non-retryable error, return immediately
+				err = moerr.NewInternalErrorf(ctx, "failed to register sync protection on downstream: %v", err)
 				return
-			case <-time.After(syncProtectionRetryInterval):
+			}
+			// Retryable error, log and retry
+			logutil.Warn("ccpr-iteration sync protection registration retryable error, will retry",
+				zap.String("task_id", iterationCtx.TaskID),
+				zap.Int("attempt", attempt+1),
+				zap.Int("max_retries", syncProtectionMaxRetries),
+				zap.Error(err),
+			)
+			if attempt < syncProtectionMaxRetries-1 {
+				select {
+				case <-ctx.Done():
+					err = ctx.Err()
+					return
+				case <-time.After(syncProtectionRetryInterval):
+				}
 			}
 		}
-	}
-	if err != nil {
-		err = moerr.NewInternalErrorf(ctx, "failed to register sync protection on downstream after %d retries: %v", syncProtectionMaxRetries, err)
-		return
-	}
-	syncProtectionRegistered = true
+		if err != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to register sync protection on downstream after %d retries: %v", syncProtectionMaxRetries, err)
+			return
+		}
+		syncProtectionRegistered = true
 
-	logutil.Info("ccpr-iteration registered sync protection on downstream",
-		zap.String("task_id", iterationCtx.TaskID),
-		zap.String("job_id", syncProtectionJobID),
-		zap.Int64("ttl_expire_ts", currentTTLExpireTS),
-	)
+		logutil.Info("ccpr-iteration registered sync protection on downstream",
+			zap.String("task_id", iterationCtx.TaskID),
+			zap.String("job_id", syncProtectionJobID),
+			zap.Int64("ttl_expire_ts", currentTTLExpireTS),
+		)
 
-	// Register sync protection job with the worker for keepalive management
-	if syncProtectionWorker != nil {
+		// Register sync protection job with the worker for keepalive management
 		syncProtectionWorker.RegisterSyncProtection(syncProtectionJobID, currentTTLExpireTS)
 	}
 
@@ -1387,12 +1389,14 @@ func ExecuteIteration(
 	// If current time exceeds TTL by more than SyncProtectionTTLDuration, it means
 	// the worker's renewal failed to update in time
 	ttlChecker := func() bool {
+		// If sync protection is not enabled (worker is nil), never expire
+		if syncProtectionWorker == nil {
+			return false
+		}
 		// Get latest TTL from worker (may have been renewed)
 		checkTTL := currentTTLExpireTS
-		if syncProtectionWorker != nil {
-			if ttl := syncProtectionWorker.GetSyncProtectionTTL(syncProtectionJobID); ttl > 0 {
-				checkTTL = ttl
-			}
+		if ttl := syncProtectionWorker.GetSyncProtectionTTL(syncProtectionJobID); ttl > 0 {
+			checkTTL = ttl
 		}
 		now := time.Now().UnixNano()
 		// Check if current time exceeds the TTL by more than one full TTL duration
