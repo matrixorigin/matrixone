@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -134,8 +135,17 @@ func (s *taskService) Allocate(ctx context.Context, value task.AsyncTask, taskRu
 	if err != nil {
 		return err
 	}
-	if len(exists) != 1 {
-		s.rt.Logger().Debug(fmt.Sprintf("queried tasks: %v", exists))
+	if len(exists) == 0 {
+		// Task not found, it may have been completed and deleted by another scheduler
+		// or CN node. This is a normal race condition in distributed systems.
+		s.rt.Logger().Warn("task not found during allocation, may have been completed or deleted",
+			zap.Uint64("task-id", value.ID),
+			zap.String("task-metadata-id", value.Metadata.ID),
+			zap.String("task-runner", taskRunner))
+		return moerr.NewInvalidTask(ctx, taskRunner, value.ID)
+	}
+	if len(exists) > 1 {
+		// Multiple records for the same primary key indicates a data consistency issue
 		s.rt.Logger().Fatal(fmt.Sprintf("query task by primary key, return %d records", len(exists)))
 	}
 
