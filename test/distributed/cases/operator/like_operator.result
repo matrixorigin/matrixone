@@ -160,15 +160,15 @@ SELECT COUNT(*) FROM like_test WHERE str1 NOT LIKE '%baz%' OR str1 IS NULL;
 count(*)
 8
 SELECT str1, str1 LIKE '%\\' FROM like_test;
-str1    str1 like %\\
-D:    0
-D:\    1
-D:\System_files    0
-D:\System_files\    1
-null    null
-NULL    0
-  A    0
-s _    0
+str1	str1 like %\\
+D:	0
+D:\	1
+D:\System_files	0
+D:\System_files\	1
+NULL	NULL
+NULL	0
+  A	0
+s _	0
 SELECT str1, str1 LIKE '%\\\\' FROM like_test;
 str1	str1 like %\\\\
 D:	0
