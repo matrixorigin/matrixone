@@ -688,6 +688,11 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 
 	mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable)
+	// Subscription DB: skip internal_auto_increment and other heavy lookups, use 0 for Auto_increment and stats.
+	autoIncrExpr := "if(relkind = 'v', NULL, coalesce(internal_auto_increment(reldatabase, relname), 0))"
+	if sub != nil {
+		autoIncrExpr = "0"
+	}
 	sql := `select
 				relname as 'Name',
 				'Tae' as 'Engine',
@@ -698,7 +703,7 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 				0 as 'Max_data_length',
 				0 as 'Index_length',
 				'NULL' as 'Data_free',
-				if(relkind = 'v', NULL, coalesce(internal_auto_increment(reldatabase, relname), 0)) as 'Auto_increment',
+				%s as 'Auto_increment',
 				created_time as 'Create_time',
 				'NULL' as 'Update_time',
 				'NULL' as 'Check_time',
@@ -717,7 +722,7 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 				and relname not like '%s'
 				and relname != '%s'
 				and (%s)`
-	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, catalog.SystemPartitionRel, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.MO_ACCOUNT_LOCK, accountClause)
+	sql = fmt.Sprintf(sql, autoIncrExpr, MO_CATALOG_DB_NAME, dbName, catalog.SystemPartitionRel, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.MO_ACCOUNT_LOCK, accountClause)
 
 	// Do not show views in sub-db
 	if sub != nil {
