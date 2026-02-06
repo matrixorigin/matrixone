@@ -47,6 +47,7 @@ create unique index idx_email on temp_unique(email);
 insert into temp_unique values (1, 'alice@example.com');
 insert into temp_unique values (2, 'bob@example.com');
 insert into temp_unique values (3, 'alice@example.com');
+-- @regex("Duplicate entry", true)
 Duplicate entry 'alice@example.com' for key 'email'
 select * from temp_unique;
 ➤ id[4,32,0]  ¦  email[12,-1,0]  𝄀
@@ -61,6 +62,7 @@ unique index idx_username (username)
 insert into temp_unique2 values (1, 'user1');
 insert into temp_unique2 values (2, 'user2');
 insert into temp_unique2 values (3, 'user1');  -- 应该失败
+-- @regex("Duplicate entry", true)
 Duplicate entry 'user1' for key 'username'
 select * from temp_unique2;
 ➤ id[4,32,0]  ¦  username[12,-1,0]  𝄀

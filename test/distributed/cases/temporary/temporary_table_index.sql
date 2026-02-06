@@ -80,6 +80,7 @@ insert into temp_unique values (2, 'bob@example.com');
 
 -- 测试用例 3.3: 尝试插入重复值
 -- 预期结果: 失败，违反唯一约束
+-- @regex("Duplicate entry",true)
 insert into temp_unique values (3, 'alice@example.com');
 
 select * from temp_unique;
@@ -95,6 +96,7 @@ create temporary table temp_unique2 (
 
 insert into temp_unique2 values (1, 'user1');
 insert into temp_unique2 values (2, 'user2');
+-- @regex("Duplicate entry",true)
 insert into temp_unique2 values (3, 'user1');  -- 应该失败
 
 select * from temp_unique2;
