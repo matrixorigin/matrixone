@@ -936,6 +936,8 @@ var (
 		catalog.MO_INDEX_UPDATE:       0,
 		catalog.MO_BRANCH_METADATA:    0,
 		catalog.MO_CCPR_LOG:           0,
+		catalog.MO_CCPR_TABLES:        0,
+		catalog.MO_CCPR_DBS:           0,
 		catalog.MO_FEATURE_LIMIT:      0,
 		catalog.MO_FEATURE_REGISTRY:   0,
 	}
@@ -986,6 +988,8 @@ var (
 		catalog.MO_INDEX_UPDATE:       0,
 		catalog.MO_BRANCH_METADATA:    0,
 		catalog.MO_CCPR_LOG:           0,
+		catalog.MO_CCPR_TABLES:        0,
+		catalog.MO_CCPR_DBS:           0,
 		catalog.MO_FEATURE_LIMIT:      0,
 		catalog.MO_FEATURE_REGISTRY:   0,
 	}
