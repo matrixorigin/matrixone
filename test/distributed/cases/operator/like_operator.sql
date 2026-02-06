@@ -59,9 +59,7 @@ SELECT COUNT(*) FROM like_test WHERE str1 NOT LIKE '%baz%';
 SELECT COUNT(*) FROM like_test WHERE str1 NOT LIKE '%baz%' OR str1 IS NULL;
 SELECT str1, str1 LIKE '%\\' FROM like_test;
 
--- @bvt:issue#5078
 SELECT str1, str1 LIKE '%\\\\' FROM like_test;
--- @bvt:issue
 
 DELETE FROM like_test;
 INSERT INTO like_test VALUES('99.9');
@@ -115,9 +113,7 @@ SELECT * FROM like_test WHERE str1 LIKE '%\\';
 SELECT * FROM like_test WHERE str2 LIKE '%\'';
 SELECT * FROM like_test WHERE str1 LIKE '%三__';
 
--- @bvt:issue#5056
 SELECT * FROM like_test WHERE str1 LIKE '%\%';
--- @bvt:issue
 
 -- NOT LIKE
 SELECT * FROM like_test WHERE str1 NOT LIKE 'D%';

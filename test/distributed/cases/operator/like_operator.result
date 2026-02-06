@@ -160,17 +160,25 @@ SELECT COUNT(*) FROM like_test WHERE str1 NOT LIKE '%baz%' OR str1 IS NULL;
 count(*)
 8
 SELECT str1, str1 LIKE '%\\' FROM like_test;
-str1    str1 like %\\
-D:    0
-D:\    1
-D:\System_files    0
-D:\System_files\    1
-null    null
-NULL    0
-  A    0
-s _    0
+str1	str1 like %\\
+D:	0
+D:\	1
+D:\System_files	0
+D:\System_files\	1
+NULL	NULL
+NULL	0
+  A	0
+s _	0
 SELECT str1, str1 LIKE '%\\\\' FROM like_test;
-[unknown result because it is related to issue#5078]
+str1	str1 like %\\\\
+D:	0
+D:\	1
+D:\System_files	0
+D:\System_files\	1
+NULL	NULL
+NULL	0
+  A	0
+s _	0
 DELETE FROM like_test;
 INSERT INTO like_test VALUES('99.9');
 INSERT INTO like_test VALUES('88');
@@ -258,7 +266,8 @@ SELECT * FROM like_test WHERE str1 LIKE '%三__';
 str1    str2
 法的萨菲厄张三三三三三    考虑理论可看见年年年年年年
 SELECT * FROM like_test WHERE str1 LIKE '%\%';
-[unknown result because it is related to issue#5056]
+str1	str2
+ HINA IS OUR HOMELAND%	HE LIKE WHORE
 SELECT * FROM like_test WHERE str1 NOT LIKE 'D%';
 str1    str2
 CHINA IS OUR HOMELAND    BEIJING IS THE CAPITAL
