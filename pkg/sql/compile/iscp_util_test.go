@@ -46,6 +46,10 @@ func mockIscpUnregisterJobError(ctx context.Context, cnUUID string, txn client.T
 	return false, moerr.NewInternalErrorNoCtx("mock unregister job error")
 }
 
+func mockIsTableInCCPRFalse(c *Compile, tableid uint64) bool {
+	return false
+}
+
 func TestISCPCheckValidIndexCdcByIndexdef(t *testing.T) {
 	{
 
@@ -125,10 +129,12 @@ func TestISCPCreateAllIndexCdcTasks(t *testing.T) {
 
 	iscpRegisterJobFunc = mockIscpRegisterJobError
 	iscpUnregisterJobFunc = mockIscpUnregisterJobError
+	isTableInCCPRFunc = mockIsTableInCCPRFalse
 
 	defer func() {
 		iscpRegisterJobFunc = iscp.RegisterJob
 		iscpUnregisterJobFunc = iscp.UnregisterJob
+		isTableInCCPRFunc = isTableInCCPRImpl
 	}()
 
 	c := &Compile{}
@@ -278,10 +284,12 @@ func TestISCPCreateIndexCdcTask(t *testing.T) {
 
 	iscpRegisterJobFunc = mockIscpRegisterJobError
 	iscpUnregisterJobFunc = mockIscpUnregisterJobError
+	isTableInCCPRFunc = mockIsTableInCCPRFalse
 
 	defer func() {
 		iscpRegisterJobFunc = iscp.RegisterJob
 		iscpUnregisterJobFunc = iscp.UnregisterJob
+		isTableInCCPRFunc = isTableInCCPRImpl
 	}()
 
 	c := &Compile{}

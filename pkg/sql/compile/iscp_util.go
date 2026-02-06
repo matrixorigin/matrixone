@@ -31,6 +31,7 @@ import (
 var (
 	iscpRegisterJobFunc   = iscp.RegisterJob
 	iscpUnregisterJobFunc = iscp.UnregisterJob
+	isTableInCCPRFunc     = isTableInCCPRImpl
 )
 
 /* CDC APIs */
@@ -98,6 +99,10 @@ func checkValidIndexCdc(tableDef *plan.TableDef, indexname string) (bool, error)
 // isTableInCCPR checks if a table is managed by CCPR (in mo_ccpr_tables)
 // Returns true if the table is in CCPR system, false otherwise
 func isTableInCCPR(c *Compile, tableid uint64) bool {
+	return isTableInCCPRFunc(c, tableid)
+}
+
+func isTableInCCPRImpl(c *Compile, tableid uint64) bool {
 	// Check mo_ccpr_tables by tableid
 	querySql := fmt.Sprintf(
 		"SELECT tableid FROM `%s`.`%s` WHERE tableid = %d",
