@@ -1476,10 +1476,10 @@ func ExecuteIteration(
 		if ttl := syncProtectionWorker.GetSyncProtectionTTL(syncProtectionJobID); ttl > 0 {
 			currentTTLExpireTS = ttl
 		}
-	}
-	if time.Now().UnixNano() > currentTTLExpireTS {
-		err = moerr.NewInternalErrorNoCtx("sync protection TTL expired before commit, please retry")
-		return
+		if time.Now().UnixNano() > currentTTLExpireTS {
+			err = moerr.NewInternalErrorNoCtx("sync protection TTL expired before commit, please retry")
+			return
+		}
 	}
 
 	logutil.Info("ccpr-iteration sync protection check passed before commit",

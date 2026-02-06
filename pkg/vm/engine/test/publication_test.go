@@ -44,6 +44,7 @@ import (
 	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -4444,6 +4445,21 @@ func TestCCPRExecutorWithGC(t *testing.T) {
 	// Create mpool for executor
 	mp, err := mpool.NewMPool("test_ccpr_executor_gc", 0, mpool.NoFixed)
 	require.NoError(t, err)
+
+	// Stub RegisterSyncProtectionOnDownstreamFn to skip sync protection in test
+	// This avoids calling mo_ctl which is not supported in test environment
+	syncProtectionStub := gostub.Stub(
+		&publication.RegisterSyncProtectionOnDownstreamFn,
+		func(
+			ctx context.Context,
+			downstreamExecutor publication.SQLExecutor,
+			objectMap map[objectio.ObjectId]*publication.ObjectWithTableInfo,
+		) (jobID string, ttlExpireTS int64, retryable bool, err error) {
+			// Return a mock job ID and TTL that won't expire
+			return "mock-sync-protection-job-id", time.Now().Add(time.Hour).UnixNano(), false, nil
+		},
+	)
+	defer syncProtectionStub.Reset()
 
 	// Step 3: Create and start publication executor
 	executorCtx, executorCancel := context.WithCancel(context.Background())

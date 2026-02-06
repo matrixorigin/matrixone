@@ -35,6 +35,18 @@ const (
 
 	// SyncProtectionRenewInterval is the interval for renewing sync protection
 	SyncProtectionRenewInterval = 5 * time.Minute
+)
+
+// RegisterSyncProtectionOnDownstreamFn is a function variable that can be stubbed in tests
+var RegisterSyncProtectionOnDownstreamFn = func(
+	ctx context.Context,
+	downstreamExecutor SQLExecutor,
+	objectMap map[objectio.ObjectId]*ObjectWithTableInfo,
+) (jobID string, ttlExpireTS int64, retryable bool, err error) {
+	return registerSyncProtectionOnDownstreamImpl(ctx, downstreamExecutor, objectMap)
+}
+
+const (
 
 	// BloomFilterExpectedItems is the expected number of items in bloom filter
 	BloomFilterExpectedItems = 100000
@@ -330,6 +342,15 @@ func IsSyncProtectionInvalidError(err error) bool {
 // No retry is performed here - executor already has retry mechanism
 // Returns retryable=true if the error is retriable (GC running, max count reached)
 func RegisterSyncProtectionOnDownstream(
+	ctx context.Context,
+	downstreamExecutor SQLExecutor,
+	objectMap map[objectio.ObjectId]*ObjectWithTableInfo,
+) (jobID string, ttlExpireTS int64, retryable bool, err error) {
+	return RegisterSyncProtectionOnDownstreamFn(ctx, downstreamExecutor, objectMap)
+}
+
+// registerSyncProtectionOnDownstreamImpl is the actual implementation
+func registerSyncProtectionOnDownstreamImpl(
 	ctx context.Context,
 	downstreamExecutor SQLExecutor,
 	objectMap map[objectio.ObjectId]*ObjectWithTableInfo,
