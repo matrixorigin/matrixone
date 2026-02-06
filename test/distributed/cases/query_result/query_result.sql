@@ -4,6 +4,8 @@ create table tt (a int);
 insert into tt values(1), (2);
 /* save_result */select * from tt;
 select * from result_scan(last_query_id()) as u;
+/* save_result */select 1 as AbC, 2 as DeF;
+select * from result_scan(last_query_id()) as u;
 /* save_result */select * from tt;
 set @var = last_query_id();
 prepare st from select count(*) from result_scan(?) as u;
