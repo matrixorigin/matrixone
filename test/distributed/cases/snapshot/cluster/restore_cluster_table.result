@@ -408,7 +408,9 @@ Tables_in_mo_catalog
 mo_account
 mo_branch_metadata
 mo_cache
+mo_ccpr_dbs
 mo_ccpr_log
+mo_ccpr_tables
 mo_cdc_task
 mo_cdc_watermark
 mo_columns
@@ -523,7 +525,9 @@ Tables_in_mo_catalog
 mo_account
 mo_branch_metadata
 mo_cache
+mo_ccpr_dbs
 mo_ccpr_log
+mo_ccpr_tables
 mo_cdc_task
 mo_cdc_watermark
 mo_columns

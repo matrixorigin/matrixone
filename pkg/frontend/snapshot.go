@@ -114,8 +114,8 @@ var (
 		catalog.MO_SUBS:               1,
 		catalog.MO_ISCP_LOG:           1,
 		catalog.MO_CCPR_LOG:           1,
-		catalog.MO_CCPR_TABLES:        1,
-		catalog.MO_CCPR_DBS:           1,
+		catalog.MO_CCPR_TABLES:        0,
+		catalog.MO_CCPR_DBS:           0,
 
 		"mo_sessions":       1,
 		"mo_configurations": 1,

@@ -350,7 +350,7 @@ show table_number from mysql;
 6
 show table_number from mo_catalog;
 ➤ Number of tables in mo_catalog[-5,64,0]  𝄀
-26
+24
 show table_number from system_metrics;
 ➤ Number of tables in system_metrics[-5,64,0]  𝄀
 11
