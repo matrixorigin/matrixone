@@ -9,7 +9,7 @@ show table_number from mysql;
 6
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-46
+44
 show table_number from system;
 [unknown result because it is related to issue#23182]
 use mo_task;
@@ -350,7 +350,7 @@ show table_number from mysql;
 6
 show table_number from mo_catalog;
 ➤ Number of tables in mo_catalog[-5,64,0]  𝄀
-24
+26
 show table_number from system_metrics;
 ➤ Number of tables in system_metrics[-5,64,0]  𝄀
 11
