@@ -56,9 +56,25 @@ show variables like 'interactive_timeout';
 Variable_name    Value
 interactive_timeout    30100
 set global interactive_timeout = 30000+100;
+internal error: the system variable is read only
+show global variables like 'interactive_timeout';
+Variable_name    Value
+interactive_timeout    28800
+set interactive_timeout = 0;
+internal error: invalid input: interactive_timeout must be >= 1
+set interactive_timeout = 1;
 show variables like 'interactive_timeout';
 Variable_name    Value
-interactive_timeout    30100
+interactive_timeout    1
+set interactive_timeout = 86400;
+show variables like 'interactive_timeout';
+Variable_name    Value
+interactive_timeout    86400
+set interactive_timeout = 86401;
+internal error: invalid input: interactive_timeout must be <= 86400
+show variables like 'interactive_timeout';
+Variable_name    Value
+interactive_timeout    86400
 show variables like 'lower%';
 Variable_name    Value
 lower_case_file_system    off
@@ -111,6 +127,21 @@ set wait_timeout = 10;
 show variables like 'wait_timeout';
 Variable_name    Value
 wait_timeout    10
+set wait_timeout = 0;
+internal error: invalid input: wait_timeout must be >= 1
+set wait_timeout = 1;
+show variables like 'wait_timeout';
+Variable_name    Value
+wait_timeout    1
+set wait_timeout = 86400;
+show variables like 'wait_timeout';
+Variable_name    Value
+wait_timeout    86400
+set wait_timeout = 86401;
+internal error: invalid input: wait_timeout must be <= 86400
+show variables like 'wait_timeout';
+Variable_name    Value
+wait_timeout    86400
 drop table if exists t;
 create table t(
 a int,
