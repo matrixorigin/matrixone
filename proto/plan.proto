@@ -1506,6 +1506,8 @@ message DropTable {
   repeated string updateFkSqls = 11;
   // fk child table id that refers to me
   repeated uint64 fkChildTblsReferToMe = 12;
+  // When dropping multiple tables in one statement, per-table details are stored here.
+  repeated DropTable tables = 13;
 }
 
 message CreateView {
