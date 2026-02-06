@@ -1667,13 +1667,14 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		for _, constraint := range ct.Cts {
 			if idxdef, ok := constraint.(*engine.IndexDef); ok && len(idxdef.Indexes) > 0 {
-				err = CreateAllIndexCdcTasks(c, idxdef.Indexes, dbName, tblName, false)
+				tableID := newRelation.GetTableID(c.proc.Ctx)
+				err = CreateAllIndexCdcTasks(c, idxdef.Indexes, dbName, tblName, tableID, false)
 				if err != nil {
 					return err
 				}
 
 				// register index update for IVFFLAT
-				err = CreateAllIndexUpdateTasks(c, idxdef.Indexes, dbName, tblName, newRelation.GetTableID(c.proc.Ctx))
+				err = CreateAllIndexUpdateTasks(c, idxdef.Indexes, dbName, tblName, tableID)
 				if err != nil {
 					return err
 				}

@@ -16,8 +16,10 @@ package compile
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -93,9 +95,44 @@ func checkValidIndexCdc(tableDef *plan.TableDef, indexname string) (bool, error)
 	return false, nil
 }
 
+// isTableInCCPR checks if a table is managed by CCPR (in mo_ccpr_tables)
+// Returns true if the table is in CCPR system, false otherwise
+func isTableInCCPR(c *Compile, tableid uint64) bool {
+	// Check mo_ccpr_tables by tableid
+	querySql := fmt.Sprintf(
+		"SELECT tableid FROM `%s`.`%s` WHERE tableid = %d",
+		catalog.MO_CATALOG,
+		catalog.MO_CCPR_TABLES,
+		tableid,
+	)
+
+	res, err := c.runSqlWithResult(querySql, int32(catalog.System_Account))
+	if err != nil {
+		// If query fails, assume not in CCPR
+		return false
+	}
+	defer res.Close()
+
+	var found bool
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows > 0 {
+			found = true
+		}
+		return false
+	})
+
+	return found
+}
+
 // NOTE: CreateIndexCdcTask will create CDC task without any checking.  Original TableDef may be empty
-func CreateIndexCdcTask(c *Compile, dbname string, tablename string, indexname string, sinker_type int8, startFromNow bool, sql string) error {
+func CreateIndexCdcTask(c *Compile, dbname string, tablename string, tableid uint64, indexname string, sinker_type int8, startFromNow bool, sql string) error {
 	var err error
+
+	// Skip ISCP task creation if table is managed by CCPR
+	if isTableInCCPR(c, tableid) {
+		logutil.Infof("skip creating index cdc task for CCPR table (%s, %s, %s)", dbname, tablename, indexname)
+		return nil
+	}
 
 	spec := &iscp.JobSpec{
 		ConsumerInfo: iscp.ConsumerInfo{ConsumerType: sinker_type,
@@ -185,7 +222,7 @@ func getSinkerTypeFromAlgo(algo string) int8 {
 }
 
 // NOTE: CreateAllIndexCdcTasks will create CDC task according to existing tableDef
-func CreateAllIndexCdcTasks(c *Compile, indexes []*plan.IndexDef, dbname string, tablename string, startFromNow bool) error {
+func CreateAllIndexCdcTasks(c *Compile, indexes []*plan.IndexDef, dbname string, tablename string, tableid uint64, startFromNow bool) error {
 	idxmap := make(map[string]bool)
 	for _, idx := range indexes {
 		_, ok := idxmap[idx.IndexName]
@@ -201,7 +238,7 @@ func CreateAllIndexCdcTasks(c *Compile, indexes []*plan.IndexDef, dbname string,
 		if valid {
 			idxmap[idx.IndexName] = true
 			sinker_type := getSinkerTypeFromAlgo(idx.IndexAlgo)
-			e := CreateIndexCdcTask(c, dbname, tablename, idx.IndexName, sinker_type, startFromNow, "")
+			e := CreateIndexCdcTask(c, dbname, tablename, tableid, idx.IndexName, sinker_type, startFromNow, "")
 			if e != nil {
 				return e
 			}
