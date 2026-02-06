@@ -34,6 +34,14 @@ import (
 
 const bfProbability = 0.001
 
+// exactPkFilterThreshold controls when WaitBloomFilter converts the received
+// unique join keys into an exact "pk IN (...)" filter instead of building a
+// bloom filter. For very small PK sets, bloom filter false positives interact
+// poorly with centroid pruning in IVF pre mode. Keeping this threshold small
+// avoids overly large IN lists while preserving the bloom filter performance
+// path for larger sets. Adjust this number if future workloads show a better cutoff.
+const exactPkFilterThreshold = 100
+
 var runSql = sqlexec.RunSql
 
 // Ivf search index struct to hold the usearch index
@@ -408,25 +416,34 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 		return
 	}
 
-	// get unique keys from hashbuild (also handles RuntimeFilter_IN → ExactPkFilter)
+	// Get raw unique join key bytes from the build side.
 	vecbytes, err := sqlexec.WaitBloomFilter(sqlproc)
 	if err != nil {
 		return
 	}
-
-	// If WaitBloomFilter received a RuntimeFilter_IN message, it set ExactPkFilter.
-	// No bloom filter is needed in that case.
-	if sqlproc.ExactPkFilter != "" {
-		return
-	}
-
 	if len(vecbytes) == 0 {
 		return
 	}
 
+	// Deserialize the unique join keys.
 	keyvec := new(vector.Vector)
 	err = keyvec.UnmarshalBinary(vecbytes)
 	if err != nil {
+		return
+	}
+
+	// Small PK set: build an exact "pk IN (...)" filter instead of bloom filter.
+	// This avoids bloom filter false positives that interact poorly with centroid
+	// pruning in IVF pre mode.
+	if exactPkFilterThreshold > 0 && keyvec.Length() <= exactPkFilterThreshold {
+		exactPk, buildErr := sqlexec.BuildExactPkFilter(sqlproc.GetContext(), keyvec)
+		if buildErr != nil {
+			err = buildErr
+			return
+		}
+		if exactPk != "" {
+			sqlproc.ExactPkFilter = exactPk
+		}
 		return
 	}
 
@@ -592,7 +609,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 
 	var sql string
 	if sqlproc != nil && sqlproc.ExactPkFilter != "" {
-		// Exact PK path: WaitBloomFilter received RuntimeFilter_IN and set ExactPkFilter.
+		// Exact PK path: WaitBloomFilter converted small key set into ExactPkFilter.
 		// Query entries directly by pk list, skip centroid-based filtering.
 		sql = fmt.Sprintf(
 			"SELECT `%s`, %s(`%s`, '%s') as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)",

@@ -71,6 +71,13 @@ func TestWaitBloomFilterForTableFunction(t *testing.T) {
 		require.Nil(t, result)
 	})
 
+	t.Run("return nil when Proc is nil", func(t *testing.T) {
+		sqlproc := &SqlProcess{}
+		result, err := WaitBloomFilter(sqlproc)
+		require.NoError(t, err)
+		require.Nil(t, result)
+	})
+
 	t.Run("return nil when UseBloomFilter is false", func(t *testing.T) {
 		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 		sqlproc := NewSqlProcess(proc)
@@ -94,7 +101,6 @@ func TestWaitBloomFilterForTableFunction(t *testing.T) {
 		tag := int32(100)
 		expectedData := []byte{1, 2, 3, 4, 5}
 
-		// Send a BLOOMFILTER message before calling the function
 		rtMsg := message.RuntimeFilterMessage{
 			Tag:  tag,
 			Typ:  message.RuntimeFilter_BLOOMFILTER,
@@ -109,7 +115,6 @@ func TestWaitBloomFilterForTableFunction(t *testing.T) {
 			},
 		}
 
-		// Use a goroutine to call the function since it blocks
 		done := make(chan bool)
 		var result []byte
 		var err error
@@ -118,7 +123,6 @@ func TestWaitBloomFilterForTableFunction(t *testing.T) {
 			done <- true
 		}()
 
-		// Wait a bit for the message to be received
 		<-done
 
 		require.NoError(t, err)
@@ -126,7 +130,6 @@ func TestWaitBloomFilterForTableFunction(t *testing.T) {
 	})
 
 	t.Run("return nil when no matching message found", func(t *testing.T) {
-		// Create a new process with timeout context for this test
 		testProc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 		mb := message.NewMessageBoard()
 		testProc.SetMessageBoard(mb)
@@ -149,11 +152,9 @@ func TestWaitBloomFilterForTableFunction(t *testing.T) {
 			},
 		}
 
-		// Use context with cancel to avoid blocking forever
 		ctx, cancel := context.WithCancel(context.Background())
 		testProc.Ctx = ctx
 
-		// Cancel context after timeout to avoid blocking forever
 		go func() {
 			time.Sleep(100 * time.Millisecond)
 			cancel()
@@ -168,9 +169,8 @@ func TestWaitBloomFilterForTableFunction(t *testing.T) {
 		}()
 
 		<-done
-		cancel() // Ensure cancel is called even if goroutine finishes early
+		cancel()
 
-		// Should return nil when context is done or no matching message
 		require.NoError(t, err)
 		require.Nil(t, result)
 	})
@@ -213,29 +213,32 @@ func TestWaitBloomFilterForTableFunction(t *testing.T) {
 
 		<-done
 
-		// Should skip the mock message and return the BLOOMFILTER message
+		// Should skip the mock message and return the BLOOMFILTER data
 		require.NoError(t, err)
 		require.Equal(t, expectedData, result)
 	})
 
-	t.Run("set ExactPkFilter when IN message found", func(t *testing.T) {
+	t.Run("skip non-BLOOMFILTER runtime filter types", func(t *testing.T) {
 		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 		mb := message.NewMessageBoard()
 		proc.SetMessageBoard(mb)
 		sqlproc := NewSqlProcess(proc)
 
-		tag := int32(400)
-		vec := vector.NewVec(types.New(types.T_int64, 8, 0))
-		vector.AppendFixed(vec, int64(10), false, proc.Mp())
-		vector.AppendFixed(vec, int64(20), false, proc.Mp())
-		expectedIn, marshalErr := vec.MarshalBinary()
-		require.NoError(t, marshalErr)
+		tag := int32(700)
+		expectedData := []byte{11, 12, 13}
 
-		// Send an IN message
+		// Send a PASS type message first (should be skipped)
+		passMsg := message.RuntimeFilterMessage{
+			Tag: tag,
+			Typ: message.RuntimeFilter_PASS,
+		}
+		message.SendMessage(passMsg, mb)
+
+		// Then send a valid BLOOMFILTER message
 		rtMsg := message.RuntimeFilterMessage{
 			Tag:  tag,
-			Typ:  message.RuntimeFilter_IN,
-			Data: expectedIn,
+			Typ:  message.RuntimeFilter_BLOOMFILTER,
+			Data: expectedData,
 		}
 		message.SendMessage(rtMsg, mb)
 
@@ -256,60 +259,9 @@ func TestWaitBloomFilterForTableFunction(t *testing.T) {
 
 		<-done
 
-		// Should return nil bytes but set ExactPkFilter on sqlproc
+		// Should skip the PASS message and return the BLOOMFILTER data
 		require.NoError(t, err)
-		require.Nil(t, result)
-		require.Equal(t, "10,20", sqlproc.ExactPkFilter)
-	})
-
-	t.Run("IN message takes priority over BLOOMFILTER when received first", func(t *testing.T) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-		mb := message.NewMessageBoard()
-		proc.SetMessageBoard(mb)
-		sqlproc := NewSqlProcess(proc)
-
-		tag := int32(500)
-
-		vec := vector.NewVec(types.New(types.T_int64, 8, 0))
-		vector.AppendFixed(vec, int64(42), false, proc.Mp())
-		inData, marshalErr := vec.MarshalBinary()
-		require.NoError(t, marshalErr)
-
-		// Send IN first, then BLOOMFILTER
-		rtMsg1 := message.RuntimeFilterMessage{
-			Tag:  tag,
-			Typ:  message.RuntimeFilter_IN,
-			Data: inData,
-		}
-		message.SendMessage(rtMsg1, mb)
-
-		rtMsg2 := message.RuntimeFilterMessage{
-			Tag:  tag,
-			Typ:  message.RuntimeFilter_BLOOMFILTER,
-			Data: []byte{11, 12, 13},
-		}
-		message.SendMessage(rtMsg2, mb)
-
-		sqlproc.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{
-			{
-				Tag:            tag,
-				UseBloomFilter: true,
-			},
-		}
-
-		done := make(chan bool)
-		var result []byte
-		var err error
-		go func() {
-			result, err = WaitBloomFilter(sqlproc)
-			done <- true
-		}()
-
-		<-done
-
-		require.NoError(t, err)
-		require.Nil(t, result)
-		require.Equal(t, "42", sqlproc.ExactPkFilter)
+		require.Equal(t, expectedData, result)
 	})
 }
 

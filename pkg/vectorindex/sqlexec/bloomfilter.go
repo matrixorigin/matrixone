@@ -29,12 +29,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
-// WaitBloomFilter blocks until it receives a runtime filter message
-// that matches sqlproc.RuntimeFilterSpecs (if any). It is used when ivf_search acts as probe
-// side in a join and build side produces a runtime filter.
+// WaitBloomFilter blocks until it receives a RuntimeFilter_BLOOMFILTER message
+// that matches sqlproc.RuntimeFilterSpecs (if any). It returns the raw serialized
+// unique join key bytes from the build side.
 //
-// For RuntimeFilter_BLOOMFILTER: returns raw vector bytes (for downstream CBloomFilter processing).
-// For RuntimeFilter_IN: converts the vector to SQL literals, sets sqlproc.ExactPkFilter, returns nil bytes.
+// The caller is responsible for deserializing the bytes and deciding how to use
+// them (e.g. exact pk IN filter vs bloom filter based on its own threshold).
 func WaitBloomFilter(sqlproc *SqlProcess) ([]byte, error) {
 	if sqlproc.Proc == nil {
 		return nil, nil
@@ -63,31 +63,10 @@ func WaitBloomFilter(sqlproc *SqlProcess) ([]byte, error) {
 		if !ok {
 			continue
 		}
-
-		switch m.Typ {
-		case message.RuntimeFilter_BLOOMFILTER:
-			// Raw vector bytes; pass through for downstream CBloomFilter processing.
-			return m.Data, nil
-
-		case message.RuntimeFilter_IN:
-			// Small PK set: unmarshal vector, convert to SQL literal list,
-			// and set ExactPkFilter on sqlproc so that the caller can use
-			// "pk IN (...)" directly instead of centroid-based bloom filter.
-			vec := vector.NewVec(types.T_any.ToType())
-			if err := vec.UnmarshalBinary(m.Data); err != nil {
-				return nil, err
-			}
-			defer vec.Free(sqlproc.Proc.Mp())
-
-			exactPk, err := BuildExactPkFilter(sqlproc.GetContext(), vec)
-			if err != nil {
-				return nil, err
-			}
-			if exactPk != "" {
-				sqlproc.ExactPkFilter = exactPk
-			}
-			return nil, nil
+		if m.Typ != message.RuntimeFilter_BLOOMFILTER {
+			continue
 		}
+		return m.Data, nil
 	}
 
 	return nil, nil
