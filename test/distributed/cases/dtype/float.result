@@ -178,11 +178,16 @@ SELECT id, 1.1 <= id FROM t_float;
 1.1  ¦  1  𝄀
 2.0  ¦  1
 SELECT id, id = 1.1 FROM t_float;
-[unknown result because it is related to issue#3366]
+id	id = 1.1
+1.0	0
+1.1	1
+2.0	0
 SELECT * from t_float WHERE id = 1.1;
-[unknown result because it is related to issue#3366]
+id
+1.1
 SELECT * from t_float WHERE id = 1.1e0;
-[unknown result because it is related to issue#3366]
+id
+1.1
 SELECT * from t_float WHERE id = '1.1';
 ➤ id[7,2,1]  𝄀
 1.1
