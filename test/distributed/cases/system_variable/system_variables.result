@@ -43,10 +43,10 @@ Variable_name    Value
 init_connect    
 show variables like 'interactive%';
 Variable_name    Value
-interactive_timeout    28800
+interactive_timeout    86400
 show variables like 'interactive_timeout';
 Variable_name    Value
-interactive_timeout    28800
+interactive_timeout    86400
 set interactive_timeout = 36600;
 show variables like 'interactive_timeout';
 Variable_name    Value
@@ -59,9 +59,9 @@ set global interactive_timeout = 30000+100;
 internal error: the system variable is read only
 show global variables like 'interactive_timeout';
 Variable_name    Value
-interactive_timeout    28800
+interactive_timeout    86400
 set interactive_timeout = 0;
-internal error: invalid input: interactive_timeout must be >= 1
+internal error: convert to the system variable int type failed
 set interactive_timeout = 1;
 show variables like 'interactive_timeout';
 Variable_name    Value
@@ -71,7 +71,7 @@ show variables like 'interactive_timeout';
 Variable_name    Value
 interactive_timeout    86400
 set interactive_timeout = 86401;
-internal error: invalid input: interactive_timeout must be <= 86400
+invalid input: interactive_timeout must be <= 86400
 show variables like 'interactive_timeout';
 Variable_name    Value
 interactive_timeout    86400
@@ -115,10 +115,10 @@ Variable_name    Value
 transaction_isolation    REPEATABLE-READ
 show variables like 'wait%';
 Variable_name    Value
-wait_timeout    28800
+wait_timeout    86400
 show variables like 'wait_timeout';
 Variable_name    Value
-wait_timeout    28800
+wait_timeout    86400
 set wait_timeout = 33600;
 show variables like 'wait_timeout';
 Variable_name    Value
@@ -128,7 +128,7 @@ show variables like 'wait_timeout';
 Variable_name    Value
 wait_timeout    10
 set wait_timeout = 0;
-internal error: invalid input: wait_timeout must be >= 1
+internal error: convert to the system variable int type failed
 set wait_timeout = 1;
 show variables like 'wait_timeout';
 Variable_name    Value
@@ -138,10 +138,11 @@ show variables like 'wait_timeout';
 Variable_name    Value
 wait_timeout    86400
 set wait_timeout = 86401;
-internal error: invalid input: wait_timeout must be <= 86400
+invalid input: wait_timeout must be <= 86400
 show variables like 'wait_timeout';
 Variable_name    Value
 wait_timeout    86400
+set wait_timeout = 10;
 drop table if exists t;
 create table t(
 a int,
@@ -435,7 +436,7 @@ wait_timeout    10000
 set wait_timeout = default;
 show variables like 'wait_timeout';
 Variable_name    Value
-wait_timeout    28800
+wait_timeout    86400
 show variables like 'character_set_results';
 Variable_name    Value
 character_set_results    utf8

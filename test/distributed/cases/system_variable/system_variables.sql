@@ -87,6 +87,7 @@ set wait_timeout = 86400;
 show variables like 'wait_timeout';
 set wait_timeout = 86401;
 show variables like 'wait_timeout';
+set wait_timeout = 10;
 
 
 drop table if exists t;
