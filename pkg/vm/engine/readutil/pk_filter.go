@@ -54,7 +54,7 @@ func DirectConstructBlockPKFilter(
 func ConstructBlockPKFilter(
 	isFakePK bool,
 	basePKFilter BasePKFilter,
-	bf *bloomfilter.BloomFilter,
+	bf *bloomfilter.CBloomFilter,
 ) (f objectio.BlockReadFilter, err error) {
 	if bf != nil && !bf.Valid() {
 		bf = nil
@@ -172,7 +172,7 @@ func ConstructBlockPKFilter(
 		if cap(sels) < rowCount {
 			sels = make([]int64, 0, rowCount)
 		}
-		bf.Test(vec, func(exist bool, row int) {
+		bf.TestVector(vec, func(exist bool, isnull bool, row int) {
 			if exist && row >= 0 && row < rowCount {
 				sels = append(sels, int64(row))
 			}
@@ -236,7 +236,7 @@ func ConstructBlockPKFilter(
 					rowSet[int(off)] = true
 				}
 			}
-			bf.Test(vec, func(exist bool, row int) {
+			bf.TestVector(vec, func(exist bool, isnull bool, row int) {
 				// Add strict boundary check to prevent index out of range
 				if exist && row >= 0 && row < rowCount && rowSet[row] {
 					exists[row] = true

@@ -534,7 +534,6 @@ drop snapshot sp11;
 
 
 -- b clone a, c clone b, d clone c in the same account
--- @bvt:issue#22363
 drop account if exists acc05;
 create account acc05 admin_name = 'test_account' identified by '111';
 -- @session:id=5&user=acc05:test_account&password=111
@@ -697,5 +696,4 @@ select * from departments;
 show create table departments;
 -- @session
 drop account acc05;
--- @bvt:issue
 show databases;

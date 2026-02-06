@@ -17,7 +17,6 @@ package hashbuild
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -89,9 +88,7 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 			if ctr.hashmapBuilder.InputBatchRowCount > 0 {
 				jm = message.NewJoinMap(ctr.hashmapBuilder.MultiSels, ctr.hashmapBuilder.IntHashMap, ctr.hashmapBuilder.StrHashMap, ctr.hashmapBuilder.DelRows, ctr.hashmapBuilder.Batches.Buf, proc.Mp())
 				jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
-				if hashBuild.NeedBatches {
-					jm.SetRowCount(int64(ctr.hashmapBuilder.InputBatchRowCount))
-				}
+				jm.SetRowCount(int64(ctr.hashmapBuilder.InputBatchRowCount))
 				jm.IncRef(hashBuild.JoinMapRefCnt)
 			}
 
@@ -223,14 +220,8 @@ func (ctr *container) handleRuntimeFilter(hashBuild *HashBuild, proc *process.Pr
 		keyVec := ctr.hashmapBuilder.UniqueJoinKeys[0]
 		rowCount := keyVec.Length()
 
-		// Use common/bloomfilter to build BloomFilter
-		// Reference fuzzyfilter experience, choose different false positive rates based on row count
-		probability := calculateBloomFilterProbability(rowCount)
-
-		bf := bloomfilter.New(int64(rowCount), probability)
-		bf.Add(keyVec)
-
-		data, err := bf.Marshal()
+		// Send UniqueJoinKeys instead of Bloomfilter
+		data, err := keyVec.MarshalBinary()
 		if err != nil {
 			return err
 		}

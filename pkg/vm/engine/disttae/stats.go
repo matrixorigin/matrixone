@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -486,7 +487,7 @@ func (gs *GlobalStats) processLogtail(ctx context.Context, tail *logtail.TableLo
 	// Count meta changes from logtail by checking batch length
 	metaChanges := 0
 	for i := range tail.Commands {
-		if logtailreplay.IsMetaEntry(tail.Commands[i].TableName) {
+		if cmd := tail.Commands[i]; cmd.EntryType == api.Entry_DataObject || logtailreplay.IsMetaEntry(tail.Commands[i].TableName) {
 			if tail.Commands[i].Bat != nil && len(tail.Commands[i].Bat.Vecs) > 0 {
 				metaChanges += int(tail.Commands[i].Bat.Vecs[0].Len)
 			}

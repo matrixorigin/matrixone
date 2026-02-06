@@ -144,7 +144,7 @@ func TestShouldRefreshQuotaConfig(t *testing.T) {
 
 	t.Run("immediate second call should be debounced", func(t *testing.T) {
 		// Simulate a refresh
-		lastQuotaRefreshTime.Store(time.Now().Unix())
+		lastQuotaRefreshTime.Store(time.Now().UnixNano())
 
 		// Immediate call should be blocked
 		if shouldRefreshQuotaConfig() {
@@ -154,7 +154,7 @@ func TestShouldRefreshQuotaConfig(t *testing.T) {
 
 	t.Run("call after debounce period should allow refresh", func(t *testing.T) {
 		// Set last refresh to 2 seconds ago
-		lastQuotaRefreshTime.Store(time.Now().Unix() - 2)
+		lastQuotaRefreshTime.Store(time.Now().UnixNano() - 2*int64(time.Second))
 
 		if !shouldRefreshQuotaConfig() {
 			t.Error("call after debounce period should return true")
@@ -163,7 +163,7 @@ func TestShouldRefreshQuotaConfig(t *testing.T) {
 
 	t.Run("call exactly at debounce boundary should allow refresh", func(t *testing.T) {
 		// Set last refresh to exactly quotaRefreshDebounceSeconds ago
-		lastQuotaRefreshTime.Store(time.Now().Unix() - quotaRefreshDebounceSeconds)
+		lastQuotaRefreshTime.Store(time.Now().UnixNano() - int64(quotaRefreshDebounceSeconds)*int64(time.Second))
 
 		if !shouldRefreshQuotaConfig() {
 			t.Error("call at debounce boundary should return true")
@@ -176,7 +176,7 @@ func TestRefreshQuotaConfigDebounce(t *testing.T) {
 	lastQuotaRefreshTime.Store(0)
 
 	t.Run("refreshQuotaConfig updates timestamp", func(t *testing.T) {
-		before := time.Now().Unix()
+		before := time.Now().UnixNano()
 		refreshQuotaConfig()
 		after := lastQuotaRefreshTime.Load()
 
@@ -241,7 +241,7 @@ func TestDebounceSimulatesK8sScaling(t *testing.T) {
 }
 
 func BenchmarkShouldRefreshQuotaConfig(b *testing.B) {
-	lastQuotaRefreshTime.Store(time.Now().Unix() - 10)
+	lastQuotaRefreshTime.Store(time.Now().UnixNano() - 10*int64(time.Second))
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
