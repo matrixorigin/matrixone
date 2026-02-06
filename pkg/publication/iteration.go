@@ -744,6 +744,9 @@ func RequestUpstreamSnapshot(
 
 	// Execute SQL through upstream executor
 	result, cancel, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, InvalidAccountID, createSnapshotSQL, false, true, time.Minute)
+	if err != nil && strings.Contains(err.Error(), "Duplicate entry") && strings.Contains(err.Error(), "for key 'sname'") {
+		err = nil
+	}
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to create snapshot: %v", err)
 	}
