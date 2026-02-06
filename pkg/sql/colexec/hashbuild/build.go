@@ -234,32 +234,19 @@ func (ctr *container) handleRuntimeFilter(hashBuild *HashBuild, proc *process.Pr
 		rowCount := keyVec.Length()
 
 		if rowCount <= exactPkFilterThreshold {
-			keyVec.InplaceSort()
-			data, err := keyVec.MarshalBinary()
-			if err != nil {
-				return err
-			}
-
 			runtimeFilter.Typ = message.RuntimeFilter_IN
-			runtimeFilter.Card = int32(rowCount)
-			runtimeFilter.Data = data
-			message.SendRuntimeFilter(runtimeFilter, spec, proc.GetMessageBoard())
 			ctr.runtimeFilterIn = true
-			return nil
+		} else {
+			runtimeFilter.Typ = message.RuntimeFilter_BLOOMFILTER
 		}
 
-		// Send UniqueJoinKeys instead of Bloomfilter
 		data, err := keyVec.MarshalBinary()
 		if err != nil {
 			return err
 		}
-
-		runtimeFilter.Typ = message.RuntimeFilter_BLOOMFILTER
 		runtimeFilter.Card = int32(rowCount)
 		runtimeFilter.Data = data
 		message.SendRuntimeFilter(runtimeFilter, spec, proc.GetMessageBoard())
-
-		// UniqueJoinKeys will be released uniformly in defer
 		return nil
 	}
 
