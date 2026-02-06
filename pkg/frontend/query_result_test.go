@@ -294,3 +294,55 @@ func Test_checkPrivilege(t *testing.T) {
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
+
+func TestGetQueryResultMetaKeepsOriginCase(t *testing.T) {
+	ioutil.RunPipelineTest(
+		func() {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			ses := newTestSession(t, ctrl)
+			_ = ses.SetSessionSysVar(context.TODO(), "save_query_result", int8(1))
+			defer ses.Close()
+
+			tenant := &TenantInfo{
+				Tenant:   sysAccountName,
+				TenantID: sysAccountID,
+			}
+			ses.SetTenantInfo(tenant)
+
+			proc := testutil.NewProcess(t)
+			proc.Base.FileService = getPu("").FileService
+			proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
+			ses.GetTxnCompileCtx().execCtx = &ExecCtx{
+				reqCtx: context.TODO(),
+				proc:   proc,
+			}
+
+			colDefs := []*plan.ColDef{
+				{Name: "AbC", Typ: plan.Type{Id: int32(types.T_int8)}},
+				{Name: "DeF", Typ: plan.Type{Id: int32(types.T_int8)}},
+			}
+			ses.rs = &plan.ResultColDef{ResultCols: colDefs}
+
+			testUUID := uuid.NullUUID{}.UUID
+			ses.tStmt = &motrace.StatementInfo{StatementID: testUUID}
+
+			ctx := context.Background()
+			asts, err := parsers.Parse(ctx, dialect.MYSQL, "select 1 as AbC, 2 as DeF", 1)
+			assert.Nil(t, err)
+
+			ses.ast = asts[0]
+			ses.p = &plan.Plan{}
+
+			err = saveMeta(ctx, ses)
+			assert.Nil(t, err)
+
+			retCols, _, err := ses.GetTxnCompileCtx().GetQueryResultMeta(testUUID.String())
+			assert.Nil(t, err)
+			if assert.Equal(t, 2, len(retCols)) {
+				assert.Equal(t, "AbC", retCols[0].Name)
+				assert.Equal(t, "DeF", retCols[1].Name)
+			}
+		})
+}

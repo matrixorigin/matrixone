@@ -88,9 +88,7 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 			if ctr.hashmapBuilder.InputBatchRowCount > 0 {
 				jm = message.NewJoinMap(ctr.hashmapBuilder.MultiSels, ctr.hashmapBuilder.IntHashMap, ctr.hashmapBuilder.StrHashMap, ctr.hashmapBuilder.DelRows, ctr.hashmapBuilder.Batches.Buf, proc.Mp())
 				jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
-				if hashBuild.NeedBatches {
-					jm.SetRowCount(int64(ctr.hashmapBuilder.InputBatchRowCount))
-				}
+				jm.SetRowCount(int64(ctr.hashmapBuilder.InputBatchRowCount))
 				jm.IncRef(hashBuild.JoinMapRefCnt)
 			}
 
