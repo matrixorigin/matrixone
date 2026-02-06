@@ -51,7 +51,7 @@ drop table t1;
 -- 测试用例 1.3: load data 跳过表头
 -- 预期结果: 跳过第一行，导入数据
 drop table if exists t1;
-create temporary table t1(a bigint primary key, b vecf32(3), c varchar(10), d double);
+create temporary table t1(a bigint, b vecf32(3), c varchar(10), d double);
 
 insert into t1 values(1, "[-1,-1,-1]", "aaaa", 1.213);
 insert into t1 values(2, "[-1, -1, 0]", "bbbb", 11.213);

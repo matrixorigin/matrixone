@@ -46,7 +46,7 @@ null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
 127  ¦  32767  ¦  2147483647  ¦  9223372036854775807  ¦  255  ¦  65535  ¦  4294967295  ¦  18446744073709551615
 drop table t1;
 drop table if exists t1;
-create temporary table t1(a bigint primary key, b vecf32(3), c varchar(10), d double);
+create temporary table t1(a bigint, b vecf32(3), c varchar(10), d double);
 insert into t1 values(1, "[-1,-1,-1]", "aaaa", 1.213);
 insert into t1 values(2, "[-1, -1, 0]", "bbbb", 11.213);
 insert into t1 values(3, "[1,1,1]", "cccc", 111.213);
