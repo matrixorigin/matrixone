@@ -130,6 +130,23 @@ const (
 		`SET iteration_state = %d, ` +
 		`cn_uuid = '%s' ` +
 		`WHERE task_id = '%s'`
+
+	// Sync protection SQL templates using mo_ctl internal commands
+	// GC status query: SELECT mo_ctl('dn', 'gc_status', '')
+	// Returns: {"running": bool, "protections": int, "ts": int64}
+	PublicationGCStatusSqlTemplate = `SELECT mo_ctl('dn', 'gc_status', '')`
+
+	// Register sync protection: SELECT mo_ctl('dn', 'register_sync_protection', '{"job_id": "xxx", "bf": "base64...", "ts": 123, "ttl_expire_ts": 456}')
+	// Returns: {"status": "ok"} or {"status": "error", "code": "ErrGCRunning", "message": "..."}
+	PublicationRegisterSyncProtectionSqlTemplate = `SELECT mo_ctl('dn', 'register_sync_protection', '{"job_id": "%s", "bf": "%s", "ts": %d, "ttl_expire_ts": %d}')`
+
+	// Renew sync protection: SELECT mo_ctl('dn', 'renew_sync_protection', '{"job_id": "xxx", "ttl_expire_ts": 456}')
+	// Returns: {"status": "ok"} or {"status": "error", "code": "ErrProtectionNotFound", "message": "..."}
+	PublicationRenewSyncProtectionSqlTemplate = `SELECT mo_ctl('dn', 'renew_sync_protection', '{"job_id": "%s", "ttl_expire_ts": %d}')`
+
+	// Unregister sync protection: SELECT mo_ctl('dn', 'unregister_sync_protection', '{"job_id": "xxx"}')
+	// Returns: {"status": "ok"}
+	PublicationUnregisterSyncProtectionSqlTemplate = `SELECT mo_ctl('dn', 'unregister_sync_protection', '{"job_id": "%s"}')`
 )
 
 const (
@@ -552,6 +569,68 @@ func (b publicationSQLBuilder) UpdateMoCcprLogIterationStateAndCnUuidSQL(
 		iterationState,
 		escapeSQLString(cnUUID),
 		taskID,
+	)
+}
+
+// ------------------------------------------------------------------------------------------------
+// Sync Protection SQL
+// ------------------------------------------------------------------------------------------------
+
+// GCStatusSQL creates SQL for querying GC status
+// Returns: {"running": bool, "protections": int, "ts": int64}
+func (b publicationSQLBuilder) GCStatusSQL() string {
+	return PublicationGCStatusSqlTemplate
+}
+
+// RegisterSyncProtectionSQL creates SQL for registering sync protection
+// Parameters:
+//   - jobID: unique job identifier
+//   - bf: base64 encoded bloom filter
+//   - ts: timestamp from gc_status (for validation)
+//   - ttlExpireTS: TTL expiration timestamp (nanoseconds)
+//
+// Returns: {"status": "ok"} or {"status": "error", "code": "ErrGCRunning", "message": "..."}
+func (b publicationSQLBuilder) RegisterSyncProtectionSQL(
+	jobID string,
+	bf string,
+	ts int64,
+	ttlExpireTS int64,
+) string {
+	return fmt.Sprintf(
+		PublicationRegisterSyncProtectionSqlTemplate,
+		escapeSQLString(jobID),
+		bf, // bf is already base64 encoded, no need to escape
+		ts,
+		ttlExpireTS,
+	)
+}
+
+// RenewSyncProtectionSQL creates SQL for renewing sync protection TTL
+// Parameters:
+//   - jobID: unique job identifier
+//   - ttlExpireTS: new TTL expiration timestamp (nanoseconds)
+//
+// Returns: {"status": "ok"} or {"status": "error", "code": "ErrProtectionNotFound", "message": "..."}
+func (b publicationSQLBuilder) RenewSyncProtectionSQL(
+	jobID string,
+	ttlExpireTS int64,
+) string {
+	return fmt.Sprintf(
+		PublicationRenewSyncProtectionSqlTemplate,
+		escapeSQLString(jobID),
+		ttlExpireTS,
+	)
+}
+
+// UnregisterSyncProtectionSQL creates SQL for unregistering sync protection
+// Parameters:
+//   - jobID: unique job identifier
+//
+// Returns: {"status": "ok"}
+func (b publicationSQLBuilder) UnregisterSyncProtectionSQL(jobID string) string {
+	return fmt.Sprintf(
+		PublicationUnregisterSyncProtectionSqlTemplate,
+		escapeSQLString(jobID),
 	)
 }
 

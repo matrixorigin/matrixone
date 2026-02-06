@@ -255,6 +255,12 @@ func (s *JobStats) ResetTopWriteObjectDurations() {
 type Worker interface {
 	Submit(taskID string, lsn uint64, state int8) error
 	Stop()
+	// RegisterSyncProtection registers a sync protection job for keepalive
+	RegisterSyncProtection(jobID string, ttlExpireTS int64)
+	// UnregisterSyncProtection unregisters a sync protection job
+	UnregisterSyncProtection(jobID string)
+	// GetSyncProtectionTTL returns the current TTL expiration timestamp for a job
+	GetSyncProtectionTTL(jobID string) int64
 }
 
 // FilterObjectWorker is the interface for filter object worker pool
@@ -287,6 +293,12 @@ type WriteObjectJobInfo interface {
 	GetObjectSize() int64
 }
 
+// syncProtectionEntry represents a registered sync protection job
+type syncProtectionEntry struct {
+	jobID       string
+	ttlExpireTS atomic.Int64
+}
+
 type worker struct {
 	cnUUID                   string
 	cnEngine                 engine.Engine
@@ -301,6 +313,12 @@ type worker struct {
 	filterObjectWorker       FilterObjectWorker
 	getChunkWorker           GetChunkWorker
 	writeObjectWorker        WriteObjectWorker
+
+	// Sync protection keepalive management
+	syncProtectionMu      sync.RWMutex
+	syncProtectionJobs    map[string]*syncProtectionEntry
+	syncProtectionTicker  *time.Ticker
+	syncProtectionStarted atomic.Bool
 }
 
 type TaskContext struct {
@@ -325,10 +343,12 @@ func NewWorker(
 		filterObjectWorker:       NewFilterObjectWorker(),
 		getChunkWorker:           NewGetChunkWorker(),
 		writeObjectWorker:        NewWriteObjectWorker(),
+		syncProtectionJobs:       make(map[string]*syncProtectionEntry),
 	}
 	worker.ctx, worker.cancel = context.WithCancel(context.Background())
 	go worker.Run()
 	go worker.RunStatsPrinter()
+	go worker.RunSyncProtectionKeepAlive()
 	return worker
 }
 
@@ -464,6 +484,7 @@ func (w *worker) onItem(taskCtx *TaskContext) {
 		w.filterObjectWorker,
 		w.getChunkWorker,
 		w.writeObjectWorker,
+		w,   // syncProtectionWorker (pass worker itself for keepalive management)
 		nil, // sqlExecutorRetryOpt (use default)
 	)
 	// Task failure is usually caused by CN UUID or LSN validation errors.
@@ -492,6 +513,190 @@ func (w *worker) Stop() {
 	if w.writeObjectWorker != nil {
 		w.writeObjectWorker.Stop()
 	}
+	// Stop sync protection ticker
+	if w.syncProtectionTicker != nil {
+		w.syncProtectionTicker.Stop()
+	}
+}
+
+// ============================================================================
+// Sync Protection KeepAlive Management
+// ============================================================================
+
+// RunSyncProtectionKeepAlive runs a single goroutine that manages keepalive for all registered sync protection jobs
+func (w *worker) RunSyncProtectionKeepAlive() {
+	w.syncProtectionTicker = time.NewTicker(SyncProtectionRenewInterval)
+	w.syncProtectionStarted.Store(true)
+	defer w.syncProtectionTicker.Stop()
+
+	for {
+		select {
+		case <-w.ctx.Done():
+			logutil.Info("ccpr-worker sync protection keepalive stopped due to context cancellation")
+			return
+		case <-w.syncProtectionTicker.C:
+			w.renewAllSyncProtections()
+		}
+	}
+}
+
+// renewAllSyncProtections renews TTL for all registered sync protection jobs
+func (w *worker) renewAllSyncProtections() {
+	w.syncProtectionMu.RLock()
+	jobs := make([]*syncProtectionEntry, 0, len(w.syncProtectionJobs))
+	for _, job := range w.syncProtectionJobs {
+		jobs = append(jobs, job)
+	}
+	w.syncProtectionMu.RUnlock()
+
+	if len(jobs) == 0 {
+		return
+	}
+
+	// Create an internal SQL executor for renewal operations
+	executor, err := NewInternalSQLExecutor(
+		w.cnUUID,
+		w.cnTxnClient,
+		w.cnEngine,
+		catalog.System_Account,
+		&SQLExecutorRetryOption{
+			MaxRetries:    DefaultSQLExecutorRetryOption().MaxRetries,
+			RetryInterval: DefaultSQLExecutorRetryOption().RetryInterval,
+			Classifier:    NewDownstreamCommitClassifier(),
+		},
+		true,
+	)
+	if err != nil {
+		logutil.Warn("ccpr-worker failed to create executor for sync protection renewal",
+			zap.Error(err),
+		)
+		return
+	}
+	defer executor.Close()
+
+	var jobsToRemove []string
+
+	for _, job := range jobs {
+		newTTLExpireTS := time.Now().UnixNano()
+		err := w.renewSyncProtectionWithRetry(executor, job.jobID, newTTLExpireTS)
+		if err != nil {
+			// Handle specific errors - non-retryable errors
+			if IsSyncProtectionNotFoundError(err) || IsSyncProtectionSoftDeleteError(err) ||
+				IsSyncProtectionInvalidError(err) {
+				// Job no longer exists or invalid, remove from worker
+				logutil.Warn("ccpr-worker sync protection not found/soft deleted/invalid, removing from keepalive",
+					zap.String("job_id", job.jobID),
+					zap.Error(err),
+				)
+				jobsToRemove = append(jobsToRemove, job.jobID)
+			} else {
+				// Retryable errors (GC running, max count) were already retried
+				// Just log and continue, will retry in next interval
+				logutil.Warn("ccpr-worker sync protection renew failed after retries",
+					zap.String("job_id", job.jobID),
+					zap.Error(err),
+				)
+			}
+		} else {
+			job.ttlExpireTS.Store(newTTLExpireTS)
+			logutil.Debug("ccpr-worker sync protection renewed",
+				zap.String("job_id", job.jobID),
+				zap.Int64("new_ttl_expire_ts", newTTLExpireTS),
+			)
+		}
+	}
+
+	// Remove jobs that are no longer valid
+	if len(jobsToRemove) > 0 {
+		w.syncProtectionMu.Lock()
+		for _, jobID := range jobsToRemove {
+			delete(w.syncProtectionJobs, jobID)
+			logutil.Info("ccpr-worker removed invalid sync protection job",
+				zap.String("job_id", jobID),
+			)
+		}
+		w.syncProtectionMu.Unlock()
+	}
+}
+
+// renewSyncProtectionWithRetry renews sync protection with retry for retryable errors
+// Retryable errors: GC is running, max count reached
+// Non-retryable errors: not found, soft deleted, invalid
+func (w *worker) renewSyncProtectionWithRetry(executor SQLExecutor, jobID string, newTTLExpireTS int64) error {
+	const maxRetries = 3
+	const retryInterval = 10 * time.Second
+
+	var lastErr error
+	for i := 0; i < maxRetries; i++ {
+		err := RenewSyncProtection(w.ctx, executor, jobID, newTTLExpireTS)
+		if err == nil {
+			return nil
+		}
+
+		lastErr = err
+
+		// Check if error is retryable
+		if IsGCRunningError(err) || IsSyncProtectionMaxCountError(err) {
+			logutil.Warn("ccpr-worker sync protection renew retryable error, will retry",
+				zap.String("job_id", jobID),
+				zap.Int("attempt", i+1),
+				zap.Int("max_retries", maxRetries),
+				zap.Error(err),
+			)
+			// Wait before retry
+			select {
+			case <-w.ctx.Done():
+				return w.ctx.Err()
+			case <-time.After(retryInterval):
+			}
+			continue
+		}
+
+		// Non-retryable error, return immediately
+		return err
+	}
+
+	return lastErr
+}
+
+// RegisterSyncProtection registers a sync protection job for keepalive
+func (w *worker) RegisterSyncProtection(jobID string, ttlExpireTS int64) {
+	w.syncProtectionMu.Lock()
+	defer w.syncProtectionMu.Unlock()
+
+	entry := &syncProtectionEntry{
+		jobID: jobID,
+	}
+	entry.ttlExpireTS.Store(ttlExpireTS)
+	w.syncProtectionJobs[jobID] = entry
+
+	logutil.Info("ccpr-worker registered sync protection",
+		zap.String("job_id", jobID),
+		zap.Int64("ttl_expire_ts", ttlExpireTS),
+	)
+}
+
+// UnregisterSyncProtection unregisters a sync protection job
+func (w *worker) UnregisterSyncProtection(jobID string) {
+	w.syncProtectionMu.Lock()
+	defer w.syncProtectionMu.Unlock()
+
+	delete(w.syncProtectionJobs, jobID)
+
+	logutil.Info("ccpr-worker unregistered sync protection",
+		zap.String("job_id", jobID),
+	)
+}
+
+// GetSyncProtectionTTL returns the current TTL expiration timestamp for a job
+func (w *worker) GetSyncProtectionTTL(jobID string) int64 {
+	w.syncProtectionMu.RLock()
+	defer w.syncProtectionMu.RUnlock()
+
+	if entry, exists := w.syncProtectionJobs[jobID]; exists {
+		return entry.ttlExpireTS.Load()
+	}
+	return 0
 }
 
 func (w *worker) updateIterationState(ctx context.Context, taskID string, iterationState int8) error {

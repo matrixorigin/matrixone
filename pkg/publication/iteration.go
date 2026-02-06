@@ -1052,6 +1052,7 @@ func ExecuteIteration(
 	filterObjectWorker FilterObjectWorker,
 	getChunkWorker GetChunkWorker,
 	writeObjectWorker WriteObjectWorker,
+	syncProtectionWorker Worker,
 	sqlExecutorRetryOpts ...*SQLExecutorRetryOption,
 ) (err error) {
 	var iterationCtx *IterationContext
@@ -1321,6 +1322,119 @@ func ExecuteIteration(
 		err = moerr.NewInternalErrorf(ctx, "failed to get object list map: %v", err)
 		return
 	}
+
+	// ============================================================================
+	// Sync Protection: Register protection with downstream GC
+	// ============================================================================
+	var currentTTLExpireTS int64
+	var syncProtectionJobID string
+	syncProtectionRegistered := false
+
+	// Register sync protection on downstream with retry for retryable errors
+	// Retryable errors: GC is running, max count reached
+	const syncProtectionMaxRetries = 5
+	const syncProtectionRetryInterval = 10 * time.Second
+	for attempt := 0; attempt < syncProtectionMaxRetries; attempt++ {
+		var syncProtectionRetryable bool
+		syncProtectionJobID, currentTTLExpireTS, syncProtectionRetryable, err = RegisterSyncProtectionOnDownstream(
+			ctx,
+			iterationCtx.LocalExecutor,
+			objectMap,
+		)
+		if err == nil {
+			break // Success
+		}
+		if !syncProtectionRetryable {
+			// Non-retryable error, return immediately
+			err = moerr.NewInternalErrorf(ctx, "failed to register sync protection on downstream: %v", err)
+			return
+		}
+		// Retryable error, log and retry
+		logutil.Warn("ccpr-iteration sync protection registration retryable error, will retry",
+			zap.String("task_id", iterationCtx.TaskID),
+			zap.Int("attempt", attempt+1),
+			zap.Int("max_retries", syncProtectionMaxRetries),
+			zap.Error(err),
+		)
+		if attempt < syncProtectionMaxRetries-1 {
+			select {
+			case <-ctx.Done():
+				err = ctx.Err()
+				return
+			case <-time.After(syncProtectionRetryInterval):
+			}
+		}
+	}
+	if err != nil {
+		err = moerr.NewInternalErrorf(ctx, "failed to register sync protection on downstream after %d retries: %v", syncProtectionMaxRetries, err)
+		return
+	}
+	syncProtectionRegistered = true
+
+	logutil.Info("ccpr-iteration registered sync protection on downstream",
+		zap.String("task_id", iterationCtx.TaskID),
+		zap.String("job_id", syncProtectionJobID),
+		zap.Int64("ttl_expire_ts", currentTTLExpireTS),
+	)
+
+	// Register sync protection job with the worker for keepalive management
+	if syncProtectionWorker != nil {
+		syncProtectionWorker.RegisterSyncProtection(syncProtectionJobID, currentTTLExpireTS)
+	}
+
+	// Create TTL checker function for ApplyObjects and jobs
+	// This function checks if sync protection TTL has expired, returns true if expired
+	// If current time exceeds TTL by more than SyncProtectionTTLDuration, it means
+	// the worker's renewal failed to update in time
+	ttlChecker := func() bool {
+		// Get latest TTL from worker (may have been renewed)
+		checkTTL := currentTTLExpireTS
+		if syncProtectionWorker != nil {
+			if ttl := syncProtectionWorker.GetSyncProtectionTTL(syncProtectionJobID); ttl > 0 {
+				checkTTL = ttl
+			}
+		}
+		now := time.Now().UnixNano()
+		// Check if current time exceeds the TTL by more than one full TTL duration
+		// This means the renewal completely failed
+		if now > checkTTL+int64(SyncProtectionTTLDuration) {
+			logutil.Warn("ccpr-iteration sync protection TTL severely expired (past renewal window)",
+				zap.String("task_id", iterationCtx.TaskID),
+				zap.String("job_id", syncProtectionJobID),
+				zap.Int64("ttl_expire_ts", checkTTL),
+				zap.Int64("current_ts", now),
+				zap.Int64("exceeded_by_ns", now-checkTTL),
+			)
+			return true
+		}
+		return false
+	}
+
+	// Defer: only unregister on failure, not on success
+	defer func() {
+		// Unregister from worker's keepalive management
+		if syncProtectionWorker != nil {
+			syncProtectionWorker.UnregisterSyncProtection(syncProtectionJobID)
+		}
+
+		// Only unregister from downstream GC if registered AND there was an error (rollback or commit failure)
+		// If err == nil (commit success), do NOT unregister from downstream
+		if syncProtectionRegistered && err != nil {
+			if unregErr := UnregisterSyncProtection(ctx, iterationCtx.LocalExecutor, syncProtectionJobID); unregErr != nil {
+				logutil.Warn("ccpr-iteration failed to unregister sync protection",
+					zap.String("task_id", iterationCtx.TaskID),
+					zap.String("job_id", syncProtectionJobID),
+					zap.Error(unregErr),
+				)
+			} else {
+				logutil.Info("ccpr-iteration unregistered sync protection due to error",
+					zap.String("task_id", iterationCtx.TaskID),
+					zap.String("job_id", syncProtectionJobID),
+				)
+			}
+		}
+	}()
+
 	err = ApplyObjects(
 		ctx,
 		iterationCtx.TaskID,
@@ -1341,11 +1455,34 @@ func ExecuteIteration(
 		iterationCtx.SubscriptionName,
 		cnEngine.(*disttae.Engine).GetCCPRTxnCache(),
 		iterationCtx.AObjectMap,
+		ttlChecker,
 	)
 	if err != nil {
-		err = moerr.NewInternalErrorf(ctx, "failed to apply object list: %v", err)
+		if err == ErrSyncProtectionTTLExpired {
+			// TTL expired error from job
+			err = moerr.NewInternalErrorNoCtx("sync protection TTL expired during apply objects, please retry")
+		} else {
+			err = moerr.NewInternalErrorf(ctx, "failed to apply object list: %v", err)
+		}
 		return
 	}
+
+	// Check TTL before commit - use the latest TTL from the worker (may have been renewed)
+	if syncProtectionWorker != nil {
+		if ttl := syncProtectionWorker.GetSyncProtectionTTL(syncProtectionJobID); ttl > 0 {
+			currentTTLExpireTS = ttl
+		}
+	}
+	if time.Now().UnixNano() > currentTTLExpireTS {
+		err = moerr.NewInternalErrorNoCtx("sync protection TTL expired before commit, please retry")
+		return
+	}
+
+	logutil.Info("ccpr-iteration sync protection check passed before commit",
+		zap.String("task_id", iterationCtx.TaskID),
+		zap.Int64("ttl_expire_ts", currentTTLExpireTS),
+		zap.Int64("current_time", time.Now().UnixNano()),
+	)
 
 	return
 }

@@ -386,6 +386,10 @@ type FilterObjectJobResult struct {
 	DownstreamStats objectio.ObjectStats
 }
 
+// TTLChecker is a function type for checking if sync protection TTL has expired
+// Returns true if TTL has expired and the job should abort
+type TTLChecker func() bool
+
 // FilterObjectJob is a job for filtering an object
 type FilterObjectJob struct {
 	ctx                     context.Context
@@ -402,6 +406,7 @@ type FilterObjectJob struct {
 	ccprCache               CCPRTxnCacheWriter
 	txnID                   []byte
 	aobjectMap              AObjectMap // Used for tombstone rowid rewriting
+	ttlChecker              TTLChecker // TTL expiration checker
 	result                  chan *FilterObjectJobResult
 }
 
@@ -421,6 +426,7 @@ func NewFilterObjectJob(
 	ccprCache CCPRTxnCacheWriter,
 	txnID []byte,
 	aobjectMap AObjectMap,
+	ttlChecker TTLChecker,
 ) *FilterObjectJob {
 	return &FilterObjectJob{
 		ctx:                     ctx,
@@ -437,13 +443,25 @@ func NewFilterObjectJob(
 		ccprCache:               ccprCache,
 		txnID:                   txnID,
 		aobjectMap:              aobjectMap,
+		ttlChecker:              ttlChecker,
 		result:                  make(chan *FilterObjectJobResult, 1),
 	}
 }
 
+// ErrSyncProtectionTTLExpired is returned when sync protection TTL has expired
+var ErrSyncProtectionTTLExpired = moerr.NewInternalErrorNoCtx("sync protection TTL expired")
+
 // Execute runs the FilterObjectJob
 func (j *FilterObjectJob) Execute() {
 	res := &FilterObjectJobResult{}
+
+	// Check TTL before starting
+	if j.ttlChecker != nil && j.ttlChecker() {
+		res.Err = ErrSyncProtectionTTLExpired
+		j.result <- res
+		return
+	}
+
 	filterResult, err := FilterObject(
 		j.ctx,
 		j.objectStatsBytes,
@@ -459,6 +477,7 @@ func (j *FilterObjectJob) Execute() {
 		j.ccprCache,
 		j.txnID,
 		j.aobjectMap,
+		j.ttlChecker,
 	)
 	res.Err = err
 	if filterResult != nil {
@@ -495,10 +514,11 @@ type FilterObjectResult struct {
 // Input: object stats (as bytes), snapshot TS, and whether it's an aobj (checked from object stats)
 // For aobj: gets object file, converts to batch, filters by snapshot TS, creates new object
 // The mapping between new UUID and upstream aobj is stored in ccprCache.aobjectMap
-// For nobj: writes directly to fileservice
+// For nobj: writes directly to fileservice with new UUID
 // ccprCache: optional CCPR transaction cache for atomic write and registration (can be nil)
 // txnID: transaction ID for CCPR cache registration (can be nil)
 // aobjectMap: mapping from upstream aobj to downstream object stats (used for tombstone rowid rewriting)
+// ttlChecker: optional function to check if sync protection TTL has expired (can be nil)
 func FilterObject(
 	ctx context.Context,
 	objectStatsBytes []byte,
@@ -514,7 +534,13 @@ func FilterObject(
 	ccprCache CCPRTxnCacheWriter,
 	txnID []byte,
 	aobjectMap AObjectMap,
+	ttlChecker TTLChecker,
 ) (*FilterObjectResult, error) {
+	// Check TTL before processing
+	if ttlChecker != nil && ttlChecker() {
+		return nil, ErrSyncProtectionTTLExpired
+	}
+
 	if len(objectStatsBytes) != objectio.ObjectStatsLen {
 		return nil, moerr.NewInternalErrorf(ctx, "invalid object stats length: expected %d, got %d", objectio.ObjectStatsLen, len(objectStatsBytes))
 	}
@@ -527,10 +553,10 @@ func FilterObject(
 	isAObj := stats.GetAppendable()
 	if isAObj {
 		// Handle appendable object
-		return filterAppendableObject(ctx, &stats, snapshotTS, upstreamExecutor, localFS, isTombstone, mp, getChunkWorker, subscriptionAccountName, pubName, aobjectMap)
+		return filterAppendableObject(ctx, &stats, snapshotTS, upstreamExecutor, localFS, isTombstone, mp, getChunkWorker, subscriptionAccountName, pubName, aobjectMap, ttlChecker)
 	} else {
 		// Handle non-appendable object - write directly to fileservice with new UUID
-		newStats, err := filterNonAppendableObject(ctx, &stats, upstreamExecutor, localFS, getChunkWorker, writeObjectWorker, subscriptionAccountName, pubName, ccprCache, txnID)
+		newStats, err := filterNonAppendableObject(ctx, &stats, upstreamExecutor, localFS, getChunkWorker, writeObjectWorker, subscriptionAccountName, pubName, ccprCache, txnID, ttlChecker)
 		if err != nil {
 			return nil, err
 		}
@@ -557,7 +583,13 @@ func filterAppendableObject(
 	subscriptionAccountName string,
 	pubName string,
 	aobjectMap AObjectMap,
+	ttlChecker TTLChecker,
 ) (*FilterObjectResult, error) {
+	// Check TTL before processing
+	if ttlChecker != nil && ttlChecker() {
+		return nil, ErrSyncProtectionTTLExpired
+	}
+
 	// Get object name from stats (upstream aobj UUID)
 	upstreamAObjUUID := stats.ObjectName().ObjectId()
 
@@ -565,6 +597,11 @@ func filterAppendableObject(
 	objectContent, err := GetObjectFromUpstreamWithWorker(ctx, upstreamExecutor, stats.ObjectName().String(), getChunkWorker, subscriptionAccountName, pubName)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to get object from upstream: %v", err)
+	}
+
+	// Check TTL after getting object
+	if ttlChecker != nil && ttlChecker() {
+		return nil, ErrSyncProtectionTTLExpired
 	}
 
 	// Extract sortkey from original object metadata
@@ -718,7 +755,13 @@ func filterNonAppendableObject(
 	pubName string,
 	ccprCache CCPRTxnCacheWriter,
 	txnID []byte,
+	ttlChecker TTLChecker,
 ) (objectio.ObjectStats, error) {
+	// Check TTL before processing
+	if ttlChecker != nil && ttlChecker() {
+		return objectio.ObjectStats{}, ErrSyncProtectionTTLExpired
+	}
+
 	// Get upstream object name from stats
 	upstreamObjectName := stats.ObjectName().String()
 
@@ -726,6 +769,11 @@ func filterNonAppendableObject(
 	objectContent, err := GetObjectFromUpstreamWithWorker(ctx, upstreamExecutor, upstreamObjectName, getChunkWorker, subscriptionAccountName, pubName)
 	if err != nil {
 		return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to get object from upstream: %v", err)
+	}
+
+	// Check TTL after getting object
+	if ttlChecker != nil && ttlChecker() {
+		return objectio.ObjectStats{}, ErrSyncProtectionTTLExpired
 	}
 
 	// Use WriteObjectJob to write to fileservice via worker pool
@@ -1578,7 +1626,12 @@ func ApplyObjects(
 	pubName string,
 	ccprCache CCPRTxnCacheWriter,
 	aobjectMap AObjectMap,
+	ttlChecker TTLChecker,
 ) (err error) {
+	// Check TTL before starting
+	if ttlChecker != nil && ttlChecker() {
+		return ErrSyncProtectionTTLExpired
+	}
 
 	var collectedTombstoneDeleteStats []*ObjectWithTableInfo
 	var collectedTombstoneInsertStats []*ObjectWithTableInfo
@@ -1614,7 +1667,7 @@ func ApplyObjects(
 		if !info.Delete {
 			statsBytes := info.Stats.Marshal()
 			// Data objects don't need aobjectMap for rewriting, pass nil
-			filterJob := NewFilterObjectJob(ctx, statsBytes, currentTS, upstreamExecutor, false, fs, mp, getChunkWorker, writeObjectWorker, subscriptionAccountName, pubName, ccprCache, txnID, nil)
+			filterJob := NewFilterObjectJob(ctx, statsBytes, currentTS, upstreamExecutor, false, fs, mp, getChunkWorker, writeObjectWorker, subscriptionAccountName, pubName, ccprCache, txnID, nil, ttlChecker)
 			if filterObjectWorker != nil {
 				filterObjectWorker.SubmitFilterObject(filterJob)
 			} else {
@@ -1717,7 +1770,7 @@ func ApplyObjects(
 		if !info.Delete {
 			statsBytes := info.Stats.Marshal()
 			// Tombstone objects need aobjectMap for rowid rewriting
-			filterJob := NewFilterObjectJob(ctx, statsBytes, currentTS, upstreamExecutor, true, fs, mp, getChunkWorker, writeObjectWorker, subscriptionAccountName, pubName, ccprCache, txnID, aobjectMap)
+			filterJob := NewFilterObjectJob(ctx, statsBytes, currentTS, upstreamExecutor, true, fs, mp, getChunkWorker, writeObjectWorker, subscriptionAccountName, pubName, ccprCache, txnID, aobjectMap, ttlChecker)
 			if filterObjectWorker != nil {
 				filterObjectWorker.SubmitFilterObject(filterJob)
 			} else {

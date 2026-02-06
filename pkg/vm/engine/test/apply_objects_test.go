@@ -515,6 +515,8 @@ func runApplyObjects(
 	currentTS := types.TimestampToTS(disttaeEngine.Now())
 	// Use mock localExecutor that returns empty results for appendable object queries
 	localExecutor := &mockLocalExecutor{}
+	// Mock TTL checker that always returns false (TTL not expired)
+	mockTTLChecker := func() bool { return false }
 	err = publication.ApplyObjects(
 		ctxWithTimeout,
 		taskID,
@@ -535,6 +537,7 @@ func runApplyObjects(
 		"",                          // pubName
 		nil,                         // ccprCache
 		publication.NewAObjectMap(), // aobjectMap
+		mockTTLChecker,              // ttlChecker - always pass
 	)
 	require.NoError(t, err)
 
