@@ -16,6 +16,7 @@ package taskservice
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -63,9 +64,9 @@ func TestRetryScheduleCronTask(t *testing.T) {
 // even after all retry attempts.
 func TestRetryScheduleCronTaskAllFailed(t *testing.T) {
 	runScheduleCronTaskTest(t, func(store *memTaskStorage, s *taskService, ctx context.Context) {
-		failCount := 0
+		var failCount atomic.Int32
 		store.preUpdateCron = func() error {
-			failCount++
+			failCount.Add(1)
 			// Always return error to simulate persistent database failure
 			return moerr.NewInfo(context.TODO(), "persistent database error")
 		}
@@ -79,7 +80,7 @@ func TestRetryScheduleCronTaskAllFailed(t *testing.T) {
 		time.Sleep(time.Second * 10)
 
 		// Verify that retries were attempted (should be cronTaskTriggerMaxRetries = 3)
-		assert.GreaterOrEqual(t, failCount, cronTaskTriggerMaxRetries,
+		assert.GreaterOrEqual(t, int(failCount.Load()), cronTaskTriggerMaxRetries,
 			"should have attempted at least %d retries", cronTaskTriggerMaxRetries)
 
 		// Verify that no async task was created due to persistent failure
