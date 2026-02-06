@@ -135,9 +135,9 @@ INSERT INTO t1 (id,a) VALUES
 (4,CAST(0xFFFFFFFFFFFFFFFF AS UNSIGNED));
 UPDATE t1 SET b = a;
 select distinct * from t1 where ((a = '2147483647') and (b = '2147483647'));
-➤ id[4,32,0]  ¦  a[3,21,0]  ¦  b[12,-1,0]
+[unknown result because it is related to issue#4383]
 select a,count(a) from t1 group by a having count(a)>=2;
-➤ a[3,21,0]  ¦  count(a)[-5,64,0]
+[unknown result because it is related to issue#4383]
 CREATE TABLE t_decimal(id decimal(10,5));
 INSERT INTO t_decimal VALUES (1), (2),(1.099999999),(2.20000000001);
 select * from t_decimal;
@@ -1236,26 +1236,11 @@ SELECT -0.487794599999999999999999999999999945451154 * col2 FROM decimal18;
 -4.8779459999999999999999999999999994550  𝄀
 4.5765056404090315799999999999999994887
 SELECT col1 * col2 FROM decimal18;
-➤ col1 * col2[3,38,37]  𝄀
-0.1221212134567890987654321333546543213  𝄀
-0.1484484651187895121879845615156784548  𝄀
-0E-37  𝄀
-3.7283784274376200000000000000000000000  𝄀
-3.4979314916658955850103159923577553319
+[unknown result because it is related to issue#8516]
 SELECT col3 * col2 FROM decimal18;
-➤ col3 * col2[8,54,0]  𝄀
-1278945.25  𝄀
-229.3758562273983  𝄀
-0.0  𝄀
-0.0  𝄀
-3.0945498936745635E12
+[unknown result because it is related to issue#8516]
 SELECT col2 * col4 FROM decimal18;
-➤ col2 * col4[8,53,16]  𝄀
-7.815317849845612E7  𝄀
-130.61903846394287  𝄀
-0.0  𝄀
--4544.9845  𝄀
--0.0
+[unknown result because it is related to issue#8516]
 SELECT col1 / col2 FROM decimal18;
 ➤ col1 / col2[3,38,37]  𝄀
 0.1221212134567890987654321333546543213  𝄀

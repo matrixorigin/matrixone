@@ -1,4 +1,3 @@
--- @skip:issue#7889
 drop database if exists test_temporary;
 create database test_temporary;
 use test_temporary;
@@ -13,7 +12,6 @@ col7 int unsigned,
 col8 bigint unsigned
 );
 
--- @bvt:issue#7875
 -- load data
 load data infile '$resources/load_data/integer_numbers_1.csv' into table t1 fields terminated by ',';
 select * from t1;
@@ -31,4 +29,3 @@ load data infile '$resources/load_data/integer_numbers_2.csv' into table t1 fiel
 select * from t1;
 delete from t1;
 drop table t1;
--- @bvt:issue

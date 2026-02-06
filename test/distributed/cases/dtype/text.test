@@ -80,12 +80,11 @@ INSERT INTO t1 VALUES ('1',3);
 update t1 set a='a' where a='1';
 select * from t1;
 drop table t1;
--- @bvt:issue#4538
 create table t1 (
 a text not null,
 b text not null default '0'
 );
--- @bvt:issue
+drop table t1;
 create table t1 (a text primary key, b varchar(32));
 create table t1 (a text, index index_test(a));
 create table t1 (a tinytext);

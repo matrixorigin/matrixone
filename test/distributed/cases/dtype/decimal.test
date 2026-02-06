@@ -109,7 +109,6 @@ SELECT * from t_decimal WHERE id BETWEEN '1.1e0' AND '1.9e0';
 drop table t1;
 CREATE TABLE t1 (a decimal(2,1));
 INSERT INTO t1 VALUES (1),(0.8999),(0.9);
--- @bvt:issue#3185
 SELECT * FROM t1 WHERE coalesce(a) BETWEEN 0 and 0.9;
 SELECT * FROM t1 WHERE coalesce(a)=0.9;
 SELECT * FROM t1 WHERE coalesce(a) in (0.8,0.9);
