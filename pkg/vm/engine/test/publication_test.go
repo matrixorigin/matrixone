@@ -88,51 +88,6 @@ func (h *checkpointUTHelper) OnSQLExecFailed(ctx context.Context, query string, 
 	return nil
 }
 
-// mockSyncProtectionWorker implements publication.Worker for unit testing
-// It provides a mock implementation that always succeeds
-type mockSyncProtectionWorker struct {
-	mu         sync.Mutex
-	jobs       map[string]int64 // jobID -> ttlExpireTS
-	registered []string         // Track registered jobs for verification
-}
-
-func newMockSyncProtectionWorker() *mockSyncProtectionWorker {
-	return &mockSyncProtectionWorker{
-		jobs: make(map[string]int64),
-	}
-}
-
-func (w *mockSyncProtectionWorker) Submit(taskID string, lsn uint64, state int8) error {
-	// No-op for mock
-	return nil
-}
-
-func (w *mockSyncProtectionWorker) Stop() {
-	// No-op for mock
-}
-
-func (w *mockSyncProtectionWorker) RegisterSyncProtection(jobID string, ttlExpireTS int64) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.jobs[jobID] = ttlExpireTS
-	w.registered = append(w.registered, jobID)
-}
-
-func (w *mockSyncProtectionWorker) UnregisterSyncProtection(jobID string) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	delete(w.jobs, jobID)
-}
-
-func (w *mockSyncProtectionWorker) GetSyncProtectionTTL(jobID string) int64 {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if ttl, ok := w.jobs[jobID]; ok {
-		return ttl
-	}
-	return 0
-}
-
 func TestCheckIterationStatus(t *testing.T) {
 	catalog.SetupDefines("")
 
