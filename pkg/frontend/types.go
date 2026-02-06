@@ -1030,6 +1030,10 @@ func (ses *feSessionImpl) GetGlobalSysVar(name string) (interface{}, error) {
 		return nil, moerr.NewInternalErrorNoCtx(errorSystemVariableIsSession())
 	}
 
+	// If global vars have not been initialized, fall back to default.
+	if ses.gSysVars == nil {
+		return gSysVarsDefs[name].Default, nil
+	}
 	return ses.gSysVars.Get(name), nil
 }
 
