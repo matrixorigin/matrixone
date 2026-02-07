@@ -36,40 +36,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/format"
 )
-
-func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Process, bat *batch.Batch) error {
-	_, span := trace.Start(ctx, "scanParquetFile")
-	defer span.End()
-
-	if param.parqh == nil {
-		var err error
-		param.parqh, err = newParquetHandler(param)
-		if err != nil {
-			return err
-		}
-		// Empty file handling: newParquetHandler returns (nil, nil) for empty files.
-		// Mark file as finished to allow multi-file loading to proceed correctly.
-		if param.parqh == nil {
-			param.Fileparam.FileFin++
-			if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
-				param.Fileparam.End = true
-			}
-			return nil
-		}
-	}
-
-	// With cached page iterators, we read up to maxParquetBatchCnt rows per call.
-	// The iterator automatically tracks position, so no need to calculate offset-based batchCnt.
-	param.parqh.batchCnt = maxParquetBatchCnt
-
-	return param.parqh.getData(bat, param, proc)
-}
 
 var maxParquetBatchCnt int64 = 100000
 
@@ -1883,11 +1854,7 @@ func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, p
 				pages.Close()
 			}
 		}
-		param.parqh = nil
-		param.Fileparam.FileFin++
-		if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
-			param.Fileparam.End = true
-		}
+		// File completion (FileFin/End) is now handled by Call's finishCurrentFile
 	}
 
 	return nil
