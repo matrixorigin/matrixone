@@ -283,92 +283,100 @@ func UpdateStatsInfo(info *TableStatsInfo, tableDef *plan.TableDef, s *pb.StatsI
 		s.NullCntMap[colName] = uint64(info.NullCnts[i])
 		s.SizeMap[colName] = uint64(info.ColumnSize[i])
 
+		// When ZoneMap is not inited we cannot decode min/max from it; set them to 0 and skip the type switch.
+		// We must NOT continue here: the ShuffleRange block below must still run so that a ShuffleRange
+		// produced by collect (e.g. from NDV accumulation in later objects) is written to s.ShuffleRangeMap.
+		// Otherwise, "collect has ShuffleRanges[i] but ZoneMap never inited" would leave ShuffleRangeMap empty.
 		if !info.ColumnZMs[i].IsInited() {
 			s.MinValMap[colName] = 0
 			s.MaxValMap[colName] = 0
-			continue
-		}
-		switch info.DataTypes[i].Oid {
-		case types.T_bit:
-			s.MinValMap[colName] = float64(types.DecodeUint64(info.ColumnZMs[i].GetMinBuf()))
-			s.MaxValMap[colName] = float64(types.DecodeUint64(info.ColumnZMs[i].GetMaxBuf()))
-		case types.T_int8:
-			s.MinValMap[colName] = float64(types.DecodeInt8(info.ColumnZMs[i].GetMinBuf()))
-			s.MaxValMap[colName] = float64(types.DecodeInt8(info.ColumnZMs[i].GetMaxBuf()))
-		case types.T_int16:
-			s.MinValMap[colName] = float64(types.DecodeInt16(info.ColumnZMs[i].GetMinBuf()))
-			s.MaxValMap[colName] = float64(types.DecodeInt16(info.ColumnZMs[i].GetMaxBuf()))
-		case types.T_int32:
-			s.MinValMap[colName] = float64(types.DecodeInt32(info.ColumnZMs[i].GetMinBuf()))
-			s.MaxValMap[colName] = float64(types.DecodeInt32(info.ColumnZMs[i].GetMaxBuf()))
-		case types.T_int64:
-			s.MinValMap[colName] = float64(types.DecodeInt64(info.ColumnZMs[i].GetMinBuf()))
-			s.MaxValMap[colName] = float64(types.DecodeInt64(info.ColumnZMs[i].GetMaxBuf()))
-		case types.T_uint8:
-			s.MinValMap[colName] = float64(types.DecodeUint8(info.ColumnZMs[i].GetMinBuf()))
-			s.MaxValMap[colName] = float64(types.DecodeUint8(info.ColumnZMs[i].GetMaxBuf()))
-		case types.T_uint16:
-			s.MinValMap[colName] = float64(types.DecodeUint16(info.ColumnZMs[i].GetMinBuf()))
-			s.MaxValMap[colName] = float64(types.DecodeUint16(info.ColumnZMs[i].GetMaxBuf()))
-		case types.T_uint32:
-			s.MinValMap[colName] = float64(types.DecodeUint32(info.ColumnZMs[i].GetMinBuf()))
-			s.MaxValMap[colName] = float64(types.DecodeUint32(info.ColumnZMs[i].GetMaxBuf()))
-		case types.T_uint64:
-			s.MinValMap[colName] = float64(types.DecodeUint64(info.ColumnZMs[i].GetMinBuf()))
-			s.MaxValMap[colName] = float64(types.DecodeUint64(info.ColumnZMs[i].GetMaxBuf()))
-		case types.T_float32:
-			s.MinValMap[colName] = float64(types.DecodeFloat32(info.ColumnZMs[i].GetMinBuf()))
-			s.MaxValMap[colName] = float64(types.DecodeFloat32(info.ColumnZMs[i].GetMaxBuf()))
-		case types.T_float64:
-			s.MinValMap[colName] = float64(types.DecodeFloat64(info.ColumnZMs[i].GetMinBuf()))
-			s.MaxValMap[colName] = float64(types.DecodeFloat64(info.ColumnZMs[i].GetMaxBuf()))
-		case types.T_date:
-			s.MinValMap[colName] = float64(types.DecodeDate(info.ColumnZMs[i].GetMinBuf()))
-			s.MaxValMap[colName] = float64(types.DecodeDate(info.ColumnZMs[i].GetMaxBuf()))
-		case types.T_time:
-			s.MinValMap[colName] = float64(types.DecodeTime(info.ColumnZMs[i].GetMinBuf()))
-			s.MaxValMap[colName] = float64(types.DecodeTime(info.ColumnZMs[i].GetMaxBuf()))
-		case types.T_timestamp:
-			s.MinValMap[colName] = float64(types.DecodeTimestamp(info.ColumnZMs[i].GetMinBuf()))
-			s.MaxValMap[colName] = float64(types.DecodeTimestamp(info.ColumnZMs[i].GetMaxBuf()))
-		case types.T_datetime:
-			s.MinValMap[colName] = float64(types.DecodeDatetime(info.ColumnZMs[i].GetMinBuf()))
-			s.MaxValMap[colName] = float64(types.DecodeDatetime(info.ColumnZMs[i].GetMaxBuf()))
-		case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
-			s.MinValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMinBuf()))
-			s.MaxValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMaxBuf()))
-		case types.T_decimal64:
-			// Fix: Use Decimal64ToFloat64 with proper scale to handle negative values correctly
-			// Direct cast to float64 treats negative values (stored as two's complement) as large positive numbers
-			// IMPORTANT: Use ZoneMap's scale, not TableDef's scale
-			// ZoneMap stores the scale from when data was written (may differ from current schema after ALTER TABLE)
-			scale := info.ColumnZMs[i].GetScale()
-			minDec := types.DecodeDecimal64(info.ColumnZMs[i].GetMinBuf())
-			maxDec := types.DecodeDecimal64(info.ColumnZMs[i].GetMaxBuf())
-			minFloat := types.Decimal64ToFloat64(minDec, scale)
-			maxFloat := types.Decimal64ToFloat64(maxDec, scale)
-			s.MinValMap[colName] = minFloat
-			s.MaxValMap[colName] = maxFloat
+		} else {
+			switch info.DataTypes[i].Oid {
+			case types.T_bit:
+				s.MinValMap[colName] = float64(types.DecodeUint64(info.ColumnZMs[i].GetMinBuf()))
+				s.MaxValMap[colName] = float64(types.DecodeUint64(info.ColumnZMs[i].GetMaxBuf()))
+			case types.T_int8:
+				s.MinValMap[colName] = float64(types.DecodeInt8(info.ColumnZMs[i].GetMinBuf()))
+				s.MaxValMap[colName] = float64(types.DecodeInt8(info.ColumnZMs[i].GetMaxBuf()))
+			case types.T_int16:
+				s.MinValMap[colName] = float64(types.DecodeInt16(info.ColumnZMs[i].GetMinBuf()))
+				s.MaxValMap[colName] = float64(types.DecodeInt16(info.ColumnZMs[i].GetMaxBuf()))
+			case types.T_int32:
+				s.MinValMap[colName] = float64(types.DecodeInt32(info.ColumnZMs[i].GetMinBuf()))
+				s.MaxValMap[colName] = float64(types.DecodeInt32(info.ColumnZMs[i].GetMaxBuf()))
+			case types.T_int64:
+				s.MinValMap[colName] = float64(types.DecodeInt64(info.ColumnZMs[i].GetMinBuf()))
+				s.MaxValMap[colName] = float64(types.DecodeInt64(info.ColumnZMs[i].GetMaxBuf()))
+			case types.T_uint8:
+				s.MinValMap[colName] = float64(types.DecodeUint8(info.ColumnZMs[i].GetMinBuf()))
+				s.MaxValMap[colName] = float64(types.DecodeUint8(info.ColumnZMs[i].GetMaxBuf()))
+			case types.T_uint16:
+				s.MinValMap[colName] = float64(types.DecodeUint16(info.ColumnZMs[i].GetMinBuf()))
+				s.MaxValMap[colName] = float64(types.DecodeUint16(info.ColumnZMs[i].GetMaxBuf()))
+			case types.T_uint32:
+				s.MinValMap[colName] = float64(types.DecodeUint32(info.ColumnZMs[i].GetMinBuf()))
+				s.MaxValMap[colName] = float64(types.DecodeUint32(info.ColumnZMs[i].GetMaxBuf()))
+			case types.T_uint64:
+				s.MinValMap[colName] = float64(types.DecodeUint64(info.ColumnZMs[i].GetMinBuf()))
+				s.MaxValMap[colName] = float64(types.DecodeUint64(info.ColumnZMs[i].GetMaxBuf()))
+			case types.T_float32:
+				s.MinValMap[colName] = float64(types.DecodeFloat32(info.ColumnZMs[i].GetMinBuf()))
+				s.MaxValMap[colName] = float64(types.DecodeFloat32(info.ColumnZMs[i].GetMaxBuf()))
+			case types.T_float64:
+				s.MinValMap[colName] = float64(types.DecodeFloat64(info.ColumnZMs[i].GetMinBuf()))
+				s.MaxValMap[colName] = float64(types.DecodeFloat64(info.ColumnZMs[i].GetMaxBuf()))
+			case types.T_date:
+				s.MinValMap[colName] = float64(types.DecodeDate(info.ColumnZMs[i].GetMinBuf()))
+				s.MaxValMap[colName] = float64(types.DecodeDate(info.ColumnZMs[i].GetMaxBuf()))
+			case types.T_time:
+				s.MinValMap[colName] = float64(types.DecodeTime(info.ColumnZMs[i].GetMinBuf()))
+				s.MaxValMap[colName] = float64(types.DecodeTime(info.ColumnZMs[i].GetMaxBuf()))
+			case types.T_timestamp:
+				s.MinValMap[colName] = float64(types.DecodeTimestamp(info.ColumnZMs[i].GetMinBuf()))
+				s.MaxValMap[colName] = float64(types.DecodeTimestamp(info.ColumnZMs[i].GetMaxBuf()))
+			case types.T_datetime:
+				s.MinValMap[colName] = float64(types.DecodeDatetime(info.ColumnZMs[i].GetMinBuf()))
+				s.MaxValMap[colName] = float64(types.DecodeDatetime(info.ColumnZMs[i].GetMaxBuf()))
+			case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
+				s.MinValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMinBuf()))
+				s.MaxValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMaxBuf()))
+			case types.T_decimal64:
+				// Fix: Use Decimal64ToFloat64 with proper scale to handle negative values correctly
+				// Direct cast to float64 treats negative values (stored as two's complement) as large positive numbers
+				// IMPORTANT: Use ZoneMap's scale, not TableDef's scale
+				// ZoneMap stores the scale from when data was written (may differ from current schema after ALTER TABLE)
+				scale := info.ColumnZMs[i].GetScale()
+				minDec := types.DecodeDecimal64(info.ColumnZMs[i].GetMinBuf())
+				maxDec := types.DecodeDecimal64(info.ColumnZMs[i].GetMaxBuf())
+				minFloat := types.Decimal64ToFloat64(minDec, scale)
+				maxFloat := types.Decimal64ToFloat64(maxDec, scale)
+				s.MinValMap[colName] = minFloat
+				s.MaxValMap[colName] = maxFloat
 
-		case types.T_decimal128:
-			// Fix: Use actual scale from ZoneMap (not TableDef)
-			// This ensures consistency with getMinMaxValueByFloat64 in disttae/stats.go
-			scale := info.ColumnZMs[i].GetScale()
-			minDec := types.DecodeDecimal128(info.ColumnZMs[i].GetMinBuf())
-			maxDec := types.DecodeDecimal128(info.ColumnZMs[i].GetMaxBuf())
-			minFloat := types.Decimal128ToFloat64(minDec, scale)
-			maxFloat := types.Decimal128ToFloat64(maxDec, scale)
-			s.MinValMap[colName] = minFloat
-			s.MaxValMap[colName] = maxFloat
+			case types.T_decimal128:
+				// Fix: Use actual scale from ZoneMap (not TableDef)
+				// This ensures consistency with getMinMaxValueByFloat64 in disttae/stats.go
+				scale := info.ColumnZMs[i].GetScale()
+				minDec := types.DecodeDecimal128(info.ColumnZMs[i].GetMinBuf())
+				maxDec := types.DecodeDecimal128(info.ColumnZMs[i].GetMaxBuf())
+				minFloat := types.Decimal128ToFloat64(minDec, scale)
+				maxFloat := types.Decimal128ToFloat64(maxDec, scale)
+				s.MinValMap[colName] = minFloat
+				s.MaxValMap[colName] = maxFloat
 
+			}
 		}
 
 		if info.ShuffleRanges[i] != nil {
-			if s.MinValMap[colName] != s.MaxValMap[colName] &&
+			// Allow writing ShuffleRange when we have one from collect and other conditions are met.
+			// When ZoneMap is not inited we set min=max=0, so min!=max is false; we relax by allowing
+			// write when !IsInited() so that collect-produced ShuffleRanges are not dropped.
+			canFill := (s.MinValMap[colName] != s.MaxValMap[colName] || !info.ColumnZMs[i].IsInited()) &&
 				s.TableCnt > ShuffleThreshHoldOfNDV*2 &&
 				info.ColumnNDVs[i] >= ShuffleThreshHoldOfNDV &&
 				!util.JudgeIsCompositeClusterByColumn(colName) &&
-				colName != catalog.CPrimaryKeyColName {
+				colName != catalog.CPrimaryKeyColName
+			if canFill {
 				info.ShuffleRanges[i].Eval()
 				info.ShuffleRanges[i].ReleaseUnused()
 				s.ShuffleRangeMap[colName] = info.ShuffleRanges[i]

@@ -227,6 +227,59 @@ func TestUpdateStatsInfo_Decimal128_NegativeValues(t *testing.T) {
 	require.Less(t, minVal, 0.0, "Min value should be negative")
 }
 
+// TestUpdateStatsInfo_ShuffleRangeWrittenWhenZoneMapNotInited tests the fix for the bug where
+// UpdateStatsInfo used to continue (skip the rest of the loop) when ColumnZMs[i].IsInited() was false,
+// so that even when collect had populated info.ShuffleRanges[i], it was never written to s.ShuffleRangeMap.
+// After the fix, we only skip decoding min/max from ZoneMap when not inited; we still run the ShuffleRange
+// block and allow writing when canFill is true (relaxed so that !IsInited() does not block the write).
+func TestUpdateStatsInfo_ShuffleRangeWrittenWhenZoneMapNotInited(t *testing.T) {
+	// ZoneMap left not inited (no UpdateZM call) — simulates collect seeing objects where this column's ZM was never inited.
+	zm := index2.NewZM(types.T_int64, 0)
+	require.False(t, zm.IsInited(), "ZoneMap must be not inited to test this path")
+
+	// ShuffleRange produced by collect (e.g. from NDV accumulation in later objects).
+	sr := NewShuffleRange(false)
+	sr.Update(1, 100000, 200000, 0)
+
+	// TableCnt and NDV above thresholds so canFill can be true (ShuffleThreshHoldOfNDV = 50000).
+	tableCnt := 200000.0
+	colNDV := 60000.0
+
+	tableDef := &planpb.TableDef{
+		Name: "test_table",
+		Cols: []*planpb.ColDef{
+			{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+			{Name: catalog.Row_ID},
+		},
+	}
+
+	info := &TableStatsInfo{
+		ColumnZMs:     []index2.ZM{zm},
+		DataTypes:     []types.Type{types.New(types.T_int64, 0, 0)},
+		ColumnNDVs:    []float64{colNDV},
+		NullCnts:      []int64{0},
+		ColumnSize:    []int64{8},
+		ShuffleRanges: []*pb.ShuffleRange{sr},
+		TableRowCount: tableCnt,
+	}
+
+	s := &pb.StatsInfo{
+		MinValMap:       make(map[string]float64),
+		MaxValMap:       make(map[string]float64),
+		NdvMap:          make(map[string]float64),
+		DataTypeMap:     make(map[string]uint64),
+		NullCntMap:      make(map[string]uint64),
+		SizeMap:         make(map[string]uint64),
+		ShuffleRangeMap: make(map[string]*pb.ShuffleRange),
+	}
+
+	UpdateStatsInfo(info, tableDef, s)
+
+	// Before the fix: continue skipped the ShuffleRange block, so ShuffleRangeMap stayed empty.
+	require.NotNil(t, s.ShuffleRangeMap["id"], "ShuffleRange must be written when ZoneMap is not inited but ShuffleRange is present and other canFill conditions are met")
+	require.Nil(t, info.ShuffleRanges[0], "UpdateStatsInfo nils out info.ShuffleRanges after copying to s")
+}
+
 // TestUpdateStatsInfo_Decimal_DifferentScales tests decimal conversion with various scales
 func TestUpdateStatsInfo_Decimal_DifferentScales(t *testing.T) {
 	testCases := []struct {
