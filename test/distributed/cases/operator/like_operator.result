@@ -1,33 +1,78 @@
 SELECT 'a' LIKE 'ae';
-a like ae
+➤ a like ae[-7,1,0]  𝄀
 0
 SELECT 'ae' LIKE 'a';
-ae like a
+➤ ae like a[-7,1,0]  𝄀
 0
 SELECT 'MYSQL' LIKE 'mysql';
-MYSQL like mysql
+➤ MYSQL like mysql[-7,1,0]  𝄀
 0
 SELECT 'David!' LIKE 'David_';
-David! like David_
+➤ David! like David_[-7,1,0]  𝄀
 1
 SELECT 'David!' LIKE '%D%v%';
-David! like %D%v%
+➤ David! like %D%v%[-7,1,0]  𝄀
 1
 SELECT 'David!' LIKE 'David\_';
-David! like David\_
+➤ David! like David\_[-7,1,0]  𝄀
 0
 SELECT 'David_' LIKE 'David\_';
-David_ like David\_
+➤ David_ like David\_[-7,1,0]  𝄀
 1
 SELECT '__++' LIKE '__++%';
-__++ like __++%
+➤ __++ like __++%[-7,1,0]  𝄀
 1
 SELECT '__++__' LIKE '__\\+';
-__++__ like __+
+➤ __++__ like __\\+[-7,1,0]  𝄀
 0
 SELECT '__++__' LIKE '__+';
-__++__ like __+
+➤ __++__ like __+[-7,1,0]  𝄀
 0
+SELECT "a+b" LIKE "a_b";
+➤ a+b like a_b[-7,1,0]  𝄀
+1
+SELECT "a+b" LIKE "a%b";
+➤ a+b like a%b[-7,1,0]  𝄀
+1
+SELECT "a++b" LIKE "a+%";
+➤ a++b like a+%[-7,1,0]  𝄀
+1
+SELECT "a++b" LIKE "%+%";
+➤ a++b like %+%[-7,1,0]  𝄀
+1
+SELECT "a+b" LIKE "a\+b";
+➤ a+b like a+b[-7,1,0]  𝄀
+1
+SELECT "a\+b" LIKE "a\\+b";
+➤ a+b like a\\+b[-7,1,0]  𝄀
+1
+SELECT "a+b" LIKE "a\\+b";
+➤ a+b like a\\+b[-7,1,0]  𝄀
+1
+SELECT "a.b" LIKE "a.b";
+➤ a.b like a.b[-7,1,0]  𝄀
+1
+SELECT "abb" LIKE "ab*";
+➤ abb like ab*[-7,1,0]  𝄀
+0
+SELECT "a?b" LIKE "a?b";
+➤ a?b like a?b[-7,1,0]  𝄀
+1
+SELECT "a(b)c" LIKE "a(b)c";
+➤ a(b)c like a(b)c[-7,1,0]  𝄀
+1
+SELECT "+++" LIKE "++%";
+➤ +++ like ++%[-7,1,0]  𝄀
+1
+SELECT " " LIKE "+";
+➤   like +[-7,1,0]  𝄀
+0
+SELECT "+123" LIKE "+%";
+➤ +123 like +%[-7,1,0]  𝄀
+1
+SELECT "123+" LIKE "%+";
+➤ 123+ like %+[-7,1,0]  𝄀
+1
 DROP TABLE IF EXISTS like_test;
 CREATE TABLE like_test(
 str1 VARCHAR(50)
@@ -41,136 +86,144 @@ INSERT INTO like_test VALUES('NULL');
 INSERT INTO like_test VALUES('  A');
 INSERT INTO like_test VALUES('s _');
 SELECT * FROM like_test WHERE str1 LIKE '%:';
-str1
+➤ str1[12,-1,0]  𝄀
 D:
 SELECT * FROM like_test WHERE str1 LIKE '%\_%';
-str1
-D:\System_files
-D:\System_files\
+➤ str1[12,-1,0]  𝄀
+D:\System_files  𝄀
+D:\System_files\  𝄀
 s _
 SELECT * FROM like_test WHERE str1 LIKE '___';
-str1
-D:\
-  A
+➤ str1[12,-1,0]  𝄀
+D:\  𝄀
+  A  𝄀
 s _
 SELECT * FROM like_test WHERE str1 LIKE ' %';
-str1
+➤ str1[12,-1,0]  𝄀
   A
 SELECT * FROM like_test WHERE str1 LIKE NULL;
-str1
+➤ str1[12,-1,0]
 SELECT * FROM like_test WHERE str1 LIKE '_:%';
-str1
-D:
-D:\
-D:\System_files
+➤ str1[12,-1,0]  𝄀
+D:  𝄀
+D:\  𝄀
+D:\System_files  𝄀
 D:\System_files\
 SELECT * FROM like_test WHERE str1 LIKE 's__';
-str1
+➤ str1[12,-1,0]  𝄀
 s _
 SELECT * FROM like_test WHERE str1 LIKE '%s';
-str1
+➤ str1[12,-1,0]  𝄀
 D:\System_files
 SELECT * FROM like_test WHERE str1 LIKE 'd%';
-str1
+➤ str1[12,-1,0]
 SELECT * FROM like_test WHERE str1 LIKE '%%';
-str1
-D:
-D:\
-D:\System_files
-D:\System_files\
-NULL
-  A
+➤ str1[12,-1,0]  𝄀
+D:  𝄀
+D:\  𝄀
+D:\System_files  𝄀
+D:\System_files\  𝄀
+NULL  𝄀
+  A  𝄀
 s _
 SELECT * FROM like_test WHERE str1 IS NULL;
-str1
+➤ str1[12,-1,0]  𝄀
 null
 SELECT * FROM like_test WHERE str1 LIKE '%U%';
-str1
+➤ str1[12,-1,0]  𝄀
 NULL
 SELECT * FROM like_test WHERE str1 LIKE '%:%' AND str1 LIKE '%s%';
-str1
-D:\System_files
+➤ str1[12,-1,0]  𝄀
+D:\System_files  𝄀
 D:\System_files\
 SELECT * FROM like_test WHERE str1 LIKE '' AND str1 LIKE 's%';
-str1
+➤ str1[12,-1,0]
 SELECT * FROM like_test WHERE str1 LIKE '% %' AND str1 LIKE '%N%';
-str1
+➤ str1[12,-1,0]
 SELECT * FROM like_test WHERE str1 LIKE '%L' OR str1 LIKE '%s%';
-str1
-D:\System_files
-D:\System_files\
-NULL
+➤ str1[12,-1,0]  𝄀
+D:\System_files  𝄀
+D:\System_files\  𝄀
+NULL  𝄀
 s _
 SELECT * FROM like_test WHERE str1 LIKE '% %' OR str1 LIKE '%N%';
-str1
-NULL
-  A
+➤ str1[12,-1,0]  𝄀
+NULL  𝄀
+  A  𝄀
 s _
 SELECT * FROM (SELECT * FROM like_test WHERE str1 LIKE 'D%') AS a WHERE LENGTH(str1) > 4;
-str1
-D:\System_files
+➤ str1[12,-1,0]  𝄀
+D:\System_files  𝄀
 D:\System_files\
 SELECT str1 FROM (SELECT * FROM like_test WHERE str1 LIKE '_:%') AS T WHERE str1 LIKE '%S%';
-str1
-D:\System_files
+➤ str1[12,-1,0]  𝄀
+D:\System_files  𝄀
 D:\System_files\
 SELECT * FROM like_test WHERE str1 NOT LIKE '___';
-str1
-D:
-D:\System_files
-D:\System_files\
+➤ str1[12,-1,0]  𝄀
+D:  𝄀
+D:\System_files  𝄀
+D:\System_files\  𝄀
 NULL
 SELECT * FROM like_test WHERE str1 NOT LIKE 'D%';
-str1
-NULL
-  A
+➤ str1[12,-1,0]  𝄀
+NULL  𝄀
+  A  𝄀
 s _
 SELECT * FROM like_test WHERE str1 NOT LIKE '%\_%';
-str1
-D:
-D:\
-NULL
+➤ str1[12,-1,0]  𝄀
+D:  𝄀
+D:\  𝄀
+NULL  𝄀
   A
 SELECT * FROM like_test WHERE str1 NOT LIKE 'NULL';
-str1
-D:
-D:\
-D:\System_files
-D:\System_files\
-  A
+➤ str1[12,-1,0]  𝄀
+D:  𝄀
+D:\  𝄀
+D:\System_files  𝄀
+D:\System_files\  𝄀
+  A  𝄀
 s _
 SELECT * FROM like_test WHERE str1 NOT LIKE NULL;
-str1
+➤ str1[12,-1,0]
 SELECT * FROM like_test WHERE str1 NOT LIKE '';
-str1
-D:
-D:\
-D:\System_files
-D:\System_files\
-NULL
-  A
+➤ str1[12,-1,0]  𝄀
+D:  𝄀
+D:\  𝄀
+D:\System_files  𝄀
+D:\System_files\  𝄀
+NULL  𝄀
+  A  𝄀
 s _
 SELECT COUNT(*) FROM like_test WHERE str1 LIKE '%baz%';
-count(*)
+➤ COUNT(*)[-5,64,0]  𝄀
 0
 SELECT COUNT(*) FROM like_test WHERE str1 NOT LIKE '%baz%';
-count(*)
+➤ COUNT(*)[-5,64,0]  𝄀
 7
 SELECT COUNT(*) FROM like_test WHERE str1 NOT LIKE '%baz%' OR str1 IS NULL;
-count(*)
+➤ COUNT(*)[-5,64,0]  𝄀
 8
 SELECT str1, str1 LIKE '%\\' FROM like_test;
-str1    str1 like %\\
-D:    0
-D:\    1
-D:\System_files    0
-D:\System_files\    1
-null    null
-NULL    0
-  A    0
-s _    0
+➤ str1[12,-1,0]  ¦  str1 like %\\[-7,1,0]  𝄀
+D:  ¦  0  𝄀
+D:\  ¦  1  𝄀
+D:\System_files  ¦  0  𝄀
+D:\System_files\  ¦  1  𝄀
+null  ¦  null  𝄀
+NULL  ¦  0  𝄀
+  A  ¦  0  𝄀
+s _  ¦  0
 SELECT str1, str1 LIKE '%\\\\' FROM like_test;
-[unknown result because it is related to issue#5078]
+➤ str1[12,-1,0]  ¦  str1 like %\\\\[-7,1,0]  𝄀
+D:  ¦  0  𝄀
+D:\  ¦  1  𝄀
+D:\System_files  ¦  0  𝄀
+D:\System_files\  ¦  1  𝄀
+null  ¦  null  𝄀
+NULL  ¦  0  𝄀
+  A  ¦  0  𝄀
+s _  ¦  0
 DELETE FROM like_test;
 INSERT INTO like_test VALUES('99.9');
 INSERT INTO like_test VALUES('88');
@@ -178,19 +231,19 @@ INSERT INTO like_test VALUES('89.88');
 INSERT INTO like_test VALUES(19.88);
 INSERT INTO like_test VALUES(2887.08);
 SELECT * FROM like_test WHERE str1 LIKE '9%';
-str1
+➤ str1[12,-1,0]  𝄀
 99.9
 SELECT * FROM like_test WHERE str1 LIKE '%9';
-str1
+➤ str1[12,-1,0]  𝄀
 99.9
 SELECT * FROM like_test WHERE str1 LIKE '%88';
-str1
-88
-89.88
+➤ str1[12,-1,0]  𝄀
+88  𝄀
+89.88  𝄀
 19.88
 SELECT * FROM like_test WHERE str1 NOT LIKE '%88';
-str1
-99.9
+➤ str1[12,-1,0]  𝄀
+99.9  𝄀
 2887.08
 DELETE FROM like_test;
 INSERT INTO like_test VALUES('ABC1_23D');
@@ -198,12 +251,12 @@ INSERT INTO like_test VALUES('123ABCD\\');
 INSERT INTO like_test VALUES('ABCD\\123');
 INSERT INTO like_test VALUES(' ');
 SELECT * FROM like_test WHERE str1 LIKE '%D\\%';
-str1
+➤ str1[12,-1,0]
 SELECT * FROM like_test WHERE str1 LIKE '% ';
-str1
+➤ str1[12,-1,0]  𝄀
  
 SELECT * FROM like_test WHERE str1 LIKE '%3_';
-str1
+➤ str1[12,-1,0]  𝄀
 ABC1_23D
 DROP TABLE IF EXISTS like_test;
 CREATE TABLE like_test(
@@ -220,65 +273,66 @@ INSERT INTO like_test(str1, str2) VALUES(' ', '');
 INSERT INTO like_test(str1, str2) VALUES('', NULL);
 INSERT INTO like_test(str1, str2) VALUES('法的萨菲厄张三三三三三', '考虑理论可看见年年年年年年');
 SELECT NULL LIKE 'ABC', 'ABC' LIKE NULL;
-null like ABC    ABC like null
-null    null
+➤ null like ABC[-7,1,0]  ¦  ABC like null[-7,1,0]  𝄀
+null  ¦  null
 SELECT * FROM like_test WHERE str1 LIKE 'C%';
-str1    str2
-CHINA IS OUR HOMELAND    BEIJING IS THE CAPITAL
+➤ str1[12,-1,0]  ¦  str2[1,50,0]  𝄀
+CHINA IS OUR HOMELAND  ¦  BEIJING IS THE CAPITAL
 SELECT * FROM like_test WHERE str1 LIKE '% ';
-str1    str2
-DHINA IS OUR HOMELAN     THIS MAN PUSH HIM
-     
+➤ str1[12,-1,0]  ¦  str2[1,50,0]  𝄀
+DHINA IS OUR HOMELAN   ¦  THIS MAN PUSH HIM  𝄀
+   ¦  
 SELECT * FROM like_test WHERE str1 LIKE '%s%';
-str1    str2
+➤ str1[12,-1,0]  ¦  str2[1,50,0]
 SELECT * FROM like_test WHERE str1 LIKE '%C%' AND str1 LIKE '%D%';
-str1    str2
-CHINA IS OUR HOMELAND    BEIJING IS THE CAPITAL
-THE UNITED OF AMERICAN_    NORTH AMERICA
-AB%CDE    PDFXLXDOC
+➤ str1[12,-1,0]  ¦  str2[1,50,0]  𝄀
+CHINA IS OUR HOMELAND  ¦  BEIJING IS THE CAPITAL  𝄀
+THE UNITED OF AMERICAN_  ¦  NORTH AMERICA  𝄀
+AB%CDE  ¦  PDFXLXDOC
 SELECT * FROM like_test WHERE str2 LIKE '__I%';
-str1    str2
-CHINA IS OUR HOMELAND    BEIJING IS THE CAPITAL
-DHINA IS OUR HOMELAN     THIS MAN PUSH HIM
+➤ str1[12,-1,0]  ¦  str2[1,50,0]  𝄀
+CHINA IS OUR HOMELAND  ¦  BEIJING IS THE CAPITAL  𝄀
+DHINA IS OUR HOMELAN   ¦  THIS MAN PUSH HIM
 SELECT * FROM like_test WHERE str2 LIKE '__ %';
-str1    str2
- HINA IS OUR HOMELAND%    HE LIKE WHORE
+➤ str1[12,-1,0]  ¦  str2[1,50,0]  𝄀
+ HINA IS OUR HOMELAND%  ¦  HE LIKE WHORE
 SELECT * FROM like_test WHERE str2 LIKE '';
-str1    str2
-     
+➤ str1[12,-1,0]  ¦  str2[1,50,0]  𝄀
+   ¦  
 SELECT * FROM like_test WHERE str2 LIKE NULL;
-str1    str2
+➤ str1[12,-1,0]  ¦  str2[1,50,0]
 SELECT * FROM like_test WHERE str1 LIKE '%\\';
-str1    str2
-THE UNITED OF ENGLAND\    KINGDOM'
+➤ str1[12,-1,0]  ¦  str2[1,50,0]  𝄀
+THE UNITED OF ENGLAND\  ¦  KINGDOM'
 SELECT * FROM like_test WHERE str2 LIKE '%\'';
-str1    str2
-THE UNITED OF ENGLAND\    KINGDOM'
+➤ str1[12,-1,0]  ¦  str2[1,50,0]  𝄀
+THE UNITED OF ENGLAND\  ¦  KINGDOM'
 SELECT * FROM like_test WHERE str1 LIKE '%三__';
-str1    str2
-法的萨菲厄张三三三三三    考虑理论可看见年年年年年年
+➤ str1[12,-1,0]  ¦  str2[1,50,0]  𝄀
+法的萨菲厄张三三三三三  ¦  考虑理论可看见年年年年年年
 SELECT * FROM like_test WHERE str1 LIKE '%\%';
-[unknown result because it is related to issue#5056]
+➤ str1[12,-1,0]  ¦  str2[1,50,0]  𝄀
+ HINA IS OUR HOMELAND%  ¦  HE LIKE WHORE
 SELECT * FROM like_test WHERE str1 NOT LIKE 'D%';
-str1    str2
-CHINA IS OUR HOMELAND    BEIJING IS THE CAPITAL
- HINA IS OUR HOMELAND%    HE LIKE WHORE
-THE UNITED OF AMERICAN_    NORTH AMERICA
-AB%CDE    PDFXLXDOC
-THE UNITED OF ENGLAND\    KINGDOM'
-     
-    null
-法的萨菲厄张三三三三三    考虑理论可看见年年年年年年
+➤ str1[12,-1,0]  ¦  str2[1,50,0]  𝄀
+CHINA IS OUR HOMELAND  ¦  BEIJING IS THE CAPITAL  𝄀
+ HINA IS OUR HOMELAND%  ¦  HE LIKE WHORE  𝄀
+THE UNITED OF AMERICAN_  ¦  NORTH AMERICA  𝄀
+AB%CDE  ¦  PDFXLXDOC  𝄀
+THE UNITED OF ENGLAND\  ¦  KINGDOM'  𝄀
+   ¦    𝄀
+  ¦  null  𝄀
+法的萨菲厄张三三三三三  ¦  考虑理论可看见年年年年年年
 SELECT * FROM like_test WHERE str1 NOT LIKE '%E';
-str1    str2
-CHINA IS OUR HOMELAND    BEIJING IS THE CAPITAL
-DHINA IS OUR HOMELAN     THIS MAN PUSH HIM
- HINA IS OUR HOMELAND%    HE LIKE WHORE
-THE UNITED OF AMERICAN_    NORTH AMERICA
-THE UNITED OF ENGLAND\    KINGDOM'
-     
-    null
-法的萨菲厄张三三三三三    考虑理论可看见年年年年年年
+➤ str1[12,-1,0]  ¦  str2[1,50,0]  𝄀
+CHINA IS OUR HOMELAND  ¦  BEIJING IS THE CAPITAL  𝄀
+DHINA IS OUR HOMELAN   ¦  THIS MAN PUSH HIM  𝄀
+ HINA IS OUR HOMELAND%  ¦  HE LIKE WHORE  𝄀
+THE UNITED OF AMERICAN_  ¦  NORTH AMERICA  𝄀
+THE UNITED OF ENGLAND\  ¦  KINGDOM'  𝄀
+   ¦    𝄀
+  ¦  null  𝄀
+法的萨菲厄张三三三三三  ¦  考虑理论可看见年年年年年年
 DELETE FROM like_test;
 DROP TABLE like_test;
 DROP TABLE IF EXISTS chinese_test;
@@ -292,26 +346,26 @@ INSERT INTO chinese_test VALUES('张飞', '北京市朝阳区天宫苑桥东街�
 INSERT INTO chinese_test VALUES('里斯', '广东省广州村', '学生教师');
 INSERT INTO chinese_test VALUES('刘五', '%%%江苏省南京市金区陵新村', '%%工人');
 SELECT name FROM chinese_test WHERE home LIKE '%桥东%';
-name
-张三
+➤ name[12,-1,0]  𝄀
+张三  𝄀
 张飞
 SELECT * FROM chinese_test WHERE name LIKE '张%';
-name    home    job
-张三    河南省信阳市桥东区广平小区    软件工程师
-张飞    北京市朝阳区天宫苑桥东街道    教师
+➤ name[12,-1,0]  ¦  home[12,-1,0]  ¦  job[12,-1,0]  𝄀
+张三  ¦  河南省信阳市桥东区广平小区  ¦  软件工程师  𝄀
+张飞  ¦  北京市朝阳区天宫苑桥东街道  ¦  教师
 SELECT * FROM (SELECT * FROM chinese_test WHERE name LIKE '张%') AS a WHERE home LIKE '%广%';
-name    home    job
-张三    河南省信阳市桥东区广平小区    软件工程师
+➤ name[12,-1,0]  ¦  home[12,-1,0]  ¦  job[12,-1,0]  𝄀
+张三  ¦  河南省信阳市桥东区广平小区  ¦  软件工程师
 SELECT * FROm (SELECT * FROM chinese_test WHERE job LIKE '%师') AS a WHERE home LIKE '%市%';
-name    home    job
-张三    河南省信阳市桥东区广平小区    软件工程师
-张飞    北京市朝阳区天宫苑桥东街道    教师
+➤ name[12,-1,0]  ¦  home[12,-1,0]  ¦  job[12,-1,0]  𝄀
+张三  ¦  河南省信阳市桥东区广平小区  ¦  软件工程师  𝄀
+张飞  ¦  北京市朝阳区天宫苑桥东街道  ¦  教师
 SELECT name FROM chinese_test WHERE home LIKE '\%%' AND job LIKE '\%%';
-name
+➤ name[12,-1,0]  𝄀
 刘五
 SELECT * FROM chinese_test WHERE home LIKE '%省%区';
-name    home    job
-张三    河南省信阳市桥东区广平小区    软件工程师
+➤ name[12,-1,0]  ¦  home[12,-1,0]  ¦  job[12,-1,0]  𝄀
+张三  ¦  河南省信阳市桥东区广平小区  ¦  软件工程师
 DROP TABLE chinese_test;
 CREATE TABLE stu(
 id INT PRIMARY KEY,
@@ -335,45 +389,45 @@ INSERT INTO score VALUES('1001', 'JACK', 89.5, 45.2, 67.5);
 INSERT INTO score VALUES('1002', 'TOM', 58.5, 76, 78);
 INSERT INTO score VALUES('1005', 'ROMMY', 68, 55, 69);
 SELECT * FROM stu INNER JOIN score ON stu.id = score.id WHERE stu.name LIKE '_O%';
-id    name    class    sex    address    id    name    chinese    math    english
-1002    TOM    7        UK    1002    TOM    58.5    76.0    78.0
-1005    ROMMY    8    F    CHINA    1005    ROMMY    68.0    55.0    69.0
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  class[4,32,0]  ¦  sex[12,-1,0]  ¦  address[12,-1,0]  ¦  id[4,32,0]  ¦  name[12,-1,0]  ¦  chinese[7,24,0]  ¦  math[7,24,0]  ¦  english[7,24,0]  𝄀
+1002  ¦  TOM  ¦  7  ¦    ¦  UK  ¦  1002  ¦  TOM  ¦  58.5  ¦  76.0  ¦  78.0  𝄀
+1005  ¦  ROMMY  ¦  8  ¦  F  ¦  CHINA  ¦  1005  ¦  ROMMY  ¦  68.0  ¦  55.0  ¦  69.0
 SELECT * FROM stu INNER JOIN score ON stu.id = score.id WHERE score.math > 60 AND stu.address LIKE 'U%_';
-id    name    class    sex    address    id    name    chinese    math    english
-1002    TOM    7        UK    1002    TOM    58.5    76.0    78.0
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  class[4,32,0]  ¦  sex[12,-1,0]  ¦  address[12,-1,0]  ¦  id[4,32,0]  ¦  name[12,-1,0]  ¦  chinese[7,24,0]  ¦  math[7,24,0]  ¦  english[7,24,0]  𝄀
+1002  ¦  TOM  ¦  7  ¦    ¦  UK  ¦  1002  ¦  TOM  ¦  58.5  ¦  76.0  ¦  78.0
 SELECT * FROM stu RIGHT JOIN score ON stu.id = score.id WHERE score.english > 65 AND stu.sex LIKE '%';
-id    name    class    sex    address    id    name    chinese    math    english
-1001    JACK    7    M    US    1001    JACK    89.5    45.2    67.5
-1002    TOM    7        UK    1002    TOM    58.5    76.0    78.0
-1005    ROMMY    8    F    CHINA    1005    ROMMY    68.0    55.0    69.0
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  class[4,32,0]  ¦  sex[12,-1,0]  ¦  address[12,-1,0]  ¦  id[4,32,0]  ¦  name[12,-1,0]  ¦  chinese[7,24,0]  ¦  math[7,24,0]  ¦  english[7,24,0]  𝄀
+1001  ¦  JACK  ¦  7  ¦  M  ¦  US  ¦  1001  ¦  JACK  ¦  89.5  ¦  45.2  ¦  67.5  𝄀
+1002  ¦  TOM  ¦  7  ¦    ¦  UK  ¦  1002  ¦  TOM  ¦  58.5  ¦  76.0  ¦  78.0  𝄀
+1005  ¦  ROMMY  ¦  8  ¦  F  ¦  CHINA  ¦  1005  ¦  ROMMY  ¦  68.0  ¦  55.0  ¦  69.0
 SELECT * FROM stu WHERE address LIKE '%A%' AND name LIKE '%R%';
-id    name    class    sex    address
-1005    ROMMY    8    F    CHINA
-1006    RACK    8    M    ITALY
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  class[4,32,0]  ¦  sex[12,-1,0]  ¦  address[12,-1,0]  𝄀
+1005  ¦  ROMMY  ¦  8  ¦  F  ¦  CHINA  𝄀
+1006  ¦  RACK  ¦  8  ¦  M  ¦  ITALY
 SELECT * FROM stu INNER JOIN score ON stu.id = score.id WHERE stu.address NOT LIKE 'CH%';
-id    name    class    sex    address    id    name    chinese    math    english
-1001    JACK    7    M    US    1001    JACK    89.5    45.2    67.5
-1002    TOM    7        UK    1002    TOM    58.5    76.0    78.0
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  class[4,32,0]  ¦  sex[12,-1,0]  ¦  address[12,-1,0]  ¦  id[4,32,0]  ¦  name[12,-1,0]  ¦  chinese[7,24,0]  ¦  math[7,24,0]  ¦  english[7,24,0]  𝄀
+1001  ¦  JACK  ¦  7  ¦  M  ¦  US  ¦  1001  ¦  JACK  ¦  89.5  ¦  45.2  ¦  67.5  𝄀
+1002  ¦  TOM  ¦  7  ¦    ¦  UK  ¦  1002  ¦  TOM  ¦  58.5  ¦  76.0  ¦  78.0
 SELECT * FROM stu WHERE name NOT LIKE '%A%';
-id    name    class    sex    address
-1002    TOM    7        UK
-1005    ROMMY    8    F    CHINA
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  class[4,32,0]  ¦  sex[12,-1,0]  ¦  address[12,-1,0]  𝄀
+1002  ¦  TOM  ¦  7  ¦    ¦  UK  𝄀
+1005  ¦  ROMMY  ¦  8  ¦  F  ¦  CHINA
 SELECT
 stu.id, stu.name, stu.address, a.chinese, a.english
 FROM
 (SELECT * FROM score WHERE math < 60 AND name LIKE '%M__') AS a,stu
 WHERE
 a.id = stu.id AND stu.address LIKE '%H%';
-id    name    address    chinese    english
-1005    ROMMY    CHINA    68.0    69.0
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  address[12,-1,0]  ¦  chinese[7,24,0]  ¦  english[7,24,0]  𝄀
+1005  ¦  ROMMY  ¦  CHINA  ¦  68.0  ¦  69.0
 SELECT
 stu.name, stu.address
 FROM
 (SELECT * FROm score WHERE chinese BETWEEN 60 AND 70) AS a, stu
 WHERE
 a.id = stu.id AND address LIKE SUBSTRING('THE CHINA',5);
-name    address
-ROMMY    CHINA
+➤ name[12,-1,0]  ¦  address[12,-1,0]  𝄀
+ROMMY  ¦  CHINA
 SELECT
 stu.id, stu.name, stu.address, score.english
 FROM
@@ -383,38 +437,35 @@ score
 ON
 stu.id = score.id
 WHERE stu.sex NOT LIKE '';
-id    name    address    english
-1001    JACK    US    67.5
-1005    ROMMY    CHINA    69.0
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  address[12,-1,0]  ¦  english[7,24,0]  𝄀
+1001  ¦  JACK  ¦  US  ¦  67.5  𝄀
+1005  ¦  ROMMY  ¦  CHINA  ¦  69.0
 DROP TABLE IF EXISTS stu;
 DROP TABLE IF EXISTS score;
-
 create table t1(a tinyint, b smallint, c int, d bigint);
 insert into t1 values(121, 121, 121, 121);
 select * from t1 where (a like '%2%' and b like '%2%' and c like '%2%' and d like '%2%');
-a    b    c    d
-121    121    121    121
+➤ a[-6,8,0]  ¦  b[5,16,0]  ¦  c[4,32,0]  ¦  d[-5,64,0]  𝄀
+121  ¦  121  ¦  121  ¦  121
 drop table t1;
-
 create table t1(a tinyint unsigned, b smallint unsigned, c int unsigned, d bigint unsigned);
 insert into t1 values(121, 121, 121, 121);
 select * from t1 where (a like '%2%' and b like '%2%' and c like '%2%' and d like '%2%');
-a    b    c    d
-121    121    121    121
+➤ a[-6,8,0]  ¦  b[5,16,0]  ¦  c[4,32,0]  ¦  d[-5,64,0]  𝄀
+121  ¦  121  ¦  121  ¦  121
 drop table t1;
-
 create table t1(a text);
 insert into t1 values(rpad('1',50000,'1') + rpad('1',50000,'1'));
 select * from t1 where a like ".";
-a
+➤ a[12,0,0]
 drop table t1;
 create table t1(a varchar(20));
 insert into t1 values ('abc'), ('ABC'), ('abC');
 select * from t1 where a ilike '%abC%';
-a
-abc
-ABC
+➤ a[12,-1,0]  𝄀
+abc  𝄀
+ABC  𝄀
 abC
 show variables where value ilike "%matrixone%" and variable_name = "version_comment";
-Variable_name    Value
-version_comment    MatrixOne
+➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
+version_comment  ¦  MatrixOne

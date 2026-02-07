@@ -120,6 +120,31 @@ func TestGetTenantInfo(t *testing.T) {
 	})
 }
 
+func TestEscapeSQLStringForDoubleQuotes(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"empty", "", ""},
+		{"plain", "abc", "abc"},
+		{"double_quote", `a"b`, `a\"b`},
+		{"backslash", `a\\b`, `a\\\\b`},
+		{"single_quote", "a'b", "a'b"},
+		{"newline", "a\nb", "a\\nb"},
+		{"carriage_return", "a\rb", "a\\rb"},
+		{"tab", "a\tb", "a\\tb"},
+		{"nul", "a\x00b", "a\\0b"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := escapeSQLStringForDoubleQuotes(tc.input)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func TestPrivilegeType_Scope(t *testing.T) {
 	convey.Convey("scope", t, func() {
 		pss := []struct {
