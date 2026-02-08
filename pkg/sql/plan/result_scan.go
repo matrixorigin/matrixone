@@ -78,6 +78,17 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 	// get cols
 	cols, path, err := builder.compCtx.GetQueryResultMeta(uuid.String())
 	if err != nil {
+		// Check if the error is "result file not found"
+		// This typically happens when last_query_id() returns the ID of a statement
+		// that didn't save its result (e.g., SET, CREATE, INSERT statements).
+		// Only SELECT statements with save_query_result=on will save their results.
+		// Fix for issue #23676: provide a more helpful error message.
+		if moerr.IsMoErrCode(err, moerr.ErrResultFileNotFound) {
+			return 0, moerr.NewInvalidInputf(builder.GetContext(),
+				"query result not found for query_id '%s'. Only SELECT statements save results when save_query_result is enabled. "+
+					"Please ensure you have executed a SELECT statement before calling result_scan(last_query_id())",
+				uuid.String())
+		}
 		return 0, err
 	}
 	logutil.Infof("buildResultScan : get save query result path is %s, uuid is %s", path, uuid.String())
