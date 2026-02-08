@@ -67,10 +67,10 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 	defer free()
 
 	// Check if the result is NULL (no previous query with saved results)
-	// This can happen when last_query_id() returns NULL because there's no previous SELECT
-	// with save_query_result enabled. Fix for issue #23676.
+	// This can happen when last_query_id() returns NULL because there's no previous query
+	// in the session. Fix for issue #23676.
 	if vec.IsConstNull() || (vec.Length() > 0 && vec.GetNulls().Contains(0)) {
-		return 0, moerr.NewInvalidInputf(builder.GetContext(), "no previous query result available, please execute a SELECT statement first with save_query_result enabled")
+		return 0, moerr.NewInvalidInputf(builder.GetContext(), "last_query_id() returned NULL, no previous query available in this session")
 	}
 
 	uuid := vector.MustFixedColWithTypeCheck[types.Uuid](vec)[0]
