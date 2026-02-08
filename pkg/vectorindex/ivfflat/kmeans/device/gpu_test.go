@@ -21,6 +21,7 @@ import (
 	"math/rand/v2"
 	"sync"
 	"testing"
+	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -47,7 +48,7 @@ func TestGpu(t *testing.T) {
 	c, err := NewKMeans[float32](vecs, nlist, 10, 0, metric.Metric_L2Distance, 0, false, 0)
 	require.NoError(t, err)
 
-	centers, err := c.Cluster()
+	centers, err := c.Cluster(context.Background())
 	require.NoError(t, err)
 
 	_, ok := centers.([][]float32)
@@ -83,7 +84,7 @@ func TestIVFAndBruteForce(t *testing.T) {
 	c, err := NewKMeans[float32](vecs, nlist, 10, 0, metric.Metric_L2Distance, 0, false, 0)
 	require.NoError(t, err)
 
-	centers, err := c.Cluster()
+	centers, err := c.Cluster(context.Background())
 	require.NoError(t, err)
 
 	centroids, ok := centers.([][]float32)
