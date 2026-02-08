@@ -1303,7 +1303,6 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 	return nil
 }
 
-
 func loadFormatIsValid(param *tree.ExternParam) bool {
 	switch param.Format {
 	case tree.JSONLINE, tree.CSV, tree.PARQUET:
