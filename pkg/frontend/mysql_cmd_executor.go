@@ -185,8 +185,23 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	//note: txn id here may be empty
 	// add by #9907, set the result of last_query_id(), this will pass those isCmdFieldListSql() from client.
 	// fixme: this op leads all internal/background executor got NULL result if call last_query_id().
+	// Fix for issue #23676: Only push query ID for SELECT statements when save_query_result is enabled,
+	// so that last_query_id() returns the ID of a query that actually has saved results.
 	if sqlType != constant.InternalSql {
-		ses.pushQueryId(types.Uuid(stmID).String())
+		stmtType := getStatementType(statement).GetStatementType()
+		// Only push query ID for SELECT statements that will have their results saved
+		if stmtType == "Select" {
+			// Check if save_query_result is enabled
+			val, _ := ses.GetSessionSysVar("save_query_result")
+			saveQueryResultEnabled := false
+			if v, ok := val.(int8); ok && v > 0 {
+				saveQueryResultEnabled = true
+			}
+			// Push query ID if save_query_result is ON or if it's a CloudUserSql
+			if saveQueryResultEnabled || sqlType == constant.CloudUserSql {
+				ses.pushQueryId(types.Uuid(stmID).String())
+			}
+		}
 	}
 
 	// -------------------------------------

@@ -60,15 +60,32 @@ func canSaveQueryResult(ctx context.Context, ses *Session) bool {
 	if stmtProfile.GetSqlSourceType() == constant.InternalSql {
 		return false
 	}
-	if stmtProfile.GetStmtType() == "Select" && stmtProfile.GetSqlSourceType() != constant.CloudUserSql {
+
+	// Only SELECT statements can have their results saved
+	// This is important for result_scan(last_query_id()) to work correctly
+	// Fix for issue #23676
+	if stmtProfile.GetStmtType() != "Select" {
 		return false
 	}
 
+	// Check if save_query_result is enabled
 	val, err := ses.GetSessionSysVar("save_query_result")
 	if err != nil {
 		return false
 	}
+	saveQueryResultEnabled := false
 	if v, _ := val.(int8); v > 0 {
+		saveQueryResultEnabled = true
+	}
+
+	// For SELECT statements:
+	// - If save_query_result is ON, save results for all SELECT statements (ExternSql and CloudUserSql)
+	// - If save_query_result is OFF, only save results for CloudUserSql (cloud platform queries)
+	if !saveQueryResultEnabled && stmtProfile.GetSqlSourceType() != constant.CloudUserSql {
+		return false
+	}
+
+	if saveQueryResultEnabled {
 		if ses.blockIdx == 0 {
 			if err = initQueryResulConfig(ctx, ses); err != nil {
 				return false

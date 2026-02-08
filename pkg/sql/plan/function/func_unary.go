@@ -3333,7 +3333,12 @@ func LastQueryIDWithoutParam(_ []*vector.Vector, result vector.FunctionResultWra
 
 	for i := uint64(0); i < uint64(length); i++ {
 		cnt := int64(len(proc.GetSessionInfo().QueryId))
+		// Note: last_query_id() is evaluated during SQL compilation (in GetComputationWrapper),
+		// which happens BEFORE pushQueryId is called (in RecordStatement).
+		// So the current query's ID is NOT in the list yet when this function runs.
+		// Therefore we use cnt directly (not cnt-1).
 		if cnt == 0 {
+			// No previous query result available
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -3378,10 +3383,16 @@ func LastQueryID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	loc, _ := ivec.GetValue(0)
 	for i := uint64(0); i < uint64(length); i++ {
 		cnt := int64(len(proc.GetSessionInfo().QueryId))
+		// Note: last_query_id() is evaluated during SQL compilation (in GetComputationWrapper),
+		// which happens BEFORE pushQueryId is called (in RecordStatement).
+		// So the current query's ID is NOT in the list yet when this function runs.
+		// Therefore we use cnt directly (not cnt-1).
 		if cnt == 0 {
+			// No previous query result available
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
+			continue
 		}
 		var idx int
 		idx, err = makeQueryIdIdx(loc, cnt, proc)
