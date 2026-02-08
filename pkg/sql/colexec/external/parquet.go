@@ -87,9 +87,12 @@ func newParquetHandler(param *ExternalParam) (*ParquetHandler, error) {
 
 func (h *ParquetHandler) openFile(param *ExternalParam) error {
 	var r io.ReaderAt
+	var fileSize int64
 	switch {
 	case param.Extern.ScanType == tree.INLINE:
-		r = bytes.NewReader(util.UnsafeStringToBytes(param.Extern.Data))
+		data := util.UnsafeStringToBytes(param.Extern.Data)
+		r = bytes.NewReader(data)
+		fileSize = int64(len(data))
 	case param.Extern.Local:
 		return moerr.NewNYI(param.Ctx, "load parquet local")
 	default:
@@ -98,12 +101,18 @@ func (h *ParquetHandler) openFile(param *ExternalParam) error {
 			return err
 		}
 
+		// Validate FileIndex to avoid out-of-bounds access
+		if param.Fileparam.FileIndex <= 0 || param.Fileparam.FileIndex > len(param.FileSize) {
+			return moerr.NewInternalErrorf(param.Ctx, "invalid FileIndex %d for FileSize length %d",
+				param.Fileparam.FileIndex, len(param.FileSize))
+		}
+		fileSize = param.FileSize[param.Fileparam.FileIndex-1]
+
 		// For S3 sources, pre-read the entire file into memory to avoid
 		// many small random HTTP requests which cause severe performance issues.
 		// Parquet reading involves many small random reads (metadata, page headers, etc.)
 		// which are fast on local disk but extremely slow over S3 due to HTTP RTT.
 		if param.Extern.ScanType == tree.S3 {
-			fileSize := param.FileSize[param.Fileparam.FileIndex-1]
 			data := make([]byte, fileSize)
 			vec := fileservice.IOVector{
 				FilePath: readPath,
@@ -128,7 +137,7 @@ func (h *ParquetHandler) openFile(param *ExternalParam) error {
 		}
 	}
 	var err error
-	h.file, err = parquet.OpenFile(r, param.FileSize[param.Fileparam.FileIndex-1])
+	h.file, err = parquet.OpenFile(r, fileSize)
 	return moerr.ConvertGoError(param.Ctx, err)
 }
 

@@ -70,9 +70,15 @@ func (r *CsvReader) Open(param *ExternalParam, proc *process.Process) (fileEmpty
 		return baseReader == nil && err == nil, err
 	}
 	r.reader, err = crt.GetUnCompressReader(proc, param.Extern.CompressType, param.Fileparam.Filepath, baseReader)
-	if err != nil || r.reader == nil {
+	if err != nil {
 		baseReader.Close()
 		return false, err
+	}
+	// GetUnCompressReader returns (nil, nil) on EOF (e.g., empty compressed file)
+	// Treat as empty file to avoid NPE in ReadBatch
+	if r.reader == nil {
+		baseReader.Close()
+		return true, nil
 	}
 
 	csvParser, err := newCSVParserFromReader(param.Extern, r.reader)
