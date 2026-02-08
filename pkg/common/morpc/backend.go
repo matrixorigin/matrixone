@@ -681,7 +681,10 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 			}
 			rb.metrics.receiveCounter.Inc()
 
-			rb.active()
+			// Only update lastActiveTime for user traffic; heartbeat (internal) should not prevent idle timeout.
+			if rpcm, ok := msg.(interface{ InternalMessage() bool }); ok && !rpcm.InternalMessage() {
+				rb.active()
+			}
 
 			if rb.options.hasPayloadResponse {
 				wg.Add(1)

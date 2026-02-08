@@ -16,12 +16,29 @@ package morpc
 
 import (
 	"context"
+	"runtime"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+// createNotifyFactory wraps a BackendFactory and signals on created each time Create returns (for event-driven tests, no Sleep).
+type createNotifyFactory struct {
+	inner   *testBackendFactory
+	created chan struct{}
+}
+
+func (f *createNotifyFactory) Create(backend string, opts ...BackendOption) (Backend, error) {
+	b, err := f.inner.Create(backend, opts...)
+	select {
+	case f.created <- struct{}{}:
+	default:
+	}
+	return b, err
+}
 
 func TestCreateBackendLocked(t *testing.T) {
 	rc, err := NewClient("", newTestBackendFactory(), WithClientMaxBackendPerHost(1))
@@ -64,6 +81,36 @@ func TestGetBackendLockedWithEmptyBackends(t *testing.T) {
 	b, err := c.getBackendLocked("b1", false)
 	assert.NoError(t, err)
 	assert.Nil(t, b)
+}
+
+// TestGetBackendLockedDoesNotCreateWhenAvailable covers the fix: maybeCreateLocked must only
+// be called when no available backend was found (b == nil). When at least one backend is
+// available (not locked, has LastActiveTime), we must not create more backends.
+func TestGetBackendLockedDoesNotCreateWhenAvailable(t *testing.T) {
+	rc, err := NewClient("",
+		newTestBackendFactory(),
+		WithClientMaxBackendPerHost(2),
+		WithClientEnableAutoCreateBackend())
+	assert.NoError(t, err)
+	c := rc.(*client)
+	defer func() {
+		assert.NoError(t, c.Close())
+	}()
+
+	c.mu.Lock()
+	c.mu.backends["b1"] = []Backend{&testBackend{id: 0, busy: false, activeTime: time.Now()}}
+	c.mu.ops["b1"] = &op{}
+	c.mu.Unlock()
+
+	for i := 0; i < 10; i++ {
+		c.mu.Lock()
+		b, err := c.getBackendLocked("b1", false)
+		n := len(c.mu.backends["b1"])
+		c.mu.Unlock()
+		assert.NoError(t, err)
+		assert.NotNil(t, b, "iteration %d: must return the available backend", i)
+		assert.Equal(t, 1, n, "getBackendLocked must not call maybeCreateLocked when b != nil; iteration %d had %d backends", i, n)
+	}
 }
 
 func TestGetBackend(t *testing.T) {
@@ -310,85 +357,91 @@ func TestGetBackendWithCreateBackend(t *testing.T) {
 }
 
 func TestCloseIdleBackends(t *testing.T) {
+	// Event-driven: factory signals on Create so we wait for 2 backends without Sleep.
+	created := make(chan struct{}, 2)
+	factory := &createNotifyFactory{inner: newTestBackendFactory(), created: created}
 	rc, err := NewClient(
 		"",
-		newTestBackendFactory(),
+		factory,
 		WithClientMaxBackendPerHost(2),
 		WithClientMaxBackendMaxIdleDuration(time.Millisecond*100),
 		WithClientCreateTaskChanSize(1),
-		WithClientEnableAutoCreateBackend())
-	assert.NoError(t, err)
+		WithClientEnableAutoCreateBackend(),
+		WithClientDisableCircuitBreaker())
+	require.NoError(t, err)
 	c := rc.(*client)
 	defer func() {
 		assert.NoError(t, c.Close())
 	}()
 
-	// First backend
-	b, err := c.getBackend("b1", false)
-	if err != nil {
-		time.Sleep(50 * time.Millisecond)
-		b, err = c.getBackend("b1", false)
-	}
-	assert.NoError(t, err)
-	assert.NotNil(t, b)
-	b.(*testBackend).busy = true
-
-	// Second backend - trigger async creation
-	_, _ = c.getBackend("b1", false)
-	// Wait for async creation
-	for i := 0; i < 20; i++ {
-		c.mu.Lock()
-		v := len(c.mu.backends["b1"])
-		c.mu.Unlock()
-		if v == 2 {
+	// First backend; lock it so getBackendLocked does not select it (b==nil) and will create second.
+	var b Backend
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		b, err = c.getBackend("b1", true)
+		if err == nil && b != nil {
 			break
 		}
-		time.Sleep(time.Millisecond * 10)
+		runtime.Gosched()
 	}
+	require.NoError(t, err)
+	require.NotNil(t, b, "timeout waiting for first backend")
 
-	b, err = c.getBackend("b1", false)
-	assert.NoError(t, err)
-	assert.NotNil(t, b)
+	// Trigger second create; wait for two Create() completions (event-driven, with timeout)
+	_, _ = c.getBackend("b1", false)
+	for _, ch := range []chan struct{}{created, created} {
+		select {
+		case <-ch:
+		case <-time.After(10 * time.Second):
+			t.Fatal("timeout waiting for backend create (second backend may not have been created)")
+		}
+	}
+	c.mu.Lock()
+	require.Equal(t, 2, len(c.mu.backends["b1"]), "second backend must be created")
+	idleBackend := c.mu.backends["b1"][0]
+	activeBackend := c.mu.backends["b1"][1]
+	c.mu.Unlock()
 
-	b2, err := c.getBackend("b1", false)
-	assert.NoError(t, err)
-	assert.NotNil(t, b2)
-	assert.NotEqual(t, b, b2)
+	idleBackend.Unlock()
+	tb := idleBackend.(*testBackend)
+	tb.Lock()
+	tb.activeTime = time.Time{}
+	tb.Unlock()
 
 	go func() {
-		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+		ctx, cancel := context.WithTimeout(context.TODO(), 2*time.Second)
 		defer cancel()
-		st, err := b2.NewStream(false)
+		st, err := activeBackend.NewStream(false)
 		assert.NoError(t, err)
-		for {
-			assert.NoError(t, st.Send(ctx, newTestMessage(1)))
-			time.Sleep(time.Millisecond * 10)
+		for i := 0; i < 50; i++ {
+			_ = st.Send(ctx, newTestMessage(1))
+			runtime.Gosched()
 		}
 	}()
 
-	for {
+	gcDeadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(gcDeadline) {
+		globalClientGC.doGCIdle()
+		runtime.Gosched()
 		c.mu.Lock()
 		v := len(c.mu.backends["b1"])
 		c.mu.Unlock()
 		if v == 1 {
-			tb := b.(*testBackend)
 			tb.RLock()
 			closed := tb.closed
 			tb.RUnlock()
-			if closed {
-				tb2 := b2.(*testBackend)
-				tb2.RLock()
-				assert.False(t, tb2.closed)
-				tb2.RUnlock()
-
-				c.mu.Lock()
-				assert.Equal(t, 1, len(c.mu.backends["b1"]))
-				c.mu.Unlock()
-				return
-			}
+			require.True(t, closed, "idle backend must be closed by GC")
+			ab := activeBackend.(*testBackend)
+			ab.RLock()
+			assert.False(t, ab.closed)
+			ab.RUnlock()
+			c.mu.Lock()
+			assert.Equal(t, 1, len(c.mu.backends["b1"]))
+			c.mu.Unlock()
+			return
 		}
-		time.Sleep(time.Millisecond * 10)
 	}
+	t.Fatal("idle backend was not closed by GC within 10s")
 }
 
 func TestLockedBackendCannotClosedWithGCIdleTask(t *testing.T) {
