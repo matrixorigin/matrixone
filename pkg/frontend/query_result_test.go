@@ -179,6 +179,8 @@ func Test_saveQueryResultMeta(t *testing.T) {
 
 			ses.ast = asts[0]
 			ses.p = &plan.Plan{}
+			// Set statement type to "Select" so canSaveQueryResult returns true
+			ses.SetStmtType("Select")
 
 			yes := canSaveQueryResult(ctx, ses)
 			assert.True(t, yes)
