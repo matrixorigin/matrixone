@@ -65,13 +65,14 @@ func (r *CsvReader) Open(param *ExternalParam, proc *process.Process) (fileEmpty
 	r.ignoreLine = r.ignoreTag
 
 	// Open file and get io.ReadCloser (preserves offset read + decompression)
-	r.reader, err = readFile(param, proc)
-	if err != nil || r.reader == nil {
-		return r.reader == nil && err == nil, err
+	baseReader, err := readFile(param, proc)
+	if err != nil || baseReader == nil {
+		return baseReader == nil && err == nil, err
 	}
-	r.reader, err = crt.GetUnCompressReader(proc, param.Extern.CompressType, param.Fileparam.Filepath, r.reader)
+	r.reader, err = crt.GetUnCompressReader(proc, param.Extern.CompressType, param.Fileparam.Filepath, baseReader)
 	if err != nil || r.reader == nil {
-		return r.reader == nil && err == nil, err
+		baseReader.Close()
+		return false, err
 	}
 
 	csvParser, err := newCSVParserFromReader(param.Extern, r.reader)

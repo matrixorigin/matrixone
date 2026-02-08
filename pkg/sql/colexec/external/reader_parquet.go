@@ -73,6 +73,7 @@ func (r *ParquetReader) ReadBatch(
 
 func (r *ParquetReader) Close() error {
 	if r.h != nil {
+		r.h.cleanup() // close rowReader (nested column path)
 		for i, pages := range r.h.pages {
 			if pages != nil {
 				pages.Close()

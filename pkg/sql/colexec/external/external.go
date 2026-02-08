@@ -135,6 +135,7 @@ func (external *External) Prepare(proc *process.Process) error {
 
 	// Defensive close old reader
 	if external.reader != nil {
+		logutil.Debugf("external Prepare: closing leftover reader from previous execution")
 		external.reader.Close()
 		external.reader = nil
 		external.fileOpened = false

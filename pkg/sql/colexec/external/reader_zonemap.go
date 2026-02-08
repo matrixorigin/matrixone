@@ -135,10 +135,9 @@ func (r *ZonemapReader) needRead(ctx context.Context, proc *process.Process) boo
 		vecs []*vector.Vector
 	)
 
-	if isMonoExpr := plan2.ExprIsZonemappable(proc.Ctx, expr); isMonoExpr {
-		cnt := plan2.AssignAuxIdForExpr(expr, 0)
-		zms = make([]objectio.ZoneMap, cnt)
-		vecs = make([]*vector.Vector, cnt)
+	if r.param.Filter.AuxIdCnt > 0 {
+		zms = make([]objectio.ZoneMap, r.param.Filter.AuxIdCnt)
+		vecs = make([]*vector.Vector, r.param.Filter.AuxIdCnt)
 	}
 
 	return colexec.EvaluateFilterByZoneMap(
