@@ -348,7 +348,6 @@ func TestGetQueryResultMetaKeepsOriginCase(t *testing.T) {
 		})
 }
 
-
 func Test_openResultMeta_NotFound(t *testing.T) {
 	ioutil.RunPipelineTest(
 		func() {
