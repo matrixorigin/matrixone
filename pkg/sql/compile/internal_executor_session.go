@@ -16,29 +16,31 @@ package compile
 
 import (
 	"context"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type internalExecutorSessionKey struct{}
+
+type internalExecutorSession interface {
+	GetTempTable(dbName, alias string) (string, bool)
+}
 
 // internalExecutorPrivilegeCheckKey toggles internal SQL auth behavior:
 // absent -> bypass as internal executor; present -> run normal auth checks.
 type internalExecutorPrivilegeCheckKey struct{}
 
-func attachInternalExecutorSession(ctx context.Context, ses process.Session) context.Context {
+func attachInternalExecutorSession(ctx context.Context, ses internalExecutorSession) context.Context {
 	if ses == nil {
 		return ctx
 	}
 	return context.WithValue(ctx, internalExecutorSessionKey{}, ses)
 }
 
-func getInternalExecutorSession(ctx context.Context) process.Session {
+func getInternalExecutorSession(ctx context.Context) internalExecutorSession {
 	if ctx == nil {
 		return nil
 	}
 	if v := ctx.Value(internalExecutorSessionKey{}); v != nil {
-		if ses, ok := v.(process.Session); ok {
+		if ses, ok := v.(internalExecutorSession); ok {
 			return ses
 		}
 	}

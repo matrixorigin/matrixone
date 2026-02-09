@@ -1497,18 +1497,11 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 
 	if createAsSelectSql := qry.GetCreateAsSelectSql(); createAsSelectSql != "" {
-		if isTemp {
-			aliasTable := fmt.Sprintf("`%s`.`%s`", dbName, aliasName)
-			realTable := fmt.Sprintf("`%s`.`%s`", dbName, tblName)
-			createAsSelectSql = strings.Replace(createAsSelectSql, aliasTable, realTable, 1)
-		}
 		res, err := func() (executor.Result, error) {
 			oldCtx := c.proc.Ctx
-			// CTAS follow-up SQL needs frontend session for temp-table alias resolution.
-			ctxWithSession := attachInternalExecutorSession(c.proc.Ctx, c.proc.GetSession())
 			// Force privilege checking for CTAS follow-up INSERT ... SELECT.
 			// Internal executor skips auth by default unless this flag is present.
-			c.proc.Ctx = attachInternalExecutorPrivilegeCheck(ctxWithSession)
+			c.proc.Ctx = attachInternalExecutorPrivilegeCheck(c.proc.Ctx)
 			defer func() {
 				c.proc.Ctx = oldCtx
 			}()

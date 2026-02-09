@@ -311,16 +311,6 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 		return nil, nil, err
 	}
 
-	// Resolve temporary table alias in current session for internal SQL execution.
-	// This keeps CTAS follow-up INSERT in the same transaction workable for temp tables.
-	isTmpTable := false
-	if ses := c.proc.GetSession(); ses != nil {
-		if realName, ok := ses.GetTempTable(dbName, tableName); ok {
-			tableName = realName
-			isTmpTable = true
-		}
-	}
-
 	ctx, table, err := c.getRelation(dbName, tableName, snapshot)
 	if err != nil {
 		return nil, nil, err
@@ -330,8 +320,7 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 	}
 
 	tableDef := table.CopyTableDef(ctx)
-	if isTmpTable || tableDef.IsTemporary {
-		tableDef.IsTemporary = true
+	if tableDef.IsTemporary {
 		tableDef.Name = tableName
 	}
 	tableID := int64(table.GetTableID(ctx))
@@ -399,10 +388,24 @@ func (c *compilerContext) getRelation(
 
 	table, err := db.Relation(ctx, tableName, nil)
 	if err != nil {
-		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+		if !moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			return nil, nil, err
+		}
+		if !c.engine.HasTempEngine() {
 			return nil, nil, nil
 		}
-		return nil, nil, err
+		tmpDB, tmpDBErr := c.engine.Database(ctx, defines.TEMPORARY_DBNAME, txnOpt)
+		if tmpDBErr != nil {
+			return nil, nil, nil
+		}
+		tmpTableName := engine.GetTempTableName(dbName, tableName)
+		table, err = tmpDB.Relation(ctx, tmpTableName, nil)
+		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+				return nil, nil, nil
+			}
+			return nil, nil, err
+		}
 	}
 	return ctx, table, nil
 }
