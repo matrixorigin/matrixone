@@ -2008,6 +2008,18 @@ var (
 			input:  `select json_extract(a, '$.b') from t`,
 			output: `select json_extract(a, $.b) from t`,
 		}, {
+			input:  `select JSON_OBJECT('key', 'value') -> '$.key' AS result1`,
+			output: `select json_extract(JSON_OBJECT(key, value), $.key) as result1`,
+		}, {
+			input:  `select a -> '$.b' from t`,
+			output: `select json_extract(a, $.b) from t`,
+		}, {
+			input:  `select JSON_OBJECT('key', 'value') ->> '$.key' AS result1`,
+			output: `select json_unquote(json_extract(JSON_OBJECT(key, value), $.key)) as result1`,
+		}, {
+			input:  `select a ->> '$.b' from t`,
+			output: `select json_unquote(json_extract(a, $.b)) from t`,
+		}, {
 			input: `create table t1 (a int, b uuid)`,
 		}, {
 			input: `create table t2 (a uuid primary key, b varchar(10))`,

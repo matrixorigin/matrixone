@@ -28,6 +28,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -360,6 +361,10 @@ var supportedTypeCast = map[types.T][]types.T{
 
 	types.T_json: {
 		types.T_char, types.T_varchar, types.T_text,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128,
 	},
 
 	types.T_uuid: {
@@ -1828,8 +1833,183 @@ func jsonToOthers(ctx context.Context,
 	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return jsonToStr(ctx, source, rs, length, selectList)
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64, types.T_decimal64, types.T_decimal128:
+		return jsonToNumeric(ctx, source, result, length, toType)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from json to %s", toType))
+}
+
+// jsonCastErr returns the standard error for invalid JSON to numeric cast.
+func jsonCastErr(ctx context.Context, toOid types.T) error {
+	return moerr.NewInvalidArg(ctx, "operator cast", fmt.Sprintf("[JSON %s]", toOid.String()))
+}
+
+// jsonToScalar extracts a numeric scalar from JSON. Returns (float64, isNull, ok). Used for all JSON->numeric casts.
+func jsonToScalar(bj bytejson.ByteJson) (float64, bool, bool) {
+	switch bj.Type {
+	case bytejson.TpCodeInt64:
+		return float64(bj.GetInt64()), false, true
+	case bytejson.TpCodeUint64:
+		return float64(bj.GetUint64()), false, true
+	case bytejson.TpCodeFloat64:
+		return bj.GetFloat64(), false, true
+	case bytejson.TpCodeString:
+		s := bj.GetString()
+		if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+			s = s[1 : len(s)-1]
+		}
+		f, err := strconv.ParseFloat(string(s), 64)
+		if err != nil {
+			return 0, false, false
+		}
+		return f, false, true
+	case bytejson.TpCodeLiteral:
+		if bj.Data[0] == bytejson.LiteralNull {
+			return 0, true, true
+		}
+		return 0, false, false
+	case bytejson.TpCodeObject, bytejson.TpCodeArray:
+		return 0, false, false
+	default:
+		return 0, true, true
+	}
+}
+
+// jsonToNumeric implements JSON -> all numeric types in one loop; append per row via type switch.
+func jsonToNumeric(ctx context.Context, source vector.FunctionParameterWrapper[types.Varlena],
+	result vector.FunctionResultWrapper, length int, toType types.Type) error {
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := source.GetStrValue(i)
+		if null {
+			if err := jsonAppendNull(result, toType); err != nil {
+				return err
+			}
+			continue
+		}
+		f, isNull, ok := jsonToScalar(types.DecodeJson(v))
+		if !ok {
+			return jsonCastErr(ctx, toType.Oid)
+		}
+		if isNull {
+			if err := jsonAppendNull(result, toType); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := jsonAppendValue(ctx, result, toType, f); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func jsonAppendNull(result vector.FunctionResultWrapper, toType types.Type) error {
+	switch toType.Oid {
+	case types.T_int8:
+		return vector.MustFunctionResult[int8](result).Append(0, true)
+	case types.T_int16:
+		return vector.MustFunctionResult[int16](result).Append(0, true)
+	case types.T_int32:
+		return vector.MustFunctionResult[int32](result).Append(0, true)
+	case types.T_int64:
+		return vector.MustFunctionResult[int64](result).Append(0, true)
+	case types.T_uint8:
+		return vector.MustFunctionResult[uint8](result).Append(0, true)
+	case types.T_uint16:
+		return vector.MustFunctionResult[uint16](result).Append(0, true)
+	case types.T_uint32:
+		return vector.MustFunctionResult[uint32](result).Append(0, true)
+	case types.T_uint64:
+		return vector.MustFunctionResult[uint64](result).Append(0, true)
+	case types.T_float32:
+		return vector.MustFunctionResult[float32](result).Append(0, true)
+	case types.T_float64:
+		return vector.MustFunctionResult[float64](result).Append(0, true)
+	case types.T_decimal64:
+		return vector.MustFunctionResult[types.Decimal64](result).Append(0, true)
+	case types.T_decimal128:
+		return vector.MustFunctionResult[types.Decimal128](result).Append(types.Decimal128{}, true)
+	default:
+		panic("jsonAppendNull: unsupported type")
+	}
+}
+
+func jsonAppendValue(ctx context.Context, result vector.FunctionResultWrapper, toType types.Type, f float64) error {
+	toOid := toType.Oid
+	switch toOid {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+		val := int64(f)
+		if f < math.MinInt64 || f > math.MaxInt64 || math.IsNaN(f) {
+			return jsonCastErr(ctx, toOid)
+		}
+		if toOid == types.T_int8 && (val < math.MinInt8 || val > math.MaxInt8) {
+			return jsonCastErr(ctx, toOid)
+		}
+		if toOid == types.T_int16 && (val < math.MinInt16 || val > math.MaxInt16) {
+			return jsonCastErr(ctx, toOid)
+		}
+		if toOid == types.T_int32 && (val < math.MinInt32 || val > math.MaxInt32) {
+			return jsonCastErr(ctx, toOid)
+		}
+		switch toOid {
+		case types.T_int8:
+			return vector.MustFunctionResult[int8](result).Append(int8(val), false)
+		case types.T_int16:
+			return vector.MustFunctionResult[int16](result).Append(int16(val), false)
+		case types.T_int32:
+			return vector.MustFunctionResult[int32](result).Append(int32(val), false)
+		default:
+			return vector.MustFunctionResult[int64](result).Append(val, false)
+		}
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		val := int64(f)
+		if val < 0 || f > math.MaxUint64 || math.IsNaN(f) {
+			return jsonCastErr(ctx, toOid)
+		}
+		u := uint64(val)
+		if toOid == types.T_uint8 && u > math.MaxUint8 {
+			return jsonCastErr(ctx, toOid)
+		}
+		if toOid == types.T_uint16 && u > math.MaxUint16 {
+			return jsonCastErr(ctx, toOid)
+		}
+		if toOid == types.T_uint32 && u > math.MaxUint32 {
+			return jsonCastErr(ctx, toOid)
+		}
+		switch toOid {
+		case types.T_uint8:
+			return vector.MustFunctionResult[uint8](result).Append(uint8(u), false)
+		case types.T_uint16:
+			return vector.MustFunctionResult[uint16](result).Append(uint16(u), false)
+		case types.T_uint32:
+			return vector.MustFunctionResult[uint32](result).Append(uint32(u), false)
+		default:
+			return vector.MustFunctionResult[uint64](result).Append(u, false)
+		}
+	case types.T_float32:
+		if f < -math.MaxFloat32 || f > math.MaxFloat32 {
+			return jsonCastErr(ctx, toOid)
+		}
+		return vector.MustFunctionResult[float32](result).Append(float32(f), false)
+	case types.T_float64:
+		return vector.MustFunctionResult[float64](result).Append(f, false)
+	case types.T_decimal64:
+		d, err := types.Decimal64FromFloat64(f, int32(toType.Width), int32(toType.Scale))
+		if err != nil {
+			return err
+		}
+		return vector.MustFunctionResult[types.Decimal64](result).Append(d, false)
+	case types.T_decimal128:
+		d, err := types.Decimal128FromFloat64(f, int32(toType.Width), int32(toType.Scale))
+		if err != nil {
+			return err
+		}
+		return vector.MustFunctionResult[types.Decimal128](result).Append(d, false)
+	default:
+		panic("jsonAppendValue: unsupported type")
+	}
 }
 
 func enumToOthers(ctx context.Context,

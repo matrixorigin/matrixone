@@ -2255,3 +2255,138 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 		})
 	}
 }
+
+// makeJSONEncodedFromText parses JSON text strings and returns their bytejson-encoded form as []string for vector.
+func makeJSONEncodedFromText(t *testing.T, jsonTexts []string, nulls []bool) []string {
+	t.Helper()
+	out := make([]string, len(jsonTexts))
+	for i, s := range jsonTexts {
+		if len(nulls) > i && nulls[i] {
+			out[i] = ""
+			continue
+		}
+		bj, err := types.ParseStringToByteJson(s)
+		require.NoError(t, err)
+		enc, err := types.EncodeJson(bj)
+		require.NoError(t, err)
+		out[i] = string(enc)
+	}
+	return out
+}
+
+func TestCastJsonToNumeric(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// run runs one JSON->numeric cast test. jsonTexts are JSON literal strings (e.g. "1", "\"a\""); toType is target type.
+	run := func(t *testing.T, name string, jsonTexts []string, nulls []bool, toType types.Type, expectAny any, expectNulls []bool, wantErr bool) {
+		t.Helper()
+		if nulls == nil {
+			nulls = make([]bool, len(jsonTexts))
+		}
+		encoded := makeJSONEncodedFromText(t, jsonTexts, nulls)
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(), encoded, nulls),
+			NewFunctionTestInput(toType, emptySliceForCastTarget(toType.Oid), []bool{}),
+		}
+		expect := NewFunctionTestResult(toType, wantErr, expectAny, expectNulls)
+		fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
+		succeed, info := fcTC.Run()
+		if wantErr {
+			require.True(t, succeed, "case %s: expected cast to fail with error, but: %s", name, info)
+			return
+		}
+		require.True(t, succeed, "case %s: %s", name, info)
+	}
+
+	t.Run("json_number_to_int64", func(t *testing.T) {
+		run(t, "int64", []string{"1", "2", "-3"}, nil,
+			types.T_int64.ToType(),
+			[]int64{1, 2, -3}, []bool{false, false, false}, false)
+	})
+
+	t.Run("json_number_to_int8", func(t *testing.T) {
+		run(t, "int8", []string{"10", "20"}, nil,
+			types.T_int8.ToType(),
+			[]int8{10, 20}, []bool{false, false}, false)
+	})
+
+	t.Run("json_string_number_to_int64", func(t *testing.T) {
+		run(t, "string_to_int64", []string{`"42"`, `"100"`}, nil,
+			types.T_int64.ToType(),
+			[]int64{42, 100}, []bool{false, false}, false)
+	})
+
+	t.Run("json_null_to_int64", func(t *testing.T) {
+		run(t, "null", []string{"null", "null"}, nil,
+			types.T_int64.ToType(),
+			[]int64{0, 0}, []bool{true, true}, false)
+	})
+
+	t.Run("json_number_to_float64", func(t *testing.T) {
+		run(t, "float64", []string{"1.5", "2.7", "3"}, nil,
+			types.T_float64.ToType(),
+			[]float64{1.5, 2.7, 3}, []bool{false, false, false}, false)
+	})
+
+	t.Run("json_string_number_to_float64", func(t *testing.T) {
+		run(t, "string_float", []string{`"3.14"`, `"0"`}, nil,
+			types.T_float64.ToType(),
+			[]float64{3.14, 0}, []bool{false, false}, false)
+	})
+
+	t.Run("json_number_to_uint64", func(t *testing.T) {
+		run(t, "uint64", []string{"1", "2", "99"}, nil,
+			types.T_uint64.ToType(),
+			[]uint64{1, 2, 99}, []bool{false, false, false}, false)
+	})
+
+	t.Run("json_object_to_int64_err", func(t *testing.T) {
+		run(t, "object_err", []string{"{}"}, nil,
+			types.T_int64.ToType(),
+			nil, nil, true)
+	})
+
+	t.Run("json_array_to_int64_err", func(t *testing.T) {
+		run(t, "array_err", []string{"[1,2]"}, nil,
+			types.T_int64.ToType(),
+			nil, nil, true)
+	})
+
+	t.Run("json_string_non_number_to_int64_err", func(t *testing.T) {
+		run(t, "string_non_number_err", []string{`"abc"`}, nil,
+			types.T_int64.ToType(),
+			nil, nil, true)
+	})
+}
+
+// emptySliceForCastTarget returns an empty slice of the right type for the second (target type) cast parameter.
+func emptySliceForCastTarget(oid types.T) any {
+	switch oid {
+	case types.T_int8:
+		return []int8{}
+	case types.T_int16:
+		return []int16{}
+	case types.T_int32:
+		return []int32{}
+	case types.T_int64:
+		return []int64{}
+	case types.T_uint8:
+		return []uint8{}
+	case types.T_uint16:
+		return []uint16{}
+	case types.T_uint32:
+		return []uint32{}
+	case types.T_uint64:
+		return []uint64{}
+	case types.T_float32:
+		return []float32{}
+	case types.T_float64:
+		return []float64{}
+	case types.T_decimal64:
+		return []types.Decimal64{}
+	case types.T_decimal128:
+		return []types.Decimal128{}
+	default:
+		return []int64{}
+	}
+}
