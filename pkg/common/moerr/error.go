@@ -419,7 +419,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDragonboatShardNotFound:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
 	ErrDragonboatOtherSystemError:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
 	ErrDropNonExistsDB:                          {ER_DB_DROP_EXISTS, []string{MySQLDefaultSqlState}, "Can't drop database '%s'; database doesn't exist"},
-	ErrResultFileNotFound:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "result file %s not found"},
+	ErrResultFileNotFound:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "query id %s not found"},
 	ErrNoConfig:                                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no configure: %s"},
 	ErrTooManyFields:                            {ER_TOO_MANY_FIELDS, []string{MySQLDefaultSqlState}, "Too many columns"},
 	ErrDupFieldName:                             {ER_DUP_FIELDNAME, []string{MySQLDefaultSqlState}, "Duplicate column name '%-.192s'"},
