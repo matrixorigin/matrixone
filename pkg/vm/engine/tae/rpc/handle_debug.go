@@ -17,6 +17,7 @@ package rpc
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -792,6 +793,71 @@ func (h *Handle) HandleDiskCleaner(
 		return
 	case cmd_util.GCVerify:
 		resp.ReturnStr = h.db.DiskCleaner.Verify(ctx)
+		return
+	case cmd_util.RegisterSyncProtection:
+		// Register sync protection for cross-cluster sync
+		// value format: JSON {"job_id": "xxx", "bf": "base64_encoded_bloomfilter", "valid_ts": 1234567890}
+		if value == "" {
+			return nil, moerr.NewInvalidArgNoCtx(op, "empty value")
+		}
+
+		var req cmd_util.SyncProtection
+		if err = json.Unmarshal([]byte(value), &req); err != nil {
+			logutil.Error(
+				"GC-Sync-Protection-Register-Parse-Error",
+				zap.String("value", value),
+				zap.Error(err),
+			)
+			return nil, moerr.NewInvalidArgNoCtx(op, value)
+		}
+
+		syncMgr := h.db.DiskCleaner.GetCleaner().GetSyncProtectionManager()
+		if err = syncMgr.RegisterSyncProtection(req.JobID, req.BF, req.ValidTS); err != nil {
+			return nil, err
+		}
+		resp.ReturnStr = `{"status": "ok"}`
+		return
+	case cmd_util.RenewSyncProtection:
+		// Renew sync protection valid timestamp
+		// value format: JSON {"job_id": "xxx", "valid_ts": 1234567890}
+		if value == "" {
+			return nil, moerr.NewInvalidArgNoCtx(op, "empty value")
+		}
+		var req cmd_util.SyncProtection
+		if err = json.Unmarshal([]byte(value), &req); err != nil {
+			logutil.Error(
+				"GC-Sync-Protection-Renew-Parse-Error",
+				zap.String("value", value),
+				zap.Error(err),
+			)
+			return nil, moerr.NewInvalidArgNoCtx(op, value)
+		}
+		syncMgr := h.db.DiskCleaner.GetCleaner().GetSyncProtectionManager()
+		if err = syncMgr.RenewSyncProtection(req.JobID, req.ValidTS); err != nil {
+			return nil, err
+		}
+		resp.ReturnStr = `{"status": "ok"}`
+		return
+	case cmd_util.UnregisterSyncProtection:
+		// Unregister (soft delete) sync protection
+		// value format: JSON {"job_id": "xxx"}
+		if value == "" {
+			return nil, moerr.NewInvalidArgNoCtx(op, "empty value")
+		}
+		var req cmd_util.SyncProtection
+		if err = json.Unmarshal([]byte(value), &req); err != nil {
+			logutil.Error(
+				"GC-Sync-Protection-Unregister-Parse-Error",
+				zap.String("value", value),
+				zap.Error(err),
+			)
+			return nil, moerr.NewInvalidArgNoCtx(op, value)
+		}
+		syncMgr := h.db.DiskCleaner.GetCleaner().GetSyncProtectionManager()
+		if err = syncMgr.UnregisterSyncProtection(req.JobID); err != nil {
+			return nil, err
+		}
+		resp.ReturnStr = `{"status": "ok"}`
 		return
 	case cmd_util.AddChecker:
 		break

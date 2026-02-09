@@ -1,0 +1,14 @@
+select mo_ctl('dn', 'diskcleaner', 'register_sync_protection.invalid_json');
+invalid argument register_sync_protection, bad value invalid_json
+select mo_ctl('dn', 'diskcleaner', 'register_sync_protection.{"job_id":"test-job-1"}');
+invalid sync protection request
+select mo_ctl('dn', 'diskcleaner', 'register_sync_protection.{"job_id":"test-job-2","bf":"invalid!!!","valid_ts":1234567890}');
+invalid sync protection request
+select mo_ctl('dn', 'diskcleaner', 'renew_sync_protection.{"job_id":"non-existent","valid_ts":1234567890}');
+sync protection not found: non-existent
+select mo_ctl('dn', 'diskcleaner', 'unregister_sync_protection.{"job_id":"non-existent"}');
+sync protection not found: non-existent
+select mo_ctl('dn', 'diskcleaner', 'register_sync_protection.');
+invalid argument register_sync_protection, bad value empty value
+select mo_ctl('dn', 'diskcleaner', 'unknown_sync_protection.{}');
+internal error: handleDiskCleaner: invalid operation!

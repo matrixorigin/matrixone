@@ -116,6 +116,9 @@ type checkpointCleaner struct {
 		isActive bool
 	}
 
+	// syncProtection is the sync protection manager for cross-cluster sync
+	syncProtection *SyncProtectionManager
+
 	mutation struct {
 		sync.Mutex
 		taskState struct {
@@ -220,7 +223,13 @@ func NewCheckpointCleaner(
 	cleaner.mutation.metaFiles = make(map[string]ioutil.TSRangeFile)
 	cleaner.mutation.snapshotMeta = logtail.NewSnapshotMeta()
 	cleaner.backupProtection.isActive = false
+	cleaner.syncProtection = NewSyncProtectionManager()
 	return cleaner
+}
+
+// GetSyncProtectionManager returns the sync protection manager
+func (c *checkpointCleaner) GetSyncProtectionManager() *SyncProtectionManager {
+	return c.syncProtection
 }
 
 func (c *checkpointCleaner) Stop() {
@@ -1200,6 +1209,7 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 		extraErrMsg = "doGCAgainstGlobalCheckpointLocked failed"
 		return
 	}
+
 	// Delete files after doGCAgainstGlobalCheckpointLocked
 	// TODO:Requires Physical Removal Policy
 	// Note: Data files are GC'ed normally even when backup protection is active.
@@ -1224,6 +1234,7 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 		v2.GCCheckpointDeleteDurationHistogram.Observe(time.Since(deleteStart).Seconds())
 		v2.GCSnapshotDeleteDurationHistogram.Observe(time.Since(deleteStart).Seconds())
 	}
+
 	if c.GetGCWaterMark() == nil {
 		return nil
 	}
@@ -1308,6 +1319,7 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 		c.mutation.snapshotMeta,
 		iscp,
 		c.checkpointCli,
+		c.syncProtection,
 		memoryBuffer,
 		c.config.canGCCacheSize,
 		c.config.estimateRows,
@@ -1483,6 +1495,7 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 		c.mutation.snapshotMeta,
 		iscp,
 		c.checkpointCli,
+		c.syncProtection,
 		buffer,
 		c.config.canGCCacheSize,
 		c.config.estimateRows,
@@ -1507,6 +1520,7 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 		c.mutation.snapshotMeta,
 		iscp,
 		c.checkpointCli,
+		c.syncProtection,
 		buffer,
 		c.config.canGCCacheSize,
 		c.config.estimateRows,
@@ -1623,6 +1637,14 @@ func (c *checkpointCleaner) Process(
 	// This ensures backup protection operations wait for GC to complete
 	c.StartMutationTask("gc-process")
 	defer c.StopMutationTask()
+
+	// Set GC running state for sync protection
+	// This prevents new sync protections from being registered during GC
+	c.syncProtection.SetGCRunning(true)
+	defer c.syncProtection.SetGCRunning(false)
+
+	// Cleanup expired sync protections (TTL exceeded, handles crashed sync jobs)
+	c.syncProtection.CleanupExpired()
 
 	// Check backup protection state and create a snapshot at the start of GC
 	// This snapshot will be used throughout the GC process to ensure consistency
@@ -1825,6 +1847,14 @@ func (c *checkpointCleaner) tryScanLocked(
 		)
 		v2.GCErrorIOErrorCounter.Inc()
 		return
+	}
+
+	// Cleanup soft-deleted sync protections when checkpoint watermark > validTS
+	// This ensures protections are only removed after the checkpoint has recorded the commit
+	scanWaterMarkEntry := c.GetScanWaterMark()
+	if scanWaterMarkEntry != nil {
+		checkpointWatermark := scanWaterMarkEntry.GetEnd().ToTimestamp().PhysicalTime
+		c.syncProtection.CleanupSoftDeleted(checkpointWatermark)
 	}
 	return
 }
