@@ -9,8 +9,8 @@ insert into t1 values (1,2), (2,2) on duplicate key update b=values(b)+10;
 select * from t1;
 delete from t1;
 insert into t1 values (1,1);
-insert into t1 values (1,11), (2,22), (3,33) on duplicate key update a=a+1,b=100;
 -- @bvt:issue#4423
+insert into t1 values (1,11), (2,22), (3,33) on duplicate key update a=a+1,b=100;
 select * from t1;
 -- @bvt:issue
 delete from t1;

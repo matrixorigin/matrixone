@@ -942,7 +942,10 @@ func (c *client) getBackendLocked(backend string, lock bool) (Backend, error) {
 		if lock && b != nil {
 			b.Lock()
 		}
-		c.maybeCreateLocked(backend)
+		// Only try to create when no available backend was found; avoid unbounded growth when backends are locked.
+		if b == nil {
+			c.maybeCreateLocked(backend)
+		}
 		return b, nil
 	}
 	return nil, nil
