@@ -46,7 +46,7 @@ create table h(h int);
 commit;
 select table_name from information_schema.tables where table_schema='bvt_drop_multi' order by table_name;
 ➤ table_name[12,-1,0]  𝄀
-c
+c  𝄀
 g  𝄀
 h
 begin;
@@ -63,7 +63,7 @@ create table j(j int);
 commit;
 select table_name from information_schema.tables where table_schema='bvt_drop_multi' order by table_name;
 ➤ table_name[12,-1,0]  𝄀
-c
+c  𝄀
 i  𝄀
 j
 begin;

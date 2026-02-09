@@ -7,8 +7,8 @@ create table t2(a int);
 create table t3(a int);
 show tables;
 ➤ Tables_in_drop_multi[12,-1,0]  𝄀
-t1
-t2
+t1  𝄀
+t2  𝄀
 t3
 drop table if exists t1,t2,t3;
 show tables;
@@ -17,7 +17,7 @@ create table t1(a int);
 create table t2(a int);
 show tables;
 ➤ Tables_in_drop_multi[12,-1,0]  𝄀
-t1
+t1  𝄀
 t2
 drop table if exists drop_multi.t1, t2;
 show tables;
