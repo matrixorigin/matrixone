@@ -1024,11 +1024,6 @@ func (tcc *TxnCompilerContext) BuildTableDefByMoColumns(dbName, table string) (*
 	return buildTableDefFromMoColumns(tcc.GetContext(), uint64(tcc.GetSession().GetAccountId()), dbName, table, tcc.GetSession())
 }
 
-// makeResultMetaPath gets query result meta path
-func makeResultMetaPath(accountName string, statementId string) string {
-	return fmt.Sprintf("query_result_meta/%s_%s.blk", accountName, statementId)
-}
-
 func (tcc *TxnCompilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (*plan2.Snapshot, error) {
 	tenantCtx := tcc.GetContext()
 	if snapshot := tcc.GetSnapshot(); snapshot != nil && snapshot.GetTenant() != nil {
