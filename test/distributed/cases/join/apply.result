@@ -5,32 +5,32 @@ drop table if exists t;
 create table t (a int, b int, j json);
 insert into t values(1,3,'{"foo":1,"bar":2}'),(2,-2,'{"foo":11,"bar":22}');
 select * from t;
-a    b    j
-1    3    {"bar": 2, "foo": 1}
-2    -2    {"bar": 22, "foo": 11}
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  j[-1,2147483647,0]  𝄀
+1  ¦  3  ¦  {"bar": 2, "foo": 1}  𝄀
+2  ¦  -2  ¦  {"bar": 22, "foo": 11}
 select t.a,t.b,tf.* from t cross apply generate_series(t.a, t.b) tf;
-a    b    result
-1    3    1
-1    3    2
-1    3    3
-2    -2    2
-2    -2    1
-2    -2    0
-2    -2    -1
-2    -2    -2
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  result[-5,64,0]  𝄀
+1  ¦  3  ¦  1  𝄀
+1  ¦  3  ¦  2  𝄀
+1  ¦  3  ¦  3  𝄀
+2  ¦  -2  ¦  2  𝄀
+2  ¦  -2  ¦  1  𝄀
+2  ¦  -2  ¦  0  𝄀
+2  ¦  -2  ¦  -1  𝄀
+2  ¦  -2  ¦  -2
 select t.a,t.b,tf.* from t cross apply generate_series(t.a, t.b) tf where t.a>1;
-a    b    result
-2    -2    2
-2    -2    1
-2    -2    0
-2    -2    -1
-2    -2    -2
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  result[-5,64,0]  𝄀
+2  ¦  -2  ¦  2  𝄀
+2  ¦  -2  ¦  1  𝄀
+2  ¦  -2  ¦  0  𝄀
+2  ¦  -2  ¦  -1  𝄀
+2  ¦  -2  ¦  -2
 select t.a,tmp.* from t cross apply unnest(t.j,'$') tmp;
-a    col    seq    key    path    index    value    this
-1    t.j    0    bar    $.bar    null    2    {"bar": 2, "foo": 1}
-1    t.j    1    foo    $.foo    null    1    {"bar": 2, "foo": 1}
-2    t.j    0    bar    $.bar    null    22    {"bar": 22, "foo": 11}
-2    t.j    1    foo    $.foo    null    11    {"bar": 22, "foo": 11}
+➤ a[4,32,0]  ¦  col[12,-1,0]  ¦  seq[4,32,0]  ¦  key[12,-1,0]  ¦  path[12,-1,0]  ¦  index[4,32,0]  ¦  value[-1,2147483647,0]  ¦  this[-1,2147483647,0]  𝄀
+1  ¦  t.j  ¦  0  ¦  bar  ¦  $.bar  ¦  null  ¦  2  ¦  {"bar": 2, "foo": 1}  𝄀
+1  ¦  t.j  ¦  1  ¦  foo  ¦  $.foo  ¦  null  ¦  1  ¦  {"bar": 2, "foo": 1}  𝄀
+2  ¦  t.j  ¦  0  ¦  bar  ¦  $.bar  ¦  null  ¦  22  ¦  {"bar": 22, "foo": 11}  𝄀
+2  ¦  t.j  ¦  1  ¦  foo  ¦  $.foo  ¦  null  ¦  11  ¦  {"bar": 22, "foo": 11}
 drop table t;
 drop table if exists jt;
 create table jt (id int, tags json, metrics json);
@@ -55,208 +55,212 @@ insert into jt values (17, '"string"', '{"m1": 1, "m2": 2, "m3": 3}');
 insert into jt values (18, '1', '{"m1": 1, "m2": 2, "m3": 3}');
 insert into jt values (20, null, '{"m1": 1, "m2": 2, "m3": 3}');
 select id, u.`key`, u.`index`, u.value from jt cross apply unnest(tags, '$') u where id < 5;
-id    key    index    value
-1    tag1    null    "v1"
-1    tag2    null    "v2"
-1    tag3    null    "v3"
-2    tag1    null    "v1"
-2    tag2    null    "v22"
-2    tag3    null    "v23"
-3    tag13    null    "v13"
-3    tag23    null    "v23"
-3    tag33    null    "v33"
-4    tag1    null    "v1"
-4    tag2    null    "v2"
-4    tag3    null    "v3"
+➤ id[4,32,0]  ¦  key[12,-1,0]  ¦  index[4,32,0]  ¦  value[-1,2147483647,0]  𝄀
+1  ¦  tag1  ¦  null  ¦  "v1"  𝄀
+1  ¦  tag2  ¦  null  ¦  "v2"  𝄀
+1  ¦  tag3  ¦  null  ¦  "v3"  𝄀
+2  ¦  tag1  ¦  null  ¦  "v1"  𝄀
+2  ¦  tag2  ¦  null  ¦  "v22"  𝄀
+2  ¦  tag3  ¦  null  ¦  "v23"  𝄀
+3  ¦  tag13  ¦  null  ¦  "v13"  𝄀
+3  ¦  tag23  ¦  null  ¦  "v23"  𝄀
+3  ¦  tag33  ¦  null  ¦  "v33"  𝄀
+4  ¦  tag1  ¦  null  ¦  "v1"  𝄀
+4  ¦  tag2  ¦  null  ¦  "v2"  𝄀
+4  ¦  tag3  ¦  null  ¦  "v3"
 select id, u.`key`, u.`index`, u.value from jt cross apply unnest(tags, '$') u;
-id    key    index    value
-1    tag1    null    "v1"
-1    tag2    null    "v2"
-1    tag3    null    "v3"
-2    tag1    null    "v1"
-2    tag2    null    "v22"
-2    tag3    null    "v23"
-3    tag13    null    "v13"
-3    tag23    null    "v23"
-3    tag33    null    "v33"
-4    tag1    null    "v1"
-4    tag2    null    "v2"
-4    tag3    null    "v3"
-5    tag1    null    "v1"
-5    tag2    null    "v2"
-5    tag3    null    "v3"
-6    tag1    null    "v1"
-6    tag2    null    "v2"
-6    tag3    null    "v3"
-7    tag1    null    "v1"
-7    tag2    null    "v2"
-7    tag3    null    "v3"
-8    tag1    null    "v1"
-8    tag2    null    "v2"
-8    tag3    null    "v3"
-9    tag1    null    "v1"
-9    tag2    null    "v2"
-9    tag3    null    "v3"
-11    tag1    null    "v1"
-11    tag2    null    "v2"
-11    tag3    null    "v3"
-12    tag1    null    "v1"
-12    tag2    null    "v22"
-12    tag3    null    "v23"
-13    tag13    null    "v13"
-13    tag23    null    "v23"
-13    tag33    null    "v33"
-14    null    0    1
-14    null    1    2
-14    null    2    3
-15    null    0    "v1"
-15    null    1    "v2"
-15    null    2    "v3"
+➤ id[4,32,0]  ¦  key[12,-1,0]  ¦  index[4,32,0]  ¦  value[-1,2147483647,0]  𝄀
+1  ¦  tag1  ¦  null  ¦  "v1"  𝄀
+1  ¦  tag2  ¦  null  ¦  "v2"  𝄀
+1  ¦  tag3  ¦  null  ¦  "v3"  𝄀
+2  ¦  tag1  ¦  null  ¦  "v1"  𝄀
+2  ¦  tag2  ¦  null  ¦  "v22"  𝄀
+2  ¦  tag3  ¦  null  ¦  "v23"  𝄀
+3  ¦  tag13  ¦  null  ¦  "v13"  𝄀
+3  ¦  tag23  ¦  null  ¦  "v23"  𝄀
+3  ¦  tag33  ¦  null  ¦  "v33"  𝄀
+4  ¦  tag1  ¦  null  ¦  "v1"  𝄀
+4  ¦  tag2  ¦  null  ¦  "v2"  𝄀
+4  ¦  tag3  ¦  null  ¦  "v3"  𝄀
+5  ¦  tag1  ¦  null  ¦  "v1"  𝄀
+5  ¦  tag2  ¦  null  ¦  "v2"  𝄀
+5  ¦  tag3  ¦  null  ¦  "v3"  𝄀
+6  ¦  tag1  ¦  null  ¦  "v1"  𝄀
+6  ¦  tag2  ¦  null  ¦  "v2"  𝄀
+6  ¦  tag3  ¦  null  ¦  "v3"  𝄀
+7  ¦  tag1  ¦  null  ¦  "v1"  𝄀
+7  ¦  tag2  ¦  null  ¦  "v2"  𝄀
+7  ¦  tag3  ¦  null  ¦  "v3"  𝄀
+8  ¦  tag1  ¦  null  ¦  "v1"  𝄀
+8  ¦  tag2  ¦  null  ¦  "v2"  𝄀
+8  ¦  tag3  ¦  null  ¦  "v3"  𝄀
+9  ¦  tag1  ¦  null  ¦  "v1"  𝄀
+9  ¦  tag2  ¦  null  ¦  "v2"  𝄀
+9  ¦  tag3  ¦  null  ¦  "v3"  𝄀
+11  ¦  tag1  ¦  null  ¦  "v1"  𝄀
+11  ¦  tag2  ¦  null  ¦  "v2"  𝄀
+11  ¦  tag3  ¦  null  ¦  "v3"  𝄀
+12  ¦  tag1  ¦  null  ¦  "v1"  𝄀
+12  ¦  tag2  ¦  null  ¦  "v22"  𝄀
+12  ¦  tag3  ¦  null  ¦  "v23"  𝄀
+13  ¦  tag13  ¦  null  ¦  "v13"  𝄀
+13  ¦  tag23  ¦  null  ¦  "v23"  𝄀
+13  ¦  tag33  ¦  null  ¦  "v33"  𝄀
+14  ¦  null  ¦  0  ¦  1  𝄀
+14  ¦  null  ¦  1  ¦  2  𝄀
+14  ¦  null  ¦  2  ¦  3  𝄀
+15  ¦  null  ¦  0  ¦  "v1"  𝄀
+15  ¦  null  ¦  1  ¦  "v2"  𝄀
+15  ¦  null  ¦  2  ¦  "v3"
 select id, u.`key`, u.`index`, u.value from jt cross apply unnest(metrics, '$') u;
-id    key    index    value
-1    m1    null    1
-1    m2    null    2
-1    m3    null    3
-2    m1    null    12
-2    m2    null    22
-2    m3    null    32
-3    m1    null    13
-3    m2    null    23
-3    m3    null    33
-4    m1    null    1
-4    m2    null    2
-4    m3    null    3
-5    m1    null    1
-5    m2    null    2
-5    m3    null    3
-6    m1    null    1
-6    m2    null    2
-6    m3    null    3
-7    m1    null    1
-7    m2    null    2
-7    m3    null    3
-8    m1    null    1
-8    m2    null    2
-8    m3    null    3
-9    m1    null    1
-9    m2    null    2
-9    m3    null    3
-11    m1    null    1
-11    m2    null    2
-11    m3    null    3
-12    m1    null    12
-12    m2    null    22
-12    m3    null    32
-13    m1    null    13
-13    m2    null    23
-13    m3    null    33
-14    m1    null    1
-14    m2    null    2
-14    m3    null    3
-15    m1    null    1
-15    m2    null    2
-15    m3    null    3
-16    m1    null    1
-16    m2    null    2
-16    m3    null    3
-17    m1    null    1
-17    m2    null    2
-17    m3    null    3
-18    m1    null    1
-18    m2    null    2
-18    m3    null    3
-20    m1    null    1
-20    m2    null    2
-20    m3    null    3
+➤ id[4,32,0]  ¦  key[12,-1,0]  ¦  index[4,32,0]  ¦  value[-1,2147483647,0]  𝄀
+1  ¦  m1  ¦  null  ¦  1  𝄀
+1  ¦  m2  ¦  null  ¦  2  𝄀
+1  ¦  m3  ¦  null  ¦  3  𝄀
+2  ¦  m1  ¦  null  ¦  12  𝄀
+2  ¦  m2  ¦  null  ¦  22  𝄀
+2  ¦  m3  ¦  null  ¦  32  𝄀
+3  ¦  m1  ¦  null  ¦  13  𝄀
+3  ¦  m2  ¦  null  ¦  23  𝄀
+3  ¦  m3  ¦  null  ¦  33  𝄀
+4  ¦  m1  ¦  null  ¦  1  𝄀
+4  ¦  m2  ¦  null  ¦  2  𝄀
+4  ¦  m3  ¦  null  ¦  3  𝄀
+5  ¦  m1  ¦  null  ¦  1  𝄀
+5  ¦  m2  ¦  null  ¦  2  𝄀
+5  ¦  m3  ¦  null  ¦  3  𝄀
+6  ¦  m1  ¦  null  ¦  1  𝄀
+6  ¦  m2  ¦  null  ¦  2  𝄀
+6  ¦  m3  ¦  null  ¦  3  𝄀
+7  ¦  m1  ¦  null  ¦  1  𝄀
+7  ¦  m2  ¦  null  ¦  2  𝄀
+7  ¦  m3  ¦  null  ¦  3  𝄀
+8  ¦  m1  ¦  null  ¦  1  𝄀
+8  ¦  m2  ¦  null  ¦  2  𝄀
+8  ¦  m3  ¦  null  ¦  3  𝄀
+9  ¦  m1  ¦  null  ¦  1  𝄀
+9  ¦  m2  ¦  null  ¦  2  𝄀
+9  ¦  m3  ¦  null  ¦  3  𝄀
+11  ¦  m1  ¦  null  ¦  1  𝄀
+11  ¦  m2  ¦  null  ¦  2  𝄀
+11  ¦  m3  ¦  null  ¦  3  𝄀
+12  ¦  m1  ¦  null  ¦  12  𝄀
+12  ¦  m2  ¦  null  ¦  22  𝄀
+12  ¦  m3  ¦  null  ¦  32  𝄀
+13  ¦  m1  ¦  null  ¦  13  𝄀
+13  ¦  m2  ¦  null  ¦  23  𝄀
+13  ¦  m3  ¦  null  ¦  33  𝄀
+14  ¦  m1  ¦  null  ¦  1  𝄀
+14  ¦  m2  ¦  null  ¦  2  𝄀
+14  ¦  m3  ¦  null  ¦  3  𝄀
+15  ¦  m1  ¦  null  ¦  1  𝄀
+15  ¦  m2  ¦  null  ¦  2  𝄀
+15  ¦  m3  ¦  null  ¦  3  𝄀
+16  ¦  m1  ¦  null  ¦  1  𝄀
+16  ¦  m2  ¦  null  ¦  2  𝄀
+16  ¦  m3  ¦  null  ¦  3  𝄀
+17  ¦  m1  ¦  null  ¦  1  𝄀
+17  ¦  m2  ¦  null  ¦  2  𝄀
+17  ¦  m3  ¦  null  ¦  3  𝄀
+18  ¦  m1  ¦  null  ¦  1  𝄀
+18  ¦  m2  ¦  null  ¦  2  𝄀
+18  ¦  m3  ¦  null  ¦  3  𝄀
+20  ¦  m1  ¦  null  ¦  1  𝄀
+20  ¦  m2  ¦  null  ¦  2  𝄀
+20  ¦  m3  ¦  null  ¦  3
 select id, u.`key`, u.`index`, u.value from jt cross apply unnest(tags, '$') u where id = 19;
-id    key    index    value
+➤ id[4,32,0]  ¦  key[12,-1,0]  ¦  index[4,32,0]  ¦  value[-1,2147483647,0]
 select id, u.`key`, u.`index`, u.value from jt cross apply unnest(tags, '$') u where id = 20;
-id    key    index    value
+➤ id[4,32,0]  ¦  key[12,-1,0]  ¦  index[4,32,0]  ¦  value[-1,2147483647,0]
 select id, u.`key`, u.`index`, u.value from jt cross apply unnest(metrics, '$') u where u.`key` = 'm2';
-id    key    index    value
-1    m2    null    2
-2    m2    null    22
-3    m2    null    23
-4    m2    null    2
-5    m2    null    2
-6    m2    null    2
-7    m2    null    2
-8    m2    null    2
-9    m2    null    2
-11    m2    null    2
-12    m2    null    22
-13    m2    null    23
-14    m2    null    2
-15    m2    null    2
-16    m2    null    2
-17    m2    null    2
-18    m2    null    2
-20    m2    null    2
+➤ id[4,32,0]  ¦  key[12,-1,0]  ¦  index[4,32,0]  ¦  value[-1,2147483647,0]  𝄀
+1  ¦  m2  ¦  null  ¦  2  𝄀
+2  ¦  m2  ¦  null  ¦  22  𝄀
+3  ¦  m2  ¦  null  ¦  23  𝄀
+4  ¦  m2  ¦  null  ¦  2  𝄀
+5  ¦  m2  ¦  null  ¦  2  𝄀
+6  ¦  m2  ¦  null  ¦  2  𝄀
+7  ¦  m2  ¦  null  ¦  2  𝄀
+8  ¦  m2  ¦  null  ¦  2  𝄀
+9  ¦  m2  ¦  null  ¦  2  𝄀
+11  ¦  m2  ¦  null  ¦  2  𝄀
+12  ¦  m2  ¦  null  ¦  22  𝄀
+13  ¦  m2  ¦  null  ¦  23  𝄀
+14  ¦  m2  ¦  null  ¦  2  𝄀
+15  ¦  m2  ¦  null  ¦  2  𝄀
+16  ¦  m2  ¦  null  ¦  2  𝄀
+17  ¦  m2  ¦  null  ¦  2  𝄀
+18  ¦  m2  ¦  null  ¦  2  𝄀
+20  ¦  m2  ¦  null  ¦  2
 select id, u.`key`, u.`index`, u.value from jt cross apply unnest(metrics, '$') u where u.`key` = 'm2' and u.value > 2;
-invalid argument operator cast, bad value [JSON BIGINT]
+➤ id[4,32,0]  ¦  key[12,-1,0]  ¦  index[4,32,0]  ¦  value[-1,2147483647,0]  𝄀
+2  ¦  m2  ¦  null  ¦  22  𝄀
+3  ¦  m2  ¦  null  ¦  23  𝄀
+12  ¦  m2  ¦  null  ¦  22  𝄀
+13  ¦  m2  ¦  null  ¦  23
 select id, u.`key`, u.`index`, u.value from jt cross apply unnest(metrics, '$') u where u.`key` = 'm2' and json_extract_float64(u.value, '$') > 2;
-id    key    index    value
-2    m2    null    22
-3    m2    null    23
-12    m2    null    22
-13    m2    null    23
+➤ id[4,32,0]  ¦  key[12,-1,0]  ¦  index[4,32,0]  ¦  value[-1,2147483647,0]  𝄀
+2  ¦  m2  ¦  null  ¦  22  𝄀
+3  ¦  m2  ¦  null  ¦  23  𝄀
+12  ¦  m2  ¦  null  ¦  22  𝄀
+13  ¦  m2  ¦  null  ¦  23
 select count(*) from jt cross apply unnest(tags, '$') u where id < 10;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 27
 select count(*) from jt cross apply unnest(tags, '$') u where id = 2;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 3
 select count(*) from jt cross apply unnest(tags, '$') u;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 42
 select count(*) from jt cross apply unnest(tags, '$') u where id = 19;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 0
 select count(*) from jt cross apply unnest(tags, '$') u where id = 20;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 0
 drop table jt;
 drop table if exists t1;
 create table t1(a int, b int);
 insert into t1 values(1,3),(1,-1);
 select * from t1 cross apply generate_series(t1.a,t1.b,1)g;
-a    b    result
-1    3    1
-1    3    2
-1    3    3
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  result[-5,64,0]  𝄀
+1  ¦  3  ¦  1  𝄀
+1  ¦  3  ¦  2  𝄀
+1  ¦  3  ¦  3
 select * from t1 outer apply generate_series(t1.a,t1.b,1)g;
-a    b    result
-1    3    1
-1    3    2
-1    3    3
-1    -1    null
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  result[-5,64,0]  𝄀
+1  ¦  3  ¦  1  𝄀
+1  ¦  3  ¦  2  𝄀
+1  ¦  3  ¦  3  𝄀
+1  ¦  -1  ¦  null
 select * from t1 cross apply generate_series(t1.a,t1.b,-1)g;
-a    b    result
-1    -1    1
-1    -1    0
-1    -1    -1
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  result[-5,64,0]  𝄀
+1  ¦  -1  ¦  1  𝄀
+1  ¦  -1  ¦  0  𝄀
+1  ¦  -1  ¦  -1
 select * from t1 outer apply generate_series(t1.a,t1.b,-1)g;
-a    b    result
-1    3    null
-1    -1    1
-1    -1    0
-1    -1    -1
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  result[-5,64,0]  𝄀
+1  ¦  3  ¦  null  𝄀
+1  ¦  -1  ¦  1  𝄀
+1  ¦  -1  ¦  0  𝄀
+1  ¦  -1  ¦  -1
 drop table t1;
 drop table if exists t2;
 create table t2(id int,j json);
 insert into t2 values(1,'{"tag1": "v1", "tag2": "v2", "tag3": "v3"}');
 insert into t2 values(2,null);
 select t2.id,tf.* from t2 cross apply unnest(t2.j,'$')tf;
-id    col    seq    key    path    index    value    this
-1    t2.j    0    tag1    $.tag1    null    "v1"    {"tag1": "v1", "tag2": "v2", "tag3": "v3"}
-1    t2.j    1    tag2    $.tag2    null    "v2"    {"tag1": "v1", "tag2": "v2", "tag3": "v3"}
-1    t2.j    2    tag3    $.tag3    null    "v3"    {"tag1": "v1", "tag2": "v2", "tag3": "v3"}
+➤ id[4,32,0]  ¦  col[12,-1,0]  ¦  seq[4,32,0]  ¦  key[12,-1,0]  ¦  path[12,-1,0]  ¦  index[4,32,0]  ¦  value[-1,2147483647,0]  ¦  this[-1,2147483647,0]  𝄀
+1  ¦  t2.j  ¦  0  ¦  tag1  ¦  $.tag1  ¦  null  ¦  "v1"  ¦  {"tag1": "v1", "tag2": "v2", "tag3": "v3"}  𝄀
+1  ¦  t2.j  ¦  1  ¦  tag2  ¦  $.tag2  ¦  null  ¦  "v2"  ¦  {"tag1": "v1", "tag2": "v2", "tag3": "v3"}  𝄀
+1  ¦  t2.j  ¦  2  ¦  tag3  ¦  $.tag3  ¦  null  ¦  "v3"  ¦  {"tag1": "v1", "tag2": "v2", "tag3": "v3"}
 select t2.id,tf.* from t2 outer apply unnest(t2.j,'$')tf;
-id    col    seq    key    path    index    value    this
-1    t2.j    0    tag1    $.tag1    null    "v1"    {"tag1": "v1", "tag2": "v2", "tag3": "v3"}
-1    t2.j    1    tag2    $.tag2    null    "v2"    {"tag1": "v1", "tag2": "v2", "tag3": "v3"}
-1    t2.j    2    tag3    $.tag3    null    "v3"    {"tag1": "v1", "tag2": "v2", "tag3": "v3"}
-2    null    null    null    null    null    null    null
+➤ id[4,32,0]  ¦  col[12,-1,0]  ¦  seq[4,32,0]  ¦  key[12,-1,0]  ¦  path[12,-1,0]  ¦  index[4,32,0]  ¦  value[-1,2147483647,0]  ¦  this[-1,2147483647,0]  𝄀
+1  ¦  t2.j  ¦  0  ¦  tag1  ¦  $.tag1  ¦  null  ¦  "v1"  ¦  {"tag1": "v1", "tag2": "v2", "tag3": "v3"}  𝄀
+1  ¦  t2.j  ¦  1  ¦  tag2  ¦  $.tag2  ¦  null  ¦  "v2"  ¦  {"tag1": "v1", "tag2": "v2", "tag3": "v3"}  𝄀
+1  ¦  t2.j  ¦  2  ¦  tag3  ¦  $.tag3  ¦  null  ¦  "v3"  ¦  {"tag1": "v1", "tag2": "v2", "tag3": "v3"}  𝄀
+2  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
 drop table if exists t1;
 create table t1(a int, b int, c int);
 insert into t1 values(1, 1, NULL);
