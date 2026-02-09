@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"math"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -2664,18 +2663,9 @@ func (s *Scope) DropTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetDropTable()
 	if len(qry.GetTables()) > 0 {
 		for _, entry := range qry.GetTables() {
-			sub := &plan.DropTable{
-				IfExists:             qry.IfExists,
-				Database:             entry.Database,
-				Table:                entry.Table,
-				IndexTableNames:      slices.Clone(entry.GetIndexTableNames()),
-				ClusterTable:         entry.GetClusterTable(),
-				TableId:              entry.GetTableId(),
-				ForeignTbl:           slices.Clone(entry.GetForeignTbl()),
-				IsView:               entry.IsView,
-				TableDef:             entry.GetTableDef(),
-				UpdateFkSqls:         slices.Clone(entry.GetUpdateFkSqls()),
-				FkChildTblsReferToMe: slices.Clone(entry.GetFkChildTblsReferToMe()),
+			sub := plan2.DeepCopyDropTable(entry)
+			if sub == nil {
+				continue
 			}
 			if err := s.dropTableSingle(c, sub); err != nil {
 				return err

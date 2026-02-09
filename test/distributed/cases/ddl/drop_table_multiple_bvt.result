@@ -1,4 +1,3 @@
--- @label:bvt
 drop database if exists bvt_drop_multi;
 create database bvt_drop_multi;
 use bvt_drop_multi;
