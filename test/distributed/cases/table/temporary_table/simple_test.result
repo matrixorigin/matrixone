@@ -58,3 +58,4 @@ not supported: add foreign key for temporary table
 drop table if exists f1;
 drop table if exists t1;
 drop database if exists test_tmp;
+drop database if exists test_temporary;

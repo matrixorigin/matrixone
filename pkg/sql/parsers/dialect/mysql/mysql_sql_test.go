@@ -2780,7 +2780,7 @@ var (
 		},
 		{
 			input:  "select $1 + $q$\\n\\t\\r\\b\\0\\_\\%\\\\$q$",
-			output: "select $1 + \\n\\t\\r\\b\\0\\_\\%\\\\",
+			output: "select $1 + \\\\n\\\\t\\\\r\\\\b\\\\0\\_\\%\\\\\\\\",
 		},
 		{
 			input:  "show table_size from test",
