@@ -3040,12 +3040,12 @@ func queryUpstreamAndCreateLocalDBTables(
 			return nil, nil, err
 		}
 
-		if dbExists {
+		if dbExists && (syncLevel == "account" || syncLevel == "database") {
 			return nil, nil, moerr.NewInternalErrorf(ctx, "db '%s' already exists locally", upstreamDbName)
 		}
 
 		// Get CREATE DATABASE DDL from upstream and create locally
-		createDbSQL, err := getUpstreamCreateDatabaseDDL(ctx, upstreamExecutor, upstreamDbName)
+		createDbSQL := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", upstreamDbName)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -3214,27 +3214,6 @@ func getTableID(ctx context.Context, bh BackgroundExec, dbName, tableName string
 		return 0, moerr.NewInternalErrorf(ctx, "table '%s.%s' not found", dbName, tableName)
 	}
 	return erArray[0].GetUint64(ctx, 0, 0)
-}
-
-// getUpstreamCreateDatabaseDDL gets CREATE DATABASE DDL from upstream
-func getUpstreamCreateDatabaseDDL(ctx context.Context, executor publication.SQLExecutor, dbName string) (string, error) {
-	sql := fmt.Sprintf("SHOW CREATE DATABASE `%s`", dbName)
-	result, cancel, err := executor.ExecSQL(ctx, nil, publication.InvalidAccountID, sql, false, false, 0)
-	if err != nil {
-		return "", moerr.NewInternalErrorf(ctx, "failed to get CREATE DATABASE DDL for '%s': %v", dbName, err)
-	}
-	defer cancel()
-	defer result.Close()
-
-	if result.Next() {
-		var dbNameResult, createSQL string
-		if err := result.Scan(&dbNameResult, &createSQL); err != nil {
-			return "", moerr.NewInternalErrorf(ctx, "failed to scan CREATE DATABASE result: %v", err)
-		}
-		return createSQL, nil
-	}
-
-	return "", moerr.NewInternalErrorf(ctx, "no CREATE DATABASE result for '%s'", dbName)
 }
 
 // getUpstreamIndexTables gets index tables from upstream for a given table using internal command
