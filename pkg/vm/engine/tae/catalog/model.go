@@ -143,6 +143,10 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *Schema, err erro
 			// We will not deal with other cases for the time being
 		}
 	}
+	// Read FromPublication from Extra if set (stored via extraInfo in mo_tables)
+	if schema.Extra != nil && schema.Extra.FromPublication {
+		schema.FromPublication = true
+	}
 	if err = schema.Finalize(false); err != nil {
 		return
 	}

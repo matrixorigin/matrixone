@@ -438,6 +438,11 @@ func (db *txnDatabase) createWithID(
 						if extra == nil {
 							tbl.extraInfo = api.MustUnmarshalTblExtra([]byte(property.Value))
 						}
+					case catalog.PropFromPublication:
+						// Store from_publication flag in extraInfo for TN to read
+						if strings.ToLower(property.Value) == "true" {
+							tbl.extraInfo.FromPublication = true
+						}
 					default:
 					}
 				}

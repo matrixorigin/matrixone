@@ -380,6 +380,8 @@ message SchemaExtra {
     uint64 FeatureFlag = 12;
     repeated uint64 IndexTables = 13;
     uint64 ParentTableID = 14;
+    // mark if table is created by publication (CCPR), should skip merge
+    bool FromPublication = 15;
 }
 
 // Int64Map mainly used in unit test
