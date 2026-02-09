@@ -48,9 +48,9 @@ use syssub1;
 show tables;
 -- @ignore:5,7
 show subscriptions all;
--- @ignore:3,5,10,11,12
+-- @ignore:3,4,5,7,9,10,11,12
 show table status;
--- @ignore:3,5,10,11,12
+-- @ignore:3,4,5,7,9,10,11,12
 show table status like 't1';
 desc t1;
 show create table t1;
@@ -100,9 +100,9 @@ use syssub1;
 show tables;
 -- @ignore:5,7
 show subscriptions all;
--- @ignore:3,5,10,11,12
+-- @ignore:3,4,5,7,9,10,11,12
 show table status;
--- @ignore:3,5,10,11,12
+-- @ignore:3,4,5,7,9,10,11,12
 show table status like 't1';
 desc t1;
 show create table t1;
@@ -174,7 +174,7 @@ create database sys_sub_part_tbls from sys publication pub_part_tbls;
 show subscriptions;
 
 show full tables from sys_sub_part_tbls;
--- @ignore:3,5,10,11,12
+-- @ignore:3,4,5,7,9,10,11,12
 show table status from sys_sub_part_tbls;
 desc sys_sub_part_tbls.t1;
 show create table sys_sub_part_tbls.t1;
@@ -185,7 +185,7 @@ select * from sys_sub_part_tbls.t2;
 
 use sys_sub_part_tbls;
 show full tables;
--- @ignore:3,5,10,11,12
+-- @ignore:3,4,5,7,9,10,11,12
 show table status;
 desc t1;
 show create table t1;

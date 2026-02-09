@@ -43,9 +43,7 @@ create table t3 (i int, j int);
 insert into t3 values (1,1), (1,2), (2,3), (2,4);
 select i, count(distinct j) from t3 group by i;
 
--- @bvt:issue#4797
 select i+0.0 as i2, count(distinct j) from t3 group by i2;
--- @bvt:issue
 
 select i+0.0 as i2, count(distinct j) from t3 group by i;
 
