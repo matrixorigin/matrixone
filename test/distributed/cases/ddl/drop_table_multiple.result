@@ -6,39 +6,36 @@ create table t1(a int);
 create table t2(a int);
 create table t3(a int);
 show tables;
-Tables_in_drop_multi
+➤ Tables_in_drop_multi[12,-1,0]  𝄀
 t1
 t2
 t3
 drop table if exists t1,t2,t3;
 show tables;
-Tables_in_drop_multi
+➤ Tables_in_drop_multi[12,-1,0]  𝄀
 create table t1(a int);
 create table t2(a int);
 show tables;
-Tables_in_drop_multi
+➤ Tables_in_drop_multi[12,-1,0]  𝄀
 t1
 t2
 drop table if exists drop_multi.t1, t2;
 show tables;
-Tables_in_drop_multi
--- duplicate table names
+➤ Tables_in_drop_multi[12,-1,0]  𝄀
 create table t1(a int);
 show tables;
-Tables_in_drop_multi
+➤ Tables_in_drop_multi[12,-1,0]  𝄀
 t1
 drop table if exists t1, t1;
 show tables;
-Tables_in_drop_multi
--- no IF EXISTS, expect error and t1 not dropped
+➤ Tables_in_drop_multi[12,-1,0]  𝄀
 create table t1(a int);
 drop table t1, no_such_table;
 no such table drop_multi.no_such_table
 show tables;
-Tables_in_drop_multi
+➤ Tables_in_drop_multi[12,-1,0]  𝄀
 t1
 drop table t1;
--- view should be skipped
 create table t1(a int);
 create view v1 as select * from t1;
 drop table if exists v1, t1;
@@ -46,7 +43,6 @@ select table_name, table_type from information_schema.tables where table_schema=
 table_name    table_type
 v1    VIEW
 drop view v1;
--- sequence should be skipped
 create sequence s1;
 create table t1(a int);
 drop table if exists s1, t1;
