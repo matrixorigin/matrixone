@@ -263,6 +263,9 @@ var (
 		input:  "show variables like 'sql_mode'",
 		output: "show variables like sql_mode",
 	}, {
+		input:  "show global variables like 'interactive_timeout'",
+		output: "show global variables like interactive_timeout",
+	}, {
 		input:  "show index from t1 from db",
 		output: "show index from t1 from db",
 	}, {
@@ -3359,6 +3362,16 @@ func TestValid(t *testing.T) {
 		}
 		ast.StmtKind()
 	}
+}
+
+func TestShowVariablesGlobalFlag(t *testing.T) {
+	ctx := context.TODO()
+	stmt, err := ParseOne(ctx, "show global variables like 'interactive_timeout'", 1)
+	require.NoError(t, err)
+
+	sv, ok := stmt.(*tree.ShowVariables)
+	require.True(t, ok)
+	require.True(t, sv.Global)
 }
 
 var (

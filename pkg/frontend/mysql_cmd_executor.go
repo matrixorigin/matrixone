@@ -738,25 +738,6 @@ func handleCmdFieldList(ses FeSession, execCtx *ExecCtx, icfl *InternalCmdFieldL
 func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error {
 	var err error = nil
 	var ok bool
-	isExplicitGlobalSet := func(sql, name string) bool {
-		if sql == "" {
-			return false
-		}
-		s := strings.ToLower(sql)
-		if !strings.Contains(s, "global") {
-			return false
-		}
-		if strings.Contains(s, "set global "+name) {
-			return true
-		}
-		if strings.Contains(s, "set @@global."+name) {
-			return true
-		}
-		if strings.Contains(s, "set @@global "+name) {
-			return true
-		}
-		return false
-	}
 	setVarFunc := func(system, global bool, name string, value interface{}, sql string) error {
 		var oldValueRaw interface{}
 		if system {
@@ -803,14 +784,6 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 
 	for _, assign := range sv.Assignments {
 		name := assign.Name
-		nameLower := strings.ToLower(name)
-
-		if assign.System && (nameLower == "wait_timeout" || nameLower == "interactive_timeout") {
-			// Cloud policy: forbid setting global wait_timeout/interactive_timeout.
-			if assign.Global || isExplicitGlobalSet(sql, nameLower) {
-				return moerr.NewInternalErrorNoCtx(errorSystemVariableIsReadOnly())
-			}
-		}
 		var value interface{}
 
 		value, err = getExprValue(assign.Value, ses, execCtx)

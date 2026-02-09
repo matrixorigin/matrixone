@@ -1138,6 +1138,10 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	if ses.sesSysVars == nil {
 		ses.sesSysVars = &SystemVariables{mp: make(map[string]interface{})}
 	}
+	// Guard: session vars must not share storage with global vars.
+	if ses.gSysVars != nil && ses.sesSysVars == ses.gSysVars {
+		ses.sesSysVars = ses.gSysVars.Clone()
+	}
 
 	if def.UpdateSessVar != nil {
 		err = def.UpdateSessVar(ctx, ses, ses.sesSysVars, name, val)
