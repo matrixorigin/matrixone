@@ -300,6 +300,21 @@ func (exec *txnExecutor) Exec(
 			defines.AlterCopyOpt{}, v)
 	}
 
+	if logicalId := statementOption.KeepLogicalId(); logicalId != 0 {
+		exec.ctx = context.WithValue(exec.ctx,
+			defines.LogicalIdKey{},
+			logicalId)
+	}
+
+	// Keep historical behavior for internal SQL: bypass frontend privilege checks.
+	// Some callers (e.g. CTAS follow-up SQL) opt in to real auth via context flag.
+	if !needInternalExecutorPrivilegeCheck(exec.ctx) {
+		exec.ctx = context.WithValue(
+			exec.ctx,
+			defines.InternalExecutorKey{},
+			true,
+		)
+	}
 	receiveAt := time.Now()
 	lower := exec.opts.LowerCaseTableNames()
 	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, lower)
@@ -339,6 +354,9 @@ func (exec *txnExecutor) Exec(
 		exec.s.us,
 		nil,
 	)
+	// Attach original frontend session to support session-scoped metadata
+	// (e.g. temporary-table alias mapping) in internal SQL compilation.
+	proc.Session = getInternalExecutorSession(exec.ctx)
 	proc.SetResolveVariableFunc(exec.opts.ResolveVariableFunc())
 
 	if exec.opts.ResolveVariableFunc() != nil {
