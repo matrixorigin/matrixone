@@ -5199,11 +5199,163 @@ func Test_doGrantPrivilege(t *testing.T) {
 				bh.sql2result[sql] = mrs
 			} else if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE ||
 				stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE {
-				sql, _ := getSqlForCheckDatabaseTable(ctx, dbName, tableName)
-				mrs := newMrsForCheckDatabaseTable([][]interface{}{
+				if stmt.ObjType == tree.OBJECT_TYPE_VIEW {
+					sql, _ := getSqlForCheckDatabaseView(ctx, dbName, tableName)
+					mrs := newMrsForCheckDatabaseTable([][]interface{}{
+						{0},
+					})
+					bh.sql2result[sql] = mrs
+				} else {
+					sql, _ := getSqlForCheckDatabaseTable(ctx, dbName, tableName)
+					mrs := newMrsForCheckDatabaseTable([][]interface{}{
+						{0},
+					})
+					bh.sql2result[sql] = mrs
+				}
+			}
+
+			_, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, stmt.ObjType, *stmt.Level)
+			convey.So(err, convey.ShouldBeNil)
+
+			for _, p := range stmt.Privileges {
+				privType, err := convertAstPrivilegeTypeToPrivilegeType(context.TODO(), p.Type, stmt.ObjType)
+				convey.So(err, convey.ShouldBeNil)
+				for j := range stmt.Roles {
+					sql := getSqlForCheckRoleHasPrivilege(int64(j), objType, objId, int64(privType))
+					mrs := newMrsForCheckRoleHasPrivilege([][]interface{}{})
+					bh.sql2result[sql] = mrs
+				}
+			}
+
+			err = doGrantPrivilege(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, bh)
+			convey.So(err, convey.ShouldBeNil)
+		}
+	})
+	convey.Convey("grant view, role succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		dbName := "d"
+		tableName := "v"
+		stmts := []*tree.GrantPrivilege{
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+				},
+				ObjType: tree.OBJECT_TYPE_VIEW,
+				Level: &tree.PrivilegeLevel{
+					Level: tree.PRIVILEGE_LEVEL_TYPE_STAR,
+				},
+				Roles: []*tree.Role{
+					{UserName: "r1"},
+				},
+			},
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+				},
+				ObjType: tree.OBJECT_TYPE_VIEW,
+				Level: &tree.PrivilegeLevel{
+					Level: tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR,
+				},
+				Roles: []*tree.Role{
+					{UserName: "r1"},
+				},
+			},
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+				},
+				ObjType: tree.OBJECT_TYPE_VIEW,
+				Level: &tree.PrivilegeLevel{
+					Level:  tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR,
+					DbName: dbName,
+				},
+				Roles: []*tree.Role{
+					{UserName: "r1"},
+				},
+			},
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+				},
+				ObjType: tree.OBJECT_TYPE_VIEW,
+				Level: &tree.PrivilegeLevel{
+					Level:   tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+					DbName:  dbName,
+					TabName: tableName,
+				},
+				Roles: []*tree.Role{
+					{UserName: "r1"},
+				},
+			},
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+				},
+				ObjType: tree.OBJECT_TYPE_VIEW,
+				Level: &tree.PrivilegeLevel{
+					Level:   tree.PRIVILEGE_LEVEL_TYPE_TABLE,
+					TabName: tableName,
+				},
+				Roles: []*tree.Role{
+					{UserName: "r1"},
+				},
+			},
+		}
+
+		ctx := context.WithValue(context.TODO(), defines.TenantIDKey{}, uint32(sysAccountID))
+
+		for _, stmt := range stmts {
+			priv := determinePrivilegeSetOfStatement(stmt)
+			ses := newSes(priv, ctrl)
+			ses.SetDatabaseName("d")
+
+			//no result set
+			bh.sql2result["begin;"] = nil
+			bh.sql2result["commit;"] = nil
+			bh.sql2result["rollback;"] = nil
+
+			//init from roles
+			for i, role := range stmt.Roles {
+				sql, _ := getSqlForRoleIdOfRole(context.TODO(), role.UserName)
+				mrs := newMrsForRoleIdOfRole([][]interface{}{
+					{i},
+				})
+				bh.sql2result[sql] = mrs
+			}
+
+			objType, err := convertAstObjectTypeToObjectType(context.TODO(), stmt.ObjType)
+			convey.So(err, convey.ShouldBeNil)
+
+			if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_STAR ||
+				stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR {
+				sql, _ := getSqlForCheckDatabase(context.TODO(), dbName)
+				mrs := newMrsForCheckDatabase([][]interface{}{
 					{0},
 				})
 				bh.sql2result[sql] = mrs
+			} else if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE ||
+				stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE {
+				if stmt.ObjType == tree.OBJECT_TYPE_VIEW {
+					sql, _ := getSqlForCheckDatabaseView(ctx, dbName, tableName)
+					mrs := newMrsForCheckDatabaseTable([][]interface{}{
+						{0},
+					})
+					bh.sql2result[sql] = mrs
+				} else {
+					sql, _ := getSqlForCheckDatabaseTable(ctx, dbName, tableName)
+					mrs := newMrsForCheckDatabaseTable([][]interface{}{
+						{0},
+					})
+					bh.sql2result[sql] = mrs
+				}
 			}
 
 			_, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, stmt.ObjType, *stmt.Level)
@@ -5503,11 +5655,163 @@ func Test_doRevokePrivilege(t *testing.T) {
 				bh.sql2result[sql] = mrs
 			} else if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE ||
 				stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE {
-				sql, _ := getSqlForCheckDatabaseTable(ctx, dbName, tableName)
-				mrs := newMrsForCheckDatabaseTable([][]interface{}{
+				if stmt.ObjType == tree.OBJECT_TYPE_VIEW {
+					sql, _ := getSqlForCheckDatabaseView(ctx, dbName, tableName)
+					mrs := newMrsForCheckDatabaseTable([][]interface{}{
+						{0},
+					})
+					bh.sql2result[sql] = mrs
+				} else {
+					sql, _ := getSqlForCheckDatabaseTable(ctx, dbName, tableName)
+					mrs := newMrsForCheckDatabaseTable([][]interface{}{
+						{0},
+					})
+					bh.sql2result[sql] = mrs
+				}
+			}
+
+			_, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, stmt.ObjType, *stmt.Level)
+			convey.So(err, convey.ShouldBeNil)
+
+			for _, p := range stmt.Privileges {
+				privType, err := convertAstPrivilegeTypeToPrivilegeType(context.TODO(), p.Type, stmt.ObjType)
+				convey.So(err, convey.ShouldBeNil)
+				for j := range stmt.Roles {
+					sql := getSqlForCheckRoleHasPrivilege(int64(j), objType, objId, int64(privType))
+					mrs := newMrsForCheckRoleHasPrivilege([][]interface{}{})
+					bh.sql2result[sql] = mrs
+				}
+			}
+
+			err = doRevokePrivilege(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, bh)
+			convey.So(err, convey.ShouldBeNil)
+		}
+	})
+	convey.Convey("revoke view, role succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		dbName := "d"
+		tableName := "v"
+		stmts := []*tree.RevokePrivilege{
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+				},
+				ObjType: tree.OBJECT_TYPE_VIEW,
+				Level: &tree.PrivilegeLevel{
+					Level: tree.PRIVILEGE_LEVEL_TYPE_STAR,
+				},
+				Roles: []*tree.Role{
+					{UserName: "r1"},
+				},
+			},
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+				},
+				ObjType: tree.OBJECT_TYPE_VIEW,
+				Level: &tree.PrivilegeLevel{
+					Level: tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR,
+				},
+				Roles: []*tree.Role{
+					{UserName: "r1"},
+				},
+			},
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+				},
+				ObjType: tree.OBJECT_TYPE_VIEW,
+				Level: &tree.PrivilegeLevel{
+					Level:  tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR,
+					DbName: dbName,
+				},
+				Roles: []*tree.Role{
+					{UserName: "r1"},
+				},
+			},
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+				},
+				ObjType: tree.OBJECT_TYPE_VIEW,
+				Level: &tree.PrivilegeLevel{
+					Level:   tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+					DbName:  dbName,
+					TabName: tableName,
+				},
+				Roles: []*tree.Role{
+					{UserName: "r1"},
+				},
+			},
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+				},
+				ObjType: tree.OBJECT_TYPE_VIEW,
+				Level: &tree.PrivilegeLevel{
+					Level:   tree.PRIVILEGE_LEVEL_TYPE_TABLE,
+					TabName: tableName,
+				},
+				Roles: []*tree.Role{
+					{UserName: "r1"},
+				},
+			},
+		}
+
+		ctx := context.WithValue(context.TODO(), defines.TenantIDKey{}, uint32(sysAccountID))
+
+		for _, stmt := range stmts {
+			priv := determinePrivilegeSetOfStatement(stmt)
+			ses := newSes(priv, ctrl)
+			ses.SetDatabaseName("d")
+
+			//no result set
+			bh.sql2result["begin;"] = nil
+			bh.sql2result["commit;"] = nil
+			bh.sql2result["rollback;"] = nil
+
+			//init from roles
+			for i, role := range stmt.Roles {
+				sql, _ := getSqlForRoleIdOfRole(context.TODO(), role.UserName)
+				mrs := newMrsForRoleIdOfRole([][]interface{}{
+					{i},
+				})
+				bh.sql2result[sql] = mrs
+			}
+
+			objType, err := convertAstObjectTypeToObjectType(context.TODO(), stmt.ObjType)
+			convey.So(err, convey.ShouldBeNil)
+
+			if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_STAR ||
+				stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR {
+				sql, _ := getSqlForCheckDatabase(context.TODO(), dbName)
+				mrs := newMrsForCheckDatabase([][]interface{}{
 					{0},
 				})
 				bh.sql2result[sql] = mrs
+			} else if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE ||
+				stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE {
+				if stmt.ObjType == tree.OBJECT_TYPE_VIEW {
+					sql, _ := getSqlForCheckDatabaseView(ctx, dbName, tableName)
+					mrs := newMrsForCheckDatabaseTable([][]interface{}{
+						{0},
+					})
+					bh.sql2result[sql] = mrs
+				} else {
+					sql, _ := getSqlForCheckDatabaseTable(ctx, dbName, tableName)
+					mrs := newMrsForCheckDatabaseTable([][]interface{}{
+						{0},
+					})
+					bh.sql2result[sql] = mrs
+				}
 			}
 
 			_, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, stmt.ObjType, *stmt.Level)

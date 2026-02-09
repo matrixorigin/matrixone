@@ -219,6 +219,8 @@ func (node *ObjectType) String() string {
 		return "function"
 	case OBJECT_TYPE_PROCEDURE:
 		return "procedure"
+	case OBJECT_TYPE_VIEW:
+		return "view"
 	case OBJECT_TYPE_ACCOUNT:
 		return "account"
 	case OBJECT_TYPE_DATABASE:

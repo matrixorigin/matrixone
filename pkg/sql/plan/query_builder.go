@@ -4370,6 +4370,14 @@ func (builder *QueryBuilder) appendStep(nodeID int32) int32 {
 
 func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32 {
 	nodeID := int32(len(builder.qry.Nodes))
+	if ctx != nil && len(ctx.viewChain) > 0 {
+		if len(node.OriginViews) == 0 {
+			node.OriginViews = append([]string{}, ctx.viewChain...)
+		}
+		if node.DirectView == "" {
+			node.DirectView = ctx.directView
+		}
+	}
 	node.NodeId = nodeID
 	builder.qry.Nodes = append(builder.qry.Nodes, node)
 	builder.ctxByNode = append(builder.ctxByNode, ctx)
@@ -4574,6 +4582,21 @@ func (builder *QueryBuilder) bindView(
 		defaultDatabase = obj.SubscriptionName
 	}
 	viewCtx.defaultDatabase = defaultDatabase
+	viewKey := schema + "#" + table
+	viewKeyWithSnapshot := viewKey
+	if IsSnapshotValid(snapshot) {
+		viewKeyWithSnapshot = FormatViewKeyWithSnapshot(viewKey, snapshot)
+	}
+	if ctx != nil && ctx.directView != "" {
+		viewCtx.directView = ctx.directView
+	} else {
+		viewCtx.directView = viewKeyWithSnapshot
+	}
+	if ctx != nil && len(ctx.viewChain) > 0 {
+		viewCtx.viewChain = append(append([]string{}, ctx.viewChain...), viewKey)
+	} else {
+		viewCtx.viewChain = []string{viewKey}
+	}
 
 	if viewCtx.viewInBinding(schema, table, viewStmt) {
 		return 0, moerr.NewParseErrorf(builder.GetContext(), "view %s reference itself", table)

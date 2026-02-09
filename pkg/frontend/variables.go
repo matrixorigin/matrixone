@@ -1727,6 +1727,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemSystemEnumType("default_storage_engine", "InnoDB"),
 		Default:           "InnoDB",
 	},
+	"view_security_type": {
+		Name:              "view_security_type",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemSystemEnumType("view_security_type", "DEFINER", "INVOKER"),
+		Default:           "DEFINER",
+	},
 	"default_table_encryption": {
 		Name:              "default_table_encryption",
 		Scope:             ScopeBoth,
