@@ -1843,7 +1843,7 @@ func jsonToOthers(ctx context.Context,
 
 // jsonCastErr returns the standard error for invalid JSON to numeric cast.
 func jsonCastErr(ctx context.Context, toOid types.T) error {
-	return moerr.NewInvalidArg(ctx, "operator cast", fmt.Sprintf("[JSON %s]", toOid.String()))
+	return moerr.NewInvalidArg(ctx, "operator cast", fmt.Sprintf("[JSON -> %s]", toOid.String()))
 }
 
 // jsonToScalar extracts a numeric scalar from JSON. Returns (float64, isNull, ok). Used for all JSON->numeric casts.
