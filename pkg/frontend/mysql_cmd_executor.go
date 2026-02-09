@@ -940,6 +940,20 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 	}
 
 	var err error
+	useGlobal := sv.Global
+	if !useGlobal && execCtx != nil {
+		sqlText := execCtx.sqlOfStmt
+		if sqlText == "" && execCtx.input != nil {
+			sqlText = execCtx.input.getSql()
+		}
+		if sqlText != "" {
+			if stmt, parseErr := parsers.ParseOne(execCtx.reqCtx, dialect.MYSQL, sqlText, 1); parseErr == nil {
+				if svParsed, ok := stmt.(*tree.ShowVariables); ok && svParsed.Global {
+					useGlobal = true
+				}
+			}
+		}
+	}
 
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
@@ -977,7 +991,7 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 		}
 
 		var value interface{}
-		if sv.Global {
+		if useGlobal {
 			if value, err = ses.GetGlobalSysVar(name); err != nil {
 				continue
 			}
