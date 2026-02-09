@@ -36,40 +36,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/parquet-go/parquet-go/format"
 )
-
-func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Process, bat *batch.Batch) error {
-	_, span := trace.Start(ctx, "scanParquetFile")
-	defer span.End()
-
-	if param.parqh == nil {
-		var err error
-		param.parqh, err = newParquetHandler(param)
-		if err != nil {
-			return err
-		}
-		// Empty file handling: newParquetHandler returns (nil, nil) for empty files.
-		// Mark file as finished to allow multi-file loading to proceed correctly.
-		if param.parqh == nil {
-			param.Fileparam.FileFin++
-			if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
-				param.Fileparam.End = true
-			}
-			return nil
-		}
-	}
-
-	// With cached page iterators, we read up to maxParquetBatchCnt rows per call.
-	// The iterator automatically tracks position, so no need to calculate offset-based batchCnt.
-	param.parqh.batchCnt = maxParquetBatchCnt
-
-	return param.parqh.getData(bat, param, proc)
-}
 
 var maxParquetBatchCnt int64 = 100000
 
@@ -116,9 +87,12 @@ func newParquetHandler(param *ExternalParam) (*ParquetHandler, error) {
 
 func (h *ParquetHandler) openFile(param *ExternalParam) error {
 	var r io.ReaderAt
+	var fileSize int64
 	switch {
 	case param.Extern.ScanType == tree.INLINE:
-		r = bytes.NewReader(util.UnsafeStringToBytes(param.Extern.Data))
+		data := util.UnsafeStringToBytes(param.Extern.Data)
+		r = bytes.NewReader(data)
+		fileSize = int64(len(data))
 	case param.Extern.Local:
 		return moerr.NewNYI(param.Ctx, "load parquet local")
 	default:
@@ -127,12 +101,18 @@ func (h *ParquetHandler) openFile(param *ExternalParam) error {
 			return err
 		}
 
+		// Validate FileIndex to avoid out-of-bounds access
+		if param.Fileparam.FileIndex <= 0 || param.Fileparam.FileIndex > len(param.FileSize) {
+			return moerr.NewInternalErrorf(param.Ctx, "invalid FileIndex %d for FileSize length %d",
+				param.Fileparam.FileIndex, len(param.FileSize))
+		}
+		fileSize = param.FileSize[param.Fileparam.FileIndex-1]
+
 		// For S3 sources, pre-read the entire file into memory to avoid
 		// many small random HTTP requests which cause severe performance issues.
 		// Parquet reading involves many small random reads (metadata, page headers, etc.)
 		// which are fast on local disk but extremely slow over S3 due to HTTP RTT.
 		if param.Extern.ScanType == tree.S3 {
-			fileSize := param.FileSize[param.Fileparam.FileIndex-1]
 			data := make([]byte, fileSize)
 			vec := fileservice.IOVector{
 				FilePath: readPath,
@@ -157,7 +137,7 @@ func (h *ParquetHandler) openFile(param *ExternalParam) error {
 		}
 	}
 	var err error
-	h.file, err = parquet.OpenFile(r, param.FileSize[param.Fileparam.FileIndex-1])
+	h.file, err = parquet.OpenFile(r, fileSize)
 	return moerr.ConvertGoError(param.Ctx, err)
 }
 
@@ -1883,11 +1863,7 @@ func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, p
 				pages.Close()
 			}
 		}
-		param.parqh = nil
-		param.Fileparam.FileFin++
-		if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
-			param.Fileparam.End = true
-		}
+		// File completion (FileFin/End) is now handled by Call's finishCurrentFile
 	}
 
 	return nil
