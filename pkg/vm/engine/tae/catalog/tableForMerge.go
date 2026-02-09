@@ -169,12 +169,49 @@ func (t TNMergeTable) IsSpecialBigTable() bool {
 
 // IsFromPublication checks if the table is created by publication
 // This flag is set when parsing properties in DefsToSchema
+// It also recursively checks parent tables (for index tables and partition tables)
 func (t TNMergeTable) IsFromPublication() bool {
-	schema := t.GetLastestSchema(false)
+	return t.isTableFromPublication(t.TableEntry)
+}
+
+// isTableFromPublication recursively checks if the table or any of its parent tables
+// is created by publication (CCPR). Index tables and partition tables inherit this property
+// from their parent tables.
+func (t TNMergeTable) isTableFromPublication(entry *TableEntry) bool {
+	if entry == nil {
+		return false
+	}
+
+	schema := entry.GetLastestSchema(false)
 	if schema == nil {
 		return false
 	}
-	return schema.FromPublication
+
+	// If this table itself is from publication, return true immediately
+	if schema.FromPublication {
+		return true
+	}
+
+	// Check parent table if exists (for index tables and partition tables)
+	if schema.Extra == nil || schema.Extra.ParentTableID == 0 {
+		return false
+	}
+
+	// Get parent table from the same database
+	db := entry.GetDB()
+	if db == nil {
+		logutil.Warn("CCPR MergeTable failed to get db")
+		return false
+	}
+
+	parentEntry, err := db.GetTableEntryByID(schema.Extra.ParentTableID)
+	if err != nil {
+		logutil.Warn("CCPR MergeTable failed to get parent table", zap.Error(err))
+		return false
+	}
+
+	// Recursively check parent table
+	return t.isTableFromPublication(parentEntry)
 }
 
 func (t TNMergeTable) IterDataItem() iter.Seq[MergeDataItem] {
