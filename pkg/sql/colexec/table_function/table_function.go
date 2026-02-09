@@ -188,6 +188,8 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = parseJsonlFilePrepare(proc, tblArg)
 	case "table_stats":
 		tblArg.ctr.state, err = tableStatsPrepare(proc, tblArg)
+	case "load_file_chunks":
+		tblArg.ctr.state, err = loadFileChunksPrepare(proc, tblArg)
 	default:
 		tblArg.ctr.state = nil
 		err = moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.FuncName))

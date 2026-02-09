@@ -399,12 +399,10 @@ use sub_db7;
 show tables;
 -- @session
 
--- @bvt:issue#9024
 create database test_db;
 create publication test_pubname database test_db account all comment 'publication to all tenant';
 drop publication test_pubname;
 drop database test_db;
--- @bvt:issue
 
 create database sub_db4 from no_exists publication pubname4;
 

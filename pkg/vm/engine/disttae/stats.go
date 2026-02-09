@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -486,7 +487,7 @@ func (gs *GlobalStats) processLogtail(ctx context.Context, tail *logtail.TableLo
 	// Count meta changes from logtail by checking batch length
 	metaChanges := 0
 	for i := range tail.Commands {
-		if logtailreplay.IsMetaEntry(tail.Commands[i].TableName) {
+		if cmd := tail.Commands[i]; cmd.EntryType == api.Entry_DataObject || logtailreplay.IsMetaEntry(tail.Commands[i].TableName) {
 			if tail.Commands[i].Bat != nil && len(tail.Commands[i].Bat.Vecs) > 0 {
 				metaChanges += int(tail.Commands[i].Bat.Vecs[0].Len)
 			}
@@ -1084,8 +1085,19 @@ func collectTableStats(
 		updateMu.Unlock()
 
 		// ===== Phase 2: Sampling decision =====
-		if isSampling && !shouldSampleObject(objName, samplingThreshold) {
-			return nil // Skip non-sampled objects, no IO
+		// When sampling is enabled (approxObjectNum > 100), we randomly skip objects to reduce IO.
+		// We must ensure at least one object is chosen so that Phase 2 runs and ColumnNDVs/ShuffleRanges
+		// get populated. Otherwise the table would end up with all-zero NDV, empty ShuffleRangeMap, and
+		// point queries would use a high block_sel (e.g. 0.5) leading to ~611 blocks instead of 1.
+		// So: if we have not yet sampled any object for this table, force this object into Phase 2.
+		// Lock is held only to read sampledObjectCount; we do not hold across IO or shouldSampleObject.
+		if isSampling {
+			updateMu.Lock()
+			forceOne := sampledObjectCount == 0
+			updateMu.Unlock()
+			if !forceOne && !shouldSampleObject(objName, samplingThreshold) {
+				return nil // Skip non-sampled objects, no IO
+			}
 		}
 
 		// Sampled object: read ObjectMeta (requires IO)

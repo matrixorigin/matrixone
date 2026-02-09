@@ -464,7 +464,7 @@ func (s *Scanner) scanString(delim uint16, typ int) (int, string) {
 			if s.cur() != delim {
 				return typ, buf.String()
 			}
-		} else if ch == '\\' {
+		} else if ch == '\\' && delim != '$' {
 			ch = handleEscape(s, buf)
 			if ch == eofChar {
 				break
@@ -497,7 +497,7 @@ func (s *Scanner) scanStringAddPlus(delim uint16, typ int) (int, string) {
 			if s.cur() != delim {
 				return typ, buf.String()
 			}
-		} else if ch == '\\' {
+		} else if ch == '\\' && delim != '$' {
 			ch = handleEscape(s, buf)
 			if ch == eofChar {
 				break

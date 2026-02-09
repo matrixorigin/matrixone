@@ -387,9 +387,7 @@ select * from decimal01;
 select max(d) over (partition by d order by d) from decimal01;
 select min(d) over (partition by d order by d) from decimal01;
 select avg(d) over (partition by d) from decimal01;
--- @bvt:issue#10043
 select sum(d) over (partition by d order by d rows between 1 preceding and 1 following) from decimal01;
--- @bvt:issue
 drop table decimal01;
 
 -- partition by and order by follows date
