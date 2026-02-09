@@ -1510,9 +1510,12 @@ func (mp *MysqlProtocolImpl) HandleHandshake(ctx context.Context, payload []byte
 		return false, moerr.NewInternalError(ctx, "received a broken response packet")
 	}
 
-	if capabilities, _, ok := mp.io.ReadUint16(payload, 0); !ok {
+	capabilities, _, ok := mp.io.ReadUint16(payload, 0)
+	if !ok {
 		return false, moerr.NewInternalError(ctx, "read capabilities from response packet failed")
-	} else if uint32(capabilities)&CLIENT_PROTOCOL_41 != 0 {
+	}
+
+	if uint32(capabilities)&CLIENT_PROTOCOL_41 != 0 {
 		var resp41 response41
 		var ok2 bool
 		mp.GetSession().Debug(ctx, "analyse handshake response")

@@ -434,7 +434,7 @@ func (mo *MOServer) handshake(rs *Conn) error {
 			}
 		} else {
 			ses.Debugf(tempCtx, "handleHandshake")
-			_, err = protocol.HandleHandshake(tempCtx, payload)
+			isTlsHeader, err = protocol.HandleHandshake(tempCtx, payload)
 			if err != nil {
 				err = moerr.AttachCause(tempCtx, err)
 				ses.Error(tempCtx,
@@ -442,11 +442,40 @@ func (mo *MOServer) handshake(rs *Conn) error {
 					zap.Error(err))
 				return err
 			}
-			if err = protocol.Authenticate(tempCtx); err != nil {
-				return moerr.AttachCause(tempCtx, err)
+			if isTlsHeader {
+				ts[TSUpgradeTLSStart] = time.Now()
+				ses.Debugf(tempCtx, "upgrade to TLS")
+				// do upgradeTls
+				tlsConn := tls.Server(rs.RawConn(), rm.getTlsConfig())
+				ses.Debugf(tempCtx, "get TLS conn ok")
+				tlsCtx, cancelFun := context.WithTimeoutCause(tempCtx, 20*time.Second, moerr.CauseHandshake2)
+				if err = tlsConn.HandshakeContext(tlsCtx); err != nil {
+					err = moerr.AttachCause(tlsCtx, err)
+					ses.Error(tempCtx,
+						"Error occurred before cancel()",
+						zap.Error(err))
+					cancelFun()
+					ses.Error(tempCtx,
+						"Error occurred after cancel()",
+						zap.Error(err))
+					return err
+				}
+				cancelFun()
+				ses.Debugf(tempCtx, "TLS handshake ok")
+				rs.UseConn(tlsConn)
+				ses.Debugf(tempCtx, "TLS handshake finished")
+
+				// tls upgradeOk
+				protocol.SetBool(TLS_ESTABLISHED, true)
+				ts[TSUpgradeTLSEnd] = time.Now()
+				v2.UpgradeTLSDurationHistogram.Observe(ts[TSUpgradeTLSEnd].Sub(ts[TSUpgradeTLSStart]).Seconds())
+			} else {
+				if err = protocol.Authenticate(tempCtx); err != nil {
+					return moerr.AttachCause(tempCtx, err)
+				}
+				mo.applyInteractiveWaitTimeout(tempCtx, ses, protocol)
+				protocol.SetBool(ESTABLISHED, true)
 			}
-			mo.applyInteractiveWaitTimeout(tempCtx, ses, protocol)
-			protocol.SetBool(ESTABLISHED, true)
 		}
 		ts[TSEstablishEnd] = time.Now()
 		v2.EstablishDurationHistogram.Observe(ts[TSEstablishEnd].Sub(ts[TSEstablishStart]).Seconds())
