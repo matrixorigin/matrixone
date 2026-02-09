@@ -405,8 +405,6 @@ func Test_CALL3(t *testing.T) {
 
 		err = tcs.arg.Prepare(tcs.proc)
 		convey.So(err, convey.ShouldBeNil)
-		param.plh, err = getMOCSVReader(param, tcs.proc)
-		require.NoError(t, err)
 		end, err := vm.Exec(tcs.arg, tcs.proc)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(end.Status == vm.ExecStop, convey.ShouldBeFalse)
@@ -415,8 +413,6 @@ func Test_CALL3(t *testing.T) {
 		param.Fileparam.End = false
 		err = tcs.arg.Prepare(tcs.proc)
 		convey.So(err, convey.ShouldBeNil)
-		param.plh, err = getMOCSVReader(param, tcs.proc)
-		require.NoError(t, err)
 		end, err = vm.Exec(tcs.arg, tcs.proc)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(end.Status == vm.ExecStop, convey.ShouldBeFalse)
@@ -842,6 +838,8 @@ func Test_getMOCSVReader(t *testing.T) {
 
 	param.Extern = extern
 	param.Fileparam.Filepath = "/noexistsfile.gz"
-	_, err := getMOCSVReader(param, case1.proc)
+	r, err := NewCsvReader(param, case1.proc)
+	require.NoError(t, err)
+	_, err = r.Open(param, case1.proc)
 	require.Equal(t, nil, err)
 }
