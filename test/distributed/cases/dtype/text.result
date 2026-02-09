@@ -156,7 +156,7 @@ create table t1 (
 a text not null,
 b text not null default '0'
 );
-Type text don't support default value
+drop table t1;
 create table t1 (a text primary key, b varchar(32));
 not supported: text type in primary key
 create table t1 (a text, index index_test(a));

@@ -17,8 +17,6 @@ package taskservice
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/exec"
 	"testing"
 	"time"
 
@@ -140,30 +138,52 @@ func TestReAllocate(t *testing.T) {
 	assert.Equal(t, uint32(2), v.Epoch)
 }
 
-func allocateWithNotExistTask(t *testing.T) {
+func TestAllocateWithNotExistTask(t *testing.T) {
 	store := NewMemTaskStorage()
 	s := NewTaskService(runtime.DefaultRuntime(), store)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
+
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 	defer cancel()
-	_ = s.Allocate(ctx, task.AsyncTask{ID: 1}, "r1")
+
+	// Try to allocate a task that doesn't exist
+	err := s.Allocate(ctx, task.AsyncTask{ID: 1, Metadata: task.TaskMetadata{ID: "non-existent"}}, "r1")
+	// Should return ErrInvalidTask instead of Fatal
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask))
 }
 
-func TestAllocateWithNotExistTask(t *testing.T) {
-	if os.Getenv("RUN_TEST") == "1" {
-		allocateWithNotExistTask(t)
-		return
-	}
-	cmd := exec.Command(os.Args[0], "-test.run=TestAllocateWithNotExistTask")
-	cmd.Env = append(os.Environ(), "RUN_TEST=1")
-	err := cmd.Run()
-	// check Fatal is called
-	if e, ok := err.(*exec.ExitError); ok && !e.Success() {
-		return
-	}
-	t.Fatalf("process ran with err %v, want exit status 1", err)
+// TestAllocateWithTaskDeletedDuringAllocation simulates the race condition where
+// a task is deleted (completed and truncated) between queryTasks and Allocate.
+// This is the scenario that caused the FATAL error in production.
+func TestAllocateWithTaskDeletedDuringAllocation(t *testing.T) {
+	store := NewMemTaskStorage().(*memTaskStorage)
+	s := NewTaskService(runtime.DefaultRuntime(), store)
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+	defer cancel()
+
+	// Create a task
+	assert.NoError(t, s.CreateAsyncTask(ctx, newTestTaskMetadata("t1")))
+	v := mustGetTestAsyncTask(t, store, 1)[0]
+
+	// Simulate the task being deleted before Allocate is called
+	// This can happen when:
+	// 1. Scheduler queries Created tasks
+	// 2. CN node picks up and completes the task
+	// 3. Another scheduler cycle truncates completed tasks
+	// 4. Original scheduler tries to allocate the now-deleted task
+	_, err := store.DeleteAsyncTask(ctx, WithTaskIDCond(EQ, v.ID))
+	assert.NoError(t, err)
+
+	// Now try to allocate the deleted task
+	err = s.Allocate(ctx, v, "r1")
+	// Should return ErrInvalidTask instead of causing Fatal
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask))
 }
 
 func TestAllocateWithInvalidEpoch(t *testing.T) {

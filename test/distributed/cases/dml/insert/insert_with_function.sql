@@ -76,9 +76,7 @@ INSERT INTO math_test(tiny,small,int_test,big) VALUES(32, 2432, 54354, 543324324
 INSERT INTO math_test(tiny_un, small_un, int_un) VALUES(127, 32768, 2147483648);
 SELECT * FROM math_test;
 
--- @bvt:issue#4952
---INSERT INTO math_test(tiny_un, small_un, int_un) VALUES(-128, -32768, -2147483648);
--- @bvt:issue
+INSERT INTO math_test(tiny_un, small_un, int_un) VALUES(-128, -32768, -2147483648);
 
 -- 小数位数
 DROP TABLE IF EXISTS test1;
