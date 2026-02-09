@@ -1497,6 +1497,13 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 
 	if createAsSelectSql := qry.GetCreateAsSelectSql(); createAsSelectSql != "" {
+		// Rewrite CTAS target to the real temporary-table name in temp database.
+		// The generated SQL targets `db`.`table`, while temporary tables are stored
+		// as `temporary_db`.`__mo_temp_xxx` internally.
+		aliasTable := fmt.Sprintf("`%s`.`%s`", dbName, tblName)
+		realTable := fmt.Sprintf("`%s`.`%s`", defines.TEMPORARY_DBNAME, engine.GetTempTableName(dbName, tblName))
+		createAsSelectSql = strings.Replace(createAsSelectSql, aliasTable, realTable, 1)
+
 		res, err := func() (executor.Result, error) {
 			oldCtx := c.proc.Ctx
 			// Force privilege checking for CTAS follow-up INSERT ... SELECT.
