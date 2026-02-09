@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"runtime/debug"
 	"sync"
 	"testing"
@@ -659,6 +660,57 @@ func TestLastActiveWithStream(t *testing.T) {
 				assert.True(t, t2.After(t1))
 			}
 		},
+	)
+}
+
+// TestReadLoopInternalMessageDoesNotUpdateLastActive ensures readLoop only calls active() for non-internal messages (heartbeat must not update LastActiveTime).
+func TestReadLoopInternalMessageDoesNotUpdateLastActive(t *testing.T) {
+	pongSent := make(chan struct{}, 1)
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+			request := msg.(RPCMessage)
+			if request.InternalMessage() {
+				if m, ok := request.Message.(*flagOnlyMessage); ok && m.flag == flagPing {
+					select {
+					case pongSent <- struct{}{}:
+					default:
+					}
+					return conn.Write(RPCMessage{
+						Ctx:      request.Ctx,
+						internal: true,
+						Message:  &flagOnlyMessage{flag: flagPong, id: m.id},
+					}, goetty.WriteOptions{Flush: true})
+				}
+			}
+			return conn.Write(msg, goetty.WriteOptions{Flush: true})
+		},
+		func(b *remoteBackend) {
+			t0 := b.LastActiveTime()
+			select {
+			case <-pongSent:
+			case <-time.After(10 * time.Second):
+				t.Fatal("timeout waiting for pong")
+			}
+			deadline := time.Now().Add(2 * time.Second)
+			for time.Now().Before(deadline) {
+				runtime.Gosched()
+				if b.LastActiveTime().Equal(t0) {
+					break
+				}
+			}
+			require.True(t, b.LastActiveTime().Equal(t0), "internal (pong) must not call active()")
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			req := newTestMessage(1)
+			f, err := b.Send(ctx, req)
+			require.NoError(t, err)
+			defer f.Close()
+			_, err = f.Get()
+			require.NoError(t, err)
+			require.True(t, b.LastActiveTime().After(t0), "user response must call active()")
+		},
+		WithBackendReadTimeout(30*time.Millisecond),
 	)
 }
 
