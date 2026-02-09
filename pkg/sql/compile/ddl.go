@@ -1504,9 +1504,11 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		res, err := func() (executor.Result, error) {
 			oldCtx := c.proc.Ctx
+			// CTAS follow-up SQL needs frontend session for temp-table alias resolution.
+			ctxWithSession := attachInternalExecutorSession(c.proc.Ctx, c.proc.GetSession())
 			// Force privilege checking for CTAS follow-up INSERT ... SELECT.
 			// Internal executor skips auth by default unless this flag is present.
-			c.proc.Ctx = attachInternalExecutorPrivilegeCheck(c.proc.Ctx)
+			c.proc.Ctx = attachInternalExecutorPrivilegeCheck(ctxWithSession)
 			defer func() {
 				c.proc.Ctx = oldCtx
 			}()
