@@ -57,9 +57,12 @@ Variable_name    Value
 interactive_timeout    30100
 set global interactive_timeout = 30000+100;
 internal error: the system variable is read only
-show global variables like 'interactive_timeout';
-Variable_name    Value
-interactive_timeout    86400
+select @@global.interactive_timeout;
+@@interactive_timeout
+86400
+select @@session.interactive_timeout;
+@@interactive_timeout
+30100
 set interactive_timeout = 0;
 internal error: convert to the system variable int type failed
 set interactive_timeout = 1;

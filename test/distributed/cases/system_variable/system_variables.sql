@@ -41,7 +41,8 @@ show variables like 'interactive_timeout';
 set interactive_timeout = 30000+100;
 show variables like 'interactive_timeout';
 set global interactive_timeout = 30000+100;
-show global variables like 'interactive_timeout';
+select @@global.interactive_timeout;
+select @@session.interactive_timeout;
 -- boundary tests (cloud policy: session only)
 set interactive_timeout = 0;
 set interactive_timeout = 1;

@@ -946,11 +946,17 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 		if sqlText == "" && execCtx.input != nil {
 			sqlText = execCtx.input.getSql()
 		}
+		if sqlText == "" && ses != nil {
+			sqlText = ses.GetSql()
+		}
 		if sqlText != "" {
 			if stmt, parseErr := parsers.ParseOne(execCtx.reqCtx, dialect.MYSQL, sqlText, 1); parseErr == nil {
 				if svParsed, ok := stmt.(*tree.ShowVariables); ok && svParsed.Global {
 					useGlobal = true
 				}
+			}
+			if !useGlobal && isShowGlobalVariablesSQL(sqlText) {
+				useGlobal = true
 			}
 		}
 	}
@@ -1074,6 +1080,37 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 	}
 
 	return trySaveQueryResult(execCtx.reqCtx, ses, mrs)
+}
+
+func isShowGlobalVariablesSQL(sqlText string) bool {
+	if sqlText == "" {
+		return false
+	}
+	scanner := mysql.NewScanner(dialect.MYSQL, sqlText)
+	defer mysql.PutScanner(scanner)
+	for {
+		tok := nextNonCommentToken(scanner)
+		switch tok {
+		case mysql.EofChar(), mysql.LEX_ERROR:
+			return false
+		case mysql.SHOW:
+			tok = nextNonCommentToken(scanner)
+			if tok == mysql.GLOBAL {
+				tok = nextNonCommentToken(scanner)
+				return tok == mysql.VARIABLES
+			}
+			return false
+		}
+	}
+}
+
+func nextNonCommentToken(scanner *mysql.Scanner) int {
+	for {
+		tok, _ := scanner.Scan()
+		if tok != mysql.COMMENT && tok != mysql.COMMENT_KEYWORD {
+			return tok
+		}
+	}
 }
 
 /*
