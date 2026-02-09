@@ -455,6 +455,18 @@ func Test_mce_selfhandle(t *testing.T) {
 		err = handleSetVar(ses, ec, setVar.(*tree.SetVar), "")
 		convey.So(err, convey.ShouldBeNil)
 
+		// Cloud policy: forbid setting global wait_timeout/interactive_timeout.
+		setGlobal := "set global interactive_timeout = 30000+100"
+		setVar, err = parsers.ParseOne(ctx, dialect.MYSQL, setGlobal, 1)
+		convey.So(err, convey.ShouldBeNil)
+
+		err = handleSetVar(ses, ec, setVar.(*tree.SetVar), setGlobal)
+		convey.So(err, convey.ShouldBeError)
+
+		val, err := ses.GetGlobalSysVar("interactive_timeout")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(val, convey.ShouldEqual, int64(86400))
+
 		req := &Request{
 			cmd:  COM_FIELD_LIST,
 			data: []byte{'A', 0},
