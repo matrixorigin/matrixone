@@ -1747,7 +1747,7 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 		}
 	}
 
-	return maybeCreateAutoIncrement(
+	err = maybeCreateAutoIncrement(
 		c.proc.Ctx,
 		c.proc.GetService(),
 		tmpDBSource,
@@ -1756,6 +1756,33 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 		func() string {
 			return engine.GetTempTableName(dbName, tblName)
 		})
+	if err != nil {
+		return err
+	}
+
+	if createAsSelectSql := qry.GetCreateAsSelectSql(); createAsSelectSql != "" {
+		res, err := func() (executor.Result, error) {
+			oldCtx := c.proc.Ctx
+			// Force privilege checking for CTAS follow-up INSERT ... SELECT.
+			// Internal executor skips auth by default unless this flag is present.
+			c.proc.Ctx = attachInternalExecutorPrivilegeCheck(c.proc.Ctx)
+			defer func() {
+				c.proc.Ctx = oldCtx
+			}()
+			return c.runSqlWithResultAndOptions(
+				createAsSelectSql,
+				NoAccountId,
+				executor.StatementOption{}.WithDisableLog(),
+			)
+		}()
+		if err != nil {
+			return err
+		}
+		c.addAffectedRows(res.AffectedRows)
+		res.Close()
+	}
+
+	return nil
 }
 
 func (s *Scope) CreateIndex(c *Compile) error {
