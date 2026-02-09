@@ -47,13 +47,11 @@ table_name    table_type
 v1    VIEW
 drop view v1;
 -- sequence should be skipped
-create sequence s1 as bigint increment by 1 minvalue 1 maxvalue 100 start with 1 no cycle;
-select * from s1;
-last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
-1    1    100    1    1    0    0
+create sequence s1;
 create table t1(a int);
 drop table if exists s1, t1;
-select * from s1;
-last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
-1    1    100    1    1    0    0
+show sequences where names in('s1');
+➤ names[12,-1,0]  ¦  data type[12,-1,0]  𝄀
+s1  ¦  BIGINT
+drop sequence s1;
 drop database drop_multi;
