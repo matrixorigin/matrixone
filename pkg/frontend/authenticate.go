@@ -6168,13 +6168,29 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 			})
 		} else if p.GetDdl().GetDropTable() != nil {
 			dropTable := p.GetDdl().GetDropTable()
-			appendPt(privilegeTips{
-				typ:                   PrivilegeTypeDropTable,
-				databaseName:          dropTable.GetDatabase(),
-				tableName:             dropTable.GetTable(),
-				isClusterTable:        dropTable.GetClusterTable().GetIsClusterTable(),
-				clusterTableOperation: clusterTableDrop,
-			})
+			if len(dropTable.GetTables()) > 0 {
+				for _, entry := range dropTable.GetTables() {
+					isCluster := false
+					if entry.GetClusterTable() != nil {
+						isCluster = entry.GetClusterTable().GetIsClusterTable()
+					}
+					appendPt(privilegeTips{
+						typ:                   PrivilegeTypeDropTable,
+						databaseName:          entry.GetDatabase(),
+						tableName:             entry.GetTable(),
+						isClusterTable:        isCluster,
+						clusterTableOperation: clusterTableDrop,
+					})
+				}
+			} else {
+				appendPt(privilegeTips{
+					typ:                   PrivilegeTypeDropTable,
+					databaseName:          dropTable.GetDatabase(),
+					tableName:             dropTable.GetTable(),
+					isClusterTable:        dropTable.GetClusterTable().GetIsClusterTable(),
+					clusterTableOperation: clusterTableDrop,
+				})
+			}
 		} else if p.GetDdl().GetCreateIndex() != nil {
 			createIndex := p.GetDdl().GetCreateIndex()
 			appendPt(privilegeTips{

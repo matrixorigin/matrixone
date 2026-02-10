@@ -3050,6 +3050,11 @@ func executeStmt(ses *Session,
 				execCtx.cw.SetExplainBuffer(analyzeModule.GetExplainPhyBuffer())
 			}
 
+			// Sync the latest plan after Run (it may have changed due to retry)
+			if txnCw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
+				txnCw.plan = c.GetPlan()
+			}
+
 			// Serialize the execution plan as json
 			_ = execCtx.cw.RecordExecPlan(execCtx.reqCtx, phyPlan)
 			c.Release()
