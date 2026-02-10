@@ -1730,5 +1730,5 @@ enum AlterPartitionType {
 }
 
 message RankOption {
-  string mode = 1; // "pre" or "post"
+  string mode = 1; // "pre", "post", "force", or "auto"
 }
