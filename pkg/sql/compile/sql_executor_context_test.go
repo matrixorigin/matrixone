@@ -16,7 +16,6 @@ package compile
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -134,7 +133,7 @@ func TestCompilerContextGetRelationReturnsNilWhenTempDbUnavailable(t *testing.T)
 	eng.EXPECT().Database(gomock.Any(), "testdb", nil).Return(mainDB, nil)
 	mainDB.EXPECT().Relation(gomock.Any(), "t1", nil).Return(nil, mainErr)
 	eng.EXPECT().HasTempEngine().Return(true)
-	eng.EXPECT().Database(gomock.Any(), defines.TEMPORARY_DBNAME, nil).Return(nil, errors.New("temp db not found"))
+	eng.EXPECT().Database(gomock.Any(), defines.TEMPORARY_DBNAME, nil).Return(nil, moerr.NewInternalErrorNoCtx("temp db not found"))
 
 	c := &compilerContext{
 		proc:      proc,
