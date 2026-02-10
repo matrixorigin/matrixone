@@ -1668,7 +1668,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		for _, constraint := range ct.Cts {
 			if idxdef, ok := constraint.(*engine.IndexDef); ok && len(idxdef.Indexes) > 0 {
 				tableID := newRelation.GetTableID(c.proc.Ctx)
-				err = CreateAllIndexCdcTasks(c, idxdef.Indexes, dbName, tblName, tableID, false)
+				err = CreateAllIndexCdcTasks(c, idxdef.Indexes, dbName, tblName, tableID, false, qry.GetTableDef())
 				if err != nil {
 					return err
 				}

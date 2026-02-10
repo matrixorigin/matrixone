@@ -130,8 +130,14 @@ func isTableInCCPRImpl(c *Compile, tableid uint64) bool {
 }
 
 // NOTE: CreateIndexCdcTask will create CDC task without any checking.  Original TableDef may be empty
-func CreateIndexCdcTask(c *Compile, dbname string, tablename string, tableid uint64, indexname string, sinker_type int8, startFromNow bool, sql string) error {
+func CreateIndexCdcTask(c *Compile, dbname string, tablename string, tableid uint64, indexname string, sinker_type int8, startFromNow bool, sql string, tableDef *plan.TableDef) error {
 	var err error
+
+	// Skip ISCP task creation if table is from CCPR subscription (from_publication = true)
+	if isTableFromPublication(tableDef) {
+		logutil.Infof("skip creating index cdc task for CCPR subscribed table (%s, %s, %s)", dbname, tablename, indexname)
+		return nil
+	}
 
 	// Skip ISCP task creation if table is managed by CCPR
 	if isTableInCCPR(c, tableid) {
@@ -227,7 +233,7 @@ func getSinkerTypeFromAlgo(algo string) int8 {
 }
 
 // NOTE: CreateAllIndexCdcTasks will create CDC task according to existing tableDef
-func CreateAllIndexCdcTasks(c *Compile, indexes []*plan.IndexDef, dbname string, tablename string, tableid uint64, startFromNow bool) error {
+func CreateAllIndexCdcTasks(c *Compile, indexes []*plan.IndexDef, dbname string, tablename string, tableid uint64, startFromNow bool, tableDef *plan.TableDef) error {
 	idxmap := make(map[string]bool)
 	for _, idx := range indexes {
 		_, ok := idxmap[idx.IndexName]
@@ -243,7 +249,7 @@ func CreateAllIndexCdcTasks(c *Compile, indexes []*plan.IndexDef, dbname string,
 		if valid {
 			idxmap[idx.IndexName] = true
 			sinker_type := getSinkerTypeFromAlgo(idx.IndexAlgo)
-			e := CreateIndexCdcTask(c, dbname, tablename, tableid, idx.IndexName, sinker_type, startFromNow, "")
+			e := CreateIndexCdcTask(c, dbname, tablename, tableid, idx.IndexName, sinker_type, startFromNow, "", tableDef)
 			if e != nil {
 				return e
 			}

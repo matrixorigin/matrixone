@@ -152,7 +152,7 @@ func TestISCPCreateAllIndexCdcTasks(t *testing.T) {
 			},
 		}
 
-		err := CreateAllIndexCdcTasks(c, tbldef.Indexes, "dbname", "tname", 0, false)
+		err := CreateAllIndexCdcTasks(c, tbldef.Indexes, "dbname", "tname", 0, false, tbldef)
 		require.NotNil(t, err)
 		fmt.Println(err)
 
@@ -170,7 +170,7 @@ func TestISCPCreateAllIndexCdcTasks(t *testing.T) {
 			},
 		}
 
-		err := CreateAllIndexCdcTasks(c, tbldef.Indexes, "dbname", "tname", 0, false)
+		err := CreateAllIndexCdcTasks(c, tbldef.Indexes, "dbname", "tname", 0, false, tbldef)
 		require.NotNil(t, err)
 		fmt.Println(err)
 
@@ -296,7 +296,7 @@ func TestISCPCreateIndexCdcTask(t *testing.T) {
 	c.proc = testutil.NewProcess(t)
 
 	{
-		err := CreateIndexCdcTask(c, "dbname", "tname", 0, "a", 0, true, "")
+		err := CreateIndexCdcTask(c, "dbname", "tname", 0, "a", 0, true, "", nil)
 		require.NotNil(t, err)
 		fmt.Println(err)
 
