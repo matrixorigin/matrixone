@@ -5370,8 +5370,9 @@ func parseRankOption(options map[string]string, ctx context.Context) (*plan.Rank
 		// - "pre": Enable vector index with BloomFilter pushdown
 		// - "post": Enable vector index with standard behavior (post-filtering)
 		// - "force": Force disable vector index, use full table scan
-		if modeLower != "pre" && modeLower != "post" && modeLower != "force" {
-			return nil, moerr.NewInvalidInputf(ctx, "mode must be 'pre', 'post', or 'force', got '%s'", mode)
+		// - "auto": Adaptive mode that automatically selects the best strategy
+		if modeLower != "pre" && modeLower != "post" && modeLower != "force" && modeLower != "auto" {
+			return nil, moerr.NewInvalidInputf(ctx, "mode must be 'pre', 'post', 'force', or 'auto', got '%s'", mode)
 		}
 		rankOption.Mode = modeLower
 	}

@@ -640,6 +640,493 @@ func TestPrepareIvfIndexContext_Success(t *testing.T) {
 	assert.NotNil(t, result.vecLitArg)
 }
 
+// TestCalculateAdaptiveNprobe tests the calculateAdaptiveNprobe function
+func TestCalculateAdaptiveNprobe(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+
+	tests := []struct {
+		name        string
+		baseNprobe  int64
+		selectivity float64
+		totalLists  int64
+		expected    int64
+	}{
+		{
+			name:        "nil stats",
+			baseNprobe:  10,
+			selectivity: -1, // Use -1 to indicate nil stats in test helper
+			totalLists:  100,
+			expected:    10,
+		},
+		{
+			name:        "selectivity 1.0",
+			baseNprobe:  10,
+			selectivity: 1.0,
+			totalLists:  100,
+			expected:    10,
+		},
+		{
+			name:        "selectivity 0.25 (compensation 2x)",
+			baseNprobe:  10,
+			selectivity: 0.25,
+			totalLists:  100,
+			expected:    20,
+		},
+		{
+			name:        "selectivity 0.01 (compensation 10x)",
+			baseNprobe:  10,
+			selectivity: 0.01,
+			totalLists:  100,
+			expected:    100,
+		},
+		{
+			name:        "selectivity 0.0001 (compensation 100x, capped by totalLists)",
+			baseNprobe:  10,
+			selectivity: 0.0001,
+			totalLists:  100,
+			expected:    100,
+		},
+		{
+			name:        "adaptive nprobe less than base (should not happen with sqrt(1/s) where s < 1)",
+			baseNprobe:  10,
+			selectivity: 0.99,
+			totalLists:  100,
+			expected:    11, // ceil(10 * sqrt(1/0.99)) = ceil(10 * 1.005) = 11
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stats *plan.Stats
+			if tt.selectivity >= 0 {
+				stats = &plan.Stats{Selectivity: tt.selectivity}
+			}
+			result := builder.calculateAdaptiveNprobe(tt.baseNprobe, stats, tt.totalLists)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestPrepareIvfIndexContext_AdaptiveNprobe tests the adaptive nprobe logic in prepareIvfIndexContext
+func TestPrepareIvfIndexContext_AdaptiveNprobe(t *testing.T) {
+	baseMockCtx := NewMockCompilerContext(true)
+	mockCtx := &customMockCompilerContext{
+		MockCompilerContext: baseMockCtx,
+		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
+			if varName == "ivf_threads_search" {
+				return int64(4), nil
+			}
+			if varName == "probe_limit" {
+				return int64(10), nil
+			}
+			return baseMockCtx.ResolveVariable(varName, isSystem, isGlobal)
+		},
+	}
+
+	builder := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
+
+	scanNode := &plan.Node{
+		TableDef: &plan.TableDef{
+			Name: "test_table",
+			Name2ColIndex: map[string]int32{
+				"vec_col": 0,
+				"id":      1,
+			},
+			Cols: []*plan.ColDef{
+				{
+					Name: "vec_col",
+					Typ: plan.Type{
+						Id: int32(types.T_array_float32),
+					},
+				},
+				{
+					Name: "id",
+					Typ: plan.Type{
+						Id:    int32(types.T_int64),
+						Width: 64,
+					},
+				},
+			},
+			Pkey: &plan.PrimaryKeyDef{
+				PkeyColName: "id",
+			},
+		},
+		Stats: &plan.Stats{
+			Selectivity: 0.25, // Compensation factor = sqrt(1/0.25) = 2
+		},
+	}
+
+	vecCtx := &vectorSortContext{
+		distFnExpr: &plan.Function{
+			Func: &ObjectRef{
+				ObjName: "l2_distance",
+			},
+			Args: []*plan.Expr{
+				{
+					Typ: plan.Type{Id: int32(types.T_array_float32)},
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							ColPos: 0,
+						},
+					},
+				},
+				{
+					Typ: plan.Type{Id: int32(types.T_array_float32)},
+					Expr: &plan.Expr_Lit{
+						Lit: &plan.Literal{},
+					},
+				},
+			},
+		},
+		scanNode:   scanNode,
+		rankOption: &plan.RankOption{Mode: "auto"}, // Enable auto mode
+	}
+
+	// 1. Adaptive nprobe enabled (auto mode, selectivity 0.25, totalLists 100)
+	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `", "lists": 100}`
+	multiTableIndex := &MultiTableIndex{
+		IndexDefs: map[string]*plan.IndexDef{
+			catalog.SystemSI_IVFFLAT_TblType_Metadata: {
+				IndexAlgoParams: idxAlgoParams,
+			},
+			catalog.SystemSI_IVFFLAT_TblType_Centroids: {
+				Parts:           []string{"vec_col"},
+				IndexAlgoParams: idxAlgoParams,
+			},
+			catalog.SystemSI_IVFFLAT_TblType_Entries: {},
+		},
+	}
+
+	// Case 1: Adaptive mode enabled, compensation applied
+	result, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	// baseNprobe is 10 (from probe_limit), compensation is 2, expected nProbe = 20
+	assert.Equal(t, int64(20), result.nProbe)
+
+	// Case 2: Adaptive mode disabled because totalLists is missing
+	idxAlgoParamsNoLists := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`
+	multiTableIndexNoLists := &MultiTableIndex{
+		IndexDefs: map[string]*plan.IndexDef{
+			catalog.SystemSI_IVFFLAT_TblType_Metadata: {
+				IndexAlgoParams: idxAlgoParamsNoLists,
+			},
+			catalog.SystemSI_IVFFLAT_TblType_Centroids: {
+				Parts:           []string{"vec_col"},
+				IndexAlgoParams: idxAlgoParamsNoLists,
+			},
+			catalog.SystemSI_IVFFLAT_TblType_Entries: {},
+		},
+	}
+	result, err = builder.prepareIvfIndexContext(vecCtx, multiTableIndexNoLists)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	// Should use baseNprobe (10) because totalLists is -1
+	assert.Equal(t, int64(10), result.nProbe)
+
+	// Case 3: Adaptive mode disabled because mode is "force"
+	vecCtxForce := &vectorSortContext{
+		distFnExpr: vecCtx.distFnExpr,
+		scanNode:   scanNode,
+		rankOption: &plan.RankOption{Mode: "force"},
+	}
+	result, err = builder.prepareIvfIndexContext(vecCtxForce, multiTableIndex)
+	assert.NoError(t, err)
+	// Force mode should return nil (meaning use original search)
+	assert.Nil(t, result)
+}
+
+// ============================================================================
+// Tests for shouldUseForceMode
+// ============================================================================
+
+func TestShouldUseForceMode(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+
+	tests := []struct {
+		name        string
+		tableCnt    float64
+		selectivity float64
+		limitVal    uint64
+		expected    bool
+	}{
+		{
+			name:        "nil stats - should return false",
+			tableCnt:    0, // Indicates nil stats
+			selectivity: 0,
+			limitVal:    10,
+			expected:    false,
+		},
+		{
+			name:        "small table (10 rows), limit 10 - table < limit*2",
+			tableCnt:    10,
+			selectivity: 1.0,
+			limitVal:    10,
+			expected:    true,
+		},
+		{
+			name:        "small table (15 rows), limit 10 - table < limit*2",
+			tableCnt:    15,
+			selectivity: 1.0,
+			limitVal:    10,
+			expected:    true,
+		},
+		{
+			name:        "medium table (25 rows), limit 10 - table > limit*2",
+			tableCnt:    25,
+			selectivity: 1.0,
+			limitVal:    10,
+			expected:    false,
+		},
+		{
+			name:        "large table with high selectivity - estimated rows < limit*2",
+			tableCnt:    1000,
+			selectivity: 0.01, // 1000 * 0.01 = 10 estimated rows
+			limitVal:    10,
+			expected:    true,
+		},
+		{
+			name:        "large table with low selectivity - estimated rows > limit*2",
+			tableCnt:    1000,
+			selectivity: 0.5, // 1000 * 0.5 = 500 estimated rows
+			limitVal:    10,
+			expected:    false,
+		},
+		{
+			name:        "very small table (3 rows), limit 5 - force mode",
+			tableCnt:    3,
+			selectivity: 1.0,
+			limitVal:    5,
+			expected:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stats *plan.Stats
+			if tt.tableCnt > 0 {
+				stats = &plan.Stats{
+					TableCnt:    tt.tableCnt,
+					Selectivity: tt.selectivity,
+				}
+			}
+
+			scanNode := &plan.Node{
+				Stats: stats,
+			}
+
+			limitExpr := &plan.Expr{
+				Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{
+						Value: &plan.Literal_U64Val{U64Val: tt.limitVal},
+					},
+				},
+			}
+
+			vecCtx := &vectorSortContext{
+				scanNode: scanNode,
+				limit:    limitExpr,
+			}
+
+			result := builder.shouldUseForceMode(vecCtx)
+			assert.Equal(t, tt.expected, result, "Test case: %s", tt.name)
+		})
+	}
+}
+
+func TestShouldUseForceMode_NilLimit(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+
+	vecCtx := &vectorSortContext{
+		scanNode: &plan.Node{
+			Stats: &plan.Stats{TableCnt: 10},
+		},
+		limit: nil, // nil limit
+	}
+
+	result := builder.shouldUseForceMode(vecCtx)
+	assert.False(t, result)
+}
+
+func TestShouldUseForceMode_NonLiteralLimit(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+
+	// Limit is a column reference, not a literal
+	vecCtx := &vectorSortContext{
+		scanNode: &plan.Node{
+			Stats: &plan.Stats{TableCnt: 10},
+		},
+		limit: &plan.Expr{
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{ColPos: 0},
+			},
+		},
+	}
+
+	result := builder.shouldUseForceMode(vecCtx)
+	assert.False(t, result)
+}
+
+// ============================================================================
+// Tests for resolveVectorSearchMode
+// ============================================================================
+
+func TestResolveVectorSearchMode(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+
+	// Create a vecCtx with stats that won't trigger force mode
+	largeTableCtx := func() *vectorSortContext {
+		return &vectorSortContext{
+			scanNode: &plan.Node{
+				Stats: &plan.Stats{
+					TableCnt:    10000,
+					Selectivity: 0.5,
+				},
+			},
+			limit: &plan.Expr{
+				Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{
+						Value: &plan.Literal_U64Val{U64Val: 10},
+					},
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		name                       string
+		userMode                   string
+		enablePrefilterByDefault   bool
+		enableAutoModeByDefault    bool
+		expectedMode               string
+		expectedIsAutoMode         bool
+		expectedShouldDisableIndex bool
+	}{
+		// Test explicit force mode
+		{
+			name:                       "explicit force mode",
+			userMode:                   "force",
+			enablePrefilterByDefault:   false,
+			enableAutoModeByDefault:    false,
+			expectedMode:               "force",
+			expectedIsAutoMode:         false,
+			expectedShouldDisableIndex: true,
+		},
+		// Test explicit auto mode
+		{
+			name:                       "explicit auto mode",
+			userMode:                   "auto",
+			enablePrefilterByDefault:   false,
+			enableAutoModeByDefault:    false,
+			expectedMode:               "post",
+			expectedIsAutoMode:         true,
+			expectedShouldDisableIndex: false,
+		},
+		// Test implicit auto mode (via session variable)
+		{
+			name:                       "implicit auto mode via session variable",
+			userMode:                   "",
+			enablePrefilterByDefault:   false,
+			enableAutoModeByDefault:    true,
+			expectedMode:               "post",
+			expectedIsAutoMode:         true,
+			expectedShouldDisableIndex: false,
+		},
+		// Test explicit pre mode
+		{
+			name:                       "explicit pre mode",
+			userMode:                   "pre",
+			enablePrefilterByDefault:   false,
+			enableAutoModeByDefault:    false,
+			expectedMode:               "pre",
+			expectedIsAutoMode:         false,
+			expectedShouldDisableIndex: false,
+		},
+		// Test explicit post mode
+		{
+			name:                       "explicit post mode",
+			userMode:                   "post",
+			enablePrefilterByDefault:   false,
+			enableAutoModeByDefault:    false,
+			expectedMode:               "post",
+			expectedIsAutoMode:         false,
+			expectedShouldDisableIndex: false,
+		},
+		// Test default behavior with prefilter enabled
+		{
+			name:                       "default with prefilter enabled",
+			userMode:                   "",
+			enablePrefilterByDefault:   true,
+			enableAutoModeByDefault:    false,
+			expectedMode:               "pre",
+			expectedIsAutoMode:         false,
+			expectedShouldDisableIndex: false,
+		},
+		// Test default behavior with nothing enabled
+		{
+			name:                       "default with nothing enabled",
+			userMode:                   "",
+			enablePrefilterByDefault:   false,
+			enableAutoModeByDefault:    false,
+			expectedMode:               "post",
+			expectedIsAutoMode:         false,
+			expectedShouldDisableIndex: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vecCtx := largeTableCtx()
+			if tt.userMode != "" {
+				vecCtx.rankOption = &plan.RankOption{Mode: tt.userMode}
+			}
+
+			mode, isAutoMode, shouldDisableIndex := builder.resolveVectorSearchMode(
+				vecCtx,
+				tt.enablePrefilterByDefault,
+				tt.enableAutoModeByDefault,
+			)
+
+			assert.Equal(t, tt.expectedMode, mode, "mode mismatch")
+			assert.Equal(t, tt.expectedIsAutoMode, isAutoMode, "isAutoMode mismatch")
+			assert.Equal(t, tt.expectedShouldDisableIndex, shouldDisableIndex, "shouldDisableIndex mismatch")
+		})
+	}
+}
+
+func TestResolveVectorSearchMode_AutoModeTriggersForce(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+
+	// Small table that should trigger force mode in auto
+	vecCtx := &vectorSortContext{
+		scanNode: &plan.Node{
+			Stats: &plan.Stats{
+				TableCnt:    5,
+				Selectivity: 1.0,
+			},
+		},
+		limit: &plan.Expr{
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{
+					Value: &plan.Literal_U64Val{U64Val: 10},
+				},
+			},
+		},
+		rankOption: &plan.RankOption{Mode: "auto"},
+	}
+
+	mode, isAutoMode, shouldDisableIndex := builder.resolveVectorSearchMode(
+		vecCtx,
+		false, // enablePrefilterByDefault
+		false, // enableAutoModeByDefault
+	)
+
+	// Should trigger force mode due to small dataset
+	assert.Equal(t, "force", mode)
+	assert.True(t, isAutoMode)
+	assert.True(t, shouldDisableIndex)
+}
+
 // ============================================================================
 // Tests for buildPkExprFromNode
 // ============================================================================

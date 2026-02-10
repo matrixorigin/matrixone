@@ -1,0 +1,290 @@
+drop database if exists temp_db;
+create database temp_db;
+use temp_db;
+drop table if exists temp_basic;
+create temporary table temp_basic (
+id int,
+name varchar(50),
+age int
+);
+insert into temp_basic values (1, 'alice', 25);
+insert into temp_basic values (2, 'bob', 30);
+insert into temp_basic values (3, 'charlie', 35);
+select * from temp_basic;
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  𝄀
+1  ¦  alice  ¦  25  𝄀
+2  ¦  bob  ¦  30  𝄀
+3  ¦  charlie  ¦  35
+drop table temp_basic;
+select * from temp_basic;
+SQL parser error: table "temp_basic" does not exist
+create temporary table temp_datatypes (
+col_int int,
+col_bigint bigint,
+col_float float,
+col_double double,
+col_decimal decimal(15,2),
+col_varchar varchar(255),
+col_text text,
+col_date date,
+col_datetime datetime,
+col_timestamp timestamp,
+col_bool boolean
+);
+insert into temp_datatypes values (
+100,
+9223372036854775807,
+3.14,
+2.718281828,
+12345.67,
+'test string',
+'long text content',
+'2024-01-15',
+'2024-01-15 10:30:00',
+'2024-01-15 10:30:00',
+true
+);
+select * from temp_datatypes;
+➤ col_int[4,32,0]  ¦  col_bigint[-5,64,0]  ¦  col_float[7,24,0]  ¦  col_double[8,54,0]  ¦  col_decimal[3,15,2]  ¦  col_varchar[12,-1,0]  ¦  col_text[12,0,0]  ¦  col_date[91,64,0]  ¦  col_datetime[93,64,0]  ¦  col_timestamp[93,64,0]  ¦  col_bool[-7,1,0]  𝄀
+100  ¦  9223372036854775807  ¦  3.14  ¦  2.718281828  ¦  12345.67  ¦  test string  ¦  long text content  ¦  2024-01-15  ¦  2024-01-15 10:30:00  ¦  2024-01-15 10:30:00  ¦  1
+drop table temp_datatypes;
+create temporary table temp_pk (
+id int primary key,
+name varchar(50)
+);
+insert into temp_pk values (1, 'alice');
+insert into temp_pk values (2, 'bob');
+insert into temp_pk values (1, 'charlie');  -- 应该失败
+Duplicate entry '1' for key 'id'
+select * from temp_pk;
+➤ id[4,32,0]  ¦  name[12,-1,0]  𝄀
+1  ¦  alice  𝄀
+2  ¦  bob
+drop table temp_pk;
+create temporary table temp_not_null (
+id int not null,
+name varchar(50) not null,
+description varchar(200)
+);
+insert into temp_not_null values (1, 'item1', 'description');
+insert into temp_not_null values (2, 'item2', null);
+insert into temp_not_null values (null, 'item3', 'description');  -- 应该失败
+constraint violation: Column 'id' cannot be null
+select * from temp_not_null;
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  description[12,-1,0]  𝄀
+1  ¦  item1  ¦  description  𝄀
+2  ¦  item2  ¦  null
+drop table temp_not_null;
+create temporary table temp_default (
+id int,
+status varchar(20) default 'active',
+created_at timestamp default current_timestamp
+);
+insert into temp_default (id) values (1);
+insert into temp_default (id, status) values (2, 'inactive');
+select * from temp_default;
+➤ id[4,32,0]  ¦  status[12,-1,0]  ¦  created_at[93,64,0]  𝄀
+1  ¦  active  ¦  2026-02-05 18:23:08  𝄀
+2  ¦  inactive  ¦  2026-02-05 18:23:08
+drop table temp_default;
+create temporary table temp_auto_inc (
+id bigint primary key auto_increment,
+name varchar(50)
+);
+insert into temp_auto_inc(name) values ('alice');
+insert into temp_auto_inc(name) values ('bob');
+insert into temp_auto_inc(name) values ('charlie');
+select * from temp_auto_inc;
+➤ id[-5,64,0]  ¦  name[12,-1,0]  𝄀
+1  ¦  alice  𝄀
+2  ¦  bob  𝄀
+3  ¦  charlie
+drop table temp_auto_inc;
+create temporary table temp_auto_inc2 (
+id bigint primary key auto_increment,
+value varchar(10)
+);
+insert into temp_auto_inc2(value) values ('aaa');
+insert into temp_auto_inc2(id, value) values (10, 'bbb');
+insert into temp_auto_inc2(value) values ('ccc');  -- id应该是11
+select * from temp_auto_inc2;
+➤ id[-5,64,0]  ¦  value[12,-1,0]  𝄀
+1  ¦  aaa  𝄀
+10  ¦  bbb  𝄀
+11  ¦  ccc
+drop table temp_auto_inc2;
+create temporary table temp_dml (
+id int,
+name varchar(50),
+value decimal(10,2)
+);
+insert into temp_dml values (1, 'item1', 100.50);
+insert into temp_dml values (2, 'item2', 200.75);
+insert into temp_dml (id, name) values (3, 'item3');
+select * from temp_dml;
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  value[3,10,2]  𝄀
+1  ¦  item1  ¦  100.50  𝄀
+2  ¦  item2  ¦  200.75  𝄀
+3  ¦  item3  ¦  null
+update temp_dml set value = 150.00 where id = 1;
+update temp_dml set name = 'updated item' where id = 2;
+select * from temp_dml;
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  value[3,10,2]  𝄀
+3  ¦  item3  ¦  null  𝄀
+1  ¦  item1  ¦  150.00  𝄀
+2  ¦  updated item  ¦  200.75
+delete from temp_dml where id = 3;
+select * from temp_dml;
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  value[3,10,2]  𝄀
+1  ¦  item1  ¦  150.00  𝄀
+2  ¦  updated item  ¦  200.75
+delete from temp_dml where value > 150;
+select * from temp_dml;
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  value[3,10,2]  𝄀
+1  ¦  item1  ¦  150.00
+drop table temp_dml;
+create temporary table temp_batch (
+id int,
+value varchar(50)
+);
+insert into temp_batch values
+(1, 'value1'),
+(2, 'value2'),
+(3, 'value3'),
+(4, 'value4'),
+(5, 'value5');
+select count(*) from temp_batch;
+➤ count(*)[-5,64,0]  𝄀
+5
+drop table temp_batch;
+create temporary table temp_select (
+id int,
+category varchar(50),
+amount decimal(10,2)
+);
+insert into temp_select values
+(1, 'food', 50.00),
+(2, 'transport', 30.00),
+(3, 'food', 70.00),
+(4, 'entertainment', 100.00),
+(5, 'transport', 25.00);
+select * from temp_select where category = 'food';
+➤ id[4,32,0]  ¦  category[12,-1,0]  ¦  amount[3,10,2]  𝄀
+1  ¦  food  ¦  50.00  𝄀
+3  ¦  food  ¦  70.00
+select * from temp_select order by amount desc;
+➤ id[4,32,0]  ¦  category[12,-1,0]  ¦  amount[3,10,2]  𝄀
+4  ¦  entertainment  ¦  100.00  𝄀
+3  ¦  food  ¦  70.00  𝄀
+1  ¦  food  ¦  50.00  𝄀
+2  ¦  transport  ¦  30.00  𝄀
+5  ¦  transport  ¦  25.00
+select * from temp_select order by id limit 3;
+➤ id[4,32,0]  ¦  category[12,-1,0]  ¦  amount[3,10,2]  𝄀
+1  ¦  food  ¦  50.00  𝄀
+2  ¦  transport  ¦  30.00  𝄀
+3  ¦  food  ¦  70.00
+select distinct category from temp_select;
+➤ category[12,-1,0]  𝄀
+food  𝄀
+transport  𝄀
+entertainment
+drop table temp_select;
+create temporary table temp_agg (
+id int,
+category varchar(50),
+amount decimal(10,2)
+);
+insert into temp_agg values
+(1, 'food', 50.00),
+(2, 'transport', 30.00),
+(3, 'food', 70.00),
+(4, 'entertainment', 100.00),
+(5, 'transport', 25.00);
+select count(*) from temp_agg;
+➤ count(*)[-5,64,0]  𝄀
+5
+select sum(amount) from temp_agg;
+➤ sum(amount)[3,38,2]  𝄀
+275.00
+select avg(amount) from temp_agg;
+➤ avg(amount)[3,38,8]  𝄀
+55.00000000
+select min(amount), max(amount) from temp_agg;
+➤ min(amount)[3,10,2]  ¦  max(amount)[3,10,2]  𝄀
+25.00  ¦  100.00
+select
+category,
+count(*) as count,
+sum(amount) as total,
+avg(amount) as average
+from temp_agg
+group by category;
+➤ category[12,-1,0]  ¦  count[-5,64,0]  ¦  total[3,38,2]  ¦  average[3,38,8]  𝄀
+food  ¦  2  ¦  120.00  ¦  60.00000000  𝄀
+transport  ¦  2  ¦  55.00  ¦  27.50000000  𝄀
+entertainment  ¦  1  ¦  100.00  ¦  100.00000000
+select
+category,
+sum(amount) as total
+from temp_agg
+group by category
+having sum(amount) > 50;
+➤ category[12,-1,0]  ¦  total[3,38,2]  𝄀
+food  ¦  120.00  𝄀
+transport  ¦  55.00  𝄀
+entertainment  ¦  100.00
+drop table temp_agg;
+create temporary table temp_subquery (
+id int,
+product varchar(50),
+price decimal(10,2)
+);
+insert into temp_subquery values
+(1, 'laptop', 999.99),
+(2, 'mouse', 29.99),
+(3, 'keyboard', 79.99),
+(4, 'monitor', 299.99),
+(5, 'headset', 59.99);
+select * from temp_subquery
+where price > (select avg(price) from temp_subquery);
+➤ id[4,32,0]  ¦  product[12,-1,0]  ¦  price[3,10,2]  𝄀
+1  ¦  laptop  ¦  999.99  𝄀
+4  ¦  monitor  ¦  299.99
+select
+count(*) as total_products,
+avg(avg_price) as overall_avg
+from (
+select avg(price) as avg_price from temp_subquery
+) sub;
+➤ total_products[-5,64,0]  ¦  overall_avg[3,38,12]  𝄀
+1  ¦  293.990000000000
+select * from temp_subquery
+where price in (
+select price from temp_subquery where price < 100
+);
+➤ id[4,32,0]  ¦  product[12,-1,0]  ¦  price[3,10,2]  𝄀
+2  ¦  mouse  ¦  29.99  𝄀
+3  ¦  keyboard  ¦  79.99  𝄀
+5  ¦  headset  ¦  59.99
+drop table temp_subquery;
+create temporary table temp_show (
+id int primary key,
+name varchar(50)
+);
+show create table temp_show;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+temp_show  ¦  CREATE TEMPORARY TABLE `temp_show` (
+  `id` int NOT NULL,
+  `name` varchar(50) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
+drop table temp_show;
+create table permanent_table (id int);
+create temporary table temp_invisible (id int);
+show tables;  -- 应该只显示 permanent_table
+➤ Tables_in_temp_db[12,-1,0]  𝄀
+permanent_table
+drop table temp_invisible;
+drop table permanent_table;
+drop database temp_db;

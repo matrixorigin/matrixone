@@ -3031,122 +3031,33 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 }
 
 func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
+	if len(stmt.Names) == 1 {
+		dropTable, err := buildDropTableSingle(stmt.IfExists, stmt.Names[0], ctx)
+		if err != nil {
+			return nil, err
+		}
+		return &Plan{
+			Plan: &plan.Plan_Ddl{
+				Ddl: &plan.DataDefinition{
+					DdlType: plan.DataDefinition_DROP_TABLE,
+					Definition: &plan.DataDefinition_DropTable{
+						DropTable: dropTable,
+					},
+				},
+			},
+		}, nil
+	}
+
 	dropTable := &plan.DropTable{
 		IfExists: stmt.IfExists,
+		Tables:   make([]*plan.DropTable, 0, len(stmt.Names)),
 	}
-	if len(stmt.Names) != 1 {
-		return nil, moerr.NewNotSupportedf(ctx.GetContext(), "drop multiple (%d) tables in one statement", len(stmt.Names))
-	}
-
-	dropTable.Database = string(stmt.Names[0].SchemaName)
-
-	// If the database name is empty, attempt to get default database name
-	if dropTable.Database == "" {
-		dropTable.Database = ctx.DefaultDatabase()
-	}
-
-	// If the final database name is still empty, return an error
-	if dropTable.Database == "" {
-		return nil, moerr.NewNoDB(ctx.GetContext())
-	}
-
-	dropTable.Table = string(stmt.Names[0].ObjectName)
-
-	obj, tableDef, err := ctx.Resolve(dropTable.Database, dropTable.Table, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	if tableDef == nil {
-		if !dropTable.IfExists {
-			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
-		}
-	} else {
-		if obj.PubInfo != nil {
-			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "can not drop subscription table %s", dropTable.Table)
-		}
-
-		enabled, err := IsForeignKeyChecksEnabled(ctx)
+	for _, name := range stmt.Names {
+		entry, err := buildDropTableSingle(stmt.IfExists, name, ctx)
 		if err != nil {
 			return nil, err
 		}
-		if enabled && len(tableDef.RefChildTbls) > 0 {
-			//if all children tables are self reference, we can drop the table
-			if !HasFkSelfReferOnly(tableDef) {
-				return nil, moerr.NewInternalErrorf(ctx.GetContext(), "can not drop table '%v' referenced by some foreign key constraint", dropTable.Table)
-			}
-		}
-
-		isView := (tableDef.ViewSql != nil)
-		dropTable.IsView = isView
-
-		if isView && !dropTable.IfExists {
-			// drop table v0, v0 is view
-			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
-		} else if isView {
-			// drop table if exists v0, v0 is view
-			dropTable.Table = ""
-		}
-
-		// Can not use drop table to drop sequence.
-		if tableDef.TableType == catalog.SystemSequenceRel && !dropTable.IfExists {
-			return nil, moerr.NewInternalError(ctx.GetContext(), "Should use 'drop sequence' to drop a sequence")
-		} else if tableDef.TableType == catalog.SystemSequenceRel {
-			// If exists, don't drop anything.
-			dropTable.Table = ""
-		}
-
-		dropTable.ClusterTable = &plan.ClusterTable{
-			IsClusterTable: util.TableIsClusterTable(tableDef.GetTableType()),
-		}
-
-		//non-sys account can not drop the cluster table
-		accountId, err := ctx.GetAccountId()
-		if err != nil {
-			return nil, err
-		}
-		if dropTable.GetClusterTable().GetIsClusterTable() && accountId != catalog.System_Account {
-			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can drop the cluster table")
-		}
-
-		ignore := false
-		val := ctx.GetContext().Value(defines.IgnoreForeignKey{})
-		if val != nil {
-			ignore = val.(bool)
-		}
-
-		dropTable.TableId = tableDef.TblId
-		if tableDef.Fkeys != nil && !ignore {
-			for _, fk := range tableDef.Fkeys {
-				if fk.ForeignTbl == 0 {
-					continue
-				}
-				dropTable.ForeignTbl = append(dropTable.ForeignTbl, fk.ForeignTbl)
-			}
-		}
-
-		// collect child tables that needs remove fk relationships
-		// with the table
-		if tableDef.RefChildTbls != nil && !ignore {
-			for _, childTbl := range tableDef.RefChildTbls {
-				if childTbl == 0 {
-					continue
-				}
-				dropTable.FkChildTblsReferToMe = append(dropTable.FkChildTblsReferToMe, childTbl)
-			}
-		}
-
-		dropTable.IndexTableNames = make([]string, 0)
-		if tableDef.Indexes != nil {
-			for _, indexdef := range tableDef.Indexes {
-				if indexdef.TableExist {
-					dropTable.IndexTableNames = append(dropTable.IndexTableNames, indexdef.IndexTableName)
-				}
-			}
-		}
-
-		dropTable.TableDef = tableDef
-		dropTable.UpdateFkSqls = []string{getSqlForDeleteTable(dropTable.Database, dropTable.Table)}
+		dropTable.Tables = append(dropTable.Tables, entry)
 	}
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -3158,6 +3069,128 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			},
 		},
 	}, nil
+}
+
+func buildDropTableSingle(ifExists bool, name *tree.TableName, ctx CompilerContext) (*plan.DropTable, error) {
+	dropTable := &plan.DropTable{
+		IfExists: ifExists,
+	}
+
+	dropTable.Database = string(name.SchemaName)
+	// If the database name is empty, attempt to get default database name
+	if dropTable.Database == "" {
+		dropTable.Database = ctx.DefaultDatabase()
+	}
+	// If the final database name is still empty, return an error
+	if dropTable.Database == "" {
+		return nil, moerr.NewNoDB(ctx.GetContext())
+	}
+
+	dropTable.Table = string(name.ObjectName)
+
+	obj, tableDef, err := ctx.Resolve(dropTable.Database, dropTable.Table, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if tableDef == nil {
+		if !dropTable.IfExists {
+			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
+		}
+		return dropTable, nil
+	}
+
+	if obj.PubInfo != nil {
+		return nil, moerr.NewInternalErrorf(ctx.GetContext(), "can not drop subscription table %s", dropTable.Table)
+	}
+
+	enabled, err := IsForeignKeyChecksEnabled(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if enabled && len(tableDef.RefChildTbls) > 0 {
+		//if all children tables are self reference, we can drop the table
+		if !HasFkSelfReferOnly(tableDef) {
+			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "can not drop table '%v' referenced by some foreign key constraint", dropTable.Table)
+		}
+	}
+
+	isView := (tableDef.ViewSql != nil)
+	dropTable.IsView = isView
+	if isView {
+		if !dropTable.IfExists {
+			// drop table v0, v0 is view
+			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
+		}
+		// drop table if exists v0, v0 is view
+		dropTable.Table = ""
+		dropTable.TableDef = nil
+		return dropTable, nil
+	}
+
+	// Can not use drop table to drop sequence.
+	if tableDef.TableType == catalog.SystemSequenceRel {
+		if !dropTable.IfExists {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "Should use 'drop sequence' to drop a sequence")
+		}
+		// If exists, don't drop anything.
+		dropTable.Table = ""
+		dropTable.TableDef = nil
+		return dropTable, nil
+	}
+
+	dropTable.ClusterTable = &plan.ClusterTable{
+		IsClusterTable: util.TableIsClusterTable(tableDef.GetTableType()),
+	}
+
+	//non-sys account can not drop the cluster table
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
+	if dropTable.GetClusterTable().GetIsClusterTable() && accountId != catalog.System_Account {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can drop the cluster table")
+	}
+
+	ignore := false
+	val := ctx.GetContext().Value(defines.IgnoreForeignKey{})
+	if val != nil {
+		ignore = val.(bool)
+	}
+
+	dropTable.TableId = tableDef.TblId
+	if tableDef.Fkeys != nil && !ignore {
+		for _, fk := range tableDef.Fkeys {
+			if fk.ForeignTbl == 0 {
+				continue
+			}
+			dropTable.ForeignTbl = append(dropTable.ForeignTbl, fk.ForeignTbl)
+		}
+	}
+
+	// collect child tables that needs remove fk relationships
+	// with the table
+	if tableDef.RefChildTbls != nil && !ignore {
+		for _, childTbl := range tableDef.RefChildTbls {
+			if childTbl == 0 {
+				continue
+			}
+			dropTable.FkChildTblsReferToMe = append(dropTable.FkChildTblsReferToMe, childTbl)
+		}
+	}
+
+	dropTable.IndexTableNames = make([]string, 0)
+	if tableDef.Indexes != nil {
+		for _, indexdef := range tableDef.Indexes {
+			if indexdef.TableExist {
+				dropTable.IndexTableNames = append(dropTable.IndexTableNames, indexdef.IndexTableName)
+			}
+		}
+	}
+
+	dropTable.TableDef = tableDef
+	dropTable.UpdateFkSqls = []string{getSqlForDeleteTable(dropTable.Database, dropTable.Table)}
+	return dropTable, nil
 }
 
 func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
