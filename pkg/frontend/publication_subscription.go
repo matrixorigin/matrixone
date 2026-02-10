@@ -3046,9 +3046,6 @@ func queryUpstreamAndCreateLocalDBTables(
 
 		// Get CREATE DATABASE DDL from upstream and create locally
 		createDbSQL := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", upstreamDbName)
-		if err != nil {
-			return nil, nil, err
-		}
 		if err = bh.Exec(downstreamCtx, createDbSQL); err != nil {
 			return nil, nil, moerr.NewInternalErrorf(ctx, "failed to create database '%s': %v", upstreamDbName, err)
 		}
