@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 )
@@ -193,6 +194,36 @@ func TestPauseResumeDaemonTask(t *testing.T) {
 
 		expectTaskStatus(t, store, dt, task.TaskStatus_PauseRequested, task.TaskStatus_Paused)
 		expectTaskStatus(t, store, dt, task.TaskStatus_ResumeRequested, task.TaskStatus_Running)
+	}, WithRunnerParallelism(1),
+		WithRunnerFetchInterval(time.Millisecond))
+}
+
+func TestPauseTaskHandleIdempotent(t *testing.T) {
+	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
+		dt := newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID)
+		mustAddTestDaemonTask(t, store, 1, dt)
+		var started atomic.Bool
+		r.testRegisterExecutor(t, task.TaskCode_ConnectorKafkaSink, &started)
+		waitStarted(&started, time.Second*5)
+
+		localDT, ok := r.getDaemonTask(1)
+		require.True(t, ok)
+
+		h := newPauseTask(r, localDT)
+		require.NoError(t, h.Handle(context.Background()))
+		require.NoError(t, h.Handle(context.Background()))
+
+		done := make(chan error, 1)
+		go func() {
+			done <- h.Handle(context.Background())
+		}()
+
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			t.Fatal("duplicate pause should not block")
+		}
 	}, WithRunnerParallelism(1),
 		WithRunnerFetchInterval(time.Millisecond))
 }
