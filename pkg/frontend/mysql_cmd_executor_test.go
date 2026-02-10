@@ -856,6 +856,16 @@ func Test_GetComputationWrapper_ShowVariablesGlobal(t *testing.T) {
 	})
 }
 
+func Test_isShowGlobalVariablesSQL(t *testing.T) {
+	convey.Convey("isShowGlobalVariablesSQL", t, func() {
+		convey.So(isShowGlobalVariablesSQL("show global variables like 'interactive_timeout'"), convey.ShouldBeTrue)
+		convey.So(isShowGlobalVariablesSQL("  /* cloud_user */ show global variables like 'a'"), convey.ShouldBeTrue)
+		convey.So(isShowGlobalVariablesSQL("show variables like 'a'"), convey.ShouldBeFalse)
+		convey.So(isShowGlobalVariablesSQL("execute stmt1"), convey.ShouldBeFalse)
+		convey.So(isShowGlobalVariablesSQL(""), convey.ShouldBeFalse)
+	})
+}
+
 func runTestHandle(funName string, t *testing.T, handleFun func(ses *Session) error) {
 	ctx := context.TODO()
 	convey.Convey(fmt.Sprintf("%s succ", funName), t, func() {

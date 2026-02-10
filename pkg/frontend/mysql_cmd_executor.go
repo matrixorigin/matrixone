@@ -1088,20 +1088,19 @@ func isShowGlobalVariablesSQL(sqlText string) bool {
 	}
 	scanner := mysql.NewScanner(dialect.MYSQL, sqlText)
 	defer mysql.PutScanner(scanner)
-	for {
-		tok := nextNonCommentToken(scanner)
-		switch tok {
-		case mysql.EofChar(), mysql.LEX_ERROR:
-			return false
-		case mysql.SHOW:
-			tok = nextNonCommentToken(scanner)
-			if tok == mysql.GLOBAL {
-				tok = nextNonCommentToken(scanner)
-				return tok == mysql.VARIABLES
-			}
-			return false
-		}
+	tok := nextNonCommentToken(scanner)
+	if tok == 0 || tok == mysql.EofChar() || tok == mysql.LEX_ERROR {
+		return false
 	}
+	if tok != mysql.SHOW {
+		return false
+	}
+	tok = nextNonCommentToken(scanner)
+	if tok != mysql.GLOBAL {
+		return false
+	}
+	tok = nextNonCommentToken(scanner)
+	return tok == mysql.VARIABLES
 }
 
 func nextNonCommentToken(scanner *mysql.Scanner) int {
