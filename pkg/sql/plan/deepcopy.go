@@ -198,6 +198,15 @@ func DeepCopyDedupJoinCtx(ctx *plan.DedupJoinCtx) *plan.DedupJoinCtx {
 	return newCtx
 }
 
+func DeepCopyRankOption(opt *plan.RankOption) *plan.RankOption {
+	if opt == nil {
+		return nil
+	}
+	return &plan.RankOption{
+		Mode: opt.Mode,
+	}
+}
+
 func DeepCopyNode(node *plan.Node) *plan.Node {
 	newNode := &Node{
 		NodeType:         node.NodeType,
@@ -238,6 +247,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		UpdateCtxList:    DeepCopyUpdateCtxList(node.UpdateCtxList),
 		DedupJoinCtx:     DeepCopyDedupJoinCtx(node.DedupJoinCtx),
 		IndexReaderParam: DeepCopyIndexReaderParam(node.IndexReaderParam),
+		RankOption:       DeepCopyRankOption(node.RankOption),
 	}
 	newNode.Uuid = append(newNode.Uuid, node.Uuid...)
 
