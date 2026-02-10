@@ -23,8 +23,33 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/panjf2000/ants/v2"
+	"github.com/tidwall/btree"
 	"go.uber.org/zap"
 )
+
+// ItemEntry represents an entry in the items BTree, sorted by objectName
+type ItemEntry struct {
+	objectName string
+	txnIDs     [][]byte
+	isWriting  bool // true if the object is currently being written to fileservice
+}
+
+// Less compares two ItemEntry by objectName for BTree ordering
+func (e ItemEntry) Less(other ItemEntry) bool {
+	return e.objectName < other.objectName
+}
+
+// TxnIndexEntry represents an entry in the txnIndex BTree, sorted by txnID
+// It stores all objectNames associated with a transaction for fast lookup
+type TxnIndexEntry struct {
+	txnID       []byte
+	objectNames []string
+}
+
+// Less compares two TxnIndexEntry by txnID for BTree ordering
+func (e TxnIndexEntry) Less(other TxnIndexEntry) bool {
+	return bytes.Compare(e.txnID, other.txnID) < 0
+}
 
 // CCPRTxnCache is a cache for tracking CCPR (Cross-Cluster Publication Replication) objects
 // and their associated transactions. It maintains a mapping from object names to transaction IDs.
@@ -38,15 +63,13 @@ import (
 //     if no more txnIDs are associated with the object, the object file will be GC'd
 type CCPRTxnCache struct {
 	mu sync.Mutex
-	// items maps object_name to a list of txnIDs that reference this object
-	// key: object name (string)
-	// value: list of transaction IDs ([][]byte)
-	items map[string][][]byte
+	// items is a BTree mapping object_name to a list of txnIDs that reference this object
+	// sorted by objectName, also tracks isWriting state
+	items *btree.BTreeG[ItemEntry]
 
-	// writingObjects tracks objects that are currently being written to fileservice
-	// key: object name (string)
-	// value: txnID that is writing this object
-	writingObjects map[string][]byte
+	// txnIndex is a BTree mapping txnID to a list of objectNames
+	// sorted by txnID, for fast lookup of objects by transaction
+	txnIndex *btree.BTreeG[TxnIndexEntry]
 
 	// gcPool is the pool for async GC operations
 	gcPool *ants.Pool
@@ -57,10 +80,10 @@ type CCPRTxnCache struct {
 // NewCCPRTxnCache creates a new CCPRTxnCache instance
 func NewCCPRTxnCache(gcPool *ants.Pool, fs fileservice.FileService) *CCPRTxnCache {
 	return &CCPRTxnCache{
-		items:          make(map[string][][]byte),
-		writingObjects: make(map[string][]byte),
-		gcPool:         gcPool,
-		fs:             fs,
+		items:    btree.NewBTreeG(ItemEntry.Less),
+		txnIndex: btree.NewBTreeG(TxnIndexEntry.Less),
+		gcPool:   gcPool,
+		fs:       fs,
 	}
 }
 
@@ -88,22 +111,21 @@ func (c *CCPRTxnCache) WriteObject(ctx context.Context, objectName string, txnID
 		return false, moerr.NewInternalError(ctx, "fileservice is nil in CCPRTxnCache")
 	}
 
-	// Check if object is currently being written
-	if _, isWriting := c.writingObjects[objectName]; isWriting {
-		return false, nil
-	}
+	txnIDCopy := make([]byte, len(txnID))
+	copy(txnIDCopy, txnID)
 
-	// Check if object already exists in cache (already written by uncommitted txn)
-	if existingTxnIDs, exists := c.items[objectName]; exists {
+	// Check if object already exists in cache
+	if entry, exists := c.items.Get(ItemEntry{objectName: objectName}); exists {
 		// Object exists in cache, add txnID if not already present
-		txnIDCopy := make([]byte, len(txnID))
-		copy(txnIDCopy, txnID)
-		for _, id := range existingTxnIDs {
+		for _, id := range entry.txnIDs {
 			if bytes.Equal(id, txnIDCopy) {
 				return false, nil
 			}
 		}
-		c.items[objectName] = append(existingTxnIDs, txnIDCopy)
+		entry.txnIDs = append(entry.txnIDs, txnIDCopy)
+		c.items.Set(entry)
+		// Update txnIndex
+		c.addObjectToTxnIndex(txnIDCopy, objectName)
 		return false, nil
 	}
 
@@ -119,30 +141,47 @@ func (c *CCPRTxnCache) WriteObject(ctx context.Context, objectName string, txnID
 	}
 
 	// File does not exist, mark as writing and register txnID
-	txnIDCopy := make([]byte, len(txnID))
-	copy(txnIDCopy, txnID)
-
-	c.writingObjects[objectName] = txnIDCopy
-	c.items[objectName] = [][]byte{txnIDCopy}
+	c.items.Set(ItemEntry{objectName: objectName, txnIDs: [][]byte{txnIDCopy}, isWriting: true})
+	// Update txnIndex
+	c.addObjectToTxnIndex(txnIDCopy, objectName)
 
 	return true, nil
 }
 
+// addObjectToTxnIndex adds an objectName to the txnIndex for the given txnID
+func (c *CCPRTxnCache) addObjectToTxnIndex(txnID []byte, objectName string) {
+	if entry, exists := c.txnIndex.Get(TxnIndexEntry{txnID: txnID}); exists {
+		// Check if objectName already exists
+		for _, name := range entry.objectNames {
+			if name == objectName {
+				return
+			}
+		}
+		entry.objectNames = append(entry.objectNames, objectName)
+		c.txnIndex.Set(entry)
+	} else {
+		c.txnIndex.Set(TxnIndexEntry{txnID: txnID, objectNames: []string{objectName}})
+	}
+}
+
 // OnFileWritten is called after the file has been successfully written to fileservice.
-// It removes the object from the writingObjects set.
+// It clears the isWriting flag for the object.
 //
 // Parameters:
 //   - objectName: the name of the object that was written
 func (c *CCPRTxnCache) OnFileWritten(objectName string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.writingObjects, objectName)
+	if entry, exists := c.items.Get(ItemEntry{objectName: objectName}); exists {
+		entry.isWriting = false
+		c.items.Set(entry)
+	}
 }
 
 // OnTxnCommit is called when a transaction commits successfully.
-// It removes the entire entry for all objects associated with this transaction.
-//
-// This method ensures atomicity by removing all entries for the given txnID.
+// It removes all object entries associated with this transaction.
+// Since the transaction committed successfully, the objects are persisted and
+// no longer need cache tracking.
 //
 // Parameters:
 //   - txnID: the ID of the committed transaction
@@ -150,29 +189,19 @@ func (c *CCPRTxnCache) OnTxnCommit(txnID []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Find and remove all entries where this txnID is the only one
-	// For entries with multiple txnIDs, just remove this txnID
-	toDelete := make([]string, 0)
-
-	for objectName, txnIDs := range c.items {
-		for i, id := range txnIDs {
-			if bytes.Equal(id, txnID) {
-				if len(txnIDs) == 1 {
-					// This txnID is the only one, mark for deletion
-					toDelete = append(toDelete, objectName)
-				} else {
-					// Remove this txnID from the list
-					c.items[objectName] = append(txnIDs[:i], txnIDs[i+1:]...)
-				}
-				break
-			}
-		}
+	// First, find all objectNames for this txnID using txnIndex
+	txnEntry, exists := c.txnIndex.Get(TxnIndexEntry{txnID: txnID})
+	if !exists {
+		return
 	}
 
-	// Delete marked entries
-	for _, objectName := range toDelete {
-		delete(c.items, objectName)
+	// Delete all object entries for this transaction
+	for _, objectName := range txnEntry.objectNames {
+		c.items.Delete(ItemEntry{objectName: objectName})
 	}
+
+	// Remove the txnIndex entry
+	c.txnIndex.Delete(txnEntry)
 }
 
 // OnTxnRollback is called when a transaction rolls back.
@@ -189,24 +218,42 @@ func (c *CCPRTxnCache) OnTxnRollback(txnID []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// First, find all objectNames for this txnID using txnIndex
+	txnEntry, exists := c.txnIndex.Get(TxnIndexEntry{txnID: txnID})
+	if !exists {
+		return
+	}
+
 	// Find objects to GC (those with no txnIDs left after removing this one)
 	toGC := make([]string, 0)
 
-	for objectName, txnIDs := range c.items {
-		for i, id := range txnIDs {
+	// Process each object by direct lookup
+	for _, objectName := range txnEntry.objectNames {
+		entry, found := c.items.Get(ItemEntry{objectName: objectName})
+		if !found {
+			// objectentry is deleted when the transaction commits
+			continue
+		}
+
+		// Find and remove this txnID from the entry
+		for i, id := range entry.txnIDs {
 			if bytes.Equal(id, txnID) {
-				if len(txnIDs) == 1 {
+				if len(entry.txnIDs) == 1 {
 					// This was the only txnID, need to GC the object
 					toGC = append(toGC, objectName)
-					delete(c.items, objectName)
+					c.items.Delete(entry)
 				} else {
 					// Remove this txnID from the list
-					c.items[objectName] = append(txnIDs[:i], txnIDs[i+1:]...)
+					entry.txnIDs = append(entry.txnIDs[:i], entry.txnIDs[i+1:]...)
+					c.items.Set(entry)
 				}
 				break
 			}
 		}
 	}
+
+	// Remove the txnIndex entry
+	c.txnIndex.Delete(txnEntry)
 
 	// GC objects asynchronously
 	if len(toGC) > 0 {
@@ -228,75 +275,10 @@ func (c *CCPRTxnCache) gcObjectsAsync(objectNames []string) {
 	names := make([]string, len(objectNames))
 	copy(names, objectNames)
 
-	err := c.gcPool.Submit(func() {
-		if err := c.fs.Delete(context.Background(), names...); err != nil {
-			logutil.Warn("failed to delete CCPR objects",
-				zap.Strings("objects", names),
-				zap.Error(err),
-			)
-		}
-	})
-	if err != nil {
-		logutil.Warn("failed to submit CCPR GC job",
+	if err := c.fs.Delete(context.Background(), names...); err != nil {
+		logutil.Warn("failed to delete CCPR objects",
 			zap.Strings("objects", names),
 			zap.Error(err),
 		)
 	}
-}
-
-// HasObject checks if an object exists in the cache or is currently being written
-//
-// Parameters:
-//   - objectName: the name of the object to check
-//
-// Returns:
-//   - bool: true if the object exists in the cache or is being written
-func (c *CCPRTxnCache) HasObject(objectName string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if _, exists := c.items[objectName]; exists {
-		return true
-	}
-	if _, isWriting := c.writingObjects[objectName]; isWriting {
-		return true
-	}
-	return false
-}
-
-// GetTxnIDs returns the list of txnIDs associated with an object
-//
-// Parameters:
-//   - objectName: the name of the object
-//
-// Returns:
-//   - [][]byte: the list of txnIDs, or nil if object doesn't exist
-func (c *CCPRTxnCache) GetTxnIDs(objectName string) [][]byte {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	txnIDs, exists := c.items[objectName]
-	if !exists {
-		return nil
-	}
-	// Return a copy to avoid data race
-	result := make([][]byte, len(txnIDs))
-	for i, id := range txnIDs {
-		result[i] = make([]byte, len(id))
-		copy(result[i], id)
-	}
-	return result
-}
-
-// Size returns the number of objects in the cache
-func (c *CCPRTxnCache) Size() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return len(c.items)
-}
-
-// Clear clears all entries in the cache without GC'ing objects
-func (c *CCPRTxnCache) Clear() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.items = make(map[string][][]byte)
-	c.writingObjects = make(map[string][]byte)
 }
