@@ -893,11 +893,9 @@ and name not like 'A%'
 and id not in (1, 3)
 and salary between 5000.00 and 6500.00;
 select count(*) from selected_employees;
-➤ count(*)
+count(*)
 1
-
 drop table selected_employees;
-
 drop table original_table;
 drop table if exists view01;
 drop table if exists view02;
