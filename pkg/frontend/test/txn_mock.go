@@ -336,26 +336,6 @@ func (mr *MockTxnClientMockRecorder) RefreshExpressionEnabled() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RefreshExpressionEnabled", reflect.TypeOf((*MockTxnClient)(nil).RefreshExpressionEnabled))
 }
 
-// RestartTxn mocks base method.
-func (m *MockTxnClient) RestartTxn(ctx context.Context, txnOp client.TxnOperator, commitTS timestamp.Timestamp, options ...client.TxnOption) (client.TxnOperator, error) {
-	m.ctrl.T.Helper()
-	varargs := []interface{}{ctx, txnOp, commitTS}
-	for _, a := range options {
-		varargs = append(varargs, a)
-	}
-	ret := m.ctrl.Call(m, "RestartTxn", varargs...)
-	ret0, _ := ret[0].(client.TxnOperator)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// RestartTxn indicates an expected call of RestartTxn.
-func (mr *MockTxnClientMockRecorder) RestartTxn(ctx, txnOp, commitTS interface{}, options ...interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	varargs := append([]interface{}{ctx, txnOp, commitTS}, options...)
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RestartTxn", reflect.TypeOf((*MockTxnClient)(nil).RestartTxn), varargs...)
-}
-
 // Resume mocks base method.
 func (m *MockTxnClient) Resume() {
 	m.ctrl.T.Helper()
@@ -633,7 +613,6 @@ func (mr *MockTxnOperatorMockRecorder) ExitRunSqlWithToken(token interface{}) *g
 }
 
 // Get mocks base method.
-
 func (m *MockTxnOperator) Get(key string) (any, bool) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Get", key)

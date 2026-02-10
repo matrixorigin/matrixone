@@ -194,6 +194,9 @@ const (
 	// ErrConnectionReset connection was reset by peer
 	// Indicates the connection was forcibly closed by remote.
 	ErrConnectionReset uint16 = 20507
+	// ErrAllCNServersBusy all CN servers are busy
+	// Indicates all CN servers are overloaded, typically due to too many active transactions.
+	ErrAllCNServersBusy uint16 = 20508
 
 	// Group 6: txn
 	// ErrTxnAborted read and write a transaction that has been rolled back.
@@ -245,6 +248,8 @@ const (
 	ErrTxnUnknown                uint16 = 20638
 	ErrTxnControl                uint16 = 20639
 	ErrOfflineTxnWrite           uint16 = 20640
+	// ErrSchedulerClosed scheduler has been closed, cannot schedule new jobs
+	ErrSchedulerClosed uint16 = 20641
 
 	// Group 7: lock service
 	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
@@ -316,8 +321,10 @@ const (
 	// Group 14: TaskService
 	ErrExecutorRunning uint16 = 22201
 
-	// Group 15: CCPR
-	ErrCCPRReadOnly uint16 = 22301
+	// Group 15: Vector Search
+	ErrVectorNeedRetryWithPreMode uint16 = 22301
+	// Group 16: CCPR
+	ErrCCPRReadOnly uint16 = 22401
 
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
@@ -417,7 +424,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDragonboatShardNotFound:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
 	ErrDragonboatOtherSystemError:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
 	ErrDropNonExistsDB:                          {ER_DB_DROP_EXISTS, []string{MySQLDefaultSqlState}, "Can't drop database '%s'; database doesn't exist"},
-	ErrResultFileNotFound:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "result file %s not found"},
+	ErrResultFileNotFound:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "query id %s not found"},
 	ErrNoConfig:                                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no configure: %s"},
 	ErrTooManyFields:                            {ER_TOO_MANY_FIELDS, []string{MySQLDefaultSqlState}, "Too many columns"},
 	ErrDupFieldName:                             {ER_DUP_FIELDNAME, []string{MySQLDefaultSqlState}, "Duplicate column name '%-.192s'"},
@@ -458,6 +465,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrBackendCannotConnect: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot connect to backend: %v"},
 	ErrServiceUnavailable:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "service unavailable: %s"},
 	ErrConnectionReset:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "connection reset by peer"},
+	ErrAllCNServersBusy:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "all CN servers are busy, possibly due to too many active transactions"},
 
 	// Group 6: txn
 	ErrTxnClosed:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "the transaction %s has been committed or aborted"},
@@ -500,6 +508,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTxnUnknown:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn commit status is unknown: %s"},
 	ErrTxnControl:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn control error: %s"},
 	ErrOfflineTxnWrite:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "write offline txn: %s"},
+	ErrSchedulerClosed:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "scheduler closed"},
 
 	// Group 7: lock service
 	ErrDeadLockDetected:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
@@ -563,7 +572,10 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	// Group 14: Task Service
 	ErrExecutorRunning: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "TaskService: executor %s is already running"},
 
-	// Group 15: CCPR
+	// Group 15: Vector Search
+	ErrVectorNeedRetryWithPreMode: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "vector search need retry with pre mode"},
+
+	// Group 16: CCPR
 	ErrCCPRReadOnly: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "ccpr shared object is read-only"},
 
 	// Group End: max value of MOErrorCode
@@ -1023,11 +1035,13 @@ func NewLogServiceNotReady(ctx context.Context) *Error {
 }
 
 func NewBadDB(ctx context.Context, name string) *Error {
-	return newError(ctx, ErrBadDB, name)
+	noReportCtx := errutil.ContextWithNoReport(ctx, true)
+	return newError(noReportCtx, ErrBadDB, name)
 }
 
 func NewNoDB(ctx context.Context) *Error {
-	return newError(ctx, ErrNoDB)
+	noReportCtx := errutil.ContextWithNoReport(ctx, true)
+	return newError(noReportCtx, ErrNoDB)
 }
 
 func NewNoWorkingStore(ctx context.Context) *Error {
@@ -1059,11 +1073,13 @@ func NewNotLeaseHolder(ctx context.Context, holderId uint64) *Error {
 }
 
 func NewNoSuchTable(ctx context.Context, db, tbl string) *Error {
-	return newError(ctx, ErrNoSuchTable, db, tbl)
+	noReportCtx := errutil.ContextWithNoReport(ctx, true)
+	return newError(noReportCtx, ErrNoSuchTable, db, tbl)
 }
 
 func NewNoSuchSequence(ctx context.Context, db, tbl string) *Error {
-	return newError(ctx, ErrNoSuchSequence, db, tbl)
+	noReportCtx := errutil.ContextWithNoReport(ctx, true)
+	return newError(noReportCtx, ErrNoSuchSequence, db, tbl)
 }
 
 func NewBadView(ctx context.Context, db, v string) *Error {
@@ -1100,6 +1116,10 @@ func NewServiceUnavailable(ctx context.Context, reason string) *Error {
 
 func NewConnectionReset(ctx context.Context) *Error {
 	return newError(ctx, ErrConnectionReset)
+}
+
+func NewAllCNServersBusyNoCtx() *Error {
+	return newError(Context(), ErrAllCNServersBusy)
 }
 
 // IsConnectionRelatedRPCError returns true if the error is related to network/connection

@@ -1373,6 +1373,9 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	} else {
 		ses.sesSysVars.Set(name, val)
 	}
+	if err == nil && name == "sql_mode" {
+		ses.updateSqlModeNoAutoValueOnZero(val)
+	}
 	return
 }
 

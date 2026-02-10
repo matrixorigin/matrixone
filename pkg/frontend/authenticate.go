@@ -1106,7 +1106,7 @@ var (
 			set owner = %d, 
 			    args = '%s',
 			    retType = '%s',
-			    body = '%s',
+			    body = "%s",
 			    language = '%s',
 			    definer = '%s',
 			    modified_time = '%s',
@@ -6202,13 +6202,29 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 			})
 		} else if p.GetDdl().GetDropTable() != nil {
 			dropTable := p.GetDdl().GetDropTable()
-			appendPt(privilegeTips{
-				typ:                   PrivilegeTypeDropTable,
-				databaseName:          dropTable.GetDatabase(),
-				tableName:             dropTable.GetTable(),
-				isClusterTable:        dropTable.GetClusterTable().GetIsClusterTable(),
-				clusterTableOperation: clusterTableDrop,
-			})
+			if len(dropTable.GetTables()) > 0 {
+				for _, entry := range dropTable.GetTables() {
+					isCluster := false
+					if entry.GetClusterTable() != nil {
+						isCluster = entry.GetClusterTable().GetIsClusterTable()
+					}
+					appendPt(privilegeTips{
+						typ:                   PrivilegeTypeDropTable,
+						databaseName:          entry.GetDatabase(),
+						tableName:             entry.GetTable(),
+						isClusterTable:        isCluster,
+						clusterTableOperation: clusterTableDrop,
+					})
+				}
+			} else {
+				appendPt(privilegeTips{
+					typ:                   PrivilegeTypeDropTable,
+					databaseName:          dropTable.GetDatabase(),
+					tableName:             dropTable.GetTable(),
+					isClusterTable:        dropTable.GetClusterTable().GetIsClusterTable(),
+					clusterTableOperation: clusterTableDrop,
+				})
+			}
 		} else if p.GetDdl().GetCreateIndex() != nil {
 			createIndex := p.GetDdl().GetCreateIndex()
 			appendPt(privilegeTips{
@@ -8858,6 +8874,7 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		body = strconv.Quote(string(byt))
 		body = body[1 : len(body)-1]
 	}
+	body = escapeSQLStringForDoubleQuotes(body)
 
 	if execResultArrayHasData(erArray) { // replace
 		var id int64
@@ -8886,6 +8903,35 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 	}
 
 	return err
+}
+
+func escapeSQLStringForDoubleQuotes(s string) string {
+	if s == "" {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			b.WriteString("\\\\")
+		case '"':
+			b.WriteString("\\\"")
+		case 0:
+			b.WriteString("\\0")
+		case '\b':
+			b.WriteString("\\b")
+		case '\n':
+			b.WriteString("\\n")
+		case '\r':
+			b.WriteString("\\r")
+		case '\t':
+			b.WriteString("\\t")
+		default:
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String()
 }
 
 func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tree.CreateProcedure) (err error) {

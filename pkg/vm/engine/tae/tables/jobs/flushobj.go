@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -155,9 +154,6 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 	}
 	task.stats = writer.GetObjectStats()
 
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.Block.Flush.Add(1)
-	})
 	task.stat = writer.Stats()
 	return err
 }

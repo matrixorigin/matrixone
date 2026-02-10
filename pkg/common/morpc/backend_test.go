@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"runtime/debug"
 	"sync"
 	"testing"
@@ -663,6 +664,61 @@ func TestLastActiveWithStream(t *testing.T) {
 	)
 }
 
+// TestReadLoopInternalMessageDoesNotUpdateLastActive covers the fix: readLoop must only call
+// active() for non-internal messages. Heartbeat (ping/pong) is internal and must not update
+// LastActiveTime, so idle timeout can still collect backends that only receive heartbeats.
+func TestReadLoopInternalMessageDoesNotUpdateLastActive(t *testing.T) {
+	// Event-driven: wait for server to send pong (pongSent), then assert lastActive unchanged (no Sleep ordering).
+	pongSent := make(chan struct{}, 1)
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+			request := msg.(RPCMessage)
+			if request.InternalMessage() {
+				if m, ok := request.Message.(*flagOnlyMessage); ok && m.flag == flagPing {
+					select {
+					case pongSent <- struct{}{}:
+					default:
+					}
+					return conn.Write(RPCMessage{
+						Ctx:      request.Ctx,
+						internal: true,
+						Message:  &flagOnlyMessage{flag: flagPong, id: m.id},
+					}, goetty.WriteOptions{Flush: true})
+				}
+			}
+			return conn.Write(msg, goetty.WriteOptions{Flush: true})
+		},
+		func(b *remoteBackend) {
+			t0 := b.LastActiveTime()
+			select {
+			case <-pongSent:
+			case <-time.After(10 * time.Second):
+				t.Fatal("timeout waiting for pong (heartbeat may not have fired or readLoop stalled)")
+			}
+			deadline := time.Now().Add(2 * time.Second)
+			for time.Now().Before(deadline) {
+				runtime.Gosched()
+				if b.LastActiveTime().Equal(t0) {
+					break
+				}
+			}
+			require.True(t, b.LastActiveTime().Equal(t0), "internal (pong) message must not call active(); lastActive changed")
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			req := newTestMessage(1)
+			f, err := b.Send(ctx, req)
+			assert.NoError(t, err)
+			defer f.Close()
+			_, err = f.Get()
+			assert.NoError(t, err)
+			t2 := b.LastActiveTime()
+			assert.True(t, t2.After(t0), "user response must call active() and update lastActive")
+		},
+		WithBackendReadTimeout(30*time.Millisecond),
+	)
+}
+
 func TestBackendConnectTimeout(t *testing.T) {
 	rb, err := NewRemoteBackend(
 		testAddr,
@@ -757,6 +813,50 @@ func TestIssue7678(t *testing.T) {
 	s.lastReceivedSequence = 10
 	s.init(0, false)
 	assert.Equal(t, uint32(0), s.lastReceivedSequence)
+}
+
+// TestRemoteBackendUsesSharedLogger ensures we do not clone the logger per backend
+// (no Logger.With()), which would cause large allocations under many backends (e.g. sysbench).
+func TestRemoteBackendUsesSharedLogger(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	logger := logutil.GetPanicLoggerWithLevel(zap.DebugLevel)
+	app := newTestApp(t, func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+		return conn.Write(msg, goetty.WriteOptions{Flush: true})
+	})
+	require.NoError(t, app.Start())
+	defer func() { assert.NoError(t, app.Stop()) }()
+
+	opts := []BackendOption{
+		WithBackendMetrics(newMetrics("")),
+		WithBackendBufferSize(1),
+		WithBackendLogger(logger),
+	}
+	rb, err := NewRemoteBackend(testAddr, newTestCodec(), opts...)
+	require.NoError(t, err)
+	b := rb.(*remoteBackend)
+	defer b.Close()
+
+	// Backend must use the same logger instance (no per-backend With() clone).
+	assert.Same(t, logger, b.logger, "backend should use shared logger, not a With() clone")
+}
+
+// TestRemoteBackendLogFields ensures logFields() returns "remote" and "backend-id"
+// so that shared-logger logs still have backend identity (regression test for the memory fix).
+func TestRemoteBackendLogFields(t *testing.T) {
+	rb := &remoteBackend{remote: "unix:///tmp/test", logID: 42}
+	rb.logFieldsCache = []zap.Field{zap.String("remote", rb.remote), zap.Uint64("backend-id", rb.logID)}
+	fields := rb.logFields()
+	var hasRemote, hasBackendID bool
+	for _, f := range fields {
+		switch f.Key {
+		case "remote":
+			hasRemote = true
+		case "backend-id":
+			hasBackendID = true
+		}
+	}
+	assert.True(t, hasRemote, "logFields() should contain remote")
+	assert.True(t, hasBackendID, "logFields() should contain backend-id")
 }
 
 func TestIsExpectedCloseError(t *testing.T) {

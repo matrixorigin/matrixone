@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/BurntSushi/toml"
@@ -293,4 +294,166 @@ func Test_checkPrivilege(t *testing.T) {
 		_, err := checkPrivilege("", uuids, ctx, ses)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
+}
+
+func TestGetQueryResultMetaKeepsOriginCase(t *testing.T) {
+	ioutil.RunPipelineTest(
+		func() {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			ses := newTestSession(t, ctrl)
+			_ = ses.SetSessionSysVar(context.TODO(), "save_query_result", int8(1))
+			defer ses.Close()
+
+			tenant := &TenantInfo{
+				Tenant:   sysAccountName,
+				TenantID: sysAccountID,
+			}
+			ses.SetTenantInfo(tenant)
+
+			proc := testutil.NewProcess(t)
+			proc.Base.FileService = getPu("").FileService
+			proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
+			ses.GetTxnCompileCtx().execCtx = &ExecCtx{
+				reqCtx: context.TODO(),
+				proc:   proc,
+			}
+
+			colDefs := []*plan.ColDef{
+				{Name: "AbC", Typ: plan.Type{Id: int32(types.T_int8)}},
+				{Name: "DeF", Typ: plan.Type{Id: int32(types.T_int8)}},
+			}
+			ses.rs = &plan.ResultColDef{ResultCols: colDefs}
+
+			testUUID := uuid.NullUUID{}.UUID
+			ses.tStmt = &motrace.StatementInfo{StatementID: testUUID}
+
+			ctx := context.Background()
+			asts, err := parsers.Parse(ctx, dialect.MYSQL, "select 1 as AbC, 2 as DeF", 1)
+			assert.Nil(t, err)
+
+			ses.ast = asts[0]
+			ses.p = &plan.Plan{}
+
+			err = saveMeta(ctx, ses)
+			assert.Nil(t, err)
+
+			retCols, _, err := ses.GetTxnCompileCtx().GetQueryResultMeta(testUUID.String())
+			assert.Nil(t, err)
+			if assert.Equal(t, 2, len(retCols)) {
+				assert.Equal(t, "AbC", retCols[0].Name)
+				assert.Equal(t, "DeF", retCols[1].Name)
+			}
+		})
+}
+
+func Test_openResultMeta_NotFound(t *testing.T) {
+	ioutil.RunPipelineTest(
+		func() {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+
+			tenant := &TenantInfo{
+				Tenant:   sysAccountName,
+				TenantID: sysAccountID,
+			}
+			ses.SetTenantInfo(tenant)
+
+			proc := testutil.NewProcess(t)
+			proc.Base.FileService = getPu("").FileService
+			proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
+			ses.GetTxnCompileCtx().execCtx = &ExecCtx{
+				reqCtx: context.TODO(),
+				proc:   proc,
+			}
+
+			ctx := context.Background()
+			// Use a non-existent query id
+			nonExistentQueryId := "00000000-0000-0000-0000-000000000000"
+
+			_, err := openResultMeta(ctx, ses, nonExistentQueryId)
+			assert.NotNil(t, err)
+			// Verify the error message contains the query id
+			assert.Contains(t, err.Error(), nonExistentQueryId)
+			assert.Contains(t, err.Error(), "query id")
+		},
+	)
+}
+
+func Test_getResultFiles_NotFound(t *testing.T) {
+	ioutil.RunPipelineTest(
+		func() {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			ses := newTestSession(t, ctrl)
+			_ = ses.SetSessionSysVar(context.TODO(), "save_query_result", int8(1))
+			defer ses.Close()
+
+			tenant := &TenantInfo{
+				Tenant:   sysAccountName,
+				TenantID: sysAccountID,
+			}
+			ses.SetTenantInfo(tenant)
+
+			proc := testutil.NewProcess(t)
+			proc.Base.FileService = getPu("").FileService
+			proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
+			ses.GetTxnCompileCtx().execCtx = &ExecCtx{
+				reqCtx: context.TODO(),
+				proc:   proc,
+			}
+
+			// Setup: create a query result first
+			typs := []types.Type{
+				types.T_int8.ToType(),
+			}
+			colDefs := []*plan.ColDef{
+				{Name: "col1", Typ: plan.Type{Id: int32(types.T_int8)}},
+			}
+			ses.rs = &plan.ResultColDef{ResultCols: colDefs}
+
+			testUUID := uuid.New()
+			ses.tStmt = &motrace.StatementInfo{StatementID: testUUID}
+			ses.SetStmtId(testUUID)
+
+			ctx := context.Background()
+			asts, err := parsers.Parse(ctx, dialect.MYSQL, "select 1", 1)
+			assert.Nil(t, err)
+			ses.ast = asts[0]
+			ses.p = &plan.Plan{}
+
+			// Save a batch to create result file
+			data := newBatch(typs, 1, proc)
+			err = saveBatch(ctx, ses, data)
+			assert.Nil(t, err)
+
+			// Save meta
+			err = saveMeta(ctx, ses)
+			assert.Nil(t, err)
+
+			// Get the result file path and delete it
+			_, str, err := ses.GetTxnCompileCtx().GetQueryResultMeta(testUUID.String())
+			assert.Nil(t, err)
+			fileList := strings.Split(str, ",")
+			for _, file := range fileList {
+				file = strings.TrimSpace(file)
+				if file != "" {
+					err = getPu("").FileService.Delete(ctx, file)
+					assert.Nil(t, err)
+				}
+			}
+
+			// Now getResultFiles should return NewResultFileNotFound error
+			_, err = getResultFiles(ctx, ses, testUUID.String())
+			assert.NotNil(t, err)
+			// Verify the error message contains the query id
+			assert.Contains(t, err.Error(), testUUID.String())
+			assert.Contains(t, err.Error(), "query id")
+		},
+	)
 }

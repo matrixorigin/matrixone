@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -36,10 +35,13 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	}
 	mergeGroup.OpAnalyzer = process.NewAnalyzer(mergeGroup.GetIdx(), mergeGroup.IsFirst, mergeGroup.IsLast, "merge_group")
 
-	if err := mergeGroup.PrepareProjection(proc); err != nil {
+	err := mergeGroup.PrepareProjection(proc)
+	if err != nil {
 		return err
 	}
+
 	mergeGroup.ctr.setSpillMem(mergeGroup.SpillMem, mergeGroup.Aggs)
+
 	return nil
 }
 
@@ -80,7 +82,9 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 			}
 
 			if needSpill {
-				mergeGroup.ctr.spillDataToDisk(proc, nil)
+				if err := mergeGroup.ctr.spillDataToDisk(proc, nil); err != nil {
+					return vm.CancelResult, err
+				}
 			}
 		}
 
@@ -118,13 +122,20 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool, error) {
 	var err error
 
-	// lower send me a batch with extra buf1,
-	// which contains the aggregation expressions.
-	if len(bat.ExtraBuf1) != 0 {
-		// but mergeGroup has not build Aggs yet, so we need to build it.
-		// This info really should be set during query planning and prepare.
-		// We screwed up, so deal with it.
-		reader := bytes.NewReader(bat.ExtraBuf1)
+	defer func() {
+		if err != nil {
+			mergeGroup.ctr.freeSpillAggList()
+		}
+	}()
+
+	mergeGroup.ctr.spillAggList, err = mergeGroup.ctr.makeAggList(mergeGroup.Aggs)
+	if err != nil {
+		return false, err
+	}
+
+	// deserialize extra buf2.
+	if len(bat.ExtraBuf) != 0 {
+		reader := bytes.NewReader(bat.ExtraBuf)
 
 		// XXX: Here, the mtyp is critical.  It will affect how later we unmarshal and merge.
 		if mergeGroup.ctr.mtyp, err = types.ReadInt32(reader); err != nil {
@@ -139,19 +150,10 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 			}
 		}
 
+		var nAggs int32
 		nAggs, err := types.ReadInt32(reader)
 		if err != nil {
 			return false, err
-		}
-		if nAggs > 0 && len(mergeGroup.Aggs) == 0 {
-			for i := int32(0); i < nAggs; i++ {
-				agExpr := aggexec.AggFuncExecExpression{}
-				if err := agExpr.UnmarshalFromReader(reader); err != nil {
-					return false, err
-				}
-				mergeGroup.Aggs = append(mergeGroup.Aggs, agExpr)
-			}
-			mergeGroup.ctr.setSpillMem(mergeGroup.SpillMem, mergeGroup.Aggs)
 		}
 
 		if len(mergeGroup.ctr.aggList) != len(mergeGroup.Aggs) {
@@ -160,27 +162,6 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 				return false, err
 			}
 		}
-	}
-
-	defer func() {
-		if err != nil {
-			mergeGroup.ctr.freeSpillAggList()
-		}
-	}()
-
-	mergeGroup.ctr.spillAggList, err = mergeGroup.ctr.makeAggList(mergeGroup.Aggs)
-	if err != nil {
-		return false, err
-	}
-
-	// deserialize extra buf2.
-	if len(bat.ExtraBuf2) != 0 {
-		var nAggs int32
-		r := bytes.NewReader(bat.ExtraBuf2)
-		nAggs, err := types.ReadInt32(r)
-		if err != nil {
-			return false, err
-		}
 
 		if int(nAggs) != len(mergeGroup.ctr.spillAggList) {
 			return false, moerr.NewInternalError(proc.Ctx, "nAggs != len(mergeGroup.ctr.spillAggList)")
@@ -188,13 +169,13 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 
 		for i := int32(0); i < nAggs; i++ {
 			ag := mergeGroup.ctr.spillAggList[i]
-			if err := ag.UnmarshalFromReader(r, mergeGroup.ctr.mp); err != nil {
+			if err := ag.UnmarshalFromReader(reader, mergeGroup.ctr.mp); err != nil {
 				return false, err
 			}
 		}
 	}
 
-	// merge intermedia results with only Aggregation.
+	// merge intermediate results with only Aggregation.
 	if len(bat.Vecs) == 0 {
 		// no group by columns, group grow 1 for each agg.
 		for i := range mergeGroup.ctr.aggList {
@@ -213,6 +194,7 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 		for i := 0; i < rowCount; i += hashmap.UnitLimit {
 			n := min(rowCount-i, hashmap.UnitLimit)
 
+			mergeGroup.ctr.sanityCheck()
 			originGroupCount := mergeGroup.ctr.hr.Hash.GroupCount()
 			vals, _, err := mergeGroup.ctr.hr.Itr.Insert(i, n, bat.Vecs)
 			if err != nil {
@@ -227,6 +209,7 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 			if len(mergeGroup.ctr.aggList) == 0 {
 				continue
 			}
+
 			if more > 0 {
 				for j := range mergeGroup.ctr.aggList {
 					if err := mergeGroup.ctr.aggList[j].GroupGrow(more); err != nil {
@@ -239,6 +222,8 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 					return false, err
 				}
 			}
+
+			mergeGroup.ctr.sanityCheck()
 		}
 	}
 

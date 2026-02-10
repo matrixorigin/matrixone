@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -32,40 +33,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/encoding"
+	"github.com/parquet-go/parquet-go/format"
 )
 
-func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Process, bat *batch.Batch) error {
-	_, span := trace.Start(ctx, "scanParquetFile")
-	defer span.End()
-
-	if param.parqh == nil {
-		var err error
-		param.parqh, err = newParquetHandler(param)
-		if err != nil {
-			return err
-		}
-	}
-
-	o := param.parqh.offset
-	for _, g := range param.parqh.file.RowGroups() {
-		n := g.NumRows()
-		if o >= n {
-			o -= n
-			continue
-		}
-		param.parqh.batchCnt = min(n-o, maxParquetBatchCnt)
-	}
-
-	return param.parqh.getData(bat, param, proc)
-}
-
-var maxParquetBatchCnt int64 = 1000
+var maxParquetBatchCnt int64 = 100000
 
 func newParquetHandler(param *ExternalParam) (*ParquetHandler, error) {
 	h := ParquetHandler{
@@ -76,6 +53,30 @@ func newParquetHandler(param *ExternalParam) (*ParquetHandler, error) {
 		return nil, err
 	}
 
+	// Empty file handling (0 rows): only check column count, skip column name and type checks.
+	// This aligns with DuckDB behavior for empty parquet files.
+	if h.file.NumRows() == 0 {
+		// Check if @vars are used in column list (LOAD DATA ... (col1, @v, col2))
+		// Parquet doesn't support @vars, report explicit error
+		if param.Extern.ExternType == int32(plan.ExternType_LOAD) &&
+			param.ColumnListLen > int32(len(param.Attrs)) {
+			return nil, moerr.NewNYI(param.Ctx, "parquet load with @variables in column list")
+		}
+
+		// Only check column count, not column names or types
+		// Column count must match exactly (align with DuckDB behavior)
+		parquetColCnt := len(h.file.Root().Columns())
+		tableColCnt := getParquetExpectedColCnt(param)
+		if parquetColCnt != tableColCnt {
+			return nil, moerr.NewInvalidInputf(param.Ctx,
+				"column count mismatch: parquet file has %d columns, but table has %d columns",
+				parquetColCnt, tableColCnt)
+		}
+		// Return nil to indicate empty file, no data to load
+		return nil, nil
+	}
+
+	// Non-empty file: use original logic (check column names and types)
 	err = h.prepare(param)
 	if err != nil {
 		return nil, err
@@ -86,24 +87,57 @@ func newParquetHandler(param *ExternalParam) (*ParquetHandler, error) {
 
 func (h *ParquetHandler) openFile(param *ExternalParam) error {
 	var r io.ReaderAt
+	var fileSize int64
 	switch {
 	case param.Extern.ScanType == tree.INLINE:
-		r = bytes.NewReader(util.UnsafeStringToBytes(param.Extern.Data))
+		data := util.UnsafeStringToBytes(param.Extern.Data)
+		r = bytes.NewReader(data)
+		fileSize = int64(len(data))
 	case param.Extern.Local:
 		return moerr.NewNYI(param.Ctx, "load parquet local")
 	default:
-		fs, readPath, err := plan.GetForETLWithType(param.Extern, param.Fileparam.Filepath)
+		fs, readPath, err := plan2.GetForETLWithType(param.Extern, param.Fileparam.Filepath)
 		if err != nil {
 			return err
 		}
-		r = &fsReaderAt{
-			fs:       fs,
-			readPath: readPath,
-			ctx:      param.Ctx,
+
+		// Validate FileIndex to avoid out-of-bounds access
+		if param.Fileparam.FileIndex <= 0 || param.Fileparam.FileIndex > len(param.FileSize) {
+			return moerr.NewInternalErrorf(param.Ctx, "invalid FileIndex %d for FileSize length %d",
+				param.Fileparam.FileIndex, len(param.FileSize))
+		}
+		fileSize = param.FileSize[param.Fileparam.FileIndex-1]
+
+		// For S3 sources, pre-read the entire file into memory to avoid
+		// many small random HTTP requests which cause severe performance issues.
+		// Parquet reading involves many small random reads (metadata, page headers, etc.)
+		// which are fast on local disk but extremely slow over S3 due to HTTP RTT.
+		if param.Extern.ScanType == tree.S3 {
+			data := make([]byte, fileSize)
+			vec := fileservice.IOVector{
+				FilePath: readPath,
+				Entries: []fileservice.IOEntry{
+					{
+						Offset: 0,
+						Size:   fileSize,
+						Data:   data,
+					},
+				},
+			}
+			if err := fs.Read(param.Ctx, &vec); err != nil {
+				return err
+			}
+			r = bytes.NewReader(data)
+		} else {
+			r = &fsReaderAt{
+				fs:       fs,
+				readPath: readPath,
+				ctx:      param.Ctx,
+			}
 		}
 	}
 	var err error
-	h.file, err = parquet.OpenFile(r, param.FileSize[param.Fileparam.FileIndex-1])
+	h.file, err = parquet.OpenFile(r, fileSize)
 	return moerr.ConvertGoError(param.Ctx, err)
 }
 
@@ -146,8 +180,11 @@ func (h *ParquetHandler) findColumnIgnoreCase(ctx context.Context, name string) 
 }
 
 func (h *ParquetHandler) prepare(param *ExternalParam) error {
-	h.cols = make([]*parquet.Column, len(param.Attrs))
-	h.mappers = make([]*columnMapper, len(param.Attrs))
+	h.cols = make([]*parquet.Column, len(param.Cols))
+	h.mappers = make([]*columnMapper, len(param.Cols))
+	h.pages = make([]parquet.Pages, len(param.Cols))
+	h.currentPage = make([]parquet.Page, len(param.Cols))
+	h.pageOffset = make([]int64, len(param.Cols))
 	for _, attr := range param.Attrs {
 		def := param.Cols[attr.ColIndex]
 		if def.Hidden {
@@ -165,7 +202,15 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 
 		var fn *columnMapper
 		if !col.Leaf() {
-			return moerr.NewNYI(param.Ctx, "parquet nested type")
+			// nested type: List/Struct/Map
+			targetType := types.T(def.Typ.Id)
+			if !isNestedTargetTypeSupported(targetType) {
+				return moerr.NewInvalidInputf(param.Ctx,
+					"parquet nested column %s must map to JSON or TEXT type, got %s",
+					attr.ColName, targetType.String())
+			}
+			h.hasNestedCols = true
+			fn = h.getNestedMapper(col, def.Typ)
 		} else {
 			fn = h.getMapper(col, def.Typ)
 		}
@@ -186,6 +231,12 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 		}
 		h.cols[attr.ColIndex] = col
 		h.mappers[attr.ColIndex] = fn
+		h.pages[attr.ColIndex] = col.Pages()
+	}
+
+	// init row reader if has nested columns
+	if h.hasNestedCols {
+		h.rowReader = parquet.NewReader(h.file)
 	}
 
 	return nil
@@ -196,10 +247,6 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 	if st.PhysicalType() == nil {
 		return nil
 	}
-	if sc.Optional() && dt.NotNullable {
-		return nil
-	}
-
 	mp := &columnMapper{
 		srcNull:            sc.Optional(),
 		dstNull:            !dt.NotNullable,
@@ -214,6 +261,13 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			if page.Dictionary() != nil {
 				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
 			}
+
+			// Fail early: if page has NULLs and destination doesn't allow them
+			if mp.srcNull && page.NumNulls() > 0 && !mp.dstNull {
+				return moerr.NewConstraintViolationf(proc.Ctx,
+					"cannot load NULL value into NOT NULL column")
+			}
+
 			p := make([]parquet.Value, page.NumValues())
 			n, err := page.Values().ReadValues(p)
 			if err != nil && !errors.Is(err, io.EOF) {
@@ -683,20 +737,37 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			}
 			// https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#timestamp
 			tsT := lt.Timestamp
-			if tsT == nil || !tsT.IsAdjustedToUTC {
+			if tsT == nil {
 				break
 			}
+			// isAdjustedToUTC: true=UTC (use directly), false=local time (subtract session timezone offset for correct MO display)
+			isAdjustedToUTC := tsT.IsAdjustedToUTC
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
 				dict := page.Dictionary()
+
+				// Get timezone offset for non-UTC timestamps
+				var tzOffsetMicros int64 = 0
+				if !isAdjustedToUTC {
+					loc := proc.Base.SessionInfo.TimeZone
+					if loc == nil {
+						loc = time.Local
+					}
+					// Get the timezone offset in seconds, then convert to microseconds
+					// We use current time to get the offset, which handles DST correctly for current data
+					_, offset := time.Now().In(loc).Zone()
+					tzOffsetMicros = int64(offset) * 1000000 // seconds to microseconds
+				}
+
 				switch {
 				case tsT.Unit.Nanos != nil:
+					tzOffsetNanos := tzOffsetMicros * 1000 // convert to nanoseconds
 					if dict != nil {
 						dictData := dict.Page().Data()
 						dictValues := dictData.Int64()
 						converted := make([]types.Timestamp, len(dictValues))
 						for i, v := range dictValues {
-							converted[i] = types.UnixNanoToTimestamp(v)
+							converted[i] = types.UnixNanoToTimestamp(v - tzOffsetNanos)
 						}
 						indexes := data.Int32()
 						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
@@ -704,7 +775,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						})
 					}
 					return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
-						return types.UnixNanoToTimestamp(v)
+						return types.UnixNanoToTimestamp(v - tzOffsetNanos)
 					})
 				case tsT.Unit.Micros != nil:
 					if dict != nil {
@@ -712,7 +783,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						dictValues := dictData.Int64()
 						converted := make([]types.Timestamp, len(dictValues))
 						for i, v := range dictValues {
-							converted[i] = types.UnixMicroToTimestamp(v)
+							converted[i] = types.UnixMicroToTimestamp(v - tzOffsetMicros)
 						}
 						indexes := data.Int32()
 						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
@@ -720,15 +791,16 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						})
 					}
 					return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
-						return types.UnixMicroToTimestamp(v)
+						return types.UnixMicroToTimestamp(v - tzOffsetMicros)
 					})
 				case tsT.Unit.Millis != nil:
+					tzOffsetMillis := tzOffsetMicros / 1000 // convert to milliseconds
 					if dict != nil {
 						dictData := dict.Page().Data()
 						dictValues := dictData.Int64()
 						converted := make([]types.Timestamp, len(dictValues))
 						for i, v := range dictValues {
-							converted[i] = types.UnixMicroToTimestamp(v * 1000)
+							converted[i] = types.UnixMicroToTimestamp((v - tzOffsetMillis) * 1000)
 						}
 						indexes := data.Int32()
 						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
@@ -736,7 +808,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						})
 					}
 					return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
-						return types.UnixMicroToTimestamp(v * 1000)
+						return types.UnixMicroToTimestamp((v - tzOffsetMillis) * 1000)
 					})
 				default:
 					return moerr.NewInternalError(proc.Ctx, "unknown unit")
@@ -887,7 +959,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				}
 			}
 		}
-	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob, types.T_json:
 		if st.Kind() != parquet.ByteArray && st.Kind() != parquet.FixedLenByteArray {
 			break
 		}
@@ -976,8 +1048,9 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			return nil
 		}
 	case types.T_decimal64:
-		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
-			// Support STRING to DECIMAL64 conversion
+		lt := st.LogicalType()
+		if (st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray) && !isDecimalLogicalType(lt) {
+			// STRING to DECIMAL64
 			precision := int32(dt.Width)
 			scale := int32(dt.Scale)
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
@@ -993,6 +1066,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				)
 			}
 		} else {
+			// Binary DECIMAL
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				kind := st.Kind()
 				data := page.Data()
@@ -1016,8 +1090,9 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			}
 		}
 	case types.T_decimal128:
-		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
-			// Support STRING to DECIMAL128 conversion
+		lt := st.LogicalType()
+		if (st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray) && !isDecimalLogicalType(lt) {
+			// STRING to DECIMAL128 conversion (no DECIMAL LogicalType means it's stored as string)
 			precision := int32(dt.Width)
 			scale := int32(dt.Scale)
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
@@ -1033,6 +1108,8 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				)
 			}
 		} else {
+			// Binary DECIMAL (INT32/INT64/FixedLenByteArray/ByteArray with DECIMAL LogicalType)
+			// PyArrow stores DECIMAL as FixedLenByteArray with DECIMAL LogicalType (big-endian two's complement)
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				kind := st.Kind()
 				data := page.Data()
@@ -1107,8 +1184,8 @@ func (nc *nullCheckInfo) isNull(index int) bool {
 func prepareNullCheck(ctx context.Context, mp *columnMapper, page parquet.Page) (nullCheckInfo, error) {
 	numRows := int(page.NumRows())
 
-	// Fast path: source or destination doesn't allow null
-	if !mp.srcNull || !mp.dstNull {
+	// Fast path: source doesn't allow null
+	if !mp.srcNull {
 		return nullCheckInfo{
 			noNulls:        true,
 			actualNonNulls: int64(numRows),
@@ -1121,6 +1198,12 @@ func prepareNullCheck(ctx context.Context, mp *columnMapper, page parquet.Page) 
 			noNulls:        true,
 			actualNonNulls: int64(numRows),
 		}, nil
+	}
+
+	// Page has NULLs - check if destination allows them
+	if !mp.dstNull {
+		return nullCheckInfo{}, moerr.NewConstraintViolationf(ctx,
+			"cannot load NULL value into NOT NULL column")
 	}
 
 	levels := page.DefinitionLevels()
@@ -1357,8 +1440,16 @@ func copyPageToVec[T any](mp *columnMapper, page parquet.Page, proc *process.Pro
 }
 
 func copyPageToVecMap[T, U any](mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector, data []T, itee func(t T) U) error {
-	noNulls := !mp.srcNull || !mp.dstNull || page.NumNulls() == 0
 	n := int(page.NumRows())
+
+	// Only skip NULL check if source doesn't allow null OR page has no nulls
+	noNulls := !mp.srcNull || page.NumNulls() == 0
+
+	// Fail early: if page has NULLs and destination doesn't allow them
+	if !noNulls && !mp.dstNull {
+		return moerr.NewConstraintViolationf(proc.Ctx,
+			"cannot load NULL value into NOT NULL column")
+	}
 
 	length := vec.Length()
 	err := vec.PreExtend(n+length, proc.Mp())
@@ -1564,6 +1655,10 @@ func decodeDecimal256Values(ctx context.Context, kind parquet.Kind, data encodin
 	}
 }
 
+func isDecimalLogicalType(lt *format.LogicalType) bool {
+	return lt != nil && lt.Decimal != nil
+}
+
 func decimalBytesToDecimal64(ctx context.Context, b []byte) (types.Decimal64, error) {
 	if len(b) == 0 {
 		return 0, nil
@@ -1673,9 +1768,17 @@ func bigIntToTwosComplementBytes(ctx context.Context, bi *big.Int, size int) ([]
 }
 
 func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *process.Process) error {
+	if h.hasNestedCols {
+		return h.getDataByRow(bat, param, proc)
+	}
+	return h.getDataByPage(bat, param, proc)
+}
+
+func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, proc *process.Process) error {
 	length := 0
 	finish := false
-	for colIdx, col := range h.cols {
+	for _, attr := range param.Attrs {
+		colIdx := attr.ColIndex
 		if param.Cols[colIdx].Hidden {
 			continue
 		}
@@ -1687,23 +1790,33 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 
 		vec := bat.Vecs[colIdx]
 
-		pages := col.Pages()
+		pages := h.pages[colIdx]
 		n := h.batchCnt
-		o := h.offset
+		pageOff := h.pageOffset[colIdx]
 	L:
 		for n > 0 {
-			page, err := pages.ReadPage()
-			switch {
-			case errors.Is(err, io.EOF):
-				finish = true
-				break L
-			case err != nil:
-				return moerr.ConvertGoError(param.Ctx, err)
+			// Use cached page if available, otherwise read next page
+			page := h.currentPage[colIdx]
+			if page == nil {
+				var err error
+				page, err = pages.ReadPage()
+				switch {
+				case errors.Is(err, io.EOF):
+					finish = true
+					break L
+				case err != nil:
+					return moerr.ConvertGoError(param.Ctx, err)
+				}
+				h.currentPage[colIdx] = page
+				pageOff = 0
 			}
 
 			nr := page.NumRows()
-			if nr < o {
-				o -= nr
+			if nr <= pageOff {
+				// Current page exhausted, clear cache and read next
+				h.currentPage[colIdx] = nil
+				h.pageOffset[colIdx] = 0
+				pageOff = 0
 				continue
 			}
 
@@ -1711,20 +1824,27 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 				return moerr.NewNYI(param.Ctx, "page has repetition")
 			}
 
-			if o > 0 || o+n < nr {
-				page = page.Slice(o, min(n+o, nr))
-			}
-			o = 0
-			n -= page.NumRows()
+			// Calculate how many rows to read from this page
+			remaining := nr - pageOff
+			toRead := min(n, remaining)
 
-			err = h.mappers[colIdx].mapping(page, proc, vec)
+			slicedPage := page.Slice(pageOff, pageOff+toRead)
+			pageOff += toRead
+			n -= toRead
+
+			// Update page offset
+			h.pageOffset[colIdx] = pageOff
+
+			// If we've consumed the entire page, clear the cache
+			if pageOff >= nr {
+				h.currentPage[colIdx] = nil
+				h.pageOffset[colIdx] = 0
+			}
+
+			err := h.mappers[colIdx].mapping(slicedPage, proc, vec)
 			if err != nil {
 				return err
 			}
-		}
-		err := pages.Close()
-		if err != nil {
-			return moerr.ConvertGoError(param.Ctx, err)
 		}
 		length = vec.Length()
 	}
@@ -1737,11 +1857,13 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 	}
 
 	if finish {
-		param.parqh = nil
-		param.Fileparam.FileFin++
-		if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
-			param.Fileparam.End = true
+		// Close all page iterators when file processing is complete
+		for _, pages := range h.pages {
+			if pages != nil {
+				pages.Close()
+			}
 		}
+		// File completion (FileFin/End) is now handled by Call's finishCurrentFile
 	}
 
 	return nil
@@ -1840,4 +1962,16 @@ func parseStringToDecimal128(s string, precision, scale int32) (types.Decimal128
 	}
 
 	return result, nil
+}
+
+// getParquetExpectedColCnt calculates the expected column count for parquet loading.
+// It excludes external hidden columns like __mo_filepath.
+func getParquetExpectedColCnt(param *ExternalParam) int {
+	cnt := 0
+	for _, attr := range param.Attrs {
+		if !catalog.ContainExternalHidenCol(attr.ColName) {
+			cnt++
+		}
+	}
+	return cnt
 }

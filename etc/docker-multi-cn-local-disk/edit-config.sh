@@ -238,11 +238,6 @@ echo ""
 echo ""
 echo -e "${BLUE}Processing changes...${NC}"
 
-# Create backup
-if [ -f "config.env" ]; then
-    cp config.env config.env.bak
-fi
-
 # Create new config file
 NEW_CONFIG=$(mktemp)
 
@@ -349,17 +344,8 @@ if [ "$CHANGES_MADE" = true ]; then
         echo "  1. Restart all:      make dev-restart"
         echo "  2. Check logs:       make dev-logs"
     fi
-    
-    if [ -f "config.env.bak" ]; then
-        echo ""
-        echo "Backup saved: config.env.bak"
-    fi
 else
-    echo -e "${YELLOW}⚠ No changes made (all settings remain commented out)${NC}"
-    # Restore original if no changes
-    if [ -f "config.env.bak" ]; then
-        mv config.env.bak config.env
-    fi
+    echo -e "${YELLOW}⚠ No changes made${NC}"
 fi
 
 echo ""

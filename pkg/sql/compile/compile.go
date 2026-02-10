@@ -45,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
@@ -172,6 +173,15 @@ func (c *Compile) GetMessageCenter() *message.MessageCenter {
 	return nil
 }
 
+// GetPlan returns the current plan of the Compile.
+// This is useful for getting the latest plan after a retry.
+func (c *Compile) GetPlan() *plan.Plan {
+	if c == nil {
+		return nil
+	}
+	return c.pn
+}
+
 func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) {
 	// clean up the process for a new query.
 	proc.ResetQueryContext()
@@ -205,7 +215,6 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	if c.proc.GetTxnOperator() != nil {
 		c.proc.GetTxnOperator().GetWorkspace().UpdateSnapshotWriteOffset()
 		c.TxnOffset = c.proc.GetTxnOperator().GetWorkspace().GetSnapshotWriteOffset()
-
 		// all scopes should update the txn offset, or the reader will receive a 0 txnOffset,
 		// that cause a dml statement can not see the previous statements' operations.
 		if len(c.scopes) > 0 {
@@ -417,7 +426,13 @@ func (c *Compile) isRetryErr(err error) bool {
 }
 
 func (c *Compile) canRetry(err error) bool {
-	return !c.disableRetry && c.isRetryErr(err)
+	if c.disableRetry {
+		return false
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrVectorNeedRetryWithPreMode) {
+		return true
+	}
+	return c.isRetryErr(err)
 }
 
 func (c *Compile) IsTpQuery() bool {
@@ -905,6 +920,21 @@ func (c *Compile) compileSinkScan(qry *plan.Query, nodeId int32) error {
 	return nil
 }
 
+func (c *Compile) isAdaptiveVectorSearch(qry *plan.Query) bool {
+	if qry == nil {
+		return false
+	}
+
+	for _, node := range qry.Nodes {
+		// Check for vector search in auto mode
+		if node.RankOption != nil && node.RankOption.Mode == "auto" {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Scope, error) {
 	if qry.Nodes[step].NodeType == plan.Node_SINK {
 		return ss, nil
@@ -924,10 +954,14 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 		}
 		updateScopesLastFlag([]*Scope{rs})
 		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curNodeIdx)
+
+		isAdaptive := c.isAdaptiveVectorSearch(qry)
+
 		rs.setRootOperator(
 			output.NewArgument().
 				WithFunc(c.fill).
-				WithBlock(c.needBlock),
+				WithBlock(c.needBlock).
+				WithAdaptive(isAdaptive),
 		)
 		return []*Scope{rs}, nil
 	}
@@ -1024,7 +1058,6 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		if err != nil {
 			return nil, err
 		}
-
 		groupInfo := constructGroup(c.proc.Ctx, node, nodes[node.Children[0]], false, 0, c.proc)
 		defer groupInfo.Release()
 		anyDistinctAgg := groupInfo.AnyDistinctAgg()
@@ -1258,7 +1291,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 
 		node.NotCacheable = true
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		return c.compileMultiUpdate(nodes, node, ss)
+		return c.compileMultiUpdate(node, ss)
 	case plan.Node_LOCK_OP:
 		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
@@ -1383,11 +1416,11 @@ func (c *Compile) constructLoadMergeScope() *Scope {
 	return ds
 }
 
-func (c *Compile) compileSourceScan(n *plan.Node) ([]*Scope, error) {
+func (c *Compile) compileSourceScan(node *plan.Node) ([]*Scope, error) {
 	_, span := trace.Start(c.proc.Ctx, "compileSourceScan")
 	defer span.End()
 	configs := make(map[string]interface{})
-	for _, def := range n.TableDef.Defs {
+	for _, def := range node.TableDef.Defs {
 		switch v := def.Def.(type) {
 		case *plan.TableDef_DefType_Properties:
 			for _, p := range v.Properties.Properties {
@@ -1409,7 +1442,7 @@ func (c *Compile) compileSourceScan(n *plan.Node) ([]*Scope, error) {
 		ss[i] = newScope(Merge)
 		ss[i].NodeInfo = getEngineNode(c)
 		ss[i].Proc = c.proc.NewNoContextChildProc(0)
-		arg := constructStream(n, ps[i])
+		arg := constructStream(node, ps[i])
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(arg)
 	}
@@ -1506,8 +1539,8 @@ func (c *Compile) getReadWriteParallelFlag(param *tree.ExternParam, fileList []s
 	return true, true
 }
 
-func (c *Compile) getExternalFileListAndSize(n *plan.Node, param *tree.ExternParam) (fileList []string, fileSize []int64, err error) {
-	switch n.ExternScan.Type {
+func (c *Compile) getExternalFileListAndSize(node *plan.Node, param *tree.ExternParam) (fileList []string, fileSize []int64, err error) {
+	switch node.ExternScan.Type {
 	case int32(plan.ExternType_EXTERNAL_TB):
 		t := time.Now()
 		_, spanReadDir := trace.Start(c.proc.Ctx, "compileExternScan.ReadDir")
@@ -1517,7 +1550,7 @@ func (c *Compile) getExternalFileListAndSize(n *plan.Node, param *tree.ExternPar
 			return nil, nil, err
 		}
 		spanReadDir.End()
-		fileList, fileSize, err = external.FilterFileList(c.proc.Ctx, n, c.proc, fileList, fileSize)
+		fileList, fileSize, err = external.FilterFileList(c.proc.Ctx, node, c.proc, fileList, fileSize)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1529,7 +1562,7 @@ func (c *Compile) getExternalFileListAndSize(n *plan.Node, param *tree.ExternPar
 		for i := range fileList {
 			fileList[i] = strings.TrimSpace(fileList[i])
 		}
-		fileList, fileSize, err = external.FilterFileList(c.proc.Ctx, n, c.proc, fileList, fileSize)
+		fileList, fileSize, err = external.FilterFileList(c.proc.Ctx, node, c.proc, fileList, fileSize)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1540,7 +1573,7 @@ func (c *Compile) getExternalFileListAndSize(n *plan.Node, param *tree.ExternPar
 	return fileList, fileSize, nil
 }
 
-func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
+func (c *Compile) compileExternScan(node *plan.Node) ([]*Scope, error) {
 	if c.isPrepare {
 		return nil, cantCompileForPrepareErr
 	}
@@ -1553,7 +1586,7 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		}
 	}()
 
-	param, err := c.getExternParam(c.proc, n.ExternScan, n.TableDef.Createsql)
+	param, err := c.getExternParam(c.proc, node.ExternScan, node.TableDef.Createsql)
 	if err != nil {
 		return nil, err
 	}
@@ -1563,10 +1596,10 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		return nil, err
 	}
 	if param.ScanType == tree.INLINE {
-		return c.compileExternValueScan(n, param, strictSqlMode)
+		return c.compileExternValueScan(node, param, strictSqlMode)
 	}
 
-	fileList, fileSize, err := c.getExternalFileListAndSize(n, param)
+	fileList, fileSize, err := c.getExternalFileListAndSize(node, param)
 	if err != nil {
 		return nil, err
 	}
@@ -1575,7 +1608,7 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 		ret := newScope(Merge)
 		ret.NodeInfo = getEngineNode(c)
 		ret.NodeInfo.Mcpu = 1
-		ret.DataSource = &Source{isConst: true, node: n}
+		ret.DataSource = &Source{isConst: true, node: node}
 
 		currentFirstFlag := c.anal.isFirst
 
@@ -1594,19 +1627,19 @@ func (c *Compile) compileExternScan(n *plan.Node) ([]*Scope, error) {
 	readParallel, writeParallel := c.getReadWriteParallelFlag(param, fileList)
 
 	if readParallel && writeParallel {
-		return c.compileExternScanParallelReadWrite(n, param, fileList, fileSize, strictSqlMode)
+		return c.compileExternScanParallelReadWrite(node, param, fileList, fileSize, strictSqlMode)
 	} else if writeParallel {
-		return c.compileExternScanParallelWrite(n, param, fileList, fileSize, strictSqlMode)
+		return c.compileExternScanParallelWrite(node, param, fileList, fileSize, strictSqlMode)
 	} else {
-		return c.compileExternScanSerialReadWrite(n, param, fileList, fileSize, strictSqlMode)
+		return c.compileExternScanSerialReadWrite(node, param, fileList, fileSize, strictSqlMode)
 	}
 }
 
-func (c *Compile) getParallelSizeForExternalScan(n *plan.Node, cpuNum int) int {
-	if n.Stats == nil {
+func (c *Compile) getParallelSizeForExternalScan(node *plan.Node, cpuNum int) int {
+	if node.Stats == nil {
 		return cpuNum
 	}
-	totalSize := n.Stats.Cost * n.Stats.Rowsize
+	totalSize := node.Stats.Cost * node.Stats.Rowsize
 	parallelSize := int(totalSize / float64(colexec.WriteS3Threshold))
 	if parallelSize < 1 {
 		return 1
@@ -1617,10 +1650,10 @@ func (c *Compile) getParallelSizeForExternalScan(n *plan.Node, cpuNum int) int {
 }
 
 // load data inline goes here, should always be single parallel
-func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam, strictSqlMode bool) ([]*Scope, error) {
+func (c *Compile) compileExternValueScan(node *plan.Node, param *tree.ExternParam, strictSqlMode bool) ([]*Scope, error) {
 	s := c.constructScopeForExternal(c.addr, false)
 	currentFirstFlag := c.anal.isFirst
-	op := constructExternal(n, param, c.proc.Ctx, nil, nil, nil, strictSqlMode)
+	op := constructExternal(node, param, c.proc.Ctx, nil, nil, nil, strictSqlMode)
 	op.SetIdx(c.anal.curNodeIdx)
 	op.SetIsFirst(currentFirstFlag)
 	s.setRootOperator(op)
@@ -1629,7 +1662,7 @@ func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam, 
 }
 
 // construct one thread to read the file data, then dispatch to mcpu thread to get the filedata for insert
-func (c *Compile) compileExternScanParallelWrite(n *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
+func (c *Compile) compileExternScanParallelWrite(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
 	param.Parallel = false
 	fileOffsetTmp := make([]*pipeline.FileOffset, len(fileList))
 	for i := 0; i < len(fileList); i++ {
@@ -1639,13 +1672,17 @@ func (c *Compile) compileExternScanParallelWrite(n *plan.Node, param *tree.Exter
 	}
 	scope := c.constructScopeForExternal("", false)
 	currentFirstFlag := c.anal.isFirst
-	extern := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
-	extern.Es.ParallelLoad = true
+	extern := constructExternal(node, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
+	parallelLoad := true
+	if len(fileList) > 0 && crt.GetCompressType(param.CompressType, fileList[0]) != tree.NOCOMPRESS {
+		parallelLoad = false
+	}
+	extern.Es.ParallelLoad = parallelLoad
 	extern.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	scope.setRootOperator(extern)
 	c.anal.isFirst = false
 
-	mcpu := c.getParallelSizeForExternalScan(n, c.ncpu) // dop of insert scopes
+	mcpu := c.getParallelSizeForExternalScan(node, c.ncpu) // dop of insert scopes
 	if mcpu == 1 {
 		return []*Scope{scope}, nil
 	}
@@ -1674,10 +1711,10 @@ func GetExternParallelSize(totalSize int64, cpuNum int) int {
 	return cpuNum
 }
 
-func (c *Compile) compileExternScanParallelReadWrite(n *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
+func (c *Compile) compileExternScanParallelReadWrite(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
 	visibleCols := make([]*plan.ColDef, 0)
 	if param.Strict {
-		for _, col := range n.TableDef.Cols {
+		for _, col := range node.TableDef.Cols {
 			if !col.Hidden {
 				visibleCols = append(visibleCols, col)
 			}
@@ -1745,7 +1782,7 @@ func (c *Compile) compileExternScanParallelReadWrite(n *plan.Node, param *tree.E
 		}
 		logutil.Infof("compileExternScanParallelReadWrite, len of cnList is %d, cn addr is %s, mcpu is %d, filepath is %s, file size is %d", len(c.cnList), c.cnList[i].Addr, scope.NodeInfo.Mcpu, param.ExParamConst.Filepath, param.ExParamConst.FileSize)
 		logutil.Infof("compileExternScanParallelReadWrite, %v\n", fileOffsetTmp)
-		op := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
+		op := constructExternal(node, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		scope.setRootOperator(op)
 		pre += count
@@ -1758,7 +1795,7 @@ func (c *Compile) compileExternScanParallelReadWrite(n *plan.Node, param *tree.E
 	return ss, nil
 }
 
-func (c *Compile) compileExternScanSerialReadWrite(n *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
+func (c *Compile) compileExternScanSerialReadWrite(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
 	ss := make([]*Scope, 1)
 	ss[0] = c.constructScopeForExternal(c.addr, param.Parallel)
 
@@ -1770,24 +1807,24 @@ func (c *Compile) compileExternScanSerialReadWrite(n *plan.Node, param *tree.Ext
 		fileOffsetTmp[j].Offset = make([]int64, 0)
 		fileOffsetTmp[j].Offset = append(fileOffsetTmp[j].Offset, []int64{param.FileStartOff, -1}...)
 	}
-	op := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
+	op := constructExternal(node, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	ss[0].setRootOperator(op)
 	c.anal.isFirst = false
 	return ss, nil
 }
 
-func (c *Compile) getTableFunctionParallelSize(n *plan.Node, mcpu int) int {
-	if n.TableDef.TblFunc.Name != "generate_series" {
+func (c *Compile) getTableFunctionParallelSize(node *plan.Node, mcpu int) int {
+	if node.TableDef.TblFunc.Name != "generate_series" {
 		return 1
 	}
 
-	temp := max(int(n.Stats.Cost)/80000, 1)
+	temp := max(int(node.Stats.Cost)/80000, 1)
 	return min(temp, mcpu)
 }
 
-func (c *Compile) generateSeriesParallel(proc *process.Process, n *plan.Node, parallelSize int) (canOpt bool, step int64, offset [][2]int64, err error) {
-	for _, expr := range n.TblFuncExprList {
+func (c *Compile) generateSeriesParallel(proc *process.Process, node *plan.Node, parallelSize int) (canOpt bool, step int64, offset [][2]int64, err error) {
+	for _, expr := range node.TblFuncExprList {
 		_, ok := expr.Expr.(*plan.Expr_Lit)
 		if !ok {
 			return false, 0, nil, nil
@@ -1795,16 +1832,16 @@ func (c *Compile) generateSeriesParallel(proc *process.Process, n *plan.Node, pa
 	}
 
 	var start, end int64
-	switch val := n.TblFuncExprList[0].Expr.(*plan.Expr_Lit).Lit.GetValue().(type) {
+	switch val := node.TblFuncExprList[0].Expr.(*plan.Expr_Lit).Lit.GetValue().(type) {
 	case *plan.Literal_I32Val:
-		if len(n.TblFuncExprList) == 1 {
+		if len(node.TblFuncExprList) == 1 {
 			start = 1
 			end = int64(val.I32Val)
 		} else {
 			start = int64(val.I32Val)
-			if val, ok := n.TblFuncExprList[1].Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_I32Val); ok {
+			if val, ok := node.TblFuncExprList[1].Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_I32Val); ok {
 				end = int64(val.I32Val)
-			} else if val, ok := n.TblFuncExprList[1].Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_I64Val); ok {
+			} else if val, ok := node.TblFuncExprList[1].Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_I64Val); ok {
 				end = val.I64Val
 			} else {
 				return false, 0, nil, moerr.NewInvalidInput(proc.Ctx, "generate_series end must be int32 or int64")
@@ -1812,14 +1849,14 @@ func (c *Compile) generateSeriesParallel(proc *process.Process, n *plan.Node, pa
 		}
 
 	case *plan.Literal_I64Val:
-		if len(n.TblFuncExprList) == 1 {
+		if len(node.TblFuncExprList) == 1 {
 			start = 1
 			end = int64(val.I64Val)
 		} else {
 			start = int64(val.I64Val)
-			if val, ok := n.TblFuncExprList[1].Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_I32Val); ok {
+			if val, ok := node.TblFuncExprList[1].Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_I32Val); ok {
 				end = int64(val.I32Val)
-			} else if val, ok := n.TblFuncExprList[1].Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_I64Val); ok {
+			} else if val, ok := node.TblFuncExprList[1].Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_I64Val); ok {
 				end = val.I64Val
 			} else {
 				return false, 0, nil, moerr.NewInvalidInput(proc.Ctx, "generate_series end must be int32 or int64")
@@ -1829,10 +1866,10 @@ func (c *Compile) generateSeriesParallel(proc *process.Process, n *plan.Node, pa
 		return false, 0, nil, nil
 	}
 
-	if len(n.TblFuncExprList) == 3 {
-		if val, ok := n.TblFuncExprList[2].Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_I32Val); ok {
+	if len(node.TblFuncExprList) == 3 {
+		if val, ok := node.TblFuncExprList[2].Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_I32Val); ok {
 			step = int64(val.I32Val)
-		} else if val, ok := n.TblFuncExprList[2].Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_I64Val); ok {
+		} else if val, ok := node.TblFuncExprList[2].Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_I64Val); ok {
 			step = val.I64Val
 		} else {
 			return false, 0, nil, moerr.NewInvalidInput(proc.Ctx, "generate_series step must be int32 or int64")
@@ -1867,14 +1904,14 @@ func (c *Compile) generateSeriesParallel(proc *process.Process, n *plan.Node, pa
 	return true, step, offset, nil
 }
 
-func (c *Compile) compileSingleTableFunction(n *plan.Node) ([]*Scope, error) {
+func (c *Compile) compileSingleTableFunction(node *plan.Node) ([]*Scope, error) {
 	currentFirstFlag := c.anal.isFirst
 	ds := newScope(Merge)
 	ds.NodeInfo = getEngineNode(c)
-	ds.DataSource = &Source{isConst: true, node: n}
+	ds.DataSource = &Source{isConst: true, node: node}
 	ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
 	ds.Proc = c.proc.NewNoContextChildProc(0)
-	op := constructTableFunction(n, c.pn.GetQuery())
+	op := constructTableFunction(node, c.pn.GetQuery())
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	ds.setRootOperator(op)
 	ss := []*Scope{ds}
@@ -1882,13 +1919,13 @@ func (c *Compile) compileSingleTableFunction(n *plan.Node) ([]*Scope, error) {
 	return ss, nil
 }
 
-func (c *Compile) compileGenerateSeriesParallel(n *plan.Node, ss []*Scope, parallelSize int, canOpt bool, offset [][2]int64, step int64) ([]*Scope, error) {
+func (c *Compile) compileGenerateSeriesParallel(node *plan.Node, ss []*Scope, parallelSize int, canOpt bool, offset [][2]int64, step int64) ([]*Scope, error) {
 	currentFirstFlag := c.anal.isFirst
 	startOffset := 0
 	for i := 0; i < len(c.cnList); i++ {
 		ds := newScope(Merge)
 		currMcpu := min(c.cnList[i].Mcpu, parallelSize)
-		op := constructTableFunction(n, c.pn.GetQuery())
+		op := constructTableFunction(node, c.pn.GetQuery())
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 
 		if currMcpu > 1 {
@@ -1900,7 +1937,7 @@ func (c *Compile) compileGenerateSeriesParallel(n *plan.Node, ss []*Scope, paral
 		op.OffsetTotal = append(op.OffsetTotal, offset[startOffset:startOffset+currMcpu]...)
 
 		ds.NodeInfo = getEngineNode(c)
-		ds.DataSource = &Source{isConst: true, node: n}
+		ds.DataSource = &Source{isConst: true, node: node}
 
 		ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: currMcpu}
 		ds.Proc = c.proc.NewNoContextChildProc(0)
@@ -1917,31 +1954,31 @@ func (c *Compile) compileGenerateSeriesParallel(n *plan.Node, ss []*Scope, paral
 	return ss, nil
 }
 
-func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) ([]*Scope, error) {
+func (c *Compile) compileTableFunction(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	currentFirstFlag := c.anal.isFirst
 
-	if len(n.Children) == 0 {
-		switch n.TableDef.TblFunc.Name {
+	if len(node.Children) == 0 {
+		switch node.TableDef.TblFunc.Name {
 		case "generate_series":
 			var mcpuTotal int
 			for i := 0; i < len(c.cnList); i++ {
 				mcpuTotal += c.cnList[i].Mcpu
 			}
-			parallelSize := c.getTableFunctionParallelSize(n, mcpuTotal)
-			canOpt, step, offset, err := c.generateSeriesParallel(c.proc, n, parallelSize)
+			parallelSize := c.getTableFunctionParallelSize(node, mcpuTotal)
+			canOpt, step, offset, err := c.generateSeriesParallel(c.proc, node, parallelSize)
 			if err != nil {
 				return nil, err
 			}
 			if parallelSize == 1 || !canOpt {
-				return c.compileSingleTableFunction(n)
+				return c.compileSingleTableFunction(node)
 			}
-			return c.compileGenerateSeriesParallel(n, ss, parallelSize, canOpt, offset, step)
+			return c.compileGenerateSeriesParallel(node, ss, parallelSize, canOpt, offset, step)
 		default:
-			return c.compileSingleTableFunction(n)
+			return c.compileSingleTableFunction(node)
 		}
 	}
 	for i := range ss {
-		op := constructTableFunction(n, c.pn.GetQuery())
+		op := constructTableFunction(node, c.pn.GetQuery())
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(op)
 	}
@@ -1950,15 +1987,15 @@ func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) ([]*Scope, err
 	return ss, nil
 }
 
-func (c *Compile) compileValueScan(n *plan.Node) ([]*Scope, error) {
+func (c *Compile) compileValueScan(node *plan.Node) ([]*Scope, error) {
 	ds := newScope(Merge)
 	ds.NodeInfo = getEngineNode(c)
-	ds.DataSource = &Source{isConst: true, node: n}
+	ds.DataSource = &Source{isConst: true, node: node}
 	ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
 	ds.Proc = c.proc.NewNoContextChildProc(0)
 
 	currentFirstFlag := c.anal.isFirst
-	op, err := constructValueScan(c.proc, n)
+	op, err := constructValueScan(c.proc, node)
 	if err != nil {
 		return nil, err
 	}
@@ -1969,14 +2006,14 @@ func (c *Compile) compileValueScan(n *plan.Node) ([]*Scope, error) {
 	return []*Scope{ds}, nil
 }
 
-func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
+func (c *Compile) compileTableScan(node *plan.Node) ([]*Scope, error) {
 	stats := statistic.StatsInfoFromContext(c.proc.GetTopContext())
 	compileStart := time.Now()
 	defer func() {
 		stats.AddCompileTableScanConsumption(time.Since(compileStart))
 	}()
 
-	nodes, err := c.generateNodes(n)
+	nodes, err := c.generateNodes(node)
 	if err != nil {
 		return nil, err
 	}
@@ -1984,7 +2021,7 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 
 	currentFirstFlag := c.anal.isFirst
 	for i := range nodes {
-		s, err := c.compileTableScanWithNode(n, nodes[i], currentFirstFlag)
+		s, err := c.compileTableScanWithNode(node, nodes[i], currentFirstFlag)
 		if err != nil {
 			return nil, err
 		}
@@ -1992,8 +2029,8 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 	}
 	c.anal.isFirst = false
 
-	if len(n.AggList) > 0 {
-		partialResults, _, _ := checkAggOptimize(n)
+	if len(node.AggList) > 0 {
+		partialResults, _, _ := checkAggOptimize(node)
 		if partialResults != nil {
 			ss[0].HasPartialResults = true
 		}
@@ -2002,15 +2039,15 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 	return ss, nil
 }
 
-func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, firstFlag bool) (*Scope, error) {
+func (c *Compile) compileTableScanWithNode(node *plan.Node, engNode engine.Node, firstFlag bool) (*Scope, error) {
 	s := newScope(Remote)
-	s.NodeInfo = node
+	s.NodeInfo = engNode
 	s.TxnOffset = c.TxnOffset
 	s.DataSource = &Source{
-		node: n,
+		node: node,
 	}
 
-	op := constructTableScan(n)
+	op := constructTableScan(node)
 	op.SetAnalyzeControl(c.anal.curNodeIdx, firstFlag)
 	s.setRootOperator(op)
 	s.Proc = c.proc.NewNoContextChildProc(0)
@@ -2146,14 +2183,14 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	return nil
 }
 
-func (c *Compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
-	if len(n.FilterList) == 0 && len(n.RuntimeFilterProbeList) == 0 {
+func (c *Compile) compileRestrict(node *plan.Node, ss []*Scope) []*Scope {
+	if len(node.FilterList) == 0 && len(node.RuntimeFilterProbeList) == 0 {
 		return ss
 	}
 	currentFirstFlag := c.anal.isFirst
 	var op *filter.Filter
 	for i := range ss {
-		op = constructRestrict(n, plan2.DeepCopyExprList(n.FilterList))
+		op = constructRestrict(node, plan2.DeepCopyExprList(node.FilterList))
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(op)
 	}
@@ -2161,63 +2198,63 @@ func (c *Compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
 	return ss
 }
 
-func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
-	if len(n.ProjectList) == 0 {
+func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
+	if len(node.ProjectList) == 0 {
 		return ss
 	}
 
 	for i := range ss {
 		rootOp := ss[i].RootOp
 		if rootOp == nil {
-			c.setProjection(n, ss[i])
+			c.setProjection(node, ss[i])
 			continue
 		}
 
 		switch op := rootOp.(type) {
 		case *table_scan.TableScan:
 			if op.ProjectList == nil {
-				op.ProjectList = n.ProjectList
+				op.ProjectList = node.ProjectList
 			} else {
-				c.setProjection(n, ss[i])
+				c.setProjection(node, ss[i])
 			}
 		case *value_scan.ValueScan:
 			if op.ProjectList == nil {
-				op.ProjectList = n.ProjectList
+				op.ProjectList = node.ProjectList
 			} else {
-				c.setProjection(n, ss[i])
+				c.setProjection(node, ss[i])
 			}
 		case *fill.Fill:
 			if op.ProjectList == nil {
-				op.ProjectList = n.ProjectList
+				op.ProjectList = node.ProjectList
 			} else {
-				c.setProjection(n, ss[i])
+				c.setProjection(node, ss[i])
 			}
 		case *source.Source:
 			if op.ProjectList == nil {
-				op.ProjectList = n.ProjectList
+				op.ProjectList = node.ProjectList
 			} else {
-				c.setProjection(n, ss[i])
+				c.setProjection(node, ss[i])
 			}
 		case *external.External:
 			if op.ProjectList == nil {
-				op.ProjectList = n.ProjectList
+				op.ProjectList = node.ProjectList
 			} else {
-				c.setProjection(n, ss[i])
+				c.setProjection(node, ss[i])
 			}
 		case *group.Group:
 			if op.ProjectList == nil {
-				op.ProjectList = n.ProjectList
+				op.ProjectList = node.ProjectList
 			} else {
-				c.setProjection(n, ss[i])
+				c.setProjection(node, ss[i])
 			}
 		case *group.MergeGroup:
 			if op.ProjectList == nil {
-				op.ProjectList = n.ProjectList
+				op.ProjectList = node.ProjectList
 			} else {
-				c.setProjection(n, ss[i])
+				c.setProjection(node, ss[i])
 			}
 		default:
-			c.setProjection(n, ss[i])
+			c.setProjection(node, ss[i])
 		}
 	}
 
@@ -2225,25 +2262,25 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 	return ss
 }
 
-func (c *Compile) setProjection(n *plan.Node, s *Scope) {
-	op := constructProjection(n)
+func (c *Compile) setProjection(node *plan.Node, s *Scope) {
+	op := constructProjection(node)
 	op.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
 	s.setRootOperator(op)
 }
 
-func (c *Compile) compileUnion(n *plan.Node, left []*Scope, right []*Scope) []*Scope {
+func (c *Compile) compileUnion(node *plan.Node, left []*Scope, right []*Scope) []*Scope {
 	left = c.mergeShuffleScopesIfNeeded(left, false)
 	right = c.mergeShuffleScopesIfNeeded(right, false)
 	left = append(left, right...)
 	rs := c.newMergeScope(left)
 	gn := new(plan.Node)
-	gn.GroupBy = make([]*plan.Expr, len(n.ProjectList))
+	gn.GroupBy = make([]*plan.Expr, len(node.ProjectList))
 	for i := range gn.GroupBy {
-		gn.GroupBy[i] = plan2.DeepCopyExpr(n.ProjectList[i])
+		gn.GroupBy[i] = plan2.DeepCopyExpr(node.ProjectList[i])
 		gn.GroupBy[i].Typ.NotNullable = false
 	}
 	currentFirstFlag := c.anal.isFirst
-	op := constructGroup(c.proc.Ctx, gn, n, true, 0, c.proc)
+	op := constructGroup(c.proc.Ctx, gn, node, true, 0, c.proc)
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(op)
 	c.anal.isFirst = false
@@ -2289,12 +2326,12 @@ func (c *Compile) compileTpMinusAndIntersect(left []*Scope, right []*Scope, node
 	return rs
 }
 
-func (c *Compile) compileMinusAndIntersect(n *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
+func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
 	if c.IsSingleScope(left) && c.IsSingleScope(right) {
 		return c.compileTpMinusAndIntersect(left, right, nodeType)
 	}
-	rs := c.newScopeListOnCurrentCN(2, int(n.Stats.Dop))
-	rs = c.newScopeListForMinusAndIntersect(rs, left, right, n)
+	rs := c.newScopeListOnCurrentCN(2, int(node.Stats.Dop))
+	rs = c.newScopeListForMinusAndIntersect(rs, left, right, node)
 
 	c.hasMergeOp = true
 	currentFirstFlag := c.anal.isFirst
@@ -2390,7 +2427,7 @@ func (c *Compile) compileShuffleJoinV2(node, left, right *plan.Node, leftscopes,
 	constructShuffleJoinOP(c, leftscopes, node, left, right, true)
 
 	for i := range leftscopes {
-		buildOp := constructShuffleBuild(leftscopes[i].RootOp, c.proc)
+		buildOp := constructShuffleHashBuild(leftscopes[i].RootOp, c.proc)
 		buildOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		rightscopes[i].setRootOperator(buildOp)
 	}
@@ -2463,7 +2500,7 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 		mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		buildScope.setRootOperator(mergeOp)
 
-		buildOp := constructShuffleBuild(shuffleJoins[i].RootOp, c.proc)
+		buildOp := constructShuffleHashBuild(shuffleJoins[i].RootOp, c.proc)
 		buildOp.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		buildScope.setRootOperator(buildOp)
 	}
@@ -2696,10 +2733,10 @@ func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
 	return rs
 }
 
-func (c *Compile) compilePostDml(n *plan.Node, ss []*Scope) []*Scope {
+func (c *Compile) compilePostDml(node *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
-		arg := constructPostDml(n, c.e)
+		arg := constructPostDml(node, c.e)
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(arg)
 	}
@@ -2707,11 +2744,11 @@ func (c *Compile) compilePostDml(n *plan.Node, ss []*Scope) []*Scope {
 	return ss
 }
 
-func (c *Compile) compilePartition(n *plan.Node, ss []*Scope) []*Scope {
+func (c *Compile) compilePartition(node *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		//c.anal.isFirst = currentFirstFlag
-		op := constructOrder(n)
+		op := constructOrder(node)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(op)
 	}
@@ -2720,7 +2757,7 @@ func (c *Compile) compilePartition(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
 
 	currentFirstFlag = c.anal.isFirst
-	arg := constructPartition(n)
+	arg := constructPartition(node)
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(arg)
 	c.anal.isFirst = false
@@ -2728,25 +2765,25 @@ func (c *Compile) compilePartition(n *plan.Node, ss []*Scope) []*Scope {
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
+func (c *Compile) compileSort(node *plan.Node, ss []*Scope) []*Scope {
 	switch {
-	case n.Limit != nil && n.Offset == nil && len(n.OrderBy) > 0: // top
-		return c.compileTop(n, n.Limit, ss)
+	case node.Limit != nil && node.Offset == nil && len(node.OrderBy) > 0: // top
+		return c.compileTop(node, node.Limit, ss)
 
-	case n.Limit == nil && n.Offset == nil && len(n.OrderBy) > 0: // top
-		return c.compileOrder(n, ss)
+	case node.Limit == nil && node.Offset == nil && len(node.OrderBy) > 0: // top
+		return c.compileOrder(node, ss)
 
-	case n.Limit != nil && n.Offset != nil && len(n.OrderBy) > 0:
-		if rule.IsConstant(n.Limit, false) && rule.IsConstant(n.Offset, false) {
+	case node.Limit != nil && node.Offset != nil && len(node.OrderBy) > 0:
+		if rule.IsConstant(node.Limit, false) && rule.IsConstant(node.Offset, false) {
 			// get limit
-			vec1, free1, err := colexec.GetReadonlyResultFromNoColumnExpression(c.proc, n.Limit)
+			vec1, free1, err := colexec.GetReadonlyResultFromNoColumnExpression(c.proc, node.Limit)
 			if err != nil {
 				panic(err)
 			}
 			defer free1()
 
 			// get offset
-			vec2, free2, err := colexec.GetReadonlyResultFromNoColumnExpression(c.proc, n.Offset)
+			vec2, free2, err := colexec.GetReadonlyResultFromNoColumnExpression(c.proc, node.Offset)
 			if err != nil {
 				panic(err)
 			}
@@ -2760,33 +2797,33 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 			}
 			if !overflow && topN <= 8192*2 {
 				// if n is small, convert `order by col limit m offset n` to `top m+n offset n`
-				return c.compileOffset(n, c.compileTop(n, plan2.MakePlan2Uint64ConstExprWithType(topN), ss))
+				return c.compileOffset(node, c.compileTop(node, plan2.MakePlan2Uint64ConstExprWithType(topN), ss))
 			}
 		}
-		return c.compileLimit(n, c.compileOffset(n, c.compileOrder(n, ss)))
+		return c.compileLimit(node, c.compileOffset(node, c.compileOrder(node, ss)))
 
-	case n.Limit == nil && n.Offset != nil && len(n.OrderBy) > 0: // order and offset
-		return c.compileOffset(n, c.compileOrder(n, ss))
+	case node.Limit == nil && node.Offset != nil && len(node.OrderBy) > 0: // order and offset
+		return c.compileOffset(node, c.compileOrder(node, ss))
 
-	case n.Limit != nil && n.Offset == nil && len(n.OrderBy) == 0: // limit
-		return c.compileLimit(n, ss)
+	case node.Limit != nil && node.Offset == nil && len(node.OrderBy) == 0: // limit
+		return c.compileLimit(node, ss)
 
-	case n.Limit == nil && n.Offset != nil && len(n.OrderBy) == 0: // offset
-		return c.compileOffset(n, ss)
+	case node.Limit == nil && node.Offset != nil && len(node.OrderBy) == 0: // offset
+		return c.compileOffset(node, ss)
 
-	case n.Limit != nil && n.Offset != nil && len(n.OrderBy) == 0: // limit and offset
-		return c.compileLimit(n, c.compileOffset(n, ss))
+	case node.Limit != nil && node.Offset != nil && len(node.OrderBy) == 0: // limit and offset
+		return c.compileLimit(node, c.compileOffset(node, ss))
 
 	default:
 		return ss
 	}
 }
 
-func (c *Compile) compileTop(n *plan.Node, topN *plan.Expr, ss []*Scope) []*Scope {
+func (c *Compile) compileTop(node *plan.Node, topN *plan.Expr, ss []*Scope) []*Scope {
 	// use topN TO make scope.
 	if c.IsSingleScope(ss) {
 		currentFirstFlag := c.anal.isFirst
-		op := constructTop(n, topN)
+		op := constructTop(node, topN)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(op)
 		c.anal.isFirst = false
@@ -2796,7 +2833,7 @@ func (c *Compile) compileTop(n *plan.Node, topN *plan.Expr, ss []*Scope) []*Scop
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		//c.anal.isFirst = currentFirstFlag
-		op := constructTop(n, topN)
+		op := constructTop(node, topN)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(op)
 	}
@@ -2805,7 +2842,7 @@ func (c *Compile) compileTop(n *plan.Node, topN *plan.Expr, ss []*Scope) []*Scop
 	rs := c.newMergeScope(ss)
 
 	currentFirstFlag = c.anal.isFirst
-	arg := constructMergeTop(n, topN)
+	arg := constructMergeTop(node, topN)
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(arg)
 	c.anal.isFirst = false
@@ -2813,16 +2850,16 @@ func (c *Compile) compileTop(n *plan.Node, topN *plan.Expr, ss []*Scope) []*Scop
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
+func (c *Compile) compileOrder(node *plan.Node, ss []*Scope) []*Scope {
 	if c.IsSingleScope(ss) {
 		currentFirstFlag := c.anal.isFirst
-		order := constructOrder(n)
+		order := constructOrder(node)
 		order.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(order)
 		c.anal.isFirst = false
 
 		currentFirstFlag = c.anal.isFirst
-		mergeOrder := constructMergeOrder(n)
+		mergeOrder := constructMergeOrder(node)
 		mergeOrder.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(mergeOrder)
 		c.anal.isFirst = false
@@ -2832,7 +2869,7 @@ func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		//c.anal.isFirst = currentFirstFlag
-		order := constructOrder(n)
+		order := constructOrder(node)
 		order.SetIdx(c.anal.curNodeIdx)
 		order.SetIsFirst(currentFirstFlag)
 		ss[i].setRootOperator(order)
@@ -2843,7 +2880,7 @@ func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
 
 	currentFirstFlag = c.anal.isFirst
-	mergeOrder := constructMergeOrder(n)
+	mergeOrder := constructMergeOrder(node)
 	mergeOrder.SetIdx(c.anal.curNodeIdx)
 	mergeOrder.SetIsFirst(currentFirstFlag)
 	rs.setRootOperator(mergeOrder)
@@ -2852,11 +2889,11 @@ func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileWin(n *plan.Node, ss []*Scope) []*Scope {
+func (c *Compile) compileWin(node *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
 
 	currentFirstFlag := c.anal.isFirst
-	arg := constructWindow(c.proc.Ctx, n, c.proc)
+	arg := constructWindow(c.proc.Ctx, node, c.proc)
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(arg)
 	c.anal.isFirst = false
@@ -2864,11 +2901,11 @@ func (c *Compile) compileWin(n *plan.Node, ss []*Scope) []*Scope {
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileTimeWin(n *plan.Node, ss []*Scope) []*Scope {
+func (c *Compile) compileTimeWin(node *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
 
 	currentFirstFlag := c.anal.isFirst
-	arg := constructTimeWindow(c.proc.Ctx, n, c.proc)
+	arg := constructTimeWindow(c.proc.Ctx, node, c.proc)
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(arg)
 	c.anal.isFirst = false
@@ -2876,11 +2913,11 @@ func (c *Compile) compileTimeWin(n *plan.Node, ss []*Scope) []*Scope {
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileFill(n *plan.Node, ss []*Scope) []*Scope {
+func (c *Compile) compileFill(node *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
 
 	currentFirstFlag := c.anal.isFirst
-	arg := constructFill(n)
+	arg := constructFill(node)
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(arg)
 	c.anal.isFirst = false
@@ -2888,10 +2925,10 @@ func (c *Compile) compileFill(n *plan.Node, ss []*Scope) []*Scope {
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
+func (c *Compile) compileOffset(node *plan.Node, ss []*Scope) []*Scope {
 	if c.IsSingleScope(ss) {
 		currentFirstFlag := c.anal.isFirst
-		op := constructOffset(n)
+		op := constructOffset(node)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(op)
 		c.anal.isFirst = false
@@ -2901,7 +2938,7 @@ func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
 
 	currentFirstFlag := c.anal.isFirst
-	arg := constructOffset(n)
+	arg := constructOffset(node)
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(arg)
 	c.anal.isFirst = false
@@ -2909,10 +2946,10 @@ func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
+func (c *Compile) compileLimit(node *plan.Node, ss []*Scope) []*Scope {
 	if c.IsSingleScope(ss) {
 		currentFirstFlag := c.anal.isFirst
-		op := constructLimit(n)
+		op := constructLimit(node)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(op)
 		c.anal.isFirst = false
@@ -2922,7 +2959,7 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		//c.anal.isFirst = currentFirstFlag
-		op := constructLimit(n)
+		op := constructLimit(node)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(op)
 	}
@@ -2932,7 +2969,7 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	rs := c.newMergeScope(ss)
 
 	currentFirstFlag = c.anal.isFirst
-	arg := constructLimit(n)
+	arg := constructLimit(node)
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(arg)
 	c.anal.isFirst = false
@@ -2940,7 +2977,7 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scope, right []*Scope) ([]*Scope, error) {
+func (c *Compile) compileFuzzyFilter(node *plan.Node, ns []*plan.Node, left []*Scope, right []*Scope) ([]*Scope, error) {
 	var l, r *Scope
 	if c.IsSingleScope(left) {
 		l = left[0]
@@ -2961,13 +2998,13 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 	c.hasMergeOp = true
 
 	currentFirstFlag := c.anal.isFirst
-	op := constructFuzzyFilter(n, ns[n.Children[0]], ns[n.Children[1]])
+	op := constructFuzzyFilter(node, ns[node.Children[0]], ns[node.Children[1]])
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(op)
 	op.AppendChild(merge2)
 	c.anal.isFirst = false
 
-	fuzzyCheck, err := newFuzzyCheck(n)
+	fuzzyCheck, err := newFuzzyCheck(node)
 	if err != nil {
 		return nil, err
 	}
@@ -2988,11 +3025,11 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 	return []*Scope{rs}, nil
 }
 
-func (c *Compile) compileSample(n *plan.Node, ss []*Scope) []*Scope {
+func (c *Compile) compileSample(node *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	isSingle := c.IsSingleScope(ss)
 	for i := range ss {
-		op := constructSample(n, !isSingle)
+		op := constructSample(node, !isSingle)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(op)
 	}
@@ -3003,9 +3040,9 @@ func (c *Compile) compileSample(n *plan.Node, ss []*Scope) []*Scope {
 
 	rs := c.newMergeScope(ss)
 	// should sample again if sample by rows.
-	if n.SampleFunc.Rows != plan2.NotSampleByRows {
+	if node.SampleFunc.Rows != plan2.NotSampleByRows {
 		currentFirstFlag = c.anal.isFirst
-		op := sample.NewMergeSample(constructSample(n, true), false)
+		op := sample.NewMergeSample(constructSample(node, true), false)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs.setRootOperator(op)
 		c.anal.isFirst = false
@@ -3013,17 +3050,17 @@ func (c *Compile) compileSample(n *plan.Node, ss []*Scope) []*Scope {
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileTPGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
+func (c *Compile) compileTPGroup(node *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	if ss[0].HasPartialResults {
-		op := constructGroup(c.proc.Ctx, n, ns[n.Children[0]], false, 0, c.proc)
+		op := constructGroup(c.proc.Ctx, node, ns[node.Children[0]], false, 0, c.proc)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(op)
-		arg := constructMergeGroup(n)
+		arg := constructMergeGroup(node, op.Aggs)
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(arg)
 	} else {
-		op := constructGroup(c.proc.Ctx, n, ns[n.Children[0]], true, 0, c.proc)
+		op := constructGroup(c.proc.Ctx, node, ns[node.Children[0]], true, 0, c.proc)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(op)
 	}
@@ -3032,7 +3069,7 @@ func (c *Compile) compileTPGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*
 	return ss
 }
 
-func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, hasDistinct bool) []*Scope {
+func (c *Compile) compileMergeGroup(node *plan.Node, ss []*Scope, ns []*plan.Node, hasDistinct bool) []*Scope {
 	// for less memory usage while merge group,
 	// we do not run the group-operator in parallel once this has a distinct aggregation.
 	// because the parallel need to store all the source data in the memory for merging.
@@ -3046,7 +3083,7 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 		mergeToGroup := c.newMergeScope(ss)
 
 		currentFirstFlag := c.anal.isFirst
-		op := constructGroup(c.proc.Ctx, n, ns[n.Children[0]], false, 0, c.proc)
+		op := constructGroup(c.proc.Ctx, node, ns[node.Children[0]], false, 0, c.proc)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		mergeToGroup.setRootOperator(op)
 		c.anal.isFirst = false
@@ -3054,18 +3091,24 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 		rs := c.newMergeScope([]*Scope{mergeToGroup})
 
 		currentFirstFlag = c.anal.isFirst
-		arg := constructMergeGroup(n)
+		arg := constructMergeGroup(node, op.Aggs)
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs.setRootOperator(arg)
 		c.anal.isFirst = false
 
 		return []*Scope{rs}
 	} else {
+		var aggs []aggexec.AggFuncExecExpression
+
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
-			op := constructGroup(c.proc.Ctx, n, ns[n.Children[0]], false, 0, c.proc)
+			op := constructGroup(c.proc.Ctx, node, ns[node.Children[0]], false, 0, c.proc)
 			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			ss[i].setRootOperator(op)
+
+			if i == 0 {
+				aggs = op.Aggs
+			}
 		}
 		c.anal.isFirst = false
 
@@ -3073,7 +3116,7 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 		rs := c.newMergeScope(ss)
 
 		currentFirstFlag = c.anal.isFirst
-		arg := constructMergeGroup(n)
+		arg := constructMergeGroup(node, aggs)
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs.setRootOperator(arg)
 		c.anal.isFirst = false
@@ -3082,14 +3125,14 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 	}
 }
 
-func (c *Compile) compileShuffleGroupV2(n *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
-	if n.Stats.Dop != nodes[n.Children[0]].Stats.Dop {
+func (c *Compile) compileShuffleGroupV2(node *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
+	if node.Stats.Dop != nodes[node.Children[0]].Stats.Dop {
 		panic("wrong shuffle dop for shuffle group!")
 	}
-	if n.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
+	if node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
 		currentFirstFlag := c.anal.isFirst
 		for i := range inputSS {
-			op := constructGroup(c.proc.Ctx, n, nodes[n.Children[0]], true, inputSS[0].NodeInfo.Mcpu, c.proc)
+			op := constructGroup(c.proc.Ctx, node, nodes[node.Children[0]], true, inputSS[0].NodeInfo.Mcpu, c.proc)
 			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			inputSS[i].setRootOperator(op)
 		}
@@ -3097,26 +3140,26 @@ func (c *Compile) compileShuffleGroupV2(n *plan.Node, inputSS []*Scope, nodes []
 		return inputSS
 	}
 
-	shuffleArg := constructShuffleArgForGroupV2(n, n.Stats.Dop)
+	shuffleArg := constructShuffleArgForGroupV2(node, node.Stats.Dop)
 	shuffleArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	inputSS[0].setRootOperator(shuffleArg)
 
-	groupOp := constructGroup(c.proc.Ctx, n, nodes[n.Children[0]], true, inputSS[0].NodeInfo.Mcpu, c.proc)
+	groupOp := constructGroup(c.proc.Ctx, node, nodes[node.Children[0]], true, inputSS[0].NodeInfo.Mcpu, c.proc)
 	groupOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	inputSS[0].setRootOperator(groupOp)
 
 	return inputSS
 }
 
-func (c *Compile) compileShuffleGroup(n *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
+func (c *Compile) compileShuffleGroup(node *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
 	if len(c.cnList) == 1 {
-		return c.compileShuffleGroupV2(n, inputSS, nodes)
+		return c.compileShuffleGroupV2(node, inputSS, nodes)
 	}
 
-	if n.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
+	if node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
 		currentFirstFlag := c.anal.isFirst
 		for i := range inputSS {
-			op := constructGroup(c.proc.Ctx, n, nodes[n.Children[0]], true, len(inputSS), c.proc)
+			op := constructGroup(c.proc.Ctx, node, nodes[node.Children[0]], true, len(inputSS), c.proc)
 			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			inputSS[i].setRootOperator(op)
 		}
@@ -3135,7 +3178,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, inputSS []*Scope, nodes []*p
 	}
 
 	shuffleGroups := make([]*Scope, 0, len(c.cnList))
-	dop := int(n.Stats.Dop)
+	dop := int(node.Stats.Dop)
 	for _, cn := range c.cnList {
 		scopes := c.newScopeListWithNode(dop, len(inputSS), cn.Addr)
 		for _, s := range scopes {
@@ -3148,13 +3191,13 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, inputSS []*Scope, nodes []*p
 
 	j := 0
 	for i := range inputSS {
-		shuffleArg := constructShuffleArgForGroup(shuffleGroups, n)
+		shuffleArg := constructShuffleArgForGroup(shuffleGroups, node)
 		shuffleArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		inputSS[i].setRootOperator(shuffleArg)
 		if len(c.cnList) > 1 && inputSS[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs, delete this in the future
 			inputSS[i] = c.newMergeScopeByCN([]*Scope{inputSS[i]}, inputSS[i].NodeInfo)
 		}
-		dispatchArg := constructDispatch(j, shuffleGroups, inputSS[i], n, false)
+		dispatchArg := constructDispatch(j, shuffleGroups, inputSS[i], node, false)
 		dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		inputSS[i].setRootOperator(dispatchArg)
 		j++
@@ -3163,7 +3206,7 @@ func (c *Compile) compileShuffleGroup(n *plan.Node, inputSS []*Scope, nodes []*p
 
 	currentIsFirst := c.anal.isFirst
 	for i := range shuffleGroups {
-		groupOp := constructGroup(c.proc.Ctx, n, nodes[n.Children[0]], true, len(shuffleGroups), c.proc)
+		groupOp := constructGroup(c.proc.Ctx, node, nodes[node.Children[0]], true, len(shuffleGroups), c.proc)
 		groupOp.SetAnalyzeControl(c.anal.curNodeIdx, currentIsFirst)
 		shuffleGroups[i].setRootOperator(groupOp)
 	}
@@ -3193,10 +3236,10 @@ func (c *Compile) appendPrescopes(parents, children []*Scope) {
 }
 
 // compilePreInsert Compile PreInsert Node and set it as the root operator for each Scope.
-func (c *Compile) compilePreInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*Scope, error) {
+func (c *Compile) compilePreInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
-		preInsertArg, err := constructPreInsert(ns, n, c.e, c.proc)
+		preInsertArg, err := constructPreInsert(nodes, node, c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}
@@ -3207,16 +3250,16 @@ func (c *Compile) compilePreInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) (
 	return ss, nil
 }
 
-func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*Scope, error) {
+func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	// Determine whether to Write S3
-	toWriteS3 := n.Stats.GetOutcnt()*float64(SingleLineSizeEstimate) >
+	toWriteS3 := node.Stats.GetOutcnt()*float64(SingleLineSizeEstimate) >
 		float64(DistributedThreshold) || c.anal.qry.LoadWriteS3
 
 	if !toWriteS3 {
 		currentFirstFlag := c.anal.isFirst
 		// Not write S3
 		for i := range ss {
-			insertArg, err := constructInsert(c.proc, n, c.e, false)
+			insertArg, err := constructInsert(c.proc, node, c.e, false)
 			if err != nil {
 				return nil, err
 			}
@@ -3229,7 +3272,7 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 	}
 
 	// to write S3
-	if haveSinkScanInPlan(ns, n.Children[0]) {
+	if haveSinkScanInPlan(nodes, node.Children[0]) {
 		// todo : pipelines with sink scan ,must refactor this in the future
 		currentFirstFlag := c.anal.isFirst
 		c.anal.isFirst = false
@@ -3238,7 +3281,7 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 			// reset the channel buffer of sink for load
 			dataScope.Proc.Reg.MergeReceivers[0].Ch2 = make(chan process.PipelineSignal, dataScope.NodeInfo.Mcpu)
 		}
-		parallelSize := c.getParallelSizeForExternalScan(n, c.ncpu)
+		parallelSize := c.getParallelSizeForExternalScan(node, c.ncpu)
 		scopes := make([]*Scope, 0, parallelSize)
 		c.hasMergeOp = true
 		for i := 0; i < parallelSize; i++ {
@@ -3254,7 +3297,7 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 				}
 			}
 		}
-		if c.anal.qry.LoadTag && n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle && dataScope.NodeInfo.Mcpu == parallelSize && parallelSize > 1 {
+		if c.anal.qry.LoadTag && node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle && dataScope.NodeInfo.Mcpu == parallelSize && parallelSize > 1 {
 			_, arg := constructDispatchLocalAndRemote(0, scopes, dataScope)
 			arg.FuncId = dispatch.ShuffleToAllFunc
 			arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
@@ -3268,7 +3311,7 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 		}
 		dataScope.IsEnd = true
 		for i := range scopes {
-			insertArg, err := constructInsert(c.proc, n, c.e, true)
+			insertArg, err := constructInsert(c.proc, node, c.e, true)
 			if err != nil {
 				return nil, err
 			}
@@ -3280,7 +3323,7 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 		rs := c.newMergeScope(scopes)
 		rs.PreScopes = append(rs.PreScopes, dataScope)
 		rs.Magic = MergeInsert
-		mergeInsertArg := constructMergeblock(c.e, n)
+		mergeInsertArg := constructMergeblock(c.e, node)
 		mergeInsertArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs.setRootOperator(mergeInsertArg)
 		ss = []*Scope{rs}
@@ -3291,7 +3334,7 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 	currentFirstFlag := c.anal.isFirst
 	c.anal.isFirst = false
 	for i := range ss {
-		insertArg, err := constructInsert(c.proc, n, c.e, true)
+		insertArg, err := constructInsert(c.proc, node, c.e, true)
 		if err != nil {
 			return nil, err
 		}
@@ -3302,22 +3345,22 @@ func (c *Compile) compileInsert(ns []*plan.Node, n *plan.Node, ss []*Scope) ([]*
 	currentFirstFlag = false
 	rs := c.newMergeScope(ss)
 	rs.Magic = MergeInsert
-	mergeInsertArg := constructMergeblock(c.e, n)
+	mergeInsertArg := constructMergeblock(c.e, node)
 	mergeInsertArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(mergeInsertArg)
 	ss = []*Scope{rs}
 	return ss, nil
 }
 
-func (c *Compile) compileMultiUpdate(_ []*plan.Node, n *plan.Node, ss []*Scope) ([]*Scope, error) {
+func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	// Determine whether to Write S3
-	toWriteS3 := n.Stats.GetOutcnt()*float64(SingleLineSizeEstimate) >
+	toWriteS3 := node.Stats.GetOutcnt()*float64(SingleLineSizeEstimate) >
 		float64(DistributedThreshold) || c.anal.qry.LoadWriteS3
 
 	currentFirstFlag := c.anal.isFirst
 	if toWriteS3 {
 		if len(ss) == 1 && ss[0].NodeInfo.Mcpu == 1 {
-			mcpu := c.getParallelSizeForExternalScan(n, c.ncpu)
+			mcpu := c.getParallelSizeForExternalScan(node, c.ncpu)
 			if mcpu > 1 {
 				oldScope := ss[0]
 
@@ -3340,7 +3383,7 @@ func (c *Compile) compileMultiUpdate(_ []*plan.Node, n *plan.Node, ss []*Scope) 
 		}
 
 		for i := range ss {
-			multiUpdateArg, err := constructMultiUpdate(n, c.e, c.proc, multi_update.UpdateWriteS3, ss[i].IsRemote)
+			multiUpdateArg, err := constructMultiUpdate(node, c.e, c.proc, multi_update.UpdateWriteS3, ss[i].IsRemote)
 			if err != nil {
 				return nil, err
 			}
@@ -3354,7 +3397,7 @@ func (c *Compile) compileMultiUpdate(_ []*plan.Node, n *plan.Node, ss []*Scope) 
 			rs = c.newMergeScope(ss)
 		}
 
-		multiUpdateArg, err := constructMultiUpdate(n, c.e, c.proc, multi_update.UpdateFlushS3Info, rs.IsRemote)
+		multiUpdateArg, err := constructMultiUpdate(node, c.e, c.proc, multi_update.UpdateFlushS3Info, rs.IsRemote)
 		if err != nil {
 			return nil, err
 		}
@@ -3366,7 +3409,7 @@ func (c *Compile) compileMultiUpdate(_ []*plan.Node, n *plan.Node, ss []*Scope) 
 			rs := c.newMergeScope(ss)
 			ss = []*Scope{rs}
 		}
-		multiUpdateArg, err := constructMultiUpdate(n, c.e, c.proc, multi_update.UpdateWriteTable, ss[0].IsRemote)
+		multiUpdateArg, err := constructMultiUpdate(node, c.e, c.proc, multi_update.UpdateWriteTable, ss[0].IsRemote)
 		if err != nil {
 			return nil, err
 		}
@@ -3377,10 +3420,10 @@ func (c *Compile) compileMultiUpdate(_ []*plan.Node, n *plan.Node, ss []*Scope) 
 	return ss, nil
 }
 
-func (c *Compile) compilePreInsertUk(n *plan.Node, ss []*Scope) []*Scope {
+func (c *Compile) compilePreInsertUk(node *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
-		preInsertUkArg := constructPreInsertUk(n)
+		preInsertUkArg := constructPreInsertUk(node)
 		preInsertUkArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(preInsertUkArg)
 	}
@@ -3388,10 +3431,10 @@ func (c *Compile) compilePreInsertUk(n *plan.Node, ss []*Scope) []*Scope {
 	return ss
 }
 
-func (c *Compile) compilePreInsertSK(n *plan.Node, ss []*Scope) []*Scope {
+func (c *Compile) compilePreInsertSK(node *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
-		preInsertSkArg := constructPreInsertSk(n)
+		preInsertSkArg := constructPreInsertSk(node)
 		preInsertSkArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(preInsertSkArg)
 	}
@@ -3399,9 +3442,9 @@ func (c *Compile) compilePreInsertSK(n *plan.Node, ss []*Scope) []*Scope {
 	return ss
 }
 
-func (c *Compile) compileDelete(n *plan.Node, ss []*Scope) ([]*Scope, error) {
+func (c *Compile) compileDelete(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	currentFirstFlag := c.anal.isFirst
-	op, err := constructDeletion(c.proc, n, c.e)
+	op, err := constructDeletion(c.proc, node, c.e)
 	if err != nil {
 		return nil, err
 	}
@@ -3416,8 +3459,8 @@ func (c *Compile) compileDelete(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 		arg = op.(*deletion.PartitionDelete).GetDelete()
 	}
 
-	if n.Stats.GetOutcnt()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) && !arg.DeleteCtx.CanTruncate {
-		rs := c.newDeleteMergeScope(arg, ss, n)
+	if node.Stats.GetOutcnt()*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) && !arg.DeleteCtx.CanTruncate {
+		rs := c.newDeleteMergeScope(arg, ss, node)
 		rs.Magic = MergeDelete
 
 		mergeDeleteArg := mergedelete.NewArgument().
@@ -3447,9 +3490,9 @@ func (c *Compile) compileDelete(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	}
 }
 
-func (c *Compile) compileLock(n *plan.Node, ss []*Scope) ([]*Scope, error) {
-	lockRows := make([]*plan.LockTarget, 0, len(n.LockTargets))
-	for _, tbl := range n.LockTargets {
+func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
+	lockRows := make([]*plan.LockTarget, 0, len(node.LockTargets))
+	for _, tbl := range node.LockTargets {
 		if tbl.LockTable {
 			c.lockTables[tbl.TableId] = tbl
 		} else {
@@ -3458,15 +3501,15 @@ func (c *Compile) compileLock(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 			}
 		}
 	}
-	n.LockTargets = lockRows
-	if len(n.LockTargets) == 0 {
+	node.LockTargets = lockRows
+	if len(node.LockTargets) == 0 {
 		return ss, nil
 	}
 
 	block := false
 	// only pessimistic txn needs to block downstream operators.
 	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
-		block = n.LockTargets[0].Block
+		block = node.LockTargets[0].Block
 		if block {
 			c.needBlock = true
 		}
@@ -3479,7 +3522,7 @@ func (c *Compile) compileLock(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	}
 	var err error
 	var lockOpArg *lockop.LockOp
-	lockOpArg, err = constructLockOp(n, c.e)
+	lockOpArg, err = constructLockOp(node, c.e)
 	if err != nil {
 		return nil, err
 	}
@@ -3489,9 +3532,9 @@ func (c *Compile) compileLock(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	return ss, nil
 }
 
-func (c *Compile) compileRecursiveCte(n *plan.Node, curNodeIdx int32) ([]*Scope, error) {
-	receivers := make([]*process.WaitRegister, len(n.SourceStep))
-	for i, step := range n.SourceStep {
+func (c *Compile) compileRecursiveCte(node *plan.Node, curNodeIdx int32) ([]*Scope, error) {
+	receivers := make([]*process.WaitRegister, len(node.SourceStep))
+	for i, step := range node.SourceStep {
 		receivers[i] = c.getNodeReg(step, curNodeIdx)
 		if receivers[i] == nil {
 			return nil, moerr.NewInternalError(c.proc.Ctx, "no data sender for sinkScan node")
@@ -3508,7 +3551,7 @@ func (c *Compile) compileRecursiveCte(n *plan.Node, curNodeIdx int32) ([]*Scope,
 	rs.setRootOperator(mergeOp1)
 
 	currentFirstFlag := c.anal.isFirst
-	mergecteArg := mergecte.NewArgument().WithNodeCnt(len(n.SourceStep) - 1)
+	mergecteArg := mergecte.NewArgument().WithNodeCnt(len(node.SourceStep) - 1)
 	mergecteArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(mergecteArg)
 	c.anal.isFirst = false
@@ -3523,9 +3566,9 @@ func (c *Compile) compileRecursiveCte(n *plan.Node, curNodeIdx int32) ([]*Scope,
 	return []*Scope{rs}, nil
 }
 
-func (c *Compile) compileRecursiveScan(n *plan.Node, curNodeIdx int32) ([]*Scope, error) {
-	receivers := make([]*process.WaitRegister, len(n.SourceStep))
-	for i, step := range n.SourceStep {
+func (c *Compile) compileRecursiveScan(node *plan.Node, curNodeIdx int32) ([]*Scope, error) {
+	receivers := make([]*process.WaitRegister, len(node.SourceStep))
+	for i, step := range node.SourceStep {
 		receivers[i] = c.getNodeReg(step, curNodeIdx)
 		if receivers[i] == nil {
 			return nil, moerr.NewInternalError(c.proc.Ctx, "no data sender for sinkScan node")
@@ -3546,9 +3589,9 @@ func (c *Compile) compileRecursiveScan(n *plan.Node, curNodeIdx int32) ([]*Scope
 	return []*Scope{rs}, nil
 }
 
-func (c *Compile) compileSinkScanNode(n *plan.Node, curNodeIdx int32) ([]*Scope, error) {
-	receivers := make([]*process.WaitRegister, len(n.SourceStep))
-	for i, step := range n.SourceStep {
+func (c *Compile) compileSinkScanNode(node *plan.Node, curNodeIdx int32) ([]*Scope, error) {
+	receivers := make([]*process.WaitRegister, len(node.SourceStep))
+	for i, step := range node.SourceStep {
 		receivers[i] = c.getNodeReg(step, curNodeIdx)
 		if receivers[i] == nil {
 			return nil, moerr.NewInternalError(c.proc.Ctx, "no data sender for sinkScan node")
@@ -3568,7 +3611,7 @@ func (c *Compile) compileSinkScanNode(n *plan.Node, curNodeIdx int32) ([]*Scope,
 	return []*Scope{rs}, nil
 }
 
-func (c *Compile) compileSinkNode(n *plan.Node, ss []*Scope, step int32) ([]*Scope, error) {
+func (c *Compile) compileSinkNode(node *plan.Node, ss []*Scope, step int32) ([]*Scope, error) {
 	receivers := c.getStepRegs(step)
 	if len(receivers) == 0 {
 		return nil, moerr.NewInternalError(c.proc.Ctx, "no data receiver for sink node")
@@ -3582,7 +3625,7 @@ func (c *Compile) compileSinkNode(n *plan.Node, ss []*Scope, step int32) ([]*Sco
 	}
 
 	currentFirstFlag := c.anal.isFirst
-	dispatchLocal := constructDispatchLocal(true, true, n.RecursiveSink, n.RecursiveCte, receivers)
+	dispatchLocal := constructDispatchLocal(true, true, node.RecursiveSink, node.RecursiveCte, receivers)
 	dispatchLocal.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(dispatchLocal)
 	c.anal.isFirst = false
@@ -3590,11 +3633,11 @@ func (c *Compile) compileSinkNode(n *plan.Node, ss []*Scope, step int32) ([]*Sco
 	ss = []*Scope{rs}
 	return ss, nil
 }
-func (c *Compile) compileOnduplicateKey(n *plan.Node, ss []*Scope) ([]*Scope, error) {
+func (c *Compile) compileOnduplicateKey(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	rs := c.newMergeScope(ss)
 
 	currentFirstFlag := c.anal.isFirst
-	arg := constructOnduplicateKey(n, c.e)
+	arg := constructOnduplicateKey(node, c.e)
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(arg)
 	c.anal.isFirst = false
@@ -3608,7 +3651,7 @@ func (c *Compile) compileOnduplicateKey(n *plan.Node, ss []*Scope) ([]*Scope, er
 // CN, so we need to transfer the rows from the
 // the same block to one and the same CN to perform
 // the deletion operators.
-func (c *Compile) newDeleteMergeScope(arg *deletion.Deletion, ss []*Scope, n *plan.Node) *Scope {
+func (c *Compile) newDeleteMergeScope(arg *deletion.Deletion, ss []*Scope, node *plan.Node) *Scope {
 	for i := 0; i < len(ss); i++ {
 		if ss[i].NodeInfo.Mcpu > 1 { // merge here to avoid bugs, delete this in the future
 			ss[i] = c.newMergeScope([]*Scope{ss[i]})
@@ -3628,7 +3671,7 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Deletion, ss []*Scope, n *pl
 	c.hasMergeOp = true
 
 	for i := 0; i < len(ss); i++ {
-		dispatchArg := constructDispatch(i, rs, ss[i], n, false)
+		dispatchArg := constructDispatch(i, rs, ss[i], node, false)
 		dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		ss[i].setRootOperator(dispatchArg)
 		ss[i].IsEnd = true
@@ -3744,11 +3787,11 @@ func (c *Compile) newScopeListWithNode(mcpu, childrenCount int, addr string) []*
 	return ss
 }
 
-func (c *Compile) newScopeListForMinusAndIntersect(rs, left, right []*Scope, n *plan.Node) []*Scope {
+func (c *Compile) newScopeListForMinusAndIntersect(rs, left, right []*Scope, node *plan.Node) []*Scope {
 	// construct left
 	left = c.mergeShuffleScopesIfNeeded(left, false)
 	leftMerge := c.newMergeScope(left)
-	leftDispatch := constructDispatch(0, rs, leftMerge, n, false)
+	leftDispatch := constructDispatch(0, rs, leftMerge, node, false)
 	leftDispatch.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	leftMerge.setRootOperator(leftDispatch)
 	leftMerge.IsEnd = true
@@ -3756,7 +3799,7 @@ func (c *Compile) newScopeListForMinusAndIntersect(rs, left, right []*Scope, n *
 	// construct right
 	right = c.mergeShuffleScopesIfNeeded(right, false)
 	rightMerge := c.newMergeScope(right)
-	rightDispatch := constructDispatch(1, rs, rightMerge, n, false)
+	rightDispatch := constructDispatch(1, rs, rightMerge, node, false)
 	leftDispatch.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	rightMerge.setRootOperator(rightDispatch)
 	rightMerge.IsEnd = true
@@ -3805,18 +3848,18 @@ func (c *Compile) mergeScopesByCN(ss []*Scope) []*Scope {
 	return rs
 }
 
-func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *plan.Node) []*Scope {
+func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, node *plan.Node) []*Scope {
 	cnlist := c.cnList
 	if len(cnlist) <= 1 {
-		n.Stats.HashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Simple
+		node.Stats.HashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Simple
 	}
 
-	reuse := n.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse
+	reuse := node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse
 	if !reuse {
 		probeScopes = c.mergeShuffleScopesIfNeeded(probeScopes, true)
 	}
 	buildScopes = c.mergeShuffleScopesIfNeeded(buildScopes, true)
-	if n.JoinType == plan.Node_DEDUP && len(cnlist) > 1 {
+	if node.JoinType == plan.Node_DEDUP && len(cnlist) > 1 {
 		//merge build side to avoid bugs
 		if !c.IsSingleScope(probeScopes) {
 			probeScopes = []*Scope{c.newMergeScope(probeScopes)}
@@ -3826,7 +3869,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 		}
 	}
 
-	dop := int(n.Stats.Dop)
+	dop := int(node.Stats.Dop)
 	bucketNum := len(cnlist) * dop
 	shuffleProbes := make([]*Scope, 0, bucketNum)
 	shuffleBuilds := make([]*Scope, 0, bucketNum)
@@ -3878,7 +3921,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 	currentFirstFlag := c.anal.isFirst
 	if !reuse {
 		for i := range probeScopes {
-			shuffleProbeOp := constructShuffleOperatorForJoin(int32(bucketNum), n, true)
+			shuffleProbeOp := constructShuffleOperatorForJoin(int32(bucketNum), node, true)
 			//shuffleProbeOp.SetIdx(c.anal.curNodeIdx)
 			shuffleProbeOp.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			probeScopes[i].setRootOperator(shuffleProbeOp)
@@ -3887,7 +3930,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 				probeScopes[i] = c.newMergeScopeByCN([]*Scope{probeScopes[i]}, probeScopes[i].NodeInfo)
 			}
 
-			dispatchArg := constructDispatch(i, shuffleProbes, probeScopes[i], n, true)
+			dispatchArg := constructDispatch(i, shuffleProbes, probeScopes[i], node, true)
 			dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 			probeScopes[i].setRootOperator(dispatchArg)
 			probeScopes[i].IsEnd = true
@@ -3903,7 +3946,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 
 	c.anal.isFirst = currentFirstFlag
 	for i := range buildScopes {
-		shuffleBuildOp := constructShuffleOperatorForJoin(int32(bucketNum), n, false)
+		shuffleBuildOp := constructShuffleOperatorForJoin(int32(bucketNum), node, false)
 		//shuffleBuildOp.SetIdx(c.anal.curNodeIdx)
 		shuffleBuildOp.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		buildScopes[i].setRootOperator(shuffleBuildOp)
@@ -3912,7 +3955,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, n *
 			buildScopes[i] = c.newMergeScopeByCN([]*Scope{buildScopes[i]}, buildScopes[i].NodeInfo)
 		}
 
-		dispatchArg := constructDispatch(i, shuffleBuilds, buildScopes[i], n, false)
+		dispatchArg := constructDispatch(i, shuffleBuilds, buildScopes[i], node, false)
 		dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		buildScopes[i].setRootOperator(dispatchArg)
 		buildScopes[i].IsEnd = true
@@ -3984,7 +4027,7 @@ func collectTombstones(
 }
 
 func (c *Compile) expandRanges(
-	n *plan.Node, rel engine.Relation, db engine.Database, ctx context.Context,
+	node *plan.Node, rel engine.Relation, db engine.Database, ctx context.Context,
 	blockFilterList []*plan.Expr, policy engine.DataCollectPolicy, rsp *engine.RangesShuffleParam) (engine.RelData, error) {
 
 	preAllocBlocks := 2
@@ -3993,7 +4036,7 @@ func (c *Compile) expandRanges(
 			if len(blockFilterList) > 0 {
 				preAllocBlocks = 64
 			} else {
-				preAllocBlocks = int(n.Stats.BlockNum)
+				preAllocBlocks = int(node.Stats.BlockNum)
 				if rsp != nil {
 					preAllocBlocks = preAllocBlocks / int(rsp.CNCNT)
 				}
@@ -4087,40 +4130,40 @@ func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.R
 	return rel, db, ctx, nil
 }
 
-func shouldScanOnCurrentCN(c *Compile, n *plan.Node, forceSingle bool) bool {
+func shouldScanOnCurrentCN(c *Compile, node *plan.Node, forceSingle bool) bool {
 	if len(c.cnList) == 1 ||
-		n.Stats.ForceOneCN ||
+		node.Stats.ForceOneCN ||
 		forceSingle {
 		return true
 	}
 
 	if !plan2.GetForceScanOnMultiCN() &&
-		n.Stats.BlockNum <= int32(plan2.BlockThresholdForOneCN) {
+		node.Stats.BlockNum <= int32(plan2.BlockThresholdForOneCN) {
 		return true
 	}
 
 	return false
 }
 
-func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
-	rel, _, _, err := c.handleDbRelContext(n, false)
+func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
+	rel, _, _, err := c.handleDbRelContext(node, false)
 	if err != nil {
 		return nil, err
 	}
 
 	forceSingle := false
-	if len(n.AggList) > 0 {
-		partialResults, _, _ := checkAggOptimize(n)
+	if len(node.AggList) > 0 {
+		partialResults, _, _ := checkAggOptimize(node)
 		if partialResults != nil {
 			forceSingle = true
-		} else if n.Stats != nil && n.Stats.ForceOneCN {
+		} else if node.Stats != nil && node.Stats.ForceOneCN {
 			// ForceOneCN is already set by CalcNodeDOP for distinct aggregation
 			// Use it directly instead of checking again
 			forceSingle = true
 		} else {
 			// Fallback: Check if any aggregation function uses distinct flag
 			// This is defensive programming in case CalcNodeDOP didn't set ForceOneCN
-			for _, agg := range n.AggList {
+			for _, agg := range node.AggList {
 				if f, ok := agg.Expr.(*plan.Expr_F); ok {
 					if (uint64(f.F.Func.Obj) & function.Distinct) != 0 {
 						forceSingle = true
@@ -4134,53 +4177,53 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	//	forceSingle = true
 	//}
 
-	if n.NodeType == plan.Node_TABLE_CLONE {
+	if node.NodeType == plan.Node_TABLE_CLONE {
 		forceSingle = true
 	}
 
-	var nodes engine.Nodes
+	var engNodes engine.Nodes
 	// scan on current CN
-	if shouldScanOnCurrentCN(c, n, forceSingle) {
-		mcpu := n.Stats.Dop
+	if shouldScanOnCurrentCN(c, node, forceSingle) {
+		mcpu := node.Stats.Dop
 		if forceSingle {
 			mcpu = 1
 		}
-		nodes = append(nodes, engine.Node{
+		engNodes = append(engNodes, engine.Node{
 			Addr:  c.addr,
 			Mcpu:  int(mcpu),
 			CNCNT: 1,
 		})
-		return nodes, nil
+		return engNodes, nil
 	}
 
 	// scan on multi CN
 	for i := range c.cnList {
-		node := engine.Node{
+		engNode := engine.Node{
 			Id:    c.cnList[i].Id,
 			Addr:  c.cnList[i].Addr,
 			Mcpu:  c.cnList[i].Mcpu,
 			CNCNT: int32(len(c.cnList)),
 			CNIDX: int32(i),
 		}
-		if node.Addr != c.addr {
-			uncommittedTombs, err := collectTombstones(c, n, rel, engine.Policy_CollectAllTombstones)
+		if engNode.Addr != c.addr {
+			uncommittedTombs, err := collectTombstones(c, node, rel, engine.Policy_CollectAllTombstones)
 			if err != nil {
 				return nil, err
 			}
-			node.Data = readutil.BuildEmptyRelData()
-			node.Data.AttachTombstones(uncommittedTombs)
+			engNode.Data = readutil.BuildEmptyRelData()
+			engNode.Data.AttachTombstones(uncommittedTombs)
 		}
-		nodes = append(nodes, node)
+		engNodes = append(engNodes, engNode)
 	}
-	return nodes, nil
+	return engNodes, nil
 }
 
-func checkAggOptimize(n *plan.Node) ([]any, []types.T, map[int]int) {
-	partialResults := make([]any, len(n.AggList))
-	partialResultTypes := make([]types.T, len(n.AggList))
+func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
+	partialResults := make([]any, len(node.AggList))
+	partialResultTypes := make([]types.T, len(node.AggList))
 	columnMap := make(map[int]int)
-	for i := range n.AggList {
-		agg := n.AggList[i].Expr.(*plan.Expr_F)
+	for i := range node.AggList {
+		agg := node.AggList[i].Expr.(*plan.Expr_F)
 		name := agg.F.Func.ObjName
 		args := agg.F.Args[0]
 		switch name {
@@ -4197,12 +4240,28 @@ func checkAggOptimize(n *plan.Node) ([]any, []types.T, map[int]int) {
 			col, ok := args.Expr.(*plan.Expr_Col)
 			if !ok {
 				if _, ok := args.Expr.(*plan.Expr_Lit); ok {
+					// COUNT(lit) e.g. count(1) from count(*): set ObjName+Obj so runtime uses countStarExec
 					agg.F.Func.ObjName = "starcount"
+					agg.F.Func.Obj = function.EncodeOverloadID(int32(function.STARCOUNT), 0)
 					return partialResults, partialResultTypes, columnMap
 				}
 				return nil, nil, nil
 			} else {
-				columnMap[int(col.Col.ColPos)] = int(n.TableDef.Cols[int(col.Col.ColPos)].Seqnum)
+				if node.TableDef == nil {
+					return nil, nil, nil
+				}
+				colPos := int(col.Col.ColPos)
+				if colPos < 0 || colPos >= len(node.TableDef.Cols) {
+					return nil, nil, nil
+				}
+				// Check if column is NOT NULL
+				if node.TableDef.Cols[colPos].Typ.NotNullable {
+					// Rewrite COUNT(not_null_col) to STARCOUNT so runtime uses countStarExec
+					agg.F.Func.ObjName = "starcount"
+					agg.F.Func.Obj = function.EncodeOverloadID(int32(function.STARCOUNT), 0)
+				} else {
+					columnMap[colPos] = int(node.TableDef.Cols[colPos].Seqnum)
+				}
 			}
 		case "min", "max":
 			partialResults[i] = nil
@@ -4210,7 +4269,10 @@ func checkAggOptimize(n *plan.Node) ([]any, []types.T, map[int]int) {
 			if !ok {
 				return nil, nil, nil
 			}
-			columnMap[int(col.Col.ColPos)] = int(n.TableDef.Cols[int(col.Col.ColPos)].Seqnum)
+			if node.TableDef == nil {
+				return nil, nil, nil
+			}
+			columnMap[int(col.Col.ColPos)] = int(node.TableDef.Cols[int(col.Col.ColPos)].Seqnum)
 		default:
 			return nil, nil, nil
 		}
@@ -4218,8 +4280,8 @@ func checkAggOptimize(n *plan.Node) ([]any, []types.T, map[int]int) {
 	return partialResults, partialResultTypes, columnMap
 }
 
-func (c *Compile) evalAggOptimize(n *plan.Node, blk *objectio.BlockInfo, partialResults []any, partialResultTypes []types.T, columnMap map[int]int) error {
-	if len(n.AggList) == 1 && n.AggList[0].Expr.(*plan.Expr_F).F.Func.ObjName == "starcount" {
+func (c *Compile) evalAggOptimize(node *plan.Node, blk *objectio.BlockInfo, partialResults []any, partialResultTypes []types.T, columnMap map[int]int) error {
+	if len(node.AggList) == 1 && node.AggList[0].Expr.(*plan.Expr_F).F.Func.ObjName == "starcount" {
 		partialResults[0] = partialResults[0].(int64) + int64(blk.MetaLocation().Rows())
 		return nil
 	}
@@ -4233,8 +4295,8 @@ func (c *Compile) evalAggOptimize(n *plan.Node, blk *objectio.BlockInfo, partial
 		return err
 	}
 	blkMeta := objMeta.MustDataMeta().GetBlockMeta(uint32(location.ID()))
-	for i := range n.AggList {
-		agg := n.AggList[i].Expr.(*plan.Expr_F)
+	for i := range node.AggList {
+		agg := node.AggList[i].Expr.(*plan.Expr_F)
 		name := agg.F.Func.ObjName
 		switch name {
 		case "starcount":

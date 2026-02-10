@@ -3,40 +3,42 @@ create database test01;
 use test01;
 create table tt(col2 float comment '"%$^&*()_+@!\'');
 show create table tt;
-Table    Create Table
-tt    CREATE TABLE `tt` (\n  `col2` float DEFAULT NULL COMMENT '"%$^&*()_+@!'''\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+tt  ¦  CREATE TABLE `tt` (
+  `col2` float DEFAULT NULL COMMENT '"%$^&*()_+@!'''
+)
 drop table tt;
 create table t1 (id int not null, str char(10),name varchar(10));
 create table t2 (a int);
 show tables;
-Tables_in_test01
-t1
+➤ Tables_in_test01[12,-1,0]  𝄀
+t1  𝄀
 t2
 show tables from test01;
-Tables_in_test01
-t1
+➤ Tables_in_test01[12,-1,0]  𝄀
+t1  𝄀
 t2
 show columns from t1;
-Field    Type    Null    Key    Default    Extra    Comment
-id    INT(32)    NO        null        
-str    CHAR(10)    YES        null        
-name    VARCHAR(10)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+str  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+name  ¦  VARCHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦  
 show full columns from t1;
-Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
-id    INT(32)    null    NO        null        select,insert,update,references    
-str    CHAR(10)    null    YES        null        select,insert,update,references    
-name    VARCHAR(10)    null    YES        null        select,insert,update,references    
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  INT(32)  ¦  null  ¦  NO  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
+str  ¦  CHAR(10)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
+name  ¦  VARCHAR(10)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦  
 show full columns from t1 like '%';
-Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
-id    INT(32)    null    NO        null        select,insert,update,references    
-str    CHAR(10)    null    YES        null        select,insert,update,references    
-name    VARCHAR(10)    null    YES        null        select,insert,update,references    
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  INT(32)  ¦  null  ¦  NO  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
+str  ¦  CHAR(10)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
+name  ¦  VARCHAR(10)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦  
 show full columns from t1 where Field ='id';
-Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
-id    INT(32)    null    NO        null        select,insert,update,references    
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  INT(32)  ¦  null  ¦  NO  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦  
 drop database if exists test01;
 show charset;
-Charset    Description    Default collation    Maxlen
+➤ Charset[1,0,0]  ¦  Description[1,0,0]  ¦  Default collation[1,0,0]  ¦  Maxlen[1,0,0]
 drop database if exists test02;
 create database test02;
 use test02;
@@ -44,107 +46,112 @@ create table t1(a tinyint, b smallint, c int, d bigint);
 create database test01;
 use test01;
 show columns from test02.t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    TINYINT(8)    YES        null        
-b    SMALLINT(16)    YES        null        
-c    INT(32)    YES        null        
-d    BIGINT(64)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  TINYINT(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  SMALLINT(16)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
 create database if not exists db11111111111;
+CREATE TABLE db11111111111.t1 (col1 int DEFAULT NULL);
+create table db11111111111.t2(col1 int auto_increment) comment 't2';
+insert into db11111111111.t2 values (10);
 show table status from db11111111111;
-Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment
+➤ Name[12,-1,0]  ¦  Engine[12,-1,0]  ¦  Row_format[12,-1,0]  ¦  Rows[-5,64,0]  ¦  Avg_row_length[-5,64,0]  ¦  Data_length[-5,64,0]  ¦  Max_data_length[-5,64,0]  ¦  Index_length[-5,64,0]  ¦  Data_free[12,-1,0]  ¦  Auto_increment[-5,64,0]  ¦  Create_time[93,64,0]  ¦  Update_time[12,-1,0]  ¦  Check_time[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Checksum[12,-1,0]  ¦  Create_options[1,0,0]  ¦  Comment[12,-1,0]  ¦  Role_id[4,32,0]  ¦  Role_name[12,-1,0]  𝄀
+t1  ¦  Tae  ¦  Dynamic  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  NULL  ¦  1  ¦  2026-02-06 13:57:00  ¦  NULL  ¦  NULL  ¦  utf8mb4_bin  ¦  NULL  ¦    ¦    ¦  0  ¦  moadmin  𝄀
+t2  ¦  Tae  ¦  Dynamic  ¦  1  ¦  48  ¦  48  ¦  0  ¦  0  ¦  NULL  ¦  2  ¦  2026-02-06 13:57:00  ¦  NULL  ¦  NULL  ¦  utf8mb4_bin  ¦  NULL  ¦    ¦  t2  ¦  0  ¦  moadmin
 drop database db11111111111;
 show variables where value = 'MatrixOne';
-Variable_name    Value
-version_comment    MatrixOne
+➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
+version_comment  ¦  MatrixOne
 select privilege_name, obj_type, privilege_level from mo_catalog.mo_role_privs where privilege_name = 'values';
-privilege_name    obj_type    privilege_level
-values    table    *.*
+➤ privilege_name[12,-1,0]  ¦  obj_type[12,-1,0]  ¦  privilege_level[12,-1,0]  𝄀
+values  ¦  table  ¦  *.*
 show grants;
-Grants for dump@localhost
-GRANT create account ON account  `dump`@`localhost`
-GRANT drop account ON account  `dump`@`localhost`
-GRANT alter account ON account  `dump`@`localhost`
-GRANT create user ON account  `dump`@`localhost`
-GRANT drop user ON account  `dump`@`localhost`
-GRANT alter user ON account  `dump`@`localhost`
-GRANT create role ON account  `dump`@`localhost`
-GRANT drop role ON account  `dump`@`localhost`
-GRANT create database ON account  `dump`@`localhost`
-GRANT drop database ON account  `dump`@`localhost`
-GRANT show databases ON account  `dump`@`localhost`
-GRANT connect ON account  `dump`@`localhost`
-GRANT manage grants ON account  `dump`@`localhost`
-GRANT account all ON account  `dump`@`localhost`
-GRANT upgrade account ON account  `dump`@`localhost`
-GRANT show tables ON database * `dump`@`localhost`
-GRANT create table ON database * `dump`@`localhost`
-GRANT create view ON database * `dump`@`localhost`
-GRANT drop table ON database * `dump`@`localhost`
-GRANT drop view ON database * `dump`@`localhost`
-GRANT alter table ON database * `dump`@`localhost`
-GRANT alter view ON database * `dump`@`localhost`
-GRANT database all ON database * `dump`@`localhost`
-GRANT database ownership ON database * `dump`@`localhost`
-GRANT select ON table *.* `dump`@`localhost`
-GRANT insert ON table *.* `dump`@`localhost`
-GRANT update ON table *.* `dump`@`localhost`
-GRANT truncate ON table *.* `dump`@`localhost`
-GRANT delete ON table *.* `dump`@`localhost`
-GRANT reference ON table *.* `dump`@`localhost`
-GRANT index ON table *.* `dump`@`localhost`
-GRANT table all ON table *.* `dump`@`localhost`
-GRANT table ownership ON table *.* `dump`@`localhost`
-GRANT values ON table *.* `dump`@`localhost`
+➤ Grants for dump@localhost[12,-1,0]  𝄀
+GRANT create account ON account  `dump`@`localhost`  𝄀
+GRANT drop account ON account  `dump`@`localhost`  𝄀
+GRANT alter account ON account  `dump`@`localhost`  𝄀
+GRANT create user ON account  `dump`@`localhost`  𝄀
+GRANT drop user ON account  `dump`@`localhost`  𝄀
+GRANT alter user ON account  `dump`@`localhost`  𝄀
+GRANT create role ON account  `dump`@`localhost`  𝄀
+GRANT drop role ON account  `dump`@`localhost`  𝄀
+GRANT create database ON account  `dump`@`localhost`  𝄀
+GRANT drop database ON account  `dump`@`localhost`  𝄀
+GRANT show databases ON account  `dump`@`localhost`  𝄀
+GRANT connect ON account  `dump`@`localhost`  𝄀
+GRANT manage grants ON account  `dump`@`localhost`  𝄀
+GRANT account all ON account  `dump`@`localhost`  𝄀
+GRANT upgrade account ON account  `dump`@`localhost`  𝄀
+GRANT show tables ON database * `dump`@`localhost`  𝄀
+GRANT create table ON database * `dump`@`localhost`  𝄀
+GRANT create view ON database * `dump`@`localhost`  𝄀
+GRANT drop table ON database * `dump`@`localhost`  𝄀
+GRANT drop view ON database * `dump`@`localhost`  𝄀
+GRANT alter table ON database * `dump`@`localhost`  𝄀
+GRANT alter view ON database * `dump`@`localhost`  𝄀
+GRANT database all ON database * `dump`@`localhost`  𝄀
+GRANT database ownership ON database * `dump`@`localhost`  𝄀
+GRANT select ON table *.* `dump`@`localhost`  𝄀
+GRANT insert ON table *.* `dump`@`localhost`  𝄀
+GRANT update ON table *.* `dump`@`localhost`  𝄀
+GRANT truncate ON table *.* `dump`@`localhost`  𝄀
+GRANT delete ON table *.* `dump`@`localhost`  𝄀
+GRANT reference ON table *.* `dump`@`localhost`  𝄀
+GRANT index ON table *.* `dump`@`localhost`  𝄀
+GRANT table all ON table *.* `dump`@`localhost`  𝄀
+GRANT table ownership ON table *.* `dump`@`localhost`  𝄀
+GRANT values ON table *.* `dump`@`localhost`  𝄀
 GRANT connect ON account  `dump`@`localhost`
 show grants for 'root'@'localhost';
-Grants for root@localhost
-GRANT create account ON account  `root`@`localhost`
-GRANT drop account ON account  `root`@`localhost`
-GRANT alter account ON account  `root`@`localhost`
-GRANT create user ON account  `root`@`localhost`
-GRANT drop user ON account  `root`@`localhost`
-GRANT alter user ON account  `root`@`localhost`
-GRANT create role ON account  `root`@`localhost`
-GRANT drop role ON account  `root`@`localhost`
-GRANT create database ON account  `root`@`localhost`
-GRANT drop database ON account  `root`@`localhost`
-GRANT show databases ON account  `root`@`localhost`
-GRANT connect ON account  `root`@`localhost`
-GRANT manage grants ON account  `root`@`localhost`
-GRANT account all ON account  `root`@`localhost`
-GRANT upgrade account ON account  `root`@`localhost`
-GRANT show tables ON database * `root`@`localhost`
-GRANT create table ON database * `root`@`localhost`
-GRANT create view ON database * `root`@`localhost`
-GRANT drop table ON database * `root`@`localhost`
-GRANT drop view ON database * `root`@`localhost`
-GRANT alter table ON database * `root`@`localhost`
-GRANT alter view ON database * `root`@`localhost`
-GRANT database all ON database * `root`@`localhost`
-GRANT database ownership ON database * `root`@`localhost`
-GRANT select ON table *.* `root`@`localhost`
-GRANT insert ON table *.* `root`@`localhost`
-GRANT update ON table *.* `root`@`localhost`
-GRANT truncate ON table *.* `root`@`localhost`
-GRANT delete ON table *.* `root`@`localhost`
-GRANT reference ON table *.* `root`@`localhost`
-GRANT index ON table *.* `root`@`localhost`
-GRANT table all ON table *.* `root`@`localhost`
-GRANT table ownership ON table *.* `root`@`localhost`
-GRANT values ON table *.* `root`@`localhost`
+➤ Grants for root@localhost[12,-1,0]  𝄀
+GRANT create account ON account  `root`@`localhost`  𝄀
+GRANT drop account ON account  `root`@`localhost`  𝄀
+GRANT alter account ON account  `root`@`localhost`  𝄀
+GRANT create user ON account  `root`@`localhost`  𝄀
+GRANT drop user ON account  `root`@`localhost`  𝄀
+GRANT alter user ON account  `root`@`localhost`  𝄀
+GRANT create role ON account  `root`@`localhost`  𝄀
+GRANT drop role ON account  `root`@`localhost`  𝄀
+GRANT create database ON account  `root`@`localhost`  𝄀
+GRANT drop database ON account  `root`@`localhost`  𝄀
+GRANT show databases ON account  `root`@`localhost`  𝄀
+GRANT connect ON account  `root`@`localhost`  𝄀
+GRANT manage grants ON account  `root`@`localhost`  𝄀
+GRANT account all ON account  `root`@`localhost`  𝄀
+GRANT upgrade account ON account  `root`@`localhost`  𝄀
+GRANT show tables ON database * `root`@`localhost`  𝄀
+GRANT create table ON database * `root`@`localhost`  𝄀
+GRANT create view ON database * `root`@`localhost`  𝄀
+GRANT drop table ON database * `root`@`localhost`  𝄀
+GRANT drop view ON database * `root`@`localhost`  𝄀
+GRANT alter table ON database * `root`@`localhost`  𝄀
+GRANT alter view ON database * `root`@`localhost`  𝄀
+GRANT database all ON database * `root`@`localhost`  𝄀
+GRANT database ownership ON database * `root`@`localhost`  𝄀
+GRANT select ON table *.* `root`@`localhost`  𝄀
+GRANT insert ON table *.* `root`@`localhost`  𝄀
+GRANT update ON table *.* `root`@`localhost`  𝄀
+GRANT truncate ON table *.* `root`@`localhost`  𝄀
+GRANT delete ON table *.* `root`@`localhost`  𝄀
+GRANT reference ON table *.* `root`@`localhost`  𝄀
+GRANT index ON table *.* `root`@`localhost`  𝄀
+GRANT table all ON table *.* `root`@`localhost`  𝄀
+GRANT table ownership ON table *.* `root`@`localhost`  𝄀
+GRANT values ON table *.* `root`@`localhost`  𝄀
 GRANT connect ON account  `root`@`localhost`
 show grants for 'test'@'localhost';
-Grants for test@localhost
+➤ Grants for test@localhost[12,-1,0]
 create role role1;
 grant all on table *.* to role1;
 grant create table, drop table on database *.* to role1;
 create user user1 identified by 'pass1';
 grant role1 to user1;
 show grants for 'user1'@'localhost';
-Grants for user1@localhost
-GRANT table all ON table *.* `user1`@`localhost`
-GRANT create table ON database *.* `user1`@`localhost`
-GRANT drop table ON database *.* `user1`@`localhost`
+➤ Grants for user1@localhost[12,-1,0]  𝄀
+GRANT table all ON table *.* `user1`@`localhost`  𝄀
+GRANT create table ON database *.* `user1`@`localhost`  𝄀
+GRANT drop table ON database *.* `user1`@`localhost`  𝄀
 GRANT connect ON account  `user1`@`localhost`
 drop user user1;
 drop role role1;
@@ -156,13 +163,13 @@ create table t1(a int, b int);
 insert into t1 values(1,1);
 create view v1 as select * from t1;
 show full tables;
-Tables_in_test03    Table_type
-t1    BASE TABLE
-v1    VIEW
+➤ Tables_in_test03[12,-1,0]  ¦  Table_type[12,-1,0]  𝄀
+t1  ¦  BASE TABLE  𝄀
+v1  ¦  VIEW
 show full tables from test03;
-Tables_in_test03    Table_type
-t1    BASE TABLE
-v1    VIEW
+➤ Tables_in_test03[12,-1,0]  ¦  Table_type[12,-1,0]  𝄀
+t1  ¦  BASE TABLE  𝄀
+v1  ¦  VIEW
 show full tables from `1;drop table t1;`;
 Unknown database 1;drop table t1;
 show tables like `1;drop table t1;`;
@@ -180,101 +187,123 @@ Unknown database 1;drop table t1;
 show index from `1;drop table t1;`;
 no such table test03.1;drop table t1;
 show variables like `1;drop table t1;`;
-Variable_name    Value
+➤ Variable_name[12,0,0]  ¦  Value[12,0,0]
 select * from t1;
-a    b
-1    1
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1
 show collation like 'utf8mb4_general_ci';
-Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
-utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+➤ Collation[12,0,0]  ¦  Charset[12,0,0]  ¦  Id[-5,0,0]  ¦  Default[12,0,0]  ¦  Compiled[12,0,0]  ¦  Sortlen[4,0,0]  ¦  Pad_attribute[12,0,0]  𝄀
+utf8mb4_general_ci  ¦  utf8mb4  ¦  45  ¦    ¦  Yes  ¦  1  ¦  PAD SPACE
 show collation like 'utf8mb4_general_ci%';
-Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
-utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+➤ Collation[12,0,0]  ¦  Charset[12,0,0]  ¦  Id[-5,0,0]  ¦  Default[12,0,0]  ¦  Compiled[12,0,0]  ¦  Sortlen[4,0,0]  ¦  Pad_attribute[12,0,0]  𝄀
+utf8mb4_general_ci  ¦  utf8mb4  ¦  45  ¦    ¦  Yes  ¦  1  ¦  PAD SPACE
 show collation where Charset='utf8mb4'and Collation ='utf8mb4_general_ci';
-Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
-utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+➤ Collation[12,0,0]  ¦  Charset[12,0,0]  ¦  Id[-5,0,0]  ¦  Default[12,0,0]  ¦  Compiled[12,0,0]  ¦  Sortlen[4,0,0]  ¦  Pad_attribute[12,0,0]  𝄀
+utf8mb4_general_ci  ¦  utf8mb4  ¦  45  ¦    ¦  Yes  ¦  1  ¦  PAD SPACE
 show variables like 'sql_safe_updates';
-Variable_name    Value
-sql_safe_updates    0
+➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
+sql_safe_updates  ¦  0
 set sql_safe_updates=1;
 show variables like 'sql_safe_updates';
-Variable_name    Value
-sql_safe_updates    1
+➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
+sql_safe_updates  ¦  1
 set autocommit = on;
 show variables like 'autocommit';
-Variable_name    Value
-autocommit    on
+➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
+autocommit  ¦  on
 set autocommit = off;
 show variables like 'autocommit';
-Variable_name    Value
-autocommit    off
+➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
+autocommit  ¦  off
 set autocommit = 1;
 show variables like 'autocommit';
-Variable_name    Value
-autocommit    on
+➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
+autocommit  ¦  on
 drop table if exists t1;
 create table t1(c1 int primary key auto_increment,c2 tinyint not null default 4,c3 smallint,c4 bigint,c5 tinyint unsigned,c6 smallint unsigned,c7 int unsigned,c8 bigint unsigned,c9 float,c10 double,c11 date,c12 datetime,c13 timestamp on update current_timestamp,c14 char,c15 varchar default 'q',c16 json,c17 decimal,c18 text,c19 blob,c20 uuid);
 show create table t1;
-Table    Create Table
-t1    CREATE TABLE `t1` (\n  `c1` int NOT NULL AUTO_INCREMENT,\n  `c2` tinyint NOT NULL DEFAULT 4,\n  `c3` smallint DEFAULT NULL,\n  `c4` bigint DEFAULT NULL,\n  `c5` tinyint unsigned DEFAULT NULL,\n  `c6` smallint unsigned DEFAULT NULL,\n  `c7` int unsigned DEFAULT NULL,\n  `c8` bigint unsigned DEFAULT NULL,\n  `c9` float DEFAULT NULL,\n  `c10` double DEFAULT NULL,\n  `c11` date DEFAULT NULL,\n  `c12` datetime DEFAULT NULL,\n  `c13` timestamp NULL DEFAULT NULL ON UPDATE current_timestamp(),\n  `c14` char(1) DEFAULT NULL,\n  `c15` varchar(65535) DEFAULT 'q',\n  `c16` json DEFAULT NULL,\n  `c17` decimal(38,0) DEFAULT NULL,\n  `c18` text DEFAULT NULL,\n  `c19` blob DEFAULT NULL,\n  `c20` uuid DEFAULT NULL,\n  PRIMARY KEY (`c1`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+t1  ¦  CREATE TABLE `t1` (
+  `c1` int NOT NULL AUTO_INCREMENT,
+  `c2` tinyint NOT NULL DEFAULT 4,
+  `c3` smallint DEFAULT NULL,
+  `c4` bigint DEFAULT NULL,
+  `c5` tinyint unsigned DEFAULT NULL,
+  `c6` smallint unsigned DEFAULT NULL,
+  `c7` int unsigned DEFAULT NULL,
+  `c8` bigint unsigned DEFAULT NULL,
+  `c9` float DEFAULT NULL,
+  `c10` double DEFAULT NULL,
+  `c11` date DEFAULT NULL,
+  `c12` datetime DEFAULT NULL,
+  `c13` timestamp NULL DEFAULT NULL ON UPDATE current_timestamp(),
+  `c14` char(1) DEFAULT NULL,
+  `c15` varchar(65535) DEFAULT 'q',
+  `c16` json DEFAULT NULL,
+  `c17` decimal(38,0) DEFAULT NULL,
+  `c18` text DEFAULT NULL,
+  `c19` blob DEFAULT NULL,
+  `c20` uuid DEFAULT NULL,
+  PRIMARY KEY (`c1`)
+)
 SHOW TRIGGERS;
-Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
+➤ Trigger[12,-1,0]  ¦  Event[12,-1,0]  ¦  Table[12,-1,0]  ¦  Statement[12,0,0]  ¦  Timing[12,-1,0]  ¦  Created[93,64,0]  ¦  sql_mode[12,-1,0]  ¦  Definer[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  ¦  Database Collation[12,-1,0]
 SHOW TRIGGERS like '*%';
-Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
+➤ Trigger[12,-1,0]  ¦  Event[12,-1,0]  ¦  Table[12,-1,0]  ¦  Statement[12,0,0]  ¦  Timing[12,-1,0]  ¦  Created[93,64,0]  ¦  sql_mode[12,-1,0]  ¦  Definer[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  ¦  Database Collation[12,-1,0]
 use mo_catalog;
 show tables;
-Tables_in_mo_catalog
-mo_account
-mo_branch_metadata
-mo_cache
-mo_ccpr_dbs
-mo_ccpr_log
-mo_ccpr_tables
-mo_cdc_task
-mo_cdc_watermark
-mo_columns
-mo_configurations
-mo_data_key
-mo_database
-mo_feature_limit
-mo_feature_registry
-mo_foreign_keys
-mo_index_update
-mo_indexes
-mo_iscp_log
-mo_locks
-mo_merge_settings
-mo_mysql_compatibility_mode
-mo_partition_metadata
-mo_partition_tables
-mo_pitr
-mo_pubs
-mo_role
-mo_role_grant
-mo_role_privs
-mo_sessions
-mo_shards
-mo_shards_metadata
-mo_snapshots
-mo_stages
-mo_stored_procedure
-mo_subs
-mo_table_partitions
-mo_table_stats_alpha
-mo_tables
-mo_transactions
-mo_upgrade
-mo_upgrade_tenant
-mo_user
-mo_user_defined_function
-mo_user_grant
-mo_variables
+➤ Tables_in_mo_catalog[12,-1,0]  𝄀
+mo_account  𝄀
+mo_branch_metadata  𝄀
+mo_cache  𝄀
+mo_ccpr_dbs  𝄀
+mo_ccpr_log  𝄀
+mo_ccpr_tables  𝄀
+mo_cdc_task  𝄀
+mo_cdc_watermark  𝄀
+mo_columns  𝄀
+mo_configurations  𝄀
+mo_data_key  𝄀
+mo_database  𝄀
+mo_feature_limit  𝄀
+mo_feature_registry  𝄀
+mo_foreign_keys  𝄀
+mo_index_update  𝄀
+mo_indexes  𝄀
+mo_iscp_log  𝄀
+mo_locks  𝄀
+mo_merge_settings  𝄀
+mo_mysql_compatibility_mode  𝄀
+mo_partition_metadata  𝄀
+mo_partition_tables  𝄀
+mo_pitr  𝄀
+mo_pubs  𝄀
+mo_role  𝄀
+mo_role_grant  𝄀
+mo_role_privs  𝄀
+mo_sessions  𝄀
+mo_shards  𝄀
+mo_shards_metadata  𝄀
+mo_snapshots  𝄀
+mo_stages  𝄀
+mo_stored_procedure  𝄀
+mo_subs  𝄀
+mo_table_partitions  𝄀
+mo_table_stats_alpha  𝄀
+mo_tables  𝄀
+mo_transactions  𝄀
+mo_upgrade  𝄀
+mo_upgrade_tenant  𝄀
+mo_user  𝄀
+mo_user_defined_function  𝄀
+mo_user_grant  𝄀
+mo_variables  𝄀
 mo_version
 show table_number from mo_catalog;
-Number of tables in mo_catalog
-46
+➤ Number of tables in mo_catalog[-5,64,0]  𝄀
+43
 show column_number from mo_database;
-Number of columns in mo_database
+➤ Number of columns in mo_database[-5,64,0]  𝄀
 9
 show column_number from hdjshdj;
 no such table mo_catalog.hdjshdj
@@ -284,28 +313,28 @@ use test01;
 create table t(a int, b int);
 insert into t values(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6);
 show table_values from t;
-max(a)    min(a)    max(b)    min(b)
-6    1    6    1
+➤ max(a)[4,32,0]  ¦  min(a)[4,32,0]  ¦  max(b)[4,32,0]  ¦  min(b)[4,32,0]  𝄀
+6  ¦  1  ¦  6  ¦  1
 drop table t;
 show node list;
-1
+➤ 1[-5,64,0]
 show locks;
-1
+➤ 1[-5,64,0]
 create role role1;
 grant all on table *.* to role1;
 grant create table, drop table on database *.* to role1;
 create user user1 identified by 'pass1';
 grant role1 to user1;
 show grants for 'user1'@'localhost';
-Grants for user1@localhost
-GRANT table all ON table *.* `user1`@`localhost`
-GRANT create table ON database *.* `user1`@`localhost`
-GRANT drop table ON database *.* `user1`@`localhost`
+➤ Grants for user1@localhost[12,-1,0]  𝄀
+GRANT table all ON table *.* `user1`@`localhost`  𝄀
+GRANT create table ON database *.* `user1`@`localhost`  𝄀
+GRANT drop table ON database *.* `user1`@`localhost`  𝄀
 GRANT connect ON account  `user1`@`localhost`
 show grants for ROLE role1;
-Grants for role1
-GRANT table all ON table *.* `role1`
-GRANT create table ON database *.* `role1`
+➤ Grants for role1[12,-1,0]  𝄀
+GRANT table all ON table *.* `role1`  𝄀
+GRANT create table ON database *.* `role1`  𝄀
 GRANT drop table ON database *.* `role1`
 drop user user1;
 drop role role1;
@@ -314,7 +343,7 @@ create database test01;
 use test01;
 create table t1(a int unique key, b int, c int);
 show table_number from test01;
-Number of tables in test01
+➤ Number of tables in test01[-5,64,0]  𝄀
 1
 drop table t1;
 drop database if exists test01;
@@ -323,12 +352,12 @@ use test01;
 create table t(a int, b int, c json);
 insert into t values(1, 1, '{"a":1,"b":2,"c":3}'), (2, 2, '{"a":1,"b":2,"c":3}'), (3, 3, '{"a":1,"b":2,"c":3}'), (4, 4, '{"a":1,"b":2,"c":3}'), (5, 5, '{"a":1,"b":2,"c":3}'), (6, 6, '{"a":1,"b":2,"c":3}');
 show table_values from t;
-max(a)    min(a)    max(b)    min(b)    max(c)    min(c)
-6    1    6    1    null    null
+➤ max(a)[4,32,0]  ¦  min(a)[4,32,0]  ¦  max(b)[4,32,0]  ¦  min(b)[4,32,0]  ¦  max(c)[12,4,0]  ¦  min(c)[12,4,0]  𝄀
+6  ¦  1  ¦  6  ¦  1  ¦  null  ¦  null
 drop table t;
 create database `.quote`;
 show tables from `.quote`;
-Tables_in_.quote
+➤ Tables_in_.quote[12,-1,0]
 drop database if exists `.quote`;
 drop database if exists showDB;
 create database showDB;
@@ -337,20 +366,23 @@ create table a (a int,b int);
 create view va as select a from a;
 begin;
 show create table a;
-Table    Create Table
-a    CREATE TABLE `a` (\n  `a` int DEFAULT NULL,\n  `b` int DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+a  ¦  CREATE TABLE `a` (
+  `a` int DEFAULT NULL,
+  `b` int DEFAULT NULL
+)
 show create table va;
-View    Create View    character_set_client    collation_connection
-va    create view va as select a from a;    utf8mb4    utf8mb4_general_ci
+➤ View[12,-1,0]  ¦  Create View[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  𝄀
+va  ¦  create view va as select a from a;  ¦  utf8mb4  ¦  utf8mb4_general_ci
 show create view va;
-View    Create View    character_set_client    collation_connection
-va    create view va as select a from a;    utf8mb4    utf8mb4_general_ci
+➤ View[12,-1,0]  ¦  Create View[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  𝄀
+va  ¦  create view va as select a from a;  ¦  utf8mb4  ¦  utf8mb4_general_ci
 show collation like 'utf8mb4_general_ci';
-Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
-utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+➤ Collation[12,0,0]  ¦  Charset[12,0,0]  ¦  Id[-5,0,0]  ¦  Default[12,0,0]  ¦  Compiled[12,0,0]  ¦  Sortlen[4,0,0]  ¦  Pad_attribute[12,0,0]  𝄀
+utf8mb4_general_ci  ¦  utf8mb4  ¦  45  ¦    ¦  Yes  ¦  1  ¦  PAD SPACE
 show collation like 'utf8mb4_general_ci%';
-Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
-utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+➤ Collation[12,0,0]  ¦  Charset[12,0,0]  ¦  Id[-5,0,0]  ¦  Default[12,0,0]  ¦  Compiled[12,0,0]  ¦  Sortlen[4,0,0]  ¦  Pad_attribute[12,0,0]  𝄀
+utf8mb4_general_ci  ¦  utf8mb4  ¦  45  ¦    ¦  Yes  ¦  1  ¦  PAD SPACE
 rollback;
 drop database if exists showDb;
 DROP DATABASE IF EXISTS test;
@@ -359,7 +391,7 @@ USE test;
 DROP TABLE IF EXISTS show_01;
 CREATE TABLE show_01(sname varchar(30),id int);
 show INDEX FROM show_01;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]
 DROP TABLE show_01;
 DROP TABLE IF EXISTS show_02;
 CREATE TABLE show_02 (
@@ -368,29 +400,37 @@ u1 varchar(16) NOT NULL default '',
 PRIMARY KEY  (h1,u1)
 );
 show INDEX FROM show_02;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-show_02    0    PRIMARY    1    h1    A    0    NULL    NULL                        YES    h1
-show_02    0    PRIMARY    2    u1    A    0    NULL    NULL                        YES    u1
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+show_02  ¦  0  ¦  PRIMARY  ¦  1  ¦  h1  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  h1  𝄀
+show_02  ¦  0  ¦  PRIMARY  ¦  2  ¦  u1  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  u1
 DROP TABLE show_02;
 DROP TABLE IF EXISTS show_03;
 CREATE TABLE show_03(a int, b int);
 CREATE unique index x ON show_03(a) comment 'x';
 show CREATE table show_03;
-Table    Create Table
-show_03    CREATE TABLE `show_03` (\n  `a` int DEFAULT NULL,\n  `b` int DEFAULT NULL,\n  UNIQUE KEY `x` (`a`) COMMENT 'x'\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+show_03  ¦  CREATE TABLE `show_03` (
+  `a` int DEFAULT NULL,
+  `b` int DEFAULT NULL,
+  UNIQUE KEY `x` (`a`) COMMENT 'x'
+)
 show INDEX FROM show_03;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-show_03    0    x    1    a    A    0    NULL    NULL    YES            x        YES    a
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+show_03  ¦  0  ¦  x  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦  x  ¦    ¦  YES  ¦  a
 DROP TABLE show_03;
 CREATE TABLE show_04(a int, b int, unique key(a));
 show CREATE TABLE show_04;
-Table    Create Table
-show_04    CREATE TABLE `show_04` (\n  `a` int DEFAULT NULL,\n  `b` int DEFAULT NULL,\n  UNIQUE KEY `a` (`a`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+show_04  ¦  CREATE TABLE `show_04` (
+  `a` int DEFAULT NULL,
+  `b` int DEFAULT NULL,
+  UNIQUE KEY `a` (`a`)
+)
 CREATE INDEX b ON show_04(b);
 show INDEX FROM show_04;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-show_04    0    a    1    a    A    0    NULL    NULL    YES                    YES    a
-show_04    1    b    1    b    A    0    NULL    NULL    YES                    YES    b
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+show_04  ¦  0  ¦  a  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  a  𝄀
+show_04  ¦  1  ¦  b  ¦  1  ¦  b  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  b
 DROP TABLE show_04;
 DROP DATABASE test;
 create database test;
@@ -398,26 +438,26 @@ use test;
 drop table if exists t1;
 create table t1(a int, b int, c int, primary key(a));
 show columns from t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    INT(32)    YES        null        
-c    INT(32)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop table t1;
 drop table if exists t2;
 create table t2(a int, b int, c int, primary key(a, b));
 show columns from t2;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    INT(32)    NO    PRI    null        
-c    INT(32)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+c  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop table t2;
 drop table if exists t3;
 create table t3(a int, b int, c int, primary key(a, b, c));
 show columns from t3;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    INT(32)    NO    PRI    null        
-c    INT(32)    NO    PRI    null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+c  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  
 drop table t3;
 drop database test;
 DROP DATABASE test;
@@ -433,10 +473,10 @@ col4 INT NOT NULL,
 INDEX (col2,col3)
 );
 show index from t1;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    1    col2    1    col2    A    0    NULL    NULL                        YES    col2
-t1    1    col2    2    col3    A    0    NULL    NULL                        YES    col3
-t1    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    col1
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+t1  ¦  1  ¦  col2  ¦  1  ¦  col2  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  col2  𝄀
+t1  ¦  1  ¦  col2  ¦  2  ¦  col3  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  col3  𝄀
+t1  ¦  0  ¦  PRIMARY  ¦  1  ¦  col1  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  col1
 drop table t1;
 drop table if exists t2;
 CREATE TABLE t2 (
@@ -446,9 +486,9 @@ col3 INT NOT NULL,
 col4 INT NOT NULL
 );
 show index from t2;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t2    0    col2    1    col2    A    0    NULL    NULL                        YES    col2
-t2    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    col1
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+t2  ¦  0  ¦  col2  ¦  1  ¦  col2  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  col2  𝄀
+t2  ¦  0  ¦  PRIMARY  ¦  1  ¦  col1  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  col1
 drop table t2;
 drop table if exists t3;
 CREATE TABLE t3 (
@@ -460,17 +500,17 @@ UNIQUE KEY (col1),
 UNIQUE KEY (col1, col3)
 );
 show index from t3;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t3    0    col1    1    col1    A    0    NULL    NULL                        YES    col1
-t3    0    col1_2    1    col1    A    0    NULL    NULL                        YES    col1
-t3    0    col1_2    2    col3    A    0    NULL    NULL                        YES    col3
-t3    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    col1
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+t3  ¦  0  ¦  col1  ¦  1  ¦  col1  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  col1  𝄀
+t3  ¦  0  ¦  col1_2  ¦  1  ¦  col1  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  col1  𝄀
+t3  ¦  0  ¦  col1_2  ¦  2  ¦  col3  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  col3  𝄀
+t3  ¦  0  ¦  PRIMARY  ¦  1  ¦  col1  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  col1
 drop table t3;
 drop database test;
 drop database if exists test;
 create database test;
 use test;
 SHOW CREATE TABLE information_schema.columns;
-View    Create View    character_set_client    collation_connection
-columns    CREATE VIEW information_schema.COLUMNS AS select 'def' as TABLE_CATALOG,mc.att_database as TABLE_SCHEMA,mc.att_relname AS TABLE_NAME,mc.attname AS COLUMN_NAME,mc.attnum AS ORDINAL_POSITION,mo_show_visible_bin(mc.att_default,1) as COLUMN_DEFAULT,(case when mc.attnotnull != 0 then 'NO' else 'YES' end) as IS_NULLABLE,mo_show_visible_bin(mc.atttyp,2) as DATA_TYPE,internal_char_length(mc.atttyp) AS CHARACTER_MAXIMUM_LENGTH,internal_char_size(mc.atttyp) AS CHARACTER_OCTET_LENGTH,internal_numeric_precision(mc.atttyp) AS NUMERIC_PRECISION,internal_numeric_scale(mc.atttyp) AS NUMERIC_SCALE,internal_datetime_scale(mc.atttyp) AS DATETIME_PRECISION,(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' else NULL end) AS COLLATION_NAME,mo_show_visible_bin(mc.atttyp,3) as COLUMN_TYPE,case when mc.att_constraint_type = 'p' then 'PRI' when mo_show_col_unique(mt.`constraint`, mc.attname) then 'UNI' else '' end as COLUMN_KEY,case when mc.att_is_auto_increment = 1 then 'auto_increment' else '' end as EXTRA,'select,insert,update,references' as `PRIVILEGES`,mc.att_comment as COLUMN_COMMENT,cast('' as varchar(500)) as GENERATION_EXPRESSION,if(true, NULL, 0) as SRS_ID from mo_catalog.mo_columns mc join mo_catalog.mo_tables mt ON mc.account_id = mt.account_id AND mc.att_database = mt.reldatabase AND mc.att_relname = mt.relname where mc.account_id = current_account_id() and mc.att_relname!='mo_increment_columns' and mc.att_relname not like '__mo_cpkey_%' and mc.attname != '__mo_rowid' and mc.att_relname not like '\%!\%%\%!\%%' and mc.att_relname != '__mo_account_lock'    utf8mb4    utf8mb4_general_ci
+➤ View[12,-1,0]  ¦  Create View[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  𝄀
+columns  ¦  CREATE VIEW information_schema.COLUMNS AS select 'def' as TABLE_CATALOG,mc.att_database as TABLE_SCHEMA,mc.att_relname AS TABLE_NAME,mc.attname AS COLUMN_NAME,mc.attnum AS ORDINAL_POSITION,mo_show_visible_bin(mc.att_default,1) as COLUMN_DEFAULT,(case when mc.attnotnull != 0 then 'NO' else 'YES' end) as IS_NULLABLE,mo_show_visible_bin(mc.atttyp,2) as DATA_TYPE,internal_char_length(mc.atttyp) AS CHARACTER_MAXIMUM_LENGTH,internal_char_size(mc.atttyp) AS CHARACTER_OCTET_LENGTH,internal_numeric_precision(mc.atttyp) AS NUMERIC_PRECISION,internal_numeric_scale(mc.atttyp) AS NUMERIC_SCALE,internal_datetime_scale(mc.atttyp) AS DATETIME_PRECISION,(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' else NULL end) AS COLLATION_NAME,mo_show_visible_bin(mc.atttyp,3) as COLUMN_TYPE,case when mc.att_constraint_type = 'p' then 'PRI' when mo_show_col_unique(mt.`constraint`, mc.attname) then 'UNI' else '' end as COLUMN_KEY,case when mc.att_is_auto_increment = 1 then 'auto_increment' else '' end as EXTRA,'select,insert,update,references' as `PRIVILEGES`,mc.att_comment as COLUMN_COMMENT,cast('' as varchar(500)) as GENERATION_EXPRESSION,if(true, NULL, 0) as SRS_ID from mo_catalog.mo_columns mc join mo_catalog.mo_tables mt ON mc.account_id = mt.account_id AND mc.att_database = mt.reldatabase AND mc.att_relname = mt.relname where mc.account_id = current_account_id() and mc.att_relname!='mo_increment_columns' and mc.att_relname not like '__mo_cpkey_%' and mc.attname != '__mo_rowid' and mc.att_relname not like '\%!\%%\%!\%%' and mc.att_relname != '__mo_account_lock'  ¦  utf8mb4  ¦  utf8mb4_general_ci
 drop database test;

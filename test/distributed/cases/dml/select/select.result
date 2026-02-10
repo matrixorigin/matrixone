@@ -8,130 +8,130 @@ insert into t1 values (1,1,5);
 insert into t1 values (4,6,10);
 insert into t1 values (5,11,99);
 select userID, MIN(score) from t1 group by userID order by userID desc;
-userID    MIN(score)
-11    99
-6    10
-3    3
-2    2
-1    1
+➤ userID[4,32,0]  ¦  MIN(score)[5,16,0]  𝄀
+11  ¦  99  𝄀
+6  ¦  10  𝄀
+3  ¦  3  𝄀
+2  ¦  2  𝄀
+1  ¦  1
 select userID, MIN(score) from t1 group by userID order by userID asc;
-userID    MIN(score)
-1    1
-2    2
-3    3
-6    10
-11    99
+➤ userID[4,32,0]  ¦  MIN(score)[5,16,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+6  ¦  10  𝄀
+11  ¦  99
 select userID, SUM(score) from t1 group by userID order by userID desc;
-userID    SUM(score)
-11    99
-6    10
-3    3
-2    2
-1    10
+➤ userID[4,32,0]  ¦  SUM(score)[-5,64,0]  𝄀
+11  ¦  99  𝄀
+6  ¦  10  𝄀
+3  ¦  3  𝄀
+2  ¦  2  𝄀
+1  ¦  10
 select userID as a, MIN(score) as b from t1 group by userID order by userID;
-a    b
-1    1
-2    2
-3    3
-6    10
-11    99
+➤ a[4,32,0]  ¦  b[5,16,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+6  ¦  10  𝄀
+11  ¦  99
 select userID as user, MAX(score) as max from t1 group by userID order by user;
-user    max
-1    5
-2    2
-3    3
-6    10
-11    99
+➤ user[4,32,0]  ¦  max[5,16,0]  𝄀
+1  ¦  5  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+6  ¦  10  𝄀
+11  ¦  99
 select userID as user, MAX(score) as max from t1 group by userID order by max desc;
-user    max
-11    99
-6    10
-1    5
-3    3
-2    2
+➤ user[4,32,0]  ¦  max[5,16,0]  𝄀
+11  ¦  99  𝄀
+6  ¦  10  𝄀
+1  ¦  5  𝄀
+3  ¦  3  𝄀
+2  ¦  2
 select userID,count(score) from t1 group by userID having count(score)>1 order by userID;
-userID    count(score)
-1    3
+➤ userID[4,32,0]  ¦  count(score)[-5,64,0]  𝄀
+1  ¦  3
 select userID,count(score) from t1 where userID>2 group by userID having count(score)>1 order by userID;
-userID    count(score)
+➤ userID[4,32,0]  ¦  count(score)[-5,64,0]
 select distinct userID, count(score) from t1 group by userID order by userID;
-userID    count(score)
-1    3
-2    1
-3    1
-6    1
-11    1
+➤ userID[4,32,0]  ¦  count(score)[-5,64,0]  𝄀
+1  ¦  3  𝄀
+2  ¦  1  𝄀
+3  ¦  1  𝄀
+6  ¦  1  𝄀
+11  ¦  1
 select distinct spID,userID from t1;
-spID    userID
-1    1
-2    2
-2    1
-3    3
-4    6
-5    11
+➤ spID[4,32,0]  ¦  userID[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+2  ¦  1  𝄀
+3  ¦  3  𝄀
+4  ¦  6  𝄀
+5  ¦  11
 select distinct spID,userID from t1 where score>2;
-spID    userID
-2    1
-3    3
-1    1
-4    6
-5    11
+➤ spID[4,32,0]  ¦  userID[4,32,0]  𝄀
+2  ¦  1  𝄀
+3  ¦  3  𝄀
+1  ¦  1  𝄀
+4  ¦  6  𝄀
+5  ¦  11
 select distinct spID,userID from t1 where score>2 order by spID asc;
-spID    userID
-1    1
-2    1
-3    3
-4    6
-5    11
+➤ spID[4,32,0]  ¦  userID[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  3  𝄀
+4  ¦  6  𝄀
+5  ¦  11
 select distinct spID,userID from t1 where spID>2 order by userID desc;
-spID    userID
-5    11
-4    6
-3    3
+➤ spID[4,32,0]  ¦  userID[4,32,0]  𝄀
+5  ¦  11  𝄀
+4  ¦  6  𝄀
+3  ¦  3
 select distinct sum(spID) as sum from t1 group by userID order by sum asc;
-sum
-2
-3
-4
+➤ sum[-5,64,0]  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
 5
 select distinct sum(spID) as sum from t1 where score>1 group by userID order by sum asc;
-sum
-2
-3
-4
+➤ sum[-5,64,0]  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
 5
 select userID,MAX(score) from t1 where userID between 2 and 3 group by userID order by userID;
-userID    MAX(score)
-2    2
-3    3
+➤ userID[4,32,0]  ¦  MAX(score)[5,16,0]  𝄀
+2  ¦  2  𝄀
+3  ¦  3
 select userID,MAX(score) from t1 where userID not between 2 and 3 group by userID order by userID desc;
-userID    MAX(score)
-11    99
-6    10
-1    5
+➤ userID[4,32,0]  ¦  MAX(score)[5,16,0]  𝄀
+11  ¦  99  𝄀
+6  ¦  10  𝄀
+1  ¦  5
 select spID,userID,score from t1 limit 2,1;
-spID    userID    score
-2    1    4
+➤ spID[4,32,0]  ¦  userID[4,32,0]  ¦  score[5,16,0]  𝄀
+2  ¦  1  ¦  4
 select spID,userID,score from t1 limit 2 offset 1;
-spID    userID    score
-2    2    2
-2    1    4
+➤ spID[4,32,0]  ¦  userID[4,32,0]  ¦  score[5,16,0]  𝄀
+2  ¦  2  ¦  2  𝄀
+2  ¦  1  ¦  4
 select sum(score) as sum from t1 where spID=6 group by score order by sum desc;
-sum
+➤ sum[-5,64,0]
 select userID, userID DIV 2 as user_dir, userID%2 as user_percent, userID MOD 2 as user_mod from t1;
-userID    user_dir    user_percent    user_mod
-1    0    1    1
-2    1    0    0
-1    0    1    1
-3    1    1    1
-1    0    1    1
-6    3    0    0
-11    5    1    1
+➤ userID[4,32,0]  ¦  user_dir[-5,64,0]  ¦  user_percent[-5,64,0]  ¦  user_mod[-5,64,0]  𝄀
+1  ¦  0  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  0  ¦  0  𝄀
+1  ¦  0  ¦  1  ¦  1  𝄀
+3  ¦  1  ¦  1  ¦  1  𝄀
+1  ¦  0  ¦  1  ¦  1  𝄀
+6  ¦  3  ¦  0  ¦  0  𝄀
+11  ¦  5  ¦  1  ¦  1
 drop table if exists a;
 create table a(a int);
 insert into a values(1),(2),(3),(4),(5),(6),(7),(8);
 select count(*) from a where a>=2 and a<=8;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 7
 drop table if exists t1;
 create table t1 ( id int, name varchar(50) );
@@ -139,17 +139,17 @@ insert into t1 values (1, 'aaaaa');
 insert into t1 values (3, "aaaaa");
 insert into t1 values (2, 'eeeeeee');
 select distinct name as name1 from t1;
-name1
-aaaaa
+➤ name1[12,-1,0]  𝄀
+aaaaa  𝄀
 eeeeeee
 drop table if exists t2;
 create table t2(name char(10),owner char(10), species char(10), gender char(1), weight float,age int);
 insert into t2 values ('Sunsweet01','Dsant01','otter','f',30.11,2), ('Sunsweet02','Dsant02','otter','m',30.11,3);
 insert into t2(name, owner, species, gender, weight, age) values ('Sunsweet03','Dsant01','otter','f',30.11,2), ('Sunsweet04','Dsant02','otter','m',30.11,3);
 select * from t2 limit 2, 4;
-name    owner    species    gender    weight    age
-Sunsweet03    Dsant01    otter    f    30.11    2
-Sunsweet04    Dsant02    otter    m    30.11    3
+➤ name[1,10,0]  ¦  owner[1,10,0]  ¦  species[1,10,0]  ¦  gender[1,1,0]  ¦  weight[7,24,0]  ¦  age[4,32,0]  𝄀
+Sunsweet03  ¦  Dsant01  ¦  otter  ¦  f  ¦  30.11  ¦  2  𝄀
+Sunsweet04  ¦  Dsant02  ¦  otter  ¦  m  ¦  30.11  ¦  3
 drop table if exists t3;
 create table t3 (spID int,userID int,score smallint);
 insert into t3 values (1,1,1);
@@ -160,60 +160,60 @@ insert into t3 values (1,1,5);
 insert into t3 values (4,6,10);
 insert into t3 values (5,11,99);
 select userID,MAX(score) max_score from t3 where userID <2 || userID > 3 group by userID order by max_score;
-userID    max_score
-1    5
-6    10
-11    99
+➤ userID[4,32,0]  ¦  max_score[5,16,0]  𝄀
+1  ¦  5  𝄀
+6  ¦  10  𝄀
+11  ¦  99
 select userID, userID DIV 2 as user_dir, userID%2 as user_percent, userID MOD 2 as user_mod from t3 where userID > 3 ;
-userID    user_dir    user_percent    user_mod
-6    3    0    0
-11    5    1    1
+➤ userID[4,32,0]  ¦  user_dir[-5,64,0]  ¦  user_percent[-5,64,0]  ¦  user_mod[-5,64,0]  𝄀
+6  ¦  3  ¦  0  ¦  0  𝄀
+11  ¦  5  ¦  1  ¦  1
 select CAST(userID AS CHAR) userid_cast, userID from t3 where CAST(spID AS CHAR)='1';
-userid_cast    userID
-1    1
-1    1
+➤ userid_cast[12,-1,0]  ¦  userID[4,32,0]  𝄀
+1  ¦  1  𝄀
+1  ¦  1
 select CAST(userID AS DOUBLE) cast_double, CAST(userID AS FLOAT(3)) cast_float , CAST(userID AS REAL) cast_real, CAST(userID AS SIGNED) cast_signed, CAST(userID AS UNSIGNED) cast_unsigned from t3 limit 2;
-cast_double    cast_float    cast_real    cast_signed    cast_unsigned
-1.0    1.0    1.0    1    1
-2.0    2.0    2.0    2    2
+➤ cast_double[8,54,0]  ¦  cast_float[7,4,0]  ¦  cast_real[8,54,0]  ¦  cast_signed[-5,64,0]  ¦  cast_unsigned[-5,64,0]  𝄀
+1.0  ¦  1.0  ¦  1.0  ¦  1  ¦  1  𝄀
+2.0  ¦  2.0  ¦  2.0  ¦  2  ¦  2
 select * from t3 where spID>2 AND userID <2 || userID >=2 OR userID < 2 limit 3;
-spid    userid    score
-1    1    1
-2    2    2
-2    1    4
+➤ spid[4,32,0]  ¦  userid[4,32,0]  ¦  score[5,16,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  2  𝄀
+2  ¦  1  ¦  4
 select * from t3 where (spID >2  or spID <= 2) && score <> 1 AND userID/2>2;
-spid    userid    score
-4    6    10
-5    11    99
+➤ spid[4,32,0]  ¦  userid[4,32,0]  ¦  score[5,16,0]  𝄀
+4  ¦  6  ¦  10  𝄀
+5  ¦  11  ¦  99
 select * from t3 where spID >2  || spID <= 2 && score !=1 limit 3;
-spid    userid    score
-2    2    2
-2    1    4
-3    3    3
+➤ spid[4,32,0]  ¦  userid[4,32,0]  ¦  score[5,16,0]  𝄀
+2  ¦  2  ¦  2  𝄀
+2  ¦  1  ¦  4  𝄀
+3  ¦  3  ¦  3
 select userID,MAX(score) max_score from t3 where userID <2 || userID > 3 group by userID order by max_score;
-userID    max_score
-1    5
-6    10
-11    99
+➤ userID[4,32,0]  ¦  max_score[5,16,0]  𝄀
+1  ¦  5  𝄀
+6  ¦  10  𝄀
+11  ¦  99
 select * from t3 where userID/2>2;
-spid    userid    score
-4    6    10
-5    11    99
+➤ spid[4,32,0]  ¦  userid[4,32,0]  ¦  score[5,16,0]  𝄀
+4  ¦  6  ¦  10  𝄀
+5  ¦  11  ¦  99
 drop table if exists t4;
 create table t4(c1 int, c2 int);
 insert into t4 values (-3, 2);
 insert into t4 values (1, 2);
 select c1, -c2 from t4 order by -c1 desc;
-c1    -c2
--3    -2
-1    -2
+➤ c1[4,32,0]  ¦  -c2[4,32,0]  𝄀
+-3  ¦  -2  𝄀
+1  ¦  -2
 drop table if exists t5;
 create table t5(a int,b varchar(10),c varchar(10));
 insert into t5 values(1,'ab','cd'),(2,'ba','dc'),(3,'bc','de'),(4,'cb','ed'),(5,'cd','ef'),(6,'dc','fe'),(2,'de','fg'),(1,'ed','gf');
 select * from t5 where (b='ba' or b='cb') and (c='dc' or c='ed');
-a    b    c
-2    ba    dc
-4    cb    ed
+➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+2  ¦  ba  ¦  dc  𝄀
+4  ¦  cb  ¦  ed
 drop table if exists tbl_01;
 create table tbl_01 (col1 int, a bigint unsigned, c char(10) not null);
 insert into tbl_01 values (1,1,"a");
@@ -239,34 +239,34 @@ insert into t1 values (106);
 insert into t1 values (107);
 insert into t2 values (107),(75),(1000);
 select t1.id, count(t2.id) from t1,t2 where t2.id = t1.id group by t1.id order by t1.id desc;
-id    count(t2.id)
-107    1
-75    1
+➤ id[4,32,0]  ¦  count(t2.id)[-5,64,0]  𝄀
+107  ¦  1  𝄀
+75  ¦  1
 drop table t1;
 create table t1 ( a int not null default 1, big bigint );
 insert into t1 (big) values (-1),(12345678901234567),(9223372036854775807);
 select * from t1;
-a    big
-1    -1
-1    12345678901234567
-1    9223372036854775807
+➤ a[4,32,0]  ¦  big[-5,64,0]  𝄀
+1  ¦  -1  𝄀
+1  ¦  12345678901234567  𝄀
+1  ¦  9223372036854775807
 select min(big),max(big),max(big)-1 from t1;
-min(big)    max(big)    max(big) - 1
--1    9223372036854775807    9223372036854775806
+➤ min(big)[-5,64,0]  ¦  max(big)[-5,64,0]  ¦  max(big) - 1[-5,64,0]  𝄀
+-1  ¦  9223372036854775807  ¦  9223372036854775806
 drop table t1;
 create table t1 ( a int not null default 1, big bigint unsigned);
 insert into t1 (big) values (12345678901234567),(9223372036854775807),(18446744073709551615);
 select * from t1;
-a    big
-1    12345678901234567
-1    9223372036854775807
-1    18446744073709551615
+➤ a[4,32,0]  ¦  big[-5,64,0]  𝄀
+1  ¦  12345678901234567  𝄀
+1  ¦  9223372036854775807  𝄀
+1  ¦  18446744073709551615
 select min(big),max(big),max(big)-1 from t1;
-min(big)    max(big)    max(big) - 1
-12345678901234567    18446744073709551615    18446744073709551614
+➤ min(big)[-5,64,0]  ¦  max(big)[-5,64,0]  ¦  max(big) - 1[3,39,0]  𝄀
+12345678901234567  ¦  18446744073709551615  ¦  18446744073709551614
 select min(big),max(big),max(big)-1 from t1 group by a;
-min(big)    max(big)    max(big) - 1
-12345678901234567    18446744073709551615    18446744073709551614
+➤ min(big)[-5,64,0]  ¦  max(big)[-5,64,0]  ¦  max(big) - 1[3,39,0]  𝄀
+12345678901234567  ¦  18446744073709551615  ¦  18446744073709551614
 drop table if exists t1;
 create table t1 (
 value64 bigint unsigned not null,
@@ -275,9 +275,9 @@ value32 int not null
 insert into t1 values(17156792991891826145, 1);
 insert into t1 values(9223372036854775807, 2);
 select * from t1;
-value64    value32
-17156792991891826145    1
-9223372036854775807    2
+➤ value64[-5,64,0]  ¦  value32[4,32,0]  𝄀
+17156792991891826145  ¦  1  𝄀
+9223372036854775807  ¦  2
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -308,11 +308,11 @@ insert into t1 values ('BerkeleyPublic1','Berkeley');
 insert into t1 values ('BerkeleyPublic2','Berkeley');
 insert into t1 values ('NYCLib','NewYork');
 select city,libname1,count(libname1) as a from t3 join t1 on libname1=libname3 join t2 on isbn3=isbn2 group by city,libname1;
-city    libname1    a
-NewYork    NewYorkPublicLibra    6
-SanFran    SanFransiscoPublic    1
-Berkeley    BerkeleyPublic1    1
-Berkeley    BerkeleyPublic2    1
+➤ city[12,-1,0]  ¦  libname1[12,-1,0]  ¦  a[-5,64,0]  𝄀
+NewYork  ¦  NewYorkPublicLibra  ¦  6  𝄀
+SanFran  ¦  SanFransiscoPublic  ¦  1  𝄀
+Berkeley  ¦  BerkeleyPublic1  ¦  1  𝄀
+Berkeley  ¦  BerkeleyPublic2  ¦  1
 drop table if exists t1;
 create table t1(a int,b varchar(5));
 insert into t1 values(1,'a');
@@ -320,16 +320,16 @@ insert into t1 values(null,null);
 insert into t1 values(null,'b');
 insert into t1 values(1,null);
 select avg(a),b from t1 group by b order by b;
-avg(a)    b
-1.0    null
-1.0    a
-null    b
+➤ avg(a)[8,54,0]  ¦  b[12,-1,0]  𝄀
+1.0  ¦  null  𝄀
+1.0  ¦  a  𝄀
+null  ¦  b
 drop table if exists t1;
 CREATE TABLE t1 (a int default NULL);
 INSERT INTO t1 VALUES (NULL),(NULL);
 select * from t1;
-a
-null
+➤ a[4,32,0]  𝄀
+null  𝄀
 null
 drop table if exists t1;
 drop table if exists t2;
@@ -347,28 +347,28 @@ INSERT INTO t1(b,c) values ("2022year","2003-01-14 03:54:55");
 INSERT INTO t1(b,c) values ("2021year","2003-01-14 03:54:55");
 INSERT INTO t1(b,c) values ("2020year","2003-01-14 03:54:55");
 select max(a),b,c from t1 group by b,c order by b,c;
-max(a)    b    c
-1    null    2003-01-14 03:54:55
-1    null    2004-01-14 03:54:55
-1    null    2005-01-14 03:54:55
-null    2020year    2003-01-14 03:54:55
-null    2021year    2003-01-14 03:54:55
-1    2022year    null
-null    2022year    2003-01-14 03:54:55
+➤ max(a)[4,32,0]  ¦  b[12,-1,0]  ¦  c[93,64,0]  𝄀
+1  ¦  null  ¦  2003-01-14 03:54:55  𝄀
+1  ¦  null  ¦  2004-01-14 03:54:55  𝄀
+1  ¦  null  ¦  2005-01-14 03:54:55  𝄀
+null  ¦  2020year  ¦  2003-01-14 03:54:55  𝄀
+null  ¦  2021year  ¦  2003-01-14 03:54:55  𝄀
+1  ¦  2022year  ¦  null  𝄀
+null  ¦  2022year  ¦  2003-01-14 03:54:55
 drop table if exists t1;
 create table t1(i int);
 insert into t1 values(1),(2),(3),(4),(5);
 insert into t1 values(null);
 select count(*) from t1 where i=2;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 1
 drop table if exists t1;
 CREATE TABLE t1 (c0 varchar(0) DEFAULT NULL);
 insert into t1 values();
 insert into t1 values('');
 select * from t1;
-c0
-null
+➤ c0[12,-1,0]  𝄀
+null  𝄀
 
 drop table if exists t1;
 create table if not exists t1(a tinyint auto_increment);
@@ -377,42 +377,75 @@ create table if not exists t1(a smallint auto_increment);
 drop table if exists t1;
 create table if not exists t1(a int auto_increment);
 select * from t1;
-a
+➤ a[4,32,0]
 show columns from t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null    auto_increment    
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦  auto_increment  ¦  
 drop table if exists t1;
 create table if not exists t1(a bigint auto_increment);
 select * from t1;
-a
+➤ a[-5,64,0]
 drop table if exists t1;
 create table if not exists t1(a int auto_increment primary key);
 drop table if exists t1;
 SELECT WORD FROM INFORMATION_SCHEMA.KEYWORDS WHERE RESERVED=1 ORDER BY WORD limit 1;
-WORD
+➤ WORD[12,-1,0]  𝄀
 ACCESSIBLE
 ;
 drop table if exists t1;
 create table t1 (a int primary key, b int);
 select * from t1 WHERE (a IN ('1','2','3','4','5','6','7','8','9','10','11','12','13','14','15','16','17','18','19','20','21','26','27','28','29') AND b = 0) ORDER BY `a` ASC;
-a    b
+➤ a[4,32,0]  ¦  b[4,32,0]
 drop table if exists t1;
 create table t1 (a int primary key, b int, c int);
 insert into t1 values (1, 2, 3);
 select count(*) from t1;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 1
 select count(*) from t1 where b=2;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 1
 select count(*) from t1 where a=2;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 0
+explain analyze select count(*) from t1;
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(\*\)", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=1 (min=1, max=1) InputSize=4 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on select.t1  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=4 bytes OutputSize=4 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+              Aggregate Functions: starcount(1)
+explain analyze select count(a) from t1;
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(t1\.a\)", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=1 (min=1, max=1) InputSize=4 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+        Aggregate Functions: count(t1.a)  𝄀
+        ->  Table Scan on select.t1  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=4 bytes OutputSize=4 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+              Aggregate Functions: starcount(t1.a)
+explain analyze select count(b) from t1;
+-- @regex("(?s)Table Scan.*Aggregate Functions: count\(t1\.b\)", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=1 (min=1, max=1) InputSize=4 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+        Aggregate Functions: count(t1.b)  𝄀
+        ->  Table Scan on select.t1  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=4 bytes OutputSize=4 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+              Aggregate Functions: count(t1.b)
 drop table if exists t1;
 create table t1 (a int(11) unsigned);
 insert into t1 values (1), (2);
 select * from t1 where a != 2;
-a
+➤ a[4,32,0]  𝄀
 1
 drop database if exists db1;
 create database db1;
@@ -420,8 +453,16 @@ use db1;
 create table t1 (a int primary key, b int);
 insert into t1 values (1,1);
 select mo_ctl('dn', 'flush', 'db1.t1');
-mo_ctl(dn, flush, db1.t1)
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+➤ mo_ctl(dn, flush, db1.t1)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
 select a from t1 where a = '';
 invalid argument cast to int, bad value 
 drop database if exists db1;
@@ -430,19 +471,60 @@ use db1;
 create table t1 (a int,b int, primary key(a,b));
 insert into t1 values (1,1),(2,2),(3,3),(4,4),(5,5);
 select count(*) from t1 where a is null;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 0
 select count(*) from t1 where a = null;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 0
+explain analyze select count(*) from t1;
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(\*\)", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=6 outputRows=1 (min=1, max=1) InputSize=20 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on db1.t1  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=5 outputRows=5 (min=5, max=5) InputSize=20 bytes OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=40 bytes (min=40 bytes, max=40 bytes)  𝄀
+              Aggregate Functions: starcount(1)
+explain analyze select count(a) from t1;
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(t1\.a\)", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=6 outputRows=1 (min=1, max=1) InputSize=20 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+        Aggregate Functions: count(t1.a)  𝄀
+        ->  Table Scan on db1.t1  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=5 outputRows=5 (min=5, max=5) InputSize=20 bytes OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=40 bytes (min=40 bytes, max=40 bytes)  𝄀
+              Aggregate Functions: starcount(t1.a)
+explain analyze select count(b) from t1;
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(t1\.b\)", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=6 outputRows=1 (min=1, max=1) InputSize=20 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+        Aggregate Functions: count(t1.b)  𝄀
+        ->  Table Scan on db1.t1  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=5 outputRows=5 (min=5, max=5) InputSize=20 bytes OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=40 bytes (min=40 bytes, max=40 bytes)  𝄀
+              Aggregate Functions: starcount(t1.b)
 select mo_ctl('dn', 'flush', 'db1.t1');
-mo_ctl(dn, flush, db1.t1)
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+➤ mo_ctl(dn, flush, db1.t1)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
 select count(*) from t1 where a is null;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 0
 select count(*) from t1 where a = null;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 0
 drop database if exists db1;
 create database db1;
@@ -450,22 +532,63 @@ use db1;
 create table t1 (a int,b int, primary key(a));
 insert into t1 values (1,1),(2,2),(3,3),(4,4),(5,5);
 select count(*) from t1 where a is null;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 0
 select count(*) from t1 where a = null;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 0
+explain analyze select count(*) from t1;
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(\*\)", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=6 outputRows=1 (min=1, max=1) InputSize=20 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on db1.t1  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=5 outputRows=5 (min=5, max=5) InputSize=20 bytes OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=40 bytes (min=40 bytes, max=40 bytes)  𝄀
+              Aggregate Functions: starcount(1)
+explain analyze select count(a) from t1;
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(t1\.a\)", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=6 outputRows=1 (min=1, max=1) InputSize=20 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+        Aggregate Functions: count(t1.a)  𝄀
+        ->  Table Scan on db1.t1  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=5 outputRows=5 (min=5, max=5) InputSize=20 bytes OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=40 bytes (min=40 bytes, max=40 bytes)  𝄀
+              Aggregate Functions: starcount(t1.a)
+explain analyze select count(b) from t1;
+-- @regex("(?s)Table Scan.*Aggregate Functions: count\(t1\.b\)", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=6 outputRows=1 (min=1, max=1) InputSize=20 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+        Aggregate Functions: count(t1.b)  𝄀
+        ->  Table Scan on db1.t1  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=5 outputRows=5 (min=5, max=5) InputSize=20 bytes OutputSize=20 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=40 bytes (min=40 bytes, max=40 bytes)  𝄀
+              Aggregate Functions: count(t1.b)
 select mo_ctl('dn', 'flush', 'db1.t1');
-mo_ctl(dn, flush, db1.t1)
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+➤ mo_ctl(dn, flush, db1.t1)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
 select count(*) from t1 where a is null;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 0
 select count(*) from t1 where a = null;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 0
 select 1 > 0;
-1 > 0
+➤ 1 > 0[-7,1,0]  𝄀
 1
 SELECT TABLE_SCHEMA AS TABLE_CAT, NULL AS TABLE_SCHEM, TABLE_NAME, CASE WHEN TABLE_TYPE='BASE TABLE' THEN CASE WHEN TABLE_SCHEMA = 'mysql' OR TABLE_SCHEMA = 'performance_schema' THEN 'SYSTEM TABLE' ELSE 'TABLE' END WHEN TABLE_TYPE='TEMPORARY' THEN 'LOCAL_TEMPORARY' ELSE TABLE_TYPE END AS TABLE_TYPE, TABLE_COMMENT AS REMARKS, NULL AS TYPE_CAT, NULL AS TYPE_SCHEM, NULL AS TYPE_NAME, NULL AS SELF_REFERENCING_COL_NAME, NULL AS REF_GENERATION FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'abc' group by null HAVING TABLE_TYPE IN ('LOCAL TEMPORARY','TABLE','VIEW',null,null) ORDER BY TABLE_TYPE, TABLE_SCHEMA, TABLE_NAME;
 SQL syntax error: non-integer constant in GROUP BY
@@ -474,54 +597,95 @@ drop table if exists t11;
 create table t11 (a int, b int, primary key (a));
 insert into t11 (select *,* from generate_series(1, 50000, 1)g);
 select count(*) from t11 where a=20000;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 1
 select count(*) from t11 where a in (1,20000);
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 2
+explain analyze select count(*) from t11;
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(\*\)", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on db1.t11  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=0 inputRows=0 outputRows=0 (min=0, max=0) InputSize=0 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+              Aggregate Functions: starcount(1)
+explain analyze select count(a) from t11;
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(t11\.a\)", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+        Aggregate Functions: count(t11.a)  𝄀
+        ->  Table Scan on db1.t11  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=0 inputRows=0 outputRows=0 (min=0, max=0) InputSize=0 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+              Aggregate Functions: starcount(t11.a)
+explain analyze select count(b) from t11;
+-- @regex("(?s)Table Scan.*Aggregate Functions: count\(t11\.b\)", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+        Aggregate Functions: count(t11.b)  𝄀
+        ->  Table Scan on db1.t11  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=0 inputRows=0 outputRows=0 (min=0, max=0) InputSize=0 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+              Aggregate Functions: count(t11.b)
 drop table if exists t1;
 create table t1(a int primary key, b int);
 insert into t1 values (1,1),(2,2),(3,3);
 select mo_ctl('dn', 'flush', 'select.t1');
-mo_ctl(dn, flush, select.t1)
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+➤ mo_ctl(dn, flush, select.t1)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
 select * from t1 where a in (3,3,3,2,1);
-a    b
-1    1
-2    2
-3    3
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3
 drop table if exists t1;
 create table t1 (a int, b varchar, c int, primary key (c,a), key idx_b(b));
 insert into t1 select result, result || "_a",result+100000000 from generate_series(1,10000) g;
 select * from t1 where b in ("11_a","21_a");
-a    b    c
-11    11_a    100000011
-21    21_a    100000021
+➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[4,32,0]  𝄀
+11  ¦  11_a  ¦  100000011  𝄀
+21  ¦  21_a  ¦  100000021
 drop table if exists t1;
 create table t1(a int primary key, b int, c varchar(200));
 insert into t1 select result, result, "aabbccddeeffgghhii_"||result from generate_series (1, 100000)g;
 select a from t1 where c in ("123456789012345678901234567890","123456789012345678901234567890","aabbccddeeffgghhii_100000");
-a
+➤ a[4,32,0]  𝄀
 100000
 drop table if exists t1;
 create table t1(a int primary key, b vecf32(10));
 insert into t1 select result, "[0.11,0.22,0.33,0.44,0.55,0.66,0.77,0.88,0.99,0.101]" from generate_series (1, 100000)g;
 select a from t1 where b in ("[1.11,1.22,1.33,1.44,1.55,1.66,1.77,1.88,1.99,1.101]","[1.11,1.22,1.33,1.44,1.55,1.66,1.77,1.88,1.99,1.102]");
-a
+➤ a[4,32,0]
 drop table if exists t1;
 create table t1(a int primary key, b vecf64(10));
 insert into t1 select result, "[0.11,0.22,0.33,0.44,0.55,0.66,0.77,0.88,0.99,0.101]" from generate_series (1, 100000)g;
 select a from t1 where b in ("[1.11,1.22,1.33,1.44,1.55,1.66,1.77,1.88,1.99,1.101]","[1.11,1.22,1.33,1.44,1.55,1.66,1.77,1.88,1.99,1.102]");
-a
+➤ a[4,32,0]
 drop table if exists test_bigint;
 create table test_bigint (a bigint unsigned);
 insert into test_bigint values (0xFFFFFFFFFFFFFFFD);
 insert into test_bigint values (0xFFFFFFFFFFFFFFFE);
 select * from test_bigint where a -1 > 1;
-a
-18446744073709551613
+➤ a[-5,64,0]  𝄀
+18446744073709551613  𝄀
 18446744073709551614
 select * from test_bigint where a > 1;
-a
-18446744073709551613
+➤ a[-5,64,0]  𝄀
+18446744073709551613  𝄀
 18446744073709551614

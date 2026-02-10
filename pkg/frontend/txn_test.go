@@ -360,11 +360,9 @@ func newMockErrSession3(t *testing.T, ctx context.Context, ctrl *gomock.Controll
 
 func newMockErrSession4(t *testing.T, ctx context.Context, ctrl *gomock.Controller,
 	newFunc func(ctx context.Context, commitTS timestamp.Timestamp, options ...TxnOption) (client.TxnOperator, error),
-	restartTxnFunc func(ctx context.Context, txnOp TxnOperator, commitTS any, options ...any) (client.TxnOperator, error),
 ) *Session {
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(newFunc).AnyTimes()
-	txnClient.EXPECT().RestartTxn(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(restartTxnFunc).AnyTimes()
 	eng := mock_frontend.NewMockEngine(ctrl)
 	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	eng.EXPECT().Hints().Return(engine.Hints{
@@ -389,12 +387,6 @@ func Test_rollbackStatement(t *testing.T) {
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
 			func(ctx context.Context, commitTS timestamp.Timestamp, options ...TxnOption) (client.TxnOperator, error) {
 				return newTestTxnOp(), nil
-			}).AnyTimes()
-		txnClient.EXPECT().RestartTxn(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-			func(ctx context.Context, txnOp TxnOperator, commitTS timestamp.Timestamp, options ...TxnOption) (client.TxnOperator, error) {
-				tTxnOp := txnOp.(*testTxnOp)
-				tTxnOp.meta.Status = txn.TxnStatus_Active
-				return txnOp, nil
 			}).AnyTimes()
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
@@ -539,12 +531,7 @@ func Test_rollbackStatement(t *testing.T) {
 			txnOp.mod = modRollbackError
 			return txnOp, nil
 		}
-		restartTxnFunc := func(ctx context.Context, txnOp TxnOperator, commitTS any, options ...any) (client.TxnOperator, error) {
-			tTxnOp := txnOp.(*testTxnOp)
-			tTxnOp.meta.Status = txn.TxnStatus_Active
-			return txnOp, nil
-		}
-		ses := newMockErrSession4(t, ctx, ctrl, newFunc, restartTxnFunc)
+		ses := newMockErrSession4(t, ctx, ctrl, newFunc)
 		ec := newTestExecCtx(ctx, ctrl)
 		ec.ses = ses
 		//case1. autocommit && not_begin. Insert Stmt (need not to be committed in the active txn)

@@ -2067,7 +2067,6 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		determineHashOnPK(rootID, builder)
 		tagCnt := make(map[int32]int)
 		rootID = builder.removeEffectlessLeftJoins(rootID, tagCnt)
-		ReCalcNodeStats(rootID, builder, true, false, true)
 		builder.pushdownTopThroughLeftJoin(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 
@@ -2410,18 +2409,16 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	havingBinder := NewHavingBinder(builder, ctx)
 	projectionBinder := NewProjectionBinder(builder, ctx, havingBinder)
 
-	// append a project node
-	lastNodeID = builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_PROJECT,
-		ProjectList: ctx.projects,
-		Children:    []int32{lastNodeID},
-		BindingTags: []int32{ctx.projectTag},
-	}, ctx)
+	// Track the original number of columns before ORDER BY binding
+	// ORDER BY may add new expressions to ctx.projects, but these should not be in the final output
+	resultLen := len(ctx.projects)
 
-	// append orderBy
+	// bind orderBy BEFORE creating PROJECT node, so that any new expressions
+	// added to ctx.projects by ORDER BY are included in the PROJECT node
+	var orderBys []*plan.OrderBySpec
 	if astOrderBy != nil {
 		orderBinder := NewOrderBinder(projectionBinder, nil)
-		orderBys := make([]*plan.OrderBySpec, 0, len(astOrderBy))
+		orderBys = make([]*plan.OrderBySpec, 0, len(astOrderBy))
 
 		for _, order := range astOrderBy {
 			expr, err := orderBinder.BindExpr(order.Expr)
@@ -2450,7 +2447,18 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 
 			orderBys = append(orderBys, orderBy)
 		}
+	}
 
+	// append a project node (after ORDER BY binding to include any new expressions)
+	lastNodeID = builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		ProjectList: ctx.projects,
+		Children:    []int32{lastNodeID},
+		BindingTags: []int32{ctx.projectTag},
+	}, ctx)
+
+	// append orderBy (SORT node)
+	if len(orderBys) > 0 {
 		lastNodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_SORT,
 			Children: []int32{lastNodeID},
@@ -2498,8 +2506,9 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	}
 
 	// append result PROJECT node
+	// Use resultLen to exclude ORDER BY expressions from the final output
 	if builder.qry.Nodes[lastNodeID].NodeType != plan.Node_PROJECT {
-		for i := 0; i < len(ctx.projects); i++ {
+		for i := 0; i < resultLen; i++ {
 			ctx.results = append(ctx.results, &plan.Expr{
 				Typ: ctx.projects[i].Typ,
 				Expr: &plan.Expr_Col{
@@ -2519,7 +2528,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 			BindingTags: []int32{ctx.resultTag},
 		}, ctx)
 	} else {
-		ctx.results = ctx.projects
+		ctx.results = ctx.projects[:resultLen]
 	}
 
 	// set heading
@@ -3950,6 +3959,13 @@ func (builder *QueryBuilder) appendAggNode(
 		SpillMem:     builder.aggSpillMem,
 	}, ctx)
 
+	// Plan-level rewrite: count(not_null_col) -> starcount (ObjName + Obj) so compile uses countStarExec.
+	if aggNode := builder.qry.Nodes[nodeID]; len(aggNode.Children) > 0 {
+		if childNode := builder.qry.Nodes[aggNode.Children[0]]; childNode.NodeType == plan.Node_TABLE_SCAN && childNode.TableDef != nil {
+			RewriteCountNotNullColToStarcount(aggNode, childNode.TableDef)
+		}
+	}
+
 	if len(boundHavingList) > 0 {
 		var newFilterList []*plan.Expr
 		var expr *plan.Expr
@@ -4988,6 +5004,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 
 		colLength := len(node.TableDef.Cols)
 		cols = make([]string, colLength)
+		originCols := make([]string, colLength)
 		colIsHidden = make([]bool, colLength)
 		types = make([]*plan.Type, colLength)
 		defaultVals = make([]string, colLength)
@@ -5000,6 +5017,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			} else {
 				cols[i] = col.Name
 			}
+			originCols[i] = cols[i]
 			cols[i] = strings.ToLower(cols[i])
 			colIsHidden[i] = col.Hidden
 			types[i] = &col.Typ
@@ -5012,6 +5030,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 
 		binding = NewBinding(tag, nodeID, node.TableDef.DbName, table, node.TableDef.TblId, cols, colIsHidden, types,
 			util.TableIsClusterTable(node.TableDef.TableType), defaultVals)
+		binding.originCols = originCols
 	} else {
 		// Subquery
 		subCtx := builder.ctxByNode[nodeID]
@@ -5036,6 +5055,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 
 		colLength := len(headings)
 		cols = make([]string, colLength)
+		originCols := make([]string, colLength)
 		colIsHidden = make([]bool, colLength)
 		types = make([]*plan.Type, colLength)
 		defaultVals = make([]string, colLength)
@@ -5046,6 +5066,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			} else {
 				cols[i] = col
 			}
+			originCols[i] = cols[i]
 			cols[i] = strings.ToLower(cols[i])
 			types[i] = &projects[i].Typ
 			colIsHidden[i] = false
@@ -5055,6 +5076,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		}
 
 		binding = NewBinding(tag, nodeID, "", table, 0, cols, colIsHidden, types, false, defaultVals)
+		binding.originCols = originCols
 	}
 
 	ctx.bindings = append(ctx.bindings, binding)
@@ -5303,6 +5325,10 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = builder.buildParseJsonlData(tbl, ctx, exprs, children)
 	case "parse_jsonl_file":
 		nodeId, err = builder.buildParseJsonlFile(tbl, ctx, exprs, children)
+	case "table_stats":
+		nodeId = builder.buildTableStats(tbl, ctx, exprs, children)
+	case "load_file_chunks":
+		nodeId = builder.buildLoadFileChunks(tbl, ctx, exprs, children)
 	default:
 		err = moerr.NewNotSupportedf(builder.GetContext(), "table function '%s' not supported", id)
 	}
@@ -5344,8 +5370,9 @@ func parseRankOption(options map[string]string, ctx context.Context) (*plan.Rank
 		// - "pre": Enable vector index with BloomFilter pushdown
 		// - "post": Enable vector index with standard behavior (post-filtering)
 		// - "force": Force disable vector index, use full table scan
-		if modeLower != "pre" && modeLower != "post" && modeLower != "force" {
-			return nil, moerr.NewInvalidInputf(ctx, "mode must be 'pre', 'post', or 'force', got '%s'", mode)
+		// - "auto": Adaptive mode that automatically selects the best strategy
+		if modeLower != "pre" && modeLower != "post" && modeLower != "force" && modeLower != "auto" {
+			return nil, moerr.NewInvalidInputf(ctx, "mode must be 'pre', 'post', 'force', or 'auto', got '%s'", mode)
 		}
 		rankOption.Mode = modeLower
 	}

@@ -68,7 +68,6 @@ SELECT JSON_ARRAY(
     (SELECT GROUP_CONCAT(DISTINCT department SEPARATOR '","') FROM employees)
 ) as departments;
 
---- @bvt:issue#23462
 SELECT CONCAT('[',
     GROUP_CONCAT(
         JSON_OBJECT('name', department, 'count', dept_count)
@@ -83,7 +82,21 @@ FROM (
     GROUP BY department
     ORDER BY department
 ) dept_summary;
---- @bvt:issue
+
+SELECT CONCAT('[',
+              GROUP_CONCAT(
+                      JSON_OBJECT('name', department, 'count', dept_count)
+                          SEPARATOR ','
+                  ),
+              ']') as department_stats
+FROM (
+         SELECT
+             department,
+             COUNT(*) as dept_count
+         FROM employees
+         GROUP BY department
+         ORDER BY department
+) dept_summary;
 
 -- 部门员工的完整信息结构
 SELECT
@@ -234,7 +247,6 @@ GROUP BY product_id;
 
 
 -- 创建角色权限表
---- @bvt:issue#23462
 CREATE TABLE role_permissions (
     role_name VARCHAR(30),
     permission VARCHAR(50)
@@ -278,8 +290,23 @@ FROM (
     GROUP BY ur.user_id, ur.role_name
 ) role_permissions_grouped
 GROUP BY user_id;
---- @bvt:issue
 
+SELECT
+    user_id,
+    JSON_OBJECTAGG(
+            role_name,
+            permissions_array
+        ) as user_permissions
+FROM (
+         SELECT
+             ur.user_id,
+             ur.role_name,
+             JSON_ARRAYAGG(rp.permission) as permissions_array
+         FROM user_roles ur
+                  JOIN role_permissions rp ON ur.role_name = rp.role_name
+         GROUP BY ur.user_id, ur.role_name
+     ) role_permissions_grouped
+GROUP BY user_id;
 
 
 drop table if exists products;

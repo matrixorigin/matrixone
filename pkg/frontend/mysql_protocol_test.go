@@ -195,12 +195,6 @@ func TestKill(t *testing.T) {
 			txnOp := newTestTxnOp()
 			return txnOp, nil
 		}).AnyTimes()
-	txnClient.EXPECT().RestartTxn(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(ctx context.Context, txnOp TxnOperator, commitTS any, options ...any) (client.TxnOperator, error) {
-			tTxnOp := txnOp.(*testTxnOp)
-			tTxnOp.meta.Status = txn.TxnStatus_Active
-			return txnOp, nil
-		}).AnyTimes()
 	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
@@ -4055,6 +4049,59 @@ func Test_appendResultSet4(t *testing.T) {
 			}
 			fun()
 		}
+	})
+}
+
+func Test_appendResultSetUUIDVarString(t *testing.T) {
+	ctx := context.TODO()
+	convey.Convey("append result set uuid as var string", t, func() {
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, nil, nil, nil)
+		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
+		setSessionAlloc("", NewLeakCheckAllocator())
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.ShouldBeNil(err)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+
+		ses := NewSession(ctx, "", proto, nil)
+		proto.ses = ses
+
+		mrs := &MysqlResultSet{}
+		mysqlCol := new(MysqlColumn)
+		mysqlCol.SetName("uuid_col")
+		mysqlCol.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+		mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+		mrs.AddColumn(mysqlCol)
+
+		mp := mpool.MustNewZero()
+		bat := batch.NewWithSize(1)
+		u := types.Uuid{}
+		for i := 0; i < len(u); i++ {
+			u[i] = byte(i + 1)
+		}
+		bat.Vecs[0] = testutil.NewUUIDVector(1, types.T_uuid.ToType(), mp, false, nil, []types.Uuid{u})
+		bat.SetRowCount(1)
+
+		colSlices := &ColumnSlices{
+			ctx:             context.TODO(),
+			colIdx2SliceIdx: make([]int, len(bat.Vecs)),
+			dataSet:         bat,
+		}
+		defer colSlices.Close()
+
+		err = convertBatchToSlices(context.TODO(), ses, bat, colSlices)
+		convey.So(err, convey.ShouldBeNil)
+
+		err = proto.appendResultSetBinaryRow2(mrs, colSlices, 0)
+		convey.So(err, convey.ShouldBeNil)
+
+		err = proto.appendResultSetTextRow2(mrs, colSlices, 0)
+		convey.So(err, convey.ShouldBeNil)
 	})
 }
 

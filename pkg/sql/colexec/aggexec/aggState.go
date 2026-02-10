@@ -83,7 +83,7 @@ type aggState struct {
 	argSkl *arenaskl.Skiplist
 }
 
-func (ag *aggState) init(mp *mpool.MPool, l, c int32, info *aggInfo) error {
+func (ag *aggState) init(mp *mpool.MPool, l, c int32, info *aggInfo, setNulls bool) error {
 	if c <= 0 || c > AggBatchSize {
 		return moerr.NewInternalErrorNoCtxf("invalid length or capacity: %d, %d", l, c)
 	}
@@ -101,7 +101,7 @@ func (ag *aggState) init(mp *mpool.MPool, l, c int32, info *aggInfo) error {
 			if err = ag.vecs[i].PreExtend(int(c), mp); err != nil {
 				return err
 			}
-			if info.emptyNull {
+			if info.emptyNull && setNulls {
 				ag.vecs[i].SetAllNulls(int(c))
 			}
 		}
@@ -358,7 +358,7 @@ func (ag *aggState) readState(mp *mpool.MPool, reader io.Reader, info *aggInfo) 
 	if cnt > AggBatchSize {
 		return 0, moerr.NewInternalErrorNoCtxf("invalid count: %d", cnt)
 	}
-	if err := ag.init(mp, cnt, cnt, info); err != nil {
+	if err := ag.init(mp, cnt, cnt, info, false); err != nil {
 		return 0, err
 	}
 
@@ -633,7 +633,7 @@ func (ae *aggExec) GroupGrow(more int) error {
 	if ae.chunkSize == 1 {
 		// special grow 1
 		ae.state = make([]aggState, 1)
-		if err := ae.state[0].init(ae.mp, 1, 1, &ae.aggInfo); err != nil {
+		if err := ae.state[0].init(ae.mp, 1, 1, &ae.aggInfo, true); err != nil {
 			panic(err)
 		}
 
@@ -651,14 +651,18 @@ func (ae *aggExec) GroupGrow(more int) error {
 			return nil
 		}
 		ae.state = append(ae.state, aggState{})
-		if err := ae.state[len(ae.state)-1].init(ae.mp, 0, AggBatchSize, &ae.aggInfo); err != nil {
+		if err := ae.state[len(ae.state)-1].init(ae.mp, 0, AggBatchSize, &ae.aggInfo, true); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (ae *aggExec) PreAllocateGroups(more int) error {
+func (ae *aggExec) preAllocateGroupsWithNulls(more int, setNulls bool) error {
+	if more < 0 {
+		return moerr.NewInternalErrorNoCtxf("invalid more: %d", more)
+	}
+
 	// grow the state until the more groups are added
 	for remain := int32(more); remain > 0; {
 		if len(ae.state) != 0 {
@@ -669,11 +673,15 @@ func (ae *aggExec) PreAllocateGroups(more int) error {
 			return nil
 		}
 		ae.state = append(ae.state, aggState{})
-		if err := ae.state[len(ae.state)-1].init(ae.mp, 0, AggBatchSize, &ae.aggInfo); err != nil {
+		if err := ae.state[len(ae.state)-1].init(ae.mp, 0, AggBatchSize, &ae.aggInfo, setNulls); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (ae *aggExec) PreAllocateGroups(more int) error {
+	return ae.preAllocateGroupsWithNulls(more, true)
 }
 
 // Fill, BulkFill, BatchFill, and Flush are implemented by each agg function.
@@ -767,7 +775,7 @@ func (ae *aggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error 
 			}
 
 			oldX := max(0, len(ae.state)-1)
-			ae.PreAllocateGroups(int(st.length))
+			ae.preAllocateGroupsWithNulls(int(st.length), false)
 			offset, err := ae.state[oldX].appendFromStateArg(mp, 0, &st, &ae.aggInfo)
 			if err != nil {
 				return err
