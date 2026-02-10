@@ -55,11 +55,12 @@ set interactive_timeout = 30000+100;
 show variables like 'interactive_timeout';
 Variable_name    Value
 interactive_timeout    30100
+set @g_interactive_timeout_before = @@global.interactive_timeout;
 set global interactive_timeout = 30000+100;
 internal error: the system variable is read only
-select @@global.interactive_timeout;
-@@interactive_timeout
-86400
+select @@global.interactive_timeout = @g_interactive_timeout_before;
+@@interactive_timeout = @g_interactive_timeout_before
+1
 select @@session.interactive_timeout;
 @@interactive_timeout
 30100
