@@ -1699,3 +1699,230 @@ func Test_extractTableDefColumns(t *testing.T) {
 		assert.NotNil(t, err)
 	})
 }
+
+// Test_parseCmdGetSnapshotTs_GoodPath tests the good path of parseCmdGetSnapshotTs
+func Test_parseCmdGetSnapshotTs_GoodPath(t *testing.T) {
+	ctx := context.Background()
+
+	convey.Convey("parseCmdGetSnapshotTs good path", t, func() {
+		// Test valid command
+		sql := makeGetSnapshotTsSql("test_snapshot", "pub_account", "test_pub")
+		cmd, err := parseCmdGetSnapshotTs(ctx, sql)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(cmd, convey.ShouldNotBeNil)
+		convey.So(cmd.snapshotName, convey.ShouldEqual, "test_snapshot")
+		convey.So(cmd.accountName, convey.ShouldEqual, "pub_account")
+		convey.So(cmd.publicationName, convey.ShouldEqual, "test_pub")
+	})
+
+	convey.Convey("parseCmdGetSnapshotTs invalid format", t, func() {
+		// Test invalid command - wrong prefix
+		_, err := parseCmdGetSnapshotTs(ctx, "SELECT * FROM table")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "not the GET_SNAPSHOT_TS command")
+
+		// Test invalid command - missing parameters
+		_, err = parseCmdGetSnapshotTs(ctx, cmdGetSnapshotTsSql+" snapshot_only")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "invalid")
+	})
+}
+
+// Test_parseCmdGetDatabases_GoodPath tests the good path of parseCmdGetDatabases
+func Test_parseCmdGetDatabases_GoodPath(t *testing.T) {
+	ctx := context.Background()
+
+	convey.Convey("parseCmdGetDatabases good path", t, func() {
+		// Test valid command
+		sql := makeGetDatabasesSql("test_snapshot", "pub_account", "test_pub", "database", "test_db", "-")
+		cmd, err := parseCmdGetDatabases(ctx, sql)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(cmd, convey.ShouldNotBeNil)
+		convey.So(cmd.snapshotName, convey.ShouldEqual, "test_snapshot")
+		convey.So(cmd.accountName, convey.ShouldEqual, "pub_account")
+		convey.So(cmd.publicationName, convey.ShouldEqual, "test_pub")
+		convey.So(cmd.level, convey.ShouldEqual, "database")
+		convey.So(cmd.dbName, convey.ShouldEqual, "test_db")
+		convey.So(cmd.tableName, convey.ShouldEqual, "-")
+	})
+
+	convey.Convey("parseCmdGetDatabases invalid format", t, func() {
+		// Test invalid command - wrong prefix
+		_, err := parseCmdGetDatabases(ctx, "SELECT * FROM table")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "not the GET_DATABASES command")
+
+		// Test invalid command - missing parameters
+		_, err = parseCmdGetDatabases(ctx, cmdGetDatabasesSql+" snapshot_only account pub")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "invalid")
+	})
+}
+
+// Test_parseCmdGetMoIndexes_GoodPath tests the good path of parseCmdGetMoIndexes
+func Test_parseCmdGetMoIndexes_GoodPath(t *testing.T) {
+	ctx := context.Background()
+
+	convey.Convey("parseCmdGetMoIndexes good path", t, func() {
+		// Test valid command
+		sql := makeGetMoIndexesSql(12345, "pub_account", "test_pub", "test_snapshot")
+		cmd, err := parseCmdGetMoIndexes(ctx, sql)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(cmd, convey.ShouldNotBeNil)
+		convey.So(cmd.tableId, convey.ShouldEqual, uint64(12345))
+		convey.So(cmd.subscriptionAccountName, convey.ShouldEqual, "pub_account")
+		convey.So(cmd.publicationName, convey.ShouldEqual, "test_pub")
+		convey.So(cmd.snapshotName, convey.ShouldEqual, "test_snapshot")
+	})
+
+	convey.Convey("parseCmdGetMoIndexes invalid format", t, func() {
+		// Test invalid command - wrong prefix
+		_, err := parseCmdGetMoIndexes(ctx, "SELECT * FROM table")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "not the GET_MO_INDEXES command")
+
+		// Test invalid command - invalid tableId
+		_, err = parseCmdGetMoIndexes(ctx, cmdGetMoIndexesSql+" not_a_number pub_account test_pub snapshot")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "invalid tableId")
+
+		// Test invalid command - missing parameters
+		_, err = parseCmdGetMoIndexes(ctx, cmdGetMoIndexesSql+" 12345")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "invalid")
+	})
+}
+
+// Test_parseCmdGetDdl_GoodPath tests the good path of parseCmdGetDdl
+func Test_parseCmdGetDdl_GoodPath(t *testing.T) {
+	ctx := context.Background()
+
+	convey.Convey("parseCmdGetDdl good path", t, func() {
+		// Test valid command
+		sql := makeGetDdlSql("test_snapshot", "pub_account", "test_pub", "table", "test_db", "test_table")
+		cmd, err := parseCmdGetDdl(ctx, sql)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(cmd, convey.ShouldNotBeNil)
+		convey.So(cmd.snapshotName, convey.ShouldEqual, "test_snapshot")
+		convey.So(cmd.subscriptionAccountName, convey.ShouldEqual, "pub_account")
+		convey.So(cmd.publicationName, convey.ShouldEqual, "test_pub")
+		convey.So(cmd.level, convey.ShouldEqual, "table")
+		convey.So(cmd.dbName, convey.ShouldEqual, "test_db")
+		convey.So(cmd.tableName, convey.ShouldEqual, "test_table")
+	})
+
+	convey.Convey("parseCmdGetDdl invalid format", t, func() {
+		// Test invalid command - wrong prefix
+		_, err := parseCmdGetDdl(ctx, "SELECT * FROM table")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "not the GET_DDL command")
+
+		// Test invalid command - missing parameters
+		_, err = parseCmdGetDdl(ctx, cmdGetDdlSql+" snapshot account pub")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "invalid")
+	})
+}
+
+// Test_parseCmdGetObject_GoodPath tests the good path of parseCmdGetObject
+func Test_parseCmdGetObject_GoodPath(t *testing.T) {
+	ctx := context.Background()
+
+	convey.Convey("parseCmdGetObject good path", t, func() {
+		// Test valid command
+		sql := makeGetObjectSql("pub_account", "test_pub", "object_name.dat", 5)
+		cmd, err := parseCmdGetObject(ctx, sql)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(cmd, convey.ShouldNotBeNil)
+		convey.So(cmd.subscriptionAccountName, convey.ShouldEqual, "pub_account")
+		convey.So(cmd.publicationName, convey.ShouldEqual, "test_pub")
+		convey.So(cmd.objectName, convey.ShouldEqual, "object_name.dat")
+		convey.So(cmd.chunkIndex, convey.ShouldEqual, int64(5))
+	})
+
+	convey.Convey("parseCmdGetObject invalid format", t, func() {
+		// Test invalid command - wrong prefix
+		_, err := parseCmdGetObject(ctx, "SELECT * FROM table")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "not the GET_OBJECT command")
+
+		// Test invalid command - invalid chunkIndex
+		_, err = parseCmdGetObject(ctx, cmdGetObjectSql+" pub_account test_pub object_name not_a_number")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "invalid chunkIndex")
+
+		// Test invalid command - missing parameters
+		_, err = parseCmdGetObject(ctx, cmdGetObjectSql+" pub_account")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "invalid")
+	})
+}
+
+// Test_parseCmdObjectList_GoodPath tests the good path of parseCmdObjectList
+func Test_parseCmdObjectList_GoodPath(t *testing.T) {
+	ctx := context.Background()
+
+	convey.Convey("parseCmdObjectList good path - with against snapshot", t, func() {
+		// Test valid command with against snapshot
+		sql := makeObjectListSql("test_snapshot", "against_snapshot", "pub_account", "test_pub")
+		cmd, err := parseCmdObjectList(ctx, sql)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(cmd, convey.ShouldNotBeNil)
+		convey.So(cmd.snapshotName, convey.ShouldEqual, "test_snapshot")
+		convey.So(cmd.againstSnapshotName, convey.ShouldEqual, "against_snapshot")
+		convey.So(cmd.subscriptionAccountName, convey.ShouldEqual, "pub_account")
+		convey.So(cmd.publicationName, convey.ShouldEqual, "test_pub")
+	})
+
+	convey.Convey("parseCmdObjectList good path - without against snapshot", t, func() {
+		// Test valid command without against snapshot (using "-")
+		sql := makeObjectListSql("test_snapshot", "-", "pub_account", "test_pub")
+		cmd, err := parseCmdObjectList(ctx, sql)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(cmd, convey.ShouldNotBeNil)
+		convey.So(cmd.snapshotName, convey.ShouldEqual, "test_snapshot")
+		convey.So(cmd.againstSnapshotName, convey.ShouldEqual, "") // "-" should be converted to empty string
+		convey.So(cmd.subscriptionAccountName, convey.ShouldEqual, "pub_account")
+		convey.So(cmd.publicationName, convey.ShouldEqual, "test_pub")
+	})
+
+	convey.Convey("parseCmdObjectList invalid format", t, func() {
+		// Test invalid command - wrong prefix
+		_, err := parseCmdObjectList(ctx, "SELECT * FROM table")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "not the OBJECT_LIST command")
+
+		// Test invalid command - missing parameters
+		_, err = parseCmdObjectList(ctx, cmdObjectListSql+" snapshot_only")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "invalid")
+	})
+}
+
+// Test_parseCmdCheckSnapshotFlushed_GoodPath tests the good path of parseCmdCheckSnapshotFlushed
+func Test_parseCmdCheckSnapshotFlushed_GoodPath(t *testing.T) {
+	ctx := context.Background()
+
+	convey.Convey("parseCmdCheckSnapshotFlushed good path", t, func() {
+		// Test valid command
+		sql := makeCheckSnapshotFlushedSql("test_snapshot", "pub_account", "test_pub")
+		cmd, err := parseCmdCheckSnapshotFlushed(ctx, sql)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(cmd, convey.ShouldNotBeNil)
+		convey.So(cmd.snapshotName, convey.ShouldEqual, "test_snapshot")
+		convey.So(cmd.subscriptionAccountName, convey.ShouldEqual, "pub_account")
+		convey.So(cmd.publicationName, convey.ShouldEqual, "test_pub")
+	})
+
+	convey.Convey("parseCmdCheckSnapshotFlushed invalid format", t, func() {
+		// Test invalid command - wrong prefix
+		_, err := parseCmdCheckSnapshotFlushed(ctx, "SELECT * FROM table")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "not the CHECK_SNAPSHOT_FLUSHED command")
+
+		// Test invalid command - missing parameters
+		_, err = parseCmdCheckSnapshotFlushed(ctx, cmdCheckSnapshotFlushedSql+" snapshot_only")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "invalid")
+	})
+}

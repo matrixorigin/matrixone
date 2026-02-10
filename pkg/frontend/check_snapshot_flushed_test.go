@@ -843,6 +843,131 @@ func Test_doCheckSnapshotFlushed_SnapshotNotFound(t *testing.T) {
 	})
 }
 
+// Test_handleInternalCheckSnapshotFlushed_GoodPath tests the good path of handleInternalCheckSnapshotFlushed
+func Test_handleInternalCheckSnapshotFlushed_GoodPath(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	convey.Convey("handleInternalCheckSnapshotFlushed good path", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		// Stub getAccountFromPublicationFunc to bypass publication check
+		pubStub := gostub.Stub(&getAccountFromPublicationFunc, func(ctx context.Context, bh BackgroundExec, pubAccountName string, pubName string, currentAccount string) (uint64, string, error) {
+			return uint64(catalog.System_Account), "sys", nil
+		})
+		defer pubStub.Reset()
+
+		// Stub getSnapshotByNameFunc to return a cluster level snapshot record
+		mockRecord := &snapshotRecord{
+			snapshotId:   "test-snapshot-id",
+			snapshotName: "test_snapshot",
+			ts:           1000,
+			level:        "cluster",
+			accountName:  "sys",
+			databaseName: "",
+			tableName:    "",
+			objId:        0,
+		}
+		snapshotStub := gostub.Stub(&getSnapshotByNameFunc, func(ctx context.Context, bh BackgroundExec, snapshotName string) (*snapshotRecord, error) {
+			return mockRecord, nil
+		})
+		defer snapshotStub.Reset()
+
+		// Stub checkSnapshotFlushedFunc to return true (good path)
+		checkStub := gostub.Stub(&checkSnapshotFlushedFunc, func(ctx context.Context, txn client.TxnOperator, snapshotTs int64, engine *disttae.Engine, level, databaseName, tableName string) (bool, error) {
+			convey.So(level, convey.ShouldEqual, "cluster")
+			convey.So(snapshotTs, convey.ShouldEqual, int64(1000))
+			return true, nil
+		})
+		defer checkStub.Reset()
+
+		// Stub getFileServiceFunc to return a stub fileservice (bypass nil check)
+		mockFS := checkSnapshotStubFS{name: "test_fs"}
+		fsStub := gostub.Stub(&getFileServiceFunc, func(de *disttae.Engine) fileservice.FileService {
+			return mockFS
+		})
+		defer fsStub.Reset()
+
+		// Mock engine with disttae.Engine wrapped in EntireEngine
+		mockDisttaeEng := &disttae.Engine{}
+		entireEngine := &engine.EntireEngine{
+			Engine: mockDisttaeEng,
+		}
+
+		// Mock txn operator
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
+		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+		txnOperator.EXPECT().CloneSnapshotOp(gomock.Any()).Return(txnOperator).AnyTimes()
+
+		// Mock txn client
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+
+		// Mock background exec
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return([]interface{}{}).AnyTimes()
+
+		// Setup system variables
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, entireEngine, txnClient, nil)
+		pu.SV.SkipCheckUser = true
+		setPu("", pu)
+		setSessionAlloc("", NewLeakCheckAllocator())
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.So(err, convey.ShouldBeNil)
+		pu.StorageEngine = entireEngine
+		pu.TxnClient = txnClient
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
+
+		ses := NewSession(ctx, "", proto, nil)
+		tenant := &TenantInfo{
+			Tenant:   "sys",
+			TenantID: catalog.System_Account,
+			User:     DefaultTenantMoAdmin,
+		}
+		ses.SetTenantInfo(tenant)
+		ses.mrs = &MysqlResultSet{}
+		ses.SetDatabaseName("test_db")
+
+		// Mock TxnHandler
+		txnHandler := InitTxnHandler("", entireEngine, ctx, txnOperator)
+		ses.txnHandler = txnHandler
+
+		proto.SetSession(ses)
+
+		// Create internal command
+		cmd := &InternalCmdCheckSnapshotFlushed{
+			snapshotName:            "test_snapshot",
+			subscriptionAccountName: "sys",
+			publicationName:         "test_pub",
+		}
+
+		// Create ExecCtx
+		execCtx := &ExecCtx{
+			reqCtx: ctx,
+		}
+
+		// Test good path
+		err = handleInternalCheckSnapshotFlushed(ses, execCtx, cmd)
+		convey.So(err, convey.ShouldBeNil)
+		// Result should be true (snapshot flushed)
+		mrs := ses.GetMysqlResultSet()
+		convey.So(mrs.GetRowCount(), convey.ShouldEqual, uint64(1))
+	})
+}
+
 // Test_doCheckSnapshotFlushed_GoodPath tests the good path of doCheckSnapshotFlushed (line 67-124)
 // This test mocks getSnapshotByNameFunc and checkSnapshotFlushedFunc to test the core logic
 func Test_doCheckSnapshotFlushed_GoodPath(t *testing.T) {

@@ -51,7 +51,7 @@ type SnapshotCoveredScope struct {
 //   - accountName: the upstream account name
 //   - err: error if permission denied or publication not found
 func GetAccountIDFromPublication(ctx context.Context, bh BackgroundExec, pubAccountName string, pubName string, currentAccount string) (uint64, string, error) {
-	return getAccountFromPublication(ctx, bh, pubAccountName, pubName, currentAccount)
+	return getAccountFromPublicationFunc(ctx, bh, pubAccountName, pubName, currentAccount)
 }
 
 // GetSnapshotTsByName gets the snapshot timestamp by snapshot name
@@ -85,7 +85,7 @@ func GetSnapshotTsByName(ctx context.Context, bh BackgroundExec, snapshotName st
 //   - snapshotTs: snapshot timestamp
 //   - err: error if snapshot not found or query failed
 func GetSnapshotCoveredScope(ctx context.Context, bh BackgroundExec, snapshotName string) (*SnapshotCoveredScope, int64, error) {
-	record, err := getSnapshotByName(ctx, bh, snapshotName)
+	record, err := getSnapshotByNameFunc(ctx, bh, snapshotName)
 	if err != nil {
 		return nil, 0, moerr.NewInternalErrorf(ctx, "failed to query snapshot: %v", err)
 	}
@@ -138,6 +138,9 @@ func ComputeDdlBatch(
 	return getddlbatch(ctx, databaseName, tableName, eng, mp, txn)
 }
 
+// ComputeDdlBatchWithSnapshotFunc is a function variable for ComputeDdlBatchWithSnapshot to allow stubbing in tests
+var ComputeDdlBatchWithSnapshotFunc = computeDdlBatchWithSnapshotImpl
+
 // ComputeDdlBatchWithSnapshot computes the DDL batch with snapshot applied
 // Parameters:
 //   - ctx: context with account ID attached
@@ -152,6 +155,19 @@ func ComputeDdlBatch(
 //   - batch: the result batch with columns (dbname, tablename, tableid, tablesql)
 //   - err: error if failed
 func ComputeDdlBatchWithSnapshot(
+	ctx context.Context,
+	databaseName string,
+	tableName string,
+	eng engine.Engine,
+	mp *mpool.MPool,
+	txn TxnOperator,
+	snapshotTs int64,
+) (*batch.Batch, error) {
+	return ComputeDdlBatchWithSnapshotFunc(ctx, databaseName, tableName, eng, mp, txn, snapshotTs)
+}
+
+// computeDdlBatchWithSnapshotImpl is the actual implementation of ComputeDdlBatchWithSnapshot
+func computeDdlBatchWithSnapshotImpl(
 	ctx context.Context,
 	databaseName string,
 	tableName string,

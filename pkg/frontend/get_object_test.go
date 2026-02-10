@@ -612,3 +612,120 @@ func Test_handleGetObject_WithMockCheckers(t *testing.T) {
 		})
 	})
 }
+
+// Test_handleInternalGetObject_GoodPath tests the good path of handleInternalGetObject
+func Test_handleInternalGetObject_GoodPath(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+
+	convey.Convey("handleInternalGetObject good path", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		// Mock engine
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+		// Mock txn operator
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
+		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
+		// Mock txn client
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+
+		// Setup system variables
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		convey.So(err, convey.ShouldBeNil)
+		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
+		pu.SV.SkipCheckUser = true
+		setPu("", pu)
+		setSessionAlloc("", NewLeakCheckAllocator())
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.So(err, convey.ShouldBeNil)
+		pu.StorageEngine = eng
+		pu.TxnClient = txnClient
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
+
+		ses := NewSession(ctx, "", proto, nil)
+		tenant := &TenantInfo{
+			Tenant:   "sys",
+			TenantID: catalog.System_Account,
+			User:     DefaultTenantMoAdmin,
+		}
+		ses.SetTenantInfo(tenant)
+		ses.mrs = &MysqlResultSet{}
+		ses.SetDatabaseName("test_db")
+
+		// Mock TxnHandler
+		txnHandler := InitTxnHandler("", eng, ctx, txnOperator)
+		ses.txnHandler = txnHandler
+
+		proto.SetSession(ses)
+
+		// Stub getAccountFromPublicationFunc for permission check
+		pubStub := gostub.Stub(&getAccountFromPublicationFunc, func(ctx context.Context, bh BackgroundExec, pubAccountName string, pubName string, currentAccount string) (uint64, string, error) {
+			return uint64(catalog.System_Account), "sys", nil
+		})
+		defer pubStub.Reset()
+
+		// Stub GetObjectFSProvider
+		stubFS := &stubFileService{
+			statFileFunc: func(ctx context.Context, filePath string) (*fileservice.DirEntry, error) {
+				return &fileservice.DirEntry{
+					Name: "test_object",
+					Size: 500 * 1024, // 500KB
+				}, nil
+			},
+		}
+		fsStub := gostub.Stub(&GetObjectFSProvider, func(ses *Session) (fileservice.FileService, error) {
+			return stubFS, nil
+		})
+		defer fsStub.Reset()
+
+		// Stub GetObjectDataReader
+		testData := []byte("test file content data")
+		dataStub := gostub.Stub(&GetObjectDataReader, func(ctx context.Context, ses *Session, objectName string, offset int64, size int64) ([]byte, error) {
+			convey.So(objectName, convey.ShouldEqual, "test_object")
+			convey.So(offset, convey.ShouldEqual, 0)
+			convey.So(size, convey.ShouldEqual, 500*1024)
+			return testData, nil
+		})
+		defer dataStub.Reset()
+
+		// Create internal command
+		ic := &InternalCmdGetObject{
+			subscriptionAccountName: "sys",
+			publicationName:         "test_pub",
+			objectName:              "test_object",
+			chunkIndex:              1, // data chunk
+		}
+
+		// Create ExecCtx
+		execCtx := &ExecCtx{
+			reqCtx: ctx,
+		}
+
+		// Test good path
+		err = handleInternalGetObject(ses, execCtx, ic)
+		convey.So(err, convey.ShouldBeNil)
+
+		// Verify result
+		mrs := ses.GetMysqlResultSet()
+		convey.So(mrs.GetRowCount(), convey.ShouldEqual, uint64(1))
+
+		row, err := mrs.GetRow(ctx, 0)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(row[0], convey.ShouldResemble, testData)     // data
+		convey.So(row[1], convey.ShouldEqual, int64(500*1024)) // fileSize
+		convey.So(row[2], convey.ShouldEqual, int64(1))        // chunkIndex
+		convey.So(row[3], convey.ShouldEqual, int64(1))        // totalChunks
+		convey.So(row[4], convey.ShouldEqual, true)            // isComplete
+	})
+}

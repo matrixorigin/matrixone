@@ -1755,3 +1755,279 @@ func Test_doCreateSubscription_SyncLevels(t *testing.T) {
 		})
 	}
 }
+
+// Test_buildSubscriptionContextJSON_GoodPath tests the good path of buildSubscriptionContextJSON
+func Test_buildSubscriptionContextJSON_GoodPath(t *testing.T) {
+	convey.Convey("buildSubscriptionContextJSON good path", t, func() {
+		tableIDs := map[string]TableIDInfo{
+			"db1.t1": {TableID: 100, DbID: 1, DbName: "db1", TableName: "t1"},
+			"db1.t2": {TableID: 101, DbID: 1, DbName: "db1", TableName: "t2"},
+		}
+		indexTableMappings := map[string]string{
+			"upstream_idx1": "downstream_idx1",
+			"upstream_idx2": "downstream_idx2",
+		}
+
+		jsonStr, err := buildSubscriptionContextJSON(tableIDs, indexTableMappings)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(jsonStr, convey.ShouldNotBeEmpty)
+		convey.So(jsonStr, convey.ShouldContainSubstring, "table_ids")
+		convey.So(jsonStr, convey.ShouldContainSubstring, "index_table_mappings")
+		convey.So(jsonStr, convey.ShouldContainSubstring, "aobject_map")
+	})
+}
+
+// Test_checkDatabaseExists_GoodPath tests the good path of checkDatabaseExists
+func Test_checkDatabaseExists_GoodPath(t *testing.T) {
+	convey.Convey("checkDatabaseExists good path - database exists", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ctx := context.Background()
+
+		// Mock result - database exists
+		mockedResult := func(ctrl *gomock.Controller) []interface{} {
+			er := mock_frontend.NewMockExecResult(ctrl)
+			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+			return []interface{}{er}
+		}
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedResult(ctrl))
+
+		exists, err := checkDatabaseExists(ctx, bh, "test_db")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(exists, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("checkDatabaseExists good path - database not exists", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ctx := context.Background()
+
+		// Mock result - database not exists
+		mockedResult := func(ctrl *gomock.Controller) []interface{} {
+			er := mock_frontend.NewMockExecResult(ctrl)
+			er.EXPECT().GetRowCount().Return(uint64(0)).AnyTimes()
+			return []interface{}{er}
+		}
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedResult(ctrl))
+
+		exists, err := checkDatabaseExists(ctx, bh, "nonexistent_db")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(exists, convey.ShouldBeFalse)
+	})
+}
+
+// Test_checkTableExists_GoodPath tests the good path of checkTableExists
+func Test_checkTableExists_GoodPath(t *testing.T) {
+	convey.Convey("checkTableExists good path - table exists", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ctx := context.Background()
+
+		// Mock result - table exists
+		mockedResult := func(ctrl *gomock.Controller) []interface{} {
+			er := mock_frontend.NewMockExecResult(ctrl)
+			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+			return []interface{}{er}
+		}
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedResult(ctrl))
+
+		exists, err := checkTableExists(ctx, bh, "test_db", "test_table")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(exists, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("checkTableExists good path - table not exists", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ctx := context.Background()
+
+		// Mock result - table not exists
+		mockedResult := func(ctrl *gomock.Controller) []interface{} {
+			er := mock_frontend.NewMockExecResult(ctrl)
+			er.EXPECT().GetRowCount().Return(uint64(0)).AnyTimes()
+			return []interface{}{er}
+		}
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedResult(ctrl))
+
+		exists, err := checkTableExists(ctx, bh, "test_db", "nonexistent_table")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(exists, convey.ShouldBeFalse)
+	})
+}
+
+// Test_getDatabaseID_GoodPath tests the good path of getDatabaseID
+func Test_getDatabaseID_GoodPath(t *testing.T) {
+	convey.Convey("getDatabaseID good path", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ctx := context.Background()
+
+		// Mock result - database ID found
+		mockedResult := func(ctrl *gomock.Controller) []interface{} {
+			er := mock_frontend.NewMockExecResult(ctrl)
+			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+			er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(0)).Return(uint64(12345), nil).AnyTimes()
+			return []interface{}{er}
+		}
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedResult(ctrl))
+
+		dbID, err := getDatabaseID(ctx, bh, "test_db")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(dbID, convey.ShouldEqual, uint64(12345))
+	})
+}
+
+// Test_getTableID_GoodPath tests the good path of getTableID
+func Test_getTableID_GoodPath(t *testing.T) {
+	convey.Convey("getTableID good path", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ctx := context.Background()
+
+		// Mock result - table ID found
+		mockedResult := func(ctrl *gomock.Controller) []interface{} {
+			er := mock_frontend.NewMockExecResult(ctrl)
+			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+			er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(0)).Return(uint64(67890), nil).AnyTimes()
+			return []interface{}{er}
+		}
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedResult(ctrl))
+
+		tableID, err := getTableID(ctx, bh, "test_db", "test_table")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(tableID, convey.ShouldEqual, uint64(67890))
+	})
+}
+
+// Test_getDownstreamIndexTables_GoodPath tests the good path of getDownstreamIndexTables
+func Test_getDownstreamIndexTables_GoodPath(t *testing.T) {
+	convey.Convey("getDownstreamIndexTables good path - has index tables", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ctx := context.Background()
+
+		// Mock table ID result
+		mockedTableIdResult := func(ctrl *gomock.Controller) []interface{} {
+			er := mock_frontend.NewMockExecResult(ctrl)
+			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+			er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(100), nil).AnyTimes()
+			return []interface{}{er}
+		}
+
+		// Mock index tables result
+		mockedIndexResult := func(ctrl *gomock.Controller) []interface{} {
+			er := mock_frontend.NewMockExecResult(ctrl)
+			er.EXPECT().GetRowCount().Return(uint64(2)).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return("idx_table_1", nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("idx_name_1", nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(1), uint64(0)).Return("idx_table_2", nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(1), uint64(1)).Return("idx_name_2", nil).AnyTimes()
+			return []interface{}{er}
+		}
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		// First call - get table ID
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil)
+		bh.EXPECT().GetExecResultSet().Return(mockedTableIdResult(ctrl))
+		// Second call - get index tables
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil)
+		bh.EXPECT().GetExecResultSet().Return(mockedIndexResult(ctrl))
+
+		indexTables, err := getDownstreamIndexTables(ctx, bh, "test_db", "test_table")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(len(indexTables), convey.ShouldEqual, 2)
+		convey.So(indexTables["idx_table_1"], convey.ShouldEqual, "idx_name_1")
+		convey.So(indexTables["idx_table_2"], convey.ShouldEqual, "idx_name_2")
+	})
+
+	convey.Convey("getDownstreamIndexTables good path - no index tables", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ctx := context.Background()
+
+		// Mock table ID result
+		mockedTableIdResult := func(ctrl *gomock.Controller) []interface{} {
+			er := mock_frontend.NewMockExecResult(ctrl)
+			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+			er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(100), nil).AnyTimes()
+			return []interface{}{er}
+		}
+
+		// Mock empty index tables result
+		mockedEmptyResult := func(ctrl *gomock.Controller) []interface{} {
+			er := mock_frontend.NewMockExecResult(ctrl)
+			er.EXPECT().GetRowCount().Return(uint64(0)).AnyTimes()
+			return []interface{}{er}
+		}
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		// First call - get table ID
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil)
+		bh.EXPECT().GetExecResultSet().Return(mockedTableIdResult(ctrl))
+		// Second call - get index tables (empty)
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil)
+		bh.EXPECT().GetExecResultSet().Return(mockedEmptyResult(ctrl))
+
+		indexTables, err := getDownstreamIndexTables(ctx, bh, "test_db", "test_table")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(len(indexTables), convey.ShouldEqual, 0)
+	})
+}
+
+// Test_insertCCPRDbAndTableRecords_GoodPath tests the good path of insertCCPRDbAndTableRecords
+func Test_insertCCPRDbAndTableRecords_GoodPath(t *testing.T) {
+	convey.Convey("insertCCPRDbAndTableRecords good path", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ctx := context.Background()
+
+		tableIDs := map[string]TableIDInfo{
+			"db1.t1": {TableID: 100, DbID: 1, DbName: "db1", TableName: "t1"},
+			"db1.t2": {TableID: 101, DbID: 1, DbName: "db1", TableName: "t2"},
+			"db2.t3": {TableID: 102, DbID: 2, DbName: "db2", TableName: "t3"},
+		}
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		// Expect multiple Exec calls for inserting DB and table records
+		// db1 insert (1 db + 2 tables), db2 insert (1 db + 1 table) = 5 total inserts
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+		err := insertCCPRDbAndTableRecords(ctx, bh, tableIDs, "test-task-id", uint32(1))
+		convey.So(err, convey.ShouldBeNil)
+	})
+}

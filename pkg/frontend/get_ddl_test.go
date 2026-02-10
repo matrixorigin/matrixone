@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -351,5 +352,104 @@ func Test_GetDdlBatchWithoutSession_GoodPath(t *testing.T) {
 			convey.So(bat.RowCount(), convey.ShouldEqual, 1)
 			bat.Clean(mp)
 		})
+	})
+}
+
+// Test_GetSnapshotCoveredScope_GoodPath tests the good path of GetSnapshotCoveredScope
+func Test_GetSnapshotCoveredScope_GoodPath(t *testing.T) {
+	ctx := context.Background()
+
+	convey.Convey("GetSnapshotCoveredScope good path - table level snapshot", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		// Stub getSnapshotByNameFunc to return a table level snapshot record
+		mockRecord := &snapshotRecord{
+			snapshotId:   "test-snapshot-id",
+			snapshotName: "test_snapshot",
+			ts:           1000,
+			level:        "table",
+			accountName:  "sys",
+			databaseName: "test_db",
+			tableName:    "test_table",
+			objId:        0,
+		}
+		snapshotStub := gostub.Stub(&getSnapshotByNameFunc, func(ctx context.Context, bh BackgroundExec, snapshotName string) (*snapshotRecord, error) {
+			convey.So(snapshotName, convey.ShouldEqual, "test_snapshot")
+			return mockRecord, nil
+		})
+		defer snapshotStub.Reset()
+
+		// Mock background exec (not actually used since we stubbed getSnapshotByNameFunc)
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+
+		// Test good path
+		scope, ts, err := GetSnapshotCoveredScope(ctx, bh, "test_snapshot")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(scope, convey.ShouldNotBeNil)
+		convey.So(scope.Level, convey.ShouldEqual, "table")
+		convey.So(scope.DatabaseName, convey.ShouldEqual, "test_db")
+		convey.So(scope.TableName, convey.ShouldEqual, "test_table")
+		convey.So(ts, convey.ShouldEqual, int64(1000))
+	})
+}
+
+// Test_BuildDdlMysqlResultSet_GoodPath tests the good path of BuildDdlMysqlResultSet
+func Test_BuildDdlMysqlResultSet_GoodPath(t *testing.T) {
+	convey.Convey("BuildDdlMysqlResultSet good path", t, func() {
+		mrs := &MysqlResultSet{}
+
+		BuildDdlMysqlResultSet(mrs)
+
+		// Verify 4 columns are added
+		convey.So(mrs.GetColumnCount(), convey.ShouldEqual, uint64(4))
+
+		// Verify column names
+		col0, _ := mrs.GetColumn(context.Background(), 0)
+		col1, _ := mrs.GetColumn(context.Background(), 1)
+		col2, _ := mrs.GetColumn(context.Background(), 2)
+		col3, _ := mrs.GetColumn(context.Background(), 3)
+
+		convey.So(col0.Name(), convey.ShouldEqual, "dbname")
+		convey.So(col1.Name(), convey.ShouldEqual, "tablename")
+		convey.So(col2.Name(), convey.ShouldEqual, "tableid")
+		convey.So(col3.Name(), convey.ShouldEqual, "tablesql")
+	})
+}
+
+// Test_FillDdlMysqlResultSet_GoodPath tests the good path of FillDdlMysqlResultSet
+func Test_FillDdlMysqlResultSet_GoodPath(t *testing.T) {
+	convey.Convey("FillDdlMysqlResultSet good path", t, func() {
+		mp := mpool.MustNewZero()
+
+		// Create a batch with test data
+		bat := batch.New([]string{"dbname", "tablename", "tableid", "tablesql"})
+		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+		defer bat.Clean(mp)
+
+		// Add test data to batch
+		_ = vector.AppendBytes(bat.Vecs[0], []byte("test_db"), false, mp)
+		_ = vector.AppendBytes(bat.Vecs[1], []byte("test_table"), false, mp)
+		_ = vector.AppendFixed[int64](bat.Vecs[2], int64(123), false, mp)
+		_ = vector.AppendBytes(bat.Vecs[3], []byte("CREATE TABLE test_table (id INT)"), false, mp)
+		bat.SetRowCount(1)
+
+		// Create MysqlResultSet and fill it
+		mrs := &MysqlResultSet{}
+		BuildDdlMysqlResultSet(mrs)
+		FillDdlMysqlResultSet(bat, mrs)
+
+		// Verify row count
+		convey.So(mrs.GetRowCount(), convey.ShouldEqual, uint64(1))
+
+		// Verify row data
+		row := mrs.Data[0]
+		convey.So(string(row[0].([]byte)), convey.ShouldEqual, "test_db")
+		convey.So(string(row[1].([]byte)), convey.ShouldEqual, "test_table")
+		convey.So(row[2], convey.ShouldEqual, int64(123))
+		convey.So(string(row[3].([]byte)), convey.ShouldEqual, "CREATE TABLE test_table (id INT)")
 	})
 }

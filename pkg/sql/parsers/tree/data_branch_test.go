@@ -288,3 +288,62 @@ func TestGetDdlLifecycle(t *testing.T) {
 
 	stmt.Free()
 }
+
+func TestObjectListFormat_GoodPath(t *testing.T) {
+	// Test basic ObjectList with only snapshot
+	stmt := NewObjectList()
+	require.NotNil(t, stmt)
+
+	stmt.Snapshot = Identifier("snap1")
+	ctx := NewFmtCtx(dialect.MYSQL, WithQuoteString(true))
+	stmt.Format(ctx)
+	require.Equal(t, "OBJECTLIST SNAPSHOT snap1", ctx.String())
+
+	// Test with Database
+	stmt2 := NewObjectList()
+	stmt2.Database = Identifier("testdb")
+	stmt2.Snapshot = Identifier("snap2")
+	ctx2 := NewFmtCtx(dialect.MYSQL, WithQuoteString(true))
+	stmt2.Format(ctx2)
+	require.Equal(t, "OBJECTLIST DATABASE testdb SNAPSHOT snap2", ctx2.String())
+
+	// Test with Database and Table
+	stmt3 := NewObjectList()
+	stmt3.Database = Identifier("testdb")
+	stmt3.Table = Identifier("testtable")
+	stmt3.Snapshot = Identifier("snap3")
+	ctx3 := NewFmtCtx(dialect.MYSQL, WithQuoteString(true))
+	stmt3.Format(ctx3)
+	require.Equal(t, "OBJECTLIST DATABASE testdb TABLE testtable SNAPSHOT snap3", ctx3.String())
+
+	// Test with AgainstSnapshot
+	stmt4 := NewObjectList()
+	stmt4.Snapshot = Identifier("snap4")
+	againstSnap := Identifier("against_snap")
+	stmt4.AgainstSnapshot = &againstSnap
+	ctx4 := NewFmtCtx(dialect.MYSQL, WithQuoteString(true))
+	stmt4.Format(ctx4)
+	require.Equal(t, "OBJECTLIST SNAPSHOT snap4 AGAINST SNAPSHOT against_snap", ctx4.String())
+
+	// Test with FROM clause (SubscriptionAccountName and PubName)
+	stmt5 := NewObjectList()
+	stmt5.Snapshot = Identifier("snap5")
+	stmt5.SubscriptionAccountName = "sys"
+	stmt5.PubName = Identifier("mypub")
+	ctx5 := NewFmtCtx(dialect.MYSQL, WithQuoteString(true))
+	stmt5.Format(ctx5)
+	require.Equal(t, "OBJECTLIST SNAPSHOT snap5 FROM sys PUBLICATION mypub", ctx5.String())
+
+	// Test with all fields
+	stmt6 := NewObjectList()
+	stmt6.Database = Identifier("db1")
+	stmt6.Table = Identifier("tbl1")
+	stmt6.Snapshot = Identifier("snap6")
+	againstSnap2 := Identifier("against6")
+	stmt6.AgainstSnapshot = &againstSnap2
+	stmt6.SubscriptionAccountName = "account1"
+	stmt6.PubName = Identifier("pub1")
+	ctx6 := NewFmtCtx(dialect.MYSQL, WithQuoteString(true))
+	stmt6.Format(ctx6)
+	require.Equal(t, "OBJECTLIST DATABASE db1 TABLE tbl1 SNAPSHOT snap6 AGAINST SNAPSHOT against6 FROM account1 PUBLICATION pub1", ctx6.String())
+}

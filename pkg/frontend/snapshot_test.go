@@ -20,11 +20,18 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func Test_fkTablesTopoSortWithTS(t *testing.T) {
@@ -1062,4 +1069,314 @@ func Test_getAccountFromPublication(t *testing.T) {
 		convey.So(accountID, convey.ShouldEqual, uint64(100))
 		convey.So(accountName, convey.ShouldEqual, "pub_account")
 	})
+}
+
+// newMrsForMoIndexes creates a MysqlResultSet for mo_indexes query
+// columns: table_id, name, algo_table_type, index_table_name
+func newMrsForMoIndexes(records [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("table_id")
+	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	mrs.AddColumn(col1)
+
+	col2 := &MysqlColumn{}
+	col2.SetName("name")
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col2)
+
+	col3 := &MysqlColumn{}
+	col3.SetName("algo_table_type")
+	col3.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col3)
+
+	col4 := &MysqlColumn{}
+	col4.SetName("index_table_name")
+	col4.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col4)
+
+	for _, record := range records {
+		mrs.AddRow(record)
+	}
+
+	return mrs
+}
+
+// Test_handleGetMoIndexes_GoodPath tests the good path of handleGetMoIndexes
+func Test_handleGetMoIndexes_GoodPath(t *testing.T) {
+	convey.Convey("handleGetMoIndexes good path - with snapshot", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        "test_tenant",
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      1,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+		ses.mrs = &MysqlResultSet{}
+
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(1))
+
+		// Setup mock result for publication info query
+		pubQuerySQL := fmt.Sprintf(`SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			FROM mo_catalog.mo_pubs 
+			WHERE account_name = '%s' AND pub_name = '%s'`, "pub_account", "test_pub")
+		bh.sql2result[pubQuerySQL] = newMrsForPublicationInfo(
+			uint64(100), "pub_account", "test_pub", "test_db", uint64(1), "*", "test_tenant,all",
+		)
+
+		// Setup mock result for snapshot record query
+		snapshotRecordSQL := fmt.Sprintf("select * from mo_catalog.mo_snapshots where sname = '%s'", "test_snapshot")
+		bh.sql2result[snapshotRecordSQL] = newMrsForSnapshotRecord(
+			"snap-001", "test_snapshot", int64(1234567890), "account", "", "", "", uint64(1),
+		)
+
+		// Setup mock result for mo_indexes query with snapshot timestamp
+		indexSQL := fmt.Sprintf("SELECT table_id, name, algo_table_type, index_table_name FROM mo_catalog.mo_indexes{MO_TS = %d} WHERE table_id = %d", int64(1234567890), 12345)
+		bh.sql2result[indexSQL] = newMrsForMoIndexes([][]interface{}{
+			{uint64(12345), "idx_primary", "", ""},
+			{uint64(12345), "idx_name", "ivfflat", "__mo_index_idx_name"},
+		})
+
+		ic := &InternalCmdGetMoIndexes{
+			tableId:                 12345,
+			subscriptionAccountName: "pub_account",
+			publicationName:         "test_pub",
+			snapshotName:            "test_snapshot",
+		}
+
+		execCtx := &ExecCtx{
+			reqCtx: ctx,
+			ses:    ses,
+		}
+
+		err := handleGetMoIndexes(ses, execCtx, ic)
+		convey.So(err, convey.ShouldBeNil)
+
+		// Verify result set
+		mrs := ses.GetMysqlResultSet()
+		convey.So(mrs.GetColumnCount(), convey.ShouldEqual, uint64(4))
+		convey.So(mrs.GetRowCount(), convey.ShouldEqual, uint64(2))
+	})
+
+	convey.Convey("handleGetMoIndexes good path - without snapshot (use current timestamp)", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        "test_tenant",
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      1,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+		ses.mrs = &MysqlResultSet{}
+
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(1))
+
+		// Setup mock result for publication info query
+		pubQuerySQL := fmt.Sprintf(`SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			FROM mo_catalog.mo_pubs 
+			WHERE account_name = '%s' AND pub_name = '%s'`, "pub_account", "test_pub")
+		bh.sql2result[pubQuerySQL] = newMrsForPublicationInfo(
+			uint64(100), "pub_account", "test_pub", "test_db", uint64(1), "*", "test_tenant,all",
+		)
+
+		// Setup mock result for mo_indexes query without snapshot (current timestamp)
+		indexSQL := fmt.Sprintf("SELECT table_id, name, algo_table_type, index_table_name FROM mo_catalog.mo_indexes WHERE table_id = %d", 12345)
+		bh.sql2result[indexSQL] = newMrsForMoIndexes([][]interface{}{
+			{uint64(12345), "idx_primary", "", ""},
+		})
+
+		ic := &InternalCmdGetMoIndexes{
+			tableId:                 12345,
+			subscriptionAccountName: "pub_account",
+			publicationName:         "test_pub",
+			snapshotName:            "-", // Use "-" to indicate no snapshot
+		}
+
+		execCtx := &ExecCtx{
+			reqCtx: ctx,
+			ses:    ses,
+		}
+
+		err := handleGetMoIndexes(ses, execCtx, ic)
+		convey.So(err, convey.ShouldBeNil)
+
+		// Verify result set
+		mrs := ses.GetMysqlResultSet()
+		convey.So(mrs.GetColumnCount(), convey.ShouldEqual, uint64(4))
+		convey.So(mrs.GetRowCount(), convey.ShouldEqual, uint64(1))
+	})
+}
+
+// Test_handleInternalGetDdl_GoodPath tests the good path of handleInternalGetDdl
+func Test_handleInternalGetDdl_GoodPath(t *testing.T) {
+	convey.Convey("handleInternalGetDdl good path", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        "test_tenant",
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      1,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+		ses.mrs = &MysqlResultSet{}
+
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(1))
+
+		// Setup mock engine and txn handler
+		mockEng := mock_frontend.NewMockEngine(ctrl)
+		mockEng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+		mockTxnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		mockTxnOp.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+		mockTxnOp.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+		mockTxnOp.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		mockTxnOp.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		mockTxnOp.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
+		mockTxnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
+		mockTxnOp.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
+		mockTxnOp.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
+		// Setup TxnHandler with mock engine and txn
+		txnHandler := InitTxnHandler("", mockEng, ctx, mockTxnOp)
+		ses.txnHandler = txnHandler
+
+		// Setup mock result for publication info query
+		pubQuerySQL := fmt.Sprintf(`SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			FROM mo_catalog.mo_pubs 
+			WHERE account_name = '%s' AND pub_name = '%s'`, "pub_account", "test_pub")
+		bh.sql2result[pubQuerySQL] = newMrsForPublicationInfo(
+			uint64(100), "pub_account", "test_pub", "test_db", uint64(1), "*", "test_tenant,all",
+		)
+
+		// Setup mock result for snapshot record query
+		snapshotRecordSQL := fmt.Sprintf("select * from mo_catalog.mo_snapshots where sname = '%s'", "test_snapshot")
+		bh.sql2result[snapshotRecordSQL] = newMrsForSnapshotRecord(
+			"snap-001", "test_snapshot", int64(1234567890), "table", "sys", "test_db", "test_table", uint64(1),
+		)
+
+		// Stub ComputeDdlBatchWithSnapshotFunc to return a mock batch
+		mp := ses.GetMemPool()
+		mockBatch := newDdlBatchForTest(mp, [][]interface{}{
+			{"test_db", "test_table", int64(100), "CREATE TABLE test_table (id INT)"},
+		})
+
+		ddlStub := gostub.Stub(&ComputeDdlBatchWithSnapshotFunc, func(
+			ctx context.Context,
+			databaseName string,
+			tableName string,
+			eng engine.Engine,
+			mp *mpool.MPool,
+			txnOp TxnOperator,
+			snapshotTs int64,
+		) (*batch.Batch, error) {
+			return mockBatch, nil
+		})
+		defer ddlStub.Reset()
+
+		ic := &InternalCmdGetDdl{
+			snapshotName:            "test_snapshot",
+			subscriptionAccountName: "pub_account",
+			publicationName:         "test_pub",
+			level:                   "table",
+			dbName:                  "test_db",
+			tableName:               "test_table",
+		}
+
+		execCtx := &ExecCtx{
+			reqCtx: ctx,
+			ses:    ses,
+		}
+
+		err := handleInternalGetDdl(ses, execCtx, ic)
+		convey.So(err, convey.ShouldBeNil)
+
+		// Verify result set
+		mrs := ses.GetMysqlResultSet()
+		convey.So(mrs.GetColumnCount(), convey.ShouldEqual, uint64(4))
+		convey.So(mrs.GetRowCount(), convey.ShouldEqual, uint64(1))
+	})
+}
+
+// newDdlBatchForTest creates a batch for DDL test
+// columns: dbname, tablename, tableid, tablesql
+func newDdlBatchForTest(mp *mpool.MPool, records [][]interface{}) *batch.Batch {
+	bat := batch.New([]string{"dbname", "tablename", "tableid", "tablesql"})
+	bat.Vecs = []*vector.Vector{
+		vector.NewVec(types.T_varchar.ToType()),
+		vector.NewVec(types.T_varchar.ToType()),
+		vector.NewVec(types.T_int64.ToType()),
+		vector.NewVec(types.T_varchar.ToType()),
+	}
+
+	for _, record := range records {
+		_ = vector.AppendBytes(bat.Vecs[0], []byte(record[0].(string)), false, mp)
+		_ = vector.AppendBytes(bat.Vecs[1], []byte(record[1].(string)), false, mp)
+		_ = vector.AppendFixed[int64](bat.Vecs[2], record[2].(int64), false, mp)
+		_ = vector.AppendBytes(bat.Vecs[3], []byte(record[3].(string)), false, mp)
+	}
+	bat.SetRowCount(len(records))
+
+	return bat
 }

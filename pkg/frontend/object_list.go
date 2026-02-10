@@ -48,12 +48,30 @@ var ObjectListPermissionChecker = func(ctx context.Context, ses *Session, pubAcc
 	return accountID, err
 }
 
+// ProcessObjectListFunc is a function variable for ProcessObjectList to allow stubbing in tests
+var ProcessObjectListFunc = processObjectListImpl
+
 // ProcessObjectList is the core function that processes OBJECTLIST statement
 // It returns a batch with "table name", "db name" columns plus object list columns
 // This function can be used by both handleObjectList and test utilities
 // If dbname is empty, it will iterate over all databases
 // If tablename is empty (but dbname is not), it will iterate over all tables in the database
 func ProcessObjectList(
+	ctx context.Context,
+	stmt *tree.ObjectList,
+	eng engine.Engine,
+	txnOp client.TxnOperator,
+	mp *mpool.MPool,
+	resolveSnapshot func(ctx context.Context, snapshotName string) (*timestamp.Timestamp, error),
+	getCurrentTS func() types.TS,
+	dbname string,
+	tablename string,
+) (*batch.Batch, error) {
+	return ProcessObjectListFunc(ctx, stmt, eng, txnOp, mp, resolveSnapshot, getCurrentTS, dbname, tablename)
+}
+
+// processObjectListImpl is the actual implementation of ProcessObjectList
+func processObjectListImpl(
 	ctx context.Context,
 	stmt *tree.ObjectList,
 	eng engine.Engine,
