@@ -49,17 +49,23 @@
 #  % MO_CL_CUDA=1 make
 
 # where am I
+ifeq ($(GO),)
+	GO=go
+endif
+
 ROOT_DIR = $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 BIN_NAME := mo-service
 UNAME_S := $(shell uname -s | tr A-Z a-z)
 UNAME_M := $(shell uname -m)
-GOPATH := $(shell go env GOPATH)
-GO_VERSION=$(shell go version)
+GOPATH := $(shell $(GO) env GOPATH)
+GO_VERSION=$(shell $(GO) version)
 BRANCH_NAME=$(shell git rev-parse --abbrev-ref HEAD)
 LAST_COMMIT_ID=$(shell git rev-parse --short HEAD)
 BUILD_TIME=$(shell date +%s)
 MO_VERSION=$(shell git symbolic-ref -q --short HEAD || git describe --tags --exact-match)
-GO_MODULE=$(shell go list -m)
+GO_MODULE=$(shell $(GO) list -m)
+GO_MAJOR_VERSION = $(shell $(GO) version | cut -c 14- | cut -d' ' -f1 | cut -d'.' -f1)
+GO_MINOR_VERSION = $(shell $(GO) version | cut -c 14- | cut -d' ' -f1 | cut -d'.' -f2)
 
 # check the MUSL_TARGET from https://musl.cc
 # make MUSL_TARGET=aarch64-linux musl to cross make the aarch64 linux executable
@@ -77,6 +83,7 @@ MUSL_CXX=$(MUSL_DIR)/bin/$(MUSL_TARGET)-musl-g++
 ifneq ($(GOARCH)$(TARGET_ARCH)$(GOOS)$(TARGET_OS),)
 $(error cross compilation has been disabled)
 endif
+
 
 ###############################################################################
 # default target
@@ -151,8 +158,8 @@ help:
 
 .PHONY: vendor-build
 vendor-build:
-	$(info [go mod vendor])
-	@go mod vendor
+	$(info [$(GO) mod vendor])
+	@$(GO) mod vendor
 
 ###############################################################################
 # code generation
@@ -161,7 +168,7 @@ vendor-build:
 .PHONY: config
 config:
 	$(info [Create build config])
-	@go mod tidy
+	@$(GO) mod tidy
 
 .PHONY: generate-pb
 generate-pb:
@@ -182,6 +189,19 @@ RACE_OPT :=
 DEBUG_OPT :=
 CGO_DEBUG_OPT :=
 TAGS :=
+GOTAGS :=
+GOEXPERIMENT_OPT :=
+
+ifeq ("$(UNAME_M)", "x86_64")
+  ifeq ($(shell expr $(GO_MAJOR_VERSION) \>= 1), 1)
+    ifeq ($(shell expr $(GO_MINOR_VERSION) \>= 26), 1)
+	#GOEXPERIMENT_OPT=GOEXPERIMENT=simd
+    endif
+  endif
+  ifneq ($(GOAMD64),)
+	GOEXPERIMENT_OPT+=GOAMD64=$(GOAMD64)
+  endif
+endif
 
 ifeq ($(MO_CL_CUDA),1)
   ifeq ($(CONDA_PREFIX),)
@@ -191,11 +211,11 @@ ifeq ($(MO_CL_CUDA),1)
 	CUVS_LDFLAGS := -L$(CONDA_PREFIX)/envs/go/lib -lcuvs -lcuvs_c
 	CUDA_CFLAGS := -I/usr/local/cuda/include $(CUVS_CFLAGS)
 	CUDA_LDFLAGS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64 -lcudart $(CUVS_LDFLAGS) -lstdc++
-	TAGS += -tags "gpu"
+	TAGS += gpu
 endif
 
 ifeq ($(TYPECHECK),1)
-	TAGS += -tags "typecheck"
+	TAGS += typecheck
 endif
 
 CGO_OPTS :=CGO_CFLAGS="-I$(THIRDPARTIES_INSTALL_DIR)/include $(CUDA_CFLAGS)"
@@ -207,6 +227,10 @@ endif
 
 ifeq ($(GOBUILD_OPT),)
 	GOBUILD_OPT :=
+endif
+
+ifneq ($(TAGS),)
+	GOTAGS := -tags "$(TAGS)"
 endif
 
 .PHONY: cgo
@@ -222,7 +246,7 @@ thirdparties:
 .PHONY: build
 build: config cgo thirdparties
 	$(info [Build binary])
-	$(CGO_OPTS) go build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
+	$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GOTAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
 # https://wiki.musl-libc.org/getting-started.html
 # https://musl.cc/
@@ -248,17 +272,17 @@ musl-thirdparties: musl-install
 .PHONY: musl
 musl: override CGO_OPTS += CC=$(MUSL_CC)
 musl: override GOLDFLAGS:=-ldflags="--linkmode 'external' --extldflags '-static -L$(THIRDPARTIES_INSTALL_DIR)/lib -lstdc++ -Wl,-rpath,\$${ORIGIN}/lib' $(VERSION_INFO)"
-musl: override TAGS := -tags musl
+musl: override GOTAGS := -tags musl
 musl: musl-install musl-cgo config musl-thirdparties
 musl:
 	$(info [Build binary(musl)])
-	$(CGO_OPTS) go build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
+	$(CGO_OPTS) $(GO) build $(GOTAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
 # build mo-tool
 .PHONY: mo-tool
 mo-tool: config cgo thirdparties
 	$(info [Build mo-tool tool])
-	$(CGO_OPTS) go build $(GOLDFLAGS) -o mo-tool ./cmd/mo-tool
+	$(CGO_OPTS) $(GO) build $(GOLDFLAGS) -o mo-tool ./cmd/mo-tool
 
 # build mo-service binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory
@@ -1007,7 +1031,7 @@ launch-minio-debug: debug dev-up-minio-local
 clean:
 	$(info [Clean up])
 	$(info Clean go test cache)
-	@go clean -testcache
+	@$(GO) clean -testcache
 	rm -f $(BIN_NAME)
 	rm -rf $(ROOT_DIR)/vendor
 	rm -rf $(MUSL_DIR)
@@ -1027,12 +1051,12 @@ fmt:
 .PHONY: install-static-check-tools
 install-static-check-tools:
 	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(GOPATH)/bin v2.6.2
-	@go install github.com/matrixorigin/linter/cmd/molint@latest
-	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
+	@$(GO) install github.com/matrixorigin/linter/cmd/molint@latest
+	@$(GO) install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 
 .PHONY: static-check
 static-check: config err-check
-	$(CGO_OPTS) go vet -vettool=`which molint` ./...
+	$(CGO_OPTS) $(GO) vet -vettool=`which molint` ./...
 	$(CGO_OPTS) license-eye -c .licenserc.yml header check
 	$(CGO_OPTS) license-eye -c .licenserc.yml dep check
 	$(CGO_OPTS) golangci-lint run -v -c .golangci.yml ./...
