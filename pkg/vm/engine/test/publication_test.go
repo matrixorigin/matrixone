@@ -504,6 +504,7 @@ func TestExecuteIteration1(t *testing.T) {
 		nil,                  // GetChunkWorker
 		nil,                  // WriteObjectWorker
 		nil,                  // syncProtectionWorker
+		nil,                  // syncProtectionRetryOpt
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -616,6 +617,7 @@ func TestExecuteIteration1(t *testing.T) {
 		nil,                  // GetChunkWorker
 		nil,                  // WriteObjectWorker
 		nil,                  // syncProtectionWorker
+		nil,                  // syncProtectionRetryOpt
 	)
 
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
@@ -747,6 +749,7 @@ func TestExecuteIteration1(t *testing.T) {
 		nil,                  // GetChunkWorker
 		nil,                  // WriteObjectWorker
 		nil,                  // syncProtectionWorker
+		nil,                  // syncProtectionRetryOpt
 	)
 
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
@@ -1038,6 +1041,7 @@ func TestExecuteIterationDatabaseLevel(t *testing.T) {
 		nil,                  // GetChunkWorker
 		nil,                  // WriteObjectWorker
 		nil,                  // syncProtectionWorker
+		nil,                  // syncProtectionRetryOpt
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -1354,6 +1358,7 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 		nil,                  // GetChunkWorker
 		nil,                  // WriteObjectWorker
 		nil,                  // syncProtectionWorker
+		nil,                  // syncProtectionRetryOpt
 	)
 
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
@@ -1514,6 +1519,7 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 		nil,                  // GetChunkWorker
 		nil,                  // WriteObjectWorker
 		nil,                  // syncProtectionWorker
+		nil,                  // syncProtectionRetryOpt
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -1914,6 +1920,7 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 		nil,                  // GetChunkWorker
 		nil,                  // WriteObjectWorker
 		nil,                  // syncProtectionWorker
+		nil,                  // syncProtectionRetryOpt
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -1963,6 +1970,7 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 		nil,                  // GetChunkWorker
 		nil,                  // WriteObjectWorker
 		nil,                  // syncProtectionWorker
+		nil,                  // syncProtectionRetryOpt
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -2235,6 +2243,7 @@ func TestExecuteIterationWithCommitFailedInjection(t *testing.T) {
 		nil,                  // GetChunkWorker
 		nil,                  // WriteObjectWorker
 		nil,                  // syncProtectionWorker
+		nil,                  // syncProtectionRetryOpt
 	)
 	assert.NoError(t, err)
 
@@ -2748,6 +2757,7 @@ func TestCCPRCreateDelete(t *testing.T) {
 		nil,                  // GetChunkWorker
 		nil,                  // WriteObjectWorker
 		nil,                  // syncProtectionWorker
+		nil,                  // syncProtectionRetryOpt
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -2870,6 +2880,7 @@ func TestCCPRCreateDelete(t *testing.T) {
 		nil,                  // GetChunkWorker
 		nil,                  // WriteObjectWorker
 		nil,                  // syncProtectionWorker
+		nil,                  // syncProtectionRetryOpt
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -3138,6 +3149,7 @@ func TestCCPRAlterTable(t *testing.T) {
 		nil,                  // GetChunkWorker
 		nil,                  // WriteObjectWorker
 		nil,                  // syncProtectionWorker
+		nil,                  // syncProtectionRetryOpt
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -3287,6 +3299,7 @@ func TestCCPRAlterTable(t *testing.T) {
 		nil,                  // GetChunkWorker
 		nil,                  // WriteObjectWorker
 		nil,                  // syncProtectionWorker
+		nil,                  // syncProtectionRetryOpt
 	)
 
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
@@ -3582,6 +3595,7 @@ func TestCCPRErrorHandling1(t *testing.T) {
 		nil,                  // GetChunkWorker
 		nil,                  // WriteObjectWorker
 		nil,                  // syncProtectionWorker
+		nil,                  // syncProtectionRetryOpt
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -3688,6 +3702,7 @@ func TestCCPRErrorHandling1(t *testing.T) {
 		nil,                  // GetChunkWorker
 		nil,                  // WriteObjectWorker
 		nil,                  // syncProtectionWorker
+		nil,                  // syncProtectionRetryOpt
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -3787,6 +3802,7 @@ func TestCCPRErrorHandling1(t *testing.T) {
 		nil,                  // GetChunkWorker
 		nil,                  // WriteObjectWorker
 		nil,                  // syncProtectionWorker
+		nil,                  // syncProtectionRetryOpt
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -3870,6 +3886,7 @@ func TestCCPRErrorHandling1(t *testing.T) {
 		nil,                  // GetChunkWorker
 		nil,                  // WriteObjectWorker
 		nil,                  // syncProtectionWorker
+		nil,                  // syncProtectionRetryOpt
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -4057,6 +4074,7 @@ func TestCCPRDDLAccountLevel(t *testing.T) {
 		nil,                  // GetChunkWorker
 		nil,                  // WriteObjectWorker
 		nil,                  // syncProtectionWorker
+		nil,                  // syncProtectionRetryOpt
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -4163,6 +4181,7 @@ func TestCCPRDDLAccountLevel(t *testing.T) {
 		nil,                  // GetChunkWorker
 		nil,                  // WriteObjectWorker
 		nil,                  // syncProtectionWorker
+		nil,                  // syncProtectionRetryOpt
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -4849,6 +4868,7 @@ func TestCCPRErrorHandling2(t *testing.T) {
 		nil,                  // GetChunkWorker
 		nil,                  // WriteObjectWorker
 		nil,                  // syncProtectionWorker
+		nil,                  // syncProtectionRetryOpt
 		&publication.SQLExecutorRetryOption{
 			MaxRetries:    2,
 			RetryInterval: 100 * time.Millisecond,
@@ -4943,6 +4963,7 @@ func TestCCPRErrorHandling2(t *testing.T) {
 		nil,                  // GetChunkWorker
 		nil,                  // WriteObjectWorker
 		nil,                  // syncProtectionWorker
+		nil,                  // syncProtectionRetryOpt
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -5206,6 +5227,7 @@ func TestExecuteIterationWithStaleRead(t *testing.T) {
 		nil,                  // GetChunkWorker
 		nil,                  // WriteObjectWorker
 		nil,                  // syncProtectionWorker
+		nil,                  // syncProtectionRetryOpt
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -5292,6 +5314,7 @@ func TestExecuteIterationWithStaleRead(t *testing.T) {
 		nil,                  // GetChunkWorker
 		nil,                  // WriteObjectWorker
 		nil,                  // syncProtectionWorker
+		nil,                  // syncProtectionRetryOpt
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -5366,6 +5389,7 @@ func TestExecuteIterationWithStaleRead(t *testing.T) {
 		nil,                  // GetChunkWorker
 		nil,                  // WriteObjectWorker
 		nil,                  // syncProtectionWorker
+		nil,                  // syncProtectionRetryOpt
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -5420,6 +5444,359 @@ func TestExecuteIterationWithStaleRead(t *testing.T) {
 
 	// Should have 10 rows (same as source table)
 	require.Equal(t, int64(10), rowCount, "destination table should have 10 rows after recovery from stale read")
+
+	err = txn.Commit(queryDestCtx)
+	require.NoError(t, err)
+
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+}
+
+// TestCCPRSyncProtectionRetry tests the sync protection retry mechanism
+// when GC is running on downstream
+func TestCCPRSyncProtectionRetry(t *testing.T) {
+	catalog.SetupDefines("")
+
+	var (
+		srcAccountID  = catalog.System_Account
+		destAccountID = uint32(2)
+		cnUUID        = ""
+	)
+
+	// Setup source account context
+	srcCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	srcCtx = context.WithValue(srcCtx, defines.TenantIDKey{}, srcAccountID)
+	srcCtxWithTimeout, cancelSrc := context.WithTimeout(srcCtx, time.Minute*5)
+	defer cancelSrc()
+
+	// Setup destination account context
+	destCtx, cancelDest := context.WithCancel(context.Background())
+	defer cancelDest()
+	destCtx = context.WithValue(destCtx, defines.TenantIDKey{}, destAccountID)
+	destCtxWithTimeout, cancelDestTimeout := context.WithTimeout(destCtx, time.Minute*5)
+	defer cancelDestTimeout()
+
+	// Create engines with source account context
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(srcCtx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(srcCtx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	// Register mock auto increment service
+	mockIncrService := NewMockAutoIncrementService(cnUUID)
+	incrservice.SetAutoIncrementServiceByID("", mockIncrService)
+	defer mockIncrService.Close()
+
+	// Create mo_indexes table for source account
+	err := exec_sql(disttaeEngine, srcCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
+	require.NoError(t, err)
+
+	// Create mo_ccpr_log table using system account context
+	systemCtx := context.WithValue(srcCtxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
+	require.NoError(t, err)
+
+	// Create mo_ccpr_tables and mo_ccpr_dbs tables using system account context
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprTablesDDL)
+	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprDbsDDL)
+	require.NoError(t, err)
+
+	// Create mo_snapshots table for source account
+	moSnapshotsDDL := frontend.MoCatalogMoSnapshotsDDL
+	err = exec_sql(disttaeEngine, srcCtxWithTimeout, moSnapshotsDDL)
+	require.NoError(t, err)
+
+	// Create system tables for destination account
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
+	require.NoError(t, err)
+
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
+	require.NoError(t, err)
+
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoAutoIncrTableDDL)
+	require.NoError(t, err)
+
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoForeignKeysDDL)
+	require.NoError(t, err)
+
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoSnapshotsDDL)
+	require.NoError(t, err)
+
+	// Step 1: Create source database and table in source account
+	srcDBName := "src_db"
+	srcTableName := "src_table"
+	schema := catalog2.MockSchemaAll(4, 3)
+	schema.Name = srcTableName
+
+	// Create database and table in source account
+	txn, err := disttaeEngine.NewTxnOperator(srcCtxWithTimeout, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	err = disttaeEngine.Engine.Create(srcCtxWithTimeout, srcDBName, txn)
+	require.NoError(t, err)
+
+	db, err := disttaeEngine.Engine.Database(srcCtxWithTimeout, srcDBName, txn)
+	require.NoError(t, err)
+
+	defs, err := testutil.EngineTableDefBySchema(schema)
+	require.NoError(t, err)
+
+	err = db.Create(srcCtxWithTimeout, srcTableName, defs)
+	require.NoError(t, err)
+
+	rel, err := db.Relation(srcCtxWithTimeout, srcTableName, nil)
+	require.NoError(t, err)
+
+	// Insert data into source table
+	bat := catalog2.MockBatch(schema, 10)
+	defer bat.Close()
+	err = rel.Write(srcCtxWithTimeout, containers.ToCNBatch(bat))
+	require.NoError(t, err)
+
+	err = txn.Commit(srcCtxWithTimeout)
+	require.NoError(t, err)
+
+	// Step 2: Write mo_ccpr_log table
+	taskID := uuid.New().String()
+	iterationLSN1 := uint64(0)
+	subscriptionName := "test_subscription_sync_protection_retry"
+
+	insertSQL := fmt.Sprintf(
+		`INSERT INTO mo_catalog.mo_ccpr_log (
+			task_id, 
+			subscription_name,
+			subscription_account_name,
+			sync_level, 
+			account_id,
+			db_name, 
+			table_name, 
+			upstream_conn, 
+			sync_config, 
+			state, 
+			iteration_state, 
+			iteration_lsn, 
+			cn_uuid
+		) VALUES (
+			'%s', 
+			'%s',
+			'test_account',
+			'table', 
+			%d,
+			'%s', 
+			'%s', 
+			'%s', 
+			'{}', 
+			%d, 
+			%d, 
+			%d, 
+			'%s'
+		)`,
+		taskID,
+		subscriptionName,
+		destAccountID,
+		srcDBName,
+		srcTableName,
+		fmt.Sprintf("%s:%d", publication.InternalSQLExecutorType, srcAccountID),
+		publication.SubscriptionStateRunning,
+		publication.IterationStateRunning,
+		iterationLSN1,
+		cnUUID,
+	)
+
+	// Write mo_ccpr_log using system account context
+	err = exec_sql(disttaeEngine, systemCtx, insertSQL)
+	require.NoError(t, err)
+
+	// Step 3: Create upstream SQL helper factory
+	upstreamSQLHelperFactory := func(
+		txnOp client.TxnOperator,
+		engine engine.Engine,
+		accountID uint32,
+		exec executor.SQLExecutor,
+		txnClient client.TxnClient,
+	) publication.UpstreamSQLHelper {
+		return NewUpstreamSQLHelper(txnOp, engine, accountID, exec, txnClient)
+	}
+
+	// Create mpool for ExecuteIteration
+	mp, err := mpool.NewMPool("test_sync_protection_retry", 0, mpool.NoFixed)
+	require.NoError(t, err)
+
+	// Step 4: Create UTHelper for checkpointing
+	checkpointDone1 := make(chan struct{}, 1)
+	utHelper1 := &checkpointUTHelper{
+		taeHandler:    taeHandler,
+		disttaeEngine: disttaeEngine,
+		checkpointC:   checkpointDone1,
+	}
+
+	// Enable fault injection
+	fault.Enable()
+	defer fault.Disable()
+
+	// Inject "gc_status GC is running" error - this simulates GC running on downstream
+	rmFn, err := objectio.InjectUpstreamSQLHelper("gc_status GC is running")
+	require.NoError(t, err)
+
+	// Execute first ExecuteIteration with no retry (InitialInterval: 0)
+	// This should fail immediately because GC is running and no retry is configured
+	err = publication.ExecuteIteration(
+		context.Background(),
+		cnUUID,
+		disttaeEngine.Engine,
+		disttaeEngine.GetTxnClient(),
+		taskID,
+		iterationLSN1,
+		upstreamSQLHelperFactory,
+		mp,
+		utHelper1,
+		100*time.Millisecond, // snapshotFlushInterval for test
+		nil,                  // FilterObjectWorker
+		nil,                  // GetChunkWorker
+		nil,                  // WriteObjectWorker
+		nil,                  // syncProtectionWorker
+		&publication.SyncProtectionRetryOption{InitialInterval: 0}, // No retry
+	)
+
+	// Signal checkpoint goroutine to stop
+	close(checkpointDone1)
+
+	// First iteration should fail with GC is running error (no retry means fail immediately)
+	require.NoError(t, err, "First ExecuteIteration should flush error but return nil")
+
+	// Step 5: Check mo_ccpr_log after first iteration - should have error message
+	querySQL1 := fmt.Sprintf(
+		`SELECT iteration_lsn, state, iteration_state, error_message 
+		FROM mo_catalog.mo_ccpr_log WHERE task_id = '%s'`,
+		taskID,
+	)
+
+	v, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
+	require.True(t, ok)
+	exec := v.(executor.SQLExecutor)
+
+	querySystemCtx := context.WithValue(destCtxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
+	txn, err = disttaeEngine.NewTxnOperator(querySystemCtx, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	res1, err := exec.Exec(querySystemCtx, querySQL1, executor.Options{}.WithTxn(txn))
+	require.NoError(t, err)
+	defer res1.Close()
+
+	var iterationLSNFromDB uint64
+	var stateFromDB int8
+	var iterationStateFromDB int8
+	var errorMessageFromDB string
+	res1.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		require.Equal(t, 1, rows)
+		iterationLSNFromDB = uint64(vector.GetFixedAtWithTypeCheck[int64](cols[0], 0))
+		stateFromDB = vector.GetFixedAtWithTypeCheck[int8](cols[1], 0)
+		iterationStateFromDB = vector.GetFixedAtWithTypeCheck[int8](cols[2], 0)
+		errorMessageFromDB = cols[3].GetStringAt(0)
+		return true
+	})
+
+	// First iteration should have error message about GC is running
+	require.Equal(t, iterationLSN1, iterationLSNFromDB, "iteration_lsn should not change after failed iteration")
+	require.Equal(t, publication.SubscriptionStateRunning, stateFromDB, "state should remain running (retryable error)")
+	require.Equal(t, publication.IterationStateCompleted, iterationStateFromDB, "iteration_state should be completed (retryable)")
+	require.Contains(t, errorMessageFromDB, "GC is running", "error_message should contain GC is running")
+
+	err = txn.Commit(querySystemCtx)
+	require.NoError(t, err)
+
+	// Step 6: Remove the injection and run second iteration
+	rmFn()
+
+	// Step 6.5: Update iteration_state back to running for second iteration
+	updateIterationStateSQL := fmt.Sprintf(
+		`UPDATE mo_catalog.mo_ccpr_log SET iteration_state = %d WHERE task_id = '%s'`,
+		publication.IterationStateRunning,
+		taskID,
+	)
+	err = exec_sql(disttaeEngine, systemCtx, updateIterationStateSQL)
+	require.NoError(t, err)
+
+	// Step 7: Run second iteration - should succeed now that GC is not running
+	checkpointDone2 := make(chan struct{}, 1)
+	utHelper2 := &checkpointUTHelper{
+		taeHandler:    taeHandler,
+		disttaeEngine: disttaeEngine,
+		checkpointC:   checkpointDone2,
+	}
+
+	err = publication.ExecuteIteration(
+		context.Background(),
+		cnUUID,
+		disttaeEngine.Engine,
+		disttaeEngine.GetTxnClient(),
+		taskID,
+		iterationLSN1, // Same LSN since first iteration was retryable
+		upstreamSQLHelperFactory,
+		mp,
+		utHelper2,
+		100*time.Millisecond, // snapshotFlushInterval for test
+		nil,                  // FilterObjectWorker
+		nil,                  // GetChunkWorker
+		nil,                  // WriteObjectWorker
+		nil,                  // syncProtectionWorker
+		nil,                  // syncProtectionRetryOpt (use default)
+	)
+
+	// Signal checkpoint goroutine to stop
+	close(checkpointDone2)
+
+	// Second iteration should succeed
+	require.NoError(t, err, "Second ExecuteIteration should complete successfully")
+
+	// Step 8: Verify final state in mo_ccpr_log
+	txn, err = disttaeEngine.NewTxnOperator(querySystemCtx, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	res2, err := exec.Exec(querySystemCtx, querySQL1, executor.Options{}.WithTxn(txn))
+	require.NoError(t, err)
+	defer res2.Close()
+
+	res2.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		require.Equal(t, 1, rows)
+		iterationLSNFromDB = uint64(vector.GetFixedAtWithTypeCheck[int64](cols[0], 0))
+		stateFromDB = vector.GetFixedAtWithTypeCheck[int8](cols[1], 0)
+		iterationStateFromDB = vector.GetFixedAtWithTypeCheck[int8](cols[2], 0)
+		errorMessageFromDB = cols[3].GetStringAt(0)
+		return true
+	})
+
+	// Second iteration should succeed
+	require.Equal(t, iterationLSN1+1, iterationLSNFromDB, "iteration_lsn should increment after successful iteration")
+	require.Equal(t, publication.SubscriptionStateRunning, stateFromDB, "state should be running")
+	require.Equal(t, publication.IterationStateCompleted, iterationStateFromDB, "iteration_state should be completed")
+	require.Empty(t, errorMessageFromDB, "error_message should be empty after successful iteration")
+
+	err = txn.Commit(querySystemCtx)
+	require.NoError(t, err)
+
+	// Step 9: Verify data in destination table
+	checkRowCountSQL := fmt.Sprintf(`SELECT COUNT(*) FROM %s.%s`, srcDBName, srcTableName)
+	queryDestCtx := context.WithValue(destCtxWithTimeout, defines.TenantIDKey{}, destAccountID)
+	txn, err = disttaeEngine.NewTxnOperator(queryDestCtx, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	rowCountRes, err := exec.Exec(queryDestCtx, checkRowCountSQL, executor.Options{}.WithTxn(txn))
+	require.NoError(t, err)
+	defer rowCountRes.Close()
+
+	var rowCount int64
+	rowCountRes.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		require.Equal(t, 1, rows)
+		rowCount = vector.GetFixedAtWithTypeCheck[int64](cols[0], 0)
+		return true
+	})
+
+	// Should have 10 rows (same as source table)
+	require.Equal(t, int64(10), rowCount, "destination table should have 10 rows after successful sync")
 
 	err = txn.Commit(queryDestCtx)
 	require.NoError(t, err)

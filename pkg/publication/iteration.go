@@ -50,6 +50,24 @@ const (
 	InternalSQLExecutorType = "internal_sql_executor"
 )
 
+// SyncProtectionRetryOption configures retry behavior for sync protection registration
+type SyncProtectionRetryOption struct {
+	// InitialInterval is the initial retry interval (default: 1s)
+	InitialInterval time.Duration
+	// MaxTotalTime is the maximum total time to retry (default: 5min)
+	// If 0 or negative, no retry is performed (fail immediately on first error)
+	MaxTotalTime time.Duration
+}
+
+// DefaultSyncProtectionRetryOption returns the default retry option
+// Default: initial 1s, exponential backoff (x2), max total time 5min
+func DefaultSyncProtectionRetryOption() *SyncProtectionRetryOption {
+	return &SyncProtectionRetryOption{
+		InitialInterval: 1 * time.Second,
+		MaxTotalTime:    5 * time.Minute,
+	}
+}
+
 // UTHelper is an interface for unit test helpers
 // It provides hooks for testing purposes
 type UTHelper interface {
@@ -1048,6 +1066,7 @@ func updateObjectStatsFlags(stats *objectio.ObjectStats, isTombstone bool, hasFa
 // snapshotFlushInterval: interval between retries when waiting for snapshot to be flushed (default: 1min if 0)
 // executorRetryOpt: retry options for executor operations (nil to use default)
 // sqlExecutorRetryOpt: retry options for SQL executor operations (nil to use default)
+// syncProtectionRetryOpt: retry options for sync protection registration (nil to use default: 1s initial, x2 backoff, 5min max)
 func ExecuteIteration(
 	ctx context.Context,
 	cnUUID string,
@@ -1063,6 +1082,7 @@ func ExecuteIteration(
 	getChunkWorker GetChunkWorker,
 	writeObjectWorker WriteObjectWorker,
 	syncProtectionWorker Worker,
+	syncProtectionRetryOpt *SyncProtectionRetryOption,
 	sqlExecutorRetryOpts ...*SQLExecutorRetryOption,
 ) (err error) {
 	var iterationCtx *IterationContext
@@ -1343,9 +1363,15 @@ func ExecuteIteration(
 	// When syncProtectionWorker is nil (e.g., in tests), skip sync protection entirely
 	// Register sync protection on downstream with retry for retryable errors
 	// Retryable errors: GC is running, max count reached
-	const syncProtectionMaxRetries = 20
-	const syncProtectionRetryInterval = 10 * time.Second
-	for attempt := 0; attempt < syncProtectionMaxRetries; attempt++ {
+	// Use exponential backoff: initial interval, then x2 each time, up to max total time
+	retryOpt := syncProtectionRetryOpt
+	if retryOpt == nil {
+		retryOpt = DefaultSyncProtectionRetryOption()
+	}
+	startTime := time.Now()
+	currentInterval := retryOpt.InitialInterval
+	attempt := 0
+	for {
 		var syncProtectionRetryable bool
 		syncProtectionJobID, currentTTLExpireTS, syncProtectionRetryable, err = RegisterSyncProtectionOnDownstream(
 			ctx,
@@ -1361,25 +1387,35 @@ func ExecuteIteration(
 			err = moerr.NewInternalErrorf(ctx, "failed to register sync protection on downstream: %v", err)
 			return
 		}
-		// Retryable error, log and retry
+		// Check if retry is disabled (InitialInterval <= 0 or MaxTotalTime <= 0)
+		if retryOpt.InitialInterval <= 0 || retryOpt.MaxTotalTime <= 0 {
+			// No retry, return the error immediately
+			return
+		}
+		// Check if we've exceeded max total time
+		elapsed := time.Since(startTime)
+		if elapsed >= retryOpt.MaxTotalTime {
+			err = moerr.NewInternalErrorf(ctx, "failed to register sync protection on downstream after %v: %v", elapsed, err)
+			return
+		}
+		// Retryable error, log and retry with exponential backoff
+		attempt++
 		logutil.Warn("ccpr-iteration sync protection registration retryable error, will retry",
 			zap.String("task_id", iterationCtx.TaskID),
-			zap.Int("attempt", attempt+1),
-			zap.Int("max_retries", syncProtectionMaxRetries),
+			zap.Int("attempt", attempt),
+			zap.Duration("elapsed", elapsed),
+			zap.Duration("max_total_time", retryOpt.MaxTotalTime),
+			zap.Duration("next_interval", currentInterval),
 			zap.Error(err),
 		)
-		if attempt < syncProtectionMaxRetries-1 {
-			select {
-			case <-ctx.Done():
-				err = ctx.Err()
-				return
-			case <-time.After(syncProtectionRetryInterval):
-			}
+		select {
+		case <-ctx.Done():
+			err = ctx.Err()
+			return
+		case <-time.After(currentInterval):
 		}
-	}
-	if err != nil {
-		err = moerr.NewInternalErrorf(ctx, "failed to register sync protection on downstream after %d retries: %v", syncProtectionMaxRetries, err)
-		return
+		// Exponential backoff: double the interval for next retry
+		currentInterval *= 2
 	}
 
 	logutil.Info("ccpr-iteration registered sync protection on downstream",

@@ -59,6 +59,8 @@ const (
 
 	FJ_PublicationSnapshotFinished = "fj/publication/snapshot/finished"
 
+	FJ_UpstreamSQLHelper = "fj/publication/upstream/sqlhelper"
+
 	FJ_WALReplayFailed = "fj/wal/replay/failed"
 
 	FJ_CDCHandleSlow             = "fj/cdc/handleslow"
@@ -722,5 +724,28 @@ func InjectPublicationSnapshotFinished(msg string) (rmFault func() (bool, error)
 
 func PublicationSnapshotFinishedInjected() (string, bool) {
 	_, sarg, injected := fault.TriggerFault(FJ_PublicationSnapshotFinished)
+	return sarg, injected
+}
+
+func InjectUpstreamSQLHelper(msg string) (rmFault func() (bool, error), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_UpstreamSQLHelper,
+		":::",
+		"echo",
+		0,
+		msg,
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() (ok bool, err error) {
+		return fault.RemoveFaultPoint(context.Background(), FJ_UpstreamSQLHelper)
+	}
+	return
+}
+
+func UpstreamSQLHelperInjected() (string, bool) {
+	_, sarg, injected := fault.TriggerFault(FJ_UpstreamSQLHelper)
 	return sarg, injected
 }

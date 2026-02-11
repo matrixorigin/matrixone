@@ -485,6 +485,7 @@ func (w *worker) onItem(taskCtx *TaskContext) {
 		w.getChunkWorker,
 		w.writeObjectWorker,
 		w,   // syncProtectionWorker (pass worker itself for keepalive management)
+		nil, // syncProtectionRetryOpt (use default: 1s initial, x2 backoff, 5min max)
 		nil, // sqlExecutorRetryOpt (use default)
 	)
 	// Task failure is usually caused by CN UUID or LSN validation errors.

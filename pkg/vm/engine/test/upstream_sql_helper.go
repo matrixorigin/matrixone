@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/publication"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -1420,11 +1421,37 @@ func (h *UpstreamSQLHelper) handleCheckSnapshotFlushedCmd(
 	}), nil
 }
 
-// handleGCStatusCmd handles the mo_ctl('dn', 'gc_status', ”) command
+// handleGCStatusCmd handles the mo_ctl('dn', 'gc_status', ") command
 // Returns a successful GC status response (not running, no protections)
+// Supports fault injection: if msg starts with "gc_status ", returns the rest as error in result
 func (h *UpstreamSQLHelper) handleGCStatusCmd(
 	ctx context.Context,
 ) (bool, *publication.Result, error) {
+	// Check for fault injection: msg format is "requesttype errorMessage"
+	// e.g., "gc_status GC is running"
+	if msg, injected := objectio.UpstreamSQLHelperInjected(); injected && strings.HasPrefix(msg, "gc_status ") {
+		errMsg := strings.TrimPrefix(msg, "gc_status ")
+		logutil.Info("UpstreamSQLHelper: gc_status fault injection triggered", zap.String("error", errMsg))
+
+		// Return a result that indicates GC is running
+		responseJSON := fmt.Sprintf(`{"running": true, "protections": 0, "ts": %d}`, time.Now().UnixNano())
+
+		mp := mpool.MustNewZero()
+		bat := batch.New([]string{"result"})
+		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		err := vector.AppendBytes(bat.Vecs[0], []byte(responseJSON), false, mp)
+		if err != nil {
+			bat.Clean(mp)
+			return true, nil, err
+		}
+		bat.SetRowCount(1)
+
+		return true, h.convertExecutorResult(executor.Result{
+			Batches: []*batch.Batch{bat},
+			Mp:      mp,
+		}), nil
+	}
+
 	logutil.Info("UpstreamSQLHelper: handling gc_status command, returning success")
 
 	// Return successful GC status: not running, 0 protections, current timestamp

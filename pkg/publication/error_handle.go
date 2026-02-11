@@ -345,8 +345,27 @@ func (StaleReadClassifier) IsRetryable(err error) bool {
 	return false
 }
 
+// GCRunningClassifier recognises GC running errors that are retryable.
+// When GC is running on downstream, sync protection registration should retry.
+type GCRunningClassifier struct{}
+
+// IsRetryable implements ErrorClassifier.
+func (GCRunningClassifier) IsRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errMsg := err.Error()
+	// Check for GC running errors on downstream
+	if strings.Contains(errMsg, "GC is running") {
+		return true
+	}
+
+	return false
+}
+
 // DownstreamCommitClassifier is used when committing to downstream.
-// It combines default, mysql, commit, and ut injection classifiers.
+// It combines default, mysql, commit, ut injection, stale read, and GC running classifiers.
 type DownstreamCommitClassifier struct {
 	MultiClassifier
 }
@@ -360,6 +379,7 @@ func NewDownstreamCommitClassifier() *DownstreamCommitClassifier {
 			CommitErrorClassifier{},
 			UTInjectionClassifier{},
 			StaleReadClassifier{},
+			GCRunningClassifier{},
 		},
 	}
 }
