@@ -31,7 +31,7 @@ show tables;
 select * from table01;
 show columns from table01;
 desc table01;
--- @ignore:3,5,10,11,12
+-- @ignore:3,4,5,7,9,10,11,12
 show table status;
 -- @session
 

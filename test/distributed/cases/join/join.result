@@ -5,8 +5,8 @@ CREATE TABLE t2 (S1 INT);
 INSERT INTO t1 VALUES (1),(3),(4),(6);
 INSERT INTO t2 VALUES (2),(4),(5);
 SELECT * FROM t1 JOIN t2 on t1.S1=t2.S1;
-S1	S1
-4	4
+➤ s1[4,32,0]  ¦  s1[4,32,0]  𝄀
+4  ¦  4
 drop table if exists t1;
 drop table if exists t2;
 create table t1 (id int);
@@ -26,16 +26,16 @@ insert into t1 values (106);
 insert into t1 values (107);
 insert into t2 values (107),(75),(1000);
 select t1.id, t2.id from t1, t2 where t2.id = t1.id;
-id	id
-75	75
-107	107
+➤ id[4,32,0]  ¦  id[4,32,0]  𝄀
+75  ¦  75  𝄀
+107  ¦  107
 select t1.id, count(t2.id) from t1,t2 where t2.id = t1.id group by t1.id;
-id	count(t2.id)
-75	1
-107	1
+➤ id[4,32,0]  ¦  count(t2.id)[-5,64,0]  𝄀
+75  ¦  1  𝄀
+107  ¦  1
 select t1.id,t2.id from t2 join t1 on t1.id=t2.id where t2.id=75;
-id	id
-75	75
+➤ id[4,32,0]  ¦  id[4,32,0]  𝄀
+75  ¦  75
 drop table if exists t1;
 drop table if exists t2;
 CREATE TABLE t1 (
@@ -69,16 +69,16 @@ INSERT INTO t2 VALUES (3,2,11,12,5400,7800);
 INSERT INTO t2 VALUES (4,2,25,12,6500,11200);
 INSERT INTO t2 VALUES (5,1,37,6,10000,12000);
 select t1.id, category as catid, state as stateid, county as countyid from t1 join t2 on count=t2.id where token='a71250b7ed780f6ef3185bfffe027983';
-id	catid	stateid	countyid
-28	2	12	11
-27	2	12	11
-29	2	12	25
-26	1	6	37
+➤ id[4,32,0]  ¦  catid[4,32,0]  ¦  stateid[4,32,0]  ¦  countyid[4,32,0]  𝄀
+26  ¦  1  ¦  6  ¦  37  𝄀
+27  ¦  2  ¦  12  ¦  11  𝄀
+28  ¦  2  ¦  12  ¦  11  𝄀
+29  ¦  2  ¦  12  ¦  25
 select t1.id, category as catid, state as stateid, county as countyid from t1 join t2 on count=t2.id where token='a71250b7ed780f6ef3185bfffe027983' and t1.id>26 order by t1.id;
-id	catid	stateid	countyid
-27	2	12	11
-28	2	12	11
-29	2	12	25
+➤ id[4,32,0]  ¦  catid[4,32,0]  ¦  stateid[4,32,0]  ¦  countyid[4,32,0]  𝄀
+27  ¦  2  ¦  12  ¦  11  𝄀
+28  ¦  2  ¦  12  ¦  11  𝄀
+29  ¦  2  ¦  12  ¦  25
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -100,23 +100,23 @@ PRIMARY KEY  (id)
 INSERT INTO t1 VALUES (12,5,'Percent','Cost',-1,0,-1,-1),(14,4,'Percent','Cost',-1,0,-1,-1),(18,5,'Percent','Cost',-1,0,-1,-1),(19,4,'Percent','Cost',-1,0,-1,-1),(20,5,'Percent','Cost',100,-1,22,291),(21,5,'Percent','Cost',100,-1,18,291),(22,1,'Percent','Cost',100,-1,6,291),(23,1,'Percent','Cost',100,-1,21,291),(24,1,'Percent','Cost',100,-1,9,291),(25,1,'Percent','Cost',100,-1,4,291),(26,1,'Percent','Cost',100,-1,20,291),(27,4,'Percent','Cost',100,-1,7,202),(28,1,'Percent','Cost',50,-1,-1,137),(29,2,'Percent','Cost',100,-1,4,354),(30,2,'Percent','Cost',100,-1,9,137),(93,2,'Cost','Cost',-1,10000000,-1,-1);
 INSERT INTO t2 VALUES (1,'s1'),(2,'s2'),(3,'s3'),(4,'s4'),(5,'s5');
 select t2_id,name, type  from t1 join t2 on t2.id=t1.t2_id order by id;
-t2_id	name	type
-1	s1	Percent
-1	s1	Percent
-1	s1	Percent
-1	s1	Percent
-1	s1	Percent
-1	s1	Percent
-2	s2	Percent
-2	s2	Percent
-2	s2	Cost
-4	s4	Percent
-4	s4	Percent
-4	s4	Percent
-5	s5	Percent
-5	s5	Percent
-5	s5	Percent
-5	s5	Percent
+➤ t2_id[4,32,0]  ¦  name[12,-1,0]  ¦  type[12,-1,0]  𝄀
+1  ¦  s1  ¦  Percent  𝄀
+1  ¦  s1  ¦  Percent  𝄀
+1  ¦  s1  ¦  Percent  𝄀
+1  ¦  s1  ¦  Percent  𝄀
+1  ¦  s1  ¦  Percent  𝄀
+1  ¦  s1  ¦  Percent  𝄀
+2  ¦  s2  ¦  Percent  𝄀
+2  ¦  s2  ¦  Percent  𝄀
+2  ¦  s2  ¦  Cost  𝄀
+4  ¦  s4  ¦  Percent  𝄀
+4  ¦  s4  ¦  Percent  𝄀
+4  ¦  s4  ¦  Percent  𝄀
+5  ¦  s5  ¦  Percent  𝄀
+5  ¦  s5  ¦  Percent  𝄀
+5  ¦  s5  ¦  Percent  𝄀
+5  ¦  s5  ¦  Percent
 drop table t1;
 drop table t2;
 CREATE TABLE t1 (ID INTEGER NOT NULL PRIMARY KEY, Value1 VARCHAR(255));
@@ -124,10 +124,10 @@ CREATE TABLE t2 (ID INTEGER NOT NULL PRIMARY KEY, Value2 VARCHAR(255));
 INSERT INTO t1 VALUES (1, 'A');
 INSERT INTO t2 VALUES (1, 'B');
 SELECT t1.ID,Value2 FROM t1 JOIN t2 on t1.ID=t2.ID WHERE Value1 = 'A';
-ID	Value2
-1	B
+➤ ID[4,32,0]  ¦  Value2[12,-1,0]  𝄀
+1  ¦  B
 SELECT t1.ID,Value2 FROM t1 JOIN t2 on t1.ID=t2.ID WHERE Value1 = 'A' and Value2 <> 'B';
-ID	Value2
+➤ ID[4,32,0]  ¦  Value2[12,-1,0]
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -138,8 +138,8 @@ insert into t1 values(1),(2),(3),(4),(5);
 insert into t2 values(1),(3),(5),(7),(9);
 insert into t3 values(1),(1),(3),(4),(7);
 select a,b,c from t1 join t2 on t1.a=t2.b join t3 on t1.a=t3.c where a>1;
-a	b	c
-3	3	3
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+3  ¦  3  ¦  3
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -150,7 +150,7 @@ insert into t1 values(1),(2);
 insert into t2 values(2),(3);
 insert into t3 values (2),(4);
 select t3.i from t1 join t2 on t1.i=t2.i join t3 on t2.i=t3.i;
-i
+➤ i[4,32,0]  𝄀
 2
 drop table if exists t1;
 drop table if exists t2;
@@ -175,7 +175,7 @@ insert into t4 values (2, 3);
 insert into t5 values (11,4);
 insert into t6 values (2, 3);
 select distinct a,t1.b,t3.c from t1 join t2 on t1.b=t2.b join t3 on t1.b=t3.c;
-a	b	c
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -189,8 +189,8 @@ insert into t2 values (1,1);
 insert into t3 values (1,1);
 insert into t4 values (1);
 select * from t1 join t2 on t1.a1=t2.a1 join t3 on b=c1 join t4 on t3.c2=t4.c2;
-a1	a2	a1	b	c1	c2	c2
-1	1	1	1	1	1	1
+➤ a1[4,32,0]  ¦  a2[4,32,0]  ¦  a1[4,32,0]  ¦  b[4,32,0]  ¦  c1[4,32,0]  ¦  c2[4,32,0]  ¦  c2[4,32,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1
 drop table if exists t1;
 create table t1 (a int);
 insert into t1 values(1);
@@ -198,8 +198,8 @@ drop table if exists t2;
 create table t2 (a int);
 insert into t2 values(1);
 select * from (t1 join t2 on t1.a = t2.a);
-a    a
-1    1
+➤ a[4,32,0]  ¦  a[4,32,0]  𝄀
+1  ¦  1
 drop table if exists tt;
 drop table if exists tt2;
 create table tt(a text,b text,c int);
@@ -207,7 +207,7 @@ create table tt2(a text,b text,c int);
 insert into tt values("a","bc",1);
 insert into tt2 values("ab","c",2);
 select * from tt as t11 join tt2 as t12 on t11.a = t12.a and t11.b = t12.b;
-a    b    c    a    b    c
+➤ a[12,0,0]  ¦  b[12,0,0]  ¦  c[4,32,0]  ¦  a[12,0,0]  ¦  b[12,0,0]  ¦  c[4,32,0]
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -215,7 +215,7 @@ create table t1 (q int);
 create table t2 (a int);
 create table t3 (b int);
 select * from t1,t2 join t3 on a=b;
-q    a    b
+➤ q[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]
 drop table if exists t1;
 drop table if exists t2;
 create table t1(a int, b int primary key);
@@ -223,17 +223,17 @@ create table t2(a int, b int,primary key(a,b));
 insert into t1 select result%50,result from generate_series(1,10000,1) g;
 insert into t2 select result/100,result%100 from generate_series(1,10000,1) g;
 select t1.a,t1.b from t1 join t2 on t1.b=t2.a and t1.b=t2.b order by t1.a desc limit 4;
-a    b
-49    99
-49    49
-48    48
-48    98
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+49  ¦  99  𝄀
+49  ¦  49  𝄀
+48  ¦  48  𝄀
+48  ¦  98
 select t2.a,t2.b from t2 join t1 on t2.a=t1.b and t2.b=t1.a order by t2.a desc limit 4;
-a    b
-100    0
-99    49
-98    48
-97    47
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+100  ¦  0  𝄀
+99  ¦  49  𝄀
+98  ¦  48  𝄀
+97  ¦  47
 drop table t1;
 drop table t2;
 create table t1(a int, b int primary key);
@@ -241,53 +241,53 @@ create table t2(a int, b int,primary key(a,b));
 insert into t1 select 10000-result,result from generate_series(1,10000,1) g;
 insert into t2 select result%2,result-result%2 from generate_series(1,10000,1) g;
 select t1.a,t1.b,t2.a,t2.b from t1 left join t2 on t1.b=t2.b order by t1.b desc limit 4;
-a    b    a    b
-0    10000    0    10000
-1    9999    NULL    NULL
-2    9998    1    9998
-2    9998    0    9998
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+0  ¦  10000  ¦  0  ¦  10000  𝄀
+1  ¦  9999  ¦  null  ¦  null  𝄀
+2  ¦  9998  ¦  1  ¦  9998  𝄀
+2  ¦  9998  ¦  0  ¦  9998
 select t1.a,t1.b,t2.a,t2.b from t1 right join t2 on t1.b=t2.b order by t1.b desc limit 4;
-a    b    a    b
-0    10000    0    10000
-2    9998    0    9998
-2    9998    1    9998
-4    9996    0    9996
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+0  ¦  10000  ¦  0  ¦  10000  𝄀
+2  ¦  9998  ¦  1  ¦  9998  𝄀
+2  ¦  9998  ¦  0  ¦  9998  𝄀
+4  ¦  9996  ¦  0  ¦  9996
 select * from t1 where t1.b in (select b from t2) order by t1.b desc limit 4;
-a    b
-0    10000
-2    9998
-4    9996
-6    9994
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+0  ¦  10000  𝄀
+2  ¦  9998  𝄀
+4  ¦  9996  𝄀
+6  ¦  9994
 select * from t1 where t1.b not in (select b from t2) order by t1.b desc limit 4;
-a    b
-1    9999
-3    9997
-5    9995
-7    9993
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  9999  𝄀
+3  ¦  9997  𝄀
+5  ¦  9995  𝄀
+7  ¦  9993
 drop table t1;
 drop table t2;
 select * from mo_catalog.mo_indexes where name = 'idx1' and table_id = (select rel_id from mo_catalog.mo_tables where relname = 't1');
-id    table_id    database_id    name    type    algo    algo_table_type    algo_params    is_visible    hidden    comment    column_name    ordinal_position    options    index_table_name
+➤ id[-5,64,0]  ¦  table_id[-5,64,0]  ¦  database_id[-5,64,0]  ¦  name[12,-1,0]  ¦  type[12,-1,0]  ¦  algo[12,-1,0]  ¦  algo_table_type[12,-1,0]  ¦  algo_params[12,-1,0]  ¦  is_visible[-6,8,0]  ¦  hidden[-6,8,0]  ¦  comment[12,-1,0]  ¦  column_name[12,-1,0]  ¦  ordinal_position[4,32,0]  ¦  options[12,0,0]  ¦  index_table_name[12,-1,0]
 create table x1 (a int, b int);
 insert into x1 values (1, 1), (2, 2), (3, 3);
 insert into x1 select 42, result from generate_series(1,20000,1) g;
 insert into x1 values (10, 10), (20, 20);
 create table x2 as select * from x1 limit 10;
 select count(*) from x2 inner join x1 on x1.a = x2.a;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 100005
 select * from x2 inner join x1 on x1.a = x2.a order by x1.a limit 10;
-a    b    a    b
-1    1    1    1
-2    2    2    2
-3    3    3    3
-10    10    10    10
-20    20    20    20
-42    2    42    1
-42    1    42    1
-42    5    42    1
-42    4    42    1
-42    3    42    1
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  2  ¦  2  𝄀
+3  ¦  3  ¦  3  ¦  3  𝄀
+10  ¦  10  ¦  10  ¦  10  𝄀
+20  ¦  20  ¦  20  ¦  20  𝄀
+42  ¦  2  ¦  42  ¦  1  𝄀
+42  ¦  1  ¦  42  ¦  1  𝄀
+42  ¦  5  ¦  42  ¦  1  𝄀
+42  ¦  4  ¦  42  ¦  1  𝄀
+42  ¦  3  ¦  42  ¦  1
 drop table x1;
 drop table x2;
 drop table if exists t1;
@@ -300,3 +300,78 @@ SELECT * FROM t1 LEFT JOIN t2 ON t1.id = t2.name;
 invalid argument cast to int, bad value abc
 drop table if exists t1;
 drop table if exists t2;
+CREATE TABLE ITEM (
+I_ID INT NOT NULL,
+I_NAME VARCHAR(24) NOT NULL,
+I_PRICE DECIMAL(5,2) NOT NULL,
+I_DATA VARCHAR(50) NOT NULL,
+I_IM_ID INT NOT NULL,
+PRIMARY KEY (I_ID)
+);
+CREATE TABLE STOCK (
+S_W_ID INT NOT NULL,
+S_I_ID INT NOT NULL,
+S_QUANTITY DECIMAL(4,0) NOT NULL,
+S_YTD DECIMAL(8,2) NOT NULL,
+S_ORDER_CNT INT NOT NULL,
+S_REMOTE_CNT INT NOT NULL,
+S_DATA VARCHAR(50) NOT NULL,
+S_DIST_01 CHAR(24) NOT NULL,
+S_DIST_02 CHAR(24) NOT NULL,
+S_DIST_03 CHAR(24) NOT NULL,
+S_DIST_04 CHAR(24) NOT NULL,
+S_DIST_05 CHAR(24) NOT NULL,
+S_DIST_06 CHAR(24) NOT NULL,
+S_DIST_07 CHAR(24) NOT NULL,
+S_DIST_08 CHAR(24) NOT NULL,
+S_DIST_09 CHAR(24) NOT NULL,
+S_DIST_10 CHAR(24) NOT NULL,
+PRIMARY KEY (S_W_ID,S_I_ID)
+);
+create table region (
+r_regionkey int not null,
+r_name char(55) not null,
+r_comment char(152) not null,
+PRIMARY KEY ( r_regionkey )
+);
+create table nation (
+n_nationkey int not null,
+n_name char(25) not null,
+n_regionkey int not null,
+n_comment char(152) not null,
+PRIMARY KEY ( n_nationkey )
+);
+create table supplier (
+s_suppkey int not null,
+s_name char(25) not null,
+s_address varchar(40) not null,
+s_nationkey int not null,
+s_phone char(15) not null,
+s_acctbal numeric(12,2) not null,
+s_comment char(101) not null,
+PRIMARY KEY ( s_suppkey )
+);
+select s_suppkey, s_name, n_name, i_id, i_name, s_address, s_phone, s_comment
+from item, supplier, stock, nation, region,
+(select s_i_id as m_i_id, min(s_quantity) as m_s_quantity
+from stock, supplier, nation, region
+where	 mod((s_w_id*s_i_id),10000)=s_suppkey
+and s_nationkey=n_nationkey
+and n_regionkey=r_regionkey
+and r_name like 'Europ%'
+group by s_i_id) m
+where 	 i_id = s_i_id
+and mod((s_w_id * s_i_id), 10000) = s_suppkey
+and s_nationkey = n_nationkey
+and n_regionkey = r_regionkey
+and i_data like '%b'
+and r_name like 'Europ%'
+and i_id=m_i_id
+and s_quantity = m_s_quantity
+order by n_name, s_name, i_id;
+➤ s_suppkey[4,32,0]  ¦  s_name[1,25,0]  ¦  n_name[1,25,0]  ¦  i_id[4,32,0]  ¦  i_name[12,-1,0]  ¦  s_address[12,-1,0]  ¦  s_phone[1,15,0]  ¦  s_comment[1,101,0]
+drop table if exists item;
+drop table if exists supplier;
+drop table if exists stock;
+drop table if exists nation;
+drop table if exists region;

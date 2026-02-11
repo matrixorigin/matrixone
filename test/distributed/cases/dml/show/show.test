@@ -42,9 +42,11 @@ create database test01;
 use test01;
 show columns from test02.t1;
 create database if not exists db11111111111;
--- @bvt:issue#23677
+CREATE TABLE db11111111111.t1 (col1 int DEFAULT NULL);
+create table db11111111111.t2(col1 int auto_increment) comment 't2';
+insert into db11111111111.t2 values (10);
+-- @ignore:3,4,5,7,9,10,11,12
 show table status from db11111111111;
--- @bvt:issue
 drop database db11111111111;
 show variables where value = 'MatrixOne';
 
