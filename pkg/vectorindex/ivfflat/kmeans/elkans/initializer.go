@@ -160,7 +160,9 @@ func (kpp *KMeansPlusPlus[T]) InitCentroids(ctx context.Context, _vectors any, k
 		target := T(kpp.rand.Float32()) * totalDistToExistingCenters
 		for idx, distance := range distances {
 			target -= distance
-			if target <= 0 {
+			// due to floating point inaccuracies, target may be > 0 even after subtracting all distances.
+			// if so, pick the last vector.
+			if target <= 0 || idx == len(distances)-1 {
 				centroids[nextCentroidIdx] = vectors[idx]
 				break
 			}
