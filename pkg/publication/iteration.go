@@ -767,6 +767,9 @@ func RequestUpstreamSnapshot(
 	}
 	iterationCtx.CurrentSnapshotTS = snapshotTS
 
+	if msg, injected := objectio.PublicationSnapshotFinishedInjected(); injected && msg == "ut injection: snapshot not found" {
+		return moerr.NewErrStaleReadNoCtx("", "")
+	}
 	// Query previous snapshot TS if LSN > 0
 	if iterationCtx.IterationLSN > 0 && !iterationCtx.IsStale {
 		prevSnapshotName := GenerateSnapshotName(iterationCtx.TaskID, iterationCtx.IterationLSN-1)

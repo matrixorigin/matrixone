@@ -5008,3 +5008,431 @@ func TestCCPRErrorHandling2(t *testing.T) {
 
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 }
+
+// TestExecuteIterationWithStaleRead tests the iteration behavior when stale read occurs:
+// 1. First iteration: normal execution (data sync succeeds)
+// 2. Second iteration: inject stale read error (using "ut injection: snapshot not found")
+// 3. Third iteration: no stale read, normal execution (data should be cleaned and re-synced)
+// 4. Verify data after iterations
+func TestExecuteIterationWithStaleRead(t *testing.T) {
+	catalog.SetupDefines("")
+
+	var (
+		srcAccountID  = uint32(1)
+		destAccountID = uint32(2)
+		cnUUID        = ""
+	)
+
+	// Setup source account context
+	srcCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	srcCtx = context.WithValue(srcCtx, defines.TenantIDKey{}, srcAccountID)
+	srcCtxWithTimeout, cancelSrc := context.WithTimeout(srcCtx, time.Minute*5)
+	defer cancelSrc()
+
+	// Setup destination account context
+	destCtx, cancelDest := context.WithCancel(context.Background())
+	defer cancelDest()
+	destCtx = context.WithValue(destCtx, defines.TenantIDKey{}, destAccountID)
+	destCtxWithTimeout, cancelDestTimeout := context.WithTimeout(destCtx, time.Minute*5)
+	defer cancelDestTimeout()
+
+	// Create test engine
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(srcCtx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(srcCtx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	// Register mock auto increment service
+	mockIncrService := NewMockAutoIncrementService(cnUUID)
+	incrservice.SetAutoIncrementServiceByID("", mockIncrService)
+	defer mockIncrService.Close()
+
+	// Create mo_indexes table for source account
+	err := exec_sql(disttaeEngine, srcCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
+	require.NoError(t, err)
+
+	// Create mo_ccpr_log table using system account context
+	systemCtx := context.WithValue(srcCtxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoIndexesDDL)
+	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
+	require.NoError(t, err)
+
+	// Create mo_ccpr_tables and mo_ccpr_dbs tables using system account context
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprTablesDDL)
+	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprDbsDDL)
+	require.NoError(t, err)
+
+	// Create mo_snapshots table for source account
+	moSnapshotsDDL := frontend.MoCatalogMoSnapshotsDDL
+	err = exec_sql(disttaeEngine, srcCtxWithTimeout, moSnapshotsDDL)
+	require.NoError(t, err)
+
+	// Create system tables for destination account
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
+	require.NoError(t, err)
+
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
+	require.NoError(t, err)
+
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoAutoIncrTableDDL)
+	require.NoError(t, err)
+
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoForeignKeysDDL)
+	require.NoError(t, err)
+
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoSnapshotsDDL)
+	require.NoError(t, err)
+
+	// Step 1: Create source database and table in source account
+	srcDBName := "src_db_stale"
+	srcTableName := "src_table_stale"
+	schema := catalog2.MockSchemaAll(4, 3)
+	schema.Name = srcTableName
+
+	// Create database and table in source account
+	txn, err := disttaeEngine.NewTxnOperator(srcCtxWithTimeout, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	err = disttaeEngine.Engine.Create(srcCtxWithTimeout, srcDBName, txn)
+	require.NoError(t, err)
+
+	db, err := disttaeEngine.Engine.Database(srcCtxWithTimeout, srcDBName, txn)
+	require.NoError(t, err)
+
+	defs, err := testutil.EngineTableDefBySchema(schema)
+	require.NoError(t, err)
+
+	err = db.Create(srcCtxWithTimeout, srcTableName, defs)
+	require.NoError(t, err)
+
+	rel, err := db.Relation(srcCtxWithTimeout, srcTableName, nil)
+	require.NoError(t, err)
+
+	// Insert data into source table
+	bat := catalog2.MockBatch(schema, 10)
+	defer bat.Close()
+	err = rel.Write(srcCtxWithTimeout, containers.ToCNBatch(bat))
+	require.NoError(t, err)
+
+	err = txn.Commit(srcCtxWithTimeout)
+	require.NoError(t, err)
+
+	// Step 2: Write mo_ccpr_log table
+	taskID := uuid.New().String()
+	iterationLSN := uint64(0)
+	subscriptionName := "test_subscription_stale_read"
+
+	insertSQL := fmt.Sprintf(
+		`INSERT INTO mo_catalog.mo_ccpr_log (
+			task_id, 
+			subscription_name,
+			subscription_account_name,
+			sync_level, 
+			account_id,
+			db_name, 
+			table_name, 
+			upstream_conn, 
+			sync_config, 
+			state, 
+			iteration_state, 
+			iteration_lsn, 
+			cn_uuid
+		) VALUES (
+			'%s', 
+			'%s',
+			'test_account',
+			'table', 
+			%d,
+			'%s', 
+			'%s', 
+			'%s', 
+			'{}', 
+			%d, 
+			%d, 
+			%d, 
+			'%s'
+		)`,
+		taskID,
+		subscriptionName,
+		destAccountID,
+		srcDBName,
+		srcTableName,
+		fmt.Sprintf("%s:%d", publication.InternalSQLExecutorType, srcAccountID),
+		publication.SubscriptionStateRunning,
+		publication.IterationStateRunning,
+		iterationLSN,
+		cnUUID,
+	)
+
+	// Write mo_ccpr_log using system account context
+	err = exec_sql(disttaeEngine, systemCtx, insertSQL)
+	require.NoError(t, err)
+
+	// Step 3: Create upstream SQL helper factory
+	upstreamSQLHelperFactory := func(
+		txnOp client.TxnOperator,
+		engine engine.Engine,
+		accountID uint32,
+		exec executor.SQLExecutor,
+		txnClient client.TxnClient,
+	) publication.UpstreamSQLHelper {
+		return NewUpstreamSQLHelper(txnOp, engine, accountID, exec, txnClient)
+	}
+
+	// Create mpool for ExecuteIteration
+	mp, err := mpool.NewMPool("test_execute_iteration_stale_read", 0, mpool.NoFixed)
+	require.NoError(t, err)
+
+	// Enable fault injection
+	fault.Enable()
+	defer fault.Disable()
+
+	// ========== First Iteration: Normal execution ==========
+	checkpointDone1 := make(chan struct{}, 1)
+	utHelper1 := &checkpointUTHelper{
+		taeHandler:    taeHandler,
+		disttaeEngine: disttaeEngine,
+		checkpointC:   checkpointDone1,
+	}
+
+	// Execute first ExecuteIteration - should succeed normally
+	err = publication.ExecuteIteration(
+		context.Background(),
+		cnUUID,
+		disttaeEngine.Engine,
+		disttaeEngine.GetTxnClient(),
+		taskID,
+		iterationLSN,
+		upstreamSQLHelperFactory,
+		mp,
+		utHelper1,
+		100*time.Millisecond, // snapshotFlushInterval for test
+		nil,                  // FilterObjectWorker
+		nil,                  // GetChunkWorker
+		nil,                  // WriteObjectWorker
+		nil,                  // syncProtectionWorker
+	)
+
+	// Signal checkpoint goroutine to stop
+	close(checkpointDone1)
+
+	// First iteration should succeed
+	require.NoError(t, err, "First ExecuteIteration should complete successfully")
+
+	// Verify first iteration completed
+	v, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
+	require.True(t, ok)
+	exec := v.(executor.SQLExecutor)
+
+	querySystemCtx := context.WithValue(destCtxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
+	txn, err = disttaeEngine.NewTxnOperator(querySystemCtx, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	querySQL := fmt.Sprintf(
+		`SELECT iteration_state, iteration_lsn, error_message FROM mo_catalog.mo_ccpr_log WHERE task_id = '%s'`,
+		taskID,
+	)
+
+	res, err := exec.Exec(querySystemCtx, querySQL, executor.Options{}.WithTxn(txn))
+	require.NoError(t, err)
+	defer res.Close()
+
+	var found bool
+	var iterationState1 int8
+	var iterationLSN1 int64
+	var errorMsg1 string
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		require.Equal(t, 1, rows)
+		iterationState1 = vector.GetFixedAtWithTypeCheck[int8](cols[0], 0)
+		iterationLSN1 = vector.GetFixedAtWithTypeCheck[int64](cols[1], 0)
+		errorMsg1 = cols[2].GetStringAt(0)
+		found = true
+		return true
+	})
+	require.True(t, found, "should find iteration record after first iteration")
+	require.Equal(t, publication.IterationStateCompleted, iterationState1, "first iteration should be completed")
+	require.Equal(t, int64(1), iterationLSN1, "iteration_lsn should be 1 after first iteration")
+	require.Empty(t, errorMsg1, "error_message should be empty after first iteration")
+
+	err = txn.Commit(querySystemCtx)
+	require.NoError(t, err)
+
+	// ========== Second Iteration: Inject stale read error ==========
+	// Update mo_ccpr_log for second iteration
+	updateSQL2 := fmt.Sprintf(
+		`UPDATE mo_catalog.mo_ccpr_log 
+		SET iteration_state = %d, iteration_lsn = %d, error_message = ''
+		WHERE task_id = '%s'`,
+		publication.IterationStateRunning,
+		iterationLSN1,
+		taskID,
+	)
+	err = exec_sql(disttaeEngine, systemCtx, updateSQL2)
+	require.NoError(t, err)
+
+	// Inject stale read error for second iteration
+	rmFn, err := objectio.InjectPublicationSnapshotFinished("ut injection: snapshot not found")
+	require.NoError(t, err)
+
+	checkpointDone2 := make(chan struct{}, 1)
+	utHelper2 := &checkpointUTHelper{
+		taeHandler:    taeHandler,
+		disttaeEngine: disttaeEngine,
+		checkpointC:   checkpointDone2,
+	}
+
+	// Execute second ExecuteIteration - should fail due to stale read injection
+	err = publication.ExecuteIteration(
+		context.Background(),
+		cnUUID,
+		disttaeEngine.Engine,
+		disttaeEngine.GetTxnClient(),
+		taskID,
+		uint64(iterationLSN1),
+		upstreamSQLHelperFactory,
+		mp,
+		utHelper2,
+		100*time.Millisecond, // snapshotFlushInterval for test
+		nil,                  // FilterObjectWorker
+		nil,                  // GetChunkWorker
+		nil,                  // WriteObjectWorker
+		nil,                  // syncProtectionWorker
+	)
+
+	// Signal checkpoint goroutine to stop
+	close(checkpointDone2)
+
+	// Second iteration should complete (error is handled internally)
+	require.NoError(t, err, "Second ExecuteIteration should complete (error handled internally)")
+
+	// Remove the injection
+	rmFn()
+
+	// Verify second iteration has stale read error recorded
+	txn, err = disttaeEngine.NewTxnOperator(querySystemCtx, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	res2, err := exec.Exec(querySystemCtx, querySQL, executor.Options{}.WithTxn(txn))
+	require.NoError(t, err)
+	defer res2.Close()
+
+	var iterationState2 int8
+	var iterationLSN2 int64
+	var errorMsg2 string
+	res2.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		require.Equal(t, 1, rows)
+		iterationState2 = vector.GetFixedAtWithTypeCheck[int8](cols[0], 0)
+		iterationLSN2 = vector.GetFixedAtWithTypeCheck[int64](cols[1], 0)
+		errorMsg2 = cols[2].GetStringAt(0)
+		return true
+	})
+
+	// Verify stale read error is recorded (error message should contain "stale read")
+	require.Equal(t, publication.IterationStateCompleted, iterationState2, "second iteration should be completed (retryable error)")
+	require.Equal(t, iterationLSN1, iterationLSN2, "iteration_lsn should not change on stale read error")
+	require.NotEmpty(t, errorMsg2, "error_message should not be empty after stale read")
+	require.Contains(t, errorMsg2, "stale read", "error_message should contain 'stale read'")
+
+	err = txn.Commit(querySystemCtx)
+	require.NoError(t, err)
+
+	// ========== Third Iteration: Normal execution (with stale flag set) ==========
+	// Update mo_ccpr_log for third iteration (keep the error message to trigger IsStale)
+	updateSQL3 := fmt.Sprintf(
+		`UPDATE mo_catalog.mo_ccpr_log 
+		SET iteration_state = %d
+		WHERE task_id = '%s'`,
+		publication.IterationStateRunning,
+		taskID,
+	)
+	err = exec_sql(disttaeEngine, systemCtx, updateSQL3)
+	require.NoError(t, err)
+
+	checkpointDone3 := make(chan struct{}, 1)
+	utHelper3 := &checkpointUTHelper{
+		taeHandler:    taeHandler,
+		disttaeEngine: disttaeEngine,
+		checkpointC:   checkpointDone3,
+	}
+
+	// Execute third ExecuteIteration - should succeed and recover from stale state
+	err = publication.ExecuteIteration(
+		context.Background(),
+		cnUUID,
+		disttaeEngine.Engine,
+		disttaeEngine.GetTxnClient(),
+		taskID,
+		uint64(iterationLSN2),
+		upstreamSQLHelperFactory,
+		mp,
+		utHelper3,
+		100*time.Millisecond, // snapshotFlushInterval for test
+		nil,                  // FilterObjectWorker
+		nil,                  // GetChunkWorker
+		nil,                  // WriteObjectWorker
+		nil,                  // syncProtectionWorker
+	)
+
+	// Signal checkpoint goroutine to stop
+	close(checkpointDone3)
+
+	// Third iteration should succeed
+	require.NoError(t, err, "Third ExecuteIteration should complete successfully")
+
+	// ========== Verify final state ==========
+	txn, err = disttaeEngine.NewTxnOperator(querySystemCtx, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	res3, err := exec.Exec(querySystemCtx, querySQL, executor.Options{}.WithTxn(txn))
+	require.NoError(t, err)
+	defer res3.Close()
+
+	var iterationState3 int8
+	var iterationLSN3 int64
+	var errorMsg3 string
+	res3.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		require.Equal(t, 1, rows)
+		iterationState3 = vector.GetFixedAtWithTypeCheck[int8](cols[0], 0)
+		iterationLSN3 = vector.GetFixedAtWithTypeCheck[int64](cols[1], 0)
+		errorMsg3 = cols[2].GetStringAt(0)
+		return true
+	})
+
+	// Verify third iteration succeeded
+	require.Equal(t, publication.IterationStateCompleted, iterationState3, "third iteration should be completed")
+	require.Equal(t, iterationLSN2+1, iterationLSN3, "iteration_lsn should be incremented after third iteration")
+	require.Empty(t, errorMsg3, "error_message should be empty after successful third iteration")
+
+	err = txn.Commit(querySystemCtx)
+	require.NoError(t, err)
+
+	// ========== Verify data in destination table ==========
+	checkRowCountSQL := fmt.Sprintf(`SELECT COUNT(*) FROM %s.%s`, srcDBName, srcTableName)
+	queryDestCtx := context.WithValue(destCtxWithTimeout, defines.TenantIDKey{}, destAccountID)
+	txn, err = disttaeEngine.NewTxnOperator(queryDestCtx, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	rowCountRes, err := exec.Exec(queryDestCtx, checkRowCountSQL, executor.Options{}.WithTxn(txn))
+	require.NoError(t, err)
+	defer rowCountRes.Close()
+
+	var rowCount int64
+	rowCountRes.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		require.Equal(t, 1, rows)
+		rowCount = vector.GetFixedAtWithTypeCheck[int64](cols[0], 0)
+		return true
+	})
+
+	// Should have 10 rows (same as source table)
+	require.Equal(t, int64(10), rowCount, "destination table should have 10 rows after recovery from stale read")
+
+	err = txn.Commit(queryDestCtx)
+	require.NoError(t, err)
+
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+}
