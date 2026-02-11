@@ -16,11 +16,13 @@ package plan
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
@@ -41,6 +43,147 @@ type ivfIndexContext struct {
 	nThread         int64
 	nProbe          int64
 	pushdownEnabled bool
+
+	// Phase 1: Auto mode support
+	isAutoMode      bool   // Whether in auto mode
+	initialStrategy string // Initial strategy selected in auto mode ("pre" or "post")
+}
+
+// shouldUseForceMode determines if force mode (full table scan) should be used
+// based on table size and LIMIT value.
+//
+// Rule: Use force mode when table_rows < LIMIT × 2
+//
+// Rationale:
+//   - For very small datasets, index overhead (metadata reading, distance calculation)
+//     exceeds the benefit of using an index
+//   - Full table scan is faster and guarantees 100% recall
+//   - Does not rely on filter selectivity estimation (which may be inaccurate)
+//
+// Returns true if force mode should be used, false otherwise.
+func (builder *QueryBuilder) shouldUseForceMode(vecCtx *vectorSortContext) bool {
+	scanNode := vecCtx.scanNode
+	stats := scanNode.Stats
+
+	// Get table row count and selectivity from statistics
+	var tableCnt float64
+	var selectivity float64 = 1.0
+
+	if stats != nil {
+		tableCnt = stats.TableCnt
+		if stats.Selectivity > 0 && stats.Selectivity < 1 {
+			selectivity = stats.Selectivity
+		}
+	}
+
+	// If no statistics available, conservatively use post mode
+	if tableCnt <= 0 {
+		return false
+	}
+
+	// Get LIMIT value
+	limitExpr := vecCtx.limit
+	if limitExpr == nil {
+		return false
+	}
+
+	limitConst := limitExpr.GetLit()
+	if limitConst == nil {
+		return false
+	}
+
+	limitVal := float64(limitConst.GetU64Val())
+	if limitVal <= 0 {
+		return false
+	}
+
+	// Rule: Estimated rows after filtering < LIMIT × 2
+	// For small result sets, brute force (force mode) is more reliable and often faster
+	estimatedRows := tableCnt * selectivity
+	threshold := limitVal * 2.0
+
+	if tableCnt < threshold || estimatedRows < threshold {
+		logutil.Debugf(
+			"Auto mode: small dataset or high selectivity detected, table_rows=%.0f, selectivity=%.4f, estimated_rows=%.0f, limit=%.0f, threshold=%.0f",
+			tableCnt, selectivity, estimatedRows, limitVal, threshold,
+		)
+		return true
+	}
+
+	return false
+}
+
+// resolveVectorSearchMode resolves the vector search mode based on user input and configuration.
+// Returns:
+//   - mode: The actual mode to use ("pre", "post", or "force")
+//   - isAutoMode: Whether auto mode is enabled
+//   - shouldDisableIndex: Whether vector index should be disabled
+func (builder *QueryBuilder) resolveVectorSearchMode(
+	vecCtx *vectorSortContext,
+	enableVectorPrefilterByDefault bool,
+	enableVectorAutoModeByDefault bool,
+) (mode string, isAutoMode bool, shouldDisableIndex bool) {
+
+	// 1. Parse user-specified mode
+	var userMode string
+	if vecCtx.rankOption != nil && vecCtx.rankOption.Mode != "" {
+		userMode = vecCtx.rankOption.Mode
+	}
+
+	// 2. Handle force mode: disable vector index
+	if userMode == "force" {
+		return "force", false, true
+	}
+
+	// 3. Handle auto mode
+	if userMode == "auto" || (userMode == "" && enableVectorAutoModeByDefault) {
+		isAutoMode = true
+
+		// Phase 2: Check if this is a very small dataset
+		if builder.shouldUseForceMode(vecCtx) {
+			logutil.Debugf("Auto mode: small dataset, selected 'force'")
+			return "force", isAutoMode, true
+		}
+
+		// Default to post mode for normal cases
+		logutil.Debugf("Auto mode: normal case, selected 'post'")
+		mode = "post"
+		return mode, isAutoMode, false
+	}
+
+	// 4. Handle explicitly specified pre/post mode
+	if userMode == "pre" || userMode == "post" {
+		return userMode, false, false
+	}
+
+	// 5. No mode specified: use default behavior
+	if enableVectorPrefilterByDefault {
+		mode = "pre"
+	} else {
+		mode = "post"
+	}
+
+	return mode, false, false
+}
+
+func (builder *QueryBuilder) calculateAdaptiveNprobe(baseNprobe int64, stats *plan.Stats, totalLists int64) int64 {
+	// 1. If no statistics or invalid selectivity, keep as is
+	if stats == nil || stats.Selectivity <= 0 || stats.Selectivity >= 1 {
+		return baseNprobe
+	}
+
+	// 2. Calculate compensation factor (square root smoothing)
+	// Square root is used to prevent nprobe from growing too fast and causing excessive overhead
+	compensation := math.Sqrt(1.0 / stats.Selectivity)
+
+	// 3. Calculate adaptive nprobe
+	adaptiveNprobe := int64(math.Ceil(float64(baseNprobe) * compensation))
+
+	// 4. Boundary handling: not less than base value, not more than total lists
+	adaptiveNprobe = max(adaptiveNprobe, baseNprobe)
+	adaptiveNprobe = min(adaptiveNprobe, totalLists)
+
+	return adaptiveNprobe
 }
 
 func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (*ivfIndexContext, error) {
@@ -60,12 +203,28 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 		}
 	}
 
-	// RankOption.Mode controls vector index behavior:
-	// - "pre": Enable vector index with BloomFilter pushdown for better filtering
-	// - "force": Disable vector index, force full table scan (for debugging/comparison)
-	// - nil/other: Enable vector index with default behavior
-	if vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "force" {
+	var enableVectorAutoModeByDefault bool
+	if val, err := builder.compCtx.ResolveVariable("enable_vector_auto_mode_by_default", true, false); err == nil && val != nil {
+		if v, ok := val.(int8); ok && v == 1 {
+			enableVectorAutoModeByDefault = true
+		}
+	}
+
+	// Resolve vector search mode
+	mode, isAutoMode, shouldDisableIndex := builder.resolveVectorSearchMode(
+		vecCtx,
+		enableVectorPrefilterByDefault,
+		enableVectorAutoModeByDefault,
+	)
+
+	// If index should be disabled (force mode), return nil
+	if shouldDisableIndex {
 		return nil, nil
+	}
+
+	// Log auto mode activation
+	if isAutoMode {
+		logutil.Debugf("Vector search auto mode enabled, initial strategy: %s", mode)
 	}
 
 	metaDef := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata]
@@ -82,6 +241,14 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 	opType, err := opTypeAst.StrictString()
 	if err != nil {
 		return nil, nil
+	}
+
+	// Get total lists for nprobe boundary handling
+	var totalLists int64 = -1
+	if listsAst, err2 := sonic.Get([]byte(metaDef.IndexAlgoParams), catalog.IndexAlgoParamLists); err2 == nil {
+		if lists, err3 := listsAst.Int64(); err3 == nil {
+			totalLists = lists
+		}
 	}
 
 	origFuncName := vecCtx.distFnExpr.Func.ObjName
@@ -112,6 +279,21 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 		nProbe = val
 	}
 
+	// Phase 4: Dynamic nprobe amplification for auto mode
+	// Only applied if mode is "post" (pushdown disabled) and totalLists is available
+	if isAutoMode && mode == "post" && totalLists > 0 {
+		oldNProbe := nProbe
+		nProbe = builder.calculateAdaptiveNprobe(
+			nProbe,
+			vecCtx.scanNode.Stats,
+			totalLists,
+		)
+		if nProbe != oldNProbe {
+			logutil.Debugf("Auto mode: adjusted nprobe from %d to %d (selectivity: %.4f)",
+				oldNProbe, nProbe, vecCtx.scanNode.Stats.Selectivity)
+		}
+	}
+
 	pkPos := vecCtx.scanNode.TableDef.Name2ColIndex[vecCtx.scanNode.TableDef.Pkey.PkeyColName]
 	pkType := vecCtx.scanNode.TableDef.Cols[pkPos].Typ
 	partType := vecCtx.scanNode.TableDef.Cols[partPos].Typ
@@ -130,7 +312,11 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 		params:          idxDef.IndexAlgoParams,
 		nThread:         nThread.(int64),
 		nProbe:          nProbe,
-		pushdownEnabled: (vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "pre") || (vecCtx.rankOption == nil && enableVectorPrefilterByDefault),
+		pushdownEnabled: (mode == "pre"),
+
+		// Phase 1: Auto mode fields
+		isAutoMode:      isAutoMode,
+		initialStrategy: mode,
 	}, nil
 }
 
@@ -229,6 +415,26 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		return nodeID, err
 	}
 
+	// Phase 1: Explicitly set Mode to "auto" if it was chosen by default
+	// This ensures isAdaptiveVectorSearch returns true
+	if ivfCtx.isAutoMode && (vecCtx.rankOption == nil || vecCtx.rankOption.Mode == "") {
+		if vecCtx.rankOption == nil {
+			vecCtx.rankOption = &plan.RankOption{}
+		}
+		vecCtx.rankOption.Mode = "auto"
+
+		// Sync back to nodes
+		if sortNode.RankOption == nil {
+			sortNode.RankOption = vecCtx.rankOption
+		}
+		if scanNode.RankOption == nil {
+			scanNode.RankOption = vecCtx.rankOption
+		}
+		if projNode.RankOption == nil {
+			projNode.RankOption = vecCtx.rankOption
+		}
+	}
+
 	tableConfigStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d,
 			"entries": "%s", "nprobe" : %d, "pktype" : %d, "pkey" : "%s", "part" : "%s", "parttype" : %d, "orig_func_name": "%s"}`,
 		scanNode.ObjRef.SchemaName,
@@ -298,10 +504,35 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		if limitConst := limit.GetLit(); limitConst != nil {
 			originalLimit := limitConst.GetU64Val()
 
-			// Use shared function to calculate over-fetch factor
-			overFetchFactor := calculatePostFilterOverFetchFactor(originalLimit)
+			// Choose over-fetch strategy based on mode
+			var overFetchFactor float64
+			if ivfCtx.isAutoMode {
+				// Auto mode: use enhanced over-fetch strategy
+				overFetchFactor = calculateAutoModeOverFetchFactor(
+					originalLimit,
+					scanNode.Stats,
+				)
+
+				// Log auto mode over-fetch calculation
+				logutil.Debugf(
+					"Auto mode over-fetch: original_limit=%d, factor=%.2f, filter_count=%d",
+					originalLimit, overFetchFactor, len(scanNode.FilterList),
+				)
+			} else {
+				// Non-auto mode: use conservative default strategy
+				overFetchFactor = calculatePostFilterOverFetchFactor(originalLimit)
+			}
 
 			newLimit := max(uint64(float64(originalLimit)*overFetchFactor), originalLimit+10)
+
+			// Log final over-fetch result for auto mode
+			if ivfCtx.isAutoMode {
+				logutil.Debugf(
+					"Auto mode over-fetch result: original_limit=%d, new_limit=%d",
+					originalLimit, newLimit,
+				)
+			}
+
 			limitExpr = &Expr{
 				Typ: limit.Typ,
 				Expr: &plan.Expr_Lit{
@@ -577,11 +808,12 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	}
 
 	sortByID := builder.appendNode(&plan.Node{
-		NodeType: plan.Node_SORT,
-		Children: []int32{joinRootID},
-		OrderBy:  orderByScore,
-		Limit:    limit,                         // Apply LIMIT after sorting
-		Offset:   DeepCopyExpr(sortNode.Offset), // Apply OFFSET after sorting
+		NodeType:   plan.Node_SORT,
+		Children:   []int32{joinRootID},
+		OrderBy:    orderByScore,
+		Limit:      limit,                         // Apply LIMIT after sorting
+		Offset:     DeepCopyExpr(sortNode.Offset), // Apply OFFSET after sorting
+		RankOption: DeepCopyRankOption(vecCtx.rankOption),
 	}, ctx)
 
 	projNode.Children[0] = sortByID

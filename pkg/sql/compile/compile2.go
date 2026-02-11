@@ -25,6 +25,7 @@ import (
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -291,7 +292,29 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		}
 		c.retryTimes = retryTimes
 		defChanged := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
-		if runC, err = c.prepareRetry(defChanged); err != nil {
+		forcePreMode := moerr.IsMoErrCode(err, moerr.ErrVectorNeedRetryWithPreMode)
+		if forcePreMode {
+			// NOTE: This in-place modification of the AST will persist if the statement
+			// is part of a prepared statement. This is generally desirable as it
+			// avoids re-triggering adaptive mode logic on subsequent executions.
+			updated := rewriteAutoModeToPre(c.stmt)
+			if !updated {
+				// If no explicit 'auto' was rewritten, but we got a retry request,
+				// it means it was implicit auto mode (from session variable).
+				// We force the AST to 'pre' mode to rebuild the plan correctly.
+				if !forceModePre(c.stmt) {
+					logutil.Warnf("Failed to force 'pre' mode on AST during retry: SQL=%s", c.sql)
+				}
+			}
+			// Force rebuild of physical plan for explain analyze after rewrite.
+			if c.anal != nil {
+				c.anal.phyPlan = nil
+				c.anal.remotePhyPlans = nil
+				c.anal.explainPhyBuffer = nil
+			}
+		}
+
+		if runC, err = c.prepareRetry(defChanged || forcePreMode); err != nil {
 			return nil, err
 		}
 
@@ -322,6 +345,190 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	//}
 
 	return queryResult, err
+}
+
+// rewriteAutoModeToPre recursively traverses the AST and rewrites 'mode=auto' to 'mode=pre'
+// in the RankOption of vector search queries.
+// NOTE: RankOption is configured at the top-level SQL, so deep traversal here is defensive.
+//
+// This function is called when the adaptive mode (auto) determines that post-filter mode
+// returns empty results and a retry with pre-filter mode is needed.
+//
+// The rewrite is performed in-place on the AST, so the same statement can be re-compiled
+// with the updated mode setting.
+//
+// Parameters:
+//   - stmt: The SQL statement AST to rewrite
+//
+// Returns:
+//   - true if any 'mode=auto' was found and rewritten to 'mode=pre'
+//   - false if no rewrite was performed (no explicit 'auto' mode found)
+func rewriteAutoModeToPre(stmt tree.Statement) bool {
+	switch s := stmt.(type) {
+	case *tree.Select:
+		return rewriteAutoModeInSelect(s)
+	case *tree.ExplainStmt:
+		return rewriteAutoModeToPre(s.Statement)
+	case *tree.ExplainAnalyze:
+		return rewriteAutoModeToPre(s.Statement)
+	case *tree.ExplainPhyPlan:
+		return rewriteAutoModeToPre(s.Statement)
+	case *tree.ExplainFor:
+		return rewriteAutoModeToPre(s.Statement)
+	case *tree.Insert:
+		return rewriteAutoModeInSelect(s.Rows)
+	case *tree.Replace:
+		return rewriteAutoModeInSelect(s.Rows)
+	default:
+		return false
+	}
+}
+
+// forceModePre forces the AST to use 'pre' mode even when no explicit mode was specified.
+//
+// This function is called when auto mode was enabled via session variable (implicit)
+// rather than explicit SQL option, and we need to rebuild the plan with pre-filter mode.
+// Unlike rewriteAutoModeToPre, this function will set 'mode=pre' regardless of the
+// current mode value, creating the RankOption structure if it doesn't exist.
+//
+// Parameters:
+//   - stmt: The SQL statement AST to modify
+//
+// Returns:
+//   - true if the mode was successfully set to 'pre'
+//   - false if the statement type doesn't support RankOption
+func forceModePre(stmt tree.Statement) bool {
+	var sel *tree.Select
+	switch s := stmt.(type) {
+	case *tree.Select:
+		sel = s
+	case *tree.ExplainStmt:
+		return forceModePre(s.Statement)
+	case *tree.ExplainAnalyze:
+		return forceModePre(s.Statement)
+	case *tree.ExplainPhyPlan:
+		return forceModePre(s.Statement)
+	case *tree.ExplainFor:
+		return forceModePre(s.Statement)
+	case *tree.Insert:
+		sel = s.Rows
+	case *tree.Replace:
+		sel = s.Rows
+	default:
+		return false
+	}
+
+	if sel == nil {
+		return false
+	}
+	if sel.RankOption == nil {
+		sel.RankOption = &tree.RankOption{
+			Option: map[string]string{"mode": "pre"},
+		}
+	} else {
+		if sel.RankOption.Option == nil {
+			sel.RankOption.Option = map[string]string{"mode": "pre"}
+		} else {
+			sel.RankOption.Option["mode"] = "pre"
+		}
+	}
+	return true
+}
+
+// rewriteAutoModeInSelect rewrites 'mode=auto' to 'mode=pre' in a Select statement.
+// It checks both the top-level RankOption and recursively processes nested subqueries.
+func rewriteAutoModeInSelect(sel *tree.Select) bool {
+	if sel == nil {
+		return false
+	}
+	updated := false
+	// Check and rewrite the RankOption at the current Select level
+	if sel.RankOption != nil && sel.RankOption.Option != nil {
+		if mode, ok := sel.RankOption.Option["mode"]; ok && strings.EqualFold(mode, "auto") {
+			sel.RankOption.Option["mode"] = "pre"
+			updated = true
+		}
+	}
+	// Recursively process nested select statements (subqueries)
+	if sel.Select != nil {
+		if rewriteAutoModeInSelectStatement(sel.Select) {
+			updated = true
+		}
+	}
+	return updated
+}
+
+// rewriteAutoModeInSelectStatement recursively processes different types of SelectStatement nodes.
+// This handles Select, ParenSelect (parenthesized selects), UnionClause, and SelectClause.
+func rewriteAutoModeInSelectStatement(stmt tree.SelectStatement) bool {
+	switch s := stmt.(type) {
+	case *tree.Select:
+		return rewriteAutoModeInSelect(s)
+	case *tree.ParenSelect:
+		return rewriteAutoModeInSelect(s.Select)
+	case *tree.UnionClause:
+		// Process both sides of UNION/INTERSECT/EXCEPT
+		updated := rewriteAutoModeInSelectStatement(s.Left)
+		if rewriteAutoModeInSelectStatement(s.Right) {
+			updated = true
+		}
+		return updated
+	case *tree.SelectClause:
+		return rewriteAutoModeInSelectClause(s)
+	default:
+		return false
+	}
+}
+
+// rewriteAutoModeInSelectClause processes a SelectClause by checking its FROM clause
+// for subqueries that may contain vector search with auto mode.
+func rewriteAutoModeInSelectClause(clause *tree.SelectClause) bool {
+	if clause == nil || clause.From == nil {
+		return false
+	}
+	updated := false
+	for _, tbl := range clause.From.Tables {
+		if rewriteAutoModeInTableExpr(tbl) {
+			updated = true
+		}
+	}
+	return updated
+}
+
+// rewriteAutoModeInTableExpr recursively processes table expressions to find subqueries.
+// This handles Subquery, JoinTableExpr, ApplyTableExpr, ParenTableExpr, AliasedTableExpr,
+// and StatementSource (for derived tables).
+func rewriteAutoModeInTableExpr(expr tree.TableExpr) bool {
+	switch t := expr.(type) {
+	case *tree.Subquery:
+		return rewriteAutoModeInSelectStatement(t.Select)
+	case *tree.JoinTableExpr:
+		updated := false
+		if t.Left != nil {
+			updated = rewriteAutoModeInTableExpr(t.Left)
+		}
+		if t.Right != nil {
+			updated = rewriteAutoModeInTableExpr(t.Right) || updated
+		}
+		return updated
+	case *tree.ApplyTableExpr:
+		updated := false
+		if t.Left != nil {
+			updated = rewriteAutoModeInTableExpr(t.Left)
+		}
+		if t.Right != nil {
+			updated = rewriteAutoModeInTableExpr(t.Right) || updated
+		}
+		return updated
+	case *tree.ParenTableExpr:
+		return rewriteAutoModeInTableExpr(t.Expr)
+	case *tree.AliasedTableExpr:
+		return rewriteAutoModeInTableExpr(t.Expr)
+	case *tree.StatementSource:
+		return rewriteAutoModeToPre(t.Statement)
+	default:
+		return false
+	}
 }
 
 // prepareRetry rebuild a new Compile object for retrying the query.
@@ -379,6 +586,11 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 			return nil, e
 		}
 		c.pn = pn
+		// Update c.anal.qry to point to the new plan's Query
+		// This ensures fillPlanNodeAnalyzeInfo uses the correct nodes
+		if qry, ok := pn.Plan.(*plan.Plan_Query); ok && c.anal != nil {
+			c.anal.qry = qry.Query
+		}
 	}
 	if e = runC.Compile(topContext, c.pn, c.fill); e != nil {
 		return nil, e
@@ -488,9 +700,18 @@ func (c *Compile) handleQueryPlanAnalyze(runC *Compile, queryResult *util2.RunRe
 		topContext := c.proc.GetTopContext()
 
 		statsInfo := statistic.StatsInfoFromContext(topContext)
-		scopeInfo := makeExplainPhyPlanBuffer(c.scopes, queryResult, statsInfo, c.anal, option)
+		// Use the final (retry) scopes for explain analyze output.
+		scopes := c.scopes
+		if runC != nil && runC != c && len(runC.scopes) > 0 {
+			scopes = runC.scopes
+		}
+		scopeInfo := makeExplainPhyPlanBuffer(scopes, queryResult, statsInfo, c.anal, option)
 
-		runC.anal.explainPhyBuffer = scopeInfo
+		// Ensure explain analyze always exposes the final (retry) plan buffer.
+		c.anal.explainPhyBuffer = scopeInfo
+		if runC.anal != nil && runC != c {
+			runC.anal.explainPhyBuffer = scopeInfo
+		}
 	}
 }
 

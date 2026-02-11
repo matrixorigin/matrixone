@@ -11388,9 +11388,11 @@ type DropTable struct {
 	UpdateFkSqls []string `protobuf:"bytes,11,rep,name=updateFkSqls,proto3" json:"updateFkSqls,omitempty"`
 	// fk child table id that refers to me
 	FkChildTblsReferToMe []uint64 `protobuf:"varint,12,rep,packed,name=fkChildTblsReferToMe,proto3" json:"fkChildTblsReferToMe,omitempty"`
-	XXX_NoUnkeyedLiteral struct{} `json:"-"`
-	XXX_unrecognized     []byte   `json:"-"`
-	XXX_sizecache        int32    `json:"-"`
+	// When dropping multiple tables in one statement, per-table details are stored here.
+	Tables               []*DropTable `protobuf:"bytes,13,rep,name=tables,proto3" json:"tables,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}     `json:"-"`
+	XXX_unrecognized     []byte       `json:"-"`
+	XXX_sizecache        int32        `json:"-"`
 }
 
 func (m *DropTable) Reset()         { *m = DropTable{} }
@@ -11499,6 +11501,13 @@ func (m *DropTable) GetUpdateFkSqls() []string {
 func (m *DropTable) GetFkChildTblsReferToMe() []uint64 {
 	if m != nil {
 		return m.FkChildTblsReferToMe
+	}
+	return nil
+}
+
+func (m *DropTable) GetTables() []*DropTable {
+	if m != nil {
+		return m.Tables
 	}
 	return nil
 }
@@ -24367,6 +24376,20 @@ func (m *DropTable) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if len(m.Tables) > 0 {
+		for iNdEx := len(m.Tables) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.Tables[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintPlan(dAtA, i, uint64(size))
+			}
+			i--
+			dAtA[i] = 0x6a
+		}
+	}
 	if len(m.FkChildTblsReferToMe) > 0 {
 		dAtA198 := make([]byte, len(m.FkChildTblsReferToMe)*10)
 		var j197 int
@@ -30772,6 +30795,12 @@ func (m *DropTable) ProtoSize() (n int) {
 			l += sovPlan(uint64(e))
 		}
 		n += 1 + sovPlan(uint64(l)) + l
+	}
+	if len(m.Tables) > 0 {
+		for _, e := range m.Tables {
+			l = e.ProtoSize()
+			n += 1 + l + sovPlan(uint64(l))
+		}
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -56640,6 +56669,40 @@ func (m *DropTable) Unmarshal(dAtA []byte) error {
 			} else {
 				return fmt.Errorf("proto: wrong wireType = %d for field FkChildTblsReferToMe", wireType)
 			}
+		case 13:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Tables", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Tables = append(m.Tables, &DropTable{})
+			if err := m.Tables[len(m.Tables)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPlan(dAtA[iNdEx:])

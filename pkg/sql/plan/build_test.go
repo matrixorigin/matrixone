@@ -808,6 +808,7 @@ func TestDdl(t *testing.T) {
 		"create table if not exists nation (t bool(20), b int, c char(20), d varchar(20))",
 		"drop table if exists tbl_name",
 		"drop table if exists nation",
+		"drop table if exists tpch.tbl_not_exist, tpch.tbl_not_exist2",
 		"drop table nation",
 		"drop table tpch.nation",
 		"drop table if exists tpch.tbl_not_exist",
