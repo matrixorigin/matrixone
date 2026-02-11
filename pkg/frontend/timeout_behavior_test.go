@@ -124,3 +124,33 @@ func TestSessionTimeoutBounds(t *testing.T) {
 	require.Error(t, ses.SetSessionSysVar(context.Background(), "interactive_timeout", int64(11)))
 	require.NoError(t, ses.SetSessionSysVar(context.Background(), "interactive_timeout", int64(6)))
 }
+
+func TestSessionTimeoutBoundsZeroDisablesPUChecks(t *testing.T) {
+	_, _, ses, _ := newTestServerWithRoutine(t, 0)
+	pu := getPu("")
+	oldWaitMin, oldWaitMax := pu.SV.WaitTimeoutMin, pu.SV.WaitTimeoutMax
+	oldInteractiveMin, oldInteractiveMax := pu.SV.InteractiveTimeoutMin, pu.SV.InteractiveTimeoutMax
+	defer func() {
+		pu.SV.WaitTimeoutMin = oldWaitMin
+		pu.SV.WaitTimeoutMax = oldWaitMax
+		pu.SV.InteractiveTimeoutMin = oldInteractiveMin
+		pu.SV.InteractiveTimeoutMax = oldInteractiveMax
+	}()
+
+	// 0 means "no additional PU bound", while system var type constraints still apply.
+	pu.SV.WaitTimeoutMin = 0
+	pu.SV.WaitTimeoutMax = 0
+	pu.SV.InteractiveTimeoutMin = 0
+	pu.SV.InteractiveTimeoutMax = 0
+
+	// newTestServerWithRoutine sets max=100. Ensure values >100 are accepted when max=0.
+	require.NoError(t, ses.SetSessionSysVar(context.Background(), "wait_timeout", int64(1000)))
+	require.NoError(t, ses.SetSessionSysVar(context.Background(), "interactive_timeout", int64(1000)))
+}
+
+func TestSessionTimeoutNegativeInput(t *testing.T) {
+	_, _, ses, _ := newTestServerWithRoutine(t, 0)
+
+	require.Error(t, ses.SetSessionSysVar(context.Background(), "wait_timeout", int64(-1)))
+	require.Error(t, ses.SetSessionSysVar(context.Background(), "interactive_timeout", int64(-1)))
+}

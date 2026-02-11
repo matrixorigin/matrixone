@@ -32,8 +32,8 @@ func TestInteractiveTimeoutScopeLeak(t *testing.T) {
 	setPu("", pu)
 	setSessionAlloc("", NewLeakCheckAllocator())
 
-	// Create a dummy session
-	// ses := NewSession(ctx, "", nil, nil) // This panics if proto is nil
+	// Build a minimal Session stub for sysvar scope checks.
+	// This test does not need network protocol behaviors.
 	ses := &Session{
 		feSessionImpl: feSessionImpl{
 			service: "",
