@@ -657,7 +657,7 @@ func extractVectorValue(vec *vector.Vector, idx uint64, dest interface{}) error 
 		val := vector.GetFixedAtWithTypeCheck[uint64](vec, int(idx))
 		if d, ok := dest.(*uint64); ok {
 			*d = val
-		} 
+		}
 		// else if d, ok := dest.(*sql.NullInt64); ok {
 		// 	// Support sql.NullInt64 for uint64 values (e.g., dat_id)
 		// 	// Note: This may overflow if uint64 value exceeds int64 max, but it's acceptable for most use cases
@@ -695,11 +695,11 @@ func extractVectorValue(vec *vector.Vector, idx uint64, dest interface{}) error 
 		byteJson := types.DecodeJson(bytesVal)
 		if d, ok := dest.(*string); ok {
 			*d = byteJson.String()
-		} 
-		// else if d, ok := dest.(*sql.NullString); ok {
-		// 	d.String = byteJson.String()
-		// 	d.Valid = true
-		// } else if d, ok := dest.(*[]byte); ok {
+		} else if d, ok := dest.(*sql.NullString); ok {
+			d.String = byteJson.String()
+			d.Valid = true
+		}
+		// else if d, ok := dest.(*[]byte); ok {
 		// 	// For byte slice, get the JSON bytes and make a copy
 		// 	*d = make([]byte, len(bytesVal))
 		// 	copy(*d, bytesVal)
