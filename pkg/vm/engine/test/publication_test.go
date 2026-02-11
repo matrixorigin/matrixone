@@ -812,6 +812,12 @@ func TestExecuteIteration1(t *testing.T) {
 
 	err = txn6.Commit(queryDestCtx3)
 	require.NoError(t, err)
+
+	// Step 13: Try to drop destination table - should fail due to CCPR protection
+	dropTableSQL := fmt.Sprintf(`DROP TABLE %s.%s`, srcDBName, srcTableName)
+	err = exec_sql(disttaeEngine, queryDestCtx3, dropTableSQL)
+	require.Error(t, err, "DROP TABLE on CCPR destination table should fail")
+	t.Logf("Expected error when dropping CCPR destination table: %v", err)
 }
 
 func TestExecuteIterationDatabaseLevel(t *testing.T) {
