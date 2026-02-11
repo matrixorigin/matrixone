@@ -2396,12 +2396,33 @@ func Conv(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 		return convString(ivecs[0], fromBase, toBase, rs, length, selectList)
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 		// Numeric types are always treated as base 10
-		return convInt64Direct(ivecs[0], toBase, rs, length, selectList)
+		switch inputType.Oid {
+		case types.T_int8:
+			return convInt8Direct(ivecs[0], toBase, rs, length, selectList)
+		case types.T_int16:
+			return convInt16Direct(ivecs[0], toBase, rs, length, selectList)
+		case types.T_int32:
+			return convInt32Direct(ivecs[0], toBase, rs, length, selectList)
+		default:
+			return convInt64Direct(ivecs[0], toBase, rs, length, selectList)
+		}
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 		// Numeric types are always treated as base 10
-		return convUint64Direct(ivecs[0], toBase, rs, length, selectList)
+		switch inputType.Oid {
+		case types.T_uint8:
+			return convUint8Direct(ivecs[0], toBase, rs, length, selectList)
+		case types.T_uint16:
+			return convUint16Direct(ivecs[0], toBase, rs, length, selectList)
+		case types.T_uint32:
+			return convUint32Direct(ivecs[0], toBase, rs, length, selectList)
+		default:
+			return convUint64Direct(ivecs[0], toBase, rs, length, selectList)
+		}
 	case types.T_float32, types.T_float64:
 		// Numeric types are always treated as base 10
+		if inputType.Oid == types.T_float32 {
+			return convFloat32Direct(ivecs[0], toBase, rs, length, selectList)
+		}
 		return convFloat64Direct(ivecs[0], toBase, rs, length, selectList)
 	default:
 		// For other types, try to convert to string first
@@ -2466,6 +2487,94 @@ func convString(nVec *vector.Vector, fromBase, toBase int64, rs *vector.Function
 	return nil
 }
 
+func formatSignedToBase(val int64, toBase int64) string {
+	if val < 0 {
+		return strconv.FormatUint(uint64(val), int(toBase))
+	}
+	return strconv.FormatInt(val, int(toBase))
+}
+
+func convInt8Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
+	nParam := vector.GenerateFunctionFixedTypeParameter[int8](nVec)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		n, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		result := formatSignedToBase(int64(n), toBase)
+		if err := rs.AppendBytes([]byte(result), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func convInt16Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
+	nParam := vector.GenerateFunctionFixedTypeParameter[int16](nVec)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		n, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		result := formatSignedToBase(int64(n), toBase)
+		if err := rs.AppendBytes([]byte(result), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func convInt32Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
+	nParam := vector.GenerateFunctionFixedTypeParameter[int32](nVec)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		n, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		result := formatSignedToBase(int64(n), toBase)
+		if err := rs.AppendBytes([]byte(result), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func convInt64Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
 	nParam := vector.GenerateFunctionFixedTypeParameter[int64](nVec)
 
@@ -2485,15 +2594,88 @@ func convInt64Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResul
 			continue
 		}
 
-		// Convert int64 to string in to_base
-		// For negative numbers, MySQL returns the unsigned representation
-		var result string
-		if n < 0 {
-			uval := uint64(n)
-			result = strconv.FormatUint(uval, int(toBase))
-		} else {
-			result = strconv.FormatInt(n, int(toBase))
+		result := formatSignedToBase(n, toBase)
+		if err := rs.AppendBytes([]byte(result), false); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+func convUint8Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
+	nParam := vector.GenerateFunctionFixedTypeParameter[uint8](nVec)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		n, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		result := strconv.FormatUint(uint64(n), int(toBase))
+		if err := rs.AppendBytes([]byte(result), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func convUint16Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
+	nParam := vector.GenerateFunctionFixedTypeParameter[uint16](nVec)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		n, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		result := strconv.FormatUint(uint64(n), int(toBase))
+		if err := rs.AppendBytes([]byte(result), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func convUint32Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
+	nParam := vector.GenerateFunctionFixedTypeParameter[uint32](nVec)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		n, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		result := strconv.FormatUint(uint64(n), int(toBase))
 		if err := rs.AppendBytes([]byte(result), false); err != nil {
 			return err
 		}
@@ -2529,6 +2711,33 @@ func convUint64Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResu
 	return nil
 }
 
+func convFloat32Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
+	nParam := vector.GenerateFunctionFixedTypeParameter[float32](nVec)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		n, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		result := formatSignedToBase(int64(n), toBase)
+		if err := rs.AppendBytes([]byte(result), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func convFloat64Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
 	nParam := vector.GenerateFunctionFixedTypeParameter[float64](nVec)
 
@@ -2549,14 +2758,7 @@ func convFloat64Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionRes
 		}
 
 		// Convert float64 to int64 first (truncate), then to string in to_base
-		val := int64(n)
-		var result string
-		if val < 0 {
-			uval := uint64(val)
-			result = strconv.FormatUint(uval, int(toBase))
-		} else {
-			result = strconv.FormatInt(val, int(toBase))
-		}
+		result := formatSignedToBase(int64(n), toBase)
 		if err := rs.AppendBytes([]byte(result), false); err != nil {
 			return err
 		}
