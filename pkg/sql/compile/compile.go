@@ -173,6 +173,15 @@ func (c *Compile) GetMessageCenter() *message.MessageCenter {
 	return nil
 }
 
+// GetPlan returns the current plan of the Compile.
+// This is useful for getting the latest plan after a retry.
+func (c *Compile) GetPlan() *plan.Plan {
+	if c == nil {
+		return nil
+	}
+	return c.pn
+}
+
 func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) {
 	// clean up the process for a new query.
 	proc.ResetQueryContext()
@@ -417,7 +426,13 @@ func (c *Compile) isRetryErr(err error) bool {
 }
 
 func (c *Compile) canRetry(err error) bool {
-	return !c.disableRetry && c.isRetryErr(err)
+	if c.disableRetry {
+		return false
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrVectorNeedRetryWithPreMode) {
+		return true
+	}
+	return c.isRetryErr(err)
 }
 
 func (c *Compile) IsTpQuery() bool {
@@ -905,6 +920,21 @@ func (c *Compile) compileSinkScan(qry *plan.Query, nodeId int32) error {
 	return nil
 }
 
+func (c *Compile) isAdaptiveVectorSearch(qry *plan.Query) bool {
+	if qry == nil {
+		return false
+	}
+
+	for _, node := range qry.Nodes {
+		// Check for vector search in auto mode
+		if node.RankOption != nil && node.RankOption.Mode == "auto" {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Scope, error) {
 	if qry.Nodes[step].NodeType == plan.Node_SINK {
 		return ss, nil
@@ -924,10 +954,14 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 		}
 		updateScopesLastFlag([]*Scope{rs})
 		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curNodeIdx)
+
+		isAdaptive := c.isAdaptiveVectorSearch(qry)
+
 		rs.setRootOperator(
 			output.NewArgument().
 				WithFunc(c.fill).
-				WithBlock(c.needBlock),
+				WithBlock(c.needBlock).
+				WithAdaptive(isAdaptive),
 		)
 		return []*Scope{rs}, nil
 	}

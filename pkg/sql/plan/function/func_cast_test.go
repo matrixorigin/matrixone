@@ -2255,3 +2255,267 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 		})
 	}
 }
+
+// makeJSONEncodedFromText parses JSON text strings and returns their bytejson-encoded form as []string for vector.
+func makeJSONEncodedFromText(t *testing.T, jsonTexts []string, nulls []bool) []string {
+	t.Helper()
+	out := make([]string, len(jsonTexts))
+	for i, s := range jsonTexts {
+		if len(nulls) > i && nulls[i] {
+			out[i] = ""
+			continue
+		}
+		bj, err := types.ParseStringToByteJson(s)
+		require.NoError(t, err)
+		enc, err := types.EncodeJson(bj)
+		require.NoError(t, err)
+		out[i] = string(enc)
+	}
+	return out
+}
+
+func TestCastJsonToNumeric(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// run runs one JSON->numeric cast test. jsonTexts are JSON literal strings (e.g. "1", "\"a\""); toType is target type.
+	run := func(t *testing.T, name string, jsonTexts []string, nulls []bool, toType types.Type, expectAny any, expectNulls []bool, wantErr bool) {
+		t.Helper()
+		if nulls == nil {
+			nulls = make([]bool, len(jsonTexts))
+		}
+		encoded := makeJSONEncodedFromText(t, jsonTexts, nulls)
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(), encoded, nulls),
+			NewFunctionTestInput(toType, emptySliceForCastTarget(toType.Oid), []bool{}),
+		}
+		expect := NewFunctionTestResult(toType, wantErr, expectAny, expectNulls)
+		fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
+		succeed, info := fcTC.Run()
+		if wantErr {
+			require.True(t, succeed, "case %s: expected cast to fail with error, but: %s", name, info)
+			return
+		}
+		require.True(t, succeed, "case %s: %s", name, info)
+	}
+
+	t.Run("json_number_to_int64", func(t *testing.T) {
+		run(t, "int64", []string{"1", "2", "-3"}, nil,
+			types.T_int64.ToType(),
+			[]int64{1, 2, -3}, []bool{false, false, false}, false)
+	})
+
+	t.Run("json_number_to_int8", func(t *testing.T) {
+		run(t, "int8", []string{"10", "20"}, nil,
+			types.T_int8.ToType(),
+			[]int8{10, 20}, []bool{false, false}, false)
+	})
+
+	t.Run("json_string_number_to_int64", func(t *testing.T) {
+		run(t, "string_to_int64", []string{`"42"`, `"100"`}, nil,
+			types.T_int64.ToType(),
+			[]int64{42, 100}, []bool{false, false}, false)
+	})
+
+	t.Run("json_null_to_int64", func(t *testing.T) {
+		run(t, "null", []string{"null", "null"}, nil,
+			types.T_int64.ToType(),
+			[]int64{0, 0}, []bool{true, true}, false)
+	})
+
+	t.Run("json_number_to_float64", func(t *testing.T) {
+		run(t, "float64", []string{"1.5", "2.7", "3"}, nil,
+			types.T_float64.ToType(),
+			[]float64{1.5, 2.7, 3}, []bool{false, false, false}, false)
+	})
+
+	t.Run("json_string_number_to_float64", func(t *testing.T) {
+		run(t, "string_float", []string{`"3.14"`, `"0"`}, nil,
+			types.T_float64.ToType(),
+			[]float64{3.14, 0}, []bool{false, false}, false)
+	})
+
+	t.Run("json_number_to_uint64", func(t *testing.T) {
+		run(t, "uint64", []string{"1", "2", "99"}, nil,
+			types.T_uint64.ToType(),
+			[]uint64{1, 2, 99}, []bool{false, false, false}, false)
+	})
+
+	t.Run("json_object_to_int64_err", func(t *testing.T) {
+		run(t, "object_err", []string{"{}"}, nil,
+			types.T_int64.ToType(),
+			nil, nil, true)
+	})
+
+	t.Run("json_array_to_int64_err", func(t *testing.T) {
+		run(t, "array_err", []string{"[1,2]"}, nil,
+			types.T_int64.ToType(),
+			nil, nil, true)
+	})
+
+	t.Run("json_string_non_number_to_int64_err", func(t *testing.T) {
+		run(t, "string_non_number_err", []string{`"abc"`}, nil,
+			types.T_int64.ToType(),
+			nil, nil, true)
+	})
+
+	// --- jsonAppendNull coverage: all numeric types get null from JSON null or vector null ---
+	t.Run("json_null_to_int16", func(t *testing.T) {
+		run(t, "null_int16", []string{"null", "null"}, nil,
+			types.T_int16.ToType(),
+			[]int16{0, 0}, []bool{true, true}, false)
+	})
+	t.Run("json_null_to_int32", func(t *testing.T) {
+		run(t, "null_int32", []string{"null"}, nil,
+			types.T_int32.ToType(),
+			[]int32{0}, []bool{true}, false)
+	})
+	t.Run("json_null_to_uint8", func(t *testing.T) {
+		run(t, "null_uint8", []string{"null", "null"}, nil,
+			types.T_uint8.ToType(),
+			[]uint8{0, 0}, []bool{true, true}, false)
+	})
+	t.Run("json_null_to_uint16", func(t *testing.T) {
+		run(t, "null_uint16", []string{"null"}, nil,
+			types.T_uint16.ToType(),
+			[]uint16{0}, []bool{true}, false)
+	})
+	t.Run("json_null_to_uint32", func(t *testing.T) {
+		run(t, "null_uint32", []string{"null", "null"}, nil,
+			types.T_uint32.ToType(),
+			[]uint32{0, 0}, []bool{true, true}, false)
+	})
+	t.Run("json_null_to_float32", func(t *testing.T) {
+		run(t, "null_float32", []string{"null"}, nil,
+			types.T_float32.ToType(),
+			[]float32{0}, []bool{true}, false)
+	})
+	t.Run("json_null_to_decimal64", func(t *testing.T) {
+		run(t, "null_decimal64", []string{"null", "null"}, nil,
+			types.T_decimal64.ToType(),
+			[]types.Decimal64{0, 0}, []bool{true, true}, false)
+	})
+	t.Run("json_null_to_decimal128", func(t *testing.T) {
+		run(t, "null_decimal128", []string{"null"}, nil,
+			types.T_decimal128.ToType(),
+			[]types.Decimal128{{B0_63: 0, B64_127: 0}}, []bool{true}, false)
+	})
+	// Vector null (row is null): first row null triggers jsonAppendNull
+	t.Run("vector_null_to_int64", func(t *testing.T) {
+		nulls := []bool{true, false}
+		run(t, "vector_null", []string{"1", "2"}, nulls,
+			types.T_int64.ToType(),
+			[]int64{0, 2}, []bool{true, false}, false)
+	})
+
+	// --- jsonAppendValue coverage: all numeric types with values ---
+	t.Run("json_number_to_int16", func(t *testing.T) {
+		run(t, "int16", []string{"100", "-200", "0"}, nil,
+			types.T_int16.ToType(),
+			[]int16{100, -200, 0}, []bool{false, false, false}, false)
+	})
+	t.Run("json_number_to_int32", func(t *testing.T) {
+		run(t, "int32", []string{"100000", "-99999"}, nil,
+			types.T_int32.ToType(),
+			[]int32{100000, -99999}, []bool{false, false}, false)
+	})
+	t.Run("json_number_to_uint8", func(t *testing.T) {
+		run(t, "uint8", []string{"0", "255", "100"}, nil,
+			types.T_uint8.ToType(),
+			[]uint8{0, 255, 100}, []bool{false, false, false}, false)
+	})
+	t.Run("json_number_to_uint16", func(t *testing.T) {
+		run(t, "uint16", []string{"1000", "65535"}, nil,
+			types.T_uint16.ToType(),
+			[]uint16{1000, 65535}, []bool{false, false}, false)
+	})
+	t.Run("json_number_to_uint32", func(t *testing.T) {
+		run(t, "uint32", []string{"100000", "4294967295"}, nil,
+			types.T_uint32.ToType(),
+			[]uint32{100000, 4294967295}, []bool{false, false}, false)
+	})
+	t.Run("json_number_to_float32", func(t *testing.T) {
+		run(t, "float32", []string{"1.5", "2.5", "-0.5"}, nil,
+			types.T_float32.ToType(),
+			[]float32{1.5, 2.5, -0.5}, []bool{false, false, false}, false)
+	})
+	t.Run("json_number_to_decimal64", func(t *testing.T) {
+		d1, _ := types.Decimal64FromFloat64(12.5, 18, 0)
+		d2, _ := types.Decimal64FromFloat64(0, 18, 0)
+		d3, _ := types.Decimal64FromFloat64(-3, 18, 0)
+		run(t, "decimal64", []string{"12.5", "0", "-3"}, nil,
+			types.T_decimal64.ToType(),
+			[]types.Decimal64{d1, d2, d3}, []bool{false, false, false}, false)
+	})
+	t.Run("json_number_to_decimal128", func(t *testing.T) {
+		d1, _ := types.Decimal128FromFloat64(12.5, 38, 0)
+		d2, _ := types.Decimal128FromFloat64(0, 38, 0)
+		d3, _ := types.Decimal128FromFloat64(-3, 38, 0)
+		run(t, "decimal128", []string{"12.5", "0", "-3"}, nil,
+			types.T_decimal128.ToType(),
+			[]types.Decimal128{d1, d2, d3}, []bool{false, false, false}, false)
+	})
+
+	// --- jsonAppendValue error/overflow cases ---
+	t.Run("json_int8_overflow_err", func(t *testing.T) {
+		run(t, "int8_overflow", []string{"1000"}, nil,
+			types.T_int8.ToType(),
+			nil, nil, true)
+	})
+	t.Run("json_int16_overflow_err", func(t *testing.T) {
+		run(t, "int16_overflow", []string{"100000"}, nil,
+			types.T_int16.ToType(),
+			nil, nil, true)
+	})
+	t.Run("json_int32_overflow_err", func(t *testing.T) {
+		run(t, "int32_overflow", []string{"999999999999"}, nil,
+			types.T_int32.ToType(),
+			nil, nil, true)
+	})
+	t.Run("json_uint_negative_err", func(t *testing.T) {
+		run(t, "uint_negative", []string{"-1"}, nil,
+			types.T_uint64.ToType(),
+			nil, nil, true)
+	})
+	t.Run("json_uint8_overflow_err", func(t *testing.T) {
+		run(t, "uint8_overflow", []string{"256"}, nil,
+			types.T_uint8.ToType(),
+			nil, nil, true)
+	})
+	t.Run("json_float32_overflow_err", func(t *testing.T) {
+		run(t, "float32_overflow", []string{"1e100"}, nil,
+			types.T_float32.ToType(),
+			nil, nil, true)
+	})
+}
+
+// emptySliceForCastTarget returns an empty slice of the right type for the second (target type) cast parameter.
+func emptySliceForCastTarget(oid types.T) any {
+	switch oid {
+	case types.T_int8:
+		return []int8{}
+	case types.T_int16:
+		return []int16{}
+	case types.T_int32:
+		return []int32{}
+	case types.T_int64:
+		return []int64{}
+	case types.T_uint8:
+		return []uint8{}
+	case types.T_uint16:
+		return []uint16{}
+	case types.T_uint32:
+		return []uint32{}
+	case types.T_uint64:
+		return []uint64{}
+	case types.T_float32:
+		return []float32{}
+	case types.T_float64:
+		return []float64{}
+	case types.T_decimal64:
+		return []types.Decimal64{}
+	case types.T_decimal128:
+		return []types.Decimal128{}
+	default:
+		return []int64{}
+	}
+}
