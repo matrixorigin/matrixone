@@ -17,6 +17,7 @@ package taskservice
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -93,22 +94,41 @@ func (r *mockErrActiveRoutine) Restart() error { return r.restartErr }
 
 type serviceWithDaemonHook struct {
 	TaskService
+	mu        sync.RWMutex
 	queryErr  error
 	updateErr error
 }
 
 func (s *serviceWithDaemonHook) QueryDaemonTask(ctx context.Context, conds ...Condition) ([]task.DaemonTask, error) {
-	if s.queryErr != nil {
-		return nil, s.queryErr
+	s.mu.RLock()
+	queryErr := s.queryErr
+	s.mu.RUnlock()
+	if queryErr != nil {
+		return nil, queryErr
 	}
 	return s.TaskService.QueryDaemonTask(ctx, conds...)
 }
 
 func (s *serviceWithDaemonHook) UpdateDaemonTask(ctx context.Context, tasks []task.DaemonTask, conds ...Condition) (int, error) {
-	if s.updateErr != nil {
-		return 0, s.updateErr
+	s.mu.RLock()
+	updateErr := s.updateErr
+	s.mu.RUnlock()
+	if updateErr != nil {
+		return 0, updateErr
 	}
 	return s.TaskService.UpdateDaemonTask(ctx, tasks, conds...)
+}
+
+func (s *serviceWithDaemonHook) setQueryErr(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.queryErr = err
+}
+
+func (s *serviceWithDaemonHook) setUpdateErr(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.updateErr = err
 }
 
 func daemonTaskMetadata() task.TaskMetadata {
@@ -184,7 +204,7 @@ func TestStartTaskHandleBranches(t *testing.T) {
 	require.False(t, executed.Load())
 
 	// force update error branch in startDaemonTask
-	hook.updateErr = errors.New("update failed")
+	hook.setUpdateErr(errors.New("update failed"))
 	dt2 := newDaemonTaskForTest(2, task.TaskStatus_Created, "")
 	dt2.Metadata.ID = "start-2"
 	dt2.LastHeartbeat = time.Time{}
@@ -196,7 +216,7 @@ func TestStartTaskHandleBranches(t *testing.T) {
 		},
 	})
 	require.NoError(t, start2.Handle(context.Background()))
-	hook.updateErr = nil
+	hook.setUpdateErr(nil)
 
 	// run executor and hit setDaemonTaskError branch
 	dt3 := newDaemonTaskForTest(3, task.TaskStatus_Created, "")
@@ -225,9 +245,9 @@ func TestResumeTaskHandleBranchesDirect(t *testing.T) {
 	mustAddTestDaemonTask(t, store, 1, dt)
 	h := newResumeTask(r, &daemonTask{task: dt})
 
-	hook.queryErr = errors.New("query failed")
+	hook.setQueryErr(errors.New("query failed"))
 	require.Error(t, h.Handle(context.Background()))
-	hook.queryErr = nil
+	hook.setQueryErr(nil)
 
 	mustDeleteTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
 	require.Error(t, h.Handle(context.Background()))
@@ -248,9 +268,9 @@ func TestResumeTaskHandleBranchesDirect(t *testing.T) {
 
 	dt.TaskStatus = task.TaskStatus_ResumeRequested
 	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
-	hook.updateErr = errors.New("update failed")
+	hook.setUpdateErr(errors.New("update failed"))
 	require.Error(t, h.Handle(context.Background()))
-	hook.updateErr = nil
+	hook.setUpdateErr(nil)
 
 	require.Error(t, h.Handle(context.Background()))
 }
@@ -266,9 +286,9 @@ func TestRestartTaskHandleBranchesDirect(t *testing.T) {
 	taskRef := &daemonTask{task: dt}
 	h := newRestartTask(r, taskRef)
 
-	hook.queryErr = errors.New("query failed")
+	hook.setQueryErr(errors.New("query failed"))
 	require.Error(t, h.Handle(context.Background()))
-	hook.queryErr = nil
+	hook.setQueryErr(nil)
 
 	mustDeleteTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
 	require.Error(t, h.Handle(context.Background()))
@@ -289,9 +309,9 @@ func TestRestartTaskHandleBranchesDirect(t *testing.T) {
 
 	dt.TaskRunner = r.runnerID
 	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
-	hook.updateErr = errors.New("update failed")
+	hook.setUpdateErr(errors.New("update failed"))
 	require.Error(t, h.Handle(context.Background()))
-	hook.updateErr = nil
+	hook.setUpdateErr(nil)
 
 	require.Error(t, h.Handle(context.Background()))
 
@@ -317,10 +337,10 @@ func TestPauseAndCancelTaskHandleBranchesDirect(t *testing.T) {
 	pauseH := newPauseTask(r, taskRef)
 	cancelH := newCancelTask(r, taskRef)
 
-	hook.queryErr = errors.New("query failed")
+	hook.setQueryErr(errors.New("query failed"))
 	require.Error(t, pauseH.Handle(context.Background()))
 	require.Error(t, cancelH.Handle(context.Background()))
-	hook.queryErr = nil
+	hook.setQueryErr(nil)
 
 	mustDeleteTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
 	require.Error(t, pauseH.Handle(context.Background()))
@@ -342,16 +362,16 @@ func TestPauseAndCancelTaskHandleBranchesDirect(t *testing.T) {
 
 	dt.TaskStatus = task.TaskStatus_PauseRequested
 	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
-	hook.updateErr = errors.New("update failed")
+	hook.setUpdateErr(errors.New("update failed"))
 	require.Error(t, pauseH.Handle(context.Background()))
-	hook.updateErr = nil
+	hook.setUpdateErr(nil)
 	require.Error(t, pauseH.Handle(context.Background()))
 
 	dt.TaskStatus = task.TaskStatus_CancelRequested
 	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
-	hook.updateErr = errors.New("update failed")
+	hook.setUpdateErr(errors.New("update failed"))
 	require.Error(t, cancelH.Handle(context.Background()))
-	hook.updateErr = nil
+	hook.setUpdateErr(nil)
 	require.Error(t, cancelH.Handle(context.Background()))
 
 	ar1 := ActiveRoutine(&mockErrActiveRoutine{pauseErr: errors.New("pause failed")})
