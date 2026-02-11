@@ -545,8 +545,9 @@ func TestTaskNameFromDetails(t *testing.T) {
 
 func TestNewStartTaskHandleWithUnknownExecutor(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
-		// No executor registered for this task code; newStartTask should return safely.
-		r.newStartTask(newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID))
+		// No executor registered for this task code; newDaemonTask should return an error.
+		_, err := r.newDaemonTask(newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID))
+		require.Error(t, err)
 	}, WithRunnerParallelism(1),
 		WithRunnerFetchInterval(time.Millisecond))
 }
@@ -569,6 +570,9 @@ func TestStartTasksWithNilHAKeeperClient(t *testing.T) {
 		dt := newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID)
 		mustAddTestDaemonTask(t, store, 1, dt)
 
+		// Stop background workers first to avoid racing with poll goroutine
+		// when overriding test-only runner fields.
+		require.NoError(t, r.Stop())
 		r.getClient = func() util.HAKeeperClient { return nil }
 		tasks := r.startTasks(context.Background())
 		require.Len(t, tasks, 1)
@@ -582,6 +586,9 @@ func TestStartTasksWithHAKeeperClientState(t *testing.T) {
 		dt := newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID)
 		mustAddTestDaemonTask(t, store, 1, dt)
 
+		// Stop background workers first to avoid racing with poll goroutine
+		// when overriding test-only runner fields.
+		require.NoError(t, r.Stop())
 		r.cnUUID = "cn-1"
 		r.getClient = func() util.HAKeeperClient {
 			return &mockHAKeeperClientForDaemon{
@@ -609,6 +616,9 @@ func TestStartTasksWithHAKeeperClientError(t *testing.T) {
 		dt := newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID)
 		mustAddTestDaemonTask(t, store, 1, dt)
 
+		// Stop background workers first to avoid racing with poll goroutine
+		// when overriding test-only runner fields.
+		require.NoError(t, r.Stop())
 		r.getClient = func() util.HAKeeperClient {
 			return &mockHAKeeperClientForDaemon{err: errors.New("hakeeper unavailable")}
 		}

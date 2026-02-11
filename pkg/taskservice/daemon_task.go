@@ -493,16 +493,6 @@ func (r *taskRunner) enqueue(handler TaskHandler) {
 	r.pendingTaskHandle <- handler
 }
 
-func (r *taskRunner) newStartTask(t task.DaemonTask) {
-	dt, err := r.newDaemonTask(t)
-	if err != nil {
-		r.logger.Error("failed to dispatch daemon task",
-			zap.Uint64("task ID", t.ID), zap.Error(err))
-		return
-	}
-	r.enqueue(newStartTask(r, dt))
-}
-
 func (r *taskRunner) dispatchTaskHandle(ctx context.Context) {
 	// Build handlers first, then enqueue outside daemonTasks lock usage
 	// to avoid lock + channel send blocking cycles.
