@@ -30,6 +30,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 )
 
+type addAsyncErrStorage struct {
+	TaskStorage
+	err error
+}
+
+func (s *addAsyncErrStorage) AddAsyncTask(context.Context, ...task.AsyncTask) (int, error) {
+	return 0, s.err
+}
+
 func TestCreateAsyncTask(t *testing.T) {
 	store := NewMemTaskStorage()
 	s := NewTaskService(runtime.DefaultRuntime(), store)
@@ -87,6 +96,51 @@ func TestCreateBatch(t *testing.T) {
 		assert.Nil(t, v.ExecuteResult)
 		assert.Equal(t, newTestTaskMetadata(fmt.Sprintf("task-%d", i)), v.Metadata)
 	}
+}
+
+func TestCreateAsyncTaskReturnsStorageError(t *testing.T) {
+	base := NewMemTaskStorage()
+	s := NewTaskService(runtime.DefaultRuntime(), &addAsyncErrStorage{
+		TaskStorage: base,
+		err:         moerr.NewInternalErrorNoCtx("inject add async failure"),
+	})
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err := s.CreateAsyncTask(ctx, newTestTaskMetadata("err-async"))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "inject add async failure")
+}
+
+func TestCreateBatchReturnsStorageError(t *testing.T) {
+	base := NewMemTaskStorage()
+	s := NewTaskService(runtime.DefaultRuntime(), &addAsyncErrStorage{
+		TaskStorage: base,
+		err:         moerr.NewInternalErrorNoCtx("inject add batch failure"),
+	})
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err := s.CreateBatch(ctx, []task.TaskMetadata{newTestTaskMetadata("err-batch")})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "inject add batch failure")
+}
+
+func TestCreateCronTaskWithInvalidExpr(t *testing.T) {
+	store := NewMemTaskStorage()
+	s := NewTaskService(runtime.DefaultRuntime(), store)
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	err := s.CreateCronTask(context.Background(), newTestTaskMetadata("invalid-cron"), "not-a-cron")
+	assert.Error(t, err)
 }
 
 func TestAllocate(t *testing.T) {
@@ -565,6 +619,7 @@ func TestAddCdcTask1(t *testing.T) {
 func Test_conditions(t *testing.T) {
 
 	conds := []Condition{
+		WithLimitCond(10),
 		WithTaskExecutorCond(EQ, task.TaskCode_InitCdc),
 		WithTaskType(EQ, task.TaskType_CreateCdc.String()),
 		WithAccountID(EQ, catalog.System_Account),
@@ -583,4 +638,52 @@ func Test_conditions(t *testing.T) {
 		cond.sql()
 		cond.eval(nil)
 	}
+}
+
+func TestCreateAsyncTaskWithCanceledContext(t *testing.T) {
+	store := NewMemTaskStorage()
+	s := NewTaskService(runtime.DefaultRuntime(), store)
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := s.CreateAsyncTask(ctx, newTestTaskMetadata("canceled-task"))
+	assert.Error(t, err)
+}
+
+func TestCreateBatchWithCanceledContext(t *testing.T) {
+	store := NewMemTaskStorage()
+	s := NewTaskService(runtime.DefaultRuntime(), store)
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := s.CreateBatch(ctx, []task.TaskMetadata{newTestTaskMetadata("canceled-batch-task")})
+	assert.Error(t, err)
+}
+
+func TestTruncateCompletedTasks(t *testing.T) {
+	store := NewMemTaskStorage()
+	s := NewTaskService(runtime.DefaultRuntime(), store)
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+
+	assert.NoError(t, s.CreateAsyncTask(ctx, newTestTaskMetadata("truncate-task")))
+	v := mustGetTestAsyncTask(t, store, 1)[0]
+	assert.NoError(t, s.Allocate(ctx, v, "r1"))
+	v = mustGetTestAsyncTask(t, store, 1)[0]
+	assert.NoError(t, s.Complete(ctx, "r1", v, task.ExecuteResult{Code: task.ResultCode_Success}))
+
+	assert.NoError(t, s.TruncateCompletedTasks(ctx))
+	tasks, err := s.QueryAsyncTask(ctx)
+	assert.NoError(t, err)
+	assert.Len(t, tasks, 0)
 }
