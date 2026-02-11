@@ -93,6 +93,14 @@ const (
 	cmdCheckSnapshotFlushedPrefix = "__++__internal_check_snapshot_flushed"
 )
 
+// mo_ctl sync protection command patterns
+const (
+	moCtlGCStatus                 = `mo_ctl('dn', 'gc_status'`
+	moCtlRegisterSyncProtection   = `mo_ctl('dn', 'register_sync_protection'`
+	moCtlRenewSyncProtection      = `mo_ctl('dn', 'renew_sync_protection'`
+	moCtlUnregisterSyncProtection = `mo_ctl('dn', 'unregister_sync_protection'`
+)
+
 // placeholderToEmpty converts the "-" placeholder back to empty string
 // This is the inverse of escapeOrPlaceholder in sql_builder.go
 func placeholderToEmpty(s string) string {
@@ -131,6 +139,20 @@ func (h *UpstreamSQLHelper) HandleSpecialSQL(
 	}
 	if strings.HasPrefix(lowerQuery, cmdCheckSnapshotFlushedPrefix) {
 		return h.handleCheckSnapshotFlushedCmd(ctx, query)
+	}
+
+	// Check for mo_ctl sync protection commands
+	if strings.Contains(lowerQuery, moCtlGCStatus) {
+		return h.handleGCStatusCmd(ctx)
+	}
+	if strings.Contains(lowerQuery, moCtlRegisterSyncProtection) {
+		return h.handleRegisterSyncProtectionCmd(ctx)
+	}
+	if strings.Contains(lowerQuery, moCtlRenewSyncProtection) {
+		return h.handleRenewSyncProtectionCmd(ctx)
+	}
+	if strings.Contains(lowerQuery, moCtlUnregisterSyncProtection) {
+		return h.handleUnregisterSyncProtectionCmd(ctx)
 	}
 
 	// Parse SQL to check if it's a special statement
@@ -1386,6 +1408,107 @@ func (h *UpstreamSQLHelper) handleCheckSnapshotFlushedCmd(
 	bat := batch.New([]string{"result"})
 	bat.Vecs[0] = vector.NewVec(types.T_bool.ToType())
 	err = vector.AppendFixed(bat.Vecs[0], result, false, mp)
+	if err != nil {
+		bat.Clean(mp)
+		return true, nil, err
+	}
+	bat.SetRowCount(1)
+
+	return true, h.convertExecutorResult(executor.Result{
+		Batches: []*batch.Batch{bat},
+		Mp:      mp,
+	}), nil
+}
+
+// handleGCStatusCmd handles the mo_ctl('dn', 'gc_status', ”) command
+// Returns a successful GC status response (not running, no protections)
+func (h *UpstreamSQLHelper) handleGCStatusCmd(
+	ctx context.Context,
+) (bool, *publication.Result, error) {
+	logutil.Info("UpstreamSQLHelper: handling gc_status command, returning success")
+
+	// Return successful GC status: not running, 0 protections, current timestamp
+	responseJSON := fmt.Sprintf(`{"running": false, "protections": 0, "ts": %d}`, time.Now().UnixNano())
+
+	mp := mpool.MustNewZero()
+	bat := batch.New([]string{"result"})
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	err := vector.AppendBytes(bat.Vecs[0], []byte(responseJSON), false, mp)
+	if err != nil {
+		bat.Clean(mp)
+		return true, nil, err
+	}
+	bat.SetRowCount(1)
+
+	return true, h.convertExecutorResult(executor.Result{
+		Batches: []*batch.Batch{bat},
+		Mp:      mp,
+	}), nil
+}
+
+// handleRegisterSyncProtectionCmd handles the mo_ctl('dn', 'register_sync_protection', ...) command
+// Returns a successful response
+func (h *UpstreamSQLHelper) handleRegisterSyncProtectionCmd(
+	ctx context.Context,
+) (bool, *publication.Result, error) {
+	logutil.Info("UpstreamSQLHelper: handling register_sync_protection command, returning success")
+
+	responseJSON := `{"status": "ok"}`
+
+	mp := mpool.MustNewZero()
+	bat := batch.New([]string{"result"})
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	err := vector.AppendBytes(bat.Vecs[0], []byte(responseJSON), false, mp)
+	if err != nil {
+		bat.Clean(mp)
+		return true, nil, err
+	}
+	bat.SetRowCount(1)
+
+	return true, h.convertExecutorResult(executor.Result{
+		Batches: []*batch.Batch{bat},
+		Mp:      mp,
+	}), nil
+}
+
+// handleRenewSyncProtectionCmd handles the mo_ctl('dn', 'renew_sync_protection', ...) command
+// Returns a successful response
+func (h *UpstreamSQLHelper) handleRenewSyncProtectionCmd(
+	ctx context.Context,
+) (bool, *publication.Result, error) {
+	logutil.Info("UpstreamSQLHelper: handling renew_sync_protection command, returning success")
+
+	responseJSON := `{"status": "ok"}`
+
+	mp := mpool.MustNewZero()
+	bat := batch.New([]string{"result"})
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	err := vector.AppendBytes(bat.Vecs[0], []byte(responseJSON), false, mp)
+	if err != nil {
+		bat.Clean(mp)
+		return true, nil, err
+	}
+	bat.SetRowCount(1)
+
+	return true, h.convertExecutorResult(executor.Result{
+		Batches: []*batch.Batch{bat},
+		Mp:      mp,
+	}), nil
+}
+
+// handleUnregisterSyncProtectionCmd handles the mo_ctl('dn', 'unregister_sync_protection', ...) command
+// Returns a successful response
+func (h *UpstreamSQLHelper) handleUnregisterSyncProtectionCmd(
+	ctx context.Context,
+) (bool, *publication.Result, error) {
+	logutil.Info("UpstreamSQLHelper: handling unregister_sync_protection command, returning success")
+
+	responseJSON := `{"status": "ok"}`
+
+	mp := mpool.MustNewZero()
+	bat := batch.New([]string{"result"})
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	err := vector.AppendBytes(bat.Vecs[0], []byte(responseJSON), false, mp)
 	if err != nil {
 		bat.Clean(mp)
 		return true, nil, err

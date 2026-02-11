@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -42,8 +43,9 @@ var RegisterSyncProtectionOnDownstreamFn = func(
 	ctx context.Context,
 	downstreamExecutor SQLExecutor,
 	objectMap map[objectio.ObjectId]*ObjectWithTableInfo,
+	mp *mpool.MPool,
 ) (jobID string, ttlExpireTS int64, retryable bool, err error) {
-	return registerSyncProtectionOnDownstreamImpl(ctx, downstreamExecutor, objectMap)
+	return registerSyncProtectionOnDownstreamImpl(ctx, downstreamExecutor, objectMap, mp)
 }
 
 const (
@@ -254,7 +256,7 @@ func UnregisterSyncProtection(
 }
 
 // BuildBloomFilterFromObjectMap builds a bloom filter from the object map using object name strings
-func BuildBloomFilterFromObjectMap(objectMap map[objectio.ObjectId]*ObjectWithTableInfo) (string, error) {
+func BuildBloomFilterFromObjectMap(objectMap map[objectio.ObjectId]*ObjectWithTableInfo, mp *mpool.MPool) (string, error) {
 	if len(objectMap) == 0 {
 		return "", nil
 	}
@@ -272,13 +274,13 @@ func BuildBloomFilterFromObjectMap(objectMap map[objectio.ObjectId]*ObjectWithTa
 	for objID := range objectMap {
 		// Convert ObjectId to ObjectName string
 		objName := objectio.BuildObjectNameWithObjectID(&objID).String()
-		if err := vector.AppendBytes(vec, []byte(objName), false, nil); err != nil {
-			vec.Free(nil)
+		if err := vector.AppendBytes(vec, []byte(objName), false, mp); err != nil {
+			vec.Free(mp)
 			return "", moerr.NewInternalErrorf(context.Background(), "failed to append to vector: %v", err)
 		}
 	}
 	bf.Add(vec)
-	vec.Free(nil)
+	vec.Free(mp)
 
 	// Marshal and encode to base64
 	bfBytes, err := bf.Marshal()
@@ -345,8 +347,9 @@ func RegisterSyncProtectionOnDownstream(
 	ctx context.Context,
 	downstreamExecutor SQLExecutor,
 	objectMap map[objectio.ObjectId]*ObjectWithTableInfo,
+	mp *mpool.MPool,
 ) (jobID string, ttlExpireTS int64, retryable bool, err error) {
-	return RegisterSyncProtectionOnDownstreamFn(ctx, downstreamExecutor, objectMap)
+	return RegisterSyncProtectionOnDownstreamFn(ctx, downstreamExecutor, objectMap, mp)
 }
 
 // registerSyncProtectionOnDownstreamImpl is the actual implementation
@@ -354,6 +357,7 @@ func registerSyncProtectionOnDownstreamImpl(
 	ctx context.Context,
 	downstreamExecutor SQLExecutor,
 	objectMap map[objectio.ObjectId]*ObjectWithTableInfo,
+	mp *mpool.MPool,
 ) (jobID string, ttlExpireTS int64, retryable bool, err error) {
 	// Generate a new UUID for job ID
 	jobID = uuid.New().String()
@@ -370,7 +374,7 @@ func registerSyncProtectionOnDownstreamImpl(
 	}
 
 	// 2. Build Bloom Filter
-	bfBase64, err := BuildBloomFilterFromObjectMap(objectMap)
+	bfBase64, err := BuildBloomFilterFromObjectMap(objectMap, mp)
 	if err != nil {
 		return "", 0, false, moerr.NewInternalErrorf(ctx, "failed to build bloom filter: %v", err)
 	}

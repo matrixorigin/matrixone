@@ -144,7 +144,6 @@ func InitializeIterationContext(
 	}()
 	// Create local executor first (without transaction) to query mo_ccpr_log
 	// mo_ccpr_log is a system table, so we must use system account
-	// Local executor doesn't need upstream SQL helper (no special SQL statements)
 	localRetryOpt := sqlExecutorRetryOpt
 	if localRetryOpt == nil {
 		localRetryOpt = DefaultSQLExecutorRetryOption()
@@ -163,6 +162,11 @@ func InitializeIterationContext(
 	// Set UTHelper if provided
 	if utHelper != nil {
 		localExecutorInternal.SetUTHelper(utHelper)
+	}
+	// Set upstream SQL helper if provided (needed for sync protection mo_ctl commands in tests)
+	if upstreamSQLHelperFactory != nil {
+		helper := upstreamSQLHelperFactory(localTxn, cnEngine, catalog.System_Account, localExecutorInternal.GetInternalExec(), cnTxnClient)
+		localExecutorInternal.SetUpstreamSQLHelper(helper)
 	}
 	var localExecutor SQLExecutor = localExecutorInternal
 
@@ -1334,58 +1338,57 @@ func ExecuteIteration(
 	// ============================================================================
 	var currentTTLExpireTS int64
 	var syncProtectionJobID string
-	syncProtectionRegistered := false
 
 	// Only register sync protection if worker is provided
 	// When syncProtectionWorker is nil (e.g., in tests), skip sync protection entirely
-	if syncProtectionWorker != nil {
-		// Register sync protection on downstream with retry for retryable errors
-		// Retryable errors: GC is running, max count reached
-		const syncProtectionMaxRetries = 5
-		const syncProtectionRetryInterval = 10 * time.Second
-		for attempt := 0; attempt < syncProtectionMaxRetries; attempt++ {
-			var syncProtectionRetryable bool
-			syncProtectionJobID, currentTTLExpireTS, syncProtectionRetryable, err = RegisterSyncProtectionOnDownstream(
-				ctx,
-				iterationCtx.LocalExecutor,
-				objectMap,
-			)
-			if err == nil {
-				break // Success
-			}
-			if !syncProtectionRetryable {
-				// Non-retryable error, return immediately
-				err = moerr.NewInternalErrorf(ctx, "failed to register sync protection on downstream: %v", err)
-				return
-			}
-			// Retryable error, log and retry
-			logutil.Warn("ccpr-iteration sync protection registration retryable error, will retry",
-				zap.String("task_id", iterationCtx.TaskID),
-				zap.Int("attempt", attempt+1),
-				zap.Int("max_retries", syncProtectionMaxRetries),
-				zap.Error(err),
-			)
-			if attempt < syncProtectionMaxRetries-1 {
-				select {
-				case <-ctx.Done():
-					err = ctx.Err()
-					return
-				case <-time.After(syncProtectionRetryInterval):
-				}
-			}
+	// Register sync protection on downstream with retry for retryable errors
+	// Retryable errors: GC is running, max count reached
+	const syncProtectionMaxRetries = 20
+	const syncProtectionRetryInterval = 10 * time.Second
+	for attempt := 0; attempt < syncProtectionMaxRetries; attempt++ {
+		var syncProtectionRetryable bool
+		syncProtectionJobID, currentTTLExpireTS, syncProtectionRetryable, err = RegisterSyncProtectionOnDownstream(
+			ctx,
+			iterationCtx.LocalExecutor,
+			objectMap,
+			mp,
+		)
+		if err == nil {
+			break // Success
 		}
-		if err != nil {
-			err = moerr.NewInternalErrorf(ctx, "failed to register sync protection on downstream after %d retries: %v", syncProtectionMaxRetries, err)
+		if !syncProtectionRetryable {
+			// Non-retryable error, return immediately
+			err = moerr.NewInternalErrorf(ctx, "failed to register sync protection on downstream: %v", err)
 			return
 		}
-		syncProtectionRegistered = true
-
-		logutil.Info("ccpr-iteration registered sync protection on downstream",
+		// Retryable error, log and retry
+		logutil.Warn("ccpr-iteration sync protection registration retryable error, will retry",
 			zap.String("task_id", iterationCtx.TaskID),
-			zap.String("job_id", syncProtectionJobID),
-			zap.Int64("ttl_expire_ts", currentTTLExpireTS),
+			zap.Int("attempt", attempt+1),
+			zap.Int("max_retries", syncProtectionMaxRetries),
+			zap.Error(err),
 		)
+		if attempt < syncProtectionMaxRetries-1 {
+			select {
+			case <-ctx.Done():
+				err = ctx.Err()
+				return
+			case <-time.After(syncProtectionRetryInterval):
+			}
+		}
+	}
+	if err != nil {
+		err = moerr.NewInternalErrorf(ctx, "failed to register sync protection on downstream after %d retries: %v", syncProtectionMaxRetries, err)
+		return
+	}
 
+	logutil.Info("ccpr-iteration registered sync protection on downstream",
+		zap.String("task_id", iterationCtx.TaskID),
+		zap.String("job_id", syncProtectionJobID),
+		zap.Int64("ttl_expire_ts", currentTTLExpireTS),
+	)
+
+	if syncProtectionWorker != nil {
 		// Register sync protection job with the worker for keepalive management
 		syncProtectionWorker.RegisterSyncProtection(syncProtectionJobID, currentTTLExpireTS)
 	}
@@ -1427,21 +1430,17 @@ func ExecuteIteration(
 			syncProtectionWorker.UnregisterSyncProtection(syncProtectionJobID)
 		}
 
-		// Only unregister from downstream GC if registered AND there was an error (rollback or commit failure)
-		// If err == nil (commit success), do NOT unregister from downstream
-		if syncProtectionRegistered && err != nil {
-			if unregErr := UnregisterSyncProtection(ctx, iterationCtx.LocalExecutor, syncProtectionJobID); unregErr != nil {
-				logutil.Warn("ccpr-iteration failed to unregister sync protection",
-					zap.String("task_id", iterationCtx.TaskID),
-					zap.String("job_id", syncProtectionJobID),
-					zap.Error(unregErr),
-				)
-			} else {
-				logutil.Info("ccpr-iteration unregistered sync protection due to error",
-					zap.String("task_id", iterationCtx.TaskID),
-					zap.String("job_id", syncProtectionJobID),
-				)
-			}
+		if unregErr := UnregisterSyncProtection(ctx, iterationCtx.LocalExecutor, syncProtectionJobID); unregErr != nil {
+			logutil.Warn("ccpr-iteration failed to unregister sync protection",
+				zap.String("task_id", iterationCtx.TaskID),
+				zap.String("job_id", syncProtectionJobID),
+				zap.Error(unregErr),
+			)
+		} else {
+			logutil.Info("ccpr-iteration unregistered sync protection due to error",
+				zap.String("task_id", iterationCtx.TaskID),
+				zap.String("job_id", syncProtectionJobID),
+			)
 		}
 	}()
 
