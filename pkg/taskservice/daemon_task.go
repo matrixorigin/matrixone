@@ -125,6 +125,20 @@ func (t *resumeTask) Handle(ctx context.Context) error {
 		return moerr.NewInternalErrorf(ctx, "the task is not on local runner, prev runner %s, "+
 			"local runner %s", tk.TaskRunner, t.runner.runnerID)
 	}
+	// Skip duplicate or stale control requests to keep resume idempotent.
+	if tk.TaskStatus != task.TaskStatus_ResumeRequested {
+		if tk.TaskStatus == task.TaskStatus_Running {
+			t.runner.logger.Debug("cdc.task.resume.skip.already-running",
+				zap.Uint64("task-id", tk.ID),
+				zap.String("task-name", taskNameFromDetails(tk)))
+			return nil
+		}
+		t.runner.logger.Warn("cdc.task.resume.skip.invalid-status",
+			zap.Uint64("task-id", tk.ID),
+			zap.String("task-name", taskNameFromDetails(tk)),
+			zap.String("current-status", tk.TaskStatus.String()))
+		return nil
+	}
 
 	tk.TaskStatus = task.TaskStatus_Running
 	nowTime := time.Now()
@@ -190,6 +204,21 @@ func (t *restartTask) Handle(ctx context.Context) error {
 		zap.String("target-runner", t.runner.runnerID),
 		zap.String("current-status", tk.TaskStatus.String()),
 	)
+	// Restart should only be executed from RestartRequested.
+	// Any duplicated request is treated as a no-op.
+	if tk.TaskStatus != task.TaskStatus_RestartRequested {
+		if tk.TaskStatus == task.TaskStatus_Running {
+			t.runner.logger.Debug("cdc.task.restart.skip.already-running",
+				zap.Uint64("task-id", tk.ID),
+				zap.String("task-name", taskNameFromDetails(tk)))
+			return nil
+		}
+		t.runner.logger.Warn("cdc.task.restart.skip.invalid-status",
+			zap.Uint64("task-id", tk.ID),
+			zap.String("task-name", taskNameFromDetails(tk)),
+			zap.String("current-status", tk.TaskStatus.String()))
+		return nil
+	}
 
 	// We cannot restart a task which is not on local runner.
 	// However, if TaskRunner is empty, we allow the local runner to take over.
@@ -301,6 +330,20 @@ func (t *pauseTask) Handle(ctx context.Context) error {
 		zap.String("target-runner", t.runner.runnerID),
 		zap.String("current-status", tk.TaskStatus.String()),
 	)
+	// Pause must be idempotent; repeated pause requests should not call activeRoutine.Pause again.
+	if tk.TaskStatus != task.TaskStatus_PauseRequested {
+		if tk.TaskStatus == task.TaskStatus_Paused {
+			t.runner.logger.Debug("cdc.task.pause.skip.already-paused",
+				zap.Uint64("task-id", tk.ID),
+				zap.String("task-name", taskNameFromDetails(tk)))
+			return nil
+		}
+		t.runner.logger.Warn("cdc.task.pause.skip.invalid-status",
+			zap.Uint64("task-id", tk.ID),
+			zap.String("task-name", taskNameFromDetails(tk)),
+			zap.String("current-status", tk.TaskStatus.String()))
+		return nil
+	}
 	tk.TaskStatus = task.TaskStatus_Paused
 	_, err = t.runner.service.UpdateDaemonTask(ctx, []task.DaemonTask{tk})
 	if err != nil {
@@ -350,6 +393,20 @@ func (t *cancelTask) Handle(ctx context.Context) error {
 	}
 
 	tk := tasks[0]
+	// Cancel should only be executed from CancelRequested.
+	if tk.TaskStatus != task.TaskStatus_CancelRequested {
+		if tk.TaskStatus == task.TaskStatus_Canceled {
+			t.runner.logger.Debug("cdc.task.cancel.skip.already-canceled",
+				zap.Uint64("task-id", tk.ID),
+				zap.String("task-name", taskNameFromDetails(tk)))
+			return nil
+		}
+		t.runner.logger.Warn("cdc.task.cancel.skip.invalid-status",
+			zap.Uint64("task-id", tk.ID),
+			zap.String("task-name", taskNameFromDetails(tk)),
+			zap.String("current-status", tk.TaskStatus.String()))
+		return nil
+	}
 	tk.TaskStatus = task.TaskStatus_Canceled
 	tk.EndAt = time.Now()
 	_, err = t.runner.service.UpdateDaemonTask(ctx, []task.DaemonTask{tk})
@@ -447,54 +504,76 @@ func (r *taskRunner) newStartTask(t task.DaemonTask) {
 }
 
 func (r *taskRunner) dispatchTaskHandle(ctx context.Context) {
-	r.daemonTasks.Lock()
-	defer r.daemonTasks.Unlock()
+	// Build handlers first, then enqueue outside daemonTasks lock usage
+	// to avoid lock + channel send blocking cycles.
+	handlers := make([]TaskHandler, 0, 16)
 	for _, t := range r.startTasks(ctx) {
-		r.newStartTask(t)
+		dt, err := r.newDaemonTask(t)
+		if err != nil {
+			r.logger.Error("failed to dispatch daemon task",
+				zap.Uint64("task ID", t.ID), zap.Error(err))
+			continue
+		}
+		handlers = append(handlers, newStartTask(r, dt))
 	}
 	for _, t := range r.resumeTasks(ctx) {
-		dt, ok := r.daemonTasks.m[t.ID]
+		dt, ok := r.getDaemonTask(t.ID)
 		if ok {
-			r.enqueue(newResumeTask(r, dt))
+			handlers = append(handlers, newResumeTask(r, dt))
 		} else {
-			r.newStartTask(t)
+			dt, err := r.newDaemonTask(t)
+			if err != nil {
+				r.logger.Error("failed to dispatch daemon task",
+					zap.Uint64("task ID", t.ID), zap.Error(err))
+				continue
+			}
+			handlers = append(handlers, newStartTask(r, dt))
 		}
 	}
 	for _, t := range r.restartTasks(ctx) {
-		dt, ok := r.daemonTasks.m[t.ID]
+		dt, ok := r.getDaemonTask(t.ID)
 		if ok {
-			r.enqueue(newRestartTask(r, dt))
+			handlers = append(handlers, newRestartTask(r, dt))
 		} else {
-			r.newStartTask(t)
+			dt, err := r.newDaemonTask(t)
+			if err != nil {
+				r.logger.Error("failed to dispatch daemon task",
+					zap.Uint64("task ID", t.ID), zap.Error(err))
+				continue
+			}
+			handlers = append(handlers, newStartTask(r, dt))
 		}
 	}
 	for _, t := range r.pauseTasks(ctx) {
-		dt, ok := r.daemonTasks.m[t.ID]
+		dt, ok := r.getDaemonTask(t.ID)
 		if ok {
-			r.enqueue(newPauseTask(r, dt))
+			handlers = append(handlers, newPauseTask(r, dt))
 		} else {
 			dt, err := r.newDaemonTask(t)
 			if err != nil {
 				r.logger.Error("failed to dispatch daemon task",
 					zap.Uint64("task ID", t.ID), zap.Error(err))
-				return
+				continue
 			}
-			r.enqueue(newPauseTask(r, dt))
+			handlers = append(handlers, newPauseTask(r, dt))
 		}
 	}
 	for _, t := range r.cancelTasks(ctx) {
-		dt, ok := r.daemonTasks.m[t.ID]
+		dt, ok := r.getDaemonTask(t.ID)
 		if ok {
-			r.enqueue(newCancelTask(r, dt))
+			handlers = append(handlers, newCancelTask(r, dt))
 		} else {
 			dt, err := r.newDaemonTask(t)
 			if err != nil {
 				r.logger.Error("failed to dispatch daemon task",
 					zap.Uint64("task ID", t.ID), zap.Error(err))
-				return
+				continue
 			}
-			r.enqueue(newCancelTask(r, dt))
+			handlers = append(handlers, newCancelTask(r, dt))
 		}
+	}
+	for _, h := range handlers {
+		r.enqueue(h)
 	}
 }
 
@@ -790,6 +869,14 @@ func (r *taskRunner) addDaemonTask(dt *daemonTask) {
 		return
 	}
 	r.daemonTasks.m[dt.task.ID] = dt
+}
+
+func (r *taskRunner) getDaemonTask(id uint64) (*daemonTask, bool) {
+	// Keep map access serialized and return the pointer snapshot.
+	r.daemonTasks.Lock()
+	defer r.daemonTasks.Unlock()
+	dt, ok := r.daemonTasks.m[id]
+	return dt, ok
 }
 
 func (r *taskRunner) removeDaemonTask(id uint64) {
