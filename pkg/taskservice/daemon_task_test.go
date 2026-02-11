@@ -16,7 +16,6 @@ package taskservice
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -26,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -195,7 +195,7 @@ func TestStartTaskHandleBranches(t *testing.T) {
 		task: dt,
 		executor: func(context.Context, task.Task) error {
 			executed.Store(true)
-			return errors.New("executor failed")
+			return moerr.NewInternalErrorNoCtx("executor failed")
 		},
 	})
 
@@ -204,7 +204,7 @@ func TestStartTaskHandleBranches(t *testing.T) {
 	require.False(t, executed.Load())
 
 	// force update error branch in startDaemonTask
-	hook.setUpdateErr(errors.New("update failed"))
+	hook.setUpdateErr(moerr.NewInternalErrorNoCtx("update failed"))
 	dt2 := newDaemonTaskForTest(2, task.TaskStatus_Created, "")
 	dt2.Metadata.ID = "start-2"
 	dt2.LastHeartbeat = time.Time{}
@@ -226,7 +226,7 @@ func TestStartTaskHandleBranches(t *testing.T) {
 		task: dt3,
 		executor: func(context.Context, task.Task) error {
 			executed.Store(true)
-			return errors.New("executor failed")
+			return moerr.NewInternalErrorNoCtx("executor failed")
 		},
 	})
 	require.NoError(t, start3.Handle(context.Background()))
@@ -245,7 +245,7 @@ func TestResumeTaskHandleBranchesDirect(t *testing.T) {
 	mustAddTestDaemonTask(t, store, 1, dt)
 	h := newResumeTask(r, &daemonTask{task: dt})
 
-	hook.setQueryErr(errors.New("query failed"))
+	hook.setQueryErr(moerr.NewInternalErrorNoCtx("query failed"))
 	require.Error(t, h.Handle(context.Background()))
 	hook.setQueryErr(nil)
 
@@ -268,7 +268,7 @@ func TestResumeTaskHandleBranchesDirect(t *testing.T) {
 
 	dt.TaskStatus = task.TaskStatus_ResumeRequested
 	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
-	hook.setUpdateErr(errors.New("update failed"))
+	hook.setUpdateErr(moerr.NewInternalErrorNoCtx("update failed"))
 	require.Error(t, h.Handle(context.Background()))
 	hook.setUpdateErr(nil)
 
@@ -286,7 +286,7 @@ func TestRestartTaskHandleBranchesDirect(t *testing.T) {
 	taskRef := &daemonTask{task: dt}
 	h := newRestartTask(r, taskRef)
 
-	hook.setQueryErr(errors.New("query failed"))
+	hook.setQueryErr(moerr.NewInternalErrorNoCtx("query failed"))
 	require.Error(t, h.Handle(context.Background()))
 	hook.setQueryErr(nil)
 
@@ -309,13 +309,13 @@ func TestRestartTaskHandleBranchesDirect(t *testing.T) {
 
 	dt.TaskRunner = r.runnerID
 	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
-	hook.setUpdateErr(errors.New("update failed"))
+	hook.setUpdateErr(moerr.NewInternalErrorNoCtx("update failed"))
 	require.Error(t, h.Handle(context.Background()))
 	hook.setUpdateErr(nil)
 
 	require.Error(t, h.Handle(context.Background()))
 
-	restartErr := errors.New("restart failed")
+	restartErr := moerr.NewInternalErrorNoCtx("restart failed")
 	ar := ActiveRoutine(&mockErrActiveRoutine{restartErr: restartErr})
 	taskRef.activeRoutine.Store(&ar)
 	dt.TaskStatus = task.TaskStatus_RestartRequested
@@ -337,7 +337,7 @@ func TestPauseAndCancelTaskHandleBranchesDirect(t *testing.T) {
 	pauseH := newPauseTask(r, taskRef)
 	cancelH := newCancelTask(r, taskRef)
 
-	hook.setQueryErr(errors.New("query failed"))
+	hook.setQueryErr(moerr.NewInternalErrorNoCtx("query failed"))
 	require.Error(t, pauseH.Handle(context.Background()))
 	require.Error(t, cancelH.Handle(context.Background()))
 	hook.setQueryErr(nil)
@@ -362,25 +362,25 @@ func TestPauseAndCancelTaskHandleBranchesDirect(t *testing.T) {
 
 	dt.TaskStatus = task.TaskStatus_PauseRequested
 	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
-	hook.setUpdateErr(errors.New("update failed"))
+	hook.setUpdateErr(moerr.NewInternalErrorNoCtx("update failed"))
 	require.Error(t, pauseH.Handle(context.Background()))
 	hook.setUpdateErr(nil)
 	require.Error(t, pauseH.Handle(context.Background()))
 
 	dt.TaskStatus = task.TaskStatus_CancelRequested
 	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
-	hook.setUpdateErr(errors.New("update failed"))
+	hook.setUpdateErr(moerr.NewInternalErrorNoCtx("update failed"))
 	require.Error(t, cancelH.Handle(context.Background()))
 	hook.setUpdateErr(nil)
 	require.Error(t, cancelH.Handle(context.Background()))
 
-	ar1 := ActiveRoutine(&mockErrActiveRoutine{pauseErr: errors.New("pause failed")})
+	ar1 := ActiveRoutine(&mockErrActiveRoutine{pauseErr: moerr.NewInternalErrorNoCtx("pause failed")})
 	taskRef.activeRoutine.Store(&ar1)
 	dt.TaskStatus = task.TaskStatus_PauseRequested
 	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
 	require.ErrorContains(t, pauseH.Handle(context.Background()), "pause failed")
 
-	ar2 := ActiveRoutine(&mockErrActiveRoutine{cancelErr: errors.New("cancel failed")})
+	ar2 := ActiveRoutine(&mockErrActiveRoutine{cancelErr: moerr.NewInternalErrorNoCtx("cancel failed")})
 	taskRef.activeRoutine.Store(&ar2)
 	dt.TaskStatus = task.TaskStatus_CancelRequested
 	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
@@ -557,10 +557,10 @@ func TestSetDaemonTaskError(t *testing.T) {
 		dt := newDaemonTaskForTest(1, task.TaskStatus_Running, r.runnerID)
 		mustAddTestDaemonTask(t, store, 1, dt)
 
-		r.setDaemonTaskError(context.Background(), &daemonTask{task: dt}, errors.New("mock daemon error"))
+		r.setDaemonTaskError(context.Background(), &daemonTask{task: dt}, moerr.NewInternalErrorNoCtx("mock daemon error"))
 		tasks := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, 1))
 		require.Len(t, tasks, 1)
-		require.Equal(t, "mock daemon error", tasks[0].Details.Error)
+		require.Contains(t, tasks[0].Details.Error, "mock daemon error")
 	}, WithRunnerParallelism(1),
 		WithRunnerFetchInterval(time.Millisecond))
 }
@@ -620,7 +620,7 @@ func TestStartTasksWithHAKeeperClientError(t *testing.T) {
 		// when overriding test-only runner fields.
 		require.NoError(t, r.Stop())
 		r.getClient = func() util.HAKeeperClient {
-			return &mockHAKeeperClientForDaemon{err: errors.New("hakeeper unavailable")}
+			return &mockHAKeeperClientForDaemon{err: moerr.NewInternalErrorNoCtx("hakeeper unavailable")}
 		}
 		tasks := r.startTasks(context.Background())
 		require.NotEmpty(t, tasks)

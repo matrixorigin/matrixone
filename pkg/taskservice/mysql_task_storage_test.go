@@ -17,7 +17,6 @@ package taskservice
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -578,7 +577,7 @@ func TestDeleteAsyncTaskInSqlMock(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, affected)
 
-	mock.ExpectExec(expectedSQL).WillReturnError(errors.New("delete failed"))
+	mock.ExpectExec(expectedSQL).WillReturnError(moerr.NewInternalErrorNoCtx("delete failed"))
 	_, err = storage.DeleteAsyncTask(context.Background(), WithTaskStatusCond(task.TaskStatus_Completed))
 	require.Error(t, err)
 
@@ -701,7 +700,7 @@ func TestRemoveDuplicateTasks(t *testing.T) {
 		Number:  moerr.ER_DUP_ENTRY,
 		Message: "Duplicate entry 'a' for key",
 	}
-	otherErr := errors.New("not mysql err")
+	otherErr := moerr.NewInternalErrorNoCtx("not mysql err")
 
 	remainingAsync, err := removeDuplicateAsyncTasks(dupErr, asyncTasks)
 	require.NoError(t, err)
@@ -823,18 +822,18 @@ type mockSqlExecutor struct {
 }
 
 func (m *mockSqlExecutor) PrepareContext(context.Context, string) (*sql.Stmt, error) {
-	return nil, errors.New("not implemented")
+	return nil, moerr.NewInternalErrorNoCtx("not implemented")
 }
 
 func (m *mockSqlExecutor) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
 	if m.execFn != nil {
 		return m.execFn(ctx, query, args...)
 	}
-	return nil, errors.New("not implemented")
+	return nil, moerr.NewInternalErrorNoCtx("not implemented")
 }
 
 func (m *mockSqlExecutor) QueryContext(context.Context, string, ...interface{}) (*sql.Rows, error) {
-	return nil, errors.New("not implemented")
+	return nil, moerr.NewInternalErrorNoCtx("not implemented")
 }
 
 func TestBuildLimitAndOrderByClause(t *testing.T) {
@@ -888,7 +887,7 @@ func TestRunAddDaemonTaskBranches(t *testing.T) {
 		d.Metadata.ID = "err-daemon"
 		_, err := m.RunAddDaemonTask(ctx, &mockSqlExecutor{
 			execFn: func(context.Context, string, ...interface{}) (sql.Result, error) {
-				return nil, errors.New("exec failed")
+				return nil, moerr.NewInternalErrorNoCtx("exec failed")
 			},
 		}, d)
 		require.Error(t, err)
@@ -899,7 +898,7 @@ func TestRunAddDaemonTaskBranches(t *testing.T) {
 		d.Metadata.ID = "rows-daemon"
 		_, err := m.RunAddDaemonTask(ctx, &mockSqlExecutor{
 			execFn: func(context.Context, string, ...interface{}) (sql.Result, error) {
-				return mockRowsAffectedResult{err: errors.New("rows failed")}, nil
+				return mockRowsAffectedResult{err: moerr.NewInternalErrorNoCtx("rows failed")}, nil
 			},
 		}, d)
 		require.Error(t, err)
@@ -922,7 +921,7 @@ func TestUpdateDaemonTaskBranchesInSqlMock(t *testing.T) {
 
 	t.Run("begin tx error", func(t *testing.T) {
 		storage, mock := newMockStorage(t)
-		mock.ExpectBegin().WillReturnError(errors.New("begin failed"))
+		mock.ExpectBegin().WillReturnError(moerr.NewInternalErrorNoCtx("begin failed"))
 		_, err := storage.UpdateDaemonTask(ctx, []task.DaemonTask{d})
 		require.Error(t, err)
 		mock.ExpectClose()
@@ -932,8 +931,8 @@ func TestUpdateDaemonTaskBranchesInSqlMock(t *testing.T) {
 	t.Run("rollback join error", func(t *testing.T) {
 		storage, mock := newMockStorage(t)
 		mock.ExpectBegin()
-		mock.ExpectExec(updateDaemonTask).WillReturnError(errors.New("exec failed"))
-		mock.ExpectRollback().WillReturnError(errors.New("rollback failed"))
+		mock.ExpectExec(updateDaemonTask).WillReturnError(moerr.NewInternalErrorNoCtx("exec failed"))
+		mock.ExpectRollback().WillReturnError(moerr.NewInternalErrorNoCtx("rollback failed"))
 		_, err := storage.UpdateDaemonTask(ctx, []task.DaemonTask{d})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "exec failed")
@@ -946,7 +945,7 @@ func TestUpdateDaemonTaskBranchesInSqlMock(t *testing.T) {
 		storage, mock := newMockStorage(t)
 		mock.ExpectBegin()
 		mock.ExpectExec(updateDaemonTask).WillReturnResult(sqlmock.NewResult(0, 1))
-		mock.ExpectCommit().WillReturnError(errors.New("commit failed"))
+		mock.ExpectCommit().WillReturnError(moerr.NewInternalErrorNoCtx("commit failed"))
 		_, err := storage.UpdateDaemonTask(ctx, []task.DaemonTask{d})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "commit failed")
@@ -980,7 +979,7 @@ func TestRunUpdateDaemonTaskBranches(t *testing.T) {
 	t.Run("exec error", func(t *testing.T) {
 		_, err := m.RunUpdateDaemonTask(ctx, []task.DaemonTask{d}, &mockSqlExecutor{
 			execFn: func(context.Context, string, ...interface{}) (sql.Result, error) {
-				return nil, errors.New("exec failed")
+				return nil, moerr.NewInternalErrorNoCtx("exec failed")
 			},
 		})
 		require.Error(t, err)
@@ -989,7 +988,7 @@ func TestRunUpdateDaemonTaskBranches(t *testing.T) {
 	t.Run("rows affected error", func(t *testing.T) {
 		_, err := m.RunUpdateDaemonTask(ctx, []task.DaemonTask{d}, &mockSqlExecutor{
 			execFn: func(context.Context, string, ...interface{}) (sql.Result, error) {
-				return mockRowsAffectedResult{err: errors.New("rows failed")}, nil
+				return mockRowsAffectedResult{err: moerr.NewInternalErrorNoCtx("rows failed")}, nil
 			},
 		})
 		require.Error(t, err)
@@ -1003,7 +1002,7 @@ func TestRunDeleteDaemonTaskBranches(t *testing.T) {
 	t.Run("exec error", func(t *testing.T) {
 		_, err := m.RunDeleteDaemonTask(ctx, &mockSqlExecutor{
 			execFn: func(context.Context, string, ...interface{}) (sql.Result, error) {
-				return nil, errors.New("exec failed")
+				return nil, moerr.NewInternalErrorNoCtx("exec failed")
 			},
 		})
 		require.Error(t, err)
@@ -1013,7 +1012,7 @@ func TestRunDeleteDaemonTaskBranches(t *testing.T) {
 		require.Panics(t, func() {
 			_, _ = m.RunDeleteDaemonTask(ctx, &mockSqlExecutor{
 				execFn: func(context.Context, string, ...interface{}) (sql.Result, error) {
-					return mockRowsAffectedResult{err: errors.New("rows failed")}, nil
+					return mockRowsAffectedResult{err: moerr.NewInternalErrorNoCtx("rows failed")}, nil
 				},
 			})
 		})
@@ -1036,7 +1035,7 @@ func TestHeartbeatDaemonTaskBranchesInSqlMock(t *testing.T) {
 
 	t.Run("begin tx error", func(t *testing.T) {
 		storage, mock := newMockStorage(t)
-		mock.ExpectBegin().WillReturnError(errors.New("begin failed"))
+		mock.ExpectBegin().WillReturnError(moerr.NewInternalErrorNoCtx("begin failed"))
 		_, err := storage.HeartbeatDaemonTask(ctx, []task.DaemonTask{d})
 		require.Error(t, err)
 		mock.ExpectClose()
@@ -1046,8 +1045,8 @@ func TestHeartbeatDaemonTaskBranchesInSqlMock(t *testing.T) {
 	t.Run("rollback join error", func(t *testing.T) {
 		storage, mock := newMockStorage(t)
 		mock.ExpectBegin()
-		mock.ExpectExec(heartbeatDaemonTask).WillReturnError(errors.New("exec failed"))
-		mock.ExpectRollback().WillReturnError(errors.New("rollback failed"))
+		mock.ExpectExec(heartbeatDaemonTask).WillReturnError(moerr.NewInternalErrorNoCtx("exec failed"))
+		mock.ExpectRollback().WillReturnError(moerr.NewInternalErrorNoCtx("rollback failed"))
 		_, err := storage.HeartbeatDaemonTask(ctx, []task.DaemonTask{d})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "exec failed")
@@ -1059,7 +1058,7 @@ func TestHeartbeatDaemonTaskBranchesInSqlMock(t *testing.T) {
 	t.Run("rows affected error", func(t *testing.T) {
 		storage, mock := newMockStorage(t)
 		mock.ExpectBegin()
-		mock.ExpectExec(heartbeatDaemonTask).WillReturnResult(sqlmock.NewErrorResult(errors.New("rows failed")))
+		mock.ExpectExec(heartbeatDaemonTask).WillReturnResult(sqlmock.NewErrorResult(moerr.NewInternalErrorNoCtx("rows failed")))
 		mock.ExpectRollback()
 		_, err := storage.HeartbeatDaemonTask(ctx, []task.DaemonTask{d})
 		require.Error(t, err)
@@ -1072,7 +1071,7 @@ func TestHeartbeatDaemonTaskBranchesInSqlMock(t *testing.T) {
 		storage, mock := newMockStorage(t)
 		mock.ExpectBegin()
 		mock.ExpectExec(heartbeatDaemonTask).WillReturnResult(sqlmock.NewResult(0, 1))
-		mock.ExpectCommit().WillReturnError(errors.New("commit failed"))
+		mock.ExpectCommit().WillReturnError(moerr.NewInternalErrorNoCtx("commit failed"))
 		_, err := storage.HeartbeatDaemonTask(ctx, []task.DaemonTask{d})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "commit failed")
@@ -1098,7 +1097,7 @@ func TestAddCDCTaskBranchesInSqlMock(t *testing.T) {
 
 	t.Run("begin tx error", func(t *testing.T) {
 		storage, mock := newMockStorage(t)
-		mock.ExpectBegin().WillReturnError(errors.New("begin failed"))
+		mock.ExpectBegin().WillReturnError(moerr.NewInternalErrorNoCtx("begin failed"))
 		_, err := storage.AddCDCTask(ctx, d, nil)
 		require.Error(t, err)
 		mock.ExpectClose()
@@ -1108,9 +1107,9 @@ func TestAddCDCTaskBranchesInSqlMock(t *testing.T) {
 	t.Run("callback rollback join error", func(t *testing.T) {
 		storage, mock := newMockStorage(t)
 		mock.ExpectBegin()
-		mock.ExpectRollback().WillReturnError(errors.New("rollback failed"))
+		mock.ExpectRollback().WillReturnError(moerr.NewInternalErrorNoCtx("rollback failed"))
 		_, err := storage.AddCDCTask(ctx, d, func(context.Context, SqlExecutor) (int, error) {
-			return 0, errors.New("callback failed")
+			return 0, moerr.NewInternalErrorNoCtx("callback failed")
 		})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "callback failed")
@@ -1137,7 +1136,7 @@ func TestAddCDCTaskBranchesInSqlMock(t *testing.T) {
 		storage, mock := newMockStorage(t)
 		mock.ExpectBegin()
 		newInsertDaemonTaskExpect(t, mock)
-		mock.ExpectCommit().WillReturnError(errors.New("commit failed"))
+		mock.ExpectCommit().WillReturnError(moerr.NewInternalErrorNoCtx("commit failed"))
 		_, err := storage.AddCDCTask(ctx, d, func(context.Context, SqlExecutor) (int, error) {
 			return 1, nil
 		})
@@ -1163,7 +1162,7 @@ func TestUpdateCDCTaskBranchesInSqlMock(t *testing.T) {
 
 	t.Run("begin tx error", func(t *testing.T) {
 		storage, mock := newMockStorage(t)
-		mock.ExpectBegin().WillReturnError(errors.New("begin failed"))
+		mock.ExpectBegin().WillReturnError(moerr.NewInternalErrorNoCtx("begin failed"))
 		_, err := storage.UpdateCDCTask(ctx, task.TaskStatus_Canceled, func(context.Context, task.TaskStatus, map[CDCTaskKey]struct{}, SqlExecutor) (int, error) {
 			return 0, nil
 		})
@@ -1175,9 +1174,9 @@ func TestUpdateCDCTaskBranchesInSqlMock(t *testing.T) {
 	t.Run("collector rollback join error", func(t *testing.T) {
 		storage, mock := newMockStorage(t)
 		mock.ExpectBegin()
-		mock.ExpectRollback().WillReturnError(errors.New("rollback failed"))
+		mock.ExpectRollback().WillReturnError(moerr.NewInternalErrorNoCtx("rollback failed"))
 		_, err := storage.UpdateCDCTask(ctx, task.TaskStatus_Canceled, func(context.Context, task.TaskStatus, map[CDCTaskKey]struct{}, SqlExecutor) (int, error) {
-			return 0, errors.New("collector failed")
+			return 0, moerr.NewInternalErrorNoCtx("collector failed")
 		})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "collector failed")
@@ -1201,7 +1200,7 @@ func TestUpdateCDCTaskBranchesInSqlMock(t *testing.T) {
 	t.Run("query daemon task error", func(t *testing.T) {
 		storage, mock := newMockStorage(t)
 		mock.ExpectBegin()
-		mock.ExpectQuery(selectDaemonTask + " order by task_id").WillReturnError(errors.New("query failed"))
+		mock.ExpectQuery(selectDaemonTask + " order by task_id").WillReturnError(moerr.NewInternalErrorNoCtx("query failed"))
 		mock.ExpectRollback()
 		_, err := storage.UpdateCDCTask(ctx, task.TaskStatus_Canceled, func(_ context.Context, _ task.TaskStatus, keyMap map[CDCTaskKey]struct{}, _ SqlExecutor) (int, error) {
 			keyMap[CDCTaskKey{

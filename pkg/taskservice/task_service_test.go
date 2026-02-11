@@ -16,7 +16,6 @@ package taskservice
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -103,7 +102,7 @@ func TestCreateAsyncTaskReturnsStorageError(t *testing.T) {
 	base := NewMemTaskStorage()
 	s := NewTaskService(runtime.DefaultRuntime(), &addAsyncErrStorage{
 		TaskStorage: base,
-		err:         errors.New("inject add async failure"),
+		err:         moerr.NewInternalErrorNoCtx("inject add async failure"),
 	})
 	defer func() {
 		assert.NoError(t, s.Close())
@@ -120,7 +119,7 @@ func TestCreateBatchReturnsStorageError(t *testing.T) {
 	base := NewMemTaskStorage()
 	s := NewTaskService(runtime.DefaultRuntime(), &addAsyncErrStorage{
 		TaskStorage: base,
-		err:         errors.New("inject add batch failure"),
+		err:         moerr.NewInternalErrorNoCtx("inject add batch failure"),
 	})
 	defer func() {
 		assert.NoError(t, s.Close())
