@@ -1468,33 +1468,57 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 
 	ps := c.proc.GetPartitionService()
-	if !ps.Enabled() || !features.IsPartitioned(qry.TableDef.FeatureFlag) {
-		return nil
+	if ps.Enabled() && features.IsPartitioned(qry.TableDef.FeatureFlag) {
+		// cannot has err.
+		stmt, _ := parsers.ParseOne(
+			c.proc.Ctx,
+			dialect.MYSQL,
+			qry.RawSQL,
+			c.getLower(),
+		)
+
+		err = ps.Create(
+			c.proc.Ctx,
+			qry.TableDef.TblId,
+			stmt.(*tree.CreateTable),
+			c.proc.GetTxnOperator(),
+		)
+		if err != nil {
+			return err
+		}
+
+		if err = shardservice.GetService(c.proc.GetService()).Create(
+			c.proc.Ctx,
+			qry.GetTableDef().TblId,
+			c.proc.GetTxnOperator(),
+		); err != nil {
+			return err
+		}
 	}
 
-	// cannot has err.
-	stmt, _ := parsers.ParseOne(
-		c.proc.Ctx,
-		dialect.MYSQL,
-		qry.RawSQL,
-		c.getLower(),
-	)
-
-	err = ps.Create(
-		c.proc.Ctx,
-		qry.TableDef.TblId,
-		stmt.(*tree.CreateTable),
-		c.proc.GetTxnOperator(),
-	)
-	if err != nil {
-		return err
+	if createAsSelectSql := qry.GetCreateAsSelectSql(); createAsSelectSql != "" {
+		res, err := func() (executor.Result, error) {
+			oldCtx := c.proc.Ctx
+			// Force privilege checking for CTAS follow-up INSERT ... SELECT.
+			// Internal executor skips auth by default unless this flag is present.
+			c.proc.Ctx = attachInternalExecutorPrivilegeCheck(c.proc.Ctx)
+			defer func() {
+				c.proc.Ctx = oldCtx
+			}()
+			return c.runSqlWithResultAndOptions(
+				createAsSelectSql,
+				NoAccountId,
+				executor.StatementOption{}.WithDisableLog(),
+			)
+		}()
+		if err != nil {
+			return err
+		}
+		c.addAffectedRows(res.AffectedRows)
+		res.Close()
 	}
 
-	return shardservice.GetService(c.proc.GetService()).Create(
-		c.proc.Ctx,
-		qry.GetTableDef().TblId,
-		c.proc.GetTxnOperator(),
-	)
+	return nil
 }
 
 func (c *Compile) runSqlWithSystemTenant(sql string) error {
@@ -1723,7 +1747,7 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 		}
 	}
 
-	return maybeCreateAutoIncrement(
+	err = maybeCreateAutoIncrement(
 		c.proc.Ctx,
 		c.proc.GetService(),
 		tmpDBSource,
@@ -1732,6 +1756,33 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 		func() string {
 			return engine.GetTempTableName(dbName, tblName)
 		})
+	if err != nil {
+		return err
+	}
+
+	if createAsSelectSql := qry.GetCreateAsSelectSql(); createAsSelectSql != "" {
+		res, err := func() (executor.Result, error) {
+			oldCtx := c.proc.Ctx
+			// Force privilege checking for CTAS follow-up INSERT ... SELECT.
+			// Internal executor skips auth by default unless this flag is present.
+			c.proc.Ctx = attachInternalExecutorPrivilegeCheck(c.proc.Ctx)
+			defer func() {
+				c.proc.Ctx = oldCtx
+			}()
+			return c.runSqlWithResultAndOptions(
+				createAsSelectSql,
+				NoAccountId,
+				executor.StatementOption{}.WithDisableLog(),
+			)
+		}()
+		if err != nil {
+			return err
+		}
+		c.addAffectedRows(res.AffectedRows)
+		res.Close()
+	}
+
+	return nil
 }
 
 func (s *Scope) CreateIndex(c *Compile) error {

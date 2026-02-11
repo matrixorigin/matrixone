@@ -32,6 +32,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -4770,16 +4771,41 @@ func (c *Compile) runSqlWithResult(sql string, accountId int32) (executor.Result
 	return c.runSqlWithResultAndOptions(sql, accountId, executor.StatementOption{})
 }
 
+func (c *Compile) getInternalSQLExecutor() executor.SQLExecutor {
+	// Prefer an executor built on current compile engine so follow-up SQL
+	// (for example CTAS INSERT ... SELECT on temporary tables) can see
+	// session-bound temporary engine state in the same transaction.
+	if c != nil &&
+		c.e != nil &&
+		c.proc != nil &&
+		c.proc.Base != nil &&
+		c.proc.Base.TxnClient != nil &&
+		c.proc.GetFileService() != nil &&
+		c.proc.GetQueryClient() != nil {
+		return NewSQLExecutor(
+			c.addr,
+			c.e,
+			c.proc.Mp(),
+			c.proc.Base.TxnClient,
+			c.proc.GetFileService(),
+			c.proc.GetQueryClient(),
+			c.proc.GetHaKeeper(),
+			c.proc.Base.UdfService,
+		)
+	}
+
+	v, ok := moruntime.ServiceRuntime(c.proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		panic("missing lock service")
+	}
+	return v.(executor.SQLExecutor)
+}
+
 func (c *Compile) runSqlWithResultAndOptions(
 	sql string,
 	accountId int32,
 	options executor.StatementOption,
 ) (executor.Result, error) {
-	v, ok := moruntime.ServiceRuntime(c.proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
-	if !ok {
-		panic("missing lock service")
-	}
-
 	lower := c.getLower()
 
 	if qry, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
@@ -4788,7 +4814,7 @@ func (c *Compile) runSqlWithResultAndOptions(
 		}
 	}
 
-	exec := v.(executor.SQLExecutor)
+	exec := c.getInternalSQLExecutor()
 	opts := executor.Options{}.
 		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
 		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
@@ -4801,6 +4827,14 @@ func (c *Compile) runSqlWithResultAndOptions(
 		WithResolveVariableFunc(c.proc.GetResolveVariableFunc())
 
 	ctx := c.proc.Ctx
+	// Ensure ParameterUnit is available in ctx for downstream helpers which call config.GetParameterUnit(ctx)
+	if ctx.Value(config.ParameterUnitKey) == nil {
+		if v, ok := moruntime.ServiceRuntime(c.proc.GetService()).GetGlobalVariables("parameter-unit"); ok {
+			if pu, ok2 := v.(*config.ParameterUnit); ok2 && pu != nil {
+				ctx = context.WithValue(ctx, config.ParameterUnitKey, pu)
+			}
+		}
+	}
 	if accountId >= 0 {
 		ctx = defines.AttachAccountId(c.proc.Ctx, uint32(accountId))
 	}
