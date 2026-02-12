@@ -1,9 +1,9 @@
 select enable_fault_injection();
-enable_fault_injection()
-true
+➤ enable_fault_injection()[-7,1,0]  𝄀
+1
 select add_fault_point('fj/cn/recv/err', ':::', 'echo', 5, 'mo_tables');
-add_fault_point(fj/cn/recv/err, :::, echo, 5, mo_tables)
-true
+➤ add_fault_point(fj/cn/recv/err, :::, echo, 5, mo_tables)[-7,1,0]  𝄀
+1
 create database db1;
 use db1;
 begin;
@@ -16,7 +16,7 @@ begin;
 drop database db1;
 use db1;
 create table t2(a int);
-Unknown database db1
+No database selected
 commit;
 create database db1;
 use db1;
@@ -32,7 +32,7 @@ begin;
 drop database db1;
 use db1;
 drop table t2;
-Unknown database db1
+no such table db1.t2
 commit;
 create database db1;
 use db1;
@@ -48,7 +48,7 @@ begin;
 drop database db1;
 use db1;
 alter table t2 add b int;
-Unknown database db1
+no such table db1.t2
 commit;
 create database db1;
 use db1;
@@ -64,7 +64,7 @@ begin;
 drop database db1;
 use db1;
 create index t2_idx on t2(a);
-Unknown database db1
+no such table db1.t2
 commit;
 create database db1;
 use db1;
@@ -80,7 +80,7 @@ begin;
 drop database db1;
 use db1;
 drop index t2_idx on t2;
-Unknown database db1
+no such table db1.t2
 commit;
 create database db1;
 use db1;
@@ -104,5 +104,5 @@ use db1;
 alter table t2 drop foreign key fk_t2_t1;
 commit;
 select disable_fault_injection();
-disable_fault_injection()
-true
+➤ disable_fault_injection()[-7,1,0]  𝄀
+1
