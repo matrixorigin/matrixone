@@ -60,17 +60,16 @@ alter table dis_table_02 drop primary key;
 use ww_conflict;
 begin;
 insert into dis_table_02 values(10, 'aaaa', '1998-09-12');
+Duplicate entry 'aaaa' for key 'b'
 commit;
 select * from dis_table_02;
-a    b    c
-10    aaaa    2020-09-08 00:00:00
-10    bbbb    2020-09-08 00:00:00
-10    aaaa    1998-09-12 00:00:00
+➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[93,64,0]  𝄀
+10  ¦  aaaa  ¦  2020-09-08 00:00:00  𝄀
+10  ¦  bbbb  ¦  2020-09-08 00:00:00
 select * from dis_table_02;
-a    b    c
-10    aaaa    2020-09-08 00:00:00
-10    bbbb    2020-09-08 00:00:00
-10    aaaa    1998-09-12 00:00:00
+➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[93,64,0]  𝄀
+10  ¦  aaaa  ¦  2020-09-08 00:00:00  𝄀
+10  ¦  bbbb  ¦  2020-09-08 00:00:00
 drop table dis_table_02;
 create table t1 (a int);
 insert into t1 values (1), (2), (3);
