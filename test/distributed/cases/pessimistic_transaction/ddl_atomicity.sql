@@ -17,7 +17,7 @@ drop database db1;
 -- @session:id=1{
 use db1;
 -- @wait:0:commit
-create table t2(a int);
+create table db1.t2(a int);
 -- @session}
 commit;
 
@@ -40,7 +40,7 @@ drop database db1;
 -- @session:id=1{
 use db1;
 -- @wait:0:commit
-drop table t2;
+drop table db1.t2;
 -- @session}
 commit;
 
@@ -63,7 +63,7 @@ drop database db1;
 -- @session:id=1{
 use db1;
 -- @wait:0:commit
-alter table t2 add b int;
+alter table db1.t2 add b int;
 -- @session}
 commit;
 
@@ -86,7 +86,7 @@ drop database db1;
 -- @session:id=1{
 use db1;
 -- @wait:0:commit
-create index t2_idx on t2(a);
+create index t2_idx on db1.t2(a);
 -- @session}
 commit;
 
@@ -109,7 +109,7 @@ drop database db1;
 -- @session:id=1{
 use db1;
 -- @wait:0:commit
-drop index t2_idx on t2;
+drop index t2_idx on db1.t2;
 -- @session}
 commit;
 
