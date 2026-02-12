@@ -57,8 +57,8 @@ create table db11111111111.t2(col1 int auto_increment) comment 't2';
 insert into db11111111111.t2 values (10);
 show table status from db11111111111;
 ➤ Name[12,-1,0]  ¦  Engine[12,-1,0]  ¦  Row_format[12,-1,0]  ¦  Rows[-5,64,0]  ¦  Avg_row_length[-5,64,0]  ¦  Data_length[-5,64,0]  ¦  Max_data_length[-5,64,0]  ¦  Index_length[-5,64,0]  ¦  Data_free[12,-1,0]  ¦  Auto_increment[-5,64,0]  ¦  Create_time[93,64,0]  ¦  Update_time[12,-1,0]  ¦  Check_time[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Checksum[12,-1,0]  ¦  Create_options[1,0,0]  ¦  Comment[12,-1,0]  ¦  Role_id[4,32,0]  ¦  Role_name[12,-1,0]  𝄀
-t1  ¦  Tae  ¦  Dynamic  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  NULL  ¦  1  ¦  2026-02-06 13:57:00  ¦  NULL  ¦  NULL  ¦  utf8mb4_bin  ¦  NULL  ¦    ¦    ¦  0  ¦  moadmin  𝄀
-t2  ¦  Tae  ¦  Dynamic  ¦  1  ¦  48  ¦  48  ¦  0  ¦  0  ¦  NULL  ¦  2  ¦  2026-02-06 13:57:00  ¦  NULL  ¦  NULL  ¦  utf8mb4_bin  ¦  NULL  ¦    ¦  t2  ¦  0  ¦  moadmin
+t1  ¦  Tae  ¦  Dynamic  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  NULL  ¦  1  ¦  2026-02-09 18:51:19  ¦  NULL  ¦  NULL  ¦  utf8mb4_bin  ¦  NULL  ¦    ¦    ¦  0  ¦  moadmin  𝄀
+t2  ¦  Tae  ¦  Dynamic  ¦  1  ¦  48  ¦  48  ¦  0  ¦  0  ¦  NULL  ¦  11  ¦  2026-02-09 18:51:19  ¦  NULL  ¦  NULL  ¦  utf8mb4_bin  ¦  NULL  ¦    ¦  t2  ¦  0  ¦  moadmin
 drop database db11111111111;
 show variables where value = 'MatrixOne';
 ➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
