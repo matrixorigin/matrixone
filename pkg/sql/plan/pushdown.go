@@ -160,6 +160,10 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		// Record middle: processing JOIN node
 		builder.optimizationHistory = append(builder.optimizationHistory,
 			fmt.Sprintf("pushdownFilters:middle (nodeID: %d, JOIN, filters: %d, onList: %d)", nodeID, len(filters), len(node.OnList)))
+		// leftTags/rightTags are binding tags of this JOIN's left/right subtrees only.
+		// Filters being pushed down can reference columns from other branches (outer
+		// scope); getJoinSide treats such columns as JoinSideBoth so we don't push
+		// the filter into a subtree that doesn't contain them.
 		leftTags := make(map[int32]bool)
 		for _, tag := range builder.enumerateTags(node.Children[0]) {
 			leftTags[tag] = true

@@ -1012,6 +1012,7 @@ func Test_statement_type(t *testing.T) {
 		}
 		kases := []kase{
 			{&tree.CreateTable{}},
+			{&tree.CreateTable{IsAsSelect: true}},
 			{&tree.Insert{}},
 			{&tree.BeginTransaction{}},
 			{&tree.ShowTables{}},

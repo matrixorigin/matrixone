@@ -77,11 +77,7 @@ func (h *ParquetHandler) getDataByRow(bat *batch.Batch, param *ExternalParam, pr
 	finish := n == 0 || h.offset >= h.file.NumRows()
 	if finish {
 		h.cleanup()
-		param.parqh = nil
-		param.Fileparam.FileFin++
-		if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
-			param.Fileparam.End = true
-		}
+		// File completion (FileFin/End) is now handled by Call's finishCurrentFile
 	}
 
 	return nil
