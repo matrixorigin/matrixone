@@ -220,18 +220,18 @@ func (ctr *container) handleRuntimeFilter(hashBuild *HashBuild, proc *process.Pr
 		keyVec := ctr.hashmapBuilder.UniqueJoinKeys[0]
 		rowCount := keyVec.Length()
 
-		// Send UniqueJoinKeys instead of Bloomfilter
+		// Always send BLOOMFILTER with the serialized unique join keys.
+		// The consumer (ivfflat search) decides whether to use them as
+		// an exact pk IN filter or a bloom filter based on its own threshold.
+		runtimeFilter.Typ = message.RuntimeFilter_BLOOMFILTER
+
 		data, err := keyVec.MarshalBinary()
 		if err != nil {
 			return err
 		}
-
-		runtimeFilter.Typ = message.RuntimeFilter_BLOOMFILTER
 		runtimeFilter.Card = int32(rowCount)
 		runtimeFilter.Data = data
 		message.SendRuntimeFilter(runtimeFilter, spec, proc.GetMessageBoard())
-
-		// UniqueJoinKeys will be released uniformly in defer
 		return nil
 	}
 
