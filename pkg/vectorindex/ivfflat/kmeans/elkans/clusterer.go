@@ -148,6 +148,15 @@ func (km *ElkanClusterer[T]) Close() error {
 	return nil
 }
 
+func checkCentroidDimension[T types.RealNumbers](centroids [][]T, expectedDim int) error {
+	for i, c := range centroids {
+		if len(c) != expectedDim {
+			return moerr.NewInternalErrorNoCtxf("initialized centroid %d has dimension %d, expected %d", i, len(c), expectedDim)
+		}
+	}
+	return nil
+}
+
 // InitCentroids initializes the centroids using initialization algorithms like random or kmeans++.
 func (km *ElkanClusterer[T]) InitCentroids(ctx context.Context) error {
 	var initializer Initializer
@@ -169,7 +178,9 @@ func (km *ElkanClusterer[T]) InitCentroids(ctx context.Context) error {
 	if !ok {
 		return moerr.NewInternalErrorNoCtx("InitCentroids not return [][]float32|float64")
 	}
-	return nil
+
+	// Add a dimension check for the initialized centroids
+	return checkCentroidDimension(km.centroids, len(km.vectorList[0]))
 }
 
 // Cluster returns the final centroids and the error if any.
