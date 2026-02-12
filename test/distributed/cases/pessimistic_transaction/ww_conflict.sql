@@ -69,8 +69,8 @@ begin;
 alter table dis_table_02 drop primary key;
 -- @session:id=1{
 use ww_conflict;
-begin;
 -- @wait:0:commit
+begin;
 insert into dis_table_02 values(10, 'aaaa', '1998-09-12');
 commit;
 select * from dis_table_02;

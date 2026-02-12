@@ -16,6 +16,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 
@@ -212,6 +213,21 @@ func (h *handler) handle(c goetty.IOSession) error {
 		// feature is not enabled.
 		if h.connCache == nil {
 			_ = sc.Close()
+			return
+		}
+		// connCache enabled: only keep backend connection alive when it has
+		// been cached successfully.
+		if clientConn, ok := cc.(*clientConn); ok && clientConn.isConnCached() {
+			return
+		}
+		serverC := t.getServerConn()
+		if serverC == nil {
+			serverC = sc
+		}
+		if serverC != nil {
+			if err := serverC.Quit(); err != nil {
+				_ = serverC.Close()
+			}
 		}
 	}()
 
@@ -265,6 +281,21 @@ func (h *handler) handle(c goetty.IOSession) error {
 		return h.ctx.Err()
 	case err := <-t.errC:
 		if isEOFErr(err) || isConnEndErr(err) {
+			// On abnormal client disconnect, no COM_QUIT may be sent.
+			// Trigger quit path once to avoid leaking backend connections.
+			if h.connCache != nil {
+				if clientConn, ok := cc.(*clientConn); ok {
+					if quitErr := clientConn.handleQuitEvent(h.ctx); quitErr != nil &&
+						!errors.Is(quitErr, errPipeClosed) {
+						h.logger.Warn("failed to clean up backend connection on close",
+							zap.Uint32("Conn ID", cc.ConnID()),
+							zap.Uint64("session ID", c.ID()),
+							zap.Int64("goId", goId),
+							zap.Error(quitErr),
+						)
+					}
+				}
+			}
 			h.logger.Info("connection closed",
 				zap.Uint32("Conn ID", cc.ConnID()),
 				zap.Uint64("session ID", c.ID()),

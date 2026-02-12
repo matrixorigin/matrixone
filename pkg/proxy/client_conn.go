@@ -23,6 +23,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -155,6 +156,13 @@ type clientConn struct {
 	sc ServerConn
 	// connCache is the cache of the connections.
 	connCache ConnCache
+	// quit tracks quit/cleanup status. It is shared by quit event path and
+	// EOF/connection-end fallback path.
+	quit struct {
+		once   sync.Once
+		err    error
+		cached bool
+	}
 }
 
 // internalStmt is used internally in proxy, which indicates the stmt
@@ -319,14 +327,11 @@ func (c *clientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []by
 	case *setVarEvent:
 		return c.handleSetVar(ev)
 	case *quitEvent:
-		// Notify/finish the event immediately.
-		ev.notify()
-		// Then handle the quit event async.
-		go func() {
-			if err := c.handleQuitEvent(ctx); err != nil {
-				c.log.Error("failed to exec quit cmd", zap.Error(err))
-			}
-		}()
+		defer ev.notify()
+		if err := c.handleQuitEvent(ctx); err != nil {
+			c.log.Error("failed to exec quit cmd", zap.Error(err))
+			return err
+		}
 		return nil
 	case *upgradeEvent:
 		return c.handleUpgradeEvent(ev, resp)
@@ -426,22 +431,34 @@ func (c *clientConn) handleSetVar(e *setVarEvent) error {
 }
 
 func (c *clientConn) handleQuitEvent(ctx context.Context) error {
-	// Get server->client pipe and set it to pause.
-	_, scp := c.tun.getPipes()
-	if err := scp.pause(ctx); err != nil {
-		if err := c.sc.Quit(); err != nil {
-			c.log.Error("failed to quit from cn server", zap.Error(err))
+	c.quit.once.Do(func() {
+		// Get server->client pipe and set it to pause.
+		_, scp := c.tun.getPipes()
+		if err := scp.pause(ctx); err != nil {
+			if err := c.sc.Quit(); err != nil {
+				c.log.Error("failed to quit from cn server", zap.Error(err))
+			}
+			c.quit.err = err
+			return
 		}
-		return err
-	}
-	// After the server->client pipe is paused, push the
-	// connection to cache.
-	if !c.connCache.Push(c.clientInfo.hash, c.sc) {
-		if err := c.sc.Quit(); err != nil {
-			c.log.Error("failed to quit from cn server", zap.Error(err))
+		// After the server->client pipe is paused, push the
+		// connection to cache.
+		if !c.connCache.Push(c.clientInfo.hash, c.sc) {
+			if err := c.sc.Quit(); err != nil {
+				c.log.Error("failed to quit from cn server", zap.Error(err))
+			}
+		} else {
+			c.quit.cached = true
 		}
+	})
+	return c.quit.err
+}
+
+func (c *clientConn) isConnCached() bool {
+	if c == nil {
+		return false
 	}
-	return nil
+	return c.quit.cached
 }
 
 func (c *clientConn) handleUpgradeEvent(e *upgradeEvent, resp chan<- []byte) error {
