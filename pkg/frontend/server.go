@@ -428,12 +428,13 @@ func (mo *MOServer) handshake(rs *Conn) error {
 				if err := protocol.Authenticate(tempCtx); err != nil {
 					return moerr.AttachCause(tempCtx, err)
 				}
+				mo.applyInteractiveWaitTimeout(tempCtx, ses, protocol)
 				protocol.SetBool(TLS_ESTABLISHED, true)
 				protocol.SetBool(ESTABLISHED, true)
 			}
 		} else {
 			ses.Debugf(tempCtx, "handleHandshake")
-			_, err = protocol.HandleHandshake(tempCtx, payload)
+			isTlsHeader, err = protocol.HandleHandshake(tempCtx, payload)
 			if err != nil {
 				err = moerr.AttachCause(tempCtx, err)
 				ses.Error(tempCtx,
@@ -441,10 +442,40 @@ func (mo *MOServer) handshake(rs *Conn) error {
 					zap.Error(err))
 				return err
 			}
-			if err = protocol.Authenticate(tempCtx); err != nil {
-				return moerr.AttachCause(tempCtx, err)
+			if isTlsHeader {
+				ts[TSUpgradeTLSStart] = time.Now()
+				ses.Debugf(tempCtx, "upgrade to TLS")
+				// do upgradeTls
+				tlsConn := tls.Server(rs.RawConn(), rm.getTlsConfig())
+				ses.Debugf(tempCtx, "get TLS conn ok")
+				tlsCtx, cancelFun := context.WithTimeoutCause(tempCtx, 20*time.Second, moerr.CauseHandshake2)
+				if err = tlsConn.HandshakeContext(tlsCtx); err != nil {
+					err = moerr.AttachCause(tlsCtx, err)
+					ses.Error(tempCtx,
+						"Error occurred before cancel()",
+						zap.Error(err))
+					cancelFun()
+					ses.Error(tempCtx,
+						"Error occurred after cancel()",
+						zap.Error(err))
+					return err
+				}
+				cancelFun()
+				ses.Debugf(tempCtx, "TLS handshake ok")
+				rs.UseConn(tlsConn)
+				ses.Debugf(tempCtx, "TLS handshake finished")
+
+				// tls upgradeOk
+				protocol.SetBool(TLS_ESTABLISHED, true)
+				ts[TSUpgradeTLSEnd] = time.Now()
+				v2.UpgradeTLSDurationHistogram.Observe(ts[TSUpgradeTLSEnd].Sub(ts[TSUpgradeTLSStart]).Seconds())
+			} else {
+				if err = protocol.Authenticate(tempCtx); err != nil {
+					return moerr.AttachCause(tempCtx, err)
+				}
+				mo.applyInteractiveWaitTimeout(tempCtx, ses, protocol)
+				protocol.SetBool(ESTABLISHED, true)
 			}
-			protocol.SetBool(ESTABLISHED, true)
 		}
 		ts[TSEstablishEnd] = time.Now()
 		v2.EstablishDurationHistogram.Observe(ts[TSEstablishEnd].Sub(ts[TSEstablishStart]).Seconds())
@@ -636,6 +667,7 @@ func (mo *MOServer) handleRequest(rs *Conn) error {
 		return io.EOF
 	}
 
+	mo.applyIdleTimeout(rs)
 	msg, err = rs.Read()
 	if err != nil {
 		if err == io.EOF {
@@ -656,4 +688,45 @@ func (mo *MOServer) handleRequest(rs *Conn) error {
 		return err
 	}
 	return nil
+}
+
+func (mo *MOServer) applyIdleTimeout(rs *Conn) {
+	rm := mo.rm
+	if rm == nil {
+		return
+	}
+	routine := rm.getRoutine(rs)
+	if routine == nil {
+		return
+	}
+	ses := routine.getSession()
+	if ses == nil {
+		return
+	}
+	val, err := ses.GetSessionSysVar("wait_timeout")
+	if err != nil {
+		return
+	}
+	timeoutSec, ok := val.(int64)
+	if !ok {
+		return
+	}
+	if timeoutSec <= 0 {
+		rs.SetTimeout(0)
+		return
+	}
+	rs.SetTimeout(time.Duration(timeoutSec) * time.Second)
+}
+
+func (mo *MOServer) applyInteractiveWaitTimeout(ctx context.Context, ses *Session, protocol MysqlRrWr) {
+	if protocol.GetU32(CAPABILITY)&CLIENT_INTERACTIVE == 0 {
+		return
+	}
+	val, err := ses.GetSessionSysVar("interactive_timeout")
+	if err != nil {
+		return
+	}
+	if err = ses.SetSessionSysVar(ctx, "wait_timeout", val); err != nil {
+		ses.Errorf(ctx, "set wait_timeout from interactive_timeout failed: %v", err)
+	}
 }

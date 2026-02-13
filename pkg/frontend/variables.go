@@ -1291,7 +1291,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: true,
 		Type:              InitSystemVariableIntType("interactive_timeout", 1, 31536000, false),
-		Default:           int64(28800),
+		Default:           int64(86400),
 	},
 	"lower_case_table_names": {
 		Name:              "lower_case_table_names",
@@ -1331,7 +1331,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("wait_timeout", 1, 2147483, false),
-		Default:           int64(28800),
+		Default:           int64(86400),
 	},
 	"sql_safe_updates": {
 		Name:              "sql_safe_updates",
