@@ -279,6 +279,21 @@ type Workspace interface {
 	PPString() string
 
 	SetCloneTxn(snapshot int64)
+
+	// SetCCPRTxn marks this transaction as a CCPR transaction.
+	// CCPR transactions will call CCPRTxnCache.OnTxnCommit/OnTxnRollback when committing/rolling back.
+	SetCCPRTxn()
+
+	// IsCCPRTxn returns true if this is a CCPR transaction.
+	IsCCPRTxn() bool
+
+	// SetCCPRTaskID sets the CCPR task ID for this transaction.
+	// When a CCPR task ID is set, the transaction can bypass shared object read-only checks.
+	SetCCPRTaskID(taskID string)
+
+	// GetCCPRTaskID returns the CCPR task ID for this transaction.
+	// Returns empty string if no task ID is set.
+	GetCCPRTaskID() string
 }
 
 // TxnOverview txn overview include meta and status

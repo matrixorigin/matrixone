@@ -57,6 +57,10 @@ const (
 	FJ_CDCExecutor  = "fj/cdc/executor"
 	FJ_CDCScanTable = "fj/cdc/scantable"
 
+	FJ_PublicationSnapshotFinished = "fj/publication/snapshot/finished"
+
+	FJ_UpstreamSQLHelper = "fj/publication/upstream/sqlhelper"
+
 	FJ_WALReplayFailed = "fj/wal/replay/failed"
 
 	FJ_CDCHandleSlow             = "fj/cdc/handleslow"
@@ -698,4 +702,50 @@ func InjectWALReplayFailed(msg string) (rmFault func() (bool, error), err error)
 		return fault.RemoveFaultPoint(context.Background(), FJ_WALReplayFailed)
 	}
 	return
+}
+
+func InjectPublicationSnapshotFinished(msg string) (rmFault func() (bool, error), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_PublicationSnapshotFinished,
+		":::",
+		"echo",
+		0,
+		msg,
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() (ok bool, err error) {
+		return fault.RemoveFaultPoint(context.Background(), FJ_PublicationSnapshotFinished)
+	}
+	return
+}
+
+func PublicationSnapshotFinishedInjected() (string, bool) {
+	_, sarg, injected := fault.TriggerFault(FJ_PublicationSnapshotFinished)
+	return sarg, injected
+}
+
+func InjectUpstreamSQLHelper(msg string) (rmFault func() (bool, error), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_UpstreamSQLHelper,
+		":::",
+		"echo",
+		0,
+		msg,
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() (ok bool, err error) {
+		return fault.RemoveFaultPoint(context.Background(), FJ_UpstreamSQLHelper)
+	}
+	return
+}
+
+func UpstreamSQLHelperInjected() (string, bool) {
+	_, sarg, injected := fault.TriggerFault(FJ_UpstreamSQLHelper)
+	return sarg, injected
 }

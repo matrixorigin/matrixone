@@ -183,10 +183,58 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleCmdFieldList(ses, execCtx, st); err != nil {
 			return
 		}
+	case *InternalCmdGetSnapshotTs:
+		ses.EnterFPrint(FPInternalCmdGetSnapshotTs)
+		defer ses.ExitFPrint(FPInternalCmdGetSnapshotTs)
+		if err = handleGetSnapshotTs(ses, execCtx, st); err != nil {
+			return
+		}
+	case *InternalCmdGetDatabases:
+		ses.EnterFPrint(FPInternalCmdGetDatabases)
+		defer ses.ExitFPrint(FPInternalCmdGetDatabases)
+		if err = handleGetDatabases(ses, execCtx, st); err != nil {
+			return
+		}
+	case *InternalCmdGetMoIndexes:
+		ses.EnterFPrint(FPInternalCmdGetMoIndexes)
+		defer ses.ExitFPrint(FPInternalCmdGetMoIndexes)
+		if err = handleGetMoIndexes(ses, execCtx, st); err != nil {
+			return
+		}
+	case *InternalCmdGetDdl:
+		ses.EnterFPrint(FPInternalCmdGetDdl)
+		defer ses.ExitFPrint(FPInternalCmdGetDdl)
+		if err = handleInternalGetDdl(ses, execCtx, st); err != nil {
+			return
+		}
+	case *InternalCmdGetObject:
+		ses.EnterFPrint(FPInternalCmdGetObject)
+		defer ses.ExitFPrint(FPInternalCmdGetObject)
+		if err = handleInternalGetObject(ses, execCtx, st); err != nil {
+			return
+		}
+	case *InternalCmdObjectList:
+		ses.EnterFPrint(FPInternalCmdObjectList)
+		defer ses.ExitFPrint(FPInternalCmdObjectList)
+		if err = handleInternalObjectList(ses, execCtx, st); err != nil {
+			return
+		}
+	case *InternalCmdCheckSnapshotFlushed:
+		ses.EnterFPrint(FPInternalCmdCheckSnapshotFlushed)
+		defer ses.ExitFPrint(FPInternalCmdCheckSnapshotFlushed)
+		if err = handleInternalCheckSnapshotFlushed(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.CreatePublication:
 		ses.EnterFPrint(FPCreatePublication)
 		defer ses.ExitFPrint(FPCreatePublication)
 		if err = handleCreatePublication(ses, execCtx, st); err != nil {
+			return
+		}
+	case *tree.CreateSubscription:
+		ses.EnterFPrint(FPCreateSubscription)
+		defer ses.ExitFPrint(FPCreateSubscription)
+		if err = handleCreateSubscription(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.AlterPublication:
@@ -201,6 +249,18 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleDropPublication(ses, execCtx, st); err != nil {
 			return
 		}
+	case *tree.DropCcprSubscription:
+		if err = handleDropCcprSubscription(ses, execCtx, st); err != nil {
+			return
+		}
+	case *tree.ResumeCcprSubscription:
+		if err = handleResumeCcprSubscription(ses, execCtx, st); err != nil {
+			return
+		}
+	case *tree.PauseCcprSubscription:
+		if err = handlePauseCcprSubscription(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.ShowPublications:
 		ses.EnterFPrint(FPShowPublications)
 		defer ses.ExitFPrint(FPShowPublications)
@@ -211,6 +271,14 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		ses.EnterFPrint(FPShowSubscriptions)
 		defer ses.ExitFPrint(FPShowSubscriptions)
 		if err = handleShowSubscriptions(ses, execCtx, st); err != nil {
+			return
+		}
+	case *tree.ShowPublicationCoverage:
+		if err = handleShowPublicationCoverage(ses, execCtx, st); err != nil {
+			return
+		}
+	case *tree.ShowCcprSubscriptions:
+		if err = handleShowCcprSubscriptions(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.CreateStage:

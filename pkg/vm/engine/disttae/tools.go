@@ -161,6 +161,9 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 
 	} else if e.typ == ALTER {
 		typ = api.Entry_Alter
+	} else if e.typ == SOFT_DELETE_OBJECT {
+		typ = api.Entry_Delete
+		ebat = e.bat
 	}
 	bat, err := toPBBatch(ebat)
 	if err != nil {

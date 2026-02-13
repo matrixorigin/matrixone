@@ -1,0 +1,751 @@
+// Copyright 2024 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package publication
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	// "math"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"go.uber.org/zap"
+)
+
+var _ SQLExecutor = (*InternalSQLExecutor)(nil)
+
+// UpstreamSQLHelper interface for handling special SQL statements
+// (CREATE/DROP SNAPSHOT, OBJECTLIST, GET OBJECT) without requiring Session
+type UpstreamSQLHelper interface {
+	// HandleSpecialSQL checks if the SQL is a special statement and handles it directly
+	// Returns (handled, result, error) where handled indicates if the statement was handled
+	HandleSpecialSQL(ctx context.Context, query string) (bool, *Result, error)
+}
+
+// UpstreamSQLHelperFactory is a function type that creates an UpstreamSQLHelper
+// Parameters: txnOp, engine, accountID, executor, txnClient (optional)
+type UpstreamSQLHelperFactory func(
+	txnOp client.TxnOperator,
+	engine engine.Engine,
+	accountID uint32,
+	executor executor.SQLExecutor,
+	txnClient client.TxnClient, // Optional: if nil, helper will try to get from engine
+) UpstreamSQLHelper
+
+// SQLExecutorRetryOption configures retry behavior for SQL executor operations
+type SQLExecutorRetryOption struct {
+	MaxRetries    int             // Maximum number of retries for retryable errors
+	RetryInterval time.Duration   // Interval between retries
+	Classifier    ErrorClassifier // Error classifier for retry logic
+}
+
+// DefaultSQLExecutorRetryOption returns default retry options for SQL executor
+func DefaultSQLExecutorRetryOption() *SQLExecutorRetryOption {
+	return &SQLExecutorRetryOption{
+		MaxRetries:    10,          // Default max retries
+		RetryInterval: time.Second, // Default retry interval
+		Classifier:    nil,         // No default classifier
+	}
+}
+
+// InternalSQLExecutor implements SQLExecutor interface using MatrixOne's internal SQL executor
+// It supports retry for RC mode transaction errors (txn need retry errors)
+// If upstreamSQLHelper is provided, special statements (CREATE/DROP SNAPSHOT, OBJECTLIST, GET OBJECT)
+// will be routed through the helper
+type InternalSQLExecutor struct {
+	cnUUID            string
+	internalExec      executor.SQLExecutor
+	txnOp             client.TxnOperator
+	txnClient         client.TxnClient
+	engine            engine.Engine
+	accountID         uint32                  // Account ID for tenant context
+	useAccountID      bool                    // Whether to use account ID for tenant context
+	upstreamSQLHelper UpstreamSQLHelper       // Optional helper for special SQL statements
+	retryOpt          *SQLExecutorRetryOption // Retry configuration
+	utHelper          UTHelper                // Optional unit test helper
+	errorCount        int                     // Error counter for current SQL query
+}
+
+// SetUpstreamSQLHelper sets the upstream SQL helper
+func (e *InternalSQLExecutor) SetUpstreamSQLHelper(helper UpstreamSQLHelper) {
+	e.upstreamSQLHelper = helper
+}
+
+// SetUTHelper sets the unit test helper
+func (e *InternalSQLExecutor) SetUTHelper(helper UTHelper) {
+	e.utHelper = helper
+}
+
+// GetInternalExec returns the internal executor (for creating helper)
+func (e *InternalSQLExecutor) GetInternalExec() executor.SQLExecutor {
+	return e.internalExec
+}
+
+// GetTxnClient returns the txnClient (for creating helper)
+func (e *InternalSQLExecutor) GetTxnClient() client.TxnClient {
+	return e.txnClient
+}
+
+// NewInternalSQLExecutor creates a new InternalSQLExecutor
+// txnClient is optional - if provided, transactions can be created via SetTxn
+// engine is required for registering transactions with the engine
+// accountID is the tenant account ID to use when executing SQL
+// retryOpt is optional - if nil, default retry options will be used
+// upstreamSQLHelper is optional - if provided, special SQL statements will be handled by it
+func NewInternalSQLExecutor(
+	cnUUID string,
+	txnClient client.TxnClient,
+	engine engine.Engine,
+	accountID uint32,
+	retryOpt *SQLExecutorRetryOption,
+	useAccountID bool,
+) (*InternalSQLExecutor, error) {
+	v, ok := moruntime.ServiceRuntime(cnUUID).GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("internal SQL executor not found for CN %s", cnUUID))
+	}
+
+	internalExec, ok := v.(executor.SQLExecutor)
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx("invalid internal SQL executor type")
+	}
+
+	if retryOpt == nil {
+		retryOpt = DefaultSQLExecutorRetryOption()
+	}
+
+	return &InternalSQLExecutor{
+		cnUUID:       cnUUID,
+		internalExec: internalExec,
+		txnClient:    txnClient,
+		engine:       engine,
+		accountID:    accountID,
+		retryOpt:     retryOpt,
+		useAccountID: useAccountID,
+	}, nil
+}
+
+// Connect is a no-op for internal executor (connection is managed by runtime)
+func (e *InternalSQLExecutor) Connect() error {
+	return nil
+}
+
+// Close is a no-op for internal executor (connection is managed by runtime)
+func (e *InternalSQLExecutor) Close() error {
+	// Clean up transaction if exists
+	if e.txnOp != nil {
+		// Transaction cleanup is handled by the caller via EndTxn
+		e.txnOp = nil
+	}
+	return nil
+}
+
+// SetTxn sets an external transaction operator for the executor
+// This allows the executor to use a transaction created outside of it
+func (e *InternalSQLExecutor) SetTxn(txnOp client.TxnOperator) {
+	e.txnOp = txnOp
+}
+
+// EndTxn ends the current transaction
+// It commits or rolls back the transaction set via SetTxn
+func (e *InternalSQLExecutor) EndTxn(ctx context.Context, commit bool) error {
+	if e.txnOp == nil {
+		return nil // Idempotent
+	}
+
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Hour, moerr.NewInternalErrorNoCtx("internal sql timeout"))
+	defer cancel()
+
+	var err error
+	if commit {
+		err = e.txnOp.Commit(ctx)
+	} else {
+		err = e.txnOp.Rollback(ctx)
+	}
+	e.txnOp = nil // Always clear, even on error
+	return err
+}
+
+// ExecSQL executes a SQL statement with options
+// accountID: the account ID to use for tenant context; use InvalidAccountID to use executor's default accountID
+// useTxn: if true, execute within a transaction (requires active transaction, will error if txnOp is nil)
+// if false, execute as autocommit (will create and commit transaction automatically)
+// It supports automatic retry for RC mode transaction errors (txn need retry errors)
+// If session is set and the statement is CREATE/DROP SNAPSHOT, OBJECTLIST, or GET OBJECT,
+// it will be routed through frontend layer
+// timeout: if > 0, each retry attempt will use a new context with this timeout; if 0, use the provided ctx directly
+// Returns: result, cancel function (empty func if no timeout context was created), error
+// IMPORTANT: caller MUST call the cancel function after finishing with the result
+func (e *InternalSQLExecutor) ExecSQL(
+	ctx context.Context,
+	ar *ActiveRoutine,
+	accountID uint32,
+	query string,
+	useTxn bool,
+	needRetry bool,
+	timeout time.Duration,
+) (*Result, context.CancelFunc, error) {
+	// If useTxn is true, check if transaction is available
+	if useTxn && e.txnOp == nil {
+		return nil, nil, moerr.NewInternalError(ctx, "transaction required but no active transaction found. Call SetTxn() first")
+	}
+	// Check for cancellation
+	if ar != nil {
+		select {
+		case <-ar.Pause:
+			return nil, nil, moerr.NewInternalError(ctx, "task paused")
+		case <-ar.Cancel:
+			return nil, nil, moerr.NewInternalError(ctx, "task cancelled")
+		default:
+		}
+	}
+
+	// Create base context with account ID
+	// Priority: 1. Use provided accountID if valid (not InvalidAccountID)
+	//           2. Otherwise use executor's accountID if useAccountID is true
+	baseCtx := ctx
+	if accountID != InvalidAccountID {
+		baseCtx = context.WithValue(ctx, defines.TenantIDKey{}, accountID)
+	} else if e.useAccountID {
+		baseCtx = context.WithValue(ctx, defines.TenantIDKey{}, e.accountID)
+	}
+
+	// Check if upstreamSQLHelper can handle this SQL
+	if e.upstreamSQLHelper != nil {
+		// Apply timeout to context for HandleSpecialSQL if specified
+		specialCtx := baseCtx
+		var specialCancel context.CancelFunc
+		if timeout > 0 {
+			specialCtx, specialCancel = context.WithTimeout(baseCtx, timeout)
+		}
+		handled, result, err := e.upstreamSQLHelper.HandleSpecialSQL(specialCtx, query)
+		if err != nil {
+			if specialCancel != nil {
+				specialCancel()
+			}
+			return nil, nil, err
+		}
+		if handled {
+			// Return the cancel function so caller can clean up
+			if specialCancel != nil {
+				return result, specialCancel, nil
+			}
+			return result, func() {}, nil
+		}
+		// If not handled, cancel the timeout context
+		if specialCancel != nil {
+			specialCancel()
+		}
+	}
+	// For other statements, use internal executor with retry logic
+	opts := executor.Options{}.
+		WithDisableIncrStatement()
+
+	// Only use transaction if useTxn is true and txnOp is available
+	if useTxn && e.txnOp != nil {
+		opts = opts.WithTxn(e.txnOp)
+	}
+
+	// Reset error counter for new SQL query
+	e.errorCount = 0
+
+	// Use policy.Do for retry logic
+	var execResult executor.Result
+	var lastErr error
+	var attemptCount int
+	var lastCancel context.CancelFunc
+
+	// Create a custom backoff that handles defChanged special case
+	backoff := &defChangedBackoff{
+		baseInterval: e.retryOpt.RetryInterval,
+		getLastErr:   func() error { return lastErr },
+		getAttempt:   func() int { return attemptCount },
+	}
+
+	policy := Policy{
+		MaxAttempts: e.retryOpt.MaxRetries + 1, // +1 because first attempt is not a retry
+		Backoff:     backoff,
+		Classifier:  e.retryOpt.Classifier,
+	}
+
+	var err error
+	err = policy.Do(ctx, func() error {
+		attemptCount++
+
+		// Cancel previous attempt's context if exists
+		if lastCancel != nil {
+			lastCancel()
+			lastCancel = nil
+		}
+
+		// Create timeout context for this attempt if timeout > 0
+		execCtx := baseCtx
+		if timeout > 0 {
+			execCtx, lastCancel = context.WithTimeout(baseCtx, timeout)
+		}
+
+		// Check for cancellation before each attempt
+		if ar != nil {
+			select {
+			case <-ar.Pause:
+				return moerr.NewInternalError(ctx, "task paused")
+			case <-ar.Cancel:
+				return moerr.NewInternalError(ctx, "task cancelled")
+			default:
+			}
+		}
+
+		// Call UTHelper before executing SQL to check if we should inject error
+		var injectErr error
+		if e.utHelper != nil {
+			injectErr = e.utHelper.OnSQLExecFailed(ctx, query, e.errorCount)
+		}
+		if injectErr != nil {
+			// Inject the error and increment error count
+			e.errorCount++
+			return injectErr
+		}
+
+		execResult, err = e.internalExec.Exec(execCtx, query, opts)
+		if err == nil {
+			// Success
+			if attemptCount > 1 {
+				logutil.Info("internal sql executor retry succeeded",
+					zap.String("query", truncateSQL(query)),
+					zap.Int("retryCount", attemptCount-1),
+				)
+			}
+			return nil
+		}
+
+		// Log retry attempt
+		logutil.Warn("internal sql executor retry attempt",
+			zap.String("query", truncateSQL(query)),
+			zap.Int("retryCount", attemptCount-1),
+			zap.Int("maxRetries", e.retryOpt.MaxRetries),
+			zap.Error(err),
+		)
+
+		return err
+	})
+
+	if err == nil {
+		// Return empty cancel func if no timeout was used
+		if lastCancel == nil {
+			lastCancel = func() {}
+		}
+		return convertExecutorResult(execResult), lastCancel, nil
+	}
+
+	// On error, cancel the last context if exists
+	if lastCancel != nil {
+		lastCancel()
+	}
+
+	logutil.Error("internal sql executor max retries exceeded",
+		zap.String("query", truncateSQL(query)),
+		zap.Int("retryCount", attemptCount-1),
+		zap.Error(lastErr),
+	)
+
+	return nil, nil, err
+}
+
+// truncateSQL truncates SQL string for logging
+func truncateSQL(sql string) string {
+	const maxLen = 200
+	if len(sql) <= maxLen {
+		return sql
+	}
+	return sql[:maxLen] + "..."
+}
+
+// convertExecutorResult converts executor.Result (with Batches) to publication.Result
+func convertExecutorResult(execResult executor.Result) *Result {
+	return &Result{
+		internalResult: &InternalResult{
+			executorResult: execResult,
+		},
+	}
+}
+
+// NewResultFromExecutorResult creates a new Result from executor.Result
+// This is exported so that external packages (like test helpers) can create Result objects
+func NewResultFromExecutorResult(execResult executor.Result) *Result {
+	return convertExecutorResult(execResult)
+}
+
+// InternalResult wraps executor.Result to provide sql.Rows-like interface
+type InternalResult struct {
+	executorResult executor.Result
+	currentBatch   int
+	currentRow     int
+	err            error
+}
+
+// Close closes the result and releases resources
+func (r *InternalResult) Close() error {
+	// Release batches if needed
+	if r.executorResult.Batches != nil {
+		for _, b := range r.executorResult.Batches {
+			if b != nil {
+				b.Clean(r.executorResult.Mp)
+			}
+		}
+	}
+	return nil
+}
+
+// Next moves to the next row
+func (r *InternalResult) Next() bool {
+	if r.err != nil {
+		return false
+	}
+
+	if len(r.executorResult.Batches) == 0 {
+		return false
+	}
+
+	// Find next row across batches
+	for r.currentBatch < len(r.executorResult.Batches) {
+		batch := r.executorResult.Batches[r.currentBatch]
+		if batch == nil {
+			r.currentBatch++
+			r.currentRow = 0
+			continue
+		}
+
+		if r.currentRow < batch.RowCount() {
+			r.currentRow++
+			return true
+		}
+
+		r.currentBatch++
+		r.currentRow = 0
+	}
+
+	return false
+}
+
+// Scan scans the current row into the provided destinations
+func (r *InternalResult) Scan(dest ...interface{}) error {
+	if len(r.executorResult.Batches) == 0 {
+		return moerr.NewInternalErrorNoCtx("no batches available")
+	}
+
+	if r.currentBatch >= len(r.executorResult.Batches) {
+		return moerr.NewInternalErrorNoCtx("no more rows")
+	}
+
+	batch := r.executorResult.Batches[r.currentBatch]
+	if batch == nil {
+		return moerr.NewInternalErrorNoCtx("batch is nil")
+	}
+
+	if r.currentRow <= 0 || r.currentRow > batch.RowCount() {
+		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid row index: %d (batch has %d rows)", r.currentRow, batch.RowCount()))
+	}
+
+	rowIdx := r.currentRow - 1 // Convert to 0-based index
+
+	// Validate column count
+	if len(dest) != len(batch.Vecs) {
+		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("column count mismatch: expected %d, got %d", len(batch.Vecs), len(dest)))
+	}
+
+	// Scan each column
+	for i, vec := range batch.Vecs {
+		if vec == nil {
+			return moerr.NewInternalErrorNoCtx(fmt.Sprintf("vector %d is nil", i))
+		}
+
+		if vec.IsNull(uint64(rowIdx)) {
+			// Handle NULL values - set destination to nil or zero value
+			switch d := dest[i].(type) {
+			// case *string:
+			// 	*d = ""
+			case *[]byte:
+				*d = nil
+			// case *sql.NullString:
+			// 	d.Valid = false
+			// 	d.String = ""
+			// case *sql.NullInt16:
+			// 	d.Valid = false
+			// 	d.Int16 = 0
+			// case *sql.NullInt32:
+			// 	d.Valid = false
+			// 	d.Int32 = 0
+			// case *sql.NullInt64:
+			// 	d.Valid = false
+			// 	d.Int64 = 0
+			// case *sql.NullBool:
+			// 	d.Valid = false
+			// 	d.Bool = false
+			// case *bool:
+			// 	*d = false
+			// case *sql.NullFloat64:
+			// 	d.Valid = false
+			// 	d.Float64 = 0
+			// case *sql.NullTime:
+			// 	d.Valid = false
+			// 	d.Time = time.Time{}
+			// case *int8:
+			// 	*d = 0
+			// case *int16:
+			// 	*d = 0
+			// case *int32:
+			// 	*d = 0
+			// case *int64:
+			// 	*d = 0
+			// case *uint8:
+			// 	*d = 0
+			// case *uint16:
+			// 	*d = 0
+			// case *uint32:
+			// 	*d = 0
+			// case *uint64:
+			// 	*d = 0
+			// case *types.TS:
+			// 	*d = types.TS{}
+			default:
+				// For other types, try to set to nil if possible
+				// This is a simplified implementation
+			}
+			continue
+		}
+
+		// Extract value from vector based on type
+		err := extractVectorValue(vec, uint64(rowIdx), dest[i])
+		if err != nil {
+			return moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to extract value from vector %d: %v", i, err))
+		}
+	}
+
+	return nil
+}
+
+// extractVectorValue extracts a value from a vector at the given index
+func extractVectorValue(vec *vector.Vector, idx uint64, dest interface{}) error {
+	switch vec.GetType().Oid {
+	case types.T_varchar, types.T_char, types.T_text, types.T_blob, types.T_binary, types.T_varbinary, types.T_datalink:
+		if d, ok := dest.(*[]byte); ok {
+			// For byte slice, get bytes directly and make a copy
+			bytesVal := vec.GetBytesAt(int(idx))
+			*d = make([]byte, len(bytesVal))
+			copy(*d, bytesVal)
+		} else if d, ok := dest.(*string); ok {
+			val := vec.GetStringAt(int(idx))
+			*d = val
+		} else if d, ok := dest.(*sql.NullString); ok {
+			val := vec.GetStringAt(int(idx))
+			d.String = val
+			d.Valid = true
+		} else {
+			return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for string, type %T", dest))
+		}
+
+	case types.T_bool:
+		val := vector.GetFixedAtWithTypeCheck[bool](vec, int(idx))
+		if d, ok := dest.(*bool); ok {
+			*d = val
+		} else if d, ok := dest.(*sql.NullBool); ok {
+			d.Bool = val
+			d.Valid = true
+		} else {
+			return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for bool, type %T", dest))
+		}
+
+	case types.T_int8:
+		val := vector.GetFixedAtWithTypeCheck[int8](vec, int(idx))
+		if d, ok := dest.(*int8); ok {
+			*d = val
+		} else {
+			return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for int8, type %T", dest))
+		}
+
+	// case types.T_int16:
+	// 	val := vector.GetFixedAtWithTypeCheck[int16](vec, int(idx))
+	// 	if d, ok := dest.(*int16); ok {
+	// 		*d = val
+	// 	} else if d, ok := dest.(*sql.NullInt16); ok {
+	// 		d.Int16 = val
+	// 		d.Valid = true
+	// 	} else {
+	// 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for int16, type %T", dest))
+	// 	}
+
+	// case types.T_int32:
+	// 	val := vector.GetFixedAtWithTypeCheck[int32](vec, int(idx))
+	// 	if d, ok := dest.(*int32); ok {
+	// 		*d = val
+	// 	} else if d, ok := dest.(*sql.NullInt32); ok {
+	// 		d.Int32 = val
+	// 		d.Valid = true
+	// 	} else {
+	// 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for int32, type %T", dest))
+	// 	}
+
+	case types.T_int64:
+		val := vector.GetFixedAtWithTypeCheck[int64](vec, int(idx))
+		if d, ok := dest.(*int64); ok {
+			*d = val
+		} else if d, ok := dest.(*sql.NullInt64); ok {
+			d.Int64 = val
+			d.Valid = true
+		} else if d, ok := dest.(*uint64); ok {
+			// Allow conversion from int64 to uint64 for compatibility
+			// This is safe for non-negative values (e.g., iteration_lsn, LSN values)
+			if val < 0 {
+				return moerr.NewInternalErrorNoCtx(fmt.Sprintf("cannot convert negative int64 value %d to uint64", val))
+			}
+			*d = uint64(val)
+		} else {
+			return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for int64, type %T", dest))
+		}
+
+	// case types.T_uint8:
+	// 	val := vector.GetFixedAtWithTypeCheck[uint8](vec, int(idx))
+	// 	if d, ok := dest.(*uint8); ok {
+	// 		*d = val
+	// 	} else {
+	// 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for uint8, type %T", dest))
+	// 	}
+
+	// case types.T_uint16:
+	// 	val := vector.GetFixedAtWithTypeCheck[uint16](vec, int(idx))
+	// 	if d, ok := dest.(*uint16); ok {
+	// 		*d = val
+	// 	} else {
+	// 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for uint16, type %T", dest))
+	// 	}
+
+	case types.T_uint32:
+		val := vector.GetFixedAtWithTypeCheck[uint32](vec, int(idx))
+		if d, ok := dest.(*uint32); ok {
+			*d = val
+		} else if d, ok := dest.(*sql.NullInt64); ok {
+			// Support sql.NullInt64 for uint32 values (e.g., account_id)
+			// This is safe as uint32 max (4294967295) is well within int64 range
+			d.Int64 = int64(val)
+			d.Valid = true
+		} else {
+			return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for uint32, type %T", dest))
+		}
+
+	case types.T_uint64:
+		val := vector.GetFixedAtWithTypeCheck[uint64](vec, int(idx))
+		if d, ok := dest.(*uint64); ok {
+			*d = val
+		}
+		// else if d, ok := dest.(*sql.NullInt64); ok {
+		// 	// Support sql.NullInt64 for uint64 values (e.g., dat_id)
+		// 	// Note: This may overflow if uint64 value exceeds int64 max, but it's acceptable for most use cases
+		// 	// where database IDs and account IDs are typically within int64 range
+		// 	if val <= uint64(math.MaxInt64) {
+		// 		d.Int64 = int64(val)
+		// 		d.Valid = true
+		// 	} else {
+		// 		// If value exceeds int64 max, we can't represent it in NullInt64
+		// 		// This should be rare in practice for database/account IDs
+		// 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("uint64 value %d exceeds int64 max, cannot convert to sql.NullInt64", val))
+		// 	}
+		// } else {
+		// 	return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for uint64, type %T", dest))
+		// }
+
+	// case types.T_timestamp:
+	// 	val := vector.GetFixedAtWithTypeCheck[types.Timestamp](vec, int(idx))
+	// 	if d, ok := dest.(*types.Timestamp); ok {
+	// 		*d = val
+	// 	} else {
+	// 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for timestamp, type %T", dest))
+	// 	}
+
+	case types.T_TS:
+		val := vector.GetFixedAtWithTypeCheck[types.TS](vec, int(idx))
+		if d, ok := dest.(*types.TS); ok {
+			*d = val
+		} else {
+			return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for TS, type %T", dest))
+		}
+
+	case types.T_json:
+		bytesVal := vec.GetBytesAt(int(idx))
+		byteJson := types.DecodeJson(bytesVal)
+		if d, ok := dest.(*string); ok {
+			*d = byteJson.String()
+		} else if d, ok := dest.(*sql.NullString); ok {
+			d.String = byteJson.String()
+			d.Valid = true
+		}
+		// else if d, ok := dest.(*[]byte); ok {
+		// 	// For byte slice, get the JSON bytes and make a copy
+		// 	*d = make([]byte, len(bytesVal))
+		// 	copy(*d, bytesVal)
+		// } else {
+		// 	return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for JSON, type %T", dest))
+		// }
+
+	default:
+		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("unsupported vector type: %v, type %T", vec.GetType().Oid, dest))
+	}
+
+	return nil
+}
+
+// Err returns any error encountered during iteration
+func (r *InternalResult) Err() error {
+	return r.err
+}
+
+// Ensure InternalSQLExecutor implements SQLExecutor interface
+var _ SQLExecutor = (*InternalSQLExecutor)(nil)
+
+// defChangedBackoff is a custom backoff strategy that handles defChanged special case
+// It waits 2x the base interval on the first retry if the error is defChanged
+type defChangedBackoff struct {
+	baseInterval time.Duration
+	getLastErr   func() error
+	getAttempt   func() int
+}
+
+// Next implements BackoffStrategy
+func (b *defChangedBackoff) Next(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+
+	// Get the last error to check if it's defChanged
+	lastErr := b.getLastErr()
+	if lastErr != nil {
+		defChanged := moerr.IsMoErrCode(lastErr, moerr.ErrTxnNeedRetryWithDefChanged)
+		// First retry after defChanged, wait a bit longer
+		if defChanged && attempt == 1 {
+			return b.baseInterval * 2
+		}
+	}
+
+	// Regular retry interval
+	return b.baseInterval
+}

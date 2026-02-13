@@ -142,6 +142,14 @@ func (tbl *txnTableDelegate) CollectChanges(ctx context.Context, from, to types.
 	return tbl.origin.CollectChanges(ctx, from, to, skipDeletes, mp)
 }
 
+func (tbl *txnTableDelegate) CollectObjectList(ctx context.Context, from, to types.TS, bat *batch.Batch, mp *mpool.MPool) error {
+	if tbl.combined.is {
+		return tbl.combined.tbl.CollectObjectList(ctx, from, to, bat, mp)
+	}
+
+	return tbl.origin.CollectObjectList(ctx, from, to, bat, mp)
+}
+
 func (tbl *txnTableDelegate) Stats(
 	ctx context.Context,
 	sync bool,
@@ -964,6 +972,15 @@ func (tbl *txnTableDelegate) Delete(
 	return tbl.origin.Delete(ctx, bat, name)
 }
 
+func (tbl *txnTableDelegate) SoftDeleteObject(ctx context.Context, objID *objectio.ObjectId, isTombstone bool) error {
+	if tbl.combined.is {
+		// For combined table, we need to handle it differently
+		// For now, delegate to origin
+		return tbl.origin.SoftDeleteObject(ctx, objID, isTombstone)
+	}
+	return tbl.origin.SoftDeleteObject(ctx, objID, isTombstone)
+}
+
 func (tbl *txnTableDelegate) AddTableDef(
 	ctx context.Context,
 	def engine.TableDef,
@@ -1074,6 +1091,15 @@ func (tbl *txnTableDelegate) GetProcess() any {
 
 func (tbl *txnTableDelegate) GetExtraInfo() *api.SchemaExtra {
 	return tbl.origin.extraInfo
+}
+
+func (tbl *txnTableDelegate) GetFlushTS(
+	ctx context.Context,
+) (types.TS, error) {
+	if tbl.combined.is {
+		return tbl.combined.tbl.GetFlushTS(ctx)
+	}
+	return tbl.origin.GetFlushTS(ctx)
 }
 
 func (tbl *txnTableDelegate) Reset(op client.TxnOperator) error {

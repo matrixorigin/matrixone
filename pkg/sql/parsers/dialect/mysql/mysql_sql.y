@@ -370,7 +370,7 @@ import (
 // Sequence
 %token <str> INCREMENT CYCLE MINVALUE
 // publication
-%token <str> PUBLICATION SUBSCRIPTIONS PUBLICATIONS
+%token <str> PUBLICATION SUBSCRIPTION SUBSCRIPTIONS PUBLICATIONS SYNC_INTERVAL SYNC COVERAGE CCPR
 
 // MO table option
 %token <str> PROPERTIES
@@ -563,7 +563,7 @@ import (
 
 // iteration
 %type <statement> loop_stmt iterate_stmt leave_stmt repeat_stmt while_stmt
-%type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
+%type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt show_publication_coverage_stmt show_ccpr_subscriptions_stmt drop_ccpr_subscription_stmt resume_ccpr_subscription_stmt pause_ccpr_subscription_stmt
 %type <statement> create_stage_stmt drop_stage_stmt alter_stage_stmt remove_stage_files_stmt
 %type <statement> create_snapshot_stmt drop_snapshot_stmt
 %type <statement> create_pitr_stmt drop_pitr_stmt show_pitr_stmt alter_pitr_stmt restore_pitr_stmt show_recovery_window_stmt
@@ -743,7 +743,7 @@ import (
 %type <frameBound> frame_bound frame_bound_start
 %type <frameType> frame_type
 %type <str> fields_or_columns
-%type <int64Val> algorithm_opt partition_num_opt sub_partition_num_opt opt_retry pitr_value
+%type <int64Val> algorithm_opt partition_num_opt sub_partition_num_opt opt_retry pitr_value sync_interval_opt
 %type <boolVal> linear_opt
 %type <partition> partition
 %type <partitions> partition_list_opt partition_list
@@ -973,6 +973,8 @@ normal_stmt:
 |   pause_cdc_stmt
 |   resume_cdc_stmt
 |   restart_cdc_stmt
+|   resume_ccpr_subscription_stmt
+|   pause_ccpr_subscription_stmt
 |   branch_stmt
 
 backup_stmt:
@@ -1164,6 +1166,41 @@ snapshot_object_opt:
         $$ = tree.ObjectInfo{
             SLevel: spLevel,
             ObjName: tree.Identifier($2.Compare() + "." + $3.Compare()),
+        }
+    }
+|   TABLE ident ident FROM ident PUBLICATION ident
+    {
+        spLevel := tree.SnapshotLevelType{
+            Level: tree.SNAPSHOTLEVELTABLE,
+        }
+        $$ = tree.ObjectInfo{
+            SLevel: spLevel,
+            ObjName: tree.Identifier($2.Compare() + "." + $3.Compare()),
+            AccountName: tree.Identifier($5.Compare()),
+            PubName: tree.Identifier($7.Compare()),
+        }
+    }
+|   DATABASE ident FROM ident PUBLICATION ident
+    {
+        spLevel := tree.SnapshotLevelType{
+            Level: tree.SNAPSHOTLEVELDATABASE,
+        }
+        $$ = tree.ObjectInfo{
+            SLevel: spLevel,
+            ObjName: tree.Identifier($2.Compare()),
+            AccountName: tree.Identifier($4.Compare()),
+            PubName: tree.Identifier($6.Compare()),
+        }
+    }
+|   ACCOUNT FROM ident PUBLICATION ident
+    {
+        spLevel := tree.SnapshotLevelType{
+            Level: tree.SNAPSHOTLEVELACCOUNT,
+        }
+        $$ = tree.ObjectInfo{
+            SLevel: spLevel,
+            AccountName: tree.Identifier($3.Compare()),
+            PubName: tree.Identifier($5.Compare()),
         }
     }
 
@@ -4235,6 +4272,8 @@ show_stmt:
 |   show_upgrade_stmt
 |   show_publications_stmt
 |   show_subscriptions_stmt
+|   show_publication_coverage_stmt
+|   show_ccpr_subscriptions_stmt
 |   show_servers_stmt
 |   show_stages_stmt
 |   show_connectors_stmt
@@ -4632,6 +4671,12 @@ show_publications_stmt:
 	$$ = &tree.ShowPublications{Like: $3}
     }
 
+show_publication_coverage_stmt:
+    SHOW PUBLICATION COVERAGE db_name
+    {
+	$$ = &tree.ShowPublicationCoverage{Name: $4}
+    }
+
 show_upgrade_stmt:
     SHOW UPGRADE
     {
@@ -4646,6 +4691,16 @@ show_subscriptions_stmt:
 |   SHOW SUBSCRIPTIONS ALL like_opt
     {
 	    $$ = &tree.ShowSubscriptions{All: true, Like: $4}
+    }
+
+show_ccpr_subscriptions_stmt:
+    SHOW CCPR SUBSCRIPTION STRING
+    {
+	    $$ = &tree.ShowCcprSubscriptions{TaskId: $4}
+    }
+|   SHOW CCPR SUBSCRIPTIONS
+    {
+	    $$ = &tree.ShowCcprSubscriptions{}
     }
 
 like_opt:
@@ -4789,6 +4844,7 @@ drop_ddl_stmt:
 |   drop_function_stmt
 |   drop_sequence_stmt
 |   drop_publication_stmt
+|   drop_ccpr_subscription_stmt
 |   drop_procedure_stmt
 |   drop_stage_stmt
 |   drop_connector_stmt
@@ -6912,6 +6968,23 @@ create_account_stmt:
             Comment,
     	)
     }
+|   CREATE ACCOUNT FROM STRING ident PUBLICATION ident sync_interval_opt
+    {
+        var FromUri = $4
+        var SubscriptionAccountName = $5.Compare()
+        var PubName = tree.Identifier($7.Compare())
+        var SyncInterval = $8
+        var cs = tree.NewCreateSubscription(
+            true,  // isDatabase
+            tree.Identifier(""),  // dbName (empty for account level)
+            "",  // tableName
+            FromUri,
+            SubscriptionAccountName,
+            PubName,
+            SyncInterval,
+        )
+        $$ = cs
+    }
 
 view_list_opt:
     view_opt
@@ -7138,6 +7211,22 @@ create_publication_stmt:
             Comment,
         )
     }
+|   CREATE PUBLICATION not_exists_opt ident DATABASE '*' create_publication_accounts comment_opt
+    {
+        var IfNotExists = $3
+        var Name = tree.Identifier($4.Compare())
+        var Database = tree.Identifier("*")
+        var AccountsSet = $7
+        var Comment = $8
+        $$ = tree.NewCreatePublication(
+            IfNotExists,
+            Name,
+            Database,
+            nil,
+            AccountsSet,
+            Comment,
+        )
+    }
 
 create_publication_accounts:
     ACCOUNT ALL
@@ -7204,6 +7293,23 @@ stage_comment_opt:
         $$ = tree.StageComment{
             Exist: true,
             Comment: $3,
+        }
+    }
+
+
+sync_interval_opt:
+    {
+        $$ = int64(0)
+    }
+|   SYNC INTERVAL INTEGRAL
+    {
+        switch v := $3.(type) {
+        case int64:
+            $$ = v
+        case uint64:
+            $$ = int64(v)
+        default:
+            $$ = int64(0)
         }
     }
 
@@ -7349,6 +7455,28 @@ drop_publication_stmt:
         $$ = tree.NewDropPublication(ifExists, name)
     }
 
+drop_ccpr_subscription_stmt:
+    DROP CCPR SUBSCRIPTION exists_opt STRING
+    {
+        var ifExists = $4
+        var taskID = $5
+        $$ = tree.NewDropCcprSubscription(ifExists, taskID)
+    }
+
+resume_ccpr_subscription_stmt:
+    RESUME CCPR SUBSCRIPTION STRING
+    {
+        var taskID = $4
+        $$ = tree.NewResumeCcprSubscription(taskID)
+    }
+
+pause_ccpr_subscription_stmt:
+    PAUSE CCPR SUBSCRIPTION STRING
+    {
+        var taskID = $4
+        $$ = tree.NewPauseCcprSubscription(taskID)
+    }
+
 drop_stage_stmt:
     DROP STAGE exists_opt ident
     {
@@ -7370,7 +7498,15 @@ drop_snapshot_stmt:
    {
         var ifExists = $3
         var name = tree.Identifier($4.Compare())
-        $$ = tree.NewDropSnapShot(ifExists, name)
+        $$ = tree.NewDropSnapShot(ifExists, name, "", "")
+    }
+|   DROP SNAPSHOT exists_opt ident FROM ident PUBLICATION ident
+   {
+        var ifExists = $3
+        var name = tree.Identifier($4.Compare())
+        var accountName = tree.Identifier($6.Compare())
+        var pubName = tree.Identifier($8.Compare())
+        $$ = tree.NewDropSnapShot(ifExists, name, accountName, pubName)
     }
 
 drop_pitr_stmt:
@@ -8004,6 +8140,23 @@ create_database_stmt:
     	t.ToAccountOpt = $8
     	$$ = t
     }
+|   CREATE database_or_schema not_exists_opt db_name FROM STRING ident PUBLICATION ident sync_interval_opt
+    {
+        var DbName = tree.Identifier($4)
+        var FromUri = $6
+        var SubscriptionAccountName = $7.Compare()
+        var PubName = tree.Identifier($9.Compare())
+        var SyncInterval = $10
+        $$ = tree.NewCreateSubscription(
+            true,  // isDatabase
+            DbName,
+            "",
+            FromUri,
+            SubscriptionAccountName,
+            PubName,
+            SyncInterval,
+        )
+    }
 
 subscription_opt:
     {
@@ -8415,6 +8568,29 @@ create_table_stmt:
 	t.SrcTable = *$7
 	t.ToAccountOpt = $8
 	$$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name FROM STRING ident PUBLICATION ident sync_interval_opt
+    {
+        var TableName = $5
+        var FromUri = $7
+        var SubscriptionAccountName = $8.Compare()
+        var PubName = tree.Identifier($10.Compare())
+        var SyncInterval = $11
+        var TableNameStr = string(TableName.ObjectName)
+        var DbName = tree.Identifier("")
+        // Extract database name from table name if explicitly specified
+        if TableName.ExplicitSchema {
+            DbName = TableName.SchemaName
+        }
+        $$ = tree.NewCreateSubscription(
+            false,  // isDatabase
+            DbName,
+            TableNameStr,
+            FromUri,
+            SubscriptionAccountName,
+            PubName,
+            SyncInterval,
+        )
     }
 
 load_param_opt_2:

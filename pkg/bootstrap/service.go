@@ -103,6 +103,9 @@ func init() {
 	sql = predefine.GenInitISCPTaskSQL()
 	initSQLs = append(initSQLs, sql)
 
+	sql = predefine.GenInitPublicationTaskSQL()
+	initSQLs = append(initSQLs, sql)
+
 	initSQLs = append(initSQLs, trace.InitSQLs...)
 
 	initSQLs = append(initSQLs, shardservice.InitSQLs...)

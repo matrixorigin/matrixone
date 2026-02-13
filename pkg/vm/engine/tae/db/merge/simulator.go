@@ -768,6 +768,8 @@ func (t *STable) HasDropCommitted() bool { return false }
 
 func (t *STable) IsSpecialBigTable() bool { return false }
 
+func (t *STable) IsFromPublication() bool { return false }
+
 func (t *STable) AddDataLocked(data SData) {
 	stats := data.GetObjectStats()
 	lv := stats.GetLevel()

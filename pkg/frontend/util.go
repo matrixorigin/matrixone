@@ -22,6 +22,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -529,6 +530,252 @@ func parseCmdFieldList(ctx context.Context, sql string) (*InternalCmdFieldList, 
 	}
 	tableName := strings.TrimSpace(sql[len(cmdFieldListSql):])
 	return &InternalCmdFieldList{tableName: tableName}, nil
+}
+
+// isCmdGetSnapshotTsSql checks the sql is the cmdGetSnapshotTsSql or not.
+func isCmdGetSnapshotTsSql(sql string) bool {
+	if len(sql) < cmdGetSnapshotTsSqlLen {
+		return false
+	}
+	prefix := sql[:cmdGetSnapshotTsSqlLen]
+	return strings.Compare(strings.ToLower(prefix), cmdGetSnapshotTsSql) == 0
+}
+
+// makeGetSnapshotTsSql makes the internal getsnapshotts sql
+func makeGetSnapshotTsSql(snapshotName, accountName, publicationName string) string {
+	return fmt.Sprintf("%s %s %s %s", cmdGetSnapshotTsSql, snapshotName, accountName, publicationName)
+}
+
+// parseCmdGetSnapshotTs parses the internal cmd getsnapshotts
+// format: getsnapshotts <snapshotName> <accountName> <publicationName>
+func parseCmdGetSnapshotTs(ctx context.Context, sql string) (*InternalCmdGetSnapshotTs, error) {
+	if !isCmdGetSnapshotTsSql(sql) {
+		return nil, moerr.NewInternalError(ctx, "it is not the GET_SNAPSHOT_TS command")
+	}
+	params := strings.TrimSpace(sql[cmdGetSnapshotTsSqlLen:])
+	parts := strings.Fields(params)
+	if len(parts) != 3 {
+		return nil, moerr.NewInternalError(ctx, "invalid getsnapshotts command format, expected: getsnapshotts <snapshotName> <accountName> <publicationName>")
+	}
+	return &InternalCmdGetSnapshotTs{
+		snapshotName:    parts[0],
+		accountName:     parts[1],
+		publicationName: parts[2],
+	}, nil
+}
+
+// isCmdGetDatabasesSql checks the sql is the cmdGetDatabasesSql or not.
+func isCmdGetDatabasesSql(sql string) bool {
+	if len(sql) < cmdGetDatabasesSqlLen {
+		return false
+	}
+	prefix := sql[:cmdGetDatabasesSqlLen]
+	return strings.Compare(strings.ToLower(prefix), cmdGetDatabasesSql) == 0
+}
+
+// makeGetDatabasesSql makes the internal getdatabases sql
+func makeGetDatabasesSql(snapshotName, accountName, publicationName, level, dbName, tableName string) string {
+	return fmt.Sprintf("%s %s %s %s %s %s %s", cmdGetDatabasesSql, snapshotName, accountName, publicationName, level, dbName, tableName)
+}
+
+// parseCmdGetDatabases parses the internal cmd getdatabases
+// format: getdatabases <snapshotName> <accountName> <publicationName> <level> <dbName> <tableName>
+func parseCmdGetDatabases(ctx context.Context, sql string) (*InternalCmdGetDatabases, error) {
+	if !isCmdGetDatabasesSql(sql) {
+		return nil, moerr.NewInternalError(ctx, "it is not the GET_DATABASES command")
+	}
+	params := strings.TrimSpace(sql[cmdGetDatabasesSqlLen:])
+	parts := strings.Fields(params)
+	if len(parts) != 6 {
+		return nil, moerr.NewInternalError(ctx, "invalid getdatabases command format, expected: getdatabases <snapshotName> <accountName> <publicationName> <level> <dbName> <tableName>")
+	}
+	return &InternalCmdGetDatabases{
+		snapshotName:    parts[0],
+		accountName:     parts[1],
+		publicationName: parts[2],
+		level:           parts[3],
+		dbName:          parts[4],
+		tableName:       parts[5],
+	}, nil
+}
+
+// isCmdGetMoIndexesSql checks the sql is the cmdGetMoIndexesSql or not.
+func isCmdGetMoIndexesSql(sql string) bool {
+	if len(sql) < cmdGetMoIndexesSqlLen {
+		return false
+	}
+	prefix := sql[:cmdGetMoIndexesSqlLen]
+	return strings.Compare(strings.ToLower(prefix), cmdGetMoIndexesSql) == 0
+}
+
+// makeGetMoIndexesSql makes the internal getmoindexes sql
+func makeGetMoIndexesSql(tableId uint64, subscriptionAccountName, publicationName, snapshotName string) string {
+	return fmt.Sprintf("%s %d %s %s %s", cmdGetMoIndexesSql, tableId, subscriptionAccountName, publicationName, snapshotName)
+}
+
+// parseCmdGetMoIndexes parses the internal cmd getmoindexes
+// format: getmoindexes <tableId> <subscriptionAccountName> <publicationName> <snapshotName>
+func parseCmdGetMoIndexes(ctx context.Context, sql string) (*InternalCmdGetMoIndexes, error) {
+	if !isCmdGetMoIndexesSql(sql) {
+		return nil, moerr.NewInternalError(ctx, "it is not the GET_MO_INDEXES command")
+	}
+	params := strings.TrimSpace(sql[cmdGetMoIndexesSqlLen:])
+	parts := strings.Fields(params)
+	if len(parts) != 4 {
+		return nil, moerr.NewInternalError(ctx, "invalid getmoindexes command format, expected: getmoindexes <tableId> <subscriptionAccountName> <publicationName> <snapshotName>")
+	}
+	tableId, err := strconv.ParseUint(parts[0], 10, 64)
+	if err != nil {
+		return nil, moerr.NewInternalErrorf(ctx, "invalid tableId: %s", parts[0])
+	}
+	return &InternalCmdGetMoIndexes{
+		tableId:                 tableId,
+		subscriptionAccountName: parts[1],
+		publicationName:         parts[2],
+		snapshotName:            parts[3],
+	}, nil
+}
+
+// isCmdGetDdlSql checks the sql is the cmdGetDdlSql or not.
+func isCmdGetDdlSql(sql string) bool {
+	if len(sql) < cmdGetDdlSqlLen {
+		return false
+	}
+	prefix := sql[:cmdGetDdlSqlLen]
+	return strings.Compare(strings.ToLower(prefix), cmdGetDdlSql) == 0
+}
+
+// makeGetDdlSql makes the internal getddl sql
+func makeGetDdlSql(snapshotName, subscriptionAccountName, publicationName, level, dbName, tableName string) string {
+	return fmt.Sprintf("%s %s %s %s %s %s %s", cmdGetDdlSql, snapshotName, subscriptionAccountName, publicationName, level, dbName, tableName)
+}
+
+// parseCmdGetDdl parses the internal cmd getddl
+// format: getddl <snapshotName> <subscriptionAccountName> <publicationName> <level> <dbName> <tableName>
+func parseCmdGetDdl(ctx context.Context, sql string) (*InternalCmdGetDdl, error) {
+	if !isCmdGetDdlSql(sql) {
+		return nil, moerr.NewInternalError(ctx, "it is not the GET_DDL command")
+	}
+	params := strings.TrimSpace(sql[cmdGetDdlSqlLen:])
+	parts := strings.Fields(params)
+	if len(parts) != 6 {
+		return nil, moerr.NewInternalError(ctx, "invalid getddl command format, expected: getddl <snapshotName> <subscriptionAccountName> <publicationName> <level> <dbName> <tableName>")
+	}
+	return &InternalCmdGetDdl{
+		snapshotName:            parts[0],
+		subscriptionAccountName: parts[1],
+		publicationName:         parts[2],
+		level:                   parts[3],
+		dbName:                  parts[4],
+		tableName:               parts[5],
+	}, nil
+}
+
+// isCmdGetObjectSql checks the sql is the cmdGetObjectSql or not.
+func isCmdGetObjectSql(sql string) bool {
+	if len(sql) < cmdGetObjectSqlLen {
+		return false
+	}
+	prefix := sql[:cmdGetObjectSqlLen]
+	return strings.Compare(strings.ToLower(prefix), cmdGetObjectSql) == 0
+}
+
+// makeGetObjectSql makes the internal getobject sql
+func makeGetObjectSql(subscriptionAccountName, publicationName, objectName string, chunkIndex int64) string {
+	return fmt.Sprintf("%s %s %s %s %d", cmdGetObjectSql, subscriptionAccountName, publicationName, objectName, chunkIndex)
+}
+
+// parseCmdGetObject parses the internal cmd getobject
+// format: getobject <subscriptionAccountName> <publicationName> <objectName> <chunkIndex>
+func parseCmdGetObject(ctx context.Context, sql string) (*InternalCmdGetObject, error) {
+	if !isCmdGetObjectSql(sql) {
+		return nil, moerr.NewInternalError(ctx, "it is not the GET_OBJECT command")
+	}
+	params := strings.TrimSpace(sql[cmdGetObjectSqlLen:])
+	parts := strings.Fields(params)
+	if len(parts) != 4 {
+		return nil, moerr.NewInternalError(ctx, "invalid getobject command format, expected: getobject <subscriptionAccountName> <publicationName> <objectName> <chunkIndex>")
+	}
+	chunkIndex, err := strconv.ParseInt(parts[3], 10, 64)
+	if err != nil {
+		return nil, moerr.NewInternalErrorf(ctx, "invalid chunkIndex: %s", parts[3])
+	}
+	return &InternalCmdGetObject{
+		subscriptionAccountName: parts[0],
+		publicationName:         parts[1],
+		objectName:              parts[2],
+		chunkIndex:              chunkIndex,
+	}, nil
+}
+
+// isCmdObjectListSql checks the sql is the cmdObjectListSql or not.
+func isCmdObjectListSql(sql string) bool {
+	if len(sql) < cmdObjectListSqlLen {
+		return false
+	}
+	prefix := sql[:cmdObjectListSqlLen]
+	return strings.Compare(strings.ToLower(prefix), cmdObjectListSql) == 0
+}
+
+// makeObjectListSql makes the internal objectlist sql
+func makeObjectListSql(snapshotName, againstSnapshotName, subscriptionAccountName, publicationName string) string {
+	return fmt.Sprintf("%s %s %s %s %s", cmdObjectListSql, snapshotName, againstSnapshotName, subscriptionAccountName, publicationName)
+}
+
+// parseCmdObjectList parses the internal cmd objectlist
+// format: objectlist <snapshotName> <againstSnapshotName> <subscriptionAccountName> <publicationName>
+// Note: againstSnapshotName can be "-" to indicate empty
+func parseCmdObjectList(ctx context.Context, sql string) (*InternalCmdObjectList, error) {
+	if !isCmdObjectListSql(sql) {
+		return nil, moerr.NewInternalError(ctx, "it is not the OBJECT_LIST command")
+	}
+	params := strings.TrimSpace(sql[cmdObjectListSqlLen:])
+	parts := strings.Fields(params)
+	if len(parts) != 4 {
+		return nil, moerr.NewInternalError(ctx, "invalid objectlist command format, expected: objectlist <snapshotName> <againstSnapshotName> <subscriptionAccountName> <publicationName>")
+	}
+	againstSnapshotName := parts[1]
+	if againstSnapshotName == "-" {
+		againstSnapshotName = ""
+	}
+	return &InternalCmdObjectList{
+		snapshotName:            parts[0],
+		againstSnapshotName:     againstSnapshotName,
+		subscriptionAccountName: parts[2],
+		publicationName:         parts[3],
+	}, nil
+}
+
+// isCmdCheckSnapshotFlushedSql checks the sql is the cmdCheckSnapshotFlushedSql or not.
+func isCmdCheckSnapshotFlushedSql(sql string) bool {
+	if len(sql) < cmdCheckSnapshotFlushedSqlLen {
+		return false
+	}
+	prefix := sql[:cmdCheckSnapshotFlushedSqlLen]
+	return strings.Compare(strings.ToLower(prefix), cmdCheckSnapshotFlushedSql) == 0
+}
+
+// makeCheckSnapshotFlushedSql makes the internal checksnapshotflushed sql
+func makeCheckSnapshotFlushedSql(snapshotName, subscriptionAccountName, publicationName string) string {
+	return fmt.Sprintf("%s %s %s %s", cmdCheckSnapshotFlushedSql, snapshotName, subscriptionAccountName, publicationName)
+}
+
+// parseCmdCheckSnapshotFlushed parses the internal cmd checksnapshotflushed
+// format: checksnapshotflushed <snapshotName> <subscriptionAccountName> <publicationName>
+func parseCmdCheckSnapshotFlushed(ctx context.Context, sql string) (*InternalCmdCheckSnapshotFlushed, error) {
+	if !isCmdCheckSnapshotFlushedSql(sql) {
+		return nil, moerr.NewInternalError(ctx, "it is not the CHECK_SNAPSHOT_FLUSHED command")
+	}
+	params := strings.TrimSpace(sql[cmdCheckSnapshotFlushedSqlLen:])
+	parts := strings.Fields(params)
+	if len(parts) != 3 {
+		return nil, moerr.NewInternalError(ctx, "invalid checksnapshotflushed command format, expected: checksnapshotflushed <snapshotName> <subscriptionAccountName> <publicationName>")
+	}
+	return &InternalCmdCheckSnapshotFlushed{
+		snapshotName:            parts[0],
+		subscriptionAccountName: parts[1],
+		publicationName:         parts[2],
+	}, nil
 }
 
 func getVariableValue(varDefault interface{}) string {

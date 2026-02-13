@@ -113,6 +113,9 @@ var (
 		catalog.MO_PUBS:               1,
 		catalog.MO_SUBS:               1,
 		catalog.MO_ISCP_LOG:           1,
+		catalog.MO_CCPR_LOG:           1,
+		catalog.MO_CCPR_TABLES:        1,
+		catalog.MO_CCPR_DBS:           1,
 
 		"mo_sessions":       1,
 		"mo_configurations": 1,
@@ -209,8 +212,19 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		}
 	}
 
+	pubAccountName := string(stmt.Object.AccountName)
+	pubName := string(stmt.Object.PubName)
+
+	if len(pubAccountName) > 0 && len(pubName) > 0 {
+		accountID, accountName, err := getAccountFromPublication(ctx, bh, pubAccountName, pubName, currentAccount)
+		if err != nil {
+			return err
+		}
+		currentAccount = accountName
+		ctx = defines.AttachAccountId(ctx, uint32(accountID))
+	}
 	// 1.check create snapshot priv
-	err = doCheckCreateSnapshotPriv(ctx, ses, stmt)
+	err = doCheckCreateSnapshotPriv(ctx, currentAccount, stmt)
 	if err != nil {
 		return err
 	}
@@ -246,6 +260,8 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 	); err != nil {
 		return err
 	}
+
+	// Check if this is a publication-based snapshot (FROM account PUBLICATION pub syntax)
 
 	// 3. get database name , table name  and objId according to the snapshot level
 	switch snapshotLevel {
@@ -331,6 +347,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 			return moerr.NewInternalError(ctx, fmt.Sprintf("can not create snapshot for system database %s", databaseName))
 		}
 
+		// Original logic for non-publication snapshot
 		getDatabaseIdFunc := func(dbName string) (dbId uint64, rtnErr error) {
 			var erArray []ExecResult
 			sql, rtnErr = getSqlForCheckDatabase(ctx, dbName)
@@ -394,7 +411,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 			}
 			return moerr.NewInternalError(ctx, fmt.Sprintf("can not create pitr for system table %s.%s", databaseName, tableName))
 		}
-
+		// Original logic for non-publication snapshot
 		getTableIdFunc := func(dbName, tblName string) (tblId uint64, rtnErr error) {
 			var erArray []ExecResult
 			sql, rtnErr = getSqlForCheckDatabaseTable(ctx, dbName, tblName)
@@ -455,11 +472,9 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 	return err
 }
 
-func doCheckCreateSnapshotPriv(ctx context.Context, ses *Session, stmt *tree.CreateSnapShot) error {
+func doCheckCreateSnapshotPriv(ctx context.Context, currentAccount string, stmt *tree.CreateSnapShot) error {
 	var err error
 	snapshotLevel := stmt.Object.SLevel.Level
-	tenantInfo := ses.GetTenantInfo()
-	currentAccount := tenantInfo.GetTenant()
 
 	switch snapshotLevel {
 	case tree.SNAPSHOTLEVELCLUSTER:
@@ -497,6 +512,20 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 	}()
 	if err != nil {
 		return err
+	}
+
+	// Handle publication-based drop
+	pubAccountName := string(stmt.AccountName)
+	pubName := string(stmt.PubName)
+
+	if len(pubAccountName) > 0 && len(pubName) > 0 {
+		tenantInfo := ses.GetTenantInfo()
+		currentAccount := tenantInfo.GetTenant()
+		accountID, _, err := getAccountFromPublication(ctx, bh, pubAccountName, pubName, currentAccount)
+		if err != nil {
+			return err
+		}
+		ctx = defines.AttachAccountId(ctx, uint32(accountID))
 	}
 
 	// check snapshot exists or not
@@ -2864,4 +2893,356 @@ func getAccountRecordByTs(ctx context.Context, ses *Session, bh BackgroundExec, 
 	}
 
 	return &accountRecord{}, moerr.NewInternalErrorf(ctx, "no such account, snapshot name: %v, ts: %v", snapshotName, ts)
+}
+
+func getAccountFromPublication(ctx context.Context, bh BackgroundExec, pubAccountName string, pubName string, currentAccount string) (accountID uint64, accountName string, err error) {
+	// Query mo_pubs to get publication info and verify permission
+	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	queryPubSQL := fmt.Sprintf(`SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			FROM mo_catalog.mo_pubs 
+			WHERE account_name = '%s' AND pub_name = '%s'`, pubAccountName, pubName)
+
+	bh.ClearExecResultSet()
+	err = bh.Exec(systemCtx, queryPubSQL)
+	if err != nil {
+		return 0, "", moerr.NewInternalErrorf(ctx, "failed to query publication info: %v", err)
+	}
+
+	erArray, err := getResultSet(systemCtx, bh)
+	if err != nil {
+		return 0, "", err
+	}
+
+	if !execResultArrayHasData(erArray) {
+		return 0, "", moerr.NewInternalErrorf(ctx, "publication %s.%s does not exist", pubAccountName, pubName)
+	}
+
+	// Get publication info
+	var accountList string
+	for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+		accountID, err = erArray[0].GetUint64(ctx, i, 0)
+		if err != nil {
+			return 0, "", err
+		}
+		accountName, err = erArray[0].GetString(ctx, i, 1)
+		if err != nil {
+			return 0, "", err
+		}
+		accountList, err = erArray[0].GetString(ctx, i, 6)
+		if err != nil {
+			return 0, "", err
+		}
+	}
+
+	// Check if current account has permission to access this publication
+	pubInfo := &pubsub.PubInfo{
+		SubAccountsStr: accountList,
+	}
+	if !pubInfo.InSubAccounts(currentAccount) {
+		return 0, "", moerr.NewInternalErrorf(ctx, "account %s does not have permission to access publication %s.%s", currentAccount, pubAccountName, pubName)
+	}
+
+	return
+}
+
+// handleGetSnapshotTs handles the internal command getsnapshotts
+// It checks permission via publication and returns snapshot ts
+func handleGetSnapshotTs(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetSnapshotTs) error {
+	ctx := execCtx.reqCtx
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// Get current account name
+	currentAccount := ses.GetTenantInfo().GetTenant()
+
+	// Step 1: Check permission via publication and get authorized account
+	accountID, _, err := GetAccountIDFromPublication(ctx, bh, ic.accountName, ic.publicationName, currentAccount)
+	if err != nil {
+		return err
+	}
+
+	// Step 2: Get snapshot ts using authorized account context
+	snapshotCtx := defines.AttachAccountId(ctx, uint32(accountID))
+	snapshotTs, err := GetSnapshotTsByName(snapshotCtx, bh, ic.snapshotName)
+	if err != nil {
+		return err
+	}
+
+	// Step 3: Build result set
+	col := new(MysqlColumn)
+	col.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	col.SetName("snapshotts")
+
+	mrs := ses.GetMysqlResultSet()
+	mrs.AddColumn(col)
+
+	row := make([]interface{}, 1)
+	row[0] = snapshotTs
+	mrs.AddRow(row)
+
+	return nil
+}
+
+// handleGetDatabases handles the internal command getdatabases
+// It checks permission via publication and returns database names covered by the snapshot
+func handleGetDatabases(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetDatabases) error {
+	ctx := execCtx.reqCtx
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// Get current account name
+	currentAccount := ses.GetTenantInfo().GetTenant()
+
+	// Step 1: Check permission via publication and get authorized account
+	accountID, _, err := GetAccountIDFromPublication(ctx, bh, ic.accountName, ic.publicationName, currentAccount)
+	if err != nil {
+		return err
+	}
+
+	// Step 2: Get snapshot ts using authorized account context - if snapshot name is empty or "-", use current timestamp (0)
+	snapshotCtx := defines.AttachAccountId(ctx, uint32(accountID))
+	var snapshotTs int64
+	if ic.snapshotName == "" || ic.snapshotName == "-" {
+		// Use 0 to indicate current timestamp
+		snapshotTs = 0
+	} else {
+		snapshotTs, err = GetSnapshotTsByName(snapshotCtx, bh, ic.snapshotName)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Step 3: Build result set based on level, dbName, tableName
+	col := new(MysqlColumn)
+	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col.SetName("datname")
+
+	mrs := ses.GetMysqlResultSet()
+	mrs.AddColumn(col)
+
+	// For database or table level, directly use the provided dbName
+	// Note: "-" is used as placeholder for empty dbName in internal command
+	if ic.level == "database" || ic.level == "table" {
+		dbNameValue := ic.dbName
+		if dbNameValue == "-" {
+			dbNameValue = ""
+		}
+		row := make([]interface{}, 1)
+		row[0] = dbNameValue
+		mrs.AddRow(row)
+		return nil
+	}
+
+	// For account level, query mo_database using the snapshot timestamp
+	var dbSql string
+	if snapshotTs == 0 {
+		// Use current timestamp - no MO_TS hint
+		dbSql = fmt.Sprintf("SELECT datname FROM mo_catalog.mo_database WHERE account_id = %d", accountID)
+	} else {
+		dbSql = fmt.Sprintf("SELECT datname FROM mo_catalog.mo_database{MO_TS = %d} WHERE account_id = %d", snapshotTs, accountID)
+	}
+
+	bh.ClearExecResultSet()
+	if err = bh.Exec(snapshotCtx, dbSql); err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to query databases: %v", err)
+	}
+
+	erArray, err := getResultSet(snapshotCtx, bh)
+	if err != nil {
+		return err
+	}
+
+	// Add each database name as a row
+	if execResultArrayHasData(erArray) {
+		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+			dbName, err := erArray[0].GetString(ctx, i, 0)
+			if err != nil {
+				return err
+			}
+			row := make([]interface{}, 1)
+			row[0] = dbName
+			mrs.AddRow(row)
+		}
+	}
+
+	return nil
+}
+
+// handleGetMoIndexes handles the internal command getmoindexes
+// It checks permission via publication and returns mo_indexes records at the snapshot timestamp
+func handleGetMoIndexes(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetMoIndexes) error {
+	ctx := execCtx.reqCtx
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// Get current account name
+	currentAccount := ses.GetTenantInfo().GetTenant()
+
+	// Step 1: Check permission via publication and get authorized account
+	accountID, _, err := GetAccountIDFromPublication(ctx, bh, ic.subscriptionAccountName, ic.publicationName, currentAccount)
+	if err != nil {
+		return err
+	}
+
+	// Step 2: Get snapshot ts using authorized account context - if snapshot name is empty or "-", use current timestamp (0)
+	snapshotCtx := defines.AttachAccountId(ctx, uint32(accountID))
+	var snapshotTs int64
+	if ic.snapshotName == "" || ic.snapshotName == "-" {
+		// Use 0 to indicate current timestamp
+		snapshotTs = 0
+	} else {
+		snapshotTs, err = GetSnapshotTsByName(snapshotCtx, bh, ic.snapshotName)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Step 3: Query mo_indexes using the snapshot timestamp
+	var indexSql string
+	if snapshotTs == 0 {
+		// Use current timestamp - no MO_TS hint
+		indexSql = fmt.Sprintf("SELECT table_id, name, algo_table_type, index_table_name FROM mo_catalog.mo_indexes WHERE table_id = %d", ic.tableId)
+	} else {
+		indexSql = fmt.Sprintf("SELECT table_id, name, algo_table_type, index_table_name FROM mo_catalog.mo_indexes{MO_TS = %d} WHERE table_id = %d", snapshotTs, ic.tableId)
+	}
+
+	bh.ClearExecResultSet()
+	if err = bh.Exec(snapshotCtx, indexSql); err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to query mo_indexes: %v", err)
+	}
+
+	erArray, err := getResultSet(snapshotCtx, bh)
+	if err != nil {
+		return err
+	}
+
+	// Step 4: Build result set
+	colTableId := new(MysqlColumn)
+	colTableId.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	colTableId.SetName("table_id")
+
+	colName := new(MysqlColumn)
+	colName.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	colName.SetName("name")
+
+	colAlgoTableType := new(MysqlColumn)
+	colAlgoTableType.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	colAlgoTableType.SetName("algo_table_type")
+
+	colIndexTableName := new(MysqlColumn)
+	colIndexTableName.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	colIndexTableName.SetName("index_table_name")
+
+	mrs := ses.GetMysqlResultSet()
+	mrs.AddColumn(colTableId)
+	mrs.AddColumn(colName)
+	mrs.AddColumn(colAlgoTableType)
+	mrs.AddColumn(colIndexTableName)
+
+	// Add each index record as a row
+	if execResultArrayHasData(erArray) {
+		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+			tableId, err := erArray[0].GetUint64(ctx, i, 0)
+			if err != nil {
+				return err
+			}
+			name, err := erArray[0].GetString(ctx, i, 1)
+			if err != nil {
+				return err
+			}
+			algoTableType, err := erArray[0].GetString(ctx, i, 2)
+			if err != nil {
+				return err
+			}
+			indexTableName, err := erArray[0].GetString(ctx, i, 3)
+			if err != nil {
+				return err
+			}
+			row := make([]interface{}, 4)
+			row[0] = tableId
+			row[1] = name
+			row[2] = algoTableType
+			row[3] = indexTableName
+			mrs.AddRow(row)
+		}
+	}
+
+	return nil
+}
+
+// handleInternalGetDdl handles the internal command getddl
+// It checks permission via publication and returns DDL records using the provided level, dbName, tableName
+func handleInternalGetDdl(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetDdl) error {
+	var err error
+	ctx := execCtx.reqCtx
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// Get current account name
+	currentAccount := ses.GetTenantInfo().GetTenant()
+
+	// Step 1: Check permission via publication and get authorized account ID
+	accountID, _, err := GetAccountIDFromPublication(ctx, bh, ic.subscriptionAccountName, ic.publicationName, currentAccount)
+	if err != nil {
+		return err
+	}
+
+	// Query mo_snapshots using the authorized account context
+	snapshotCtx := defines.AttachAccountId(ctx, uint32(accountID))
+
+	// Step 2: Get snapshot timestamp - if snapshot name is empty or "-", use current timestamp (0)
+	var snapshotTs int64
+	if ic.snapshotName == "" || ic.snapshotName == "-" {
+		// Use 0 to indicate current timestamp
+		snapshotTs = 0
+	} else {
+		snapshotTs, err = GetSnapshotTsByName(snapshotCtx, bh, ic.snapshotName)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Step 3: Get engine, mpool, and txn from session
+	session := ses.(*Session)
+	eng := session.GetTxnHandler().GetStorage()
+	if eng == nil {
+		return moerr.NewInternalError(ctx, "engine is nil")
+	}
+	mp := session.GetMemPool()
+	if mp == nil {
+		return moerr.NewInternalError(ctx, "mpool is nil")
+	}
+
+	txn := session.GetTxnHandler().GetTxn()
+	if txn == nil && session.GetProc() != nil {
+		txn = session.GetProc().GetTxnOperator()
+	}
+	if txn == nil {
+		return moerr.NewInternalError(ctx, "transaction is required for internal getddl")
+	}
+
+	// Step 4: Compute DDL batch with snapshot timestamp using provided dbName and tableName
+	// Note: "-" is used as placeholder for empty values in internal command
+	dbNameValue := ic.dbName
+	if dbNameValue == "-" {
+		dbNameValue = ""
+	}
+	tableNameValue := ic.tableName
+	if tableNameValue == "-" {
+		tableNameValue = ""
+	}
+	resultBatch, err := ComputeDdlBatchWithSnapshot(snapshotCtx, dbNameValue, tableNameValue, eng, mp, txn, snapshotTs)
+	if err != nil {
+		return err
+	}
+	defer resultBatch.Clean(mp)
+
+	// Step 5: Build MySQL result set
+	mrs := ses.GetMysqlResultSet()
+	BuildDdlMysqlResultSet(mrs)
+
+	// Step 6: Fill result set from batch
+	FillDdlMysqlResultSet(resultBatch, mrs)
+
+	return nil
 }

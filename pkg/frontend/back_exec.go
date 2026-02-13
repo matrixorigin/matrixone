@@ -592,6 +592,12 @@ var GetComputationWrapperInBack = func(execCtx *ExecCtx, db string, input *UserI
 
 	var stmts []tree.Statement = nil
 	var cmdFieldStmt *InternalCmdFieldList
+	var cmdGetSnapshotTsStmt *InternalCmdGetSnapshotTs
+	var cmdGetDatabasesStmt *InternalCmdGetDatabases
+	var cmdGetMoIndexesStmt *InternalCmdGetMoIndexes
+	var cmdGetDdlStmt *InternalCmdGetDdl
+	var cmdGetObjectStmt *InternalCmdGetObject
+	var cmdObjectListStmt *InternalCmdObjectList
 	var err error
 	// if the input is an option ast, we should use it directly
 	if input.getStmt() != nil {
@@ -602,6 +608,48 @@ var GetComputationWrapperInBack = func(execCtx *ExecCtx, db string, input *UserI
 			return nil, err
 		}
 		stmts = append(stmts, cmdFieldStmt)
+	} else if isCmdGetSnapshotTsSql(input.getSql()) {
+		cmdGetSnapshotTsStmt, err = parseCmdGetSnapshotTs(execCtx.reqCtx, input.getSql())
+		if err != nil {
+			return nil, err
+		}
+		stmts = append(stmts, cmdGetSnapshotTsStmt)
+	} else if isCmdGetDatabasesSql(input.getSql()) {
+		cmdGetDatabasesStmt, err = parseCmdGetDatabases(execCtx.reqCtx, input.getSql())
+		if err != nil {
+			return nil, err
+		}
+		stmts = append(stmts, cmdGetDatabasesStmt)
+	} else if isCmdGetMoIndexesSql(input.getSql()) {
+		cmdGetMoIndexesStmt, err = parseCmdGetMoIndexes(execCtx.reqCtx, input.getSql())
+		if err != nil {
+			return nil, err
+		}
+		stmts = append(stmts, cmdGetMoIndexesStmt)
+	} else if isCmdGetDdlSql(input.getSql()) {
+		cmdGetDdlStmt, err = parseCmdGetDdl(execCtx.reqCtx, input.getSql())
+		if err != nil {
+			return nil, err
+		}
+		stmts = append(stmts, cmdGetDdlStmt)
+	} else if isCmdGetObjectSql(input.getSql()) {
+		cmdGetObjectStmt, err = parseCmdGetObject(execCtx.reqCtx, input.getSql())
+		if err != nil {
+			return nil, err
+		}
+		stmts = append(stmts, cmdGetObjectStmt)
+	} else if isCmdObjectListSql(input.getSql()) {
+		cmdObjectListStmt, err = parseCmdObjectList(execCtx.reqCtx, input.getSql())
+		if err != nil {
+			return nil, err
+		}
+		stmts = append(stmts, cmdObjectListStmt)
+	} else if isCmdCheckSnapshotFlushedSql(input.getSql()) {
+		cmdCheckSnapshotFlushedStmt, err := parseCmdCheckSnapshotFlushed(execCtx.reqCtx, input.getSql())
+		if err != nil {
+			return nil, err
+		}
+		stmts = append(stmts, cmdCheckSnapshotFlushedStmt)
 	} else {
 		stmts, err = parseSql(execCtx, ses.GetMySQLParser())
 		if err != nil {

@@ -1258,6 +1258,58 @@ func (mr *MockWorkspaceMockRecorder) SetCloneTxn(snapshot interface{}) *gomock.C
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetCloneTxn", reflect.TypeOf((*MockWorkspace)(nil).SetCloneTxn), snapshot)
 }
 
+// SetCCPRTxn mocks base method.
+func (m *MockWorkspace) SetCCPRTxn() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetCCPRTxn")
+}
+
+// SetCCPRTxn indicates an expected call of SetCCPRTxn.
+func (mr *MockWorkspaceMockRecorder) SetCCPRTxn() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetCCPRTxn", reflect.TypeOf((*MockWorkspace)(nil).SetCCPRTxn))
+}
+
+// IsCCPRTxn mocks base method.
+func (m *MockWorkspace) IsCCPRTxn() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsCCPRTxn")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsCCPRTxn indicates an expected call of IsCCPRTxn.
+func (mr *MockWorkspaceMockRecorder) IsCCPRTxn() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsCCPRTxn", reflect.TypeOf((*MockWorkspace)(nil).IsCCPRTxn))
+}
+
+// SetCCPRTaskID mocks base method.
+func (m *MockWorkspace) SetCCPRTaskID(taskID string) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetCCPRTaskID", taskID)
+}
+
+// SetCCPRTaskID indicates an expected call of SetCCPRTaskID.
+func (mr *MockWorkspaceMockRecorder) SetCCPRTaskID(taskID interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetCCPRTaskID", reflect.TypeOf((*MockWorkspace)(nil).SetCCPRTaskID), taskID)
+}
+
+// GetCCPRTaskID mocks base method.
+func (m *MockWorkspace) GetCCPRTaskID() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetCCPRTaskID")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// GetCCPRTaskID indicates an expected call of GetCCPRTaskID.
+func (mr *MockWorkspaceMockRecorder) GetCCPRTaskID() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCCPRTaskID", reflect.TypeOf((*MockWorkspace)(nil).GetCCPRTaskID))
+}
+
 // SetHaveDDL mocks base method.
 func (m *MockWorkspace) SetHaveDDL(flag bool) {
 	m.ctrl.T.Helper()

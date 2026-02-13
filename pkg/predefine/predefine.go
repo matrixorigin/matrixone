@@ -155,6 +155,10 @@ func GenISCPTaskCheckSQL() string {
 	return fmt.Sprintf("select * from %s.sys_daemon_task where task_metadata_executor = %d", catalog.MOTaskDB, task.TaskCode_ISCPExecutor)
 }
 
+func GenPublicationTaskCheckSQL() string {
+	return fmt.Sprintf("select * from %s.sys_daemon_task where task_metadata_executor = %d", catalog.MOTaskDB, task.TaskCode_PublicationExecutor)
+}
+
 func GenInitISCPTaskSQL() string {
 	option := task.TaskOptions{
 		MaxRetryTimes: 10,
@@ -220,6 +224,75 @@ func GenInitISCPTaskSQL() string {
 		task.TaskType_ISCP.String(),
 		detailStr,
 		task.TaskCode_ISCPExecutor,
+	)
+	return sql
+}
+
+func GenInitPublicationTaskSQL() string {
+	option := task.TaskOptions{
+		MaxRetryTimes: 10,
+		RetryInterval: int64(time.Second * 10),
+		DelayDuration: 0,
+		Concurrency:   0,
+	}
+	j, err := json.Marshal(option)
+	if err != nil {
+		panic(err)
+	}
+	taskID := uuid.Must(uuid.NewV7())
+	details := &task.Details{
+		AccountID: sysAccountID,
+		Account:   sysAccountName,
+		Details: &task.Details_Publication{
+			Publication: &task.PublicationDetails{
+				TaskName: "publication",
+				TaskId:   taskID.String(),
+			},
+		},
+	}
+	detailStr, err := details.Marshal()
+	if err != nil {
+		panic(err)
+	}
+	sql := fmt.Sprintf(
+		`INSERT INTO %s.sys_daemon_task (
+			task_metadata_id,
+			task_metadata_executor,
+			task_metadata_context,
+			task_metadata_option,
+			account_id,
+			account,
+			task_type,
+			task_status,
+			create_at,
+			update_at,
+			details
+		)
+		SELECT 
+			'%s' AS task_metadata_id,
+			%d AS task_metadata_executor,
+			NULL AS task_metadata_context,
+			'%s' AS task_metadata_option,
+			%d AS account_id,
+			'%s' AS account,
+			'%s' AS task_type,
+			0 AS task_status,
+			NOW() AS create_at,
+			NOW() AS update_at,
+			'%s' AS details
+		FROM DUAL
+		WHERE NOT EXISTS (
+			SELECT 1 FROM mo_task.sys_daemon_task WHERE task_metadata_executor = %d
+		);`,
+		catalog.MOTaskDB,
+		taskID.String(),
+		task.TaskCode_PublicationExecutor,
+		string(j),
+		sysAccountID,
+		sysAccountName,
+		task.TaskType_Publication.String(),
+		detailStr,
+		task.TaskCode_PublicationExecutor,
 	)
 	return sql
 }

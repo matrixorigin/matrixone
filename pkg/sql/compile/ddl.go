@@ -123,6 +123,21 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return moerr.NewErrDropNonExistsDB(c.proc.Ctx, dbName)
 	}
 
+	// Check if the database is a CCPR shared database
+	if !db.IsSubscription(c.proc.Ctx) {
+		dbIDStr := db.GetDatabaseId(c.proc.Ctx)
+		dbID, err := strconv.ParseUint(dbIDStr, 10, 64)
+		if err == nil {
+			canDrop, err := checkCCPRDbBeforeDrop(c, dbID)
+			if err != nil {
+				return err
+			}
+			if !canDrop {
+				return moerr.NewCCPRReadOnly(c.proc.Ctx)
+			}
+		}
+	}
+
 	if err = lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
@@ -1652,13 +1667,14 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		for _, constraint := range ct.Cts {
 			if idxdef, ok := constraint.(*engine.IndexDef); ok && len(idxdef.Indexes) > 0 {
-				err = CreateAllIndexCdcTasks(c, idxdef.Indexes, dbName, tblName, false)
+				tableID := newRelation.GetTableID(c.proc.Ctx)
+				err = CreateAllIndexCdcTasks(c, idxdef.Indexes, dbName, tblName, tableID, false, qry.GetTableDef())
 				if err != nil {
 					return err
 				}
 
 				// register index update for IVFFLAT
-				err = CreateAllIndexUpdateTasks(c, idxdef.Indexes, dbName, tblName, newRelation.GetTableID(c.proc.Ctx))
+				err = CreateAllIndexUpdateTasks(c, idxdef.Indexes, dbName, tblName, tableID)
 				if err != nil {
 					return err
 				}
@@ -2528,6 +2544,11 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		return err
 	}
 
+	// Check if target table is a CCPR shared table (from publication)
+	if c.shouldBlockCCPRReadOnly(rel.GetTableDef(c.proc.Ctx)) {
+		return moerr.NewCCPRReadOnly(c.proc.Ctx)
+	}
+
 	if rel.GetTableDef(c.proc.Ctx).TableType == catalog.SystemExternalRel {
 		return nil
 	}
@@ -2759,6 +2780,18 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 			return nil
 		}
 		return err
+	}
+
+	// Check if the table is a CCPR shared table
+	if !isTemp && !isView && !isSource {
+		tableID := rel.GetTableID(c.proc.Ctx)
+		canDrop, err := checkCCPRTableBeforeDrop(c, tableID)
+		if err != nil {
+			return err
+		}
+		if !canDrop {
+			return moerr.NewCCPRReadOnly(c.proc.Ctx)
+		}
 	}
 
 	if !c.disableLock &&
@@ -5422,4 +5455,182 @@ func isLegal(name string, sqls []string) bool {
 		break
 	}
 	return yes
+}
+
+// checkCCPRTableBeforeDrop checks if a table can be dropped based on CCPR rules.
+// Returns:
+//   - true if the table can be dropped
+//   - false if the table is a CCPR shared object and cannot be dropped
+//   - error if any error occurs
+func checkCCPRTableBeforeDrop(c *Compile, tableID uint64) (bool, error) {
+	// Query mo_ccpr_tables to check if this table is a CCPR shared table
+	querySql := fmt.Sprintf(
+		"SELECT taskid FROM `%s`.`%s` WHERE tableid = %d",
+		catalog.MO_CATALOG,
+		catalog.MO_CCPR_TABLES,
+		tableID,
+	)
+
+	res, err := c.runSqlWithResult(querySql, int32(catalog.System_Account))
+	if err != nil {
+		return false, err
+	}
+	defer res.Close()
+
+	var taskID string
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows > 0 {
+			// taskid is UUID type, use GetFixedAtWithTypeCheck to read it properly
+			taskID = vector.GetFixedAtWithTypeCheck[types.Uuid](cols[0], 0).String()
+		}
+		return false
+	})
+
+	// If not found in mo_ccpr_tables, allow deletion
+	if taskID == "" {
+		return true, nil
+	}
+
+	// Check if the task exists and is not dropped in mo_ccpr_log
+	checkTaskSql := fmt.Sprintf(
+		"SELECT task_id, drop_at FROM `%s`.`%s` WHERE task_id = '%s'",
+		catalog.MO_CATALOG,
+		catalog.MO_CCPR_LOG,
+		taskID,
+	)
+
+	taskRes, err := c.runSqlWithResult(checkTaskSql, int32(catalog.System_Account))
+	if err != nil {
+		return false, err
+	}
+	defer taskRes.Close()
+
+	var foundTask bool
+	var isDropped bool
+	taskRes.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows > 0 {
+			foundTask = true
+			// Check if drop_at is null (task not dropped)
+			if !cols[1].IsNull(0) {
+				isDropped = true
+			}
+		}
+		return false
+	})
+
+	// If task doesn't exist or is dropped, allow deletion and log it
+	if !foundTask || isDropped {
+		logutil.Info("CCPR: allowing drop of shared table because task is dropped or not found",
+			zap.Uint64("tableID", tableID),
+			zap.String("taskID", taskID),
+			zap.Bool("taskFound", foundTask),
+			zap.Bool("isDropped", isDropped))
+
+		// Delete the record from mo_ccpr_tables
+		deleteSql := fmt.Sprintf(
+			"DELETE FROM `%s`.`%s` WHERE tableid = %d",
+			catalog.MO_CATALOG,
+			catalog.MO_CCPR_TABLES,
+			tableID,
+		)
+		if err := c.runSqlWithSystemTenant(deleteSql); err != nil {
+			logutil.Warn("CCPR: failed to delete record from mo_ccpr_tables",
+				zap.Uint64("tableID", tableID),
+				zap.Error(err))
+		}
+
+		return true, nil
+	}
+
+	// Task exists and is not dropped, deny deletion
+	return false, nil
+}
+
+// checkCCPRDbBeforeDrop checks if a database can be dropped based on CCPR rules.
+// Returns:
+//   - true if the database can be dropped
+//   - false if the database is a CCPR shared object and cannot be dropped
+//   - error if any error occurs
+func checkCCPRDbBeforeDrop(c *Compile, dbID uint64) (bool, error) {
+	// Query mo_ccpr_dbs to check if this database is a CCPR shared database
+	querySql := fmt.Sprintf(
+		"SELECT taskid FROM `%s`.`%s` WHERE dbid = %d",
+		catalog.MO_CATALOG,
+		catalog.MO_CCPR_DBS,
+		dbID,
+	)
+
+	res, err := c.runSqlWithResult(querySql, int32(catalog.System_Account))
+	if err != nil {
+		return false, err
+	}
+	defer res.Close()
+
+	var taskID string
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows > 0 {
+			// taskid is UUID type, use GetFixedAtWithTypeCheck to read it properly
+			taskID = vector.GetFixedAtWithTypeCheck[types.Uuid](cols[0], 0).String()
+		}
+		return false
+	})
+
+	// If not found in mo_ccpr_dbs, allow deletion
+	if taskID == "" {
+		return true, nil
+	}
+
+	// Check if the task exists and is not dropped in mo_ccpr_log
+	checkTaskSql := fmt.Sprintf(
+		"SELECT task_id, drop_at FROM `%s`.`%s` WHERE task_id = '%s'",
+		catalog.MO_CATALOG,
+		catalog.MO_CCPR_LOG,
+		taskID,
+	)
+
+	taskRes, err := c.runSqlWithResult(checkTaskSql, int32(catalog.System_Account))
+	if err != nil {
+		return false, err
+	}
+	defer taskRes.Close()
+
+	var foundTask bool
+	var isDropped bool
+	taskRes.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows > 0 {
+			foundTask = true
+			// Check if drop_at is null (task not dropped)
+			if !cols[1].IsNull(0) {
+				isDropped = true
+			}
+		}
+		return false
+	})
+
+	// If task doesn't exist or is dropped, allow deletion and log it
+	if !foundTask || isDropped {
+		logutil.Info("CCPR: allowing drop of shared database because task is dropped or not found",
+			zap.Uint64("dbID", dbID),
+			zap.String("taskID", taskID),
+			zap.Bool("taskFound", foundTask),
+			zap.Bool("isDropped", isDropped))
+
+		// Delete the record from mo_ccpr_dbs
+		deleteSql := fmt.Sprintf(
+			"DELETE FROM `%s`.`%s` WHERE dbid = %d",
+			catalog.MO_CATALOG,
+			catalog.MO_CCPR_DBS,
+			dbID,
+		)
+		if err := c.runSqlWithSystemTenant(deleteSql); err != nil {
+			logutil.Warn("CCPR: failed to delete record from mo_ccpr_dbs",
+				zap.Uint64("dbID", dbID),
+				zap.Error(err))
+		}
+
+		return true, nil
+	}
+
+	// Task exists and is not dropped, deny deletion
+	return false, nil
 }

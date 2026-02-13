@@ -413,11 +413,18 @@ func ConstructCreateTableSQL(
 	createStr += ")"
 
 	var comment string
+	var properties []*plan.Property // Collect non-system properties for PROPERTIES clause
 	for _, def := range tableDef.Defs {
 		if proDef, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
 			for _, kv := range proDef.Properties.Properties {
 				if kv.Key == catalog.SystemRelAttr_Comment {
 					comment = " COMMENT='" + kv.Value + "'"
+				} else if kv.Key != catalog.SystemRelAttr_Kind &&
+					kv.Key != catalog.SystemRelAttr_CreateSQL &&
+					kv.Key != catalog.PropSchemaExtra {
+					// Collect non-system properties (excluding Comment, Kind, CreateSQL, SchemaExtra)
+					// These will be included in PROPERTIES clause
+					properties = append(properties, kv)
 				}
 			}
 		}
@@ -466,6 +473,20 @@ func ConstructCreateTableSQL(
 
 			createStr += partitionBy
 		}
+	}
+
+	// Add PROPERTIES clause if there are any non-system properties
+	// PROPERTIES is a table option and should be before CLUSTER BY
+	if len(properties) > 0 {
+		propsStr := " PROPERTIES("
+		for i, prop := range properties {
+			if i > 0 {
+				propsStr += ", "
+			}
+			propsStr += fmt.Sprintf(`"%s" = "%s"`, prop.Key, prop.Value)
+		}
+		propsStr += ")"
+		createStr += propsStr
 	}
 
 	/**

@@ -2600,6 +2600,12 @@ var (
 			output: "create publication pub1 database db1 table t1, t2 account all comment 'test'",
 		},
 		{
+			input: "create publication pub1 database * account all",
+		},
+		{
+			input: "create publication pub1 database * account acc0, acc1 comment 'account level publication'",
+		},
+		{
 			input:  "CREATE STAGE my_ext_stage URL='s3://load/files/'",
 			output: "create stage my_ext_stage url='s3://load/files/'",
 		},

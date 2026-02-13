@@ -323,6 +323,8 @@ const (
 
 	// Group 15: Vector Search
 	ErrVectorNeedRetryWithPreMode uint16 = 22301
+	// Group 16: CCPR
+	ErrCCPRReadOnly uint16 = 22401
 
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
@@ -572,6 +574,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 
 	// Group 15: Vector Search
 	ErrVectorNeedRetryWithPreMode: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "vector search need retry with pre mode"},
+
+	// Group 16: CCPR
+	ErrCCPRReadOnly: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "ccpr shared object is read-only"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
@@ -1688,6 +1693,10 @@ func NewErrExecutorRunning(ctx context.Context, executor string) *Error {
 
 func NewErrTooBigPrecision(ctx context.Context, precision int32, funcName string, maxPrecision uint64) *Error {
 	return newError(ctx, ErrTooBigPrecision, precision, funcName, maxPrecision)
+}
+
+func NewCCPRReadOnly(ctx context.Context) *Error {
+	return newError(ctx, ErrCCPRReadOnly)
 }
 
 var contextFunc atomic.Value

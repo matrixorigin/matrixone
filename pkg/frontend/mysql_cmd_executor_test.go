@@ -804,6 +804,134 @@ func Test_GetComputationWrapper(t *testing.T) {
 	})
 }
 
+// Test_GetComputationWrapper_InternalCmds tests the internal command parsing in GetComputationWrapper
+func Test_GetComputationWrapper_InternalCmds(t *testing.T) {
+	ctx := context.Background()
+
+	convey.Convey("GetComputationWrapper internal commands", t, func() {
+		db, user := "T", "root"
+		var eng engine.Engine
+		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+
+		sysVars := make(map[string]interface{})
+		for name, sysVar := range gSysVarsDefs {
+			sysVars[name] = sysVar.Default
+		}
+		ses := &Session{planCache: newPlanCache(1),
+			feSessionImpl: feSessionImpl{
+				gSysVars: &SystemVariables{mp: sysVars},
+			},
+		}
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		// Test internal_get_snapshot_ts command
+		convey.Convey("internal_get_snapshot_ts command", func() {
+			sql := makeGetSnapshotTsSql("snap1", "account1", "pub1")
+			ec := newTestExecCtx(ctx, ctrl)
+			ec.ses = ses
+			ec.input = &UserInput{sql: sql}
+
+			cw, err := GetComputationWrapper(ec, db, user, eng, proc, ses)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(cw, convey.ShouldNotBeEmpty)
+			convey.So(len(cw), convey.ShouldEqual, 1)
+			_, ok := cw[0].GetAst().(*InternalCmdGetSnapshotTs)
+			convey.So(ok, convey.ShouldBeTrue)
+		})
+
+		// Test internal_get_databases command
+		convey.Convey("internal_get_databases command", func() {
+			sql := makeGetDatabasesSql("snap1", "account1", "pub1", "account", "db1", "tbl1")
+			ec := newTestExecCtx(ctx, ctrl)
+			ec.ses = ses
+			ec.input = &UserInput{sql: sql}
+
+			cw, err := GetComputationWrapper(ec, db, user, eng, proc, ses)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(cw, convey.ShouldNotBeEmpty)
+			convey.So(len(cw), convey.ShouldEqual, 1)
+			_, ok := cw[0].GetAst().(*InternalCmdGetDatabases)
+			convey.So(ok, convey.ShouldBeTrue)
+		})
+
+		// Test internal_get_mo_indexes command
+		convey.Convey("internal_get_mo_indexes command", func() {
+			sql := makeGetMoIndexesSql(123, "account1", "pub1", "snap1")
+			ec := newTestExecCtx(ctx, ctrl)
+			ec.ses = ses
+			ec.input = &UserInput{sql: sql}
+
+			cw, err := GetComputationWrapper(ec, db, user, eng, proc, ses)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(cw, convey.ShouldNotBeEmpty)
+			convey.So(len(cw), convey.ShouldEqual, 1)
+			_, ok := cw[0].GetAst().(*InternalCmdGetMoIndexes)
+			convey.So(ok, convey.ShouldBeTrue)
+		})
+
+		// Test internal_get_ddl command
+		convey.Convey("internal_get_ddl command", func() {
+			sql := makeGetDdlSql("snap1", "account1", "pub1", "table", "db1", "tbl1")
+			ec := newTestExecCtx(ctx, ctrl)
+			ec.ses = ses
+			ec.input = &UserInput{sql: sql}
+
+			cw, err := GetComputationWrapper(ec, db, user, eng, proc, ses)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(cw, convey.ShouldNotBeEmpty)
+			convey.So(len(cw), convey.ShouldEqual, 1)
+			_, ok := cw[0].GetAst().(*InternalCmdGetDdl)
+			convey.So(ok, convey.ShouldBeTrue)
+		})
+
+		// Test internal_get_object command
+		convey.Convey("internal_get_object command", func() {
+			sql := makeGetObjectSql("account1", "pub1", "object1", 0)
+			ec := newTestExecCtx(ctx, ctrl)
+			ec.ses = ses
+			ec.input = &UserInput{sql: sql}
+
+			cw, err := GetComputationWrapper(ec, db, user, eng, proc, ses)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(cw, convey.ShouldNotBeEmpty)
+			convey.So(len(cw), convey.ShouldEqual, 1)
+			_, ok := cw[0].GetAst().(*InternalCmdGetObject)
+			convey.So(ok, convey.ShouldBeTrue)
+		})
+
+		// Test internal_object_list command
+		convey.Convey("internal_object_list command", func() {
+			sql := makeObjectListSql("snap1", "snap0", "account1", "pub1")
+			ec := newTestExecCtx(ctx, ctrl)
+			ec.ses = ses
+			ec.input = &UserInput{sql: sql}
+
+			cw, err := GetComputationWrapper(ec, db, user, eng, proc, ses)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(cw, convey.ShouldNotBeEmpty)
+			convey.So(len(cw), convey.ShouldEqual, 1)
+			_, ok := cw[0].GetAst().(*InternalCmdObjectList)
+			convey.So(ok, convey.ShouldBeTrue)
+		})
+
+		// Test internal_check_snapshot_flushed command
+		convey.Convey("internal_check_snapshot_flushed command", func() {
+			sql := makeCheckSnapshotFlushedSql("snap1", "account1", "pub1")
+			ec := newTestExecCtx(ctx, ctrl)
+			ec.ses = ses
+			ec.input = &UserInput{sql: sql}
+
+			cw, err := GetComputationWrapper(ec, db, user, eng, proc, ses)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(cw, convey.ShouldNotBeEmpty)
+			convey.So(len(cw), convey.ShouldEqual, 1)
+			_, ok := cw[0].GetAst().(*InternalCmdCheckSnapshotFlushed)
+			convey.So(ok, convey.ShouldBeTrue)
+		})
+	})
+}
+
 func runTestHandle(funName string, t *testing.T, handleFun func(ses *Session) error) {
 	ctx := context.TODO()
 	convey.Convey(fmt.Sprintf("%s succ", funName), t, func() {

@@ -1390,6 +1390,10 @@ func (m *mockRelation) CollectChanges(ctx context.Context, from, to types.TS, _ 
 	return nil, nil
 }
 
+func (m *mockRelation) CollectObjectList(ctx context.Context, from, to types.TS, bat *batch.Batch, mp *mpool.MPool) error {
+	return nil
+}
+
 func (m *mockRelation) ApproxObjectsNum(ctx context.Context) int {
 	if m.approxObjectsNumFunc != nil {
 		return m.approxObjectsNumFunc(ctx)
@@ -1497,6 +1501,10 @@ func (m *mockRelation) PrimaryKeysMayBeUpserted(ctx context.Context, from types.
 
 func (m *mockRelation) Reset(op client.TxnOperator) error {
 	return nil
+}
+
+func (m *mockRelation) GetFlushTS(ctx context.Context) (types.TS, error) {
+	return types.TS{}, nil
 }
 
 func (m *mockRelation) GetExtraInfo() *api.SchemaExtra {

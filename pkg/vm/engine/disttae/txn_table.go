@@ -1983,6 +1983,43 @@ func (tbl *txnTable) Delete(
 	}
 }
 
+// SoftDeleteObject soft deletes an object by setting its deleteat timestamp
+// This is similar to merge's soft delete mechanism
+func (tbl *txnTable) SoftDeleteObject(ctx context.Context, objID *objectio.ObjectId, isTombstone bool) error {
+	if tbl.db.op.IsSnapOp() {
+		return moerr.NewInternalErrorNoCtx("soft delete object operation is not allowed in snapshot transaction")
+	}
+
+	// Create a batch containing ObjectID for soft delete object
+	// Batch structure: one column with ObjectID bytes (18 bytes as binary)
+	bat := batch.NewWithSize(1)
+	bat.SetAttributes([]string{"object_id"})
+
+	objIDVec := vector.NewVec(types.T_binary.ToType())
+	objIDBytes := objID[:]
+	if err := vector.AppendBytes(objIDVec, objIDBytes, false, tbl.getTxn().proc.Mp()); err != nil {
+		return err
+	}
+	bat.Vecs[0] = objIDVec
+	bat.SetRowCount(1)
+
+	// Create entry with EntrySoftDeleteObject type
+	entry := Entry{
+		typ:          SOFT_DELETE_OBJECT,
+		bat:          bat,
+		tnStore:      tbl.getTxn().tnStores[0],
+		tableId:      tbl.tableId,
+		databaseId:   tbl.db.databaseId,
+		tableName:    tbl.tableName,
+		databaseName: tbl.db.databaseName,
+		accountId:    tbl.accountId,
+		fileName:     fmt.Sprintf("soft_delete_object:%v", isTombstone), // Only store isTombstone in fileName
+	}
+
+	tbl.getTxn().writes = append(tbl.getTxn().writes, entry)
+	return nil
+}
+
 func (tbl *txnTable) writeTnPartition(_ context.Context, bat *batch.Batch) error {
 	ibat, err := util.CopyBatch(bat, tbl.getTxn().proc)
 	if err != nil {

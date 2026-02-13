@@ -50,6 +50,14 @@ type testWorkspace struct {
 
 func (txn *testWorkspace) SetCloneTxn(snapshot int64) {}
 
+func (txn *testWorkspace) SetCCPRTxn() {}
+
+func (txn *testWorkspace) IsCCPRTxn() bool { return false }
+
+func (txn *testWorkspace) SetCCPRTaskID(taskID string) {}
+
+func (txn *testWorkspace) GetCCPRTaskID() string { return "" }
+
 func (txn *testWorkspace) Readonly() bool {
 	panic("implement me")
 }

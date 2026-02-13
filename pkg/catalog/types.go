@@ -29,7 +29,8 @@ import (
 
 const (
 	// for schema
-	PropSchemaExtra = "schema_extra"
+	PropSchemaExtra     = "schema_extra"
+	PropFromPublication = "from_publication"
 
 	Row_ID           = objectio.PhysicalAddr_Attr
 	PrefixPriColName = "__mo_cpkey_"
@@ -174,11 +175,16 @@ const (
 	MO_ISCP_LOG         = "mo_iscp_log"
 	MO_STORED_PROCEDURE = "mo_stored_procedure"
 
+	MO_CCPR_LOG = "mo_ccpr_log"
+
 	MO_INDEX_UPDATE = "mo_index_update"
 
 	MO_BRANCH_METADATA  = "mo_branch_metadata"
 	MO_FEATURE_LIMIT    = "mo_feature_limit"
 	MO_FEATURE_REGISTRY = "mo_feature_registry"
+
+	MO_CCPR_TABLES = "mo_ccpr_tables"
+	MO_CCPR_DBS    = "mo_ccpr_dbs"
 )
 
 func IsSystemTable(id uint64) bool {
@@ -791,6 +797,36 @@ var (
 		types.New(types.T_TS, 0, 0),                        // committs
 		types.New(types.T_uuid, 0, 0),                      // segment_id
 		types.New(types.T_TS, 0, 0),                        // flush_point
+	}
+
+	// mo_ccpr_tables schema: tableid (pk), taskid, dbname, tablename, account_id
+	MoCCPRTablesSchema = []string{
+		"tableid",
+		"taskid",
+		"dbname",
+		"tablename",
+		"account_id",
+	}
+	MoCCPRTablesTypes = []types.Type{
+		types.New(types.T_uint64, 0, 0),    // tableid (primary key)
+		types.New(types.T_uuid, 0, 0),      // taskid
+		types.New(types.T_varchar, 256, 0), // dbname
+		types.New(types.T_varchar, 256, 0), // tablename
+		types.New(types.T_uint32, 0, 0),    // account_id
+	}
+
+	// mo_ccpr_dbs schema: dbid (pk), taskid, dbname, account_id
+	MoCCPRDbsSchema = []string{
+		"dbid",
+		"taskid",
+		"dbname",
+		"account_id",
+	}
+	MoCCPRDbsTypes = []types.Type{
+		types.New(types.T_uint64, 0, 0),    // dbid (primary key)
+		types.New(types.T_uuid, 0, 0),      // taskid
+		types.New(types.T_varchar, 256, 0), // dbname
+		types.New(types.T_uint32, 0, 0),    // account_id
 	}
 )
 

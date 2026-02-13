@@ -792,6 +792,34 @@ func (node *ShowCreatePublications) Format(ctx *FmtCtx) {
 func (node *ShowCreatePublications) GetStatementType() string { return "Show Create Publication" }
 func (node *ShowCreatePublications) GetQueryType() string     { return QueryTypeOth }
 
+type ShowPublicationCoverage struct {
+	showImpl
+	Name string
+}
+
+func (node *ShowPublicationCoverage) Format(ctx *FmtCtx) {
+	ctx.WriteString("show publication coverage ")
+	ctx.WriteString(node.Name)
+}
+func (node *ShowPublicationCoverage) GetStatementType() string { return "Show Publication Coverage" }
+func (node *ShowPublicationCoverage) GetQueryType() string     { return QueryTypeOth }
+
+type ShowCcprSubscriptions struct {
+	showImpl
+	TaskId string
+}
+
+func (node *ShowCcprSubscriptions) Format(ctx *FmtCtx) {
+	if node.TaskId != "" {
+		ctx.WriteString("show ccpr subscription ")
+		ctx.WriteString(node.TaskId)
+	} else {
+		ctx.WriteString("show ccpr subscriptions")
+	}
+}
+func (node *ShowCcprSubscriptions) GetStatementType() string { return "Show Ccpr Subscriptions" }
+func (node *ShowCcprSubscriptions) GetQueryType() string     { return QueryTypeOth }
+
 type ShowTableSize struct {
 	showImpl
 	Table  *UnresolvedObjectName
