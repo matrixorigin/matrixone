@@ -7187,6 +7187,17 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 	var stats statistic.StatsArray
 	stats.Reset()
 
+	if st, ok := stmt.(*tree.CreateTable); ok && st.IsAsSelect {
+		// CTAS needs source-query SELECT privilege even when target-table CREATE
+		// is valid, so we check the source plan explicitly here.
+		ok, delta, err := authenticateCreateTableAsSelectSourcePrivilege(ctx, ses, st)
+		if err != nil {
+			return false, stats, err
+		}
+		stats.Add(&delta)
+		return ok, stats, nil
+	}
+
 	priv := determinePrivilegeSetOfStatement(stmt)
 	if priv.objectType() == objectTypeTable {
 		//only sys account, moadmin role can exec mo_ctrl
@@ -7212,6 +7223,36 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 		return ok, stats, nil
 	}
 	return true, stats, nil
+}
+
+func authenticateCreateTableAsSelectSourcePrivilege(
+	ctx context.Context,
+	ses *Session,
+	st *tree.CreateTable,
+) (bool, statistic.StatsArray, error) {
+	var stats statistic.StatsArray
+	stats.Reset()
+	if st == nil || st.AsSource == nil {
+		return true, stats, nil
+	}
+
+	// Rebuild source-select plan and reuse normal table-scan privilege extraction,
+	// instead of manually parsing AST table references.
+	sourcePlan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), st.AsSource)
+	if err != nil {
+		return false, stats, err
+	}
+	arr := extractPrivilegeTipsFromPlan(sourcePlan)
+	if len(arr) == 0 {
+		return true, stats, nil
+	}
+
+	sourcePriv := determinePrivilegeSetOfStatement(st.AsSource)
+	convertPrivilegeTipsToPrivilege(sourcePriv, arr)
+
+	ok, delta, err := determineUserHasPrivilegeSet(ctx, ses, sourcePriv)
+	stats.Add(&delta)
+	return ok, stats, err
 }
 
 // formSqlFromGrantPrivilege makes the sql for querying the database.

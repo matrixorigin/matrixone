@@ -55,71 +55,10 @@ null
 CREATE TABLE t1(num_str VARCHAR(10), num_val INT);
 INSERT INTO t1 VALUES ('A', 10), ('FF', 255), ('1010', 10);
 SELECT CONV(num_str, 16, 10) AS hex_val, CONV(num_val, 10, 16) AS hex_str FROM t1;
-internal error: panic type mismatch: casting INT vector to []int64: 
-github.com/matrixorigin/matrixone/pkg/container/vector.checkType[...]
-	/Users/ariznawl/matrixone/pkg/container/vector/vector.go:107
-github.com/matrixorigin/matrixone/pkg/container/vector.ToSlice[...]
-	/Users/ariznawl/matrixone/pkg/container/vector/vector.go:101
-github.com/matrixorigin/matrixone/pkg/container/vector.ToFixedCol[...]
-	/Users/ariznawl/matrixone/pkg/container/vector/tools.go:42
-github.com/matrixorigin/matrixone/pkg/container/vector.MustFixedColWithTypeCheck[...]
-	/Users/ariznawl/matrixone/pkg/container/vector/tools.go:56
-github.com/matrixorigin/matrixone/pkg/container/vector.GenerateFunctionFixedTypeParameter[...]
-	/Users/ariznawl/matrixone/pkg/container/vector/functionTools.go:67
-github.com/matrixorigin/matrixone/pkg/sql/plan/function.convInt64Direct
-	/Users/ariznawl/matrixone/pkg/sql/plan/function/func_binary.go:2470
-github.com/matrixorigin/matrixone/pkg/sql/plan/function.Conv
-	/Users/ariznawl/matrixone/pkg/sql/plan/function/func_binary.go:2399
-github.com/matrixorigin/matrixone/pkg/sql/colexec.(*FunctionExpressionExecutor).Eval
-	/Users/ariznawl/matrixone/pkg/sql/colexec/evalExpression.go:633
-github.com/matrixorigin/matrixone/pkg/sql/colexec/projection.(*Projection).Call
-	/Users/ariznawl/matrixone/pkg/sql/colexec/projection/projection.go:76
-github.com/matrixorigin/matrixone/pkg/vm.Exec
-	/Users/ariznawl/matrixone/pkg/vm/types.go:514
-github.com/matrixorigin/matrixone/pkg/vm.ChildrenCall
-	/Users/ariznawl/matrixone/pkg/vm/types.go:525
-github.com/matrixorigin/matrixone/pkg/sql/colexec/output.(*Output).Call
-	/Users/ariznawl/matrixone/pkg/sql/colexec/output/output.go:55
-github.com/matrixorigin/matrixone/pkg/vm.Exec
-	/Users/ariznawl/matrixone/pkg/vm/types.go:514
-github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).Run
-	/Users/ariznawl/matrixone/pkg/vm/pipeline/pipeline.go:71
-github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).RunWithReader
-	/Users/ariznawl/matrixone/pkg/vm/pipeline/pipeline.go:59
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).Run
-	/Users/ariznawl/matrixone/pkg/sql/compile/scope.go:198
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).ParallelRun
-	/Users/ariznawl/matrixone/pkg/sql/compile/scope.go:490
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).MergeRun
-	/Users/ariznawl/matrixone/pkg/sql/compile/scope.go:276
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).RemoteRun
-	/Users/ariznawl/matrixone/pkg/sql/compile/scope.go:395
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).run
-	/Users/ariznawl/matrixone/pkg/sql/compile/compile.go:375
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).runOnce
-	/Users/ariznawl/matrixone/pkg/sql/compile/compile.go:522
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).Run
-	/Users/ariznawl/matrixone/pkg/sql/compile/compile2.go:250
-github.com/matrixorigin/matrixone/pkg/frontend.executeResultRowStmt
-	/Users/ariznawl/matrixone/pkg/frontend/result_row_stmt.go:87
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmt
-	/Users/ariznawl/matrixone/pkg/frontend/mysql_cmd_executor.go:2995
-github.com/matrixorigin/matrixone/pkg/frontend.dispatchStmt
-	/Users/ariznawl/matrixone/pkg/frontend/mysql_cmd_executor.go:2848
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithIncrStmt
-	/Users/ariznawl/matrixone/pkg/frontend/mysql_cmd_executor.go:2813
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithWorkspace
-	/Users/ariznawl/matrixone/pkg/frontend/mysql_cmd_executor.go:2757
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithTxn
-	/Users/ariznawl/matrixone/pkg/frontend/mysql_cmd_executor.go:2632
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithResponse
-	/Users/ariznawl/matrixone/pkg/frontend/mysql_cmd_executor.go:2595
-github.com/matrixorigin/matrixone/pkg/frontend.doComQuery
-	/Users/ariznawl/matrixone/pkg/frontend/mysql_cmd_executor.go:3238
-github.com/matrixorigin/matrixone/pkg/frontend.ExecRequest
-	/Users/ariznawl/matrixone/pkg/frontend/mysql_cmd_executor.go:3318
-github.com/matrixorigin/matrixone/pkg/frontend.(*Routine).handleRequest
-	/Users/ariznawl/matrixone/pkg/frontend/routine.go:298
+hex_val	hex_str
+10	a
+255	ff
+4112	a
 DROP TABLE t1;
 CREATE TABLE t1(val VARCHAR(10));
 INSERT INTO t1 VALUES ('A'), ('B'), ('C');
