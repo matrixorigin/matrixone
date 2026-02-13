@@ -224,20 +224,6 @@ func decreaseDepth(expr *plan.Expr) (*plan.Expr, bool) {
 	return expr, correlated
 }
 
-// getJoinSide returns which side(s) of a join an expression's columns come from.
-//
-// leftTags and rightTags are the binding tags of this JOIN's left and right subtrees
-// only (from enumerateTags(Children[0]) and enumerateTags(Children[1])). Filters are
-// pushed down from the root, so they can reference columns from any table in the
-// whole query (outer scope). When we recurse into an inner JOIN, that join's two
-// children may not cover all referenced tables—e.g. at JOIN(item, subquery_m),
-// leftTags = {item}, rightTags = {m}; a filter referencing supplier (tag 7) has
-// RelPos not in either set.
-//
-// If a column's RelPos is not in leftTags or rightTags (and not markTag), we return
-// JoinSideBoth so the filter is not pushed to one child only. Otherwise it would
-// be misclassified as JoinSideLeft/Right and pushed into a subtree that doesn't
-// contain that column, causing "Column remapping failed" at execution.
 func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]bool, markTag int32) (side int8) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
@@ -246,18 +232,12 @@ func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]bool, markTag in
 		}
 
 	case *plan.Expr_Col:
-		tag := exprImpl.Col.RelPos
-		if leftTags[tag] {
+		if leftTags[exprImpl.Col.RelPos] {
 			side = JoinSideLeft
-		} else if rightTags[tag] {
+		} else if rightTags[exprImpl.Col.RelPos] {
 			side = JoinSideRight
-		} else if tag == markTag {
+		} else if exprImpl.Col.RelPos == markTag {
 			side = JoinSideMark
-		} else {
-			// Column's tag is in neither leftTags nor rightTags: it belongs to another
-			// branch of the join tree (outer scope). Return JoinSideBoth so this filter
-			// is not pushed to one child only and we avoid remap failure on that child.
-			side = JoinSideBoth
 		}
 
 	case *plan.Expr_Corr:

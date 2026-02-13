@@ -1021,14 +1021,15 @@ func TestSamplingRatioCalculation(t *testing.T) {
 		{101, float64(100) / 101, "just above threshold, sample 100"},
 		{500, float64(100) / 500, "500 objects, sample 100"},
 		{1000, float64(100) / 1000, "1000 objects, sample 100"},
-		{10000, float64(100) / 10000, "10000 objects, sample 100 (sqrt=100)"},
-		{10001, float64(100) / 10001, "10001 objects, sample 100"},
-		// For 20000: max(sqrt(20000)=141, 20000*0.02=400) = 400
-		{20000, float64(400) / 20000, "20000 objects, sample 2%=400"},
-		// For 100000: max(sqrt(100000)=316, 100000*0.02=2000) = 2000
-		{100000, float64(2000) / 100000, "100000 objects, sample 2%=2000 (max)"},
-		{250000, float64(2000) / 250000, "250000 objects, sample 2000 (max)"},
-		{500000, float64(2000) / 500000, "500000 objects, sample 2000 (max)"},
+		// For 10000: max(sqrt(10000)=100, 10000*0.1=1000) = 1000
+		{10000, float64(1000) / 10000, "10000 objects, sample 10%=1000"},
+		{10001, float64(1000) / 10001, "10001 objects, sample 1000"},
+		// For 20000: max(sqrt(20000)=141, 20000*0.1=2000) = 2000
+		{20000, float64(2000) / 20000, "20000 objects, sample 10%=2000"},
+		// For 100000: max(sqrt(100000)=316, 100000*0.1=10000) = 10000, clamped to MaxSampleObjects=5000
+		{100000, float64(5000) / 100000, "100000 objects, sample 5000 (max)"},
+		{250000, float64(5000) / 250000, "250000 objects, sample 5000 (max)"},
+		{500000, float64(5000) / 500000, "500000 objects, sample 5000 (max)"},
 	}
 
 	for _, tc := range testCases {
