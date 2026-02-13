@@ -112,7 +112,7 @@ const (
 
 	// MaxSampleObjects is the maximum number of objects to sample.
 	// Raise to allow large tables (>5w objects) to reach ~1-2% sampling.
-	MaxSampleObjects = 2000
+	MaxSampleObjects = 5000
 
 	// objectIDRandomOffset is the offset of random bytes in ObjectNameShort.
 	// UUIDv7's bytes 8-15 are random, providing uniform distribution for sampling.
@@ -1017,8 +1017,8 @@ func calcSamplingRatio(approxObjectNum int64) float64 {
 	// targetCount = clamp(max(sqrt(N), 0.02·N), 100, 2000)//
 	// Candidate1: sqrt(N)
 	targetCount := int(math.Sqrt(float64(approxObjectNum)))
-	// Candidate2: 2% of objects
-	targetCount = max(targetCount, int(float64(approxObjectNum)*0.02))
+	// Candidate2: 10% of objects
+	targetCount = max(targetCount, int(float64(approxObjectNum)*0.1))
 	// Lower/upper bounds
 	targetCount = max(targetCount, MinSampleObjects)
 	targetCount = min(targetCount, MaxSampleObjects)
@@ -1267,7 +1267,11 @@ func collectTableStats(
 	if exactObjectNumber > 0 {
 		actualSamplingRatio = float64(sampledObjectCount) / float64(exactObjectNumber)
 	}
-
+	for _, r := range info.ShuffleRanges {
+		if r != nil {
+			r.SampleRatio = actualSamplingRatio
+		}
+	}
 	// ===== Scale column-level stats if sampling =====
 	if isSampling && sampledRowCount > 0 {
 		rowScaleFactor := exactRowCount / sampledRowCount
