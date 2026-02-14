@@ -83,6 +83,13 @@ var (
 		*/
 	}
 
+	MetricTypeToUsearchMetric = map[MetricType]usearch.Metric{
+		Metric_L2Distance:     usearch.L2sq,
+		Metric_L2sqDistance:   usearch.L2sq,
+		Metric_InnerProduct:   usearch.InnerProduct,
+		Metric_CosineDistance: usearch.Cosine,
+	}
+
 	MetricTypeToDistFuncName = map[MetricType]string{
 		Metric_L2Distance:     DistFn_L2Distance,
 		Metric_L2sqDistance:   DistFn_L2sqDistance,
@@ -110,7 +117,7 @@ func MaxFloat[T types.RealNumbers]() T {
 	typ := reflect.TypeFor[T]()
 	switch typ.Kind() {
 	case reflect.Float32:
-		return math.MaxFloat32
+		return T(math.MaxFloat32)
 	case reflect.Float64:
 		v := math.MaxFloat64
 		val := reflect.ValueOf(v).Convert(typ)

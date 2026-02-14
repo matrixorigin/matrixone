@@ -46,3 +46,7 @@ func UnsafeSliceCast[B any, From []A, A any, To []B](from From) To {
 func UnsafeUintptr[P *T, T any](p P) uintptr {
 	return uintptr(unsafe.Pointer(p))
 }
+
+func UnsafePointer[P *T, T any](p P) unsafe.Pointer {
+	return unsafe.Pointer(p)
+}
