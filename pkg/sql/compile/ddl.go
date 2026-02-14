@@ -1497,6 +1497,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 
 	if createAsSelectSql := qry.GetCreateAsSelectSql(); createAsSelectSql != "" {
+		// Mark current txn as DDL before compiling CTAS follow-up INSERT ... SELECT,
+		// so internal SQL stays on one CN and can see uncommitted table metadata.
+		c.setHaveDDL(true)
 		res, err := func() (executor.Result, error) {
 			oldCtx := c.proc.Ctx
 			// Force privilege checking for CTAS follow-up INSERT ... SELECT.
@@ -1761,6 +1764,9 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 	}
 
 	if createAsSelectSql := qry.GetCreateAsSelectSql(); createAsSelectSql != "" {
+		// Mark current txn as DDL before compiling CTAS follow-up INSERT ... SELECT,
+		// so internal SQL stays on one CN and can see uncommitted table metadata.
+		c.setHaveDDL(true)
 		res, err := func() (executor.Result, error) {
 			oldCtx := c.proc.Ctx
 			// Force privilege checking for CTAS follow-up INSERT ... SELECT.
