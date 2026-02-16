@@ -18,10 +18,10 @@ package device
 
 import (
 	//"fmt"
+	"context"
 	"math/rand/v2"
 	"sync"
 	"testing"
-	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
