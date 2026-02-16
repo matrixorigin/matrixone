@@ -35,6 +35,8 @@ type varStdDevExec[
 	f2t   func(float64, int32) (T, error)
 }
 
+const varianceNearZeroToleranceInULP = 8.0
+
 func simpleA2F[A types.Ints | types.UInts | types.Floats](a A, scale int32) float64 {
 	return float64(a)
 }
@@ -144,13 +146,38 @@ func (exec *varStdDevExec[T, A]) SetExtraInformation(partialResult any, _ int) e
 	return nil
 }
 
+// clampVarianceNearZero rounds cancellation noise to zero by using an ULP-based tolerance.
+func clampVarianceNearZero(variance, part1, part2 float64) float64 {
+	if math.IsNaN(variance) || math.IsInf(variance, 0) {
+		return variance
+	}
+	scale := math.Max(math.Abs(part1), math.Abs(part2))
+	if scale == 0 || math.IsNaN(scale) || math.IsInf(scale, 0) {
+		return variance
+	}
+
+	ulp := math.Nextafter(scale, math.Inf(1)) - scale
+	if ulp <= 0 || math.IsNaN(ulp) || math.IsInf(ulp, 0) {
+		return variance
+	}
+	if math.Abs(variance) <= varianceNearZeroToleranceInULP*ulp {
+		return 0
+	}
+	return variance
+}
+
 func (exec *varStdDevExec[T, A]) getResult(s float64, s2 float64, cnt int64) (T, error) {
 	var result float64
 	avg := s / float64(cnt)
 	if exec.isPop {
-		result = s2/float64(cnt) - avg*avg
+		part1 := s2 / float64(cnt)
+		part2 := avg * avg
+		result = clampVarianceNearZero(part1-part2, part1, part2)
 	} else {
-		result = s2/float64(cnt-1) - avg*avg*float64(cnt)/(float64(cnt-1))
+		denominator := float64(cnt - 1)
+		part1 := s2 / denominator
+		part2 := avg * avg * float64(cnt) / denominator
+		result = clampVarianceNearZero(part1-part2, part1, part2)
 	}
 
 	if !exec.isVar {
