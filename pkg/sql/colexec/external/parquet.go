@@ -231,7 +231,22 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 		}
 		h.cols[attr.ColIndex] = col
 		h.mappers[attr.ColIndex] = fn
-		h.pages[attr.ColIndex] = col.Pages()
+	}
+
+	// init RowGroup filtering (must be before page initialization)
+	h.rowGroups = h.file.RowGroups()
+	h.curRGIdx = 0
+	h.initRowGroupFilter(param)
+
+	// Open page iterators: when canFilter=true, pages are opened per-RowGroup
+	// in getDataByRowGroup; otherwise open whole-file iterators here.
+	if !h.canFilter {
+		for _, attr := range param.Attrs {
+			colIdx := attr.ColIndex
+			if h.cols[colIdx] != nil {
+				h.pages[colIdx] = h.cols[colIdx].Pages()
+			}
+		}
 	}
 
 	// init row reader if has nested columns
@@ -1770,6 +1785,9 @@ func bigIntToTwosComplementBytes(ctx context.Context, bi *big.Int, size int) ([]
 func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *process.Process) error {
 	if h.hasNestedCols {
 		return h.getDataByRow(bat, param, proc)
+	}
+	if h.canFilter {
+		return h.getDataByRowGroup(bat, param, proc)
 	}
 	return h.getDataByPage(bat, param, proc)
 }

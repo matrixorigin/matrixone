@@ -284,6 +284,13 @@ type ParquetHandler struct {
 	// for nested types support
 	hasNestedCols bool
 	rowReader     *parquet.Reader
+
+	// RowGroup filtering: skip RowGroups whose statistics don't match the filter
+	rowGroups    []parquet.RowGroup // all RowGroups in the file
+	curRGIdx     int                // current RowGroup index being processed
+	filterExpr   *plan.Expr         // filter expression for ZoneMap evaluation
+	filterColMap map[int]int        // plan col position -> parquet col index
+	canFilter    bool               // whether RowGroup filtering is possible
 }
 
 type columnMapper struct {
