@@ -166,8 +166,10 @@ func parquetValuesToZoneMap(minVal, maxVal parquet.Value, moType types.T) index.
 
 	case types.T_varchar, types.T_char, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob:
-		minBytes = minVal.ByteArray()
-		maxBytes = maxVal.ByteArray()
+		// String ZoneMap requires careful handling of MO's internal encoding.
+		// For now, skip string-based RowGroup filtering to avoid false negatives.
+		// TODO: investigate ZoneMap string comparison semantics and enable.
+		return nil
 
 	default:
 		return nil
@@ -194,9 +196,9 @@ func (h *ParquetHandler) initRowGroupFilter(param *ExternalParam) {
 			continue
 		}
 		colName := param.Attrs[planColPos].ColName
-		for parquetIdx, col := range h.cols {
+		for _, col := range h.cols {
 			if col != nil && col.Name() == colName {
-				h.filterColMap[planColPos] = parquetIdx
+				h.filterColMap[planColPos] = col.Index()
 				break
 			}
 		}
@@ -272,7 +274,8 @@ func (h *ParquetHandler) getDataByRowGroup(
 				if param.Cols[colIdx].Hidden || h.mappers[colIdx] == nil {
 					continue
 				}
-				h.pages[colIdx] = chunks[colIdx].Pages()
+				parquetColIdx := h.cols[colIdx].Index()
+				h.pages[colIdx] = chunks[parquetColIdx].Pages()
 			}
 		}
 

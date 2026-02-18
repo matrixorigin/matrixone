@@ -85,10 +85,9 @@ func TestParquetValuesToZoneMap_Bool(t *testing.T) {
 func TestParquetValuesToZoneMap_Varchar(t *testing.T) {
 	minVal := parquet.ByteArrayValue([]byte("aaa"))
 	maxVal := parquet.ByteArrayValue([]byte("zzz"))
+	// String types are currently disabled for RowGroup filtering
 	zm := parquetValuesToZoneMap(minVal, maxVal, types.T_varchar)
-	require.NotNil(t, zm)
-	require.Equal(t, []byte("aaa"), zm.GetMinBuf())
-	require.Equal(t, []byte("zzz"), zm.GetMaxBuf())
+	require.Nil(t, zm)
 }
 
 func TestParquetValuesToZoneMap_SmallInts(t *testing.T) {
