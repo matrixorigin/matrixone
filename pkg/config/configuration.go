@@ -127,6 +127,16 @@ var (
 	// defaultSessionTimeout default: 24 hour
 	defaultSessionTimeout = 24 * time.Hour
 
+	// defaultWaitTimeoutMin default: 1 second
+	defaultWaitTimeoutMin int64 = 1
+	// defaultWaitTimeoutMax default: 24 hours (in seconds)
+	defaultWaitTimeoutMax int64 = 24 * 60 * 60
+
+	// defaultInteractiveTimeoutMin default: 1 second
+	defaultInteractiveTimeoutMin int64 = 1
+	// defaultInteractiveTimeoutMax default: 24 hours (in seconds)
+	defaultInteractiveTimeoutMax int64 = 24 * 60 * 60
+
 	// defaultNetReadTimeout default: 0 (no timeout for normal operations)
 	defaultNetReadTimeout = time.Duration(0)
 
@@ -287,6 +297,15 @@ type FrontendParameters struct {
 	// NetWriteTimeout is the timeout for writing to the network connection. Default is 60 seconds.
 	NetWriteTimeout toml.Duration `toml:"netWriteTimeout"`
 
+	// WaitTimeoutMin is the hard minimum for wait_timeout (seconds).
+	WaitTimeoutMin int64 `toml:"waitTimeoutMin"`
+	// WaitTimeoutMax is the hard maximum for wait_timeout (seconds).
+	WaitTimeoutMax int64 `toml:"waitTimeoutMax"`
+	// InteractiveTimeoutMin is the hard minimum for interactive_timeout (seconds).
+	InteractiveTimeoutMin int64 `toml:"interactiveTimeoutMin"`
+	// InteractiveTimeoutMax is the hard maximum for interactive_timeout (seconds).
+	InteractiveTimeoutMax int64 `toml:"interactiveTimeoutMax"`
+
 	// LoadLocalReadTimeout is the timeout for reading data from client during LOAD DATA LOCAL operations.
 	// Used to detect F5/LoadBalancer idle timeout disconnections. Default is 60 seconds.
 	LoadLocalReadTimeout toml.Duration `toml:"loadLocalReadTimeout"`
@@ -441,6 +460,19 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if fp.NetWriteTimeout.Duration == 0 {
 		fp.NetWriteTimeout.Duration = defaultNetWriteTimeout
+	}
+
+	if fp.WaitTimeoutMin == 0 {
+		fp.WaitTimeoutMin = defaultWaitTimeoutMin
+	}
+	if fp.WaitTimeoutMax == 0 {
+		fp.WaitTimeoutMax = defaultWaitTimeoutMax
+	}
+	if fp.InteractiveTimeoutMin == 0 {
+		fp.InteractiveTimeoutMin = defaultInteractiveTimeoutMin
+	}
+	if fp.InteractiveTimeoutMax == 0 {
+		fp.InteractiveTimeoutMax = defaultInteractiveTimeoutMax
 	}
 
 	if fp.LoadLocalReadTimeout.Duration == 0 {

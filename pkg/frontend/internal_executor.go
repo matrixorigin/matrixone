@@ -285,6 +285,8 @@ func (ip *internalProtocol) GetU32(id PropertyID) uint32 {
 	switch id {
 	case CONNID:
 		return ip.ConnectionID()
+	case CAPABILITY:
+		return 0
 	}
 	return math.MaxUint32
 }

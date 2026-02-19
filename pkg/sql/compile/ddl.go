@@ -1733,6 +1733,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 			realTable := fmt.Sprintf("`%s`.`%s`", dbName, tblName)
 			createAsSelectSql = strings.Replace(createAsSelectSql, aliasTable, realTable, 1)
 		}
+		// Mark current txn as DDL before compiling CTAS follow-up INSERT ... SELECT,
+		// so internal SQL stays on one CN and can see uncommitted table metadata.
+		c.setHaveDDL(true)
 		res, err := func() (executor.Result, error) {
 			oldCtx := c.proc.Ctx
 			// CTAS follow-up SQL needs frontend session for temp-table alias resolution.
