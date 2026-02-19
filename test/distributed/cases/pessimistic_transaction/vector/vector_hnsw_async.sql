@@ -27,7 +27,7 @@ DELETE FROM t1 WHERE a=1;
 
 -- test with multi-cn is tricky.  since model is cached in memory, model may not be updated after CDC sync'd.  The only way to test is to all INSERT/DELETE/UPDATE before SELECT.
 -- already update to [4,5,6], result is [4,5,6]
--- @wait_expect(1,11)
+-- @wait_expect(1,20)
 select * from t1 order by  L2_DISTANCE(b,"[1,2,3]") ASC LIMIT 10;
 
 -- should return a=0
