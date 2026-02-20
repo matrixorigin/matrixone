@@ -18,13 +18,6 @@
 #include <stdio.h>
 #include <stdint.h>
 
-// Weak symbol declaration for usearch_filtered_search
-// Allows compilation even if the function is not available in the library
-__attribute__((weak)) size_t usearch_filtered_search(
-    usearch_index_t, void const*, usearch_scalar_kind_t, size_t,
-    usearch_filtered_search_callback_t, void*,
-    usearch_key_t*, usearch_distance_t*, usearch_error_t*);
-
 typedef struct bitmap_int_t {
     uint64_t *bitmap;
     size_t len;
@@ -44,22 +37,14 @@ size_t usearchex_filtered_search_with_bloomfilter(
     void *bf,
     usearch_key_t* keys, usearch_distance_t* distances, usearch_error_t* error) {
 
-    // Check if usearch_filtered_search is available
-    if (usearch_filtered_search == NULL) {
-        if (error) {
-            *error = "usearch_filtered_search function not available in library";
-        }
-        return 0;
-    }
-
-    return usearch_filtered_search((usearch_index_t)index,
-            query_vector,
-            (usearch_scalar_kind_t)query_kind,
-            count,
-            filtered_search_bf_cb,
-            bf,
-            keys,
-            distances,
+    return usearch_filtered_search((usearch_index_t)index, 
+            query_vector, 
+            (usearch_scalar_kind_t)query_kind, 
+            count, 
+            filtered_search_bf_cb, 
+            bf, 
+            keys, 
+            distances, 
             error);
 }
 
@@ -76,14 +61,6 @@ size_t usearchex_filtered_search_with_bitmap(
     void const* query_vector, usearch_scalar_kind_t query_kind, size_t count,
     uint64_t *bitmap, size_t bmlen,
     usearch_key_t* keys, usearch_distance_t* distances, usearch_error_t* error) {
-
-    // Check if usearch_filtered_search is available
-    if (usearch_filtered_search == NULL) {
-        if (error) {
-            *error = "usearch_filtered_search function not available in library";
-        }
-        return 0;
-    }
 
     bitmap_int_t bm;
     bm.bitmap = bitmap;
