@@ -307,6 +307,49 @@ select * from ext_wildcard_v order by id;
 2  ¦  Beta  ¦  2023-05-20 15:30:00  𝄀
 3  ¦  Gamma  ¦  2024-01-01 00:00:00  𝄀
 3  ¦  Gamma  ¦  2024-01-01 00:00:00
+drop table if exists ext_multi_rg;
+create external table ext_multi_rg (
+id BIGINT,
+value DOUBLE,
+name VARCHAR(20)
+) infile{"filepath"='$resources/parquet/multi_rowgroup.parquet', "format"='parquet'};
+select count(*) from ext_multi_rg;
+➤ count(*)[-5,64,0]  𝄀
+25
+select * from ext_multi_rg where id = 3;
+➤ id[-5,64,0]  ¦  value[8,54,0]  ¦  name[12,-1,0]  𝄀
+3  ¦  31.5  ¦  row_003
+select id, name from ext_multi_rg where id >= 11 and id <= 20 order by id;
+➤ id[-5,64,0]  ¦  name[12,-1,0]  𝄀
+11  ¦  row_011  𝄀
+12  ¦  row_012  𝄀
+13  ¦  row_013  𝄀
+14  ¦  row_014  𝄀
+15  ¦  row_015  𝄀
+16  ¦  row_016  𝄀
+17  ¦  row_017  𝄀
+18  ¦  row_018  𝄀
+19  ¦  row_019  𝄀
+20  ¦  row_020
+select id, value from ext_multi_rg where value > 220.0 order by id;
+➤ id[-5,64,0]  ¦  value[8,54,0]  𝄀
+21  ¦  220.5  𝄀
+22  ¦  231.0  𝄀
+23  ¦  241.5  𝄀
+24  ¦  252.0  𝄀
+25  ¦  262.5
+select count(*) from ext_multi_rg where id > 100;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from ext_multi_rg where id > 0;
+➤ count(*)[-5,64,0]  𝄀
+25
+select min(id), max(id), count(*) from ext_multi_rg where id between 6 and 15;
+➤ min(id)[-5,64,0]  ¦  max(id)[-5,64,0]  ¦  count(*)[-5,64,0]  𝄀
+6  ¦  15  ¦  10
+select id, name from ext_multi_rg where name = 'row_012';
+➤ id[-5,64,0]  ¦  name[12,-1,0]  𝄀
+12  ¦  row_012
 drop table if exists ext_readonly;
 create external table ext_readonly (
 id BIGINT,
@@ -337,5 +380,6 @@ drop table if exists ext_with_stats;
 drop table if exists ext_no_stats;
 drop table if exists ext_wide;
 drop table if exists ext_wildcard_v;
+drop table if exists ext_multi_rg;
 drop table if exists ext_readonly;
 drop database ext_parquet_db;
