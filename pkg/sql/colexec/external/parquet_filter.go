@@ -184,6 +184,9 @@ func parquetValuesToZoneMap(minVal, maxVal parquet.Value, moType types.T) index.
 
 // initRowGroupFilter initializes RowGroup filtering state on the handler.
 func (h *ParquetHandler) initRowGroupFilter(param *ExternalParam) {
+	if param.Filter == nil {
+		return
+	}
 	h.filterExpr = param.Filter.FilterExpr
 	if h.filterExpr == nil || len(param.Filter.columnMap) == 0 {
 		return
