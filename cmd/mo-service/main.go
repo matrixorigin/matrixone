@@ -149,6 +149,14 @@ func waitSignalToStop(stopper *stopper.Stopper, shutdownC chan struct{}) {
 	sigchan := make(chan os.Signal, 1)
 	signal.Notify(sigchan, syscall.SIGTERM, syscall.SIGINT)
 
+	rotateSig := make(chan os.Signal, 1)
+	signal.Notify(rotateSig, syscall.SIGUSR1)
+	go func() {
+		for range rotateSig {
+			logutil.Rotate()
+		}
+	}()
+
 	go saveProfilesLoop(sigchan)
 
 	detail := "Starting shutdown..."

@@ -17,6 +17,7 @@ package logutil
 import (
 	"context"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -52,12 +53,15 @@ func initMOLogger(cfg *LogConfig) (*zap.Logger, error) {
 var _globalLogger atomic.Value
 var _skip1Logger atomic.Value
 var _errorLogger atomic.Value
+var _fileLogger atomic.Value
+var _fileLoggerMu sync.Mutex
 
 // init initializes a default zap logger before set up logger.
 func init() {
 	SetLogReporter(&TraceReporter{noopReportZap, noopContextField})
 	conf := GetDefaultConfig()
 	setGlobalLogConfig(&conf)
+	_fileLogger.Store((*lumberjack.Logger)(nil))
 	logger, _ := initMOLogger(&conf)
 	replaceGlobalLogger(logger)
 }
@@ -103,6 +107,7 @@ type LogConfig struct {
 
 func (cfg *LogConfig) getSyncer() zapcore.WriteSyncer {
 	if cfg.Filename == "" || cfg.Filename == "console" {
+		setFileLogger(nil)
 		return getConsoleSyncer()
 	}
 
@@ -116,14 +121,16 @@ func (cfg *LogConfig) getSyncer() zapcore.WriteSyncer {
 		cfg.MaxSize = 512
 	}
 	// add lumberjack logger
-	return zapcore.AddSync(&lumberjack.Logger{
+	logger := &lumberjack.Logger{
 		Filename:   cfg.Filename,
 		MaxSize:    cfg.MaxSize,
 		MaxAge:     cfg.MaxDays,
 		MaxBackups: cfg.MaxBackups,
 		LocalTime:  true,
 		Compress:   false,
-	})
+	}
+	setFileLogger(logger)
+	return zapcore.AddSync(logger)
 }
 
 func (cfg *LogConfig) getEncoder() zapcore.Encoder {
@@ -202,4 +209,27 @@ func getConsoleSyncer() zapcore.WriteSyncer {
 		panic(err)
 	}
 	return syncer
+}
+
+func setFileLogger(logger *lumberjack.Logger) {
+	_fileLoggerMu.Lock()
+	defer _fileLoggerMu.Unlock()
+	_fileLogger.Store(logger)
+}
+
+func Rotate() {
+	if !EnableLog() {
+		Info("log.rotate.skip", zap.String("reason", "log disabled"))
+		return
+	}
+	logger := _fileLogger.Load().(*lumberjack.Logger)
+	if logger == nil {
+		Info("log.rotate.skip", zap.String("reason", "no file logger configured"))
+		return
+	}
+	if err := logger.Rotate(); err != nil {
+		Warn("log.rotate.failed", zap.Error(err))
+		return
+	}
+	Info("log.rotate.done")
 }
