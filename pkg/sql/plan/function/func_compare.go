@@ -79,6 +79,193 @@ func equalAndNotEqualOperatorSupports(typ1, typ2 types.Type) bool {
 	return true
 }
 
+func opBinaryFixedFixedToFixedNullSafe[T types.FixedSizeTExceptStrType](
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	_ *process.Process,
+	length int,
+	cmpFn func(v1, v2 T) bool,
+	selectList *FunctionSelectList,
+) error {
+	result.UseOptFunctionParamFrame(2)
+	rs := vector.MustFunctionResult[bool](result)
+	p1 := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
+	p2 := vector.OptGetParamFromWrapper[T](rs, 1, parameters[1])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[bool](rsVec)
+
+	// Result of <=> is never NULL
+	rsVec.GetNulls().Reset()
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetValue(i)
+		v2, null2 := p2.GetValue(i)
+
+		if null1 && null2 {
+			rss[i] = true
+		} else if null1 || null2 {
+			rss[i] = false
+		} else {
+			rss[i] = cmpFn(v1, v2)
+		}
+	}
+	return nil
+}
+
+func opBinaryBytesBytesToFixedNullSafe(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	_ *process.Process,
+	length int,
+	cmpFn func(v1, v2 []byte) bool,
+	selectList *FunctionSelectList,
+) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	p2 := vector.GenerateFunctionStrParameter(parameters[1])
+	rs := vector.MustFunctionResult[bool](result)
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[bool](rsVec)
+
+	// Result of <=> is never NULL
+	rsVec.GetNulls().Reset()
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		v2, null2 := p2.GetStrValue(i)
+
+		if null1 && null2 {
+			rss[i] = true
+		} else if null1 || null2 {
+			rss[i] = false
+		} else {
+			rss[i] = cmpFn(v1, v2)
+		}
+	}
+	return nil
+}
+
+func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	paramType := parameters[0].GetType()
+	rs := vector.MustFunctionResult[bool](result)
+
+	switch paramType.Oid {
+	case types.T_bool:
+		return opBinaryFixedFixedToFixedNullSafe[bool](parameters, rs, proc, length, func(a, b bool) bool {
+			return a == b
+		}, selectList)
+	case types.T_bit:
+		return opBinaryFixedFixedToFixedNullSafe[uint64](parameters, rs, proc, length, func(a, b uint64) bool {
+			return a == b
+		}, selectList)
+	case types.T_int8:
+		return opBinaryFixedFixedToFixedNullSafe[int8](parameters, rs, proc, length, func(a, b int8) bool {
+			return a == b
+		}, selectList)
+	case types.T_int16:
+		return opBinaryFixedFixedToFixedNullSafe[int16](parameters, rs, proc, length, func(a, b int16) bool {
+			return a == b
+		}, selectList)
+	case types.T_int32:
+		return opBinaryFixedFixedToFixedNullSafe[int32](parameters, rs, proc, length, func(a, b int32) bool {
+			return a == b
+		}, selectList)
+	case types.T_int64:
+		return opBinaryFixedFixedToFixedNullSafe[int64](parameters, rs, proc, length, func(a, b int64) bool {
+			return a == b
+		}, selectList)
+	case types.T_uint8:
+		return opBinaryFixedFixedToFixedNullSafe[uint8](parameters, rs, proc, length, func(a, b uint8) bool {
+			return a == b
+		}, selectList)
+	case types.T_uint16:
+		return opBinaryFixedFixedToFixedNullSafe[uint16](parameters, rs, proc, length, func(a, b uint16) bool {
+			return a == b
+		}, selectList)
+	case types.T_uint32:
+		return opBinaryFixedFixedToFixedNullSafe[uint32](parameters, rs, proc, length, func(a, b uint32) bool {
+			return a == b
+		}, selectList)
+	case types.T_uint64:
+		return opBinaryFixedFixedToFixedNullSafe[uint64](parameters, rs, proc, length, func(a, b uint64) bool {
+			return a == b
+		}, selectList)
+	case types.T_uuid:
+		return opBinaryFixedFixedToFixedNullSafe[types.Uuid](parameters, rs, proc, length, func(a, b types.Uuid) bool {
+			return a == b
+		}, selectList)
+	case types.T_float32:
+		scale := paramType.Scale
+		if scale > 0 {
+			pow := math.Pow10(int(scale))
+			return opBinaryFixedFixedToFixedNullSafe[float32](parameters, rs, proc, length, func(a, b float32) bool {
+				a = float32(math.Round(float64(a)*pow) / pow)
+				b = float32(math.Round(float64(b)*pow) / pow)
+				return a == b
+			}, selectList)
+		}
+		return opBinaryFixedFixedToFixedNullSafe[float32](parameters, rs, proc, length, func(a, b float32) bool {
+			return a == b
+		}, selectList)
+	case types.T_float64:
+		return opBinaryFixedFixedToFixedNullSafe[float64](parameters, rs, proc, length, func(a, b float64) bool {
+			return a == b
+		}, selectList)
+	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
+		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(a, b []byte) bool {
+			return bytes.Equal(a, b)
+		}, selectList)
+	case types.T_array_float32:
+		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(v1, v2 []byte) bool {
+			_v1 := types.BytesToArray[float32](v1)
+			_v2 := types.BytesToArray[float32](v2)
+			return types.ArrayCompare[float32](_v1, _v2) == 0
+		}, selectList)
+	case types.T_array_float64:
+		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(v1, v2 []byte) bool {
+			_v1 := types.BytesToArray[float64](v1)
+			_v2 := types.BytesToArray[float64](v2)
+			return types.ArrayCompare[float64](_v1, _v2) == 0
+		}, selectList)
+	case types.T_date:
+		return opBinaryFixedFixedToFixedNullSafe[types.Date](parameters, rs, proc, length, func(a, b types.Date) bool {
+			return a == b
+		}, selectList)
+	case types.T_datetime:
+		return opBinaryFixedFixedToFixedNullSafe[types.Datetime](parameters, rs, proc, length, func(a, b types.Datetime) bool {
+			return a == b
+		}, selectList)
+	case types.T_time:
+		return opBinaryFixedFixedToFixedNullSafe[types.Time](parameters, rs, proc, length, func(a, b types.Time) bool {
+			return a == b
+		}, selectList)
+	case types.T_timestamp:
+		return opBinaryFixedFixedToFixedNullSafe[types.Timestamp](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
+			return a == b
+		}, selectList)
+	case types.T_decimal64:
+		return opBinaryFixedFixedToFixedNullSafe[types.Decimal64](parameters, rs, proc, length, func(a, b types.Decimal64) bool {
+			return a == b
+		}, selectList)
+	case types.T_decimal128:
+		return opBinaryFixedFixedToFixedNullSafe[types.Decimal128](parameters, rs, proc, length, func(a, b types.Decimal128) bool {
+			return a == b
+		}, selectList)
+	case types.T_Rowid:
+		return opBinaryFixedFixedToFixedNullSafe[types.Rowid](parameters, rs, proc, length, func(a, b types.Rowid) bool {
+			return a.EQ(&b)
+		}, selectList)
+	case types.T_enum:
+		return opBinaryFixedFixedToFixedNullSafe[types.Enum](parameters, rs, proc, length, func(a, b types.Enum) bool {
+			return a == b
+		}, selectList)
+	case types.T_year:
+		return opBinaryFixedFixedToFixedNullSafe[types.MoYear](parameters, rs, proc, length, func(a, b types.MoYear) bool {
+			return a == b
+		}, selectList)
+	}
+	panic("unreached code")
+}
+
 // should convert to c.Numeric next.
 func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
