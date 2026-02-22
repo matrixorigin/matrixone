@@ -44,6 +44,7 @@ from .pubsub import PubSubManager
 from .restore import RestoreManager
 from .snapshot import SnapshotManager
 from .clone import CloneManager
+from .branch import BranchManager
 from .sqlalchemy_ext import MatrixOneDialect
 from .vector_manager import VectorManager
 from .version import get_version_manager
@@ -217,6 +218,7 @@ class Client(BaseMatrixOneClient):
         self._login_info = None
         self._snapshots = None
         self._clone = None
+        self._branch = None
         self._moctl = None
         self._restore = None
         self._pitr = None
@@ -487,15 +489,15 @@ class Client(BaseMatrixOneClient):
         if not isinstance(engine.dialect, MatrixOneDialect):
             original_dialect = engine.dialect
             original_dbapi = engine.dialect.dbapi
-            
+
             # Create MatrixOne dialect with same configuration
             mo_dialect = MatrixOneDialect()
             mo_dialect.dbapi = original_dbapi
-            
+
             # Copy important attributes from original dialect
             if hasattr(original_dialect, '_connection_charset'):
                 mo_dialect._connection_charset = original_dialect._connection_charset
-            
+
             # Replace dialect (this is still a limitation of SQLAlchemy's design)
             # but we've preserved the original configuration
             engine.dialect = mo_dialect
@@ -580,6 +582,7 @@ class Client(BaseMatrixOneClient):
         """Initialize all manager instances after engine is created"""
         self._snapshots = SnapshotManager(self)
         self._clone = CloneManager(self)
+        self._branch = BranchManager(self)
         self._moctl = MoCtlManager(self)
         self._restore = RestoreManager(self)
         self._pitr = PitrManager(self)
@@ -1812,6 +1815,11 @@ class Client(BaseMatrixOneClient):
     def clone(self) -> Optional[CloneManager]:
         """Get clone manager"""
         return self._clone
+
+    @property
+    def branch(self) -> Optional[BranchManager]:
+        """Get branch manager"""
+        return self._branch
 
     @property
     def moctl(self) -> Optional[MoCtlManager]:
@@ -3186,6 +3194,7 @@ class Session(SQLAlchemySession):
         # Use executor pattern: managers use this session as executor
         self.snapshots = SnapshotManager(client, executor=self)
         self.clone = CloneManager(client, executor=self)
+        self.branch = BranchManager(client, executor=self)
         self.restore = RestoreManager(client, executor=self)
         self.pitr = PitrManager(client, executor=self)
         self.pubsub = PubSubManager(client, executor=self)

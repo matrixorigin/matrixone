@@ -27,6 +27,7 @@ from .session import Session, AsyncSession
 from .exceptions import (
     AccountError,
     CloneError,
+    BranchError,
     ConfigurationError,
     ConnectionError,
     MatrixOneError,
@@ -55,6 +56,7 @@ from .pubsub import Publication, PubSubManager, Subscription
 from .restore import RestoreManager
 from .snapshot import Snapshot, SnapshotLevel, SnapshotManager
 from .clone import CloneManager
+from .branch import BranchManager, AsyncBranchManager
 from .stage import Stage, StageManager, AsyncStageManager
 from .cdc import CDCTaskInfo, CDCWatermarkInfo, CDCManager, AsyncCDCManager, build_mysql_uri
 
@@ -109,6 +111,7 @@ __all__ = [
     "ConfigurationError",
     "SnapshotError",
     "CloneError",
+    "BranchError",
     "MoCtlError",
     "RestoreError",
     "PitrError",
@@ -116,6 +119,8 @@ __all__ = [
     "Snapshot",
     "SnapshotManager",
     "CloneManager",
+    "BranchManager",
+    "AsyncBranchManager",
     "SnapshotLevel",
     "MoCtlManager",
     "RestoreManager",

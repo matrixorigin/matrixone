@@ -271,6 +271,66 @@ class AsyncCloneManager:
         await self.clone_table(target_table, source_table, snapshot_name, if_not_exists)
 
 
+
+
+class AsyncBranchManager:
+    """Async branch manager"""
+
+    def __init__(self, client):
+        self.client = client
+
+    async def create_table_branch(
+        self,
+        target_table: str,
+        source_table: str,
+        snapshot_name: Optional[str] = None,
+    ) -> None:
+        """Create table branch asynchronously"""
+        if snapshot_name:
+            sql = f"data branch create table {target_table} from {source_table}{{snapshot=\"{snapshot_name}\"}}"
+        else:
+            sql = f"data branch create table {target_table} from {source_table}"
+        await self.client.execute(sql)
+
+    async def delete_table_branch(self, table: str) -> None:
+        """Delete table branch asynchronously"""
+        sql = f"data branch delete table {table}"
+        await self.client.execute(sql)
+
+    async def create_database_branch(self, target_database: str, source_database: str) -> None:
+        """Create database branch asynchronously"""
+        sql = f"data branch create database {target_database} from {source_database}"
+        await self.client.execute(sql)
+
+    async def delete_database_branch(self, database: str) -> None:
+        """Delete database branch asynchronously"""
+        sql = f"data branch delete database {database}"
+        await self.client.execute(sql)
+
+    async def diff_table(
+        self,
+        table: str,
+        against_table: str,
+        snapshot_name: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Diff tables asynchronously"""
+        if snapshot_name:
+            sql = f"data branch diff {table} against {against_table}{{snapshot=\"{snapshot_name}\"}}"
+        else:
+            sql = f"data branch diff {table} against {against_table}"
+        result = await self.client.execute(sql)
+        return result.fetchall()
+
+    async def merge_table(
+        self,
+        source_table: str,
+        target_table: str,
+        conflict_strategy: str = "skip",
+    ) -> None:
+        """Merge tables asynchronously"""
+        sql = f"data branch merge {source_table} into {target_table} when conflict {conflict_strategy}"
+        await self.client.execute(sql)
+
 class AsyncRestoreManager:
     """Async manager for restore operations"""
 
@@ -594,6 +654,7 @@ class AsyncClient(BaseMatrixOneClient):
         # Initialize managers
         self._snapshots = AsyncSnapshotManager(self)
         self._clone = AsyncCloneManager(self)
+        self._branch = AsyncBranchManager(self)
         self._moctl = AsyncMoCtlManager(self)
         self._restore = AsyncRestoreManager(self)
         self._pitr = AsyncPitrManager(self)
@@ -2062,6 +2123,11 @@ class AsyncClient(BaseMatrixOneClient):
     def clone(self) -> AsyncCloneManager:
         """Get async clone manager"""
         return self._clone
+
+    @property
+    def branch(self) -> AsyncBranchManager:
+        """Get async branch manager"""
+        return self._branch
 
     @property
     def moctl(self) -> AsyncMoCtlManager:

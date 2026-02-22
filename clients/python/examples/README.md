@@ -127,6 +127,9 @@ make test USE_SOURCE=0
 - `example_25_metadata_operations.py` - Metadata operations
 - `example_31_cdc_operations.py` - CDC task lifecycle operations
 
+### Git-Style Branch Operations (Git for Data)
+- `example_branch_operations.py` - Branch operations (create, diff, merge, delete)
+
 ## Prerequisites
 
 ### For Local Source Mode

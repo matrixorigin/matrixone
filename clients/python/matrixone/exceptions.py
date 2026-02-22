@@ -41,6 +41,10 @@ class CloneError(MatrixOneError):
     """Raised when clone operations fail"""
 
 
+class BranchError(MatrixOneError):
+    """Raised when branch operations fail"""
+
+
 class MoCtlError(MatrixOneError):
     """Raised when mo_ctl operations fail"""
 
