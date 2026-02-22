@@ -443,12 +443,7 @@ example-fulltext: ## Run fulltext index example
 	$(EXAMPLE_PYTHON_PATH) $(PYTHON) examples/example_fulltext_index.py
 	@echo "$(GREEN)Fulltext example completed!$(NC)"
 
-.PHONY: example-branch
-example-branch: ## Run branch operations example
-	@echo "$(BLUE)Running branch operations example...$(NC)"
-	@if [ "$(USE_SOURCE)" = "1" ]; then echo "$(YELLOW)Using local source$(NC)"; fi
-	$(EXAMPLE_PYTHON_PATH) $(PYTHON) examples/example_branch_operations.py
-	@echo "$(GREEN)Branch example completed!$(NC)"
+
 
 # Build and publish
 .PHONY: build

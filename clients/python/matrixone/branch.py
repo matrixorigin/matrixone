@@ -94,6 +94,13 @@ class BaseBranchManager:
         snapshot_name: Optional[str] = None,
     ) -> str:
         """Build DATA BRANCH CREATE TABLE SQL statement"""
+        if not target_table or not isinstance(target_table, str):
+            raise BranchError("target_table must be a non-empty string")
+        if not source_table or not isinstance(source_table, str):
+            raise BranchError("source_table must be a non-empty string")
+        if snapshot_name is not None and not isinstance(snapshot_name, str):
+            raise BranchError("snapshot_name must be a string or None")
+        
         if snapshot_name:
             return f"data branch create table {target_table} from {source_table}{{snapshot=\"{snapshot_name}\"}}"
         else:
@@ -101,6 +108,8 @@ class BaseBranchManager:
 
     def _build_delete_table_branch_sql(self, table: str) -> str:
         """Build DATA BRANCH DELETE TABLE SQL statement"""
+        if not table or not isinstance(table, str):
+            raise BranchError("table must be a non-empty string")
         return f"data branch delete table {table}"
 
     def _build_create_database_branch_sql(
@@ -109,10 +118,16 @@ class BaseBranchManager:
         source_database: str,
     ) -> str:
         """Build DATA BRANCH CREATE DATABASE SQL statement"""
+        if not target_database or not isinstance(target_database, str):
+            raise BranchError("target_database must be a non-empty string")
+        if not source_database or not isinstance(source_database, str):
+            raise BranchError("source_database must be a non-empty string")
         return f"data branch create database {target_database} from {source_database}"
 
     def _build_delete_database_branch_sql(self, database: str) -> str:
         """Build DATA BRANCH DELETE DATABASE SQL statement"""
+        if not database or not isinstance(database, str):
+            raise BranchError("database must be a non-empty string")
         return f"data branch delete database {database}"
 
     def _build_diff_table_sql(
@@ -134,6 +149,12 @@ class BaseBranchManager:
         conflict_strategy: Literal["skip", "accept"] = "skip",
     ) -> str:
         """Build DATA BRANCH MERGE SQL statement"""
+        if not source_table or not isinstance(source_table, str):
+            raise BranchError("source_table must be a non-empty string")
+        if not target_table or not isinstance(target_table, str):
+            raise BranchError("target_table must be a non-empty string")
+        if conflict_strategy not in ("skip", "accept"):
+            raise BranchError(f"conflict_strategy must be 'skip' or 'accept', got '{conflict_strategy}'")
         return f"data branch merge {source_table} into {target_table} when conflict {conflict_strategy}"
 
 
@@ -208,7 +229,7 @@ class BranchManager(BaseBranchManager):
 
     Version Requirements:
 
-        Branch functionality requires MatrixOne version 1.2.0 or higher.
+        Branch functionality requires MatrixOne version 3.0.5 or higher.
         Earlier versions do not support data branch operations.
 
     See Also:
@@ -218,7 +239,7 @@ class BranchManager(BaseBranchManager):
     """
 
     @requires_version(
-        min_version="1.2.0",
+        min_version="3.0.5",
         feature_name="table_branching",
         description="Table branching functionality",
         alternative="Use CREATE TABLE and data migration instead",
@@ -249,7 +270,7 @@ class BranchManager(BaseBranchManager):
         try:
             self._get_executor().execute(sql)
         except Exception as e:
-            raise BranchError(f"Failed to create table branch: {e}") from None
+            raise BranchError(f"Failed to create table branch: {e}") from e
 
     def delete_table_branch(self, table: str) -> None:
         """
@@ -270,10 +291,10 @@ class BranchManager(BaseBranchManager):
         try:
             self._get_executor().execute(sql)
         except Exception as e:
-            raise BranchError(f"Failed to delete table branch: {e}") from None
+            raise BranchError(f"Failed to delete table branch: {e}") from e
 
     @requires_version(
-        min_version="1.2.0",
+        min_version="3.0.5",
         feature_name="database_branching",
         description="Database branching functionality",
         alternative="Use CREATE DATABASE and data migration instead",
@@ -302,7 +323,7 @@ class BranchManager(BaseBranchManager):
         try:
             self._get_executor().execute(sql)
         except Exception as e:
-            raise BranchError(f"Failed to create database branch: {e}") from None
+            raise BranchError(f"Failed to create database branch: {e}") from e
 
     def delete_database_branch(self, database: str) -> None:
         """
@@ -323,10 +344,10 @@ class BranchManager(BaseBranchManager):
         try:
             self._get_executor().execute(sql)
         except Exception as e:
-            raise BranchError(f"Failed to delete database branch: {e}") from None
+            raise BranchError(f"Failed to delete database branch: {e}") from e
 
     @requires_version(
-        min_version="1.2.0",
+        min_version="3.0.5",
         feature_name="table_diffing",
         description="Table diffing functionality",
         alternative="Use manual comparison instead",
@@ -361,10 +382,10 @@ class BranchManager(BaseBranchManager):
             result = self._get_executor().execute(sql)
             return result.fetchall()
         except Exception as e:
-            raise BranchError(f"Failed to diff tables: {e}") from None
+            raise BranchError(f"Failed to diff tables: {e}") from e
 
     @requires_version(
-        min_version="1.2.0",
+        min_version="3.0.5",
         feature_name="table_merging",
         description="Table merging functionality",
         alternative="Use manual merge instead",
@@ -396,7 +417,7 @@ class BranchManager(BaseBranchManager):
         try:
             self._get_executor().execute(sql)
         except Exception as e:
-            raise BranchError(f"Failed to merge tables: {e}") from None
+            raise BranchError(f"Failed to merge tables: {e}") from e
 
     # Simplified API - Pythonic method names
     def create(
@@ -581,7 +602,7 @@ class AsyncBranchManager(BaseBranchManager):
 
     Version Requirements:
 
-        Branch functionality requires MatrixOne version 1.2.0 or higher.
+        Branch functionality requires MatrixOne version 3.0.5 or higher.
         Requires async database drivers (aiomysql or asyncmy).
 
     See Also:
@@ -592,7 +613,7 @@ class AsyncBranchManager(BaseBranchManager):
     """
 
     @requires_version(
-        min_version="1.2.0",
+        min_version="3.0.5",
         feature_name="table_branching",
         description="Table branching functionality",
         alternative="Use CREATE TABLE and data migration instead",
@@ -623,7 +644,7 @@ class AsyncBranchManager(BaseBranchManager):
         try:
             await self._get_executor().execute(sql)
         except Exception as e:
-            raise BranchError(f"Failed to create table branch: {e}") from None
+            raise BranchError(f"Failed to create table branch: {e}") from e
 
     async def delete_table_branch(self, table: str) -> None:
         """
@@ -644,10 +665,10 @@ class AsyncBranchManager(BaseBranchManager):
         try:
             await self._get_executor().execute(sql)
         except Exception as e:
-            raise BranchError(f"Failed to delete table branch: {e}") from None
+            raise BranchError(f"Failed to delete table branch: {e}") from e
 
     @requires_version(
-        min_version="1.2.0",
+        min_version="3.0.5",
         feature_name="database_branching",
         description="Database branching functionality",
         alternative="Use CREATE DATABASE and data migration instead",
@@ -676,7 +697,7 @@ class AsyncBranchManager(BaseBranchManager):
         try:
             await self._get_executor().execute(sql)
         except Exception as e:
-            raise BranchError(f"Failed to create database branch: {e}") from None
+            raise BranchError(f"Failed to create database branch: {e}") from e
 
     async def delete_database_branch(self, database: str) -> None:
         """
@@ -697,10 +718,10 @@ class AsyncBranchManager(BaseBranchManager):
         try:
             await self._get_executor().execute(sql)
         except Exception as e:
-            raise BranchError(f"Failed to delete database branch: {e}") from None
+            raise BranchError(f"Failed to delete database branch: {e}") from e
 
     @requires_version(
-        min_version="1.2.0",
+        min_version="3.0.5",
         feature_name="table_diffing",
         description="Table diffing functionality",
         alternative="Use manual comparison instead",
@@ -735,10 +756,10 @@ class AsyncBranchManager(BaseBranchManager):
             result = await self._get_executor().execute(sql)
             return result.fetchall()
         except Exception as e:
-            raise BranchError(f"Failed to diff tables: {e}") from None
+            raise BranchError(f"Failed to diff tables: {e}") from e
 
     @requires_version(
-        min_version="1.2.0",
+        min_version="3.0.5",
         feature_name="table_merging",
         description="Table merging functionality",
         alternative="Use manual merge instead",
@@ -770,7 +791,7 @@ class AsyncBranchManager(BaseBranchManager):
         try:
             await self._get_executor().execute(sql)
         except Exception as e:
-            raise BranchError(f"Failed to merge tables: {e}") from None
+            raise BranchError(f"Failed to merge tables: {e}") from e
 
 
     # Simplified API - Pythonic method names

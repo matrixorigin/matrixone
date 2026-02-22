@@ -38,6 +38,7 @@ from .fulltext_manager import AsyncFulltextIndexManager
 from .metadata import AsyncMetadataManager
 from .session import AsyncSession
 from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
+from .branch import AsyncBranchManager
 from .connection_hooks import ConnectionAction, ConnectionHook, create_connection_hook
 from .load_data import AsyncLoadDataManager
 from .stage import AsyncStageManager
@@ -272,64 +273,6 @@ class AsyncCloneManager:
 
 
 
-
-class AsyncBranchManager:
-    """Async branch manager"""
-
-    def __init__(self, client):
-        self.client = client
-
-    async def create_table_branch(
-        self,
-        target_table: str,
-        source_table: str,
-        snapshot_name: Optional[str] = None,
-    ) -> None:
-        """Create table branch asynchronously"""
-        if snapshot_name:
-            sql = f"data branch create table {target_table} from {source_table}{{snapshot=\"{snapshot_name}\"}}"
-        else:
-            sql = f"data branch create table {target_table} from {source_table}"
-        await self.client.execute(sql)
-
-    async def delete_table_branch(self, table: str) -> None:
-        """Delete table branch asynchronously"""
-        sql = f"data branch delete table {table}"
-        await self.client.execute(sql)
-
-    async def create_database_branch(self, target_database: str, source_database: str) -> None:
-        """Create database branch asynchronously"""
-        sql = f"data branch create database {target_database} from {source_database}"
-        await self.client.execute(sql)
-
-    async def delete_database_branch(self, database: str) -> None:
-        """Delete database branch asynchronously"""
-        sql = f"data branch delete database {database}"
-        await self.client.execute(sql)
-
-    async def diff_table(
-        self,
-        table: str,
-        against_table: str,
-        snapshot_name: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """Diff tables asynchronously"""
-        if snapshot_name:
-            sql = f"data branch diff {table} against {against_table}{{snapshot=\"{snapshot_name}\"}}"
-        else:
-            sql = f"data branch diff {table} against {against_table}"
-        result = await self.client.execute(sql)
-        return result.fetchall()
-
-    async def merge_table(
-        self,
-        source_table: str,
-        target_table: str,
-        conflict_strategy: str = "skip",
-    ) -> None:
-        """Merge tables asynchronously"""
-        sql = f"data branch merge {source_table} into {target_table} when conflict {conflict_strategy}"
-        await self.client.execute(sql)
 
 class AsyncRestoreManager:
     """Async manager for restore operations"""

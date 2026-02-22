@@ -195,3 +195,49 @@ class TestAsyncBranchManager:
         manager = AsyncBranchManager(MockAsyncClient())
         sql = manager._build_merge_table_sql('t2', 't1', 'accept')
         assert sql == "data branch merge t2 into t1 when conflict accept"
+
+
+class TestBranchManagerValidation:
+    """Test parameter validation"""
+
+    def test_invalid_target_table_empty(self):
+        """Test empty target_table raises error"""
+        manager = BranchManager(MockClient())
+        with pytest.raises(BranchError, match="target_table must be a non-empty string"):
+            manager._build_create_table_branch_sql('', 'source')
+
+    def test_invalid_target_table_none(self):
+        """Test None target_table raises error"""
+        manager = BranchManager(MockClient())
+        with pytest.raises(BranchError, match="target_table must be a non-empty string"):
+            manager._build_create_table_branch_sql(None, 'source')
+
+    def test_invalid_source_table_empty(self):
+        """Test empty source_table raises error"""
+        manager = BranchManager(MockClient())
+        with pytest.raises(BranchError, match="source_table must be a non-empty string"):
+            manager._build_create_table_branch_sql('target', '')
+
+    def test_invalid_conflict_strategy(self):
+        """Test invalid conflict_strategy raises error"""
+        manager = BranchManager(MockClient())
+        with pytest.raises(BranchError, match="conflict_strategy must be 'skip' or 'accept'"):
+            manager._build_merge_table_sql('source', 'target', 'invalid')
+
+    def test_invalid_database_name_empty(self):
+        """Test empty database name raises error"""
+        manager = BranchManager(MockClient())
+        with pytest.raises(BranchError, match="target_database must be a non-empty string"):
+            manager._build_create_database_branch_sql('', 'source_db')
+
+    def test_invalid_delete_table_empty(self):
+        """Test empty table name for delete raises error"""
+        manager = BranchManager(MockClient())
+        with pytest.raises(BranchError, match="table must be a non-empty string"):
+            manager._build_delete_table_branch_sql('')
+
+    def test_invalid_snapshot_name_type(self):
+        """Test non-string snapshot_name raises error"""
+        manager = BranchManager(MockClient())
+        with pytest.raises(BranchError, match="snapshot_name must be a string or None"):
+            manager._build_create_table_branch_sql('target', 'source', 123)
