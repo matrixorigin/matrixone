@@ -1771,3 +1771,47 @@ class TestFulltextComprehensive:
         finally:
             test_client.drop_table(EdgeTest)
             test_client.execute("DROP DATABASE fulltext_edge_test")
+
+    def test_fulltext_index_create_all(self, test_client):
+        """Test FulltextIndex works with SQLAlchemy create_all()"""
+        test_client.execute("CREATE DATABASE IF NOT EXISTS fulltext_create_all_test")
+        test_client.execute("USE fulltext_create_all_test")
+
+        Base = declarative_base()
+
+        class Article(Base):
+            __tablename__ = 'articles'
+            id = Column(Integer, primary_key=True, autoincrement=True)
+            title = Column(String(200), nullable=False)
+            content = Column(Text, nullable=False)
+            __table_args__ = (FulltextIndex('ftidx_content', ['title', 'content']),)
+
+        try:
+            # Use create_all() to create table with fulltext index
+            with test_client.session() as session:
+                Base.metadata.create_all(session.get_bind())
+                session.commit()
+
+            # Verify index was created
+            result = test_client.execute("SHOW INDEX FROM articles WHERE Key_name = 'ftidx_content'")
+            rows = result.fetchall()
+            assert len(rows) == 2, "Should have 2 columns in fulltext index"
+            assert rows[0][10] == 'fulltext', "Index type should be fulltext"
+
+            # Test the index works
+            test_client.batch_insert(Article, [
+                {"title": "Python Guide", "content": "Learn Python programming"},
+                {"title": "Java Tutorial", "content": "Learn Java basics"}
+            ])
+
+            result = test_client.execute(
+                "SELECT title FROM articles WHERE MATCH(title, content) AGAINST('Python')"
+            )
+            rows = result.fetchall()
+            assert len(rows) == 1 and rows[0][0] == "Python Guide"
+
+        finally:
+            with test_client.session() as session:
+                Base.metadata.drop_all(session.get_bind())
+                session.commit()
+            test_client.execute("DROP DATABASE fulltext_create_all_test")
