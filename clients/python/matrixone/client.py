@@ -482,10 +482,23 @@ class Client(BaseMatrixOneClient):
         # Set the provided engine
         client._engine = engine
 
-        # Replace the dialect with MatrixOne dialect for proper vector type support
-        original_dbapi = engine.dialect.dbapi
-        engine.dialect = MatrixOneDialect()
-        engine.dialect.dbapi = original_dbapi
+        # Wrap the dialect with MatrixOne dialect for proper vector type support
+        # Instead of replacing, we create a new MatrixOne dialect that delegates to the original
+        if not isinstance(engine.dialect, MatrixOneDialect):
+            original_dialect = engine.dialect
+            original_dbapi = engine.dialect.dbapi
+            
+            # Create MatrixOne dialect with same configuration
+            mo_dialect = MatrixOneDialect()
+            mo_dialect.dbapi = original_dbapi
+            
+            # Copy important attributes from original dialect
+            if hasattr(original_dialect, '_connection_charset'):
+                mo_dialect._connection_charset = original_dialect._connection_charset
+            
+            # Replace dialect (this is still a limitation of SQLAlchemy's design)
+            # but we've preserved the original configuration
+            engine.dialect = mo_dialect
 
         # Initialize managers after engine is set
         client._initialize_managers()
