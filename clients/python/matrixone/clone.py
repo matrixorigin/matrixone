@@ -207,7 +207,7 @@ class CloneManager(BaseCloneManager):
         try:
             self._get_executor().execute(sql)
         except Exception as e:
-            raise CloneError(f"Failed to clone database: {e}") from None
+            raise CloneError(f"Failed to clone database: {e}") from e
 
     def clone_table(
         self,
@@ -237,7 +237,7 @@ class CloneManager(BaseCloneManager):
         try:
             self._get_executor().execute(sql)
         except Exception as e:
-            raise CloneError(f"Failed to clone table: {e}") from None
+            raise CloneError(f"Failed to clone table: {e}") from e
 
     def clone_database_with_snapshot(
         self,
@@ -408,7 +408,7 @@ class AsyncCloneManager(BaseCloneManager):
         try:
             await self._get_executor().execute(sql)
         except Exception as e:
-            raise CloneError(f"Failed to clone database: {e}") from None
+            raise CloneError(f"Failed to clone database: {e}") from e
 
     async def clone_table(
         self,
@@ -438,7 +438,7 @@ class AsyncCloneManager(BaseCloneManager):
         try:
             await self._get_executor().execute(sql)
         except Exception as e:
-            raise CloneError(f"Failed to clone table: {e}") from None
+            raise CloneError(f"Failed to clone table: {e}") from e
 
     async def clone_database_with_snapshot(
         self,
