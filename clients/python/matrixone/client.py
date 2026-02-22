@@ -1818,7 +1818,39 @@ class Client(BaseMatrixOneClient):
 
     @property
     def branch(self) -> Optional[BranchManager]:
-        """Get branch manager"""
+        """
+        Get branch manager for Git-style version control operations.
+
+        Provides table and database branching, diffing, and merging capabilities.
+        Requires MatrixOne 3.0.5 or higher.
+
+        Returns:
+            BranchManager instance for branch operations
+
+        Example::
+
+            client = Client()
+            client.connect(database='test')
+
+            # Create table branch
+            client.branch.create_table_branch('users_branch', 'users')
+
+            # Create database branch
+            client.branch.create_database_branch('dev_db', 'production')
+
+            # Compare branches
+            diffs = client.branch.diff_table('users_branch', 'users')
+
+            # Merge branches
+            client.branch.merge_table('users_branch', 'users')
+
+            # Delete branches
+            client.branch.delete_table_branch('users_branch')
+            client.branch.delete_database_branch('dev_db')
+
+        See Also:
+            - :doc:`branch_guide` - Complete branch management guide
+        """
         return self._branch
 
     @property

@@ -2069,7 +2069,47 @@ class AsyncClient(BaseMatrixOneClient):
 
     @property
     def branch(self) -> AsyncBranchManager:
-        """Get async branch manager"""
+        """
+        Get async branch manager for Git-style version control operations.
+
+        Provides asynchronous table and database branching, diffing, and merging capabilities.
+        Requires MatrixOne 3.0.5 or higher.
+
+        Returns:
+            AsyncBranchManager instance for async branch operations
+
+        Example::
+
+            import asyncio
+            from matrixone import AsyncClient
+
+            async def main():
+                client = AsyncClient()
+                await client.connect(database='test')
+
+                # Create table branch
+                await client.branch.create_table_branch('users_branch', 'users')
+
+                # Create database branch
+                await client.branch.create_database_branch('dev_db', 'production')
+
+                # Compare branches
+                diffs = await client.branch.diff_table('users_branch', 'users')
+
+                # Merge branches
+                await client.branch.merge_table('users_branch', 'users')
+
+                # Delete branches
+                await client.branch.delete_table_branch('users_branch')
+                await client.branch.delete_database_branch('dev_db')
+
+                await client.disconnect()
+
+            asyncio.run(main())
+
+        See Also:
+            - :doc:`branch_guide` - Complete branch management guide
+        """
         return self._branch
 
     @property

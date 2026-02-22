@@ -165,6 +165,8 @@ class BranchManager(BaseBranchManager):
     This class provides comprehensive branch functionality for Git-style version control,
     enabling table and database branching, diffing, and merging operations.
 
+    **Version Requirement:** MatrixOne 3.0.5 or higher
+
     Key Features:
 
     - **Table branching**: Create branches from tables with optional snapshots
@@ -186,51 +188,54 @@ class BranchManager(BaseBranchManager):
 
         from matrixone import Client
 
-        client = Client(host='localhost', port=6001, user='root', password='111', database='test')
+        client = Client()
+        client.connect(database='test')
 
-        # Create table branch from snapshot
-        client.branch.create_table_branch(
-            target_table='users_branch',
-            source_table='users',
-            snapshot_name='daily_backup_2024_01_01'
-        )
-
-        # Create table branch from current state
+        # Create table branch
         client.branch.create_table_branch(
             target_table='users_branch',
             source_table='users'
         )
 
+        # Create table branch from snapshot
+        client.branch.create_table_branch(
+            target_table='users_historical',
+            source_table='users',
+            snapshot_name='daily_backup_2024_01_01'
+        )
+
         # Create database branch
         client.branch.create_database_branch(
-            target_database='dev_branch',
+            target_database='dev_db',
             source_database='production'
         )
 
-        # Diff tables
+        # Simplified API (auto-detects table vs database)
+        client.branch.create('users_branch', 'users')
+        client.branch.create('dev_db', 'production', database=True)
+
+        # Compare tables
         diffs = client.branch.diff_table(
-            table='branch_table',
-            against_table='main_table'
+            table='users_branch',
+            against_table='users'
         )
 
         # Merge with conflict resolution
         client.branch.merge_table(
-            source_table='branch_table',
-            target_table='main_table',
+            source_table='users_branch',
+            target_table='users',
             conflict_strategy='accept'
         )
 
+        # Delete branches
+        client.branch.delete_table_branch('users_branch')
+        client.branch.delete_database_branch('dev_db')
+
         # Using within a transaction (all operations are atomic)
         with client.session() as session:
-            # Create multiple branches atomically
             session.branch.create_table_branch('branch1', 'source_table')
             session.branch.create_table_branch('branch2', 'source_table')
             # Both operations succeed or fail together
-
-    Version Requirements:
-
-        Branch functionality requires MatrixOne version 3.0.5 or higher.
-        Earlier versions do not support data branch operations.
 
     See Also:
 
@@ -531,6 +536,8 @@ class AsyncBranchManager(BaseBranchManager):
     full async/await support for non-blocking I/O operations. Ideal for high-concurrency
     applications and async web frameworks.
 
+    **Version Requirement:** MatrixOne 3.0.5 or higher
+
     Key Features:
 
     - **Non-blocking operations**: All branch operations use async/await
@@ -555,31 +562,30 @@ class AsyncBranchManager(BaseBranchManager):
 
         async def main():
             client = AsyncClient()
-            await client.connect(host='localhost', port=6001, user='root', password='111', database='test')
+            await client.connect(database='test')
 
             # Create table branch asynchronously
             await client.branch.create_table_branch(
                 target_table='users_branch',
-                source_table='users',
-                snapshot_name='daily_backup'
+                source_table='users'
             )
 
             # Create database branch asynchronously
             await client.branch.create_database_branch(
-                target_database='dev_branch',
+                target_database='dev_db',
                 source_database='production'
             )
 
             # Diff tables asynchronously
             diffs = await client.branch.diff_table(
-                table='branch_table',
-                against_table='main_table'
+                table='users_branch',
+                against_table='users'
             )
 
             # Merge with conflict resolution asynchronously
             await client.branch.merge_table(
-                source_table='branch_table',
-                target_table='main_table',
+                source_table='users_branch',
+                target_table='users',
                 conflict_strategy='accept'
             )
 
@@ -599,11 +605,6 @@ class AsyncBranchManager(BaseBranchManager):
             await client.disconnect()
 
         asyncio.run(main())
-
-    Version Requirements:
-
-        Branch functionality requires MatrixOne version 3.0.5 or higher.
-        Requires async database drivers (aiomysql or asyncmy).
 
     See Also:
 
