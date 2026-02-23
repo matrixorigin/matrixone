@@ -40,6 +40,7 @@ from matrixone.config import get_connection_params, print_config
 
 Base = declarative_base()
 
+
 class Product(Base):
     __tablename__ = 'products'
     id = Column(Integer, primary_key=True)
@@ -408,9 +409,9 @@ class BranchOperationsDemo:
 
     def generate_summary_report(self):
         """Generate comprehensive summary report."""
-        print("\n" + "="*80)
+        print("\n" + "=" * 80)
         print("Branch Operations Demo - Summary Report")
-        print("="*80)
+        print("=" * 80)
 
         total_tests = self.results['tests_run']
         passed_tests = self.results['tests_passed']
@@ -434,9 +435,9 @@ class BranchOperationsDemo:
 
     def run_all_tests(self):
         """Run all tests"""
-        print("\n" + "="*80)
+        print("\n" + "=" * 80)
         print("MatrixOne Branch Operations - Complete Examples")
-        print("="*80)
+        print("=" * 80)
         print_config()
 
         self.test_basic_api()
@@ -450,9 +451,9 @@ class BranchOperationsDemo:
 
         results = self.generate_summary_report()
 
-        print("\n" + "="*80)
+        print("\n" + "=" * 80)
         print("Key Features Demonstrated:")
-        print("="*80)
+        print("=" * 80)
         print("1. ✓ Simple API: create(), delete(), diff(), merge()")
         print("2. ✓ ORM Model Support: Works with SQLAlchemy models")
         print("3. ✓ Development Workflow: Isolate, test, merge changes")

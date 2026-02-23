@@ -80,12 +80,7 @@ class IVFRankSearchDemo:
                 client.execute(f"INSERT INTO documents VALUES ({doc_id}, '{title}', '{vec_str}')")
 
             # Create IVF index
-            client.vector_ops.create_ivf(
-                table_name="documents",
-                name="idx_embedding",
-                column="embedding",
-                lists=2
-            )
+            client.vector_ops.create_ivf(table_name="documents", name="idx_embedding", column="embedding", lists=2)
 
             query_vector = [0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85]
 
@@ -97,7 +92,7 @@ class IVFRankSearchDemo:
                 query_vector=query_vector,
                 limit=3,
                 rank_mode=IVFRankMode.PRE,
-                select_columns=["id", "title"]
+                select_columns=["id", "title"],
             )
             self.logger.info(f"   ✅ PRE mode returned {len(results_pre)} results")
 
@@ -109,7 +104,7 @@ class IVFRankSearchDemo:
                 query_vector=query_vector,
                 limit=3,
                 rank_mode=IVFRankMode.POST,
-                select_columns=["id", "title"]
+                select_columns=["id", "title"],
             )
             self.logger.info(f"   ✅ POST mode returned {len(results_post)} results")
 
@@ -121,7 +116,7 @@ class IVFRankSearchDemo:
                 query_vector=query_vector,
                 limit=3,
                 rank_mode=IVFRankMode.FORCE,
-                select_columns=["id", "title"]
+                select_columns=["id", "title"],
             )
             self.logger.info(f"   ✅ FORCE mode returned {len(results_force)} results")
 
@@ -170,12 +165,7 @@ class IVFRankSearchDemo:
                 client.execute(f"INSERT INTO products VALUES ({prod_id}, '{name}', '{category}', {price}, '{vec_str}')")
 
             # Create IVF index
-            client.vector_ops.create_ivf(
-                table_name="products",
-                name="idx_product_embedding",
-                column="embedding",
-                lists=2
-            )
+            client.vector_ops.create_ivf(table_name="products", name="idx_product_embedding", column="embedding", lists=2)
 
             query_vector = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 
@@ -188,7 +178,7 @@ class IVFRankSearchDemo:
                 limit=3,
                 rank_mode=IVFRankMode.PRE,
                 where_clause="category = 'electronics'",
-                select_columns=["id", "name", "category"]
+                select_columns=["id", "name", "category"],
             )
             self.logger.info(f"   ✅ Found {len(results)} electronics products")
 
@@ -201,7 +191,7 @@ class IVFRankSearchDemo:
                 limit=3,
                 rank_mode=IVFRankMode.POST,
                 where_clause="price < 500",
-                select_columns=["id", "name", "price"]
+                select_columns=["id", "name", "price"],
             )
             self.logger.info(f"   ✅ Found {len(results)} products under $500 (POST)")
 
@@ -214,7 +204,7 @@ class IVFRankSearchDemo:
                 limit=3,
                 rank_mode=IVFRankMode.FORCE,
                 where_clause="category = 'books'",
-                select_columns=["id", "name", "category"]
+                select_columns=["id", "name", "category"],
             )
             self.logger.info(f"   ✅ Found {len(results)} books (FORCE mode)")
 
@@ -263,19 +253,11 @@ class IVFRankSearchDemo:
 
             # Create IVF indexes
             client.vector_ops.create_ivf(
-                table_name="embeddings",
-                name="idx_l2",
-                column="vec_l2",
-                lists=2,
-                op_type="vector_l2_ops"
+                table_name="embeddings", name="idx_l2", column="vec_l2", lists=2, op_type="vector_l2_ops"
             )
 
             client.vector_ops.create_ivf(
-                table_name="embeddings",
-                name="idx_cosine",
-                column="vec_cosine",
-                lists=2,
-                op_type="vector_cosine_ops"
+                table_name="embeddings", name="idx_cosine", column="vec_cosine", lists=2, op_type="vector_cosine_ops"
             )
 
             query = [0.8, 0.2, 0.0, 0.0]
@@ -289,7 +271,7 @@ class IVFRankSearchDemo:
                 limit=3,
                 distance_type="l2",
                 rank_mode=IVFRankMode.PRE,
-                select_columns=["id", "name"]
+                select_columns=["id", "name"],
             )
             self.logger.info(f"   ✅ L2 search (PRE) returned {len(results)} results")
 
@@ -302,7 +284,7 @@ class IVFRankSearchDemo:
                 limit=3,
                 distance_type="cosine",
                 rank_mode=IVFRankMode.POST,
-                select_columns=["id", "name"]
+                select_columns=["id", "name"],
             )
             self.logger.info(f"   ✅ Cosine search (POST) returned {len(results)} results")
 

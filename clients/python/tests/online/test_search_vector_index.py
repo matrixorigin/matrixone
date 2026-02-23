@@ -33,16 +33,14 @@ class TestPineconeCompatibleIndex:
         test_client.execute("CREATE DATABASE IF NOT EXISTS search_vector_test")
         test_client.execute("USE search_vector_test")
 
-        test_client.execute(
-            """
+        test_client.execute("""
             CREATE TABLE IF NOT EXISTS test_vectors (
                 id VARCHAR(50) PRIMARY KEY,
                 title VARCHAR(200),
                 content TEXT,
                 embedding vecf32(128)
             )
-        """
-        )
+        """)
 
         # Create vector index
         test_client.vector_ops.create_ivf("test_vectors", name="idx_embedding", column="embedding", lists=100)
@@ -69,16 +67,14 @@ class TestPineconeCompatibleIndex:
         await test_async_client.execute("CREATE DATABASE IF NOT EXISTS async_search_vector_test")
         await test_async_client.execute("USE async_search_vector_test")
 
-        await test_async_client.execute(
-            """
+        await test_async_client.execute("""
             CREATE TABLE IF NOT EXISTS test_vectors_async (
                 id VARCHAR(50) PRIMARY KEY,
                 title VARCHAR(200),
                 content TEXT,
                 embedding vecf32(128)
             )
-        """
-        )
+        """)
 
         # Create vector index
         await test_async_client.vector_ops.create_ivf(
@@ -112,15 +108,13 @@ class TestPineconeCompatibleIndex:
         # Drop table if exists to ensure clean state
         test_client.execute("DROP TABLE IF EXISTS test_parse")
 
-        test_client.execute(
-            """
+        test_client.execute("""
             CREATE TABLE test_parse (
                 id BIGINT PRIMARY KEY,
                 title VARCHAR(200),
                 embedding vecf32(256)
             )
-        """
-        )
+        """)
 
         # Create vector index
         test_client.vector_ops.create_hnsw("test_parse", name="idx_hnsw", column="embedding", m=16, ef_construction=200)
@@ -149,29 +143,25 @@ class TestPineconeCompatibleIndex:
         test_client.execute("CREATE DATABASE IF NOT EXISTS query_test")
         test_client.execute("USE query_test")
 
-        test_client.execute(
-            """
+        test_client.execute("""
             CREATE TABLE IF NOT EXISTS test_query (
                 id VARCHAR(50) PRIMARY KEY,
                 title VARCHAR(200),
                 category VARCHAR(50),
                 embedding vecf32(64)
             )
-        """
-        )
+        """)
 
         # Create vector index
         test_client.vector_ops.create_ivf("test_query", name="idx_query", column="embedding", lists=10)
 
         # Insert test data
-        test_client.execute(
-            """
+        test_client.execute("""
             INSERT INTO test_query (id, title, category, embedding) VALUES
             ('doc1', 'Machine Learning Guide', 'AI', '[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4]'),
             ('doc2', 'Python Programming', 'Programming', '[0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5]'),
             ('doc3', 'Database Design', 'Database', '[0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]')
-        """
-        )
+        """)
 
         try:
             # Get PineconeCompatibleIndex object
@@ -210,15 +200,13 @@ class TestPineconeCompatibleIndex:
         await test_async_client.execute("CREATE DATABASE IF NOT EXISTS async_query_test")
         await test_async_client.execute("USE async_query_test")
 
-        await test_async_client.execute(
-            """
+        await test_async_client.execute("""
             CREATE TABLE IF NOT EXISTS test_query_async (
                 id VARCHAR(50) PRIMARY KEY,
                 title VARCHAR(200),
                 embedding vecf32(32)
             )
-        """
-        )
+        """)
 
         # Create vector index
         await test_async_client.vector_ops.create_ivf(
@@ -226,13 +214,11 @@ class TestPineconeCompatibleIndex:
         )
 
         # Insert test data
-        await test_async_client.execute(
-            """
+        await test_async_client.execute("""
             INSERT INTO test_query_async (id, title, embedding) VALUES
             ('doc1', 'Test Document 1', '[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2]'),
             ('doc2', 'Test Document 2', '[0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3]')
-        """
-        )
+        """)
 
         try:
             # Get PineconeCompatibleIndex object
@@ -266,15 +252,13 @@ class TestPineconeCompatibleIndex:
         # Drop table if exists to ensure clean state
         test_client.execute("DROP TABLE IF EXISTS test_upsert")
 
-        test_client.execute(
-            """
+        test_client.execute("""
             CREATE TABLE test_upsert (
                 id VARCHAR(50) PRIMARY KEY,
                 title VARCHAR(200),
                 embedding vecf32(16)
             )
-        """
-        )
+        """)
 
         # Create IVF vector index (required for upsert/delete operations)
         test_client.vector_ops.create_ivf("test_upsert", name="idx_upsert", column="embedding", lists=5)
@@ -284,13 +268,11 @@ class TestPineconeCompatibleIndex:
             index = test_client.get_pinecone_index("test_upsert", vector_column="embedding")
 
             # Insert test data directly using SQL
-            test_client.execute(
-                """
+            test_client.execute("""
                 INSERT INTO test_upsert (id, title, embedding) VALUES
                 ('test1', 'Test Document 1', '[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]'),
                 ('test2', 'Test Document 2', '[0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]')
-            """
-            )
+            """)
 
             # Verify data was inserted
             count_result = test_client.execute("SELECT COUNT(*) FROM test_upsert")
@@ -318,27 +300,23 @@ class TestPineconeCompatibleIndex:
         test_client.execute("CREATE DATABASE IF NOT EXISTS stats_test")
         test_client.execute("USE stats_test")
 
-        test_client.execute(
-            """
+        test_client.execute("""
             CREATE TABLE IF NOT EXISTS test_stats (
                 id VARCHAR(50) PRIMARY KEY,
                 title VARCHAR(200),
                 embedding vecf32(64)
             )
-        """
-        )
+        """)
 
         # Create vector index
         test_client.vector_ops.create_ivf("test_stats", name="idx_stats", column="embedding", lists=10)
 
         # Insert test data
-        test_client.execute(
-            """
+        test_client.execute("""
             INSERT INTO test_stats (id, title, embedding) VALUES
             ('doc1', 'Document 1', '[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4]'),
             ('doc2', 'Document 2', '[0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5]')
-        """
-        )
+        """)
 
         try:
             # Get PineconeCompatibleIndex object
@@ -370,15 +348,13 @@ class TestPineconeCompatibleIndex:
         # Drop table if exists to ensure clean state
         test_client.execute("DROP TABLE IF EXISTS test_hnsw_upsert")
 
-        test_client.execute(
-            """
+        test_client.execute("""
             CREATE TABLE test_hnsw_upsert (
                 id BIGINT PRIMARY KEY,
                 title VARCHAR(200),
                 embedding vecf32(64)
             )
-        """
-        )
+        """)
 
         # Create HNSW vector index
         test_client.vector_ops.create_hnsw(
@@ -419,28 +395,24 @@ class TestPineconeCompatibleIndexCaseInsensitive:
         test_client.execute("CREATE DATABASE IF NOT EXISTS case_test")
         test_client.execute("USE case_test")
 
-        test_client.execute(
-            """
+        test_client.execute("""
             CREATE TABLE IF NOT EXISTS test_case_vectors (
                 ID VARCHAR(50) PRIMARY KEY,
                 Title VARCHAR(200),
                 Content TEXT,
                 Embedding vecf32(64)
             )
-        """
-        )
+        """)
 
         # Create vector index
         test_client.vector_ops.create_ivf("test_case_vectors", name="idx_case_embedding", column="Embedding", lists=10)
 
         # Insert test data
-        test_client.execute(
-            """
+        test_client.execute("""
             INSERT INTO test_case_vectors (ID, Title, Content, Embedding) VALUES
             ('doc1', 'Test Document 1', 'Content 1', '[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4]'),
             ('doc2', 'Test Document 2', 'Content 2', '[0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5]')
-        """
-        )
+        """)
 
         try:
             # Test with different case variations of vector column name
@@ -491,16 +463,14 @@ class TestPineconeCompatibleIndexCaseInsensitive:
         await test_async_client.execute("CREATE DATABASE IF NOT EXISTS async_case_test")
         await test_async_client.execute("USE async_case_test")
 
-        await test_async_client.execute(
-            """
+        await test_async_client.execute("""
             CREATE TABLE IF NOT EXISTS test_case_vectors_async (
                 ID VARCHAR(50) PRIMARY KEY,
                 Title VARCHAR(200),
                 Content TEXT,
                 Embedding vecf32(32)
             )
-        """
-        )
+        """)
 
         # Create vector index
         await test_async_client.vector_ops.create_ivf(
@@ -511,13 +481,11 @@ class TestPineconeCompatibleIndexCaseInsensitive:
         )
 
         # Insert test data
-        await test_async_client.execute(
-            """
+        await test_async_client.execute("""
             INSERT INTO test_case_vectors_async (ID, Title, Content, Embedding) VALUES
             ('doc1', 'Test Document 1', 'Content 1', '[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2]'),
             ('doc2', 'Test Document 2', 'Content 2', '[0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.1, 0.2, 0.3]')
-        """
-        )
+        """)
 
         try:
             # Test with different case variations of vector column name

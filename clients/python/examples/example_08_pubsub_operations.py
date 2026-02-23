@@ -219,8 +219,7 @@ def demo_cross_account_pubsub():
             host=host, port=port, user="pub_publisher#pub_admin", password="pub_pass", database="publisher_data"
         )
 
-        pub_admin_client.execute(
-            """
+        pub_admin_client.execute("""
             CREATE TABLE IF NOT EXISTS sales_data (
                 id INT PRIMARY KEY AUTO_INCREMENT,
                 product_name VARCHAR(100) NOT NULL,
@@ -228,11 +227,9 @@ def demo_cross_account_pubsub():
                 price DECIMAL(10,2),
                 sale_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """
-        )
+        """)
 
-        pub_admin_client.execute(
-            """
+        pub_admin_client.execute("""
             CREATE TABLE IF NOT EXISTS customer_data (
                 id INT PRIMARY KEY AUTO_INCREMENT,
                 customer_name VARCHAR(100) NOT NULL,
@@ -240,8 +237,7 @@ def demo_cross_account_pubsub():
                 phone VARCHAR(20),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """
-        )
+        """)
 
         # Insert sample data
         pub_admin_client.execute("DELETE FROM sales_data")
@@ -323,14 +319,12 @@ def demo_cross_account_pubsub():
         logger.info(f"   📊 Total sales records: {sales_count}")
 
         # Show sales summary
-        result = pub_admin_client.execute(
-            """
+        result = pub_admin_client.execute("""
             SELECT product_name, SUM(quantity) as total_qty, SUM(quantity * price) as total_value
             FROM sales_data
             GROUP BY product_name
             ORDER BY total_value DESC
-        """
-        )
+        """)
         logger.info("   📋 Sales summary:")
         for row in result.rows:
             logger.info(f"     - {row[0]}: {row[1]} units, ${row[2]:.2f}")
@@ -398,8 +392,7 @@ async def demo_async_pubsub_operations():
         await client.execute("CREATE DATABASE IF NOT EXISTS async_pubsub_test")
         await client.execute("USE async_pubsub_test")
 
-        await client.execute(
-            """
+        await client.execute("""
             CREATE TABLE IF NOT EXISTS events (
                 id INT PRIMARY KEY AUTO_INCREMENT,
                 event_type VARCHAR(50) NOT NULL,
@@ -407,8 +400,7 @@ async def demo_async_pubsub_operations():
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 source VARCHAR(100)
             )
-        """
-        )
+        """)
 
         # Insert sample data
         await client.execute("DELETE FROM events")
@@ -474,14 +466,12 @@ async def demo_async_pubsub_operations():
         logger.info(f"   📊 Total events: {event_count}")
 
         # Show event distribution by type
-        result = await client.execute(
-            """
+        result = await client.execute("""
             SELECT event_type, COUNT(*) as count
             FROM events
             GROUP BY event_type
             ORDER BY count DESC
-        """
-        )
+        """)
         logger.info("   📊 Event distribution by type:")
         for row in result.rows:
             logger.info(f"     - {row[0]}: {row[1]} events")
@@ -520,8 +510,7 @@ def demo_pubsub_best_practices():
         client.execute("USE ecommerce")
 
         # Create tables
-        client.execute(
-            """
+        client.execute("""
             CREATE TABLE IF NOT EXISTS products (
                 id INT PRIMARY KEY AUTO_INCREMENT,
                 name VARCHAR(100) NOT NULL,
@@ -530,11 +519,9 @@ def demo_pubsub_best_practices():
                 category VARCHAR(50),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """
-        )
+        """)
 
-        client.execute(
-            """
+        client.execute("""
             CREATE TABLE IF NOT EXISTS orders (
                 id INT PRIMARY KEY AUTO_INCREMENT,
                 customer_id INT,
@@ -544,11 +531,9 @@ def demo_pubsub_best_practices():
                 status VARCHAR(20) DEFAULT 'pending',
                 order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """
-        )
+        """)
 
-        client.execute(
-            """
+        client.execute("""
             CREATE TABLE IF NOT EXISTS inventory_logs (
                 id INT PRIMARY KEY AUTO_INCREMENT,
                 product_id INT,
@@ -557,8 +542,7 @@ def demo_pubsub_best_practices():
                 change_reason VARCHAR(100),
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """
-        )
+        """)
 
         # Insert sample data - clear existing data
         try:
@@ -681,8 +665,7 @@ def demo_pubsub_best_practices():
         logger.info("\n📊 Business Analytics")
 
         # Product performance
-        result = client.execute(
-            """
+        result = client.execute("""
             SELECT p.name, p.price, p.stock_quantity,
                    COALESCE(SUM(o.quantity), 0) as total_ordered,
                    COALESCE(SUM(o.total_amount), 0) as total_revenue
@@ -690,15 +673,13 @@ def demo_pubsub_best_practices():
             LEFT JOIN orders o ON p.id = o.product_id
             GROUP BY p.id, p.name, p.price, p.stock_quantity
             ORDER BY total_revenue DESC
-        """
-        )
+        """)
         logger.info("   📋 Product performance:")
         for row in result.rows:
             logger.info(f"     - {row[0]}: ${row[1]}, Stock: {row[2]}, Ordered: {row[3]}, Revenue: ${row[4]:.2f}")
 
         # Inventory status
-        result = client.execute(
-            """
+        result = client.execute("""
             SELECT name, stock_quantity,
                    CASE
                        WHEN stock_quantity > 50 THEN 'High'
@@ -707,8 +688,7 @@ def demo_pubsub_best_practices():
                    END as stock_level
             FROM products
             ORDER BY stock_quantity ASC
-        """
-        )
+        """)
         logger.info("   📋 Inventory status:")
         for row in result.rows:
             logger.info(f"     - {row[0]}: {row[1]} units ({row[2]} stock)")

@@ -78,8 +78,7 @@ class TestFulltextSearchOnline:
         # Create table
         try:
             cls.client.execute("DROP TABLE IF EXISTS test_articles")
-            cls.client.execute(
-                """
+            cls.client.execute("""
                 CREATE TABLE IF NOT EXISTS test_articles (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     title VARCHAR(255) NOT NULL,
@@ -87,8 +86,7 @@ class TestFulltextSearchOnline:
                     tags VARCHAR(500),
                     category VARCHAR(100)
                 )
-            """
-            )
+            """)
         except Exception as e:
             pytest.skip(f"Cannot create test table: {e}")
 
@@ -445,8 +443,7 @@ class TestAsyncFulltextSearch:
 
         # Create table if not exists
         sync_client.execute("DROP TABLE IF EXISTS test_articles")
-        sync_client.execute(
-            """
+        sync_client.execute("""
             CREATE TABLE IF NOT EXISTS test_articles (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 title VARCHAR(200),
@@ -454,8 +451,7 @@ class TestAsyncFulltextSearch:
                 tags VARCHAR(500),
                 category VARCHAR(50)
             )
-        """
-        )
+        """)
 
         # Insert at least one test record for async tests
         sync_client.execute(
@@ -524,8 +520,7 @@ class TestFulltextSearchEdgeCases:
 
         # Create table if not exists
         cls.client.execute("DROP TABLE IF EXISTS test_articles")
-        cls.client.execute(
-            """
+        cls.client.execute("""
             CREATE TABLE IF NOT EXISTS test_articles (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 title VARCHAR(200),
@@ -533,8 +528,7 @@ class TestFulltextSearchEdgeCases:
                 tags VARCHAR(500),
                 category VARCHAR(50)
             )
-        """
-        )
+        """)
 
         # Insert test data
         cls.client.execute(
@@ -666,8 +660,7 @@ class TestLogicalAdaptersOnline:
 
         # Create table if not exists
         cls.client.execute("DROP TABLE IF EXISTS test_articles")
-        cls.client.execute(
-            """
+        cls.client.execute("""
             CREATE TABLE IF NOT EXISTS test_articles (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 title VARCHAR(255) NOT NULL,
@@ -675,8 +668,7 @@ class TestLogicalAdaptersOnline:
                 tags VARCHAR(500),
                 category VARCHAR(100)
             )
-        """
-        )
+        """)
 
         # Insert test data for logical adapter tests
         test_data = [

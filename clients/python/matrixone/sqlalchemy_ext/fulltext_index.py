@@ -265,11 +265,11 @@ class FulltextIndex(Index):
         """
         if isinstance(columns, str):
             columns = [columns]
-        
+
         # Validate columns parameter
         if not columns:
             raise ValueError("FulltextIndex requires at least one column")
-        
+
         if not all(isinstance(col, str) for col in columns):
             raise TypeError("All columns must be strings")
 
@@ -723,9 +723,11 @@ def compile_create_index(element, compiler, **kw):
     if isinstance(index, FulltextIndex):
         # Validate table is bound
         if index.table is None:
-            raise ValueError(f"FulltextIndex '{index.name}' is not bound to a table. "
-                           "Ensure the index is defined in __table_args__ or bound to a table.")
-        
+            raise ValueError(
+                f"FulltextIndex '{index.name}' is not bound to a table. "
+                "Ensure the index is defined in __table_args__ or bound to a table."
+            )
+
         # Generate FULLTEXT index DDL
         columns_str = ", ".join(col.name for col in index.columns)
         sql = f"CREATE FULLTEXT INDEX {index.name} ON {index.table.name} ({columns_str})"

@@ -56,14 +56,14 @@ class TestFulltextIndexValidation:
         """Test that unbound table raises ValueError during compilation."""
         # Create index without binding to table
         index = FulltextIndex("test_idx", "content")
-        
+
         # Mock CreateIndex element
         mock_element = Mock()
         mock_element.element = index
-        
+
         # Mock compiler
         mock_compiler = Mock()
-        
+
         # Test that compilation raises ValueError
         with pytest.raises(ValueError, match="not bound to a table"):
             compile_create_index(mock_element, mock_compiler)
@@ -71,27 +71,22 @@ class TestFulltextIndexValidation:
     def test_bound_table_compiles_successfully(self):
         """Test that bound table compiles successfully."""
         from sqlalchemy import Table, Column, Integer, String, MetaData
-        
+
         # Create table and bind index
         metadata = MetaData()
-        table = Table(
-            'test_table',
-            metadata,
-            Column('id', Integer, primary_key=True),
-            Column('content', String(255))
-        )
-        
+        table = Table('test_table', metadata, Column('id', Integer, primary_key=True), Column('content', String(255)))
+
         # Create index and bind to table
         index = FulltextIndex("test_idx", "content")
         index._set_parent(table)
-        
+
         # Mock CreateIndex element
         mock_element = Mock()
         mock_element.element = index
-        
+
         # Mock compiler
         mock_compiler = Mock()
-        
+
         # Test that compilation succeeds
         result = compile_create_index(mock_element, mock_compiler)
         assert "CREATE FULLTEXT INDEX test_idx ON test_table (content)" in result
@@ -100,27 +95,22 @@ class TestFulltextIndexValidation:
         """Test that parser is included in DDL when specified."""
         from sqlalchemy import Table, Column, Integer, String, MetaData
         from matrixone.sqlalchemy_ext.fulltext_index import FulltextParserType
-        
+
         # Create table and bind index with parser
         metadata = MetaData()
-        table = Table(
-            'test_table',
-            metadata,
-            Column('id', Integer, primary_key=True),
-            Column('content', String(255))
-        )
-        
+        table = Table('test_table', metadata, Column('id', Integer, primary_key=True), Column('content', String(255)))
+
         # Create index with parser
         index = FulltextIndex("test_idx", "content", parser=FulltextParserType.JSON)
         index._set_parent(table)
-        
+
         # Mock CreateIndex element
         mock_element = Mock()
         mock_element.element = index
-        
+
         # Mock compiler
         mock_compiler = Mock()
-        
+
         # Test that compilation includes parser
         result = compile_create_index(mock_element, mock_compiler)
         assert "WITH PARSER json" in result
@@ -128,7 +118,7 @@ class TestFulltextIndexValidation:
     def test_multiple_columns_in_ddl(self):
         """Test that multiple columns are properly formatted in DDL."""
         from sqlalchemy import Table, Column, Integer, String, Text, MetaData
-        
+
         # Create table with multiple text columns
         metadata = MetaData()
         table = Table(
@@ -136,20 +126,20 @@ class TestFulltextIndexValidation:
             metadata,
             Column('id', Integer, primary_key=True),
             Column('title', String(255)),
-            Column('content', Text)
+            Column('content', Text),
         )
-        
+
         # Create index with multiple columns
         index = FulltextIndex("test_idx", ["title", "content"])
         index._set_parent(table)
-        
+
         # Mock CreateIndex element
         mock_element = Mock()
         mock_element.element = index
-        
+
         # Mock compiler
         mock_compiler = Mock()
-        
+
         # Test that compilation includes both columns
         result = compile_create_index(mock_element, mock_compiler)
         assert "CREATE FULLTEXT INDEX test_idx ON test_table (title, content)" in result

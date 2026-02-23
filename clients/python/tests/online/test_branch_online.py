@@ -123,6 +123,23 @@ class TestBranchOnline:
         test_client.execute("DROP TABLE merge_t3")
         test_client.execute("DROP TABLE merge_t4")
 
+    def test_diff_table_count_output(self, test_client):
+        """Test diff with output='count' parameter"""
+        test_client.execute("DROP TABLE IF EXISTS diff_count_t1")
+        test_client.execute("DROP TABLE IF EXISTS diff_count_t2")
+        test_client.execute("CREATE TABLE diff_count_t1 (id INT PRIMARY KEY, val INT)")
+        test_client.execute("CREATE TABLE diff_count_t2 (id INT PRIMARY KEY, val INT)")
+        test_client.execute("INSERT INTO diff_count_t1 VALUES (1, 100), (2, 200)")
+        test_client.execute("INSERT INTO diff_count_t2 VALUES (1, 100), (3, 300)")
+
+        count = test_client.branch.diff("diff_count_t2", "diff_count_t1", output='count')
+        assert isinstance(count, list)
+        count_value = count[0][0] if count else 0
+        assert count_value >= 0
+
+        test_client.execute("DROP TABLE diff_count_t1")
+        test_client.execute("DROP TABLE diff_count_t2")
+
     def test_create_database_branch(self, test_client):
         """Test creating database branch"""
         src_db = f"branch_src_db_{int(time.time())}"
@@ -211,3 +228,21 @@ class TestAsyncBranchOnline:
 
         await test_async_client.execute("DROP TABLE async_merge_t1")
         await test_async_client.execute("DROP TABLE async_merge_t2")
+
+    @pytest.mark.asyncio
+    async def test_async_diff_count_output(self, test_async_client):
+        """Test async diff with output='count' parameter"""
+        await test_async_client.execute("DROP TABLE IF EXISTS async_diff_count_t1")
+        await test_async_client.execute("DROP TABLE IF EXISTS async_diff_count_t2")
+        await test_async_client.execute("CREATE TABLE async_diff_count_t1 (id INT PRIMARY KEY)")
+        await test_async_client.execute("CREATE TABLE async_diff_count_t2 (id INT PRIMARY KEY)")
+        await test_async_client.execute("INSERT INTO async_diff_count_t1 VALUES (1)")
+        await test_async_client.execute("INSERT INTO async_diff_count_t2 VALUES (2)")
+
+        count = await test_async_client.branch.diff("async_diff_count_t2", "async_diff_count_t1", output='count')
+        assert isinstance(count, list)
+        count_value = count[0][0] if count else 0
+        assert count_value >= 0
+
+        await test_async_client.execute("DROP TABLE async_diff_count_t1")
+        await test_async_client.execute("DROP TABLE async_diff_count_t2")

@@ -23,6 +23,7 @@ from matrixone.exceptions import BranchError, ConnectionError
 
 class MockClient:
     """Mock client for testing"""
+
     def __init__(self):
         self._engine = True
         self.executed_sql = []
@@ -34,6 +35,7 @@ class MockClient:
 
 class MockAsyncClient:
     """Mock async client for testing"""
+
     def __init__(self):
         self._engine = True
         self.executed_sql = []
@@ -45,6 +47,7 @@ class MockAsyncClient:
 
 class MockResultSet:
     """Mock result set"""
+
     def __init__(self):
         self.rows = []
 
@@ -54,6 +57,7 @@ class MockResultSet:
 
 class MockAsyncResultSet:
     """Mock async result set"""
+
     def __init__(self):
         self.rows = []
 
@@ -63,6 +67,7 @@ class MockAsyncResultSet:
 
 class MockExecutor:
     """Mock executor"""
+
     def __init__(self):
         self.executed_sql = []
 
@@ -73,6 +78,7 @@ class MockExecutor:
 
 class MockAsyncExecutor:
     """Mock async executor"""
+
     def __init__(self):
         self.executed_sql = []
 
@@ -118,13 +124,19 @@ class TestBranchManager:
         """Test diffing tables without snapshot"""
         manager = BranchManager(MockClient())
         sql = manager._build_diff_table_sql('t2', 't1')
-        assert sql == "data branch diff t2 against t1"
+        assert sql == 'data branch diff t2 against t1'
 
     def test_diff_table_with_snapshot(self):
         """Test diffing tables with snapshot"""
         manager = BranchManager(MockClient())
         sql = manager._build_diff_table_sql('t2', 't1', 'snapshot_1')
         assert sql == 'data branch diff t2 against t1{snapshot="snapshot_1"}'
+
+    def test_diff_table_with_count_output(self):
+        """Test diffing tables with count output"""
+        manager = BranchManager(MockClient())
+        sql = manager._build_diff_table_sql('t2', 't1', output='count')
+        assert sql == 'data branch diff t2 against t1 output count'
 
     def test_merge_table_with_skip(self):
         """Test merging tables with skip strategy"""
@@ -176,13 +188,19 @@ class TestAsyncBranchManager:
         """Test diffing tables without snapshot"""
         manager = AsyncBranchManager(MockAsyncClient())
         sql = manager._build_diff_table_sql('t2', 't1')
-        assert sql == "data branch diff t2 against t1"
+        assert sql == 'data branch diff t2 against t1'
 
     def test_diff_table_with_snapshot(self):
         """Test diffing tables with snapshot"""
         manager = AsyncBranchManager(MockAsyncClient())
         sql = manager._build_diff_table_sql('t2', 't1', 'snapshot_1')
         assert sql == 'data branch diff t2 against t1{snapshot="snapshot_1"}'
+
+    def test_diff_table_with_count_output(self):
+        """Test diffing tables with count output"""
+        manager = AsyncBranchManager(MockAsyncClient())
+        sql = manager._build_diff_table_sql('t2', 't1', output='count')
+        assert sql == 'data branch diff t2 against t1 output count'
 
     def test_merge_table_with_skip(self):
         """Test merging tables with skip strategy"""
@@ -221,7 +239,7 @@ class TestBranchManagerValidation:
     def test_invalid_conflict_strategy(self):
         """Test invalid conflict_strategy raises error"""
         manager = BranchManager(MockClient())
-        with pytest.raises(BranchError, match="conflict_strategy must be 'skip' or 'accept'"):
+        with pytest.raises(BranchError, match="on_conflict must be 'skip' or 'accept'"):
             manager._build_merge_table_sql('source', 'target', 'invalid')
 
     def test_invalid_database_name_empty(self):

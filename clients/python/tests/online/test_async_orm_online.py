@@ -112,46 +112,38 @@ class TestAsyncORMOnline:
 
         try:
             # Create test tables
-            await client.execute(
-                """
+            await client.execute("""
                 CREATE TABLE IF NOT EXISTS test_async_users (
                     id INT PRIMARY KEY,
                     name VARCHAR(100),
                     email VARCHAR(100),
                     age INT
                 )
-            """
-            )
+            """)
 
-            await client.execute(
-                """
+            await client.execute("""
                 CREATE TABLE IF NOT EXISTS test_async_products (
                     id INT PRIMARY KEY,
                     name VARCHAR(100),
                     price DECIMAL(10,2),
                     category VARCHAR(50)
                 )
-            """
-            )
+            """)
 
             # Insert test data
-            await client.execute(
-                """
+            await client.execute("""
                 INSERT INTO test_async_users VALUES 
                 (1, 'Alice Johnson', 'alice@example.com', 28),
                 (2, 'Charlie Brown', 'charlie@example.com', 32),
                 (3, 'Diana Prince', 'diana@example.com', 27)
-            """
-            )
+            """)
 
-            await client.execute(
-                """
+            await client.execute("""
                 INSERT INTO test_async_products VALUES 
                 (1, 'Tablet', 299.99, 'Electronics'),
                 (2, 'Notebook', 5.99, 'Stationery'),
                 (3, 'Headphones', 149.99, 'Electronics')
-            """
-            )
+            """)
 
             yield client
 

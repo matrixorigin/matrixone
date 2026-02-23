@@ -158,30 +158,25 @@ class ComplexQueryDemo:
         self.client.create_table(Embedding)
 
         # Insert categories
-        self.client.execute(
-            """
+        self.client.execute("""
             INSERT INTO categories_complex (category_name) VALUES
             ('Electronics'),
             ('Clothing'),
             ('Books')
-        """
-        )
+        """)
 
         # Insert products
-        self.client.execute(
-            """
+        self.client.execute("""
             INSERT INTO products_complex (product_name, description, category_id, price) VALUES
             ('Laptop', 'High performance laptop for coding', 1, 999.99),
             ('Smartphone', 'Latest smartphone with great camera', 1, 699.99),
             ('T-Shirt', 'Comfortable cotton t-shirt', 2, 19.99),
             ('Python Book', 'Learn Python programming', 3, 39.99),
             ('ML Book', 'Machine learning fundamentals', 3, 49.99)
-        """
-        )
+        """)
 
         # Insert reviews
-        self.client.execute(
-            """
+        self.client.execute("""
             INSERT INTO reviews_complex (product_id, rating, comment) VALUES
             (1, 5, 'Excellent laptop for development'),
             (1, 4, 'Good value for money'),
@@ -189,8 +184,7 @@ class ComplexQueryDemo:
             (3, 3, 'Decent quality'),
             (4, 5, 'Great for beginners'),
             (5, 5, 'Very insightful')
-        """
-        )
+        """)
 
         # Insert embeddings with vectors
         def generate_vector(dim=64):
@@ -200,14 +194,12 @@ class ComplexQueryDemo:
                 vec = [random.random() for _ in range(dim)]
             return '[' + ','.join(map(str, vec)) + ']'
 
-        self.client.execute(
-            f"""
+        self.client.execute(f"""
             INSERT INTO embeddings_complex (category_id, text, vector) VALUES
             (1, 'tech gadgets', '{generate_vector(64)}'),
             (2, 'fashion apparel', '{generate_vector(64)}'),
             (3, 'educational content', '{generate_vector(64)}')
-        """
-        )
+        """)
 
         print("✓ Test data populated\n")
 

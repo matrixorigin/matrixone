@@ -272,8 +272,6 @@ class AsyncCloneManager:
         await self.clone_table(target_table, source_table, snapshot_name, if_not_exists)
 
 
-
-
 class AsyncRestoreManager:
     """Async manager for restore operations"""
 

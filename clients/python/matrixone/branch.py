@@ -19,17 +19,17 @@ Unified branch management supporting sync/async and client/session executors.
 """
 
 from typing import Optional, Literal, Union, Any, Dict, List, Type
+from enum import Enum
 
 from .exceptions import BranchError, ConnectionError
 from .version import requires_version
 
-try:
-    from sqlalchemy import inspect
-    from sqlalchemy.orm import DeclarativeMeta
-    SQLALCHEMY_AVAILABLE = True
-except ImportError:
-    SQLALCHEMY_AVAILABLE = False
-    DeclarativeMeta = type  # Fallback type
+
+class DiffOutput(str, Enum):
+    """Diff output format options"""
+
+    ROWS = 'rows'
+    COUNT = 'count'
 
 
 class BaseBranchManager:
@@ -60,21 +60,21 @@ class BaseBranchManager:
     def _get_table_name(self, table: Union[str, Type]) -> str:
         """
         Extract table name from string or ORM model.
-        
+
         Supports:
         - "table_name"
         - "db.table_name"
         - TableModel (SQLAlchemy ORM)
-        
+
         Args:
             table: Table name string or ORM model class
-            
+
         Returns:
             Fully qualified table name string
         """
         if isinstance(table, str):
             return table
-        
+
         # Handle SQLAlchemy ORM model
         if SQLALCHEMY_AVAILABLE and hasattr(table, '__tablename__'):
             table_name = table.__tablename__
@@ -84,7 +84,7 @@ class BaseBranchManager:
                 if isinstance(table_args, dict) and 'schema' in table_args:
                     return f"{table_args['schema']}.{table_name}"
             return table_name
-        
+
         raise BranchError(f"Invalid table parameter: {table}. Expected string or ORM model.")
 
     def _build_create_table_branch_sql(
@@ -100,7 +100,7 @@ class BaseBranchManager:
             raise BranchError("source_table must be a non-empty string")
         if snapshot_name is not None and not isinstance(snapshot_name, str):
             raise BranchError("snapshot_name must be a string or None")
-        
+
         if snapshot_name:
             return f"data branch create table {target_table} from {source_table}{{snapshot=\"{snapshot_name}\"}}"
         else:
@@ -135,27 +135,33 @@ class BaseBranchManager:
         table: str,
         against_table: str,
         snapshot_name: Optional[str] = None,
+        output: DiffOutput = DiffOutput.ROWS,
     ) -> str:
         """Build DATA BRANCH DIFF SQL statement"""
+        base_sql = f"data branch diff {table} against {against_table}"
+
         if snapshot_name:
-            return f"data branch diff {table} against {against_table}{{snapshot=\"{snapshot_name}\"}}"
-        else:
-            return f"data branch diff {table} against {against_table}"
+            base_sql += f"{{snapshot=\"{snapshot_name}\"}}"
+
+        if output == DiffOutput.COUNT:
+            base_sql += " output count"
+
+        return base_sql
 
     def _build_merge_table_sql(
         self,
         source_table: str,
         target_table: str,
-        conflict_strategy: Literal["skip", "accept"] = "skip",
+        on_conflict: Literal["skip", "accept"] = "skip",
     ) -> str:
         """Build DATA BRANCH MERGE SQL statement"""
         if not source_table or not isinstance(source_table, str):
             raise BranchError("source_table must be a non-empty string")
         if not target_table or not isinstance(target_table, str):
             raise BranchError("target_table must be a non-empty string")
-        if conflict_strategy not in ("skip", "accept"):
-            raise BranchError(f"conflict_strategy must be 'skip' or 'accept', got '{conflict_strategy}'")
-        return f"data branch merge {source_table} into {target_table} when conflict {conflict_strategy}"
+        if on_conflict not in ("skip", "accept"):
+            raise BranchError(f"on_conflict must be 'skip' or 'accept', got '{on_conflict}'")
+        return f"data branch merge {source_table} into {target_table} when conflict {on_conflict}"
 
 
 class BranchManager(BaseBranchManager):
@@ -362,6 +368,7 @@ class BranchManager(BaseBranchManager):
         table: str,
         against_table: str,
         snapshot_name: Optional[str] = None,
+        output: DiffOutput = DiffOutput.ROWS,
     ) -> List[Dict[str, Any]]:
         """
         Compare differences between tables.
@@ -370,6 +377,7 @@ class BranchManager(BaseBranchManager):
             table: Source table name (can include database: db.table)
             against_table: Target table name for comparison (can include database: db.table)
             snapshot_name: Optional snapshot name for point-in-time comparison
+            output: Output format - ROWS for detailed differences, COUNT for count only
 
         Returns:
             List of differences between tables
@@ -381,7 +389,7 @@ class BranchManager(BaseBranchManager):
         if not self.client._engine:
             raise ConnectionError("Not connected to database")
 
-        sql = self._build_diff_table_sql(table, against_table, snapshot_name)
+        sql = self._build_diff_table_sql(table, against_table, snapshot_name, output)
 
         try:
             result = self._get_executor().execute(sql)
@@ -399,7 +407,7 @@ class BranchManager(BaseBranchManager):
         self,
         source_table: str,
         target_table: str,
-        conflict_strategy: Literal["skip", "accept"] = "skip",
+        on_conflict: Literal["skip", "accept"] = "skip",
     ) -> None:
         """
         Merge one table into another with conflict resolution.
@@ -407,8 +415,8 @@ class BranchManager(BaseBranchManager):
         Args:
             source_table: Source table name (can include database: db.table)
             target_table: Target table name (can include database: db.table)
-            conflict_strategy: How to handle conflicts - "skip" to skip conflicting rows,
-                             "accept" to accept source values
+            on_conflict: How to handle conflicts - "skip" to skip conflicting rows,
+                        "accept" to accept source values
 
         Raises:
             ConnectionError: If not connected to database
@@ -417,7 +425,7 @@ class BranchManager(BaseBranchManager):
         if not self.client._engine:
             raise ConnectionError("Not connected to database")
 
-        sql = self._build_merge_table_sql(source_table, target_table, conflict_strategy)
+        sql = self._build_merge_table_sql(source_table, target_table, on_conflict)
 
         try:
             self._get_executor().execute(sql)
@@ -434,21 +442,21 @@ class BranchManager(BaseBranchManager):
     ) -> None:
         """
         Create a branch (table or database).
-        
+
         Simplified API that auto-detects whether to create table or database branch.
-        
+
         Args:
             target: Target name (string or ORM model)
             source: Source name (string or ORM model)
             snapshot: Optional snapshot name
             database: If True, create database branch; if False, create table branch
-            
+
         Examples:
             # Table branch
             client.branch.create('new_table', 'source_table')
             client.branch.create('new_table', TableModel)
             client.branch.create('new_table', 'source', snapshot='snap1')
-            
+
             # Database branch
             client.branch.create('new_db', 'source_db', database=True)
         """
@@ -462,11 +470,11 @@ class BranchManager(BaseBranchManager):
     def delete(self, name: Union[str, Type], database: bool = False) -> None:
         """
         Delete a branch (table or database).
-        
+
         Args:
             name: Branch name (string or ORM model)
             database: If True, delete database branch; if False, delete table branch
-            
+
         Examples:
             client.branch.delete('branch_table')
             client.branch.delete(BranchModel)
@@ -483,26 +491,29 @@ class BranchManager(BaseBranchManager):
         table: Union[str, Type],
         against: Union[str, Type],
         snapshot: Optional[str] = None,
+        output: DiffOutput = DiffOutput.ROWS,
     ) -> List[Dict[str, Any]]:
         """
         Compare differences between two tables.
-        
+
         Args:
             table: First table (string or ORM model)
             against: Second table to compare against (string or ORM model)
             snapshot: Optional snapshot name
-            
+            output: Output format - ROWS for detailed differences, COUNT for count only
+
         Returns:
             List of differences
-            
+
         Examples:
             diffs = client.branch.diff('table1', 'table2')
             diffs = client.branch.diff(Model1, Model2)
             diffs = client.branch.diff('table1', 'table2', snapshot='snap1')
+            count = client.branch.diff('table1', 'table2', output='count')
         """
         table_name = self._get_table_name(table)
         against_name = self._get_table_name(against)
-        return self.diff_table(table_name, against_name, snapshot)
+        return self.diff_table(table_name, against_name, snapshot, output)
 
     def merge(
         self,
@@ -512,12 +523,12 @@ class BranchManager(BaseBranchManager):
     ) -> None:
         """
         Merge source table into target table.
-        
+
         Args:
             source: Source table (string or ORM model)
             target: Target table (string or ORM model)
             on_conflict: Conflict resolution strategy: 'skip' or 'accept'
-            
+
         Examples:
             client.branch.merge('source', 'target')
             client.branch.merge(SourceModel, TargetModel)
@@ -732,6 +743,7 @@ class AsyncBranchManager(BaseBranchManager):
         table: str,
         against_table: str,
         snapshot_name: Optional[str] = None,
+        output: DiffOutput = DiffOutput.ROWS,
     ) -> List[Dict[str, Any]]:
         """
         Compare differences between tables asynchronously.
@@ -740,6 +752,7 @@ class AsyncBranchManager(BaseBranchManager):
             table: Source table name (can include database: db.table)
             against_table: Target table name for comparison (can include database: db.table)
             snapshot_name: Optional snapshot name for point-in-time comparison
+            output: Output format - ROWS for detailed differences, COUNT for count only
 
         Returns:
             List of differences between tables
@@ -751,7 +764,7 @@ class AsyncBranchManager(BaseBranchManager):
         if not self.client._engine:
             raise ConnectionError("Not connected to database")
 
-        sql = self._build_diff_table_sql(table, against_table, snapshot_name)
+        sql = self._build_diff_table_sql(table, against_table, snapshot_name, output)
 
         try:
             result = await self._get_executor().execute(sql)
@@ -769,7 +782,7 @@ class AsyncBranchManager(BaseBranchManager):
         self,
         source_table: str,
         target_table: str,
-        conflict_strategy: Literal["skip", "accept"] = "skip",
+        on_conflict: Literal["skip", "accept"] = "skip",
     ) -> None:
         """
         Merge one table into another with conflict resolution asynchronously.
@@ -777,8 +790,8 @@ class AsyncBranchManager(BaseBranchManager):
         Args:
             source_table: Source table name (can include database: db.table)
             target_table: Target table name (can include database: db.table)
-            conflict_strategy: How to handle conflicts - "skip" to skip conflicting rows,
-                             "accept" to accept source values
+            on_conflict: How to handle conflicts - "skip" to skip conflicting rows,
+                        "accept" to accept source values
 
         Raises:
             ConnectionError: If not connected to database
@@ -787,13 +800,12 @@ class AsyncBranchManager(BaseBranchManager):
         if not self.client._engine:
             raise ConnectionError("Not connected to database")
 
-        sql = self._build_merge_table_sql(source_table, target_table, conflict_strategy)
+        sql = self._build_merge_table_sql(source_table, target_table, on_conflict)
 
         try:
             await self._get_executor().execute(sql)
         except Exception as e:
             raise BranchError(f"Failed to merge tables: {e}") from e
-
 
     # Simplified API - Pythonic method names
     async def create(
@@ -805,7 +817,7 @@ class AsyncBranchManager(BaseBranchManager):
     ) -> None:
         """
         Create a branch (table or database) asynchronously.
-        
+
         Args:
             target: Target name (string or ORM model)
             source: Source name (string or ORM model)
@@ -822,7 +834,7 @@ class AsyncBranchManager(BaseBranchManager):
     async def delete(self, name: Union[str, Type], database: bool = False) -> None:
         """
         Delete a branch (table or database) asynchronously.
-        
+
         Args:
             name: Branch name (string or ORM model)
             database: If True, delete database branch; if False, delete table branch
@@ -838,21 +850,23 @@ class AsyncBranchManager(BaseBranchManager):
         table: Union[str, Type],
         against: Union[str, Type],
         snapshot: Optional[str] = None,
+        output: DiffOutput = DiffOutput.ROWS,
     ) -> List[Dict[str, Any]]:
         """
         Compare differences between two tables asynchronously.
-        
+
         Args:
             table: First table (string or ORM model)
             against: Second table to compare against (string or ORM model)
             snapshot: Optional snapshot name
-            
+            output: Output format - ROWS for detailed differences, COUNT for count only
+
         Returns:
             List of differences
         """
         table_name = self._get_table_name(table)
         against_name = self._get_table_name(against)
-        return await self.diff_table(table_name, against_name, snapshot)
+        return await self.diff_table(table_name, against_name, snapshot, output)
 
     async def merge(
         self,
@@ -862,7 +876,7 @@ class AsyncBranchManager(BaseBranchManager):
     ) -> None:
         """
         Merge source table into target table asynchronously.
-        
+
         Args:
             source: Source table (string or ORM model)
             target: Target table (string or ORM model)

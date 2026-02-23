@@ -68,14 +68,12 @@ class TestSQLAlchemyEngineIntegration:
             client.execute(f"USE {test_database}")
 
             # Test table creation
-            client.execute(
-                """
+            client.execute("""
                 CREATE TABLE IF NOT EXISTS test_table (
                     id INT PRIMARY KEY,
                     name VARCHAR(100)
                 )
-            """
-            )
+            """)
 
             # Test data insertion
             client.execute("INSERT INTO test_table VALUES (1, 'test')")
@@ -149,14 +147,12 @@ class TestSQLAlchemyEngineIntegration:
             await client.execute(f"USE {test_database}")
 
             # Test table creation
-            await client.execute(
-                """
+            await client.execute("""
                 CREATE TABLE IF NOT EXISTS async_test_table (
                     id INT PRIMARY KEY,
                     name VARCHAR(100)
                 )
-            """
-            )
+            """)
 
             # Test data insertion
             await client.execute("INSERT INTO async_test_table VALUES (1, 'async_test')")

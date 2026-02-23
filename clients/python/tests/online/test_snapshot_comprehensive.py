@@ -89,15 +89,13 @@ class TestSnapshotComprehensive:
         try:
             test_client.execute(f"CREATE DATABASE IF NOT EXISTS {test_db}")
             test_client.execute(f"USE {test_db}")
-            test_client.execute(
-                f"""
+            test_client.execute(f"""
                 CREATE TABLE IF NOT EXISTS {test_table} (
                     id INT PRIMARY KEY,
                     name VARCHAR(100),
                     value INT
                 )
-            """
-            )
+            """)
 
             # Clear existing data and insert test data
             test_client.execute(f"DELETE FROM {test_table}")
@@ -123,15 +121,13 @@ class TestSnapshotComprehensive:
         try:
             await test_async_client.execute(f"CREATE DATABASE IF NOT EXISTS {test_db}")
             await test_async_client.execute(f"USE {test_db}")
-            await test_async_client.execute(
-                f"""
+            await test_async_client.execute(f"""
                 CREATE TABLE IF NOT EXISTS {test_table} (
                     id INT PRIMARY KEY,
                     name VARCHAR(100),
                     value INT
                 )
-            """
-            )
+            """)
 
             # Clear existing data and insert test data
             await test_async_client.execute(f"DELETE FROM {test_table}")

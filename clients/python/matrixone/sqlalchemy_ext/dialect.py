@@ -89,14 +89,10 @@ class MatrixOneDialect(MySQLDialect):
                 result = connection.execute(sqlalchemy.text("SELECT DATABASE()"))
                 schema = result.scalar()
             except Exception:
-                raise ValueError(
-                    "Failed to get current database. Use 'USE database_name' or specify schema parameter."
-                )
+                raise ValueError("Failed to get current database. Use 'USE database_name' or specify schema parameter.")
             if not schema:
-                raise ValueError(
-                    "No database selected. Use 'USE database_name' or specify schema parameter."
-                )
-        
+                raise ValueError("No database selected. Use 'USE database_name' or specify schema parameter.")
+
         return super().get_table_names(connection, schema, **kw)
 
     def has_table(self, connection, table_name, schema=None, **kw):
@@ -108,13 +104,9 @@ class MatrixOneDialect(MySQLDialect):
                 result = connection.execute(sqlalchemy.text("SELECT DATABASE()"))
                 schema = result.scalar()
             except Exception:
-                raise ValueError(
-                    "Failed to get current database. Use 'USE database_name' or specify schema parameter."
-                )
+                raise ValueError("Failed to get current database. Use 'USE database_name' or specify schema parameter.")
             if not schema:
-                raise ValueError(
-                    "No database selected. Use 'USE database_name' or specify schema parameter."
-                )
+                raise ValueError("No database selected. Use 'USE database_name' or specify schema parameter.")
 
         return super().has_table(connection, table_name, schema, **kw)
 

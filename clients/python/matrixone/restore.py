@@ -248,9 +248,7 @@ class RestoreManager:
             result = self._get_executor().execute(sql)
             return result is not None
         except Exception as e:
-            raise RestoreError(
-                f"Failed to restore database '{database_name}' from snapshot '{snapshot_name}': {e}"
-            ) from e
+            raise RestoreError(f"Failed to restore database '{database_name}' from snapshot '{snapshot_name}': {e}") from e
 
     def restore_table(
         self,
@@ -509,9 +507,7 @@ class AsyncRestoreManager:
             result = await self._get_executor().execute(sql)
             return result is not None
         except Exception as e:
-            raise RestoreError(
-                f"Failed to restore database '{database_name}' from snapshot '{snapshot_name}': {e}"
-            ) from e
+            raise RestoreError(f"Failed to restore database '{database_name}' from snapshot '{snapshot_name}': {e}") from e
 
     async def restore_table(
         self,

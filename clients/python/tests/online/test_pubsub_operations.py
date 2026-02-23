@@ -36,8 +36,7 @@ class TestPubSubOperations:
         test_client.execute("CREATE DATABASE IF NOT EXISTS pubsub_test")
         test_client.execute("USE pubsub_test")
 
-        test_client.execute(
-            """
+        test_client.execute("""
             CREATE TABLE IF NOT EXISTS products (
                 id INT PRIMARY KEY AUTO_INCREMENT,
                 name VARCHAR(100) NOT NULL,
@@ -45,11 +44,9 @@ class TestPubSubOperations:
                 category VARCHAR(50),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """
-        )
+        """)
 
-        test_client.execute(
-            """
+        test_client.execute("""
             CREATE TABLE IF NOT EXISTS orders (
                 id INT PRIMARY KEY AUTO_INCREMENT,
                 product_id INT,
@@ -57,8 +54,7 @@ class TestPubSubOperations:
                 total_price DECIMAL(10,2),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """
-        )
+        """)
 
         try:
             # Test 1: Basic PubSub setup (as per examples)
@@ -109,19 +105,16 @@ class TestPubSubOperations:
         test_client.execute("USE pubsub_multi_test")
 
         # Create multiple tables
-        test_client.execute(
-            """
+        test_client.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id INT PRIMARY KEY AUTO_INCREMENT,
                 username VARCHAR(50) NOT NULL,
                 email VARCHAR(100) NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """
-        )
+        """)
 
-        test_client.execute(
-            """
+        test_client.execute("""
             CREATE TABLE IF NOT EXISTS posts (
                 id INT PRIMARY KEY AUTO_INCREMENT,
                 user_id INT,
@@ -129,11 +122,9 @@ class TestPubSubOperations:
                 content TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """
-        )
+        """)
 
-        test_client.execute(
-            """
+        test_client.execute("""
             CREATE TABLE IF NOT EXISTS comments (
                 id INT PRIMARY KEY AUTO_INCREMENT,
                 post_id INT,
@@ -141,8 +132,7 @@ class TestPubSubOperations:
                 content TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """
-        )
+        """)
 
         try:
             # Test multi-table PubSub operations (as per examples)
@@ -221,14 +211,12 @@ class TestPubSubOperations:
         test_client.execute("CREATE DATABASE IF NOT EXISTS pubsub_list_test")
         test_client.execute("USE pubsub_list_test")
 
-        test_client.execute(
-            """
+        test_client.execute("""
             CREATE TABLE IF NOT EXISTS test_table (
                 id INT PRIMARY KEY AUTO_INCREMENT,
                 name VARCHAR(50) NOT NULL
             )
-        """
-        )
+        """)
 
         try:
             # Test listing operations (as per examples - should work even if empty)
@@ -264,15 +252,13 @@ class TestPubSubOperations:
         await test_async_client.execute("CREATE DATABASE IF NOT EXISTS async_pubsub_test")
         await test_async_client.execute("USE async_pubsub_test")
 
-        await test_async_client.execute(
-            """
+        await test_async_client.execute("""
             CREATE TABLE IF NOT EXISTS async_test_table (
                 id INT PRIMARY KEY AUTO_INCREMENT,
                 name VARCHAR(50) NOT NULL,
                 value INT
             )
-        """
-        )
+        """)
 
         try:
             # Test async PubSub operations (as per examples)
@@ -316,14 +302,12 @@ class TestPubSubOperations:
             client.execute("CREATE DATABASE IF NOT EXISTS pubsub_log_test")
             client.execute("USE pubsub_log_test")
 
-            client.execute(
-                """
+            client.execute("""
                 CREATE TABLE IF NOT EXISTS log_test_table (
                     id INT PRIMARY KEY AUTO_INCREMENT,
                     name VARCHAR(50) NOT NULL
                 )
-            """
-            )
+            """)
 
             # Test PubSub operations with logging (as per examples)
             # Test list operations (should work even if empty)

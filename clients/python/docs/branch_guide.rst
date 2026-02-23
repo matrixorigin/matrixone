@@ -214,7 +214,7 @@ Compare differences between branches and merge them:
 
 .. code-block:: python
 
-    from matrixone import Client
+    from matrixone import Client, DiffOutput
 
     client = Client()
     client.connect(database='test')
@@ -228,25 +228,35 @@ Compare differences between branches and merge them:
     # Make changes in the branch
     client.execute("INSERT INTO users_branch (name) VALUES ('New User')")
 
-    # Compare differences
+    # Get count of differences (performance optimized)
+    diff_count = client.branch.diff_table(
+        table='users_branch',
+        against_table='users',
+        output=DiffOutput.COUNT
+    )
+    count_value = diff_count[0][0] if diff_count else 0
+    print(f"Differences found: {count_value}")
+
+    # Get detailed differences
     diffs = client.branch.diff_table(
         table='users_branch',
-        against_table='users'
+        against_table='users',
+        output=DiffOutput.ROWS  # or just omit, it's the default
     )
-    print(f"Differences found: {len(diffs)}")
+    print(f"Detailed differences: {len(diffs)}")
 
     # Merge branch back to original (skip conflicts)
     client.branch.merge_table(
         source_table='users_branch',
         target_table='users',
-        conflict_strategy='skip'
+        on_conflict='skip'
     )
 
     # Or accept source values on conflict
     client.branch.merge_table(
         source_table='users_branch',
         target_table='users',
-        conflict_strategy='accept'
+        on_conflict='accept'
     )
 
     # Clean up
@@ -345,6 +355,17 @@ Limitations
 API Reference
 -------------
 
+DiffOutput Enum
+~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    from matrixone import DiffOutput
+
+    class DiffOutput(str, Enum):
+        ROWS = 'rows'    # Return detailed differences (default)
+        COUNT = 'count'  # Return only the count of differences
+
 Table Branch Operations
 ~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -364,14 +385,15 @@ Table Branch Operations
     client.branch.diff_table(
         table: str,
         against_table: str,
-        snapshot_name: Optional[str] = None
+        snapshot_name: Optional[str] = None,
+        output: DiffOutput = DiffOutput.ROWS
     ) -> List[Dict[str, Any]]
 
     # Merge tables
     client.branch.merge_table(
         source_table: str,
         target_table: str,
-        conflict_strategy: Literal["skip", "accept"] = "skip"
+        on_conflict: Literal["skip", "accept"] = "skip"
     ) -> None
 
 Database Branch Operations
@@ -411,7 +433,8 @@ Simplified API
     client.branch.diff(
         table: Union[str, Type],
         against: Union[str, Type],
-        snapshot: Optional[str] = None
+        snapshot: Optional[str] = None,
+        output: DiffOutput = DiffOutput.ROWS
     ) -> List[Dict[str, Any]]
 
     # Merge branches

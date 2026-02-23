@@ -461,12 +461,10 @@ class TestPineconeFilter:
     def test_filter_with_boolean_like_values(self, client, test_data_setup):
         """Test filter with boolean-like values"""
         # First, let's add some test data with boolean-like values
-        client.execute(
-            """
+        client.execute("""
             INSERT INTO test_movies (id, title, genre, year, rating, director, embedding) VALUES
             (6, 'Test Movie 1', 'action', 2020, 7.5, 'Test Director', '[0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6]')
-        """
-        )
+        """)
 
         index = client.get_pinecone_index("test_movies", "embedding")
         query_vector = [0.15] * 64
@@ -480,12 +478,10 @@ class TestPineconeFilter:
     def test_filter_with_special_characters(self, client, test_data_setup):
         """Test filter with special characters in values"""
         # Add test data with special characters
-        client.execute(
-            """
+        client.execute("""
             INSERT INTO test_movies (id, title, genre, year, rating, director, embedding) VALUES
             (7, 'Movie with "quotes"', 'drama', 2021, 8.0, 'Director with apostrophe''s name', '[0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7]')
-        """
-        )
+        """)
 
         index = client.get_pinecone_index("test_movies", "embedding")
         query_vector = [0.15] * 64
@@ -656,15 +652,13 @@ class TestPineconeFilter:
     def test_edge_case_empty_table(self, client, test_data_setup):
         """Test query on empty table"""
         # Create empty table
-        client.execute(
-            """
+        client.execute("""
             CREATE TABLE empty_movies (
                 id INT PRIMARY KEY,
                 title VARCHAR(200),
                 embedding VECF32(64)
             )
-        """
-        )
+        """)
 
         index = client.get_pinecone_index("empty_movies", "embedding")
         query_vector = [0.15] * 64
@@ -677,22 +671,18 @@ class TestPineconeFilter:
     def test_edge_case_single_record(self, client, test_data_setup):
         """Test query on table with single record"""
         # Create table with single record
-        client.execute(
-            """
+        client.execute("""
             CREATE TABLE single_movie (
                 id INT PRIMARY KEY,
                 title VARCHAR(200),
                 embedding VECF32(64)
             )
-        """
-        )
+        """)
 
-        client.execute(
-            """
+        client.execute("""
             INSERT INTO single_movie (id, title, embedding) VALUES
             (1, 'Single Movie', '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]')
-        """
-        )
+        """)
 
         index = client.get_pinecone_index("single_movie", "embedding")
         query_vector = [0.5] * 64  # Exact match
