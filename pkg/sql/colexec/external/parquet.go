@@ -1985,6 +1985,12 @@ func parseStringToDecimal128(s string, precision, scale int32) (types.Decimal128
 // getParquetExpectedColCnt calculates the expected column count for parquet loading.
 // It excludes external hidden columns like __mo_filepath.
 func getParquetExpectedColCnt(param *ExternalParam) int {
+	// ColumnListLen comes from ExternScan.TbColToDataCol (built before column pruning),
+	// representing the original non-hidden column count unaffected by optimizer pruning.
+	if param.ColumnListLen > 0 {
+		return int(param.ColumnListLen)
+	}
+	// Fallback: count non-hidden attrs (for cases where ColumnListLen is not set)
 	cnt := 0
 	for _, attr := range param.Attrs {
 		if !catalog.ContainExternalHidenCol(attr.ColName) {

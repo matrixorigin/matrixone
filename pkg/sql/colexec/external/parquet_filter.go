@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -157,12 +158,11 @@ func parquetValuesToZoneMap(minVal, maxVal parquet.Value, moType types.T) index.
 		maxBytes = types.EncodeDate(&v2)
 
 	case types.T_timestamp, types.T_datetime:
-		// Parquet TIMESTAMP is int64 (micros/millis/nanos)
-		// ZoneMap comparison is ordinal, so raw int64 works
-		v1 := minVal.Int64()
-		v2 := maxVal.Int64()
-		minBytes = types.EncodeInt64(&v1)
-		maxBytes = types.EncodeInt64(&v2)
+		// Parquet stores Unix epoch micros, but MO internal Timestamp = raw + unixEpochMicroSecs.
+		// The value domains differ, so ZoneMap comparison produces wrong results.
+		// Disable RowGroup filtering for these types until proper conversion is implemented.
+		// TODO: convert Parquet values to MO internal representation (handle micros/millis/nanos and isAdjustedToUTC)
+		return nil
 
 	case types.T_varchar, types.T_char, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob:
@@ -189,6 +189,11 @@ func (h *ParquetHandler) initRowGroupFilter(param *ExternalParam) {
 	}
 	h.filterExpr = param.Filter.FilterExpr
 	if h.filterExpr == nil || len(param.Filter.columnMap) == 0 {
+		return
+	}
+
+	// Check if the expression is zonemappable (aligns with reader_zonemap.go:47)
+	if !plan2.ExprIsZonemappable(param.Ctx, h.filterExpr) {
 		return
 	}
 
@@ -230,12 +235,13 @@ func (h *ParquetHandler) canSkipRowGroup(
 		if parquetColIdx >= len(chunks) {
 			return false
 		}
-		moType := types.T(param.Cols[planColPos].Typ.Id)
+		colsIdx := param.Filter.columnMap[planColPos]
+		moType := types.T(param.Cols[colsIdx].Typ.Id)
 		meta := buildColumnMetaFromParquet(chunks[parquetColIdx], moType)
 		if meta == nil {
 			return false
 		}
-		fetcher.metas[uint16(planColPos)] = meta
+		fetcher.metas[uint16(parquetColIdx)] = meta
 	}
 
 	zms := make([]objectio.ZoneMap, param.Filter.AuxIdCnt)

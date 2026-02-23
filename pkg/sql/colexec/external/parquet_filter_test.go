@@ -140,9 +140,14 @@ func TestParquetValuesToZoneMap_Date(t *testing.T) {
 func TestParquetValuesToZoneMap_Timestamp(t *testing.T) {
 	minVal := parquet.Int64Value(0)
 	maxVal := parquet.Int64Value(1000000)
+
+	// Timestamp ZoneMap is disabled: Parquet stores Unix epoch micros but MO internal
+	// Timestamp = raw + unixEpochMicroSecs. Value domains differ, so filtering is skipped.
 	zm := parquetValuesToZoneMap(minVal, maxVal, types.T_timestamp)
-	require.NotNil(t, zm)
-	require.True(t, zm.IsInited())
+	require.Nil(t, zm)
+
+	zm = parquetValuesToZoneMap(minVal, maxVal, types.T_datetime)
+	require.Nil(t, zm)
 }
 
 func TestParquetValuesToZoneMap_NullValues(t *testing.T) {
@@ -513,4 +518,202 @@ func buildColumnMetaForTest(zm index.ZM, nullCnt uint32) objectio.ColumnMeta {
 	meta.SetZoneMap(zm)
 	meta.SetNullCnt(nullCnt)
 	return meta
+}
+
+// --- Bug fix verification tests ---
+
+// TestInitRowGroupFilter_NonZonemappableExpr verifies RC2 fix:
+// non-zonemappable expressions (%, ABS, CAST, NOT, etc.) should disable
+// RowGroup filtering (canFilter=false) instead of incorrectly skipping all RowGroups.
+func TestInitRowGroupFilter_NonZonemappableExpr(t *testing.T) {
+	buf := writeParquetInt32File(t, []int32{1, 2, 3}, 0)
+	f, err := parquet.OpenFile(bytes.NewReader(buf), int64(len(buf)))
+	require.NoError(t, err)
+
+	h := &ParquetHandler{file: f, batchCnt: maxParquetBatchCnt}
+	param := makeParquetParam("c", types.T_int32)
+
+	// ABS (function ID 38) is NOT zonemappable (class=Function_STRICT, no ZONEMAPPABLE flag).
+	// Encoded overload ID: (38 << 32) | 0 = 163208757248
+	// ExprIsZonemappable → GetFunctionIsZonemappableById → returns false → canFilter=false
+	absObj := int64(38)<<32 | 0
+	param.Filter = &FilterParam{
+		FilterExpr: &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_bool)},
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: "abs", Obj: absObj},
+					Args: []*plan.Expr{
+						{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+					},
+				},
+			},
+		},
+		columnMap: map[int]int{0: 0},
+		AuxIdCnt:  1,
+	}
+
+	require.NoError(t, h.prepare(param))
+	// RC2 fix: non-zonemappable expr → canFilter must be false
+	require.False(t, h.canFilter, "non-zonemappable expression should disable RowGroup filtering")
+}
+
+// TestCanSkipRowGroup_ColumnPruning verifies RC3 fix:
+// when column pruning causes planColPos != parquetColIdx, the fetcher key
+// must align with EvaluateFilterByZoneMap's lookup key (parquetColIdx).
+func TestCanSkipRowGroup_ColumnPruning(t *testing.T) {
+	// Create a 4-column parquet file: id(0), val(1), score(2), cat(3)
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("x", parquet.Group{
+		"id":    parquet.Leaf(parquet.Int32Type),
+		"val":   parquet.Leaf(parquet.Int32Type),
+		"score": parquet.Leaf(parquet.Int32Type),
+		"cat":   parquet.Leaf(parquet.Int32Type),
+	})
+	type row4 struct {
+		ID    int32 `parquet:"id"`
+		Val   int32 `parquet:"val"`
+		Score int32 `parquet:"score"`
+		Cat   int32 `parquet:"cat"`
+	}
+	w := parquet.NewGenericWriter[row4](&buf, schema)
+	for i := int32(0); i < 10; i++ {
+		_, err := w.Write([]row4{{ID: i, Val: i * 3, Score: i * 10, Cat: i % 5}})
+		require.NoError(t, err)
+	}
+	require.NoError(t, w.Close())
+
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+
+	// Simulate column pruning: SELECT score FROM test WHERE score > 5
+	// After pruning, only "score" remains. planColPos=0, but parquetColIdx=2.
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx:   context.Background(),
+			Attrs: []plan.ExternAttr{{ColName: "score", ColIndex: 0}},
+			Cols:  []*plan.ColDef{{Typ: plan.Type{Id: int32(types.T_int32), NotNullable: true}}},
+			Extern: &tree.ExternParam{
+				ExParamConst: tree.ExParamConst{ScanType: tree.INLINE},
+			},
+			FileSize: []int64{int64(buf.Len())},
+		},
+		ExParam: ExParam{
+			Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1},
+			Filter: &FilterParam{
+				FilterExpr: makeConstTrueExpr(),
+				columnMap:  map[int]int{0: 0}, // exprColPos=0 → param.Cols index=0
+				AuxIdCnt:   1,
+			},
+		},
+	}
+	param.Extern.Data = string(buf.Bytes())
+
+	h := &ParquetHandler{file: f, batchCnt: maxParquetBatchCnt}
+	require.NoError(t, h.prepare(param))
+
+	// Verify: planColPos=0 maps to parquetColIdx=2 (score is the 3rd column in parquet)
+	require.True(t, h.canFilter)
+	require.Equal(t, 2, h.filterColMap[0], "planColPos=0 should map to parquetColIdx=2 (score)")
+
+	// The key test: canSkipRowGroup should NOT skip (const true expr → needRead=true)
+	// Before RC3 fix, fetcher.metas[0]=meta but lookup used MustGetColumn(2) → miss → skip
+	proc := testutil.NewProc(t)
+	rg := f.RowGroups()[0]
+	skipped := h.canSkipRowGroup(rg, param, proc)
+	require.False(t, skipped, "RowGroup should NOT be skipped with const-true filter after RC3 fix")
+}
+
+// TestCanSkipRowGroup_ColumnPruning_ActualFilter tests RC3 with a real
+// comparison filter that should match some data, verifying the ZoneMap
+// lookup works correctly after column pruning.
+func TestCanSkipRowGroup_ColumnPruning_ActualFilter(t *testing.T) {
+	// Create a 3-column parquet file: a(0), b(1), c(2)
+	// Values: a=[1..5], b=[10..50], c=[100..500]
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("x", parquet.Group{
+		"a": parquet.Leaf(parquet.Int32Type),
+		"b": parquet.Leaf(parquet.Int32Type),
+		"c": parquet.Leaf(parquet.Int32Type),
+	})
+	type row3 struct {
+		A int32 `parquet:"a"`
+		B int32 `parquet:"b"`
+		C int32 `parquet:"c"`
+	}
+	w := parquet.NewGenericWriter[row3](&buf, schema)
+	for i := int32(1); i <= 5; i++ {
+		_, err := w.Write([]row3{{A: i, B: i * 10, C: i * 100}})
+		require.NoError(t, err)
+	}
+	require.NoError(t, w.Close())
+
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+
+	// Simulate: SELECT c FROM test WHERE c > 99999
+	// After pruning: only column "c" (planColPos=0, parquetColIdx=2)
+	// c range is [100, 500], so c > 99999 should allow skipping the RowGroup
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx:   context.Background(),
+			Attrs: []plan.ExternAttr{{ColName: "c", ColIndex: 0}},
+			Cols:  []*plan.ColDef{{Name: "c", Typ: plan.Type{Id: int32(types.T_int32), NotNullable: true}}},
+			Extern: &tree.ExternParam{
+				ExParamConst: tree.ExParamConst{ScanType: tree.INLINE},
+			},
+			FileSize: []int64{int64(buf.Len())},
+		},
+		ExParam: ExParam{
+			Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1},
+			Filter:    &FilterParam{},
+		},
+	}
+	param.Extern.Data = string(buf.Bytes())
+
+	// Build a "c > 99999" filter expression
+	// This is a zonemappable expression: GT(col[0], literal(99999))
+	// GREAT_THAN function ID = 2, overload index = 0, encoded: (2 << 32) | 0
+	gtObj := int64(2)<<32 | 0
+	gtExpr := &plan.Expr{
+		Typ:   plan.Type{Id: int32(types.T_bool)},
+		AuxId: 2,
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: ">", Obj: gtObj},
+				Args: []*plan.Expr{
+					{
+						Typ:   plan.Type{Id: int32(types.T_int32)},
+						AuxId: 0,
+						Expr:  &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0, Name: "c"}},
+					},
+					{
+						Typ:   plan.Type{Id: int32(types.T_int32)},
+						AuxId: 1,
+						Expr:  &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I32Val{I32Val: 99999}}},
+					},
+				},
+			},
+		},
+	}
+	param.Filter = &FilterParam{
+		FilterExpr: gtExpr,
+		columnMap:  map[int]int{0: 0},
+		AuxIdCnt:   3,
+	}
+
+	h := &ParquetHandler{file: f, batchCnt: maxParquetBatchCnt}
+	require.NoError(t, h.prepare(param))
+	require.True(t, h.canFilter)
+	require.Equal(t, 2, h.filterColMap[0], "planColPos=0 should map to parquetColIdx=2")
+
+	// Before RC3 fix: fetcher.metas[0]=meta, but lookup uses MustGetColumn(2) → miss
+	// → returns uninitialized ZM → selected=false → canSkipRowGroup returns true (wrong: it should
+	//   actually skip because c max=500 < 99999, but for the WRONG reason)
+	// After RC3 fix: fetcher.metas[2]=meta, lookup MustGetColumn(2) → hit → correct ZM evaluation
+	proc := testutil.NewProc(t)
+	rg := f.RowGroups()[0]
+	skipped := h.canSkipRowGroup(rg, param, proc)
+	// c range [100, 500], filter c > 99999 → ZoneMap says no match → should skip
+	require.True(t, skipped, "RowGroup with c=[100,500] should be skipped for c > 99999")
 }
