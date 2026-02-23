@@ -214,7 +214,7 @@ Compare differences between branches and merge them:
 
 .. code-block:: python
 
-    from matrixone import Client, DiffOutput
+    from matrixone import Client, DiffOutput, MergeConflictStrategy
 
     client = Client()
     client.connect(database='test')
@@ -249,14 +249,14 @@ Compare differences between branches and merge them:
     client.branch.merge_table(
         source_table='users_branch',
         target_table='users',
-        on_conflict='skip'
+        on_conflict=MergeConflictStrategy.SKIP
     )
 
     # Or accept source values on conflict
     client.branch.merge_table(
         source_table='users_branch',
         target_table='users',
-        on_conflict='accept'
+        on_conflict=MergeConflictStrategy.ACCEPT
     )
 
     # Clean up
@@ -355,8 +355,11 @@ Limitations
 API Reference
 -------------
 
+Enums
+~~~~~
+
 DiffOutput Enum
-~~~~~~~~~~~~~~~
+^^^^^^^^^^^^^^^
 
 .. code-block:: python
 
@@ -365,6 +368,17 @@ DiffOutput Enum
     class DiffOutput(str, Enum):
         ROWS = 'rows'    # Return detailed differences (default)
         COUNT = 'count'  # Return only the count of differences
+
+MergeConflictStrategy Enum
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+    from matrixone import MergeConflictStrategy
+
+    class MergeConflictStrategy(str, Enum):
+        SKIP = 'skip'      # Skip conflicting rows (default)
+        ACCEPT = 'accept'  # Accept source values on conflict
 
 Table Branch Operations
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -393,7 +407,7 @@ Table Branch Operations
     client.branch.merge_table(
         source_table: str,
         target_table: str,
-        on_conflict: Literal["skip", "accept"] = "skip"
+        on_conflict: Union[str, MergeConflictStrategy] = "skip"
     ) -> None
 
 Database Branch Operations
@@ -441,7 +455,7 @@ Simplified API
     client.branch.merge(
         source: Union[str, Type],
         target: Union[str, Type],
-        on_conflict: Literal["skip", "accept"] = "skip"
+        on_conflict: Union[str, MergeConflictStrategy] = "skip"
     ) -> None
 
 See Also

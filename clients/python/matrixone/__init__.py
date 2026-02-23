@@ -56,7 +56,7 @@ from .pubsub import Publication, PubSubManager, Subscription
 from .restore import RestoreManager
 from .snapshot import Snapshot, SnapshotLevel, SnapshotManager
 from .clone import CloneManager
-from .branch import BranchManager, AsyncBranchManager, DiffOutput
+from .branch import BranchManager, AsyncBranchManager, DiffOutput, MergeConflictStrategy
 from .stage import Stage, StageManager, AsyncStageManager
 from .cdc import CDCTaskInfo, CDCWatermarkInfo, CDCManager, AsyncCDCManager, build_mysql_uri
 from .ivf_rank import IVFRankMode, IVFRankOptions

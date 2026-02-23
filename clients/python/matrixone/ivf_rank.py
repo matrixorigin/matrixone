@@ -12,7 +12,7 @@ Supported modes:
 """
 
 from enum import Enum
-from typing import Optional, Dict, Any, Literal
+from typing import Optional, Dict, Any
 
 
 class IVFRankMode(Enum):

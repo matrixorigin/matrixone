@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Union
 
 if TYPE_CHECKING:
     from .sqlalchemy_ext import VectorOpType
+    from .ivf_rank import IVFRankMode
 
 
 def _extract_table_name(table_name_or_model: Union[str, type]) -> str:
@@ -443,7 +444,7 @@ class VectorManager(_VectorManagerBase):
             >>> client.execute("DROP TABLE documents")
             >>> client.disconnect()
         """
-        from .ivf_rank import IVFRankMode, IVFRankOptions
+        from .ivf_rank import IVFRankMode
 
         try:
             table_name = _extract_table_name(table_name)
@@ -801,7 +802,7 @@ class AsyncVectorManager(_VectorManagerBase):
             >>>
             >>> asyncio.run(example())
         """
-        from .ivf_rank import IVFRankMode, IVFRankOptions
+        from .ivf_rank import IVFRankMode
 
         try:
             table_name = _extract_table_name(table_name)

@@ -173,7 +173,7 @@ class PitrManager:
 
             result = self._get_executor().execute(sql)
             if result is None:
-                raise PitrError(f"Failed to create cluster PITR '{name}'") from e
+                raise PitrError(f"Failed to create cluster PITR '{name}'")
 
             # Return PITR object (we'll get the actual details via SHOW PITR)
             return self.get(name)
@@ -230,7 +230,7 @@ class PitrManager:
 
             result = self._get_executor().execute(sql)
             if result is None:
-                raise PitrError(f"Failed to create account PITR '{name}'") from e
+                raise PitrError(f"Failed to create account PITR '{name}'")
 
             return self.get(name)
 
@@ -271,7 +271,7 @@ class PitrManager:
 
             result = self._get_executor().execute(sql)
             if result is None:
-                raise PitrError(f"Failed to create database PITR '{name}'") from e
+                raise PitrError(f"Failed to create database PITR '{name}'")
 
             return self.get(name)
 
@@ -321,7 +321,7 @@ class PitrManager:
 
             result = self._get_executor().execute(sql)
             if result is None:
-                raise PitrError(f"Failed to create table PITR '{name}'") from e
+                raise PitrError(f"Failed to create table PITR '{name}'")
 
             return self.get(name)
 
@@ -349,7 +349,7 @@ class PitrManager:
             result = self._get_executor().execute(sql)
 
             if not result or not result.rows:
-                raise PitrError(f"PITR '{name}' not found") from e
+                raise PitrError(f"PITR '{name}' not found")
 
             row = result.rows[0]
             return self._row_to_pitr(row)
@@ -431,7 +431,7 @@ class PitrManager:
 
             result = self._get_executor().execute(sql)
             if result is None:
-                raise PitrError(f"Failed to alter PITR '{name}'") from e
+                raise PitrError(f"Failed to alter PITR '{name}'")
 
             return self.get(name)
 
@@ -465,11 +465,11 @@ class PitrManager:
     def _validate_range(self, range_value: int, range_unit: str) -> None:
         """Validate PITR range parameters"""
         if not (1 <= range_value <= 100):
-            raise PitrError("Range value must be between 1 and 100") from e
+            raise PitrError("Range value must be between 1 and 100")
 
         valid_units = ["h", "d", "mo", "y"]
         if range_unit not in valid_units:
-            raise PitrError(f"Range unit must be one of: {', '.join(valid_units)}") from e
+            raise PitrError(f"Range unit must be one of: {', '.join(valid_units)}")
 
     def _row_to_pitr(self, row: tuple) -> Pitr:
         """Convert database row to Pitr object"""

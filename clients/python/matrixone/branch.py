@@ -18,11 +18,19 @@ MatrixOne Branch Management
 Unified branch management supporting sync/async and client/session executors.
 """
 
-from typing import Optional, Literal, Union, Any, Dict, List, Type
+from typing import Optional, Union, Any, Dict, List, Type
 from enum import Enum
 
 from .exceptions import BranchError, ConnectionError
 from .version import requires_version
+
+try:
+    from sqlalchemy.orm import DeclarativeMeta
+
+    SQLALCHEMY_AVAILABLE = True
+except ImportError:
+    SQLALCHEMY_AVAILABLE = False
+    DeclarativeMeta = type  # Fallback type
 
 
 class DiffOutput(str, Enum):
@@ -30,6 +38,13 @@ class DiffOutput(str, Enum):
 
     ROWS = 'rows'
     COUNT = 'count'
+
+
+class MergeConflictStrategy(str, Enum):
+    """Merge conflict resolution strategies"""
+
+    SKIP = 'skip'
+    ACCEPT = 'accept'
 
 
 class BaseBranchManager:
@@ -152,13 +167,18 @@ class BaseBranchManager:
         self,
         source_table: str,
         target_table: str,
-        on_conflict: Literal["skip", "accept"] = "skip",
+        on_conflict: Union[str, MergeConflictStrategy] = "skip",
     ) -> str:
         """Build DATA BRANCH MERGE SQL statement"""
         if not source_table or not isinstance(source_table, str):
             raise BranchError("source_table must be a non-empty string")
         if not target_table or not isinstance(target_table, str):
             raise BranchError("target_table must be a non-empty string")
+
+        # Convert enum to string if needed
+        if isinstance(on_conflict, MergeConflictStrategy):
+            on_conflict = on_conflict.value
+
         if on_conflict not in ("skip", "accept"):
             raise BranchError(f"on_conflict must be 'skip' or 'accept', got '{on_conflict}'")
         return f"data branch merge {source_table} into {target_table} when conflict {on_conflict}"
@@ -407,7 +427,7 @@ class BranchManager(BaseBranchManager):
         self,
         source_table: str,
         target_table: str,
-        on_conflict: Literal["skip", "accept"] = "skip",
+        on_conflict: Union[str, MergeConflictStrategy] = "skip",
     ) -> None:
         """
         Merge one table into another with conflict resolution.
@@ -519,7 +539,7 @@ class BranchManager(BaseBranchManager):
         self,
         source: Union[str, Type],
         target: Union[str, Type],
-        on_conflict: Literal["skip", "accept"] = "skip",
+        on_conflict: Union[str, MergeConflictStrategy] = "skip",
     ) -> None:
         """
         Merge source table into target table.
@@ -782,7 +802,7 @@ class AsyncBranchManager(BaseBranchManager):
         self,
         source_table: str,
         target_table: str,
-        on_conflict: Literal["skip", "accept"] = "skip",
+        on_conflict: Union[str, MergeConflictStrategy] = "skip",
     ) -> None:
         """
         Merge one table into another with conflict resolution asynchronously.
@@ -872,7 +892,7 @@ class AsyncBranchManager(BaseBranchManager):
         self,
         source: Union[str, Type],
         target: Union[str, Type],
-        on_conflict: Literal["skip", "accept"] = "skip",
+        on_conflict: Union[str, MergeConflictStrategy] = "skip",
     ) -> None:
         """
         Merge source table into target table asynchronously.

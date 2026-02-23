@@ -33,6 +33,7 @@ This example demonstrates the complete branch functionality of MatrixOne.
 import asyncio
 import time
 from matrixone import Client, AsyncClient
+from matrixone.branch import DiffOutput, MergeConflictStrategy
 from matrixone.orm import declarative_base
 from sqlalchemy import Column, Integer, String, Numeric
 from matrixone.logger import create_default_logger
@@ -149,11 +150,11 @@ class BranchOperationsDemo:
             # Make changes in dev (data only, not schema)
             client.execute("INSERT INTO users_dev VALUES (3, 'Charlie', 'charlie@example.com', 'active')")
 
-            # Compare
-            diffs = client.branch.diff('users_dev', 'users_prod')
+            # Compare (get count of differences)
+            diffs = client.branch.diff('users_dev', 'users_prod', output=DiffOutput.COUNT)
 
             # Merge
-            client.branch.merge('users_dev', 'users_prod', on_conflict='accept')
+            client.branch.merge('users_dev', 'users_prod', on_conflict=MergeConflictStrategy.ACCEPT)
             result = client.execute("SELECT COUNT(*) FROM users_prod")
             count = result.rows[0][0]
 
@@ -256,7 +257,7 @@ class BranchOperationsDemo:
             avg_b = float(result.rows[0][0])
 
             # Merge winner
-            client.branch.merge('products_b', 'products', on_conflict='accept')
+            client.branch.merge('products_b', 'products', on_conflict=MergeConflictStrategy.ACCEPT)
 
             client.execute("DROP TABLE products_a")
             client.execute("DROP TABLE products_b")
@@ -303,8 +304,8 @@ class BranchOperationsDemo:
             client.execute("UPDATE inventory_team_b SET quantity = 150 WHERE id = 1")
 
             # Merge both
-            client.branch.merge('inventory_team_a', 'inventory', on_conflict='accept')
-            client.branch.merge('inventory_team_b', 'inventory', on_conflict='accept')
+            client.branch.merge('inventory_team_a', 'inventory', on_conflict=MergeConflictStrategy.ACCEPT)
+            client.branch.merge('inventory_team_b', 'inventory', on_conflict=MergeConflictStrategy.ACCEPT)
 
             client.execute("DROP TABLE inventory_team_a")
             client.execute("DROP TABLE inventory_team_b")
@@ -393,7 +394,7 @@ class BranchOperationsDemo:
 
             # Async branch operations
             await async_client.branch.create('async_test_branch', 'async_test')
-            diffs = await async_client.branch.diff('async_test_branch', 'async_test')
+            diffs = await async_client.branch.diff('async_test_branch', 'async_test', output=DiffOutput.COUNT)
             await async_client.branch.delete('async_test_branch')
 
             await async_client.execute("DROP TABLE async_test")

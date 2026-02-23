@@ -33,7 +33,7 @@ This feature is essential for:
 import asyncio
 import time
 from matrixone import Client, AsyncClient
-from matrixone.branch import DiffOutput
+from matrixone.branch import DiffOutput, MergeConflictStrategy
 from matrixone.logger import create_default_logger
 from matrixone.config import get_connection_params
 
