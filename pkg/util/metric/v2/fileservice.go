@@ -246,10 +246,10 @@ var (
 		},
 		[]string{"phase"},
 	)
-	FSDiskCacheWriteDurationTotal     = fsDiskCacheWriteDuration.WithLabelValues("total")
-	FSDiskCacheWriteDurationWaitLock  = fsDiskCacheWriteDuration.WithLabelValues("wait-lock")
-	FSDiskCacheWriteDurationCopy      = fsDiskCacheWriteDuration.WithLabelValues("copy")
-	FSDiskCacheWriteDurationSync      = fsDiskCacheWriteDuration.WithLabelValues("sync")
+	FSDiskCacheWriteDurationTotal       = fsDiskCacheWriteDuration.WithLabelValues("total")
+	FSDiskCacheWriteDurationWaitLock    = fsDiskCacheWriteDuration.WithLabelValues("wait-lock")
+	FSDiskCacheWriteDurationCopy        = fsDiskCacheWriteDuration.WithLabelValues("copy")
+	FSDiskCacheWriteDurationSync        = fsDiskCacheWriteDuration.WithLabelValues("sync")
 	FSDiskCacheWriteDurationCloseRename = fsDiskCacheWriteDuration.WithLabelValues("close-rename")
 
 	// FSDiskCacheWriteBytes tracks the bytes written to disk cache
