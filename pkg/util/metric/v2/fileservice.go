@@ -221,4 +221,61 @@ var (
 			Help:      "Total number of disk cache errors",
 		},
 	)
+
+	// FSDiskCacheWriteCounter tracks the number of disk cache write operations
+	fsDiskCacheWriteCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "disk_cache_write_total",
+			Help:      "Total number of disk cache write operations",
+		},
+		[]string{"type"},
+	)
+	FSDiskCacheWriteCounter     = fsDiskCacheWriteCounter.WithLabelValues("write")
+	FSDiskCacheWriteSkipCounter = fsDiskCacheWriteCounter.WithLabelValues("skip-exists")
+
+	// FSDiskCacheWriteDuration tracks the duration of disk cache write phases
+	fsDiskCacheWriteDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "disk_cache_write_duration_seconds",
+			Help:      "Duration of disk cache write phases in seconds",
+			Buckets:   getDurationBuckets(),
+		},
+		[]string{"phase"},
+	)
+	FSDiskCacheWriteDurationTotal     = fsDiskCacheWriteDuration.WithLabelValues("total")
+	FSDiskCacheWriteDurationWaitLock  = fsDiskCacheWriteDuration.WithLabelValues("wait-lock")
+	FSDiskCacheWriteDurationCopy      = fsDiskCacheWriteDuration.WithLabelValues("copy")
+	FSDiskCacheWriteDurationSync      = fsDiskCacheWriteDuration.WithLabelValues("sync")
+	FSDiskCacheWriteDurationCloseRename = fsDiskCacheWriteDuration.WithLabelValues("close-rename")
+
+	// FSDiskCacheWriteBytes tracks the bytes written to disk cache
+	FSDiskCacheWriteBytes = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "disk_cache_write_bytes",
+			Help:      "Bytes written to disk cache per operation",
+			Buckets:   prometheus.ExponentialBuckets(1024, 2.0, 20), // 1KB to 512MB
+		},
+	)
+
+	// FSDiskCacheAsyncWriteGauge tracks the number of in-flight async disk cache writes
+	FSDiskCacheAsyncWriteGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "disk_cache_async_write_inflight",
+			Help:      "Number of in-flight async disk cache write goroutines",
+		},
+	)
+)
+
+// IO merger timeout metrics
+var (
+	// IOMergerCounterTimeout tracks the number of IO merger wait timeouts
+	IOMergerCounterTimeout = ioMergerCounter.WithLabelValues("timeout")
 )

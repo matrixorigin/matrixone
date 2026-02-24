@@ -455,6 +455,11 @@ func (d *DiskCache) writeFile(
 	openReader func(context.Context) (io.ReadCloser, error),
 ) (written bool, err error) {
 
+	tTotal := time.Now()
+	defer func() {
+		metric.FSDiskCacheWriteDurationTotal.Observe(time.Since(tTotal).Seconds())
+	}()
+
 	var numError int64
 	defer func() {
 		if numError > 0 {
@@ -482,17 +487,21 @@ func (d *DiskCache) writeFile(
 		}
 	}()
 
+	tLock := time.Now()
 	doneUpdate := d.startUpdate(diskPath)
+	metric.FSDiskCacheWriteDurationWaitLock.Observe(time.Since(tLock).Seconds())
 	defer doneUpdate()
 
 	if _, ok := d.cache.Get(ctx, diskPath); ok {
 		// already exists
+		metric.FSDiskCacheWriteSkipCounter.Add(1)
 		return false, nil
 	}
 	stat, err := os.Stat(diskPath)
 	if err == nil {
 		// file exists
 		d.cache.Set(ctx, diskPath, struct{}{}, fileSize(stat))
+		metric.FSDiskCacheWriteSkipCounter.Add(1)
 		return false, nil
 	}
 
@@ -533,14 +542,18 @@ func (d *DiskCache) writeFile(
 	var buf []byte
 	put := ioBufferPool.Get(&buf)
 	defer put.Put()
+	tCopy := time.Now()
 	_, err = io.CopyBuffer(f, from, buf)
+	metric.FSDiskCacheWriteDurationCopy.Observe(time.Since(tCopy).Seconds())
 	if err != nil {
 		return false, err
 	}
 
+	tSync := time.Now()
 	if err := f.Sync(); err != nil {
 		return false, err
 	}
+	metric.FSDiskCacheWriteDurationSync.Observe(time.Since(tSync).Seconds())
 
 	stat, err = f.Stat()
 	if err != nil {
@@ -548,17 +561,23 @@ func (d *DiskCache) writeFile(
 	}
 	size := fileSize(stat)
 
+	tCloseRename := time.Now()
 	if err := f.Close(); err != nil {
 		return false, err
 	}
 	if err := os.Rename(f.Name(), diskPath); err != nil {
 		return false, err
 	}
+	metric.FSDiskCacheWriteDurationCloseRename.Observe(time.Since(tCloseRename).Seconds())
+
 	logutil.Debug("disk cache file written",
 		zap.Any("path", diskPath),
 	)
 
 	d.cache.Set(ctx, diskPath, struct{}{}, size)
+
+	metric.FSDiskCacheWriteCounter.Add(1)
+	metric.FSDiskCacheWriteBytes.Observe(float64(size))
 
 	return true, nil
 }

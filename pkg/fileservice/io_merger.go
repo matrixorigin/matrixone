@@ -60,6 +60,7 @@ func (i *IOMerger) makeWaitFunc(key IOMergeKey, ch chan struct{}, maxWaitDuratio
 				if time.Since(t0) > maxWaitDuration {
 					// don't wait too long
 					// number of I/O requests may increase, but we don't want to hurt latencies too much.
+					metric.IOMergerCounterTimeout.Add(1)
 					return
 				}
 				logutil.Warn("wait io for too long",

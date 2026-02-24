@@ -952,12 +952,12 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 	// The disk cache write includes f.Sync() which can take 10-30 seconds under high concurrency,
 	// blocking all waiters in IO merger. By making this async, done() returns quickly and waiters
 	// can proceed without waiting for disk I/O.
-	// 
+	//
 	// Data consistency is guaranteed by:
 	// 1. Disk cache uses temp file + atomic rename, so readers never see partial data
 	// 2. Disk cache has startUpdate/waitUpdateComplete locking mechanism for concurrent access
 	// 3. writeFile already ignores errors internally
-	// 
+	//
 	// Note: Waiters may not hit memory cache immediately after done() because memCache.Update()
 	// is also deferred and executes after done(). This is existing behavior and waiters will
 	// fall back to disk cache or S3 if needed.
@@ -972,6 +972,8 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 		dataCopy := make([]byte, len(contentBytes))
 		copy(dataCopy, contentBytes)
 		go func() {
+			metric.FSDiskCacheAsyncWriteGauge.Inc()
+			defer metric.FSDiskCacheAsyncWriteGauge.Dec()
 			t0 := time.Now()
 			_ = diskCache.SetFile(context.Background(), filePath, func(context.Context) (io.ReadCloser, error) {
 				return io.NopCloser(bytes.NewReader(dataCopy)), nil

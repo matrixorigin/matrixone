@@ -50,8 +50,6 @@ var (
 	str_write_writerforread_end               = internString("write WriterForRead end")
 	str_io_copybuffer_begin                   = internString("io.CopyBuffer begin")
 	str_io_copybuffer_end                     = internString("io.CopyBuffer end")
-	str_disk_cache_setfile_begin              = internString("disk cache SetFile begin")
-	str_disk_cache_setfile_end                = internString("disk cache SetFile end")
 	str_retryable_reader_new_reader_begin     = internString("retryable reader new reader begin")
 	str_retryable_reader_new_reader_end       = internString("retryable reader new reader end")
 	str_awssdkv2_get_object_begin             = internString("AwsSDKv2 GetObject begin")
