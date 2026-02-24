@@ -953,6 +953,9 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 	// blocking all waiters in IO merger. By making this async, done() returns quickly and waiters
 	// can proceed without waiting for disk I/O.
 	//
+	// When asyncUpdate is false (e.g. in tests), the write is done synchronously to ensure
+	// deterministic cache population for test assertions.
+	//
 	// Data consistency is guaranteed by:
 	// 1. Disk cache uses temp file + atomic rename, so readers never see partial data
 	// 2. Disk cache has startUpdate/waitUpdateComplete locking mechanism for concurrent access
@@ -971,7 +974,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 		// Make a copy of contentBytes for the goroutine since the original may be reused
 		dataCopy := make([]byte, len(contentBytes))
 		copy(dataCopy, contentBytes)
-		go func() {
+		writeFn := func() {
 			metric.FSDiskCacheAsyncWriteGauge.Inc()
 			defer metric.FSDiskCacheAsyncWriteGauge.Dec()
 			t0 := time.Now()
@@ -979,7 +982,12 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 				return io.NopCloser(bytes.NewReader(dataCopy)), nil
 			})
 			metric.FSReadDurationSetCachedData.Observe(time.Since(t0).Seconds())
-		}()
+		}
+		if s.asyncUpdate {
+			go writeFn()
+		} else {
+			writeFn()
+		}
 	}
 
 	return nil
