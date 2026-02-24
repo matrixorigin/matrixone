@@ -128,7 +128,21 @@ var (
 	FSReadDurationStat              = fsReadWriteDuration.WithLabelValues("stat")
 	FSReadDurationIOReadAll         = fsReadWriteDuration.WithLabelValues("io-read-all")
 
+	// Read total duration (entire Read() call)
+	FSReadDurationTotal = fsReadWriteDuration.WithLabelValues("read-total")
+	// IO merger wait in Read()
+	FSReadDurationIOMerger = fsReadWriteDuration.WithLabelValues("read-io-merger")
+	// s.read() call duration (S3 download + entry processing + disk cache SetFile)
+	FSReadDurationS3Read = fsReadWriteDuration.WithLabelValues("s3-read")
+	// disk cache SetFile in read()
+	FSReadDurationDiskCacheSetFileInRead = fsReadWriteDuration.WithLabelValues("read-disk-cache-setfile")
+
+	// Write total duration
 	FSWriteDurationWrite = fsReadWriteDuration.WithLabelValues("write")
+	// Write sub-phases
+	FSWriteDurationExists          = fsReadWriteDuration.WithLabelValues("write-exists")
+	FSWriteDurationStorage         = fsReadWriteDuration.WithLabelValues("write-storage")
+	FSWriteDurationDiskCacheInWrite = fsReadWriteDuration.WithLabelValues("write-disk-cache-setfile")
 )
 
 var (
