@@ -44,16 +44,14 @@ class TestSyncTransactionContexts:
         client.execute(f"USE {test_db}")
 
         client.execute("DROP TABLE IF EXISTS sync_tx_docs")
-        client.execute(
-            """
+        client.execute("""
             CREATE TABLE sync_tx_docs (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 title VARCHAR(255) NOT NULL,
                 content TEXT NOT NULL,
                 category VARCHAR(100) NOT NULL
             )
-        """
-        )
+        """)
 
         # Insert test data
         test_docs = [
@@ -65,12 +63,10 @@ class TestSyncTransactionContexts:
         ]
 
         for title, content, category in test_docs:
-            client.execute(
-                f"""
+            client.execute(f"""
                 INSERT INTO sync_tx_docs (title, content, category)
                 VALUES ('{title}', '{content}', '{category}')
-            """
-            )
+            """)
 
         # Create fulltext index
         client.fulltext_index.create("sync_tx_docs", "ftidx_sync_tx", ["title", "content"])
@@ -160,16 +156,14 @@ class TestAsyncTransactionContexts:
         await client.execute(f"USE {test_db}")
 
         await client.execute("DROP TABLE IF EXISTS async_tx_docs")
-        await client.execute(
-            """
+        await client.execute("""
             CREATE TABLE async_tx_docs (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 title VARCHAR(255) NOT NULL,
                 content TEXT NOT NULL,
                 category VARCHAR(100) NOT NULL
             )
-        """
-        )
+        """)
 
         # Insert test data
         test_docs = [
@@ -197,12 +191,10 @@ class TestAsyncTransactionContexts:
         ]
 
         for title, content, category in test_docs:
-            await client.execute(
-                f"""
+            await client.execute(f"""
                 INSERT INTO async_tx_docs (title, content, category)
                 VALUES ('{title}', '{content}', '{category}')
-            """
-            )
+            """)
 
         # Create fulltext index
         await client.fulltext_index.create("async_tx_docs", "ftidx_async_tx", ["title", "content"])
@@ -299,15 +291,13 @@ class TestTransactionContextCompatibility:
         client.execute(f"USE {test_db}")
 
         client.execute("DROP TABLE IF EXISTS compat_tx_docs")
-        client.execute(
-            """
+        client.execute("""
             CREATE TABLE compat_tx_docs (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 title VARCHAR(255) NOT NULL,
                 content TEXT NOT NULL
             )
-        """
-        )
+        """)
 
         # Insert test data
         client.execute("INSERT INTO compat_tx_docs (title, content) VALUES ('Test Title', 'Test Content')")
@@ -369,15 +359,13 @@ class TestTransactionContextCompatibility:
             await client.execute(f"USE {test_db}")
 
             await client.execute("DROP TABLE IF EXISTS async_compat_tx_docs")
-            await client.execute(
-                """
+            await client.execute("""
                 CREATE TABLE async_compat_tx_docs (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     title VARCHAR(255) NOT NULL,
                     content TEXT NOT NULL
                 )
-            """
-            )
+            """)
 
             # Insert test data
             await client.execute("INSERT INTO async_compat_tx_docs (title, content) VALUES ('Test Title', 'Test Content')")
@@ -436,16 +424,14 @@ class TestTransactionContextFeatures:
         client.execute(f"USE {test_db}")
 
         client.execute("DROP TABLE IF EXISTS features_tx_docs")
-        client.execute(
-            """
+        client.execute("""
             CREATE TABLE features_tx_docs (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 title VARCHAR(255) NOT NULL,
                 content TEXT NOT NULL,
                 category VARCHAR(100) NOT NULL
             )
-        """
-        )
+        """)
 
         # Insert test data
         test_docs = [
@@ -455,12 +441,10 @@ class TestTransactionContextFeatures:
         ]
 
         for title, content, category in test_docs:
-            client.execute(
-                f"""
+            client.execute(f"""
                 INSERT INTO features_tx_docs (title, content, category)
                 VALUES ('{title}', '{content}', '{category}')
-            """
-            )
+            """)
 
         # Create fulltext index
         client.fulltext_index.create("features_tx_docs", "ftidx_features", ["title", "content"])
@@ -542,16 +526,14 @@ class TestTransactionContextFeatures:
             await client.execute(f"USE {test_db}")
 
             await client.execute("DROP TABLE IF EXISTS async_features_tx_docs")
-            await client.execute(
-                """
+            await client.execute("""
                 CREATE TABLE async_features_tx_docs (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     title VARCHAR(255) NOT NULL,
                     content TEXT NOT NULL,
                     category VARCHAR(100) NOT NULL
                 )
-            """
-            )
+            """)
 
             # Insert test data
             test_docs = [
@@ -561,12 +543,10 @@ class TestTransactionContextFeatures:
             ]
 
             for title, content, category in test_docs:
-                await client.execute(
-                    f"""
+                await client.execute(f"""
                     INSERT INTO async_features_tx_docs (title, content, category)
                     VALUES ('{title}', '{content}', '{category}')
-                """
-                )
+                """)
 
             # Create fulltext index
             await client.fulltext_index.create("async_features_tx_docs", "ftidx_async_features", ["title", "content"])
@@ -649,16 +629,14 @@ class TestGetConnectionInterface:
         client.execute(f"USE {test_db}")
 
         client.execute("DROP TABLE IF EXISTS get_conn_docs")
-        client.execute(
-            """
+        client.execute("""
             CREATE TABLE get_conn_docs (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 title VARCHAR(255) NOT NULL,
                 content TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """
-        )
+        """)
 
         # Insert test data
         test_docs = [
@@ -668,12 +646,10 @@ class TestGetConnectionInterface:
         ]
 
         for title, content in test_docs:
-            client.execute(
-                f"""
+            client.execute(f"""
                 INSERT INTO get_conn_docs (title, content)
                 VALUES ('{title}', '{content}')
-            """
-            )
+            """)
 
         yield client, test_db
 
@@ -757,16 +733,14 @@ class TestGetConnectionInterface:
             await client.execute(f"USE {test_db}")
 
             await client.execute("DROP TABLE IF EXISTS async_get_conn_docs")
-            await client.execute(
-                """
+            await client.execute("""
                 CREATE TABLE async_get_conn_docs (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     title VARCHAR(255) NOT NULL,
                     content TEXT NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
-            """
-            )
+            """)
 
             # Insert test data
             test_docs = [
@@ -776,12 +750,10 @@ class TestGetConnectionInterface:
             ]
 
             for title, content in test_docs:
-                await client.execute(
-                    f"""
+                await client.execute(f"""
                     INSERT INTO async_get_conn_docs (title, content)
                     VALUES ('{title}', '{content}')
-                """
-                )
+                """)
 
             async with client.session() as tx:
                 # Get connection
@@ -864,8 +836,7 @@ class TestAsyncTransactionManagerConsistency:
         client.execute(f"USE {test_db}")
 
         client.execute("DROP TABLE IF EXISTS consistency_docs")
-        client.execute(
-            """
+        client.execute("""
             CREATE TABLE consistency_docs (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 title VARCHAR(255) NOT NULL,
@@ -873,8 +844,7 @@ class TestAsyncTransactionManagerConsistency:
                 category VARCHAR(100) NOT NULL,
                 priority INT DEFAULT 1
             )
-        """
-        )
+        """)
 
         # Insert test data
         test_docs = [
@@ -884,12 +854,10 @@ class TestAsyncTransactionManagerConsistency:
         ]
 
         for title, content, category, priority in test_docs:
-            client.execute(
-                f"""
+            client.execute(f"""
                 INSERT INTO consistency_docs (title, content, category, priority)
                 VALUES ('{title}', '{content}', '{category}', {priority})
-            """
-            )
+            """)
 
         yield client, test_db
 
@@ -915,8 +883,7 @@ class TestAsyncTransactionManagerConsistency:
         await client.execute(f"USE {test_db}")
 
         await client.execute("DROP TABLE IF EXISTS async_consistency_docs")
-        await client.execute(
-            """
+        await client.execute("""
             CREATE TABLE async_consistency_docs (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 title VARCHAR(255) NOT NULL,
@@ -924,8 +891,7 @@ class TestAsyncTransactionManagerConsistency:
                 category VARCHAR(100) NOT NULL,
                 priority INT DEFAULT 1
             )
-        """
-        )
+        """)
 
         # Insert test data
         test_docs = [
@@ -935,12 +901,10 @@ class TestAsyncTransactionManagerConsistency:
         ]
 
         for title, content, category, priority in test_docs:
-            await client.execute(
-                f"""
+            await client.execute(f"""
                 INSERT INTO async_consistency_docs (title, content, category, priority)
                 VALUES ('{title}', '{content}', '{category}', {priority})
-            """
-            )
+            """)
 
         yield client, test_db
 

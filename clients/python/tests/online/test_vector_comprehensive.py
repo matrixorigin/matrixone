@@ -455,12 +455,10 @@ class TestVectorComprehensive:
             test_vector = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0] * 6 + [0.1, 0.2, 0.3, 0.4]
             vector_str = '[' + ','.join(map(str, test_vector)) + ']'
 
-            insert_sql = text(
-                f"""
+            insert_sql = text(f"""
                 INSERT INTO {table.name} (id, name, embedding)
                 VALUES (:id, :name, :embedding)
-            """
-            )
+            """)
 
             conn.execute(insert_sql, {"id": 1, "name": "test_vector", "embedding": vector_str})
 
@@ -639,14 +637,12 @@ class TestVectorComprehensive:
         """Test handling of invalid vector dimensions"""
         try:
             # Try to create table with invalid vector dimension
-            test_client.execute(
-                """
+            test_client.execute("""
                 CREATE TABLE test_invalid_vector (
                     id INT PRIMARY KEY,
                     embedding vecf32(0)
                 )
-            """
-            )
+            """)
             # If we get here, the test should fail
             assert False, "Should have failed with invalid dimension"
         except Exception as e:

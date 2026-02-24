@@ -149,6 +149,92 @@ MatrixOne provides powerful vector index management through the `vector_ops` API
    client.vector_ops.drop("documents", "idx_embedding_ivf")
    client.vector_ops.drop("documents", "idx_embedding_hnsw")
 
+IVF LIMIT BY RANK - Fine-Grained Search Control
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The IVF LIMIT BY RANK feature provides fine-grained control over vector search execution strategies, allowing you to balance between speed and accuracy.
+
+**Three Ranking Modes:**
+
+.. code-block:: python
+
+   from matrixone.ivf_rank import IVFRankMode, IVFRankOptions
+
+   # Mode 1: PRE - Pre-filter mode
+   # Applies WHERE clause filtering BEFORE vector search
+   # ⚠️  Requires high selectivity of filter condition
+   # ❌ Poor performance if filter selectivity is low
+   # Best for: Highly selective filters (e.g., filtering to <1% of data)
+   options_pre = IVFRankOptions(mode=IVFRankMode.PRE)
+
+   # Mode 2: POST - Post-filter mode (RECOMMENDED)
+   # Performs vector search FIRST using IVF index, then applies filtering
+   # ✅ Best performance in most cases
+   # ✅ Recall typically not affected
+   # ✅ Use as default unless you have specific reasons for PRE
+   # Best for: Most production scenarios, optimal performance
+   options_post = IVFRankOptions(mode=IVFRankMode.POST)
+
+   # Mode 3: FORCE - Force mode
+   # Forces IVF index usage regardless of optimizer decision
+   # Best for: Debugging, ensuring consistent behavior
+   options_force = IVFRankOptions(mode=IVFRankMode.FORCE)
+
+**Usage in Vector Search:**
+
+.. code-block:: python
+
+   from matrixone.ivf_rank import IVFRankMode, IVFRankOptions
+   import numpy as np
+
+   # Create IVF index first
+   client.vector_ops.enable_ivf()
+   client.vector_ops.create_ivf("documents", "idx_embedding", "embedding", lists=50)
+
+   # Search with PRE mode (fast)
+   query_vector = np.random.rand(384).tolist()
+   results_fast = client.vector_ops.similarity_search(
+       "documents",
+       vector_column="embedding",
+       query_vector=query_vector,
+       limit=10,
+       distance_type="cosine",
+       rank_mode=IVFRankMode.PRE  # Fast approximate search
+   )
+
+   # Search with POST mode (accurate)
+   results_accurate = client.vector_ops.similarity_search(
+       "documents",
+       vector_column="embedding",
+       query_vector=query_vector,
+       limit=10,
+       distance_type="cosine",
+       rank_mode=IVFRankMode.POST  # Slower but more accurate
+   )
+
+**Important Considerations:**
+
+.. warning::
+
+   **⚠️ PRE Mode (Pre-filter):**
+   
+   - Requires HIGH selectivity of the WHERE clause filter
+   - If filter selectivity is poor (filters out <50% of data), performance degrades significantly
+   - Only use when you know the filter is highly selective (e.g., filtering to <1% of data)
+   
+   **✅ POST Mode (Post-filter) - RECOMMENDED:**
+   
+   - Best performance in most cases
+   - Recall is typically not affected
+   - Use as default for production systems
+   - Only switch to PRE if you encounter recall issues AND have a highly selective filter
+   
+   **🔧 FORCE Mode:**
+   
+   - Use only for debugging or specific performance testing
+   - May override optimizer's better choices
+   - Can lead to suboptimal query plans
+
 .. note::
    **HNSW Index Requirements:**
    

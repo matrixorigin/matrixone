@@ -44,6 +44,7 @@ from .pubsub import PubSubManager
 from .restore import RestoreManager
 from .snapshot import SnapshotManager
 from .clone import CloneManager
+from .branch import BranchManager
 from .sqlalchemy_ext import MatrixOneDialect
 from .vector_manager import VectorManager
 from .version import get_version_manager
@@ -217,6 +218,7 @@ class Client(BaseMatrixOneClient):
         self._login_info = None
         self._snapshots = None
         self._clone = None
+        self._branch = None
         self._moctl = None
         self._restore = None
         self._pitr = None
@@ -482,10 +484,23 @@ class Client(BaseMatrixOneClient):
         # Set the provided engine
         client._engine = engine
 
-        # Replace the dialect with MatrixOne dialect for proper vector type support
-        original_dbapi = engine.dialect.dbapi
-        engine.dialect = MatrixOneDialect()
-        engine.dialect.dbapi = original_dbapi
+        # Wrap the dialect with MatrixOne dialect for proper vector type support
+        # Instead of replacing, we create a new MatrixOne dialect that delegates to the original
+        if not isinstance(engine.dialect, MatrixOneDialect):
+            original_dialect = engine.dialect
+            original_dbapi = engine.dialect.dbapi
+
+            # Create MatrixOne dialect with same configuration
+            mo_dialect = MatrixOneDialect()
+            mo_dialect.dbapi = original_dbapi
+
+            # Copy important attributes from original dialect
+            if hasattr(original_dialect, '_connection_charset'):
+                mo_dialect._connection_charset = original_dialect._connection_charset
+
+            # Replace dialect (this is still a limitation of SQLAlchemy's design)
+            # but we've preserved the original configuration
+            engine.dialect = mo_dialect
 
         # Initialize managers after engine is set
         client._initialize_managers()
@@ -567,6 +582,7 @@ class Client(BaseMatrixOneClient):
         """Initialize all manager instances after engine is created"""
         self._snapshots = SnapshotManager(self)
         self._clone = CloneManager(self)
+        self._branch = BranchManager(self)
         self._moctl = MoCtlManager(self)
         self._restore = RestoreManager(self)
         self._pitr = PitrManager(self)
@@ -1799,6 +1815,43 @@ class Client(BaseMatrixOneClient):
     def clone(self) -> Optional[CloneManager]:
         """Get clone manager"""
         return self._clone
+
+    @property
+    def branch(self) -> Optional[BranchManager]:
+        """
+        Get branch manager for Git-style version control operations.
+
+        Provides table and database branching, diffing, and merging capabilities.
+        Requires MatrixOne 3.0.5 or higher.
+
+        Returns:
+            BranchManager instance for branch operations
+
+        Example::
+
+            client = Client()
+            client.connect(database='test')
+
+            # Create table branch
+            client.branch.create_table_branch('users_branch', 'users')
+
+            # Create database branch
+            client.branch.create_database_branch('dev_db', 'production')
+
+            # Compare branches
+            diffs = client.branch.diff_table('users_branch', 'users')
+
+            # Merge branches
+            client.branch.merge_table('users_branch', 'users')
+
+            # Delete branches
+            client.branch.delete_table_branch('users_branch')
+            client.branch.delete_database_branch('dev_db')
+
+        See Also:
+            - :doc:`branch_guide` - Complete branch management guide
+        """
+        return self._branch
 
     @property
     def moctl(self) -> Optional[MoCtlManager]:
@@ -3173,6 +3226,7 @@ class Session(SQLAlchemySession):
         # Use executor pattern: managers use this session as executor
         self.snapshots = SnapshotManager(client, executor=self)
         self.clone = CloneManager(client, executor=self)
+        self.branch = BranchManager(client, executor=self)
         self.restore = RestoreManager(client, executor=self)
         self.pitr = PitrManager(client, executor=self)
         self.pubsub = PubSubManager(client, executor=self)

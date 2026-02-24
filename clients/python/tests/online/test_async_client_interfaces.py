@@ -238,13 +238,11 @@ class TestAsyncClientMissingInterfaces:
             vector_str_1 = '[' + ','.join(map(str, vector_data_1)) + ']'
             vector_str_2 = '[' + ','.join(map(str, vector_data_2)) + ']'
 
-            await client.execute(
-                f"""
+            await client.execute(f"""
                 INSERT INTO {table_name} (id, embedding) VALUES
                 (1, '{vector_str_1}'),
                 (2, '{vector_str_2}')
-            """
-            )
+            """)
 
             # Test vector similarity search (if supported)
             try:

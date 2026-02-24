@@ -75,14 +75,12 @@ class TestVectorManagerClient:
         """Test insert through vector_ops"""
         try:
             # Create test table
-            client.execute(
-                f"""
+            client.execute(f"""
                 CREATE TABLE {table_name} (
                     id INT PRIMARY KEY,
                     embedding VECF32(3)
                 )
-            """
-            )
+            """)
 
             # Insert via vector_ops
             result = client.vector_ops.insert(table_name, {'id': 1, 'embedding': [0.1, 0.2, 0.3]})
@@ -103,14 +101,12 @@ class TestVectorManagerClient:
         """Test batch insert through vector_ops"""
         try:
             # Create test table
-            client.execute(
-                f"""
+            client.execute(f"""
                 CREATE TABLE {table_name} (
                     id INT PRIMARY KEY,
                     embedding VECF32(3)
                 )
-            """
-            )
+            """)
 
             # Batch insert via vector_ops
             data_list = [{'id': i, 'embedding': [i * 0.1, i * 0.2, i * 0.3]} for i in range(1, 6)]
@@ -176,14 +172,12 @@ class TestVectorManagerSession:
         """Test vector insert in session context"""
         try:
             # Create test table
-            client.execute(
-                f"""
+            client.execute(f"""
                 CREATE TABLE {table_name} (
                     id INT PRIMARY KEY,
                     embedding VECF32(3)
                 )
-            """
-            )
+            """)
 
             # Insert in session
             with client.session() as session:
@@ -205,14 +199,12 @@ class TestVectorManagerSession:
         """Test vector batch insert in session context"""
         try:
             # Create test table
-            client.execute(
-                f"""
+            client.execute(f"""
                 CREATE TABLE {table_name} (
                     id INT PRIMARY KEY,
                     embedding VECF32(3)
                 )
-            """
-            )
+            """)
 
             # Batch insert in session
             with client.session() as session:
@@ -280,14 +272,12 @@ class TestAsyncVectorManagerClient:
         """Test async vector insert"""
         try:
             # Create test table
-            await async_client.execute(
-                f"""
+            await async_client.execute(f"""
                 CREATE TABLE {table_name} (
                     id INT PRIMARY KEY,
                     embedding VECF32(3)
                 )
-            """
-            )
+            """)
 
             # Insert via vector_ops
             result = await async_client.vector_ops.insert(table_name, {'id': 1, 'embedding': [0.1, 0.2, 0.3]})
@@ -310,14 +300,12 @@ class TestAsyncVectorManagerClient:
         """Test async vector batch insert"""
         try:
             # Create test table
-            await async_client.execute(
-                f"""
+            await async_client.execute(f"""
                 CREATE TABLE {table_name} (
                     id INT PRIMARY KEY,
                     embedding VECF32(3)
                 )
-            """
-            )
+            """)
 
             # Batch insert via vector_ops
             data_list = [{'id': i, 'embedding': [i * 0.1, i * 0.2, i * 0.3]} for i in range(1, 6)]
@@ -399,14 +387,12 @@ class TestAsyncVectorManagerSession:
         async def _test():
             try:
                 # Create test table
-                await async_client.execute(
-                    f"""
+                await async_client.execute(f"""
                     CREATE TABLE {table_name} (
                         id INT PRIMARY KEY,
                         embedding VECF32(3)
                     )
-                """
-                )
+                """)
 
                 # Insert in session
                 async with async_client.session() as session:
@@ -435,14 +421,12 @@ class TestAsyncVectorManagerSession:
         async def _test():
             try:
                 # Create test table
-                await async_client.execute(
-                    f"""
+                await async_client.execute(f"""
                     CREATE TABLE {table_name} (
                         id INT PRIMARY KEY,
                         embedding VECF32(3)
                     )
-                """
-                )
+                """)
 
                 # Batch insert in session
                 async with async_client.session() as session:
