@@ -279,3 +279,17 @@ var (
 	// IOMergerCounterTimeout tracks the number of IO merger wait timeouts
 	IOMergerCounterTimeout = ioMergerCounter.WithLabelValues("timeout")
 )
+
+// S3 read concurrency metrics
+var (
+	// FSReadSemaphoreWaitDuration tracks how long goroutines wait to acquire the read semaphore
+	FSReadSemaphoreWaitDuration = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "read_semaphore_wait_duration_seconds",
+			Help:      "Duration of waiting to acquire the S3 read semaphore",
+			Buckets:   getDurationBuckets(),
+		},
+	)
+)

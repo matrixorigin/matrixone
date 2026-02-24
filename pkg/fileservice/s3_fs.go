@@ -54,10 +54,24 @@ type S3FS struct {
 	ioMerger *IOMerger
 
 	parallelMode ParallelMode
+
+	// readSemaphore limits the number of concurrent s.read() calls (S3 downloads).
+	// Under high concurrency (e.g. 1000 warehouses), too many simultaneous S3 reads
+	// cause network congestion, memory spikes, and GC pressure, making each read
+	// take 10-30s instead of <1s. This semaphore ensures only a bounded number of
+	// goroutines are actively downloading from S3 at any time.
+	readSemaphore chan struct{}
 }
 
 // key mapping scheme:
 // <KeyPrefix>/<file path> -> file content
+
+// defaultReadConcurrency limits the number of concurrent S3 read operations.
+// Under high concurrency (e.g. TPCC 1000 warehouses, 1000 connections), unlimited
+// concurrent S3 reads cause network congestion, memory spikes (1GB→7GB), and extreme
+// GC pressure. Each read takes 10-30s instead of <1s due to bandwidth saturation.
+// Limiting to 128 concurrent reads keeps S3 latency low while still allowing high throughput.
+var defaultReadConcurrency = 128
 
 var _ FileService = new(S3FS)
 
@@ -79,6 +93,7 @@ func NewS3FS(
 		perfCounterSets: perfCounterSets,
 		ioMerger:        NewIOMerger(),
 		parallelMode:    args.ParallelMode,
+		readSemaphore:   make(chan struct{}, defaultReadConcurrency),
 	}
 
 	var err error
@@ -665,6 +680,19 @@ read_disk_cache:
 			s3ReadBytes += entry.Size
 		}
 	}
+
+	// Acquire read semaphore to limit concurrent S3 downloads.
+	// Without this, 1000+ goroutines can simultaneously do io.ReadAll from S3,
+	// causing network congestion, memory spikes (1GB→7GB), and extreme GC pressure.
+	t0Sem := time.Now()
+	select {
+	case s.readSemaphore <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	metric.FSReadSemaphoreWaitDuration.Observe(time.Since(t0Sem).Seconds())
+	defer func() { <-s.readSemaphore }()
+
 	if err := s.read(ctx, vector); err != nil {
 		return err
 	}

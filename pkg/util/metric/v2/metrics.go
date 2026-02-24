@@ -114,6 +114,7 @@ func initFileServiceMetrics() {
 	registry.MustRegister(fsDiskCacheWriteDuration)
 	registry.MustRegister(FSDiskCacheWriteBytes)
 	registry.MustRegister(FSDiskCacheAsyncWriteGauge)
+	registry.MustRegister(FSReadSemaphoreWaitDuration)
 }
 
 func initLogtailMetrics() {
