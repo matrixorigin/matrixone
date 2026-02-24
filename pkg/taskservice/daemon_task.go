@@ -613,9 +613,14 @@ func (r *taskRunner) mergeTasks(tasksSlice ...[]task.DaemonTask) []task.DaemonTa
 // - status: task.TaskStatus_Created
 // - status: task.TaskStatus_Running AND last-heartbeat: timeout
 func (r *taskRunner) startTasks(ctx context.Context) []task.DaemonTask {
-	labels := NewCnLabels(r.cnUUID)
-	if r.getClient != nil {
-		hakeeperClient := r.getClient()
+	r.hakeeper.RLock()
+	getClient := r.hakeeper.getClient
+	cnUUID := r.hakeeper.cnUUID
+	r.hakeeper.RUnlock()
+
+	labels := NewCnLabels(cnUUID)
+	if getClient != nil {
+		hakeeperClient := getClient()
 		// account -> cn map. in all c
 		if hakeeperClient != nil {
 			ctx2, cancel := context.WithTimeoutCause(ctx, time.Second*5, moerr.CauseStartTasks)
