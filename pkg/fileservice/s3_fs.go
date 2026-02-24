@@ -976,45 +976,21 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 		vector.Entries[i] = entry
 	}
 
-	// write to disk cache asynchronously to avoid blocking IO merger waiters
-	// The disk cache write includes f.Sync() which can take 10-30 seconds under high concurrency,
-	// blocking all waiters in IO merger. By making this async, done() returns quickly and waiters
-	// can proceed without waiting for disk I/O.
-	//
-	// When asyncUpdate is false (e.g. in tests), the write is done synchronously to ensure
-	// deterministic cache population for test assertions.
-	//
-	// Data consistency is guaranteed by:
-	// 1. Disk cache uses temp file + atomic rename, so readers never see partial data
-	// 2. Disk cache has startUpdate/waitUpdateComplete locking mechanism for concurrent access
-	// 3. writeFile already ignores errors internally
-	//
-	// Note: Waiters may not hit memory cache immediately after done() because memCache.Update()
-	// is also deferred and executes after done(). This is existing behavior and waiters will
-	// fall back to disk cache or S3 if needed.
+	// write to disk cache
 	if readFullObject &&
 		contentErr == nil &&
 		len(contentBytes) > 0 &&
 		s.diskCache != nil &&
 		!vector.Policy.Any(SkipDiskCacheWrites) {
-		filePath := vector.FilePath
-		diskCache := s.diskCache
-		// Make a copy of contentBytes for the goroutine since the original may be reused
-		dataCopy := make([]byte, len(contentBytes))
-		copy(dataCopy, contentBytes)
-		writeFn := func() {
-			metric.FSDiskCacheAsyncWriteGauge.Inc()
-			defer metric.FSDiskCacheAsyncWriteGauge.Dec()
-			t0 := time.Now()
-			_ = diskCache.SetFile(context.Background(), filePath, func(context.Context) (io.ReadCloser, error) {
-				return io.NopCloser(bytes.NewReader(dataCopy)), nil
-			})
-			metric.FSReadDurationSetCachedData.Observe(time.Since(t0).Seconds())
-		}
-		if s.asyncUpdate {
-			go writeFn()
-		} else {
-			writeFn()
+		t0 := time.Now()
+		LogEvent(ctx, str_disk_cache_setfile_begin)
+		err := s.diskCache.SetFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(contentBytes)), nil
+		})
+		LogEvent(ctx, str_disk_cache_setfile_end)
+		metric.FSReadDurationSetCachedData.Observe(time.Since(t0).Seconds())
+		if err != nil {
+			return err
 		}
 	}
 

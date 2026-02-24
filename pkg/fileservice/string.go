@@ -56,6 +56,8 @@ var (
 	str_awssdkv2_get_object_end               = internString("AwsSDKv2 GetObject end")
 	str_set_cache_data_begin                  = internString("setCacheData begin")
 	str_set_cache_data_end                    = internString("setCacheData end")
+	str_disk_cache_setfile_begin              = internString("disk cache SetFile begin")
+	str_disk_cache_setfile_end                = internString("disk cache SetFile end")
 	str_to_cache_data_begin                   = internString("ToCacheData begin")
 	str_to_cache_data_end                     = internString("ToCacheData end")
 	str_read_cache_exceed_deadline            = internString("readCache exceed deadline")

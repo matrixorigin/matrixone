@@ -262,16 +262,6 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(1024, 2.0, 20), // 1KB to 512MB
 		},
 	)
-
-	// FSDiskCacheAsyncWriteGauge tracks the number of in-flight async disk cache writes
-	FSDiskCacheAsyncWriteGauge = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "mo",
-			Subsystem: "fs",
-			Name:      "disk_cache_async_write_inflight",
-			Help:      "Number of in-flight async disk cache write goroutines",
-		},
-	)
 )
 
 // IO merger timeout metrics
