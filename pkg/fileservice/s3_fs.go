@@ -86,6 +86,11 @@ func NewS3FS(
 
 	args.NoDefaultCredentials = noDefaultCredential
 
+	readConcurrency := args.ReadConcurrency
+	if readConcurrency <= 0 {
+		readConcurrency = defaultReadConcurrency
+	}
+
 	fs := &S3FS{
 		name:            args.Name,
 		keyPrefix:       args.KeyPrefix,
@@ -93,7 +98,7 @@ func NewS3FS(
 		perfCounterSets: perfCounterSets,
 		ioMerger:        NewIOMerger(),
 		parallelMode:    args.ParallelMode,
-		readSemaphore:   make(chan struct{}, defaultReadConcurrency),
+		readSemaphore:   make(chan struct{}, readConcurrency),
 	}
 
 	var err error
