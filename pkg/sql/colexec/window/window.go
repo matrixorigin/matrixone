@@ -210,7 +210,8 @@ func (ctr *container) resetResultBatch(bat *batch.Batch, vec *vector.Vector) *ba
 func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, analyzer process.Analyzer) error {
 	var err error
 	n := ctr.bat.Vecs[0].Length()
-	isWinOrder := function.GetFunctionIsWinOrderFunByName(ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.Name)
+	funcName := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.Name
+	isWinOrder := function.GetFunctionIsWinOrderFunByName(funcName)
 	if isWinOrder {
 		if ctr.ps == nil {
 			ctr.ps = append(ctr.ps, 0)
@@ -224,6 +225,13 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 			ctr.os = ctr.ps
 		}
 
+		// Special handling for NTILE: evaluate bucket count parameter
+		if funcName == "ntile" && len(ctr.aggVecs[idx].Vec) > 0 {
+			if err = ctr.evalAggVector(ctr.bat, proc); err != nil {
+				return err
+			}
+		}
+
 		vec := vector.NewVec(types.T_int64.ToType())
 		defer vec.Free(proc.Mp())
 		if err = vector.AppendFixedList(vec, ctr.os, nil, proc.Mp()); err != nil {
@@ -235,7 +243,15 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 			for ; o < len(ctr.os); o++ {
 
 				if ctr.os[o] <= ctr.ps[p] {
-					if err = ctr.batAggs[idx].Fill(p-1, o, []*vector.Vector{vec}); err != nil {
+					// For NTILE, pass both os vector and bucket count vector
+					var fillVecs []*vector.Vector
+					if funcName == "ntile" && len(ctr.aggVecs[idx].Vec) > 0 {
+						fillVecs = []*vector.Vector{vec, ctr.aggVecs[idx].Vec[0]}
+					} else {
+						fillVecs = []*vector.Vector{vec}
+					}
+					
+					if err = ctr.batAggs[idx].Fill(p-1, o, fillVecs); err != nil {
 						return err
 					}
 

@@ -681,6 +681,7 @@ var functionIdRegister = map[string]int32{
 	"rank":       RANK,
 	"row_number": ROW_NUMBER,
 	"dense_rank": DENSE_RANK,
+	"ntile":      NTILE,
 	// value window functions
 	"lag":         LAG,
 	"lead":        LEAD,

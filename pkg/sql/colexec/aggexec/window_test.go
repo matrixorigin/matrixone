@@ -1077,6 +1077,134 @@ func TestValueWindowExec_BlockidType(t *testing.T) {
 	exec.Free()
 }
 
+// TestNtileWindowExec tests NTILE window function
+func TestNtileWindowExec(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	t.Run("NTILE_basic_10_rows_3_buckets", func(t *testing.T) {
+		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
+		require.NoError(t, err)
+
+		// Simulate window operator: one partition with 10 rows
+		bucketVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(bucketVec, []int64{3, 3, 3, 3, 3, 3, 3, 3, 3, 3}, nil, mp)
+		require.NoError(t, err)
+		defer bucketVec.Free(mp)
+
+		osVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(osVec, []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, nil, mp)
+		require.NoError(t, err)
+		defer osVec.Free(mp)
+
+		err = exec.GroupGrow(10)
+		require.NoError(t, err)
+
+		// Fill with groupIndex=0, row=0..10 (indices into os array)
+		for o := 0; o <= 10; o++ {
+			err = exec.Fill(0, o, []*vector.Vector{osVec, bucketVec})
+			require.NoError(t, err)
+		}
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+
+		resultVec := results[0]
+		require.Equal(t, 10, resultVec.Length())
+
+		// Expected: 1,1,1,1,2,2,2,3,3,3 (4+3+3 distribution)
+		col := vector.MustFixedColNoTypeCheck[int64](resultVec)
+		expected := []int64{1, 1, 1, 1, 2, 2, 2, 3, 3, 3}
+		for i := 0; i < 10; i++ {
+			require.Equal(t, expected[i], col[i], "row %d", i)
+		}
+
+		resultVec.Free(mp)
+		exec.Free()
+	})
+
+	t.Run("NTILE_9_rows_3_buckets", func(t *testing.T) {
+		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
+		require.NoError(t, err)
+
+		bucketVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(bucketVec, []int64{3, 3, 3, 3, 3, 3, 3, 3, 3}, nil, mp)
+		require.NoError(t, err)
+		defer bucketVec.Free(mp)
+
+		osVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(osVec, []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, nil, mp)
+		require.NoError(t, err)
+		defer osVec.Free(mp)
+
+		err = exec.GroupGrow(9)
+		require.NoError(t, err)
+
+		for o := 0; o <= 9; o++ {
+			err = exec.Fill(0, o, []*vector.Vector{osVec, bucketVec})
+			require.NoError(t, err)
+		}
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+
+		resultVec := results[0]
+		require.Equal(t, 9, resultVec.Length())
+
+		// Expected: 1,1,1,2,2,2,3,3,3 (3+3+3 distribution)
+		col := vector.MustFixedColNoTypeCheck[int64](resultVec)
+		expected := []int64{1, 1, 1, 2, 2, 2, 3, 3, 3}
+		for i := 0; i < 9; i++ {
+			require.Equal(t, expected[i], col[i], "row %d", i)
+		}
+
+		resultVec.Free(mp)
+		exec.Free()
+	})
+
+	t.Run("NTILE_5_rows_3_buckets", func(t *testing.T) {
+		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
+		require.NoError(t, err)
+
+		bucketVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(bucketVec, []int64{3, 3, 3, 3, 3}, nil, mp)
+		require.NoError(t, err)
+		defer bucketVec.Free(mp)
+
+		osVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(osVec, []int64{0, 1, 2, 3, 4, 5}, nil, mp)
+		require.NoError(t, err)
+		defer osVec.Free(mp)
+
+		err = exec.GroupGrow(5)
+		require.NoError(t, err)
+
+		for o := 0; o <= 5; o++ {
+			err = exec.Fill(0, o, []*vector.Vector{osVec, bucketVec})
+			require.NoError(t, err)
+		}
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+
+		resultVec := results[0]
+		require.Equal(t, 5, resultVec.Length())
+
+		// Expected: 1,1,2,2,3 (2+2+1 distribution)
+		col := vector.MustFixedColNoTypeCheck[int64](resultVec)
+		expected := []int64{1, 1, 2, 2, 3}
+		for i := 0; i < 5; i++ {
+			require.Equal(t, expected[i], col[i], "row %d", i)
+		}
+
+		resultVec.Free(mp)
+		exec.Free()
+	})
+}
+
 // TestValueWindowExec_TSType tests TS type
 func TestValueWindowExec_TSType(t *testing.T) {
 	mp := mpool.MustNewZero()
