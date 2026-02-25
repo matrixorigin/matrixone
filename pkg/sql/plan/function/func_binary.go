@@ -5024,7 +5024,7 @@ func GetFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *p
 				}
 				continue
 			}
-		case "DATETIME":
+		case "DATETIME", "TIMESTAMP":
 			switch localeStr {
 			case "USA":
 				formatStr = "%Y-%m-%d %H.%i.%s"

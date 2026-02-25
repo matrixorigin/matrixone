@@ -457,6 +457,7 @@ import (
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK ROW_NUMBER
 %token <str> DENSE_RANK BIT_CAST LAG LEAD FIRST_VALUE LAST_VALUE NTH_VALUE
 %token <str> BITMAP_BIT_POSITION BITMAP_BUCKET_NUMBER BITMAP_COUNT BITMAP_CONSTRUCT_AGG BITMAP_OR_AGG
+%token <str> GET_FORMAT
 
 // Sequence function
 %token <str> NEXTVAL SETVAL CURRVAL LASTVAL
@@ -798,6 +799,7 @@ import (
 %type <assignment> set_value
 %type <str> row_opt substr_option
 %type <str> time_unit time_stamp_unit
+%type <str> get_format_type
 %type <whenClause> when_clause
 %type <whenClauseList> when_clause_list
 %type <withClause> with_clause
@@ -11353,6 +11355,12 @@ time_stamp_unit:
 |    SQL_TSI_QUARTER
 |    SQL_TSI_YEAR
 
+get_format_type:
+    DATE
+|   TIME
+|   DATETIME
+|   TIMESTAMP
+
 function_call_nonkeyword:
     CURTIME datetime_scale
     {
@@ -11400,6 +11408,17 @@ function_call_nonkeyword:
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{arg1, $5, $7},
+        }
+	}
+|	GET_FORMAT '(' get_format_type ',' expression ')'
+	{
+        name := tree.NewUnresolvedColName($1)
+        str := strings.ToUpper($3)
+        arg1 := tree.NewNumVal(str, str, false, tree.P_char)
+		$$ =  &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{arg1, $5},
         }
 	}
 function_call_keyword:
@@ -13503,6 +13522,7 @@ not_keyword:
 |   AVG
 |	TIMESTAMPDIFF
 |	TIMESTAMPADD
+|	GET_FORMAT
 |   NEXTVAL
 |   SETVAL
 |   CURRVAL

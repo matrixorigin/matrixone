@@ -3354,6 +3354,22 @@ var (
 			input:  "create cdc cdc_tpcc 'mysql://sys#dump:111@127.0.0.1:6001' 'matrixone' 'mysql://sys#dump:111@127.0.0.1:6001' 'test_cdc:t1' {'Level'='database'} internal;",
 			output: "create cdc cdc_tpcc 'mysql://sys#dump:111@127.0.0.1:6001' 'matrixone' 'mysql://sys#dump:111@127.0.0.1:6001' 'test_cdc:t1' { \"Level\"='database'} internal",
 		},
+		{
+			input:  "select get_format(date, 'USA')",
+			output: "select get_format(DATE, USA)",
+		},
+		{
+			input:  "select get_format(time, 'EUR')",
+			output: "select get_format(TIME, EUR)",
+		},
+		{
+			input:  "select get_format(datetime, 'JIS')",
+			output: "select get_format(DATETIME, JIS)",
+		},
+		{
+			input:  "select get_format(timestamp, 'ISO')",
+			output: "select get_format(TIMESTAMP, ISO)",
+		},
 	}
 )
 
