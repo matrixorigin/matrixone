@@ -288,46 +288,61 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 	pubName := string(cp.Name)
 	dbName := string(cp.Database)
 	comment := cp.Comment
-	if _, ok := sysDatabases[dbName]; ok {
-		err = moerr.NewInternalErrorf(ctx, "Unknown database name '%s', not support publishing system database", dbName)
-		return
-	}
 
-	// Try to find database in current account first
-	dbId, dbType, err = getDbIdAndType(ctx, bh, dbName)
-	if err != nil {
-		// If not found in current account and ACCOUNT clause is specified, try to find in target accounts
-		if !cp.AccountsSet.All && len(cp.AccountsSet.SetAccounts) > 0 {
-			for _, accName := range cp.AccountsSet.SetAccounts {
-				if accInfo, ok := accNameInfoMap[string(accName)]; ok {
-					var foundDbId uint64
-					var foundDbType string
-					foundDbId, foundDbType, err = getDbIdAndTypeForAccount(ctx, bh, dbName, uint32(accInfo.Id))
-					if err == nil {
-						// Found database in target account, use it
-						dbId = foundDbId
-						dbType = foundDbType
-						// Update context to the account where database exists for subsequent operations
-						ctx = defines.AttachAccountId(ctx, uint32(accInfo.Id))
-						break
-					}
-				}
-			}
-			// If still not found after checking all target accounts, return error
-			if err != nil {
-				return
-			}
-		} else {
-			// No target accounts specified or ACCOUNT ALL, return the original error
+	// Check if this is account level publication (DATABASE *)
+	isAccountLevel := dbName == pubsub.TableAll
+
+	// For account level publication, skip database validation
+	if !isAccountLevel {
+		if _, ok := sysDatabases[dbName]; ok {
+			err = moerr.NewInternalErrorf(ctx, "Unknown database name '%s', not support publishing system database", dbName)
 			return
 		}
-	}
-	if dbType != "" { //TODO: check the dat_type
-		return moerr.NewInternalErrorf(ctx, "database '%s' is not a user database", cp.Database)
+
+		// Try to find database in current account first
+		dbId, dbType, err = getDbIdAndType(ctx, bh, dbName)
+		if err != nil {
+			// If not found in current account and ACCOUNT clause is specified, try to find in target accounts
+			if !cp.AccountsSet.All && len(cp.AccountsSet.SetAccounts) > 0 {
+				for _, accName := range cp.AccountsSet.SetAccounts {
+					if accInfo, ok := accNameInfoMap[string(accName)]; ok {
+						var foundDbId uint64
+						var foundDbType string
+						foundDbId, foundDbType, err = getDbIdAndTypeForAccount(ctx, bh, dbName, uint32(accInfo.Id))
+						if err == nil {
+							// Found database in target account, use it
+							dbId = foundDbId
+							dbType = foundDbType
+							// Update context to the account where database exists for subsequent operations
+							ctx = defines.AttachAccountId(ctx, uint32(accInfo.Id))
+							break
+						}
+					}
+				}
+				// If still not found after checking all target accounts, return error
+				if err != nil {
+					return
+				}
+			} else {
+				// No target accounts specified or ACCOUNT ALL, return the original error
+				return
+			}
+		}
+		if dbType != "" { //TODO: check the dat_type
+			return moerr.NewInternalErrorf(ctx, "database '%s' is not a user database", cp.Database)
+		}
+	} else {
+		// Account level publication: dbId is 0 (special value for account level)
+		dbId = 0
 	}
 
 	tablesStr := pubsub.TableAll
 	if len(cp.Table) > 0 {
+		if isAccountLevel {
+			// Account level publication cannot specify tables
+			err = moerr.NewInternalErrorf(ctx, "account level publication (DATABASE *) cannot specify tables")
+			return
+		}
 		if tablesStr, err = genPubTablesStr(ctx, bh, dbName, cp.Table); err != nil {
 			return
 		}
