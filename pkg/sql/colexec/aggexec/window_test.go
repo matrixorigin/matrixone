@@ -1110,3 +1110,20 @@ func TestValueWindowExec_TSType(t *testing.T) {
 	results[0].Free(mp)
 	exec.Free()
 }
+
+func TestPercentRank(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	t.Run("creation", func(t *testing.T) {
+		exec, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		require.NotNil(t, exec)
+		exec.Free()
+	})
+
+	t.Run("distinct_not_supported", func(t *testing.T) {
+		_, err := makePercentRankExec(mp, WinIdOfPercentRank, true)
+		require.Error(t, err)
+	})
+}

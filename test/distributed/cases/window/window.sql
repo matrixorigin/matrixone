@@ -69,6 +69,12 @@ select a, dense_rank() over () from t1;
 select a, b, c, dense_rank() over (partition by a, b order by c) from t1;
 select a, c, dense_rank() over(partition by a order by c rows current row) from t1;
 select a, c, rank() over(order by a), row_number() over(order by a), dense_rank() over(order by a) from t1;
+-- percent_rank tests
+select a, c, percent_rank() over (partition by a order by c) from t1;
+select a, percent_rank() over (partition by a) from t1;
+select a, percent_rank() over () from t1;
+select a, b, c, percent_rank() over (partition by a, b order by c) from t1;
+select a, c, percent_rank() over(order by a), rank() over(order by a), dense_rank() over(order by a) from t1;
 drop table t1;
 
 drop table if exists t1;
