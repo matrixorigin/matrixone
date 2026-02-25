@@ -59,14 +59,13 @@ ifeq ($(UNAME_S),linux)
   ifeq ($(MUSL),)
 	USEARCH_CMAKE_FLAG += -DUSEARCH_USE_OPENMP=1
   endif
-  AVX512FP16 := $(shell lscpu | grep avx512fp16)
 endif
 
-ifeq ($(UNAME_M),x86_64)
-  ifneq ($(AVX512FP16),)
-    ifeq ($(MUSL),)
-	USEARCH_CMAKE_FLAG += -DUSEARCH_USE_SIMSIMD=1
-    endif
+ifeq ($(MO_CL_SIMSIMD),1)
+  ifeq ($(MUSL),)
+	USEARCH_CMAKE_FLAG += -DUSEARCH_USE_SIMSIMD=1 -DSIMSIMD_DYNAMIC_DISPATCH=1
+	SIMSIMD_TARGET := HASWELL SKYLAKE ICE GENOA SAPPHIRE TURIN SIERRA NEON NEON_I8 NEON_F16 NEON_BF16 SVE SVE_I8 SVE_F16 SVE_BF16 SVE2
+	USEARCH_CMAKE_FLAG += $(foreach target,$(SIMSIMD_TARGET),-DSIMSIMD_TARGET_$(target)=1)
   endif
 endif
 
@@ -76,6 +75,9 @@ install/include/usearch.h:
 	cp -r $(FP16_DIR)/* $(USEARCH_DIR)/fp16
 	cp -r $(SIMSIMD_DIR)/* $(USEARCH_DIR)/simsimd
 	cp -r $(STRINGZILLA_DIR)/* $(USEARCH_DIR)/stringzilla
+	@if $(CC) -march=haswell -E - < /dev/null > /dev/null 2>&1; then \
+		sed -i -e "s/march=native/march=haswell/g" $(USEARCH_DIR)/CMakeLists.txt; \
+	fi
 	(cd $(USEARCH_DIR) && cmake -B build $(USEARCH_CMAKE_FLAG) && cmake --build build --config Release)
 ifeq ($(UNAME_S),darwin)
 	cp $(USEARCH_DIR)/build/*.dylib install/lib

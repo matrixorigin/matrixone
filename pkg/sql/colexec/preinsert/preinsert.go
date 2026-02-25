@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -262,6 +263,20 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, preInsert *PreInsert) error {
 	currentTxn := proc.Base.TxnOperator
 
 	needReCheck := checkIfNeedReGenAutoIncrCol(bat, preInsert)
+
+	// FIX: Capture lastAllocateAt BEFORE InsertValues to avoid false negative bug
+	// If InsertValues triggers a new allocation, lastAllocateAt will be updated,
+	// which would cause PrimaryKeysMayBeUpserted to check a narrower time range
+	// and miss manual inserts that happened between the old and new allocation.
+	lastAllocateTSMap := make(map[string]timestamp.Timestamp)
+	for col := range needReCheck {
+		ts, err := proc.GetIncrService().GetLastAllocateTS(proc.Ctx, tableID, col)
+		if err != nil {
+			return err
+		}
+		lastAllocateTSMap[col] = ts
+	}
+
 	lastInsertValue, err := proc.GetIncrService().InsertValues(
 		proc.Ctx,
 		tableID,
@@ -294,16 +309,12 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, preInsert *PreInsert) error {
 			return err
 		}
 
+		// Use the captured lastAllocateAt timestamps (before InsertValues)
 		for col, idx := range needReCheck {
-			from, err := proc.GetIncrService().GetLastAllocateTS(proc.Ctx, tableID, col)
-			if err != nil {
-				return err
-			}
-			fromTs := types.TimestampToTS(from)
+			fromTs := types.TimestampToTS(lastAllocateTSMap[col])
 			toTs := types.TimestampToTS(proc.Base.TxnOperator.SnapshotTS())
 			if mayChanged, err := rel.PrimaryKeysMayBeUpserted(proc.Ctx, fromTs, toTs, bat, preInsert.ColOffset+int32(idx)); err == nil {
 				if mayChanged {
-					logutil.Debugf("user may have manually specified the value to be inserted into the auto pk col before this transaction.")
 					return moerr.NewTxnNeedRetry(proc.Ctx)
 				}
 			} else {

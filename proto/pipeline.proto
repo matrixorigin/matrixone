@@ -595,6 +595,7 @@ message Source {
   repeated plan.msgHeader recv_msg_list = 13 [(gogoproto.nullable) = false];
   repeated plan.OrderBySpec block_order_by = 14;
   uint64 block_limit = 15;
+  bytes bloom_filter = 16;
 }
 
 message NodeInfo {
@@ -698,7 +699,7 @@ message UuidToRegIdx {
   string from_addr = 3;
 }
 
-message Apply{
+message Apply {
   int32 apply_type = 1;
   repeated int32 rel_list = 2;
   repeated int32 col_list = 3;

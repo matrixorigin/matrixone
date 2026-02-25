@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
@@ -310,7 +311,7 @@ func (builder *QueryBuilder) getArgsFromDistFn(distFnExpr *plan.Function, partPo
 	if vecColArg.GetCol() == nil {
 		return
 	}
-	if vecLitArg.GetLit() == nil {
+	if !rule.IsConstant(vecLitArg, true) {
 		return
 	}
 

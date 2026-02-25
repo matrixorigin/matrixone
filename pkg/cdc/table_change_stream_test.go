@@ -1933,13 +1933,15 @@ func (n *noopTxnOperator) NextSequence() uint64 {
 	return 0
 }
 
-func (n *noopTxnOperator) EnterRunSql()            {}
-func (n *noopTxnOperator) ExitRunSql()             {}
-func (n *noopTxnOperator) EnterIncrStmt()          {}
-func (n *noopTxnOperator) ExitIncrStmt()           {}
-func (n *noopTxnOperator) EnterRollbackStmt()      {}
-func (n *noopTxnOperator) ExitRollbackStmt()       {}
-func (n *noopTxnOperator) SetFootPrints(int, bool) {}
+func (n *noopTxnOperator) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) uint64 {
+	return 0
+}
+func (n *noopTxnOperator) ExitRunSqlWithToken(_ uint64) {}
+func (n *noopTxnOperator) EnterIncrStmt()               {}
+func (n *noopTxnOperator) ExitIncrStmt()                {}
+func (n *noopTxnOperator) EnterRollbackStmt()           {}
+func (n *noopTxnOperator) ExitRollbackStmt()            {}
+func (n *noopTxnOperator) SetFootPrints(int, bool)      {}
 
 // tableStreamHarnessConfig captures the configurable parts of the test harness
 // so individual test cases can focus on behavior rather than boilerplate setup.
@@ -2046,8 +2048,7 @@ type tableStreamHarness struct {
 	getTxn         func(context.Context, engine.Engine, client.TxnOperator) error
 	getRelation    func(context.Context, engine.Engine, client.TxnOperator, uint64) (string, string, engine.Relation, error)
 	getSnapshotTS  func(client.TxnOperator) timestamp.Timestamp
-	enterRunSql    func(client.TxnOperator)
-	exitRunSql     func(client.TxnOperator)
+	enterRunSql    func(context.Context, client.TxnOperator, string) func()
 	collectFactory func(fromTs, toTs types.TS) (engine.ChangesHandle, error)
 
 	collectCallsMu sync.Mutex
@@ -2162,8 +2163,7 @@ func newTableStreamHarness(t *testing.T, opts ...tableStreamHarnessOption) *tabl
 		}
 		return ts
 	}
-	h.enterRunSql = func(client.TxnOperator) {}
-	h.exitRunSql = func(client.TxnOperator) {}
+	h.enterRunSql = func(context.Context, client.TxnOperator, string) func() { return func() {} }
 	h.collectFactory = func(fromTs, toTs types.TS) (engine.ChangesHandle, error) {
 		return newImmediateChangesHandle(nil), nil
 	}
@@ -2189,11 +2189,8 @@ func (h *tableStreamHarness) installStubs() {
 	h.addStub(gostub.Stub(&GetSnapshotTS, func(op client.TxnOperator) timestamp.Timestamp {
 		return h.getSnapshotTS(op)
 	}))
-	h.addStub(gostub.Stub(&EnterRunSql, func(op client.TxnOperator) {
-		h.enterRunSql(op)
-	}))
-	h.addStub(gostub.Stub(&ExitRunSql, func(op client.TxnOperator) {
-		h.exitRunSql(op)
+	h.addStub(gostub.Stub(&EnterRunSql, func(ctx context.Context, op client.TxnOperator, sql string) func() {
+		return h.enterRunSql(ctx, op, sql)
 	}))
 	h.addStub(gostub.Stub(&CollectChanges, func(ctx context.Context, rel engine.Relation, fromTs, toTs types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
 		h.collectCallsMu.Lock()
@@ -2321,18 +2318,11 @@ func (h *tableStreamHarness) SetGetSnapshotTS(fn func(client.TxnOperator) timest
 	}
 }
 
-func (h *tableStreamHarness) SetEnterRunSql(fn func(client.TxnOperator)) {
+func (h *tableStreamHarness) SetEnterRunSql(fn func(context.Context, client.TxnOperator, string) func()) {
 	if fn == nil {
-		fn = func(client.TxnOperator) {}
+		fn = func(context.Context, client.TxnOperator, string) func() { return func() {} }
 	}
 	h.enterRunSql = fn
-}
-
-func (h *tableStreamHarness) SetExitRunSql(fn func(client.TxnOperator)) {
-	if fn == nil {
-		fn = func(client.TxnOperator) {}
-	}
-	h.exitRunSql = fn
 }
 
 func (h *tableStreamHarness) SetCollectFactory(factory func(fromTs, toTs types.TS) (engine.ChangesHandle, error)) {
@@ -2618,4 +2608,104 @@ func TestTableChangeStream_CalculateInitialDelay_GetLastSyncTimeFailure(t *testi
 	if runErr != nil {
 		require.ErrorIs(t, runErr, context.Canceled)
 	}
+}
+
+// TestTableChangeStream_DetermineRetryable_TableNotFoundError verifies that
+// "can not find table by id" errors are classified as retryable.
+// This error may occur during flush when table metadata is being modified.
+func TestTableChangeStream_DetermineRetryable_TableNotFoundError(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	tableInfo := &DbTableInfo{
+		SourceDbName:  "db1",
+		SourceTblName: "t1",
+		SourceTblId:   1,
+	}
+
+	stream := createTestStream(mp, tableInfo)
+
+	testCases := []struct {
+		name        string
+		errMsg      string
+		wantRetry   bool
+		description string
+	}{
+		{
+			name:        "table not found by id",
+			errMsg:      "internal error: can not find table by id 272525: accountId: 0",
+			wantRetry:   true,
+			description: "table not found during flush should be retryable",
+		},
+		{
+			name:        "table not found by id with different id",
+			errMsg:      "can not find table by id 12345: accountId: 1",
+			wantRetry:   true,
+			description: "table not found with different table/account id should also be retryable",
+		},
+		{
+			name:        "table not found deleted in txn",
+			errMsg:      "internal error: can not find table by id 272555: accountId: 0. Deleted in txn",
+			wantRetry:   true,
+			description: "table deleted in transaction should be retryable",
+		},
+		{
+			name:        "unrelated error",
+			errMsg:      "some other error",
+			wantRetry:   false,
+			description: "unrelated errors should not be retryable",
+		},
+		{
+			name:        "relation error",
+			errMsg:      "relation not found",
+			wantRetry:   true,
+			description: "relation errors should be retryable",
+		},
+		{
+			name:        "truncated table",
+			errMsg:      "table has been truncated",
+			wantRetry:   true,
+			description: "truncated table errors should be retryable",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := moerr.NewInternalError(context.Background(), tc.errMsg)
+			retryable := stream.determineRetryable(err)
+			assert.Equal(t, tc.wantRetry, retryable, tc.description)
+		})
+	}
+}
+
+// TestTableChangeStream_TableNotFoundError_Integration verifies end-to-end behavior
+// when "can not find table by id" error occurs during collection.
+func TestTableChangeStream_TableNotFoundError_Integration(t *testing.T) {
+	h := newTableStreamHarness(t)
+	defer h.Close()
+
+	// Inject "can not find table by id" error during collection
+	tableNotFoundErr := moerr.NewInternalError(h.Context(), "internal error: can not find table by id 272525: accountId: 0")
+	h.SetCollectError(tableNotFoundErr)
+
+	ar := h.NewActiveRoutine()
+	errCh, done := h.RunStreamAsync(ar)
+
+	// Wait for stream to process the error and mark as retryable
+	require.Eventually(t, func() bool {
+		return h.Stream().GetRetryable()
+	}, 2*time.Second, 10*time.Millisecond, "stream should be marked retryable on table not found error")
+
+	h.Cancel()
+	done()
+
+	var runErr error
+	select {
+	case runErr = <-errCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream did not exit")
+	}
+
+	require.Error(t, runErr)
+	require.True(t, h.Stream().GetRetryable(), "table not found error should mark stream retryable")
 }

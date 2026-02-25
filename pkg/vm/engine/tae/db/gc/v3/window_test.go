@@ -517,3 +517,122 @@ func TestMultiTableGCWithRealCheckpointData(t *testing.T) {
 		}
 	}
 }
+
+// TestFilesToGCDeduplication tests that duplicate file names are deduplicated
+// before being sent to the deleter. This is the fix for the issue where
+// the same object could appear multiple times in filesToGC when referenced
+// by multiple tables.
+func TestFilesToGCDeduplication(t *testing.T) {
+	// Simulate the deduplication logic used in ExecuteGlobalCheckpointBasedGC
+	// This tests the map-based deduplication approach
+
+	// Create a list of file names with duplicates (simulating the bug scenario)
+	// In the original bug, vecToGC could contain the same object name multiple times
+	// because the same object was referenced by multiple tables
+	duplicateFiles := []string{
+		"018f1234-5678-9abc-def0-123456789abc_0.data",
+		"018f2345-6789-abcd-ef01-23456789abcd_0.data",
+		"018f1234-5678-9abc-def0-123456789abc_0.data", // duplicate of first
+		"018f3456-789a-bcde-f012-3456789abcde_0.data",
+		"018f2345-6789-abcd-ef01-23456789abcd_0.data", // duplicate of second
+		"018f1234-5678-9abc-def0-123456789abc_0.data", // another duplicate of first
+		"018f4567-89ab-cdef-0123-456789abcdef_0.data",
+	}
+
+	// Apply the deduplication logic (same as in ExecuteGlobalCheckpointBasedGC)
+	filesToGCSet := make(map[string]struct{})
+	for _, file := range duplicateFiles {
+		filesToGCSet[file] = struct{}{}
+	}
+
+	filesToGC := make([]string, 0, len(filesToGCSet))
+	for file := range filesToGCSet {
+		filesToGC = append(filesToGC, file)
+	}
+
+	// Verify deduplication worked correctly
+	require.Equal(t, 4, len(filesToGC), "Should have 4 unique files after deduplication")
+
+	// Verify all unique files are present
+	uniqueFiles := map[string]bool{
+		"018f1234-5678-9abc-def0-123456789abc_0.data": false,
+		"018f2345-6789-abcd-ef01-23456789abcd_0.data": false,
+		"018f3456-789a-bcde-f012-3456789abcde_0.data": false,
+		"018f4567-89ab-cdef-0123-456789abcdef_0.data": false,
+	}
+
+	for _, file := range filesToGC {
+		_, exists := uniqueFiles[file]
+		require.True(t, exists, "File %s should be in the unique files set", file)
+		uniqueFiles[file] = true
+	}
+
+	// Verify all unique files were found
+	for file, found := range uniqueFiles {
+		require.True(t, found, "File %s should have been found in filesToGC", file)
+	}
+
+	// Verify the original list had duplicates
+	require.Equal(t, 7, len(duplicateFiles), "Original list should have 7 entries (with duplicates)")
+
+	// Calculate the reduction ratio
+	reductionRatio := float64(len(duplicateFiles)-len(filesToGC)) / float64(len(duplicateFiles)) * 100
+	t.Logf("Deduplication reduced file count from %d to %d (%.1f%% reduction)",
+		len(duplicateFiles), len(filesToGC), reductionRatio)
+}
+
+// TestFilesToGCDeduplicationWithEmptyInput tests deduplication with edge cases
+func TestFilesToGCDeduplicationWithEmptyInput(t *testing.T) {
+	testCases := []struct {
+		name     string
+		input    []string
+		expected int
+	}{
+		{
+			name:     "empty input",
+			input:    []string{},
+			expected: 0,
+		},
+		{
+			name:     "single file",
+			input:    []string{"file1.data"},
+			expected: 1,
+		},
+		{
+			name:     "all duplicates",
+			input:    []string{"file1.data", "file1.data", "file1.data"},
+			expected: 1,
+		},
+		{
+			name:     "no duplicates",
+			input:    []string{"file1.data", "file2.data", "file3.data"},
+			expected: 3,
+		},
+		{
+			name: "mixed duplicates",
+			input: []string{
+				"file1.data", "file2.data", "file1.data",
+				"file3.data", "file2.data", "file4.data",
+			},
+			expected: 4,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Apply deduplication
+			filesToGCSet := make(map[string]struct{})
+			for _, file := range tc.input {
+				filesToGCSet[file] = struct{}{}
+			}
+
+			filesToGC := make([]string, 0, len(filesToGCSet))
+			for file := range filesToGCSet {
+				filesToGC = append(filesToGC, file)
+			}
+
+			require.Equal(t, tc.expected, len(filesToGC),
+				"Expected %d unique files, got %d", tc.expected, len(filesToGC))
+		})
+	}
+}

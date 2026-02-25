@@ -740,8 +740,8 @@ func (s *TableChangeStream) processOneRound(ctx context.Context, ar *ActiveRouti
 	}
 	defer FinishTxnOp(ctx, err, txnOp, s.cnEngine)
 
-	EnterRunSql(txnOp)
-	defer ExitRunSql(txnOp)
+	finishRunSQL := EnterRunSql(ctx, txnOp, "<cdc.table_change_stream>")
+	defer finishRunSQL()
 
 	if err = GetTxn(ctx, s.cnEngine, txnOp); err != nil {
 		return err
@@ -947,6 +947,11 @@ func (s *TableChangeStream) determineRetryable(err error) bool {
 
 	// Table relation errors (table truncated, etc.) are retryable
 	if strings.Contains(errMsg, "relation") || strings.Contains(errMsg, "truncated") {
+		return true
+	}
+
+	// Table not found errors are retryable (may occur during flush when table is being modified)
+	if strings.Contains(errMsg, "can not find table by id") {
 		return true
 	}
 
