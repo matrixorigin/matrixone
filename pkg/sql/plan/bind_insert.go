@@ -210,6 +210,31 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 	}
 
+	// Materialize lock keys for composite unique indexes in advance.
+	// This guarantees the lock target can find __mo_index_idx_col in colName2Idx.
+	for i, idxDef := range tableDef.Indexes {
+		if !idxDef.Unique || skipUniqueIdx[i] || len(idxDef.Parts) <= 1 {
+			continue
+		}
+		lockColName := idxDef.IndexTableName + "." + catalog.IndexTableIndexColName
+		if _, ok := colName2Idx[lockColName]; ok {
+			continue
+		}
+		args := make([]*plan.Expr, len(idxDef.Parts))
+		for k := range idxDef.Parts {
+			partName := catalog.ResolveAlias(idxDef.Parts[k])
+			partPos, ok := colName2Idx[tableDef.Name+"."+partName]
+			if !ok {
+				errMsg := fmt.Sprintf("bind insert err, can not find colName = %s", partName)
+				return 0, moerr.NewInternalError(builder.GetContext(), errMsg)
+			}
+			args[k] = DeepCopyExpr(selectNode.ProjectList[partPos])
+		}
+		lockExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
+		colName2Idx[lockColName] = int32(len(selectNode.ProjectList))
+		selectNode.ProjectList = append(selectNode.ProjectList, lockExpr)
+	}
+
 	objRef := dmlCtx.objRefs[0]
 	idxObjRefs := make([]*plan.ObjectRef, len(tableDef.Indexes))
 	idxTableDefs := make([]*plan.TableDef, len(tableDef.Indexes))
@@ -241,9 +266,20 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		var pkIdxInBat int32
 
 		if len(idxDef.Parts) == 1 {
-			pkIdxInBat = colName2Idx[tableDef.Name+"."+idxDef.Parts[0]]
+			var ok bool
+			pkIdxInBat, ok = colName2Idx[tableDef.Name+"."+idxDef.Parts[0]]
+			if !ok {
+				errMsg := fmt.Sprintf("bind insert err, can not find colName = %s", idxDef.Parts[0])
+				return 0, moerr.NewInternalError(builder.GetContext(), errMsg)
+			}
 		} else {
-			pkIdxInBat = colName2Idx[idxTableDef.Name+"."+catalog.IndexTableIndexColName]
+			lockColName := idxDef.IndexTableName + "." + catalog.IndexTableIndexColName
+			var ok bool
+			pkIdxInBat, ok = colName2Idx[lockColName]
+			if !ok {
+				errMsg := fmt.Sprintf("bind insert err, can not find colName = %s", lockColName)
+				return 0, moerr.NewInternalError(builder.GetContext(), errMsg)
+			}
 		}
 		lockTarget := &plan.LockTarget{
 			TableId:            idxTableDef.TblId,
