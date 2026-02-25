@@ -71,6 +71,16 @@ select a, c, dense_rank() over(partition by a order by c rows current row) from 
 select a, c, rank() over(order by a), row_number() over(order by a), dense_rank() over(order by a) from t1;
 drop table t1;
 
+-- test cume_dist
+drop table if exists t1;
+create table t1 (a int, b int);
+insert into t1 values(1, 1), (1, 2), (2, 1), (2, 2), (2, 3);
+select a, b, cume_dist() over (order by a) from t1;
+select a, b, cume_dist() over (order by b) from t1;
+select a, b, cume_dist() over (partition by a order by b) from t1;
+select a, cume_dist() over () from t1;
+drop table t1;
+
 drop table if exists t1;
 create table t1 (a int, b decimal(7, 2));
 insert into t1 values(1, 12.12), (2, 123.13), (3, 456.66), (4, 1111.34);
