@@ -210,6 +210,30 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 	}
 
+	// Materialize lock keys for composite unique indexes in advance.
+	// This guarantees the lock target can find __mo_index_idx_col in colName2Idx.
+	for i, idxDef := range tableDef.Indexes {
+		if !idxDef.Unique || skipUniqueIdx[i] || len(idxDef.Parts) <= 1 {
+			continue
+		}
+		lockColName := idxDef.IndexTableName + "." + catalog.IndexTableIndexColName
+		if _, ok := colName2Idx[lockColName]; ok {
+			continue
+		}
+		args := make([]*plan.Expr, len(idxDef.Parts))
+		for k := range idxDef.Parts {
+			partName := catalog.ResolveAlias(idxDef.Parts[k])
+			partPos, ok := colName2Idx[tableDef.Name+"."+partName]
+			if !ok {
+				return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind insert err, can not find colName = %s", partName)
+			}
+			args[k] = DeepCopyExpr(selectNode.ProjectList[partPos])
+		}
+		lockExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
+		colName2Idx[lockColName] = int32(len(selectNode.ProjectList))
+		selectNode.ProjectList = append(selectNode.ProjectList, lockExpr)
+	}
+
 	objRef := dmlCtx.objRefs[0]
 	idxObjRefs := make([]*plan.ObjectRef, len(tableDef.Indexes))
 	idxTableDefs := make([]*plan.TableDef, len(tableDef.Indexes))
@@ -241,9 +265,18 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		var pkIdxInBat int32
 
 		if len(idxDef.Parts) == 1 {
-			pkIdxInBat = colName2Idx[tableDef.Name+"."+idxDef.Parts[0]]
+			var ok bool
+			pkIdxInBat, ok = colName2Idx[tableDef.Name+"."+idxDef.Parts[0]]
+			if !ok {
+				return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind insert err, can not find colName = %s", idxDef.Parts[0])
+			}
 		} else {
-			pkIdxInBat = colName2Idx[idxTableDef.Name+"."+catalog.IndexTableIndexColName]
+			lockColName := idxDef.IndexTableName + "." + catalog.IndexTableIndexColName
+			var ok bool
+			pkIdxInBat, ok = colName2Idx[lockColName]
+			if !ok {
+				return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind insert err, can not find colName = %s", lockColName)
+			}
 		}
 		lockTarget := &plan.LockTarget{
 			TableId:            idxTableDef.TblId,
@@ -374,8 +407,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			var ok bool
 			for k := range argsLen {
 				if colPos, ok = colName2Idx[tableDef.Name+"."+catalog.ResolveAlias(idxDef.Parts[k])]; !ok {
-					errMsg := fmt.Sprintf("bind insert err, can not find colName = %s", idxDef.Parts[k])
-					return 0, moerr.NewInternalError(builder.GetContext(), errMsg)
+					return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind insert err, can not find colName = %s", idxDef.Parts[k])
 				}
 				args[k] = &plan.Expr{
 					Typ: selectNode.ProjectList[colPos].Typ,
@@ -699,8 +731,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				// argsLen is alwarys greater than 1 for secondary index, so we can use serial_full directly
 				for k, part := range idxDef.Parts {
 					if colPos, ok = colName2Idx[tableDef.Name+"."+catalog.ResolveAlias(part)]; !ok {
-						errMsg := fmt.Sprintf("bind insert err, can not find colName = %s", part)
-						return nil, moerr.NewInternalError(builder.GetContext(), errMsg)
+						return nil, moerr.NewInternalErrorf(builder.GetContext(), "bind insert err, can not find colName = %s", part)
 					}
 					// build from selectTag because we want to insert the row into the index table
 					args[k] = &plan.Expr{
@@ -762,8 +793,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				var ok bool
 				for k, part := range idxDef.Parts {
 					if colPos, ok = tableDef.Name2ColIndex[catalog.ResolveAlias(part)]; !ok {
-						errMsg := fmt.Sprintf("bind insert err, can not find colName = %s", part)
-						return 0, moerr.NewInternalError(builder.GetContext(), errMsg)
+						return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind insert err, can not find colName = %s", part)
 					}
 
 					delArgs[k] = &plan.Expr{
