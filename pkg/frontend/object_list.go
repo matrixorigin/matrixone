@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -437,6 +438,10 @@ func GetObjectListWithoutSession(
 	}
 
 	for _, dbName := range dbNames {
+		// Skip system databases
+		if slices.Contains(catalog.SystemDatabases, strings.ToLower(dbName)) {
+			continue
+		}
 		err = collectObjectListForDatabase(ctx, from, to, dbName, tablename, eng, txn, bat, mp)
 		if err != nil {
 			bat.Clean(mp)

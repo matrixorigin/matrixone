@@ -1023,14 +1023,18 @@ func (h *UpstreamSQLHelper) handleGetDatabasesCmd(
 	// Create context with account ID
 	queryCtx := context.WithValue(ctx, defines.TenantIDKey{}, h.accountID)
 
+	// Build system databases exclusion clause
+	sysDbList := strings.Join(catalog.SystemDatabases, "','")
+	sysDbExclusion := fmt.Sprintf("AND LOWER(datname) NOT IN ('%s')", sysDbList)
+
 	var sql string
 	if level == publication.SyncLevelDatabase {
 		// Database level: only check/return the specific database if it exists
-		sql = fmt.Sprintf("SELECT datname FROM mo_catalog.mo_database{MO_TS = %d} WHERE account_id = %d AND datname = '%s'",
-			snapshotTs, h.accountID, dbName)
+		sql = fmt.Sprintf("SELECT datname FROM mo_catalog.mo_database{MO_TS = %d} WHERE account_id = %d AND datname = '%s' %s",
+			snapshotTs, h.accountID, dbName, sysDbExclusion)
 	} else {
-		// Account level: return all databases for the account
-		sql = fmt.Sprintf("SELECT datname FROM mo_catalog.mo_database{MO_TS = %d} WHERE account_id = %d", snapshotTs, h.accountID)
+		// Account level: return all databases for the account, excluding system databases
+		sql = fmt.Sprintf("SELECT datname FROM mo_catalog.mo_database{MO_TS = %d} WHERE account_id = %d %s", snapshotTs, h.accountID, sysDbExclusion)
 	}
 
 	// Execute using internal executor

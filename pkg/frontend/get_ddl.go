@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -468,8 +469,12 @@ func getddlbatch(
 		return nil, moerr.NewInternalErrorf(ctx, "failed to get database names: %v", err)
 	}
 
-	// Process each database
+	// Process each database, skipping system databases
 	for _, dbName := range dbNames {
+		// Skip system databases
+		if slices.Contains(catalog.SystemDatabases, strings.ToLower(dbName)) {
+			continue
+		}
 		err = visitDatabaseDdl(ctx, dbName, tableName, resultBatch, txn, eng, mp)
 		if err != nil {
 			resultBatch.Clean(mp)

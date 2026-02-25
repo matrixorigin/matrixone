@@ -3050,6 +3050,11 @@ func queryUpstreamAndCreateLocalDBTables(
 			return nil, nil, moerr.NewInternalErrorf(ctx, "failed to scan database result: %v", err)
 		}
 
+		// Skip system databases
+		if slices.Contains(catalog.SystemDatabases, strings.ToLower(upstreamDbName)) {
+			continue
+		}
+
 		// Check if database exists locally
 		dbExists, err := checkDatabaseExists(downstreamCtx, bh, upstreamDbName)
 		if err != nil {
@@ -3090,6 +3095,11 @@ func queryUpstreamAndCreateLocalDBTables(
 		var upstreamTableID int64
 		if err := ddlResult.Scan(&upstreamDbName, &upstreamTableName, &upstreamTableID, &tableSQL); err != nil {
 			return nil, nil, moerr.NewInternalErrorf(ctx, "failed to scan DDL result: %v", err)
+		}
+
+		// Skip system databases
+		if slices.Contains(catalog.SystemDatabases, strings.ToLower(upstreamDbName)) {
+			continue
 		}
 
 		// Skip if table SQL is empty (might be system table or filtered out)

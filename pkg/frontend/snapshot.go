@@ -3052,12 +3052,16 @@ func handleGetDatabases(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetDatab
 		return err
 	}
 
-	// Add each database name as a row
+	// Add each database name as a row, skipping system databases
 	if execResultArrayHasData(erArray) {
 		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
 			dbName, err := erArray[0].GetString(ctx, i, 0)
 			if err != nil {
 				return err
+			}
+			// Skip system databases
+			if slices.Contains(catalog.SystemDatabases, strings.ToLower(dbName)) {
+				continue
 			}
 			row := make([]interface{}, 1)
 			row[0] = dbName
