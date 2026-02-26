@@ -547,6 +547,8 @@ func TestJoinTableSqlBuilder(t *testing.T) {
 		"select nation.n_name from nation join nation2 on nation.n_name !='a' join region on nation.n_regionkey = region.r_regionkey",
 		"select * from nation, nation2, region",
 		"select n_name from nation dedup join region on n_regionkey = r_regionkey",
+		"SELECT * FROM NATION a join REGION b on a.N_REGIONKEY = b.R_REGIONKEY WHERE a.N_REGIONKEY > 0 for update", //join for update
+		"select * from nation, nation2, region for update",                                                         //multi-table for update
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -556,8 +558,6 @@ func TestJoinTableSqlBuilder(t *testing.T) {
 		"SELECT N_NAME, R_REGIONKEY FROM NATION join REGION using(R_REGIONKEY)",                                              //column not exist
 		"SELECT N_NAME,N_REGIONKEY FROM NATION a join REGION b on a.N_REGIONKEY = b.R_REGIONKEY WHERE aaaaa.N_REGIONKEY > 0", //table alias not exist
 		"select *", //No table used
-		"SELECT * FROM NATION a join REGION b on a.N_REGIONKEY = b.R_REGIONKEY WHERE a.N_REGIONKEY > 0 for update", //Not support
-		"select * from nation, nation2, region for update",                                                         // Not support
 	}
 	runTestShouldError(mock, t, sqls)
 }
