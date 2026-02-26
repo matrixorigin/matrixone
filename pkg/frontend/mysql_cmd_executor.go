@@ -430,7 +430,7 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 
 		// get table stats
 		var rets []ExecResult
-		if rets, err = executeSQLInBackgroundSession(ctx, bh, sqlBuilder.String()); err != nil {
+		if rets, err = ExeSqlInBgSes(ctx, bh, sqlBuilder.String()); err != nil {
 			return
 		}
 
@@ -466,7 +466,7 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 			sqlBuilder.WriteString(fmt.Sprintf("row('%s', '%s')", dbName, tblName))
 		}
 		sqlBuilder.WriteString(") as tmp(db, tbl)")
-		rets, err := executeSQLInBackgroundSession(ctx, bh, sqlBuilder.String())
+		rets, err := ExeSqlInBgSes(ctx, bh, sqlBuilder.String())
 		if err != nil {
 			return nil, err
 		}
@@ -511,7 +511,7 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 				continue
 			}
 			sql := fmt.Sprintf("select count(*) from `%s`.`%s`", escapeIdent(dbName), escapeIdent(tblName))
-			rets, err := executeSQLInBackgroundSession(ctx, bh, sql)
+			rets, err := ExeSqlInBgSes(ctx, bh, sql)
 			if err != nil {
 				return nil, err
 			}

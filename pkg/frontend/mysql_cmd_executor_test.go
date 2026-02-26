@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1833,6 +1834,97 @@ func Test_handleShowTableStatus(t *testing.T) {
 
 		ec = newTestExecCtx(context.Background(), ctrl)
 		convey.So(handleShowTableStatus(ses, ec, shv), convey.ShouldNotBeNil)
+	})
+
+	convey.Convey("handleShowTableStatus statement_info fallback rows", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		relation := mock_frontend.NewMockRelation(ctrl)
+		relation.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+			TableType: catalog.SystemOrdinaryRel,
+		}).AnyTimes()
+
+		database := mock_frontend.NewMockDatabase(ctrl)
+		database.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
+		database.EXPECT().Relation(gomock.Any(), gomock.Any(), nil).Return(relation, nil).AnyTimes()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Database(gomock.Any(), gomock.Any(), nil).Return(database, nil).AnyTimes()
+
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
+
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
+		pu.SV.SkipCheckUser = true
+		setPu("", pu)
+		setSessionAlloc("", NewLeakCheckAllocator())
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.So(err, convey.ShouldBeNil)
+		pu.StorageEngine = eng
+		pu.TxnClient = txnClient
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
+
+		ses := NewSession(ctx, "", proto, nil)
+		tenant := &TenantInfo{
+			Tenant:        "acc_fallback",
+			TenantID:      1,
+			User:          "admin",
+			DefaultRole:   accountAdminRoleName,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+		ses.mrs = &MysqlResultSet{}
+		ses.SetDatabaseName(catalog.MO_SYSTEM)
+		ses.data = [][]interface{}{{
+			[]byte(catalog.MO_STATEMENT), nil, nil, nil, nil, nil, nil, nil, nil,
+			nil, nil, nil, nil, nil, nil, nil, nil, uint32(moAdminRoleID), nil,
+		}}
+
+		statsRet := mock_frontend.NewMockExecResult(ctrl)
+		statsRet.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+		statsRet.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return(catalog.MO_STATEMENT, nil).AnyTimes()
+		statsRet.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(1)).Return(int64(0), nil).AnyTimes()
+		statsRet.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(2)).Return(int64(128), nil).AnyTimes()
+
+		countRet := mock_frontend.NewMockExecResult(ctrl)
+		countRet.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+		countRet.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(7), nil).AnyTimes()
+
+		calls := 0
+		execStub := gostub.StubFunc(&ExeSqlInBgSes, func(reqCtx context.Context, bh BackgroundExec, sql string) ([]ExecResult, error) {
+			calls++
+			switch {
+			case strings.Contains(sql, "mo_table_rows(db, tbl)"):
+				return []ExecResult{statsRet}, nil
+			case strings.Contains(sql, "select count(*) from `system`.`statement_info`"):
+				return []ExecResult{countRet}, nil
+			default:
+				return nil, moerr.NewInternalErrorf(reqCtx, "unexpected sql in test: %s", sql)
+			}
+		})
+		defer execStub.Reset()
+
+		proto.SetSession(ses)
+		ec := newTestExecCtx(ctx, ctrl)
+		shv := &tree.ShowTableStatus{DbName: catalog.MO_SYSTEM}
+		convey.So(handleShowTableStatus(ses, ec, shv), convey.ShouldBeNil)
+		convey.So(calls, convey.ShouldEqual, 2)
+		convey.So(ses.data[0][3], convey.ShouldEqual, int64(7))
+		convey.So(ses.data[0][4], convey.ShouldEqual, int64(0))
+		convey.So(ses.data[0][5], convey.ShouldEqual, int64(128))
 	})
 }
 

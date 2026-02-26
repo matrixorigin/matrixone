@@ -1,0 +1,10 @@
+drop account if exists show_table_status_acc_10163;
+create account show_table_status_acc_10163 admin_name = 'admin' identified by '111';
+select 1;
+1
+1
+show table status from system like 'statement_info';
+-- @regex("(?m)^statement_info\\s+Tae\\s+Dynamic\\s+[1-9][0-9]*\\s+",true)
+Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
+statement_info    Tae    Dynamic    116    0    102892    0    0    NULL    0    2024-08-29 16:04:58    NULL    NULL    utf8mb4_bin    NULL        record each statement and stats info[mo_no_del_hint]    0    moadmin
+drop account show_table_status_acc_10163;
