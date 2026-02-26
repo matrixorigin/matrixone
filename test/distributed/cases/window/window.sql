@@ -1581,3 +1581,5 @@ select a, ntile(3) over (order by a) as bucket, rank() over (order by a) as rnk,
 select a % 3 as grp, a, ntile(2) over (partition by a % 3 order by a) as bucket from t_ntile;
 
 drop table t_ntile;
+
+drop database test;

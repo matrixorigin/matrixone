@@ -250,7 +250,7 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 					} else {
 						fillVecs = []*vector.Vector{vec}
 					}
-					
+
 					if err = ctr.batAggs[idx].Fill(p-1, o, fillVecs); err != nil {
 						return err
 					}
@@ -263,8 +263,8 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 			}
 		}
 	} else {
-		//nullVec := vector.NewConstNull(*ctr.aggVecs[idx].Vec[0].GetType(), 1, proc.Mp())
-		//defer nullVec.Free(proc.Mp())
+		// nullVec := vector.NewConstNull(*ctr.aggVecs[idx].Vec[0].GetType(), 1, proc.Mp())
+		// defer nullVec.Free(proc.Mp())
 
 		// plan.Function_AGG, plan.Function_WIN_VALUE
 		for j := 0; j < n; j++ {
@@ -282,9 +282,9 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 
 			if right < start || left > end || left >= right {
 				// todo: I commented this out because it was a waste of time to fill a null value.
-				//if err = ctr.bat.Aggs[idx].Fill(j, 0, []*vector.Vector{nullVec}); err != nil {
+				// if err = ctr.bat.Aggs[idx].Fill(j, 0, []*vector.Vector{nullVec}); err != nil {
 				//	return err
-				//}
+				// }
 				continue
 			}
 
@@ -526,9 +526,9 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 	ovec := ctr.orderVecs[0].Vec[0]
 
 	rowCount := bat.RowCount()
-	//if ctr.sels == nil {
+	// if ctr.sels == nil {
 	//	ctr.sels = make([]int64, rowCount)
-	//}
+	// }
 	ctr.sels = make([]int64, rowCount)
 	for i := 0; i < rowCount; i++ {
 		ctr.sels[i] = int64(i)

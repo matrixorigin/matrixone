@@ -4475,3 +4475,4 @@ grp    a    bucket
 2    5    1
 2    8    2
 drop table t_ntile;
+drop database test;

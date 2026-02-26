@@ -320,6 +320,7 @@ func makeMedian(
 	info := singleAggInfo{
 		aggID:     aggID,
 		distinct:  isDistinct,
+		argType:   param,
 		retType:   MedianReturnType([]types.Type{param}),
 		emptyNull: true,
 	}
