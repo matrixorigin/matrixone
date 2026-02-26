@@ -401,7 +401,9 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) (err error) {
 		return err
 	}
 	key := s.pathToKey(path.File)
+	existsStart := time.Now()
 	exists, err := s.storage.Exists(ctx, key)
+	metric.FSWriteDurationExists.Observe(time.Since(existsStart).Seconds())
 	if err != nil {
 		return err
 	}
@@ -472,23 +474,29 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 			Concurrency: runtime.NumCPU(),
 			Expire:      expire,
 		}
+		storageStart := time.Now()
 		if err := pmw.WriteMultipartParallel(ctx, key, reader, size, opt); err != nil {
 			return 0, err
 		}
+		metric.FSWriteDurationStorage.Observe(time.Since(storageStart).Seconds())
 	} else {
+		storageStart := time.Now()
 		if err := s.storage.Write(ctx, key, reader, size, expire); err != nil {
 			return 0, err
 		}
+		metric.FSWriteDurationStorage.Observe(time.Since(storageStart).Seconds())
 	}
 
 	// write to disk cache
 	if writeDiskCache {
 		content := diskCacheBuf.Bytes()
+		diskCacheStart := time.Now()
 		if err := s.diskCache.SetFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
 			return io.NopCloser(bytes.NewReader(content)), nil
 		}); err != nil {
 			return 0, err
 		}
+		metric.FSWriteDurationDiskCacheSet.Observe(time.Since(diskCacheStart).Seconds())
 	}
 
 	return int(n.Load()), nil
@@ -500,6 +508,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	ioStart := time.Now()
 	defer func() {
 		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
+		metric.FSReadDurationTotal.Observe(time.Since(ioStart).Seconds())
 	}()
 
 	if err := ctx.Err(); err != nil {
@@ -643,12 +652,14 @@ read_disk_cache:
 		if done != nil {
 			defer done()
 			stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
+			metric.FSReadDurationIOMerger.Observe(time.Since(startLock).Seconds())
 			LogEvent(ctx, str_ioMerger_Merge_initiate)
 			LogEvent(ctx, str_ioMerger_Merge_end)
 		} else {
 			LogEvent(ctx, str_ioMerger_Merge_wait)
 			wait()
 			stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
+			metric.FSReadDurationIOMerger.Observe(time.Since(startLock).Seconds())
 			LogEvent(ctx, str_ioMerger_Merge_end)
 			if mayReadMemoryCache {
 				goto read_memory_cache
@@ -665,9 +676,11 @@ read_disk_cache:
 			s3ReadBytes += entry.Size
 		}
 	}
+	s3ReadStart := time.Now()
 	if err := s.read(ctx, vector); err != nil {
 		return err
 	}
+	metric.FSReadDurationS3Read.Observe(time.Since(s3ReadStart).Seconds())
 	// Record S3 read size (all bytes read from S3)
 	if s3ReadBytes > 0 {
 		perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
