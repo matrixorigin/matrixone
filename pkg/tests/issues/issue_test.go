@@ -647,29 +647,36 @@ func TestIssue19551(t *testing.T) {
 
 			// workflow:
 			// start txn1, txn2 on cn1
+			// txn1, txn2 both do insert before CN is marked invalid
 			// mark cn1 invalid
-			// commit txn1
-			// wait abort active txn completed
-			// commit txn2
+			// txn1 commits first, gets ErrCannotCommitOnInvalidCN, triggers markAllActiveTxnAborted
+			// wait abort active txn completed (service resume)
+			// txn2 commits, gets ErrTxnClosed (already marked aborted)
 			// start txn3 and commit will success
+			//
+			// Note: txn1 may also get ErrTxnClosed if a background task (e.g. mo_table_stats)
+			// commits while CN is invalid and triggers markAllActiveTxnAborted before txn1.
 
 			var wg sync.WaitGroup
 			wg.Add(2)
 
 			txn1StartedC := make(chan struct{})
 			txn2StartedC := make(chan struct{})
+			txn1InsertedC := make(chan struct{})
+			txn2InsertedC := make(chan struct{})
 			invalidMarkedC := make(chan struct{})
+			txn1CommittedC := make(chan struct{})
 
 			// txn1
 			exec := testutils.GetSQLExecutor(cn1)
 			go func() {
 				defer wg.Done()
+				defer close(txn1CommittedC)
 
 				err := exec.ExecTxn(
 					ctx,
 					func(txn executor.TxnExecutor) error {
 						close(txn1StartedC)
-						<-invalidMarkedC
 
 						res, err := txn.Exec(
 							"insert into "+table+" values (1, 1)",
@@ -679,14 +686,23 @@ func TestIssue19551(t *testing.T) {
 							return err
 						}
 						res.Close()
+
+						close(txn1InsertedC)
+						// wait until CN is marked invalid, then return to trigger commit
+						<-invalidMarkedC
 						return nil
 					},
 					executor.Options{}.WithDatabase(db),
 				)
 				require.Error(t, err)
+				// txn1 gets ErrCannotCommitOnInvalidCN when its commit reaches TN validation.
+				// However, if a background task (e.g. mo_table_stats) commits while CN is invalid
+				// before txn1, it triggers markAllActiveTxnAborted first, marking txn1 as aborted,
+				// in which case txn1 gets ErrTxnClosed instead.
 				require.Truef(
 					t,
-					moerr.IsMoErrCode(err, moerr.ErrCannotCommitOnInvalidCN),
+					moerr.IsMoErrCode(err, moerr.ErrCannotCommitOnInvalidCN) ||
+						moerr.IsMoErrCode(err, moerr.ErrTxnClosed),
 					fmt.Sprintf("got: %v", err))
 			}()
 
@@ -707,7 +723,11 @@ func TestIssue19551(t *testing.T) {
 						}
 						res.Close()
 
-						// wait valid service resume, means all active in txn client is marked aborted
+						close(txn2InsertedC)
+						// wait txn1 committed first, which triggers markAllActiveTxnAborted
+						<-txn1CommittedC
+
+						// wait service resume, which means markAllActiveTxnAborted + Resume completed
 						for {
 							if !allocator.HasInvalidService(lockSID) {
 								break
@@ -728,6 +748,11 @@ func TestIssue19551(t *testing.T) {
 
 			<-txn1StartedC
 			<-txn2StartedC
+			// wait both txns to finish insert before marking CN invalid,
+			// so that commit happens immediately after invalidMarkedC is closed,
+			// minimizing the window for background tasks to interfere.
+			<-txn1InsertedC
+			<-txn2InsertedC
 
 			// mark cn1 invalid
 			allocator.AddInvalidService(lockSID)
