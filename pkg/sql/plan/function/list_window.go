@@ -89,6 +89,28 @@ var supportedWindowInNewFramework = []FuncNew{
 		},
 	},
 	{
+		functionId: NTILE,
+		class:      plan.Function_WIN_ORDER,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 1 {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isWin:      true,
+				retType:    aggexec.SingleWindowReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:         "ntile",
+					aggRegister: agg.RegisterNtile,
+				},
+			},
+		},
+	},
+	{
 		functionId: CUME_DIST,
 		class:      plan.Function_WIN_ORDER,
 		layout:     STANDARD_FUNCTION,
