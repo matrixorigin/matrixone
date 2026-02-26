@@ -1776,6 +1776,61 @@ func Test_run_panic(t *testing.T) {
 
 func Test_handleShowTableStatus(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), 1)
+	newShowTableStatusFixture := func(
+		reqCtx context.Context,
+		ctrl *gomock.Controller,
+		tableType, tableName string,
+		roleID uint32,
+		tenant *TenantInfo,
+		dbName string,
+	) (*Session, *ExecCtx, *tree.ShowTableStatus) {
+		relation := mock_frontend.NewMockRelation(ctrl)
+		relation.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{TableType: tableType}).AnyTimes()
+
+		database := mock_frontend.NewMockDatabase(ctrl)
+		database.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
+		database.EXPECT().Relation(gomock.Any(), gomock.Any(), nil).Return(relation, nil).AnyTimes()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Database(gomock.Any(), gomock.Any(), nil).Return(database, nil).AnyTimes()
+
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
+
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
+		pu.SV.SkipCheckUser = true
+		setPu("", pu)
+		setSessionAlloc("", NewLeakCheckAllocator())
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.So(err, convey.ShouldBeNil)
+		pu.StorageEngine = eng
+		pu.TxnClient = txnClient
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
+
+		ses := NewSession(reqCtx, "", proto, nil)
+		ses.SetTenantInfo(tenant)
+		ses.mrs = &MysqlResultSet{}
+		ses.SetDatabaseName(dbName)
+		ses.data = [][]interface{}{{
+			[]byte(tableName), nil, nil, nil, nil, nil, nil, nil, nil,
+			nil, nil, nil, nil, nil, nil, nil, nil, roleID, nil,
+		}}
+		proto.SetSession(ses)
+		return ses, newTestExecCtx(reqCtx, ctrl), &tree.ShowTableStatus{DbName: dbName}
+	}
+
 	convey.Convey("handleShowTableStatus succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -1904,7 +1959,7 @@ func Test_handleShowTableStatus(t *testing.T) {
 		countRet.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(7), nil).AnyTimes()
 
 		calls := 0
-		execStub := gostub.StubFunc(&ExeSqlInBgSes, func(reqCtx context.Context, bh BackgroundExec, sql string) ([]ExecResult, error) {
+		execStub := gostub.Stub(&ExeSqlInBgSes, func(reqCtx context.Context, bh BackgroundExec, sql string) ([]ExecResult, error) {
 			calls++
 			switch {
 			case strings.Contains(sql, "mo_table_rows(db, tbl)"):
@@ -1925,6 +1980,225 @@ func Test_handleShowTableStatus(t *testing.T) {
 		convey.So(ses.data[0][3], convey.ShouldEqual, int64(7))
 		convey.So(ses.data[0][4], convey.ShouldEqual, int64(0))
 		convey.So(ses.data[0][5], convey.ShouldEqual, int64(128))
+	})
+
+	convey.Convey("handleShowTableStatus non-special table should not fallback", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses, ec, shv := newShowTableStatusFixture(
+			ctx, ctrl,
+			catalog.SystemOrdinaryRel, "not_special",
+			uint32(moAdminRoleID),
+			&TenantInfo{
+				Tenant:        "acc_fallback",
+				TenantID:      1,
+				User:          "admin",
+				DefaultRole:   accountAdminRoleName,
+				DefaultRoleID: moAdminRoleID,
+			},
+			catalog.MO_SYSTEM,
+		)
+
+		statsRet := mock_frontend.NewMockExecResult(ctrl)
+		statsRet.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+		statsRet.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return("not_special", nil).AnyTimes()
+		statsRet.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(1)).Return(int64(5), nil).AnyTimes()
+		statsRet.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(2)).Return(int64(100), nil).AnyTimes()
+
+		countCalls := 0
+		execStub := gostub.Stub(&ExeSqlInBgSes, func(reqCtx context.Context, bh BackgroundExec, sql string) ([]ExecResult, error) {
+			switch {
+			case strings.Contains(sql, "mo_table_rows(db, tbl)"):
+				return []ExecResult{statsRet}, nil
+			case strings.Contains(sql, "select count(*)"):
+				countCalls++
+				return nil, moerr.NewInternalErrorf(reqCtx, "count query should not be called, sql: %s", sql)
+			default:
+				return nil, moerr.NewInternalErrorf(reqCtx, "unexpected sql in test: %s", sql)
+			}
+		})
+		defer execStub.Reset()
+
+		convey.So(handleShowTableStatus(ses, ec, shv), convey.ShouldBeNil)
+		convey.So(countCalls, convey.ShouldEqual, 0)
+		convey.So(ses.data[0][3], convey.ShouldEqual, int64(5))
+		convey.So(ses.data[0][4], convey.ShouldEqual, int64(20))
+		convey.So(ses.data[0][5], convey.ShouldEqual, int64(100))
+	})
+
+	convey.Convey("handleShowTableStatus statement_info fallback empty result should keep mo_table_rows", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses, ec, shv := newShowTableStatusFixture(
+			ctx, ctrl,
+			catalog.SystemOrdinaryRel, catalog.MO_STATEMENT,
+			uint32(moAdminRoleID),
+			&TenantInfo{
+				Tenant:        "acc_fallback",
+				TenantID:      1,
+				User:          "admin",
+				DefaultRole:   accountAdminRoleName,
+				DefaultRoleID: moAdminRoleID,
+			},
+			catalog.MO_SYSTEM,
+		)
+
+		statsRet := mock_frontend.NewMockExecResult(ctrl)
+		statsRet.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+		statsRet.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return(catalog.MO_STATEMENT, nil).AnyTimes()
+		statsRet.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(1)).Return(int64(3), nil).AnyTimes()
+		statsRet.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(2)).Return(int64(90), nil).AnyTimes()
+
+		countRet := mock_frontend.NewMockExecResult(ctrl)
+		countRet.EXPECT().GetRowCount().Return(uint64(0)).AnyTimes()
+
+		calls := 0
+		execStub := gostub.Stub(&ExeSqlInBgSes, func(reqCtx context.Context, bh BackgroundExec, sql string) ([]ExecResult, error) {
+			calls++
+			switch {
+			case strings.Contains(sql, "mo_table_rows(db, tbl)"):
+				return []ExecResult{statsRet}, nil
+			case strings.Contains(sql, "select count(*) from `system`.`statement_info`"):
+				return []ExecResult{countRet}, nil
+			default:
+				return nil, moerr.NewInternalErrorf(reqCtx, "unexpected sql in test: %s", sql)
+			}
+		})
+		defer execStub.Reset()
+
+		convey.So(handleShowTableStatus(ses, ec, shv), convey.ShouldBeNil)
+		convey.So(calls, convey.ShouldEqual, 2)
+		convey.So(ses.data[0][3], convey.ShouldEqual, int64(3))
+		convey.So(ses.data[0][4], convey.ShouldEqual, int64(30))
+		convey.So(ses.data[0][5], convey.ShouldEqual, int64(90))
+	})
+
+	convey.Convey("handleShowTableStatus statement_info fallback count query error", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses, ec, shv := newShowTableStatusFixture(
+			ctx, ctrl,
+			catalog.SystemOrdinaryRel, catalog.MO_STATEMENT,
+			uint32(moAdminRoleID),
+			&TenantInfo{
+				Tenant:        "acc_fallback",
+				TenantID:      1,
+				User:          "admin",
+				DefaultRole:   accountAdminRoleName,
+				DefaultRoleID: moAdminRoleID,
+			},
+			catalog.MO_SYSTEM,
+		)
+
+		statsRet := mock_frontend.NewMockExecResult(ctrl)
+		statsRet.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+		statsRet.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return(catalog.MO_STATEMENT, nil).AnyTimes()
+		statsRet.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(1)).Return(int64(3), nil).AnyTimes()
+		statsRet.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(2)).Return(int64(90), nil).AnyTimes()
+
+		execStub := gostub.Stub(&ExeSqlInBgSes, func(reqCtx context.Context, bh BackgroundExec, sql string) ([]ExecResult, error) {
+			switch {
+			case strings.Contains(sql, "mo_table_rows(db, tbl)"):
+				return []ExecResult{statsRet}, nil
+			case strings.Contains(sql, "select count(*) from `system`.`statement_info`"):
+				return nil, moerr.NewInternalErrorf(reqCtx, "mock count query error")
+			default:
+				return nil, moerr.NewInternalErrorf(reqCtx, "unexpected sql in test: %s", sql)
+			}
+		})
+		defer execStub.Reset()
+
+		convey.So(handleShowTableStatus(ses, ec, shv), convey.ShouldNotBeNil)
+	})
+
+	convey.Convey("handleShowTableStatus statement_info fallback count decode error", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses, ec, shv := newShowTableStatusFixture(
+			ctx, ctrl,
+			catalog.SystemOrdinaryRel, catalog.MO_STATEMENT,
+			uint32(moAdminRoleID),
+			&TenantInfo{
+				Tenant:        "acc_fallback",
+				TenantID:      1,
+				User:          "admin",
+				DefaultRole:   accountAdminRoleName,
+				DefaultRoleID: moAdminRoleID,
+			},
+			catalog.MO_SYSTEM,
+		)
+
+		statsRet := mock_frontend.NewMockExecResult(ctrl)
+		statsRet.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+		statsRet.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return(catalog.MO_STATEMENT, nil).AnyTimes()
+		statsRet.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(1)).Return(int64(3), nil).AnyTimes()
+		statsRet.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(2)).Return(int64(90), nil).AnyTimes()
+
+		countRet := mock_frontend.NewMockExecResult(ctrl)
+		countRet.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+		countRet.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(0), moerr.NewInternalErrorNoCtx("mock decode error")).AnyTimes()
+
+		execStub := gostub.Stub(&ExeSqlInBgSes, func(reqCtx context.Context, bh BackgroundExec, sql string) ([]ExecResult, error) {
+			switch {
+			case strings.Contains(sql, "mo_table_rows(db, tbl)"):
+				return []ExecResult{statsRet}, nil
+			case strings.Contains(sql, "select count(*) from `system`.`statement_info`"):
+				return []ExecResult{countRet}, nil
+			default:
+				return nil, moerr.NewInternalErrorf(reqCtx, "unexpected sql in test: %s", sql)
+			}
+		})
+		defer execStub.Reset()
+
+		convey.So(handleShowTableStatus(ses, ec, shv), convey.ShouldNotBeNil)
+	})
+
+	convey.Convey("handleShowTableStatus sys account should skip special rows fallback", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		sysCtx := defines.AttachAccountId(context.TODO(), sysAccountID)
+		ses, ec, shv := newShowTableStatusFixture(
+			sysCtx, ctrl,
+			catalog.SystemOrdinaryRel, catalog.MO_DATABASE,
+			uint32(moAdminRoleID),
+			&TenantInfo{
+				Tenant:   "sys",
+				TenantID: 0,
+				User:     DefaultTenantMoAdmin,
+			},
+			catalog.MO_SYSTEM,
+		)
+
+		statsRet := mock_frontend.NewMockExecResult(ctrl)
+		statsRet.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+		statsRet.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return(catalog.MO_DATABASE, nil).AnyTimes()
+		statsRet.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(1)).Return(int64(11), nil).AnyTimes()
+		statsRet.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(2)).Return(int64(121), nil).AnyTimes()
+
+		countCalls := 0
+		execStub := gostub.Stub(&ExeSqlInBgSes, func(reqCtx context.Context, bh BackgroundExec, sql string) ([]ExecResult, error) {
+			switch {
+			case strings.Contains(sql, "mo_table_rows(db, tbl)"):
+				return []ExecResult{statsRet}, nil
+			case strings.Contains(sql, "select count(*)"):
+				countCalls++
+				return nil, moerr.NewInternalErrorf(reqCtx, "count query should not be called, sql: %s", sql)
+			default:
+				return nil, moerr.NewInternalErrorf(reqCtx, "unexpected sql in test: %s", sql)
+			}
+		})
+		defer execStub.Reset()
+
+		convey.So(handleShowTableStatus(ses, ec, shv), convey.ShouldBeNil)
+		convey.So(countCalls, convey.ShouldEqual, 0)
+		convey.So(ses.data[0][3], convey.ShouldEqual, int64(11))
+		convey.So(ses.data[0][4], convey.ShouldEqual, int64(11))
+		convey.So(ses.data[0][5], convey.ShouldEqual, int64(121))
 	})
 }
 
