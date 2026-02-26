@@ -273,6 +273,261 @@ func (exec *singleWindowExec) flushRowNumber() ([]*vector.Vector, error) {
 	return exec.ret.flushAll(), nil
 }
 
+// ntileWindowExec is a window function executor for NTILE
+type ntileWindowExec struct {
+	singleAggInfo
+	ret aggResultWithFixedType[int64]
+
+	groups       []i64Slice
+	bucketCounts []int64 // bucket count for each group
+}
+
+func makeNtileWindowExec(mp *mpool.MPool, info singleAggInfo) AggFuncExec {
+	return &ntileWindowExec{
+		singleAggInfo: info,
+		ret:           initAggResultWithFixedTypeResult[int64](mp, info.retType, info.emptyNull, 0, false),
+	}
+}
+
+func (exec *ntileWindowExec) GroupGrow(more int) error {
+	exec.groups = append(exec.groups, make([]i64Slice, more)...)
+	exec.bucketCounts = append(exec.bucketCounts, make([]int64, more)...)
+	return exec.ret.grows(more)
+}
+
+func (exec *ntileWindowExec) PreAllocateGroups(more int) error {
+	return exec.ret.preExtend(more)
+}
+
+func (exec *ntileWindowExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
+	if len(vectors) == 0 {
+		return moerr.NewInternalErrorNoCtx("ntile requires vectors")
+	}
+
+	// vectors[0] is the os (order sequence) vector
+	value := vector.MustFixedColWithTypeCheck[int64](vectors[0])[row]
+	exec.groups[groupIndex] = append(exec.groups[groupIndex], value)
+
+	// If vectors[1] exists, it's the bucket count parameter
+	if len(vectors) > 1 && exec.bucketCounts[groupIndex] == 0 {
+		bucketVec := vectors[1]
+		if !bucketVec.IsNull(uint64(row)) {
+			var bucketCount int64
+			switch bucketVec.GetType().Oid {
+			case types.T_int64:
+				bucketCount = vector.MustFixedColWithTypeCheck[int64](bucketVec)[row]
+			case types.T_int32:
+				bucketCount = int64(vector.MustFixedColWithTypeCheck[int32](bucketVec)[row])
+			case types.T_int16:
+				bucketCount = int64(vector.MustFixedColWithTypeCheck[int16](bucketVec)[row])
+			case types.T_int8:
+				bucketCount = int64(vector.MustFixedColWithTypeCheck[int8](bucketVec)[row])
+			case types.T_uint64:
+				bucketCount = int64(vector.MustFixedColWithTypeCheck[uint64](bucketVec)[row])
+			case types.T_uint32:
+				bucketCount = int64(vector.MustFixedColWithTypeCheck[uint32](bucketVec)[row])
+			case types.T_uint16:
+				bucketCount = int64(vector.MustFixedColWithTypeCheck[uint16](bucketVec)[row])
+			case types.T_uint8:
+				bucketCount = int64(vector.MustFixedColWithTypeCheck[uint8](bucketVec)[row])
+			default:
+				return moerr.NewInternalErrorNoCtx("ntile bucket count must be integer type")
+			}
+
+			if bucketCount <= 0 {
+				return moerr.NewInternalErrorNoCtx("ntile bucket count must be positive")
+			}
+			exec.bucketCounts[groupIndex] = bucketCount
+		}
+	}
+
+	// Default to 1 bucket if not set
+	if exec.bucketCounts[groupIndex] == 0 {
+		exec.bucketCounts[groupIndex] = 1
+	}
+
+	return nil
+}
+
+func (exec *ntileWindowExec) GetOptResult() SplitResult {
+	return &exec.ret.optSplitResult
+}
+
+func (exec *ntileWindowExec) marshal() ([]byte, error) {
+	d := exec.singleAggInfo.getEncoded()
+	r, em, dist, err := exec.ret.marshalToBytes()
+	if err != nil {
+		return nil, err
+	}
+	if dist != nil {
+		return nil, moerr.NewInternalErrorNoCtx("dist should have been nil")
+	}
+
+	encoded := EncodedAgg{
+		Info:    d,
+		Result:  r,
+		Empties: em,
+		Groups:  nil,
+	}
+	if len(exec.groups) > 0 {
+		encoded.Groups = make([][]byte, len(exec.groups))
+		for i := range encoded.Groups {
+			exec.groups[i] = append(exec.groups[i], exec.bucketCounts[i])
+			encoded.Groups[i] = types.EncodeSlice[int64](exec.groups[i])
+		}
+	}
+	return encoded.Marshal()
+}
+
+func (exec *ntileWindowExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
+	return marshalRetAndGroupsToBuffer(
+		cnt, flags, buf,
+		&exec.ret.optSplitResult, exec.groups, nil)
+}
+
+func (exec *ntileWindowExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+	return marshalChunkToBuffer(
+		chunk, buf,
+		&exec.ret.optSplitResult, exec.groups, nil)
+}
+
+func (exec *ntileWindowExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	err := unmarshalFromReaderNoGroup(reader, &exec.ret.optSplitResult)
+	if err != nil {
+		return err
+	}
+	exec.ret.setupT()
+
+	ngrp, err := types.ReadInt64(reader)
+	if err != nil {
+		return err
+	}
+	if ngrp != 0 {
+		exec.groups = make([]i64Slice, ngrp)
+		exec.bucketCounts = make([]int64, ngrp)
+		for i := range exec.groups {
+			_, bs, err := types.ReadSizeBytes(reader)
+			if err != nil {
+				return err
+			}
+			data := types.DecodeSlice[int64](bs)
+			if len(data) > 0 {
+				exec.bucketCounts[i] = data[len(data)-1]
+				exec.groups[i] = data[:len(data)-1]
+			}
+		}
+	}
+	return nil
+}
+
+func (exec *ntileWindowExec) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
+	if len(exec.groups) > 0 {
+		exec.groups = make([]i64Slice, len(groups))
+		exec.bucketCounts = make([]int64, len(groups))
+		for i := range exec.groups {
+			if len(groups[i]) > 0 {
+				data := types.DecodeSlice[int64](groups[i])
+				if len(data) > 0 {
+					exec.bucketCounts[i] = data[len(data)-1]
+					exec.groups[i] = data[:len(data)-1]
+				}
+			}
+		}
+	}
+	return exec.ret.unmarshalFromBytes(result, empties, nil)
+}
+
+func (exec *ntileWindowExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
+	panic("implement me")
+}
+
+func (exec *ntileWindowExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	return nil
+}
+
+func (exec *ntileWindowExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
+	return nil
+}
+
+func (exec *ntileWindowExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	return nil
+}
+
+func (exec *ntileWindowExec) SetExtraInformation(partialResult any, groupIndex int) error {
+	panic("window function do not support the extra information")
+}
+
+func (exec *ntileWindowExec) Flush() ([]*vector.Vector, error) {
+	return exec.flushNtile()
+}
+
+func (exec *ntileWindowExec) Free() {
+	exec.ret.free()
+}
+
+func (exec *ntileWindowExec) Size() int64 {
+	var size int64
+	size += exec.ret.Size()
+	for _, group := range exec.groups {
+		size += int64(cap(group)) * int64(types.T_int64.ToType().TypeSize())
+	}
+	size += int64(cap(exec.groups)) * 24
+	size += int64(cap(exec.bucketCounts)) * 8
+	return size
+}
+
+func (exec *ntileWindowExec) flushNtile() ([]*vector.Vector, error) {
+	values := exec.ret.values
+
+	idx := 0
+	for gi, group := range exec.groups {
+		if len(group) == 0 {
+			continue
+		}
+
+		bucketCount := exec.bucketCounts[gi]
+		if bucketCount <= 0 {
+			bucketCount = 1
+		}
+
+		// group stores cumulative indices, last element is the total count
+		// actual row count is the last element minus the first element
+		totalRows := group[len(group)-1] - group[0]
+		if totalRows == 0 {
+			continue
+		}
+
+		bucketSize := totalRows / bucketCount
+		remainder := totalRows % bucketCount
+
+		currentBucket := int64(1)
+		rowsInCurrentBucket := int64(0)
+		currentBucketSize := bucketSize
+		if remainder > 0 {
+			currentBucketSize++
+		}
+
+		for j := int64(0); j < totalRows; j++ {
+			x, y := exec.ret.updateNextAccessIdx(idx)
+			values[x][y] = currentBucket
+
+			rowsInCurrentBucket++
+			if rowsInCurrentBucket >= currentBucketSize {
+				currentBucket++
+				rowsInCurrentBucket = 0
+				remainder--
+				if remainder > 0 {
+					currentBucketSize = bucketSize + 1
+				} else {
+					currentBucketSize = bucketSize
+				}
+			}
+			idx++
+		}
+	}
+	return exec.ret.flushAll(), nil
+}
+
 // cumeDistWindowExec is for CUME_DIST window function which returns float64
 type cumeDistWindowExec struct {
 	singleAggInfo

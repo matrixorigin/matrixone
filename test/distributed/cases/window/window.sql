@@ -1553,4 +1553,33 @@ select * from (select i_manufact_id, sum(ss_sales_price) sum_sales, avg(sum(ss_s
 
 -- information_schema is now a table which is compatible with mysql, it is now an empty table
 select group_concat(c.column_name order by ordinal_position) key_columns  from information_schema.key_column_usage c where c.table_schema='test1' and c.table_name='region' and constraint_name='PRIMARY';
+
+-- NTILE window function tests
+drop table if exists t_ntile;
+create table t_ntile (a int, b int, c int);
+insert into t_ntile values(1, 10, 100), (2, 20, 200), (3, 30, 300), (4, 40, 400), (5, 50, 500), (6, 60, 600), (7, 70, 700), (8, 80, 800), (9, 90, 900), (10, 100, 1000);
+
+-- Basic ntile with 3 buckets
+select a, ntile(3) over (order by a) as bucket from t_ntile;
+
+-- Ntile with partition
+select a, b, ntile(2) over (partition by a % 2 order by b) as bucket from t_ntile;
+
+-- Ntile with different bucket counts
+select a, ntile(1) over (order by a) as bucket from t_ntile;
+select a, ntile(4) over (order by a) as bucket from t_ntile;
+select a, ntile(10) over (order by a) as bucket from t_ntile;
+
+-- Ntile with uneven distribution
+select a, ntile(3) over (order by a) as bucket from t_ntile where a <= 5;
+select a, ntile(4) over (order by a) as bucket from t_ntile where a <= 9;
+
+-- Ntile combined with other window functions
+select a, ntile(3) over (order by a) as bucket, rank() over (order by a) as rnk, row_number() over (order by a) as rn from t_ntile;
+
+-- Ntile with multiple partitions
+select a % 3 as grp, a, ntile(2) over (partition by a % 3 order by a) as bucket from t_ntile;
+
+drop table t_ntile;
+
 drop database test;

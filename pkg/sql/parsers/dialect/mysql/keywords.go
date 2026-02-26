@@ -593,6 +593,7 @@ func init() {
 		"first_value":                FIRST_VALUE,
 		"last_value":                 LAST_VALUE,
 		"nth_value":                  NTH_VALUE,
+		"ntile":                      NTILE,
 		"reset":                      RESET,
 		"intersect":                  INTERSECT,
 		"minus":                      MINUS,
