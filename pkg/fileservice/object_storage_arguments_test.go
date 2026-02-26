@@ -18,10 +18,8 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"encoding/xml"
-	"errors"
 	"fmt"
 	"math/rand/v2"
-	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -163,21 +161,6 @@ func TestQCloudRegion(t *testing.T) {
 }
 
 func TestAWSRegion(t *testing.T) {
-	oldResolve := resolveAWSBucketRegion
-	resolveAWSBucketRegion = func(bucket string) (string, error) {
-		switch bucket {
-		case "aws":
-			return "us-east-1", nil
-		case "fdsafdsafasdfsdafsadfsdafdsafewrewqrweqrewrwerwqrew":
-			return "", &url.Error{Op: "Head", URL: "https://" + bucket + ".s3.amazonaws.com", Err: errors.New("mock dns failure")}
-		default:
-			return "", nil
-		}
-	}
-	t.Cleanup(func() {
-		resolveAWSBucketRegion = oldResolve
-	})
-
 	args := ObjectStorageArguments{
 		Endpoint: "amazonaws.com",
 

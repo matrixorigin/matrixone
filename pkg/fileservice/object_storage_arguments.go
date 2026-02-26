@@ -168,18 +168,6 @@ func (o *ObjectStorageArguments) SetFromString(arguments []string) error {
 }
 
 var qcloudEndpointPattern = regexp.MustCompile(`cos\.([^.]+)\.myqcloud\.com`)
-var awsBucketNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
-
-var resolveAWSBucketRegion = func(bucket string) (string, error) {
-	resp, err := http.Head("https://" + bucket + ".s3.amazonaws.com")
-	if err != nil {
-		return "", err
-	}
-	if resp != nil && resp.Body != nil {
-		_ = resp.Body.Close()
-	}
-	return resp.Header.Get("x-amz-bucket-region"), nil
-}
 
 func (o *ObjectStorageArguments) validate() error {
 
@@ -210,13 +198,13 @@ func (o *ObjectStorageArguments) validate() error {
 		} else if o.Endpoint != "" && strings.Contains(o.Endpoint, "amazonaws.com") {
 			// AWS
 			// try to get region from bucket
-			if !isValidAWSBucketName(o.Bucket) {
-				return moerr.NewInvalidInputNoCtxf("invalid S3 bucket: %s", o.Bucket)
-			}
-			if value, err := resolveAWSBucketRegion(o.Bucket); err == nil {
-				if value != "" {
+			resp, err := http.Head("https://" + o.Bucket + ".s3.amazonaws.com")
+			if err == nil {
+				if value := resp.Header.Get("x-amz-bucket-region"); value != "" {
 					o.Region = value
 				}
+			} else {
+				return err
 			}
 		}
 
@@ -243,18 +231,4 @@ func (o *ObjectStorageArguments) shouldLoadDefaultCredentials() bool {
 	}
 
 	return false
-}
-
-func isValidAWSBucketName(bucket string) bool {
-	if len(bucket) < 3 || len(bucket) > 63 {
-		return false
-	}
-	if !awsBucketNamePattern.MatchString(bucket) {
-		return false
-	}
-	// Adjacent dots are not allowed in bucket names.
-	if strings.Contains(bucket, "..") {
-		return false
-	}
-	return true
 }
