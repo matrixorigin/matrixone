@@ -115,6 +115,9 @@ func processObjectListImpl(
 		to = getCurrentTS()
 	}
 
+	// Set txn snapshot timestamp to 'to' timestamp
+	txnOp = txnOp.CloneSnapshotOp(to.ToTimestamp())
+
 	// Get object list batch (batch is created inside GetObjectListWithoutSession)
 	objBatch, err := GetObjectListWithoutSession(ctx, from, to, dbname, tablename, eng, txnOp, mp)
 	if err != nil {
