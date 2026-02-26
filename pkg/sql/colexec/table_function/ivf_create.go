@@ -34,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"golang.org/x/exp/rand"
 )
 
 const (
@@ -60,7 +59,6 @@ type ivfCreateState struct {
 	idxcfg       vectorindex.IndexConfig
 	data32       [][]float32
 	data64       [][]float64
-	rand         *rand.Rand
 	nsample      uint
 	sample_ratio float64
 	offset       int
