@@ -786,3 +786,64 @@ prepare s1 from select a from t1 where b = ? order by b limit 1 for update;
 set @b=2;
 execute s1 using @b;
 deallocate prepare s1;
+
+-- select ... for update with join tables
+drop table if exists su_join_t1;
+drop table if exists su_join_t2;
+drop table if exists su_join_t3;
+create table su_join_t1(id int primary key, name varchar(25), tid int);
+create table su_join_t2(id int primary key, val int);
+create table su_join_t3(id int primary key, tag varchar(10));
+insert into su_join_t1 values(1,'alice',10),(2,'bob',20),(3,'carol',30);
+insert into su_join_t2 values(10,100),(20,200),(30,300);
+insert into su_join_t3 values(1,'x'),(2,'y'),(3,'z');
+
+-- inner join for update
+begin;
+select su_join_t1.id, su_join_t1.name, su_join_t2.val from su_join_t1 join su_join_t2 on su_join_t1.tid = su_join_t2.id where su_join_t1.id <= 2 for update;
+-- @session:id=1{
+use select_for_update;
+select * from su_join_t1 where id=1;
+select * from su_join_t2 where id=10;
+-- @session}
+commit;
+
+-- left join for update
+begin;
+select a.id, b.val from su_join_t1 a left join su_join_t2 b on a.tid = b.id for update;
+commit;
+
+-- three table join for update
+begin;
+select a.id, a.name, b.val, c.tag from su_join_t1 a join su_join_t2 b on a.tid = b.id join su_join_t3 c on a.id = c.id where a.id = 1 for update;
+commit;
+
+-- join for update with update in same transaction
+begin;
+select su_join_t1.id, su_join_t2.val from su_join_t1 join su_join_t2 on su_join_t1.tid = su_join_t2.id where su_join_t1.id = 1 for update;
+update su_join_t2 set val = 999 where id = 10;
+commit;
+select * from su_join_t2 where id = 10;
+
+-- join for update with alias
+begin;
+select a.id, b.val from su_join_t1 a inner join su_join_t2 b on a.tid = b.id for update;
+commit;
+
+-- natural join for update (no common columns, acts as cross join)
+drop table if exists su_join_nat1;
+drop table if exists su_join_nat2;
+create table su_join_nat1(c1 int primary key, c2 int);
+create table su_join_nat2(c1 int primary key, c2 int);
+insert into su_join_nat1 values(1,10),(2,20);
+insert into su_join_nat2 values(1,10),(2,20);
+begin;
+select * from su_join_nat1 natural join su_join_nat2 for update;
+commit;
+
+-- cleanup
+drop table if exists su_join_t1;
+drop table if exists su_join_t2;
+drop table if exists su_join_t3;
+drop table if exists su_join_nat1;
+drop table if exists su_join_nat2;
