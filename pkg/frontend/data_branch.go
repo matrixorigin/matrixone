@@ -51,6 +51,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -70,6 +71,12 @@ const (
 	diffInsert = "INSERT"
 	diffDelete = "DELETE"
 	diffUpdate = "UPDATE"
+)
+
+const (
+	diffSideUnknown = iota
+	diffSideTarget
+	diffSideBase
 )
 
 const dataBranchHashmapLimitRate = 0.8
@@ -231,6 +238,7 @@ type tableStuff struct {
 type batchWithKind struct {
 	name  string
 	kind  string
+	side  int
 	batch *batch.Batch
 }
 
@@ -1705,6 +1713,74 @@ func satisfyDiffOutputOpt(
 		}
 		mrs.AddRow([]any{cnt})
 
+	} else if stmt.OutputOpt.Summary {
+		var (
+			targetInsertCnt int64
+			targetDeleteCnt int64
+			targetUpdateCnt int64
+			baseInsertCnt   int64
+			baseDeleteCnt   int64
+			baseUpdateCnt   int64
+		)
+
+		for wrapped := range retCh {
+			if first != nil {
+				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+				continue
+			}
+			if ctx.Err() != nil {
+				first = ctx.Err()
+				cancel()
+				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+				continue
+			}
+
+			var (
+				targetMetric *int64
+				baseMetric   *int64
+			)
+
+			switch wrapped.kind {
+			case diffInsert:
+				targetMetric = &targetInsertCnt
+				baseMetric = &baseInsertCnt
+			case diffDelete:
+				targetMetric = &targetDeleteCnt
+				baseMetric = &baseDeleteCnt
+			case diffUpdate:
+				targetMetric = &targetUpdateCnt
+				baseMetric = &baseUpdateCnt
+			default:
+				first = moerr.NewInternalErrorNoCtxf("unknown diff kind %q", wrapped.kind)
+				cancel()
+				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+				continue
+			}
+
+			cnt := int64(wrapped.batch.RowCount())
+			switch wrapped.side {
+			case diffSideTarget:
+				*targetMetric += cnt
+			case diffSideBase:
+				*baseMetric += cnt
+			default:
+				first = moerr.NewInternalErrorNoCtxf("unknown diff side for summary, kind=%q, table=%q", wrapped.kind, wrapped.name)
+				cancel()
+				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+				continue
+			}
+
+			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+		}
+
+		if first != nil {
+			return first
+		}
+
+		mrs.AddRow([]any{"INSERTED", targetInsertCnt, baseInsertCnt})
+		mrs.AddRow([]any{"DELETED", targetDeleteCnt, baseDeleteCnt})
+		mrs.AddRow([]any{"UPDATED", targetUpdateCnt, baseUpdateCnt})
+
 	} else if len(stmt.OutputOpt.DirPath) != 0 {
 		var (
 			insertCnt int
@@ -2375,6 +2451,18 @@ func buildOutputSchema(
 			nCol.SetName(tblStuff.def.colNames[idx])
 			showCols = append(showCols, nCol)
 		}
+
+	} else if stmt.OutputOpt.Summary {
+		targetName := tree.StringWithOpts(&stmt.TargetTable, dialect.MYSQL, tree.WithSingleQuoteString())
+		baseName := tree.StringWithOpts(&stmt.BaseTable, dialect.MYSQL, tree.WithSingleQuoteString())
+
+		showCols = append(showCols, &MysqlColumn{}, &MysqlColumn{}, &MysqlColumn{})
+		showCols[0].SetName("metric")
+		showCols[0].SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		showCols[1].SetName(targetName)
+		showCols[1].SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+		showCols[2].SetName(baseName)
+		showCols[2].SetColumnType(defines.MYSQL_TYPE_LONGLONG)
 
 	} else if stmt.OutputOpt.Count {
 		// count(*) of diff rows
@@ -3081,6 +3169,7 @@ func hashDiffIfHasLCA(
 	)
 
 	handleBaseDeleteAndUpdates := func(wrapped batchWithKind) error {
+		wrapped.side = diffSideBase
 		if err2 := mergeutil.SortColumnsByIndex(
 			wrapped.batch.Vecs, tblStuff.def.pkColIdx, ses.proc.Mp(),
 		); err2 != nil {
@@ -3096,6 +3185,7 @@ func hashDiffIfHasLCA(
 	}
 
 	handleTarDeleteAndUpdates := func(wrapped batchWithKind) (err2 error) {
+		wrapped.side = diffSideTarget
 		if len(baseUpdateBatches) == 0 && len(baseDeleteBatches) == 0 {
 			// no need to check conflict
 			if stop, e := emitBatch(emit, wrapped, false, tblStuff.retPool); e != nil {
@@ -3288,6 +3378,12 @@ func hashDiffIfHasLCA(
 
 			if err3 := findDeleteAndUpdateBat(
 				newCtx, ses, bh, tblStuff, name,
+				func() int {
+					if forBase {
+						return diffSideBase
+					}
+					return diffSideTarget
+				}(),
 				tmpCh, branchTS, copt.expandUpdate, hashmap1, hashmap2,
 			); err3 != nil {
 				atomicErr.Store(err3)
@@ -3477,7 +3573,7 @@ func compareRowInWrappedBatches(
 
 func findDeleteAndUpdateBat(
 	ctx context.Context, ses *Session, bh BackgroundExec,
-	tblStuff tableStuff, tblName string, tmpCh chan batchWithKind, branchTS types.TS,
+	tblStuff tableStuff, tblName string, side int, tmpCh chan batchWithKind, branchTS types.TS,
 	expandUpdate bool,
 	dataHashmap, tombstoneHashmap databranchutils.BranchHashmap,
 ) (err error) {
@@ -3604,6 +3700,7 @@ func findDeleteAndUpdateBat(
 							updateDeleteBat.SetRowCount(updateDeleteBat.Vecs[0].Length())
 							if err2 = send(batchWithKind{
 								name:  tblName,
+								side:  side,
 								batch: updateDeleteBat,
 								kind:  diffDelete,
 							}); err2 != nil {
@@ -3612,6 +3709,7 @@ func findDeleteAndUpdateBat(
 						}
 						if err2 = send(batchWithKind{
 							name:  tblName,
+							side:  side,
 							batch: updateBat,
 							kind:  diffInsert,
 						}); err2 != nil {
@@ -3620,6 +3718,7 @@ func findDeleteAndUpdateBat(
 					} else {
 						if err2 = send(batchWithKind{
 							name:  tblName,
+							side:  side,
 							batch: updateBat,
 							kind:  diffUpdate,
 						}); err2 != nil {
@@ -3630,6 +3729,7 @@ func findDeleteAndUpdateBat(
 
 				if err2 = send(batchWithKind{
 					name:  tblName,
+					side:  side,
 					batch: tBat2,
 					kind:  diffDelete,
 				}); err2 != nil {
@@ -3883,6 +3983,7 @@ func diffDataHelper(
 				batch: baseDeleteBat,
 				kind:  diffDelete,
 				name:  tblStuff.baseRel.GetTableName(),
+				side:  diffSideBase,
 			}, false, tblStuff.retPool); err3 != nil {
 				return err3
 			} else if stop {
@@ -3894,6 +3995,7 @@ func diffDataHelper(
 			batch: tarBat,
 			kind:  diffInsert,
 			name:  tblStuff.tarRel.GetTableName(),
+			side:  diffSideTarget,
 		}, false, tblStuff.retPool); err3 != nil {
 			return err3
 		} else if stop {
@@ -3904,6 +4006,7 @@ func diffDataHelper(
 			batch: baseBat,
 			kind:  diffInsert,
 			name:  tblStuff.baseRel.GetTableName(),
+			side:  diffSideBase,
 		}, false, tblStuff.retPool); err3 != nil {
 			return err3
 		} else if stop {
@@ -3960,6 +4063,7 @@ func diffDataHelper(
 			batch: bat,
 			kind:  diffInsert,
 			name:  tblStuff.baseRel.GetTableName(),
+			side:  diffSideBase,
 		}, false, tblStuff.retPool); err3 != nil {
 			return err3
 		} else if stop {

@@ -173,6 +173,9 @@ func TestDataBranchDiffAsFile(t *testing.T) {
 			t.Log("diff output limit with large base workload still returns subset of full diff")
 			runDiffOutputLimitLargeBase(t, ctx, sqlDB)
 
+			t.Log("diff output summary validates complex snapshot and branch divergence scenarios")
+			runDiffOutputSummaryComplex(t, ctx, sqlDB)
+
 			t.Log("diff output to stage and load via datalink")
 			runDiffOutputToStage(t, ctx, sqlDB)
 		})
@@ -696,6 +699,66 @@ func runDiffOutputLimitLargeBase(t *testing.T, parentCtx context.Context, db *sq
 	limitQuery(len(fullRows) * 20 / 100)
 }
 
+func runDiffOutputSummaryComplex(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(parentCtx, time.Second*150)
+	defer cancel()
+
+	dbName := testutils.GetDatabaseName(t)
+	seed := "summary_seed"
+	left := "summary_left"
+	right := "summary_right"
+	standaloneBase := "summary_standalone_base"
+	standaloneTarget := "summary_standalone_target"
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
+	defer func() {
+		execSQLDB(t, ctx, db, "use mo_catalog")
+		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
+	}()
+	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
+
+	// Divergent branch scenario to verify both target/base columns can be non-zero per metric.
+	execSQLDB(t, ctx, db, fmt.Sprintf("create table %s (id int primary key, val int)", seed))
+	execSQLDB(t, ctx, db, fmt.Sprintf("insert into %s values (1, 10), (2, 20), (3, 30), (4, 40), (5, 50), (6, 60)", seed))
+	execSQLDB(t, ctx, db, fmt.Sprintf("data branch create table %s from %s", left, seed))
+	execSQLDB(t, ctx, db, fmt.Sprintf("data branch create table %s from %s", right, seed))
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("update %s set val = val + 100 where id in (1, 2)", left))
+	execSQLDB(t, ctx, db, fmt.Sprintf("delete from %s where id = 4", left))
+	execSQLDB(t, ctx, db, fmt.Sprintf("insert into %s values (7, 70)", left))
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("update %s set val = val + 200 where id in (2, 3)", right))
+	execSQLDB(t, ctx, db, fmt.Sprintf("delete from %s where id = 1", right))
+	execSQLDB(t, ctx, db, fmt.Sprintf("insert into %s values (8, 80)", right))
+
+	leftSummaryStmt := fmt.Sprintf("data branch diff %s against %s output summary", left, right)
+	leftCountStmt := fmt.Sprintf("data branch diff %s against %s output count", left, right)
+	leftSummary := fetchDiffSummaryMetrics(t, ctx, db, leftSummaryStmt)
+	assertSummaryMetrics(t, leftSummary, [2]int64{1, 1}, [2]int64{1, 1}, [2]int64{2, 2})
+	assertSummaryMatchesCount(t, leftSummary, fetchDiffCount(t, ctx, db, leftCountStmt))
+
+	rightSummaryStmt := fmt.Sprintf("data branch diff %s against %s output summary", right, left)
+	rightCountStmt := fmt.Sprintf("data branch diff %s against %s output count", right, left)
+	rightSummary := fetchDiffSummaryMetrics(t, ctx, db, rightSummaryStmt)
+	assertSummaryMetrics(t, rightSummary, [2]int64{1, 1}, [2]int64{1, 1}, [2]int64{2, 2})
+	assertSummaryMatchesCount(t, rightSummary, fetchDiffCount(t, ctx, db, rightCountStmt))
+
+	// Non-branch baseline to ensure summary/count consistency still holds without branch lineage.
+	execSQLDB(t, ctx, db, fmt.Sprintf("create table %s (id int primary key, val int, note varchar(16))", standaloneBase))
+	execSQLDB(t, ctx, db, fmt.Sprintf("create table %s (id int primary key, val int, note varchar(16))", standaloneTarget))
+	execSQLDB(t, ctx, db, fmt.Sprintf("insert into %s values (1, 10, 'seed'), (2, 20, 'seed'), (3, 30, 'seed'), (4, 40, 'seed')", standaloneBase))
+	execSQLDB(t, ctx, db, fmt.Sprintf("insert into %s values (1, 110, 'updated'), (2, 20, 'seed'), (5, 500, 'added'), (6, 600, 'added')", standaloneTarget))
+
+	standaloneSummaryStmt := fmt.Sprintf("data branch diff %s against %s output summary", standaloneTarget, standaloneBase)
+	standaloneCountStmt := fmt.Sprintf("data branch diff %s against %s output count", standaloneTarget, standaloneBase)
+	standaloneSummary := fetchDiffSummaryMetrics(t, ctx, db, standaloneSummaryStmt)
+	standaloneCount := fetchDiffCount(t, ctx, db, standaloneCountStmt)
+	assertSummaryMatchesCount(t, standaloneSummary, standaloneCount)
+	require.Greater(t, standaloneCount, int64(0), "standalone summary/count should report non-zero diff rows")
+}
+
 func runDiffOutputToStage(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	t.Helper()
 
@@ -1070,6 +1133,68 @@ func fetchDiffRowsAsStrings(t *testing.T, ctx context.Context, db *sql.DB, stmt 
 	require.NoErrorf(t, rows.Err(), "sql: %s", stmt)
 	require.NotEmpty(t, result, "diff statement returned no rows: %s", stmt)
 	return result
+}
+
+func fetchDiffSummaryMetrics(t *testing.T, ctx context.Context, db *sql.DB, stmt string) map[string][2]int64 {
+	t.Helper()
+
+	rows, err := db.QueryContext(ctx, stmt)
+	require.NoErrorf(t, err, "sql: %s", stmt)
+	defer rows.Close()
+
+	cols, err := rows.Columns()
+	require.NoError(t, err)
+	require.Equalf(t, 3, len(cols), "summary result should have 3 columns: %s", stmt)
+
+	result := make(map[string][2]int64, 3)
+	for rows.Next() {
+		var (
+			metric string
+			left   int64
+			right  int64
+		)
+		require.NoError(t, rows.Scan(&metric, &left, &right))
+		result[strings.ToUpper(metric)] = [2]int64{left, right}
+	}
+	require.NoErrorf(t, rows.Err(), "sql: %s", stmt)
+	require.Lenf(t, result, 3, "summary should include 3 metrics: %s", stmt)
+	require.Containsf(t, result, "INSERTED", "summary missing INSERTED: %s", stmt)
+	require.Containsf(t, result, "DELETED", "summary missing DELETED: %s", stmt)
+	require.Containsf(t, result, "UPDATED", "summary missing UPDATED: %s", stmt)
+	return result
+}
+
+func fetchDiffCount(t *testing.T, ctx context.Context, db *sql.DB, stmt string) int64 {
+	t.Helper()
+
+	var cnt int64
+	err := db.QueryRowContext(ctx, stmt).Scan(&cnt)
+	require.NoErrorf(t, err, "sql: %s", stmt)
+	return cnt
+}
+
+func assertSummaryMetrics(
+	t *testing.T,
+	summary map[string][2]int64,
+	inserted [2]int64,
+	deleted [2]int64,
+	updated [2]int64,
+) {
+	t.Helper()
+
+	require.Equal(t, inserted, summary["INSERTED"], "INSERTED metric mismatch")
+	require.Equal(t, deleted, summary["DELETED"], "DELETED metric mismatch")
+	require.Equal(t, updated, summary["UPDATED"], "UPDATED metric mismatch")
+}
+
+func assertSummaryMatchesCount(t *testing.T, summary map[string][2]int64, count int64) {
+	t.Helper()
+
+	total := int64(0)
+	for _, metric := range summary {
+		total += metric[0] + metric[1]
+	}
+	require.Equal(t, total, count, "summary total should match output count")
 }
 
 func execDiffAndFetchFile(t *testing.T, ctx context.Context, db *sql.DB, stmt string) string {
