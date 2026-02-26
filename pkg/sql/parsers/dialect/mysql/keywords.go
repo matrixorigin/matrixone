@@ -215,6 +215,7 @@ func init() {
 		"geometry":                   GEOMETRY,
 		"geometrycollection":         GEOMETRYCOLLECTION,
 		"get":                        UNUSED,
+		"get_format":                 GET_FORMAT,
 		"global":                     GLOBAL,
 		"grant":                      GRANT,
 		"grants":                     GRANTS,

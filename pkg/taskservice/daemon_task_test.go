@@ -569,7 +569,9 @@ func TestStartTasksWithNilHAKeeperClient(t *testing.T) {
 		dt := newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID)
 		mustAddTestDaemonTask(t, store, 1, dt)
 
-		r.getClient = func() util.HAKeeperClient { return nil }
+		r.hakeeper.Lock()
+		r.hakeeper.getClient = func() util.HAKeeperClient { return nil }
+		r.hakeeper.Unlock()
 		tasks := r.startTasks(context.Background())
 		require.Len(t, tasks, 1)
 		require.Equal(t, uint64(1), tasks[0].ID)
@@ -582,8 +584,9 @@ func TestStartTasksWithHAKeeperClientState(t *testing.T) {
 		dt := newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID)
 		mustAddTestDaemonTask(t, store, 1, dt)
 
-		r.cnUUID = "cn-1"
-		r.getClient = func() util.HAKeeperClient {
+		r.hakeeper.Lock()
+		r.hakeeper.cnUUID = "cn-1"
+		r.hakeeper.getClient = func() util.HAKeeperClient {
 			return &mockHAKeeperClientForDaemon{
 				state: logservicepb.CheckerState{
 					CNState: logservicepb.CNState{
@@ -598,6 +601,7 @@ func TestStartTasksWithHAKeeperClientState(t *testing.T) {
 				},
 			}
 		}
+		r.hakeeper.Unlock()
 		tasks := r.startTasks(context.Background())
 		require.NotEmpty(t, tasks)
 	}, WithRunnerParallelism(1),
@@ -609,9 +613,11 @@ func TestStartTasksWithHAKeeperClientError(t *testing.T) {
 		dt := newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID)
 		mustAddTestDaemonTask(t, store, 1, dt)
 
-		r.getClient = func() util.HAKeeperClient {
+		r.hakeeper.Lock()
+		r.hakeeper.getClient = func() util.HAKeeperClient {
 			return &mockHAKeeperClientForDaemon{err: errors.New("hakeeper unavailable")}
 		}
+		r.hakeeper.Unlock()
 		tasks := r.startTasks(context.Background())
 		require.NotEmpty(t, tasks)
 	}, WithRunnerParallelism(1),
