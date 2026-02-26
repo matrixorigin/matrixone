@@ -24,27 +24,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
-// mockExprExecutor is a mock implementation of colexec.ExpressionExecutor
-type mockExprExecutor struct {
-	vec *vector.Vector
-}
-
-func (m *mockExprExecutor) Exec(_ int, _ []*batch.Batch, proc *process.Process) (*vector.Vector, error) {
-	return m.vec, nil
-}
-func (m *mockExprExecutor) Free()              {}
-func (m *mockExprExecutor) ResetForNextQuery() {}
-
 func TestIvfCreateStart_Error(t *testing.T) {
-	var _ colexec.ExpressionExecutor
 	proc := testutil.NewProc(t)
 	defaultTblCfg, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(`{"db_name":"db", "table_name":"t", "index_table_name":"__mo_index_centroid_556f61743332", "key_part":"v", "datasize": 100000, "kmeans_train_percent": 20}`), 1, proc.Mp())
 	require.NoError(t, err)
