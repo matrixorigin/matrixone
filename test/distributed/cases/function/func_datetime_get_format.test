@@ -23,7 +23,7 @@ SELECT GET_FORMAT(DATETIME, 'JIS') AS datetime_jis;
 SELECT GET_FORMAT(DATETIME, 'ISO') AS datetime_iso;
 SELECT GET_FORMAT(DATETIME, 'INTERNAL') AS datetime_internal;
 
-# Case insensitive
+# Case insensitive - quoted strings as first arg: syntax error (MySQL compatible, first arg must be bare keyword)
 SELECT GET_FORMAT('date', 'usa') AS date_lowercase;
 SELECT GET_FORMAT('DATE', 'Eur') AS date_mixed;
 
@@ -36,7 +36,7 @@ SELECT GET_FORMAT(NULL, NULL) AS null_both;
 SELECT GET_FORMAT('INVALID', 'USA') AS invalid_type;
 SELECT GET_FORMAT(DATE, 'INVALID') AS invalid_locale;
 
-# Table usage
+# Table usage - column references as first arg: syntax error (MySQL compatible)
 CREATE TABLE t1(type_col VARCHAR(10), locale_col VARCHAR(10));
 INSERT INTO t1 VALUES ('DATE', 'USA'), ('TIME', 'EUR'), ('DATETIME', 'JIS');
 SELECT GET_FORMAT(type_col, locale_col) AS format_str FROM t1;
@@ -46,3 +46,9 @@ DROP TABLE t1;
 SELECT DATE_FORMAT('2024-12-20', GET_FORMAT(DATE, 'USA')) AS formatted_date;
 SELECT DATE_FORMAT('2024-12-20 15:30:45', GET_FORMAT(DATETIME, 'EUR')) AS formatted_datetime;
 
+# TIMESTAMP formats (synonym for DATETIME)
+SELECT GET_FORMAT(TIMESTAMP, 'USA') AS timestamp_usa;
+SELECT GET_FORMAT(TIMESTAMP, 'JIS') AS timestamp_jis;
+SELECT GET_FORMAT(TIMESTAMP, 'ISO') AS timestamp_iso;
+SELECT GET_FORMAT(TIMESTAMP, 'EUR') AS timestamp_eur;
+SELECT GET_FORMAT(TIMESTAMP, 'INTERNAL') AS timestamp_internal;

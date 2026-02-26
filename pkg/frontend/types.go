@@ -1030,6 +1030,10 @@ func (ses *feSessionImpl) GetGlobalSysVar(name string) (interface{}, error) {
 		return nil, moerr.NewInternalErrorNoCtx(errorSystemVariableIsSession())
 	}
 
+	// If global vars have not been initialized, fall back to default.
+	if ses.gSysVars == nil {
+		return gSysVarsDefs[name].Default, nil
+	}
 	return ses.gSysVars.Get(name), nil
 }
 
@@ -1039,6 +1043,11 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 	def, ok := gSysVarsDefs[name]
 	if !ok {
 		return moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
+	}
+
+	// Cloud policy: forbid setting global wait_timeout/interactive_timeout.
+	if name == "wait_timeout" || name == "interactive_timeout" {
+		return moerr.NewInternalErrorNoCtx(errorSystemVariableIsReadOnly())
 	}
 
 	if def.Scope == ScopeSession {
@@ -1119,9 +1128,19 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		return
 	}
 
+	if name == "wait_timeout" || name == "interactive_timeout" {
+		if err = validateSessionTimeoutLimits(ctx, ses, name, val); err != nil {
+			return err
+		}
+	}
+
 	// ensure session system variables container exists in embed/basic cluster
 	if ses.sesSysVars == nil {
 		ses.sesSysVars = &SystemVariables{mp: make(map[string]interface{})}
+	}
+	// Guard: session vars must not share storage with global vars.
+	if ses.gSysVars != nil && ses.sesSysVars == ses.gSysVars {
+		ses.sesSysVars = ses.gSysVars.Clone()
 	}
 
 	if def.UpdateSessVar != nil {
@@ -1133,6 +1152,38 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		ses.updateSqlModeNoAutoValueOnZero(val)
 	}
 	return
+}
+
+func validateSessionTimeoutLimits(ctx context.Context, ses *Session, name string, val interface{}) error {
+	v, ok := val.(int64)
+	if !ok {
+		return moerr.NewInvalidInputf(ctx, "invalid %s value type", name)
+	}
+
+	pu := getPu(ses.GetService())
+	if pu == nil {
+		return nil
+	}
+
+	var min, max int64
+	switch name {
+	case "wait_timeout":
+		min = pu.SV.WaitTimeoutMin
+		max = pu.SV.WaitTimeoutMax
+	case "interactive_timeout":
+		min = pu.SV.InteractiveTimeoutMin
+		max = pu.SV.InteractiveTimeoutMax
+	default:
+		return nil
+	}
+
+	if min > 0 && v < min {
+		return moerr.NewInvalidInputf(ctx, "%s must be >= %d", name, min)
+	}
+	if max > 0 && v > max {
+		return moerr.NewInvalidInputf(ctx, "%s must be <= %d", name, max)
+	}
+	return nil
 }
 
 func (ses *feSessionImpl) SetSql(sql string) {

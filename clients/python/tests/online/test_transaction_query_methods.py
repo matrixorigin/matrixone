@@ -38,26 +38,22 @@ class TestTransactionQueryMethods:
         client.execute(f"USE {test_db}")
 
         # Create test table
-        client.execute(
-            f"""
+        client.execute(f"""
             CREATE TABLE {test_db}.test_table (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 name VARCHAR(255),
                 age INT,
                 email VARCHAR(255)
             )
-        """
-        )
+        """)
 
         # Insert test data
-        client.execute(
-            f"""
+        client.execute(f"""
             INSERT INTO {test_db}.test_table (name, age, email) VALUES
             ('Alice', 25, 'alice@example.com'),
             ('Bob', 30, 'bob@example.com'),
             ('Charlie', 35, 'charlie@example.com')
-        """
-        )
+        """)
 
         yield client, test_db
 
@@ -82,26 +78,22 @@ class TestTransactionQueryMethods:
         await client.execute(f"USE {test_db}")
 
         # Create test table
-        await client.execute(
-            f"""
+        await client.execute(f"""
             CREATE TABLE {test_db}.test_table (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 name VARCHAR(255),
                 age INT,
                 email VARCHAR(255)
             )
-        """
-        )
+        """)
 
         # Insert test data
-        await client.execute(
-            f"""
+        await client.execute(f"""
             INSERT INTO {test_db}.test_table (name, age, email) VALUES
             ('David', 28, 'david@example.com'),
             ('Eve', 32, 'eve@example.com'),
             ('Frank', 38, 'frank@example.com')
-        """
-        )
+        """)
 
         yield client, test_db
 
@@ -248,13 +240,11 @@ class TestTransactionQueryMethods:
             assert rows[0][0] == initial_count + 1
 
             # Insert multiple records
-            tx.execute(
-                f"""
+            tx.execute(f"""
                 INSERT INTO {test_db}.test_table (name, age, email) VALUES
                 ('Mixed Test 2', 46, 'mixed2@example.com'),
                 ('Mixed Test 3', 47, 'mixed3@example.com')
-            """
-            )
+            """)
 
             # Query final count
             result = tx.execute(f"SELECT COUNT(*) FROM {test_db}.test_table")
@@ -284,13 +274,11 @@ class TestTransactionQueryMethods:
             assert rows[0][0] == initial_count + 1
 
             # Insert multiple records
-            await tx.execute(
-                f"""
+            await tx.execute(f"""
                 INSERT INTO {test_db}.test_table (name, age, email) VALUES
                 ('Async Mixed Test 2', 49, 'async_mixed2@example.com'),
                 ('Async Mixed Test 3', 50, 'async_mixed3@example.com')
-            """
-            )
+            """)
 
             # Query final count
             result = await tx.execute(f"SELECT COUNT(*) FROM {test_db}.test_table")

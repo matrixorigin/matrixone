@@ -717,6 +717,7 @@ func Test_mysqlerror(t *testing.T) {
 func Test_handleShowVariables(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), 0)
 	convey.Convey("handleShowVariables succ", t, func() {
+		setSessionAlloc("", NewLeakCheckAllocator())
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -766,6 +767,26 @@ func Test_handleShowVariables(t *testing.T) {
 
 		shv := &tree.ShowVariables{Global: false}
 		convey.So(handleShowVariables(ses, ec, shv), convey.ShouldBeNil)
+
+		// Ensure global shows global value even if session differs.
+		ses.sesSysVars.Set("interactive_timeout", int64(30100))
+		ses.gSysVars.Set("interactive_timeout", int64(86400))
+		stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "show global variables like 'interactive_timeout'", 1)
+		convey.So(err, convey.ShouldBeNil)
+		showVars, ok := stmt.(*tree.ShowVariables)
+		convey.So(ok, convey.ShouldBeTrue)
+		ses.SetMysqlResultSet(&MysqlResultSet{})
+		convey.So(handleShowVariables(ses, ec, showVars), convey.ShouldBeNil)
+		mrs := ses.GetMysqlResultSet()
+		found := false
+		for _, row := range mrs.Data {
+			if len(row) >= 2 && row[0] == "interactive_timeout" {
+				convey.So(row[1], convey.ShouldEqual, int64(86400))
+				found = true
+				break
+			}
+		}
+		convey.So(found, convey.ShouldBeTrue)
 	})
 }
 
@@ -801,6 +822,37 @@ func Test_GetComputationWrapper(t *testing.T) {
 		cw, err := GetComputationWrapper(ec, db, user, eng, proc, ses)
 		convey.So(cw, convey.ShouldNotBeEmpty)
 		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func Test_GetComputationWrapper_ShowVariablesGlobal(t *testing.T) {
+	convey.Convey("GetComputationWrapper show global variables", t, func() {
+		sql := "show global variables like 'interactive_timeout'"
+		var eng engine.Engine
+		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+
+		sysVars := make(map[string]interface{})
+		for name, sysVar := range gSysVarsDefs {
+			sysVars[name] = sysVar.Default
+		}
+		ses := &Session{planCache: newPlanCache(1),
+			feSessionImpl: feSessionImpl{
+				gSysVars: &SystemVariables{mp: sysVars},
+			},
+		}
+
+		ctrl := gomock.NewController(t)
+		ec := newTestExecCtx(context.Background(), ctrl)
+		ec.ses = ses
+		ec.input = &UserInput{sql: sql}
+
+		cws, err := GetComputationWrapper(ec, "", "", eng, proc, ses)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(len(cws) > 0, convey.ShouldBeTrue)
+		stmt := cws[0].GetAst()
+		sv, ok := stmt.(*tree.ShowVariables)
+		convey.So(ok, convey.ShouldBeTrue)
+		convey.So(sv.Global, convey.ShouldBeTrue)
 	})
 }
 

@@ -27,6 +27,7 @@ from .session import Session, AsyncSession
 from .exceptions import (
     AccountError,
     CloneError,
+    BranchError,
     ConfigurationError,
     ConnectionError,
     MatrixOneError,
@@ -55,8 +56,10 @@ from .pubsub import Publication, PubSubManager, Subscription
 from .restore import RestoreManager
 from .snapshot import Snapshot, SnapshotLevel, SnapshotManager
 from .clone import CloneManager
+from .branch import BranchManager, AsyncBranchManager, DiffOutput, MergeConflictStrategy
 from .stage import Stage, StageManager, AsyncStageManager
 from .cdc import CDCTaskInfo, CDCWatermarkInfo, CDCManager, AsyncCDCManager, build_mysql_uri
+from .ivf_rank import IVFRankMode, IVFRankOptions
 
 # Import SQLAlchemy extensions
 from .sqlalchemy_ext import (
@@ -109,6 +112,7 @@ __all__ = [
     "ConfigurationError",
     "SnapshotError",
     "CloneError",
+    "BranchError",
     "MoCtlError",
     "RestoreError",
     "PitrError",
@@ -116,6 +120,8 @@ __all__ = [
     "Snapshot",
     "SnapshotManager",
     "CloneManager",
+    "BranchManager",
+    "AsyncBranchManager",
     "SnapshotLevel",
     "MoCtlManager",
     "RestoreManager",
@@ -150,6 +156,9 @@ __all__ = [
     "CDCManager",
     "AsyncCDCManager",
     "build_mysql_uri",
+    # IVF Rank Options
+    "IVFRankMode",
+    "IVFRankOptions",
     # SQLAlchemy extensions
     "VectorType",
     "Vectorf32",

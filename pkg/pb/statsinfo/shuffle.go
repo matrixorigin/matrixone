@@ -244,7 +244,8 @@ func (s *ShuffleRange) Eval() {
 	}
 	last := step
 	k -= 2
-	s.Uniform = float64(s.Sz) / (s.Max - s.Min)
+	globalDensity := float64(s.Sz) / s.SampleRatio / (s.Max - s.Min)
+	s.Uniform = globalDensity
 	for {
 		if head == nil {
 			for i := 0; i <= k; i++ {
@@ -356,7 +357,7 @@ func (s *ShuffleRange) Eval() {
 		}
 		head = head.Next
 	}
-	s.Uniform = float64(s.Sz) / (s.Max - s.Min) / s.Uniform
+	s.Uniform = min(0.999, globalDensity/s.Uniform) // s.Uniform is max local density
 	for i := range s.Result {
 		if s.Result[i] != s.Result[i] {
 			s.Result = nil

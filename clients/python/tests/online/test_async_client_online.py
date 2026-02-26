@@ -57,16 +57,14 @@ class TestAsyncClientOnline:
 
         try:
             await test_async_client.execute(f"CREATE DATABASE IF NOT EXISTS {test_db}")
-            await test_async_client.execute(
-                f"""
+            await test_async_client.execute(f"""
                 CREATE TABLE IF NOT EXISTS {test_db}.{test_table} (
                     id INT PRIMARY KEY,
                     name VARCHAR(100),
                     value INT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
-            """
-            )
+            """)
 
             # Insert test data
             await test_async_client.execute(f"INSERT INTO {test_db}.{test_table} VALUES (1, 'async_test1', 100, NOW())")

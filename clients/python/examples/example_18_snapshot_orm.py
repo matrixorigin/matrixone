@@ -69,8 +69,7 @@ class SnapshotORMDemo:
                 client.execute("DROP TABLE IF EXISTS users")
 
                 # Create table
-                client.execute(
-                    """
+                client.execute("""
                     CREATE TABLE users (
                         id INT PRIMARY KEY AUTO_INCREMENT,
                         name VARCHAR(100),
@@ -78,8 +77,7 @@ class SnapshotORMDemo:
                         age INT,
                         department VARCHAR(50)
                     )
-                """
-                )
+                """)
 
                 # Insert test data
                 client.execute(
@@ -157,16 +155,14 @@ class SnapshotORMDemo:
                 await client.execute("DROP TABLE IF EXISTS products")
 
                 # Create table
-                await client.execute(
-                    """
+                await client.execute("""
                     CREATE TABLE products (
                         id INT PRIMARY KEY AUTO_INCREMENT,
                         name VARCHAR(100),
                         price DECIMAL(10,2),
                         category VARCHAR(50)
                     )
-                """
-                )
+                """)
 
                 # Insert test data
                 await client.execute("INSERT INTO products (name, price, category) VALUES ('Laptop', 999.99, 'Electronics')")
@@ -239,18 +235,15 @@ class SnapshotORMDemo:
                 client.execute("DROP TABLE IF EXISTS customers")
 
                 # Create tables
-                client.execute(
-                    """
+                client.execute("""
                     CREATE TABLE customers (
                         id INT PRIMARY KEY AUTO_INCREMENT,
                         name VARCHAR(100),
                         email VARCHAR(100)
                     )
-                """
-                )
+                """)
 
-                client.execute(
-                    """
+                client.execute("""
                     CREATE TABLE orders (
                         id INT PRIMARY KEY AUTO_INCREMENT,
                         customer_id INT,
@@ -258,8 +251,7 @@ class SnapshotORMDemo:
                         amount DECIMAL(10,2),
                         FOREIGN KEY (customer_id) REFERENCES customers(id)
                     )
-                """
-                )
+                """)
 
                 # Insert test data
                 client.execute("INSERT INTO customers (name, email) VALUES ('John', 'john@example.com')")
@@ -330,16 +322,14 @@ class SnapshotORMDemo:
                 client.execute("USE builder_methods_test")
                 client.execute("DROP TABLE IF EXISTS test_data")
 
-                client.execute(
-                    """
+                client.execute("""
                     CREATE TABLE test_data (
                         id INT PRIMARY KEY AUTO_INCREMENT,
                         name VARCHAR(100),
                         value INT,
                         category VARCHAR(50)
                     )
-                """
-                )
+                """)
 
                 # Insert test data
                 client.execute("INSERT INTO test_data (name, value, category) VALUES ('Item1', 10, 'A')")
