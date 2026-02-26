@@ -835,6 +835,7 @@ func (r *taskRunner) startDaemonTask(ctx context.Context, dt *daemonTask) (bool,
 
 	// Clear the error message of the task when start it. And if it fails to
 	// start, new error message will be set again.
+	t.Details = cloneDaemonTaskDetails(t.Details)
 	t.Details.Error = ""
 
 	// When update the daemon task, add the condition that last heartbeat of
@@ -861,6 +862,7 @@ func (r *taskRunner) setDaemonTaskError(ctx context.Context, dt *daemonTask, err
 	t := dt.task
 	nowTime := time.Now()
 	t.UpdateAt = nowTime
+	t.Details = cloneDaemonTaskDetails(t.Details)
 	t.Details.Error = errMsg.Error()
 	// TODO(volgariver6): if it is a retryable error, do not update the status,
 	// otherwise, set the status to Error.
@@ -871,6 +873,14 @@ func (r *taskRunner) setDaemonTaskError(ctx context.Context, dt *daemonTask, err
 			zap.String("error message", errMsg.Error()),
 			zap.Error(err))
 	}
+}
+
+func cloneDaemonTaskDetails(d *task.Details) *task.Details {
+	if d == nil {
+		return &task.Details{}
+	}
+	clone := *d
+	return &clone
 }
 
 func (r *taskRunner) addDaemonTask(dt *daemonTask) {
