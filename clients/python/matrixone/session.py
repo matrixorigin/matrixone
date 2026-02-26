@@ -360,6 +360,7 @@ class Session(SQLAlchemySession):
         # These are defined in their respective modules
         from .snapshot import SnapshotManager
         from .clone import CloneManager
+        from .branch import BranchManager
 
         # These are defined in client.py after the Session class
         import sys
@@ -384,6 +385,7 @@ class Session(SQLAlchemySession):
         # The executor pattern allows managers to work in both client and session contexts
         self.snapshots = SnapshotManager(client, executor=self)
         self.clone = CloneManager(client, executor=self)
+        self.branch = BranchManager(client, executor=self)
         self.restore = RestoreManager(client, executor=self)
         self.pitr = PitrManager(client, executor=self)
         self.pubsub = PubSubManager(client, executor=self)
@@ -1192,6 +1194,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
         # These are defined in their respective modules
         from .snapshot import AsyncSnapshotManager
         from .clone import AsyncCloneManager
+        from .branch import AsyncBranchManager
         from .restore import AsyncRestoreManager
         from .pitr import AsyncPitrManager
         from .pubsub import AsyncPubSubManager
@@ -1206,6 +1209,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
         # The executor pattern allows managers to work in both client and session contexts
         self.snapshots = AsyncSnapshotManager(client, executor=self)
         self.clone = AsyncCloneManager(client, executor=self)
+        self.branch = AsyncBranchManager(client, executor=self)
         self.restore = AsyncRestoreManager(client, executor=self)
         self.pitr = AsyncPitrManager(client, executor=self)
         self.pubsub = AsyncPubSubManager(client, executor=self)

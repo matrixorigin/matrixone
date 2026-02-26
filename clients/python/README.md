@@ -22,6 +22,7 @@ A comprehensive Python SDK for MatrixOne that provides SQLAlchemy-like interface
   - Support for f32 and f64 precision vectors
   - Multiple distance metrics (L2, Cosine, Inner Product)
   - ⭐ **IVF Index Health Monitoring** with `get_ivf_stats()` - Critical for production!
+  - ⭐ **IVF LIMIT BY RANK** - Fine-grained ranking control (pre/post/force modes)
   - Configurable index parameters for performance tuning
 - 🔍 **Fulltext Search**: Powerful fulltext indexing and search with BM25 and TF-IDF algorithms
   - Natural language and boolean search modes
@@ -55,6 +56,11 @@ A comprehensive Python SDK for MatrixOne that provides SQLAlchemy-like interface
 - 📸 **Snapshot Management**: Create and manage database snapshots at multiple levels
 - ⏰ **Point-in-Time Recovery**: PITR functionality for precise data recovery
 - 🔄 **Table Cloning**: Clone databases and tables efficiently with data replication
+- 🌿 **Branch Management**: Git-style version control for databases and tables
+  - Create isolated branches for development and testing
+  - Compare differences between branches with count-only optimization
+  - Merge branches with conflict resolution strategies
+  - Point-in-time branching from snapshots
 - 👥 **Account Management**: Comprehensive user, role, and permission management
 - 📊 **Pub/Sub**: Real-time publication and subscription support
 - 🔧 **Version Management**: Automatic backend version detection and compatibility checking

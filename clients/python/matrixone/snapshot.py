@@ -306,7 +306,7 @@ class SnapshotManager(BaseSnapshotManager):
             # Get snapshot info
             return self.get(name)
         except Exception as e:
-            raise SnapshotError(f"Failed to create snapshot: {e}") from None
+            raise SnapshotError(f"Failed to create snapshot: {e}") from e
 
     def list(self) -> List[Snapshot]:
         """
@@ -331,7 +331,7 @@ class SnapshotManager(BaseSnapshotManager):
             return snapshots
 
         except Exception as e:
-            raise SnapshotError(f"Failed to list snapshots: {e}") from None
+            raise SnapshotError(f"Failed to list snapshots: {e}") from e
 
     def get(self, name: str) -> Snapshot:
         """
@@ -380,7 +380,7 @@ class SnapshotManager(BaseSnapshotManager):
         try:
             self._get_executor().execute(f"DROP SNAPSHOT {name}")
         except Exception as e:
-            raise SnapshotError(f"Failed to delete snapshot: {e}") from None
+            raise SnapshotError(f"Failed to delete snapshot: {e}") from e
 
     def exists(self, name: str) -> bool:
         """
@@ -445,7 +445,7 @@ class AsyncSnapshotManager(BaseSnapshotManager):
             # Get snapshot info
             return await self.get(name)
         except Exception as e:
-            raise SnapshotError(f"Failed to create snapshot: {e}") from None
+            raise SnapshotError(f"Failed to create snapshot: {e}") from e
 
     async def list(self) -> List[Snapshot]:
         """
@@ -470,7 +470,7 @@ class AsyncSnapshotManager(BaseSnapshotManager):
             return snapshots
 
         except Exception as e:
-            raise SnapshotError(f"Failed to list snapshots: {e}") from None
+            raise SnapshotError(f"Failed to list snapshots: {e}") from e
 
     async def get(self, name: str) -> Snapshot:
         """
@@ -519,7 +519,7 @@ class AsyncSnapshotManager(BaseSnapshotManager):
         try:
             await self._get_executor().execute(f"DROP SNAPSHOT {name}")
         except Exception as e:
-            raise SnapshotError(f"Failed to delete snapshot: {e}") from None
+            raise SnapshotError(f"Failed to delete snapshot: {e}") from e
 
     async def exists(self, name: str) -> bool:
         """

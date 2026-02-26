@@ -443,6 +443,8 @@ example-fulltext: ## Run fulltext index example
 	$(EXAMPLE_PYTHON_PATH) $(PYTHON) examples/example_fulltext_index.py
 	@echo "$(GREEN)Fulltext example completed!$(NC)"
 
+
+
 # Build and publish
 .PHONY: build
 build: clean ## Build package (wheel + sdist)

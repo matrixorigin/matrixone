@@ -38,6 +38,7 @@ from .fulltext_manager import AsyncFulltextIndexManager
 from .metadata import AsyncMetadataManager
 from .session import AsyncSession
 from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
+from .branch import AsyncBranchManager
 from .connection_hooks import ConnectionAction, ConnectionHook, create_connection_hook
 from .load_data import AsyncLoadDataManager
 from .stage import AsyncStageManager
@@ -594,6 +595,7 @@ class AsyncClient(BaseMatrixOneClient):
         # Initialize managers
         self._snapshots = AsyncSnapshotManager(self)
         self._clone = AsyncCloneManager(self)
+        self._branch = AsyncBranchManager(self)
         self._moctl = AsyncMoCtlManager(self)
         self._restore = AsyncRestoreManager(self)
         self._pitr = AsyncPitrManager(self)
@@ -2062,6 +2064,51 @@ class AsyncClient(BaseMatrixOneClient):
     def clone(self) -> AsyncCloneManager:
         """Get async clone manager"""
         return self._clone
+
+    @property
+    def branch(self) -> AsyncBranchManager:
+        """
+        Get async branch manager for Git-style version control operations.
+
+        Provides asynchronous table and database branching, diffing, and merging capabilities.
+        Requires MatrixOne 3.0.5 or higher.
+
+        Returns:
+            AsyncBranchManager instance for async branch operations
+
+        Example::
+
+            import asyncio
+            from matrixone import AsyncClient
+
+            async def main():
+                client = AsyncClient()
+                await client.connect(database='test')
+
+                # Create table branch
+                await client.branch.create_table_branch('users_branch', 'users')
+
+                # Create database branch
+                await client.branch.create_database_branch('dev_db', 'production')
+
+                # Compare branches
+                diffs = await client.branch.diff_table('users_branch', 'users')
+
+                # Merge branches
+                await client.branch.merge_table('users_branch', 'users')
+
+                # Delete branches
+                await client.branch.delete_table_branch('users_branch')
+                await client.branch.delete_database_branch('dev_db')
+
+                await client.disconnect()
+
+            asyncio.run(main())
+
+        See Also:
+            - :doc:`branch_guide` - Complete branch management guide
+        """
+        return self._branch
 
     @property
     def moctl(self) -> AsyncMoCtlManager:
