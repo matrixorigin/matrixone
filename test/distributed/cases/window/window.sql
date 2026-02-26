@@ -71,6 +71,105 @@ select a, c, dense_rank() over(partition by a order by c rows current row) from 
 select a, c, rank() over(order by a), row_number() over(order by a), dense_rank() over(order by a) from t1;
 drop table t1;
 
+-- test cume_dist
+drop table if exists t1;
+create table t1 (a int, b int);
+insert into t1 values(1, 1), (1, 2), (2, 1), (2, 2), (2, 3);
+select a, b, cume_dist() over (order by a) from t1;
+select a, b, cume_dist() over (order by b) from t1;
+select a, b, cume_dist() over (partition by a order by b) from t1;
+select a, cume_dist() over () from t1;
+drop table t1;
+
+-- test cume_dist: edge cases
+drop table if exists t2;
+create table t2 (a int, b int);
+select a, b, cume_dist() over (order by a) from t2;
+insert into t2 values(1, 1);
+select a, b, cume_dist() over (order by a) from t2;
+insert into t2 values(1, 1), (1, 1), (1, 1);
+select a, b, cume_dist() over (order by a) from t2;
+drop table t2;
+
+-- test cume_dist: NULL handling
+drop table if exists t3;
+create table t3 (a int, b int);
+insert into t3 values(1, 1), (2, NULL), (3, 3), (NULL, 4), (5, NULL);
+select a, b, cume_dist() over (order by a) from t3;
+select a, b, cume_dist() over (order by b) from t3;
+select a, b, cume_dist() over (partition by a order by b) from t3;
+drop table t3;
+
+-- test cume_dist: string type
+drop table if exists t4;
+create table t4 (name varchar(20), score int);
+insert into t4 values('Alice', 90), ('Bob', 85), ('Charlie', 90), ('David', 75), ('Eve', 85);
+select name, score, cume_dist() over (order by name) from t4;
+select name, score, cume_dist() over (order by score) from t4;
+select name, score, cume_dist() over (partition by score order by name) from t4;
+drop table t4;
+
+-- test cume_dist: date type
+drop table if exists t5;
+create table t5 (id int, dt date);
+insert into t5 values(1, '2024-01-01'), (2, '2024-01-01'), (3, '2024-02-01'), (4, '2024-03-01'), (5, '2024-02-01');
+select id, dt, cume_dist() over (order by dt) from t5;
+select id, dt, cume_dist() over (partition by dt order by id) from t5;
+drop table t5;
+
+-- test cume_dist: DESC order
+drop table if exists t6;
+create table t6 (a int, b int);
+insert into t6 values(1, 10), (2, 20), (3, 30), (4, 20), (5, 10);
+select a, b, cume_dist() over (order by b desc) from t6;
+select a, b, cume_dist() over (partition by b order by a desc) from t6;
+drop table t6;
+
+-- test cume_dist: multiple columns order by
+drop table if exists t7;
+create table t7 (a int, b int, c int);
+insert into t7 values(1, 1, 1), (1, 2, 1), (1, 1, 2), (2, 1, 1), (2, 2, 2);
+select a, b, c, cume_dist() over (order by a, b) from t7;
+select a, b, c, cume_dist() over (order by a desc, b asc) from t7;
+select a, b, c, cume_dist() over (partition by a order by b, c) from t7;
+drop table t7;
+
+-- test cume_dist: with other window functions
+drop table if exists t8;
+create table t8 (a int, b int);
+insert into t8 values(1, 10), (1, 20), (2, 10), (2, 20), (2, 30);
+select a, b, 
+    row_number() over (order by b) as rn,
+    rank() over (order by b) as rnk,
+    dense_rank() over (order by b) as drnk,
+    cume_dist() over (order by b) as cdist
+from t8;
+select a, b,
+    rank() over (partition by a order by b) as rnk,
+    cume_dist() over (partition by a order by b) as cdist
+from t8;
+drop table t8;
+
+-- test cume_dist: larger dataset
+drop table if exists t9;
+create table t9 (id int, category int, value int);
+insert into t9 values
+(1, 1, 100), (2, 1, 200), (3, 1, 100), (4, 1, 300),
+(5, 2, 150), (6, 2, 150), (7, 2, 250), (8, 2, 150),
+(9, 3, 100), (10, 3, 200), (11, 3, 300), (12, 3, 400);
+select id, category, value, cume_dist() over (order by value) from t9;
+select id, category, value, cume_dist() over (partition by category order by value) from t9;
+drop table t9;
+
+-- test cume_dist: float type
+drop table if exists t10;
+create table t10 (a float, b double);
+insert into t10 values(1.1, 2.2), (1.1, 3.3), (2.2, 2.2), (3.3, 1.1);
+select a, b, cume_dist() over (order by a) from t10;
+select a, b, cume_dist() over (order by b) from t10;
+select a, b, cume_dist() over (partition by a order by b) from t10;
+drop table t10;
+
 drop table if exists t1;
 create table t1 (a int, b decimal(7, 2));
 insert into t1 values(1, 12.12), (2, 123.13), (3, 456.66), (4, 1111.34);
