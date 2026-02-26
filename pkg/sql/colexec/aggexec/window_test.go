@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -1108,5 +1109,366 @@ func TestValueWindowExec_TSType(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	results[0].Free(mp)
+	exec.Free()
+}
+
+// TestCumeDistWindowExec_BasicOperations tests basic operations of cumeDistWindowExec
+func TestCumeDistWindowExec_BasicOperations(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	exec, err := makeWindowExec(mp, WinIdOfCumeDist, false)
+	require.NoError(t, err)
+	require.NotNil(t, exec)
+
+	// Test PreAllocateGroups
+	err = exec.PreAllocateGroups(5)
+	require.NoError(t, err)
+
+	// Test GetOptResult
+	result := exec.GetOptResult()
+	require.NotNil(t, result)
+
+	// Test Size
+	size := exec.Size()
+	require.GreaterOrEqual(t, size, int64(0))
+
+	exec.Free()
+}
+
+// TestCumeDistWindowExec_FillAndFlush tests Fill and Flush operations
+func TestCumeDistWindowExec_FillAndFlush(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	exec, err := makeWindowExec(mp, WinIdOfCumeDist, false)
+	require.NoError(t, err)
+
+	vec := vector.NewVec(types.T_int64.ToType())
+	err = vector.AppendFixedList(vec, []int64{0, 1, 2, 3}, nil, mp)
+	require.NoError(t, err)
+	defer vec.Free(mp)
+
+	err = exec.GroupGrow(4)
+	require.NoError(t, err)
+
+	for i := 0; i < 4; i++ {
+		err = exec.Fill(i, i, []*vector.Vector{vec})
+		require.NoError(t, err)
+	}
+
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+
+	resultVec := results[0]
+	require.Equal(t, 4, resultVec.Length())
+
+	resultVec.Free(mp)
+	exec.Free()
+}
+
+// TestCumeDistWindowExec_Merge tests Merge operation
+func TestCumeDistWindowExec_Merge(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	exec1, err := makeWindowExec(mp, WinIdOfCumeDist, false)
+	require.NoError(t, err)
+
+	exec2, err := makeWindowExec(mp, WinIdOfCumeDist, false)
+	require.NoError(t, err)
+
+	vec := vector.NewVec(types.T_int64.ToType())
+	err = vector.AppendFixedList(vec, []int64{0, 1}, nil, mp)
+	require.NoError(t, err)
+	defer vec.Free(mp)
+
+	err = exec1.GroupGrow(2)
+	require.NoError(t, err)
+	err = exec2.GroupGrow(2)
+	require.NoError(t, err)
+
+	err = exec1.Fill(0, 0, []*vector.Vector{vec})
+	require.NoError(t, err)
+	err = exec2.Fill(0, 0, []*vector.Vector{vec})
+	require.NoError(t, err)
+
+	err = exec1.Merge(exec2, 0, 0)
+	require.NoError(t, err)
+
+	exec1.Free()
+	exec2.Free()
+}
+
+// TestCumeDistWindowExec_BatchMerge tests BatchMerge operation
+func TestCumeDistWindowExec_BatchMerge(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	exec1, err := makeWindowExec(mp, WinIdOfCumeDist, false)
+	require.NoError(t, err)
+
+	exec2, err := makeWindowExec(mp, WinIdOfCumeDist, false)
+	require.NoError(t, err)
+
+	vec := vector.NewVec(types.T_int64.ToType())
+	err = vector.AppendFixedList(vec, []int64{0, 1, 2}, nil, mp)
+	require.NoError(t, err)
+	defer vec.Free(mp)
+
+	err = exec1.GroupGrow(3)
+	require.NoError(t, err)
+	err = exec2.GroupGrow(3)
+	require.NoError(t, err)
+
+	for i := 0; i < 3; i++ {
+		err = exec1.Fill(i, i, []*vector.Vector{vec})
+		require.NoError(t, err)
+		err = exec2.Fill(i, i, []*vector.Vector{vec})
+		require.NoError(t, err)
+	}
+
+	groups := []uint64{1, 2, 3}
+	err = exec1.BatchMerge(exec2, 0, groups)
+	require.NoError(t, err)
+
+	exec1.Free()
+	exec2.Free()
+}
+
+// TestCumeDistWindowExec_BatchMergeWithNotMatched tests BatchMerge with GroupNotMatched
+func TestCumeDistWindowExec_BatchMergeWithNotMatched(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	exec1, err := makeWindowExec(mp, WinIdOfCumeDist, false)
+	require.NoError(t, err)
+
+	exec2, err := makeWindowExec(mp, WinIdOfCumeDist, false)
+	require.NoError(t, err)
+
+	vec := vector.NewVec(types.T_int64.ToType())
+	err = vector.AppendFixedList(vec, []int64{0, 1, 2}, nil, mp)
+	require.NoError(t, err)
+	defer vec.Free(mp)
+
+	err = exec1.GroupGrow(3)
+	require.NoError(t, err)
+	err = exec2.GroupGrow(3)
+	require.NoError(t, err)
+
+	for i := 0; i < 3; i++ {
+		err = exec1.Fill(i, i, []*vector.Vector{vec})
+		require.NoError(t, err)
+		err = exec2.Fill(i, i, []*vector.Vector{vec})
+		require.NoError(t, err)
+	}
+
+	groups := []uint64{GroupNotMatched, 2, GroupNotMatched}
+	err = exec1.BatchMerge(exec2, 0, groups)
+	require.NoError(t, err)
+
+	exec1.Free()
+	exec2.Free()
+}
+
+// TestCumeDistWindowExec_PanicMethods tests methods that should panic
+func TestCumeDistWindowExec_PanicMethods(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	exec, err := makeWindowExec(mp, WinIdOfCumeDist, false)
+	require.NoError(t, err)
+
+	cExec := exec.(*cumeDistWindowExec)
+
+	// Test BulkFill (should panic)
+	require.Panics(t, func() {
+		_ = cExec.BulkFill(0, nil)
+	})
+
+	// Test BatchFill (should panic)
+	require.Panics(t, func() {
+		_ = cExec.BatchFill(0, nil, nil)
+	})
+
+	// Test SetExtraInformation (should panic)
+	require.Panics(t, func() {
+		_ = cExec.SetExtraInformation(nil, 0)
+	})
+
+	exec.Free()
+}
+
+// TestCumeDistWindowExec_MarshalUnmarshal tests marshal and unmarshal operations
+func TestCumeDistWindowExec_MarshalUnmarshal(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	exec, err := makeWindowExec(mp, WinIdOfCumeDist, false)
+	require.NoError(t, err)
+
+	vec := vector.NewVec(types.T_int64.ToType())
+	err = vector.AppendFixedList(vec, []int64{0, 1, 2}, nil, mp)
+	require.NoError(t, err)
+	defer vec.Free(mp)
+
+	err = exec.GroupGrow(3)
+	require.NoError(t, err)
+
+	for i := 0; i < 3; i++ {
+		err = exec.Fill(i, i, []*vector.Vector{vec})
+		require.NoError(t, err)
+	}
+
+	cExec := exec.(*cumeDistWindowExec)
+
+	// Test marshal
+	data, err := cExec.marshal()
+	require.NoError(t, err)
+	require.NotNil(t, data)
+
+	// Test unmarshal
+	exec2, err := makeWindowExec(mp, WinIdOfCumeDist, false)
+	require.NoError(t, err)
+	cExec2 := exec2.(*cumeDistWindowExec)
+
+	err = cExec2.unmarshal(mp, nil, nil, nil)
+	require.NoError(t, err)
+
+	exec.Free()
+	exec2.Free()
+}
+
+// TestCumeDistWindowExec_SaveIntermediateResult tests SaveIntermediateResult
+func TestCumeDistWindowExec_SaveIntermediateResult(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	exec, err := makeWindowExec(mp, WinIdOfCumeDist, false)
+	require.NoError(t, err)
+
+	vec := vector.NewVec(types.T_int64.ToType())
+	err = vector.AppendFixedList(vec, []int64{0, 1}, nil, mp)
+	require.NoError(t, err)
+	defer vec.Free(mp)
+
+	err = exec.GroupGrow(2)
+	require.NoError(t, err)
+
+	for i := 0; i < 2; i++ {
+		err = exec.Fill(i, i, []*vector.Vector{vec})
+		require.NoError(t, err)
+	}
+
+	cExec := exec.(*cumeDistWindowExec)
+
+	// Test SaveIntermediateResult
+	var buf bytes.Buffer
+	flags := [][]uint8{{1, 1}}
+	err = cExec.SaveIntermediateResult(2, flags, &buf)
+	require.NoError(t, err)
+
+	exec.Free()
+}
+
+// TestCumeDistWindowExec_SaveIntermediateResultOfChunk tests SaveIntermediateResultOfChunk
+func TestCumeDistWindowExec_SaveIntermediateResultOfChunk(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	exec, err := makeWindowExec(mp, WinIdOfCumeDist, false)
+	require.NoError(t, err)
+
+	vec := vector.NewVec(types.T_int64.ToType())
+	err = vector.AppendFixedList(vec, []int64{0, 1}, nil, mp)
+	require.NoError(t, err)
+	defer vec.Free(mp)
+
+	err = exec.GroupGrow(2)
+	require.NoError(t, err)
+
+	for i := 0; i < 2; i++ {
+		err = exec.Fill(i, i, []*vector.Vector{vec})
+		require.NoError(t, err)
+	}
+
+	cExec := exec.(*cumeDistWindowExec)
+
+	// Test SaveIntermediateResultOfChunk
+	var buf bytes.Buffer
+	err = cExec.SaveIntermediateResultOfChunk(0, &buf)
+	require.NoError(t, err)
+
+	exec.Free()
+}
+
+// TestCumeDistWindowExec_UnmarshalFromReader tests UnmarshalFromReader
+func TestCumeDistWindowExec_UnmarshalFromReader(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	exec, err := makeWindowExec(mp, WinIdOfCumeDist, false)
+	require.NoError(t, err)
+
+	vec := vector.NewVec(types.T_int64.ToType())
+	err = vector.AppendFixedList(vec, []int64{0, 1}, nil, mp)
+	require.NoError(t, err)
+	defer vec.Free(mp)
+
+	err = exec.GroupGrow(2)
+	require.NoError(t, err)
+
+	for i := 0; i < 2; i++ {
+		err = exec.Fill(i, i, []*vector.Vector{vec})
+		require.NoError(t, err)
+	}
+
+	cExec := exec.(*cumeDistWindowExec)
+
+	// Save to buffer
+	var buf bytes.Buffer
+	flags := [][]uint8{{1, 1}}
+	err = cExec.SaveIntermediateResult(2, flags, &buf)
+	require.NoError(t, err)
+
+	// Create new exec and unmarshal
+	exec2, err := makeWindowExec(mp, WinIdOfCumeDist, false)
+	require.NoError(t, err)
+	cExec2 := exec2.(*cumeDistWindowExec)
+
+	err = cExec2.UnmarshalFromReader(&buf, mp)
+	require.NoError(t, err)
+
+	exec.Free()
+	exec2.Free()
+}
+
+// TestCumeDistWindowExec_SizeWithData tests Size with actual data
+func TestCumeDistWindowExec_SizeWithData(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	exec, err := makeWindowExec(mp, WinIdOfCumeDist, false)
+	require.NoError(t, err)
+
+	vec := vector.NewVec(types.T_int64.ToType())
+	err = vector.AppendFixedList(vec, []int64{0, 1, 2, 3, 4}, nil, mp)
+	require.NoError(t, err)
+	defer vec.Free(mp)
+
+	err = exec.GroupGrow(5)
+	require.NoError(t, err)
+
+	for i := 0; i < 5; i++ {
+		err = exec.Fill(i, i, []*vector.Vector{vec})
+		require.NoError(t, err)
+	}
+
+	cExec := exec.(*cumeDistWindowExec)
+	size := cExec.Size()
+	require.Greater(t, size, int64(0))
+
 	exec.Free()
 }
