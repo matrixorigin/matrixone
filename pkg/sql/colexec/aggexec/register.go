@@ -163,6 +163,11 @@ func RegisterNthValueWin(id int64) {
 	WinIdOfNthValue = id
 }
 
+func RegisterCumeDistWin(id int64) {
+	specialAgg[id] = true
+	WinIdOfCumeDist = id
+}
+
 type registeredAggInfo struct {
 	isSingleAgg          bool
 	acceptNull           bool
@@ -213,6 +218,7 @@ var (
 	AggIdOfBitOr           = int64(-27)
 	AggIdOfBitmapConstruct = int64(-28)
 	AggIdOfBitmapOr        = int64(-29)
+	WinIdOfCumeDist        = int64(-30)
 	groupConcatSep         = ","
 	getCroupConcatRet      = func(args ...types.Type) types.Type {
 		for _, p := range args {

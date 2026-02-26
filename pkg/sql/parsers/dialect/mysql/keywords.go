@@ -587,6 +587,7 @@ func init() {
 		"prepare":                    PREPARE,
 		"deallocate":                 DEALLOCATE,
 		"dense_rank":                 DENSE_RANK,
+		"cume_dist":                  CUME_DIST,
 		"lag":                        LAG,
 		"lead":                       LEAD,
 		"first_value":                FIRST_VALUE,
