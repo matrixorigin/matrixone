@@ -286,14 +286,10 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 		return err
 	}
 
-	part := src_alias + "." + indexDef.Parts[0]
-	insertIntoIvfIndexTableFormat := "SELECT f.* from `%s`.`%s` AS %s CROSS APPLY ivf_create('%s', '%s', %s) AS f;"
+	insertIntoIvfIndexTableFormat := "SELECT * FROM ivf_create('%s', '%s') AS f;"
 	sql := fmt.Sprintf(insertIntoIvfIndexTableFormat,
-		qryDatabase, originalTableDef.Name,
-		src_alias,
 		params_str,
-		string(cfgbytes),
-		part)
+		string(cfgbytes))
 
 	err = s.logTimestamp(c, qryDatabase, metadataTableName, "clustering_start")
 	if err != nil {
