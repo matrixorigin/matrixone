@@ -1026,8 +1026,10 @@ func convertObjectToBatch(
 		// Decompress if needed
 		var decompressedData []byte
 		var decompressedBuf fscache.Data
-		if ext.Alg() == compress.None {
-			decompressedData = colData
+
+		if ext.Alg() == compress.None { // Clone non-compressed data to avoid buffer sharing with objectContent
+			// objectContent may be reused/pooled, and UnmarshalBinary doesn't copy data
+			decompressedData = append([]byte(nil), colData...)
 		} else {
 			// Allocate buffer for decompressed data
 			decompressedBuf = allocator.AllocateCacheDataWithHint(ctx, int(ext.OriginSize()), malloc.NoClear)
