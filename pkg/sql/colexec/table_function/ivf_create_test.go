@@ -16,9 +16,9 @@ package table_function
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -97,7 +97,7 @@ func TestIvfCreateStart_Error(t *testing.T) {
 			params: `{"lists":"1", "op_type":"vector_l2_ops"}`,
 			tblCfg: defaultTblCfg,
 			sqlFn: func(p *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-				return executor.Result{}, fmt.Errorf("sql error")
+				return executor.Result{}, moerr.NewInternalErrorNoCtx("sql error")
 			},
 			wantErr: "sql error",
 		},
