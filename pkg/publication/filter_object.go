@@ -556,7 +556,8 @@ func FilterObject(
 		return filterAppendableObject(ctx, &stats, snapshotTS, upstreamExecutor, localFS, isTombstone, mp, getChunkWorker, subscriptionAccountName, pubName, aobjectMap, ttlChecker)
 	} else {
 		// Handle non-appendable object - write directly to fileservice with new UUID
-		newStats, err := filterNonAppendableObject(ctx, &stats, upstreamExecutor, localFS, getChunkWorker, writeObjectWorker, subscriptionAccountName, pubName, ccprCache, txnID, ttlChecker)
+		// For tombstone, need to convert to batch and rewrite rowids using aobjectMap
+		newStats, err := filterNonAppendableObject(ctx, &stats, snapshotTS, upstreamExecutor, localFS, isTombstone, mp, getChunkWorker, writeObjectWorker, subscriptionAccountName, pubName, ccprCache, txnID, aobjectMap, ttlChecker)
 		if err != nil {
 			return nil, err
 		}
@@ -633,7 +634,8 @@ func filterAppendableObject(
 
 	// Sort batch by primary key, remove commit TS column, write to file, and record ObjectStats
 	// This is data object (not tombstone), so use SchemaData
-	objStats, err := createObjectFromBatch(ctx, filteredBat, stats, snapshotTS, isTombstone, localFS, mp, sortKeySeqnum)
+	// Use new object name for appendable objects (keepOriginalName=false)
+	objStats, err := createObjectFromBatch(ctx, filteredBat, stats, snapshotTS, isTombstone, localFS, mp, sortKeySeqnum, false)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to create object from batch: %v", err)
 	}
@@ -742,19 +744,24 @@ type CCPRTxnCacheWriter interface {
 }
 
 // filterNonAppendableObject handles non-appendable objects
-// Writes directly to fileservice with the original object name
-// Returns the original ObjectStats
+// For data objects: writes directly to fileservice with the original object name
+// For tombstone objects: converts to batch, rewrites rowids using aobjectMap, creates new object
+// Returns the ObjectStats (original for data, new for tombstone)
 func filterNonAppendableObject(
 	ctx context.Context,
 	stats *objectio.ObjectStats,
+	snapshotTS types.TS,
 	upstreamExecutor SQLExecutor,
 	localFS fileservice.FileService,
+	isTombstone bool,
+	mp *mpool.MPool,
 	getChunkWorker GetChunkWorker,
 	writeObjectWorker WriteObjectWorker,
 	subscriptionAccountName string,
 	pubName string,
 	ccprCache CCPRTxnCacheWriter,
 	txnID []byte,
+	aobjectMap AObjectMap,
 	ttlChecker TTLChecker,
 ) (objectio.ObjectStats, error) {
 	// Check TTL before processing
@@ -776,7 +783,37 @@ func filterNonAppendableObject(
 		return objectio.ObjectStats{}, ErrSyncProtectionTTLExpired
 	}
 
-	// Use WriteObjectJob to write to fileservice via worker pool
+	// For tombstone objects, convert to batch and rewrite rowids using aobjectMap
+	if isTombstone && aobjectMap != nil {
+		// Extract sortkey from original object metadata
+		sortKeySeqnum, err := extractSortKeyFromObject(ctx, objectContent, stats)
+		if err != nil {
+			return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to extract sortkey from tombstone object: %v", err)
+		}
+
+		// Convert object file to batch
+		bat, err := convertObjectToBatch(ctx, objectContent, stats, snapshotTS, localFS, mp)
+		if err != nil {
+			return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to convert tombstone object to batch: %v", err)
+		}
+		defer bat.Close()
+
+		// Rewrite tombstone rowids using aobjectMap
+		if err := rewriteTombstoneRowids(ctx, bat, aobjectMap, mp); err != nil {
+			return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to rewrite tombstone rowids: %v", err)
+		}
+
+		// Create new object from batch with rewritten rowids
+		// Keep original object name for non-appendable tombstone (keepOriginalName=true)
+		objStats, err := createObjectFromBatch(ctx, bat, stats, snapshotTS, isTombstone, localFS, mp, sortKeySeqnum, true)
+		if err != nil {
+			return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to create object from tombstone batch: %v", err)
+		}
+
+		return objStats, nil
+	}
+
+	// For data objects (or tombstone without aobjectMap), write directly to fileservice
 	writeJob := NewWriteObjectJob(ctx, localFS, upstreamObjectName, objectContent, ccprCache, txnID)
 	if writeObjectWorker != nil {
 		writeObjectWorker.SubmitWriteObject(writeJob)
@@ -1127,6 +1164,7 @@ func filterBatchBySnapshotTS(
 // writes to object file, and returns objectio.ObjectStats
 // isTombstone: true for tombstone objects, false for data objects
 // sortKeySeqnum: the seqnum of the sortkey column in the original object
+// keepOriginalName: if true, use original object name instead of generating new one
 func createObjectFromBatch(
 	ctx context.Context,
 	bat *containers.Batch,
@@ -1136,6 +1174,7 @@ func createObjectFromBatch(
 	localFS fileservice.FileService,
 	mp *mpool.MPool,
 	sortKeySeqnum uint16,
+	keepOriginalName bool,
 ) (objectio.ObjectStats, error) {
 	if bat == nil || bat.Length() == 0 {
 		return objectio.ObjectStats{}, nil
@@ -1212,8 +1251,23 @@ func createObjectFromBatch(
 
 	// Create block writer - use data schema for data objects, tombstone schema for tombstone objects
 	var writer *ioutil.BlockWriter
-	if isTombstone {
-		// Use tombstone schema
+	if keepOriginalName {
+		// Use original object name (for non-appendable tombstone)
+		segid := originalStats.ObjectName().SegmentId()
+		num := originalStats.ObjectName().Num()
+		writer = ioutil.ConstructWriterWithSegmentID(
+			&segid,
+			num,
+			0, // version
+			seqnums,
+			sortKeyPos, // sortkeyPos from original object metadata
+			true,       // sortkeyIsPK
+			isTombstone,
+			localFS,
+			nil, // arena
+		)
+	} else if isTombstone {
+		// Use tombstone schema with new object name
 		writer = ioutil.ConstructWriter(
 			0, // version
 			seqnums,
@@ -1223,7 +1277,7 @@ func createObjectFromBatch(
 			localFS,
 		)
 	} else {
-		// Use data schema
+		// Use data schema with new object name
 		writer = ioutil.ConstructWriter(
 			0, // version
 			seqnums,
