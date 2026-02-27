@@ -283,7 +283,8 @@ class VersionManager:
         Handles formats:
         1. "8.0.30-MatrixOne-v" -> "999.0.0" (development version, highest)
         2. "8.0.30-MatrixOne-v3.0.0" -> "3.0.0" (release version)
-        3. "MatrixOne 3.0.1" -> "3.0.1" (fallback format)
+        3. "8.0.30-MatrixOne-v3.0" -> "3.0.99999" (unreleased dev version, e.g., 3.0 branch in development)
+        4. "MatrixOne 3.0.1" -> "3.0.1" (fallback format)
 
         Args:
 
@@ -307,13 +308,22 @@ class VersionManager:
             # Development version - assign highest version number
             return "999.0.0"
 
-        # Pattern 2: Release version "8.0.30-MatrixOne-v3.0.0" (v followed by version number)
+        # Pattern 2: Release version "8.0.30-MatrixOne-v3.0.0" (v followed by complete version number)
         release_pattern = r"^(\d+\.\d+\.\d+)-MatrixOne-v(\d+\.\d+\.\d+)$"
         release_match = re.search(release_pattern, version_string)
         if release_match:
             # Extract the semantic version part
             semantic_version = release_match.group(2)
             return semantic_version
+
+        # Pattern 3: Unreleased dev version "8.0.30-MatrixOne-v3.0" (v followed by major.minor only)
+        # This represents the latest development version of that branch (e.g., 3.0 branch in development)
+        dev_branch_pattern = r"^(\d+\.\d+\.\d+)-MatrixOne-v(\d+\.\d+)$"
+        dev_branch_match = re.search(dev_branch_pattern, version_string)
+        if dev_branch_match:
+            # Unreleased version - use 99999 as patch to indicate it's the latest in that branch
+            major_minor = dev_branch_match.group(2)
+            return f"{major_minor}.99999"
 
         # Pattern 3: Fallback format "MatrixOne 3.0.1", "Version 2.5.0", or "3.0.1"
         # Match clean version strings or strings that start with common prefixes

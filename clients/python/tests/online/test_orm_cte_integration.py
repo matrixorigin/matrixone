@@ -64,50 +64,42 @@ class TestORMCTEIntegration:
         self.client.execute(f"USE {self.test_db}")
 
         # Create tables
-        self.client.execute(
-            f"""
+        self.client.execute(f"""
             CREATE TABLE IF NOT EXISTS {self.test_db}.cte_users (
                 id INT PRIMARY KEY AUTO_INCREMENT,
                 name VARCHAR(50),
                 department VARCHAR(50),
                 salary INT
             )
-        """
-        )
+        """)
 
-        self.client.execute(
-            f"""
+        self.client.execute(f"""
             CREATE TABLE IF NOT EXISTS {self.test_db}.cte_articles (
                 id INT PRIMARY KEY AUTO_INCREMENT,
                 title VARCHAR(100),
                 author_id INT,
                 views INT
             )
-        """
-        )
+        """)
 
         # Insert test data
-        self.client.execute(
-            f"""
+        self.client.execute(f"""
             INSERT INTO {self.test_db}.cte_users (name, department, salary) VALUES
             ('Alice', 'Engineering', 80000),
             ('Bob', 'Engineering', 90000),
             ('Charlie', 'Marketing', 70000),
             ('Diana', 'Marketing', 75000),
             ('Eve', 'Sales', 60000)
-        """
-        )
+        """)
 
-        self.client.execute(
-            f"""
+        self.client.execute(f"""
             INSERT INTO {self.test_db}.cte_articles (title, author_id, views) VALUES
             ('Python Tutorial', 1, 1000),
             ('Database Design', 1, 800),
             ('Marketing Strategy', 3, 600),
             ('Sales Tips', 5, 400),
             ('Advanced Python', 2, 1200)
-        """
-        )
+        """)
 
         yield
 

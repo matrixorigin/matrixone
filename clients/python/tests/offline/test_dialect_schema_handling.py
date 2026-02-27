@@ -36,11 +36,11 @@ class TestMatrixOneDialectSchemaHandling:
         self.mock_connection.connection = Mock()
 
     def test_has_table_with_none_schema(self):
-        """Test has_table method with schema=None (the main issue we're fixing)."""
-        # Mock connection with database name in DSN
-        self.mock_connection.connection.dsn = "host=localhost port=6001 dbname=test user=root"
-        # Mock get_dsn_parameters to return None so it falls back to DSN parsing
-        self.mock_connection.connection.get_dsn_parameters.return_value = {}
+        """Test has_table method with schema=None - should use SELECT DATABASE()."""
+        # Mock SELECT DATABASE() to return 'mydb'
+        mock_result = Mock()
+        mock_result.scalar.return_value = 'mydb'
+        self.mock_connection.execute.return_value = mock_result
 
         # Mock the super().has_table call to return True
         with patch('sqlalchemy.dialects.mysql.base.MySQLDialect.has_table') as mock_parent_has_table:
@@ -49,8 +49,10 @@ class TestMatrixOneDialectSchemaHandling:
             # Test the method
             result = self.dialect.has_table(self.mock_connection, "test_table", schema=None)
 
-            # Verify that schema was set to "test" (from DSN)
-            mock_parent_has_table.assert_called_once_with(self.mock_connection, "test_table", "test", **{})
+            # Verify that SELECT DATABASE() was called
+            self.mock_connection.execute.assert_called_once()
+            # Verify that schema was set to "mydb" (from SELECT DATABASE())
+            mock_parent_has_table.assert_called_once_with(self.mock_connection, "test_table", "mydb", **{})
             assert result is True
 
     def test_has_table_with_explicit_schema(self):
@@ -59,64 +61,55 @@ class TestMatrixOneDialectSchemaHandling:
         with patch('sqlalchemy.dialects.mysql.base.MySQLDialect.has_table') as mock_parent_has_table:
             mock_parent_has_table.return_value = False
 
-            # Test with explicit schema
+            # Test with explicit schema - should not call SELECT DATABASE()
             result = self.dialect.has_table(self.mock_connection, "test_table", schema="mydb")
 
             # Verify that the explicit schema was used
             mock_parent_has_table.assert_called_once_with(self.mock_connection, "test_table", "mydb", **{})
+            # Verify SELECT DATABASE() was NOT called
+            self.mock_connection.execute.assert_not_called()
             assert result is False
 
-    def test_has_table_fallback_to_default_schema(self):
-        """Test has_table method fallback to default schema when DSN parsing fails."""
-        # Mock connection without DSN or with invalid DSN
-        self.mock_connection.connection.dsn = "invalid_dsn"
-        # Mock get_dsn_parameters to return None so it falls back to DSN parsing
-        self.mock_connection.connection.get_dsn_parameters.return_value = {}
+    def test_has_table_no_database_selected(self):
+        """Test has_table method when no database is selected - should raise ValueError."""
+        # Mock SELECT DATABASE() to return None
+        mock_result = Mock()
+        mock_result.scalar.return_value = None
+        self.mock_connection.execute.return_value = mock_result
 
-        with patch('sqlalchemy.dialects.mysql.base.MySQLDialect.has_table') as mock_parent_has_table:
-            mock_parent_has_table.return_value = True
+        # Test the method - should raise ValueError
+        with pytest.raises(ValueError, match="No database selected"):
+            self.dialect.has_table(self.mock_connection, "test_table", schema=None)
 
-            # Test the method
-            result = self.dialect.has_table(self.mock_connection, "test_table", schema=None)
+    def test_get_table_names_with_none_schema(self):
+        """Test get_table_names method with schema=None - should use SELECT DATABASE()."""
+        # Mock SELECT DATABASE() to return 'mydb'
+        mock_result = Mock()
+        mock_result.scalar.return_value = 'mydb'
+        self.mock_connection.execute.return_value = mock_result
 
-            # Verify that fallback schema "test" was used
-            mock_parent_has_table.assert_called_once_with(self.mock_connection, "test_table", "test", **{})
-            assert result is True
-
-    def test_has_table_with_dsn_parameters(self):
-        """Test has_table method with DSN parameters."""
-        # Mock connection with get_dsn_parameters method
-        self.mock_connection.connection.get_dsn_parameters.return_value = {
-            'dbname': 'mydatabase',
-            'user': 'root',
-            'host': 'localhost',
-        }
-
-        with patch('sqlalchemy.dialects.mysql.base.MySQLDialect.has_table') as mock_parent_has_table:
-            mock_parent_has_table.return_value = True
+        with patch('sqlalchemy.dialects.mysql.base.MySQLDialect.get_table_names') as mock_parent:
+            mock_parent.return_value = ["table1", "table2"]
 
             # Test the method
-            result = self.dialect.has_table(self.mock_connection, "test_table", schema=None)
+            result = self.dialect.get_table_names(self.mock_connection, schema=None)
 
-            # Verify that database name from DSN parameters was used
-            mock_parent_has_table.assert_called_once_with(self.mock_connection, "test_table", "mydatabase", **{})
-            assert result is True
+            # Verify that SELECT DATABASE() was called
+            self.mock_connection.execute.assert_called_once()
+            # Verify that database name from SELECT DATABASE() was used
+            mock_parent.assert_called_once_with(self.mock_connection, "mydb", **{})
+            assert result == ["table1", "table2"]
 
-    def test_has_table_exception_handling(self):
-        """Test has_table method exception handling."""
-        # Mock connection that raises exception
-        self.mock_connection.connection.dsn = "invalid_dsn"
-        self.mock_connection.connection.get_dsn_parameters.side_effect = Exception("Connection error")
+    def test_get_table_names_no_database_selected(self):
+        """Test get_table_names when no database is selected - should raise ValueError."""
+        # Mock SELECT DATABASE() to return None
+        mock_result = Mock()
+        mock_result.scalar.return_value = None
+        self.mock_connection.execute.return_value = mock_result
 
-        with patch('sqlalchemy.dialects.mysql.base.MySQLDialect.has_table') as mock_parent_has_table:
-            mock_parent_has_table.return_value = True
-
-            # Test the method
-            result = self.dialect.has_table(self.mock_connection, "test_table", schema=None)
-
-            # Verify that fallback schema "test" was used after exception
-            mock_parent_has_table.assert_called_once_with(self.mock_connection, "test_table", "test", **{})
-            assert result is True
+        # Test the method - should raise ValueError
+        with pytest.raises(ValueError, match="No database selected"):
+            self.dialect.get_table_names(self.mock_connection, schema=None)
 
 
 class TestMatrixOneTypeCompiler:

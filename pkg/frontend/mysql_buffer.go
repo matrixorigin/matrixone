@@ -197,6 +197,11 @@ type Conn struct {
 	service               string
 }
 
+// SetTimeout updates the read timeout used by ReadFromConn.
+func (c *Conn) SetTimeout(d time.Duration) {
+	c.timeout = d
+}
+
 // NewIOSession create a new io session
 func NewIOSession(conn net.Conn, pu *config.ParameterUnit, service string) (_ *Conn, err error) {
 	c := &Conn{

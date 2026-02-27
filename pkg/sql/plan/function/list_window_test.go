@@ -203,3 +203,36 @@ func TestWindowFunctionRetType(t *testing.T) {
 		require.Equal(t, types.T_any.ToType(), retType)
 	})
 }
+
+// TestCumeDistCheckFn tests the checkFn for CUME_DIST window function
+func TestCumeDistCheckFn(t *testing.T) {
+	// Find CUME_DIST function
+	var cumeDistFunc *FuncNew
+	for i := range supportedWindowInNewFramework {
+		if supportedWindowInNewFramework[i].functionId == CUME_DIST {
+			cumeDistFunc = &supportedWindowInNewFramework[i]
+			break
+		}
+	}
+
+	require.NotNil(t, cumeDistFunc, "CUME_DIST function should be defined")
+
+	intType := types.T_int64.ToType()
+
+	// Test valid case: no parameters
+	t.Run("CUME_DIST_valid_0_params", func(t *testing.T) {
+		result := cumeDistFunc.checkFn(cumeDistFunc.Overloads, []types.Type{})
+		require.Equal(t, 0, result.idx)
+	})
+
+	// Test invalid case: with parameters (this covers the error branch)
+	t.Run("CUME_DIST_invalid_1_param", func(t *testing.T) {
+		result := cumeDistFunc.checkFn(cumeDistFunc.Overloads, []types.Type{intType})
+		require.Equal(t, failedFunctionParametersWrong, result.status)
+	})
+
+	t.Run("CUME_DIST_invalid_2_params", func(t *testing.T) {
+		result := cumeDistFunc.checkFn(cumeDistFunc.Overloads, []types.Type{intType, intType})
+		require.Equal(t, failedFunctionParametersWrong, result.status)
+	})
+}

@@ -224,14 +224,12 @@ class TestQueryUpdateOnline:
         test_client.execute(f"USE {test_database}")
 
         # Create test records specifically for this test
-        test_client.execute(
-            """
+        test_client.execute("""
             INSERT INTO test_users_update (id, name, email, age, salary, status, login_count) 
             VALUES (200, 'Test User 1', 'test1@example.com', 25, 50000, 'active', 10),
                    (201, 'Test User 2', 'test2@example.com', 30, 60000, 'active', 5),
                    (202, 'Test User 3', 'test3@example.com', 35, 70000, 'active', 8)
-        """
-        )
+        """)
 
         # Update users who are active and have login_count > 5
         query = test_client.query(User)
@@ -324,12 +322,10 @@ class TestQueryUpdateOnline:
         test_client.execute(f"USE {test_database}")
 
         # Create a test record specifically for this test
-        test_client.execute(
-            """
+        test_client.execute("""
             INSERT INTO test_users_update (id, name, email, age, salary, status, login_count) 
             VALUES (100, 'Transaction Test User', 'transaction@test.com', 25, 50000, 'active', 0)
-        """
-        )
+        """)
 
         with test_client.session() as tx:
             # Ensure we're using the test database in transaction context
@@ -352,12 +348,10 @@ class TestQueryUpdateOnline:
         test_client.execute(f"USE {test_database}")
 
         # Create a test record specifically for this test
-        test_client.execute(
-            """
+        test_client.execute("""
             INSERT INTO test_users_update (id, name, email, age, salary, status, login_count) 
             VALUES (101, 'Rollback Test User', 'rollback@test.com', 30, 60000, 'original_status', 0)
-        """
-        )
+        """)
 
         # Verify initial state
         user = test_client.query(User).filter(User.id == 101).first()

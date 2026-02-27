@@ -43,15 +43,13 @@ def demo_dynamic_config_update():
 
     # Create test table
     client.execute("DROP TABLE IF EXISTS dynamic_log_test")
-    client.execute(
-        """
+    client.execute("""
         CREATE TABLE dynamic_log_test (
             id INT,
             embedding VECF32(3),
             PRIMARY KEY(id)
         )
-    """
-    )
+    """)
 
     print("\n1. Initial mode: 'simple'")
     print("   Expected: Only show operation summary")
@@ -104,15 +102,13 @@ def demo_per_operation_override():
 
     # Create test table
     client.execute("DROP TABLE IF EXISTS override_log_test")
-    client.execute(
-        """
+    client.execute("""
         CREATE TABLE override_log_test (
             id INT,
             embedding VECF32(3),
             PRIMARY KEY(id)
         )
-    """
-    )
+    """)
 
     print("\n1. Global mode: 'off' (no logging)")
     print("   Inserting data without logging...")
@@ -166,15 +162,13 @@ def demo_debugging_scenario():
 
     # Create test table
     client.execute("DROP TABLE IF EXISTS debug_scenario")
-    client.execute(
-        """
+    client.execute("""
         CREATE TABLE debug_scenario (
             id INT,
             embedding VECF32(128),
             PRIMARY KEY(id)
         )
-    """
-    )
+    """)
 
     print("\n1. Normal production operations with 'simple' logging")
     import random
@@ -222,8 +216,7 @@ def main():
         print("\n" + "=" * 80)
         print("Summary")
         print("=" * 80)
-        print(
-            """
+        print("""
 Key Features Demonstrated:
 
 1. Dynamic Configuration Update (logger.update_config())
@@ -247,8 +240,7 @@ Benefits:
 ✓ Fine-grained control over logging
 ✓ Better performance in production
 ✓ Easy troubleshooting during development
-        """
-        )
+        """)
 
     except Exception as e:
         print(f"\n✗ Error occurred: {e}")
