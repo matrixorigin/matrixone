@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -234,6 +235,11 @@ func getDatabaseDiff(
 			return nil, nil, moerr.NewInternalError(ctx, "database name is empty for database level sync")
 		}
 
+		// Skip system databases - they should never be synced
+		if slices.Contains(catalog.SystemDatabases, strings.ToLower(iterationCtx.SrcInfo.DBName)) {
+			return dbToCreate, dbToDrop, nil
+		}
+
 		// Check if database exists upstream (in the GETDATABASES result)
 		existsUpstream := upstreamDBs[iterationCtx.SrcInfo.DBName]
 
@@ -268,14 +274,24 @@ func getDatabaseDiff(
 		}
 
 		// Find databases that exist upstream but not locally (to create)
+		// Skip system databases
 		for upstreamDB := range upstreamDBs {
+			// Skip system databases - they should never be created by CCPR
+			if slices.Contains(catalog.SystemDatabases, strings.ToLower(upstreamDB)) {
+				continue
+			}
 			if !localDBsMap[upstreamDB] {
 				dbToCreate = append(dbToCreate, upstreamDB)
 			}
 		}
 
 		// Find databases that exist locally but not upstream (to drop)
+		// Skip system databases
 		for _, localDB := range localDBs {
+			// Skip system databases - they should never be dropped
+			if slices.Contains(catalog.SystemDatabases, strings.ToLower(localDB)) {
+				continue
+			}
 			if !upstreamDBs[localDB] {
 				dbToDrop = append(dbToDrop, localDB)
 			}
