@@ -121,12 +121,18 @@ create table seq_table_01(col1 int);
 create sequence seq_14  increment 50 start with 126 no cycle;
 
 select nextval('seq_14');
+nextval(seq_14)
+126
 
 select nextval('seq_14'),currval('seq_14');
+nextval(seq_14)    currval(seq_14)
+176    176
 
 insert into seq_table_01 select nextval('seq_14');
 
 select currval('seq_14');
+currval(seq_14)
+226
 
 insert into seq_table_01 values(nextval('seq_14'));
 
@@ -137,10 +143,17 @@ insert into seq_table_01 values(nextval('seq_14'));
 insert into seq_table_01 values(nextval('seq_14'));
 
 select currval('seq_14');
+currval(seq_14)
+426
 
 select * from seq_table_01;
+col1
+226
+276
+326
+376
+426
 
 drop sequence seq_14;
 
 drop table seq_table_01;
-

@@ -208,7 +208,7 @@ func extend(v *Vector, rows int, m *mpool.MPool) error {
 		}
 		v.data = ndata
 	}
-	v.data = v.data[:tgtDataCap]
+	v.data = v.data[:cap(v.data)]
 	return nil
 }
 
@@ -326,6 +326,8 @@ func MakeAppendBytesFunc(vec *Vector) func([]byte, bool, *mpool.MPool) error {
 		return appendBytesToFixSized[types.Rowid](vec)
 	case types.T_Blockid:
 		return appendBytesToFixSized[types.Blockid](vec)
+	case types.T_year:
+		return appendBytesToFixSized[types.MoYear](vec)
 	}
 	panic(fmt.Sprintf("unexpected type: %s", vec.GetType().String()))
 }

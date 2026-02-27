@@ -67,10 +67,8 @@ create table test_int8_overflow(
     value tinyint not null
 );
 
--- @bvt:issue#15626
-load data infile {'filepath'='$resources/load_data/string_to_int_overflow.parq', 'format'='parquet'} 
+load data infile {'filepath'='$resources/load_data/string_to_int_overflow.parq', 'format'='parquet'}
 into table test_int8_overflow;
--- @bvt:issue
 
 -- Test 6: Invalid format - should fail with non-numeric string
 create table test_invalid_format(
@@ -78,10 +76,8 @@ create table test_invalid_format(
     value int not null
 );
 
--- @bvt:issue#15626
-load data infile {'filepath'='$resources/load_data/string_to_int_invalid.parq', 'format'='parquet'} 
+load data infile {'filepath'='$resources/load_data/string_to_int_invalid.parq', 'format'='parquet'}
 into table test_invalid_format;
--- @bvt:issue
 
 -- Test 7: Only whitespace strings - should fail
 create table test_only_whitespace(
@@ -89,10 +85,8 @@ create table test_only_whitespace(
     value int not null
 );
 
--- @bvt:issue#15626
-load data infile {'filepath'='$resources/load_data/string_to_int_only_spaces.parq', 'format'='parquet'} 
+load data infile {'filepath'='$resources/load_data/string_to_int_only_spaces.parq', 'format'='parquet'}
 into table test_only_whitespace;
--- @bvt:issue
 
 -- Test 8: Scientific notation - should fail
 create table test_scientific_notation(
@@ -100,10 +94,8 @@ create table test_scientific_notation(
     value int not null
 );
 
--- @bvt:issue#15626
-load data infile {'filepath'='$resources/load_data/string_to_int_scientific.parq', 'format'='parquet'} 
+load data infile {'filepath'='$resources/load_data/string_to_int_scientific.parq', 'format'='parquet'}
 into table test_scientific_notation;
--- @bvt:issue
 
 -- Test 9: Hexadecimal notation - should fail
 create table test_hexadecimal(
@@ -111,10 +103,8 @@ create table test_hexadecimal(
     value int not null
 );
 
--- @bvt:issue#15626
-load data infile {'filepath'='$resources/load_data/string_to_int_hex.parq', 'format'='parquet'} 
+load data infile {'filepath'='$resources/load_data/string_to_int_hex.parq', 'format'='parquet'}
 into table test_hexadecimal;
--- @bvt:issue
 
 -- Test 10: Very long strings - should fail
 create table test_very_long_string(
@@ -122,10 +112,8 @@ create table test_very_long_string(
     value bigint not null
 );
 
--- @bvt:issue#15626
-load data infile {'filepath'='$resources/load_data/string_to_int_very_long.parq', 'format'='parquet'} 
+load data infile {'filepath'='$resources/load_data/string_to_int_very_long.parq', 'format'='parquet'}
 into table test_very_long_string;
--- @bvt:issue
 
 -- Test 11: Unicode digits - should fail
 create table test_unicode_digits(
@@ -133,10 +121,8 @@ create table test_unicode_digits(
     value int not null
 );
 
--- @bvt:issue#15626
-load data infile {'filepath'='$resources/load_data/string_to_int_unicode.parq', 'format'='parquet'} 
+load data infile {'filepath'='$resources/load_data/string_to_int_unicode.parq', 'format'='parquet'}
 into table test_unicode_digits;
--- @bvt:issue
 
 -- Cleanup
 drop database test_string_to_int;

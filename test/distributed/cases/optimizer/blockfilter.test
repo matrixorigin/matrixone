@@ -6,7 +6,11 @@ drop table if exists t2;
 create table t1(c2 int, c1 int, c3 int) cluster by (c1,c2);
 create table t2(c1 int, c2 int, c3 int, primary key(c1,c2));
 insert into t1 select result%100,result%10000, result from generate_series(100000) g;
+select count(*) from t1;
+
 insert into t2 select result%100,*,* from generate_series(1000000) g;
+select count(*) from t2;
+
 -- @separator:table
 select mo_ctl('dn', 'flush', 'd1.t1');
 -- @separator:table

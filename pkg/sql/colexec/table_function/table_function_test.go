@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/stretchr/testify/require"
@@ -49,4 +50,113 @@ func TestPrepare(t *testing.T) {
 	arg.FuncName = "not_exist"
 	err = arg.Prepare(testutil.NewProc(t))
 	require.Error(t, err)
+}
+
+func TestParseTablePathWithAccount(t *testing.T) {
+	tests := []struct {
+		name              string
+		path              string
+		currentDatabase   string
+		currentAccountId  uint32
+		expectedDb        string
+		expectedTable     string
+		expectedAccountId uint32
+		expectError       bool
+		errorContains     string
+	}{
+		{
+			name:              "single part - table only",
+			path:              "mytable",
+			currentDatabase:   "mydb",
+			currentAccountId:  1,
+			expectedDb:        "mydb",
+			expectedTable:     "mytable",
+			expectedAccountId: 1,
+			expectError:       false,
+		},
+		{
+			name:             "single part - no database selected",
+			path:             "mytable",
+			currentDatabase:  "",
+			currentAccountId: 1,
+			expectError:      true,
+			errorContains:    "no database selected",
+		},
+		{
+			name:              "two parts - db.table",
+			path:              "mydb.mytable",
+			currentDatabase:   "otherdb",
+			currentAccountId:  1,
+			expectedDb:        "mydb",
+			expectedTable:     "mytable",
+			expectedAccountId: 1,
+			expectError:       false,
+		},
+		{
+			name:              "three parts - db.table.account_id (same account)",
+			path:              "mydb.mytable.1",
+			currentDatabase:   "otherdb",
+			currentAccountId:  1,
+			expectedDb:        "mydb",
+			expectedTable:     "mytable",
+			expectedAccountId: 1,
+			expectError:       false,
+		},
+		{
+			name:              "three parts - db.table.account_id (sys account queries other)",
+			path:              "mydb.mytable.5",
+			currentDatabase:   "otherdb",
+			currentAccountId:  0, // sys account
+			expectedDb:        "mydb",
+			expectedTable:     "mytable",
+			expectedAccountId: 5,
+			expectError:       false,
+		},
+		{
+			name:             "three parts - non-sys account queries other (should fail)",
+			path:             "mydb.mytable.2",
+			currentDatabase:  "otherdb",
+			currentAccountId: 1, // non-sys account
+			expectError:      true,
+			errorContains:    "only sys account can query stats for other accounts",
+		},
+		{
+			name:             "three parts - invalid account_id format",
+			path:             "mydb.mytable.abc",
+			currentDatabase:  "otherdb",
+			currentAccountId: 1,
+			expectError:      true,
+			errorContains:    "invalid account_id",
+		},
+		{
+			name:             "four parts - too many",
+			path:             "mydb.mytable.1.extra",
+			currentDatabase:  "otherdb",
+			currentAccountId: 1,
+			expectError:      true,
+			errorContains:    "invalid table path",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			proc.GetSessionInfo().Database = tt.currentDatabase
+			proc.Ctx = defines.AttachAccountId(proc.Ctx, tt.currentAccountId)
+
+			db, table, accountId, err := parseTablePathWithAccount(tt.path, proc)
+
+			if tt.expectError {
+				require.Error(t, err)
+				if tt.errorContains != "" {
+					require.Contains(t, err.Error(), tt.errorContains)
+				}
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tt.expectedDb, db)
+				require.Equal(t, tt.expectedTable, table)
+				require.Equal(t, tt.expectedAccountId, accountId)
+			}
+		})
+	}
 }

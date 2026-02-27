@@ -45,9 +45,11 @@ type HashBuild struct {
 	HashOnPK          bool
 	NeedBatches       bool
 	NeedAllocateSels  bool
+	IsShuffle         bool
 	Conditions        []*plan.Expr
 	JoinMapTag        int32
 	JoinMapRefCnt     int32
+	ShuffleIdx        int32
 	RuntimeFilterSpec *plan.RuntimeFilterSpec
 
 	IsDedup           bool

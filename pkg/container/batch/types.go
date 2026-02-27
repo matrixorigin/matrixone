@@ -51,8 +51,7 @@ type Batch struct {
 	// Vecs col data
 	Vecs []*vector.Vector
 
-	ExtraBuf1 []byte
-	ExtraBuf2 []byte
+	ExtraBuf []byte
 
 	// row count of batch, to instead of old len(Zs).
 	rowCount int

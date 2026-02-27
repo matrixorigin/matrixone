@@ -28,7 +28,7 @@ CREATE TABLE indup_00(
 );
 
 -- 准备索引行数检查
-SET @idxsql = CONCAT("SELECT COUNT(*) FROM `", (SELECT DISTINCT index_table_name FROM mo_catalog.mo_indexes WHERE name = 'idx_act_name_spu_id_0'), "`");
+SET @idxsql = CONCAT("SELECT * FROM `", (SELECT DISTINCT index_table_name FROM mo_catalog.mo_indexes WHERE name = 'idx_act_name_spu_id_0'), "`");
 PREPARE check_idx FROM @idxsql;
 
 -- 初始化测试数据
@@ -108,7 +108,7 @@ SELECT * FROM indup_01;
 EXECUTE check_idx;
 
 -- 测试 2.2: 唯一索引冲突但主键不冲突（预期报错：MO 不支持此场景）
--- @pattern
+-- @regex("Duplicate entry '\(beijing,001\)'", true)
 INSERT INTO indup_01 VALUES (100,'beijing','001',888,'2023-02-01') 
 ON DUPLICATE KEY UPDATE `uv`=VALUES(`uv`), `update_time`=VALUES(`update_time`);
 EXECUTE check_idx;
@@ -442,12 +442,12 @@ SELECT * FROM indup_09;
 EXECUTE check_idx;
 
 -- 测试 5.1: 唯一索引冲突但主键不冲突（预期报错：MO 不支持此场景）
--- @pattern
+-- @regex("Duplicate entry '\(1,ns1\)'", true)
 INSERT INTO indup_09 (biz_type, namespace, sn) VALUES (1, 'ns1', 999) 
 ON DUPLICATE KEY UPDATE sn = sn + 1;
 
 -- 测试 5.2: 多次尝试唯一键冲突更新（预期报错）
--- @pattern
+-- @regex("Duplicate entry '\(1,ns1\)'", true)
 INSERT INTO indup_09 (biz_type, namespace, sn) VALUES (1, 'ns1', 999) 
 ON DUPLICATE KEY UPDATE sn = sn + 1;
 
@@ -1364,7 +1364,7 @@ INSERT INTO indup_err_uk_01 VALUES (1, 'user@example.com', 'user1');
 EXECUTE check_idx;
 
 -- 测试 25.1: 唯一键冲突但主键不冲突（预期报错）
--- @pattern
+-- @regex("Duplicate entry 'user@example.com'", true)
 INSERT INTO indup_err_uk_01 VALUES (2, 'user@example.com', 'user2') 
 ON DUPLICATE KEY UPDATE name = VALUES(name);
 EXECUTE check_idx;
@@ -1387,7 +1387,7 @@ INSERT INTO indup_err_uk_02 VALUES (1, 'a', 'b', 100);
 EXECUTE check_idx;
 
 -- 预期报错
--- @pattern
+-- @regex("Duplicate entry '\(a,b\)'", true)
 INSERT INTO indup_err_uk_02 VALUES (2, 'a', 'b', 200) 
 ON DUPLICATE KEY UPDATE value = VALUES(value);
 EXECUTE check_idx;

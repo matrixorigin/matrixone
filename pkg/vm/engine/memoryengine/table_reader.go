@@ -273,6 +273,14 @@ func (t *Table) CollectTombstones(
 	panic("implement me")
 }
 
+func (t *Table) StarCount(ctx context.Context) (uint64, error) {
+	return t.Rows(ctx)
+}
+
+func (t *Table) EstimateCommittedTombstoneCount(ctx context.Context) (int, error) {
+	return 0, nil // memory engine has no persisted tombstones
+}
+
 // for memory engine.
 type MemRelationData struct {
 	Shards ShardIdSlice

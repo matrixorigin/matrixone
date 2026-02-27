@@ -2614,3 +2614,103 @@ func TestTableChangeStream_CalculateInitialDelay_GetLastSyncTimeFailure(t *testi
 		require.ErrorIs(t, runErr, context.Canceled)
 	}
 }
+
+// TestTableChangeStream_DetermineRetryable_TableNotFoundError verifies that
+// "can not find table by id" errors are classified as retryable.
+// This error may occur during flush when table metadata is being modified.
+func TestTableChangeStream_DetermineRetryable_TableNotFoundError(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	tableInfo := &DbTableInfo{
+		SourceDbName:  "db1",
+		SourceTblName: "t1",
+		SourceTblId:   1,
+	}
+
+	stream := createTestStream(mp, tableInfo)
+
+	testCases := []struct {
+		name        string
+		errMsg      string
+		wantRetry   bool
+		description string
+	}{
+		{
+			name:        "table not found by id",
+			errMsg:      "internal error: can not find table by id 272525: accountId: 0",
+			wantRetry:   true,
+			description: "table not found during flush should be retryable",
+		},
+		{
+			name:        "table not found by id with different id",
+			errMsg:      "can not find table by id 12345: accountId: 1",
+			wantRetry:   true,
+			description: "table not found with different table/account id should also be retryable",
+		},
+		{
+			name:        "table not found deleted in txn",
+			errMsg:      "internal error: can not find table by id 272555: accountId: 0. Deleted in txn",
+			wantRetry:   true,
+			description: "table deleted in transaction should be retryable",
+		},
+		{
+			name:        "unrelated error",
+			errMsg:      "some other error",
+			wantRetry:   false,
+			description: "unrelated errors should not be retryable",
+		},
+		{
+			name:        "relation error",
+			errMsg:      "relation not found",
+			wantRetry:   true,
+			description: "relation errors should be retryable",
+		},
+		{
+			name:        "truncated table",
+			errMsg:      "table has been truncated",
+			wantRetry:   true,
+			description: "truncated table errors should be retryable",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := moerr.NewInternalError(context.Background(), tc.errMsg)
+			retryable := stream.determineRetryable(err)
+			assert.Equal(t, tc.wantRetry, retryable, tc.description)
+		})
+	}
+}
+
+// TestTableChangeStream_TableNotFoundError_Integration verifies end-to-end behavior
+// when "can not find table by id" error occurs during collection.
+func TestTableChangeStream_TableNotFoundError_Integration(t *testing.T) {
+	h := newTableStreamHarness(t)
+	defer h.Close()
+
+	// Inject "can not find table by id" error during collection
+	tableNotFoundErr := moerr.NewInternalError(h.Context(), "internal error: can not find table by id 272525: accountId: 0")
+	h.SetCollectError(tableNotFoundErr)
+
+	ar := h.NewActiveRoutine()
+	errCh, done := h.RunStreamAsync(ar)
+
+	// Wait for stream to process the error and mark as retryable
+	require.Eventually(t, func() bool {
+		return h.Stream().GetRetryable()
+	}, 2*time.Second, 10*time.Millisecond, "stream should be marked retryable on table not found error")
+
+	h.Cancel()
+	done()
+
+	var runErr error
+	select {
+	case runErr = <-errCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream did not exit")
+	}
+
+	require.Error(t, runErr)
+	require.True(t, h.Stream().GetRetryable(), "table not found error should mark stream retryable")
+}

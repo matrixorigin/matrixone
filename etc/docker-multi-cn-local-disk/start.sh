@@ -203,6 +203,68 @@ fi
 
 # Handle extra mounts by creating a temporary docker-compose override
 COMPOSE_FILES=(-f docker-compose.yml)
+
+# Generate default memory limits
+# Detect available memory (works on both macOS and Linux)
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS: get Docker Desktop memory limit
+    TOTAL_MEM_KB=$(docker info --format '{{.MemTotal}}' 2>/dev/null | awk '{print int($1/1024)}')
+else
+    # Linux: get system memory
+    TOTAL_MEM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+fi
+
+if [ -n "$TOTAL_MEM_KB" ] && [ "$TOTAL_MEM_KB" -gt 0 ]; then
+    # Calculate memory limits (in MB)
+    MEM_30_VAL=$((TOTAL_MEM_KB * 30 / 100 / 1024))
+    MEM_5_VAL=$((TOTAL_MEM_KB * 5 / 100 / 1024))
+    
+    # Apply minimums: TN/CN1/CN2 min 2G, Log/Proxy min 1G
+    [ "$MEM_30_VAL" -lt 2048 ] && MEM_30_VAL=2048
+    [ "$MEM_5_VAL" -lt 1024 ] && MEM_5_VAL=1024
+    
+    MEM_30="${MEM_30_VAL}M"
+    MEM_5="${MEM_5_VAL}M"
+    
+    DEFAULT_LIMITS="/tmp/docker-compose.default-limits.$$.yml"
+    cat > "$DEFAULT_LIMITS" << EOF
+services:
+  mo-cn1:
+    deploy:
+      resources:
+        limits:
+          memory: $MEM_30
+  mo-cn2:
+    deploy:
+      resources:
+        limits:
+          memory: $MEM_30
+  mo-tn:
+    deploy:
+      resources:
+        limits:
+          memory: $MEM_30
+  mo-log:
+    deploy:
+      resources:
+        limits:
+          memory: $MEM_5
+  mo-proxy:
+    deploy:
+      resources:
+        limits:
+          memory: $MEM_5
+EOF
+    COMPOSE_FILES+=(-f "$DEFAULT_LIMITS")
+    trap "rm -f $DEFAULT_LIMITS" EXIT
+    echo "Using default memory limits: TN/CN1/CN2=${MEM_30}, Log/Proxy=${MEM_5}"
+fi
+
+# Include user's override file (after default limits, so user config takes priority)
+if [ -f "docker-compose.override.yml" ]; then
+    COMPOSE_FILES+=(-f docker-compose.override.yml)
+fi
+
 if [ -n "$EXTRA_MOUNTS" ]; then
     TEMP_OVERRIDE="/tmp/docker-compose.override.$$.yml"
     cat > "$TEMP_OVERRIDE" << EOF

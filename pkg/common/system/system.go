@@ -41,6 +41,17 @@ var (
 	cpuUsage atomic.Uint64
 
 	goMaxProcs atomic.Int32
+
+	// lastQuotaRefreshTime tracks the last time quota config was refreshed.
+	// Used to debounce frequent cgroup config changes during k8s vertical scaling.
+	lastQuotaRefreshTime atomic.Int64
+)
+
+const (
+	// quotaRefreshDebounceSeconds is the minimum interval between quota refreshes.
+	// This prevents excessive refreshes when kubelet updates both cpu.max and memory.max
+	// during vertical pod autoscaling.
+	quotaRefreshDebounceSeconds = 1
 )
 
 // InContainer returns if the process is running in a container.
@@ -230,9 +241,26 @@ func runSystemMonitor(stopper *stopper.Stopper) {
 	}
 }
 
+// shouldRefreshQuotaConfig checks if enough time has passed since last refresh.
+// This debounces frequent cgroup updates during k8s vertical scaling where kubelet
+// may update both cpu.max and memory.max files even if only one value changed.
+func shouldRefreshQuotaConfig() bool {
+	now := time.Now().UnixNano()
+	last := lastQuotaRefreshTime.Load()
+
+	// Always allow first refresh (last == 0)
+	if last == 0 {
+		return true
+	}
+
+	// Check if debounce period has passed
+	return now-last >= int64(quotaRefreshDebounceSeconds)*int64(time.Second)
+}
+
 // refreshQuotaConfig get CPU/Mem config from dev. If run in container, get it from the cgroup config.
 // Tips: Currently, the callings are serial in two places: 1) init; 2) runWatchCgroupConfig
 func refreshQuotaConfig() {
+	lastQuotaRefreshTime.Store(time.Now().UnixNano())
 	if InContainer() {
 		cpu, err := cgroup.GetCPUStats(pid)
 		if err != nil {

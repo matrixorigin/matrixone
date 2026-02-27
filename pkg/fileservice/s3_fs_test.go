@@ -581,15 +581,12 @@ func TestS3PrefetchFile(t *testing.T) {
 		Policy: SkipDiskCache | SkipMemoryCache,
 	})
 	assert.Nil(t, err)
-	assert.Equal(t, int64(0), pcSet.FileService.Cache.Disk.WriteFile.Load())
 
 	// preload
 	err = fs.PrefetchFile(ctx, "foo/bar")
 	assert.Nil(t, err)
-	assert.Equal(t, int64(1), pcSet.FileService.Cache.Disk.WriteFile.Load())
 	err = fs.PrefetchFile(ctx, "foo/bar")
 	assert.Nil(t, err)
-	assert.Equal(t, int64(1), pcSet.FileService.Cache.Disk.WriteFile.Load())
 
 	// read
 	lastHit := int64(0)

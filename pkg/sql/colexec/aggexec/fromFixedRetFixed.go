@@ -116,6 +116,8 @@ func newSingleAggFuncExec1NewVersion(
 		return newAggregatorFromFixedToFixed[types.Time](mg, info, impl)
 	case types.T_timestamp:
 		return newAggregatorFromFixedToFixed[types.Timestamp](mg, info, impl)
+	case types.T_year:
+		return newAggregatorFromFixedToFixed[types.MoYear](mg, info, impl)
 	case types.T_bit:
 		return newAggregatorFromFixedToFixed[uint64](mg, info, impl)
 	case types.T_TS:
@@ -222,6 +224,11 @@ func newAggregatorFromFixedToFixed[to types.FixedSizeTExceptStrType](
 
 	case types.T_timestamp:
 		e := &aggregatorFromFixedToFixed[types.Timestamp, to]{}
+		e.init(mg, info, impl)
+		return e
+
+	case types.T_year:
+		e := &aggregatorFromFixedToFixed[types.MoYear, to]{}
 		e.init(mg, info, impl)
 		return e
 

@@ -111,9 +111,6 @@ func NewDiskCache(
 				err := os.Remove(path)
 				if err == nil {
 					metric.FSDiskCacheEvictCounter.Add(1)
-					perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
-						set.FileService.Cache.Disk.Evict.Add(1)
-					}, perfCounterSets...)
 				} else if !os.IsNotExist(err) {
 					logutil.Error("delete disk cache file",
 						zap.Any("error", err),
@@ -259,9 +256,6 @@ func (d *DiskCache) Read(
 			c.FileService.Cache.Hit.Add(numHit)
 			c.FileService.Cache.Disk.Read.Add(numRead)
 			c.FileService.Cache.Disk.Hit.Add(numHit)
-			c.FileService.Cache.Disk.Error.Add(numError)
-			c.FileService.Cache.Disk.OpenIOEntryFile.Add(numOpenIOEntry)
-			c.FileService.Cache.Disk.OpenFullFile.Add(numOpenFull)
 		}, d.perfCounterSets...)
 
 		LogEvent(ctx, str_update_metrics_end)
@@ -461,17 +455,11 @@ func (d *DiskCache) writeFile(
 	openReader func(context.Context) (io.ReadCloser, error),
 ) (written bool, err error) {
 
-	var numCreate, numStat, numError, numWrite int64
+	var numError int64
 	defer func() {
 		if numError > 0 {
 			metric.FSDiskCacheErrorCounter.Add(float64(numError))
 		}
-		perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
-			set.FileService.Cache.Disk.CreateFile.Add(numCreate)
-			set.FileService.Cache.Disk.StatFile.Add(numStat)
-			set.FileService.Cache.Disk.WriteFile.Add(numWrite)
-			set.FileService.Cache.Disk.Error.Add(numError)
-		})
 	}()
 
 	defer func() {
@@ -505,7 +493,6 @@ func (d *DiskCache) writeFile(
 	if err == nil {
 		// file exists
 		d.cache.Set(ctx, diskPath, struct{}{}, fileSize(stat))
-		numStat++
 		return false, nil
 	}
 
@@ -526,7 +513,6 @@ func (d *DiskCache) writeFile(
 		}
 	}()
 
-	numCreate++
 	from, err := openReader(ctx)
 	if err != nil {
 		return false, err
@@ -573,8 +559,6 @@ func (d *DiskCache) writeFile(
 	)
 
 	d.cache.Set(ctx, diskPath, struct{}{}, size)
-
-	numWrite++
 
 	return true, nil
 }

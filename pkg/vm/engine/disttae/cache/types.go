@@ -318,7 +318,7 @@ func copyTableItem(dst, src *TableItem) {
 	dst.ClusterByIdx = src.ClusterByIdx
 	dst.PrimarySeqnum = src.PrimarySeqnum
 	dst.Version = src.Version
-	dst.ExtraInfo = api.MustUnmarshalTblExtra(api.MustMarshalTblExtra(src.ExtraInfo))
+	dst.ExtraInfo = api.CloneExtra(src.ExtraInfo)
 	dst.LogicalId = src.LogicalId
 }
 

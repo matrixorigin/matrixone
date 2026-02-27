@@ -464,8 +464,10 @@ type Binding struct {
 	db      string
 	table   string
 	tableID uint64
-	// lower case
-	cols        []string
+	// lower case: used for binding/lookup
+	cols []string
+	// original case: only for SELECT * display, must be same length as cols (or empty)
+	originCols  []string
 	colIsHidden []bool
 	types       []*plan.Type
 	refCnts     []uint

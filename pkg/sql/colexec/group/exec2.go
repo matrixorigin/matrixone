@@ -63,21 +63,17 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 		return err
 	}
 
-	if group.NeedEval {
-		group.ctr.setSpillMem(group.SpillMem, group.Aggs)
-	} else {
-		group.ctr.setSpillMem(group.SpillMem/8, group.Aggs)
-	}
+	group.ctr.setSpillMem(group.SpillMem, group.Aggs)
 	return nil
 }
 
 func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
-	if len(group.ctr.groupByEvaluate.Executor) == len(group.Exprs) {
+	if len(group.ctr.groupByEvaluate.Executor) == len(group.GroupBy) {
 		group.ctr.groupByEvaluate.ResetForNextQuery()
 	} else {
 		// calculate the key width and key nullable, and hash table type.
 		group.ctr.keyWidth, group.ctr.keyNullable = 0, false
-		for _, expr := range group.Exprs {
+		for _, expr := range group.GroupBy {
 			group.ctr.keyNullable = group.ctr.keyNullable || (!expr.Typ.NotNullable)
 			if expr.Typ.Id == int32(types.T_tuple) {
 				return moerr.NewInternalErrorNoCtx("tuple is not supported as group by column")
@@ -103,7 +99,7 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 
 		// create group by evaluate
 		group.ctr.groupByEvaluate.Free()
-		group.ctr.groupByEvaluate, err = colexec.MakeEvalVector(proc, group.Exprs)
+		group.ctr.groupByEvaluate, err = colexec.MakeEvalVector(proc, group.GroupBy)
 		if err != nil {
 			return err
 		}
@@ -201,7 +197,12 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 	defer group.OpAnalyzer.Stop()
 
 	switch group.ctr.state {
-	case vm.Build:
+	case vm.Build, vm.EvalReset:
+		if group.ctr.state == vm.EvalReset {
+			group.ctr.resetForSpill()
+			group.ctr.state = vm.Build
+		}
+
 		// receive all data, loop till exhuasted.
 		for !group.ctr.inputDone {
 			var r vm.CallResult
@@ -246,10 +247,15 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 			if needSpill {
 				// we need to spill the data to disk.
 				if group.NeedEval {
-					group.ctr.spillDataToDisk(proc, nil)
+					if err := group.ctr.spillDataToDisk(proc, nil); err != nil {
+						return vm.CancelResult, err
+					}
 					// continue the loop, to receive more data.
 				} else {
 					// break the loop, output the intermediate result.
+					// set state to Eval, so that we can output ALL
+					// the intermediate result.
+					group.ctr.state = vm.Eval
 					break
 				}
 			}
@@ -451,7 +457,7 @@ func (group *Group) outputOneBatch(proc *process.Process) (vm.CallResult, error)
 				// switch back to build to receive more data.
 				// reset will set state to vm.Build, which will let us
 				// process more by Call child.
-				group.ctr.reset()
+				group.ctr.state = vm.EvalReset
 			}
 		}
 		return res, nil
@@ -471,32 +477,18 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 
 	batch := group.ctr.groupByBatches[curr]
 
-	// XXX: serialize aggs to ExtraBuf1, only need to do this for the first
-	// batch.  This really should be set at plan time.
-	if curr == 0 {
-		var buf1 bytes.Buffer
-		buf1.Write(types.EncodeInt32(&group.ctr.mtyp))
-		nAggs := int32(len(group.Aggs))
-		buf1.Write(types.EncodeInt32(&nAggs))
-		if nAggs > 0 {
-			for _, agExpr := range group.Aggs {
-				agExpr.MarshalToBuffer(&buf1)
-			}
-		}
-		batch.ExtraBuf1 = buf1.Bytes()
-	}
-
 	// XXX: Serialize chunk of aggList entries to batch.
 	// This is also a pretty bad design, we would really like to
 	// dump group state to a vector and put the vector into the batch.
 	// But well,
-	var buf2 bytes.Buffer
+	var buf bytes.Buffer
+	buf.Write(types.EncodeInt32(&group.ctr.mtyp))
 	nAggs := int32(len(group.ctr.aggList))
-	buf2.Write(types.EncodeInt32(&nAggs))
+	buf.Write(types.EncodeInt32(&nAggs))
 	for _, ag := range group.ctr.aggList {
-		ag.SaveIntermediateResultOfChunk(curr, &buf2)
+		ag.SaveIntermediateResultOfChunk(curr, &buf)
 	}
-	batch.ExtraBuf2 = buf2.Bytes()
+	batch.ExtraBuf = buf.Bytes()
 
 	res := vm.NewCallResult()
 	res.Batch = batch

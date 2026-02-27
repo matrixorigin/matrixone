@@ -935,6 +935,8 @@ var (
 		catalog.MO_ISCP_LOG:           0,
 		catalog.MO_INDEX_UPDATE:       0,
 		catalog.MO_BRANCH_METADATA:    0,
+		catalog.MO_FEATURE_LIMIT:      0,
+		catalog.MO_FEATURE_REGISTRY:   0,
 	}
 	sysAccountTables = map[string]struct{}{
 		catalog.MOVersionTable:       {},
@@ -982,6 +984,8 @@ var (
 		catalog.MO_ISCP_LOG:           0,
 		catalog.MO_INDEX_UPDATE:       0,
 		catalog.MO_BRANCH_METADATA:    0,
+		catalog.MO_FEATURE_LIMIT:      0,
+		catalog.MO_FEATURE_REGISTRY:   0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
@@ -1025,6 +1029,9 @@ var (
 		MoCatalogMoISCPLogDDL,
 		MoCatalogMoIndexUpdateDDL,
 		MoCatalogBranchMetadataDDL,
+		MoCatalogFeatureLimitDDL,
+		MoCatalogFeatureRegistryDDL,
+		MoCatalogFeatureRegistryInitData,
 	}
 
 	//drop tables for the tenant
@@ -1090,7 +1097,7 @@ var (
 			set owner = %d, 
 			    args = '%s',
 			    retType = '%s',
-			    body = '%s',
+			    body = "%s",
 			    language = '%s',
 			    definer = '%s',
 			    modified_time = '%s',
@@ -3767,13 +3774,32 @@ func doDropStage(ctx context.Context, ses *Session, ds *tree.DropStage) (err err
 	return err
 }
 
+func doRemoveStageFiles(ctx context.Context, ses *Session, rs *tree.RemoveStageFiles) error {
+	if err := doCheckRole(ctx, ses); err != nil {
+		return err
+	}
+
+	if !strings.HasPrefix(rs.Path, stage.STAGE_PROTOCOL+"://") {
+		return moerr.NewBadConfig(ctx, "URL protocol only supports stage://")
+	}
+
+	_, err := stageutil.DeleteStageFiles(ctx, ses.proc, rs.Path, rs.IfExists)
+	return err
+}
+
 type dropAccount struct {
 	IfExists bool
 	Name     string
 }
 
 // doDropAccount accomplishes the DropAccount statement
-func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dropAccount) (err error) {
+func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dropAccount, inTransaction ...bool) (err error) {
+	// Check if already in a transaction (for restore scenarios to avoid breaking outer transaction)
+	inTxn := false
+	if len(inTransaction) > 0 {
+		inTxn = inTransaction[0]
+	}
+
 	//set backgroundHandler's default schema
 	if handler, ok := bh.(*backExec); ok {
 		handler.backSes.txnCompileCtx.dbName = catalog.MO_CATALOG
@@ -3828,12 +3854,15 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 	}
 
 	dropAccountFunc := func() (rtnErr error) {
-		rtnErr = bh.Exec(ctx, "begin;")
-		defer func() {
-			rtnErr = finishTxn(ctx, bh, rtnErr)
-		}()
-		if rtnErr != nil {
-			return rtnErr
+		// If already in a transaction (e.g., restore scenario), don't create a new one
+		if !inTxn {
+			rtnErr = bh.Exec(ctx, "begin;")
+			if rtnErr != nil {
+				return rtnErr
+			}
+			defer func() {
+				rtnErr = finishTxn(ctx, bh, rtnErr)
+			}()
 		}
 
 		//step 0: lock account name first
@@ -5940,7 +5969,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.SetConnectionID:
 		objType = objectTypeNone
 		kind = privilegeKindNone
-	case *tree.CreateStage, *tree.AlterStage, *tree.DropStage:
+	case *tree.CreateStage, *tree.AlterStage, *tree.DropStage, *tree.RemoveStageFiles:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.BackupStart:
@@ -6139,13 +6168,29 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 			})
 		} else if p.GetDdl().GetDropTable() != nil {
 			dropTable := p.GetDdl().GetDropTable()
-			appendPt(privilegeTips{
-				typ:                   PrivilegeTypeDropTable,
-				databaseName:          dropTable.GetDatabase(),
-				tableName:             dropTable.GetTable(),
-				isClusterTable:        dropTable.GetClusterTable().GetIsClusterTable(),
-				clusterTableOperation: clusterTableDrop,
-			})
+			if len(dropTable.GetTables()) > 0 {
+				for _, entry := range dropTable.GetTables() {
+					isCluster := false
+					if entry.GetClusterTable() != nil {
+						isCluster = entry.GetClusterTable().GetIsClusterTable()
+					}
+					appendPt(privilegeTips{
+						typ:                   PrivilegeTypeDropTable,
+						databaseName:          entry.GetDatabase(),
+						tableName:             entry.GetTable(),
+						isClusterTable:        isCluster,
+						clusterTableOperation: clusterTableDrop,
+					})
+				}
+			} else {
+				appendPt(privilegeTips{
+					typ:                   PrivilegeTypeDropTable,
+					databaseName:          dropTable.GetDatabase(),
+					tableName:             dropTable.GetTable(),
+					isClusterTable:        dropTable.GetClusterTable().GetIsClusterTable(),
+					clusterTableOperation: clusterTableDrop,
+				})
+			}
 		} else if p.GetDdl().GetCreateIndex() != nil {
 			createIndex := p.GetDdl().GetCreateIndex()
 			appendPt(privilegeTips{
@@ -7142,6 +7187,17 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 	var stats statistic.StatsArray
 	stats.Reset()
 
+	if st, ok := stmt.(*tree.CreateTable); ok && st.IsAsSelect {
+		// CTAS needs source-query SELECT privilege even when target-table CREATE
+		// is valid, so we check the source plan explicitly here.
+		ok, delta, err := authenticateCreateTableAsSelectSourcePrivilege(ctx, ses, st)
+		if err != nil {
+			return false, stats, err
+		}
+		stats.Add(&delta)
+		return ok, stats, nil
+	}
+
 	priv := determinePrivilegeSetOfStatement(stmt)
 	if priv.objectType() == objectTypeTable {
 		//only sys account, moadmin role can exec mo_ctrl
@@ -7167,6 +7223,36 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 		return ok, stats, nil
 	}
 	return true, stats, nil
+}
+
+func authenticateCreateTableAsSelectSourcePrivilege(
+	ctx context.Context,
+	ses *Session,
+	st *tree.CreateTable,
+) (bool, statistic.StatsArray, error) {
+	var stats statistic.StatsArray
+	stats.Reset()
+	if st == nil || st.AsSource == nil {
+		return true, stats, nil
+	}
+
+	// Rebuild source-select plan and reuse normal table-scan privilege extraction,
+	// instead of manually parsing AST table references.
+	sourcePlan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), st.AsSource)
+	if err != nil {
+		return false, stats, err
+	}
+	arr := extractPrivilegeTipsFromPlan(sourcePlan)
+	if len(arr) == 0 {
+		return true, stats, nil
+	}
+
+	sourcePriv := determinePrivilegeSetOfStatement(st.AsSource)
+	convertPrivilegeTipsToPrivilege(sourcePriv, arr)
+
+	ok, delta, err := determineUserHasPrivilegeSet(ctx, ses, sourcePriv)
+	stats.Add(&delta)
+	return ok, stats, err
 }
 
 // formSqlFromGrantPrivilege makes the sql for querying the database.
@@ -8026,6 +8112,14 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 			return true
 		}
 
+		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_FEATURE_LIMIT)) {
+			return true
+		}
+
+		if strings.Contains(sql, fmt.Sprintf("mo_catalog.%s", catalog.MO_FEATURE_REGISTRY)) {
+			return true
+		}
+
 		return false
 	}
 
@@ -8778,6 +8872,7 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		body = strconv.Quote(string(byt))
 		body = body[1 : len(body)-1]
 	}
+	body = escapeSQLStringForDoubleQuotes(body)
 
 	if execResultArrayHasData(erArray) { // replace
 		var id int64
@@ -8806,6 +8901,35 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 	}
 
 	return err
+}
+
+func escapeSQLStringForDoubleQuotes(s string) string {
+	if s == "" {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			b.WriteString("\\\\")
+		case '"':
+			b.WriteString("\\\"")
+		case 0:
+			b.WriteString("\\0")
+		case '\b':
+			b.WriteString("\\b")
+		case '\n':
+			b.WriteString("\\n")
+		case '\r':
+			b.WriteString("\\r")
+		case '\t':
+			b.WriteString("\\t")
+		default:
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String()
 }
 
 func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tree.CreateProcedure) (err error) {

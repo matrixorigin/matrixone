@@ -279,6 +279,8 @@ fulltext(col5)
 show create table test_table;
 Table    Create Table
 test_table    CREATE TABLE `test_table` (\n  `col1` int NOT NULL AUTO_INCREMENT,\n  `col2` float DEFAULT NULL,\n  `col3` bool DEFAULT NULL,\n  `col4` date DEFAULT NULL,\n  `col5` varchar(255) DEFAULT NULL,\n  `col6` text DEFAULT NULL,\n  PRIMARY KEY (`col1`),\n FULLTEXT (`col5`)\n)
+set @old_sql_mode = @@sql_mode;
+set sql_mode = concat_ws(',', @@sql_mode, 'NO_AUTO_VALUE_ON_ZERO');
 load data infile '$resources/load_data/test_1.csv' into table test_table fields terminated by ',' parallel 'true';
 select * from test_table;
 col1    col2    col3    col4    col5    col6
@@ -332,6 +334,7 @@ col1    col2    col3    col4    col5    col6
 47    47.1    0    1987-09-23    varchar_47    text_47
 48    48.1    1    1985-10-25    varchar_48    text_48
 49    49.1    0    1988-10-06    varchar_49    text_49
+set sql_mode = @old_sql_mode;
 drop table test_table;
 drop table if exists jsonline_t2;
 create table jsonline_t2(

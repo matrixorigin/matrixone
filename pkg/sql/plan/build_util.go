@@ -199,6 +199,8 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 			return plan.Type{Id: int32(types.T_datetime), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
 		case defines.MYSQL_TYPE_TIMESTAMP:
 			return plan.Type{Id: int32(types.T_timestamp), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
+		case defines.MYSQL_TYPE_YEAR:
+			return plan.Type{Id: int32(types.T_year), Width: 4}, nil
 		case defines.MYSQL_TYPE_DECIMAL:
 			if n.InternalType.DisplayWith > 16 {
 				return plan.Type{Id: int32(types.T_decimal128), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
@@ -696,4 +698,38 @@ func cleanHint(originSql string) string {
 	re := regexp.MustCompile(`/\*[^!].*?\*/`)
 	cleanSQL := re.ReplaceAllString(originSql, "")
 	return cleanSQL
+}
+
+// RewriteCountNotNullColToStarcount rewrites count(not_null_col) to starcount (ObjName + Obj) on node.AggList
+// so that compile uses countStarExec instead of countColumnExec. tableDef must be the child's (e.g. TABLE_SCAN).
+func RewriteCountNotNullColToStarcount(node *plan.Node, tableDef *plan.TableDef) {
+	if node == nil || tableDef == nil || len(node.AggList) == 0 {
+		return
+	}
+	for i := range node.AggList {
+		agg := node.AggList[i].GetF()
+		if agg == nil || agg.Func == nil || agg.Func.ObjName != "count" {
+			continue
+		}
+		if uint64(agg.Func.Obj)&function.Distinct != 0 {
+			continue
+		}
+		if len(agg.Args) == 0 {
+			continue
+		}
+		arg := agg.Args[0]
+		col := arg.GetCol()
+		if col == nil {
+			continue
+		}
+		colPos := int(col.ColPos)
+		if colPos < 0 || colPos >= len(tableDef.Cols) {
+			continue
+		}
+		if !tableDef.Cols[colPos].Typ.NotNullable {
+			continue
+		}
+		agg.Func.ObjName = "starcount"
+		agg.Func.Obj = function.EncodeOverloadID(int32(function.STARCOUNT), 0)
+	}
 }

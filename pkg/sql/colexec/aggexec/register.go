@@ -27,6 +27,66 @@ import (
 	after registered, the function `MakeAgg` can make the aggregation function executor.
 */
 
+func RegisterBitmapConstruct(id int64) {
+	specialAgg[id] = true
+	AggIdOfBitmapConstruct = id
+}
+
+func RegisterBitmapOr(id int64) {
+	specialAgg[id] = true
+	AggIdOfBitmapOr = id
+}
+
+func RegisterBitXorAgg(id int64) {
+	specialAgg[id] = true
+	AggIdOfBitXor = id
+}
+
+func RegisterBitAndAgg(id int64) {
+	specialAgg[id] = true
+	AggIdOfBitAnd = id
+}
+
+func RegisterBitOrAgg(id int64) {
+	specialAgg[id] = true
+	AggIdOfBitOr = id
+}
+
+func RegisterVarPop(id int64) {
+	specialAgg[id] = true
+	AggIdOfVarPop = id
+}
+
+func RegisterStdDevPop(id int64) {
+	specialAgg[id] = true
+	AggIdOfStdDevPop = id
+}
+
+func RegisterVarSample(id int64) {
+	specialAgg[id] = true
+	AggIdOfVarSample = id
+}
+
+func RegisterStdDevSample(id int64) {
+	specialAgg[id] = true
+	AggIdOfStdDevSample = id
+}
+
+func RegisterAny(id int64) {
+	specialAgg[id] = true
+	AggIdOfAny = id
+}
+
+func RegisterMin(id int64) {
+	specialAgg[id] = true
+	AggIdOfMin = id
+}
+
+func RegisterMax(id int64) {
+	specialAgg[id] = true
+	AggIdOfMax = id
+}
+
 func RegisterSum(id int64) {
 	specialAgg[id] = true
 	AggIdOfSum = id
@@ -124,25 +184,37 @@ var (
 	registeredAggFunctions = make(map[aggKey]aggImplementation)
 
 	// list of special aggregation function IDs.
-	AggIdOfCountColumn   = int64(-1)
-	AggIdOfCountStar     = int64(-2)
-	AggIdOfGroupConcat   = int64(-3)
-	AggIdOfApproxCount   = int64(-4)
-	AggIdOfMedian        = int64(-5)
-	AggIdOfJsonArrayAgg  = int64(-6)
-	AggIdOfJsonObjectAgg = int64(-7)
-	WinIdOfRowNumber     = int64(-8)
-	WinIdOfRank          = int64(-9)
-	WinIdOfDenseRank     = int64(-10)
-	WinIdOfLag           = int64(-11)
-	WinIdOfLead          = int64(-12)
-	WinIdOfFirstValue    = int64(-13)
-	WinIdOfLastValue     = int64(-14)
-	WinIdOfNthValue      = int64(-15)
-	AggIdOfSum           = int64(-16)
-	AggIdOfAvg           = int64(-17)
-	groupConcatSep       = ","
-	getCroupConcatRet    = func(args ...types.Type) types.Type {
+	AggIdOfCountColumn     = int64(-1)
+	AggIdOfCountStar       = int64(-2)
+	AggIdOfGroupConcat     = int64(-3)
+	AggIdOfApproxCount     = int64(-4)
+	AggIdOfMedian          = int64(-5)
+	AggIdOfJsonArrayAgg    = int64(-6)
+	AggIdOfJsonObjectAgg   = int64(-7)
+	WinIdOfRowNumber       = int64(-8)
+	WinIdOfRank            = int64(-9)
+	WinIdOfDenseRank       = int64(-10)
+	WinIdOfLag             = int64(-11)
+	WinIdOfLead            = int64(-12)
+	WinIdOfFirstValue      = int64(-13)
+	WinIdOfLastValue       = int64(-14)
+	WinIdOfNthValue        = int64(-15)
+	AggIdOfSum             = int64(-16)
+	AggIdOfAvg             = int64(-17)
+	AggIdOfMin             = int64(-18)
+	AggIdOfMax             = int64(-19)
+	AggIdOfAny             = int64(-20)
+	AggIdOfVarPop          = int64(-21)
+	AggIdOfStdDevPop       = int64(-22)
+	AggIdOfVarSample       = int64(-23)
+	AggIdOfStdDevSample    = int64(-24)
+	AggIdOfBitXor          = int64(-25)
+	AggIdOfBitAnd          = int64(-26)
+	AggIdOfBitOr           = int64(-27)
+	AggIdOfBitmapConstruct = int64(-28)
+	AggIdOfBitmapOr        = int64(-29)
+	groupConcatSep         = ","
+	getCroupConcatRet      = func(args ...types.Type) types.Type {
 		for _, p := range args {
 			if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
 				return types.T_blob.ToType()

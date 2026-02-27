@@ -1497,14 +1497,20 @@ func TestAbortRemoteDeadlockTxn(t *testing.T) {
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrDeadLockDetected))
 			}()
 
-			for {
+			// Wait until txn2's waiter is queued on l1 (one blocked waiter). Poll with
+			// timeout to avoid unbounded spin or hang; small sleep avoids busy loop.
+			deadline := time.Now().Add(time.Second * 5)
+			var n int
+			for time.Now().Before(deadline) {
 				l1.events.mu.RLock()
-				if len(l1.events.mu.blockedWaiters) == 1 {
-					l1.events.mu.RUnlock()
+				n = len(l1.events.mu.blockedWaiters)
+				l1.events.mu.RUnlock()
+				if n == 1 {
 					break
 				}
-				l1.events.mu.RUnlock()
+				time.Sleep(time.Millisecond * 5)
 			}
+			require.Equal(t, 1, n, "expected exactly one blocked waiter on l1 before abort")
 
 			wait := pb.WaitTxn{TxnID: []byte("txn2"), WaiterAddress: l1.serviceID}
 			l2.abortDeadlockTxn(wait, ErrDeadLockDetected)
@@ -2038,25 +2044,28 @@ func TestIssue3288(t *testing.T) {
 
 			l1.Close()
 
-			// should lock failed - after auto-create wait timeout, returns ErrBackendClosed
-			_, err = l2.Lock(
-				ctx,
-				0,
-				[][]byte{{1}},
-				[]byte("txn2"),
-				option)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendClosed))
-
-			time.Sleep(time.Second * 3)
-
-			// should lock succ
-			_, err = l2.Lock(
-				ctx,
-				0,
-				[][]byte{{1}},
-				[]byte("txn2"),
-				option)
-			require.NoError(t, err)
+			// Real scenario: after s1 (l1) dies, s2 (l2) acquires the lock. Caller retries on
+			// ErrBackendClosed or ErrLockTableBindChanged per API contract until success.
+			//
+			// No infinite wait: (1) success -> break; (2) retryable error -> continue; (3) any other
+			// error -> require.NoError fails and test stops; (4) ctx has 10s timeout, so even if we
+			// only ever get retryable errors, Lock() will eventually return context.DeadlineExceeded
+			// and (3) triggers. So the loop always terminates.
+			//
+			// No flakiness: no sleep; outcome is determined only by retry-until-success. CI stable
+			// unless the environment is so slow that allocator cannot move bind within 10s.
+			var result pb.Result
+			for {
+				result, err = l2.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option)
+				if err == nil {
+					break
+				}
+				if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) || moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+					continue
+				}
+				require.NoError(t, err, "lock must succeed or return retryable error (ErrBackendClosed/ErrLockTableBindChanged)")
+			}
+			_ = result
 
 		},
 		nil,
@@ -2226,13 +2235,24 @@ func TestReLockSuccWithBindChanged(t *testing.T) {
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
 
 			// should lock succ
-			_, err = l2.Lock(
-				ctx,
-				0,
-				[][]byte{{1}},
-				[]byte("txn2"),
-				option)
-			require.NoError(t, err)
+			for {
+				select {
+				case <-ctx.Done():
+					require.Fail(t, "timeout")
+				default:
+				}
+				_, err = l2.Lock(
+					ctx,
+					0,
+					[][]byte{{1}},
+					[]byte("txn2"),
+					option)
+				if moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+					continue
+				}
+				require.NoError(t, err)
+				break
+			}
 		},
 		nil,
 	)

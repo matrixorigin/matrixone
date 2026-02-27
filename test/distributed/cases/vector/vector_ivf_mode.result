@@ -368,12 +368,13 @@ UNION
 FROM mini_embed_data
 ORDER BY cosine_distance(embedding, '[0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2]')
 LIMIT 2 by rank with option 'mode=pre')
+ORDER BY id
 LIMIT 4;
 id    content    dist
-id1    hello world    1.5163443088531494
-id10    additional entry    1.4459599256515503
 id03    it stores high dimensional vectors    0.0
 id02    sql is structured query language    0.246478870511055
+id10    additional entry    1.4459599256515503
+id1    hello world    1.5163443088531494
 (SELECT id, category, l2_distance(vec, '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]') AS dist
 FROM vec_with_multi_idx
 WHERE category = 'A' AND status = 1
@@ -446,6 +447,7 @@ FROM mini_embed_data
 WHERE file_id = 'file02'
 ORDER BY cosine_distance(embedding, '[0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2]')
 LIMIT 2 by rank with option 'mode=pre')
+ORDER BY id
 LIMIT 3;
 id    content
 id02    sql is structured query language

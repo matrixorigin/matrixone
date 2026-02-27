@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/shuffle"
 )
 
@@ -248,6 +247,11 @@ func (v *Vector) SetNulls(nsp *nulls.Nulls) {
 	v.nsp.Or(nsp)
 }
 
+func (v *Vector) SetAllNulls(length int) {
+	v.nsp.InitWithSize(int(length))
+	v.nsp.AddRange(0, uint64(length))
+}
+
 func (v *Vector) SetGrouping(gsp *nulls.Nulls) {
 	v.gsp.Clear()
 	if gsp == nil {
@@ -427,6 +431,8 @@ func GetAny(vec *Vector, i int, deepCopy bool) any {
 		return GetFixedAtNoTypeCheck[types.Time](vec, i)
 	case types.T_timestamp:
 		return GetFixedAtNoTypeCheck[types.Timestamp](vec, i)
+	case types.T_year:
+		return GetFixedAtNoTypeCheck[types.MoYear](vec, i)
 	case types.T_enum:
 		return GetFixedAtNoTypeCheck[types.Enum](vec, i)
 	case types.T_decimal64:
@@ -570,6 +576,14 @@ func (v *Vector) IsNull(i uint64) bool {
 	return v.nsp.Contains(i)
 }
 
+func (v *Vector) SetNull(i uint64) {
+	v.nsp.Add(i)
+}
+
+func (v *Vector) UnsetNull(i uint64) {
+	v.nsp.Del(i)
+}
+
 // call this function if type already checked
 func SetFixedAtNoTypeCheck[T types.FixedSizeT](v *Vector, idx int, t T) error {
 	vacol := MustFixedColNoTypeCheck[T](v)
@@ -610,6 +624,15 @@ func SetBytesAt(v *Vector, idx int, bs []byte, mp *mpool.MPool) error {
 
 func SetStringAt(v *Vector, idx int, bs string, mp *mpool.MPool) error {
 	return SetBytesAt(v, idx, []byte(bs), mp)
+}
+
+func (v *Vector) SetRawBytesAt(i int, bs []byte, mp *mpool.MPool) error {
+	if v.typ.IsVarlen() {
+		return SetBytesAt(v, i, bs, mp)
+	} else {
+		copy(v.data[i*v.typ.TypeSize():i*v.typ.TypeSize()+v.typ.TypeSize()], bs)
+		return nil
+	}
 }
 
 // IsConstNull return true if the vector means a scalar Null.
@@ -1037,6 +1060,8 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 		shrinkFixed[types.Time](v, sels, negate)
 	case types.T_timestamp:
 		shrinkFixed[types.Timestamp](v, sels, negate)
+	case types.T_year:
+		shrinkFixed[types.MoYear](v, sels, negate)
 	case types.T_enum:
 		shrinkFixed[types.Enum](v, sels, negate)
 	case types.T_decimal64:
@@ -1105,6 +1130,8 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
 		shrinkFixedByMask[types.Time](v, sels, negate, offset)
 	case types.T_timestamp:
 		shrinkFixedByMask[types.Timestamp](v, sels, negate, offset)
+	case types.T_year:
+		shrinkFixedByMask[types.MoYear](v, sels, negate, offset)
 	case types.T_enum:
 		shrinkFixedByMask[types.Enum](v, sels, negate, offset)
 	case types.T_decimal64:
@@ -1166,6 +1193,8 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 		err = shuffleFixedNoTypeCheck[types.Time](v, sels, mp)
 	case types.T_timestamp:
 		err = shuffleFixedNoTypeCheck[types.Timestamp](v, sels, mp)
+	case types.T_year:
+		err = shuffleFixedNoTypeCheck[types.MoYear](v, sels, mp)
 	case types.T_enum:
 		err = shuffleFixedNoTypeCheck[types.Enum](v, sels, mp)
 	case types.T_decimal64:
@@ -1605,6 +1634,35 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			if w.IsConst() {
 				ws := MustFixedColNoTypeCheck[types.Date](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extend(v, w.length, mp); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			if w.gsp.Any() {
+				unionNsp(&v.gsp, &w.gsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.length += w.length
+			return nil
+		}
+	case types.T_year:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[types.MoYear](w)
 				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
 					return err
 				}
@@ -2119,6 +2177,17 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 				return SetConstNull(v, length, mp)
 			}
 			ws := MustFixedColNoTypeCheck[types.Date](w)
+			if w.IsConst() {
+				return SetConstFixed(v, ws[0], length, mp)
+			}
+			return SetConstFixed(v, ws[sel], length, mp)
+		}
+	case types.T_year:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedColNoTypeCheck[types.MoYear](w)
 			if w.IsConst() {
 				return SetConstFixed(v, ws[0], length, mp)
 			}
@@ -2655,8 +2724,18 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 			}
 		} else {
 			if flags == nil {
-				copy(v.data[v.length*tlen:(v.length+cnt)*tlen], w.data[(int(offset))*tlen:(int(offset)+cnt)*tlen])
-				v.length += cnt
+				if w.nsp.Any() {
+					for i := 0; i < cnt; i++ {
+						if w.nsp.Contains(uint64(offset) + uint64(i)) {
+							nulls.Add(&v.nsp, uint64(v.length))
+						}
+						copy(v.data[v.length*tlen:(v.length+1)*tlen], w.data[(int(offset)+i)*tlen:(int(offset)+i+1)*tlen])
+						v.length++
+					}
+				} else {
+					copy(v.data[v.length*tlen:(v.length+cnt)*tlen], w.data[(int(offset))*tlen:(int(offset)+cnt)*tlen])
+					v.length += cnt
+				}
 			} else {
 				for i := range flags {
 					if flags[i] == 0 {
@@ -2713,6 +2792,8 @@ func (v *Vector) String() string {
 		return vecToString[types.Timestamp](v)
 	case types.T_enum:
 		return vecToString[types.Enum](v)
+	case types.T_year:
+		return vecToString[types.MoYear](v)
 	case types.T_decimal64:
 		return vecToString[types.Decimal64](v)
 	case types.T_decimal128:
@@ -2904,6 +2985,8 @@ func (v *Vector) RowToString(idx int) string {
 		return implFixedRowToString[float64](v, idx)
 	case types.T_date:
 		return implFixedRowToString[types.Date](v, idx)
+	case types.T_year:
+		return implFixedRowToString[types.MoYear](v, idx)
 	case types.T_datetime:
 		return implDatetimeRowToString(v, idx)
 	case types.T_time:
@@ -3054,6 +3137,8 @@ func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 		return appendOneFixed(vec, val.(float64), false, mp)
 	case types.T_date:
 		return appendOneFixed(vec, val.(types.Date), false, mp)
+	case types.T_year:
+		return appendOneFixed(vec, val.(types.MoYear), false, mp)
 	case types.T_datetime:
 		return appendOneFixed(vec, val.(types.Datetime), false, mp)
 	case types.T_time:
@@ -3782,6 +3867,11 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		minv = types.EncodeDate(&minVal)
 		maxv = types.EncodeDate(&maxVal)
 
+	case types.T_year:
+		minVal, maxVal := OrderedGetMinAndMax[types.MoYear](v)
+		minv = types.EncodeMoYear(&minVal)
+		maxv = types.EncodeMoYear(&maxVal)
+
 	case types.T_datetime:
 		minVal, maxVal := OrderedGetMinAndMax[types.Datetime](v)
 		minv = types.EncodeDatetime(&minVal)
@@ -4175,6 +4265,18 @@ func (v *Vector) InplaceSortAndCompact() {
 			appendList(v, newCol, nil, nil)
 		}
 
+	case types.T_year:
+		col := MustFixedColNoTypeCheck[types.MoYear](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+		newCol := slices.Compact(col)
+		if len(newCol) != len(col) {
+			v.CleanOnlyData()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
+		}
+
 	case types.T_datetime:
 		col := MustFixedColNoTypeCheck[types.Datetime](v)
 		sort.Slice(col, func(i, j int) bool {
@@ -4309,13 +4411,13 @@ func (v *Vector) InplaceSortAndCompact() {
 	case types.T_array_float32:
 		col, area := MustVarlenaRawData(v)
 		sort.Slice(col, func(i, j int) bool {
-			return moarray.Compare(
+			return types.ArrayCompare[float32](
 				types.GetArray[float32](&col[i], area),
 				types.GetArray[float32](&col[j], area),
 			) < 0
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Varlena) bool {
-			return moarray.Compare(
+			return types.ArrayCompare[float32](
 				types.GetArray[float32](&a, area),
 				types.GetArray[float32](&b, area),
 			) == 0
@@ -4328,13 +4430,13 @@ func (v *Vector) InplaceSortAndCompact() {
 	case types.T_array_float64:
 		col, area := MustVarlenaRawData(v)
 		sort.Slice(col, func(i, j int) bool {
-			return moarray.Compare(
+			return types.ArrayCompare[float64](
 				types.GetArray[float64](&col[i], area),
 				types.GetArray[float64](&col[j], area),
 			) < 0
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Varlena) bool {
-			return moarray.Compare(
+			return types.ArrayCompare[float64](
 				types.GetArray[float64](&a, area),
 				types.GetArray[float64](&b, area),
 			) == 0
@@ -4426,6 +4528,12 @@ func (v *Vector) InplaceSort() {
 			return col[i] < col[j]
 		})
 
+	case types.T_year:
+		col := MustFixedColNoTypeCheck[types.MoYear](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
 	case types.T_datetime:
 		col := MustFixedColNoTypeCheck[types.Datetime](v)
 		sort.Slice(col, func(i, j int) bool {
@@ -4489,7 +4597,7 @@ func (v *Vector) InplaceSort() {
 	case types.T_array_float32:
 		col, area := MustVarlenaRawData(v)
 		sort.Slice(col, func(i, j int) bool {
-			return moarray.Compare[float32](
+			return types.ArrayCompare[float32](
 				types.GetArray[float32](&col[i], area),
 				types.GetArray[float32](&col[j], area),
 			) < 0
@@ -4497,7 +4605,7 @@ func (v *Vector) InplaceSort() {
 	case types.T_array_float64:
 		col, area := MustVarlenaRawData(v)
 		sort.Slice(col, func(i, j int) bool {
-			return moarray.Compare[float64](
+			return types.ArrayCompare[float64](
 				types.GetArray[float64](&col[i], area),
 				types.GetArray[float64](&col[j], area),
 			) < 0

@@ -17,6 +17,7 @@ package readutil
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -239,9 +240,7 @@ func (or *ObjListRelData) expand() {
 		or.blocklistRelData.blklist = objectio.MultiObjectStatsToBlockInfoSlice(or.Objlist, or.NeedFirstEmpty)
 	}
 
-	if or.blocklistRelData.pState == nil {
-		or.blocklistRelData.pState = or.PState
-	}
+	or.ensurePStatePropagation()
 }
 
 func (or *ObjListRelData) AppendObj(obj *objectio.ObjectStats) {
@@ -270,6 +269,12 @@ func (or *ObjListRelData) AppendShardID(id uint64) {
 	panic("not supported")
 }
 
+func (or *ObjListRelData) ensurePStatePropagation() {
+	if or.blocklistRelData.pState == nil {
+		or.blocklistRelData.pState = or.PState
+	}
+}
+
 func (or *ObjListRelData) Split(cpunum int) []engine.RelData {
 	rsp := or.Rsp
 	if len(or.Objlist) < cpunum || or.TotalBlocks < 64 || rsp == nil || !rsp.Node.Stats.HashmapStats.Shuffle || rsp.Node.Stats.HashmapStats.ShuffleType != plan.ShuffleType_Range {
@@ -278,9 +283,7 @@ func (or *ObjListRelData) Split(cpunum int) []engine.RelData {
 		return or.blocklistRelData.Split(cpunum)
 	}
 
-	if or.blocklistRelData.pState == nil {
-		or.blocklistRelData.pState = or.PState
-	}
+	or.ensurePStatePropagation()
 
 	//split by range shuffle
 	result := make([]engine.RelData, cpunum)
@@ -339,6 +342,7 @@ func (or *ObjListRelData) GetBlockInfoSlice() objectio.BlockInfoSlice {
 }
 
 func (or *ObjListRelData) BuildEmptyRelData(i int) engine.RelData {
+	or.ensurePStatePropagation()
 	return or.blocklistRelData.BuildEmptyRelData(i)
 }
 

@@ -290,78 +290,50 @@ select * from export_verify order by id;
 -- ============================================================================
 
 -- Test 8.1: Invalid format 'xml'
--- @bvt:issue#23270
 select * from export_format_test into outfile 'stage://export_test_stage/test_invalid_xml.txt' format 'xml';
--- @bvt:issue
 
 -- Test 8.2: Invalid format 'json' (should be 'jsonline')
--- @bvt:issue#23270
 select * from export_format_test into outfile 'stage://export_test_stage/test_invalid_json.txt' format 'json';
--- @bvt:issue
 
 -- Test 8.3: Invalid format 'txt'
--- @bvt:issue#23270
 select * from export_format_test into outfile 'stage://export_test_stage/test_invalid_txt.txt' format 'txt';
--- @bvt:issue
 
 -- Test 8.4: Invalid format empty string
--- @bvt:issue#23270
 select * from export_format_test into outfile 'stage://export_test_stage/test_invalid_empty.txt' format '';
--- @bvt:issue
 
 -- Test 8.5: Invalid format with number
--- @bvt:issue#23270
 select * from export_format_test into outfile 'stage://export_test_stage/test_invalid_num.txt' format '123';
--- @bvt:issue
 
 -- Test 8.6: FORMAT 'jsonline' does not match file suffix '.csv'
--- @bvt:issue#23270
 select * from export_format_test into outfile 'stage://export_test_stage/test_mismatch1.csv' format 'jsonline';
--- @bvt:issue
 
 -- Test 8.7: FORMAT 'parquet' does not match file suffix '.csv'
--- @bvt:issue#23270
 select * from export_format_test into outfile 'stage://export_test_stage/test_mismatch2.csv' format 'parquet';
--- @bvt:issue
 
 -- Test 8.8: FORMAT 'csv' does not match file suffix '.jsonl'
--- @bvt:issue#23270
 select * from export_format_test into outfile 'stage://export_test_stage/test_mismatch3.jsonl' format 'csv';
--- @bvt:issue
 
 -- Test 8.9: FORMAT 'csv' does not match file suffix '.parquet'
--- @bvt:issue#23270
 select * from export_format_test into outfile 'stage://export_test_stage/test_mismatch4.parquet' format 'csv';
--- @bvt:issue
 
 -- Test 8.10: FORMAT 'jsonline' does not match file suffix '.parquet'
--- @bvt:issue#23270
 select * from export_format_test into outfile 'stage://export_test_stage/test_mismatch5.parquet' format 'jsonline';
--- @bvt:issue
 
 -- ============================================================================
 -- PART 9: Abnormal/Invalid Cases - SPLITSIZE errors
 -- ============================================================================
 
 -- Test 9.1: Invalid splitsize unit 'X'
--- @bvt:issue#23270
 select * from export_format_test into outfile 'stage://export_test_stage/test_invalid_unit_%d.csv' format 'csv' splitsize '100X';
--- @bvt:issue
 
 -- Test 9.2: Invalid splitsize negative value
--- @bvt:issue#23270
 select * from export_format_test into outfile 'stage://export_test_stage/test_invalid_neg_%d.csv' format 'csv' splitsize '-100M';
--- @bvt:issue
 
 -- Test 9.3: Invalid splitsize empty string
--- @bvt:issue#23270
 select * from export_format_test into outfile 'stage://export_test_stage/test_invalid_empty_%d.csv' format 'csv' splitsize '';
--- @bvt:issue
 
 -- Test 9.4: Invalid splitsize non-numeric
--- @bvt:issue#23270
 select * from export_format_test into outfile 'stage://export_test_stage/test_invalid_nan_%d.csv' format 'csv' splitsize 'abc';
--- @bvt:issue
 
 -- Test 9.5: SPLITSIZE with zero value (should mean no split, single file)
 select * from export_format_test into outfile 'stage://export_test_stage/test_split_zero.csv' format 'csv' splitsize '0';

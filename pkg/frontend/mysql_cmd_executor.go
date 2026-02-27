@@ -65,6 +65,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -103,7 +104,11 @@ const (
 )
 
 func getPrepareStmtName(stmtID uint32) string {
-	return fmt.Sprintf("%s_%d", prefixPrepareStmtName, stmtID)
+	var buf [32]byte
+	b := append(buf[:0], prefixPrepareStmtName...)
+	b = append(b, '_')
+	b = strconv.AppendUint(b, uint64(stmtID), 10)
+	return string(b)
 }
 
 func parsePrepareStmtID(s string) uint32 {
@@ -167,7 +172,8 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 			text = commonutil.Abbreviate(envStmt, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 		}
 	} else {
-		stmID, _ = uuid.NewV7()
+		u, _ := util.FastUuid()
+		stmID = uuid.UUID(u)
 		text = commonutil.Abbreviate(envStmt, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 	}
 	ses.SetStmtId(stmID)
@@ -447,8 +453,45 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 		return
 	}
 
+	getIndexSizes := func(indexTableNames []string) (map[string]int64, error) {
+		if len(indexTableNames) == 0 {
+			return map[string]int64{}, nil
+		}
+		sqlBuilder := strings.Builder{}
+		sqlBuilder.WriteString("select tbl, mo_table_size(db, tbl) from (values ")
+		for i, tblName := range indexTableNames {
+			if i != 0 {
+				sqlBuilder.WriteString(", ")
+			}
+			sqlBuilder.WriteString(fmt.Sprintf("row('%s', '%s')", dbName, tblName))
+		}
+		sqlBuilder.WriteString(") as tmp(db, tbl)")
+		rets, err := executeSQLInBackgroundSession(ctx, bh, sqlBuilder.String())
+		if err != nil {
+			return nil, err
+		}
+		sizes := make(map[string]int64, len(indexTableNames))
+		var tblName string
+		for _, result := range rets {
+			for r := uint64(0); r < result.GetRowCount(); r++ {
+				if tblName, err = result.GetString(ctx, r, 0); err != nil {
+					return nil, err
+				}
+				if sizes[tblName], err = result.GetInt64(ctx, r, 1); err != nil {
+					return nil, err
+				}
+			}
+		}
+		return sizes, nil
+	}
+
 	var tblNames []string
 	var tblIdxes []int
+	// baseTable -> index table names (secondary/unique only), for Index_length
+	type baseIndexPair struct{ base, index string }
+	var baseIndexPairs []baseIndexPair
+	indexTableSet := make(map[string]struct{})
+
 	mrs := ses.GetMysqlResultSet()
 	for i, row := range ses.data {
 		tableName := string(row[0].([]byte))
@@ -465,6 +508,14 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 		if slices.Contains(needRowsAndSizeTableTypes, r.GetTableDef(ctx).TableType) {
 			tblNames = append(tblNames, tableName)
 			tblIdxes = append(tblIdxes, i)
+			tableDef := r.GetTableDef(ctx)
+			for _, idx := range tableDef.GetIndexes() {
+				itn := idx.GetIndexTableName()
+				if strings.HasPrefix(itn, catalog.UniqueIndexTableNamePrefix) || strings.HasPrefix(itn, catalog.SecondaryIndexTableNamePrefix) {
+					baseIndexPairs = append(baseIndexPairs, baseIndexPair{tableName, itn})
+					indexTableSet[itn] = struct{}{}
+				}
+			}
 		} else if r.GetTableDef(ctx).TableType == catalog.SystemViewRel {
 			for i := 0; i < 16; i++ {
 				// only remain name and created_time
@@ -493,10 +544,32 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 	if err != nil {
 		return err
 	}
+
+	indexLengths := make(map[string]int64, len(tblNames))
+	if len(indexTableSet) > 0 {
+		indexTableNames := make([]string, 0, len(indexTableSet))
+		for k := range indexTableSet {
+			indexTableNames = append(indexTableNames, k)
+		}
+		indexSizes, err := getIndexSizes(indexTableNames)
+		if err != nil {
+			return err
+		}
+		for _, p := range baseIndexPairs {
+			indexLengths[p.base] += indexSizes[p.index]
+		}
+	}
+
 	for i, tblName := range tblNames {
 		idx := tblIdxes[i]
 		ses.data[idx][3] = rows[tblName]
+		if rows[tblName] > 0 {
+			ses.data[idx][4] = sizes[tblName] / rows[tblName]
+		} else {
+			ses.data[idx][4] = int64(0)
+		}
 		ses.data[idx][5] = sizes[tblName]
+		ses.data[idx][7] = indexLengths[tblName]
 	}
 	return nil
 }
@@ -867,6 +940,7 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 	}
 
 	var err error
+	useGlobal := sv.Global
 
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
@@ -904,7 +978,7 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 		}
 
 		var value interface{}
-		if sv.Global {
+		if useGlobal {
 			if value, err = ses.GetGlobalSysVar(name); err != nil {
 				continue
 			}
@@ -1261,6 +1335,10 @@ func handleAlterStage(ses FeSession, execCtx *ExecCtx, as *tree.AlterStage) erro
 
 func handleDropStage(ses FeSession, execCtx *ExecCtx, ds *tree.DropStage) error {
 	return doDropStage(execCtx.reqCtx, ses.(*Session), ds)
+}
+
+func handleRemoveStageFiles(ses FeSession, execCtx *ExecCtx, rs *tree.RemoveStageFiles) error {
+	return doRemoveStageFiles(execCtx.reqCtx, ses.(*Session), rs)
 }
 
 func handleCreateSnapshot(ses *Session, execCtx *ExecCtx, ct *tree.CreateSnapShot) error {
@@ -2594,7 +2672,12 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 
 func makeCompactTxnInfo(op TxnOperator) string {
 	txn := op.Txn()
-	return fmt.Sprintf("%s:%s", hex.EncodeToString(txn.ID), txn.SnapshotTS.DebugString())
+	var buf [128]byte
+	b := buf[:0]
+	b = append(b, hex.EncodeToString(txn.ID)...)
+	b = append(b, ':')
+	b = append(b, txn.SnapshotTS.DebugString()...)
+	return string(b)
 }
 
 func executeStmtWithResponse(ses *Session,
@@ -2616,23 +2699,6 @@ func executeStmtWithResponse(ses *Session,
 	err = executeStmtWithTxn(ses, nil, execCtx)
 	if err != nil {
 		return err
-	}
-
-	// TODO put in one txn
-	// insert data after create table in "create table ... as select ..." stmt
-	if ses.createAsSelectSql != "" {
-		ses.EnterFPrint(FPStmtWithResponseCreateAsSelect)
-		defer ses.ExitFPrint(FPStmtWithResponseCreateAsSelect)
-		sql := ses.createAsSelectSql
-		ses.createAsSelectSql = ""
-		tempExecCtx := ExecCtx{
-			ses:    ses,
-			reqCtx: execCtx.reqCtx,
-		}
-		defer tempExecCtx.Close()
-		if err = doComQuery(ses, &tempExecCtx, &UserInput{sql: sql}); err != nil {
-			return err
-		}
 	}
 
 	err = respClientWhenSuccess(ses, execCtx)
@@ -2983,6 +3049,11 @@ func executeStmt(ses *Session,
 			if analyzeModule != nil {
 				phyPlan = analyzeModule.GetPhyPlan()
 				execCtx.cw.SetExplainBuffer(analyzeModule.GetExplainPhyBuffer())
+			}
+
+			// Sync the latest plan after Run (it may have changed due to retry)
+			if txnCw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
+				txnCw.plan = c.GetPlan()
 			}
 
 			// Serialize the execution plan as json
@@ -3481,18 +3552,24 @@ func parseStmtExecute(reqCtx context.Context, ses *Session, data []byte) (string
 	stmtID := binary.LittleEndian.Uint32(data[0:4])
 	pos += 4
 
-	stmtName := fmt.Sprintf("%s_%d", prefixPrepareStmtName, stmtID)
+	stmtName := getPrepareStmtName(stmtID)
 	preStmt, err := ses.GetPrepareStmt(reqCtx, stmtName)
 	if err != nil {
 		return "", nil, err
 	}
 
 	var sql string
-	prefix := ""
 	if preStmt.IsCloudNonuser {
-		prefix = "/* cloud_nonuser */"
+		var buf [128]byte
+		b := append(buf[:0], "/* cloud_nonuser */execute "...)
+		b = append(b, stmtName...)
+		sql = string(b)
+	} else {
+		var buf [64]byte
+		b := append(buf[:0], "execute "...)
+		b = append(b, stmtName...)
+		sql = string(b)
 	}
-	sql = fmt.Sprintf("%sexecute %s", prefix, stmtName)
 
 	ses.Debug(reqCtx, "query trace", logutil.QueryField(sql))
 	err = ses.GetResponser().MysqlRrWr().ParseExecuteData(reqCtx, ses.GetProc(), preStmt, data, pos)
@@ -3511,18 +3588,24 @@ func parseStmtSendLongData(reqCtx context.Context, ses *Session, data []byte) er
 	stmtID := binary.LittleEndian.Uint32(data[0:4])
 	pos += 4
 
-	stmtName := fmt.Sprintf("%s_%d", prefixPrepareStmtName, stmtID)
+	stmtName := getPrepareStmtName(stmtID)
 	preStmt, err := ses.GetPrepareStmt(reqCtx, stmtName)
 	if err != nil {
 		return err
 	}
 
 	var sql string
-	prefix := ""
 	if preStmt.IsCloudNonuser {
-		prefix = "/* cloud_nonuser */"
+		var buf [128]byte
+		b := append(buf[:0], "/* cloud_nonuser */send long data for stmt "...)
+		b = append(b, stmtName...)
+		sql = string(b)
+	} else {
+		var buf [64]byte
+		b := append(buf[:0], "send long data for stmt "...)
+		b = append(b, stmtName...)
+		sql = string(b)
 	}
-	sql = fmt.Sprintf("%ssend long data for stmt %s", prefix, stmtName)
 
 	ses.Debug(reqCtx, "query trace", logutil.QueryField(sql))
 
@@ -3591,6 +3674,8 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 		col.SetColumnType(defines.MYSQL_TYPE_TIME)
 	case types.T_timestamp:
 		col.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+	case types.T_year:
+		col.SetColumnType(defines.MYSQL_TYPE_YEAR)
 	case types.T_decimal64:
 		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
 	case types.T_decimal128:
@@ -3600,7 +3685,8 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 	case types.T_text:
 		col.SetColumnType(defines.MYSQL_TYPE_TEXT)
 	case types.T_uuid:
-		col.SetColumnType(defines.MYSQL_TYPE_UUID)
+		// Downgrade to string for client compatibility (e.g. Go MySQL driver).
+		col.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
 	case types.T_TS:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	case types.T_Blockid:

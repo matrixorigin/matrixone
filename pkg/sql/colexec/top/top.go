@@ -132,7 +132,7 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 			top.ctr.buildBat.Recursive = bat.Recursive
 			top.ctr.buildBat.ShuffleIDX = bat.ShuffleIDX
 			top.ctr.buildBat.Attrs = bat.Attrs
-			if len(bat.ExtraBuf1) > 0 || len(bat.ExtraBuf2) > 0 {
+			if len(bat.ExtraBuf) > 0 {
 				return result, moerr.NewInternalError(proc.Ctx, "top build should not have extra buffers")
 			}
 			copy(top.ctr.buildBat.Vecs, bat.Vecs)
@@ -394,6 +394,9 @@ func (top *Top) getTopValue() ([]byte, bool) {
 	case types.T_enum:
 		v := vector.GetFixedAtNoTypeCheck[types.Enum](vec, x)
 		return types.EncodeEnum(&v), true
+	case types.T_year:
+		v := vector.GetFixedAtNoTypeCheck[types.MoYear](vec, x)
+		return types.EncodeMoYear(&v), true
 	}
 	return nil, false
 }

@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -66,7 +67,8 @@ type JobResult struct {
 }
 
 type parallelJobScheduler struct {
-	pool *ants.Pool
+	pool   *ants.Pool
+	closed atomic.Bool
 }
 
 func NewParallelJobScheduler(parallism int) *parallelJobScheduler {
@@ -80,11 +82,17 @@ func NewParallelJobScheduler(parallism int) *parallelJobScheduler {
 }
 
 func (s *parallelJobScheduler) Stop() {
+	s.closed.Store(true)
 	s.pool.Release()
-	s.pool = nil
 }
 
 func (s *parallelJobScheduler) Schedule(job *Job) (err error) {
+	if s.closed.Load() {
+		return moerr.NewSchedulerClosedNoCtx()
+	}
+	if s.pool == nil || s.pool.IsClosed() {
+		return moerr.NewSchedulerClosedNoCtx()
+	}
 	err = s.pool.Submit(job.Run)
 	return
 }

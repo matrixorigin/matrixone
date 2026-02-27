@@ -41,7 +41,7 @@ x-build: &common-build
   context: ../../
   dockerfile: optools/images/Dockerfile.dev
   tags:
-    - ${IMAGE_NAME:-matrixorigin/matrixone:latest}
+    - ${IMAGE_NAME:-matrixorigin/matrixone:local}
     - matrixorigin/matrixone:local
   args:
     # Go proxy for faster dependency downloads
@@ -54,7 +54,7 @@ x-build: &common-build
 services:
   # LogService - must start first as it contains HAKeeper
   mo-log:
-    image: ${IMAGE_NAME:-matrixorigin/matrixone:latest}
+    image: ${IMAGE_NAME:-matrixorigin/matrixone:local}
     build: *common-build
     container_name: mo-log
     hostname: mo-log
@@ -85,7 +85,7 @@ services:
 
   # TN - Transaction Node
   mo-tn:
-    image: ${IMAGE_NAME:-matrixorigin/matrixone:latest}
+    image: ${IMAGE_NAME:-matrixorigin/matrixone:local}
     container_name: mo-tn
     hostname: mo-tn
     profiles:
@@ -118,7 +118,7 @@ services:
 
   # CN1 - Compute Node 1
   mo-cn1:
-    image: ${IMAGE_NAME:-matrixorigin/matrixone:latest}
+    image: ${IMAGE_NAME:-matrixorigin/matrixone:local}
     container_name: mo-cn1
     hostname: mo-cn1
     profiles:
@@ -152,7 +152,7 @@ services:
 
   # CN2 - Compute Node 2
   mo-cn2:
-    image: ${IMAGE_NAME:-matrixorigin/matrixone:latest}
+    image: ${IMAGE_NAME:-matrixorigin/matrixone:local}
     container_name: mo-cn2
     hostname: mo-cn2
     profiles:
@@ -186,7 +186,7 @@ services:
 
   # Proxy - Load Balancer
   mo-proxy:
-    image: ${IMAGE_NAME:-matrixorigin/matrixone:latest}
+    image: ${IMAGE_NAME:-matrixorigin/matrixone:local}
     container_name: mo-proxy
     hostname: mo-proxy
     profiles:

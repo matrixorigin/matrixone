@@ -523,11 +523,13 @@ func (l *localLockTable) handleLockConflictLocked(
 	})
 
 	conflictWith.addWaiter(l.logger, c.w)
+	// Set waiter to blocking before adding to events.mu.blockedWaiters so
+	// waiter_events.check() won't remove it (check removes only non-blocking).
+	c.txn.setBlocked(c.w, l.logger)
 	l.events.add(c)
 
 	// find conflict, and wait prev txn completed, and a new
 	// waiter added, we need to active deadlock check.
-	c.txn.setBlocked(c.w, l.logger)
 	logLocalLockWaitOn(l.logger, c.txn, l.bind.Table, c.w, key, conflictWith)
 
 	if c.opts.Granularity != pb.Granularity_Range {

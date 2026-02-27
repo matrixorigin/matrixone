@@ -10,171 +10,187 @@ create table t2(c0 int, c1 int , c2 int, c3 int, primary key(c0,c1),key(c2), uni
 insert into t2 select *,*,*,* from generate_series(1,100000) g;
 insert into t2 select *,*,1111,* from generate_series(100001,150000) g;
 select mo_ctl('dn', 'flush', 'd1.t1');
-mo_ctl(dn, flush, d1.t1)
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+➤ mo_ctl(dn, flush, d1.t1)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
 select mo_ctl('dn', 'flush', 'd1.t2');
-mo_ctl(dn, flush, d1.t2)
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+➤ mo_ctl(dn, flush, d1.t2)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
 select Sleep(1);
-Sleep(1)
+➤ Sleep(1)[-6,8,0]  𝄀
 0
 explain select * from t1,t2 where t1.c1=t2.c0 and t1.c3=11;
-TP QUERY PLAN
-Project
-  ->  Join
-        Join Type: INNER   hashOnPK
-        Join Cond: (t2.c0 = t1.c1)
-        Runtime Filter Build: serial(#[-1,0])
-        ->  Table Scan on d1.t2
-              Runtime Filter Probe: t2.__mo_cpkey_col Match Prefix
-        ->  Join
-              Join Type: INDEX
-              Join Cond: (t1.c1 = __mo_index_pri_col)
-              Runtime Filter Build: #[-1,0]
-              ->  Table Scan on d1.t1 [ForceOneCN]
-                    Filter Cond: (t1.c3 = 11)
-                    Block Filter Cond: (t1.c3 = 11)
-                    Runtime Filter Probe: t1.c1
-              ->  Index Table Scan on t1.id1 [ForceOneCN]
-                    Filter Cond: (__mo_index_idx_col = 11)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Join  𝄀
+        Join Type: INNER   hashOnPK  𝄀
+        Join Cond: (t2.c0 = t1.c1)  𝄀
+        Runtime Filter Build: serial(#[-1,0])  𝄀
+        ->  Table Scan on d1.t2  𝄀
+              Runtime Filter Probe: t2.__mo_cpkey_col Match Prefix  𝄀
+        ->  Join  𝄀
+              Join Type: INDEX  𝄀
+              Join Cond: (t1.c1 = __mo_index_pri_col)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on d1.t1 [ForceOneCN]  𝄀
+                    Filter Cond: (t1.c3 = 11)  𝄀
+                    Block Filter Cond: (t1.c3 = 11)  𝄀
+                    Runtime Filter Probe: t1.c1  𝄀
+              ->  Index Table Scan on t1.id1 [ForceOneCN]  𝄀
+                    Filter Cond: (__mo_index_idx_col = 11)  𝄀
                     Block Filter Cond: (__mo_index_idx_col = 11)
 select * from t1,t2 where t1.c1=t2.c0 and t1.c3=11;
-c1    c2    c3    c0    c1    c2    c3
-11    11    11    11    11    11    11
+➤ c1[4,32,0]  ¦  c2[4,32,0]  ¦  c3[4,32,0]  ¦  c0[4,32,0]  ¦  c1[4,32,0]  ¦  c2[4,32,0]  ¦  c3[4,32,0]  𝄀
+11  ¦  11  ¦  11  ¦  11  ¦  11  ¦  11  ¦  11
 select * from t1 where c2=1;
-c1    c2    c3
-1    1    1
+➤ c1[4,32,0]  ¦  c2[4,32,0]  ¦  c3[4,32,0]  𝄀
+1  ¦  1  ¦  1
 select count(c3) from t1 where c2=1111;
-count(c3)
+➤ count(c3)[-5,64,0]  𝄀
 50001
 select * from t1 where c3=1234;
-c1    c2    c3
-1234    1234    1234
+➤ c1[4,32,0]  ¦  c2[4,32,0]  ¦  c3[4,32,0]  𝄀
+1234  ¦  1234  ¦  1234
 select * from t1 where c3=5678;
-c1    c2    c3
-5678    5678    5678
+➤ c1[4,32,0]  ¦  c2[4,32,0]  ¦  c3[4,32,0]  𝄀
+5678  ¦  5678  ¦  5678
 select * from t1 where c2 between 1 and 3;
-c1    c2    c3
-1    1    1
-2    2    2
-3    3    3
+➤ c1[4,32,0]  ¦  c2[4,32,0]  ¦  c3[4,32,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  2  𝄀
+3  ¦  3  ¦  3
 select * from t1 where c3 between 2 and 10;
-c1    c2    c3
-2    2    2
-3    3    3
-4    4    4
-5    5    5
-6    6    6
-7    7    7
-8    8    8
-9    9    9
-10    10    10
+➤ c1[4,32,0]  ¦  c2[4,32,0]  ¦  c3[4,32,0]  𝄀
+2  ¦  2  ¦  2  𝄀
+3  ¦  3  ¦  3  𝄀
+4  ¦  4  ¦  4  𝄀
+5  ¦  5  ¦  5  𝄀
+6  ¦  6  ¦  6  𝄀
+7  ¦  7  ¦  7  𝄀
+8  ¦  8  ¦  8  𝄀
+9  ¦  9  ¦  9  𝄀
+10  ¦  10  ¦  10
 select count(c3) from t1 where c2 between 1000 and 1100;
-count(c3)
+➤ count(c3)[-5,64,0]  𝄀
 101
 select count(c3) from t1 where c2 between 1000 and 1200;
-count(c3)
+➤ count(c3)[-5,64,0]  𝄀
 50201
 select count(c3) from t1 where c2 between 1000 and 2000;
-count(c3)
+➤ count(c3)[-5,64,0]  𝄀
 51001
 select count(c3) from t1 where c2 between 1000 and 3000;
-count(c3)
+➤ count(c3)[-5,64,0]  𝄀
 52001
 select count(c3) from t1 where c3 between 1000 and 1100;
-count(c3)
+➤ count(c3)[-5,64,0]  𝄀
 101
 select count(c3) from t1 where c2 between 1000 and 2000;
-count(c3)
+➤ count(c3)[-5,64,0]  𝄀
 51001
 select * from t1 where c2 in (1);
-c1    c2    c3
-1    1    1
+➤ c1[4,32,0]  ¦  c2[4,32,0]  ¦  c3[4,32,0]  𝄀
+1  ¦  1  ¦  1
 select * from t1 where c2 in (1,1000,2000);
-c1    c2    c3
-1    1    1
-1000    1000    1000
-2000    2000    2000
+➤ c1[4,32,0]  ¦  c2[4,32,0]  ¦  c3[4,32,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+1000  ¦  1000  ¦  1000  𝄀
+2000  ¦  2000  ¦  2000
 select count(c3) from t1 where c2 in (1,1000,1111,2000);
-count(c3)
+➤ count(c3)[-5,64,0]  𝄀
 50004
 select * from t2 where c2=1;
-c0    c1    c2    c3
-1    1    1    1
+➤ c0[4,32,0]  ¦  c1[4,32,0]  ¦  c2[4,32,0]  ¦  c3[4,32,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
 select count(c3) from t2 where c2=1111;
-count(c3)
+➤ count(c3)[-5,64,0]  𝄀
 50001
 select * from t2 where c3=1234;
-c0    c1    c2    c3
-1234    1234    1234    1234
+➤ c0[4,32,0]  ¦  c1[4,32,0]  ¦  c2[4,32,0]  ¦  c3[4,32,0]  𝄀
+1234  ¦  1234  ¦  1234  ¦  1234
 select * from t2 where c3=5678;
-c0    c1    c2    c3
-5678    5678    5678    5678
+➤ c0[4,32,0]  ¦  c1[4,32,0]  ¦  c2[4,32,0]  ¦  c3[4,32,0]  𝄀
+5678  ¦  5678  ¦  5678  ¦  5678
 select * from t2 where c2 between 1 and 3;
-c0    c1    c2    c3
-1    1    1    1
-2    2    2    2
-3    3    3    3
+➤ c0[4,32,0]  ¦  c1[4,32,0]  ¦  c2[4,32,0]  ¦  c3[4,32,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  2  ¦  2  𝄀
+3  ¦  3  ¦  3  ¦  3
 select * from t2 where c3 between 2 and 10;
-c0    c1    c2    c3
-2    2    2    2
-3    3    3    3
-4    4    4    4
-5    5    5    5
-6    6    6    6
-7    7    7    7
-8    8    8    8
-9    9    9    9
-10    10    10    10
+➤ c0[4,32,0]  ¦  c1[4,32,0]  ¦  c2[4,32,0]  ¦  c3[4,32,0]  𝄀
+2  ¦  2  ¦  2  ¦  2  𝄀
+3  ¦  3  ¦  3  ¦  3  𝄀
+4  ¦  4  ¦  4  ¦  4  𝄀
+5  ¦  5  ¦  5  ¦  5  𝄀
+6  ¦  6  ¦  6  ¦  6  𝄀
+7  ¦  7  ¦  7  ¦  7  𝄀
+8  ¦  8  ¦  8  ¦  8  𝄀
+9  ¦  9  ¦  9  ¦  9  𝄀
+10  ¦  10  ¦  10  ¦  10
 select count(c3) from t2 where c2 between 1000 and 1100;
-count(c3)
+➤ count(c3)[-5,64,0]  𝄀
 101
 select count(c3) from t2 where c2 between 1000 and 1200;
-count(c3)
+➤ count(c3)[-5,64,0]  𝄀
 50201
 select count(c3) from t2 where c2 between 1000 and 2000;
-count(c3)
+➤ count(c3)[-5,64,0]  𝄀
 51001
 select count(c3) from t2 where c2 between 1000 and 3000;
-count(c3)
+➤ count(c3)[-5,64,0]  𝄀
 52001
 select count(c3) from t2 where c3 between 1000 and 1100;
-count(c3)
+➤ count(c3)[-5,64,0]  𝄀
 101
 select count(c3) from t2 where c2 between 1000 and 2000;
-count(c3)
+➤ count(c3)[-5,64,0]  𝄀
 51001
 select * from t2 where c2 in (1);
-c0    c1    c2    c3
-1    1    1    1
+➤ c0[4,32,0]  ¦  c1[4,32,0]  ¦  c2[4,32,0]  ¦  c3[4,32,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
 select * from t2 where c2 in (1,1000,2000);
-c0    c1    c2    c3
-1    1    1    1
-1000    1000    1000    1000
-2000    2000    2000    2000
+➤ c0[4,32,0]  ¦  c1[4,32,0]  ¦  c2[4,32,0]  ¦  c3[4,32,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  𝄀
+1000  ¦  1000  ¦  1000  ¦  1000  𝄀
+2000  ¦  2000  ¦  2000  ¦  2000
 select count(c3) from t2 where c2 in (1,1000,1111,2000);
-count(c3)
+➤ count(c3)[-5,64,0]  𝄀
 50004
 select c3,c2 from t1 where c2=1111 order by c3 limit 10;
-c3    c2
-1111    1111
-100001    1111
-100002    1111
-100003    1111
-100004    1111
-100005    1111
-100006    1111
-100007    1111
-100008    1111
-100009    1111
+➤ c3[4,32,0]  ¦  c2[4,32,0]  𝄀
+1111  ¦  1111  𝄀
+100001  ¦  1111  𝄀
+100002  ¦  1111  𝄀
+100003  ¦  1111  𝄀
+100004  ¦  1111  𝄀
+100005  ¦  1111  𝄀
+100006  ¦  1111  𝄀
+100007  ¦  1111  𝄀
+100008  ¦  1111  𝄀
+100009  ¦  1111
 select * from t1 where c2=-1;
-c1    c2    c3
+➤ c1[4,32,0]  ¦  c2[4,32,0]  ¦  c3[4,32,0]
 insert into t1 values(-1,-1,-1);
 select * from t1 where c2=-1;
-c1    c2    c3
--1    -1    -1
+➤ c1[4,32,0]  ¦  c2[4,32,0]  ¦  c3[4,32,0]  𝄀
+-1  ¦  -1  ¦  -1
 select * from t1 where c2=-2;
-c1    c2    c3
+➤ c1[4,32,0]  ¦  c2[4,32,0]  ¦  c3[4,32,0]
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30));
 create index idx1 using master on t1(a,b,c);
@@ -182,43 +198,59 @@ insert into t1 values("Congress","Lane", "1");
 insert into t1 values("Juniper","Way", "2");
 insert into t1 values("Nightingale","Lane", "3");
 select * from t1 where a in ("Congress","Nightingale") and b="Lane" and c in("1","2","3");
-a    b    c
-Congress    Lane    1
-Nightingale    Lane    3
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+Congress  ¦  Lane  ¦  1  𝄀
+Nightingale  ¦  Lane  ¦  3
 drop table if exists t1;
 create table t1(a int primary key, b int unique key);
 insert into t1 select result, result from generate_series(1,10000)g;
 select mo_ctl('dn','flush','d1.t1');
-mo_ctl(dn, flush, d1.t1)
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+➤ mo_ctl(dn, flush, d1.t1)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
 select * from t1 where b in (1,2) for update;
-a    b
-1    1
-2    2
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2
 create view v1 as select (case when a in (1,2,3) then 'y' else 'n' end) as a from t1;
 select count(a) from v1;
-count(a)
+➤ count(a)[-5,64,0]  𝄀
 10000
 drop table t1;
 create table t1(a int unsigned, b int, c varchar, primary key(a, c));
 select a from t1 where a = current_account_id() or (a = 0 and c in ('mo_catalog'));
-a
+➤ a[4,32,0]
 drop table if exists t1;
 create table t1(c1 int , c2 int, c3 int, key(c2), unique key id1(c3)) cluster by c1;
 insert into t1 select *,*,* from generate_series(1,100000)g;
 select mo_ctl('dn','flush','d1.t1');
-mo_ctl(dn, flush, d1.t1)
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+➤ mo_ctl(dn, flush, d1.t1)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
 select * from t1 where c2=1;
-c1    c2    c3
-1    1    1
+➤ c1[4,32,0]  ¦  c2[4,32,0]  ¦  c3[4,32,0]  𝄀
+1  ¦  1  ¦  1
 explain select * from t1 where c3<2000;
-TP QUERY PLAN
-Project
-  ->  Table Scan on d1.t1
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Table Scan on d1.t1  𝄀
         Filter Cond: (t1.c3 < 2000)
 select count(*) from t1 where c3<2000;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 1999
 drop table if exists t1;
 drop database if exists d1;
@@ -227,8 +259,28 @@ use d1;
 create table t1(c1 int primary key, c2 int, c3 int, key(c2), unique key id1(c3));
 insert into t1 select *,*,* from generate_series(1,100000) g;
 insert into t1 select *,1111,* from generate_series(100001,150000) g;
+select count(*) from t1;
+➤ count(*)[-5,64,0]  𝄀
+150000
 update t1 set c1=c1+1000000, c2=1,c3=c3-1000000 where c2=1;
+select count(*) from t1;
+➤ count(*)[-5,64,0]  𝄀
+150001
 delete from t1;
+select count(*) from t1;
+➤ count(*)[-5,64,0]  𝄀
+0
+explain analyze select count(*) from t1;
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(1\)", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on d1.t1  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=0 inputRows=0 outputRows=0 (min=0, max=0) InputSize=0 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+              Aggregate Functions: starcount(1)
 drop table t1;
 drop database d1;
 drop database if exists d1;
@@ -253,20 +305,20 @@ drop table t1;
 create table t1 (a timestamp, b varchar(10), key(b));
 insert into t1 select "2024-01-01 10:10:10", "a"||result from generate_series(1,200000)g;
 select * from t1 where a >= "2020-01-01 10:10:10" and a <= "2034-01-01 10:10:10" and b in ("a1");
-a    b
-2024-01-01 10:10:10    a1
+➤ a[93,64,0]  ¦  b[12,-1,0]  𝄀
+2024-01-01 10:10:10  ¦  a1
 drop table if exists t14;
 CREATE TABLE t14 (`pseudo` char(35) NOT NULL default '',`pseudo1` char(35) NOT NULL default '',
 `same` tinyint(1) unsigned NOT NULL default '1',PRIMARY KEY  (`pseudo1`),KEY `pseudo` (`pseudo`));
 INSERT INTO t14 (pseudo,pseudo1,same) VALUES ('joce', 'testtt', 1),('joce', 'tsestset', 1),('dekad', 'joce', 1);
 explain SELECT pseudo1 FROM t14 WHERE pseudo='joce';
-TP QUERY PLAN
-Project
-  ->  Index Table Scan on t14.pseudo
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Index Table Scan on t14.pseudo  𝄀
         Filter Cond: prefix_eq(__mo_index_idx_col)
 SELECT pseudo1 FROM t14 WHERE pseudo='joce';
-pseudo1
-testtt
+➤ pseudo1[1,35,0]  𝄀
+testtt  𝄀
 tsestset
 drop table t1;
 create table t1(a bigint, b bigint default null, c int, primary key(a), key(b));
@@ -275,15 +327,15 @@ delete from t1 where b = 1;
 drop table t1;
 create table t1(c1 int, c2 int, c3 int, key(c1));
 explain select * from t1 where c1=1;
-TP QUERY PLAN
-Project
-  ->  Join
-        Join Type: INDEX
-        Join Cond: (t1.__mo_fake_pk_col = __mo_index_pri_col)
-        Runtime Filter Build: #[-1,0]
-        ->  Table Scan on d1.t1 [ForceOneCN]
-              Filter Cond: (t1.c1 = 1)
-              Runtime Filter Probe: t1.__mo_fake_pk_col
-        ->  Index Table Scan on t1.c1 [ForceOneCN]
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Join  𝄀
+        Join Type: INDEX  𝄀
+        Join Cond: (t1.__mo_fake_pk_col = __mo_index_pri_col)  𝄀
+        Runtime Filter Build: #[-1,0]  𝄀
+        ->  Table Scan on d1.t1 [ForceOneCN]  𝄀
+              Filter Cond: (t1.c1 = 1)  𝄀
+              Runtime Filter Probe: t1.__mo_fake_pk_col  𝄀
+        ->  Index Table Scan on t1.c1 [ForceOneCN]  𝄀
               Filter Cond: prefix_eq(__mo_index_idx_col)
 drop database d1;

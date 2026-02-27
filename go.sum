@@ -211,8 +211,8 @@ github.com/cpegeric/cuvs/go v0.0.0-20251215111627-7e6a0b54cda6 h1:hn6US40835XeZR
 github.com/cpegeric/cuvs/go v0.0.0-20251215111627-7e6a0b54cda6/go.mod h1:Ju9l9IcIHZOPLO1tjN9dEYSgEPFowDPF9pM70W9nNGs=
 github.com/cpegeric/pdftotext-go v0.0.0-20241112123704-49cb86a3790e h1:tQSCiEjYPRU+AuuVR+zd+xYVOsEqX1clPhmIAM6FCHU=
 github.com/cpegeric/pdftotext-go v0.0.0-20241112123704-49cb86a3790e/go.mod h1:zt7uTOYu0EEeKatGaTi9JiP0I9ePHpDvjAwpfPXh/N0=
-github.com/cpegeric/usearch/golang v0.0.0-20251212130039-afde3fa5e527 h1:A8qDoMLqBZRv5Fi7RC+KA9hMngZAIK4cSuL1ME3Jy7w=
-github.com/cpegeric/usearch/golang v0.0.0-20251212130039-afde3fa5e527/go.mod h1:3SN8SakyyBWzb14DNZn4t5yX8dOa7ae45KpqDioi4RA=
+github.com/cpegeric/usearch/golang v0.0.0-20260116111453-124ac7861dc9 h1:jnClZ1ddCpjYQLMem6YSlVm7Ois6sXbRr2CP6n/rc/s=
+github.com/cpegeric/usearch/golang v0.0.0-20260116111453-124ac7861dc9/go.mod h1:3SN8SakyyBWzb14DNZn4t5yX8dOa7ae45KpqDioi4RA=
 github.com/cpuguy83/dockercfg v0.3.1 h1:/FpZ+JaygUR/lZP2NlFI2DVfrOEMAIKP5wWEJdoYe9E=
 github.com/cpuguy83/dockercfg v0.3.1/go.mod h1:sugsbF4//dDlL/i+S+rtpIWp+5h0BHJHfjj5/jFyUJc=
 github.com/cpuguy83/go-md2man v1.0.10/go.mod h1:SmD6nW6nTyfqj6ABTjUi3V3JVMnlJmwcJI5acqYI6dE=

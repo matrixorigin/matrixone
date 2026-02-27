@@ -57,6 +57,28 @@ func MustUnmarshalTblExtra(data []byte) *SchemaExtra {
 	return info
 }
 
+func CloneExtra(info *SchemaExtra) *SchemaExtra {
+	if info == nil {
+		return nil
+	}
+	return &SchemaExtra{
+		NextColSeqnum:     info.NextColSeqnum,
+		DroppedAttrs:      append([]string{}, info.DroppedAttrs...),
+		ColumnChanged:     info.ColumnChanged,
+		OldName:           info.OldName,
+		MinOsizeQuailifed: info.MinOsizeQuailifed,
+		MaxObjOnerun:      info.MaxObjOnerun,
+		MaxOsizeMergedObj: info.MaxOsizeMergedObj,
+		Hints:             append([]MergeHint{}, info.Hints...),
+		MinCnMergeSize:    info.MinCnMergeSize,
+		BlockMaxRows:      info.BlockMaxRows,
+		ObjectMaxBlocks:   info.ObjectMaxBlocks,
+		FeatureFlag:       info.FeatureFlag,
+		IndexTables:       append([]uint64{}, info.IndexTables...),
+		ParentTableID:     info.ParentTableID,
+	}
+}
+
 func NewUpdateConstraintReq(did, tid uint64, cstr string) *AlterTableReq {
 	return &AlterTableReq{
 		DbId:    did,

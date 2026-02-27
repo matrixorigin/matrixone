@@ -39,9 +39,9 @@ fuzzyCheck use to contains some info to run a background SQL when
 fuzzy filter can not draw a definite conclusion for duplicate check
 */
 
-func newFuzzyCheck(n *plan.Node) (*fuzzyCheck, error) {
-	tblName := n.TableDef.GetName()
-	dbName := n.ObjRef.GetSchemaName()
+func newFuzzyCheck(node *plan.Node) (*fuzzyCheck, error) {
+	tblName := node.TableDef.GetName()
+	dbName := node.ObjRef.GetSchemaName()
 
 	if tblName == "" || dbName == "" {
 		return nil, moerr.NewInternalErrorNoCtx("fuzzyfilter failed to get the db/tbl name")
@@ -50,36 +50,36 @@ func newFuzzyCheck(n *plan.Node) (*fuzzyCheck, error) {
 	f := reuse.Alloc[fuzzyCheck](nil)
 	f.tbl = tblName
 	f.db = dbName
-	f.attr = n.TableDef.Pkey.PkeyColName
+	f.attr = node.TableDef.Pkey.PkeyColName
 
-	for _, c := range n.TableDef.Cols {
-		if c.Name == n.TableDef.Pkey.PkeyColName {
+	for _, c := range node.TableDef.Cols {
+		if c.Name == node.TableDef.Pkey.PkeyColName {
 			f.col = c
 		}
 	}
 
 	// compound key could be primary key(a, b, c...) or unique key(a, b, c ...)
 	// for Decimal type, we need colDef to get the scale
-	if n.TableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
+	if node.TableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
 		f.isCompound = true
-		f.compoundCols = f.sortColDef(n.TableDef.Pkey.Names, n.TableDef.Cols)
+		f.compoundCols = f.sortColDef(node.TableDef.Pkey.Names, node.TableDef.Cols)
 	}
 
 	// for the case like create unique index for existed table,
 	// We can only get the table definition of the hidden table.
 	// How the original table defines this unique index (for example, which columns are used and whether it is composite) can NOT be confirmed,
 	// that introduces some strange logic, and obscures the meaning of some fields, such as fuzzyCheck.isCompound
-	if catalog.IsHiddenTable(tblName) && n.Fuzzymessage == nil {
+	if catalog.IsHiddenTable(tblName) && node.Fuzzymessage == nil {
 		f.onlyInsertHidden = true
 	}
 
-	if n.Fuzzymessage != nil {
-		if len(n.Fuzzymessage.ParentUniqueCols) > 1 {
+	if node.Fuzzymessage != nil {
+		if len(node.Fuzzymessage.ParentUniqueCols) > 1 {
 			f.isCompound = true
-			f.tbl = n.Fuzzymessage.ParentTableName
-			f.compoundCols = n.Fuzzymessage.ParentUniqueCols
+			f.tbl = node.Fuzzymessage.ParentTableName
+			f.compoundCols = node.Fuzzymessage.ParentUniqueCols
 		} else {
-			f.col = n.Fuzzymessage.ParentUniqueCols[0]
+			f.col = node.Fuzzymessage.ParentUniqueCols[0]
 		}
 	}
 
@@ -405,7 +405,7 @@ func (f *fuzzyCheck) format(toCheck *vector.Vector) ([]string, error) {
 	// background SQL condition should be b='ab' instead of b=ab, as well as time types
 	switch typ.Oid {
 	// date and time
-	case types.T_date, types.T_time, types.T_datetime, types.T_timestamp:
+	case types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year:
 		for i, str := range ss {
 			ss[i] = strconv.Quote(str)
 		}
@@ -487,6 +487,9 @@ func vectorToString(vec *vector.Vector, rowIndex int) (string, error) {
 	case types.T_datetime:
 		val := vector.GetFixedAtNoTypeCheck[types.Datetime](vec, rowIndex)
 		return val.String2(vec.GetType().Scale), nil
+	case types.T_year:
+		val := vector.GetFixedAtNoTypeCheck[types.MoYear](vec, rowIndex)
+		return val.String(), nil
 	case types.T_enum:
 		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[uint16](vec, rowIndex)), nil
 	default:

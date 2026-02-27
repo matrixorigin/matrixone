@@ -98,11 +98,9 @@ CREATE TABLE t_float(id float(2,1));
 INSERT INTO t_float VALUES (1),(1.1), (2);
 SELECT id, id >= 1.1 FROM t_float;
 SELECT id, 1.1 <= id FROM t_float;
--- @bvt:issue#3366
 SELECT id, id = 1.1 FROM t_float;
 SELECT * from t_float WHERE id = 1.1;
 SELECT * from t_float WHERE id = 1.1e0;
--- @bvt:issue
 SELECT * from t_float WHERE id = '1.1';
 SELECT * from t_float WHERE id = '1.1e0';
 SELECT * from t_float WHERE id IN (1.1, 2.2);

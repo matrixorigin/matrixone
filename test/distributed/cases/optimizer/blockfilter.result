@@ -6,196 +6,218 @@ drop table if exists t2;
 create table t1(c2 int, c1 int, c3 int) cluster by (c1,c2);
 create table t2(c1 int, c2 int, c3 int, primary key(c1,c2));
 insert into t1 select result%100,result%10000, result from generate_series(100000) g;
+select count(*) from t1;
+➤ count(*)[-5,64,0]  𝄀
+100000
 insert into t2 select result%100,*,* from generate_series(1000000) g;
+select count(*) from t2;
+➤ count(*)[-5,64,0]  𝄀
+1000000
 select mo_ctl('dn', 'flush', 'd1.t1');
-mo_ctl(dn, flush, d1.t1)
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+➤ mo_ctl(dn, flush, d1.t1)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
 select mo_ctl('dn', 'flush', 'd1.t2');
-mo_ctl(dn, flush, d1.t2)
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+➤ mo_ctl(dn, flush, d1.t2)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
 select Sleep(1);
-Sleep(1)
+➤ Sleep(1)[-6,8,0]  𝄀
 0
 explain select count(*) from t1 where c1 = 1;
-TP QUERY PLAN
-Project
-  ->  Aggregate
-        Aggregate Functions: starcount(1)
-        ->  Table Scan on d1.t1
-              Filter Cond: prefix_eq(t1.__mo_cbkey_002c1002c2)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on d1.t1  𝄀
+              Filter Cond: prefix_eq(t1.__mo_cbkey_002c1002c2)  𝄀
               Block Filter Cond: prefix_eq(t1.__mo_cbkey_002c1002c2)
 select count(*) from t1 where c1 = 1;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 10
 explain select count(*) from t1 where c1 > 10;
-TP QUERY PLAN
-Project
-  ->  Aggregate
-        Aggregate Functions: starcount(1)
-        ->  Table Scan on d1.t1
-              Filter Cond: (t1.c1 > 10)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on d1.t1  𝄀
+              Filter Cond: (t1.c1 > 10)  𝄀
               Block Filter Cond: (t1.c1 > 10)
 select count(*) from t1 where c1 > 10;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 99890
 explain select count(*) from t1 where c1 in (1,2,3);
-TP QUERY PLAN
-Project
-  ->  Aggregate
-        Aggregate Functions: starcount(1)
-        ->  Table Scan on d1.t1
-              Filter Cond: prefix_in(t1.__mo_cbkey_002c1002c2)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on d1.t1  𝄀
+              Filter Cond: prefix_in(t1.__mo_cbkey_002c1002c2)  𝄀
               Block Filter Cond: prefix_in(t1.__mo_cbkey_002c1002c2)
 select count(*) from t1 where c1 in (1,2,3);
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 30
 explain select count(*) from t1 where c1 between 1 and 5;
-TP QUERY PLAN
-Project
-  ->  Aggregate
-        Aggregate Functions: starcount(1)
-        ->  Table Scan on d1.t1
-              Filter Cond: prefix_between(t1.__mo_cbkey_002c1002c2)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on d1.t1  𝄀
+              Filter Cond: prefix_between(t1.__mo_cbkey_002c1002c2)  𝄀
               Block Filter Cond: prefix_between(t1.__mo_cbkey_002c1002c2)
 select count(*) from t1 where c1 between 1 and 5;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 50
 explain select count(*) from t1 where c1 = 2 and c2 = 10;
-TP QUERY PLAN
-Project
-  ->  Aggregate
-        Aggregate Functions: starcount(1)
-        ->  Table Scan on d1.t1
-              Filter Cond: (t1.__mo_cbkey_002c1002c2 = )
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on d1.t1  𝄀
+              Filter Cond: (t1.__mo_cbkey_002c1002c2 = )  𝄀
               Block Filter Cond: (t1.__mo_cbkey_002c1002c2 = )
 select count(*) from t1 where c1 = 2 and c2 = 10;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 0
 explain select count(*) from t1 where c1 = 5 and c2 > 10;
-TP QUERY PLAN
-Project
-  ->  Aggregate
-        Aggregate Functions: starcount(1)
-        ->  Table Scan on d1.t1
-              Filter Cond: prefix_eq(t1.__mo_cbkey_002c1002c2), (t1.c2 > 10)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on d1.t1  𝄀
+              Filter Cond: prefix_eq(t1.__mo_cbkey_002c1002c2), (t1.c2 > 10)  𝄀
               Block Filter Cond: prefix_eq(t1.__mo_cbkey_002c1002c2), (t1.c2 > 10)
 select count(*) from t1 where c1 = 5 and c2 > 10;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 0
 explain select count(*) from t1 where c1 = 3 and c2 in (1,2,3);
-TP QUERY PLAN
-Project
-  ->  Aggregate
-        Aggregate Functions: starcount(1)
-        ->  Table Scan on d1.t1
-              Filter Cond: t1.__mo_cbkey_002c1002c2 in ()
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on d1.t1  𝄀
+              Filter Cond: t1.__mo_cbkey_002c1002c2 in ()  𝄀
               Block Filter Cond: t1.__mo_cbkey_002c1002c2 in ()
 select count(*) from t1 where c1 = 3 and c2 in (1,2,3);
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 10
 explain select count(*) from t1 where c1=4 and c2 between 1 and 5;
-TP QUERY PLAN
-Project
-  ->  Aggregate
-        Aggregate Functions: starcount(1)
-        ->  Table Scan on d1.t1
-              Filter Cond: t1.__mo_cbkey_002c1002c2 BETWEEN '::' AND '::'
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on d1.t1  𝄀
+              Filter Cond: t1.__mo_cbkey_002c1002c2 BETWEEN '::' AND '::'  𝄀
               Block Filter Cond: t1.__mo_cbkey_002c1002c2 BETWEEN '::' AND '::'
 select count(*) from t1 where c1=4 and c2 between 1 and 5;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 10
 explain select count(*) from t2 where c1 = 1;
-TP QUERY PLAN
-Project
-  ->  Aggregate
-        Aggregate Functions: starcount(1)
-        ->  Table Scan on d1.t2
-              Filter Cond: prefix_eq(t2.__mo_cpkey_col)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on d1.t2  𝄀
+              Filter Cond: prefix_eq(t2.__mo_cpkey_col)  𝄀
               Block Filter Cond: prefix_eq(t2.__mo_cpkey_col)
 select count(*) from t2 where c1 = 1;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 10000
 explain select count(*) from t2 where c1 > 10;
-AP QUERY PLAN ON ONE CN(4 core)
-Project
-  ->  Aggregate
-        Aggregate Functions: starcount(1)
-        ->  Table Scan on d1.t2
-              Filter Cond: (t2.c1 > 10)
+➤ AP QUERY PLAN ON ONE CN(24 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on d1.t2  𝄀
+              Filter Cond: (t2.c1 > 10)  𝄀
               Block Filter Cond: (t2.c1 > 10)
 select count(*) from t2 where c1 > 10;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 890000
 explain select count(*) from t2 where c1 in (1,2,3);
-TP QUERY PLAN
-Project
-  ->  Aggregate
-        Aggregate Functions: starcount(1)
-        ->  Table Scan on d1.t2
-              Filter Cond: prefix_in(t2.__mo_cpkey_col)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on d1.t2  𝄀
+              Filter Cond: prefix_in(t2.__mo_cpkey_col)  𝄀
               Block Filter Cond: prefix_in(t2.__mo_cpkey_col)
 select count(*) from t2 where c1 in (1,2,3);
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 30000
 explain select count(*) from t2 where c1 between 1 and 5;
-TP QUERY PLAN
-Project
-  ->  Aggregate
-        Aggregate Functions: starcount(1)
-        ->  Table Scan on d1.t2
-              Filter Cond: prefix_between(t2.__mo_cpkey_col)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on d1.t2  𝄀
+              Filter Cond: prefix_between(t2.__mo_cpkey_col)  𝄀
               Block Filter Cond: prefix_between(t2.__mo_cpkey_col)
 select count(*) from t2 where c1 between 1 and 5;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 50000
 explain select count(*) from t2 where c1 = 2 and c2 = 10;
-TP QUERY PLAN
-Project
-  ->  Aggregate
-        Aggregate Functions: starcount(1)
-        ->  Table Scan on d1.t2
-              Filter Cond: (t2.__mo_cpkey_col = )
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on d1.t2  𝄀
+              Filter Cond: (t2.__mo_cpkey_col = )  𝄀
               Block Filter Cond: (t2.__mo_cpkey_col = )
 select count(*) from t2 where c1 = 2 and c2 = 10;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 0
 explain select count(*) from t2 where c1 = 5 and c2 > 10;
-TP QUERY PLAN
-Project
-  ->  Aggregate
-        Aggregate Functions: starcount(1)
-        ->  Table Scan on d1.t2
-              Filter Cond: prefix_eq(t2.__mo_cpkey_col), (t2.c2 > 10)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on d1.t2  𝄀
+              Filter Cond: prefix_eq(t2.__mo_cpkey_col), (t2.c2 > 10)  𝄀
               Block Filter Cond: prefix_eq(t2.__mo_cpkey_col), (t2.c2 > 10)
 select count(*) from t2 where c1 = 5 and c2 > 10;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 9999
 explain select count(*) from t2 where c1 = 3 and c2 in (1,2,3);
-TP QUERY PLAN
-Project
-  ->  Aggregate
-        Aggregate Functions: starcount(1)
-        ->  Table Scan on d1.t2
-              Filter Cond: t2.__mo_cpkey_col in ()
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on d1.t2  𝄀
+              Filter Cond: t2.__mo_cpkey_col in ()  𝄀
               Block Filter Cond: t2.__mo_cpkey_col in ()
 select count(*) from t2 where c1 = 3 and c2 in (1,2,3);
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 1
 explain select count(*) from t2 where c1=4 and c2 between 1 and 5;
-TP QUERY PLAN
-Project
-  ->  Aggregate
-        Aggregate Functions: starcount(1)
-        ->  Table Scan on d1.t2
-              Filter Cond: t2.__mo_cpkey_col BETWEEN '::' AND '::'
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on d1.t2  𝄀
+              Filter Cond: t2.__mo_cpkey_col BETWEEN '::' AND '::'  𝄀
               Block Filter Cond: t2.__mo_cpkey_col BETWEEN '::' AND '::'
 select count(*) from t2 where c1=4 and c2 between 1 and 5;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 1
 drop table if exists t1;
 create table t1 (a varchar(100) primary key, b int);
 insert into t1 select result, 2 from generate_series('2021-01-01 00:00:00','2022-01-01 00:00:00', '1 minute') g;
 select count(*) as ttl from t1 where a between "2021-02-02 20:00:00" and "2021-02-03 00:00:00";
-ttl
+➤ ttl[-5,64,0]  𝄀
 241
 drop database if exists d1;

@@ -322,6 +322,8 @@ func (mp *MysqlProtocolImpl) GetU32(id PropertyID) uint32 {
 	switch id {
 	case CONNID:
 		return mp.ConnectionID()
+	case CAPABILITY:
+		return mp.GetCapability()
 	}
 	return math.MaxUint32
 }
@@ -1508,9 +1510,12 @@ func (mp *MysqlProtocolImpl) HandleHandshake(ctx context.Context, payload []byte
 		return false, moerr.NewInternalError(ctx, "received a broken response packet")
 	}
 
-	if capabilities, _, ok := mp.io.ReadUint16(payload, 0); !ok {
+	capabilities, _, ok := mp.io.ReadUint16(payload, 0)
+	if !ok {
 		return false, moerr.NewInternalError(ctx, "read capabilities from response packet failed")
-	} else if uint32(capabilities)&CLIENT_PROTOCOL_41 != 0 {
+	}
+
+	if uint32(capabilities)&CLIENT_PROTOCOL_41 != 0 {
 		var resp41 response41
 		var ok2 bool
 		mp.GetSession().Debug(ctx, "analyse handshake response")
@@ -2986,6 +2991,15 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 				if err != nil {
 					return err
 				}
+			case types.T_uuid:
+				value, err := GetUUID(colSlices, rowIdx, i)
+				if err != nil {
+					return err
+				}
+				err = AppendStringLenEnc(mp, value)
+				if err != nil {
+					return err
+				}
 			default:
 				value, err := GetBytesBased(colSlices, rowIdx, i)
 				if err != nil {
@@ -3288,6 +3302,15 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 			switch typ.Oid {
 			case types.T_datetime:
 				value, err := GetDatetime(colSlices, r, i)
+				if err != nil {
+					return err
+				}
+				err = AppendStringLenEnc(mp, value)
+				if err != nil {
+					return err
+				}
+			case types.T_uuid:
+				value, err := GetUUID(colSlices, r, i)
 				if err != nil {
 					return err
 				}

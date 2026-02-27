@@ -287,7 +287,15 @@ func (writer *s3WriterDelegate) prepareDeleteBatches(
 					return nil, err
 				}
 
-				if colexec.IsDeletionOnTxnUnCommit(writer.segmentMap, &segid) {
+				tableId := uint64(0)
+				txnID := []byte(nil)
+				if idx < len(writer.updateCtxs) && writer.updateCtxs[idx] != nil && writer.updateCtxs[idx].TableDef != nil {
+					tableId = writer.updateCtxs[idx].TableDef.TblId
+				}
+				if txnOp := proc.GetTxnOperator(); txnOp != nil {
+					txnID = txnOp.Txn().ID
+				}
+				if colexec.IsDeletionOnTxnUnCommit(writer.segmentMap, &segid, tableId, txnID) {
 					blockMap[blkid].typ = deletion.DeletionOnTxnUnCommit
 				} else {
 					blockMap[blkid].typ = deletion.DeletionOnCommitted

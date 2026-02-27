@@ -47,12 +47,19 @@ var (
 	_ ComputationWrapper = &TxnComputationWrapper{}
 )
 
+type Compile interface {
+	Run(uint64) (*util2.RunResult, error)
+	GetPlan() *plan.Plan
+	Release()
+	SetOriginSQL(string)
+}
+
 type TxnComputationWrapper struct {
 	stmt      tree.Statement
 	plan      *plan2.Plan
 	proc      *process.Process
 	ses       FeSession
-	compile   *compile.Compile
+	compile   Compile
 	runResult *util2.RunResult
 
 	ifIsExeccute bool
@@ -70,7 +77,8 @@ func InitTxnComputationWrapper(
 	stmt tree.Statement,
 	proc *process.Process,
 ) *TxnComputationWrapper {
-	uuid, _ := uuid.NewV7()
+	u, _ := util2.FastUuid()
+	uuid := uuid.UUID(u)
 	return &TxnComputationWrapper{
 		stmt: stmt,
 		proc: proc,
@@ -358,6 +366,8 @@ func (cwft *TxnComputationWrapper) GetUUID() []byte {
 
 func (cwft *TxnComputationWrapper) Run(ts uint64) (*util2.RunResult, error) {
 	runResult, err := cwft.compile.Run(ts)
+	// Sync the latest plan after Run (it may have changed due to retry)
+	cwft.plan = cwft.compile.GetPlan()
 	cwft.compile.Release()
 	cwft.runResult = runResult
 	cwft.compile = nil

@@ -89,6 +89,29 @@ func Test_BuiltIn_RegularLike(t *testing.T) {
 
 }
 
+func Test_BuiltIn_RegularMatchForLikeOp(t *testing.T) {
+	op := newOpBuiltInRegexp()
+
+	cs := []struct {
+		pat      string
+		str      string
+		expected bool
+	}{
+		{pat: "__++%", str: "__++", expected: true},
+		{pat: "__\\+", str: "__++__", expected: false},
+		{pat: "__+", str: "__++__", expected: false},
+		{pat: "a+b", str: "a+b", expected: true},
+		{pat: "a+b", str: "ab", expected: false},
+		{pat: "__..%", str: "__..x", expected: true},
+	}
+
+	for i, c := range cs {
+		match, err := op.regMap.regularMatchForLikeOp([]byte(c.pat), []byte(c.str))
+		require.NoError(t, err, i)
+		require.Equal(t, c.expected, match, i)
+	}
+}
+
 func Test_BuiltIn_RegularReplace(t *testing.T) {
 	op := newOpBuiltInRegexp()
 

@@ -19,6 +19,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -1434,6 +1436,68 @@ func TestLoadFile(t *testing.T) {
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, LoadFile)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestLoadFileDatalink(t *testing.T) {
+	dir := t.TempDir()
+	proc := testutil.NewProc(t)
+	filePath := filepath.Join(dir, "test")
+
+	err := os.WriteFile(filePath, []byte("12345678"), 0o600)
+	require.NoError(t, err)
+
+	datalinkPath := "file://" + filePath
+	testCases := []tcTemp{
+		{
+			info: "test load file datalink",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datalink.ToType(),
+					[]string{datalinkPath},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_text.ToType(), false,
+				[]string{"12345678"},
+				[]bool{false}),
+		},
+	}
+
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc,
+			tc.inputs, tc.expect, LoadFileDatalink)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestLoadFileDatalinkTooLarge(t *testing.T) {
+	dir := t.TempDir()
+	proc := testutil.NewProc(t)
+	filePath := filepath.Join(dir, "test")
+
+	err := os.WriteFile(filePath, []byte("1234"), 0o600)
+	require.NoError(t, err)
+
+	datalinkPath := fmt.Sprintf("file://%s?offset=0&size=%d", filePath, int64(types.MaxBlobLen)+1)
+	testCases := []tcTemp{
+		{
+			info: "test load file datalink too large",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datalink.ToType(),
+					[]string{datalinkPath},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_text.ToType(), true,
+				[]string{""},
+				[]bool{false}),
+		},
+	}
+
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc,
+			tc.inputs, tc.expect, LoadFileDatalink)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}

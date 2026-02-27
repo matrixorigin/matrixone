@@ -778,6 +778,184 @@ func TestCombinedTxnTable_Size(t *testing.T) {
 	})
 }
 
+func TestCombinedTxnTable_StarCount(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("Success with multiple tables", func(t *testing.T) {
+		mockRel1 := &mockRelation{
+			starCountFunc: func(ctx context.Context) (uint64, error) {
+				return 100, nil
+			},
+		}
+		mockRel2 := &mockRelation{
+			starCountFunc: func(ctx context.Context) (uint64, error) {
+				return 200, nil
+			},
+		}
+
+		table := &combinedTxnTable{
+			tablesFunc: func() ([]engine.Relation, error) {
+				return []engine.Relation{mockRel1, mockRel2}, nil
+			},
+		}
+
+		count, err := table.StarCount(ctx)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(300), count)
+	})
+
+	t.Run("Error from tablesFunc", func(t *testing.T) {
+		table := &combinedTxnTable{
+			tablesFunc: func() ([]engine.Relation, error) {
+				return nil, assert.AnError
+			},
+		}
+
+		count, err := table.StarCount(ctx)
+		assert.Error(t, err)
+		assert.Equal(t, uint64(0), count)
+		assert.Equal(t, assert.AnError, err)
+	})
+
+	t.Run("Error from individual table", func(t *testing.T) {
+		mockRel := &mockRelation{
+			starCountFunc: func(ctx context.Context) (uint64, error) {
+				return 0, assert.AnError
+			},
+		}
+
+		table := &combinedTxnTable{
+			tablesFunc: func() ([]engine.Relation, error) {
+				return []engine.Relation{mockRel}, nil
+			},
+		}
+
+		count, err := table.StarCount(ctx)
+		assert.Error(t, err)
+		assert.Equal(t, uint64(0), count)
+		assert.Equal(t, assert.AnError, err)
+	})
+
+	t.Run("Empty tables list", func(t *testing.T) {
+		table := &combinedTxnTable{
+			tablesFunc: func() ([]engine.Relation, error) {
+				return []engine.Relation{}, nil
+			},
+		}
+
+		count, err := table.StarCount(ctx)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(0), count)
+	})
+
+	t.Run("Single table", func(t *testing.T) {
+		mockRel := &mockRelation{
+			starCountFunc: func(ctx context.Context) (uint64, error) {
+				return 42, nil
+			},
+		}
+
+		table := &combinedTxnTable{
+			tablesFunc: func() ([]engine.Relation, error) {
+				return []engine.Relation{mockRel}, nil
+			},
+		}
+
+		count, err := table.StarCount(ctx)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(42), count)
+	})
+}
+
+func TestCombinedTxnTable_EstimateCommittedTombstoneCount(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("Success with multiple tables", func(t *testing.T) {
+		mockRel1 := &mockRelation{
+			estimateCommittedTombstoneCountFunc: func(ctx context.Context) (int, error) {
+				return 10, nil
+			},
+		}
+		mockRel2 := &mockRelation{
+			estimateCommittedTombstoneCountFunc: func(ctx context.Context) (int, error) {
+				return 20, nil
+			},
+		}
+
+		table := &combinedTxnTable{
+			tablesFunc: func() ([]engine.Relation, error) {
+				return []engine.Relation{mockRel1, mockRel2}, nil
+			},
+		}
+
+		count, err := table.EstimateCommittedTombstoneCount(ctx)
+		assert.NoError(t, err)
+		assert.Equal(t, 30, count)
+	})
+
+	t.Run("Error from tablesFunc", func(t *testing.T) {
+		table := &combinedTxnTable{
+			tablesFunc: func() ([]engine.Relation, error) {
+				return nil, assert.AnError
+			},
+		}
+
+		count, err := table.EstimateCommittedTombstoneCount(ctx)
+		assert.Error(t, err)
+		assert.Equal(t, 0, count)
+		assert.Equal(t, assert.AnError, err)
+	})
+
+	t.Run("Error from individual table", func(t *testing.T) {
+		mockRel := &mockRelation{
+			estimateCommittedTombstoneCountFunc: func(ctx context.Context) (int, error) {
+				return 0, assert.AnError
+			},
+		}
+
+		table := &combinedTxnTable{
+			tablesFunc: func() ([]engine.Relation, error) {
+				return []engine.Relation{mockRel}, nil
+			},
+		}
+
+		count, err := table.EstimateCommittedTombstoneCount(ctx)
+		assert.Error(t, err)
+		assert.Equal(t, 0, count)
+		assert.Equal(t, assert.AnError, err)
+	})
+
+	t.Run("Empty tables list", func(t *testing.T) {
+		table := &combinedTxnTable{
+			tablesFunc: func() ([]engine.Relation, error) {
+				return []engine.Relation{}, nil
+			},
+		}
+
+		count, err := table.EstimateCommittedTombstoneCount(ctx)
+		assert.NoError(t, err)
+		assert.Equal(t, 0, count)
+	})
+
+	t.Run("Single table", func(t *testing.T) {
+		mockRel := &mockRelation{
+			estimateCommittedTombstoneCountFunc: func(ctx context.Context) (int, error) {
+				return 5, nil
+			},
+		}
+
+		table := &combinedTxnTable{
+			tablesFunc: func() ([]engine.Relation, error) {
+				return []engine.Relation{mockRel}, nil
+			},
+		}
+
+		count, err := table.EstimateCommittedTombstoneCount(ctx)
+		assert.NoError(t, err)
+		assert.Equal(t, 5, count)
+	})
+}
+
 func TestCombinedTxnTable_Rows(t *testing.T) {
 	// Test case 1: Success case with multiple tables
 	t.Run("Success with multiple tables", func(t *testing.T) {
@@ -1141,14 +1319,16 @@ func (m *mockReader) SetIndexParam(param *plan.IndexReaderParam) {}
 func (m *mockReader) SetFilterZM(objectio.ZoneMap) {}
 
 type mockRelation struct {
-	rangesFunc                      func(ctx context.Context, param engine.RangesParam) (engine.RelData, error)
-	getColumMetadataScanInfoFunc    func(ctx context.Context, name string, visitTombstone bool) ([]*plan.MetadataScanInfo, error)
-	getNonAppendableObjectStatsFunc func(ctx context.Context) ([]objectio.ObjectStats, error)
-	approxObjectsNumFunc            func(ctx context.Context) int
-	collectTombstonesFunc           func(ctx context.Context, txnOffset int, policy engine.TombstoneCollectPolicy) (engine.Tombstoner, error)
-	sizeFunc                        func(ctx context.Context, columnName string) (uint64, error)
-	rowsFunc                        func(ctx context.Context) (uint64, error)
-	buildReadersFunc                func(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num int, txnOffset int, orderBy bool, policy engine.TombstoneApplyPolicy, filterHint engine.FilterHint) ([]engine.Reader, error)
+	rangesFunc                          func(ctx context.Context, param engine.RangesParam) (engine.RelData, error)
+	getColumMetadataScanInfoFunc        func(ctx context.Context, name string, visitTombstone bool) ([]*plan.MetadataScanInfo, error)
+	getNonAppendableObjectStatsFunc     func(ctx context.Context) ([]objectio.ObjectStats, error)
+	approxObjectsNumFunc                func(ctx context.Context) int
+	collectTombstonesFunc               func(ctx context.Context, txnOffset int, policy engine.TombstoneCollectPolicy) (engine.Tombstoner, error)
+	sizeFunc                            func(ctx context.Context, columnName string) (uint64, error)
+	rowsFunc                            func(ctx context.Context) (uint64, error)
+	starCountFunc                       func(ctx context.Context) (uint64, error)
+	estimateCommittedTombstoneCountFunc func(ctx context.Context) (int, error)
+	buildReadersFunc                    func(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num int, txnOffset int, orderBy bool, policy engine.TombstoneApplyPolicy, filterHint engine.FilterHint) ([]engine.Reader, error)
 }
 
 func (m *mockRelation) Ranges(ctx context.Context, param engine.RangesParam) (engine.RelData, error) {
@@ -1190,6 +1370,20 @@ func (m *mockRelation) CollectTombstones(ctx context.Context, txnOffset int, pol
 		return m.collectTombstonesFunc(ctx, txnOffset, policy)
 	}
 	return nil, nil
+}
+
+func (m *mockRelation) StarCount(ctx context.Context) (uint64, error) {
+	if m.starCountFunc != nil {
+		return m.starCountFunc(ctx)
+	}
+	return 0, nil
+}
+
+func (m *mockRelation) EstimateCommittedTombstoneCount(ctx context.Context) (int, error) {
+	if m.estimateCommittedTombstoneCountFunc != nil {
+		return m.estimateCommittedTombstoneCountFunc(ctx)
+	}
+	return 0, nil
 }
 
 func (m *mockRelation) CollectChanges(ctx context.Context, from, to types.TS, _ bool, mp *mpool.MPool) (engine.ChangesHandle, error) {

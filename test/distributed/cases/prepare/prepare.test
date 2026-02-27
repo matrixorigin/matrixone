@@ -567,3 +567,19 @@ drop role prepare_role1;
 -- @session
 
 drop account prepare_account_01;
+create database db1;
+use db1;
+drop table if exists t_tuple_in;
+create table t_tuple_in (s_w_id int, s_i_id int, s_qty int, primary key (s_w_id, s_i_id));
+insert into t_tuple_in values (1,1,10),(1,2,20),(2,1,30);
+prepare stmt_tuple_in from "select s_i_id, s_qty from t_tuple_in where (s_w_id, s_i_id) in ((?,?),(?,?)) order by s_i_id for update";
+set @w1=1;
+set @i1=1;
+set @w2=1;
+set @i2=2;
+begin;
+execute stmt_tuple_in using @w1, @i1, @w2, @i2;
+commit;
+deallocate prepare stmt_tuple_in;
+drop table t_tuple_in;
+drop database db1;

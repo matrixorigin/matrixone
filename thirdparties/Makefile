@@ -15,16 +15,18 @@
 PWD=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 UNAME_S=$(shell uname -s | tr A-Z a-z)
 UNAME_M=$(shell uname -m)
-USEARCH_DIR=usearch-2.21.1-hotfix-20251212
-USEARCH_TAR=usearch-2.21.1-hotfix-20251212.tar.gz
+USEARCH_DIR=USearch-2.23.0
+USEARCH_TAR=usearch-2.23.0.tar.gz
 STRINGZILLA_DIR=StringZilla-4.2.1
 STRINGZILLA_TAR=$(STRINGZILLA_DIR).tar.gz
 SIMSIMD_DIR=SimSIMD-6.5.3
 SIMSIMD_TAR=$(SIMSIMD_DIR).tar.gz
 FP16_DIR=fp16
 FP16_TAR=$(FP16_DIR).tar.gz
+XXHASH_DIR=xxHash-0.8.3
+XXHASH_TAR=$(XXHASH_DIR).tar.gz
 
-all: init usearch
+all: init usearch xxhash
 
 init:
 	mkdir -p install
@@ -39,6 +41,13 @@ simsimd: install/include/simsimd/simsimd.h
 fp16: install/include/fp16.h
 
 simsimd: install/include/simsimd/simsimd.h
+
+xxhash: install/include/xxhash.h
+
+install/include/xxhash.h:
+	tar zxvf $(XXHASH_TAR)
+	cp -r $(XXHASH_DIR)/xxhash.h install/include
+	rm -rf $(XXHASH_DIR)
 
 install/include/fp16.h:
 	tar zxvf $(FP16_TAR)
@@ -75,6 +84,9 @@ install/include/usearch.h:
 	cp -r $(FP16_DIR)/* $(USEARCH_DIR)/fp16
 	cp -r $(SIMSIMD_DIR)/* $(USEARCH_DIR)/simsimd
 	cp -r $(STRINGZILLA_DIR)/* $(USEARCH_DIR)/stringzilla
+	@if $(CC) -march=haswell -E - < /dev/null > /dev/null 2>&1; then \
+		sed -i -e "s/march=native/march=haswell/g" $(USEARCH_DIR)/CMakeLists.txt; \
+	fi
 	(cd $(USEARCH_DIR) && cmake -B build $(USEARCH_CMAKE_FLAG) && cmake --build build --config Release)
 ifeq ($(UNAME_S),darwin)
 	cp $(USEARCH_DIR)/build/*.dylib install/lib

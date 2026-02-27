@@ -206,6 +206,7 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 			CronJobs_Name_GCLogtail,
 			db.Opts.CheckpointCfg.GCCheckpointInterval,
 			func(ctx context.Context) {
+				db.LogtailMgr.TryCompactTable()
 				ckp := db.BGCheckpointRunner.MaxIncrementalCheckpoint()
 				if ckp == nil {
 					return

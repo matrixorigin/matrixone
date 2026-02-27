@@ -250,3 +250,253 @@ func (c *testHAKeeperClient) UpdateCNWorkState(ctx context.Context, state logpb.
 	}
 	return nil
 }
+
+// TestWaitReadyFastPath tests that waitReady uses the atomic fast path after cluster is ready.
+func TestWaitReadyFastPath(t *testing.T) {
+	runClusterTest(
+		time.Hour,
+		func(hc *testHAKeeperClient, c *cluster) {
+			// After first refresh, ready should be true
+			c.ForceRefresh(true)
+			assert.True(t, c.ready.Load(), "ready flag should be true after refresh")
+
+			// waitReady should return immediately via fast path
+			done := make(chan struct{})
+			go func() {
+				c.waitReady()
+				close(done)
+			}()
+
+			select {
+			case <-done:
+				// Success: waitReady returned quickly
+			case <-time.After(time.Millisecond * 100):
+				t.Fatal("waitReady should return immediately via fast path")
+			}
+		})
+}
+
+// TestWaitReadySlowPath tests that waitReady blocks on channel before cluster is ready.
+func TestWaitReadySlowPath(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			hc := &testHAKeeperClient{}
+			// Use WithDisableRefresh to prevent automatic refresh
+			c := NewMOCluster(sid, hc, time.Hour, WithDisableRefresh())
+			defer c.Close()
+
+			cluster := c.(*cluster)
+			// With disableRefresh, ready should be true immediately
+			assert.True(t, cluster.ready.Load(), "ready should be true with disableRefresh")
+		},
+	)
+}
+
+// TestWaitReadyBeforeRefresh tests waitReady blocks until first refresh completes.
+func TestWaitReadyBeforeRefresh(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			// Create a slow client that delays GetClusterDetails
+			hc := &slowHAKeeperClient{
+				testHAKeeperClient: &testHAKeeperClient{},
+				delay:              time.Millisecond * 200,
+			}
+
+			c := NewMOCluster(sid, hc, time.Hour)
+			defer c.Close()
+
+			cluster := c.(*cluster)
+
+			// Initially ready should be false (refresh not completed yet)
+			// Note: there's a race here, but with 200ms delay we should catch it
+			initialReady := cluster.ready.Load()
+
+			// Wait for ready
+			start := time.Now()
+			cluster.waitReady()
+			elapsed := time.Since(start)
+
+			// After waitReady returns, ready should be true
+			assert.True(t, cluster.ready.Load(), "ready should be true after waitReady")
+
+			// If initial was false, we should have waited
+			if !initialReady {
+				assert.True(t, elapsed >= time.Millisecond*100,
+					"should have waited for refresh, elapsed: %v", elapsed)
+			}
+		},
+	)
+}
+
+// TestWaitReadyConcurrent tests concurrent calls to waitReady are safe.
+func TestWaitReadyConcurrent(t *testing.T) {
+	runClusterTest(
+		time.Hour,
+		func(hc *testHAKeeperClient, c *cluster) {
+			const numGoroutines = 100
+			var wg sync.WaitGroup
+			wg.Add(numGoroutines)
+
+			// Start many goroutines calling waitReady concurrently
+			for i := 0; i < numGoroutines; i++ {
+				go func() {
+					defer wg.Done()
+					c.waitReady()
+				}()
+			}
+
+			// All should complete without deadlock
+			done := make(chan struct{})
+			go func() {
+				wg.Wait()
+				close(done)
+			}()
+
+			select {
+			case <-done:
+				// Success
+			case <-time.After(time.Second * 5):
+				t.Fatal("concurrent waitReady calls deadlocked")
+			}
+
+			// ready flag should be true
+			assert.True(t, c.ready.Load())
+		})
+}
+
+// TestWaitReadyConcurrentWithRefresh tests concurrent waitReady and refresh operations.
+func TestWaitReadyConcurrentWithRefresh(t *testing.T) {
+	runClusterTest(
+		time.Millisecond*10, // Fast refresh interval
+		func(hc *testHAKeeperClient, c *cluster) {
+			const numGoroutines = 50
+			const numIterations = 100
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			var wg sync.WaitGroup
+			wg.Add(numGoroutines)
+
+			// Concurrent waitReady calls
+			for i := 0; i < numGoroutines; i++ {
+				go func() {
+					defer wg.Done()
+					for j := 0; j < numIterations; j++ {
+						c.waitReady()
+						// Also test GetAllTNServices which calls waitReady
+						_ = c.GetAllTNServices()
+					}
+				}()
+			}
+
+			// Concurrent ForceRefresh calls (stop when context is cancelled)
+			var refreshWg sync.WaitGroup
+			refreshWg.Add(1)
+			go func() {
+				defer refreshWg.Done()
+				for i := 0; i < numIterations; i++ {
+					select {
+					case <-ctx.Done():
+						return
+					default:
+						c.ForceRefresh(false)
+						time.Sleep(time.Millisecond)
+					}
+				}
+			}()
+
+			// Wait for waitReady goroutines to complete
+			wg.Wait()
+			// Signal refresh goroutine to stop
+			cancel()
+			refreshWg.Wait()
+		})
+}
+
+// TestReadyFlagConsistency tests that ready flag is always consistent with readyC channel state.
+func TestReadyFlagConsistency(t *testing.T) {
+	runClusterTest(
+		time.Hour,
+		func(hc *testHAKeeperClient, c *cluster) {
+			// After refresh, both ready flag and channel should indicate ready
+			c.ForceRefresh(true)
+
+			// ready flag should be true
+			assert.True(t, c.ready.Load())
+
+			// readyC should be closed (non-blocking receive)
+			select {
+			case <-c.readyC:
+				// Channel is closed, as expected
+			default:
+				t.Fatal("readyC should be closed when ready is true")
+			}
+		})
+}
+
+// TestGetAllTNServicesAfterReady tests GetAllTNServices works correctly after ready.
+func TestGetAllTNServicesAfterReady(t *testing.T) {
+	runClusterTest(
+		time.Hour,
+		func(hc *testHAKeeperClient, c *cluster) {
+			hc.addTN(100, "tn0")
+			hc.addTN(200, "tn1")
+			c.ForceRefresh(true)
+
+			// Should return services without blocking
+			services := c.GetAllTNServices()
+
+			// Only the highest tick TN should be returned (tn1 with tick 200)
+			require.Equal(t, 1, len(services))
+			require.Equal(t, "tn1", services[0].ServiceID)
+		})
+}
+
+// BenchmarkWaitReadyFastPath benchmarks the fast path performance.
+func BenchmarkWaitReadyFastPath(b *testing.B) {
+	runClusterTest(
+		time.Hour,
+		func(hc *testHAKeeperClient, c *cluster) {
+			c.ForceRefresh(true)
+
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				for pb.Next() {
+					c.waitReady()
+				}
+			})
+		})
+}
+
+// BenchmarkGetAllTNServices benchmarks GetAllTNServices which uses waitReady.
+func BenchmarkGetAllTNServices(b *testing.B) {
+	runClusterTest(
+		time.Hour,
+		func(hc *testHAKeeperClient, c *cluster) {
+			hc.addTN(100, "tn0")
+			c.ForceRefresh(true)
+
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				for pb.Next() {
+					_ = c.GetAllTNServices()
+				}
+			})
+		})
+}
+
+// slowHAKeeperClient wraps testHAKeeperClient with artificial delay.
+type slowHAKeeperClient struct {
+	*testHAKeeperClient
+	delay time.Duration
+}
+
+func (c *slowHAKeeperClient) GetClusterDetails(ctx context.Context) (logpb.ClusterDetails, error) {
+	time.Sleep(c.delay)
+	return c.testHAKeeperClient.GetClusterDetails(ctx)
+}

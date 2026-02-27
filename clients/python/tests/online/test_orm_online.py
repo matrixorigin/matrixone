@@ -90,23 +90,19 @@ class TestORMOnline:
             Base.metadata.create_all(test_client._engine)
 
             # Insert test data
-            test_client.execute(
-                """
+            test_client.execute("""
                 INSERT INTO test_users VALUES 
                 (1, 'John Doe', 'john@example.com', 30),
                 (2, 'Jane Smith', 'jane@example.com', 25),
                 (3, 'Bob Johnson', 'bob@example.com', 35)
-            """
-            )
+            """)
 
-            test_client.execute(
-                """
+            test_client.execute("""
                 INSERT INTO test_products VALUES 
                 (1, 'Laptop', 999.99, 'Electronics'),
                 (2, 'Book', 19.99, 'Education'),
                 (3, 'Phone', 699.99, 'Electronics')
-            """
-            )
+            """)
 
             yield test_db
 

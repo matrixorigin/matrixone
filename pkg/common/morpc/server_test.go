@@ -272,7 +272,8 @@ func TestServerTimeoutCacheWillRemoved(t *testing.T) {
 			assert.NoError(t, st.Close(false))
 		}()
 
-		assert.NoError(t, st.Send(ctx, newTestMessage(1)))
+		// Stream.Send requires request.GetID() == stream.ID(); stream id is assigned by backend at NewStream().
+		assert.NoError(t, st.Send(ctx, newTestMessage(st.ID())))
 		<-cc
 		v, ok := rs.sessions.Load(uint64(1))
 		if ok {

@@ -48,7 +48,6 @@ SELECT TIMESTAMPDIFF(DAY,
 # 3. Comparison with Other Date Functions
 # ============================================
 # Compare TIMESTAMPADD with DATE_ADD
--- @bvt:issue#23160
 SELECT TIMESTAMPADD(DAY, 5, '2024-12-20') AS timestampadd_result,
        DATE_ADD('2024-12-20', INTERVAL 5 DAY) AS dateadd_result;
 
@@ -57,7 +56,6 @@ SELECT TIMESTAMPADD(MONTH, 3, '2024-01-01') AS timestampadd_month,
 
 SELECT TIMESTAMPADD(YEAR, 1, '2024-01-01') AS timestampadd_year,
        DATE_ADD('2024-01-01', INTERVAL 1 YEAR) AS dateadd_year;
--- @bvt:issue
 
 # Compare TIMESTAMPDIFF with DATEDIFF
 SELECT TIMESTAMPDIFF(DAY, '2024-01-01', '2024-12-31') AS timestampdiff_result,

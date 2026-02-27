@@ -153,10 +153,11 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 			switch {
 			case !(c0 == '%' || c0 == '_') && !(c1 == '%' || c1 == '_'):
 				// Rule 4.1: no wild card, so it is a simple compare eq.
+				literal := functionUtil.RemoveEscapeChar(pat, DefaultEscapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
-					if err := rs.Append(len(v1) == n && bytes.Equal(pat, v1), null1); err != nil {
+					if err := rs.Append(len(v1) == len(literal) && bytes.Equal(literal, v1), null1); err != nil {
 						return true, err
 					}
 				}
@@ -164,10 +165,11 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 
 			case c0 == '_' && !(c1 == '%' || c1 == '_'):
 				// Rule 4.2: _foobarzoo,
+				literal := functionUtil.RemoveEscapeChar(pat[1:], DefaultEscapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
-					if err := rs.Append(len(v1) == n && bytes.Equal(pat[1:], v1[1:]), null1); err != nil {
+					if err := rs.Append(len(v1) == len(literal)+1 && bytes.Equal(literal, v1[1:]), null1); err != nil {
 						return true, err
 					}
 				}
@@ -191,7 +193,7 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 				for i := uint64(0); i < uint64(length); i++ {
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
-					if err := rs.Append(len(v1) == n && bytes.Equal(prefix, v1[:n-1]), null1); err != nil {
+					if err := rs.Append(len(v1) == len(prefix)+1 && bytes.Equal(prefix, v1[:len(prefix)]), null1); err != nil {
 						return true, err
 					}
 				}
@@ -615,36 +617,47 @@ func (rs *regexpSet) getRegularMatcher(pat string) (*regexp.Regexp, error) {
 
 func (rs *regexpSet) regularMatchForLikeOp(pat []byte, str []byte) (match bool, err error) {
 	replace := func(s string) string {
-		var oldCharactor rune
+		isRegexMeta := func(r rune) bool {
+			switch r {
+			case '.', '+', '*', '?', '^', '$', '(', ')', '[', ']', '{', '}', '|', '\\':
+				return true
+			default:
+				return false
+			}
+		}
+		appendLiteral := func(buf *bytes.Buffer, r rune) {
+			if isRegexMeta(r) {
+				buf.WriteByte('\\')
+			}
+			buf.WriteRune(r)
+		}
 
-		r := make([]byte, len(s)*2)
-		w := 0
-		start := 0
-		for len(s) > start {
-			character, wid := utf8.DecodeRuneInString(s[start:])
-			if oldCharactor == '\\' {
-				w += copy(r[w:], s[start:start+wid])
-				start += wid
-				oldCharactor = 0
+		var escaped bool
+		var buf bytes.Buffer
+		buf.Grow(len(s) * 2)
+		for len(s) > 0 {
+			r, size := utf8.DecodeRuneInString(s)
+			s = s[size:]
+			if escaped {
+				appendLiteral(&buf, r)
+				escaped = false
 				continue
 			}
-			switch character {
-			case '_':
-				w += copy(r[w:], []byte{'.'})
-			case '%':
-				w += copy(r[w:], []byte{'.', '*'})
-			case '(':
-				w += copy(r[w:], []byte{'\\', '('})
-			case ')':
-				w += copy(r[w:], []byte{'\\', ')'})
+			switch r {
 			case '\\':
+				escaped = true
+			case '_':
+				buf.WriteByte('.')
+			case '%':
+				buf.WriteString(".*")
 			default:
-				w += copy(r[w:], s[start:start+wid])
+				appendLiteral(&buf, r)
 			}
-			start += wid
-			oldCharactor = character
 		}
-		return string(r[:w])
+		if escaped {
+			appendLiteral(&buf, '\\')
+		}
+		return buf.String()
 	}
 	convert := func(expr []byte) string {
 		return fmt.Sprintf("^(?s:%s)$", replace(util.UnsafeBytesToString(expr)))

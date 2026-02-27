@@ -12,19 +12,19 @@ INSERT INTO char_test(str2) VALUES(FIND_IN_SET('a', 'b,d,c,a'));
 INSERT INTO char_test(str2) VALUES(FIND_IN_SET('a', 'if i were a boy'));
 INSERT INTO char_test(str2) VALUES(FIND_IN_SET('A', CONCAT_WS(',', 'The english Union',', have a king.')));
 SELECT * FROM char_test;
-str1    str2
-null    4
-null    0
-null    0
+➤ str1[1,50,0]  ¦  str2[12,-1,0]  𝄀
+null  ¦  4  𝄀
+null  ¦  0  𝄀
+null  ¦  0
 DELETE FROM char_test;
 INSERT INTO char_test(str2) VALUES(OCT(FIND_IN_SET('a', 'b,c,d,e,f,g,h,a')));
 INSERT INTO char_test(str2) VALUES(OCT(NULL));
 INSERT INTO char_test(str2) VALUES(OCT(LENGTH('JFKLD;AJKFLD;AJFKDL;ASJFKDLSA;FJDKSAL;FJDKSAL;FJDKA;')));
 SELECT * FROM char_test;
-str1    str2
-null    10
-null    null
-null    64
+➤ str1[1,50,0]  ¦  str2[12,-1,0]  𝄀
+null  ¦  10  𝄀
+null  ¦  null  𝄀
+null  ¦  64
 DELETE FROM char_test;
 INSERT INTO char_test(str1) VALUES(SPACE(100));
 internal error: Can't cast '                                                                                                    ' from VARCHAR type to CHAR type. Src length 100 is larger than Dest length 50
@@ -35,13 +35,13 @@ INSERT INTO char_test(str2) VALUES(EMPTY(CONCAT_WS(' ', 'ABCDE','JKFL;JDK','FDAF
 INSERT INTO char_test(str2) VALUES(EMPTY(SPACE(100)));
 INSERT INTO char_test(str2) VALUES(EMPTY(OCT(4564123156)));
 select * from char_test;
-str1    str2
-RONALDOSHOOTGOAL    null
-null    1
-null    null
-null    0
-null    0
-null    0
+➤ str1[1,50,0]  ¦  str2[12,-1,0]  𝄀
+RONALDOSHOOTGOAL  ¦  null  𝄀
+null  ¦  1  𝄀
+null  ¦  null  𝄀
+null  ¦  0  𝄀
+null  ¦  0  𝄀
+null  ¦  0
 DROP TABLE IF EXISTS date_test;
 CREATE TABLE date_test(
 d2 DATE,
@@ -57,12 +57,12 @@ INSERT INTO date_test(d5) SELECT UNIX_TIMESTAMP("2021-02-29");
 INSERT INTO date_test(d3) VALUES(DATE_ADD('2008-13-26 23:59:59', NULL));
 SQL syntax error: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'null)' at line 1
 SELECT * FROM date_test;
-d2    d3    d4    d5
-2022-08-07    2018-09-13 13:45:13    null    null
-2015-11-07    2013-09-14 13:45:13    null    null
-2013-08-07    2006-05-23 13:23:13    null    null
-2011-08-07    2018-07-08 23:59:59    null    null
-null    null    null    null
+➤ d2[91,64,0]  ¦  d3[93,64,0]  ¦  d4[93,64,0]  ¦  d5[-5,64,0]  𝄀
+2022-08-07  ¦  2018-09-13 13:45:13  ¦  null  ¦  null  𝄀
+2015-11-07  ¦  2013-09-14 13:45:13  ¦  null  ¦  null  𝄀
+2013-08-07  ¦  2006-05-23 13:23:13  ¦  null  ¦  null  𝄀
+2011-08-07  ¦  2018-07-08 23:59:59  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  null  ¦  null
 DELETE FROM date_test;
 CREATE TABLE math_test(
 tiny TINYINT,
@@ -79,9 +79,11 @@ float_64 DOUBLE
 INSERT INTO math_test(tiny,small,int_test,big) VALUES(32, 2432, 54354, 543324324);
 INSERT INTO math_test(tiny_un, small_un, int_un) VALUES(127, 32768, 2147483648);
 SELECT * FROM math_test;
-tiny    small    int_test    big    tiny_un    small_un    int_un    big_un    float_32    float_64
-32    2432    54354    543324324    null    null    null    null    null    null
-null    null    null    null    127    32768    2147483648    null    null    null
+➤ tiny[-6,8,0]  ¦  small[5,16,0]  ¦  int_test[4,32,0]  ¦  big[-5,64,0]  ¦  tiny_un[-6,8,0]  ¦  small_un[5,16,0]  ¦  int_un[4,32,0]  ¦  big_un[-5,64,0]  ¦  float_32[7,24,0]  ¦  float_64[8,54,0]  𝄀
+32  ¦  2432  ¦  54354  ¦  543324324  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  127  ¦  32768  ¦  2147483648  ¦  null  ¦  null  ¦  null
+INSERT INTO math_test(tiny_un, small_un, int_un) VALUES(-128, -32768, -2147483648);
+Data truncation: data out of range: data type uint8, value '-128'
 DROP TABLE IF EXISTS test1;
 CREATE TABLE test1(
 num1 FLOAT(6,2),
@@ -91,9 +93,9 @@ num3 DECIMAL(6,2)
 INSERT INTO test1(num1, num2, num3) VALUES(12.21, 43.43, 999.899);
 INSERT INTO test1 VALUES(3.1415, 3.1415, 3.1415);
 SELECT * FROM test1;
-num1    num2    num3
-12.21    43.43    999.90
-3.14    3.14    3.14
+➤ num1[7,6,2]  ¦  num2[8,6,2]  ¦  num3[3,6,2]  𝄀
+12.21  ¦  43.43  ¦  999.90  𝄀
+3.14  ¦  3.14  ¦  3.14
 DROP TABLE char_test;
 DROP TABLE date_test;
 DROP TABLE math_test;

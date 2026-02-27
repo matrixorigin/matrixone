@@ -157,8 +157,8 @@ SELECT COUNT(NULL) FROM (SELECT * FROM tables LIMIT 10) AS temp;
 ➤ COUNT(null)[-5,64,0]  𝄀
 0
 SELECT COUNT(*) FROM table_constraints;
-➤ COUNT(*)[-5,64,0]  𝄀
-125
+COUNT(*)
+129
 USE mo_catalog;
 SHOW CREATE TABLE mo_columns;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀

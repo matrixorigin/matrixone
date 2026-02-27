@@ -1,0 +1,228 @@
+drop database if exists unnormal_db;
+create database unnormal_db;
+use unnormal_db;
+create temporary table temp_truncate_test (
+id int,
+data varchar(50)
+);
+insert into temp_truncate_test values (1, 'test1');
+insert into temp_truncate_test values (2, 'test2');
+truncate table temp_truncate_test;  -- 失败
+no such table unnormal_db.temp_truncate_test
+delete from temp_truncate_test;
+select * from temp_truncate_test;  -- 应该返回空结果
+➤ id[4,32,0]  ¦  data[12,-1,0]
+drop table temp_truncate_test;
+create table parent_table (
+id int primary key,
+name varchar(50)
+);
+insert into parent_table values (1, 'parent 1');
+create temporary table temp_with_fk (
+id int,
+parent_id int,
+data varchar(50),
+constraint fk_parent foreign key (parent_id) references parent_table(id)
+);  -- 失败
+not supported: add foreign key for temporary table
+drop table parent_table;
+create temporary table temp_parent (
+id int primary key,
+name varchar(50)
+);
+create table child_table (
+id int,
+temp_parent_id int,
+constraint fk_temp foreign key (temp_parent_id) references temp_parent(id)
+);  -- 失败
+not supported: add foreign key for temporary table
+drop table temp_parent;
+create table ref_table (
+id int primary key
+);
+create temporary table temp_alter_fk (
+id int,
+ref_id int
+);
+alter table temp_alter_fk
+add constraint fk_ref foreign key (ref_id) references ref_table(id);  -- 失败
+alter table for temporary table is not yet implemented
+drop table temp_alter_fk;
+drop table ref_table;
+create temporary table temp_cluster (
+id int,
+category varchar(50),
+value decimal(10,2)
+) cluster by (category);  -- 失败
+not supported: cluster by with temporary table is not support
+create temporary table temp_partition (
+id int,
+sale_date date,
+amount decimal(10,2)
+)
+partition by range (year(sale_date)) (
+partition p2023 values less than (2024),
+partition p2024 values less than (2025)
+);  -- 失败
+Cannot create temporary table with partitions
+create temporary table temp_alter_column (
+id int,
+name varchar(50)
+);
+alter table temp_alter_column add column age int;  -- 失败
+alter table for temporary table is not yet implemented
+drop table temp_alter_column;
+create temporary table temp_drop_column (
+id int,
+name varchar(50),
+age int
+);
+alter table temp_drop_column drop column age;  -- 失败
+alter table for temporary table is not yet implemented
+drop table temp_drop_column;
+create temporary table temp_modify_column (
+id int,
+name varchar(50)
+);
+alter table temp_modify_column modify column name varchar(100);  -- 失败
+alter table for temporary table is not yet implemented
+drop table temp_modify_column;
+create temporary table temp_rename_column (
+id int,
+old_name varchar(50)
+);
+alter table temp_rename_column rename column old_name to new_name;  -- 失败
+alter table for temporary table is not yet implemented
+drop table temp_rename_column;
+create temporary table temp_old_name (
+id int
+);
+alter table temp_old_name rename to temp_new_name;  -- 失败
+alter table for temporary table is not yet implemented
+drop table temp_old_name;
+create temporary table temp_duplicate (
+id int
+);
+create temporary table temp_duplicate (
+id int
+);  -- 失败
+table temp_duplicate already exists
+drop table temp_duplicate;
+create temporary table if not exists temp_if_not_exists (
+id int
+);
+create temporary table if not exists temp_if_not_exists (
+id int
+);  -- 成功，不创建新表
+drop table temp_if_not_exists;
+select * from temp_nonexistent;  -- 失败
+SQL parser error: table "temp_nonexistent" does not exist
+drop table temp_nonexistent;  -- 失败
+no such table unnormal_db.temp_nonexistent
+drop table if exists temp_nonexistent;  -- 成功，不报错
+create database test_temp_db;
+use test_temp_db;
+create temporary table temp_in_db (
+id int,
+data varchar(50)
+);
+insert into temp_in_db values (1, 'test data');
+use mysql;
+drop database test_temp_db;
+select * from test_temp_db.temp_in_db;
+Unknown database test_temp_db
+drop database if exists temp_view;
+[unknown result because it is related to issue#23700]
+create database temp_view;
+[unknown result because it is related to issue#23700]
+use temp_view;
+[unknown result because it is related to issue#23700]
+create temporary table temp_for_view (
+id int,
+name varchar(50)
+);
+[unknown result because it is related to issue#23700]
+insert into temp_for_view values (1, 'alice');
+[unknown result because it is related to issue#23700]
+create view view_on_temp as
+select * from temp_for_view;
+[unknown result because it is related to issue#23700]
+drop view if exists view_on_temp;
+[unknown result because it is related to issue#23700]
+drop table temp_for_view;
+[unknown result because it is related to issue#23700]
+delimiter //
+create procedure test_temp_in_proc()
+begin
+create table temp_in_proc (
+id int,
+data varchar(50)
+);
+[unknown result because it is related to issue#23700]
+insert into temp_in_proc values (1, 'test');
+[unknown result because it is related to issue#23700]
+select * from temp_in_proc;
+[unknown result because it is related to issue#23700]
+drop table temp_in_proc;
+[unknown result because it is related to issue#23700]
+end //
+delimiter ;
+[unknown result because it is related to issue#23700]
+call test_temp_in_proc();
+[unknown result because it is related to issue#23700]
+drop procedure test_temp_in_proc;
+[unknown result because it is related to issue#23700]
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+drop user if exists user_temp;
+create user user_temp identified by '111';
+drop role if exists role_temp;
+create role role_temp;
+grant create database on account * to role_temp;
+grant show databases on account * to role_temp;
+grant connect on account * to role_temp;
+grant select on table * to role_temp;
+internal error: there is no database ""
+grant show tables on database * to role_temp;
+grant role_temp to user_temp;
+create database test;
+use test;
+create temporary table t1(col1 int);
+drop user user_temp;
+drop role role_temp;
+drop account if exists acc01;
+drop database if exists temp_db;
+create database temp_db;
+use temp_db;
+create temporary table `select` (
+id int
+);
+insert into `select` values (1);
+select * from `select`;
+➤ id[4,32,0]  𝄀
+1
+drop table `select`;
+create temporary table `temp-table-with-dash` (
+id int
+);
+drop table if exists `temp-table-with-dash`;
+create temporary table temp_very_long_table_name_that_exceeds_normal_limits_and_might_cause_issues (
+id int
+);
+drop table if exists temp_very_long_table_name_that_exceeds_normal_limits_and_might_cause_issues;
+create temporary table temp_long_column (
+very_long_column_name_that_exceeds_normal_limits_and_might_cause_issues int
+);
+drop table if exists temp_long_column;
+drop database unnormal_db;
+drop database temporary_table_limitation;
+drop database temp_db;
+show databases;
+➤ Database[12,-1,0]  𝄀
+information_schema  𝄀
+mo_catalog  𝄀
+mo_debug  𝄀
+mo_task  𝄀
+mysql  𝄀
+system  𝄀
+system_metrics

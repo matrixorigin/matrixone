@@ -178,6 +178,28 @@ func EngineTableDefBySchema(schema *catalog.Schema) ([]engine.TableDef, error) {
 			return nil, err
 		}
 
+		// If schema has PK but ConstraintDef doesn't contain PrimaryKeyDef, add it
+		// This happens when using fake PK (pkIdx == -1 in MockSchemaAll)
+		hasPKConstraint := false
+		for _, ct := range con.Cts {
+			if _, ok := ct.(*engine.PrimaryKeyDef); ok {
+				hasPKConstraint = true
+				break
+			}
+		}
+
+		if !hasPKConstraint {
+			if pkCol := schema.GetPrimaryKey(); pkCol != nil {
+				pkConstraint := &engine.PrimaryKeyDef{
+					Pkey: &plan.PrimaryKeyDef{
+						PkeyColName: pkCol.Name,
+						Names:       []string{pkCol.Name},
+					},
+				}
+				con.Cts = append(con.Cts, pkConstraint)
+			}
+		}
+
 		defs = append(defs, &con)
 	}
 

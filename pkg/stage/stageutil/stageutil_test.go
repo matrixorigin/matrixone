@@ -15,7 +15,11 @@
 package stageutil
 
 import (
+	"context"
 	"net/url"
+	"os"
+	"path"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -92,4 +96,79 @@ func Test_runSql(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	_, err := runSql(proc, "")
 	require.Nil(t, err)
+}
+
+func TestDeleteStageFiles(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	cache := proc.GetStageCache()
+
+	dir := t.TempDir()
+	stageURL := &url.URL{Scheme: stage.FILE_PROTOCOL, Path: dir}
+	cache.Set("mystage", stage.StageDef{Id: 1, Name: "mystage", Url: stageURL})
+
+	fileA := filepath.Join(dir, "a.txt")
+	require.NoError(t, os.WriteFile(fileA, []byte("a"), 0600))
+
+	deleted, err := DeleteStageFiles(context.Background(), proc, "stage://mystage/a.txt", false)
+	require.NoError(t, err)
+	require.Equal(t, 1, deleted)
+	_, err = os.Stat(fileA)
+	require.True(t, os.IsNotExist(err))
+
+	fileB := filepath.Join(dir, "b.txt")
+	fileC := filepath.Join(dir, "c.log")
+	require.NoError(t, os.WriteFile(fileB, []byte("b"), 0600))
+	require.NoError(t, os.WriteFile(fileC, []byte("c"), 0600))
+
+	deleted, err = DeleteStageFiles(context.Background(), proc, "stage://mystage/*.txt", false)
+	require.NoError(t, err)
+	require.Equal(t, 1, deleted)
+	_, err = os.Stat(fileB)
+	require.True(t, os.IsNotExist(err))
+	_, err = os.Stat(fileC)
+	require.NoError(t, err)
+
+	deleted, err = DeleteStageFiles(context.Background(), proc, "stage://mystage/*.missing", true)
+	require.NoError(t, err)
+	require.Equal(t, 0, deleted)
+
+	_, err = DeleteStageFiles(context.Background(), proc, "stage://mystage/*.missing", false)
+	require.Error(t, err)
+}
+
+func TestDeleteStageFilesErrors(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	cache := proc.GetStageCache()
+
+	dir := t.TempDir()
+	stageURL := &url.URL{Scheme: stage.FILE_PROTOCOL, Path: dir}
+	cache.Set("mystage", stage.StageDef{Id: 1, Name: "mystage", Url: stageURL})
+
+	_, err := DeleteStageFiles(context.Background(), proc, "", false)
+	require.Error(t, err)
+
+	_, err = DeleteStageFiles(context.Background(), proc, "stage://mystage/a.txt?version=1", false)
+	require.Error(t, err)
+
+	deleted, err := DeleteStageFiles(context.Background(), proc, "stage://mystage/missing.txt", true)
+	require.NoError(t, err)
+	require.Equal(t, 0, deleted)
+
+	_, err = DeleteStageFiles(context.Background(), proc, "stage://mystage/missing.txt", false)
+	require.Error(t, err)
+
+	cache.Set("emptystage", stage.StageDef{Id: 2, Name: "emptystage", Url: &url.URL{Scheme: stage.FILE_PROTOCOL}})
+	_, err = DeleteStageFiles(context.Background(), proc, "stage://emptystage", false)
+	require.Error(t, err)
+}
+
+func TestStageListWithPatternNoWildcard(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "a.txt")
+	require.NoError(t, os.WriteFile(filePath, []byte("a"), 0600))
+
+	list, err := StageListWithPattern("", dir, proc)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{path.Join(dir, "a.txt")}, list)
 }

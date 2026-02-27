@@ -80,7 +80,10 @@ func (checker *ExprChecker) checkFuncExpr(astExpr *tree.FuncExpr, expr *plan2.Ex
 	if len(astExpr.Exprs) != len(fun.GetArgs()) {
 		return false, nil
 	}
-	if fun.GetFunc().ObjName != astExpr.FuncName.Compare() {
+	planName := fun.GetFunc().ObjName
+	astName := astExpr.FuncName.Compare()
+	// Plan rewrites COUNT(not_null_col) to starcount; accept pattern "count" when plan has "starcount".
+	if planName != astName && !(planName == "starcount" && astName == "count") {
 		return false, nil
 	}
 	for i, arg := range astExpr.Exprs {

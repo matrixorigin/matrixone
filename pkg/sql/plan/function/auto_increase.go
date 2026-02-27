@@ -86,9 +86,10 @@ func getTableAutoIncrCol(engineDefs []engine.TableDef) string {
 			return ""
 		}
 
-		// FIXME: more than one auto cols??
+		// Select the first column with the auto increment property; otherwise, a synthetic primary key(fake pk) may be selected, which can be confusing.
 		if attr, ok := def.(*engine.AttributeDef); ok && attr.Attr.AutoIncrement {
 			autoIncrCol = attr.Attr.Name
+			break
 		}
 	}
 	return autoIncrCol

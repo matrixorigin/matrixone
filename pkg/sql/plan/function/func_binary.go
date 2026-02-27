@@ -18,7 +18,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/aes"
-	"crypto/sha1"
+	"crypto/cipher"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
@@ -2396,12 +2396,33 @@ func Conv(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 		return convString(ivecs[0], fromBase, toBase, rs, length, selectList)
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 		// Numeric types are always treated as base 10
-		return convInt64Direct(ivecs[0], toBase, rs, length, selectList)
+		switch inputType.Oid {
+		case types.T_int8:
+			return convInt8Direct(ivecs[0], toBase, rs, length, selectList)
+		case types.T_int16:
+			return convInt16Direct(ivecs[0], toBase, rs, length, selectList)
+		case types.T_int32:
+			return convInt32Direct(ivecs[0], toBase, rs, length, selectList)
+		default:
+			return convInt64Direct(ivecs[0], toBase, rs, length, selectList)
+		}
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 		// Numeric types are always treated as base 10
-		return convUint64Direct(ivecs[0], toBase, rs, length, selectList)
+		switch inputType.Oid {
+		case types.T_uint8:
+			return convUint8Direct(ivecs[0], toBase, rs, length, selectList)
+		case types.T_uint16:
+			return convUint16Direct(ivecs[0], toBase, rs, length, selectList)
+		case types.T_uint32:
+			return convUint32Direct(ivecs[0], toBase, rs, length, selectList)
+		default:
+			return convUint64Direct(ivecs[0], toBase, rs, length, selectList)
+		}
 	case types.T_float32, types.T_float64:
 		// Numeric types are always treated as base 10
+		if inputType.Oid == types.T_float32 {
+			return convFloat32Direct(ivecs[0], toBase, rs, length, selectList)
+		}
 		return convFloat64Direct(ivecs[0], toBase, rs, length, selectList)
 	default:
 		// For other types, try to convert to string first
@@ -2466,6 +2487,94 @@ func convString(nVec *vector.Vector, fromBase, toBase int64, rs *vector.Function
 	return nil
 }
 
+func formatSignedToBase(val int64, toBase int64) string {
+	if val < 0 {
+		return strconv.FormatUint(uint64(val), int(toBase))
+	}
+	return strconv.FormatInt(val, int(toBase))
+}
+
+func convInt8Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
+	nParam := vector.GenerateFunctionFixedTypeParameter[int8](nVec)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		n, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		result := formatSignedToBase(int64(n), toBase)
+		if err := rs.AppendBytes([]byte(result), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func convInt16Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
+	nParam := vector.GenerateFunctionFixedTypeParameter[int16](nVec)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		n, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		result := formatSignedToBase(int64(n), toBase)
+		if err := rs.AppendBytes([]byte(result), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func convInt32Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
+	nParam := vector.GenerateFunctionFixedTypeParameter[int32](nVec)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		n, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		result := formatSignedToBase(int64(n), toBase)
+		if err := rs.AppendBytes([]byte(result), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func convInt64Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
 	nParam := vector.GenerateFunctionFixedTypeParameter[int64](nVec)
 
@@ -2485,15 +2594,88 @@ func convInt64Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResul
 			continue
 		}
 
-		// Convert int64 to string in to_base
-		// For negative numbers, MySQL returns the unsigned representation
-		var result string
-		if n < 0 {
-			uval := uint64(n)
-			result = strconv.FormatUint(uval, int(toBase))
-		} else {
-			result = strconv.FormatInt(n, int(toBase))
+		result := formatSignedToBase(n, toBase)
+		if err := rs.AppendBytes([]byte(result), false); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+func convUint8Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
+	nParam := vector.GenerateFunctionFixedTypeParameter[uint8](nVec)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		n, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		result := strconv.FormatUint(uint64(n), int(toBase))
+		if err := rs.AppendBytes([]byte(result), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func convUint16Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
+	nParam := vector.GenerateFunctionFixedTypeParameter[uint16](nVec)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		n, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		result := strconv.FormatUint(uint64(n), int(toBase))
+		if err := rs.AppendBytes([]byte(result), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func convUint32Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
+	nParam := vector.GenerateFunctionFixedTypeParameter[uint32](nVec)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		n, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		result := strconv.FormatUint(uint64(n), int(toBase))
 		if err := rs.AppendBytes([]byte(result), false); err != nil {
 			return err
 		}
@@ -2529,6 +2711,33 @@ func convUint64Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResu
 	return nil
 }
 
+func convFloat32Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
+	nParam := vector.GenerateFunctionFixedTypeParameter[float32](nVec)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		n, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		result := formatSignedToBase(int64(n), toBase)
+		if err := rs.AppendBytes([]byte(result), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func convFloat64Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
 	nParam := vector.GenerateFunctionFixedTypeParameter[float64](nVec)
 
@@ -2549,14 +2758,7 @@ func convFloat64Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionRes
 		}
 
 		// Convert float64 to int64 first (truncate), then to string in to_base
-		val := int64(n)
-		var result string
-		if val < 0 {
-			uval := uint64(val)
-			result = strconv.FormatUint(uval, int(toBase))
-		} else {
-			result = strconv.FormatInt(val, int(toBase))
-		}
+		result := formatSignedToBase(int64(n), toBase)
 		if err := rs.AppendBytes([]byte(result), false); err != nil {
 			return err
 		}
@@ -7343,11 +7545,16 @@ func castBinaryArrayToInt(array []uint8) int64 {
 	return result
 }
 
-// generateAESKey generates a 16-byte AES key from the input key using SHA1
-// MySQL's AES_ENCRYPT uses SHA1 hash of the key, taking the first 16 bytes
-func generateAESKey(key []byte) []byte {
-	hash := sha1.Sum(key)
-	return hash[:16] // AES-128 requires 16-byte key
+// generateAESKey generates an AES key using MySQL-style XOR folding.
+func generateAESKey(key []byte, keyLen int) ([]byte, error) {
+	if keyLen != 16 && keyLen != 32 {
+		return nil, moerr.NewInvalidInputNoCtx("unsupported aes key length")
+	}
+	out := make([]byte, keyLen)
+	for i, b := range key {
+		out[i%keyLen] ^= b
+	}
+	return out, nil
 }
 
 // pkcs7Padding adds PKCS7 padding to the data
@@ -7419,11 +7626,78 @@ func decryptECB(ciphertext, key []byte) ([]byte, error) {
 	return pkcs7Unpadding(plaintext)
 }
 
+// encryptCBC encrypts data using AES-CBC mode
+func encryptCBC(plaintext, key, iv []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	if len(iv) < aes.BlockSize {
+		return nil, moerr.NewInvalidInputNoCtx("invalid iv length")
+	}
+	padded := pkcs7Padding(plaintext, aes.BlockSize)
+	ciphertext := make([]byte, len(padded))
+	mode := cipher.NewCBCEncrypter(block, iv[:aes.BlockSize])
+	mode.CryptBlocks(ciphertext, padded)
+	return ciphertext, nil
+}
+
+// decryptCBC decrypts data using AES-CBC mode
+func decryptCBC(ciphertext, key, iv []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	if len(iv) < aes.BlockSize {
+		return nil, moerr.NewInvalidInputNoCtx("invalid iv length")
+	}
+	if len(ciphertext)%aes.BlockSize != 0 {
+		return nil, moerr.NewInvalidInputNoCtx("invalid ciphertext length")
+	}
+	plaintext := make([]byte, len(ciphertext))
+	mode := cipher.NewCBCDecrypter(block, iv[:aes.BlockSize])
+	mode.CryptBlocks(plaintext, ciphertext)
+	return pkcs7Unpadding(plaintext)
+}
+
+type aesModeInfo struct {
+	keyLen  int
+	needsIV bool
+	useCBC  bool
+}
+
+func getAESMode(proc *process.Process) (aesModeInfo, error) {
+	mode := "aes-128-ecb"
+	if proc != nil && proc.GetResolveVariableFunc() != nil {
+		if v, err := proc.GetResolveVariableFunc()("block_encryption_mode", true, false); err == nil && v != nil {
+			if s, ok := v.(string); ok && s != "" {
+				mode = s
+			}
+		}
+	}
+	mode = strings.ToLower(mode)
+	switch mode {
+	case "aes-128-ecb":
+		return aesModeInfo{keyLen: 16, needsIV: false, useCBC: false}, nil
+	case "aes-256-cbc":
+		return aesModeInfo{keyLen: 32, needsIV: true, useCBC: true}, nil
+	default:
+		return aesModeInfo{}, moerr.NewInvalidInputNoCtx("unsupported block_encryption_mode")
+	}
+}
+
 // AESEncrypt: AES_ENCRYPT(str, key_str) - Encrypts a string using AES encryption
 func AESEncrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	strParam := vector.GenerateFunctionStrParameter(ivecs[0])
 	keyParam := vector.GenerateFunctionStrParameter(ivecs[1])
+	var ivParam vector.FunctionParameterWrapper[types.Varlena]
+	hasIV := len(ivecs) >= 3
+	if hasIV {
+		ivParam = vector.GenerateFunctionStrParameter(ivecs[2])
+	}
+
+	modeInfo, modeErr := getAESMode(proc)
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList != nil && selectList.Contains(i) {
@@ -7435,20 +7709,41 @@ func AESEncrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 
 		str, nullStr := strParam.GetStrValue(i)
 		key, nullKey := keyParam.GetStrValue(i)
+		var iv []byte
+		var nullIV bool
+		if hasIV {
+			iv, nullIV = ivParam.GetStrValue(i)
+		}
 
-		if nullStr || nullKey {
+		if nullStr || nullKey || modeErr != nil {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if modeInfo.needsIV && (!hasIV || nullIV || len(iv) < aes.BlockSize) {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 			continue
 		}
 
-		// Generate AES key from the key string
-		aesKey := generateAESKey(key)
+		aesKey, keyErr := generateAESKey(key, modeInfo.keyLen)
+		if keyErr != nil {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 
-		// Encrypt using AES-128-ECB
-		ciphertext, err := encryptECB(str, aesKey)
-		if err != nil {
+		var ciphertext []byte
+		var encErr error
+		if modeInfo.useCBC {
+			ciphertext, encErr = encryptCBC(str, aesKey, iv)
+		} else {
+			ciphertext, encErr = encryptECB(str, aesKey)
+		}
+		if encErr != nil {
 			// On error, return NULL (MySQL behavior)
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
@@ -7469,6 +7764,13 @@ func AESDecrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	cryptParam := vector.GenerateFunctionStrParameter(ivecs[0])
 	keyParam := vector.GenerateFunctionStrParameter(ivecs[1])
+	var ivParam vector.FunctionParameterWrapper[types.Varlena]
+	hasIV := len(ivecs) >= 3
+	if hasIV {
+		ivParam = vector.GenerateFunctionStrParameter(ivecs[2])
+	}
+
+	modeInfo, modeErr := getAESMode(proc)
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList != nil && selectList.Contains(i) {
@@ -7480,20 +7782,41 @@ func AESDecrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 
 		crypt, nullCrypt := cryptParam.GetStrValue(i)
 		key, nullKey := keyParam.GetStrValue(i)
+		var iv []byte
+		var nullIV bool
+		if hasIV {
+			iv, nullIV = ivParam.GetStrValue(i)
+		}
 
-		if nullCrypt || nullKey {
+		if nullCrypt || nullKey || modeErr != nil {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if modeInfo.needsIV && (!hasIV || nullIV || len(iv) < aes.BlockSize) {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 			continue
 		}
 
-		// Generate AES key from the key string
-		aesKey := generateAESKey(key)
+		aesKey, keyErr := generateAESKey(key, modeInfo.keyLen)
+		if keyErr != nil {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 
-		// Decrypt using AES-128-ECB
-		plaintext, err := decryptECB(crypt, aesKey)
-		if err != nil {
+		var plaintext []byte
+		var decErr error
+		if modeInfo.useCBC {
+			plaintext, decErr = decryptCBC(crypt, aesKey, iv)
+		} else {
+			plaintext, decErr = decryptECB(crypt, aesKey)
+		}
+		if decErr != nil {
 			// On error, return NULL (MySQL behavior)
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err

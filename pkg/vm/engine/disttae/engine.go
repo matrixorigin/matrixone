@@ -849,6 +849,11 @@ func (e *Engine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.
 	return e.globalStats.Get(ctx, key, sync)
 }
 
+// GetGlobalStats returns the GlobalStats instance
+func (e *Engine) GetGlobalStats() *GlobalStats {
+	return e.globalStats
+}
+
 // return true if the prefetch is received
 // return false if the prefetch is not rejected
 func (e *Engine) PrefetchTableMeta(ctx context.Context, key pb.StatsInfoKey) bool {

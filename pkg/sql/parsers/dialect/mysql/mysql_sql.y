@@ -311,7 +311,7 @@ import (
 %left <str> '=' '<' '>' LE GE NE NULL_SAFE_EQUAL IS LIKE REGEXP IN ASSIGNMENT ILIKE
 %left <str> '|'
 %left <str> '&'
-%left <str> SHIFT_LEFT SHIFT_RIGHT
+%left <str> SHIFT_LEFT SHIFT_RIGHT ARROW LONG_ARROW
 %left <str> '+' '-'
 %left <str> '*' '/' DIV '%' MOD
 %left <str> '^'
@@ -350,7 +350,7 @@ import (
 %token <str> LOW_PRIORITY HIGH_PRIORITY DELAYED
 
 // Create Table
-%token <str> CREATE ALTER DROP RENAME ANALYZE PHYPLAN ADD RETURNS
+%token <str> CREATE ALTER DROP RENAME REMOVE ANALYZE PHYPLAN ADD RETURNS
 %token <str> SCHEMA TABLE SEQUENCE INDEX VIEW TO IGNORE IF PRIMARY COLUMN CONSTRAINT SPATIAL FULLTEXT FOREIGN KEY_BLOCK_SIZE
 %token <str> SHOW DESCRIBE EXPLAIN DATE ESCAPE REPAIR OPTIMIZE TRUNCATE
 %token <str> MAXVALUE PARTITION REORGANIZE LESS THAN PROCEDURE TRIGGER
@@ -389,7 +389,7 @@ import (
 
 // Revoke
 %token <str> REVOKE FUNCTION PRIVILEGES TABLESPACE EXECUTE SUPER GRANT OPTION REFERENCES REPLICATION
-%token <str> SLAVE CLIENT USAGE RELOAD FILE TEMPORARY ROUTINE EVENT SHUTDOWN
+%token <str> SLAVE CLIENT USAGE RELOAD FILE FILES TEMPORARY ROUTINE EVENT SHUTDOWN
 
 // Type Modifiers
 %token <str> NULLX AUTO_INCREMENT APPROXNUM SIGNED UNSIGNED ZEROFILL ENGINES LOW_CARDINALITY AUTOEXTEND_SIZE
@@ -461,8 +461,7 @@ import (
 // Sequence function
 %token <str> NEXTVAL SETVAL CURRVAL LASTVAL
 
-//JSON function
-%token <str> ARROW
+//JSON function: ARROW and LONG_ARROW declared via %left for precedence
 
 // Insert
 %token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE PARALLEL STRICT SPLITSIZE
@@ -565,7 +564,7 @@ import (
 // iteration
 %type <statement> loop_stmt iterate_stmt leave_stmt repeat_stmt while_stmt
 %type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
-%type <statement> create_stage_stmt drop_stage_stmt alter_stage_stmt
+%type <statement> create_stage_stmt drop_stage_stmt alter_stage_stmt remove_stage_files_stmt
 %type <statement> create_snapshot_stmt drop_snapshot_stmt
 %type <statement> create_pitr_stmt drop_pitr_stmt show_pitr_stmt alter_pitr_stmt restore_pitr_stmt show_recovery_window_stmt
 %type <str> urlparams
@@ -943,6 +942,7 @@ normal_stmt:
 |   replace_stmt
 |   delete_stmt
 |   drop_stmt
+|   remove_stage_files_stmt
 |   truncate_table_stmt
 |   explain_stmt
 |   prepare_stmt
@@ -7357,6 +7357,14 @@ drop_stage_stmt:
         $$ = tree.NewDropStage(ifNotExists, name)
     }
 
+remove_stage_files_stmt:
+    REMOVE FILES FROM STAGE exists_opt STRING
+    {
+        var ifExists = $5
+        var path = $6
+        $$ = tree.NewRemoveStageFiles(ifExists, path)
+    }
+
 drop_snapshot_stmt:
    DROP SNAPSHOT exists_opt ident
    {
@@ -10124,6 +10132,30 @@ bit_expr:
 |   bit_expr SHIFT_RIGHT bit_expr %prec SHIFT_RIGHT
     {
         $$ = tree.NewBinaryExpr(tree.RIGHT_SHIFT, $1, $3)
+    }
+|   bit_expr ARROW simple_expr %prec SHIFT_RIGHT
+    {
+        name := tree.NewUnresolvedColName("json_extract")
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr("json_extract", 1),
+            Exprs: tree.Exprs{$1, $3},
+        }
+    }
+|   bit_expr LONG_ARROW simple_expr %prec SHIFT_RIGHT
+    {
+        extractName := tree.NewUnresolvedColName("json_extract")
+        inner := &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(extractName),
+            FuncName: tree.NewCStr("json_extract", 1),
+            Exprs: tree.Exprs{$1, $3},
+        }
+        unquoteName := tree.NewUnresolvedColName("json_unquote")
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(unquoteName),
+            FuncName: tree.NewCStr("json_unquote", 1),
+            Exprs: tree.Exprs{inner},
+        }
     }
 |   simple_expr %prec LOWER_THAN_COLLATE
     {
@@ -13317,6 +13349,7 @@ non_reserved_keyword:
 |	FIRST
 |	AFTER
 |	FILE
+|	FILES
 |	GRANTS
 |	HOUR
 |	IDENTIFIED

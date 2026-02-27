@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"sync/atomic"
@@ -639,6 +640,7 @@ func Test_typeconvert(t *testing.T) {
 			types.T_float64,
 			types.T_char,
 			types.T_varchar,
+			types.T_uuid,
 			types.T_date,
 			types.T_time,
 			types.T_datetime,
@@ -664,6 +666,7 @@ func Test_typeconvert(t *testing.T) {
 			{tp: defines.MYSQL_TYPE_FLOAT, signed: true},
 			{tp: defines.MYSQL_TYPE_DOUBLE, signed: true},
 			{tp: defines.MYSQL_TYPE_STRING, signed: true},
+			{tp: defines.MYSQL_TYPE_VAR_STRING, signed: true},
 			{tp: defines.MYSQL_TYPE_VAR_STRING, signed: true},
 			{tp: defines.MYSQL_TYPE_DATE, signed: true},
 			{tp: defines.MYSQL_TYPE_TIME, signed: true},
@@ -714,6 +717,7 @@ func Test_mysqlerror(t *testing.T) {
 func Test_handleShowVariables(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), 0)
 	convey.Convey("handleShowVariables succ", t, func() {
+		setSessionAlloc("", NewLeakCheckAllocator())
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -763,6 +767,26 @@ func Test_handleShowVariables(t *testing.T) {
 
 		shv := &tree.ShowVariables{Global: false}
 		convey.So(handleShowVariables(ses, ec, shv), convey.ShouldBeNil)
+
+		// Ensure global shows global value even if session differs.
+		ses.sesSysVars.Set("interactive_timeout", int64(30100))
+		ses.gSysVars.Set("interactive_timeout", int64(86400))
+		stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "show global variables like 'interactive_timeout'", 1)
+		convey.So(err, convey.ShouldBeNil)
+		showVars, ok := stmt.(*tree.ShowVariables)
+		convey.So(ok, convey.ShouldBeTrue)
+		ses.SetMysqlResultSet(&MysqlResultSet{})
+		convey.So(handleShowVariables(ses, ec, showVars), convey.ShouldBeNil)
+		mrs := ses.GetMysqlResultSet()
+		found := false
+		for _, row := range mrs.Data {
+			if len(row) >= 2 && row[0] == "interactive_timeout" {
+				convey.So(row[1], convey.ShouldEqual, int64(86400))
+				found = true
+				break
+			}
+		}
+		convey.So(found, convey.ShouldBeTrue)
 	})
 }
 
@@ -798,6 +822,37 @@ func Test_GetComputationWrapper(t *testing.T) {
 		cw, err := GetComputationWrapper(ec, db, user, eng, proc, ses)
 		convey.So(cw, convey.ShouldNotBeEmpty)
 		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func Test_GetComputationWrapper_ShowVariablesGlobal(t *testing.T) {
+	convey.Convey("GetComputationWrapper show global variables", t, func() {
+		sql := "show global variables like 'interactive_timeout'"
+		var eng engine.Engine
+		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+
+		sysVars := make(map[string]interface{})
+		for name, sysVar := range gSysVarsDefs {
+			sysVars[name] = sysVar.Default
+		}
+		ses := &Session{planCache: newPlanCache(1),
+			feSessionImpl: feSessionImpl{
+				gSysVars: &SystemVariables{mp: sysVars},
+			},
+		}
+
+		ctrl := gomock.NewController(t)
+		ec := newTestExecCtx(context.Background(), ctrl)
+		ec.ses = ses
+		ec.input = &UserInput{sql: sql}
+
+		cws, err := GetComputationWrapper(ec, "", "", eng, proc, ses)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(len(cws) > 0, convey.ShouldBeTrue)
+		stmt := cws[0].GetAst()
+		sv, ok := stmt.(*tree.ShowVariables)
+		convey.So(ok, convey.ShouldBeTrue)
+		convey.So(sv.Global, convey.ShouldBeTrue)
 	})
 }
 
@@ -957,6 +1012,7 @@ func Test_statement_type(t *testing.T) {
 		}
 		kases := []kase{
 			{&tree.CreateTable{}},
+			{&tree.CreateTable{IsAsSelect: true}},
 			{&tree.Insert{}},
 			{&tree.BeginTransaction{}},
 			{&tree.ShowTables{}},
@@ -1879,4 +1935,237 @@ func Test_checkModify(t *testing.T) {
 			assert.Nil(t, err)
 		}
 	}
+}
+
+// testMysqlWriterWithError is a test mysql writer that can return error from ParseSendLongData
+type testMysqlWriterWithError struct {
+	*testMysqlWriter
+	returnError error
+}
+
+func (fp *testMysqlWriterWithError) ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
+	if fp.returnError != nil {
+		return fp.returnError
+	}
+	return nil
+}
+
+func Test_parseStmtSendLongData(t *testing.T) {
+	ctx := context.TODO()
+	convey.Convey("parseStmtSendLongData", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		// Test case 1: data length < 4 bytes - should return error
+		convey.Convey("data length less than 4 bytes", func() {
+			ses := newTestSession(t, ctrl)
+			data := []byte{1, 2, 3} // only 3 bytes
+			err := parseStmtSendLongData(ctx, ses, data)
+			convey.So(err, convey.ShouldNotBeNil)
+			convey.So(moerr.IsMoErrCode(err, moerr.ErrInvalidInput), convey.ShouldBeTrue)
+		})
+
+		// Test case 2: GetPrepareStmt returns error
+		convey.Convey("GetPrepareStmt returns error", func() {
+			ses := newTestSession(t, ctrl)
+			stmtID := uint32(123)
+			data := make([]byte, 4)
+			binary.LittleEndian.PutUint32(data, stmtID)
+			// Add some additional data
+			data = append(data, []byte("additional data")...)
+
+			err := parseStmtSendLongData(ctx, ses, data)
+			convey.So(err, convey.ShouldNotBeNil)
+		})
+
+		// Test case 3: Normal flow with IsCloudNonuser = false
+		convey.Convey("normal flow with IsCloudNonuser false", func() {
+			ses := newTestSession(t, ctrl)
+			stmtID := uint32(456)
+			stmtName := getPrepareStmtName(stmtID)
+
+			// Create a prepare statement
+			preStmt := &PrepareStmt{
+				Name:           stmtName,
+				Sql:            "SELECT ? FROM t",
+				IsCloudNonuser: false,
+			}
+			ses.mu.Lock()
+			if ses.prepareStmts == nil {
+				ses.prepareStmts = make(map[string]*PrepareStmt)
+			}
+			ses.prepareStmts[stmtName] = preStmt
+			ses.mu.Unlock()
+
+			// Create test mysql writer
+			sv, err := getSystemVariables("test/system_vars_config.toml")
+			convey.So(err, convey.ShouldBeNil)
+			pu := config.NewParameterUnit(sv, nil, nil, nil)
+			ioses, err := NewIOSession(&testConn{}, pu, "")
+			convey.So(err, convey.ShouldBeNil)
+			testWriter := &testMysqlWriter{ioses: ioses}
+			ses.respr = NewMysqlResp(testWriter)
+
+			// Create data with stmtID
+			data := make([]byte, 4)
+			binary.LittleEndian.PutUint32(data, stmtID)
+			data = append(data, []byte("long data content")...)
+
+			err = parseStmtSendLongData(ctx, ses, data)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		// Test case 4: Normal flow with IsCloudNonuser = true
+		convey.Convey("normal flow with IsCloudNonuser true", func() {
+			ses := newTestSession(t, ctrl)
+			stmtID := uint32(789)
+			stmtName := getPrepareStmtName(stmtID)
+
+			// Create a prepare statement with IsCloudNonuser = true
+			preStmt := &PrepareStmt{
+				Name:           stmtName,
+				Sql:            "SELECT ? FROM t",
+				IsCloudNonuser: true,
+			}
+			ses.mu.Lock()
+			if ses.prepareStmts == nil {
+				ses.prepareStmts = make(map[string]*PrepareStmt)
+			}
+			ses.prepareStmts[stmtName] = preStmt
+			ses.mu.Unlock()
+
+			// Create test mysql writer
+			sv, err := getSystemVariables("test/system_vars_config.toml")
+			convey.So(err, convey.ShouldBeNil)
+			pu := config.NewParameterUnit(sv, nil, nil, nil)
+			ioses, err := NewIOSession(&testConn{}, pu, "")
+			convey.So(err, convey.ShouldBeNil)
+			testWriter := &testMysqlWriter{ioses: ioses}
+			ses.respr = NewMysqlResp(testWriter)
+
+			// Create data with stmtID
+			data := make([]byte, 4)
+			binary.LittleEndian.PutUint32(data, stmtID)
+			data = append(data, []byte("long data content")...)
+
+			err = parseStmtSendLongData(ctx, ses, data)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		// Test case 5: ParseSendLongData returns error
+		convey.Convey("ParseSendLongData returns error", func() {
+			ses := newTestSession(t, ctrl)
+			stmtID := uint32(999)
+			stmtName := getPrepareStmtName(stmtID)
+
+			// Create a prepare statement
+			preStmt := &PrepareStmt{
+				Name:           stmtName,
+				Sql:            "SELECT ? FROM t",
+				IsCloudNonuser: false,
+			}
+			ses.mu.Lock()
+			if ses.prepareStmts == nil {
+				ses.prepareStmts = make(map[string]*PrepareStmt)
+			}
+			ses.prepareStmts[stmtName] = preStmt
+			ses.mu.Unlock()
+
+			// Create test mysql writer that returns error
+			expectedErr := moerr.NewInternalError(ctx, "parse send long data error")
+			sv, err := getSystemVariables("test/system_vars_config.toml")
+			convey.So(err, convey.ShouldBeNil)
+			pu := config.NewParameterUnit(sv, nil, nil, nil)
+			ioses, err := NewIOSession(&testConn{}, pu, "")
+			convey.So(err, convey.ShouldBeNil)
+			baseWriter := &testMysqlWriter{ioses: ioses}
+			testWriter := &testMysqlWriterWithError{
+				testMysqlWriter: baseWriter,
+				returnError:     expectedErr,
+			}
+			ses.respr = NewMysqlResp(testWriter)
+
+			// Create data with stmtID
+			data := make([]byte, 4)
+			binary.LittleEndian.PutUint32(data, stmtID)
+			data = append(data, []byte("long data content")...)
+
+			err = parseStmtSendLongData(ctx, ses, data)
+			convey.So(err, convey.ShouldNotBeNil)
+			convey.So(err, convey.ShouldEqual, expectedErr)
+		})
+
+		// Test case 6: Empty data after stmtID (only 4 bytes)
+		convey.Convey("empty data after stmtID", func() {
+			ses := newTestSession(t, ctrl)
+			stmtID := uint32(111)
+			stmtName := getPrepareStmtName(stmtID)
+
+			// Create a prepare statement
+			preStmt := &PrepareStmt{
+				Name:           stmtName,
+				Sql:            "SELECT ? FROM t",
+				IsCloudNonuser: false,
+			}
+			ses.mu.Lock()
+			if ses.prepareStmts == nil {
+				ses.prepareStmts = make(map[string]*PrepareStmt)
+			}
+			ses.prepareStmts[stmtName] = preStmt
+			ses.mu.Unlock()
+
+			// Create test mysql writer
+			sv, err := getSystemVariables("test/system_vars_config.toml")
+			convey.So(err, convey.ShouldBeNil)
+			pu := config.NewParameterUnit(sv, nil, nil, nil)
+			ioses, err := NewIOSession(&testConn{}, pu, "")
+			convey.So(err, convey.ShouldBeNil)
+			testWriter := &testMysqlWriter{ioses: ioses}
+			ses.respr = NewMysqlResp(testWriter)
+
+			// Create data with only stmtID (4 bytes)
+			data := make([]byte, 4)
+			binary.LittleEndian.PutUint32(data, stmtID)
+
+			err = parseStmtSendLongData(ctx, ses, data)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		// Test case 7: Large stmtID
+		convey.Convey("large stmtID", func() {
+			ses := newTestSession(t, ctrl)
+			stmtID := uint32(0xFFFFFFFF) // max uint32
+			stmtName := getPrepareStmtName(stmtID)
+
+			// Create a prepare statement
+			preStmt := &PrepareStmt{
+				Name:           stmtName,
+				Sql:            "SELECT ? FROM t",
+				IsCloudNonuser: false,
+			}
+			ses.mu.Lock()
+			if ses.prepareStmts == nil {
+				ses.prepareStmts = make(map[string]*PrepareStmt)
+			}
+			ses.prepareStmts[stmtName] = preStmt
+			ses.mu.Unlock()
+
+			// Create test mysql writer
+			sv, err := getSystemVariables("test/system_vars_config.toml")
+			convey.So(err, convey.ShouldBeNil)
+			pu := config.NewParameterUnit(sv, nil, nil, nil)
+			ioses, err := NewIOSession(&testConn{}, pu, "")
+			convey.So(err, convey.ShouldBeNil)
+			testWriter := &testMysqlWriter{ioses: ioses}
+			ses.respr = NewMysqlResp(testWriter)
+
+			// Create data with stmtID
+			data := make([]byte, 4)
+			binary.LittleEndian.PutUint32(data, stmtID)
+			data = append(data, []byte("test data")...)
+
+			err = parseStmtSendLongData(ctx, ses, data)
+			convey.So(err, convey.ShouldBeNil)
+		})
+	})
 }

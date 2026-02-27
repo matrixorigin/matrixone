@@ -18,6 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -31,9 +34,11 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/btree"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -44,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -112,6 +118,31 @@ func TestGetTenantInfo(t *testing.T) {
 		convey.So(GetDefaultTenant(), convey.ShouldEqual, sysAccountName)
 		convey.So(GetDefaultRole(), convey.ShouldEqual, moAdminRoleName)
 	})
+}
+
+func TestEscapeSQLStringForDoubleQuotes(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"empty", "", ""},
+		{"plain", "abc", "abc"},
+		{"double_quote", `a"b`, `a\"b`},
+		{"backslash", `a\\b`, `a\\\\b`},
+		{"single_quote", "a'b", "a'b"},
+		{"newline", "a\nb", "a\\nb"},
+		{"carriage_return", "a\rb", "a\\rb"},
+		{"tab", "a\tb", "a\\tb"},
+		{"nul", "a\x00b", "a\\0b"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := escapeSQLStringForDoubleQuotes(tc.input)
+			require.Equal(t, tc.want, got)
+		})
+	}
 }
 
 func TestPrivilegeType_Scope(t *testing.T) {
@@ -7168,6 +7199,21 @@ func newMrsForShowTables(rows [][]interface{}) *MysqlResultSet {
 	return mrs
 }
 
+func newMrsForShowDatabases(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col := &MysqlColumn{}
+	col.SetName("Database")
+	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
 func Test_doDropAccount(t *testing.T) {
 	convey.Convey("drop account", t, func() {
 		ctrl := gomock.NewController(t)
@@ -7325,6 +7371,174 @@ func Test_doDropAccount(t *testing.T) {
 		})
 		convey.So(err, convey.ShouldBeError)
 	})
+}
+
+func Test_doDropAccount_InTransaction(t *testing.T) {
+	convey.Convey("doDropAccount with inTransaction parameter", t, func() {
+		// Test case 1: inTransaction=false (default behavior - creates new transaction)
+		convey.Convey("inTransaction=false should create new transaction", func() {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			bh := &backgroundExecTestWithHistory{}
+			bh.init()
+
+			stmt := &tree.DropAccount{
+				Name: boxExprStr("test_acc"),
+			}
+			priv := determinePrivilegeSetOfStatement(stmt)
+			ses := newSes(priv, ctrl)
+
+			pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+			pu.SV.SetDefaultValues()
+			pu.SV.KillRountinesInterval = 0
+			ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+			ctx = defines.AttachAccountId(ctx, 0)
+
+			rm, _ := NewRoutineManager(ctx, "")
+			ses.rm = rm
+
+			// Setup SQL results
+			bh.sql2result["begin;"] = nil
+			bh.sql2result["commit;"] = nil
+			bh.sql2result["rollback;"] = nil
+
+			sql, _ := getSqlForLockMoAccountNameFormat(ctx, "test_acc")
+			bh.sql2result[sql] = nil
+
+			sql, _ = getSqlForCheckTenant(ctx, "test_acc")
+			mrs := newMrsForGetAllAccounts([][]interface{}{
+				{uint64(1), "test_acc", "open", uint64(1), nil},
+			})
+			bh.sql2result[sql] = mrs
+
+			sql, _ = getSqlForDeleteAccountFromMoAccount(context.TODO(), "test_acc")
+			bh.sql2result[sql] = nil
+
+			for _, sql = range getSqlForDropAccount() {
+				bh.sql2result[sql] = nil
+			}
+
+			bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
+
+			sql = fmt.Sprintf(getPubInfoSql, 1) + " order by update_time desc, created_time desc"
+			bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{})
+
+			sql = "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
+			bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{{1}})
+
+			sql = getSubsSql
+			bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{})
+
+			sql = getSubsSql + " and sub_account_id = 1"
+			bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{})
+
+			bh.sql2result["show databases;"] = newMrsForShowDatabases([][]interface{}{})
+
+			err := doDropAccount(ses.GetTxnHandler().GetTxnCtx(), bh, ses, &dropAccount{
+				IfExists: stmt.IfExists,
+				Name:     mustUnboxExprStr(stmt.Name),
+			}, false) // inTransaction=false
+
+			convey.So(err, convey.ShouldBeNil)
+			// Verify that "begin;" was executed
+			convey.So(bh.hasExecuted("begin;"), convey.ShouldBeTrue)
+		})
+
+		// Test case 2: inTransaction=true (restore scenario - uses existing transaction)
+		convey.Convey("inTransaction=true should not create new transaction", func() {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			bh := &backgroundExecTestWithHistory{}
+			bh.init()
+
+			stmt := &tree.DropAccount{
+				Name: boxExprStr("test_acc"),
+			}
+			priv := determinePrivilegeSetOfStatement(stmt)
+			ses := newSes(priv, ctrl)
+
+			pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+			pu.SV.SetDefaultValues()
+			pu.SV.KillRountinesInterval = 0
+			ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+			ctx = defines.AttachAccountId(ctx, 0)
+
+			rm, _ := NewRoutineManager(ctx, "")
+			ses.rm = rm
+
+			// Setup SQL results (no begin; needed)
+			bh.sql2result["commit;"] = nil
+			bh.sql2result["rollback;"] = nil
+
+			sql, _ := getSqlForLockMoAccountNameFormat(ctx, "test_acc")
+			bh.sql2result[sql] = nil
+
+			sql, _ = getSqlForCheckTenant(ctx, "test_acc")
+			mrs := newMrsForGetAllAccounts([][]interface{}{
+				{uint64(1), "test_acc", "open", uint64(1), nil},
+			})
+			bh.sql2result[sql] = mrs
+
+			sql, _ = getSqlForDeleteAccountFromMoAccount(context.TODO(), "test_acc")
+			bh.sql2result[sql] = nil
+
+			for _, sql = range getSqlForDropAccount() {
+				bh.sql2result[sql] = nil
+			}
+
+			bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
+
+			sql = fmt.Sprintf(getPubInfoSql, 1) + " order by update_time desc, created_time desc"
+			bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{})
+
+			sql = "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
+			bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{{1}})
+
+			sql = getSubsSql
+			bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{})
+
+			sql = getSubsSql + " and sub_account_id = 1"
+			bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{})
+
+			bh.sql2result["show databases;"] = newMrsForShowDatabases([][]interface{}{})
+
+			err := doDropAccount(ses.GetTxnHandler().GetTxnCtx(), bh, ses, &dropAccount{
+				IfExists: stmt.IfExists,
+				Name:     mustUnboxExprStr(stmt.Name),
+			}, true) // inTransaction=true
+
+			convey.So(err, convey.ShouldBeNil)
+			// Verify that "begin;" was NOT executed
+			convey.So(bh.hasExecuted("begin;"), convey.ShouldBeFalse)
+		})
+	})
+}
+
+// backgroundExecTestWithHistory extends backgroundExecTest to track SQL execution history
+type backgroundExecTestWithHistory struct {
+	backgroundExecTest
+	executedSqls []string
+}
+
+func (bt *backgroundExecTestWithHistory) init() {
+	bt.backgroundExecTest.init()
+	bt.executedSqls = make([]string, 0)
+}
+
+func (bt *backgroundExecTestWithHistory) Exec(ctx context.Context, s string) error {
+	bt.executedSqls = append(bt.executedSqls, s)
+	return bt.backgroundExecTest.Exec(ctx, s)
+}
+
+func (bt *backgroundExecTestWithHistory) hasExecuted(sql string) bool {
+	for _, executed := range bt.executedSqls {
+		if executed == sql {
+			return true
+		}
+	}
+	return false
 }
 
 func generateGrantPrivilege(grant, to string, exists bool, roleNames []string, withGrantOption bool) {
@@ -7841,6 +8055,101 @@ func newMrsForPasswordOfUser(rows [][]interface{}) *MysqlResultSet {
 	}
 
 	return mrs
+}
+
+func newMrsForFeatureRegistry(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("enabled")
+	col1.SetColumnType(defines.MYSQL_TYPE_TINY)
+
+	col2 := &MysqlColumn{}
+	col2.SetName("scope_spec")
+	col2.SetColumnType(defines.MYSQL_TYPE_TEXT)
+
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func newMrsForFeatureLimit(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("quota")
+	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	mrs.AddColumn(col1)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func newMrsForSnapshotCount(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("count")
+	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	mrs.AddColumn(col1)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func mockSnapshotQuotaResult(
+	bh *backgroundExecTest,
+	accountName string,
+	accountId uint32,
+	scope string,
+) error {
+	scopeSpec, err := bytejson.ParseJsonByteFromString(fmt.Sprintf(`{"allowed_scope":["%s"]}`, scope))
+	if err != nil {
+		return err
+	}
+
+	registrySQL := fmt.Sprintf(
+		"select enabled, scope_spec from %s.%s where feature_code = '%s'",
+		catalog.MO_CATALOG, catalog.MO_FEATURE_REGISTRY, featureCodeSnapshot,
+	)
+	bh.sql2result[registrySQL] = newMrsForFeatureRegistry([][]interface{}{
+		{int8(1), string(scopeSpec)},
+	})
+
+	quota := int64(defaultSnapshotLimit)
+	if accountId == sysAccountID {
+		quota = defaultFeatureLimitForSys
+	}
+	limitSQL := fmt.Sprintf(
+		"select quota from %s.%s where account_id = %d and feature_code = '%s' and scope = '%s'",
+		catalog.MO_CATALOG, catalog.MO_FEATURE_LIMIT, accountId, featureCodeSnapshot, scope,
+	)
+	bh.sql2result[limitSQL] = newMrsForFeatureLimit([][]interface{}{
+		{quota},
+	})
+
+	countSQL := fmt.Sprintf(
+		"select count(*) from %s.%s where account_name = '%s' and level = '%s'",
+		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, accountName, scope,
+	)
+	bh.sql2result[countSQL] = newMrsForSnapshotCount([][]interface{}{
+		{int64(0)},
+	})
+
+	return nil
 }
 
 func newMrsForPitrRecord(rows [][]interface{}) *MysqlResultSet {
@@ -8515,6 +8824,44 @@ func TestDoCheckRole(t *testing.T) {
 	}
 	ses.SetTenantInfo(tenant)
 	err = doCheckRole(ctx, ses)
+	require.Error(t, err)
+}
+
+func TestDoRemoveStageFiles(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ctx := context.Background()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	dir := t.TempDir()
+	stageURL := &url.URL{Scheme: stage.FILE_PROTOCOL, Path: dir}
+	ses.proc.GetStageCache().Set("mystage", stage.StageDef{Id: 1, Name: "mystage", Url: stageURL})
+
+	filePath := filepath.Join(dir, "a.txt")
+	require.NoError(t, os.WriteFile(filePath, []byte("a"), 0600))
+
+	rs := tree.NewRemoveStageFiles(false, "stage://mystage/a.txt")
+	err := doRemoveStageFiles(ctx, ses, rs)
+	require.NoError(t, err)
+	_, err = os.Stat(filePath)
+	require.True(t, os.IsNotExist(err))
+
+	rs = tree.NewRemoveStageFiles(false, "file:///tmp/a.txt")
+	err = doRemoveStageFiles(ctx, ses, rs)
+	require.Error(t, err)
+
+	tenant := &TenantInfo{
+		Tenant:        "default_1",
+		User:          "admin",
+		DefaultRole:   "role1",
+		TenantID:      3001,
+		UserID:        2,
+		DefaultRoleID: 10,
+	}
+	ses.SetTenantInfo(tenant)
+	rs = tree.NewRemoveStageFiles(false, "stage://mystage/a.txt")
+	err = doRemoveStageFiles(ctx, ses, rs)
 	require.Error(t, err)
 }
 
@@ -10801,6 +11148,9 @@ func TestDoCreateSnapshot(t *testing.T) {
 		mrs2 := newMrsForPasswordOfUser([][]interface{}{{1}})
 		bh.sql2result[sql2] = mrs2
 
+		quotaErr := mockSnapshotQuotaResult(bh, tenant.Tenant, tenant.TenantID, tree.SNAPSHOTLEVELACCOUNT.String())
+		convey.So(quotaErr, convey.ShouldBeNil)
+
 		err := doCreateSnapshot(ctx, ses, cs)
 		convey.So(err, convey.ShouldBeNil)
 	})
@@ -10867,6 +11217,9 @@ func TestDoCreateSnapshot(t *testing.T) {
 		mrs2 := newMrsForPasswordOfUser([][]interface{}{{1}})
 		bh.sql2result[sql2] = mrs2
 
+		quotaErr := mockSnapshotQuotaResult(bh, tenant.Tenant, tenant.TenantID, tree.SNAPSHOTLEVELACCOUNT.String())
+		convey.So(quotaErr, convey.ShouldBeNil)
+
 		err := doCreateSnapshot(ctx, ses, cs)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
@@ -10932,6 +11285,9 @@ func TestDoCreateSnapshot(t *testing.T) {
 		sql2, _ := getSqlForCheckTenant(ctx, "acc1")
 		mrs2 := newMrsForPasswordOfUser([][]interface{}{{1}})
 		bh.sql2result[sql2] = mrs2
+
+		quotaErr := mockSnapshotQuotaResult(bh, tenant.Tenant, tenant.TenantID, tree.SNAPSHOTLEVELACCOUNT.String())
+		convey.So(quotaErr, convey.ShouldBeNil)
 
 		err := doCreateSnapshot(ctx, ses, cs)
 		convey.So(err, convey.ShouldNotBeNil)
@@ -11000,6 +11356,9 @@ func TestDoCreateSnapshot(t *testing.T) {
 		mrs2 := newMrsForPasswordOfUser([][]interface{}{{1}})
 		bh.sql2result[sql2] = mrs2
 
+		quotaErr := mockSnapshotQuotaResult(bh, tenant.Tenant, tenant.TenantID, tree.SNAPSHOTLEVELACCOUNT.String())
+		convey.So(quotaErr, convey.ShouldBeNil)
+
 		err := doCreateSnapshot(ctx, ses, cs)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
@@ -11066,6 +11425,9 @@ func TestDoCreateSnapshot(t *testing.T) {
 		sql2, _ := getSqlForCheckTenant(ctx, "acc1")
 		mrs2 := newMrsForPasswordOfUser([][]interface{}{{1}})
 		bh.sql2result[sql2] = mrs2
+
+		quotaErr := mockSnapshotQuotaResult(bh, tenant.Tenant, tenant.TenantID, tree.SNAPSHOTLEVELACCOUNT.String())
+		convey.So(quotaErr, convey.ShouldBeNil)
 
 		err := doCreateSnapshot(ctx, ses, cs)
 		convey.So(err, convey.ShouldNotBeNil)
@@ -11543,4 +11905,25 @@ func Test_authenticateUserCanExecuteStatementWithObjectTypeNone(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
+}
+
+func Test_determinePrivilegeSetOfStatement_CreateTableAsSelect(t *testing.T) {
+	stmt := &tree.CreateTable{
+		IsAsSelect: true,
+	}
+	priv := determinePrivilegeSetOfStatement(stmt)
+
+	require.Equal(t, objectTypeDatabase, priv.objectType())
+	require.NotEmpty(t, priv.entries)
+
+	seen := make(map[PrivilegeType]bool)
+	for _, entry := range priv.entries {
+		seen[entry.privilegeId] = true
+	}
+
+	require.True(t, seen[PrivilegeTypeCreateTable])
+	require.True(t, seen[PrivilegeTypeDatabaseAll])
+	require.True(t, seen[PrivilegeTypeDatabaseOwnership])
+	require.False(t, seen[PrivilegeTypeSelect])
+	require.False(t, seen[PrivilegeTypeInsert])
 }

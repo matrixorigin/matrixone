@@ -9,15 +9,15 @@ create table t2 (b int);
 insert into t2 values(1), (2), (3);
 update t1, t2 set a = 1, b =2;
 select * from t1;
-a
-1
-1
+➤ a[4,32,0]  𝄀
+1  𝄀
+1  𝄀
 1
 update t1, t2 set a = null, b =null;
 select * from t2;
-b
-null
-null
+➤ b[4,32,0]  𝄀
+null  𝄀
+null  𝄀
 null
 drop table if exists t1;
 drop table if exists t2;
@@ -28,9 +28,9 @@ create table t2 (b int);
 insert into t2 values(1), (2), (3);
 update t2 as t222, (select b from t2) as t22 set t222.b = 555 where t222.b = 3;
 select  * from t2;
-b
-1
-2
+➤ b[4,32,0]  𝄀
+1  𝄀
+2  𝄀
 555
 drop table if exists t1;
 drop table if exists t2;
@@ -40,16 +40,16 @@ create table t2 (a int, b int, c int);
 insert into t2 values(1, 2, 3), (4, 5, 6), (7, 8, 9);
 update t1 join t2 on t1.a = t2.a set t1.b = 222, t1.c = 333, t2.b = 222, t2.c = 333;
 select * from t1;
-a	b	c
-1	222	333
-4	222	333
-7	222	333
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  222  ¦  333  𝄀
+4  ¦  222  ¦  333  𝄀
+7  ¦  222  ¦  333
 with t11 as (select * from (select * from t1) as t22) update t11 join t2 on t11.a = t2.a set t2.b = 666;
 select * from t2;
-a	b	c
-1	666	333
-4	666	333
-7	666	333
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  666  ¦  333  𝄀
+4  ¦  666  ¦  333  𝄀
+7  ¦  666  ¦  333
 drop table if exists t1;
 drop table if exists t2;
 create table t1 (a int primary key, b int, c int);
@@ -58,132 +58,141 @@ create table t2 (a int, b int, c int);
 insert into t2 values(1, 2, 3), (4, 5, 6), (7, 8, 9);
 update t1 join t2 on t1.a = t2.a set t1.a = 111 where t1.b = 2;
 select * from t1;
-a	b	c
-4	5	6
-7	8	9
-111	2	3
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+4  ¦  5  ¦  6  𝄀
+7  ¦  8  ¦  9  𝄀
+111  ¦  2  ¦  3
 drop table if exists t1;
 create table t1 (a int, b int);
 insert into t1 values (1, 2), (3, 4), (5, 6);
 update t1 set a = 1 where a > 1;
 select * from t1;
-a	b
-1	2
-1	4
-1	6
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  2  𝄀
+1  ¦  4  𝄀
+1  ¦  6
+select count(*) from t1;
+➤ count(*)[-5,64,0]  𝄀
+3
 drop table if exists t2;
 create table t2 (a int primary key, b int);
 insert into t2 values (1, 2), (3, 4);
 select * from t2;
-a	b
-1	2
-3	4
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  2  𝄀
+3  ¦  4
 update t2 set a = 2 where a > 1;
 select * from t2;
-a	b
-1	2
-2	4
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  4
 update t2 set a = b, b = a +1 where a > 1;
 select * from t2;
-a	b
-1	2
-4	3
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  2  𝄀
+4  ¦  3
+select count(*) from t2;
+➤ count(*)[-5,64,0]  𝄀
+2
 drop table if exists t3;
 create table t3 (a char(20));
 insert into t3 values("hello"), ("world");
 select * from t3;
-a
-hello
+➤ a[1,20,0]  𝄀
+hello  𝄀
 world
 update t3 set a = "modify";
 select * from t3;
-a
+➤ a[1,20,0]  𝄀
+modify  𝄀
 modify
-modify
+select count(*) from t3;
+➤ count(*)[-5,64,0]  𝄀
+2
 drop table if exists t5;
 create table t5(a date);
 insert into t5 values ('20070210'), ('1997-02-10'), ('0001-04-28'), ('20041112'), ('0123-04-03');
 select * from t5;
-a
-2007-02-10
-1997-02-10
-0001-04-28
-2004-11-12
+➤ a[91,64,0]  𝄀
+2007-02-10  𝄀
+1997-02-10  𝄀
+0001-04-28  𝄀
+2004-11-12  𝄀
 0123-04-03
 update t5 set a = '20070212' where a = '20070210';
 select * from t5;
-a
-1997-02-10
-0001-04-28
-2004-11-12
-0123-04-03
+➤ a[91,64,0]  𝄀
+1997-02-10  𝄀
+0001-04-28  𝄀
+2004-11-12  𝄀
+0123-04-03  𝄀
 2007-02-12
 drop table if exists t7;
 create table t7 (a int, b int, c int);
 insert into t7 values (1, 2, 11), (3, 4, 11), (5, 6, 11);
 select * from t7;
-a	b	c
-1	2	11
-3	4	11
-5	6	11
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  2  ¦  11  𝄀
+3  ¦  4  ¦  11  𝄀
+5  ¦  6  ¦  11
 update t7 set a = b,  b = a + 1 where a > 1;
 select * from t7;
-a	b	c
-1	2	11
-4	4	11
-6	6	11
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  2  ¦  11  𝄀
+4  ¦  4  ¦  11  𝄀
+6  ¦  6  ¦  11
 drop table if exists t8;
 create table t8 (a int);
 insert into t8 values(1), (2), (3),  (4),  (5);
 select * from t8;
-a
-1
-2
-3
-4
+➤ a[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
 5
 update t8 set a = 111 where a > 2 order by a limit 2;
 select * from t8;
-a
-1
-2
-5
-111
+➤ a[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+5  𝄀
+111  𝄀
 111
 drop table if exists t9;
 CREATE TABLE t9 (a bigint(3), b bigint(5) primary key);
 insert INTO t9 VALUES (1,1),(1,2);
 update t9 set a=2 where a=1 limit 1;
 select * from t9;
-a	b
-1	2
-2	1
+➤ a[-5,64,0]  ¦  b[-5,64,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  1
 drop table if exists t10;
 create table t10 (a int primary key, b int);
 insert into t10 values(1, 2),  (3, 4),  (5, 6);
 update t10 set b = null, a = a +1 where a > 1;
 select * from t10;
-a	b
-1	2
-4	null
-6	null
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  2  𝄀
+4  ¦  null  𝄀
+6  ¦  null
 drop table if exists t11;
 create table t11 (a int, b int);
 insert into t11 values(1, null),  (3, 4),  (5, null);
 update t11 set a = b+1;
 select * from t11;
-a	b
-null	null
-5	4
-null	null
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+null  ¦  null  𝄀
+5  ¦  4  𝄀
+null  ¦  null
 drop table if exists t1;
 create table t1 (a int default 222);
 insert into t1 values(1), (2), (3);
 update t1 set a = default;
 select * from t1;
-a
-222
-222
+➤ a[4,32,0]  𝄀
+222  𝄀
+222  𝄀
 222
 drop table if exists t1;
 drop table if exists t2;
@@ -193,43 +202,49 @@ create table t2 (a int, b int default 111* 3);
 insert into t2 values (1, 1), (2, 2);
 update t1 join t2 on t1.a = t2.a set t1.b = default, t2.a = default;
 select * from t1;
-a	b
-1	289
-2	289
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  289  𝄀
+2  ¦  289
 select * from t2;
-a	b
-null	1
-null	2
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+null  ¦  1  𝄀
+null  ¦  2
+select count(*) from t1;
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from t2;
+➤ count(*)[-5,64,0]  𝄀
+2
 drop table if exists t1;
 create table t1(a int auto_increment, b int auto_increment);
 insert into t1 values(null, null), (null, null);
 select * from t1;
-a    b
-1    1
-2    2
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2
 insert into t1 values(100, 200), (null, null);
 select * from t1;
-a    b
-1    1
-2    2
-100    200
-101    201
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+100  ¦  200  𝄀
+101  ¦  201
 update t1 set a=null;
 constraint violation: Column 'a' cannot be null
 select * from t1;
-a    b
-1    1
-2    2
-100    200
-101    201
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+100  ¦  200  𝄀
+101  ¦  201
 update t1 set b=null;
 constraint violation: Column 'b' cannot be null
 select * from t1;
-a    b
-1    1
-2    2
-100    200
-101    201
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+100  ¦  200  𝄀
+101  ¦  201
 drop table if exists t1;
 create table t1(
 id int,
@@ -238,15 +253,15 @@ b datetime NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 insert into t1(id) values(1);
 select a is null from t1;
-a is null
+➤ a is null[-7,1,0]  𝄀
 1
 update t1 set id = 2 where id = 1;
 select a is not null from t1;
-a is not null
+➤ a is not null[-7,1,0]  𝄀
 1
 update t1  set id = 3,  a = '20121212' where id = 2;
 select id from t1 where a = '20121212';
-id
+➤ id[4,32,0]  𝄀
 3
 drop table if exists t1;
 create table t1(a int, b int, primary key(a));
@@ -267,46 +282,51 @@ insert into t1 values(2, 3);
 update t1 set a = 2 where a = 1;
 Duplicate entry ('\(\d\,\d\)'|'\d\w\d{5}\w\d{4}') for key '(\(a,b\)|__mo_cpkey_col)'
 drop table if exists t1;
+[unknown result because it is related to issue#5790]
 create table t1(a int, b varchar(20), unique key(a));
+[unknown result because it is related to issue#5790]
 insert into t1 values(1, '1');
+[unknown result because it is related to issue#5790]
 insert into t1 values(2, '2');
+[unknown result because it is related to issue#5790]
 insert into t1 values(3, '3');
+[unknown result because it is related to issue#5790]
 insert into t1 values(4, '4');
+[unknown result because it is related to issue#5790]
 select * from t1;
-a    b
-1    1
-2    2
-3    3
-4    4
+[unknown result because it is related to issue#5790]
 update t1 set a = 2 where a = 1;
-tae data: duplicate
+[unknown result because it is related to issue#5790]
 drop table if exists t1;
+[unknown result because it is related to issue#5790]
 create table t1(a int, b varchar(20), unique key(a, b));
+[unknown result because it is related to issue#5790]
 insert into t1 values(1, '2');
+[unknown result because it is related to issue#5790]
 insert into t1 values(1, '3');
+[unknown result because it is related to issue#5790]
 insert into t1 values(2, '2');
+[unknown result because it is related to issue#5790]
 insert into t1 values(2, '3');
+[unknown result because it is related to issue#5790]
 select * from t1;
-a    b
-1    2
-1    3
-2    2
-2    3
+[unknown result because it is related to issue#5790]
 update t1 set a = 2 where a = 1;
-tae data: duplicate
+[unknown result because it is related to issue#5790]
 update t1 set a = null where a = 1;
+[unknown result because it is related to issue#5790]
 drop table if exists t1;
 create table t1(a int, b int, c datetime on update CURRENT_TIMESTAMP);
 insert into t1(a) values(1);
 update t1 set a = 2 where a = 1;
 select c is not null from t1;
-c is not null
+➤ c is not null[-7,1,0]  𝄀
 1
 drop table if exists t1;
 create table t1 (a int primary key, b int);
 insert into t1 values (1,100);
 select b from t1 where a = 1 for update;
-b
+➤ b[4,32,0]  𝄀
 100
 drop database if exists db1;
 create database db1;
@@ -316,14 +336,17 @@ create database db2;
 use db2;
 insert into db1.t1 values (1,1);
 select * from db1.t1;
-a    b
-1    1
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1
 update db1.t1 set b = 2 where a = 1;
 select * from db1.t1;
-a    b
-1    2
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  2
 delete from db1.t1;
 select * from db1.t1;
-a    b
+➤ a[4,32,0]  ¦  b[4,32,0]
+select count(*) from db1.t1;
+➤ count(*)[-5,64,0]  𝄀
+0
 drop database if exists db1;
 drop database if exists db2;

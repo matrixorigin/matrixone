@@ -16,6 +16,7 @@ package bloomfilter
 
 import (
 	"bytes"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -25,20 +26,63 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
+// Clean releases all resources of the bloom filter.
 func (bf *BloomFilter) Clean() {
-	bf.bitmap.Reset()
-	bf.hashSeed = nil
+	if bf.shared != nil {
+		bf.shared.bitmap.Reset()
+		bf.shared.hashSeed = nil
+	}
+	bf.shared = nil
 	bf.keys = nil
 	bf.states = nil
 	bf.vals = nil
 	bf.addVals = nil
 }
 
+// NewHandle creates a new BloomFilter handle that shares the underlying data
+// but has its own scratch buffers for thread-safe concurrent testing.
+func (bf *BloomFilter) NewHandle() *BloomFilter {
+	if bf == nil || bf.shared == nil {
+		return nil
+	}
+	atomic.AddInt32(&bf.shared.refCount, 1)
+
+	seedCount := len(bf.shared.hashSeed)
+	newBF := &BloomFilter{
+		shared:    bf.shared,
+		valLength: bf.valLength,
+		keys:      make([][]byte, hashmap.UnitLimit),
+		states:    make([][3]uint64, hashmap.UnitLimit),
+		vals:      make([][]uint64, hashmap.UnitLimit),
+		addVals:   make([]uint64, hashmap.UnitLimit*3*seedCount),
+	}
+	for j := 0; j < hashmap.UnitLimit; j++ {
+		newBF.vals[j] = make([]uint64, seedCount*3)
+	}
+	return newBF
+}
+
+// Free decrements the reference count of the shared data and cleans up if it reaches zero.
+func (bf *BloomFilter) Free() {
+	if bf == nil || bf.shared == nil {
+		return
+	}
+	if atomic.AddInt32(&bf.shared.refCount, -1) == 0 {
+		bf.Clean()
+	} else {
+		bf.shared = nil
+		bf.keys = nil
+		bf.states = nil
+		bf.vals = nil
+		bf.addVals = nil
+	}
+}
+
 func (bf *BloomFilter) Add(v *vector.Vector) {
 	length := v.Length()
-	bitSize := uint64(bf.bitmap.Len())
+	bitSize := uint64(bf.shared.bitmap.Len())
 	step := hashmap.UnitLimit
-	lastSeed := len(bf.hashSeed) - 1
+	lastSeed := len(bf.shared.hashSeed) - 1
 
 	var i, j, n, k, idx int
 	getIdxVal := func(v uint64) uint64 {
@@ -48,8 +92,6 @@ func (bf *BloomFilter) Add(v *vector.Vector) {
 		return v
 	}
 
-	// There is no question of correctness if no distinction is made.
-	// However, there is an unacceptable slowdown in calling the Add method.
 	for i = 0; i < length; i += step {
 		n = length - i
 		if n > step {
@@ -59,7 +101,7 @@ func (bf *BloomFilter) Add(v *vector.Vector) {
 
 		idx = 0
 		for k = 0; k < lastSeed; k++ {
-			hashtable.BytesBatchGenHashStatesWithSeed(&bf.keys[0], &bf.states[0], n, bf.hashSeed[k])
+			hashtable.BytesBatchGenHashStatesWithSeed(&bf.keys[0], &bf.states[0], n, bf.shared.hashSeed[k])
 			for j = 0; j < n; j++ {
 				bf.addVals[idx] = getIdxVal(bf.states[j][0])
 				idx++
@@ -69,7 +111,7 @@ func (bf *BloomFilter) Add(v *vector.Vector) {
 				idx++
 			}
 		}
-		hashtable.BytesBatchGenHashStatesWithSeed(&bf.keys[0], &bf.states[0], n, bf.hashSeed[lastSeed])
+		hashtable.BytesBatchGenHashStatesWithSeed(&bf.keys[0], &bf.states[0], n, bf.shared.hashSeed[lastSeed])
 		for j = 0; j < n; j++ {
 			bf.addVals[idx] = getIdxVal(bf.states[j][0])
 			idx++
@@ -79,7 +121,7 @@ func (bf *BloomFilter) Add(v *vector.Vector) {
 			idx++
 			bf.keys[j] = bf.keys[j][:0]
 		}
-		bf.bitmap.AddMany(bf.addVals[:idx])
+		bf.shared.bitmap.AddMany(bf.addVals[:idx])
 	}
 }
 
@@ -88,14 +130,57 @@ func (bf *BloomFilter) Test(v *vector.Vector, callBack func(bool, int)) {
 		exist := true
 		vals := bf.vals[idx]
 		for j := 0; j < bf.valLength; j++ {
-			exist = bf.bitmap.Contains(vals[j])
+			exist = bf.shared.bitmap.Contains(vals[j])
 			if !exist {
 				break
 			}
 		}
 		callBack(exist, beginIdx+idx)
-	},
-	)
+	})
+}
+
+// TestRow tests if a single row might be in the bloom filter.
+func (bf *BloomFilter) TestRow(v *vector.Vector, row int) bool {
+	if row < 0 || row >= v.Length() {
+		return false
+	}
+
+	bf.keys[0] = bf.keys[0][:0]
+	encodeHashKeys(bf.keys[:1], v, row, 1)
+
+	bitSize := uint64(bf.shared.bitmap.Len())
+	lastSeed := len(bf.shared.hashSeed) - 1
+
+	getIdxVal := func(v uint64) uint64 {
+		if bitSize == 0 || v < bitSize {
+			return v
+		} else {
+			return v % bitSize
+		}
+	}
+
+	for k := 0; k < lastSeed; k++ {
+		hashtable.BytesBatchGenHashStatesWithSeed(&bf.keys[0], &bf.states[0], 1, bf.shared.hashSeed[k])
+		idx := k * 3
+		bf.vals[0][idx] = getIdxVal(bf.states[0][0])
+		bf.vals[0][idx+1] = getIdxVal(bf.states[0][1])
+		bf.vals[0][idx+2] = getIdxVal(bf.states[0][2])
+	}
+	hashtable.BytesBatchGenHashStatesWithSeed(&bf.keys[0], &bf.states[0], 1, bf.shared.hashSeed[lastSeed])
+	idx := lastSeed * 3
+	bf.vals[0][idx] = getIdxVal(bf.states[0][0])
+	bf.vals[0][idx+1] = getIdxVal(bf.states[0][1])
+	bf.vals[0][idx+2] = getIdxVal(bf.states[0][2])
+
+	bf.keys[0] = bf.keys[0][:0]
+
+	vals := bf.vals[0]
+	for j := 0; j < bf.valLength; j++ {
+		if !bf.shared.bitmap.Contains(vals[j]) {
+			return false
+		}
+	}
+	return true
 }
 
 func (bf *BloomFilter) TestAndAdd(v *vector.Vector, callBack func(bool, int)) {
@@ -105,34 +190,30 @@ func (bf *BloomFilter) TestAndAdd(v *vector.Vector, callBack func(bool, int)) {
 		vals := bf.vals[idx]
 		for j := 0; j < bf.valLength; j++ {
 			if exist {
-				contains = bf.bitmap.Contains(vals[j])
+				contains = bf.shared.bitmap.Contains(vals[j])
 				if !contains {
-					bf.bitmap.Add(vals[j])
+					bf.shared.bitmap.Add(vals[j])
 					exist = false
 				}
 			} else {
-				bf.bitmap.Add(vals[j])
+				bf.shared.bitmap.Add(vals[j])
 			}
 		}
 		callBack(exist, beginIdx+idx)
 	})
-
 }
 
-// Marshal encodes BloomFilter into byte sequence for transmission via runtime filter message within the same CN.
-// Encoding format:
-//
-//	[seedCount:uint32][seeds...:uint64][bitmapLen:uint32][bitmapBytes...]
+// Marshal encodes BloomFilter into byte sequence.
 func (bf *BloomFilter) Marshal() ([]byte, error) {
 	var buf bytes.Buffer
 
-	seedCount := uint32(len(bf.hashSeed))
+	seedCount := uint32(len(bf.shared.hashSeed))
 	buf.Write(types.EncodeUint32(&seedCount))
 	for i := 0; i < int(seedCount); i++ {
-		buf.Write(types.EncodeUint64(&bf.hashSeed[i]))
+		buf.Write(types.EncodeUint64(&bf.shared.hashSeed[i]))
 	}
 
-	bmBytes := bf.bitmap.Marshal()
+	bmBytes := bf.shared.bitmap.Marshal()
 	bmLen := uint32(len(bmBytes))
 	buf.Write(types.EncodeUint32(&bmLen))
 	buf.Write(bmBytes)
@@ -140,8 +221,7 @@ func (bf *BloomFilter) Marshal() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// Unmarshal restores BloomFilter from byte sequence.
-// Initializes internal structures (keys / states / vals / addVals) based on encoded seedCount and bitmap.
+// Unmarshal restores BloomFilter from byte sequence and initializes internal handles.
 func (bf *BloomFilter) Unmarshal(data []byte) error {
 	if len(data) < 4 {
 		return moerr.NewInternalErrorNoCtx("invalid bloomfilter data")
@@ -175,30 +255,29 @@ func (bf *BloomFilter) Unmarshal(data []byte) error {
 	var bm bitmap.Bitmap
 	bm.Unmarshal(data[:bmLen])
 
-	// Reinitialize internal auxiliary structures for subsequent Test/TestAndAdd
-	vals := make([][]uint64, hashmap.UnitLimit)
-	keys := make([][]byte, hashmap.UnitLimit)
-	states := make([][3]uint64, hashmap.UnitLimit)
-	for j := 0; j < hashmap.UnitLimit; j++ {
-		vals[j] = make([]uint64, seedCount*3)
+	bf.shared = &sharedData{
+		bitmap:   bm,
+		hashSeed: hashSeed,
+		refCount: 1,
 	}
 
-	bf.bitmap = bm
-	bf.hashSeed = hashSeed
-	bf.keys = keys
-	bf.states = states
-	bf.vals = vals
+	bf.keys = make([][]byte, hashmap.UnitLimit)
+	bf.states = make([][3]uint64, hashmap.UnitLimit)
+	bf.vals = make([][]uint64, hashmap.UnitLimit)
+	for j := 0; j < hashmap.UnitLimit; j++ {
+		bf.vals[j] = make([]uint64, seedCount*3)
+	}
 	bf.addVals = make([]uint64, hashmap.UnitLimit*3*seedCount)
 	bf.valLength = len(hashSeed) * 3
 
 	return nil
 }
 
-// for an incoming vector, compute the hash value of each of its elements, and manipulate it with func tf.fn
+// handle computes the hash value of each element and executes the callback.
 func (bf *BloomFilter) handle(v *vector.Vector, callBack func(int, int)) {
 	length := v.Length()
-	bitSize := uint64(bf.bitmap.Len())
-	lastSeed := len(bf.hashSeed) - 1
+	bitSize := uint64(bf.shared.bitmap.Len())
+	lastSeed := len(bf.shared.hashSeed) - 1
 	step := hashmap.UnitLimit
 
 	var i, j, n, k, idx int
@@ -210,10 +289,6 @@ func (bf *BloomFilter) handle(v *vector.Vector, callBack func(int, int)) {
 		}
 	}
 
-	// The reason we need to distinguish whether an operator is an Add or not is
-	// because it determines whether we can call tf.fn more efficiently or not.
-	//
-	// There is no question of correctness if no distinction is made. However, there is an unacceptable slowdown in calling the Add method.
 	for i = 0; i < length; i += step {
 		n = length - i
 		if n > step {
@@ -223,15 +298,15 @@ func (bf *BloomFilter) handle(v *vector.Vector, callBack func(int, int)) {
 		encodeHashKeys(bf.keys, v, i, n)
 
 		for k = 0; k < lastSeed; k++ {
-			hashtable.BytesBatchGenHashStatesWithSeed(&bf.keys[0], &bf.states[0], n, bf.hashSeed[k])
+			hashtable.BytesBatchGenHashStatesWithSeed(&bf.keys[0], &bf.states[0], n, bf.shared.hashSeed[k])
 			idx = k * 3
-			for j = 0; j < n; j++ {
+			for j := 0; j < n; j++ {
 				bf.vals[j][idx] = getIdxVal(bf.states[j][0])
 				bf.vals[j][idx+1] = getIdxVal(bf.states[j][1])
 				bf.vals[j][idx+2] = getIdxVal(bf.states[j][2])
 			}
 		}
-		hashtable.BytesBatchGenHashStatesWithSeed(&bf.keys[0], &bf.states[0], n, bf.hashSeed[lastSeed])
+		hashtable.BytesBatchGenHashStatesWithSeed(&bf.keys[0], &bf.states[0], n, bf.shared.hashSeed[lastSeed])
 		idx = lastSeed * 3
 		for j = 0; j < n; j++ {
 			bf.vals[j][idx] = getIdxVal(bf.states[j][0])

@@ -385,8 +385,8 @@ func (de *TestDisttaeEngine) SubscribeTable(
 	dbName, tblName string,
 	setSubscribed bool,
 ) (err error) {
-	ticker := time.NewTicker(time.Second)
-	timeout := 5
+	ticker := time.NewTicker(time.Millisecond * 5)
+	timeout := 1000
 
 	for range ticker.C {
 		if timeout <= 0 {

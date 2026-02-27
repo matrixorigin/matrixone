@@ -1,0 +1,145 @@
+select * from table_stats('table_func_table_stats.no_exist_table') g;
+-- @regex("not found", true)
+internal error: table table_func_table_stats.no_exist_table not found: no such table table_func_table_stats.no_exist_table
+use table_func_table_stats;
+drop table if exists t1;
+create table t1(a int, b varchar(100), c float);
+insert into t1 values(1, 'hello', 1.1);
+insert into t1 values(2, 'world', 2.2);
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
+select count(*) from t1;
+➤ count(*)[-5,64,0]  𝄀
+2048
+select mo_ctl('dn', 'flush', 'table_func_table_stats.t1');
+➤ mo_ctl(dn, flush, table_func_table_stats.t1)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select sleep(1);
+➤ sleep(1)[-6,8,0]  𝄀
+0
+select * from table_stats('table_func_table_stats.t1') g;
+➤ table_name[12,-1,0]  ¦  table_cnt[8,54,0]  ¦  block_number[-5,64,0]  ¦  approx_object_number[-5,64,0]  ¦  accurate_object_number[-5,64,0]  ¦  sampling_ratio[8,54,0]  ¦  ndv_map[12,0,0]  ¦  min_val_map[12,0,0]  ¦  max_val_map[12,0,0]  ¦  data_type_map[12,0,0]  ¦  null_cnt_map[12,0,0]  ¦  size_map[12,0,0]  ¦  shuffle_range_map[12,0,0]  𝄀
+table_func_table_stats.t1  ¦  2048.0  ¦  1  ¦  2  ¦  1  ¦  1.0  ¦  {
+  "__mo_fake_pk_col": 2048,
+  "a": 2,
+  "b": 2,
+  "c": 2
+}  ¦  {
+  "__mo_fake_pk_col": 1,
+  "a": 1,
+  "b": 7522537965566820000,
+  "c": 1.100000023841858
+}  ¦  {
+  "__mo_fake_pk_col": 2048,
+  "a": 2,
+  "b": 8606223222788063000,
+  "c": 2.200000047683716
+}  ¦  {
+  "__mo_fake_pk_col": "BIGINT UNSIGNED",
+  "a": "INT",
+  "b": "VARCHAR",
+  "c": "FLOAT"
+}  ¦  {
+  "__mo_fake_pk_col": 0,
+  "a": 0,
+  "b": 0,
+  "c": 0
+}  ¦  {
+  "__mo_fake_pk_col": 16422,
+  "a": 8230,
+  "b": 49190,
+  "c": 8230
+}  ¦  {}
+select table_name, sampling_ratio >= 0 from table_stats('table_func_table_stats.t1') g;
+➤ table_name[12,-1,0]  ¦  sampling_ratio >= 0[-7,1,0]  𝄀
+table_func_table_stats.t1  ¦  1
+select table_name, ndv_map is not null from table_stats('table_func_table_stats.t1') g;
+➤ table_name[12,-1,0]  ¦  ndv_map is not null[-7,1,0]  𝄀
+table_func_table_stats.t1  ¦  1
+select table_name, table_cnt, block_number from table_stats('table_func_table_stats.t1', 'refresh', 'full') g;
+➤ table_name[12,-1,0]  ¦  table_cnt[8,54,0]  ¦  block_number[-5,64,0]  𝄀
+table_func_table_stats.t1  ¦  2048.0  ¦  1
+drop table if exists t3;
+create table t3(x int, y varchar(50));
+select table_name, table_cnt, block_number, accurate_object_number from table_stats('table_func_table_stats.t3') g;
+➤ table_name[12,-1,0]  ¦  table_cnt[8,54,0]  ¦  block_number[-5,64,0]  ¦  accurate_object_number[-5,64,0]  𝄀
+table_func_table_stats.t3  ¦  0.0  ¦  0  ¦  0
+select table_name, table_cnt from table_stats('table_func_table_stats.t1') g;
+➤ table_name[12,-1,0]  ¦  table_cnt[8,54,0]  𝄀
+table_func_table_stats.t1  ¦  2048.0
+select table_name, table_cnt from table_stats('table_func_table_stats.t1', 'get') g;
+➤ table_name[12,-1,0]  ¦  table_cnt[8,54,0]  𝄀
+table_func_table_stats.t1  ¦  2048.0
+select table_name, table_cnt from table_stats('table_func_table_stats.t1', 'refresh') g;
+➤ table_name[12,-1,0]  ¦  table_cnt[8,54,0]  𝄀
+table_func_table_stats.t1  ¦  2048.0
+select table_name, table_cnt from table_stats('table_func_table_stats.t1', 'refresh', 'auto') g;
+➤ table_name[12,-1,0]  ¦  table_cnt[8,54,0]  𝄀
+table_func_table_stats.t1  ¦  2048.0
+select table_name, table_cnt from table_stats('table_func_table_stats.t1', 'refresh', 'full') g;
+➤ table_name[12,-1,0]  ¦  table_cnt[8,54,0]  𝄀
+table_func_table_stats.t1  ¦  2048.0
+select * from table_stats('table_func_table_stats.t1', 'refresh', 'invalid') g;
+-- @regex("invalid refresh mode", true)
+internal error: invalid refresh mode: invalid (must be 'auto' or 'full')
+select * from table_stats('table_func_table_stats.t1', 'invalid_cmd') g;
+-- @regex("unknown command", true)
+internal error: unknown command: invalid_cmd (supported: get, refresh, patch)
+select table_name, table_cnt, ndv_map from table_stats('table_func_table_stats.t1', 'patch', '{"table_cnt": 99999, "ndv_map": {"a": 1000}}') g;
+➤ table_name[12,-1,0]  ¦  table_cnt[8,54,0]  ¦  ndv_map[12,0,0]  𝄀
+table_func_table_stats.t1  ¦  99999.0  ¦  {
+  "__mo_fake_pk_col": 2048,
+  "a": 1000,
+  "b": 2,
+  "c": 2
+}
+select table_name, table_cnt from table_stats('table_func_table_stats.t1') g;
+➤ table_name[12,-1,0]  ¦  table_cnt[8,54,0]  𝄀
+table_func_table_stats.t1  ¦  99999.0
+select table_name, table_cnt, block_number from table_stats('table_func_table_stats.t1', 'patch', '{"table_cnt": 50000, "block_number": 100}') g;
+➤ table_name[12,-1,0]  ¦  table_cnt[8,54,0]  ¦  block_number[-5,64,0]  𝄀
+table_func_table_stats.t1  ¦  50000.0  ¦  100
+select * from table_stats('table_func_table_stats.t1', 'patch') g;
+-- @regex("patch command requires args", true)
+internal error: patch command requires args
+select * from table_stats('table_func_table_stats.t1', 'patch', 'invalid json') g;
+-- @regex("invalid patch args", true)
+internal error: invalid patch args: invalid character 'i' looking for beginning of value
+select table_name, table_cnt, sampling_ratio from table_stats('table_func_table_stats.t1') g;
+➤ table_name[12,-1,0]  ¦  table_cnt[8,54,0]  ¦  sampling_ratio[8,54,0]  𝄀
+table_func_table_stats.t1  ¦  50000.0  ¦  1.0
+select table_name, ndv_map, min_val_map from table_stats('table_func_table_stats.t1') g;
+➤ table_name[12,-1,0]  ¦  ndv_map[12,0,0]  ¦  min_val_map[12,0,0]  𝄀
+table_func_table_stats.t1  ¦  {
+  "__mo_fake_pk_col": 2048,
+  "a": 1000,
+  "b": 2,
+  "c": 2
+}  ¦  {
+  "__mo_fake_pk_col": 1,
+  "a": 1,
+  "b": 7522537965566820000,
+  "c": 1.100000023841858
+}
+select table_name, table_cnt >= 0 from table_stats('mo_catalog.mo_tables') g;
+➤ table_name[12,-1,0]  ¦  table_cnt >= 0[-7,1,0]  𝄀
+mo_catalog.mo_tables  ¦  1
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;

@@ -4,164 +4,176 @@ use d1;
 drop table if exists t1;
 create table t1(c1 bigint primary key, c2 varchar(64) not null);
 insert into t1 select result, result%10 from generate_series(1,100000)g;
+select count(*) from t1;
+➤ count(*)[-5,64,0]  𝄀
+100000
 select sum(c1),c2 from t1 group by c2 order by c2;
-sum(c1)    c2
-500050000    0
-499960000    1
-499970000    2
-499980000    3
-499990000    4
-500000000    5
-500010000    6
-500020000    7
-500030000    8
-500040000    9
+➤ sum(c1)[-5,64,0]  ¦  c2[12,-1,0]  𝄀
+500050000  ¦  0  𝄀
+499960000  ¦  1  𝄀
+499970000  ¦  2  𝄀
+499980000  ¦  3  𝄀
+499990000  ¦  4  𝄀
+500000000  ¦  5  𝄀
+500010000  ¦  6  𝄀
+500020000  ¦  7  𝄀
+500030000  ¦  8  𝄀
+500040000  ¦  9
 delete from t1 where c2=1;
+select count(*) from t1;
+➤ count(*)[-5,64,0]  𝄀
+90000
 insert into t1 select result, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' from generate_series(100001,200000)g;
+select count(*) from t1;
+➤ count(*)[-5,64,0]  𝄀
+190000
 insert into t1 select result, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' from generate_series(200001,300000)g;
+select count(*) from t1;
+➤ count(*)[-5,64,0]  𝄀
+290000
 select sum(c1),c2 from t1 group by c2 order by c2;
-sum(c1)    c2
-500050000    0
-499970000    2
-499980000    3
-499990000    4
-500000000    5
-500010000    6
-500020000    7
-500030000    8
-500040000    9
-15000050000    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-25000050000    bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+➤ sum(c1)[-5,64,0]  ¦  c2[12,-1,0]  𝄀
+500050000  ¦  0  𝄀
+499970000  ¦  2  𝄀
+499980000  ¦  3  𝄀
+499990000  ¦  4  𝄀
+500000000  ¦  5  𝄀
+500010000  ¦  6  𝄀
+500020000  ¦  7  𝄀
+500030000  ¦  8  𝄀
+500040000  ¦  9  𝄀
+15000050000  ¦  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  𝄀
+25000050000  ¦  bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 drop table if exists t1;
 create table t1(c1 bigint, c2 varchar(64)) cluster by c1;
 insert into t1 select result, result%5 from generate_series(1,100000)g;
 select sum(c1),c2 from t1 group by c2 order by c2;
-sum(c1)    c2
-1000050000    0
-999970000    1
-999990000    2
-1000010000    3
-1000030000    4
+➤ sum(c1)[-5,64,0]  ¦  c2[12,-1,0]  𝄀
+1000050000  ¦  0  𝄀
+999970000  ¦  1  𝄀
+999990000  ¦  2  𝄀
+1000010000  ¦  3  𝄀
+1000030000  ¦  4
 insert into t1 select result, null from generate_series(1,100000)g;
 select sum(c1),c2 from t1 group by c2 order by c2;
-sum(c1)    c2
-5000050000    null
-1000050000    0
-999970000    1
-999990000    2
-1000010000    3
-1000030000    4
+➤ sum(c1)[-5,64,0]  ¦  c2[12,-1,0]  𝄀
+5000050000  ¦  null  𝄀
+1000050000  ¦  0  𝄀
+999970000  ¦  1  𝄀
+999990000  ¦  2  𝄀
+1000010000  ¦  3  𝄀
+1000030000  ¦  4
 delete from t1 where c2=1;
 select sum(c1),c2 from t1 group by c2 order by c2;
-sum(c1)    c2
-5000050000    null
-1000050000    0
-999990000    2
-1000010000    3
-1000030000    4
+➤ sum(c1)[-5,64,0]  ¦  c2[12,-1,0]  𝄀
+5000050000  ¦  null  𝄀
+1000050000  ¦  0  𝄀
+999990000  ¦  2  𝄀
+1000010000  ¦  3  𝄀
+1000030000  ¦  4
 insert into t1 select result, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' from generate_series(100001,200000)g;
 insert into t1 select result, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' from generate_series(200001,300000)g;
 select sum(c1),c2 from t1 group by c2 order by c2;
-sum(c1)    c2
-5000050000    null
-1000050000    0
-999990000    2
-1000010000    3
-1000030000    4
-15000050000    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-25000050000    bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+➤ sum(c1)[-5,64,0]  ¦  c2[12,-1,0]  𝄀
+5000050000  ¦  null  𝄀
+1000050000  ¦  0  𝄀
+999990000  ¦  2  𝄀
+1000010000  ¦  3  𝄀
+1000030000  ¦  4  𝄀
+15000050000  ¦  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  𝄀
+25000050000  ¦  bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 drop table if exists t1;
 create table t1(c1 bigint primary key, c2 varchar(64) not null, c3 varchar(64) not null);
 insert into t1 select result, result%3, result %4 from generate_series(1,100000)g;
 select sum(c1),c2,c3 from t1 group by c2,c3 order by c2,c3;
-sum(c1)    c2    c3
-416683332    0    0
-416658333    0    1
-416633334    0    2
-416708334    0    3
-416716668    1    0
-416691666    1    1
-416666666    1    2
-416641667    1    3
-416650000    2    0
-416625001    2    1
-416700000    2    2
-416674999    2    3
+➤ sum(c1)[-5,64,0]  ¦  c2[12,-1,0]  ¦  c3[12,-1,0]  𝄀
+416683332  ¦  0  ¦  0  𝄀
+416658333  ¦  0  ¦  1  𝄀
+416633334  ¦  0  ¦  2  𝄀
+416708334  ¦  0  ¦  3  𝄀
+416716668  ¦  1  ¦  0  𝄀
+416691666  ¦  1  ¦  1  𝄀
+416666666  ¦  1  ¦  2  𝄀
+416641667  ¦  1  ¦  3  𝄀
+416650000  ¦  2  ¦  0  𝄀
+416625001  ¦  2  ¦  1  𝄀
+416700000  ¦  2  ¦  2  𝄀
+416674999  ¦  2  ¦  3
 delete from t1 where c2=1;
 insert into t1 select result, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','a' from generate_series(100001,200000)g;
 insert into t1 select result, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','b' from generate_series(200001,300000)g;
 select sum(c1),c2,c3 from t1 group by c2,c3 order by c2,c3;
-sum(c1)    c2    c3
-416683332    0    0
-416658333    0    1
-416633334    0    2
-416708334    0    3
-416650000    2    0
-416625001    2    1
-416700000    2    2
-416674999    2    3
-15000050000    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa    a
-25000050000    bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb    b
+➤ sum(c1)[-5,64,0]  ¦  c2[12,-1,0]  ¦  c3[12,-1,0]  𝄀
+416683332  ¦  0  ¦  0  𝄀
+416658333  ¦  0  ¦  1  𝄀
+416633334  ¦  0  ¦  2  𝄀
+416708334  ¦  0  ¦  3  𝄀
+416650000  ¦  2  ¦  0  𝄀
+416625001  ¦  2  ¦  1  𝄀
+416700000  ¦  2  ¦  2  𝄀
+416674999  ¦  2  ¦  3  𝄀
+15000050000  ¦  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  ¦  a  𝄀
+25000050000  ¦  bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  ¦  b
 drop table if exists t1;
 create table t1(c1 bigint, c2 varchar(64), c3 varchar(64)) cluster by c1;
 insert into t1 select result, result%4, result%3 from generate_series(1,100000)g;
 select sum(c1),c2,c3 from t1 group by c2,c3 order by c2,c3;
-sum(c1)    c2    c3
-416683332    0    0
-416716668    0    1
-416650000    0    2
-416658333    1    0
-416691666    1    1
-416625001    1    2
-416633334    2    0
-416666666    2    1
-416700000    2    2
-416708334    3    0
-416641667    3    1
-416674999    3    2
+➤ sum(c1)[-5,64,0]  ¦  c2[12,-1,0]  ¦  c3[12,-1,0]  𝄀
+416683332  ¦  0  ¦  0  𝄀
+416716668  ¦  0  ¦  1  𝄀
+416650000  ¦  0  ¦  2  𝄀
+416658333  ¦  1  ¦  0  𝄀
+416691666  ¦  1  ¦  1  𝄀
+416625001  ¦  1  ¦  2  𝄀
+416633334  ¦  2  ¦  0  𝄀
+416666666  ¦  2  ¦  1  𝄀
+416700000  ¦  2  ¦  2  𝄀
+416708334  ¦  3  ¦  0  𝄀
+416641667  ¦  3  ¦  1  𝄀
+416674999  ¦  3  ¦  2
 insert into t1 select result, null, null from generate_series(1,100000)g;
 select sum(c1),c2,c3 from t1 group by c2,c3 order by c2,c3;
-sum(c1)    c2    c3
-5000050000    null    null
-416683332    0    0
-416716668    0    1
-416650000    0    2
-416658333    1    0
-416691666    1    1
-416625001    1    2
-416633334    2    0
-416666666    2    1
-416700000    2    2
-416708334    3    0
-416641667    3    1
-416674999    3    2
+➤ sum(c1)[-5,64,0]  ¦  c2[12,-1,0]  ¦  c3[12,-1,0]  𝄀
+5000050000  ¦  null  ¦  null  𝄀
+416683332  ¦  0  ¦  0  𝄀
+416716668  ¦  0  ¦  1  𝄀
+416650000  ¦  0  ¦  2  𝄀
+416658333  ¦  1  ¦  0  𝄀
+416691666  ¦  1  ¦  1  𝄀
+416625001  ¦  1  ¦  2  𝄀
+416633334  ¦  2  ¦  0  𝄀
+416666666  ¦  2  ¦  1  𝄀
+416700000  ¦  2  ¦  2  𝄀
+416708334  ¦  3  ¦  0  𝄀
+416641667  ¦  3  ¦  1  𝄀
+416674999  ¦  3  ¦  2
 delete from t1 where c2=1;
 select sum(c1),c2,c3 from t1 group by c2,c3 order by c2,c3;
-sum(c1)    c2    c3
-5000050000    null    null
-416683332    0    0
-416716668    0    1
-416650000    0    2
-416633334    2    0
-416666666    2    1
-416700000    2    2
-416708334    3    0
-416641667    3    1
-416674999    3    2
+➤ sum(c1)[-5,64,0]  ¦  c2[12,-1,0]  ¦  c3[12,-1,0]  𝄀
+5000050000  ¦  null  ¦  null  𝄀
+416683332  ¦  0  ¦  0  𝄀
+416716668  ¦  0  ¦  1  𝄀
+416650000  ¦  0  ¦  2  𝄀
+416633334  ¦  2  ¦  0  𝄀
+416666666  ¦  2  ¦  1  𝄀
+416700000  ¦  2  ¦  2  𝄀
+416708334  ¦  3  ¦  0  𝄀
+416641667  ¦  3  ¦  1  𝄀
+416674999  ¦  3  ¦  2
 insert into t1 select result, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','a' from generate_series(100001,200000)g;
 insert into t1 select result, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','b' from generate_series(200001,300000)g;
 select sum(c1),c2,c3 from t1 group by c2,c3 order by c2,c3;
-sum(c1)    c2    c3
-5000050000    null    null
-416683332    0    0
-416716668    0    1
-416650000    0    2
-416633334    2    0
-416666666    2    1
-416700000    2    2
-416708334    3    0
-416641667    3    1
-416674999    3    2
-15000050000    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa    a
-25000050000    bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb    b
+➤ sum(c1)[-5,64,0]  ¦  c2[12,-1,0]  ¦  c3[12,-1,0]  𝄀
+5000050000  ¦  null  ¦  null  𝄀
+416683332  ¦  0  ¦  0  𝄀
+416716668  ¦  0  ¦  1  𝄀
+416650000  ¦  0  ¦  2  𝄀
+416633334  ¦  2  ¦  0  𝄀
+416666666  ¦  2  ¦  1  𝄀
+416700000  ¦  2  ¦  2  𝄀
+416708334  ¦  3  ¦  0  𝄀
+416641667  ¦  3  ¦  1  𝄀
+416674999  ¦  3  ¦  2  𝄀
+15000050000  ¦  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  ¦  a  𝄀
+25000050000  ¦  bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  ¦  b
 drop database if exists d1;

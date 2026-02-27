@@ -71,6 +71,9 @@ type MOTracer struct {
 // but also trigger profile dump specify by `WithProfileGoroutine()`, `WithProfileHeap()`, `WithProfileThreadCreate()`,
 // `WithProfileAllocs()`, `WithProfileBlock()`, `WithProfileMutex()`, `WithProfileCpuSecs()`, `WithProfileTraceSecs()` SpanOption.
 func (t *MOTracer) Start(ctx context.Context, name string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	// First check if trace is enabled at provider level (fast path, no allocation)
 	if !t.provider.IsEnable() {
 		return ctx, trace.NoopSpan{}

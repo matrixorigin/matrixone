@@ -122,6 +122,10 @@ select count(*) from (select a, b, c from t group by a, b, c) tmptt;
 select sum(a), max(c), avg(d), avg(f) from (select a, c, avg(d) as d, avg(f) as f from t group by a, c) tmptt;
 
 select count(a), sum(d), sum(f) from (
+select count(*), a, sum(d) as d, sum(f) as f from t group by a
+) tmptt;
+
+select count(a), sum(d), sum(f) from (
 select count(*), a, sum(distinct d) d, sum(distinct f) f from t where a < 10000 group by a
 ) tmptt;
 

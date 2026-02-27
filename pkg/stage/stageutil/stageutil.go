@@ -331,3 +331,91 @@ func StageListWithPattern(service string, pattern string, proc *process.Process)
 	}
 	return fileList, nil
 }
+
+func DeleteStageFiles(ctx context.Context, proc *process.Process, stagePath string, ifExists bool) (int, error) {
+	if len(stagePath) == 0 {
+		return 0, moerr.NewInvalidInput(ctx, "stage file path is empty")
+	}
+
+	procCtx := *proc
+	procCtx.Ctx = ctx
+
+	s, err := UrlToStageDef(stagePath, &procCtx)
+	if err != nil {
+		return 0, err
+	}
+
+	fspath, query, err := s.ToPath()
+	if err != nil {
+		return 0, err
+	}
+	if query != "" {
+		return 0, moerr.NewInvalidInput(ctx, "stage file path does not support query parameters")
+	}
+
+	idx := strings.LastIndex(fspath, fileservice.ServiceNameSeparator)
+	service := ""
+	filePattern := fspath
+	if idx != -1 {
+		service = fspath[:idx]
+		filePattern = fspath[idx+1:]
+	}
+
+	filePattern = path.Clean("/" + filePattern)
+	if filePattern == "/" {
+		return 0, moerr.NewInvalidInput(ctx, "stage file path is empty")
+	}
+	if strings.ContainsAny(filePattern, "*?") {
+		fileList, err := StageListWithPattern(service, filePattern, &procCtx)
+		if err != nil {
+			return 0, err
+		}
+		if len(fileList) == 0 {
+			if ifExists {
+				return 0, nil
+			}
+			return 0, moerr.NewFileNotFound(ctx, stagePath)
+		}
+		return deleteStageFileList(ctx, &procCtx, service, fileList, ifExists)
+	}
+
+	return deleteStageFile(ctx, &procCtx, service, filePattern, ifExists)
+}
+
+func deleteStageFileList(ctx context.Context, proc *process.Process, service string, fileList []string, ifExists bool) (int, error) {
+	deleted := 0
+	for _, filePath := range fileList {
+		count, err := deleteStageFile(ctx, proc, service, filePath, ifExists)
+		if err != nil {
+			return deleted, err
+		}
+		deleted += count
+	}
+	return deleted, nil
+}
+
+func deleteStageFile(ctx context.Context, proc *process.Process, service string, filePath string, ifExists bool) (int, error) {
+	fullPath := fileservice.JoinPath(service, filePath)
+	etlFS, targetPath, err := fileservice.GetForETL(ctx, proc.GetFileService(), fullPath)
+	if err != nil {
+		return 0, err
+	}
+	defer etlFS.Close(ctx)
+
+	_, err = etlFS.StatFile(ctx, targetPath)
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) && ifExists {
+			return 0, nil
+		}
+		return 0, err
+	}
+
+	if err := etlFS.Delete(ctx, targetPath); err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) && ifExists {
+			return 0, nil
+		}
+		return 0, err
+	}
+
+	return 1, nil
+}

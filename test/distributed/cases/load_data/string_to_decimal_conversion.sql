@@ -76,10 +76,8 @@ create table test_invalid(
     value decimal(10, 2)
 );
 
--- @bvt:issue#15626
-load data infile {'filepath'='$resources/load_data/string_to_decimal_invalid.parq', 'format'='parquet'} 
+load data infile {'filepath'='$resources/load_data/string_to_decimal_invalid.parq', 'format'='parquet'}
 into table test_invalid;
--- @bvt:issue
 
 -- Cleanup
 drop database test_string_to_decimal;

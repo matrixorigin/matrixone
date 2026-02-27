@@ -235,8 +235,11 @@ PRIMARY KEY (`col1`),
 fulltext(col5)
 );
 show create table test_table;
+set @old_sql_mode = @@sql_mode;
+set sql_mode = concat_ws(',', @@sql_mode, 'NO_AUTO_VALUE_ON_ZERO');
 load data infile '$resources/load_data/test_1.csv' into table test_table fields terminated by ',' parallel 'true';
 select * from test_table;
+set sql_mode = @old_sql_mode;
 drop table test_table;
 
 

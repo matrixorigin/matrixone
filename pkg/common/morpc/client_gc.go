@@ -31,6 +31,11 @@ const (
 	// This value is shared between client_gc.go and cfg.go.
 	DefaultGCIdleCheckInterval = time.Second
 
+	// DefaultGCInactiveCheckInterval is the interval for proactively removing
+	// explicitly closed (inactive) backends. Such backends are removed within
+	// this period instead of waiting for the normal idle timeout (e.g. 1 minute).
+	DefaultGCInactiveCheckInterval = 10 * time.Second
+
 	// DefaultGCChannelBufferSize is the default buffer size for GC task channels.
 	// Increased from 1024 to 4096 to reduce request drops in high-load scenarios.
 	DefaultGCChannelBufferSize = 4096
@@ -145,8 +150,9 @@ type clientGCManager struct {
 	logger  *zap.Logger
 
 	// Config values captured at creation time to avoid race conditions
-	gcIdleCheckInterval time.Duration
-	channelBufferSize   int
+	gcIdleCheckInterval     time.Duration
+	gcInactiveCheckInterval time.Duration
+	channelBufferSize       int
 
 	// Channels for coordinating GC tasks
 	gcInactiveC chan gcInactiveRequest
@@ -207,6 +213,7 @@ func newClientGCManager() *clientGCManager {
 		clients:                    make(map[*client]struct{}),
 		stopC:                      make(chan struct{}),
 		gcIdleCheckInterval:        interval,
+		gcInactiveCheckInterval:    DefaultGCInactiveCheckInterval,
 		channelBufferSize:          bufferSize,
 		gcInactiveC:                make(chan gcInactiveRequest, bufferSize),
 		createC:                    make(chan createRequest, bufferSize),
@@ -307,9 +314,10 @@ func (m *clientGCManager) triggerCreate(c *client, backend string) bool {
 	}
 }
 
-// runGCIdleLoop periodically closes idle backends for all registered clients.
-// It checks at the configured interval (default 1 second) to ensure timely cleanup
-// while avoiding excessive CPU usage.
+// runGCIdleLoop periodically closes idle backends for all registered clients,
+// and every gcInactiveCheckInterval (10s) also runs inactive cleanup so explicitly
+// closed backends are removed without waiting for the 1-minute idle timeout.
+// Uses a single goroutine: 1s tick for idle GC, 10s tick for inactive GC.
 //
 // Note: The check frequency is global, but each client's maxIdleDuration is still
 // used to determine if a backend should be GC'd. This means:
@@ -319,19 +327,40 @@ func (m *clientGCManager) triggerCreate(c *client, backend string) bool {
 func (m *clientGCManager) runGCIdleLoop() {
 	defer m.wg.Done()
 	m.logger.Debug("global GC idle loop started",
-		zap.Duration("check-interval", m.gcIdleCheckInterval))
+		zap.Duration("idle-check", m.gcIdleCheckInterval),
+		zap.Duration("inactive-check", m.gcInactiveCheckInterval))
 	defer m.logger.Debug("global GC idle loop stopped")
 
-	ticker := time.NewTicker(m.gcIdleCheckInterval)
-	defer ticker.Stop()
+	idleTicker := time.NewTicker(m.gcIdleCheckInterval)
+	inactiveTicker := time.NewTicker(m.gcInactiveCheckInterval)
+	defer idleTicker.Stop()
+	defer inactiveTicker.Stop()
 
 	for {
 		select {
 		case <-m.stopC:
 			return
-		case <-ticker.C:
+		case <-idleTicker.C:
 			m.doGCIdle()
+		case <-inactiveTicker.C:
+			m.doGCInactivePeriodic()
 		}
+	}
+}
+
+// doGCInactivePeriodic runs doRemoveInactiveAll for every registered client.
+// Removes explicitly closed (LastActiveTime == zero) backends per remote; does not
+// mix backends across different remotes (each remote has its own slice in backends map).
+func (m *clientGCManager) doGCInactivePeriodic() {
+	m.mu.RLock()
+	clients := make([]*client, 0, len(m.clients))
+	for c := range m.clients {
+		clients = append(clients, c)
+	}
+	m.mu.RUnlock()
+
+	for _, c := range clients {
+		c.doRemoveInactiveAll()
 	}
 }
 

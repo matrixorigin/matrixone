@@ -785,6 +785,8 @@ func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool) FunctionResultWra
 		return newResultFunc[float64](typ, mp)
 	case types.T_date:
 		return newResultFunc[types.Date](typ, mp)
+	case types.T_year:
+		return newResultFunc[types.MoYear](typ, mp)
 	case types.T_datetime:
 		return newResultFunc[types.Datetime](typ, mp)
 	case types.T_time:

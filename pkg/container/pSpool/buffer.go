@@ -78,8 +78,7 @@ func (b *spoolBuffer) putCacheID(mp *mpool.MPool, id uint32, bat *batch.Batch) {
 	bat.Vecs = bat.Vecs[:0]
 	bat.Attrs = bat.Attrs[:0]
 	bat.SetRowCount(0)
-	bat.ExtraBuf1 = nil
-	bat.ExtraBuf2 = nil
+	bat.ExtraBuf = nil
 
 	// put id into free list.
 	b.Lock()

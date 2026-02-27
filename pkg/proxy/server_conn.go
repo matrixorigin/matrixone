@@ -190,8 +190,8 @@ func (s *serverConn) HandleHandshake(
 	case <-ctx.Done():
 		logutil.Errorf("handshake to cn %s timeout %v, conn ID: %d goId:%d",
 			s.cnServer.addr, timeout, s.connID, goid.Get())
-		// Return a retryable error.
-		return nil, newConnectErr(moerr.AttachCause(ctx, context.DeadlineExceeded))
+		// Return a retryable error with timeout flag set.
+		return nil, newTimeoutConnectErr(moerr.AttachCause(ctx, context.DeadlineExceeded))
 	}
 }
 

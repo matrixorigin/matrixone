@@ -38,6 +38,9 @@ func (s *tempSession) GetTempTable(dbName, alias string) (string, bool) {
 func (s *tempSession) AddTempTable(string, string, string) {}
 func (s *tempSession) RemoveTempTable(string, string)      {}
 func (s *tempSession) RemoveTempTableByRealName(string)    {}
+func (s *tempSession) GetSqlModeNoAutoValueOnZero() (bool, bool) {
+	return false, false
+}
 
 func TestGetRelationByObjRefTempAlias(t *testing.T) {
 	ctrl := gomock.NewController(t)

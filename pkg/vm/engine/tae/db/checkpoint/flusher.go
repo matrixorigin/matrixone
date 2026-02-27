@@ -811,12 +811,14 @@ func (flusher *flushImpl) FlushTable(
 	if flush && (iarg == 0 || rand.Int63n(iarg) == 0) {
 		return moerr.NewInternalError(ctx, sarg)
 	}
+
 	makeRequest := func() *FlushRequest {
 		tree := flusher.sourcer.ScanInRangePruned(types.TS{}, ts)
 		tableTree := tree.GetTree().GetTable(tableID)
 		if tableTree == nil {
 			return nil
 		}
+
 		nTree := model.NewTree()
 		nTree.Tables[tableID] = tableTree
 		entry := logtail.NewDirtyTreeEntry(types.TS{}, ts, nTree)

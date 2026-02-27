@@ -123,13 +123,13 @@ func WithRunnerRetryInterval(interval time.Duration) RunnerOption {
 
 func WithHaKeeperClient(getClient func() util.HAKeeperClient) RunnerOption {
 	return func(r *taskRunner) {
-		r.getClient = getClient
+		r.hakeeper.getClient = getClient
 	}
 }
 
 func WithCnUUID(uuid string) RunnerOption {
 	return func(r *taskRunner) {
-		r.cnUUID = uuid
+		r.hakeeper.cnUUID = uuid
 	}
 }
 
@@ -182,8 +182,11 @@ type taskRunner struct {
 		heartbeatTimeout  time.Duration
 	}
 
-	getClient func() util.HAKeeperClient
-	cnUUID    string
+	hakeeper struct {
+		sync.RWMutex
+		getClient func() util.HAKeeperClient
+		cnUUID    string
+	}
 }
 
 // NewTaskRunner new task runner. The TaskRunner can be created by CN nodes and pull tasks from TaskService to

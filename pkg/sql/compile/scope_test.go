@@ -362,7 +362,7 @@ func TestCompileExternScanParallelReadWrite(t *testing.T) {
 		TableDef:   &plan.TableDef{},
 		ExternScan: &plan.ExternScan{},
 	}
-	filePath := fmt.Sprintf("%s/../../../test/distributed/resources/load_data/parallel_1.txt.gz", GetFilePath())
+	filePath := fmt.Sprintf("%s/../../../test/distributed/resources/load_data/parallel_1.txt", GetFilePath())
 	filePath = path.Clean("/" + filePath)
 	fileSize := []int64{int64(colexec.WriteS3Threshold) * 2}
 	_, err := testCompile.compileExternScanParallelReadWrite(n, param, []string{filePath}, fileSize, true)
@@ -373,6 +373,12 @@ func TestCompileExternScanParallelReadWrite(t *testing.T) {
 	fileSize = []int64{int64(colexec.WriteS3Threshold) * 3}
 	_, err = testCompile.compileExternScanParallelReadWrite(n, param, []string{filePath}, fileSize, false)
 	require.NoError(t, err)
+
+	// Compressed files should not be split for parallel read.
+	gzPath := fmt.Sprintf("%s/../../../test/distributed/resources/load_data/parallel_1.txt.gz", GetFilePath())
+	gzPath = path.Clean("/" + gzPath)
+	_, err = testCompile.compileExternScanParallelReadWrite(n, param, []string{gzPath}, fileSize, false)
+	require.Error(t, err)
 }
 
 func generateScopeWithRootOperator(proc *process.Process, operatorList []vm.OpType) *Scope {

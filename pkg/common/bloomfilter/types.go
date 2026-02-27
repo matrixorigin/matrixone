@@ -21,49 +21,68 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 )
 
-type BloomFilter struct {
+// sharedData holds the actual bloom filter data that can be shared among multiple handles.
+type sharedData struct {
 	bitmap   bitmap.Bitmap
 	hashSeed []uint64
+	refCount int32
+}
 
-	keys      [][]byte
-	states    [][3]uint64
-	vals      [][]uint64
+// BloomFilter is a handle to the bloom filter data. It contains private scratch buffers
+// to allow concurrent testing without locking.
+type BloomFilter struct {
+	shared    *sharedData
 	valLength int
 
-	addVals []uint64
+	// Private scratch buffers for vectorized operations
+	keys    [][]byte
+	states  [][3]uint64
+	vals    [][]uint64
+	addVals []uint64 // used for Add operations
+}
+
+// Valid returns true if the BloomFilter is initialized and usable.
+func (bf *BloomFilter) Valid() bool {
+	return bf != nil && bf.shared != nil
 }
 
 func New(rowCount int64, probability float64) BloomFilter {
 	bitSize, seedCount := computeMemAndHashCount(rowCount, probability)
 	hashSeed := make([]uint64, seedCount)
 	for i := 0; i < seedCount; i++ {
-		hashSeed[i] = rand.Uint64()
+		hashSeed[i] = uint64(rand.Int63())
 	}
 	bits := bitmap.Bitmap{}
 	bits.InitWithSize(bitSize)
 
-	vals := make([][]uint64, hashmap.UnitLimit)
-	keys := make([][]byte, hashmap.UnitLimit)
-	states := make([][3]uint64, hashmap.UnitLimit)
-	for j := 0; j < hashmap.UnitLimit; j++ {
-		vals[j] = make([]uint64, seedCount*3)
-	}
-
-	return BloomFilter{
+	shared := &sharedData{
 		bitmap:   bits,
 		hashSeed: hashSeed,
-
-		keys:      keys,
-		states:    states,
-		vals:      vals,
-		addVals:   make([]uint64, hashmap.UnitLimit*3*seedCount),
-		valLength: len(hashSeed) * 3,
+		refCount: 1,
 	}
+
+	bf := BloomFilter{
+		shared:    shared,
+		valLength: seedCount * 3,
+		keys:      make([][]byte, hashmap.UnitLimit),
+		states:    make([][3]uint64, hashmap.UnitLimit),
+		vals:      make([][]uint64, hashmap.UnitLimit),
+		addVals:   make([]uint64, hashmap.UnitLimit*3*seedCount),
+	}
+
+	for j := 0; j < hashmap.UnitLimit; j++ {
+		bf.vals[j] = make([]uint64, seedCount*3)
+	}
+
+	return bf
 }
 
 func (bf *BloomFilter) Reset() {
-	end := uint64(bf.bitmap.Len())
-	bf.bitmap.RemoveRange(0, end)
+	if bf.shared == nil {
+		return
+	}
+	end := uint64(bf.shared.bitmap.Len())
+	bf.shared.bitmap.RemoveRange(0, end)
 
 	for i := range bf.keys {
 		bf.keys[i] = nil

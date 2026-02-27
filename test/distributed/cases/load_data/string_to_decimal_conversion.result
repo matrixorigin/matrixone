@@ -71,5 +71,5 @@ value decimal(10, 2)
 );
 load data infile {'filepath'='$resources/load_data/string_to_decimal_invalid.parq', 'format'='parquet'}
 into table test_invalid;
-internal error: failed to parse 'abc' as DECIMAL(10,2): invalid input: abc beyond the range, can't be converted to Decimal64(10,2).
+invalid input: abc beyond the range, can't be converted to Decimal64(10,2).
 drop database test_string_to_decimal;

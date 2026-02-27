@@ -263,6 +263,9 @@ var (
 		input:  "show variables like 'sql_mode'",
 		output: "show variables like sql_mode",
 	}, {
+		input:  "show global variables like 'interactive_timeout'",
+		output: "show global variables like interactive_timeout",
+	}, {
 		input:  "show index from t1 from db",
 		output: "show index from t1 from db",
 	}, {
@@ -2008,6 +2011,18 @@ var (
 			input:  `select json_extract(a, '$.b') from t`,
 			output: `select json_extract(a, $.b) from t`,
 		}, {
+			input:  `select JSON_OBJECT('key', 'value') -> '$.key' AS result1`,
+			output: `select json_extract(JSON_OBJECT(key, value), $.key) as result1`,
+		}, {
+			input:  `select a -> '$.b' from t`,
+			output: `select json_extract(a, $.b) from t`,
+		}, {
+			input:  `select JSON_OBJECT('key', 'value') ->> '$.key' AS result1`,
+			output: `select json_unquote(json_extract(JSON_OBJECT(key, value), $.key)) as result1`,
+		}, {
+			input:  `select a ->> '$.b' from t`,
+			output: `select json_unquote(json_extract(a, $.b)) from t`,
+		}, {
 			input: `create table t1 (a int, b uuid)`,
 		}, {
 			input: `create table t2 (a uuid primary key, b varchar(10))`,
@@ -2608,6 +2623,10 @@ var (
 			output: "drop stage if not exists my_ext_stage1",
 		},
 		{
+			input:  "REMOVE FILES FROM STAGE IF EXISTS 'stage://mystage/data_*.csv'",
+			output: "remove files from stage if exists 'stage://mystage/data_*.csv'",
+		},
+		{
 			input:  "ALTER STAGE my_ext_stage SET URL='s3://loading/files/new/'",
 			output: "alter stage my_ext_stage set  url='s3://loading/files/new/'",
 		},
@@ -2776,7 +2795,7 @@ var (
 		},
 		{
 			input:  "select $1 + $q$\\n\\t\\r\\b\\0\\_\\%\\\\$q$",
-			output: "select $1 + \\n\\t\\r\\b\\0\\_\\%\\\\",
+			output: "select $1 + \\\\n\\\\t\\\\r\\\\b\\\\0\\_\\%\\\\\\\\",
 		},
 		{
 			input:  "show table_size from test",
@@ -3355,6 +3374,16 @@ func TestValid(t *testing.T) {
 		}
 		ast.StmtKind()
 	}
+}
+
+func TestShowVariablesGlobalFlag(t *testing.T) {
+	ctx := context.TODO()
+	stmt, err := ParseOne(ctx, "show global variables like 'interactive_timeout'", 1)
+	require.NoError(t, err)
+
+	sv, ok := stmt.(*tree.ShowVariables)
+	require.True(t, ok)
+	require.True(t, sv.Global)
 }
 
 var (

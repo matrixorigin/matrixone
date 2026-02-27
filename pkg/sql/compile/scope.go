@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -42,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -118,6 +120,12 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 
 	if s.ScopeAnalyzer != nil {
 		s.ScopeAnalyzer.Reset()
+	}
+
+	// Reset StarCount cache so next run re-executes StarCount with new snapshot.
+	s.StarCountOnly = false
+	if s.StarCountMergeGroup != nil {
+		s.StarCountMergeGroup.PartialResults = nil
 	}
 
 	return nil
@@ -928,9 +936,61 @@ func removeStringBetween(s, start, end string) string {
 	return s
 }
 
+// defaultStarCountTombstoneThreshold: when estimated tombstone rows exceed this, skip StarCount
+// and use per-block aggOptimize (only scan blocks with tombstones). Avoids CollectTombstoneStats
+// Merge path taking seconds for large tombstone sets.
+const defaultStarCountTombstoneThreshold = 5000000
+
+// isSingleStarCountNoFilterNoGroupBy returns true if node has exactly one agg and it is starcount, with no filter and no groupby.
+func isSingleStarCountNoFilterNoGroupBy(node *plan.Node) bool {
+	if node == nil || len(node.AggList) != 1 || len(node.FilterList) != 0 || len(node.GroupBy) != 0 {
+		return false
+	}
+	agg, ok := node.AggList[0].Expr.(*plan.Expr_F)
+	return ok && agg.F.Func.ObjName == "starcount"
+}
+
 func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context) error {
 	node := s.DataSource.node
 	if node != nil && len(node.AggList) > 0 {
+		// Fast path: single starcount without filter/groupby — only call rel.StarCount(), no scan.
+		if isSingleStarCountNoFilterNoGroupBy(node) {
+			estimatedTombstoneRows, err := rel.EstimateCommittedTombstoneCount(ctx)
+			if err != nil {
+				return err
+			}
+			metricv2.StarcountEstimateTombstoneRowsHistogram.Observe(float64(estimatedTombstoneRows))
+
+			if estimatedTombstoneRows > defaultStarCountTombstoneThreshold {
+				metricv2.StarcountPathPerBlockCounter.Inc()
+				// Fall through to per-block aggOptimize (only scan blocks with tombstones)
+			} else {
+				metricv2.StarcountPathFastCounter.Inc()
+				fastStart := time.Now()
+				totalRows, err := rel.StarCount(ctx)
+				if err != nil {
+					return err
+				}
+				metricv2.StarcountDurationHistogram.Observe(time.Since(fastStart).Seconds())
+				metricv2.StarcountResultRowsHistogram.Observe(float64(totalRows))
+
+				newRelData := s.NodeInfo.Data.BuildEmptyRelData(0)
+				s.NodeInfo.Data = newRelData
+				partialResults := []any{int64(totalRows)}
+				partialResultTypes := []types.T{types.T_int64}
+				mergeGroup := findMergeGroup(s.RootOp)
+				if mergeGroup != nil {
+					mergeGroup.PartialResults = partialResults
+					mergeGroup.PartialResultTypes = partialResultTypes
+					s.StarCountMergeGroup = mergeGroup
+				} else {
+					panic("can't find merge group operator for agg optimize!")
+				}
+				s.StarCountOnly = true
+				return nil
+			}
+		}
+
 		partialResults, partialResultTypes, columnMap := checkAggOptimize(node)
 		if partialResults != nil && s.NodeInfo.Data.DataCnt() > 1 {
 			//append first empty block
@@ -991,19 +1051,36 @@ func findMergeGroup(op vm.Operator) *group.MergeGroup {
 	if op == nil {
 		return nil
 	}
+	base := op.GetOperatorBase()
+	if base == nil || base.NumChildren() == 0 {
+		return nil
+	}
 	if mergeGroup, ok := op.(*group.MergeGroup); ok {
-		child := op.GetOperatorBase().GetChildren(0)
+		child := base.GetChildren(0)
 		if _, ok = child.(*group.Group); ok {
-			child = child.GetOperatorBase().GetChildren(0)
-			if _, ok = child.(*table_scan.TableScan); ok {
-				return mergeGroup
+			childBase := child.GetOperatorBase()
+			if childBase != nil && childBase.NumChildren() > 0 {
+				child = childBase.GetChildren(0)
+				if _, ok = child.(*table_scan.TableScan); ok {
+					return mergeGroup
+				}
 			}
 		}
 	}
-	return findMergeGroup(op.GetOperatorBase().GetChildren(0))
+	return findMergeGroup(base.GetChildren(0))
 }
 
 func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
+	// StarCount-only path: aggOptimize already called rel.StarCount() and set PartialResults.
+	// Return EmptyReaders so no data flows; MergeGroup will use PartialResults only.
+	if s.StarCountOnly {
+		readers = make([]engine.Reader, s.NodeInfo.Mcpu)
+		for i := range readers {
+			readers[i] = new(readutil.EmptyReader)
+		}
+		return readers, nil
+	}
+
 	// receive runtime filter and optimize the datasource.
 	var runtimeFilterList, blockFilterList []*plan.Expr
 	var emptyScan bool

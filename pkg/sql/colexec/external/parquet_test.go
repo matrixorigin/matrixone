@@ -17,9 +17,11 @@ package external
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"testing"
+	"time"
 
 	"io"
 	"iter"
@@ -798,13 +800,15 @@ func TestParquet_prepare_missingColumn(t *testing.T) {
 }
 
 func TestParquet_prepare_optionalToNotNull(t *testing.T) {
+	// Test that optional column can be prepared to map to NOT NULL column
+	// The NULL constraint violation will be checked at runtime when actual NULLs are encountered
 	var buf bytes.Buffer
 	schema := parquet.NewSchema("x", parquet.Group{
 		"c": parquet.Optional(parquet.Leaf(parquet.Int32Type)),
 	})
 	w := parquet.NewWriter(&buf, schema)
 	_, err := w.WriteRows([]parquet.Row{
-		{parquet.Int32Value(1).Level(0, 0, 0)},
+		{parquet.Int32Value(1).Level(0, 1, 0)},
 	})
 	require.NoError(t, err)
 	require.NoError(t, w.Close())
@@ -823,8 +827,9 @@ func TestParquet_prepare_optionalToNotNull(t *testing.T) {
 			},
 		},
 	}
+	// prepare should succeed - NULL constraint is checked at runtime, not prepare time
 	err = h.prepare(param)
-	require.Error(t, err)
+	require.NoError(t, err)
 }
 
 func TestParquet_ensureDictionaryIndexes_outOfRange(t *testing.T) {
@@ -887,15 +892,23 @@ func TestParquet_ScanParquetFile_SteppedBatches(t *testing.T) {
 
 	proc := testutil.NewProc(t)
 
+	r := NewParquetReader(param, proc)
+	_, err = r.Open(param, proc)
+	require.NoError(t, err)
+	defer r.Close()
+
 	got := make([]int32, 0, 3)
-	for attempts := 0; attempts < 5 && !param.Fileparam.End; attempts++ {
+	for attempts := 0; attempts < 5; attempts++ {
 		bat := vectorBatch([]types.Type{types.New(types.T_int32, 0, 0)})
-		require.NoError(t, scanParquetFile(context.Background(), param, proc, bat))
+		finished, rerr := r.ReadBatch(context.Background(), bat, proc, nil)
+		require.NoError(t, rerr)
 		vals := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0])
 		got = append(got, vals[:bat.RowCount()]...)
+		if finished {
+			break
+		}
 	}
 	require.Equal(t, []int32{10, 20, 30}, got)
-	require.True(t, param.Fileparam.End)
 }
 
 // helper to build a batch with provided vector types
@@ -1065,19 +1078,102 @@ func Test_parquet_decimal256FromInt64(t *testing.T) {
 	require.Equal(t, uint64(^uint64(0)), d.B64_127)
 }
 
-func Test_pageIsNull_simplePaths(t *testing.T) {
+func Test_prepareNullCheck_simplePaths(t *testing.T) {
+	ctx := context.Background()
 	// Build a required int32 page (no nulls)
 	st := parquet.Int32Type
 	page := st.NewPage(0, 2, encoding.Int32Values([]int32{1, 2}))
 	mp := &columnMapper{srcNull: false, dstNull: true, maxDefinitionLevel: 0}
-	b, err := mp.pageIsNull(context.Background(), page, 0)
+	nc, err := prepareNullCheck(ctx, mp, page)
 	require.NoError(t, err)
-	require.False(t, b)
-	// when srcNull true but page has no nulls -> false
+	require.True(t, nc.noNulls)
+	require.False(t, nc.isNull(0))
+	require.False(t, nc.isNull(1))
+
+	// when srcNull true but page has no nulls -> noNulls should be true
 	mp = &columnMapper{srcNull: true, dstNull: true, maxDefinitionLevel: 0}
-	b, err = mp.pageIsNull(context.Background(), page, 0)
+	nc, err = prepareNullCheck(ctx, mp, page)
 	require.NoError(t, err)
-	require.False(t, b)
+	require.True(t, nc.noNulls)
+	require.False(t, nc.isNull(0))
+}
+
+func Test_validateStringDataCount(t *testing.T) {
+	ctx := context.Background()
+
+	// Test ByteArray validation - success case
+	{
+		var loader strLoader
+		loader.init(encoding.ByteArrayValues([]byte("abcdef"), []uint32{0, 3, 6}))
+		err := validateStringDataCount(ctx, &loader, 2)
+		require.NoError(t, err)
+	}
+
+	// Test ByteArray validation - mismatch
+	{
+		var loader strLoader
+		loader.init(encoding.ByteArrayValues([]byte("abcdef"), []uint32{0, 3, 6}))
+		err := validateStringDataCount(ctx, &loader, 3)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "expected 3 non-null values")
+	}
+
+	// Test FixedLenByteArray validation - success case
+	{
+		var loader strLoader
+		loader.init(encoding.FixedLenByteArrayValues([]byte("abcdef"), 3))
+		err := validateStringDataCount(ctx, &loader, 2)
+		require.NoError(t, err)
+	}
+
+	// Test FixedLenByteArray validation - mismatch
+	{
+		var loader strLoader
+		loader.init(encoding.FixedLenByteArrayValues([]byte("abcdef"), 3))
+		err := validateStringDataCount(ctx, &loader, 3)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "expected 3 non-null values")
+	}
+
+	// Test empty ByteArray
+	{
+		var loader strLoader
+		loader.init(encoding.ByteArrayValues(nil, nil))
+		err := validateStringDataCount(ctx, &loader, 0)
+		require.NoError(t, err)
+	}
+}
+
+func Test_validateDictionaryIndicesCount(t *testing.T) {
+	ctx := context.Background()
+
+	// Success case
+	indices := []int32{0, 1, 2}
+	err := validateDictionaryIndicesCount(ctx, indices, 3)
+	require.NoError(t, err)
+
+	// Mismatch case
+	err = validateDictionaryIndicesCount(ctx, indices, 5)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "expected 5 dictionary indices")
+}
+
+func Test_wrapParseError(t *testing.T) {
+	ctx := context.Background()
+
+	// nil error returns nil
+	require.Nil(t, wrapParseError(ctx, 0, nil))
+
+	// Plain error gets wrapped with row context
+	plainErr := errors.New("parse error")
+	wrapped := wrapParseError(ctx, 5, plainErr)
+	require.Error(t, wrapped)
+	require.Contains(t, wrapped.Error(), "row 5")
+
+	// moerr.Error is returned directly without extra wrapping
+	moErr := moerr.NewInternalError(ctx, "already a moerr")
+	result := wrapParseError(ctx, 10, moErr)
+	require.Equal(t, moErr, result)
 }
 
 func Test_fsReaderAt_ReadAt(t *testing.T) {
@@ -1137,16 +1233,373 @@ func Test_getData_FinishAndOffset(t *testing.T) {
 	h := &ParquetHandler{file: f, batchCnt: 1}
 	param := &ExternalParam{ExParamConst: ExParamConst{Ctx: context.Background(), Attrs: []plan.ExternAttr{{ColName: "c", ColIndex: 0}}, Cols: []*plan.ColDef{{Typ: plan.Type{Id: int32(types.T_int32), NotNullable: true}}}}, ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1}}}
 	require.NoError(t, h.prepare(param))
-	param.parqh = h
 
 	// First call -> one row, not finished yet
 	bat := vectorBatch([]types.Type{types.New(types.T_int32, 0, 0)})
 	require.NoError(t, h.getData(bat, param, proc))
 	require.Equal(t, 1, bat.RowCount())
-	require.NotNil(t, param.parqh)
+	require.True(t, h.offset < h.file.NumRows(), "should not be finished yet")
 	// Second call -> last row and finish
 	bat2 := vectorBatch([]types.Type{types.New(types.T_int32, 0, 0)})
 	require.NoError(t, h.getData(bat2, param, proc))
 	require.Equal(t, 1, bat2.RowCount())
-	require.Nil(t, param.parqh)
+	require.True(t, h.offset >= h.file.NumRows(), "should be finished")
+}
+
+// TestParquet_Timestamp_NotAdjustedToUTC tests loading TIMESTAMP with IsAdjustedToUTC=false.
+// When IsAdjustedToUTC=false, the parquet value represents a "local time literal" without timezone info.
+// MO should store it such that displaying with session timezone shows the original literal value.
+func TestParquet_Timestamp_NotAdjustedToUTC(t *testing.T) {
+	// Create a process with a specific timezone (+8 hours)
+	proc := testutil.NewProc(t)
+	loc := time.FixedZone("UTC+8", 8*3600)
+	proc.Base.SessionInfo.TimeZone = loc
+
+	// Test value: 2024-01-15 10:30:00 as Unix microseconds (interpreted as UTC in parquet)
+	// 2024-01-15 10:30:00 UTC = 1705314600 seconds = 1705314600000000 microseconds
+	testMicros := int64(1705314600000000)
+
+	// Test with IsAdjustedToUTC=false (using TimestampAdjusted)
+	{
+		// Create parquet file with IsAdjustedToUTC=false
+		st := parquet.TimestampAdjusted(parquet.Microsecond, false).Type()
+		page := st.NewPage(0, 1, encoding.Int64Values([]int64{testMicros}))
+
+		var buf bytes.Buffer
+		schema := parquet.NewSchema("x", parquet.Group{
+			"c": parquet.TimestampAdjusted(parquet.Microsecond, false),
+		})
+		w := parquet.NewWriter(&buf, schema)
+		vals := make([]parquet.Value, page.NumRows())
+		_, _ = page.Values().ReadValues(vals)
+		_, err := w.WriteRows([]parquet.Row{parquet.MakeRow(vals)})
+		require.NoError(t, err)
+		require.NoError(t, w.Close())
+
+		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		require.NoError(t, err)
+
+		vec := vector.NewVec(types.New(types.T_timestamp, 0, 0))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp)})
+		require.NotNil(t, mp, "mapper should not be nil for IsAdjustedToUTC=false")
+
+		err = mp.mapping(page, proc, vec)
+		require.NoError(t, err)
+
+		got := vector.MustFixedColWithTypeCheck[types.Timestamp](vec)
+		require.Equal(t, 1, len(got))
+
+		// The displayed value should be "2024-01-15 10:30:00" regardless of timezone
+		// String2 uses the session timezone to display
+		displayed := got[0].String2(loc, 0)
+		require.Equal(t, "2024-01-15 10:30:00", displayed,
+			"IsAdjustedToUTC=false should preserve the literal time value")
+	}
+
+	// Compare with IsAdjustedToUTC=true (default behavior)
+	{
+		st := parquet.Timestamp(parquet.Microsecond).Type()
+		page := st.NewPage(0, 1, encoding.Int64Values([]int64{testMicros}))
+
+		var buf bytes.Buffer
+		schema := parquet.NewSchema("x", parquet.Group{
+			"c": parquet.Timestamp(parquet.Microsecond),
+		})
+		w := parquet.NewWriter(&buf, schema)
+		vals := make([]parquet.Value, page.NumRows())
+		_, _ = page.Values().ReadValues(vals)
+		_, err := w.WriteRows([]parquet.Row{parquet.MakeRow(vals)})
+		require.NoError(t, err)
+		require.NoError(t, w.Close())
+
+		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		require.NoError(t, err)
+
+		vec := vector.NewVec(types.New(types.T_timestamp, 0, 0))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp)})
+		require.NotNil(t, mp)
+
+		err = mp.mapping(page, proc, vec)
+		require.NoError(t, err)
+
+		got := vector.MustFixedColWithTypeCheck[types.Timestamp](vec)
+		displayed := got[0].String2(loc, 0)
+		// With IsAdjustedToUTC=true, the value is UTC, so +8 timezone shows +8 hours
+		require.Equal(t, "2024-01-15 18:30:00", displayed,
+			"IsAdjustedToUTC=true should add timezone offset when displaying")
+	}
+}
+
+// TestParquet_Timestamp_NotAdjustedToUTC_AllUnits tests all time units (nanos, micros, millis)
+func TestParquet_Timestamp_NotAdjustedToUTC_AllUnits(t *testing.T) {
+	proc := testutil.NewProc(t)
+	loc := time.FixedZone("UTC+8", 8*3600)
+	proc.Base.SessionInfo.TimeZone = loc
+
+	// 2024-01-15 10:30:00 UTC = 1705314600000000 microseconds
+	testMicros := int64(1705314600000000)
+	testMillis := testMicros / 1000
+	testNanos := testMicros * 1000
+
+	tests := []struct {
+		name  string
+		unit  parquet.TimeUnit
+		value int64
+	}{
+		{"micros", parquet.Microsecond, testMicros},
+		{"millis", parquet.Millisecond, testMillis},
+		{"nanos", parquet.Nanosecond, testNanos},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			st := parquet.TimestampAdjusted(tc.unit, false).Type()
+			page := st.NewPage(0, 1, encoding.Int64Values([]int64{tc.value}))
+
+			var buf bytes.Buffer
+			schema := parquet.NewSchema("x", parquet.Group{
+				"c": parquet.TimestampAdjusted(tc.unit, false),
+			})
+			w := parquet.NewWriter(&buf, schema)
+			vals := make([]parquet.Value, page.NumRows())
+			_, _ = page.Values().ReadValues(vals)
+			_, err := w.WriteRows([]parquet.Row{parquet.MakeRow(vals)})
+			require.NoError(t, err)
+			require.NoError(t, w.Close())
+
+			f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+			require.NoError(t, err)
+
+			vec := vector.NewVec(types.New(types.T_timestamp, 0, 0))
+			var h ParquetHandler
+			mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp)})
+			require.NotNil(t, mp, "mapper should not be nil for %s", tc.name)
+
+			err = mp.mapping(page, proc, vec)
+			require.NoError(t, err)
+
+			got := vector.MustFixedColWithTypeCheck[types.Timestamp](vec)
+			displayed := got[0].String2(loc, 0)
+			require.Equal(t, "2024-01-15 10:30:00", displayed,
+				"unit %s: should preserve literal time value", tc.name)
+		})
+	}
+}
+
+// TestParquet_Timestamp_NotAdjustedToUTC_Dictionary tests dictionary-encoded timestamps
+func TestParquet_Timestamp_NotAdjustedToUTC_Dictionary(t *testing.T) {
+	proc := testutil.NewProc(t)
+	loc := time.FixedZone("UTC+8", 8*3600)
+	proc.Base.SessionInfo.TimeZone = loc
+
+	// 2024-01-15 10:30:00 UTC = 1705314600000000 microseconds
+	testMicros := int64(1705314600000000)
+
+	node := parquet.Encoded(parquet.TimestampAdjusted(parquet.Microsecond, false), &parquet.RLEDictionary)
+	vals := []parquet.Value{
+		parquet.Int64Value(testMicros),
+		parquet.Int64Value(testMicros + 1000000), // +1 second
+		parquet.Int64Value(testMicros),
+	}
+	f, page := writeDictAndGetPage(t, node, vals)
+
+	vec := vector.NewVec(types.New(types.T_timestamp, 0, 0))
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp)})
+	require.NotNil(t, mp)
+
+	err := mp.mapping(page, proc, vec)
+	require.NoError(t, err)
+
+	got := vector.MustFixedColWithTypeCheck[types.Timestamp](vec)
+	require.Equal(t, 3, len(got))
+	require.Equal(t, "2024-01-15 10:30:00", got[0].String2(loc, 0))
+	require.Equal(t, "2024-01-15 10:30:01", got[1].String2(loc, 0))
+	require.Equal(t, "2024-01-15 10:30:00", got[2].String2(loc, 0))
+}
+
+// TestParquet_EmptyFile_ColumnCountMatch tests that empty parquet files (0 rows)
+// only check column count, not column names or types. This aligns with DuckDB behavior.
+func TestParquet_EmptyFile_ColumnCountMatch(t *testing.T) {
+	// Create an empty parquet file with 2 columns (id: int64, name: string)
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("x", parquet.Group{
+		"id":   parquet.Leaf(parquet.Int64Type),
+		"name": parquet.Leaf(parquet.ByteArrayType),
+	})
+	w := parquet.NewWriter(&buf, schema)
+	// Write no rows - just close to create empty file with schema
+	require.NoError(t, w.Close())
+
+	// Verify file has 0 rows
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	require.Equal(t, int64(0), f.NumRows())
+
+	// Create param with different column names but same count (2 columns)
+	// This should succeed for empty files (only check column count)
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx: context.Background(),
+			Attrs: []plan.ExternAttr{
+				{ColName: "col1", ColIndex: 0}, // different name from "id"
+				{ColName: "col2", ColIndex: 1}, // different name from "name"
+			},
+			Cols: []*plan.ColDef{
+				{Typ: plan.Type{Id: int32(types.T_int32)}},     // different type from int64
+				{Typ: plan.Type{Id: int32(types.T_decimal64)}}, // different type from string
+			},
+			Extern:   &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INLINE}},
+			FileSize: []int64{int64(buf.Len())},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1}},
+	}
+	param.Extern.Data = string(buf.Bytes())
+
+	// newParquetHandler should return (nil, nil) for empty file with matching column count
+	h, err := newParquetHandler(param)
+	require.NoError(t, err)
+	require.Nil(t, h, "empty file should return nil handler")
+}
+
+// TestParquet_EmptyFile_ColumnCountMismatch tests that empty parquet files
+// still fail when column count doesn't match.
+func TestParquet_EmptyFile_ColumnCountMismatch(t *testing.T) {
+	// Create an empty parquet file with 2 columns
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("x", parquet.Group{
+		"id":   parquet.Leaf(parquet.Int64Type),
+		"name": parquet.Leaf(parquet.ByteArrayType),
+	})
+	w := parquet.NewWriter(&buf, schema)
+	require.NoError(t, w.Close())
+
+	// Create param expecting 3 columns (more than parquet has)
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx: context.Background(),
+			Attrs: []plan.ExternAttr{
+				{ColName: "col1", ColIndex: 0},
+				{ColName: "col2", ColIndex: 1},
+				{ColName: "col3", ColIndex: 2}, // extra column
+			},
+			Cols: []*plan.ColDef{
+				{Typ: plan.Type{Id: int32(types.T_int32)}},
+				{Typ: plan.Type{Id: int32(types.T_varchar)}},
+				{Typ: plan.Type{Id: int32(types.T_float64)}},
+			},
+			Extern:   &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INLINE}},
+			FileSize: []int64{int64(buf.Len())},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1}},
+	}
+	param.Extern.Data = string(buf.Bytes())
+
+	// Should fail with column count mismatch error
+	h, err := newParquetHandler(param)
+	require.Error(t, err)
+	require.Nil(t, h)
+	require.Contains(t, err.Error(), "column count mismatch")
+}
+
+// TestParquet_EmptyFile_ExtraParquetColumns tests that empty parquet files
+// with more columns than table expects should fail (align with DuckDB behavior).
+func TestParquet_EmptyFile_ExtraParquetColumns(t *testing.T) {
+	// Create an empty parquet file with 3 columns
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("x", parquet.Group{
+		"id":    parquet.Leaf(parquet.Int64Type),
+		"name":  parquet.Leaf(parquet.ByteArrayType),
+		"extra": parquet.Leaf(parquet.Int32Type),
+	})
+	w := parquet.NewWriter(&buf, schema)
+	require.NoError(t, w.Close())
+
+	// Create param expecting only 2 columns (less than parquet has)
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx: context.Background(),
+			Attrs: []plan.ExternAttr{
+				{ColName: "col1", ColIndex: 0},
+				{ColName: "col2", ColIndex: 1},
+			},
+			Cols: []*plan.ColDef{
+				{Typ: plan.Type{Id: int32(types.T_int32)}},
+				{Typ: plan.Type{Id: int32(types.T_varchar)}},
+			},
+			Extern:   &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INLINE}},
+			FileSize: []int64{int64(buf.Len())},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1}},
+	}
+	param.Extern.Data = string(buf.Bytes())
+
+	// Should fail - column count mismatch (parquet has 3, table expects 2)
+	h, err := newParquetHandler(param)
+	require.Error(t, err)
+	require.Nil(t, h)
+	require.Contains(t, err.Error(), "column count mismatch")
+}
+
+// TestParquet_ScanEmptyFile tests the full scanParquetFile flow with empty file.
+func TestParquet_ScanEmptyFile(t *testing.T) {
+	// Create an empty parquet file
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("x", parquet.Group{
+		"c": parquet.Leaf(parquet.Int32Type),
+	})
+	w := parquet.NewWriter(&buf, schema)
+	require.NoError(t, w.Close())
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx:      context.Background(),
+			Attrs:    []plan.ExternAttr{{ColName: "different_name", ColIndex: 0}},
+			Cols:     []*plan.ColDef{{Typ: plan.Type{Id: int32(types.T_int64)}}}, // different type
+			Extern:   &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INLINE}},
+			FileSize: []int64{int64(buf.Len())},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1}},
+	}
+	param.Extern.Data = string(buf.Bytes())
+
+	proc := testutil.NewProc(t)
+	bat := vectorBatch([]types.Type{types.New(types.T_int64, 0, 0)})
+
+	// ParquetReader.Open should return fileEmpty=true for empty files
+	r := NewParquetReader(param, proc)
+	fileEmpty, err := r.Open(param, proc)
+	require.NoError(t, err)
+	require.True(t, fileEmpty, "empty file should return fileEmpty=true")
+	r.Close()
+	require.Equal(t, 0, bat.RowCount(), "batch should have 0 rows")
+}
+
+// TestParquet_getParquetExpectedColCnt tests the helper function.
+func TestParquet_getParquetExpectedColCnt(t *testing.T) {
+	// Normal columns
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Attrs: []plan.ExternAttr{
+				{ColName: "col1"},
+				{ColName: "col2"},
+				{ColName: "col3"},
+			},
+		},
+	}
+	require.Equal(t, 3, getParquetExpectedColCnt(param))
+
+	// With hidden column __mo_filepath
+	param2 := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Attrs: []plan.ExternAttr{
+				{ColName: "col1"},
+				{ColName: "__mo_filepath"}, // hidden column
+				{ColName: "col2"},
+			},
+		},
+	}
+	require.Equal(t, 2, getParquetExpectedColCnt(param2))
 }

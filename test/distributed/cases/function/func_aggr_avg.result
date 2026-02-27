@@ -28,7 +28,7 @@ select avg(g) from t1;
 ➤ avg(g)[8,54,0]  𝄀
 31.13
 select avg(h) from t1;
-➤ avg(h)[3,18,19]  𝄀
+➤ avg(h)[3,38,19]  𝄀
 14.3140000000000000000
 select avg(a) from t1 limit 1;
 ➤ avg(a)[8,54,0]  𝄀
@@ -52,7 +52,7 @@ select avg(g) from t1 limit 1;
 ➤ avg(g)[8,54,0]  𝄀
 31.13
 select avg(h) from t1 limit 1;
-➤ avg(h)[3,18,19]  𝄀
+➤ avg(h)[3,38,19]  𝄀
 14.3140000000000000000
 drop table t1;
 create table t1(a bigint);
@@ -230,7 +230,7 @@ CREATE TABLE t1 (col1 decimal(16,12));
 INSERT INTO t1 VALUES (-5.00000000001),(-5.00000000002),(-5.00000000003),(-5.00000000000),(-5.00000000001),(-5.00000000002);
 insert into t1 select * from t1;
 select col1,count(col1),sum(col1),avg(col1) from t1 group by col1;
-➤ col1[3,16,12]  ¦  count(col1)[-5,64,0]  ¦  sum(col1)[3,38,12]  ¦  avg(col1)[3,18,12]  𝄀
+➤ col1[3,16,12]  ¦  count(col1)[-5,64,0]  ¦  sum(col1)[3,38,12]  ¦  avg(col1)[3,38,12]  𝄀
 -5.000000000010  ¦  4  ¦  -20.000000000040  ¦  -5.000000000010  𝄀
 -5.000000000020  ¦  4  ¦  -20.000000000080  ¦  -5.000000000020  𝄀
 -5.000000000030  ¦  2  ¦  -10.000000000060  ¦  -5.000000000030  𝄀
@@ -284,7 +284,8 @@ insert into t1 values (3,4,"E");
 insert into t1 values (3,5,"C");
 insert into t1 values (3,6,"D");
 select sum(all a),count(all a),avg(all a),std(all a),variance(all a),bit_or(all a),bit_and(all a),min(all a),max(all a),min(all c),max(all c) from t1;
-[unknown result because it is related to issue#3344]
+➤ sum(all a)[-5,64,0]  ¦  count(all a)[-5,64,0]  ¦  avg(all a)[8,54,0]  ¦  std(all a)[8,54,0]  ¦  variance(all a)[8,54,0]  ¦  bit_or(all a)[-5,64,0]  ¦  bit_and(all a)[-5,64,0]  ¦  min(all a)[-5,64,0]  ¦  max(all a)[-5,64,0]  ¦  min(all c)[1,10,0]  ¦  max(all c)[1,10,0]  𝄀
+21  ¦  6  ¦  3.5  ¦  1.707825127659933  ¦  2.916666666666666  ¦  7  ¦  0  ¦  1  ¦  6  ¦  C  ¦  c
 select grp, sum(a),count(a),avg(a),std(a),variance(a),bit_or(a),bit_and(a),min(a),max(a),min(c),max(c) from t1 group by grp;
 ➤ grp[4,32,0]  ¦  sum(a)[-5,64,0]  ¦  count(a)[-5,64,0]  ¦  avg(a)[8,54,0]  ¦  std(a)[8,54,0]  ¦  variance(a)[8,54,0]  ¦  bit_or(a)[-5,64,0]  ¦  bit_and(a)[-5,64,0]  ¦  min(a)[-5,64,0]  ¦  max(a)[-5,64,0]  ¦  min(c)[1,10,0]  ¦  max(c)[1,10,0]  𝄀
 1  ¦  1  ¦  1  ¦  1.0  ¦  0.0  ¦  0.0  ¦  1  ¦  1  ¦  1  ¦  1  ¦  a  ¦  a  𝄀

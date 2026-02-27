@@ -70,7 +70,10 @@ INSERT INTO t2 VALUES
 ('test1','2016-12-13'),('test2','2016-12-14'),('test3','2016-12-15');
 SELECT b, b = '20161213',
 CASE b WHEN '20161213' then 'found' ELSE 'not found' END FROM t2;
-[unknown result because it is related to issue#3254]
+➤ b[91,64,0]  ¦  b = 20161213[-7,1,0]  ¦  case b when 20161213 then found else not found end[12,-1,0]  𝄀
+2016-12-13  ¦  1  ¦  found  𝄀
+2016-12-14  ¦  0  ¦  not found  𝄀
+2016-12-15  ¦  0  ¦  not found
 drop table if exists t1;
 create table t1 (a int);
 insert into t1 values(1),(2),(3),(4);

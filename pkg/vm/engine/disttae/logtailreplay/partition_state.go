@@ -23,6 +23,7 @@ import (
 	"runtime/trace"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"go.uber.org/zap"
@@ -39,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
+	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -263,9 +265,6 @@ func (p *PartitionState) handleDataObjectEntry(
 		//if objEntry.EntryState && scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
 		//	p.dirtyBlocks.Delete(*blkID)
 		//}
-		perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
-			c.DistTAE.Logtail.ActiveRows.Add(-numDeleted)
-		})
 	}
 
 	p.prefetchObject(fs, objEntry)
@@ -321,7 +320,6 @@ func (p *PartitionState) handleTombstoneObjectEntry(
 	truncatePoint := objEntry.DeleteTime
 
 	var deletedRow *RowEntry
-	var numDeleted int64
 	var tbIter = p.inMemTombstoneRowIdIndex.Copy().Iter()
 	defer tbIter.Release()
 
@@ -360,9 +358,6 @@ func (p *PartitionState) handleTombstoneObjectEntry(
 
 	p.prefetchObject(fs, objEntry)
 
-	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
-		c.DistTAE.Logtail.ActiveRows.Add(-numDeleted)
-	})
 	return
 }
 func (p *PartitionState) HandleLogtailEntry(
@@ -560,7 +555,6 @@ func (p *PartitionState) HandleDataObjectList(
 		p.prefetchObject(fs, objEntry)
 	}
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
-		c.DistTAE.Logtail.ActiveRows.Add(-numDeleted)
 	})
 }
 
@@ -576,7 +570,6 @@ func (p *PartitionState) HandleTombstoneObjectList(
 	fs fileservice.FileService,
 	pool *mpool.MPool) {
 
-	var numDeleted int64
 	statsVec := mustVectorFromProto(ee.Bat.Vecs[2])
 	defer statsVec.Free(pool)
 
@@ -683,7 +676,6 @@ func (p *PartitionState) HandleTombstoneObjectList(
 	}
 
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
-		c.DistTAE.Logtail.ActiveRows.Add(-numDeleted)
 	})
 }
 
@@ -777,9 +769,6 @@ func (p *PartitionState) HandleRowsDelete(
 	}
 
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
-		c.DistTAE.Logtail.Entries.Add(1)
-		c.DistTAE.Logtail.DeleteEntries.Add(1)
-		c.DistTAE.Logtail.DeleteRows.Add(numDeletes)
 	})
 }
 
@@ -848,10 +837,6 @@ func (p *PartitionState) HandleRowsInsert(
 	}
 
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
-		c.DistTAE.Logtail.Entries.Add(1)
-		c.DistTAE.Logtail.InsertEntries.Add(1)
-		c.DistTAE.Logtail.InsertRows.Add(numInserted)
-		c.DistTAE.Logtail.ActiveRows.Add(numInserted)
 	})
 
 	return
@@ -1264,14 +1249,61 @@ func (p *PartitionState) CheckRowIdDeletedInMem(ts types.TS, rowId types.Rowid) 
 	return item.RowID.EQ(&rowId)
 }
 
+// countVisibleRowsInAppendableObject scans blocks of one appendable data object, reads commit_ts column,
+// and counts rows where commit_ts <= snapshot. Returns error on I/O failure (e.g. LoadColumnsData).
+// Caller must pass a non-nil mp for vector allocations.
+func (p *PartitionState) countVisibleRowsInAppendableObject(
+	ctx context.Context,
+	snapshot types.TS,
+	fs fileservice.FileService,
+	obj objectio.ObjectEntry,
+	mp *mpool.MPool,
+) (uint64, error) {
+	cols := []uint16{objectio.SEQNUM_COMMITTS}
+	typs := []types.Type{types.T_TS.ToType()}
+	cacheVectors := containers.NewVectors(1)
+
+	var count uint64
+	var loadErr error
+	objectio.ForeachBlkInObjStatsList(true, nil,
+		func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
+			loc := blk.MetaLocation()
+			_, release, err := ioutil.LoadColumnsData(ctx, cols, typs, fs, loc, cacheVectors, mp, fileservice.Policy(0))
+			if err != nil {
+				loadErr = err
+				return false // stop and propagate error
+			}
+			defer release()
+			if cacheVectors[0].Length() == 0 {
+				return true
+			}
+			commitTSCol := vector.MustFixedColWithTypeCheck[types.TS](&cacheVectors[0])
+			for _, ts := range commitTSCol {
+				if ts.LE(&snapshot) {
+					count++
+				}
+			}
+			return true
+		}, obj.ObjectStats)
+	if loadErr != nil {
+		return 0, loadErr
+	}
+	return count, nil
+}
+
 // CountRows returns the total number of visible rows at the given snapshot.
 // CountRows = CollectDataStats.Rows - CollectTombstoneStats.Rows
+// Caller must pass a non-nil mp when fs is set (for reading appendable blocks).
 func (p *PartitionState) CountRows(
 	ctx context.Context,
 	snapshot types.TS,
 	fs fileservice.FileService,
+	mp *mpool.MPool,
 ) (uint64, error) {
-	dataStats := p.CollectDataStats(snapshot)
+	dataStats, err := p.CollectDataStats(ctx, snapshot, fs, mp)
+	if err != nil {
+		return 0, err
+	}
 	tombstoneStats, err := p.CollectTombstoneStats(ctx, snapshot, fs)
 	if err != nil {
 		return 0, err
@@ -1279,7 +1311,49 @@ func (p *PartitionState) CountRows(
 	if tombstoneStats.Rows > dataStats.Rows {
 		return 0, nil
 	}
+	// Record estimate/actual ratio: high ratio (e.g. 100x) means estimate is much larger than actual (bad signal).
+	estimateRows, _ := p.estimateTombstoneRowsOnly(snapshot)
+	actual := tombstoneStats.Rows
+	if actual == 0 {
+		actual = 1 // avoid div by zero; ratio is still meaningful (estimate/1)
+	}
+	ratio := float64(estimateRows) / float64(actual)
+	metricv2.StarcountEstimateOverActualRatioHistogram.Observe(ratio)
 	return dataStats.Rows - tombstoneStats.Rows, nil
+}
+
+// estimateTombstoneRowsOnly returns (estimated rows, object count) from metadata only (no S3 I/O).
+// Same visibility logic as EstimateCommittedTombstoneCount; used by CountRows to compute estimate/actual ratio.
+func (p *PartitionState) estimateTombstoneRowsOnly(snapshot types.TS) (estimatedRows int, objectCount int) {
+	iter := p.tombstoneObjectsNameIndex.Iter()
+	defer iter.Release()
+	for ok := iter.First(); ok; ok = iter.Next() {
+		obj := iter.Item()
+		if obj.CreateTime.GT(&snapshot) {
+			continue
+		}
+		if !obj.DeleteTime.IsEmpty() && obj.DeleteTime.LE(&snapshot) {
+			continue
+		}
+		estimatedRows += int(obj.Rows())
+		objectCount++
+	}
+	return estimatedRows, objectCount
+}
+
+// EstimateCommittedTombstoneCount returns an estimated count of committed tombstone rows
+// by summing up the row counts from visible tombstone object metadata.
+// This is very lightweight (only reads metadata, no S3 I/O) and can be used to decide
+// whether to use StarCount optimization.
+//
+// Note: This is an upper bound estimate because:
+// - It includes duplicate rowids (not deduplicated)
+// - It includes tombstones pointing to invisible data objects
+// The actual count from CollectTombstoneStats will be lower after deduplication and visibility filtering.
+func (p *PartitionState) EstimateCommittedTombstoneCount(snapshot types.TS) int {
+	estimatedRows, objectCount := p.estimateTombstoneRowsOnly(snapshot)
+	metricv2.StarcountEstimateTombstoneObjectsHistogram.Observe(float64(objectCount))
+	return estimatedRows
 }
 
 // DataStats contains statistics for data objects and rows.
@@ -1295,17 +1369,27 @@ type DataStats struct {
 	//   or batch size if no non-appendable objects exist
 	Size float64
 
-	ObjectCnt int // Exact count of visible non-appendable data objects
-	BlockCnt  int // Exact count of visible data blocks
+	ObjectCnt int // Count of visible data objects (appendable + non-appendable)
+	BlockCnt  int // Count of visible data blocks (appendable + non-appendable)
 }
 
 // CollectDataStats returns comprehensive statistics for data objects and rows at the given snapshot.
-func (p *PartitionState) CollectDataStats(snapshot types.TS) DataStats {
+// In one pass over data objects: non-appendable uses obj.Rows(); visible appendable objects
+// are scanned block-by-block and rows with commit_ts <= snapshot are counted.
+// Caller must pass a non-nil mp when fs is set (for reading appendable blocks).
+func (p *PartitionState) CollectDataStats(
+	ctx context.Context,
+	snapshot types.TS,
+	fs fileservice.FileService,
+	mp *mpool.MPool,
+) (DataStats, error) {
 	var stats DataStats
 	var estimatedOneRowSize float64
 	var nonAppendableRows uint64
+	var appendableScanStart time.Time
+	var appendableScanned int
 
-	// Count non-appendable data objects
+	// Scan each data object: non-appendable → count from metadata; appendable → scan blocks and count by commit_ts
 	iter := p.dataObjectsNameIndex.Iter()
 	defer iter.Release()
 	for ok := iter.First(); ok; ok = iter.Next() {
@@ -1322,7 +1406,26 @@ func (p *PartitionState) CollectDataStats(snapshot types.TS) DataStats {
 			stats.Rows += uint64(obj.Rows())
 			stats.Size += float64(obj.Size())
 			nonAppendableRows += uint64(obj.Rows())
+		} else {
+			// Visible appendable object: include in object/block count; optionally scan blocks for row count
+			stats.ObjectCnt++
+			stats.BlockCnt += int(obj.BlkCnt())
+			if fs != nil && mp != nil {
+				if appendableScanned == 0 {
+					appendableScanStart = time.Now()
+				}
+				n, err := p.countVisibleRowsInAppendableObject(ctx, snapshot, fs, obj, mp)
+				if err != nil {
+					return DataStats{}, err
+				}
+				stats.Rows += n
+				appendableScanned++
+			}
 		}
+	}
+	if appendableScanned > 0 {
+		metricv2.StarcountAppendableScanDurationSecondsHistogram.Observe(time.Since(appendableScanStart).Seconds())
+		metricv2.StarcountAppendableObjectsScannedHistogram.Observe(float64(appendableScanned))
 	}
 
 	// Calculate estimated row size from non-appendable objects
@@ -1346,7 +1449,7 @@ func (p *PartitionState) CollectDataStats(snapshot types.TS) DataStats {
 		return true
 	})
 
-	return stats
+	return stats, nil
 }
 
 // TombstoneStats contains statistics for tombstone objects and deleted rows.
@@ -1427,7 +1530,7 @@ func (p *PartitionState) CollectTombstoneStats(
 	return p.countTombstoneStatsWithMap(ctx, snapshot, fs, visibleObjects, stats)
 }
 
-// isDataObjectVisible checks if a data object is visible at the given snapshot.
+// IsDataObjectVisible checks if a data object is visible at the given snapshot.
 //
 // Background:
 // - CN can delete rows on both appendable and non-appendable data objects
@@ -1437,7 +1540,7 @@ func (p *PartitionState) CollectTombstoneStats(
 // This function checks:
 // 1. Non-appendable objects in dataObjectsNameIndex (O(log n) lookup)
 // 2. Appendable objects in rows btree (O(n) scan, but cached by caller)
-func (p *PartitionState) isDataObjectVisible(objId *types.Objectid, snapshot types.TS) bool {
+func (p *PartitionState) IsDataObjectVisible(objId *types.Objectid, snapshot types.TS) bool {
 	// Build a dummy ObjectEntry with the target objectid for lookup
 	var stats objectio.ObjectStats
 	objectio.SetObjectStatsObjectName(&stats, objectio.BuildObjectNameWithObjectID(objId))
@@ -1547,7 +1650,7 @@ func (p *PartitionState) countTombstoneStatsLinear(
 				if !lastObjIdSet || !objId.EQ(&lastObjId) {
 					lastObjId = *objId
 					lastObjIdSet = true
-					lastVisible = p.isDataObjectVisible(objId, snapshot)
+					lastVisible = p.IsDataObjectVisible(objId, snapshot)
 				}
 
 				if lastVisible {
@@ -1643,7 +1746,7 @@ func (p *PartitionState) countTombstoneStatsWithMap(
 					if !lastObjIdSet || !objId.EQ(&lastObjId) {
 						lastObjId = *objId
 						lastObjIdSet = true
-						lastVisible = p.isDataObjectVisible(objId, snapshot)
+						lastVisible = p.IsDataObjectVisible(objId, snapshot)
 					}
 
 					if lastVisible {
@@ -1690,7 +1793,7 @@ func (p *PartitionState) countTombstoneStatsWithMap(
 		if !lastObjIdSet || !objId.EQ(&lastObjId) {
 			lastObjId = *objId
 			lastObjIdSet = true
-			lastVisible = p.isDataObjectVisible(objId, snapshot)
+			lastVisible = p.IsDataObjectVisible(objId, snapshot)
 		}
 
 		if lastVisible {
@@ -1774,7 +1877,7 @@ func (it *tombstoneBlockIterator) next() bool {
 			}
 
 			objId := it.inMemEntry.RowID.BorrowObjectID()
-			if !it.p.isDataObjectVisible(objId, it.snapshot) {
+			if !it.p.IsDataObjectVisible(objId, it.snapshot) {
 				continue
 			}
 
@@ -1791,7 +1894,7 @@ func (it *tombstoneBlockIterator) next() bool {
 			}
 
 			objId := it.rowIds[it.rowIdx].BorrowObjectID()
-			if !it.p.isDataObjectVisible(objId, it.snapshot) {
+			if !it.p.IsDataObjectVisible(objId, it.snapshot) {
 				it.rowIdx++
 				continue
 			}
@@ -1960,19 +2063,24 @@ type TableStats struct {
 	TotalSize float64
 
 	// Object and block counts (all exact)
-	DataObjectCnt      int // Number of visible non-appendable data objects
-	DataBlockCnt       int // Number of visible data blocks
+	DataObjectCnt      int // Number of visible data objects (appendable + non-appendable)
+	DataBlockCnt       int // Number of visible data blocks (appendable + non-appendable)
 	TombstoneObjectCnt int // Number of visible tombstone objects
 	TombstoneBlockCnt  int // Number of visible tombstone blocks
 }
 
 // CalculateTableStats calculates comprehensive table statistics at the given snapshot.
+// Caller must pass a non-nil mp when partition has appendable data objects on fs.
 func (p *PartitionState) CalculateTableStats(
 	ctx context.Context,
 	snapshot types.TS,
 	fs fileservice.FileService,
+	mp *mpool.MPool,
 ) (TableStats, error) {
-	dataStats := p.CollectDataStats(snapshot)
+	dataStats, err := p.CollectDataStats(ctx, snapshot, fs, mp)
+	if err != nil {
+		return TableStats{}, err
+	}
 	tombstoneStats, err := p.CollectTombstoneStats(ctx, snapshot, fs)
 	if err != nil {
 		return TableStats{}, err

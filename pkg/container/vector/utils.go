@@ -18,7 +18,6 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 )
 
 // FindFirstIndexInSortedSlice finds the first index of v in a sorted slice s
@@ -308,10 +307,10 @@ func ArrayGetMinMax[T types.RealNumbers](vec *Vector) (minv, maxv []T) {
 				minv, maxv = val, val
 				first = false
 			} else {
-				if moarray.Compare[T](minv, val) > 0 {
+				if types.ArrayCompare[T](minv, val) > 0 {
 					minv = val
 				}
-				if moarray.Compare[T](maxv, val) < 0 {
+				if types.ArrayCompare[T](maxv, val) < 0 {
 					maxv = val
 				}
 			}
@@ -321,10 +320,10 @@ func ArrayGetMinMax[T types.RealNumbers](vec *Vector) (minv, maxv []T) {
 		minv, maxv = val, val
 		for i, j := 1, vec.Length(); i < j; i++ {
 			val := types.GetArray[T](&col[i], area)
-			if moarray.Compare[T](minv, val) > 0 {
+			if types.ArrayCompare[T](minv, val) > 0 {
 				minv = val
 			}
-			if moarray.Compare[T](maxv, val) < 0 {
+			if types.ArrayCompare[T](maxv, val) < 0 {
 				maxv = val
 			}
 		}
@@ -390,6 +389,8 @@ func typeCompatible[T any](typ types.Type) bool {
 		return typ.Oid == types.T_Blockid
 	case types.Enum:
 		return typ.Oid == types.T_enum
+	case types.MoYear:
+		return typ.Oid == types.T_year
 	}
 	return false
 }

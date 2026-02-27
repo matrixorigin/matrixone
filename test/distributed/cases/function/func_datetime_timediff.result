@@ -1,77 +1,79 @@
 SELECT TIMEDIFF('2000:01:01 00:00:00', '2000:01:01 00:00:00.000001') AS result1;
-result1
+➤ result1[92,64,0]  𝄀
 00:00:00.000001000
 SELECT TIMEDIFF('2000:01:01 00:00:00', '2000:01:01 00:00:00.000001') AS microsecond_diff;
-microsecond_diff
+➤ microsecond_diff[92,64,0]  𝄀
 00:00:00.000001000
 SELECT TIMEDIFF('2000:01:01 00:00:00', '2000:01:01 00:00:00') AS zero_diff;
-zero_diff
+➤ zero_diff[92,64,0]  𝄀
 00:00:00
 SELECT TIMEDIFF('2000:01:01 00:00:01', '2000:01:01 00:00:00') AS one_second_diff;
-one_second_diff
+➤ one_second_diff[92,64,0]  𝄀
 00:00:01
 SELECT TIMEDIFF('2000:01:01 01:00:00', '2000:01:01 00:00:00') AS one_hour_diff;
-one_hour_diff
+➤ one_hour_diff[92,64,0]  𝄀
 01:00:00
 SELECT TIMEDIFF('2000:01:01 00:00:00', '2000:01:01 00:00:01') AS negative_one_second;
-negative_one_second
+➤ negative_one_second[92,64,0]  𝄀
 00:00:01
 SELECT TIMEDIFF('2000:01:01 00:00:00', '2000:01:01 01:00:00') AS negative_one_hour;
-negative_one_hour
+➤ negative_one_hour[92,64,0]  𝄀
 -1:00:00
 SELECT TIMEDIFF('15:30:45', '10:20:30') AS time_diff;
-time_diff
+➤ time_diff[92,64,0]  𝄀
 05:10:15
 SELECT TIMEDIFF('00:00:00', '00:00:00') AS time_zero;
-time_zero
+➤ time_zero[92,64,0]  𝄀
 00:00:00
 SELECT TIMEDIFF('23:59:59', '00:00:00') AS time_max_diff;
-time_max_diff
+➤ time_max_diff[92,64,0]  𝄀
 23:59:59
 SELECT TIMEDIFF('2000-01-01 15:30:45', '2000-01-01 10:20:30') AS datetime_diff;
-datetime_diff
+➤ datetime_diff[92,64,0]  𝄀
 05:10:15
 SELECT TIMEDIFF('2000-01-01 00:00:00', '2000-01-01 00:00:00') AS datetime_zero;
-datetime_zero
+➤ datetime_zero[92,64,0]  𝄀
 00:00:00
-SELECT TIMEDIFF('2000-01-01 15:30:45', '15:30:45') AS mixed_format1;
-The result set is not correct because of unexpected reason,Message: Invalid length (20) for type TIME
-SELECT TIMEDIFF('15:30:45', '2000-01-01 15:30:45') AS mixed_format2;
-The result set is not correct because of unexpected reason,Message: Invalid length (19) for type TIME
+SELECT CAST(TIMEDIFF ('2000-01-01 15:30:45', '2026-02-02 15:30:45')AS char) AS mixed_format1;
+➤ mixed_format1[12,-1,0]  𝄀
+-228696:00:00.000000
+SELECT CAST(TIMEDIFF('2026-02-02 15:30:45', '2000-01-01 15:30:45')AS char) AS mixed_format2;
+➤ mixed_format2[12,-1,0]  𝄀
+228696:00:00.000000
 SELECT TIMEDIFF('2000-01-01 00:00:00.500000', '2000-01-01 00:00:00.200000') AS with_microseconds;
-with_microseconds
+➤ with_microseconds[92,64,0]  𝄀
 00:00:00.300000000
 SELECT TIMEDIFF('2000-01-01 00:00:00.000001', '2000-01-01 00:00:00.000000') AS one_microsecond;
-one_microsecond
+➤ one_microsecond[92,64,0]  𝄀
 00:00:00.000001000
 SELECT TIMEDIFF(NULL, '2000-01-01 00:00:00') AS null_expr1;
-null_expr1
+➤ null_expr1[92,64,0]  𝄀
 null
 SELECT TIMEDIFF('2000-01-01 00:00:00', NULL) AS null_expr2;
-null_expr2
+➤ null_expr2[92,64,0]  𝄀
 null
 SELECT TIMEDIFF(NULL, NULL) AS null_both;
-null_both
+➤ null_both[92,64,0]  𝄀
 null
 CREATE TABLE t1(dt1 DATETIME, dt2 DATETIME);
 INSERT INTO t1 VALUES ('2000-01-01 15:30:45', '2000-01-01 10:20:30'), ('2000-01-01 00:00:00', '2000-01-01 00:00:00');
 SELECT TIMEDIFF(dt1, dt2) AS result FROM t1;
-result
-05:10:15
+➤ result[92,64,0]  𝄀
+05:10:15  𝄀
 00:00:00
 DROP TABLE t1;
 CREATE TABLE t1(dt1 DATETIME, dt2 DATETIME);
 INSERT INTO t1 VALUES ('2000-01-01 15:30:45', '2000-01-01 10:20:30'), ('2000-01-01 00:00:00', '2000-01-01 00:00:00');
 SELECT * FROM t1 WHERE TIMEDIFF(dt1, dt2) > '02:00:00';
-dt1    dt2
-2000-01-01 15:30:45    2000-01-01 10:20:30
+➤ dt1[93,64,0]  ¦  dt2[93,64,0]  𝄀
+2000-01-01 15:30:45  ¦  2000-01-01 10:20:30
 DROP TABLE t1;
 SELECT TIMEDIFF('2000-01-01 23:59:59', '2000-01-01 00:00:00') AS max_day_diff;
-max_day_diff
+➤ max_day_diff[92,64,0]  𝄀
 23:59:59
 SELECT TIMEDIFF('2000-01-02 00:00:00', '2000-01-01 00:00:00') AS day_boundary;
-day_boundary
+➤ day_boundary[92,64,0]  𝄀
 24:00:00
 SELECT TIMEDIFF('2000-01-01 00:00:00', '2000-01-02 00:00:00') AS negative_day_boundary;
-negative_day_boundary
+➤ negative_day_boundary[92,64,0]  𝄀
 -24:00:00

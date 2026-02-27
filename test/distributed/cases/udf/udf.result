@@ -3,24 +3,27 @@ select sql_sum(1, 1) as ret;
 ret
 2
 drop function sql_sum(int, int);
-drop database if exists db1;
-create database db1;
-use db1;
-select name, db from mo_catalog.mo_user_defined_function where db = 'db1';
+drop database if exists udf_db1;
+create database udf_db1;
+use udf_db1;
+select name, db from mo_catalog.mo_user_defined_function where db = 'udf_db1';
 name    db
 create function helloworld () returns int language sql as 'select id from tbl1 limit 1';
-select name, db from mo_catalog.mo_user_defined_function where db = 'db1';
+select name, db from mo_catalog.mo_user_defined_function where db = 'udf_db1';
 name    db
-helloworld    db1
-drop database db1;
-select name, db from mo_catalog.mo_user_defined_function where db = 'db1';
+helloworld    udf_db1
+drop database if exists udf_db1;
+select name, db from mo_catalog.mo_user_defined_function where db = 'udf_db1';
 name    db
-create function db1.helloworld5 () returns int language sql as 'select id from tbl1 limit 1';
-Unknown database db1
-create database db1;
-use db1;
-create function db1.helloworld5 () returns int language sql as 'select id from tbl1 limit 1';
-drop function db1.helloworld5();
+create function udf_db1.helloworld5 () returns int language sql as 'select id from tbl1 limit 1';
+Unknown database udf_db1
+create database udf_db1;
+use udf_db1;
+create function udf_db1.helloworld5 () returns int language sql as 'select id from tbl1 limit 1';
+drop function udf_db1.helloworld5();
 drop function db2.helloworld5();
 Unknown database db2
-drop database db1;
+create function sql_nl() returns varchar language sql as $$select '\n'$$;
+select hex(body) as body_hex from mo_catalog.mo_user_defined_function where name = 'sql_nl' and db = 'udf_db1';
+body_hex
+73656C65637420275C6E27

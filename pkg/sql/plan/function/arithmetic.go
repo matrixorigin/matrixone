@@ -68,6 +68,7 @@ func minusOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_decimal64, types.T_decimal128:
 	case types.T_date, types.T_datetime:
 	case types.T_array_float32, types.T_array_float64:
+	case types.T_year:
 	default:
 		return false
 	}
@@ -90,6 +91,7 @@ func multiOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_float32, types.T_float64:
 	case types.T_decimal64, types.T_decimal128:
 	case types.T_array_float32, types.T_array_float64:
+	case types.T_year:
 	default:
 		return false
 	}
@@ -111,6 +113,7 @@ func divOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_float32, types.T_float64:
 	case types.T_decimal64, types.T_decimal128:
 	case types.T_array_float32, types.T_array_float64:
+	case types.T_year:
 	default:
 		return false
 	}
@@ -280,12 +283,12 @@ func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 			return addInt64WithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_float32:
-		return opBinaryFixedFixedToFixed[float32, float32, float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
-			return v1 + v2
+		return opBinaryFixedFixedToFixedWithErrorCheck[float32, float32, float32](parameters, result, proc, length, func(v1, v2 float32) (float32, error) {
+			return addFloat32WithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_float64:
-		return opBinaryFixedFixedToFixed[float64, float64, float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
-			return v1 + v2
+		return opBinaryFixedFixedToFixedWithErrorCheck[float64, float64, float64](parameters, result, proc, length, func(v1, v2 float64) (float64, error) {
+			return addFloat64WithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_decimal64:
 		return decimalArith[types.Decimal64](parameters, result, proc, length, func(v1, v2 types.Decimal64, scale1, scale2 int32) (types.Decimal64, error) {
@@ -380,6 +383,10 @@ func minusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, minusFnArray[float32], selectList)
 	case types.T_array_float64:
 		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, minusFnArray[float64], selectList)
+	case types.T_year:
+		return opBinaryFixedFixedToFixed[types.MoYear, types.MoYear, int64](parameters, result, proc, length, func(v1, v2 types.MoYear) int64 {
+			return int64(v1 - v2)
+		}, selectList)
 	}
 	panic("unreached code")
 }
@@ -457,6 +464,10 @@ func multiFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, multiFnArray[float32], selectList)
 	case types.T_array_float64:
 		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, multiFnArray[float64], selectList)
+	case types.T_year:
+		return opBinaryFixedFixedToFixed[types.MoYear, types.MoYear, int64](parameters, result, proc, length, func(v1, v2 types.MoYear) int64 {
+			return int64(v1) * int64(v2)
+		}, selectList)
 	}
 	panic("unreached code")
 }
@@ -496,6 +507,13 @@ func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, divFnArray[float32], selectList)
 	case types.T_array_float64:
 		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, divFnArray[float64], selectList)
+	case types.T_year:
+		return opBinaryFixedFixedToFixed[types.MoYear, types.MoYear, float64](parameters, result, proc, length, func(v1, v2 types.MoYear) float64 {
+			if v2 == 0 {
+				return math.NaN()
+			}
+			return float64(v1) / float64(v2)
+		}, selectList)
 	}
 	panic("unreached code")
 }

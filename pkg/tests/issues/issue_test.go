@@ -889,6 +889,49 @@ func waitLogtailResume(cn cnservice.Service) {
 	}
 }
 
+// #15087
+func TestLikePatternPlus(t *testing.T) {
+	embed.RunBaseClusterTests(
+		func(c embed.Cluster) {
+			cn, err := c.GetCNService(0)
+			require.NoError(t, err)
+
+			exec := testutils.GetSQLExecutor(cn)
+			require.NotNil(t, exec)
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
+
+			cases := []struct {
+				sql      string
+				expected bool
+			}{
+				{sql: "select '__++' like '__++%';", expected: true},
+				{sql: "select '__++__' like '__\\\\+';", expected: false},
+				{sql: "select '__++__' like '__+';", expected: false},
+			}
+
+			for _, c := range cases {
+				res, err := exec.Exec(ctx, c.sql, executor.Options{})
+				require.NoError(t, err, c.sql)
+
+				var got bool
+				res.ReadRows(
+					func(rows int, cols []*vector.Vector) bool {
+						got = executor.GetFixedRows[bool](cols[0])[0]
+						return true
+					},
+				)
+				res.Close()
+
+				require.Equal(t, c.expected, got, c.sql)
+			}
+		},
+	)
+}
+
 func TestFaultInjection(t *testing.T) {
 	embed.RunBaseClusterTests(
 		func(c embed.Cluster) {

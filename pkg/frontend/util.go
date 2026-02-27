@@ -385,6 +385,9 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, feSes FeSession
 	case types.T_timestamp:
 		val := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)[0]
 		return val.String2(feSes.GetTimeZone(), vec.GetType().Scale), nil
+	case types.T_year:
+		val := vector.MustFixedColNoTypeCheck[types.MoYear](vec)[0]
+		return val.String(), nil
 	case types.T_enum:
 		return vector.MustFixedColNoTypeCheck[types.Enum](vec)[0], nil
 	default:

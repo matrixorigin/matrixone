@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -71,6 +73,12 @@ func (back *backExec) Close() {
 	back.Clear()
 	back.backSes.Close()
 	back.backSes = nil
+}
+
+// UpdateTxn updates the transaction operator without recreating the entire backExec.
+// This allows reusing the backExec across transaction boundaries in autocommit mode.
+func (back *backExec) UpdateTxn(txnOp TxnOperator) {
+	back.backSes.GetTxnHandler().SetShareTxn(txnOp)
 }
 
 func (back *backExec) GetExecStatsArray() statistic.StatsArray {
@@ -807,10 +815,15 @@ type backSession struct {
 
 func newBackSession(ses FeSession, txnOp TxnOperator, db string, callBack outputCallBackFunc) *backSession {
 	service := ses.GetService()
-	txnHandler := InitTxnHandler(ses.GetService(), getPu(service).StorageEngine, ses.GetTxnHandler().GetConnCtx(), txnOp)
+	var connCtx context.Context
+	if ses.GetTxnHandler() != nil {
+		connCtx = ses.GetTxnHandler().GetConnCtx()
+	}
+	txnHandler := InitTxnHandler(ses.GetService(), getPu(service).StorageEngine, connCtx, txnOp)
 	backSes := &backSession{}
 	backSes.initFeSes(ses, txnHandler, db, callBack)
-	backSes.uuid, _ = uuid.NewV7()
+	u, _ := util.FastUuid()
+	backSes.uuid = uuid.UUID(u)
 	return backSes
 }
 
@@ -855,6 +868,15 @@ func (backSes *backSession) getCachedPlan(sql string) *cachedPlan {
 	return nil
 }
 
+func (backSes *backSession) getCleanupContext() context.Context {
+	if txnHandler := backSes.GetTxnHandler(); txnHandler != nil {
+		if ctx := txnHandler.GetTxnCtx(); ctx != nil {
+			return ctx
+		}
+	}
+	return context.Background()
+}
+
 func (backSes *backSession) Close() {
 	if backSes == nil {
 		return
@@ -862,6 +884,7 @@ func (backSes *backSession) Close() {
 	txnHandler := backSes.GetTxnHandler()
 	if txnHandler != nil {
 		tempExecCtx := ExecCtx{
+			reqCtx: backSes.getCleanupContext(),
 			ses:    backSes,
 			txnOpt: FeTxnOption{byRollback: true},
 		}
@@ -931,7 +954,11 @@ func (backSes *backSession) getNextProcessId() string {
 		routineId + sqlCount
 	*/
 	routineId := backSes.respr.GetU32(CONNID)
-	return fmt.Sprintf("%d%d", routineId, backSes.GetSqlCount())
+	// Optimize: use strconv instead of fmt.Sprintf
+	var buf [24]byte
+	b := strconv.AppendUint(buf[:0], uint64(routineId), 10)
+	b = strconv.AppendUint(b, backSes.GetSqlCount(), 10)
+	return string(b)
 }
 
 func (backSes *backSession) cleanCache() {
@@ -1289,4 +1316,11 @@ func (backSes *backSession) RemoveTempTable(dbName, alias string) {
 		return
 	}
 	backSes.upstream.RemoveTempTable(dbName, alias)
+}
+
+func (backSes *backSession) GetSqlModeNoAutoValueOnZero() (bool, bool) {
+	if backSes == nil || backSes.upstream == nil {
+		return false, false
+	}
+	return backSes.upstream.GetSqlModeNoAutoValueOnZero()
 }

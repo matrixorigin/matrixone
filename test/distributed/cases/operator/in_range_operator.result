@@ -1,0 +1,1084 @@
+SELECT IN_RANGE(TRUE, FALSE, TRUE, 0);
+in_range(true, false, true, 0)
+1
+SELECT IN_RANGE(FALSE, TRUE, FALSE, 1);
+in_range(false, true, false, 1)
+0
+SELECT IN_RANGE(TRUE, FALSE, TRUE, 1);
+in_range(true, false, true, 1)
+1
+SELECT IN_RANGE(TRUE, FALSE, TRUE, 2);
+in_range(true, false, true, 2)
+0
+SELECT IN_RANGE(TRUE, FALSE, TRUE, 3);
+in_range(true, false, true, 3)
+0
+SELECT IN_RANGE(NULL, FALSE, TRUE, 0);
+in_range(NULL, false, true, 0)
+NULL
+SELECT IN_RANGE(NULL, FALSE, TRUE, 1);
+in_range(NULL, false, true, 1)
+NULL
+SELECT IN_RANGE(NULL, FALSE, TRUE, 2);
+in_range(NULL, false, true, 2)
+NULL
+SELECT IN_RANGE(NULL, FALSE, TRUE, 3);
+in_range(NULL, false, true, 3)
+NULL
+SELECT IN_RANGE(5, 1, 10, 0);
+in_range(5, 1, 10, 0)
+1
+SELECT IN_RANGE(15, 1, 10, 0);
+in_range(15, 1, 10, 0)
+0
+SELECT IN_RANGE(1, 1, 10, 1);
+in_range(1, 1, 10, 1)
+0
+SELECT IN_RANGE(10, 1, 10, 2);
+in_range(10, 1, 10, 2)
+0
+SELECT IN_RANGE(5, 1, 10, 3);
+in_range(5, 1, 10, 3)
+1
+SELECT IN_RANGE(NULL, 1, 10, 0);
+in_range(NULL, 1, 10, 0)
+NULL
+SELECT IN_RANGE(NULL, 1, 10, 1);
+in_range(NULL, 1, 10, 1)
+NULL
+SELECT IN_RANGE(NULL, 1, 10, 2);
+in_range(NULL, 1, 10, 2)
+NULL
+SELECT IN_RANGE(NULL, 1, 10, 3);
+in_range(NULL, 1, 10, 3)
+NULL
+SELECT IN_RANGE(5, 1, 10, 0);
+in_range(5, 1, 10, 0)
+1
+SELECT IN_RANGE(15, 1, 10, 0);
+in_range(15, 1, 10, 0)
+0
+SELECT IN_RANGE(1, 1, 10, 1);
+in_range(1, 1, 10, 1)
+0
+SELECT IN_RANGE(10, 1, 10, 2);
+in_range(10, 1, 10, 2)
+0
+SELECT IN_RANGE(5, 1, 10, 3);
+in_range(5, 1, 10, 3)
+1
+SELECT IN_RANGE(NULL, 1, 10, 0);
+in_range(NULL, 1, 10, 0)
+NULL
+SELECT IN_RANGE(NULL, 1, 10, 1);
+in_range(NULL, 1, 10, 1)
+NULL
+SELECT IN_RANGE(NULL, 1, 10, 2);
+in_range(NULL, 1, 10, 2)
+NULL
+SELECT IN_RANGE(NULL, 1, 10, 3);
+in_range(NULL, 1, 10, 3)
+NULL
+SELECT IN_RANGE(50, 10, 100, 0);
+in_range(50, 10, 100, 0)
+1
+SELECT IN_RANGE(150, 10, 100, 0);
+in_range(150, 10, 100, 0)
+0
+SELECT IN_RANGE(10, 10, 100, 1);
+in_range(10, 10, 100, 1)
+0
+SELECT IN_RANGE(100, 10, 100, 2);
+in_range(100, 10, 100, 2)
+0
+SELECT IN_RANGE(50, 10, 100, 3);
+in_range(50, 10, 100, 3)
+1
+SELECT IN_RANGE(NULL, 10, 100, 0);
+in_range(NULL, 10, 100, 0)
+NULL
+SELECT IN_RANGE(NULL, 10, 100, 1);
+in_range(NULL, 10, 100, 1)
+NULL
+SELECT IN_RANGE(NULL, 10, 100, 2);
+in_range(NULL, 10, 100, 2)
+NULL
+SELECT IN_RANGE(NULL, 10, 100, 3);
+in_range(NULL, 10, 100, 3)
+NULL
+SELECT IN_RANGE(50, 10, 100, 0);
+in_range(50, 10, 100, 0)
+1
+SELECT IN_RANGE(150, 10, 100, 0);
+in_range(150, 10, 100, 0)
+0
+SELECT IN_RANGE(10, 10, 100, 1);
+in_range(10, 10, 100, 1)
+0
+SELECT IN_RANGE(100, 10, 100, 2);
+in_range(100, 10, 100, 2)
+0
+SELECT IN_RANGE(50, 10, 100, 3);
+in_range(50, 10, 100, 3)
+1
+SELECT IN_RANGE(NULL, 10, 100, 0);
+in_range(NULL, 10, 100, 0)
+NULL
+SELECT IN_RANGE(NULL, 10, 100, 1);
+in_range(NULL, 10, 100, 1)
+NULL
+SELECT IN_RANGE(NULL, 10, 100, 2);
+in_range(NULL, 10, 100, 2)
+NULL
+SELECT IN_RANGE(NULL, 10, 100, 3);
+in_range(NULL, 10, 100, 3)
+NULL
+SELECT IN_RANGE(5, 1, 10, 0);
+in_range(5, 1, 10, 0)
+1
+SELECT IN_RANGE(15, 1, 10, 0);
+in_range(15, 1, 10, 0)
+0
+SELECT IN_RANGE(1, 1, 10, 1);
+in_range(1, 1, 10, 1)
+0
+SELECT IN_RANGE(10, 1, 10, 2);
+in_range(10, 1, 10, 2)
+0
+SELECT IN_RANGE(5, 1, 10, 3);
+in_range(5, 1, 10, 3)
+1
+SELECT IN_RANGE(NULL, 1, 10, 0);
+in_range(NULL, 1, 10, 0)
+NULL
+SELECT IN_RANGE(NULL, 1, 10, 1);
+in_range(NULL, 1, 10, 1)
+NULL
+SELECT IN_RANGE(NULL, 1, 10, 2);
+in_range(NULL, 1, 10, 2)
+NULL
+SELECT IN_RANGE(NULL, 1, 10, 3);
+in_range(NULL, 1, 10, 3)
+NULL
+SELECT IN_RANGE(5, 1, 10, 0);
+in_range(5, 1, 10, 0)
+1
+SELECT IN_RANGE(15, 1, 10, 0);
+in_range(15, 1, 10, 0)
+0
+SELECT IN_RANGE(1, 1, 10, 1);
+in_range(1, 1, 10, 1)
+0
+SELECT IN_RANGE(10, 1, 10, 2);
+in_range(10, 1, 10, 2)
+0
+SELECT IN_RANGE(5, 1, 10, 3);
+in_range(5, 1, 10, 3)
+1
+SELECT IN_RANGE(NULL, 1, 10, 0);
+in_range(NULL, 1, 10, 0)
+NULL
+SELECT IN_RANGE(NULL, 1, 10, 1);
+in_range(NULL, 1, 10, 1)
+NULL
+SELECT IN_RANGE(NULL, 1, 10, 2);
+in_range(NULL, 1, 10, 2)
+NULL
+SELECT IN_RANGE(NULL, 1, 10, 3);
+in_range(NULL, 1, 10, 3)
+NULL
+SELECT IN_RANGE(500, 100, 1000, 0);
+in_range(500, 100, 1000, 0)
+1
+SELECT IN_RANGE(1500, 100, 1000, 0);
+in_range(1500, 100, 1000, 0)
+0
+SELECT IN_RANGE(100, 100, 1000, 1);
+in_range(100, 100, 1000, 1)
+0
+SELECT IN_RANGE(1000, 100, 1000, 2);
+in_range(1000, 100, 1000, 2)
+0
+SELECT IN_RANGE(500, 100, 1000, 3);
+in_range(500, 100, 1000, 3)
+1
+SELECT IN_RANGE(NULL, 100, 1000, 0);
+in_range(NULL, 100, 1000, 0)
+NULL
+SELECT IN_RANGE(NULL, 100, 1000, 1);
+in_range(NULL, 100, 1000, 1)
+NULL
+SELECT IN_RANGE(NULL, 100, 1000, 2);
+in_range(NULL, 100, 1000, 2)
+NULL
+SELECT IN_RANGE(NULL, 100, 1000, 3);
+in_range(NULL, 100, 1000, 3)
+NULL
+SELECT IN_RANGE(500, 100, 1000, 0);
+in_range(500, 100, 1000, 0)
+1
+SELECT IN_RANGE(1500, 100, 1000, 0);
+in_range(1500, 100, 1000, 0)
+0
+SELECT IN_RANGE(100, 100, 1000, 1);
+in_range(100, 100, 1000, 1)
+0
+SELECT IN_RANGE(1000, 100, 1000, 2);
+in_range(1000, 100, 1000, 2)
+0
+SELECT IN_RANGE(500, 100, 1000, 3);
+in_range(500, 100, 1000, 3)
+1
+SELECT IN_RANGE(NULL, 100, 1000, 0);
+in_range(NULL, 100, 1000, 0)
+NULL
+SELECT IN_RANGE(NULL, 100, 1000, 1);
+in_range(NULL, 100, 1000, 1)
+NULL
+SELECT IN_RANGE(NULL, 100, 1000, 2);
+in_range(NULL, 100, 1000, 2)
+NULL
+SELECT IN_RANGE(NULL, 100, 1000, 3);
+in_range(NULL, 100, 1000, 3)
+NULL
+SELECT IN_RANGE(1.5, 1.0, 2.0, 0);
+in_range(1.5, 1.0, 2.0, 0)
+1
+SELECT IN_RANGE(2.5, 1.0, 2.0, 0);
+in_range(2.5, 1.0, 2.0, 0)
+0
+SELECT IN_RANGE(1.0, 1.0, 2.0, 1);
+in_range(1.0, 1.0, 2.0, 1)
+0
+SELECT IN_RANGE(2.0, 1.0, 2.0, 2);
+in_range(2.0, 1.0, 2.0, 2)
+0
+SELECT IN_RANGE(1.5, 1.0, 2.0, 3);
+in_range(1.5, 1.0, 2.0, 3)
+1
+SELECT IN_RANGE(NULL, 1.0, 2.0, 0);
+in_range(NULL, 1.0, 2.0, 0)
+NULL
+SELECT IN_RANGE(NULL, 1.0, 2.0, 1);
+in_range(NULL, 1.0, 2.0, 1)
+NULL
+SELECT IN_RANGE(NULL, 1.0, 2.0, 2);
+in_range(NULL, 1.0, 2.0, 2)
+NULL
+SELECT IN_RANGE(NULL, 1.0, 2.0, 3);
+in_range(NULL, 1.0, 2.0, 3)
+NULL
+SELECT IN_RANGE(10.50, 0.0, 15.0, 0);
+in_range(10.50, 0.0, 15.0, 0)
+1
+SELECT IN_RANGE(20.50, 0.0, 15.0, 0);
+in_range(20.50, 0.0, 15.0, 0)
+0
+SELECT IN_RANGE(0.0, 0.0, 15.0, 1);
+in_range(0.0, 0.0, 15.0, 1)
+0
+SELECT IN_RANGE(15.0, 0.0, 15.0, 2);
+in_range(15.0, 0.0, 15.0, 2)
+0
+SELECT IN_RANGE(10.50, 0.0, 15.0, 3);
+in_range(10.50, 0.0, 15.0, 3)
+1
+SELECT IN_RANGE(NULL, 0.0, 15.0, 0);
+in_range(NULL, 0.0, 15.0, 0)
+NULL
+SELECT IN_RANGE(NULL, 0.0, 15.0, 1);
+in_range(NULL, 0.0, 15.0, 1)
+NULL
+SELECT IN_RANGE(NULL, 0.0, 15.0, 2);
+in_range(NULL, 0.0, 15.0, 2)
+NULL
+SELECT IN_RANGE(NULL, 0.0, 15.0, 3);
+in_range(NULL, 0.0, 15.0, 3)
+NULL
+SELECT IN_RANGE('2022-06-15', '2022-01-01', '2022-12-31', 0);
+in_range(2022-06-15, 2022-01-01, 2022-12-31, 0)
+1
+SELECT IN_RANGE('2021-12-31', '2022-01-01', '2022-12-31', 0);
+in_range(2021-12-31, 2022-01-01, 2022-12-31, 0)
+0
+SELECT IN_RANGE('2022-01-01', '2022-01-01', '2022-12-31', 1);
+in_range(2022-01-01, 2022-01-01, 2022-12-31, 1)
+0
+SELECT IN_RANGE('2022-12-31', '2022-01-01', '2022-12-31', 2);
+in_range(2022-12-31, 2022-01-01, 2022-12-31, 2)
+0
+SELECT IN_RANGE('2022-06-15', '2022-01-01', '2022-12-31', 3);
+in_range(2022-06-15, 2022-01-01, 2022-12-31, 3)
+1
+SELECT IN_RANGE(NULL, '2022-01-01', '2022-12-31', 0);
+in_range(NULL, 2022-01-01, 2022-12-31, 0)
+NULL
+SELECT IN_RANGE(NULL, '2022-01-01', '2022-12-31', 1);
+in_range(NULL, 2022-01-01, 2022-12-31, 1)
+NULL
+SELECT IN_RANGE(NULL, '2022-01-01', '2022-12-31', 2);
+in_range(NULL, 2022-01-01, 2022-12-31, 2)
+NULL
+SELECT IN_RANGE(NULL, '2022-01-01', '2022-12-31', 3);
+in_range(NULL, 2022-01-01, 2022-12-31, 3)
+NULL
+SELECT IN_RANGE('12:00:00', '10:00:00', '14:00:00', 0);
+in_range(12:00:00, 10:00:00, 14:00:00, 0)
+1
+SELECT IN_RANGE('15:00:00', '10:00:00', '14:00:00', 0);
+in_range(15:00:00, 10:00:00, 14:00:00, 0)
+0
+SELECT IN_RANGE('10:00:00', '10:00:00', '14:00:00', 1);
+in_range(10:00:00, 10:00:00, 14:00:00, 1)
+0
+SELECT IN_RANGE('14:00:00', '10:00:00', '14:00:00', 2);
+in_range(14:00:00, 10:00:00, 14:00:00, 2)
+0
+SELECT IN_RANGE('12:00:00', '10:00:00', '14:00:00', 3);
+in_range(12:00:00, 10:00:00, 14:00:00, 3)
+1
+SELECT IN_RANGE(NULL, '10:00:00', '14:00:00', 0);
+in_range(NULL, 10:00:00, 14:00:00, 0)
+NULL
+SELECT IN_RANGE(NULL, '10:00:00', '14:00:00', 1);
+in_range(NULL, 10:00:00, 14:00:00, 1)
+NULL
+SELECT IN_RANGE(NULL, '10:00:00', '14:00:00', 2);
+in_range(NULL, 10:00:00, 14:00:00, 2)
+NULL
+SELECT IN_RANGE(NULL, '10:00:00', '14:00:00', 3);
+in_range(NULL, 10:00:00, 14:00:00, 3)
+NULL
+SELECT IN_RANGE('2022-06-15 12:00:00', '2022-01-01 00:00:00', '2022-12-31 23:59:59', 0);
+in_range(2022-06-15 12:00:00, 2022-01-01 00:00:00, 2022-12-31 23:59:59, 0)
+1
+SELECT IN_RANGE('2023-01-01 00:00:00', '2022-01-01 00:00:00', '2022-12-31 23:59:59', 0);
+in_range(2023-01-01 00:00:00, 2022-01-01 00:00:00, 2022-12-31 23:59:59, 0)
+0
+SELECT IN_RANGE('2022-01-01 00:00:00', '2022-01-01 00:00:00', '2022-12-31 23:59:59', 1);
+in_range(2022-01-01 00:00:00, 2022-01-01 00:00:00, 2022-12-31 23:59:59, 1)
+0
+SELECT IN_RANGE('2022-12-31 23:59:59', '2022-01-01 00:00:00', '2022-12-31 23:59:59', 2);
+in_range(2022-12-31 23:59:59, 2022-01-01 00:00:00, 2022-12-31 23:59:59, 2)
+0
+SELECT IN_RANGE('2022-06-15 12:00:00', '2022-01-01 00:00:00', '2022-12-31 23:59:59', 3);
+in_range(2022-06-15 12:00:00, 2022-01-01 00:00:00, 2022-12-31 23:59:59, 3)
+1
+SELECT IN_RANGE(NULL, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 0);
+in_range(NULL, 2022-01-01 00:00:00, 2022-12-31 23:59:59, 0)
+NULL
+SELECT IN_RANGE(NULL, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 1);
+in_range(NULL, 2022-01-01 00:00:00, 2022-12-31 23:59:59, 1)
+NULL
+SELECT IN_RANGE(NULL, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 2);
+in_range(NULL, 2022-01-01 00:00:00, 2022-12-31 23:59:59, 2)
+NULL
+SELECT IN_RANGE(NULL, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 3);
+in_range(NULL, 2022-01-01 00:00:00, 2022-12-31 23:59:59, 3)
+NULL
+SELECT IN_RANGE('2022-06-15 12:00:00', '2022-01-01 00:00:00', '2022-12-31 23:59:59', 0);
+in_range(2022-06-15 12:00:00, 2022-01-01 00:00:00, 2022-12-31 23:59:59, 0)
+1
+SELECT IN_RANGE('2023-01-01 00:00:00', '2022-01-01 00:00:00', '2022-12-31 23:59:59', 0);
+in_range(2023-01-01 00:00:00, 2022-01-01 00:00:00, 2022-12-31 23:59:59, 0)
+0
+SELECT IN_RANGE('2022-01-01 00:00:00', '2022-01-01 00:00:00', '2022-12-31 23:59:59', 1);
+in_range(2022-01-01 00:00:00, 2022-01-01 00:00:00, 2022-12-31 23:59:59, 1)
+0
+SELECT IN_RANGE('2022-12-31 23:59:59', '2022-01-01 00:00:00', '2022-12-31 23:59:59', 2);
+in_range(2022-12-31 23:59:59, 2022-01-01 00:00:00, 2022-12-31 23:59:59, 2)
+0
+SELECT IN_RANGE('2022-06-15 12:00:00', '2022-01-01 00:00:00', '2022-12-31 23:59:59', 3);
+in_range(2022-06-15 12:00:00, 2022-01-01 00:00:00, 2022-12-31 23:59:59, 3)
+1
+SELECT IN_RANGE(NULL, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 0);
+in_range(NULL, 2022-01-01 00:00:00, 2022-12-31 23:59:59, 0)
+NULL
+SELECT IN_RANGE(NULL, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 1);
+in_range(NULL, 2022-01-01 00:00:00, 2022-12-31 23:59:59, 1)
+NULL
+SELECT IN_RANGE(NULL, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 2);
+in_range(NULL, 2022-01-01 00:00:00, 2022-12-31 23:59:59, 2)
+NULL
+SELECT IN_RANGE(NULL, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 3);
+in_range(NULL, 2022-01-01 00:00:00, 2022-12-31 23:59:59, 3)
+NULL
+SELECT IN_RANGE('hello', 'a', 'z', 0);
+in_range(hello, a, z, 0)
+1
+SELECT IN_RANGE('Hello', 'a', 'z', 0);
+in_range(Hello, a, z, 0)
+0
+SELECT IN_RANGE('a', 'a', 'z', 1);
+in_range(a, a, z, 1)
+0
+SELECT IN_RANGE('z', 'a', 'z', 2);
+in_range(z, a, z, 2)
+0
+SELECT IN_RANGE('m', 'a', 'z', 3);
+in_range(m, a, z, 3)
+1
+SELECT IN_RANGE(NULL, 'a', 'z', 0);
+in_range(NULL, a, z, 0)
+NULL
+SELECT IN_RANGE(NULL, 'a', 'z', 1);
+in_range(NULL, a, z, 1)
+NULL
+SELECT IN_RANGE(NULL, 'a', 'z', 2);
+in_range(NULL, a, z, 2)
+NULL
+SELECT IN_RANGE(NULL, 'a', 'z', 3);
+in_range(NULL, a, z, 3)
+NULL
+DROP TABLE IF EXISTS test_bool;
+CREATE TABLE test_bool(
+bool_primary BOOL PRIMARY KEY,
+bool_normal BOOL
+);
+INSERT INTO test_bool VALUES(TRUE, TRUE), (FALSE, FALSE);
+SELECT * FROM test_bool WHERE IN_RANGE(bool_primary, FALSE, TRUE, 0);
+bool_primary    bool_normal
+1    1
+0    0
+SELECT * FROM test_bool WHERE IN_RANGE(bool_primary, FALSE, TRUE, 1);
+bool_primary    bool_normal
+1    1
+SELECT * FROM test_bool WHERE IN_RANGE(bool_primary, FALSE, TRUE, 2);
+bool_primary    bool_normal
+0    0
+SELECT * FROM test_bool WHERE IN_RANGE(bool_primary, FALSE, TRUE, 3);
+bool_primary    bool_normal
+SELECT * FROM test_bool WHERE IN_RANGE(bool_normal, FALSE, TRUE, 0);
+bool_primary    bool_normal
+1    1
+0    0
+SELECT * FROM test_bool WHERE IN_RANGE(bool_normal, FALSE, TRUE, 1);
+bool_primary    bool_normal
+1    1
+SELECT * FROM test_bool WHERE IN_RANGE(bool_normal, FALSE, TRUE, 2);
+bool_primary    bool_normal
+0    0
+SELECT * FROM test_bool WHERE IN_RANGE(bool_normal, FALSE, TRUE, 3);
+bool_primary    bool_normal
+DROP TABLE IF EXISTS test_bool;
+DROP TABLE IF EXISTS test_tinyint;
+CREATE TABLE test_tinyint(
+tinyint_primary TINYINT PRIMARY KEY,
+tinyint_normal TINYINT
+);
+INSERT INTO test_tinyint VALUES(5, 5), (15, 15), (1, NULL);
+SELECT * FROM test_tinyint WHERE IN_RANGE(tinyint_primary, 1, 10, 0);
+tinyint_primary    tinyint_normal
+5    5
+1    NULL
+SELECT * FROM test_tinyint WHERE IN_RANGE(tinyint_primary, 1, 10, 1);
+tinyint_primary    tinyint_normal
+5    5
+SELECT * FROM test_tinyint WHERE IN_RANGE(tinyint_primary, 1, 10, 2);
+tinyint_primary    tinyint_normal
+5    5
+1    NULL
+SELECT * FROM test_tinyint WHERE IN_RANGE(tinyint_primary, 1, 10, 3);
+tinyint_primary    tinyint_normal
+5    5
+SELECT * FROM test_tinyint WHERE IN_RANGE(tinyint_normal, 1, 10, 0);
+tinyint_primary    tinyint_normal
+5    5
+SELECT * FROM test_tinyint WHERE IN_RANGE(tinyint_normal, 1, 10, 1);
+tinyint_primary    tinyint_normal
+5    5
+SELECT * FROM test_tinyint WHERE IN_RANGE(tinyint_normal, 1, 10, 2);
+tinyint_primary    tinyint_normal
+5    5
+SELECT * FROM test_tinyint WHERE IN_RANGE(tinyint_normal, 1, 10, 3);
+tinyint_primary    tinyint_normal
+5    5
+DROP TABLE IF EXISTS test_tinyint;
+DROP TABLE IF EXISTS test_utinyint;
+CREATE TABLE test_utinyint(
+utinyint_primary TINYINT UNSIGNED PRIMARY KEY,
+utinyint_normal TINYINT UNSIGNED
+);
+INSERT INTO test_utinyint VALUES(5, 5), (15, 15), (1, NULL);
+SELECT * FROM test_utinyint WHERE IN_RANGE(utinyint_primary, 1, 10, 0);
+utinyint_primary    utinyint_normal
+5    5
+1    NULL
+SELECT * FROM test_utinyint WHERE IN_RANGE(utinyint_primary, 1, 10, 1);
+utinyint_primary    utinyint_normal
+5    5
+SELECT * FROM test_utinyint WHERE IN_RANGE(utinyint_primary, 1, 10, 2);
+utinyint_primary    utinyint_normal
+5    5
+1    NULL
+SELECT * FROM test_utinyint WHERE IN_RANGE(utinyint_primary, 1, 10, 3);
+utinyint_primary    utinyint_normal
+5    5
+SELECT * FROM test_utinyint WHERE IN_RANGE(utinyint_normal, 1, 10, 0);
+utinyint_primary    utinyint_normal
+5    5
+SELECT * FROM test_utinyint WHERE IN_RANGE(utinyint_normal, 1, 10, 1);
+utinyint_primary    utinyint_normal
+5    5
+SELECT * FROM test_utinyint WHERE IN_RANGE(utinyint_normal, 1, 10, 2);
+utinyint_primary    utinyint_normal
+5    5
+SELECT * FROM test_utinyint WHERE IN_RANGE(utinyint_normal, 1, 10, 3);
+utinyint_primary    utinyint_normal
+5    5
+DROP TABLE IF EXISTS test_utinyint;
+DROP TABLE IF EXISTS test_smallint;
+CREATE TABLE test_smallint(
+smallint_primary SMALLINT PRIMARY KEY,
+smallint_normal SMALLINT
+);
+INSERT INTO test_smallint VALUES(50, 50), (150, 150), (10, NULL);
+SELECT * FROM test_smallint WHERE IN_RANGE(smallint_primary, 10, 100, 0);
+smallint_primary    smallint_normal
+50    50
+10    NULL
+SELECT * FROM test_smallint WHERE IN_RANGE(smallint_primary, 10, 100, 1);
+smallint_primary    smallint_normal
+50    50
+SELECT * FROM test_smallint WHERE IN_RANGE(smallint_primary, 10, 100, 2);
+smallint_primary    smallint_normal
+50    50
+10    NULL
+SELECT * FROM test_smallint WHERE IN_RANGE(smallint_primary, 10, 100, 3);
+smallint_primary    smallint_normal
+50    50
+SELECT * FROM test_smallint WHERE IN_RANGE(smallint_normal, 10, 100, 0);
+smallint_primary    smallint_normal
+50    50
+SELECT * FROM test_smallint WHERE IN_RANGE(smallint_normal, 10, 100, 1);
+smallint_primary    smallint_normal
+50    50
+SELECT * FROM test_smallint WHERE IN_RANGE(smallint_normal, 10, 100, 2);
+smallint_primary    smallint_normal
+50    50
+SELECT * FROM test_smallint WHERE IN_RANGE(smallint_normal, 10, 100, 3);
+smallint_primary    smallint_normal
+50    50
+DROP TABLE IF EXISTS test_smallint;
+DROP TABLE IF EXISTS test_usmallint;
+CREATE TABLE test_usmallint(
+usmallint_primary SMALLINT UNSIGNED PRIMARY KEY,
+usmallint_normal SMALLINT UNSIGNED
+);
+INSERT INTO test_usmallint VALUES(50, 50), (150, 150), (10, NULL);
+SELECT * FROM test_usmallint WHERE IN_RANGE(usmallint_primary, 10, 100, 0);
+usmallint_primary    usmallint_normal
+50    50
+10    NULL
+SELECT * FROM test_usmallint WHERE IN_RANGE(usmallint_primary, 10, 100, 1);
+usmallint_primary    usmallint_normal
+50    50
+SELECT * FROM test_usmallint WHERE IN_RANGE(usmallint_primary, 10, 100, 2);
+usmallint_primary    usmallint_normal
+50    50
+10    NULL
+SELECT * FROM test_usmallint WHERE IN_RANGE(usmallint_primary, 10, 100, 3);
+usmallint_primary    usmallint_normal
+50    50
+SELECT * FROM test_usmallint WHERE IN_RANGE(usmallint_normal, 10, 100, 0);
+usmallint_primary    usmallint_normal
+50    50
+SELECT * FROM test_usmallint WHERE IN_RANGE(usmallint_normal, 10, 100, 1);
+usmallint_primary    usmallint_normal
+50    50
+SELECT * FROM test_usmallint WHERE IN_RANGE(usmallint_normal, 10, 100, 2);
+usmallint_primary    usmallint_normal
+50    50
+SELECT * FROM test_usmallint WHERE IN_RANGE(usmallint_normal, 10, 100, 3);
+usmallint_primary    usmallint_normal
+50    50
+DROP TABLE IF EXISTS test_usmallint;
+DROP TABLE IF EXISTS test_int;
+CREATE TABLE test_int(
+int_primary INT PRIMARY KEY,
+int_normal INT
+);
+INSERT INTO test_int VALUES(5, 5), (15, 15), (1, NULL);
+SELECT * FROM test_int WHERE IN_RANGE(int_primary, 1, 10, 0);
+int_primary    int_normal
+5    5
+1    NULL
+SELECT * FROM test_int WHERE IN_RANGE(int_primary, 1, 10, 1);
+int_primary    int_normal
+5    5
+SELECT * FROM test_int WHERE IN_RANGE(int_primary, 1, 10, 2);
+int_primary    int_normal
+5    5
+1    NULL
+SELECT * FROM test_int WHERE IN_RANGE(int_primary, 1, 10, 3);
+int_primary    int_normal
+5    5
+SELECT * FROM test_int WHERE IN_RANGE(int_normal, 1, 10, 0);
+int_primary    int_normal
+5    5
+SELECT * FROM test_int WHERE IN_RANGE(int_normal, 1, 10, 1);
+int_primary    int_normal
+5    5
+SELECT * FROM test_int WHERE IN_RANGE(int_normal, 1, 10, 2);
+int_primary    int_normal
+5    5
+SELECT * FROM test_int WHERE IN_RANGE(int_normal, 1, 10, 3);
+int_primary    int_normal
+5    5
+DROP TABLE IF EXISTS test_int;
+DROP TABLE IF EXISTS test_uint;
+CREATE TABLE test_uint(
+uint_primary INT UNSIGNED PRIMARY KEY,
+uint_normal INT UNSIGNED
+);
+INSERT INTO test_uint VALUES(5, 5), (15, 15), (1, NULL);
+SELECT * FROM test_uint WHERE IN_RANGE(uint_primary, 1, 10, 0);
+uint_primary    uint_normal
+5    5
+1    NULL
+SELECT * FROM test_uint WHERE IN_RANGE(uint_primary, 1, 10, 1);
+uint_primary    uint_normal
+5    5
+SELECT * FROM test_uint WHERE IN_RANGE(uint_primary, 1, 10, 2);
+uint_primary    uint_normal
+5    5
+1    NULL
+SELECT * FROM test_uint WHERE IN_RANGE(uint_primary, 1, 10, 3);
+uint_primary    uint_normal
+5    5
+SELECT * FROM test_uint WHERE IN_RANGE(uint_normal, 1, 10, 0);
+uint_primary    uint_normal
+5    5
+SELECT * FROM test_uint WHERE IN_RANGE(uint_normal, 1, 10, 1);
+uint_primary    uint_normal
+5    5
+SELECT * FROM test_uint WHERE IN_RANGE(uint_normal, 1, 10, 2);
+uint_primary    uint_normal
+5    5
+SELECT * FROM test_uint WHERE IN_RANGE(uint_normal, 1, 10, 3);
+uint_primary    uint_normal
+5    5
+DROP TABLE IF EXISTS test_uint;
+DROP TABLE IF EXISTS test_bigint;
+CREATE TABLE test_bigint(
+bigint_primary BIGINT PRIMARY KEY,
+bigint_normal BIGINT
+);
+INSERT INTO test_bigint VALUES(500, 500), (1500, 1500), (100, NULL);
+SELECT * FROM test_bigint WHERE IN_RANGE(bigint_primary, 100, 1000, 0);
+bigint_primary    bigint_normal
+500    500
+100    NULL
+SELECT * FROM test_bigint WHERE IN_RANGE(bigint_primary, 100, 1000, 1);
+bigint_primary    bigint_normal
+500    500
+SELECT * FROM test_bigint WHERE IN_RANGE(bigint_primary, 100, 1000, 2);
+bigint_primary    bigint_normal
+500    500
+100    NULL
+SELECT * FROM test_bigint WHERE IN_RANGE(bigint_primary, 100, 1000, 3);
+bigint_primary    bigint_normal
+500    500
+SELECT * FROM test_bigint WHERE IN_RANGE(bigint_normal, 100, 1000, 0);
+bigint_primary    bigint_normal
+500    500
+SELECT * FROM test_bigint WHERE IN_RANGE(bigint_normal, 100, 1000, 1);
+bigint_primary    bigint_normal
+500    500
+SELECT * FROM test_bigint WHERE IN_RANGE(bigint_normal, 100, 1000, 2);
+bigint_primary    bigint_normal
+500    500
+SELECT * FROM test_bigint WHERE IN_RANGE(bigint_normal, 100, 1000, 3);
+bigint_primary    bigint_normal
+500    500
+DROP TABLE IF EXISTS test_bigint;
+DROP TABLE IF EXISTS test_ubigint;
+CREATE TABLE test_ubigint(
+ubigint_primary BIGINT UNSIGNED PRIMARY KEY,
+ubigint_normal BIGINT UNSIGNED
+);
+INSERT INTO test_ubigint VALUES(500, 500), (1500, 1500), (100, NULL);
+SELECT * FROM test_ubigint WHERE IN_RANGE(ubigint_primary, 100, 1000, 0);
+ubigint_primary    ubigint_normal
+500    500
+100    NULL
+SELECT * FROM test_ubigint WHERE IN_RANGE(ubigint_primary, 100, 1000, 1);
+ubigint_primary    ubigint_normal
+500    500
+SELECT * FROM test_ubigint WHERE IN_RANGE(ubigint_primary, 100, 1000, 2);
+ubigint_primary    ubigint_normal
+500    500
+100    NULL
+SELECT * FROM test_ubigint WHERE IN_RANGE(ubigint_primary, 100, 1000, 3);
+ubigint_primary    ubigint_normal
+500    500
+SELECT * FROM test_ubigint WHERE IN_RANGE(ubigint_normal, 100, 1000, 0);
+ubigint_primary    ubigint_normal
+500    500
+SELECT * FROM test_ubigint WHERE IN_RANGE(ubigint_normal, 100, 1000, 1);
+ubigint_primary    ubigint_normal
+500    500
+SELECT * FROM test_ubigint WHERE IN_RANGE(ubigint_normal, 100, 1000, 2);
+ubigint_primary    ubigint_normal
+500    500
+SELECT * FROM test_ubigint WHERE IN_RANGE(ubigint_normal, 100, 1000, 3);
+ubigint_primary    ubigint_normal
+500    500
+DROP TABLE IF EXISTS test_ubigint;
+DROP TABLE IF EXISTS test_float;
+CREATE TABLE test_float(
+float_primary FLOAT PRIMARY KEY,
+float_normal FLOAT
+);
+INSERT INTO test_float VALUES(1.5, 1.5), (2.5, 2.5), (1.1, NULL);
+SELECT * FROM test_float WHERE IN_RANGE(float_primary, 1.0, 2.0, 0);
+float_primary    float_normal
+1.5    1.5
+1.1    NULL
+SELECT * FROM test_float WHERE IN_RANGE(float_primary, 1.0, 2.0, 1);
+float_primary    float_normal
+1.5    1.5
+1.1    NULL
+SELECT * FROM test_float WHERE IN_RANGE(float_primary, 1.0, 2.0, 2);
+float_primary    float_normal
+1.5    1.5
+1.1    NULL
+SELECT * FROM test_float WHERE IN_RANGE(float_primary, 1.0, 2.0, 3);
+float_primary    float_normal
+1.5    1.5
+1.1    NULL
+SELECT * FROM test_float WHERE IN_RANGE(float_normal, 1.0, 2.0, 0);
+float_primary    float_normal
+1.5    1.5
+SELECT * FROM test_float WHERE IN_RANGE(float_normal, 1.0, 2.0, 1);
+float_primary    float_normal
+1.5    1.5
+SELECT * FROM test_float WHERE IN_RANGE(float_normal, 1.0, 2.0, 2);
+float_primary    float_normal
+1.5    1.5
+SELECT * FROM test_float WHERE IN_RANGE(float_normal, 1.0, 2.0, 3);
+float_primary    float_normal
+1.5    1.5
+DROP TABLE IF EXISTS test_float;
+DROP TABLE IF EXISTS test_decimal;
+CREATE TABLE test_decimal(
+decimal_primary DECIMAL(10,2) PRIMARY KEY,
+decimal_normal DECIMAL(10,2)
+);
+INSERT INTO test_decimal VALUES(10.50, 10.50), (20.50, 20.50), (5.50, NULL);
+SELECT * FROM test_decimal WHERE IN_RANGE(decimal_primary, 0.0, 15.0, 0);
+decimal_primary    decimal_normal
+10.50    10.50
+5.50    NULL
+SELECT * FROM test_decimal WHERE IN_RANGE(decimal_primary, 0.0, 15.0, 1);
+decimal_primary    decimal_normal
+10.50    10.50
+5.50    NULL
+SELECT * FROM test_decimal WHERE IN_RANGE(decimal_primary, 0.0, 15.0, 2);
+decimal_primary    decimal_normal
+10.50    10.50
+5.50    NULL
+SELECT * FROM test_decimal WHERE IN_RANGE(decimal_primary, 0.0, 15.0, 3);
+decimal_primary    decimal_normal
+10.50    10.50
+5.50    NULL
+SELECT * FROM test_decimal WHERE IN_RANGE(decimal_normal, 0.0, 15.0, 0);
+decimal_primary    decimal_normal
+10.50    10.50
+SELECT * FROM test_decimal WHERE IN_RANGE(decimal_normal, 0.0, 15.0, 1);
+decimal_primary    decimal_normal
+10.50    10.50
+SELECT * FROM test_decimal WHERE IN_RANGE(decimal_normal, 0.0, 15.0, 2);
+decimal_primary    decimal_normal
+10.50    10.50
+SELECT * FROM test_decimal WHERE IN_RANGE(decimal_normal, 0.0, 15.0, 3);
+decimal_primary    decimal_normal
+10.50    10.50
+DROP TABLE IF EXISTS test_decimal;
+DROP TABLE IF EXISTS test_date;
+CREATE TABLE test_date(
+date_primary DATE PRIMARY KEY,
+date_normal DATE
+);
+INSERT INTO test_date VALUES('2022-06-15', '2022-06-15'), ('2022-07-15', '2022-07-15'), ('2022-08-15', NULL);
+SELECT * FROM test_date WHERE IN_RANGE(date_primary, '2022-01-01', '2022-12-31', 0);
+date_primary    date_normal
+2022-06-15    2022-06-15
+2022-07-15    2022-07-15
+2022-08-15    NULL
+SELECT * FROM test_date WHERE IN_RANGE(date_primary, '2022-01-01', '2022-12-31', 1);
+date_primary    date_normal
+2022-06-15    2022-06-15
+2022-07-15    2022-07-15
+2022-08-15    NULL
+SELECT * FROM test_date WHERE IN_RANGE(date_primary, '2022-01-01', '2022-12-31', 2);
+date_primary    date_normal
+2022-06-15    2022-06-15
+2022-07-15    2022-07-15
+2022-08-15    NULL
+SELECT * FROM test_date WHERE IN_RANGE(date_primary, '2022-01-01', '2022-12-31', 3);
+date_primary    date_normal
+2022-06-15    2022-06-15
+2022-07-15    2022-07-15
+2022-08-15    NULL
+SELECT * FROM test_date WHERE IN_RANGE(date_normal, '2022-01-01', '2022-12-31', 0);
+date_primary    date_normal
+2022-06-15    2022-06-15
+2022-07-15    2022-07-15
+SELECT * FROM test_date WHERE IN_RANGE(date_normal, '2022-01-01', '2022-12-31', 1);
+date_primary    date_normal
+2022-06-15    2022-06-15
+2022-07-15    2022-07-15
+SELECT * FROM test_date WHERE IN_RANGE(date_normal, '2022-01-01', '2022-12-31', 2);
+date_primary    date_normal
+2022-06-15    2022-06-15
+2022-07-15    2022-07-15
+SELECT * FROM test_date WHERE IN_RANGE(date_normal, '2022-01-01', '2022-12-31', 3);
+date_primary    date_normal
+2022-06-15    2022-06-15
+2022-07-15    2022-07-15
+DROP TABLE IF EXISTS test_date;
+DROP TABLE IF EXISTS test_time;
+CREATE TABLE test_time(
+time_primary TIME PRIMARY KEY,
+time_normal TIME
+);
+INSERT INTO test_time VALUES('12:00:00', '12:00:00'), ('13:00:00', '13:00:00'), ('15:00:00', NULL);
+SELECT * FROM test_time WHERE IN_RANGE(time_primary, '10:00:00', '14:00:00', 0);
+time_primary    time_normal
+12:00:00    12:00:00
+13:00:00    13:00:00
+SELECT * FROM test_time WHERE IN_RANGE(time_primary, '10:00:00', '14:00:00', 1);
+time_primary    time_normal
+12:00:00    12:00:00
+13:00:00    13:00:00
+SELECT * FROM test_time WHERE IN_RANGE(time_primary, '10:00:00', '14:00:00', 2);
+time_primary    time_normal
+12:00:00    12:00:00
+13:00:00    13:00:00
+SELECT * FROM test_time WHERE IN_RANGE(time_primary, '10:00:00', '14:00:00', 3);
+time_primary    time_normal
+12:00:00    12:00:00
+13:00:00    13:00:00
+SELECT * FROM test_time WHERE IN_RANGE(time_normal, '10:00:00', '14:00:00', 0);
+time_primary    time_normal
+12:00:00    12:00:00
+13:00:00    13:00:00
+SELECT * FROM test_time WHERE IN_RANGE(time_normal, '10:00:00', '14:00:00', 1);
+time_primary    time_normal
+12:00:00    12:00:00
+13:00:00    13:00:00
+SELECT * FROM test_time WHERE IN_RANGE(time_normal, '10:00:00', '14:00:00', 2);
+time_primary    time_normal
+12:00:00    12:00:00
+13:00:00    13:00:00
+SELECT * FROM test_time WHERE IN_RANGE(time_normal, '10:00:00', '14:00:00', 3);
+time_primary    time_normal
+12:00:00    12:00:00
+13:00:00    13:00:00
+DROP TABLE IF EXISTS test_time;
+DROP TABLE IF EXISTS test_datetime;
+CREATE TABLE test_datetime(
+datetime_primary DATETIME PRIMARY KEY,
+datetime_normal DATETIME
+);
+INSERT INTO test_datetime VALUES('2022-06-15 12:00:00', '2022-06-15 12:00:00'), ('2022-07-15 13:00:00', '2022-07-15 13:00:00'), ('2022-08-15 15:00:00', NULL);
+SELECT * FROM test_datetime WHERE IN_RANGE(datetime_primary, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 0);
+datetime_primary    datetime_normal
+2022-06-15 12:00:00    2022-06-15 12:00:00
+2022-07-15 13:00:00    2022-07-15 13:00:00
+2022-08-15 15:00:00    NULL
+SELECT * FROM test_datetime WHERE IN_RANGE(datetime_primary, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 1);
+datetime_primary    datetime_normal
+2022-06-15 12:00:00    2022-06-15 12:00:00
+2022-07-15 13:00:00    2022-07-15 13:00:00
+2022-08-15 15:00:00    NULL
+SELECT * FROM test_datetime WHERE IN_RANGE(datetime_primary, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 2);
+datetime_primary    datetime_normal
+2022-06-15 12:00:00    2022-06-15 12:00:00
+2022-07-15 13:00:00    2022-07-15 13:00:00
+2022-08-15 15:00:00    NULL
+SELECT * FROM test_datetime WHERE IN_RANGE(datetime_primary, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 3);
+datetime_primary    datetime_normal
+2022-06-15 12:00:00    2022-06-15 12:00:00
+2022-07-15 13:00:00    2022-07-15 13:00:00
+2022-08-15 15:00:00    NULL
+SELECT * FROM test_datetime WHERE IN_RANGE(datetime_normal, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 0);
+datetime_primary    datetime_normal
+2022-06-15 12:00:00    2022-06-15 12:00:00
+2022-07-15 13:00:00    2022-07-15 13:00:00
+SELECT * FROM test_datetime WHERE IN_RANGE(datetime_normal, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 1);
+datetime_primary    datetime_normal
+2022-06-15 12:00:00    2022-06-15 12:00:00
+2022-07-15 13:00:00    2022-07-15 13:00:00
+SELECT * FROM test_datetime WHERE IN_RANGE(datetime_normal, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 2);
+datetime_primary    datetime_normal
+2022-06-15 12:00:00    2022-06-15 12:00:00
+2022-07-15 13:00:00    2022-07-15 13:00:00
+SELECT * FROM test_datetime WHERE IN_RANGE(datetime_normal, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 3);
+datetime_primary    datetime_normal
+2022-06-15 12:00:00    2022-06-15 12:00:00
+2022-07-15 13:00:00    2022-07-15 13:00:00
+DROP TABLE IF EXISTS test_datetime;
+DROP TABLE IF EXISTS test_timestamp;
+CREATE TABLE test_timestamp(
+timestamp_primary TIMESTAMP PRIMARY KEY,
+timestamp_normal TIMESTAMP
+);
+INSERT INTO test_timestamp VALUES('2022-06-15 12:00:00', '2022-06-15 12:00:00'), ('2022-07-15 13:00:00', '2022-07-15 13:00:00'), ('2022-08-15 15:00:00', NULL);
+SELECT * FROM test_timestamp WHERE IN_RANGE(timestamp_primary, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 0);
+timestamp_primary    timestamp_normal
+2022-06-15 12:00:00    2022-06-15 12:00:00
+2022-07-15 13:00:00    2022-07-15 13:00:00
+2022-08-15 15:00:00    NULL
+SELECT * FROM test_timestamp WHERE IN_RANGE(timestamp_primary, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 1);
+timestamp_primary    timestamp_normal
+2022-06-15 12:00:00    2022-06-15 12:00:00
+2022-07-15 13:00:00    2022-07-15 13:00:00
+2022-08-15 15:00:00    NULL
+SELECT * FROM test_timestamp WHERE IN_RANGE(timestamp_primary, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 2);
+timestamp_primary    timestamp_normal
+2022-06-15 12:00:00    2022-06-15 12:00:00
+2022-07-15 13:00:00    2022-07-15 13:00:00
+2022-08-15 15:00:00    NULL
+SELECT * FROM test_timestamp WHERE IN_RANGE(timestamp_primary, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 3);
+timestamp_primary    timestamp_normal
+2022-06-15 12:00:00    2022-06-15 12:00:00
+2022-07-15 13:00:00    2022-07-15 13:00:00
+2022-08-15 15:00:00    NULL
+SELECT * FROM test_timestamp WHERE IN_RANGE(timestamp_normal, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 0);
+timestamp_primary    timestamp_normal
+2022-06-15 12:00:00    2022-06-15 12:00:00
+2022-07-15 13:00:00    2022-07-15 13:00:00
+SELECT * FROM test_timestamp WHERE IN_RANGE(timestamp_normal, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 1);
+timestamp_primary    timestamp_normal
+2022-06-15 12:00:00    2022-06-15 12:00:00
+2022-07-15 13:00:00    2022-07-15 13:00:00
+SELECT * FROM test_timestamp WHERE IN_RANGE(timestamp_normal, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 2);
+timestamp_primary    timestamp_normal
+2022-06-15 12:00:00    2022-06-15 12:00:00
+2022-07-15 13:00:00    2022-07-15 13:00:00
+SELECT * FROM test_timestamp WHERE IN_RANGE(timestamp_normal, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 3);
+timestamp_primary    timestamp_normal
+2022-06-15 12:00:00    2022-06-15 12:00:00
+2022-07-15 13:00:00    2022-07-15 13:00:00
+DROP TABLE IF EXISTS test_timestamp;
+DROP TABLE IF EXISTS test_varchar;
+CREATE TABLE test_varchar(
+varchar_primary VARCHAR(50) PRIMARY KEY,
+varchar_normal VARCHAR(50)
+);
+INSERT INTO test_varchar VALUES('hello', 'hello'), ('world', 'world'), ('test', NULL);
+SELECT * FROM test_varchar WHERE IN_RANGE(varchar_primary, 'a', 'z', 0);
+varchar_primary    varchar_normal
+hello    hello
+world    world
+test    NULL
+SELECT * FROM test_varchar WHERE IN_RANGE(varchar_primary, 'a', 'z', 1);
+varchar_primary    varchar_normal
+hello    hello
+world    world
+test    NULL
+SELECT * FROM test_varchar WHERE IN_RANGE(varchar_primary, 'a', 'z', 2);
+varchar_primary    varchar_normal
+hello    hello
+world    world
+test    NULL
+SELECT * FROM test_varchar WHERE IN_RANGE(varchar_primary, 'a', 'z', 3);
+varchar_primary    varchar_normal
+hello    hello
+world    world
+test    NULL
+SELECT * FROM test_varchar WHERE IN_RANGE(varchar_normal, 'a', 'z', 0);
+varchar_primary    varchar_normal
+hello    hello
+world    world
+SELECT * FROM test_varchar WHERE IN_RANGE(varchar_normal, 'a', 'z', 1);
+varchar_primary    varchar_normal
+hello    hello
+world    world
+SELECT * FROM test_varchar WHERE IN_RANGE(varchar_normal, 'a', 'z', 2);
+varchar_primary    varchar_normal
+hello    hello
+world    world
+SELECT * FROM test_varchar WHERE IN_RANGE(varchar_normal, 'a', 'z', 3);
+varchar_primary    varchar_normal
+hello    hello
+world    world
+DROP TABLE IF EXISTS test_varchar;
+DROP TABLE IF EXISTS test_large_int;
+CREATE TABLE test_large_int(
+int_col INT PRIMARY KEY,
+int_data INT
+);
+INSERT INTO test_large_int SELECT *, * FROM generate_series(1, 1000000) t;
+SELECT COUNT(*) FROM test_large_int WHERE IN_RANGE(int_col, 100000, 900000, 0);
+count(*)
+800001
+SELECT COUNT(*) FROM test_large_int WHERE IN_RANGE(int_col, 100000, 900000, 1);
+count(*)
+800000
+SELECT COUNT(*) FROM test_large_int WHERE IN_RANGE(int_col, 100000, 900000, 2);
+count(*)
+800000
+SELECT COUNT(*) FROM test_large_int WHERE IN_RANGE(int_col, 100000, 900000, 3);
+count(*)
+799999
+DROP TABLE IF EXISTS test_large_int;
+DROP TABLE IF EXISTS test_large_float;
+CREATE TABLE test_large_float(
+float_col FLOAT PRIMARY KEY,
+float_data FLOAT
+);
+INSERT INTO test_large_float SELECT *, * FROM generate_series(1, 1000000) t;
+SELECT COUNT(*) FROM test_large_float WHERE IN_RANGE(float_col, 100000.0, 900000.0, 0);
+count(*)
+800001
+SELECT COUNT(*) FROM test_large_float WHERE IN_RANGE(float_col, 100000.0, 900000.0, 1);
+count(*)
+800000
+SELECT COUNT(*) FROM test_large_float WHERE IN_RANGE(float_col, 100000.0, 900000.0, 2);
+count(*)
+800000
+SELECT COUNT(*) FROM test_large_float WHERE IN_RANGE(float_col, 100000.0, 900000.0, 3);
+count(*)
+799999
+DROP TABLE IF EXISTS test_large_float;
+DROP TABLE IF EXISTS test_large_decimal;
+CREATE TABLE test_large_decimal(
+decimal_col DECIMAL(15,2) PRIMARY KEY,
+decimal_data DECIMAL(15,2)
+);
+INSERT INTO test_large_decimal SELECT *, * FROM generate_series(1, 1000000) t;
+SELECT COUNT(*) FROM test_large_decimal WHERE IN_RANGE(decimal_col, 100000.00, 900000.00, 0);
+count(*)
+800001
+SELECT COUNT(*) FROM test_large_decimal WHERE IN_RANGE(decimal_col, 100000.00, 900000.00, 1);
+count(*)
+800000
+SELECT COUNT(*) FROM test_large_decimal WHERE IN_RANGE(decimal_col, 100000.00, 900000.00, 2);
+count(*)
+800000
+SELECT COUNT(*) FROM test_large_decimal WHERE IN_RANGE(decimal_col, 100000.00, 900000.00, 3);
+count(*)
+799999
+DROP TABLE IF EXISTS test_large_decimal;
+DROP TABLE IF EXISTS test_large_varchar;
+CREATE TABLE test_large_varchar(
+varchar_col VARCHAR(50) PRIMARY KEY,
+varchar_data VARCHAR(50)
+);
+INSERT INTO test_large_varchar SELECT *, * FROM generate_series(1, 1000000) t;
+SELECT COUNT(*) FROM test_large_varchar WHERE IN_RANGE(varchar_col, '100000', '900000', 0);
+count(*)
+888890
+SELECT COUNT(*) FROM test_large_varchar WHERE IN_RANGE(varchar_col, '100000', '900000', 1);
+count(*)
+888889
+SELECT COUNT(*) FROM test_large_varchar WHERE IN_RANGE(varchar_col, '100000', '900000', 2);
+count(*)
+888889
+SELECT COUNT(*) FROM test_large_varchar WHERE IN_RANGE(varchar_col, '100000', '900000', 3);
+count(*)
+888888
+DROP TABLE IF EXISTS test_large_varchar;

@@ -41,6 +41,8 @@ drop table t4;
 select length(cast(uuid() as varchar));
 select length(cast(uuid() as char));
 select length(cast(uuid() as text));
+-- issue 21512: uuid should display as string-compatible output
+select length(cast(uuid() as varchar)) = 36;
 
 CREATE TABLE ratings (   `book_id` bigint,   `user_id` bigint,   `score` tinyint,   `rated_at` datetime DEFAULT NOW(),   PRIMARY KEY (`book_id`,`user_id`) );
 desc ratings;

@@ -89,5 +89,5 @@ date_val date
 );
 load data infile {'filepath'='$resources/load_data/string_to_datetime_invalid.parq', 'format'='parquet'}
 into table test_datetime_invalid;
-
+invalid argument parsedate, bad value 2024-13-45
 drop database test_string_to_datetime;
