@@ -20,7 +20,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	vmetric "github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -34,11 +35,12 @@ const (
 )
 
 type container struct {
-	state      int
-	bat        *batch.Batch // build batch
-	rbat       *batch.Batch
-	inBat      *batch.Batch // probe batch
-	metrictype vmetric.MetricType
+	state       int
+	bat         *batch.Batch // build batch
+	rbat        *batch.Batch
+	inBat       *batch.Batch // probe batch
+	metrictype  metric.MetricType
+	brute_force cache.VectorIndexSearchIf // brute_force.BruteForceIndex
 }
 
 type Productl2 struct {
@@ -89,11 +91,13 @@ func (productl2 *Productl2) Reset(proc *process.Process, pipelineFailed bool, er
 	if productl2.ctr.rbat != nil {
 		productl2.ctr.rbat.CleanOnlyData()
 	}
+	productl2.ctr.release()
 	productl2.ctr.inBat = nil
 	productl2.ctr.state = Build
 }
 
 func (productl2 *Productl2) Free(proc *process.Process, pipelineFailed bool, err error) {
+	productl2.ctr.release()
 	productl2.ctr.cleanBatch(proc.Mp())
 }
 

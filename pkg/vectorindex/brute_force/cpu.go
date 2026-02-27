@@ -1,4 +1,6 @@
-// Copyright 2023 Matrix Origin
+//go:build !gpu
+
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,22 +14,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package kmeans
+package brute_force
 
-import "context"
-
-const DefaultRandSeed = 1
-
-type Clusterer interface {
-	InitCentroids(context.Context) error
-	Cluster(context.Context) (any, error)
-	SSE() (float64, error)
-	Close() error
-}
-
-type InitType uint16
-
-const (
-	Random InitType = iota
-	KmeansPlusPlus
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
+
+func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
+	dimension uint,
+	m metric.MetricType,
+	elemsz uint) (cache.VectorIndexSearchIf, error) {
+
+	return NewCpuBruteForceIndex[T](dataset, dimension, m, elemsz)
+}
