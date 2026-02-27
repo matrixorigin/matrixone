@@ -161,7 +161,7 @@ func handleObjectList(
 
 	// Resolve snapshot using session
 	resolveSnapshot := func(ctx context.Context, snapshotName string) (*timestamp.Timestamp, error) {
-		snapshot, err := ses.GetTxnCompileCtx().ResolveSnapshotWithSnapshotName(snapshotName)
+		snapshot, err := doResolveSnapshotWithSnapshotName(ctx, ses, snapshotName)
 		if err != nil || snapshot == nil || snapshot.TS == nil {
 			return nil, err
 		}
@@ -541,7 +541,7 @@ func handleInternalObjectList(ses FeSession, execCtx *ExecCtx, ic *InternalCmdOb
 
 	// Resolve snapshot using session
 	resolveSnapshot := func(ctx context.Context, snapshotName string) (*timestamp.Timestamp, error) {
-		snapshot, err := session.GetTxnCompileCtx().ResolveSnapshotWithSnapshotName(snapshotName)
+		snapshot, err := doResolveSnapshotWithSnapshotName(ctx, session, snapshotName)
 		if err != nil || snapshot == nil || snapshot.TS == nil {
 			return nil, err
 		}
