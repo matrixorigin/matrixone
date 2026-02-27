@@ -155,6 +155,15 @@ func (ls *LocalDisttaeDataSource) String() string {
 		blks)
 }
 
+func (ls *LocalDisttaeDataSource) GetObjectCreateTS(
+	bid *objectio.Blockid,
+) (types.TS, bool) {
+	if ls == nil || ls.pState == nil || bid == nil {
+		return types.TS{}, false
+	}
+	return ls.pState.GetDataObjectCreateTS(bid.Object())
+}
+
 func (ls *LocalDisttaeDataSource) SetOrderBy(orderby []*plan.OrderBySpec) {
 	ls.OrderBy = orderby
 }
@@ -849,9 +858,30 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 				if i == physicalColumnPos {
 					continue
 				}
-				idx := 2 /*rowid and commits*/ + seqNums[i]
+
+				var idx uint16
+				switch seqNums[i] {
+				case objectio.SEQNUM_COMMITTS:
+					// in-memory committed row batch layout:
+					// [0]=rowid, [1]=commitTS, [2+seq]=user columns
+					idx = 1
+				default:
+					idx = 2 /*rowid and commits*/ + seqNums[i]
+				}
+
 				if int(idx) >= len(entry.Batch.Vecs) /*add column*/ ||
 					entry.Batch.Attrs[idx] == "" /*drop column*/ {
+					if seqNums[i] == objectio.SEQNUM_COMMITTS {
+						logutil.Infof(
+							"AAAA inmem commit missing: tableId=%d idx=%d vecs=%d attrs=%d rowOffset=%d rowTime=%s",
+							ls.table.tableId,
+							idx,
+							len(entry.Batch.Vecs),
+							len(entry.Batch.Attrs),
+							entry.Offset,
+							entry.Time.ToString(),
+						)
+					}
 					err = vector.AppendAny(
 						outBatch.Vecs[i],
 						nil,
@@ -859,7 +889,7 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 						mp)
 				} else {
 					err = outBatch.Vecs[i].UnionOne(
-						entry.Batch.Vecs[int(2+seqNums[i])],
+						entry.Batch.Vecs[int(idx)],
 						entry.Offset,
 						mp,
 					)

@@ -1588,6 +1588,19 @@ func (p *PartitionState) IsDataObjectVisible(objId *types.Objectid, snapshot typ
 	return false
 }
 
+// GetDataObjectCreateTS returns the create timestamp of a persisted data object.
+func (p *PartitionState) GetDataObjectCreateTS(objID *types.Objectid) (types.TS, bool) {
+	var stats objectio.ObjectStats
+	objectio.SetObjectStatsObjectName(&stats, objectio.BuildObjectNameWithObjectID(objID))
+
+	entry := objectio.ObjectEntry{ObjectStats: stats}
+	if obj, exists := p.dataObjectsNameIndex.Get(entry); exists {
+		return obj.CreateTime, true
+	}
+
+	return types.TS{}, false
+}
+
 // countTombstoneStatsLinear uses linear deduplication for single object
 // Single object is already sorted, no cross-object duplicates possible
 func (p *PartitionState) countTombstoneStatsLinear(

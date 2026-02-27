@@ -160,6 +160,7 @@ func ReadOneBlockWithMeta(
 	blkmeta := meta.GetBlockMeta(uint32(blk))
 	maxSeqnum := blkmeta.GetMaxSeqnum()
 	for i, seqnum := range seqnums {
+		reqSeqnum := seqnum
 		// special columns
 		if seqnum >= SEQNUM_UPPER {
 			metaColCnt := blkmeta.GetMetaColumnCount()
@@ -176,6 +177,18 @@ func ReadOneBlockWithMeta(
 			//  2. old version tn nonappendable block
 			col := blkmeta.ColumnMeta(seqnum)
 			if col.DataType() != uint8(types.T_TS) {
+				if reqSeqnum == SEQNUM_COMMITTS {
+					logutil.Infof(
+						"AAAA objectio commit placeholder: file=%s blk=%d reqSeq=%d mappedSeq=%d metaColCnt=%d dtype=%d rows=%d",
+						name,
+						blk,
+						reqSeqnum,
+						seqnum,
+						metaColCnt,
+						col.DataType(),
+						blkmeta.GetRows(),
+					)
+				}
 				putFillHolder(i, seqnum)
 			} else {
 				ext := col.Location()

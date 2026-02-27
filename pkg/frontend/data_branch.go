@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"regexp"
 	"runtime"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,14 +35,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/panjf2000/ants/v2"
 )
 
@@ -1202,11 +1201,7 @@ func decideCollectRange(
 		tarTableID  = tables.tarRel.GetTableID(ctx)
 		baseTableID = tables.baseRel.GetTableID(ctx)
 
-		mp    = ses.proc.Mp()
-		eng   = ses.proc.GetSessionInfo().StorageEngine
-		txnOp = ses.GetTxnHandler().GetTxn()
-
-		txnSnapshot = types.TimestampToTS(txnOp.SnapshotTS())
+		txnSnapshot = types.TimestampToTS(ses.GetTxnHandler().GetTxn().SnapshotTS())
 	)
 
 	tarSp = txnSnapshot
@@ -1220,10 +1215,8 @@ func decideCollectRange(
 	}
 
 	if tblCommitTS, err = getTablesCreationCommitTS(
-		ctx, ses, eng, mp,
-		tables.tarRel, tables.baseRel,
+		ctx, ses, tables.tarRel, tables.baseRel,
 		[]types.TS{tarSp, baseSp},
-		txnOp,
 	); err != nil {
 		return
 	}
@@ -1413,119 +1406,141 @@ func decideCollectRange(
 func getTablesCreationCommitTS(
 	ctx context.Context,
 	ses *Session,
-	eng engine.Engine,
-	mp *mpool.MPool,
 	tar engine.Relation,
 	base engine.Relation,
 	snapshot []types.TS,
-	txnOp client.TxnOperator,
 ) (commitTS []types.TS, err error) {
 
-	var (
-		sqlRet        executor.Result
-		data          *batch.Batch
-		tombstone     *batch.Batch
-		moTableRel    engine.Relation
-		moTableHandle engine.ChangesHandle
-
-		from types.TS
-		end  types.TS
-	)
-
-	defer func() {
-		if data != nil {
-			data.Clean(mp)
+	resolveSnapshot := func(idx int) types.TS {
+		if idx >= 0 && idx < len(snapshot) && !snapshot[idx].IsEmpty() {
+			return snapshot[idx]
 		}
-		if moTableHandle != nil {
-			moTableHandle.Close()
-		}
-	}()
-
-	if _, _, moTableRel, err = eng.GetRelationById(
-		ctx, txnOp, catalog.MO_TABLES_ID,
-	); err != nil {
-		return
+		return types.TimestampToTS(ses.GetTxnHandler().GetTxn().SnapshotTS())
 	}
 
-	buf := &bytes.Buffer{}
-	defer func() {
-		sqlRet.Close()
-	}()
+	resolveOne := func(tableID uint64, sp types.TS) (types.TS, error) {
+		resolveAt := func(snapshotTS types.TS) (commit types.TS, ok bool, err error) {
+			txnOp := ses.GetTxnHandler().GetTxn().CloneSnapshotOp(snapshotTS.ToTimestamp())
+			_, _, moTablesRel, rerr := ses.GetTxnHandler().GetStorage().GetRelationById(ctx, txnOp, catalog.MO_TABLES_ID)
+			if rerr != nil {
+				return types.TS{}, false, rerr
+			}
 
-	// pk ==> account_id and reldatabase and relname
-	buf.WriteString("select min(created_time) from mo_catalog.mo_tables where ")
-	buf.WriteString(fmt.Sprintf(
-		"(account_id = %d and reldatabase = '%s' and relname = '%s')",
-		ses.accountId, tar.GetTableDef(ctx).DbName, tar.GetTableName(),
-	))
-	buf.WriteString(" OR ")
-	buf.WriteString(fmt.Sprintf(
-		"(account_id = %d and reldatabase = '%s' and relname = '%s')",
-		ses.accountId, base.GetTableDef(ctx).DbName, base.GetTableName(),
-	))
+			relData, rerr := moTablesRel.Ranges(ctx, engine.DefaultRangesParam)
+			if rerr != nil {
+				return types.TS{}, false, rerr
+			}
+			readers, rerr := moTablesRel.BuildReaders(
+				ctx,
+				ses.proc,
+				nil,
+				relData,
+				1,
+				0,
+				false,
+				engine.Policy_CheckCommittedOnly,
+				engine.FilterHint{},
+			)
+			if rerr != nil {
+				return types.TS{}, false, rerr
+			}
+			defer func() {
+				for _, rd := range readers {
+					if rd != nil {
+						_ = rd.Close()
+					}
+				}
+			}()
 
-	if sqlRet, err = sqlexec.RunSql(sqlexec.NewSqlProcess(ses.proc), buf.String()); err != nil {
-		return
-	}
+			attrs := []string{
+				catalog.SystemRelAttr_ID,
+				objectio.DefaultCommitTS_Attr,
+			}
+			readBatch := batch.NewWithSize(len(attrs))
+			readBatch.SetAttributes(attrs)
+			readBatch.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+			readBatch.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+			defer readBatch.Clean(ses.proc.Mp())
 
-	if len(sqlRet.Batches) != 1 && sqlRet.Batches[0].RowCount() != 1 {
-		return nil, moerr.NewInternalErrorNoCtxf(
-			"get table created time for (%s, %s) failed(%s)",
-			tar.GetTableName(), base.GetTableName(), buf.String(),
+			rowFound := false
+			commitFound := false
+			commitTS := types.TS{}
+			for _, rd := range readers {
+				for {
+					var isEnd bool
+					isEnd, rerr = rd.Read(ctx, attrs, nil, ses.proc.Mp(), readBatch)
+					if rerr != nil {
+						return types.TS{}, false, rerr
+					}
+					if isEnd {
+						break
+					}
+					if readBatch.RowCount() == 0 {
+						continue
+					}
+
+					fmt.Printf("AAAA tableId=%d, bat=%s\n",
+						tableID, common.MoBatchToString(readBatch, readBatch.RowCount()))
+
+					relIDs := vector.MustFixedColWithTypeCheck[uint64](readBatch.Vecs[0])
+					commitCol := vector.MustFixedColWithTypeCheck[types.TS](readBatch.Vecs[1])
+					for i := range relIDs {
+						if relIDs[i] != tableID {
+							continue
+						}
+						rowFound = true
+						if !readBatch.Vecs[1].IsNull(uint64(i)) {
+							if !commitFound || commitCol[i].LT(&commitTS) {
+								commitTS = commitCol[i]
+							}
+							commitFound = true
+							fmt.Printf("AAAA tableId=%d row=%d commit=%s\n",
+								tableID, i, commitCol[i].ToString())
+						} else {
+							fmt.Printf("AAAA tableId=%d row=%d commit=NULL\n",
+								tableID, i)
+						}
+					}
+				}
+			}
+
+			if commitFound {
+				return commitTS, true, nil
+			}
+			return types.TS{}, rowFound, nil
+		}
+
+		if commit, ok, rerr := resolveAt(sp); rerr != nil {
+			return types.TS{}, rerr
+		} else if ok {
+			return commit, nil
+		}
+
+		curSnapshot := types.TimestampToTS(ses.GetTxnHandler().GetTxn().SnapshotTS())
+		if !curSnapshot.EQ(&sp) {
+			if commit, ok, rerr := resolveAt(curSnapshot); rerr != nil {
+				return types.TS{}, rerr
+			} else if ok {
+				return commit, nil
+			}
+		}
+
+		return types.TS{}, moerr.NewInternalErrorNoCtxf(
+			"cannot find table %d commit ts at snapshot %s",
+			tableID,
+			sp.ToString(),
 		)
 	}
 
-	ts := vector.GetFixedAtWithTypeCheck[types.Timestamp](sqlRet.Batches[0].Vecs[0], 0)
-	from = types.BuildTS(
-		ts.ToDatetime(ses.timeZone).ConvertToGoTime(ses.timeZone).UnixNano(),
-		0,
-	)
-
-	end = slices.MaxFunc(snapshot, func(a, b types.TS) int { return a.Compare(&b) })
-
-	if moTableHandle, err = moTableRel.CollectChanges(
-		ctx, from, end, true, mp,
-	); err != nil {
-		return
+	tarCommitTS, err := resolveOne(tar.GetTableID(ctx), resolveSnapshot(0))
+	if err != nil {
+		return nil, err
 	}
-
-	commitTS = make([]types.TS, 2)
-
-	for commitTS[0].IsEmpty() || commitTS[1].IsEmpty() {
-		if data, tombstone, _, err = moTableHandle.Next(ctx, mp); err != nil {
-			return
-		} else if data == nil && tombstone == nil {
-			break
-		}
-
-		if tombstone != nil {
-			tombstone.Clean(mp)
-		}
-
-		if data != nil {
-			relIdCol := vector.MustFixedColNoTypeCheck[uint64](data.Vecs[0])
-			commitTSCol := vector.MustFixedColNoTypeCheck[types.TS](data.Vecs[len(data.Vecs)-1])
-
-			if idx := slices.Index(relIdCol, tar.GetTableID(ctx)); idx != -1 {
-				commitTS[0] = commitTSCol[idx]
-			}
-
-			if idx := slices.Index(relIdCol, base.GetTableID(ctx)); idx != -1 {
-				commitTS[1] = commitTSCol[idx]
-			}
-
-			data.Clean(mp)
-		}
+	baseCommitTS, err := resolveOne(base.GetTableID(ctx), resolveSnapshot(1))
+	if err != nil {
+		return nil, err
 	}
-
-	if commitTS[0].IsEmpty() || commitTS[1].IsEmpty() {
-		err = moerr.NewInternalErrorNoCtxf(
-			"get table created time for (%s, %s) failed",
-			tar.GetTableName(), base.GetTableName(),
-		)
-	}
-
-	return commitTS, err
+	return []types.TS{tarCommitTS, baseCommitTS}, nil
 }
 
 func decideLCABranchTSFromBranchDAG(
