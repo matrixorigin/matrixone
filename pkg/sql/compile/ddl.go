@@ -114,6 +114,41 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 
+	// After acquiring the exclusive lock on mo_database, refresh the
+	// transaction's snapshot to the latest applied logtail timestamp.
+	//
+	// This fixes a race condition between concurrent CLONE (CREATE TABLE)
+	// and DROP DATABASE:
+	//   1. CLONE acquires Shared lock on mo_database, creates table in
+	//      mo_tables, commits, releases Shared lock.
+	//   2. DROP acquires Exclusive lock on mo_database. The lock service
+	//      runs hasNewVersionInRange on mo_database rows, but CLONE did
+	//      NOT modify mo_database (only mo_tables), so changed=false and
+	//      the snapshot is NOT advanced past CLONE's commit timestamp.
+	//   3. DROP calls Relations() with the stale snapshot, misses the
+	//      newly created table, and drops the database without deleting
+	//      the table — leaving an orphan record in mo_tables that causes
+	//      an OkExpectedEOB panic during checkpoint replay.
+	//
+	// By explicitly advancing the snapshot to the latest commit timestamp
+	// after acquiring the exclusive lock, we ensure Relations() sees all
+	// tables committed before the lock was granted.
+	{
+		txnOp := c.proc.GetTxnOperator()
+		if txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
+			latestCommitTS := c.proc.Base.TxnClient.GetLatestCommitTS()
+			if txnOp.Txn().SnapshotTS.Less(latestCommitTS) {
+				newTS, err := c.proc.Base.TxnClient.WaitLogTailAppliedAt(c.proc.Ctx, latestCommitTS)
+				if err != nil {
+					return err
+				}
+				if err := txnOp.UpdateSnapshot(c.proc.Ctx, newTS); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	// handle sub
 	if db.IsSubscription(c.proc.Ctx) {
 		if err = dropSubscription(c.proc.Ctx, c, dbName); err != nil {
@@ -1497,6 +1532,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 
 	if createAsSelectSql := qry.GetCreateAsSelectSql(); createAsSelectSql != "" {
+		// Mark current txn as DDL before compiling CTAS follow-up INSERT ... SELECT,
+		// so internal SQL stays on one CN and can see uncommitted table metadata.
+		c.setHaveDDL(true)
 		res, err := func() (executor.Result, error) {
 			oldCtx := c.proc.Ctx
 			// Force privilege checking for CTAS follow-up INSERT ... SELECT.
@@ -1761,6 +1799,9 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 	}
 
 	if createAsSelectSql := qry.GetCreateAsSelectSql(); createAsSelectSql != "" {
+		// Mark current txn as DDL before compiling CTAS follow-up INSERT ... SELECT,
+		// so internal SQL stays on one CN and can see uncommitted table metadata.
+		c.setHaveDDL(true)
 		res, err := func() (executor.Result, error) {
 			oldCtx := c.proc.Ctx
 			// Force privilege checking for CTAS follow-up INSERT ... SELECT.
