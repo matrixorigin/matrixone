@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -110,43 +111,8 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return moerr.NewErrDropNonExistsDB(c.proc.Ctx, dbName)
 	}
 
-	if err = lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
+	if err = lockMoDatabaseAndRefreshSnapshot(c, dbName); err != nil {
 		return err
-	}
-
-	// After acquiring the exclusive lock on mo_database, refresh the
-	// transaction's snapshot to the latest applied logtail timestamp.
-	//
-	// This fixes a race condition between concurrent CLONE (CREATE TABLE)
-	// and DROP DATABASE:
-	//   1. CLONE acquires Shared lock on mo_database, creates table in
-	//      mo_tables, commits, releases Shared lock.
-	//   2. DROP acquires Exclusive lock on mo_database. The lock service
-	//      runs hasNewVersionInRange on mo_database rows, but CLONE did
-	//      NOT modify mo_database (only mo_tables), so changed=false and
-	//      the snapshot is NOT advanced past CLONE's commit timestamp.
-	//   3. DROP calls Relations() with the stale snapshot, misses the
-	//      newly created table, and drops the database without deleting
-	//      the table — leaving an orphan record in mo_tables that causes
-	//      an OkExpectedEOB panic during checkpoint replay.
-	//
-	// By explicitly advancing the snapshot to the latest commit timestamp
-	// after acquiring the exclusive lock, we ensure Relations() sees all
-	// tables committed before the lock was granted.
-	{
-		txnOp := c.proc.GetTxnOperator()
-		if txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
-			latestCommitTS := c.proc.Base.TxnClient.GetLatestCommitTS()
-			if txnOp.Txn().SnapshotTS.Less(latestCommitTS) {
-				newTS, err := c.proc.Base.TxnClient.WaitLogTailAppliedAt(c.proc.Ctx, latestCommitTS)
-				if err != nil {
-					return err
-				}
-				if err := txnOp.UpdateSnapshot(c.proc.Ctx, newTS); err != nil {
-					return err
-				}
-			}
-		}
 	}
 
 	// handle sub
@@ -3890,6 +3856,34 @@ var lockMoDatabase = func(c *Compile, dbName string, lockMode lock.LockMode) err
 	defer bat.GetVector(0).Free(c.proc.Mp())
 	if err := lockRows(c.e, c.proc, dbRel, bat, 0, lockMode, lock.Sharding_None, accountID); err != nil {
 		return err
+	}
+	return nil
+}
+
+// lockMoDatabaseAndRefreshSnapshot acquires an Exclusive lock on mo_database
+// and then refreshes the transaction snapshot using clock.Now().
+//
+// This fixes a race where concurrent CREATE TABLE (via data branch) commits
+// and releases its Shared lock, but updateLastCommitTS has not yet run due to
+// defer LIFO ordering in txnOperator.doWrite. Using clock.Now() instead of
+// GetLatestCommitTS() guarantees the timestamp is >= any committed txn's
+// commitTS, so WaitLogTailAppliedAt will wait for all committed changes.
+var lockMoDatabaseAndRefreshSnapshot = func(c *Compile, dbName string) error {
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
+		return err
+	}
+	txnOp := c.proc.GetTxnOperator()
+	if txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
+		now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
+		newTS, err := c.proc.Base.TxnClient.WaitLogTailAppliedAt(c.proc.Ctx, now)
+		if err != nil {
+			return err
+		}
+		if txnOp.Txn().SnapshotTS.Less(newTS) {
+			if err := txnOp.UpdateSnapshot(c.proc.Ctx, newTS); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
