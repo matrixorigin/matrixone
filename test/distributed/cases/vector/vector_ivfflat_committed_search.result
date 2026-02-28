@@ -36,8 +36,8 @@ SELECT id, L2_DISTANCE(embedding, '[0.5, 0.5, 0.5, 0.5]') AS dist
 FROM t_ivfflat_committed
 ORDER BY dist ASC
 LIMIT 3;
-➤ id[4,32,0]  ¦  dist[8,9,0]  𝄀
-12502  ¦  0.0  𝄀
-12503  ¦  0.0  𝄀
-12501  ¦  0.0
+id    dist
+12502    0.0
+12503    0.0
+12501    0.0
 DROP TABLE IF EXISTS t_ivfflat_committed;
