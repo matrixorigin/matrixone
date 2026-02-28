@@ -18,6 +18,8 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -160,6 +162,18 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	err = s.removeFkeysRelationships(c, dbName)
 	if err != nil {
 		return err
+	}
+
+	// HACK: inject delay AFTER v1 fix but BEFORE Relations().
+	// The lock service bug allows CREATE TABLE (Shared) to bypass the Exclusive
+	// lock held by DROP. Even after v1 fix refreshes the snapshot, new CREATE TABLE
+	// txns can still commit and create tables that Relations() won't see.
+	// This delay widens that window. Set MO_DELAY_BEFORE_RELATIONS_MS=500 to enable.
+	if v := os.Getenv("MO_DELAY_BEFORE_RELATIONS_MS"); v != "" {
+		if ms, _ := strconv.Atoi(v); ms > 0 {
+			logutil.Infof("DROP DATABASE %s: HACK sleeping %dms before Relations()", dbName, ms)
+			time.Sleep(time.Duration(ms) * time.Millisecond)
+		}
 	}
 
 	database, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
