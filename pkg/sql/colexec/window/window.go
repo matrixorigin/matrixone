@@ -210,7 +210,8 @@ func (ctr *container) resetResultBatch(bat *batch.Batch, vec *vector.Vector) *ba
 func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, analyzer process.Analyzer) error {
 	var err error
 	n := ctr.bat.Vecs[0].Length()
-	isWinOrder := function.GetFunctionIsWinOrderFunByName(ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.Name)
+	funcName := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.Name
+	isWinOrder := function.GetFunctionIsWinOrderFunByName(funcName)
 	if isWinOrder {
 		if ctr.ps == nil {
 			ctr.ps = append(ctr.ps, 0)
@@ -224,6 +225,13 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 			ctr.os = ctr.ps
 		}
 
+		// Special handling for NTILE: evaluate bucket count parameter
+		if funcName == "ntile" && len(ctr.aggVecs[idx].Vec) > 0 {
+			if err = ctr.evalAggVector(ctr.bat, proc); err != nil {
+				return err
+			}
+		}
+
 		vec := vector.NewVec(types.T_int64.ToType())
 		defer vec.Free(proc.Mp())
 		if err = vector.AppendFixedList(vec, ctr.os, nil, proc.Mp()); err != nil {
@@ -235,7 +243,15 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 			for ; o < len(ctr.os); o++ {
 
 				if ctr.os[o] <= ctr.ps[p] {
-					if err = ctr.batAggs[idx].Fill(p-1, o, []*vector.Vector{vec}); err != nil {
+					// For NTILE, pass both os vector and bucket count vector
+					var fillVecs []*vector.Vector
+					if funcName == "ntile" && len(ctr.aggVecs[idx].Vec) > 0 {
+						fillVecs = []*vector.Vector{vec, ctr.aggVecs[idx].Vec[0]}
+					} else {
+						fillVecs = []*vector.Vector{vec}
+					}
+
+					if err = ctr.batAggs[idx].Fill(p-1, o, fillVecs); err != nil {
 						return err
 					}
 
@@ -247,8 +263,8 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 			}
 		}
 	} else {
-		//nullVec := vector.NewConstNull(*ctr.aggVecs[idx].Vec[0].GetType(), 1, proc.Mp())
-		//defer nullVec.Free(proc.Mp())
+		// nullVec := vector.NewConstNull(*ctr.aggVecs[idx].Vec[0].GetType(), 1, proc.Mp())
+		// defer nullVec.Free(proc.Mp())
 
 		// plan.Function_AGG, plan.Function_WIN_VALUE
 		for j := 0; j < n; j++ {
@@ -266,9 +282,9 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 
 			if right < start || left > end || left >= right {
 				// todo: I commented this out because it was a waste of time to fill a null value.
-				//if err = ctr.bat.Aggs[idx].Fill(j, 0, []*vector.Vector{nullVec}); err != nil {
+				// if err = ctr.bat.Aggs[idx].Fill(j, 0, []*vector.Vector{nullVec}); err != nil {
 				//	return err
-				//}
+				// }
 				continue
 			}
 
@@ -510,9 +526,9 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 	ovec := ctr.orderVecs[0].Vec[0]
 
 	rowCount := bat.RowCount()
-	//if ctr.sels == nil {
+	// if ctr.sels == nil {
 	//	ctr.sels = make([]int64, rowCount)
-	//}
+	// }
 	ctr.sels = make([]int64, rowCount)
 	for i := 0; i < rowCount; i++ {
 		ctr.sels[i] = int64(i)

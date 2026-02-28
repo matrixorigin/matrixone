@@ -143,6 +143,11 @@ func RegisterPercentRankWin(id int64) {
 	WinIdOfPercentRank = id
 }
 
+func RegisterNtileWin(id int64) {
+	specialAgg[id] = true
+	WinIdOfNtile = id
+}
+
 func RegisterLagWin(id int64) {
 	specialAgg[id] = true
 	WinIdOfLag = id
@@ -166,6 +171,11 @@ func RegisterLastValueWin(id int64) {
 func RegisterNthValueWin(id int64) {
 	specialAgg[id] = true
 	WinIdOfNthValue = id
+}
+
+func RegisterCumeDistWin(id int64) {
+	specialAgg[id] = true
+	WinIdOfCumeDist = id
 }
 
 type registeredAggInfo struct {
@@ -199,26 +209,28 @@ var (
 	WinIdOfRowNumber       = int64(-8)
 	WinIdOfRank            = int64(-9)
 	WinIdOfDenseRank       = int64(-10)
-	WinIdOfPercentRank     = int64(-11)
-	WinIdOfLag             = int64(-12)
-	WinIdOfLead            = int64(-13)
-	WinIdOfFirstValue      = int64(-14)
-	WinIdOfLastValue       = int64(-15)
-	WinIdOfNthValue        = int64(-16)
-	AggIdOfSum             = int64(-17)
-	AggIdOfAvg             = int64(-18)
-	AggIdOfMin             = int64(-19)
-	AggIdOfMax             = int64(-20)
-	AggIdOfAny             = int64(-21)
-	AggIdOfVarPop          = int64(-22)
-	AggIdOfStdDevPop       = int64(-23)
-	AggIdOfVarSample       = int64(-24)
-	AggIdOfStdDevSample    = int64(-25)
-	AggIdOfBitXor          = int64(-26)
-	AggIdOfBitAnd          = int64(-27)
-	AggIdOfBitOr           = int64(-28)
-	AggIdOfBitmapConstruct = int64(-29)
-	AggIdOfBitmapOr        = int64(-30)
+	WinIdOfLag             = int64(-11)
+	WinIdOfLead            = int64(-12)
+	WinIdOfFirstValue      = int64(-13)
+	WinIdOfLastValue       = int64(-14)
+	WinIdOfNthValue        = int64(-15)
+	AggIdOfSum             = int64(-16)
+	AggIdOfAvg             = int64(-17)
+	AggIdOfMin             = int64(-18)
+	AggIdOfMax             = int64(-19)
+	AggIdOfAny             = int64(-20)
+	AggIdOfVarPop          = int64(-21)
+	AggIdOfStdDevPop       = int64(-22)
+	AggIdOfVarSample       = int64(-23)
+	AggIdOfStdDevSample    = int64(-24)
+	AggIdOfBitXor          = int64(-25)
+	AggIdOfBitAnd          = int64(-26)
+	AggIdOfBitOr           = int64(-27)
+	AggIdOfBitmapConstruct = int64(-28)
+	AggIdOfBitmapOr        = int64(-29)
+	WinIdOfCumeDist        = int64(-30)
+	WinIdOfNtile           = int64(-31)
+	WinIdOfPercentRank     = int64(-32)
 	groupConcatSep         = ","
 	getCroupConcatRet      = func(args ...types.Type) types.Type {
 		for _, p := range args {
