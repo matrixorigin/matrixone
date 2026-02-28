@@ -10,7 +10,7 @@ select sleep(15);
 select count(*) > 0 as has_data from system.statement_info;
 -- @ignore:0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18
 -- @metacmp(false)
--- @regex("(?m)^statement_info\\b.*\\bTae\\b.*\\bDynamic\\b.*\\b[1-9][0-9]*\\b",true)
+-- @regex("(?m)^statement_info.*Tae.*Dynamic.*[1-9][0-9]*.*$",true)
 show table status from system like 'statement_info';
 
 -- @session
