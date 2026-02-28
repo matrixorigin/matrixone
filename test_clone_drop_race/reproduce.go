@@ -10,6 +10,11 @@
 //     - latestCommitTS 还没更新，v1 fix 的 GetLatestCommitTS() 看到旧值
 //     - v1 fix 不触发，Relations() 用旧 snapshot 查询，漏掉新创建的表
 //
+// 源表索引结构（匹配线上 gate_019ca107 场景）：
+//   类型A: infra_configs 风格 — 1 UNIQUE + 3 SECONDARY = 1主表+4索引表 = 5 relations
+//   类型B: agent_events 风格 — 9 SECONDARY + 1 FULLTEXT = 1主表+10索引表 = 11 relations
+//   类型C: 向量表风格 — 1 UNIQUE + 1 SECONDARY + 1 IVF-FLAT(3表) = 1主表+5索引表 = 6 relations
+//
 // 使用步骤：
 //   1. 编译 MO（包含 operator.go 中的 MO_DELAY_AFTER_UNLOCK_MS hack）
 //   2. 启动 MO 时设置环境变量：
@@ -171,27 +176,103 @@ func runOneRound(roundID int, pool *sql.DB) (found bool, msg string) {
 func setupSrcDB(pool *sql.DB) error {
 	srcDB := "race_src"
 	mustExec(pool, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", srcDB))
-	for i := 0; i < 20; i++ {
+
+	// 创建三种源表，模拟线上 gate_019ca107 场景：
+	//
+	// 类型 A: infra_configs 风格 — 1 UNIQUE + 3 SECONDARY = 4 索引表 + 1 主表 = 5 relations
+	//   线上日志: txn BADE44, 表 476218 + 索引 476214(unique), 476215-476217(secondary)
+	//
+	// 类型 B: agent_events 风格 — 9 SECONDARY + 1 FULLTEXT = 10 索引表 + 1 主表 = 11 relations
+	//   线上日志: txn BADEA1, 表 476230 + 索引 476219-476229, AffectedRows=21
+	//
+	// 类型 C: 向量表风格 — 1 UNIQUE + 2 SECONDARY + 1 IVF-FLAT(3个索引表) = 6 索引表 + 1 主表 = 7 relations
+	//   IVF-FLAT 会创建 metadata/centroids/entries 三个索引表
+
+	for i := 0; i < *tables; i++ {
 		tbl := fmt.Sprintf("src_tbl_%03d", i)
-		// 创建带索引的源表，模拟线上场景（1 主表 + 4 索引表 = 5 条 mo_tables 记录）
-		ddl := fmt.Sprintf(
-			"CREATE TABLE IF NOT EXISTS `%s`.`%s` ("+
-				"id BIGINT PRIMARY KEY, "+
-				"name VARCHAR(255), "+
-				"status INT, "+
-				"created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "+
-				"updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "+
-				"KEY idx_%s_name (name), "+
-				"KEY idx_%s_status (status), "+
-				"KEY idx_%s_created (created_at), "+
-				"KEY idx_%s_updated (updated_at))",
-			srcDB, tbl, tbl, tbl, tbl, tbl)
-		if _, err := pool.Exec(ddl); err != nil {
-			return fmt.Errorf("create src table %s: %w", tbl, err)
+		switch i % 3 {
+		case 0:
+			// 类型 A: infra_configs 风格
+			ddl := fmt.Sprintf(
+				"CREATE TABLE IF NOT EXISTS `%s`.`%s` ("+
+					"id BIGINT PRIMARY KEY, "+
+					"key_name VARCHAR(255), "+
+					"scope_type VARCHAR(64), "+
+					"scope_user_id VARCHAR(128), "+
+					"config_value TEXT, "+
+					"UNIQUE KEY uk_name_scope (key_name, scope_type, scope_user_id), "+
+					"KEY idx_scope_type (scope_type), "+
+					"KEY idx_scope_user (scope_user_id), "+
+					"KEY idx_key_name (key_name))",
+				srcDB, tbl)
+			if _, err := pool.Exec(ddl); err != nil {
+				return fmt.Errorf("create src table %s: %w", tbl, err)
+			}
+			pool.Exec(fmt.Sprintf(
+				"INSERT IGNORE INTO `%s`.`%s` (id, key_name, scope_type, scope_user_id, config_value) "+
+					"VALUES (1,'k1','global','','v1'),(2,'k2','user','u1','v2'),(3,'k3','user','u2','v3')",
+				srcDB, tbl))
+
+		case 1:
+			// 类型 B: agent_events 风格 (含 fulltext 索引)
+			ddl := fmt.Sprintf(
+				"CREATE TABLE IF NOT EXISTS `%s`.`%s` ("+
+					"id BIGINT PRIMARY KEY, "+
+					"event_type VARCHAR(64), "+
+					"agent_id VARCHAR(128), "+
+					"session_id VARCHAR(128), "+
+					"user_id VARCHAR(128), "+
+					"content TEXT, "+
+					"status VARCHAR(32), "+
+					"source VARCHAR(64), "+
+					"priority INT, "+
+					"category VARCHAR(64), "+
+					"created_at DATETIME, "+
+					"KEY idx_event_type (event_type), "+
+					"KEY idx_agent_id (agent_id), "+
+					"KEY idx_session_id (session_id), "+
+					"KEY idx_user_id (user_id), "+
+					"KEY idx_status (status), "+
+					"KEY idx_source (source), "+
+					"KEY idx_priority (priority), "+
+					"KEY idx_category (category), "+
+					"KEY idx_created_at (created_at), "+
+					"FULLTEXT INDEX ft_content_session (content, session_id) WITH PARSER ngram)",
+				srcDB, tbl)
+			if _, err := pool.Exec(ddl); err != nil {
+				return fmt.Errorf("create src table %s: %w", tbl, err)
+			}
+			pool.Exec(fmt.Sprintf(
+				"INSERT IGNORE INTO `%s`.`%s` "+
+					"(id, event_type, agent_id, session_id, user_id, content, status, source, priority, category, created_at) VALUES "+
+					"(1,'chat','a1','s1','u1','hello world','done','web',1,'general','2026-01-01 00:00:00'),"+
+					"(2,'tool','a2','s2','u2','test content','running','api',2,'debug','2026-01-02 00:00:00'),"+
+					"(3,'plan','a3','s3','u3','plan step','pending','cli',3,'plan','2026-01-03 00:00:00')",
+				srcDB, tbl))
+
+		case 2:
+			// 类型 C: 向量表风格 (含 IVF-FLAT 索引)
+			// IVF-FLAT 会创建 3 个索引表 (metadata, centroids, entries)
+			ddl := fmt.Sprintf(
+				"CREATE TABLE IF NOT EXISTS `%s`.`%s` ("+
+					"id BIGINT PRIMARY KEY, "+
+					"doc_id VARCHAR(128), "+
+					"title VARCHAR(255), "+
+					"embedding vecf32(3), "+
+					"UNIQUE KEY uk_doc_id (doc_id), "+
+					"KEY idx_title (title), "+
+					"KEY idx_vec USING ivfflat (embedding) lists = 2 op_type 'vector_l2_ops')",
+				srcDB, tbl)
+			if _, err := pool.Exec(ddl); err != nil {
+				return fmt.Errorf("create src table %s: %w", tbl, err)
+			}
+			pool.Exec(fmt.Sprintf(
+				"INSERT IGNORE INTO `%s`.`%s` (id, doc_id, title, embedding) VALUES "+
+					"(1,'d1','hello','[1.0, 2.0, 3.0]'),"+
+					"(2,'d2','world','[4.0, 5.0, 6.0]'),"+
+					"(3,'d3','test','[7.0, 8.0, 9.0]')",
+				srcDB, tbl))
 		}
-		pool.Exec(fmt.Sprintf(
-			"INSERT IGNORE INTO `%s`.`%s` (id, name, status) VALUES (1,'a',1),(2,'b',2),(3,'c',3)",
-			srcDB, tbl))
 	}
 	return nil
 }
@@ -205,6 +286,11 @@ func main() {
 	log.Println("根因: 事务 commit 时 defer LIFO 导致 unlock 在 updateLastCommitTS 之前执行")
 	log.Println("  unlock → Shared lock 释放 → DROP 获取 Exclusive lock")
 	log.Println("  此时 latestCommitTS 还没更新 → v1 fix 不触发 → Relations() 用旧 snapshot")
+	log.Println("")
+	log.Println("源表索引结构 (匹配线上 gate_019ca107):")
+	log.Println("  i%3==0: infra_configs 风格 — 1 UNIQUE + 3 SECONDARY = 5 relations/表")
+	log.Println("  i%3==1: agent_events 风格 — 9 SECONDARY + 1 FULLTEXT = 11 relations/表")
+	log.Println("  i%3==2: 向量表风格 — 1 UNIQUE + 1 SECONDARY + 1 IVF-FLAT(3表) = 6 relations/表")
 	log.Println("")
 	log.Println("请确保:")
 	log.Println("  1. MO 编译时包含 operator.go 中的 MO_DELAY_AFTER_UNLOCK_MS hack")
@@ -221,7 +307,7 @@ func main() {
 		log.Fatalf("Ping 失败: %v", err)
 	}
 
-	log.Println("初始化源数据库 race_src ...")
+	log.Println("初始化源数据库 race_src (infra_configs + agent_events + IVF-FLAT 风格索引) ...")
 	if err := setupSrcDB(pool); err != nil {
 		log.Fatalf("初始化源数据库失败: %v", err)
 	}
