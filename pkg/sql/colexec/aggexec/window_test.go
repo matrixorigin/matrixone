@@ -1495,6 +1495,166 @@ func TestPercentRank(t *testing.T) {
 		exec1.Free()
 		exec2.Free()
 	})
+
+	t.Run("save_intermediate_result_of_chunk", func(t *testing.T) {
+		exec, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		err = exec.GroupGrow(2)
+		require.NoError(t, err)
+
+		vec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(vec, []int64{0, 1}, nil, mp)
+		require.NoError(t, err)
+		defer vec.Free(mp)
+
+		err = exec.Fill(0, 0, []*vector.Vector{vec})
+		require.NoError(t, err)
+
+		prExec := exec.(*percentRankExec)
+		var buf bytes.Buffer
+		err = prExec.SaveIntermediateResultOfChunk(0, &buf)
+		require.NoError(t, err)
+
+		exec.Free()
+	})
+
+	t.Run("unmarshal", func(t *testing.T) {
+		exec1, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		err = exec1.GroupGrow(1)
+		require.NoError(t, err)
+
+		vec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(vec, []int64{0, 1}, nil, mp)
+		require.NoError(t, err)
+		defer vec.Free(mp)
+
+		err = exec1.Fill(0, 0, []*vector.Vector{vec})
+		require.NoError(t, err)
+
+		prExec1 := exec1.(*percentRankExec)
+		data, err := prExec1.marshal()
+		require.NoError(t, err)
+
+		var encoded EncodedAgg
+		err = encoded.Unmarshal(data)
+		require.NoError(t, err)
+
+		exec2, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		err = exec2.GroupGrow(1)
+		require.NoError(t, err)
+		prExec2 := exec2.(*percentRankExec)
+		err = prExec2.unmarshal(mp, encoded.Result, encoded.Empties, encoded.Groups)
+		require.NoError(t, err)
+
+		exec1.Free()
+		exec2.Free()
+	})
+
+	t.Run("unmarshal_empty_groups", func(t *testing.T) {
+		exec, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+
+		prExec := exec.(*percentRankExec)
+		err = prExec.unmarshal(mp, [][]byte{}, [][]byte{}, [][]byte{})
+		require.NoError(t, err)
+
+		exec.Free()
+	})
+
+	t.Run("marshal_empty_groups", func(t *testing.T) {
+		exec, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+
+		prExec := exec.(*percentRankExec)
+		data, err := prExec.marshal()
+		require.NoError(t, err)
+		require.NotEmpty(t, data)
+
+		exec.Free()
+	})
+
+	t.Run("flush_multiple_groups", func(t *testing.T) {
+		exec, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		err = exec.GroupGrow(2)
+		require.NoError(t, err)
+
+		vec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(vec, []int64{0, 1, 2, 3}, nil, mp)
+		require.NoError(t, err)
+		defer vec.Free(mp)
+
+		// 第一个分区: [0, 1] - 1行
+		err = exec.Fill(0, 0, []*vector.Vector{vec})
+		require.NoError(t, err)
+		err = exec.Fill(0, 1, []*vector.Vector{vec})
+		require.NoError(t, err)
+
+		// 第二个分区: [2, 3] - 1行
+		err = exec.Fill(1, 2, []*vector.Vector{vec})
+		require.NoError(t, err)
+		err = exec.Fill(1, 3, []*vector.Vector{vec})
+		require.NoError(t, err)
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.NotEmpty(t, results)
+
+		for _, r := range results {
+			r.Free(mp)
+		}
+		exec.Free()
+	})
+
+	t.Run("flush_with_empty_group", func(t *testing.T) {
+		exec, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		err = exec.GroupGrow(2)
+		require.NoError(t, err)
+
+		vec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(vec, []int64{0, 1}, nil, mp)
+		require.NoError(t, err)
+		defer vec.Free(mp)
+
+		// 只填充第一个分区，第二个分区为空
+		err = exec.Fill(0, 0, []*vector.Vector{vec})
+		require.NoError(t, err)
+		err = exec.Fill(0, 1, []*vector.Vector{vec})
+		require.NoError(t, err)
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.NotEmpty(t, results)
+
+		for _, r := range results {
+			r.Free(mp)
+		}
+		exec.Free()
+	})
+
+	t.Run("size_with_groups", func(t *testing.T) {
+		exec, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		err = exec.GroupGrow(2)
+		require.NoError(t, err)
+
+		vec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(vec, []int64{0, 1, 2}, nil, mp)
+		require.NoError(t, err)
+		defer vec.Free(mp)
+
+		for i := 0; i < 3; i++ {
+			err = exec.Fill(0, i, []*vector.Vector{vec})
+			require.NoError(t, err)
+		}
+
+		size := exec.Size()
+		require.Greater(t, size, int64(0))
+		exec.Free()
+	})
 }
 
 // TestNtileExec_ParameterValidation tests parameter validation for makeNtileExec
