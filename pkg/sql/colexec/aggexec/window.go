@@ -204,7 +204,7 @@ func (exec *percentRankExec) Flush() ([]*vector.Vector, error) {
 			continue
 		}
 
-		totalRows := int64(group[len(group)-1] - group[0] + 1)
+		totalRows := group[len(group)-1] - group[0]
 		if totalRows == 1 {
 			x, y := exec.ret.updateNextAccessIdx(idx)
 			values[x][y] = 0
@@ -221,7 +221,7 @@ func (exec *percentRankExec) Flush() ([]*vector.Vector, error) {
 			}
 			sn += int64(m)
 		}
-		
+
 		// 处理最后一组
 		for idx < int(totalRows) {
 			x, y := exec.ret.updateNextAccessIdx(idx)
