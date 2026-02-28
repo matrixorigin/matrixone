@@ -643,7 +643,14 @@ func (r *reader) Read(
 				return false, err
 			}
 
-			outBatch.Shuffle(sels, mp)
+			// Keep batch cardinality consistent with pushed-down vector TopN result.
+			// When sels is empty, batch.Shuffle is a no-op, so we must clear outBatch
+			// explicitly; otherwise rowCount can stay > 0 while distVec is empty.
+			if len(sels) == 0 {
+				outBatch.CleanOnlyData()
+			} else if err := outBatch.Shuffle(sels, mp); err != nil {
+				return false, err
+			}
 
 			// Reuse the detached distVec when possible to avoid per-batch allocation.
 			distVec := detachedDistVec
@@ -651,7 +658,9 @@ func (r *reader) Read(
 				distVec = vector.NewVec(types.T_float64.ToType())
 			}
 			detachedDistVec = nil
-			vector.AppendFixedList(distVec, dists, nil, mp)
+			if err := vector.AppendFixedList(distVec, dists, nil, mp); err != nil {
+				return false, err
+			}
 			outBatch.Vecs = append(outBatch.Vecs, distVec)
 		}
 
