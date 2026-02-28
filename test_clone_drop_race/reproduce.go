@@ -29,7 +29,6 @@ import (
 	"fmt"
 	"log"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -98,11 +97,40 @@ func runOneRound(roundID int, pool *sql.DB) (found bool, msg string) {
 	}
 
 	var wg sync.WaitGroup
-	var branchDone atomic.Int32
 	var dropErr error
 
-	// 并发执行 data branch create table
-	for i := 0; i < *tables; i++ {
+	// 核心分析：为什么不好复现？
+	//
+	// doWrite commit 路径中 defer 执行顺序（LIFO）：
+	//   1. defer B: unlock(ctx) → 等 logtail → lockService.Unlock → [500ms delay]
+	//   2. defer A: closeLocked() → updateLastCommitTS
+	//   3. doWrite 返回 → 客户端收到 commit 响应
+	//
+	// 客户端收到响应时，updateLastCommitTS 已经执行完了！
+	// 所以 branchDone 信号发出时，latestCommitTS 已经包含了这个 branch 的 commitTS。
+	//
+	// 线上能出问题的场景：
+	//   - 多个 branch 并发，Branch A 的 unlock 释放了 Shared lock（步骤 1 完成）
+	//   - 但 Branch A 的 closeLocked 还没执行（在 500ms delay 中）
+	//   - 同时 Branch B 也释放了 Shared lock
+	//   - DROP 获取 Exclusive lock，v1 fix 看到的 latestCommitTS 不包含 Branch A 的 commitTS
+	//   - 但可能包含 Branch B 的（如果 B 的 closeLocked 已执行）
+	//   - Relations() 漏掉 Branch A 创建的表
+	//
+	// 复现策略：
+	//   启动多个 branch 并发，同时启动 DROP。
+	//   DROP 会被 Shared lock 阻塞，等所有 branch 的 Shared lock 释放。
+	//   最后一个 branch 释放 Shared lock 后，DROP 获取 Exclusive lock。
+	//   此时最后一个 branch 在 500ms delay 中，latestCommitTS 还没更新。
+	//   但倒数第二个 branch 可能也在 delay 中（如果它们几乎同时 commit）。
+	//   v1 fix 看到的 latestCommitTS 可能不包含这些 branch 的 commitTS。
+	//
+	// 关键：需要多个 branch 几乎同时 commit，这样它们的 unlock 几乎同时释放 Shared lock，
+	// DROP 在最后一个 unlock 后立即获取 Exclusive lock，此时多个 branch 的 closeLocked 都还没执行。
+
+	branchCount := 2 + (roundID % 4) // 2~5 个 branch
+
+	for i := 0; i < branchCount; i++ {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
@@ -118,24 +146,18 @@ func runOneRound(roundID int, pool *sql.DB) (found bool, msg string) {
 			ddl := fmt.Sprintf(
 				"data branch create table `%s`.`%s` from `%s`.`%s`",
 				dbName, dstTbl, srcDB, srcTbl)
-			_, err = c.Exec(ddl)
-			if err != nil {
-				return
-			}
-			branchDone.Add(1)
+			_, _ = c.Exec(ddl)
 		}(i)
 	}
 
-	// DROP：等几张表创建成功后立即 drop
+	// DROP：立即并发发起，不等 branch 完成。
+	// DROP 会被 Shared lock 阻塞，直到所有 branch 的 Shared lock 释放。
+	// 最后一个 branch unlock 后，DROP 获取 Exclusive lock。
+	// 此时如果有 branch 的 closeLocked 还没执行（在 500ms delay 中），
+	// v1 fix 的 GetLatestCommitTS() 看不到这些 branch 的 commitTS。
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 2000; i++ {
-			if branchDone.Load() >= 2 {
-				break
-			}
-			time.Sleep(1 * time.Millisecond)
-		}
 		c, err := sql.Open("mysql", dsn())
 		if err != nil {
 			dropErr = err
@@ -281,7 +303,7 @@ func main() {
 	flag.Parse()
 
 	log.Println("=== data branch create table + DROP DATABASE 竞态条件复现工具 ===")
-	log.Printf("目标: %s:%d, 轮次=%d, 每轮表数=%d", *host, *port, *rounds, *tables)
+	log.Printf("目标: %s:%d, 轮次=%d", *host, *port, *rounds)
 	log.Println("")
 	log.Println("根因: 事务 commit 时 defer LIFO 导致 unlock 在 updateLastCommitTS 之前执行")
 	log.Println("  unlock → Shared lock 释放 → DROP 获取 Exclusive lock")
