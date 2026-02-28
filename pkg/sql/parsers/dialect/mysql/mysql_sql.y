@@ -512,7 +512,7 @@ import (
 
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
-%type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt upgrade_stmt
+%type <statement> create_stmt insert_stmt insert_no_with_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt upgrade_stmt
 %type <statement> delete_without_using_stmt delete_with_using_stmt
 %type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt drop_connector_stmt drop_function_stmt drop_procedure_stmt drop_sequence_stmt
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
@@ -5099,6 +5099,14 @@ replace_data:
 	}
 
 insert_stmt:
+    insert_no_with_stmt
+|   with_clause insert_no_with_stmt
+    {
+        $2.(*tree.Insert).With = $1
+        $$ = $2
+    }
+
+insert_no_with_stmt:
     INSERT into_table_name partition_clause_opt insert_data on_duplicate_key_update_opt
     {
         ins := $4
