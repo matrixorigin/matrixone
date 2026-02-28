@@ -729,6 +729,22 @@ func rewriteTombstoneRowids(
 		}
 	}
 
+	// Re-sort tombstone batch by rowid after rewriting
+	// Tombstones must be sorted by rowid (TombstonePrimaryKeyIdx = 0) as required by flush
+	n := rowidVec.Length()
+	sortedIdx := make([]int64, n)
+	for i := 0; i < n; i++ {
+		sortedIdx[i] = int64(i)
+	}
+	sort.Sort(false, false, false, sortedIdx, rowidVec.GetDownstreamVector())
+
+	// Shuffle all vectors in the batch using the sorted index
+	for i := 0; i < len(bat.Vecs); i++ {
+		if err := bat.Vecs[i].GetDownstreamVector().Shuffle(sortedIdx, mp); err != nil {
+			return moerr.NewInternalErrorf(ctx, "failed to shuffle tombstone column %d: %v", i, err)
+		}
+	}
+
 	return nil
 }
 
