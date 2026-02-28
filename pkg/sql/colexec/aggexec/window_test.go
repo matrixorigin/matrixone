@@ -1078,6 +1078,134 @@ func TestValueWindowExec_BlockidType(t *testing.T) {
 	exec.Free()
 }
 
+// TestNtileWindowExec tests NTILE window function
+func TestNtileWindowExec(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	t.Run("NTILE_basic_10_rows_3_buckets", func(t *testing.T) {
+		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
+		require.NoError(t, err)
+
+		// Simulate window operator: one partition with 10 rows
+		bucketVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(bucketVec, []int64{3, 3, 3, 3, 3, 3, 3, 3, 3, 3}, nil, mp)
+		require.NoError(t, err)
+		defer bucketVec.Free(mp)
+
+		osVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(osVec, []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, nil, mp)
+		require.NoError(t, err)
+		defer osVec.Free(mp)
+
+		err = exec.GroupGrow(10)
+		require.NoError(t, err)
+
+		// Fill with groupIndex=0, row=0..10 (indices into os array)
+		for o := 0; o <= 10; o++ {
+			err = exec.Fill(0, o, []*vector.Vector{osVec, bucketVec})
+			require.NoError(t, err)
+		}
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+
+		resultVec := results[0]
+		require.Equal(t, 10, resultVec.Length())
+
+		// Expected: 1,1,1,1,2,2,2,3,3,3 (4+3+3 distribution)
+		col := vector.MustFixedColNoTypeCheck[int64](resultVec)
+		expected := []int64{1, 1, 1, 1, 2, 2, 2, 3, 3, 3}
+		for i := 0; i < 10; i++ {
+			require.Equal(t, expected[i], col[i], "row %d", i)
+		}
+
+		resultVec.Free(mp)
+		exec.Free()
+	})
+
+	t.Run("NTILE_9_rows_3_buckets", func(t *testing.T) {
+		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
+		require.NoError(t, err)
+
+		bucketVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(bucketVec, []int64{3, 3, 3, 3, 3, 3, 3, 3, 3}, nil, mp)
+		require.NoError(t, err)
+		defer bucketVec.Free(mp)
+
+		osVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(osVec, []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, nil, mp)
+		require.NoError(t, err)
+		defer osVec.Free(mp)
+
+		err = exec.GroupGrow(9)
+		require.NoError(t, err)
+
+		for o := 0; o <= 9; o++ {
+			err = exec.Fill(0, o, []*vector.Vector{osVec, bucketVec})
+			require.NoError(t, err)
+		}
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+
+		resultVec := results[0]
+		require.Equal(t, 9, resultVec.Length())
+
+		// Expected: 1,1,1,2,2,2,3,3,3 (3+3+3 distribution)
+		col := vector.MustFixedColNoTypeCheck[int64](resultVec)
+		expected := []int64{1, 1, 1, 2, 2, 2, 3, 3, 3}
+		for i := 0; i < 9; i++ {
+			require.Equal(t, expected[i], col[i], "row %d", i)
+		}
+
+		resultVec.Free(mp)
+		exec.Free()
+	})
+
+	t.Run("NTILE_5_rows_3_buckets", func(t *testing.T) {
+		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
+		require.NoError(t, err)
+
+		bucketVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(bucketVec, []int64{3, 3, 3, 3, 3}, nil, mp)
+		require.NoError(t, err)
+		defer bucketVec.Free(mp)
+
+		osVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(osVec, []int64{0, 1, 2, 3, 4, 5}, nil, mp)
+		require.NoError(t, err)
+		defer osVec.Free(mp)
+
+		err = exec.GroupGrow(5)
+		require.NoError(t, err)
+
+		for o := 0; o <= 5; o++ {
+			err = exec.Fill(0, o, []*vector.Vector{osVec, bucketVec})
+			require.NoError(t, err)
+		}
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+
+		resultVec := results[0]
+		require.Equal(t, 5, resultVec.Length())
+
+		// Expected: 1,1,2,2,3 (2+2+1 distribution)
+		col := vector.MustFixedColNoTypeCheck[int64](resultVec)
+		expected := []int64{1, 1, 2, 2, 3}
+		for i := 0; i < 5; i++ {
+			require.Equal(t, expected[i], col[i], "row %d", i)
+		}
+
+		resultVec.Free(mp)
+		exec.Free()
+	})
+}
+
 // TestValueWindowExec_TSType tests TS type
 func TestValueWindowExec_TSType(t *testing.T) {
 	mp := mpool.MustNewZero()
@@ -1109,6 +1237,1079 @@ func TestValueWindowExec_TSType(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	results[0].Free(mp)
+	exec.Free()
+}
+
+func TestPercentRank(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	t.Run("creation", func(t *testing.T) {
+		exec, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		require.NotNil(t, exec)
+		exec.Free()
+	})
+
+	t.Run("distinct_not_supported", func(t *testing.T) {
+		_, err := makePercentRankExec(mp, WinIdOfPercentRank, true)
+		require.Error(t, err)
+	})
+
+	t.Run("group_grow_and_preallocate", func(t *testing.T) {
+		exec, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		err = exec.GroupGrow(3)
+		require.NoError(t, err)
+		err = exec.PreAllocateGroups(2)
+		require.NoError(t, err)
+		exec.Free()
+	})
+
+	t.Run("fill_and_flush_single_row", func(t *testing.T) {
+		exec, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		// 分配1个结果槽位
+		err = exec.GroupGrow(1)
+		require.NoError(t, err)
+
+		// 单行分区: [0, 1] 表示从0到1共1行
+		vec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(vec, []int64{0, 1}, nil, mp)
+		require.NoError(t, err)
+		defer vec.Free(mp)
+
+		// Fill两次: 第一次是起始位置0，第二次是结束位置1
+		err = exec.Fill(0, 0, []*vector.Vector{vec})
+		require.NoError(t, err)
+		err = exec.Fill(0, 1, []*vector.Vector{vec})
+		require.NoError(t, err)
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		// 单行 percent_rank = 0
+		vals := vector.MustFixedColWithTypeCheck[float64](results[0])
+		require.Equal(t, float64(0), vals[0])
+		for _, r := range results {
+			r.Free(mp)
+		}
+		exec.Free()
+	})
+
+	t.Run("fill_and_flush_multiple_rows", func(t *testing.T) {
+		exec, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		// 分配4个结果槽位（4行数据）
+		err = exec.GroupGrow(4)
+		require.NoError(t, err)
+
+		// 4行分区，每行rank不同: [0, 1, 2, 3, 4]
+		vec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(vec, []int64{0, 1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		defer vec.Free(mp)
+
+		for i := 0; i < 5; i++ {
+			err = exec.Fill(0, i, []*vector.Vector{vec})
+			require.NoError(t, err)
+		}
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		vals := vector.MustFixedColWithTypeCheck[float64](results[0])
+		// totalRows = 4, percent_rank = (rank-1)/(totalRows-1)
+		require.InDelta(t, 0.0, vals[0], 0.0001)
+		require.InDelta(t, 1.0/3.0, vals[1], 0.0001)
+		require.InDelta(t, 2.0/3.0, vals[2], 0.0001)
+		require.InDelta(t, 1.0, vals[3], 0.0001)
+		for _, r := range results {
+			r.Free(mp)
+		}
+		exec.Free()
+	})
+
+	t.Run("merge", func(t *testing.T) {
+		exec1, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		exec2, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+
+		err = exec1.GroupGrow(1)
+		require.NoError(t, err)
+		err = exec2.GroupGrow(1)
+		require.NoError(t, err)
+
+		vec1 := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(vec1, []int64{0, 1}, nil, mp)
+		require.NoError(t, err)
+		defer vec1.Free(mp)
+
+		vec2 := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(vec2, []int64{1, 2}, nil, mp)
+		require.NoError(t, err)
+		defer vec2.Free(mp)
+
+		err = exec1.Fill(0, 0, []*vector.Vector{vec1})
+		require.NoError(t, err)
+		err = exec1.Fill(0, 1, []*vector.Vector{vec1})
+		require.NoError(t, err)
+		err = exec2.Fill(0, 0, []*vector.Vector{vec2})
+		require.NoError(t, err)
+		err = exec2.Fill(0, 1, []*vector.Vector{vec2})
+		require.NoError(t, err)
+
+		err = exec1.Merge(exec2, 0, 0)
+		require.NoError(t, err)
+
+		exec1.Free()
+		exec2.Free()
+	})
+
+	t.Run("batch_merge", func(t *testing.T) {
+		exec1, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		exec2, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+
+		err = exec1.GroupGrow(2)
+		require.NoError(t, err)
+		err = exec2.GroupGrow(2)
+		require.NoError(t, err)
+
+		vec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(vec, []int64{0, 1}, nil, mp)
+		require.NoError(t, err)
+		defer vec.Free(mp)
+
+		for i := 0; i < 2; i++ {
+			err = exec1.Fill(0, i, []*vector.Vector{vec})
+			require.NoError(t, err)
+			err = exec2.Fill(1, i, []*vector.Vector{vec})
+			require.NoError(t, err)
+		}
+
+		groups := []uint64{1, GroupNotMatched}
+		err = exec1.BatchMerge(exec2, 0, groups)
+		require.NoError(t, err)
+
+		exec1.Free()
+		exec2.Free()
+	})
+
+	t.Run("size", func(t *testing.T) {
+		exec, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		size := exec.Size()
+		require.GreaterOrEqual(t, size, int64(0))
+		exec.Free()
+	})
+
+	t.Run("get_opt_result", func(t *testing.T) {
+		exec, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		result := exec.GetOptResult()
+		require.NotNil(t, result)
+		exec.Free()
+	})
+
+	t.Run("marshal_unmarshal", func(t *testing.T) {
+		exec, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		err = exec.GroupGrow(2)
+		require.NoError(t, err)
+
+		vec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(vec, []int64{0, 1, 2}, nil, mp)
+		require.NoError(t, err)
+		defer vec.Free(mp)
+
+		for i := 0; i < 3; i++ {
+			err = exec.Fill(0, i, []*vector.Vector{vec})
+			require.NoError(t, err)
+		}
+
+		prExec := exec.(*percentRankExec)
+		data, err := prExec.marshal()
+		require.NoError(t, err)
+		require.NotEmpty(t, data)
+
+		exec.Free()
+	})
+
+	t.Run("save_intermediate_result", func(t *testing.T) {
+		exec, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		err = exec.GroupGrow(2)
+		require.NoError(t, err)
+
+		vec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(vec, []int64{0, 1}, nil, mp)
+		require.NoError(t, err)
+		defer vec.Free(mp)
+
+		err = exec.Fill(0, 0, []*vector.Vector{vec})
+		require.NoError(t, err)
+		err = exec.Fill(0, 1, []*vector.Vector{vec})
+		require.NoError(t, err)
+
+		prExec := exec.(*percentRankExec)
+		var buf bytes.Buffer
+		flags := [][]uint8{{1, 1}}
+		err = prExec.SaveIntermediateResult(2, flags, &buf)
+		require.NoError(t, err)
+
+		exec.Free()
+	})
+
+	t.Run("unmarshal_from_reader", func(t *testing.T) {
+		exec1, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		err = exec1.GroupGrow(2)
+		require.NoError(t, err)
+
+		vec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(vec, []int64{0, 1, 2}, nil, mp)
+		require.NoError(t, err)
+		defer vec.Free(mp)
+
+		for i := 0; i < 3; i++ {
+			err = exec1.Fill(0, i, []*vector.Vector{vec})
+			require.NoError(t, err)
+		}
+
+		prExec1 := exec1.(*percentRankExec)
+		var buf bytes.Buffer
+		flags := [][]uint8{{1, 1}}
+		err = prExec1.SaveIntermediateResult(2, flags, &buf)
+		require.NoError(t, err)
+
+		exec2, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		prExec2 := exec2.(*percentRankExec)
+		reader := bytes.NewReader(buf.Bytes())
+		err = prExec2.UnmarshalFromReader(reader, mp)
+		require.NoError(t, err)
+
+		exec1.Free()
+		exec2.Free()
+	})
+
+	t.Run("save_intermediate_result_of_chunk", func(t *testing.T) {
+		exec, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		err = exec.GroupGrow(2)
+		require.NoError(t, err)
+
+		vec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(vec, []int64{0, 1}, nil, mp)
+		require.NoError(t, err)
+		defer vec.Free(mp)
+
+		err = exec.Fill(0, 0, []*vector.Vector{vec})
+		require.NoError(t, err)
+
+		prExec := exec.(*percentRankExec)
+		var buf bytes.Buffer
+		err = prExec.SaveIntermediateResultOfChunk(0, &buf)
+		require.NoError(t, err)
+
+		exec.Free()
+	})
+
+	t.Run("unmarshal", func(t *testing.T) {
+		exec1, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		err = exec1.GroupGrow(1)
+		require.NoError(t, err)
+
+		vec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(vec, []int64{0, 1}, nil, mp)
+		require.NoError(t, err)
+		defer vec.Free(mp)
+
+		err = exec1.Fill(0, 0, []*vector.Vector{vec})
+		require.NoError(t, err)
+
+		prExec1 := exec1.(*percentRankExec)
+		data, err := prExec1.marshal()
+		require.NoError(t, err)
+
+		var encoded EncodedAgg
+		err = encoded.Unmarshal(data)
+		require.NoError(t, err)
+
+		exec2, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		err = exec2.GroupGrow(1)
+		require.NoError(t, err)
+		prExec2 := exec2.(*percentRankExec)
+		err = prExec2.unmarshal(mp, encoded.Result, encoded.Empties, encoded.Groups)
+		require.NoError(t, err)
+
+		exec1.Free()
+		exec2.Free()
+	})
+
+	t.Run("unmarshal_empty_groups", func(t *testing.T) {
+		exec, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+
+		prExec := exec.(*percentRankExec)
+		err = prExec.unmarshal(mp, [][]byte{}, [][]byte{}, [][]byte{})
+		require.NoError(t, err)
+
+		exec.Free()
+	})
+
+	t.Run("marshal_empty_groups", func(t *testing.T) {
+		exec, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+
+		prExec := exec.(*percentRankExec)
+		data, err := prExec.marshal()
+		require.NoError(t, err)
+		require.NotEmpty(t, data)
+
+		exec.Free()
+	})
+
+	t.Run("flush_multiple_groups", func(t *testing.T) {
+		exec, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		err = exec.GroupGrow(2)
+		require.NoError(t, err)
+
+		vec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(vec, []int64{0, 1, 2, 3}, nil, mp)
+		require.NoError(t, err)
+		defer vec.Free(mp)
+
+		// 第一个分区: [0, 1] - 1行
+		err = exec.Fill(0, 0, []*vector.Vector{vec})
+		require.NoError(t, err)
+		err = exec.Fill(0, 1, []*vector.Vector{vec})
+		require.NoError(t, err)
+
+		// 第二个分区: [2, 3] - 1行
+		err = exec.Fill(1, 2, []*vector.Vector{vec})
+		require.NoError(t, err)
+		err = exec.Fill(1, 3, []*vector.Vector{vec})
+		require.NoError(t, err)
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.NotEmpty(t, results)
+
+		for _, r := range results {
+			r.Free(mp)
+		}
+		exec.Free()
+	})
+
+	t.Run("flush_with_empty_group", func(t *testing.T) {
+		exec, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		err = exec.GroupGrow(2)
+		require.NoError(t, err)
+
+		vec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(vec, []int64{0, 1}, nil, mp)
+		require.NoError(t, err)
+		defer vec.Free(mp)
+
+		// 只填充第一个分区，第二个分区为空
+		err = exec.Fill(0, 0, []*vector.Vector{vec})
+		require.NoError(t, err)
+		err = exec.Fill(0, 1, []*vector.Vector{vec})
+		require.NoError(t, err)
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.NotEmpty(t, results)
+
+		for _, r := range results {
+			r.Free(mp)
+		}
+		exec.Free()
+	})
+
+	t.Run("size_with_groups", func(t *testing.T) {
+		exec, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		err = exec.GroupGrow(2)
+		require.NoError(t, err)
+
+		vec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(vec, []int64{0, 1, 2}, nil, mp)
+		require.NoError(t, err)
+		defer vec.Free(mp)
+
+		for i := 0; i < 3; i++ {
+			err = exec.Fill(0, i, []*vector.Vector{vec})
+			require.NoError(t, err)
+		}
+
+		size := exec.Size()
+		require.Greater(t, size, int64(0))
+		exec.Free()
+	})
+}
+
+// TestNtileExec_ParameterValidation tests parameter validation for makeNtileExec
+func TestNtileExec_ParameterValidation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	t.Run("distinct_not_supported", func(t *testing.T) {
+		_, err := makeNtileExec(mp, WinIdOfNtile, true, []types.Type{types.T_int64.ToType()})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "distinct")
+	})
+
+	t.Run("wrong_param_count", func(t *testing.T) {
+		_, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "exactly one argument")
+	})
+
+	t.Run("valid_creation", func(t *testing.T) {
+		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
+		require.NoError(t, err)
+		require.NotNil(t, exec)
+		exec.Free()
+	})
+}
+
+// TestNtileExec_IntegerTypes tests Fill with various integer types
+func TestNtileExec_IntegerTypes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	testCases := []struct {
+		name     string
+		typ      types.Type
+		values   interface{}
+		expected int64
+	}{
+		{"int8", types.T_int8.ToType(), []int8{5}, 5},
+		{"int16", types.T_int16.ToType(), []int16{5}, 5},
+		{"int32", types.T_int32.ToType(), []int32{5}, 5},
+		{"int64", types.T_int64.ToType(), []int64{5}, 5},
+		{"uint8", types.T_uint8.ToType(), []uint8{5}, 5},
+		{"uint16", types.T_uint16.ToType(), []uint16{5}, 5},
+		{"uint32", types.T_uint32.ToType(), []uint32{5}, 5},
+		{"uint64", types.T_uint64.ToType(), []uint64{5}, 5},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{tc.typ})
+			require.NoError(t, err)
+
+			osVec := vector.NewVec(types.T_int64.ToType())
+			err = vector.AppendFixedList(osVec, []int64{0, 1, 2, 3, 4, 5, 6}, nil, mp)
+			require.NoError(t, err)
+			defer osVec.Free(mp)
+
+			bucketVec := vector.NewVec(tc.typ)
+			switch v := tc.values.(type) {
+			case []int8:
+				err = vector.AppendFixedList(bucketVec, v, nil, mp)
+			case []int16:
+				err = vector.AppendFixedList(bucketVec, v, nil, mp)
+			case []int32:
+				err = vector.AppendFixedList(bucketVec, v, nil, mp)
+			case []int64:
+				err = vector.AppendFixedList(bucketVec, v, nil, mp)
+			case []uint8:
+				err = vector.AppendFixedList(bucketVec, v, nil, mp)
+			case []uint16:
+				err = vector.AppendFixedList(bucketVec, v, nil, mp)
+			case []uint32:
+				err = vector.AppendFixedList(bucketVec, v, nil, mp)
+			case []uint64:
+				err = vector.AppendFixedList(bucketVec, v, nil, mp)
+			}
+			require.NoError(t, err)
+			defer bucketVec.Free(mp)
+
+			err = exec.GroupGrow(5)
+			require.NoError(t, err)
+
+			for o := 0; o <= 5; o++ {
+				err = exec.Fill(0, o, []*vector.Vector{osVec, bucketVec})
+				require.NoError(t, err)
+			}
+
+			ntileExec := exec.(*ntileWindowExec)
+			require.Equal(t, tc.expected, ntileExec.bucketCounts[0])
+
+			exec.Free()
+		})
+	}
+}
+
+// TestNtileExec_BoundaryConditions tests boundary conditions
+func TestNtileExec_BoundaryConditions(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	t.Run("negative_bucket_count", func(t *testing.T) {
+		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
+		require.NoError(t, err)
+
+		osVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(osVec, []int64{0, 1}, nil, mp)
+		require.NoError(t, err)
+		defer osVec.Free(mp)
+
+		bucketVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(bucketVec, []int64{-1}, nil, mp)
+		require.NoError(t, err)
+		defer bucketVec.Free(mp)
+
+		err = exec.GroupGrow(1)
+		require.NoError(t, err)
+
+		err = exec.Fill(0, 0, []*vector.Vector{osVec, bucketVec})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "positive")
+
+		exec.Free()
+	})
+
+	t.Run("zero_bucket_count", func(t *testing.T) {
+		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
+		require.NoError(t, err)
+
+		osVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(osVec, []int64{0, 1}, nil, mp)
+		require.NoError(t, err)
+		defer osVec.Free(mp)
+
+		bucketVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(bucketVec, []int64{0}, nil, mp)
+		require.NoError(t, err)
+		defer bucketVec.Free(mp)
+
+		err = exec.GroupGrow(1)
+		require.NoError(t, err)
+
+		err = exec.Fill(0, 0, []*vector.Vector{osVec, bucketVec})
+		require.Error(t, err)
+
+		exec.Free()
+	})
+
+	t.Run("null_bucket_defaults_to_1", func(t *testing.T) {
+		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
+		require.NoError(t, err)
+
+		osVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(osVec, []int64{0, 1, 2, 3}, nil, mp)
+		require.NoError(t, err)
+		defer osVec.Free(mp)
+
+		bucketVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(bucketVec, []int64{0}, []bool{true}, mp)
+		require.NoError(t, err)
+		defer bucketVec.Free(mp)
+
+		err = exec.GroupGrow(3)
+		require.NoError(t, err)
+
+		for o := 0; o <= 3; o++ {
+			err = exec.Fill(0, o, []*vector.Vector{osVec, bucketVec})
+			require.NoError(t, err)
+		}
+
+		ntileExec := exec.(*ntileWindowExec)
+		require.Equal(t, int64(1), ntileExec.bucketCounts[0])
+
+		exec.Free()
+	})
+
+	t.Run("empty_vectors", func(t *testing.T) {
+		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
+		require.NoError(t, err)
+
+		err = exec.GroupGrow(1)
+		require.NoError(t, err)
+
+		err = exec.Fill(0, 0, []*vector.Vector{})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "requires vectors")
+
+		exec.Free()
+	})
+
+	t.Run("only_os_vector", func(t *testing.T) {
+		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
+		require.NoError(t, err)
+
+		osVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(osVec, []int64{0, 1, 2}, nil, mp)
+		require.NoError(t, err)
+		defer osVec.Free(mp)
+
+		err = exec.GroupGrow(2)
+		require.NoError(t, err)
+
+		for o := 0; o <= 2; o++ {
+			err = exec.Fill(0, o, []*vector.Vector{osVec})
+			require.NoError(t, err)
+		}
+
+		ntileExec := exec.(*ntileWindowExec)
+		require.Equal(t, int64(1), ntileExec.bucketCounts[0])
+
+		exec.Free()
+	})
+}
+
+// TestNtileExec_AlgorithmEdgeCases tests flushNtile algorithm edge cases
+func TestNtileExec_AlgorithmEdgeCases(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	t.Run("1_row_1_bucket", func(t *testing.T) {
+		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
+		require.NoError(t, err)
+
+		osVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(osVec, []int64{0, 1}, nil, mp)
+		require.NoError(t, err)
+		defer osVec.Free(mp)
+
+		bucketVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(bucketVec, []int64{1}, nil, mp)
+		require.NoError(t, err)
+		defer bucketVec.Free(mp)
+
+		err = exec.GroupGrow(1)
+		require.NoError(t, err)
+
+		for o := 0; o <= 1; o++ {
+			err = exec.Fill(0, o, []*vector.Vector{osVec, bucketVec})
+			require.NoError(t, err)
+		}
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+
+		resultVec := results[0]
+		require.Equal(t, 1, resultVec.Length())
+		col := vector.MustFixedColNoTypeCheck[int64](resultVec)
+		require.Equal(t, int64(1), col[0])
+
+		resultVec.Free(mp)
+		exec.Free()
+	})
+
+	t.Run("1_row_multiple_buckets", func(t *testing.T) {
+		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
+		require.NoError(t, err)
+
+		osVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(osVec, []int64{0, 1}, nil, mp)
+		require.NoError(t, err)
+		defer osVec.Free(mp)
+
+		bucketVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(bucketVec, []int64{5}, nil, mp)
+		require.NoError(t, err)
+		defer bucketVec.Free(mp)
+
+		err = exec.GroupGrow(1)
+		require.NoError(t, err)
+
+		for o := 0; o <= 1; o++ {
+			err = exec.Fill(0, o, []*vector.Vector{osVec, bucketVec})
+			require.NoError(t, err)
+		}
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+
+		resultVec := results[0]
+		require.Equal(t, 1, resultVec.Length())
+		col := vector.MustFixedColNoTypeCheck[int64](resultVec)
+		require.Equal(t, int64(1), col[0])
+
+		resultVec.Free(mp)
+		exec.Free()
+	})
+
+	t.Run("multiple_rows_1_bucket", func(t *testing.T) {
+		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
+		require.NoError(t, err)
+
+		osVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(osVec, []int64{0, 1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		defer osVec.Free(mp)
+
+		bucketVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(bucketVec, []int64{1}, nil, mp)
+		require.NoError(t, err)
+		defer bucketVec.Free(mp)
+
+		err = exec.GroupGrow(4)
+		require.NoError(t, err)
+
+		for o := 0; o <= 4; o++ {
+			err = exec.Fill(0, o, []*vector.Vector{osVec, bucketVec})
+			require.NoError(t, err)
+		}
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+
+		resultVec := results[0]
+		require.Equal(t, 4, resultVec.Length())
+		col := vector.MustFixedColNoTypeCheck[int64](resultVec)
+		for i := 0; i < 4; i++ {
+			require.Equal(t, int64(1), col[i])
+		}
+
+		resultVec.Free(mp)
+		exec.Free()
+	})
+
+	t.Run("even_distribution", func(t *testing.T) {
+		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
+		require.NoError(t, err)
+
+		osVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(osVec, []int64{0, 1, 2, 3, 4, 5, 6}, nil, mp)
+		require.NoError(t, err)
+		defer osVec.Free(mp)
+
+		bucketVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(bucketVec, []int64{3}, nil, mp)
+		require.NoError(t, err)
+		defer bucketVec.Free(mp)
+
+		err = exec.GroupGrow(6)
+		require.NoError(t, err)
+
+		for o := 0; o <= 6; o++ {
+			err = exec.Fill(0, o, []*vector.Vector{osVec, bucketVec})
+			require.NoError(t, err)
+		}
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+
+		resultVec := results[0]
+		require.Equal(t, 6, resultVec.Length())
+		col := vector.MustFixedColNoTypeCheck[int64](resultVec)
+		expected := []int64{1, 1, 2, 2, 3, 3}
+		for i := 0; i < 6; i++ {
+			require.Equal(t, expected[i], col[i], "row %d", i)
+		}
+
+		resultVec.Free(mp)
+		exec.Free()
+	})
+
+	t.Run("empty_group", func(t *testing.T) {
+		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
+		require.NoError(t, err)
+
+		err = exec.GroupGrow(2)
+		require.NoError(t, err)
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+
+		resultVec := results[0]
+		require.Equal(t, 2, resultVec.Length())
+
+		resultVec.Free(mp)
+		exec.Free()
+	})
+}
+
+// TestNtileExec_MultiplePartitions tests multiple groups with different configurations
+func TestNtileExec_MultiplePartitions(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	t.Run("different_bucket_counts", func(t *testing.T) {
+		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
+		require.NoError(t, err)
+
+		osVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(osVec, []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, nil, mp)
+		require.NoError(t, err)
+		defer osVec.Free(mp)
+
+		bucket2Vec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(bucket2Vec, []int64{2}, nil, mp)
+		require.NoError(t, err)
+		defer bucket2Vec.Free(mp)
+
+		bucket3Vec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(bucket3Vec, []int64{3}, nil, mp)
+		require.NoError(t, err)
+		defer bucket3Vec.Free(mp)
+
+		err = exec.GroupGrow(6)
+		require.NoError(t, err)
+
+		// Group 0: 3 rows, 2 buckets
+		for o := 0; o <= 3; o++ {
+			err = exec.Fill(0, o, []*vector.Vector{osVec, bucket2Vec})
+			require.NoError(t, err)
+		}
+
+		// Group 1: 3 rows, 3 buckets
+		for o := 0; o <= 3; o++ {
+			err = exec.Fill(1, o, []*vector.Vector{osVec, bucket3Vec})
+			require.NoError(t, err)
+		}
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+
+		resultVec := results[0]
+		require.Equal(t, 6, resultVec.Length())
+		col := vector.MustFixedColNoTypeCheck[int64](resultVec)
+
+		// Group 0: 1,1,2
+		require.Equal(t, int64(1), col[0])
+		require.Equal(t, int64(1), col[1])
+		require.Equal(t, int64(2), col[2])
+
+		// Group 1: 1,2,3
+		require.Equal(t, int64(1), col[3])
+		require.Equal(t, int64(2), col[4])
+		require.Equal(t, int64(3), col[5])
+
+		resultVec.Free(mp)
+		exec.Free()
+	})
+}
+
+// TestNtileExec_Serialization tests marshal/unmarshal
+func TestNtileExec_Serialization(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	t.Run("marshal_unmarshal_roundtrip", func(t *testing.T) {
+		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
+		require.NoError(t, err)
+
+		osVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(osVec, []int64{0, 1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		defer osVec.Free(mp)
+
+		bucketVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(bucketVec, []int64{2}, nil, mp)
+		require.NoError(t, err)
+		defer bucketVec.Free(mp)
+
+		err = exec.GroupGrow(2)
+		require.NoError(t, err)
+
+		for o := 0; o <= 4; o++ {
+			err = exec.Fill(0, o, []*vector.Vector{osVec, bucketVec})
+			require.NoError(t, err)
+		}
+
+		data, err := exec.(*ntileWindowExec).marshal()
+		require.NoError(t, err)
+		require.NotNil(t, data)
+
+		// Create exec2 with same group count to match unmarshal logic
+		exec2, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
+		require.NoError(t, err)
+
+		err = exec2.GroupGrow(2)
+		require.NoError(t, err)
+
+		var encoded EncodedAgg
+		err = encoded.Unmarshal(data)
+		require.NoError(t, err)
+
+		err = exec2.(*ntileWindowExec).unmarshal(mp, encoded.Result, encoded.Empties, encoded.Groups)
+		require.NoError(t, err)
+
+		// Verify bucketCounts were restored
+		ntileExec2 := exec2.(*ntileWindowExec)
+		require.Equal(t, int64(2), ntileExec2.bucketCounts[0])
+
+		exec.Free()
+		exec2.Free()
+	})
+
+	t.Run("marshal_with_empty_groups", func(t *testing.T) {
+		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
+		require.NoError(t, err)
+
+		err = exec.GroupGrow(2)
+		require.NoError(t, err)
+
+		data, err := exec.(*ntileWindowExec).marshal()
+		require.NoError(t, err)
+		require.NotNil(t, data)
+
+		exec.Free()
+	})
+}
+
+// TestNtileExec_MemoryManagement tests memory-related methods
+func TestNtileExec_MemoryManagement(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	t.Run("size_calculation", func(t *testing.T) {
+		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
+		require.NoError(t, err)
+
+		initialSize := exec.Size()
+		require.GreaterOrEqual(t, initialSize, int64(0))
+
+		osVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(osVec, []int64{0, 1, 2, 3}, nil, mp)
+		require.NoError(t, err)
+		defer osVec.Free(mp)
+
+		bucketVec := vector.NewVec(types.T_int64.ToType())
+		err = vector.AppendFixedList(bucketVec, []int64{2}, nil, mp)
+		require.NoError(t, err)
+		defer bucketVec.Free(mp)
+
+		err = exec.GroupGrow(2)
+		require.NoError(t, err)
+
+		for o := 0; o <= 3; o++ {
+			err = exec.Fill(0, o, []*vector.Vector{osVec, bucketVec})
+			require.NoError(t, err)
+		}
+
+		sizeWithData := exec.Size()
+		require.Greater(t, sizeWithData, initialSize)
+
+		exec.Free()
+	})
+
+	t.Run("group_grow", func(t *testing.T) {
+		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
+		require.NoError(t, err)
+
+		err = exec.GroupGrow(5)
+		require.NoError(t, err)
+
+		ntileExec := exec.(*ntileWindowExec)
+		require.Len(t, ntileExec.groups, 5)
+		require.Len(t, ntileExec.bucketCounts, 5)
+
+		err = exec.GroupGrow(3)
+		require.NoError(t, err)
+
+		require.Len(t, ntileExec.groups, 8)
+		require.Len(t, ntileExec.bucketCounts, 8)
+
+		exec.Free()
+	})
+
+	t.Run("pre_allocate_groups", func(t *testing.T) {
+		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
+		require.NoError(t, err)
+
+		err = exec.PreAllocateGroups(10)
+		require.NoError(t, err)
+
+		exec.Free()
+	})
+
+	t.Run("get_opt_result", func(t *testing.T) {
+		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
+		require.NoError(t, err)
+
+		result := exec.GetOptResult()
+		require.NotNil(t, result)
+
+		exec.Free()
+	})
+}
+
+// TestNtileExec_ErrorMethods tests methods that should panic or return errors
+func TestNtileExec_ErrorMethods(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
+	require.NoError(t, err)
+
+	ntileExec := exec.(*ntileWindowExec)
+
+	t.Run("bulk_fill_panics", func(t *testing.T) {
+		require.Panics(t, func() {
+			_ = ntileExec.BulkFill(0, nil)
+		})
+	})
+
+	t.Run("set_extra_information_panics", func(t *testing.T) {
+		require.Panics(t, func() {
+			_ = ntileExec.SetExtraInformation(nil, 0)
+		})
+	})
+
+	t.Run("batch_fill_returns_nil", func(t *testing.T) {
+		err := ntileExec.BatchFill(0, nil, nil)
+		require.NoError(t, err)
+	})
+
+	t.Run("merge_returns_nil", func(t *testing.T) {
+		err := ntileExec.Merge(nil, 0, 0)
+		require.NoError(t, err)
+	})
+
+	t.Run("batch_merge_returns_nil", func(t *testing.T) {
+		err := ntileExec.BatchMerge(nil, 0, nil)
+		require.NoError(t, err)
+	})
+
+	exec.Free()
+}
+
+// TestNtileExec_InvalidBucketType tests Fill with invalid bucket type
+func TestNtileExec_InvalidBucketType(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_varchar.ToType()})
+	require.NoError(t, err)
+
+	osVec := vector.NewVec(types.T_int64.ToType())
+	err = vector.AppendFixedList(osVec, []int64{0, 1}, nil, mp)
+	require.NoError(t, err)
+	defer osVec.Free(mp)
+
+	bucketVec := vector.NewVec(types.T_varchar.ToType())
+	err = vector.AppendStringList(bucketVec, []string{"invalid"}, nil, mp)
+	require.NoError(t, err)
+	defer bucketVec.Free(mp)
+
+	err = exec.GroupGrow(1)
+	require.NoError(t, err)
+
+	err = exec.Fill(0, 0, []*vector.Vector{osVec, bucketVec})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "integer type")
+
 	exec.Free()
 }
 
