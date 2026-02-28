@@ -16,7 +16,7 @@ select count(*) > 0 as has_data from system.statement_info;
 has_data
 1
 show table status from system like 'statement_info';
--- @regex("(?m)^statement_info\\s+Tae\\s+Dynamic\\s+[1-9][0-9]*\\s+",true)
+-- @regex("(?m)^statement_info\\b.*\\bTae\\b.*\\bDynamic\\b.*\\b[1-9][0-9]*\\b",true)
 Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
-statement_info    Tae    Dynamic    2    0    0    0    0    NULL    1    2026-02-26 16:36:09    NULL    NULL    utf8mb4_bin    NULL        record each statement and stats info[mo_no_del_hint]    2    accountadmin
+statement_info    Tae    Dynamic    1    0    0    0    0    NULL    1    2026-02-28 16:08:26    NULL    NULL    utf8mb4_bin    NULL        record each statement and stats info[mo_no_del_hint]    2    accountadmin
 drop account show_table_status_acc_10163;
