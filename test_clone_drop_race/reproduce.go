@@ -173,14 +173,24 @@ func setupSrcDB(pool *sql.DB) error {
 	mustExec(pool, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", srcDB))
 	for i := 0; i < 20; i++ {
 		tbl := fmt.Sprintf("src_tbl_%03d", i)
+		// 创建带索引的源表，模拟线上场景（1 主表 + 4 索引表 = 5 条 mo_tables 记录）
 		ddl := fmt.Sprintf(
-			"CREATE TABLE IF NOT EXISTS `%s`.`%s` (id BIGINT PRIMARY KEY, name VARCHAR(255))",
-			srcDB, tbl)
+			"CREATE TABLE IF NOT EXISTS `%s`.`%s` ("+
+				"id BIGINT PRIMARY KEY, "+
+				"name VARCHAR(255), "+
+				"status INT, "+
+				"created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "+
+				"updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "+
+				"KEY idx_%s_name (name), "+
+				"KEY idx_%s_status (status), "+
+				"KEY idx_%s_created (created_at), "+
+				"KEY idx_%s_updated (updated_at))",
+			srcDB, tbl, tbl, tbl, tbl, tbl)
 		if _, err := pool.Exec(ddl); err != nil {
 			return fmt.Errorf("create src table %s: %w", tbl, err)
 		}
 		pool.Exec(fmt.Sprintf(
-			"INSERT IGNORE INTO `%s`.`%s` (id, name) VALUES (1,'a'),(2,'b'),(3,'c')",
+			"INSERT IGNORE INTO `%s`.`%s` (id, name, status) VALUES (1,'a',1),(2,'b',2),(3,'c',3)",
 			srcDB, tbl))
 	}
 	return nil
