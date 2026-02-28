@@ -1449,6 +1449,14 @@ func (tc *txnOperator) unlock(ctx context.Context) {
 			zap.Error(err))
 	}
 
+	// DIAG: log the moment lock is released but before closeLocked/updateLastCommitTS
+	if len(tc.mu.txn.LockTables) > 0 {
+		tc.logger.Info("DROP-DB-DIAG unlock done, closeLocked pending",
+			zap.String("txnID", hex.EncodeToString(tc.mu.txn.ID)),
+			zap.String("commitTS", tc.mu.txn.CommitTS.DebugString()),
+			zap.Int("lockTables", len(tc.mu.txn.LockTables)))
+	}
+
 	// HACK: delay after lockService.Unlock but before closeLocked/updateLastCommitTS.
 	// This widens the window where:
 	//   1. Shared lock is released (Unlock done above)
@@ -1477,6 +1485,12 @@ func (tc *txnOperator) closeLocked() {
 		tc.mu.closed = true
 		if tc.reset.commitErr != nil {
 			tc.mu.txn.Status = txn.TxnStatus_Aborted
+		}
+		// DIAG: log the moment closeLocked fires (which triggers updateLastCommitTS)
+		if len(tc.mu.txn.LockTables) > 0 {
+			tc.logger.Info("DROP-DB-DIAG closeLocked firing",
+				zap.String("txnID", hex.EncodeToString(tc.mu.txn.ID)),
+				zap.String("commitTS", tc.mu.txn.CommitTS.DebugString()))
 		}
 		tc.triggerEventLocked(
 			TxnEvent{

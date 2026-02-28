@@ -586,6 +586,9 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
+	logutil.Infof("DROP-DB-DIAG [%s] Engine.Delete Relations() returned %d tables for db=%s snapshot=%s: %v",
+		op.Txn().DebugString(), len(rels), name,
+		op.Txn().SnapshotTS.DebugString(), rels)
 	for _, relName := range rels {
 		if err := toDelDB.Delete(ctx, relName); err != nil {
 			return err

@@ -136,6 +136,10 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	if err != nil {
 		return err
 	}
+
+	logutil.Infof("DROP-DB-DIAG [%s] Relations() returned %d tables for db=%s snapshot=%s: %v",
+		c.proc.GetTxnOperator().Txn().DebugString(), len(relations), dbName,
+		c.proc.GetTxnOperator().Txn().SnapshotTS.DebugString(), relations)
 	var ignoreTables []string
 	for _, r := range relations {
 		t, err := database.Relation(c.proc.Ctx, r, nil)
@@ -178,6 +182,10 @@ func (s *Scope) DropDatabase(c *Compile) error {
 			return err
 		}
 	}
+
+	logutil.Infof("DROP-DB-DIAG [%s] finished dropping %d user tables for db=%s, now calling e.Delete. snapshot=%s",
+		c.proc.GetTxnOperator().Txn().DebugString(), len(deleteTables), dbName,
+		c.proc.GetTxnOperator().Txn().SnapshotTS.DebugString())
 
 	sql := s.Plan.GetDdl().GetDropDatabase().GetCheckFKSql()
 	if len(sql) != 0 {
@@ -3874,11 +3882,15 @@ var lockMoDatabaseAndRefreshSnapshot = func(c *Compile, dbName string) error {
 	}
 	txnOp := c.proc.GetTxnOperator()
 	if txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
+		oldSnapshotTS := txnOp.Txn().SnapshotTS
 		now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
+		latestCommitTS := c.proc.Base.TxnClient.GetLatestCommitTS()
 		newTS, err := c.proc.Base.TxnClient.WaitLogTailAppliedAt(c.proc.Ctx, now)
 		if err != nil {
 			return err
 		}
+		logutil.Infof("DROP-DB-DIAG [%s] lockMoDatabaseAndRefreshSnapshot: db=%s oldSnapshot=%s clockNow=%s latestCommitTS=%s waitResult=%s willUpdate=%v",
+			txnOp.Txn().DebugString(), dbName, oldSnapshotTS.DebugString(), now.DebugString(), latestCommitTS.DebugString(), newTS.DebugString(), oldSnapshotTS.Less(newTS))
 		if txnOp.Txn().SnapshotTS.Less(newTS) {
 			if err := txnOp.UpdateSnapshot(c.proc.Ctx, newTS); err != nil {
 				return err
