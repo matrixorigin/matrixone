@@ -75,6 +75,8 @@ select a, percent_rank() over (partition by a) from t1;
 select a, percent_rank() over () from t1;
 select a, b, c, percent_rank() over (partition by a, b order by c) from t1;
 select a, c, percent_rank() over(order by a), rank() over(order by a), dense_rank() over(order by a) from t1;
+select a, c, percent_rank() over (order by c desc) from t1;
+select a, c, percent_rank() over (partition by a order by c desc) from t1;
 drop table t1;
 
 -- test cume_dist

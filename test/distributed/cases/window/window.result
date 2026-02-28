@@ -488,6 +488,24 @@ a    c    percent_rank() over (order by a)    rank() over (order by a)    dense_
 3    7    0.16666666666666666    2    2
 5    3    0.8333333333333334    6    3
 7    4    1    7    4
+select a, c, percent_rank() over (order by c desc) from t1;
+a    c    percent_rank() over (order by c desc)
+3    7    0
+3    6    0.16666666666666666
+3    5    0.3333333333333333
+7    4    0.5
+5    3    0.6666666666666666
+3    2    0.8333333333333334
+1    1    1
+select a, c, percent_rank() over (partition by a order by c desc) from t1;
+a    c    percent_rank() over (partition by a order by c desc)
+1    1    0
+3    7    0
+3    6    0.3333333333333333
+3    5    0.6666666666666666
+3    2    1
+5    3    0
+7    4    0
 drop table t1;
 drop table if exists t1;
 create table t1 (a int, b int);
