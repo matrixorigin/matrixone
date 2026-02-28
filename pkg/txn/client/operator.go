@@ -20,7 +20,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1445,6 +1447,20 @@ func (tc *txnOperator) unlock(ctx context.Context) {
 		tc.logger.Error("failed to unlock txn",
 			util.TxnField(tc.mu.txn),
 			zap.Error(err))
+	}
+
+	// HACK: delay after lockService.Unlock but before closeLocked/updateLastCommitTS.
+	// This widens the window where:
+	//   1. Shared lock is released (Unlock done above)
+	//   2. latestCommitTS is NOT yet updated (updateLastCommitTS runs in closeLocked,
+	//      which executes AFTER unlock returns due to defer LIFO ordering)
+	// DROP DATABASE can acquire Exclusive lock in this window, and v1 fix's
+	// GetLatestCommitTS() will see a stale value.
+	// Set MO_DELAY_AFTER_UNLOCK_MS=500 to enable.
+	if v := os.Getenv("MO_DELAY_AFTER_UNLOCK_MS"); v != "" {
+		if ms, _ := strconv.Atoi(v); ms > 0 {
+			time.Sleep(time.Duration(ms) * time.Millisecond)
+		}
 	}
 }
 

@@ -1,17 +1,19 @@
 // reproduce.go — 复现 data branch create table + DROP DATABASE 竞态条件
 //
-// 场景：应用程序对数据库执行 data branch create table（内部转为 CLONE），
-// 同时另一个连接 DROP 该数据库。由于 lock service bug（Exclusive lock 获取后
-// 锁模式仍为 Shared），CREATE TABLE 的 lockMoDatabase(Shared) 可以绕过
-// DROP 的 Exclusive lock。
-//
-// v1 fix 在 lock 之后刷新 snapshot 到 latestCommitTS，但由于 lock service bug，
-// 新的 CREATE TABLE 可以在 v1 fix 之后继续进来并提交，Relations() 仍然会漏掉。
+// 根因：事务 commit 时 defer LIFO 顺序导致 unlock 在 updateLastCommitTS 之前执行。
+//   1. data branch txn commit → doWrite
+//   2. defer tc.unlock(ctx)  — 释放 Shared lock
+//   3. defer { closeLocked(); mu.Unlock() } — 触发 updateLastCommitTS
+//   由于 defer LIFO，unlock 先执行，closeLocked 后执行。
+//   在 unlock 和 closeLocked 之间的窗口中：
+//     - Shared lock 已释放，DROP 可以获取 Exclusive lock
+//     - latestCommitTS 还没更新，v1 fix 的 GetLatestCommitTS() 看到旧值
+//     - v1 fix 不触发，Relations() 用旧 snapshot 查询，漏掉新创建的表
 //
 // 使用步骤：
-//   1. 编译 MO（包含 ddl.go 中的 MO_DELAY_BEFORE_RELATIONS_MS hack）
+//   1. 编译 MO（包含 operator.go 中的 MO_DELAY_AFTER_UNLOCK_MS hack）
 //   2. 启动 MO 时设置环境变量：
-//      export MO_DELAY_BEFORE_RELATIONS_MS=500
+//      export MO_DELAY_AFTER_UNLOCK_MS=500
 //   3. 运行本工具：go run reproduce.go -host 127.0.0.1 -port 6001
 
 package main
@@ -35,7 +37,6 @@ var (
 	pass   = flag.String("pass", "111", "MO password")
 	rounds = flag.Int("rounds", 200, "number of test rounds")
 	tables = flag.Int("tables", 20, "number of tables to branch concurrently")
-	delay  = flag.Int("delay", 500, "suggested MO_DELAY_BEFORE_RELATIONS_MS value (ms)")
 )
 
 func dsn() string {
@@ -95,7 +96,7 @@ func runOneRound(roundID int, pool *sql.DB) (found bool, msg string) {
 	var branchDone atomic.Int32
 	var dropErr error
 
-	// 并发执行 data branch create table（模拟 data branch 操作）
+	// 并发执行 data branch create table
 	for i := 0; i < *tables; i++ {
 		wg.Add(1)
 		go func(idx int) {
@@ -114,7 +115,6 @@ func runOneRound(roundID int, pool *sql.DB) (found bool, msg string) {
 				dbName, dstTbl, srcDB, srcTbl)
 			_, err = c.Exec(ddl)
 			if err != nil {
-				// 可能因为 db 已被 drop 而失败，正常
 				return
 			}
 			branchDone.Add(1)
@@ -125,7 +125,6 @@ func runOneRound(roundID int, pool *sql.DB) (found bool, msg string) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		// 等至少 2 张表创建成功
 		for i := 0; i < 2000; i++ {
 			if branchDone.Load() >= 2 {
 				break
@@ -149,7 +148,6 @@ func runOneRound(roundID int, pool *sql.DB) (found bool, msg string) {
 		return false, ""
 	}
 
-	// 等 logtail 追上
 	time.Sleep(500 * time.Millisecond)
 
 	dbExists, orphans, err := checkOrphans(pool, dbName)
@@ -176,17 +174,14 @@ func setupSrcDB(pool *sql.DB) error {
 	for i := 0; i < 20; i++ {
 		tbl := fmt.Sprintf("src_tbl_%03d", i)
 		ddl := fmt.Sprintf(
-			"CREATE TABLE IF NOT EXISTS `%s`.`%s` (id BIGINT PRIMARY KEY, name VARCHAR(255), "+
-				"val TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
+			"CREATE TABLE IF NOT EXISTS `%s`.`%s` (id BIGINT PRIMARY KEY, name VARCHAR(255))",
 			srcDB, tbl)
 		if _, err := pool.Exec(ddl); err != nil {
 			return fmt.Errorf("create src table %s: %w", tbl, err)
 		}
-		// 插入一些数据
-		ins := fmt.Sprintf(
-			"INSERT IGNORE INTO `%s`.`%s` (id, name, val) VALUES (1,'a','x'),(2,'b','y'),(3,'c','z')",
-			srcDB, tbl)
-		pool.Exec(ins)
+		pool.Exec(fmt.Sprintf(
+			"INSERT IGNORE INTO `%s`.`%s` (id, name) VALUES (1,'a'),(2,'b'),(3,'c')",
+			srcDB, tbl))
 	}
 	return nil
 }
@@ -197,9 +192,13 @@ func main() {
 	log.Println("=== data branch create table + DROP DATABASE 竞态条件复现工具 ===")
 	log.Printf("目标: %s:%d, 轮次=%d, 每轮表数=%d", *host, *port, *rounds, *tables)
 	log.Println("")
+	log.Println("根因: 事务 commit 时 defer LIFO 导致 unlock 在 updateLastCommitTS 之前执行")
+	log.Println("  unlock → Shared lock 释放 → DROP 获取 Exclusive lock")
+	log.Println("  此时 latestCommitTS 还没更新 → v1 fix 不触发 → Relations() 用旧 snapshot")
+	log.Println("")
 	log.Println("请确保:")
-	log.Printf("  1. MO 编译时包含 ddl.go 中的 MO_DELAY_BEFORE_RELATIONS_MS hack")
-	log.Printf("  2. 启动 MO 时设置: export MO_DELAY_BEFORE_RELATIONS_MS=%d", *delay)
+	log.Println("  1. MO 编译时包含 operator.go 中的 MO_DELAY_AFTER_UNLOCK_MS hack")
+	log.Println("  2. 启动 MO 时设置: export MO_DELAY_AFTER_UNLOCK_MS=500")
 	log.Println("")
 
 	pool, err := sql.Open("mysql", dsn())
@@ -234,6 +233,6 @@ func main() {
 	if total > 0 {
 		log.Printf("BUG 已复现! %d 轮出现孤儿表", total)
 	} else {
-		log.Println("未复现。尝试增大 delay 或 tables 数量。")
+		log.Println("未复现。尝试增大 tables 数量或检查 MO_DELAY_AFTER_UNLOCK_MS 是否生效。")
 	}
 }
