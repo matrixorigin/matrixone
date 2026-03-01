@@ -24,7 +24,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -111,7 +110,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return moerr.NewErrDropNonExistsDB(c.proc.Ctx, dbName)
 	}
 
-	if err = lockMoDatabaseAndRefreshSnapshot(c, dbName); err != nil {
+	if err = lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 
@@ -3869,38 +3868,6 @@ var lockMoDatabase = func(c *Compile, dbName string, lockMode lock.LockMode) err
 	}
 	logutil.Infof("DROP-DB-DIAG [%s] lockMoDatabase acquired: db=%s mode=%v accountID=%d",
 		c.proc.GetTxnOperator().Txn().DebugString(), dbName, lockMode, accountID)
-	return nil
-}
-
-// lockMoDatabaseAndRefreshSnapshot acquires an Exclusive lock on mo_database
-// and then refreshes the transaction snapshot using clock.Now().
-//
-// This fixes a race where concurrent CREATE TABLE (via data branch) commits
-// and releases its Shared lock, but updateLastCommitTS has not yet run due to
-// defer LIFO ordering in txnOperator.doWrite. Using clock.Now() instead of
-// GetLatestCommitTS() guarantees the timestamp is >= any committed txn's
-// commitTS, so WaitLogTailAppliedAt will wait for all committed changes.
-var lockMoDatabaseAndRefreshSnapshot = func(c *Compile, dbName string) error {
-	if err := lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
-		return err
-	}
-	txnOp := c.proc.GetTxnOperator()
-	if txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
-		oldSnapshotTS := txnOp.Txn().SnapshotTS
-		now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
-		latestCommitTS := c.proc.Base.TxnClient.GetLatestCommitTS()
-		newTS, err := c.proc.Base.TxnClient.WaitLogTailAppliedAt(c.proc.Ctx, now)
-		if err != nil {
-			return err
-		}
-		logutil.Infof("DROP-DB-DIAG [%s] lockMoDatabaseAndRefreshSnapshot: db=%s oldSnapshot=%s clockNow=%s latestCommitTS=%s waitResult=%s willUpdate=%v",
-			txnOp.Txn().DebugString(), dbName, oldSnapshotTS.DebugString(), now.DebugString(), latestCommitTS.DebugString(), newTS.DebugString(), oldSnapshotTS.Less(newTS))
-		if txnOp.Txn().SnapshotTS.Less(newTS) {
-			if err := txnOp.UpdateSnapshot(c.proc.Ctx, newTS); err != nil {
-				return err
-			}
-		}
-	}
 	return nil
 }
 
