@@ -135,7 +135,6 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	if err != nil {
 		return err
 	}
-
 	var ignoreTables []string
 	for _, r := range relations {
 		t, err := database.Relation(c.proc.Ctx, r, nil)

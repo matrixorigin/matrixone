@@ -1446,7 +1446,6 @@ func (tc *txnOperator) unlock(ctx context.Context) {
 			util.TxnField(tc.mu.txn),
 			zap.Error(err))
 	}
-
 }
 
 func (tc *txnOperator) needUnlockLocked() bool {
