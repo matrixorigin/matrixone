@@ -1302,7 +1302,6 @@ func TestExclusiveHolderMustBlockSharedRequests(t *testing.T) {
 	)
 }
 
-
 // TestSharedAfterExclusiveRelease verifies that after an Exclusive holder
 // releases, a waiting Shared txn can acquire the lock, and subsequent Shared
 // requests are also allowed (not incorrectly blocked by a stale Exclusive mode).
@@ -1368,4 +1367,3 @@ func TestSharedAfterExclusiveRelease(t *testing.T) {
 		},
 	)
 }
-

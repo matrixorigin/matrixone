@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -111,6 +112,16 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	}
 
 	if err = lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
+		return err
+	}
+
+	// After acquiring the Exclusive lock, refresh the snapshot to the latest
+	// timestamp so that Relations() can see all tables committed before this
+	// point. This covers the edge case where a concurrent "data branch create
+	// table" transaction committed and released its Shared lock before DROP
+	// started locking (Mode B situation 1), in which case the lock service
+	// returns no conflict and doLock does not advance the snapshot.
+	if err = refreshSnapshotAfterLock(c); err != nil {
 		return err
 	}
 
@@ -3857,6 +3868,24 @@ var lockMoDatabase = func(c *Compile, dbName string, lockMode lock.LockMode) err
 		return err
 	}
 	return nil
+}
+
+// refreshSnapshotAfterLock advances the transaction's snapshot to the current
+// HLC timestamp. This ensures that subsequent reads (e.g. Relations()) see all
+// data committed up to this moment, regardless of whether the lock service
+// reported a conflict.
+//
+// This is necessary because the lock conflict detection only checks the locked
+// table (mo_database), but concurrent transactions may have modified related
+// tables (mo_tables) without changing mo_database. In such cases, doLock's
+// hasNewVersionInRange returns false and the snapshot is not advanced.
+func refreshSnapshotAfterLock(c *Compile) error {
+	now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
+	ts, err := c.proc.Base.TxnClient.WaitLogTailAppliedAt(c.proc.Ctx, now)
+	if err != nil {
+		return err
+	}
+	return c.proc.GetTxnOperator().UpdateSnapshot(c.proc.Ctx, ts)
 }
 
 var lockMoTable = func(
