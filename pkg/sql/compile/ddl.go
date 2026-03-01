@@ -127,6 +127,18 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 
+	// After acquiring the exclusive lock on mo_database, advance the
+	// transaction's snapshot so that Relations() sees all tables committed
+	// before the lock was acquired. Only needed for DropDatabase because it
+	// enumerates tables via Relations() and must not miss any.
+	//
+	// This must NOT be in lockMoDatabase itself, because CreateDatabase also
+	// calls lockMoDatabase(Exclusive) and advancing the snapshot there can
+	// cause duplicate-key errors during restore cluster operations.
+	if err = refreshSnapshotAfterLock(c); err != nil {
+		return err
+	}
+
 	// handle sub
 	if db.IsSubscription(c.proc.Ctx) {
 		if err = dropSubscription(c.proc.Ctx, c, dbName); err != nil {
@@ -3981,34 +3993,7 @@ var doLockMoDatabase = func(c *Compile, dbName string, lockMode lock.LockMode) e
 }
 
 var lockMoDatabase = func(c *Compile, dbName string, lockMode lock.LockMode) error {
-	if err := doLockMoDatabase(c, dbName, lockMode); err != nil {
-		return err
-	}
-
-	// After acquiring an exclusive lock on mo_database, advance the
-	// transaction's snapshot to the current HLC timestamp.
-	//
-	// This is necessary because the lock service only checks mo_database rows
-	// (via hasNewVersionInRange) to decide whether to advance the snapshot.
-	// Concurrent operations that only modify mo_tables (e.g., CREATE TABLE,
-	// CLONE) will not trigger a snapshot advance. Without this explicit refresh,
-	// subsequent reads (e.g., Relations()) may use a stale snapshot and miss
-	// recently committed tables, leading to orphan records in mo_tables and
-	// OkExpectedEOB panic on replay.
-	//
-	// Note: we use clock.Now() instead of GetLatestCommitTS() because the
-	// doWrite defer LIFO ordering causes unlock (which releases the Shared lock
-	// and wakes up the Exclusive waiter) to execute BEFORE closeLocked (which
-	// triggers updateLastCommitTS). So when DROP is woken up, latestCommitTS
-	// has not yet been updated, and the condition snapshotTS < latestCommitTS
-	// would be false, causing the fix to be skipped entirely.
-	if lockMode == lock.LockMode_Exclusive {
-		if err := refreshSnapshotAfterLock(c); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return doLockMoDatabase(c, dbName, lockMode)
 }
 
 // refreshSnapshotAfterLock advances the transaction's snapshot to the current
