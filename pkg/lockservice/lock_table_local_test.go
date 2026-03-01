@@ -1302,3 +1302,70 @@ func TestExclusiveHolderMustBlockSharedRequests(t *testing.T) {
 	)
 }
 
+
+// TestSharedAfterExclusiveRelease verifies that after an Exclusive holder
+// releases, a waiting Shared txn can acquire the lock, and subsequent Shared
+// requests are also allowed (not incorrectly blocked by a stale Exclusive mode).
+func TestSharedAfterExclusiveRelease(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, s []*service) {
+			l := s[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			tableID := uint64(10)
+			rows := newTestRows(1)
+			sharedOpt := newTestRowSharedOptions()
+			exclusiveOpt := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			// Step 1: txn1 acquires Exclusive lock
+			txn1 := newTestTxnID(1)
+			_, err := l.Lock(ctx, tableID, rows, txn1, exclusiveOpt)
+			require.NoError(t, err)
+
+			// Step 2: txn2 requests Shared lock → blocked
+			txn2 := newTestTxnID(2)
+			txn2Done := make(chan struct{}, 1)
+			go func() {
+				_, err := l.Lock(ctx, tableID, rows, txn2, sharedOpt)
+				require.NoError(t, err)
+				txn2Done <- struct{}{}
+			}()
+			time.Sleep(100 * time.Millisecond)
+
+			// Step 3: txn1 releases → txn2 should acquire Shared lock
+			require.NoError(t, l.Unlock(ctx, txn1, timestamp.Timestamp{PhysicalTime: 1}))
+			select {
+			case <-txn2Done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("txn2 (Shared) did not acquire lock after txn1 (Exclusive) released")
+			}
+
+			// Step 4: txn3 requests Shared lock → should succeed (both Shared)
+			txn3 := newTestTxnID(3)
+			txn3Done := make(chan struct{}, 1)
+			go func() {
+				_, err := l.Lock(ctx, tableID, rows, txn3, sharedOpt)
+				require.NoError(t, err)
+				txn3Done <- struct{}{}
+			}()
+			select {
+			case <-txn3Done:
+				// Good: txn3 Shared lock granted while txn2 holds Shared
+			case <-time.After(2 * time.Second):
+				t.Fatal("txn3 (Shared) should be allowed while txn2 holds Shared lock, " +
+					"but it was blocked. Lock mode may not have been downgraded from Exclusive.")
+			}
+
+			require.NoError(t, l.Unlock(ctx, txn2, timestamp.Timestamp{PhysicalTime: 2}))
+			require.NoError(t, l.Unlock(ctx, txn3, timestamp.Timestamp{PhysicalTime: 3}))
+		},
+	)
+}
+

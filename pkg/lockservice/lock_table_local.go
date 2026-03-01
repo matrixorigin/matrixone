@@ -415,15 +415,8 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 				// only new holder can added lock into txn.
 				// newHolder is false means prev op of txn has already added lock into txn
 				if newHolder {
-					// If the new holder requested an Exclusive lock but the existing
-					// lock entry is in Shared mode, upgrade the lock mode to Exclusive.
-					// This prevents subsequent Shared lock requests from being incorrectly
-					// allowed while an Exclusive holder is present.
-					// Lock is a value type, so we must write back to the store.
-					if c.opts.Mode == pb.LockMode_Exclusive && lock.isShared() {
-						lock.value &^= flagLockSharedMode
-						lock.value |= flagLockExclusiveMode
-						l.mu.store.Add(key, lock)
+					if updated, changed := lock.setMode(c.opts.Mode); changed {
+						l.mu.store.Add(key, updated)
 					}
 					err := c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{key}, l.logger)
 					if err != nil {
@@ -657,13 +650,8 @@ func (l *localLockTable) addRangeLockLocked(
 				// only new holder can added lock into txn.
 				// newHolder is false means prev op of txn has already added lock into txn
 				if newHolder {
-					// If the new holder requested an Exclusive lock but the existing
-					// lock entry is in Shared mode, upgrade the lock mode to Exclusive.
-					// Lock is a value type, so we must write back to the store.
-					if c.opts.Mode == pb.LockMode_Exclusive && conflictWith.isShared() {
-						conflictWith.value &^= flagLockSharedMode
-						conflictWith.value |= flagLockExclusiveMode
-						l.mu.store.Add(conflictKey, conflictWith)
+					if updated, changed := conflictWith.setMode(c.opts.Mode); changed {
+						l.mu.store.Add(conflictKey, updated)
 					}
 					err := c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{conflictKey}, l.logger)
 					if err != nil {
