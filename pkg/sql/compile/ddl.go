@@ -3879,7 +3879,7 @@ var lockMoDatabase = func(c *Compile, dbName string, lockMode lock.LockMode) err
 // table (mo_database), but concurrent transactions may have modified related
 // tables (mo_tables) without changing mo_database. In such cases, doLock's
 // hasNewVersionInRange returns false and the snapshot is not advanced.
-func refreshSnapshotAfterLock(c *Compile) error {
+var refreshSnapshotAfterLock = func(c *Compile) error {
 	now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
 	ts, err := c.proc.Base.TxnClient.WaitLogTailAppliedAt(c.proc.Ctx, now)
 	if err != nil {
