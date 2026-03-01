@@ -1198,3 +1198,107 @@ type target struct {
 	Start string `json:"start"`
 	End   string `json:"end"`
 }
+
+// TestExclusiveHolderMustBlockSharedRequests verifies that when an Exclusive
+// lock waiter is promoted to holder (after all Shared holders release), the
+// lock entry's mode is upgraded from Shared to Exclusive. Without this fix,
+// the lock mode stays Shared (because Lock is a value type and addHolder
+// modifies a copy), allowing subsequent Shared lock requests to be incorrectly
+// granted while an Exclusive holder is present.
+//
+// This is the root cause of the data branch create table + DROP DATABASE race:
+// DROP DATABASE acquires Exclusive lock on mo_database, but the lock entry
+// stays Shared, so new CREATE TABLE (Shared) requests slip through.
+func TestExclusiveHolderMustBlockSharedRequests(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, s []*service) {
+			l := s[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			tableID := uint64(10)
+			rows := newTestRows(1)
+			sharedOpt := newTestRowSharedOptions()
+			exclusiveOpt := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			// Step 1: txn1 acquires Shared lock (simulates Branch txn A)
+			txn1 := newTestTxnID(1)
+			_, err := l.Lock(ctx, tableID, rows, txn1, sharedOpt)
+			require.NoError(t, err)
+
+			// Step 2: txn2 requests Exclusive lock (simulates DROP DATABASE)
+			// This will block because txn1 holds Shared lock.
+			txn2 := newTestTxnID(2)
+			txn2Done := make(chan pb.Result, 1)
+			go func() {
+				res, err := l.Lock(ctx, tableID, rows, txn2, exclusiveOpt)
+				require.NoError(t, err)
+				txn2Done <- res
+			}()
+
+			// Give txn2 time to register as waiter
+			time.Sleep(100 * time.Millisecond)
+
+			// Step 3: txn1 releases Shared lock → txn2 should be promoted to Exclusive holder
+			require.NoError(t, l.Unlock(ctx, txn1, timestamp.Timestamp{PhysicalTime: 1}))
+
+			// Wait for txn2 to acquire the lock
+			select {
+			case <-txn2Done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("txn2 (Exclusive) did not acquire lock in time")
+			}
+
+			// Step 4: Verify the lock mode is now Exclusive (not Shared)
+			v, err := l.getLockTable(0, tableID)
+			require.NoError(t, err)
+			lt := v.(*localLockTable)
+			lt.mu.RLock()
+			lock, ok := lt.mu.store.Get(rows[0])
+			lt.mu.RUnlock()
+			require.True(t, ok, "lock entry should exist")
+			require.True(t, lock.holders.contains(txn2), "txn2 should be holder")
+			require.Equal(t, pb.LockMode_Exclusive, lock.GetLockMode(),
+				"lock mode should be Exclusive after Exclusive waiter promoted to holder")
+			require.False(t, lock.isShared(),
+				"lock should NOT be Shared when Exclusive holder is present")
+
+			// Step 5: txn3 requests Shared lock (simulates new Branch txn)
+			// With the fix, this MUST block (Exclusive holder present).
+			// Without the fix, this would succeed (lock mode still Shared).
+			txn3 := newTestTxnID(3)
+			txn3Done := make(chan struct{}, 1)
+			go func() {
+				_, err := l.Lock(ctx, tableID, rows, txn3, sharedOpt)
+				require.NoError(t, err)
+				txn3Done <- struct{}{}
+			}()
+
+			// txn3 should NOT acquire the lock within 500ms
+			select {
+			case <-txn3Done:
+				t.Fatal("txn3 (Shared) should be BLOCKED by txn2 (Exclusive), but it was granted. " +
+					"This means the lock mode was not upgraded from Shared to Exclusive.")
+			case <-time.After(500 * time.Millisecond):
+				// Expected: txn3 is blocked
+			}
+
+			// Cleanup: release txn2 → txn3 should then succeed
+			require.NoError(t, l.Unlock(ctx, txn2, timestamp.Timestamp{PhysicalTime: 2}))
+			select {
+			case <-txn3Done:
+				// txn3 acquired lock after txn2 released
+			case <-time.After(5 * time.Second):
+				t.Fatal("txn3 did not acquire lock after txn2 released")
+			}
+			require.NoError(t, l.Unlock(ctx, txn3, timestamp.Timestamp{PhysicalTime: 3}))
+		},
+	)
+}
+
