@@ -1198,3 +1198,132 @@ type target struct {
 	Start string `json:"start"`
 	End   string `json:"end"`
 }
+
+// TestExclusiveHolderMustBlockSharedRequests verifies that when an Exclusive
+// waiter is promoted to holder (after all Shared holders release), the lock
+// entry's mode is correctly updated from Shared to Exclusive, so subsequent
+// Shared requests are blocked.
+//
+// Without the setMode fix, the lock entry's mode stays Shared after the
+// Exclusive waiter is promoted (because Lock is a value type and addHolder
+// operates on a copy), allowing new Shared requests to slip through.
+func TestExclusiveHolderMustBlockSharedRequests(t *testing.T) {
+	table := uint64(10)
+	getRunner(false)(
+		t,
+		table,
+		func(ctx context.Context, s *service, lt *localLockTable) {
+			rows := newTestRows(1)
+			txn1 := newTestTxnID(1) // Shared holder
+			txn2 := newTestTxnID(2) // Exclusive waiter → holder
+			txn3 := newTestTxnID(3) // Shared requester (should be blocked)
+
+			// Step 1: txn1 acquires Shared lock
+			_, err := s.Lock(ctx, table, rows, txn1, pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Shared,
+				Policy:      pb.WaitPolicy_Wait,
+			})
+			require.NoError(t, err)
+
+			// Step 2: txn2 requests Exclusive lock → blocked (waiter)
+			c2 := make(chan error, 1)
+			go func() {
+				_, err := s.Lock(ctx, table, rows, txn2, pb.LockOptions{
+					Mode:     pb.LockMode_Exclusive,
+					Sharding: pb.Sharding_None,
+					Policy:   pb.WaitPolicy_Wait,
+				})
+				c2 <- err
+			}()
+			waitWaiters(t, s, table, rows[0], 1)
+
+			// Step 3: txn1 releases Shared lock → txn2 promoted to Exclusive holder
+			require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+			require.NoError(t, <-c2)
+
+			// Step 4: txn3 requests Shared lock → must be blocked
+			c3 := make(chan error, 1)
+			go func() {
+				_, err := s.Lock(ctx, table, rows, txn3, pb.LockOptions{
+					Mode:     pb.LockMode_Shared,
+					Sharding: pb.Sharding_None,
+					Policy:   pb.WaitPolicy_Wait,
+				})
+				c3 <- err
+			}()
+			waitWaiters(t, s, table, rows[0], 1)
+
+			// Verify txn3 is still waiting (not immediately granted)
+			select {
+			case <-c3:
+				t.Fatal("Shared request should be blocked by Exclusive holder")
+			case <-time.After(100 * time.Millisecond):
+				// Expected: txn3 is blocked
+			}
+
+			// Cleanup: release txn2 → txn3 can proceed
+			require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
+			require.NoError(t, <-c3)
+			require.NoError(t, s.Unlock(ctx, txn3, timestamp.Timestamp{}))
+		},
+	)
+}
+
+// TestSharedAfterExclusiveRelease verifies that when an Exclusive holder
+// releases and a Shared waiter is promoted, the lock entry's mode is correctly
+// updated from Exclusive to Shared, so subsequent Shared requests are allowed.
+func TestSharedAfterExclusiveRelease(t *testing.T) {
+	table := uint64(10)
+	getRunner(false)(
+		t,
+		table,
+		func(ctx context.Context, s *service, lt *localLockTable) {
+			rows := newTestRows(1)
+			txn1 := newTestTxnID(1) // Exclusive holder
+			txn2 := newTestTxnID(2) // Shared waiter → holder
+			txn3 := newTestTxnID(3) // Shared requester (should be allowed)
+
+			// Step 1: txn1 acquires Exclusive lock
+			mustAddTestLock(t, ctx, s, table, txn1, rows, pb.Granularity_Row)
+
+			// Step 2: txn2 requests Shared lock → blocked
+			c2 := make(chan error, 1)
+			go func() {
+				_, err := s.Lock(ctx, table, rows, txn2, pb.LockOptions{
+					Mode:     pb.LockMode_Shared,
+					Sharding: pb.Sharding_None,
+					Policy:   pb.WaitPolicy_Wait,
+				})
+				c2 <- err
+			}()
+			waitWaiters(t, s, table, rows[0], 1)
+
+			// Step 3: txn1 releases Exclusive lock → txn2 promoted to Shared holder
+			require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+			require.NoError(t, <-c2)
+
+			// Step 4: txn3 requests Shared lock → must be allowed (not blocked)
+			c3 := make(chan error, 1)
+			go func() {
+				_, err := s.Lock(ctx, table, rows, txn3, pb.LockOptions{
+					Mode:     pb.LockMode_Shared,
+					Sharding: pb.Sharding_None,
+					Policy:   pb.WaitPolicy_Wait,
+				})
+				c3 <- err
+			}()
+
+			select {
+			case err := <-c3:
+				require.NoError(t, err) // Expected: txn3 granted immediately
+			case <-time.After(3 * time.Second):
+				t.Fatal("Shared request should be allowed when only Shared holders exist")
+			}
+
+			// Cleanup
+			require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
+			require.NoError(t, s.Unlock(ctx, txn3, timestamp.Timestamp{}))
+		},
+	)
+}

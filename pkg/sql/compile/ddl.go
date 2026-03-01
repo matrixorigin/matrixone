@@ -3985,32 +3985,43 @@ var lockMoDatabase = func(c *Compile, dbName string, lockMode lock.LockMode) err
 		return err
 	}
 
-	// After acquiring an exclusive lock on mo_database, refresh the
-	// transaction's snapshot to the latest commit timestamp.
+	// After acquiring an exclusive lock on mo_database, advance the
+	// transaction's snapshot to the current HLC timestamp.
 	//
-	// The lock service only checks mo_database rows (via hasNewVersionInRange)
-	// to decide whether to advance the snapshot. Concurrent operations that
-	// only modify mo_tables (e.g., CREATE TABLE, CLONE) will not trigger a
-	// snapshot advance. Without this explicit refresh, subsequent reads (e.g.,
-	// Relations()) may use a stale snapshot and miss recently committed tables,
-	// leading to orphan records in mo_tables and OkExpectedEOB panic on replay.
+	// This is necessary because the lock service only checks mo_database rows
+	// (via hasNewVersionInRange) to decide whether to advance the snapshot.
+	// Concurrent operations that only modify mo_tables (e.g., CREATE TABLE,
+	// CLONE) will not trigger a snapshot advance. Without this explicit refresh,
+	// subsequent reads (e.g., Relations()) may use a stale snapshot and miss
+	// recently committed tables, leading to orphan records in mo_tables and
+	// OkExpectedEOB panic on replay.
+	//
+	// Note: we use clock.Now() instead of GetLatestCommitTS() because the
+	// doWrite defer LIFO ordering causes unlock (which releases the Shared lock
+	// and wakes up the Exclusive waiter) to execute BEFORE closeLocked (which
+	// triggers updateLastCommitTS). So when DROP is woken up, latestCommitTS
+	// has not yet been updated, and the condition snapshotTS < latestCommitTS
+	// would be false, causing the fix to be skipped entirely.
 	if lockMode == lock.LockMode_Exclusive {
-		txnOp := c.proc.GetTxnOperator()
-		if txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
-			latestCommitTS := c.proc.Base.TxnClient.GetLatestCommitTS()
-			if txnOp.Txn().SnapshotTS.Less(latestCommitTS) {
-				newTS, err := c.proc.Base.TxnClient.WaitLogTailAppliedAt(c.proc.Ctx, latestCommitTS)
-				if err != nil {
-					return err
-				}
-				if err := txnOp.UpdateSnapshot(c.proc.Ctx, newTS); err != nil {
-					return err
-				}
-			}
+		if err := refreshSnapshotAfterLock(c); err != nil {
+			return err
 		}
 	}
 
 	return nil
+}
+
+// refreshSnapshotAfterLock advances the transaction's snapshot to the current
+// HLC timestamp. This ensures that subsequent reads (e.g. Relations()) see all
+// data committed up to this moment, regardless of whether the lock service
+// reported a conflict.
+var refreshSnapshotAfterLock = func(c *Compile) error {
+	now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
+	ts, err := c.proc.Base.TxnClient.WaitLogTailAppliedAt(c.proc.Ctx, now)
+	if err != nil {
+		return err
+	}
+	return c.proc.GetTxnOperator().UpdateSnapshot(c.proc.Ctx, ts)
 }
 
 var lockMoTable = func(

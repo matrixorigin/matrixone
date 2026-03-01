@@ -415,6 +415,9 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 				// only new holder can added lock into txn.
 				// newHolder is false means prev op of txn has already added lock into txn
 				if newHolder {
+					if updated, changed := lock.setMode(c.opts.Mode); changed {
+						l.mu.store.Add(key, updated)
+					}
 					err := c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{key}, l.logger)
 					if err != nil {
 						return err
@@ -649,6 +652,9 @@ func (l *localLockTable) addRangeLockLocked(
 				// only new holder can added lock into txn.
 				// newHolder is false means prev op of txn has already added lock into txn
 				if newHolder {
+					if updated, changed := conflictWith.setMode(c.opts.Mode); changed {
+						l.mu.store.Add(conflictKey, updated)
+					}
 					err := c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{conflictKey}, l.logger)
 					if err != nil {
 						return nil, Lock{}, err
