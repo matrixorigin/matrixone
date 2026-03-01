@@ -136,9 +136,6 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 
-	logutil.Infof("DROP-DB-DIAG [%s] Relations() returned %d tables for db=%s snapshot=%s: %v",
-		c.proc.GetTxnOperator().Txn().DebugString(), len(relations), dbName,
-		c.proc.GetTxnOperator().Txn().SnapshotTS.DebugString(), relations)
 	var ignoreTables []string
 	for _, r := range relations {
 		t, err := database.Relation(c.proc.Ctx, r, nil)
@@ -181,10 +178,6 @@ func (s *Scope) DropDatabase(c *Compile) error {
 			return err
 		}
 	}
-
-	logutil.Infof("DROP-DB-DIAG [%s] finished dropping %d user tables for db=%s, now calling e.Delete. snapshot=%s",
-		c.proc.GetTxnOperator().Txn().DebugString(), len(deleteTables), dbName,
-		c.proc.GetTxnOperator().Txn().SnapshotTS.DebugString())
 
 	sql := s.Plan.GetDdl().GetDropDatabase().GetCheckFKSql()
 	if len(sql) != 0 {
@@ -3861,13 +3854,9 @@ var lockMoDatabase = func(c *Compile, dbName string, lockMode lock.LockMode) err
 		return err
 	}
 	defer bat.GetVector(0).Free(c.proc.Mp())
-	logutil.Infof("DROP-DB-DIAG [%s] lockMoDatabase: db=%s mode=%v accountID=%d",
-		c.proc.GetTxnOperator().Txn().DebugString(), dbName, lockMode, accountID)
 	if err := lockRows(c.e, c.proc, dbRel, bat, 0, lockMode, lock.Sharding_None, accountID); err != nil {
 		return err
 	}
-	logutil.Infof("DROP-DB-DIAG [%s] lockMoDatabase acquired: db=%s mode=%v accountID=%d",
-		c.proc.GetTxnOperator().Txn().DebugString(), dbName, lockMode, accountID)
 	return nil
 }
 

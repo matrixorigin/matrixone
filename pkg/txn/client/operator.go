@@ -20,9 +20,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1449,27 +1447,6 @@ func (tc *txnOperator) unlock(ctx context.Context) {
 			zap.Error(err))
 	}
 
-	// DIAG: log the moment lock is released but before closeLocked/updateLastCommitTS
-	if len(tc.mu.txn.LockTables) > 0 {
-		tc.logger.Info("DROP-DB-DIAG unlock done, closeLocked pending",
-			zap.String("txnID", hex.EncodeToString(tc.mu.txn.ID)),
-			zap.String("commitTS", tc.mu.txn.CommitTS.DebugString()),
-			zap.Int("lockTables", len(tc.mu.txn.LockTables)))
-	}
-
-	// HACK: delay after lockService.Unlock but before closeLocked/updateLastCommitTS.
-	// This widens the window where:
-	//   1. Shared lock is released (Unlock done above)
-	//   2. latestCommitTS is NOT yet updated (updateLastCommitTS runs in closeLocked,
-	//      which executes AFTER unlock returns due to defer LIFO ordering)
-	// DROP DATABASE can acquire Exclusive lock in this window, and v1 fix's
-	// GetLatestCommitTS() will see a stale value.
-	// Set MO_DELAY_AFTER_UNLOCK_MS=500 to enable.
-	if v := os.Getenv("MO_DELAY_AFTER_UNLOCK_MS"); v != "" {
-		if ms, _ := strconv.Atoi(v); ms > 0 {
-			time.Sleep(time.Duration(ms) * time.Millisecond)
-		}
-	}
 }
 
 func (tc *txnOperator) needUnlockLocked() bool {
@@ -1485,12 +1462,6 @@ func (tc *txnOperator) closeLocked() {
 		tc.mu.closed = true
 		if tc.reset.commitErr != nil {
 			tc.mu.txn.Status = txn.TxnStatus_Aborted
-		}
-		// DIAG: log the moment closeLocked fires (which triggers updateLastCommitTS)
-		if len(tc.mu.txn.LockTables) > 0 {
-			tc.logger.Info("DROP-DB-DIAG closeLocked firing",
-				zap.String("txnID", hex.EncodeToString(tc.mu.txn.ID)),
-				zap.String("commitTS", tc.mu.txn.CommitTS.DebugString()))
 		}
 		tc.triggerEventLocked(
 			TxnEvent{
