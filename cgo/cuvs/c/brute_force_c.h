@@ -31,11 +31,13 @@ typedef void* GpuBruteForceSearchResultC;
 // dimension: Dimension of each vector
 // metric: Distance metric to use
 // nthread: Number of worker threads
-GpuBruteForceIndexC GpuBruteForceIndex_New(const float* dataset_data, uint64_t count_vectors, uint32_t dimension, CuvsDistanceTypeC metric, uint32_t nthread);
+// errmsg: Pointer to a char pointer to store an error message if one occurs. The caller is responsible for freeing the memory.
+GpuBruteForceIndexC GpuBruteForceIndex_New(const float* dataset_data, uint64_t count_vectors, uint32_t dimension, CuvsDistanceTypeC metric, uint32_t nthread, void* errmsg);
 
 // Loads the index to the GPU
 // index_c: Opaque pointer to the GpuBruteForceIndex object
-void GpuBruteForceIndex_Load(GpuBruteForceIndexC index_c);
+// errmsg: Pointer to a char pointer to store an error message if one occurs. The caller is responsible for freeing the memory.
+void GpuBruteForceIndex_Load(GpuBruteForceIndexC index_c, void* errmsg);
 
 // Performs a search operation
 // index_c: Opaque pointer to the GpuBruteForceIndex object
@@ -59,7 +61,8 @@ void GpuBruteForceIndex_FreeSearchResult(GpuBruteForceSearchResultC result_c);
 
 // Destroys the GpuBruteForceIndex object and frees associated resources
 // index_c: Opaque pointer to the GpuBruteForceIndex object
-void GpuBruteForceIndex_Destroy(GpuBruteForceIndexC index_c);
+// errmsg: Pointer to a char pointer to store an error message if one occurs. The caller is responsible for freeing the memory.
+void GpuBruteForceIndex_Destroy(GpuBruteForceIndexC index_c, void* errmsg);
 
 #ifdef __cplusplus
 }

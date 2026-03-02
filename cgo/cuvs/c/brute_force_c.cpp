@@ -8,6 +8,20 @@
 #include <limits>      // For std::numeric_limits
 #include <cstring>     // For strcpy
 
+// Helper to set error message
+void set_errmsg(void* errmsg, const std::string& prefix, const std::exception& e) {
+    if (errmsg) {
+        std::string err_str = prefix + ": " + std::string(e.what());
+        char* msg = (char*)malloc(err_str.length() + 1);
+        if (msg) {
+            std::strcpy(msg, err_str.c_str());
+            *(static_cast<char**>(errmsg)) = msg;
+        }
+    } else {
+        std::cerr << prefix << ": " << e.what() << std::endl;
+    }
+}
+
 // Helper to convert C enum to C++ enum
 cuvs::distance::DistanceType convert_distance_type(CuvsDistanceTypeC metric_c) {
     switch (metric_c) {
@@ -22,34 +36,34 @@ cuvs::distance::DistanceType convert_distance_type(CuvsDistanceTypeC metric_c) {
 }
 
 // Constructor for GpuBruteForceIndex
-GpuBruteForceIndexC GpuBruteForceIndex_New(const float* dataset_data, uint64_t count_vectors, uint32_t dimension, CuvsDistanceTypeC metric_c, uint32_t nthread) {
+GpuBruteForceIndexC GpuBruteForceIndex_New(const float* dataset_data, uint64_t count_vectors, uint32_t dimension, CuvsDistanceTypeC metric_c, uint32_t nthread, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         cuvs::distance::DistanceType metric = convert_distance_type(metric_c);
         matrixone::GpuBruteForceIndex<float>* index = new matrixone::GpuBruteForceIndex<float>(dataset_data, count_vectors, dimension, metric, nthread);
         return static_cast<GpuBruteForceIndexC>(index);
     } catch (const std::exception& e) {
-        std::cerr << "Error in GpuBruteForceIndex_New: " << e.what() << std::endl;
+        set_errmsg(errmsg, "Error in GpuBruteForceIndex_New", e);
         return nullptr;
     }
 }
 
 // Loads the index to the GPU
-void GpuBruteForceIndex_Load(GpuBruteForceIndexC index_c) {
+void GpuBruteForceIndex_Load(GpuBruteForceIndexC index_c, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         matrixone::GpuBruteForceIndex<float>* index = static_cast<matrixone::GpuBruteForceIndex<float>*>(index_c);
         if (index) {
             index->Load();
         }
     } catch (const std::exception& e) {
-        std::cerr << "Error in GpuBruteForceIndex_Load: " << e.what() << std::endl;
+        set_errmsg(errmsg, "Error in GpuBruteForceIndex_Load", e);
     }
 }
 
 // Performs a search operation
 GpuBruteForceSearchResultC GpuBruteForceIndex_Search(GpuBruteForceIndexC index_c, const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, void* errmsg) {
-    if (errmsg) {
-        *(static_cast<char**>(errmsg)) = nullptr;
-    }
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
 
     try {
         matrixone::GpuBruteForceIndex<float>* index = static_cast<matrixone::GpuBruteForceIndex<float>*>(index_c);
@@ -59,16 +73,7 @@ GpuBruteForceSearchResultC GpuBruteForceIndex_Search(GpuBruteForceIndexC index_c
             return static_cast<GpuBruteForceSearchResultC>(search_result);
         }
     } catch (const std::exception& e) {
-        if (errmsg) {
-            std::string err_str = "Error in GpuBruteForceIndex_Search: " + std::string(e.what());
-            char* msg = (char*)malloc(err_str.length() + 1);
-            if (msg) { // Check if malloc was successful
-                std::strcpy(msg, err_str.c_str());
-                *(static_cast<char**>(errmsg)) = msg;
-            }
-        } else {
-            std::cerr << "Error in GpuBruteForceIndex_Search: " << e.what() << std::endl;
-        }
+        set_errmsg(errmsg, "Error in GpuBruteForceIndex_Search", e);
     }
     return nullptr;
 }
@@ -101,13 +106,14 @@ void GpuBruteForceIndex_FreeSearchResult(GpuBruteForceSearchResultC result_c) {
 }
 
 // Destroys the GpuBruteForceIndex object and frees associated resources
-void GpuBruteForceIndex_Destroy(GpuBruteForceIndexC index_c) {
+void GpuBruteForceIndex_Destroy(GpuBruteForceIndexC index_c, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         matrixone::GpuBruteForceIndex<float>* index = static_cast<matrixone::GpuBruteForceIndex<float>*>(index_c);
         if (index) {
             delete index;
         }
     } catch (const std::exception& e) {
-        std::cerr << "Error in GpuBruteForceIndex_Destroy: " << e.what() << std::endl;
+        set_errmsg(errmsg, "Error in GpuBruteForceIndex_Destroy", e);
     }
 }
