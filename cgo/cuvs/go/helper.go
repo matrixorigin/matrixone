@@ -10,12 +10,12 @@ package mocuvs
 import "C"
 import (
     "fmt"
-    "runtime"
     "unsafe"
+    "runtime"
 )
 
-// DistanceType maps to C.CuvsDistanceTypeC
-type DistanceType C.CuvsDistanceTypeC
+// DistanceType maps to C.distance_type_t
+type DistanceType C.distance_type_t
 
 const (
     L2Expanded      DistanceType = C.DistanceType_L2Expanded
@@ -27,8 +27,8 @@ const (
     Unknown         DistanceType = C.DistanceType_Unknown
 )
 
-// Quantization maps to C.CuvsQuantizationC
-type Quantization C.CuvsQuantizationC
+// Quantization maps to C.quantization_t
+type Quantization C.quantization_t
 
 const (
     F32   Quantization = C.Quantization_F32
@@ -73,7 +73,7 @@ func GpuConvertF32ToF16(src []float32, dst []Float16, deviceID int) error {
     }
 
     var errmsg *C.char
-    C.GpuConvertF32ToF16(
+    C.gpu_convert_f32_to_f16(
         (*C.float)(unsafe.Pointer(&src[0])),
         unsafe.Pointer(&dst[0]),
         C.uint64_t(len(src)),
@@ -93,7 +93,7 @@ func GpuConvertF32ToF16(src []float32, dst []Float16, deviceID int) error {
 
 // GetGpuDeviceCount returns the number of available CUDA devices.
 func GetGpuDeviceCount() (int, error) {
-    count := int(C.GpuGetDeviceCount())
+    count := int(C.gpu_get_device_count())
     if count < 0 {
         return 0, fmt.Errorf("failed to get GPU device count")
     }
@@ -111,7 +111,7 @@ func GetGpuDeviceList() ([]int, error) {
     }
 
     cDevices := make([]C.int, count)
-    actualCount := int(C.GpuGetDeviceList(&cDevices[0], C.int(count)))
+    actualCount := int(C.gpu_get_device_list(&cDevices[0], C.int(count)))
     
     devices := make([]int, actualCount)
     for i := 0; i < actualCount; i++ {

@@ -14,9 +14,9 @@ import (
     "unsafe"
 )
 
-// GpuBruteForceIndex represents the C++ GpuBruteForceIndex object
+// GpuBruteForceIndex represents the C++ gpu_brute_force_index_t object
 type GpuBruteForceIndex[T VectorType] struct {
-    cIndex C.GpuBruteForceIndexC
+    cIndex C.gpu_brute_force_index_c
 }
 
 // NewGpuBruteForceIndex creates a new GpuBruteForceIndex instance
@@ -27,14 +27,14 @@ func NewGpuBruteForceIndex[T VectorType](dataset []T, countVectors uint64, dimen
 
     qtype := GetQuantization[T]()
     var errmsg *C.char
-    cIndex := C.GpuBruteForceIndex_New(
+    cIndex := C.gpu_brute_force_index_new(
         unsafe.Pointer(&dataset[0]),
         C.uint64_t(countVectors),
         C.uint32_t(dimension),
-        C.CuvsDistanceTypeC(metric),
+        C.distance_type_t(metric),
         C.uint32_t(nthread),
         C.int(deviceID),
-        C.CuvsQuantizationC(qtype),
+        C.quantization_t(qtype),
         unsafe.Pointer(&errmsg),
     )
     runtime.KeepAlive(dataset)
@@ -57,7 +57,7 @@ func (gbi *GpuBruteForceIndex[T]) Load() error {
         return fmt.Errorf("GpuBruteForceIndex is not initialized")
     }
     var errmsg *C.char
-    C.GpuBruteForceIndex_Load(gbi.cIndex, unsafe.Pointer(&errmsg))
+    C.gpu_brute_force_index_load(gbi.cIndex, unsafe.Pointer(&errmsg))
     if errmsg != nil {
         errStr := C.GoString(errmsg)
         C.free(unsafe.Pointer(errmsg))
@@ -76,7 +76,7 @@ func (gbi *GpuBruteForceIndex[T]) Search(queries []T, numQueries uint64, queryDi
 	}
 
 	var errmsg *C.char
-	cResult := C.GpuBruteForceIndex_Search(
+	cResult := C.gpu_brute_force_index_search(
 		gbi.cIndex,
 		unsafe.Pointer(&queries[0]),
 		C.uint64_t(numQueries),
@@ -99,11 +99,11 @@ func (gbi *GpuBruteForceIndex[T]) Search(queries []T, numQueries uint64, queryDi
 	neighbors := make([]int64, numQueries*uint64(limit))
 	distances := make([]float32, numQueries*uint64(limit))
 
-	C.GpuBruteForceIndex_GetResults(cResult, C.uint64_t(numQueries), C.uint32_t(limit), (*C.int64_t)(unsafe.Pointer(&neighbors[0])), (*C.float)(unsafe.Pointer(&distances[0])))
+	C.gpu_brute_force_index_get_results(cResult, C.uint64_t(numQueries), C.uint32_t(limit), (*C.int64_t)(unsafe.Pointer(&neighbors[0])), (*C.float)(unsafe.Pointer(&distances[0])))
     runtime.KeepAlive(neighbors)
     runtime.KeepAlive(distances)
 
-	C.GpuBruteForceIndex_FreeSearchResult(cResult);
+	C.gpu_brute_force_index_free_search_result(cResult);
 
 	return neighbors, distances, nil
 }
@@ -114,7 +114,7 @@ func (gbi *GpuBruteForceIndex[T]) Destroy() error {
         return nil
     }
     var errmsg *C.char
-    C.GpuBruteForceIndex_Destroy(gbi.cIndex, unsafe.Pointer(&errmsg))
+    C.gpu_brute_force_index_destroy(gbi.cIndex, unsafe.Pointer(&errmsg))
     gbi.cIndex = nil // Mark as destroyed
     if errmsg != nil {
         errStr := C.GoString(errmsg)
