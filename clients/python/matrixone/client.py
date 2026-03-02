@@ -50,21 +50,81 @@ from .vector_manager import VectorManager
 from .version import get_version_manager
 
 
-def _classify_db_error(error_msg: str, sql_or_stmt: Any = None) -> QueryError:
+def _extract_errno(exc: Exception) -> Optional[int]:
+    """Extract the numeric error code from a database exception.
+
+    Walks the exception chain (SQLAlchemy → PyMySQL) to find the original
+    ``(errno, message)`` tuple.  Returns ``None`` when no code is found.
+    """
+    # SQLAlchemy wraps PyMySQL errors in .orig
+    orig = getattr(exc, 'orig', None)
+    if orig is not None and hasattr(orig, 'args') and orig.args:
+        try:
+            return int(orig.args[0])
+        except (ValueError, TypeError, IndexError):
+            pass
+    # Direct PyMySQL error
+    if hasattr(exc, 'args') and exc.args:
+        try:
+            return int(exc.args[0])
+        except (ValueError, TypeError, IndexError):
+            pass
+    # Try to parse "(NNNNN, '...')" from the string representation
+    import re
+    m = re.search(r'\((\d{4,5}),\s', str(exc))
+    if m:
+        try:
+            return int(m.group(1))
+        except ValueError:
+            pass
+    return None
+
+
+# ── MatrixOne / MySQL error code constants ──────────────────────────
+# MySQL-compatible codes (returned by MatrixOne for standard errors)
+_MYSQL_BAD_DB = 1049            # Unknown database
+_MYSQL_TABLE_EXISTS = 1050      # Table already exists
+_MYSQL_BAD_FIELD = 1054         # Unknown column
+_MYSQL_DUP_ENTRY = 1062        # Duplicate entry
+_MYSQL_PARSE_ERROR = 1064       # SQL parser error
+_MYSQL_NULL_VIOLATION = 1048    # Column cannot be null
+_MYSQL_DUP_KEYNAME = 1061      # Duplicate key name
+_MYSQL_UNKNOWN_ERROR = 1105     # Generic unknown error (many moerr codes map here)
+_MYSQL_NO_SUCH_TABLE = 1146    # No such table
+
+# MatrixOne-specific codes (moerr package, sometimes sent directly)
+_MO_INTERNAL = 20101           # internal error (permission denied, OOM, etc. — classified by message text)
+_MO_NOT_SUPPORTED = 20105      # not supported
+_MO_INVALID_INPUT = 20301      # invalid input
+_MO_SYNTAX_ERROR = 20302       # SQL syntax error
+_MO_PARSE_ERROR = 20303        # SQL parser error
+_MO_CONSTRAINT_VIOLATION = 20304
+_MO_DUPLICATE_ENTRY = 20307    # Duplicate entry
+_MO_BAD_FIELD = 20309          # Unknown column
+_MO_BAD_DB = 20402             # Unknown database
+_MO_NO_SUCH_TABLE = 20403      # No such table
+_MO_TABLE_ALREADY_EXISTS = 20421  # Table already exists
+_MO_DB_ALREADY_EXISTS = 20420  # Database already exists
+_MO_PRIMARY_KEY_DUP = 20623    # Primary key duplicated
+
+
+def _classify_db_error(exc: Exception, sql_or_stmt: Any = None) -> QueryError:
     """Classify a database error into a user-friendly QueryError.
 
-    Args:
-        error_msg: The string representation of the original exception.
-        sql_or_stmt: The SQL string or SQLAlchemy statement that caused the error.
+    Uses the numeric error code (MySQL or moerr) as the primary classifier,
+    with message-text matching as fallback for wrapped/stringified errors.
 
-    Returns:
-        A QueryError with a helpful, classified message.
+    Args:
+        exc: The original exception (or its string for backward compat).
+        sql_or_stmt: The SQL string or SQLAlchemy statement that caused the error.
     """
     import re
 
+    error_msg = str(exc)
     msg_lower = error_msg.lower()
+    errno = _extract_errno(exc) if not isinstance(exc, str) else None
 
-    # Permission / OS-level errors (e.g. stage path not accessible)
+    # ── Permission denied (moerr ErrInternal with OS-level message) ──
     if 'permission denied' in msg_lower:
         path_match = re.search(r'(?:mkdir|open|stat|access)\s+([^\s:]+)', error_msg)
         path_hint = f" Path: {path_match.group(1)}" if path_match else ""
@@ -73,9 +133,17 @@ def _classify_db_error(error_msg: str, sql_or_stmt: Any = None) -> QueryError:
             f"Ensure the MatrixOne server process has access to the target path."
         )
 
-    # Object does not exist
-    if 'does not exist' in msg_lower or 'no such table' in msg_lower or "doesn't exist" in msg_lower:
-        match = re.search(r"(?:table|database)\s+[\"']?(\w+)[\"']?\s+does not exist", error_msg, re.IGNORECASE)
+    # ── Object does not exist ──
+    # Check message first: MatrixOne sometimes wraps "does not exist" inside errno 1064 (parse error)
+    not_found_msg = 'does not exist' in msg_lower or 'no such table' in msg_lower or "doesn't exist" in msg_lower
+    if errno in (_MYSQL_NO_SUCH_TABLE, _MO_NO_SUCH_TABLE, _MYSQL_BAD_DB, _MO_BAD_DB) or not_found_msg:
+        match = re.search(
+            r"(?:table|database)\s+[\"']?([\w.]+)[\"']?\s+does not exist", error_msg, re.IGNORECASE
+        )
+        if not match:
+            match = re.search(r"no such table\s+([\w.]+)", error_msg, re.IGNORECASE)
+        if not match:
+            match = re.search(r"Unknown database\s+([\w.]+)", error_msg, re.IGNORECASE)
         if match:
             return QueryError(
                 f"Table or database '{match.group(1)}' does not exist. "
@@ -83,53 +151,69 @@ def _classify_db_error(error_msg: str, sql_or_stmt: Any = None) -> QueryError:
             )
         return QueryError(f"Object not found: {error_msg}")
 
-    # Object already exists
-    if 'already exists' in msg_lower and '1050' in error_msg:
-        match = re.search(r"table\s+(\w+)\s+already\s+exists", error_msg, re.IGNORECASE) if 'table' in msg_lower else None
+    # ── Object already exists ──
+    if errno in (_MYSQL_TABLE_EXISTS, _MO_TABLE_ALREADY_EXISTS, _MO_DB_ALREADY_EXISTS) or (
+        errno is None and 'already exists' in msg_lower
+    ):
+        match = re.search(r"(?:table|database)\s+([\w.]+)\s+already\s+exists", error_msg, re.IGNORECASE)
         if match:
-            table_name = match.group(1)
+            name = match.group(1)
             return QueryError(
-                f"Table '{table_name}' already exists. "
-                f"Use DROP TABLE {table_name} or client.drop_table() to remove it first."
+                f"Table '{name}' already exists. "
+                f"Use DROP TABLE {name} or client.drop_table() to remove it first."
             )
         return QueryError(f"Object already exists: {error_msg}")
 
-    # Duplicate key/entry
-    if 'duplicate' in msg_lower and ('1062' in error_msg or '1061' in error_msg):
+    # ── Duplicate key / entry ──
+    if errno in (_MYSQL_DUP_ENTRY, _MYSQL_DUP_KEYNAME, _MO_DUPLICATE_ENTRY, _MO_PRIMARY_KEY_DUP) or (
+        errno is None and 'duplicate' in msg_lower
+    ):
         return QueryError(
             f"Duplicate entry error: {error_msg}. "
             f"Check for duplicate primary key or unique constraint violations."
         )
 
-    # SQL syntax error
-    if 'syntax error' in msg_lower or '1064' in error_msg:
+    # ── SQL syntax / parse error ──
+    if errno in (_MYSQL_PARSE_ERROR, _MO_SYNTAX_ERROR, _MO_PARSE_ERROR) or (
+        errno is None and ('syntax error' in msg_lower or 'parser error' in msg_lower)
+    ):
         sql_display = sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
-        sql_preview = (sql_display[:200] + '...') if len(str(sql_display)) > 200 else sql_display
+        sql_preview = (str(sql_display)[:200] + '...') if len(str(sql_display)) > 200 else sql_display
         return QueryError(f"SQL syntax error: {error_msg}\nQuery: {sql_preview}")
 
-    # Column not found
-    if 'column' in msg_lower and ('unknown' in msg_lower or 'not found' in msg_lower):
+    # ── Column not found ──
+    if errno in (_MYSQL_BAD_FIELD, _MO_BAD_FIELD) or (
+        errno is None and 'column' in msg_lower and ('unknown' in msg_lower or 'not found' in msg_lower)
+    ):
         return QueryError(f"Column not found: {error_msg}. Check your column names and table schema.")
 
-    # NULL constraint
-    if 'cannot be null' in msg_lower or '1048' in error_msg:
+    # ── NULL constraint violation ──
+    if errno == _MYSQL_NULL_VIOLATION or (errno is None and 'cannot be null' in msg_lower):
         return QueryError(f"NULL constraint violation: {error_msg}. Some columns require non-NULL values.")
 
-    # Feature not supported
-    if 'not supported' in msg_lower and '20105' in error_msg:
+    # ── Feature not supported ──
+    if errno == _MO_NOT_SUPPORTED or (errno is None and 'not supported' in msg_lower):
         return QueryError(
             f"MatrixOne feature limitation: {error_msg}. "
             f"This feature may require additional configuration or is not yet supported."
         )
 
-    # Bind parameter error
+    # ── Invalid input ──
+    if errno == _MO_INVALID_INPUT:
+        return QueryError(f"Invalid input: {error_msg}")
+
+    # ── Constraint violation ──
+    if errno == _MO_CONSTRAINT_VIOLATION:
+        return QueryError(f"Constraint violation: {error_msg}")
+
+    # ── Bind parameter / SQLAlchemy error ──
     if 'bind parameter' in msg_lower or 'InvalidRequestError' in error_msg:
         return QueryError(
             f"Parameter binding error: {error_msg}. "
             f"This might be caused by special characters in your data (colons in JSON, etc.)"
         )
 
-    # Generic fallback
+    # ── Generic fallback ──
     return QueryError(f"Query execution failed: {error_msg}")
 
 
@@ -1253,7 +1337,7 @@ class Client(BaseMatrixOneClient):
 
                 print(f"Warning: Error logging failed: {log_err}", file=sys.stderr)
 
-            raise _classify_db_error(str(e), sql_or_stmt) from None
+            raise _classify_db_error(e, sql_or_stmt) from None
 
     def insert(self, table_name_or_model, data: dict) -> "ResultSet":
         """
@@ -3341,7 +3425,7 @@ class Session(SQLAlchemySession):
                 override_sql_log_mode=_log_mode,
             )
             self.client.logger.log_error(e, context="Session query execution")
-            raise _classify_db_error(str(e), sql_or_stmt) from None
+            raise _classify_db_error(e, sql_or_stmt) from None
 
     def get_connection(self):
         """
