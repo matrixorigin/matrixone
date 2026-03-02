@@ -31,8 +31,6 @@ type GpuBruteForceIndex struct {
     cIndex C.GpuBruteForceIndexC
 }
 
-
-
 // NewGpuBruteForceIndex creates a new GpuBruteForceIndex instance
 func NewGpuBruteForceIndex(dataset []float32, countVectors uint64, dimension uint32, metric DistanceType, nthread uint32) (*GpuBruteForceIndex, error) {
     if len(dataset) == 0 || countVectors == 0 || dimension == 0 {
@@ -42,13 +40,22 @@ func NewGpuBruteForceIndex(dataset []float32, countVectors uint64, dimension uin
         return nil, fmt.Errorf("dataset size (%d) does not match countVectors (%d) * dimension (%d)", len(dataset), countVectors, dimension)
     }
 
+    var errmsg *C.char
     cIndex := C.GpuBruteForceIndex_New(
         (*C.float)(&dataset[0]),
         C.uint64_t(countVectors),
         C.uint32_t(dimension),
         C.CuvsDistanceTypeC(metric),
         C.uint32_t(nthread),
+        unsafe.Pointer(&errmsg),
     )
+
+    if errmsg != nil {
+        errStr := C.GoString(errmsg)
+        C.free(unsafe.Pointer(errmsg))
+        return nil, fmt.Errorf("%s", errStr)
+    }
+
     if cIndex == nil {
         return nil, fmt.Errorf("failed to create GpuBruteForceIndex")
     }
@@ -60,8 +67,13 @@ func (gbi *GpuBruteForceIndex) Load() error {
     if gbi.cIndex == nil {
         return fmt.Errorf("GpuBruteForceIndex is not initialized")
     }
-    C.GpuBruteForceIndex_Load(gbi.cIndex)
-    // C functions print errors to stderr, more robust error handling could be added to C interface
+    var errmsg *C.char
+    C.GpuBruteForceIndex_Load(gbi.cIndex, unsafe.Pointer(&errmsg))
+    if errmsg != nil {
+        errStr := C.GoString(errmsg)
+        C.free(unsafe.Pointer(errmsg))
+        return fmt.Errorf("%s", errStr)
+    }
     return nil
 }
 
@@ -131,11 +143,16 @@ func (gbi *GpuBruteForceIndex) Search(queries []float32, numQueries uint64, quer
 // Destroy frees the C++ GpuBruteForceIndex instance
 func (gbi *GpuBruteForceIndex) Destroy() error {
     if gbi.cIndex == nil {
-        return fmt.Errorf("GpuBruteForceIndex is not initialized")
+        return nil // Already destroyed or not initialized
     }
-    C.GpuBruteForceIndex_Destroy(gbi.cIndex)
-    gbi.cIndex = nil // Mark as destroyed
+    var errmsg *C.char
+    C.GpuBruteForceIndex_Destroy(gbi.cIndex, unsafe.Pointer(&errmsg))
+    gbi.cIndex = nil // Mark as destroyed anyway
+
+    if errmsg != nil {
+        errStr := C.GoString(errmsg)
+        C.free(unsafe.Pointer(errmsg))
+        return fmt.Errorf("%s", errStr)
+    }
     return nil
 }
-
-
