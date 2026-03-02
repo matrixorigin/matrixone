@@ -1,4 +1,4 @@
-package cuvs
+package mocuvs
 
 import (
     "testing"

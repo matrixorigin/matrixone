@@ -1,4 +1,4 @@
-package cuvs
+package mocuvs
 
 /*
 #cgo LDFLAGS: /home/eric/github/matrixone/cgo/cuvs/c/libmocuvs.so -Wl,-rpath=/home/eric/github/matrixone/cgo/cuvs/c
