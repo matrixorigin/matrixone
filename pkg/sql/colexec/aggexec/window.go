@@ -205,7 +205,7 @@ func (exec *percentRankExec) Flush() ([]*vector.Vector, error) {
 		}
 
 		totalRows := group[len(group)-1] - group[0]
-		if totalRows == 1 {
+		if totalRows <= 1 {
 			x, y := exec.ret.updateNextAccessIdx(idx)
 			values[x][y] = 0
 			idx++
@@ -215,18 +215,12 @@ func (exec *percentRankExec) Flush() ([]*vector.Vector, error) {
 		sn := int64(1)
 		for i := 1; i < len(group); i++ {
 			m := int(group[i] - group[i-1])
-			for k := idx + m; idx < k; idx++ {
+			for j := 0; j < m; j++ {
 				x, y := exec.ret.updateNextAccessIdx(idx)
 				values[x][y] = float64(sn-1) / float64(totalRows-1)
+				idx++
 			}
 			sn += int64(m)
-		}
-
-		// 处理最后一组
-		for idx < int(totalRows) {
-			x, y := exec.ret.updateNextAccessIdx(idx)
-			values[x][y] = float64(sn-1) / float64(totalRows-1)
-			idx++
 		}
 	}
 	return exec.ret.flushAll(), nil
