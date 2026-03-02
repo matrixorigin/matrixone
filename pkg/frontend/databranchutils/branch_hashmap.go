@@ -1437,7 +1437,7 @@ func (hs *hashShard) close() error {
 	hs.memInUse = 0
 
 	if hs.spill != nil {
-		if err := hs.spill.close(); err != nil && firstErr == nil {
+		if err := hs.spill.close(); err != nil {
 			firstErr = err
 		}
 		hs.spill = nil
@@ -1999,13 +1999,6 @@ func newMemStore() *memStore {
 		lruHead: -1,
 		lruTail: -1,
 	}
-}
-
-func (ms *memStore) len() int {
-	if ms == nil {
-		return 0
-	}
-	return ms.count
 }
 
 func (ms *memStore) ensureCapacity(additional int) {

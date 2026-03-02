@@ -1047,6 +1047,156 @@ func TestBranchHashmapPopByEncodedKeyValue(t *testing.T) {
 	}
 }
 
+func TestBranchHashmapPopByVectorsStreamInMemory(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	keyVec := buildInt64Vector(t, mp, []int64{1, 1, 2})
+	valVec := buildStringVector(t, mp, []string{"one", "uno", "two"})
+	defer keyVec.Free(mp)
+	defer valVec.Free(mp)
+
+	bh, err := NewBranchHashmap()
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, bh.Close())
+	}()
+
+	require.NoError(t, bh.PutByVectors([]*vector.Vector{keyVec, valVec}, []int{0}))
+
+	probe := buildInt64Vector(t, mp, []int64{1, 2})
+	defer probe.Free(mp)
+
+	var (
+		callbackCount int
+		removedByIdx  = map[int]int{}
+	)
+	removed, err := bh.PopByVectorsStream([]*vector.Vector{probe}, true, func(idx int, key []byte, row []byte) error {
+		callbackCount++
+		removedByIdx[idx]++
+		require.NotEmpty(t, key)
+		require.NotEmpty(t, row)
+		return nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, 3, removed)
+	require.Equal(t, 3, callbackCount)
+	require.Equal(t, 2, removedByIdx[0])
+	require.Equal(t, 1, removedByIdx[1])
+
+	after, err := bh.GetByVectors([]*vector.Vector{probe})
+	require.NoError(t, err)
+	require.False(t, after[0].Exists)
+	require.False(t, after[1].Exists)
+}
+
+func TestBranchHashmapPopByVectorsStreamSpilled(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	allocator := newLimitedAllocator(80)
+	bh, err := NewBranchHashmap(
+		WithBranchHashmapAllocator(allocator),
+		WithBranchHashmapSpillRoot(t.TempDir()),
+	)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, bh.Close())
+	}()
+
+	key := buildInt64Vector(t, mp, []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
+	value := buildStringVector(t, mp, []string{"one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"})
+	defer key.Free(mp)
+	defer value.Free(mp)
+
+	require.NoError(t, bh.PutByVectors([]*vector.Vector{key, value}, []int{0}))
+
+	probe := buildInt64Vector(t, mp, []int64{9, 10})
+	defer probe.Free(mp)
+
+	var callbackCount int
+	removed, err := bh.PopByVectorsStream([]*vector.Vector{probe}, true, func(_ int, key []byte, row []byte) error {
+		callbackCount++
+		require.NotEmpty(t, key)
+		require.NotEmpty(t, row)
+		return nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, removed)
+	require.Equal(t, 2, callbackCount)
+
+	after, err := bh.GetByVectors([]*vector.Vector{probe})
+	require.NoError(t, err)
+	require.False(t, after[0].Exists)
+	require.False(t, after[1].Exists)
+}
+
+func TestBranchHashmapCursorGetAndPopByEncodedValueDuringIteration(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	keyVec := buildInt64Vector(t, mp, []int64{1, 1})
+	valVec := buildStringVector(t, mp, []string{"one", "uno"})
+	defer keyVec.Free(mp)
+	defer valVec.Free(mp)
+
+	bh, err := NewBranchHashmap()
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, bh.Close())
+	}()
+	require.NoError(t, bh.PutByVectors([]*vector.Vector{keyVec, valVec}, []int{0}))
+
+	var popped bool
+	err = bh.ForEachShardParallel(func(cursor ShardCursor) error {
+		require.GreaterOrEqual(t, cursor.ShardID(), 0)
+		if popped {
+			return nil
+		}
+		return cursor.ForEach(func(key []byte, row []byte) error {
+			if popped {
+				return nil
+			}
+			keyCopy := append([]byte(nil), key...)
+			rowCopy := append([]byte(nil), row...)
+
+			got, err := cursor.GetByEncodedKey(keyCopy)
+			require.NoError(t, err)
+			require.True(t, got.Exists)
+			require.Len(t, got.Rows, 2)
+
+			removed, err := cursor.PopByEncodedKeyValue(keyCopy, rowCopy, false)
+			require.NoError(t, err)
+			require.Equal(t, 1, removed)
+			popped = true
+			return nil
+		})
+	}, 1)
+	require.NoError(t, err)
+	require.True(t, popped)
+
+	probe := buildInt64Vector(t, mp, []int64{1})
+	defer probe.Free(mp)
+	results, err := bh.GetByVectors([]*vector.Vector{probe})
+	require.NoError(t, err)
+	require.True(t, results[0].Exists)
+	require.Len(t, results[0].Rows, 1)
+}
+
+func TestBranchHashmapCursorNilMethods(t *testing.T) {
+	var cursor *shardCursor
+	require.Equal(t, -1, cursor.ShardID())
+
+	got, err := cursor.GetByEncodedKey([]byte("k"))
+	require.NoError(t, err)
+	require.False(t, got.Exists)
+	require.Empty(t, got.Rows)
+
+	removed, err := cursor.PopByEncodedKeyValue([]byte("k"), []byte("v"), true)
+	require.NoError(t, err)
+	require.Equal(t, 0, removed)
+}
+
 func TestBranchHashmapPopByEncodedFullValueExact(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
@@ -1226,6 +1376,72 @@ func TestBranchHashmapShardCountClamp(t *testing.T) {
 		require.NoError(t, bhHigh.Close())
 	}()
 	require.Equal(t, maxShardCount, bhHigh.(*branchHashmap).shardCount)
+}
+
+func TestBranchHashmapShardCountMethod(t *testing.T) {
+	bh, err := NewBranchHashmap(WithBranchHashmapShardCount(4))
+	require.NoError(t, err)
+
+	require.Equal(t, 4, bh.ShardCount())
+	require.NoError(t, bh.Close())
+	require.Equal(t, 0, bh.ShardCount())
+}
+
+func TestBranchHashmapRehashSingleShard(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	const rowCnt = 900
+	keys := make([]int64, rowCnt)
+	values := make([]string, rowCnt)
+	for i := 0; i < rowCnt; i++ {
+		keys[i] = int64(i)
+		values[i] = fmt.Sprintf("v%d", i)
+	}
+
+	keyVec := buildInt64Vector(t, mp, keys)
+	valVec := buildStringVector(t, mp, values)
+	defer keyVec.Free(mp)
+	defer valVec.Free(mp)
+
+	bh, err := NewBranchHashmap(WithBranchHashmapShardCount(1))
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, bh.Close())
+	}()
+
+	require.NoError(t, bh.PutByVectors([]*vector.Vector{keyVec, valVec}, []int{0}))
+	require.Equal(t, int64(rowCnt), bh.ItemCount())
+
+	probe := buildInt64Vector(t, mp, []int64{0, 450, 899})
+	defer probe.Free(mp)
+
+	got, err := bh.GetByVectors([]*vector.Vector{probe})
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	for _, res := range got {
+		require.True(t, res.Exists)
+		require.Len(t, res.Rows, 1)
+	}
+}
+
+func TestMemStoreRehash(t *testing.T) {
+	ms := newMemStore()
+	ms.init(8)
+
+	for i := 0; i < 8; i++ {
+		ms.insert(memEntry{
+			hash:   uint64(i + 1),
+			keyLen: 1,
+			valLen: 1,
+		})
+	}
+
+	oldCap := len(ms.index)
+	ms.rehash(oldCap * 2)
+	require.Greater(t, len(ms.index), oldCap)
+	require.Equal(t, 8, ms.count)
+	require.Equal(t, 0, ms.tombstones)
 }
 
 func TestEncodeRowCoversManyTypes(t *testing.T) {
