@@ -10,6 +10,7 @@ package mocuvs
 import "C"
 import (
     "fmt"
+    "runtime"
     "unsafe"
 )
 
@@ -38,6 +39,7 @@ func NewGpuCagraIndex[T VectorType](dataset []T, countVectors uint64, dimension 
         C.CuvsQuantizationC(qtype),
         unsafe.Pointer(&errmsg),
     )
+    runtime.KeepAlive(dataset)
 
     if errmsg != nil {
         errStr := C.GoString(errmsg)
@@ -136,6 +138,7 @@ func (gbi *GpuCagraIndex[T]) Search(queries []T, numQueries uint64, queryDimensi
         C.size_t(itopk_size),
 		unsafe.Pointer(&errmsg),
 	)
+    runtime.KeepAlive(queries)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
@@ -151,6 +154,8 @@ func (gbi *GpuCagraIndex[T]) Search(queries []T, numQueries uint64, queryDimensi
 	distances := make([]float32, numQueries*uint64(limit))
 
 	C.GpuCagraIndex_GetResults(cResult, C.uint64_t(numQueries), C.uint32_t(limit), (*C.int64_t)(unsafe.Pointer(&neighbors[0])), (*C.float)(unsafe.Pointer(&distances[0])))
+    runtime.KeepAlive(neighbors)
+    runtime.KeepAlive(distances)
 
 	C.GpuCagraIndex_FreeSearchResult(cResult);
 
@@ -189,6 +194,7 @@ func (gbi *GpuCagraIndex[T]) Extend(additionalData []T, numVectors uint64) error
         C.uint64_t(numVectors),
         unsafe.Pointer(&errmsg),
     )
+    runtime.KeepAlive(additionalData)
 
     if errmsg != nil {
         errStr := C.GoString(errmsg)
@@ -220,6 +226,8 @@ func MergeCagraIndices[T VectorType](indices []*GpuCagraIndex[T], nthread uint32
         C.int(deviceID),
         unsafe.Pointer(&errmsg),
     )
+    runtime.KeepAlive(cIndices)
+    runtime.KeepAlive(indices)
 
     if errmsg != nil {
         errStr := C.GoString(errmsg)

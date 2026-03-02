@@ -10,6 +10,7 @@ package mocuvs
 import "C"
 import (
     "fmt"
+    "runtime"
     "unsafe"
 )
 
@@ -36,6 +37,7 @@ func NewGpuBruteForceIndex[T VectorType](dataset []T, countVectors uint64, dimen
         C.CuvsQuantizationC(qtype),
         unsafe.Pointer(&errmsg),
     )
+    runtime.KeepAlive(dataset)
 
     if errmsg != nil {
         errStr := C.GoString(errmsg)
@@ -82,6 +84,7 @@ func (gbi *GpuBruteForceIndex[T]) Search(queries []T, numQueries uint64, queryDi
 		C.uint32_t(limit),
 		unsafe.Pointer(&errmsg),
 	)
+    runtime.KeepAlive(queries)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
@@ -97,6 +100,8 @@ func (gbi *GpuBruteForceIndex[T]) Search(queries []T, numQueries uint64, queryDi
 	distances := make([]float32, numQueries*uint64(limit))
 
 	C.GpuBruteForceIndex_GetResults(cResult, C.uint64_t(numQueries), C.uint32_t(limit), (*C.int64_t)(unsafe.Pointer(&neighbors[0])), (*C.float)(unsafe.Pointer(&distances[0])))
+    runtime.KeepAlive(neighbors)
+    runtime.KeepAlive(distances)
 
 	C.GpuBruteForceIndex_FreeSearchResult(cResult);
 

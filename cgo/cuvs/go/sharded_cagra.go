@@ -10,6 +10,7 @@ package mocuvs
 import "C"
 import (
     "fmt"
+    "runtime"
     "unsafe"
 )
 
@@ -47,6 +48,8 @@ func NewGpuShardedCagraIndex[T VectorType](dataset []T, countVectors uint64, dim
         C.CuvsQuantizationC(qtype),
         unsafe.Pointer(&errmsg),
     )
+    runtime.KeepAlive(dataset)
+    runtime.KeepAlive(cDevices)
 
     if errmsg != nil {
         errStr := C.GoString(errmsg)
@@ -89,6 +92,7 @@ func NewGpuShardedCagraIndexFromFile[T VectorType](filename string, dimension ui
         C.CuvsQuantizationC(qtype),
         unsafe.Pointer(&errmsg),
     )
+    runtime.KeepAlive(cDevices)
 
     if errmsg != nil {
         errStr := C.GoString(errmsg)
@@ -151,6 +155,7 @@ func (gbi *GpuShardedCagraIndex[T]) Search(queries []T, numQueries uint64, query
         C.size_t(itopk_size),
         unsafe.Pointer(&errmsg),
     )
+    runtime.KeepAlive(queries)
 
     if errmsg != nil {
         errStr := C.GoString(errmsg)
@@ -165,6 +170,8 @@ func (gbi *GpuShardedCagraIndex[T]) Search(queries []T, numQueries uint64, query
     distances := make([]float32, numQueries*uint64(limit))
 
     C.GpuShardedCagraIndex_GetResults(cResult, C.uint64_t(numQueries), C.uint32_t(limit), (*C.int64_t)(unsafe.Pointer(&neighbors[0])), (*C.float)(unsafe.Pointer(&distances[0])))
+    runtime.KeepAlive(neighbors)
+    runtime.KeepAlive(distances)
 
     C.GpuShardedCagraIndex_FreeSearchResult(cResult)
 

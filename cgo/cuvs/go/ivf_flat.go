@@ -10,6 +10,7 @@ package mocuvs
 import "C"
 import (
     "fmt"
+    "runtime"
     "unsafe"
 )
 
@@ -39,6 +40,7 @@ func NewGpuIvfFlatIndex[T VectorType](dataset []T, countVectors uint64, dimensio
         C.CuvsQuantizationC(qtype),
         unsafe.Pointer(&errmsg),
     )
+    runtime.KeepAlive(dataset)
 
     if errmsg != nil {
         errStr := C.GoString(errmsg)
@@ -138,6 +140,7 @@ func (gbi *GpuIvfFlatIndex[T]) Search(queries []T, numQueries uint64, queryDimen
         C.uint32_t(n_probes),
 		unsafe.Pointer(&errmsg),
 	)
+    runtime.KeepAlive(queries)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
@@ -153,6 +156,8 @@ func (gbi *GpuIvfFlatIndex[T]) Search(queries []T, numQueries uint64, queryDimen
 	distances := make([]float32, numQueries*uint64(limit))
 
 	C.GpuIvfFlatIndex_GetResults(cResult, C.uint64_t(numQueries), C.uint32_t(limit), (*C.int64_t)(unsafe.Pointer(&neighbors[0])), (*C.float)(unsafe.Pointer(&distances[0])))
+    runtime.KeepAlive(neighbors)
+    runtime.KeepAlive(distances)
 
 	C.GpuIvfFlatIndex_FreeSearchResult(cResult);
 
@@ -186,6 +191,8 @@ func (gbi *GpuIvfFlatIndex[T]) GetCenters() ([]float32, error) {
     centers := make([]float32, gbi.nList * gbi.dimension)
     var errmsg *C.char
     C.GpuIvfFlatIndex_GetCenters(gbi.cIndex, (*C.float)(&centers[0]), unsafe.Pointer(&errmsg))
+    runtime.KeepAlive(centers)
+
     if errmsg != nil {
         errStr := C.GoString(errmsg)
         C.free(unsafe.Pointer(errmsg))

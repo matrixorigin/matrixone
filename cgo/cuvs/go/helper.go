@@ -10,6 +10,7 @@ package mocuvs
 import "C"
 import (
     "fmt"
+    "runtime"
     "unsafe"
 )
 
@@ -79,6 +80,8 @@ func GpuConvertF32ToF16(src []float32, dst []Float16, deviceID int) error {
         C.int(deviceID),
         unsafe.Pointer(&errmsg),
     )
+    runtime.KeepAlive(src)
+    runtime.KeepAlive(dst)
 
     if errmsg != nil {
         errStr := C.GoString(errmsg)
@@ -114,5 +117,6 @@ func GetGpuDeviceList() ([]int, error) {
     for i := 0; i < actualCount; i++ {
         devices[i] = int(cDevices[i])
     }
+    runtime.KeepAlive(cDevices)
     return devices, nil
 }
