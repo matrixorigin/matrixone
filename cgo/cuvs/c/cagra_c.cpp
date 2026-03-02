@@ -212,3 +212,47 @@ void GpuCagraIndex_Destroy(GpuCagraIndexC index_c, void* errmsg) {
         set_errmsg_cagra(errmsg, "Error in GpuCagraIndex_Destroy", e);
     }
 }
+
+void GpuCagraIndex_Extend(GpuCagraIndexC index_c, const void* additional_data, uint64_t num_vectors, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<GpuCagraIndexAny*>(index_c);
+        switch (any->qtype) {
+            case Quantization_F32: static_cast<matrixone::GpuCagraIndex<float>*>(any->ptr)->Extend(static_cast<const float*>(additional_data), num_vectors); break;
+            case Quantization_F16: static_cast<matrixone::GpuCagraIndex<half>*>(any->ptr)->Extend(static_cast<const half*>(additional_data), num_vectors); break;
+            case Quantization_INT8: static_cast<matrixone::GpuCagraIndex<int8_t>*>(any->ptr)->Extend(static_cast<const int8_t*>(additional_data), num_vectors); break;
+            case Quantization_UINT8: static_cast<matrixone::GpuCagraIndex<uint8_t>*>(any->ptr)->Extend(static_cast<const uint8_t*>(additional_data), num_vectors); break;
+        }
+    } catch (const std::exception& e) {
+        set_errmsg_cagra(errmsg, "Error in GpuCagraIndex_Extend", e);
+    }
+}
+
+template <typename T>
+static GpuCagraIndexC merge_cagra(GpuCagraIndexC* indices, uint32_t num_indices, uint32_t nthread, int device_id, CuvsQuantizationC qtype) {
+    std::vector<matrixone::GpuCagraIndex<T>*> cpp_indices;
+    for (uint32_t i = 0; i < num_indices; ++i) {
+        cpp_indices.push_back(static_cast<matrixone::GpuCagraIndex<T>*>(static_cast<GpuCagraIndexAny*>(indices[i])->ptr));
+    }
+    auto merged = matrixone::GpuCagraIndex<T>::Merge(cpp_indices, nthread, device_id);
+    return static_cast<GpuCagraIndexC>(new GpuCagraIndexAny(qtype, merged.release()));
+}
+
+GpuCagraIndexC GpuCagraIndex_Merge(GpuCagraIndexC* indices, uint32_t num_indices, uint32_t nthread, int device_id, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    if (num_indices == 0) return nullptr;
+    try {
+        auto* first = static_cast<GpuCagraIndexAny*>(indices[0]);
+        CuvsQuantizationC qtype = first->qtype;
+        switch (qtype) {
+            case Quantization_F32: return merge_cagra<float>(indices, num_indices, nthread, device_id, qtype);
+            case Quantization_F16: return merge_cagra<half>(indices, num_indices, nthread, device_id, qtype);
+            case Quantization_INT8: return merge_cagra<int8_t>(indices, num_indices, nthread, device_id, qtype);
+            case Quantization_UINT8: return merge_cagra<uint8_t>(indices, num_indices, nthread, device_id, qtype);
+            default: throw std::runtime_error("Unsupported quantization type for GpuCagraIndex_Merge");
+        }
+    } catch (const std::exception& e) {
+        set_errmsg_cagra(errmsg, "Error in GpuCagraIndex_Merge", e);
+        return nullptr;
+    }
+}

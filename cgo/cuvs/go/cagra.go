@@ -172,3 +172,64 @@ func (gbi *GpuCagraIndex[T]) Destroy() error {
     }
     return nil
 }
+
+// Extend adds new vectors to the existing index
+func (gbi *GpuCagraIndex[T]) Extend(additionalData []T, numVectors uint64) error {
+    if gbi.cIndex == nil {
+        return fmt.Errorf("GpuCagraIndex is not initialized")
+    }
+    if len(additionalData) == 0 || numVectors == 0 {
+        return nil
+    }
+
+    var errmsg *C.char
+    C.GpuCagraIndex_Extend(
+        gbi.cIndex,
+        unsafe.Pointer(&additionalData[0]),
+        C.uint64_t(numVectors),
+        unsafe.Pointer(&errmsg),
+    )
+
+    if errmsg != nil {
+        errStr := C.GoString(errmsg)
+        C.free(unsafe.Pointer(errmsg))
+        return fmt.Errorf("%s", errStr)
+    }
+    return nil
+}
+
+// MergeCagraIndices merges multiple CAGRA indices into a single one
+func MergeCagraIndices[T VectorType](indices []*GpuCagraIndex[T], nthread uint32, deviceID int) (*GpuCagraIndex[T], error) {
+    if len(indices) == 0 {
+        return nil, fmt.Errorf("indices list cannot be empty")
+    }
+
+    cIndices := make([]C.GpuCagraIndexC, len(indices))
+    for i, idx := range indices {
+        if idx.cIndex == nil {
+            return nil, fmt.Errorf("index at position %d is nil or destroyed", i)
+        }
+        cIndices[i] = idx.cIndex
+    }
+
+    var errmsg *C.char
+    cMergedIndex := C.GpuCagraIndex_Merge(
+        &cIndices[0],
+        C.uint32_t(len(indices)),
+        C.uint32_t(nthread),
+        C.int(deviceID),
+        unsafe.Pointer(&errmsg),
+    )
+
+    if errmsg != nil {
+        errStr := C.GoString(errmsg)
+        C.free(unsafe.Pointer(errmsg))
+        return nil, fmt.Errorf("%s", errStr)
+    }
+
+    if cMergedIndex == nil {
+        return nil, fmt.Errorf("failed to merge CAGRA indices")
+    }
+
+    return &GpuCagraIndex[T]{cIndex: cMergedIndex}, nil
+}

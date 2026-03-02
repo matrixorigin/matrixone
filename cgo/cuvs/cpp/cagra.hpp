@@ -77,6 +77,16 @@ public:
         Worker = std::make_unique<CuvsWorker>(nthread, device_id_);
     }
 
+    // Private constructor for creating from an existing cuVS index (used by Merge)
+    GpuCagraIndex(std::unique_ptr<cuvs::neighbors::cagra::index<T, uint32_t>> index, 
+                  uint32_t dimension, cuvs::distance::DistanceType m, uint32_t nthread, int device_id)
+        : Index(std::move(index)), Metric(m), Dimension(dimension), device_id_(device_id) {
+        Worker = std::make_unique<CuvsWorker>(nthread, device_id_);
+        Count = static_cast<uint32_t>(Index->size());
+        GraphDegree = static_cast<size_t>(Index->graph_degree());
+        is_loaded_ = true;
+    }
+
     void Load() {
         std::unique_lock<std::shared_mutex> lock(mutex_);
         if (is_loaded_) return;
@@ -111,6 +121,7 @@ public:
                 index_params.metric = Metric;
                 index_params.intermediate_graph_degree = IntermediateGraphDegree;
                 index_params.graph_degree = GraphDegree;
+                index_params.attach_dataset_on_build = true; 
 
                 Index = std::make_unique<cuvs::neighbors::cagra::index<T, uint32_t>>(
                     cuvs::neighbors::cagra::build(*handle.get_raft_resources(), index_params, raft::make_const_mdspan(dataset_device->view())));
@@ -136,6 +147,97 @@ public:
 
         init_complete_future.get();
         is_loaded_ = true;
+    }
+
+    void Extend(const T* additional_data, uint64_t num_vectors) {
+        if constexpr (std::is_same_v<T, half>) {
+             throw std::runtime_error("CAGRA single-GPU extend is not supported for float16 (half) by cuVS.");
+        } else {
+            if (!is_loaded_ || !Index) {
+                throw std::runtime_error("Index must be loaded before extending.");
+            }
+            if (num_vectors == 0) return;
+
+            std::unique_lock<std::shared_mutex> lock(mutex_);
+
+            uint64_t jobID = Worker->Submit(
+                [&, additional_data, num_vectors](RaftHandleWrapper& handle) -> std::any {
+                    auto& res = *handle.get_raft_resources();
+                    
+                    auto additional_dataset_device = raft::make_device_matrix<T, int64_t, raft::layout_c_contiguous>(
+                        res, static_cast<int64_t>(num_vectors), static_cast<int64_t>(Dimension));
+                    
+                    RAFT_CUDA_TRY(cudaMemcpyAsync(additional_dataset_device.data_handle(), additional_data,
+                                            num_vectors * Dimension * sizeof(T), cudaMemcpyHostToDevice,
+                                            raft::resource::get_cuda_stream(res)));
+
+                    cuvs::neighbors::cagra::extend_params params;
+                    auto view = additional_dataset_device.view();
+                    cuvs::neighbors::cagra::extend(res, params, raft::make_const_mdspan(view), *Index);
+
+                    raft::resource::sync_stream(res);
+                    return std::any();
+                }
+            );
+
+            CuvsTaskResult result = Worker->Wait(jobID).get();
+            if (result.Error) {
+                std::rethrow_exception(result.Error);
+            }
+
+            Count += static_cast<uint32_t>(num_vectors);
+            
+            if (!flattened_host_dataset.empty()) {
+                size_t old_size = flattened_host_dataset.size();
+                flattened_host_dataset.resize(old_size + num_vectors * Dimension);
+                std::copy(additional_data, additional_data + num_vectors * Dimension, flattened_host_dataset.begin() + old_size);
+            }
+        }
+    }
+
+    static std::unique_ptr<GpuCagraIndex<T>> Merge(const std::vector<GpuCagraIndex<T>*>& indices, uint32_t nthread, int device_id) {
+        if (indices.empty()) return nullptr;
+        
+        uint32_t dimension = indices[0]->Dimension;
+        cuvs::distance::DistanceType metric = indices[0]->Metric;
+
+        CuvsWorker transient_worker(1, device_id);
+        transient_worker.Start();
+
+        uint64_t jobID = transient_worker.Submit(
+            [&indices](RaftHandleWrapper& handle) -> std::any {
+                auto& res = *handle.get_raft_resources();
+                
+                std::vector<cuvs::neighbors::cagra::index<T, uint32_t>*> cagra_indices;
+                for (auto* idx : indices) {
+                    if (!idx->is_loaded_ || !idx->Index) {
+                        throw std::runtime_error("One of the indices to merge is not loaded.");
+                    }
+                    cagra_indices.push_back(idx->Index.get());
+                }
+
+                cuvs::neighbors::cagra::index_params index_params;
+                cuvs::neighbors::cagra::merge_params params(index_params);
+                
+                auto merged_index = std::make_unique<cuvs::neighbors::cagra::index<T, uint32_t>>(
+                    cuvs::neighbors::cagra::merge(res, params, cagra_indices)
+                );
+
+                raft::resource::sync_stream(res);
+                return merged_index.release(); 
+            }
+        );
+
+        CuvsTaskResult result = transient_worker.Wait(jobID).get();
+        if (result.Error) {
+            std::rethrow_exception(result.Error);
+        }
+
+        auto* merged_index_raw = std::any_cast<cuvs::neighbors::cagra::index<T, uint32_t>*>(result.Result);
+        auto merged_index_ptr = std::unique_ptr<cuvs::neighbors::cagra::index<T, uint32_t>>(merged_index_raw);
+        transient_worker.Stop();
+
+        return std::make_unique<GpuCagraIndex<T>>(std::move(merged_index_ptr), dimension, metric, nthread, device_id);
     }
 
     void Save(const std::string& filename) {
@@ -217,7 +319,7 @@ public:
                 // Post-process to handle sentinels
                 for (size_t i = 0; i < res.Neighbors.size(); ++i) {
                     if (res.Neighbors[i] == std::numeric_limits<uint32_t>::max()) {
-                        res.Neighbors[i] = static_cast<uint32_t>(-1); // Let the caller decide how to handle this max val
+                        res.Neighbors[i] = static_cast<uint32_t>(-1); 
                     }
                 }
                 

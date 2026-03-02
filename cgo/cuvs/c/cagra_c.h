@@ -35,6 +35,12 @@ void GpuCagraIndex_FreeSearchResult(GpuCagraSearchResultC result_c);
 
 void GpuCagraIndex_Destroy(GpuCagraIndexC index_c, void* errmsg);
 
+// Extends the index with new vectors
+void GpuCagraIndex_Extend(GpuCagraIndexC index_c, const void* additional_data, uint64_t num_vectors, void* errmsg);
+
+// Merges multiple indices into one
+GpuCagraIndexC GpuCagraIndex_Merge(GpuCagraIndexC* indices, uint32_t num_indices, uint32_t nthread, int device_id, void* errmsg);
+
 #ifdef __cplusplus
 }
 #endif
