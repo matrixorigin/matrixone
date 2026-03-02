@@ -50,6 +50,15 @@ from .vector_manager import VectorManager
 from .version import get_version_manager
 
 
+_VALID_LOG_MODES = frozenset(('off', 'auto', 'simple', 'full', None))
+
+
+def _validate_log_mode(log_mode: Optional[str]) -> None:
+    """Validate log_mode parameter at API entry points."""
+    if log_mode not in _VALID_LOG_MODES:
+        raise ValueError(f"Invalid log_mode '{log_mode}'. Must be one of 'off', 'auto', 'simple', 'full'")
+
+
 def _extract_errno(exc: Exception) -> Optional[int]:
     """Extract the numeric error code from a database exception.
 
@@ -923,7 +932,7 @@ class Client(BaseMatrixOneClient):
         return final_user_string, parsed_info
 
     def _execute_with_logging(
-        self, connection: "Connection", sql: str, context: str = "SQL execution", override_sql_log_mode: str = None
+        self, connection: "Connection", sql: str, context: str = "SQL execution", log_mode: str = None
     ):
         """
         Execute SQL with proper logging through the client's logger.
@@ -936,7 +945,7 @@ class Client(BaseMatrixOneClient):
             connection: SQLAlchemy connection object
             sql: SQL query string
             context: Context description for error logging (default: "SQL execution")
-            override_sql_log_mode: Temporarily override sql_log_mode for this query only
+            log_mode: Temporarily override sql_log_mode for this query only
 
         Returns::
 
@@ -969,25 +978,25 @@ class Client(BaseMatrixOneClient):
                     # For SELECT queries, we can't consume the result to count rows
                     # So we just log without row count
                     self.logger.log_query(
-                        sql, execution_time, None, success=True, override_sql_log_mode=override_sql_log_mode
+                        sql, execution_time, None, success=True, log_mode=log_mode
                     )
                 else:
                     # For DML queries (INSERT/UPDATE/DELETE), we can get rowcount
                     self.logger.log_query(
-                        sql, execution_time, result.rowcount, success=True, override_sql_log_mode=override_sql_log_mode
+                        sql, execution_time, result.rowcount, success=True, log_mode=log_mode
                     )
             except Exception:
                 # Fallback: just log the query without row count
-                self.logger.log_query(sql, execution_time, None, success=True, override_sql_log_mode=override_sql_log_mode)
+                self.logger.log_query(sql, execution_time, None, success=True, log_mode=log_mode)
 
             return result
         except Exception as e:
             execution_time = time.time() - start_time
-            self.logger.log_query(sql, execution_time, success=False, override_sql_log_mode=override_sql_log_mode)
+            self.logger.log_query(sql, execution_time, success=False, log_mode=log_mode)
             self.logger.log_error(e, context=context)
-            raise
+            raise _classify_db_error(e, sql) from None
 
-    def execute(self, sql_or_stmt, params: Optional[Tuple] = None, _log_mode: str = None) -> "ResultSet":
+    def execute(self, sql_or_stmt, params: Optional[Tuple] = None, log_mode: str = None) -> "ResultSet":
         """
         Execute SQL query or SQLAlchemy statement without transaction isolation.
 
@@ -1022,7 +1031,7 @@ class Client(BaseMatrixOneClient):
                 SQL injection. Ignored for SQLAlchemy statements (use .values() or .where()
                 with bound parameters instead).
 
-            _log_mode (Optional[str]): Override SQL logging mode for this query only.
+            log_mode (Optional[str]): Override SQL logging mode for this query only.
                 Options: 'off', 'simple', 'full'. If None, uses client's global sql_log_mode
                 setting. Useful for debugging specific queries or disabling logs for
                 frequently-executed statements.
@@ -1208,19 +1217,19 @@ class Client(BaseMatrixOneClient):
             # Disable logging for frequently executed query
             result = client.execute(
                 select(User).where(User.id == 1),
-                _log_mode='off'
+                log_mode='off'
             )
 
             # Force full SQL logging for debugging
             result = client.execute(
                 select(User).where(User.name.like('%test%')),
-                _log_mode='full'
+                log_mode='full'
             )
 
             # Simple logging (operation type only)
             result = client.execute(
                 update(User).values(status='processed'),
-                _log_mode='simple'
+                log_mode='simple'
             )
 
         Important Notes:
@@ -1236,7 +1245,7 @@ class Client(BaseMatrixOneClient):
         1. **Prefer ORM-style statements**: Use select(), insert(), update(), delete()
         2. **Use parameters**: Always use parameter binding to prevent SQL injection
         3. **Session for transactions**: Use client.session() for atomic operations
-        4. **Disable logging in production**: Use _log_mode='off' for hot paths
+        4. **Disable logging in production**: Use log_mode='off' for hot paths
         5. **Handle exceptions**: Wrap execute() in try-except for error handling
 
         See Also:
@@ -1248,6 +1257,8 @@ class Client(BaseMatrixOneClient):
         if not self._engine:
             raise ConnectionError("Not connected to database")
 
+        _validate_log_mode(log_mode)
+
         import time
 
         start_time = time.time()
@@ -1257,7 +1268,8 @@ class Client(BaseMatrixOneClient):
             if not isinstance(sql_or_stmt, str):
                 # SQLAlchemy statement - delegate to session for consistent behavior
                 with self.session() as session:
-                    result = session.execute(sql_or_stmt, params)
+                    # Suppress Session-level logging; Client logs below
+                    result = session.execute(sql_or_stmt, params, log_mode='off')
 
                     # Convert SQLAlchemy result to ResultSet
                     if hasattr(result, 'returns_rows') and result.returns_rows:
@@ -1271,7 +1283,7 @@ class Client(BaseMatrixOneClient):
                             execution_time,
                             len(rows),
                             success=True,
-                            override_sql_log_mode=_log_mode,
+                            log_mode=log_mode,
                         )
                         return result_set
                     else:
@@ -1283,7 +1295,7 @@ class Client(BaseMatrixOneClient):
                             execution_time,
                             result.rowcount,
                             success=True,
-                            override_sql_log_mode=_log_mode,
+                            log_mode=log_mode,
                         )
                         return result_set
 
@@ -1311,14 +1323,14 @@ class Client(BaseMatrixOneClient):
                     rows = result.fetchall()
                     result_set = ResultSet(columns, rows)
                     self.logger.log_query(
-                        sql_or_stmt, execution_time, len(rows), success=True, override_sql_log_mode=_log_mode
+                        sql_or_stmt, execution_time, len(rows), success=True, log_mode=log_mode
                     )
                     return result_set
                 else:
                     # INSERT/UPDATE/DELETE query
                     result_set = ResultSet([], [], affected_rows=result.rowcount)
                     self.logger.log_query(
-                        sql_or_stmt, execution_time, result.rowcount, success=True, override_sql_log_mode=_log_mode
+                        sql_or_stmt, execution_time, result.rowcount, success=True, log_mode=log_mode
                     )
                     return result_set
 
@@ -3349,7 +3361,7 @@ class Session(SQLAlchemySession):
             params: Query parameters (only used for string SQL with '?' placeholders)
             **kwargs: Additional arguments passed to parent execute(). Supports special parameter:
 
-                - _log_mode (str): Override SQL logging mode for this operation only.
+                - log_mode (str): Override SQL logging mode for this operation only.
                   Options: 'off', 'simple', 'full'. Useful for debugging
                   specific operations without changing global settings.
 
@@ -3373,14 +3385,14 @@ class Session(SQLAlchemySession):
             # Debugging with temporary logging override
             with client.session() as session:
                 # Enable full logging for this query only
-                result = session.execute("SELECT * FROM large_table", _log_mode='full')
+                result = session.execute("SELECT * FROM large_table", log_mode='full')
         """
         import time
 
         start_time = time.time()
 
-        # Extract _log_mode from kwargs (don't pass it to SQLAlchemy)
-        _log_mode = kwargs.pop('_log_mode', None)
+        # Extract log_mode from kwargs (don't pass it to SQLAlchemy)
+        log_mode = kwargs.pop('log_mode', None)
 
         try:
             # Check if this is a string SQL
@@ -3403,7 +3415,7 @@ class Session(SQLAlchemySession):
             # Log query
             if hasattr(result, 'returns_rows') and result.returns_rows:
                 self.client.logger.log_query(
-                    original_sql, execution_time, None, success=True, override_sql_log_mode=_log_mode
+                    original_sql, execution_time, None, success=True, log_mode=log_mode
                 )
             else:
                 self.client.logger.log_query(
@@ -3411,7 +3423,7 @@ class Session(SQLAlchemySession):
                     execution_time,
                     getattr(result, 'rowcount', 0),
                     success=True,
-                    override_sql_log_mode=_log_mode,
+                    log_mode=log_mode,
                 )
 
             return result
@@ -3422,7 +3434,7 @@ class Session(SQLAlchemySession):
                 original_sql if 'original_sql' in locals() else str(sql_or_stmt),
                 execution_time,
                 success=False,
-                override_sql_log_mode=_log_mode,
+                log_mode=log_mode,
             )
             self.client.logger.log_error(e, context="Session query execution")
             raise _classify_db_error(e, sql_or_stmt) from None
