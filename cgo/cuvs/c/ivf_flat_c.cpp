@@ -49,7 +49,7 @@ struct gpu_ivf_flat_any_t {
 };
 
 template <typename T>
-static void copy_centers(void* ptr, float* centers) {
+static void copy_centers_impl(void* ptr, float* centers) {
     auto host_centers = static_cast<matrixone::gpu_ivf_flat_t<T>*>(ptr)->get_centers();
     for (size_t i = 0; i < host_centers.size(); ++i) {
         centers[i] = static_cast<float>(host_centers[i]);
@@ -218,10 +218,10 @@ void gpu_ivf_flat_get_centers(gpu_ivf_flat_c index_c, float* centers, void* errm
     try {
         auto* any = static_cast<gpu_ivf_flat_any_t*>(index_c);
         switch (any->qtype) {
-            case Quantization_F32: copy_centers<float>(any->ptr, centers); break;
-            case Quantization_F16: copy_centers<half>(any->ptr, centers); break;
-            case Quantization_INT8: copy_centers<int8_t>(any->ptr, centers); break;
-            case Quantization_UINT8: copy_centers<uint8_t>(any->ptr, centers); break;
+            case Quantization_F32: copy_centers_impl<float>(any->ptr, centers); break;
+            case Quantization_F16: copy_centers_impl<half>(any->ptr, centers); break;
+            case Quantization_INT8: copy_centers_impl<int8_t>(any->ptr, centers); break;
+            case Quantization_UINT8: copy_centers_impl<uint8_t>(any->ptr, centers); break;
         }
     } catch (const std::exception& e) {
         set_errmsg_ivf(errmsg, "Error in gpu_ivf_flat_get_centers", e);

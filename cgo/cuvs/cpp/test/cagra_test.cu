@@ -6,14 +6,14 @@
 
 using namespace matrixone;
 
-TEST(GpuCagraIndexTest, BasicLoadAndSearch) {
+TEST(GpuCagraTest, BasicLoadAndSearch) {
     const uint32_t dimension = 16;
     const uint64_t count = 100;
     std::vector<float> dataset(count * dimension);
     for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
     
     std::vector<int> devices = {0};
-    gpu_cagra_index_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 32, 16, devices, 1);
+    gpu_cagra_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 32, 16, devices, 1);
     index.load();
 
     std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
@@ -25,7 +25,7 @@ TEST(GpuCagraIndexTest, BasicLoadAndSearch) {
     index.destroy();
 }
 
-TEST(GpuCagraIndexTest, SaveAndLoadFromFile) {
+TEST(GpuCagraTest, SaveAndLoadFromFile) {
     const uint32_t dimension = 16;
     const uint64_t count = 100;
     std::vector<float> dataset(count * dimension);
@@ -35,7 +35,7 @@ TEST(GpuCagraIndexTest, SaveAndLoadFromFile) {
 
     // 1. Build and Save
     {
-        gpu_cagra_index_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 32, 16, devices, 1);
+        gpu_cagra_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 32, 16, devices, 1);
         index.load();
         index.save(filename);
         index.destroy();
@@ -43,7 +43,7 @@ TEST(GpuCagraIndexTest, SaveAndLoadFromFile) {
 
     // 2. Load and Search
     {
-        gpu_cagra_index_t<float> index(filename, dimension, cuvs::distance::DistanceType::L2Expanded, devices, 1);
+        gpu_cagra_t<float> index(filename, dimension, cuvs::distance::DistanceType::L2Expanded, devices, 1);
         index.load();
         
         std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
@@ -58,14 +58,14 @@ TEST(GpuCagraIndexTest, SaveAndLoadFromFile) {
     std::remove(filename.c_str());
 }
 
-TEST(GpuCagraIndexTest, ShardedModeSimulation) {
+TEST(GpuCagraTest, ShardedModeSimulation) {
     const uint32_t dimension = 16;
     const uint64_t count = 100;
     std::vector<float> dataset(count * dimension);
     for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
     
     std::vector<int> devices = {0}; 
-    gpu_cagra_index_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 32, 16, devices, 1);
+    gpu_cagra_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 32, 16, devices, 1, true); // force_mg = true
     index.load();
 
     std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);

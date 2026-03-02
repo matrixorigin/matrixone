@@ -16,14 +16,14 @@ static std::vector<half> float_to_half(const std::vector<float>& src) {
     return dst;
 }
 
-// --- GpuBruteForceIndexTest ---
+// --- GpuBruteForceTest ---
 
-TEST(GpuBruteForceIndexTest, BasicLoadAndSearch) {
+TEST(GpuBruteForceTest, BasicLoadAndSearch) {
     const uint32_t dimension = 3;
     const uint64_t count = 2;
     std::vector<float> dataset = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
     
-    gpu_brute_force_index_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 1, 0);
+    gpu_brute_force_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 1, 0);
     index.load();
 
     std::vector<float> queries = {1.0, 2.0, 3.0};
@@ -36,7 +36,7 @@ TEST(GpuBruteForceIndexTest, BasicLoadAndSearch) {
     index.destroy();
 }
 
-TEST(GpuBruteForceIndexTest, SearchWithMultipleQueries) {
+TEST(GpuBruteForceTest, SearchWithMultipleQueries) {
     const uint32_t dimension = 4;
     const uint64_t count = 4;
     std::vector<float> dataset = {
@@ -46,7 +46,7 @@ TEST(GpuBruteForceIndexTest, SearchWithMultipleQueries) {
         0.0, 0.0, 0.0, 1.0  // ID 3
     };
     
-    gpu_brute_force_index_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 1, 0);
+    gpu_brute_force_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 1, 0);
     index.load();
 
     std::vector<float> queries = {
@@ -62,13 +62,13 @@ TEST(GpuBruteForceIndexTest, SearchWithMultipleQueries) {
     index.destroy();
 }
 
-TEST(GpuBruteForceIndexTest, SearchWithFloat16) {
+TEST(GpuBruteForceTest, SearchWithFloat16) {
     const uint32_t dimension = 2;
     const uint64_t count = 2;
     std::vector<float> f_dataset = {1.0, 1.0, 2.0, 2.0};
     std::vector<half> h_dataset = float_to_half(f_dataset);
     
-    gpu_brute_force_index_t<half> index(h_dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 1, 0);
+    gpu_brute_force_t<half> index(h_dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 1, 0);
     index.load();
 
     std::vector<float> f_queries = {1.0, 1.0};
@@ -82,7 +82,7 @@ TEST(GpuBruteForceIndexTest, SearchWithFloat16) {
     index.destroy();
 }
 
-TEST(GpuBruteForceIndexTest, SearchWithInnerProduct) {
+TEST(GpuBruteForceTest, SearchWithInnerProduct) {
     const uint32_t dimension = 2;
     const uint64_t count = 2;
     std::vector<float> dataset = {
@@ -90,7 +90,7 @@ TEST(GpuBruteForceIndexTest, SearchWithInnerProduct) {
         0.0, 1.0
     };
     
-    gpu_brute_force_index_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::InnerProduct, 1, 0);
+    gpu_brute_force_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::InnerProduct, 1, 0);
     index.load();
 
     std::vector<float> queries = {1.0, 0.0};
@@ -100,17 +100,18 @@ TEST(GpuBruteForceIndexTest, SearchWithInnerProduct) {
     ASSERT_EQ(result.neighbors[0], 0);
     ASSERT_EQ(result.neighbors[1], 1);
     
-    // Log actual distances to debug
-    TEST_LOG("InnerProduct Distances: " << result.distances[0] << ", " << result.distances[1]);
+    // dot product should be 1.0 for exact match
+    ASSERT_TRUE(std::abs(result.distances[0] - 1.0) < 1e-5);
+    ASSERT_TRUE(std::abs(result.distances[1] - 0.0) < 1e-5);
 
     index.destroy();
 }
 
-TEST(GpuBruteForceIndexTest, EmptyDataset) {
+TEST(GpuBruteForceTest, EmptyDataset) {
     const uint32_t dimension = 128;
     const uint64_t count = 0;
     
-    gpu_brute_force_index_t<float> index(nullptr, count, dimension, cuvs::distance::DistanceType::L2Expanded, 1, 0);
+    gpu_brute_force_t<float> index(nullptr, count, dimension, cuvs::distance::DistanceType::L2Expanded, 1, 0);
     index.load();
 
     std::vector<float> queries(dimension, 0.0);
@@ -121,12 +122,12 @@ TEST(GpuBruteForceIndexTest, EmptyDataset) {
     index.destroy();
 }
 
-TEST(GpuBruteForceIndexTest, LargeLimit) {
+TEST(GpuBruteForceTest, LargeLimit) {
     const uint32_t dimension = 2;
     const uint64_t count = 5;
     std::vector<float> dataset(count * dimension, 1.0);
     
-    gpu_brute_force_index_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 1, 0);
+    gpu_brute_force_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 1, 0);
     index.load();
 
     std::vector<float> queries(dimension, 1.0);
@@ -152,7 +153,7 @@ TEST(CuvsWorkerTest, BruteForceSearch) {
     std::vector<float> dataset(count * dimension);
     for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
 
-    gpu_brute_force_index_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 1, 0);
+    gpu_brute_force_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 1, 0);
     index.load();
 
     std::vector<float> queries = std::vector<float>(dataset.begin(), dataset.begin() + dimension);
@@ -172,11 +173,11 @@ TEST(CuvsWorkerTest, ConcurrentSearches) {
     // Use very distinct values to ensure unique neighbors
     for (size_t i = 0; i < count; ++i) {
         for (size_t j = 0; j < dimension; ++j) {
-            dataset[i * dimension + j] = (float)i * 10.0f + (float)j;
+            dataset[i * dimension + j] = (float)i * 100.0f + (float)j;
         }
     }
 
-    gpu_brute_force_index_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 4, 0);
+    gpu_brute_force_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 4, 0);
     index.load();
 
     const int num_threads = 4;

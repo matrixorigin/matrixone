@@ -37,11 +37,11 @@
 namespace matrixone {
 
 /**
- * @brief gpu_cagra_index_t implements a CAGRA index that can run on a single GPU or sharded across multiple GPUs.
+ * @brief gpu_cagra_t implements a CAGRA index that can run on a single GPU or sharded across multiple GPUs.
  * It automatically chooses between single-GPU and multi-GPU (SNMG) cuVS APIs based on the RAFT handle resources.
  */
 template <typename T>
-class gpu_cagra_index_t {
+class gpu_cagra_t {
 public:
     using cagra_index = cuvs::neighbors::cagra::index<T, uint32_t>;
     using mg_index = cuvs::neighbors::mg_index<cagra_index, T, uint32_t>;
@@ -64,12 +64,12 @@ public:
     bool is_loaded_ = false;
     std::shared_ptr<void> dataset_device_ptr_; // Keeps device dataset alive for single-GPU build
 
-    ~gpu_cagra_index_t() {
+    ~gpu_cagra_t() {
         destroy();
     }
 
     // Unified Constructor for building from dataset
-    gpu_cagra_index_t(const T* dataset_data, uint64_t count_vectors, uint32_t dimension, 
+    gpu_cagra_t(const T* dataset_data, uint64_t count_vectors, uint32_t dimension, 
                   cuvs::distance::DistanceType m, size_t intermediate_graph_degree, 
                   size_t graph_degree, const std::vector<int>& devices, uint32_t nthread, bool force_mg = false)
         : dimension(dimension), count(static_cast<uint32_t>(count_vectors)), metric(m), 
@@ -79,11 +79,13 @@ public:
         worker = std::make_unique<cuvs_worker_t>(nthread, devices_, force_mg || (devices_.size() > 1));
 
         flattened_host_dataset.resize(count * dimension);
-        std::copy(dataset_data, dataset_data + (count * dimension), flattened_host_dataset.begin());
+        if (dataset_data) {
+            std::copy(dataset_data, dataset_data + (count * dimension), flattened_host_dataset.begin());
+        }
     }
 
     // Unified Constructor for loading from file
-    gpu_cagra_index_t(const std::string& filename, uint32_t dimension, cuvs::distance::DistanceType m, 
+    gpu_cagra_t(const std::string& filename, uint32_t dimension, cuvs::distance::DistanceType m, 
                     const std::vector<int>& devices, uint32_t nthread, bool force_mg = false)
         : filename_(filename), dimension(dimension), metric(m), count(0), 
           intermediate_graph_degree(0), graph_degree(0), devices_(devices) {
@@ -92,7 +94,7 @@ public:
     }
 
     // Private constructor for creating from an existing cuVS index (used by merge)
-    gpu_cagra_index_t(std::unique_ptr<cagra_index> idx, 
+    gpu_cagra_t(std::unique_ptr<cagra_index> idx, 
                   uint32_t dim, cuvs::distance::DistanceType m, uint32_t nthread, const std::vector<int>& devices)
         : index_(std::move(idx)), metric(m), dimension(dim), devices_(devices) {
         
@@ -230,7 +232,7 @@ public:
         }
     }
 
-    static std::unique_ptr<gpu_cagra_index_t<T>> merge(const std::vector<gpu_cagra_index_t<T>*>& indices, uint32_t nthread, const std::vector<int>& devices) {
+    static std::unique_ptr<gpu_cagra_t<T>> merge(const std::vector<gpu_cagra_t<T>*>& indices, uint32_t nthread, const std::vector<int>& devices) {
         if (indices.empty()) return nullptr;
         
         uint32_t dim = indices[0]->dimension;
@@ -270,7 +272,7 @@ public:
         auto merged_index_ptr = std::unique_ptr<cagra_index>(merged_index_raw);
         transient_worker.stop();
 
-        return std::make_unique<gpu_cagra_index_t<T>>(std::move(merged_index_ptr), dim, m, nthread, devices);
+        return std::make_unique<gpu_cagra_t<T>>(std::move(merged_index_ptr), dim, m, nthread, devices);
     }
 
     void save(const std::string& filename) {

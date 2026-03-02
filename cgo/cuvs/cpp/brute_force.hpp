@@ -38,9 +38,9 @@
 
 namespace matrixone {
 
-// --- gpu_brute_force_index_t Class ---
+// --- gpu_brute_force_t Class ---
 template <typename T>
-class gpu_brute_force_index_t {
+class gpu_brute_force_t {
 public:
     std::vector<T> flattened_host_dataset; // Store flattened data as std::vector
     std::unique_ptr<cuvs::neighbors::brute_force::index<T, float>> index; // Use float for DistT
@@ -52,18 +52,20 @@ public:
     std::shared_mutex mutex_; // Mutex to protect load() and search()
     bool is_loaded_ = false;
 
-    ~gpu_brute_force_index_t() {
+    ~gpu_brute_force_t() {
         destroy();
     }
 
-    gpu_brute_force_index_t(const T* dataset_data, uint64_t count_vectors, uint32_t dimension, cuvs::distance::DistanceType m,
+    gpu_brute_force_t(const T* dataset_data, uint64_t count_vectors, uint32_t dimension, cuvs::distance::DistanceType m,
                        uint32_t nthread, int device_id = 0)
         : dimension(dimension), count(static_cast<uint32_t>(count_vectors)), metric(m), device_id_(device_id) {
         worker = std::make_unique<cuvs_worker_t>(nthread, device_id_);
 
         // Resize flattened_host_dataset and copy data from the flattened array
         flattened_host_dataset.resize(count * dimension); // Total elements
-        std::copy(dataset_data, dataset_data + (count * dimension), flattened_host_dataset.begin());
+        if (dataset_data) {
+            std::copy(dataset_data, dataset_data + (count * dimension), flattened_host_dataset.begin());
+        }
     }
 
     void load() {

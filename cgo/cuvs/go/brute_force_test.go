@@ -5,53 +5,80 @@ import (
     "fmt"
 )
 
-func TestNewGpuBruteForceIndex(t *testing.T) {
-    // Example dataset: 2 vectors, each with 3 dimensions
-    dataset := []float32{
-        1.0, 2.0, 3.0,
-        4.0, 5.0, 6.0,
-    }
-    countVectors := uint64(2)
+func TestNewGpuBruteForce(t *testing.T) {
     dimension := uint32(3)
-    metric := L2Expanded
-    nthread := uint32(1)
-    deviceID := 0
-
-    // Create the index
-    index, err := NewGpuBruteForceIndex(dataset, countVectors, dimension, metric, nthread, deviceID)
+    count := uint64(2)
+    dataset := []float32{1.0, 2.0, 3.0, 4.0, 5.0, 6.0}
+    
+    // Test with float32
+    index, err := NewGpuBruteForce(dataset, count, dimension, L2Expanded, 1, 0)
     if err != nil {
-        t.Fatalf("Failed to create GpuBruteForceIndex: %v", err)
-    }
-    if index == nil {
-        t.Fatalf("NewGpuBruteForceIndex returned nil index")
+        t.Fatalf("Failed to create GpuBruteForce: %v", err)
     }
 
-    // Load the index
     err = index.Load()
     if err != nil {
-        t.Fatalf("Failed to load GpuBruteForceIndex: %v", err)
+        t.Fatalf("Failed to load: %v", err)
     }
 
-    // Simple search (queries match dataset for simplicity)
-    queries := []float32{
-        1.0, 2.0, 3.0, // Query 1
-    }
-    numQueries := uint64(1)
-    queryDimension := uint32(3)
-    limit := uint32(1)
-
-    neighbors, distances, err := index.Search(queries, numQueries, queryDimension, limit)
+    queries := []float32{1.0, 2.0, 3.0}
+    neighbors, distances, err := index.Search(queries, 1, dimension, 1)
     if err != nil {
         t.Fatalf("Failed to search: %v", err)
     }
-    if neighbors == nil || len(neighbors) == 0 {
-        t.Fatalf("Search returned empty neighbors")
-    }
+
     fmt.Printf("Search Result: Neighbors=%v, Distances=%v\n", neighbors, distances)
 
-    // Destroy the index
+    if neighbors[0] != 0 {
+        t.Errorf("Expected first neighbor to be 0, got %d", neighbors[0])
+    }
+    if distances[0] != 0.0 {
+        t.Errorf("Expected first distance to be 0.0, got %f", distances[0])
+    }
+
     err = index.Destroy()
     if err != nil {
-        t.Fatalf("Failed to destroy GpuBruteForceIndex: %v", err)
+        t.Fatalf("Failed to destroy: %v", err)
     }
+}
+
+func TestGpuBruteForceFloat16(t *testing.T) {
+    dimension := uint32(2)
+    count := uint64(2)
+    dataset := []float32{1.0, 1.0, 2.0, 2.0}
+    
+    // Convert to Float16 on GPU
+    hDataset := make([]Float16, len(dataset))
+    err := GpuConvertF32ToF16(dataset, hDataset, 0)
+    if err != nil {
+        t.Fatalf("Failed to convert dataset to F16: %v", err)
+    }
+
+    index, err := NewGpuBruteForce(hDataset, count, dimension, L2Expanded, 1, 0)
+    if err != nil {
+        t.Fatalf("Failed to create F16 GpuBruteForce: %v", err)
+    }
+
+    err = index.Load()
+    if err != nil {
+        t.Fatalf("Failed to load: %v", err)
+    }
+
+    queries := []float32{1.0, 1.0}
+    hQueries := make([]Float16, len(queries))
+    GpuConvertF32ToF16(queries, hQueries, 0)
+
+    neighbors, distances, err := index.Search(hQueries, 1, dimension, 1)
+    if err != nil {
+        t.Fatalf("Failed to search F16: %v", err)
+    }
+
+    if neighbors[0] != 0 {
+        t.Errorf("Expected first neighbor 0, got %d", neighbors[0])
+    }
+    if distances[0] != 0.0 {
+        t.Errorf("Expected distance 0.0, got %f", distances[0])
+    }
+
+    index.Destroy()
 }

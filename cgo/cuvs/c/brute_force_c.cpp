@@ -34,15 +34,15 @@ static cuvs::distance::DistanceType convert_distance_type(distance_type_t metric
     }
 }
 
-struct gpu_brute_force_index_any_t {
+struct gpu_brute_force_any_t {
     quantization_t qtype;
     void* ptr;
 
-    gpu_brute_force_index_any_t(quantization_t q, void* p) : qtype(q), ptr(p) {}
-    ~gpu_brute_force_index_any_t() {
+    gpu_brute_force_any_t(quantization_t q, void* p) : qtype(q), ptr(p) {}
+    ~gpu_brute_force_any_t() {
         switch (qtype) {
-            case Quantization_F32: delete static_cast<matrixone::gpu_brute_force_index_t<float>*>(ptr); break;
-            case Quantization_F16: delete static_cast<matrixone::gpu_brute_force_index_t<half>*>(ptr); break;
+            case Quantization_F32: delete static_cast<matrixone::gpu_brute_force_t<float>*>(ptr); break;
+            case Quantization_F16: delete static_cast<matrixone::gpu_brute_force_t<half>*>(ptr); break;
             default: break;
         }
     }
@@ -50,57 +50,57 @@ struct gpu_brute_force_index_any_t {
 
 extern "C" {
 
-gpu_brute_force_index_c gpu_brute_force_index_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, distance_type_t metric_c, uint32_t nthread, int device_id, quantization_t qtype, void* errmsg) {
+gpu_brute_force_c gpu_brute_force_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, distance_type_t metric_c, uint32_t nthread, int device_id, quantization_t qtype, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         cuvs::distance::DistanceType metric = convert_distance_type(metric_c);
         void* index_ptr = nullptr;
         switch (qtype) {
             case Quantization_F32:
-                index_ptr = new matrixone::gpu_brute_force_index_t<float>(static_cast<const float*>(dataset_data), count_vectors, dimension, metric, nthread, device_id);
+                index_ptr = new matrixone::gpu_brute_force_t<float>(static_cast<const float*>(dataset_data), count_vectors, dimension, metric, nthread, device_id);
                 break;
             case Quantization_F16:
-                index_ptr = new matrixone::gpu_brute_force_index_t<half>(static_cast<const half*>(dataset_data), count_vectors, dimension, metric, nthread, device_id);
+                index_ptr = new matrixone::gpu_brute_force_t<half>(static_cast<const half*>(dataset_data), count_vectors, dimension, metric, nthread, device_id);
                 break;
             default:
                 throw std::runtime_error("Unsupported quantization type for brute force (only f32 and f16 supported)");
         }
-        return static_cast<gpu_brute_force_index_c>(new gpu_brute_force_index_any_t(qtype, index_ptr));
+        return static_cast<gpu_brute_force_c>(new gpu_brute_force_any_t(qtype, index_ptr));
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_brute_force_index_new", e);
+        set_errmsg(errmsg, "Error in gpu_brute_force_new", e);
         return nullptr;
     }
 }
 
-void gpu_brute_force_index_load(gpu_brute_force_index_c index_c, void* errmsg) {
+void gpu_brute_force_load(gpu_brute_force_c index_c, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<gpu_brute_force_index_any_t*>(index_c);
+        auto* any = static_cast<gpu_brute_force_any_t*>(index_c);
         switch (any->qtype) {
-            case Quantization_F32: static_cast<matrixone::gpu_brute_force_index_t<float>*>(any->ptr)->load(); break;
-            case Quantization_F16: static_cast<matrixone::gpu_brute_force_index_t<half>*>(any->ptr)->load(); break;
+            case Quantization_F32: static_cast<matrixone::gpu_brute_force_t<float>*>(any->ptr)->load(); break;
+            case Quantization_F16: static_cast<matrixone::gpu_brute_force_t<half>*>(any->ptr)->load(); break;
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_brute_force_index_load", e);
+        set_errmsg(errmsg, "Error in gpu_brute_force_load", e);
     }
 }
 
-gpu_brute_force_search_result_c gpu_brute_force_index_search(gpu_brute_force_index_c index_c, const void* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, void* errmsg) {
+gpu_brute_force_search_result_c gpu_brute_force_search(gpu_brute_force_c index_c, const void* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<gpu_brute_force_index_any_t*>(index_c);
+        auto* any = static_cast<gpu_brute_force_any_t*>(index_c);
         void* result_ptr = nullptr;
         switch (any->qtype) {
             case Quantization_F32: {
-                auto res = std::make_unique<matrixone::gpu_brute_force_index_t<float>::search_result_t>();
-                *res = static_cast<matrixone::gpu_brute_force_index_t<float>*>(any->ptr)->search(static_cast<const float*>(queries_data), num_queries, query_dimension, limit);
+                auto res = std::make_unique<matrixone::gpu_brute_force_t<float>::search_result_t>();
+                *res = static_cast<matrixone::gpu_brute_force_t<float>*>(any->ptr)->search(static_cast<const float*>(queries_data), num_queries, query_dimension, limit);
                 result_ptr = res.release();
                 break;
             }
             case Quantization_F16: {
-                auto res = std::make_unique<matrixone::gpu_brute_force_index_t<half>::search_result_t>();
-                *res = static_cast<matrixone::gpu_brute_force_index_t<half>*>(any->ptr)->search(static_cast<const half*>(queries_data), num_queries, query_dimension, limit);
+                auto res = std::make_unique<matrixone::gpu_brute_force_t<half>::search_result_t>();
+                *res = static_cast<matrixone::gpu_brute_force_t<half>*>(any->ptr)->search(static_cast<const half*>(queries_data), num_queries, query_dimension, limit);
                 result_ptr = res.release();
                 break;
             }
@@ -108,14 +108,14 @@ gpu_brute_force_search_result_c gpu_brute_force_index_search(gpu_brute_force_ind
         }
         return static_cast<gpu_brute_force_search_result_c>(result_ptr);
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_brute_force_index_search", e);
+        set_errmsg(errmsg, "Error in gpu_brute_force_search", e);
         return nullptr;
     }
 }
 
-void gpu_brute_force_index_get_results(gpu_brute_force_search_result_c result_c, uint64_t num_queries, uint32_t limit, int64_t* neighbors, float* distances) {
+void gpu_brute_force_get_results(gpu_brute_force_search_result_c result_c, uint64_t num_queries, uint32_t limit, int64_t* neighbors, float* distances) {
     if (!result_c) return;
-    auto* search_result = static_cast<matrixone::gpu_brute_force_index_t<float>::search_result_t*>(result_c);
+    auto* search_result = static_cast<matrixone::gpu_brute_force_t<float>::search_result_t*>(result_c);
 
     size_t total = num_queries * limit;
     if (search_result->neighbors.size() >= total) {
@@ -131,18 +131,18 @@ void gpu_brute_force_index_get_results(gpu_brute_force_search_result_c result_c,
     }
 }
 
-void gpu_brute_force_index_free_search_result(gpu_brute_force_search_result_c result_c) {
+void gpu_brute_force_free_search_result(gpu_brute_force_search_result_c result_c) {
     if (!result_c) return;
-    delete static_cast<matrixone::gpu_brute_force_index_t<float>::search_result_t*>(result_c);
+    delete static_cast<matrixone::gpu_brute_force_t<float>::search_result_t*>(result_c);
 }
 
-void gpu_brute_force_index_destroy(gpu_brute_force_index_c index_c, void* errmsg) {
+void gpu_brute_force_destroy(gpu_brute_force_c index_c, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<gpu_brute_force_index_any_t*>(index_c);
+        auto* any = static_cast<gpu_brute_force_any_t*>(index_c);
         delete any;
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_brute_force_index_destroy", e);
+        set_errmsg(errmsg, "Error in gpu_brute_force_destroy", e);
     }
 }
 
