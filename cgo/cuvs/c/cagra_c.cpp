@@ -48,15 +48,9 @@ struct GpuCagraIndexAny {
     }
 };
 
-GpuCagraIndexC GpuCagraIndex_New(const float* dataset_data, uint64_t count_vectors, uint32_t dimension, 
+GpuCagraIndexC GpuCagraIndex_New(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, 
                                  CuvsDistanceTypeC metric_c, size_t intermediate_graph_degree, 
-                                 size_t graph_degree, uint32_t nthread, int device_id, void* errmsg) {
-    return GpuCagraIndex_NewUnsafe(dataset_data, count_vectors, dimension, metric_c, intermediate_graph_degree, graph_degree, nthread, device_id, Quantization_F32, errmsg);
-}
-
-GpuCagraIndexC GpuCagraIndex_NewUnsafe(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, 
-                                       CuvsDistanceTypeC metric_c, size_t intermediate_graph_degree, 
-                                       size_t graph_degree, uint32_t nthread, int device_id, CuvsQuantizationC qtype, void* errmsg) {
+                                 size_t graph_degree, uint32_t nthread, int device_id, CuvsQuantizationC qtype, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         cuvs::distance::DistanceType metric = convert_distance_type_cagra(metric_c);
@@ -77,18 +71,13 @@ GpuCagraIndexC GpuCagraIndex_NewUnsafe(const void* dataset_data, uint64_t count_
         }
         return static_cast<GpuCagraIndexC>(new GpuCagraIndexAny(qtype, index_ptr));
     } catch (const std::exception& e) {
-        set_errmsg_cagra(errmsg, "Error in GpuCagraIndex_NewUnsafe", e);
+        set_errmsg_cagra(errmsg, "Error in GpuCagraIndex_New", e);
         return nullptr;
     }
 }
 
 GpuCagraIndexC GpuCagraIndex_NewFromFile(const char* filename, uint32_t dimension, CuvsDistanceTypeC metric_c, 
-                                         uint32_t nthread, int device_id, void* errmsg) {
-    return GpuCagraIndex_NewFromFileUnsafe(filename, dimension, metric_c, nthread, device_id, Quantization_F32, errmsg);
-}
-
-GpuCagraIndexC GpuCagraIndex_NewFromFileUnsafe(const char* filename, uint32_t dimension, CuvsDistanceTypeC metric_c, 
-                                               uint32_t nthread, int device_id, CuvsQuantizationC qtype, void* errmsg) {
+                                         uint32_t nthread, int device_id, CuvsQuantizationC qtype, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         cuvs::distance::DistanceType metric = convert_distance_type_cagra(metric_c);
@@ -109,7 +98,7 @@ GpuCagraIndexC GpuCagraIndex_NewFromFileUnsafe(const char* filename, uint32_t di
         }
         return static_cast<GpuCagraIndexC>(new GpuCagraIndexAny(qtype, index_ptr));
     } catch (const std::exception& e) {
-        set_errmsg_cagra(errmsg, "Error in GpuCagraIndex_NewFromFileUnsafe", e);
+        set_errmsg_cagra(errmsg, "Error in GpuCagraIndex_NewFromFile", e);
         return nullptr;
     }
 }
@@ -144,15 +133,9 @@ void GpuCagraIndex_Save(GpuCagraIndexC index_c, const char* filename, void* errm
     }
 }
 
-GpuCagraSearchResultC GpuCagraIndex_Search(GpuCagraIndexC index_c, const float* queries_data, 
+GpuCagraSearchResultC GpuCagraIndex_Search(GpuCagraIndexC index_c, const void* queries_data, 
                                            uint64_t num_queries, uint32_t query_dimension, 
                                            uint32_t limit, size_t itopk_size, void* errmsg) {
-    return GpuCagraIndex_SearchUnsafe(index_c, queries_data, num_queries, query_dimension, limit, itopk_size, errmsg);
-}
-
-GpuCagraSearchResultC GpuCagraIndex_SearchUnsafe(GpuCagraIndexC index_c, const void* queries_data, 
-                                                 uint64_t num_queries, uint32_t query_dimension, 
-                                                 uint32_t limit, size_t itopk_size, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         auto* any = static_cast<GpuCagraIndexAny*>(index_c);
@@ -185,7 +168,7 @@ GpuCagraSearchResultC GpuCagraIndex_SearchUnsafe(GpuCagraIndexC index_c, const v
         }
         return static_cast<GpuCagraSearchResultC>(result_ptr);
     } catch (const std::exception& e) {
-        set_errmsg_cagra(errmsg, "Error in GpuCagraIndex_SearchUnsafe", e);
+        set_errmsg_cagra(errmsg, "Error in GpuCagraIndex_Search", e);
         return nullptr;
     }
 }

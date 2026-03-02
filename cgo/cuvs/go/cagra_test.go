@@ -80,7 +80,7 @@ func TestGpuCagraIndexSaveLoad(t *testing.T) {
 
     // 2. Load from file and Search
     {
-        index, err := NewGpuCagraIndexFromFile(filename, dimension, metric, nthread, deviceID)
+        index, err := NewGpuCagraIndexFromFile[float32](filename, dimension, metric, nthread, deviceID)
         if err != nil {
             t.Fatalf("Failed to create from file: %v", err)
         }

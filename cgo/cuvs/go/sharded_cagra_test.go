@@ -5,6 +5,7 @@ import (
     "fmt"
     "os"
     "math/rand"
+    "unsafe"
 )
 
 func TestGpuShardedCagraIndex(t *testing.T) {
@@ -21,7 +22,7 @@ func TestGpuShardedCagraIndex(t *testing.T) {
     devices := []int{0} // Testing with single GPU in sharded mode
     nthread := uint32(1)
 
-    index, err := NewGpuShardedCagraIndex(dataset, count, dimension, metric, intermediateGraphDegree, graphDegree, devices, nthread)
+    index, err := NewGpuShardedCagraIndex(unsafe.Pointer(&dataset[0]), count, dimension, metric, intermediateGraphDegree, graphDegree, devices, nthread, F32)
     if err != nil {
         t.Fatalf("Failed to create GpuShardedCagraIndex: %v", err)
     }
@@ -33,7 +34,7 @@ func TestGpuShardedCagraIndex(t *testing.T) {
 
     // Search for the first vector
     queries := dataset[:dimension]
-    neighbors, distances, err := index.Search(queries, 1, dimension, 5, 32)
+    neighbors, distances, err := index.Search(unsafe.Pointer(&queries[0]), 1, dimension, 5, 32)
     if err != nil {
         t.Fatalf("Failed to search: %v", err)
     }
@@ -66,7 +67,7 @@ func TestGpuShardedCagraIndexSaveLoad(t *testing.T) {
 
     // 1. Build and Save
     {
-        index, err := NewGpuShardedCagraIndex(dataset, count, dimension, metric, intermediateGraphDegree, graphDegree, devices, nthread)
+        index, err := NewGpuShardedCagraIndex(unsafe.Pointer(&dataset[0]), count, dimension, metric, intermediateGraphDegree, graphDegree, devices, nthread, F32)
         if err != nil {
             t.Fatalf("Failed to create: %v", err)
         }
@@ -81,7 +82,7 @@ func TestGpuShardedCagraIndexSaveLoad(t *testing.T) {
 
     // 2. Load from file and Search
     {
-        index, err := NewGpuShardedCagraIndexFromFile(filename, dimension, metric, devices, nthread)
+        index, err := NewGpuShardedCagraIndexFromFile(filename, dimension, metric, devices, nthread, F32)
         if err != nil {
             t.Fatalf("Failed to create from file: %v", err)
         }
@@ -90,7 +91,7 @@ func TestGpuShardedCagraIndexSaveLoad(t *testing.T) {
         }
 
         queries := dataset[:dimension]
-        neighbors, _, err := index.Search(queries, 1, dimension, 5, 32)
+        neighbors, _, err := index.Search(unsafe.Pointer(&queries[0]), 1, dimension, 5, 32)
         if err != nil {
             t.Fatalf("Failed to search: %v", err)
         }

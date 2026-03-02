@@ -13,16 +13,13 @@ import (
     "unsafe"
 )
 
+// GpuShardedCagraIndex represents the C++ GpuShardedCagraIndex object
 type GpuShardedCagraIndex struct {
     cIndex C.GpuShardedCagraIndexC
-    dimension uint32
 }
 
-func NewGpuShardedCagraIndex(dataset []float32, countVectors uint64, dimension uint32, metric DistanceType, intermediateGraphDegree uint32, graphDegree uint32, devices []int, nthread uint32) (*GpuShardedCagraIndex, error) {
-    return NewGpuShardedCagraIndexUnsafe(unsafe.Pointer(&dataset[0]), countVectors, dimension, metric, intermediateGraphDegree, graphDegree, devices, nthread, F32)
-}
-
-func NewGpuShardedCagraIndexUnsafe(dataset unsafe.Pointer, countVectors uint64, dimension uint32, metric DistanceType, intermediateGraphDegree uint32, graphDegree uint32, devices []int, nthread uint32, qtype Quantization) (*GpuShardedCagraIndex, error) {
+// NewGpuShardedCagraIndex creates a new GpuShardedCagraIndex instance for building from dataset across multiple GPUs
+func NewGpuShardedCagraIndex(dataset unsafe.Pointer, countVectors uint64, dimension uint32, metric DistanceType, intermediateGraphDegree uint32, graphDegree uint32, devices []int, nthread uint32, qtype Quantization) (*GpuShardedCagraIndex, error) {
     if dataset == nil || countVectors == 0 || dimension == 0 {
         return nil, fmt.Errorf("dataset, countVectors, and dimension cannot be zero")
     }
@@ -36,7 +33,7 @@ func NewGpuShardedCagraIndexUnsafe(dataset unsafe.Pointer, countVectors uint64, 
     }
 
     var errmsg *C.char
-    cIndex := C.GpuShardedCagraIndex_NewUnsafe(
+    cIndex := C.GpuShardedCagraIndex_New(
         dataset,
         C.uint64_t(countVectors),
         C.uint32_t(dimension),
@@ -59,14 +56,11 @@ func NewGpuShardedCagraIndexUnsafe(dataset unsafe.Pointer, countVectors uint64, 
     if cIndex == nil {
         return nil, fmt.Errorf("failed to create GpuShardedCagraIndex")
     }
-    return &GpuShardedCagraIndex{cIndex: cIndex, dimension: dimension}, nil
+    return &GpuShardedCagraIndex{cIndex: cIndex}, nil
 }
 
-func NewGpuShardedCagraIndexFromFile(filename string, dimension uint32, metric DistanceType, devices []int, nthread uint32) (*GpuShardedCagraIndex, error) {
-    return NewGpuShardedCagraIndexFromFileUnsafe(filename, dimension, metric, devices, nthread, F32)
-}
-
-func NewGpuShardedCagraIndexFromFileUnsafe(filename string, dimension uint32, metric DistanceType, devices []int, nthread uint32, qtype Quantization) (*GpuShardedCagraIndex, error) {
+// NewGpuShardedCagraIndexFromFile creates a new GpuShardedCagraIndex instance for loading from file (multi-GPU)
+func NewGpuShardedCagraIndexFromFile(filename string, dimension uint32, metric DistanceType, devices []int, nthread uint32, qtype Quantization) (*GpuShardedCagraIndex, error) {
     if filename == "" || dimension == 0 {
         return nil, fmt.Errorf("filename and dimension cannot be empty or zero")
     }
@@ -83,7 +77,7 @@ func NewGpuShardedCagraIndexFromFileUnsafe(filename string, dimension uint32, me
     }
 
     var errmsg *C.char
-    cIndex := C.GpuShardedCagraIndex_NewFromFileUnsafe(
+    cIndex := C.GpuShardedCagraIndex_NewFromFile(
         cFilename,
         C.uint32_t(dimension),
         C.CuvsDistanceTypeC(metric),
@@ -103,7 +97,7 @@ func NewGpuShardedCagraIndexFromFileUnsafe(filename string, dimension uint32, me
     if cIndex == nil {
         return nil, fmt.Errorf("failed to create GpuShardedCagraIndex from file")
     }
-    return &GpuShardedCagraIndex{cIndex: cIndex, dimension: dimension}, nil
+    return &GpuShardedCagraIndex{cIndex: cIndex}, nil
 }
 
 func (gbi *GpuShardedCagraIndex) Load() error {
@@ -137,11 +131,7 @@ func (gbi *GpuShardedCagraIndex) Save(filename string) error {
     return nil
 }
 
-func (gbi *GpuShardedCagraIndex) Search(queries []float32, numQueries uint64, queryDimension uint32, limit uint32, itopkSize uint32) ([]int64, []float32, error) {
-    return gbi.SearchUnsafe(unsafe.Pointer(&queries[0]), numQueries, queryDimension, limit, itopkSize)
-}
-
-func (gbi *GpuShardedCagraIndex) SearchUnsafe(queries unsafe.Pointer, numQueries uint64, queryDimension uint32, limit uint32, itopkSize uint32) ([]int64, []float32, error) {
+func (gbi *GpuShardedCagraIndex) Search(queries unsafe.Pointer, numQueries uint64, queryDimension uint32, limit uint32, itopk_size uint32) ([]int64, []float32, error) {
     if gbi.cIndex == nil {
         return nil, nil, fmt.Errorf("index is not initialized")
     }
@@ -150,13 +140,13 @@ func (gbi *GpuShardedCagraIndex) SearchUnsafe(queries unsafe.Pointer, numQueries
     }
 
     var errmsg *C.char
-    cResult := C.GpuShardedCagraIndex_SearchUnsafe(
+    cResult := C.GpuShardedCagraIndex_Search(
         gbi.cIndex,
         queries,
         C.uint64_t(numQueries),
         C.uint32_t(queryDimension),
         C.uint32_t(limit),
-        C.size_t(itopkSize),
+        C.size_t(itopk_size),
         unsafe.Pointer(&errmsg),
     )
 
@@ -186,6 +176,7 @@ func (gbi *GpuShardedCagraIndex) Destroy() error {
     var errmsg *C.char
     C.GpuShardedCagraIndex_Destroy(gbi.cIndex, unsafe.Pointer(&errmsg))
     gbi.cIndex = nil
+
     if errmsg != nil {
         errStr := C.GoString(errmsg)
         C.free(unsafe.Pointer(errmsg))

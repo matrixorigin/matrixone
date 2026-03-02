@@ -35,6 +35,32 @@ const (
     UINT8 Quantization = C.Quantization_UINT8
 )
 
+// Float16 is a 16-bit floating point type (IEEE 754-2008).
+// Go does not have a native float16 type, so we use uint16 to represent its memory layout.
+type Float16 uint16
+
+// VectorType is a constraint for types that can be used as vector data.
+type VectorType interface {
+    float32 | Float16 | int8 | uint8
+}
+
+// GetQuantization returns the Quantization enum for a given VectorType.
+func GetQuantization[T VectorType]() Quantization {
+    var zero T
+    switch any(zero).(type) {
+    case float32:
+        return F32
+    case Float16:
+        return F16
+    case int8:
+        return INT8
+    case uint8:
+        return UINT8
+    default:
+        panic("unsupported vector type")
+    }
+}
+
 // GetGpuDeviceCount returns the number of available CUDA devices.
 func GetGpuDeviceCount() (int, error) {
     count := int(C.GpuGetDeviceCount())

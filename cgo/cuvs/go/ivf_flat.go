@@ -14,26 +14,22 @@ import (
 )
 
 // GpuIvfFlatIndex represents the C++ GpuIvfFlatIndex object
-type GpuIvfFlatIndex struct {
+type GpuIvfFlatIndex[T VectorType] struct {
     cIndex C.GpuIvfFlatIndexC
     nList uint32
     dimension uint32
 }
 
 // NewGpuIvfFlatIndex creates a new GpuIvfFlatIndex instance for building from dataset
-func NewGpuIvfFlatIndex(dataset []float32, countVectors uint64, dimension uint32, metric DistanceType, nList uint32, nthread uint32, deviceID int) (*GpuIvfFlatIndex, error) {
-    return NewGpuIvfFlatIndexUnsafe(unsafe.Pointer(&dataset[0]), countVectors, dimension, metric, nList, nthread, deviceID, F32)
-}
-
-// NewGpuIvfFlatIndexUnsafe creates a new GpuIvfFlatIndex instance with generic pointer and quantization type
-func NewGpuIvfFlatIndexUnsafe(dataset unsafe.Pointer, countVectors uint64, dimension uint32, metric DistanceType, nList uint32, nthread uint32, deviceID int, qtype Quantization) (*GpuIvfFlatIndex, error) {
-    if dataset == nil || countVectors == 0 || dimension == 0 {
+func NewGpuIvfFlatIndex[T VectorType](dataset []T, countVectors uint64, dimension uint32, metric DistanceType, nList uint32, nthread uint32, deviceID int) (*GpuIvfFlatIndex[T], error) {
+    if len(dataset) == 0 || countVectors == 0 || dimension == 0 {
         return nil, fmt.Errorf("dataset, countVectors, and dimension cannot be zero")
     }
 
+    qtype := GetQuantization[T]()
     var errmsg *C.char
-    cIndex := C.GpuIvfFlatIndex_NewUnsafe(
-        dataset,
+    cIndex := C.GpuIvfFlatIndex_New(
+        unsafe.Pointer(&dataset[0]),
         C.uint64_t(countVectors),
         C.uint32_t(dimension),
         C.CuvsDistanceTypeC(metric),
@@ -53,25 +49,21 @@ func NewGpuIvfFlatIndexUnsafe(dataset unsafe.Pointer, countVectors uint64, dimen
     if cIndex == nil {
         return nil, fmt.Errorf("failed to create GpuIvfFlatIndex")
     }
-    return &GpuIvfFlatIndex{cIndex: cIndex, nList: nList, dimension: dimension}, nil
+    return &GpuIvfFlatIndex[T]{cIndex: cIndex, nList: nList, dimension: dimension}, nil
 }
 
 // NewGpuIvfFlatIndexFromFile creates a new GpuIvfFlatIndex instance for loading from file
-func NewGpuIvfFlatIndexFromFile(filename string, dimension uint32, metric DistanceType, nthread uint32, deviceID int) (*GpuIvfFlatIndex, error) {
-    return NewGpuIvfFlatIndexFromFileUnsafe(filename, dimension, metric, nthread, deviceID, F32)
-}
-
-// NewGpuIvfFlatIndexFromFileUnsafe creates a new GpuIvfFlatIndex instance for loading from file with quantization type
-func NewGpuIvfFlatIndexFromFileUnsafe(filename string, dimension uint32, metric DistanceType, nthread uint32, deviceID int, qtype Quantization) (*GpuIvfFlatIndex, error) {
+func NewGpuIvfFlatIndexFromFile[T VectorType](filename string, dimension uint32, metric DistanceType, nthread uint32, deviceID int) (*GpuIvfFlatIndex[T], error) {
     if filename == "" || dimension == 0 {
         return nil, fmt.Errorf("filename and dimension cannot be empty or zero")
     }
 
+    qtype := GetQuantization[T]()
     cFilename := C.CString(filename)
     defer C.free(unsafe.Pointer(cFilename))
 
     var errmsg *C.char
-    cIndex := C.GpuIvfFlatIndex_NewFromFileUnsafe(
+    cIndex := C.GpuIvfFlatIndex_NewFromFile(
         cFilename,
         C.uint32_t(dimension),
         C.CuvsDistanceTypeC(metric),
@@ -90,11 +82,11 @@ func NewGpuIvfFlatIndexFromFileUnsafe(filename string, dimension uint32, metric 
     if cIndex == nil {
         return nil, fmt.Errorf("failed to create GpuIvfFlatIndex from file")
     }
-    return &GpuIvfFlatIndex{cIndex: cIndex, nList: 0, dimension: dimension}, nil
+    return &GpuIvfFlatIndex[T]{cIndex: cIndex, nList: 0, dimension: dimension}, nil
 }
 
 // Load loads the index to the GPU
-func (gbi *GpuIvfFlatIndex) Load() error {
+func (gbi *GpuIvfFlatIndex[T]) Load() error {
     if gbi.cIndex == nil {
         return fmt.Errorf("GpuIvfFlatIndex is not initialized")
     }
@@ -110,7 +102,7 @@ func (gbi *GpuIvfFlatIndex) Load() error {
 }
 
 // Save saves the index to file
-func (gbi *GpuIvfFlatIndex) Save(filename string) error {
+func (gbi *GpuIvfFlatIndex[T]) Save(filename string) error {
     if gbi.cIndex == nil {
         return fmt.Errorf("GpuIvfFlatIndex is not initialized")
     }
@@ -128,23 +120,18 @@ func (gbi *GpuIvfFlatIndex) Save(filename string) error {
 }
 
 // Search performs a search operation
-func (gbi *GpuIvfFlatIndex) Search(queries []float32, numQueries uint64, queryDimension uint32, limit uint32, n_probes uint32) ([]int64, []float32, error) {
-	return gbi.SearchUnsafe(unsafe.Pointer(&queries[0]), numQueries, queryDimension, limit, n_probes)
-}
-
-// SearchUnsafe performs a search operation with generic pointer
-func (gbi *GpuIvfFlatIndex) SearchUnsafe(queries unsafe.Pointer, numQueries uint64, queryDimension uint32, limit uint32, n_probes uint32) ([]int64, []float32, error) {
+func (gbi *GpuIvfFlatIndex[T]) Search(queries []T, numQueries uint64, queryDimension uint32, limit uint32, n_probes uint32) ([]int64, []float32, error) {
 	if gbi.cIndex == nil {
 		return nil, nil, fmt.Errorf("GpuIvfFlatIndex is not initialized")
 	}
-	if queries == nil || numQueries == 0 || queryDimension == 0 {
+	if len(queries) == 0 || numQueries == 0 || queryDimension == 0 {
 		return nil, nil, fmt.Errorf("queries, numQueries, and queryDimension cannot be zero")
 	}
 
 	var errmsg *C.char
-	cResult := C.GpuIvfFlatIndex_SearchUnsafe(
+	cResult := C.GpuIvfFlatIndex_Search(
 		gbi.cIndex,
-		queries,
+		unsafe.Pointer(&queries[0]),
 		C.uint64_t(numQueries),
 		C.uint32_t(queryDimension),
 		C.uint32_t(limit),
@@ -173,7 +160,7 @@ func (gbi *GpuIvfFlatIndex) SearchUnsafe(queries unsafe.Pointer, numQueries uint
 }
 
 // Destroy frees the C++ GpuIvfFlatIndex instance
-func (gbi *GpuIvfFlatIndex) Destroy() error {
+func (gbi *GpuIvfFlatIndex[T]) Destroy() error {
     if gbi.cIndex == nil {
         return nil
     }
@@ -189,7 +176,7 @@ func (gbi *GpuIvfFlatIndex) Destroy() error {
 }
 
 // GetCenters retrieves the centroids
-func (gbi *GpuIvfFlatIndex) GetCenters() ([]float32, error) {
+func (gbi *GpuIvfFlatIndex[T]) GetCenters() ([]float32, error) {
     if gbi.cIndex == nil {
         return nil, fmt.Errorf("GpuIvfFlatIndex is not initialized")
     }

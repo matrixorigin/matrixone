@@ -48,15 +48,9 @@ struct GpuShardedIvfFlatIndexAny {
     }
 };
 
-GpuShardedIvfFlatIndexC GpuShardedIvfFlatIndex_New(const float* dataset_data, uint64_t count_vectors, uint32_t dimension, 
+GpuShardedIvfFlatIndexC GpuShardedIvfFlatIndex_New(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, 
                                                   CuvsDistanceTypeC metric_c, uint32_t n_list, 
-                                                  const int* devices, uint32_t num_devices, uint32_t nthread, void* errmsg) {
-    return GpuShardedIvfFlatIndex_NewUnsafe(dataset_data, count_vectors, dimension, metric_c, n_list, devices, num_devices, nthread, Quantization_F32, errmsg);
-}
-
-GpuShardedIvfFlatIndexC GpuShardedIvfFlatIndex_NewUnsafe(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, 
-                                                        CuvsDistanceTypeC metric_c, uint32_t n_list, 
-                                                        const int* devices, uint32_t num_devices, uint32_t nthread, CuvsQuantizationC qtype, void* errmsg) {
+                                                  const int* devices, uint32_t num_devices, uint32_t nthread, CuvsQuantizationC qtype, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         cuvs::distance::DistanceType metric = convert_distance_type_sharded(metric_c);
@@ -78,20 +72,14 @@ GpuShardedIvfFlatIndexC GpuShardedIvfFlatIndex_NewUnsafe(const void* dataset_dat
         }
         return static_cast<GpuShardedIvfFlatIndexC>(new GpuShardedIvfFlatIndexAny(qtype, index_ptr));
     } catch (const std::exception& e) {
-        set_errmsg_sharded(errmsg, "Error in GpuShardedIvfFlatIndex_NewUnsafe", e);
+        set_errmsg_sharded(errmsg, "Error in GpuShardedIvfFlatIndex_New", e);
         return nullptr;
     }
 }
 
 GpuShardedIvfFlatIndexC GpuShardedIvfFlatIndex_NewFromFile(const char* filename, uint32_t dimension, 
                                                           CuvsDistanceTypeC metric_c, 
-                                                          const int* devices, uint32_t num_devices, uint32_t nthread, void* errmsg) {
-    return GpuShardedIvfFlatIndex_NewFromFileUnsafe(filename, dimension, metric_c, devices, num_devices, nthread, Quantization_F32, errmsg);
-}
-
-GpuShardedIvfFlatIndexC GpuShardedIvfFlatIndex_NewFromFileUnsafe(const char* filename, uint32_t dimension, 
-                                                                CuvsDistanceTypeC metric_c, 
-                                                                const int* devices, uint32_t num_devices, uint32_t nthread, CuvsQuantizationC qtype, void* errmsg) {
+                                                          const int* devices, uint32_t num_devices, uint32_t nthread, CuvsQuantizationC qtype, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         cuvs::distance::DistanceType metric = convert_distance_type_sharded(metric_c);
@@ -113,7 +101,7 @@ GpuShardedIvfFlatIndexC GpuShardedIvfFlatIndex_NewFromFileUnsafe(const char* fil
         }
         return static_cast<GpuShardedIvfFlatIndexC>(new GpuShardedIvfFlatIndexAny(qtype, index_ptr));
     } catch (const std::exception& e) {
-        set_errmsg_sharded(errmsg, "Error in GpuShardedIvfFlatIndex_NewFromFileUnsafe", e);
+        set_errmsg_sharded(errmsg, "Error in GpuShardedIvfFlatIndex_NewFromFile", e);
         return nullptr;
     }
 }
@@ -148,15 +136,9 @@ void GpuShardedIvfFlatIndex_Save(GpuShardedIvfFlatIndexC index_c, const char* fi
     }
 }
 
-GpuShardedIvfFlatSearchResultC GpuShardedIvfFlatIndex_Search(GpuShardedIvfFlatIndexC index_c, const float* queries_data, 
+GpuShardedIvfFlatSearchResultC GpuShardedIvfFlatIndex_Search(GpuShardedIvfFlatIndexC index_c, const void* queries_data, 
                                                             uint64_t num_queries, uint32_t query_dimension, 
                                                             uint32_t limit, uint32_t n_probes, void* errmsg) {
-    return GpuShardedIvfFlatIndex_SearchUnsafe(index_c, queries_data, num_queries, query_dimension, limit, n_probes, errmsg);
-}
-
-GpuShardedIvfFlatSearchResultC GpuShardedIvfFlatIndex_SearchUnsafe(GpuShardedIvfFlatIndexC index_c, const void* queries_data, 
-                                                                  uint64_t num_queries, uint32_t query_dimension, 
-                                                                  uint32_t limit, uint32_t n_probes, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         auto* any = static_cast<GpuShardedIvfFlatIndexAny*>(index_c);
@@ -189,7 +171,7 @@ GpuShardedIvfFlatSearchResultC GpuShardedIvfFlatIndex_SearchUnsafe(GpuShardedIvf
         }
         return static_cast<GpuShardedIvfFlatSearchResultC>(result_ptr);
     } catch (const std::exception& e) {
-        set_errmsg_sharded(errmsg, "Error in GpuShardedIvfFlatIndex_SearchUnsafe", e);
+        set_errmsg_sharded(errmsg, "Error in GpuShardedIvfFlatIndex_Search", e);
         return nullptr;
     }
 }

@@ -9,7 +9,7 @@
 #include <cstring>
 
 // Helper to set error message
-void set_errmsg(void* errmsg, const std::string& prefix, const std::exception& e) {
+static void set_errmsg(void* errmsg, const std::string& prefix, const std::exception& e) {
     if (errmsg) {
         std::string err_str = prefix + ": " + std::string(e.what());
         char* msg = (char*)malloc(err_str.length() + 1);
@@ -23,7 +23,7 @@ void set_errmsg(void* errmsg, const std::string& prefix, const std::exception& e
 }
 
 // Helper to convert C enum to C++ enum
-cuvs::distance::DistanceType convert_distance_type(CuvsDistanceTypeC metric_c) {
+static cuvs::distance::DistanceType convert_distance_type(CuvsDistanceTypeC metric_c) {
     switch (metric_c) {
         case DistanceType_L2Expanded: return cuvs::distance::DistanceType::L2Expanded;
         case DistanceType_L1: return cuvs::distance::DistanceType::L1;
@@ -48,11 +48,7 @@ struct GpuBruteForceIndexAny {
     }
 };
 
-GpuBruteForceIndexC GpuBruteForceIndex_New(const float* dataset_data, uint64_t count_vectors, uint32_t dimension, CuvsDistanceTypeC metric_c, uint32_t nthread, int device_id, void* errmsg) {
-    return GpuBruteForceIndex_NewUnsafe(dataset_data, count_vectors, dimension, metric_c, nthread, device_id, Quantization_F32, errmsg);
-}
-
-GpuBruteForceIndexC GpuBruteForceIndex_NewUnsafe(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, CuvsDistanceTypeC metric_c, uint32_t nthread, int device_id, CuvsQuantizationC qtype, void* errmsg) {
+GpuBruteForceIndexC GpuBruteForceIndex_New(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, CuvsDistanceTypeC metric_c, uint32_t nthread, int device_id, CuvsQuantizationC qtype, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         cuvs::distance::DistanceType metric = convert_distance_type(metric_c);
@@ -69,7 +65,7 @@ GpuBruteForceIndexC GpuBruteForceIndex_NewUnsafe(const void* dataset_data, uint6
         }
         return static_cast<GpuBruteForceIndexC>(new GpuBruteForceIndexAny(qtype, index_ptr));
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in GpuBruteForceIndex_NewUnsafe", e);
+        set_errmsg(errmsg, "Error in GpuBruteForceIndex_New", e);
         return nullptr;
     }
 }
@@ -88,11 +84,7 @@ void GpuBruteForceIndex_Load(GpuBruteForceIndexC index_c, void* errmsg) {
     }
 }
 
-GpuBruteForceSearchResultC GpuBruteForceIndex_Search(GpuBruteForceIndexC index_c, const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, void* errmsg) {
-    return GpuBruteForceIndex_SearchUnsafe(index_c, queries_data, num_queries, query_dimension, limit, errmsg);
-}
-
-GpuBruteForceSearchResultC GpuBruteForceIndex_SearchUnsafe(GpuBruteForceIndexC index_c, const void* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, void* errmsg) {
+GpuBruteForceSearchResultC GpuBruteForceIndex_Search(GpuBruteForceIndexC index_c, const void* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         auto* any = static_cast<GpuBruteForceIndexAny*>(index_c);
@@ -114,7 +106,7 @@ GpuBruteForceSearchResultC GpuBruteForceIndex_SearchUnsafe(GpuBruteForceIndexC i
         }
         return static_cast<GpuBruteForceSearchResultC>(result_ptr);
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in GpuBruteForceIndex_SearchUnsafe", e);
+        set_errmsg(errmsg, "Error in GpuBruteForceIndex_Search", e);
         return nullptr;
     }
 }

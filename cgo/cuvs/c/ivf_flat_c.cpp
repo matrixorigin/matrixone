@@ -48,11 +48,7 @@ struct GpuIvfFlatIndexAny {
     }
 };
 
-GpuIvfFlatIndexC GpuIvfFlatIndex_New(const float* dataset_data, uint64_t count_vectors, uint32_t dimension, CuvsDistanceTypeC metric_c, uint32_t n_list, uint32_t nthread, int device_id, void* errmsg) {
-    return GpuIvfFlatIndex_NewUnsafe(dataset_data, count_vectors, dimension, metric_c, n_list, nthread, device_id, Quantization_F32, errmsg);
-}
-
-GpuIvfFlatIndexC GpuIvfFlatIndex_NewUnsafe(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, CuvsDistanceTypeC metric_c, uint32_t n_list, uint32_t nthread, int device_id, CuvsQuantizationC qtype, void* errmsg) {
+GpuIvfFlatIndexC GpuIvfFlatIndex_New(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, CuvsDistanceTypeC metric_c, uint32_t n_list, uint32_t nthread, int device_id, CuvsQuantizationC qtype, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         cuvs::distance::DistanceType metric = convert_distance_type_ivf(metric_c);
@@ -73,16 +69,12 @@ GpuIvfFlatIndexC GpuIvfFlatIndex_NewUnsafe(const void* dataset_data, uint64_t co
         }
         return static_cast<GpuIvfFlatIndexC>(new GpuIvfFlatIndexAny(qtype, index_ptr));
     } catch (const std::exception& e) {
-        set_errmsg_ivf(errmsg, "Error in GpuIvfFlatIndex_NewUnsafe", e);
+        set_errmsg_ivf(errmsg, "Error in GpuIvfFlatIndex_New", e);
         return nullptr;
     }
 }
 
-GpuIvfFlatIndexC GpuIvfFlatIndex_NewFromFile(const char* filename, uint32_t dimension, CuvsDistanceTypeC metric_c, uint32_t nthread, int device_id, void* errmsg) {
-    return GpuIvfFlatIndex_NewFromFileUnsafe(filename, dimension, metric_c, nthread, device_id, Quantization_F32, errmsg);
-}
-
-GpuIvfFlatIndexC GpuIvfFlatIndex_NewFromFileUnsafe(const char* filename, uint32_t dimension, CuvsDistanceTypeC metric_c, uint32_t nthread, int device_id, CuvsQuantizationC qtype, void* errmsg) {
+GpuIvfFlatIndexC GpuIvfFlatIndex_NewFromFile(const char* filename, uint32_t dimension, CuvsDistanceTypeC metric_c, uint32_t nthread, int device_id, CuvsQuantizationC qtype, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         cuvs::distance::DistanceType metric = convert_distance_type_ivf(metric_c);
@@ -103,7 +95,7 @@ GpuIvfFlatIndexC GpuIvfFlatIndex_NewFromFileUnsafe(const char* filename, uint32_
         }
         return static_cast<GpuIvfFlatIndexC>(new GpuIvfFlatIndexAny(qtype, index_ptr));
     } catch (const std::exception& e) {
-        set_errmsg_ivf(errmsg, "Error in GpuIvfFlatIndex_NewFromFileUnsafe", e);
+        set_errmsg_ivf(errmsg, "Error in GpuIvfFlatIndex_NewFromFile", e);
         return nullptr;
     }
 }
@@ -138,11 +130,7 @@ void GpuIvfFlatIndex_Save(GpuIvfFlatIndexC index_c, const char* filename, void* 
     }
 }
 
-GpuIvfFlatSearchResultC GpuIvfFlatIndex_Search(GpuIvfFlatIndexC index_c, const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, uint32_t n_probes, void* errmsg) {
-    return GpuIvfFlatIndex_SearchUnsafe(index_c, queries_data, num_queries, query_dimension, limit, n_probes, errmsg);
-}
-
-GpuIvfFlatSearchResultC GpuIvfFlatIndex_SearchUnsafe(GpuIvfFlatIndexC index_c, const void* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, uint32_t n_probes, void* errmsg) {
+GpuIvfFlatSearchResultC GpuIvfFlatIndex_Search(GpuIvfFlatIndexC index_c, const void* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, uint32_t n_probes, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         auto* any = static_cast<GpuIvfFlatIndexAny*>(index_c);
@@ -175,7 +163,7 @@ GpuIvfFlatSearchResultC GpuIvfFlatIndex_SearchUnsafe(GpuIvfFlatIndexC index_c, c
         }
         return static_cast<GpuIvfFlatSearchResultC>(result_ptr);
     } catch (const std::exception& e) {
-        set_errmsg_ivf(errmsg, "Error in GpuIvfFlatIndex_SearchUnsafe", e);
+        set_errmsg_ivf(errmsg, "Error in GpuIvfFlatIndex_Search", e);
         return nullptr;
     }
 }

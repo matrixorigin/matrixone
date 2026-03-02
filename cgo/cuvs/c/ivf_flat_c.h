@@ -13,17 +13,11 @@ typedef void* GpuIvfFlatIndexC;
 // Opaque pointer to the C++ IVF search result object
 typedef void* GpuIvfFlatSearchResultC;
 
-// Constructor for building from dataset (Float32 specific)
-GpuIvfFlatIndexC GpuIvfFlatIndex_New(const float* dataset_data, uint64_t count_vectors, uint32_t dimension, CuvsDistanceTypeC metric, uint32_t n_list, uint32_t nthread, int device_id, void* errmsg);
+// Constructor for building from dataset
+GpuIvfFlatIndexC GpuIvfFlatIndex_New(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, CuvsDistanceTypeC metric, uint32_t n_list, uint32_t nthread, int device_id, CuvsQuantizationC qtype, void* errmsg);
 
-// Constructor for building from dataset (Generic/Unsafe)
-GpuIvfFlatIndexC GpuIvfFlatIndex_NewUnsafe(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, CuvsDistanceTypeC metric, uint32_t n_list, uint32_t nthread, int device_id, CuvsQuantizationC qtype, void* errmsg);
-
-// Constructor for loading from file (Float32 specific)
-GpuIvfFlatIndexC GpuIvfFlatIndex_NewFromFile(const char* filename, uint32_t dimension, CuvsDistanceTypeC metric, uint32_t nthread, int device_id, void* errmsg);
-
-// Constructor for loading from file (Generic/Unsafe)
-GpuIvfFlatIndexC GpuIvfFlatIndex_NewFromFileUnsafe(const char* filename, uint32_t dimension, CuvsDistanceTypeC metric, uint32_t nthread, int device_id, CuvsQuantizationC qtype, void* errmsg);
+// Constructor for loading from file
+GpuIvfFlatIndexC GpuIvfFlatIndex_NewFromFile(const char* filename, uint32_t dimension, CuvsDistanceTypeC metric, uint32_t nthread, int device_id, CuvsQuantizationC qtype, void* errmsg);
 
 // Loads the index to the GPU (either builds or loads from file depending on constructor)
 void GpuIvfFlatIndex_Load(GpuIvfFlatIndexC index_c, void* errmsg);
@@ -31,11 +25,8 @@ void GpuIvfFlatIndex_Load(GpuIvfFlatIndexC index_c, void* errmsg);
 // Saves the index to file
 void GpuIvfFlatIndex_Save(GpuIvfFlatIndexC index_c, const char* filename, void* errmsg);
 
-// Performs a search operation (Float32 specific)
-GpuIvfFlatSearchResultC GpuIvfFlatIndex_Search(GpuIvfFlatIndexC index_c, const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, uint32_t n_probes, void* errmsg);
-
-// Performs a search operation (Generic/Unsafe)
-GpuIvfFlatSearchResultC GpuIvfFlatIndex_SearchUnsafe(GpuIvfFlatIndexC index_c, const void* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, uint32_t n_probes, void* errmsg);
+// Performs a search operation
+GpuIvfFlatSearchResultC GpuIvfFlatIndex_Search(GpuIvfFlatIndexC index_c, const void* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, uint32_t n_probes, void* errmsg);
 
 // Retrieves the results from a search operation
 void GpuIvfFlatIndex_GetResults(GpuIvfFlatSearchResultC result_c, uint64_t num_queries, uint32_t limit, int64_t* neighbors, float* distances);

@@ -14,24 +14,20 @@ import (
 )
 
 // GpuBruteForceIndex represents the C++ GpuBruteForceIndex object
-type GpuBruteForceIndex struct {
+type GpuBruteForceIndex[T VectorType] struct {
     cIndex C.GpuBruteForceIndexC
 }
 
 // NewGpuBruteForceIndex creates a new GpuBruteForceIndex instance
-func NewGpuBruteForceIndex(dataset []float32, countVectors uint64, dimension uint32, metric DistanceType, nthread uint32, deviceID int) (*GpuBruteForceIndex, error) {
-    return NewGpuBruteForceIndexUnsafe(unsafe.Pointer(&dataset[0]), countVectors, dimension, metric, nthread, deviceID, F32)
-}
-
-// NewGpuBruteForceIndexUnsafe creates a new GpuBruteForceIndex instance with generic pointer and quantization type
-func NewGpuBruteForceIndexUnsafe(dataset unsafe.Pointer, countVectors uint64, dimension uint32, metric DistanceType, nthread uint32, deviceID int, qtype Quantization) (*GpuBruteForceIndex, error) {
-    if dataset == nil || countVectors == 0 || dimension == 0 {
+func NewGpuBruteForceIndex[T VectorType](dataset []T, countVectors uint64, dimension uint32, metric DistanceType, nthread uint32, deviceID int) (*GpuBruteForceIndex[T], error) {
+    if len(dataset) == 0 || countVectors == 0 || dimension == 0 {
         return nil, fmt.Errorf("dataset, countVectors, and dimension cannot be zero")
     }
 
+    qtype := GetQuantization[T]()
     var errmsg *C.char
-    cIndex := C.GpuBruteForceIndex_NewUnsafe(
-        dataset,
+    cIndex := C.GpuBruteForceIndex_New(
+        unsafe.Pointer(&dataset[0]),
         C.uint64_t(countVectors),
         C.uint32_t(dimension),
         C.CuvsDistanceTypeC(metric),
@@ -50,11 +46,11 @@ func NewGpuBruteForceIndexUnsafe(dataset unsafe.Pointer, countVectors uint64, di
     if cIndex == nil {
         return nil, fmt.Errorf("failed to create GpuBruteForceIndex")
     }
-    return &GpuBruteForceIndex{cIndex: cIndex}, nil
+    return &GpuBruteForceIndex[T]{cIndex: cIndex}, nil
 }
 
 // Load loads the index to the GPU
-func (gbi *GpuBruteForceIndex) Load() error {
+func (gbi *GpuBruteForceIndex[T]) Load() error {
     if gbi.cIndex == nil {
         return fmt.Errorf("GpuBruteForceIndex is not initialized")
     }
@@ -69,23 +65,18 @@ func (gbi *GpuBruteForceIndex) Load() error {
 }
 
 // Search performs a search operation
-func (gbi *GpuBruteForceIndex) Search(queries []float32, numQueries uint64, queryDimension uint32, limit uint32) ([]int64, []float32, error) {
-	return gbi.SearchUnsafe(unsafe.Pointer(&queries[0]), numQueries, queryDimension, limit)
-}
-
-// SearchUnsafe performs a search operation with generic pointer
-func (gbi *GpuBruteForceIndex) SearchUnsafe(queries unsafe.Pointer, numQueries uint64, queryDimension uint32, limit uint32) ([]int64, []float32, error) {
+func (gbi *GpuBruteForceIndex[T]) Search(queries []T, numQueries uint64, queryDimension uint32, limit uint32) ([]int64, []float32, error) {
 	if gbi.cIndex == nil {
 		return nil, nil, fmt.Errorf("GpuBruteForceIndex is not initialized")
 	}
-	if queries == nil || numQueries == 0 || queryDimension == 0 {
+	if len(queries) == 0 || numQueries == 0 || queryDimension == 0 {
 		return nil, nil, fmt.Errorf("queries, numQueries, and queryDimension cannot be zero")
 	}
 
 	var errmsg *C.char
-	cResult := C.GpuBruteForceIndex_SearchUnsafe(
+	cResult := C.GpuBruteForceIndex_Search(
 		gbi.cIndex,
-		queries,
+		unsafe.Pointer(&queries[0]),
 		C.uint64_t(numQueries),
 		C.uint32_t(queryDimension),
 		C.uint32_t(limit),
@@ -113,7 +104,7 @@ func (gbi *GpuBruteForceIndex) SearchUnsafe(queries unsafe.Pointer, numQueries u
 }
 
 // Destroy frees the C++ GpuBruteForceIndex instance
-func (gbi *GpuBruteForceIndex) Destroy() error {
+func (gbi *GpuBruteForceIndex[T]) Destroy() error {
     if gbi.cIndex == nil {
         return nil
     }

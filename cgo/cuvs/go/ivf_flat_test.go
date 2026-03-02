@@ -84,7 +84,7 @@ func TestGpuIvfFlatIndexSaveLoad(t *testing.T) {
 
     // 2. Load from file and Search
     {
-        index, err := NewGpuIvfFlatIndexFromFile(filename, dimension, metric, nthread, deviceID)
+        index, err := NewGpuIvfFlatIndexFromFile[float32](filename, dimension, metric, nthread, deviceID)
         if err != nil {
             t.Fatalf("Failed to create from file: %v", err)
         }
