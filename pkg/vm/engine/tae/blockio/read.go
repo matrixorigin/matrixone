@@ -719,72 +719,6 @@ func buildRowidColumn(
 	return
 }
 
-type cnCreatedObjectCreateTSProvider interface {
-	GetObjectCreateTS(bid *objectio.Blockid) (types.TS, bool)
-}
-
-func getCreateTSLookup(
-	ds engine.DataSource,
-	info *objectio.BlockInfo,
-) func() (types.TS, bool) {
-	if ds == nil || info == nil || !info.IsCNCreated() {
-		return nil
-	}
-	p, ok := ds.(cnCreatedObjectCreateTSProvider)
-	if !ok {
-		return nil
-	}
-	return func() (types.TS, bool) {
-		return p.GetObjectCreateTS(&info.BlockID)
-	}
-}
-
-func fillCNCreatedCommitTSIfNeeded(
-	cols []uint16,
-	cacheVectors containers.Vectors,
-	m *mpool.MPool,
-	info *objectio.BlockInfo,
-	getCreateTS func() (types.TS, bool),
-) error {
-	if getCreateTS == nil {
-		return nil
-	}
-
-	createTS, ok := getCreateTS()
-	if !ok {
-		logutil.Infof(
-			"AAAA blockio commit fill skipped: no createTS, blk=%s",
-			info.BlockID.String(),
-		)
-		return nil
-	}
-
-	for i, seq := range cols {
-		if seq != objectio.SEQNUM_COMMITTS || i >= len(cacheVectors) {
-			continue
-		}
-
-		vec := &cacheVectors[i]
-		if vec.Length() == 0 || !vec.AllNull() {
-			continue
-		}
-
-		filled, err := vector.NewConstFixed(types.T_TS.ToType(), createTS, vec.Length(), m)
-		if err != nil {
-			return err
-		}
-		cacheVectors[i] = *filled
-		logutil.Infof(
-			"AAAA blockio commit filled from createTS: blk=%s rows=%d createTS=%s",
-			info.BlockID.String(),
-			vec.Length(),
-			createTS.ToString(),
-		)
-	}
-
-	return nil
-}
-
 // This func load columns from storage of specified column indexes
 // No memory copy, the loaded data is directly stored in the cacheVectors
 // if `phyAddrColumnPos` >= 0, it means one of the columns is the physical address column,
@@ -803,7 +737,7 @@ func readBlockData(
 	colTypes []types.Type,
 	phyAddrColumnPos int,
 	info *objectio.BlockInfo,
-	ds engine.DataSource,
+	_ engine.DataSource,
 	ts types.TS,
 	policy fileservice.Policy,
 	cacheVectors containers.Vectors,
@@ -817,7 +751,6 @@ func readBlockData(
 	cacheVectors.Free(m)
 
 	idxes, typs := excludePhyAddrColumn(colIndexes, colTypes, phyAddrColumnPos)
-	createTSLookup := getCreateTSLookup(ds, info)
 
 	readColumns := func(
 		cols []uint16,
@@ -834,24 +767,6 @@ func readBlockData(
 		)
 		if err2 != nil {
 			return
-		}
-
-		err2 = fillCNCreatedCommitTSIfNeeded(cols, cacheVectors2, m, info, createTSLookup)
-		if err2 != nil {
-			return
-		}
-
-		for i, seq := range cols {
-			if seq != objectio.SEQNUM_COMMITTS || i >= len(cacheVectors2) {
-				continue
-			}
-			if cacheVectors2[i].Length() > 0 && cacheVectors2[i].AllNull() {
-				logutil.Infof(
-					"AAAA blockio commit remains null after fill: blk=%s rows=%d",
-					info.BlockID.String(),
-					cacheVectors2[i].Length(),
-				)
-			}
 		}
 		return
 	}
