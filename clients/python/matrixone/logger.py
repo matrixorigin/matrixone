@@ -116,9 +116,13 @@ class MatrixOneLogger:
         """
         frame = sys._getframe(stack_depth)
         record = self.logger.makeRecord(
-            self.logger.name, level,
-            frame.f_code.co_filename, frame.f_lineno,
-            message, (), exc_info,
+            self.logger.name,
+            level,
+            frame.f_code.co_filename,
+            frame.f_lineno,
+            message,
+            (),
+            exc_info,
         )
         self.logger.handle(record)
 

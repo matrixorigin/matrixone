@@ -49,7 +49,6 @@ from .sqlalchemy_ext import MatrixOneDialect
 from .vector_manager import VectorManager
 from .version import get_version_manager
 
-
 _VALID_LOG_MODES = frozenset(('off', 'auto', 'simple', 'full', None))
 
 
@@ -80,6 +79,7 @@ def _extract_errno(exc: Exception) -> Optional[int]:
             pass
     # Try to parse "(NNNNN, '...')" from the string representation
     import re
+
     m = re.search(r'\((\d{4,5}),\s', str(exc))
     if m:
         try:
@@ -91,30 +91,30 @@ def _extract_errno(exc: Exception) -> Optional[int]:
 
 # ── MatrixOne / MySQL error code constants ──────────────────────────
 # MySQL-compatible codes (returned by MatrixOne for standard errors)
-_MYSQL_BAD_DB = 1049            # Unknown database
-_MYSQL_TABLE_EXISTS = 1050      # Table already exists
-_MYSQL_BAD_FIELD = 1054         # Unknown column
-_MYSQL_DUP_ENTRY = 1062        # Duplicate entry
-_MYSQL_PARSE_ERROR = 1064       # SQL parser error
-_MYSQL_NULL_VIOLATION = 1048    # Column cannot be null
-_MYSQL_DUP_KEYNAME = 1061      # Duplicate key name
-_MYSQL_UNKNOWN_ERROR = 1105     # Generic unknown error (many moerr codes map here)
-_MYSQL_NO_SUCH_TABLE = 1146    # No such table
+_MYSQL_BAD_DB = 1049  # Unknown database
+_MYSQL_TABLE_EXISTS = 1050  # Table already exists
+_MYSQL_BAD_FIELD = 1054  # Unknown column
+_MYSQL_DUP_ENTRY = 1062  # Duplicate entry
+_MYSQL_PARSE_ERROR = 1064  # SQL parser error
+_MYSQL_NULL_VIOLATION = 1048  # Column cannot be null
+_MYSQL_DUP_KEYNAME = 1061  # Duplicate key name
+_MYSQL_UNKNOWN_ERROR = 1105  # Generic unknown error (many moerr codes map here)
+_MYSQL_NO_SUCH_TABLE = 1146  # No such table
 
 # MatrixOne-specific codes (moerr package, sometimes sent directly)
-_MO_INTERNAL = 20101           # internal error (permission denied, OOM, etc. — classified by message text)
-_MO_NOT_SUPPORTED = 20105      # not supported
-_MO_INVALID_INPUT = 20301      # invalid input
-_MO_SYNTAX_ERROR = 20302       # SQL syntax error
-_MO_PARSE_ERROR = 20303        # SQL parser error
+_MO_INTERNAL = 20101  # internal error (permission denied, OOM, etc. — classified by message text)
+_MO_NOT_SUPPORTED = 20105  # not supported
+_MO_INVALID_INPUT = 20301  # invalid input
+_MO_SYNTAX_ERROR = 20302  # SQL syntax error
+_MO_PARSE_ERROR = 20303  # SQL parser error
 _MO_CONSTRAINT_VIOLATION = 20304
-_MO_DUPLICATE_ENTRY = 20307    # Duplicate entry
-_MO_BAD_FIELD = 20309          # Unknown column
-_MO_BAD_DB = 20402             # Unknown database
-_MO_NO_SUCH_TABLE = 20403      # No such table
+_MO_DUPLICATE_ENTRY = 20307  # Duplicate entry
+_MO_BAD_FIELD = 20309  # Unknown column
+_MO_BAD_DB = 20402  # Unknown database
+_MO_NO_SUCH_TABLE = 20403  # No such table
 _MO_TABLE_ALREADY_EXISTS = 20421  # Table already exists
 _MO_DB_ALREADY_EXISTS = 20420  # Database already exists
-_MO_PRIMARY_KEY_DUP = 20623    # Primary key duplicated
+_MO_PRIMARY_KEY_DUP = 20623  # Primary key duplicated
 
 
 def _classify_db_error(exc: Exception, sql_or_stmt: Any = None) -> QueryError:
@@ -146,9 +146,7 @@ def _classify_db_error(exc: Exception, sql_or_stmt: Any = None) -> QueryError:
     # Check message first: MatrixOne sometimes wraps "does not exist" inside errno 1064 (parse error)
     not_found_msg = 'does not exist' in msg_lower or 'no such table' in msg_lower or "doesn't exist" in msg_lower
     if errno in (_MYSQL_NO_SUCH_TABLE, _MO_NO_SUCH_TABLE, _MYSQL_BAD_DB, _MO_BAD_DB) or not_found_msg:
-        match = re.search(
-            r"(?:table|database)\s+[\"']?([\w.]+)[\"']?\s+does not exist", error_msg, re.IGNORECASE
-        )
+        match = re.search(r"(?:table|database)\s+[\"']?([\w.]+)[\"']?\s+does not exist", error_msg, re.IGNORECASE)
         if not match:
             match = re.search(r"no such table\s+([\w.]+)", error_msg, re.IGNORECASE)
         if not match:
@@ -168,8 +166,7 @@ def _classify_db_error(exc: Exception, sql_or_stmt: Any = None) -> QueryError:
         if match:
             name = match.group(1)
             return QueryError(
-                f"Table '{name}' already exists. "
-                f"Use DROP TABLE {name} or client.drop_table() to remove it first."
+                f"Table '{name}' already exists. " f"Use DROP TABLE {name} or client.drop_table() to remove it first."
             )
         return QueryError(f"Object already exists: {error_msg}")
 
@@ -178,8 +175,7 @@ def _classify_db_error(exc: Exception, sql_or_stmt: Any = None) -> QueryError:
         errno is None and 'duplicate' in msg_lower
     ):
         return QueryError(
-            f"Duplicate entry error: {error_msg}. "
-            f"Check for duplicate primary key or unique constraint violations."
+            f"Duplicate entry error: {error_msg}. " f"Check for duplicate primary key or unique constraint violations."
         )
 
     # ── SQL syntax / parse error ──
@@ -977,14 +973,10 @@ class Client(BaseMatrixOneClient):
                 if result.returns_rows:
                     # For SELECT queries, we can't consume the result to count rows
                     # So we just log without row count
-                    self.logger.log_query(
-                        sql, execution_time, None, success=True, log_mode=log_mode
-                    )
+                    self.logger.log_query(sql, execution_time, None, success=True, log_mode=log_mode)
                 else:
                     # For DML queries (INSERT/UPDATE/DELETE), we can get rowcount
-                    self.logger.log_query(
-                        sql, execution_time, result.rowcount, success=True, log_mode=log_mode
-                    )
+                    self.logger.log_query(sql, execution_time, result.rowcount, success=True, log_mode=log_mode)
             except Exception:
                 # Fallback: just log the query without row count
                 self.logger.log_query(sql, execution_time, None, success=True, log_mode=log_mode)
@@ -1322,16 +1314,12 @@ class Client(BaseMatrixOneClient):
                     columns = list(result.keys())
                     rows = result.fetchall()
                     result_set = ResultSet(columns, rows)
-                    self.logger.log_query(
-                        sql_or_stmt, execution_time, len(rows), success=True, log_mode=log_mode
-                    )
+                    self.logger.log_query(sql_or_stmt, execution_time, len(rows), success=True, log_mode=log_mode)
                     return result_set
                 else:
                     # INSERT/UPDATE/DELETE query
                     result_set = ResultSet([], [], affected_rows=result.rowcount)
-                    self.logger.log_query(
-                        sql_or_stmt, execution_time, result.rowcount, success=True, log_mode=log_mode
-                    )
+                    self.logger.log_query(sql_or_stmt, execution_time, result.rowcount, success=True, log_mode=log_mode)
                     return result_set
 
         except Exception as e:
@@ -3414,9 +3402,7 @@ class Session(SQLAlchemySession):
 
             # Log query
             if hasattr(result, 'returns_rows') and result.returns_rows:
-                self.client.logger.log_query(
-                    original_sql, execution_time, None, success=True, log_mode=log_mode
-                )
+                self.client.logger.log_query(original_sql, execution_time, None, success=True, log_mode=log_mode)
             else:
                 self.client.logger.log_query(
                     original_sql,

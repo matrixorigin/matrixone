@@ -662,9 +662,7 @@ class Session(SQLAlchemySession):
 
             # Log query
             if hasattr(result, 'returns_rows') and result.returns_rows:
-                self.client.logger.log_query(
-                    original_sql, execution_time, None, success=True, log_mode=log_mode
-                )
+                self.client.logger.log_query(original_sql, execution_time, None, success=True, log_mode=log_mode)
             else:
                 self.client.logger.log_query(
                     original_sql,
@@ -686,6 +684,7 @@ class Session(SQLAlchemySession):
             )
             self.client.logger.log_error(e, context="Session query execution")
             from .client import _classify_db_error
+
             raise _classify_db_error(e, sql_or_stmt) from None
 
     def insert(self, table_name: str, data: dict[str, Any]) -> "ResultSet":
@@ -1265,9 +1264,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
 
             # Log query
             if hasattr(result, 'returns_rows') and result.returns_rows:
-                self.client.logger.log_query(
-                    original_sql, execution_time, None, success=True, log_mode=log_mode
-                )
+                self.client.logger.log_query(original_sql, execution_time, None, success=True, log_mode=log_mode)
             else:
                 self.client.logger.log_query(
                     original_sql,
@@ -1289,6 +1286,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
             )
             self.client.logger.log_error(e, context="Async session query execution")
             from .client import _classify_db_error
+
             raise _classify_db_error(e, sql_or_stmt) from None
 
     async def insert(self, table_name_or_model, data: dict):

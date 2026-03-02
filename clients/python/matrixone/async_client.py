@@ -1019,9 +1019,7 @@ class AsyncClient(BaseMatrixOneClient):
 
         return self
 
-    async def _execute_with_logging(
-        self, connection, sql: str, context: str = "Async SQL execution", log_mode: str = None
-    ):
+    async def _execute_with_logging(self, connection, sql: str, context: str = "Async SQL execution", log_mode: str = None):
         """
         Execute SQL asynchronously with proper logging through the client's logger.
 
@@ -1058,14 +1056,10 @@ class AsyncClient(BaseMatrixOneClient):
                 if result.returns_rows:
                     # For SELECT queries, we can't consume the result to count rows
                     # So we just log without row count
-                    self.logger.log_query(
-                        sql, execution_time, None, success=True, log_mode=log_mode
-                    )
+                    self.logger.log_query(sql, execution_time, None, success=True, log_mode=log_mode)
                 else:
                     # For DML queries (INSERT/UPDATE/DELETE), we can get rowcount
-                    self.logger.log_query(
-                        sql, execution_time, result.rowcount, success=True, log_mode=log_mode
-                    )
+                    self.logger.log_query(sql, execution_time, result.rowcount, success=True, log_mode=log_mode)
             except Exception:
                 # Fallback: just log the query without row count
                 self.logger.log_query(sql, execution_time, None, success=True, log_mode=log_mode)
@@ -1076,6 +1070,7 @@ class AsyncClient(BaseMatrixOneClient):
             self.logger.log_query(sql, execution_time, success=False, log_mode=log_mode)
             self.logger.log_error(e, context=context)
             from .client import _classify_db_error
+
             raise _classify_db_error(e, sql) from None
 
     async def execute(self, sql_or_stmt, params: Optional[Tuple] = None, log_mode: str = None) -> AsyncResultSet:
@@ -1400,15 +1395,11 @@ class AsyncClient(BaseMatrixOneClient):
                     rows = result.fetchall()
                     columns = list(result.keys()) if hasattr(result, "keys") else []
                     async_result = AsyncResultSet(columns, rows)
-                    self.logger.log_query(
-                        sql_or_stmt, execution_time, len(rows), success=True, log_mode=log_mode
-                    )
+                    self.logger.log_query(sql_or_stmt, execution_time, len(rows), success=True, log_mode=log_mode)
                     return async_result
                 else:
                     async_result = AsyncResultSet([], [], affected_rows=result.rowcount)
-                    self.logger.log_query(
-                        sql_or_stmt, execution_time, result.rowcount, success=True, log_mode=log_mode
-                    )
+                    self.logger.log_query(sql_or_stmt, execution_time, result.rowcount, success=True, log_mode=log_mode)
                     return async_result
 
         except Exception as e:
@@ -1427,6 +1418,7 @@ class AsyncClient(BaseMatrixOneClient):
                 print(f"Warning: Error logging failed: {log_err}", file=sys.stderr)
 
             from .client import _classify_db_error
+
             raise _classify_db_error(e, sql_or_stmt) from None
 
     def _substitute_parameters(self, sql: str, params: Optional[Tuple] = None) -> str:
