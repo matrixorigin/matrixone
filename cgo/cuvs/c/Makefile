@@ -11,7 +11,7 @@ CONDA_PREFIX ?= /home/eric/miniconda3/envs/go
 CLFLAGS := -I. -I$(CUDA_HOME)/include -I$(CONDA_PREFIX)/include -I$(GOCUVS)/include/rapids -I$(GOCUVS)/include/raft -I$(GOCUVS)/include/cuvs -I../cpp
 
 # Compiler flags
-NVCC_COMPILER_FLAGS := -std=c++17 -x cu -Xcompiler "-Wall -Wextra -fPIC -O2" $(CLFLAGS) -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE
+NVCC_COMPILER_FLAGS := -std=c++17 -x cu -Xcompiler "-Wall -Wextra -fPIC -O2" $(CLFLAGS) -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE -DRAFT_SYSTEM_LITTLE_ENDIAN=1
 
 # Linker flags
 NVCC_LDFLAGS := -L$(CUDA_HOME)/lib64/stubs -lcuda -L$(CUDA_HOME)/lib64 -lcudart -L$(GOCUVS)/lib -lcuvs -lcuvs_c -ldl -lrmm
@@ -20,8 +20,8 @@ LDFLAGS := $(NVCC_LDFLAGS) $(addprefix -Xlinker ,$(HOST_LDFLAGS))
 
 # Unified library name
 TARGET_LIB := libmocuvs.so
-SRCS := brute_force_c.cpp ivf_flat_c.cpp sharded_ivf_flat_c.cpp helper.cpp
-OBJS := brute_force_c.o ivf_flat_c.o sharded_ivf_flat_c.o helper.o
+SRCS := brute_force_c.cpp ivf_flat_c.cpp sharded_ivf_flat_c.cpp cagra_c.cpp sharded_cagra_c.cpp helper.cpp
+OBJS := brute_force_c.o ivf_flat_c.o sharded_ivf_flat_c.o cagra_c.o sharded_cagra_c.o helper.o
 
 .PHONY: all clean
 

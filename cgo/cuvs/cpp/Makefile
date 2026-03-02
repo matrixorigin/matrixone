@@ -9,8 +9,8 @@ NVCC := $(CUDA_HOME)/bin/nvcc
 # -O2 is for optimization
 # -I. includes the current directory for headers
 CLFLAGS := -I$(CUDA_HOME)/include -I$(CONDA_PREFIX)/include -I$(GOCUVS)/include/rapids -I$(GOCUVS)/include/raft -I$(GOCUVS)/include/cuvs
-CXXFLAGS := -std=c++17 -pthread -Wall -Wextra -O2 -I. $(CLFLAGS) -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE
-NVCCFLAGS := -std=c++17 -Xcompiler "-Wall -Wextra -fPIC -O2" -I. $(CLFLAGS) -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE
+CXXFLAGS := -std=c++17 -pthread -Wall -Wextra -O2 -I. $(CLFLAGS) -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE -DRAFT_SYSTEM_LITTLE_ENDIAN=1
+NVCCFLAGS := -std=c++17 -Xcompiler "-Wall -Wextra -fPIC -O2" -I. $(CLFLAGS) -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE -DRAFT_SYSTEM_LITTLE_ENDIAN=1
 
 # Source directory
 SRCDIR := .
@@ -32,7 +32,7 @@ HOST_LDFLAGS := -lpthread # For host linker, passed via -Xlinker
 LDFLAGS := $(NVCC_LDFLAGS) $(addprefix -Xlinker ,$(HOST_LDFLAGS))
 
 TEST_EXE := test_cuvs_worker
-TEST_SRCS := $(SRCDIR)/test/main_test.cu $(SRCDIR)/test/brute_force_test.cu $(SRCDIR)/test/ivf_flat_test.cu $(SRCDIR)/test/sharded_ivf_flat_test.cu
+TEST_SRCS := $(SRCDIR)/test/main_test.cu $(SRCDIR)/test/brute_force_test.cu $(SRCDIR)/test/ivf_flat_test.cu $(SRCDIR)/test/sharded_ivf_flat_test.cu $(SRCDIR)/test/cagra_test.cu $(SRCDIR)/test/sharded_cagra_test.cu
 TEST_OBJS := $(patsubst $(SRCDIR)/%.cu,$(OBJDIR)/%.o,$(TEST_SRCS))
 
 # The default goal is to build only the test executable, as the library is header-only
