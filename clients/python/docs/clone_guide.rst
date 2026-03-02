@@ -921,3 +921,88 @@ Common issues and solutions:
    - Ensure proper user roles
 
 For more information, see the :doc:`api/client` and :doc:`best_practices`.
+
+Statement Builders (SQLAlchemy-Style API)
+-----------------------------------------
+
+In addition to the ``CloneManager`` API, the SDK provides SQLAlchemy-style
+statement builders that produce SQL strings independently of the client.
+
+.. code-block:: python
+
+    from matrixone import clone_table, clone_database
+
+Cloning Tables
+~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    # Basic clone
+    stmt = clone_table('users_copy').from_table('users')
+    client.execute(str(stmt))
+
+    # With IF NOT EXISTS
+    stmt = clone_table('users_copy').if_not_exists().from_table('users')
+    client.execute(str(stmt))
+
+    # From snapshot
+    stmt = clone_table('users_copy').from_table('users', snapshot='snap1')
+    client.execute(str(stmt))
+
+    # Cross-database
+    stmt = clone_table('db2.users').from_table('db1.users')
+    client.execute(str(stmt))
+
+    # Cross-tenant (sys tenant only)
+    stmt = (
+        clone_table('users_copy')
+        .from_table('users', snapshot='snap1')
+        .to_account('tenant1')
+    )
+    client.execute(str(stmt))
+
+Cloning Databases
+~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    stmt = clone_database('dev_db').from_database('prod_db')
+    client.execute(str(stmt))
+
+    stmt = (
+        clone_database('dev_db')
+        .if_not_exists()
+        .from_database('prod_db', snapshot='daily_snap')
+        .to_account('acc1')
+    )
+    client.execute(str(stmt))
+
+ORM Model Support
+~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    from matrixone.orm import Base, Column, Integer, String
+
+    class User(Base):
+        __tablename__ = 'users'
+        id = Column(Integer, primary_key=True)
+        name = Column(String(100))
+
+    stmt = clone_table('users_copy').from_table(User)
+    stmt = clone_table(User).from_table('users_backup')
+
+CloneManager vs Statement Builders
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
++----------------------------+-------------------------------+-------------------------------+
+| Feature                    | CloneManager                  | Statement Builders            |
++============================+===============================+===============================+
+| Execution                  | Calls execute internally      | Produces SQL string           |
++----------------------------+-------------------------------+-------------------------------+
+| Client dependency          | Requires client               | Independent of client         |
++----------------------------+-------------------------------+-------------------------------+
+| Cross-tenant (TO ACCOUNT)  | Not supported                 | Supported                     |
++----------------------------+-------------------------------+-------------------------------+
+| Snapshot verification      | Verifies snapshot exists      | No verification (raw SQL)     |
++----------------------------+-------------------------------+-------------------------------+

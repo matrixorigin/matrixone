@@ -458,6 +458,135 @@ Simplified API
         on_conflict: Union[str, MergeConflictStrategy] = "skip"
     ) -> None
 
+Statement Builders (SQLAlchemy-Style API)
+-----------------------------------------
+
+In addition to the ``BranchManager`` API above, the SDK provides SQLAlchemy-style
+statement builders that produce SQL strings independently of the client. These work
+like ``select()``, ``insert()``, ``delete()``, ``update()`` from SQLAlchemy.
+
+.. code-block:: python
+
+    from matrixone import (
+        create_table_branch,
+        create_database_branch,
+        delete_table_branch,
+        delete_database_branch,
+        diff_table_branch,
+        merge_table_branch,
+    )
+
+Creating Branches
+~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    # Create table branch from source
+    stmt = create_table_branch('users_dev').from_table('users')
+    client.execute(str(stmt))
+
+    # With snapshot
+    stmt = create_table_branch('users_snap').from_table('users', snapshot='snap1')
+    client.execute(str(stmt))
+
+    # Cross-tenant (sys tenant only)
+    stmt = create_table_branch('users_copy').from_table('users').to_account('tenant1')
+    client.execute(str(stmt))
+
+    # Database branch
+    stmt = create_database_branch('dev_db').from_database('prod_db')
+    client.execute(str(stmt))
+
+Deleting Branches
+~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    stmt = delete_table_branch('users_dev')
+    client.execute(str(stmt))
+
+    stmt = delete_database_branch('dev_db')
+    client.execute(str(stmt))
+
+Comparing Branches (Diff)
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The diff builder supports all MatrixOne DIFF output options:
+
+.. code-block:: python
+
+    # Get all differences
+    stmt = diff_table_branch('users_dev').against('users')
+    result = client.execute(str(stmt))
+
+    # Count only (performance optimized)
+    stmt = diff_table_branch('users_dev').against('users').output_count()
+    result = client.execute(str(stmt))
+
+    # Limit rows
+    stmt = diff_table_branch('users_dev').against('users').output_limit(100)
+    result = client.execute(str(stmt))
+
+    # Export to file
+    stmt = diff_table_branch('users_dev').against('users').output_file('/tmp/diff.csv')
+    client.execute(str(stmt))
+
+    # With snapshots on both sides
+    stmt = (
+        diff_table_branch('t1').snapshot('snap_a')
+        .against('t2', snapshot='snap_b')
+        .output_count()
+    )
+    client.execute(str(stmt))
+
+Merging Branches
+~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    # Merge with skip on conflict (default)
+    stmt = merge_table_branch('users_dev').into('users')
+    client.execute(str(stmt))
+
+    # Accept source values on conflict
+    stmt = merge_table_branch('users_dev').into('users').when_conflict('accept')
+    client.execute(str(stmt))
+
+ORM Model Support
+~~~~~~~~~~~~~~~~~
+
+All table builders accept ORM models in place of string table names:
+
+.. code-block:: python
+
+    from matrixone.orm import Base, Column, Integer, String
+
+    class User(Base):
+        __tablename__ = 'users'
+        id = Column(Integer, primary_key=True)
+        name = Column(String(100))
+
+    stmt = create_table_branch('users_dev').from_table(User)
+    stmt = diff_table_branch('users_dev').against(User).output_count()
+    stmt = merge_table_branch('users_dev').into(User).when_conflict('accept')
+
+BranchManager vs Statement Builders
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
++----------------------------+-------------------------------+-------------------------------+
+| Feature                    | BranchManager                 | Statement Builders            |
++============================+===============================+===============================+
+| Execution                  | Calls execute internally      | Produces SQL string           |
++----------------------------+-------------------------------+-------------------------------+
+| Client dependency          | Requires client               | Independent of client         |
++----------------------------+-------------------------------+-------------------------------+
+| DIFF output options        | ROWS, COUNT                   | COUNT, LIMIT, FILE, AS        |
++----------------------------+-------------------------------+-------------------------------+
+| Cross-tenant (TO ACCOUNT)  | Not supported                 | Supported                     |
++----------------------------+-------------------------------+-------------------------------+
+| Snapshot on base table     | Not supported                 | Supported                     |
++----------------------------+-------------------------------+-------------------------------+
+
 See Also
 --------
 
