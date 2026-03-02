@@ -31,8 +31,9 @@ typedef void* GpuBruteForceSearchResultC;
 // dimension: Dimension of each vector
 // metric: Distance metric to use
 // nthread: Number of worker threads
+// device_id: GPU device ID to use (default 0)
 // errmsg: Pointer to a char pointer to store an error message if one occurs. The caller is responsible for freeing the memory.
-GpuBruteForceIndexC GpuBruteForceIndex_New(const float* dataset_data, uint64_t count_vectors, uint32_t dimension, CuvsDistanceTypeC metric, uint32_t nthread, void* errmsg);
+GpuBruteForceIndexC GpuBruteForceIndex_New(const float* dataset_data, uint64_t count_vectors, uint32_t dimension, CuvsDistanceTypeC metric, uint32_t nthread, int device_id, void* errmsg);
 
 // Loads the index to the GPU
 // index_c: Opaque pointer to the GpuBruteForceIndex object

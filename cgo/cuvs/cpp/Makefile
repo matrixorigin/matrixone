@@ -32,7 +32,7 @@ HOST_LDFLAGS := -lpthread # For host linker, passed via -Xlinker
 LDFLAGS := $(NVCC_LDFLAGS) $(addprefix -Xlinker ,$(HOST_LDFLAGS))
 
 TEST_EXE := test_cuvs_worker
-TEST_SRCS := $(SRCDIR)/test/main_test.cu $(SRCDIR)/test/brute_force_test.cu $(SRCDIR)/test/ivf_flat_test.cu
+TEST_SRCS := $(SRCDIR)/test/main_test.cu $(SRCDIR)/test/brute_force_test.cu $(SRCDIR)/test/ivf_flat_test.cu $(SRCDIR)/test/sharded_ivf_flat_test.cu
 TEST_OBJS := $(patsubst $(SRCDIR)/%.cu,$(OBJDIR)/%.o,$(TEST_SRCS))
 
 # The default goal is to build only the test executable, as the library is header-only

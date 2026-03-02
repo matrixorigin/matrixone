@@ -32,7 +32,7 @@ type GpuBruteForceIndex struct {
 }
 
 // NewGpuBruteForceIndex creates a new GpuBruteForceIndex instance
-func NewGpuBruteForceIndex(dataset []float32, countVectors uint64, dimension uint32, metric DistanceType, nthread uint32) (*GpuBruteForceIndex, error) {
+func NewGpuBruteForceIndex(dataset []float32, countVectors uint64, dimension uint32, metric DistanceType, nthread uint32, deviceID int) (*GpuBruteForceIndex, error) {
     if len(dataset) == 0 || countVectors == 0 || dimension == 0 {
         return nil, fmt.Errorf("dataset, countVectors, and dimension cannot be zero")
     }
@@ -47,6 +47,7 @@ func NewGpuBruteForceIndex(dataset []float32, countVectors uint64, dimension uin
         C.uint32_t(dimension),
         C.CuvsDistanceTypeC(metric),
         C.uint32_t(nthread),
+        C.int(deviceID),
         unsafe.Pointer(&errmsg),
     )
 

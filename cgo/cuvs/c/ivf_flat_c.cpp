@@ -32,11 +32,11 @@ static cuvs::distance::DistanceType convert_distance_type_ivf(CuvsDistanceTypeC 
     }
 }
 
-GpuIvfFlatIndexC GpuIvfFlatIndex_New(const float* dataset_data, uint64_t count_vectors, uint32_t dimension, CuvsDistanceTypeC metric_c, uint32_t n_list, uint32_t nthread, void* errmsg) {
+GpuIvfFlatIndexC GpuIvfFlatIndex_New(const float* dataset_data, uint64_t count_vectors, uint32_t dimension, CuvsDistanceTypeC metric_c, uint32_t n_list, uint32_t nthread, int device_id, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         cuvs::distance::DistanceType metric = convert_distance_type_ivf(metric_c);
-        auto* index = new matrixone::GpuIvfFlatIndex<float>(dataset_data, count_vectors, dimension, metric, n_list, nthread);
+        auto* index = new matrixone::GpuIvfFlatIndex<float>(dataset_data, count_vectors, dimension, metric, n_list, nthread, device_id);
         return static_cast<GpuIvfFlatIndexC>(index);
     } catch (const std::exception& e) {
         set_errmsg_ivf(errmsg, "Error in GpuIvfFlatIndex_New", e);
@@ -44,11 +44,11 @@ GpuIvfFlatIndexC GpuIvfFlatIndex_New(const float* dataset_data, uint64_t count_v
     }
 }
 
-GpuIvfFlatIndexC GpuIvfFlatIndex_NewFromFile(const char* filename, uint32_t dimension, CuvsDistanceTypeC metric_c, uint32_t nthread, void* errmsg) {
+GpuIvfFlatIndexC GpuIvfFlatIndex_NewFromFile(const char* filename, uint32_t dimension, CuvsDistanceTypeC metric_c, uint32_t nthread, int device_id, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         cuvs::distance::DistanceType metric = convert_distance_type_ivf(metric_c);
-        auto* index = new matrixone::GpuIvfFlatIndex<float>(std::string(filename), dimension, metric, nthread);
+        auto* index = new matrixone::GpuIvfFlatIndex<float>(std::string(filename), dimension, metric, nthread, device_id);
         return static_cast<GpuIvfFlatIndexC>(index);
     } catch (const std::exception& e) {
         set_errmsg_ivf(errmsg, "Error in GpuIvfFlatIndex_NewFromFile", e);

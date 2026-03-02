@@ -26,15 +26,37 @@
 #include <raft/core/resources.hpp>
 #include <raft/core/resource/cuda_stream.hpp>
 #include <raft/core/handle.hpp>
+#include <raft/core/device_resources.hpp>
+#include <raft/core/device_resources_snmg.hpp>
 #pragma GCC diagnostic pop
 
 /**
  * @brief Wrapper for RAFT resources to manage their lifecycle.
+ * Supports both single-GPU and single-node multi-GPU (SNMG) modes.
  * Defined in global namespace for RAFT compatibility.
  */
 class RaftHandleWrapper {
 public:
-    RaftHandleWrapper() : resources_(std::make_unique<raft::resources>()) {}
+    // Default constructor for single-GPU mode (uses current device)
+    RaftHandleWrapper() : resources_(std::make_unique<raft::device_resources>()) {}
+
+    // Constructor for single-GPU mode with a specific device ID
+    explicit RaftHandleWrapper(int device_id) {
+        RAFT_CUDA_TRY(cudaSetDevice(device_id));
+        resources_ = std::make_unique<raft::device_resources>();
+    }
+
+    // Constructor for multi-GPU mode (SNMG)
+    explicit RaftHandleWrapper(const std::vector<int>& devices) {
+        if (devices.empty()) {
+            resources_ = std::make_unique<raft::device_resources>();
+        } else {
+            // Ensure the main device is set before creating SNMG resources
+            RAFT_CUDA_TRY(cudaSetDevice(devices[0]));
+            resources_ = std::make_unique<raft::device_resources_snmg>(devices);
+        }
+    }
+
     ~RaftHandleWrapper() = default;
 
     raft::resources* get_raft_resources() const { return resources_.get(); }

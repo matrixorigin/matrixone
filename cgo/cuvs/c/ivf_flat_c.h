@@ -14,10 +14,10 @@ typedef void* GpuIvfFlatIndexC;
 typedef void* GpuIvfFlatSearchResultC;
 
 // Constructor for building from dataset
-GpuIvfFlatIndexC GpuIvfFlatIndex_New(const float* dataset_data, uint64_t count_vectors, uint32_t dimension, CuvsDistanceTypeC metric, uint32_t n_list, uint32_t nthread, void* errmsg);
+GpuIvfFlatIndexC GpuIvfFlatIndex_New(const float* dataset_data, uint64_t count_vectors, uint32_t dimension, CuvsDistanceTypeC metric, uint32_t n_list, uint32_t nthread, int device_id, void* errmsg);
 
 // Constructor for loading from file
-GpuIvfFlatIndexC GpuIvfFlatIndex_NewFromFile(const char* filename, uint32_t dimension, CuvsDistanceTypeC metric, uint32_t nthread, void* errmsg);
+GpuIvfFlatIndexC GpuIvfFlatIndex_NewFromFile(const char* filename, uint32_t dimension, CuvsDistanceTypeC metric, uint32_t nthread, int device_id, void* errmsg);
 
 // Loads the index to the GPU (either builds or loads from file depending on constructor)
 void GpuIvfFlatIndex_Load(GpuIvfFlatIndexC index_c, void* errmsg);

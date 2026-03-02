@@ -15,9 +15,10 @@ func TestNewGpuBruteForceIndex(t *testing.T) {
     dimension := uint32(3)
     metric := L2Expanded
     nthread := uint32(1)
+    deviceID := 0
 
-    // Create a new GpuBruteForceIndex
-    index, err := NewGpuBruteForceIndex(dataset, countVectors, dimension, metric, nthread)
+    // Create the index
+    index, err := NewGpuBruteForceIndex(dataset, countVectors, dimension, metric, nthread, deviceID)
     if err != nil {
         t.Fatalf("Failed to create GpuBruteForceIndex: %v", err)
     }

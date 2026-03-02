@@ -21,7 +21,7 @@ type GpuIvfFlatIndex struct {
 }
 
 // NewGpuIvfFlatIndex creates a new GpuIvfFlatIndex instance for building from dataset
-func NewGpuIvfFlatIndex(dataset []float32, countVectors uint64, dimension uint32, metric DistanceType, nList uint32, nthread uint32) (*GpuIvfFlatIndex, error) {
+func NewGpuIvfFlatIndex(dataset []float32, countVectors uint64, dimension uint32, metric DistanceType, nList uint32, nthread uint32, deviceID int) (*GpuIvfFlatIndex, error) {
     if len(dataset) == 0 || countVectors == 0 || dimension == 0 {
         return nil, fmt.Errorf("dataset, countVectors, and dimension cannot be zero")
     }
@@ -37,6 +37,7 @@ func NewGpuIvfFlatIndex(dataset []float32, countVectors uint64, dimension uint32
         C.CuvsDistanceTypeC(metric),
         C.uint32_t(nList),
         C.uint32_t(nthread),
+        C.int(deviceID),
         unsafe.Pointer(&errmsg),
     )
 
@@ -53,7 +54,7 @@ func NewGpuIvfFlatIndex(dataset []float32, countVectors uint64, dimension uint32
 }
 
 // NewGpuIvfFlatIndexFromFile creates a new GpuIvfFlatIndex instance for loading from file
-func NewGpuIvfFlatIndexFromFile(filename string, dimension uint32, metric DistanceType, nthread uint32) (*GpuIvfFlatIndex, error) {
+func NewGpuIvfFlatIndexFromFile(filename string, dimension uint32, metric DistanceType, nthread uint32, deviceID int) (*GpuIvfFlatIndex, error) {
     if filename == "" || dimension == 0 {
         return nil, fmt.Errorf("filename and dimension cannot be empty or zero")
     }
@@ -67,6 +68,7 @@ func NewGpuIvfFlatIndexFromFile(filename string, dimension uint32, metric Distan
         C.uint32_t(dimension),
         C.CuvsDistanceTypeC(metric),
         C.uint32_t(nthread),
+        C.int(deviceID),
         unsafe.Pointer(&errmsg),
     )
 

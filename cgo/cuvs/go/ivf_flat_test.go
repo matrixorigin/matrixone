@@ -18,8 +18,9 @@ func TestGpuIvfFlatIndex(t *testing.T) {
     metric := L2Expanded
     nList := uint32(2)
     nthread := uint32(1)
+    deviceID := 0
 
-    index, err := NewGpuIvfFlatIndex(dataset, countVectors, dimension, metric, nList, nthread)
+    index, err := NewGpuIvfFlatIndex(dataset, countVectors, dimension, metric, nList, nthread, deviceID)
     if err != nil {
         t.Fatalf("Failed to create GpuIvfFlatIndex: %v", err)
     }
@@ -63,11 +64,12 @@ func TestGpuIvfFlatIndexSaveLoad(t *testing.T) {
     metric := L2Expanded
     nList := uint32(2)
     nthread := uint32(1)
+    deviceID := 0
     filename := "test_ivf_flat_go.bin"
 
     // 1. Build and Save
     {
-        index, err := NewGpuIvfFlatIndex(dataset, countVectors, dimension, metric, nList, nthread)
+        index, err := NewGpuIvfFlatIndex(dataset, countVectors, dimension, metric, nList, nthread, deviceID)
         if err != nil {
             t.Fatalf("Failed to create: %v", err)
         }
@@ -82,7 +84,7 @@ func TestGpuIvfFlatIndexSaveLoad(t *testing.T) {
 
     // 2. Load from file and Search
     {
-        index, err := NewGpuIvfFlatIndexFromFile(filename, dimension, metric, nthread)
+        index, err := NewGpuIvfFlatIndexFromFile(filename, dimension, metric, nthread, deviceID)
         if err != nil {
             t.Fatalf("Failed to create from file: %v", err)
         }

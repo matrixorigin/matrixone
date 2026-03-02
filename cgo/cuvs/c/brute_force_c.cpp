@@ -36,11 +36,11 @@ cuvs::distance::DistanceType convert_distance_type(CuvsDistanceTypeC metric_c) {
 }
 
 // Constructor for GpuBruteForceIndex
-GpuBruteForceIndexC GpuBruteForceIndex_New(const float* dataset_data, uint64_t count_vectors, uint32_t dimension, CuvsDistanceTypeC metric_c, uint32_t nthread, void* errmsg) {
+GpuBruteForceIndexC GpuBruteForceIndex_New(const float* dataset_data, uint64_t count_vectors, uint32_t dimension, CuvsDistanceTypeC metric_c, uint32_t nthread, int device_id, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         cuvs::distance::DistanceType metric = convert_distance_type(metric_c);
-        matrixone::GpuBruteForceIndex<float>* index = new matrixone::GpuBruteForceIndex<float>(dataset_data, count_vectors, dimension, metric, nthread);
+        matrixone::GpuBruteForceIndex<float>* index = new matrixone::GpuBruteForceIndex<float>(dataset_data, count_vectors, dimension, metric, nthread, device_id);
         return static_cast<GpuBruteForceIndexC>(index);
     } catch (const std::exception& e) {
         set_errmsg(errmsg, "Error in GpuBruteForceIndex_New", e);

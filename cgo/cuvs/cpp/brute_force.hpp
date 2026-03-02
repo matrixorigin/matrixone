@@ -47,6 +47,7 @@ public:
     cuvs::distance::DistanceType Metric;
     uint32_t Dimension;
     uint32_t Count;
+    int device_id_;
     std::unique_ptr<CuvsWorker> Worker;
     std::shared_mutex mutex_; // Mutex to protect Load() and Search()
     bool is_loaded_ = false;
@@ -56,8 +57,8 @@ public:
     }
 
     GpuBruteForceIndex(const T* dataset_data, uint64_t count_vectors, uint32_t dimension, cuvs::distance::DistanceType m,
-                       uint32_t nthread)
-        : Dimension(dimension), Count(static_cast<uint32_t>(count_vectors)), Metric(m) {
+                       uint32_t nthread, int device_id = 0)
+        : Dimension(dimension), Count(static_cast<uint32_t>(count_vectors)), Metric(m), device_id_(device_id) {
         Worker = std::make_unique<CuvsWorker>(nthread);
 
         // Resize flattened_host_dataset and copy data from the flattened array
@@ -72,7 +73,10 @@ public:
         std::promise<bool> init_complete_promise;
         std::future<bool> init_complete_future = init_complete_promise.get_future();
 
-        auto init_fn = [&](RaftHandleWrapper& handle) -> std::any {
+        auto init_fn = [&](RaftHandleWrapper& _) -> std::any {
+            // Re-initialize handle with specific device_id
+            RaftHandleWrapper handle(device_id_);
+
             if (flattened_host_dataset.empty()) { // Use new member
                 Index = nullptr; // Ensure Index is null if no data
                 init_complete_promise.set_value(true); // Signal completion even if empty
@@ -132,7 +136,8 @@ public:
         size_t queries_cols = Dimension; // Use the class's Dimension
 
         uint64_t jobID = Worker->Submit(
-            [&, queries_rows, queries_cols, limit](RaftHandleWrapper& handle) -> std::any {
+            [&, queries_rows, queries_cols, limit](RaftHandleWrapper& _) -> std::any {
+                RaftHandleWrapper handle(device_id_);
                 std::shared_lock<std::shared_mutex> lock(mutex_); // Acquire shared read-only lock inside worker thread
                 
                 auto queries_device = raft::make_device_matrix<T, int64_t, raft::layout_c_contiguous>(
