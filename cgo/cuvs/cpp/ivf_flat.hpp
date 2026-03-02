@@ -87,6 +87,7 @@ public:
                 index_params.metric = Metric;
                 Index = std::make_unique<cuvs::neighbors::ivf_flat::index<T, int64_t>>(*handle.get_raft_resources(), index_params, Dimension);
                 cuvs::neighbors::ivf_flat::deserialize(*handle.get_raft_resources(), filename_, Index.get());
+                raft::resource::sync_stream(*handle.get_raft_resources());
                 
                 // Update metadata from loaded index
                 Count = static_cast<uint32_t>(Index->size());
@@ -136,6 +137,7 @@ public:
             [&](RaftHandleWrapper& handle) -> std::any {
                 std::shared_lock<std::shared_mutex> lock(mutex_); 
                 cuvs::neighbors::ivf_flat::serialize(*handle.get_raft_resources(), filename, *Index);
+                raft::resource::sync_stream(*handle.get_raft_resources());
                 return std::any();
             }
         );
