@@ -32,7 +32,7 @@ import (
 
 func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext) (int32, error) {
 	dmlCtx := NewDMLContext()
-	err := dmlCtx.ResolveTables(builder.compCtx, tree.TableExprs{stmt.Table}, nil, nil, true)
+	err := dmlCtx.ResolveTables(builder.compCtx, tree.TableExprs{stmt.Table}, stmt.With, nil, true)
 	if err != nil {
 		return 0, err
 	}
@@ -52,6 +52,11 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 		defer func() {
 			builder.compCtx.SetSnapshot(oldSnapshot)
 		}()
+	}
+
+	// Pass WITH clause from INSERT to SELECT if present
+	if stmt.With != nil && stmt.Rows != nil && stmt.Rows.With == nil {
+		stmt.Rows.With = stmt.With
 	}
 
 	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false)
