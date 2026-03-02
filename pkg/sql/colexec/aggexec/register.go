@@ -138,6 +138,11 @@ func RegisterDenseRankWin(id int64) {
 	WinIdOfDenseRank = id
 }
 
+func RegisterPercentRankWin(id int64) {
+	specialAgg[id] = true
+	WinIdOfPercentRank = id
+}
+
 func RegisterNtileWin(id int64) {
 	specialAgg[id] = true
 	WinIdOfNtile = id
@@ -225,6 +230,7 @@ var (
 	AggIdOfBitmapOr        = int64(-29)
 	WinIdOfCumeDist        = int64(-30)
 	WinIdOfNtile           = int64(-31)
+	WinIdOfPercentRank     = int64(-32)
 	groupConcatSep         = ","
 	getCroupConcatRet      = func(args ...types.Type) types.Type {
 		for _, p := range args {

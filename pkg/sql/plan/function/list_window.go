@@ -89,6 +89,30 @@ var supportedWindowInNewFramework = []FuncNew{
 		},
 	},
 	{
+		functionId: PERCENT_RANK,
+		class:      plan.Function_WIN_ORDER,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 0 {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isWin:      true,
+				retType: func(_ []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				aggFramework: aggregationLogicOfOverload{
+					str:         "percent_rank",
+					aggRegister: agg.RegisterPercentRank,
+				},
+			},
+		},
+	},
+	{
 		functionId: NTILE,
 		class:      plan.Function_WIN_ORDER,
 		layout:     STANDARD_FUNCTION,

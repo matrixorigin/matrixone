@@ -24,6 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -98,4 +100,27 @@ func Test_buildPreDeleteFullTextIndexAsync(t *testing.T) {
 		require.Nil(t, err)
 	}
 
+}
+
+// Test WITH clause support for INSERT statement (Issue #22583)
+func TestBuildWithInsert(t *testing.T) {
+	sqls := []string{
+		"WITH cte AS (SELECT * FROM t1 WHERE id = 1) INSERT INTO t1 SELECT id + 10, name, value FROM cte",
+		"WITH cte AS (SELECT id, name FROM t1) INSERT INTO t1 (id, name, value) SELECT id + 20, name, 100 FROM cte",
+		"WITH cte1 AS (SELECT * FROM t1), cte2 AS (SELECT * FROM cte1 WHERE id > 5) INSERT INTO t1 SELECT id + 30, name, value FROM cte2",
+	}
+
+	for _, sql := range sqls {
+		t.Run(sql, func(t *testing.T) {
+			// Just verify the SQL can be parsed and the WITH clause is present
+			stmts, err := mysql.Parse(context.TODO(), sql, 1)
+			require.NoError(t, err)
+			require.Equal(t, 1, len(stmts))
+
+			ins, ok := stmts[0].(*tree.Insert)
+			require.True(t, ok)
+			require.NotNil(t, ins.With, "INSERT.With should not be nil")
+			require.Greater(t, len(ins.With.CTEs), 0, "WITH clause should have at least one CTE")
+		})
+	}
 }

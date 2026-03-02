@@ -250,6 +250,9 @@ func makeSpecialAggExec(
 		case WinIdOfRowNumber, WinIdOfRank, WinIdOfDenseRank:
 			exec, err := makeWindowExec(mp, id, isDistinct)
 			return exec, true, err
+		case WinIdOfPercentRank:
+			exec, err := makePercentRankExec(mp, id, isDistinct)
+			return exec, true, err
 		case WinIdOfNtile:
 			exec, err := makeNtileExec(mp, id, isDistinct, params)
 			return exec, true, err
