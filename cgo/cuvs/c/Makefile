@@ -1,48 +1,44 @@
 # C++ compiler (use NVCC for CUDA-related compilation and linking)
 NVCC := $(CUDA_HOME)/bin/nvcc
-CXX := g++ # Still keep for reference, but won't be used for brute_force_c.cpp
+CXX := g++
 
 # Paths from parent Makefile
 CUDA_HOME ?= /usr/local/cuda
-GOCUVS ?= /home/eric/miniconda3/envs/go # Assuming GOCUVS base path if not specified
-CONDA_PREFIX ?= /home/eric/miniconda3/envs/go # Assuming CONDA_PREFIX for other headers
+GOCUVS ?= /home/eric/miniconda3/envs/go
+CONDA_PREFIX ?= /home/eric/miniconda3/envs/go
 
 # Common include flags for C++ compilation
 CLFLAGS := -I. -I$(CUDA_HOME)/include -I$(CONDA_PREFIX)/include -I$(GOCUVS)/include/rapids -I$(GOCUVS)/include/raft -I$(GOCUVS)/include/cuvs -I../cpp
 
-# Compiler flags for C++ source files (brute_force_c.cpp)
-# Use -x cu to force nvcc to treat it as a CUDA C++ file
-# -Xcompiler passes flags to the host C++ compiler (g++)
+# Compiler flags for C++ source files
 NVCC_COMPILER_FLAGS := -std=c++17 -x cu -Xcompiler "-Wall -Wextra -fPIC -O2" $(CLFLAGS) -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE
 
-# Linker flags for creating a shared library (still use NVCC as linker driver)
+# Linker flags for creating a shared library
 NVCC_LDFLAGS := -L$(CUDA_HOME)/lib64/stubs -lcuda -L$(CUDA_HOME)/lib64 -lcudart -L$(GOCUVS)/lib -lcuvs -lcuvs_c -ldl -lrmm
 HOST_LDFLAGS := -lpthread -lm
 
 LDFLAGS := $(NVCC_LDFLAGS) $(addprefix -Xlinker ,$(HOST_LDFLAGS))
 
 # Output library names
-TARGET_SHARED_LIB := libbrute_force_c.so
-TARGET_STATIC_LIB := libbrute_force_c.a
-SOURCE_FILE := brute_force_c.cpp
-OBJECT_FILE := $(SOURCE_FILE:.cpp=.o)
+BRUTE_FORCE_SHARED := libbrute_force_c.so
+IVF_FLAT_SHARED := libivf_flat_c.so
 
 .PHONY: all clean
 
-all: $(TARGET_SHARED_LIB) $(TARGET_STATIC_LIB)
+all: $(BRUTE_FORCE_SHARED) $(IVF_FLAT_SHARED)
 
-$(TARGET_SHARED_LIB): $(OBJECT_FILE)
+$(BRUTE_FORCE_SHARED): brute_force_c.o
 	@echo "Linking shared library $@"
-	$(NVCC) -shared $(OBJECT_FILE) $(LDFLAGS) -o $@
+	$(NVCC) -shared $< $(LDFLAGS) -o $@
 
-$(TARGET_STATIC_LIB): $(OBJECT_FILE)
-	@echo "Creating static library $@"
-	ar rcs $@ $<
+$(IVF_FLAT_SHARED): ivf_flat_c.o
+	@echo "Linking shared library $@"
+	$(NVCC) -shared $< $(LDFLAGS) -o $@
 
-$(OBJECT_FILE): $(SOURCE_FILE)
+%.o: %.cpp
 	@echo "Compiling $< with NVCC (as CUDA C++)"
 	$(NVCC) $(NVCC_COMPILER_FLAGS) -c $< -o $@
 
 clean:
 	@echo "Cleaning up..."
-	rm -f $(TARGET_SHARED_LIB) $(TARGET_STATIC_LIB) $(OBJECT_FILE)
+	rm -f *.so *.o *.a
