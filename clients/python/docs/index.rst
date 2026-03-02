@@ -50,6 +50,7 @@ type safety and extensive documentation.
    export_guide
    snapshot_restore_guide
    clone_guide
+   branch_guide
 
 .. toctree::
    :maxdepth: 2

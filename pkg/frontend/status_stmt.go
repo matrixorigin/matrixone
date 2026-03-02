@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 	"go.uber.org/zap"
@@ -97,13 +96,6 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
 			ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
-		}
-
-		// execute insert sql if this is a `create table as select` stmt
-		if st.IsAsSelect {
-			insertSql := execCtx.cw.Plan().GetDdl().GetDefinition().(*plan.DataDefinition_CreateTable).CreateTable.CreateAsSelectSql
-			ses.createAsSelectSql = insertSql
-			return
 		}
 
 		// Start the dynamic table daemon task
@@ -198,7 +190,7 @@ func (resper *MysqlResp) respStatus(ses *Session,
 		rspLen = execCtx.runResult.AffectRows
 	}
 
-	switch st := execCtx.stmt.(type) {
+	switch execCtx.stmt.(type) {
 	case *tree.Select:
 		//select ... into ...
 		if len(execCtx.proc.GetSessionInfo().SeqAddValues) != 0 {
@@ -239,10 +231,6 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			}
 		}
 	case *tree.CreateTable:
-		// skip create table as select
-		if st.IsAsSelect {
-			return nil
-		}
 		res := setResponse(ses, execCtx.isLastStmt, rspLen)
 		if len(execCtx.proc.GetSessionInfo().SeqDeleteKeys) != 0 {
 			ses.DeleteSeqValues(execCtx.proc)

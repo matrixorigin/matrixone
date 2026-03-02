@@ -14,6 +14,22 @@ SELECT 'David_' LIKE 'David\_';
 SELECT '__++' LIKE '__++%';
 SELECT '__++__' LIKE '__\\+';
 SELECT '__++__' LIKE '__+';
+SELECT "a+b" LIKE "a_b";
+SELECT "a+b" LIKE "a%b";
+SELECT "a++b" LIKE "a+%";
+SELECT "a++b" LIKE "%+%";
+SELECT "a+b" LIKE "a\+b";
+SELECT "a\+b" LIKE "a\\+b";
+SELECT "a+b" LIKE "a\\+b";
+SELECT "a.b" LIKE "a.b";
+SELECT "abb" LIKE "ab*";
+SELECT "a?b" LIKE "a?b";
+SELECT "a(b)c" LIKE "a(b)c";
+SELECT "+++" LIKE "++%";
+SELECT " " LIKE "+";
+SELECT "+123" LIKE "+%";
+SELECT "123+" LIKE "%+";
+
 
 DROP TABLE IF EXISTS like_test;
 CREATE TABLE like_test(

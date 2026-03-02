@@ -1041,3 +1041,11 @@ func TestElkanClusterer_updateBounds_Error(t *testing.T) {
 		})
 	}
 }
+
+func Test_checkCentroidDimension(t *testing.T) {
+	c := [][]float32{{1, 2, 3}, {2, 3, 4}}
+	err := checkCentroidDimension(c, 2)
+	require.Error(t, err)
+	err = checkCentroidDimension(c, 3)
+	require.NoError(t, err)
+}

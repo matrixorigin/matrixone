@@ -1,0 +1,63 @@
+-- @label:bvt
+drop database if exists bvt_drop_multi;
+create database bvt_drop_multi;
+use bvt_drop_multi;
+
+create table a(a int);
+create table b(b int);
+create table c(c int);
+select table_name from information_schema.tables where table_schema='bvt_drop_multi' order by table_name;
+
+begin;
+drop table if exists a,b;
+commit;
+select table_name from information_schema.tables where table_schema='bvt_drop_multi' order by table_name;
+
+-- drop non-existent tables should be ok
+drop table if exists no1,no2;
+
+create table a(a int);
+create table b(b int);
+select table_name from information_schema.tables where table_schema='bvt_drop_multi' order by table_name;
+
+-- mixed db-qualified and unqualified names
+drop table if exists bvt_drop_multi.a, b;
+select table_name from information_schema.tables where table_schema='bvt_drop_multi' order by table_name;
+
+begin;
+create table d(d int);
+create table e(e int);
+drop table if exists d,e;
+commit;
+select table_name from information_schema.tables where table_schema='bvt_drop_multi' order by table_name;
+
+-- mix existing and non-existing
+create table f(f int);
+drop table if exists f, no_such_table;
+select table_name from information_schema.tables where table_schema='bvt_drop_multi' order by table_name;
+
+-- create then commit, drop then commit
+begin;
+create table g(g int);
+create table h(h int);
+commit;
+select table_name from information_schema.tables where table_schema='bvt_drop_multi' order by table_name;
+begin;
+drop table if exists g,h;
+commit;
+select table_name from information_schema.tables where table_schema='bvt_drop_multi' order by table_name;
+
+-- create in separate transactions, then drop together
+begin;
+create table i(i int);
+commit;
+begin;
+create table j(j int);
+commit;
+select table_name from information_schema.tables where table_schema='bvt_drop_multi' order by table_name;
+begin;
+drop table if exists i,j;
+commit;
+select table_name from information_schema.tables where table_schema='bvt_drop_multi' order by table_name;
+
+drop database bvt_drop_multi;

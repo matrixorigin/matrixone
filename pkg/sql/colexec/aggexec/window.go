@@ -28,6 +28,10 @@ func SingleWindowReturnType(_ []types.Type) types.Type {
 	return types.T_int64.ToType()
 }
 
+func CumeDistReturnType(_ []types.Type) types.Type {
+	return types.T_float64.ToType()
+}
+
 type i64Slice []int64
 
 func (s i64Slice) MarshalBinary() ([]byte, error) {
@@ -264,6 +268,185 @@ func (exec *singleWindowExec) flushRowNumber() ([]*vector.Vector, error) {
 
 			values[x][y] = j
 			idx++
+		}
+	}
+	return exec.ret.flushAll(), nil
+}
+
+// cumeDistWindowExec is for CUME_DIST window function which returns float64
+type cumeDistWindowExec struct {
+	singleAggInfo
+	ret aggResultWithFixedType[float64]
+
+	groups []i64Slice
+}
+
+func makeCumeDist(mp *mpool.MPool, info singleAggInfo) AggFuncExec {
+	return &cumeDistWindowExec{
+		singleAggInfo: info,
+		ret:           initAggResultWithFixedTypeResult[float64](mp, info.retType, info.emptyNull, 0, false),
+	}
+}
+
+func (exec *cumeDistWindowExec) GroupGrow(more int) error {
+	exec.groups = append(exec.groups, make([]i64Slice, more)...)
+	return exec.ret.grows(more)
+}
+
+func (exec *cumeDistWindowExec) PreAllocateGroups(more int) error {
+	return exec.ret.preExtend(more)
+}
+
+func (exec *cumeDistWindowExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
+	value := vector.MustFixedColWithTypeCheck[int64](vectors[0])[row]
+	exec.groups[groupIndex] = append(exec.groups[groupIndex], value)
+	return nil
+}
+
+func (exec *cumeDistWindowExec) GetOptResult() SplitResult {
+	return &exec.ret.optSplitResult
+}
+
+func (exec *cumeDistWindowExec) marshal() ([]byte, error) {
+	d := exec.singleAggInfo.getEncoded()
+	r, em, dist, err := exec.ret.marshalToBytes()
+	if err != nil {
+		return nil, err
+	}
+	if dist != nil {
+		return nil, moerr.NewInternalErrorNoCtx("dist should have been nil")
+	}
+
+	encoded := EncodedAgg{
+		Info:    d,
+		Result:  r,
+		Empties: em,
+		Groups:  nil,
+	}
+	if len(exec.groups) > 0 {
+		encoded.Groups = make([][]byte, len(exec.groups))
+		for i := range encoded.Groups {
+			encoded.Groups[i] = types.EncodeSlice[int64](exec.groups[i])
+		}
+	}
+	return encoded.Marshal()
+}
+
+func (exec *cumeDistWindowExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
+	return marshalRetAndGroupsToBuffer(
+		cnt, flags, buf,
+		&exec.ret.optSplitResult, exec.groups, nil)
+}
+
+func (exec *cumeDistWindowExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+	return marshalChunkToBuffer(
+		chunk, buf,
+		&exec.ret.optSplitResult, exec.groups, nil)
+}
+
+func (exec *cumeDistWindowExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	err := unmarshalFromReaderNoGroup(reader, &exec.ret.optSplitResult)
+	if err != nil {
+		return err
+	}
+	exec.ret.setupT()
+
+	ngrp, err := types.ReadInt64(reader)
+	if err != nil {
+		return err
+	}
+	if ngrp != 0 {
+		exec.groups = make([]i64Slice, ngrp)
+		for i := range exec.groups {
+			_, bs, err := types.ReadSizeBytes(reader)
+			if err != nil {
+				return err
+			}
+			exec.groups[i] = types.DecodeSlice[int64](bs)
+		}
+	}
+	return nil
+}
+
+func (exec *cumeDistWindowExec) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
+	if len(exec.groups) > 0 {
+		exec.groups = make([]i64Slice, len(groups))
+		for i := range exec.groups {
+			if len(groups[i]) > 0 {
+				exec.groups[i] = types.DecodeSlice[int64](groups[i])
+			}
+		}
+	}
+	return exec.ret.unmarshalFromBytes(result, empties, nil)
+}
+
+func (exec *cumeDistWindowExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
+	panic("implement me")
+}
+
+func (exec *cumeDistWindowExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	panic("implement me")
+}
+
+func (exec *cumeDistWindowExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
+	other := next.(*cumeDistWindowExec)
+	exec.groups[groupIdx1] = append(exec.groups[groupIdx1], other.groups[groupIdx2]...)
+	return nil
+}
+
+func (exec *cumeDistWindowExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	other := next.(*cumeDistWindowExec)
+	for i := range groups {
+		if groups[i] != GroupNotMatched {
+			groupIdx1 := int(groups[i] - 1)
+			groupIdx2 := i + offset
+
+			exec.groups[groupIdx1] = append(exec.groups[groupIdx1], other.groups[groupIdx2]...)
+		}
+	}
+	return nil
+}
+
+func (exec *cumeDistWindowExec) SetExtraInformation(partialResult any, groupIndex int) error {
+	panic("window function do not support the extra information")
+}
+
+func (exec *cumeDistWindowExec) Flush() ([]*vector.Vector, error) {
+	return exec.flushCumeDist()
+}
+
+func (exec *cumeDistWindowExec) Free() {
+	exec.ret.free()
+}
+
+func (exec *cumeDistWindowExec) Size() int64 {
+	var size int64
+	size += exec.ret.Size()
+	for _, group := range exec.groups {
+		size += int64(cap(group)) * int64(types.T_int64.ToType().TypeSize())
+	}
+	size += int64(cap(exec.groups)) * 24
+	return size
+}
+
+func (exec *cumeDistWindowExec) flushCumeDist() ([]*vector.Vector, error) {
+	values := exec.ret.values
+
+	idx := 0
+	for _, group := range exec.groups {
+		if len(group) == 0 {
+			continue
+		}
+
+		total := float64(group[len(group)-1] - group[0])
+		for i := 1; i < len(group); i++ {
+			m := int(group[i] - group[i-1])
+			cumeDist := float64(group[i]-group[0]) / total
+
+			for k := idx + m; idx < k; idx++ {
+				x, y := exec.ret.updateNextAccessIdx(idx)
+				values[x][y] = cumeDist
+			}
 		}
 	}
 	return exec.ret.flushAll(), nil

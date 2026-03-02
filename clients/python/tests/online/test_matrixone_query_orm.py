@@ -102,8 +102,7 @@ class TestMatrixOneQueryORM:
             pass
 
         # Create test tables
-        client.execute(
-            """
+        client.execute("""
             CREATE TABLE test_users (
                 id INT PRIMARY KEY,
                 name VARCHAR(100),
@@ -113,11 +112,9 @@ class TestMatrixOneQueryORM:
                 salary DECIMAL(10,2),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """
-        )
+        """)
 
-        client.execute(
-            """
+        client.execute("""
             CREATE TABLE test_products (
                 id INT PRIMARY KEY,
                 name VARCHAR(100),
@@ -126,11 +123,9 @@ class TestMatrixOneQueryORM:
                 stock INT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """
-        )
+        """)
 
-        client.execute(
-            """
+        client.execute("""
             CREATE TABLE test_orders (
                 id INT PRIMARY KEY,
                 user_id INT,
@@ -139,42 +134,35 @@ class TestMatrixOneQueryORM:
                 total_amount DECIMAL(10,2),
                 order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """
-        )
+        """)
 
         # Insert test data
-        client.execute(
-            """
+        client.execute("""
             INSERT INTO test_users (id, name, email, age, department, salary) VALUES
             (1, 'Alice Johnson', 'alice@example.com', 28, 'Engineering', 75000.00),
             (2, 'Bob Smith', 'bob@example.com', 32, 'Marketing', 65000.00),
             (3, 'Charlie Brown', 'charlie@example.com', 25, 'Engineering', 70000.00),
             (4, 'Diana Prince', 'diana@example.com', 30, 'Sales', 60000.00),
             (5, 'Eve Wilson', 'eve@example.com', 27, 'Engineering', 80000.00)
-        """
-        )
+        """)
 
-        client.execute(
-            """
+        client.execute("""
             INSERT INTO test_products (id, name, price, category, stock) VALUES
             (1, 'Laptop Pro', 1299.99, 'Electronics', 50),
             (2, 'Wireless Mouse', 29.99, 'Electronics', 200),
             (3, 'Office Chair', 199.99, 'Furniture', 30),
             (4, 'Coffee Mug', 12.99, 'Accessories', 100),
             (5, 'Monitor 4K', 399.99, 'Electronics', 25)
-        """
-        )
+        """)
 
-        client.execute(
-            """
+        client.execute("""
             INSERT INTO test_orders (id, user_id, product_id, quantity, total_amount) VALUES
             (1, 1, 1, 1, 1299.99),
             (2, 2, 2, 2, 59.98),
             (3, 3, 3, 1, 199.99),
             (4, 1, 4, 3, 38.97),
             (5, 4, 5, 1, 399.99)
-        """
-        )
+        """)
 
         yield
 
@@ -348,8 +336,7 @@ class TestAsyncMatrixOneQueryORM:
             pass
 
         # Create test tables
-        await async_client.execute(
-            """
+        await async_client.execute("""
             CREATE TABLE async_test_users (
                 id INT PRIMARY KEY,
                 name VARCHAR(100),
@@ -359,11 +346,9 @@ class TestAsyncMatrixOneQueryORM:
                 salary DECIMAL(10,2),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """
-        )
+        """)
 
-        await async_client.execute(
-            """
+        await async_client.execute("""
             CREATE TABLE async_test_products (
                 id INT PRIMARY KEY,
                 name VARCHAR(100),
@@ -372,31 +357,26 @@ class TestAsyncMatrixOneQueryORM:
                 stock INT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """
-        )
+        """)
 
         # Insert test data
-        await async_client.execute(
-            """
+        await async_client.execute("""
             INSERT INTO async_test_users (id, name, email, age, department, salary) VALUES
             (1, 'Async Alice', 'async.alice@example.com', 28, 'Engineering', 75000.00),
             (2, 'Async Bob', 'async.bob@example.com', 32, 'Marketing', 65000.00),
             (3, 'Async Charlie', 'async.charlie@example.com', 25, 'Engineering', 70000.00),
             (4, 'Async Diana', 'async.diana@example.com', 30, 'Sales', 60000.00),
             (5, 'Async Eve', 'async.eve@example.com', 27, 'Engineering', 80000.00)
-        """
-        )
+        """)
 
-        await async_client.execute(
-            """
+        await async_client.execute("""
             INSERT INTO async_test_products (id, name, price, category, stock) VALUES
             (1, 'Async Laptop', 1299.99, 'Electronics', 50),
             (2, 'Async Mouse', 29.99, 'Electronics', 200),
             (3, 'Async Chair', 199.99, 'Furniture', 30),
             (4, 'Async Mug', 12.99, 'Accessories', 100),
             (5, 'Async Monitor', 399.99, 'Electronics', 25)
-        """
-        )
+        """)
 
         yield
 

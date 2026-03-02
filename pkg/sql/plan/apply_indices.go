@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+	"math"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -26,6 +27,12 @@ const (
 	UnsupportedIndexCondition = 0
 	EqualIndexCondition       = 1
 	NonEqualIndexCondition    = 2
+
+	// MaxOverFetchFactor is the maximum multiplier for over-fetching candidates
+	// in auto mode vector search. This cap prevents excessive memory usage and
+	// candidate processing when filter selectivity is very low (e.g., 0.001).
+	// Value of 100 means we fetch at most 100x the original LIMIT value.
+	MaxOverFetchFactor = 100.0
 )
 
 type specialIndexKind uint8
@@ -55,6 +62,36 @@ func calculatePostFilterOverFetchFactor(originalLimit uint64) float64 {
 	} else {
 		return 1.2 // Huge limits: 1.2x
 	}
+}
+
+// calculateAutoModeOverFetchFactor calculates the over-fetch factor for auto mode.
+// It uses a simplified selectivity-based formula: max(baseFactor, 1/Selectivity)
+//
+// Parameters:
+//   - originalLimit: The user-specified LIMIT value
+//   - stats: Statistics of the scan node
+//
+// Returns:
+//   - over-fetch factor (multiplier)
+func calculateAutoModeOverFetchFactor(originalLimit uint64, stats *plan.Stats) float64 {
+	// 1. Base factor: use existing conservative strategy (1.2x - 5.0x)
+	baseFactor := calculatePostFilterOverFetchFactor(originalLimit)
+
+	// 2. If no statistics available or selectivity is invalid, return base factor
+	// We check for selectivity > 1 and <= 0 as invalid/unsupported cases
+	if stats == nil || stats.Selectivity <= 0 || stats.Selectivity >= 1 {
+		return baseFactor
+	}
+
+	// 3. Compensation factor: 1 / Selectivity
+	// E.g., if only 10% rows remain, we need 10x more candidates to satisfy LIMIT
+	selectivityFactor := 1.0 / stats.Selectivity
+
+	// 4. Combine factors: take maximum to maintain at least the base redundancy
+	adaptiveFactor := math.Max(baseFactor, selectivityFactor)
+
+	// 5. Cap at MaxOverFetchFactor to avoid excessive memory usage and candidate processing
+	return math.Min(adaptiveFactor, MaxOverFetchFactor)
 }
 
 func containsDynamicParam(expr *plan.Expr) bool {

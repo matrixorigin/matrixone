@@ -309,11 +309,15 @@ func (exec *txnExecutor) Exec(
 			logicalId)
 	}
 
-	exec.ctx = context.WithValue(
-		exec.ctx,
-		defines.InternalExecutorKey{},
-		true,
-	)
+	// Keep historical behavior for internal SQL: bypass frontend privilege checks.
+	// Some callers (e.g. CTAS follow-up SQL) opt in to real auth via context flag.
+	if !needInternalExecutorPrivilegeCheck(exec.ctx) {
+		exec.ctx = context.WithValue(
+			exec.ctx,
+			defines.InternalExecutorKey{},
+			true,
+		)
+	}
 
 	receiveAt := time.Now()
 	lower := exec.opts.LowerCaseTableNames()
@@ -355,6 +359,9 @@ func (exec *txnExecutor) Exec(
 		nil,
 		exec.s.taskservice,
 	)
+	// Attach original frontend session to support session-scoped metadata
+	// (e.g. temporary-table alias mapping) in internal SQL compilation.
+	proc.Session = getInternalExecutorSession(exec.ctx)
 	proc.SetResolveVariableFunc(exec.opts.ResolveVariableFunc())
 
 	if exec.opts.ResolveVariableFunc() != nil {

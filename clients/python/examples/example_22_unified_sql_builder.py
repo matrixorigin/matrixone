@@ -243,8 +243,7 @@ class UnifiedSQLBuilderDemo:
         try:
             # Create test tables
             self.client.execute("DROP TABLE IF EXISTS test_users_cte")
-            self.client.execute(
-                """
+            self.client.execute("""
                 CREATE TABLE test_users_cte (
                     id INT PRIMARY KEY,
                     name VARCHAR(100),
@@ -252,45 +251,37 @@ class UnifiedSQLBuilderDemo:
                     salary DECIMAL(10,2),
                     email VARCHAR(100)
                 )
-            """
-            )
+            """)
 
             self.client.execute("DROP TABLE IF EXISTS test_departments_cte")
-            self.client.execute(
-                """
+            self.client.execute("""
                 CREATE TABLE test_departments_cte (
                     id INT PRIMARY KEY,
                     name VARCHAR(100),
                     budget DECIMAL(12,2)
                 )
-            """
-            )
+            """)
 
             # Insert sample data
-            self.client.execute(
-                """
+            self.client.execute("""
                 INSERT INTO test_departments_cte (id, name, budget) VALUES 
                 (1, 'Engineering', 100000),
                 (2, 'Marketing', 50000),
                 (3, 'Sales', 80000),
                 (4, 'HR', 30000)
-            """
-            )
+            """)
 
-            self.client.execute(
-                """
+            self.client.execute("""
                 INSERT INTO test_users_cte (id, name, department_id, salary, email) VALUES 
                 (1, 'John Doe', 1, 75000, 'john@example.com'),
                 (2, 'Jane Smith', 1, 80000, 'jane@example.com'),
                 (3, 'Bob Johnson', 2, 60000, 'bob@example.com'),
                 (4, 'Alice Brown', 3, 70000, 'alice@example.com'),
                 (5, 'Charlie Wilson', 4, 55000, 'charlie@example.com')
-            """
-            )
+            """)
 
             # Test CTE with department statistics using new CTE support
-            results = self.client.execute(
-                """
+            results = self.client.execute("""
                 WITH dept_stats AS (
                     SELECT 
                         department_id, 
@@ -308,16 +299,14 @@ class UnifiedSQLBuilderDemo:
                 FROM dept_stats
                 WHERE avg_salary > 65000
                 ORDER BY avg_salary DESC
-            """
-            )
+            """)
 
             print(f"✅ CTE department statistics: {len(results)} results")
             for row in results:
                 print(f"    Dept {row.department_id}: {row.user_count} users, avg: ${row.avg_salary:.2f}")
 
             # Test CTE with JOINs using new CTE support
-            results2 = self.client.execute(
-                """
+            results2 = self.client.execute("""
                 WITH high_salary_users AS (
                     SELECT id, name, department_id, salary 
                     FROM test_users_cte 
@@ -330,8 +319,7 @@ class UnifiedSQLBuilderDemo:
                 FROM high_salary_users
                 INNER JOIN test_departments_cte d ON high_salary_users.department_id = d.id
                 ORDER BY high_salary_users.salary DESC
-            """
-            )
+            """)
 
             print(f"✅ CTE with JOINs: {len(results2)} results")
             for row in results2:

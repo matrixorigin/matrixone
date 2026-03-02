@@ -496,6 +496,12 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 		"values row(1,1), row(2,2), row(3,3) order by column_0 limit 2",
 		"select * from (values row(1,1), row(2,2), row(3,3)) a (c1, c2)",
 		"prepare stmt1 from select * from nation where n_name like ? or n_nationkey > 10 order by 2 limit '10' for update",
+
+		// get_format: DATE/TIME/DATETIME/TIMESTAMP should be treated as type keywords, not column names
+		"select get_format(DATE, 'USA')",
+		"select get_format(TIME, 'EUR')",
+		"select get_format(DATETIME, 'JIS')",
+		"select get_format(TIMESTAMP, 'ISO')",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -541,6 +547,8 @@ func TestJoinTableSqlBuilder(t *testing.T) {
 		"select nation.n_name from nation join nation2 on nation.n_name !='a' join region on nation.n_regionkey = region.r_regionkey",
 		"select * from nation, nation2, region",
 		"select n_name from nation dedup join region on n_regionkey = r_regionkey",
+		"SELECT * FROM NATION a join REGION b on a.N_REGIONKEY = b.R_REGIONKEY WHERE a.N_REGIONKEY > 0 for update", //join for update
+		"select * from nation, nation2, region for update",                                                         //multi-table for update
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -550,8 +558,6 @@ func TestJoinTableSqlBuilder(t *testing.T) {
 		"SELECT N_NAME, R_REGIONKEY FROM NATION join REGION using(R_REGIONKEY)",                                              //column not exist
 		"SELECT N_NAME,N_REGIONKEY FROM NATION a join REGION b on a.N_REGIONKEY = b.R_REGIONKEY WHERE aaaaa.N_REGIONKEY > 0", //table alias not exist
 		"select *", //No table used
-		"SELECT * FROM NATION a join REGION b on a.N_REGIONKEY = b.R_REGIONKEY WHERE a.N_REGIONKEY > 0 for update", //Not support
-		"select * from nation, nation2, region for update",                                                         // Not support
 	}
 	runTestShouldError(mock, t, sqls)
 }
@@ -808,6 +814,7 @@ func TestDdl(t *testing.T) {
 		"create table if not exists nation (t bool(20), b int, c char(20), d varchar(20))",
 		"drop table if exists tbl_name",
 		"drop table if exists nation",
+		"drop table if exists tpch.tbl_not_exist, tpch.tbl_not_exist2",
 		"drop table nation",
 		"drop table tpch.nation",
 		"drop table if exists tpch.tbl_not_exist",

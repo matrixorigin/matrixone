@@ -1699,33 +1699,67 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 
 	ps := c.proc.GetPartitionService()
-	if !ps.Enabled() || !features.IsPartitioned(qry.TableDef.FeatureFlag) {
-		return nil
+	if ps.Enabled() && features.IsPartitioned(qry.TableDef.FeatureFlag) {
+		// cannot has err.
+		stmt, _ := parsers.ParseOne(
+			c.proc.Ctx,
+			dialect.MYSQL,
+			qry.RawSQL,
+			c.getLower(),
+		)
+
+		err = ps.Create(
+			c.proc.Ctx,
+			qry.TableDef.TblId,
+			stmt.(*tree.CreateTable),
+			c.proc.GetTxnOperator(),
+		)
+		if err != nil {
+			return err
+		}
+
+		if err = shardservice.GetService(c.proc.GetService()).Create(
+			c.proc.Ctx,
+			qry.GetTableDef().TblId,
+			c.proc.GetTxnOperator(),
+		); err != nil {
+			return err
+		}
 	}
 
-	// cannot has err.
-	stmt, _ := parsers.ParseOne(
-		c.proc.Ctx,
-		dialect.MYSQL,
-		qry.RawSQL,
-		c.getLower(),
-	)
-
-	err = ps.Create(
-		c.proc.Ctx,
-		qry.TableDef.TblId,
-		stmt.(*tree.CreateTable),
-		c.proc.GetTxnOperator(),
-	)
-	if err != nil {
-		return err
+	if createAsSelectSql := qry.GetCreateAsSelectSql(); createAsSelectSql != "" {
+		if isTemp {
+			aliasTable := fmt.Sprintf("`%s`.`%s`", dbName, aliasName)
+			realTable := fmt.Sprintf("`%s`.`%s`", dbName, tblName)
+			createAsSelectSql = strings.Replace(createAsSelectSql, aliasTable, realTable, 1)
+		}
+		// Mark current txn as DDL before compiling CTAS follow-up INSERT ... SELECT,
+		// so internal SQL stays on one CN and can see uncommitted table metadata.
+		c.setHaveDDL(true)
+		res, err := func() (executor.Result, error) {
+			oldCtx := c.proc.Ctx
+			// CTAS follow-up SQL needs frontend session for temp-table alias resolution.
+			ctxWithSession := attachInternalExecutorSession(c.proc.Ctx, c.proc.GetSession())
+			// Force privilege checking for CTAS follow-up INSERT ... SELECT.
+			// Internal executor skips auth by default unless this flag is present.
+			c.proc.Ctx = attachInternalExecutorPrivilegeCheck(ctxWithSession)
+			defer func() {
+				c.proc.Ctx = oldCtx
+			}()
+			return c.runSqlWithResultAndOptions(
+				createAsSelectSql,
+				NoAccountId,
+				executor.StatementOption{}.WithDisableLog(),
+			)
+		}()
+		if err != nil {
+			return err
+		}
+		c.addAffectedRows(res.AffectedRows)
+		res.Close()
 	}
 
-	return shardservice.GetService(c.proc.GetService()).Create(
-		c.proc.Ctx,
-		qry.GetTableDef().TblId,
-		c.proc.GetTxnOperator(),
-	)
+	return nil
 }
 
 func (c *Compile) runSqlWithSystemTenant(sql string) error {
@@ -2661,8 +2695,27 @@ func (s *Scope) DropTable(c *Compile) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetDropTable()
+	if len(qry.GetTables()) > 0 {
+		for _, entry := range qry.GetTables() {
+			sub := plan2.DeepCopyDropTable(entry)
+			if sub == nil {
+				continue
+			}
+			if err := s.dropTableSingle(c, sub); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return s.dropTableSingle(c, qry)
+}
+
+func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 	dbName := qry.GetDatabase()
 	tblName := qry.GetTable()
+	if tblName == "" {
+		return nil
+	}
 	isView := qry.GetIsView()
 	var isSource = false
 	if qry.TableDef != nil {
@@ -3907,7 +3960,7 @@ func getLockBatch(proc *process.Process, accountId uint32, names []string) (*bat
 	return bat, nil
 }
 
-var lockMoDatabase = func(c *Compile, dbName string, lockMode lock.LockMode) error {
+var doLockMoDatabase = func(c *Compile, dbName string, lockMode lock.LockMode) error {
 	dbRel, err := getRelFromMoCatalog(c, catalog.MO_DATABASE)
 	if err != nil {
 		return err
@@ -3924,6 +3977,39 @@ var lockMoDatabase = func(c *Compile, dbName string, lockMode lock.LockMode) err
 	if err := lockRows(c.e, c.proc, dbRel, bat, 0, lockMode, lock.Sharding_None, accountID); err != nil {
 		return err
 	}
+	return nil
+}
+
+var lockMoDatabase = func(c *Compile, dbName string, lockMode lock.LockMode) error {
+	if err := doLockMoDatabase(c, dbName, lockMode); err != nil {
+		return err
+	}
+
+	// After acquiring an exclusive lock on mo_database, refresh the
+	// transaction's snapshot to the latest commit timestamp.
+	//
+	// The lock service only checks mo_database rows (via hasNewVersionInRange)
+	// to decide whether to advance the snapshot. Concurrent operations that
+	// only modify mo_tables (e.g., CREATE TABLE, CLONE) will not trigger a
+	// snapshot advance. Without this explicit refresh, subsequent reads (e.g.,
+	// Relations()) may use a stale snapshot and miss recently committed tables,
+	// leading to orphan records in mo_tables and OkExpectedEOB panic on replay.
+	if lockMode == lock.LockMode_Exclusive {
+		txnOp := c.proc.GetTxnOperator()
+		if txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
+			latestCommitTS := c.proc.Base.TxnClient.GetLatestCommitTS()
+			if txnOp.Txn().SnapshotTS.Less(latestCommitTS) {
+				newTS, err := c.proc.Base.TxnClient.WaitLogTailAppliedAt(c.proc.Ctx, latestCommitTS)
+				if err != nil {
+					return err
+				}
+				if err := txnOp.UpdateSnapshot(c.proc.Ctx, newTS); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	return nil
 }
 

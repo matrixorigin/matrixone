@@ -398,6 +398,10 @@ func (s *Scanner) stepBackOneChar(ch uint16) (int, string) {
 			}
 		case '>':
 			s.inc()
+			if s.cur() == '>' {
+				s.inc()
+				return LONG_ARROW, ""
+			}
 			return ARROW, ""
 		}
 		return int(ch), ""

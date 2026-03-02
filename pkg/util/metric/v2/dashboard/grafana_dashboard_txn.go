@@ -260,7 +260,7 @@ func (c *DashboardCreator) initTxnStarcountRow() dashboard.Option {
 			"Estimated Tombstone Objects (Tombstone objects 数量)",
 		},
 		[]float64{0.50, 0.8, 0.90, 0.99},
-		[]float32{6, 6},
+		[]float32{3, 3, 3, 3},
 		axis.Min(0))
 
 	// High ratio = estimate much larger than actual (e.g. 100x) = bad signal

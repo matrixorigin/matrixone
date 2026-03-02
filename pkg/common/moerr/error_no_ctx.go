@@ -499,3 +499,7 @@ func NewCantCompileForPrepareNoCtx() *Error {
 func NewSchedulerClosedNoCtx() *Error {
 	return newError(Context(), ErrSchedulerClosed)
 }
+
+func NewVectorNeedRetryWithPreModeNoCtx() *Error {
+	return newError(Context(), ErrVectorNeedRetryWithPreMode)
+}

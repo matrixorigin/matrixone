@@ -321,6 +321,9 @@ const (
 	// Group 14: TaskService
 	ErrExecutorRunning uint16 = 22201
 
+	// Group 15: Vector Search
+	ErrVectorNeedRetryWithPreMode uint16 = 22301
+
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
 )
@@ -419,7 +422,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDragonboatShardNotFound:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
 	ErrDragonboatOtherSystemError:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
 	ErrDropNonExistsDB:                          {ER_DB_DROP_EXISTS, []string{MySQLDefaultSqlState}, "Can't drop database '%s'; database doesn't exist"},
-	ErrResultFileNotFound:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "result file %s not found"},
+	ErrResultFileNotFound:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "query id %s not found"},
 	ErrNoConfig:                                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no configure: %s"},
 	ErrTooManyFields:                            {ER_TOO_MANY_FIELDS, []string{MySQLDefaultSqlState}, "Too many columns"},
 	ErrDupFieldName:                             {ER_DUP_FIELDNAME, []string{MySQLDefaultSqlState}, "Duplicate column name '%-.192s'"},
@@ -566,6 +569,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 
 	// Group 14: Task Service
 	ErrExecutorRunning: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "TaskService: executor %s is already running"},
+
+	// Group 15: Vector Search
+	ErrVectorNeedRetryWithPreMode: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "vector search need retry with pre mode"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},

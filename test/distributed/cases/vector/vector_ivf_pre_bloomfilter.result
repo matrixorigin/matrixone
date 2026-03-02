@@ -29,6 +29,7 @@ ORDER BY l2_distance(embedding,  '[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0
 LIMIT 2 by rank with option 'mode=pre';
 id    name    score
 10    Item J    0.5
+7    Item G    2.0
 set ivf_preload_entries = 0;
 set ivf_small_centroid_threshold = 0;
 set probe_limit  = 5;
@@ -147,6 +148,8 @@ WHERE category = 'cat1' AND active = true AND score > 2.0
 ORDER BY l2_distance(embedding,  '[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]')
 LIMIT 2 by rank with option 'mode=pre';
 id    name    score
+1    Item A    5.0
+2    Item B    4.5
 set ivf_preload_entries = 0;
 set ivf_small_centroid_threshold = 0;
 set probe_limit  = 5;

@@ -1291,7 +1291,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: true,
 		Type:              InitSystemVariableIntType("interactive_timeout", 1, 31536000, false),
-		Default:           int64(28800),
+		Default:           int64(86400),
 	},
 	"lower_case_table_names": {
 		Name:              "lower_case_table_names",
@@ -1331,7 +1331,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("wait_timeout", 1, 2147483, false),
-		Default:           int64(28800),
+		Default:           int64(86400),
 	},
 	"sql_safe_updates": {
 		Name:              "sql_safe_updates",
@@ -3613,6 +3613,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("enable_vector_prefilter_by_default"),
+		Default:           int8(0),
+	},
+	"enable_vector_auto_mode_by_default": {
+		Name:              "enable_vector_auto_mode_by_default",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("enable_vector_auto_mode_by_default"),
 		Default:           int8(0),
 	},
 	"probe_limit": {

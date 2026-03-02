@@ -930,7 +930,7 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 	bats, release, err := reader.LoadAllColumns(tcc.execCtx.reqCtx, idxs, common.DefaultAllocator)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-			return nil, "", moerr.NewResultFileNotFound(tcc.execCtx.reqCtx, makeResultMetaPath(proc.Base.SessionInfo.Account, uuid))
+			return nil, "", moerr.NewResultFileNotFound(tcc.execCtx.reqCtx, uuid)
 		}
 		return nil, "", err
 	}
@@ -1022,11 +1022,6 @@ func (tcc *TxnCompilerContext) IsPublishing(dbName string) (bool, error) {
 
 func (tcc *TxnCompilerContext) BuildTableDefByMoColumns(dbName, table string) (*plan.TableDef, error) {
 	return buildTableDefFromMoColumns(tcc.GetContext(), uint64(tcc.GetSession().GetAccountId()), dbName, table, tcc.GetSession())
-}
-
-// makeResultMetaPath gets query result meta path
-func makeResultMetaPath(accountName string, statementId string) string {
-	return fmt.Sprintf("query_result_meta/%s_%s.blk", accountName, statementId)
 }
 
 func (tcc *TxnCompilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (*plan2.Snapshot, error) {

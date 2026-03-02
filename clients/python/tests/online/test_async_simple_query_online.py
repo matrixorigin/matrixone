@@ -77,8 +77,7 @@ class TestAsyncSimpleQueryOnline:
 
         # Create test table
         await client.execute("DROP TABLE IF EXISTS test_async_simple_query_articles")
-        await client.execute(
-            """
+        await client.execute("""
             CREATE TABLE IF NOT EXISTS test_async_simple_query_articles (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 title VARCHAR(255) NOT NULL,
@@ -88,8 +87,7 @@ class TestAsyncSimpleQueryOnline:
                 author VARCHAR(100),
                 published_date VARCHAR(20)
             )
-        """
-        )
+        """)
 
         # Insert test data
         test_articles = [
@@ -193,12 +191,10 @@ class TestAsyncSimpleQueryOnline:
             author_escaped = article[5].replace("'", "''")
             date_escaped = article[6].replace("'", "''")
 
-            await client.execute(
-                f"""
+            await client.execute(f"""
                 INSERT INTO test_async_simple_query_articles (id, title, content, category, tags, author, published_date) 
                 VALUES ({article[0]}, '{title_escaped}', '{content_escaped}', '{category_escaped}', '{tags_escaped}', '{author_escaped}', '{date_escaped}')
-            """
-            )
+            """)
 
         # Create fulltext index - use only the columns that simple_query will search
         try:
@@ -433,12 +429,10 @@ class TestAsyncSimpleQueryOnline:
         """Test search with non-English text using async client."""
         # Insert a Chinese article for testing
         client, test_db = async_client_setup
-        await client.execute(
-            """
+        await client.execute("""
             INSERT INTO test_async_simple_query_articles (title, content, category, tags) 
             VALUES ('中文异步测试', '这是一个中文异步全文搜索测试', 'Test', 'chinese,async,test')
-        """
-        )
+        """)
 
         results = await (
             client.query("test_async_simple_query_articles")
@@ -597,8 +591,7 @@ class TestAsyncTransactionSimpleQueryOnline:
 
         # Create test table
         await client.execute("DROP TABLE IF EXISTS test_async_simple_query_articles")
-        await client.execute(
-            """
+        await client.execute("""
             CREATE TABLE IF NOT EXISTS test_async_simple_query_articles (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 title VARCHAR(255) NOT NULL,
@@ -608,8 +601,7 @@ class TestAsyncTransactionSimpleQueryOnline:
                 author VARCHAR(100),
                 published_date VARCHAR(20)
             )
-        """
-        )
+        """)
 
         # Insert test data
         test_articles = [
@@ -666,12 +658,10 @@ class TestAsyncTransactionSimpleQueryOnline:
             category_escaped = article[3].replace("'", "''")
             tags_escaped = article[4].replace("'", "''") if article[4] else ''
 
-            await client.execute(
-                f"""
+            await client.execute(f"""
                 INSERT INTO test_async_simple_query_articles (id, title, content, category, tags, author, published_date) 
                 VALUES ({article[0]}, '{title_escaped}', '{content_escaped}', '{category_escaped}', '{tags_escaped}', '{article[5]}', '{article[6]}')
-            """
-            )
+            """)
 
         # Create fulltext index - use only the columns that simple_query will search
         try:

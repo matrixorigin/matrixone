@@ -1269,7 +1269,7 @@ func TestParseRankOption(t *testing.T) {
 		rankOption, err := parseRankOption(options, ctx)
 		require.Error(t, err)
 		require.Nil(t, rankOption)
-		require.Contains(t, err.Error(), "mode must be 'pre', 'post', or 'force'")
+		require.Contains(t, err.Error(), "mode must be 'pre', 'post', 'force', or 'auto'")
 		require.Contains(t, err.Error(), "invalid")
 	})
 

@@ -112,7 +112,7 @@ const (
 
 	// MaxSampleObjects is the maximum number of objects to sample.
 	// Raise to allow large tables (>5w objects) to reach ~1-2% sampling.
-	MaxSampleObjects = 2000
+	MaxSampleObjects = 5000
 
 	// objectIDRandomOffset is the offset of random bytes in ObjectNameShort.
 	// UUIDv7's bytes 8-15 are random, providing uniform distribution for sampling.
@@ -1017,8 +1017,8 @@ func calcSamplingRatio(approxObjectNum int64) float64 {
 	// targetCount = clamp(max(sqrt(N), 0.02·N), 100, 2000)//
 	// Candidate1: sqrt(N)
 	targetCount := int(math.Sqrt(float64(approxObjectNum)))
-	// Candidate2: 2% of objects
-	targetCount = max(targetCount, int(float64(approxObjectNum)*0.02))
+	// Candidate2: 10% of objects
+	targetCount = max(targetCount, int(float64(approxObjectNum)*0.1))
 	// Lower/upper bounds
 	targetCount = max(targetCount, MinSampleObjects)
 	targetCount = min(targetCount, MaxSampleObjects)
@@ -1085,8 +1085,19 @@ func collectTableStats(
 		updateMu.Unlock()
 
 		// ===== Phase 2: Sampling decision =====
-		if isSampling && !shouldSampleObject(objName, samplingThreshold) {
-			return nil // Skip non-sampled objects, no IO
+		// When sampling is enabled (approxObjectNum > 100), we randomly skip objects to reduce IO.
+		// We must ensure at least one object is chosen so that Phase 2 runs and ColumnNDVs/ShuffleRanges
+		// get populated. Otherwise the table would end up with all-zero NDV, empty ShuffleRangeMap, and
+		// point queries would use a high block_sel (e.g. 0.5) leading to ~611 blocks instead of 1.
+		// So: if we have not yet sampled any object for this table, force this object into Phase 2.
+		// Lock is held only to read sampledObjectCount; we do not hold across IO or shouldSampleObject.
+		if isSampling {
+			updateMu.Lock()
+			forceOne := sampledObjectCount == 0
+			updateMu.Unlock()
+			if !forceOne && !shouldSampleObject(objName, samplingThreshold) {
+				return nil // Skip non-sampled objects, no IO
+			}
 		}
 
 		// Sampled object: read ObjectMeta (requires IO)
@@ -1256,7 +1267,11 @@ func collectTableStats(
 	if exactObjectNumber > 0 {
 		actualSamplingRatio = float64(sampledObjectCount) / float64(exactObjectNumber)
 	}
-
+	for _, r := range info.ShuffleRanges {
+		if r != nil {
+			r.SampleRatio = actualSamplingRatio
+		}
+	}
 	// ===== Scale column-level stats if sampling =====
 	if isSampling && sampledRowCount > 0 {
 		rowScaleFactor := exactRowCount / sampledRowCount

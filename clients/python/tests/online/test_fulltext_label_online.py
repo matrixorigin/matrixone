@@ -75,8 +75,7 @@ class TestFulltextLabelOnline(unittest.TestCase):
         cls.Article = Article
 
         # Create table
-        cls.client.execute(
-            """
+        cls.client.execute("""
             CREATE TABLE IF NOT EXISTS test_articles (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 title VARCHAR(200),
@@ -84,8 +83,7 @@ class TestFulltextLabelOnline(unittest.TestCase):
                 tags VARCHAR(500),
                 category VARCHAR(50)
             )
-        """
-        )
+        """)
 
         # Insert test data
         test_articles = [

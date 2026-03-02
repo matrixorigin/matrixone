@@ -16,6 +16,8 @@ package plan
 
 import (
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 func TestCalculatePostFilterOverFetchFactor(t *testing.T) {
@@ -256,5 +258,234 @@ func TestCalculatePostFilterOverFetchFactor_MonotonicDecrease(t *testing.T) {
 		}
 
 		prevFactor = currentFactor
+	}
+}
+
+// ============================================================================
+// Tests for calculateAutoModeOverFetchFactor
+// ============================================================================
+
+func TestCalculateAutoModeOverFetchFactor(t *testing.T) {
+	tests := []struct {
+		name        string
+		limit       uint64
+		stats       *plan.Stats
+		expectedMin float64
+		expectedMax float64
+	}{
+		// Test with nil stats - should return base factor
+		{
+			name:        "nil stats, small limit",
+			limit:       5,
+			stats:       nil,
+			expectedMin: 5.0,
+			expectedMax: 5.0,
+		},
+		{
+			name:        "nil stats, medium limit",
+			limit:       50,
+			stats:       nil,
+			expectedMin: 1.5,
+			expectedMax: 1.5,
+		},
+
+		// Test with invalid selectivity values - should return base factor
+		{
+			name:        "selectivity zero",
+			limit:       10,
+			stats:       &plan.Stats{Selectivity: 0},
+			expectedMin: 2.0,
+			expectedMax: 2.0,
+		},
+		{
+			name:        "selectivity negative",
+			limit:       10,
+			stats:       &plan.Stats{Selectivity: -0.5},
+			expectedMin: 2.0,
+			expectedMax: 2.0,
+		},
+		{
+			name:        "selectivity 1.0 (no filtering)",
+			limit:       10,
+			stats:       &plan.Stats{Selectivity: 1.0},
+			expectedMin: 2.0,
+			expectedMax: 2.0,
+		},
+		{
+			name:        "selectivity > 1.0 (invalid)",
+			limit:       10,
+			stats:       &plan.Stats{Selectivity: 1.5},
+			expectedMin: 2.0,
+			expectedMax: 2.0,
+		},
+
+		// Test selectivity-based compensation
+		{
+			name:        "selectivity 0.5 (2x compensation, but base factor 5x is higher for small limit)",
+			limit:       5,
+			stats:       &plan.Stats{Selectivity: 0.5},
+			expectedMin: 5.0,
+			expectedMax: 5.0,
+		},
+		{
+			name:        "selectivity 0.1 (10x compensation)",
+			limit:       100,
+			stats:       &plan.Stats{Selectivity: 0.1},
+			expectedMin: 10.0,
+			expectedMax: 10.0,
+		},
+		{
+			name:        "selectivity 0.05 (20x compensation)",
+			limit:       100,
+			stats:       &plan.Stats{Selectivity: 0.05},
+			expectedMin: 20.0,
+			expectedMax: 20.0,
+		},
+		{
+			name:        "selectivity 0.01 (100x compensation, at cap)",
+			limit:       100,
+			stats:       &plan.Stats{Selectivity: 0.01},
+			expectedMin: MaxOverFetchFactor,
+			expectedMax: MaxOverFetchFactor,
+		},
+		{
+			name:        "selectivity 0.001 (1000x compensation, capped at 100x)",
+			limit:       100,
+			stats:       &plan.Stats{Selectivity: 0.001},
+			expectedMin: MaxOverFetchFactor,
+			expectedMax: MaxOverFetchFactor,
+		},
+
+		// Test that base factor wins when selectivity is not very low
+		{
+			name:        "selectivity 0.9 (1.1x compensation, base factor wins)",
+			limit:       5,
+			stats:       &plan.Stats{Selectivity: 0.9},
+			expectedMin: 5.0, // base factor for limit=5
+			expectedMax: 5.0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := calculateAutoModeOverFetchFactor(tt.limit, tt.stats)
+
+			if result < tt.expectedMin || result > tt.expectedMax {
+				t.Errorf("calculateAutoModeOverFetchFactor(%d, %+v) = %f, want between %f and %f",
+					tt.limit, tt.stats, result, tt.expectedMin, tt.expectedMax)
+			}
+
+			// Verify the result is positive
+			if result <= 0 {
+				t.Errorf("calculateAutoModeOverFetchFactor(%d, %+v) = %f, want positive value",
+					tt.limit, tt.stats, result)
+			}
+
+			// Verify the result is at least 1.0
+			if result < 1.0 {
+				t.Errorf("calculateAutoModeOverFetchFactor(%d, %+v) = %f, want >= 1.0",
+					tt.limit, tt.stats, result)
+			}
+
+			// Verify the result is capped at MaxOverFetchFactor
+			if result > MaxOverFetchFactor {
+				t.Errorf("calculateAutoModeOverFetchFactor(%d, %+v) = %f, want <= %f",
+					tt.limit, tt.stats, result, MaxOverFetchFactor)
+			}
+		})
+	}
+}
+
+// Test the actual over-fetch calculation with selectivity
+func TestCalculateAutoModeOverFetchFactor_ActualValues(t *testing.T) {
+	testCases := []struct {
+		name          string
+		limit         uint64
+		selectivity   float64
+		expectedFetch uint64
+	}{
+		// Base factor wins (selectivity compensation is lower)
+		{
+			name:          "high selectivity, small limit",
+			limit:         5,
+			selectivity:   0.5,
+			expectedFetch: 25, // 5 * 5.0 (base factor wins over 2x)
+		},
+
+		// Selectivity compensation wins
+		{
+			name:          "low selectivity, large limit",
+			limit:         100,
+			selectivity:   0.1,
+			expectedFetch: 1000, // 100 * 10x
+		},
+		{
+			name:          "very low selectivity, large limit",
+			limit:         100,
+			selectivity:   0.05,
+			expectedFetch: 2000, // 100 * 20x
+		},
+
+		// Cap at MaxOverFetchFactor
+		{
+			name:          "extremely low selectivity, capped",
+			limit:         100,
+			selectivity:   0.001,
+			expectedFetch: 10000, // 100 * 100x (capped)
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			stats := &plan.Stats{Selectivity: tc.selectivity}
+			factor := calculateAutoModeOverFetchFactor(tc.limit, stats)
+			actualFetch := uint64(float64(tc.limit) * factor)
+
+			if actualFetch != tc.expectedFetch {
+				t.Errorf("For limit %d, selectivity %f: got fetch %d, want %d (factor: %f)",
+					tc.limit, tc.selectivity, actualFetch, tc.expectedFetch, factor)
+			}
+		})
+	}
+}
+
+// Test that auto mode factor is always >= base factor
+func TestCalculateAutoModeOverFetchFactor_AlwaysGteBaseFactor(t *testing.T) {
+	testCases := []struct {
+		limit       uint64
+		selectivity float64
+	}{
+		{5, 0.1},
+		{5, 0.5},
+		{5, 0.9},
+		{50, 0.1},
+		{50, 0.5},
+		{100, 0.1},
+		{100, 0.05},
+		{200, 0.1},
+	}
+
+	for _, tc := range testCases {
+		baseFactor := calculatePostFilterOverFetchFactor(tc.limit)
+		stats := &plan.Stats{Selectivity: tc.selectivity}
+		autoFactor := calculateAutoModeOverFetchFactor(tc.limit, stats)
+
+		if autoFactor < baseFactor {
+			t.Errorf("Auto factor %f should be >= base factor %f for limit=%d, selectivity=%f",
+				autoFactor, baseFactor, tc.limit, tc.selectivity)
+		}
+	}
+}
+
+// Benchmark
+func BenchmarkCalculateAutoModeOverFetchFactor(b *testing.B) {
+	limits := []uint64{5, 50, 100, 500}
+	stats := &plan.Stats{Selectivity: 0.1}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, limit := range limits {
+			_ = calculateAutoModeOverFetchFactor(limit, stats)
+		}
 	}
 }

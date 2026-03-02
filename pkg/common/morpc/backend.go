@@ -300,9 +300,13 @@ func (rb *remoteBackend) adjust() {
 	rb.logFieldsCache = []zap.Field{zap.String("remote", rb.remote), zap.Uint64("backend-id", rb.logID)}
 	rb.rateLimitLogger = logutil.NewRateLimitedLogger(rb.logger)
 	rb.options.goettyOptions = append(rb.options.goettyOptions,
-		goetty.WithSessionCodec(rb.codec))
-	// Don't pass logger to goetty to avoid noisy error logs from goetty library
-	// (e.g., "close connection failed" which is expected during normal connection lifecycle)
+		goetty.WithSessionCodec(rb.codec),
+		goetty.WithSessionLogger(rb.logger))
+	// Pass our shared logger to goetty so it does not call getDefaultZapLoggerWithLevel(),
+	// which uses zap.Config.Build() with Sampling and allocates zapcore.newCounters per
+	// session (~hundreds of KB each). Without WithSessionLogger, the path
+	// NewRemoteBackend->NewIOSession->adjust->adjustLogger->getDefaultZapLoggerWithLevel
+	// ->zap.Config.Build->NewSamplerWithOptions->newCounters caused ~83GB under sysbench.
 }
 
 // logFields returns zap fields for this backend; use at log sites instead of a per-backend Logger.With().
@@ -677,7 +681,10 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 			}
 			rb.metrics.receiveCounter.Inc()
 
-			rb.active()
+			// Only update lastActiveTime for user traffic; heartbeat (internal) should not prevent idle timeout.
+			if rpcm, ok := msg.(interface{ InternalMessage() bool }); ok && !rpcm.InternalMessage() {
+				rb.active()
+			}
 
 			if rb.options.hasPayloadResponse {
 				wg.Add(1)
@@ -859,7 +866,16 @@ func (rb *remoteBackend) removeActiveStream(s *stream) {
 	if len(s.c) > 0 {
 		panic("BUG: stream channel is not empty")
 	}
-	rb.pool.streams.Put(s)
+	// When backend is already stopped (e.g. stream closed with closeConn=true), do not Put
+	// the stream back into the pool. Otherwise backend->pool->stream->backend forms a cycle
+	// and the backend (and its goetty session / newCounters) can never be GC'd after removal
+	// from the client, so heap inuse for newCounters stays high.
+	rb.stateMu.RLock()
+	stopped := rb.stateMu.state == stateStopped
+	rb.stateMu.RUnlock()
+	if !stopped {
+		rb.pool.streams.Put(s)
+	}
 }
 
 func (rb *remoteBackend) stopWriteLoop() {

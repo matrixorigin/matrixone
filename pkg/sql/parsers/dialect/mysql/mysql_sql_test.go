@@ -263,6 +263,9 @@ var (
 		input:  "show variables like 'sql_mode'",
 		output: "show variables like sql_mode",
 	}, {
+		input:  "show global variables like 'interactive_timeout'",
+		output: "show global variables like interactive_timeout",
+	}, {
 		input:  "show index from t1 from db",
 		output: "show index from t1 from db",
 	}, {
@@ -2008,6 +2011,18 @@ var (
 			input:  `select json_extract(a, '$.b') from t`,
 			output: `select json_extract(a, $.b) from t`,
 		}, {
+			input:  `select JSON_OBJECT('key', 'value') -> '$.key' AS result1`,
+			output: `select json_extract(JSON_OBJECT(key, value), $.key) as result1`,
+		}, {
+			input:  `select a -> '$.b' from t`,
+			output: `select json_extract(a, $.b) from t`,
+		}, {
+			input:  `select JSON_OBJECT('key', 'value') ->> '$.key' AS result1`,
+			output: `select json_unquote(json_extract(JSON_OBJECT(key, value), $.key)) as result1`,
+		}, {
+			input:  `select a ->> '$.b' from t`,
+			output: `select json_unquote(json_extract(a, $.b)) from t`,
+		}, {
 			input: `create table t1 (a int, b uuid)`,
 		}, {
 			input: `create table t2 (a uuid primary key, b varchar(10))`,
@@ -3339,6 +3354,22 @@ var (
 			input:  "create cdc cdc_tpcc 'mysql://sys#dump:111@127.0.0.1:6001' 'matrixone' 'mysql://sys#dump:111@127.0.0.1:6001' 'test_cdc:t1' {'Level'='database'} internal;",
 			output: "create cdc cdc_tpcc 'mysql://sys#dump:111@127.0.0.1:6001' 'matrixone' 'mysql://sys#dump:111@127.0.0.1:6001' 'test_cdc:t1' { \"Level\"='database'} internal",
 		},
+		{
+			input:  "select get_format(date, 'USA')",
+			output: "select get_format(DATE, USA)",
+		},
+		{
+			input:  "select get_format(time, 'EUR')",
+			output: "select get_format(TIME, EUR)",
+		},
+		{
+			input:  "select get_format(datetime, 'JIS')",
+			output: "select get_format(DATETIME, JIS)",
+		},
+		{
+			input:  "select get_format(timestamp, 'ISO')",
+			output: "select get_format(TIMESTAMP, ISO)",
+		},
 	}
 )
 
@@ -3359,6 +3390,16 @@ func TestValid(t *testing.T) {
 		}
 		ast.StmtKind()
 	}
+}
+
+func TestShowVariablesGlobalFlag(t *testing.T) {
+	ctx := context.TODO()
+	stmt, err := ParseOne(ctx, "show global variables like 'interactive_timeout'", 1)
+	require.NoError(t, err)
+
+	sv, ok := stmt.(*tree.ShowVariables)
+	require.True(t, ok)
+	require.True(t, sv.Global)
 }
 
 var (
