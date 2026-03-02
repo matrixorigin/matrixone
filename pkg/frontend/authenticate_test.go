@@ -3452,6 +3452,62 @@ func Test_determineDropTable(t *testing.T) {
 	})
 }
 
+func Test_getDbNameForPrivilege(t *testing.T) {
+	tests := []struct {
+		name   string
+		objRef *plan2.ObjectRef
+		want   string
+	}{
+		{
+			name:   "normal table",
+			objRef: &plan2.ObjectRef{SchemaName: "db1", ObjName: "t1"},
+			want:   "db1",
+		},
+		{
+			name:   "subscription table uses sub name",
+			objRef: &plan2.ObjectRef{SchemaName: "pub_db", ObjName: "t1", SubscriptionName: "sub2"},
+			want:   "sub2",
+		},
+		{
+			name:   "empty subscription name",
+			objRef: &plan2.ObjectRef{SchemaName: "db1", ObjName: "t1", SubscriptionName: ""},
+			want:   "db1",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := getDbNameForPrivilege(tt.objRef)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func Test_extractPrivilegeTipsFromPlan_Subscription(t *testing.T) {
+	// When a TABLE_SCAN node has SubscriptionName set, the extracted
+	// privilegeTips should use the subscription database name instead
+	// of the publisher's original database name.
+	p := &plan2.Plan{
+		Plan: &plan2.Plan_Query{
+			Query: &plan2.Query{
+				Nodes: []*plan2.Node{
+					{
+						NodeType: plan.Node_TABLE_SCAN,
+						ObjRef: &plan2.ObjectRef{
+							SchemaName:       "pub_original_db",
+							ObjName:          "t1",
+							SubscriptionName: "sub2",
+						},
+					},
+				},
+			},
+		},
+	}
+	arr := extractPrivilegeTipsFromPlan(p)
+	assert.Equal(t, 1, len(arr))
+	assert.Equal(t, "sub2", arr[0].databaseName)
+	assert.Equal(t, "t1", arr[0].tableName)
+}
+
 func Test_determineDML(t *testing.T) {
 	type arg struct {
 		stmt tree.Statement
