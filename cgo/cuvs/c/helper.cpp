@@ -7,12 +7,17 @@
 #include <iostream>
 #include <raft/util/cudart_utils.hpp>
 
-// Simple kernel for float32 to float16 conversion
-__global__ void f32_to_f16_kernel(const float* src, half* dst, uint64_t n) {
+// Vectorized kernel processing 2 elements per thread
+__global__ void f32_to_f16_vectorized_kernel(const float2* src, half2* dst, uint64_t n_pairs) {
     uint64_t i = blockIdx.x * (uint64_t)blockDim.x + threadIdx.x;
-    if (i < n) {
-        dst[i] = __float2half(src[i]);
+    if (i < n_pairs) {
+        dst[i] = __float22half2_rn(src[i]);
     }
+}
+
+// Fallback kernel for the last element if total_elements is odd
+__global__ void f32_to_f16_tail_kernel(const float* src, half* dst, uint64_t index) {
+    dst[index] = __float2half(src[index]);
 }
 
 extern "C" {
@@ -69,10 +74,18 @@ void GpuConvertF32ToF16(const float* src, void* dst, uint64_t total_elements, in
         // Copy source to device
         RAFT_CUDA_TRY(cudaMemcpy(d_src, src, total_elements * sizeof(float), cudaMemcpyHostToDevice));
 
-        // Launch kernel
-        uint32_t threads_per_block = 256;
-        uint32_t blocks = (total_elements + threads_per_block - 1) / threads_per_block;
-        f32_to_f16_kernel<<<blocks, threads_per_block>>>(d_src, d_dst, total_elements);
+        // Launch vectorized kernel for pairs
+        uint64_t n_pairs = total_elements / 2;
+        if (n_pairs > 0) {
+            uint32_t threads_per_block = 256;
+            uint32_t blocks = (n_pairs + threads_per_block - 1) / threads_per_block;
+            f32_to_f16_vectorized_kernel<<<blocks, threads_per_block>>>((const float2*)d_src, (half2*)d_dst, n_pairs);
+        }
+
+        // Handle the tail if odd
+        if (total_elements % 2 != 0) {
+            f32_to_f16_tail_kernel<<<1, 1>>>(d_src, d_dst, total_elements - 1);
+        }
         
         RAFT_CUDA_TRY(cudaPeekAtLastError());
         RAFT_CUDA_TRY(cudaDeviceSynchronize());
