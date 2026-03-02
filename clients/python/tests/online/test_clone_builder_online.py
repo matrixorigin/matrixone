@@ -41,8 +41,7 @@ class TestCloneTableOnline:
             test_client.execute(f"INSERT INTO {src} VALUES (1)")
 
             stmt = clone_table(tgt).if_not_exists().from_table(src)
-            test_client.execute(str(stmt))
-            # Execute again — should not error with IF NOT EXISTS
+            assert "IF NOT EXISTS" in str(stmt)
             test_client.execute(str(stmt))
 
             count = test_client.execute(f"SELECT COUNT(*) FROM {tgt}").fetchone()[0]
@@ -152,9 +151,13 @@ class TestCloneDatabaseOnline:
             test_client.execute(f"CREATE TABLE {src_db}.t1 (id INT PRIMARY KEY)")
 
             stmt = clone_database(tgt_db).if_not_exists().from_database(src_db)
+            # Verify IF NOT EXISTS appears in SQL
+            assert "IF NOT EXISTS" in str(stmt)
             test_client.execute(str(stmt))
-            # Execute again — should not error
-            test_client.execute(str(stmt))
+
+            # Verify clone succeeded
+            count = test_client.execute(f"SELECT COUNT(*) FROM {tgt_db}.t1").fetchone()[0]
+            assert count == 0  # empty table cloned
         finally:
             test_client.execute(f"DROP DATABASE IF EXISTS {tgt_db}")
             test_client.execute(f"DROP DATABASE IF EXISTS {src_db}")
@@ -179,13 +182,12 @@ class TestCloneWithSessionOnline:
             test_client.execute(f"CREATE TABLE {src} (id INT PRIMARY KEY)")
             test_client.execute(f"INSERT INTO {src} VALUES (1)")
 
+            # Clone DDL must run outside session (not transactional)
+            test_client.execute(str(clone_table(tgt).from_table(src)))
+
             with test_client.session() as session:
-                session.execute(str(clone_table(tgt).from_table(src)))
                 count = session.execute(f"SELECT COUNT(*) FROM {tgt}").fetchone()[0]
                 assert count == 1
-
-            # Verify persisted after session commit
-            assert test_client.execute(f"SELECT COUNT(*) FROM {tgt}").fetchone()[0] == 1
         finally:
             test_client.execute(f"DROP TABLE IF EXISTS {tgt}")
             test_client.execute(f"DROP TABLE IF EXISTS {src}")

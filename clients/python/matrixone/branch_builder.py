@@ -10,13 +10,7 @@ from typing import Optional, Union, Type
 from enum import Enum
 
 from .branch import MergeConflictStrategy
-
-try:
-    from sqlalchemy.orm import DeclarativeMeta as _unused  # noqa: F401
-
-    SQLALCHEMY_AVAILABLE = True
-except ImportError:
-    SQLALCHEMY_AVAILABLE = False
+from ._utils import get_table_name as _get_table_name, require_non_empty as _require_non_empty
 
 
 class DiffOutputOption(str, Enum):
@@ -26,33 +20,6 @@ class DiffOutputOption(str, Enum):
     LIMIT = 'limit'
     FILE = 'file'
     AS = 'as'
-
-
-def _get_table_name(table: Union[str, Type]) -> str:
-    """Extract table name from string or ORM model.
-
-    Supports:
-    - "table_name"
-    - "db.table_name"
-    - ORM model with optional __table_args__['schema'] for db.table
-    """
-    if isinstance(table, str):
-        return table
-    if SQLALCHEMY_AVAILABLE and hasattr(table, '__tablename__'):
-        name = table.__tablename__
-        if hasattr(table, '__table_args__'):
-            args = table.__table_args__
-            if isinstance(args, dict) and 'schema' in args:
-                return f"{args['schema']}.{name}"
-        return name
-    raise ValueError(f"Invalid table parameter: {table}. Expected string or ORM model.")
-
-
-def _require_non_empty(value: str, param_name: str) -> str:
-    """Validate that a string parameter is non-empty."""
-    if not value:
-        raise ValueError(f"{param_name} must be a non-empty string")
-    return value
 
 
 class BranchStatement:

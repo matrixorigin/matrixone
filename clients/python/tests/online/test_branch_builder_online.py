@@ -367,26 +367,25 @@ class TestComplexWorkflowOnline:
 class TestWithSessionOnline:
 
     def test_branch_in_session(self, test_client):
-        """Branch operations work within session context."""
+        """Branch create via client, then query in session."""
         src = f"bb_txsrc_{_uid()}"
         tgt = f"bb_txtgt_{_uid()}"
         try:
             test_client.execute(f"CREATE TABLE {src} (id INT PRIMARY KEY)")
             test_client.execute(f"INSERT INTO {src} VALUES (1)")
 
+            # Branch DDL must run outside session (not transactional)
+            test_client.execute(str(create_table_branch(tgt).from_table(src)))
+
             with test_client.session() as session:
-                session.execute(str(create_table_branch(tgt).from_table(src)))
                 result = session.execute(f"SELECT COUNT(*) FROM {tgt}").fetchone()
                 assert result[0] == 1
-
-            # Verify persisted after session commit
-            assert test_client.execute(f"SELECT COUNT(*) FROM {tgt}").fetchone()[0] == 1
         finally:
             test_client.execute(f"DROP TABLE IF EXISTS {tgt}")
             test_client.execute(f"DROP TABLE IF EXISTS {src}")
 
     def test_multiple_branches_in_session(self, test_client):
-        """Multiple branch operations in single session."""
+        """Multiple branch creates via client, then query in session."""
         src = f"bb_multisrc_{_uid()}"
         b1 = f"bb_multib1_{_uid()}"
         b2 = f"bb_multib2_{_uid()}"
@@ -394,10 +393,10 @@ class TestWithSessionOnline:
             test_client.execute(f"CREATE TABLE {src} (id INT PRIMARY KEY)")
             test_client.execute(f"INSERT INTO {src} VALUES (1), (2)")
 
-            with test_client.session() as session:
-                session.execute(str(create_table_branch(b1).from_table(src)))
-                session.execute(str(create_table_branch(b2).from_table(src)))
+            test_client.execute(str(create_table_branch(b1).from_table(src)))
+            test_client.execute(str(create_table_branch(b2).from_table(src)))
 
+            with test_client.session() as session:
                 r1 = session.execute(f"SELECT COUNT(*) FROM {b1}").fetchone()[0]
                 r2 = session.execute(f"SELECT COUNT(*) FROM {b2}").fetchone()[0]
                 assert r1 == 2

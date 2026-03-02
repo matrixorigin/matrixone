@@ -33,7 +33,7 @@ class TestCloneTable:
 
     def test_with_snapshot(self):
         sql = clone_table('tgt').from_table('src', snapshot='snap1').compile()
-        assert sql == 'CREATE TABLE tgt CLONE src {SNAPSHOT = "snap1"}'
+        assert sql == 'CREATE TABLE tgt CLONE src {snapshot = "snap1"}'
 
     def test_if_not_exists(self):
         sql = clone_table('tgt').if_not_exists().from_table('src').compile()
@@ -45,7 +45,7 @@ class TestCloneTable:
 
     def test_all_options(self):
         sql = clone_table('tgt').if_not_exists().from_table('src', snapshot='snap1').to_account('tenant1').compile()
-        assert sql == 'CREATE TABLE IF NOT EXISTS tgt CLONE src {SNAPSHOT = "snap1"} TO ACCOUNT tenant1'
+        assert sql == 'CREATE TABLE IF NOT EXISTS tgt CLONE src {snapshot = "snap1"} TO ACCOUNT tenant1'
 
     def test_qualified_names(self):
         sql = clone_table('db2.tgt').from_table('db1.src').compile()
@@ -115,7 +115,7 @@ class TestCloneDatabase:
 
     def test_with_snapshot(self):
         sql = clone_database('tgt_db').from_database('src_db', snapshot='snap1').compile()
-        assert sql == 'CREATE DATABASE tgt_db CLONE src_db {SNAPSHOT = "snap1"}'
+        assert sql == 'CREATE DATABASE tgt_db CLONE src_db {snapshot = "snap1"}'
 
     def test_if_not_exists(self):
         sql = clone_database('tgt_db').if_not_exists().from_database('src_db').compile()
@@ -133,7 +133,7 @@ class TestCloneDatabase:
             .to_account('tenant1')
             .compile()
         )
-        assert sql == 'CREATE DATABASE IF NOT EXISTS tgt_db CLONE src_db {SNAPSHOT = "snap1"} TO ACCOUNT tenant1'
+        assert sql == 'CREATE DATABASE IF NOT EXISTS tgt_db CLONE src_db {snapshot = "snap1"} TO ACCOUNT tenant1'
 
     def test_str(self):
         stmt = clone_database('tgt').from_database('src')

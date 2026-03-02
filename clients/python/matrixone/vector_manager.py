@@ -27,13 +27,8 @@ if TYPE_CHECKING:
     from .ivf_rank import IVFRankMode
 
 
-def _extract_table_name(table_name_or_model: Union[str, type]) -> str:
-    """Extract table name from string or SQLAlchemy Model class."""
-    if isinstance(table_name_or_model, str):
-        return table_name_or_model
-    if hasattr(table_name_or_model, '__tablename__'):
-        return table_name_or_model.__tablename__
-    return str(table_name_or_model)
+from ._utils import get_table_name as _extract_table_name
+from .exceptions import QueryError
 
 
 class _VectorManagerBase:
@@ -237,7 +232,7 @@ class VectorManager(_VectorManagerBase):
             self.executor.execute(create_sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to create IVFFLAT vector index {name} on table {table_name}: {e}")
+            raise QueryError(f"Failed to create IVFFLAT vector index {name} on table {table_name}: {e}")
 
     def create_hnsw(
         self,
@@ -256,7 +251,7 @@ class VectorManager(_VectorManagerBase):
             self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to create HNSW vector index {name} on table {table_name}: {e}")
+            raise QueryError(f"Failed to create HNSW vector index {name} on table {table_name}: {e}")
 
     def drop(self, table_name: Union[str, type], name: str) -> "VectorManager":
         """Drop a vector index."""
@@ -266,7 +261,7 @@ class VectorManager(_VectorManagerBase):
             self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to drop vector index {name} on table {table_name}: {e}")
+            raise QueryError(f"Failed to drop vector index {name} on table {table_name}: {e}")
 
     def enable_ivf(self, probe_limit: int = 1) -> "VectorManager":
         """Enable IVF indexing."""
@@ -276,7 +271,7 @@ class VectorManager(_VectorManagerBase):
                 self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"IVF indexing is not supported: {e}")
+            raise QueryError(f"IVF indexing is not supported: {e}")
 
     def disable_ivf(self) -> "VectorManager":
         """Disable IVF indexing."""
@@ -285,7 +280,7 @@ class VectorManager(_VectorManagerBase):
             self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to disable IVF indexing: {e}")
+            raise QueryError(f"Failed to disable IVF indexing: {e}")
 
     def enable_hnsw(self) -> "VectorManager":
         """Enable HNSW indexing."""
@@ -294,7 +289,7 @@ class VectorManager(_VectorManagerBase):
             self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to enable HNSW indexing: {e}")
+            raise QueryError(f"Failed to enable HNSW indexing: {e}")
 
     def disable_hnsw(self) -> "VectorManager":
         """Disable HNSW indexing."""
@@ -303,7 +298,7 @@ class VectorManager(_VectorManagerBase):
             self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to disable HNSW indexing: {e}")
+            raise QueryError(f"Failed to disable HNSW indexing: {e}")
 
     def insert(self, table_name: Union[str, type], data: Dict[str, Any]) -> "VectorManager":
         """Insert vector data into table."""
@@ -313,7 +308,7 @@ class VectorManager(_VectorManagerBase):
             self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to insert vector data into table {table_name}: {e}")
+            raise QueryError(f"Failed to insert vector data into table {table_name}: {e}")
 
     def batch_insert(self, table_name: Union[str, type], data_list: List[Dict[str, Any]]) -> "VectorManager":
         """Batch insert vector data."""
@@ -322,7 +317,7 @@ class VectorManager(_VectorManagerBase):
                 self.insert(table_name, record)
             return self
         except Exception as e:
-            raise Exception(f"Failed to batch insert vector data into table {table_name}: {e}")
+            raise QueryError(f"Failed to batch insert vector data into table {table_name}: {e}")
 
     def similarity_search(
         self,
@@ -344,7 +339,7 @@ class VectorManager(_VectorManagerBase):
             result = self.executor.execute(sql, _log_mode=_log_mode)
             return [dict(row._mapping) for row in result]
         except Exception as e:
-            raise Exception(f"Failed to perform similarity search on table {table_name}: {e}")
+            raise QueryError(f"Failed to perform similarity search on table {table_name}: {e}")
 
     def range_search(
         self,
@@ -365,7 +360,7 @@ class VectorManager(_VectorManagerBase):
             result = self.executor.execute(sql, _log_mode=_log_mode)
             return [dict(row._mapping) for row in result]
         except Exception as e:
-            raise Exception(f"Failed to perform range search on table {table_name}: {e}")
+            raise QueryError(f"Failed to perform range search on table {table_name}: {e}")
 
     def search_with_rank(
         self,
@@ -482,7 +477,7 @@ class VectorManager(_VectorManagerBase):
             result = self.executor.execute(sql, _log_mode=_log_mode)
             return [dict(row._mapping) for row in result]
         except Exception as e:
-            raise Exception(f"Failed to perform vector search with rank on table {table_name}: {e}") from e
+            raise QueryError(f"Failed to perform vector search with rank on table {table_name}: {e}") from e
 
     def get_ivf_stats(
         self,
@@ -517,12 +512,12 @@ class VectorManager(_VectorManagerBase):
             vector_columns = result.fetchall()
 
             if not vector_columns:
-                raise Exception(f"No vector columns found in table {table_name}")
+                raise QueryError(f"No vector columns found in table {table_name}")
             elif len(vector_columns) == 1:
                 column_name = vector_columns[0][0]
             else:
                 column_names = [col[0] for col in vector_columns]
-                raise Exception(
+                raise QueryError(
                     f"Multiple vector columns found in table {table_name}: {column_names}. "
                     f"Please specify the column_name parameter."
                 )
@@ -533,12 +528,12 @@ class VectorManager(_VectorManagerBase):
         index_tables = {row[0]: row[1] for row in result}
 
         if not index_tables:
-            raise Exception(f"No IVF index found for table {table_name}, column {column_name}")
+            raise QueryError(f"No IVF index found for table {table_name}, column {column_name}")
 
         # Get the entries table name for distribution analysis
         entries_table = index_tables.get('entries')
         if not entries_table:
-            raise Exception("No entries table found in IVF index")
+            raise QueryError("No entries table found in IVF index")
 
         # Get bucket distribution
         dist_sql = self._build_distribution_sql(database, entries_table)
@@ -591,7 +586,7 @@ class AsyncVectorManager(_VectorManagerBase):
             await self.executor.execute(create_sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to create IVFFLAT vector index {name} on table {table_name}: {e}")
+            raise QueryError(f"Failed to create IVFFLAT vector index {name} on table {table_name}: {e}")
 
     async def create_hnsw(
         self,
@@ -610,7 +605,7 @@ class AsyncVectorManager(_VectorManagerBase):
             await self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to create HNSW vector index {name} on table {table_name}: {e}")
+            raise QueryError(f"Failed to create HNSW vector index {name} on table {table_name}: {e}")
 
     async def drop(self, table_name: Union[str, type], name: str) -> "AsyncVectorManager":
         """Drop a vector index."""
@@ -620,7 +615,7 @@ class AsyncVectorManager(_VectorManagerBase):
             await self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to drop vector index {name} on table {table_name}: {e}")
+            raise QueryError(f"Failed to drop vector index {name} on table {table_name}: {e}")
 
     async def enable_ivf(self, probe_limit: int = 1) -> "AsyncVectorManager":
         """Enable IVF indexing."""
@@ -630,7 +625,7 @@ class AsyncVectorManager(_VectorManagerBase):
                 await self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"IVF indexing is not supported: {e}")
+            raise QueryError(f"IVF indexing is not supported: {e}")
 
     async def disable_ivf(self) -> "AsyncVectorManager":
         """Disable IVF indexing."""
@@ -639,7 +634,7 @@ class AsyncVectorManager(_VectorManagerBase):
             await self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to disable IVF indexing: {e}")
+            raise QueryError(f"Failed to disable IVF indexing: {e}")
 
     async def enable_hnsw(self) -> "AsyncVectorManager":
         """Enable HNSW indexing."""
@@ -648,7 +643,7 @@ class AsyncVectorManager(_VectorManagerBase):
             await self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to enable HNSW indexing: {e}")
+            raise QueryError(f"Failed to enable HNSW indexing: {e}")
 
     async def disable_hnsw(self) -> "AsyncVectorManager":
         """Disable HNSW indexing."""
@@ -657,7 +652,7 @@ class AsyncVectorManager(_VectorManagerBase):
             await self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to disable HNSW indexing: {e}")
+            raise QueryError(f"Failed to disable HNSW indexing: {e}")
 
     async def insert(self, table_name: Union[str, type], data: Dict[str, Any]) -> "AsyncVectorManager":
         """Insert vector data into table."""
@@ -667,7 +662,7 @@ class AsyncVectorManager(_VectorManagerBase):
             await self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to insert vector data into table {table_name}: {e}")
+            raise QueryError(f"Failed to insert vector data into table {table_name}: {e}")
 
     async def batch_insert(self, table_name: Union[str, type], data_list: List[Dict[str, Any]]) -> "AsyncVectorManager":
         """Batch insert vector data."""
@@ -676,7 +671,7 @@ class AsyncVectorManager(_VectorManagerBase):
                 await self.insert(table_name, record)
             return self
         except Exception as e:
-            raise Exception(f"Failed to batch insert vector data into table {table_name}: {e}")
+            raise QueryError(f"Failed to batch insert vector data into table {table_name}: {e}")
 
     async def similarity_search(
         self,
@@ -698,7 +693,7 @@ class AsyncVectorManager(_VectorManagerBase):
             result = await self.executor.execute(sql, _log_mode=_log_mode)
             return [dict(row._mapping) for row in result]
         except Exception as e:
-            raise Exception(f"Failed to perform similarity search on table {table_name}: {e}")
+            raise QueryError(f"Failed to perform similarity search on table {table_name}: {e}")
 
     async def range_search(
         self,
@@ -719,7 +714,7 @@ class AsyncVectorManager(_VectorManagerBase):
             result = await self.executor.execute(sql, _log_mode=_log_mode)
             return [dict(row._mapping) for row in result]
         except Exception as e:
-            raise Exception(f"Failed to perform range search on table {table_name}: {e}")
+            raise QueryError(f"Failed to perform range search on table {table_name}: {e}")
 
     async def search_with_rank(
         self,
@@ -840,7 +835,7 @@ class AsyncVectorManager(_VectorManagerBase):
             result = await self.executor.execute(sql, _log_mode=_log_mode)
             return [dict(row._mapping) for row in result]
         except Exception as e:
-            raise Exception(f"Failed to perform vector search with rank on table {table_name}: {e}") from e
+            raise QueryError(f"Failed to perform vector search with rank on table {table_name}: {e}") from e
 
     async def get_ivf_stats(
         self,
@@ -875,12 +870,12 @@ class AsyncVectorManager(_VectorManagerBase):
             vector_columns = result.fetchall()
 
             if not vector_columns:
-                raise Exception(f"No vector columns found in table {table_name}")
+                raise QueryError(f"No vector columns found in table {table_name}")
             elif len(vector_columns) == 1:
                 column_name = vector_columns[0][0]
             else:
                 column_names = [col[0] for col in vector_columns]
-                raise Exception(
+                raise QueryError(
                     f"Multiple vector columns found in table {table_name}: {column_names}. "
                     f"Please specify the column_name parameter."
                 )
@@ -891,12 +886,12 @@ class AsyncVectorManager(_VectorManagerBase):
         index_tables = {row[0]: row[1] for row in result}
 
         if not index_tables:
-            raise Exception(f"No IVF index found for table {table_name}, column {column_name}")
+            raise QueryError(f"No IVF index found for table {table_name}, column {column_name}")
 
         # Get the entries table name for distribution analysis
         entries_table = index_tables.get('entries')
         if not entries_table:
-            raise Exception("No entries table found in IVF index")
+            raise QueryError("No entries table found in IVF index")
 
         # Get bucket distribution
         dist_sql = self._build_distribution_sql(database, entries_table)

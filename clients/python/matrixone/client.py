@@ -50,6 +50,89 @@ from .vector_manager import VectorManager
 from .version import get_version_manager
 
 
+def _classify_db_error(error_msg: str, sql_or_stmt: Any = None) -> QueryError:
+    """Classify a database error into a user-friendly QueryError.
+
+    Args:
+        error_msg: The string representation of the original exception.
+        sql_or_stmt: The SQL string or SQLAlchemy statement that caused the error.
+
+    Returns:
+        A QueryError with a helpful, classified message.
+    """
+    import re
+
+    msg_lower = error_msg.lower()
+
+    # Permission / OS-level errors (e.g. stage path not accessible)
+    if 'permission denied' in msg_lower:
+        path_match = re.search(r'(?:mkdir|open|stat|access)\s+([^\s:]+)', error_msg)
+        path_hint = f" Path: {path_match.group(1)}" if path_match else ""
+        return QueryError(
+            f"Permission denied on server filesystem.{path_hint} "
+            f"Ensure the MatrixOne server process has access to the target path."
+        )
+
+    # Object does not exist
+    if 'does not exist' in msg_lower or 'no such table' in msg_lower or "doesn't exist" in msg_lower:
+        match = re.search(r"(?:table|database)\s+[\"']?(\w+)[\"']?\s+does not exist", error_msg, re.IGNORECASE)
+        if match:
+            return QueryError(
+                f"Table or database '{match.group(1)}' does not exist. "
+                f"Create it first using client.create_table() or CREATE TABLE/DATABASE statement."
+            )
+        return QueryError(f"Object not found: {error_msg}")
+
+    # Object already exists
+    if 'already exists' in msg_lower and '1050' in error_msg:
+        match = re.search(r"table\s+(\w+)\s+already\s+exists", error_msg, re.IGNORECASE) if 'table' in msg_lower else None
+        if match:
+            table_name = match.group(1)
+            return QueryError(
+                f"Table '{table_name}' already exists. "
+                f"Use DROP TABLE {table_name} or client.drop_table() to remove it first."
+            )
+        return QueryError(f"Object already exists: {error_msg}")
+
+    # Duplicate key/entry
+    if 'duplicate' in msg_lower and ('1062' in error_msg or '1061' in error_msg):
+        return QueryError(
+            f"Duplicate entry error: {error_msg}. "
+            f"Check for duplicate primary key or unique constraint violations."
+        )
+
+    # SQL syntax error
+    if 'syntax error' in msg_lower or '1064' in error_msg:
+        sql_display = sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
+        sql_preview = (sql_display[:200] + '...') if len(str(sql_display)) > 200 else sql_display
+        return QueryError(f"SQL syntax error: {error_msg}\nQuery: {sql_preview}")
+
+    # Column not found
+    if 'column' in msg_lower and ('unknown' in msg_lower or 'not found' in msg_lower):
+        return QueryError(f"Column not found: {error_msg}. Check your column names and table schema.")
+
+    # NULL constraint
+    if 'cannot be null' in msg_lower or '1048' in error_msg:
+        return QueryError(f"NULL constraint violation: {error_msg}. Some columns require non-NULL values.")
+
+    # Feature not supported
+    if 'not supported' in msg_lower and '20105' in error_msg:
+        return QueryError(
+            f"MatrixOne feature limitation: {error_msg}. "
+            f"This feature may require additional configuration or is not yet supported."
+        )
+
+    # Bind parameter error
+    if 'bind parameter' in msg_lower or 'InvalidRequestError' in error_msg:
+        return QueryError(
+            f"Parameter binding error: {error_msg}. "
+            f"This might be caused by special characters in your data (colons in JSON, etc.)"
+        )
+
+    # Generic fallback
+    return QueryError(f"Query execution failed: {error_msg}")
+
+
 class ClientExecutor(BaseMatrixOneExecutor):
     """Client executor that uses Client's execute method"""
 
@@ -1170,85 +1253,7 @@ class Client(BaseMatrixOneClient):
 
                 print(f"Warning: Error logging failed: {log_err}", file=sys.stderr)
 
-            # Extract user-friendly error message
-            error_msg = str(e)
-
-            # Handle common database errors with helpful messages
-            # Check for "does not exist" first before "syntax error"
-            if (
-                'does not exist' in error_msg.lower()
-                or 'no such table' in error_msg.lower()
-                or 'doesn\'t exist' in error_msg.lower()
-            ):
-                # Table doesn't exist
-                import re
-
-                match = re.search(r"(?:table|database)\s+[\"']?(\w+)[\"']?\s+does not exist", error_msg, re.IGNORECASE)
-                if match:
-                    obj_name = match.group(1)
-                    raise QueryError(
-                        f"Table or database '{obj_name}' does not exist. "
-                        f"Create it first using client.create_table() or CREATE TABLE/DATABASE statement."
-                    ) from None
-                else:
-                    raise QueryError(f"Object not found: {error_msg}") from None
-
-            elif 'already exists' in error_msg.lower() and '1050' in error_msg:
-                # Table already exists
-                match = None
-                if 'table' in error_msg.lower():
-                    import re
-
-                    match = re.search(r"table\s+(\w+)\s+already\s+exists", error_msg, re.IGNORECASE)
-                if match:
-                    table_name = match.group(1)
-                    raise QueryError(
-                        f"Table '{table_name}' already exists. "
-                        f"Use DROP TABLE {table_name} or client.drop_table() to remove it first."
-                    ) from None
-                else:
-                    raise QueryError(f"Object already exists: {error_msg}") from None
-
-            elif 'duplicate' in error_msg.lower() and ('1062' in error_msg or '1061' in error_msg):
-                # Duplicate key/entry
-                raise QueryError(
-                    f"Duplicate entry error: {error_msg}. "
-                    f"Check for duplicate primary key or unique constraint violations."
-                ) from None
-
-            elif 'syntax error' in error_msg.lower() or '1064' in error_msg:
-                # SQL syntax error
-                sql_display = sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
-                sql_preview = sql_display[:200] + '...' if len(sql_display) > 200 else sql_display
-                raise QueryError(f"SQL syntax error: {error_msg}\n" f"Query: {sql_preview}") from None
-
-            elif 'column' in error_msg.lower() and ('unknown' in error_msg.lower() or 'not found' in error_msg.lower()):
-                # Column doesn't exist
-                raise QueryError(f"Column not found: {error_msg}. " f"Check your column names and table schema.") from None
-
-            elif 'cannot be null' in error_msg.lower() or '1048' in error_msg:
-                # NULL constraint violation
-                raise QueryError(
-                    f"NULL constraint violation: {error_msg}. " f"Some columns require non-NULL values."
-                ) from None
-
-            elif 'not supported' in error_msg.lower() and '20105' in error_msg:
-                # MatrixOne-specific: feature not supported
-                raise QueryError(
-                    f"MatrixOne feature limitation: {error_msg}. "
-                    f"This feature may require additional configuration or is not yet supported."
-                ) from None
-
-            elif 'bind parameter' in error_msg.lower() or 'InvalidRequestError' in error_msg:
-                # SQLAlchemy bind parameter error (from JSON colons, etc.)
-                raise QueryError(
-                    f"Parameter binding error: {error_msg}. "
-                    f"This might be caused by special characters in your data (colons in JSON, etc.)"
-                ) from None
-
-            else:
-                # Generic error - still cleaner than full SQLAlchemy stack
-                raise QueryError(f"Query execution failed: {error_msg}") from None
+            raise _classify_db_error(str(e), sql_or_stmt) from None
 
     def insert(self, table_name_or_model, data: dict) -> "ResultSet":
         """
@@ -3336,7 +3341,7 @@ class Session(SQLAlchemySession):
                 override_sql_log_mode=_log_mode,
             )
             self.client.logger.log_error(e, context="Session query execution")
-            raise QueryError(f"Session query execution failed: {e}")
+            raise _classify_db_error(str(e), sql_or_stmt) from None
 
     def get_connection(self):
         """

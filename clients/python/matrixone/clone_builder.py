@@ -7,39 +7,7 @@ by passing them to client.execute() or session.execute() as strings.
 
 from typing import Optional, Union, Type
 
-try:
-    from sqlalchemy.orm import DeclarativeMeta as _unused  # noqa: F401
-
-    SQLALCHEMY_AVAILABLE = True
-except ImportError:
-    SQLALCHEMY_AVAILABLE = False
-
-
-def _get_table_name(table: Union[str, Type]) -> str:
-    """Extract table name from string or ORM model.
-
-    Supports:
-    - "table_name"
-    - "db.table_name"
-    - ORM model with optional __table_args__['schema'] for db.table
-    """
-    if isinstance(table, str):
-        return table
-    if SQLALCHEMY_AVAILABLE and hasattr(table, '__tablename__'):
-        name = table.__tablename__
-        if hasattr(table, '__table_args__'):
-            args = table.__table_args__
-            if isinstance(args, dict) and 'schema' in args:
-                return f"{args['schema']}.{name}"
-        return name
-    raise ValueError(f"Invalid table parameter: {table}. Expected string or ORM model.")
-
-
-def _require_non_empty(value: str, param_name: str) -> str:
-    """Validate that a string parameter is non-empty."""
-    if not value:
-        raise ValueError(f"{param_name} must be a non-empty string")
-    return value
+from ._utils import get_table_name as _get_table_name, require_non_empty as _require_non_empty
 
 
 class CloneStatement:
@@ -96,7 +64,7 @@ class CloneTable(CloneStatement):
         ine = "IF NOT EXISTS " if self._if_not_exists else ""
         sql = f"CREATE TABLE {ine}{self._target} CLONE {self._source}"
         if self._snapshot:
-            sql += f' {{SNAPSHOT = "{self._snapshot}"}}'
+            sql += f' {{snapshot = "{self._snapshot}"}}'
         if self._account:
             sql += f" TO ACCOUNT {self._account}"
         return sql
@@ -137,7 +105,7 @@ class CloneDatabase(CloneStatement):
         ine = "IF NOT EXISTS " if self._if_not_exists else ""
         sql = f"CREATE DATABASE {ine}{self._target} CLONE {self._source}"
         if self._snapshot:
-            sql += f' {{SNAPSHOT = "{self._snapshot}"}}'
+            sql += f' {{snapshot = "{self._snapshot}"}}'
         if self._account:
             sql += f" TO ACCOUNT {self._account}"
         return sql

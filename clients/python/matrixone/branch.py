@@ -23,14 +23,7 @@ from enum import Enum
 
 from .exceptions import BranchError, ConnectionError
 from .version import requires_version
-
-try:
-    from sqlalchemy.orm import DeclarativeMeta
-
-    SQLALCHEMY_AVAILABLE = True
-except ImportError:
-    SQLALCHEMY_AVAILABLE = False
-    DeclarativeMeta = type  # Fallback type
+from ._utils import get_table_name
 
 
 class DiffOutput(str, Enum):
@@ -73,34 +66,11 @@ class BaseBranchManager:
         return self.executor if self.executor else self.client
 
     def _get_table_name(self, table: Union[str, Type]) -> str:
-        """
-        Extract table name from string or ORM model.
-
-        Supports:
-        - "table_name"
-        - "db.table_name"
-        - TableModel (SQLAlchemy ORM)
-
-        Args:
-            table: Table name string or ORM model class
-
-        Returns:
-            Fully qualified table name string
-        """
-        if isinstance(table, str):
-            return table
-
-        # Handle SQLAlchemy ORM model
-        if SQLALCHEMY_AVAILABLE and hasattr(table, '__tablename__'):
-            table_name = table.__tablename__
-            # Check if model has __table_args__ with schema
-            if hasattr(table, '__table_args__'):
-                table_args = table.__table_args__
-                if isinstance(table_args, dict) and 'schema' in table_args:
-                    return f"{table_args['schema']}.{table_name}"
-            return table_name
-
-        raise BranchError(f"Invalid table parameter: {table}. Expected string or ORM model.")
+        """Extract table name from string or ORM model."""
+        try:
+            return get_table_name(table)
+        except ValueError as e:
+            raise BranchError(str(e)) from e
 
     def _build_create_table_branch_sql(
         self,
