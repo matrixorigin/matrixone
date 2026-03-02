@@ -1629,7 +1629,7 @@ func (p *PartitionState) countTombstoneStatsLinear(
 			var commitTSs []types.TS
 			// When cnCreated=false (TN created), ReadDeletes reads [Rowid, CommitTS] at indices [0, 1]
 			// When cnCreated=true (CN created), ReadDeletes only reads [Rowid] at index [0], no CommitTS
-			if needCheckCommitTs && !cnCreated && len(persistedDeletes) > 1 {
+			if needCheckCommitTs && len(persistedDeletes) > 2 {
 				commitTSs = vector.MustFixedColNoTypeCheck[types.TS](&persistedDeletes[1])
 			}
 
@@ -1728,7 +1728,7 @@ func (p *PartitionState) countTombstoneStatsWithMap(
 				var commitTSs []types.TS
 				// When cnCreated=false (TN created), ReadDeletes reads [Rowid, CommitTS] at indices [0, 1]
 				// When cnCreated=true (CN created), ReadDeletes only reads [Rowid] at index [0], no CommitTS
-				if needCheckCommitTs && !cnCreated && len(persistedDeletes) > 1 {
+				if needCheckCommitTs && len(persistedDeletes) > 2 {
 					commitTSs = vector.MustFixedColNoTypeCheck[types.TS](&persistedDeletes[1])
 				}
 
