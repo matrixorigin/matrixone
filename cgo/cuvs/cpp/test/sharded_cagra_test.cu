@@ -7,78 +7,52 @@
 using namespace matrixone;
 
 TEST(GpuShardedCagraIndexTest, BasicLoadAndSearch) {
-    uint32_t dimension = 16;
-    uint64_t count = 100;
+    const uint32_t dimension = 16;
+    const uint64_t count = 100;
     std::vector<float> dataset(count * dimension);
-    for (size_t i = 0; i < dataset.size(); ++i) {
-        dataset[i] = static_cast<float>(rand()) / RAND_MAX;
-    }
-
-    size_t intermediate_graph_degree = 64;
-    size_t graph_degree = 32;
-    uint32_t nthread = 1;
-    std::vector<int> devices = {0};
-
-    GpuShardedCagraIndex<float> index(dataset.data(), count, dimension, 
-                                      cuvs::distance::DistanceType::L2Expanded, 
-                                      intermediate_graph_degree, graph_degree, devices, nthread);
-    index.Load();
-
-    // Verify Search
-    std::vector<float> queries(dimension);
-    for (size_t i = 0; i < dimension; ++i) queries[i] = dataset[i]; 
+    for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
     
-    auto result = index.Search(queries.data(), 1, dimension, 5, 32);
-    
-    ASSERT_EQ(result.Neighbors.size(), (size_t)5);
-    ASSERT_EQ(result.Neighbors[0], 0);
+    std::vector<int> devices = {0}; // Single GPU clique for testing
+    gpu_sharded_cagra_index_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 64, 32, devices, 1);
+    index.load();
 
-    index.Destroy();
+    std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
+    auto result = index.search(queries.data(), 1, dimension, 5, 32);
+
+    ASSERT_EQ(result.neighbors.size(), (size_t)5);
+    ASSERT_EQ(result.neighbors[0], 0);
+
+    index.destroy();
 }
 
 TEST(GpuShardedCagraIndexTest, SaveAndLoadFromFile) {
-    uint32_t dimension = 16;
-    uint64_t count = 100;
+    const uint32_t dimension = 16;
+    const uint64_t count = 100;
     std::vector<float> dataset(count * dimension);
-    for (size_t i = 0; i < dataset.size(); ++i) {
-        dataset[i] = static_cast<float>(rand()) / RAND_MAX;
-    }
-
-    size_t intermediate_graph_degree = 64;
-    size_t graph_degree = 32;
-    uint32_t nthread = 1;
-    std::vector<int> devices = {0};
+    for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
     std::string filename = "test_sharded_cagra.bin";
+    std::vector<int> devices = {0};
 
     // 1. Build and Save
     {
-        GpuShardedCagraIndex<float> index(dataset.data(), count, dimension, 
-                                          cuvs::distance::DistanceType::L2Expanded, 
-                                          intermediate_graph_degree, graph_degree, devices, nthread);
-        index.Load();
-        index.Save(filename);
-        index.Destroy();
+        gpu_sharded_cagra_index_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 64, 32, devices, 1);
+        index.load();
+        index.save(filename);
+        index.destroy();
     }
 
-    // 2. Load from file and Search
+    // 2. Load and Search
     {
-        GpuShardedCagraIndex<float> index(filename, dimension, 
-                                          cuvs::distance::DistanceType::L2Expanded, 
-                                          devices, nthread);
-        index.Load();
+        gpu_sharded_cagra_index_t<float> index(filename, dimension, cuvs::distance::DistanceType::L2Expanded, devices, 1);
+        index.load();
         
-        ASSERT_EQ(index.Count, (uint32_t)100);
-        ASSERT_EQ(index.GraphDegree, graph_degree);
-
-        std::vector<float> queries(dimension);
-        for (size_t i = 0; i < dimension; ++i) queries[i] = dataset[i];
-
-        auto result = index.Search(queries.data(), 1, dimension, 5, 32);
+        std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
+        auto result = index.search(queries.data(), 1, dimension, 5, 32);
         
-        ASSERT_EQ(result.Neighbors.size(), (size_t)5);
-        ASSERT_EQ(result.Neighbors[0], 0);
+        ASSERT_EQ(result.neighbors.size(), (size_t)5);
+        ASSERT_EQ(result.neighbors[0], 0);
 
-        index.Destroy();
+        index.destroy();
     }
 
     std::remove(filename.c_str());

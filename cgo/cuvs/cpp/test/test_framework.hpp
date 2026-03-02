@@ -61,6 +61,7 @@ inline bool has_exception(const std::exception_ptr& ep) {
     } \
 } while (0)
 #define ASSERT_NE(val1, val2) do { if (!((val1) != (val2))) { REPORT_FAILURE("ASSERT_NE failed: " #val1 " vs " #val2); } } while (0)
+#define ASSERT_GE(val1, val2) do { if (!((val1) >= (val2))) { REPORT_FAILURE("ASSERT_GE failed: " #val1 " vs " #val2); } } while (0)
 #define ASSERT_THROW(statement, expected_exception) do { bool caught = false; try { statement; } catch (const expected_exception&) { caught = true; } if (!caught) { REPORT_FAILURE("ASSERT_THROW failed"); } } while (0)
 #define ASSERT_NO_THROW(statement) do { try { statement; } catch (...) { REPORT_FAILURE("ASSERT_NO_THROW failed"); } } while (0)
 

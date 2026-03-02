@@ -7,33 +7,33 @@
 extern "C" {
 #endif
 
-typedef void* GpuShardedCagraIndexC;
-typedef void* GpuShardedCagraSearchResultC;
+typedef void* gpu_sharded_cagra_index_c;
+typedef void* gpu_sharded_cagra_search_result_c;
 
 // Constructor for building from dataset across multiple GPUs
-GpuShardedCagraIndexC GpuShardedCagraIndex_New(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, 
-                                               CuvsDistanceTypeC metric, size_t intermediate_graph_degree, 
-                                               size_t graph_degree, const int* devices, uint32_t num_devices, uint32_t nthread, CuvsQuantizationC qtype, void* errmsg);
+gpu_sharded_cagra_index_c gpu_sharded_cagra_index_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, 
+                                               distance_type_t metric, size_t intermediate_graph_degree, 
+                                               size_t graph_degree, const int* devices, uint32_t num_devices, uint32_t nthread, quantization_t qtype, void* errmsg);
 
 // Constructor for loading from file (multi-GPU)
-GpuShardedCagraIndexC GpuShardedCagraIndex_NewFromFile(const char* filename, uint32_t dimension, 
-                                                       CuvsDistanceTypeC metric, 
-                                                       const int* devices, uint32_t num_devices, uint32_t nthread, CuvsQuantizationC qtype, void* errmsg);
+gpu_sharded_cagra_index_c gpu_sharded_cagra_index_new_from_file(const char* filename, uint32_t dimension, 
+                                                       distance_type_t metric, 
+                                                       const int* devices, uint32_t num_devices, uint32_t nthread, quantization_t qtype, void* errmsg);
 
-void GpuShardedCagraIndex_Load(GpuShardedCagraIndexC index_c, void* errmsg);
+void gpu_sharded_cagra_index_load(gpu_sharded_cagra_index_c index_c, void* errmsg);
 
-void GpuShardedCagraIndex_Save(GpuShardedCagraIndexC index_c, const char* filename, void* errmsg);
+void gpu_sharded_cagra_index_save(gpu_sharded_cagra_index_c index_c, const char* filename, void* errmsg);
 
 // Performs search
-GpuShardedCagraSearchResultC GpuShardedCagraIndex_Search(GpuShardedCagraIndexC index_c, const void* queries_data, 
+gpu_sharded_cagra_search_result_c gpu_sharded_cagra_index_search(gpu_sharded_cagra_index_c index_c, const void* queries_data, 
                                                          uint64_t num_queries, uint32_t query_dimension, 
                                                          uint32_t limit, size_t itopk_size, void* errmsg);
 
-void GpuShardedCagraIndex_GetResults(GpuShardedCagraSearchResultC result_c, uint64_t num_queries, uint32_t limit, int64_t* neighbors, float* distances);
+void gpu_sharded_cagra_index_get_results(gpu_sharded_cagra_search_result_c result_c, uint64_t num_queries, uint32_t limit, int64_t* neighbors, float* distances);
 
-void GpuShardedCagraIndex_FreeSearchResult(GpuShardedCagraSearchResultC result_c);
+void gpu_sharded_cagra_index_free_search_result(gpu_sharded_cagra_search_result_c result_c);
 
-void GpuShardedCagraIndex_Destroy(GpuShardedCagraIndexC index_c, void* errmsg);
+void gpu_sharded_cagra_index_destroy(gpu_sharded_cagra_index_c index_c, void* errmsg);
 
 #ifdef __cplusplus
 }

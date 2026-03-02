@@ -7,39 +7,39 @@
 extern "C" {
 #endif
 
-typedef void* GpuCagraIndexC;
-typedef void* GpuCagraSearchResultC;
+typedef void* gpu_cagra_index_c;
+typedef void* gpu_cagra_search_result_c;
 
 // Constructor for building from dataset
-GpuCagraIndexC GpuCagraIndex_New(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, 
-                                 CuvsDistanceTypeC metric, size_t intermediate_graph_degree, 
-                                 size_t graph_degree, uint32_t nthread, int device_id, CuvsQuantizationC qtype, void* errmsg);
+gpu_cagra_index_c gpu_cagra_index_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, 
+                                 distance_type_t metric, size_t intermediate_graph_degree, 
+                                 size_t graph_degree, uint32_t nthread, int device_id, quantization_t qtype, void* errmsg);
 
 // Constructor for loading from file
-GpuCagraIndexC GpuCagraIndex_NewFromFile(const char* filename, uint32_t dimension, CuvsDistanceTypeC metric, 
-                                         uint32_t nthread, int device_id, CuvsQuantizationC qtype, void* errmsg);
+gpu_cagra_index_c gpu_cagra_index_new_from_file(const char* filename, uint32_t dimension, distance_type_t metric, 
+                                         uint32_t nthread, int device_id, quantization_t qtype, void* errmsg);
 
-void GpuCagraIndex_Load(GpuCagraIndexC index_c, void* errmsg);
+void gpu_cagra_index_load(gpu_cagra_index_c index_c, void* errmsg);
 
-void GpuCagraIndex_Save(GpuCagraIndexC index_c, const char* filename, void* errmsg);
+void gpu_cagra_index_save(gpu_cagra_index_c index_c, const char* filename, void* errmsg);
 
 // Performs search
-GpuCagraSearchResultC GpuCagraIndex_Search(GpuCagraIndexC index_c, const void* queries_data, 
+gpu_cagra_search_result_c gpu_cagra_index_search(gpu_cagra_index_c index_c, const void* queries_data, 
                                            uint64_t num_queries, uint32_t query_dimension, 
                                            uint32_t limit, size_t itopk_size, void* errmsg);
 
 // Retrieves the results from a search operation (converts uint32_t neighbors to int64_t)
-void GpuCagraIndex_GetResults(GpuCagraSearchResultC result_c, uint64_t num_queries, uint32_t limit, int64_t* neighbors, float* distances);
+void gpu_cagra_index_get_results(gpu_cagra_search_result_c result_c, uint64_t num_queries, uint32_t limit, int64_t* neighbors, float* distances);
 
-void GpuCagraIndex_FreeSearchResult(GpuCagraSearchResultC result_c);
+void gpu_cagra_index_free_search_result(gpu_cagra_search_result_c result_c);
 
-void GpuCagraIndex_Destroy(GpuCagraIndexC index_c, void* errmsg);
+void gpu_cagra_index_destroy(gpu_cagra_index_c index_c, void* errmsg);
 
 // Extends the index with new vectors
-void GpuCagraIndex_Extend(GpuCagraIndexC index_c, const void* additional_data, uint64_t num_vectors, void* errmsg);
+void gpu_cagra_index_extend(gpu_cagra_index_c index_c, const void* additional_data, uint64_t num_vectors, void* errmsg);
 
 // Merges multiple indices into one
-GpuCagraIndexC GpuCagraIndex_Merge(GpuCagraIndexC* indices, uint32_t num_indices, uint32_t nthread, int device_id, void* errmsg);
+gpu_cagra_index_c gpu_cagra_index_merge(gpu_cagra_index_c* indices, uint32_t num_indices, uint32_t nthread, int device_id, void* errmsg);
 
 #ifdef __cplusplus
 }

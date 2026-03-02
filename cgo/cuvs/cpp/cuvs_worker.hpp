@@ -36,19 +36,19 @@ namespace matrixone {
  * @brief Wrapper for RAFT resources to manage their lifecycle.
  * Supports both single-GPU and single-node multi-GPU (SNMG) modes.
  */
-class RaftHandleWrapper {
+class raft_handle_wrapper_t {
 public:
     // Default constructor for single-GPU mode (uses current device)
-    RaftHandleWrapper() : resources_(std::make_unique<raft::device_resources>()) {}
+    raft_handle_wrapper_t() : resources_(std::make_unique<raft::device_resources>()) {}
 
     // Constructor for single-GPU mode with a specific device ID
-    explicit RaftHandleWrapper(int device_id) {
+    explicit raft_handle_wrapper_t(int device_id) {
         RAFT_CUDA_TRY(cudaSetDevice(device_id));
         resources_ = std::make_unique<raft::device_resources>();
     }
 
     // Constructor for multi-GPU mode (SNMG)
-    explicit RaftHandleWrapper(const std::vector<int>& devices) {
+    explicit raft_handle_wrapper_t(const std::vector<int>& devices) {
         if (devices.empty()) {
             resources_ = std::make_unique<raft::device_resources>();
         } else {
@@ -58,7 +58,7 @@ public:
         }
     }
 
-    ~RaftHandleWrapper() = default;
+    ~raft_handle_wrapper_t() = default;
 
     raft::resources* get_raft_resources() const { return resources_.get(); }
 
@@ -70,7 +70,7 @@ private:
  * @brief A thread-safe blocking queue for task distribution.
  */
 template <typename T>
-class ThreadSafeQueue {
+class thread_safe_queue_t {
 public:
     void push(T value) {
         {
@@ -109,58 +109,58 @@ private:
     bool stopped_ = false;
 };
 
-struct CuvsTaskResult {
-    uint64_t ID;
-    std::any Result;
-    std::exception_ptr Error;
+struct cuvs_task_result_t {
+    uint64_t id;
+    std::any result;
+    std::exception_ptr error;
 };
 
 /**
  * @brief Manages storage and retrieval of task results.
  */
-class CuvsTaskResultStore {
+class cuvs_task_result_store_t {
 public:
-    CuvsTaskResultStore() : next_id_(1), stopped_(false) {}
+    cuvs_task_result_store_t() : next_id_(1), stopped_(false) {}
 
-    uint64_t GetNextJobID() { return next_id_.fetch_add(1); }
+    uint64_t get_next_job_id() { return next_id_.fetch_add(1); }
 
-    void Store(const CuvsTaskResult& result) {
+    void store(const cuvs_task_result_t& result) {
         std::unique_lock<std::mutex> lock(mu_);
-        if (auto it = pending_.find(result.ID); it != pending_.end()) {
+        if (auto it = pending_.find(result.id); it != pending_.end()) {
             auto promise = std::move(it->second);
             pending_.erase(it);
             lock.unlock();
             promise->set_value(result);
         } else {
-            results_[result.ID] = result;
+            results_[result.id] = result;
         }
     }
 
-    std::future<CuvsTaskResult> Wait(uint64_t jobID) {
+    std::future<cuvs_task_result_t> wait(uint64_t job_id) {
         std::unique_lock<std::mutex> lock(mu_);
         if (stopped_) {
-            std::promise<CuvsTaskResult> p;
-            p.set_exception(std::make_exception_ptr(std::runtime_error("CuvsTaskResultStore stopped before result was available")));
+            std::promise<cuvs_task_result_t> p;
+            p.set_exception(std::make_exception_ptr(std::runtime_error("cuvs_task_result_store_t stopped before result was available")));
             return p.get_future();
         }
 
-        if (auto it = results_.find(jobID); it != results_.end()) {
-            std::promise<CuvsTaskResult> p;
+        if (auto it = results_.find(job_id); it != results_.end()) {
+            std::promise<cuvs_task_result_t> p;
             p.set_value(std::move(it->second));
             results_.erase(it);
             return p.get_future();
         }
 
-        auto promise = std::make_shared<std::promise<CuvsTaskResult>>();
-        pending_[jobID] = promise;
+        auto promise = std::make_shared<std::promise<cuvs_task_result_t>>();
+        pending_[job_id] = promise;
         return promise->get_future();
     }
 
-    void Stop() {
+    void stop() {
         std::lock_guard<std::mutex> lock(mu_);
         stopped_ = true;
         for (auto& pair : pending_) {
-            pair.second->set_exception(std::make_exception_ptr(std::runtime_error("CuvsTaskResultStore stopped before result was available")));
+            pair.second->set_exception(std::make_exception_ptr(std::runtime_error("cuvs_task_result_store_t stopped before result was available")));
         }
         pending_.clear();
         results_.clear();
@@ -169,46 +169,46 @@ public:
 private:
     std::atomic<uint64_t> next_id_;
     std::mutex mu_;
-    std::map<uint64_t, std::shared_ptr<std::promise<CuvsTaskResult>>> pending_;
-    std::map<uint64_t, CuvsTaskResult> results_;
+    std::map<uint64_t, std::shared_ptr<std::promise<cuvs_task_result_t>>> pending_;
+    std::map<uint64_t, cuvs_task_result_t> results_;
     bool stopped_;
 };
 
 /**
  * @brief dedicated worker pool for executing cuVS (RAFT) tasks in GPU-enabled threads.
  */
-class CuvsWorker {
+class cuvs_worker_t {
 public:
-    using RaftHandle = RaftHandleWrapper;
-    using UserTaskFn = std::function<std::any(RaftHandle&)>;
+    using raft_handle = raft_handle_wrapper_t;
+    using user_task_fn = std::function<std::any(raft_handle&)>;
 
-    struct CuvsTask {
-        uint64_t ID;
-        UserTaskFn Fn;
+    struct cuvs_task_t {
+        uint64_t id;
+        user_task_fn fn;
     };
 
-    explicit CuvsWorker(size_t n_threads, int device_id = -1) 
+    explicit cuvs_worker_t(size_t n_threads, int device_id = -1) 
         : n_threads_(n_threads), device_id_(device_id) {
         if (n_threads == 0) throw std::invalid_argument("Thread count must be > 0");
     }
 
-    CuvsWorker(size_t n_threads, const std::vector<int>& devices)
+    cuvs_worker_t(size_t n_threads, const std::vector<int>& devices)
         : n_threads_(n_threads), devices_(devices) {
         if (n_threads == 0) throw std::invalid_argument("Thread count must be > 0");
     }
 
-    ~CuvsWorker() { Stop(); }
+    ~cuvs_worker_t() { stop(); }
 
-    CuvsWorker(const CuvsWorker&) = delete;
-    CuvsWorker& operator=(const CuvsWorker&) = delete;
+    cuvs_worker_t(const cuvs_worker_t&) = delete;
+    cuvs_worker_t& operator=(const cuvs_worker_t&) = delete;
 
-    void Start(UserTaskFn init_fn = nullptr, UserTaskFn stop_fn = nullptr) {
+    void start(user_task_fn init_fn = nullptr, user_task_fn stop_fn = nullptr) {
         if (started_.exchange(true)) return;
-        main_thread_ = std::thread(&CuvsWorker::run_main_loop, this, std::move(init_fn), std::move(stop_fn));
-        signal_thread_ = std::thread(&CuvsWorker::signal_handler_loop, this);
+        main_thread_ = std::thread(&cuvs_worker_t::run_main_loop, this, std::move(init_fn), std::move(stop_fn));
+        signal_thread_ = std::thread(&cuvs_worker_t::signal_handler_loop, this);
     }
 
-    void Stop() {
+    void stop() {
         if (!started_.load() || stopped_.exchange(true)) return;
 
         tasks_.stop();
@@ -223,25 +223,25 @@ public:
         for (auto& t : sub_workers_) if (t.joinable()) t.join();
         
         sub_workers_.clear();
-        result_store_.Stop();
+        result_store_.stop();
     }
 
-    uint64_t Submit(UserTaskFn fn) {
+    uint64_t submit(user_task_fn fn) {
         if (stopped_.load()) throw std::runtime_error("Cannot submit task: worker stopped");
-        uint64_t id = result_store_.GetNextJobID();
+        uint64_t id = result_store_.get_next_job_id();
         tasks_.push({id, std::move(fn)});
         return id;
     }
 
-    std::future<CuvsTaskResult> Wait(uint64_t id) { return result_store_.Wait(id); }
+    std::future<cuvs_task_result_t> wait(uint64_t id) { return result_store_.wait(id); }
 
-    std::exception_ptr GetFirstError() {
+    std::exception_ptr get_first_error() {
         std::lock_guard<std::mutex> lock(event_mu_);
         return fatal_error_;
     }
 
 private:
-    void run_main_loop(UserTaskFn init_fn, UserTaskFn stop_fn) {
+    void run_main_loop(user_task_fn init_fn, user_task_fn stop_fn) {
         pin_thread(0);
         auto resource = setup_resource();
         if (!resource) return;
@@ -256,16 +256,16 @@ private:
         std::shared_ptr<void> cleanup_guard(nullptr, [&](...) { defer_cleanup(); });
 
         if (n_threads_ == 1) {
-            CuvsTask task;
+            cuvs_task_t task;
             while (tasks_.pop(task)) execute_task(task, *resource);
         } else {
             for (size_t i = 0; i < n_threads_; ++i) {
-                sub_workers_.emplace_back(&CuvsWorker::worker_sub_loop, this);
+                sub_workers_.emplace_back(&cuvs_worker_t::worker_sub_loop, this);
             }
             std::unique_lock<std::mutex> lock(event_mu_);
             event_cv_.wait(lock, [this] { return should_stop_ || fatal_error_; });
         }
-        std::cout << "DEBUG: CuvsWorker main loop finished." << std::endl;
+        std::cout << "DEBUG: cuvs_worker_t main loop finished." << std::endl;
     }
 
     void worker_sub_loop() {
@@ -273,28 +273,28 @@ private:
         auto resource = setup_resource();
         if (!resource) return;
 
-        CuvsTask task;
+        cuvs_task_t task;
         while (tasks_.pop(task)) execute_task(task, *resource);
     }
 
-    void execute_task(const CuvsTask& task, RaftHandle& resource) {
-        CuvsTaskResult res{task.ID};
-        try { res.Result = task.Fn(resource); }
+    void execute_task(const cuvs_task_t& task, raft_handle& resource) {
+        cuvs_task_result_t res{task.id};
+        try { res.result = task.fn(resource); }
         catch (...) { 
-            res.Error = std::current_exception(); 
-            std::cerr << "ERROR: Task " << task.ID << " failed." << std::endl;
+            res.error = std::current_exception(); 
+            std::cerr << "ERROR: Task " << task.id << " failed." << std::endl;
         }
-        result_store_.Store(res);
+        result_store_.store(res);
     }
 
-    std::unique_ptr<RaftHandle> setup_resource() {
+    std::unique_ptr<raft_handle> setup_resource() {
         try {
             if (!devices_.empty()) {
-                return std::make_unique<RaftHandle>(devices_);
+                return std::make_unique<raft_handle>(devices_);
             } else if (device_id_ >= 0) {
-                return std::make_unique<RaftHandle>(device_id_);
+                return std::make_unique<raft_handle>(device_id_);
             } else {
-                return std::make_unique<RaftHandle>();
+                return std::make_unique<raft_handle>();
             }
         } catch (...) {
             report_fatal_error(std::current_exception());
@@ -333,7 +333,7 @@ private:
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }
         if (signal_received.load()) {
-            std::cout << "DEBUG: CuvsWorker received shutdown signal." << std::endl;
+            std::cout << "DEBUG: cuvs_worker_t received shutdown signal." << std::endl;
             std::lock_guard<std::mutex> lock(event_mu_);
             should_stop_ = true;
             event_cv_.notify_all();
@@ -345,8 +345,8 @@ private:
     std::vector<int> devices_;
     std::atomic<bool> started_{false};
     std::atomic<bool> stopped_{false};
-    ThreadSafeQueue<CuvsTask> tasks_;
-    CuvsTaskResultStore result_store_;
+    thread_safe_queue_t<cuvs_task_t> tasks_;
+    cuvs_task_result_store_t result_store_;
     std::thread main_thread_;
     std::thread signal_thread_;
     std::vector<std::thread> sub_workers_;

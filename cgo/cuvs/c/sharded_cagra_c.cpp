@@ -22,7 +22,7 @@ static void set_errmsg_sharded_cagra(void* errmsg, const std::string& prefix, co
 }
 
 // Helper to convert C enum to C++ enum
-static cuvs::distance::DistanceType convert_distance_type_sharded_cagra(CuvsDistanceTypeC metric_c) {
+static cuvs::distance::DistanceType convert_distance_type_sharded_cagra(distance_type_t metric_c) {
     switch (metric_c) {
         case DistanceType_L2Expanded: return cuvs::distance::DistanceType::L2Expanded;
         case DistanceType_L1: return cuvs::distance::DistanceType::L1;
@@ -33,24 +33,26 @@ static cuvs::distance::DistanceType convert_distance_type_sharded_cagra(CuvsDist
     }
 }
 
-struct GpuShardedCagraIndexAny {
-    CuvsQuantizationC qtype;
+struct gpu_sharded_cagra_index_any_t {
+    quantization_t qtype;
     void* ptr;
 
-    GpuShardedCagraIndexAny(CuvsQuantizationC q, void* p) : qtype(q), ptr(p) {}
-    ~GpuShardedCagraIndexAny() {
+    gpu_sharded_cagra_index_any_t(quantization_t q, void* p) : qtype(q), ptr(p) {}
+    ~gpu_sharded_cagra_index_any_t() {
         switch (qtype) {
-            case Quantization_F32: delete static_cast<matrixone::GpuShardedCagraIndex<float>*>(ptr); break;
-            case Quantization_F16: delete static_cast<matrixone::GpuShardedCagraIndex<half>*>(ptr); break;
-            case Quantization_INT8: delete static_cast<matrixone::GpuShardedCagraIndex<int8_t>*>(ptr); break;
-            case Quantization_UINT8: delete static_cast<matrixone::GpuShardedCagraIndex<uint8_t>*>(ptr); break;
+            case Quantization_F32: delete static_cast<matrixone::gpu_sharded_cagra_index_t<float>*>(ptr); break;
+            case Quantization_F16: delete static_cast<matrixone::gpu_sharded_cagra_index_t<half>*>(ptr); break;
+            case Quantization_INT8: delete static_cast<matrixone::gpu_sharded_cagra_index_t<int8_t>*>(ptr); break;
+            case Quantization_UINT8: delete static_cast<matrixone::gpu_sharded_cagra_index_t<uint8_t>*>(ptr); break;
         }
     }
 };
 
-GpuShardedCagraIndexC GpuShardedCagraIndex_New(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, 
-                                               CuvsDistanceTypeC metric_c, size_t intermediate_graph_degree, 
-                                               size_t graph_degree, const int* devices, uint32_t num_devices, uint32_t nthread, CuvsQuantizationC qtype, void* errmsg) {
+extern "C" {
+
+gpu_sharded_cagra_index_c gpu_sharded_cagra_index_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, 
+                                               distance_type_t metric_c, size_t intermediate_graph_degree, 
+                                               size_t graph_degree, const int* devices, uint32_t num_devices, uint32_t nthread, quantization_t qtype, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         cuvs::distance::DistanceType metric = convert_distance_type_sharded_cagra(metric_c);
@@ -58,28 +60,28 @@ GpuShardedCagraIndexC GpuShardedCagraIndex_New(const void* dataset_data, uint64_
         void* index_ptr = nullptr;
         switch (qtype) {
             case Quantization_F32:
-                index_ptr = new matrixone::GpuShardedCagraIndex<float>(static_cast<const float*>(dataset_data), count_vectors, dimension, metric, intermediate_graph_degree, graph_degree, device_vec, nthread);
+                index_ptr = new matrixone::gpu_sharded_cagra_index_t<float>(static_cast<const float*>(dataset_data), count_vectors, dimension, metric, intermediate_graph_degree, graph_degree, device_vec, nthread);
                 break;
             case Quantization_F16:
-                index_ptr = new matrixone::GpuShardedCagraIndex<half>(static_cast<const half*>(dataset_data), count_vectors, dimension, metric, intermediate_graph_degree, graph_degree, device_vec, nthread);
+                index_ptr = new matrixone::gpu_sharded_cagra_index_t<half>(static_cast<const half*>(dataset_data), count_vectors, dimension, metric, intermediate_graph_degree, graph_degree, device_vec, nthread);
                 break;
             case Quantization_INT8:
-                index_ptr = new matrixone::GpuShardedCagraIndex<int8_t>(static_cast<const int8_t*>(dataset_data), count_vectors, dimension, metric, intermediate_graph_degree, graph_degree, device_vec, nthread);
+                index_ptr = new matrixone::gpu_sharded_cagra_index_t<int8_t>(static_cast<const int8_t*>(dataset_data), count_vectors, dimension, metric, intermediate_graph_degree, graph_degree, device_vec, nthread);
                 break;
             case Quantization_UINT8:
-                index_ptr = new matrixone::GpuShardedCagraIndex<uint8_t>(static_cast<const uint8_t*>(dataset_data), count_vectors, dimension, metric, intermediate_graph_degree, graph_degree, device_vec, nthread);
+                index_ptr = new matrixone::gpu_sharded_cagra_index_t<uint8_t>(static_cast<const uint8_t*>(dataset_data), count_vectors, dimension, metric, intermediate_graph_degree, graph_degree, device_vec, nthread);
                 break;
         }
-        return static_cast<GpuShardedCagraIndexC>(new GpuShardedCagraIndexAny(qtype, index_ptr));
+        return static_cast<gpu_sharded_cagra_index_c>(new gpu_sharded_cagra_index_any_t(qtype, index_ptr));
     } catch (const std::exception& e) {
-        set_errmsg_sharded_cagra(errmsg, "Error in GpuShardedCagraIndex_New", e);
+        set_errmsg_sharded_cagra(errmsg, "Error in gpu_sharded_cagra_index_new", e);
         return nullptr;
     }
 }
 
-GpuShardedCagraIndexC GpuShardedCagraIndex_NewFromFile(const char* filename, uint32_t dimension, 
-                                                       CuvsDistanceTypeC metric_c, 
-                                                       const int* devices, uint32_t num_devices, uint32_t nthread, CuvsQuantizationC qtype, void* errmsg) {
+gpu_sharded_cagra_index_c gpu_sharded_cagra_index_new_from_file(const char* filename, uint32_t dimension, 
+                                                       distance_type_t metric_c, 
+                                                       const int* devices, uint32_t num_devices, uint32_t nthread, quantization_t qtype, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         cuvs::distance::DistanceType metric = convert_distance_type_sharded_cagra(metric_c);
@@ -87,103 +89,103 @@ GpuShardedCagraIndexC GpuShardedCagraIndex_NewFromFile(const char* filename, uin
         void* index_ptr = nullptr;
         switch (qtype) {
             case Quantization_F32:
-                index_ptr = new matrixone::GpuShardedCagraIndex<float>(std::string(filename), dimension, metric, device_vec, nthread);
+                index_ptr = new matrixone::gpu_sharded_cagra_index_t<float>(std::string(filename), dimension, metric, device_vec, nthread);
                 break;
             case Quantization_F16:
-                index_ptr = new matrixone::GpuShardedCagraIndex<half>(std::string(filename), dimension, metric, device_vec, nthread);
+                index_ptr = new matrixone::gpu_sharded_cagra_index_t<half>(std::string(filename), dimension, metric, device_vec, nthread);
                 break;
             case Quantization_INT8:
-                index_ptr = new matrixone::GpuShardedCagraIndex<int8_t>(std::string(filename), dimension, metric, device_vec, nthread);
+                index_ptr = new matrixone::gpu_sharded_cagra_index_t<int8_t>(std::string(filename), dimension, metric, device_vec, nthread);
                 break;
             case Quantization_UINT8:
-                index_ptr = new matrixone::GpuShardedCagraIndex<uint8_t>(std::string(filename), dimension, metric, device_vec, nthread);
+                index_ptr = new matrixone::gpu_sharded_cagra_index_t<uint8_t>(std::string(filename), dimension, metric, device_vec, nthread);
                 break;
         }
-        return static_cast<GpuShardedCagraIndexC>(new GpuShardedCagraIndexAny(qtype, index_ptr));
+        return static_cast<gpu_sharded_cagra_index_c>(new gpu_sharded_cagra_index_any_t(qtype, index_ptr));
     } catch (const std::exception& e) {
-        set_errmsg_sharded_cagra(errmsg, "Error in GpuShardedCagraIndex_NewFromFile", e);
+        set_errmsg_sharded_cagra(errmsg, "Error in gpu_sharded_cagra_index_new_from_file", e);
         return nullptr;
     }
 }
 
-void GpuShardedCagraIndex_Load(GpuShardedCagraIndexC index_c, void* errmsg) {
+void gpu_sharded_cagra_index_load(gpu_sharded_cagra_index_c index_c, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<GpuShardedCagraIndexAny*>(index_c);
+        auto* any = static_cast<gpu_sharded_cagra_index_any_t*>(index_c);
         switch (any->qtype) {
-            case Quantization_F32: static_cast<matrixone::GpuShardedCagraIndex<float>*>(any->ptr)->Load(); break;
-            case Quantization_F16: static_cast<matrixone::GpuShardedCagraIndex<half>*>(any->ptr)->Load(); break;
-            case Quantization_INT8: static_cast<matrixone::GpuShardedCagraIndex<int8_t>*>(any->ptr)->Load(); break;
-            case Quantization_UINT8: static_cast<matrixone::GpuShardedCagraIndex<uint8_t>*>(any->ptr)->Load(); break;
+            case Quantization_F32: static_cast<matrixone::gpu_sharded_cagra_index_t<float>*>(any->ptr)->load(); break;
+            case Quantization_F16: static_cast<matrixone::gpu_sharded_cagra_index_t<half>*>(any->ptr)->load(); break;
+            case Quantization_INT8: static_cast<matrixone::gpu_sharded_cagra_index_t<int8_t>*>(any->ptr)->load(); break;
+            case Quantization_UINT8: static_cast<matrixone::gpu_sharded_cagra_index_t<uint8_t>*>(any->ptr)->load(); break;
         }
     } catch (const std::exception& e) {
-        set_errmsg_sharded_cagra(errmsg, "Error in GpuShardedCagraIndex_Load", e);
+        set_errmsg_sharded_cagra(errmsg, "Error in gpu_sharded_cagra_index_load", e);
     }
 }
 
-void GpuShardedCagraIndex_Save(GpuShardedCagraIndexC index_c, const char* filename, void* errmsg) {
+void gpu_sharded_cagra_index_save(gpu_sharded_cagra_index_c index_c, const char* filename, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<GpuShardedCagraIndexAny*>(index_c);
+        auto* any = static_cast<gpu_sharded_cagra_index_any_t*>(index_c);
         switch (any->qtype) {
-            case Quantization_F32: static_cast<matrixone::GpuShardedCagraIndex<float>*>(any->ptr)->Save(std::string(filename)); break;
-            case Quantization_F16: static_cast<matrixone::GpuShardedCagraIndex<half>*>(any->ptr)->Save(std::string(filename)); break;
-            case Quantization_INT8: static_cast<matrixone::GpuShardedCagraIndex<int8_t>*>(any->ptr)->Save(std::string(filename)); break;
-            case Quantization_UINT8: static_cast<matrixone::GpuShardedCagraIndex<uint8_t>*>(any->ptr)->Save(std::string(filename)); break;
+            case Quantization_F32: static_cast<matrixone::gpu_sharded_cagra_index_t<float>*>(any->ptr)->save(std::string(filename)); break;
+            case Quantization_F16: static_cast<matrixone::gpu_sharded_cagra_index_t<half>*>(any->ptr)->save(std::string(filename)); break;
+            case Quantization_INT8: static_cast<matrixone::gpu_sharded_cagra_index_t<int8_t>*>(any->ptr)->save(std::string(filename)); break;
+            case Quantization_UINT8: static_cast<matrixone::gpu_sharded_cagra_index_t<uint8_t>*>(any->ptr)->save(std::string(filename)); break;
         }
     } catch (const std::exception& e) {
-        set_errmsg_sharded_cagra(errmsg, "Error in GpuShardedCagraIndex_Save", e);
+        set_errmsg_sharded_cagra(errmsg, "Error in gpu_sharded_cagra_index_save", e);
     }
 }
 
-GpuShardedCagraSearchResultC GpuShardedCagraIndex_Search(GpuShardedCagraIndexC index_c, const void* queries_data, 
+gpu_sharded_cagra_search_result_c gpu_sharded_cagra_index_search(gpu_sharded_cagra_index_c index_c, const void* queries_data, 
                                                          uint64_t num_queries, uint32_t query_dimension, 
                                                          uint32_t limit, size_t itopk_size, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<GpuShardedCagraIndexAny*>(index_c);
+        auto* any = static_cast<gpu_sharded_cagra_index_any_t*>(index_c);
         void* result_ptr = nullptr;
         switch (any->qtype) {
             case Quantization_F32: {
-                auto res = std::make_unique<matrixone::GpuShardedCagraIndex<float>::SearchResult>();
-                *res = static_cast<matrixone::GpuShardedCagraIndex<float>*>(any->ptr)->Search(static_cast<const float*>(queries_data), num_queries, query_dimension, limit, itopk_size);
+                auto res = std::make_unique<matrixone::gpu_sharded_cagra_index_t<float>::search_result_t>();
+                *res = static_cast<matrixone::gpu_sharded_cagra_index_t<float>*>(any->ptr)->search(static_cast<const float*>(queries_data), num_queries, query_dimension, limit, itopk_size);
                 result_ptr = res.release();
                 break;
             }
             case Quantization_F16: {
-                auto res = std::make_unique<matrixone::GpuShardedCagraIndex<half>::SearchResult>();
-                *res = static_cast<matrixone::GpuShardedCagraIndex<half>*>(any->ptr)->Search(static_cast<const half*>(queries_data), num_queries, query_dimension, limit, itopk_size);
+                auto res = std::make_unique<matrixone::gpu_sharded_cagra_index_t<half>::search_result_t>();
+                *res = static_cast<matrixone::gpu_sharded_cagra_index_t<half>*>(any->ptr)->search(static_cast<const half*>(queries_data), num_queries, query_dimension, limit, itopk_size);
                 result_ptr = res.release();
                 break;
             }
             case Quantization_INT8: {
-                auto res = std::make_unique<matrixone::GpuShardedCagraIndex<int8_t>::SearchResult>();
-                *res = static_cast<matrixone::GpuShardedCagraIndex<int8_t>*>(any->ptr)->Search(static_cast<const int8_t*>(queries_data), num_queries, query_dimension, limit, itopk_size);
+                auto res = std::make_unique<matrixone::gpu_sharded_cagra_index_t<int8_t>::search_result_t>();
+                *res = static_cast<matrixone::gpu_sharded_cagra_index_t<int8_t>*>(any->ptr)->search(static_cast<const int8_t*>(queries_data), num_queries, query_dimension, limit, itopk_size);
                 result_ptr = res.release();
                 break;
             }
             case Quantization_UINT8: {
-                auto res = std::make_unique<matrixone::GpuShardedCagraIndex<uint8_t>::SearchResult>();
-                *res = static_cast<matrixone::GpuShardedCagraIndex<uint8_t>*>(any->ptr)->Search(static_cast<const uint8_t*>(queries_data), num_queries, query_dimension, limit, itopk_size);
+                auto res = std::make_unique<matrixone::gpu_sharded_cagra_index_t<uint8_t>::search_result_t>();
+                *res = static_cast<matrixone::gpu_sharded_cagra_index_t<uint8_t>*>(any->ptr)->search(static_cast<const uint8_t*>(queries_data), num_queries, query_dimension, limit, itopk_size);
                 result_ptr = res.release();
                 break;
             }
         }
-        return static_cast<GpuShardedCagraSearchResultC>(result_ptr);
+        return static_cast<gpu_sharded_cagra_search_result_c>(result_ptr);
     } catch (const std::exception& e) {
-        set_errmsg_sharded_cagra(errmsg, "Error in GpuShardedCagraIndex_Search", e);
+        set_errmsg_sharded_cagra(errmsg, "Error in gpu_sharded_cagra_index_search", e);
         return nullptr;
     }
 }
 
-void GpuShardedCagraIndex_GetResults(GpuShardedCagraSearchResultC result_c, uint64_t num_queries, uint32_t limit, int64_t* neighbors, float* distances) {
+void gpu_sharded_cagra_index_get_results(gpu_sharded_cagra_search_result_c result_c, uint64_t num_queries, uint32_t limit, int64_t* neighbors, float* distances) {
     if (!result_c) return;
-    auto* search_result = static_cast<matrixone::GpuShardedCagraIndex<float>::SearchResult*>(result_c);
+    auto* search_result = static_cast<matrixone::gpu_sharded_cagra_index_t<float>::search_result_t*>(result_c);
     
     size_t total = num_queries * limit;
-    if (search_result->Neighbors.size() >= total) {
+    if (search_result->neighbors.size() >= total) {
         for (size_t i = 0; i < total; ++i) {
-            uint32_t n = search_result->Neighbors[i];
+            uint32_t n = search_result->neighbors[i];
             if (n == static_cast<uint32_t>(-1)) {
                 neighbors[i] = -1;
             } else {
@@ -194,24 +196,26 @@ void GpuShardedCagraIndex_GetResults(GpuShardedCagraSearchResultC result_c, uint
         std::fill(neighbors, neighbors + total, -1);
     }
 
-    if (search_result->Distances.size() >= total) {
-        std::copy(search_result->Distances.begin(), search_result->Distances.begin() + total, distances);
+    if (search_result->distances.size() >= total) {
+        std::copy(search_result->distances.begin(), search_result->distances.begin() + total, distances);
     } else {
         std::fill(distances, distances + total, std::numeric_limits<float>::infinity());
     }
 }
 
-void GpuShardedCagraIndex_FreeSearchResult(GpuShardedCagraSearchResultC result_c) {
+void gpu_sharded_cagra_index_free_search_result(gpu_sharded_cagra_search_result_c result_c) {
     if (!result_c) return;
-    delete static_cast<matrixone::GpuShardedCagraIndex<float>::SearchResult*>(result_c);
+    delete static_cast<matrixone::gpu_sharded_cagra_index_t<float>::search_result_t*>(result_c);
 }
 
-void GpuShardedCagraIndex_Destroy(GpuShardedCagraIndexC index_c, void* errmsg) {
+void gpu_sharded_cagra_index_destroy(gpu_sharded_cagra_index_c index_c, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<GpuShardedCagraIndexAny*>(index_c);
+        auto* any = static_cast<gpu_sharded_cagra_index_any_t*>(index_c);
         delete any;
     } catch (const std::exception& e) {
-        set_errmsg_sharded_cagra(errmsg, "Error in GpuShardedCagraIndex_Destroy", e);
+        set_errmsg_sharded_cagra(errmsg, "Error in gpu_sharded_cagra_index_destroy", e);
     }
 }
+
+} // extern "C"

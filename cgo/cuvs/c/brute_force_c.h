@@ -7,29 +7,29 @@
 extern "C" {
 #endif
 
-// Opaque pointer to the C++ GpuBruteForceIndex object
-typedef void* GpuBruteForceIndexC;
+// Opaque pointer to the C++ gpu_brute_force_index_t object
+typedef void* gpu_brute_force_index_c;
 
 // Opaque pointer to the C++ search result object
-typedef void* GpuBruteForceSearchResultC;
+typedef void* gpu_brute_force_search_result_c;
 
-// Constructor for GpuBruteForceIndex
-GpuBruteForceIndexC GpuBruteForceIndex_New(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, CuvsDistanceTypeC metric, uint32_t nthread, int device_id, CuvsQuantizationC qtype, void* errmsg);
+// Constructor for gpu_brute_force_index_t
+gpu_brute_force_index_c gpu_brute_force_index_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, distance_type_t metric, uint32_t nthread, int device_id, quantization_t qtype, void* errmsg);
 
 // Loads the index to the GPU
-void GpuBruteForceIndex_Load(GpuBruteForceIndexC index_c, void* errmsg);
+void gpu_brute_force_index_load(gpu_brute_force_index_c index_c, void* errmsg);
 
 // Performs a search operation
-GpuBruteForceSearchResultC GpuBruteForceIndex_Search(GpuBruteForceIndexC index_c, const void* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, void* errmsg);
+gpu_brute_force_search_result_c gpu_brute_force_index_search(gpu_brute_force_index_c index_c, const void* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, void* errmsg);
 
 // Retrieves the results from a search operation
-void GpuBruteForceIndex_GetResults(GpuBruteForceSearchResultC result_c, uint64_t num_queries, uint32_t limit, int64_t* neighbors, float* distances);
+void gpu_brute_force_index_get_results(gpu_brute_force_search_result_c result_c, uint64_t num_queries, uint32_t limit, int64_t* neighbors, float* distances);
 
-// Frees the memory for a GpuBruteForceSearchResultC object
-void GpuBruteForceIndex_FreeSearchResult(GpuBruteForceSearchResultC result_c);
+// Frees the memory for a gpu_brute_force_search_result_c object
+void gpu_brute_force_index_free_search_result(gpu_brute_force_search_result_c result_c);
 
-// Destroys the GpuBruteForceIndex object and frees associated resources
-void GpuBruteForceIndex_Destroy(GpuBruteForceIndexC index_c, void* errmsg);
+// Destroys the gpu_brute_force_index_t object and frees associated resources
+void gpu_brute_force_index_destroy(gpu_brute_force_index_c index_c, void* errmsg);
 
 #ifdef __cplusplus
 }

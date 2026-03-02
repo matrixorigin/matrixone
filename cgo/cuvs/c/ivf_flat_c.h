@@ -7,42 +7,42 @@
 extern "C" {
 #endif
 
-// Opaque pointer to the C++ GpuIvfFlatIndex object
-typedef void* GpuIvfFlatIndexC;
+// Opaque pointer to the C++ gpu_ivf_flat_index_t object
+typedef void* gpu_ivf_flat_index_c;
 
 // Opaque pointer to the C++ IVF search result object
-typedef void* GpuIvfFlatSearchResultC;
+typedef void* gpu_ivf_flat_search_result_c;
 
 // Constructor for building from dataset
-GpuIvfFlatIndexC GpuIvfFlatIndex_New(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, CuvsDistanceTypeC metric, uint32_t n_list, uint32_t nthread, int device_id, CuvsQuantizationC qtype, void* errmsg);
+gpu_ivf_flat_index_c gpu_ivf_flat_index_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, distance_type_t metric, uint32_t n_list, uint32_t nthread, int device_id, quantization_t qtype, void* errmsg);
 
 // Constructor for loading from file
-GpuIvfFlatIndexC GpuIvfFlatIndex_NewFromFile(const char* filename, uint32_t dimension, CuvsDistanceTypeC metric, uint32_t nthread, int device_id, CuvsQuantizationC qtype, void* errmsg);
+gpu_ivf_flat_index_c gpu_ivf_flat_index_new_from_file(const char* filename, uint32_t dimension, distance_type_t metric, uint32_t nthread, int device_id, quantization_t qtype, void* errmsg);
 
 // Loads the index to the GPU (either builds or loads from file depending on constructor)
-void GpuIvfFlatIndex_Load(GpuIvfFlatIndexC index_c, void* errmsg);
+void gpu_ivf_flat_index_load(gpu_ivf_flat_index_c index_c, void* errmsg);
 
 // Saves the index to file
-void GpuIvfFlatIndex_Save(GpuIvfFlatIndexC index_c, const char* filename, void* errmsg);
+void gpu_ivf_flat_index_save(gpu_ivf_flat_index_c index_c, const char* filename, void* errmsg);
 
 // Performs a search operation
-GpuIvfFlatSearchResultC GpuIvfFlatIndex_Search(GpuIvfFlatIndexC index_c, const void* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, uint32_t n_probes, void* errmsg);
+gpu_ivf_flat_search_result_c gpu_ivf_flat_index_search(gpu_ivf_flat_index_c index_c, const void* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, uint32_t n_probes, void* errmsg);
 
 // Retrieves the results from a search operation
-void GpuIvfFlatIndex_GetResults(GpuIvfFlatSearchResultC result_c, uint64_t num_queries, uint32_t limit, int64_t* neighbors, float* distances);
+void gpu_ivf_flat_index_get_results(gpu_ivf_flat_search_result_c result_c, uint64_t num_queries, uint32_t limit, int64_t* neighbors, float* distances);
 
-// Frees the memory for a GpuIvfFlatSearchResultC object
-void GpuIvfFlatIndex_FreeSearchResult(GpuIvfFlatSearchResultC result_c);
+// Frees the memory for a gpu_ivf_flat_search_result_c object
+void gpu_ivf_flat_index_free_search_result(gpu_ivf_flat_search_result_c result_c);
 
-// Destroys the GpuIvfFlatIndex object
-void GpuIvfFlatIndex_Destroy(GpuIvfFlatIndexC index_c, void* errmsg);
+// Destroys the gpu_ivf_flat_index_t object
+void gpu_ivf_flat_index_destroy(gpu_ivf_flat_index_c index_c, void* errmsg);
 
 // Gets the centroids after build
 // centers: Pre-allocated array of size n_list * dimension
-void GpuIvfFlatIndex_GetCenters(GpuIvfFlatIndexC index_c, float* centers, void* errmsg);
+void gpu_ivf_flat_index_get_centers(gpu_ivf_flat_index_c index_c, float* centers, void* errmsg);
 
 // Gets the number of lists (centroids)
-uint32_t GpuIvfFlatIndex_GetNList(GpuIvfFlatIndexC index_c);
+uint32_t gpu_ivf_flat_index_get_n_list(gpu_ivf_flat_index_c index_c);
 
 #ifdef __cplusplus
 }

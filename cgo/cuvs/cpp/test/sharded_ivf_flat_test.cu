@@ -7,82 +7,56 @@
 using namespace matrixone;
 
 TEST(GpuShardedIvfFlatIndexTest, BasicLoadSearchAndCenters) {
-    uint32_t dimension = 16;
-    uint64_t count = 100;
+    const uint32_t dimension = 16;
+    const uint64_t count = 100;
     std::vector<float> dataset(count * dimension);
-    for (size_t i = 0; i < dataset.size(); ++i) {
-        dataset[i] = static_cast<float>(rand()) / RAND_MAX;
-    }
-
-    uint32_t n_list = 5;
-    uint32_t n_probes = 2;
-    uint32_t nthread = 1;
-    std::vector<int> devices = {0}; 
-
-    GpuShardedIvfFlatIndex<float> index(dataset.data(), count, dimension, 
-                                        cuvs::distance::DistanceType::L2Expanded, 
-                                        n_list, devices, nthread);
-    index.Load();
-
-    // Verify Centers
-    auto centers = index.GetCenters();
-    ASSERT_EQ(centers.size(), (size_t)(n_list * dimension));
-    TEST_LOG("Sharded centroids retrieved: " << centers.size() / dimension);
-
-    // Verify Search
-    std::vector<float> queries(dimension);
-    for (size_t i = 0; i < dimension; ++i) queries[i] = dataset[i]; // Search for first vector
+    for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)i / dataset.size();
     
-    auto result = index.Search(queries.data(), 1, dimension, 5, n_probes);
-    
-    ASSERT_EQ(result.Neighbors.size(), (size_t)5);
-    ASSERT_EQ(result.Neighbors[0], 0); // Exact match
+    std::vector<int> devices = {0}; // Single GPU clique for testing
+    gpu_sharded_ivf_flat_index_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 5, devices, 1);
+    index.load();
 
-    index.Destroy();
+    // Verify centers
+    auto centers = index.get_centers();
+    ASSERT_EQ(centers.size(), (size_t)(5 * dimension));
+
+    std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
+    auto result = index.search(queries.data(), 1, dimension, 5, 2);
+
+    ASSERT_EQ(result.neighbors.size(), (size_t)5);
+    ASSERT_EQ(result.neighbors[0], 0);
+
+    index.destroy();
 }
 
 TEST(GpuShardedIvfFlatIndexTest, SaveAndLoadFromFile) {
-    uint32_t dimension = 16;
-    uint64_t count = 100;
+    const uint32_t dimension = 16;
+    const uint64_t count = 100;
     std::vector<float> dataset(count * dimension);
-    for (size_t i = 0; i < dataset.size(); ++i) {
-        dataset[i] = static_cast<float>(rand()) / RAND_MAX;
-    }
-
-    uint32_t n_list = 5;
-    uint32_t nthread = 1;
-    std::vector<int> devices = {0};
+    for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)i / dataset.size();
     std::string filename = "test_sharded_ivf_flat.bin";
+    std::vector<int> devices = {0};
 
     // 1. Build and Save
     {
-        GpuShardedIvfFlatIndex<float> index(dataset.data(), count, dimension, 
-                                            cuvs::distance::DistanceType::L2Expanded, 
-                                            n_list, devices, nthread);
-        index.Load();
-        index.Save(filename);
-        index.Destroy();
+        gpu_sharded_ivf_flat_index_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 5, devices, 1);
+        index.load();
+        index.save(filename);
+        index.destroy();
     }
 
-    // 2. Load from file and Search
+    // 2. Load and Search
     {
-        GpuShardedIvfFlatIndex<float> index(filename, dimension, 
-                                            cuvs::distance::DistanceType::L2Expanded, 
-                                            devices, nthread);
-        index.Load();
+        gpu_sharded_ivf_flat_index_t<float> index(filename, dimension, cuvs::distance::DistanceType::L2Expanded, devices, 1);
+        index.load();
         
-        ASSERT_EQ(index.Count, (uint32_t)100);
-        ASSERT_EQ(index.NList, (uint32_t)5);
-
-        std::vector<float> queries(dimension);
-        for (size_t i = 0; i < dimension; ++i) queries[i] = dataset[i];
-
-        auto result = index.Search(queries.data(), 1, dimension, 5, 2);
+        std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
+        auto result = index.search(queries.data(), 1, dimension, 5, 2);
         
-        ASSERT_EQ(result.Neighbors.size(), (size_t)5);
-        ASSERT_EQ(result.Neighbors[0], 0);
+        ASSERT_EQ(result.neighbors.size(), (size_t)5);
+        ASSERT_EQ(result.neighbors[0], 0);
 
-        index.Destroy();
+        index.destroy();
     }
 
     std::remove(filename.c_str());

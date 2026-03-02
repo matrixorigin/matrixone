@@ -23,7 +23,7 @@ static void set_errmsg(void* errmsg, const std::string& prefix, const std::excep
 }
 
 // Helper to convert C enum to C++ enum
-static cuvs::distance::DistanceType convert_distance_type(CuvsDistanceTypeC metric_c) {
+static cuvs::distance::DistanceType convert_distance_type(distance_type_t metric_c) {
     switch (metric_c) {
         case DistanceType_L2Expanded: return cuvs::distance::DistanceType::L2Expanded;
         case DistanceType_L1: return cuvs::distance::DistanceType::L1;
@@ -34,112 +34,116 @@ static cuvs::distance::DistanceType convert_distance_type(CuvsDistanceTypeC metr
     }
 }
 
-struct GpuBruteForceIndexAny {
-    CuvsQuantizationC qtype;
+struct gpu_brute_force_index_any_t {
+    quantization_t qtype;
     void* ptr;
 
-    GpuBruteForceIndexAny(CuvsQuantizationC q, void* p) : qtype(q), ptr(p) {}
-    ~GpuBruteForceIndexAny() {
+    gpu_brute_force_index_any_t(quantization_t q, void* p) : qtype(q), ptr(p) {}
+    ~gpu_brute_force_index_any_t() {
         switch (qtype) {
-            case Quantization_F32: delete static_cast<matrixone::GpuBruteForceIndex<float>*>(ptr); break;
-            case Quantization_F16: delete static_cast<matrixone::GpuBruteForceIndex<half>*>(ptr); break;
+            case Quantization_F32: delete static_cast<matrixone::gpu_brute_force_index_t<float>*>(ptr); break;
+            case Quantization_F16: delete static_cast<matrixone::gpu_brute_force_index_t<half>*>(ptr); break;
             default: break;
         }
     }
 };
 
-GpuBruteForceIndexC GpuBruteForceIndex_New(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, CuvsDistanceTypeC metric_c, uint32_t nthread, int device_id, CuvsQuantizationC qtype, void* errmsg) {
+extern "C" {
+
+gpu_brute_force_index_c gpu_brute_force_index_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, distance_type_t metric_c, uint32_t nthread, int device_id, quantization_t qtype, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         cuvs::distance::DistanceType metric = convert_distance_type(metric_c);
         void* index_ptr = nullptr;
         switch (qtype) {
             case Quantization_F32:
-                index_ptr = new matrixone::GpuBruteForceIndex<float>(static_cast<const float*>(dataset_data), count_vectors, dimension, metric, nthread, device_id);
+                index_ptr = new matrixone::gpu_brute_force_index_t<float>(static_cast<const float*>(dataset_data), count_vectors, dimension, metric, nthread, device_id);
                 break;
             case Quantization_F16:
-                index_ptr = new matrixone::GpuBruteForceIndex<half>(static_cast<const half*>(dataset_data), count_vectors, dimension, metric, nthread, device_id);
+                index_ptr = new matrixone::gpu_brute_force_index_t<half>(static_cast<const half*>(dataset_data), count_vectors, dimension, metric, nthread, device_id);
                 break;
             default:
-                throw std::runtime_error("Unsupported quantization type for Brute Force (Only F32 and F16 supported)");
+                throw std::runtime_error("Unsupported quantization type for brute force (only f32 and f16 supported)");
         }
-        return static_cast<GpuBruteForceIndexC>(new GpuBruteForceIndexAny(qtype, index_ptr));
+        return static_cast<gpu_brute_force_index_c>(new gpu_brute_force_index_any_t(qtype, index_ptr));
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in GpuBruteForceIndex_New", e);
+        set_errmsg(errmsg, "Error in gpu_brute_force_index_new", e);
         return nullptr;
     }
 }
 
-void GpuBruteForceIndex_Load(GpuBruteForceIndexC index_c, void* errmsg) {
+void gpu_brute_force_index_load(gpu_brute_force_index_c index_c, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<GpuBruteForceIndexAny*>(index_c);
+        auto* any = static_cast<gpu_brute_force_index_any_t*>(index_c);
         switch (any->qtype) {
-            case Quantization_F32: static_cast<matrixone::GpuBruteForceIndex<float>*>(any->ptr)->Load(); break;
-            case Quantization_F16: static_cast<matrixone::GpuBruteForceIndex<half>*>(any->ptr)->Load(); break;
+            case Quantization_F32: static_cast<matrixone::gpu_brute_force_index_t<float>*>(any->ptr)->load(); break;
+            case Quantization_F16: static_cast<matrixone::gpu_brute_force_index_t<half>*>(any->ptr)->load(); break;
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in GpuBruteForceIndex_Load", e);
+        set_errmsg(errmsg, "Error in gpu_brute_force_index_load", e);
     }
 }
 
-GpuBruteForceSearchResultC GpuBruteForceIndex_Search(GpuBruteForceIndexC index_c, const void* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, void* errmsg) {
+gpu_brute_force_search_result_c gpu_brute_force_index_search(gpu_brute_force_index_c index_c, const void* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<GpuBruteForceIndexAny*>(index_c);
+        auto* any = static_cast<gpu_brute_force_index_any_t*>(index_c);
         void* result_ptr = nullptr;
         switch (any->qtype) {
             case Quantization_F32: {
-                auto res = std::make_unique<matrixone::GpuBruteForceIndex<float>::SearchResult>();
-                *res = static_cast<matrixone::GpuBruteForceIndex<float>*>(any->ptr)->Search(static_cast<const float*>(queries_data), num_queries, query_dimension, limit);
+                auto res = std::make_unique<matrixone::gpu_brute_force_index_t<float>::search_result_t>();
+                *res = static_cast<matrixone::gpu_brute_force_index_t<float>*>(any->ptr)->search(static_cast<const float*>(queries_data), num_queries, query_dimension, limit);
                 result_ptr = res.release();
                 break;
             }
             case Quantization_F16: {
-                auto res = std::make_unique<matrixone::GpuBruteForceIndex<half>::SearchResult>();
-                *res = static_cast<matrixone::GpuBruteForceIndex<half>*>(any->ptr)->Search(static_cast<const half*>(queries_data), num_queries, query_dimension, limit);
+                auto res = std::make_unique<matrixone::gpu_brute_force_index_t<half>::search_result_t>();
+                *res = static_cast<matrixone::gpu_brute_force_index_t<half>*>(any->ptr)->search(static_cast<const half*>(queries_data), num_queries, query_dimension, limit);
                 result_ptr = res.release();
                 break;
             }
             default: break;
         }
-        return static_cast<GpuBruteForceSearchResultC>(result_ptr);
+        return static_cast<gpu_brute_force_search_result_c>(result_ptr);
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in GpuBruteForceIndex_Search", e);
+        set_errmsg(errmsg, "Error in gpu_brute_force_index_search", e);
         return nullptr;
     }
 }
 
-void GpuBruteForceIndex_GetResults(GpuBruteForceSearchResultC result_c, uint64_t num_queries, uint32_t limit, int64_t* neighbors, float* distances) {
+void gpu_brute_force_index_get_results(gpu_brute_force_search_result_c result_c, uint64_t num_queries, uint32_t limit, int64_t* neighbors, float* distances) {
     if (!result_c) return;
-    auto* search_result = static_cast<matrixone::GpuBruteForceIndex<float>::SearchResult*>(result_c);
+    auto* search_result = static_cast<matrixone::gpu_brute_force_index_t<float>::search_result_t*>(result_c);
 
     size_t total = num_queries * limit;
-    if (search_result->Neighbors.size() >= total) {
-        std::copy(search_result->Neighbors.begin(), search_result->Neighbors.begin() + total, neighbors);
+    if (search_result->neighbors.size() >= total) {
+        std::copy(search_result->neighbors.begin(), search_result->neighbors.begin() + total, neighbors);
     } else {
         std::fill(neighbors, neighbors + total, -1);
     }
 
-    if (search_result->Distances.size() >= total) {
-        std::copy(search_result->Distances.begin(), search_result->Distances.begin() + total, distances);
+    if (search_result->distances.size() >= total) {
+        std::copy(search_result->distances.begin(), search_result->distances.begin() + total, distances);
     } else {
         std::fill(distances, distances + total, std::numeric_limits<float>::infinity());
     }
 }
 
-void GpuBruteForceIndex_FreeSearchResult(GpuBruteForceSearchResultC result_c) {
+void gpu_brute_force_index_free_search_result(gpu_brute_force_search_result_c result_c) {
     if (!result_c) return;
-    delete static_cast<matrixone::GpuBruteForceIndex<float>::SearchResult*>(result_c);
+    delete static_cast<matrixone::gpu_brute_force_index_t<float>::search_result_t*>(result_c);
 }
 
-void GpuBruteForceIndex_Destroy(GpuBruteForceIndexC index_c, void* errmsg) {
+void gpu_brute_force_index_destroy(gpu_brute_force_index_c index_c, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        auto* any = static_cast<GpuBruteForceIndexAny*>(index_c);
+        auto* any = static_cast<gpu_brute_force_index_any_t*>(index_c);
         delete any;
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in GpuBruteForceIndex_Destroy", e);
+        set_errmsg(errmsg, "Error in gpu_brute_force_index_destroy", e);
     }
 }
+
+} // extern "C"

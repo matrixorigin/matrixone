@@ -1,4 +1,5 @@
 #include "helper.h"
+#include "cuvs_worker.hpp"
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #include <stdexcept>
@@ -22,7 +23,7 @@ __global__ void f32_to_f16_tail_kernel(const float* src, half* dst, uint64_t ind
 
 extern "C" {
 
-int GpuGetDeviceCount() {
+int gpu_get_device_count() {
     int count = 0;
     cudaError_t err = cudaGetDeviceCount(&count);
     if (err != cudaSuccess) {
@@ -31,7 +32,7 @@ int GpuGetDeviceCount() {
     return count;
 }
 
-int GpuGetDeviceList(int* devices, int max_count) {
+int gpu_get_device_list(int* devices, int max_count) {
     int count = 0;
     cudaError_t err = cudaGetDeviceCount(&count);
     if (err != cudaSuccess) {
@@ -57,7 +58,7 @@ static void set_errmsg_helper(void* errmsg, const std::string& prefix, const std
     }
 }
 
-void GpuConvertF32ToF16(const float* src, void* dst, uint64_t total_elements, int device_id, void* errmsg) {
+void gpu_convert_f32_to_f16(const float* src, void* dst, uint64_t total_elements, int device_id, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         if (!src || !dst || total_elements == 0) return;
@@ -98,7 +99,7 @@ void GpuConvertF32ToF16(const float* src, void* dst, uint64_t total_elements, in
         cudaFree(d_dst);
 
     } catch (const std::exception& e) {
-        set_errmsg_helper(errmsg, "Error in GpuConvertF32ToF16", e);
+        set_errmsg_helper(errmsg, "Error in gpu_convert_f32_to_f16", e);
     }
 }
 

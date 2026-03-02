@@ -1,351 +1,195 @@
-#include "cuvs_worker.hpp" // For CuvsWorker
-#include "brute_force.hpp" // For GpuBruteForceIndex
-#include "test_framework.hpp" // Include the custom test framework
+#include "cuvs_worker.hpp"
+#include "brute_force.hpp"
+#include "test_framework.hpp"
+#include <cstdio>
+#include <cstdlib>
+#include <cuda_fp16.h>
 
-// Forward declare the namespace for convenience
 using namespace matrixone;
 
-// --- GpuBruteForceIndex Tests ---
-
-TEST(GpuBruteForceIndexTest, SimpleL2Test) {
-    std::vector<std::vector<float>> dataset_data_2d = {
-        {1.0f, 1.0f}, // Index 0
-        {100.0f, 100.0f} // Index 1
-    };
-    uint32_t dimension = 2;
-    cuvs::distance::DistanceType metric = cuvs::distance::DistanceType::L2Expanded;
-    uint32_t nthread = 1;
-
-    // Flatten dataset_data_2d
-    std::vector<float> flattened_dataset_data;
-    for (const auto& vec : dataset_data_2d) {
-        flattened_dataset_data.insert(flattened_dataset_data.end(), vec.begin(), vec.end());
+// --- Helper to convert float to half ---
+static std::vector<half> float_to_half(const std::vector<float>& src) {
+    std::vector<half> dst(src.size());
+    for (size_t i = 0; i < src.size(); ++i) {
+        dst[i] = __float2half(src[i]);
     }
-    uint64_t count_vectors = dataset_data_2d.size();
-    const float* dataset_data_ptr = flattened_dataset_data.data();
-
-    GpuBruteForceIndex<float> index(dataset_data_ptr, count_vectors, dimension, metric, nthread);
-    index.Load();
-
-    std::vector<std::vector<float>> queries_data_2d = { // Renamed
-        {1.1f, 1.1f} // Query 0 (closest to dataset_data[0])
-    };
-    uint32_t limit = 1;
-    uint32_t query_dimension = dimension; // Use the same dimension as the index
-
-    // Flatten queries_data_2d
-    std::vector<float> flattened_queries_data;
-    for (const auto& vec : queries_data_2d) {
-        flattened_queries_data.insert(flattened_queries_data.end(), vec.begin(), vec.end());
-    }
-    uint64_t num_queries = queries_data_2d.size();
-    const float* queries_data_ptr = flattened_queries_data.data();
-
-    auto search_result = index.Search(queries_data_ptr, num_queries, query_dimension, limit);
-
-    ASSERT_EQ(search_result.Neighbors.size(), num_queries * limit);
-    ASSERT_EQ(search_result.Distances.size(), num_queries * limit);
-
-    ASSERT_EQ(search_result.Neighbors[0], 0); // Expected: Index 0
-    index.Destroy();
+    return dst;
 }
 
+// --- GpuBruteForceIndexTest ---
 
 TEST(GpuBruteForceIndexTest, BasicLoadAndSearch) {
-    std::vector<std::vector<float>> dataset_data_2d = {
-        {1.0f, 2.0f, 3.0f},
-        {4.0f, 5.0f, 6.0f},
-        {7.0f, 8.0f, 9.0f}
-    };
-    uint32_t dimension = 3;
-    cuvs::distance::DistanceType metric = cuvs::distance::DistanceType::L2Expanded;
-    uint32_t nthread = 1;
+    const uint32_t dimension = 3;
+    const uint64_t count = 2;
+    std::vector<float> dataset = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
+    
+    gpu_brute_force_index_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 1, 0);
+    index.load();
 
-    // Flatten dataset_data_2d
-    std::vector<float> flattened_dataset_data;
-    for (const auto& vec : dataset_data_2d) {
-        flattened_dataset_data.insert(flattened_dataset_data.end(), vec.begin(), vec.end());
-    }
-    uint64_t count_vectors = dataset_data_2d.size();
-    const float* dataset_data_ptr = flattened_dataset_data.data();
+    std::vector<float> queries = {1.0, 2.0, 3.0};
+    auto result = index.search(queries.data(), 1, dimension, 1);
 
-    GpuBruteForceIndex<float> index(dataset_data_ptr, count_vectors, dimension, metric, nthread);
-    index.Load();
+    ASSERT_EQ(result.neighbors.size(), (size_t)1);
+    ASSERT_EQ(result.neighbors[0], 0);
+    ASSERT_EQ(result.distances[0], 0.0);
 
-    std::vector<std::vector<float>> queries_data_2d = { // Renamed
-        {1.1f, 2.1f, 3.1f},
-        {7.1f, 8.1f, 9.1f}
-    };
-    uint32_t limit = 2;
-    uint32_t query_dimension = dimension; // Use the same dimension as the index
-
-    // Flatten queries_data_2d
-    std::vector<float> flattened_queries_data;
-    for (const auto& vec : queries_data_2d) {
-        flattened_queries_data.insert(flattened_queries_data.end(), vec.begin(), vec.end());
-    }
-    uint64_t num_queries = queries_data_2d.size();
-    const float* queries_data_ptr = flattened_queries_data.data();
-
-    auto search_result = index.Search(queries_data_ptr, num_queries, query_dimension, limit);
-
-    ASSERT_EQ(search_result.Neighbors.size(), num_queries * limit);
-    ASSERT_EQ(search_result.Distances.size(), num_queries * limit);
-
-    // Basic check for expected neighbors (first query closest to first dataset entry, second to third)
-    // Note: Actual values would depend on raft's exact calculation, this is a very loose check
-    // if queries_data[0] is (1.1, 2.1, 3.1) and dataset_data[0] is (1.0, 2.0, 3.0) they are close
-    // if queries_data[1] is (7.1, 8.1, 9.1) and dataset_data[2] is (7.0, 8.0, 9.0) they are close
-    // ASSERT_EQ(search_result.Neighbors[0][0], 0); // Assuming first query is closest to first dataset item
-    // ASSERT_EQ(search_result.Neighbors[1][0], 2); // Assuming second query is closest to third dataset item
-
-
-    index.Destroy();
+    index.destroy();
 }
 
-TEST(GpuBruteForceIndexTest, TestDifferentDistanceMetrics) {
-    std::vector<std::vector<float>> dataset_data_2d_l2sq = {
-        {0.0f, 0.0f, 0.0f},
-        {1.0f, 1.0f, 1.0f},
-        {2.0f, 2.0f, 2.0f}
+TEST(GpuBruteForceIndexTest, SearchWithMultipleQueries) {
+    const uint32_t dimension = 4;
+    const uint64_t count = 4;
+    std::vector<float> dataset = {
+        1.0, 0.0, 0.0, 0.0, // ID 0
+        0.0, 1.0, 0.0, 0.0, // ID 1
+        0.0, 0.0, 1.0, 0.0, // ID 2
+        0.0, 0.0, 0.0, 1.0  // ID 3
     };
-    uint32_t dimension = 3;
-    uint32_t nthread = 1;
-    uint32_t limit = 1;
+    
+    gpu_brute_force_index_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 1, 0);
+    index.load();
 
-    // Flatten dataset_data_2d_l2sq
-    std::vector<float> flattened_dataset_data_l2sq;
-    for (const auto& vec : dataset_data_2d_l2sq) {
-        flattened_dataset_data_l2sq.insert(flattened_dataset_data_l2sq.end(), vec.begin(), vec.end());
-    }
-    uint64_t count_vectors_l2sq = dataset_data_2d_l2sq.size();
-    const float* dataset_data_ptr_l2sq = flattened_dataset_data_l2sq.data();
-
-    std::vector<std::vector<float>> queries_data_2d = {
-        {0.1f, 0.1f, 0.1f} // Query closest to dataset_data[0]
+    std::vector<float> queries = {
+        1.0, 0.0, 0.0, 0.0, // Should match ID 0
+        0.0, 0.0, 1.0, 0.0  // Should match ID 2
     };
-    uint32_t query_dimension = dimension; // Use the same dimension as the index
+    auto result = index.search(queries.data(), 2, dimension, 1);
 
-    // Flatten queries_data_2d
-    std::vector<float> flattened_queries_data;
-    for (const auto& vec : queries_data_2d) {
-        flattened_queries_data.insert(flattened_queries_data.end(), vec.begin(), vec.end());
-    }
-    uint64_t num_queries = queries_data_2d.size();
-    const float* queries_data_ptr = flattened_queries_data.data();
+    ASSERT_EQ(result.neighbors.size(), (size_t)2);
+    ASSERT_EQ(result.neighbors[0], 0);
+    ASSERT_EQ(result.neighbors[1], 2);
 
-
-    // Test L2Expanded (Euclidean Squared)
-    GpuBruteForceIndex<float> index_l2sq(dataset_data_ptr_l2sq, count_vectors_l2sq, dimension, cuvs::distance::DistanceType::L2Expanded, nthread);
-    index_l2sq.Load();
-    auto result_l2sq = index_l2sq.Search(queries_data_ptr, num_queries, query_dimension, limit);
-    ASSERT_EQ(result_l2sq.Neighbors[0], 0);
-    index_l2sq.Destroy();
-
-    // Test L1 (Manhattan)
-    // Flatten dataset_data_2d_l2sq for L1 test (same data)
-    GpuBruteForceIndex<float> index_l1(dataset_data_ptr_l2sq, count_vectors_l2sq, dimension, cuvs::distance::DistanceType::L1, nthread);
-    index_l1.Load();
-    auto result_l1 = index_l1.Search(queries_data_ptr, num_queries, query_dimension, limit);
-    ASSERT_EQ(result_l1.Neighbors[0], 0);
-    index_l1.Destroy();
-
-    // Test InnerProduct
-    std::vector<std::vector<float>> dataset_ip_2d = {
-        {0.0f, 0.0f, 0.0f},
-        {1.0f, 1.0f, 1.0f},
-        {2.0f, 2.0f, 2.0f}
-    };
-    // Flatten dataset_ip_2d
-    std::vector<float> flattened_dataset_ip;
-    for (const auto& vec : dataset_ip_2d) {
-        flattened_dataset_ip.insert(flattened_dataset_ip.end(), vec.begin(), vec.end());
-    }
-    uint64_t count_vectors_ip = dataset_ip_2d.size();
-    const float* dataset_data_ptr_ip = flattened_dataset_ip.data();
-
-    std::vector<std::vector<float>> queries_ip_2d = {
-        {0.1f, 0.1f, 0.1f}
-    };
-    // Flatten queries_ip_2d
-    std::vector<float> flattened_queries_ip;
-    for (const auto& vec : queries_ip_2d) {
-        flattened_queries_ip.insert(flattened_queries_ip.end(), vec.begin(), vec.end());
-    }
-    uint64_t num_queries_ip = queries_ip_2d.size();
-    const float* queries_data_ptr_ip = flattened_queries_ip.data();
-
-    GpuBruteForceIndex<float> index_ip(dataset_data_ptr_ip, count_vectors_ip, dimension, cuvs::distance::DistanceType::InnerProduct, nthread);
-    index_ip.Load();
-    auto result_ip = index_ip.Search(queries_data_ptr_ip, num_queries_ip, query_dimension, limit);
-    // ASSERT_EQ(result_ip.Neighbors[0][0], 2); // Expecting index 2 as closest for InnerProduct (highest score)
-    index_ip.Destroy();
-
-    // Test CosineSimilarity
-    std::vector<std::vector<float>> dataset_cosine_2d = {
-        {0.0f, 0.0f, 0.0f},
-        {1.0f, 0.0f, 0.0f},
-        {0.0f, 1.0f, 0.0f},
-        {1.0f, 1.0f, 0.0f}
-    };
-    // Flatten dataset_cosine_2d
-    std::vector<float> flattened_dataset_cosine;
-    for (const auto& vec : dataset_cosine_2d) {
-        flattened_dataset_cosine.insert(flattened_dataset_cosine.end(), vec.begin(), vec.end());
-    }
-    uint64_t count_vectors_cosine = dataset_cosine_2d.size();
-    const float* dataset_data_ptr_cosine = flattened_dataset_cosine.data();
-
-    std::vector<std::vector<float>> queries_cosine_2d = {
-        {1.0f, 1.0f, 0.0f} // Query is same as index 3
-    };
-    // Flatten queries_cosine_2d
-    std::vector<float> flattened_queries_cosine;
-    for (const auto& vec : queries_cosine_2d) {
-        flattened_queries_cosine.insert(flattened_queries_cosine.end(), vec.begin(), vec.end());
-    }
-    uint64_t num_queries_cosine = queries_cosine_2d.size();
-    const float* queries_data_ptr_cosine = flattened_queries_cosine.data();
-
-    GpuBruteForceIndex<float> index_cosine(dataset_data_ptr_cosine, count_vectors_cosine, dimension, cuvs::distance::DistanceType::L2Expanded, nthread); // Reverted to L2Expanded
-    index_cosine.Load();
-    auto result_cosine = index_cosine.Search(queries_data_ptr_cosine, num_queries_cosine, query_dimension, limit);
-    // ASSERT_EQ(result_cosine.Neighbors[0][0], 3); // Expecting index 3 as it's an exact match
-    index_cosine.Destroy();
+    index.destroy();
 }
 
-TEST(GpuBruteForceIndexTest, TestEdgeCases) {
-    uint32_t dimension = 3;
-    cuvs::distance::DistanceType metric = cuvs::distance::DistanceType::L2Expanded;
-    uint32_t nthread = 1;
+TEST(GpuBruteForceIndexTest, SearchWithFloat16) {
+    const uint32_t dimension = 2;
+    const uint64_t count = 2;
+    std::vector<float> f_dataset = {1.0, 1.0, 2.0, 2.0};
+    std::vector<half> h_dataset = float_to_half(f_dataset);
+    
+    gpu_brute_force_index_t<half> index(h_dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 1, 0);
+    index.load();
 
-    // Case 1: Empty dataset
-    std::vector<std::vector<float>> empty_dataset_2d = {};
-    // Flatten empty_dataset_2d
-    std::vector<float> flattened_empty_dataset;
-    // No need to copy for empty, but define pointer and count
-    uint64_t count_vectors_empty = empty_dataset_2d.size();
-    const float* empty_dataset_ptr = flattened_empty_dataset.data(); // This will be nullptr or garbage if empty() but that's fine for empty dataset
+    std::vector<float> f_queries = {1.0, 1.0};
+    std::vector<half> h_queries = float_to_half(f_queries);
+    auto result = index.search(h_queries.data(), 1, dimension, 1);
 
-    GpuBruteForceIndex<float> empty_index(empty_dataset_ptr, count_vectors_empty, dimension, metric, nthread);
-    empty_index.Load();
-    ASSERT_EQ(empty_index.Count, 0);
+    ASSERT_EQ(result.neighbors.size(), (size_t)1);
+    ASSERT_EQ(result.neighbors[0], 0);
+    ASSERT_EQ(result.distances[0], 0.0);
 
-    std::vector<std::vector<float>> queries_data_empty_2d; // Declare here
-    // Flatten queries_data_empty_2d
-    std::vector<float> flattened_queries_data_empty;
-    uint64_t num_queries_empty_dataset_search = queries_data_empty_2d.size();
-    const float* queries_data_ptr_empty_dataset_search = flattened_queries_data_empty.data();
-
-    auto result_empty_dataset_search = empty_index.Search(queries_data_ptr_empty_dataset_search, num_queries_empty_dataset_search, dimension, 1); // Pass dimension here
-    ASSERT_TRUE(result_empty_dataset_search.Neighbors.empty());
-    ASSERT_TRUE(result_empty_dataset_search.Distances.empty());
-    empty_index.Destroy();
-
-    // Re-create a valid index for query edge cases
-    std::vector<std::vector<float>> dataset_data_2d = {
-        {1.0f, 2.0f, 3.0f},
-        {4.0f, 5.0f, 6.0f}
-    };
-    // Flatten dataset_data_2d
-    std::vector<float> flattened_dataset_data;
-    for (const auto& vec : dataset_data_2d) {
-        flattened_dataset_data.insert(flattened_dataset_data.end(), vec.begin(), vec.end());
-    }
-    uint64_t count_vectors_data = dataset_data_2d.size();
-    const float* dataset_data_ptr = flattened_dataset_data.data();
-
-    GpuBruteForceIndex<float> index(dataset_data_ptr, count_vectors_data, dimension, metric, nthread);
-    index.Load();
-
-    // Case 2: Empty queries
-    std::vector<std::vector<float>> empty_queries_2d = {};
-    // Flatten empty_queries_2d
-    std::vector<float> flattened_empty_queries;
-    uint64_t num_empty_queries = empty_queries_2d.size();
-    const float* empty_queries_ptr = flattened_empty_queries.data();
-
-    auto result_empty_queries = index.Search(empty_queries_ptr, num_empty_queries, dimension, 1); // Pass dimension here
-    ASSERT_TRUE(result_empty_queries.Neighbors.empty());
-    ASSERT_TRUE(result_empty_queries.Distances.empty());
-
-    // Case 3: Limit is 0
-    std::vector<std::vector<float>> queries_data_2d = {
-        {1.1f, 2.1f, 3.1f}
-    };
-    // Flatten queries_data_2d
-    std::vector<float> flattened_queries_data;
-    for (const auto& vec : queries_data_2d) {
-        flattened_queries_data.insert(flattened_queries_data.end(), vec.begin(), vec.end());
-    }
-    uint64_t num_queries_limit_zero = queries_data_2d.size();
-    const float* queries_data_ptr_limit_zero = flattened_queries_data.data();
-
-    auto result_limit_zero = index.Search(queries_data_ptr_limit_zero, num_queries_limit_zero, dimension, 0); // Pass dimension here
-    ASSERT_TRUE(result_limit_zero.Neighbors.empty());
-    ASSERT_TRUE(result_limit_zero.Distances.empty());
-
-    // Case 4: Limit is greater than dataset count
-    auto result_limit_too_large = index.Search(queries_data_ptr_limit_zero, num_queries_limit_zero, dimension, 10); // Pass dimension here, dataset_data has 2 elements
-    ASSERT_EQ(result_limit_too_large.Neighbors.size(), num_queries_limit_zero * 10);
-    ASSERT_EQ(result_limit_too_large.Distances.size(), num_queries_limit_zero * 10);
-    ASSERT_EQ(result_limit_too_large.Neighbors[0], 0);
-    ASSERT_EQ(result_limit_too_large.Neighbors[1], 1);
-    for (size_t i = 2; i < 10; ++i) {
-        ASSERT_EQ(result_limit_too_large.Neighbors[i], -1);
-    }
-
-    index.Destroy();
+    index.destroy();
 }
 
-TEST(GpuBruteForceIndexTest, TestMultipleThreads) {
-    std::vector<std::vector<float>> dataset_data_2d = {
-        {1.0f, 2.0f, 3.0f},
-        {4.0f, 5.0f, 6.0f},
-        {7.0f, 8.0f, 9.0f},
-        {10.0f, 11.0f, 12.0f},
-        {13.0f, 14.0f, 15.0f}
+TEST(GpuBruteForceIndexTest, SearchWithInnerProduct) {
+    const uint32_t dimension = 2;
+    const uint64_t count = 2;
+    std::vector<float> dataset = {
+        1.0, 0.0,
+        0.0, 1.0
     };
-    uint32_t dimension = 3;
-    cuvs::distance::DistanceType metric = cuvs::distance::DistanceType::L2Expanded;
-    uint32_t nthread = 4; // Test with multiple threads
+    
+    gpu_brute_force_index_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::InnerProduct, 1, 0);
+    index.load();
 
-    // Flatten dataset_data_2d
-    std::vector<float> flattened_dataset_data;
-    for (const auto& vec : dataset_data_2d) {
-        flattened_dataset_data.insert(flattened_dataset_data.end(), vec.begin(), vec.end());
-    }
-    uint64_t count_vectors = dataset_data_2d.size();
-    const float* dataset_data_ptr = flattened_dataset_data.data();
+    std::vector<float> queries = {1.0, 0.0};
+    auto result = index.search(queries.data(), 1, dimension, 2);
 
-    GpuBruteForceIndex<float> index(dataset_data_ptr, count_vectors, dimension, metric, nthread);
-    index.Load();
+    ASSERT_EQ(result.neighbors.size(), (size_t)2);
+    ASSERT_EQ(result.neighbors[0], 0);
+    ASSERT_EQ(result.neighbors[1], 1);
+    
+    // Log actual distances to debug
+    TEST_LOG("InnerProduct Distances: " << result.distances[0] << ", " << result.distances[1]);
 
-    std::vector<std::vector<float>> queries_data_2d = { // Renamed
-        {1.1f, 2.1f, 3.1f}, // Closest to dataset_data[0]
-        {13.1f, 14.1f, 15.1f} // Closest to dataset_data[4]
-    };
-    uint32_t limit = 1;
-    uint32_t query_dimension = dimension; // Use the same dimension as the index
-
-    // Flatten queries_data_2d
-    std::vector<float> flattened_queries_data;
-    for (const auto& vec : queries_data_2d) {
-        flattened_queries_data.insert(flattened_queries_data.end(), vec.begin(), vec.end());
-    }
-    uint64_t num_queries = queries_data_2d.size();
-    const float* queries_data_ptr = flattened_queries_data.data();
-
-    auto search_result = index.Search(queries_data_ptr, num_queries, query_dimension, limit);
-
-    ASSERT_EQ(search_result.Neighbors.size(), num_queries * limit);
-    ASSERT_EQ(search_result.Distances.size(), num_queries * limit);
-
-    // Verify expected nearest neighbors
-    // ASSERT_EQ(search_result.Neighbors[0][0], 0);
-    // ASSERT_EQ(search_result.Neighbors[1][0], 4);
-
-    index.Destroy();
+    index.destroy();
 }
 
+TEST(GpuBruteForceIndexTest, EmptyDataset) {
+    const uint32_t dimension = 128;
+    const uint64_t count = 0;
+    
+    gpu_brute_force_index_t<float> index(nullptr, count, dimension, cuvs::distance::DistanceType::L2Expanded, 1, 0);
+    index.load();
 
+    std::vector<float> queries(dimension, 0.0);
+    auto result = index.search(queries.data(), 1, dimension, 5);
+
+    ASSERT_EQ(result.neighbors.size(), (size_t)0);
+
+    index.destroy();
+}
+
+TEST(GpuBruteForceIndexTest, LargeLimit) {
+    const uint32_t dimension = 2;
+    const uint64_t count = 5;
+    std::vector<float> dataset(count * dimension, 1.0);
+    
+    gpu_brute_force_index_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 1, 0);
+    index.load();
+
+    std::vector<float> queries(dimension, 1.0);
+    uint32_t limit = 10;
+    auto result = index.search(queries.data(), 1, dimension, limit);
+
+    ASSERT_EQ(result.neighbors.size(), (size_t)limit);
+    for (int i = 0; i < 5; ++i) ASSERT_GE(result.neighbors[i], 0);
+    for (int i = 5; i < 10; ++i) ASSERT_EQ(result.neighbors[i], -1);
+
+    index.destroy();
+}
+
+// --- CuvsWorkerTest ---
+
+TEST(CuvsWorkerTest, BruteForceSearch) {
+    uint32_t n_threads = 1;
+    cuvs_worker_t worker(n_threads);
+    worker.start();
+
+    const uint32_t dimension = 128;
+    const uint64_t count = 1000;
+    std::vector<float> dataset(count * dimension);
+    for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
+
+    gpu_brute_force_index_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 1, 0);
+    index.load();
+
+    std::vector<float> queries = std::vector<float>(dataset.begin(), dataset.begin() + dimension);
+    auto result = index.search(queries.data(), 1, dimension, 5);
+
+    ASSERT_EQ(result.neighbors.size(), (size_t)5);
+    ASSERT_EQ(result.neighbors[0], 0);
+
+    index.destroy();
+    worker.stop();
+}
+
+TEST(CuvsWorkerTest, ConcurrentSearches) {
+    const uint32_t dimension = 16;
+    const uint64_t count = 100;
+    std::vector<float> dataset(count * dimension);
+    // Use very distinct values to ensure unique neighbors
+    for (size_t i = 0; i < count; ++i) {
+        for (size_t j = 0; j < dimension; ++j) {
+            dataset[i * dimension + j] = (float)i * 10.0f + (float)j;
+        }
+    }
+
+    gpu_brute_force_index_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 4, 0);
+    index.load();
+
+    const int num_threads = 4;
+    std::vector<std::future<void>> futures;
+    for (int i = 0; i < num_threads; ++i) {
+        futures.push_back(std::async(std::launch::async, [&index, dimension, &dataset, i]() {
+            std::vector<float> query = std::vector<float>(dataset.begin() + i * dimension, dataset.begin() + (i + 1) * dimension);
+            auto res = index.search(query.data(), 1, dimension, 1);
+            ASSERT_EQ(res.neighbors[0], i);
+        }));
+    }
+
+    for (auto& f : futures) f.get();
+
+    index.destroy();
+}

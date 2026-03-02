@@ -10,7 +10,7 @@ NVCC := $(CUDA_HOME)/bin/nvcc
 # -I. includes the current directory for headers
 CLFLAGS := -I$(CUDA_HOME)/include -I$(CONDA_PREFIX)/include -I$(GOCUVS)/include/rapids -I$(GOCUVS)/include/raft -I$(GOCUVS)/include/cuvs
 CXXFLAGS := -std=c++17 -pthread -Wall -Wextra -O2 -I. $(CLFLAGS) -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE -DRAFT_SYSTEM_LITTLE_ENDIAN=1
-NVCCFLAGS := -std=c++17 -Xcompiler "-Wall -Wextra -fPIC -O2" -I. $(CLFLAGS) -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE -DRAFT_SYSTEM_LITTLE_ENDIAN=1
+NVCCFLAGS := -std=c++17 -Xcompiler "-Wall -Wextra -fPIC -O2" --extended-lambda -I. $(CLFLAGS) -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE -DRAFT_SYSTEM_LITTLE_ENDIAN=1
 
 # Source directory
 SRCDIR := .

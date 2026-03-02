@@ -1,6 +1,6 @@
 #pragma once
 
-#include "cuvs_worker.hpp" // For CuvsWorker and RaftHandleWrapper
+#include "cuvs_worker.hpp" // For cuvs_worker_t and raft_handle_wrapper_t
 #include <raft/util/cudart_utils.hpp> // For RAFT_CUDA_TRY
 #include <cuda_fp16.h> // For half
 
@@ -38,59 +38,59 @@
 
 namespace matrixone {
 
-// --- GpuBruteForceIndex Class ---
+// --- gpu_brute_force_index_t Class ---
 template <typename T>
-class GpuBruteForceIndex {
+class gpu_brute_force_index_t {
 public:
     std::vector<T> flattened_host_dataset; // Store flattened data as std::vector
-    std::unique_ptr<cuvs::neighbors::brute_force::index<T, float>> Index; // Use float for DistT
-    cuvs::distance::DistanceType Metric;
-    uint32_t Dimension;
-    uint32_t Count;
+    std::unique_ptr<cuvs::neighbors::brute_force::index<T, float>> index; // Use float for DistT
+    cuvs::distance::DistanceType metric;
+    uint32_t dimension;
+    uint32_t count;
     int device_id_;
-    std::unique_ptr<CuvsWorker> Worker;
-    std::shared_mutex mutex_; // Mutex to protect Load() and Search()
+    std::unique_ptr<cuvs_worker_t> worker;
+    std::shared_mutex mutex_; // Mutex to protect load() and search()
     bool is_loaded_ = false;
 
-    ~GpuBruteForceIndex() {
-        Destroy();
+    ~gpu_brute_force_index_t() {
+        destroy();
     }
 
-    GpuBruteForceIndex(const T* dataset_data, uint64_t count_vectors, uint32_t dimension, cuvs::distance::DistanceType m,
+    gpu_brute_force_index_t(const T* dataset_data, uint64_t count_vectors, uint32_t dimension, cuvs::distance::DistanceType m,
                        uint32_t nthread, int device_id = 0)
-        : Dimension(dimension), Count(static_cast<uint32_t>(count_vectors)), Metric(m), device_id_(device_id) {
-        Worker = std::make_unique<CuvsWorker>(nthread, device_id_);
+        : dimension(dimension), count(static_cast<uint32_t>(count_vectors)), metric(m), device_id_(device_id) {
+        worker = std::make_unique<cuvs_worker_t>(nthread, device_id_);
 
         // Resize flattened_host_dataset and copy data from the flattened array
-        flattened_host_dataset.resize(Count * Dimension); // Total elements
-        std::copy(dataset_data, dataset_data + (Count * Dimension), flattened_host_dataset.begin());
+        flattened_host_dataset.resize(count * dimension); // Total elements
+        std::copy(dataset_data, dataset_data + (count * dimension), flattened_host_dataset.begin());
     }
 
-    void Load() {
+    void load() {
         std::unique_lock<std::shared_mutex> lock(mutex_); // Acquire exclusive lock
         if (is_loaded_) return;
 
         std::promise<bool> init_complete_promise;
         std::future<bool> init_complete_future = init_complete_promise.get_future();
 
-        auto init_fn = [&](RaftHandleWrapper& handle) -> std::any {
+        auto init_fn = [&](raft_handle_wrapper_t& handle) -> std::any {
             if (flattened_host_dataset.empty()) { // Use new member
-                Index = nullptr; // Ensure Index is null if no data
+                index = nullptr; // Ensure index is null if no data
                 init_complete_promise.set_value(true); // Signal completion even if empty
                 return std::any();
             }
 
             auto dataset_device = raft::make_device_matrix<T, int64_t, raft::layout_c_contiguous>(
-                *handle.get_raft_resources(), static_cast<int64_t>(Count), static_cast<int64_t>(Dimension));
+                *handle.get_raft_resources(), static_cast<int64_t>(count), static_cast<int64_t>(dimension));
             
             RAFT_CUDA_TRY(cudaMemcpyAsync(dataset_device.data_handle(), flattened_host_dataset.data(),
                                      flattened_host_dataset.size() * sizeof(T), cudaMemcpyHostToDevice,
                                      raft::resource::get_cuda_stream(*handle.get_raft_resources())));
 
             cuvs::neighbors::brute_force::index_params index_params; // Correct brute_force namespace
-            index_params.metric = Metric;
+            index_params.metric = metric;
 
-            Index = std::make_unique<cuvs::neighbors::brute_force::index<T, float>>(
+            index = std::make_unique<cuvs::neighbors::brute_force::index<T, float>>(
                 cuvs::neighbors::brute_force::build(*handle.get_raft_resources(), index_params, raft::make_const_mdspan(dataset_device.view()))); // Use raft::make_const_mdspan
 
             raft::resource::sync_stream(*handle.get_raft_resources()); // Synchronize after build
@@ -98,42 +98,42 @@ public:
             init_complete_promise.set_value(true); // Signal that initialization is complete
             return std::any();
         };
-        auto stop_fn = [&](RaftHandleWrapper& handle) -> std::any {
-            if (Index) { // Check if unique_ptr holds an object
-                Index.reset();
+        auto stop_fn = [&](raft_handle_wrapper_t& handle) -> std::any {
+            if (index) { // Check if unique_ptr holds an object
+                index.reset();
             }
             return std::any();
         };
-        Worker->Start(init_fn, stop_fn);
+        worker->start(init_fn, stop_fn);
 
         init_complete_future.get(); // Wait for the init_fn to complete
         is_loaded_ = true;
     }
 
-    struct SearchResult {
-        std::vector<int64_t> Neighbors;
-        std::vector<float> Distances;
+    struct search_result_t {
+        std::vector<int64_t> neighbors;
+        std::vector<float> distances;
     };
 
-    SearchResult Search(const T* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit) {
-        if (!queries_data || num_queries == 0 || Dimension == 0) { // Check for invalid input
-            return SearchResult{};
+    search_result_t search(const T* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit) {
+        if (!queries_data || num_queries == 0 || dimension == 0) { // Check for invalid input
+            return search_result_t{};
         }
-        if (query_dimension != this->Dimension) {
+        if (query_dimension != this->dimension) {
             throw std::runtime_error("Query dimension does not match index dimension.");
         }
         if (limit == 0) {
-            return SearchResult{};
+            return search_result_t{};
         }
-        if (!Index) {
-            return SearchResult{};
+        if (!index) {
+            return search_result_t{};
         }
 
         size_t queries_rows = num_queries;
-        size_t queries_cols = Dimension; // Use the class's Dimension
+        size_t queries_cols = dimension; // Use the class's dimension
 
-        uint64_t jobID = Worker->Submit(
-            [&, queries_rows, queries_cols, limit](RaftHandleWrapper& handle) -> std::any {
+        uint64_t job_id = worker->submit(
+            [&, queries_rows, queries_cols, limit](raft_handle_wrapper_t& handle) -> std::any {
                 std::shared_lock<std::shared_mutex> lock(mutex_); // Acquire shared read-only lock inside worker thread
                 
                 auto queries_device = raft::make_device_matrix<T, int64_t, raft::layout_c_contiguous>(
@@ -148,28 +148,28 @@ public:
                     *handle.get_raft_resources(), static_cast<int64_t>(queries_rows), static_cast<int64_t>(limit));
 
                 cuvs::neighbors::brute_force::search_params search_params;
-                cuvs::neighbors::brute_force::search(*handle.get_raft_resources(), search_params, *Index,
+                cuvs::neighbors::brute_force::search(*handle.get_raft_resources(), search_params, *index,
                                                      raft::make_const_mdspan(queries_device.view()), neighbors_device.view(), distances_device.view());
 
-                SearchResult res;
-                res.Neighbors.resize(queries_rows * limit);
-                res.Distances.resize(queries_rows * limit);
+                search_result_t res;
+                res.neighbors.resize(queries_rows * limit);
+                res.distances.resize(queries_rows * limit);
 
-                RAFT_CUDA_TRY(cudaMemcpyAsync(res.Neighbors.data(), neighbors_device.data_handle(),
-                                         res.Neighbors.size() * sizeof(int64_t), cudaMemcpyDeviceToHost,
+                RAFT_CUDA_TRY(cudaMemcpyAsync(res.neighbors.data(), neighbors_device.data_handle(),
+                                         res.neighbors.size() * sizeof(int64_t), cudaMemcpyDeviceToHost,
                                          raft::resource::get_cuda_stream(*handle.get_raft_resources())));
-                RAFT_CUDA_TRY(cudaMemcpyAsync(res.Distances.data(), distances_device.data_handle(),
-                                         res.Distances.size() * sizeof(float), cudaMemcpyDeviceToHost,
+                RAFT_CUDA_TRY(cudaMemcpyAsync(res.distances.data(), distances_device.data_handle(),
+                                         res.distances.size() * sizeof(float), cudaMemcpyDeviceToHost,
                                          raft::resource::get_cuda_stream(*handle.get_raft_resources())));
 
                 raft::resource::sync_stream(*handle.get_raft_resources());
 
                 // Post-process to handle sentinels
-                for (size_t i = 0; i < res.Neighbors.size(); ++i) {
-                    if (res.Neighbors[i] == std::numeric_limits<int64_t>::max() || 
-                        res.Neighbors[i] == 4294967295LL || 
-                        res.Neighbors[i] < 0) {
-                        res.Neighbors[i] = -1;
+                for (size_t i = 0; i < res.neighbors.size(); ++i) {
+                    if (res.neighbors[i] == std::numeric_limits<int64_t>::max() || 
+                        res.neighbors[i] == 4294967295LL || 
+                        res.neighbors[i] < 0) {
+                        res.neighbors[i] = -1;
                     }
                 }
                 
@@ -177,17 +177,17 @@ public:
             }
         );
 
-        CuvsTaskResult result = Worker->Wait(jobID).get();
-        if (result.Error) {
-            std::rethrow_exception(result.Error);
+        cuvs_task_result_t result = worker->wait(job_id).get();
+        if (result.error) {
+            std::rethrow_exception(result.error);
         }
 
-        return std::any_cast<SearchResult>(result.Result);
+        return std::any_cast<search_result_t>(result.result);
     }
 
-    void Destroy() {
-        if (Worker) {
-            Worker->Stop();
+    void destroy() {
+        if (worker) {
+            worker->stop();
         }
     }
 };

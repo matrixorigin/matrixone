@@ -33,99 +33,99 @@
 namespace matrixone {
 
 /**
- * @brief GpuShardedIvfFlatIndex implements a sharded IVF-Flat index across multiple GPUs on a single node.
+ * @brief gpu_sharded_ivf_flat_index_t implements a sharded IVF-Flat index across multiple GPUs on a single node.
  * It uses the cuVS Multi-GPU (SNMG) API.
  */
 template <typename T>
-class GpuShardedIvfFlatIndex {
+class gpu_sharded_ivf_flat_index_t {
 public:
-    using IvfFlatIndex = cuvs::neighbors::ivf_flat::index<T, int64_t>;
-    using MgIndex = cuvs::neighbors::mg_index<IvfFlatIndex, T, int64_t>;
+    using ivf_flat_index = cuvs::neighbors::ivf_flat::index<T, int64_t>;
+    using mg_index = cuvs::neighbors::mg_index<ivf_flat_index, T, int64_t>;
 
     std::vector<T> flattened_host_dataset;
     std::vector<int> devices_;
     std::string filename_;
-    std::unique_ptr<MgIndex> Index;
-    std::unique_ptr<RaftHandleWrapper> snmg_handle_; // Persistent SNMG handle
-    cuvs::distance::DistanceType Metric;
-    uint32_t Dimension;
-    uint32_t Count;
-    uint32_t NList;
+    std::unique_ptr<mg_index> index;
+    std::unique_ptr<raft_handle_wrapper_t> snmg_handle_; // Persistent SNMG handle
+    cuvs::distance::DistanceType metric;
+    uint32_t dimension;
+    uint32_t count;
+    uint32_t n_list;
     int device_id_;
-    std::unique_ptr<CuvsWorker> Worker;
+    std::unique_ptr<cuvs_worker_t> worker;
     std::shared_mutex mutex_;
     bool is_loaded_ = false;
 
-    ~GpuShardedIvfFlatIndex() {
-        Destroy();
+    ~gpu_sharded_ivf_flat_index_t() {
+        destroy();
     }
 
     // Constructor for building from dataset across multiple GPUs
-    GpuShardedIvfFlatIndex(const T* dataset_data, uint64_t count_vectors, uint32_t dimension, 
+    gpu_sharded_ivf_flat_index_t(const T* dataset_data, uint64_t count_vectors, uint32_t dimension, 
                            cuvs::distance::DistanceType m, uint32_t n_list, 
                            const std::vector<int>& devices, uint32_t nthread)
-        : Dimension(dimension), Count(static_cast<uint32_t>(count_vectors)), Metric(m), 
-          NList(n_list), devices_(devices) {
-        Worker = std::make_unique<CuvsWorker>(nthread, devices_);
+        : dimension(dimension), count(static_cast<uint32_t>(count_vectors)), metric(m), 
+          n_list(n_list), devices_(devices) {
+        worker = std::make_unique<cuvs_worker_t>(nthread, devices_);
 
-        flattened_host_dataset.resize(Count * Dimension);
-        std::copy(dataset_data, dataset_data + (Count * Dimension), flattened_host_dataset.begin());
+        flattened_host_dataset.resize(count * dimension);
+        std::copy(dataset_data, dataset_data + (count * dimension), flattened_host_dataset.begin());
     }
 
     // Constructor for loading from file (multi-GPU)
-    GpuShardedIvfFlatIndex(const std::string& filename, uint32_t dimension, 
+    gpu_sharded_ivf_flat_index_t(const std::string& filename, uint32_t dimension, 
                            cuvs::distance::DistanceType m, const std::vector<int>& devices, uint32_t nthread)
-        : filename_(filename), Dimension(dimension), Metric(m), Count(0), NList(0), devices_(devices) {
-        Worker = std::make_unique<CuvsWorker>(nthread, devices_);
+        : filename_(filename), dimension(dimension), metric(m), count(0), n_list(0), devices_(devices) {
+        worker = std::make_unique<cuvs_worker_t>(nthread, devices_);
     }
 
-    void Load() {
+    void load() {
         std::unique_lock<std::shared_mutex> lock(mutex_);
         if (is_loaded_) return;
 
         std::promise<bool> init_complete_promise;
         std::future<bool> init_complete_future = init_complete_promise.get_future();
 
-        auto init_fn = [&](RaftHandleWrapper& handle) -> std::any {
+        auto init_fn = [&](raft_handle_wrapper_t& handle) -> std::any {
             auto clique = handle.get_raft_resources();
 
             if (!filename_.empty()) {
-                // Load MG index from file
-                Index = std::make_unique<MgIndex>(
+                // load MG index from file
+                index = std::make_unique<mg_index>(
                     cuvs::neighbors::ivf_flat::deserialize<T, int64_t>(*clique, filename_));
                 raft::resource::sync_stream(*clique);
                 
                 // Update metadata
-                Count = 0;
-                for (const auto& iface : Index->ann_interfaces_) {
+                count = 0;
+                for (const auto& iface : index->ann_interfaces_) {
                     if (iface.index_.has_value()) {
-                        Count += static_cast<uint32_t>(iface.index_.value().size());
+                        count += static_cast<uint32_t>(iface.index_.value().size());
                     }
                 }
                 
-                if (!Index->ann_interfaces_.empty() && Index->ann_interfaces_[0].index_.has_value()) {
-                    NList = static_cast<uint32_t>(Index->ann_interfaces_[0].index_.value().n_lists());
+                if (!index->ann_interfaces_.empty() && index->ann_interfaces_[0].index_.has_value()) {
+                    n_list = static_cast<uint32_t>(index->ann_interfaces_[0].index_.value().n_lists());
                 }
             } else if (!flattened_host_dataset.empty()) {
                 // DATASET SIZE CHECK
-                if (Count < NList) {
-                    throw std::runtime_error("Dataset too small: Count (" + std::to_string(Count) + 
-                                            ") must be >= NList (" + std::to_string(NList) + 
+                if (count < n_list) {
+                    throw std::runtime_error("Dataset too small: count (" + std::to_string(count) + 
+                                            ") must be >= n_list (" + std::to_string(n_list) + 
                                             ") to build IVF index.");
                 }
 
                 // Build sharded index from host dataset
                 auto dataset_host_view = raft::make_host_matrix_view<const T, int64_t>(
-                    flattened_host_dataset.data(), (int64_t)Count, (int64_t)Dimension);
+                    flattened_host_dataset.data(), (int64_t)count, (int64_t)dimension);
 
                 cuvs::neighbors::ivf_flat::index_params index_params;
-                index_params.metric = Metric;
-                index_params.n_lists = NList;
+                index_params.metric = metric;
+                index_params.n_lists = n_list;
 
                 cuvs::neighbors::mg_index_params<cuvs::neighbors::ivf_flat::index_params> mg_params(index_params);
                 mg_params.mode = cuvs::neighbors::distribution_mode::SHARDED;
 
-                Index = std::make_unique<MgIndex>(
+                index = std::make_unique<mg_index>(
                     cuvs::neighbors::ivf_flat::build(*clique, mg_params, dataset_host_view));
 
                 raft::resource::sync_stream(*clique);
@@ -135,92 +135,92 @@ public:
             return std::any();
         };
 
-        auto stop_fn = [&](RaftHandleWrapper& handle) -> std::any {
-            if (Index) Index.reset();
+        auto stop_fn = [&](raft_handle_wrapper_t& handle) -> std::any {
+            if (index) index.reset();
             return std::any();
         };
 
-        Worker->Start(init_fn, stop_fn);
+        worker->start(init_fn, stop_fn);
         init_complete_future.get();
         is_loaded_ = true;
     }
 
-    void Save(const std::string& filename) {
-        if (!is_loaded_ || !Index) throw std::runtime_error("Index not loaded");
+    void save(const std::string& filename) {
+        if (!is_loaded_ || !index) throw std::runtime_error("index not loaded");
 
-        uint64_t jobID = Worker->Submit(
-            [&](RaftHandleWrapper& handle) -> std::any {
+        uint64_t job_id = worker->submit(
+            [&](raft_handle_wrapper_t& handle) -> std::any {
                 std::shared_lock<std::shared_mutex> lock(mutex_);
-                cuvs::neighbors::ivf_flat::serialize(*handle.get_raft_resources(), *Index, filename);
+                cuvs::neighbors::ivf_flat::serialize(*handle.get_raft_resources(), *index, filename);
                 raft::resource::sync_stream(*handle.get_raft_resources());
                 return std::any();
             }
         );
 
-        CuvsTaskResult result = Worker->Wait(jobID).get();
-        if (result.Error) std::rethrow_exception(result.Error);
+        cuvs_task_result_t result = worker->wait(job_id).get();
+        if (result.error) std::rethrow_exception(result.error);
     }
 
-    struct SearchResult {
-        std::vector<int64_t> Neighbors;
-        std::vector<float> Distances;
+    struct search_result_t {
+        std::vector<int64_t> neighbors;
+        std::vector<float> distances;
     };
 
-    SearchResult Search(const T* queries_data, uint64_t num_queries, uint32_t query_dimension, 
+    search_result_t search(const T* queries_data, uint64_t num_queries, uint32_t query_dimension, 
                         uint32_t limit, uint32_t n_probes) {
-        if (!queries_data || num_queries == 0 || !Index) return SearchResult{};
-        if (query_dimension != Dimension) throw std::runtime_error("Dimension mismatch");
+        if (!queries_data || num_queries == 0 || !index) return search_result_t{};
+        if (query_dimension != dimension) throw std::runtime_error("dimension mismatch");
 
-        uint64_t jobID = Worker->Submit(
-            [&, num_queries, limit, n_probes](RaftHandleWrapper& handle) -> std::any {
+        uint64_t job_id = worker->submit(
+            [&, num_queries, limit, n_probes](raft_handle_wrapper_t& handle) -> std::any {
                 auto clique = handle.get_raft_resources();
                 std::shared_lock<std::shared_mutex> lock(mutex_);
 
                 auto queries_host_view = raft::make_host_matrix_view<const T, int64_t>(
-                    queries_data, (int64_t)num_queries, (int64_t)Dimension);
+                    queries_data, (int64_t)num_queries, (int64_t)dimension);
 
-                SearchResult res;
-                res.Neighbors.resize(num_queries * limit);
-                res.Distances.resize(num_queries * limit);
+                search_result_t res;
+                res.neighbors.resize(num_queries * limit);
+                res.distances.resize(num_queries * limit);
 
                 auto neighbors_host_view = raft::make_host_matrix_view<int64_t, int64_t>(
-                    res.Neighbors.data(), (int64_t)num_queries, (int64_t)limit);
+                    res.neighbors.data(), (int64_t)num_queries, (int64_t)limit);
                 auto distances_host_view = raft::make_host_matrix_view<float, int64_t>(
-                    res.Distances.data(), (int64_t)num_queries, (int64_t)limit);
+                    res.distances.data(), (int64_t)num_queries, (int64_t)limit);
 
                 cuvs::neighbors::ivf_flat::search_params search_params;
                 search_params.n_probes = n_probes;
 
                 cuvs::neighbors::mg_search_params<cuvs::neighbors::ivf_flat::search_params> mg_search_params(search_params);
 
-                cuvs::neighbors::ivf_flat::search(*clique, *Index, mg_search_params,
+                cuvs::neighbors::ivf_flat::search(*clique, *index, mg_search_params,
                                                    queries_host_view, neighbors_host_view, distances_host_view);
 
                 raft::resource::sync_stream(*clique);
 
-                for (size_t i = 0; i < res.Neighbors.size(); ++i) {
-                    if (res.Neighbors[i] == std::numeric_limits<int64_t>::max() || 
-                        res.Neighbors[i] == 4294967295LL || res.Neighbors[i] < 0) {
-                        res.Neighbors[i] = -1;
+                for (size_t i = 0; i < res.neighbors.size(); ++i) {
+                    if (res.neighbors[i] == std::numeric_limits<int64_t>::max() || 
+                        res.neighbors[i] == 4294967295LL || res.neighbors[i] < 0) {
+                        res.neighbors[i] = -1;
                     }
                 }
                 return res;
             }
         );
 
-        CuvsTaskResult result = Worker->Wait(jobID).get();
-        if (result.Error) std::rethrow_exception(result.Error);
-        return std::any_cast<SearchResult>(result.Result);
+        cuvs_task_result_t result = worker->wait(job_id).get();
+        if (result.error) std::rethrow_exception(result.error);
+        return std::any_cast<search_result_t>(result.result);
     }
 
-    std::vector<T> GetCenters() {
-        if (!is_loaded_ || !Index) return {};
+    std::vector<T> get_centers() {
+        if (!is_loaded_ || !index) return {};
 
-        uint64_t jobID = Worker->Submit(
-            [&](RaftHandleWrapper& handle) -> std::any {
+        uint64_t job_id = worker->submit(
+            [&](raft_handle_wrapper_t& handle) -> std::any {
                 std::shared_lock<std::shared_mutex> lock(mutex_);
-                const IvfFlatIndex* local_index = nullptr;
-                for (const auto& iface : Index->ann_interfaces_) {
+                const ivf_flat_index* local_index = nullptr;
+                for (const auto& iface : index->ann_interfaces_) {
                     if (iface.index_.has_value()) {
                         local_index = &iface.index_.value();
                         break;
@@ -241,13 +241,13 @@ public:
             }
         );
 
-        CuvsTaskResult result = Worker->Wait(jobID).get();
-        if (result.Error) std::rethrow_exception(result.Error);
-        return std::any_cast<std::vector<T>>(result.Result);
+        cuvs_task_result_t result = worker->wait(job_id).get();
+        if (result.error) std::rethrow_exception(result.error);
+        return std::any_cast<std::vector<T>>(result.result);
     }
 
-    void Destroy() {
-        if (Worker) Worker->Stop();
+    void destroy() {
+        if (worker) worker->stop();
     }
 };
 
