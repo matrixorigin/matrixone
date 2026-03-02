@@ -16,12 +16,12 @@ func TestGpuCagraIndex(t *testing.T) {
     }
 
     metric := L2Expanded
-    intermediateGraphDegree := uint32(32) // Reduced from 64
-    graphDegree := uint32(16)            // Reduced from 32
+    intermediateGraphDegree := uint32(32) 
+    graphDegree := uint32(16)            
     nthread := uint32(1)
-    deviceID := 0
+    devices := []int{0}
 
-    index, err := NewGpuCagraIndex(dataset, count, dimension, metric, intermediateGraphDegree, graphDegree, nthread, deviceID)
+    index, err := NewGpuCagraIndex(dataset, count, dimension, metric, intermediateGraphDegree, graphDegree, devices, nthread, false)
     if err != nil {
         t.Fatalf("Failed to create GpuCagraIndex: %v", err)
     }
@@ -57,15 +57,15 @@ func TestGpuCagraIndexSaveLoad(t *testing.T) {
     }
 
     metric := L2Expanded
-    intermediateGraphDegree := uint32(32) // Reduced from 64
-    graphDegree := uint32(16)            // Reduced from 32
+    intermediateGraphDegree := uint32(32) 
+    graphDegree := uint32(16)            
     nthread := uint32(1)
-    deviceID := 0
+    devices := []int{0}
     filename := "test_cagra_go.bin"
 
     // 1. Build and Save
     {
-        index, err := NewGpuCagraIndex(dataset, count, dimension, metric, intermediateGraphDegree, graphDegree, nthread, deviceID)
+        index, err := NewGpuCagraIndex(dataset, count, dimension, metric, intermediateGraphDegree, graphDegree, devices, nthread, false)
         if err != nil {
             t.Fatalf("Failed to create: %v", err)
         }
@@ -80,7 +80,7 @@ func TestGpuCagraIndexSaveLoad(t *testing.T) {
 
     // 2. Load from file and Search
     {
-        index, err := NewGpuCagraIndexFromFile[float32](filename, dimension, metric, nthread, deviceID)
+        index, err := NewGpuCagraIndexFromFile[float32](filename, dimension, metric, devices, nthread, false)
         if err != nil {
             t.Fatalf("Failed to create from file: %v", err)
         }
@@ -112,12 +112,12 @@ func TestGpuCagraIndexExtend(t *testing.T) {
     }
 
     metric := L2Expanded
-    intermediateGraphDegree := uint32(32) // Reduced from 64
-    graphDegree := uint32(16)            // Reduced from 32
+    intermediateGraphDegree := uint32(32) 
+    graphDegree := uint32(16)            
     nthread := uint32(1)
-    deviceID := 0
+    devices := []int{0}
 
-    index, err := NewGpuCagraIndex(dataset, count, dimension, metric, intermediateGraphDegree, graphDegree, nthread, deviceID)
+    index, err := NewGpuCagraIndex(dataset, count, dimension, metric, intermediateGraphDegree, graphDegree, devices, nthread, false)
     if err != nil {
         t.Fatalf("Failed to create: %v", err)
     }
@@ -159,7 +159,7 @@ func TestGpuCagraIndexExtend(t *testing.T) {
 
 func TestGpuCagraIndexMerge(t *testing.T) {
     dimension := uint32(16)
-    count := uint64(100) // Increased to 100 to accommodate graph degree
+    count := uint64(100) 
     
     dataset1 := make([]float32, count*uint64(dimension))
     for i := range dataset1 { dataset1[i] = rand.Float32() }
@@ -169,18 +169,17 @@ func TestGpuCagraIndexMerge(t *testing.T) {
 
     metric := L2Expanded
     nthread := uint32(1)
-    deviceID := 0
+    devices := []int{0}
 
-    // Using smaller degrees to avoid warnings and speed up build
-    idx1, err := NewGpuCagraIndex(dataset1, count, dimension, metric, 32, 16, nthread, deviceID)
+    idx1, err := NewGpuCagraIndex(dataset1, count, dimension, metric, 32, 16, devices, nthread, false)
     if err != nil { t.Fatalf("NewGpuCagraIndex 1 failed: %v", err) }
     if err := idx1.Load(); err != nil { t.Fatalf("Load 1 failed: %v", err) }
     
-    idx2, err := NewGpuCagraIndex(dataset2, count, dimension, metric, 32, 16, nthread, deviceID)
+    idx2, err := NewGpuCagraIndex(dataset2, count, dimension, metric, 32, 16, devices, nthread, false)
     if err != nil { t.Fatalf("NewGpuCagraIndex 2 failed: %v", err) }
     if err := idx2.Load(); err != nil { t.Fatalf("Load 2 failed: %v", err) }
 
-    mergedIdx, err := MergeCagraIndices([]*GpuCagraIndex[float32]{idx1, idx2}, nthread, deviceID)
+    mergedIdx, err := MergeCagraIndices([]*GpuCagraIndex[float32]{idx1, idx2}, devices, nthread)
     if err != nil {
         t.Fatalf("Failed to merge: %v", err)
     }
@@ -206,4 +205,45 @@ func TestGpuCagraIndexMerge(t *testing.T) {
     if err := idx1.Destroy(); err != nil { t.Errorf("idx1 Destroy failed: %v", err) }
     if err := idx2.Destroy(); err != nil { t.Errorf("idx2 Destroy failed: %v", err) }
     if err := mergedIdx.Destroy(); err != nil { t.Errorf("mergedIdx Destroy failed: %v", err) }
+}
+
+func TestGpuShardedCagraIndex(t *testing.T) {
+    dimension := uint32(16)
+    count := uint64(100)
+    dataset := make([]float32, count*uint64(dimension))
+    for i := range dataset {
+        dataset[i] = rand.Float32()
+    }
+
+    devices, _ := GetGpuDeviceList()
+    if len(devices) < 1 {
+        t.Skip("No GPU devices available")
+    }
+
+    metric := L2Expanded
+    intermediateGraphDegree := uint32(32)
+    graphDegree := uint32(16)
+    nthread := uint32(1)
+
+    // Force MG mode even on 1 device to test sharded code path.
+    index, err := NewGpuCagraIndex(dataset, count, dimension, metric, intermediateGraphDegree, graphDegree, devices, nthread, true)
+    if err != nil {
+        t.Fatalf("Failed to create sharded index: %v", err)
+    }
+
+    if err := index.Load(); err != nil {
+        t.Fatalf("Failed to load sharded index: %v", err)
+    }
+
+    queries := dataset[:dimension]
+    neighbors, _, err := index.Search(queries, 1, dimension, 5, 16)
+    if err != nil {
+        t.Fatalf("Failed to search sharded index: %v", err)
+    }
+
+    if neighbors[0] != 0 {
+        t.Errorf("Expected first neighbor to be 0, got %d", neighbors[0])
+    }
+
+    index.Destroy()
 }

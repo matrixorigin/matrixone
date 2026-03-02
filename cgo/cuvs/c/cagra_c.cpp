@@ -49,12 +49,12 @@ struct gpu_cagra_index_any_t {
 };
 
 template <typename T>
-static gpu_cagra_index_c merge_cagra(gpu_cagra_index_c* indices, uint32_t num_indices, uint32_t nthread, int device_id, quantization_t qtype) {
+static gpu_cagra_index_c merge_cagra(gpu_cagra_index_c* indices, uint32_t num_indices, uint32_t nthread, const std::vector<int>& device_vec, quantization_t qtype) {
     std::vector<matrixone::gpu_cagra_index_t<T>*> cpp_indices;
     for (uint32_t i = 0; i < num_indices; ++i) {
         cpp_indices.push_back(static_cast<matrixone::gpu_cagra_index_t<T>*>(static_cast<gpu_cagra_index_any_t*>(indices[i])->ptr));
     }
-    auto merged = matrixone::gpu_cagra_index_t<T>::merge(cpp_indices, nthread, device_id);
+    auto merged = matrixone::gpu_cagra_index_t<T>::merge(cpp_indices, nthread, device_vec);
     return static_cast<gpu_cagra_index_c>(new gpu_cagra_index_any_t(qtype, merged.release()));
 }
 
@@ -62,23 +62,24 @@ extern "C" {
 
 gpu_cagra_index_c gpu_cagra_index_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, 
                                  distance_type_t metric_c, size_t intermediate_graph_degree, 
-                                 size_t graph_degree, uint32_t nthread, int device_id, quantization_t qtype, void* errmsg) {
+                                 size_t graph_degree, const int* devices, uint32_t num_devices, uint32_t nthread, quantization_t qtype, bool force_mg, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         cuvs::distance::DistanceType metric = convert_distance_type_cagra(metric_c);
+        std::vector<int> device_vec(devices, devices + num_devices);
         void* index_ptr = nullptr;
         switch (qtype) {
             case Quantization_F32:
-                index_ptr = new matrixone::gpu_cagra_index_t<float>(static_cast<const float*>(dataset_data), count_vectors, dimension, metric, intermediate_graph_degree, graph_degree, nthread, device_id);
+                index_ptr = new matrixone::gpu_cagra_index_t<float>(static_cast<const float*>(dataset_data), count_vectors, dimension, metric, intermediate_graph_degree, graph_degree, device_vec, nthread, force_mg);
                 break;
             case Quantization_F16:
-                index_ptr = new matrixone::gpu_cagra_index_t<half>(static_cast<const half*>(dataset_data), count_vectors, dimension, metric, intermediate_graph_degree, graph_degree, nthread, device_id);
+                index_ptr = new matrixone::gpu_cagra_index_t<half>(static_cast<const half*>(dataset_data), count_vectors, dimension, metric, intermediate_graph_degree, graph_degree, device_vec, nthread, force_mg);
                 break;
             case Quantization_INT8:
-                index_ptr = new matrixone::gpu_cagra_index_t<int8_t>(static_cast<const int8_t*>(dataset_data), count_vectors, dimension, metric, intermediate_graph_degree, graph_degree, nthread, device_id);
+                index_ptr = new matrixone::gpu_cagra_index_t<int8_t>(static_cast<const int8_t*>(dataset_data), count_vectors, dimension, metric, intermediate_graph_degree, graph_degree, device_vec, nthread, force_mg);
                 break;
             case Quantization_UINT8:
-                index_ptr = new matrixone::gpu_cagra_index_t<uint8_t>(static_cast<const uint8_t*>(dataset_data), count_vectors, dimension, metric, intermediate_graph_degree, graph_degree, nthread, device_id);
+                index_ptr = new matrixone::gpu_cagra_index_t<uint8_t>(static_cast<const uint8_t*>(dataset_data), count_vectors, dimension, metric, intermediate_graph_degree, graph_degree, device_vec, nthread, force_mg);
                 break;
         }
         return static_cast<gpu_cagra_index_c>(new gpu_cagra_index_any_t(qtype, index_ptr));
@@ -89,23 +90,24 @@ gpu_cagra_index_c gpu_cagra_index_new(const void* dataset_data, uint64_t count_v
 }
 
 gpu_cagra_index_c gpu_cagra_index_new_from_file(const char* filename, uint32_t dimension, distance_type_t metric_c, 
-                                         uint32_t nthread, int device_id, quantization_t qtype, void* errmsg) {
+                                         const int* devices, uint32_t num_devices, uint32_t nthread, quantization_t qtype, bool force_mg, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         cuvs::distance::DistanceType metric = convert_distance_type_cagra(metric_c);
+        std::vector<int> device_vec(devices, devices + num_devices);
         void* index_ptr = nullptr;
         switch (qtype) {
             case Quantization_F32:
-                index_ptr = new matrixone::gpu_cagra_index_t<float>(std::string(filename), dimension, metric, nthread, device_id);
+                index_ptr = new matrixone::gpu_cagra_index_t<float>(std::string(filename), dimension, metric, device_vec, nthread, force_mg);
                 break;
             case Quantization_F16:
-                index_ptr = new matrixone::gpu_cagra_index_t<half>(std::string(filename), dimension, metric, nthread, device_id);
+                index_ptr = new matrixone::gpu_cagra_index_t<half>(std::string(filename), dimension, metric, device_vec, nthread, force_mg);
                 break;
             case Quantization_INT8:
-                index_ptr = new matrixone::gpu_cagra_index_t<int8_t>(std::string(filename), dimension, metric, nthread, device_id);
+                index_ptr = new matrixone::gpu_cagra_index_t<int8_t>(std::string(filename), dimension, metric, device_vec, nthread, force_mg);
                 break;
             case Quantization_UINT8:
-                index_ptr = new matrixone::gpu_cagra_index_t<uint8_t>(std::string(filename), dimension, metric, nthread, device_id);
+                index_ptr = new matrixone::gpu_cagra_index_t<uint8_t>(std::string(filename), dimension, metric, device_vec, nthread, force_mg);
                 break;
         }
         return static_cast<gpu_cagra_index_c>(new gpu_cagra_index_any_t(qtype, index_ptr));
@@ -240,17 +242,18 @@ void gpu_cagra_index_extend(gpu_cagra_index_c index_c, const void* additional_da
     }
 }
 
-gpu_cagra_index_c gpu_cagra_index_merge(gpu_cagra_index_c* indices, uint32_t num_indices, uint32_t nthread, int device_id, void* errmsg) {
+gpu_cagra_index_c gpu_cagra_index_merge(gpu_cagra_index_c* indices, uint32_t num_indices, uint32_t nthread, const int* devices, uint32_t num_devices, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     if (num_indices == 0) return nullptr;
     try {
         auto* first = static_cast<gpu_cagra_index_any_t*>(indices[0]);
         quantization_t qtype = first->qtype;
+        std::vector<int> device_vec(devices, devices + num_devices);
         switch (qtype) {
-            case Quantization_F32: return merge_cagra<float>(indices, num_indices, nthread, device_id, qtype);
-            case Quantization_F16: return merge_cagra<half>(indices, num_indices, nthread, device_id, qtype);
-            case Quantization_INT8: return merge_cagra<int8_t>(indices, num_indices, nthread, device_id, qtype);
-            case Quantization_UINT8: return merge_cagra<uint8_t>(indices, num_indices, nthread, device_id, qtype);
+            case Quantization_F32: return merge_cagra<float>(indices, num_indices, nthread, device_vec, qtype);
+            case Quantization_F16: return merge_cagra<half>(indices, num_indices, nthread, device_vec, qtype);
+            case Quantization_INT8: return merge_cagra<int8_t>(indices, num_indices, nthread, device_vec, qtype);
+            case Quantization_UINT8: return merge_cagra<uint8_t>(indices, num_indices, nthread, device_vec, qtype);
             default: throw std::runtime_error("Unsupported quantization type for gpu_cagra_index_merge");
         }
     } catch (const std::exception& e) {

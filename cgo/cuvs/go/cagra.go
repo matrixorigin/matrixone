@@ -6,6 +6,7 @@ package mocuvs
 
 #include "cagra_c.h"
 #include <stdlib.h>
+#include <stdbool.h>
 */
 import "C"
 import (
@@ -14,18 +15,30 @@ import (
     "unsafe"
 )
 
-// GpuCagraIndex represents the C++ gpu_cagra_index_t object
+// GpuCagraIndex represents the C++ gpu_cagra_index_t object.
+// It supports both single-GPU and sharded multi-GPU modes.
 type GpuCagraIndex[T VectorType] struct {
     cIndex C.gpu_cagra_index_c
 }
 
-// NewGpuCagraIndex creates a new GpuCagraIndex instance for building from dataset
-func NewGpuCagraIndex[T VectorType](dataset []T, count_vectors uint64, dimension uint32, metric DistanceType, intermediate_graph_degree uint32, graph_degree uint32, nthread uint32, device_id int) (*GpuCagraIndex[T], error) {
+// NewGpuCagraIndex creates a new GpuCagraIndex instance for building from dataset.
+// devices: List of GPU device IDs. If len(devices) == 1, it runs in single-GPU mode.
+// If len(devices) > 1, it shards the index across those GPUs.
+// force_mg: If true, forces the use of the sharded API even for a single device (useful for testing).
+func NewGpuCagraIndex[T VectorType](dataset []T, count_vectors uint64, dimension uint32, metric DistanceType, intermediate_graph_degree uint32, graph_degree uint32, devices []int, nthread uint32, force_mg bool) (*GpuCagraIndex[T], error) {
     if len(dataset) == 0 || count_vectors == 0 || dimension == 0 {
         return nil, fmt.Errorf("dataset, count_vectors, and dimension cannot be zero")
     }
+    if len(devices) == 0 {
+        return nil, fmt.Errorf("devices list cannot be empty")
+    }
 
     qtype := GetQuantization[T]()
+    cDevices := make([]C.int, len(devices))
+    for i, dev := range devices {
+        cDevices[i] = C.int(dev)
+    }
+
     var errmsg *C.char
     cIndex := C.gpu_cagra_index_new(
         unsafe.Pointer(&dataset[0]),
@@ -34,12 +47,15 @@ func NewGpuCagraIndex[T VectorType](dataset []T, count_vectors uint64, dimension
         C.distance_type_t(metric),
         C.size_t(intermediate_graph_degree),
         C.size_t(graph_degree),
+        &cDevices[0],
+        C.uint32_t(len(devices)),
         C.uint32_t(nthread),
-        C.int(device_id),
         C.quantization_t(qtype),
+        C.bool(force_mg),
         unsafe.Pointer(&errmsg),
     )
     runtime.KeepAlive(dataset)
+    runtime.KeepAlive(cDevices)
 
     if errmsg != nil {
         errStr := C.GoString(errmsg)
@@ -53,26 +69,37 @@ func NewGpuCagraIndex[T VectorType](dataset []T, count_vectors uint64, dimension
     return &GpuCagraIndex[T]{cIndex: cIndex}, nil
 }
 
-// NewGpuCagraIndexFromFile creates a new GpuCagraIndex instance for loading from file
-func NewGpuCagraIndexFromFile[T VectorType](filename string, dimension uint32, metric DistanceType, nthread uint32, device_id int) (*GpuCagraIndex[T], error) {
+// NewGpuCagraIndexFromFile creates a new GpuCagraIndex instance for loading from file.
+func NewGpuCagraIndexFromFile[T VectorType](filename string, dimension uint32, metric DistanceType, devices []int, nthread uint32, force_mg bool) (*GpuCagraIndex[T], error) {
     if filename == "" || dimension == 0 {
         return nil, fmt.Errorf("filename and dimension cannot be empty or zero")
+    }
+    if len(devices) == 0 {
+        return nil, fmt.Errorf("devices list cannot be empty")
     }
 
     qtype := GetQuantization[T]()
     c_filename := C.CString(filename)
     defer C.free(unsafe.Pointer(c_filename))
 
+    cDevices := make([]C.int, len(devices))
+    for i, dev := range devices {
+        cDevices[i] = C.int(dev)
+    }
+
     var errmsg *C.char
     cIndex := C.gpu_cagra_index_new_from_file(
         c_filename,
         C.uint32_t(dimension),
         C.distance_type_t(metric),
+        &cDevices[0],
+        C.uint32_t(len(devices)),
         C.uint32_t(nthread),
-        C.int(device_id),
         C.quantization_t(qtype),
+        C.bool(force_mg),
         unsafe.Pointer(&errmsg),
     )
+    runtime.KeepAlive(cDevices)
 
     if errmsg != nil {
         errStr := C.GoString(errmsg)
@@ -178,7 +205,7 @@ func (gbi *GpuCagraIndex[T]) Destroy() error {
     return nil
 }
 
-// Extend adds new vectors to the existing index
+// Extend adds new vectors to the existing index (single-GPU only)
 func (gbi *GpuCagraIndex[T]) Extend(additional_data []T, num_vectors uint64) error {
     if gbi.cIndex == nil {
         return fmt.Errorf("GpuCagraIndex is not initialized")
@@ -204,10 +231,13 @@ func (gbi *GpuCagraIndex[T]) Extend(additional_data []T, num_vectors uint64) err
     return nil
 }
 
-// MergeCagraIndices merges multiple CAGRA indices into a single one
-func MergeCagraIndices[T VectorType](indices []*GpuCagraIndex[T], nthread uint32, device_id int) (*GpuCagraIndex[T], error) {
+// MergeCagraIndices merges multiple single-GPU CAGRA indices into a single one.
+func MergeCagraIndices[T VectorType](indices []*GpuCagraIndex[T], devices []int, nthread uint32) (*GpuCagraIndex[T], error) {
     if len(indices) == 0 {
         return nil, fmt.Errorf("indices list cannot be empty")
+    }
+    if len(devices) == 0 {
+        return nil, fmt.Errorf("devices list cannot be empty")
     }
 
     cIndices := make([]C.gpu_cagra_index_c, len(indices))
@@ -218,16 +248,23 @@ func MergeCagraIndices[T VectorType](indices []*GpuCagraIndex[T], nthread uint32
         cIndices[i] = idx.cIndex
     }
 
+    cDevices := make([]C.int, len(devices))
+    for i, dev := range devices {
+        cDevices[i] = C.int(dev)
+    }
+
     var errmsg *C.char
     cMergedIndex := C.gpu_cagra_index_merge(
         &cIndices[0],
         C.uint32_t(len(indices)),
         C.uint32_t(nthread),
-        C.int(device_id),
+        &cDevices[0],
+        C.uint32_t(len(devices)),
         unsafe.Pointer(&errmsg),
     )
     runtime.KeepAlive(cIndices)
     runtime.KeepAlive(indices)
+    runtime.KeepAlive(cDevices)
 
     if errmsg != nil {
         errStr := C.GoString(errmsg)

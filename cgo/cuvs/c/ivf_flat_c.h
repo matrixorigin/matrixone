@@ -2,6 +2,7 @@
 #define IVF_FLAT_C_H
 
 #include "helper.h"
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -13,11 +14,13 @@ typedef void* gpu_ivf_flat_index_c;
 // Opaque pointer to the C++ IVF search result object
 typedef void* gpu_ivf_flat_search_result_c;
 
-// Constructor for building from dataset
-gpu_ivf_flat_index_c gpu_ivf_flat_index_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, distance_type_t metric, uint32_t n_list, uint32_t nthread, int device_id, quantization_t qtype, void* errmsg);
+// Constructor for building from dataset. 
+// devices: pointer to array of device IDs. 
+// num_devices: number of devices. If 1, single-GPU API is used. If > 1, sharded API is used.
+gpu_ivf_flat_index_c gpu_ivf_flat_index_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, distance_type_t metric, uint32_t n_list, const int* devices, uint32_t num_devices, uint32_t nthread, quantization_t qtype, bool force_mg, void* errmsg);
 
-// Constructor for loading from file
-gpu_ivf_flat_index_c gpu_ivf_flat_index_new_from_file(const char* filename, uint32_t dimension, distance_type_t metric, uint32_t nthread, int device_id, quantization_t qtype, void* errmsg);
+// Constructor for loading from file.
+gpu_ivf_flat_index_c gpu_ivf_flat_index_new_from_file(const char* filename, uint32_t dimension, distance_type_t metric, const int* devices, uint32_t num_devices, uint32_t nthread, quantization_t qtype, bool force_mg, void* errmsg);
 
 // Loads the index to the GPU (either builds or loads from file depending on constructor)
 void gpu_ivf_flat_index_load(gpu_ivf_flat_index_c index_c, void* errmsg);

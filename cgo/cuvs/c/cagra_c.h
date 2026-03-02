@@ -2,6 +2,7 @@
 #define CAGRA_C_H
 
 #include "helper.h"
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -10,14 +11,15 @@ extern "C" {
 typedef void* gpu_cagra_index_c;
 typedef void* gpu_cagra_search_result_c;
 
-// Constructor for building from dataset
+// Constructor for building from dataset. 
+// devices: pointer to array of device IDs. If num_devices > 1, sharded mode is used.
 gpu_cagra_index_c gpu_cagra_index_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, 
                                  distance_type_t metric, size_t intermediate_graph_degree, 
-                                 size_t graph_degree, uint32_t nthread, int device_id, quantization_t qtype, void* errmsg);
+                                 size_t graph_degree, const int* devices, uint32_t num_devices, uint32_t nthread, quantization_t qtype, bool force_mg, void* errmsg);
 
 // Constructor for loading from file
 gpu_cagra_index_c gpu_cagra_index_new_from_file(const char* filename, uint32_t dimension, distance_type_t metric, 
-                                         uint32_t nthread, int device_id, quantization_t qtype, void* errmsg);
+                                         const int* devices, uint32_t num_devices, uint32_t nthread, quantization_t qtype, bool force_mg, void* errmsg);
 
 void gpu_cagra_index_load(gpu_cagra_index_c index_c, void* errmsg);
 
@@ -35,11 +37,11 @@ void gpu_cagra_index_free_search_result(gpu_cagra_search_result_c result_c);
 
 void gpu_cagra_index_destroy(gpu_cagra_index_c index_c, void* errmsg);
 
-// Extends the index with new vectors
+// Extends the index with new vectors (only supported for single-GPU)
 void gpu_cagra_index_extend(gpu_cagra_index_c index_c, const void* additional_data, uint64_t num_vectors, void* errmsg);
 
-// Merges multiple indices into one
-gpu_cagra_index_c gpu_cagra_index_merge(gpu_cagra_index_c* indices, uint32_t num_indices, uint32_t nthread, int device_id, void* errmsg);
+// Merges multiple single-GPU indices into one
+gpu_cagra_index_c gpu_cagra_index_merge(gpu_cagra_index_c* indices, uint32_t num_indices, uint32_t nthread, const int* devices, uint32_t num_devices, void* errmsg);
 
 #ifdef __cplusplus
 }

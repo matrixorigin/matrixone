@@ -58,23 +58,24 @@ static void copy_centers(void* ptr, float* centers) {
 
 extern "C" {
 
-gpu_ivf_flat_index_c gpu_ivf_flat_index_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, distance_type_t metric_c, uint32_t n_list, uint32_t nthread, int device_id, quantization_t qtype, void* errmsg) {
+gpu_ivf_flat_index_c gpu_ivf_flat_index_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, distance_type_t metric_c, uint32_t n_list, const int* devices, uint32_t num_devices, uint32_t nthread, quantization_t qtype, bool force_mg, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         cuvs::distance::DistanceType metric = convert_distance_type_ivf(metric_c);
+        std::vector<int> device_vec(devices, devices + num_devices);
         void* index_ptr = nullptr;
         switch (qtype) {
             case Quantization_F32:
-                index_ptr = new matrixone::gpu_ivf_flat_index_t<float>(static_cast<const float*>(dataset_data), count_vectors, dimension, metric, n_list, nthread, device_id);
+                index_ptr = new matrixone::gpu_ivf_flat_index_t<float>(static_cast<const float*>(dataset_data), count_vectors, dimension, metric, n_list, device_vec, nthread, force_mg);
                 break;
             case Quantization_F16:
-                index_ptr = new matrixone::gpu_ivf_flat_index_t<half>(static_cast<const half*>(dataset_data), count_vectors, dimension, metric, n_list, nthread, device_id);
+                index_ptr = new matrixone::gpu_ivf_flat_index_t<half>(static_cast<const half*>(dataset_data), count_vectors, dimension, metric, n_list, device_vec, nthread, force_mg);
                 break;
             case Quantization_INT8:
-                index_ptr = new matrixone::gpu_ivf_flat_index_t<int8_t>(static_cast<const int8_t*>(dataset_data), count_vectors, dimension, metric, n_list, nthread, device_id);
+                index_ptr = new matrixone::gpu_ivf_flat_index_t<int8_t>(static_cast<const int8_t*>(dataset_data), count_vectors, dimension, metric, n_list, device_vec, nthread, force_mg);
                 break;
             case Quantization_UINT8:
-                index_ptr = new matrixone::gpu_ivf_flat_index_t<uint8_t>(static_cast<const uint8_t*>(dataset_data), count_vectors, dimension, metric, n_list, nthread, device_id);
+                index_ptr = new matrixone::gpu_ivf_flat_index_t<uint8_t>(static_cast<const uint8_t*>(dataset_data), count_vectors, dimension, metric, n_list, device_vec, nthread, force_mg);
                 break;
         }
         return static_cast<gpu_ivf_flat_index_c>(new gpu_ivf_flat_index_any_t(qtype, index_ptr));
@@ -84,23 +85,24 @@ gpu_ivf_flat_index_c gpu_ivf_flat_index_new(const void* dataset_data, uint64_t c
     }
 }
 
-gpu_ivf_flat_index_c gpu_ivf_flat_index_new_from_file(const char* filename, uint32_t dimension, distance_type_t metric_c, uint32_t nthread, int device_id, quantization_t qtype, void* errmsg) {
+gpu_ivf_flat_index_c gpu_ivf_flat_index_new_from_file(const char* filename, uint32_t dimension, distance_type_t metric_c, const int* devices, uint32_t num_devices, uint32_t nthread, quantization_t qtype, bool force_mg, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         cuvs::distance::DistanceType metric = convert_distance_type_ivf(metric_c);
+        std::vector<int> device_vec(devices, devices + num_devices);
         void* index_ptr = nullptr;
         switch (qtype) {
             case Quantization_F32:
-                index_ptr = new matrixone::gpu_ivf_flat_index_t<float>(std::string(filename), dimension, metric, nthread, device_id);
+                index_ptr = new matrixone::gpu_ivf_flat_index_t<float>(std::string(filename), dimension, metric, device_vec, nthread, force_mg);
                 break;
             case Quantization_F16:
-                index_ptr = new matrixone::gpu_ivf_flat_index_t<half>(std::string(filename), dimension, metric, nthread, device_id);
+                index_ptr = new matrixone::gpu_ivf_flat_index_t<half>(std::string(filename), dimension, metric, device_vec, nthread, force_mg);
                 break;
             case Quantization_INT8:
-                index_ptr = new matrixone::gpu_ivf_flat_index_t<int8_t>(std::string(filename), dimension, metric, nthread, device_id);
+                index_ptr = new matrixone::gpu_ivf_flat_index_t<int8_t>(std::string(filename), dimension, metric, device_vec, nthread, force_mg);
                 break;
             case Quantization_UINT8:
-                index_ptr = new matrixone::gpu_ivf_flat_index_t<uint8_t>(std::string(filename), dimension, metric, nthread, device_id);
+                index_ptr = new matrixone::gpu_ivf_flat_index_t<uint8_t>(std::string(filename), dimension, metric, device_vec, nthread, force_mg);
                 break;
         }
         return static_cast<gpu_ivf_flat_index_c>(new gpu_ivf_flat_index_any_t(qtype, index_ptr));

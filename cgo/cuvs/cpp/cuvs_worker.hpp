@@ -48,8 +48,12 @@ public:
     }
 
     // Constructor for multi-GPU mode (SNMG)
-    explicit raft_handle_wrapper_t(const std::vector<int>& devices) {
+    // force_mg: If true, use device_resources_snmg even if devices.size() == 1 (useful for testing)
+    explicit raft_handle_wrapper_t(const std::vector<int>& devices, bool force_mg = false) {
         if (devices.empty()) {
+            resources_ = std::make_unique<raft::device_resources>();
+        } else if (devices.size() == 1 && !force_mg) {
+            RAFT_CUDA_TRY(cudaSetDevice(devices[0]));
             resources_ = std::make_unique<raft::device_resources>();
         } else {
             // Ensure the main device is set before creating SNMG resources
@@ -192,8 +196,8 @@ public:
         if (n_threads == 0) throw std::invalid_argument("Thread count must be > 0");
     }
 
-    cuvs_worker_t(size_t n_threads, const std::vector<int>& devices)
-        : n_threads_(n_threads), devices_(devices) {
+    cuvs_worker_t(size_t n_threads, const std::vector<int>& devices, bool force_mg = false)
+        : n_threads_(n_threads), devices_(devices), force_mg_(force_mg) {
         if (n_threads == 0) throw std::invalid_argument("Thread count must be > 0");
     }
 
@@ -290,7 +294,7 @@ private:
     std::unique_ptr<raft_handle> setup_resource() {
         try {
             if (!devices_.empty()) {
-                return std::make_unique<raft_handle>(devices_);
+                return std::make_unique<raft_handle>(devices_, force_mg_);
             } else if (device_id_ >= 0) {
                 return std::make_unique<raft_handle>(device_id_);
             } else {
@@ -343,6 +347,7 @@ private:
     size_t n_threads_;
     int device_id_ = -1;
     std::vector<int> devices_;
+    bool force_mg_ = false;
     std::atomic<bool> started_{false};
     std::atomic<bool> stopped_{false};
     thread_safe_queue_t<cuvs_task_t> tasks_;
