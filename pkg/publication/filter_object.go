@@ -384,6 +384,9 @@ type FilterObjectJobResult struct {
 	CurrentStats     objectio.ObjectStats
 	// DownstreamStats holds the stats for non-appendable objects that were written to fileservice
 	DownstreamStats objectio.ObjectStats
+	// RowOffsetMap maps original rowoffset to new rowoffset after sorting
+	// Key: original rowoffset, Value: new rowoffset
+	RowOffsetMap map[uint32]uint32
 }
 
 // TTLChecker is a function type for checking if sync protection TTL has expired
@@ -486,6 +489,7 @@ func (j *FilterObjectJob) Execute() {
 		res.PreviousStats = filterResult.PreviousStats
 		res.CurrentStats = filterResult.CurrentStats
 		res.DownstreamStats = filterResult.DownstreamStats
+		res.RowOffsetMap = filterResult.RowOffsetMap
 	}
 	j.result <- res
 }
@@ -508,6 +512,9 @@ type FilterObjectResult struct {
 	CurrentStats     objectio.ObjectStats
 	// DownstreamStats holds the stats for non-appendable objects that were written to fileservice
 	DownstreamStats objectio.ObjectStats
+	// RowOffsetMap maps original rowoffset to new rowoffset after sorting
+	// Key: original rowoffset, Value: new rowoffset
+	RowOffsetMap map[uint32]uint32
 }
 
 // FilterObject filters an object based on snapshot TS
@@ -635,7 +642,7 @@ func filterAppendableObject(
 	// Sort batch by primary key, remove commit TS column, write to file, and record ObjectStats
 	// This is data object (not tombstone), so use SchemaData
 	// Use new object name for appendable objects (keepOriginalName=false)
-	objStats, err := createObjectFromBatch(ctx, filteredBat, stats, snapshotTS, isTombstone, localFS, mp, sortKeySeqnum, false)
+	objStats, rowOffsetMap, err := createObjectFromBatch(ctx, filteredBat, stats, snapshotTS, isTombstone, localFS, mp, sortKeySeqnum, false)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to create object from batch: %v", err)
 	}
@@ -645,6 +652,7 @@ func filterAppendableObject(
 		HasMappingUpdate: true,
 		UpstreamAObjUUID: upstreamAObjUUID,
 		CurrentStats:     objStats, // New current stats
+		RowOffsetMap:     rowOffsetMap,
 	}, nil
 }
 
@@ -654,6 +662,9 @@ type AObjectMapping struct {
 	IsTombstone     bool
 	DBName          string
 	TableName       string
+	// RowOffsetMap maps original rowoffset to new rowoffset after sorting
+	// Key: original rowoffset, Value: new rowoffset
+	RowOffsetMap map[uint32]uint32
 }
 
 // AObjectMap stores the mapping from upstream aobj to downstream object stats
@@ -726,6 +737,15 @@ func rewriteTombstoneRowids(
 			// We need to replace the first 18 bytes (SegmentID + ObjOffset) with downstream object ID
 			rowids[i].SetSegment(types.Segmentid(*downstreamObjID.Segment()))
 			rowids[i].SetObjOffset(downstreamObjID.Offset())
+
+			// Rewrite row offset using RowOffsetMap if available
+			// The RowOffsetMap maps original rowoffset to new rowoffset after sorting
+			if mapping.RowOffsetMap != nil {
+				oldRowOffset := rowids[i].GetRowOffset()
+				if newRowOffset, ok := mapping.RowOffsetMap[oldRowOffset]; ok {
+					rowids[i].SetRowOffset(newRowOffset)
+				}
+			}
 		}
 	}
 
@@ -821,7 +841,8 @@ func filterNonAppendableObject(
 
 		// Create new object from batch with rewritten rowids
 		// Keep original object name for non-appendable tombstone (keepOriginalName=true)
-		objStats, err := createObjectFromBatch(ctx, bat, stats, snapshotTS, isTombstone, localFS, mp, sortKeySeqnum, true)
+		// Ignore rowOffsetMap for tombstone objects (it's only needed for data objects)
+		objStats, _, err := createObjectFromBatch(ctx, bat, stats, snapshotTS, isTombstone, localFS, mp, sortKeySeqnum, true)
 		if err != nil {
 			return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to create object from tombstone batch: %v", err)
 		}
@@ -1181,6 +1202,7 @@ func filterBatchBySnapshotTS(
 // isTombstone: true for tombstone objects, false for data objects
 // sortKeySeqnum: the seqnum of the sortkey column in the original object
 // keepOriginalName: if true, use original object name instead of generating new one
+// Also returns rowOffsetMap: maps original rowoffset to new rowoffset after sorting
 func createObjectFromBatch(
 	ctx context.Context,
 	bat *containers.Batch,
@@ -1191,9 +1213,9 @@ func createObjectFromBatch(
 	mp *mpool.MPool,
 	sortKeySeqnum uint16,
 	keepOriginalName bool,
-) (objectio.ObjectStats, error) {
+) (objectio.ObjectStats, map[uint32]uint32, error) {
 	if bat == nil || bat.Length() == 0 {
-		return objectio.ObjectStats{}, nil
+		return objectio.ObjectStats{}, nil, nil
 	}
 
 	// Step 1: Convert to CN batch for sorting
@@ -1203,7 +1225,7 @@ func createObjectFromBatch(
 	// Step 2: Sort by primary key (first column, seqnum 0)
 	// Primary key is typically the first column
 	if len(cnBat.Vecs) == 0 {
-		return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "batch has no columns")
+		return objectio.ObjectStats{}, nil, moerr.NewInternalErrorf(ctx, "batch has no columns")
 	}
 	pkIdx := 0 // Primary key is the first column
 	sortedIdx := make([]int64, cnBat.Vecs[0].Length())
@@ -1211,9 +1233,17 @@ func createObjectFromBatch(
 		sortedIdx[i] = int64(i)
 	}
 	sort.Sort(false, false, true, sortedIdx, cnBat.Vecs[pkIdx])
+
+	// Build rowOffsetMap: maps original rowoffset to new rowoffset after sorting
+	// sortedIdx[newIdx] = oldIdx, so we need: rowOffsetMap[oldIdx] = newIdx
+	rowOffsetMap := make(map[uint32]uint32, len(sortedIdx))
+	for newIdx, oldIdx := range sortedIdx {
+		rowOffsetMap[uint32(oldIdx)] = uint32(newIdx)
+	}
+
 	for i := 0; i < len(cnBat.Vecs); i++ {
 		if err := cnBat.Vecs[i].Shuffle(sortedIdx, mp); err != nil {
-			return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to shuffle vector: %v", err)
+			return objectio.ObjectStats{}, nil, moerr.NewInternalErrorf(ctx, "failed to shuffle vector: %v", err)
 		}
 	}
 
@@ -1227,7 +1257,7 @@ func createObjectFromBatch(
 		}
 	}
 	if commitTSIdx == -1 {
-		return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "commit TS column not found")
+		return objectio.ObjectStats{}, nil, moerr.NewInternalErrorf(ctx, "commit TS column not found")
 	}
 
 	// Create new batch without commit TS column
@@ -1309,7 +1339,7 @@ func createObjectFromBatch(
 	// and build objMetaBuilder and update zonemap
 	_, err := writer.WriteBatch(newBat)
 	if err != nil {
-		return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to write batch: %v", err)
+		return objectio.ObjectStats{}, nil, moerr.NewInternalErrorf(ctx, "failed to write batch: %v", err)
 	}
 
 	// Sync writer to flush data
@@ -1317,12 +1347,12 @@ func createObjectFromBatch(
 	// and then DescribeObject which uses colmeta[sortKeySeqnum] to set zonemap
 	_, _, err = writer.Sync(ctx)
 	if err != nil {
-		return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to sync writer: %v", err)
+		return objectio.ObjectStats{}, nil, moerr.NewInternalErrorf(ctx, "failed to sync writer: %v", err)
 	}
 
 	// Step 5: Get and return objectio.ObjectStats
 	objStats := writer.GetObjectStats(objectio.WithSorted(), objectio.WithCNCreated())
-	return objStats, nil
+	return objStats, rowOffsetMap, nil
 }
 
 // submitObjectsAsInsert submits objects as INSERT operation
@@ -1796,6 +1826,7 @@ func ApplyObjects(
 						IsTombstone:     false,
 						DBName:          info.DBName,
 						TableName:       info.TableName,
+						RowOffsetMap:    filterResult.RowOffsetMap,
 					})
 					// Add new downstream object to insert stats
 					collectedDataInsertStats = append(collectedDataInsertStats, &ObjectWithTableInfo{
