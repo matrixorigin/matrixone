@@ -1,7 +1,7 @@
 package cuvs
 
 /*
-#cgo LDFLAGS: /home/eric/github/matrixone/cgo/cuvs/c/libivf_flat_c.so -Wl,-rpath=/home/eric/github/matrixone/cgo/cuvs/c
+#cgo LDFLAGS: /home/eric/github/matrixone/cgo/cuvs/c/libmocuvs.so -Wl,-rpath=/home/eric/github/matrixone/cgo/cuvs/c
 #cgo CFLAGS: -I../c
 
 #include "ivf_flat_c.h"

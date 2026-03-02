@@ -2,43 +2,39 @@
 NVCC := $(CUDA_HOME)/bin/nvcc
 CXX := g++
 
-# Paths from parent Makefile
+# Paths
 CUDA_HOME ?= /usr/local/cuda
 GOCUVS ?= /home/eric/miniconda3/envs/go
 CONDA_PREFIX ?= /home/eric/miniconda3/envs/go
 
-# Common include flags for C++ compilation
+# Common include flags
 CLFLAGS := -I. -I$(CUDA_HOME)/include -I$(CONDA_PREFIX)/include -I$(GOCUVS)/include/rapids -I$(GOCUVS)/include/raft -I$(GOCUVS)/include/cuvs -I../cpp
 
-# Compiler flags for C++ source files
+# Compiler flags
 NVCC_COMPILER_FLAGS := -std=c++17 -x cu -Xcompiler "-Wall -Wextra -fPIC -O2" $(CLFLAGS) -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE
 
-# Linker flags for creating a shared library
+# Linker flags
 NVCC_LDFLAGS := -L$(CUDA_HOME)/lib64/stubs -lcuda -L$(CUDA_HOME)/lib64 -lcudart -L$(GOCUVS)/lib -lcuvs -lcuvs_c -ldl -lrmm
 HOST_LDFLAGS := -lpthread -lm
-
 LDFLAGS := $(NVCC_LDFLAGS) $(addprefix -Xlinker ,$(HOST_LDFLAGS))
 
-# Output library names
-BRUTE_FORCE_SHARED := libbrute_force_c.so
-IVF_FLAT_SHARED := libivf_flat_c.so
+# Unified library name
+TARGET_LIB := libmocuvs.so
+SRCS := brute_force_c.cpp ivf_flat_c.cpp sharded_ivf_flat_c.cpp
+OBJS := brute_force_c.o ivf_flat_c.o sharded_ivf_flat_c.o
 
 .PHONY: all clean
 
-all: $(BRUTE_FORCE_SHARED) $(IVF_FLAT_SHARED)
+all: $(TARGET_LIB)
 
-$(BRUTE_FORCE_SHARED): brute_force_c.o
+$(TARGET_LIB): $(OBJS)
 	@echo "Linking shared library $@"
-	$(NVCC) -shared $< $(LDFLAGS) -o $@
-
-$(IVF_FLAT_SHARED): ivf_flat_c.o
-	@echo "Linking shared library $@"
-	$(NVCC) -shared $< $(LDFLAGS) -o $@
+	$(NVCC) -shared $(OBJS) $(LDFLAGS) -o $@
 
 %.o: %.cpp
-	@echo "Compiling $< with NVCC (as CUDA C++)"
+	@echo "Compiling $< with NVCC"
 	$(NVCC) $(NVCC_COMPILER_FLAGS) -c $< -o $@
 
 clean:
 	@echo "Cleaning up..."
-	rm -f *.so *.o *.a
+	rm -f $(TARGET_LIB) *.o

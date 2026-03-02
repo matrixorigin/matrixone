@@ -1,7 +1,7 @@
 package cuvs
 
 /*
-#cgo LDFLAGS: /home/eric/github/matrixone/cgo/cuvs/c/libbrute_force_c.so -Wl,-rpath=/home/eric/github/matrixone/cgo/cuvs/c
+#cgo LDFLAGS: /home/eric/github/matrixone/cgo/cuvs/c/libmocuvs.so -Wl,-rpath=/home/eric/github/matrixone/cgo/cuvs/c
 #cgo CFLAGS: -I../c
 
 #include "brute_force_c.h"
