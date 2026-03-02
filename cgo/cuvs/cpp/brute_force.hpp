@@ -2,6 +2,7 @@
 
 #include "cuvs_worker.hpp" // For CuvsWorker and RaftHandleWrapper
 #include <raft/util/cudart_utils.hpp> // For RAFT_CUDA_TRY
+#include <cuda_fp16.h> // For half
 
 // Standard library includes
 #include <algorithm>   // For std::copy
@@ -9,8 +10,8 @@
 #include <memory>
 #include <numeric>     // For std::iota
 #include <stdexcept>   // For std::runtime_error
-#include <string>      // Corrected: was #string
-#include <type_traits> // For std::is_floating_point
+#include <string>      
+#include <type_traits> 
 #include <vector>
 #include <future>      // For std::promise and std::future
 #include <limits>      // For std::numeric_limits
@@ -39,8 +40,6 @@ namespace matrixone {
 // --- GpuBruteForceIndex Class ---
 template <typename T>
 class GpuBruteForceIndex {
-    static_assert(std::is_floating_point<T>::value, "T must be a floating-point type.");
-
 public:
     std::vector<T> flattened_host_dataset; // Store flattened data as std::vector
     std::unique_ptr<cuvs::neighbors::brute_force::index<T, float>> Index; // Use float for DistT

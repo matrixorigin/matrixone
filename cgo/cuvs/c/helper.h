@@ -1,22 +1,31 @@
 #ifndef MO_CUVS_HELPER_H
 #define MO_CUVS_HELPER_H
 
+#include <stdint.h>
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/**
- * @brief Gets the number of available CUDA devices.
- * @return The number of devices, or a negative error code.
- */
-int GpuGetDeviceCount();
+typedef enum {
+    DistanceType_L2Expanded,
+    DistanceType_L1,
+    DistanceType_InnerProduct,
+    DistanceType_CosineSimilarity,
+    DistanceType_Jaccard,
+    DistanceType_Hamming,
+    DistanceType_Unknown
+} CuvsDistanceTypeC;
 
-/**
- * @brief Gets the list of available CUDA device IDs.
- * @param devices Pre-allocated array to store the device IDs.
- * @param max_count The maximum number of devices the array can hold.
- * @return The number of device IDs actually written to the array.
- */
+typedef enum {
+    Quantization_F32,
+    Quantization_F16,
+    Quantization_INT8,
+    Quantization_UINT8
+} CuvsQuantizationC;
+
+int GpuGetDeviceCount();
 int GpuGetDeviceList(int* devices, int max_count);
 
 #ifdef __cplusplus

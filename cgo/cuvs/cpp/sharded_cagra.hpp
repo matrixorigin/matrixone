@@ -2,6 +2,7 @@
 
 #include "cuvs_worker.hpp"
 #include <raft/util/cudart_utils.hpp>
+#include <cuda_fp16.h> // For half
 
 // Standard library includes
 #include <algorithm>
@@ -36,8 +37,6 @@ namespace matrixone {
  */
 template <typename T>
 class GpuShardedCagraIndex {
-    static_assert(std::is_floating_point<T>::value, "T must be a floating-point type.");
-
 public:
     using CagraIndex = cuvs::neighbors::cagra::index<T, uint32_t>;
     using MgIndex = cuvs::neighbors::mg_index<CagraIndex, T, uint32_t>;
@@ -187,7 +186,7 @@ public:
                 cuvs::neighbors::mg_search_params<cuvs::neighbors::cagra::search_params> mg_search_params(search_params);
 
                 cuvs::neighbors::cagra::search(*clique, *Index, mg_search_params,
-                                               queries_host_view, neighbors_host_view, distances_host_view);
+                                                   queries_host_view, neighbors_host_view, distances_host_view);
 
                 raft::resource::sync_stream(*clique);
 

@@ -12,6 +12,29 @@ import (
     "fmt"
 )
 
+// DistanceType maps to C.CuvsDistanceTypeC
+type DistanceType C.CuvsDistanceTypeC
+
+const (
+    L2Expanded      DistanceType = C.DistanceType_L2Expanded
+    L1              DistanceType = C.DistanceType_L1
+    InnerProduct    DistanceType = C.DistanceType_InnerProduct
+    CosineSimilarity DistanceType = C.DistanceType_CosineSimilarity
+    Jaccard         DistanceType = C.DistanceType_Jaccard
+    Hamming         DistanceType = C.DistanceType_Hamming
+    Unknown         DistanceType = C.DistanceType_Unknown
+)
+
+// Quantization maps to C.CuvsQuantizationC
+type Quantization C.CuvsQuantizationC
+
+const (
+    F32   Quantization = C.Quantization_F32
+    F16   Quantization = C.Quantization_F16
+    INT8  Quantization = C.Quantization_INT8
+    UINT8 Quantization = C.Quantization_UINT8
+)
+
 // GetGpuDeviceCount returns the number of available CUDA devices.
 func GetGpuDeviceCount() (int, error) {
     count := int(C.GpuGetDeviceCount())

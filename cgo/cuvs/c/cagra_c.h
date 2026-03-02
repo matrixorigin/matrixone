@@ -1,7 +1,7 @@
 #ifndef CAGRA_C_H
 #define CAGRA_C_H
 
-#include "brute_force_c.h" // Reuse shared definitions
+#include "helper.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -10,22 +10,37 @@ extern "C" {
 typedef void* GpuCagraIndexC;
 typedef void* GpuCagraSearchResultC;
 
-// Constructor for building from dataset
+// Constructor for building from dataset (Float32 specific)
 GpuCagraIndexC GpuCagraIndex_New(const float* dataset_data, uint64_t count_vectors, uint32_t dimension, 
                                  CuvsDistanceTypeC metric, size_t intermediate_graph_degree, 
                                  size_t graph_degree, uint32_t nthread, int device_id, void* errmsg);
 
-// Constructor for loading from file
+// Constructor for building from dataset (Generic/Unsafe)
+GpuCagraIndexC GpuCagraIndex_NewUnsafe(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, 
+                                       CuvsDistanceTypeC metric, size_t intermediate_graph_degree, 
+                                       size_t graph_degree, uint32_t nthread, int device_id, CuvsQuantizationC qtype, void* errmsg);
+
+// Constructor for loading from file (Float32 specific)
 GpuCagraIndexC GpuCagraIndex_NewFromFile(const char* filename, uint32_t dimension, CuvsDistanceTypeC metric, 
                                          uint32_t nthread, int device_id, void* errmsg);
+
+// Constructor for loading from file (Generic/Unsafe)
+GpuCagraIndexC GpuCagraIndex_NewFromFileUnsafe(const char* filename, uint32_t dimension, CuvsDistanceTypeC metric, 
+                                               uint32_t nthread, int device_id, CuvsQuantizationC qtype, void* errmsg);
 
 void GpuCagraIndex_Load(GpuCagraIndexC index_c, void* errmsg);
 
 void GpuCagraIndex_Save(GpuCagraIndexC index_c, const char* filename, void* errmsg);
 
+// Performs search (Float32 specific)
 GpuCagraSearchResultC GpuCagraIndex_Search(GpuCagraIndexC index_c, const float* queries_data, 
                                            uint64_t num_queries, uint32_t query_dimension, 
                                            uint32_t limit, size_t itopk_size, void* errmsg);
+
+// Performs search (Generic/Unsafe)
+GpuCagraSearchResultC GpuCagraIndex_SearchUnsafe(GpuCagraIndexC index_c, const void* queries_data, 
+                                                 uint64_t num_queries, uint32_t query_dimension, 
+                                                 uint32_t limit, size_t itopk_size, void* errmsg);
 
 // Retrieves the results from a search operation (converts uint32_t neighbors to int64_t)
 void GpuCagraIndex_GetResults(GpuCagraSearchResultC result_c, uint64_t num_queries, uint32_t limit, int64_t* neighbors, float* distances);

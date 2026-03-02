@@ -22,11 +22,13 @@ type GpuShardedIvfFlatIndex struct {
 
 // NewGpuShardedIvfFlatIndex creates a new GpuShardedIvfFlatIndex instance for building from dataset across multiple GPUs
 func NewGpuShardedIvfFlatIndex(dataset []float32, countVectors uint64, dimension uint32, metric DistanceType, nList uint32, devices []int, nthread uint32) (*GpuShardedIvfFlatIndex, error) {
-    if len(dataset) == 0 || countVectors == 0 || dimension == 0 {
+    return NewGpuShardedIvfFlatIndexUnsafe(unsafe.Pointer(&dataset[0]), countVectors, dimension, metric, nList, devices, nthread, F32)
+}
+
+// NewGpuShardedIvfFlatIndexUnsafe creates a new GpuShardedIvfFlatIndex instance with generic pointer and quantization type
+func NewGpuShardedIvfFlatIndexUnsafe(dataset unsafe.Pointer, countVectors uint64, dimension uint32, metric DistanceType, nList uint32, devices []int, nthread uint32, qtype Quantization) (*GpuShardedIvfFlatIndex, error) {
+    if dataset == nil || countVectors == 0 || dimension == 0 {
         return nil, fmt.Errorf("dataset, countVectors, and dimension cannot be zero")
-    }
-    if uint64(len(dataset)) != countVectors * uint64(dimension) {
-        return nil, fmt.Errorf("dataset size (%d) does not match countVectors (%d) * dimension (%d)", len(dataset), countVectors, dimension)
     }
     if len(devices) == 0 {
         return nil, fmt.Errorf("devices list cannot be empty for sharded index")
@@ -38,8 +40,8 @@ func NewGpuShardedIvfFlatIndex(dataset []float32, countVectors uint64, dimension
     }
 
     var errmsg *C.char
-    cIndex := C.GpuShardedIvfFlatIndex_New(
-        (*C.float)(&dataset[0]),
+    cIndex := C.GpuShardedIvfFlatIndex_NewUnsafe(
+        dataset,
         C.uint64_t(countVectors),
         C.uint32_t(dimension),
         C.CuvsDistanceTypeC(metric),
@@ -47,6 +49,7 @@ func NewGpuShardedIvfFlatIndex(dataset []float32, countVectors uint64, dimension
         &cDevices[0],
         C.uint32_t(len(devices)),
         C.uint32_t(nthread),
+        C.CuvsQuantizationC(qtype),
         unsafe.Pointer(&errmsg),
     )
 
@@ -64,6 +67,11 @@ func NewGpuShardedIvfFlatIndex(dataset []float32, countVectors uint64, dimension
 
 // NewGpuShardedIvfFlatIndexFromFile creates a new GpuShardedIvfFlatIndex instance for loading from file (multi-GPU)
 func NewGpuShardedIvfFlatIndexFromFile(filename string, dimension uint32, metric DistanceType, devices []int, nthread uint32) (*GpuShardedIvfFlatIndex, error) {
+    return NewGpuShardedIvfFlatIndexFromFileUnsafe(filename, dimension, metric, devices, nthread, F32)
+}
+
+// NewGpuShardedIvfFlatIndexFromFileUnsafe creates a new GpuShardedIvfFlatIndex instance for loading from file with quantization type
+func NewGpuShardedIvfFlatIndexFromFileUnsafe(filename string, dimension uint32, metric DistanceType, devices []int, nthread uint32, qtype Quantization) (*GpuShardedIvfFlatIndex, error) {
     if filename == "" || dimension == 0 {
         return nil, fmt.Errorf("filename and dimension cannot be empty or zero")
     }
@@ -80,13 +88,14 @@ func NewGpuShardedIvfFlatIndexFromFile(filename string, dimension uint32, metric
     }
 
     var errmsg *C.char
-    cIndex := C.GpuShardedIvfFlatIndex_NewFromFile(
+    cIndex := C.GpuShardedIvfFlatIndex_NewFromFileUnsafe(
         cFilename,
         C.uint32_t(dimension),
         C.CuvsDistanceTypeC(metric),
         &cDevices[0],
         C.uint32_t(len(devices)),
         C.uint32_t(nthread),
+        C.CuvsQuantizationC(qtype),
         unsafe.Pointer(&errmsg),
     )
 
@@ -135,20 +144,21 @@ func (gbi *GpuShardedIvfFlatIndex) Save(filename string) error {
 }
 
 func (gbi *GpuShardedIvfFlatIndex) Search(queries []float32, numQueries uint64, queryDimension uint32, limit uint32, nProbes uint32) ([]int64, []float32, error) {
+    return gbi.SearchUnsafe(unsafe.Pointer(&queries[0]), numQueries, queryDimension, limit, nProbes)
+}
+
+func (gbi *GpuShardedIvfFlatIndex) SearchUnsafe(queries unsafe.Pointer, numQueries uint64, queryDimension uint32, limit uint32, nProbes uint32) ([]int64, []float32, error) {
     if gbi.cIndex == nil {
         return nil, nil, fmt.Errorf("index is not initialized")
     }
-    if len(queries) == 0 || numQueries == 0 || queryDimension == 0 {
+    if queries == nil || numQueries == 0 || queryDimension == 0 {
         return nil, nil, fmt.Errorf("invalid query input")
     }
 
-    var cQueries *C.float
-    cQueries = (*C.float)(&queries[0])
-
     var errmsg *C.char
-    cResult := C.GpuShardedIvfFlatIndex_Search(
+    cResult := C.GpuShardedIvfFlatIndex_SearchUnsafe(
         gbi.cIndex,
-        cQueries,
+        queries,
         C.uint64_t(numQueries),
         C.uint32_t(queryDimension),
         C.uint32_t(limit),

@@ -13,19 +13,6 @@ import (
     "unsafe"
 )
 
-// DistanceType maps to C.CuvsDistanceTypeC
-type DistanceType C.CuvsDistanceTypeC
-
-const (
-    L2Expanded      DistanceType = C.DistanceType_L2Expanded
-    L1              DistanceType = C.DistanceType_L1
-    InnerProduct    DistanceType = C.DistanceType_InnerProduct
-    CosineSimilarity DistanceType = C.DistanceType_CosineSimilarity
-    Jaccard         DistanceType = C.DistanceType_Jaccard
-    Hamming         DistanceType = C.DistanceType_Hamming
-    Unknown         DistanceType = C.DistanceType_Unknown
-)
-
 // GpuBruteForceIndex represents the C++ GpuBruteForceIndex object
 type GpuBruteForceIndex struct {
     cIndex C.GpuBruteForceIndexC
@@ -33,21 +20,24 @@ type GpuBruteForceIndex struct {
 
 // NewGpuBruteForceIndex creates a new GpuBruteForceIndex instance
 func NewGpuBruteForceIndex(dataset []float32, countVectors uint64, dimension uint32, metric DistanceType, nthread uint32, deviceID int) (*GpuBruteForceIndex, error) {
-    if len(dataset) == 0 || countVectors == 0 || dimension == 0 {
+    return NewGpuBruteForceIndexUnsafe(unsafe.Pointer(&dataset[0]), countVectors, dimension, metric, nthread, deviceID, F32)
+}
+
+// NewGpuBruteForceIndexUnsafe creates a new GpuBruteForceIndex instance with generic pointer and quantization type
+func NewGpuBruteForceIndexUnsafe(dataset unsafe.Pointer, countVectors uint64, dimension uint32, metric DistanceType, nthread uint32, deviceID int, qtype Quantization) (*GpuBruteForceIndex, error) {
+    if dataset == nil || countVectors == 0 || dimension == 0 {
         return nil, fmt.Errorf("dataset, countVectors, and dimension cannot be zero")
-    }
-    if uint64(len(dataset)) != countVectors * uint64(dimension) {
-        return nil, fmt.Errorf("dataset size (%d) does not match countVectors (%d) * dimension (%d)", len(dataset), countVectors, dimension)
     }
 
     var errmsg *C.char
-    cIndex := C.GpuBruteForceIndex_New(
-        (*C.float)(&dataset[0]),
+    cIndex := C.GpuBruteForceIndex_NewUnsafe(
+        dataset,
         C.uint64_t(countVectors),
         C.uint32_t(dimension),
         C.CuvsDistanceTypeC(metric),
         C.uint32_t(nthread),
         C.int(deviceID),
+        C.CuvsQuantizationC(qtype),
         unsafe.Pointer(&errmsg),
     )
 
@@ -78,32 +68,24 @@ func (gbi *GpuBruteForceIndex) Load() error {
     return nil
 }
 
-// SearchResult wraps the C-side search result object
-type SearchResult struct {
-	cResult C.GpuBruteForceSearchResultC
-}
-
 // Search performs a search operation
 func (gbi *GpuBruteForceIndex) Search(queries []float32, numQueries uint64, queryDimension uint32, limit uint32) ([]int64, []float32, error) {
+	return gbi.SearchUnsafe(unsafe.Pointer(&queries[0]), numQueries, queryDimension, limit)
+}
+
+// SearchUnsafe performs a search operation with generic pointer
+func (gbi *GpuBruteForceIndex) SearchUnsafe(queries unsafe.Pointer, numQueries uint64, queryDimension uint32, limit uint32) ([]int64, []float32, error) {
 	if gbi.cIndex == nil {
 		return nil, nil, fmt.Errorf("GpuBruteForceIndex is not initialized")
 	}
-	if len(queries) == 0 || numQueries == 0 || queryDimension == 0 {
+	if queries == nil || numQueries == 0 || queryDimension == 0 {
 		return nil, nil, fmt.Errorf("queries, numQueries, and queryDimension cannot be zero")
-	}
-	if uint64(len(queries)) != numQueries*uint64(queryDimension) {
-		return nil, nil, fmt.Errorf("queries size (%d) does not match numQueries (%d) * queryDimension (%d)", len(queries), numQueries, queryDimension)
-	}
-
-	var cQueries *C.float
-	if len(queries) > 0 {
-		cQueries = (*C.float)(&queries[0])
 	}
 
 	var errmsg *C.char
-	cResult := C.GpuBruteForceIndex_Search(
+	cResult := C.GpuBruteForceIndex_SearchUnsafe(
 		gbi.cIndex,
-		cQueries,
+		queries,
 		C.uint64_t(numQueries),
 		C.uint32_t(queryDimension),
 		C.uint32_t(limit),
@@ -123,19 +105,8 @@ func (gbi *GpuBruteForceIndex) Search(queries []float32, numQueries uint64, quer
 	neighbors := make([]int64, numQueries*uint64(limit))
 	distances := make([]float32, numQueries*uint64(limit))
 
-	var cNeighbors *C.int64_t
-	if len(neighbors) > 0 {
-		cNeighbors = (*C.int64_t)(unsafe.Pointer(&neighbors[0]))
-	}
+	C.GpuBruteForceIndex_GetResults(cResult, C.uint64_t(numQueries), C.uint32_t(limit), (*C.int64_t)(unsafe.Pointer(&neighbors[0])), (*C.float)(unsafe.Pointer(&distances[0])))
 
-	var cDistances *C.float
-	if len(distances) > 0 {
-		cDistances = (*C.float)(unsafe.Pointer(&distances[0]))
-	}
-
-	C.GpuBruteForceIndex_GetResults(cResult, C.uint64_t(numQueries), C.uint32_t(limit), cNeighbors, cDistances)
-
-	// Free the C++ search result object now that we have copied the data
 	C.GpuBruteForceIndex_FreeSearchResult(cResult);
 
 	return neighbors, distances, nil
@@ -144,12 +115,11 @@ func (gbi *GpuBruteForceIndex) Search(queries []float32, numQueries uint64, quer
 // Destroy frees the C++ GpuBruteForceIndex instance
 func (gbi *GpuBruteForceIndex) Destroy() error {
     if gbi.cIndex == nil {
-        return nil // Already destroyed or not initialized
+        return nil
     }
     var errmsg *C.char
     C.GpuBruteForceIndex_Destroy(gbi.cIndex, unsafe.Pointer(&errmsg))
-    gbi.cIndex = nil // Mark as destroyed anyway
-
+    gbi.cIndex = nil // Mark as destroyed
     if errmsg != nil {
         errStr := C.GoString(errmsg)
         C.free(unsafe.Pointer(errmsg))

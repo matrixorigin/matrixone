@@ -2,6 +2,7 @@
 
 #include "cuvs_worker.hpp"
 #include <raft/util/cudart_utils.hpp>
+#include <cuda_fp16.h> // For half
 
 // Standard library includes
 #include <algorithm>
@@ -36,8 +37,6 @@ namespace matrixone {
  */
 template <typename T>
 class GpuShardedIvfFlatIndex {
-    static_assert(std::is_floating_point<T>::value, "T must be a floating-point type.");
-
 public:
     using IvfFlatIndex = cuvs::neighbors::ivf_flat::index<T, int64_t>;
     using MgIndex = cuvs::neighbors::mg_index<IvfFlatIndex, T, int64_t>;
@@ -46,10 +45,12 @@ public:
     std::vector<int> devices_;
     std::string filename_;
     std::unique_ptr<MgIndex> Index;
+    std::unique_ptr<RaftHandleWrapper> snmg_handle_; // Persistent SNMG handle
     cuvs::distance::DistanceType Metric;
     uint32_t Dimension;
     uint32_t Count;
     uint32_t NList;
+    int device_id_;
     std::unique_ptr<CuvsWorker> Worker;
     std::shared_mutex mutex_;
     bool is_loaded_ = false;
@@ -105,6 +106,13 @@ public:
                     NList = static_cast<uint32_t>(Index->ann_interfaces_[0].index_.value().n_lists());
                 }
             } else if (!flattened_host_dataset.empty()) {
+                // DATASET SIZE CHECK
+                if (Count < NList) {
+                    throw std::runtime_error("Dataset too small: Count (" + std::to_string(Count) + 
+                                            ") must be >= NList (" + std::to_string(NList) + 
+                                            ") to build IVF index.");
+                }
+
                 // Build sharded index from host dataset
                 auto dataset_host_view = raft::make_host_matrix_view<const T, int64_t>(
                     flattened_host_dataset.data(), (int64_t)Count, (int64_t)Dimension);

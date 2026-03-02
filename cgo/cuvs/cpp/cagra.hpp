@@ -2,19 +2,20 @@
 
 #include "cuvs_worker.hpp" // For CuvsWorker and RaftHandleWrapper
 #include <raft/util/cudart_utils.hpp> // For RAFT_CUDA_TRY
+#include <cuda_fp16.h> // For half
 
 // Standard library includes
-#include <algorithm>
-#include <iostream>
+#include <algorithm>   // For std::copy
+#include <iostream>    // For simulation debug logs
 #include <memory>
-#include <numeric>
-#include <stdexcept>
-#include <string>
-#include <type_traits>
+#include <numeric>     // For std::iota
+#include <stdexcept>   // For std::runtime_error
+#include <string>      
+#include <type_traits> 
 #include <vector>
-#include <future>
-#include <limits>
-#include <shared_mutex>
+#include <future>      // For std::promise and std::future
+#include <limits>      // For std::numeric_limits
+#include <shared_mutex> // For std::shared_mutex
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
@@ -36,8 +37,6 @@ namespace matrixone {
 // --- GpuCagraIndex Class ---
 template <typename T>
 class GpuCagraIndex {
-    static_assert(std::is_floating_point<T>::value, "T must be a floating-point type.");
-
 public:
     std::vector<T> flattened_host_dataset;
     std::string filename_;

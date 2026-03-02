@@ -22,22 +22,25 @@ type GpuIvfFlatIndex struct {
 
 // NewGpuIvfFlatIndex creates a new GpuIvfFlatIndex instance for building from dataset
 func NewGpuIvfFlatIndex(dataset []float32, countVectors uint64, dimension uint32, metric DistanceType, nList uint32, nthread uint32, deviceID int) (*GpuIvfFlatIndex, error) {
-    if len(dataset) == 0 || countVectors == 0 || dimension == 0 {
+    return NewGpuIvfFlatIndexUnsafe(unsafe.Pointer(&dataset[0]), countVectors, dimension, metric, nList, nthread, deviceID, F32)
+}
+
+// NewGpuIvfFlatIndexUnsafe creates a new GpuIvfFlatIndex instance with generic pointer and quantization type
+func NewGpuIvfFlatIndexUnsafe(dataset unsafe.Pointer, countVectors uint64, dimension uint32, metric DistanceType, nList uint32, nthread uint32, deviceID int, qtype Quantization) (*GpuIvfFlatIndex, error) {
+    if dataset == nil || countVectors == 0 || dimension == 0 {
         return nil, fmt.Errorf("dataset, countVectors, and dimension cannot be zero")
-    }
-    if uint64(len(dataset)) != countVectors * uint64(dimension) {
-        return nil, fmt.Errorf("dataset size (%d) does not match countVectors (%d) * dimension (%d)", len(dataset), countVectors, dimension)
     }
 
     var errmsg *C.char
-    cIndex := C.GpuIvfFlatIndex_New(
-        (*C.float)(&dataset[0]),
+    cIndex := C.GpuIvfFlatIndex_NewUnsafe(
+        dataset,
         C.uint64_t(countVectors),
         C.uint32_t(dimension),
         C.CuvsDistanceTypeC(metric),
         C.uint32_t(nList),
         C.uint32_t(nthread),
         C.int(deviceID),
+        C.CuvsQuantizationC(qtype),
         unsafe.Pointer(&errmsg),
     )
 
@@ -55,6 +58,11 @@ func NewGpuIvfFlatIndex(dataset []float32, countVectors uint64, dimension uint32
 
 // NewGpuIvfFlatIndexFromFile creates a new GpuIvfFlatIndex instance for loading from file
 func NewGpuIvfFlatIndexFromFile(filename string, dimension uint32, metric DistanceType, nthread uint32, deviceID int) (*GpuIvfFlatIndex, error) {
+    return NewGpuIvfFlatIndexFromFileUnsafe(filename, dimension, metric, nthread, deviceID, F32)
+}
+
+// NewGpuIvfFlatIndexFromFileUnsafe creates a new GpuIvfFlatIndex instance for loading from file with quantization type
+func NewGpuIvfFlatIndexFromFileUnsafe(filename string, dimension uint32, metric DistanceType, nthread uint32, deviceID int, qtype Quantization) (*GpuIvfFlatIndex, error) {
     if filename == "" || dimension == 0 {
         return nil, fmt.Errorf("filename and dimension cannot be empty or zero")
     }
@@ -63,12 +71,13 @@ func NewGpuIvfFlatIndexFromFile(filename string, dimension uint32, metric Distan
     defer C.free(unsafe.Pointer(cFilename))
 
     var errmsg *C.char
-    cIndex := C.GpuIvfFlatIndex_NewFromFile(
+    cIndex := C.GpuIvfFlatIndex_NewFromFileUnsafe(
         cFilename,
         C.uint32_t(dimension),
         C.CuvsDistanceTypeC(metric),
         C.uint32_t(nthread),
         C.int(deviceID),
+        C.CuvsQuantizationC(qtype),
         unsafe.Pointer(&errmsg),
     )
 
@@ -96,7 +105,6 @@ func (gbi *GpuIvfFlatIndex) Load() error {
         C.free(unsafe.Pointer(errmsg))
         return fmt.Errorf("%s", errStr)
     }
-    // Refresh nList (especially important for NewGpuIvfFlatIndexFromFile)
     gbi.nList = uint32(C.GpuIvfFlatIndex_GetNList(gbi.cIndex))
     return nil
 }
@@ -120,30 +128,27 @@ func (gbi *GpuIvfFlatIndex) Save(filename string) error {
 }
 
 // Search performs a search operation
-func (gbi *GpuIvfFlatIndex) Search(queries []float32, numQueries uint64, queryDimension uint32, limit uint32, nProbes uint32) ([]int64, []float32, error) {
+func (gbi *GpuIvfFlatIndex) Search(queries []float32, numQueries uint64, queryDimension uint32, limit uint32, n_probes uint32) ([]int64, []float32, error) {
+	return gbi.SearchUnsafe(unsafe.Pointer(&queries[0]), numQueries, queryDimension, limit, n_probes)
+}
+
+// SearchUnsafe performs a search operation with generic pointer
+func (gbi *GpuIvfFlatIndex) SearchUnsafe(queries unsafe.Pointer, numQueries uint64, queryDimension uint32, limit uint32, n_probes uint32) ([]int64, []float32, error) {
 	if gbi.cIndex == nil {
 		return nil, nil, fmt.Errorf("GpuIvfFlatIndex is not initialized")
 	}
-	if len(queries) == 0 || numQueries == 0 || queryDimension == 0 {
+	if queries == nil || numQueries == 0 || queryDimension == 0 {
 		return nil, nil, fmt.Errorf("queries, numQueries, and queryDimension cannot be zero")
-	}
-	if uint64(len(queries)) != numQueries*uint64(queryDimension) {
-		return nil, nil, fmt.Errorf("queries size (%d) does not match numQueries (%d) * queryDimension (%d)", len(queries), numQueries, queryDimension)
-	}
-
-	var cQueries *C.float
-	if len(queries) > 0 {
-		cQueries = (*C.float)(&queries[0])
 	}
 
 	var errmsg *C.char
-	cResult := C.GpuIvfFlatIndex_Search(
+	cResult := C.GpuIvfFlatIndex_SearchUnsafe(
 		gbi.cIndex,
-		cQueries,
+		queries,
 		C.uint64_t(numQueries),
 		C.uint32_t(queryDimension),
 		C.uint32_t(limit),
-        C.uint32_t(nProbes),
+        C.uint32_t(n_probes),
 		unsafe.Pointer(&errmsg),
 	)
 
@@ -160,17 +165,7 @@ func (gbi *GpuIvfFlatIndex) Search(queries []float32, numQueries uint64, queryDi
 	neighbors := make([]int64, numQueries*uint64(limit))
 	distances := make([]float32, numQueries*uint64(limit))
 
-	var cNeighbors *C.int64_t
-	if len(neighbors) > 0 {
-		cNeighbors = (*C.int64_t)(unsafe.Pointer(&neighbors[0]))
-	}
-
-	var cDistances *C.float
-	if len(distances) > 0 {
-		cDistances = (*C.float)(unsafe.Pointer(&distances[0]))
-	}
-
-	C.GpuIvfFlatIndex_GetResults(cResult, C.uint64_t(numQueries), C.uint32_t(limit), cNeighbors, cDistances)
+	C.GpuIvfFlatIndex_GetResults(cResult, C.uint64_t(numQueries), C.uint32_t(limit), (*C.int64_t)(unsafe.Pointer(&neighbors[0])), (*C.float)(unsafe.Pointer(&distances[0])))
 
 	C.GpuIvfFlatIndex_FreeSearchResult(cResult);
 
@@ -185,7 +180,6 @@ func (gbi *GpuIvfFlatIndex) Destroy() error {
     var errmsg *C.char
     C.GpuIvfFlatIndex_Destroy(gbi.cIndex, unsafe.Pointer(&errmsg))
     gbi.cIndex = nil
-
     if errmsg != nil {
         errStr := C.GoString(errmsg)
         C.free(unsafe.Pointer(errmsg))
