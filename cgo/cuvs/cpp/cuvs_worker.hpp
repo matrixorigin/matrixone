@@ -30,10 +30,11 @@
 #include <raft/core/device_resources_snmg.hpp>
 #pragma GCC diagnostic pop
 
+namespace matrixone {
+
 /**
  * @brief Wrapper for RAFT resources to manage their lifecycle.
  * Supports both single-GPU and single-node multi-GPU (SNMG) modes.
- * Defined in global namespace for RAFT compatibility.
  */
 class RaftHandleWrapper {
 public:
@@ -64,8 +65,6 @@ public:
 private:
     std::unique_ptr<raft::resources> resources_;
 };
-
-namespace matrixone {
 
 /**
  * @brief A thread-safe blocking queue for task distribution.

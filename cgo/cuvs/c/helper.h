@@ -28,6 +28,14 @@ typedef enum {
 int GpuGetDeviceCount();
 int GpuGetDeviceList(int* devices, int max_count);
 
+// Converts float32 data to float16 (half) on GPU
+// src: host float32 array
+// dst: host float16 array (pre-allocated, uint16_t in C/Go)
+// total_elements: number of elements to convert
+// device_id: GPU device to use for conversion
+// errmsg: pointer to char* for error message
+void GpuConvertF32ToF16(const float* src, void* dst, uint64_t total_elements, int device_id, void* errmsg);
+
 #ifdef __cplusplus
 }
 #endif

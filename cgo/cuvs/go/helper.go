@@ -10,6 +10,7 @@ package cuvs
 import "C"
 import (
     "fmt"
+    "unsafe"
 )
 
 // DistanceType maps to C.CuvsDistanceTypeC
@@ -59,6 +60,32 @@ func GetQuantization[T VectorType]() Quantization {
     default:
         panic("unsupported vector type")
     }
+}
+
+// GpuConvertF32ToF16 converts a float32 slice to a Float16 slice using the GPU.
+func GpuConvertF32ToF16(src []float32, dst []Float16, deviceID int) error {
+    if len(src) == 0 {
+        return nil
+    }
+    if len(src) != len(dst) {
+        return fmt.Errorf("source and destination slices must have the same length")
+    }
+
+    var errmsg *C.char
+    C.GpuConvertF32ToF16(
+        (*C.float)(unsafe.Pointer(&src[0])),
+        unsafe.Pointer(&dst[0]),
+        C.uint64_t(len(src)),
+        C.int(deviceID),
+        unsafe.Pointer(&errmsg),
+    )
+
+    if errmsg != nil {
+        errStr := C.GoString(errmsg)
+        C.free(unsafe.Pointer(errmsg))
+        return fmt.Errorf("%s", errStr)
+    }
+    return nil
 }
 
 // GetGpuDeviceCount returns the number of available CUDA devices.
