@@ -64,6 +64,7 @@ Database Management
    pitr_manager
    pubsub_manager
    moctl_manager
+   branch_builder
 
 Utilities
 =========

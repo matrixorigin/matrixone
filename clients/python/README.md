@@ -61,6 +61,9 @@ A comprehensive Python SDK for MatrixOne that provides SQLAlchemy-like interface
   - Compare differences between branches with count-only optimization
   - Merge branches with conflict resolution strategies
   - Point-in-time branching from snapshots
+  - ⭐ **SQLAlchemy-style statement builders** (`create_table_branch()`, `diff_table_branch()`, etc.)
+  - Advanced DIFF output: COUNT, LIMIT, FILE export, snapshot on both sides
+  - Cross-tenant branching with TO ACCOUNT support
 - 👥 **Account Management**: Comprehensive user, role, and permission management
 - 📊 **Pub/Sub**: Real-time publication and subscription support
 - 🔧 **Version Management**: Automatic backend version detection and compatibility checking
@@ -1383,6 +1386,9 @@ Check out the `examples/` directory for comprehensive usage examples:
 
 **Stage Management Examples:**
 - `example_26_stage_operations.py` - External stage management and data loading from stages
+
+**Branch Builder Examples:**
+- `example_branch_builder.py` - SQLAlchemy-style branch statement builders (create, diff, merge)
 
 **Specialized Examples:**
 - `example_connection_hooks.py` - Connection hooks for custom initialization

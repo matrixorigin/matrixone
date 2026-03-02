@@ -57,6 +57,15 @@ from .restore import RestoreManager
 from .snapshot import Snapshot, SnapshotLevel, SnapshotManager
 from .clone import CloneManager
 from .branch import BranchManager, AsyncBranchManager, DiffOutput, MergeConflictStrategy
+from .branch_builder import (
+    create_table_branch,
+    create_database_branch,
+    delete_table_branch,
+    delete_database_branch,
+    diff_table_branch,
+    merge_table_branch,
+    DiffOutputOption,
+)
 from .stage import Stage, StageManager, AsyncStageManager
 from .cdc import CDCTaskInfo, CDCWatermarkInfo, CDCManager, AsyncCDCManager, build_mysql_uri
 from .ivf_rank import IVFRankMode, IVFRankOptions
@@ -122,6 +131,15 @@ __all__ = [
     "CloneManager",
     "BranchManager",
     "AsyncBranchManager",
+    "DiffOutput",
+    "MergeConflictStrategy",
+    "create_table_branch",
+    "create_database_branch",
+    "delete_table_branch",
+    "delete_database_branch",
+    "diff_table_branch",
+    "merge_table_branch",
+    "DiffOutputOption",
     "SnapshotLevel",
     "MoCtlManager",
     "RestoreManager",

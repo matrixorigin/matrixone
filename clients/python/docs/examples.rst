@@ -1154,6 +1154,42 @@ Performance Optimization Examples
 
    performance_example()
 
+Branch Statement Builders
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    from matrixone import (
+        create_table_branch,
+        create_database_branch,
+        delete_table_branch,
+        diff_table_branch,
+        merge_table_branch,
+        Client,
+    )
+
+    client = Client()
+    client.connect(database='test')
+
+    # Create a branch
+    stmt = create_table_branch('users_dev').from_table('users')
+    client.execute(str(stmt))
+
+    # Compare differences (count only)
+    stmt = diff_table_branch('users_dev').against('users').output_count()
+    result = client.execute(str(stmt))
+    print(result.fetchall())
+
+    # Merge back
+    stmt = merge_table_branch('users_dev').into('users').when_conflict('skip')
+    client.execute(str(stmt))
+
+    # Clean up
+    stmt = delete_table_branch('users_dev')
+    client.execute(str(stmt))
+
+    client.disconnect()
+
 Next Steps
 ----------
 
