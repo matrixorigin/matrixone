@@ -66,6 +66,10 @@ from .branch_builder import (
     merge_table_branch,
     DiffOutputOption,
 )
+from .clone_builder import (
+    clone_table,
+    clone_database,
+)
 from .stage import Stage, StageManager, AsyncStageManager
 from .cdc import CDCTaskInfo, CDCWatermarkInfo, CDCManager, AsyncCDCManager, build_mysql_uri
 from .ivf_rank import IVFRankMode, IVFRankOptions
@@ -140,6 +144,8 @@ __all__ = [
     "diff_table_branch",
     "merge_table_branch",
     "DiffOutputOption",
+    "clone_table",
+    "clone_database",
     "SnapshotLevel",
     "MoCtlManager",
     "RestoreManager",

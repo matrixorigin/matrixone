@@ -1190,6 +1190,34 @@ Branch Statement Builders
 
     client.disconnect()
 
+Clone Statement Builders
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    from matrixone import clone_table, clone_database, Client
+
+    client = Client()
+    client.connect(database='test')
+
+    # Clone a table
+    stmt = clone_table('users_backup').from_table('users')
+    client.execute(str(stmt))
+
+    # Clone with IF NOT EXISTS and snapshot
+    stmt = (
+        clone_table('users_snap')
+        .if_not_exists()
+        .from_table('users', snapshot='daily_snap')
+    )
+    client.execute(str(stmt))
+
+    # Clone a database
+    stmt = clone_database('dev_db').from_database('prod_db')
+    client.execute(str(stmt))
+
+    client.disconnect()
+
 Next Steps
 ----------
 
