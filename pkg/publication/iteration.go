@@ -390,6 +390,7 @@ func (iterCtx *IterationContext) Close(commit bool) error {
 
 // UpdateIterationState updates iteration state, iteration LSN, iteration context, error message, and subscription state in mo_ccpr_log table
 // It serializes the relevant parts of IterationContext to JSON and updates the corresponding fields
+// If updateContext is false, the context field will not be updated (preserves existing value)
 func UpdateIterationState(
 	ctx context.Context,
 	executor SQLExecutor,
@@ -400,75 +401,88 @@ func UpdateIterationState(
 	errorMessage string,
 	useTxn bool,
 	subscriptionState int8,
+	updateContext bool,
 ) error {
 	if executor == nil {
 		return moerr.NewInternalError(ctx, "executor is nil")
 	}
 
-	// Serialize IterationContext to JSON
-	var contextJSON string
-	if iterationCtx != nil {
-		// Convert AObjectMap to serializable format
-		aobjectMapJSON := make(map[string]AObjectMappingJSON)
-		if iterationCtx.AObjectMap != nil {
-			for upstreamIDStr, mapping := range iterationCtx.AObjectMap {
-				mappingJSON := AObjectMappingJSON{
-					IsTombstone: mapping.IsTombstone,
-					DBName:      mapping.DBName,
-					TableName:   mapping.TableName,
-				}
-				// Serialize DownstreamStats to base64
-				if !mapping.DownstreamStats.IsZero() {
-					statsBytes := mapping.DownstreamStats.Marshal()
-					mappingJSON.DownstreamStats = base64.StdEncoding.EncodeToString(statsBytes)
-				}
-				aobjectMapJSON[upstreamIDStr] = mappingJSON
-			}
-		}
-
-		// Convert TableIDs to string map for JSON serialization
-		tableIDsJSON := make(map[string]uint64)
-		for key, id := range iterationCtx.TableIDs {
-			keyStr := tableKeyToString(key)
-			tableIDsJSON[keyStr] = id
-		}
-
-		// Convert IndexTableMappings to string map for JSON serialization
-		indexTableMappingsJSON := make(map[string]string)
-		if iterationCtx.IndexTableMappings != nil {
-			for upstreamName, downstreamName := range iterationCtx.IndexTableMappings {
-				indexTableMappingsJSON[upstreamName] = downstreamName
-			}
-		}
-
-		// Create a serializable context structure
-		ctxJSON := IterationContextJSON{
-			TaskID:             iterationCtx.TaskID,
-			SubscriptionName:   iterationCtx.SubscriptionName,
-			SrcInfo:            iterationCtx.SrcInfo,
-			AObjectMap:         aobjectMapJSON,
-			TableIDs:           tableIDsJSON,
-			IndexTableMappings: indexTableMappingsJSON,
-		}
-
-		contextBytes, err := json.Marshal(ctxJSON)
-		if err != nil {
-			return moerr.NewInternalErrorf(ctx, "failed to marshal iteration context: %v", err)
-		}
-		contextJSON = string(contextBytes)
+	var updateSQL string
+	if !updateContext {
+		// Don't update context field - preserves existing AObjectMap on error
+		updateSQL = PublicationSQLBuilder.UpdateMoCcprLogNoContextSQL(
+			taskID,
+			iterationState,
+			iterationLSN,
+			errorMessage,
+			subscriptionState,
+		)
 	} else {
-		contextJSON = "null"
-	}
+		// Serialize IterationContext to JSON
+		var contextJSON string
+		if iterationCtx != nil {
+			// Convert AObjectMap to serializable format
+			aobjectMapJSON := make(map[string]AObjectMappingJSON)
+			if iterationCtx.AObjectMap != nil {
+				for upstreamIDStr, mapping := range iterationCtx.AObjectMap {
+					mappingJSON := AObjectMappingJSON{
+						IsTombstone: mapping.IsTombstone,
+						DBName:      mapping.DBName,
+						TableName:   mapping.TableName,
+					}
+					// Serialize DownstreamStats to base64
+					if !mapping.DownstreamStats.IsZero() {
+						statsBytes := mapping.DownstreamStats.Marshal()
+						mappingJSON.DownstreamStats = base64.StdEncoding.EncodeToString(statsBytes)
+					}
+					aobjectMapJSON[upstreamIDStr] = mappingJSON
+				}
+			}
 
-	// Build update SQL
-	updateSQL := PublicationSQLBuilder.UpdateMoCcprLogSQL(
-		taskID,
-		iterationState,
-		iterationLSN,
-		contextJSON,
-		errorMessage,
-		subscriptionState,
-	)
+			// Convert TableIDs to string map for JSON serialization
+			tableIDsJSON := make(map[string]uint64)
+			for key, id := range iterationCtx.TableIDs {
+				keyStr := tableKeyToString(key)
+				tableIDsJSON[keyStr] = id
+			}
+
+			// Convert IndexTableMappings to string map for JSON serialization
+			indexTableMappingsJSON := make(map[string]string)
+			if iterationCtx.IndexTableMappings != nil {
+				for upstreamName, downstreamName := range iterationCtx.IndexTableMappings {
+					indexTableMappingsJSON[upstreamName] = downstreamName
+				}
+			}
+
+			// Create a serializable context structure
+			ctxJSON := IterationContextJSON{
+				TaskID:             iterationCtx.TaskID,
+				SubscriptionName:   iterationCtx.SubscriptionName,
+				SrcInfo:            iterationCtx.SrcInfo,
+				AObjectMap:         aobjectMapJSON,
+				TableIDs:           tableIDsJSON,
+				IndexTableMappings: indexTableMappingsJSON,
+			}
+
+			contextBytes, err := json.Marshal(ctxJSON)
+			if err != nil {
+				return moerr.NewInternalErrorf(ctx, "failed to marshal iteration context: %v", err)
+			}
+			contextJSON = string(contextBytes)
+		} else {
+			contextJSON = "null"
+		}
+
+		// Build update SQL with context
+		updateSQL = PublicationSQLBuilder.UpdateMoCcprLogSQL(
+			taskID,
+			iterationState,
+			iterationLSN,
+			contextJSON,
+			errorMessage,
+			subscriptionState,
+		)
+	}
 
 	// Execute update SQL using system account context
 	// mo_ccpr_log is a system table, so we must use system account
@@ -489,6 +503,7 @@ func UpdateIterationState(
 
 // UpdateIterationStateNoSubscriptionState updates iteration state, iteration LSN, iteration context, and error message in mo_ccpr_log table
 // It does NOT update the subscription state field - used for successful iterations
+// If updateContext is false, the context field will not be updated (preserves existing value)
 func UpdateIterationStateNoSubscriptionState(
 	ctx context.Context,
 	executor SQLExecutor,
@@ -499,75 +514,88 @@ func UpdateIterationStateNoSubscriptionState(
 	iterationCtx *IterationContext,
 	useTxn bool,
 	errorMessage string,
+	updateContext bool,
 ) error {
 	if executor == nil {
 		return moerr.NewInternalError(ctx, "executor is nil")
 	}
 
-	// Serialize IterationContext to JSON
-	var contextJSON string
-	if iterationCtx != nil {
-		// Convert AObjectMap to serializable format
-		aobjectMapJSON := make(map[string]AObjectMappingJSON)
-		if iterationCtx.AObjectMap != nil {
-			for upstreamIDStr, mapping := range iterationCtx.AObjectMap {
-				mappingJSON := AObjectMappingJSON{
-					IsTombstone: mapping.IsTombstone,
-					DBName:      mapping.DBName,
-					TableName:   mapping.TableName,
-				}
-				// Serialize DownstreamStats to base64
-				if !mapping.DownstreamStats.IsZero() {
-					statsBytes := mapping.DownstreamStats.Marshal()
-					mappingJSON.DownstreamStats = base64.StdEncoding.EncodeToString(statsBytes)
-				}
-				aobjectMapJSON[upstreamIDStr] = mappingJSON
-			}
-		}
-
-		// Convert TableIDs to string map for JSON serialization
-		tableIDsJSON := make(map[string]uint64)
-		for key, id := range iterationCtx.TableIDs {
-			keyStr := tableKeyToString(key)
-			tableIDsJSON[keyStr] = id
-		}
-
-		// Convert IndexTableMappings to string map for JSON serialization
-		indexTableMappingsJSON := make(map[string]string)
-		if iterationCtx.IndexTableMappings != nil {
-			for upstreamName, downstreamName := range iterationCtx.IndexTableMappings {
-				indexTableMappingsJSON[upstreamName] = downstreamName
-			}
-		}
-
-		// Create a serializable context structure
-		ctxJSON := IterationContextJSON{
-			TaskID:             iterationCtx.TaskID,
-			SubscriptionName:   iterationCtx.SubscriptionName,
-			SrcInfo:            iterationCtx.SrcInfo,
-			AObjectMap:         aobjectMapJSON,
-			TableIDs:           tableIDsJSON,
-			IndexTableMappings: indexTableMappingsJSON,
-		}
-
-		contextBytes, err := json.Marshal(ctxJSON)
-		if err != nil {
-			return moerr.NewInternalErrorf(ctx, "failed to marshal iteration context: %v", err)
-		}
-		contextJSON = string(contextBytes)
+	var updateSQL string
+	if !updateContext {
+		// Don't update context field - preserves existing AObjectMap on error
+		updateSQL = PublicationSQLBuilder.UpdateMoCcprLogNoStateNoContextSQL(
+			taskID,
+			iterationState,
+			iterationLSN,
+			watermark,
+			errorMessage,
+		)
 	} else {
-		contextJSON = "null"
-	}
+		// Serialize IterationContext to JSON
+		var contextJSON string
+		if iterationCtx != nil {
+			// Convert AObjectMap to serializable format
+			aobjectMapJSON := make(map[string]AObjectMappingJSON)
+			if iterationCtx.AObjectMap != nil {
+				for upstreamIDStr, mapping := range iterationCtx.AObjectMap {
+					mappingJSON := AObjectMappingJSON{
+						IsTombstone: mapping.IsTombstone,
+						DBName:      mapping.DBName,
+						TableName:   mapping.TableName,
+					}
+					// Serialize DownstreamStats to base64
+					if !mapping.DownstreamStats.IsZero() {
+						statsBytes := mapping.DownstreamStats.Marshal()
+						mappingJSON.DownstreamStats = base64.StdEncoding.EncodeToString(statsBytes)
+					}
+					aobjectMapJSON[upstreamIDStr] = mappingJSON
+				}
+			}
 
-	// Build update SQL without state field
-	updateSQL := PublicationSQLBuilder.UpdateMoCcprLogNoStateSQL(
-		taskID,
-		iterationState,
-		iterationLSN,
-		watermark,
-		contextJSON,
-		errorMessage,
-	)
+			// Convert TableIDs to string map for JSON serialization
+			tableIDsJSON := make(map[string]uint64)
+			for key, id := range iterationCtx.TableIDs {
+				keyStr := tableKeyToString(key)
+				tableIDsJSON[keyStr] = id
+			}
+
+			// Convert IndexTableMappings to string map for JSON serialization
+			indexTableMappingsJSON := make(map[string]string)
+			if iterationCtx.IndexTableMappings != nil {
+				for upstreamName, downstreamName := range iterationCtx.IndexTableMappings {
+					indexTableMappingsJSON[upstreamName] = downstreamName
+				}
+			}
+
+			// Create a serializable context structure
+			ctxJSON := IterationContextJSON{
+				TaskID:             iterationCtx.TaskID,
+				SubscriptionName:   iterationCtx.SubscriptionName,
+				SrcInfo:            iterationCtx.SrcInfo,
+				AObjectMap:         aobjectMapJSON,
+				TableIDs:           tableIDsJSON,
+				IndexTableMappings: indexTableMappingsJSON,
+			}
+
+			contextBytes, err := json.Marshal(ctxJSON)
+			if err != nil {
+				return moerr.NewInternalErrorf(ctx, "failed to marshal iteration context: %v", err)
+			}
+			contextJSON = string(contextBytes)
+		} else {
+			contextJSON = "null"
+		}
+
+		// Build update SQL without state field
+		updateSQL = PublicationSQLBuilder.UpdateMoCcprLogNoStateSQL(
+			taskID,
+			iterationState,
+			iterationLSN,
+			watermark,
+			contextJSON,
+			errorMessage,
+		)
+	}
 
 	// Execute update SQL using system account context
 	// mo_ccpr_log is a system table, so we must use system account
@@ -1195,7 +1223,9 @@ func ExecuteIteration(
 				subscriptionState = SubscriptionStateError
 			}
 			errorMsg := errorMetadata.Format()
-			if err = UpdateIterationState(ctx, iterationCtx.LocalExecutor, taskID, finalState, iterationLSN, iterationCtx, errorMsg, false, subscriptionState); err != nil {
+			// Pass updateContext=false to avoid persisting AObjectMap changes on error
+			// The AObjectMap should only be updated on successful iterations
+			if err = UpdateIterationState(ctx, iterationCtx.LocalExecutor, taskID, finalState, iterationLSN, iterationCtx, errorMsg, false, subscriptionState, false); err != nil {
 				// Log error but don't override the original error
 				err = moerr.NewInternalErrorf(ctx, "failed to update iteration state: %v", err)
 				logutil.Error("ccpr-iteration error",
@@ -1260,19 +1290,21 @@ func ExecuteIteration(
 				)
 				if !retryable {
 					// Non-retryable error: set state to error
+					// Pass updateContext=false to avoid persisting AObjectMap changes on error
 					finalState = IterationStateError
-					updateErr = UpdateIterationState(ctx, iterationCtx.LocalExecutor, taskID, finalState, nextLSN, iterationCtx, errorMsg, true, SubscriptionStateError)
+					updateErr = UpdateIterationState(ctx, iterationCtx.LocalExecutor, taskID, finalState, nextLSN, iterationCtx, errorMsg, true, SubscriptionStateError, false)
 				} else {
 					// Retryable error: don't change subscription state
 					// Use current snapshot ts as watermark
+					// Pass updateContext=false to avoid persisting AObjectMap changes on error
 					watermark := int64(iterationCtx.PrevSnapshotTS.Physical())
-					updateErr = UpdateIterationStateNoSubscriptionState(ctx, iterationCtx.LocalExecutor, taskID, finalState, nextLSN, watermark, iterationCtx, true, errorMsg)
+					updateErr = UpdateIterationStateNoSubscriptionState(ctx, iterationCtx.LocalExecutor, taskID, finalState, nextLSN, watermark, iterationCtx, true, errorMsg, false)
 				}
 			} else {
 				// Success case: don't set subscription state
 				// Use current snapshot ts as watermark
 				watermark := int64(iterationCtx.CurrentSnapshotTS.Physical())
-				updateErr = UpdateIterationStateNoSubscriptionState(ctx, iterationCtx.LocalExecutor, taskID, finalState, nextLSN, watermark, iterationCtx, true, errorMsg)
+				updateErr = UpdateIterationStateNoSubscriptionState(ctx, iterationCtx.LocalExecutor, taskID, finalState, nextLSN, watermark, iterationCtx, true, errorMsg, true)
 			}
 
 			if updateErr != nil {

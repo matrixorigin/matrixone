@@ -96,6 +96,14 @@ const (
 		`state = %d ` +
 		`WHERE task_id = '%s'`
 
+	// Update mo_ccpr_log SQL template without context (preserves existing context value)
+	PublicationUpdateMoCcprLogNoContextSqlTemplate = `UPDATE mo_catalog.mo_ccpr_log ` +
+		`SET iteration_state = %d, ` +
+		`iteration_lsn = %d, ` +
+		`error_message = '%s', ` +
+		`state = %d ` +
+		`WHERE task_id = '%s'`
+
 	// Update mo_ccpr_log iteration_state (and lsn) only
 	PublicationUpdateMoCcprLogStateSqlTemplate = `UPDATE mo_catalog.mo_ccpr_log ` +
 		`SET iteration_state = %d, ` +
@@ -117,6 +125,14 @@ const (
 		`iteration_lsn = %d, ` +
 		`watermark = %d, ` +
 		`context = '%s', ` +
+		`error_message = '%s' ` +
+		`WHERE task_id = '%s'`
+
+	// Update mo_ccpr_log without state and context SQL template (for retryable errors)
+	PublicationUpdateMoCcprLogNoStateNoContextSqlTemplate = `UPDATE mo_catalog.mo_ccpr_log ` +
+		`SET iteration_state = %d, ` +
+		`iteration_lsn = %d, ` +
+		`watermark = %d, ` +
 		`error_message = '%s' ` +
 		`WHERE task_id = '%s'`
 
@@ -159,10 +175,12 @@ const (
 	PublicationQuerySnapshotTsSqlTemplate_Idx
 	PublicationGetDatabasesSqlTemplate_Idx
 	PublicationUpdateMoCcprLogSqlTemplate_Idx
+	PublicationUpdateMoCcprLogNoContextSqlTemplate_Idx
 	PublicationUpdateMoCcprLogStateSqlTemplate_Idx
 	PublicationCheckSnapshotFlushedSqlTemplate_Idx
 	PublicationQueryMoCcprLogStateBeforeUpdateSqlTemplate_Idx
 	PublicationUpdateMoCcprLogNoStateSqlTemplate_Idx
+	PublicationUpdateMoCcprLogNoStateNoContextSqlTemplate_Idx
 	PublicationUpdateMoCcprLogIterationStateOnlySqlTemplate_Idx
 	PublicationUpdateMoCcprLogIterationStateAndCnUuidSqlTemplate_Idx
 
@@ -229,6 +247,9 @@ var PublicationSQLTemplates = [PublicationSqlTemplateCount]struct {
 	PublicationUpdateMoCcprLogSqlTemplate_Idx: {
 		SQL: PublicationUpdateMoCcprLogSqlTemplate,
 	},
+	PublicationUpdateMoCcprLogNoContextSqlTemplate_Idx: {
+		SQL: PublicationUpdateMoCcprLogNoContextSqlTemplate,
+	},
 	PublicationUpdateMoCcprLogStateSqlTemplate_Idx: {
 		SQL: PublicationUpdateMoCcprLogStateSqlTemplate,
 	},
@@ -245,6 +266,9 @@ var PublicationSQLTemplates = [PublicationSqlTemplateCount]struct {
 	},
 	PublicationUpdateMoCcprLogNoStateSqlTemplate_Idx: {
 		SQL: PublicationUpdateMoCcprLogNoStateSqlTemplate,
+	},
+	PublicationUpdateMoCcprLogNoStateNoContextSqlTemplate_Idx: {
+		SQL: PublicationUpdateMoCcprLogNoStateNoContextSqlTemplate,
 	},
 	PublicationUpdateMoCcprLogIterationStateOnlySqlTemplate_Idx: {
 		SQL: PublicationUpdateMoCcprLogIterationStateOnlySqlTemplate,
@@ -526,6 +550,26 @@ func (b publicationSQLBuilder) UpdateMoCcprLogSQL(
 	)
 }
 
+// UpdateMoCcprLogNoContextSQL creates SQL for updating mo_ccpr_log without context field
+// Used for error cases where we want to preserve the existing context (including AObjectMap)
+// Example: UPDATE mo_catalog.mo_ccpr_log SET iteration_state = 3, iteration_lsn = 1000, error_message = 'error msg', state = 3 WHERE task_id = 'uuid'
+func (b publicationSQLBuilder) UpdateMoCcprLogNoContextSQL(
+	taskID string,
+	iterationState int8,
+	iterationLSN uint64,
+	errorMessage string,
+	subscriptionState int8,
+) string {
+	return fmt.Sprintf(
+		PublicationSQLTemplates[PublicationUpdateMoCcprLogNoContextSqlTemplate_Idx].SQL,
+		iterationState,
+		iterationLSN,
+		escapeSQLString(errorMessage),
+		subscriptionState,
+		taskID,
+	)
+}
+
 // QueryMoCcprLogStateBeforeUpdateSQL creates SQL for querying state, iteration_state, iteration_lsn before update
 // Example: SELECT state, iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = 'uuid'
 func (b publicationSQLBuilder) QueryMoCcprLogStateBeforeUpdateSQL(taskID string) string {
@@ -552,6 +596,26 @@ func (b publicationSQLBuilder) UpdateMoCcprLogNoStateSQL(
 		iterationLSN,
 		watermark,
 		escapeSQLString(contextJSON),
+		escapeSQLString(errorMessage),
+		taskID,
+	)
+}
+
+// UpdateMoCcprLogNoStateNoContextSQL creates SQL for updating mo_ccpr_log without state and context fields
+// Used for retryable errors where we want to preserve the existing context (including AObjectMap)
+// Example: UPDATE mo_catalog.mo_ccpr_log SET iteration_state = 1, iteration_lsn = 1000, watermark = 12345, error_message = 'error msg' WHERE task_id = 'uuid'
+func (b publicationSQLBuilder) UpdateMoCcprLogNoStateNoContextSQL(
+	taskID string,
+	iterationState int8,
+	iterationLSN uint64,
+	watermark int64,
+	errorMessage string,
+) string {
+	return fmt.Sprintf(
+		PublicationSQLTemplates[PublicationUpdateMoCcprLogNoStateNoContextSqlTemplate_Idx].SQL,
+		iterationState,
+		iterationLSN,
+		watermark,
 		escapeSQLString(errorMessage),
 		taskID,
 	)
