@@ -38,11 +38,11 @@
 namespace matrixone {
 
 /**
- * @brief gpu_ivf_flat_index_t implements an IVF-Flat index that can run on a single GPU or sharded across multiple GPUs.
+ * @brief gpu_ivf_flat_t implements an IVF-Flat index that can run on a single GPU or sharded across multiple GPUs.
  * It automatically chooses between single-GPU and multi-GPU (SNMG) cuVS APIs based on the RAFT handle resources.
  */
 template <typename T>
-class gpu_ivf_flat_index_t {
+class gpu_ivf_flat_t {
 public:
     using ivf_flat_index = cuvs::neighbors::ivf_flat::index<T, int64_t>;
     using mg_index = cuvs::neighbors::mg_index<ivf_flat_index, T, int64_t>;
@@ -63,12 +63,12 @@ public:
     std::shared_mutex mutex_;
     bool is_loaded_ = false;
 
-    ~gpu_ivf_flat_index_t() {
+    ~gpu_ivf_flat_t() {
         destroy();
     }
 
     // Unified Constructor for building from dataset
-    gpu_ivf_flat_index_t(const T* dataset_data, uint64_t count_vectors, uint32_t dimension, cuvs::distance::DistanceType m,
+    gpu_ivf_flat_t(const T* dataset_data, uint64_t count_vectors, uint32_t dimension, cuvs::distance::DistanceType m,
                     uint32_t n_list, const std::vector<int>& devices, uint32_t nthread, bool force_mg = false)
         : dimension(dimension), count(static_cast<uint32_t>(count_vectors)), metric(m), 
           n_list(n_list), devices_(devices) {
@@ -80,7 +80,7 @@ public:
     }
 
     // Unified Constructor for loading from file
-    gpu_ivf_flat_index_t(const std::string& filename, uint32_t dimension, cuvs::distance::DistanceType m, 
+    gpu_ivf_flat_t(const std::string& filename, uint32_t dimension, cuvs::distance::DistanceType m, 
                     const std::vector<int>& devices, uint32_t nthread, bool force_mg = false)
         : filename_(filename), dimension(dimension), metric(m), count(0), n_list(0), devices_(devices) {
         

@@ -6,7 +6,7 @@ import (
     "os"
 )
 
-func TestGpuIvfFlatIndex(t *testing.T) {
+func TestGpuIvfFlat(t *testing.T) {
     dimension := uint32(2)
     count := uint64(4)
     dataset := []float32{
@@ -22,9 +22,9 @@ func TestGpuIvfFlatIndex(t *testing.T) {
     devices := []int{0}
 
     // 1. Single GPU Mode
-    index, err := NewGpuIvfFlatIndex(dataset, count, dimension, metric, nList, devices, nthread, false)
+    index, err := NewGpuIvfFlat(dataset, count, dimension, metric, nList, devices, nthread, false)
     if err != nil {
-        t.Fatalf("Failed to create GpuIvfFlatIndex: %v", err)
+        t.Fatalf("Failed to create GpuIvfFlat: %v", err)
     }
 
     err = index.Load()
@@ -52,7 +52,7 @@ func TestGpuIvfFlatIndex(t *testing.T) {
     index.Destroy()
 }
 
-func TestGpuIvfFlatIndexSaveLoad(t *testing.T) {
+func TestGpuIvfFlatSaveLoad(t *testing.T) {
     dimension := uint32(2)
     count := uint64(4)
     dataset := []float32{1.0, 1.0, 1.1, 1.1, 100.0, 100.0, 101.0, 101.0}
@@ -61,7 +61,7 @@ func TestGpuIvfFlatIndexSaveLoad(t *testing.T) {
 
     // 1. Build and Save
     {
-        index, err := NewGpuIvfFlatIndex(dataset, count, dimension, L2Expanded, 2, devices, 1, false)
+        index, err := NewGpuIvfFlat(dataset, count, dimension, L2Expanded, 2, devices, 1, false)
         if err != nil {
             t.Fatalf("Failed to create: %v", err)
         }
@@ -76,7 +76,7 @@ func TestGpuIvfFlatIndexSaveLoad(t *testing.T) {
 
     // 2. Load and Search
     {
-        index, err := NewGpuIvfFlatIndexFromFile[float32](filename, dimension, L2Expanded, devices, 1, false)
+        index, err := NewGpuIvfFlatFromFile[float32](filename, dimension, L2Expanded, devices, 1, false)
         if err != nil {
             t.Fatalf("Failed to create from file: %v", err)
         }
@@ -98,7 +98,7 @@ func TestGpuIvfFlatIndexSaveLoad(t *testing.T) {
     os.Remove(filename)
 }
 
-func TestGpuShardedIvfFlatIndex(t *testing.T) {
+func TestGpuShardedIvfFlat(t *testing.T) {
     dimension := uint32(2)
     count := uint64(100)
     dataset := make([]float32, count*uint64(dimension))
@@ -112,7 +112,7 @@ func TestGpuShardedIvfFlatIndex(t *testing.T) {
     }
     
     // Test sharding logic on 1 GPU by forcing MG mode.
-    index, err := NewGpuIvfFlatIndex(dataset, count, dimension, L2Expanded, 5, devices, 1, true)
+    index, err := NewGpuIvfFlat(dataset, count, dimension, L2Expanded, 5, devices, 1, true)
     if err != nil {
         t.Fatalf("Failed to create sharded index: %v", err)
     }
