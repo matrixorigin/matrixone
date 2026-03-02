@@ -23,11 +23,13 @@ except ImportError:
 
 try:
     from sqlalchemy import text
+    from sqlalchemy.engine import URL
     from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 except ImportError:
     create_async_engine = None
     AsyncEngine = None
     text = None
+    URL = None
 
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -862,19 +864,21 @@ class AsyncClient(BaseMatrixOneClient):
         if not create_async_engine:
             raise ConnectionError("SQLAlchemy async engine not available. Please install sqlalchemy[asyncio]")
 
-        # Build connection string for async engine
-        connection_string = (
-            f"mysql+aiomysql://{self._connection_params['user']}:"
-            f"{self._connection_params['password']}@"
-            f"{self._connection_params['host']}:"
-            f"{self._connection_params['port']}/"
-            f"{self._connection_params['database'] or ''}"
-            f"?charset={self._connection_params['charset']}"
+        # Build connection URL using SQLAlchemy's URL.create() for proper escaping
+        # of special characters in user/password (e.g., @, #, %, etc.)
+        url = URL.create(
+            drivername="mysql+aiomysql",
+            username=self._connection_params["user"],
+            password=self._connection_params["password"],
+            host=self._connection_params["host"],
+            port=self._connection_params["port"],
+            database=self._connection_params["database"] or None,
+            query={"charset": self._connection_params["charset"]},
         )
 
         # Create async engine with connection pooling
         engine = create_async_engine(
-            connection_string,
+            url,
             pool_size=5,  # Smaller pool size for testing
             max_overflow=10,  # Smaller max overflow
             pool_timeout=30,  # Default pool timeout

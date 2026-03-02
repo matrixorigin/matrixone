@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from sqlalchemy.engine import Connection
 
 from sqlalchemy import create_engine
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Engine, URL
 from sqlalchemy.orm import Session as SQLAlchemySession
 
 from .account import AccountManager
@@ -548,27 +548,34 @@ class Client(BaseMatrixOneClient):
 
     def _create_engine(self) -> Engine:
         """Create SQLAlchemy engine with connection pooling"""
-        # Build connection string
-        connection_string = (
-            f"mysql+pymysql://{self._connection_params['user']}:"
-            f"{self._connection_params['password']}@"
-            f"{self._connection_params['host']}:"
-            f"{self._connection_params['port']}/"
-            f"{self._connection_params['database']}"
-        )
+        # Build connection URL using SQLAlchemy's URL.create() for proper escaping
+        # of special characters in user/password (e.g., @, #, %, etc.)
+        connect_args = {}
+        if self._connection_params.get("ssl_ca"):
+            connect_args["ssl"] = {"ca": self._connection_params["ssl_ca"]}
+            if self._connection_params.get("ssl_cert"):
+                connect_args["ssl"]["cert"] = self._connection_params["ssl_cert"]
+            if self._connection_params.get("ssl_key"):
+                connect_args["ssl"]["key"] = self._connection_params["ssl_key"]
 
-        # Add SSL parameters if needed
-        if "ssl_ca" in self._connection_params:
-            connection_string += f"?ssl_ca={self._connection_params['ssl_ca']}"
+        url = URL.create(
+            drivername="mysql+pymysql",
+            username=self._connection_params["user"],
+            password=self._connection_params["password"],
+            host=self._connection_params["host"],
+            port=self._connection_params["port"],
+            database=self._connection_params["database"] or None,
+        )
 
         # Create engine with connection pooling
         engine = create_engine(
-            connection_string,
+            url,
             pool_size=self.pool_size,
             max_overflow=self.max_overflow,
             pool_timeout=self.pool_timeout,
             pool_recycle=self.pool_recycle,
             pool_pre_ping=True,  # Enable connection health checks
+            connect_args=connect_args,
         )
 
         # Replace the dialect with MatrixOne dialect for proper vector type support
