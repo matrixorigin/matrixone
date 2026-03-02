@@ -26,6 +26,7 @@
 #include <raft/core/device_mdspan.hpp>   // Required for device_matrix_view
 #include <raft/core/host_mdarray.hpp> // For raft::host_matrix
 #include <raft/core/resources.hpp>       // Core resource handle
+#include <raft/core/copy.cuh>            // For raft::copy with type conversion
 
 // cuVS includes
 #include <cuvs/distance/distance.hpp>    // cuVS distance API

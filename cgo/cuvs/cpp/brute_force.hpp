@@ -27,6 +27,7 @@
 #include <raft/core/host_mdarray.hpp> // For raft::host_matrix
 #include <raft/core/resources.hpp>       // Core resource handle
 #include <raft/linalg/map.cuh>           // RESTORED: map.cuh
+#include <raft/core/copy.cuh>            // For raft::copy with type conversion
 
 
 // cuVS includes

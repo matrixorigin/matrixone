@@ -1,40 +1,39 @@
-# C++ compiler (use NVCC for CUDA-related compilation and linking)
-NVCC := $(CUDA_HOME)/bin/nvcc
-CXX := g++
+# Makefile for MatrixOne cuVS C Wrapper
 
-# Paths
-CUDA_HOME ?= /usr/local/cuda
-GOCUVS ?= /home/eric/miniconda3/envs/go
-CONDA_PREFIX ?= /home/eric/miniconda3/envs/go
+CUDA_PATH ?= /usr/local/cuda
+NVCC := $(CUDA_PATH)/bin/nvcc
 
-# Common include flags
-CLFLAGS := -I. -I$(CUDA_HOME)/include -I$(CONDA_PREFIX)/include -I$(GOCUVS)/include/rapids -I$(GOCUVS)/include/raft -I$(GOCUVS)/include/cuvs -I../cpp
+# Compilation flags
+# Added --extended-lambda because raft/core/copy.cuh requires it for some internal headers
+NVCC_FLAGS := -std=c++17 -x cu -Xcompiler "-Wall -Wextra -fPIC -O2" --extended-lambda
+NVCC_FLAGS += -I. -I$(CUDA_PATH)/include -I$(HOME)/miniconda3/envs/go/include -I$(HOME)/miniconda3/envs/go/include/rapids -I$(HOME)/miniconda3/envs/go/include/raft -I$(HOME)/miniconda3/envs/go/include/cuvs -I../cpp
+NVCC_FLAGS += -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE -DRAFT_SYSTEM_LITTLE_ENDIAN=1
 
-# Compiler flags
-NVCC_COMPILER_FLAGS := -std=c++17 -x cu -Xcompiler "-Wall -Wextra -fPIC -O2" $(CLFLAGS) -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE -DRAFT_SYSTEM_LITTLE_ENDIAN=1
+# Linking flags
+LDFLAGS := -shared
+LDFLAGS += -L$(CUDA_PATH)/lib64/stubs -lcuda -L$(CUDA_PATH)/lib64 -lcudart
+LDFLAGS += -L$(HOME)/miniconda3/envs/go/lib -lcuvs -lcuvs_c -ldl -lrmm
+LDFLAGS += -Xlinker -lpthread -Xlinker -lm
 
-# Linker flags
-NVCC_LDFLAGS := -L$(CUDA_HOME)/lib64/stubs -lcuda -L$(CUDA_HOME)/lib64 -lcudart -L$(GOCUVS)/lib -lcuvs -lcuvs_c -ldl -lrmm
-HOST_LDFLAGS := -lpthread -lm
-LDFLAGS := $(NVCC_LDFLAGS) $(addprefix -Xlinker ,$(HOST_LDFLAGS))
+# Target library
+TARGET := libmocuvs.so
 
-# Unified library name
-TARGET_LIB := libmocuvs.so
+# Source files
 SRCS := brute_force_c.cpp ivf_flat_c.cpp sharded_ivf_flat_c.cpp cagra_c.cpp sharded_cagra_c.cpp helper.cpp
-OBJS := brute_force_c.o ivf_flat_c.o sharded_ivf_flat_c.o cagra_c.o sharded_cagra_c.o helper.o
+OBJS := $(SRCS:.cpp=.o)
 
 .PHONY: all clean
 
-all: $(TARGET_LIB)
+all: $(TARGET)
 
-$(TARGET_LIB): $(OBJS)
+$(TARGET): $(OBJS)
 	@echo "Linking shared library $@"
-	$(NVCC) -shared $(OBJS) $(LDFLAGS) -o $@
+	$(NVCC) $(LDFLAGS) $^ -o $@
 
 %.o: %.cpp
 	@echo "Compiling $< with NVCC"
-	$(NVCC) $(NVCC_COMPILER_FLAGS) -c $< -o $@
+	$(NVCC) $(NVCC_FLAGS) -c $< -o $@
 
 clean:
 	@echo "Cleaning up..."
-	rm -f $(TARGET_LIB) *.o
+	rm -f $(TARGET) *.o

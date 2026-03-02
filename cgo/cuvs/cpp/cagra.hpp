@@ -26,6 +26,7 @@
 #include <raft/core/device_mdspan.hpp>
 #include <raft/core/host_mdarray.hpp>
 #include <raft/core/resources.hpp>
+#include <raft/core/copy.cuh>            // For raft::copy with type conversion
 
 // cuVS includes
 #include <cuvs/distance/distance.hpp>
