@@ -46,7 +46,6 @@ public:
     std::vector<int> devices_;
     std::string filename_;
     std::unique_ptr<MgIndex> Index;
-    std::unique_ptr<RaftHandleWrapper> snmg_handle_; // Persistent SNMG handle
     cuvs::distance::DistanceType Metric;
     uint32_t Dimension;
     uint32_t Count;
@@ -65,7 +64,7 @@ public:
                            const std::vector<int>& devices, uint32_t nthread)
         : Dimension(dimension), Count(static_cast<uint32_t>(count_vectors)), Metric(m), 
           NList(n_list), devices_(devices) {
-        Worker = std::make_unique<CuvsWorker>(nthread);
+        Worker = std::make_unique<CuvsWorker>(nthread, devices_);
 
         flattened_host_dataset.resize(Count * Dimension);
         std::copy(dataset_data, dataset_data + (Count * Dimension), flattened_host_dataset.begin());
@@ -75,7 +74,7 @@ public:
     GpuShardedIvfFlatIndex(const std::string& filename, uint32_t dimension, 
                            cuvs::distance::DistanceType m, const std::vector<int>& devices, uint32_t nthread)
         : filename_(filename), Dimension(dimension), Metric(m), Count(0), NList(0), devices_(devices) {
-        Worker = std::make_unique<CuvsWorker>(nthread);
+        Worker = std::make_unique<CuvsWorker>(nthread, devices_);
     }
 
     void Load() {
@@ -85,13 +84,8 @@ public:
         std::promise<bool> init_complete_promise;
         std::future<bool> init_complete_future = init_complete_promise.get_future();
 
-        auto init_fn = [&](RaftHandleWrapper& _) -> std::any {
-            if (!devices_.empty()) {
-                RAFT_CUDA_TRY(cudaSetDevice(devices_[0]));
-            }
-            // Initialize the SNMG handle once
-            snmg_handle_ = std::make_unique<RaftHandleWrapper>(devices_);
-            auto clique = snmg_handle_->get_raft_resources();
+        auto init_fn = [&](RaftHandleWrapper& handle) -> std::any {
+            auto clique = handle.get_raft_resources();
 
             if (!filename_.empty()) {
                 // Load MG index from file
@@ -132,9 +126,8 @@ public:
             return std::any();
         };
 
-        auto stop_fn = [&](RaftHandleWrapper& _) -> std::any {
+        auto stop_fn = [&](RaftHandleWrapper& handle) -> std::any {
             if (Index) Index.reset();
-            if (snmg_handle_) snmg_handle_.reset();
             return std::any();
         };
 
@@ -144,14 +137,13 @@ public:
     }
 
     void Save(const std::string& filename) {
-        if (!is_loaded_ || !Index || !snmg_handle_) throw std::runtime_error("Index not loaded");
+        if (!is_loaded_ || !Index) throw std::runtime_error("Index not loaded");
 
         uint64_t jobID = Worker->Submit(
-            [&](RaftHandleWrapper& _) -> std::any {
+            [&](RaftHandleWrapper& handle) -> std::any {
                 std::shared_lock<std::shared_mutex> lock(mutex_);
-                auto clique = snmg_handle_->get_raft_resources();
-                cuvs::neighbors::ivf_flat::serialize(*clique, *Index, filename);
-                raft::resource::sync_stream(*clique);
+                cuvs::neighbors::ivf_flat::serialize(*handle.get_raft_resources(), *Index, filename);
+                raft::resource::sync_stream(*handle.get_raft_resources());
                 return std::any();
             }
         );
@@ -167,13 +159,13 @@ public:
 
     SearchResult Search(const T* queries_data, uint64_t num_queries, uint32_t query_dimension, 
                         uint32_t limit, uint32_t n_probes) {
-        if (!queries_data || num_queries == 0 || !Index || !snmg_handle_) return SearchResult{};
+        if (!queries_data || num_queries == 0 || !Index) return SearchResult{};
         if (query_dimension != Dimension) throw std::runtime_error("Dimension mismatch");
 
         uint64_t jobID = Worker->Submit(
-            [&, num_queries, limit, n_probes](RaftHandleWrapper& _) -> std::any {
+            [&, num_queries, limit, n_probes](RaftHandleWrapper& handle) -> std::any {
+                auto clique = handle.get_raft_resources();
                 std::shared_lock<std::shared_mutex> lock(mutex_);
-                auto clique = snmg_handle_->get_raft_resources();
 
                 auto queries_host_view = raft::make_host_matrix_view<const T, int64_t>(
                     queries_data, (int64_t)num_queries, (int64_t)Dimension);
@@ -213,10 +205,10 @@ public:
     }
 
     std::vector<T> GetCenters() {
-        if (!is_loaded_ || !Index || !snmg_handle_) return {};
+        if (!is_loaded_ || !Index) return {};
 
         uint64_t jobID = Worker->Submit(
-            [&](RaftHandleWrapper& _) -> std::any {
+            [&](RaftHandleWrapper& handle) -> std::any {
                 std::shared_lock<std::shared_mutex> lock(mutex_);
                 const IvfFlatIndex* local_index = nullptr;
                 for (const auto& iface : Index->ann_interfaces_) {
@@ -233,8 +225,6 @@ public:
                 size_t dim = centers_view.extent(1);
                 std::vector<T> host_centers(n_centers * dim);
 
-                // Use the clique's main device for the copy
-                RAFT_CUDA_TRY(cudaSetDevice(devices_[0]));
                 RAFT_CUDA_TRY(cudaMemcpy(host_centers.data(), centers_view.data_handle(),
                                          host_centers.size() * sizeof(T), cudaMemcpyDeviceToHost));
 

@@ -61,7 +61,7 @@ public:
                     uint32_t n_list, uint32_t nthread, int device_id = 0)
         : Dimension(dimension), Count(static_cast<uint32_t>(count_vectors)), Metric(m), 
           NList(n_list), device_id_(device_id) {
-        Worker = std::make_unique<CuvsWorker>(nthread);
+        Worker = std::make_unique<CuvsWorker>(nthread, device_id_);
 
         // Resize flattened_host_dataset and copy data from the flattened array
         flattened_host_dataset.resize(Count * Dimension); // Total elements
@@ -71,7 +71,7 @@ public:
     // Constructor for loading from file
     GpuIvfFlatIndex(const std::string& filename, uint32_t dimension, cuvs::distance::DistanceType m, uint32_t nthread, int device_id = 0)
         : filename_(filename), Dimension(dimension), Metric(m), Count(0), NList(0), device_id_(device_id) {
-        Worker = std::make_unique<CuvsWorker>(nthread);
+        Worker = std::make_unique<CuvsWorker>(nthread, device_id_);
     }
 
     void Load() {
@@ -81,9 +81,7 @@ public:
         std::promise<bool> init_complete_promise;
         std::future<bool> init_complete_future = init_complete_promise.get_future();
 
-        auto init_fn = [&](RaftHandleWrapper& _) -> std::any {
-            RaftHandleWrapper handle(device_id_);
-
+        auto init_fn = [&](RaftHandleWrapper& handle) -> std::any {
             if (!filename_.empty()) {
                 // Load from file
                 cuvs::neighbors::ivf_flat::index_params index_params;
@@ -144,8 +142,7 @@ public:
         }
 
         uint64_t jobID = Worker->Submit(
-            [&](RaftHandleWrapper& _) -> std::any {
-                RaftHandleWrapper handle(device_id_);
+            [&](RaftHandleWrapper& handle) -> std::any {
                 std::shared_lock<std::shared_mutex> lock(mutex_); 
                 cuvs::neighbors::ivf_flat::serialize(*handle.get_raft_resources(), filename, *Index);
                 raft::resource::sync_stream(*handle.get_raft_resources());
@@ -182,8 +179,7 @@ public:
         size_t queries_cols = Dimension; 
 
         uint64_t jobID = Worker->Submit(
-            [&, queries_rows, queries_cols, limit, n_probes](RaftHandleWrapper& _) -> std::any {
-                RaftHandleWrapper handle(device_id_);
+            [&, queries_rows, queries_cols, limit, n_probes](RaftHandleWrapper& handle) -> std::any {
                 std::shared_lock<std::shared_mutex> lock(mutex_); // Acquire shared read-only lock inside worker thread
                 
                 auto queries_device = raft::make_device_matrix<T, int64_t, raft::layout_c_contiguous>(
@@ -241,8 +237,7 @@ public:
         if (!is_loaded_ || !Index) return {};
 
         uint64_t jobID = Worker->Submit(
-            [&](RaftHandleWrapper& _) -> std::any {
-                RaftHandleWrapper handle(device_id_);
+            [&](RaftHandleWrapper& handle) -> std::any {
                 std::shared_lock<std::shared_mutex> lock(mutex_);
                 auto centers_view = Index->centers();
                 size_t n_centers = centers_view.extent(0);

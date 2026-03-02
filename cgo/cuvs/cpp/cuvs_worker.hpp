@@ -188,7 +188,13 @@ public:
         UserTaskFn Fn;
     };
 
-    explicit CuvsWorker(size_t n_threads) : n_threads_(n_threads) {
+    explicit CuvsWorker(size_t n_threads, int device_id = -1) 
+        : n_threads_(n_threads), device_id_(device_id) {
+        if (n_threads == 0) throw std::invalid_argument("Thread count must be > 0");
+    }
+
+    CuvsWorker(size_t n_threads, const std::vector<int>& devices)
+        : n_threads_(n_threads), devices_(devices) {
         if (n_threads == 0) throw std::invalid_argument("Thread count must be > 0");
     }
 
@@ -283,8 +289,15 @@ private:
     }
 
     std::unique_ptr<RaftHandle> setup_resource() {
-        try { return std::make_unique<RaftHandle>(); }
-        catch (...) {
+        try {
+            if (!devices_.empty()) {
+                return std::make_unique<RaftHandle>(devices_);
+            } else if (device_id_ >= 0) {
+                return std::make_unique<RaftHandle>(device_id_);
+            } else {
+                return std::make_unique<RaftHandle>();
+            }
+        } catch (...) {
             report_fatal_error(std::current_exception());
             std::cerr << "ERROR: Failed to setup RAFT resource." << std::endl;
             return nullptr;
@@ -329,6 +342,8 @@ private:
     }
 
     size_t n_threads_;
+    int device_id_ = -1;
+    std::vector<int> devices_;
     std::atomic<bool> started_{false};
     std::atomic<bool> stopped_{false};
     ThreadSafeQueue<CuvsTask> tasks_;
