@@ -20,8 +20,8 @@ LDFLAGS := $(NVCC_LDFLAGS) $(addprefix -Xlinker ,$(HOST_LDFLAGS))
 
 # Unified library name
 TARGET_LIB := libmocuvs.so
-SRCS := brute_force_c.cpp ivf_flat_c.cpp sharded_ivf_flat_c.cpp
-OBJS := brute_force_c.o ivf_flat_c.o sharded_ivf_flat_c.o
+SRCS := brute_force_c.cpp ivf_flat_c.cpp sharded_ivf_flat_c.cpp helper.cpp
+OBJS := brute_force_c.o ivf_flat_c.o sharded_ivf_flat_c.o helper.o
 
 .PHONY: all clean
 
