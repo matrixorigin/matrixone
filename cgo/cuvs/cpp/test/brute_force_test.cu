@@ -43,12 +43,10 @@ TEST(GpuBruteForceIndexTest, SimpleL2Test) {
 
     auto search_result = index.Search(queries_data_ptr, num_queries, query_dimension, limit);
 
-    ASSERT_EQ(search_result.Neighbors.size(), num_queries);
-    ASSERT_EQ(search_result.Distances.size(), num_queries);
-    ASSERT_EQ(search_result.Neighbors[0].size(), (size_t)limit);
-    ASSERT_EQ(search_result.Distances[0].size(), (size_t)limit);
+    ASSERT_EQ(search_result.Neighbors.size(), num_queries * limit);
+    ASSERT_EQ(search_result.Distances.size(), num_queries * limit);
 
-    ASSERT_EQ(search_result.Neighbors[0][0], 0); // Expected: Index 0
+    ASSERT_EQ(search_result.Neighbors[0], 0); // Expected: Index 0
     index.Destroy();
 }
 
@@ -91,10 +89,8 @@ TEST(GpuBruteForceIndexTest, BasicLoadAndSearch) {
 
     auto search_result = index.Search(queries_data_ptr, num_queries, query_dimension, limit);
 
-    ASSERT_EQ(search_result.Neighbors.size(), num_queries);
-    ASSERT_EQ(search_result.Distances.size(), num_queries);
-    ASSERT_EQ(search_result.Neighbors[0].size(), (size_t)limit);
-    ASSERT_EQ(search_result.Distances[0].size(), (size_t)limit);
+    ASSERT_EQ(search_result.Neighbors.size(), num_queries * limit);
+    ASSERT_EQ(search_result.Distances.size(), num_queries * limit);
 
     // Basic check for expected neighbors (first query closest to first dataset entry, second to third)
     // Note: Actual values would depend on raft's exact calculation, this is a very loose check
@@ -143,7 +139,7 @@ TEST(GpuBruteForceIndexTest, TestDifferentDistanceMetrics) {
     GpuBruteForceIndex<float> index_l2sq(dataset_data_ptr_l2sq, count_vectors_l2sq, dimension, cuvs::distance::DistanceType::L2Expanded, nthread);
     index_l2sq.Load();
     auto result_l2sq = index_l2sq.Search(queries_data_ptr, num_queries, query_dimension, limit);
-    ASSERT_EQ(result_l2sq.Neighbors[0][0], 0);
+    ASSERT_EQ(result_l2sq.Neighbors[0], 0);
     index_l2sq.Destroy();
 
     // Test L1 (Manhattan)
@@ -151,7 +147,7 @@ TEST(GpuBruteForceIndexTest, TestDifferentDistanceMetrics) {
     GpuBruteForceIndex<float> index_l1(dataset_data_ptr_l2sq, count_vectors_l2sq, dimension, cuvs::distance::DistanceType::L1, nthread);
     index_l1.Load();
     auto result_l1 = index_l1.Search(queries_data_ptr, num_queries, query_dimension, limit);
-    ASSERT_EQ(result_l1.Neighbors[0][0], 0);
+    ASSERT_EQ(result_l1.Neighbors[0], 0);
     index_l1.Destroy();
 
     // Test InnerProduct
@@ -286,17 +282,18 @@ TEST(GpuBruteForceIndexTest, TestEdgeCases) {
     const float* queries_data_ptr_limit_zero = flattened_queries_data.data();
 
     auto result_limit_zero = index.Search(queries_data_ptr_limit_zero, num_queries_limit_zero, dimension, 0); // Pass dimension here
-    ASSERT_EQ(result_limit_zero.Neighbors.size(), num_queries_limit_zero);
-    ASSERT_EQ(result_limit_zero.Distances.size(), num_queries_limit_zero);
-    ASSERT_TRUE(result_limit_zero.Neighbors[0].empty());
-    ASSERT_TRUE(result_limit_zero.Distances[0].empty());
+    ASSERT_TRUE(result_limit_zero.Neighbors.empty());
+    ASSERT_TRUE(result_limit_zero.Distances.empty());
 
     // Case 4: Limit is greater than dataset count
     auto result_limit_too_large = index.Search(queries_data_ptr_limit_zero, num_queries_limit_zero, dimension, 10); // Pass dimension here, dataset_data has 2 elements
-    ASSERT_EQ(result_limit_too_large.Neighbors.size(), num_queries_limit_zero);
-    ASSERT_EQ(result_limit_too_large.Distances.size(), num_queries_limit_zero);
-    ASSERT_EQ(result_limit_too_large.Neighbors[0].size(), (size_t)dataset_data_2d.size()); // Should return up to available neighbors
-    ASSERT_EQ(result_limit_too_large.Distances[0].size(), (size_t)dataset_data_2d.size());
+    ASSERT_EQ(result_limit_too_large.Neighbors.size(), num_queries_limit_zero * 10);
+    ASSERT_EQ(result_limit_too_large.Distances.size(), num_queries_limit_zero * 10);
+    ASSERT_EQ(result_limit_too_large.Neighbors[0], 0);
+    ASSERT_EQ(result_limit_too_large.Neighbors[1], 1);
+    for (size_t i = 2; i < 10; ++i) {
+        ASSERT_EQ(result_limit_too_large.Neighbors[i], -1);
+    }
 
     index.Destroy();
 }
@@ -341,10 +338,8 @@ TEST(GpuBruteForceIndexTest, TestMultipleThreads) {
 
     auto search_result = index.Search(queries_data_ptr, num_queries, query_dimension, limit);
 
-    ASSERT_EQ(search_result.Neighbors.size(), num_queries);
-    ASSERT_EQ(search_result.Distances.size(), num_queries);
-    ASSERT_EQ(search_result.Neighbors[0].size(), (size_t)limit);
-    ASSERT_EQ(search_result.Distances[0].size(), (size_t)limit);
+    ASSERT_EQ(search_result.Neighbors.size(), num_queries * limit);
+    ASSERT_EQ(search_result.Distances.size(), num_queries * limit);
 
     // Verify expected nearest neighbors
     // ASSERT_EQ(search_result.Neighbors[0][0], 0);

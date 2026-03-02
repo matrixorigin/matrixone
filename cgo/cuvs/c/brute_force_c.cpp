@@ -78,25 +78,18 @@ void GpuBruteForceIndex_GetResults(GpuBruteForceSearchResultC result_c, uint64_t
     if (!result_c) return;
     auto search_result = static_cast<matrixone::GpuBruteForceIndex<float>::SearchResult*>(result_c);
 
-    for (uint64_t i = 0; i < num_queries; ++i) {
-        uint64_t offset = i * limit;
-        if (i < search_result->Neighbors.size()) {
-            size_t found_k = search_result->Neighbors[i].size();
-            std::copy(search_result->Neighbors[i].begin(), search_result->Neighbors[i].end(), neighbors + offset);
-            std::copy(search_result->Distances[i].begin(), search_result->Distances[i].end(), distances + offset);
+    if (search_result->Neighbors.size() >= num_queries * limit) {
+        std::copy(search_result->Neighbors.begin(), search_result->Neighbors.begin() + (num_queries * limit), neighbors);
+    } else {
+        // Fallback for unexpected size
+        std::fill(neighbors, neighbors + (num_queries * limit), -1);
+    }
 
-            // Pad the rest of the array if fewer than 'limit' neighbors are found
-            for (size_t j = found_k; j < limit; ++j) {
-                neighbors[offset + j] = -1;
-                distances[offset + j] = std::numeric_limits<float>::infinity();
-            }
-        } else {
-            // If the search returned fewer result sets than queries, pad the entire block
-            for (size_t j = 0; j < limit; ++j) {
-                neighbors[offset + j] = -1;
-                distances[offset + j] = std::numeric_limits<float>::infinity();
-            }
-        }
+    if (search_result->Distances.size() >= num_queries * limit) {
+        std::copy(search_result->Distances.begin(), search_result->Distances.begin() + (num_queries * limit), distances);
+    } else {
+        // Fallback for unexpected size
+        std::fill(distances, distances + (num_queries * limit), std::numeric_limits<float>::infinity());
     }
 }
 
