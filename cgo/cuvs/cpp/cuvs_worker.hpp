@@ -25,6 +25,7 @@
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #include <raft/core/resources.hpp>
 #include <raft/core/resource/cuda_stream.hpp>
+#include <raft/core/resource/comms.hpp>
 #include <raft/core/handle.hpp>
 #include <raft/core/device_resources.hpp>
 #include <raft/core/device_resources_snmg.hpp>
@@ -69,6 +70,13 @@ public:
 private:
     std::unique_ptr<raft::resources> resources_;
 };
+
+/**
+ * @brief Helper to check if a RAFT handle is configured for Multi-GPU (SNMG).
+ */
+static inline bool is_snmg_handle(raft::resources* res) {
+    return dynamic_cast<const raft::device_resources_snmg*>(res) != nullptr;
+}
 
 /**
  * @brief A thread-safe blocking queue for task distribution.

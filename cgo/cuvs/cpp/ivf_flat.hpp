@@ -27,6 +27,7 @@
 #include <raft/core/host_mdarray.hpp> // For raft::host_matrix
 #include <raft/core/resources.hpp>       // Core resource handle
 #include <raft/core/copy.cuh>            // For raft::copy with type conversion
+#include <raft/core/device_resources_snmg.hpp> // For checking SNMG type
 
 // cuVS includes
 #include <cuvs/distance/distance.hpp>    // cuVS distance API
@@ -38,7 +39,7 @@ namespace matrixone {
 
 /**
  * @brief gpu_ivf_flat_index_t implements an IVF-Flat index that can run on a single GPU or sharded across multiple GPUs.
- * It automatically chooses between single-GPU and multi-GPU (SNMG) cuVS APIs based on the provided devices.
+ * It automatically chooses between single-GPU and multi-GPU (SNMG) cuVS APIs based on the RAFT handle resources.
  */
 template <typename T>
 class gpu_ivf_flat_index_t {
@@ -53,7 +54,6 @@ public:
     // Internal index storage
     std::unique_ptr<ivf_flat_index> index_;
     std::unique_ptr<mg_index> mg_index_;
-    bool is_mg_ = false;
 
     cuvs::distance::DistanceType metric;
     uint32_t dimension;
@@ -73,8 +73,7 @@ public:
         : dimension(dimension), count(static_cast<uint32_t>(count_vectors)), metric(m), 
           n_list(n_list), devices_(devices) {
         
-        is_mg_ = force_mg || (devices_.size() > 1);
-        worker = std::make_unique<cuvs_worker_t>(nthread, devices_, is_mg_);
+        worker = std::make_unique<cuvs_worker_t>(nthread, devices_, force_mg || (devices_.size() > 1));
 
         flattened_host_dataset.resize(count * dimension);
         std::copy(dataset_data, dataset_data + (count * dimension), flattened_host_dataset.begin());
@@ -85,8 +84,7 @@ public:
                     const std::vector<int>& devices, uint32_t nthread, bool force_mg = false)
         : filename_(filename), dimension(dimension), metric(m), count(0), n_list(0), devices_(devices) {
         
-        is_mg_ = force_mg || (devices_.size() > 1);
-        worker = std::make_unique<cuvs_worker_t>(nthread, devices_, is_mg_);
+        worker = std::make_unique<cuvs_worker_t>(nthread, devices_, force_mg || (devices_.size() > 1));
     }
 
     void load() {
@@ -98,9 +96,10 @@ public:
 
         auto init_fn = [&](raft_handle_wrapper_t& handle) -> std::any {
             auto res = handle.get_raft_resources();
+            bool is_mg = is_snmg_handle(res);
 
             if (!filename_.empty()) {
-                if (is_mg_) {
+                if (is_mg) {
                     mg_index_ = std::make_unique<mg_index>(
                         cuvs::neighbors::ivf_flat::deserialize<T, int64_t>(*res, filename_));
                     // Update metadata
@@ -127,7 +126,7 @@ public:
                                             ") to build IVF index.");
                 }
 
-                if (is_mg_) {
+                if (is_mg) {
                     auto dataset_host_view = raft::make_host_matrix_view<const T, int64_t>(
                         flattened_host_dataset.data(), (int64_t)count, (int64_t)dimension);
 
@@ -180,7 +179,7 @@ public:
             [&](raft_handle_wrapper_t& handle) -> std::any {
                 std::shared_lock<std::shared_mutex> lock(mutex_);
                 auto res = handle.get_raft_resources();
-                if (is_mg_) {
+                if (is_snmg_handle(res)) {
                     cuvs::neighbors::ivf_flat::serialize(*res, *mg_index_, filename);
                 } else {
                     cuvs::neighbors::ivf_flat::serialize(*res, filename, *index_);
@@ -217,7 +216,7 @@ public:
                 cuvs::neighbors::ivf_flat::search_params search_params;
                 search_params.n_probes = n_probes;
 
-                if (is_mg_) {
+                if (is_snmg_handle(res)) {
                     auto queries_host_view = raft::make_host_matrix_view<const T, int64_t>(
                         queries_data, (int64_t)num_queries, (int64_t)dimension);
                     auto neighbors_host_view = raft::make_host_matrix_view<int64_t, int64_t>(
@@ -278,7 +277,7 @@ public:
                 auto res = handle.get_raft_resources();
                 
                 const ivf_flat_index* local_index = nullptr;
-                if (is_mg_) {
+                if (is_snmg_handle(res)) {
                     for (const auto& iface : mg_index_->ann_interfaces_) {
                         if (iface.index_.has_value()) { local_index = &iface.index_.value(); break; }
                     }

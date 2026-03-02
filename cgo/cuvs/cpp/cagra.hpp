@@ -27,6 +27,7 @@
 #include <raft/core/host_mdarray.hpp>
 #include <raft/core/resources.hpp>
 #include <raft/core/copy.cuh>            // For raft::copy with type conversion
+#include <raft/core/device_resources_snmg.hpp> // For checking SNMG type
 
 // cuVS includes
 #include <cuvs/distance/distance.hpp>
@@ -37,7 +38,7 @@ namespace matrixone {
 
 /**
  * @brief gpu_cagra_index_t implements a CAGRA index that can run on a single GPU or sharded across multiple GPUs.
- * It automatically chooses between single-GPU and multi-GPU (SNMG) cuVS APIs based on the provided devices.
+ * It automatically chooses between single-GPU and multi-GPU (SNMG) cuVS APIs based on the RAFT handle resources.
  */
 template <typename T>
 class gpu_cagra_index_t {
@@ -52,7 +53,6 @@ public:
     // Internal index storage
     std::unique_ptr<cagra_index> index_;
     std::unique_ptr<mg_index> mg_index_;
-    bool is_mg_ = false;
 
     cuvs::distance::DistanceType metric;
     uint32_t dimension;
@@ -76,8 +76,7 @@ public:
           intermediate_graph_degree(intermediate_graph_degree), graph_degree(graph_degree), 
           devices_(devices) {
         
-        is_mg_ = force_mg || (devices_.size() > 1);
-        worker = std::make_unique<cuvs_worker_t>(nthread, devices_, is_mg_);
+        worker = std::make_unique<cuvs_worker_t>(nthread, devices_, force_mg || (devices_.size() > 1));
 
         flattened_host_dataset.resize(count * dimension);
         std::copy(dataset_data, dataset_data + (count * dimension), flattened_host_dataset.begin());
@@ -89,8 +88,7 @@ public:
         : filename_(filename), dimension(dimension), metric(m), count(0), 
           intermediate_graph_degree(0), graph_degree(0), devices_(devices) {
         
-        is_mg_ = force_mg || (devices_.size() > 1);
-        worker = std::make_unique<cuvs_worker_t>(nthread, devices_, is_mg_);
+        worker = std::make_unique<cuvs_worker_t>(nthread, devices_, force_mg || (devices_.size() > 1));
     }
 
     // Private constructor for creating from an existing cuVS index (used by merge)
@@ -98,8 +96,8 @@ public:
                   uint32_t dim, cuvs::distance::DistanceType m, uint32_t nthread, const std::vector<int>& devices)
         : index_(std::move(idx)), metric(m), dimension(dim), devices_(devices) {
         
-        is_mg_ = false; // Merge result is currently a single-GPU index in the C++ layer logic
-        worker = std::make_unique<cuvs_worker_t>(nthread, devices_);
+        // Merge result is currently a single-GPU index.
+        worker = std::make_unique<cuvs_worker_t>(nthread, devices_, false);
         worker->start();
         count = static_cast<uint32_t>(index_->size());
         graph_degree = static_cast<size_t>(index_->graph_degree());
@@ -115,9 +113,10 @@ public:
 
         auto init_fn = [&](raft_handle_wrapper_t& handle) -> std::any {
             auto res = handle.get_raft_resources();
+            bool is_mg = is_snmg_handle(res);
 
             if (!filename_.empty()) {
-                if (is_mg_) {
+                if (is_mg) {
                     mg_index_ = std::make_unique<mg_index>(
                         cuvs::neighbors::cagra::deserialize<T, uint32_t>(*res, filename_));
                     count = 0;
@@ -135,7 +134,7 @@ public:
                 }
                 raft::resource::sync_stream(*res);
             } else if (!flattened_host_dataset.empty()) {
-                if (is_mg_) {
+                if (is_mg) {
                     auto dataset_host_view = raft::make_host_matrix_view<const T, int64_t>(
                         flattened_host_dataset.data(), (int64_t)count, (int64_t)dimension);
 
@@ -190,14 +189,11 @@ public:
     }
 
     void extend(const T* additional_data, uint64_t num_vectors) {
-        if (is_mg_) {
-            throw std::runtime_error("CAGRA sharded (multi-GPU) extend is not supported by cuVS.");
-        }
         if constexpr (std::is_same_v<T, half>) {
              throw std::runtime_error("CAGRA single-GPU extend is not supported for float16 (half) by cuVS.");
         } else {
             if (!is_loaded_ || !index_) {
-                throw std::runtime_error("index must be loaded before extending.");
+                throw std::runtime_error("index must be loaded before extending (or it is a multi-GPU index, which doesn't support extend).");
             }
             if (num_vectors == 0) return;
 
@@ -240,7 +236,7 @@ public:
         uint32_t dim = indices[0]->dimension;
         cuvs::distance::DistanceType m = indices[0]->metric;
 
-        cuvs_worker_t transient_worker(1, devices);
+        cuvs_worker_t transient_worker(1, devices, false);
         transient_worker.start();
 
         uint64_t job_id = transient_worker.submit(
@@ -284,7 +280,7 @@ public:
             [&](raft_handle_wrapper_t& handle) -> std::any {
                 std::shared_lock<std::shared_mutex> lock(mutex_);
                 auto res = handle.get_raft_resources();
-                if (is_mg_) {
+                if (is_snmg_handle(res)) {
                     cuvs::neighbors::cagra::serialize(*res, *mg_index_, filename);
                 } else {
                     cuvs::neighbors::cagra::serialize(*res, filename, *index_);
@@ -320,7 +316,7 @@ public:
                 cuvs::neighbors::cagra::search_params search_params;
                 search_params.itopk_size = itopk_size;
 
-                if (is_mg_) {
+                if (is_snmg_handle(res)) {
                     auto queries_host_view = raft::make_host_matrix_view<const T, int64_t>(
                         queries_data, (int64_t)num_queries, (int64_t)dimension);
                     auto neighbors_host_view = raft::make_host_matrix_view<uint32_t, int64_t>(

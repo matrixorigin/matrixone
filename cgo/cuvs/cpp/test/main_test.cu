@@ -87,6 +87,20 @@ TEST(CuvsTaskResultStoreTest, StopStore) {
     ASSERT_THROW(fut.get(), std::runtime_error);
 }
 
+// --- raft_handle_wrapper_t and is_snmg_handle Tests ---
+
+TEST(RaftHandleWrapperTest, DetectSingleGpu) {
+    std::vector<int> devices = {0};
+    raft_handle_wrapper_t wrapper(devices, false); // force_mg = false
+    ASSERT_FALSE(is_snmg_handle(wrapper.get_raft_resources()));
+}
+
+TEST(RaftHandleWrapperTest, DetectMultiGpuForced) {
+    std::vector<int> devices = {0};
+    raft_handle_wrapper_t wrapper(devices, true); // force_mg = true
+    ASSERT_TRUE(is_snmg_handle(wrapper.get_raft_resources()));
+}
+
 // --- cuvs_worker_t Tests ---
 
 TEST(CuvsWorkerTest, BasicLifecycle) {
