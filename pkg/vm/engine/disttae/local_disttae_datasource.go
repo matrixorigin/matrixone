@@ -155,15 +155,6 @@ func (ls *LocalDisttaeDataSource) String() string {
 		blks)
 }
 
-func (ls *LocalDisttaeDataSource) GetObjectCreateTS(
-	bid *objectio.Blockid,
-) (types.TS, bool) {
-	if ls == nil || ls.pState == nil || bid == nil {
-		return types.TS{}, false
-	}
-	return ls.pState.GetDataObjectCreateTS(bid.Object())
-}
-
 func (ls *LocalDisttaeDataSource) SetOrderBy(orderby []*plan.OrderBySpec) {
 	ls.OrderBy = orderby
 }
