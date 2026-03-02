@@ -862,17 +862,6 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 
 				if int(idx) >= len(entry.Batch.Vecs) /*add column*/ ||
 					entry.Batch.Attrs[idx] == "" /*drop column*/ {
-					if seqNums[i] == objectio.SEQNUM_COMMITTS {
-						logutil.Infof(
-							"AAAA inmem commit missing: tableId=%d idx=%d vecs=%d attrs=%d rowOffset=%d rowTime=%s",
-							ls.table.tableId,
-							idx,
-							len(entry.Batch.Vecs),
-							len(entry.Batch.Attrs),
-							entry.Offset,
-							entry.Time.ToString(),
-						)
-					}
 					err = vector.AppendAny(
 						outBatch.Vecs[i],
 						nil,

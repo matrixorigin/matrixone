@@ -42,7 +42,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/panjf2000/ants/v2"
 )
 
@@ -1479,9 +1478,6 @@ func getTablesCreationCommitTS(
 						continue
 					}
 
-					fmt.Printf("AAAA tableId=%d, bat=%s\n",
-						tableID, common.MoBatchToString(readBatch, readBatch.RowCount()))
-
 					relIDs := vector.MustFixedColWithTypeCheck[uint64](readBatch.Vecs[0])
 					commitCol := vector.MustFixedColWithTypeCheck[types.TS](readBatch.Vecs[1])
 					for i := range relIDs {
@@ -1494,11 +1490,6 @@ func getTablesCreationCommitTS(
 								commitTS = commitCol[i]
 							}
 							commitFound = true
-							fmt.Printf("AAAA tableId=%d row=%d commit=%s\n",
-								tableID, i, commitCol[i].ToString())
-						} else {
-							fmt.Printf("AAAA tableId=%d row=%d commit=NULL\n",
-								tableID, i)
 						}
 					}
 				}
