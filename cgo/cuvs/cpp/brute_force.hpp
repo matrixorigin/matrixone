@@ -43,7 +43,7 @@ class GpuBruteForceIndex {
 
 public:
     std::vector<T> flattened_host_dataset; // Store flattened data as std::vector
-    std::unique_ptr<cuvs::neighbors::brute_force::index<T, float>> Index; // Corrected Index type to float
+    std::unique_ptr<cuvs::neighbors::brute_force::index<T, float>> Index; // Use float for DistT
     cuvs::distance::DistanceType Metric;
     uint32_t Dimension;
     uint32_t Count;
@@ -89,7 +89,7 @@ public:
             cuvs::neighbors::brute_force::index_params index_params; // Correct brute_force namespace
             index_params.metric = Metric;
 
-            Index = std::make_unique<cuvs::neighbors::brute_force::index<T, float>>( // Corrected Index type to float
+            Index = std::make_unique<cuvs::neighbors::brute_force::index<T, float>>(
                 cuvs::neighbors::brute_force::build(*handle.get_raft_resources(), index_params, raft::make_const_mdspan(dataset_device.view()))); // Use raft::make_const_mdspan
 
             raft::resource::sync_stream(*handle.get_raft_resources()); // Synchronize after build
@@ -165,7 +165,9 @@ public:
 
                 // Post-process to handle sentinels
                 for (size_t i = 0; i < res.Neighbors.size(); ++i) {
-                    if (res.Neighbors[i] == std::numeric_limits<int64_t>::max()) {
+                    if (res.Neighbors[i] == std::numeric_limits<int64_t>::max() || 
+                        res.Neighbors[i] == 4294967295LL || 
+                        res.Neighbors[i] < 0) {
                         res.Neighbors[i] = -1;
                     }
                 }

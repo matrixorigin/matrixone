@@ -51,7 +51,15 @@ inline bool has_exception(const std::exception_ptr& ep) {
 #define REPORT_FAILURE(msg_str) do { TEST_ERROR(msg_str); current_test_failed = true; return; } while (0)
 #define ASSERT_TRUE(condition) do { if (!(condition)) { REPORT_FAILURE("ASSERT_TRUE failed: " #condition); } } while (0)
 #define ASSERT_FALSE(condition) ASSERT_TRUE(!(condition))
-#define ASSERT_EQ(val1, val2) do { if (!((val1) == (val2))) { REPORT_FAILURE("ASSERT_EQ failed: " #val1 " vs " #val2); } } while (0)
+#define ASSERT_EQ(val1, val2) do { \
+    auto v1 = (val1); \
+    auto v2 = (val2); \
+    if (!(v1 == v2)) { \
+        std::ostringstream oss; \
+        oss << "ASSERT_EQ failed: " << #val1 << " (" << v1 << ") vs " << #val2 << " (" << v2 << ")"; \
+        REPORT_FAILURE(oss.str()); \
+    } \
+} while (0)
 #define ASSERT_NE(val1, val2) do { if (!((val1) != (val2))) { REPORT_FAILURE("ASSERT_NE failed: " #val1 " vs " #val2); } } while (0)
 #define ASSERT_THROW(statement, expected_exception) do { bool caught = false; try { statement; } catch (const expected_exception&) { caught = true; } if (!caught) { REPORT_FAILURE("ASSERT_THROW failed"); } } while (0)
 #define ASSERT_NO_THROW(statement) do { try { statement; } catch (...) { REPORT_FAILURE("ASSERT_NO_THROW failed"); } } while (0)
