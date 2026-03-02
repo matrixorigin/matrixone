@@ -39,17 +39,14 @@ func TestNewGpuBruteForceIndex(t *testing.T) {
     queryDimension := uint32(3)
     limit := uint32(1)
 
-    searchResult, err := index.Search(queries, numQueries, queryDimension, limit)
+    neighbors, distances, err := index.Search(queries, numQueries, queryDimension, limit)
     if err != nil {
         t.Fatalf("Failed to search: %v", err)
     }
-    if searchResult.Neighbors == nil || len(searchResult.Neighbors) == 0 {
+    if neighbors == nil || len(neighbors) == 0 {
         t.Fatalf("Search returned empty neighbors")
     }
-    fmt.Printf("Search Result: Neighbors=%v, Distances=%v\n", searchResult.Neighbors, searchResult.Distances)
-
-    // Free search result memory
-    searchResult.Free()
+    fmt.Printf("Search Result: Neighbors=%v, Distances=%v\n", neighbors, distances)
 
     // Destroy the index
     err = index.Destroy()

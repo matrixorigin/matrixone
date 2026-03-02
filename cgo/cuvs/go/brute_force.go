@@ -5,6 +5,7 @@ package cuvs
 #cgo CFLAGS: -I../c
 
 #include "brute_force_c.h"
+#include <stdlib.h>
 */
 import "C"
 import (
@@ -30,16 +31,7 @@ type GpuBruteForceIndex struct {
     cIndex C.GpuBruteForceIndexC
 }
 
-// SearchResult maps to C.CuvsSearchResultC
-type SearchResult struct {
-    Neighbors []int64
-    Distances []float32
-    NumQueries uint64
-    Limit      uint32
-    ActualK    uint32
-    // Internally, keep the C struct pointer to free memory later
-    cResult C.CuvsSearchResultC
-}
+
 
 // NewGpuBruteForceIndex creates a new GpuBruteForceIndex instance
 func NewGpuBruteForceIndex(dataset []float32, countVectors uint64, dimension uint32, metric DistanceType, nthread uint32) (*GpuBruteForceIndex, error) {
@@ -73,55 +65,67 @@ func (gbi *GpuBruteForceIndex) Load() error {
     return nil
 }
 
+// SearchResult wraps the C-side search result object
+type SearchResult struct {
+	cResult C.GpuBruteForceSearchResultC
+}
+
 // Search performs a search operation
-func (gbi *GpuBruteForceIndex) Search(queries []float32, numQueries uint64, queryDimension uint32, limit uint32) (SearchResult, error) {
-    if gbi.cIndex == nil {
-        return SearchResult{}, fmt.Errorf("GpuBruteForceIndex is not initialized")
-    }
-    if len(queries) == 0 || numQueries == 0 || queryDimension == 0 {
-        return SearchResult{}, fmt.Errorf("queries, numQueries, and queryDimension cannot be zero")
-    }
-    if uint64(len(queries)) != numQueries * uint64(queryDimension) {
-        return SearchResult{}, fmt.Errorf("queries size (%d) does not match numQueries (%d) * queryDimension (%d)", len(queries), numQueries, queryDimension)
-    }
+func (gbi *GpuBruteForceIndex) Search(queries []float32, numQueries uint64, queryDimension uint32, limit uint32) ([]int64, []float32, error) {
+	if gbi.cIndex == nil {
+		return nil, nil, fmt.Errorf("GpuBruteForceIndex is not initialized")
+	}
+	if len(queries) == 0 || numQueries == 0 || queryDimension == 0 {
+		return nil, nil, fmt.Errorf("queries, numQueries, and queryDimension cannot be zero")
+	}
+	if uint64(len(queries)) != numQueries*uint64(queryDimension) {
+		return nil, nil, fmt.Errorf("queries size (%d) does not match numQueries (%d) * queryDimension (%d)", len(queries), numQueries, queryDimension)
+	}
 
-    var cQueries *C.float
-    if len(queries) > 0 {
-        cQueries = (*C.float)(&queries[0])
-    }
+	var cQueries *C.float
+	if len(queries) > 0 {
+		cQueries = (*C.float)(&queries[0])
+	}
 
-    cResult := C.GpuBruteForceIndex_Search(
-        gbi.cIndex,
-        cQueries,
-        C.uint64_t(numQueries),
-        C.uint32_t(queryDimension),
-        C.uint32_t(limit),
-    )
+	var errmsg *C.char
+	cResult := C.GpuBruteForceIndex_Search(
+		gbi.cIndex,
+		cQueries,
+		C.uint64_t(numQueries),
+		C.uint32_t(queryDimension),
+		C.uint32_t(limit),
+		unsafe.Pointer(&errmsg),
+	)
 
-    // Check for errors returned by C.GpuBruteForceIndex_Search
-    if cResult.neighbors == nil && cResult.distances == nil && cResult.num_queries == 0 {
-        // This is a simplistic error check. A more robust C interface would return error codes.
-        return SearchResult{}, fmt.Errorf("C.GpuBruteForceIndex_Search returned empty result, possibly due to an internal C++ error")
-    }
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return nil, nil, fmt.Errorf("%s", errStr)
+	}
+	if cResult == nil {
+		return nil, nil, fmt.Errorf("search returned nil result")
+	}
 
-    // Determine the total size of the flattened arrays
-    // This assumes the C side returned contiguous blocks of data
-    totalNeighborsElements := uint64(cResult.num_queries) * uint64(cResult.actual_k)
-    totalDistancesElements := uint64(cResult.num_queries) * uint64(cResult.actual_k)
-    
-    // Safely create Go slices from C arrays
-    // C.int64_t and C.float are Go types wrapping the C types
-    goNeighbors := unsafe.Slice((*int64)(unsafe.Pointer(cResult.neighbors)), totalNeighborsElements)
-    goDistances := unsafe.Slice((*float32)(unsafe.Pointer(cResult.distances)), totalDistancesElements)
+	// Allocate slices for results
+	neighbors := make([]int64, numQueries*uint64(limit))
+	distances := make([]float32, numQueries*uint64(limit))
 
-    return SearchResult{
-        Neighbors:  goNeighbors,
-        Distances:  goDistances,
-        NumQueries: uint64(cResult.num_queries),
-        Limit:      uint32(cResult.limit),
-        ActualK:    uint32(cResult.actual_k),
-        cResult:    cResult, // Store C result struct to free later
-    }, nil
+	var cNeighbors *C.int64_t
+	if len(neighbors) > 0 {
+		cNeighbors = (*C.int64_t)(unsafe.Pointer(&neighbors[0]))
+	}
+
+	var cDistances *C.float
+	if len(distances) > 0 {
+		cDistances = (*C.float)(unsafe.Pointer(&distances[0]))
+	}
+
+	C.GpuBruteForceIndex_GetResults(cResult, C.uint64_t(numQueries), C.uint32_t(limit), cNeighbors, cDistances)
+
+	// Free the C++ search result object now that we have copied the data
+	C.GpuBruteForceIndex_FreeSearchResult(cResult);
+
+	return neighbors, distances, nil
 }
 
 // Destroy frees the C++ GpuBruteForceIndex instance
@@ -134,12 +138,4 @@ func (gbi *GpuBruteForceIndex) Destroy() error {
     return nil
 }
 
-// Free frees the memory allocated for the C SearchResult.
-// This MUST be called by the Go code after it's done with the SearchResult.
-func (sr *SearchResult) Free() {
-    if sr.cResult.neighbors != nil || sr.cResult.distances != nil {
-        C.CuvsSearchResult_Free(sr.cResult)
-        sr.cResult.neighbors = nil // Mark as freed
-        sr.cResult.distances = nil
-    }
-}
+

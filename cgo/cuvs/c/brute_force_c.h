@@ -22,14 +22,8 @@ typedef enum {
 // Opaque pointer to the C++ GpuBruteForceIndex object
 typedef void* GpuBruteForceIndexC;
 
-// Structure to hold the search results
-typedef struct {
-    int64_t* neighbors;     // Flattened array of neighbor indices
-    float* distances;       // Flattened array of distances
-    uint64_t num_queries;   // Number of query vectors for this result
-    uint32_t limit;         // Number of neighbors per query
-    uint32_t actual_k;      // Actual number of neighbors found per query (min of limit and available)
-} CuvsSearchResultC;
+// Opaque pointer to the C++ SearchResult object
+typedef void* GpuBruteForceSearchResultC;
 
 // Constructor for GpuBruteForceIndex
 // dataset_data: Flattened array of dataset vectors
@@ -49,15 +43,23 @@ void GpuBruteForceIndex_Load(GpuBruteForceIndexC index_c);
 // num_queries: Number of query vectors
 // query_dimension: Dimension of each query vector (must match index dimension)
 // limit: Maximum number of neighbors to return per query
-CuvsSearchResultC GpuBruteForceIndex_Search(GpuBruteForceIndexC index_c, const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit);
+// errmsg: Pointer to a char pointer to store an error message if one occurs. The caller is responsible for freeing the memory.
+GpuBruteForceSearchResultC GpuBruteForceIndex_Search(GpuBruteForceIndexC index_c, const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, void* errmsg);
+
+// Retrieves the results from a search operation
+// result_c: Opaque pointer to the GpuBruteForceSearchResult object
+// neighbors: Pre-allocated flattened array for neighbor indices (size: num_queries * limit)
+// distances: Pre-allocated flattened array for distances (size: num_queries * limit)
+void GpuBruteForceIndex_GetResults(GpuBruteForceSearchResultC result_c, uint64_t num_queries, uint32_t limit, int64_t* neighbors, float* distances);
+
+
+// Frees the memory for a GpuBruteForceSearchResultC object
+void GpuBruteForceIndex_FreeSearchResult(GpuBruteForceSearchResultC result_c);
+
 
 // Destroys the GpuBruteForceIndex object and frees associated resources
 // index_c: Opaque pointer to the GpuBruteForceIndex object
 void GpuBruteForceIndex_Destroy(GpuBruteForceIndexC index_c);
-
-// Frees the memory allocated for a CuvsSearchResultC object
-// result_c: The CuvsSearchResultC object whose internal arrays need to be freed
-void CuvsSearchResult_Free(CuvsSearchResultC result_c);
 
 #ifdef __cplusplus
 }
