@@ -1136,9 +1136,9 @@ func convertObjectToBatch(
 			}
 			vec := obj.(*vector.Vector)
 
-			// Append data from this block's vector to the result vector
-			for j := 0; j < vec.Length(); j++ {
-				vecs[i].Append(vec.GetRawBytesAt(j), vec.IsNull(uint64(j)))
+			// Extend result vector with this block's data
+			if err := vecs[i].ExtendVec(vec); err != nil {
+				return nil, moerr.NewInternalErrorf(ctx, "failed to extend vector: %v", err)
 			}
 		}
 	}
