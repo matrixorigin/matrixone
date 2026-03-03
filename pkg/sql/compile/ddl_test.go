@@ -883,7 +883,6 @@ func TestDropDatabase_ListRelationsAtLatestSnapshot(t *testing.T) {
 		// any error should be ignored and not cause DropDatabase to fail.
 		// This is verified by the fact that the error handling in DropDatabase
 		// logs the error but returns nil.
-		
 		// The actual behavior is tested in integration tests.
 		// Here we just verify the error handling logic exists.
 	})
