@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cuvs_worker.hpp" // For cuvs_worker_t and raft_handle_wrapper_t
+#include "../c/helper.h"   // For distance_type_t and cagra_build_params_t
 #include <raft/util/cudart_utils.hpp> // For RAFT_CUDA_TRY
 #include <cuda_fp16.h> // For half
 
@@ -57,8 +58,9 @@ public:
     cuvs::distance::DistanceType metric;
     uint32_t dimension;
     uint32_t count;
-    size_t intermediate_graph_degree;
-    size_t graph_degree;
+    cagra_build_params_t build_params;
+    distribution_mode_t dist_mode;
+
     std::unique_ptr<cuvs_worker_t> worker;
     std::shared_mutex mutex_;
     bool is_loaded_ = false;
@@ -70,12 +72,12 @@ public:
 
     // Unified Constructor for building from dataset
     gpu_cagra_t(const T* dataset_data, uint64_t count_vectors, uint32_t dimension, 
-                  cuvs::distance::DistanceType m, size_t intermediate_graph_degree, 
-                  size_t graph_degree, const std::vector<int>& devices, uint32_t nthread, bool force_mg = false)
+                  cuvs::distance::DistanceType m, const cagra_build_params_t& bp,
+                  const std::vector<int>& devices, uint32_t nthread, distribution_mode_t mode)
         : dimension(dimension), count(static_cast<uint32_t>(count_vectors)), metric(m), 
-          intermediate_graph_degree(intermediate_graph_degree), graph_degree(graph_degree), 
-          devices_(devices) {
+          build_params(bp), dist_mode(mode), devices_(devices) {
         
+        bool force_mg = (mode == DistributionMode_SHARDED || mode == DistributionMode_REPLICATED);
         worker = std::make_unique<cuvs_worker_t>(nthread, devices_, force_mg || (devices_.size() > 1));
 
         flattened_host_dataset.resize(count * dimension);
@@ -86,11 +88,13 @@ public:
 
     // Unified Constructor for loading from file
     gpu_cagra_t(const std::string& filename, uint32_t dimension, cuvs::distance::DistanceType m, 
-                    const std::vector<int>& devices, uint32_t nthread, bool force_mg = false)
+                    const std::vector<int>& devices, uint32_t nthread, distribution_mode_t mode)
         : filename_(filename), dimension(dimension), metric(m), count(0), 
-          intermediate_graph_degree(0), graph_degree(0), devices_(devices) {
+          dist_mode(mode), devices_(devices) {
         
+        bool force_mg = (mode == DistributionMode_SHARDED || mode == DistributionMode_REPLICATED);
         worker = std::make_unique<cuvs_worker_t>(nthread, devices_, force_mg || (devices_.size() > 1));
+        build_params = {128, 64}; // Default values
     }
 
     // Private constructor for creating from an existing cuVS index (used by merge)
@@ -102,7 +106,9 @@ public:
         worker = std::make_unique<cuvs_worker_t>(nthread, devices_, false);
         worker->start();
         count = static_cast<uint32_t>(index_->size());
-        graph_degree = static_cast<size_t>(index_->graph_degree());
+        build_params.graph_degree = static_cast<size_t>(index_->graph_degree());
+        build_params.intermediate_graph_degree = build_params.graph_degree * 2; // Best guess
+        dist_mode = DistributionMode_SINGLE_GPU;
         is_loaded_ = true;
     }
 
@@ -126,13 +132,13 @@ public:
                         if (iface.index_.has_value()) count += static_cast<uint32_t>(iface.index_.value().size());
                     }
                     if (!mg_index_->ann_interfaces_.empty() && mg_index_->ann_interfaces_[0].index_.has_value()) {
-                        graph_degree = static_cast<size_t>(mg_index_->ann_interfaces_[0].index_.value().graph_degree());
+                        build_params.graph_degree = static_cast<size_t>(mg_index_->ann_interfaces_[0].index_.value().graph_degree());
                     }
                 } else {
                     index_ = std::make_unique<cagra_index>(*res);
                     cuvs::neighbors::cagra::deserialize(*res, filename_, index_.get());
                     count = static_cast<uint32_t>(index_->size());
-                    graph_degree = static_cast<size_t>(index_->graph_degree());
+                    build_params.graph_degree = static_cast<size_t>(index_->graph_degree());
                 }
                 raft::resource::sync_stream(*res);
             } else if (!flattened_host_dataset.empty()) {
@@ -142,11 +148,15 @@ public:
 
                     cuvs::neighbors::cagra::index_params index_params;
                     index_params.metric = metric;
-                    index_params.intermediate_graph_degree = intermediate_graph_degree;
-                    index_params.graph_degree = graph_degree;
+                    index_params.intermediate_graph_degree = build_params.intermediate_graph_degree;
+                    index_params.graph_degree = build_params.graph_degree;
 
                     cuvs::neighbors::mg_index_params<cuvs::neighbors::cagra::index_params> mg_params(index_params);
-                    mg_params.mode = cuvs::neighbors::distribution_mode::SHARDED;
+                    if (dist_mode == DistributionMode_REPLICATED) {
+                        mg_params.mode = cuvs::neighbors::distribution_mode::REPLICATED;
+                    } else {
+                        mg_params.mode = cuvs::neighbors::distribution_mode::SHARDED;
+                    }
 
                     mg_index_ = std::make_unique<mg_index>(
                         cuvs::neighbors::cagra::build(*res, mg_params, dataset_host_view));
@@ -164,8 +174,8 @@ public:
 
                     cuvs::neighbors::cagra::index_params index_params;
                     index_params.metric = metric;
-                    index_params.intermediate_graph_degree = intermediate_graph_degree;
-                    index_params.graph_degree = graph_degree;
+                    index_params.intermediate_graph_degree = build_params.intermediate_graph_degree;
+                    index_params.graph_degree = build_params.graph_degree;
                     index_params.attach_dataset_on_build = true; 
 
                     index_ = std::make_unique<cagra_index>(
@@ -301,13 +311,14 @@ public:
         std::vector<float> distances;
     };
 
-    search_result_t search(const T* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, size_t itopk_size) {
+    search_result_t search(const T* queries_data, uint64_t num_queries, uint32_t query_dimension, 
+                        uint32_t limit, const cagra_search_params_t& sp) {
         if (!queries_data || num_queries == 0 || dimension == 0) return search_result_t{};
         if (query_dimension != dimension) throw std::runtime_error("dimension mismatch");
         if (!is_loaded_ || (!index_ && !mg_index_)) return search_result_t{};
 
         uint64_t job_id = worker->submit(
-            [&, num_queries, limit, itopk_size](raft_handle_wrapper_t& handle) -> std::any {
+            [&, num_queries, limit, sp](raft_handle_wrapper_t& handle) -> std::any {
                 std::shared_lock<std::shared_mutex> lock(mutex_);
                 auto res = handle.get_raft_resources();
 
@@ -316,7 +327,8 @@ public:
                 search_res.distances.resize(num_queries * limit);
 
                 cuvs::neighbors::cagra::search_params search_params;
-                search_params.itopk_size = itopk_size;
+                search_params.itopk_size = sp.itopk_size;
+                search_params.search_width = sp.search_width;
 
                 if (is_snmg_handle(res)) {
                     auto queries_host_view = raft::make_host_matrix_view<const T, int64_t>(

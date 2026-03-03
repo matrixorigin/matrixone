@@ -1,5 +1,5 @@
-#ifndef MO_CUVS_HELPER_H
-#define MO_CUVS_HELPER_H
+#ifndef MO_CUVS_C_HELPER_H
+#define MO_CUVS_C_HELPER_H
 
 #include <stdint.h>
 #include <stddef.h>
@@ -25,19 +25,42 @@ typedef enum {
     Quantization_UINT8
 } quantization_t;
 
+typedef enum {
+    DistributionMode_SINGLE_GPU,
+    DistributionMode_SHARDED,
+    DistributionMode_REPLICATED
+} distribution_mode_t;
+
+// CAGRA build parameters
+typedef struct {
+    size_t intermediate_graph_degree; // default 128
+    size_t graph_degree;              // default 64
+} cagra_build_params_t;
+
+// CAGRA search parameters
+typedef struct {
+    size_t itopk_size;   // default 64
+    size_t search_width; // default 1
+} cagra_search_params_t;
+
+// IVF-Flat build parameters
+typedef struct {
+    uint32_t n_lists; // default 1024
+} ivf_flat_build_params_t;
+
+// IVF-Flat search parameters
+typedef struct {
+    uint32_t n_probes; // default 20
+} ivf_flat_search_params_t;
+
 int gpu_get_device_count();
 int gpu_get_device_list(int* devices, int max_count);
 
 // Converts float32 data to float16 (half) on GPU
-// src: host float32 array
-// dst: host float16 array (pre-allocated, uint16_t in C/Go)
-// total_elements: number of elements to convert
-// device_id: GPU device to use for conversion
-// errmsg: pointer to char* for error message
 void gpu_convert_f32_to_f16(const float* src, void* dst, uint64_t total_elements, int device_id, void* errmsg);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif // MO_CUVS_HELPER_H
+#endif // MO_CUVS_C_HELPER_H

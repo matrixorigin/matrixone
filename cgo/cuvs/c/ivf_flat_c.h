@@ -11,37 +11,46 @@ extern "C" {
 // Opaque pointer to the C++ gpu_ivf_flat_t object
 typedef void* gpu_ivf_flat_c;
 
-// Opaque pointer to the C++ IVF search result object
-typedef void* gpu_ivf_flat_search_result_c;
+// Opaque pointer to the C++ IVF-Flat search result object
+typedef void* gpu_ivf_flat_result_c;
 
-// Constructor for building from dataset. 
-// devices: pointer to array of device IDs. 
-// num_devices: number of devices. If 1, single-GPU API is used. If > 1, sharded API is used.
-gpu_ivf_flat_c gpu_ivf_flat_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, distance_type_t metric, uint32_t n_list, const int* devices, uint32_t num_devices, uint32_t nthread, quantization_t qtype, bool force_mg, void* errmsg);
+// Constructor for building from dataset
+gpu_ivf_flat_c gpu_ivf_flat_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, 
+                                 distance_type_t metric, ivf_flat_build_params_t build_params,
+                                 const int* devices, int device_count, uint32_t nthread, 
+                                 distribution_mode_t dist_mode, quantization_t qtype, void* errmsg);
 
-// Constructor for loading from file.
-gpu_ivf_flat_c gpu_ivf_flat_new_from_file(const char* filename, uint32_t dimension, distance_type_t metric, const int* devices, uint32_t num_devices, uint32_t nthread, quantization_t qtype, bool force_mg, void* errmsg);
+// Constructor for loading from file
+gpu_ivf_flat_c gpu_ivf_flat_load_file(const char* filename, uint32_t dimension, distance_type_t metric,
+                                      const int* devices, int device_count, uint32_t nthread, 
+                                      distribution_mode_t dist_mode, quantization_t qtype, void* errmsg);
 
-// Loads the index to the GPU (either builds or loads from file depending on constructor)
-void gpu_ivf_flat_load(gpu_ivf_flat_c index_c, void* errmsg);
-
-// Saves the index to file
-void gpu_ivf_flat_save(gpu_ivf_flat_c index_c, const char* filename, void* errmsg);
-
-// Performs a search operation
-gpu_ivf_flat_search_result_c gpu_ivf_flat_search(gpu_ivf_flat_c index_c, const void* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, uint32_t n_probes, void* errmsg);
-
-// Retrieves the results from a search operation
-void gpu_ivf_flat_get_results(gpu_ivf_flat_search_result_c result_c, uint64_t num_queries, uint32_t limit, int64_t* neighbors, float* distances);
-
-// Frees the memory for a gpu_ivf_flat_search_result_c object
-void gpu_ivf_flat_free_search_result(gpu_ivf_flat_search_result_c result_c);
-
-// Destroys the gpu_ivf_flat_t object
+// Destructor
 void gpu_ivf_flat_destroy(gpu_ivf_flat_c index_c, void* errmsg);
 
-// Gets the centroids after build
-// centers: Pre-allocated array of size n_list * dimension
+// Load function (actually triggers the build/load logic)
+void gpu_ivf_flat_load(gpu_ivf_flat_c index_c, void* errmsg);
+
+// Save function
+void gpu_ivf_flat_save(gpu_ivf_flat_c index_c, const char* filename, void* errmsg);
+
+// Search function
+typedef struct {
+    gpu_ivf_flat_result_c result_ptr;
+} gpu_ivf_flat_search_res_t;
+
+gpu_ivf_flat_search_res_t gpu_ivf_flat_search(gpu_ivf_flat_c index_c, const void* queries_data, uint64_t num_queries, 
+                                              uint32_t query_dimension, uint32_t limit, 
+                                              ivf_flat_search_params_t search_params, void* errmsg);
+
+// Get results from result object
+void gpu_ivf_flat_get_neighbors(gpu_ivf_flat_result_c result_c, uint64_t total_elements, int64_t* neighbors);
+void gpu_ivf_flat_get_distances(gpu_ivf_flat_result_c result_c, uint64_t total_elements, float* distances);
+
+// Free result object
+void gpu_ivf_flat_free_result(gpu_ivf_flat_result_c result_c);
+
+// Gets the trained centroids
 void gpu_ivf_flat_get_centers(gpu_ivf_flat_c index_c, float* centers, void* errmsg);
 
 // Gets the number of lists (centroids)

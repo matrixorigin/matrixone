@@ -8,40 +8,53 @@
 extern "C" {
 #endif
 
+// Opaque pointer to the C++ gpu_cagra_t object
 typedef void* gpu_cagra_c;
-typedef void* gpu_cagra_search_result_c;
 
-// Constructor for building from dataset. 
-// devices: pointer to array of device IDs. If num_devices > 1, sharded mode is used.
+// Opaque pointer to the C++ CAGRA search result object
+typedef void* gpu_cagra_result_c;
+
+// Constructor for building from dataset
 gpu_cagra_c gpu_cagra_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, 
-                                 distance_type_t metric, size_t intermediate_graph_degree, 
-                                 size_t graph_degree, const int* devices, uint32_t num_devices, uint32_t nthread, quantization_t qtype, bool force_mg, void* errmsg);
+                            distance_type_t metric, cagra_build_params_t build_params,
+                            const int* devices, int device_count, uint32_t nthread, 
+                            distribution_mode_t dist_mode, quantization_t qtype, void* errmsg);
 
 // Constructor for loading from file
-gpu_cagra_c gpu_cagra_new_from_file(const char* filename, uint32_t dimension, distance_type_t metric, 
-                                         const int* devices, uint32_t num_devices, uint32_t nthread, quantization_t qtype, bool force_mg, void* errmsg);
+gpu_cagra_c gpu_cagra_load_file(const char* filename, uint32_t dimension, distance_type_t metric,
+                                 const int* devices, int device_count, uint32_t nthread, 
+                                 distribution_mode_t dist_mode, quantization_t qtype, void* errmsg);
 
-void gpu_cagra_load(gpu_cagra_c index_c, void* errmsg);
-
-void gpu_cagra_save(gpu_cagra_c index_c, const char* filename, void* errmsg);
-
-// Performs search
-gpu_cagra_search_result_c gpu_cagra_search(gpu_cagra_c index_c, const void* queries_data, 
-                                           uint64_t num_queries, uint32_t query_dimension, 
-                                           uint32_t limit, size_t itopk_size, void* errmsg);
-
-// Retrieves the results from a search operation (converts uint32_t neighbors to int64_t)
-void gpu_cagra_get_results(gpu_cagra_search_result_c result_c, uint64_t num_queries, uint32_t limit, int64_t* neighbors, float* distances);
-
-void gpu_cagra_free_search_result(gpu_cagra_search_result_c result_c);
-
+// Destructor
 void gpu_cagra_destroy(gpu_cagra_c index_c, void* errmsg);
 
-// Extends the index with new vectors (only supported for single-GPU)
+// Load function (actually triggers the build/load logic)
+void gpu_cagra_load(gpu_cagra_c index_c, void* errmsg);
+
+// Save function
+void gpu_cagra_save(gpu_cagra_c index_c, const char* filename, void* errmsg);
+
+// Search function
+typedef struct {
+    gpu_cagra_result_c result_ptr;
+} gpu_cagra_search_res_t;
+
+gpu_cagra_search_res_t gpu_cagra_search(gpu_cagra_c index_c, const void* queries_data, uint64_t num_queries, 
+                                         uint32_t query_dimension, uint32_t limit, 
+                                         cagra_search_params_t search_params, void* errmsg);
+
+// Get results from result object
+void gpu_cagra_get_neighbors(gpu_cagra_result_c result_c, uint64_t total_elements, uint32_t* neighbors);
+void gpu_cagra_get_distances(gpu_cagra_result_c result_c, uint64_t total_elements, float* distances);
+
+// Free result object
+void gpu_cagra_free_result(gpu_cagra_result_c result_c);
+
+// Extend function
 void gpu_cagra_extend(gpu_cagra_c index_c, const void* additional_data, uint64_t num_vectors, void* errmsg);
 
-// Merges multiple single-GPU indices into one
-gpu_cagra_c gpu_cagra_merge(gpu_cagra_c* indices, uint32_t num_indices, uint32_t nthread, const int* devices, uint32_t num_devices, void* errmsg);
+// Merge function
+gpu_cagra_c gpu_cagra_merge(gpu_cagra_c* indices_c, int num_indices, uint32_t nthread, const int* devices, int device_count, void* errmsg);
 
 #ifdef __cplusplus
 }

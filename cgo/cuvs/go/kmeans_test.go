@@ -90,3 +90,63 @@ func TestGpuKMeans_FitPredict_Float16(t *testing.T) {
         t.Errorf("Expected %d labels, got %d", nSamples, len(labels))
     }
 }
+
+func TestGpuKMeans_Int8(t *testing.T) {
+    nClusters := uint32(2)
+    dimension := uint32(2)
+    nSamples := uint64(4)
+
+    dataset := []int8{
+        0, 0,
+        1, 1,
+        10, 10,
+        11, 11,
+    }
+
+    deviceID := 0
+    kmeans, err := NewGpuKMeans[int8](nClusters, dimension, L2Expanded, 20, deviceID, 1)
+    if err != nil {
+        t.Fatalf("Failed to create GpuKMeans: %v", err)
+    }
+    defer kmeans.Destroy()
+
+    labels, _, _, err := kmeans.FitPredict(dataset, nSamples)
+    if err != nil {
+        t.Fatalf("FitPredict failed: %v", err)
+    }
+    fmt.Printf("Int8 Predict labels: %v\n", labels)
+
+    if len(labels) != int(nSamples) {
+        t.Errorf("Expected %d labels, got %d", nSamples, len(labels))
+    }
+}
+
+func TestGpuKMeans_Uint8(t *testing.T) {
+    nClusters := uint32(2)
+    dimension := uint32(2)
+    nSamples := uint64(4)
+
+    dataset := []uint8{
+        0, 0,
+        1, 1,
+        10, 10,
+        11, 11,
+    }
+
+    deviceID := 0
+    kmeans, err := NewGpuKMeans[uint8](nClusters, dimension, L2Expanded, 20, deviceID, 1)
+    if err != nil {
+        t.Fatalf("Failed to create GpuKMeans: %v", err)
+    }
+    defer kmeans.Destroy()
+
+    labels, _, _, err := kmeans.FitPredict(dataset, nSamples)
+    if err != nil {
+        t.Fatalf("FitPredict failed: %v", err)
+    }
+    fmt.Printf("Uint8 Predict labels: %v\n", labels)
+
+    if len(labels) != int(nSamples) {
+        t.Errorf("Expected %d labels, got %d", nSamples, len(labels))
+    }
+}

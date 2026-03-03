@@ -16,42 +16,41 @@ import (
 )
 
 // GpuCagra represents the C++ gpu_cagra_t object.
-// It supports both single-GPU and sharded multi-GPU modes.
 type GpuCagra[T VectorType] struct {
-    cIndex C.gpu_cagra_c
+    cCagra    C.gpu_cagra_c
+    dimension uint32
 }
 
-// NewGpuCagra creates a new GpuCagra instance for building from dataset.
-// devices: List of GPU device IDs. If len(devices) == 1, it runs in single-GPU mode.
-// If len(devices) > 1, it shards the index across those GPUs.
-// force_mg: If true, forces the use of the sharded API even for a single device (useful for testing).
-func NewGpuCagra[T VectorType](dataset []T, count_vectors uint64, dimension uint32, metric DistanceType, intermediate_graph_degree uint32, graph_degree uint32, devices []int, nthread uint32, force_mg bool) (*GpuCagra[T], error) {
-    if len(dataset) == 0 || count_vectors == 0 || dimension == 0 {
-        return nil, fmt.Errorf("dataset, count_vectors, and dimension cannot be zero")
-    }
+// NewGpuCagra creates a new GpuCagra instance from a dataset.
+func NewGpuCagra[T VectorType](dataset []T, count uint64, dimension uint32, metric DistanceType, 
+                               bp CagraBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuCagra[T], error) {
     if len(devices) == 0 {
-        return nil, fmt.Errorf("devices list cannot be empty")
+        return nil, fmt.Errorf("at least one device must be specified")
     }
 
     qtype := GetQuantization[T]()
+    var errmsg *C.char
     cDevices := make([]C.int, len(devices))
-    for i, dev := range devices {
-        cDevices[i] = C.int(dev)
+    for i, d := range devices {
+        cDevices[i] = C.int(d)
     }
 
-    var errmsg *C.char
-    cIndex := C.gpu_cagra_new(
+    cBP := C.cagra_build_params_t{
+        intermediate_graph_degree: C.size_t(bp.IntermediateGraphDegree),
+        graph_degree:              C.size_t(bp.GraphDegree),
+    }
+
+    cCagra := C.gpu_cagra_new(
         unsafe.Pointer(&dataset[0]),
-        C.uint64_t(count_vectors),
+        C.uint64_t(count),
         C.uint32_t(dimension),
         C.distance_type_t(metric),
-        C.size_t(intermediate_graph_degree),
-        C.size_t(graph_degree),
+        cBP,
         &cDevices[0],
-        C.uint32_t(len(devices)),
+        C.int(len(devices)),
         C.uint32_t(nthread),
+        C.distribution_mode_t(mode),
         C.quantization_t(qtype),
-        C.bool(force_mg),
         unsafe.Pointer(&errmsg),
     )
     runtime.KeepAlive(dataset)
@@ -63,40 +62,39 @@ func NewGpuCagra[T VectorType](dataset []T, count_vectors uint64, dimension uint
         return nil, fmt.Errorf("%s", errStr)
     }
 
-    if cIndex == nil {
+    if cCagra == nil {
         return nil, fmt.Errorf("failed to create GpuCagra")
     }
-    return &GpuCagra[T]{cIndex: cIndex}, nil
+
+    return &GpuCagra[T]{cCagra: cCagra, dimension: dimension}, nil
 }
 
-// NewGpuCagraFromFile creates a new GpuCagra instance for loading from file.
-func NewGpuCagraFromFile[T VectorType](filename string, dimension uint32, metric DistanceType, devices []int, nthread uint32, force_mg bool) (*GpuCagra[T], error) {
-    if filename == "" || dimension == 0 {
-        return nil, fmt.Errorf("filename and dimension cannot be empty or zero")
-    }
+// NewGpuCagraFromFile creates a new GpuCagra instance by loading from a file.
+func NewGpuCagraFromFile[T VectorType](filename string, dimension uint32, metric DistanceType, 
+                                       devices []int, nthread uint32, mode DistributionMode) (*GpuCagra[T], error) {
     if len(devices) == 0 {
-        return nil, fmt.Errorf("devices list cannot be empty")
+        return nil, fmt.Errorf("at least one device must be specified")
     }
 
     qtype := GetQuantization[T]()
-    c_filename := C.CString(filename)
-    defer C.free(unsafe.Pointer(c_filename))
+    var errmsg *C.char
+    cFilename := C.CString(filename)
+    defer C.free(unsafe.Pointer(cFilename))
 
     cDevices := make([]C.int, len(devices))
-    for i, dev := range devices {
-        cDevices[i] = C.int(dev)
+    for i, d := range devices {
+        cDevices[i] = C.int(d)
     }
 
-    var errmsg *C.char
-    cIndex := C.gpu_cagra_new_from_file(
-        c_filename,
+    cCagra := C.gpu_cagra_load_file(
+        cFilename,
         C.uint32_t(dimension),
         C.distance_type_t(metric),
         &cDevices[0],
-        C.uint32_t(len(devices)),
+        C.int(len(devices)),
         C.uint32_t(nthread),
+        C.distribution_mode_t(mode),
         C.quantization_t(qtype),
-        C.bool(force_mg),
         unsafe.Pointer(&errmsg),
     )
     runtime.KeepAlive(cDevices)
@@ -107,96 +105,21 @@ func NewGpuCagraFromFile[T VectorType](filename string, dimension uint32, metric
         return nil, fmt.Errorf("%s", errStr)
     }
 
-    if cIndex == nil {
-        return nil, fmt.Errorf("failed to create GpuCagra from file")
+    if cCagra == nil {
+        return nil, fmt.Errorf("failed to load GpuCagra from file")
     }
-    return &GpuCagra[T]{cIndex: cIndex}, nil
+
+    return &GpuCagra[T]{cCagra: cCagra, dimension: dimension}, nil
 }
 
-// Load loads the index to the GPU
-func (gbi *GpuCagra[T]) Load() error {
-    if gbi.cIndex == nil {
-        return fmt.Errorf("GpuCagra is not initialized")
-    }
-    var errmsg *C.char
-    C.gpu_cagra_load(gbi.cIndex, unsafe.Pointer(&errmsg))
-    if errmsg != nil {
-        errStr := C.GoString(errmsg)
-        C.free(unsafe.Pointer(errmsg))
-        return fmt.Errorf("%s", errStr)
-    }
-    return nil
-}
-
-// Save saves the index to file
-func (gbi *GpuCagra[T]) Save(filename string) error {
-    if gbi.cIndex == nil {
-        return fmt.Errorf("GpuCagra is not initialized")
-    }
-    c_filename := C.CString(filename)
-    defer C.free(unsafe.Pointer(c_filename))
-
-    var errmsg *C.char
-    C.gpu_cagra_save(gbi.cIndex, c_filename, unsafe.Pointer(&errmsg))
-    if errmsg != nil {
-        errStr := C.GoString(errmsg)
-        C.free(unsafe.Pointer(errmsg))
-        return fmt.Errorf("%s", errStr)
-    }
-    return nil
-}
-
-// Search performs a search operation
-func (gbi *GpuCagra[T]) Search(queries []T, num_queries uint64, query_dimension uint32, limit uint32, itopk_size uint32) ([]int64, []float32, error) {
-	if gbi.cIndex == nil {
-		return nil, nil, fmt.Errorf("GpuCagra is not initialized")
-	}
-	if len(queries) == 0 || num_queries == 0 || query_dimension == 0 {
-		return nil, nil, fmt.Errorf("queries, num_queries, and query_dimension cannot be zero")
-	}
-
-	var errmsg *C.char
-	cResult := C.gpu_cagra_search(
-		gbi.cIndex,
-		unsafe.Pointer(&queries[0]),
-		C.uint64_t(num_queries),
-		C.uint32_t(query_dimension),
-		C.uint32_t(limit),
-        C.size_t(itopk_size),
-		unsafe.Pointer(&errmsg),
-	)
-    runtime.KeepAlive(queries)
-
-	if errmsg != nil {
-		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
-		return nil, nil, fmt.Errorf("%s", errStr)
-	}
-	if cResult == nil {
-		return nil, nil, fmt.Errorf("search returned nil result")
-	}
-
-	// Allocate slices for results
-	neighbors := make([]int64, num_queries*uint64(limit))
-	distances := make([]float32, num_queries*uint64(limit))
-
-	C.gpu_cagra_get_results(cResult, C.uint64_t(num_queries), C.uint32_t(limit), (*C.int64_t)(unsafe.Pointer(&neighbors[0])), (*C.float)(unsafe.Pointer(&distances[0])))
-    runtime.KeepAlive(neighbors)
-    runtime.KeepAlive(distances)
-
-	C.gpu_cagra_free_search_result(cResult);
-
-	return neighbors, distances, nil
-}
-
-// Destroy frees the C++ GpuCagra instance
-func (gbi *GpuCagra[T]) Destroy() error {
-    if gbi.cIndex == nil {
+// Destroy frees the C++ gpu_cagra_t instance
+func (gc *GpuCagra[T]) Destroy() error {
+    if gc.cCagra == nil {
         return nil
     }
     var errmsg *C.char
-    C.gpu_cagra_destroy(gbi.cIndex, unsafe.Pointer(&errmsg))
-    gbi.cIndex = nil
+    C.gpu_cagra_destroy(gc.cCagra, unsafe.Pointer(&errmsg))
+    gc.cCagra = nil
     if errmsg != nil {
         errStr := C.GoString(errmsg)
         C.free(unsafe.Pointer(errmsg))
@@ -205,23 +128,109 @@ func (gbi *GpuCagra[T]) Destroy() error {
     return nil
 }
 
-// Extend adds new vectors to the existing index (single-GPU only)
-func (gbi *GpuCagra[T]) Extend(additional_data []T, num_vectors uint64) error {
-    if gbi.cIndex == nil {
+// Load triggers the build or file loading process
+func (gc *GpuCagra[T]) Load() error {
+    if gc.cCagra == nil {
         return fmt.Errorf("GpuCagra is not initialized")
     }
-    if len(additional_data) == 0 || num_vectors == 0 {
+    var errmsg *C.char
+    C.gpu_cagra_load(gc.cCagra, unsafe.Pointer(&errmsg))
+    if errmsg != nil {
+        errStr := C.GoString(errmsg)
+        C.free(unsafe.Pointer(errmsg))
+        return fmt.Errorf("%s", errStr)
+    }
+    return nil
+}
+
+// Save serializes the index to a file
+func (gc *GpuCagra[T]) Save(filename string) error {
+    if gc.cCagra == nil {
+        return fmt.Errorf("GpuCagra is not initialized")
+    }
+    var errmsg *C.char
+    cFilename := C.CString(filename)
+    defer C.free(unsafe.Pointer(cFilename))
+
+    C.gpu_cagra_save(gc.cCagra, cFilename, unsafe.Pointer(&errmsg))
+    if errmsg != nil {
+        errStr := C.GoString(errmsg)
+        C.free(unsafe.Pointer(errmsg))
+        return fmt.Errorf("%s", errStr)
+    }
+    return nil
+}
+
+// Search performs a K-Nearest Neighbor search
+func (gc *GpuCagra[T]) Search(queries []T, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) (SearchResult, error) {
+    if gc.cCagra == nil {
+        return SearchResult{}, fmt.Errorf("GpuCagra is not initialized")
+    }
+    if len(queries) == 0 || numQueries == 0 {
+        return SearchResult{}, nil
+    }
+
+    var errmsg *C.char
+    cSP := C.cagra_search_params_t{
+        itopk_size:   C.size_t(sp.ItopkSize),
+        search_width: C.size_t(sp.SearchWidth),
+    }
+
+    res := C.gpu_cagra_search(
+        gc.cCagra,
+        unsafe.Pointer(&queries[0]),
+        C.uint64_t(numQueries),
+        C.uint32_t(dimension),
+        C.uint32_t(limit),
+        cSP,
+        unsafe.Pointer(&errmsg),
+    )
+    runtime.KeepAlive(queries)
+
+    if errmsg != nil {
+        errStr := C.GoString(errmsg)
+        C.free(unsafe.Pointer(errmsg))
+        return SearchResult{}, fmt.Errorf("%s", errStr)
+    }
+
+    if res.result_ptr == nil {
+        return SearchResult{}, fmt.Errorf("search returned nil result")
+    }
+
+    totalElements := uint64(numQueries) * uint64(limit)
+    neighbors := make([]uint32, totalElements)
+    distances := make([]float32, totalElements)
+
+    C.gpu_cagra_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.uint32_t)(unsafe.Pointer(&neighbors[0])))
+    C.gpu_cagra_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(unsafe.Pointer(&distances[0])))
+    runtime.KeepAlive(neighbors)
+    runtime.KeepAlive(distances)
+
+    C.gpu_cagra_free_result(res.result_ptr)
+
+    return SearchResult{
+        Neighbors: neighbors,
+        Distances: distances,
+    }, nil
+}
+
+// Extend adds more vectors to the index (single-GPU only)
+func (gc *GpuCagra[T]) Extend(additionalData []T, numVectors uint64) error {
+    if gc.cCagra == nil {
+        return fmt.Errorf("GpuCagra is not initialized")
+    }
+    if len(additionalData) == 0 || numVectors == 0 {
         return nil
     }
 
     var errmsg *C.char
     C.gpu_cagra_extend(
-        gbi.cIndex,
-        unsafe.Pointer(&additional_data[0]),
-        C.uint64_t(num_vectors),
+        gc.cCagra,
+        unsafe.Pointer(&additionalData[0]),
+        C.uint64_t(numVectors),
         unsafe.Pointer(&errmsg),
     )
-    runtime.KeepAlive(additional_data)
+    runtime.KeepAlive(additionalData)
 
     if errmsg != nil {
         errStr := C.GoString(errmsg)
@@ -231,39 +240,35 @@ func (gbi *GpuCagra[T]) Extend(additional_data []T, num_vectors uint64) error {
     return nil
 }
 
-// MergeCagra merges multiple single-GPU CAGRA indices into a single one.
-func MergeCagra[T VectorType](indices []*GpuCagra[T], devices []int, nthread uint32) (*GpuCagra[T], error) {
+// Merge combines multiple single-GPU GpuCagra indices into a new one.
+func MergeGpuCagra[T VectorType](indices []*GpuCagra[T], nthread uint32, devices []int) (*GpuCagra[T], error) {
     if len(indices) == 0 {
-        return nil, fmt.Errorf("indices list cannot be empty")
+        return nil, fmt.Errorf("no indices to merge")
     }
     if len(devices) == 0 {
-        return nil, fmt.Errorf("devices list cannot be empty")
+        return nil, fmt.Errorf("at least one device must be specified")
     }
 
     cIndices := make([]C.gpu_cagra_c, len(indices))
     for i, idx := range indices {
-        if idx.cIndex == nil {
-            return nil, fmt.Errorf("index at position %d is nil or destroyed", i)
-        }
-        cIndices[i] = idx.cIndex
+        cIndices[i] = idx.cCagra
     }
 
     cDevices := make([]C.int, len(devices))
-    for i, dev := range devices {
-        cDevices[i] = C.int(dev)
+    for i, d := range devices {
+        cDevices[i] = C.int(d)
     }
 
     var errmsg *C.char
-    cMergedIndex := C.gpu_cagra_merge(
+    cCagra := C.gpu_cagra_merge(
         &cIndices[0],
-        C.uint32_t(len(indices)),
+        C.int(len(indices)),
         C.uint32_t(nthread),
         &cDevices[0],
-        C.uint32_t(len(devices)),
+        C.int(len(devices)),
         unsafe.Pointer(&errmsg),
     )
     runtime.KeepAlive(cIndices)
-    runtime.KeepAlive(indices)
     runtime.KeepAlive(cDevices)
 
     if errmsg != nil {
@@ -272,9 +277,15 @@ func MergeCagra[T VectorType](indices []*GpuCagra[T], devices []int, nthread uin
         return nil, fmt.Errorf("%s", errStr)
     }
 
-    if cMergedIndex == nil {
-        return nil, fmt.Errorf("failed to merge CAGRA indices")
+    if cCagra == nil {
+        return nil, fmt.Errorf("failed to merge GpuCagra indices")
     }
 
-    return &GpuCagra[T]{cIndex: cMergedIndex}, nil
+    return &GpuCagra[T]{cCagra: cCagra, dimension: indices[0].dimension}, nil
+}
+
+// SearchResult contains the neighbors and distances from a search.
+type SearchResult struct {
+	Neighbors []uint32
+	Distances []float32
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cuvs_worker.hpp" // For cuvs_worker_t and raft_handle_wrapper_t
+#include "../c/helper.h"   // For distance_type_t and ivf_flat_build_params_t
 #include <raft/util/cudart_utils.hpp> // For RAFT_CUDA_TRY
 #include <cuda_fp16.h> // For half
 
@@ -58,7 +59,9 @@ public:
     cuvs::distance::DistanceType metric;
     uint32_t dimension;
     uint32_t count;
-    uint32_t n_list;
+    ivf_flat_build_params_t build_params;
+    distribution_mode_t dist_mode;
+
     std::unique_ptr<cuvs_worker_t> worker;
     std::shared_mutex mutex_;
     bool is_loaded_ = false;
@@ -68,11 +71,13 @@ public:
     }
 
     // Unified Constructor for building from dataset
-    gpu_ivf_flat_t(const T* dataset_data, uint64_t count_vectors, uint32_t dimension, cuvs::distance::DistanceType m,
-                    uint32_t n_list, const std::vector<int>& devices, uint32_t nthread, bool force_mg = false)
+    gpu_ivf_flat_t(const T* dataset_data, uint64_t count_vectors, uint32_t dimension, 
+                    cuvs::distance::DistanceType m, const ivf_flat_build_params_t& bp, 
+                    const std::vector<int>& devices, uint32_t nthread, distribution_mode_t mode)
         : dimension(dimension), count(static_cast<uint32_t>(count_vectors)), metric(m), 
-          n_list(n_list), devices_(devices) {
+          build_params(bp), dist_mode(mode), devices_(devices) {
         
+        bool force_mg = (mode == DistributionMode_SHARDED || mode == DistributionMode_REPLICATED);
         worker = std::make_unique<cuvs_worker_t>(nthread, devices_, force_mg || (devices_.size() > 1));
 
         flattened_host_dataset.resize(count * dimension);
@@ -81,10 +86,13 @@ public:
 
     // Unified Constructor for loading from file
     gpu_ivf_flat_t(const std::string& filename, uint32_t dimension, cuvs::distance::DistanceType m, 
-                    const std::vector<int>& devices, uint32_t nthread, bool force_mg = false)
-        : filename_(filename), dimension(dimension), metric(m), count(0), n_list(0), devices_(devices) {
+                    const std::vector<int>& devices, uint32_t nthread, distribution_mode_t mode)
+        : filename_(filename), dimension(dimension), metric(m), count(0), 
+          dist_mode(mode), devices_(devices) {
         
+        bool force_mg = (mode == DistributionMode_SHARDED || mode == DistributionMode_REPLICATED);
         worker = std::make_unique<cuvs_worker_t>(nthread, devices_, force_mg || (devices_.size() > 1));
+        build_params = {1024}; // Default values
     }
 
     void load() {
@@ -108,7 +116,7 @@ public:
                         if (iface.index_.has_value()) count += static_cast<uint32_t>(iface.index_.value().size());
                     }
                     if (!mg_index_->ann_interfaces_.empty() && mg_index_->ann_interfaces_[0].index_.has_value()) {
-                        n_list = static_cast<uint32_t>(mg_index_->ann_interfaces_[0].index_.value().n_lists());
+                        build_params.n_lists = static_cast<uint32_t>(mg_index_->ann_interfaces_[0].index_.value().n_lists());
                     }
                 } else {
                     cuvs::neighbors::ivf_flat::index_params index_params;
@@ -116,13 +124,13 @@ public:
                     index_ = std::make_unique<ivf_flat_index>(*res, index_params, dimension);
                     cuvs::neighbors::ivf_flat::deserialize(*res, filename_, index_.get());
                     count = static_cast<uint32_t>(index_->size());
-                    n_list = static_cast<uint32_t>(index_->n_lists());
+                    build_params.n_lists = static_cast<uint32_t>(index_->n_lists());
                 }
                 raft::resource::sync_stream(*res);
             } else if (!flattened_host_dataset.empty()) {
-                if (count < n_list) {
+                if (count < build_params.n_lists) {
                     throw std::runtime_error("Dataset too small: count (" + std::to_string(count) + 
-                                            ") must be >= n_list (" + std::to_string(n_list) + 
+                                            ") must be >= n_list (" + std::to_string(build_params.n_lists) + 
                                             ") to build IVF index.");
                 }
 
@@ -132,10 +140,14 @@ public:
 
                     cuvs::neighbors::ivf_flat::index_params index_params;
                     index_params.metric = metric;
-                    index_params.n_lists = n_list;
+                    index_params.n_lists = build_params.n_lists;
 
                     cuvs::neighbors::mg_index_params<cuvs::neighbors::ivf_flat::index_params> mg_params(index_params);
-                    mg_params.mode = cuvs::neighbors::distribution_mode::SHARDED;
+                    if (dist_mode == DistributionMode_REPLICATED) {
+                        mg_params.mode = cuvs::neighbors::distribution_mode::REPLICATED;
+                    } else {
+                        mg_params.mode = cuvs::neighbors::distribution_mode::SHARDED;
+                    }
 
                     mg_index_ = std::make_unique<mg_index>(
                         cuvs::neighbors::ivf_flat::build(*res, mg_params, dataset_host_view));
@@ -149,7 +161,7 @@ public:
 
                     cuvs::neighbors::ivf_flat::index_params index_params;
                     index_params.metric = metric;
-                    index_params.n_lists = n_list;
+                    index_params.n_lists = build_params.n_lists;
 
                     index_ = std::make_unique<ivf_flat_index>(
                         cuvs::neighbors::ivf_flat::build(*res, index_params, raft::make_const_mdspan(dataset_device.view())));
@@ -199,13 +211,13 @@ public:
     };
 
     search_result_t search(const T* queries_data, uint64_t num_queries, uint32_t query_dimension, 
-                        uint32_t limit, uint32_t n_probes) {
+                        uint32_t limit, const ivf_flat_search_params_t& sp) {
         if (!queries_data || num_queries == 0 || dimension == 0) return search_result_t{};
         if (query_dimension != dimension) throw std::runtime_error("dimension mismatch");
         if (!is_loaded_ || (!index_ && !mg_index_)) return search_result_t{};
 
         uint64_t job_id = worker->submit(
-            [&, num_queries, limit, n_probes](raft_handle_wrapper_t& handle) -> std::any {
+            [&, num_queries, limit, sp](raft_handle_wrapper_t& handle) -> std::any {
                 std::shared_lock<std::shared_mutex> lock(mutex_);
                 auto res = handle.get_raft_resources();
 
@@ -214,7 +226,7 @@ public:
                 search_res.distances.resize(num_queries * limit);
 
                 cuvs::neighbors::ivf_flat::search_params search_params;
-                search_params.n_probes = n_probes;
+                search_params.n_probes = sp.n_probes;
 
                 if (is_snmg_handle(res)) {
                     auto queries_host_view = raft::make_host_matrix_view<const T, int64_t>(
@@ -304,6 +316,19 @@ public:
         cuvs_task_result_t result = worker->wait(job_id).get();
         if (result.error) std::rethrow_exception(result.error);
         return std::any_cast<std::vector<T>>(result.result);
+    }
+
+    uint32_t get_n_list() {
+        std::shared_lock<std::shared_mutex> lock(mutex_);
+        if (!is_loaded_) return build_params.n_lists;
+        
+        if (index_) return static_cast<uint32_t>(index_->n_lists());
+        if (mg_index_) {
+            for (const auto& iface : mg_index_->ann_interfaces_) {
+                if (iface.index_.has_value()) return static_cast<uint32_t>(iface.index_.value().n_lists());
+            }
+        }
+        return build_params.n_lists;
     }
 
     void destroy() {

@@ -136,7 +136,7 @@ TEST(GpuBruteForceTest, LargeLimit) {
 
     ASSERT_EQ(result.neighbors.size(), (size_t)limit);
     for (int i = 0; i < 5; ++i) ASSERT_GE(result.neighbors[i], 0);
-    for (int i = 5; i < 10; ++i) ASSERT_EQ(result.neighbors[i], -1);
+    for (int i = 5; i < 10; ++i) ASSERT_EQ((int64_t)result.neighbors[i], (int64_t)-1);
 
     index.destroy();
 }
@@ -145,7 +145,7 @@ TEST(GpuBruteForceTest, LargeLimit) {
 
 TEST(CuvsWorkerTest, BruteForceSearch) {
     uint32_t n_threads = 1;
-    cuvs_worker_t worker(n_threads);
+    cuvs_worker_t worker(n_threads, 0); // Added device_id
     worker.start();
 
     const uint32_t dimension = 128;
@@ -186,7 +186,7 @@ TEST(CuvsWorkerTest, ConcurrentSearches) {
         futures.push_back(std::async(std::launch::async, [&index, dimension, &dataset, i]() {
             std::vector<float> query = std::vector<float>(dataset.begin() + i * dimension, dataset.begin() + (i + 1) * dimension);
             auto res = index.search(query.data(), 1, dimension, 1);
-            ASSERT_EQ(res.neighbors[0], i);
+            ASSERT_EQ(res.neighbors[0], (int64_t)i);
         }));
     }
 

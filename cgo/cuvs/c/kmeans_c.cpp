@@ -42,6 +42,8 @@ struct gpu_kmeans_any_t {
         switch (qtype) {
             case Quantization_F32: delete static_cast<matrixone::gpu_kmeans_t<float>*>(ptr); break;
             case Quantization_F16: delete static_cast<matrixone::gpu_kmeans_t<half>*>(ptr); break;
+            case Quantization_INT8: delete static_cast<matrixone::gpu_kmeans_t<int8_t>*>(ptr); break;
+            case Quantization_UINT8: delete static_cast<matrixone::gpu_kmeans_t<uint8_t>*>(ptr); break;
             default: break;
         }
     }
@@ -62,6 +64,12 @@ gpu_kmeans_c gpu_kmeans_new(uint32_t n_clusters, uint32_t dimension, distance_ty
                 break;
             case Quantization_F16:
                 kmeans_ptr = new matrixone::gpu_kmeans_t<half>(n_clusters, dimension, metric, max_iter, device_id, nthread);
+                break;
+            case Quantization_INT8:
+                kmeans_ptr = new matrixone::gpu_kmeans_t<int8_t>(n_clusters, dimension, metric, max_iter, device_id, nthread);
+                break;
+            case Quantization_UINT8:
+                kmeans_ptr = new matrixone::gpu_kmeans_t<uint8_t>(n_clusters, dimension, metric, max_iter, device_id, nthread);
                 break;
             default:
                 throw std::runtime_error("Unsupported quantization type for KMeans");
@@ -97,7 +105,19 @@ gpu_kmeans_fit_res_t gpu_kmeans_fit(gpu_kmeans_c kmeans_c, const void* X_data, u
             }
             case Quantization_F16: {
                 auto cpp_res = static_cast<matrixone::gpu_kmeans_t<half>*>(any->ptr)->fit(static_cast<const half*>(X_data), n_samples);
-                res.inertia = (float)cpp_res.inertia;
+                res.inertia = cpp_res.inertia;
+                res.n_iter = cpp_res.n_iter;
+                break;
+            }
+            case Quantization_INT8: {
+                auto cpp_res = static_cast<matrixone::gpu_kmeans_t<int8_t>*>(any->ptr)->fit(static_cast<const int8_t*>(X_data), n_samples);
+                res.inertia = cpp_res.inertia;
+                res.n_iter = cpp_res.n_iter;
+                break;
+            }
+            case Quantization_UINT8: {
+                auto cpp_res = static_cast<matrixone::gpu_kmeans_t<uint8_t>*>(any->ptr)->fit(static_cast<const uint8_t*>(X_data), n_samples);
+                res.inertia = cpp_res.inertia;
                 res.n_iter = cpp_res.n_iter;
                 break;
             }
@@ -126,7 +146,21 @@ gpu_kmeans_predict_res_t gpu_kmeans_predict(gpu_kmeans_c kmeans_c, const void* X
                 auto* cpp_res = new matrixone::gpu_kmeans_t<half>::predict_result_t();
                 *cpp_res = static_cast<matrixone::gpu_kmeans_t<half>*>(any->ptr)->predict(static_cast<const half*>(X_data), n_samples);
                 res.result_ptr = static_cast<gpu_kmeans_result_c>(cpp_res);
-                res.inertia = (float)cpp_res->inertia;
+                res.inertia = cpp_res->inertia;
+                break;
+            }
+            case Quantization_INT8: {
+                auto* cpp_res = new matrixone::gpu_kmeans_t<int8_t>::predict_result_t();
+                *cpp_res = static_cast<matrixone::gpu_kmeans_t<int8_t>*>(any->ptr)->predict(static_cast<const int8_t*>(X_data), n_samples);
+                res.result_ptr = static_cast<gpu_kmeans_result_c>(cpp_res);
+                res.inertia = cpp_res->inertia;
+                break;
+            }
+            case Quantization_UINT8: {
+                auto* cpp_res = new matrixone::gpu_kmeans_t<uint8_t>::predict_result_t();
+                *cpp_res = static_cast<matrixone::gpu_kmeans_t<uint8_t>*>(any->ptr)->predict(static_cast<const uint8_t*>(X_data), n_samples);
+                res.result_ptr = static_cast<gpu_kmeans_result_c>(cpp_res);
+                res.inertia = cpp_res->inertia;
                 break;
             }
             default: break;
@@ -155,7 +189,23 @@ gpu_kmeans_fit_predict_res_t gpu_kmeans_fit_predict(gpu_kmeans_c kmeans_c, const
                 auto* cpp_res = new matrixone::gpu_kmeans_t<half>::fit_predict_result_t();
                 *cpp_res = static_cast<matrixone::gpu_kmeans_t<half>*>(any->ptr)->fit_predict(static_cast<const half*>(X_data), n_samples);
                 res.result_ptr = static_cast<gpu_kmeans_result_c>(cpp_res);
-                res.inertia = (float)cpp_res->inertia;
+                res.inertia = cpp_res->inertia;
+                res.n_iter = cpp_res->n_iter;
+                break;
+            }
+            case Quantization_INT8: {
+                auto* cpp_res = new matrixone::gpu_kmeans_t<int8_t>::fit_predict_result_t();
+                *cpp_res = static_cast<matrixone::gpu_kmeans_t<int8_t>*>(any->ptr)->fit_predict(static_cast<const int8_t*>(X_data), n_samples);
+                res.result_ptr = static_cast<gpu_kmeans_result_c>(cpp_res);
+                res.inertia = cpp_res->inertia;
+                res.n_iter = cpp_res->n_iter;
+                break;
+            }
+            case Quantization_UINT8: {
+                auto* cpp_res = new matrixone::gpu_kmeans_t<uint8_t>::fit_predict_result_t();
+                *cpp_res = static_cast<matrixone::gpu_kmeans_t<uint8_t>*>(any->ptr)->fit_predict(static_cast<const uint8_t*>(X_data), n_samples);
+                res.result_ptr = static_cast<gpu_kmeans_result_c>(cpp_res);
+                res.inertia = cpp_res->inertia;
                 res.n_iter = cpp_res->n_iter;
                 break;
             }
@@ -178,7 +228,6 @@ void gpu_kmeans_get_labels(gpu_kmeans_result_c result_c, uint64_t n_samples, int
 
 void gpu_kmeans_free_result(gpu_kmeans_result_c result_c) {
     if (!result_c) return;
-    // Using float's predict_result_t is safe as labels is same
     delete static_cast<matrixone::gpu_kmeans_t<float>::predict_result_t*>(result_c);
 }
 
@@ -194,7 +243,17 @@ void gpu_kmeans_get_centroids(gpu_kmeans_c kmeans_c, void* centroids, void* errm
             }
             case Quantization_F16: {
                 auto host_centroids = static_cast<matrixone::gpu_kmeans_t<half>*>(any->ptr)->get_centroids();
-                std::copy(host_centroids.begin(), host_centroids.end(), static_cast<half*>(centroids));
+                std::copy(host_centroids.begin(), host_centroids.end(), static_cast<float*>(centroids));
+                break;
+            }
+            case Quantization_INT8: {
+                auto host_centroids = static_cast<matrixone::gpu_kmeans_t<int8_t>*>(any->ptr)->get_centroids();
+                std::copy(host_centroids.begin(), host_centroids.end(), static_cast<float*>(centroids));
+                break;
+            }
+            case Quantization_UINT8: {
+                auto host_centroids = static_cast<matrixone::gpu_kmeans_t<uint8_t>*>(any->ptr)->get_centroids();
+                std::copy(host_centroids.begin(), host_centroids.end(), static_cast<float*>(centroids));
                 break;
             }
             default: break;

@@ -37,6 +37,63 @@ const (
     UINT8 Quantization = C.Quantization_UINT8
 )
 
+// DistributionMode maps to C.distribution_mode_t
+type DistributionMode C.distribution_mode_t
+
+const (
+    SingleGpu  DistributionMode = C.DistributionMode_SINGLE_GPU
+    Sharded    DistributionMode = C.DistributionMode_SHARDED
+    Replicated DistributionMode = C.DistributionMode_REPLICATED
+)
+
+// CagraBuildParams maps to C.cagra_build_params_t
+type CagraBuildParams struct {
+    IntermediateGraphDegree uint64
+    GraphDegree             uint64
+}
+
+func DefaultCagraBuildParams() CagraBuildParams {
+    return CagraBuildParams{
+        IntermediateGraphDegree: 128,
+        GraphDegree:             64,
+    }
+}
+
+// CagraSearchParams maps to C.cagra_search_params_t
+type CagraSearchParams struct {
+    ItopkSize   uint64
+    SearchWidth uint64
+}
+
+func DefaultCagraSearchParams() CagraSearchParams {
+    return CagraSearchParams{
+        ItopkSize:   64,
+        SearchWidth: 1,
+    }
+}
+
+// IvfFlatBuildParams maps to C.ivf_flat_build_params_t
+type IvfFlatBuildParams struct {
+    NLists uint32
+}
+
+func DefaultIvfFlatBuildParams() IvfFlatBuildParams {
+    return IvfFlatBuildParams{
+        NLists: 1024,
+    }
+}
+
+// IvfFlatSearchParams maps to C.ivf_flat_search_params_t
+type IvfFlatSearchParams struct {
+    NProbes uint32
+}
+
+func DefaultIvfFlatSearchParams() IvfFlatSearchParams {
+    return IvfFlatSearchParams{
+        NProbes: 20,
+    }
+}
+
 // Float16 is a 16-bit floating point type (IEEE 754-2008).
 // Go does not have a native float16 type, so we use uint16 to represent its memory layout.
 type Float16 uint16

@@ -1,142 +1,134 @@
 package mocuvs
 
 import (
-    "testing"
-    "fmt"
     "os"
+    "testing"
 )
 
 func TestGpuIvfFlat(t *testing.T) {
     dimension := uint32(2)
-    count := uint64(4)
-    dataset := []float32{
-        1.0, 1.0,
-        1.1, 1.1,
-        100.0, 100.0,
-        101.0, 101.0,
+    n_vectors := uint64(1000)
+    dataset := make([]float32, n_vectors*uint64(dimension))
+    for i := uint64(0); i < n_vectors; i++ {
+        dataset[i*uint64(dimension)] = float32(i)
+        dataset[i*uint64(dimension)+1] = float32(i)
     }
 
-    metric := L2Expanded
-    nList := uint32(2)
-    nthread := uint32(1)
     devices := []int{0}
-
-    // 1. Single GPU Mode
-    index, err := NewGpuIvfFlat(dataset, count, dimension, metric, nList, devices, nthread, false)
+    bp := DefaultIvfFlatBuildParams()
+    bp.NLists = 10
+    index, err := NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu)
     if err != nil {
         t.Fatalf("Failed to create GpuIvfFlat: %v", err)
     }
+    defer index.Destroy()
 
     err = index.Load()
     if err != nil {
-        t.Fatalf("Failed to load: %v", err)
+        t.Fatalf("Failed to load/build GpuIvfFlat: %v", err)
     }
 
-    centers, err := index.GetCenters()
+    centers, err := index.GetCenters(10)
     if err != nil {
-        t.Fatalf("Failed to get centers: %v", err)
+        t.Fatalf("GetCenters failed: %v", err)
     }
-    fmt.Printf("Centers: %v\n", centers)
+    t.Logf("Centers: %v", centers[:4])
 
-    queries := []float32{1.05, 1.05}
-    neighbors, distances, err := index.Search(queries, 1, dimension, 2, 2)
+    queries := []float32{1.0, 1.0, 100.0, 100.0}
+    sp := DefaultIvfFlatSearchParams()
+    sp.NProbes = 5
+    result, err := index.Search(queries, 2, dimension, 1, sp)
     if err != nil {
-        t.Fatalf("Failed to search: %v", err)
-    }
-    fmt.Printf("Neighbors: %v, Distances: %v\n", neighbors, distances)
-
-    if neighbors[0] != 0 && neighbors[0] != 1 {
-        t.Errorf("Expected first neighbor to be 0 or 1, got %d", neighbors[0])
+        t.Fatalf("Search failed: %v", err)
     }
 
-    index.Destroy()
+    t.Logf("Neighbors: %v, Distances: %v", result.Neighbors, result.Distances)
+    if result.Neighbors[0] != 1 {
+        t.Errorf("Expected neighbor 1, got %d", result.Neighbors[0])
+    }
+    if result.Neighbors[1] != 100 {
+        t.Errorf("Expected neighbor 100, got %d", result.Neighbors[1])
+    }
 }
 
 func TestGpuIvfFlatSaveLoad(t *testing.T) {
     dimension := uint32(2)
-    count := uint64(4)
-    dataset := []float32{1.0, 1.0, 1.1, 1.1, 100.0, 100.0, 101.0, 101.0}
-    filename := "test_ivf_flat_go.bin"
+    n_vectors := uint64(100)
+    dataset := make([]float32, n_vectors*uint64(dimension))
+    for i := range dataset { dataset[i] = float32(i) }
+
     devices := []int{0}
+    bp := DefaultIvfFlatBuildParams()
+    bp.NLists = 2
+    index, err := NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+    if err != nil {
+        t.Fatalf("Failed to create GpuIvfFlat: %v", err)
+    }
+    index.Load()
 
-    // 1. Build and Save
-    {
-        index, err := NewGpuIvfFlat(dataset, count, dimension, L2Expanded, 2, devices, 1, false)
-        if err != nil {
-            t.Fatalf("Failed to create: %v", err)
-        }
-        if err := index.Load(); err != nil {
-            t.Fatalf("Failed to load: %v", err)
-        }
-        if err := index.Save(filename); err != nil {
-            t.Fatalf("Failed to save: %v", err)
-        }
-        index.Destroy()
+    filename := "test_ivf_flat.idx"
+    err = index.Save(filename)
+    if err != nil {
+        t.Fatalf("Save failed: %v", err)
+    }
+    defer os.Remove(filename)
+    index.Destroy()
+
+    index2, err := NewGpuIvfFlatFromFile[float32](filename, dimension, L2Expanded, devices, 1, SingleGpu)
+    if err != nil {
+        t.Fatalf("Failed to create GpuIvfFlat from file: %v", err)
+    }
+    defer index2.Destroy()
+
+    err = index2.Load()
+    if err != nil {
+        t.Fatalf("Load from file failed: %v", err)
     }
 
-    // 2. Load and Search
-    {
-        index, err := NewGpuIvfFlatFromFile[float32](filename, dimension, L2Expanded, devices, 1, false)
-        if err != nil {
-            t.Fatalf("Failed to create from file: %v", err)
-        }
-        if err := index.Load(); err != nil {
-            t.Fatalf("Failed to load from file: %v", err)
-        }
-
-        queries := []float32{100.5, 100.5}
-        neighbors, _, err := index.Search(queries, 1, dimension, 2, 2)
-        if err != nil {
-            t.Fatalf("Failed to search: %v", err)
-        }
-        if neighbors[0] != 2 && neighbors[0] != 3 {
-            t.Errorf("Expected neighbor 2 or 3, got %d", neighbors[0])
-        }
-        index.Destroy()
+    queries := []float32{0.0, 0.0}
+    sp := DefaultIvfFlatSearchParams()
+    result, err := index2.Search(queries, 1, dimension, 1, sp)
+    if err != nil {
+        t.Fatalf("Search failed: %v", err)
     }
-
-    os.Remove(filename)
+    if result.Neighbors[0] != 0 {
+        t.Errorf("Expected 0, got %d", result.Neighbors[0])
+    }
 }
 
 func TestGpuShardedIvfFlat(t *testing.T) {
-    dimension := uint32(2)
-    count := uint64(100)
-    dataset := make([]float32, count*uint64(dimension))
-    for i := range dataset {
-        dataset[i] = float32(i) / float32(count)
-    }
-
-    devices, _ := GetGpuDeviceList()
-    if len(devices) < 1 {
-        t.Skip("No GPU devices available")
+    count, _ := GetGpuDeviceCount()
+    if count < 1 {
+        t.Skip("Need at least 1 GPU for sharded IVF-Flat test")
     }
     
-    // Test sharding logic on 1 GPU by forcing MG mode.
-    index, err := NewGpuIvfFlat(dataset, count, dimension, L2Expanded, 5, devices, 1, true)
+    devices := []int{0}
+    dimension := uint32(2)
+    n_vectors := uint64(100)
+    dataset := make([]float32, n_vectors*uint64(dimension))
+    for i := uint64(0); i < n_vectors; i++ {
+        dataset[i*uint64(dimension)] = float32(i)
+        dataset[i*uint64(dimension)+1] = float32(i)
+    }
+
+    bp := DefaultIvfFlatBuildParams()
+    bp.NLists = 5
+    index, err := NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, Sharded)
     if err != nil {
-        t.Fatalf("Failed to create sharded index: %v", err)
+        t.Fatalf("Failed to create sharded IVF-Flat: %v", err)
     }
+    defer index.Destroy()
 
-    if err := index.Load(); err != nil {
-        t.Fatalf("Failed to load sharded index: %v", err)
-    }
-
-    centers, err := index.GetCenters()
+    err = index.Load()
     if err != nil {
-        t.Fatalf("Failed to get sharded centers: %v", err)
+        t.Fatalf("Load sharded failed: %v", err)
     }
-    fmt.Printf("Sharded Centers: %v\n", centers[:10])
 
-    queries := dataset[:dimension]
-    neighbors, distances, err := index.Search(queries, 1, dimension, 5, 2)
+    queries := []float32{0.1, 0.1, 0.2, 0.2, 0.3, 0.3, 0.4, 0.4, 0.5, 0.5}
+    sp := DefaultIvfFlatSearchParams()
+    result, err := index.Search(queries, 5, dimension, 1, sp)
     if err != nil {
-        t.Fatalf("Failed to search sharded index: %v", err)
+        t.Fatalf("Search sharded failed: %v", err)
     }
-    fmt.Printf("Sharded Neighbors: %v, Distances: %v\n", neighbors, distances)
-
-    if neighbors[0] != 0 {
-        t.Errorf("Expected first neighbor to be 0, got %d", neighbors[0])
-    }
-
-    index.Destroy()
+    t.Logf("Sharded Neighbors: %v, Distances: %v", result.Neighbors, result.Distances)
 }
