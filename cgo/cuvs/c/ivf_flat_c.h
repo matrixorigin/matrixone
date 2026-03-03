@@ -22,6 +22,7 @@ gpu_ivf_flat_c gpu_ivf_flat_new(const void* dataset_data, uint64_t count_vectors
 
 // Constructor for loading from file
 gpu_ivf_flat_c gpu_ivf_flat_load_file(const char* filename, uint32_t dimension, distance_type_t metric,
+                                      ivf_flat_build_params_t build_params,
                                       const int* devices, int device_count, uint32_t nthread, 
                                       distribution_mode_t dist_mode, quantization_t qtype, void* errmsg);
 

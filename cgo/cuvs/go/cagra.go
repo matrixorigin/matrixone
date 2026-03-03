@@ -38,6 +38,7 @@ func NewGpuCagra[T VectorType](dataset []T, count uint64, dimension uint32, metr
     cBP := C.cagra_build_params_t{
         intermediate_graph_degree: C.size_t(bp.IntermediateGraphDegree),
         graph_degree:              C.size_t(bp.GraphDegree),
+        attach_dataset_on_build:   C.bool(bp.AttachDatasetOnBuild),
     }
 
     cCagra := C.gpu_cagra_new(
@@ -71,7 +72,7 @@ func NewGpuCagra[T VectorType](dataset []T, count uint64, dimension uint32, metr
 
 // NewGpuCagraFromFile creates a new GpuCagra instance by loading from a file.
 func NewGpuCagraFromFile[T VectorType](filename string, dimension uint32, metric DistanceType, 
-                                       devices []int, nthread uint32, mode DistributionMode) (*GpuCagra[T], error) {
+                                       bp CagraBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuCagra[T], error) {
     if len(devices) == 0 {
         return nil, fmt.Errorf("at least one device must be specified")
     }
@@ -86,10 +87,17 @@ func NewGpuCagraFromFile[T VectorType](filename string, dimension uint32, metric
         cDevices[i] = C.int(d)
     }
 
+    cBP := C.cagra_build_params_t{
+        intermediate_graph_degree: C.size_t(bp.IntermediateGraphDegree),
+        graph_degree:              C.size_t(bp.GraphDegree),
+        attach_dataset_on_build:   C.bool(bp.AttachDatasetOnBuild),
+    }
+
     cCagra := C.gpu_cagra_load_file(
         cFilename,
         C.uint32_t(dimension),
         C.distance_type_t(metric),
+        cBP,
         &cDevices[0],
         C.int(len(devices)),
         C.uint32_t(nthread),

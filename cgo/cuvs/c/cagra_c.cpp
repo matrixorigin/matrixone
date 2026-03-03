@@ -84,6 +84,7 @@ gpu_cagra_c gpu_cagra_new(const void* dataset_data, uint64_t count_vectors, uint
 }
 
 gpu_cagra_c gpu_cagra_load_file(const char* filename, uint32_t dimension, distance_type_t metric_c,
+                                 cagra_build_params_t build_params,
                                  const int* devices, int device_count, uint32_t nthread, 
                                  distribution_mode_t dist_mode, quantization_t qtype, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
@@ -93,16 +94,16 @@ gpu_cagra_c gpu_cagra_load_file(const char* filename, uint32_t dimension, distan
         void* cagra_ptr = nullptr;
         switch (qtype) {
             case Quantization_F32:
-                cagra_ptr = new matrixone::gpu_cagra_t<float>(std::string(filename), dimension, metric, devs, nthread, dist_mode);
+                cagra_ptr = new matrixone::gpu_cagra_t<float>(std::string(filename), dimension, metric, build_params, devs, nthread, dist_mode);
                 break;
             case Quantization_F16:
-                cagra_ptr = new matrixone::gpu_cagra_t<half>(std::string(filename), dimension, metric, devs, nthread, dist_mode);
+                cagra_ptr = new matrixone::gpu_cagra_t<half>(std::string(filename), dimension, metric, build_params, devs, nthread, dist_mode);
                 break;
             case Quantization_INT8:
-                cagra_ptr = new matrixone::gpu_cagra_t<int8_t>(std::string(filename), dimension, metric, devs, nthread, dist_mode);
+                cagra_ptr = new matrixone::gpu_cagra_t<int8_t>(std::string(filename), dimension, metric, build_params, devs, nthread, dist_mode);
                 break;
             case Quantization_UINT8:
-                cagra_ptr = new matrixone::gpu_cagra_t<uint8_t>(std::string(filename), dimension, metric, devs, nthread, dist_mode);
+                cagra_ptr = new matrixone::gpu_cagra_t<uint8_t>(std::string(filename), dimension, metric, build_params, devs, nthread, dist_mode);
                 break;
             default:
                 throw std::runtime_error("Unsupported quantization type for CAGRA");

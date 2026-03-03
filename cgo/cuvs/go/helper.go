@@ -50,12 +50,14 @@ const (
 type CagraBuildParams struct {
     IntermediateGraphDegree uint64
     GraphDegree             uint64
+    AttachDatasetOnBuild    bool
 }
 
 func DefaultCagraBuildParams() CagraBuildParams {
     return CagraBuildParams{
         IntermediateGraphDegree: 128,
         GraphDegree:             64,
+        AttachDatasetOnBuild:    true,
     }
 }
 
@@ -74,12 +76,16 @@ func DefaultCagraSearchParams() CagraSearchParams {
 
 // IvfFlatBuildParams maps to C.ivf_flat_build_params_t
 type IvfFlatBuildParams struct {
-    NLists uint32
+    NLists                 uint32
+    AddDataOnBuild         bool
+    KmeansTrainsetFraction float64
 }
 
 func DefaultIvfFlatBuildParams() IvfFlatBuildParams {
     return IvfFlatBuildParams{
-        NLists: 1024,
+        NLists:                 1024,
+        AddDataOnBuild:         true,
+        KmeansTrainsetFraction: 0.5,
     }
 }
 

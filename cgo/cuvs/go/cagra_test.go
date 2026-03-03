@@ -73,7 +73,7 @@ func TestGpuCagraSaveLoad(t *testing.T) {
     defer os.Remove(filename)
     index.Destroy()
 
-    index2, err := NewGpuCagraFromFile[float32](filename, dimension, L2Expanded, devices, 1, SingleGpu)
+    index2, err := NewGpuCagraFromFile[float32](filename, dimension, L2Expanded, bp, devices, 1, SingleGpu)
     if err != nil {
         t.Fatalf("Failed to create GpuCagra from file: %v", err)
     }

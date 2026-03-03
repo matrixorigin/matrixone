@@ -86,13 +86,12 @@ public:
 
     // Unified Constructor for loading from file
     gpu_ivf_flat_t(const std::string& filename, uint32_t dimension, cuvs::distance::DistanceType m, 
-                    const std::vector<int>& devices, uint32_t nthread, distribution_mode_t mode)
+                    const ivf_flat_build_params_t& bp, const std::vector<int>& devices, uint32_t nthread, distribution_mode_t mode)
         : filename_(filename), dimension(dimension), metric(m), count(0), 
-          dist_mode(mode), devices_(devices) {
+          build_params(bp), dist_mode(mode), devices_(devices) {
         
         bool force_mg = (mode == DistributionMode_SHARDED || mode == DistributionMode_REPLICATED);
         worker = std::make_unique<cuvs_worker_t>(nthread, devices_, force_mg || (devices_.size() > 1));
-        build_params = {1024}; // Default values
     }
 
     void load() {
@@ -141,6 +140,8 @@ public:
                     cuvs::neighbors::ivf_flat::index_params index_params;
                     index_params.metric = metric;
                     index_params.n_lists = build_params.n_lists;
+                    index_params.add_data_on_build = build_params.add_data_on_build;
+                    index_params.kmeans_trainset_fraction = build_params.kmeans_trainset_fraction;
 
                     cuvs::neighbors::mg_index_params<cuvs::neighbors::ivf_flat::index_params> mg_params(index_params);
                     if (dist_mode == DistributionMode_REPLICATED) {
@@ -162,6 +163,8 @@ public:
                     cuvs::neighbors::ivf_flat::index_params index_params;
                     index_params.metric = metric;
                     index_params.n_lists = build_params.n_lists;
+                    index_params.add_data_on_build = build_params.add_data_on_build;
+                    index_params.kmeans_trainset_fraction = build_params.kmeans_trainset_fraction;
 
                     index_ = std::make_unique<ivf_flat_index>(
                         cuvs::neighbors::ivf_flat::build(*res, index_params, raft::make_const_mdspan(dataset_device.view())));

@@ -88,13 +88,12 @@ public:
 
     // Unified Constructor for loading from file
     gpu_cagra_t(const std::string& filename, uint32_t dimension, cuvs::distance::DistanceType m, 
-                    const std::vector<int>& devices, uint32_t nthread, distribution_mode_t mode)
+                    const cagra_build_params_t& bp, const std::vector<int>& devices, uint32_t nthread, distribution_mode_t mode)
         : filename_(filename), dimension(dimension), metric(m), count(0), 
-          dist_mode(mode), devices_(devices) {
+          build_params(bp), dist_mode(mode), devices_(devices) {
         
         bool force_mg = (mode == DistributionMode_SHARDED || mode == DistributionMode_REPLICATED);
         worker = std::make_unique<cuvs_worker_t>(nthread, devices_, force_mg || (devices_.size() > 1));
-        build_params = {128, 64}; // Default values
     }
 
     // Private constructor for creating from an existing cuVS index (used by merge)
@@ -176,7 +175,7 @@ public:
                     index_params.metric = metric;
                     index_params.intermediate_graph_degree = build_params.intermediate_graph_degree;
                     index_params.graph_degree = build_params.graph_degree;
-                    index_params.attach_dataset_on_build = true; 
+                    index_params.attach_dataset_on_build = build_params.attach_dataset_on_build;
 
                     index_ = std::make_unique<cagra_index>(
                         cuvs::neighbors::cagra::build(*res, index_params, raft::make_const_mdspan(dataset_device->view())));

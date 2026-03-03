@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -35,6 +36,7 @@ typedef enum {
 typedef struct {
     size_t intermediate_graph_degree; // default 128
     size_t graph_degree;              // default 64
+    bool attach_dataset_on_build;     // default true
 } cagra_build_params_t;
 
 // CAGRA search parameters
@@ -45,7 +47,9 @@ typedef struct {
 
 // IVF-Flat build parameters
 typedef struct {
-    uint32_t n_lists; // default 1024
+    uint32_t n_lists;             // default 1024
+    bool add_data_on_build;       // default true
+    double kmeans_trainset_fraction; // default 0.5
 } ivf_flat_build_params_t;
 
 // IVF-Flat search parameters

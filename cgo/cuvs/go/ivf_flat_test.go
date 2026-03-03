@@ -74,7 +74,7 @@ func TestGpuIvfFlatSaveLoad(t *testing.T) {
     defer os.Remove(filename)
     index.Destroy()
 
-    index2, err := NewGpuIvfFlatFromFile[float32](filename, dimension, L2Expanded, devices, 1, SingleGpu)
+    index2, err := NewGpuIvfFlatFromFile[float32](filename, dimension, L2Expanded, bp, devices, 1, SingleGpu)
     if err != nil {
         t.Fatalf("Failed to create GpuIvfFlat from file: %v", err)
     }

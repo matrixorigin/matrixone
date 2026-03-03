@@ -36,7 +36,9 @@ func NewGpuIvfFlat[T VectorType](dataset []T, count uint64, dimension uint32, me
     }
 
     cBP := C.ivf_flat_build_params_t{
-        n_lists: C.uint32_t(bp.NLists),
+        n_lists:                  C.uint32_t(bp.NLists),
+        add_data_on_build:        C.bool(bp.AddDataOnBuild),
+        kmeans_trainset_fraction: C.double(bp.KmeansTrainsetFraction),
     }
 
     cIvfFlat := C.gpu_ivf_flat_new(
@@ -70,7 +72,7 @@ func NewGpuIvfFlat[T VectorType](dataset []T, count uint64, dimension uint32, me
 
 // NewGpuIvfFlatFromFile creates a new GpuIvfFlat instance by loading from a file.
 func NewGpuIvfFlatFromFile[T VectorType](filename string, dimension uint32, metric DistanceType, 
-                                         devices []int, nthread uint32, mode DistributionMode) (*GpuIvfFlat[T], error) {
+                                         bp IvfFlatBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfFlat[T], error) {
     if len(devices) == 0 {
         return nil, fmt.Errorf("at least one device must be specified")
     }
@@ -85,10 +87,17 @@ func NewGpuIvfFlatFromFile[T VectorType](filename string, dimension uint32, metr
         cDevices[i] = C.int(d)
     }
 
+    cBP := C.ivf_flat_build_params_t{
+        n_lists:                  C.uint32_t(bp.NLists),
+        add_data_on_build:        C.bool(bp.AddDataOnBuild),
+        kmeans_trainset_fraction: C.double(bp.KmeansTrainsetFraction),
+    }
+
     cIvfFlat := C.gpu_ivf_flat_load_file(
         cFilename,
         C.uint32_t(dimension),
         C.distance_type_t(metric),
+        cBP,
         &cDevices[0],
         C.int(len(devices)),
         C.uint32_t(nthread),
