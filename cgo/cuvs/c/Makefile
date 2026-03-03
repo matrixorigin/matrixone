@@ -19,7 +19,7 @@ LDFLAGS += -Xlinker -lpthread -Xlinker -lm
 TARGET := libmocuvs.so
 
 # Source files (sharded_*_c.cpp removed as they are merged)
-SRCS := brute_force_c.cpp ivf_flat_c.cpp cagra_c.cpp helper.cpp
+SRCS := brute_force_c.cpp ivf_flat_c.cpp cagra_c.cpp kmeans_c.cpp helper.cpp
 OBJS := $(SRCS:.cpp=.o)
 
 .PHONY: all clean

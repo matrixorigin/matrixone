@@ -16,13 +16,14 @@ OBJDIR := obj
 TESTDIR := test
 
 # Header files
-HEADERS := brute_force.hpp cagra.hpp cuvs_worker.hpp ivf_flat.hpp
+HEADERS := brute_force.hpp cagra.hpp cuvs_worker.hpp ivf_flat.hpp kmeans.hpp
 
 # Test source files
 TEST_SRCS := $(TESTDIR)/main_test.cu \
              $(TESTDIR)/brute_force_test.cu \
              $(TESTDIR)/ivf_flat_test.cu \
-             $(TESTDIR)/cagra_test.cu
+             $(TESTDIR)/cagra_test.cu \
+             $(TESTDIR)/kmeans_test.cu
 
 # Test object files
 TEST_OBJS := $(patsubst $(TESTDIR)/%.cu, $(OBJDIR)/test/%.o, $(TEST_SRCS))
