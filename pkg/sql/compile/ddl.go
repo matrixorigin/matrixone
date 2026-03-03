@@ -4014,6 +4014,13 @@ var deleteOrphanTableRecords = func(c *Compile, dbName string, orphanTables []st
 		}
 		for _, tblName := range orphanTables {
 			if err := db.Delete(ctx, tblName); err != nil {
+				// Table may already be deleted by another concurrent transaction
+				// (e.g., another DROP DATABASE or DROP TABLE). This is safe to
+				// ignore because our goal is to ensure the orphan records are
+				// removed, and they already are.
+				if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+					continue
+				}
 				return err
 			}
 		}
