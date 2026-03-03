@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashmap_util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -36,7 +35,9 @@ const (
 type container struct {
 	state           int
 	runtimeFilterIn bool
-	hashmapBuilder  hashmap_util.HashmapBuilder
+	hashmapBuilder  HashmapBuilder
+	spilledBuckets  []string
+	spilledRowCnts  []int64
 }
 
 type HashBuild struct {
@@ -51,6 +52,7 @@ type HashBuild struct {
 	JoinMapRefCnt     int32
 	ShuffleIdx        int32
 	RuntimeFilterSpec *plan.RuntimeFilterSpec
+	SpillThreshold    int64
 
 	IsDedup           bool
 	DelColIdx         int32
@@ -102,13 +104,30 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 	mapSucceed := hashBuild.ctr.state == SendSucceed
 
 	hashBuild.ctr.hashmapBuilder.Reset(proc, !mapSucceed)
+	hashBuild.cleanupSpillFiles(proc)
+	hashBuild.ctr.spilledBuckets = nil
+	hashBuild.ctr.spilledRowCnts = nil
 	hashBuild.ctr.state = BuildHashMap
 	hashBuild.ctr.runtimeFilterIn = false
 	message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, runtimeSucceed, proc.GetMessageBoard())
 	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), hashBuild.JoinMapTag, false, 0, mapSucceed)
 }
 func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
+	hashBuild.cleanupSpillFiles(proc)
 	hashBuild.ctr.hashmapBuilder.Free(proc)
+}
+
+func (hashBuild *HashBuild) cleanupSpillFiles(proc *process.Process) {
+	if len(hashBuild.ctr.spilledBuckets) == 0 {
+		return
+	}
+	spillfs, err := proc.GetSpillFileService()
+	if err != nil {
+		return
+	}
+	for _, bucket := range hashBuild.ctr.spilledBuckets {
+		spillfs.Delete(proc.Ctx, bucket)
+	}
 }
 
 func (hashBuild *HashBuild) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

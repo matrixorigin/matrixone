@@ -1,0 +1,483 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package hashjoin
+
+import (
+	"bytes"
+	"fmt"
+	"io"
+	"os"
+
+	"github.com/cespare/xxhash/v2"
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+const (
+	spillNumBuckets = 32
+	spillMagic      = 0x12345678DEADBEEF
+	spillBufferSize = 8192
+)
+
+type bucketBuffer struct {
+	rowIds []int32
+	bat    *batch.Batch
+}
+
+func flushBucketBuffer(proc *process.Process, buf *bucketBuffer, file *os.File, analyzer process.Analyzer) (int64, error) {
+	if buf.bat == nil || buf.bat.RowCount() == 0 {
+		return 0, nil
+	}
+
+	cnt := int64(buf.bat.RowCount())
+	batchData := &bytes.Buffer{}
+	buf.bat.MarshalBinaryWithBuffer(batchData, false)
+	batchSize := int64(batchData.Len())
+
+	writeBuf := bytes.NewBuffer(make([]byte, 0, batchSize+32))
+	writeBuf.Write(types.EncodeInt64(&cnt))
+	writeBuf.Write(types.EncodeInt64(&batchSize))
+	writeBuf.Write(batchData.Bytes())
+	magic := uint64(spillMagic)
+	writeBuf.Write(types.EncodeUint64(&magic))
+
+	written, err := file.Write(writeBuf.Bytes())
+	if err != nil {
+		return 0, err
+	}
+	analyzer.Spill(int64(written))
+
+	buf.bat.Clean(proc.Mp())
+	buf.bat = nil
+	buf.rowIds = buf.rowIds[:0]
+	return cnt, nil
+}
+
+func createProbeSpillFiles(proc *process.Process) ([]string, []*os.File, error) {
+	spillfs, err := proc.GetSpillFileService()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	uid, _ := uuid.NewV7()
+	baseName := fmt.Sprintf("join_probe_%s", uid.String())
+	logutil.Infof("creating probe spill files, base: %s", baseName)
+
+	buckets := make([]string, spillNumBuckets)
+	files := make([]*os.File, spillNumBuckets)
+
+	for i := 0; i < spillNumBuckets; i++ {
+		buckets[i] = fmt.Sprintf("%s_%d", baseName, i)
+		if files[i], err = spillfs.CreateFile(proc.Ctx, buckets[i]); err != nil {
+			for j := 0; j < i; j++ {
+				files[j].Close()
+			}
+			return nil, nil, err
+		}
+	}
+
+	return buckets, files, nil
+}
+
+func appendProbeBatchToSpillFiles(proc *process.Process, bat *batch.Batch, files []*os.File, buffers []*bucketBuffer, conditions []*pbplan.Expr, executors []colexec.ExpressionExecutor, analyzer process.Analyzer) error {
+	eqVecs := make([]*vector.Vector, len(conditions))
+	for i := range conditions {
+		vec, err := executors[i].Eval(proc, []*batch.Batch{bat}, nil)
+		if err != nil {
+			return err
+		}
+		eqVecs[i] = vec
+	}
+
+	hashValues := make([]uint64, bat.RowCount())
+	if err := computeXXHash(eqVecs, hashValues); err != nil {
+		return err
+	}
+
+	bucketRowIds := make([][]int32, spillNumBuckets)
+	for row := 0; row < bat.RowCount(); row++ {
+		bucketId := hashValues[row] & (spillNumBuckets - 1)
+		bucketRowIds[bucketId] = append(bucketRowIds[bucketId], int32(row))
+	}
+
+	// Add rows to buffers and flush when needed
+	for bucketId := 0; bucketId < spillNumBuckets; bucketId++ {
+		sels := bucketRowIds[bucketId]
+		if len(sels) == 0 {
+			continue
+		}
+
+		buf := buffers[bucketId]
+		if buf.bat == nil {
+			buf.bat = batch.NewWithSize(len(bat.Vecs))
+			for i, vec := range bat.Vecs {
+				typ := *vec.GetType()
+				buf.bat.Vecs[i] = vector.NewVec(typ)
+			}
+		}
+
+		// Append rows to buffer
+		for _, sel := range sels {
+			for i, vec := range bat.Vecs {
+				if err := buf.bat.Vecs[i].UnionOne(vec, int64(sel), proc.Mp()); err != nil {
+					return err
+				}
+			}
+		}
+		buf.bat.SetRowCount(buf.bat.RowCount() + len(sels))
+		analyzer.SpillRows(int64(len(sels)))
+
+		// Flush if buffer is full
+		if buf.bat.RowCount() >= spillBufferSize {
+			if _, err := flushBucketBuffer(proc, buf, files[bucketId], analyzer); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// computeXXHash computes xxhash values for partitioning
+// Must match the hash logic in hashbuild/spill.go
+func computeXXHash(keyVecs []*vector.Vector, hashValues []uint64) error {
+	if len(keyVecs) == 0 || len(hashValues) == 0 {
+		return nil
+	}
+
+	rowCount := len(hashValues)
+	buf := make([]byte, 0, 128)
+
+	for i := 0; i < rowCount; i++ {
+		buf = buf[:0]
+
+		// Encode all key columns for this row
+		for _, vec := range keyVecs {
+			// For constant vectors, always use index 0
+			idx := i
+			if vec.IsConst() {
+				idx = 0
+			} else if i >= vec.Length() {
+				continue
+			}
+
+			typ := vec.GetType()
+
+			if typ.IsFixedLen() {
+				// For fixed-length types, get raw bytes using type size
+				switch typ.TypeSize() {
+				case 1:
+					v := vector.GetFixedAtNoTypeCheck[uint8](vec, idx)
+					buf = append(buf, types.EncodeUint8(&v)...)
+				case 2:
+					v := vector.GetFixedAtNoTypeCheck[uint16](vec, idx)
+					buf = append(buf, types.EncodeUint16(&v)...)
+				case 4:
+					v := vector.GetFixedAtNoTypeCheck[uint32](vec, idx)
+					buf = append(buf, types.EncodeUint32(&v)...)
+				case 8:
+					v := vector.GetFixedAtNoTypeCheck[uint64](vec, idx)
+					buf = append(buf, types.EncodeUint64(&v)...)
+				case 16:
+					v := vector.GetFixedAtNoTypeCheck[[16]byte](vec, idx)
+					buf = append(buf, v[:]...)
+				default:
+					// Fallback for other fixed sizes
+					data := vec.GetBytesAt(idx)
+					buf = append(buf, data...)
+				}
+			} else {
+				data := vec.GetBytesAt(idx)
+				buf = append(buf, data...)
+			}
+		}
+
+		// Compute xxhash
+		hashValues[i] = xxhash.Sum64(buf)
+	}
+
+	return nil
+}
+
+func (hashJoin *HashJoin) loadSpilledProbeBucket(proc *process.Process, bucketIdx int) ([]*batch.Batch, error) {
+	if bucketIdx >= len(hashJoin.ctr.spilledProbeBuckets) {
+		return nil, nil
+	}
+
+	spillfs, err := proc.GetSpillFileService()
+	if err != nil {
+		return nil, err
+	}
+
+	file, err := spillfs.OpenFile(proc.Ctx, hashJoin.ctr.spilledProbeBuckets[bucketIdx])
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	batches := make([]*batch.Batch, 0)
+	buf := make([]byte, 8)
+
+	for {
+		// Read count
+		if _, err := io.ReadFull(file, buf); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, err
+		}
+		cnt := types.DecodeInt64(buf)
+
+		// Read batch size
+		if _, err := io.ReadFull(file, buf); err != nil {
+			return nil, err
+		}
+		batchSize := types.DecodeInt64(buf)
+
+		// Read batch data
+		batchData := make([]byte, batchSize)
+		if _, err := io.ReadFull(file, batchData); err != nil {
+			return nil, err
+		}
+
+		// Read magic
+		if _, err := io.ReadFull(file, buf); err != nil {
+			return nil, err
+		}
+		magic := types.DecodeUint64(buf)
+		if magic != spillMagic {
+			return nil, moerr.NewInternalError(proc.Ctx, "corrupted spill file")
+		}
+
+		bat := batch.NewWithSize(0)
+		if err := bat.UnmarshalBinary(batchData); err != nil {
+			return nil, err
+		}
+
+		if bat.RowCount() != int(cnt) {
+			return nil, moerr.NewInternalError(proc.Ctx, "row count mismatch")
+		}
+
+		batches = append(batches, bat)
+	}
+
+	// Delete the spill file after successful load
+	spillfs.Delete(proc.Ctx, hashJoin.ctr.spilledProbeBuckets[bucketIdx])
+
+	return batches, nil
+}
+
+func (hashJoin *HashJoin) processSpilledJoin(proc *process.Process, analyzer process.Analyzer) (*batch.Batch, error) {
+	ctr := &hashJoin.ctr
+
+	// Load next bucket if needed
+	if ctr.bucketJoinMap == nil {
+		if ctr.currentBucketIdx >= len(ctr.spilledBuildBuckets) {
+			return nil, nil
+		}
+
+		buildBatches, err := loadSpilledBuildBucket(proc, ctr.spilledBuildBuckets[ctr.currentBucketIdx])
+		if err != nil {
+			return nil, err
+		}
+
+		probeBatches, err := hashJoin.loadSpilledProbeBucket(proc, ctr.currentBucketIdx)
+		if err != nil {
+			return nil, err
+		}
+
+		ctr.currentBucketIdx++
+
+		if len(buildBatches) == 0 || len(probeBatches) == 0 {
+			// Empty bucket, try next one
+			return hashJoin.processSpilledJoin(proc, analyzer)
+		}
+
+		// Rebuild hashmap for this bucket
+		tmpJoinMap, err := hashJoin.rebuildHashmapForBucket(proc, buildBatches)
+		if err != nil {
+			return nil, err
+		}
+
+		ctr.bucketBuildBatches = buildBatches
+		ctr.bucketProbeBatches = probeBatches
+		ctr.bucketProbeIdx = 0
+		ctr.bucketJoinMap = tmpJoinMap
+	}
+
+	// Process one probe batch
+	if ctr.bucketProbeIdx >= len(ctr.bucketProbeBatches) {
+		// Done with this bucket, clean up and move to next
+		ctr.bucketJoinMap.Free()
+		ctr.bucketJoinMap = nil
+		for i := range ctr.bucketBuildBatches {
+			if ctr.bucketBuildBatches[i] != nil {
+				ctr.bucketBuildBatches[i].Clean(proc.Mp())
+			}
+		}
+		ctr.bucketBuildBatches = nil
+		for i := range ctr.bucketProbeBatches {
+			if ctr.bucketProbeBatches[i] != nil {
+				ctr.bucketProbeBatches[i].Clean(proc.Mp())
+			}
+		}
+		ctr.bucketProbeBatches = nil
+		return hashJoin.processSpilledJoin(proc, analyzer)
+	}
+
+	// Set up container state for regular probe
+	ctr.leftBat = ctr.bucketProbeBatches[ctr.bucketProbeIdx]
+	ctr.bucketProbeIdx++
+	ctr.mp = ctr.bucketJoinMap
+	ctr.rightBats = ctr.mp.GetBatches()
+	ctr.rightRowCnt = ctr.mp.GetRowCount()
+	if hashJoin.IsRightJoin {
+		if ctr.rightRowCnt > 0 {
+			ctr.rightRowsMatched = &bitmap.Bitmap{}
+			ctr.rightRowsMatched.InitWithSize(ctr.rightRowCnt)
+		}
+	}
+
+	// Reset iterator for new probe batch
+	ctr.itr = nil
+
+	// Prepare fresh result batch
+	ctr.resBat = batch.NewWithSize(len(hashJoin.ResultCols))
+	for i, rp := range hashJoin.ResultCols {
+		if rp.Rel == 0 {
+			ctr.resBat.Vecs[i] = vector.NewVec(hashJoin.LeftTypes[rp.Pos])
+		} else {
+			ctr.resBat.Vecs[i] = vector.NewVec(hashJoin.RightTypes[rp.Pos])
+		}
+	}
+
+	// Reset probe state
+	ctr.lastIdx = 0
+	ctr.probeState = psNextBatch
+
+	// Use regular probe logic
+	var result vm.CallResult
+	if err := ctr.probe(hashJoin, proc, &result); err != nil {
+		return nil, err
+	}
+
+	// Clean up for next call
+	ctr.leftBat = nil
+
+	if result.Batch == nil || result.Batch.RowCount() == 0 {
+		return hashJoin.processSpilledJoin(proc, analyzer)
+	}
+
+	return result.Batch, nil
+}
+
+func loadSpilledBuildBucket(proc *process.Process, bucketName string) ([]*batch.Batch, error) {
+	spillfs, err := proc.GetSpillFileService()
+	if err != nil {
+		return nil, err
+	}
+
+	file, err := spillfs.OpenFile(proc.Ctx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	batches := make([]*batch.Batch, 0)
+	buf := make([]byte, 8)
+
+	for {
+		// Read count
+		if _, err := io.ReadFull(file, buf); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, err
+		}
+		cnt := types.DecodeInt64(buf)
+
+		// Read batch size
+		if _, err := io.ReadFull(file, buf); err != nil {
+			return nil, err
+		}
+		batchSize := types.DecodeInt64(buf)
+
+		// Read batch data
+		batchData := make([]byte, batchSize)
+		if _, err := io.ReadFull(file, batchData); err != nil {
+			return nil, err
+		}
+
+		// Read magic
+		if _, err := io.ReadFull(file, buf); err != nil {
+			return nil, err
+		}
+		magic := types.DecodeUint64(buf)
+		if magic != spillMagic {
+			return nil, moerr.NewInternalError(proc.Ctx, "corrupted spill file")
+		}
+
+		bat := batch.NewWithSize(0)
+		if err := bat.UnmarshalBinary(batchData); err != nil {
+			return nil, err
+		}
+
+		if bat.RowCount() != int(cnt) {
+			return nil, moerr.NewInternalError(proc.Ctx, "row count mismatch")
+		}
+
+		batches = append(batches, bat)
+	}
+
+	// Delete the spill file after successful load
+	spillfs.Delete(proc.Ctx, bucketName)
+
+	return batches, nil
+}
+
+func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, buildBatches []*batch.Batch) (*message.JoinMap, error) {
+	// Create a temporary hashmap builder
+	builder := &hashbuild.HashmapBuilder{}
+	if err := builder.Prepare(hashJoin.EqConds[1], -1, proc); err != nil {
+		return nil, err
+	}
+
+	// Copy batches into builder
+	for _, bat := range buildBatches {
+		if err := builder.Batches.CopyIntoBatches(bat, proc); err != nil {
+			return nil, err
+		}
+		builder.InputBatchRowCount += bat.RowCount()
+	}
+
+	// Build hashmap
+	if err := builder.BuildHashmap(hashJoin.HashOnPK, true, false, proc); err != nil {
+		return nil, err
+	}
+
+	return message.NewJoinMap(builder.MultiSels, builder.IntHashMap, builder.StrHashMap, nil, builder.Batches.Buf, proc.Mp()), nil
+}
+

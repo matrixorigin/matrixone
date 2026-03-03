@@ -2415,7 +2415,7 @@ func (c *Compile) compileShuffleJoinV2(node, left, right *plan.Node, leftscopes,
 	constructShuffleJoinOP(c, leftscopes, node, left, right, true)
 
 	for i := range leftscopes {
-		buildOp := constructShuffleHashBuild(leftscopes[i].RootOp, c.proc)
+		buildOp := constructShuffleHashBuild(node, leftscopes[i].RootOp, c.proc)
 		buildOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		rightscopes[i].setRootOperator(buildOp)
 	}
@@ -2488,7 +2488,7 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, lefts, rights
 		mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		buildScope.setRootOperator(mergeOp)
 
-		buildOp := constructShuffleHashBuild(shuffleJoins[i].RootOp, c.proc)
+		buildOp := constructShuffleHashBuild(node, shuffleJoins[i].RootOp, c.proc)
 		buildOp.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		buildScope.setRootOperator(buildOp)
 	}

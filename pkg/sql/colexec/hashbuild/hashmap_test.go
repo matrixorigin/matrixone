@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package hashmap_util
+package hashbuild
 
 import (
 	"reflect"
@@ -32,21 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
-
-func newExpr(pos int32, typ types.Type) *plan.Expr {
-	return &plan.Expr{
-		Typ: plan.Type{
-			Id:    int32(typ.Oid),
-			Width: typ.Width,
-			Scale: typ.Scale,
-		},
-		Expr: &plan.Expr_Col{
-			Col: &plan.ColRef{
-				ColPos: pos,
-			},
-		},
-	}
-}
 
 func TestBuildHashMap(t *testing.T) {
 	var hb HashmapBuilder

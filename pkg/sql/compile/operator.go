@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -143,6 +144,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 			op.ShuffleIdx = t.ShuffleIdx
 		}
 		op.RuntimeFilterSpec = t.RuntimeFilterSpec
+		op.SpillThreshold = t.SpillThreshold
 		op.IsDedup = t.IsDedup
 		op.OnDuplicateAction = t.OnDuplicateAction
 		op.DedupColTypes = t.DedupColTypes
@@ -192,6 +194,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		if t.ShuffleIdx == -1 { // shuffleV2
 			op.ShuffleIdx = int32(index)
 		}
+		op.SpillThreshold = t.SpillThreshold
 		op.SetInfo(&info)
 		return op
 
@@ -939,6 +942,14 @@ func constructHashJoin(node, left *plan.Node, left_types, right_types []types.Ty
 	arg.HashOnPK = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.HashOnPK
 	arg.CanSkipProbe = node.JoinType == plan.Node_SEMI && !node.IsRightJoin && left.NodeType == plan.Node_TABLE_SCAN
 	arg.IsShuffle = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle
+
+	// Get threshold from build side (use same as hash aggregate default)
+	mem := int64(system.MemoryTotal()) / int64(system.GoMaxProcs()) / 8
+	if node.SpillMem > 0 && mem > node.SpillMem {
+		mem = node.SpillMem
+	}
+	arg.SpillThreshold = node.SpillMem
+
 	for i := range node.SendMsgList {
 		if node.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
 			arg.JoinMapTag = node.SendMsgList[i].MsgTag
@@ -1625,12 +1636,20 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 	return ret
 }
 
-func constructShuffleHashBuild(op vm.Operator, proc *process.Process) *hashbuild.HashBuild {
+func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Process) *hashbuild.HashBuild {
 	ret := hashbuild.NewArgument()
 	ret.NeedHashMap = true
 	ret.IsShuffle = true
 	ret.JoinMapRefCnt = 1
 	ret.DelColIdx = -1
+
+	// Set default spill threshold: MemoryTotal / GoMaxProcs / 8, min 128MB
+	// Same logic as hash aggregate
+	mem := int64(system.MemoryTotal()) / int64(system.GoMaxProcs()) / 8
+	if node.SpillMem > 0 && mem > node.SpillMem {
+		mem = node.SpillMem
+	}
+	ret.SpillThreshold = mem
 
 	switch op.OpType() {
 	case vm.HashJoin:

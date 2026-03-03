@@ -192,6 +192,9 @@ type QueryBuilder struct {
 	// spill memory for aggregate function
 	aggSpillMem int64
 
+	// spill memory for join
+	joinSpillMem int64
+
 	optimizerHints *OptimizerHints
 
 	// optimizationHistory records key optimization steps for debugging remap errors
