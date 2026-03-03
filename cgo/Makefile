@@ -23,6 +23,7 @@ ifeq ($(MO_CL_CUDA),1)
 	CFLAGS = -ccbin g++ -m64 -Xcompiler -fPIC -gencode arch=compute_75,code=sm_75 -gencode arch=compute_80,code=sm_80 -gencode arch=compute_86,code=sm_86 -gencode arch=compute_89,code=sm_89 -gencode arch=compute_90,code=sm_90 -gencode arch=compute_90,code=compute_90
 	CFLAGS += -I../thirdparties/install/include -DMO_CL_CUDA
 	CUDA_OBJS += cuda/cuda.o
+	# Explicitly include all needed libraries for shared library linking
 	CUDA_LDFLAGS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64 -lcudart -L$(CONDA_PREFIX)/lib -lcuvs -lcuvs_c -ldl -lrmm -lstdc++
 	LDFLAGS += $(CUDA_LDFLAGS)
 endif

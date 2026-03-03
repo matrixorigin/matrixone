@@ -1,5 +1,6 @@
 # Makefile for MatrixOne cuVS C Wrapper
 
+UNAME_M := $(shell uname -m)
 CUDA_PATH ?= /usr/local/cuda
 NVCC := $(CUDA_PATH)/bin/nvcc
 
@@ -40,7 +41,7 @@ TEST_OBJS := $(patsubst $(TESTDIR)/%.cu, $(OBJDIR)/test/%.o, $(TEST_SRCS))
 
 .PHONY: all clean test
 
-all: $(TARGET)
+all: $(OBJS)
 
 $(TARGET): $(OBJS)
 	@echo "Linking shared library $@"

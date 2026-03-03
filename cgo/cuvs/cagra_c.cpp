@@ -272,3 +272,10 @@ gpu_cagra_c gpu_cagra_merge(gpu_cagra_c* indices_c, int num_indices, uint32_t nt
 }
 
 } // extern "C"
+
+namespace matrixone {
+template class gpu_cagra_t<float>;
+template class gpu_cagra_t<half>;
+template class gpu_cagra_t<int8_t>;
+template class gpu_cagra_t<uint8_t>;
+}

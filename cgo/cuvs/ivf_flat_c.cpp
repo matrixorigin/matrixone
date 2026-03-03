@@ -255,3 +255,10 @@ uint32_t gpu_ivf_flat_get_n_list(gpu_ivf_flat_c index_c) {
 }
 
 } // extern "C"
+
+namespace matrixone {
+template class gpu_ivf_flat_t<float>;
+template class gpu_ivf_flat_t<half>;
+template class gpu_ivf_flat_t<int8_t>;
+template class gpu_ivf_flat_t<uint8_t>;
+}

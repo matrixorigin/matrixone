@@ -264,3 +264,10 @@ void gpu_kmeans_get_centroids(gpu_kmeans_c kmeans_c, void* centroids, void* errm
 }
 
 } // extern "C"
+
+namespace matrixone {
+template class gpu_kmeans_t<float>;
+template class gpu_kmeans_t<half>;
+template class gpu_kmeans_t<int8_t>;
+template class gpu_kmeans_t<uint8_t>;
+}

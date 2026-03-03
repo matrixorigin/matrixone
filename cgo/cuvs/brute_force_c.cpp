@@ -147,3 +147,8 @@ void gpu_brute_force_destroy(gpu_brute_force_c index_c, void* errmsg) {
 }
 
 } // extern "C"
+
+namespace matrixone {
+template class gpu_brute_force_t<float>;
+template class gpu_brute_force_t<half>;
+}
