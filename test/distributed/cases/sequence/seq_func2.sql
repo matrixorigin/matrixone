@@ -92,7 +92,6 @@ select setval('seq1', 50);
 select currval('seq1'),nextval('seq1'),lastval(),currval('seq1'),lastval();
 drop sequence seq1;
 
--- @bvt:issue#9847
 create table seq_table_01(col1 int);
 create sequence seq_14  increment 50 start with 126 no cycle;
 --126[176]
@@ -117,4 +116,3 @@ select * from seq_table_01;
 
 drop sequence seq_14;
 drop table seq_table_01;
--- @bvt:issue
