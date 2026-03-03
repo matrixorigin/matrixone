@@ -357,6 +357,124 @@ func TestDataBranchOutputTryFlushDeletesOrInserts(t *testing.T) {
 	})
 }
 
+func TestDataBranchOutputNewPKBatchInfo(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	baseRel := mock_frontend.NewMockRelation(ctrl)
+	baseRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+		DbName: "db1",
+		Name:   "t1",
+	}).AnyTimes()
+	baseRel.EXPECT().GetTableName().Return("t1").AnyTimes()
+
+	tblStuff := tableStuff{
+		baseRel: baseRel,
+	}
+	tblStuff.def.colNames = []string{"id", "name", "age"}
+	tblStuff.def.pkColIdxes = []int{0, 2}
+	tblStuff.def.visibleIdxes = []int{0, 1, 2}
+	tblStuff.def.pkKind = normalKind
+
+	info := newPKBatchInfo(context.Background(), &Session{}, tblStuff)
+	require.NotNil(t, info)
+	require.Equal(t, "db1", info.dbName)
+	require.Equal(t, "t1", info.baseTable)
+	require.Equal(t, []string{"id", "age"}, info.pkNames)
+	require.Equal(t, []string{"id", "name", "age"}, info.visibleNames)
+	require.True(t, strings.HasPrefix(info.deleteTable, "__mo_diff_del_"))
+	require.True(t, strings.HasPrefix(info.insertTable, "__mo_diff_ins_"))
+
+	tblStuff.def.pkKind = fakeKind
+	require.Nil(t, newPKBatchInfo(context.Background(), &Session{}, tblStuff))
+}
+
+func TestDataBranchOutputAppenderAppendRowAndFlushAll(t *testing.T) {
+	pkInfo := &pkBatchInfo{
+		dbName:       "db1",
+		baseTable:    "t1",
+		deleteTable:  "__mo_diff_del_x",
+		insertTable:  "__mo_diff_ins_x",
+		pkNames:      []string{"id"},
+		visibleNames: []string{"id", "name"},
+	}
+
+	t.Run("append delete in full-row mode", func(t *testing.T) {
+		deleteCnt := 0
+		insertCnt := 0
+		deleteBuf := &bytes.Buffer{}
+		insertBuf := &bytes.Buffer{}
+
+		appender := sqlValuesAppender{
+			ctx:             context.Background(),
+			deleteByFullRow: true,
+			pkInfo:          pkInfo,
+			deleteCnt:       &deleteCnt,
+			deleteBuf:       deleteBuf,
+			insertCnt:       &insertCnt,
+			insertBuf:       insertBuf,
+		}
+
+		err := appender.appendRow(diffDelete, []byte("delete from db1.t1 where id = 1 limit 1;\n"))
+		require.NoError(t, err)
+		require.Equal(t, 1, deleteCnt)
+		require.Equal(t, "delete from db1.t1 where id = 1 limit 1;\n", deleteBuf.String())
+	})
+
+	t.Run("append insert with comma", func(t *testing.T) {
+		deleteCnt := 0
+		insertCnt := 1
+		deleteBuf := &bytes.Buffer{}
+		insertBuf := bytes.NewBufferString("(1,'a')")
+
+		appender := sqlValuesAppender{
+			ctx:             context.Background(),
+			deleteByFullRow: false,
+			pkInfo:          pkInfo,
+			deleteCnt:       &deleteCnt,
+			deleteBuf:       deleteBuf,
+			insertCnt:       &insertCnt,
+			insertBuf:       insertBuf,
+		}
+
+		err := appender.appendRow(diffInsert, []byte("(2,'b')"))
+		require.NoError(t, err)
+		require.Equal(t, 2, insertCnt)
+		require.Equal(t, "(1,'a'),(2,'b')", insertBuf.String())
+	})
+
+	t.Run("flush all buffers", func(t *testing.T) {
+		var out bytes.Buffer
+		writeFile := func(b []byte) error {
+			_, err := out.Write(b)
+			return err
+		}
+
+		deleteCnt := 1
+		insertCnt := 1
+		deleteBuf := bytes.NewBufferString("(1)")
+		insertBuf := bytes.NewBufferString("(1,'a')")
+		appender := sqlValuesAppender{
+			ctx:             context.Background(),
+			deleteByFullRow: false,
+			pkInfo:          pkInfo,
+			deleteCnt:       &deleteCnt,
+			deleteBuf:       deleteBuf,
+			insertCnt:       &insertCnt,
+			insertBuf:       insertBuf,
+			writeFile:       writeFile,
+		}
+
+		require.NoError(t, appender.flushAll())
+		require.Equal(t, 0, deleteCnt)
+		require.Equal(t, 0, insertCnt)
+		require.Equal(t, 0, deleteBuf.Len())
+		require.Equal(t, 0, insertBuf.Len())
+		require.Contains(t, out.String(), "insert into db1.__mo_diff_del_x values (1);")
+		require.Contains(t, out.String(), "insert into db1.__mo_diff_ins_x values (1,'a');")
+	})
+}
+
 func TestDataBranchOutputNewSingleWriteAppenderNilWorker(t *testing.T) {
 	_, _, err := newSingleWriteAppender(context.Background(), nil, nil, "unused", nil)
 	require.Error(t, err)
