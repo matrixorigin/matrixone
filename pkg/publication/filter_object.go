@@ -1035,8 +1035,8 @@ func convertObjectToBatch(
 	}
 
 	// Step 2: Get column information from first block meta
-	blkMeta := dataMeta.GetBlockMeta(0)
-	maxSeqnum := blkMeta.GetMaxSeqnum()
+	firstBlkMeta := dataMeta.GetBlockMeta(0)
+	maxSeqnum := firstBlkMeta.GetMaxSeqnum()
 
 	// Step 3: Prepare columns and types
 	// For appendable objects, we need to include commit TS column
@@ -1045,7 +1045,7 @@ func convertObjectToBatch(
 
 	// Add data columns
 	for seqnum := uint16(0); seqnum <= maxSeqnum; seqnum++ {
-		colMeta := blkMeta.ColumnMeta(seqnum)
+		colMeta := firstBlkMeta.ColumnMeta(seqnum)
 		if colMeta.DataType() == 0 {
 			continue // Skip invalid columns
 		}
@@ -1058,81 +1058,89 @@ func convertObjectToBatch(
 	cols = append(cols, objectio.SEQNUM_COMMITTS)
 	typs = append(typs, objectio.TSType)
 
-	// Step 4: Read column data directly from objectContent bytes
-	vecs := make([]containers.Vector, 0, len(cols))
+	// Step 4: Read column data from ALL blocks and merge
+	// Initialize vectors for each column
+	vecs := make([]containers.Vector, len(cols))
+	for i, typ := range typs {
+		vecs[i] = containers.MakeVector(typ, mp)
+	}
 	allocator := fileservice.DefaultCacheDataAllocator()
 
-	for i, seqnum := range cols {
-		var colMeta objectio.ColumnMeta
-		var ext objectio.Extent
+	// Iterate through all blocks
+	for blkIdx := uint32(0); blkIdx < blkCnt; blkIdx++ {
+		blkMeta := dataMeta.GetBlockMeta(blkIdx)
 
-		// Handle special columns (commit TS)
-		if seqnum >= objectio.SEQNUM_UPPER {
-			if seqnum == objectio.SEQNUM_COMMITTS {
-				metaColCnt := blkMeta.GetMetaColumnCount()
-				colMeta = blkMeta.ColumnMeta(metaColCnt - 1)
-			} else {
-				return nil, moerr.NewInternalErrorf(ctx, "unsupported special column: %d", seqnum)
-			}
-		} else {
-			// Normal column
-			if seqnum > maxSeqnum || blkMeta.ColumnMeta(seqnum).DataType() == 0 {
-				// Generate null vector for missing columns
-				length := int(blkMeta.GetRows())
-				nullVec := containers.MakeVector(typs[i], mp)
-				for j := 0; j < length; j++ {
-					nullVec.Append(nil, false)
+		for i, seqnum := range cols {
+			var colMeta objectio.ColumnMeta
+			var ext objectio.Extent
+
+			// Handle special columns (commit TS)
+			if seqnum >= objectio.SEQNUM_UPPER {
+				if seqnum == objectio.SEQNUM_COMMITTS {
+					metaColCnt := blkMeta.GetMetaColumnCount()
+					colMeta = blkMeta.ColumnMeta(metaColCnt - 1)
+				} else {
+					return nil, moerr.NewInternalErrorf(ctx, "unsupported special column: %d", seqnum)
 				}
-				vecs = append(vecs, nullVec)
-				continue
+			} else {
+				// Normal column
+				if seqnum > maxSeqnum || blkMeta.ColumnMeta(seqnum).DataType() == 0 {
+					// Generate null values for missing columns
+					length := int(blkMeta.GetRows())
+					for j := 0; j < length; j++ {
+						vecs[i].Append(nil, true)
+					}
+					continue
+				}
+				colMeta = blkMeta.ColumnMeta(seqnum)
 			}
-			colMeta = blkMeta.ColumnMeta(seqnum)
-		}
 
-		ext = colMeta.Location()
+			ext = colMeta.Location()
 
-		// Read column data from objectContent bytes
-		if int(ext.Offset()+ext.Length()) > len(objectContent) {
-			return nil, moerr.NewInternalErrorf(ctx, "object content too small for column extent at seqnum %d", seqnum)
-		}
-		colData := objectContent[ext.Offset() : ext.Offset()+ext.Length()]
+			// Read column data from objectContent bytes
+			if int(ext.Offset()+ext.Length()) > len(objectContent) {
+				return nil, moerr.NewInternalErrorf(ctx, "object content too small for column extent at seqnum %d, block %d", seqnum, blkIdx)
+			}
+			colData := objectContent[ext.Offset() : ext.Offset()+ext.Length()]
 
-		// Decompress if needed
-		var decompressedData []byte
-		var decompressedBuf fscache.Data
+			// Decompress if needed
+			var decompressedData []byte
+			var decompressedBuf fscache.Data
 
-		if ext.Alg() == compress.None { // Clone non-compressed data to avoid buffer sharing with objectContent
-			// objectContent may be reused/pooled, and UnmarshalBinary doesn't copy data
-			decompressedData = append([]byte(nil), colData...)
-		} else {
-			// Allocate buffer for decompressed data
-			decompressedBuf = allocator.AllocateCacheDataWithHint(ctx, int(ext.OriginSize()), malloc.NoClear)
-			bs, err := compress.Decompress(colData, decompressedBuf.Bytes(), compress.Lz4)
-			if err != nil {
+			if ext.Alg() == compress.None { // Clone non-compressed data to avoid buffer sharing with objectContent
+				// objectContent may be reused/pooled, and UnmarshalBinary doesn't copy data
+				decompressedData = append([]byte(nil), colData...)
+			} else {
+				// Allocate buffer for decompressed data
+				decompressedBuf = allocator.AllocateCacheDataWithHint(ctx, int(ext.OriginSize()), malloc.NoClear)
+				bs, err := compress.Decompress(colData, decompressedBuf.Bytes(), compress.Lz4)
+				if err != nil {
+					if decompressedBuf != nil {
+						decompressedBuf.Release()
+					}
+					return nil, moerr.NewInternalErrorf(ctx, "failed to decompress column data: %v", err)
+				}
+				decompressedData = decompressedBuf.Bytes()[:len(bs)]
+				// Clone the data to ensure decoded vector doesn't hold reference to buffer
+				decompressedData = append([]byte(nil), decompressedData...)
+				// Release buffer immediately after cloning
 				if decompressedBuf != nil {
 					decompressedBuf.Release()
 				}
-				return nil, moerr.NewInternalErrorf(ctx, "failed to decompress column data: %v", err)
 			}
-			decompressedData = decompressedBuf.Bytes()[:len(bs)]
-			// Clone the data to ensure decoded vector doesn't hold reference to buffer
-			decompressedData = append([]byte(nil), decompressedData...)
-			// Release buffer immediately after cloning
-			if decompressedBuf != nil {
-				decompressedBuf.Release()
+
+			// Decode to vector.Vector
+			obj, err := objectio.Decode(decompressedData)
+			if err != nil {
+				return nil, moerr.NewInternalErrorf(ctx, "failed to decode column data: %v", err)
+			}
+			vec := obj.(*vector.Vector)
+
+			// Append data from this block's vector to the result vector
+			for j := 0; j < vec.Length(); j++ {
+				vecs[i].Append(vec.GetRawBytesAt(j), vec.IsNull(uint64(j)))
 			}
 		}
-
-		// Decode to vector.Vector
-		obj, err := objectio.Decode(decompressedData)
-		if err != nil {
-			return nil, moerr.NewInternalErrorf(ctx, "failed to decode column data: %v", err)
-		}
-		vec := obj.(*vector.Vector)
-
-		// Convert to containers.Vector
-		tnVec := containers.ToTNVector(vec, mp)
-		vecs = append(vecs, tnVec)
 	}
 
 	// Step 5: Create batch with columns
