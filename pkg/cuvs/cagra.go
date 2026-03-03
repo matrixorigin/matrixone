@@ -1,10 +1,7 @@
-package mocuvs
+package cuvs
 
 /*
-#cgo LDFLAGS: /home/eric/github/matrixone/cgo/cuvs/c/libmocuvs.so -Wl,-rpath=/home/eric/github/matrixone/cgo/cuvs/c
-#cgo CFLAGS: -I../c -I../cpp
-
-#include "cagra_c.h"
+#include "../../cgo/cuvs/cagra_c.h"
 #include <stdlib.h>
 #include <stdbool.h>
 */

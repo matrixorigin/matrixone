@@ -1,4 +1,4 @@
-package mocuvs
+package cuvs
 
 import (
     "os"
