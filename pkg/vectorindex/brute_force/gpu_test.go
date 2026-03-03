@@ -39,7 +39,7 @@ func TestGpuBruteForce(t *testing.T) {
 	limit := uint(1)
 	elemsz := uint(4) // float32
 
-	idx, err := NewGpuBruteForceIndex[float32](dataset, dimension, metric.Metric_L2sqDistance, elemsz)
+	idx, err := NewGpuBruteForceIndex[float32](dataset, dimension, metric.Metric_L2sqDistance, elemsz, ncpu)
 	require.NoError(t, err)
 	defer idx.Destroy()
 
@@ -96,7 +96,7 @@ func TestGpuBruteForceConcurrent(t *testing.T) {
 
 	query := dataset
 
-	idx, err := NewGpuBruteForceIndex[float32](dataset, dimension, metric.Metric_L2sqDistance, elemsz)
+	idx, err := NewGpuBruteForceIndex[float32](dataset, dimension, metric.Metric_L2sqDistance, elemsz, ncpu)
 	require.NoError(t, err)
 	defer idx.Destroy()
 
