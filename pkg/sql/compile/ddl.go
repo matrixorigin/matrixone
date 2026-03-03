@@ -194,7 +194,21 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	orphanTables := diffStringSlice(allTablesIncludingHidden, visibleTables)
 	if len(orphanTables) > 0 {
 		if err = deleteOrphanTableRecords(c, dbName, orphanTables); err != nil {
-			return err
+			// Orphan cleanup is best-effort. Any error can be safely ignored because:
+			// 1. The orphan records shouldn't exist in the first place
+			// 2. They may have been handled by other concurrent transactions
+			// 3. Worst case is leaving some orphan records, which doesn't affect
+			//    data correctness
+			//
+			// Common errors include:
+			// - ErrTxnWWConflict: parent txn already dropped the table
+			// - ErrTxnRWConflict: concurrent read-write conflict
+			// - ErrNoSuchTable: table already deleted
+			// - ErrBadDB: database already deleted
+			//
+			// Log the error for debugging but don't fail the DropDatabase operation.
+			logutil.Infof("deleteOrphanTableRecords failed (ignored): db=%s, orphans=%v, err=%v",
+				dbName, orphanTables, err)
 		}
 	}
 
