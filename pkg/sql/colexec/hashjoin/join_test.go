@@ -306,3 +306,158 @@ func resetHashBuildChildren(arg *hashbuild.HashBuild, m *mpool.MPool) {
 	arg.Children = nil
 	arg.AppendChild(op)
 }
+
+func TestHashJoinTypeName(t *testing.T) {
+	arg := NewArgument()
+	require.Equal(t, "hash_join", arg.TypeName())
+	arg.Release()
+}
+
+func TestHashJoinOpType(t *testing.T) {
+	arg := NewArgument()
+	require.Equal(t, vm.HashJoin, arg.OpType())
+	arg.Release()
+}
+
+func TestHashJoinReleaseAndReuse(t *testing.T) {
+	arg := NewArgument()
+	arg.JoinMapTag = 100
+	arg.Release()
+	
+	arg2 := NewArgument()
+	require.Equal(t, int32(0), arg2.JoinMapTag)
+	arg2.Release()
+}
+
+func TestHashJoinTypeCheckers(t *testing.T) {
+	tests := []struct {
+		name        string
+		joinType    plan.Node_JoinType
+		isRightJoin bool
+		checks      map[string]bool
+	}{
+		{
+			name:     "inner join",
+			joinType: plan.Node_INNER,
+			checks: map[string]bool{
+				"IsInner": true, "IsLeftOuter": false, "IsRightOuter": false,
+				"IsFullOuter": false, "IsSemi": false, "IsAnti": false, "IsSingle": false,
+			},
+		},
+		{
+			name:     "left outer join",
+			joinType: plan.Node_LEFT,
+			checks: map[string]bool{
+				"IsInner": false, "IsLeftOuter": true, "IsRightOuter": false,
+			},
+		},
+		{
+			name:     "right outer join",
+			joinType: plan.Node_RIGHT,
+			checks: map[string]bool{
+				"IsInner": false, "IsLeftOuter": false, "IsRightOuter": true,
+			},
+		},
+		{
+			name:     "full outer join",
+			joinType: plan.Node_OUTER,
+			checks: map[string]bool{
+				"IsFullOuter": true, "IsInner": false,
+			},
+		},
+		{
+			name:     "left semi join",
+			joinType: plan.Node_SEMI,
+			checks: map[string]bool{
+				"IsSemi": true, "IsLeftSemi": true, "IsRightSemi": false,
+			},
+		},
+		{
+			name:        "right semi join",
+			joinType:    plan.Node_SEMI,
+			isRightJoin: true,
+			checks: map[string]bool{
+				"IsSemi": true, "IsLeftSemi": false, "IsRightSemi": true,
+			},
+		},
+		{
+			name:     "left anti join",
+			joinType: plan.Node_ANTI,
+			checks: map[string]bool{
+				"IsAnti": true, "IsLeftAnti": true, "IsRightAnti": false,
+			},
+		},
+		{
+			name:        "right anti join",
+			joinType:    plan.Node_ANTI,
+			isRightJoin: true,
+			checks: map[string]bool{
+				"IsAnti": true, "IsLeftAnti": false, "IsRightAnti": true,
+			},
+		},
+		{
+			name:     "left single join",
+			joinType: plan.Node_SINGLE,
+			checks: map[string]bool{
+				"IsSingle": true, "IsLeftSingle": true, "IsRightSingle": false,
+			},
+		},
+		{
+			name:        "right single join",
+			joinType:    plan.Node_SINGLE,
+			isRightJoin: true,
+			checks: map[string]bool{
+				"IsSingle": true, "IsLeftSingle": false, "IsRightSingle": true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			arg := &HashJoin{
+				JoinType:    tt.joinType,
+				IsRightJoin: tt.isRightJoin,
+			}
+
+			if expected, ok := tt.checks["IsInner"]; ok {
+				require.Equal(t, expected, arg.IsInner())
+			}
+			if expected, ok := tt.checks["IsLeftOuter"]; ok {
+				require.Equal(t, expected, arg.IsLeftOuter())
+			}
+			if expected, ok := tt.checks["IsRightOuter"]; ok {
+				require.Equal(t, expected, arg.IsRightOuter())
+			}
+			if expected, ok := tt.checks["IsFullOuter"]; ok {
+				require.Equal(t, expected, arg.IsFullOuter())
+			}
+			if expected, ok := tt.checks["IsSemi"]; ok {
+				require.Equal(t, expected, arg.IsSemi())
+			}
+			if expected, ok := tt.checks["IsLeftSemi"]; ok {
+				require.Equal(t, expected, arg.IsLeftSemi())
+			}
+			if expected, ok := tt.checks["IsRightSemi"]; ok {
+				require.Equal(t, expected, arg.IsRightSemi())
+			}
+			if expected, ok := tt.checks["IsAnti"]; ok {
+				require.Equal(t, expected, arg.IsAnti())
+			}
+			if expected, ok := tt.checks["IsLeftAnti"]; ok {
+				require.Equal(t, expected, arg.IsLeftAnti())
+			}
+			if expected, ok := tt.checks["IsRightAnti"]; ok {
+				require.Equal(t, expected, arg.IsRightAnti())
+			}
+			if expected, ok := tt.checks["IsSingle"]; ok {
+				require.Equal(t, expected, arg.IsSingle())
+			}
+			if expected, ok := tt.checks["IsLeftSingle"]; ok {
+				require.Equal(t, expected, arg.IsLeftSingle())
+			}
+			if expected, ok := tt.checks["IsRightSingle"]; ok {
+				require.Equal(t, expected, arg.IsRightSingle())
+			}
+		})
+	}
+}

@@ -16,7 +16,6 @@ package hashjoin
 
 import (
 	"bytes"
-	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -316,8 +315,6 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 					}
 				}
 			}
-
-			fmt.Println("spilled probe rows:", analyzer.GetOpStats().SpillRows)
 		}
 	}
 	ctr.rightBats = ctr.mp.GetBatches()

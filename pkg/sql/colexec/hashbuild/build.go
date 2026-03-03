@@ -16,7 +16,6 @@ package hashbuild
 
 import (
 	"bytes"
-	"fmt"
 	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -203,7 +202,6 @@ func (ctr *container) build(hashBuild *HashBuild, proc *process.Process, analyze
 
 	// Flush remaining buffered data and close spill files
 	if spillMode {
-		fmt.Println("spilled build rows:", analyzer.GetOpStats().SpillRows)
 		for i, buf := range spillBuffers {
 			if _, err := flushBucketBuffer(proc, buf, spillFiles[i], analyzer); err != nil {
 				return err
