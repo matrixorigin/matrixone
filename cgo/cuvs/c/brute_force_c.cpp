@@ -1,5 +1,5 @@
 #include "brute_force_c.h"
-#include "../cpp/brute_force.hpp"
+#include "brute_force.hpp"
 #include <iostream>
 #include <stdexcept>
 #include <vector>

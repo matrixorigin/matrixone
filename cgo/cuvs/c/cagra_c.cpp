@@ -1,5 +1,5 @@
 #include "cagra_c.h"
-#include "../cpp/cagra.hpp"
+#include "cagra.hpp"
 #include <iostream>
 #include <stdexcept>
 #include <vector>

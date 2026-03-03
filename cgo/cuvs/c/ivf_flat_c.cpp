@@ -1,5 +1,5 @@
 #include "ivf_flat_c.h"
-#include "../cpp/ivf_flat.hpp"
+#include "ivf_flat.hpp"
 #include <iostream>
 #include <stdexcept>
 #include <vector>

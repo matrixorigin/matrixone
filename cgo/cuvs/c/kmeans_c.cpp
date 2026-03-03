@@ -1,5 +1,5 @@
 #include "kmeans_c.h"
-#include "../cpp/kmeans.hpp"
+#include "kmeans.hpp"
 #include <iostream>
 #include <stdexcept>
 #include <vector>
