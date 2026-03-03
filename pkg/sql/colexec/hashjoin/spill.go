@@ -28,7 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -102,7 +102,7 @@ func createProbeSpillFiles(proc *process.Process) ([]string, []*os.File, error) 
 	return buckets, files, nil
 }
 
-func appendProbeBatchToSpillFiles(proc *process.Process, bat *batch.Batch, files []*os.File, buffers []*bucketBuffer, conditions []*pbplan.Expr, executors []colexec.ExpressionExecutor, analyzer process.Analyzer) error {
+func appendProbeBatchToSpillFiles(proc *process.Process, bat *batch.Batch, files []*os.File, buffers []*bucketBuffer, conditions []*plan.Expr, executors []colexec.ExpressionExecutor, analyzer process.Analyzer) error {
 	eqVecs := make([]*vector.Vector, len(conditions))
 	for i := range conditions {
 		vec, err := executors[i].Eval(proc, []*batch.Batch{bat}, nil)
@@ -184,35 +184,7 @@ func computeXXHash(keyVecs []*vector.Vector, hashValues []uint64) error {
 				continue
 			}
 
-			typ := vec.GetType()
-
-			if typ.IsFixedLen() {
-				// For fixed-length types, get raw bytes using type size
-				switch typ.TypeSize() {
-				case 1:
-					v := vector.GetFixedAtNoTypeCheck[uint8](vec, idx)
-					buf = append(buf, types.EncodeUint8(&v)...)
-				case 2:
-					v := vector.GetFixedAtNoTypeCheck[uint16](vec, idx)
-					buf = append(buf, types.EncodeUint16(&v)...)
-				case 4:
-					v := vector.GetFixedAtNoTypeCheck[uint32](vec, idx)
-					buf = append(buf, types.EncodeUint32(&v)...)
-				case 8:
-					v := vector.GetFixedAtNoTypeCheck[uint64](vec, idx)
-					buf = append(buf, types.EncodeUint64(&v)...)
-				case 16:
-					v := vector.GetFixedAtNoTypeCheck[[16]byte](vec, idx)
-					buf = append(buf, v[:]...)
-				default:
-					// Fallback for other fixed sizes
-					data := vec.GetBytesAt(idx)
-					buf = append(buf, data...)
-				}
-			} else {
-				data := vec.GetBytesAt(idx)
-				buf = append(buf, data...)
-			}
+			buf = append(buf, vec.GetRawBytesAt(idx)...)
 		}
 
 		// Compute xxhash
@@ -480,4 +452,3 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, buildBa
 
 	return message.NewJoinMap(builder.MultiSels, builder.IntHashMap, builder.StrHashMap, nil, builder.Batches.Buf, proc.Mp()), nil
 }
-
