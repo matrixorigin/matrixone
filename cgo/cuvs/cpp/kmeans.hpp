@@ -1,7 +1,7 @@
 #pragma once
 
 #include "cuvs_worker.hpp" // For cuvs_worker_t and raft_handle_wrapper_t
-#include "../c/helper.h"   // For distance_type_t and quantization_t
+#include "cuvs_types.h"    // For distance_type_t and quantization_t
 #include <raft/util/cudart_utils.hpp> // For RAFT_CUDA_TRY
 #include <cuda_fp16.h> // For half
 
