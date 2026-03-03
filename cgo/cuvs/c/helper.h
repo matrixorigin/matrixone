@@ -1,7 +1,7 @@
 #ifndef MO_CUVS_C_HELPER_H
 #define MO_CUVS_C_HELPER_H
 
-#include "../cpp/cuvs_types.h"
+#include "cuvs_types.h"
 
 #ifdef __cplusplus
 extern "C" {

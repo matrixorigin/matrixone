@@ -2,7 +2,7 @@ package mocuvs
 
 /*
 #cgo LDFLAGS: /home/eric/github/matrixone/cgo/cuvs/c/libmocuvs.so -Wl,-rpath=/home/eric/github/matrixone/cgo/cuvs/c
-#cgo CFLAGS: -I../c
+#cgo CFLAGS: -I../c -I../cpp
 
 #include "ivf_flat_c.h"
 #include <stdlib.h>
