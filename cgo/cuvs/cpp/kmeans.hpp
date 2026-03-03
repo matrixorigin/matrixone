@@ -40,7 +40,7 @@ public:
     uint32_t n_clusters;
     uint32_t dimension;
     
-    cuvs::cluster::kmeans::params params;
+    cuvs::cluster::kmeans::balanced_params params;
 
     // Type of centroids and inertia. cuVS uses float for these even if input is half.
     // Also input data X must be float/double.
@@ -52,13 +52,10 @@ public:
     std::shared_mutex mutex_;
 
     gpu_kmeans_t(uint32_t n_clusters, uint32_t dimension, cuvs::distance::DistanceType metric,
-                 int max_iter, float tol, int n_init, int device_id, uint32_t nthread)
+                 int max_iter = 20, int device_id = 0, uint32_t nthread = 1)
         : n_clusters(n_clusters), dimension(dimension) {
         
-        params.n_clusters = static_cast<int>(n_clusters);
-        params.max_iter = max_iter;
-        params.tol = tol;
-        params.n_init = n_init;
+        params.n_iters = static_cast<uint32_t>(max_iter);
         params.metric = metric;
 
         // K-Means in cuVS is currently single-GPU focused in the main cluster API
@@ -110,18 +107,12 @@ public:
                         raft::make_device_matrix<DataT, int64_t>(*res, static_cast<int64_t>(n_clusters), static_cast<int64_t>(dimension)));
                 }
 
-                float inertia = 0;
-                int64_t n_iter = 0;
-
                 cuvs::cluster::kmeans::fit(*res, params, 
                                            raft::make_const_mdspan(X_device.view()), 
-                                           std::nullopt,
-                                           centroids_->view(),
-                                           raft::make_host_scalar_view(&inertia),
-                                           raft::make_host_scalar_view(&n_iter));
+                                           centroids_->view());
 
                 raft::resource::sync_stream(*res);
-                return fit_result_t{inertia, n_iter};
+                return fit_result_t{0.0f, static_cast<int64_t>(params.n_iters)};
             }
         );
         auto result = worker->wait(job_id).get();
@@ -167,24 +158,21 @@ public:
 
                 predict_result_t res_out;
                 res_out.labels.resize(n_samples);
-                auto labels_device = raft::make_device_vector<int64_t, int64_t>(*res, static_cast<int64_t>(n_samples));
+                auto labels_device = raft::make_device_vector<uint32_t, int64_t>(*res, static_cast<int64_t>(n_samples));
                 
-                float inertia = 0;
-
                 cuvs::cluster::kmeans::predict(*res, params,
                                                raft::make_const_mdspan(X_device.view()),
-                                               std::nullopt,
                                                raft::make_const_mdspan(centroids_->view()),
-                                               labels_device.view(),
-                                               false,
-                                               raft::make_host_scalar_view(&inertia));
+                                               labels_device.view());
 
-                RAFT_CUDA_TRY(cudaMemcpyAsync(res_out.labels.data(), labels_device.data_handle(),
-                                         n_samples * sizeof(int64_t), cudaMemcpyDeviceToHost,
+                std::vector<uint32_t> host_labels(n_samples);
+                RAFT_CUDA_TRY(cudaMemcpyAsync(host_labels.data(), labels_device.data_handle(),
+                                         n_samples * sizeof(uint32_t), cudaMemcpyDeviceToHost,
                                          raft::resource::get_cuda_stream(*res)));
                 
                 raft::resource::sync_stream(*res);
-                res_out.inertia = inertia;
+                for(uint64_t i=0; i<n_samples; ++i) res_out.labels[i] = (int64_t)host_labels[i];
+                res_out.inertia = 0.0f;
                 return res_out;
             }
         );
@@ -235,25 +223,22 @@ public:
 
                 fit_predict_result_t res_out;
                 res_out.labels.resize(n_samples);
-                auto labels_device = raft::make_device_vector<int64_t, int64_t>(*res, static_cast<int64_t>(n_samples));
-                float inertia = 0;
-                int64_t n_iter = 0;
+                auto labels_device = raft::make_device_vector<uint32_t, int64_t>(*res, static_cast<int64_t>(n_samples));
 
                 cuvs::cluster::kmeans::fit_predict(*res, params,
                                                    raft::make_const_mdspan(X_device.view()),
-                                                   std::nullopt,
-                                                   std::make_optional(centroids_->view()),
-                                                   labels_device.view(),
-                                                   raft::make_host_scalar_view(&inertia),
-                                                   raft::make_host_scalar_view(&n_iter));
+                                                   centroids_->view(),
+                                                   labels_device.view());
 
-                RAFT_CUDA_TRY(cudaMemcpyAsync(res_out.labels.data(), labels_device.data_handle(),
-                                         n_samples * sizeof(int64_t), cudaMemcpyDeviceToHost,
+                std::vector<uint32_t> host_labels(n_samples);
+                RAFT_CUDA_TRY(cudaMemcpyAsync(host_labels.data(), labels_device.data_handle(),
+                                         n_samples * sizeof(uint32_t), cudaMemcpyDeviceToHost,
                                          raft::resource::get_cuda_stream(*res)));
                 
                 raft::resource::sync_stream(*res);
-                res_out.inertia = inertia;
-                res_out.n_iter = n_iter;
+                for(uint64_t i=0; i<n_samples; ++i) res_out.labels[i] = (int64_t)host_labels[i];
+                res_out.inertia = 0.0f;
+                res_out.n_iter = static_cast<int64_t>(params.n_iters);
                 return res_out;
             }
         );

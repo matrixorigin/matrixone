@@ -16,7 +16,7 @@ typedef void* gpu_kmeans_result_c;
 
 // Constructor
 gpu_kmeans_c gpu_kmeans_new(uint32_t n_clusters, uint32_t dimension, distance_type_t metric,
-                            int max_iter, float tol, int n_init, int device_id, uint32_t nthread, 
+                            int max_iter, int device_id, uint32_t nthread, 
                             quantization_t qtype, void* errmsg);
 
 // Destructor

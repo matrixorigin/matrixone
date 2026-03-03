@@ -50,7 +50,7 @@ struct gpu_kmeans_any_t {
 extern "C" {
 
 gpu_kmeans_c gpu_kmeans_new(uint32_t n_clusters, uint32_t dimension, distance_type_t metric_c,
-                            int max_iter, float tol, int n_init, int device_id, uint32_t nthread, 
+                            int max_iter, int device_id, uint32_t nthread, 
                             quantization_t qtype, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
@@ -58,10 +58,10 @@ gpu_kmeans_c gpu_kmeans_new(uint32_t n_clusters, uint32_t dimension, distance_ty
         void* kmeans_ptr = nullptr;
         switch (qtype) {
             case Quantization_F32:
-                kmeans_ptr = new matrixone::gpu_kmeans_t<float>(n_clusters, dimension, metric, max_iter, tol, n_init, device_id, nthread);
+                kmeans_ptr = new matrixone::gpu_kmeans_t<float>(n_clusters, dimension, metric, max_iter, device_id, nthread);
                 break;
             case Quantization_F16:
-                kmeans_ptr = new matrixone::gpu_kmeans_t<half>(n_clusters, dimension, metric, max_iter, tol, n_init, device_id, nthread);
+                kmeans_ptr = new matrixone::gpu_kmeans_t<half>(n_clusters, dimension, metric, max_iter, device_id, nthread);
                 break;
             default:
                 throw std::runtime_error("Unsupported quantization type for KMeans");

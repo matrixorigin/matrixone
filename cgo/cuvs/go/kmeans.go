@@ -23,7 +23,7 @@ type GpuKMeans[T VectorType] struct {
 }
 
 // NewGpuKMeans creates a new GpuKMeans instance.
-func NewGpuKMeans[T VectorType](nClusters uint32, dimension uint32, metric DistanceType, maxIter int, tol float32, nInit int, deviceID int, nthread uint32) (*GpuKMeans[T], error) {
+func NewGpuKMeans[T VectorType](nClusters uint32, dimension uint32, metric DistanceType, maxIter int, deviceID int, nthread uint32) (*GpuKMeans[T], error) {
     qtype := GetQuantization[T]()
     if qtype != F32 && qtype != F16 {
         return nil, fmt.Errorf("KMeans only supports float32 and float16")
@@ -35,8 +35,6 @@ func NewGpuKMeans[T VectorType](nClusters uint32, dimension uint32, metric Dista
         C.uint32_t(dimension),
         C.distance_type_t(metric),
         C.int(maxIter),
-        C.float(tol),
-        C.int(nInit),
         C.int(deviceID),
         C.uint32_t(nthread),
         C.quantization_t(qtype),

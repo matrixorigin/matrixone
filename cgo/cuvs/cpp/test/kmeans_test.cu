@@ -22,12 +22,10 @@ TEST(GpuKMeansTest, BasicFitAndPredict) {
         20.1f, 20.1f, 20.0f, 20.2f, 20.2f, 20.0f  // Cluster 2
     };
 
-    int device_id = 0;
-    gpu_kmeans_t<float> kmeans(n_clusters, dimension, cuvs::distance::DistanceType::L2Expanded, 100, 1e-4f, 1, device_id, 1);
+    gpu_kmeans_t<float> kmeans(n_clusters, dimension, cuvs::distance::DistanceType::L2Expanded, 20, 0, 1);
 
     auto fit_res = kmeans.fit(dataset.data(), n_samples);
     ASSERT_GE(fit_res.n_iter, 1);
-    ASSERT_GE(fit_res.inertia, 0.0f);
 
     auto predict_res = kmeans.predict(dataset.data(), n_samples);
     ASSERT_EQ(predict_res.labels.size(), (size_t)n_samples);
@@ -57,13 +55,11 @@ TEST(GpuKMeansTest, FitPredict) {
     std::vector<float> dataset(n_samples * dimension);
     for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
 
-    int device_id = 0;
-    gpu_kmeans_t<float> kmeans(n_clusters, dimension, cuvs::distance::DistanceType::L2Expanded, 100, 1e-4f, 1, device_id, 1);
+    gpu_kmeans_t<float> kmeans(n_clusters, dimension, cuvs::distance::DistanceType::L2Expanded, 20, 0, 1);
 
     auto res = kmeans.fit_predict(dataset.data(), n_samples);
     ASSERT_EQ(res.labels.size(), (size_t)n_samples);
     ASSERT_GE(res.n_iter, 1);
-    ASSERT_GE(res.inertia, 0.0f);
 
     kmeans.destroy();
 }
@@ -75,8 +71,7 @@ TEST(GpuKMeansTest, GetCentroids) {
     std::vector<float> dataset(n_samples * dimension);
     for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
 
-    int device_id = 0;
-    gpu_kmeans_t<float> kmeans(n_clusters, dimension, cuvs::distance::DistanceType::L2Expanded, 100, 1e-4f, 1, device_id, 1);
+    gpu_kmeans_t<float> kmeans(n_clusters, dimension, cuvs::distance::DistanceType::L2Expanded, 20, 0, 1);
 
     kmeans.fit(dataset.data(), n_samples);
     auto centroids = kmeans.get_centroids();
