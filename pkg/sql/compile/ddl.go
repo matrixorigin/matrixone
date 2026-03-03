@@ -24,7 +24,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -115,14 +114,39 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 
-	// After acquiring the Exclusive lock, refresh the snapshot to the latest
-	// timestamp so that Relations() can see all tables committed before this
-	// point. This covers the edge case where a concurrent "data branch create
-	// table" transaction committed and released its Shared lock before DROP
-	// started locking (Mode B situation 1), in which case the lock service
-	// returns no conflict and doLock does not advance the snapshot.
-	if err = refreshSnapshotAfterLock(c); err != nil {
-		return err
+	// After acquiring the exclusive lock on mo_database, refresh the
+	// transaction's snapshot to the latest applied logtail timestamp.
+	//
+	// This fixes a race condition between concurrent CLONE (CREATE TABLE)
+	// and DROP DATABASE:
+	//   1. CLONE acquires Shared lock on mo_database, creates table in
+	//      mo_tables, commits, releases Shared lock.
+	//   2. DROP acquires Exclusive lock on mo_database. The lock service
+	//      runs hasNewVersionInRange on mo_database rows, but CLONE did
+	//      NOT modify mo_database (only mo_tables), so changed=false and
+	//      the snapshot is NOT advanced past CLONE's commit timestamp.
+	//   3. DROP calls Relations() with the stale snapshot, misses the
+	//      newly created table, and drops the database without deleting
+	//      the table — leaving an orphan record in mo_tables that causes
+	//      an OkExpectedEOB panic during checkpoint replay.
+	//
+	// By explicitly advancing the snapshot to the latest commit timestamp
+	// after acquiring the exclusive lock, we ensure Relations() sees all
+	// tables committed before the lock was granted.
+	{
+		txnOp := c.proc.GetTxnOperator()
+		if txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
+			latestCommitTS := c.proc.Base.TxnClient.GetLatestCommitTS()
+			if txnOp.Txn().SnapshotTS.Less(latestCommitTS) {
+				newTS, err := c.proc.Base.TxnClient.WaitLogTailAppliedAt(c.proc.Ctx, latestCommitTS)
+				if err != nil {
+					return err
+				}
+				if err := txnOp.UpdateSnapshot(c.proc.Ctx, newTS); err != nil {
+					return err
+				}
+			}
+		}
 	}
 
 	// handle sub
@@ -3868,24 +3892,6 @@ var lockMoDatabase = func(c *Compile, dbName string, lockMode lock.LockMode) err
 		return err
 	}
 	return nil
-}
-
-// refreshSnapshotAfterLock advances the transaction's snapshot to the current
-// HLC timestamp. This ensures that subsequent reads (e.g. Relations()) see all
-// data committed up to this moment, regardless of whether the lock service
-// reported a conflict.
-//
-// This is necessary because the lock conflict detection only checks the locked
-// table (mo_database), but concurrent transactions may have modified related
-// tables (mo_tables) without changing mo_database. In such cases, doLock's
-// hasNewVersionInRange returns false and the snapshot is not advanced.
-var refreshSnapshotAfterLock = func(c *Compile) error {
-	now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
-	ts, err := c.proc.Base.TxnClient.WaitLogTailAppliedAt(c.proc.Ctx, now)
-	if err != nil {
-		return err
-	}
-	return c.proc.GetTxnOperator().UpdateSnapshot(c.proc.Ctx, ts)
 }
 
 var lockMoTable = func(
