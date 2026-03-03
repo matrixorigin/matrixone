@@ -24,7 +24,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -115,16 +114,6 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 
-	// After acquiring the Exclusive lock, refresh the snapshot to the latest
-	// timestamp so that Relations() can see all tables committed before this
-	// point. This covers the edge case where a concurrent "data branch create
-	// table" transaction committed and released its Shared lock before DROP
-	// started locking (Mode B situation 1), in which case the lock service
-	// returns no conflict and doLock does not advance the snapshot.
-	if err = refreshSnapshotAfterLock(c); err != nil {
-		return err
-	}
-
 	// handle sub
 	if db.IsSubscription(c.proc.Ctx) {
 		if err = dropSubscription(c.proc.Ctx, c, dbName); err != nil {
@@ -138,49 +127,39 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 
-	database, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
+	// Get all tables from a fresh snapshot (includes tables committed by
+	// concurrent transactions after our snapshot). This is used later to
+	// identify orphan tables that need cleanup.
+	allTables, allHiddenTables, err := listRelationsAtLatestSnapshot(c, dbName)
 	if err != nil {
 		return err
 	}
-	relations, err := database.Relations(c.proc.Ctx)
+	// Combine regular and hidden tables for orphan detection later.
+	allTablesIncludingHidden := append(allTables, allHiddenTables...)
+
+	// Query tables visible to the current txn BEFORE Engine.Delete modifies
+	// the workspace. After Engine.Delete, the workspace tombstones make these
+	// tables invisible, which would break the orphan diff calculation.
+	visibleTables, err := listVisibleRelations(c, dbName)
 	if err != nil {
 		return err
 	}
-	var ignoreTables []string
-	for _, r := range relations {
-		t, err := database.Relation(c.proc.Ctx, r, nil)
-		if err != nil {
-			return err
-		}
-		defs, err := t.TableDefs(c.proc.Ctx)
-		if err != nil {
-			return err
-		}
 
-		constrain := GetConstraintDefFromTableDefs(defs)
-		for _, ct := range constrain.Cts {
-			if ds, ok := ct.(*engine.IndexDef); ok {
-				for _, d := range ds.Indexes {
-					ignoreTables = append(ignoreTables, d.IndexTableName)
-				}
-			}
+	// Filter out hidden/index tables from visibleTables for DROP TABLE loop.
+	// Hidden tables (like index tables) are dropped automatically when their
+	// parent table is dropped, so we should not drop them directly.
+	var deleteTables []string
+	for _, t := range visibleTables {
+		if !catalog.IsHiddenTable(t) {
+			deleteTables = append(deleteTables, t)
 		}
 	}
 
-	deleteTables := make([]string, 0, len(relations)-len(ignoreTables))
-	for _, r := range relations {
-		isIndexTable := false
-		for _, d := range ignoreTables {
-			if d == r {
-				isIndexTable = true
-				break
-			}
-		}
-		if !isIndexTable {
-			deleteTables = append(deleteTables, r)
-		}
-	}
-
+	// Drop tables visible to the current transaction via normal SQL path.
+	// We use visibleTables (filtered) here, NOT allTables, because:
+	// 1. Tables in allTables but not in visibleTables are orphans (invisible
+	//    to current txn), DROP TABLE IF EXISTS would be a no-op for them.
+	// 2. We need to drop only the tables that the current txn can see and lock.
 	for _, t := range deleteTables {
 		dropSql := fmt.Sprintf(dropTableBeforeDropDatabase, dbName, t)
 		err = c.runSql(dropSql)
@@ -199,6 +178,24 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	err = c.e.Delete(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		return err
+	}
+
+	// Clean up orphan table records that the current transaction could not see.
+	// After the DROP TABLE loop and Engine.Delete above, any tables that were
+	// visible to the current txn have been properly deleted (with locks held).
+	// However, tables committed by concurrent "data branch create table" after
+	// our snapshot are invisible to the current txn — the DROP TABLE IF EXISTS
+	// was a no-op for them, leaving orphan records in mo_tables/mo_columns.
+	//
+	// We identify orphans by comparing allTablesIncludingHidden (fresh snapshot)
+	// against visibleTables (current txn snapshot, captured before Engine.Delete).
+	// The orphan records are NOT locked by the current txn, so a separate
+	// transaction can safely delete them without deadlock.
+	orphanTables := diffStringSlice(allTablesIncludingHidden, visibleTables)
+	if len(orphanTables) > 0 {
+		if err = deleteOrphanTableRecords(c, dbName, orphanTables); err != nil {
+			return err
+		}
 	}
 
 	// 1.delete all index object record under the database from mo_catalog.mo_indexes
@@ -225,7 +222,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 			catalog.MO_PITR_ACCOUNT_ID, accountId,
 			catalog.MO_PITR_DB_NAME, dbName,
 			catalog.MO_PITR_STATUS, 1,
-			catalog.MO_PITR_OBJECT_ID, database.GetDatabaseId(c.proc.Ctx),
+			catalog.MO_PITR_OBJECT_ID, db.GetDatabaseId(c.proc.Ctx),
 		)
 
 		err = c.runSqlWithSystemTenant(updatePitrSql)
@@ -3870,22 +3867,158 @@ var lockMoDatabase = func(c *Compile, dbName string, lockMode lock.LockMode) err
 	return nil
 }
 
-// refreshSnapshotAfterLock advances the transaction's snapshot to the current
-// HLC timestamp. This ensures that subsequent reads (e.g. Relations()) see all
-// data committed up to this moment, regardless of whether the lock service
-// reported a conflict.
+// listRelationsAtLatestSnapshot reads the table list for the given database
+// using a separate read-only transaction at the latest snapshot. This avoids
+// advancing the current transaction's SnapshotTS, which would bypass the
+// workspace tombstone transfer mechanism and cause duplicate-key errors.
 //
-// This is necessary because the lock conflict detection only checks the locked
-// table (mo_database), but concurrent transactions may have modified related
-// tables (mo_tables) without changing mo_database. In such cases, doLock's
-// hasNewVersionInRange returns false and the snapshot is not advanced.
-var refreshSnapshotAfterLock = func(c *Compile) error {
-	now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
-	ts, err := c.proc.Base.TxnClient.WaitLogTailAppliedAt(c.proc.Ctx, now)
+// Returns (deleteTables, ignoreTables, error) where ignoreTables contains
+// hidden/index table names that should not be dropped directly.
+var listRelationsAtLatestSnapshot = func(c *Compile, dbName string) ([]string, []string, error) {
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-	return c.proc.GetTxnOperator().UpdateSnapshot(c.proc.Ctx, ts)
+
+	// Query mo_tables in a fresh transaction to see all committed data.
+	sql := fmt.Sprintf(
+		"select %s from `%s`.`%s` where %s = %d and %s = '%s'",
+		catalog.SystemRelAttr_Name, catalog.MO_CATALOG, catalog.MO_TABLES,
+		catalog.SystemRelAttr_AccID, accountID,
+		catalog.SystemRelAttr_DBName, dbName,
+	)
+
+	exec := c.getInternalSQLExecutor()
+	ctx := c.proc.Ctx
+	opts := executor.Options{}.
+		WithDatabase(c.db).
+		WithTimeZone(c.proc.GetSessionInfo().TimeZone).
+		WithDisableIncrStatement()
+
+	res, err := exec.Exec(ctx, sql, opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer res.Close()
+
+	var deleteTables []string
+	var ignoreTables []string
+	for _, b := range res.Batches {
+		for i, v := 0, b.Vecs[0]; i < v.Length(); i++ {
+			name := v.GetStringAt(i)
+			if catalog.IsHiddenTable(name) {
+				ignoreTables = append(ignoreTables, name)
+			} else {
+				deleteTables = append(deleteTables, name)
+			}
+		}
+	}
+	return deleteTables, ignoreTables, nil
+}
+
+// listVisibleRelations queries mo_tables using the current transaction to get
+// the list of tables visible to the current txn's snapshot. This is used to
+// compute the diff against allTables (from a fresh snapshot) to identify
+// orphan tables that need cleanup.
+var listVisibleRelations = func(c *Compile, dbName string) ([]string, error) {
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	sql := fmt.Sprintf(
+		"select %s from `%s`.`%s` where %s = %d and %s = '%s'",
+		catalog.SystemRelAttr_Name, catalog.MO_CATALOG, catalog.MO_TABLES,
+		catalog.SystemRelAttr_AccID, accountID,
+		catalog.SystemRelAttr_DBName, dbName,
+	)
+
+	exec := c.getInternalSQLExecutor()
+	ctx := c.proc.Ctx
+	opts := executor.Options{}.
+		WithDatabase(c.db).
+		WithTimeZone(c.proc.GetSessionInfo().TimeZone).
+		WithDisableIncrStatement().
+		WithTxn(c.proc.GetTxnOperator())
+
+	res, err := exec.Exec(ctx, sql, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Close()
+
+	var tables []string
+	for _, b := range res.Batches {
+		for i, v := 0, b.Vecs[0]; i < v.Length(); i++ {
+			tables = append(tables, v.GetStringAt(i))
+		}
+	}
+	return tables, nil
+}
+
+// diffStringSlice returns elements in 'all' that are not in 'visible'.
+func diffStringSlice(all, visible []string) []string {
+	set := make(map[string]struct{}, len(visible))
+	for _, s := range visible {
+		set[s] = struct{}{}
+	}
+	var diff []string
+	for _, s := range all {
+		if _, ok := set[s]; !ok {
+			diff = append(diff, s)
+		}
+	}
+	return diff
+}
+
+// deleteOrphanTableRecords removes orphan table records in mo_tables and
+// mo_columns for the given database. Only the specified orphan table names
+// are deleted. These are tables that were committed by a concurrent "data
+// branch create table" after the DropDatabase transaction's snapshot, making
+// them invisible to the current transaction. Because the current transaction
+// does NOT hold locks on these orphan records, a separate transaction can
+// safely delete them without deadlock.
+//
+// We use engine.Database.Delete() (not raw SQL DELETE) because TN expects
+// mo_tables DELETE entries to have the full batch format produced by
+// GenDropTableTuple. A raw SQL DELETE only generates a tombstone batch
+// (rowid + pk), which causes an index-out-of-range panic in TN's
+// parseDeleteTable → genDropTables.
+//
+// We also cannot use "DROP TABLE IF EXISTS" SQL in the separate transaction
+// because the DropTable DDL path calls lockMoDatabase(Shared), which
+// conflicts with the parent transaction's Exclusive lock on mo_database.
+// Instead, we call engine.Database.Delete() directly, which goes through
+// txnDatabase.deleteTable() and produces the correct batch format without
+// acquiring any mo_database locks.
+var deleteOrphanTableRecords = func(c *Compile, dbName string, orphanTables []string) error {
+	exec := c.getInternalSQLExecutor()
+	ctx := c.proc.Ctx
+	opts := executor.Options{}.
+		WithDatabase(c.db).
+		WithTimeZone(c.proc.GetSessionInfo().TimeZone).
+		WithDisableIncrStatement()
+
+	return exec.ExecTxn(ctx, func(te executor.TxnExecutor) error {
+		txnOp := te.Txn()
+		db, err := c.e.Database(ctx, dbName, txnOp)
+		if err != nil {
+			// Database may already be invisible if the parent txn's
+			// Engine.Delete has been committed by the time this runs.
+			// In that case, there's nothing to clean up.
+			// Only ignore ErrBadDB; propagate other errors (e.g., network).
+			if moerr.IsMoErrCode(err, moerr.ErrBadDB) {
+				return nil
+			}
+			return err
+		}
+		for _, tblName := range orphanTables {
+			if err := db.Delete(ctx, tblName); err != nil {
+				return err
+			}
+		}
+		return nil
+	}, opts)
 }
 
 var lockMoTable = func(
