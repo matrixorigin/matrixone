@@ -17,12 +17,12 @@ create table spill_t2 (
     category varchar(50)
 );
 
--- Insert test data
-insert into spill_t1 select result, concat('name_', result), result * 10 from generate_series(1, 1000) g;
-insert into spill_t2 select result, (result % 1000) + 1, concat('cat_', result % 5) from generate_series(1, 1000) g;
+-- Insert test data - increased to trigger spill with 128MB threshold
+insert into spill_t1 select result, concat('name_', result), result * 10 from generate_series(1, 100000) g;
+insert into spill_t2 select result, (result % 100000) + 1, concat('cat_', result % 5) from generate_series(1, 100000) g;
 
 -- Test 1: Inner join with spill enabled (low threshold to force spilling)
-set @@join_spill_mem = 1048576;
+set @@join_spill_mem = 10000;
 select count(*) from spill_t1 inner join spill_t2 on spill_t1.id = spill_t2.t1_id;
 
 -- Test 2: Left join with spill
@@ -30,20 +30,20 @@ select count(*) from spill_t1 left join spill_t2 on spill_t1.id = spill_t2.t1_id
 
 -- Test 3: Join with aggregation and spill
 select spill_t2.category, count(*) as cnt
-from spill_t1 
+from spill_t1
 inner join spill_t2 on spill_t1.id = spill_t2.t1_id
 group by spill_t2.category
 order by spill_t2.category;
 
 -- Test 4: Join with where clause and spill
 select count(*)
-from spill_t1 
+from spill_t1
 inner join spill_t2 on spill_t1.id = spill_t2.t1_id
 where spill_t1.value > 1000 and spill_t1.value < 5000;
 
 -- Test 5: Join with order by and limit
 select spill_t1.id, spill_t1.name, spill_t2.category
-from spill_t1 
+from spill_t1
 inner join spill_t2 on spill_t1.id = spill_t2.t1_id
 where spill_t1.id <= 5
 order by spill_t1.id;
@@ -53,14 +53,13 @@ set @@join_spill_mem = 0;
 select count(*) from spill_t1 inner join spill_t2 on spill_t1.id = spill_t2.t1_id;
 
 -- Test 7: Very low threshold to force aggressive spilling
-set @@join_spill_mem = 65536;
+set @@join_spill_mem = 10000;
 select count(*)
-from spill_t1 
+from spill_t1
 inner join spill_t2 on spill_t1.id = spill_t2.t1_id
 where spill_t1.id between 100 and 200;
 
 -- Test 8: Join with subquery and spill
-set @@join_spill_mem = 1048576;
 select count(*)
 from spill_t1
 inner join (
@@ -74,4 +73,3 @@ where sub.cnt > 0;
 drop table spill_t1;
 drop table spill_t2;
 set @@join_spill_mem = 0;
-

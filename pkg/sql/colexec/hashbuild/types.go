@@ -15,7 +15,9 @@
 package hashbuild
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -38,6 +40,7 @@ type container struct {
 	hashmapBuilder  HashmapBuilder
 	spilledBuckets  []string
 	spilledRowCnts  []int64
+	spillThreshold  int64
 }
 
 type HashBuild struct {
@@ -132,4 +135,18 @@ func (hashBuild *HashBuild) cleanupSpillFiles(proc *process.Process) {
 
 func (hashBuild *HashBuild) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
 	return input, nil
+}
+
+func (ctr *container) setSpillThreshold(threshold int64) {
+	if threshold == 0 {
+		// 0 means auto config
+		mem := int64(system.MemoryTotal()) / int64(system.GoMaxProcs()) / 8
+		// min 128MB
+		if mem < common.MiB*128 {
+			mem = common.MiB * 128
+		}
+		ctr.spillThreshold = mem
+	} else {
+		ctr.spillThreshold = threshold
+	}
 }

@@ -183,15 +183,24 @@ func appendBatchToSpillFiles(proc *process.Process, bat *batch.Batch, files []*o
 	return rowCnts, nil
 }
 
+func (ctr *container) memUsed() int64 {
+	sz := ctr.hashmapBuilder.GetSize()
+	for _, bat := range ctr.hashmapBuilder.Batches.Buf {
+		sz += int64(bat.Size())
+	}
+	return sz
+}
+
 func (hashBuild *HashBuild) shouldSpillBatches() bool {
-	if !hashBuild.IsShuffle || hashBuild.SpillThreshold <= 0 {
+	ctr := &hashBuild.ctr
+	if !hashBuild.IsShuffle || ctr.spillThreshold <= 0 {
 		return false
 	}
-	var totalSize int64
-	for _, bat := range hashBuild.ctr.hashmapBuilder.Batches.Buf {
-		totalSize += int64(bat.Size())
+	if ctr.spillThreshold <= 100000 {
+		return ctr.hashmapBuilder.GetGroupCount() >= uint64(ctr.spillThreshold)
+	} else {
+		return ctr.memUsed() > ctr.spillThreshold
 	}
-	return totalSize > hashBuild.SpillThreshold
 }
 
 // computeXXHash computes xxhash values for partitioning

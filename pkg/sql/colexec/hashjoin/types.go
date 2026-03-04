@@ -15,9 +15,11 @@
 package hashjoin
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -92,6 +94,7 @@ type container struct {
 	spilledBuildRowCnts []int64
 	spilledProbeBuckets []string
 	currentBucketIdx    int
+	spillThreshold      int64
 
 	// state for processing current bucket
 	bucketBuildBatches []*batch.Batch
@@ -335,4 +338,18 @@ func (hashJoin *HashJoin) IsLeftSingle() bool {
 
 func (hashJoin *HashJoin) IsRightSingle() bool {
 	return hashJoin.IsRightJoin && hashJoin.JoinType == plan.Node_SINGLE
+}
+
+func (ctr *container) setSpillThreshold(threshold int64) {
+	if threshold == 0 {
+		// 0 means auto config
+		mem := int64(system.MemoryTotal()) / int64(system.GoMaxProcs()) / 8
+		// min 128MB
+		if mem < common.MiB*128 {
+			mem = common.MiB * 128
+		}
+		ctr.spillThreshold = mem
+	} else {
+		ctr.spillThreshold = threshold
+	}
 }

@@ -8,7 +8,7 @@ drop table if exists spill_edge_t2;
 -- Test 1: Empty table join with spill enabled
 create table spill_edge_t1 (id int, val int);
 create table spill_edge_t2 (id int, val int);
-set @@join_spill_mem = 1048576;
+set @@join_spill_mem = 10000;
 select count(*) from spill_edge_t1 inner join spill_edge_t2 on spill_edge_t1.id = spill_edge_t2.id;
 drop table spill_edge_t1;
 drop table spill_edge_t2;
@@ -34,8 +34,8 @@ drop table spill_edge_t2;
 -- Test 4: All rows match with spill
 create table spill_edge_t1 (id int, val int);
 create table spill_edge_t2 (id int, val int);
-insert into spill_edge_t1 select result, result * 10 from generate_series(1, 100) g;
-insert into spill_edge_t2 select result, result * 20 from generate_series(1, 100) g;
+insert into spill_edge_t1 select result, result * 10 from generate_series(1, 10000) g;
+insert into spill_edge_t2 select result, result * 20 from generate_series(1, 10000) g;
 select count(*) from spill_edge_t1 inner join spill_edge_t2 on spill_edge_t1.id = spill_edge_t2.id;
 drop table spill_edge_t1;
 drop table spill_edge_t2;
@@ -61,9 +61,8 @@ drop table spill_edge_t2;
 -- Test 7: Large result set with very low spill threshold
 create table spill_edge_t1 (id int, val int);
 create table spill_edge_t2 (id int, val int);
-insert into spill_edge_t1 select result, result from generate_series(1, 500) g;
-insert into spill_edge_t2 select result, result from generate_series(1, 500) g;
-set @@join_spill_mem = 32768;
+insert into spill_edge_t1 select result, result from generate_series(1, 50000) g;
+insert into spill_edge_t2 select result, result from generate_series(1, 50000) g;
 select count(*) from spill_edge_t1 inner join spill_edge_t2 on spill_edge_t1.id = spill_edge_t2.id;
 drop table spill_edge_t1;
 drop table spill_edge_t2;
@@ -71,10 +70,9 @@ drop table spill_edge_t2;
 -- Test 8: Multiple join conditions with spill
 create table spill_edge_t1 (id1 int, id2 int, val int);
 create table spill_edge_t2 (id1 int, id2 int, val int);
-insert into spill_edge_t1 select result, result % 10, result from generate_series(1, 100) g;
-insert into spill_edge_t2 select result, result % 10, result from generate_series(1, 100) g;
-set @@join_spill_mem = 1048576;
-select count(*) from spill_edge_t1 inner join spill_edge_t2 
+insert into spill_edge_t1 select result, result % 10, result from generate_series(1, 10000) g;
+insert into spill_edge_t2 select result, result % 10, result from generate_series(1, 10000) g;
+select count(*) from spill_edge_t1 inner join spill_edge_t2
 on spill_edge_t1.id1 = spill_edge_t2.id1 and spill_edge_t1.id2 = spill_edge_t2.id2;
 drop table spill_edge_t1;
 drop table spill_edge_t2;

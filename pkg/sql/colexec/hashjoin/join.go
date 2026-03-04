@@ -70,6 +70,8 @@ func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
 	}
 
 	ctr := &hashJoin.ctr
+	ctr.setSpillThreshold(hashJoin.SpillThreshold)
+
 	if hashJoin.NonEqCond != nil && len(ctr.joinBats) == 0 {
 		ctr.joinBats = make([]*batch.Batch, 2)
 	}

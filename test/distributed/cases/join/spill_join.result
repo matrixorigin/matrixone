@@ -10,26 +10,26 @@ id int primary key,
 t1_id int,
 category varchar(50)
 );
-insert into spill_t1 select result, concat('name_', result), result * 10 from generate_series(1, 1000) g;
-insert into spill_t2 select result, (result % 1000) + 1, concat('cat_', result % 5) from generate_series(1, 1000) g;
-set @@join_spill_mem = 1048576;
+insert into spill_t1 select result, concat('name_', result), result * 10 from generate_series(1, 100000) g;
+insert into spill_t2 select result, (result % 100000) + 1, concat('cat_', result % 5) from generate_series(1, 100000) g;
+set @@join_spill_mem = 10000;
 select count(*) from spill_t1 inner join spill_t2 on spill_t1.id = spill_t2.t1_id;
 count(*)
-1000
+100000
 select count(*) from spill_t1 left join spill_t2 on spill_t1.id = spill_t2.t1_id;
 count(*)
-1000
+100000
 select spill_t2.category, count(*) as cnt
 from spill_t1
 inner join spill_t2 on spill_t1.id = spill_t2.t1_id
 group by spill_t2.category
 order by spill_t2.category;
 category    cnt
-cat_0    200
-cat_1    200
-cat_2    200
-cat_3    200
-cat_4    200
+cat_0    20000
+cat_1    20000
+cat_2    20000
+cat_3    20000
+cat_4    20000
 select count(*)
 from spill_t1
 inner join spill_t2 on spill_t1.id = spill_t2.t1_id
@@ -50,15 +50,14 @@ id    name    category
 set @@join_spill_mem = 0;
 select count(*) from spill_t1 inner join spill_t2 on spill_t1.id = spill_t2.t1_id;
 count(*)
-1000
-set @@join_spill_mem = 65536;
+100000
+set @@join_spill_mem = 10000;
 select count(*)
 from spill_t1
 inner join spill_t2 on spill_t1.id = spill_t2.t1_id
 where spill_t1.id between 100 and 200;
 count(*)
 101
-set @@join_spill_mem = 1048576;
 select count(*)
 from spill_t1
 inner join (
@@ -68,7 +67,7 @@ group by t1_id
 ) sub on spill_t1.id = sub.t1_id
 where sub.cnt > 0;
 count(*)
-1000
+100000
 drop table spill_t1;
 drop table spill_t2;
 set @@join_spill_mem = 0;

@@ -44,6 +44,8 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 		hashBuild.OpAnalyzer.Reset()
 	}
 
+	hashBuild.ctr.setSpillThreshold(hashBuild.SpillThreshold)
+
 	if !hashBuild.NeedHashMap {
 		return nil
 	}
@@ -212,10 +214,7 @@ func (ctr *container) build(hashBuild *HashBuild, proc *process.Process, analyze
 				f.Close()
 			}
 		}
-	}
 
-	// Store spill info in container
-	if spillMode {
 		ctr.spilledBuckets = spilledBuckets
 		ctr.spilledRowCnts = spilledRowCnts
 	}
