@@ -17,11 +17,13 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -47,6 +49,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/stage"
@@ -143,6 +147,36 @@ func TestEscapeSQLStringForDoubleQuotes(t *testing.T) {
 			require.Equal(t, tc.want, got)
 		})
 	}
+}
+
+func TestEscapeSQLStringForDoubleQuotes_PythonUdfBodyRoundTrip(t *testing.T) {
+	payload := map[string]any{
+		"handler": "pdf_to_markdown",
+		"import":  false,
+		"body":    "def f():\n    return \"ok\"\n",
+	}
+	rawBytes, err := json.Marshal(payload)
+	require.NoError(t, err)
+	raw := string(rawBytes)
+
+	scanStringLiteral := func(s string) string {
+		scanner := mysqlparser.NewScanner(dialect.MYSQL, `"`+escapeSQLStringForDoubleQuotes(s)+`"`)
+		typ, val := scanner.Scan()
+		require.Equal(t, mysqlparser.STRING, typ)
+		return val
+	}
+
+	// Regression check: quoting JSON before SQL escaping leaves `\"` in storage,
+	// then python_udf json.Unmarshal fails with "invalid character '\\' ...".
+	bad := strconv.Quote(raw)
+	bad = bad[1 : len(bad)-1]
+	badStored := scanStringLiteral(bad)
+	var decoded map[string]any
+	require.Error(t, json.Unmarshal([]byte(badStored), &decoded))
+
+	goodStored := scanStringLiteral(raw)
+	require.Equal(t, raw, goodStored)
+	require.NoError(t, json.Unmarshal([]byte(goodStored), &decoded))
 }
 
 func TestPrivilegeType_Scope(t *testing.T) {
