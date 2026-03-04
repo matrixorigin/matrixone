@@ -781,7 +781,8 @@ type CCPRTxnCacheWriter interface {
 
 // filterNonAppendableObject handles non-appendable objects
 // For data objects: writes directly to fileservice with the original object name
-// For tombstone objects: converts to batch, rewrites rowids using aobjectMap, creates new object
+// For tombstone objects: reads blocks one by one, rewrites rowids using aobjectMap,
+// writes to a sorted sinker with the original object name
 // Returns the ObjectStats (original for data, new for tombstone)
 func filterNonAppendableObject(
 	ctx context.Context,
@@ -819,34 +820,14 @@ func filterNonAppendableObject(
 		return objectio.ObjectStats{}, ErrSyncProtectionTTLExpired
 	}
 
-	// For tombstone objects, convert to batch and rewrite rowids using aobjectMap
+	// For tombstone objects, read blocks one by one and rewrite rowids using aobjectMap
 	if isTombstone && aobjectMap != nil {
-		// Extract sortkey from original object metadata
-		sortKeySeqnum, err := extractSortKeyFromObject(ctx, objectContent, stats)
+		objStats, err := rewriteNonAppendableTombstoneWithSinker(
+			ctx, objectContent, stats, localFS, mp, aobjectMap,
+		)
 		if err != nil {
-			return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to extract sortkey from tombstone object: %v", err)
+			return objectio.ObjectStats{}, err
 		}
-
-		// Convert object file to batch
-		bat, err := convertObjectToBatch(ctx, objectContent, stats, snapshotTS, localFS, mp)
-		if err != nil {
-			return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to convert tombstone object to batch: %v", err)
-		}
-		defer bat.Close()
-
-		// Rewrite tombstone rowids using aobjectMap
-		if err := rewriteTombstoneRowids(ctx, bat, aobjectMap, mp); err != nil {
-			return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to rewrite tombstone rowids: %v", err)
-		}
-
-		// Create new object from batch with rewritten rowids
-		// Keep original object name for non-appendable tombstone (keepOriginalName=true)
-		// Ignore rowOffsetMap for tombstone objects (it's only needed for data objects)
-		objStats, _, err := createObjectFromBatch(ctx, bat, stats, snapshotTS, isTombstone, localFS, mp, sortKeySeqnum, true)
-		if err != nil {
-			return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to create object from tombstone batch: %v", err)
-		}
-
 		return objStats, nil
 	}
 
@@ -977,6 +958,362 @@ func extractSortKeyFromObject(
 	// Get sortkey seqnum from block header
 	sortKeySeqnum := dataMeta.BlockHeader().SortKey()
 	return sortKeySeqnum, nil
+}
+
+// rewriteNonAppendableTombstoneWithSinker reads tombstone blocks one by one,
+// rewrites rowids using aobjectMap, and writes to a sorted sinker with the original object name.
+// This avoids loading the entire object into memory at once.
+func rewriteNonAppendableTombstoneWithSinker(
+	ctx context.Context,
+	objectContent []byte,
+	stats *objectio.ObjectStats,
+	localFS fileservice.FileService,
+	mp *mpool.MPool,
+	aobjectMap AObjectMap,
+) (objectio.ObjectStats, error) {
+	// Step 1: Parse object metadata
+	metaExtent := stats.Extent()
+	if int(metaExtent.Offset()+metaExtent.Length()) > len(objectContent) {
+		return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "object content too small for meta extent")
+	}
+	metaBytes := objectContent[metaExtent.Offset() : metaExtent.Offset()+metaExtent.Length()]
+
+	// Decompress meta if needed
+	var decompressedMetaBytes []byte
+	var decompressedMetaBuf fscache.Data
+	if metaExtent.Alg() == compress.None {
+		decompressedMetaBytes = metaBytes
+	} else {
+		allocator := fileservice.DefaultCacheDataAllocator()
+		decompressedMetaBuf = allocator.AllocateCacheDataWithHint(ctx, int(metaExtent.OriginSize()), malloc.NoClear)
+		bs, err := compress.Decompress(metaBytes, decompressedMetaBuf.Bytes(), compress.Lz4)
+		if err != nil {
+			if decompressedMetaBuf != nil {
+				decompressedMetaBuf.Release()
+			}
+			return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to decompress meta data: %v", err)
+		}
+		decompressedMetaBytes = decompressedMetaBuf.Bytes()[:len(bs)]
+		decompressedMetaBytes = append([]byte(nil), decompressedMetaBytes...)
+		if decompressedMetaBuf != nil {
+			decompressedMetaBuf.Release()
+		}
+	}
+
+	meta := objectio.MustObjectMeta(decompressedMetaBytes)
+	dataMeta := meta.MustGetMeta(objectio.SchemaData)
+	blkCnt := dataMeta.BlockCount()
+	if blkCnt == 0 {
+		return objectio.ObjectStats{}, nil
+	}
+
+	// Step 2: Get column information from first block meta
+	firstBlkMeta := dataMeta.GetBlockMeta(0)
+	maxSeqnum := firstBlkMeta.GetMaxSeqnum()
+
+	// Prepare columns and types (excluding commit TS for non-appendable)
+	cols := make([]uint16, 0, maxSeqnum+1)
+	typs := make([]types.Type, 0, maxSeqnum+1)
+	for seqnum := uint16(0); seqnum <= maxSeqnum; seqnum++ {
+		colMeta := firstBlkMeta.ColumnMeta(seqnum)
+		if colMeta.DataType() == 0 {
+			continue
+		}
+		cols = append(cols, seqnum)
+		typ := types.T(colMeta.DataType()).ToType()
+		typs = append(typs, typ)
+	}
+
+	// Step 3: Create sinker factory with specified object name
+	// Use the original object name (segmentID + num)
+	segid := stats.ObjectName().SegmentId()
+	num := stats.ObjectName().Num()
+	objectName := objectio.BuildObjectName(&segid, num)
+
+	// Get PK type from second column (TombstoneAttr_PK_Idx = 1)
+	pkType := typs[objectio.TombstoneAttr_PK_Idx]
+
+	// Create tombstone sinker with the specified object name
+	sinkerFactory := newTombstoneFSinkerFactoryWithName(objectName, objectio.HiddenColumnSelection_None)
+	attrs, attrTypes := objectio.GetTombstoneSchema(pkType, objectio.HiddenColumnSelection_None)
+
+	sinker := ioutil.NewSinker(
+		objectio.TombstonePrimaryKeyIdx,
+		attrs,
+		attrTypes,
+		sinkerFactory,
+		mp,
+		localFS,
+		ioutil.WithTailSizeCap(0), // Force all data to be written to object
+	)
+	defer sinker.Close()
+
+	// Step 4: Read blocks one by one and write to sinker
+	allocator := fileservice.DefaultCacheDataAllocator()
+
+	for blkIdx := uint32(0); blkIdx < blkCnt; blkIdx++ {
+		// Read single block
+		blkBat, err := readSingleBlockToBatch(ctx, objectContent, dataMeta, blkIdx, cols, typs, maxSeqnum, allocator, mp)
+		if err != nil {
+			return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to read block %d: %v", blkIdx, err)
+		}
+
+		// Rewrite tombstone rowids using aobjectMap
+		if err := rewriteTombstoneRowidsBatch(ctx, blkBat, aobjectMap, mp); err != nil {
+			blkBat.Clean(mp)
+			return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to rewrite tombstone rowids for block %d: %v", blkIdx, err)
+		}
+
+		// Write to sinker
+		if err := sinker.Write(ctx, blkBat); err != nil {
+			blkBat.Clean(mp)
+			return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to write block %d to sinker: %v", blkIdx, err)
+		}
+
+		blkBat.Clean(mp)
+	}
+
+	// Step 5: Sync sinker and get result
+	if err := sinker.Sync(ctx); err != nil {
+		return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to sync sinker: %v", err)
+	}
+
+	persisted, _ := sinker.GetResult()
+	if len(persisted) == 0 {
+		return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "no object was created by sinker")
+	}
+
+	// Return the first (and only) object stats
+	return persisted[0], nil
+}
+
+// newTombstoneFSinkerFactoryWithName creates a FileSinkerFactory for tombstone
+// that uses a specified object name instead of generating a new one
+func newTombstoneFSinkerFactoryWithName(
+	objectName objectio.ObjectName,
+	hidden objectio.HiddenColumnSelection,
+) ioutil.FileSinkerFactory {
+	return func(mp *mpool.MPool, fs fileservice.FileService) ioutil.FileSinker {
+		return &tombstoneFSinkerWithName{
+			objectName:      objectName,
+			hiddenSelection: hidden,
+			mp:              mp,
+			fs:              fs,
+		}
+	}
+}
+
+// tombstoneFSinkerWithName is a FileSinker for tombstone that uses a specified object name
+type tombstoneFSinkerWithName struct {
+	writer          *ioutil.BlockWriter
+	objectName      objectio.ObjectName
+	hiddenSelection objectio.HiddenColumnSelection
+	mp              *mpool.MPool
+	fs              fileservice.FileService
+}
+
+func (s *tombstoneFSinkerWithName) Sink(ctx context.Context, b *batch.Batch) error {
+	if s.writer == nil {
+		// Create tombstone writer with specified object name
+		seqnums := objectio.GetTombstoneSeqnums(s.hiddenSelection)
+		segid := s.objectName.SegmentId()
+		s.writer = ioutil.ConstructWriterWithSegmentID(
+			&segid,
+			s.objectName.Num(),
+			0, // version
+			seqnums,
+			objectio.TombstonePrimaryKeyIdx, // sortkeyPos
+			true,                            // sortkeyIsPK
+			true,                            // isTombstone
+			s.fs,
+			nil, // arena
+		)
+	}
+	_, err := s.writer.WriteBatch(b)
+	return err
+}
+
+func (s *tombstoneFSinkerWithName) Sync(ctx context.Context) (*objectio.ObjectStats, error) {
+	if s.writer == nil {
+		return nil, nil
+	}
+	if _, _, err := s.writer.Sync(ctx); err != nil {
+		return nil, err
+	}
+	ss := s.writer.GetObjectStats(objectio.WithSorted(), objectio.WithCNCreated())
+	s.writer = nil
+	return &ss, nil
+}
+
+func (s *tombstoneFSinkerWithName) Reset() {
+	if s.writer != nil {
+		s.writer = nil
+	}
+}
+
+func (s *tombstoneFSinkerWithName) Close() error {
+	s.writer = nil
+	return nil
+}
+
+// readSingleBlockToBatch reads a single block from object content into a CN batch
+func readSingleBlockToBatch(
+	ctx context.Context,
+	objectContent []byte,
+	dataMeta objectio.ObjectDataMeta,
+	blkIdx uint32,
+	cols []uint16,
+	typs []types.Type,
+	maxSeqnum uint16,
+	allocator fileservice.CacheDataAllocator,
+	mp *mpool.MPool,
+) (*batch.Batch, error) {
+	blkMeta := dataMeta.GetBlockMeta(blkIdx)
+
+	// Create vectors for this block
+	vecs := make([]*vector.Vector, len(cols))
+	for i, typ := range typs {
+		vecs[i] = vector.NewVec(typ)
+	}
+
+	for i, seqnum := range cols {
+		var colMeta objectio.ColumnMeta
+		var ext objectio.Extent
+
+		if seqnum > maxSeqnum || blkMeta.ColumnMeta(seqnum).DataType() == 0 {
+			// Generate null values for missing columns
+			length := int(blkMeta.GetRows())
+			for j := 0; j < length; j++ {
+				if err := vector.AppendAny(vecs[i], nil, true, mp); err != nil {
+					// Clean up on error
+					for k := 0; k <= i; k++ {
+						vecs[k].Free(mp)
+					}
+					return nil, err
+				}
+			}
+			continue
+		}
+		colMeta = blkMeta.ColumnMeta(seqnum)
+		ext = colMeta.Location()
+
+		// Read column data from objectContent bytes
+		if int(ext.Offset()+ext.Length()) > len(objectContent) {
+			for k := 0; k <= i; k++ {
+				vecs[k].Free(mp)
+			}
+			return nil, moerr.NewInternalErrorf(ctx, "object content too small for column extent at seqnum %d, block %d", seqnum, blkIdx)
+		}
+		colData := objectContent[ext.Offset() : ext.Offset()+ext.Length()]
+
+		// Decompress if needed
+		var decompressedData []byte
+		var decompressedBuf fscache.Data
+
+		if ext.Alg() == compress.None {
+			decompressedData = append([]byte(nil), colData...)
+		} else {
+			decompressedBuf = allocator.AllocateCacheDataWithHint(ctx, int(ext.OriginSize()), malloc.NoClear)
+			bs, err := compress.Decompress(colData, decompressedBuf.Bytes(), compress.Lz4)
+			if err != nil {
+				if decompressedBuf != nil {
+					decompressedBuf.Release()
+				}
+				for k := 0; k <= i; k++ {
+					vecs[k].Free(mp)
+				}
+				return nil, moerr.NewInternalErrorf(ctx, "failed to decompress column data: %v", err)
+			}
+			decompressedData = decompressedBuf.Bytes()[:len(bs)]
+			decompressedData = append([]byte(nil), decompressedData...)
+			if decompressedBuf != nil {
+				decompressedBuf.Release()
+			}
+		}
+
+		// Decode to vector.Vector
+		obj, err := objectio.Decode(decompressedData)
+		if err != nil {
+			for k := 0; k <= i; k++ {
+				vecs[k].Free(mp)
+			}
+			return nil, moerr.NewInternalErrorf(ctx, "failed to decode column data: %v", err)
+		}
+		decodedVec := obj.(*vector.Vector)
+
+		// Copy data from decoded vector to result vector
+		if err := vecs[i].UnionBatch(decodedVec, 0, decodedVec.Length(), nil, mp); err != nil {
+			for k := 0; k <= i; k++ {
+				vecs[k].Free(mp)
+			}
+			return nil, moerr.NewInternalErrorf(ctx, "failed to union vector: %v", err)
+		}
+	}
+
+	// Create batch
+	bat := batch.NewWithSize(len(cols))
+	bat.Vecs = vecs
+	attrs := make([]string, len(cols))
+	for i := range cols {
+		attrs[i] = fmt.Sprintf("col_%d", i)
+	}
+	bat.SetAttributes(attrs)
+	bat.SetRowCount(vecs[0].Length())
+
+	return bat, nil
+}
+
+// rewriteTombstoneRowidsBatch rewrites delete rowids in CN batch using aobjectMap
+func rewriteTombstoneRowidsBatch(
+	ctx context.Context,
+	bat *batch.Batch,
+	aobjectMap AObjectMap,
+	mp *mpool.MPool,
+) error {
+	if bat == nil || bat.RowCount() == 0 || aobjectMap == nil {
+		return nil
+	}
+
+	// Tombstone schema: first column is delete rowid (TombstoneAttr_Rowid_Attr)
+	rowidVec := bat.Vecs[0]
+	if rowidVec == nil || rowidVec.Length() == 0 {
+		return nil
+	}
+
+	// Verify the column type is Rowid
+	if rowidVec.GetType().Oid != types.T_Rowid {
+		return moerr.NewInternalErrorf(ctx, "first column of tombstone should be rowid, got %s", rowidVec.GetType().String())
+	}
+
+	// Get rowid values from the vector
+	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](rowidVec)
+
+	// Iterate through each rowid and rewrite if mapping exists
+	for i := range rowids {
+		// Extract object ID from rowid
+		upstreamObjID := rowids[i].BorrowObjectID()
+		upstreamIDStr := upstreamObjID.String()
+
+		// Check if this object ID has a mapping in aobjectMap
+		if mapping, exists := aobjectMap.Get(upstreamIDStr); exists {
+			// Get downstream object ID from mapping
+			downstreamObjID := mapping.DownstreamStats.ObjectName().ObjectId()
+
+			// Replace the segment ID in rowid with downstream object's segment ID
+			rowids[i].SetSegment(types.Segmentid(*downstreamObjID.Segment()))
+			rowids[i].SetObjOffset(downstreamObjID.Offset())
+
+			// Rewrite row offset using RowOffsetMap if available
+			if mapping.RowOffsetMap != nil {
+				oldRowOffset := rowids[i].GetRowOffset()
+				if newRowOffset, ok := mapping.RowOffsetMap[oldRowOffset]; ok {
+					rowids[i].SetRowOffset(newRowOffset)
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 // convertObjectToBatch converts object file content to batch directly from memory
