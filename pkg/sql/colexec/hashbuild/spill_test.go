@@ -191,6 +191,7 @@ func TestShouldSpillBatches(t *testing.T) {
 			IsShuffle:      true,
 			SpillThreshold: 1, // 1 byte
 		}
+		hb.ctr.setSpillThreshold(1)
 		bat := batch.NewWithSize(1)
 		bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3, 4, 5}, nil, proc.Mp())
 		bat.SetRowCount(5)

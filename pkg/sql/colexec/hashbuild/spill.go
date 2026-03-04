@@ -191,13 +191,21 @@ func (ctr *container) memUsed() int64 {
 	return sz
 }
 
+func (ctr *container) rowCnt() int64 {
+	sz := 0
+	for _, bat := range ctr.hashmapBuilder.Batches.Buf {
+		sz += bat.RowCount()
+	}
+	return int64(sz)
+}
+
 func (hashBuild *HashBuild) shouldSpillBatches() bool {
 	ctr := &hashBuild.ctr
 	if !hashBuild.IsShuffle || ctr.spillThreshold <= 0 {
 		return false
 	}
 	if ctr.spillThreshold <= 100000 {
-		return ctr.hashmapBuilder.GetGroupCount() >= uint64(ctr.spillThreshold)
+		return ctr.rowCnt() >= ctr.spillThreshold
 	} else {
 		return ctr.memUsed() > ctr.spillThreshold
 	}
