@@ -27,9 +27,14 @@ type Insert struct {
 	IsRestore         bool
 	IsRestoreByTs     bool
 	FromDataTenantID  uint32
+	With              *With
 }
 
 func (node *Insert) Format(ctx *FmtCtx) {
+	if node.With != nil {
+		node.With.Format(ctx)
+		ctx.WriteByte(' ')
+	}
 	ctx.WriteString("insert into ")
 	node.Table.Format(ctx)
 

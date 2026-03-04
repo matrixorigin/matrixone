@@ -3691,3 +3691,69 @@ func TestLimitByRank(t *testing.T) {
 		})
 	}
 }
+
+// Test WITH clause support for INSERT statement (Issue #22583)
+func TestWithInsert(t *testing.T) {
+	tests := []struct {
+		input  string
+		output string
+	}{
+		{
+			input:  "WITH cte AS (SELECT * FROM t1) INSERT INTO t2 SELECT * FROM cte",
+			output: "with cte as (select * from t1) insert into t2 select * from cte",
+		},
+		{
+			input:  "WITH cte AS (SELECT id, name FROM t1 WHERE id > 10) INSERT INTO t2 SELECT * FROM cte",
+			output: "with cte as (select id, name from t1 where id > 10) insert into t2 select * from cte",
+		},
+		{
+			input:  "WITH cte1 AS (SELECT * FROM t1), cte2 AS (SELECT * FROM cte1) INSERT INTO t2 SELECT * FROM cte2",
+			output: "with cte1 as (select * from t1), cte2 as (select * from cte1) insert into t2 select * from cte2",
+		},
+		{
+			input:  "WITH RECURSIVE cte AS (SELECT 1 AS n UNION ALL SELECT n+1 FROM cte WHERE n < 10) INSERT INTO t SELECT * FROM cte",
+			output: "with recursive cte as (select 1 as n union all select n + 1 from cte where n < 10) insert into t select * from cte",
+		},
+		{
+			input:  "WITH cte AS (SELECT * FROM t1) INSERT INTO t2 (id, name) SELECT id, name FROM cte",
+			output: "with cte as (select * from t1) insert into t2 (id, name) select id, name from cte",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			ast, err := ParseOne(context.TODO(), test.input, 1)
+			require.NoError(t, err)
+			require.NotNil(t, ast)
+
+			// Verify it's an INSERT statement
+			ins, ok := ast.(*tree.Insert)
+			require.True(t, ok, "Expected *tree.Insert, got %T", ast)
+
+			// Verify WITH clause is present
+			require.NotNil(t, ins.With, "INSERT.With should not be nil")
+			require.Greater(t, len(ins.With.CTEs), 0, "WITH clause should have at least one CTE")
+
+			// Verify the statement can be formatted back
+			output := tree.String(ast, dialect.MYSQL)
+			require.Equal(t, test.output, output)
+		})
+	}
+}
+
+// Test that WITH clause is properly passed to SELECT in INSERT
+func TestWithInsertCTEPropagation(t *testing.T) {
+	sql := "WITH cte AS (SELECT * FROM t1) INSERT INTO t2 SELECT * FROM cte"
+	ast, err := ParseOne(context.TODO(), sql, 1)
+	require.NoError(t, err)
+
+	ins, ok := ast.(*tree.Insert)
+	require.True(t, ok)
+	require.NotNil(t, ins.With)
+	require.Equal(t, 1, len(ins.With.CTEs))
+	require.Equal(t, "cte", string(ins.With.CTEs[0].Name.Alias))
+
+	// Verify Rows is a SELECT statement
+	require.NotNil(t, ins.Rows)
+	require.NotNil(t, ins.Rows.Select)
+}

@@ -1,18 +1,38 @@
-CFLAGS=-I.. -g -Wall -Werror -lm -I../../thirdparties/install/include
+ifeq ($(MO_CL_CUDA),1)
+        ifeq ($(CONDA_PREFIX),)
+                $(error CONDA_PREFIX env variable not found. Please activate your conda environment.)
+        endif
+        CC = /usr/local/cuda/bin/nvcc
+	COMPILER_FLAGS := -Xcompiler "-Wall -Werror"
+	# When using nvcc to link, we need to pass the libraries and rpath
+	LINKER_FLAGS := -Xlinker "-rpath=$(shell realpath ..)"
+	# We must also include the cuVS and other deps that libmo_c.so needs if linked statically, 
+	# but since libmo_c.so is shared, we just need to link against it.
+	LIBS += -L.. -lmo_c -L../../thirdparties/install/lib -lusearch_c -L$(CUDA_PATH)/lib64/stubs -lcuda -L$(CUDA_PATH)/lib64 -lcudart
+	LIBS += -L$(CONDA_PREFIX)/lib -lcuvs -lcuvs_c -ldl -lrmm -lpthread  -lgomp
+	LIBS += -Xlinker -lpthread -Xlinker -lm
+else
+	COMPILER_FLAGS := -Wall -Werror
+	LINKER_FLAGS := -Wl,-rpath=$(shell realpath ..)
+	LIBS := -L.. -lmo_c -L../../thirdparties/install/lib -lusearch_c -lm -fopenmp -lstdc++
+endif
 
-all: test_add.exe test_bloom.exe test_varlena.exe bloom_whole_test.exe
+CFLAGS := -I.. -g -I../../thirdparties/install/include $(COMPILER_FLAGS)
+LDFLAGS := $(LIBS) $(LINKER_FLAGS)
 
-test_add.exe: test_add.c ../libmo.a
-	$(CC) $(CFLAGS) -o test_add.exe test_add.c -L.. -lmo
+all: test_add.exe test_bloom.exe test_varlena.exe
 
-test_bloom.exe: test_bloom.c ../libmo.a
-	$(CC) $(CFLAGS) -o test_bloom.exe test_bloom.c -L.. -lmo
+test_add.exe: test_add.c 
+	$(CC) $(CFLAGS) -o $@ test_add.c $(LDFLAGS)
 
-test_varlena.exe: varlena_test.c ../libmo.a
-	$(CC) $(CFLAGS) -o test_varlena.exe varlena_test.c -L.. -lmo
+test_bloom.exe: test_bloom.c
+	$(CC) $(CFLAGS) -o $@ test_bloom.c $(LDFLAGS)
 
-bloom_whole_test.exe: bloom_whole_test.c ../libmo.a
-	$(CC) $(CFLAGS) -o bloom_whole_test.exe bloom_whole_test.c -L.. -lmo
+test_varlena.exe: varlena_test.c
+	$(CC) $(CFLAGS) -o $@ varlena_test.c $(LDFLAGS)
+
+bloom_whole_test.exe: bloom_whole_test.c 
+	$(CC) $(CFLAGS) $(NVCC_FLAGS) -o bloom_whole_test.exe bloom_whole_test.c $(LDFLAGS)
 
 clean:
 	rm -f *.o *.exe

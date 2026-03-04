@@ -17,7 +17,6 @@
 package brute_force
 
 import (
-	//"fmt"
 	"math/rand/v2"
 	"sync"
 	"testing"
@@ -35,22 +34,22 @@ func TestGpuBruteForce(t *testing.T) {
 	dataset := [][]float32{{1, 2, 3}, {3, 4, 5}}
 	query := [][]float32{{1, 2, 3}, {3, 4, 5}}
 	dimension := uint(3)
-	ncpu := uint(1)
+	ncpu := uint(8)
 	limit := uint(1)
 	elemsz := uint(4) // float32
 
-	idx, err := NewGpuBruteForceIndex[float32](dataset, dimension, metric.Metric_L2sqDistance, elemsz)
+	idx, err := NewGpuBruteForceIndex[float32](dataset, dimension, metric.Metric_L2sqDistance, elemsz, ncpu)
 	require.NoError(t, err)
 	defer idx.Destroy()
 
 	err = idx.Load(nil)
 	require.NoError(t, err)
 
-	rt := vectorindex.RuntimeConfig{Limit: limit, NThreads: ncpu}
+	rt := vectorindex.RuntimeConfig{Limit: limit, NThreads: 1}
 
 	var wg sync.WaitGroup
 
-	for n := 0; n < 4; n++ {
+	for n := 0; n < 8; n++ {
 
 		wg.Add(1)
 		go func() {
@@ -66,7 +65,6 @@ func TestGpuBruteForce(t *testing.T) {
 					require.Equal(t, key, int64(j))
 					require.Equal(t, distances[j], float64(0))
 				}
-				// fmt.Printf("keys %v, dist %v\n", keys, distances)
 			}
 		}()
 	}
@@ -81,7 +79,7 @@ func TestGpuBruteForceConcurrent(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	dimension := uint(128)
-	ncpu := uint(4)
+	ncpu := uint(8)
 	limit := uint(3)
 	elemsz := uint(4) // float32
 
@@ -96,7 +94,7 @@ func TestGpuBruteForceConcurrent(t *testing.T) {
 
 	query := dataset
 
-	idx, err := NewGpuBruteForceIndex[float32](dataset, dimension, metric.Metric_L2sqDistance, elemsz)
+	idx, err := NewGpuBruteForceIndex[float32](dataset, dimension, metric.Metric_L2sqDistance, elemsz, ncpu)
 	require.NoError(t, err)
 	defer idx.Destroy()
 
@@ -105,13 +103,12 @@ func TestGpuBruteForceConcurrent(t *testing.T) {
 
 	// limit 3
 	{
-		rt := vectorindex.RuntimeConfig{Limit: limit, NThreads: ncpu}
+		rt := vectorindex.RuntimeConfig{Limit: limit, NThreads: 1}
 
 		anykeys, distances, err := idx.Search(sqlproc, query, rt)
 		require.NoError(t, err)
 
 		keys := anykeys.([]int64)
-		// fmt.Printf("keys %v, dist %v\n", keys, distances)
 		require.Equal(t, int(rt.Limit)*len(query), len(keys))
 		for i := range query {
 			offset := i * int(rt.Limit)
@@ -122,13 +119,12 @@ func TestGpuBruteForceConcurrent(t *testing.T) {
 
 	// limit 1
 	{
-		rt := vectorindex.RuntimeConfig{Limit: 1, NThreads: ncpu}
+		rt := vectorindex.RuntimeConfig{Limit: 1, NThreads: 1}
 
 		anykeys, distances, err := idx.Search(sqlproc, query, rt)
 		require.NoError(t, err)
 
 		keys := anykeys.([]int64)
-		// fmt.Printf("keys %v, dist %v\n", keys, distances)
 		require.Equal(t, int(rt.Limit)*len(query), len(keys))
 		for i := range query {
 			offset := i * int(rt.Limit)

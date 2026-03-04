@@ -17,84 +17,48 @@
 package device
 
 import (
-	//"os"
-
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans/elkans"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
-	cuvs "github.com/rapidsai/cuvs/go"
-	"github.com/rapidsai/cuvs/go/ivf_flat"
 )
 
-type GpuClusterer[T cuvs.TensorNumberType] struct {
-	indexParams *ivf_flat.IndexParams
-	nlist       int
-	dim         int
-	vectors     [][]T
+type GpuClusterer[T cuvs.VectorType] struct {
+	kmeans  *cuvs.GpuKMeans[T]
+	nlist   int
+	dim     int
+	vectors []T
 }
 
 func (c *GpuClusterer[T]) InitCentroids(ctx context.Context) error {
-
 	return nil
 }
 
 func (c *GpuClusterer[T]) Cluster(ctx context.Context) (any, error) {
+	if c.kmeans == nil {
+		return nil, moerr.NewInternalErrorNoCtx("GpuKMeans not initialized")
+	}
 
-	resource, err := cuvs.NewResource(nil)
+	nSamples := uint64(len(c.vectors) / c.dim)
+	_, _, err := c.kmeans.Fit(c.vectors, nSamples)
 	if err != nil {
 		return nil, err
 	}
-	defer resource.Close()
 
-	dataset, err := cuvs.NewTensor(c.vectors)
+	centroids, err := c.kmeans.GetCentroids()
 	if err != nil {
 		return nil, err
 	}
-	defer dataset.Close()
 
-	index, err := ivf_flat.CreateIndex(c.indexParams, &dataset)
-	if err != nil {
-		return nil, err
-	}
-	defer index.Close()
-
-	if _, err := dataset.ToDevice(&resource); err != nil {
-		return nil, err
-	}
-
-	centers, err := cuvs.NewTensorOnDevice[T](&resource, []int64{int64(c.nlist), int64(c.dim)})
-	if err != nil {
-		return nil, err
-	}
-	defer centers.Close()
-
-	if err := ivf_flat.BuildIndex(resource, c.indexParams, &dataset, index); err != nil {
-		return nil, err
-	}
-
-	if err := resource.Sync(); err != nil {
-		return nil, err
-	}
-
-	if err := ivf_flat.GetCenters(index, &centers); err != nil {
-		return nil, err
-	}
-
-	if _, err := centers.ToHost(&resource); err != nil {
-		return nil, err
-	}
-
-	if err := resource.Sync(); err != nil {
-		return nil, err
-	}
-
-	result, err := centers.Slice()
-	if err != nil {
-		return nil, err
+	// Reshape centroids back to [][]T
+	result := make([][]T, c.nlist)
+	for i := 0; i < c.nlist; i++ {
+		result[i] = make([]T, c.dim)
+		copy(result[i], centroids[i*c.dim:(i+1)*c.dim])
 	}
 
 	return result, nil
@@ -105,26 +69,26 @@ func (c *GpuClusterer[T]) SSE() (float64, error) {
 }
 
 func (c *GpuClusterer[T]) Close() error {
-	if c.indexParams != nil {
-		c.indexParams.Close()
+	if c.kmeans != nil {
+		return c.kmeans.Destroy()
 	}
 	return nil
 }
 
-func resolveCuvsDistanceForDense(distance metric.MetricType) cuvs.Distance {
+func resolveCuvsDistanceForDense(distance metric.MetricType) cuvs.DistanceType {
 	switch distance {
 	case metric.Metric_L2sqDistance:
-		return cuvs.DistanceL2
+		return cuvs.L2Expanded
 	case metric.Metric_L2Distance:
-		return cuvs.DistanceL2
+		return cuvs.L2Expanded
 	case metric.Metric_InnerProduct:
-		return cuvs.DistanceL2
+		return cuvs.InnerProduct
 	case metric.Metric_CosineDistance:
-		return cuvs.DistanceL2
+		return cuvs.CosineSimilarity
 	case metric.Metric_L1Distance:
-		return cuvs.DistanceL2
+		return cuvs.L1
 	default:
-		return cuvs.DistanceL2
+		return cuvs.L2Expanded
 	}
 }
 
@@ -136,27 +100,35 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 
 	switch vecs := any(vectors).(type) {
 	case [][]float32:
-
-		c := &GpuClusterer[float32]{}
-		c.nlist = clusterCnt
-		if len(vectors) == 0 {
+		if len(vecs) == 0 {
 			return nil, moerr.NewInternalErrorNoCtx("empty dataset")
 		}
-		c.vectors = vecs
-		c.dim = len(vecs[0])
 
-		indexParams, err := ivf_flat.CreateIndexParams()
+		dim := len(vecs[0])
+		// Flatten vectors for pkg/cuvs
+		flattened := make([]float32, len(vecs)*dim)
+		for i, v := range vecs {
+			copy(flattened[i*dim:(i+1)*dim], v)
+		}
+
+		// cuVS K-Means is currently single-GPU focused in our wrapper
+		deviceID := 0
+		nthread := uint32(1)
+
+		km, err := cuvs.NewGpuKMeans[float32](uint32(clusterCnt), uint32(dim), resolveCuvsDistanceForDense(distanceType), maxIterations, deviceID, nthread)
 		if err != nil {
 			return nil, err
 		}
-		indexParams.SetNLists(uint32(clusterCnt))
-		indexParams.SetMetric(resolveCuvsDistanceForDense(distanceType))
-		indexParams.SetKMeansNIters(uint32(maxIterations))
-		indexParams.SetKMeansTrainsetFraction(1) // train all sample
-		c.indexParams = indexParams
+
+		c := &GpuClusterer[float32]{
+			kmeans:  km,
+			nlist:   clusterCnt,
+			dim:     dim,
+			vectors: flattened,
+		}
 		return c, nil
+
 	default:
 		return elkans.NewKMeans(vectors, clusterCnt, maxIterations, deltaThreshold, distanceType, initType, spherical, nworker)
-
 	}
 }

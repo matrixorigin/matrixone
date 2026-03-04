@@ -69,7 +69,47 @@ select a, dense_rank() over () from t1;
 select a, b, c, dense_rank() over (partition by a, b order by c) from t1;
 select a, c, dense_rank() over(partition by a order by c rows current row) from t1;
 select a, c, rank() over(order by a), row_number() over(order by a), dense_rank() over(order by a) from t1;
+-- percent_rank tests
+select a, c, percent_rank() over (partition by a order by c) from t1;
+select a, percent_rank() over (partition by a) from t1;
+select a, percent_rank() over () from t1;
+select a, b, c, percent_rank() over (partition by a, b order by c) from t1;
+select a, c, percent_rank() over(order by a), rank() over(order by a), dense_rank() over(order by a) from t1;
+select a, c, percent_rank() over (order by c desc) from t1;
+select a, c, percent_rank() over (partition by a order by c desc) from t1;
+-- percent_rank: multi-column order by
+select a, b, c, percent_rank() over (order by a, c) from t1;
+-- percent_rank: expression in order by
+select a, b, percent_rank() over (order by a + b) from t1;
 drop table t1;
+
+-- percent_rank: NULL handling
+drop table if exists t2;
+create table t2 (a int, b int);
+insert into t2 values(1, 1), (2, NULL), (3, 2), (4, NULL), (5, 3);
+select a, b, percent_rank() over (order by b) from t2;
+select a, b, percent_rank() over (partition by b order by a) from t2;
+drop table t2;
+
+-- percent_rank: duplicate values
+drop table if exists t3;
+create table t3 (a int, b int);
+insert into t3 values(1, 1), (2, 1), (3, 1), (4, 2), (5, 2);
+select a, b, percent_rank() over (order by b) from t3;
+drop table t3;
+
+-- percent_rank: single row partition
+drop table if exists t4;
+create table t4 (a int, b int);
+insert into t4 values(1, 1), (2, 2), (3, 3);
+select a, b, percent_rank() over (partition by a order by b) from t4;
+drop table t4;
+
+-- percent_rank: empty table
+drop table if exists t5;
+create table t5 (a int, b int);
+select a, b, percent_rank() over (order by a) from t5;
+drop table t5;
 
 -- test cume_dist
 drop table if exists t1;
@@ -1553,4 +1593,33 @@ select * from (select i_manufact_id, sum(ss_sales_price) sum_sales, avg(sum(ss_s
 
 -- information_schema is now a table which is compatible with mysql, it is now an empty table
 select group_concat(c.column_name order by ordinal_position) key_columns  from information_schema.key_column_usage c where c.table_schema='test1' and c.table_name='region' and constraint_name='PRIMARY';
+
+-- NTILE window function tests
+drop table if exists t_ntile;
+create table t_ntile (a int, b int, c int);
+insert into t_ntile values(1, 10, 100), (2, 20, 200), (3, 30, 300), (4, 40, 400), (5, 50, 500), (6, 60, 600), (7, 70, 700), (8, 80, 800), (9, 90, 900), (10, 100, 1000);
+
+-- Basic ntile with 3 buckets
+select a, ntile(3) over (order by a) as bucket from t_ntile;
+
+-- Ntile with partition
+select a, b, ntile(2) over (partition by a % 2 order by b) as bucket from t_ntile;
+
+-- Ntile with different bucket counts
+select a, ntile(1) over (order by a) as bucket from t_ntile;
+select a, ntile(4) over (order by a) as bucket from t_ntile;
+select a, ntile(10) over (order by a) as bucket from t_ntile;
+
+-- Ntile with uneven distribution
+select a, ntile(3) over (order by a) as bucket from t_ntile where a <= 5;
+select a, ntile(4) over (order by a) as bucket from t_ntile where a <= 9;
+
+-- Ntile combined with other window functions
+select a, ntile(3) over (order by a) as bucket, rank() over (order by a) as rnk, row_number() over (order by a) as rn from t_ntile;
+
+-- Ntile with multiple partitions
+select a % 3 as grp, a, ntile(2) over (partition by a % 3 order by a) as bucket from t_ntile;
+
+drop table t_ntile;
+
 drop database test;
