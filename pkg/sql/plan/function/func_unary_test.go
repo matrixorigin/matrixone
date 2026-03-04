@@ -1072,6 +1072,123 @@ func TestBitLengthFunc(t *testing.T) {
 	}
 }
 
+func initBitCountFuncTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test BitCountFunc with int8",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int8.ToType(),
+					[]int8{0, 1, 2, 3, 127, -1, -128},
+					[]bool{false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0, 1, 1, 2, 7, 8, 1},
+				[]bool{false, false, false, false, false, false, false}),
+		},
+		{
+			info: "test BitCountFunc with int16",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int16.ToType(),
+					[]int16{0, 1, 255, 256, 32767, -1},
+					[]bool{false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0, 1, 8, 1, 15, 16},
+				[]bool{false, false, false, false, false, false}),
+		},
+		{
+			info: "test BitCountFunc with int32",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int32.ToType(),
+					[]int32{0, 1, 15, 16, 2147483647, -1},
+					[]bool{false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0, 1, 4, 1, 31, 32},
+				[]bool{false, false, false, false, false, false}),
+		},
+		{
+			info: "test BitCountFunc with int64",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{0, 1, 15, 16, 9223372036854775807, -1},
+					[]bool{false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0, 1, 4, 1, 63, 64},
+				[]bool{false, false, false, false, false, false}),
+		},
+		{
+			info: "test BitCountFunc with uint8",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint8.ToType(),
+					[]uint8{0, 1, 255},
+					[]bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0, 1, 8},
+				[]bool{false, false, false}),
+		},
+		{
+			info: "test BitCountFunc with uint16",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint16.ToType(),
+					[]uint16{0, 1, 65535},
+					[]bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0, 1, 16},
+				[]bool{false, false, false}),
+		},
+		{
+			info: "test BitCountFunc with uint32",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint32.ToType(),
+					[]uint32{0, 1, 4294967295},
+					[]bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0, 1, 32},
+				[]bool{false, false, false}),
+		},
+		{
+			info: "test BitCountFunc with uint64",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(),
+					[]uint64{0, 1, 18446744073709551615},
+					[]bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0, 1, 64},
+				[]bool{false, false, false}),
+		},
+		{
+			info: "test BitCountFunc with null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{0},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestBitCountFunc(t *testing.T) {
+	testCases := initBitCountFuncTestCase()
+
+	// do the test work.
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc,
+			tc.inputs, tc.expect, BitCountFunc)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 func initCurrentDateTestCase() []tcTemp {
 	return []tcTemp{
 		{

@@ -90,6 +90,7 @@ var predefinedFunids = map[int]int{
 	BIT_NOT:           64,
 	BIT_OR:            65,
 	BIT_XOR:           66,
+	BIT_COUNT:         406,
 	BITAGG_AND:        67,
 	BITAGG_OR:         68,
 	BOOLAGG_AND:       69,

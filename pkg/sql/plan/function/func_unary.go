@@ -32,6 +32,7 @@ import (
 	"hash/crc32"
 	"io"
 	"math"
+	"math/bits"
 	"net"
 	"runtime"
 	"strconv"
@@ -509,6 +510,49 @@ func BitLengthFunc(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	return opUnaryStrToFixed[int64](ivecs, result, proc, length, func(v string) int64 {
 		return int64(len(v) * 8)
 	}, selectList)
+}
+
+// BitCountFunc returns the number of bits that are set to 1 in the binary representation of the input integer.
+// It supports all integer types (int8, int16, int32, int64, uint8, uint16, uint32, uint64).
+func BitCountFunc(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	ivec := ivecs[0]
+
+	switch ivec.GetType().Oid {
+	case types.T_int8:
+		return opUnaryFixedToFixed[int8, int64](ivecs, result, proc, length, func(v int8) int64 {
+			return int64(bits.OnesCount8(uint8(v)))
+		}, selectList)
+	case types.T_int16:
+		return opUnaryFixedToFixed[int16, int64](ivecs, result, proc, length, func(v int16) int64 {
+			return int64(bits.OnesCount16(uint16(v)))
+		}, selectList)
+	case types.T_int32:
+		return opUnaryFixedToFixed[int32, int64](ivecs, result, proc, length, func(v int32) int64 {
+			return int64(bits.OnesCount32(uint32(v)))
+		}, selectList)
+	case types.T_int64:
+		return opUnaryFixedToFixed[int64, int64](ivecs, result, proc, length, func(v int64) int64 {
+			return int64(bits.OnesCount64(uint64(v)))
+		}, selectList)
+	case types.T_uint8:
+		return opUnaryFixedToFixed[uint8, int64](ivecs, result, proc, length, func(v uint8) int64 {
+			return int64(bits.OnesCount8(v))
+		}, selectList)
+	case types.T_uint16:
+		return opUnaryFixedToFixed[uint16, int64](ivecs, result, proc, length, func(v uint16) int64 {
+			return int64(bits.OnesCount16(v))
+		}, selectList)
+	case types.T_uint32:
+		return opUnaryFixedToFixed[uint32, int64](ivecs, result, proc, length, func(v uint32) int64 {
+			return int64(bits.OnesCount32(v))
+		}, selectList)
+	case types.T_uint64:
+		return opUnaryFixedToFixed[uint64, int64](ivecs, result, proc, length, func(v uint64) int64 {
+			return int64(bits.OnesCount64(v))
+		}, selectList)
+	default:
+		return moerr.NewInternalError(proc.Ctx, "bit_count: unsupported type %v", ivec.GetType())
+	}
 }
 
 func CurrentDate(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

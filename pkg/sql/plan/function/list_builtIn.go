@@ -236,6 +236,97 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `bit_count`
+	{
+		functionId: BIT_COUNT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_int8},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return BitCountFunc
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_int16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return BitCountFunc
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_int32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return BitCountFunc
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return BitCountFunc
+				},
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_uint8},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return BitCountFunc
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_uint16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return BitCountFunc
+				},
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_uint32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return BitCountFunc
+				},
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_uint64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return BitCountFunc
+				},
+			},
+		},
+	},
+
 	// function `concat`
 	{
 		functionId: CONCAT,
