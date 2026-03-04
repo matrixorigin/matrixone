@@ -3998,7 +3998,27 @@ var deleteOrphanTableRecords = func(c *Compile, dbName string, orphanTables []st
 			return err
 		}
 
+		// Get tables visible to this separate transaction.
+		// We should NOT delete tables that are visible to this transaction,
+		// because they are "legitimate" tables that may have been deleted
+		// by the parent transaction. Deleting them could cause w-w conflicts.
+		visibleTables, err := db.Relations(ctx)
+		if err != nil {
+			return err
+		}
+		visibleSet := make(map[string]struct{}, len(visibleTables))
+		for _, t := range visibleTables {
+			visibleSet[t] = struct{}{}
+		}
+
 		for _, tblName := range orphanTables {
+			// Skip tables that are visible to this transaction.
+			// These tables may have been deleted by the parent transaction,
+			// and deleting them again would cause w-w conflict.
+			if _, ok := visibleSet[tblName]; ok {
+				continue
+			}
+
 			if err := db.Delete(ctx, tblName); err != nil {
 				// Table may already be deleted by another concurrent transaction
 				// (e.g., another DROP DATABASE or DROP TABLE). This is safe to
