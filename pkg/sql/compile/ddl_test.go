@@ -38,6 +38,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -815,4 +817,153 @@ func Test_toHours(t *testing.T) {
 			t.Fatalf("toHours(%d,%q)=%d, want %d", c.val, c.unit, got, c.want)
 		}
 	}
+}
+
+// TestDropDatabase_SnapshotRefreshAfterExclusiveLock verifies that DropDatabase
+// refreshes the transaction snapshot after acquiring the exclusive lock on
+// mo_database. This prevents the race condition where a concurrent CLONE
+// (CREATE TABLE) commits between the snapshot and the lock acquisition,
+// leaving orphan records in mo_tables.
+func TestDropDatabase_SnapshotRefreshAfterExclusiveLock(t *testing.T) {
+	dropDbDef := &plan2.DropDatabase{
+		IfExists: false,
+		Database: "test_db",
+	}
+	cplan := &plan.Plan{
+		Plan: &plan2.Plan_Ddl{
+			Ddl: &plan2.DataDefinition{
+				DdlType: plan2.DataDefinition_DROP_DATABASE,
+				Definition: &plan2.DataDefinition_DropDatabase{
+					DropDatabase: dropDbDef,
+				},
+			},
+		},
+	}
+	s := &Scope{
+		Magic:     DropDatabase,
+		Plan:      cplan,
+		TxnOffset: 0,
+	}
+
+	snapshotTS := timestamp.Timestamp{PhysicalTime: 100}
+	latestCommitTS := timestamp.Timestamp{PhysicalTime: 200}
+	appliedTS := timestamp.Timestamp{PhysicalTime: 200}
+
+	// Test 1: When snapshotTS < latestCommitTS, UpdateSnapshot MUST be called.
+	t.Run("snapshot_refreshed_when_stale", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		proc := testutil.NewProcess(t)
+		proc.Base.SessionInfo.Buf = buffer.New()
+		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+		proc.Ctx = ctx
+		proc.ReplaceTopCtx(ctx)
+
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+		txnOp.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+		txnOp.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+		txnOp.EXPECT().Txn().Return(txn.TxnMeta{
+			Mode:       txn.TxnMode_Pessimistic,
+			Isolation:  txn.TxnIsolation_RC,
+			SnapshotTS: snapshotTS,
+		}).AnyTimes()
+		txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
+		txnOp.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+		txnOp.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		txnOp.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
+		txnOp.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
+		txnOp.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+
+		// Key assertion: UpdateSnapshot must be called with the applied timestamp.
+		txnOp.EXPECT().UpdateSnapshot(gomock.Any(), appliedTS).Return(nil).Times(1)
+
+		txnCli := mock_frontend.NewMockTxnClient(ctrl)
+		txnCli.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOp, nil).AnyTimes()
+		txnCli.EXPECT().GetLatestCommitTS().Return(latestCommitTS).Times(1)
+		txnCli.EXPECT().WaitLogTailAppliedAt(gomock.Any(), latestCommitTS).Return(appliedTS, nil).Times(1)
+
+		proc.Base.TxnClient = txnCli
+		proc.Base.TxnOperator = txnOp
+
+		mockDb := mock_frontend.NewMockDatabase(ctrl)
+		mockDb.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
+		// Relations returns an error to stop execution after the snapshot refresh.
+		// The important thing is that UpdateSnapshot was called before we get here.
+		mockDb.EXPECT().Relations(gomock.Any()).Return(nil, moerr.NewInternalErrorNoCtx("stop here")).AnyTimes()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Database(gomock.Any(), "test_db", gomock.Any()).Return(mockDb, nil).AnyTimes()
+
+		lockMoDb := gostub.Stub(&doLockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error {
+			return nil
+		})
+		defer lockMoDb.Reset()
+
+		c := NewCompile("test", "test", "drop database test_db", "", "", eng, proc, nil, false, nil, time.Now())
+		err := s.DropDatabase(c)
+		// The test will error at Relations(), but the key assertion is that
+		// UpdateSnapshot was called (enforced by Times(1) on the mock).
+		assert.Error(t, err)
+	})
+
+	// Test 2: When snapshotTS >= latestCommitTS, UpdateSnapshot must NOT be called.
+	t.Run("snapshot_not_refreshed_when_fresh", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		proc := testutil.NewProcess(t)
+		proc.Base.SessionInfo.Buf = buffer.New()
+		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+		proc.Ctx = ctx
+		proc.ReplaceTopCtx(ctx)
+
+		freshSnapshotTS := timestamp.Timestamp{PhysicalTime: 300}
+		staleCommitTS := timestamp.Timestamp{PhysicalTime: 200}
+
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+		txnOp.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+		txnOp.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+		txnOp.EXPECT().Txn().Return(txn.TxnMeta{
+			Mode:       txn.TxnMode_Pessimistic,
+			Isolation:  txn.TxnIsolation_RC,
+			SnapshotTS: freshSnapshotTS,
+		}).AnyTimes()
+		txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
+		txnOp.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+		txnOp.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		txnOp.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
+		txnOp.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
+		txnOp.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+
+		// Key assertion: UpdateSnapshot must NOT be called.
+		txnOp.EXPECT().UpdateSnapshot(gomock.Any(), gomock.Any()).Times(0)
+
+		txnCli := mock_frontend.NewMockTxnClient(ctrl)
+		txnCli.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOp, nil).AnyTimes()
+		txnCli.EXPECT().GetLatestCommitTS().Return(staleCommitTS).Times(1)
+		// WaitLogTailAppliedAt should NOT be called either.
+		txnCli.EXPECT().WaitLogTailAppliedAt(gomock.Any(), gomock.Any()).Times(0)
+
+		proc.Base.TxnClient = txnCli
+		proc.Base.TxnOperator = txnOp
+
+		mockDb := mock_frontend.NewMockDatabase(ctrl)
+		mockDb.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
+		mockDb.EXPECT().Relations(gomock.Any()).Return(nil, moerr.NewInternalErrorNoCtx("stop here")).AnyTimes()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Database(gomock.Any(), "test_db", gomock.Any()).Return(mockDb, nil).AnyTimes()
+
+		lockMoDb := gostub.Stub(&doLockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error {
+			return nil
+		})
+		defer lockMoDb.Reset()
+
+		c := NewCompile("test", "test", "drop database test_db", "", "", eng, proc, nil, false, nil, time.Now())
+		err := s.DropDatabase(c)
+		assert.Error(t, err)
+	})
 }

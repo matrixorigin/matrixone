@@ -9128,3 +9128,39 @@ func Test_doDateStringSub_Edge(t *testing.T) {
 	_, err = doDateStringSub("2024-01-01 00:00:00", int64(types.IntervalNumMAX)+1, types.Year)
 	require.Error(t, err)
 }
+
+func initGetFormatTestCase() []tcTemp {
+	cases := []tcTemp{
+		{
+			info:   "get_format date usa",
+			inputs: []FunctionTestInput{NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"DATE"}, []bool{false}), NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"USA"}, []bool{false})},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"%m.%d.%Y"}, []bool{false}),
+		},
+		{
+			info:   "get_format datetime jis",
+			inputs: []FunctionTestInput{NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"DATETIME"}, []bool{false}), NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"JIS"}, []bool{false})},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"%Y-%m-%d %H:%i:%s"}, []bool{false}),
+		},
+		{
+			info:   "get_format time iso",
+			inputs: []FunctionTestInput{NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"TIME"}, []bool{false}), NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"ISO"}, []bool{false})},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"%H:%i:%s"}, []bool{false}),
+		},
+		{
+			info:   "get_format timestamp eur",
+			inputs: []FunctionTestInput{NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"TIMESTAMP"}, []bool{false}), NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"EUR"}, []bool{false})},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"%Y-%m-%d %H.%i.%s"}, []bool{false}),
+		},
+	}
+	return cases
+}
+
+func TestGetFormat(t *testing.T) {
+	testCases := initGetFormatTestCase()
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, GetFormat)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
