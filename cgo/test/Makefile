@@ -6,15 +6,15 @@ ifeq ($(MO_CL_CUDA),1)
 	COMPILER_FLAGS := -Xcompiler "-Wall -Werror"
 	# When using nvcc to link, we need to pass the libraries and rpath
 	LINKER_FLAGS := -Xlinker "-rpath=$(shell realpath ..)"
-	# We must also include the cuVS and other deps that libmo_c.so needs if linked statically, 
-	# but since libmo_c.so is shared, we just need to link against it.
-	LIBS += -L.. -lmo_c -L../../thirdparties/install/lib -lusearch_c -L$(CUDA_PATH)/lib64/stubs -lcuda -L$(CUDA_PATH)/lib64 -lcudart
+	# We must also include the cuVS and other deps that libmo.so needs if linked statically, 
+	# but since libmo.so is shared, we just need to link against it.
+	LIBS += -L.. -lmo -L../../thirdparties/install/lib -lusearch_c -L$(CUDA_PATH)/lib64/stubs -lcuda -L$(CUDA_PATH)/lib64 -lcudart
 	LIBS += -L$(CONDA_PREFIX)/lib -lcuvs -lcuvs_c -ldl -lrmm -lpthread  -lgomp
 	LIBS += -Xlinker -lpthread -Xlinker -lm
 else
 	COMPILER_FLAGS := -Wall -Werror
 	LINKER_FLAGS := -Wl,-rpath=$(shell realpath ..)
-	LIBS := -L.. -lmo_c -L../../thirdparties/install/lib -lusearch_c -lm -fopenmp -lstdc++
+	LIBS := -L.. -lmo -L../../thirdparties/install/lib -lusearch_c -lm -fopenmp -lstdc++
 endif
 
 CFLAGS := -I.. -g -I../../thirdparties/install/include $(COMPILER_FLAGS)

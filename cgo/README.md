@@ -6,7 +6,7 @@ This directory contains CGO source code for MatrixOne. Running `make` produces t
 On the Go side, the integration typically uses `mo.h` and links against the generated libraries:
 ```
 mo.h
-libmo_c.a / libmo_c.so
+libmo.a / libmo.so
 ```
 
 `mo.h` should remain pristine, containing only C function prototypes for Go to consume. Data passed between Go and C should be limited to standard types (int, float, double, pointers). Always specify explicit integer sizes (e.g., `int32_t`, `uint64_t`) and avoid platform-dependent types like `int` or `long`.
