@@ -58,8 +58,8 @@ var (
 
 // arg list [param, ivf.IndexTableConfig (JSON), vec]
 func (builder *QueryBuilder) buildIvfCreate(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
-	if len(exprs) < 3 {
-		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS < 3).")
+	if len(exprs) < 2 {
+		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS < 2).")
 	}
 
 	colDefs := DeepCopyColDefList(kIVFBuildIndexColDefs)
@@ -68,10 +68,12 @@ func (builder *QueryBuilder) buildIvfCreate(tbl *tree.TableFunction, ctx *BindCo
 		return 0, err
 	}
 
-	scanNode := builder.qry.Nodes[children[0]]
-	if scanNode.NodeType != plan.Node_TABLE_SCAN {
-		return 0, moerr.NewNoConfig(builder.GetContext(), "child node is not a TABLE SCAN")
-	}
+	/*
+		scanNode := builder.qry.Nodes[children[0]]
+		if scanNode.NodeType != plan.Node_TABLE_SCAN {
+			return 0, moerr.NewNoConfig(builder.GetContext(), "child node is not a TABLE SCAN")
+		}
+	*/
 
 	// remove the first argment and put the first argument to Param
 	exprs = exprs[1:]
