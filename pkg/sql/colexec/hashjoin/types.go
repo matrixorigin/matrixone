@@ -217,12 +217,8 @@ func (hashJoin *HashJoin) cleanupSpillFiles(proc *process.Process) {
 	if err != nil {
 		return
 	}
-	for _, bucket := range hashJoin.ctr.spilledBuildBuckets {
-		spillfs.Delete(proc.Ctx, bucket)
-	}
-	for _, bucket := range hashJoin.ctr.spilledProbeBuckets {
-		spillfs.Delete(proc.Ctx, bucket)
-	}
+	spillfs.Delete(proc.Ctx, hashJoin.ctr.spilledBuildBuckets...)
+	spillfs.Delete(proc.Ctx, hashJoin.ctr.spilledProbeBuckets...)
 }
 
 func (ctr *container) resetNonEqCondExecutor() {
