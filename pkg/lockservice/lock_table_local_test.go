@@ -1327,3 +1327,206 @@ func TestSharedAfterExclusiveRelease(t *testing.T) {
 		},
 	)
 }
+
+// TestRangeLockModeUpgradeUpdatesBothEnds verifies that when a waiter is promoted
+// to holder with a different mode (e.g., Shared -> Exclusive), both ends of the
+// range lock (range-start and range-end) are updated to the new mode.
+// This tests the setModePairedRangeLock helper.
+func TestRangeLockModeUpgradeUpdatesBothEnds(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, s []*service) {
+			l := s[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			tableID := uint64(10)
+			rangeStart := []byte{1}
+			rangeEnd := []byte{5}
+			rangeRows := [][]byte{rangeStart, rangeEnd}
+
+			sharedOpt := pb.LockOptions{
+				Granularity: pb.Granularity_Range,
+				Mode:        pb.LockMode_Shared,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+			exclusiveOpt := pb.LockOptions{
+				Granularity: pb.Granularity_Range,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			// Step 1: txn1 acquires Shared range lock
+			txn1 := newTestTxnID(1)
+			_, err := l.Lock(ctx, tableID, rangeRows, txn1, sharedOpt)
+			require.NoError(t, err)
+
+			// Verify both ends are Shared
+			v, err := l.getLockTable(0, tableID)
+			require.NoError(t, err)
+			lt := v.(*localLockTable)
+
+			lt.mu.RLock()
+			startLock, ok1 := lt.mu.store.Get(rangeStart)
+			endLock, ok2 := lt.mu.store.Get(rangeEnd)
+			lt.mu.RUnlock()
+			require.True(t, ok1, "range-start should exist")
+			require.True(t, ok2, "range-end should exist")
+			require.True(t, startLock.isShared(), "range-start should be Shared initially")
+			require.True(t, endLock.isShared(), "range-end should be Shared initially")
+
+			// Step 2: txn2 requests Exclusive range lock → blocked
+			txn2 := newTestTxnID(2)
+			txn2Done := make(chan struct{}, 1)
+			go func() {
+				_, err := l.Lock(ctx, tableID, rangeRows, txn2, exclusiveOpt)
+				require.NoError(t, err)
+				txn2Done <- struct{}{}
+			}()
+			time.Sleep(100 * time.Millisecond)
+
+			// Step 3: txn1 releases → txn2 promoted to Exclusive holder
+			require.NoError(t, l.Unlock(ctx, txn1, timestamp.Timestamp{PhysicalTime: 1}))
+			select {
+			case <-txn2Done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("txn2 (Exclusive) did not acquire range lock in time")
+			}
+
+			// Step 4: Verify BOTH ends are now Exclusive (this is what setModePairedRangeLock fixes)
+			lt.mu.RLock()
+			startLock, ok1 = lt.mu.store.Get(rangeStart)
+			endLock, ok2 = lt.mu.store.Get(rangeEnd)
+			lt.mu.RUnlock()
+			require.True(t, ok1, "range-start should exist after promotion")
+			require.True(t, ok2, "range-end should exist after promotion")
+			require.False(t, startLock.isShared(),
+				"range-start should be Exclusive after Exclusive waiter promoted (setModePairedRangeLock)")
+			require.False(t, endLock.isShared(),
+				"range-end should be Exclusive after Exclusive waiter promoted (setModePairedRangeLock)")
+			require.Equal(t, pb.LockMode_Exclusive, startLock.GetLockMode(),
+				"range-start mode should be Exclusive")
+			require.Equal(t, pb.LockMode_Exclusive, endLock.GetLockMode(),
+				"range-end mode should be Exclusive")
+
+			// Step 5: txn3 requests Shared range lock → should be blocked by Exclusive holder
+			txn3 := newTestTxnID(3)
+			txn3Done := make(chan struct{}, 1)
+			go func() {
+				_, err := l.Lock(ctx, tableID, rangeRows, txn3, sharedOpt)
+				require.NoError(t, err)
+				txn3Done <- struct{}{}
+			}()
+
+			select {
+			case <-txn3Done:
+				t.Fatal("txn3 (Shared) should be BLOCKED by txn2 (Exclusive range lock), " +
+					"but it was granted. This means setModePairedRangeLock did not update both ends.")
+			case <-time.After(500 * time.Millisecond):
+				// Expected: txn3 is blocked
+			}
+
+			// Cleanup
+			require.NoError(t, l.Unlock(ctx, txn2, timestamp.Timestamp{PhysicalTime: 2}))
+			select {
+			case <-txn3Done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("txn3 did not acquire lock after txn2 released")
+			}
+			require.NoError(t, l.Unlock(ctx, txn3, timestamp.Timestamp{PhysicalTime: 3}))
+		},
+	)
+}
+
+// TestRangeLockWithInterleavedRowLocks verifies that setModePairedRangeLock
+// correctly scans past interleaved row locks to find the paired range entry.
+// Row locks outside the range can coexist with range locks in the btree.
+func TestRangeLockWithInterleavedRowLocks(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, s []*service) {
+			l := s[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			tableID := uint64(10)
+			// Use non-overlapping keys: row lock at key 0 (before range), range [1, 10]
+			rowKey := []byte{0}
+			rangeStart := []byte{1}
+			rangeEnd := []byte{10}
+			rangeRows := [][]byte{rangeStart, rangeEnd}
+
+			sharedRangeOpt := pb.LockOptions{
+				Granularity: pb.Granularity_Range,
+				Mode:        pb.LockMode_Shared,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+			exclusiveRangeOpt := pb.LockOptions{
+				Granularity: pb.Granularity_Range,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+			sharedRowOpt := newTestRowSharedOptions()
+
+			// Step 1: txn1 acquires Shared row lock on key 0 (before the range)
+			txn1 := newTestTxnID(1)
+			_, err := l.Lock(ctx, tableID, [][]byte{rowKey}, txn1, sharedRowOpt)
+			require.NoError(t, err)
+
+			// Step 2: txn2 acquires Shared range lock [1, 10]
+			txn2 := newTestTxnID(2)
+			_, err = l.Lock(ctx, tableID, rangeRows, txn2, sharedRangeOpt)
+			require.NoError(t, err)
+
+			// Verify btree structure: [0:row] [1:range-start] [10:range-end]
+			v, err := l.getLockTable(0, tableID)
+			require.NoError(t, err)
+			lt := v.(*localLockTable)
+
+			lt.mu.RLock()
+			rowLock, ok1 := lt.mu.store.Get(rowKey)
+			startLock, ok2 := lt.mu.store.Get(rangeStart)
+			endLock, ok3 := lt.mu.store.Get(rangeEnd)
+			lt.mu.RUnlock()
+			require.True(t, ok1 && ok2 && ok3, "all three locks should exist")
+			require.True(t, rowLock.isLockRow(), "should be row lock")
+			require.True(t, startLock.isLockRangeStart(), "should be range-start")
+			require.True(t, endLock.isLockRangeEnd(), "should be range-end")
+
+			// Step 3: txn3 requests Exclusive range lock → blocked by txn2's Shared range lock
+			txn3 := newTestTxnID(3)
+			txn3Done := make(chan struct{}, 1)
+			go func() {
+				_, err := l.Lock(ctx, tableID, rangeRows, txn3, exclusiveRangeOpt)
+				require.NoError(t, err)
+				txn3Done <- struct{}{}
+			}()
+			time.Sleep(100 * time.Millisecond)
+
+			// Step 4: txn2 releases range lock → txn3 promoted to Exclusive holder
+			require.NoError(t, l.Unlock(ctx, txn2, timestamp.Timestamp{PhysicalTime: 1}))
+			select {
+			case <-txn3Done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("txn3 (Exclusive) did not acquire range lock in time")
+			}
+
+			// Step 5: Verify both range-start and range-end are Exclusive
+			// The row lock at key 0 should not interfere with setModePairedRangeLock
+			lt.mu.RLock()
+			startLock, _ = lt.mu.store.Get(rangeStart)
+			endLock, _ = lt.mu.store.Get(rangeEnd)
+			lt.mu.RUnlock()
+			require.False(t, startLock.isShared(),
+				"range-start should be Exclusive after promotion")
+			require.False(t, endLock.isShared(),
+				"range-end should be Exclusive after promotion")
+
+			// Cleanup
+			require.NoError(t, l.Unlock(ctx, txn1, timestamp.Timestamp{PhysicalTime: 2}))
+			require.NoError(t, l.Unlock(ctx, txn3, timestamp.Timestamp{PhysicalTime: 3}))
+		},
+	)
+}
