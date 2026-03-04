@@ -1,3 +1,6 @@
+SELECT BIT_COUNT(8), BIT_COUNT(24), BIT_COUNT(28), BIT_COUNT(255);
+bit_count(8)    bit_count(24)    bit_count(28)    bit_count(255)
+1    2    3    8
 SELECT 1 ^ 1, 9 &4& 2, 1 ^ 0;
 1 ^ 1    9 & 4 & 2    1 ^ 0
 0    0    1

@@ -1072,6 +1072,70 @@ func TestBitLengthFunc(t *testing.T) {
 	}
 }
 
+func initBitCountFuncTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test BitCountFunc int64: MySQL BIT_COUNT(8), BIT_COUNT(24), BIT_COUNT(28), BIT_COUNT(255)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{8, 24, 28, 255},
+					[]bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{1, 2, 3, 8},
+				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test BitCountFunc uint64",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(),
+					[]uint64{0, 1, 255, 256},
+					[]bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0, 1, 8, 1},
+				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test BitCountFunc with null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{8},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestBitCountFunc(t *testing.T) {
+	testCases := initBitCountFuncTestCase()
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc,
+			tc.inputs, tc.expect, BitCountFunc[int64])
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+	// Test uint64 overload
+	t.Run("uint64", func(t *testing.T) {
+		fcTC := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(),
+					[]uint64{0, 1, 255},
+					[]bool{false, false, false}),
+			},
+			NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0, 1, 8},
+				[]bool{false, false, false}),
+			BitCountFunc[uint64])
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("BitCountFunc[uint64]: %s", info))
+	})
+}
+
 func initCurrentDateTestCase() []tcTemp {
 	return []tcTemp{
 		{

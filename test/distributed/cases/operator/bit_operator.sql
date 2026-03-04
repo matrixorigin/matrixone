@@ -4,6 +4,8 @@
 -- @desc:test bit operators such as &, |, ^, ~, <<, >>
 -- @label:bvt
 
+-- BIT_COUNT(N): MySQL compatible, returns number of bits set in argument
+SELECT BIT_COUNT(8), BIT_COUNT(24), BIT_COUNT(28), BIT_COUNT(255);
 SELECT 1 ^ 1, 9 &4& 2, 1 ^ 0;
 SELECT 29 & 15;
 SELECT ~0, 64 << 2, '40' << 2;
