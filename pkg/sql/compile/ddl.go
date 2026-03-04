@@ -127,18 +127,40 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 
-	// After acquiring the exclusive lock on mo_database, advance the
-	// transaction's snapshot so that Relations() sees all tables committed
-	// before the lock was acquired. Only needed for DropDatabase because it
-	// enumerates tables via Relations() and must not miss any.
+	// After acquiring the exclusive lock on mo_database, refresh the
+	// transaction's snapshot to the latest applied logtail timestamp.
 	//
-	// This must NOT be in lockMoDatabase itself, because CreateDatabase also
-	// calls lockMoDatabase(Exclusive) and advancing the snapshot there can
-	// cause duplicate-key errors during restore cluster operations.
-	if err = refreshSnapshotAfterLock(c); err != nil {
-		return err
+	// This fixes a race condition between concurrent CLONE (CREATE TABLE)
+	// and DROP DATABASE:
+	//   1. CLONE acquires Shared lock on mo_database, creates table in
+	//      mo_tables, commits, releases Shared lock.
+	//   2. DROP acquires Exclusive lock on mo_database. The lock service
+	//      runs hasNewVersionInRange on mo_database rows, but CLONE did
+	//      NOT modify mo_database (only mo_tables), so changed=false and
+	//      the snapshot is NOT advanced past CLONE's commit timestamp.
+	//   3. DROP calls Relations() with the stale snapshot, misses the
+	//      newly created table, and drops the database without deleting
+	//      the table — leaving an orphan record in mo_tables that causes
+	//      an OkExpectedEOB panic during checkpoint replay.
+	//
+	// By explicitly advancing the snapshot to the latest commit timestamp
+	// after acquiring the exclusive lock, we ensure Relations() sees all
+	// tables committed before the lock was granted.
+	{
+		txnOp := c.proc.GetTxnOperator()
+		if txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
+			latestCommitTS := c.proc.Base.TxnClient.GetLatestCommitTS()
+			if txnOp.Txn().SnapshotTS.Less(latestCommitTS) {
+				newTS, err := c.proc.Base.TxnClient.WaitLogTailAppliedAt(c.proc.Ctx, latestCommitTS)
+				if err != nil {
+					return err
+				}
+				if err := txnOp.UpdateSnapshot(c.proc.Ctx, newTS); err != nil {
+					return err
+				}
+			}
+		}
 	}
-
 	// handle sub
 	if db.IsSubscription(c.proc.Ctx) {
 		if err = dropSubscription(c.proc.Ctx, c, dbName); err != nil {
@@ -3993,20 +4015,23 @@ var doLockMoDatabase = func(c *Compile, dbName string, lockMode lock.LockMode) e
 }
 
 var lockMoDatabase = func(c *Compile, dbName string, lockMode lock.LockMode) error {
-	return doLockMoDatabase(c, dbName, lockMode)
-}
-
-// refreshSnapshotAfterLock advances the transaction's snapshot to the current
-// HLC timestamp. This ensures that subsequent reads (e.g. Relations()) see all
-// data committed up to this moment, regardless of whether the lock service
-// reported a conflict.
-var refreshSnapshotAfterLock = func(c *Compile) error {
-	now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
-	ts, err := c.proc.Base.TxnClient.WaitLogTailAppliedAt(c.proc.Ctx, now)
+	dbRel, err := getRelFromMoCatalog(c, catalog.MO_DATABASE)
 	if err != nil {
 		return err
 	}
-	return c.proc.GetTxnOperator().UpdateSnapshot(c.proc.Ctx, ts)
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	bat, err := getLockBatch(c.proc, accountID, []string{dbName})
+	if err != nil {
+		return err
+	}
+	defer bat.GetVector(0).Free(c.proc.Mp())
+	if err := lockRows(c.e, c.proc, dbRel, bat, 0, lockMode, lock.Sharding_None, accountID); err != nil {
+		return err
+	}
+	return nil
 }
 
 var lockMoTable = func(
