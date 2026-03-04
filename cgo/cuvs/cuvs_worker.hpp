@@ -277,7 +277,6 @@ private:
             std::unique_lock<std::mutex> lock(event_mu_);
             event_cv_.wait(lock, [this] { return should_stop_ || fatal_error_; });
         }
-        std::cout << "DEBUG: cuvs_worker_t main loop finished." << std::endl;
     }
 
     void worker_sub_loop() {
@@ -345,7 +344,6 @@ private:
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }
         if (signal_received.load()) {
-            std::cout << "DEBUG: cuvs_worker_t received shutdown signal." << std::endl;
             std::lock_guard<std::mutex> lock(event_mu_);
             should_stop_ = true;
             event_cv_.notify_all();
