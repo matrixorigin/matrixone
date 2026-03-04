@@ -236,6 +236,37 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `bit_count` (MySQL BIT_COUNT: number of bits set in argument)
+	{
+		functionId: BIT_COUNT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return BitCountFunc
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_uint64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return BitCountUint64Func
+				},
+			},
+		},
+	},
+
 	// function `concat`
 	{
 		functionId: CONCAT,

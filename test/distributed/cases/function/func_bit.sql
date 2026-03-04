@@ -1,7 +1,10 @@
 -- @suit
 -- @case
--- @desc:test for bit_and(), bit_or(), bit_xor() in x86 or ARM
+-- @desc:test for bit_and(), bit_or(), bit_xor(), bit_count() in x86 or ARM
 -- @label:bvt
+
+-- BIT_COUNT(N): number of bits set in argument (MySQL compatible). e.g. BIT_COUNT(8)=1, BIT_COUNT(24)=2, BIT_COUNT(28)=3, BIT_COUNT(255)=8
+SELECT BIT_COUNT(0), BIT_COUNT(1), BIT_COUNT(8), BIT_COUNT(24), BIT_COUNT(28), BIT_COUNT(255);
 
 SELECT BIT_AND(0), BIT_OR(0), BIT_XOR(0);
 SELECT BIT_AND(1), BIT_OR(1), BIT_XOR(1);

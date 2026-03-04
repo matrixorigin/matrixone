@@ -1715,7 +1715,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				return nil, err
 			}
 		}
-	case "oct", "bit_and", "bit_or", "bit_xor":
+	case "oct", "bit_and", "bit_or", "bit_xor", "bit_count":
 		if len(args) == 0 {
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
 		}
