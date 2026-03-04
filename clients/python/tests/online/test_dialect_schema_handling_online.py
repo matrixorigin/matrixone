@@ -246,6 +246,40 @@ class TestMatrixOneDialectSchemaHandlingOnline:
             except:
                 pass
 
+    def test_get_columns_with_vector_types_online(self, engine):
+        """Test get_columns correctly reflects vecf32/vecf64 columns without TypeError."""
+        try:
+            from matrixone.sqlalchemy_ext import create_vector_column
+            from matrixone.sqlalchemy_ext.vector_type import VectorType
+
+            Base = declarative_base()
+
+            class VectorReflectModel(Base):
+                __tablename__ = 'test_vector_reflect'
+                id = Column(Integer, primary_key=True)
+                name = Column(String(100))
+                embedding = create_vector_column(384, "f32")
+
+            Base.metadata.create_all(engine, checkfirst=True)
+
+            with engine.connect() as connection:
+                dialect = engine.dialect
+                # This used to raise TypeError: NullType(384) when vecf32 was unknown
+                columns = dialect.get_columns(connection, 'test_vector_reflect')
+                col_map = {c["name"]: c["type"] for c in columns}
+
+                assert isinstance(col_map["embedding"], VectorType)
+                assert col_map["embedding"].dimension == 384
+                assert col_map["embedding"].precision == "f32"
+
+        except ImportError:
+            pytest.skip("Vector types not available")
+        finally:
+            try:
+                Base.metadata.drop_all(engine, checkfirst=True)
+            except:
+                pass
+
     def test_dialect_connection_handling_online(self, engine):
         """Test dialect connection handling with real database."""
         dialect = engine.dialect
