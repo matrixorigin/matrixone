@@ -24,9 +24,9 @@ package cuvs
 */
 import "C"
 import (
-    "fmt"
     "unsafe"
     "runtime"
+    "github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // DistanceType maps to C.distance_type_t
@@ -168,7 +168,7 @@ func GpuConvertF32ToF16(src []float32, dst []Float16, deviceID int) error {
         return nil
     }
     if len(src) != len(dst) {
-        return fmt.Errorf("source and destination slices must have the same length")
+        return moerr.NewInternalErrorNoCtx("source and destination slices must have the same length")
     }
 
     var errmsg *C.char
@@ -185,7 +185,7 @@ func GpuConvertF32ToF16(src []float32, dst []Float16, deviceID int) error {
     if errmsg != nil {
         errStr := C.GoString(errmsg)
         C.free(unsafe.Pointer(errmsg))
-        return fmt.Errorf("%s", errStr)
+        return moerr.NewInternalErrorNoCtx(errStr)
     }
     return nil
 }
@@ -194,7 +194,7 @@ func GpuConvertF32ToF16(src []float32, dst []Float16, deviceID int) error {
 func GetGpuDeviceCount() (int, error) {
     count := int(C.gpu_get_device_count())
     if count < 0 {
-        return 0, fmt.Errorf("failed to get GPU device count")
+        return 0, moerr.NewInternalErrorNoCtx("failed to get GPU device count")
     }
     return count, nil
 }

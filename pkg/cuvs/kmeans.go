@@ -25,9 +25,9 @@ package cuvs
 */
 import "C"
 import (
-    "fmt"
     "runtime"
     "unsafe"
+    "github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // GpuKMeans represents the C++ gpu_kmeans_t object.
@@ -56,11 +56,11 @@ func NewGpuKMeans[T VectorType](nClusters uint32, dimension uint32, metric Dista
     if errmsg != nil {
         errStr := C.GoString(errmsg)
         C.free(unsafe.Pointer(errmsg))
-        return nil, fmt.Errorf("%s", errStr)
+        return nil, moerr.NewInternalErrorNoCtx(errStr)
     }
 
     if cKMeans == nil {
-        return nil, fmt.Errorf("failed to create GpuKMeans")
+        return nil, moerr.NewInternalErrorNoCtx("failed to create GpuKMeans")
     }
     return &GpuKMeans[T]{cKMeans: cKMeans, nClusters: nClusters, dimension: dimension}, nil
 }
@@ -76,7 +76,7 @@ func (gk *GpuKMeans[T]) Destroy() error {
     if errmsg != nil {
         errStr := C.GoString(errmsg)
         C.free(unsafe.Pointer(errmsg))
-        return fmt.Errorf("%s", errStr)
+        return moerr.NewInternalErrorNoCtx(errStr)
     }
     return nil
 }
@@ -84,7 +84,7 @@ func (gk *GpuKMeans[T]) Destroy() error {
 // Fit computes the cluster centroids.
 func (gk *GpuKMeans[T]) Fit(dataset []T, nSamples uint64) (float32, int64, error) {
     if gk.cKMeans == nil {
-        return 0, 0, fmt.Errorf("GpuKMeans is not initialized")
+        return 0, 0, moerr.NewInternalErrorNoCtx("GpuKMeans is not initialized")
     }
     if len(dataset) == 0 || nSamples == 0 {
         return 0, 0, nil
@@ -102,7 +102,7 @@ func (gk *GpuKMeans[T]) Fit(dataset []T, nSamples uint64) (float32, int64, error
     if errmsg != nil {
         errStr := C.GoString(errmsg)
         C.free(unsafe.Pointer(errmsg))
-        return 0, 0, fmt.Errorf("%s", errStr)
+        return 0, 0, moerr.NewInternalErrorNoCtx(errStr)
     }
 
     return float32(res.inertia), int64(res.n_iter), nil
@@ -111,7 +111,7 @@ func (gk *GpuKMeans[T]) Fit(dataset []T, nSamples uint64) (float32, int64, error
 // Predict assigns labels to new data based on existing centroids.
 func (gk *GpuKMeans[T]) Predict(dataset []T, nSamples uint64) ([]int64, float32, error) {
     if gk.cKMeans == nil {
-        return nil, 0, fmt.Errorf("GpuKMeans is not initialized")
+        return nil, 0, moerr.NewInternalErrorNoCtx("GpuKMeans is not initialized")
     }
     if len(dataset) == 0 || nSamples == 0 {
         return nil, 0, nil
@@ -129,11 +129,11 @@ func (gk *GpuKMeans[T]) Predict(dataset []T, nSamples uint64) ([]int64, float32,
     if errmsg != nil {
         errStr := C.GoString(errmsg)
         C.free(unsafe.Pointer(errmsg))
-        return nil, 0, fmt.Errorf("%s", errStr)
+        return nil, 0, moerr.NewInternalErrorNoCtx(errStr)
     }
 
     if res.result_ptr == nil {
-        return nil, 0, fmt.Errorf("predict returned nil result")
+        return nil, 0, moerr.NewInternalErrorNoCtx("predict returned nil result")
     }
 
     labels := make([]int64, nSamples)
@@ -148,7 +148,7 @@ func (gk *GpuKMeans[T]) Predict(dataset []T, nSamples uint64) ([]int64, float32,
 // FitPredict performs both fitting and labeling in one step.
 func (gk *GpuKMeans[T]) FitPredict(dataset []T, nSamples uint64) ([]int64, float32, int64, error) {
     if gk.cKMeans == nil {
-        return nil, 0, 0, fmt.Errorf("GpuKMeans is not initialized")
+        return nil, 0, 0, moerr.NewInternalErrorNoCtx("GpuKMeans is not initialized")
     }
     if len(dataset) == 0 || nSamples == 0 {
         return nil, 0, 0, nil
@@ -166,11 +166,11 @@ func (gk *GpuKMeans[T]) FitPredict(dataset []T, nSamples uint64) ([]int64, float
     if errmsg != nil {
         errStr := C.GoString(errmsg)
         C.free(unsafe.Pointer(errmsg))
-        return nil, 0, 0, fmt.Errorf("%s", errStr)
+        return nil, 0, 0, moerr.NewInternalErrorNoCtx(errStr)
     }
 
     if res.result_ptr == nil {
-        return nil, 0, 0, fmt.Errorf("fit_predict returned nil result")
+        return nil, 0, 0, moerr.NewInternalErrorNoCtx("fit_predict returned nil result")
     }
 
     labels := make([]int64, nSamples)
@@ -185,7 +185,7 @@ func (gk *GpuKMeans[T]) FitPredict(dataset []T, nSamples uint64) ([]int64, float
 // GetCentroids retrieves the trained centroids.
 func (gk *GpuKMeans[T]) GetCentroids() ([]T, error) {
     if gk.cKMeans == nil {
-        return nil, fmt.Errorf("GpuKMeans is not initialized")
+        return nil, moerr.NewInternalErrorNoCtx("GpuKMeans is not initialized")
     }
     centroids := make([]T, gk.nClusters*gk.dimension)
     var errmsg *C.char
@@ -195,7 +195,7 @@ func (gk *GpuKMeans[T]) GetCentroids() ([]T, error) {
     if errmsg != nil {
         errStr := C.GoString(errmsg)
         C.free(unsafe.Pointer(errmsg))
-        return nil, fmt.Errorf("%s", errStr)
+        return nil, moerr.NewInternalErrorNoCtx(errStr)
     }
     return centroids, nil
 }

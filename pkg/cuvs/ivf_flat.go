@@ -25,9 +25,9 @@ package cuvs
 */
 import "C"
 import (
-    "fmt"
     "runtime"
     "unsafe"
+    "github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // GpuIvfFlat represents the C++ gpu_ivf_flat_t object.
@@ -40,7 +40,7 @@ type GpuIvfFlat[T VectorType] struct {
 func NewGpuIvfFlat[T VectorType](dataset []T, count uint64, dimension uint32, metric DistanceType, 
                                  bp IvfFlatBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfFlat[T], error) {
     if len(devices) == 0 {
-        return nil, fmt.Errorf("at least one device must be specified")
+        return nil, moerr.NewInternalErrorNoCtx("at least one device must be specified")
     }
 
     qtype := GetQuantization[T]()
@@ -75,11 +75,11 @@ func NewGpuIvfFlat[T VectorType](dataset []T, count uint64, dimension uint32, me
     if errmsg != nil {
         errStr := C.GoString(errmsg)
         C.free(unsafe.Pointer(errmsg))
-        return nil, fmt.Errorf("%s", errStr)
+        return nil, moerr.NewInternalErrorNoCtx(errStr)
     }
 
     if cIvfFlat == nil {
-        return nil, fmt.Errorf("failed to create GpuIvfFlat")
+        return nil, moerr.NewInternalErrorNoCtx("failed to create GpuIvfFlat")
     }
 
     return &GpuIvfFlat[T]{cIvfFlat: cIvfFlat, dimension: dimension}, nil
@@ -89,7 +89,7 @@ func NewGpuIvfFlat[T VectorType](dataset []T, count uint64, dimension uint32, me
 func NewGpuIvfFlatFromFile[T VectorType](filename string, dimension uint32, metric DistanceType, 
                                          bp IvfFlatBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfFlat[T], error) {
     if len(devices) == 0 {
-        return nil, fmt.Errorf("at least one device must be specified")
+        return nil, moerr.NewInternalErrorNoCtx("at least one device must be specified")
     }
 
     qtype := GetQuantization[T]()
@@ -125,11 +125,11 @@ func NewGpuIvfFlatFromFile[T VectorType](filename string, dimension uint32, metr
     if errmsg != nil {
         errStr := C.GoString(errmsg)
         C.free(unsafe.Pointer(errmsg))
-        return nil, fmt.Errorf("%s", errStr)
+        return nil, moerr.NewInternalErrorNoCtx(errStr)
     }
 
     if cIvfFlat == nil {
-        return nil, fmt.Errorf("failed to load GpuIvfFlat from file")
+        return nil, moerr.NewInternalErrorNoCtx("failed to load GpuIvfFlat from file")
     }
 
     return &GpuIvfFlat[T]{cIvfFlat: cIvfFlat, dimension: dimension}, nil
@@ -146,7 +146,7 @@ func (gi *GpuIvfFlat[T]) Destroy() error {
     if errmsg != nil {
         errStr := C.GoString(errmsg)
         C.free(unsafe.Pointer(errmsg))
-        return fmt.Errorf("%s", errStr)
+        return moerr.NewInternalErrorNoCtx(errStr)
     }
     return nil
 }
@@ -154,14 +154,14 @@ func (gi *GpuIvfFlat[T]) Destroy() error {
 // Load triggers the build or file loading process
 func (gi *GpuIvfFlat[T]) Load() error {
     if gi.cIvfFlat == nil {
-        return fmt.Errorf("GpuIvfFlat is not initialized")
+        return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
     }
     var errmsg *C.char
     C.gpu_ivf_flat_load(gi.cIvfFlat, unsafe.Pointer(&errmsg))
     if errmsg != nil {
         errStr := C.GoString(errmsg)
         C.free(unsafe.Pointer(errmsg))
-        return fmt.Errorf("%s", errStr)
+        return moerr.NewInternalErrorNoCtx(errStr)
     }
     return nil
 }
@@ -169,7 +169,7 @@ func (gi *GpuIvfFlat[T]) Load() error {
 // Save serializes the index to a file
 func (gi *GpuIvfFlat[T]) Save(filename string) error {
     if gi.cIvfFlat == nil {
-        return fmt.Errorf("GpuIvfFlat is not initialized")
+        return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
     }
     var errmsg *C.char
     cFilename := C.CString(filename)
@@ -179,7 +179,7 @@ func (gi *GpuIvfFlat[T]) Save(filename string) error {
     if errmsg != nil {
         errStr := C.GoString(errmsg)
         C.free(unsafe.Pointer(errmsg))
-        return fmt.Errorf("%s", errStr)
+        return moerr.NewInternalErrorNoCtx(errStr)
     }
     return nil
 }
@@ -187,7 +187,7 @@ func (gi *GpuIvfFlat[T]) Save(filename string) error {
 // Search performs a K-Nearest Neighbor search
 func (gi *GpuIvfFlat[T]) Search(queries []T, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams) (SearchResultIvfFlat, error) {
     if gi.cIvfFlat == nil {
-        return SearchResultIvfFlat{}, fmt.Errorf("GpuIvfFlat is not initialized")
+        return SearchResultIvfFlat{}, moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
     }
     if len(queries) == 0 || numQueries == 0 {
         return SearchResultIvfFlat{}, nil
@@ -212,11 +212,11 @@ func (gi *GpuIvfFlat[T]) Search(queries []T, numQueries uint64, dimension uint32
     if errmsg != nil {
         errStr := C.GoString(errmsg)
         C.free(unsafe.Pointer(errmsg))
-        return SearchResultIvfFlat{}, fmt.Errorf("%s", errStr)
+        return SearchResultIvfFlat{}, moerr.NewInternalErrorNoCtx(errStr)
     }
 
     if res.result_ptr == nil {
-        return SearchResultIvfFlat{}, fmt.Errorf("search returned nil result")
+        return SearchResultIvfFlat{}, moerr.NewInternalErrorNoCtx("search returned nil result")
     }
 
     totalElements := uint64(numQueries) * uint64(limit)
@@ -239,7 +239,7 @@ func (gi *GpuIvfFlat[T]) Search(queries []T, numQueries uint64, dimension uint32
 // GetCenters retrieves the trained centroids.
 func (gi *GpuIvfFlat[T]) GetCenters(nLists uint32) ([]float32, error) {
     if gi.cIvfFlat == nil {
-        return nil, fmt.Errorf("GpuIvfFlat is not initialized")
+        return nil, moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
     }
     centers := make([]float32, nLists*gi.dimension)
     var errmsg *C.char
@@ -249,7 +249,7 @@ func (gi *GpuIvfFlat[T]) GetCenters(nLists uint32) ([]float32, error) {
     if errmsg != nil {
         errStr := C.GoString(errmsg)
         C.free(unsafe.Pointer(errmsg))
-        return nil, fmt.Errorf("%s", errStr)
+        return nil, moerr.NewInternalErrorNoCtx(errStr)
     }
     return centers, nil
 }

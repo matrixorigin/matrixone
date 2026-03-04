@@ -25,9 +25,9 @@ package cuvs
 */
 import "C"
 import (
-    "fmt"
     "runtime"
     "unsafe"
+    "github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // GpuCagra represents the C++ gpu_cagra_t object.
@@ -40,7 +40,7 @@ type GpuCagra[T VectorType] struct {
 func NewGpuCagra[T VectorType](dataset []T, count uint64, dimension uint32, metric DistanceType, 
                                bp CagraBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuCagra[T], error) {
     if len(devices) == 0 {
-        return nil, fmt.Errorf("at least one device must be specified")
+        return nil, moerr.NewInternalErrorNoCtx("at least one device must be specified")
     }
 
     qtype := GetQuantization[T]()
@@ -75,11 +75,11 @@ func NewGpuCagra[T VectorType](dataset []T, count uint64, dimension uint32, metr
     if errmsg != nil {
         errStr := C.GoString(errmsg)
         C.free(unsafe.Pointer(errmsg))
-        return nil, fmt.Errorf("%s", errStr)
+        return nil, moerr.NewInternalErrorNoCtx(errStr)
     }
 
     if cCagra == nil {
-        return nil, fmt.Errorf("failed to create GpuCagra")
+        return nil, moerr.NewInternalErrorNoCtx("failed to create GpuCagra")
     }
 
     return &GpuCagra[T]{cCagra: cCagra, dimension: dimension}, nil
@@ -89,7 +89,7 @@ func NewGpuCagra[T VectorType](dataset []T, count uint64, dimension uint32, metr
 func NewGpuCagraFromFile[T VectorType](filename string, dimension uint32, metric DistanceType, 
                                        bp CagraBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuCagra[T], error) {
     if len(devices) == 0 {
-        return nil, fmt.Errorf("at least one device must be specified")
+        return nil, moerr.NewInternalErrorNoCtx("at least one device must be specified")
     }
 
     qtype := GetQuantization[T]()
@@ -125,11 +125,11 @@ func NewGpuCagraFromFile[T VectorType](filename string, dimension uint32, metric
     if errmsg != nil {
         errStr := C.GoString(errmsg)
         C.free(unsafe.Pointer(errmsg))
-        return nil, fmt.Errorf("%s", errStr)
+        return nil, moerr.NewInternalErrorNoCtx(errStr)
     }
 
     if cCagra == nil {
-        return nil, fmt.Errorf("failed to load GpuCagra from file")
+        return nil, moerr.NewInternalErrorNoCtx("failed to load GpuCagra from file")
     }
 
     return &GpuCagra[T]{cCagra: cCagra, dimension: dimension}, nil
@@ -146,7 +146,7 @@ func (gc *GpuCagra[T]) Destroy() error {
     if errmsg != nil {
         errStr := C.GoString(errmsg)
         C.free(unsafe.Pointer(errmsg))
-        return fmt.Errorf("%s", errStr)
+        return moerr.NewInternalErrorNoCtx(errStr)
     }
     return nil
 }
@@ -154,14 +154,14 @@ func (gc *GpuCagra[T]) Destroy() error {
 // Load triggers the build or file loading process
 func (gc *GpuCagra[T]) Load() error {
     if gc.cCagra == nil {
-        return fmt.Errorf("GpuCagra is not initialized")
+        return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
     }
     var errmsg *C.char
     C.gpu_cagra_load(gc.cCagra, unsafe.Pointer(&errmsg))
     if errmsg != nil {
         errStr := C.GoString(errmsg)
         C.free(unsafe.Pointer(errmsg))
-        return fmt.Errorf("%s", errStr)
+        return moerr.NewInternalErrorNoCtx(errStr)
     }
     return nil
 }
@@ -169,7 +169,7 @@ func (gc *GpuCagra[T]) Load() error {
 // Save serializes the index to a file
 func (gc *GpuCagra[T]) Save(filename string) error {
     if gc.cCagra == nil {
-        return fmt.Errorf("GpuCagra is not initialized")
+        return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
     }
     var errmsg *C.char
     cFilename := C.CString(filename)
@@ -179,7 +179,7 @@ func (gc *GpuCagra[T]) Save(filename string) error {
     if errmsg != nil {
         errStr := C.GoString(errmsg)
         C.free(unsafe.Pointer(errmsg))
-        return fmt.Errorf("%s", errStr)
+        return moerr.NewInternalErrorNoCtx(errStr)
     }
     return nil
 }
@@ -187,7 +187,7 @@ func (gc *GpuCagra[T]) Save(filename string) error {
 // Search performs a K-Nearest Neighbor search
 func (gc *GpuCagra[T]) Search(queries []T, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) (SearchResult, error) {
     if gc.cCagra == nil {
-        return SearchResult{}, fmt.Errorf("GpuCagra is not initialized")
+        return SearchResult{}, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
     }
     if len(queries) == 0 || numQueries == 0 {
         return SearchResult{}, nil
@@ -213,11 +213,11 @@ func (gc *GpuCagra[T]) Search(queries []T, numQueries uint64, dimension uint32, 
     if errmsg != nil {
         errStr := C.GoString(errmsg)
         C.free(unsafe.Pointer(errmsg))
-        return SearchResult{}, fmt.Errorf("%s", errStr)
+        return SearchResult{}, moerr.NewInternalErrorNoCtx(errStr)
     }
 
     if res.result_ptr == nil {
-        return SearchResult{}, fmt.Errorf("search returned nil result")
+        return SearchResult{}, moerr.NewInternalErrorNoCtx("search returned nil result")
     }
 
     totalElements := uint64(numQueries) * uint64(limit)
@@ -240,7 +240,7 @@ func (gc *GpuCagra[T]) Search(queries []T, numQueries uint64, dimension uint32, 
 // Extend adds more vectors to the index (single-GPU only)
 func (gc *GpuCagra[T]) Extend(additionalData []T, numVectors uint64) error {
     if gc.cCagra == nil {
-        return fmt.Errorf("GpuCagra is not initialized")
+        return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
     }
     if len(additionalData) == 0 || numVectors == 0 {
         return nil
@@ -258,7 +258,7 @@ func (gc *GpuCagra[T]) Extend(additionalData []T, numVectors uint64) error {
     if errmsg != nil {
         errStr := C.GoString(errmsg)
         C.free(unsafe.Pointer(errmsg))
-        return fmt.Errorf("%s", errStr)
+        return moerr.NewInternalErrorNoCtx(errStr)
     }
     return nil
 }
@@ -266,10 +266,10 @@ func (gc *GpuCagra[T]) Extend(additionalData []T, numVectors uint64) error {
 // Merge combines multiple single-GPU GpuCagra indices into a new one.
 func MergeGpuCagra[T VectorType](indices []*GpuCagra[T], nthread uint32, devices []int) (*GpuCagra[T], error) {
     if len(indices) == 0 {
-        return nil, fmt.Errorf("no indices to merge")
+        return nil, moerr.NewInternalErrorNoCtx("no indices to merge")
     }
     if len(devices) == 0 {
-        return nil, fmt.Errorf("at least one device must be specified")
+        return nil, moerr.NewInternalErrorNoCtx("at least one device must be specified")
     }
 
     cIndices := make([]C.gpu_cagra_c, len(indices))
@@ -297,11 +297,11 @@ func MergeGpuCagra[T VectorType](indices []*GpuCagra[T], nthread uint32, devices
     if errmsg != nil {
         errStr := C.GoString(errmsg)
         C.free(unsafe.Pointer(errmsg))
-        return nil, fmt.Errorf("%s", errStr)
+        return nil, moerr.NewInternalErrorNoCtx(errStr)
     }
 
     if cCagra == nil {
-        return nil, fmt.Errorf("failed to merge GpuCagra indices")
+        return nil, moerr.NewInternalErrorNoCtx("failed to merge GpuCagra indices")
     }
 
     return &GpuCagra[T]{cCagra: cCagra, dimension: indices[0].dimension}, nil
