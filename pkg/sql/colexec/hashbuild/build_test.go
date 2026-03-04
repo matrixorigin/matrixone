@@ -273,7 +273,7 @@ func TestHashBuildReleaseAndReuse(t *testing.T) {
 	arg := NewArgument()
 	arg.JoinMapTag = 100
 	arg.Release()
-	
+
 	arg2 := NewArgument()
 	require.Equal(t, int32(0), arg2.JoinMapTag)
 	arg2.Release()
@@ -286,7 +286,7 @@ func TestHashBuildWithRuntimeFilter(t *testing.T) {
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 		Ch2: make(chan process.PipelineSignal, 10),
 	}
-	
+
 	arg := &HashBuild{
 		JoinMapTag:    1,
 		JoinMapRefCnt: 1,
@@ -305,24 +305,24 @@ func TestHashBuildWithRuntimeFilter(t *testing.T) {
 			},
 		},
 	}
-	
+
 	err := arg.Prepare(proc)
 	require.NoError(t, err)
-	
+
 	bat := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, false, 10, proc.Mp())
 	proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(bat, nil, proc.Mp())
 	proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, proc.Mp())
 	proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, proc.Mp())
-	
+
 	marg := &merge.Merge{}
 	err = marg.Prepare(proc)
 	require.NoError(t, err)
 	arg.SetChildren([]vm.Operator{marg})
-	
+
 	ok, err := vm.Exec(arg, proc)
 	require.NoError(t, err)
 	require.Equal(t, vm.ExecStop, ok.Status)
-	
+
 	arg.Free(proc, false, nil)
 	proc.Free()
 }

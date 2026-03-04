@@ -321,19 +321,6 @@ func (hb *HashmapBuilder) ClearHashmap() {
 		hb.StrHashMap.Free()
 		hb.StrHashMap = nil
 	}
-	// Clear vecs as well since they're tied to hashmap
-	if hb.needDupVec {
-		for i := range hb.vecs {
-			if hb.vecs[i] != nil {
-				for j := range hb.vecs[i] {
-					if hb.vecs[i][j] != nil {
-						// Note: we can't free these here as they might be referenced
-						// Just clear the slice
-					}
-				}
-			}
-		}
-	}
 	hb.vecs = nil
 }
 

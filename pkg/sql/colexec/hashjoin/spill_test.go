@@ -260,9 +260,9 @@ func TestBucketBufferReuse(t *testing.T) {
 func TestHashDistribution(t *testing.T) {
 	mp := mpool.MustNewZero()
 	// Test that hash values distribute across buckets
-	vec := testutil.MakeInt32Vector([]int32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 
+	vec := testutil.MakeInt32Vector([]int32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
 		11, 12, 13, 14, 15, 16, 17, 18, 19, 20}, nil, mp)
-	
+
 	hashValues := make([]uint64, 20)
 	err := computeXXHash([]*vector.Vector{vec}, hashValues)
 	require.NoError(t, err)

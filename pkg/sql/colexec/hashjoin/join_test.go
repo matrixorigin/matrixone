@@ -323,7 +323,7 @@ func TestHashJoinReleaseAndReuse(t *testing.T) {
 	arg := NewArgument()
 	arg.JoinMapTag = 100
 	arg.Release()
-	
+
 	arg2 := NewArgument()
 	require.Equal(t, int32(0), arg2.JoinMapTag)
 	arg2.Release()

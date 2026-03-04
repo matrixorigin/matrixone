@@ -42,11 +42,11 @@ inner join spill_t2 on spill_t1.id = spill_t2.t1_id
 where spill_t1.id <= 5
 order by spill_t1.id;
 id    name    category
-1    name_1    cat_1
-2    name_2    cat_2
-3    name_3    cat_3
-4    name_4    cat_4
-5    name_5    cat_0
+1    name_1    cat_0
+2    name_2    cat_1
+3    name_3    cat_2
+4    name_4    cat_3
+5    name_5    cat_4
 set @@join_spill_mem = 0;
 select count(*) from spill_t1 inner join spill_t2 on spill_t1.id = spill_t2.t1_id;
 count(*)

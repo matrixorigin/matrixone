@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
@@ -944,11 +945,12 @@ func constructHashJoin(node, left *plan.Node, left_types, right_types []types.Ty
 	arg.IsShuffle = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle
 
 	// Get threshold from build side (use same as hash aggregate default)
-	mem := int64(system.MemoryTotal()) / int64(system.GoMaxProcs()) / 8
-	if node.SpillMem > 0 && mem > node.SpillMem {
-		mem = node.SpillMem
+	if node.SpillMem == 0 {
+		mem := int64(system.MemoryTotal()) / int64(system.GoMaxProcs()) / 8
+		arg.SpillThreshold = max(mem, common.MiB*128)
+	} else {
+		arg.SpillThreshold = node.SpillMem
 	}
-	arg.SpillThreshold = node.SpillMem
 
 	for i := range node.SendMsgList {
 		if node.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
@@ -1645,11 +1647,12 @@ func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Pr
 
 	// Set default spill threshold: MemoryTotal / GoMaxProcs / 8, min 128MB
 	// Same logic as hash aggregate
-	mem := int64(system.MemoryTotal()) / int64(system.GoMaxProcs()) / 8
-	if node.SpillMem > 0 && mem > node.SpillMem {
-		mem = node.SpillMem
+	if node.SpillMem == 0 {
+		mem := int64(system.MemoryTotal()) / int64(system.GoMaxProcs()) / 8
+		ret.SpillThreshold = max(mem, common.MiB*128)
+	} else {
+		ret.SpillThreshold = node.SpillMem
 	}
-	ret.SpillThreshold = mem
 
 	switch op.OpType() {
 	case vm.HashJoin:
