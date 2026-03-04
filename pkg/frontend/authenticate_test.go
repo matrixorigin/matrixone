@@ -17,11 +17,13 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -47,6 +49,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/stage"
@@ -143,6 +147,36 @@ func TestEscapeSQLStringForDoubleQuotes(t *testing.T) {
 			require.Equal(t, tc.want, got)
 		})
 	}
+}
+
+func TestEscapeSQLStringForDoubleQuotes_PythonUdfBodyRoundTrip(t *testing.T) {
+	payload := map[string]any{
+		"handler": "pdf_to_markdown",
+		"import":  false,
+		"body":    "def f():\n    return \"ok\"\n",
+	}
+	rawBytes, err := json.Marshal(payload)
+	require.NoError(t, err)
+	raw := string(rawBytes)
+
+	scanStringLiteral := func(s string) string {
+		scanner := mysqlparser.NewScanner(dialect.MYSQL, `"`+escapeSQLStringForDoubleQuotes(s)+`"`)
+		typ, val := scanner.Scan()
+		require.Equal(t, mysqlparser.STRING, typ)
+		return val
+	}
+
+	// Regression check: quoting JSON before SQL escaping leaves `\"` in storage,
+	// then python_udf json.Unmarshal fails with "invalid character '\\' ...".
+	bad := strconv.Quote(raw)
+	bad = bad[1 : len(bad)-1]
+	badStored := scanStringLiteral(bad)
+	var decoded map[string]any
+	require.Error(t, json.Unmarshal([]byte(badStored), &decoded))
+
+	goodStored := scanStringLiteral(raw)
+	require.Equal(t, raw, goodStored)
+	require.NoError(t, json.Unmarshal([]byte(goodStored), &decoded))
 }
 
 func TestPrivilegeType_Scope(t *testing.T) {
@@ -3450,6 +3484,62 @@ func Test_determineDropTable(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
+}
+
+func Test_getDbNameForPrivilege(t *testing.T) {
+	tests := []struct {
+		name   string
+		objRef *plan2.ObjectRef
+		want   string
+	}{
+		{
+			name:   "normal table",
+			objRef: &plan2.ObjectRef{SchemaName: "db1", ObjName: "t1"},
+			want:   "db1",
+		},
+		{
+			name:   "subscription table uses sub name",
+			objRef: &plan2.ObjectRef{SchemaName: "pub_db", ObjName: "t1", SubscriptionName: "sub2"},
+			want:   "sub2",
+		},
+		{
+			name:   "empty subscription name",
+			objRef: &plan2.ObjectRef{SchemaName: "db1", ObjName: "t1", SubscriptionName: ""},
+			want:   "db1",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := getDbNameForPrivilege(tt.objRef)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func Test_extractPrivilegeTipsFromPlan_Subscription(t *testing.T) {
+	// When a TABLE_SCAN node has SubscriptionName set, the extracted
+	// privilegeTips should use the subscription database name instead
+	// of the publisher's original database name.
+	p := &plan2.Plan{
+		Plan: &plan2.Plan_Query{
+			Query: &plan2.Query{
+				Nodes: []*plan2.Node{
+					{
+						NodeType: plan.Node_TABLE_SCAN,
+						ObjRef: &plan2.ObjectRef{
+							SchemaName:       "pub_original_db",
+							ObjName:          "t1",
+							SubscriptionName: "sub2",
+						},
+					},
+				},
+			},
+		},
+	}
+	arr := extractPrivilegeTipsFromPlan(p)
+	assert.Equal(t, 1, len(arr))
+	assert.Equal(t, "sub2", arr[0].databaseName)
+	assert.Equal(t, "t1", arr[0].tableName)
 }
 
 func Test_determineDML(t *testing.T) {
