@@ -1059,6 +1059,10 @@ type Entry struct {
 	bat       *batch.Batch
 	tnStore   DNStore
 	pkChkByTN int8
+
+	// skipTransfer indicates this entry should skip transfer processing
+	// Used by CCPR to avoid transfer errors for cross-cluster tombstones
+	skipTransfer bool
 }
 
 func (e *Entry) String() string {

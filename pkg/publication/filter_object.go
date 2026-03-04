@@ -1791,8 +1791,10 @@ func submitObjectsAsInsert(ctx context.Context, taskID string, txn client.TxnOpe
 
 		deleteBat.SetRowCount(len(tombstoneStats))
 
-		// Delete through relation
-		if err := rel.Delete(ctx, deleteBat, ""); err != nil {
+		// Delete through relation with skipTransfer flag to avoid transfer errors
+		// CCPR tombstones should not be transferred since they are already properly positioned
+		skipTransferCtx := context.WithValue(ctx, defines.SkipTransferKey{}, true)
+		if err := rel.Delete(skipTransferCtx, deleteBat, ""); err != nil {
 			deleteBat.Clean(mp)
 			return moerr.NewInternalErrorf(ctx, "failed to delete tombstone objects: %v", err)
 		}

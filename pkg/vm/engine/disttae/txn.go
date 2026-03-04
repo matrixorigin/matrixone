@@ -991,6 +991,71 @@ func (txn *Transaction) WriteFileLocked(
 	return nil
 }
 
+// WriteFileLockedSkipTransfer is similar to WriteFileLocked but marks the entry
+// to skip transfer processing. Used by CCPR for cross-cluster tombstones.
+func (txn *Transaction) WriteFileLockedSkipTransfer(
+	typ int,
+	accountId uint32,
+	databaseId,
+	tableId uint64,
+	databaseName,
+	tableName string,
+	fileName string,
+	inputBat *batch.Batch,
+	tnStore DNStore,
+) (err error) {
+
+	txn.hasS3Op.Store(true)
+
+	var (
+		copied *batch.Batch
+	)
+
+	if copied, err = inputBat.Dup(txn.proc.Mp()); err != nil {
+		return err
+	}
+
+	if typ == INSERT {
+		col, area := vector.MustVarlenaRawData(copied.Vecs[1])
+		for i := range col {
+			stats := objectio.ObjectStats(col[i].GetByteSlice(area))
+			oid := stats.ObjectName().ObjectId()
+			sid := oid.Segment()
+
+			colexec.RecordTxnUnCommitSegment(txn.op.Txn().ID, tableId, sid)
+			txn.registerCNObjects(*oid, accountId, copied, databaseName, tableName)
+		}
+	}
+
+	txn.readOnly.Store(false)
+	txn.workspaceSize += uint64(copied.Size())
+
+	if typ == DELETE {
+		col, area := vector.MustVarlenaRawData(copied.Vecs[0])
+		for i := range col {
+			stats := objectio.ObjectStats(col[i].GetByteSlice(area))
+			txn.StashFlushedTombstones(stats)
+		}
+	}
+
+	entry := Entry{
+		typ:          typ,
+		accountId:    accountId,
+		tableId:      tableId,
+		databaseId:   databaseId,
+		tableName:    tableName,
+		databaseName: databaseName,
+		fileName:     fileName,
+		bat:          copied,
+		tnStore:      tnStore,
+		skipTransfer: true,
+	}
+
+	txn.writes = append(txn.writes, entry)
+
+	return nil
+}
+
 // WriteFile used to add a s3 file information to the transaction buffer
 // insert/delete/update all use this api
 func (txn *Transaction) WriteFile(
@@ -1588,7 +1653,8 @@ func (txn *Transaction) forEachTableHasDeletesLocked(
 	for i := 0; i < len(txn.writes); i++ {
 		e := txn.writes[i]
 		if e.typ != DELETE || e.bat == nil || e.bat.RowCount() == 0 ||
-			(!isObject && e.fileName != "" || isObject && e.fileName == "") {
+			(!isObject && e.fileName != "" || isObject && e.fileName == "") ||
+			e.skipTransfer {
 			continue
 		}
 

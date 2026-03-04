@@ -1970,6 +1970,16 @@ func (tbl *txnTable) Delete(
 		stats := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(0))
 		fileName := stats.ObjectLocation().String()
 
+		// Check if skipTransfer is requested via context (used by CCPR)
+		skipTransfer := ctx.Value(defines.SkipTransferKey{}) != nil
+		if skipTransfer {
+			tbl.getTxn().Lock()
+			err := tbl.getTxn().WriteFileLockedSkipTransfer(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
+				tbl.db.databaseName, tbl.tableName, fileName, bat, tbl.getTxn().tnStores[0])
+			tbl.getTxn().Unlock()
+			return err
+		}
+
 		if err := tbl.getTxn().WriteFile(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
 			tbl.db.databaseName, tbl.tableName, fileName, bat, tbl.getTxn().tnStores[0]); err != nil {
 			return err

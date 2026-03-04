@@ -261,6 +261,10 @@ type IvfReaderParam struct{}
 // PkCheckByTN whether TN does primary key uniqueness check against transaction's workspace or not.
 type PkCheckByTN struct{}
 
+// SkipTransferKey is used to indicate that the delete operation should skip transfer processing.
+// Used by CCPR for cross-cluster tombstones.
+type SkipTransferKey struct{}
+
 // StartTS is the start timestamp of a statement.
 type StartTS struct{}
 
