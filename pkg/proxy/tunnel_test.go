@@ -31,9 +31,53 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 )
+
+type transferRouteErrRouter struct{}
+
+func (router *transferRouteErrRouter) Route(
+	_ context.Context, _ string, _ clientInfo, _ func(string) bool,
+) (*CNServer, error) {
+	return nil, moerr.NewInternalErrorNoCtx("route failed in transfer")
+}
+
+func (router *transferRouteErrRouter) SelectByConnID(_ uint32) (*CNServer, error) {
+	return nil, nil
+}
+
+func (router *transferRouteErrRouter) AllServers(_ string) ([]*CNServer, error) {
+	return nil, nil
+}
+
+func (router *transferRouteErrRouter) Connect(
+	_ *CNServer, _ *frontend.Packet, _ *tunnel,
+) (ServerConn, []byte, error) {
+	return nil, nil, nil
+}
+
+type transferPopCountConnCache struct {
+	popCount int
+}
+
+func (c *transferPopCountConnCache) Push(cacheKey, ServerConn) bool {
+	return false
+}
+
+func (c *transferPopCountConnCache) Pop(cacheKey, uint32, []byte, []byte) ServerConn {
+	c.popCount++
+	return nil
+}
+
+func (c *transferPopCountConnCache) Count() int {
+	return 0
+}
+
+func (c *transferPopCountConnCache) Close() error {
+	return nil
+}
 
 func TestTunnelClientToServer(t *testing.T) {
 	defer leaktest.AfterTest(t)()
@@ -840,4 +884,48 @@ func Test_transfer(t *testing.T) {
 	err = tun.transferSync(ctx)
 	assert.Error(t, err)
 
+}
+
+func TestTransferSync_SkipCachePopOnMigration(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+
+	ctx := context.Background()
+	tun := newTunnel(ctx, rt.Logger(), newCounterSet())
+	cache := &transferPopCountConnCache{}
+
+	cc := &clientConn{
+		ctx:        ctx,
+		log:        rt.Logger(),
+		router:     &transferRouteErrRouter{},
+		mysqlProto: &frontend.MysqlProtocolImpl{},
+		connCache:  cache,
+	}
+
+	serverProxy, server := net.Pipe()
+	defer serverProxy.Close()
+	defer server.Close()
+
+	tun.cc = cc
+	tun.mu.started = true
+	tun.mu.serverConn = newMySQLConn(
+		connServerName,
+		serverProxy,
+		0,
+		tun.reqC,
+		tun.respC,
+		false,
+		0,
+	)
+	tun.mu.scp = &pipe{}
+	tun.mu.csp = &pipe{}
+	now := time.Now()
+	tun.mu.csp.mu.lastCmdTime = now
+	tun.mu.scp.mu.lastCmdTime = now.Add(time.Second)
+
+	err := tun.transferSync(ctx)
+	require.Error(t, err)
+	require.Equal(t, 0, cache.popCount)
 }
