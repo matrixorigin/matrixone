@@ -1,3 +1,19 @@
+/* 
+ * Copyright 2021 Matrix Origin
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #pragma once
 
 #include "cuvs_worker.hpp" // For cuvs_worker_t and raft_handle_wrapper_t
@@ -95,6 +111,9 @@ public:
         worker = std::make_unique<cuvs_worker_t>(nthread, devices_, force_mg || (devices_.size() > 1));
     }
 
+    /**
+     * @brief Loads the index from file or builds it from the dataset.
+     */
     void load() {
         std::unique_lock<std::shared_mutex> lock(mutex_);
         if (is_loaded_) return;
@@ -193,6 +212,10 @@ public:
         is_loaded_ = true;
     }
 
+    /**
+     * @brief Serializes the index to a file.
+     * @param filename Path to the output file.
+     */
     void save(const std::string& filename) {
         if (!is_loaded_ || (!index_ && !mg_index_)) throw std::runtime_error("index not loaded");
 
@@ -214,11 +237,23 @@ public:
         if (result.error) std::rethrow_exception(result.error);
     }
 
+    /**
+     * @brief Search result containing neighbor IDs and distances.
+     */
     struct search_result_t {
-        std::vector<int64_t> neighbors;
-        std::vector<float> distances;
+        std::vector<int64_t> neighbors; // Indices of nearest neighbors
+        std::vector<float> distances;  // Distances to nearest neighbors
     };
 
+    /**
+     * @brief Performs IVF-Flat search for given queries.
+     * @param queries_data Pointer to flattened query vectors on host.
+     * @param num_queries Number of query vectors.
+     * @param query_dimension Dimension of query vectors.
+     * @param limit Number of nearest neighbors to find.
+     * @param sp IVF-Flat search parameters.
+     * @return Search results.
+     */
     search_result_t search(const T* queries_data, uint64_t num_queries, uint32_t query_dimension, 
                         uint32_t limit, const ivf_flat_search_params_t& sp) {
         if (!queries_data || num_queries == 0 || dimension == 0) return search_result_t{};

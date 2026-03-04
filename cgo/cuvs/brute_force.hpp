@@ -1,3 +1,19 @@
+/* 
+ * Copyright 2021 Matrix Origin
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #pragma once
 
 #include "cuvs_worker.hpp" // For cuvs_worker_t and raft_handle_wrapper_t
@@ -38,25 +54,37 @@
 
 namespace matrixone {
 
-// --- gpu_brute_force_t Class ---
+/**
+ * @brief Brute-force nearest neighbor search on GPU.
+ * @tparam T Data type of the vector elements (e.g., float, half).
+ */
 template <typename T>
 class gpu_brute_force_t {
 public:
-    std::vector<T> flattened_host_dataset; // Store flattened data as std::vector
-    std::unique_ptr<cuvs::neighbors::brute_force::index<T, float>> index; // Use float for DistT
-    cuvs::distance::DistanceType metric;
-    uint32_t dimension;
-    uint32_t count;
-    int device_id_;
-    std::unique_ptr<cuvs_worker_t> worker;
-    std::shared_mutex mutex_; // Mutex to protect load() and search()
-    bool is_loaded_ = false;
-    std::shared_ptr<void> dataset_device_ptr_; // Keep device memory alive
+    std::vector<T> flattened_host_dataset; // Host-side copy of the dataset
+    std::unique_ptr<cuvs::neighbors::brute_force::index<T, float>> index; // cuVS brute-force index
+    cuvs::distance::DistanceType metric; // Distance metric
+    uint32_t dimension; // Dimension of vectors
+    uint32_t count; // Number of vectors in the dataset
+    int device_id_; // CUDA device ID
+    std::unique_ptr<cuvs_worker_t> worker; // Asynchronous task worker
+    std::shared_mutex mutex_; // Protects index and data access
+    bool is_loaded_ = false; // Whether the index is loaded into GPU memory
+    std::shared_ptr<void> dataset_device_ptr_; // Pointer to device-side dataset memory
 
     ~gpu_brute_force_t() {
         destroy();
     }
 
+    /**
+     * @brief Constructor for brute-force search.
+     * @param dataset_data Pointer to the flattened dataset on host.
+     * @param count_vectors Number of vectors.
+     * @param dimension Vector dimension.
+     * @param m Distance metric.
+     * @param nthread Number of worker threads.
+     * @param device_id GPU device ID.
+     */
     gpu_brute_force_t(const T* dataset_data, uint64_t count_vectors, uint32_t dimension, cuvs::distance::DistanceType m,
                        uint32_t nthread, int device_id = 0)
         : dimension(dimension), count(static_cast<uint32_t>(count_vectors)), metric(m), device_id_(device_id) {
@@ -69,6 +97,9 @@ public:
         }
     }
 
+    /**
+     * @brief Loads the dataset to the GPU and builds the index.
+     */
     void load() {
         std::unique_lock<std::shared_mutex> lock(mutex_); // Acquire exclusive lock
         if (is_loaded_) return;
@@ -118,11 +149,22 @@ public:
         is_loaded_ = true;
     }
 
+    /**
+     * @brief Search result containing neighbor IDs and distances.
+     */
     struct search_result_t {
-        std::vector<int64_t> neighbors;
-        std::vector<float> distances;
+        std::vector<int64_t> neighbors; // Indices of nearest neighbors
+        std::vector<float> distances;  // Distances to nearest neighbors
     };
 
+    /**
+     * @brief Performs brute-force search for given queries.
+     * @param queries_data Pointer to flattened query vectors on host.
+     * @param num_queries Number of query vectors.
+     * @param query_dimension Dimension of query vectors.
+     * @param limit Number of nearest neighbors to find.
+     * @return Search results.
+     */
     search_result_t search(const T* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit) {
         if (!queries_data || num_queries == 0 || dimension == 0) { // Check for invalid input
             return search_result_t{};
