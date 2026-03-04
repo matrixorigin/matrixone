@@ -533,7 +533,10 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 
 	var sc ServerConn
 	// If connCache is enabled, try to get connection from the cache.
-	if c.connCache != nil {
+	// NB: Cache reuse is only valid for first login. During connection
+	// migration (prevAdd != ""), we must build a fresh backend connection and
+	// migrate session state from the previous CN.
+	if c.connCache != nil && prevAdd == "" {
 		sc = c.connCache.Pop(c.clientInfo.hash, c.connID, c.mysqlProto.GetSalt(), c.mysqlProto.GetAuthResponse())
 		if sc != nil {
 			// get the response from the cn server.
