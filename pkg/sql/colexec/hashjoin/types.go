@@ -173,7 +173,7 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	if !ctr.bitmapSynced && hashJoin.NumCPU > 1 && !hashJoin.IsMerger {
 		hashJoin.Channel <- nil
 	}
-	ctr.cleanHashMap(proc)
+	ctr.cleanHashMap()
 	ctr.resetNonEqCondExecutor()
 	ctr.resetEqCondExecutors()
 	ctr.rightRowsMatched = nil
@@ -206,7 +206,7 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &hashJoin.ctr
 	ctr.cleanBatch(proc)
-	ctr.cleanHashMap(proc)
+	ctr.cleanHashMap()
 	ctr.cleanNonEqCondExecutor()
 	ctr.cleanEqCondExecutors()
 	hashJoin.cleanupSpillFiles(proc)
@@ -217,8 +217,11 @@ func (hashJoin *HashJoin) cleanupSpillFiles(proc *process.Process) {
 	if err != nil {
 		return
 	}
-	if len(hashJoin.ctr.spilledProbeBuckets) > 0 {
-		spillfs.Delete(proc.Ctx, hashJoin.ctr.spilledProbeBuckets...)
+	for _, bucket := range hashJoin.ctr.spilledBuildBuckets {
+		spillfs.Delete(proc.Ctx, bucket)
+	}
+	for _, bucket := range hashJoin.ctr.spilledProbeBuckets {
+		spillfs.Delete(proc.Ctx, bucket)
 	}
 }
 
@@ -261,14 +264,9 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 	ctr.bucketProbeBatches = nil
 }
 
-func (ctr *container) cleanHashMap(proc *process.Process) {
+func (ctr *container) cleanHashMap() {
 	if ctr.mp != nil {
-		spillfs, err := proc.GetSpillFileService()
-		if err == nil {
-			ctr.mp.FreeWithSpillCleanup(proc.Ctx, spillfs)
-		} else {
-			ctr.mp.Free()
-		}
+		ctr.mp.Free()
 		ctr.mp = nil
 	}
 }
@@ -347,7 +345,10 @@ func (ctr *container) setSpillThreshold(threshold int64) {
 		// 0 means auto config
 		mem := int64(system.MemoryTotal()) / int64(system.GoMaxProcs()) / 8
 		// min 128MB
-		ctr.spillThreshold = max(mem, common.MiB*128)
+		if mem < common.MiB*128 {
+			mem = common.MiB * 128
+		}
+		ctr.spillThreshold = mem
 	} else {
 		ctr.spillThreshold = threshold
 	}

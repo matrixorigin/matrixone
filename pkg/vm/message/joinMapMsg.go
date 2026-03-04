@@ -190,26 +190,6 @@ func (jm *JoinMap) IsDeleted(row uint64) bool {
 	return jm.delRows != nil && jm.delRows.Contains(uint64(row))
 }
 
-func (jm *JoinMap) Free() {
-	if atomic.AddInt64(&jm.refCnt, -1) != 0 {
-		return
-	}
-	jm.FreeMemory()
-}
-
-func (jm *JoinMap) FreeWithSpillCleanup(ctx context.Context, spillfs interface {
-	Delete(context.Context, ...string) error
-}) {
-	if atomic.AddInt64(&jm.refCnt, -1) != 0 {
-		return
-	}
-	// Clean up build spill files
-	if jm.Spilled && len(jm.SpillBuckets) > 0 {
-		spillfs.Delete(ctx, jm.SpillBuckets...)
-	}
-	jm.FreeMemory()
-}
-
 func (jm *JoinMap) FreeMemory() {
 	jm.multiSels.Free()
 	if jm.ihm != nil {
@@ -226,6 +206,13 @@ func (jm *JoinMap) FreeMemory() {
 	jm.SpillBuckets = nil
 	jm.SpillRowCnts = nil
 	jm.valid = false
+}
+
+func (jm *JoinMap) Free() {
+	if atomic.AddInt64(&jm.refCnt, -1) != 0 {
+		return
+	}
+	jm.FreeMemory()
 }
 
 func (jm *JoinMap) Size() int64 {

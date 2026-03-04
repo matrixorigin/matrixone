@@ -1491,7 +1491,7 @@ func constructLoopJoin(node *plan.Node, rightTypes []types.Type, proc *process.P
 	return arg
 }
 
-func constructJoinBuildOperator(node *plan.Node, c *Compile, op vm.Operator, mcpu int32) vm.Operator {
+func constructJoinBuildOperator(c *Compile, op vm.Operator, mcpu int32) vm.Operator {
 	switch op.OpType() {
 	case vm.IndexJoin:
 		indexJoin := op.(*indexjoin.IndexJoin)
@@ -1503,7 +1503,7 @@ func constructJoinBuildOperator(node *plan.Node, c *Compile, op vm.Operator, mcp
 		ret.SetIsFirst(true)
 		return ret
 	default:
-		res := constructBroadcastHashBuild(node, op, c.proc, mcpu)
+		res := constructBroadcastHashBuild(op, c.proc, mcpu)
 		res.SetIdx(op.GetOperatorBase().GetIdx())
 		res.SetIsFirst(true)
 		return res
@@ -1539,10 +1539,9 @@ func rewriteJoinExprToHashBuildExpr(src []*plan.Expr) []*plan.Expr {
 	return dst
 }
 
-func constructBroadcastHashBuild(node *plan.Node, op vm.Operator, proc *process.Process, mcpu int32) *hashbuild.HashBuild {
+func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hashbuild.HashBuild {
 	ret := hashbuild.NewArgument()
 	ret.IsShuffle = false
-	ret.SpillThreshold = node.SpillMem
 
 	switch op.OpType() {
 	case vm.HashJoin:
