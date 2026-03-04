@@ -58,7 +58,7 @@ test: $(TEST_EXE)
 
 $(TEST_EXE): $(TEST_OBJS)
 	@echo "NVCCLD $@"
-	$(NVCC) $(NVCC_FLAGS: -x cu=) $^ $(LDFLAGS: -shared=) -o $@
+	$(NVCC) $(subst -x cu,,$(NVCC_FLAGS)) $^ $(subst -shared,,$(LDFLAGS)) -o $@
 
 $(OBJDIR)/test/%.o: $(TESTDIR)/%.cu
 	@mkdir -p $(@D)
