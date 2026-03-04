@@ -228,25 +228,32 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	// are invisible to the current txn, leaving orphan records in mo_tables/mo_columns.
 	//
 	// We identify orphans by comparing allTables (fresh snapshot after lock acquired)
-	// against deleteTables (tables visible to current txn).
-	// Only delete tables that are in allTables but NOT in deleteTables.
-	allTables, _, err := listRelationsAtLatestSnapshot(c, dbName)
+	// against relations (tables visible to current txn).
+	// Only delete tables that are in allTables but NOT in relations.
+	//
+	// Note: We need to include hidden tables (index tables) because they are also
+	// created by "data branch create table" and need to be cleaned up.
+	allTables, hiddenTables, err := listRelationsAtLatestSnapshot(c, dbName)
 	if err != nil {
 		// Database may already be deleted, ignore error
 		logutil.Infof("listRelationsAtLatestSnapshot failed (ignored): db=%s, err=%v", dbName, err)
 		return nil
 	}
+	// Combine regular and hidden tables for orphan detection
+	allTablesIncludingHidden := append(allTables, hiddenTables...)
 
-	// Build a set of tables that were already handled by the current transaction
-	deleteTablesSet := make(map[string]struct{}, len(deleteTables))
-	for _, t := range deleteTables {
-		deleteTablesSet[t] = struct{}{}
+	// Build a set of tables that were already handled by the current transaction.
+	// We use 'relations' (all tables visible to current txn, including hidden tables)
+	// instead of 'deleteTables' (which excludes index tables).
+	relationsSet := make(map[string]struct{}, len(relations))
+	for _, t := range relations {
+		relationsSet[t] = struct{}{}
 	}
 
-	// Find orphan tables: tables in allTables but not in deleteTables
+	// Find orphan tables: tables in allTablesIncludingHidden but not in relations
 	var orphanTables []string
-	for _, t := range allTables {
-		if _, ok := deleteTablesSet[t]; !ok {
+	for _, t := range allTablesIncludingHidden {
+		if _, ok := relationsSet[t]; !ok {
 			orphanTables = append(orphanTables, t)
 		}
 	}
@@ -3957,13 +3964,6 @@ var listRelationsAtLatestSnapshot = func(c *Compile, dbName string) ([]string, [
 // does NOT hold locks on these orphan records, a separate transaction can
 // safely delete them without deadlock.
 //
-// IMPORTANT: We only delete tables that are NOT visible to the separate
-// transaction. If a table is visible to the separate transaction, it means
-// the table is "legitimate" and should not be deleted by us. Deleting such
-// tables could cause w-w conflicts with the parent transaction (e.g., in
-// restore cluster scenario where the parent transaction may also be dropping
-// the same tables).
-//
 // We use engine.Database.Delete() (not raw SQL DELETE) because TN expects
 // mo_tables DELETE entries to have the full batch format produced by
 // GenDropTableTuple. A raw SQL DELETE only generates a tombstone batch
@@ -3998,27 +3998,7 @@ var deleteOrphanTableRecords = func(c *Compile, dbName string, orphanTables []st
 			return err
 		}
 
-		// Get tables visible to this separate transaction.
-		// We should NOT delete tables that are visible to this transaction,
-		// because they are "legitimate" tables. Deleting them could cause
-		// w-w conflicts with the parent transaction.
-		visibleTables, err := db.Relations(ctx)
-		if err != nil {
-			return err
-		}
-		visibleSet := make(map[string]struct{}, len(visibleTables))
-		for _, t := range visibleTables {
-			visibleSet[t] = struct{}{}
-		}
-
 		for _, tblName := range orphanTables {
-			// Skip tables that are visible to this transaction.
-			// These are "legitimate" tables that should not be deleted by us.
-			if _, ok := visibleSet[tblName]; ok {
-				logutil.Infof("deleteOrphanTableRecords: skip visible table %s.%s", dbName, tblName)
-				continue
-			}
-
 			if err := db.Delete(ctx, tblName); err != nil {
 				// Table may already be deleted by another concurrent transaction
 				// (e.g., another DROP DATABASE or DROP TABLE). This is safe to
