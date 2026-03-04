@@ -51,6 +51,7 @@ public:
     std::unique_ptr<cuvs_worker_t> worker;
     std::shared_mutex mutex_; // Mutex to protect load() and search()
     bool is_loaded_ = false;
+    std::shared_ptr<void> dataset_device_ptr_; // Keep device memory alive
 
     ~gpu_brute_force_t() {
         destroy();
@@ -82,10 +83,14 @@ public:
                 return std::any();
             }
 
-            auto dataset_device = raft::make_device_matrix<T, int64_t, raft::layout_c_contiguous>(
-                *handle.get_raft_resources(), static_cast<int64_t>(count), static_cast<int64_t>(dimension));
+            auto dataset_device = new auto(raft::make_device_matrix<T, int64_t, raft::layout_c_contiguous>(
+                *handle.get_raft_resources(), static_cast<int64_t>(count), static_cast<int64_t>(dimension)));
             
-            RAFT_CUDA_TRY(cudaMemcpyAsync(dataset_device.data_handle(), flattened_host_dataset.data(),
+            dataset_device_ptr_ = std::shared_ptr<void>(dataset_device, [](void* ptr) {
+                delete static_cast<raft::device_matrix<T, int64_t, raft::layout_c_contiguous>*>(ptr);
+            });
+
+            RAFT_CUDA_TRY(cudaMemcpyAsync(dataset_device->data_handle(), flattened_host_dataset.data(),
                                      flattened_host_dataset.size() * sizeof(T), cudaMemcpyHostToDevice,
                                      raft::resource::get_cuda_stream(*handle.get_raft_resources())));
 
@@ -93,7 +98,7 @@ public:
             index_params.metric = metric;
 
             index = std::make_unique<cuvs::neighbors::brute_force::index<T, float>>(
-                cuvs::neighbors::brute_force::build(*handle.get_raft_resources(), index_params, raft::make_const_mdspan(dataset_device.view()))); // Use raft::make_const_mdspan
+                cuvs::neighbors::brute_force::build(*handle.get_raft_resources(), index_params, raft::make_const_mdspan(dataset_device->view()))); // Use raft::make_const_mdspan
 
             raft::resource::sync_stream(*handle.get_raft_resources()); // Synchronize after build
 
@@ -104,6 +109,7 @@ public:
             if (index) { // Check if unique_ptr holds an object
                 index.reset();
             }
+            dataset_device_ptr_.reset();
             return std::any();
         };
         worker->start(init_fn, stop_fn);

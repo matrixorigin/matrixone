@@ -65,6 +65,7 @@ public:
     std::unique_ptr<cuvs_worker_t> worker;
     std::shared_mutex mutex_;
     bool is_loaded_ = false;
+    std::shared_ptr<void> dataset_device_ptr_; // Keep device memory alive
 
     ~gpu_ivf_flat_t() {
         destroy();
@@ -153,10 +154,14 @@ public:
                     mg_index_ = std::make_unique<mg_index>(
                         cuvs::neighbors::ivf_flat::build(*res, mg_params, dataset_host_view));
                 } else {
-                    auto dataset_device = raft::make_device_matrix<T, int64_t, raft::layout_c_contiguous>(
-                        *res, static_cast<int64_t>(count), static_cast<int64_t>(dimension));
+                    auto dataset_device = new auto(raft::make_device_matrix<T, int64_t, raft::layout_c_contiguous>(
+                        *res, static_cast<int64_t>(count), static_cast<int64_t>(dimension)));
                     
-                    RAFT_CUDA_TRY(cudaMemcpyAsync(dataset_device.data_handle(), flattened_host_dataset.data(),
+                    dataset_device_ptr_ = std::shared_ptr<void>(dataset_device, [](void* ptr) {
+                        delete static_cast<raft::device_matrix<T, int64_t, raft::layout_c_contiguous>*>(ptr);
+                    });
+
+                    RAFT_CUDA_TRY(cudaMemcpyAsync(dataset_device->data_handle(), flattened_host_dataset.data(),
                                              flattened_host_dataset.size() * sizeof(T), cudaMemcpyHostToDevice,
                                              raft::resource::get_cuda_stream(*res)));
 
@@ -167,7 +172,7 @@ public:
                     index_params.kmeans_trainset_fraction = build_params.kmeans_trainset_fraction;
 
                     index_ = std::make_unique<ivf_flat_index>(
-                        cuvs::neighbors::ivf_flat::build(*res, index_params, raft::make_const_mdspan(dataset_device.view())));
+                        cuvs::neighbors::ivf_flat::build(*res, index_params, raft::make_const_mdspan(dataset_device->view())));
                 }
                 raft::resource::sync_stream(*res);
             }
@@ -179,6 +184,7 @@ public:
         auto stop_fn = [&](raft_handle_wrapper_t& handle) -> std::any {
             index_.reset();
             mg_index_.reset();
+            dataset_device_ptr_.reset();
             return std::any();
         };
 
