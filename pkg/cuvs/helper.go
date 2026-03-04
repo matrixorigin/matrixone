@@ -33,14 +33,35 @@ import (
 type DistanceType C.distance_type_t
 
 const (
-    L2Expanded      DistanceType = C.DistanceType_L2Expanded
-    L1              DistanceType = C.DistanceType_L1
-    InnerProduct    DistanceType = C.DistanceType_InnerProduct
-    CosineSimilarity DistanceType = C.DistanceType_CosineSimilarity
-    Jaccard         DistanceType = C.DistanceType_Jaccard
-    Hamming         DistanceType = C.DistanceType_Hamming
-    Unknown         DistanceType = C.DistanceType_Unknown
+	L2Expanded          DistanceType = C.DistanceType_L2Expanded
+	L2SqrtExpanded      DistanceType = C.DistanceType_L2SqrtExpanded
+	CosineExpanded      DistanceType = C.DistanceType_CosineExpanded
+	L1                  DistanceType = C.DistanceType_L1
+	L2Unexpanded        DistanceType = C.DistanceType_L2Unexpanded
+	L2SqrtUnexpanded    DistanceType = C.DistanceType_L2SqrtUnexpanded
+	InnerProduct        DistanceType = C.DistanceType_InnerProduct
+	Linf                DistanceType = C.DistanceType_Linf
+	Canberra            DistanceType = C.DistanceType_Canberra
+	LpUnexpanded        DistanceType = C.DistanceType_LpUnexpanded
+	CorrelationExpanded DistanceType = C.DistanceType_CorrelationExpanded
+	JaccardExpanded     DistanceType = C.DistanceType_JaccardExpanded
+	HellingerExpanded   DistanceType = C.DistanceType_HellingerExpanded
+	Haversine           DistanceType = C.DistanceType_Haversine
+	BrayCurtis          DistanceType = C.DistanceType_BrayCurtis
+	JensenShannon       DistanceType = C.DistanceType_JensenShannon
+	HammingUnexpanded   DistanceType = C.DistanceType_HammingUnexpanded
+	KLDivergence        DistanceType = C.DistanceType_KLDivergence
+	RusselRaoExpanded   DistanceType = C.DistanceType_RusselRaoExpanded
+	DiceExpanded        DistanceType = C.DistanceType_DiceExpanded
+	BitwiseHamming      DistanceType = C.DistanceType_BitwiseHamming
+	Precomputed         DistanceType = C.DistanceType_Precomputed
+	// Aliases
+	CosineSimilarity         DistanceType = C.DistanceType_CosineSimilarity
+	Jaccard                  DistanceType = C.DistanceType_Jaccard
+	Hamming                  DistanceType = C.DistanceType_Hamming
+	Unknown                  DistanceType = C.DistanceType_Unknown
 )
+
 
 // Quantization maps to C.quantization_t
 type Quantization C.quantization_t

@@ -10,13 +10,33 @@ extern "C" {
 #endif
 
 typedef enum {
-    DistanceType_L2Expanded,
-    DistanceType_L1,
-    DistanceType_InnerProduct,
-    DistanceType_CosineSimilarity,
-    DistanceType_Jaccard,
-    DistanceType_Hamming,
-    DistanceType_Unknown
+    DistanceType_L2Expanded = 0,
+    DistanceType_L2SqrtExpanded = 1,
+    DistanceType_CosineExpanded = 2,
+    DistanceType_L1 = 3,
+    DistanceType_L2Unexpanded = 4,
+    DistanceType_L2SqrtUnexpanded = 5,
+    DistanceType_InnerProduct = 6,
+    DistanceType_Linf = 7,
+    DistanceType_Canberra = 8,
+    DistanceType_LpUnexpanded = 9,
+    DistanceType_CorrelationExpanded = 10,
+    DistanceType_JaccardExpanded = 11,
+    DistanceType_HellingerExpanded = 12,
+    DistanceType_Haversine = 13,
+    DistanceType_BrayCurtis = 14,
+    DistanceType_JensenShannon = 15,
+    DistanceType_HammingUnexpanded = 16,
+    DistanceType_KLDivergence = 17,
+    DistanceType_RusselRaoExpanded = 18,
+    DistanceType_DiceExpanded = 19,
+    DistanceType_BitwiseHamming = 20,
+    DistanceType_Precomputed = 100,
+    // Aliases
+    DistanceType_CosineSimilarity = 2,
+    DistanceType_Jaccard = 11,
+    DistanceType_Hamming = 16,
+    DistanceType_Unknown = 255
 } distance_type_t;
 
 typedef enum {

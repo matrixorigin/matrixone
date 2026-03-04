@@ -7,32 +7,6 @@
 #include <cstdlib>
 #include <cstring>
 
-// Helper to set error message
-static void set_errmsg_cagra(void* errmsg, const std::string& prefix, const std::exception& e) {
-    if (errmsg) {
-        std::string err_str = prefix + ": " + std::string(e.what());
-        char* msg = (char*)malloc(err_str.length() + 1);
-        if (msg) {
-            std::strcpy(msg, err_str.c_str());
-            *(static_cast<char**>(errmsg)) = msg;
-        }
-    } else {
-        std::cerr << prefix << ": " << e.what() << std::endl;
-    }
-}
-
-// Helper to convert C enum to C++ enum
-static cuvs::distance::DistanceType convert_distance_type_cagra(distance_type_t metric_c) {
-    switch (metric_c) {
-        case DistanceType_L2Expanded: return cuvs::distance::DistanceType::L2Expanded;
-        case DistanceType_L1: return cuvs::distance::DistanceType::L1;
-        case DistanceType_InnerProduct: return cuvs::distance::DistanceType::InnerProduct;
-        case DistanceType_CosineSimilarity: return cuvs::distance::DistanceType::CosineExpanded;
-        default:
-            throw std::runtime_error("Unknown distance type");
-    }
-}
-
 struct gpu_cagra_any_t {
     quantization_t qtype;
     void* ptr;
@@ -57,7 +31,7 @@ gpu_cagra_c gpu_cagra_new(const void* dataset_data, uint64_t count_vectors, uint
                             distribution_mode_t dist_mode, quantization_t qtype, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        cuvs::distance::DistanceType metric = convert_distance_type_cagra(metric_c);
+        cuvs::distance::DistanceType metric = matrixone::convert_distance_type(metric_c);
         std::vector<int> devs(devices, devices + device_count);
         void* cagra_ptr = nullptr;
         switch (qtype) {
@@ -78,7 +52,7 @@ gpu_cagra_c gpu_cagra_new(const void* dataset_data, uint64_t count_vectors, uint
         }
         return static_cast<gpu_cagra_c>(new gpu_cagra_any_t(qtype, cagra_ptr));
     } catch (const std::exception& e) {
-        set_errmsg_cagra(errmsg, "Error in gpu_cagra_new", e);
+        set_errmsg(errmsg, "Error in gpu_cagra_new", e.what());
         return nullptr;
     }
 }
@@ -89,7 +63,7 @@ gpu_cagra_c gpu_cagra_load_file(const char* filename, uint32_t dimension, distan
                                  distribution_mode_t dist_mode, quantization_t qtype, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        cuvs::distance::DistanceType metric = convert_distance_type_cagra(metric_c);
+        cuvs::distance::DistanceType metric = matrixone::convert_distance_type(metric_c);
         std::vector<int> devs(devices, devices + device_count);
         void* cagra_ptr = nullptr;
         switch (qtype) {
@@ -110,7 +84,7 @@ gpu_cagra_c gpu_cagra_load_file(const char* filename, uint32_t dimension, distan
         }
         return static_cast<gpu_cagra_c>(new gpu_cagra_any_t(qtype, cagra_ptr));
     } catch (const std::exception& e) {
-        set_errmsg_cagra(errmsg, "Error in gpu_cagra_load_file", e);
+        set_errmsg(errmsg, "Error in gpu_cagra_load_file", e.what());
         return nullptr;
     }
 }
@@ -121,7 +95,7 @@ void gpu_cagra_destroy(gpu_cagra_c index_c, void* errmsg) {
         auto* any = static_cast<gpu_cagra_any_t*>(index_c);
         delete any;
     } catch (const std::exception& e) {
-        set_errmsg_cagra(errmsg, "Error in gpu_cagra_destroy", e);
+        set_errmsg(errmsg, "Error in gpu_cagra_destroy", e.what());
     }
 }
 
@@ -137,7 +111,7 @@ void gpu_cagra_load(gpu_cagra_c index_c, void* errmsg) {
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg_cagra(errmsg, "Error in gpu_cagra_load", e);
+        set_errmsg(errmsg, "Error in gpu_cagra_load", e.what());
     }
 }
 
@@ -153,7 +127,7 @@ void gpu_cagra_save(gpu_cagra_c index_c, const char* filename, void* errmsg) {
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg_cagra(errmsg, "Error in gpu_cagra_save", e);
+        set_errmsg(errmsg, "Error in gpu_cagra_save", e.what());
     }
 }
 
@@ -192,7 +166,7 @@ gpu_cagra_search_res_t gpu_cagra_search(gpu_cagra_c index_c, const void* queries
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg_cagra(errmsg, "Error in gpu_cagra_search", e);
+        set_errmsg(errmsg, "Error in gpu_cagra_search", e.what());
     }
     return res;
 }
@@ -232,7 +206,7 @@ void gpu_cagra_extend(gpu_cagra_c index_c, const void* additional_data, uint64_t
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg_cagra(errmsg, "Error in gpu_cagra_extend", e);
+        set_errmsg(errmsg, "Error in gpu_cagra_extend", e.what());
     }
 }
 
@@ -266,7 +240,7 @@ gpu_cagra_c gpu_cagra_merge(gpu_cagra_c* indices_c, int num_indices, uint32_t nt
         }
         return static_cast<gpu_cagra_c>(new gpu_cagra_any_t(qtype, merged_ptr));
     } catch (const std::exception& e) {
-        set_errmsg_cagra(errmsg, "Error in gpu_cagra_merge", e);
+        set_errmsg(errmsg, "Error in gpu_cagra_merge", e.what());
         return nullptr;
     }
 }

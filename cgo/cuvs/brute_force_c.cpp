@@ -8,33 +8,8 @@
 #include <limits>
 #include <cstring>
 
-// Helper to set error message
-static void set_errmsg(void* errmsg, const std::string& prefix, const std::exception& e) {
-    if (errmsg) {
-        std::string err_str = prefix + ": " + std::string(e.what());
-        char* msg = (char*)malloc(err_str.length() + 1);
-        if (msg) {
-            std::strcpy(msg, err_str.c_str());
-            *(static_cast<char**>(errmsg)) = msg;
-        }
-    } else {
-        std::cerr << prefix << ": " << e.what() << std::endl;
-    }
-}
-
-// Helper to convert C enum to C++ enum
-static cuvs::distance::DistanceType convert_distance_type(distance_type_t metric_c) {
-    switch (metric_c) {
-        case DistanceType_L2Expanded: return cuvs::distance::DistanceType::L2Expanded;
-        case DistanceType_L1: return cuvs::distance::DistanceType::L1;
-        case DistanceType_InnerProduct: return cuvs::distance::DistanceType::InnerProduct;
-        case DistanceType_CosineSimilarity: return cuvs::distance::DistanceType::CosineExpanded;
-        default:
-            throw std::runtime_error("Unknown distance type");
-    }
-}
-
 struct gpu_brute_force_any_t {
+
     quantization_t qtype;
     void* ptr;
 
@@ -53,7 +28,7 @@ extern "C" {
 gpu_brute_force_c gpu_brute_force_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, distance_type_t metric_c, uint32_t nthread, int device_id, quantization_t qtype, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        cuvs::distance::DistanceType metric = convert_distance_type(metric_c);
+        cuvs::distance::DistanceType metric = matrixone::convert_distance_type(metric_c);
         void* index_ptr = nullptr;
         switch (qtype) {
             case Quantization_F32:
@@ -67,7 +42,7 @@ gpu_brute_force_c gpu_brute_force_new(const void* dataset_data, uint64_t count_v
         }
         return static_cast<gpu_brute_force_c>(new gpu_brute_force_any_t(qtype, index_ptr));
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_brute_force_new", e);
+        set_errmsg(errmsg, "Error in gpu_brute_force_new", e.what());
         return nullptr;
     }
 }
@@ -82,7 +57,7 @@ void gpu_brute_force_load(gpu_brute_force_c index_c, void* errmsg) {
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_brute_force_load", e);
+        set_errmsg(errmsg, "Error in gpu_brute_force_load", e.what());
     }
 }
 
@@ -108,7 +83,7 @@ gpu_brute_force_search_result_c gpu_brute_force_search(gpu_brute_force_c index_c
         }
         return static_cast<gpu_brute_force_search_result_c>(result_ptr);
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_brute_force_search", e);
+        set_errmsg(errmsg, "Error in gpu_brute_force_search", e.what());
         return nullptr;
     }
 }
@@ -142,7 +117,7 @@ void gpu_brute_force_destroy(gpu_brute_force_c index_c, void* errmsg) {
         auto* any = static_cast<gpu_brute_force_any_t*>(index_c);
         delete any;
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_brute_force_destroy", e);
+        set_errmsg(errmsg, "Error in gpu_brute_force_destroy", e.what());
     }
 }
 

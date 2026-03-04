@@ -8,6 +8,37 @@
 #include <iostream>
 #include <raft/util/cudart_utils.hpp>
 
+namespace matrixone {
+cuvs::distance::DistanceType convert_distance_type(distance_type_t metric_c) {
+    switch (metric_c) {
+        case DistanceType_L2Expanded: return cuvs::distance::DistanceType::L2Expanded;
+        case DistanceType_L2SqrtExpanded: return cuvs::distance::DistanceType::L2SqrtExpanded;
+        case DistanceType_CosineExpanded: return cuvs::distance::DistanceType::CosineExpanded;
+        case DistanceType_L1: return cuvs::distance::DistanceType::L1;
+        case DistanceType_L2Unexpanded: return cuvs::distance::DistanceType::L2Unexpanded;
+        case DistanceType_L2SqrtUnexpanded: return cuvs::distance::DistanceType::L2SqrtUnexpanded;
+        case DistanceType_InnerProduct: return cuvs::distance::DistanceType::InnerProduct;
+        case DistanceType_Linf: return cuvs::distance::DistanceType::Linf;
+        case DistanceType_Canberra: return cuvs::distance::DistanceType::Canberra;
+        case DistanceType_LpUnexpanded: return cuvs::distance::DistanceType::LpUnexpanded;
+        case DistanceType_CorrelationExpanded: return cuvs::distance::DistanceType::CorrelationExpanded;
+        case DistanceType_JaccardExpanded: return cuvs::distance::DistanceType::JaccardExpanded;
+        case DistanceType_HellingerExpanded: return cuvs::distance::DistanceType::HellingerExpanded;
+        case DistanceType_Haversine: return cuvs::distance::DistanceType::Haversine;
+        case DistanceType_BrayCurtis: return cuvs::distance::DistanceType::BrayCurtis;
+        case DistanceType_JensenShannon: return cuvs::distance::DistanceType::JensenShannon;
+        case DistanceType_HammingUnexpanded: return cuvs::distance::DistanceType::HammingUnexpanded;
+        case DistanceType_KLDivergence: return cuvs::distance::DistanceType::KLDivergence;
+        case DistanceType_RusselRaoExpanded: return cuvs::distance::DistanceType::RusselRaoExpanded;
+        case DistanceType_DiceExpanded: return cuvs::distance::DistanceType::DiceExpanded;
+        case DistanceType_BitwiseHamming: return cuvs::distance::DistanceType::BitwiseHamming;
+        case DistanceType_Precomputed: return cuvs::distance::DistanceType::Precomputed;
+        default:
+            throw std::runtime_error("Unknown or unsupported distance type");
+    }
+}
+}
+
 // Vectorized kernel processing 2 elements per thread
 __global__ void f32_to_f16_vectorized_kernel(const float2* src, half2* dst, uint64_t n_pairs) {
     uint64_t i = blockIdx.x * (uint64_t)blockDim.x + threadIdx.x;
@@ -45,16 +76,16 @@ int gpu_get_device_list(int* devices, int max_count) {
     return actual_count;
 }
 
-static void set_errmsg_helper(void* errmsg, const std::string& prefix, const std::exception& e) {
+void set_errmsg(void* errmsg, const char* prefix, const char* what) {
     if (errmsg) {
-        std::string err_str = prefix + ": " + std::string(e.what());
+        std::string err_str = std::string(prefix) + ": " + std::string(what);
         char* msg = (char*)malloc(err_str.length() + 1);
         if (msg) {
             std::strcpy(msg, err_str.c_str());
             *(static_cast<char**>(errmsg)) = msg;
         }
     } else {
-        std::cerr << prefix << ": " << e.what() << std::endl;
+        std::cerr << prefix << ": " << what << std::endl;
     }
 }
 
@@ -99,7 +130,7 @@ void gpu_convert_f32_to_f16(const float* src, void* dst, uint64_t total_elements
         cudaFree(d_dst);
 
     } catch (const std::exception& e) {
-        set_errmsg_helper(errmsg, "Error in gpu_convert_f32_to_f16", e);
+        set_errmsg(errmsg, "Error in gpu_convert_f32_to_f16", e.what());
     }
 }
 

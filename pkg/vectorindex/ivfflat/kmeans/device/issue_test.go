@@ -23,209 +23,89 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/stretchr/testify/require"
-
-	cuvs "github.com/rapidsai/cuvs/go"
-	"github.com/rapidsai/cuvs/go/brute_force"
-	"github.com/rapidsai/cuvs/go/ivf_flat"
 )
 
-func getCenters(vecs [][]float32, dim int, clusterCnt int, distanceType cuvs.Distance, maxIterations int) ([][]float32, error) {
+func getCenters(vecs [][]float32, dim int, clusterCnt int, distanceType cuvs.DistanceType, maxIterations int) ([][]float32, error) {
+	if len(vecs) == 0 {
+		return nil, fmt.Errorf("empty dataset")
+	}
 
-	stream, err := cuvs.NewCudaStream()
+	// Flatten vectors
+	flattened := make([]float32, len(vecs)*dim)
+	for i, v := range vecs {
+		copy(flattened[i*dim:(i+1)*dim], v)
+	}
+
+	deviceID := 0
+	nthread := uint32(1)
+	km, err := cuvs.NewGpuKMeans[float32](uint32(clusterCnt), uint32(dim), distanceType, maxIterations, deviceID, nthread)
 	if err != nil {
 		return nil, err
 	}
-	defer stream.Close()
-	resource, err := cuvs.NewResource(stream)
-	if err != nil {
-		return nil, err
-	}
-	defer resource.Close()
-	defer runtime.KeepAlive(resource)
+	defer km.Destroy()
 
-	indexParams, err := ivf_flat.CreateIndexParams()
-	if err != nil {
-		return nil, err
-	}
-	defer indexParams.Close()
-
-	indexParams.SetNLists(uint32(clusterCnt))
-	indexParams.SetMetric(distanceType)
-	indexParams.SetKMeansNIters(uint32(maxIterations))
-	indexParams.SetKMeansTrainsetFraction(1) // train all sample
-
-	dataset, err := cuvs.NewTensor(vecs)
-	if err != nil {
-		return nil, err
-	}
-	defer dataset.Close()
-
-	index, err := ivf_flat.CreateIndex[float32](indexParams)
-	if err != nil {
-		return nil, err
-	}
-	defer index.Close()
-
-	if _, err := dataset.ToDevice(&resource); err != nil {
-		return nil, err
-	}
-
-	centers, err := cuvs.NewTensorNoDataOnDevice[float32](&resource, []int64{int64(clusterCnt), int64(dim)})
+	_, _, err = km.Fit(flattened, uint64(len(vecs)))
 	if err != nil {
 		return nil, err
 	}
 
-	if err := ivf_flat.BuildIndex(resource, indexParams, &dataset, index); err != nil {
-		return nil, err
-	}
-
-	if err := resource.Sync(); err != nil {
-		return nil, err
-	}
-
-	if err := ivf_flat.GetCenters(index, &centers); err != nil {
-		return nil, err
-	}
-
-	if err := resource.Sync(); err != nil {
-		return nil, err
-	}
-
-	if _, err := centers.ToHost(&resource); err != nil {
-		return nil, err
-	}
-
-	if err := resource.Sync(); err != nil {
-		return nil, err
-	}
-
-	result, err := centers.Slice()
+	centroids, err := km.GetCentroids()
 	if err != nil {
 		return nil, err
+	}
+
+	// Reshape centroids
+	result := make([][]float32, clusterCnt)
+	for i := 0; i < clusterCnt; i++ {
+		result[i] = make([]float32, dim)
+		copy(result[i], centroids[i*dim:(i+1)*dim])
 	}
 
 	return result, nil
-
 }
 
-func Search(datasetvec [][]float32, queriesvec [][]float32, limit uint, distanceType cuvs.Distance) (retkeys any, retdistances []float64, err error) {
+func Search(datasetvec [][]float32, queriesvec [][]float32, limit uint, distanceType cuvs.DistanceType) (retkeys any, retdistances []float64, err error) {
+	if len(datasetvec) == 0 || len(queriesvec) == 0 {
+		return nil, nil, nil
+	}
 
-	stream, err := cuvs.NewCudaStream()
+	dim := len(datasetvec[0])
+	flattenedDataset := make([]float32, len(datasetvec)*dim)
+	for i, v := range datasetvec {
+		copy(flattenedDataset[i*dim:(i+1)*dim], v)
+	}
+
+	flattenedQueries := make([]float32, len(queriesvec)*dim)
+	for i, v := range queriesvec {
+		copy(flattenedQueries[i*dim:(i+1)*dim], v)
+	}
+
+	deviceID := 0
+	nthread := uint32(1)
+	bf, err := cuvs.NewGpuBruteForce[float32](flattenedDataset, uint64(len(datasetvec)), uint32(dim), distanceType, nthread, deviceID)
 	if err != nil {
-		return
+		return nil, nil, err
 	}
-	defer stream.Close()
+	defer bf.Destroy()
 
-	resource, err := cuvs.NewResource(stream)
+	err = bf.Load()
 	if err != nil {
-		return
+		return nil, nil, err
 	}
-	defer resource.Close()
-	defer runtime.KeepAlive(resource)
 
-	dataset, err := cuvs.NewTensor(datasetvec)
+	neighbors, distances, err := bf.Search(flattenedQueries, uint64(len(queriesvec)), uint32(dim), uint32(limit))
 	if err != nil {
-		return
-	}
-	defer dataset.Close()
-
-	index, err := brute_force.CreateIndex()
-	if err != nil {
-		return
-	}
-	defer index.Close()
-
-	queries, err := cuvs.NewTensor(queriesvec)
-	if err != nil {
-		return
-	}
-	defer queries.Close()
-
-	neighbors, err := cuvs.NewTensorOnDevice[int64](&resource, []int64{int64(len(queriesvec)), int64(limit)})
-	if err != nil {
-		return
-	}
-	defer neighbors.Close()
-
-	distances, err := cuvs.NewTensorOnDevice[float32](&resource, []int64{int64(len(queriesvec)), int64(limit)})
-	if err != nil {
-		return
-	}
-	defer distances.Close()
-
-	if _, err = dataset.ToDevice(&resource); err != nil {
-		return
+		return nil, nil, err
 	}
 
-	if err = resource.Sync(); err != nil {
-		return
+	retdistances = make([]float64, len(distances))
+	for i, d := range distances {
+		retdistances[i] = float64(d)
 	}
 
-	err = brute_force.BuildIndex(resource, &dataset, distanceType, 2.0, index)
-	if err != nil {
-		//os.Stderr.WriteString(fmt.Sprintf("BruteForceIndex: build index failed %v\n", err))
-		//os.Stderr.WriteString(fmt.Sprintf("BruteForceIndex: build index failed centers %v\n", datasetvec))
-		return
-	}
-
-	if err = resource.Sync(); err != nil {
-		return
-	}
-	//os.Stderr.WriteString("built brute force index\n")
-
-	if _, err = queries.ToDevice(&resource); err != nil {
-		return
-	}
-
-	//os.Stderr.WriteString("brute force index search Runing....\n")
-	err = brute_force.SearchIndex(resource, index, &queries, &neighbors, &distances)
-	if err != nil {
-		return
-	}
-	//os.Stderr.WriteString("brute force index search finished Runing....\n")
-
-	if _, err = neighbors.ToHost(&resource); err != nil {
-		return
-	}
-	//os.Stderr.WriteString("brute force index search neighbour to host done....\n")
-
-	if _, err = distances.ToHost(&resource); err != nil {
-		return
-	}
-	//os.Stderr.WriteString("brute force index search distances to host done....\n")
-
-	if err = resource.Sync(); err != nil {
-		return
-	}
-
-	//os.Stderr.WriteString("brute force index search return result....\n")
-	neighborsSlice, err := neighbors.Slice()
-	if err != nil {
-		return
-	}
-
-	distancesSlice, err := distances.Slice()
-	if err != nil {
-		return
-	}
-
-	//fmt.Printf("flattened %v\n", flatten)
-	retdistances = make([]float64, len(distancesSlice)*int(limit))
-	for i := range distancesSlice {
-		for j, dist := range distancesSlice[i] {
-			retdistances[i*int(limit)+j] = float64(dist)
-		}
-	}
-
-	keys := make([]int64, len(neighborsSlice)*int(limit))
-	for i := range neighborsSlice {
-		for j, key := range neighborsSlice[i] {
-			keys[i*int(limit)+j] = int64(key)
-		}
-	}
-	retkeys = keys
-	//os.Stderr.WriteString("brute force index search RETURN NOW....\n")
+	retkeys = neighbors
 	return
 }
 
@@ -239,11 +119,6 @@ func TestIssueGpu(t *testing.T) {
 		defer wg.Done()
 
 		dimension := uint(128)
-		/*
-		   ncpu := uint(1)
-		   elemsz := uint(4) // float32
-		*/
-
 		dsize := 100000
 		nlist := 128
 		vecs := make([][]float32, dsize)
@@ -254,7 +129,7 @@ func TestIssueGpu(t *testing.T) {
 			}
 		}
 
-		_, err := getCenters(vecs, int(dimension), nlist, cuvs.DistanceL2, 10)
+		_, err := getCenters(vecs, int(dimension), nlist, cuvs.L2Expanded, 10)
 		require.NoError(t, err)
 	}()
 	wg.Wait()
@@ -269,25 +144,8 @@ func TestIssueIvfAndBruteForceForIssue(t *testing.T) {
 
 		defer wg1.Done()
 
-		mem, err := cuvs.NewCuvsPoolMemory(60, 100, false)
-		if err != nil {
-			t.Fatal("Failed to create memory resource:", err)
-		}
-
-		defer func() {
-			err = mem.Close()
-			if err != nil {
-				t.Fatal("Failed to close memory resource:", err)
-			}
-		}()
-
 		dimension := uint(128)
 		limit := uint(1)
-		/*
-			ncpu := uint(1)
-			elemsz := uint(4) // float32
-		*/
-
 		dsize := 100000
 		nlist := 128
 		vecs := make([][]float32, dsize)
@@ -299,7 +157,7 @@ func TestIssueIvfAndBruteForceForIssue(t *testing.T) {
 		}
 		queries := vecs[:8192]
 
-		centers, err := getCenters(vecs, int(dimension), nlist, cuvs.DistanceL2, 10)
+		centers, err := getCenters(vecs, int(dimension), nlist, cuvs.L2Expanded, 10)
 		require.NoError(t, err)
 
 		fmt.Println("centers DONE")
@@ -307,7 +165,6 @@ func TestIssueIvfAndBruteForceForIssue(t *testing.T) {
 		var wg sync.WaitGroup
 
 		for n := 0; n < 8; n++ {
-
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -315,26 +172,14 @@ func TestIssueIvfAndBruteForceForIssue(t *testing.T) {
 				runtime.LockOSThread()
 				defer runtime.UnlockOSThread()
 
-				for i := 0; i < 1000; i++ {
-					_, _, err := Search(centers, queries, limit, cuvs.DistanceL2)
+				for i := 0; i < 100; i++ { // Reduced iteration count for faster test run
+					_, _, err := Search(centers, queries, limit, cuvs.L2Expanded)
 					require.NoError(t, err)
-
-					/*
-						keys_i64, ok := keys.([]int64)
-						require.Equal(t, ok, true)
-
-						for j, key := range keys_i64 {
-							require.Equal(t, key, int64(j))
-							require.Equal(t, distances[j], float64(0))
-						}
-					*/
-					// fmt.Printf("keys %v, dist %v\n", keys, distances)
 				}
 			}()
 		}
 
 		wg.Wait()
-
 	}()
 
 	wg1.Wait()

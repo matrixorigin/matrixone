@@ -7,32 +7,6 @@
 #include <cstdlib>
 #include <cstring>
 
-// Helper to set error message
-static void set_errmsg_ivf_flat(void* errmsg, const std::string& prefix, const std::exception& e) {
-    if (errmsg) {
-        std::string err_str = prefix + ": " + std::string(e.what());
-        char* msg = (char*)malloc(err_str.length() + 1);
-        if (msg) {
-            std::strcpy(msg, err_str.c_str());
-            *(static_cast<char**>(errmsg)) = msg;
-        }
-    } else {
-        std::cerr << prefix << ": " << e.what() << std::endl;
-    }
-}
-
-// Helper to convert C enum to C++ enum
-static cuvs::distance::DistanceType convert_distance_type_ivf_flat(distance_type_t metric_c) {
-    switch (metric_c) {
-        case DistanceType_L2Expanded: return cuvs::distance::DistanceType::L2Expanded;
-        case DistanceType_L1: return cuvs::distance::DistanceType::L1;
-        case DistanceType_InnerProduct: return cuvs::distance::DistanceType::InnerProduct;
-        case DistanceType_CosineSimilarity: return cuvs::distance::DistanceType::CosineExpanded;
-        default:
-            throw std::runtime_error("Unknown distance type");
-    }
-}
-
 struct gpu_ivf_flat_any_t {
     quantization_t qtype;
     void* ptr;
@@ -57,7 +31,7 @@ gpu_ivf_flat_c gpu_ivf_flat_new(const void* dataset_data, uint64_t count_vectors
                                  distribution_mode_t dist_mode, quantization_t qtype, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        cuvs::distance::DistanceType metric = convert_distance_type_ivf_flat(metric_c);
+        cuvs::distance::DistanceType metric = matrixone::convert_distance_type(metric_c);
         std::vector<int> devs(devices, devices + device_count);
         void* ivf_ptr = nullptr;
         switch (qtype) {
@@ -78,7 +52,7 @@ gpu_ivf_flat_c gpu_ivf_flat_new(const void* dataset_data, uint64_t count_vectors
         }
         return static_cast<gpu_ivf_flat_c>(new gpu_ivf_flat_any_t(qtype, ivf_ptr));
     } catch (const std::exception& e) {
-        set_errmsg_ivf_flat(errmsg, "Error in gpu_ivf_flat_new", e);
+        set_errmsg(errmsg, "Error in gpu_ivf_flat_new", e.what());
         return nullptr;
     }
 }
@@ -89,7 +63,7 @@ gpu_ivf_flat_c gpu_ivf_flat_load_file(const char* filename, uint32_t dimension, 
                                       distribution_mode_t dist_mode, quantization_t qtype, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        cuvs::distance::DistanceType metric = convert_distance_type_ivf_flat(metric_c);
+        cuvs::distance::DistanceType metric = matrixone::convert_distance_type(metric_c);
         std::vector<int> devs(devices, devices + device_count);
         void* ivf_ptr = nullptr;
         switch (qtype) {
@@ -110,7 +84,7 @@ gpu_ivf_flat_c gpu_ivf_flat_load_file(const char* filename, uint32_t dimension, 
         }
         return static_cast<gpu_ivf_flat_c>(new gpu_ivf_flat_any_t(qtype, ivf_ptr));
     } catch (const std::exception& e) {
-        set_errmsg_ivf_flat(errmsg, "Error in gpu_ivf_flat_load_file", e);
+        set_errmsg(errmsg, "Error in gpu_ivf_flat_load_file", e.what());
         return nullptr;
     }
 }
@@ -121,7 +95,7 @@ void gpu_ivf_flat_destroy(gpu_ivf_flat_c index_c, void* errmsg) {
         auto* any = static_cast<gpu_ivf_flat_any_t*>(index_c);
         delete any;
     } catch (const std::exception& e) {
-        set_errmsg_ivf_flat(errmsg, "Error in gpu_ivf_flat_destroy", e);
+        set_errmsg(errmsg, "Error in gpu_ivf_flat_destroy", e.what());
     }
 }
 
@@ -137,7 +111,7 @@ void gpu_ivf_flat_load(gpu_ivf_flat_c index_c, void* errmsg) {
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg_ivf_flat(errmsg, "Error in gpu_ivf_flat_load", e);
+        set_errmsg(errmsg, "Error in gpu_ivf_flat_load", e.what());
     }
 }
 
@@ -153,7 +127,7 @@ void gpu_ivf_flat_save(gpu_ivf_flat_c index_c, const char* filename, void* errms
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg_ivf_flat(errmsg, "Error in gpu_ivf_flat_save", e);
+        set_errmsg(errmsg, "Error in gpu_ivf_flat_save", e.what());
     }
 }
 
@@ -192,7 +166,7 @@ gpu_ivf_flat_search_res_t gpu_ivf_flat_search(gpu_ivf_flat_c index_c, const void
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg_ivf_flat(errmsg, "Error in gpu_ivf_flat_search", e);
+        set_errmsg(errmsg, "Error in gpu_ivf_flat_search", e.what());
     }
     return res;
 }
@@ -238,7 +212,7 @@ void gpu_ivf_flat_get_centers(gpu_ivf_flat_c index_c, float* centers, void* errm
             for (size_t i = 0; i < host_centers.size(); ++i) centers[i] = (float)host_centers[i];
         }
     } catch (const std::exception& e) {
-        set_errmsg_ivf_flat(errmsg, "Error in gpu_ivf_flat_get_centers", e);
+        set_errmsg(errmsg, "Error in gpu_ivf_flat_get_centers", e.what());
     }
 }
 
