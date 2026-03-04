@@ -781,6 +781,7 @@ func (l *localLockTable) mustGetRangeStart(endKey []byte) []byte {
 	}
 	return v
 }
+
 // setModePairedRangeLock updates the mode of the paired range lock entry.
 // A range lock is stored as two entries (range-start and range-end) with
 // independent Lock.value bytes. When setMode updates one end, this helper
@@ -827,7 +828,6 @@ func (l *localLockTable) setModePairedRangeLock(key []byte, lock Lock, mode pb.L
 		)
 	}
 }
-
 
 func nextKey(src, dst []byte) []byte {
 	dst = append(dst, src...)
