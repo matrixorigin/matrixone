@@ -17,7 +17,8 @@ TEST(GpuIvfFlatTest, BasicLoadSearchAndCenters) {
     };
     
     std::vector<int> devices = {0};
-    ivf_flat_build_params_t bp = {2};
+    ivf_flat_build_params_t bp = ivf_flat_build_params_default();
+    bp.n_lists = 2;
     gpu_ivf_flat_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
     index.load();
 
@@ -27,7 +28,8 @@ TEST(GpuIvfFlatTest, BasicLoadSearchAndCenters) {
     TEST_LOG("IVF-Flat Centers: " << centers[0] << ", " << centers[1]);
 
     std::vector<float> queries = {1.05, 1.05};
-    ivf_flat_search_params_t sp = {2};
+    ivf_flat_search_params_t sp = ivf_flat_search_params_default();
+    sp.n_probes = 2;
     auto result = index.search(queries.data(), 1, dimension, 2, sp);
 
     ASSERT_EQ(result.neighbors.size(), (size_t)2);
@@ -46,7 +48,8 @@ TEST(GpuIvfFlatTest, SaveAndLoadFromFile) {
 
     // 1. Build and Save
     {
-        ivf_flat_build_params_t bp = {2};
+        ivf_flat_build_params_t bp = ivf_flat_build_params_default();
+        bp.n_lists = 2;
         gpu_ivf_flat_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
         index.load();
         index.save(filename);
@@ -55,11 +58,14 @@ TEST(GpuIvfFlatTest, SaveAndLoadFromFile) {
 
     // 2. Load and Search
     {
-        gpu_ivf_flat_t<float> index(filename, dimension, cuvs::distance::DistanceType::L2Expanded, devices, 1, DistributionMode_SINGLE_GPU);
+        ivf_flat_build_params_t bp = ivf_flat_build_params_default();
+        bp.n_lists = 2;
+        gpu_ivf_flat_t<float> index(filename, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
         index.load();
         
         std::vector<float> queries = {100.5, 100.5};
-        ivf_flat_search_params_t sp = {2};
+        ivf_flat_search_params_t sp = ivf_flat_search_params_default();
+        sp.n_probes = 2;
         auto result = index.search(queries.data(), 1, dimension, 2, sp);
         
         ASSERT_EQ(result.neighbors.size(), (size_t)2);
@@ -78,7 +84,8 @@ TEST(GpuIvfFlatTest, ShardedModeSimulation) {
     for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)i / dataset.size();
     
     std::vector<int> devices = {0}; 
-    ivf_flat_build_params_t bp = {5};
+    ivf_flat_build_params_t bp = ivf_flat_build_params_default();
+    bp.n_lists = 5;
     gpu_ivf_flat_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SHARDED);
     index.load();
 
@@ -86,7 +93,8 @@ TEST(GpuIvfFlatTest, ShardedModeSimulation) {
     ASSERT_EQ(centers.size(), (size_t)(5 * dimension));
 
     std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
-    ivf_flat_search_params_t sp = {2};
+    ivf_flat_search_params_t sp = ivf_flat_search_params_default();
+    sp.n_probes = 2;
     auto result = index.search(queries.data(), 1, dimension, 5, sp);
 
     ASSERT_EQ(result.neighbors.size(), (size_t)5);

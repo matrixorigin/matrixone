@@ -13,12 +13,12 @@ TEST(GpuCagraTest, BasicLoadAndSearch) {
     for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
     
     std::vector<int> devices = {0};
-    cagra_build_params_t bp = {128, 64};
+    cagra_build_params_t bp = cagra_build_params_default();
     gpu_cagra_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
     index.load();
 
     std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
-    cagra_search_params_t sp = {64, 1};
+    cagra_search_params_t sp = cagra_search_params_default();
     auto result = index.search(queries.data(), 1, dimension, 5, sp);
 
     ASSERT_EQ(result.neighbors.size(), (size_t)5);
@@ -37,7 +37,7 @@ TEST(GpuCagraTest, SaveAndLoadFromFile) {
 
     // 1. Build and Save
     {
-        cagra_build_params_t bp = {128, 64};
+        cagra_build_params_t bp = cagra_build_params_default();
         gpu_cagra_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
         index.load();
         index.save(filename);
@@ -46,11 +46,12 @@ TEST(GpuCagraTest, SaveAndLoadFromFile) {
 
     // 2. Load and Search
     {
-        gpu_cagra_t<float> index(filename, dimension, cuvs::distance::DistanceType::L2Expanded, devices, 1, DistributionMode_SINGLE_GPU);
+        cagra_build_params_t bp = cagra_build_params_default();
+        gpu_cagra_t<float> index(filename, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
         index.load();
         
         std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
-        cagra_search_params_t sp = {64, 1};
+        cagra_search_params_t sp = cagra_search_params_default();
         auto result = index.search(queries.data(), 1, dimension, 5, sp);
         
         ASSERT_EQ(result.neighbors.size(), (size_t)5);
@@ -69,12 +70,12 @@ TEST(GpuCagraTest, ShardedModeSimulation) {
     for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
     
     std::vector<int> devices = {0}; 
-    cagra_build_params_t bp = {128, 64};
+    cagra_build_params_t bp = cagra_build_params_default();
     gpu_cagra_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SHARDED);
     index.load();
 
     std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
-    cagra_search_params_t sp = {64, 1};
+    cagra_search_params_t sp = cagra_search_params_default();
     auto result = index.search(queries.data(), 1, dimension, 5, sp);
 
     ASSERT_EQ(result.neighbors.size(), (size_t)5);
