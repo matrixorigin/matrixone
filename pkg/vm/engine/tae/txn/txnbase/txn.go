@@ -51,6 +51,11 @@ type OpTxn struct {
 	ctx context.Context
 	Txn txnif.AsyncTxn
 	Op  OpType
+
+	queueDiagSampled bool
+	enqueuedPreWalAt time.Time
+	enqueuedWalAt    time.Time
+	enqueuedApplyAt  time.Time
 }
 
 func (txn *OpTxn) IsReplay() bool { return txn.Txn.IsReplay() }
