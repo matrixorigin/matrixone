@@ -107,16 +107,14 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 	mapSucceed := hashBuild.ctr.state == SendSucceed
 
 	hashBuild.ctr.hashmapBuilder.Reset(proc, !mapSucceed)
-	hashBuild.cleanupSpillFiles(proc)
 	hashBuild.ctr.spilledBuckets = nil
 	hashBuild.ctr.spilledRowCnts = nil
 	hashBuild.ctr.state = BuildHashMap
 	hashBuild.ctr.runtimeFilterIn = false
 	message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, runtimeSucceed, proc.GetMessageBoard())
-	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), hashBuild.JoinMapTag, false, 0, mapSucceed)
+	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), hashBuild.JoinMapTag, hashBuild.IsShuffle, hashBuild.ShuffleIdx, mapSucceed)
 }
 func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
-	hashBuild.cleanupSpillFiles(proc)
 	hashBuild.ctr.hashmapBuilder.Free(proc)
 }
 
@@ -142,10 +140,7 @@ func (ctr *container) setSpillThreshold(threshold int64) {
 		// 0 means auto config
 		mem := int64(system.MemoryTotal()) / int64(system.GoMaxProcs()) / 8
 		// min 128MB
-		if mem < common.MiB*128 {
-			mem = common.MiB * 128
-		}
-		ctr.spillThreshold = mem
+		ctr.spillThreshold = max(mem, common.MiB*128)
 	} else {
 		ctr.spillThreshold = threshold
 	}
