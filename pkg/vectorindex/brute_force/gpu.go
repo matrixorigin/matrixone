@@ -61,11 +61,7 @@ func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	case [][]float64:
 		return NewCpuBruteForceIndex[T](dataset, dimension, m, elemsz)
 	case [][]float32:
-		// Check for GPU support
-		if len(dset) > 0 {
-			return NewGpuBruteForceIndex[float32](dset, dimension, m, elemsz, nthread)
-		}
-		return NewCpuBruteForceIndex[float32](dset, dimension, m, elemsz)
+		return NewGpuBruteForceIndex[float32](dset, dimension, m, elemsz, nthread)
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("type not supported for BruteForceIndex")
 	}
