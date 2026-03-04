@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 
 	"github.com/golang/mock/gomock"
 	"github.com/prashantv/gostub"
@@ -786,7 +787,7 @@ func TestIsExperimentalEnabled(t *testing.T) {
 	assert.True(t, enabled)
 }
 
-// TestDropDatabase_SnapshotRefreshAfterExclusiveLock verifies that DropDatabase
+// TestDropDatabase_ListRelationsAtLatestSnapshot verifies that DropDatabase
 // uses a snapshot read at the latest timestamp to list relations after acquiring
 // the exclusive lock on mo_database. This prevents the race condition where a
 // concurrent CLONE (CREATE TABLE) commits between the snapshot and the lock
@@ -830,13 +831,16 @@ func TestDropDatabase_ListRelationsAtLatestSnapshot(t *testing.T) {
 		proc.Ctx = ctx
 		proc.ReplaceTopCtx(ctx)
 
+		snapshotTS := timestamp.Timestamp{PhysicalTime: 100}
+
 		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOp.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOp.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOp.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
 		txnOp.EXPECT().Txn().Return(txn.TxnMeta{
-			Mode:      txn.TxnMode_Pessimistic,
-			Isolation: txn.TxnIsolation_RC,
+			Mode:       txn.TxnMode_Pessimistic,
+			Isolation:  txn.TxnIsolation_RC,
+			SnapshotTS: snapshotTS,
 		}).AnyTimes()
 		txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 		txnOp.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
@@ -846,10 +850,16 @@ func TestDropDatabase_ListRelationsAtLatestSnapshot(t *testing.T) {
 		txnOp.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 
 		// Key assertion: UpdateSnapshot must NOT be called — the txn snapshot stays unchanged.
+		// Our implementation uses listRelationsAtLatestSnapshot which creates a separate
+		// read-only transaction instead of updating the current transaction's snapshot.
 		txnOp.EXPECT().UpdateSnapshot(gomock.Any(), gomock.Any()).Times(0)
 
 		txnCli := mock_frontend.NewMockTxnClient(ctrl)
 		txnCli.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOp, nil).AnyTimes()
+		// Note: GetLatestCommitTS and WaitLogTailAppliedAt are called by listRelationsAtLatestSnapshot
+		// which is at the END of DropDatabase. Since we stop early with Delete error, these won't be called.
+		txnCli.EXPECT().GetLatestCommitTS().Return(timestamp.Timestamp{}).AnyTimes()
+		txnCli.EXPECT().WaitLogTailAppliedAt(gomock.Any(), gomock.Any()).Return(timestamp.Timestamp{}, nil).AnyTimes()
 
 		proc.Base.TxnClient = txnCli
 		proc.Base.TxnOperator = txnOp
@@ -887,7 +897,6 @@ func TestDropDatabase_ListRelationsAtLatestSnapshot(t *testing.T) {
 		// Here we just verify the error handling logic exists.
 	})
 }
-
 
 // TestDropDatabase_WWConflictIgnored tests that w-w conflict errors from
 // deleteOrphanTableRecords are ignored. This can happen in restore cluster
