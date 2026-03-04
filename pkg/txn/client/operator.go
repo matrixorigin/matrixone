@@ -987,6 +987,7 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 		tc.logger.Fatal("can not write on ready only transaction")
 	}
 	var payload []txn.TxnRequest
+	var needUnlock bool
 	if commit {
 		if tc.reset.workspace != nil {
 			reqs, err := tc.reset.workspace.Commit(ctx)
@@ -999,6 +1000,9 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 		defer func() {
 			tc.closeLocked()
 			tc.mu.Unlock()
+			if needUnlock {
+				tc.unlock(ctx)
+			}
 		}()
 		if tc.mu.closed {
 			tc.reset.commitErr = moerr.NewTxnClosedNoCtx(tc.reset.txnID)
@@ -1007,7 +1011,7 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 
 		if tc.needUnlockLocked() {
 			tc.mu.txn.LockTables = tc.mu.lockTables
-			defer tc.unlock(ctx)
+			needUnlock = true
 		}
 	}
 
