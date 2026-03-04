@@ -32,6 +32,7 @@ import (
 	"hash/crc32"
 	"io"
 	"math"
+	"math/bits"
 	"net"
 	"runtime"
 	"strconv"
@@ -508,6 +509,55 @@ func BinFloat[T constraints.Float](ivecs []*vector.Vector, result vector.Functio
 func BitLengthFunc(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryStrToFixed[int64](ivecs, result, proc, length, func(v string) int64 {
 		return int64(len(v) * 8)
+	}, selectList)
+}
+
+// BitCount returns the number of set bits (population count). MySQL compatible.
+func BitCountInt8(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[int8, int64](ivecs, result, proc, length, func(v int8) int64 {
+		return int64(bits.OnesCount64(uint64(uint8(v))))
+	}, selectList)
+}
+
+func BitCountInt16(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[int16, int64](ivecs, result, proc, length, func(v int16) int64 {
+		return int64(bits.OnesCount64(uint64(uint16(v))))
+	}, selectList)
+}
+
+func BitCountInt32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[int32, int64](ivecs, result, proc, length, func(v int32) int64 {
+		return int64(bits.OnesCount64(uint64(uint32(v))))
+	}, selectList)
+}
+
+func BitCountInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[int64, int64](ivecs, result, proc, length, func(v int64) int64 {
+		return int64(bits.OnesCount64(uint64(v)))
+	}, selectList)
+}
+
+func BitCountUint8(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[uint8, int64](ivecs, result, proc, length, func(v uint8) int64 {
+		return int64(bits.OnesCount64(uint64(v)))
+	}, selectList)
+}
+
+func BitCountUint16(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[uint16, int64](ivecs, result, proc, length, func(v uint16) int64 {
+		return int64(bits.OnesCount64(uint64(v)))
+	}, selectList)
+}
+
+func BitCountUint32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[uint32, int64](ivecs, result, proc, length, func(v uint32) int64 {
+		return int64(bits.OnesCount64(uint64(v)))
+	}, selectList)
+}
+
+func BitCountUint64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[uint64, int64](ivecs, result, proc, length, func(v uint64) int64 {
+		return int64(bits.OnesCount64(v))
 	}, selectList)
 }
 

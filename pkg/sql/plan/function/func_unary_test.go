@@ -1072,6 +1072,63 @@ func TestBitLengthFunc(t *testing.T) {
 	}
 }
 
+func initBitCountFuncTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "BIT_COUNT(0)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{false}),
+		},
+		{
+			info: "BIT_COUNT(1)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, []bool{false}),
+		},
+		{
+			info: "BIT_COUNT(3) = 2",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{3}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{2}, []bool{false}),
+		},
+		{
+			info: "BIT_COUNT(255) = 8",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{255}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{8}, []bool{false}),
+		},
+		{
+			info: "BIT_COUNT with null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{}, []bool{true}),
+		},
+		{
+			info: "BIT_COUNT multiple values",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 1, 3, 255, 256}, []bool{false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 1, 2, 8, 1}, []bool{false, false, false, false, false}),
+		},
+	}
+}
+
+func TestBitCountFunc(t *testing.T) {
+	testCases := initBitCountFuncTestCase()
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, BitCountInt64)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 func initCurrentDateTestCase() []tcTemp {
 	return []tcTemp{
 		{

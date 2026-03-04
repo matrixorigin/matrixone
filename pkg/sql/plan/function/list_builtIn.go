@@ -236,6 +236,25 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `bit_count` (MySQL compatible: returns number of set bits in argument)
+	{
+		functionId: BIT_COUNT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_int8}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return BitCountInt8 }},
+			{overloadId: 1, args: []types.T{types.T_int16}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return BitCountInt16 }},
+			{overloadId: 2, args: []types.T{types.T_int32}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return BitCountInt32 }},
+			{overloadId: 3, args: []types.T{types.T_int64}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return BitCountInt64 }},
+			{overloadId: 4, args: []types.T{types.T_uint8}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return BitCountUint8 }},
+			{overloadId: 5, args: []types.T{types.T_uint16}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return BitCountUint16 }},
+			{overloadId: 6, args: []types.T{types.T_uint32}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return BitCountUint32 }},
+			{overloadId: 7, args: []types.T{types.T_uint64}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return BitCountUint64 }},
+		},
+	},
+
 	// function `concat`
 	{
 		functionId: CONCAT,
