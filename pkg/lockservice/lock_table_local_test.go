@@ -1479,6 +1479,163 @@ func TestRangeLockModeUpgradeUpdatesBothEnds(t *testing.T) {
 	)
 }
 
+// TestSetModePairedRangeLockDirect directly tests the setModePairedRangeLock helper
+// by manually creating range locks and verifying the paired entry is updated.
+func TestSetModePairedRangeLockDirect(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, s []*service) {
+			l := s[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			tableID := uint64(10)
+			rangeStart := []byte{1}
+			rangeEnd := []byte{5}
+			rangeRows := [][]byte{rangeStart, rangeEnd}
+
+			sharedOpt := pb.LockOptions{
+				Granularity: pb.Granularity_Range,
+				Mode:        pb.LockMode_Shared,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			// Create a Shared range lock
+			txn1 := newTestTxnID(1)
+			_, err := l.Lock(ctx, tableID, rangeRows, txn1, sharedOpt)
+			require.NoError(t, err)
+
+			// Get the lock table and directly test setModePairedRangeLock
+			v, err := l.getLockTable(0, tableID)
+			require.NoError(t, err)
+			lt := v.(*localLockTable)
+
+			// Test 1: Update range-start, verify range-end is also updated
+			lt.mu.Lock()
+			startLock, _ := lt.mu.store.Get(rangeStart)
+			require.True(t, startLock.isLockRangeStart(), "should be range-start")
+			require.True(t, startLock.isShared(), "should be Shared initially")
+
+			// Simulate mode upgrade on range-start
+			updatedStart, changed := startLock.setMode(pb.LockMode_Exclusive)
+			require.True(t, changed, "mode should change from Shared to Exclusive")
+			lt.mu.store.Add(rangeStart, updatedStart)
+
+			// Call setModePairedRangeLock to update range-end
+			lt.setModePairedRangeLock(rangeStart, updatedStart, pb.LockMode_Exclusive)
+
+			// Verify range-end is now Exclusive
+			endLock, _ := lt.mu.store.Get(rangeEnd)
+			require.False(t, endLock.isShared(),
+				"range-end should be Exclusive after setModePairedRangeLock called on range-start")
+			lt.mu.Unlock()
+
+			// Cleanup
+			require.NoError(t, l.Unlock(ctx, txn1, timestamp.Timestamp{PhysicalTime: 1}))
+		},
+	)
+}
+
+// TestSetModePairedRangeLockFromRangeEnd tests setModePairedRangeLock when called
+// from the range-end entry (backward scan to find range-start).
+func TestSetModePairedRangeLockFromRangeEnd(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, s []*service) {
+			l := s[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			tableID := uint64(10)
+			rangeStart := []byte{1}
+			rangeEnd := []byte{5}
+			rangeRows := [][]byte{rangeStart, rangeEnd}
+
+			sharedOpt := pb.LockOptions{
+				Granularity: pb.Granularity_Range,
+				Mode:        pb.LockMode_Shared,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			// Create a Shared range lock
+			txn1 := newTestTxnID(1)
+			_, err := l.Lock(ctx, tableID, rangeRows, txn1, sharedOpt)
+			require.NoError(t, err)
+
+			// Get the lock table and directly test setModePairedRangeLock from range-end
+			v, err := l.getLockTable(0, tableID)
+			require.NoError(t, err)
+			lt := v.(*localLockTable)
+
+			// Test: Update range-end, verify range-start is also updated
+			lt.mu.Lock()
+			endLock, _ := lt.mu.store.Get(rangeEnd)
+			require.True(t, endLock.isLockRangeEnd(), "should be range-end")
+			require.True(t, endLock.isShared(), "should be Shared initially")
+
+			// Simulate mode upgrade on range-end
+			updatedEnd, changed := endLock.setMode(pb.LockMode_Exclusive)
+			require.True(t, changed, "mode should change from Shared to Exclusive")
+			lt.mu.store.Add(rangeEnd, updatedEnd)
+
+			// Call setModePairedRangeLock to update range-start (backward scan)
+			lt.setModePairedRangeLock(rangeEnd, updatedEnd, pb.LockMode_Exclusive)
+
+			// Verify range-start is now Exclusive
+			startLock, _ := lt.mu.store.Get(rangeStart)
+			require.False(t, startLock.isShared(),
+				"range-start should be Exclusive after setModePairedRangeLock called on range-end")
+			lt.mu.Unlock()
+
+			// Cleanup
+			require.NoError(t, l.Unlock(ctx, txn1, timestamp.Timestamp{PhysicalTime: 1}))
+		},
+	)
+}
+
+// TestSetModePairedRangeLockRowLockNoOp verifies that setModePairedRangeLock
+// is a no-op for row locks.
+func TestSetModePairedRangeLockRowLockNoOp(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, s []*service) {
+			l := s[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			tableID := uint64(10)
+			rowKey := []byte{3}
+
+			sharedOpt := newTestRowSharedOptions()
+
+			// Create a Shared row lock
+			txn1 := newTestTxnID(1)
+			_, err := l.Lock(ctx, tableID, [][]byte{rowKey}, txn1, sharedOpt)
+			require.NoError(t, err)
+
+			// Get the lock table
+			v, err := l.getLockTable(0, tableID)
+			require.NoError(t, err)
+			lt := v.(*localLockTable)
+
+			// Verify it's a row lock and call setModePairedRangeLock (should be no-op)
+			lt.mu.Lock()
+			rowLock, _ := lt.mu.store.Get(rowKey)
+			require.True(t, rowLock.isLockRow(), "should be row lock")
+
+			// This should be a no-op (early return)
+			lt.setModePairedRangeLock(rowKey, rowLock, pb.LockMode_Exclusive)
+			lt.mu.Unlock()
+
+			// Cleanup
+			require.NoError(t, l.Unlock(ctx, txn1, timestamp.Timestamp{PhysicalTime: 1}))
+		},
+	)
+}
+
 // TestRangeLockWithInterleavedRowLocks verifies that setModePairedRangeLock
 // correctly scans past interleaved row locks to find the paired range entry.
 // Row locks outside the range can coexist with range locks in the btree.
