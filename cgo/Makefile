@@ -9,7 +9,7 @@ COMMON_CFLAGS := -g $(OPT_LV) -Wall -Werror -fPIC -I../thirdparties/install/incl
 CFLAGS := -std=c99 $(COMMON_CFLAGS)
 OBJS := mo.o arith.o compare.o logic.o xcall.o usearchex.o bloom.o
 CUDA_OBJS :=
-LDFLAGS := -shared
+LDFLAGS := -shared -L../thirdparties/install/lib -lusearch_c
 
 ifeq ($(UNAME_M), x86_64)
 	CFLAGS += -march=haswell
