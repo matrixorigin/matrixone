@@ -6679,7 +6679,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 			})
 		} else if p.GetDdl().GetDropTable() != nil {
 			dropTable := p.GetDdl().GetDropTable()
-if len(dropTable.GetTables()) > 0 {
+			if len(dropTable.GetTables()) > 0 {
 				for _, entry := range dropTable.GetTables() {
 					isCluster := false
 					if entry.GetClusterTable() != nil {
