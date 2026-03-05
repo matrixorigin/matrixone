@@ -22,6 +22,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
+// Constants for backward compatibility (used by frontend/get_object.go)
+const (
+	// GetChunkSize is the default size of each chunk (100MB)
+	GetChunkSize int64 = 100 * 1024 * 1024
+	// GetChunkMaxMemory is the default maximum memory for concurrent GetChunkJob operations (3GB)
+	GetChunkMaxMemory int64 = 3 * 1024 * 1024 * 1024
+)
+
 // CCPRConfig holds all configuration parameters for CCPR (Cross-Cluster Publication Replication)
 type CCPRConfig struct {
 	// ============================================================================
