@@ -402,7 +402,8 @@ func TestCloseIdleBackends(t *testing.T) {
 	activeBackend := c.mu.backends["b1"][1]
 	c.mu.Unlock()
 
-	idleBackend.Unlock()
+	// Unlock the backend we locked earlier (b), not idleBackend which might not be locked
+	b.Unlock()
 	tb := idleBackend.(*testBackend)
 	tb.Lock()
 	tb.activeTime = time.Time{}
