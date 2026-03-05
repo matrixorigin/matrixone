@@ -896,7 +896,7 @@ func TestDropDatabase_SnapshotRefreshAfterExclusiveLock(t *testing.T) {
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().Database(gomock.Any(), "test_db", gomock.Any()).Return(mockDb, nil).AnyTimes()
 
-		lockMoDb := gostub.Stub(&doLockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error {
+		lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error {
 			return nil
 		})
 		defer lockMoDb.Reset()
@@ -957,7 +957,7 @@ func TestDropDatabase_SnapshotRefreshAfterExclusiveLock(t *testing.T) {
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().Database(gomock.Any(), "test_db", gomock.Any()).Return(mockDb, nil).AnyTimes()
 
-		lockMoDb := gostub.Stub(&doLockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error {
+		lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error {
 			return nil
 		})
 		defer lockMoDb.Reset()
