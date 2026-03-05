@@ -69,6 +69,118 @@ func TestDataBranchOutputMakeFileName(t *testing.T) {
 	require.Regexp(t, regexp.MustCompile(`^diff_t2_sp2_t1_sp1_\d{8}_\d{6}$`), got)
 }
 
+func TestDataBranchOutputBuildOutputSchema(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+	ses.SetMysqlResultSet(&MysqlResultSet{})
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	baseRel := mock_frontend.NewMockRelation(ctrl)
+	tarRel := mock_frontend.NewMockRelation(ctrl)
+	baseRel.EXPECT().GetTableName().Return("t1").AnyTimes()
+	tarRel.EXPECT().GetTableName().Return("t2").AnyTimes()
+
+	tblStuff := tableStuff{
+		baseRel: baseRel,
+		tarRel:  tarRel,
+	}
+	tblStuff.def.colNames = []string{"id", "name"}
+	tblStuff.def.colTypes = []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}
+	tblStuff.def.visibleIdxes = []int{0, 1}
+
+	target := tree.NewTableName(tree.Identifier("t2"), tree.ObjectNamePrefix{}, nil)
+	base := tree.NewTableName(tree.Identifier("t1"), tree.ObjectNamePrefix{}, nil)
+
+	t.Run("default output", func(t *testing.T) {
+		ses.SetMysqlResultSet(&MysqlResultSet{})
+		stmt := &tree.DataBranchDiff{
+			TargetTable: *target,
+			BaseTable:   *base,
+			OutputOpt:   nil,
+		}
+		require.NoError(t, buildOutputSchema(ctx, ses, stmt, tblStuff))
+
+		mrs := ses.GetMysqlResultSet()
+		require.Equal(t, uint64(4), mrs.GetColumnCount())
+		col0, err := mrs.GetColumn(ctx, 0)
+		require.NoError(t, err)
+		require.Equal(t, "diff t2 against t1", col0.Name())
+		col1, err := mrs.GetColumn(ctx, 1)
+		require.NoError(t, err)
+		require.Equal(t, "flag", col1.Name())
+	})
+
+	t.Run("summary output", func(t *testing.T) {
+		ses.SetMysqlResultSet(&MysqlResultSet{})
+		stmt := &tree.DataBranchDiff{
+			TargetTable: *target,
+			BaseTable:   *base,
+			OutputOpt:   &tree.DiffOutputOpt{Summary: true},
+		}
+		require.NoError(t, buildOutputSchema(ctx, ses, stmt, tblStuff))
+
+		mrs := ses.GetMysqlResultSet()
+		require.Equal(t, uint64(3), mrs.GetColumnCount())
+		col0, err := mrs.GetColumn(ctx, 0)
+		require.NoError(t, err)
+		require.Equal(t, "metric", col0.Name())
+		col1, err := mrs.GetColumn(ctx, 1)
+		require.NoError(t, err)
+		require.Contains(t, col1.Name(), "t2")
+		col2, err := mrs.GetColumn(ctx, 2)
+		require.NoError(t, err)
+		require.Contains(t, col2.Name(), "t1")
+	})
+
+	t.Run("count output", func(t *testing.T) {
+		ses.SetMysqlResultSet(&MysqlResultSet{})
+		stmt := &tree.DataBranchDiff{
+			TargetTable: *target,
+			BaseTable:   *base,
+			OutputOpt:   &tree.DiffOutputOpt{Count: true},
+		}
+		require.NoError(t, buildOutputSchema(ctx, ses, stmt, tblStuff))
+
+		mrs := ses.GetMysqlResultSet()
+		require.Equal(t, uint64(1), mrs.GetColumnCount())
+		col0, err := mrs.GetColumn(ctx, 0)
+		require.NoError(t, err)
+		require.Equal(t, "COUNT(*)", col0.Name())
+	})
+
+	t.Run("file output", func(t *testing.T) {
+		ses.SetMysqlResultSet(&MysqlResultSet{})
+		stmt := &tree.DataBranchDiff{
+			TargetTable: *target,
+			BaseTable:   *base,
+			OutputOpt:   &tree.DiffOutputOpt{DirPath: "/tmp"},
+		}
+		require.NoError(t, buildOutputSchema(ctx, ses, stmt, tblStuff))
+
+		mrs := ses.GetMysqlResultSet()
+		require.Equal(t, uint64(2), mrs.GetColumnCount())
+		col0, err := mrs.GetColumn(ctx, 0)
+		require.NoError(t, err)
+		require.Equal(t, "FILE SAVED TO", col0.Name())
+		col1, err := mrs.GetColumn(ctx, 1)
+		require.NoError(t, err)
+		require.Equal(t, "HINT", col1.Name())
+	})
+
+	t.Run("unsupported output", func(t *testing.T) {
+		ses.SetMysqlResultSet(&MysqlResultSet{})
+		stmt := &tree.DataBranchDiff{
+			TargetTable: *target,
+			BaseTable:   *base,
+			OutputOpt:   &tree.DiffOutputOpt{},
+		}
+		err := buildOutputSchema(ctx, ses, stmt, tblStuff)
+		require.Error(t, err)
+	})
+}
+
 func TestDataBranchOutputWriteRowValues(t *testing.T) {
 	tblStuff := tableStuff{}
 	tblStuff.def.colNames = []string{"id", "name"}
