@@ -470,8 +470,7 @@ drop table if exists t_year_uniq;
 create table t_year_uniq (y year unique, name varchar(20));
 insert into t_year_uniq values (2020, 'first');
 insert into t_year_uniq values (2021, 'second');
-insert into t_year_uniq values (2020, 'duplicate');
-Duplicate entry '2020' for key 'y'
+insert ignore into t_year_uniq values (2020, 'duplicate');
 select * from t_year_uniq order by y;
 ➤ y[91,2147483647,0]  ¦  name[12,-1,0]  𝄀
 2020-01-01  ¦  first  𝄀

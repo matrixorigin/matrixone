@@ -245,7 +245,7 @@ func runSystemMonitor(stopper *stopper.Stopper) {
 // This debounces frequent cgroup updates during k8s vertical scaling where kubelet
 // may update both cpu.max and memory.max files even if only one value changed.
 func shouldRefreshQuotaConfig() bool {
-	now := time.Now().Unix()
+	now := time.Now().UnixNano()
 	last := lastQuotaRefreshTime.Load()
 
 	// Always allow first refresh (last == 0)
@@ -254,13 +254,13 @@ func shouldRefreshQuotaConfig() bool {
 	}
 
 	// Check if debounce period has passed
-	return now-last >= quotaRefreshDebounceSeconds
+	return now-last >= int64(quotaRefreshDebounceSeconds)*int64(time.Second)
 }
 
 // refreshQuotaConfig get CPU/Mem config from dev. If run in container, get it from the cgroup config.
 // Tips: Currently, the callings are serial in two places: 1) init; 2) runWatchCgroupConfig
 func refreshQuotaConfig() {
-	lastQuotaRefreshTime.Store(time.Now().Unix())
+	lastQuotaRefreshTime.Store(time.Now().UnixNano())
 	if InContainer() {
 		cpu, err := cgroup.GetCPUStats(pid)
 		if err != nil {

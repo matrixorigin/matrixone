@@ -254,29 +254,23 @@ insert into t select * from t;
 insert into t select * from t;
 insert into t select * from t;
 insert into t select * from t;
-[unknown result because it is related to issue#9447]
 begin;
-[unknown result because it is related to issue#9447]
 insert into t select * from t;
-[unknown result because it is related to issue#9447]
 delete from t where a = 1;
-[unknown result because it is related to issue#9447]
 select count(*) from t;
-[unknown result because it is related to issue#9447]
+➤ count(*)[-5,64,0]  𝄀
+8387584
 rollback;
-[unknown result because it is related to issue#9447]
 begin;
-[unknown result because it is related to issue#9447]
 insert into t select * from t;
-[unknown result because it is related to issue#9447]
 delete from t where a = 1;
-[unknown result because it is related to issue#9447]
 select count(*) from t;
-[unknown result because it is related to issue#9447]
+➤ count(*)[-5,64,0]  𝄀
+8387584
 commit;
-[unknown result because it is related to issue#9447]
 select count(*) from t;
-[unknown result because it is related to issue#9447]
+➤ count(*)[-5,64,0]  𝄀
+8387584
 drop table if exists temp;
 drop table if exists t;
 create table temp(a int);

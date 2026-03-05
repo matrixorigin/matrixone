@@ -3,9 +3,9 @@ UNAME_M := $(shell uname -m)
 
 # Yeah, fast math.  We want it to be fast, for all xcall, 
 # IEEE compliance should not be an issue.
-OPT_LV := -O3 -ffast-math
-CFLAGS=-std=c99 -g ${OPT_LV} -Wall -Werror
-OBJS=mo.o arith.o compare.o logic.o xcall.o
+OPT_LV := -O3 -ffast-math -ftree-vectorize -funroll-loops
+CFLAGS=-std=c99 -g ${OPT_LV} -Wall -Werror -I../thirdparties/install/include
+OBJS=mo.o arith.o compare.o logic.o xcall.o usearchex.o bloom.o
 CUDA_OBJS=
 
 ifeq ($(UNAME_M), x86_64)
@@ -15,7 +15,7 @@ endif
 ifeq ($(MO_CL_CUDA),1)
 	CC = /usr/local/cuda/bin/nvcc 
 	CFLAGS = -ccbin g++ -m64 --shared -gencode arch=compute_75,code=sm_75 -gencode arch=compute_80,code=sm_80 -gencode arch=compute_86,code=sm_86 -gencode arch=compute_89,code=sm_89 -gencode arch=compute_90,code=sm_90 -gencode arch=compute_90,code=compute_90
-	CFLAGS += -DMO_CL_CUDA
+	CFLAGS += -I../thirdparties/install/include -DMO_CL_CUDA
 	CUDA_OBJS += cuda/cuda.o
 	CUDA_LDFLAGS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64 -lcudart -lstdc++
 endif
@@ -32,6 +32,8 @@ endif
 #	$(CC) -o libmo.a $(OBJS) $(CUDA_OBJS) $(CUDA_LDFLAGS)
 
 
+test: libmo.a
+	make -C test
 
 .PHONY: debug
 debug: override OPT_LV := -O0

@@ -60,7 +60,9 @@ class BaseCloneManager:
         if_not_exists_clause = "IF NOT EXISTS " if if_not_exists else ""
 
         if snapshot_name:
-            return f"CREATE DATABASE {if_not_exists_clause}{target_db} CLONE {source_db} {{snapshot = '{snapshot_name}'}}"
+            return (
+                f"CREATE DATABASE {if_not_exists_clause}{target_db} " f"CLONE {source_db} {{snapshot = \"{snapshot_name}\"}}"
+            )
         else:
             return f"CREATE DATABASE {if_not_exists_clause}{target_db} CLONE {source_db}"
 
@@ -77,7 +79,7 @@ class BaseCloneManager:
         if snapshot_name:
             return (
                 f"CREATE TABLE {if_not_exists_clause}{target_table} "
-                f"CLONE {source_table} {{snapshot = '{snapshot_name}'}}"
+                f"CLONE {source_table} {{snapshot = \"{snapshot_name}\"}}"
             )
         else:
             return f"CREATE TABLE {if_not_exists_clause}{target_table} CLONE {source_table}"
@@ -207,7 +209,7 @@ class CloneManager(BaseCloneManager):
         try:
             self._get_executor().execute(sql)
         except Exception as e:
-            raise CloneError(f"Failed to clone database: {e}") from None
+            raise CloneError(f"Failed to clone database: {e}") from e
 
     def clone_table(
         self,
@@ -237,7 +239,7 @@ class CloneManager(BaseCloneManager):
         try:
             self._get_executor().execute(sql)
         except Exception as e:
-            raise CloneError(f"Failed to clone table: {e}") from None
+            raise CloneError(f"Failed to clone table: {e}") from e
 
     def clone_database_with_snapshot(
         self,
@@ -408,7 +410,7 @@ class AsyncCloneManager(BaseCloneManager):
         try:
             await self._get_executor().execute(sql)
         except Exception as e:
-            raise CloneError(f"Failed to clone database: {e}") from None
+            raise CloneError(f"Failed to clone database: {e}") from e
 
     async def clone_table(
         self,
@@ -438,7 +440,7 @@ class AsyncCloneManager(BaseCloneManager):
         try:
             await self._get_executor().execute(sql)
         except Exception as e:
-            raise CloneError(f"Failed to clone table: {e}") from None
+            raise CloneError(f"Failed to clone table: {e}") from e
 
     async def clone_database_with_snapshot(
         self,

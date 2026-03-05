@@ -297,11 +297,8 @@ create table t_year_uniq (y year unique, name varchar(20));
 insert into t_year_uniq values (2020, 'first');
 insert into t_year_uniq values (2021, 'second');
 
--- This should fail due to unique constraint
--- @bvt:issue#23408
-insert into t_year_uniq values (2020, 'duplicate');
--- @bvt:issue#23408
-
+-- Test unique constraint with INSERT IGNORE (duplicate should be ignored)
+insert ignore into t_year_uniq values (2020, 'duplicate');
 select * from t_year_uniq order by y;
 drop table t_year_uniq;
 

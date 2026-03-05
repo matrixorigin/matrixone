@@ -24,15 +24,11 @@ from typing import TYPE_CHECKING, Any, Dict, List, Union
 
 if TYPE_CHECKING:
     from .sqlalchemy_ext import VectorOpType
+    from .ivf_rank import IVFRankMode
 
 
-def _extract_table_name(table_name_or_model: Union[str, type]) -> str:
-    """Extract table name from string or SQLAlchemy Model class."""
-    if isinstance(table_name_or_model, str):
-        return table_name_or_model
-    if hasattr(table_name_or_model, '__tablename__'):
-        return table_name_or_model.__tablename__
-    return str(table_name_or_model)
+from ._utils import get_table_name as _extract_table_name
+from .exceptions import QueryError
 
 
 class _VectorManagerBase:
@@ -236,7 +232,7 @@ class VectorManager(_VectorManagerBase):
             self.executor.execute(create_sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to create IVFFLAT vector index {name} on table {table_name}: {e}")
+            raise QueryError(f"Failed to create IVFFLAT vector index {name} on table {table_name}: {e}")
 
     def create_hnsw(
         self,
@@ -255,7 +251,7 @@ class VectorManager(_VectorManagerBase):
             self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to create HNSW vector index {name} on table {table_name}: {e}")
+            raise QueryError(f"Failed to create HNSW vector index {name} on table {table_name}: {e}")
 
     def drop(self, table_name: Union[str, type], name: str) -> "VectorManager":
         """Drop a vector index."""
@@ -265,7 +261,7 @@ class VectorManager(_VectorManagerBase):
             self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to drop vector index {name} on table {table_name}: {e}")
+            raise QueryError(f"Failed to drop vector index {name} on table {table_name}: {e}")
 
     def enable_ivf(self, probe_limit: int = 1) -> "VectorManager":
         """Enable IVF indexing."""
@@ -275,7 +271,7 @@ class VectorManager(_VectorManagerBase):
                 self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"IVF indexing is not supported: {e}")
+            raise QueryError(f"IVF indexing is not supported: {e}")
 
     def disable_ivf(self) -> "VectorManager":
         """Disable IVF indexing."""
@@ -284,7 +280,7 @@ class VectorManager(_VectorManagerBase):
             self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to disable IVF indexing: {e}")
+            raise QueryError(f"Failed to disable IVF indexing: {e}")
 
     def enable_hnsw(self) -> "VectorManager":
         """Enable HNSW indexing."""
@@ -293,7 +289,7 @@ class VectorManager(_VectorManagerBase):
             self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to enable HNSW indexing: {e}")
+            raise QueryError(f"Failed to enable HNSW indexing: {e}")
 
     def disable_hnsw(self) -> "VectorManager":
         """Disable HNSW indexing."""
@@ -302,7 +298,7 @@ class VectorManager(_VectorManagerBase):
             self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to disable HNSW indexing: {e}")
+            raise QueryError(f"Failed to disable HNSW indexing: {e}")
 
     def insert(self, table_name: Union[str, type], data: Dict[str, Any]) -> "VectorManager":
         """Insert vector data into table."""
@@ -312,7 +308,7 @@ class VectorManager(_VectorManagerBase):
             self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to insert vector data into table {table_name}: {e}")
+            raise QueryError(f"Failed to insert vector data into table {table_name}: {e}")
 
     def batch_insert(self, table_name: Union[str, type], data_list: List[Dict[str, Any]]) -> "VectorManager":
         """Batch insert vector data."""
@@ -321,7 +317,7 @@ class VectorManager(_VectorManagerBase):
                 self.insert(table_name, record)
             return self
         except Exception as e:
-            raise Exception(f"Failed to batch insert vector data into table {table_name}: {e}")
+            raise QueryError(f"Failed to batch insert vector data into table {table_name}: {e}")
 
     def similarity_search(
         self,
@@ -332,7 +328,7 @@ class VectorManager(_VectorManagerBase):
         select_columns: List[str] = None,
         where_clause: str = None,
         distance_type: str = "l2",
-        _log_mode: str = None,
+        log_mode: str = None,
     ) -> List[Dict[str, Any]]:
         """Perform vector similarity search."""
         try:
@@ -340,10 +336,10 @@ class VectorManager(_VectorManagerBase):
             sql = self._build_similarity_search_sql(
                 table_name, vector_column, query_vector, limit, select_columns, where_clause, distance_type
             )
-            result = self.executor.execute(sql, _log_mode=_log_mode)
+            result = self.executor.execute(sql, log_mode=log_mode)
             return [dict(row._mapping) for row in result]
         except Exception as e:
-            raise Exception(f"Failed to perform similarity search on table {table_name}: {e}")
+            raise QueryError(f"Failed to perform similarity search on table {table_name}: {e}")
 
     def range_search(
         self,
@@ -353,7 +349,7 @@ class VectorManager(_VectorManagerBase):
         max_distance: float,
         select_columns: List[str] = None,
         where_clause: str = None,
-        _log_mode: str = None,
+        log_mode: str = None,
     ) -> List[Dict[str, Any]]:
         """Perform vector range search."""
         try:
@@ -361,10 +357,127 @@ class VectorManager(_VectorManagerBase):
             sql = self._build_range_search_sql(
                 table_name, vector_column, query_vector, max_distance, select_columns, where_clause
             )
-            result = self.executor.execute(sql, _log_mode=_log_mode)
+            result = self.executor.execute(sql, log_mode=log_mode)
             return [dict(row._mapping) for row in result]
         except Exception as e:
-            raise Exception(f"Failed to perform range search on table {table_name}: {e}")
+            raise QueryError(f"Failed to perform range search on table {table_name}: {e}")
+
+    def search_with_rank(
+        self,
+        table_name: Union[str, type],
+        vector_column: str,
+        query_vector: List[float],
+        limit: int = 10,
+        select_columns: List[str] = None,
+        where_clause: str = None,
+        distance_type: str = "l2",
+        rank_mode: Union[str, "IVFRankMode"] = None,
+        log_mode: str = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Perform vector similarity search with IVF LIMIT BY RANK support.
+
+        This method executes vector search using MatrixOne's IVF index with
+        fine-grained control over ranking strategy via the LIMIT BY RANK
+        WITH OPTION clause.
+
+        Args:
+            table_name: Name of the table (string) or SQLAlchemy Model class.
+            vector_column: Name of the vector column to search.
+            query_vector: Query vector as list of floats.
+            limit: Maximum number of results to return. Defaults to 10.
+            select_columns: List of columns to select. If None, selects all.
+            where_clause: Optional WHERE clause for filtering before search.
+            distance_type: Distance metric - "l2", "cosine", or "inner_product".
+                          Defaults to "l2".
+            rank_mode: IVF ranking mode - "pre", "post", or "force".
+                      - "pre": Fast approximate search (default)
+                      - "post": Slower but more accurate search
+                      - "force": Force index usage with strict ranking
+                      If None, defaults to "post".
+            log_mode: Internal logging mode parameter.
+
+        Returns:
+            List of dictionaries containing search results with distance column.
+
+        Raises:
+            Exception: If search fails or invalid parameters provided.
+
+        Example:
+            >>> # Complete runnable example
+            >>> from matrixone import Client, IVFRankMode
+            >>> client = Client()
+            >>> client.connect(database="test")
+            >>>
+            >>> # Create table
+            >>> client.execute('''
+            ...     CREATE TABLE IF NOT EXISTS documents (
+            ...         id INT PRIMARY KEY,
+            ...         title VARCHAR(200),
+            ...         embedding VECF32(4)
+            ...     )
+            ... ''')
+            >>>
+            >>> # Insert data
+            >>> client.execute("INSERT INTO documents VALUES (1, 'Doc 1', '[0.1,0.2,0.3,0.4]')")
+            >>> client.execute("INSERT INTO documents VALUES (2, 'Doc 2', '[0.2,0.3,0.4,0.5]')")
+            >>>
+            >>> # Create IVF index
+            >>> client.vector_ops.create_ivf('documents', 'idx_emb', 'embedding', lists=2)
+            >>>
+            >>> # Search with rank
+            >>> results = client.vector_ops.search_with_rank(
+            ...     table_name="documents",
+            ...     vector_column="embedding",
+            ...     query_vector=[0.15, 0.25, 0.35, 0.45],
+            ...     limit=2
+            ... )
+            >>> len(results)
+            2
+            >>>
+            >>> # Cleanup
+            >>> client.execute("DROP TABLE documents")
+            >>> client.disconnect()
+        """
+        from .ivf_rank import IVFRankMode
+
+        try:
+            table_name = _extract_table_name(table_name)
+
+            # Parse rank mode
+            if rank_mode is None:
+                rank_mode = IVFRankMode.POST
+            elif isinstance(rank_mode, str):
+                rank_mode = IVFRankMode(rank_mode.lower())
+            elif not isinstance(rank_mode, IVFRankMode):
+                raise ValueError(f"rank_mode must be IVFRankMode or string, got {type(rank_mode).__name__}")
+
+            # Build base similarity search SQL
+            columns = ", ".join(select_columns) if select_columns else "*"
+            vector_str = "[" + ",".join(str(v) for v in query_vector) + "]"
+
+            # Select distance function
+            if distance_type == "l2":
+                distance_func = "l2_distance"
+            elif distance_type == "cosine":
+                distance_func = "cosine_distance"
+            elif distance_type == "inner_product":
+                distance_func = "inner_product"
+            else:
+                distance_func = "l2_distance"
+
+            sql = f"SELECT {columns}, {distance_func}({vector_column}, '{vector_str}') as distance FROM {table_name}"
+
+            if where_clause:
+                sql += f" WHERE {where_clause}"
+
+            # Add LIMIT BY RANK WITH OPTION clause
+            sql += f" ORDER BY distance LIMIT {limit} BY RANK WITH OPTION 'mode={rank_mode.value}'"
+
+            result = self.executor.execute(sql, log_mode=log_mode)
+            return [dict(row._mapping) for row in result]
+        except Exception as e:
+            raise QueryError(f"Failed to perform vector search with rank on table {table_name}: {e}") from e
 
     def get_ivf_stats(
         self,
@@ -399,12 +512,12 @@ class VectorManager(_VectorManagerBase):
             vector_columns = result.fetchall()
 
             if not vector_columns:
-                raise Exception(f"No vector columns found in table {table_name}")
+                raise QueryError(f"No vector columns found in table {table_name}")
             elif len(vector_columns) == 1:
                 column_name = vector_columns[0][0]
             else:
                 column_names = [col[0] for col in vector_columns]
-                raise Exception(
+                raise QueryError(
                     f"Multiple vector columns found in table {table_name}: {column_names}. "
                     f"Please specify the column_name parameter."
                 )
@@ -415,12 +528,12 @@ class VectorManager(_VectorManagerBase):
         index_tables = {row[0]: row[1] for row in result}
 
         if not index_tables:
-            raise Exception(f"No IVF index found for table {table_name}, column {column_name}")
+            raise QueryError(f"No IVF index found for table {table_name}, column {column_name}")
 
         # Get the entries table name for distribution analysis
         entries_table = index_tables.get('entries')
         if not entries_table:
-            raise Exception("No entries table found in IVF index")
+            raise QueryError("No entries table found in IVF index")
 
         # Get bucket distribution
         dist_sql = self._build_distribution_sql(database, entries_table)
@@ -473,7 +586,7 @@ class AsyncVectorManager(_VectorManagerBase):
             await self.executor.execute(create_sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to create IVFFLAT vector index {name} on table {table_name}: {e}")
+            raise QueryError(f"Failed to create IVFFLAT vector index {name} on table {table_name}: {e}")
 
     async def create_hnsw(
         self,
@@ -492,7 +605,7 @@ class AsyncVectorManager(_VectorManagerBase):
             await self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to create HNSW vector index {name} on table {table_name}: {e}")
+            raise QueryError(f"Failed to create HNSW vector index {name} on table {table_name}: {e}")
 
     async def drop(self, table_name: Union[str, type], name: str) -> "AsyncVectorManager":
         """Drop a vector index."""
@@ -502,7 +615,7 @@ class AsyncVectorManager(_VectorManagerBase):
             await self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to drop vector index {name} on table {table_name}: {e}")
+            raise QueryError(f"Failed to drop vector index {name} on table {table_name}: {e}")
 
     async def enable_ivf(self, probe_limit: int = 1) -> "AsyncVectorManager":
         """Enable IVF indexing."""
@@ -512,7 +625,7 @@ class AsyncVectorManager(_VectorManagerBase):
                 await self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"IVF indexing is not supported: {e}")
+            raise QueryError(f"IVF indexing is not supported: {e}")
 
     async def disable_ivf(self) -> "AsyncVectorManager":
         """Disable IVF indexing."""
@@ -521,7 +634,7 @@ class AsyncVectorManager(_VectorManagerBase):
             await self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to disable IVF indexing: {e}")
+            raise QueryError(f"Failed to disable IVF indexing: {e}")
 
     async def enable_hnsw(self) -> "AsyncVectorManager":
         """Enable HNSW indexing."""
@@ -530,7 +643,7 @@ class AsyncVectorManager(_VectorManagerBase):
             await self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to enable HNSW indexing: {e}")
+            raise QueryError(f"Failed to enable HNSW indexing: {e}")
 
     async def disable_hnsw(self) -> "AsyncVectorManager":
         """Disable HNSW indexing."""
@@ -539,7 +652,7 @@ class AsyncVectorManager(_VectorManagerBase):
             await self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to disable HNSW indexing: {e}")
+            raise QueryError(f"Failed to disable HNSW indexing: {e}")
 
     async def insert(self, table_name: Union[str, type], data: Dict[str, Any]) -> "AsyncVectorManager":
         """Insert vector data into table."""
@@ -549,7 +662,7 @@ class AsyncVectorManager(_VectorManagerBase):
             await self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to insert vector data into table {table_name}: {e}")
+            raise QueryError(f"Failed to insert vector data into table {table_name}: {e}")
 
     async def batch_insert(self, table_name: Union[str, type], data_list: List[Dict[str, Any]]) -> "AsyncVectorManager":
         """Batch insert vector data."""
@@ -558,7 +671,7 @@ class AsyncVectorManager(_VectorManagerBase):
                 await self.insert(table_name, record)
             return self
         except Exception as e:
-            raise Exception(f"Failed to batch insert vector data into table {table_name}: {e}")
+            raise QueryError(f"Failed to batch insert vector data into table {table_name}: {e}")
 
     async def similarity_search(
         self,
@@ -569,7 +682,7 @@ class AsyncVectorManager(_VectorManagerBase):
         select_columns: List[str] = None,
         where_clause: str = None,
         distance_type: str = "l2",
-        _log_mode: str = None,
+        log_mode: str = None,
     ) -> List[Dict[str, Any]]:
         """Perform vector similarity search."""
         try:
@@ -577,10 +690,10 @@ class AsyncVectorManager(_VectorManagerBase):
             sql = self._build_similarity_search_sql(
                 table_name, vector_column, query_vector, limit, select_columns, where_clause, distance_type
             )
-            result = await self.executor.execute(sql, _log_mode=_log_mode)
+            result = await self.executor.execute(sql, log_mode=log_mode)
             return [dict(row._mapping) for row in result]
         except Exception as e:
-            raise Exception(f"Failed to perform similarity search on table {table_name}: {e}")
+            raise QueryError(f"Failed to perform similarity search on table {table_name}: {e}")
 
     async def range_search(
         self,
@@ -590,7 +703,7 @@ class AsyncVectorManager(_VectorManagerBase):
         max_distance: float,
         select_columns: List[str] = None,
         where_clause: str = None,
-        _log_mode: str = None,
+        log_mode: str = None,
     ) -> List[Dict[str, Any]]:
         """Perform vector range search."""
         try:
@@ -598,10 +711,131 @@ class AsyncVectorManager(_VectorManagerBase):
             sql = self._build_range_search_sql(
                 table_name, vector_column, query_vector, max_distance, select_columns, where_clause
             )
-            result = await self.executor.execute(sql, _log_mode=_log_mode)
+            result = await self.executor.execute(sql, log_mode=log_mode)
             return [dict(row._mapping) for row in result]
         except Exception as e:
-            raise Exception(f"Failed to perform range search on table {table_name}: {e}")
+            raise QueryError(f"Failed to perform range search on table {table_name}: {e}")
+
+    async def search_with_rank(
+        self,
+        table_name: Union[str, type],
+        vector_column: str,
+        query_vector: List[float],
+        limit: int = 10,
+        select_columns: List[str] = None,
+        where_clause: str = None,
+        distance_type: str = "l2",
+        rank_mode: Union[str, "IVFRankMode"] = None,
+        log_mode: str = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Perform vector similarity search with IVF LIMIT BY RANK support (async).
+
+        This method executes vector search using MatrixOne's IVF index with
+        fine-grained control over ranking strategy via the LIMIT BY RANK
+        WITH OPTION clause.
+
+        Args:
+            table_name: Name of the table (string) or SQLAlchemy Model class.
+            vector_column: Name of the vector column to search.
+            query_vector: Query vector as list of floats.
+            limit: Maximum number of results to return. Defaults to 10.
+            select_columns: List of columns to select. If None, selects all.
+            where_clause: Optional WHERE clause for filtering before search.
+            distance_type: Distance metric - "l2", "cosine", or "inner_product".
+                          Defaults to "l2".
+            rank_mode: IVF ranking mode - "pre", "post", or "force".
+                      - "pre": Fast approximate search (default)
+                      - "post": Slower but more accurate search
+                      - "force": Force index usage with strict ranking
+                      If None, defaults to "post".
+            log_mode: Internal logging mode parameter.
+
+        Returns:
+            List of dictionaries containing search results with distance column.
+
+        Raises:
+            Exception: If search fails or invalid parameters provided.
+
+        Example:
+            >>> # Complete runnable example
+            >>> import asyncio
+            >>> from matrixone import AsyncClient, IVFRankMode
+            >>>
+            >>> async def example():
+            ...     client = AsyncClient()
+            ...     await client.connect(database="test")
+            ...
+            ...     # Create table
+            ...     await client.execute('''
+            ...         CREATE TABLE IF NOT EXISTS documents (
+            ...             id INT PRIMARY KEY,
+            ...             title VARCHAR(200),
+            ...             embedding VECF32(4)
+            ...         )
+            ...     ''')
+            ...
+            ...     # Insert data
+            ...     await client.execute("INSERT INTO documents VALUES (1, 'Doc 1', '[0.1,0.2,0.3,0.4]')")
+            ...     await client.execute("INSERT INTO documents VALUES (2, 'Doc 2', '[0.2,0.3,0.4,0.5]')")
+            ...
+            ...     # Create IVF index
+            ...     await client.vector_ops.create_ivf('documents', 'idx_emb', 'embedding', lists=2)
+            ...
+            ...     # Search with rank
+            ...     results = await client.vector_ops.search_with_rank(
+            ...         table_name="documents",
+            ...         vector_column="embedding",
+            ...         query_vector=[0.15, 0.25, 0.35, 0.45],
+            ...         limit=2
+            ...     )
+            ...     print(f"Found {len(results)} results")
+            ...
+            ...     # Cleanup
+            ...     await client.execute("DROP TABLE documents")
+            ...     await client.disconnect()
+            >>>
+            >>> asyncio.run(example())
+        """
+        from .ivf_rank import IVFRankMode
+
+        try:
+            table_name = _extract_table_name(table_name)
+
+            # Parse rank mode
+            if rank_mode is None:
+                rank_mode = IVFRankMode.POST
+            elif isinstance(rank_mode, str):
+                rank_mode = IVFRankMode(rank_mode.lower())
+            elif not isinstance(rank_mode, IVFRankMode):
+                raise ValueError(f"rank_mode must be IVFRankMode or string, got {type(rank_mode).__name__}")
+
+            # Build base similarity search SQL
+            columns = ", ".join(select_columns) if select_columns else "*"
+            vector_str = "[" + ",".join(str(v) for v in query_vector) + "]"
+
+            # Select distance function
+            if distance_type == "l2":
+                distance_func = "l2_distance"
+            elif distance_type == "cosine":
+                distance_func = "cosine_distance"
+            elif distance_type == "inner_product":
+                distance_func = "inner_product"
+            else:
+                distance_func = "l2_distance"
+
+            sql = f"SELECT {columns}, {distance_func}({vector_column}, '{vector_str}') as distance FROM {table_name}"
+
+            if where_clause:
+                sql += f" WHERE {where_clause}"
+
+            # Add LIMIT BY RANK WITH OPTION clause
+            sql += f" ORDER BY distance LIMIT {limit} BY RANK WITH OPTION 'mode={rank_mode.value}'"
+
+            result = await self.executor.execute(sql, log_mode=log_mode)
+            return [dict(row._mapping) for row in result]
+        except Exception as e:
+            raise QueryError(f"Failed to perform vector search with rank on table {table_name}: {e}") from e
 
     async def get_ivf_stats(
         self,
@@ -636,12 +870,12 @@ class AsyncVectorManager(_VectorManagerBase):
             vector_columns = result.fetchall()
 
             if not vector_columns:
-                raise Exception(f"No vector columns found in table {table_name}")
+                raise QueryError(f"No vector columns found in table {table_name}")
             elif len(vector_columns) == 1:
                 column_name = vector_columns[0][0]
             else:
                 column_names = [col[0] for col in vector_columns]
-                raise Exception(
+                raise QueryError(
                     f"Multiple vector columns found in table {table_name}: {column_names}. "
                     f"Please specify the column_name parameter."
                 )
@@ -652,12 +886,12 @@ class AsyncVectorManager(_VectorManagerBase):
         index_tables = {row[0]: row[1] for row in result}
 
         if not index_tables:
-            raise Exception(f"No IVF index found for table {table_name}, column {column_name}")
+            raise QueryError(f"No IVF index found for table {table_name}, column {column_name}")
 
         # Get the entries table name for distribution analysis
         entries_table = index_tables.get('entries')
         if not entries_table:
-            raise Exception("No entries table found in IVF index")
+            raise QueryError("No entries table found in IVF index")
 
         # Get bucket distribution
         dist_sql = self._build_distribution_sql(database, entries_table)

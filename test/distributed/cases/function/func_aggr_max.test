@@ -253,17 +253,15 @@ DROP TABLE t1;
 
 create table t1 (f1 int, f2 int, f3 date, f4 datetime);
 insert into t1 values(98,1998,"1998-01-01","1998-01-01 00:00:00");
-insert into t1 values('00',2000,20000101,"2000-01-01 00:00:01");
-insert into t1 values(02,2002,20020101,"2002-01-01 23:59:59");
-insert into t1 values(60,2060,20600101,"2060-01-01 11:11:11");
-insert into t1 values(70,1970,19700101,"1970-11-11 22:22:22");
+insert into t1 values('00',2000,"20000101","2000-01-01 00:00:01");
+insert into t1 values(02,2002,"20020101","2002-01-01 23:59:59");
+insert into t1 values(60,2060,"20600101","2060-01-01 11:11:11");
+insert into t1 values(70,1970,"19700101","1970-11-11 22:22:22");
 insert into t1 values(NULL,NULL,NULL,NULL);
--- @bvt:issue#3523
 select min(f1),max(f1) from t1;
 select min(f2),max(f2) from t1;
 select min(f3),max(f3) from t1;
 select min(f4),max(f4) from t1;
--- @bvt:issue
 drop table t1;
 
 create table t1 (grp int, a bigint unsigned, c char(10) not null);

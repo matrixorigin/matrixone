@@ -74,9 +74,14 @@ type SqlProcess struct {
 	Proc   *process.Process
 	SqlCtx *SqlContext
 
+	// Optional RuntimeFilterSpec
+	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	// Optional BloomFilter bytes attached by vector index runtime.
 	// Used to drive additional filtering in internal SQL executor (e.g. ivf entries scan).
 	BloomFilter []byte
+	// Optional exact primary-key filter list (SQL literals, comma-separated).
+	// When set, ivf_search uses it to build "pk IN (...)" and skip centroid filtering.
+	ExactPkFilter string
 	// Optional IndexReaderParam attached by vector index runtime.
 	// Used to drive additional filtering in internal SQL executor (e.g. ivf entries scan).
 	IndexReaderParam *plan.IndexReaderParam

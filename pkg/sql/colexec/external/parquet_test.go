@@ -892,15 +892,23 @@ func TestParquet_ScanParquetFile_SteppedBatches(t *testing.T) {
 
 	proc := testutil.NewProc(t)
 
+	r := NewParquetReader(param, proc)
+	_, err = r.Open(param, proc)
+	require.NoError(t, err)
+	defer r.Close()
+
 	got := make([]int32, 0, 3)
-	for attempts := 0; attempts < 5 && !param.Fileparam.End; attempts++ {
+	for attempts := 0; attempts < 5; attempts++ {
 		bat := vectorBatch([]types.Type{types.New(types.T_int32, 0, 0)})
-		require.NoError(t, scanParquetFile(context.Background(), param, proc, bat))
+		finished, rerr := r.ReadBatch(context.Background(), bat, proc, nil)
+		require.NoError(t, rerr)
 		vals := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0])
 		got = append(got, vals[:bat.RowCount()]...)
+		if finished {
+			break
+		}
 	}
 	require.Equal(t, []int32{10, 20, 30}, got)
-	require.True(t, param.Fileparam.End)
 }
 
 // helper to build a batch with provided vector types
@@ -1225,18 +1233,17 @@ func Test_getData_FinishAndOffset(t *testing.T) {
 	h := &ParquetHandler{file: f, batchCnt: 1}
 	param := &ExternalParam{ExParamConst: ExParamConst{Ctx: context.Background(), Attrs: []plan.ExternAttr{{ColName: "c", ColIndex: 0}}, Cols: []*plan.ColDef{{Typ: plan.Type{Id: int32(types.T_int32), NotNullable: true}}}}, ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1}}}
 	require.NoError(t, h.prepare(param))
-	param.parqh = h
 
 	// First call -> one row, not finished yet
 	bat := vectorBatch([]types.Type{types.New(types.T_int32, 0, 0)})
 	require.NoError(t, h.getData(bat, param, proc))
 	require.Equal(t, 1, bat.RowCount())
-	require.NotNil(t, param.parqh)
+	require.True(t, h.offset < h.file.NumRows(), "should not be finished yet")
 	// Second call -> last row and finish
 	bat2 := vectorBatch([]types.Type{types.New(types.T_int32, 0, 0)})
 	require.NoError(t, h.getData(bat2, param, proc))
 	require.Equal(t, 1, bat2.RowCount())
-	require.Nil(t, param.parqh)
+	require.True(t, h.offset >= h.file.NumRows(), "should be finished")
 }
 
 // TestParquet_Timestamp_NotAdjustedToUTC tests loading TIMESTAMP with IsAdjustedToUTC=false.
@@ -1561,11 +1568,12 @@ func TestParquet_ScanEmptyFile(t *testing.T) {
 	proc := testutil.NewProc(t)
 	bat := vectorBatch([]types.Type{types.New(types.T_int64, 0, 0)})
 
-	// scanParquetFile should succeed and mark file as finished
-	err := scanParquetFile(context.Background(), param, proc, bat)
+	// ParquetReader.Open should return fileEmpty=true for empty files
+	r := NewParquetReader(param, proc)
+	fileEmpty, err := r.Open(param, proc)
 	require.NoError(t, err)
-	require.True(t, param.Fileparam.End, "empty file should mark End=true")
-	require.Equal(t, 1, param.Fileparam.FileFin, "FileFin should be incremented")
+	require.True(t, fileEmpty, "empty file should return fileEmpty=true")
+	r.Close()
 	require.Equal(t, 0, bat.RowCount(), "batch should have 0 rows")
 }
 

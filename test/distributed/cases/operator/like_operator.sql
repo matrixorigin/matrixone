@@ -14,6 +14,22 @@ SELECT 'David_' LIKE 'David\_';
 SELECT '__++' LIKE '__++%';
 SELECT '__++__' LIKE '__\\+';
 SELECT '__++__' LIKE '__+';
+SELECT "a+b" LIKE "a_b";
+SELECT "a+b" LIKE "a%b";
+SELECT "a++b" LIKE "a+%";
+SELECT "a++b" LIKE "%+%";
+SELECT "a+b" LIKE "a\+b";
+SELECT "a\+b" LIKE "a\\+b";
+SELECT "a+b" LIKE "a\\+b";
+SELECT "a.b" LIKE "a.b";
+SELECT "abb" LIKE "ab*";
+SELECT "a?b" LIKE "a?b";
+SELECT "a(b)c" LIKE "a(b)c";
+SELECT "+++" LIKE "++%";
+SELECT " " LIKE "+";
+SELECT "+123" LIKE "+%";
+SELECT "123+" LIKE "%+";
+
 
 DROP TABLE IF EXISTS like_test;
 CREATE TABLE like_test(
@@ -59,9 +75,7 @@ SELECT COUNT(*) FROM like_test WHERE str1 NOT LIKE '%baz%';
 SELECT COUNT(*) FROM like_test WHERE str1 NOT LIKE '%baz%' OR str1 IS NULL;
 SELECT str1, str1 LIKE '%\\' FROM like_test;
 
--- @bvt:issue#5078
 SELECT str1, str1 LIKE '%\\\\' FROM like_test;
--- @bvt:issue
 
 DELETE FROM like_test;
 INSERT INTO like_test VALUES('99.9');
@@ -115,9 +129,7 @@ SELECT * FROM like_test WHERE str1 LIKE '%\\';
 SELECT * FROM like_test WHERE str2 LIKE '%\'';
 SELECT * FROM like_test WHERE str1 LIKE '%三__';
 
--- @bvt:issue#5056
 SELECT * FROM like_test WHERE str1 LIKE '%\%';
--- @bvt:issue
 
 -- NOT LIKE
 SELECT * FROM like_test WHERE str1 NOT LIKE 'D%';

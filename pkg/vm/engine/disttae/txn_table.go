@@ -657,7 +657,7 @@ func (tbl *txnTable) StarCount(ctx context.Context) (uint64, error) {
 
 	// Fast path: readonly transaction has no uncommitted data
 	if tbl.getTxn().ReadOnly() {
-		return part.CountRows(ctx, types.TimestampToTS(snapshot), fs)
+		return part.CountRows(ctx, types.TimestampToTS(snapshot), fs, tbl.getTxn().proc.Mp())
 	}
 
 	// Determine the range of workspace entries to scan.
@@ -684,7 +684,7 @@ func (tbl *txnTable) StarCount(ctx context.Context) (uint64, error) {
 
 	// Get committed row count from PartitionState.
 	// This already accounts for committed inserts minus committed tombstones.
-	committedRows, err := part.CountRows(ctx, types.TimestampToTS(snapshot), fs)
+	committedRows, err := part.CountRows(ctx, types.TimestampToTS(snapshot), fs, tbl.getTxn().proc.Mp())
 	if err != nil {
 		return 0, err
 	}
@@ -2231,9 +2231,9 @@ func (tbl *txnTable) BuildReaders(
 	def := tbl.GetTableDef(ctx)
 	shards := relData.Split(newNum)
 
-	var mainBF *bloomfilter.BloomFilter
+	var mainBF *bloomfilter.CBloomFilter
 	if len(filterHint.BloomFilter) > 0 {
-		mainBF = &bloomfilter.BloomFilter{}
+		mainBF = &bloomfilter.CBloomFilter{}
 		if err := mainBF.Unmarshal(filterHint.BloomFilter); err != nil {
 			mainBF = nil
 		}
@@ -2242,7 +2242,8 @@ func (tbl *txnTable) BuildReaders(
 	for i := 0; i < newNum; i++ {
 		hint := filterHint
 		if mainBF != nil {
-			hint.BF = mainBF.NewHandle()
+			// CBloomFilter is thread safe for Test and TestVector
+			hint.BF = mainBF.SharePointer()
 		}
 		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shards[i], tombstonePolicy, engine.GeneralLocalDataSource)
 		if err != nil {

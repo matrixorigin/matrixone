@@ -595,13 +595,9 @@ Unknown database sub_db7
 show tables;
 No database selected
 create database test_db;
-[unknown result because it is related to issue#9024]
 create publication test_pubname database test_db account all comment 'publication to all tenant';
-[unknown result because it is related to issue#9024]
 drop publication test_pubname;
-[unknown result because it is related to issue#9024]
 drop database test_db;
-[unknown result because it is related to issue#9024]
 create database sub_db4 from no_exists publication pubname4;
 internal error: there is no publication account no_exists
 create publication test_pubname database mo_task account test_account comment 'publication to test_account tenant';

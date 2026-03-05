@@ -597,4 +597,22 @@ var (
 			Help:      "Ratio of estimated tombstone rows over actual (dedup) tombstone rows. High ratio (e.g. 100x) means estimate is loose.",
 			Buckets:   prometheus.ExponentialBuckets(1, 2, 14), // 1, 2, 4, ..., 8192
 		})
+
+	// Appendable data object scan (S3 I/O) when counting visible rows by commit_ts
+	StarcountAppendableScanDurationSecondsHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "starcount_appendable_scan_duration_seconds",
+			Help:      "Duration of scanning appendable data objects (S3 I/O) to count rows by commit_ts. Use for monitoring StarCount appendable path cost.",
+			Buckets:   getDurationBuckets(),
+		})
+	StarcountAppendableObjectsScannedHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "starcount_appendable_objects_scanned",
+			Help:      "Number of appendable data objects scanned (S3 I/O) per CollectDataStats call. Use for monitoring appendable scan volume.",
+			Buckets:   prometheus.ExponentialBuckets(1, 5, 10), // 1 to ~2e6
+		})
 )

@@ -72,9 +72,7 @@ drop table t1;
 #drop table t1;
 
 #EXTREME VALUE
---- @bvt:issue#3579
 select any_value(9999999999999999999999999999.9999999999);
---- @bvt:issue
 select any_value("0000-00-00 00:00:00");
 select any_value("你好");
 

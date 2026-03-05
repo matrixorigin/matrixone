@@ -17,6 +17,7 @@ package output
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -45,6 +46,8 @@ func (output *Output) Prepare(_ *process.Process) error {
 		output.ctr.cachedBatches = make([]*batch.Batch, 0)
 	}
 
+	output.ctr.rowCount = 0
+
 	return nil
 }
 
@@ -58,6 +61,18 @@ func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 
 		if result.Batch == nil {
+			// Adaptive vector search fallback: trigger retry with pre-filter mode
+			// when post-filter mode returns empty results.
+			//
+			// Condition: IsAdaptive=true AND rowCount=0 (no results at all)
+			//
+			// We only trigger on rowCount == 0 (not rowCount < limit) because:
+			// 1. Partial results cannot be merged with retry results (would cause duplicates)
+			// 2. Empty results strongly indicate that post-filter mode failed to find
+			//    any matching rows, likely due to high filter selectivity
+			if output.shouldRetryWithPreMode() {
+				return result, moerr.NewVectorNeedRetryWithPreModeNoCtx()
+			}
 			result.Status = vm.ExecStop
 			return result, nil
 		}
@@ -66,6 +81,7 @@ func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, nil
 		}
 		bat := result.Batch
+		output.ctr.rowCount += int64(bat.RowCount())
 
 		crs := analyzer.GetOpCounterSet()
 		if err = output.Func(bat, crs); err != nil {
@@ -97,6 +113,7 @@ func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 				if bat.IsEmpty() {
 					continue
 				}
+				output.ctr.rowCount += int64(bat.RowCount())
 				appendBat, err := bat.Dup(proc.GetMPool())
 				if err != nil {
 					return result, err
@@ -110,6 +127,10 @@ func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 		if output.ctr.blockStep == stepSend {
 			if output.ctr.currentIdx == len(output.ctr.cachedBatches) {
 				output.ctr.blockStep = stepEnd
+				// Only trigger retry when no results at all (rowCount == 0)
+				if output.shouldRetryWithPreMode() {
+					return result, moerr.NewVectorNeedRetryWithPreModeNoCtx()
+				}
 				return result, nil
 			} else {
 				bat := output.ctr.cachedBatches[output.ctr.currentIdx]
@@ -133,6 +154,10 @@ func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 
 		if output.ctr.blockStep == stepEnd {
 			result.Status = vm.ExecStop
+			// Only trigger retry when no results at all (rowCount == 0)
+			if output.shouldRetryWithPreMode() {
+				return result, moerr.NewVectorNeedRetryWithPreModeNoCtx()
+			}
 			return result, nil
 		}
 

@@ -1,8 +1,8 @@
 create table t1(a int, b uuid);
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null
-b    UUID(0)    YES        null
+a    INT(32)    YES        null        
+b    UUID(0)    YES        null        
 show create table t1;
 Table    Create Table
 t1    CREATE TABLE `t1` (\n  `a` int DEFAULT NULL,\n  `b` uuid DEFAULT NULL\n)
@@ -15,7 +15,7 @@ d date
 ) COMMENT='test uuid parimary key';
 show create table t2;
 Table    Create Table
-t2    CREATE TABLE `t2` (\n`a` UUID NOT NULL,\n`b` INT DEFAULT NULL,\n`c` VARCHAR(20) DEFAULT NULL,\n`d` DATE DEFAULT NULL,\nPRIMARY KEY (`a`)\n) COMMENT='test uuid parimary key'
+t2    CREATE TABLE `t2` (\n  `a` uuid NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` varchar(20) DEFAULT NULL,\n  `d` date DEFAULT NULL,\n  PRIMARY KEY (`a`)\n) COMMENT='test uuid parimary key'
 INSERT INTO t2 VALUES ("6d1b1f73-2dbf-11ed-940f-000c29847904",12,'SMITH','1980-12-17');
 INSERT INTO t2 VALUES ("ad9f809f-2dbd-11ed-940f-000c29847904",34,'ALLEN','1981-02-20');
 INSERT INTO t2 VALUES ("1b50c137-2dba-11ed-940f-000c29847904",15,'WARD','1981-02-22');
@@ -37,9 +37,9 @@ a    b    c    d
 ad9f809f-2dbd-11ed-940f-000c29847904    34    ALLEN    1981-02-20
 select * from t2 where a <= '6d1b1f732dbf11ed940f000c29847904';
 a    b    c    d
-6d1b1f73-2dbf-11ed-940f-000c29847904    12    SMITH    1980-12-17
-1b50c137-2dba-11ed-940f-000c29847904    15    WARD    1981-02-22
 149e3f0f-2de4-11ed-940f-000c29847904    27    JONES    1981-04-02
+1b50c137-2dba-11ed-940f-000c29847904    15    WARD    1981-02-22
+6d1b1f73-2dbf-11ed-940f-000c29847904    12    SMITH    1980-12-17
 select * from t2 where a < '6d1b1f732dbf11ed940f000c29847904';
 a    b    c    d
 1b50c137-2dba-11ed-940f-000c29847904    15    WARD    1981-02-22

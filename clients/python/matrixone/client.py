@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from sqlalchemy.engine import Connection
 
 from sqlalchemy import create_engine
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Engine, URL
 from sqlalchemy.orm import Session as SQLAlchemySession
 
 from .account import AccountManager
@@ -44,9 +44,182 @@ from .pubsub import PubSubManager
 from .restore import RestoreManager
 from .snapshot import SnapshotManager
 from .clone import CloneManager
+from .branch import BranchManager
 from .sqlalchemy_ext import MatrixOneDialect
 from .vector_manager import VectorManager
 from .version import get_version_manager
+
+_VALID_LOG_MODES = frozenset(('off', 'auto', 'simple', 'full', None))
+
+
+def _validate_log_mode(log_mode: Optional[str]) -> None:
+    """Validate log_mode parameter at API entry points."""
+    if log_mode not in _VALID_LOG_MODES:
+        raise ValueError(f"Invalid log_mode '{log_mode}'. Must be one of 'off', 'auto', 'simple', 'full'")
+
+
+def _extract_errno(exc: Exception) -> Optional[int]:
+    """Extract the numeric error code from a database exception.
+
+    Walks the exception chain (SQLAlchemy → PyMySQL) to find the original
+    ``(errno, message)`` tuple.  Returns ``None`` when no code is found.
+    """
+    # SQLAlchemy wraps PyMySQL errors in .orig
+    orig = getattr(exc, 'orig', None)
+    if orig is not None and hasattr(orig, 'args') and orig.args:
+        try:
+            return int(orig.args[0])
+        except (ValueError, TypeError, IndexError):
+            pass
+    # Direct PyMySQL error
+    if hasattr(exc, 'args') and exc.args:
+        try:
+            return int(exc.args[0])
+        except (ValueError, TypeError, IndexError):
+            pass
+    # Try to parse "(NNNNN, '...')" from the string representation
+    import re
+
+    m = re.search(r'\((\d{4,5}),\s', str(exc))
+    if m:
+        try:
+            return int(m.group(1))
+        except ValueError:
+            pass
+    return None
+
+
+# ── MatrixOne / MySQL error code constants ──────────────────────────
+# MySQL-compatible codes (returned by MatrixOne for standard errors)
+_MYSQL_BAD_DB = 1049  # Unknown database
+_MYSQL_TABLE_EXISTS = 1050  # Table already exists
+_MYSQL_BAD_FIELD = 1054  # Unknown column
+_MYSQL_DUP_ENTRY = 1062  # Duplicate entry
+_MYSQL_PARSE_ERROR = 1064  # SQL parser error
+_MYSQL_NULL_VIOLATION = 1048  # Column cannot be null
+_MYSQL_DUP_KEYNAME = 1061  # Duplicate key name
+_MYSQL_UNKNOWN_ERROR = 1105  # Generic unknown error (many moerr codes map here)
+_MYSQL_NO_SUCH_TABLE = 1146  # No such table
+
+# MatrixOne-specific codes (moerr package, sometimes sent directly)
+_MO_INTERNAL = 20101  # internal error (permission denied, OOM, etc. — classified by message text)
+_MO_NOT_SUPPORTED = 20105  # not supported
+_MO_INVALID_INPUT = 20301  # invalid input
+_MO_SYNTAX_ERROR = 20302  # SQL syntax error
+_MO_PARSE_ERROR = 20303  # SQL parser error
+_MO_CONSTRAINT_VIOLATION = 20304
+_MO_DUPLICATE_ENTRY = 20307  # Duplicate entry
+_MO_BAD_FIELD = 20309  # Unknown column
+_MO_BAD_DB = 20402  # Unknown database
+_MO_NO_SUCH_TABLE = 20403  # No such table
+_MO_TABLE_ALREADY_EXISTS = 20421  # Table already exists
+_MO_DB_ALREADY_EXISTS = 20420  # Database already exists
+_MO_PRIMARY_KEY_DUP = 20623  # Primary key duplicated
+
+
+def _classify_db_error(exc: Exception, sql_or_stmt: Any = None) -> QueryError:
+    """Classify a database error into a user-friendly QueryError.
+
+    Uses the numeric error code (MySQL or moerr) as the primary classifier,
+    with message-text matching as fallback for wrapped/stringified errors.
+
+    Args:
+        exc: The original exception (or its string for backward compat).
+        sql_or_stmt: The SQL string or SQLAlchemy statement that caused the error.
+    """
+    import re
+
+    error_msg = str(exc)
+    msg_lower = error_msg.lower()
+    errno = _extract_errno(exc) if not isinstance(exc, str) else None
+
+    # ── Permission denied (moerr ErrInternal with OS-level message) ──
+    if 'permission denied' in msg_lower:
+        path_match = re.search(r'(?:mkdir|open|stat|access)\s+([^\s:]+)', error_msg)
+        path_hint = f" Path: {path_match.group(1)}" if path_match else ""
+        return QueryError(
+            f"Permission denied on server filesystem.{path_hint} "
+            f"Ensure the MatrixOne server process has access to the target path."
+        )
+
+    # ── Object does not exist ──
+    # Check message first: MatrixOne sometimes wraps "does not exist" inside errno 1064 (parse error)
+    not_found_msg = 'does not exist' in msg_lower or 'no such table' in msg_lower or "doesn't exist" in msg_lower
+    if errno in (_MYSQL_NO_SUCH_TABLE, _MO_NO_SUCH_TABLE, _MYSQL_BAD_DB, _MO_BAD_DB) or not_found_msg:
+        match = re.search(r"(?:table|database)\s+[\"']?([\w.]+)[\"']?\s+does not exist", error_msg, re.IGNORECASE)
+        if not match:
+            match = re.search(r"no such table\s+([\w.]+)", error_msg, re.IGNORECASE)
+        if not match:
+            match = re.search(r"Unknown database\s+([\w.]+)", error_msg, re.IGNORECASE)
+        if match:
+            return QueryError(
+                f"Table or database '{match.group(1)}' does not exist. "
+                f"Create it first using client.create_table() or CREATE TABLE/DATABASE statement."
+            )
+        return QueryError(f"Object not found: {error_msg}")
+
+    # ── Object already exists ──
+    if errno in (_MYSQL_TABLE_EXISTS, _MO_TABLE_ALREADY_EXISTS, _MO_DB_ALREADY_EXISTS) or (
+        errno is None and 'already exists' in msg_lower
+    ):
+        match = re.search(r"(?:table|database)\s+([\w.]+)\s+already\s+exists", error_msg, re.IGNORECASE)
+        if match:
+            name = match.group(1)
+            return QueryError(
+                f"Table '{name}' already exists. " f"Use DROP TABLE {name} or client.drop_table() to remove it first."
+            )
+        return QueryError(f"Object already exists: {error_msg}")
+
+    # ── Duplicate key / entry ──
+    if errno in (_MYSQL_DUP_ENTRY, _MYSQL_DUP_KEYNAME, _MO_DUPLICATE_ENTRY, _MO_PRIMARY_KEY_DUP) or (
+        errno is None and 'duplicate' in msg_lower
+    ):
+        return QueryError(
+            f"Duplicate entry error: {error_msg}. " f"Check for duplicate primary key or unique constraint violations."
+        )
+
+    # ── SQL syntax / parse error ──
+    if errno in (_MYSQL_PARSE_ERROR, _MO_SYNTAX_ERROR, _MO_PARSE_ERROR) or (
+        errno is None and ('syntax error' in msg_lower or 'parser error' in msg_lower)
+    ):
+        sql_display = sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
+        sql_preview = (str(sql_display)[:200] + '...') if len(str(sql_display)) > 200 else sql_display
+        return QueryError(f"SQL syntax error: {error_msg}\nQuery: {sql_preview}")
+
+    # ── Column not found ──
+    if errno in (_MYSQL_BAD_FIELD, _MO_BAD_FIELD) or (
+        errno is None and 'column' in msg_lower and ('unknown' in msg_lower or 'not found' in msg_lower)
+    ):
+        return QueryError(f"Column not found: {error_msg}. Check your column names and table schema.")
+
+    # ── NULL constraint violation ──
+    if errno == _MYSQL_NULL_VIOLATION or (errno is None and 'cannot be null' in msg_lower):
+        return QueryError(f"NULL constraint violation: {error_msg}. Some columns require non-NULL values.")
+
+    # ── Feature not supported ──
+    if errno == _MO_NOT_SUPPORTED or (errno is None and 'not supported' in msg_lower):
+        return QueryError(
+            f"MatrixOne feature limitation: {error_msg}. "
+            f"This feature may require additional configuration or is not yet supported."
+        )
+
+    # ── Invalid input ──
+    if errno == _MO_INVALID_INPUT:
+        return QueryError(f"Invalid input: {error_msg}")
+
+    # ── Constraint violation ──
+    if errno == _MO_CONSTRAINT_VIOLATION:
+        return QueryError(f"Constraint violation: {error_msg}")
+
+    # ── Bind parameter / SQLAlchemy error ──
+    if 'bind parameter' in msg_lower or 'InvalidRequestError' in error_msg:
+        return QueryError(
+            f"Parameter binding error: {error_msg}. "
+            f"This might be caused by special characters in your data (colons in JSON, etc.)"
+        )
+
+    # ── Generic fallback ──
+    return QueryError(f"Query execution failed: {error_msg}")
 
 
 class ClientExecutor(BaseMatrixOneExecutor):
@@ -217,6 +390,7 @@ class Client(BaseMatrixOneClient):
         self._login_info = None
         self._snapshots = None
         self._clone = None
+        self._branch = None
         self._moctl = None
         self._restore = None
         self._pitr = None
@@ -482,10 +656,23 @@ class Client(BaseMatrixOneClient):
         # Set the provided engine
         client._engine = engine
 
-        # Replace the dialect with MatrixOne dialect for proper vector type support
-        original_dbapi = engine.dialect.dbapi
-        engine.dialect = MatrixOneDialect()
-        engine.dialect.dbapi = original_dbapi
+        # Wrap the dialect with MatrixOne dialect for proper vector type support
+        # Instead of replacing, we create a new MatrixOne dialect that delegates to the original
+        if not isinstance(engine.dialect, MatrixOneDialect):
+            original_dialect = engine.dialect
+            original_dbapi = engine.dialect.dbapi
+
+            # Create MatrixOne dialect with same configuration
+            mo_dialect = MatrixOneDialect()
+            mo_dialect.dbapi = original_dbapi
+
+            # Copy important attributes from original dialect
+            if hasattr(original_dialect, '_connection_charset'):
+                mo_dialect._connection_charset = original_dialect._connection_charset
+
+            # Replace dialect (this is still a limitation of SQLAlchemy's design)
+            # but we've preserved the original configuration
+            engine.dialect = mo_dialect
 
         # Initialize managers after engine is set
         client._initialize_managers()
@@ -533,27 +720,34 @@ class Client(BaseMatrixOneClient):
 
     def _create_engine(self) -> Engine:
         """Create SQLAlchemy engine with connection pooling"""
-        # Build connection string
-        connection_string = (
-            f"mysql+pymysql://{self._connection_params['user']}:"
-            f"{self._connection_params['password']}@"
-            f"{self._connection_params['host']}:"
-            f"{self._connection_params['port']}/"
-            f"{self._connection_params['database']}"
-        )
+        # Build connection URL using SQLAlchemy's URL.create() for proper escaping
+        # of special characters in user/password (e.g., @, #, %, etc.)
+        connect_args = {}
+        if self._connection_params.get("ssl_ca"):
+            connect_args["ssl"] = {"ca": self._connection_params["ssl_ca"]}
+            if self._connection_params.get("ssl_cert"):
+                connect_args["ssl"]["cert"] = self._connection_params["ssl_cert"]
+            if self._connection_params.get("ssl_key"):
+                connect_args["ssl"]["key"] = self._connection_params["ssl_key"]
 
-        # Add SSL parameters if needed
-        if "ssl_ca" in self._connection_params:
-            connection_string += f"?ssl_ca={self._connection_params['ssl_ca']}"
+        url = URL.create(
+            drivername="mysql+pymysql",
+            username=self._connection_params["user"],
+            password=self._connection_params["password"],
+            host=self._connection_params["host"],
+            port=self._connection_params["port"],
+            database=self._connection_params["database"] or None,
+        )
 
         # Create engine with connection pooling
         engine = create_engine(
-            connection_string,
+            url,
             pool_size=self.pool_size,
             max_overflow=self.max_overflow,
             pool_timeout=self.pool_timeout,
             pool_recycle=self.pool_recycle,
             pool_pre_ping=True,  # Enable connection health checks
+            connect_args=connect_args,
         )
 
         # Replace the dialect with MatrixOne dialect for proper vector type support
@@ -567,6 +761,7 @@ class Client(BaseMatrixOneClient):
         """Initialize all manager instances after engine is created"""
         self._snapshots = SnapshotManager(self)
         self._clone = CloneManager(self)
+        self._branch = BranchManager(self)
         self._moctl = MoCtlManager(self)
         self._restore = RestoreManager(self)
         self._pitr = PitrManager(self)
@@ -733,7 +928,7 @@ class Client(BaseMatrixOneClient):
         return final_user_string, parsed_info
 
     def _execute_with_logging(
-        self, connection: "Connection", sql: str, context: str = "SQL execution", override_sql_log_mode: str = None
+        self, connection: "Connection", sql: str, context: str = "SQL execution", log_mode: str = None
     ):
         """
         Execute SQL with proper logging through the client's logger.
@@ -746,7 +941,7 @@ class Client(BaseMatrixOneClient):
             connection: SQLAlchemy connection object
             sql: SQL query string
             context: Context description for error logging (default: "SQL execution")
-            override_sql_log_mode: Temporarily override sql_log_mode for this query only
+            log_mode: Temporarily override sql_log_mode for this query only
 
         Returns::
 
@@ -778,26 +973,22 @@ class Client(BaseMatrixOneClient):
                 if result.returns_rows:
                     # For SELECT queries, we can't consume the result to count rows
                     # So we just log without row count
-                    self.logger.log_query(
-                        sql, execution_time, None, success=True, override_sql_log_mode=override_sql_log_mode
-                    )
+                    self.logger.log_query(sql, execution_time, None, success=True, log_mode=log_mode)
                 else:
                     # For DML queries (INSERT/UPDATE/DELETE), we can get rowcount
-                    self.logger.log_query(
-                        sql, execution_time, result.rowcount, success=True, override_sql_log_mode=override_sql_log_mode
-                    )
+                    self.logger.log_query(sql, execution_time, result.rowcount, success=True, log_mode=log_mode)
             except Exception:
                 # Fallback: just log the query without row count
-                self.logger.log_query(sql, execution_time, None, success=True, override_sql_log_mode=override_sql_log_mode)
+                self.logger.log_query(sql, execution_time, None, success=True, log_mode=log_mode)
 
             return result
         except Exception as e:
             execution_time = time.time() - start_time
-            self.logger.log_query(sql, execution_time, success=False, override_sql_log_mode=override_sql_log_mode)
+            self.logger.log_query(sql, execution_time, success=False, log_mode=log_mode)
             self.logger.log_error(e, context=context)
-            raise
+            raise _classify_db_error(e, sql) from None
 
-    def execute(self, sql_or_stmt, params: Optional[Tuple] = None, _log_mode: str = None) -> "ResultSet":
+    def execute(self, sql_or_stmt, params: Optional[Tuple] = None, log_mode: str = None) -> "ResultSet":
         """
         Execute SQL query or SQLAlchemy statement without transaction isolation.
 
@@ -832,7 +1023,7 @@ class Client(BaseMatrixOneClient):
                 SQL injection. Ignored for SQLAlchemy statements (use .values() or .where()
                 with bound parameters instead).
 
-            _log_mode (Optional[str]): Override SQL logging mode for this query only.
+            log_mode (Optional[str]): Override SQL logging mode for this query only.
                 Options: 'off', 'simple', 'full'. If None, uses client's global sql_log_mode
                 setting. Useful for debugging specific queries or disabling logs for
                 frequently-executed statements.
@@ -1018,19 +1209,19 @@ class Client(BaseMatrixOneClient):
             # Disable logging for frequently executed query
             result = client.execute(
                 select(User).where(User.id == 1),
-                _log_mode='off'
+                log_mode='off'
             )
 
             # Force full SQL logging for debugging
             result = client.execute(
                 select(User).where(User.name.like('%test%')),
-                _log_mode='full'
+                log_mode='full'
             )
 
             # Simple logging (operation type only)
             result = client.execute(
                 update(User).values(status='processed'),
-                _log_mode='simple'
+                log_mode='simple'
             )
 
         Important Notes:
@@ -1046,7 +1237,7 @@ class Client(BaseMatrixOneClient):
         1. **Prefer ORM-style statements**: Use select(), insert(), update(), delete()
         2. **Use parameters**: Always use parameter binding to prevent SQL injection
         3. **Session for transactions**: Use client.session() for atomic operations
-        4. **Disable logging in production**: Use _log_mode='off' for hot paths
+        4. **Disable logging in production**: Use log_mode='off' for hot paths
         5. **Handle exceptions**: Wrap execute() in try-except for error handling
 
         See Also:
@@ -1058,6 +1249,8 @@ class Client(BaseMatrixOneClient):
         if not self._engine:
             raise ConnectionError("Not connected to database")
 
+        _validate_log_mode(log_mode)
+
         import time
 
         start_time = time.time()
@@ -1067,7 +1260,8 @@ class Client(BaseMatrixOneClient):
             if not isinstance(sql_or_stmt, str):
                 # SQLAlchemy statement - delegate to session for consistent behavior
                 with self.session() as session:
-                    result = session.execute(sql_or_stmt, params)
+                    # Suppress Session-level logging; Client logs below
+                    result = session.execute(sql_or_stmt, params, log_mode='off')
 
                     # Convert SQLAlchemy result to ResultSet
                     if hasattr(result, 'returns_rows') and result.returns_rows:
@@ -1081,7 +1275,7 @@ class Client(BaseMatrixOneClient):
                             execution_time,
                             len(rows),
                             success=True,
-                            override_sql_log_mode=_log_mode,
+                            log_mode=log_mode,
                         )
                         return result_set
                     else:
@@ -1093,7 +1287,7 @@ class Client(BaseMatrixOneClient):
                             execution_time,
                             result.rowcount,
                             success=True,
-                            override_sql_log_mode=_log_mode,
+                            log_mode=log_mode,
                         )
                         return result_set
 
@@ -1120,16 +1314,12 @@ class Client(BaseMatrixOneClient):
                     columns = list(result.keys())
                     rows = result.fetchall()
                     result_set = ResultSet(columns, rows)
-                    self.logger.log_query(
-                        sql_or_stmt, execution_time, len(rows), success=True, override_sql_log_mode=_log_mode
-                    )
+                    self.logger.log_query(sql_or_stmt, execution_time, len(rows), success=True, log_mode=log_mode)
                     return result_set
                 else:
                     # INSERT/UPDATE/DELETE query
                     result_set = ResultSet([], [], affected_rows=result.rowcount)
-                    self.logger.log_query(
-                        sql_or_stmt, execution_time, result.rowcount, success=True, override_sql_log_mode=_log_mode
-                    )
+                    self.logger.log_query(sql_or_stmt, execution_time, result.rowcount, success=True, log_mode=log_mode)
                     return result_set
 
         except Exception as e:
@@ -1147,85 +1337,7 @@ class Client(BaseMatrixOneClient):
 
                 print(f"Warning: Error logging failed: {log_err}", file=sys.stderr)
 
-            # Extract user-friendly error message
-            error_msg = str(e)
-
-            # Handle common database errors with helpful messages
-            # Check for "does not exist" first before "syntax error"
-            if (
-                'does not exist' in error_msg.lower()
-                or 'no such table' in error_msg.lower()
-                or 'doesn\'t exist' in error_msg.lower()
-            ):
-                # Table doesn't exist
-                import re
-
-                match = re.search(r"(?:table|database)\s+[\"']?(\w+)[\"']?\s+does not exist", error_msg, re.IGNORECASE)
-                if match:
-                    obj_name = match.group(1)
-                    raise QueryError(
-                        f"Table or database '{obj_name}' does not exist. "
-                        f"Create it first using client.create_table() or CREATE TABLE/DATABASE statement."
-                    ) from None
-                else:
-                    raise QueryError(f"Object not found: {error_msg}") from None
-
-            elif 'already exists' in error_msg.lower() and '1050' in error_msg:
-                # Table already exists
-                match = None
-                if 'table' in error_msg.lower():
-                    import re
-
-                    match = re.search(r"table\s+(\w+)\s+already\s+exists", error_msg, re.IGNORECASE)
-                if match:
-                    table_name = match.group(1)
-                    raise QueryError(
-                        f"Table '{table_name}' already exists. "
-                        f"Use DROP TABLE {table_name} or client.drop_table() to remove it first."
-                    ) from None
-                else:
-                    raise QueryError(f"Object already exists: {error_msg}") from None
-
-            elif 'duplicate' in error_msg.lower() and ('1062' in error_msg or '1061' in error_msg):
-                # Duplicate key/entry
-                raise QueryError(
-                    f"Duplicate entry error: {error_msg}. "
-                    f"Check for duplicate primary key or unique constraint violations."
-                ) from None
-
-            elif 'syntax error' in error_msg.lower() or '1064' in error_msg:
-                # SQL syntax error
-                sql_display = sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
-                sql_preview = sql_display[:200] + '...' if len(sql_display) > 200 else sql_display
-                raise QueryError(f"SQL syntax error: {error_msg}\n" f"Query: {sql_preview}") from None
-
-            elif 'column' in error_msg.lower() and ('unknown' in error_msg.lower() or 'not found' in error_msg.lower()):
-                # Column doesn't exist
-                raise QueryError(f"Column not found: {error_msg}. " f"Check your column names and table schema.") from None
-
-            elif 'cannot be null' in error_msg.lower() or '1048' in error_msg:
-                # NULL constraint violation
-                raise QueryError(
-                    f"NULL constraint violation: {error_msg}. " f"Some columns require non-NULL values."
-                ) from None
-
-            elif 'not supported' in error_msg.lower() and '20105' in error_msg:
-                # MatrixOne-specific: feature not supported
-                raise QueryError(
-                    f"MatrixOne feature limitation: {error_msg}. "
-                    f"This feature may require additional configuration or is not yet supported."
-                ) from None
-
-            elif 'bind parameter' in error_msg.lower() or 'InvalidRequestError' in error_msg:
-                # SQLAlchemy bind parameter error (from JSON colons, etc.)
-                raise QueryError(
-                    f"Parameter binding error: {error_msg}. "
-                    f"This might be caused by special characters in your data (colons in JSON, etc.)"
-                ) from None
-
-            else:
-                # Generic error - still cleaner than full SQLAlchemy stack
-                raise QueryError(f"Query execution failed: {error_msg}") from None
+            raise _classify_db_error(e, sql_or_stmt) from None
 
     def insert(self, table_name_or_model, data: dict) -> "ResultSet":
         """
@@ -1799,6 +1911,43 @@ class Client(BaseMatrixOneClient):
     def clone(self) -> Optional[CloneManager]:
         """Get clone manager"""
         return self._clone
+
+    @property
+    def branch(self) -> Optional[BranchManager]:
+        """
+        Get branch manager for Git-style version control operations.
+
+        Provides table and database branching, diffing, and merging capabilities.
+        Requires MatrixOne 3.0.5 or higher.
+
+        Returns:
+            BranchManager instance for branch operations
+
+        Example::
+
+            client = Client()
+            client.connect(database='test')
+
+            # Create table branch
+            client.branch.create_table_branch('users_branch', 'users')
+
+            # Create database branch
+            client.branch.create_database_branch('dev_db', 'production')
+
+            # Compare branches
+            diffs = client.branch.diff_table('users_branch', 'users')
+
+            # Merge branches
+            client.branch.merge_table('users_branch', 'users')
+
+            # Delete branches
+            client.branch.delete_table_branch('users_branch')
+            client.branch.delete_database_branch('dev_db')
+
+        See Also:
+            - :doc:`branch_guide` - Complete branch management guide
+        """
+        return self._branch
 
     @property
     def moctl(self) -> Optional[MoCtlManager]:
@@ -3173,6 +3322,7 @@ class Session(SQLAlchemySession):
         # Use executor pattern: managers use this session as executor
         self.snapshots = SnapshotManager(client, executor=self)
         self.clone = CloneManager(client, executor=self)
+        self.branch = BranchManager(client, executor=self)
         self.restore = RestoreManager(client, executor=self)
         self.pitr = PitrManager(client, executor=self)
         self.pubsub = PubSubManager(client, executor=self)
@@ -3199,7 +3349,7 @@ class Session(SQLAlchemySession):
             params: Query parameters (only used for string SQL with '?' placeholders)
             **kwargs: Additional arguments passed to parent execute(). Supports special parameter:
 
-                - _log_mode (str): Override SQL logging mode for this operation only.
+                - log_mode (str): Override SQL logging mode for this operation only.
                   Options: 'off', 'simple', 'full'. Useful for debugging
                   specific operations without changing global settings.
 
@@ -3223,14 +3373,14 @@ class Session(SQLAlchemySession):
             # Debugging with temporary logging override
             with client.session() as session:
                 # Enable full logging for this query only
-                result = session.execute("SELECT * FROM large_table", _log_mode='full')
+                result = session.execute("SELECT * FROM large_table", log_mode='full')
         """
         import time
 
         start_time = time.time()
 
-        # Extract _log_mode from kwargs (don't pass it to SQLAlchemy)
-        _log_mode = kwargs.pop('_log_mode', None)
+        # Extract log_mode from kwargs (don't pass it to SQLAlchemy)
+        log_mode = kwargs.pop('log_mode', None)
 
         try:
             # Check if this is a string SQL
@@ -3252,16 +3402,14 @@ class Session(SQLAlchemySession):
 
             # Log query
             if hasattr(result, 'returns_rows') and result.returns_rows:
-                self.client.logger.log_query(
-                    original_sql, execution_time, None, success=True, override_sql_log_mode=_log_mode
-                )
+                self.client.logger.log_query(original_sql, execution_time, None, success=True, log_mode=log_mode)
             else:
                 self.client.logger.log_query(
                     original_sql,
                     execution_time,
                     getattr(result, 'rowcount', 0),
                     success=True,
-                    override_sql_log_mode=_log_mode,
+                    log_mode=log_mode,
                 )
 
             return result
@@ -3272,10 +3420,10 @@ class Session(SQLAlchemySession):
                 original_sql if 'original_sql' in locals() else str(sql_or_stmt),
                 execution_time,
                 success=False,
-                override_sql_log_mode=_log_mode,
+                log_mode=log_mode,
             )
             self.client.logger.log_error(e, context="Session query execution")
-            raise QueryError(f"Session query execution failed: {e}")
+            raise _classify_db_error(e, sql_or_stmt) from None
 
     def get_connection(self):
         """

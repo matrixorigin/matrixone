@@ -16,6 +16,7 @@ package taskservice
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -55,6 +56,37 @@ func TestRetryScheduleCronTask(t *testing.T) {
 		defer s.StopScheduleCronTask()
 
 		waitHasTasks(t, store, time.Second*20, WithTaskParentTaskIDCond(EQ, "t1"))
+	})
+}
+
+// TestRetryScheduleCronTaskAllFailed tests the scenario where all retries fail.
+// This simulates a persistent database failure where the cron task cannot be triggered
+// even after all retry attempts.
+func TestRetryScheduleCronTaskAllFailed(t *testing.T) {
+	runScheduleCronTaskTest(t, func(store *memTaskStorage, s *taskService, ctx context.Context) {
+		var failCount atomic.Int32
+		store.preUpdateCron = func() error {
+			failCount.Add(1)
+			// Always return error to simulate persistent database failure
+			return moerr.NewInfo(context.TODO(), "persistent database error")
+		}
+
+		assert.NoError(t, s.CreateCronTask(ctx, newTestTaskMetadata("t1"), "*/1 * * * * *"))
+
+		s.StartScheduleCronTask()
+		defer s.StopScheduleCronTask()
+
+		// Wait for the cron job to trigger and exhaust all retries
+		time.Sleep(time.Second * 10)
+
+		// Verify that retries were attempted (should be cronTaskTriggerMaxRetries = 3)
+		assert.GreaterOrEqual(t, int(failCount.Load()), cronTaskTriggerMaxRetries,
+			"should have attempted at least %d retries", cronTaskTriggerMaxRetries)
+
+		// Verify that no async task was created due to persistent failure
+		tasks, err := store.QueryAsyncTask(ctx, WithTaskParentTaskIDCond(EQ, "t1"))
+		assert.NoError(t, err)
+		assert.Equal(t, 0, len(tasks), "no async task should be created when all retries fail")
 	})
 }
 

@@ -128,13 +128,11 @@ drop table t1;
 select if(0, 18446744073709551610, 18446744073709551610);
 
 CREATE TABLE t1(a DECIMAL(10,3));
--- @bvt:issue#2302
 SELECT t1.a,
 IF((ROUND(t1.a,2)=1), 2,
 IF((ROUND(t1.a,2)=1), 2,
 IF((ROUND(t1.a,2)=1), 2,
 IF((ROUND(t1.a,2)=1), 2,0)))) + 1 FROM t1;
--- @bvt:issue
 DROP TABLE t1;
 
 

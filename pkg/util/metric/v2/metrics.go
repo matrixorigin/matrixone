@@ -186,6 +186,8 @@ func initTxnMetrics() {
 	registry.MustRegister(StarcountEstimateTombstoneRowsHistogram)
 	registry.MustRegister(StarcountEstimateTombstoneObjectsHistogram)
 	registry.MustRegister(StarcountEstimateOverActualRatioHistogram)
+	registry.MustRegister(StarcountAppendableScanDurationSecondsHistogram)
+	registry.MustRegister(StarcountAppendableObjectsScannedHistogram)
 }
 
 func initRPCMetrics() {

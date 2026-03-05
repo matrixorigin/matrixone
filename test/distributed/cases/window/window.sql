@@ -69,7 +69,146 @@ select a, dense_rank() over () from t1;
 select a, b, c, dense_rank() over (partition by a, b order by c) from t1;
 select a, c, dense_rank() over(partition by a order by c rows current row) from t1;
 select a, c, rank() over(order by a), row_number() over(order by a), dense_rank() over(order by a) from t1;
+-- percent_rank tests
+select a, c, percent_rank() over (partition by a order by c) from t1;
+select a, percent_rank() over (partition by a) from t1;
+select a, percent_rank() over () from t1;
+select a, b, c, percent_rank() over (partition by a, b order by c) from t1;
+select a, c, percent_rank() over(order by a), rank() over(order by a), dense_rank() over(order by a) from t1;
+select a, c, percent_rank() over (order by c desc) from t1;
+select a, c, percent_rank() over (partition by a order by c desc) from t1;
+-- percent_rank: multi-column order by
+select a, b, c, percent_rank() over (order by a, c) from t1;
+-- percent_rank: expression in order by
+select a, b, percent_rank() over (order by a + b) from t1;
 drop table t1;
+
+-- percent_rank: NULL handling
+drop table if exists t2;
+create table t2 (a int, b int);
+insert into t2 values(1, 1), (2, NULL), (3, 2), (4, NULL), (5, 3);
+select a, b, percent_rank() over (order by b) from t2;
+select a, b, percent_rank() over (partition by b order by a) from t2;
+drop table t2;
+
+-- percent_rank: duplicate values
+drop table if exists t3;
+create table t3 (a int, b int);
+insert into t3 values(1, 1), (2, 1), (3, 1), (4, 2), (5, 2);
+select a, b, percent_rank() over (order by b) from t3;
+drop table t3;
+
+-- percent_rank: single row partition
+drop table if exists t4;
+create table t4 (a int, b int);
+insert into t4 values(1, 1), (2, 2), (3, 3);
+select a, b, percent_rank() over (partition by a order by b) from t4;
+drop table t4;
+
+-- percent_rank: empty table
+drop table if exists t5;
+create table t5 (a int, b int);
+select a, b, percent_rank() over (order by a) from t5;
+drop table t5;
+
+-- test cume_dist
+drop table if exists t1;
+create table t1 (a int, b int);
+insert into t1 values(1, 1), (1, 2), (2, 1), (2, 2), (2, 3);
+select a, b, cume_dist() over (order by a) from t1;
+select a, b, cume_dist() over (order by b) from t1;
+select a, b, cume_dist() over (partition by a order by b) from t1;
+select a, cume_dist() over () from t1;
+drop table t1;
+
+-- test cume_dist: edge cases
+drop table if exists t2;
+create table t2 (a int, b int);
+select a, b, cume_dist() over (order by a) from t2;
+insert into t2 values(1, 1);
+select a, b, cume_dist() over (order by a) from t2;
+insert into t2 values(1, 1), (1, 1), (1, 1);
+select a, b, cume_dist() over (order by a) from t2;
+drop table t2;
+
+-- test cume_dist: NULL handling
+drop table if exists t3;
+create table t3 (a int, b int);
+insert into t3 values(1, 1), (2, NULL), (3, 3), (NULL, 4), (5, NULL);
+select a, b, cume_dist() over (order by a) from t3;
+select a, b, cume_dist() over (order by b) from t3;
+select a, b, cume_dist() over (partition by a order by b) from t3;
+drop table t3;
+
+-- test cume_dist: string type
+drop table if exists t4;
+create table t4 (name varchar(20), score int);
+insert into t4 values('Alice', 90), ('Bob', 85), ('Charlie', 90), ('David', 75), ('Eve', 85);
+select name, score, cume_dist() over (order by name) from t4;
+select name, score, cume_dist() over (order by score) from t4;
+select name, score, cume_dist() over (partition by score order by name) from t4;
+drop table t4;
+
+-- test cume_dist: date type
+drop table if exists t5;
+create table t5 (id int, dt date);
+insert into t5 values(1, '2024-01-01'), (2, '2024-01-01'), (3, '2024-02-01'), (4, '2024-03-01'), (5, '2024-02-01');
+select id, dt, cume_dist() over (order by dt) from t5;
+select id, dt, cume_dist() over (partition by dt order by id) from t5;
+drop table t5;
+
+-- test cume_dist: DESC order
+drop table if exists t6;
+create table t6 (a int, b int);
+insert into t6 values(1, 10), (2, 20), (3, 30), (4, 20), (5, 10);
+select a, b, cume_dist() over (order by b desc) from t6;
+select a, b, cume_dist() over (partition by b order by a desc) from t6;
+drop table t6;
+
+-- test cume_dist: multiple columns order by
+drop table if exists t7;
+create table t7 (a int, b int, c int);
+insert into t7 values(1, 1, 1), (1, 2, 1), (1, 1, 2), (2, 1, 1), (2, 2, 2);
+select a, b, c, cume_dist() over (order by a, b) from t7;
+select a, b, c, cume_dist() over (order by a desc, b asc) from t7;
+select a, b, c, cume_dist() over (partition by a order by b, c) from t7;
+drop table t7;
+
+-- test cume_dist: with other window functions
+drop table if exists t8;
+create table t8 (a int, b int);
+insert into t8 values(1, 10), (1, 20), (2, 10), (2, 20), (2, 30);
+select a, b, 
+    row_number() over (order by b) as rn,
+    rank() over (order by b) as rnk,
+    dense_rank() over (order by b) as drnk,
+    cume_dist() over (order by b) as cdist
+from t8;
+select a, b,
+    rank() over (partition by a order by b) as rnk,
+    cume_dist() over (partition by a order by b) as cdist
+from t8;
+drop table t8;
+
+-- test cume_dist: larger dataset
+drop table if exists t9;
+create table t9 (id int, category int, value int);
+insert into t9 values
+(1, 1, 100), (2, 1, 200), (3, 1, 100), (4, 1, 300),
+(5, 2, 150), (6, 2, 150), (7, 2, 250), (8, 2, 150),
+(9, 3, 100), (10, 3, 200), (11, 3, 300), (12, 3, 400);
+select id, category, value, cume_dist() over (order by value) from t9;
+select id, category, value, cume_dist() over (partition by category order by value) from t9;
+drop table t9;
+
+-- test cume_dist: float type
+drop table if exists t10;
+create table t10 (a float, b double);
+insert into t10 values(1.1, 2.2), (1.1, 3.3), (2.2, 2.2), (3.3, 1.1);
+select a, b, cume_dist() over (order by a) from t10;
+select a, b, cume_dist() over (order by b) from t10;
+select a, b, cume_dist() over (partition by a order by b) from t10;
+drop table t10;
 
 drop table if exists t1;
 create table t1 (a int, b decimal(7, 2));
@@ -387,9 +526,7 @@ select * from decimal01;
 select max(d) over (partition by d order by d) from decimal01;
 select min(d) over (partition by d order by d) from decimal01;
 select avg(d) over (partition by d) from decimal01;
--- @bvt:issue#10043
 select sum(d) over (partition by d order by d rows between 1 preceding and 1 following) from decimal01;
--- @bvt:issue
 drop table decimal01;
 
 -- partition by and order by follows date
@@ -1456,4 +1593,33 @@ select * from (select i_manufact_id, sum(ss_sales_price) sum_sales, avg(sum(ss_s
 
 -- information_schema is now a table which is compatible with mysql, it is now an empty table
 select group_concat(c.column_name order by ordinal_position) key_columns  from information_schema.key_column_usage c where c.table_schema='test1' and c.table_name='region' and constraint_name='PRIMARY';
+
+-- NTILE window function tests
+drop table if exists t_ntile;
+create table t_ntile (a int, b int, c int);
+insert into t_ntile values(1, 10, 100), (2, 20, 200), (3, 30, 300), (4, 40, 400), (5, 50, 500), (6, 60, 600), (7, 70, 700), (8, 80, 800), (9, 90, 900), (10, 100, 1000);
+
+-- Basic ntile with 3 buckets
+select a, ntile(3) over (order by a) as bucket from t_ntile;
+
+-- Ntile with partition
+select a, b, ntile(2) over (partition by a % 2 order by b) as bucket from t_ntile;
+
+-- Ntile with different bucket counts
+select a, ntile(1) over (order by a) as bucket from t_ntile;
+select a, ntile(4) over (order by a) as bucket from t_ntile;
+select a, ntile(10) over (order by a) as bucket from t_ntile;
+
+-- Ntile with uneven distribution
+select a, ntile(3) over (order by a) as bucket from t_ntile where a <= 5;
+select a, ntile(4) over (order by a) as bucket from t_ntile where a <= 9;
+
+-- Ntile combined with other window functions
+select a, ntile(3) over (order by a) as bucket, rank() over (order by a) as rnk, row_number() over (order by a) as rn from t_ntile;
+
+-- Ntile with multiple partitions
+select a % 3 as grp, a, ntile(2) over (partition by a % 3 order by a) as bucket from t_ntile;
+
+drop table t_ntile;
+
 drop database test;

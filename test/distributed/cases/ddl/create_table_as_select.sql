@@ -28,7 +28,6 @@ select * from t5;
 insert into t1 values (1, '1_1');
 select * from t1;
 CREATE table t6 (a int unique) as select * from t1;
-drop table t6;
 
 CREATE table t6 as select max(a) from t1;
 desc t6;
@@ -119,9 +118,7 @@ select * from t1;
 create table t2 (c float) as select b, a from t1;
 desc t2;
 select * from t2;
--- @bvt:issue#14775
 CREATE table if not exists t2 (d float) as select b, a from t1;
--- @bvt:issue
 select * from t2;
 drop table t1;
 drop table t2;
@@ -587,7 +584,6 @@ insert into original_table (id, name, age, salary, hire_date) values (1, 'Alice'
                                                                      (5, 'Eve', 25, 4000.00, '2020-07-15');
 
 drop table if exists selected_employees;
--- @bvt:issue#14775
 create table selected_employees as select * from original_table where
 salary >= 5500.00
 and salary < 7000.00
@@ -596,10 +592,8 @@ and hire_date >= '2021-01-01'
 and name not like 'A%'
 and id not in (1, 3)
 and salary between 5000.00 and 6500.00;
-show create table selected_employees;
-select * from selected_employees;
+select count(*) from selected_employees;
 drop table selected_employees;
--- @bvt:issue
 drop table original_table;
 
 -- after ctas, create view

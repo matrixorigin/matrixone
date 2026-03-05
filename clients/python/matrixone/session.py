@@ -32,8 +32,6 @@ try:
 except ImportError:
     SQLAlchemyAsyncSession = None
 
-from .exceptions import QueryError
-
 if TYPE_CHECKING:
     from .client import ResultSet  # noqa: F401
     from .async_client import AsyncResultSet  # noqa: F401
@@ -360,6 +358,7 @@ class Session(SQLAlchemySession):
         # These are defined in their respective modules
         from .snapshot import SnapshotManager
         from .clone import CloneManager
+        from .branch import BranchManager
 
         # These are defined in client.py after the Session class
         import sys
@@ -384,6 +383,7 @@ class Session(SQLAlchemySession):
         # The executor pattern allows managers to work in both client and session contexts
         self.snapshots = SnapshotManager(client, executor=self)
         self.clone = CloneManager(client, executor=self)
+        self.branch = BranchManager(client, executor=self)
         self.restore = RestoreManager(client, executor=self)
         self.pitr = PitrManager(client, executor=self)
         self.pubsub = PubSubManager(client, executor=self)
@@ -423,7 +423,7 @@ class Session(SQLAlchemySession):
 
             **kwargs: Additional keyword arguments:
 
-                - _log_mode (str): Override SQL logging mode for this query only.
+                - log_mode (str): Override SQL logging mode for this query only.
                   Options: 'off', 'simple', 'full'. If not specified, uses client's
                   global sql_log_mode setting.
                 - Other kwargs are passed to SQLAlchemy's execute()
@@ -608,19 +608,19 @@ class Session(SQLAlchemySession):
                 # Disable logging for this query only
                 result = session.execute(
                     "SELECT * FROM large_table",
-                    _log_mode='off'
+                    log_mode='off'
                 )
 
                 # Force full SQL logging for debugging
                 result = session.execute(
                     "SELECT * FROM users WHERE complex_condition",
-                    _log_mode='full'
+                    log_mode='full'
                 )
 
                 # Simple logging (show operation type only)
                 result = session.execute(
                     "UPDATE massive_table SET field = 'value'",
-                    _log_mode='simple'
+                    log_mode='simple'
                 )
 
         Best Practices:
@@ -628,7 +628,7 @@ class Session(SQLAlchemySession):
             - Use SQLAlchemy statements for complex queries
             - Use string SQL for simple, dynamic queries
             - Always consume or close result sets
-            - Use _log_mode='off' for frequently executed queries in production
+            - Use log_mode='off' for frequently executed queries in production
 
         See Also:
             - AsyncSession.execute(): Async version
@@ -639,8 +639,8 @@ class Session(SQLAlchemySession):
 
         start_time = time.time()
 
-        # Extract _log_mode from kwargs (don't pass it to SQLAlchemy)
-        _log_mode = kwargs.pop('_log_mode', None)
+        # Extract log_mode from kwargs (don't pass it to SQLAlchemy)
+        log_mode = kwargs.pop('log_mode', None)
 
         try:
             # Check if this is a string SQL
@@ -662,16 +662,14 @@ class Session(SQLAlchemySession):
 
             # Log query
             if hasattr(result, 'returns_rows') and result.returns_rows:
-                self.client.logger.log_query(
-                    original_sql, execution_time, None, success=True, override_sql_log_mode=_log_mode
-                )
+                self.client.logger.log_query(original_sql, execution_time, None, success=True, log_mode=log_mode)
             else:
                 self.client.logger.log_query(
                     original_sql,
                     execution_time,
                     getattr(result, 'rowcount', 0),
                     success=True,
-                    override_sql_log_mode=_log_mode,
+                    log_mode=log_mode,
                 )
 
             return result
@@ -682,10 +680,12 @@ class Session(SQLAlchemySession):
                 original_sql if 'original_sql' in locals() else str(sql_or_stmt),
                 execution_time,
                 success=False,
-                override_sql_log_mode=_log_mode,
+                log_mode=log_mode,
             )
             self.client.logger.log_error(e, context="Session query execution")
-            raise QueryError(f"Session query execution failed: {e}")
+            from .client import _classify_db_error
+
+            raise _classify_db_error(e, sql_or_stmt) from None
 
     def insert(self, table_name: str, data: dict[str, Any]) -> "ResultSet":
         """
@@ -1192,6 +1192,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
         # These are defined in their respective modules
         from .snapshot import AsyncSnapshotManager
         from .clone import AsyncCloneManager
+        from .branch import AsyncBranchManager
         from .restore import AsyncRestoreManager
         from .pitr import AsyncPitrManager
         from .pubsub import AsyncPubSubManager
@@ -1206,6 +1207,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
         # The executor pattern allows managers to work in both client and session contexts
         self.snapshots = AsyncSnapshotManager(client, executor=self)
         self.clone = AsyncCloneManager(client, executor=self)
+        self.branch = AsyncBranchManager(client, executor=self)
         self.restore = AsyncRestoreManager(client, executor=self)
         self.pitr = AsyncPitrManager(client, executor=self)
         self.pubsub = AsyncPubSubManager(client, executor=self)
@@ -1230,7 +1232,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
         Args:
             sql_or_stmt: SQL string or SQLAlchemy statement
             params: Query parameters (only used for string SQL with '?' placeholders)
-            **kwargs: Additional execution options (including _log_mode for logging control)
+            **kwargs: Additional execution options (including log_mode for logging control)
 
         Returns:
             SQLAlchemy async result object
@@ -1239,8 +1241,8 @@ class AsyncSession(SQLAlchemyAsyncSession):
 
         start_time = time.time()
 
-        # Extract _log_mode from kwargs (don't pass it to SQLAlchemy)
-        _log_mode = kwargs.pop('_log_mode', None)
+        # Extract log_mode from kwargs (don't pass it to SQLAlchemy)
+        log_mode = kwargs.pop('log_mode', None)
 
         try:
             # Check if this is a string SQL
@@ -1262,16 +1264,14 @@ class AsyncSession(SQLAlchemyAsyncSession):
 
             # Log query
             if hasattr(result, 'returns_rows') and result.returns_rows:
-                self.client.logger.log_query(
-                    original_sql, execution_time, None, success=True, override_sql_log_mode=_log_mode
-                )
+                self.client.logger.log_query(original_sql, execution_time, None, success=True, log_mode=log_mode)
             else:
                 self.client.logger.log_query(
                     original_sql,
                     execution_time,
                     getattr(result, 'rowcount', 0),
                     success=True,
-                    override_sql_log_mode=_log_mode,
+                    log_mode=log_mode,
                 )
 
             return result
@@ -1282,10 +1282,12 @@ class AsyncSession(SQLAlchemyAsyncSession):
                 original_sql if 'original_sql' in locals() else str(sql_or_stmt),
                 execution_time,
                 success=False,
-                override_sql_log_mode=_log_mode,
+                log_mode=log_mode,
             )
             self.client.logger.log_error(e, context="Async session query execution")
-            raise QueryError(f"Async session query execution failed: {e}")
+            from .client import _classify_db_error
+
+            raise _classify_db_error(e, sql_or_stmt) from None
 
     async def insert(self, table_name_or_model, data: dict):
         """

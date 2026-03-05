@@ -1,0 +1,153 @@
+create database if not exists test_retry;
+use test_retry;
+drop table if exists t_phase1;
+create table t_phase1(id int primary key, vec vecf32(3), category int);
+insert into t_phase1 values (1, '[1,0,0]', 1);
+insert into t_phase1 values (2, '[0,1,0]', 1);
+insert into t_phase1 values (3, '[0,0,1]', 2);
+insert into t_phase1 values (4, '[1,1,0]', 2);
+insert into t_phase1 values (5, '[1,0,1]', 3);
+create index idx_phase1 using ivfflat on t_phase1(vec) lists=2 op_type 'vector_l2_ops';
+set experimental_ivf_index = 1;
+select id from t_phase1 order by l2_distance(vec, '[0,0,0]') limit 1 by rank with option 'mode=auto';
+id
+2
+select id from t_phase1 where category = 1 order by l2_distance(vec, '[0,0,0]') limit 1 by rank with option 'mode=auto';
+id
+1
+select id from t_phase1 where category = 1 order by l2_distance(vec, '[0,0,0]') limit 2 by rank with option 'mode=pre';
+id
+2
+1
+select id from t_phase1 where category = 1 order by l2_distance(vec, '[0,0,0]') limit 2 by rank with option 'mode=auto';
+id
+2
+1
+drop table t_phase1;
+drop table if exists t_phase2_small;
+create table t_phase2_small(id int primary key, vec vecf32(3), rare_col int);
+insert into t_phase2_small values (1, '[1,0,0]', 0);
+insert into t_phase2_small values (2, '[0,1,0]', 0);
+insert into t_phase2_small values (3, '[0,0,1]', 0);
+insert into t_phase2_small values (4, '[1,1,1]', 1);  -- rare value
+insert into t_phase2_small values (5, '[2,2,2]', 0);
+create index idx_phase2 using ivfflat on t_phase2_small(vec) lists=2 op_type 'vector_l2_ops';
+select id, rare_col from t_phase2_small where rare_col = 1 order by l2_distance(vec, '[0,0,0]') limit 1 by rank with option 'mode=auto';
+id    rare_col
+4    1
+select id, rare_col from t_phase2_small where rare_col = 1 order by l2_distance(vec, '[0,0,0]') limit 1 by rank with option 'mode=force';
+id    rare_col
+4    1
+drop table t_phase2_small;
+drop table if exists t_phase34;
+create table t_phase34(id int primary key, vec vecf32(3), filter_col int);
+insert into t_phase34 values (1, '[0.1,0.1,0.1]', 0);
+insert into t_phase34 values (2, '[0.2,0.2,0.2]', 0);
+insert into t_phase34 values (3, '[0.3,0.3,0.3]', 0);
+insert into t_phase34 values (4, '[0.4,0.4,0.4]', 0);
+insert into t_phase34 values (5, '[0.5,0.5,0.5]', 0);
+insert into t_phase34 values (6, '[0.6,0.6,0.6]', 0);
+insert into t_phase34 values (7, '[0.7,0.7,0.7]', 0);
+insert into t_phase34 values (8, '[0.8,0.8,0.8]', 0);
+insert into t_phase34 values (9, '[0.9,0.9,0.9]', 0);
+insert into t_phase34 values (10, '[1.0,1.0,1.0]', 1);  -- rare value in cluster
+insert into t_phase34 values (11, '[5.1,5.1,5.1]', 0);
+insert into t_phase34 values (12, '[5.2,5.2,5.2]', 0);
+insert into t_phase34 values (13, '[5.3,5.3,5.3]', 0);
+insert into t_phase34 values (14, '[5.4,5.4,5.4]', 0);
+insert into t_phase34 values (15, '[5.5,5.5,5.5]', 1);  -- rare value in cluster
+create index idx_phase34 using ivfflat on t_phase34(vec) lists=3 op_type 'vector_l2_ops';
+set probe_limit = 1;
+select id from t_phase34 where filter_col = 0 order by l2_distance(vec, '[0,0,0]') limit 3 by rank with option 'mode=auto';
+id
+1
+2
+3
+select id from t_phase34 where filter_col = 1 order by l2_distance(vec, '[0,0,0]') limit 1 by rank with option 'mode=auto';
+id
+10
+select id from t_phase34 where filter_col = 1 order by l2_distance(vec, '[0,0,0]') limit 1 by rank with option 'mode=pre';
+id
+10
+drop table t_phase34;
+drop table if exists t_retry;
+create table t_retry(id int primary key, vec vecf32(3), filter_col int);
+insert into t_retry values (1, '[0.1,0.1,0.1]', 0);
+insert into t_retry values (2, '[0.11,0.11,0.11]', 0);
+insert into t_retry values (3, '[0.12,0.12,0.12]', 0);
+insert into t_retry values (4, '[0.13,0.13,0.13]', 0);
+insert into t_retry values (5, '[0.14,0.14,0.14]', 0);
+insert into t_retry values (6, '[0.15,0.15,0.15]', 0);
+insert into t_retry values (7, '[0.16,0.16,0.16]', 0);
+insert into t_retry values (8, '[0.17,0.17,0.17]', 0);
+insert into t_retry values (9, '[0.18,0.18,0.18]', 0);
+insert into t_retry values (10, '[0.19,0.19,0.19]', 0);
+insert into t_retry values (11, '[0.2,0.2,0.2]', 0);
+insert into t_retry values (12, '[0.21,0.21,0.21]', 0);
+insert into t_retry values (13, '[0.22,0.22,0.22]', 0);
+insert into t_retry values (14, '[0.23,0.23,0.23]', 0);
+insert into t_retry values (15, '[0.24,0.24,0.24]', 0);
+insert into t_retry values (16, '[0.25,0.25,0.25]', 0);
+insert into t_retry values (17, '[0.26,0.26,0.26]', 0);
+insert into t_retry values (18, '[0.27,0.27,0.27]', 0);
+insert into t_retry values (19, '[0.28,0.28,0.28]', 0);
+insert into t_retry values (20, '[0.29,0.29,0.29]', 0);
+insert into t_retry values (999, '[10,10,10]', 1);
+create index idx using ivfflat on t_retry(vec) lists=5 op_type 'vector_l2_ops';
+set experimental_ivf_index = 1;
+set probe_limit = 1;
+select id, filter_col from t_retry where filter_col = 1 order by l2_distance(vec, '[0,0,0]') limit 1 by rank with option 'mode=post';
+id    filter_col
+select id, filter_col from t_retry where filter_col = 1 order by l2_distance(vec, '[0,0,0]') limit 1 by rank with option 'mode=auto';
+id    filter_col
+999    1
+select id, filter_col from t_retry where filter_col = 0 order by l2_distance(vec, '[0,0,0]') limit 1 by rank with option 'mode=auto';
+id    filter_col
+1    0
+select id, filter_col from t_retry where filter_col = 0 order by l2_distance(vec, '[0,0,0]') limit 5 by rank with option 'mode=auto';
+id    filter_col
+1    0
+2    0
+3    0
+4    0
+select id, filter_col from t_retry where filter_col = 1 order by l2_distance(vec, '[0,0,0]') limit 1 by rank with option 'mode=pre';
+id    filter_col
+999    1
+drop table t_retry;
+drop table if exists t_edge;
+create table t_edge(id int primary key, vec vecf32(3), status int);
+insert into t_edge values (1, '[1,0,0]', 1);
+insert into t_edge values (2, '[0,1,0]', 2);
+insert into t_edge values (3, '[0,0,1]', 3);
+create index idx_edge using ivfflat on t_edge(vec) lists=2 op_type 'vector_l2_ops';
+select id from t_edge where status = 999 order by l2_distance(vec, '[0,0,0]') limit 1 by rank with option 'mode=auto';
+id
+select id from t_edge where status != 2 order by l2_distance(vec, '[0,0,0]') limit 10 by rank with option 'mode=auto';
+id
+3
+1
+select id from t_edge order by l2_distance(vec, '[0,0,0]') limit 2 by rank with option 'mode=auto';
+id
+3
+1
+drop table t_edge;
+drop table if exists t_phase6;
+create table t_phase6(id int primary key, vec vecf32(3), filter_col int);
+insert into t_phase6 values (1, '[1,0,0]', 0);
+insert into t_phase6 values (2, '[0,1,0]', 0);
+insert into t_phase6 values (3, '[0,0,1]', 0);
+insert into t_phase6 values (999, '[10,10,10]', 1);
+create index idx_phase6 using ivfflat on t_phase6(vec) lists=2 op_type 'vector_l2_ops';
+set experimental_ivf_index = 1;
+set probe_limit = 1;
+set enable_vector_auto_mode_by_default = 1;
+select id from t_phase6 where filter_col = 1 order by l2_distance(vec, '[0,0,0]') limit 1;
+id
+999
+select id from t_phase6 where filter_col = 1 order by l2_distance(vec, '[0,0,0]') limit 1 by rank with option 'mode=post';
+id
+set enable_vector_auto_mode_by_default = 0;
+select id from t_phase6 where filter_col = 1 order by l2_distance(vec, '[0,0,0]') limit 1;
+id
+drop table t_phase6;
+drop database test_retry;

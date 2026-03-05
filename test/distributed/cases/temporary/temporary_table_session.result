@@ -1,0 +1,242 @@
+drop database if exists temp_session;
+create database temp_session;
+use temp_session;
+drop table if exists temp_session1;
+create temporary table temp_session1 (
+id int,
+session_name varchar(50)
+);
+insert into temp_session1 values (1, 'session 1 data');
+select * from temp_session1;  -- 预期结果: 返回 (1, 'session 1 data')
+➤ id[4,32,0]  ¦  session_name[12,-1,0]  𝄀
+1  ¦  session 1 data
+select * from temp_session.temp_session1;  -- 预期结果: 报错 "table does not exist"
+SQL parser error: table "temp_session1" does not exist
+create temporary table temp_shared_name (
+id int,
+data varchar(50)
+);
+insert into temp_shared_name values (1, 'from session 1');
+select * from temp_shared_name;  -- 预期结果: 返回 'from session 1'
+➤ id[4,32,0]  ¦  data[12,-1,0]  𝄀
+1  ¦  from session 1
+drop database if exists session2;
+create database session2;
+create temporary table session2.temp_shared_name (
+id int,
+data varchar(50)
+);
+insert into session2.temp_shared_name values (2, 'from session 2');
+select * from session2.temp_shared_name;  -- 预期结果: 返回 'from session 2'
+➤ id[4,32,0]  ¦  data[12,-1,0]  𝄀
+2  ¦  from session 2
+select * from temp_shared_name;  -- 预期结果: 仍然返回 'from session 1'
+➤ id[4,32,0]  ¦  data[12,-1,0]  𝄀
+1  ¦  from session 1
+create temporary table temp_session.temp_auto_cleanup (
+id int,
+value varchar(50)
+);
+insert into temp_session.temp_auto_cleanup values (1, 'test data');
+select * from temp_session.temp_auto_cleanup;  -- 预期结果: 返回数据
+➤ id[4,32,0]  ¦  value[12,-1,0]  𝄀
+1  ¦  test data
+select * from temp_session.temp_auto_cleanup;  -- 预期结果: 报错 "table does not exist"
+SQL parser error: table "temp_auto_cleanup" does not exist
+create table users (
+id int,
+name varchar(50),
+type varchar(20) default 'permanent'
+);
+insert into users values (1, 'permanent user', 'permanent');
+select * from users;  -- 预期结果: 返回 (1, 'permanent user', 'permanent')
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  type[12,-1,0]  𝄀
+1  ¦  permanent user  ¦  permanent
+create temporary table users (
+id int,
+name varchar(50),
+type varchar(20) default 'temporary'
+);
+insert into users values (2, 'temporary user', 'temporary');
+select * from users;  -- 预期结果: 返回 (2, 'temporary user', 'temporary')
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  type[12,-1,0]  𝄀
+2  ¦  temporary user  ¦  temporary
+drop table users;  -- 删除临时表
+select * from users;  -- 预期结果: 返回 (1, 'permanent user', 'permanent')
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  type[12,-1,0]  𝄀
+1  ¦  permanent user  ¦  permanent
+drop table users;  -- 删除普通表
+create table products (
+id int,
+name varchar(50)
+);
+show create table products;  -- 预期结果: 显示 create table products
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+products  ¦  CREATE TABLE `products` (
+  `id` int DEFAULT NULL,
+  `name` varchar(50) DEFAULT NULL
+)
+create temporary table products (
+id int,
+name varchar(100)
+);
+show create table products;  -- 预期结果: 显示 create temporary table products
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+products  ¦  CREATE TEMPORARY TABLE `products` (
+  `id` int DEFAULT NULL,
+  `name` varchar(100) DEFAULT NULL
+)
+drop table products;  -- 删除临时表
+show create table products;  -- 预期结果: 显示 create table products
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+products  ¦  CREATE TABLE `products` (
+  `id` int DEFAULT NULL,
+  `name` varchar(50) DEFAULT NULL
+)
+drop table products;  -- 删除普通表
+create table orders (
+id int,
+amount decimal(10,2)
+);
+insert into orders values (1, 100.00);
+create temporary table orders (
+id int,
+amount decimal(10,2)
+);
+insert into orders values (2, 200.00);
+update orders set amount = 250.00 where id = 2;
+delete from orders where id = 2;
+select * from orders;  -- 预期结果: 空结果（临时表为空）
+➤ id[4,32,0]  ¦  amount[3,10,2]
+drop table orders;  -- 删除临时表
+select * from orders;  -- 预期结果: 返回 (1, 100.00) 普通表数据
+➤ id[4,32,0]  ¦  amount[3,10,2]  𝄀
+1  ¦  100.00
+drop table orders;  -- 删除普通表
+create table temp_session.customers (
+id int,
+name varchar(50)
+);
+insert into temp_session.customers values (1, 'customer a');
+insert into temp_session.customers values (2, 'customer b');
+select * from temp_session.customers;  -- 预期结果: 返回2条记录
+➤ id[4,32,0]  ¦  name[12,-1,0]  𝄀
+1  ¦  customer a  𝄀
+2  ¦  customer b
+create temporary table temp_session.customers (
+id int,
+name varchar(50)
+);
+insert into temp_session.customers values (3, 'temp customer');
+select * from temp_session.customers;  -- 预期结果: 返回 (3, 'temp customer')
+➤ id[4,32,0]  ¦  name[12,-1,0]  𝄀
+3  ¦  temp customer
+select * from temp_session.customers;  -- 预期结果: 仍然返回原来的2条记录
+➤ id[4,32,0]  ¦  name[12,-1,0]  𝄀
+1  ¦  customer a  𝄀
+2  ¦  customer b
+drop table temp_session.customers;  -- 删除临时表
+drop table temp_session.customers;  -- 删除普通表
+create temporary table temp_manual_drop (
+id int,
+data varchar(50)
+);
+insert into temp_manual_drop values (1, 'test');
+select * from temp_manual_drop;  -- 预期结果: 返回数据
+➤ id[4,32,0]  ¦  data[12,-1,0]  𝄀
+1  ¦  test
+drop table temp_manual_drop;
+select * from temp_manual_drop;  -- 预期结果: 报错 "table does not exist"
+SQL parser error: table "temp_manual_drop" does not exist
+create table test_table (
+id int,
+type varchar(20) default 'permanent'
+);
+insert into test_table values (1, 'permanent');
+create temporary table test_table (
+id int,
+type varchar(20) default 'temporary'
+);
+insert into test_table values (2, 'temporary');
+drop table test_table;  -- 删除临时表
+select * from test_table;  -- 预期结果: 返回 (1, 'permanent')
+➤ id[4,32,0]  ¦  type[12,-1,0]  𝄀
+1  ¦  permanent
+drop table test_table;  -- 删除普通表
+create temporary table temp_table1 (id int);
+create temporary table temp_table2 (id int);
+create temporary table temp_table3 (id int);
+insert into temp_table1 values (1);
+insert into temp_table2 values (2);
+insert into temp_table3 values (3);
+select * from temp_table1;  -- 预期结果: 返回 1
+➤ id[4,32,0]  𝄀
+1
+select * from temp_table2;  -- 预期结果: 返回 2
+➤ id[4,32,0]  𝄀
+2
+select * from temp_table3;  -- 预期结果: 返回 3
+➤ id[4,32,0]  𝄀
+3
+drop table temp_table2;
+select * from temp_table1;  -- 预期结果: 仍然可访问
+➤ id[4,32,0]  𝄀
+1
+select * from temp_table2;  -- 预期结果: 报错
+SQL parser error: table "temp_table2" does not exist
+select * from temp_table3;  -- 预期结果: 仍然可访问
+➤ id[4,32,0]  𝄀
+3
+drop table temp_table1;
+drop table temp_table3;
+create temporary table temp_session.temp_timeout (
+id int,
+data varchar(50)
+);
+insert into temp_session.temp_timeout values (1, 'test data');
+select * from temp_timeout;  -- 预期结果: 报错 "table does not exist"
+SQL parser error: table "temp_timeout" does not exist
+create table temp_session.permanent1 (id int);
+create table temp_session.permanent2 (id int);
+create temporary table temp_session.temp1 (id int);
+create temporary table temp_session.temp2 (id int);
+use temp_session;
+show tables;
+➤ Tables_in_temp_session[12,-1,0]  𝄀
+permanent1  𝄀
+permanent2
+drop table temp1;
+no such table temp_session.temp1
+drop table temp2;
+no such table temp_session.temp2
+drop table permanent1;
+drop table permanent2;
+create table test_visibility (id int);
+show tables;  -- 预期结果: 显示 test_visibility
+➤ Tables_in_temp_session[12,-1,0]  𝄀
+test_visibility
+create temporary table test_visibility (id int);
+show tables;  -- 预期结果: 仍然显示 test_visibility（普通表）
+➤ Tables_in_temp_session[12,-1,0]  𝄀
+test_visibility
+drop table test_visibility;  -- 删除临时表
+show tables;  -- 预期结果: 显示 test_visibility（普通表）
+➤ Tables_in_temp_session[12,-1,0]  𝄀
+test_visibility
+drop table test_visibility;  -- 删除普通表
+create temporary table temp_long_session (
+id int,
+created_at timestamp default current_timestamp
+);
+insert into temp_long_session (id) values (1);
+select * from temp_long_session;  -- 预期结果: 数据仍然存在
+➤ id[4,32,0]  ¦  created_at[93,64,0]  𝄀
+1  ¦  2026-02-05 18:52:11
+insert into temp_long_session (id) values (2);
+select * from temp_long_session;  -- 预期结果: 返回2条记录
+➤ id[4,32,0]  ¦  created_at[93,64,0]  𝄀
+1  ¦  2026-02-05 18:52:11  𝄀
+2  ¦  2026-02-05 18:52:11
+drop table temp_long_session;
+drop database temp_session;
+drop database session2;

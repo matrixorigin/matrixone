@@ -24,8 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -50,8 +50,6 @@ type ExternalParam struct {
 }
 
 type ExParamConst struct {
-	IgnoreLine    int
-	IgnoreLineTag int
 	ParallelLoad  bool
 	StrictSqlMode bool
 	Close         byte
@@ -69,18 +67,12 @@ type ExParamConst struct {
 	FileOffsetTotal []*pipeline.FileOffset
 	Ctx             context.Context
 	Extern          *tree.ExternParam
-	tableDef        *plan.TableDef
 	ClusterTable    *plan.ClusterTable
 }
 
 type ExParam struct {
-	prevStr   string
-	reader    io.ReadCloser
-	plh       *ParseLineHandler
 	Fileparam *ExFileparam
-	Zoneparam *ZonemapFileparam
 	Filter    *FilterParam
-	parqh     *ParquetHandler
 }
 
 type ExFileparam struct {
@@ -100,16 +92,38 @@ type FilterParam struct {
 	zonemappable bool
 	columnMap    map[int]int
 	FilterExpr   *plan.Expr
-	blockReader  *ioutil.BlockReader
+	AuxIdCnt     int32 // saved from AssignAuxIdForExpr in Prepare, reused at runtime
+}
+
+// ExternalFileReader is the unified interface for reading external files.
+// Each format (CSV/Parquet/ZoneMap) implements this interface independently.
+//
+// Lifecycle: NewXxxReader() → Open() → ReadBatch()* → Close() → Open() → ...
+// Reader saves param reference in Open, subsequent methods access it via r.param.
+type ExternalFileReader interface {
+	// Open opens a file and initializes internal state.
+	// fileEmpty=true means the file is empty (e.g. 0-row Parquet),
+	// Call should Close then finishCurrentFile and continue to next file.
+	Open(param *ExternalParam, proc *process.Process) (fileEmpty bool, err error)
+
+	// ReadBatch reads one batch of data into buf.
+	// Returns true when the current file is fully read.
+	ReadBatch(ctx context.Context, buf *batch.Batch, proc *process.Process, analyzer process.Analyzer) (fileFinished bool, err error)
+
+	// Close closes the current file and releases resources.
+	Close() error
 }
 
 type container struct {
 	maxAllocSize int
 	buf          *batch.Batch
 }
+
 type External struct {
-	ctr container
-	Es  *ExternalParam
+	ctr        container
+	Es         *ExternalParam
+	reader     ExternalFileReader // unified file reader
+	fileOpened bool               // whether a file is currently active
 
 	vm.OperatorBase
 	colexec.Projection
@@ -152,6 +166,13 @@ func (external *External) Release() {
 }
 
 func (external *External) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	if external.reader != nil {
+		if closeErr := external.reader.Close(); closeErr != nil {
+			logutil.Debugf("external reader close on reset: %v", closeErr)
+		}
+		external.reader = nil
+		external.fileOpened = false
+	}
 	if external.ctr.buf != nil {
 		external.ctr.buf.CleanOnlyData()
 	}
@@ -169,6 +190,11 @@ func (external *External) Reset(proc *process.Process, pipelineFailed bool, err 
 }
 
 func (external *External) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if external.reader != nil {
+		external.reader.Close()
+		external.reader = nil
+		external.fileOpened = false
+	}
 	if external.ctr.buf != nil {
 		external.ctr.buf.Clean(proc.Mp())
 		external.ctr.buf = nil
@@ -189,7 +215,10 @@ type ParseLineHandler struct {
 	csvReader *csvparser.CSVParser
 }
 
-func newReaderWithParam(param *ExternalParam) (*csvparser.CSVParser, error) {
+// newCSVParserFromReader is a stateless pure function that creates a CSV parser.
+// It only depends on config and io.Reader, not on ExParam.
+// Used by both CsvReader.Open and getTailSizeStrict.
+func newCSVParserFromReader(extern *tree.ExternParam, r io.Reader) (*csvparser.CSVParser, error) {
 	fieldsTerminatedBy := tree.DefaultFieldsTerminated
 	fieldsEnclosedBy := tree.DefaultFieldsEnclosedBy
 	fieldsEscapedBy := tree.DefaultFieldsEscapedBy
@@ -197,14 +226,14 @@ func newReaderWithParam(param *ExternalParam) (*csvparser.CSVParser, error) {
 	linesTerminatedBy := "\n"
 	linesStartingBy := ""
 
-	if param.Extern.Tail.Fields != nil {
-		if terminated := param.Extern.Tail.Fields.Terminated; terminated != nil && terminated.Value != "" {
+	if extern.Tail.Fields != nil {
+		if terminated := extern.Tail.Fields.Terminated; terminated != nil && terminated.Value != "" {
 			fieldsTerminatedBy = terminated.Value
 		}
-		if enclosed := param.Extern.Tail.Fields.EnclosedBy; enclosed != nil && enclosed.Value != 0 {
+		if enclosed := extern.Tail.Fields.EnclosedBy; enclosed != nil && enclosed.Value != 0 {
 			fieldsEnclosedBy = string(enclosed.Value)
 		}
-		if escaped := param.Extern.Tail.Fields.EscapedBy; escaped != nil {
+		if escaped := extern.Tail.Fields.EscapedBy; escaped != nil {
 			if escaped.Value == 0 {
 				fieldsEscapedBy = ""
 			} else {
@@ -213,16 +242,16 @@ func newReaderWithParam(param *ExternalParam) (*csvparser.CSVParser, error) {
 		}
 	}
 
-	if param.Extern.Tail.Lines != nil {
-		if terminated := param.Extern.Tail.Lines.TerminatedBy; terminated != nil && terminated.Value != "" {
-			linesTerminatedBy = param.Extern.Tail.Lines.TerminatedBy.Value
+	if extern.Tail.Lines != nil {
+		if terminated := extern.Tail.Lines.TerminatedBy; terminated != nil && terminated.Value != "" {
+			linesTerminatedBy = extern.Tail.Lines.TerminatedBy.Value
 		}
-		if param.Extern.Tail.Lines.StartingBy != "" {
-			linesStartingBy = param.Extern.Tail.Lines.StartingBy
+		if extern.Tail.Lines.StartingBy != "" {
+			linesStartingBy = extern.Tail.Lines.StartingBy
 		}
 	}
 
-	if param.Extern.Format == tree.JSONLINE {
+	if extern.Format == tree.JSONLINE {
 		fieldsTerminatedBy = "\t"
 		fieldsEscapedBy = ""
 	}
@@ -239,7 +268,7 @@ func newReaderWithParam(param *ExternalParam) (*csvparser.CSVParser, error) {
 		Comment:            '#',
 	}
 
-	return csvparser.NewCSVParser(&config, bufio.NewReader(param.reader), csvparser.ReadBlockSize, false)
+	return csvparser.NewCSVParser(&config, bufio.NewReader(r), csvparser.ReadBlockSize, false)
 }
 
 type ParquetHandler struct {

@@ -327,6 +327,16 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 		return nil, nil, err
 	}
 
+	// Resolve temporary table alias in current session for internal SQL execution.
+	// This keeps CTAS follow-up INSERT in the same transaction workable for temp tables.
+	isTmpTable := false
+	if ses := c.proc.GetSession(); ses != nil {
+		if realName, ok := ses.GetTempTable(dbName, tableName); ok {
+			tableName = realName
+			isTmpTable = true
+		}
+	}
+
 	ctx, table, err := c.getRelation(dbName, tableName, snapshot)
 	if err != nil {
 		return nil, nil, err
@@ -336,7 +346,8 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 	}
 
 	tableDef := table.CopyTableDef(ctx)
-	if tableDef.IsTemporary {
+	if isTmpTable || tableDef.IsTemporary {
+		tableDef.IsTemporary = true
 		tableDef.Name = tableName
 	}
 	tableID := int64(table.GetTableID(ctx))

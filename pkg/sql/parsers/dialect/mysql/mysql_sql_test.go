@@ -263,6 +263,9 @@ var (
 		input:  "show variables like 'sql_mode'",
 		output: "show variables like sql_mode",
 	}, {
+		input:  "show global variables like 'interactive_timeout'",
+		output: "show global variables like interactive_timeout",
+	}, {
 		input:  "show index from t1 from db",
 		output: "show index from t1 from db",
 	}, {
@@ -2008,6 +2011,18 @@ var (
 			input:  `select json_extract(a, '$.b') from t`,
 			output: `select json_extract(a, $.b) from t`,
 		}, {
+			input:  `select JSON_OBJECT('key', 'value') -> '$.key' AS result1`,
+			output: `select json_extract(JSON_OBJECT(key, value), $.key) as result1`,
+		}, {
+			input:  `select a -> '$.b' from t`,
+			output: `select json_extract(a, $.b) from t`,
+		}, {
+			input:  `select JSON_OBJECT('key', 'value') ->> '$.key' AS result1`,
+			output: `select json_unquote(json_extract(JSON_OBJECT(key, value), $.key)) as result1`,
+		}, {
+			input:  `select a ->> '$.b' from t`,
+			output: `select json_unquote(json_extract(a, $.b)) from t`,
+		}, {
 			input: `create table t1 (a int, b uuid)`,
 		}, {
 			input: `create table t2 (a uuid primary key, b varchar(10))`,
@@ -2780,7 +2795,7 @@ var (
 		},
 		{
 			input:  "select $1 + $q$\\n\\t\\r\\b\\0\\_\\%\\\\$q$",
-			output: "select $1 + \\n\\t\\r\\b\\0\\_\\%\\\\",
+			output: "select $1 + \\\\n\\\\t\\\\r\\\\b\\\\0\\_\\%\\\\\\\\",
 		},
 		{
 			input:  "show table_size from test",
@@ -3339,6 +3354,22 @@ var (
 			input:  "create cdc cdc_tpcc 'mysql://sys#dump:111@127.0.0.1:6001' 'matrixone' 'mysql://sys#dump:111@127.0.0.1:6001' 'test_cdc:t1' {'Level'='database'} internal;",
 			output: "create cdc cdc_tpcc 'mysql://sys#dump:111@127.0.0.1:6001' 'matrixone' 'mysql://sys#dump:111@127.0.0.1:6001' 'test_cdc:t1' { \"Level\"='database'} internal",
 		},
+		{
+			input:  "select get_format(date, 'USA')",
+			output: "select get_format(DATE, USA)",
+		},
+		{
+			input:  "select get_format(time, 'EUR')",
+			output: "select get_format(TIME, EUR)",
+		},
+		{
+			input:  "select get_format(datetime, 'JIS')",
+			output: "select get_format(DATETIME, JIS)",
+		},
+		{
+			input:  "select get_format(timestamp, 'ISO')",
+			output: "select get_format(TIMESTAMP, ISO)",
+		},
 	}
 )
 
@@ -3359,6 +3390,16 @@ func TestValid(t *testing.T) {
 		}
 		ast.StmtKind()
 	}
+}
+
+func TestShowVariablesGlobalFlag(t *testing.T) {
+	ctx := context.TODO()
+	stmt, err := ParseOne(ctx, "show global variables like 'interactive_timeout'", 1)
+	require.NoError(t, err)
+
+	sv, ok := stmt.(*tree.ShowVariables)
+	require.True(t, ok)
+	require.True(t, sv.Global)
 }
 
 var (
@@ -3649,4 +3690,70 @@ func TestLimitByRank(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Test WITH clause support for INSERT statement (Issue #22583)
+func TestWithInsert(t *testing.T) {
+	tests := []struct {
+		input  string
+		output string
+	}{
+		{
+			input:  "WITH cte AS (SELECT * FROM t1) INSERT INTO t2 SELECT * FROM cte",
+			output: "with cte as (select * from t1) insert into t2 select * from cte",
+		},
+		{
+			input:  "WITH cte AS (SELECT id, name FROM t1 WHERE id > 10) INSERT INTO t2 SELECT * FROM cte",
+			output: "with cte as (select id, name from t1 where id > 10) insert into t2 select * from cte",
+		},
+		{
+			input:  "WITH cte1 AS (SELECT * FROM t1), cte2 AS (SELECT * FROM cte1) INSERT INTO t2 SELECT * FROM cte2",
+			output: "with cte1 as (select * from t1), cte2 as (select * from cte1) insert into t2 select * from cte2",
+		},
+		{
+			input:  "WITH RECURSIVE cte AS (SELECT 1 AS n UNION ALL SELECT n+1 FROM cte WHERE n < 10) INSERT INTO t SELECT * FROM cte",
+			output: "with recursive cte as (select 1 as n union all select n + 1 from cte where n < 10) insert into t select * from cte",
+		},
+		{
+			input:  "WITH cte AS (SELECT * FROM t1) INSERT INTO t2 (id, name) SELECT id, name FROM cte",
+			output: "with cte as (select * from t1) insert into t2 (id, name) select id, name from cte",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			ast, err := ParseOne(context.TODO(), test.input, 1)
+			require.NoError(t, err)
+			require.NotNil(t, ast)
+
+			// Verify it's an INSERT statement
+			ins, ok := ast.(*tree.Insert)
+			require.True(t, ok, "Expected *tree.Insert, got %T", ast)
+
+			// Verify WITH clause is present
+			require.NotNil(t, ins.With, "INSERT.With should not be nil")
+			require.Greater(t, len(ins.With.CTEs), 0, "WITH clause should have at least one CTE")
+
+			// Verify the statement can be formatted back
+			output := tree.String(ast, dialect.MYSQL)
+			require.Equal(t, test.output, output)
+		})
+	}
+}
+
+// Test that WITH clause is properly passed to SELECT in INSERT
+func TestWithInsertCTEPropagation(t *testing.T) {
+	sql := "WITH cte AS (SELECT * FROM t1) INSERT INTO t2 SELECT * FROM cte"
+	ast, err := ParseOne(context.TODO(), sql, 1)
+	require.NoError(t, err)
+
+	ins, ok := ast.(*tree.Insert)
+	require.True(t, ok)
+	require.NotNil(t, ins.With)
+	require.Equal(t, 1, len(ins.With.CTEs))
+	require.Equal(t, "cte", string(ins.With.CTEs[0].Name.Alias))
+
+	// Verify Rows is a SELECT statement
+	require.NotNil(t, ins.Rows)
+	require.NotNil(t, ins.Rows.Select)
 }

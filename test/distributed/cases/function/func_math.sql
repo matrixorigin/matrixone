@@ -43,27 +43,24 @@ select abs(tan(d))*2 from t1;
 
 -- @suite
 -- @setup
--- @bvt:issue#10748
 drop table if exists ceil;
-create table ceil(id int,d int,dl double,fl float,de decimal);
+create table ceil(id int primary key,d int,dl double,fl float,de decimal);
 insert into ceil values(1,5,5,-5.5,-5.5);
 insert into ceil values(2,-2,18446744073709551614,-2.5,-5.2);
-insert into ceil values(2,-1,18446744073709551614,1.23,-1.23);
-insert into ceil values(2,-1,1844674407370955161,1.23,-1.23);
-insert into ceil values(2,-1,-9223372036854775808,1.23,-1.23);
-insert into ceil values(2,-1,-184467440737095516,1.23,-1.23);
-insert into ceil values(2,-1,-922337203685477580,1.23,-1.23);
-insert into ceil values(2,-1,-922337203685477580,1.23,-1.23);
-insert into ceil values(2,-1,-99999999999999999.9,1.23,-1.23);
-insert into ceil values(2,-1,-99999999999999999.9,1.23,-1.23);
+insert into ceil values(3,-1,18446744073709551614,1.23,-1.23);
+insert into ceil values(4,-1,1844674407370955161,1.23,-1.23);
+insert into ceil values(5,-1,-9223372036854775808,1.23,-1.23);
+insert into ceil values(6,-1,-184467440737095516,1.23,-1.23);
+insert into ceil values(7,-1,-922337203685477580,1.23,-1.23);
+insert into ceil values(8,-1,-922337203685477580,1.23,-1.23);
+insert into ceil values(9,-1,-99999999999999999.9,1.23,-1.23);
+insert into ceil values(10,-1,-99999999999999999.9,1.23,-1.23);
 
 -- @case
 -- @desc:test for abs
 -- @label:bvt
-select ceil(d),ceil(dl),ceil(fl) from ceil;
-
+select id,ceil(d),ceil(dl),ceil(fl) from ceil;
 
 drop table t1;
 drop table ceil;
 drop table abs;
--- @bvt:issue

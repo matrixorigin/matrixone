@@ -33,6 +33,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -2545,8 +2546,10 @@ func (d *dynamicCtx) statsCalculateOp(
 
 	born := time.Now()
 
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
 	// Use the new CalculateTableStats function in partition state
-	stats, err := pState.CalculateTableStats(ctx, snapshot, fs)
+	stats, err := pState.CalculateTableStats(ctx, snapshot, fs, mp)
 	if err != nil {
 		return sl, err
 	}
