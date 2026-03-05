@@ -522,7 +522,7 @@ func fillOutputBatchBySelectedRows(
 	outputBat *batch.Batch,
 	cacheVectors containers.Vectors,
 	selectRows []int64,
-	orderByLimit *objectio.BlockReadTopOp,
+	orderByLimit *objectio.IndexReaderTopOp,
 	dists []float64,
 	mp *mpool.MPool,
 ) (err error) {
