@@ -50,14 +50,10 @@ const (
 var running atomic.Bool
 
 const (
-	DefaultGCInterval       = time.Hour
-	DefaultGCTTL            = time.Hour * 24 * 7 // 7 days
-	DefaultSyncTaskInterval = time.Second * 10
-	DefaultRetryTimes       = 5
-	DefaultRetryInterval    = time.Second
-	DefaultRetryDuration    = time.Minute * 10
-	SnapshotThreshold       = time.Hour * 24     // 1 day
-	SnapshotGCThreshold     = time.Hour * 24 * 3 // 3 days for ccpr snapshot GC
+	// These are kept for backward compatibility, prefer using config center
+	DefaultRetryDuration = time.Minute * 10
+	SnapshotThreshold    = time.Hour * 24     // 1 day
+	SnapshotGCThreshold  = time.Hour * 24 * 3 // 3 days for ccpr snapshot GC
 )
 
 // ExecutorRetryOption configures retry behavior for executor operations
@@ -70,8 +66,8 @@ type ExecutorRetryOption struct {
 // DefaultExecutorRetryOption returns default retry options for executor
 func DefaultExecutorRetryOption() *ExecutorRetryOption {
 	return &ExecutorRetryOption{
-		RetryTimes:    DefaultRetryTimes,
-		RetryInterval: DefaultRetryInterval,
+		RetryTimes:    GetRetryTimes(),
+		RetryInterval: GetRetryInterval(),
 		RetryDuration: DefaultRetryDuration,
 	}
 }
@@ -145,13 +141,13 @@ func fillDefaultOption(option *PublicationExecutorOption) *PublicationExecutorOp
 		option = &PublicationExecutorOption{}
 	}
 	if option.GCInterval == 0 {
-		option.GCInterval = DefaultGCInterval
+		option.GCInterval = GetGCInterval()
 	}
 	if option.GCTTL == 0 {
-		option.GCTTL = DefaultGCTTL
+		option.GCTTL = GetGCTTL()
 	}
 	if option.SyncTaskInterval == 0 {
-		option.SyncTaskInterval = DefaultSyncTaskInterval
+		option.SyncTaskInterval = GetSyncTaskInterval()
 	}
 	if option.RetryOption == nil {
 		option.RetryOption = DefaultExecutorRetryOption()

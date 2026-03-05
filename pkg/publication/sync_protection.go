@@ -30,13 +30,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
-const (
-	// SyncProtectionTTLDuration is the TTL duration for sync protection
-	SyncProtectionTTLDuration = 15 * time.Minute
-
-	// SyncProtectionRenewInterval is the interval for renewing sync protection
-	SyncProtectionRenewInterval = 5 * time.Minute
-)
+// Note: SyncProtectionTTLDuration and SyncProtectionRenewInterval are now
+// managed through the config center. Use GetSyncProtectionTTLDuration() and
+// GetSyncProtectionRenewInterval() to access their values.
 
 // RegisterSyncProtectionOnDownstreamFn is a function variable that can be stubbed in tests
 var RegisterSyncProtectionOnDownstreamFn = func(
@@ -48,14 +44,9 @@ var RegisterSyncProtectionOnDownstreamFn = func(
 	return registerSyncProtectionOnDownstreamImpl(ctx, downstreamExecutor, objectMap, mp)
 }
 
-const (
-
-	// BloomFilterExpectedItems is the expected number of items in bloom filter
-	BloomFilterExpectedItems = 100000
-
-	// BloomFilterFalsePositiveRate is the false positive rate for bloom filter
-	BloomFilterFalsePositiveRate = 0.01
-)
+// Note: BloomFilterExpectedItems and BloomFilterFalsePositiveRate are now
+// managed through the config center. Use GetBloomFilterExpectedItems() and
+// GetBloomFilterFalsePositiveRate() to access their values.
 
 // GCStatus represents the response from gc_status mo_ctl command
 type GCStatus struct {
@@ -261,13 +252,14 @@ func BuildBloomFilterFromObjectMap(objectMap map[objectio.ObjectId]*ObjectWithTa
 		return "", nil
 	}
 
-	// Create bloom filter with appropriate size
+	// Create bloom filter with appropriate size from config
 	expectedItems := len(objectMap)
-	if expectedItems < BloomFilterExpectedItems {
-		expectedItems = BloomFilterExpectedItems
+	configExpectedItems := GetBloomFilterExpectedItems()
+	if expectedItems < configExpectedItems {
+		expectedItems = configExpectedItems
 	}
 
-	bf := bloomfilter.New(int64(expectedItems), BloomFilterFalsePositiveRate)
+	bf := bloomfilter.New(int64(expectedItems), GetBloomFilterFalsePositiveRate())
 
 	// Add all object names (strings) to bloom filter
 	vec := vector.NewVec(types.T_varchar.ToType())
@@ -380,7 +372,7 @@ func registerSyncProtectionOnDownstreamImpl(
 	}
 
 	// 3. Register protection on downstream
-	ttlExpireTS = time.Now().Add(SyncProtectionTTLDuration).UnixNano()
+	ttlExpireTS = time.Now().Add(GetSyncProtectionTTLDuration()).UnixNano()
 	err = RegisterSyncProtection(ctx, downstreamExecutor, jobID, bfBase64, gcStatus.TS, ttlExpireTS)
 	if err != nil {
 		retryable = IsGCRunningError(err) || IsSyncProtectionMaxCountError(err)

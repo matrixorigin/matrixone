@@ -32,11 +32,6 @@ import (
 )
 
 const (
-	PublicationWorkerThread  = 10
-	FilterObjectWorkerThread = 1000
-	GetChunkWorkerThread     = 10
-	WriteObjectWorkerThread  = 100
-
 	SubmitRetryTimes    = 1000
 	SubmitRetryDuration = time.Hour
 
@@ -415,7 +410,7 @@ func (w *worker) RunStatsPrinter() {
 }
 
 func (w *worker) Run() {
-	for i := 0; i < PublicationWorkerThread; i++ {
+	for i := 0; i < GetPublicationWorkerThread(); i++ {
 		w.wg.Add(1)
 		go func() {
 			defer w.wg.Done()
@@ -446,7 +441,7 @@ func (w *worker) onItem(taskCtx *TaskContext) {
 	// Create retry option for executor operations
 	executorRetryOpt := &ExecutorRetryOption{
 		RetryTimes:    SubmitRetryTimes,
-		RetryInterval: DefaultRetryInterval,
+		RetryInterval: GetRetryInterval(),
 		RetryDuration: SubmitRetryDuration,
 	}
 
@@ -623,7 +618,7 @@ func NewFilterObjectWorker() FilterObjectWorker {
 }
 
 func (w *filterObjectWorker) Run() {
-	for i := 0; i < FilterObjectWorkerThread; i++ {
+	for i := 0; i < GetFilterObjectWorkerThread(); i++ {
 		w.wg.Add(1)
 		go func() {
 			defer w.wg.Done()
@@ -680,7 +675,7 @@ func NewGetChunkWorker() GetChunkWorker {
 }
 
 func (w *getChunkWorker) Run() {
-	workerThreadCount := GetChunkWorkerThread
+	workerThreadCount := GetGetChunkWorkerThread()
 	for i := 0; i < workerThreadCount; i++ {
 		w.wg.Add(1)
 		go func() {
@@ -833,7 +828,7 @@ func NewWriteObjectWorker() WriteObjectWorker {
 	return &writeObjectWorker{
 		simpleJobWorker: newSimpleJobWorker(
 			"WriteObjectWorker",
-			WriteObjectWorkerThread,
+			GetWriteObjectWorkerThread(),
 			globalJobStats.IncrementWriteObjectPending,
 			globalJobStats.IncrementWriteObjectRunning,
 			globalJobStats.DecrementWriteObjectRunning,

@@ -32,12 +32,12 @@ func (m *mockClassifier) IsRetryable(err error) bool {
 }
 
 func TestBuildErrorMetadata_OldRetryCountExceedsThreshold_Retryable(t *testing.T) {
-	// Test case: old.RetryCount > RetryThreshold with retryable error
+	// Test case: old.RetryCount > GetRetryThreshold() with retryable error
 	// Covers lines 125-135: should reset count to 1
 	oldTime := time.Now().Add(-time.Hour)
 	old := &ErrorMetadata{
 		IsRetryable: true,
-		RetryCount:  RetryThreshold + 1, // exceeds threshold
+		RetryCount:  GetRetryThreshold() + 1, // exceeds threshold
 		FirstSeen:   oldTime,
 		LastSeen:    oldTime,
 		Message:     "old error",
@@ -57,12 +57,12 @@ func TestBuildErrorMetadata_OldRetryCountExceedsThreshold_Retryable(t *testing.T
 }
 
 func TestBuildErrorMetadata_OldRetryCountExceedsThreshold_NonRetryable(t *testing.T) {
-	// Test case: old.RetryCount > RetryThreshold with non-retryable error
+	// Test case: old.RetryCount > GetRetryThreshold() with non-retryable error
 	// Covers lines 125-135: should reset count to 1, no retry
 	oldTime := time.Now().Add(-time.Hour)
 	old := &ErrorMetadata{
 		IsRetryable: true,
-		RetryCount:  RetryThreshold + 1,
+		RetryCount:  GetRetryThreshold() + 1,
 		FirstSeen:   oldTime,
 		LastSeen:    oldTime,
 		Message:     "old error",
@@ -110,7 +110,7 @@ func TestBuildErrorMetadata_SameErrorType_Retryable_ReachesThreshold(t *testing.
 	oldTime := time.Now().Add(-time.Hour)
 	old := &ErrorMetadata{
 		IsRetryable: true,
-		RetryCount:  RetryThreshold, // at threshold
+		RetryCount:  GetRetryThreshold(), // at threshold
 		FirstSeen:   oldTime,
 		LastSeen:    oldTime,
 		Message:     "old error",
@@ -121,10 +121,10 @@ func TestBuildErrorMetadata_SameErrorType_Retryable_ReachesThreshold(t *testing.
 	meta, shouldRetry := BuildErrorMetadata(old, err, classifier)
 
 	assert.NotNil(t, meta)
-	assert.Equal(t, RetryThreshold+1, meta.RetryCount) // exceeded threshold
-	assert.False(t, meta.IsRetryable)                  // IsRetryable = isRetryable && shouldRetry
-	assert.False(t, shouldRetry)                       // count > threshold
-	assert.Equal(t, oldTime, meta.FirstSeen)           // FirstSeen preserved
+	assert.Equal(t, GetRetryThreshold()+1, meta.RetryCount) // exceeded threshold
+	assert.False(t, meta.IsRetryable)                       // IsRetryable = isRetryable && shouldRetry
+	assert.False(t, shouldRetry)                            // count > threshold
+	assert.Equal(t, oldTime, meta.FirstSeen)                // FirstSeen preserved
 }
 
 func TestBuildErrorMetadata_SameErrorType_NonRetryable(t *testing.T) {

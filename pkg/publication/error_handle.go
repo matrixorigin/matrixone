@@ -88,10 +88,8 @@ func Parse(errMsg string) *ErrorMetadata {
 	}
 }
 
-const (
-	// RetryThreshold is the maximum number of retries before stopping
-	RetryThreshold = 10
-)
+// Note: RetryThreshold is now managed through the config center.
+// Use GetRetryThreshold() to access its value.
 
 // BuildErrorMetadata builds new metadata based on old metadata and new error
 // It uses the classifier to determine if the error is retryable
@@ -107,10 +105,12 @@ func BuildErrorMetadata(old *ErrorMetadata, err error, classifier ErrorClassifie
 		isRetryable = classifier.IsRetryable(err)
 	}
 
+	threshold := GetRetryThreshold()
+
 	// New error (no previous metadata)
 	if old == nil {
 		retryCount := 1
-		shouldRetry := isRetryable && retryCount <= RetryThreshold
+		shouldRetry := isRetryable && retryCount <= threshold
 		return &ErrorMetadata{
 			IsRetryable: isRetryable && shouldRetry,
 			RetryCount:  retryCount,
@@ -122,9 +122,9 @@ func BuildErrorMetadata(old *ErrorMetadata, err error, classifier ErrorClassifie
 
 	// Check if previous retry count exceeded threshold
 	// If so, reset count even if error type is the same
-	if old.RetryCount > RetryThreshold {
+	if old.RetryCount > threshold {
 		retryCount := 1
-		shouldRetry := isRetryable && retryCount <= RetryThreshold
+		shouldRetry := isRetryable && retryCount <= threshold
 		return &ErrorMetadata{
 			IsRetryable: isRetryable && shouldRetry,
 			RetryCount:  retryCount,
@@ -137,7 +137,7 @@ func BuildErrorMetadata(old *ErrorMetadata, err error, classifier ErrorClassifie
 	// Same error type, increment retry count
 	if old.IsRetryable == isRetryable {
 		retryCount := old.RetryCount + 1
-		shouldRetry := isRetryable && retryCount <= RetryThreshold
+		shouldRetry := isRetryable && retryCount <= threshold
 		return &ErrorMetadata{
 			IsRetryable: isRetryable && shouldRetry,
 			RetryCount:  retryCount,
@@ -149,7 +149,7 @@ func BuildErrorMetadata(old *ErrorMetadata, err error, classifier ErrorClassifie
 
 	// Error type changed, reset count
 	retryCount := 1
-	shouldRetry := isRetryable && retryCount <= RetryThreshold
+	shouldRetry := isRetryable && retryCount <= threshold
 	return &ErrorMetadata{
 		IsRetryable: isRetryable && shouldRetry,
 		RetryCount:  retryCount,

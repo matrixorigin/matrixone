@@ -16,6 +16,7 @@ package publication
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,17 +35,24 @@ const (
 	JobTypeWriteObject  int8 = 4
 )
 
-const (
-	// getChunkMaxMemory is the maximum memory for concurrent GetChunkJob operations (1GB)
-	GetChunkMaxMemory = 3 * 1024 * 1024 * 1024
-	// getChunkSize is the size of each chunk (100MB)
-	GetChunkSize = 100 * 1024 * 1024
-	// getChunkMaxConcurrent is the maximum concurrent chunk reads (1GB / 100MB = 10)
-	getChunkMaxConcurrent = GetChunkMaxMemory / GetChunkSize
+var (
+	// getChunkSemaphore limits concurrent memory usage for GetChunkJob
+	// Initialized lazily based on configuration
+	getChunkSemaphore     chan struct{}
+	getChunkSemaphoreOnce sync.Once
 )
 
-// getChunkSemaphore limits concurrent memory usage for GetChunkJob (1GB max)
-var getChunkSemaphore = make(chan struct{}, getChunkMaxConcurrent)
+// getOrCreateChunkSemaphore returns the chunk semaphore, creating it if necessary
+func getOrCreateChunkSemaphore() chan struct{} {
+	getChunkSemaphoreOnce.Do(func() {
+		maxConcurrent := GetGlobalConfig().GetChunkMaxConcurrent()
+		if maxConcurrent <= 0 {
+			maxConcurrent = 30 // fallback default
+		}
+		getChunkSemaphore = make(chan struct{}, maxConcurrent)
+	})
+	return getChunkSemaphore
+}
 
 // Job is an interface for async jobs
 type Job interface {
@@ -168,16 +176,17 @@ func NewGetChunkJob(ctx context.Context, upstreamExecutor SQLExecutor, objectNam
 func (j *GetChunkJob) Execute() {
 	res := &GetChunkJobResult{ChunkIndex: j.chunkIndex}
 
-	// Acquire semaphore for memory control (blocks if 1GB limit reached)
+	// Acquire semaphore for memory control (blocks if max concurrent limit reached)
+	sem := getOrCreateChunkSemaphore()
 	select {
-	case getChunkSemaphore <- struct{}{}:
+	case sem <- struct{}{}:
 		// acquired
 	case <-j.ctx.Done():
 		res.Err = j.ctx.Err()
 		j.result <- res
 		return
 	}
-	defer func() { <-getChunkSemaphore }()
+	defer func() { <-sem }()
 
 	getChunkSQL := PublicationSQLBuilder.GetObjectSQL(j.subscriptionAccountName, j.pubName, j.objectName, j.chunkIndex)
 	result, cancel, err := j.upstreamExecutor.ExecSQL(j.ctx, nil, InvalidAccountID, getChunkSQL, false, true, time.Minute)
