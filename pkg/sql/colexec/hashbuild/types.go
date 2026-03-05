@@ -113,7 +113,7 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 	hashBuild.ctr.state = BuildHashMap
 	hashBuild.ctr.runtimeFilterIn = false
 	message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, runtimeSucceed, proc.GetMessageBoard())
-	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), hashBuild.JoinMapTag, false, 0, mapSucceed)
+	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), hashBuild.JoinMapTag, hashBuild.IsShuffle, hashBuild.ShuffleIdx, mapSucceed)
 }
 func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
 	hashBuild.cleanupSpillFiles(proc)
