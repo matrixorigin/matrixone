@@ -17,15 +17,20 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -590,4 +595,95 @@ func TestDataBranchOutputAppenderAppendRowAndFlushAll(t *testing.T) {
 func TestDataBranchOutputNewSingleWriteAppenderNilWorker(t *testing.T) {
 	_, _, err := newSingleWriteAppender(context.Background(), nil, nil, "unused", nil)
 	require.Error(t, err)
+}
+
+func TestDataBranchOutputNewSingleWriteAppenderSuccess(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "diff.sql")
+
+	etlFS, targetPath, err := fileservice.GetForETL(ctx, nil, filePath)
+	require.NoError(t, err)
+
+	pool, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer pool.Release()
+
+	called := false
+	writeFile, release, err := newSingleWriteAppender(ctx, pool, etlFS, targetPath, func() {
+		called = true
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, writeFile([]byte("BEGIN;\n")))
+	require.NoError(t, writeFile([]byte("COMMIT;\n")))
+	release()
+	require.False(t, called)
+
+	content, err := os.ReadFile(filePath)
+	require.NoError(t, err)
+	require.Equal(t, "BEGIN;\nCOMMIT;\n", string(content))
+}
+
+type failingWriteFS struct {
+	fileservice.FileService
+}
+
+func (fs *failingWriteFS) Write(ctx context.Context, vector fileservice.IOVector) error {
+	return moerr.NewInternalErrorNoCtx("mock write failure")
+}
+
+func TestDataBranchOutputNewSingleWriteAppenderWriteFail(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "diff.sql")
+
+	etlFS, _, err := fileservice.GetForETL(ctx, nil, filePath)
+	require.NoError(t, err)
+
+	pool, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer pool.Release()
+
+	called := false
+	writeFile, release, err := newSingleWriteAppender(
+		ctx,
+		pool,
+		&failingWriteFS{FileService: etlFS},
+		"diff.sql",
+		func() { called = true },
+	)
+	require.NoError(t, err)
+
+	_ = writeFile([]byte("SOME SQL;\n"))
+	release()
+	require.True(t, called)
+}
+
+func TestDataBranchOutputNewSingleWriteAppenderSubmitFail(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "diff.sql")
+
+	etlFS, _, err := fileservice.GetForETL(ctx, nil, filePath)
+	require.NoError(t, err)
+
+	pool, err := ants.NewPool(1)
+	require.NoError(t, err)
+	pool.Release()
+
+	_, _, err = newSingleWriteAppender(ctx, pool, etlFS, "diff.sql", nil)
+	require.Error(t, err)
+}
+
+func TestDataBranchOutputRemoveFileIgnoreError(t *testing.T) {
+	ctx := context.Background()
+	filePath := filepath.Join(t.TempDir(), "diff.sql")
+	require.NoError(t, os.WriteFile(filePath, []byte("x"), 0o644))
+
+	removeFileIgnoreError(ctx, "", filePath)
+
+	_, err := os.Stat(filePath)
+	require.Error(t, err)
+	require.True(t, os.IsNotExist(err))
 }
