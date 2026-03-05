@@ -34,7 +34,7 @@ func TestFillOutputBatchBySelectedRows(t *testing.T) {
 	t.Run("basic_no_phyaddr_no_orderbylimit", func(t *testing.T) {
 		vec0 := vector.NewVec(types.T_int32.ToType())
 		vec1 := vector.NewVec(types.T_varchar.ToType())
-		
+
 		for i := 0; i < 10; i++ {
 			vector.AppendFixed(vec0, int32(i), false, mp)
 			vector.AppendBytes(vec1, []byte("test"), false, mp)
@@ -65,7 +65,7 @@ func TestFillOutputBatchBySelectedRows(t *testing.T) {
 	t.Run("with_orderbylimit", func(t *testing.T) {
 		vec0 := vector.NewVec(types.T_int32.ToType())
 		vec1 := vector.NewVec(types.T_array_float32.ToType())
-		
+
 		for i := 0; i < 10; i++ {
 			vector.AppendFixed(vec0, int32(i), false, mp)
 			vector.AppendBytes(vec1, types.ArrayToBytes[float32]([]float32{0.1, 0.2}), false, mp)
@@ -126,7 +126,7 @@ func TestFillOutputBatchBySelectedRows(t *testing.T) {
 	t.Run("with_orderbylimit_distvec_exists", func(t *testing.T) {
 		vec0 := vector.NewVec(types.T_int32.ToType())
 		vec1 := vector.NewVec(types.T_array_float32.ToType())
-		
+
 		for i := 0; i < 10; i++ {
 			vector.AppendFixed(vec0, int32(i), false, mp)
 			vector.AppendBytes(vec1, types.ArrayToBytes[float32]([]float32{0.1, 0.2}), false, mp)
