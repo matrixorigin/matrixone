@@ -83,7 +83,7 @@ func TestFillOutputBatchBySelectedRows(t *testing.T) {
 		columns := []uint16{0, 1}
 		dists := []float64{0.5, 0.8}
 
-		orderByLimit := &objectio.IndexReaderTopOp{ColPos: 1, Limit: 2}
+		orderByLimit := &objectio.BlockReadTopOp{ColPos: 1, Limit: 2}
 		info := &objectio.BlockInfo{}
 
 		err := fillOutputBatchBySelectedRows(
@@ -145,7 +145,7 @@ func TestFillOutputBatchBySelectedRows(t *testing.T) {
 		columns := []uint16{0, 1}
 		dists := []float64{0.5, 0.8}
 
-		orderByLimit := &objectio.IndexReaderTopOp{ColPos: 1, Limit: 2}
+		orderByLimit := &objectio.BlockReadTopOp{ColPos: 1, Limit: 2}
 		info := &objectio.BlockInfo{}
 
 		err := fillOutputBatchBySelectedRows(
