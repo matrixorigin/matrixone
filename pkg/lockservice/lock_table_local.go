@@ -787,46 +787,55 @@ func (l *localLockTable) mustGetRangeStart(endKey []byte) []byte {
 // independent Lock.value bytes. When setMode updates one end, this helper
 // finds and updates the other end so both entries have a consistent mode.
 // It is a no-op for row locks.
+// setModePairedRangeLock updates the paired range lock entry's mode to keep
+// both ends consistent. For range-end it scans backward to find range-start;
+// for range-start it scans forward to find range-end.
 func (l *localLockTable) setModePairedRangeLock(key []byte, lock Lock, mode pb.LockMode) {
 	if lock.isLockRow() {
 		return
 	}
+	pairedKey, pairedLock, ok := l.findPairedRangeLock(key, lock)
+	if !ok {
+		return
+	}
+	if updated, changed := pairedLock.setMode(mode); changed {
+		l.mu.store.Add(pairedKey, updated)
+	}
+}
+
+// findPairedRangeLock locates the other end of a range lock pair.
+// Between range-start and range-end there may be interleaved row locks
+// from other transactions, so we scan until we find the matching entry.
+func (l *localLockTable) findPairedRangeLock(key []byte, lock Lock) ([]byte, Lock, bool) {
 	if lock.isLockRangeEnd() {
-		// Find the paired range-start via Prev. Between range-start and
-		// range-end there may be row locks from other transactions, so we
-		// scan backwards until we find a range-start entry.
 		cur := key
 		for {
 			prevKey, prevLock, ok := l.mu.store.Prev(cur)
 			if !ok {
-				return
+				return nil, Lock{}, false
 			}
 			if prevLock.isLockRangeStart() {
-				if updated, changed := prevLock.setMode(mode); changed {
-					l.mu.store.Add(prevKey, updated)
-				}
-				return
+				return prevKey, prevLock, true
 			}
 			cur = prevKey
 		}
-	} else if lock.isLockRangeStart() {
-		// Find the paired range-end. Between range-start and range-end
-		// there may be row locks from other transactions, so we scan
-		// forward until we find a range-end entry.
-		l.mu.store.Range(
-			nextKey(key, nil),
-			nil,
-			func(k []byte, v Lock) bool {
-				if v.isLockRangeEnd() {
-					if updated, changed := v.setMode(mode); changed {
-						l.mu.store.Add(k, updated)
-					}
-					return false // stop
-				}
-				return true // keep scanning
-			},
-		)
 	}
+	// isLockRangeStart: scan forward
+	var pairedKey []byte
+	var pairedLock Lock
+	var found bool
+	l.mu.store.Range(
+		nextKey(key, nil),
+		nil,
+		func(k []byte, v Lock) bool {
+			if v.isLockRangeEnd() {
+				pairedKey, pairedLock, found = k, v, true
+				return false
+			}
+			return true
+		},
+	)
+	return pairedKey, pairedLock, found
 }
 
 func nextKey(src, dst []byte) []byte {
