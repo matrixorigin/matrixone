@@ -434,7 +434,15 @@ func (c *clientConn) handleQuitEvent(ctx context.Context) error {
 	c.quit.once.Do(func() {
 		// Get server->client pipe and set it to pause.
 		_, scp := c.tun.getPipes()
-		if err := scp.pause(ctx); err != nil {
+		// Quit handling is synchronous. Bound pause wait time to avoid hanging
+		// the close path if the pipe cannot reach paused state.
+		pauseCtx := ctx
+		if pauseCtx == nil {
+			pauseCtx = context.Background()
+		}
+		pauseCtx, cancel := context.WithTimeout(pauseCtx, defaultTransferTimeout)
+		defer cancel()
+		if err := scp.pause(pauseCtx); err != nil {
 			if err := c.sc.Quit(); err != nil {
 				c.log.Error("failed to quit from cn server", zap.Error(err))
 			}

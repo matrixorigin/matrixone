@@ -879,6 +879,9 @@ func cloneDaemonTaskDetails(d *task.Details) *task.Details {
 	if d == nil {
 		return &task.Details{}
 	}
+	// Shallow copy is enough for current use because callers only mutate the
+	// top-level Error field. If nested mutable fields are updated in future,
+	// this should be changed to a deep copy.
 	clone := *d
 	return &clone
 }

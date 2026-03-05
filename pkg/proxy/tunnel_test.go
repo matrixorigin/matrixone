@@ -31,53 +31,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 )
-
-type transferRouteErrRouter struct{}
-
-func (router *transferRouteErrRouter) Route(
-	_ context.Context, _ string, _ clientInfo, _ func(string) bool,
-) (*CNServer, error) {
-	return nil, moerr.NewInternalErrorNoCtx("route failed in transfer")
-}
-
-func (router *transferRouteErrRouter) SelectByConnID(_ uint32) (*CNServer, error) {
-	return nil, nil
-}
-
-func (router *transferRouteErrRouter) AllServers(_ string) ([]*CNServer, error) {
-	return nil, nil
-}
-
-func (router *transferRouteErrRouter) Connect(
-	_ *CNServer, _ *frontend.Packet, _ *tunnel,
-) (ServerConn, []byte, error) {
-	return nil, nil, nil
-}
-
-type transferPopCountConnCache struct {
-	popCount int
-}
-
-func (c *transferPopCountConnCache) Push(cacheKey, ServerConn) bool {
-	return false
-}
-
-func (c *transferPopCountConnCache) Pop(cacheKey, uint32, []byte, []byte) ServerConn {
-	c.popCount++
-	return nil
-}
-
-func (c *transferPopCountConnCache) Count() int {
-	return 0
-}
-
-func (c *transferPopCountConnCache) Close() error {
-	return nil
-}
 
 func TestTunnelClientToServer(t *testing.T) {
 	defer leaktest.AfterTest(t)()
@@ -468,6 +424,35 @@ func TestPipeStart(t *testing.T) {
 		}
 	}, 10*time.Second, 100*time.Millisecond)
 	require.NoError(t, lastErr)
+}
+
+func TestPipePauseTimeout(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	clientProxy, serverProxy := net.Pipe()
+	defer clientProxy.Close()
+	defer serverProxy.Close()
+
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	logger := rt.Logger()
+	tun := newTunnel(context.Background(), logger, newCounterSet())
+
+	cc := newMySQLConn("client", clientProxy, 0, nil, nil, false, 0)
+	sc := newMySQLConn("server", serverProxy, 0, nil, nil, false, 0)
+	p := tun.newPipe(pipeClientToServer, cc, sc)
+
+	p.mu.Lock()
+	p.mu.started = true
+	p.mu.Unlock()
+
+	start := time.Now()
+	err := p.pause(ctx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(start), time.Second)
 }
 
 func TestPipeStartAndPause(t *testing.T) {
@@ -894,12 +879,12 @@ func TestTransferSync_SkipCachePopOnMigration(t *testing.T) {
 
 	ctx := context.Background()
 	tun := newTunnel(ctx, rt.Logger(), newCounterSet())
-	cache := &transferPopCountConnCache{}
+	cache := &popCountConnCache{}
 
 	cc := &clientConn{
 		ctx:        ctx,
 		log:        rt.Logger(),
-		router:     &transferRouteErrRouter{},
+		router:     &routeErrRouter{errMsg: "route failed in transfer"},
 		mysqlProto: &frontend.MysqlProtocolImpl{},
 		connCache:  cache,
 	}

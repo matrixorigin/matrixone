@@ -607,45 +607,6 @@ func (router *testRouter) Connect(c *CNServer, handshakeResp *frontend.Packet, t
 	return newMockServerConn(nil), nil, nil
 }
 
-type routeErrRouter struct{}
-
-func (router *routeErrRouter) Route(ctx context.Context, sid string, client clientInfo, filter func(string) bool) (*CNServer, error) {
-	return nil, moerr.NewInternalErrorNoCtx("route failed")
-}
-
-func (router *routeErrRouter) SelectByConnID(connID uint32) (*CNServer, error) {
-	return nil, nil
-}
-
-func (router *routeErrRouter) AllServers(sid string) ([]*CNServer, error) {
-	return nil, nil
-}
-
-func (router *routeErrRouter) Connect(c *CNServer, handshakeResp *frontend.Packet, t *tunnel) (ServerConn, []byte, error) {
-	return nil, nil, nil
-}
-
-type popCountConnCache struct {
-	popCount int
-}
-
-func (c *popCountConnCache) Push(cacheKey, ServerConn) bool {
-	return false
-}
-
-func (c *popCountConnCache) Pop(cacheKey, uint32, []byte, []byte) ServerConn {
-	c.popCount++
-	return nil
-}
-
-func (c *popCountConnCache) Count() int {
-	return 0
-}
-
-func (c *popCountConnCache) Close() error {
-	return nil
-}
-
 var _ client.QueryClient = &testQueryClient{}
 
 type testQueryClient struct {
