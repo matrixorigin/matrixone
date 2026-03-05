@@ -250,8 +250,6 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 		buf.WriteString("'")
 		buf.WriteString(val.(types.Date).String())
 		buf.WriteString("'")
-	case types.T_year:
-		buf.WriteString(val.(types.MoYear).String())
 	case types.T_decimal64:
 		buf.WriteString(val.(types.Decimal64).Format(t.Scale))
 	case types.T_decimal128:
@@ -487,11 +485,6 @@ func compareSingleValInVector(
 		return types.CompareValue(
 			vector.GetFixedAtNoTypeCheck[types.Timestamp](vec1, rowIdx1),
 			vector.GetFixedAtNoTypeCheck[types.Timestamp](vec2, rowIdx2),
-		), nil
-	case types.T_year:
-		return types.CompareValue(
-			vector.GetFixedAtNoTypeCheck[types.MoYear](vec1, rowIdx1),
-			vector.GetFixedAtNoTypeCheck[types.MoYear](vec2, rowIdx2),
 		), nil
 	case types.T_decimal64:
 		return types.CompareValue(

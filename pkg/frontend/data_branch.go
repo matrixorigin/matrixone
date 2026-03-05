@@ -97,9 +97,9 @@ func (a *branchHashmapAllocator) Allocate(
 	}, nil
 }
 
-func (d *branchHashmapDeallocator) Deallocate() {
+func (d *branchHashmapDeallocator) Deallocate(hints malloc.Hints) {
 	if d.upstream != nil {
-		d.upstream.Deallocate()
+		d.upstream.Deallocate(hints)
 	}
 	if d.throttler != nil && d.size > 0 {
 		d.throttler.Release(int64(d.size))
@@ -317,10 +317,6 @@ func dataBranchCreateTable(
 		}
 	}()
 
-	if err = checkBranchQuota(execCtx.reqCtx, ses, bh, 1); err != nil {
-		return err
-	}
-
 	cloneStmt = &tree.CloneTable{
 		SrcTable:     stmt.SrcTable,
 		CreateTable:  stmt.CreateTable,
@@ -386,10 +382,6 @@ func dataBranchCreateDatabase(
 
 	if receipts, err = handleCloneDatabase(execCtx, ses, bh, &stmt.CloneDatabase); err != nil {
 		return
-	}
-
-	if err = checkBranchQuota(execCtx.reqCtx, ses, bh, int64(len(receipts))); err != nil {
-		return err
 	}
 
 	for _, rcpt := range receipts {
