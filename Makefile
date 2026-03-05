@@ -220,10 +220,10 @@ ifeq ($(TYPECHECK),1)
 endif
 
 CGO_OPTS :=CGO_CFLAGS="-I$(CGO_DIR) -I$(THIRDPARTIES_INSTALL_DIR)/include $(CUDA_CFLAGS)"
-GOLDFLAGS=-ldflags="-extldflags '$(CUDA_LDFLAGS) -L$(CGO_DIR) -lmo_c -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,\$${ORIGIN}/lib -fopenmp' $(VERSION_INFO)"
+GOLDFLAGS=-ldflags="-extldflags '$(CUDA_LDFLAGS) -L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,\$${ORIGIN}/lib -fopenmp' $(VERSION_INFO)"
 
 ifeq ("$(UNAME_S)","darwin")
-GOLDFLAGS:=-ldflags="-extldflags '-L$(CGO_DIR) -lmo_c -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,@executable_path/lib' $(VERSION_INFO)"
+GOLDFLAGS:=-ldflags="-extldflags '-L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,@executable_path/lib' $(VERSION_INFO)"
 endif
 
 ifeq ($(GOBUILD_OPT),)

@@ -294,10 +294,9 @@ public:
                 }
 
                 cuvs::neighbors::cagra::index_params index_params;
-                cuvs::neighbors::cagra::merge_params params(index_params);
                 
                 auto merged_index = std::make_unique<cagra_index>(
-                    cuvs::neighbors::cagra::merge(*res, params, cagra_indices)
+                    cuvs::neighbors::cagra::merge(*res, index_params, cagra_indices)
                 );
 
                 raft::resource::sync_stream(*res);

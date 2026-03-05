@@ -30,9 +30,9 @@ endif
 
 .PHONY: all clean test debug
 
-all: libmo_c.so libmo_c.a
+all: libmo.so libmo.a
 
-libmo_c.so: $(OBJS) 
+libmo.so: $(OBJS) 
 ifeq ($(MO_CL_CUDA),1)
 	$(MAKE) -C cuda
 	$(MAKE) -C cuvs
@@ -41,7 +41,7 @@ else
 	$(CC) $(LDFLAGS) -o $@ $(OBJS)
 endif
 
-libmo_c.a: $(OBJS)
+libmo.a: $(OBJS)
 ifeq ($(MO_CL_CUDA),1)
 	$(MAKE) -C cuda
 	$(MAKE) -C cuvs
@@ -53,7 +53,7 @@ endif
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-test: libmo_c.so
+test: libmo.so
 	$(MAKE) -C test
 
 debug: override OPT_LV := -O0
