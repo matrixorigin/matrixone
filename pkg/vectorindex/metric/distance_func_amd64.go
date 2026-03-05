@@ -33,22 +33,13 @@ func L2Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
 	return T(math.Sqrt(float64(dist))), nil
 }
 
+// SumFloat32x16 performs horizontal reduction using binary tree pattern to avoid memory roundtrip
 func SumFloat32x16(v archsimd.Float32x16) float32 {
-	var arr [16]float32
-	v.Store(&arr)
-	s0 := (arr[0] + arr[1]) + (arr[2] + arr[3])
-	s1 := (arr[4] + arr[5]) + (arr[6] + arr[7])
-	s2 := (arr[8] + arr[9]) + (arr[10] + arr[11])
-	s3 := (arr[12] + arr[13]) + (arr[14] + arr[15])
-	return (s0 + s1) + (s2 + s3)
+	return SumFloat32x8(v.GetLo().Add(v.GetHi()))
 }
 
 func SumFloat32x8(v archsimd.Float32x8) float32 {
-	var arr [8]float32
-	v.Store(&arr)
-	s0 := (arr[0] + arr[1]) + (arr[2] + arr[3])
-	s1 := (arr[4] + arr[5]) + (arr[6] + arr[7])
-	return s0 + s1
+	return SumFloat32x4(v.GetLo().Add(v.GetHi()))
 }
 
 func SumFloat32x4(v archsimd.Float32x4) float32 {
@@ -58,17 +49,11 @@ func SumFloat32x4(v archsimd.Float32x4) float32 {
 }
 
 func SumFloat64x8(v archsimd.Float64x8) float64 {
-	var arr [8]float64
-	v.Store(&arr)
-	s0 := (arr[0] + arr[1]) + (arr[2] + arr[3])
-	s1 := (arr[4] + arr[5]) + (arr[6] + arr[7])
-	return s0 + s1
+	return SumFloat64x4(v.GetLo().Add(v.GetHi()))
 }
 
 func SumFloat64x4(v archsimd.Float64x4) float64 {
-	var arr [4]float64
-	v.Store(&arr)
-	return (arr[0] + arr[1]) + (arr[2] + arr[3])
+	return SumFloat64x2(v.GetLo().Add(v.GetHi()))
 }
 
 func SumFloat64x2(v archsimd.Float64x2) float64 {
@@ -83,29 +68,20 @@ func L2DistanceSqFloat32(a, b []float32) (float32, error) {
 	}
 
 	var sumSq float32
-	i := 0
-	n := len(a)
+	i, n := 0, len(a)
 
 	if archsimd.X86.AVX512() {
 		acc0, acc1, acc2, acc3 := archsimd.Float32x16{}, archsimd.Float32x16{}, archsimd.Float32x16{}, archsimd.Float32x16{}
 		acc4, acc5, acc6, acc7 := archsimd.Float32x16{}, archsimd.Float32x16{}, archsimd.Float32x16{}, archsimd.Float32x16{}
 		for i <= n-128 {
-			v0a := archsimd.LoadFloat32x16Slice(a[i : i+16])
-			v0b := archsimd.LoadFloat32x16Slice(b[i : i+16])
-			v1a := archsimd.LoadFloat32x16Slice(a[i+16 : i+32])
-			v1b := archsimd.LoadFloat32x16Slice(b[i+16 : i+32])
-			v2a := archsimd.LoadFloat32x16Slice(a[i+32 : i+48])
-			v2b := archsimd.LoadFloat32x16Slice(b[i+32 : i+48])
-			v3a := archsimd.LoadFloat32x16Slice(a[i+48 : i+64])
-			v3b := archsimd.LoadFloat32x16Slice(b[i+48 : i+64])
-			v4a := archsimd.LoadFloat32x16Slice(a[i+64 : i+80])
-			v4b := archsimd.LoadFloat32x16Slice(b[i+64 : i+80])
-			v5a := archsimd.LoadFloat32x16Slice(a[i+80 : i+96])
-			v5b := archsimd.LoadFloat32x16Slice(b[i+80 : i+96])
-			v6a := archsimd.LoadFloat32x16Slice(a[i+96 : i+112])
-			v6b := archsimd.LoadFloat32x16Slice(b[i+96 : i+112])
-			v7a := archsimd.LoadFloat32x16Slice(a[i+112 : i+128])
-			v7b := archsimd.LoadFloat32x16Slice(b[i+112 : i+128])
+			v0a, v0b := archsimd.LoadFloat32x16Slice(a[i:i+16]), archsimd.LoadFloat32x16Slice(b[i:i+16])
+			v1a, v1b := archsimd.LoadFloat32x16Slice(a[i+16:i+32]), archsimd.LoadFloat32x16Slice(b[i+16:i+32])
+			v2a, v2b := archsimd.LoadFloat32x16Slice(a[i+32:i+48]), archsimd.LoadFloat32x16Slice(b[i+32:i+48])
+			v3a, v3b := archsimd.LoadFloat32x16Slice(a[i+48:i+64]), archsimd.LoadFloat32x16Slice(b[i+48:i+64])
+			v4a, v4b := archsimd.LoadFloat32x16Slice(a[i+64:i+80]), archsimd.LoadFloat32x16Slice(b[i+64:i+80])
+			v5a, v5b := archsimd.LoadFloat32x16Slice(a[i+80:i+96]), archsimd.LoadFloat32x16Slice(b[i+80:i+96])
+			v6a, v6b := archsimd.LoadFloat32x16Slice(a[i+96:i+112]), archsimd.LoadFloat32x16Slice(b[i+96:i+112])
+			v7a, v7b := archsimd.LoadFloat32x16Slice(a[i+112:i+128]), archsimd.LoadFloat32x16Slice(b[i+112:i+128])
 
 			d0, d1, d2, d3 := v0a.Sub(v0b), v1a.Sub(v1b), v2a.Sub(v2b), v3a.Sub(v3b)
 			d4, d5, d6, d7 := v4a.Sub(v4b), v5a.Sub(v5b), v6a.Sub(v6b), v7a.Sub(v7b)
@@ -117,18 +93,12 @@ func L2DistanceSqFloat32(a, b []float32) (float32, error) {
 			i += 128
 		}
 		for i <= n-16 {
-			va := archsimd.LoadFloat32x16Slice(a[i : i+16])
-			vb := archsimd.LoadFloat32x16Slice(b[i : i+16])
+			va, vb := archsimd.LoadFloat32x16Slice(a[i:i+16]), archsimd.LoadFloat32x16Slice(b[i:i+16])
 			d := va.Sub(vb)
 			acc0 = d.MulAdd(d, acc0)
 			i += 16
 		}
-		s0 := acc0.Add(acc1)
-		s1 := acc2.Add(acc3)
-		s2 := acc4.Add(acc5)
-		s3 := acc6.Add(acc7)
-		res := s0.Add(s1).Add(s2.Add(s3))
-		sumSq += SumFloat32x16(res)
+		sumSq += SumFloat32x16(acc0.Add(acc1).Add(acc2.Add(acc3)).Add(acc4.Add(acc5).Add(acc6.Add(acc7))))
 	}
 
 	if (archsimd.X86.AVX2() || archsimd.X86.AVX()) && i <= n-8 {
@@ -140,14 +110,14 @@ func L2DistanceSqFloat32(a, b []float32) (float32, error) {
 			v3a, v3b := archsimd.LoadFloat32x8Slice(a[i+24:i+32]), archsimd.LoadFloat32x8Slice(b[i+24:i+32])
 
 			d0, d1, d2, d3 := v0a.Sub(v0b), v1a.Sub(v1b), v2a.Sub(v2b), v3a.Sub(v3b)
-			acc0, acc1 = acc0.Add(d0.Mul(d0)), acc1.Add(d1.Mul(d1))
-			acc2, acc3 = acc2.Add(d2.Mul(d2)), acc3.Add(d3.Mul(d3))
+			acc0, acc1 = d0.MulAdd(d0, acc0), d1.MulAdd(d1, acc1)
+			acc2, acc3 = d2.MulAdd(d2, acc2), d3.MulAdd(d3, acc3)
 			i += 32
 		}
 		for i <= n-8 {
 			va, vb := archsimd.LoadFloat32x8Slice(a[i:i+8]), archsimd.LoadFloat32x8Slice(b[i:i+8])
 			d := va.Sub(vb)
-			acc0 = acc0.Add(d.Mul(d))
+			acc0 = d.MulAdd(d, acc0)
 			i += 8
 		}
 		sumSq += SumFloat32x8(acc0.Add(acc1).Add(acc2.Add(acc3)))
@@ -166,8 +136,7 @@ func L2DistanceSqFloat64(a, b []float64) (float64, error) {
 	}
 
 	var sumSq float64
-	i := 0
-	n := len(a)
+	i, n := 0, len(a)
 
 	if archsimd.X86.AVX512() {
 		acc0, acc1, acc2, acc3 := archsimd.Float64x8{}, archsimd.Float64x8{}, archsimd.Float64x8{}, archsimd.Float64x8{}
@@ -197,9 +166,7 @@ func L2DistanceSqFloat64(a, b []float64) (float64, error) {
 			acc0 = d.MulAdd(d, acc0)
 			i += 8
 		}
-		s0, s1, s2, s3 := acc0.Add(acc1), acc2.Add(acc3), acc4.Add(acc5), acc6.Add(acc7)
-		res := s0.Add(s1).Add(s2.Add(s3))
-		sumSq += SumFloat64x8(res)
+		sumSq += SumFloat64x8(acc0.Add(acc1).Add(acc2.Add(acc3)).Add(acc4.Add(acc5).Add(acc6.Add(acc7))))
 	}
 
 	if (archsimd.X86.AVX2() || archsimd.X86.AVX()) && i <= n-4 {
@@ -211,14 +178,14 @@ func L2DistanceSqFloat64(a, b []float64) (float64, error) {
 			v3a, v3b := archsimd.LoadFloat64x4Slice(a[i+12:i+16]), archsimd.LoadFloat64x4Slice(b[i+12:i+16])
 
 			d0, d1, d2, d3 := v0a.Sub(v0b), v1a.Sub(v1b), v2a.Sub(v2b), v3a.Sub(v3b)
-			acc0, acc1 = acc0.Add(d0.Mul(d0)), acc1.Add(d1.Mul(d1) )
-			acc2, acc3 = acc2.Add(d2.Mul(d2)), acc3.Add(d3.Mul(d3) )
+			acc0, acc1 = d0.MulAdd(d0, acc0), d1.MulAdd(d1, acc1)
+			acc2, acc3 = d2.MulAdd(d2, acc2), d3.MulAdd(d3, acc3)
 			i += 16
 		}
 		for i <= n-4 {
 			va, vb := archsimd.LoadFloat64x4Slice(a[i:i+4]), archsimd.LoadFloat64x4Slice(b[i:i+4])
 			d := va.Sub(vb)
-			acc0 = acc0.Add(d.Mul(d))
+			acc0 = d.MulAdd(d, acc0)
 			i += 4
 		}
 		sumSq += SumFloat64x4(acc0.Add(acc1).Add(acc2.Add(acc3)))
@@ -232,16 +199,15 @@ func L2DistanceSqFloat64(a, b []float64) (float64, error) {
 }
 
 func L2DistanceSq[T types.RealNumbers](p, q []T) (T, error) {
-	switch any(p).(type) {
-	case []float32:
-		ret, err := L2DistanceSqFloat32(any(p).([]float32), any(q).([]float32))
-		return T(ret), err
-	case []float64:
-		ret, err := L2DistanceSqFloat64(any(p).([]float64), any(q).([]float64))
-		return T(ret), err
-	default:
-		return 0, moerr.NewInternalErrorNoCtx("vector type not supported")
+	if pf32, ok := any(p).([]float32); ok {
+		res, err := L2DistanceSqFloat32(pf32, any(q).([]float32))
+		return T(res), err
 	}
+	if pf64, ok := any(p).([]float64); ok {
+		res, err := L2DistanceSqFloat64(pf64, any(q).([]float64))
+		return T(res), err
+	}
+	return 0, moerr.NewInternalErrorNoCtx("vector type not supported")
 }
 
 func L1DistanceFloat32(a, b []float32) (float32, error) {
@@ -363,16 +329,15 @@ func L1DistanceFloat64(a, b []float64) (float64, error) {
 }
 
 func L1Distance[T types.RealNumbers](p, q []T) (T, error) {
-	switch any(p).(type) {
-	case []float32:
-		ret, err := L1DistanceFloat32(any(p).([]float32), any(q).([]float32))
-		return T(ret), err
-	case []float64:
-		ret, err := L1DistanceFloat64(any(p).([]float64), any(q).([]float64))
-		return T(ret), err
-	default:
-		return 0, moerr.NewInternalErrorNoCtx("vector type not supported")
+	if pf32, ok := any(p).([]float32); ok {
+		res, err := L1DistanceFloat32(pf32, any(q).([]float32))
+		return T(res), err
 	}
+	if pf64, ok := any(p).([]float64); ok {
+		res, err := L1DistanceFloat64(pf64, any(q).([]float64))
+		return T(res), err
+	}
+	return 0, moerr.NewInternalErrorNoCtx("vector type not supported")
 }
 
 func InnerProductFloat32(a, b []float32) (float32, error) {
@@ -406,8 +371,7 @@ func InnerProductFloat32(a, b []float32) (float32, error) {
 			acc0 = va.MulAdd(vb, acc0)
 			i += 16
 		}
-		s0, s1, s2, s3 := acc0.Add(acc1), acc2.Add(acc3), acc4.Add(acc5), acc6.Add(acc7)
-		total += SumFloat32x16(s0.Add(s1).Add(s2.Add(s3)))
+		total += SumFloat32x16(acc0.Add(acc1).Add(acc2.Add(acc3)).Add(acc4.Add(acc5).Add(acc6.Add(acc7))))
 	}
 
 	if (archsimd.X86.AVX2() || archsimd.X86.AVX()) && i <= n-8 {
@@ -418,13 +382,13 @@ func InnerProductFloat32(a, b []float32) (float32, error) {
 			v2a, v2b := archsimd.LoadFloat32x8Slice(a[i+16:i+24]), archsimd.LoadFloat32x8Slice(b[i+16:i+24])
 			v3a, v3b := archsimd.LoadFloat32x8Slice(a[i+24:i+32]), archsimd.LoadFloat32x8Slice(b[i+24:i+32])
 
-			acc0, acc1 = acc0.Add(v0a.Mul(v0b)), acc1.Add(v1a.Mul(v1b))
-			acc2, acc3 = acc2.Add(v2a.Mul(v2b)), acc3.Add(v3a.Mul(v3b))
+			acc0, acc1 = v0a.MulAdd(v0b, acc0), v1a.MulAdd(v1b, acc1)
+			acc2, acc3 = v2a.MulAdd(v2b, acc2), v3a.MulAdd(v3b, acc3)
 			i += 32
 		}
 		for i <= n-8 {
 			va, vb := archsimd.LoadFloat32x8Slice(a[i:i+8]), archsimd.LoadFloat32x8Slice(b[i:i+8])
-			acc0 = acc0.Add(va.Mul(vb))
+			acc0 = va.MulAdd(vb, acc0)
 			i += 8
 		}
 		total += SumFloat32x8(acc0.Add(acc1).Add(acc2.Add(acc3)))
@@ -465,8 +429,7 @@ func InnerProductFloat64(a, b []float64) (float64, error) {
 			acc0 = va.MulAdd(vb, acc0)
 			i += 8
 		}
-		s0, s1, s2, s3 := acc0.Add(acc1), acc2.Add(acc3), acc4.Add(acc5), acc6.Add(acc7)
-		total += SumFloat64x8(s0.Add(s1).Add(s2.Add(s3)))
+		total += SumFloat64x8(acc0.Add(acc1).Add(acc2.Add(acc3)).Add(acc4.Add(acc5).Add(acc6.Add(acc7))))
 	}
 
 	if (archsimd.X86.AVX2() || archsimd.X86.AVX()) && i <= n-4 {
@@ -477,13 +440,13 @@ func InnerProductFloat64(a, b []float64) (float64, error) {
 			v2a, v2b := archsimd.LoadFloat64x4Slice(a[i+8:i+12]), archsimd.LoadFloat64x4Slice(b[i+8:i+12])
 			v3a, v3b := archsimd.LoadFloat64x4Slice(a[i+12:i+16]), archsimd.LoadFloat64x4Slice(b[i+12:i+16])
 
-			acc0, acc1 = acc0.Add(v0a.Mul(v0b)), acc1.Add(v1a.Mul(v1b))
-			acc2, acc3 = acc2.Add(v2a.Mul(v2b)), acc3.Add(v3a.Mul(v3b))
+			acc0, acc1 = v0a.MulAdd(v0b, acc0), v1a.MulAdd(v1b, acc1)
+			acc2, acc3 = v2a.MulAdd(v2b, acc2), v3a.MulAdd(v3b, acc3)
 			i += 16
 		}
 		for i <= n-4 {
 			va, vb := archsimd.LoadFloat64x4Slice(a[i:i+4]), archsimd.LoadFloat64x4Slice(b[i:i+4])
-			acc0 = acc0.Add(va.Mul(vb))
+			acc0 = va.MulAdd(vb, acc0)
 			i += 4
 		}
 		total += SumFloat64x4(acc0.Add(acc1).Add(acc2.Add(acc3)))
@@ -494,16 +457,15 @@ func InnerProductFloat64(a, b []float64) (float64, error) {
 }
 
 func InnerProduct[T types.RealNumbers](p, q []T) (T, error) {
-	switch any(p).(type) {
-	case []float32:
-		ret, err := InnerProductFloat32(any(p).([]float32), any(q).([]float32))
-		return T(ret), err
-	case []float64:
-		ret, err := InnerProductFloat64(any(p).([]float64), any(q).([]float64))
-		return T(ret), err
-	default:
-		return 0, moerr.NewInternalErrorNoCtx("vector type not supported")
+	if pf32, ok := any(p).([]float32); ok {
+		res, err := InnerProductFloat32(pf32, any(q).([]float32))
+		return T(res), err
 	}
+	if pf64, ok := any(p).([]float64); ok {
+		res, err := InnerProductFloat64(pf64, any(q).([]float64))
+		return T(res), err
+	}
+	return 0, moerr.NewInternalErrorNoCtx("vector type not supported")
 }
 
 func CosineDistanceF32(a, b []float32) (float32, error) {
@@ -547,13 +509,13 @@ func CosineDistanceF32(a, b []float32) (float32, error) {
 		for i <= n-16 {
 			v0a, v0b := archsimd.LoadFloat32x8Slice(a[i:i+8]), archsimd.LoadFloat32x8Slice(b[i:i+8])
 			v1a, v1b := archsimd.LoadFloat32x8Slice(a[i+8:i+16]), archsimd.LoadFloat32x8Slice(b[i+8:i+16])
-			accDot0, accA0, accB0 = accDot0.Add(v0a.Mul(v0b)), accA0.Add(v0a.Mul(v0a)), accB0.Add(v0b.Mul(v0b))
-			accDot1, accA1, accB1 = accDot1.Add(v1a.Mul(v1b)), accA1.Add(v1a.Mul(v1a)), accB1.Add(v1b.Mul(v1b))
+			accDot0, accA0, accB0 = v0a.MulAdd(v0b, accDot0), v0a.MulAdd(v0a, accA0), v0b.MulAdd(v0b, accB0)
+			accDot1, accA1, accB1 = v1a.MulAdd(v1b, accDot1), v1a.MulAdd(v1a, accA1), v1b.MulAdd(v1b, accB1)
 			i += 16
 		}
 		if i <= n-8 {
 			va, vb := archsimd.LoadFloat32x8Slice(a[i:i+8]), archsimd.LoadFloat32x8Slice(b[i:i+8])
-			accDot0, accA0, accB0 = accDot0.Add(va.Mul(vb)), accA0.Add(va.Mul(va)), accB0.Add(vb.Mul(vb))
+			accDot0, accA0, accB0 = va.MulAdd(vb, accDot0), va.MulAdd(va, accA0), vb.MulAdd(vb, accB0)
 			i += 8
 		}
 		dot += SumFloat32x8(accDot0.Add(accDot1))
@@ -612,13 +574,13 @@ func CosineDistanceF64(a, b []float64) (float64, error) {
 		for i <= n-8 {
 			v0a, v0b := archsimd.LoadFloat64x4Slice(a[i:i+4]), archsimd.LoadFloat64x4Slice(b[i:i+4])
 			v1a, v1b := archsimd.LoadFloat64x4Slice(a[i+4:i+8]), archsimd.LoadFloat64x4Slice(b[i+4:i+8])
-			accDot0, accA0, accB0 = accDot0.Add(v0a.Mul(v0b)), accA0.Add(v0a.Mul(v0a)), accB0.Add(v0b.Mul(v0b))
-			accDot1, accA1, accB1 = accDot1.Add(v1a.Mul(v1b)), accA1.Add(v1a.Mul(v1a)), accB1.Add(v1b.Mul(v1b))
+			accDot0, accA0, accB0 = v0a.MulAdd(v0b, accDot0), v0a.MulAdd(v0a, accA0), v0b.MulAdd(v0b, accB0)
+			accDot1, accA1, accB1 = v1a.MulAdd(v1b, accDot1), v1a.MulAdd(v1a, accA1), v1b.MulAdd(v1b, accB1)
 			i += 8
 		}
 		if i <= n-4 {
 			va, vb := archsimd.LoadFloat64x4Slice(a[i:i+4]), archsimd.LoadFloat64x4Slice(b[i:i+4])
-			accDot0, accA0, accB0 = accDot0.Add(va.Mul(vb)), accA0.Add(va.Mul(va)), accB0.Add(vb.Mul(vb))
+			accDot0, accA0, accB0 = va.MulAdd(vb, accDot0), va.MulAdd(va, accA0), vb.MulAdd(vb, accB0)
 			i += 4
 		}
 		dot += SumFloat64x4(accDot0.Add(accDot1))
@@ -637,16 +599,15 @@ func CosineDistanceF64(a, b []float64) (float64, error) {
 }
 
 func CosineDistance[T types.RealNumbers](p, q []T) (T, error) {
-	switch any(p).(type) {
-	case []float32:
-		ret, err := CosineDistanceF32(any(p).([]float32), any(q).([]float32))
-		return T(ret), err
-	case []float64:
-		ret, err := CosineDistanceF64(any(p).([]float64), any(q).([]float64))
-		return T(ret), err
-	default:
-		return 0, moerr.NewInternalErrorNoCtx("vector type not supported")
+	if pf32, ok := any(p).([]float32); ok {
+		res, err := CosineDistanceF32(pf32, any(q).([]float32))
+		return T(res), err
 	}
+	if pf64, ok := any(p).([]float64); ok {
+		res, err := CosineDistanceF64(pf64, any(q).([]float64))
+		return T(res), err
+	}
+	return 0, moerr.NewInternalErrorNoCtx("vector type not supported")
 }
 
 func CosineSimilarityF32(a, b []float32) (float32, error) {
@@ -691,13 +652,13 @@ func CosineSimilarityF32(a, b []float32) (float32, error) {
 		for i <= n-16 {
 			v0a, v0b := archsimd.LoadFloat32x8Slice(a[i:i+8]), archsimd.LoadFloat32x8Slice(b[i:i+8])
 			v1a, v1b := archsimd.LoadFloat32x8Slice(a[i+8:i+16]), archsimd.LoadFloat32x8Slice(b[i+8:i+16])
-			accDot0, accA0, accB0 = accDot0.Add(v0a.Mul(v0b)), accA0.Add(v0a.Mul(v0a)), accB0.Add(v0b.Mul(v0b))
-			accDot1, accA1, accB1 = accDot1.Add(v1a.Mul(v1b)), accA1.Add(v1a.Mul(v1a)), accB1.Add(v1b.Mul(v1b))
+			accDot0, accA0, accB0 = v0a.MulAdd(v0b, accDot0), v0a.MulAdd(v0a, accA0), v0b.MulAdd(v0b, accB0)
+			accDot1, accA1, accB1 = v1a.MulAdd(v1b, accDot1), v1a.MulAdd(v1a, accA1), v1b.MulAdd(v1b, accB1)
 			i += 16
 		}
 		if i <= n-8 {
 			va, vb := archsimd.LoadFloat32x8Slice(a[i:i+8]), archsimd.LoadFloat32x8Slice(b[i:i+8])
-			accDot0, accA0, accB0 = accDot0.Add(va.Mul(vb)), accA0.Add(va.Mul(va)), accB0.Add(vb.Mul(vb))
+			accDot0, accA0, accB0 = va.MulAdd(vb, accDot0), va.MulAdd(va, accA0), vb.MulAdd(vb, accB0)
 			i += 8
 		}
 		dot += SumFloat32x8(accDot0.Add(accDot1))
@@ -759,13 +720,13 @@ func CosineSimilarityF64(a, b []float64) (float64, error) {
 		for i <= n-8 {
 			v0a, v0b := archsimd.LoadFloat64x4Slice(a[i:i+4]), archsimd.LoadFloat64x4Slice(b[i:i+4])
 			v1a, v1b := archsimd.LoadFloat64x4Slice(a[i+4:i+8]), archsimd.LoadFloat64x4Slice(b[i+4:i+8])
-			accDot0, accA0, accB0 = accDot0.Add(v0a.Mul(v0b)), accA0.Add(v0a.Mul(v0a)), accB0.Add(v0b.Mul(v0b))
-			accDot1, accA1, accB1 = accDot1.Add(v1a.Mul(v1b)), accA1.Add(v1a.Mul(v1a)), accB1.Add(v1b.Mul(v1b))
+			accDot0, accA0, accB0 = v0a.MulAdd(v0b, accDot0), v0a.MulAdd(v0a, accA0), v0b.MulAdd(v0b, accB0)
+			accDot1, accA1, accB1 = v1a.MulAdd(v1b, accDot1), v1a.MulAdd(v1a, accA1), v1b.MulAdd(v1b, accB1)
 			i += 8
 		}
 		if i <= n-4 {
 			va, vb := archsimd.LoadFloat64x4Slice(a[i:i+4]), archsimd.LoadFloat64x4Slice(b[i:i+4])
-			accDot0, accA0, accB0 = accDot0.Add(va.Mul(vb)), accA0.Add(va.Mul(va)), accB0.Add(vb.Mul(vb))
+			accDot0, accA0, accB0 = va.MulAdd(vb, accDot0), va.MulAdd(va, accA0), vb.MulAdd(vb, accB0)
 			i += 4
 		}
 		dot += SumFloat64x4(accDot0.Add(accDot1))
@@ -786,16 +747,15 @@ func CosineSimilarityF64(a, b []float64) (float64, error) {
 }
 
 func CosineSimilarity[T types.RealNumbers](p, q []T) (T, error) {
-	switch any(p).(type) {
-	case []float32:
-		ret, err := CosineSimilarityF32(any(p).([]float32), any(q).([]float32))
-		return T(ret), err
-	case []float64:
-		ret, err := CosineSimilarityF64(any(p).([]float64), any(q).([]float64))
-		return T(ret), err
-	default:
-		return 0, moerr.NewInternalErrorNoCtx("vector type not supported")
+	if pf32, ok := any(p).([]float32); ok {
+		res, err := CosineSimilarityF32(pf32, any(q).([]float32))
+		return T(res), err
 	}
+	if pf64, ok := any(p).([]float64); ok {
+		res, err := CosineSimilarityF64(pf64, any(q).([]float64))
+		return T(res), err
+	}
+	return 0, moerr.NewInternalErrorNoCtx("vector type not supported")
 }
 
 func SphericalDistanceFloat32(a, b []float32) (float32, error) {
@@ -829,8 +789,7 @@ func SphericalDistanceFloat32(a, b []float32) (float32, error) {
 			acc0 = va.MulAdd(vb, acc0)
 			i += 16
 		}
-		s0, s1, s2, s3 := acc0.Add(acc1), acc2.Add(acc3), acc4.Add(acc5), acc6.Add(acc7)
-		total += SumFloat32x16(s0.Add(s1).Add(s2.Add(s3)))
+		total += SumFloat32x16(acc0.Add(acc1).Add(acc2.Add(acc3)).Add(acc4.Add(acc5).Add(acc6.Add(acc7))))
 	}
 
 	if (archsimd.X86.AVX2() || archsimd.X86.AVX()) && i <= n-8 {
@@ -841,13 +800,13 @@ func SphericalDistanceFloat32(a, b []float32) (float32, error) {
 			v2a, v2b := archsimd.LoadFloat32x8Slice(a[i+16:i+24]), archsimd.LoadFloat32x8Slice(b[i+16:i+24])
 			v3a, v3b := archsimd.LoadFloat32x8Slice(a[i+24:i+32]), archsimd.LoadFloat32x8Slice(b[i+24:i+32])
 
-			acc0, acc1 = acc0.Add(v0a.Mul(v0b)), acc1.Add(v1a.Mul(v1b))
-			acc2, acc3 = acc2.Add(v2a.Mul(v2b)), acc3.Add(v3a.Mul(v3b))
+			acc0, acc1 = v0a.MulAdd(v0b, acc0), v1a.MulAdd(v1b, acc1)
+			acc2, acc3 = v2a.MulAdd(v2b, acc2), v3a.MulAdd(v3b, acc3)
 			i += 32
 		}
 		for i <= n-8 {
 			va, vb := archsimd.LoadFloat32x8Slice(a[i:i+8]), archsimd.LoadFloat32x8Slice(b[i:i+8])
-			acc0 = acc0.Add(va.Mul(vb))
+			acc0 = va.MulAdd(vb, acc0)
 			i += 8
 		}
 		total += SumFloat32x8(acc0.Add(acc1).Add(acc2.Add(acc3)))
@@ -890,8 +849,7 @@ func SphericalDistanceFloat64(a, b []float64) (float64, error) {
 			acc0 = va.MulAdd(vb, acc0)
 			i += 8
 		}
-		s0, s1, s2, s3 := acc0.Add(acc1), acc2.Add(acc3), acc4.Add(acc5), acc6.Add(acc7)
-		total += SumFloat64x8(s0.Add(s1).Add(s2.Add(s3)))
+		total += SumFloat64x8(acc0.Add(acc1).Add(acc2.Add(acc3)).Add(acc4.Add(acc5).Add(acc6.Add(acc7))))
 	}
 
 	if (archsimd.X86.AVX2() || archsimd.X86.AVX()) && i <= n-4 {
@@ -902,13 +860,13 @@ func SphericalDistanceFloat64(a, b []float64) (float64, error) {
 			v2a, v2b := archsimd.LoadFloat64x4Slice(a[i+8:i+12]), archsimd.LoadFloat64x4Slice(b[i+8:i+12])
 			v3a, v3b := archsimd.LoadFloat64x4Slice(a[i+12:i+16]), archsimd.LoadFloat64x4Slice(b[i+12:i+16])
 
-			acc0, acc1 = acc0.Add(v0a.Mul(v0b)), acc1.Add(v1a.Mul(v1b))
-			acc2, acc3 = acc2.Add(v2a.Mul(v2b)), acc3.Add(v3a.Mul(v3b))
+			acc0, acc1 = v0a.MulAdd(v0b, acc0), v1a.MulAdd(v1b, acc1)
+			acc2, acc3 = v2a.MulAdd(v2b, acc2), v3a.MulAdd(v3b, acc3)
 			i += 16
 		}
 		for i <= n-4 {
 			va, vb := archsimd.LoadFloat64x4Slice(a[i:i+4]), archsimd.LoadFloat64x4Slice(b[i:i+4])
-			acc0 = acc0.Add(va.Mul(vb))
+			acc0 = va.MulAdd(vb, acc0)
 			i += 4
 		}
 		total += SumFloat64x4(acc0.Add(acc1).Add(acc2.Add(acc3)))
@@ -921,16 +879,15 @@ func SphericalDistanceFloat64(a, b []float64) (float64, error) {
 }
 
 func SphericalDistance[T types.RealNumbers](p, q []T) (T, error) {
-	switch any(p).(type) {
-	case []float32:
-		ret, err := SphericalDistanceFloat32(any(p).([]float32), any(q).([]float32))
-		return T(ret), err
-	case []float64:
-		ret, err := SphericalDistanceFloat64(any(p).([]float64), any(q).([]float64))
-		return T(ret), err
-	default:
-		return 0, moerr.NewInternalErrorNoCtx("vector type not supported")
+	if pf32, ok := any(p).([]float32); ok {
+		res, err := SphericalDistanceFloat32(pf32, any(q).([]float32))
+		return T(res), err
 	}
+	if pf64, ok := any(p).([]float64); ok {
+		res, err := SphericalDistanceFloat64(pf64, any(q).([]float64))
+		return T(res), err
+	}
+	return 0, moerr.NewInternalErrorNoCtx("vector type not supported")
 }
 
 func NormalizeL2[T types.RealNumbers](v1 []T, normalized []T) error {
