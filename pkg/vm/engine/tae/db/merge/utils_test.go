@@ -127,3 +127,11 @@ func TestMergeSettings(t *testing.T) {
 		require.NoError(t, err)
 	}
 }
+
+func TestMergeSettingsToMMsgTaskTrigger(t *testing.T) {
+	settings := DefaultMergeSettings.Clone()
+	settings.L0MaxCountDecayControl = []float64{0.1, 0.2, 0.3, 0.4}
+	trigger, err := settings.ToMMsgTaskTrigger()
+	require.NoError(t, err)
+	require.Equal(t, [4]float64{0.1, 0.2, 0.3}, trigger.l0.CPoints)
+}
