@@ -1,0 +1,51 @@
+2026/01/23 15:48:34.512529 +0800 INFO system/system.go:130 call runtime.GOMAXPROCS(16): 16, keep: 16
+2026/01/23 15:48:34.544651 +0800 INFO tasks/cancelablejob.go:161 cancelablejob.start.cron.job {"name": "CronJob[streamReaderGC-019be9d3-8e70-79b7-b8ea-7de757b017d4-2m0s]", "interval": "2m0s"}
+=== RUN   TestExponentialBackoff_Next_AttemptLessThanOne
+--- PASS: TestExponentialBackoff_Next_AttemptLessThanOne (0.00s)
+=== RUN   TestExponentialBackoff_Next_AttemptNormal
+--- PASS: TestExponentialBackoff_Next_AttemptNormal (0.00s)
+=== RUN   TestExponentialBackoff_Next_BaseZeroOrNegative
+--- PASS: TestExponentialBackoff_Next_BaseZeroOrNegative (0.00s)
+=== RUN   TestExponentialBackoff_Next_FactorLessThanOrEqualOne
+--- PASS: TestExponentialBackoff_Next_FactorLessThanOrEqualOne (0.00s)
+=== RUN   TestExponentialBackoff_Next_CustomFactor
+--- PASS: TestExponentialBackoff_Next_CustomFactor (0.00s)
+=== RUN   TestExponentialBackoff_Next_MaxZero
+--- PASS: TestExponentialBackoff_Next_MaxZero (0.00s)
+=== RUN   TestExponentialBackoff_Next_MaxCaps
+--- PASS: TestExponentialBackoff_Next_MaxCaps (0.00s)
+=== RUN   TestExponentialBackoff_Next_MaxNotExceeded
+--- PASS: TestExponentialBackoff_Next_MaxNotExceeded (0.00s)
+=== RUN   TestExponentialBackoff_Next_JitterZero
+--- PASS: TestExponentialBackoff_Next_JitterZero (0.00s)
+=== RUN   TestExponentialBackoff_Next_JitterWithCustomRandFn
+--- PASS: TestExponentialBackoff_Next_JitterWithCustomRandFn (0.00s)
+=== RUN   TestExponentialBackoff_Next_JitterWithDefaultRandFn
+--- PASS: TestExponentialBackoff_Next_JitterWithDefaultRandFn (0.00s)
+=== RUN   TestExponentialBackoff_Next_JitterWithMaxCap
+--- PASS: TestExponentialBackoff_Next_JitterWithMaxCap (0.00s)
+=== RUN   TestExponentialBackoff_Next_DefaultRandFnWithZeroMax
+    error_handle_test.go:433: 
+        	Error Trace:	/home/jiangxinmeng/workspace/matrixone/pkg/publication/error_handle_test.go:433
+        	Error:      	"100ms" is not greater than "100ms"
+        	Test:       	TestExponentialBackoff_Next_DefaultRandFnWithZeroMax
+--- FAIL: TestExponentialBackoff_Next_DefaultRandFnWithZeroMax (0.00s)
+=== RUN   TestExponentialBackoff_Next_AllDefaultValues
+--- PASS: TestExponentialBackoff_Next_AllDefaultValues (0.00s)
+=== RUN   TestExponentialBackoff_Next_CombinedScenario
+--- PASS: TestExponentialBackoff_Next_CombinedScenario (0.00s)
+=== RUN   TestExponentialBackoff_Next_LargeAttempt
+    error_handle_test.go:482: 
+        	Error Trace:	/home/jiangxinmeng/workspace/matrixone/pkg/publication/error_handle_test.go:482
+        	Error:      	Not equal: 
+        	            	expected: 10s
+        	            	actual  : -2562047h47m16.854775808s
+        	Test:       	TestExponentialBackoff_Next_LargeAttempt
+--- FAIL: TestExponentialBackoff_Next_LargeAttempt (0.00s)
+=== RUN   TestExponentialBackoff_Next_NegativeJitter
+--- PASS: TestExponentialBackoff_Next_NegativeJitter (0.00s)
+=== RUN   TestExponentialBackoff_Next_NegativeMax
+--- PASS: TestExponentialBackoff_Next_NegativeMax (0.00s)
+FAIL
+exit status 1
+FAIL	github.com/matrixorigin/matrixone/pkg/publication	0.117s

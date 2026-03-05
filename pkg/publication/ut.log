@@ -1,0 +1,222 @@
+2026/02/02 15:36:20.401999 +0800 INFO system/system.go:130 call runtime.GOMAXPROCS(16): 16, keep: 16
+2026/02/02 15:36:20.423981 +0800 INFO tasks/cancelablejob.go:161 cancelablejob.start.cron.job {"name": "CronJob[streamReaderGC-019c1d47-f2c7-7ece-bc10-440036a024cc-2m0s]", "interval": "2m0s"}
+=== RUN   TestBuildErrorMetadata_OldRetryCountExceedsThreshold_Retryable
+--- PASS: TestBuildErrorMetadata_OldRetryCountExceedsThreshold_Retryable (0.00s)
+=== RUN   TestBuildErrorMetadata_OldRetryCountExceedsThreshold_NonRetryable
+--- PASS: TestBuildErrorMetadata_OldRetryCountExceedsThreshold_NonRetryable (0.00s)
+=== RUN   TestBuildErrorMetadata_SameErrorType_Retryable_IncrementCount
+--- PASS: TestBuildErrorMetadata_SameErrorType_Retryable_IncrementCount (0.00s)
+=== RUN   TestBuildErrorMetadata_SameErrorType_Retryable_ReachesThreshold
+--- PASS: TestBuildErrorMetadata_SameErrorType_Retryable_ReachesThreshold (0.00s)
+=== RUN   TestBuildErrorMetadata_SameErrorType_NonRetryable
+--- PASS: TestBuildErrorMetadata_SameErrorType_NonRetryable (0.00s)
+=== RUN   TestBuildErrorMetadata_ErrorTypeChanged_RetryableToNonRetryable
+--- PASS: TestBuildErrorMetadata_ErrorTypeChanged_RetryableToNonRetryable (0.00s)
+=== RUN   TestBuildErrorMetadata_ErrorTypeChanged_NonRetryableToRetryable
+--- PASS: TestBuildErrorMetadata_ErrorTypeChanged_NonRetryableToRetryable (0.00s)
+=== RUN   TestExponentialBackoff_Next_AttemptLessThanOne
+--- PASS: TestExponentialBackoff_Next_AttemptLessThanOne (0.00s)
+=== RUN   TestExponentialBackoff_Next_AttemptNormal
+--- PASS: TestExponentialBackoff_Next_AttemptNormal (0.00s)
+=== RUN   TestExponentialBackoff_Next_BaseZeroOrNegative
+--- PASS: TestExponentialBackoff_Next_BaseZeroOrNegative (0.00s)
+=== RUN   TestExponentialBackoff_Next_FactorLessThanOrEqualOne
+--- PASS: TestExponentialBackoff_Next_FactorLessThanOrEqualOne (0.00s)
+=== RUN   TestExponentialBackoff_Next_CustomFactor
+--- PASS: TestExponentialBackoff_Next_CustomFactor (0.00s)
+=== RUN   TestExponentialBackoff_Next_MaxZero
+--- PASS: TestExponentialBackoff_Next_MaxZero (0.00s)
+=== RUN   TestExponentialBackoff_Next_MaxCaps
+--- PASS: TestExponentialBackoff_Next_MaxCaps (0.00s)
+=== RUN   TestExponentialBackoff_Next_MaxNotExceeded
+--- PASS: TestExponentialBackoff_Next_MaxNotExceeded (0.00s)
+=== RUN   TestExponentialBackoff_Next_JitterZero
+--- PASS: TestExponentialBackoff_Next_JitterZero (0.00s)
+=== RUN   TestExponentialBackoff_Next_JitterWithCustomRandFn
+--- PASS: TestExponentialBackoff_Next_JitterWithCustomRandFn (0.00s)
+=== RUN   TestExponentialBackoff_Next_JitterWithDefaultRandFn
+--- PASS: TestExponentialBackoff_Next_JitterWithDefaultRandFn (0.00s)
+=== RUN   TestExponentialBackoff_Next_JitterWithMaxCap
+--- PASS: TestExponentialBackoff_Next_JitterWithMaxCap (0.00s)
+=== RUN   TestExponentialBackoff_Next_DefaultRandFnWithZeroMax
+--- PASS: TestExponentialBackoff_Next_DefaultRandFnWithZeroMax (0.00s)
+=== RUN   TestExponentialBackoff_Next_AllDefaultValues
+--- PASS: TestExponentialBackoff_Next_AllDefaultValues (0.00s)
+=== RUN   TestExponentialBackoff_Next_CombinedScenario
+--- PASS: TestExponentialBackoff_Next_CombinedScenario (0.00s)
+=== RUN   TestExponentialBackoff_Next_LargeAttempt
+--- PASS: TestExponentialBackoff_Next_LargeAttempt (0.00s)
+=== RUN   TestExponentialBackoff_Next_NegativeJitter
+--- PASS: TestExponentialBackoff_Next_NegativeJitter (0.00s)
+=== RUN   TestExponentialBackoff_Next_NegativeMax
+--- PASS: TestExponentialBackoff_Next_NegativeMax (0.00s)
+=== RUN   TestSetGetParameterUnitWrapper
+--- PASS: TestSetGetParameterUnitWrapper (0.00s)
+=== RUN   TestResult_Close
+=== RUN   TestResult_Close/nil_result
+=== RUN   TestResult_Close/with_internal_result
+--- PASS: TestResult_Close (0.00s)
+    --- PASS: TestResult_Close/nil_result (0.00s)
+    --- PASS: TestResult_Close/with_internal_result (0.00s)
+=== RUN   TestResult_Next
+=== RUN   TestResult_Next/nil_result
+=== RUN   TestResult_Next/with_empty_internal_result
+--- PASS: TestResult_Next (0.00s)
+    --- PASS: TestResult_Next/nil_result (0.00s)
+    --- PASS: TestResult_Next/with_empty_internal_result (0.00s)
+=== RUN   TestResult_Scan
+=== RUN   TestResult_Scan/nil_result
+--- PASS: TestResult_Scan (0.00s)
+    --- PASS: TestResult_Scan/nil_result (0.00s)
+=== RUN   TestResult_Err
+=== RUN   TestResult_Err/nil_result
+=== RUN   TestResult_Err/with_internal_result
+--- PASS: TestResult_Err (0.00s)
+    --- PASS: TestResult_Err/nil_result (0.00s)
+    --- PASS: TestResult_Err/with_internal_result (0.00s)
+=== RUN   TestParseUpstreamConn
+=== RUN   TestParseUpstreamConn/valid_connection_with_account
+2026/02/02 15:36:20.424803 +0800 INFO publication/sql_executor.go:462 publication.executor.parse_upstream_conn {"account": "acc", "user": "user", "host": "127.0.0.1", "port": 6001, "password_encrypted": false}
+=== RUN   TestParseUpstreamConn/valid_connection_without_account
+2026/02/02 15:36:20.424857 +0800 INFO publication/sql_executor.go:462 publication.executor.parse_upstream_conn {"account": "", "user": "user", "host": "127.0.0.1", "port": 6001, "password_encrypted": false}
+=== RUN   TestParseUpstreamConn/valid_connection_with_complex_password
+2026/02/02 15:36:20.424898 +0800 INFO publication/sql_executor.go:462 publication.executor.parse_upstream_conn {"account": "acc", "user": "user", "host": "localhost", "port": 3306, "password_encrypted": false}
+=== RUN   TestParseUpstreamConn/valid_connection_with_query_parameters
+2026/02/02 15:36:20.424914 +0800 INFO publication/sql_executor.go:462 publication.executor.parse_upstream_conn {"account": "acc", "user": "user", "host": "127.0.0.1", "port": 6001, "password_encrypted": false}
+=== RUN   TestParseUpstreamConn/empty_connection_string
+=== RUN   TestParseUpstreamConn/missing_mysql_prefix
+=== RUN   TestParseUpstreamConn/missing_@_separator
+=== RUN   TestParseUpstreamConn/empty_user_with_account
+=== RUN   TestParseUpstreamConn/empty_user_without_account
+=== RUN   TestParseUpstreamConn/empty_password
+=== RUN   TestParseUpstreamConn/empty_host
+=== RUN   TestParseUpstreamConn/invalid_port
+=== RUN   TestParseUpstreamConn/missing_port
+=== RUN   TestParseUpstreamConn/account_with_empty_user_after_hash
+--- PASS: TestParseUpstreamConn (0.00s)
+    --- PASS: TestParseUpstreamConn/valid_connection_with_account (0.00s)
+    --- PASS: TestParseUpstreamConn/valid_connection_without_account (0.00s)
+    --- PASS: TestParseUpstreamConn/valid_connection_with_complex_password (0.00s)
+    --- PASS: TestParseUpstreamConn/valid_connection_with_query_parameters (0.00s)
+    --- PASS: TestParseUpstreamConn/empty_connection_string (0.00s)
+    --- PASS: TestParseUpstreamConn/missing_mysql_prefix (0.00s)
+    --- PASS: TestParseUpstreamConn/missing_@_separator (0.00s)
+    --- PASS: TestParseUpstreamConn/empty_user_with_account (0.00s)
+    --- PASS: TestParseUpstreamConn/empty_user_without_account (0.00s)
+    --- PASS: TestParseUpstreamConn/empty_password (0.00s)
+    --- PASS: TestParseUpstreamConn/empty_host (0.00s)
+    --- PASS: TestParseUpstreamConn/invalid_port (0.00s)
+    --- PASS: TestParseUpstreamConn/missing_port (0.00s)
+    --- PASS: TestParseUpstreamConn/account_with_empty_user_after_hash (0.00s)
+=== RUN   TestParseUpstreamConnWithDecrypt
+=== RUN   TestParseUpstreamConnWithDecrypt/without_executor
+2026/02/02 15:36:20.425055 +0800 INFO publication/sql_executor.go:462 publication.executor.parse_upstream_conn {"account": "acc", "user": "user", "host": "127.0.0.1", "port": 6001, "password_encrypted": false}
+--- PASS: TestParseUpstreamConnWithDecrypt (0.00s)
+    --- PASS: TestParseUpstreamConnWithDecrypt/without_executor (0.00s)
+=== RUN   TestTryDecryptPassword
+=== RUN   TestTryDecryptPassword/short_password_not_encrypted
+=== RUN   TestTryDecryptPassword/non-hex_string_not_encrypted
+=== RUN   TestTryDecryptPassword/no_executor_provided
+--- PASS: TestTryDecryptPassword (0.00s)
+    --- PASS: TestTryDecryptPassword/short_password_not_encrypted (0.00s)
+    --- PASS: TestTryDecryptPassword/non-hex_string_not_encrypted (0.00s)
+    --- PASS: TestTryDecryptPassword/no_executor_provided (0.00s)
+=== RUN   TestNewUpstreamExecutor_Validation
+=== RUN   TestNewUpstreamExecutor_Validation/empty_user
+=== RUN   TestNewUpstreamExecutor_Validation/account_provided_but_empty_user
+--- PASS: TestNewUpstreamExecutor_Validation (0.00s)
+    --- PASS: TestNewUpstreamExecutor_Validation/empty_user (0.00s)
+    --- PASS: TestNewUpstreamExecutor_Validation/account_provided_but_empty_user (0.00s)
+=== RUN   TestUpstreamExecutor_EndTxn
+=== RUN   TestUpstreamExecutor_EndTxn/nil_transaction
+--- PASS: TestUpstreamExecutor_EndTxn (0.00s)
+    --- PASS: TestUpstreamExecutor_EndTxn/nil_transaction (0.00s)
+=== RUN   TestUpstreamExecutor_Close
+=== RUN   TestUpstreamExecutor_Close/nil_connection
+--- PASS: TestUpstreamExecutor_Close (0.00s)
+    --- PASS: TestUpstreamExecutor_Close/nil_connection (0.00s)
+=== RUN   TestUpstreamExecutor_EnsureConnection
+=== RUN   TestUpstreamExecutor_EnsureConnection/already_connected
+2026/02/02 15:36:20.425299 +0800 INFO publication/sql_executor.go:482 publication.executor.open_db_conn {"account": "", "user": "", "timeout": "", "host": "invalid-host", "port": 99999}
+2026/02/02 15:36:20.425318 +0800 ERROR publication/sql_executor.go:499 publication.executor.open_db_conn_invalid {"error": "both account and user are empty"}
+--- PASS: TestUpstreamExecutor_EnsureConnection (0.00s)
+    --- PASS: TestUpstreamExecutor_EnsureConnection/already_connected (0.00s)
+=== RUN   TestUpstreamExecutor_ExecSQL_UseTxn
+=== RUN   TestUpstreamExecutor_ExecSQL_UseTxn/useTxn_not_supported
+--- PASS: TestUpstreamExecutor_ExecSQL_UseTxn (0.00s)
+    --- PASS: TestUpstreamExecutor_ExecSQL_UseTxn/useTxn_not_supported (0.00s)
+=== RUN   TestUpstreamExecutor_CalculateMaxAttempts
+=== RUN   TestUpstreamExecutor_CalculateMaxAttempts/zero_retries
+=== RUN   TestUpstreamExecutor_CalculateMaxAttempts/positive_retries
+=== RUN   TestUpstreamExecutor_CalculateMaxAttempts/infinite_retries
+--- PASS: TestUpstreamExecutor_CalculateMaxAttempts (0.00s)
+    --- PASS: TestUpstreamExecutor_CalculateMaxAttempts/zero_retries (0.00s)
+    --- PASS: TestUpstreamExecutor_CalculateMaxAttempts/positive_retries (0.00s)
+    --- PASS: TestUpstreamExecutor_CalculateMaxAttempts/infinite_retries (0.00s)
+=== RUN   TestUpstreamExecutor_InitRetryPolicy
+--- PASS: TestUpstreamExecutor_InitRetryPolicy (0.00s)
+=== RUN   TestUpstreamExecutor_LogFailedSQL
+=== RUN   TestUpstreamExecutor_LogFailedSQL/short_SQL
+2026/02/02 15:36:20.425529 +0800 ERROR publication/sql_executor.go:806 publication.executor.sql_failed {"error": "assert.AnError general error for testing", "sql": "SELECT 1"}
+=== RUN   TestUpstreamExecutor_LogFailedSQL/long_SQL
+2026/02/02 15:36:20.425571 +0800 ERROR publication/sql_executor.go:806 publication.executor.sql_failed {"error": "assert.AnError general error for testing", "sql": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa..."}
+--- PASS: TestUpstreamExecutor_LogFailedSQL (0.00s)
+    --- PASS: TestUpstreamExecutor_LogFailedSQL/short_SQL (0.00s)
+    --- PASS: TestUpstreamExecutor_LogFailedSQL/long_SQL (0.00s)
+=== RUN   TestActiveRoutine
+=== RUN   TestActiveRoutine/create_and_channels
+=== RUN   TestActiveRoutine/close_pause
+=== RUN   TestActiveRoutine/close_cancel
+--- PASS: TestActiveRoutine (0.00s)
+    --- PASS: TestActiveRoutine/create_and_channels (0.00s)
+    --- PASS: TestActiveRoutine/close_pause (0.00s)
+    --- PASS: TestActiveRoutine/close_cancel (0.00s)
+=== RUN   TestUpstreamConnConfig
+--- PASS: TestUpstreamConnConfig (0.00s)
+=== RUN   TestUpstreamExecutor_ExecWithRetry
+=== RUN   TestUpstreamExecutor_ExecWithRetry/context_cancelled
+=== RUN   TestUpstreamExecutor_ExecWithRetry/active_routine_paused
+=== RUN   TestUpstreamExecutor_ExecWithRetry/active_routine_cancelled
+=== RUN   TestUpstreamExecutor_ExecWithRetry/success_on_first_attempt
+=== RUN   TestUpstreamExecutor_ExecWithRetry/non-retryable_error
+2026/02/02 15:36:23.476411 +0800 ERROR publication/sql_executor.go:697 publication.executor.retry_failed {"attempt": 1, "error": "assert.AnError general error for testing"}
+--- PASS: TestUpstreamExecutor_ExecWithRetry (3.05s)
+    --- PASS: TestUpstreamExecutor_ExecWithRetry/context_cancelled (0.00s)
+    --- PASS: TestUpstreamExecutor_ExecWithRetry/active_routine_paused (1.58s)
+    --- PASS: TestUpstreamExecutor_ExecWithRetry/active_routine_cancelled (1.47s)
+    --- PASS: TestUpstreamExecutor_ExecWithRetry/success_on_first_attempt (0.00s)
+    --- PASS: TestUpstreamExecutor_ExecWithRetry/non-retryable_error (0.00s)
+=== RUN   TestOpenDbConn_Validation
+=== RUN   TestOpenDbConn_Validation/account_provided_but_user_empty
+2026/02/02 15:36:23.476619 +0800 INFO publication/sql_executor.go:482 publication.executor.open_db_conn {"account": "account", "user": "", "timeout": "10s", "host": "127.0.0.1", "port": 6001}
+2026/02/02 15:36:23.476654 +0800 ERROR publication/sql_executor.go:492 publication.executor.open_db_conn_invalid {"error": "account is provided but user is empty", "account": "account"}
+=== RUN   TestOpenDbConn_Validation/both_account_and_user_empty
+2026/02/02 15:36:23.476761 +0800 INFO publication/sql_executor.go:482 publication.executor.open_db_conn {"account": "", "user": "", "timeout": "10s", "host": "127.0.0.1", "port": 6001}
+2026/02/02 15:36:23.476784 +0800 ERROR publication/sql_executor.go:499 publication.executor.open_db_conn_invalid {"error": "both account and user are empty"}
+--- PASS: TestOpenDbConn_Validation (0.00s)
+    --- PASS: TestOpenDbConn_Validation/account_provided_but_user_empty (0.00s)
+    --- PASS: TestOpenDbConn_Validation/both_account_and_user_empty (0.00s)
+=== RUN   TestInitAesKeyForPublication
+=== RUN   TestInitAesKeyForPublication/already_initialized
+=== RUN   TestInitAesKeyForPublication/executor_returns_error
+=== RUN   TestInitAesKeyForPublication/no_data_key_found
+=== RUN   TestInitAesKeyForPublication/scan_error
+=== RUN   TestInitAesKeyForPublication/parameter_unit_not_available_-_no_wrapper
+=== RUN   TestInitAesKeyForPublication/parameter_unit_not_available_-_wrapper_returns_nil
+=== RUN   TestInitAesKeyForPublication/parameter_unit_SV_is_nil
+=== RUN   TestInitAesKeyForPublication/fallback_to_context_ParameterUnit
+=== RUN   TestInitAesKeyForPublication/success_with_wrapper
+=== RUN   TestInitAesKeyForPublication/decrypt_error_-_AesCFBDecodeWithKey_returns_error
+--- PASS: TestInitAesKeyForPublication (0.00s)
+    --- PASS: TestInitAesKeyForPublication/already_initialized (0.00s)
+    --- PASS: TestInitAesKeyForPublication/executor_returns_error (0.00s)
+    --- PASS: TestInitAesKeyForPublication/no_data_key_found (0.00s)
+    --- PASS: TestInitAesKeyForPublication/scan_error (0.00s)
+    --- PASS: TestInitAesKeyForPublication/parameter_unit_not_available_-_no_wrapper (0.00s)
+    --- PASS: TestInitAesKeyForPublication/parameter_unit_not_available_-_wrapper_returns_nil (0.00s)
+    --- PASS: TestInitAesKeyForPublication/parameter_unit_SV_is_nil (0.00s)
+    --- PASS: TestInitAesKeyForPublication/fallback_to_context_ParameterUnit (0.00s)
+    --- PASS: TestInitAesKeyForPublication/success_with_wrapper (0.00s)
+    --- PASS: TestInitAesKeyForPublication/decrypt_error_-_AesCFBDecodeWithKey_returns_error (0.00s)
+PASS
+ok  	github.com/matrixorigin/matrixone/pkg/publication	3.133s
