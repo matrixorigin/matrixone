@@ -123,48 +123,6 @@ func (bl *batchTxnCommitListener) OnEndPrepareWAL(txn txnif.AsyncTxn) {
 type TxnStoreFactory = func() txnif.TxnStore
 type TxnFactory = func(*TxnManager, txnif.TxnStore, []byte, types.TS, types.TS) txnif.AsyncTxn
 
-const (
-	// Sample 1 out of 64 txns for queue wait diagnostics.
-	txnQueueDiagSampleMask = uint64(0x3f)
-	// Emit one summary log every 1024 samples.
-	txnQueueDiagLogEverySamples = uint64(1024)
-)
-
-type txnQueueWaitDiag struct {
-	name    string
-	samples atomic.Uint64
-	totalNs atomic.Uint64
-	maxNs   atomic.Uint64
-}
-
-func (d *txnQueueWaitDiag) observe(wait time.Duration) {
-	if wait <= 0 {
-		return
-	}
-	waitNs := uint64(wait.Nanoseconds())
-	n := d.samples.Add(1)
-	d.totalNs.Add(waitNs)
-	for {
-		max := d.maxNs.Load()
-		if waitNs <= max || d.maxNs.CompareAndSwap(max, waitNs) {
-			break
-		}
-	}
-	if n%txnQueueDiagLogEverySamples != 0 {
-		return
-	}
-
-	total := d.totalNs.Load()
-	logutil.Info(
-		"Txn-Queue-DIAG-Summary",
-		zap.String("queue", d.name),
-		zap.String("sample-rate", "1/64"),
-		zap.Uint64("samples", n),
-		zap.Duration("avg-wait", time.Duration(total/n)),
-		zap.Duration("max-wait", time.Duration(d.maxNs.Load())),
-	)
-}
-
 type TxnManager struct {
 	sm.ClosedState
 	preWalQueue     sm.Queue
@@ -205,13 +163,6 @@ type TxnManager struct {
 	prevPrepareTS             types.TS
 	prevPrepareTSInPreparing  types.TS
 	prevPrepareTSInPrepareWAL types.TS
-
-	queueDiag struct {
-		seq        atomic.Uint64
-		preWalWait txnQueueWaitDiag
-		walWait    txnQueueWaitDiag
-		applyWait  txnQueueWaitDiag
-	}
 }
 
 func NewTxnManager(
@@ -242,9 +193,6 @@ func NewTxnManager(
 	mgr.preWalQueue = sm.NewSafeQueue(20*batSize, batSize, mgr.onPreWalStage)
 	mgr.walQueue = sm.NewSafeQueue(20*batSize, batSize, mgr.onWalStage)
 	mgr.applyQueue = sm.NewSafeQueue(20*batSize, batSize, mgr.onApply)
-	mgr.queueDiag.preWalWait.name = "pre-wal-queue"
-	mgr.queueDiag.walWait.name = "wal-queue"
-	mgr.queueDiag.applyWait.name = "apply-queue"
 
 	mgr.workers, _ = ants.NewPool(runtime.GOMAXPROCS(0))
 	return mgr
@@ -527,13 +475,6 @@ func (mgr *TxnManager) OnOpTxn(op *OpTxn) (err error) {
 	if op.Txn.GetStore().IsOffline() {
 		panic("offline txn should not be here")
 	}
-	if !op.Txn.GetStore().IsHeartbeat() {
-		seq := mgr.queueDiag.seq.Add(1)
-		if seq&txnQueueDiagSampleMask == 0 {
-			op.queueDiagSampled = true
-			op.enqueuedPreWalAt = time.Now()
-		}
-	}
 	_, err = mgr.preWalQueue.Enqueue(op)
 	return
 }
@@ -768,9 +709,6 @@ func (mgr *TxnManager) onApply(items ...any) {
 	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
-		if op.queueDiagSampled {
-			mgr.queueDiag.applyWait.observe(time.Since(op.enqueuedApplyAt))
-		}
 		store := op.Txn.GetStore()
 		store.TriggerTrace(txnif.TraceOnApply)
 		mgr.workers.Submit(func() {
@@ -901,16 +839,9 @@ func (mgr *TxnManager) onPreWalStage(items ...any) {
 	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
-		if op.queueDiagSampled {
-			mgr.queueDiag.preWalWait.observe(time.Since(op.enqueuedPreWalAt))
-		}
-
 		op.Txn.GetStore().TriggerTrace(txnif.TracePreWal)
 		if !mgr.preWal(op) {
 			continue
-		}
-		if op.queueDiagSampled {
-			op.enqueuedWalAt = time.Now()
 		}
 		if _, err := mgr.walQueue.Enqueue(op); err != nil {
 			panic(err)
@@ -929,10 +860,6 @@ func (mgr *TxnManager) onWalStage(items ...any) {
 	for _, item := range items {
 		t1 := time.Now()
 		op := item.(*OpTxn)
-		if op.queueDiagSampled {
-			mgr.queueDiag.walWait.observe(time.Since(op.enqueuedWalAt))
-		}
-
 		op.Txn.GetStore().TriggerTrace(txnif.TraceOnWal)
 		inWal := mgr.onWal(op)
 		t2 := time.Now()
@@ -963,9 +890,6 @@ func (mgr *TxnManager) postWal(op *OpTxn, inWal bool) {
 		// logtail collecting and pushing
 		// happened only when op really in the wal process
 		mgr.CommitListener.OnEndPrepareWAL(op.Txn)
-	}
-	if op.queueDiagSampled {
-		op.enqueuedApplyAt = time.Now()
 	}
 
 	// waiting for all things done and then to apply this commit/rollback
