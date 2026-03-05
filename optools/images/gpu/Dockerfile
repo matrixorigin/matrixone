@@ -8,7 +8,7 @@ RUN export LANG=en_US.utf8
 ARG DEBIAN_FRONTEND=noninteractive
 ENV MOHOME=/matrixone
 ENV PATH="/usr/local/cuda/bin:${PATH}"
-ENV LD_LIBRARY_PATH="/usr/local/cuda/lib64:/usr/local/cuda/lib64/stubs:${MOHOME}/thirdparties/install/lib:${LD_LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="/usr/local/cuda/lib64:/usr/local/cuda/lib64/stubs:${MOHOME}/thirdparties/install/lib:${MOHOME}/cgo:${LD_LIBRARY_PATH}"
 
 WORKDIR /matrixone
 COPY . .
