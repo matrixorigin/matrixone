@@ -337,6 +337,8 @@ func (s *Schema) HasPKOrFakePK() bool {
 }
 
 func (s *Schema) MustGetExtraBytes() []byte {
+	// Sync FromPublication to Extra before serialization
+	s.Extra.FromPublication = s.FromPublication
 	data, err := s.Extra.Marshal()
 	if err != nil {
 		panic(err)
@@ -349,6 +351,8 @@ func (s *Schema) MustRestoreExtra(data []byte) {
 	if err := s.Extra.Unmarshal(data); err != nil {
 		panic(err)
 	}
+	// Sync FromPublication from Extra after deserialization
+	s.FromPublication = s.Extra.FromPublication
 }
 
 func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err error) {
