@@ -3994,26 +3994,6 @@ func getLockBatch(proc *process.Process, accountId uint32, names []string) (*bat
 	return bat, nil
 }
 
-var doLockMoDatabase = func(c *Compile, dbName string, lockMode lock.LockMode) error {
-	dbRel, err := getRelFromMoCatalog(c, catalog.MO_DATABASE)
-	if err != nil {
-		return err
-	}
-	accountID, err := defines.GetAccountId(c.proc.Ctx)
-	if err != nil {
-		return err
-	}
-	bat, err := getLockBatch(c.proc, accountID, []string{dbName})
-	if err != nil {
-		return err
-	}
-	defer bat.GetVector(0).Free(c.proc.Mp())
-	if err := lockRows(c.e, c.proc, dbRel, bat, 0, lockMode, lock.Sharding_None, accountID); err != nil {
-		return err
-	}
-	return nil
-}
-
 var lockMoDatabase = func(c *Compile, dbName string, lockMode lock.LockMode) error {
 	dbRel, err := getRelFromMoCatalog(c, catalog.MO_DATABASE)
 	if err != nil {
