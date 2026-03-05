@@ -8878,8 +8878,10 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		if err != nil {
 			return err
 		}
-		body = strconv.Quote(string(byt))
-		body = body[1 : len(body)-1]
+		// Keep raw JSON here; SQL-level escaping is applied below.
+		// Using strconv.Quote here would preserve backslashes before JSON quotes
+		// in storage and break json.Unmarshal when invoking python UDFs.
+		body = string(byt)
 	}
 	body = escapeSQLStringForDoubleQuotes(body)
 
