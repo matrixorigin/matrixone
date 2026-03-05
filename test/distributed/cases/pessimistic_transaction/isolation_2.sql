@@ -388,3 +388,4 @@ select * from dis_table_07;
 commit;
 select * from dis_table_07;
 drop table dis_table_07;
+drop database temp_db;

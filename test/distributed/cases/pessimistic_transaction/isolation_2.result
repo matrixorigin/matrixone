@@ -614,3 +614,4 @@ select * from dis_table_07;
 2  ¦  blue  ¦  10.0  ¦  2021-01-20 00:00:00  𝄀
 2  ¦  blue  ¦  12.0  ¦  2024-01-20 00:00:00
 drop table dis_table_07;
+drop database temp_db;
