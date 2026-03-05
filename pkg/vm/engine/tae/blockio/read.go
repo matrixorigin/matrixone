@@ -120,7 +120,7 @@ func BlockDataReadNoCopy(
 	fs fileservice.FileService,
 ) (*batch.Batch, *nulls.Bitmap, func(), error) {
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-		logutil.Debugf("read block %s, columns %v, types %v", info.BlockID.String(), columns, colTypes)
+		logutil.Infof("read block %s, columns %v, types %v", info.BlockID.String(), columns, colTypes)
 	}
 
 	var (
@@ -222,7 +222,7 @@ func BlockDataRead(
 	fs fileservice.FileService,
 ) error {
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-		logutil.Debugf("read block %s, columns %v, types %v", info.BlockID.String(), columns, colTypes)
+		logutil.Infof("read block %s, columns %v, types %v", info.BlockID.String(), columns, colTypes)
 	}
 
 	snapshotTS := types.TimestampToTS(ts)
@@ -881,7 +881,7 @@ func readBlockData(
 				deletes.Add(uint64(i))
 			}
 		}
-		logutil.Debugf(
+		logutil.Infof(
 			"blockread %s scan filter cost %v: base %s filter out %v\n ",
 			info.BlockID.String(),
 			time.Since(t0),
