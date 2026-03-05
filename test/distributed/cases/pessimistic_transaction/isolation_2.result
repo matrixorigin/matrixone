@@ -281,25 +281,25 @@ vvv    2000-09-08 00:00:00
 aaaa    2000-09-02 00:00:00
 oppo    1009-11-11 00:00:00
 insert into dis_table_02(b,c) values ('','1999-06-04');
+drop database if exists temp_db;
+create database temp_db;
+use temp_db;
 create temporary table dis_temp_01(a int,b varchar(100),primary key(a));
-
 begin ;
-
 insert into dis_temp_01 values (233,'uuuu');
-
+use temp_db;
 select * from dis_temp_01;
 SQL parser error: table "dis_temp_01" does not exist
 select * from dis_temp_01;
-a    b
-233    uuuu
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+233  ¦  uuuu
+use temp_db;
 truncate table dis_temp_01;
-no such table isolation_2.dis_temp_01
+no such table temp_db.dis_temp_01
 rollback ;
-
 select * from dis_temp_01;
-a    b
+➤ a[4,32,0]  ¦  b[12,-1,0]
 drop table dis_temp_01;
-
 start transaction;
 
 load data infile '$resources/external_table_file/isolation_01.csv' into table dis_table_02 fields terminated by ',';
@@ -507,28 +507,21 @@ a    b    c
 6666    kkkk    2010-11-25 00:00:00
 879    uuyyy    2011-11-26 00:00:00
 begin ;
-
 use isolation_2;
-
 create temporary table dis_table_05(a int,b varchar(25) not null,c datetime,primary key(a),unique key bstr (b),key cdate (c));
-
 load data infile 'fff.csv' to dis_table_05 fields terminated by ',';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 29 near " to dis_table_05;";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 29 near " to dis_table_05 fields terminated by ',';";
 use isolation_2;
-
 select * from dis_table_05;
 SQL parser error: table "dis_table_05" does not exist
 insert into dis_table_05 values (8900,'kkkk77','1772-04-20');
-
 commit;
-
 select * from dis_table_05;
-a    b    c
-8900    kkkk77    1772-04-20 00:00:00
+➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[93,64,0]  𝄀
+8900  ¦  kkkk77  ¦  1772-04-20 00:00:00
 select * from dis_table_05;
 SQL parser error: table "dis_table_05" does not exist
 drop table dis_table_05;
-
 use isolation_2;
 create table dis_table_06(a int auto_increment primary key,b varchar(25),c double default 0.0);
 insert into dis_table_06(a,b) values(2,'moon');
@@ -538,47 +531,47 @@ use isolation_2;
 insert into dis_table_06(a,b) values (3,'llllp');
 Duplicate entry '3' for key 'a'
 select * from dis_table_06;
-a    b    c
-2    moon    0.0
-3    sun    0.0
+➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[8,54,0]  𝄀
+2  ¦  moon  ¦  0.0  𝄀
+3  ¦  sun  ¦  0.0
 use isolation_2;
 insert into dis_table_06 values (3,'uuubbb',12.02);
 Duplicate entry '3' for key 'a'
 select * from dis_table_06;
-a    b    c
-2    moon    0.0
-3    sun    0.0
+➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[8,54,0]  𝄀
+2  ¦  moon  ¦  0.0  𝄀
+3  ¦  sun  ¦  0.0
 insert into dis_table_06(a,b) values (4,'cookie');
 commit;
 select * from dis_table_06;
-a    b    c
-2    moon    0.0
-3    sun    0.0
-4    cookie    0.0
+➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[8,54,0]  𝄀
+2  ¦  moon  ¦  0.0  𝄀
+3  ¦  sun  ¦  0.0  𝄀
+4  ¦  cookie  ¦  0.0
 begin;
 use isolation_2;
 insert into dis_table_06(a,b) values (5,'leetio');
 select * from dis_table_06;
-a    b    c
-5    leetio    0.0
-2    moon    0.0
-3    sun    0.0
-4    cookie    0.0
+➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[8,54,0]  𝄀
+5  ¦  leetio  ¦  0.0  𝄀
+2  ¦  moon  ¦  0.0  𝄀
+3  ¦  sun  ¦  0.0  𝄀
+4  ¦  cookie  ¦  0.0
 update dis_table_06 set a=5 where b='sun';
 Duplicate entry '5' for key 'a'
 select * from dis_table_06;
-a    b    c
-2    moon    0.0
-3    sun    0.0
-4    cookie    0.0
-5    leetio    0.0
+➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[8,54,0]  𝄀
+2  ¦  moon  ¦  0.0  𝄀
+3  ¦  sun  ¦  0.0  𝄀
+4  ¦  cookie  ¦  0.0  𝄀
+5  ¦  leetio  ¦  0.0
 commit;
 select * from dis_table_06;
-a    b    c
-2    moon    0.0
-3    sun    0.0
-4    cookie    0.0
-5    leetio    0.0
+➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[8,54,0]  𝄀
+2  ¦  moon  ¦  0.0  𝄀
+3  ¦  sun  ¦  0.0  𝄀
+4  ¦  cookie  ¦  0.0  𝄀
+5  ¦  leetio  ¦  0.0
 drop table dis_table_06;
 create table dis_table_07(a int,b varchar(25),c double,d datetime,primary key(a,b,d));
 insert into dis_table_07 values (1,'yellow',20.09,'2020-09-27');
@@ -588,36 +581,36 @@ use isolation_2;
 insert into dis_table_07 values (2,'blue',11.00,'2021-01-20');
 Duplicate entry '(2,blue,2021-01-20 00:00:00)' for key '(a,b,d)'
 select * from dis_table_07;
-a    b    c    d
-1    yellow    20.09    2020-09-27 00:00:00
-2    blue    10.0    2021-01-20 00:00:00
+➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[8,54,0]  ¦  d[93,64,0]  𝄀
+1  ¦  yellow  ¦  20.09  ¦  2020-09-27 00:00:00  𝄀
+2  ¦  blue  ¦  10.0  ¦  2021-01-20 00:00:00
 select * from dis_table_07;
-a    b    c    d
-1    yellow    20.09    2020-09-27 00:00:00
-2    blue    10.0    2021-01-20 00:00:00
+➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[8,54,0]  ¦  d[93,64,0]  𝄀
+1  ¦  yellow  ¦  20.09  ¦  2020-09-27 00:00:00  𝄀
+2  ¦  blue  ¦  10.0  ¦  2021-01-20 00:00:00
 commit;
 select * from dis_table_07;
-a    b    c    d
-1    yellow    20.09    2020-09-27 00:00:00
-2    blue    10.0    2021-01-20 00:00:00
+➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[8,54,0]  ¦  d[93,64,0]  𝄀
+1  ¦  yellow  ¦  20.09  ¦  2020-09-27 00:00:00  𝄀
+2  ¦  blue  ¦  10.0  ¦  2021-01-20 00:00:00
 insert into dis_table_07 values (2,'blue',12.00,'2024-01-20');
 begin;
 update dis_table_07 set d='2024-01-20' where a=2 and b='blue';
 Duplicate entry '(2,blue,2024-01-20 00:00:00)' for key '(a,b,d)'
 select * from dis_table_07;
-a    b    c    d
-1    yellow    20.09    2020-09-27 00:00:00
-2    blue    10.0    2021-01-20 00:00:00
-2    blue    12.0    2024-01-20 00:00:00
+➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[8,54,0]  ¦  d[93,64,0]  𝄀
+1  ¦  yellow  ¦  20.09  ¦  2020-09-27 00:00:00  𝄀
+2  ¦  blue  ¦  10.0  ¦  2021-01-20 00:00:00  𝄀
+2  ¦  blue  ¦  12.0  ¦  2024-01-20 00:00:00
 select * from dis_table_07;
-a    b    c    d
-1    yellow    20.09    2020-09-27 00:00:00
-2    blue    10.0    2021-01-20 00:00:00
-2    blue    12.0    2024-01-20 00:00:00
+➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[8,54,0]  ¦  d[93,64,0]  𝄀
+1  ¦  yellow  ¦  20.09  ¦  2020-09-27 00:00:00  𝄀
+2  ¦  blue  ¦  10.0  ¦  2021-01-20 00:00:00  𝄀
+2  ¦  blue  ¦  12.0  ¦  2024-01-20 00:00:00
 commit;
 select * from dis_table_07;
-a    b    c    d
-1    yellow    20.09    2020-09-27 00:00:00
-2    blue    10.0    2021-01-20 00:00:00
-2    blue    12.0    2024-01-20 00:00:00
+➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[8,54,0]  ¦  d[93,64,0]  𝄀
+1  ¦  yellow  ¦  20.09  ¦  2020-09-27 00:00:00  𝄀
+2  ¦  blue  ¦  10.0  ¦  2021-01-20 00:00:00  𝄀
+2  ¦  blue  ¦  12.0  ¦  2024-01-20 00:00:00
 drop table dis_table_07;
