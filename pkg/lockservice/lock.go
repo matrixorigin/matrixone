@@ -100,6 +100,29 @@ func (l Lock) addHolder(
 	logHolderAdded(logger, c, l)
 }
 
+// setMode updates the lock's mode to match the requested mode. Returns the
+// updated Lock and whether the mode actually changed. Because Lock is a value
+// type, the caller must write the returned Lock back to the store when changed.
+//
+// This must be called when a waiter is promoted to holder, because addHolder
+// operates on a value copy and cannot update the mode in the store. Without
+// this, the stored mode becomes stale:
+//   - Shared lock with Exclusive holder → new Shared requests incorrectly allowed
+//   - Exclusive lock with Shared holder → new Shared requests incorrectly blocked
+func (l Lock) setMode(mode pb.LockMode) (Lock, bool) {
+	if mode == pb.LockMode_Exclusive && l.isShared() {
+		l.value &^= flagLockSharedMode
+		l.value |= flagLockExclusiveMode
+		return l, true
+	}
+	if mode == pb.LockMode_Shared && !l.isShared() {
+		l.value &^= flagLockExclusiveMode
+		l.value |= flagLockSharedMode
+		return l, true
+	}
+	return l, false
+}
+
 func (l Lock) isEmpty() bool {
 	return l.holders.size() == 0 &&
 		(l.waiters == nil || l.waiters.size() == 0)
