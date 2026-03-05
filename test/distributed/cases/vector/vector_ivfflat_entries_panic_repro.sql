@@ -94,7 +94,9 @@ INSERT INTO t_ivfflat_entries_panic
 SELECT result + 19500, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
 
 -- Force baseline to persisted.
+-- @ignore:0
 SELECT mo_ctl('dn','flush', concat(database(), '.t_ivfflat_entries_panic'));
+-- @ignore:0
 SELECT mo_ctl('dn','checkpoint','');
 
 -- Add in-memory delta after checkpoint.

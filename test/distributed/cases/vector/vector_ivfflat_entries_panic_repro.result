@@ -107,6 +107,7 @@ SELECT mo_ctl('dn','checkpoint','');
   ]
 }
 
+
 INSERT INTO t_ivfflat_entries_panic
 SELECT result + 20000, '[0.5,0.5,0.5,0.5]', 2 FROM generate_series(1, 500) g;
 INSERT INTO t_ivfflat_entries_panic
@@ -150,7 +151,7 @@ SET @q = CONCAT(
 );
 PREPARE s1 FROM @q;
 EXECUTE s1;
-cnt
+➤ cnt[-5,64,0]  𝄀
 4000
 DEALLOCATE PREPARE s1;
 DROP TABLE IF EXISTS t_ivfflat_entries_panic;
