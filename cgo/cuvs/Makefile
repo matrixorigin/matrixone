@@ -17,7 +17,7 @@ NVCC_FLAGS += -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE -DRAFT_SYSTEM_LIT
 # Linking flags
 LDFLAGS := -shared
 LDFLAGS += -L$(CUDA_PATH)/lib64/stubs -lcuda -L$(CUDA_PATH)/lib64 -lcudart
-LDFLAGS += -L$(CONDA_PREFIX)/lib -lcuvs -lcuvs_c -ldl -lrmm
+LDFLAGS += -L$(CONDA_PREFIX)/lib -lcuvs -lcuvs_c -ldl -lrmm -lrapids_logger
 LDFLAGS += -Xlinker -lpthread -Xlinker -lm
 
 # Target library
