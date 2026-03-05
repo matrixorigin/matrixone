@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -1115,6 +1116,20 @@ func ExecuteIteration(
 	syncProtectionRetryOpt *SyncProtectionRetryOption, // Currently unused, reserved for future sync protection
 	sqlExecutorRetryOpts ...*SQLExecutorRetryOption,
 ) (err error) {
+	startTime := time.Now()
+	v2.CCPRIterationStartedCounter.Inc()
+	v2.CCPRRunningIterationsGauge.Inc()
+	defer func() {
+		duration := time.Since(startTime)
+		v2.CCPRIterationTotalDurationHistogram.Observe(duration.Seconds())
+		v2.CCPRRunningIterationsGauge.Dec()
+		if err != nil {
+			v2.CCPRIterationErrorCounter.Inc()
+		} else {
+			v2.CCPRIterationCompletedCounter.Inc()
+		}
+	}()
+
 	var iterationCtx *IterationContext
 	var sqlExecutorRetryOpt *SQLExecutorRetryOption
 	if len(sqlExecutorRetryOpts) > 0 {

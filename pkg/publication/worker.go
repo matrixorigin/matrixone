@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
 )
@@ -628,7 +629,14 @@ func (w *filterObjectWorker) Run() {
 					return
 				case job := <-w.jobChan:
 					globalJobStats.IncrementFilterObjectRunning()
+					v2.CCPRFilterObjectQueueSizeGauge.Dec()
+					v2.CCPRRunningFilterObjectJobsGauge.Inc()
+					startTime := time.Now()
 					job.Execute()
+					duration := time.Since(startTime)
+					v2.CCPRRunningFilterObjectJobsGauge.Dec()
+					v2.CCPRFilterObjectJobDurationHistogram.Observe(duration.Seconds())
+					v2.CCPRFilterObjectJobCompletedCounter.Inc()
 					globalJobStats.DecrementFilterObjectRunning()
 				}
 			}
@@ -641,6 +649,7 @@ func (w *filterObjectWorker) SubmitFilterObject(job Job) error {
 		return moerr.NewInternalError(context.Background(), "FilterObjectWorker is closed")
 	}
 	globalJobStats.IncrementFilterObjectPending()
+	v2.CCPRFilterObjectQueueSizeGauge.Inc()
 	w.jobChan <- job
 	return nil
 }
@@ -829,16 +838,29 @@ func NewWriteObjectWorker() WriteObjectWorker {
 		simpleJobWorker: newSimpleJobWorker(
 			"WriteObjectWorker",
 			GetWriteObjectWorkerThread(),
-			globalJobStats.IncrementWriteObjectPending,
-			globalJobStats.IncrementWriteObjectRunning,
-			globalJobStats.DecrementWriteObjectRunning,
+			func() {
+				globalJobStats.IncrementWriteObjectPending()
+				v2.CCPRWriteObjectQueueSizeGauge.Inc()
+			},
+			func() {
+				globalJobStats.IncrementWriteObjectRunning()
+				v2.CCPRWriteObjectQueueSizeGauge.Dec()
+				v2.CCPRRunningWriteObjectJobsGauge.Inc()
+			},
+			func() {
+				globalJobStats.DecrementWriteObjectRunning()
+				v2.CCPRRunningWriteObjectJobsGauge.Dec()
+				v2.CCPRWriteObjectJobCompletedCounter.Inc()
+			},
 			func(job Job, duration time.Duration) {
+				v2.CCPRWriteObjectJobDurationHistogram.Observe(duration.Seconds())
 				if writeJobInfo, ok := job.(WriteObjectJobInfo); ok {
 					globalJobStats.RecordWriteObjectDuration(
 						writeJobInfo.GetObjectName(),
 						writeJobInfo.GetObjectSize(),
 						duration,
 					)
+					v2.CCPRObjectSizeBytesHistogram.Observe(float64(writeJobInfo.GetObjectSize()))
 				}
 			},
 		),

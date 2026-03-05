@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/tidwall/btree"
 )
@@ -773,6 +774,13 @@ func GC(
 	upstreamSQLHelperFactory UpstreamSQLHelperFactory,
 	cleanupThreshold time.Duration,
 ) (err error) {
+	startTime := time.Now()
+	v2.CCPRGCRunCounter.Inc()
+	defer func() {
+		duration := time.Since(startTime)
+		v2.CCPRGCDurationHistogram.Observe(duration.Seconds())
+	}()
+
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
