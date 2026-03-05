@@ -665,7 +665,7 @@ func (l *localLockTable) addRangeLockLocked(
 						// so both ends reflect the correct mode.
 						l.setModePairedRangeLock(conflictKey, updated, c.opts.Mode)
 					}
-					err := c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{conflictKey}, l.logger)
+					err = c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{conflictKey}, l.logger)
 					if err != nil {
 						return nil, Lock{}, err
 					}
