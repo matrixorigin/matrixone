@@ -787,12 +787,13 @@ func TestIsExperimentalEnabled(t *testing.T) {
 	assert.True(t, enabled)
 }
 
-// TestDropDatabase_SnapshotRefreshAfterExclusiveLock verifies that DropDatabase
-// refreshes the transaction snapshot after acquiring the exclusive lock on
-// mo_database. This prevents the race condition where a concurrent CLONE
-// (CREATE TABLE) commits between the snapshot and the lock acquisition,
-// leaving orphan records in mo_tables.
-func TestDropDatabase_SnapshotRefreshAfterExclusiveLock(t *testing.T) {
+// TestDropDatabase_SnapshotAdvanceAndRestore verifies that DropDatabase
+// unconditionally advances SnapshotTS via UpdateSnapshot(HLC Now) after
+// acquiring the exclusive lock, and restores the original SnapshotTS
+// before returning. This prevents the race condition where a concurrent
+// CLONE (CREATE TABLE) on another CN commits between the snapshot and
+// the lock acquisition, leaving orphan records in mo_tables.
+func TestDropDatabase_SnapshotAdvanceAndRestore(t *testing.T) {
 	dropDbDef := &plan2.DropDatabase{
 		IfExists: false,
 		Database: "test_db",
@@ -813,12 +814,11 @@ func TestDropDatabase_SnapshotRefreshAfterExclusiveLock(t *testing.T) {
 		TxnOffset: 0,
 	}
 
-	snapshotTS := timestamp.Timestamp{PhysicalTime: 100}
-	latestCommitTS := timestamp.Timestamp{PhysicalTime: 200}
-	appliedTS := timestamp.Timestamp{PhysicalTime: 200}
+	origSnapshotTS := timestamp.Timestamp{PhysicalTime: 100}
 
-	// Test 1: When snapshotTS < latestCommitTS, UpdateSnapshot MUST be called.
-	t.Run("snapshot_refreshed_when_stale", func(t *testing.T) {
+	// Test 1: Pessimistic + RC => UpdateSnapshot called with HLC Now,
+	// and SnapshotTS is restored after DropDatabase returns.
+	t.Run("advance_and_restore", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -828,37 +828,45 @@ func TestDropDatabase_SnapshotRefreshAfterExclusiveLock(t *testing.T) {
 		proc.Ctx = ctx
 		proc.ReplaceTopCtx(ctx)
 
+		// Use a real TxnMeta so TxnRef() returns a mutable pointer
+		// and we can verify the restore.
+		txnMeta := txn.TxnMeta{
+			Mode:       txn.TxnMode_Pessimistic,
+			Isolation:  txn.TxnIsolation_RC,
+			SnapshotTS: origSnapshotTS,
+		}
+
 		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOp.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOp.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOp.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
-		txnOp.EXPECT().Txn().Return(txn.TxnMeta{
-			Mode:       txn.TxnMode_Pessimistic,
-			Isolation:  txn.TxnIsolation_RC,
-			SnapshotTS: snapshotTS,
-		}).AnyTimes()
+		txnOp.EXPECT().Txn().Return(txnMeta).AnyTimes()
 		txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 		txnOp.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 		txnOp.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
 		txnOp.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		txnOp.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
 		txnOp.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOp.EXPECT().SnapshotTS().Return(origSnapshotTS).AnyTimes()
+		txnOp.EXPECT().TxnRef().Return(&txnMeta).AnyTimes()
 
-		// Key assertion: UpdateSnapshot must be called with the applied timestamp.
-		txnOp.EXPECT().UpdateSnapshot(gomock.Any(), appliedTS).Return(nil).Times(1)
+		// Key assertion: UpdateSnapshot must be called exactly once with
+		// an HLC timestamp (we accept any value since HLC Now is dynamic).
+		txnOp.EXPECT().UpdateSnapshot(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, ts timestamp.Timestamp) error {
+				// The timestamp should be a recent HLC Now, not the original.
+				assert.True(t, origSnapshotTS.Less(ts),
+					"UpdateSnapshot should be called with HLC Now > origSnapshotTS")
+				// Simulate what real UpdateSnapshot does: advance SnapshotTS.
+				txnMeta.SnapshotTS = ts
+				return nil
+			}).Times(1)
 
-		txnCli := mock_frontend.NewMockTxnClient(ctrl)
-		txnCli.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOp, nil).AnyTimes()
-		txnCli.EXPECT().GetLatestCommitTS().Return(latestCommitTS).Times(1)
-		txnCli.EXPECT().WaitLogTailAppliedAt(gomock.Any(), latestCommitTS).Return(appliedTS, nil).Times(1)
-
-		proc.Base.TxnClient = txnCli
 		proc.Base.TxnOperator = txnOp
 
 		mockDb := mock_frontend.NewMockDatabase(ctrl)
 		mockDb.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
-		// Relations returns an error to stop execution after the snapshot refresh.
-		// The important thing is that UpdateSnapshot was called before we get here.
+		// Relations returns an error to stop execution after the snapshot advance.
 		mockDb.EXPECT().Relations(gomock.Any()).Return(nil, moerr.NewInternalErrorNoCtx("stop here")).AnyTimes()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
@@ -871,13 +879,17 @@ func TestDropDatabase_SnapshotRefreshAfterExclusiveLock(t *testing.T) {
 
 		c := NewCompile("test", "test", "drop database test_db", "", "", eng, proc, nil, false, nil, time.Now())
 		err := s.DropDatabase(c)
-		// The test will error at Relations(), but the key assertion is that
-		// UpdateSnapshot was called (enforced by Times(1) on the mock).
+		// DropDatabase errors at Relations(), but the key assertions are:
+		// 1. UpdateSnapshot was called (enforced by Times(1))
+		// 2. SnapshotTS is restored to the original value by the defer
 		assert.Error(t, err)
+		assert.Equal(t, origSnapshotTS, txnMeta.SnapshotTS,
+			"SnapshotTS must be restored to original after DropDatabase returns")
 	})
 
-	// Test 2: When snapshotTS >= latestCommitTS, UpdateSnapshot must NOT be called.
-	t.Run("snapshot_not_refreshed_when_fresh", func(t *testing.T) {
+	// Test 2: Non-pessimistic txn => UpdateSnapshot must NOT be called,
+	// but SnapshotTS restore defer still runs (no-op in this case).
+	t.Run("skip_advance_for_non_rc", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -887,35 +899,29 @@ func TestDropDatabase_SnapshotRefreshAfterExclusiveLock(t *testing.T) {
 		proc.Ctx = ctx
 		proc.ReplaceTopCtx(ctx)
 
-		freshSnapshotTS := timestamp.Timestamp{PhysicalTime: 300}
-		staleCommitTS := timestamp.Timestamp{PhysicalTime: 200}
+		txnMeta := txn.TxnMeta{
+			Mode:       txn.TxnMode_Optimistic,
+			Isolation:  txn.TxnIsolation_SI,
+			SnapshotTS: origSnapshotTS,
+		}
 
 		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOp.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOp.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOp.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
-		txnOp.EXPECT().Txn().Return(txn.TxnMeta{
-			Mode:       txn.TxnMode_Pessimistic,
-			Isolation:  txn.TxnIsolation_RC,
-			SnapshotTS: freshSnapshotTS,
-		}).AnyTimes()
+		txnOp.EXPECT().Txn().Return(txnMeta).AnyTimes()
 		txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 		txnOp.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 		txnOp.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
 		txnOp.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		txnOp.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
 		txnOp.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOp.EXPECT().SnapshotTS().Return(origSnapshotTS).AnyTimes()
+		txnOp.EXPECT().TxnRef().Return(&txnMeta).AnyTimes()
 
-		// Key assertion: UpdateSnapshot must NOT be called.
+		// Key assertion: UpdateSnapshot must NOT be called for non-RC txn.
 		txnOp.EXPECT().UpdateSnapshot(gomock.Any(), gomock.Any()).Times(0)
 
-		txnCli := mock_frontend.NewMockTxnClient(ctrl)
-		txnCli.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOp, nil).AnyTimes()
-		txnCli.EXPECT().GetLatestCommitTS().Return(staleCommitTS).Times(1)
-		// WaitLogTailAppliedAt should NOT be called either.
-		txnCli.EXPECT().WaitLogTailAppliedAt(gomock.Any(), gomock.Any()).Times(0)
-
-		proc.Base.TxnClient = txnCli
 		proc.Base.TxnOperator = txnOp
 
 		mockDb := mock_frontend.NewMockDatabase(ctrl)
@@ -933,5 +939,7 @@ func TestDropDatabase_SnapshotRefreshAfterExclusiveLock(t *testing.T) {
 		c := NewCompile("test", "test", "drop database test_db", "", "", eng, proc, nil, false, nil, time.Now())
 		err := s.DropDatabase(c)
 		assert.Error(t, err)
+		assert.Equal(t, origSnapshotTS, txnMeta.SnapshotTS,
+			"SnapshotTS must remain unchanged for non-RC txn")
 	})
 }
