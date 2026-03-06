@@ -239,12 +239,18 @@ func (w *AsyncWorkerPool) workerLoop(wg *sync.WaitGroup) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	resource, err := w.createResource()
-	if err != nil {
-		w.errch <- err
-		return
+	var resource any
+	var err error
+	if w.createResource != nil {
+		resource, err = w.createResource()
+		if err != nil {
+			w.errch <- err
+			return
+		}
 	}
-	defer w.cleanupResource(resource)
+	if w.cleanupResource != nil {
+		defer w.cleanupResource(resource)
+	}
 
 	for {
 		select {
@@ -266,12 +272,18 @@ func (w *AsyncWorkerPool) run(initFn func(res any) error, stopFn func(resource a
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	parentResource, err := w.createResource()
-	if err != nil {
-		w.errch <- err
-		return
+	var parentResource any
+	var err error
+	if w.createResource != nil {
+		parentResource, err = w.createResource()
+		if err != nil {
+			w.errch <- err
+			return
+		}
 	}
-	defer w.cleanupResource(parentResource)
+	if w.cleanupResource != nil {
+		defer w.cleanupResource(parentResource)
+	}
 
 	// Execute initFn once.
 	if initFn != nil {

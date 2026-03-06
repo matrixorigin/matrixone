@@ -486,3 +486,24 @@ func TestAsyncWorkerPool_MultipleStopCalls(t *testing.T) {
 
 	t.Log("Successfully called Stop multiple times without panic.")
 }
+
+func TestAsyncWorkerPool_NilCallbacks(t *testing.T) {
+	worker := NewAsyncWorkerPool(2, nil, nil)
+	require.NotNil(t, worker)
+
+	worker.Start(nil, nil)
+
+	expectedResult := "no resource needed"
+	taskID, err := worker.Submit(func(res any) (any, error) {
+		assert.Nil(t, res)
+		return expectedResult, nil
+	})
+	require.NoError(t, err)
+
+	result, err := worker.Wait(taskID)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, expectedResult, result.Result)
+
+	worker.Stop()
+}
