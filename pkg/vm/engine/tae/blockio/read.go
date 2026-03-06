@@ -621,13 +621,7 @@ func BlockDataReadInner(
 		var dists []float64
 
 		if orderByLimit != nil {
-			vecColPos := orderByLimit.ColPos
-			if phyAddrColumnPos >= 0 && vecColPos > int32(phyAddrColumnPos) {
-				vecColPos--
-			}
-			vecCol := &cacheVectors[vecColPos]
-
-			selectRows, dists, err = HandleOrderByLimitOnIVFFlatIndex(ctx, selectRows, vecCol, orderByLimit)
+			selectRows, dists, err = handleOrderByLimitOnSelectRows(ctx, selectRows, orderByLimit, phyAddrColumnPos, cacheVectors)
 			if err != nil {
 				return err
 			}
@@ -675,20 +669,15 @@ func BlockDataReadInner(
 	// No pre-filter rows, but vector TopN pushdown is requested:
 	// apply TopN on live rows (exclude tombstones first), then materialize selected rows.
 	if orderByLimit != nil {
-		vecColPos := orderByLimit.ColPos
-		if phyAddrColumnPos >= 0 && vecColPos > int32(phyAddrColumnPos) {
-			vecColPos--
-		}
-		vecCol := &cacheVectors[vecColPos]
-
 		var topInputRows []int64
 		if !deleteMask.IsEmpty() {
-			capHint := vecCol.Length() - deleteMask.Count()
+			length := int(info.MetaLocation().Rows())
+			capHint := length - deleteMask.Count()
 			if capHint < 0 {
 				capHint = 0
 			}
 			topInputRows = make([]int64, 0, capHint)
-			for i := 0; i < vecCol.Length(); i++ {
+			for i := 0; i < length; i++ {
 				if !deleteMask.Contains(uint64(i)) {
 					topInputRows = append(topInputRows, int64(i))
 				}
@@ -696,7 +685,7 @@ func BlockDataReadInner(
 		}
 
 		var dists []float64
-		selectRows, dists, err = HandleOrderByLimitOnIVFFlatIndex(ctx, topInputRows, vecCol, orderByLimit)
+		selectRows, dists, err = handleOrderByLimitOnSelectRows(ctx, topInputRows, orderByLimit, phyAddrColumnPos, cacheVectors)
 		if err != nil {
 			return err
 		}
@@ -878,4 +867,20 @@ func readBlockData(
 	}
 
 	return
+}
+
+func handleOrderByLimitOnSelectRows(
+	ctx context.Context,
+	selectRows []int64,
+	orderByLimit *objectio.IndexReaderTopOp,
+	phyAddrColumnPos int,
+	cacheVectors containers.Vectors,
+) ([]int64, []float64, error) {
+	vecColPos := orderByLimit.ColPos
+	if phyAddrColumnPos >= 0 && vecColPos > int32(phyAddrColumnPos) {
+		vecColPos--
+	}
+	vecCol := &cacheVectors[vecColPos]
+
+	return HandleOrderByLimitOnIVFFlatIndex(ctx, selectRows, vecCol, orderByLimit)
 }

@@ -15,6 +15,7 @@
 package blockio
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -22,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/stretchr/testify/require"
 )
@@ -185,4 +187,45 @@ func TestFillOutputBatchBySelectedRows(t *testing.T) {
 		require.Equal(t, 3, outputBat.Vecs[0].Length())
 		require.Equal(t, 3, outputBat.Vecs[1].Length())
 	})
+}
+
+func TestHandleOrderByLimitOnSelectRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	ctx := context.Background()
+
+	vec0 := vector.NewVec(types.T_int32.ToType())
+	vec1 := vector.NewVec(types.T_array_float32.ToType())
+
+	for i := 0; i < 3; i++ {
+		vector.AppendFixed(vec0, int32(i), false, mp)
+	}
+
+	vector.AppendBytes(vec1, types.ArrayToBytes[float32]([]float32{1.0, 1.0}), false, mp) // dist: 2
+	vector.AppendBytes(vec1, types.ArrayToBytes[float32]([]float32{0.1, 0.2}), false, mp) // dist: 0.05
+	vector.AppendBytes(vec1, types.ArrayToBytes[float32]([]float32{0.5, 0.5}), false, mp) // dist: 0.5
+
+	cacheVectors := make(containers.Vectors, 2)
+	cacheVectors[0] = *vec0
+	cacheVectors[1] = *vec1
+
+	selectRows := []int64{0, 1, 2}
+
+	orderByLimit := &objectio.IndexReaderTopOp{
+		ColPos:     1,
+		Limit:      2,
+		Typ:        types.T_array_float32,
+		NumVec:     types.ArrayToBytes[float32]([]float32{0.0, 0.0}),
+		MetricType: metric.Metric_L2Distance,
+		DistHeap:   make(objectio.Float64Heap, 0, 2),
+	}
+
+	resSels, resDists, err := handleOrderByLimitOnSelectRows(ctx, selectRows, orderByLimit, -1, cacheVectors)
+	require.NoError(t, err)
+	require.Equal(t, 2, len(resSels))
+	require.Equal(t, 2, len(resDists))
+
+	// Closest should be index 1 (0.1, 0.2), then index 2 (0.5, 0.5)
+	require.Equal(t, int64(1), resSels[0])
+	require.Equal(t, int64(2), resSels[1])
 }
