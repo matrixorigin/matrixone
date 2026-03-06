@@ -82,6 +82,7 @@ func ReadDataByFilter(
 		colTypes,
 		-1,
 		info,
+		ds,
 		ts,
 		fileservice.Policy(0),
 		cacheVectors,
@@ -149,7 +150,7 @@ func BlockDataReadNoCopy(
 
 	// read block data from storage specified by meta location
 	if deleteMask, release, err = readBlockData(
-		ctx, columns, colTypes, phyAddrColumnPos, info, ts, policy, cacheVectors, mp, fs,
+		ctx, columns, colTypes, phyAddrColumnPos, info, ds, ts, policy, cacheVectors, mp, fs,
 	); err != nil {
 		return nil, nil, nil, err
 	}
@@ -625,6 +626,7 @@ func BlockDataReadInner(
 		colTypes,
 		phyAddrColumnPos,
 		info,
+		ds,
 		ts,
 		policy,
 		cacheVectors,
@@ -817,6 +819,7 @@ func readBlockData(
 	colTypes []types.Type,
 	phyAddrColumnPos int,
 	info *objectio.BlockInfo,
+	_ engine.DataSource,
 	ts types.TS,
 	policy fileservice.Policy,
 	cacheVectors containers.Vectors,
@@ -844,6 +847,9 @@ func readBlockData(
 		release, err2 = ioutil.LoadColumns(
 			ctx, cols, typs, fs, info.MetaLocation(), cacheVectors2, m, policy,
 		)
+		if err2 != nil {
+			return
+		}
 		return
 	}
 

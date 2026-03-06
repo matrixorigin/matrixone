@@ -15,13 +15,15 @@
 package databranchutils
 
 import (
+	"bufio"
 	"bytes"
-	"container/list"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -31,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/panjf2000/ants/v2"
 )
 
@@ -43,18 +46,34 @@ type BranchHashmap interface {
 	// GetResult per probed row, preserving the order of the original vectors. The
 	// returned rows reference the internal storage and must be treated as read-only.
 	GetByVectors(keyVecs []*vector.Vector) ([]GetResult, error)
+	// GetByEncodedKey retrieves rows using a pre-encoded key such as one obtained
+	// from ForEachShardParallel. Returned rows reference internal storage and must
+	// be treated as read-only.
+	GetByEncodedKey(encodedKey []byte) (GetResult, error)
 	// PopByVectors behaves like GetByVectors but removes matching rows from the
 	// hashmap. When removeAll is true, all rows associated with a key are removed.
 	// When removeAll is false, only a single row is removed. Returned rows are
 	// detached copies because the underlying entries have been removed.
 	PopByVectors(keyVecs []*vector.Vector, removeAll bool) ([]GetResult, error)
+	// PopByVectorsStream removes rows like PopByVectors but streams each matched
+	// row to the callback. The callback receives the original key row index plus
+	// the encoded key/value; the slices are detached copies and safe to keep.
+	// The returned integer counts removed rows.
+	PopByVectorsStream(keyVecs []*vector.Vector, removeAll bool, fn func(idx int, key []byte, row []byte) error) (int, error)
 	// PopByEncodedKey removes rows using a pre-encoded key such as one obtained
 	// from ForEachShardParallel. It mirrors PopByVectors semantics.
 	PopByEncodedKey(encodedKey []byte, removeAll bool) (GetResult, error)
+	// PopByEncodedKeyValue removes rows matching both the encoded key and encoded
+	// value. When removeAll is true it removes all matching rows, otherwise it
+	// removes a single row. It returns the number of rows removed.
+	PopByEncodedKeyValue(encodedKey []byte, encodedValue []byte, removeAll bool) (int, error)
 	// PopByEncodedFullValue PopByEncodedFullValues removes rows by reconstructing the key from a full
 	// encoded row payload. The full row must match the value encoding used by
 	// PutByVectors. It mirrors PopByEncodedKey semantics.
 	PopByEncodedFullValue(encodedValue []byte, removeAll bool) (GetResult, error)
+	// PopByEncodedFullValueExact removes rows by matching the full encoded row
+	// payload, including the value bytes. It mirrors PopByEncodedKeyValue semantics.
+	PopByEncodedFullValueExact(encodedValue []byte, removeAll bool) (int, error)
 	// ForEachShardParallel provides exclusive access to each shard. The callback
 	// receives a cursor offering read-only iteration plus mutation helpers that
 	// avoid blocking other shards. parallelism <= 0 selects the default value:
@@ -72,6 +91,8 @@ type BranchHashmap interface {
 	Migrate(keyCols []int, parallelism int) (BranchHashmap, error)
 	// ItemCount reports the number of rows currently stored in the hashmap.
 	ItemCount() int64
+	// ShardCount reports the number of shards in the hashmap.
+	ShardCount() int
 	// DecodeRow turns the encoded row emitted by Put/Get/Pop/ForEach back into a
 	// tuple of column values in the same order that was originally supplied.
 	DecodeRow(data []byte) (types.Tuple, []types.Type, error)
@@ -83,12 +104,19 @@ type ShardCursor interface {
 	// ShardID returns the zero-based shard identifier.
 	ShardID() int
 	// ForEach visits every encoded key stored inside the shard, including rows
-	// that have spilled to disk. The provided rows slices reference internal
-	// buffers and are therefore read-only and only valid inside the callback.
-	ForEach(fn func(key []byte, rows [][]byte) error) error
+	// that have spilled to disk. The callback is invoked per entry with a single
+	// payload row. The provided slices reference internal buffers (or scratch
+	// copies for spilled data) and are only valid inside the callback.
+	ForEach(fn func(key []byte, row []byte) error) error
+	// GetByEncodedKey retrieves rows using a pre-encoded key while the caller
+	// still owns the iteration lock.
+	GetByEncodedKey(encodedKey []byte) (GetResult, error)
 	// PopByEncodedKey removes entries from the shard while the caller still owns
 	// the iteration lock, ensuring In-shard mutations stay non-blocking.
 	PopByEncodedKey(encodedKey []byte, removeAll bool) (GetResult, error)
+	// PopByEncodedKeyValue removes entries matching both key and value while the
+	// caller still owns the iteration lock.
+	PopByEncodedKeyValue(encodedKey []byte, encodedValue []byte, removeAll bool) (int, error)
 }
 
 // GetResult bundles the original rows associated with a probed key.
@@ -101,11 +129,30 @@ type GetResult struct {
 	Rows [][]byte
 }
 
+type keyProbe struct {
+	idx    int
+	key    []byte
+	keyStr string
+	hash   uint64
+	plan   *removalPlan
+}
+
+type probeGroup struct {
+	indices []int
+	plans   []*removalPlan
+	next    int
+	values  [][]byte
+}
+
 const (
-	branchHashSeed = 0x9e3779b97f4a7c15
-	minShardCount  = 4
-	maxShardCount  = 128
-	putBatchSize   = 8192
+	branchHashSeed             = 0x9e3779b97f4a7c15
+	minShardCount              = 4
+	maxShardCount              = 128
+	putBatchSize               = 8192
+	defaultMemIndexSize        = 1024
+	defaultSpillBucketCount    = 1024
+	defaultSpillSegmentMaxSize = 128 * mpool.MB
+	spillEntryHeaderSize       = 16
 )
 
 // branchHashmap is an adaptive hash map that accepts vector columns and
@@ -120,6 +167,10 @@ type branchHashmap struct {
 	keyCols    []int
 
 	spillRoot string
+	// spillBucketCount must be a power of two.
+	spillBucketCount uint32
+	// spillSegmentMaxBytes controls the maximum size of a spill file segment.
+	spillSegmentMaxBytes uint64
 
 	packerPool     sync.Pool
 	entryBatchPool sync.Pool
@@ -147,6 +198,25 @@ func WithBranchHashmapSpillRoot(root string) BranchHashmapOption {
 	}
 }
 
+// WithBranchHashmapSpillBucketCount sets the number of spill buckets per shard.
+// The value is rounded up to the next power of two.
+func WithBranchHashmapSpillBucketCount(bucketCount int) BranchHashmapOption {
+	return func(bh *branchHashmap) {
+		if bucketCount > 0 {
+			bh.spillBucketCount = uint32(bucketCount)
+		}
+	}
+}
+
+// WithBranchHashmapSpillSegmentMaxBytes caps the size of each spill file segment.
+func WithBranchHashmapSpillSegmentMaxBytes(maxBytes uint64) BranchHashmapOption {
+	return func(bh *branchHashmap) {
+		if maxBytes > 0 {
+			bh.spillSegmentMaxBytes = maxBytes
+		}
+	}
+}
+
 // WithBranchHashmapShardCount sets the shard count. Values outside [4, 64] are clamped.
 func WithBranchHashmapShardCount(shards int) BranchHashmapOption {
 	return func(bh *branchHashmap) {
@@ -157,10 +227,19 @@ func WithBranchHashmapShardCount(shards int) BranchHashmapOption {
 // NewBranchHashmap constructs a new branchHashmap.
 func NewBranchHashmap(opts ...BranchHashmapOption) (BranchHashmap, error) {
 	bh := &branchHashmap{
-		allocator: malloc.GetDefault(nil),
+		allocator:            malloc.GetDefault(nil),
+		spillBucketCount:     defaultSpillBucketCount,
+		spillSegmentMaxBytes: defaultSpillSegmentMaxSize,
 	}
 	for _, opt := range opts {
 		opt(bh)
+	}
+	if bh.spillBucketCount == 0 {
+		bh.spillBucketCount = defaultSpillBucketCount
+	}
+	bh.spillBucketCount = normalizeBucketCount(bh.spillBucketCount)
+	if bh.spillSegmentMaxBytes == 0 {
+		bh.spillSegmentMaxBytes = defaultSpillSegmentMaxSize
 	}
 	if bh.allocator == nil {
 		return nil, moerr.NewInternalErrorNoCtx("branchHashmap requires a non-nil allocator")
@@ -177,7 +256,7 @@ func NewBranchHashmap(opts ...BranchHashmapOption) (BranchHashmap, error) {
 	}
 	bh.shards = make([]*hashShard, bh.shardCount)
 	for i := range bh.shards {
-		bh.shards[i] = newHashShard(i, bh.spillRoot)
+		bh.shards[i] = newHashShard(i, bh.spillRoot, bh.spillBucketCount, bh.spillSegmentMaxBytes)
 	}
 	return bh, nil
 }
@@ -241,7 +320,7 @@ func (bh *branchHashmap) PutByVectors(vecs []*vector.Vector, keyCols []int) erro
 	if batchSize > rowCount {
 		batchSize = rowCount
 	}
-	shardBuckets := make([][]*hashEntry, bh.shardCount)
+	shardEntries := make([][]int, bh.shardCount)
 	for batchStart := 0; batchStart < rowCount; batchStart += batchSize {
 		batchEnd := batchStart + batchSize
 		if batchEnd > rowCount {
@@ -264,7 +343,7 @@ func (bh *branchHashmap) PutByVectors(vecs []*vector.Vector, keyCols []int) erro
 				value: valuePacker.Bytes(),
 			})
 		}
-		if err := bh.flushPreparedEntries(shardBuckets, chunk); err != nil {
+		if err := bh.flushPreparedEntries(shardEntries, chunk); err != nil {
 			bh.putPreparedEntryBatch(chunk)
 			return err
 		}
@@ -274,7 +353,7 @@ func (bh *branchHashmap) PutByVectors(vecs []*vector.Vector, keyCols []int) erro
 	return nil
 }
 
-func (bh *branchHashmap) flushPreparedEntries(shardBuckets [][]*hashEntry, chunk []preparedEntry) error {
+func (bh *branchHashmap) flushPreparedEntries(shardEntries [][]int, chunk []preparedEntry) error {
 	if len(chunk) == 0 {
 		return nil
 	}
@@ -302,53 +381,56 @@ func (bh *branchHashmap) flushPreparedEntries(shardBuckets [][]*hashEntry, chunk
 				if mid == 0 {
 					mid = 1
 				}
-				if err := bh.flushPreparedEntries(shardBuckets, chunk[:mid]); err != nil {
+				if err := bh.flushPreparedEntries(shardEntries, chunk[:mid]); err != nil {
 					return err
 				}
-				return bh.flushPreparedEntries(shardBuckets, chunk[mid:])
+				return bh.flushPreparedEntries(shardEntries, chunk[mid:])
 			}
 		}
 	}
 
 	block := &entryBlock{
+		buf:         buf,
 		deallocator: deallocator,
 	}
 	block.remaining.Store(int32(len(chunk)))
 	offset := 0
+	entries := make([]memEntry, len(chunk))
 	for i := range chunk {
 		prepared := &chunk[i]
 		entrySize := len(prepared.key) + len(prepared.value)
-		var entryBuf []byte
 		if entrySize > 0 {
-			entryBuf = buf[offset : offset+entrySize]
+			entryBuf := buf[offset : offset+entrySize]
 			copy(entryBuf[:len(prepared.key)], prepared.key)
 			copy(entryBuf[len(prepared.key):], prepared.value)
 		}
-		offset += entrySize
-		entry := &hashEntry{
-			hash:     hashKey(prepared.key),
-			buf:      entryBuf,
-			keyLen:   uint32(len(prepared.key)),
-			valueLen: uint32(len(prepared.value)),
-			block:    block,
+		hash := hashKey(prepared.key)
+		entries[i] = memEntry{
+			hash:    hash,
+			keyOff:  uint32(offset),
+			keyLen:  uint32(len(prepared.key)),
+			valOff:  uint32(offset + len(prepared.key)),
+			valLen:  uint32(len(prepared.value)),
+			block:   block,
+			slot:    -1,
+			lruPrev: -1,
+			lruNext: -1,
 		}
-		shardIdx := int(entry.hash % uint64(bh.shardCount))
-		shardBuckets[shardIdx] = append(shardBuckets[shardIdx], entry)
+		offset += entrySize
+		shardIdx := int(hash % uint64(bh.shardCount))
+		shardEntries[shardIdx] = append(shardEntries[shardIdx], i)
 	}
-	for idx, entries := range shardBuckets {
-		if len(entries) == 0 {
+	for idx, entryIdxs := range shardEntries {
+		if len(entryIdxs) == 0 {
 			continue
 		}
 		shard := bh.shards[idx]
 		shard.lock()
-		for _, entry := range entries {
-			shard.insertEntryLocked(entry)
+		for _, entryIdx := range entryIdxs {
+			shard.insertEntryLocked(entries[entryIdx])
 		}
 		shard.unlock()
-		for i := range entries {
-			entries[i] = nil
-		}
-		shardBuckets[idx] = entries[:0]
+		shardEntries[idx] = entryIdxs[:0]
 	}
 	return nil
 }
@@ -356,8 +438,140 @@ func (bh *branchHashmap) GetByVectors(keyVecs []*vector.Vector) ([]GetResult, er
 	return bh.lookupByVectors(keyVecs, nil)
 }
 
+func (bh *branchHashmap) GetByEncodedKey(encodedKey []byte) (GetResult, error) {
+	var result GetResult
+
+	bh.metaMu.RLock()
+	if bh.closed {
+		bh.metaMu.RUnlock()
+		return result, moerr.NewInternalErrorNoCtx("branchHashmap is closed")
+	}
+	if len(bh.keyTypes) == 0 {
+		bh.metaMu.RUnlock()
+		return result, nil
+	}
+	shardCount := bh.shardCount
+	bh.metaMu.RUnlock()
+
+	if shardCount == 0 {
+		return result, nil
+	}
+
+	hash := hashKey(encodedKey)
+	shard := bh.shards[int(hash%uint64(shardCount))]
+	rows, err := shard.getRows(hash, encodedKey)
+	if err != nil {
+		return result, err
+	}
+	result.Rows = rows
+	result.Exists = len(rows) > 0
+	return result, nil
+}
+
 func (bh *branchHashmap) PopByVectors(keyVecs []*vector.Vector, removeAll bool) ([]GetResult, error) {
 	return bh.lookupByVectors(keyVecs, &removeAll)
+}
+
+func (bh *branchHashmap) PopByVectorsStream(keyVecs []*vector.Vector, removeAll bool, fn func(idx int, key []byte, row []byte) error) (int, error) {
+	if len(keyVecs) == 0 {
+		return 0, nil
+	}
+
+	rowCount := keyVecs[0].Length()
+
+	bh.metaMu.RLock()
+	if bh.closed {
+		bh.metaMu.RUnlock()
+		return 0, moerr.NewInternalErrorNoCtx("branchHashmap is closed")
+	}
+	keyTypes := bh.keyTypes
+	shardCount := bh.shardCount
+	bh.metaMu.RUnlock()
+
+	if len(keyTypes) == 0 {
+		return 0, nil
+	}
+	if len(keyVecs) != len(keyTypes) {
+		return 0, moerr.NewInvalidInputNoCtxf("expected %d key vectors, got %d", len(keyTypes), len(keyVecs))
+	}
+	for i := 1; i < len(keyVecs); i++ {
+		if keyVecs[i].Length() != rowCount {
+			return 0, moerr.NewInvalidInputNoCtxf("key vector length mismatch at column %d", i)
+		}
+	}
+	for i, vec := range keyVecs {
+		if *vec.GetType() != keyTypes[i] {
+			return 0, moerr.NewInvalidInputNoCtxf("key vector type mismatch at column %d", i)
+		}
+	}
+
+	keyIndexes := make([]int, len(keyVecs))
+	for i := range keyVecs {
+		keyIndexes[i] = i
+	}
+
+	packer := bh.getPacker()
+	defer bh.putPacker(packer)
+	probesByShard := make(map[*hashShard][]*keyProbe, shardCount)
+	for idx := 0; idx < rowCount; idx++ {
+		packer.Reset()
+		if err := encodeRow(packer, keyVecs, keyIndexes, idx); err != nil {
+			return 0, err
+		}
+		keyBytes := packer.Bytes()
+		keyCopy := make([]byte, len(keyBytes))
+		copy(keyCopy, keyBytes)
+		hash := hashKey(keyCopy)
+		shard := bh.shards[int(hash%uint64(shardCount))]
+		probe := &keyProbe{
+			idx:    idx,
+			key:    keyCopy,
+			keyStr: string(keyCopy),
+			hash:   hash,
+			plan:   newRemovalPlan(removeAll),
+		}
+		probesByShard[shard] = append(probesByShard[shard], probe)
+	}
+
+	var totalRemoved int64
+	collectValues := fn != nil
+	for shard, probes := range probesByShard {
+		if shard == nil {
+			continue
+		}
+		shard.lock()
+		var removedTotal int64
+		for _, probe := range probes {
+			rows, removedBytes, removedCount := shard.mem.collect(probe.hash, probe.key, probe.plan, true, collectValues)
+			if removedBytes > 0 {
+				shard.memInUse -= removedBytes
+			}
+			if removedCount > 0 {
+				removedTotal += int64(removedCount)
+			}
+			if collectValues {
+				for _, row := range rows {
+					if err := fn(probe.idx, probe.key, row); err != nil {
+						shard.unlock()
+						return int(totalRemoved), err
+					}
+				}
+			}
+		}
+		if shard.spill != nil {
+			if err := collectSpillPopStream(shard, probes, removeAll, fn, &removedTotal, collectValues); err != nil {
+				shard.unlock()
+				return int(totalRemoved), err
+			}
+		}
+		if removedTotal > 0 {
+			atomic.AddInt64(&shard.items, -removedTotal)
+			totalRemoved += removedTotal
+		}
+		shard.unlock()
+	}
+
+	return int(totalRemoved), nil
 }
 
 func (bh *branchHashmap) lookupByVectors(keyVecs []*vector.Vector, removeAll *bool) ([]GetResult, error) {
@@ -401,32 +615,74 @@ func (bh *branchHashmap) lookupByVectors(keyVecs []*vector.Vector, removeAll *bo
 
 	packer := bh.getPacker()
 	defer bh.putPacker(packer)
-
+	probesByShard := make(map[*hashShard][]*keyProbe, shardCount)
 	for idx := 0; idx < rowCount; idx++ {
 		packer.Reset()
 		if err := encodeRow(packer, keyVecs, keyIndexes, idx); err != nil {
 			return nil, err
 		}
 		keyBytes := packer.Bytes()
-		hash := hashKey(keyBytes)
+		keyCopy := make([]byte, len(keyBytes))
+		copy(keyCopy, keyBytes)
+		hash := hashKey(keyCopy)
 		shard := bh.shards[int(hash%uint64(shardCount))]
-		var (
-			rows [][]byte
-			err  error
-		)
-		if removeAll == nil {
-			rows, err = shard.getRows(hash, keyBytes)
-		} else {
-			rows, err = shard.popRows(hash, keyBytes, *removeAll)
+		probe := &keyProbe{
+			idx:    idx,
+			key:    keyCopy,
+			keyStr: string(keyCopy),
+			hash:   hash,
 		}
-		if err != nil {
-			return nil, err
+		if removeAll != nil {
+			probe.plan = newRemovalPlan(*removeAll)
 		}
-		res := &results[idx]
-		res.Rows = rows
-		res.Exists = len(rows) > 0
+		probesByShard[shard] = append(probesByShard[shard], probe)
 	}
 
+	for shard, probes := range probesByShard {
+		if shard == nil {
+			continue
+		}
+		shard.lock()
+		var removedTotal int64
+		copyValues := removeAll != nil
+		for _, probe := range probes {
+			if removeAll == nil {
+				rows, _, _ := shard.mem.collect(probe.hash, probe.key, nil, false, true)
+				results[probe.idx].Rows = rows
+				continue
+			}
+			rows, removedBytes, removedCount := shard.mem.collect(probe.hash, probe.key, probe.plan, copyValues, true)
+			results[probe.idx].Rows = rows
+			if removedBytes > 0 {
+				shard.memInUse -= removedBytes
+			}
+			if removedCount > 0 {
+				removedTotal += int64(removedCount)
+			}
+		}
+
+		if shard.spill != nil {
+			if removeAll == nil {
+				if err := collectSpillGet(shard, probes, results); err != nil {
+					shard.unlock()
+					return nil, err
+				}
+			} else {
+				if err := collectSpillPop(shard, probes, results, *removeAll, &removedTotal); err != nil {
+					shard.unlock()
+					return nil, err
+				}
+			}
+		}
+		if removeAll != nil && removedTotal > 0 {
+			atomic.AddInt64(&shard.items, -removedTotal)
+		}
+		shard.unlock()
+	}
+
+	for i := range results {
+		results[i].Exists = len(results[i].Rows) > 0
+	}
 	return results, nil
 }
 func (bh *branchHashmap) PopByEncodedKey(encodedKey []byte, removeAll bool) (GetResult, error) {
@@ -457,6 +713,28 @@ func (bh *branchHashmap) PopByEncodedKey(encodedKey []byte, removeAll bool) (Get
 	result.Rows = rows
 	result.Exists = len(rows) > 0
 	return result, nil
+}
+
+func (bh *branchHashmap) PopByEncodedKeyValue(encodedKey []byte, encodedValue []byte, removeAll bool) (int, error) {
+	bh.metaMu.RLock()
+	if bh.closed {
+		bh.metaMu.RUnlock()
+		return 0, moerr.NewInternalErrorNoCtx("branchHashmap is closed")
+	}
+	if len(bh.keyTypes) == 0 {
+		bh.metaMu.RUnlock()
+		return 0, nil
+	}
+	shardCount := bh.shardCount
+	bh.metaMu.RUnlock()
+
+	if shardCount == 0 {
+		return 0, nil
+	}
+
+	hash := hashKey(encodedKey)
+	shard := bh.shards[int(hash%uint64(shardCount))]
+	return shard.popRowsByValue(hash, encodedKey, encodedValue, removeAll)
 }
 
 func (bh *branchHashmap) PopByEncodedFullValue(encodedValue []byte, removeAll bool) (GetResult, error) {
@@ -504,6 +782,51 @@ func (bh *branchHashmap) PopByEncodedFullValue(encodedValue []byte, removeAll bo
 	}
 	encodedKey := packer.Bytes()
 	return bh.PopByEncodedKey(encodedKey, removeAll)
+}
+
+func (bh *branchHashmap) PopByEncodedFullValueExact(encodedValue []byte, removeAll bool) (int, error) {
+	if bh.ItemCount() == 0 {
+		return 0, nil
+	}
+
+	bh.metaMu.RLock()
+	if bh.closed {
+		bh.metaMu.RUnlock()
+		return 0, moerr.NewInternalErrorNoCtx("branchHashmap is closed")
+	}
+	valueTypes := cloneTypesFromSlice(bh.valueTypes)
+	keyTypes := cloneTypesFromSlice(bh.keyTypes)
+	keyCols := cloneInts(bh.keyCols)
+	bh.metaMu.RUnlock()
+
+	if len(valueTypes) == 0 || len(keyTypes) == 0 || len(keyCols) == 0 {
+		return 0, moerr.NewInvalidInputNoCtx("branchHashmap PopByEncodedFullValueExact requires initialized key and value types")
+	}
+	if len(keyCols) != len(keyTypes) {
+		return 0, moerr.NewInvalidInputNoCtx("branchHashmap key columns/types mismatch")
+	}
+
+	tuple, err := types.Unpack(encodedValue)
+	if err != nil {
+		return 0, err
+	}
+	if len(tuple) != len(valueTypes) {
+		return 0, moerr.NewInvalidInputNoCtxf("unexpected row width %d, want %d", len(tuple), len(valueTypes))
+	}
+
+	packer := bh.getPacker()
+	defer bh.putPacker(packer)
+
+	for i, colIdx := range keyCols {
+		if valueTypes[colIdx] != keyTypes[i] {
+			return 0, moerr.NewInvalidInputNoCtx("key column type mismatch")
+		}
+		if err := encodeDecodedValue(packer, valueTypes[colIdx], tuple[colIdx]); err != nil {
+			return 0, err
+		}
+	}
+	encodedKey := packer.Bytes()
+	return bh.PopByEncodedKeyValue(encodedKey, encodedValue, removeAll)
 }
 func (bh *branchHashmap) ForEachShardParallel(fn func(cursor ShardCursor) error, parallelism int) error {
 	if fn == nil {
@@ -605,6 +928,8 @@ func (bh *branchHashmap) projectInternal(keyCols []int, parallelism int, consume
 	shardCount := bh.shardCount
 	allocator := bh.allocator
 	spillRoot := bh.spillRoot
+	spillBucketCount := bh.spillBucketCount
+	spillSegmentMaxBytes := bh.spillSegmentMaxBytes
 	bh.metaMu.RUnlock()
 
 	if len(valueTypes) == 0 {
@@ -626,6 +951,8 @@ func (bh *branchHashmap) projectInternal(keyCols []int, parallelism int, consume
 	targetIface, err := NewBranchHashmap(
 		WithBranchHashmapAllocator(allocator),
 		WithBranchHashmapSpillRoot(spillRoot),
+		WithBranchHashmapSpillBucketCount(int(spillBucketCount)),
+		WithBranchHashmapSpillSegmentMaxBytes(spillSegmentMaxBytes),
 		WithBranchHashmapShardCount(shardCount),
 	)
 	if err != nil {
@@ -642,14 +969,14 @@ func (bh *branchHashmap) projectInternal(keyCols []int, parallelism int, consume
 	target.metaMu.Unlock()
 
 	err = bh.ForEachShardParallel(func(cursor ShardCursor) error {
-		shardBuckets := make([][]*hashEntry, target.shardCount)
+		shardEntries := make([][]int, target.shardCount)
 		keyPacker := target.getPacker()
 		chunk := target.getPreparedEntryBatch(0)
 		flushChunk := func() error {
 			if len(chunk) == 0 {
 				return nil
 			}
-			if err := target.flushPreparedEntries(shardBuckets, chunk); err != nil {
+			if err := target.flushPreparedEntries(shardEntries, chunk); err != nil {
 				return err
 			}
 			target.putPreparedEntryBatch(chunk)
@@ -661,7 +988,7 @@ func (bh *branchHashmap) projectInternal(keyCols []int, parallelism int, consume
 			target.putPreparedEntryBatch(chunk)
 		}()
 
-		err := cursor.ForEach(func(key []byte, rows [][]byte) error {
+		err := cursor.ForEach(func(key []byte, row []byte) error {
 			var sourceRows [][]byte
 			if consume {
 				res, err := cursor.PopByEncodedKey(key, true)
@@ -670,7 +997,7 @@ func (bh *branchHashmap) projectInternal(keyCols []int, parallelism int, consume
 				}
 				sourceRows = res.Rows
 			} else {
-				sourceRows = rows
+				sourceRows = [][]byte{row}
 			}
 			if len(sourceRows) == 0 {
 				return nil
@@ -741,6 +1068,15 @@ func (bh *branchHashmap) ItemCount() int64 {
 	return total
 }
 
+func (bh *branchHashmap) ShardCount() int {
+	bh.metaMu.RLock()
+	defer bh.metaMu.RUnlock()
+	if bh.closed {
+		return 0
+	}
+	return len(bh.shards)
+}
+
 type shardCursor struct {
 	shard *hashShard
 }
@@ -752,11 +1088,25 @@ func (sc *shardCursor) ShardID() int {
 	return sc.shard.id
 }
 
-func (sc *shardCursor) ForEach(fn func(key []byte, rows [][]byte) error) error {
+func (sc *shardCursor) ForEach(fn func(key []byte, row []byte) error) error {
 	if fn == nil || sc == nil || sc.shard == nil {
 		return nil
 	}
 	return sc.shard.iterateUnsafe(fn)
+}
+
+func (sc *shardCursor) GetByEncodedKey(encodedKey []byte) (GetResult, error) {
+	var result GetResult
+	if sc == nil || sc.shard == nil {
+		return result, nil
+	}
+	rows, err := sc.shard.getRowsDuringIteration(hashKey(encodedKey), encodedKey)
+	if err != nil {
+		return result, err
+	}
+	result.Rows = rows
+	result.Exists = len(rows) > 0
+	return result, nil
 }
 
 func (sc *shardCursor) PopByEncodedKey(encodedKey []byte, removeAll bool) (GetResult, error) {
@@ -771,6 +1121,13 @@ func (sc *shardCursor) PopByEncodedKey(encodedKey []byte, removeAll bool) (GetRe
 	result.Rows = rows
 	result.Exists = len(rows) > 0
 	return result, nil
+}
+
+func (sc *shardCursor) PopByEncodedKeyValue(encodedKey []byte, encodedValue []byte, removeAll bool) (int, error) {
+	if sc == nil || sc.shard == nil {
+		return 0, nil
+	}
+	return sc.shard.popRowsByValueDuringIteration(hashKey(encodedKey), encodedKey, encodedValue, removeAll)
 }
 func (bh *branchHashmap) DecodeRow(data []byte) (types.Tuple, []types.Type, error) {
 	t, err := types.Unpack(data)
@@ -789,13 +1146,22 @@ func (bh *branchHashmap) Close() error {
 	bh.metaMu.Unlock()
 
 	var firstErr error
+	var agg spillSnapshot
+	var hadStats bool
 	for _, shard := range bh.shards {
 		if shard == nil {
 			continue
 		}
+		if snapshot := shard.snapshotSpillStats(); snapshot.hasData() {
+			agg.merge(snapshot)
+			hadStats = true
+		}
 		if err := shard.close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
+	}
+	if hadStats {
+		logutil.Infof("%s", agg.summary("branchHashmap"))
 	}
 
 	return firstErr
@@ -806,12 +1172,13 @@ type hashShard struct {
 	id        int
 	spillRoot string
 
-	inMemory map[uint64]*hashBucket
-	order    list.List
+	mem      *memStore
 	memInUse uint64
 
-	spills   []*spillPartition
-	spillDir string
+	spill                *spillStore
+	spillDir             string
+	spillBucketCount     uint32
+	spillSegmentMaxBytes uint64
 
 	items int64
 
@@ -820,12 +1187,18 @@ type hashShard struct {
 	iterating bool
 }
 
-func newHashShard(id int, spillRoot string) *hashShard {
+func newHashShard(id int, spillRoot string, spillBucketCount uint32, spillSegmentMaxBytes uint64) *hashShard {
 	hs := &hashShard{
-		id:        id,
-		spillRoot: spillRoot,
-		inMemory:  make(map[uint64]*hashBucket),
+		id:                   id,
+		spillRoot:            spillRoot,
+		mem:                  newMemStore(),
+		spillBucketCount:     spillBucketCount,
+		spillSegmentMaxBytes: spillSegmentMaxBytes,
 	}
+	if hs.spillBucketCount == 0 {
+		hs.spillBucketCount = 1
+	}
+	hs.spillBucketCount = normalizeBucketCount(hs.spillBucketCount)
 	hs.cond = sync.NewCond(&hs.mu)
 	return hs
 }
@@ -857,33 +1230,37 @@ func (hs *hashShard) endIteration() {
 	hs.cond.Broadcast()
 }
 
-func (hs *hashShard) insertEntryLocked(entry *hashEntry) {
-	bucket := hs.inMemory[entry.hash]
-	if bucket == nil {
-		bucket = &hashBucket{hash: entry.hash}
-		bucket.orderNode = hs.order.PushBack(entry.hash)
-		hs.inMemory[entry.hash] = bucket
+func (hs *hashShard) insertEntryLocked(entry memEntry) {
+	if hs.mem == nil {
+		hs.mem = newMemStore()
 	}
-	bucket.add(entry)
-	if bucket.orderNode != nil {
-		hs.order.MoveToBack(bucket.orderNode)
-	}
-	hs.memInUse += uint64(len(entry.buf))
+	hs.mem.insert(entry)
+	hs.memInUse += entry.size()
 	atomic.AddInt64(&hs.items, 1)
 	// TODO(monitoring): track shard-level insertion metrics.
 }
 func (hs *hashShard) getRows(hash uint64, key []byte) ([][]byte, error) {
 	hs.lock()
 	defer hs.unlock()
-	rows := hs.collectFromMemory(hash, key, nil, nil, false)
-	if len(hs.spills) == 0 {
+	rows, _, _ := hs.mem.collect(hash, key, nil, false, true)
+	if hs.spill == nil {
 		return rows, nil
 	}
-	var scratch []byte
-	for _, part := range hs.spills {
-		if err := part.collect(hash, key, &rows, &scratch, nil); err != nil {
-			return nil, err
-		}
+	if err := hs.spill.collect(hs.spill.bucketID(hash), hash, key, &rows, nil, true, scanReasonGet); err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+func (hs *hashShard) getRowsDuringIteration(hash uint64, key []byte) ([][]byte, error) {
+	if !hs.iterating {
+		return nil, moerr.NewInternalErrorNoCtx("shard iteration context required")
+	}
+	rows, _, _ := hs.mem.collect(hash, key, nil, false, true)
+	if hs.spill == nil {
+		return rows, nil
+	}
+	if err := hs.spill.collect(hs.spill.bucketID(hash), hash, key, &rows, nil, true, scanReasonGet); err != nil {
+		return nil, err
 	}
 	return rows, nil
 }
@@ -893,6 +1270,12 @@ func (hs *hashShard) popRows(hash uint64, key []byte, removeAll bool) ([][]byte,
 	return hs.popRowsUnsafe(hash, key, removeAll)
 }
 
+func (hs *hashShard) popRowsByValue(hash uint64, key []byte, value []byte, removeAll bool) (int, error) {
+	hs.lock()
+	defer hs.unlock()
+	return hs.popRowsByValueUnsafe(hash, key, value, removeAll)
+}
+
 func (hs *hashShard) popRowsDuringIteration(hash uint64, key []byte, removeAll bool) ([][]byte, error) {
 	if !hs.iterating {
 		return nil, moerr.NewInternalErrorNoCtx("shard iteration context required")
@@ -900,21 +1283,27 @@ func (hs *hashShard) popRowsDuringIteration(hash uint64, key []byte, removeAll b
 	return hs.popRowsUnsafe(hash, key, removeAll)
 }
 
+func (hs *hashShard) popRowsByValueDuringIteration(hash uint64, key []byte, value []byte, removeAll bool) (int, error) {
+	if !hs.iterating {
+		return 0, moerr.NewInternalErrorNoCtx("shard iteration context required")
+	}
+	return hs.popRowsByValueUnsafe(hash, key, value, removeAll)
+}
+
 func (hs *hashShard) popRowsUnsafe(hash uint64, key []byte, removeAll bool) ([][]byte, error) {
 	plan := newRemovalPlan(removeAll)
-	rows := hs.collectFromMemory(hash, key, nil, plan, true)
-	if len(hs.spills) == 0 {
-		if removed := len(rows); removed > 0 {
-			atomic.AddInt64(&hs.items, -int64(removed))
+	rows, removedBytes, removedCount := hs.mem.collect(hash, key, plan, true, true)
+	if removedBytes > 0 {
+		hs.memInUse -= removedBytes
+	}
+	if hs.spill == nil {
+		if removedCount > 0 {
+			atomic.AddInt64(&hs.items, -int64(removedCount))
 		}
 		return rows, nil
 	}
-	var scratch []byte
-	for _, part := range hs.spills {
-		if plan != nil && !plan.hasRemaining() {
-			break
-		}
-		if err := part.collect(hash, key, &rows, &scratch, plan); err != nil {
+	if plan != nil && plan.hasRemaining() {
+		if err := hs.spill.collect(hs.spill.bucketID(hash), hash, key, &rows, plan, true, scanReasonPop); err != nil {
 			return nil, err
 		}
 	}
@@ -923,129 +1312,88 @@ func (hs *hashShard) popRowsUnsafe(hash uint64, key []byte, removeAll bool) ([][
 	}
 	return rows, nil
 }
-func (hs *hashShard) collectFromMemory(hash uint64, key []byte, dst [][]byte, plan *removalPlan, copyValues bool) [][]byte {
-	bucket, ok := hs.inMemory[hash]
-	if !ok {
-		return dst
+
+func (hs *hashShard) popRowsByValueUnsafe(hash uint64, key []byte, value []byte, removeAll bool) (int, error) {
+	matchValue := value
+	if removeAll && len(value) > 0 {
+		matchValue = make([]byte, len(value))
+		copy(matchValue, value)
 	}
-	matchLen := len(key)
-	if plan != nil {
-		newEntries := bucket.entries[:0]
-		for _, entry := range bucket.entries {
-			if !plan.hasRemaining() {
-				newEntries = append(newEntries, entry)
-				continue
-			}
-			if int(entry.keyLen) == matchLen && bytes.Equal(entry.keyBytes(), key) && plan.take() {
-				value := entry.valueBytes()
-				var payload []byte
-				if copyValues {
-					payload = make([]byte, len(value))
-					copy(payload, value)
-				} else {
-					payload = value
-				}
-				dst = append(dst, payload)
-				hs.memInUse -= uint64(len(entry.buf))
-				entry.release()
-			} else {
-				newEntries = append(newEntries, entry)
-			}
-		}
-		if len(newEntries) == 0 {
-			if bucket.orderNode != nil {
-				hs.order.Remove(bucket.orderNode)
-			}
-			delete(hs.inMemory, hash)
-		} else {
-			bucket.entries = newEntries
-			if bucket.orderNode != nil {
-				hs.order.MoveToBack(bucket.orderNode)
-			}
-		}
-		return dst
+	plan := newValueRemovalPlan(removeAll, matchValue)
+	_, removedBytes, removedCount := hs.mem.collect(hash, key, plan, false, false)
+	if removedBytes > 0 {
+		hs.memInUse -= removedBytes
 	}
-	if bucket.orderNode != nil {
-		hs.order.MoveToBack(bucket.orderNode)
-	}
-	for _, entry := range bucket.entries {
-		if int(entry.keyLen) != matchLen {
-			continue
+	if hs.spill == nil {
+		if removedCount > 0 {
+			atomic.AddInt64(&hs.items, -int64(removedCount))
 		}
-		if bytes.Equal(entry.keyBytes(), key) {
-			value := entry.valueBytes()
-			if copyValues {
-				copied := make([]byte, len(value))
-				copy(copied, value)
-				dst = append(dst, copied)
-			} else {
-				dst = append(dst, value)
-			}
+		return removedCount, nil
+	}
+	var unused [][]byte
+	if plan != nil && plan.hasRemaining() {
+		if err := hs.spill.collect(hs.spill.bucketID(hash), hash, key, &unused, plan, false, scanReasonPopValue); err != nil {
+			return 0, err
 		}
 	}
-	return dst
+	removed := plan.removed
+	if removed > 0 {
+		atomic.AddInt64(&hs.items, -int64(removed))
+	}
+	return removed, nil
 }
 func (hs *hashShard) spillLocked(required uint64) (uint64, error) {
 	if required == 0 {
 		return 0, nil
 	}
 	var (
-		freed       uint64
 		minRequired = max(mpool.MB, required)
 	)
-	for freed < minRequired {
-		element := hs.order.Front()
-		if element == nil {
-			break
-		}
-		hash := element.Value.(uint64)
-		bucket := hs.inMemory[hash]
-		hs.order.Remove(element)
-		if bucket == nil {
-			delete(hs.inMemory, hash)
-			continue
-		}
-		released, err := hs.spillBucketLocked(bucket)
-		if err != nil {
-			return freed, err
-		}
-		freed += released
-		delete(hs.inMemory, hash)
-	}
-	return freed, nil
-}
-
-func (hs *hashShard) spillBucketLocked(bucket *hashBucket) (uint64, error) {
-	if len(bucket.entries) == 0 {
-		return 0, nil
-	}
-	part, err := hs.ensureSpillPartition()
+	store, err := hs.ensureSpillStore()
 	if err != nil {
 		return 0, err
 	}
-	var freed uint64
-	for _, entry := range bucket.entries {
-		if err := part.append(entry); err != nil {
-			return freed, err
-		}
-		freed += uint64(len(entry.buf))
-		entry.release()
+	entries, freed := hs.mem.pickEvictionEntries(minRequired)
+	if len(entries) == 0 {
+		return 0, nil
 	}
-	bucket.entries = nil
-	hs.memInUse -= freed
+	grouped := make(map[uint32][]spillEntry, len(entries))
+	for _, idx := range entries {
+		entry := &hs.mem.entries[idx]
+		bucketID := store.bucketID(entry.hash)
+		grouped[bucketID] = append(grouped[bucketID], spillEntry{
+			hash:  entry.hash,
+			key:   entry.keyBytes(),
+			value: entry.valueBytes(),
+		})
+	}
+	for bucketID, list := range grouped {
+		if err := store.appendEntries(bucketID, list); err != nil {
+			return 0, err
+		}
+	}
+	for _, idx := range entries {
+		freedBytes := hs.mem.removeEntry(idx)
+		if freedBytes > 0 {
+			hs.memInUse -= freedBytes
+		}
+	}
 	return freed, nil
 }
 
-func (hs *hashShard) ensureSpillPartition() (*spillPartition, error) {
+func (hs *hashShard) ensureSpillStore() (*spillStore, error) {
+	if hs.spill != nil {
+		return hs.spill, nil
+	}
 	if err := hs.ensureSpillDir(); err != nil {
 		return nil, err
 	}
-	part, err := newSpillPartition(hs.spillDir)
+	store, err := newSpillStore(hs.spillDir, hs.spillBucketCount, hs.spillSegmentMaxBytes)
 	if err != nil {
 		return nil, err
 	}
-	hs.spills = append(hs.spills, part)
-	return part, nil
+	hs.spill = store
+	return store, nil
 }
 
 func (hs *hashShard) ensureSpillDir() error {
@@ -1073,28 +1421,27 @@ func (hs *hashShard) close() error {
 	defer hs.unlock()
 
 	var firstErr error
-	for hash, bucket := range hs.inMemory {
-		if bucket.orderNode != nil {
-			hs.order.Remove(bucket.orderNode)
-		}
-		for _, entry := range bucket.entries {
-			hs.memInUse -= uint64(len(entry.buf))
-			entry.release()
-		}
-		delete(hs.inMemory, hash)
-	}
-
-	for _, part := range hs.spills {
-		if err := part.close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-		if part.path != "" {
-			if err := os.Remove(part.path); err != nil && !os.IsNotExist(err) && firstErr == nil {
-				firstErr = err
+	if hs.mem != nil {
+		for idx := range hs.mem.entries {
+			entry := &hs.mem.entries[idx]
+			if !entry.inUse {
+				continue
+			}
+			hs.memInUse -= entry.size()
+			if entry.block != nil {
+				entry.block.release()
 			}
 		}
+		hs.mem = newMemStore()
 	}
-	hs.spills = nil
+	hs.memInUse = 0
+
+	if hs.spill != nil {
+		if err := hs.spill.close(); err != nil {
+			firstErr = err
+		}
+		hs.spill = nil
+	}
 
 	if hs.spillDir != "" {
 		if err := os.RemoveAll(hs.spillDir); err != nil && firstErr == nil {
@@ -1104,6 +1451,62 @@ func (hs *hashShard) close() error {
 	}
 	atomic.StoreInt64(&hs.items, 0)
 	return firstErr
+}
+
+func (hs *hashShard) snapshotSpillStats() spillSnapshot {
+	if hs == nil || hs.spill == nil {
+		return spillSnapshot{}
+	}
+	ss := hs.spill.stats
+	snap := spillSnapshot{
+		spilledEntries:      ss.spilledEntries,
+		spilledPayloadBytes: ss.spilledPayloadBytes,
+		spilledBytes:        ss.spilledBytes,
+		bucketScans:         ss.bucketScans,
+		bucketScanBytes:     ss.bucketScanBytes,
+		bucketScanEntries:   ss.bucketScanEntries,
+		matchedEntries:      ss.matchedEntries,
+		matchedBytes:        ss.matchedBytes,
+		removedEntries:      ss.removedEntries,
+		removedBytes:        ss.removedBytes,
+		getProbeKeys:        ss.getProbeKeys,
+		getBucketScans:      ss.getBucketScans,
+		popProbeKeys:        ss.popProbeKeys,
+		popBucketScans:      ss.popBucketScans,
+		popValueProbeKeys:   ss.popValueProbeKeys,
+		popValueBucketScans: ss.popValueBucketScans,
+		forEachBucketScans:  ss.forEachBucketScans,
+		bucketCount:         hs.spill.bucketCount,
+	}
+	var (
+		maxSegments uint64
+		segments    uint64
+		bucketsUsed uint64
+	)
+	for _, bucket := range hs.spill.buckets {
+		segCount := uint64(len(bucket.segments))
+		segments += segCount
+		if segCount > maxSegments {
+			maxSegments = segCount
+		}
+		if bucket.rowCount > 0 {
+			bucketsUsed++
+		}
+	}
+	snap.segmentsTotal = segments
+	snap.maxSegmentsPerBucket = maxSegments
+	snap.bucketsUsed = bucketsUsed
+
+	for _, scanCount := range ss.scanPerBucket {
+		if scanCount == 0 {
+			continue
+		}
+		snap.bucketsScanned++
+		if scanCount > 1 {
+			snap.repeatedBucketScans += scanCount - 1
+		}
+	}
+	return snap
 }
 func (bh *branchHashmap) allocateBuffer(size uint64) ([]byte, malloc.Deallocator, error) {
 	buf, deallocator, err := bh.allocator.Allocate(size, malloc.NoClear)
@@ -1229,6 +1632,20 @@ func hashKey(key []byte) uint64 {
 	states := [][3]uint64{{}}
 	hashtable.BytesBatchGenHashStatesWithSeed(&rows[0], &states[0], 1, branchHashSeed)
 	return states[0][0]
+}
+
+func normalizeBucketCount(n uint32) uint32 {
+	if n <= 1 {
+		return 1
+	}
+	n--
+	n |= n >> 1
+	n |= n >> 2
+	n |= n >> 4
+	n |= n >> 8
+	n |= n >> 16
+	n++
+	return n
 }
 
 func cloneTypes(vecs []*vector.Vector) []types.Type {
@@ -1502,6 +1919,7 @@ type preparedEntry struct {
 }
 
 type entryBlock struct {
+	buf         []byte
 	deallocator malloc.Deallocator
 	remaining   atomic.Int32
 }
@@ -1519,161 +1937,1095 @@ func (eb *entryBlock) release() {
 			if cur-1 == 0 && eb.deallocator != nil {
 				eb.deallocator.Deallocate(malloc.NoHints)
 				eb.deallocator = nil
+				eb.buf = nil
 			}
 			return
 		}
 	}
 }
 
-type hashEntry struct {
-	hash     uint64
-	buf      []byte
-	keyLen   uint32
-	valueLen uint32
-	block    *entryBlock
+const (
+	memSlotEmpty     int32 = -1
+	memSlotTombstone int32 = -2
+)
+
+type memEntry struct {
+	hash    uint64
+	keyOff  uint32
+	keyLen  uint32
+	valOff  uint32
+	valLen  uint32
+	block   *entryBlock
+	slot    int32
+	lruPrev int32
+	lruNext int32
+	inUse   bool
 }
 
-func (e *hashEntry) keyBytes() []byte {
-	if e.keyLen == 0 {
+func (e *memEntry) keyBytes() []byte {
+	if e == nil || e.keyLen == 0 || e.block == nil {
 		return nil
 	}
-	return e.buf[:e.keyLen]
+	start := int(e.keyOff)
+	end := start + int(e.keyLen)
+	return e.block.buf[start:end]
 }
 
-func (e *hashEntry) valueBytes() []byte {
-	if e.valueLen == 0 {
+func (e *memEntry) valueBytes() []byte {
+	if e == nil || e.valLen == 0 || e.block == nil {
 		return nil
 	}
-	return e.buf[e.keyLen : e.keyLen+e.valueLen]
+	start := int(e.valOff)
+	end := start + int(e.valLen)
+	return e.block.buf[start:end]
 }
 
-func (e *hashEntry) release() {
-	e.buf = nil
-	if e.block != nil {
-		e.block.release()
-		e.block = nil
+func (e *memEntry) size() uint64 {
+	return uint64(e.keyLen + e.valLen)
+}
+
+type memStore struct {
+	index      []int32
+	entries    []memEntry
+	freeList   []int32
+	count      int
+	tombstones int
+	lruHead    int32
+	lruTail    int32
+}
+
+func newMemStore() *memStore {
+	return &memStore{
+		lruHead: -1,
+		lruTail: -1,
 	}
 }
 
-type hashBucket struct {
-	hash      uint64
-	entries   []*hashEntry
-	orderNode *list.Element
-}
-
-func (b *hashBucket) add(entry *hashEntry) {
-	b.entries = append(b.entries, entry)
-}
-
-type spillPartition struct {
-	file   *os.File
-	path   string
-	offset int64
-	index  map[uint64][]spillPointer
-}
-
-type spillPointer struct {
-	offset   int64
-	keyLen   uint32
-	valueLen uint32
-}
-
-func newSpillPartition(dir string) (*spillPartition, error) {
-	file, err := os.CreateTemp(dir, "branch-spill-*.bin")
-	if err != nil {
-		return nil, moerr.NewInternalErrorNoCtxf("failed to create spill file: %v", err)
+func (ms *memStore) ensureCapacity(additional int) {
+	if ms.index == nil {
+		ms.init(defaultMemIndexSize)
 	}
-	return &spillPartition{
-		file:  file,
-		path:  file.Name(),
-		index: make(map[uint64][]spillPointer),
-	}, nil
+	needed := ms.count + additional
+	limit := int(float64(len(ms.index)) * 0.7)
+	if needed+ms.tombstones <= limit {
+		return
+	}
+	newCap := len(ms.index) * 2
+	if newCap == 0 {
+		newCap = defaultMemIndexSize
+	}
+	for int(float64(newCap)*0.7) < needed {
+		newCap *= 2
+	}
+	ms.rehash(newCap)
 }
 
-func (sp *spillPartition) append(entry *hashEntry) error {
-	var header [16]byte
-	binary.LittleEndian.PutUint64(header[0:8], entry.hash)
-	binary.LittleEndian.PutUint32(header[8:12], entry.keyLen)
-	binary.LittleEndian.PutUint32(header[12:16], entry.valueLen)
-	if n, err := sp.file.Write(header[:]); err != nil {
-		return err
-	} else if n != len(header) {
-		return io.ErrShortWrite
+func (ms *memStore) init(capacity int) {
+	if capacity < defaultMemIndexSize {
+		capacity = defaultMemIndexSize
 	}
-	if n, err := sp.file.Write(entry.buf); err != nil {
-		return err
-	} else if n != len(entry.buf) {
-		return io.ErrShortWrite
+	capacity = int(normalizeBucketCount(uint32(capacity)))
+	ms.index = make([]int32, capacity)
+	for i := range ms.index {
+		ms.index[i] = memSlotEmpty
 	}
-	dataOffset := sp.offset + 16
-	sp.index[entry.hash] = append(sp.index[entry.hash], spillPointer{
-		offset:   dataOffset,
-		keyLen:   entry.keyLen,
-		valueLen: entry.valueLen,
-	})
-	sp.offset += int64(16 + len(entry.buf))
-	return nil
 }
 
-func (sp *spillPartition) collect(hash uint64, key []byte, dst *[][]byte, scratch *[]byte, plan *removalPlan) error {
-	pointers := sp.index[hash]
-	if len(pointers) == 0 {
-		return nil
+func (ms *memStore) rehash(capacity int) {
+	if capacity < defaultMemIndexSize {
+		capacity = defaultMemIndexSize
 	}
-	kept := pointers[:0]
-	for _, ptr := range pointers {
-		if plan != nil && !plan.hasRemaining() {
-			kept = append(kept, ptr)
+	capacity = int(normalizeBucketCount(uint32(capacity)))
+	newIndex := make([]int32, capacity)
+	for i := range newIndex {
+		newIndex[i] = memSlotEmpty
+	}
+	mask := uint64(capacity - 1)
+	for idx := range ms.entries {
+		entry := &ms.entries[idx]
+		if !entry.inUse {
 			continue
 		}
-		need := int(ptr.keyLen + ptr.valueLen)
-		if cap(*scratch) < need {
-			*scratch = make([]byte, need)
-		}
-		buf := (*scratch)[:need]
-		n, err := sp.file.ReadAt(buf, ptr.offset)
-		if err != nil && err != io.EOF {
-			return err
-		}
-		if n != len(buf) {
-			return io.ErrUnexpectedEOF
-		}
-		matched := bytes.Equal(buf[:ptr.keyLen], key)
-		switch {
-		case plan == nil:
-			if matched {
-				payload := make([]byte, ptr.valueLen)
-				copy(payload, buf[ptr.keyLen:])
-				*dst = append(*dst, payload)
+		slot := int(entry.hash & mask)
+		for {
+			if newIndex[slot] == memSlotEmpty {
+				newIndex[slot] = int32(idx)
+				entry.slot = int32(slot)
+				break
 			}
-			kept = append(kept, ptr)
-		case matched && plan.take():
-			payload := make([]byte, ptr.valueLen)
-			copy(payload, buf[ptr.keyLen:])
-			*dst = append(*dst, payload)
-		default:
-			kept = append(kept, ptr)
+			slot = (slot + 1) & (capacity - 1)
 		}
 	}
-	if plan != nil {
-		if len(kept) == 0 {
-			delete(sp.index, hash)
-		} else {
-			sp.index[hash] = append(sp.index[hash][:0], kept...)
+	ms.index = newIndex
+	ms.tombstones = 0
+}
+
+func (ms *memStore) allocateEntryIndex() int32 {
+	if n := len(ms.freeList); n > 0 {
+		idx := ms.freeList[n-1]
+		ms.freeList = ms.freeList[:n-1]
+		return idx
+	}
+	ms.entries = append(ms.entries, memEntry{})
+	return int32(len(ms.entries) - 1)
+}
+
+func (ms *memStore) insert(entry memEntry) int32 {
+	ms.ensureCapacity(1)
+	slot, usedTombstone := ms.findSlot(entry.hash)
+	idx := ms.allocateEntryIndex()
+	entry.slot = int32(slot)
+	entry.inUse = true
+	entry.lruPrev = -1
+	entry.lruNext = -1
+	ms.entries[idx] = entry
+	ms.index[slot] = idx
+	if usedTombstone {
+		ms.tombstones--
+	}
+	ms.count++
+	ms.lruAppend(idx)
+	return idx
+}
+
+func (ms *memStore) findSlot(hash uint64) (int, bool) {
+	mask := len(ms.index) - 1
+	slot := int(hash & uint64(mask))
+	firstTombstone := -1
+	for {
+		cur := ms.index[slot]
+		switch cur {
+		case memSlotEmpty:
+			if firstTombstone >= 0 {
+				return firstTombstone, true
+			}
+			return slot, false
+		case memSlotTombstone:
+			if firstTombstone < 0 {
+				firstTombstone = slot
+			}
+		default:
 		}
-	} else if len(kept) != len(pointers) {
-		sp.index[hash] = append(sp.index[hash][:0], kept...)
+		slot = (slot + 1) & mask
+	}
+}
+
+func (ms *memStore) lruAppend(idx int32) {
+	if idx < 0 {
+		return
+	}
+	if ms.lruTail < 0 {
+		ms.lruHead = idx
+		ms.lruTail = idx
+		return
+	}
+	tail := ms.lruTail
+	ms.entries[idx].lruPrev = tail
+	ms.entries[idx].lruNext = -1
+	ms.entries[tail].lruNext = idx
+	ms.lruTail = idx
+}
+
+func (ms *memStore) lruRemove(idx int32) {
+	if idx < 0 {
+		return
+	}
+	entry := &ms.entries[idx]
+	prev := entry.lruPrev
+	next := entry.lruNext
+	if prev >= 0 {
+		ms.entries[prev].lruNext = next
+	} else {
+		ms.lruHead = next
+	}
+	if next >= 0 {
+		ms.entries[next].lruPrev = prev
+	} else {
+		ms.lruTail = prev
+	}
+	entry.lruPrev = -1
+	entry.lruNext = -1
+}
+
+func (ms *memStore) lruTouch(idx int32) {
+	if idx < 0 || ms.lruTail == idx {
+		return
+	}
+	ms.lruRemove(idx)
+	ms.lruAppend(idx)
+}
+
+func (ms *memStore) removeEntry(idx int32) uint64 {
+	if idx < 0 {
+		return 0
+	}
+	entry := &ms.entries[idx]
+	if !entry.inUse {
+		return 0
+	}
+	if entry.slot >= 0 && entry.slot < int32(len(ms.index)) {
+		if ms.index[entry.slot] == idx {
+			ms.index[entry.slot] = memSlotTombstone
+			ms.tombstones++
+		}
+	}
+	ms.count--
+	ms.lruRemove(idx)
+	entry.inUse = false
+	size := entry.size()
+	if entry.block != nil {
+		entry.block.release()
+	}
+	*entry = memEntry{}
+	ms.freeList = append(ms.freeList, idx)
+	return size
+}
+
+func (ms *memStore) collect(hash uint64, key []byte, plan *removalPlan, copyValues bool, collectValues bool) ([][]byte, uint64, int) {
+	if len(ms.index) == 0 || ms.count == 0 {
+		return nil, 0, 0
+	}
+	var (
+		rows         [][]byte
+		removedCount int
+		removedBytes uint64
+	)
+	mask := len(ms.index) - 1
+	slot := int(hash & uint64(mask))
+	for {
+		cur := ms.index[slot]
+		if cur == memSlotEmpty {
+			break
+		}
+		if cur >= 0 {
+			entry := &ms.entries[cur]
+			if entry.inUse && entry.hash == hash && bytes.Equal(entry.keyBytes(), key) {
+				if plan == nil {
+					if collectValues {
+						value := entry.valueBytes()
+						if copyValues {
+							payload := make([]byte, len(value))
+							copy(payload, value)
+							rows = append(rows, payload)
+						} else {
+							rows = append(rows, value)
+						}
+					}
+					ms.lruTouch(cur)
+				} else if plan.matchesValue(entry.valueBytes()) && plan.take() {
+					if collectValues {
+						value := entry.valueBytes()
+						payload := make([]byte, len(value))
+						copy(payload, value)
+						rows = append(rows, payload)
+					}
+					removedCount++
+					ms.lruTouch(cur)
+					removedBytes += ms.removeEntry(cur)
+				}
+			}
+		}
+		slot = (slot + 1) & mask
+	}
+	return rows, removedBytes, removedCount
+}
+
+func (ms *memStore) forEach(fn func(entry *memEntry) error) error {
+	if fn == nil {
+		return nil
+	}
+	for idx := range ms.entries {
+		entry := &ms.entries[idx]
+		if !entry.inUse {
+			continue
+		}
+		if err := fn(entry); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func (sp *spillPartition) close() error {
-	if sp.file == nil {
+func (ms *memStore) pickEvictionEntries(required uint64) ([]int32, uint64) {
+	var (
+		selected []int32
+		freed    uint64
+	)
+	cur := ms.lruHead
+	for cur >= 0 && freed < required {
+		entry := &ms.entries[cur]
+		if entry.inUse {
+			selected = append(selected, cur)
+			freed += entry.size()
+		}
+		cur = entry.lruNext
+	}
+	return selected, freed
+}
+
+type spillStore struct {
+	dir             string
+	bucketCount     uint32
+	bucketMask      uint64
+	maxSegmentBytes uint64
+	buckets         []spillBucket
+	stats           spillStats
+}
+
+type spillEntry struct {
+	hash  uint64
+	key   []byte
+	value []byte
+}
+
+type spillBucket struct {
+	segments  []*spillSegment
+	rowCount  uint64
+	tombstone *tombstoneBitmap
+}
+
+type spillSegment struct {
+	path string
+	size int64
+}
+
+type tombstoneBitmap struct {
+	bits []uint64
+}
+
+type scanReason uint8
+
+const (
+	scanReasonUnknown scanReason = iota
+	scanReasonForEach
+	scanReasonGet
+	scanReasonPop
+	scanReasonPopValue
+)
+
+type spillStats struct {
+	spilledEntries      uint64
+	spilledPayloadBytes uint64
+	spilledBytes        uint64
+	segmentsCreated     uint64
+
+	bucketScans       uint64
+	bucketScanBytes   uint64
+	bucketScanEntries uint64
+
+	matchedEntries uint64
+	matchedBytes   uint64
+	removedEntries uint64
+	removedBytes   uint64
+
+	getProbeKeys        uint64
+	getBucketScans      uint64
+	popProbeKeys        uint64
+	popBucketScans      uint64
+	popValueProbeKeys   uint64
+	popValueBucketScans uint64
+	forEachBucketScans  uint64
+
+	scanPerBucket []uint64
+}
+
+type spillSnapshot struct {
+	spilledEntries       uint64
+	spilledPayloadBytes  uint64
+	spilledBytes         uint64
+	segmentsTotal        uint64
+	maxSegmentsPerBucket uint64
+	bucketsUsed          uint64
+	bucketCount          uint32
+
+	bucketScans         uint64
+	bucketScanBytes     uint64
+	bucketScanEntries   uint64
+	bucketsScanned      uint64
+	repeatedBucketScans uint64
+
+	matchedEntries uint64
+	matchedBytes   uint64
+	removedEntries uint64
+	removedBytes   uint64
+
+	getProbeKeys        uint64
+	getBucketScans      uint64
+	popProbeKeys        uint64
+	popBucketScans      uint64
+	popValueProbeKeys   uint64
+	popValueBucketScans uint64
+	forEachBucketScans  uint64
+}
+
+func (ss *spillStats) recordProbe(reason scanReason, keys int, buckets int) {
+	if keys <= 0 || buckets <= 0 {
+		return
+	}
+	switch reason {
+	case scanReasonGet:
+		ss.getProbeKeys += uint64(keys)
+	case scanReasonPop:
+		ss.popProbeKeys += uint64(keys)
+	case scanReasonPopValue:
+		ss.popValueProbeKeys += uint64(keys)
+	}
+}
+
+func (ss *spillStats) recordMatch(valueLen int, removed bool) {
+	if valueLen < 0 {
+		valueLen = 0
+	}
+	ss.matchedEntries++
+	ss.matchedBytes += uint64(valueLen)
+	if removed {
+		ss.removedEntries++
+		ss.removedBytes += uint64(valueLen)
+	}
+}
+
+func (ss *spillStats) recordScan(reason scanReason, bucketID uint32, entries uint64, bytes uint64) {
+	if entries == 0 && bytes == 0 {
+		return
+	}
+	ss.bucketScans++
+	ss.bucketScanEntries += entries
+	ss.bucketScanBytes += bytes
+	if int(bucketID) < len(ss.scanPerBucket) {
+		ss.scanPerBucket[bucketID]++
+	}
+	switch reason {
+	case scanReasonForEach:
+		ss.forEachBucketScans++
+	case scanReasonGet:
+		ss.getBucketScans++
+	case scanReasonPop:
+		ss.popBucketScans++
+	case scanReasonPopValue:
+		ss.popValueBucketScans++
+	}
+}
+
+func (sn *spillSnapshot) merge(other spillSnapshot) {
+	sn.spilledEntries += other.spilledEntries
+	sn.spilledPayloadBytes += other.spilledPayloadBytes
+	sn.spilledBytes += other.spilledBytes
+	sn.segmentsTotal += other.segmentsTotal
+	if other.maxSegmentsPerBucket > sn.maxSegmentsPerBucket {
+		sn.maxSegmentsPerBucket = other.maxSegmentsPerBucket
+	}
+	sn.bucketsUsed += other.bucketsUsed
+	if sn.bucketCount == 0 {
+		sn.bucketCount = other.bucketCount
+	}
+	sn.bucketScans += other.bucketScans
+	sn.bucketScanBytes += other.bucketScanBytes
+	sn.bucketScanEntries += other.bucketScanEntries
+	sn.bucketsScanned += other.bucketsScanned
+	sn.repeatedBucketScans += other.repeatedBucketScans
+	sn.matchedEntries += other.matchedEntries
+	sn.matchedBytes += other.matchedBytes
+	sn.removedEntries += other.removedEntries
+	sn.removedBytes += other.removedBytes
+	sn.getProbeKeys += other.getProbeKeys
+	sn.getBucketScans += other.getBucketScans
+	sn.popProbeKeys += other.popProbeKeys
+	sn.popBucketScans += other.popBucketScans
+	sn.popValueProbeKeys += other.popValueProbeKeys
+	sn.popValueBucketScans += other.popValueBucketScans
+	sn.forEachBucketScans += other.forEachBucketScans
+}
+
+func (sn spillSnapshot) hasData() bool {
+	return sn.spilledEntries > 0 || sn.bucketScans > 0 || sn.matchedEntries > 0
+}
+
+func (sn spillSnapshot) summary(prefix string) string {
+	avgEntry := uint64(0)
+	if sn.spilledEntries > 0 {
+		avgEntry = sn.spilledPayloadBytes / sn.spilledEntries
+	}
+	scanAmp := 0.0
+	if sn.matchedEntries > 0 {
+		scanAmp = float64(sn.bucketScanEntries) / float64(sn.matchedEntries)
+	}
+	avgKeysPerGetScan := 0.0
+	if sn.getBucketScans > 0 {
+		avgKeysPerGetScan = float64(sn.getProbeKeys) / float64(sn.getBucketScans)
+	}
+	avgKeysPerPopScan := 0.0
+	if sn.popBucketScans > 0 {
+		avgKeysPerPopScan = float64(sn.popProbeKeys) / float64(sn.popBucketScans)
+	}
+	hints := make([]string, 0, 3)
+	if sn.matchedEntries > 0 && scanAmp > 50 {
+		hints = append(hints, "high scan amplification")
+	}
+	if sn.getBucketScans > 0 && avgKeysPerGetScan < 2 {
+		hints = append(hints, "low key batching on get")
+	}
+	if sn.popBucketScans > 0 && avgKeysPerPopScan < 2 {
+		hints = append(hints, "low key batching on pop")
+	}
+	if sn.repeatedBucketScans > sn.bucketScans/2 {
+		hints = append(hints, "many repeated bucket scans")
+	}
+	hintText := "ok"
+	if len(hints) > 0 {
+		hintText = strings.Join(hints, "; ")
+	}
+	return fmt.Sprintf(
+		"%s spill summary: spilled_entries=%d spilled_payload_bytes=%d spilled_bytes=%d avg_entry_bytes=%d segments=%d max_segments_per_bucket=%d buckets_used=%d bucket_scans=%d scan_entries=%d scan_bytes=%d matched_entries=%d removed_entries=%d scan_amp=%.2f get_keys=%d get_bucket_scans=%d pop_keys=%d pop_bucket_scans=%d foreach_bucket_scans=%d repeated_bucket_scans=%d hints=%s",
+		prefix,
+		sn.spilledEntries,
+		sn.spilledPayloadBytes,
+		sn.spilledBytes,
+		avgEntry,
+		sn.segmentsTotal,
+		sn.maxSegmentsPerBucket,
+		sn.bucketsUsed,
+		sn.bucketScans,
+		sn.bucketScanEntries,
+		sn.bucketScanBytes,
+		sn.matchedEntries,
+		sn.removedEntries,
+		scanAmp,
+		sn.getProbeKeys,
+		sn.getBucketScans,
+		sn.popProbeKeys,
+		sn.popBucketScans,
+		sn.forEachBucketScans,
+		sn.repeatedBucketScans,
+		hintText,
+	)
+}
+func newSpillStore(dir string, bucketCount uint32, maxSegmentBytes uint64) (*spillStore, error) {
+	if bucketCount == 0 {
+		bucketCount = 1
+	}
+	bucketCount = normalizeBucketCount(bucketCount)
+	if maxSegmentBytes == 0 {
+		maxSegmentBytes = defaultSpillSegmentMaxSize
+	}
+	store := &spillStore{
+		dir:             dir,
+		bucketCount:     bucketCount,
+		bucketMask:      uint64(bucketCount - 1),
+		maxSegmentBytes: maxSegmentBytes,
+		buckets:         make([]spillBucket, bucketCount),
+	}
+	store.stats.scanPerBucket = make([]uint64, bucketCount)
+	return store, nil
+}
+
+func (ss *spillStore) bucketID(hash uint64) uint32 {
+	return uint32(hash & ss.bucketMask)
+}
+
+func (ss *spillStore) appendEntries(bucketID uint32, entries []spillEntry) error {
+	if len(entries) == 0 {
 		return nil
 	}
-	err := sp.file.Close()
-	sp.file = nil
-	return err
+	bucket := &ss.buckets[bucketID]
+	var (
+		seg    *spillSegment
+		file   *os.File
+		writer *bufio.Writer
+	)
+	if len(bucket.segments) > 0 {
+		seg = bucket.segments[len(bucket.segments)-1]
+	}
+	closeWriter := func() error {
+		if writer != nil {
+			if err := writer.Flush(); err != nil {
+				return err
+			}
+		}
+		if file != nil {
+			if err := file.Close(); err != nil {
+				return err
+			}
+		}
+		writer = nil
+		file = nil
+		return nil
+	}
+	for _, entry := range entries {
+		entryBytes := spillEntryHeaderSize + len(entry.key) + len(entry.value)
+		needsNewSegment := seg == nil
+		if !needsNewSegment && ss.maxSegmentBytes > 0 && seg.size > 0 &&
+			seg.size+int64(entryBytes) > int64(ss.maxSegmentBytes) {
+			needsNewSegment = true
+		}
+		if needsNewSegment {
+			if err := closeWriter(); err != nil {
+				return err
+			}
+			var err error
+			seg, file, writer, err = ss.createSegment(bucket, bucketID)
+			if err != nil {
+				return err
+			}
+		} else if file == nil || writer == nil {
+			var err error
+			file, err = os.OpenFile(seg.path, os.O_WRONLY|os.O_APPEND, 0o600)
+			if err != nil {
+				return err
+			}
+			writer = bufio.NewWriter(file)
+		}
+		var header [spillEntryHeaderSize]byte
+		binary.LittleEndian.PutUint64(header[0:8], entry.hash)
+		binary.LittleEndian.PutUint32(header[8:12], uint32(len(entry.key)))
+		binary.LittleEndian.PutUint32(header[12:16], uint32(len(entry.value)))
+		if _, err := writer.Write(header[:]); err != nil {
+			_ = closeWriter()
+			return err
+		}
+		if len(entry.key) > 0 {
+			if _, err := writer.Write(entry.key); err != nil {
+				_ = closeWriter()
+				return err
+			}
+		}
+		if len(entry.value) > 0 {
+			if _, err := writer.Write(entry.value); err != nil {
+				_ = closeWriter()
+				return err
+			}
+		}
+		seg.size += int64(entryBytes)
+		bucket.rowCount++
+		ss.stats.spilledEntries++
+		ss.stats.spilledPayloadBytes += uint64(len(entry.key) + len(entry.value))
+		ss.stats.spilledBytes += uint64(entryBytes)
+	}
+	return closeWriter()
+}
+
+func (ss *spillStore) createSegment(bucket *spillBucket, bucketID uint32) (*spillSegment, *os.File, *bufio.Writer, error) {
+	segmentID := len(bucket.segments)
+	path := filepath.Join(ss.dir, fmt.Sprintf("spill-b%05d-%06d.bin", bucketID, segmentID))
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	seg := &spillSegment{path: path}
+	bucket.segments = append(bucket.segments, seg)
+	ss.stats.segmentsCreated++
+	return seg, file, bufio.NewWriter(file), nil
+}
+
+func (ss *spillStore) forEachEntry(bucketID uint32, scratch *[]byte, fn func(key []byte, value []byte) error) error {
+	return ss.scanBucket(bucketID, scanReasonForEach, scratch, func(_ uint64, key []byte, value []byte, _ uint64) (bool, error) {
+		return false, fn(key, value)
+	})
+}
+
+func (ss *spillStore) collect(bucketID uint32, hash uint64, key []byte, dst *[][]byte, plan *removalPlan, collectValues bool, reason scanReason) error {
+	bucket := &ss.buckets[bucketID]
+	if bucket.rowCount == 0 {
+		return nil
+	}
+	ss.stats.recordProbe(reason, 1, 1)
+	var scratch []byte
+	return ss.scanBucket(bucketID, reason, &scratch, func(entryHash uint64, entryKey []byte, entryValue []byte, rid uint64) (bool, error) {
+		if entryHash != hash || !bytes.Equal(entryKey, key) {
+			return false, nil
+		}
+		if plan == nil {
+			if collectValues {
+				payload := make([]byte, len(entryValue))
+				copy(payload, entryValue)
+				*dst = append(*dst, payload)
+			}
+			ss.stats.recordMatch(len(entryValue), false)
+			return false, nil
+		}
+		if plan.matchesValue(entryValue) && plan.take() {
+			if collectValues {
+				payload := make([]byte, len(entryValue))
+				copy(payload, entryValue)
+				*dst = append(*dst, payload)
+			}
+			bucket.setTombstone(rid)
+			ss.stats.recordMatch(len(entryValue), true)
+		}
+		if !plan.hasRemaining() {
+			return true, nil
+		}
+		return false, nil
+	})
+}
+
+func (ss *spillStore) scanBucket(bucketID uint32, reason scanReason, scratch *[]byte, fn func(hash uint64, key []byte, value []byte, rid uint64) (bool, error)) error {
+	bucket := &ss.buckets[bucketID]
+	if bucket.rowCount == 0 {
+		return nil
+	}
+	var header [spillEntryHeaderSize]byte
+	var rid uint64
+	var scannedEntries uint64
+	var scannedBytes uint64
+	for _, seg := range bucket.segments {
+		file, err := os.Open(seg.path)
+		if err != nil {
+			return err
+		}
+		reader := bufio.NewReader(file)
+		for {
+			if _, err := io.ReadFull(reader, header[:]); err != nil {
+				if err == io.EOF {
+					break
+				}
+				if err == io.ErrUnexpectedEOF {
+					_ = file.Close()
+					return io.ErrUnexpectedEOF
+				}
+				_ = file.Close()
+				return err
+			}
+			entryHash := binary.LittleEndian.Uint64(header[0:8])
+			keyLen := binary.LittleEndian.Uint32(header[8:12])
+			valLen := binary.LittleEndian.Uint32(header[12:16])
+			total := int(keyLen + valLen)
+			scannedEntries++
+			scannedBytes += uint64(spillEntryHeaderSize) + uint64(total)
+			if cap(*scratch) < total {
+				*scratch = make([]byte, total)
+			}
+			buf := (*scratch)[:total]
+			if _, err := io.ReadFull(reader, buf); err != nil {
+				_ = file.Close()
+				return err
+			}
+			if bucket.tombstone != nil && bucket.tombstone.isSet(rid) {
+				rid++
+				continue
+			}
+			keyBytes := buf[:keyLen]
+			valBytes := buf[keyLen:]
+			stop, err := fn(entryHash, keyBytes, valBytes, rid)
+			if err != nil {
+				_ = file.Close()
+				return err
+			}
+			rid++
+			if stop {
+				_ = file.Close()
+				return nil
+			}
+		}
+		if err := file.Close(); err != nil {
+			return err
+		}
+	}
+	ss.stats.recordScan(reason, bucketID, scannedEntries, scannedBytes)
+	return nil
+}
+
+func (ss *spillStore) close() error {
+	var firstErr error
+	for _, bucket := range ss.buckets {
+		for _, seg := range bucket.segments {
+			if seg.path == "" {
+				continue
+			}
+			if err := os.Remove(seg.path); err != nil && !os.IsNotExist(err) && firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
+}
+
+func (sb *spillBucket) setTombstone(rid uint64) {
+	if sb.tombstone == nil {
+		sb.tombstone = &tombstoneBitmap{}
+	}
+	sb.tombstone.set(rid)
+}
+
+func (tb *tombstoneBitmap) isSet(rid uint64) bool {
+	idx := rid >> 6
+	if int(idx) >= len(tb.bits) {
+		return false
+	}
+	return tb.bits[idx]&(1<<(rid&63)) != 0
+}
+
+func (tb *tombstoneBitmap) set(rid uint64) {
+	idx := rid >> 6
+	if int(idx) >= len(tb.bits) {
+		expanded := make([]uint64, idx+1)
+		copy(expanded, tb.bits)
+		tb.bits = expanded
+	}
+	tb.bits[idx] |= 1 << (rid & 63)
+}
+
+func collectSpillGet(shard *hashShard, probes []*keyProbe, results []GetResult) error {
+	buckets := make(map[uint32][]*keyProbe, len(probes))
+	for _, probe := range probes {
+		bucketID := shard.spill.bucketID(probe.hash)
+		buckets[bucketID] = append(buckets[bucketID], probe)
+	}
+	var scratch []byte
+	for bucketID, bucketProbes := range buckets {
+		shard.spill.stats.recordProbe(scanReasonGet, len(bucketProbes), 1)
+		groupsByHash := make(map[uint64]map[string]*probeGroup, len(bucketProbes))
+		for _, probe := range bucketProbes {
+			groups, ok := groupsByHash[probe.hash]
+			if !ok {
+				groups = make(map[string]*probeGroup, 1)
+				groupsByHash[probe.hash] = groups
+			}
+			group, ok := groups[probe.keyStr]
+			if !ok {
+				group = &probeGroup{}
+				groups[probe.keyStr] = group
+			}
+			group.indices = append(group.indices, probe.idx)
+		}
+
+		if err := shard.spill.scanBucket(bucketID, scanReasonGet, &scratch, func(entryHash uint64, entryKey []byte, entryValue []byte, _ uint64) (bool, error) {
+			groups := groupsByHash[entryHash]
+			if len(groups) == 0 {
+				return false, nil
+			}
+			group := groups[string(entryKey)]
+			if group == nil {
+				return false, nil
+			}
+			shard.spill.stats.recordMatch(len(entryValue), false)
+			payload := make([]byte, len(entryValue))
+			copy(payload, entryValue)
+			group.values = append(group.values, payload)
+			return false, nil
+		}); err != nil {
+			return err
+		}
+
+		for _, groups := range groupsByHash {
+			for _, group := range groups {
+				if len(group.values) == 0 {
+					continue
+				}
+				for _, idx := range group.indices {
+					results[idx].Rows = append(results[idx].Rows, group.values...)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func collectSpillPop(shard *hashShard, probes []*keyProbe, results []GetResult, removeAll bool, removedTotal *int64) error {
+	buckets := make(map[uint32][]*keyProbe, len(probes))
+	seenKeys := map[string]struct{}{}
+	for _, probe := range probes {
+		if probe.plan == nil || !probe.plan.hasRemaining() {
+			continue
+		}
+		if removeAll {
+			if _, ok := seenKeys[probe.keyStr]; ok {
+				continue
+			}
+			seenKeys[probe.keyStr] = struct{}{}
+		}
+		bucketID := shard.spill.bucketID(probe.hash)
+		buckets[bucketID] = append(buckets[bucketID], probe)
+	}
+
+	var scratch []byte
+	for bucketID, bucketProbes := range buckets {
+		if len(bucketProbes) == 0 {
+			continue
+		}
+		shard.spill.stats.recordProbe(scanReasonPop, len(bucketProbes), 1)
+		groupsByHash := make(map[uint64]map[string]*probeGroup, len(bucketProbes))
+		remaining := 0
+		for _, probe := range bucketProbes {
+			groups, ok := groupsByHash[probe.hash]
+			if !ok {
+				groups = make(map[string]*probeGroup, 1)
+				groupsByHash[probe.hash] = groups
+			}
+			group, ok := groups[probe.keyStr]
+			if !ok {
+				group = &probeGroup{}
+				groups[probe.keyStr] = group
+			}
+			group.indices = append(group.indices, probe.idx)
+			group.plans = append(group.plans, probe.plan)
+			if !removeAll && probe.plan.hasRemaining() {
+				remaining++
+			}
+		}
+
+		err := shard.spill.scanBucket(bucketID, scanReasonPop, &scratch, func(entryHash uint64, entryKey []byte, entryValue []byte, rid uint64) (bool, error) {
+			groups := groupsByHash[entryHash]
+			if len(groups) == 0 {
+				return false, nil
+			}
+			group := groups[string(entryKey)]
+			if group == nil {
+				return false, nil
+			}
+			if removeAll {
+				plan := group.plans[0]
+				if plan.matchesValue(entryValue) && plan.take() {
+					shard.spill.buckets[bucketID].setTombstone(rid)
+					shard.spill.stats.recordMatch(len(entryValue), true)
+					if removedTotal != nil {
+						*removedTotal = *removedTotal + 1
+					}
+					payload := make([]byte, len(entryValue))
+					copy(payload, entryValue)
+					results[group.indices[0]].Rows = append(results[group.indices[0]].Rows, payload)
+				}
+				return false, nil
+			}
+
+			for group.next < len(group.plans) && !group.plans[group.next].hasRemaining() {
+				group.next++
+			}
+			if group.next >= len(group.plans) {
+				return false, nil
+			}
+			plan := group.plans[group.next]
+			if plan.matchesValue(entryValue) && plan.take() {
+				shard.spill.buckets[bucketID].setTombstone(rid)
+				shard.spill.stats.recordMatch(len(entryValue), true)
+				if removedTotal != nil {
+					*removedTotal = *removedTotal + 1
+				}
+				payload := make([]byte, len(entryValue))
+				copy(payload, entryValue)
+				results[group.indices[group.next]].Rows = append(results[group.indices[group.next]].Rows, payload)
+				if !plan.hasRemaining() {
+					group.next++
+					remaining--
+					if remaining <= 0 {
+						return true, nil
+					}
+				}
+			}
+			return false, nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func collectSpillPopStream(shard *hashShard, probes []*keyProbe, removeAll bool, fn func(idx int, key []byte, row []byte) error, removedTotal *int64, collectValues bool) error {
+	buckets := make(map[uint32][]*keyProbe, len(probes))
+	seenKeys := map[string]struct{}{}
+	for _, probe := range probes {
+		if probe.plan == nil || !probe.plan.hasRemaining() {
+			continue
+		}
+		if removeAll {
+			if _, ok := seenKeys[probe.keyStr]; ok {
+				continue
+			}
+			seenKeys[probe.keyStr] = struct{}{}
+		}
+		bucketID := shard.spill.bucketID(probe.hash)
+		buckets[bucketID] = append(buckets[bucketID], probe)
+	}
+
+	var scratch []byte
+	for bucketID, bucketProbes := range buckets {
+		if len(bucketProbes) == 0 {
+			continue
+		}
+		shard.spill.stats.recordProbe(scanReasonPop, len(bucketProbes), 1)
+		groupsByHash := make(map[uint64]map[string]*probeGroup, len(bucketProbes))
+		remaining := 0
+		for _, probe := range bucketProbes {
+			groups, ok := groupsByHash[probe.hash]
+			if !ok {
+				groups = make(map[string]*probeGroup, 1)
+				groupsByHash[probe.hash] = groups
+			}
+			group, ok := groups[probe.keyStr]
+			if !ok {
+				group = &probeGroup{}
+				groups[probe.keyStr] = group
+			}
+			group.indices = append(group.indices, probe.idx)
+			group.plans = append(group.plans, probe.plan)
+			if !removeAll && probe.plan.hasRemaining() {
+				remaining++
+			}
+		}
+
+		err := shard.spill.scanBucket(bucketID, scanReasonPop, &scratch, func(entryHash uint64, entryKey []byte, entryValue []byte, rid uint64) (bool, error) {
+			groups := groupsByHash[entryHash]
+			if len(groups) == 0 {
+				return false, nil
+			}
+			group := groups[string(entryKey)]
+			if group == nil {
+				return false, nil
+			}
+			if removeAll {
+				plan := group.plans[0]
+				if plan.matchesValue(entryValue) && plan.take() {
+					shard.spill.buckets[bucketID].setTombstone(rid)
+					shard.spill.stats.recordMatch(len(entryValue), true)
+					if removedTotal != nil {
+						*removedTotal = *removedTotal + 1
+					}
+					if collectValues {
+						payload := make([]byte, len(entryValue))
+						copy(payload, entryValue)
+						if err := fn(group.indices[0], entryKey, payload); err != nil {
+							return true, err
+						}
+					}
+				}
+				return false, nil
+			}
+
+			for group.next < len(group.plans) && !group.plans[group.next].hasRemaining() {
+				group.next++
+			}
+			if group.next >= len(group.plans) {
+				return false, nil
+			}
+			plan := group.plans[group.next]
+			if plan.matchesValue(entryValue) && plan.take() {
+				shard.spill.buckets[bucketID].setTombstone(rid)
+				shard.spill.stats.recordMatch(len(entryValue), true)
+				if removedTotal != nil {
+					*removedTotal = *removedTotal + 1
+				}
+				if collectValues {
+					payload := make([]byte, len(entryValue))
+					copy(payload, entryValue)
+					if err := fn(group.indices[group.next], entryKey, payload); err != nil {
+						return true, err
+					}
+				}
+				if !plan.hasRemaining() {
+					group.next++
+					remaining--
+					if remaining <= 0 {
+						return true, nil
+					}
+				}
+			}
+			return false, nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func newRemovalPlan(removeAll bool) *removalPlan {
@@ -1683,8 +3035,18 @@ func newRemovalPlan(removeAll bool) *removalPlan {
 	return &removalPlan{remaining: 1}
 }
 
+func newValueRemovalPlan(removeAll bool, value []byte) *removalPlan {
+	plan := newRemovalPlan(removeAll)
+	plan.matchValue = value
+	plan.matchValueSet = true
+	return plan
+}
+
 type removalPlan struct {
-	remaining int
+	remaining     int
+	removed       int
+	matchValue    []byte
+	matchValueSet bool
 }
 
 func (rp *removalPlan) take() bool {
@@ -1692,12 +3054,14 @@ func (rp *removalPlan) take() bool {
 		return false
 	}
 	if rp.remaining < 0 {
+		rp.removed++
 		return true
 	}
 	if rp.remaining == 0 {
 		return false
 	}
 	rp.remaining--
+	rp.removed++
 	return true
 }
 
@@ -1711,81 +3075,38 @@ func (rp *removalPlan) hasRemaining() bool {
 	return rp.remaining > 0
 }
 
-type iterationGroup struct {
-	key  []byte
-	rows [][]byte
+func (rp *removalPlan) matchesValue(value []byte) bool {
+	if rp == nil || !rp.matchValueSet {
+		return true
+	}
+	return bytes.Equal(value, rp.matchValue)
 }
 
-func bytesToStableString(b []byte) string {
-	if len(b) == 0 {
-		return ""
-	}
-	return string(b)
-}
-func (hs *hashShard) iterateUnsafe(fn func(key []byte, rows [][]byte) error) error {
+func (hs *hashShard) iterateUnsafe(fn func(key []byte, row []byte) error) error {
 	if fn == nil {
 		return nil
 	}
 	if !hs.iterating {
 		return moerr.NewInternalErrorNoCtx("shard iteration context required")
 	}
-	groups := make(map[string]*iterationGroup, len(hs.inMemory))
-	for _, bucket := range hs.inMemory {
-		for _, entry := range bucket.entries {
-			keyBytes := entry.keyBytes()
-			keyStr := bytesToStableString(keyBytes)
-			group, ok := groups[keyStr]
-			if !ok {
-				group = &iterationGroup{
-					key:  keyBytes,
-					rows: make([][]byte, 0, 1),
-				}
-				groups[keyStr] = group
-			}
-			group.rows = append(group.rows, entry.valueBytes())
-		}
-	}
-
-	var scratch []byte
-	for _, part := range hs.spills {
-		for hash, pointers := range part.index {
-			_ = hash
-			for _, ptr := range pointers {
-				need := int(ptr.keyLen + ptr.valueLen)
-				if cap(scratch) < need {
-					scratch = make([]byte, need)
-				}
-				buf := scratch[:need]
-				n, err := part.file.ReadAt(buf, ptr.offset)
-				if err != nil && err != io.EOF {
-					return err
-				}
-				if n != len(buf) {
-					return io.ErrUnexpectedEOF
-				}
-				keyCopy := make([]byte, ptr.keyLen)
-				copy(keyCopy, buf[:ptr.keyLen])
-				keyStr := string(keyCopy)
-				group, ok := groups[keyStr]
-				if !ok {
-					group = &iterationGroup{
-						key:  keyCopy,
-						rows: make([][]byte, 0, 1),
-					}
-					groups[keyStr] = group
-				}
-				valueCopy := make([]byte, ptr.valueLen)
-				copy(valueCopy, buf[ptr.keyLen:ptr.keyLen+ptr.valueLen])
-				group.rows = append(group.rows, valueCopy)
-			}
-		}
-	}
-
-	for keyStr, group := range groups {
-		if err := fn(group.key, group.rows); err != nil {
+	if hs.mem != nil {
+		if err := hs.mem.forEach(func(entry *memEntry) error {
+			return fn(entry.keyBytes(), entry.valueBytes())
+		}); err != nil {
 			return err
 		}
-		delete(groups, keyStr)
+	}
+	if hs.spill == nil {
+		return nil
+	}
+	var scratch []byte
+	for bucketID := uint32(0); bucketID < hs.spill.bucketCount; bucketID++ {
+		err := hs.spill.forEachEntry(bucketID, &scratch, func(key []byte, value []byte) error {
+			return fn(key, value)
+		})
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
