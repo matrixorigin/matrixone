@@ -1,3 +1,5 @@
+UNAME_S := $(shell uname -s)
+
 ifeq ($(MO_CL_CUDA),1)
         ifeq ($(CONDA_PREFIX),)
                 $(error CONDA_PREFIX env variable not found. Please activate your conda environment.)
@@ -13,8 +15,15 @@ ifeq ($(MO_CL_CUDA),1)
 	LIBS += -Xlinker -lpthread -Xlinker -lm
 else
 	COMPILER_FLAGS := -Wall -Werror
-	LINKER_FLAGS := -Wl,-rpath=$(shell realpath ..)
-	LIBS := -L.. -lmo -L../../thirdparties/install/lib -lusearch_c -lm -fopenmp -lstdc++
+	ifeq ($(UNAME_S),Darwin)
+		LINKER_FLAGS := -Wl,-rpath,$(shell realpath ..)
+	else
+		LINKER_FLAGS := -Wl,-rpath=$(shell realpath ..)
+	endif
+	LIBS := -L.. -lmo -L../../thirdparties/install/lib -lusearch_c -lm -lstdc++
+	ifneq ($(UNAME_S),Darwin)
+		LIBS += -fopenmp
+	endif
 endif
 
 CFLAGS := -I.. -g -I../../thirdparties/install/include $(COMPILER_FLAGS)
