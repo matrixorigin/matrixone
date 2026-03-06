@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/brute_force"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -66,6 +67,7 @@ type IvfflatMeta struct {
 	K                    uint32
 	Seed                 uint64
 	SmallCenterThreshold int64
+	DataSize             int64
 }
 
 // LoadStats get the number of entries per centroid
@@ -84,35 +86,60 @@ func (idx *IvfflatSearchIndex[T]) LoadStats(
 		idx.Meta.SmallCenterThreshold = val.(int64)
 	}
 
-	stats := make(map[int64]int64)
+	{
+		logutil.Infof("IVFFLAT START: gets data size")
+		sql := fmt.Sprintf("SELECT COUNT(1) FROM `%s`.`%s`",
+			tblcfg.DbName, tblcfg.EntriesTable,
+		)
 
-	sql := fmt.Sprintf("SELECT `%s`, COUNT(`%s`) FROM `%s`.`%s` WHERE `%s` = %d GROUP BY `%s`",
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
-		tblcfg.DbName, tblcfg.EntriesTable,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
-		idx.Version,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
-	)
-
-	res, err := runSql(sqlproc, sql)
-	if err != nil {
-		return err
-	}
-	defer res.Close()
-
-	for _, bat := range res.Batches {
-		cntvec := bat.Vecs[1]
-		idvec := bat.Vecs[0]
-
-		for i := 0; i < bat.RowCount(); i++ {
-			cid := vector.GetFixedAtNoTypeCheck[int64](idvec, i)
-			cnt := vector.GetFixedAtNoTypeCheck[int64](cntvec, i)
-			stats[cid] = cnt
+		res, err := runSql(sqlproc, sql)
+		if err != nil {
+			return err
 		}
+		defer res.Close()
+
+		// batch cannot be empty
+		bat := res.Batches[0]
+
+		cnt := vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0)
+		idx.Meta.DataSize = int64(cnt)
+		logutil.Infof("IVFFLAT END: gets data size = %d", cnt)
+
 	}
 
-	idx.Meta.CenterStats = stats
+	if idx.Meta.SmallCenterThreshold > 0 {
+		logutil.Infof("IVFFLAT loads CenterStats")
+		// Table Scan is slow here.
+		stats := make(map[int64]int64)
+		sql := fmt.Sprintf("SELECT `%s`, COUNT(`%s`) FROM `%s`.`%s` WHERE `%s` = %d GROUP BY `%s`",
+			catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
+			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
+			tblcfg.DbName, tblcfg.EntriesTable,
+			catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+			idx.Version,
+			catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
+		)
+
+		res, err := runSql(sqlproc, sql)
+		if err != nil {
+			return err
+		}
+		defer res.Close()
+
+		for _, bat := range res.Batches {
+			cntvec := bat.Vecs[1]
+			idvec := bat.Vecs[0]
+
+			for i := 0; i < bat.RowCount(); i++ {
+				cid := vector.GetFixedAtNoTypeCheck[int64](idvec, i)
+				cnt := vector.GetFixedAtNoTypeCheck[int64](cntvec, i)
+				stats[cid] = cnt
+			}
+		}
+
+		idx.Meta.CenterStats = stats
+		logutil.Infof("IVFFLAT finished loading CenterStats")
+	}
 	return nil
 }
 
@@ -130,19 +157,8 @@ func (idx *IvfflatSearchIndex[T]) LoadBloomFilters(
 		return
 	}
 
-	// calculate the row count for bloomfilter
-	if idx.Meta.CenterStats == nil {
-		// no stats
-		return
-	}
-
-	maxv := int64(0)
-	for _, v := range idx.Meta.CenterStats {
-		if v > maxv {
-			maxv = v
-		}
-	}
-
+	// average size per bucket to estimate the bloomfilter size
+	maxv := idx.Meta.DataSize / int64(idxcfg.Ivfflat.Lists)
 	if maxv == 0 {
 		// no entries found
 		return
@@ -182,6 +198,7 @@ func (idx *IvfflatSearchIndex[T]) LoadBloomFilters(
 		}
 	}()
 
+	logutil.Infof("IVFFLAT START: get bloomfilter")
 	for i := 0; i < int(idxcfg.Ivfflat.Lists); i++ {
 		err = func() error {
 			bf := bloomfilters[i]
@@ -210,12 +227,14 @@ func (idx *IvfflatSearchIndex[T]) LoadBloomFilters(
 			return
 		}
 	}
-
+	logutil.Infof("IVFFLAT END: get bloomfilter")
 	return
 }
 
 func (idx *IvfflatSearchIndex[T]) LoadCentroids(proc *sqlexec.SqlProcess, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64) error {
 
+	logutil.Infof("IVFFLAT START: Load Centroids")
+	defer logutil.Infof("IVFFLAT END: Load Centroids")
 	// load centroids
 	sql := fmt.Sprintf(
 		"SELECT `%s`, `%s` FROM `%s`.`%s` WHERE `%s` = %d",
@@ -311,10 +330,11 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *sqlexec.SqlProcess, idxcfg vec
 	return nil
 }
 
-func (idx *IvfflatSearchIndex[T]) getCentroidsSum(centroids_ids []int64) uint64 {
+func (idx *IvfflatSearchIndex[T]) getCentroidsSum(centroids_ids []int64, nlists uint) uint64 {
 	total := uint64(0)
 
 	if idx.Meta.CenterStats == nil {
+		total = uint64(idx.Meta.DataSize * int64(len(centroids_ids)) / int64(nlists))
 		return total
 	}
 
@@ -477,7 +497,7 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 
 	if len(idx.BloomFilters) == 0 {
 
-		sum := idx.getCentroidsSum(centroids_ids)
+		sum := idx.getCentroidsSum(centroids_ids, idxcfg.Ivfflat.Lists)
 		if uint64(keyvec.Length()) < sum {
 			// unique join keys size is smaller than entries in centroids
 			return buildBloomFilterWithUniqueJoinKeys(keyvec)
