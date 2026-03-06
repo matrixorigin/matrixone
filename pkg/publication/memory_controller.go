@@ -113,8 +113,8 @@ func (mc *MemoryController) Alloc(ctx context.Context, size int, memType MemoryT
 		)
 	}
 
-	// Allocate from mpool
-	data, err := mc.mp.Alloc(size)
+	// Allocate from mpool (offHeap=false for normal allocations)
+	data, err := mc.mp.Alloc(size, false)
 	if err != nil {
 		if isLarge {
 			<-mc.largeSem
