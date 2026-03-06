@@ -1072,6 +1072,56 @@ func TestBitLengthFunc(t *testing.T) {
 	}
 }
 
+func initBitCountFuncTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test BitCountInt int64 (MySQL BIT_COUNT compatible)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{8, 24, 28, 255},
+					[]bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{1, 2, 3, 8},
+				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test BitCountInt int64 with null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{0},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{},
+				[]bool{true}),
+		},
+		{
+			info: "test BitCountInt int64 zero",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{0},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0},
+				[]bool{false}),
+		},
+	}
+}
+
+func TestBitCountFunc(t *testing.T) {
+	testCases := initBitCountFuncTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc,
+			tc.inputs, tc.expect, BitCountInt[int64])
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 func initCurrentDateTestCase() []tcTemp {
 	return []tcTemp{
 		{

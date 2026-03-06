@@ -15,6 +15,13 @@ select power(a,2) as a1, power(b,2) as b1 from t1 where power(a,2) > power(b,2) 
 
 -- @suite
 -- @setup
+-- @case
+-- @desc:test for func bit_count() (MySQL compatible)
+-- @label:bvt
+select bit_count(8), bit_count(24), bit_count(28), bit_count(255);
+
+-- @suite
+-- @setup
 drop table if exists t1;
 create table t1(a date,b datetime);
 insert into t1 values("2022-06-01","2022-07-01 00:00:00");

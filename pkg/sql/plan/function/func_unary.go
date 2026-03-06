@@ -32,6 +32,7 @@ import (
 	"hash/crc32"
 	"io"
 	"math"
+	"math/bits"
 	"net"
 	"runtime"
 	"strconv"
@@ -508,6 +509,13 @@ func BinFloat[T constraints.Float](ivecs []*vector.Vector, result vector.Functio
 func BitLengthFunc(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryStrToFixed[int64](ivecs, result, proc, length, func(v string) int64 {
 		return int64(len(v) * 8)
+	}, selectList)
+}
+
+// BitCountInt returns the number of bits set in the argument (MySQL BIT_COUNT compatible).
+func BitCountInt[T constraints.Integer](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[T, int64](ivecs, result, proc, length, func(v T) int64 {
+		return int64(bits.OnesCount64(uint64(v)))
 	}, selectList)
 }
 
