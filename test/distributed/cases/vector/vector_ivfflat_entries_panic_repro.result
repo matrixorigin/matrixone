@@ -86,27 +86,11 @@ SELECT result + 19000, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
 INSERT INTO t_ivfflat_entries_panic
 SELECT result + 19500, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
 SELECT mo_ctl('dn','flush', concat(database(), '.t_ivfflat_entries_panic')) AS flush_res;
-➤ flush_res[12,-1,0]  𝄀
-{
-  "method": "Flush",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+flush_res
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 SELECT mo_ctl('dn','checkpoint','') AS checkpoint_res;
-➤ checkpoint_res[12,-1,0]  𝄀
-{
-  "method": "Checkpoint",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+checkpoint_res
+{\n  "method": "Checkpoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 INSERT INTO t_ivfflat_entries_panic
 SELECT result + 20000, '[0.5,0.5,0.5,0.5]', 2 FROM generate_series(1, 500) g;
 INSERT INTO t_ivfflat_entries_panic
@@ -150,7 +134,7 @@ SET @q = CONCAT(
 );
 PREPARE s1 FROM @q;
 EXECUTE s1;
-➤ cnt[-5,64,0]  𝄀
+cnt
 4000
 DEALLOCATE PREPARE s1;
 DROP TABLE IF EXISTS t_ivfflat_entries_panic;

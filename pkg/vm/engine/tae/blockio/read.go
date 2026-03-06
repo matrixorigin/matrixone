@@ -641,13 +641,7 @@ func BlockDataReadInner(
 		var dists []float64
 
 		if orderByLimit != nil {
-			vecColPos := orderByLimit.ColPos
-			if phyAddrColumnPos >= 0 && vecColPos > int32(phyAddrColumnPos) {
-				vecColPos--
-			}
-			vecCol := &cacheVectors[vecColPos]
-
-			selectRows, dists, err = HandleOrderByLimitOnIVFFlatIndex(ctx, selectRows, vecCol, orderByLimit)
+			selectRows, dists, err = handleOrderByLimitOnSelectRows(ctx, selectRows, orderByLimit, phyAddrColumnPos, cacheVectors)
 			if err != nil {
 				return err
 			}
@@ -898,4 +892,20 @@ func readBlockData(
 	}
 
 	return
+}
+
+func handleOrderByLimitOnSelectRows(
+	ctx context.Context,
+	selectRows []int64,
+	orderByLimit *objectio.BlockReadTopOp,
+	phyAddrColumnPos int,
+	cacheVectors containers.Vectors,
+) ([]int64, []float64, error) {
+	vecColPos := orderByLimit.ColPos
+	if phyAddrColumnPos >= 0 && vecColPos > int32(phyAddrColumnPos) {
+		vecColPos--
+	}
+	vecCol := &cacheVectors[vecColPos]
+
+	return HandleOrderByLimitOnIVFFlatIndex(ctx, selectRows, vecCol, orderByLimit)
 }
