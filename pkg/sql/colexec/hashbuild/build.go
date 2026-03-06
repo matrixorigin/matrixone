@@ -16,6 +16,7 @@ package hashbuild
 
 import (
 	"bytes"
+	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -42,6 +43,8 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 	} else {
 		hashBuild.OpAnalyzer.Reset()
 	}
+
+	hashBuild.ctr.setSpillThreshold(hashBuild.SpillThreshold)
 
 	if !hashBuild.NeedHashMap {
 		return nil
@@ -85,9 +88,20 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			var jm *message.JoinMap
+			spillMode := len(ctr.spilledBuckets) > 0
+
 			if ctr.hashmapBuilder.InputBatchRowCount > 0 {
-				jm = message.NewJoinMap(ctr.hashmapBuilder.MultiSels, ctr.hashmapBuilder.IntHashMap, ctr.hashmapBuilder.StrHashMap, ctr.hashmapBuilder.DelRows, ctr.hashmapBuilder.Batches.Buf, proc.Mp())
-				jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
+				if spillMode {
+					// In spill mode: send empty JoinMap with spill info, no batches
+					jm = message.NewJoinMap(message.JoinSels{}, nil, nil, nil, nil, proc.Mp())
+					jm.Spilled = true
+					jm.SpillBuckets = ctr.spilledBuckets
+					jm.SpillRowCnts = ctr.spilledRowCnts
+				} else {
+					// Normal mode: send hashmap and batches
+					jm = message.NewJoinMap(ctr.hashmapBuilder.MultiSels, ctr.hashmapBuilder.IntHashMap, ctr.hashmapBuilder.StrHashMap, ctr.hashmapBuilder.DelRows, ctr.hashmapBuilder.Batches.Buf, proc.Mp())
+					jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
+				}
 				jm.SetRowCount(int64(ctr.hashmapBuilder.InputBatchRowCount))
 				jm.IncRef(hashBuild.JoinMapRefCnt)
 			}
@@ -97,6 +111,7 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 				IsShuffle:  hashBuild.IsShuffle,
 				ShuffleIdx: hashBuild.ShuffleIdx,
 				Tag:        hashBuild.JoinMapTag,
+				Spilled:    spillMode,
 			}, proc.GetMessageBoard())
 
 			ctr.state = SendSucceed
@@ -109,7 +124,22 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) collectBuildBatches(hashBuild *HashBuild, proc *process.Process, analyzer process.Analyzer) error {
+func (ctr *container) build(hashBuild *HashBuild, proc *process.Process, analyzer process.Analyzer) error {
+	spillMode := false
+	var spilledBuckets []string
+	var spilledRowCnts []int64
+	var spillFiles []*os.File
+	var spillBuffers []*bucketBuffer
+
+	defer func() {
+		// Close spill files if open
+		for _, f := range spillFiles {
+			if f != nil {
+				f.Close()
+			}
+		}
+	}()
+
 	for {
 		result, err := vm.ChildrenCall(hashBuild.GetChildren(0), proc, analyzer)
 		if err != nil {
@@ -124,34 +154,85 @@ func (ctr *container) collectBuildBatches(hashBuild *HashBuild, proc *process.Pr
 
 		analyzer.Alloc(int64(result.Batch.Size()))
 		ctr.hashmapBuilder.InputBatchRowCount += result.Batch.RowCount()
+
+		// If in spill mode, spill this batch directly to open files
+		if spillMode {
+			rowCnts, err := appendBatchToSpillFiles(proc, result.Batch, spillFiles, spillBuffers, hashBuild.HashOnPK, hashBuild.Conditions, analyzer)
+			if err != nil {
+				return err
+			}
+			for i := range rowCnts {
+				spilledRowCnts[i] += rowCnts[i]
+			}
+			continue
+		}
+
+		// Store original batch
 		err = ctr.hashmapBuilder.Batches.CopyIntoBatches(result.Batch, proc)
 		if err != nil {
 			return err
 		}
-	}
-	return nil
-}
 
-func (ctr *container) build(hashBuild *HashBuild, proc *process.Process, analyzer process.Analyzer) error {
-	err := ctr.collectBuildBatches(hashBuild, proc, analyzer)
-	if err != nil {
-		return err
+		// Check if we should enter spill mode based on batch memory size
+		if hashBuild.NeedHashMap && hashBuild.shouldSpillBatches() {
+			spillMode = true
+			// Create spill files once
+			spilledBuckets, spillFiles, err = createSpillFiles(proc)
+			if err != nil {
+				return err
+			}
+			spilledRowCnts = make([]int64, spillNumBuckets)
+			spillBuffers = make([]*bucketBuffer, spillNumBuckets)
+			for i := range spillBuffers {
+				spillBuffers[i] = &bucketBuffer{}
+			}
+
+			// Spill all batches collected so far
+			for _, bat := range ctr.hashmapBuilder.Batches.Buf {
+				rowCnts, err := appendBatchToSpillFiles(proc, bat, spillFiles, spillBuffers, hashBuild.HashOnPK, hashBuild.Conditions, analyzer)
+				if err != nil {
+					return err
+				}
+				for i := range rowCnts {
+					spilledRowCnts[i] += rowCnts[i]
+				}
+			}
+			// Clear batches to save memory
+			ctr.hashmapBuilder.Batches.Clean(proc.Mp())
+		}
 	}
 
-	if hashBuild.NeedHashMap {
+	// Flush remaining buffered data and close spill files
+	if spillMode {
+		for i, buf := range spillBuffers {
+			if _, err := flushBucketBuffer(proc, buf, spillFiles[i], analyzer); err != nil {
+				return err
+			}
+		}
+		for _, f := range spillFiles {
+			if f != nil {
+				f.Close()
+			}
+		}
+
+		ctr.spilledBuckets = spilledBuckets
+		ctr.spilledRowCnts = spilledRowCnts
+	}
+
+	// If we never entered spill mode, build the hashmap
+	if !spillMode && hashBuild.NeedHashMap {
 		needUniqueVec := true
 		if hashBuild.IsShuffle || hashBuild.RuntimeFilterSpec == nil || hashBuild.RuntimeFilterSpec.Expr == nil {
 			needUniqueVec = false
 		}
 
-		err = ctr.hashmapBuilder.BuildHashmap(hashBuild.HashOnPK, hashBuild.NeedAllocateSels, needUniqueVec, proc)
+		err := ctr.hashmapBuilder.BuildHashmap(hashBuild.HashOnPK, hashBuild.NeedAllocateSels, needUniqueVec, proc)
 		if err != nil {
 			return err
 		}
 	}
 
 	if !hashBuild.NeedBatches {
-		// if do not need merged batch, free it now to save memory
 		ctr.hashmapBuilder.Batches.Clean(proc.Mp())
 	}
 

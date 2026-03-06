@@ -660,20 +660,21 @@ message AnalyzeInfo {
   int64 memory_max = 34;
 
   int64 spill_size = 35;
-  int64 spill_min = 36;
-  int64 spill_max = 37;
+  int64 spill_rows = 36;
+  int64 spill_min = 37;
+  int64 spill_max = 38;
 
   // useful for detecting skews.
-  int64 outrows_min = 38;
-  int64 outrows_max = 39;
+  int64 outrows_min = 39;
+  int64 outrows_max = 40;
 
   // read_size: actual bytes read from storage layer (excluding rowid tombstone)
-  int64 read_size = 40;
+  int64 read_size = 41;
   // s3_read_size: actual bytes read from S3 (excluding rowid tombstone)
-  int64 s3_read_size = 41;
+  int64 s3_read_size = 42;
   // disk_read_size: actual bytes read from disk cache (excluding rowid
   // tombstone)
-  int64 disk_read_size = 42;
+  int64 disk_read_size = 43;
 }
 
 message OriginTableMessageForFuzzy {

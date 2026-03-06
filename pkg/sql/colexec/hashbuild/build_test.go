@@ -256,3 +256,73 @@ func TestCalculateBloomFilterProbability(t *testing.T) {
 		})
 	}
 }
+
+func TestHashBuildTypeName(t *testing.T) {
+	arg := NewArgument()
+	require.Equal(t, "hash_build", arg.TypeName())
+	arg.Release()
+}
+
+func TestHashBuildOpType(t *testing.T) {
+	arg := NewArgument()
+	require.Equal(t, vm.HashBuild, arg.OpType())
+	arg.Release()
+}
+
+func TestHashBuildReleaseAndReuse(t *testing.T) {
+	arg := NewArgument()
+	arg.JoinMapTag = 100
+	arg.Release()
+
+	arg2 := NewArgument()
+	require.Equal(t, int32(0), arg2.JoinMapTag)
+	arg2.Release()
+}
+
+func TestHashBuildWithRuntimeFilter(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.SetMessageBoard(message.NewMessageBoard())
+	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
+	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
+		Ch2: make(chan process.PipelineSignal, 10),
+	}
+
+	arg := &HashBuild{
+		JoinMapTag:    1,
+		JoinMapRefCnt: 1,
+		Conditions: []*plan.Expr{
+			newExpr(0, types.T_int32.ToType()),
+		},
+		NeedHashMap: true,
+		RuntimeFilterSpec: &plan.RuntimeFilterSpec{
+			Tag: 1,
+		},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
+		},
+	}
+
+	err := arg.Prepare(proc)
+	require.NoError(t, err)
+
+	bat := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, false, 10, proc.Mp())
+	proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(bat, nil, proc.Mp())
+	proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, proc.Mp())
+	proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, proc.Mp())
+
+	marg := &merge.Merge{}
+	err = marg.Prepare(proc)
+	require.NoError(t, err)
+	arg.SetChildren([]vm.Operator{marg})
+
+	ok, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, ok.Status)
+
+	arg.Free(proc, false, nil)
+	proc.Free()
+}

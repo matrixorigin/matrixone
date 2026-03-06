@@ -70,6 +70,8 @@ func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
 	}
 
 	ctr := &hashJoin.ctr
+	ctr.setSpillThreshold(hashJoin.SpillThreshold)
+
 	if hashJoin.NonEqCond != nil && len(ctr.joinBats) == 0 {
 		ctr.joinBats = make([]*batch.Batch, 2)
 	}
@@ -121,7 +123,22 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.skipProbe = true
 			}
 
-			ctr.state = Probe
+			// Check if we need to process spilled data
+			if ctr.mp != nil && ctr.mp.IsSpilled() {
+				ctr.state = ProcessSpilled
+			} else {
+				ctr.state = Probe
+			}
+
+		case ProcessSpilled:
+			result.Batch, err = hashJoin.processSpilledJoin(proc, analyzer)
+			if err != nil {
+				return result, err
+			}
+			if result.Batch == nil {
+				ctr.state = End
+			}
+			return result, nil
 
 		case Probe:
 			if ctr.leftBat == nil {
@@ -255,6 +272,52 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
+
+		// Handle spilled build side
+		if ctr.mp.IsSpilled() {
+			ctr.spilledBuildBuckets, ctr.spilledBuildRowCnts = ctr.mp.GetSpillBuckets()
+			ctr.currentBucketIdx = 0
+
+			// Create spill files for probe side
+			spilledProbeBuckets, spillProbeFiles, err := createProbeSpillFiles(proc)
+			if err != nil {
+				return err
+			}
+			ctr.spilledProbeBuckets = spilledProbeBuckets
+
+			spillBuffers := make([]*bucketBuffer, spillNumBuckets)
+			for i := range spillBuffers {
+				spillBuffers[i] = &bucketBuffer{}
+			}
+
+			defer func() {
+				// Flush remaining buffered data
+				for i, buf := range spillBuffers {
+					flushBucketBuffer(proc, buf, spillProbeFiles[i], analyzer)
+				}
+				for _, f := range spillProbeFiles {
+					if f != nil {
+						f.Close()
+					}
+				}
+			}()
+
+			// Spill each probe batch as it arrives
+			for {
+				input, err := vm.ChildrenCall(hashJoin.GetChildren(0), proc, analyzer)
+				if err != nil {
+					return err
+				}
+				if input.Batch == nil {
+					break
+				}
+				if !input.Batch.IsEmpty() {
+					if err := appendProbeBatchToSpillFiles(proc, input.Batch, spillProbeFiles, spillBuffers, hashJoin.EqConds[0], ctr.eqCondExecs, analyzer); err != nil {
+						return err
+					}
+				}
+			}
+		}
 	}
 	ctr.rightBats = ctr.mp.GetBatches()
 	ctr.rightRowCnt = ctr.mp.GetRowCount()

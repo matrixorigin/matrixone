@@ -15,9 +15,11 @@
 package hashjoin
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -35,6 +37,7 @@ const (
 	Probe
 	SyncBitmap
 	Finalize
+	ProcessSpilled
 	End
 )
 
@@ -85,6 +88,19 @@ type container struct {
 	bitmapSynced     bool
 
 	maxAllocSize int64
+
+	// spill support
+	spilledBuildBuckets []string
+	spilledBuildRowCnts []int64
+	spilledProbeBuckets []string
+	currentBucketIdx    int
+	spillThreshold      int64
+
+	// state for processing current bucket
+	bucketBuildBatches []*batch.Batch
+	bucketProbeBatches []*batch.Batch
+	bucketProbeIdx     int
+	bucketJoinMap      *message.JoinMap
 }
 
 type HashJoin struct {
@@ -111,6 +127,7 @@ type HashJoin struct {
 	IsMerger           bool
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	JoinMapTag         int32
+	SpillThreshold     int64
 
 	vm.OperatorBase
 }
@@ -166,6 +183,18 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.state = Build
 	ctr.probeState = psNextBatch
 	ctr.lastIdx = 0
+	hashJoin.cleanupSpillFiles(proc)
+	ctr.spilledBuildBuckets = nil
+	ctr.spilledBuildRowCnts = nil
+	ctr.spilledProbeBuckets = nil
+	ctr.currentBucketIdx = 0
+	if ctr.bucketJoinMap != nil {
+		ctr.bucketJoinMap.Free()
+		ctr.bucketJoinMap = nil
+	}
+	ctr.bucketBuildBatches = nil
+	ctr.bucketProbeBatches = nil
+	ctr.bucketProbeIdx = 0
 
 	if hashJoin.OpAnalyzer != nil {
 		hashJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
@@ -180,6 +209,16 @@ func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err e
 	ctr.cleanHashMap()
 	ctr.cleanNonEqCondExecutor()
 	ctr.cleanEqCondExecutors()
+	hashJoin.cleanupSpillFiles(proc)
+}
+
+func (hashJoin *HashJoin) cleanupSpillFiles(proc *process.Process) {
+	spillfs, err := proc.GetSpillFileService()
+	if err != nil {
+		return
+	}
+	spillfs.Delete(proc.Ctx, hashJoin.ctr.spilledBuildBuckets...)
+	spillfs.Delete(proc.Ctx, hashJoin.ctr.spilledProbeBuckets...)
 }
 
 func (ctr *container) resetNonEqCondExecutor() {
@@ -207,6 +246,18 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 			ctr.joinBats[i] = nil
 		}
 	}
+	for i := range ctr.bucketBuildBatches {
+		if ctr.bucketBuildBatches[i] != nil {
+			ctr.bucketBuildBatches[i].Clean(proc.Mp())
+		}
+	}
+	ctr.bucketBuildBatches = nil
+	for i := range ctr.bucketProbeBatches {
+		if ctr.bucketProbeBatches[i] != nil {
+			ctr.bucketProbeBatches[i].Clean(proc.Mp())
+		}
+	}
+	ctr.bucketProbeBatches = nil
 }
 
 func (ctr *container) cleanHashMap() {
@@ -283,4 +334,18 @@ func (hashJoin *HashJoin) IsLeftSingle() bool {
 
 func (hashJoin *HashJoin) IsRightSingle() bool {
 	return hashJoin.IsRightJoin && hashJoin.JoinType == plan.Node_SINGLE
+}
+
+func (ctr *container) setSpillThreshold(threshold int64) {
+	if threshold == 0 {
+		// 0 means auto config
+		mem := int64(system.MemoryTotal()) / int64(system.GoMaxProcs()) / 8
+		// min 128MB
+		if mem < common.MiB*128 {
+			mem = common.MiB * 128
+		}
+		ctr.spillThreshold = mem
+	} else {
+		ctr.spillThreshold = threshold
+	}
 }
