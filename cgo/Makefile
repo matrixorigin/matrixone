@@ -1,5 +1,6 @@
 DEBUG_OPT :=
 UNAME_M := $(shell uname -m)
+UNAME_S := $(shell uname -s)
 CC ?= gcc
 
 # Yeah, fast math.  We want it to be fast, for all xcall, 
@@ -9,7 +10,15 @@ COMMON_CFLAGS := -g $(OPT_LV) -Wall -Werror -fPIC -I../thirdparties/install/incl
 CFLAGS := -std=c99 $(COMMON_CFLAGS)
 OBJS := mo.o arith.o compare.o logic.o xcall.o usearchex.o bloom.o
 CUDA_OBJS :=
-LDFLAGS := -shared -L../thirdparties/install/lib -lusearch_c
+LDFLAGS := -L../thirdparties/install/lib -lusearch_c
+TARGET_LIB := libmo.so
+
+ifeq ($(UNAME_S),Darwin)
+	TARGET_LIB := libmo.dylib
+	LDFLAGS += -dynamiclib -undefined dynamic_lookup -install_name @rpath/$(TARGET_LIB)
+else
+	LDFLAGS += -shared
+endif
 
 ifeq ($(UNAME_M), x86_64)
 	CFLAGS += -march=haswell
@@ -30,9 +39,9 @@ endif
 
 .PHONY: all clean test debug
 
-all: libmo.so libmo.a
+all: $(TARGET_LIB) libmo.a
 
-libmo.so: $(OBJS) 
+$(TARGET_LIB): $(OBJS) 
 ifeq ($(MO_CL_CUDA),1)
 	$(MAKE) -C cuda
 	$(MAKE) -C cuvs
@@ -53,7 +62,7 @@ endif
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-test: libmo.so
+test: $(TARGET_LIB)
 	$(MAKE) -C test
 
 debug: override OPT_LV := -O0
@@ -61,7 +70,7 @@ debug: override DEBUG_OPT := debug
 debug: all
 
 clean:
-	rm -f *.o *.a *.so
+	rm -f *.o *.a *.so *.dylib
 ifeq ($(MO_CL_CUDA),1)
 	$(MAKE) -C cuda clean
 	$(MAKE) -C cuvs clean
