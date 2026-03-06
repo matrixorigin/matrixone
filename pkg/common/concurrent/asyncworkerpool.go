@@ -1,5 +1,3 @@
-//go:build gpu
-
 // Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,25 +24,24 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	cuvs "github.com/rapidsai/cuvs/go"
 	"go.uber.org/zap"
 )
 
-// CuvsTask represents a task to be executed by the CuvsWorker.
-type CuvsTask struct {
+// AsyncTask represents a task to be executed by the AsyncWorkerPool.
+type AsyncTask struct {
 	ID uint64
-	Fn func(res *cuvs.Resource) (any, error)
+	Fn func(res any) (any, error)
 }
 
-// CuvsTaskResult holds the result of a CuvsTask execution.
-type CuvsTaskResult struct {
+// AsyncTaskResult holds the result of a AsyncTask execution.
+type AsyncTaskResult struct {
 	ID     uint64
 	Result any
 	Error  error
 }
 
-// CuvsTaskResultStore manages the storage and retrieval of CuvsTaskResults.
-type CuvsTaskResultStore struct {
+// AsyncTaskResultStore manages the storage and retrieval of AsyncTaskResults.
+type AsyncTaskResultStore struct {
 	states    map[uint64]*taskState
 	mu        sync.Mutex
 	nextJobID uint64
@@ -54,12 +51,12 @@ type CuvsTaskResultStore struct {
 
 type taskState struct {
 	done   chan struct{}
-	result *CuvsTaskResult
+	result *AsyncTaskResult
 }
 
-// NewCuvsTaskResultStore creates a new CuvsTaskResultStore.
-func NewCuvsTaskResultStore() *CuvsTaskResultStore {
-	return &CuvsTaskResultStore{
+// NewAsyncTaskResultStore creates a new AsyncTaskResultStore.
+func NewAsyncTaskResultStore() *AsyncTaskResultStore {
+	return &AsyncTaskResultStore{
 		states:    make(map[uint64]*taskState),
 		nextJobID: 0,
 		stopCh:    make(chan struct{}),
@@ -67,8 +64,8 @@ func NewCuvsTaskResultStore() *CuvsTaskResultStore {
 	}
 }
 
-// Store saves a CuvsTaskResult in the store and signals any waiting goroutines.
-func (s *CuvsTaskResultStore) Store(result *CuvsTaskResult) {
+// Store saves a AsyncTaskResult in the store and signals any waiting goroutines.
+func (s *AsyncTaskResultStore) Store(result *AsyncTaskResult) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	state, ok := s.states[result.ID]
@@ -82,7 +79,7 @@ func (s *CuvsTaskResultStore) Store(result *CuvsTaskResult) {
 
 // Wait blocks until the result for the given jobID is available and returns it.
 // The result is removed from the internal map after being retrieved.
-func (s *CuvsTaskResultStore) Wait(jobID uint64) (*CuvsTaskResult, error) {
+func (s *AsyncTaskResultStore) Wait(jobID uint64) (*AsyncTaskResult, error) {
 	s.mu.Lock()
 	state, ok := s.states[jobID]
 	if !ok {
@@ -107,62 +104,66 @@ func (s *CuvsTaskResultStore) Wait(jobID uint64) (*CuvsTaskResult, error) {
 		s.mu.Unlock()
 		return state.result, nil
 	case <-s.stopCh:
-		return nil, moerr.NewInternalErrorNoCtx("CuvsTaskResultStore stopped before result was available")
+		return nil, moerr.NewInternalErrorNoCtx("AsyncTaskResultStore stopped before result was available")
 	}
 }
 
 // GetNextJobID atomically increments and returns a new unique job ID.
-func (s *CuvsTaskResultStore) GetNextJobID() uint64 {
+func (s *AsyncTaskResultStore) GetNextJobID() uint64 {
 	return atomic.AddUint64(&s.nextJobID, 1)
 }
 
-// Stop signals the CuvsTaskResultStore to stop processing new waits.
-func (s *CuvsTaskResultStore) Stop() {
+// Stop signals the AsyncTaskResultStore to stop processing new waits.
+func (s *AsyncTaskResultStore) Stop() {
 	if s.stopped.CompareAndSwap(false, true) {
 		close(s.stopCh)
 	}
 }
 
-// CuvsWorker runs tasks in a dedicated OS thread with a CUDA context.
-type CuvsWorker struct {
-	tasks                chan *CuvsTask
+// AsyncWorkerPool runs tasks in a dedicated OS thread with a CUDA context.
+type AsyncWorkerPool struct {
+	tasks                chan *AsyncTask
 	stopCh               chan struct{}
 	wg                   sync.WaitGroup
 	stopped              atomic.Bool // Indicates if the worker has been stopped
 	firstError           error
-	*CuvsTaskResultStore // Embed the result store
+	*AsyncTaskResultStore // Embed the result store
 	nthread              uint
 	sigc                 chan os.Signal // Add this field
 	errch                chan error
+	createResource       func() (any, error)
+	cleanupResource      func(any)
 }
 
-// NewCuvsWorker creates a new CuvsWorker.
-func NewCuvsWorker(nthread uint) *CuvsWorker {
-	return &CuvsWorker{
-		tasks:               make(chan *CuvsTask, nthread),
+// NewAsyncWorkerPool creates a new AsyncWorkerPool.
+func NewAsyncWorkerPool(nthread uint, createResource func() (any, error), cleanupResource func(any)) *AsyncWorkerPool {
+	return &AsyncWorkerPool{
+		tasks:               make(chan *AsyncTask, nthread),
 		stopCh:              make(chan struct{}),
 		stopped:             atomic.Bool{}, // Initialize to false
-		CuvsTaskResultStore: NewCuvsTaskResultStore(),
+		AsyncTaskResultStore: NewAsyncTaskResultStore(),
 		nthread:             nthread,
 		sigc:                make(chan os.Signal, 1),   // Initialize sigc
 		errch:               make(chan error, nthread), // Initialize errch
+		createResource:      createResource,
+		cleanupResource:     cleanupResource,
 	}
 }
 
-// handleAndStoreTask processes a single CuvsTask and stores its result.
-func (w *CuvsWorker) handleAndStoreTask(task *CuvsTask, resource *cuvs.Resource) {
+// handleAndStoreTask processes a single AsyncTask and stores its result.
+func (w *AsyncWorkerPool) handleAndStoreTask(task *AsyncTask, resource any) {
 	result, err := task.Fn(resource)
-	cuvsResult := &CuvsTaskResult{
+	asyncResult := &AsyncTaskResult{
 		ID:     task.ID,
 		Result: result,
 		Error:  err,
 	}
-	w.CuvsTaskResultStore.Store(cuvsResult)
+	w.AsyncTaskResultStore.Store(asyncResult)
 }
 
 // drainAndProcessTasks drains the w.tasks channel and processes each task.
 // It stops when the channel is empty or closed.
-func (w *CuvsWorker) drainAndProcessTasks(resource *cuvs.Resource) {
+func (w *AsyncWorkerPool) drainAndProcessTasks(resource any) {
 	for {
 		select {
 		case task, ok := <-w.tasks:
@@ -177,7 +178,7 @@ func (w *CuvsWorker) drainAndProcessTasks(resource *cuvs.Resource) {
 }
 
 // Start begins the worker's execution loop.
-func (w *CuvsWorker) Start(initFn func(res *cuvs.Resource) error, stopFn func(resource *cuvs.Resource) error) {
+func (w *AsyncWorkerPool) Start(initFn func(res any) error, stopFn func(resource any) error) {
 	w.wg.Add(1) // for w.run
 	go w.run(initFn, stopFn)
 
@@ -188,13 +189,13 @@ func (w *CuvsWorker) Start(initFn func(res *cuvs.Resource) error, stopFn func(re
 		defer w.wg.Done() // Ensure wg.Done() is called when this goroutine exits
 		select {
 		case <-w.sigc: // Wait for a signal
-			logutil.Info("CuvsWorker received shutdown signal, stopping...")
+			logutil.Info("AsyncWorkerPool received shutdown signal, stopping...")
 			if w.stopped.CompareAndSwap(false, true) {
 				close(w.stopCh) // Signal run() to stop.
 				close(w.tasks)  // Close tasks channel here.
 			}
 		case err := <-w.errch: // Listen for errors from worker goroutines
-			logutil.Error("CuvsWorker received internal error, stopping...", zap.Error(err))
+			logutil.Error("AsyncWorkerPool received internal error, stopping...", zap.Error(err))
 			if w.firstError == nil {
 				w.firstError = err
 			}
@@ -203,29 +204,29 @@ func (w *CuvsWorker) Start(initFn func(res *cuvs.Resource) error, stopFn func(re
 				close(w.tasks)  // Close tasks channel here.
 			}
 		case <-w.stopCh: // Listen for internal stop signal from w.Stop()
-			logutil.Info("CuvsWorker signal handler received internal stop signal, exiting...")
+			logutil.Info("AsyncWorkerPool signal handler received internal stop signal, exiting...")
 			// Do nothing, just exit. w.Stop() will handle the rest.
 		}
 	}()
 }
 
 // Stop signals the worker to terminate.
-func (w *CuvsWorker) Stop() {
+func (w *AsyncWorkerPool) Stop() {
 	if w.stopped.CompareAndSwap(false, true) {
 		close(w.stopCh) // Signal run() to stop.
 		close(w.tasks)  // Close tasks channel here.
 	}
 	w.wg.Wait()
-	w.CuvsTaskResultStore.Stop() // Signal the result store to stop
+	w.AsyncTaskResultStore.Stop() // Signal the result store to stop
 }
 
 // Submit sends a task to the worker.
-func (w *CuvsWorker) Submit(fn func(res *cuvs.Resource) (any, error)) (uint64, error) {
+func (w *AsyncWorkerPool) Submit(fn func(res any) (any, error)) (uint64, error) {
 	if w.stopped.Load() {
 		return 0, moerr.NewInternalErrorNoCtx("cannot submit task: worker is stopped")
 	}
 	jobID := w.GetNextJobID()
-	task := &CuvsTask{
+	task := &AsyncTask{
 		ID: jobID,
 		Fn: fn,
 	}
@@ -233,17 +234,23 @@ func (w *CuvsWorker) Submit(fn func(res *cuvs.Resource) (any, error)) (uint64, e
 	return jobID, nil
 }
 
-func (w *CuvsWorker) workerLoop(wg *sync.WaitGroup) {
+func (w *AsyncWorkerPool) workerLoop(wg *sync.WaitGroup) {
 	defer wg.Done()
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	resourcePtr, cleanup, err := w.setupResource()
-	if err != nil {
-		return
+	var resource any
+	var err error
+	if w.createResource != nil {
+		resource, err = w.createResource()
+		if err != nil {
+			w.errch <- err
+			return
+		}
 	}
-	defer cleanup()
-	defer runtime.KeepAlive(resourcePtr) // KeepAlive the pointer
+	if w.cleanupResource != nil {
+		defer w.cleanupResource(resource)
+	}
 
 	for {
 		select {
@@ -251,31 +258,37 @@ func (w *CuvsWorker) workerLoop(wg *sync.WaitGroup) {
 			if !ok { // tasks channel closed
 				return // No more tasks, and channel is closed. Exit.
 			}
-			w.handleAndStoreTask(task, resourcePtr) // Pass resourcePtr directly
+			w.handleAndStoreTask(task, resource) // Pass resource directly
 		case <-w.stopCh:
 			// stopCh signaled. Drain remaining tasks from w.tasks then exit.
-			w.drainAndProcessTasks(resourcePtr) // Pass resourcePtr directly
+			w.drainAndProcessTasks(resource) // Pass resource directly
 			return
 		}
 	}
 }
 
-func (w *CuvsWorker) run(initFn func(res *cuvs.Resource) error, stopFn func(resource *cuvs.Resource) error) {
+func (w *AsyncWorkerPool) run(initFn func(res any) error, stopFn func(resource any) error) {
 	defer w.wg.Done()
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	parentResource, cleanup, err := w.setupResource()
-	if err != nil {
-		return
+	var parentResource any
+	var err error
+	if w.createResource != nil {
+		parentResource, err = w.createResource()
+		if err != nil {
+			w.errch <- err
+			return
+		}
 	}
-	defer cleanup()
-	defer runtime.KeepAlive(parentResource)
+	if w.cleanupResource != nil {
+		defer w.cleanupResource(parentResource)
+	}
 
 	// Execute initFn once.
 	if initFn != nil {
 		if err := initFn(parentResource); err != nil {
-			logutil.Error("failed to initialize cuvs resource with provided function", zap.Error(err))
+			logutil.Error("failed to initialize async resource with provided function", zap.Error(err))
 			w.errch <- err
 
 			return
@@ -285,7 +298,7 @@ func (w *CuvsWorker) run(initFn func(res *cuvs.Resource) error, stopFn func(reso
 	if stopFn != nil {
 		defer func() {
 			if err := stopFn(parentResource); err != nil {
-				logutil.Error("error during cuvs resource stop function", zap.Error(err))
+				logutil.Error("error during async resource stop function", zap.Error(err))
 				w.errch <- err
 			}
 		}()
@@ -324,34 +337,12 @@ func (w *CuvsWorker) run(initFn func(res *cuvs.Resource) error, stopFn func(reso
 
 // Wait blocks until the result for the given jobID is available and returns it.
 // The result is removed from the internal map after being retrieved.
-func (w *CuvsWorker) Wait(jobID uint64) (*CuvsTaskResult, error) {
-	return w.CuvsTaskResultStore.Wait(jobID)
+func (w *AsyncWorkerPool) Wait(jobID uint64) (*AsyncTaskResult, error) {
+	return w.AsyncTaskResultStore.Wait(jobID)
 }
 
 // GetFirstError returns the first internal error encountered by the worker.
-func (w *CuvsWorker) GetFirstError() error {
+func (w *AsyncWorkerPool) GetFirstError() error {
 	return w.firstError
 }
 
-func (w *CuvsWorker) setupResource() (*cuvs.Resource, func(), error) {
-	stream, err := cuvs.NewCudaStream()
-	if err != nil {
-		logutil.Error("failed to create parent cuda stream", zap.Error(err))
-		w.errch <- err
-		return nil, nil, err
-	}
-
-	resource, err := cuvs.NewResource(stream)
-	if err != nil {
-		logutil.Error("failed to create parent cuvs resource", zap.Error(err))
-		w.errch <- err
-		stream.Close() // Close stream if resource creation fails
-		return nil, nil, err
-	}
-
-	cleanup := func() {
-		resource.Close()
-		stream.Close()
-	}
-	return &resource, cleanup, nil
-}

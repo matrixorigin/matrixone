@@ -1,5 +1,3 @@
-//go:build gpu
-
 // Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,50 +21,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rapidsai/cuvs/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-var (
-	cudaAvailableOnce sync.Once
-	hasCuda           bool
-	cudaErr           error
-)
-
-func skipIfNotCudaAvailable(t *testing.T) {
-	cudaAvailableOnce.Do(func() {
-		stream, err := cuvs.NewCudaStream()
-		if err != nil {
-			cudaErr = fmt.Errorf("failed to create cuvs stream: %w", err)
-			return
-		}
-		defer stream.Close()
-
-		resource, err := cuvs.NewResource(stream)
-		if err != nil {
-			cudaErr = fmt.Errorf("failed to create cuvs resource: %w", err)
-			return
-		}
-		defer resource.Close()
-
-		hasCuda = true
-	})
-
-	if !hasCuda {
-		t.Skipf("Skipping test because CUDA environment is not available: %v", cudaErr)
-	}
-}
-
-func TestNewCuvsTaskResultStore(t *testing.T) {
-	store := NewCuvsTaskResultStore()
+func TestNewAsyncTaskResultStore(t *testing.T) {
+	store := NewAsyncTaskResultStore()
 	assert.NotNil(t, store)
 	assert.NotNil(t, store.states)
 	assert.Equal(t, uint64(0), store.nextJobID)
 }
 
-func TestCuvsTaskResultStore_GetNextJobID(t *testing.T) {
-	store := NewCuvsTaskResultStore()
+func TestAsyncTaskResultStore_GetNextJobID(t *testing.T) {
+	store := NewAsyncTaskResultStore()
 	id1 := store.GetNextJobID()
 	id2 := store.GetNextJobID()
 	id3 := store.GetNextJobID()
@@ -76,8 +43,8 @@ func TestCuvsTaskResultStore_GetNextJobID(t *testing.T) {
 	assert.Equal(t, uint64(3), id3)
 }
 
-func TestCuvsTaskResultStore_StoreAndWait(t *testing.T) {
-	store := NewCuvsTaskResultStore()
+func TestAsyncTaskResultStore_StoreAndWait(t *testing.T) {
+	store := NewAsyncTaskResultStore()
 	jobID := store.GetNextJobID()
 	expectedResult := "task completed"
 
@@ -86,7 +53,7 @@ func TestCuvsTaskResultStore_StoreAndWait(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		time.Sleep(10 * time.Millisecond) // Simulate some work before storing
-		store.Store(&CuvsTaskResult{
+		store.Store(&AsyncTaskResult{
 			ID:     jobID,
 			Result: expectedResult,
 			Error:  nil,
@@ -109,8 +76,8 @@ func TestCuvsTaskResultStore_StoreAndWait(t *testing.T) {
 	assert.False(t, ok, "Result should be removed from store after Wait")
 }
 
-func TestCuvsTaskResultStore_ConcurrentStoreAndWait(t *testing.T) {
-	store := NewCuvsTaskResultStore()
+func TestAsyncTaskResultStore_ConcurrentStoreAndWait(t *testing.T) {
+	store := NewAsyncTaskResultStore()
 	numTasks := 100
 
 	var submitWg sync.WaitGroup
@@ -118,7 +85,7 @@ func TestCuvsTaskResultStore_ConcurrentStoreAndWait(t *testing.T) {
 	submitWg.Add(numTasks)
 	waitWg.Add(numTasks)
 
-	results := make(chan *CuvsTaskResult, numTasks)
+	results := make(chan *AsyncTaskResult, numTasks)
 
 	// Launch goroutines to wait for results
 	for i := 0; i < numTasks; i++ {
@@ -137,7 +104,7 @@ func TestCuvsTaskResultStore_ConcurrentStoreAndWait(t *testing.T) {
 			defer submitWg.Done()
 			// Simulate random delay
 			time.Sleep(time.Duration(id%10) * time.Millisecond)
-			store.Store(&CuvsTaskResult{
+			store.Store(&AsyncTaskResult{
 				ID:     id,
 				Result: fmt.Sprintf("result-%d", id),
 				Error:  nil,
@@ -160,56 +127,38 @@ func TestCuvsTaskResultStore_ConcurrentStoreAndWait(t *testing.T) {
 	}
 }
 
-// Mocking cuvs for CuvsWorker tests
-// This is a minimal mock to prevent panics and test the Go concurrency logic.
-// A proper mock would involve interfaces if cuvs was designed with them,
-// or a mocking library.
-type mockCudaStream struct{}
-
-func (m *mockCudaStream) Close() error { return nil }
-
-type mockResource struct {
-	stream *mockCudaStream
+type dummyResource struct {
 	closed bool
 }
 
-func (m *mockResource) Close() { m.closed = true }
+func (m *dummyResource) Close() {
+	m.closed = true
+}
 
-// Override the actual cuvs calls for testing purposes.
-// This is a tricky part without proper dependency injection in the original code.
-// We'll rely on the fact that CuvsWorker's run method calls NewCudaStream and NewResource.
-// For testing purposes, we would ideally mock these functions.
-// However, since we cannot easily mock package-level functions in Go without
-// modifying the source or using advanced mocking frameworks (which might not be in project dependencies),
-// we will focus on the CuvsWorker's general behavior and assume cuvs calls succeed for now.
-// If this test fails due to actual CUDA dependency, a more sophisticated mocking strategy
-// or build tags would be necessary.
-//
-// For this test, we will temporarily hijack the NewCudaStream and NewResource functions
-// using a linker trick (if running in a controlled test environment with `go test -ldflags='-X ...'`)
-// or more practically, by making the `cuvs` calls inside `run` accessible for mocking via a variable.
-// Given the current structure, direct mocking is difficult.
+func testCreateResource() (any, error) {
+	return &dummyResource{}, nil
+}
 
-// The following test for CuvsWorker will primarily verify the Go concurrency
-// aspects (Start, Submit, Wait, Stop) and the integration with CuvsTaskResultStore.
-// The actual `cuvs.NewCudaStream()` and `cuvs.NewResource()` calls will still be made.
-// If run on a machine without a CUDA device, these calls are likely to fail and
-// cause a `logutil.Fatal` exit, preventing the test from completing successfully.
-// This limitation is noted due to the direct dependency on a low-level C++ library
-// without an easy mocking point in the provided `cudaworker.go`.
-func TestCuvsWorker_LifecycleAndTaskExecution(t *testing.T) {
-	skipIfNotCudaAvailable(t)
+func testCleanupResource(res any) {
+	if res == nil {
+		return
+	}
+	resource := res.(*dummyResource)
+	resource.Close()
+}
 
-	worker := NewCuvsWorker(5)
+func TestAsyncWorkerPool_LifecycleAndTaskExecution(t *testing.T) {
+
+	worker := NewAsyncWorkerPool(5, testCreateResource, testCleanupResource)
 	require.NotNil(t, worker)
 
 	// Start the worker
-	worker.Start(nil, func(_ *cuvs.Resource) error { return nil }) // Pass nil initFn
+	worker.Start(nil, func(_ any) error { return nil }) // Pass nil initFn
 
 	// Submit a task
 	expectedTaskResult := "processed by CUDA (mocked)"
-	taskID, err := worker.Submit(func(res *cuvs.Resource) (any, error) {
-		// In a real scenario, this would use the cuvs.Resource
+	taskID, err := worker.Submit(func(res any) (any, error) {
+		// In a real scenario, this would use the real resource
 		// For testing, we just return a value.
 		// Assert that res is not nil, even if it's a dummy one.
 		assert.NotNil(t, res)
@@ -227,7 +176,7 @@ func TestCuvsWorker_LifecycleAndTaskExecution(t *testing.T) {
 
 	// Submit another task
 	expectedTaskResult2 := 123
-	taskID2, err := worker.Submit(func(res *cuvs.Resource) (any, error) {
+	taskID2, err := worker.Submit(func(res any) (any, error) {
 		assert.NotNil(t, res)
 		return expectedTaskResult2, nil
 	})
@@ -242,14 +191,14 @@ func TestCuvsWorker_LifecycleAndTaskExecution(t *testing.T) {
 
 	// Test a task that returns an error
 	expectedError := fmt.Errorf("cuda operation failed")
-	taskID3, err := worker.Submit(func(res *cuvs.Resource) (any, error) {
+	taskID3, err := worker.Submit(func(res any) (any, error) {
 		assert.NotNil(t, res)
 		return nil, expectedError
 	})
 	require.NoError(t, err)
 
 	result3, err := worker.Wait(taskID3)
-	assert.NoError(t, err) // Error is returned in CuvsTaskResult, not as return value of Wait
+	assert.NoError(t, err) // Error is returned in AsyncTaskResult, not as return value of Wait
 	assert.NotNil(t, result3)
 	assert.Equal(t, taskID3, result3.ID)
 	assert.Nil(t, result3.Result)
@@ -258,55 +207,17 @@ func TestCuvsWorker_LifecycleAndTaskExecution(t *testing.T) {
 	// Stop the worker
 	worker.Stop()
 
-	// Ensure that after stopping, submitting new tasks does not panic but also doesn't get processed.
-	// This might block indefinitely, so we use a context with a timeout.
-	// // Ensure that after stopping, submitting new tasks does not panic but also doesn't get processed.
-	// // This might block indefinitely, so we use a context with a timeout.
-	// taskID4 := worker.GetNextJobID()
-	// task4 := &CuvsTask{ // Updated line
-	// 	ID: taskID4,
-	// 	Fn: func(res *cuvs.Resource) (any, error) {
-	// 		return "should not be processed", nil
-	// 	},
-	// }
-
-	// // Submitting to a closed channel will panic. We need to handle this gracefully
-	// // or ensure `Submit` is not called after `Stop`.
-	// // Given the current implementation, `Submit` would block indefinitely if tasks channel is not closed.
-	// // Or panic if the channel is closed.
-	// // The current `Stop` implementation just closes `stopCh` and waits for `run` to exit.
-	// // The `tasks` channel remains open.
-	// // A more robust worker design might close `tasks` channel on stop or return an error on submit.
-	// // For now, we will just verify the previous tasks were processed and the worker stops.
-
-	// // Attempting to submit after stop might block or panic depending on exact timing.
-	// // To safely test the 'stopped' state without modifying the worker, we ensure that
-	// // the worker correctly processed its queue and exited its `run` loop.
-
-	// // Verify that if we try to wait for a non-existent task, it eventually times out
-	// // (or would block indefinitely if not for the conditional signal mechanism).
-	// // With the current `Wait` implementation, it will wait indefinitely.
-	// // To test that it does not process new tasks after stop, a better approach would be
-	// // to see if a submitted task *doesn't* get its result back within a timeout.
-	// // However, this requires a modification to `Wait` or a more complex test setup.
-
-	// // For now, assume if the worker has stopped, its `run` goroutine has exited.
-	// // The tasks channel is not closed by `Stop`, so subsequent `Submit` calls would block.
-	// // This is an area for potential improvement in the worker's design if it's meant to
-	// // gracefully reject new tasks after stopping.
-
-	t.Log("CuvsWorker stopped. Further submissions would block or panic.")
+	t.Log("AsyncWorkerPool stopped. Further submissions would block or panic.")
 }
 
-func TestCuvsWorker_StopDuringTaskProcessing(t *testing.T) {
-	skipIfNotCudaAvailable(t)
+func TestAsyncWorkerPool_StopDuringTaskProcessing(t *testing.T) {
 
-	worker := NewCuvsWorker(5)
-	worker.Start(nil, func(_ *cuvs.Resource) error { return nil }) // Pass nil initFn
+	worker := NewAsyncWorkerPool(5, testCreateResource, testCleanupResource)
+	worker.Start(nil, func(_ any) error { return nil }) // Pass nil initFn
 
 	// Submit a long-running task
 	longTaskSignal := make(chan struct{})
-	longTaskID, err := worker.Submit(func(res *cuvs.Resource) (any, error) {
+	longTaskID, err := worker.Submit(func(res any) (any, error) {
 		assert.NotNil(t, res)
 		<-longTaskSignal // Block until signaled
 		return "long task done", nil
@@ -351,20 +262,19 @@ func TestCuvsWorker_StopDuringTaskProcessing(t *testing.T) {
 	assert.Equal(t, "long task done", result.Result)
 }
 
-func TestCuvsWorker_MultipleSubmitsBeforeStart(t *testing.T) {
-	skipIfNotCudaAvailable(t)
+func TestAsyncWorkerPool_MultipleSubmitsBeforeStart(t *testing.T) {
 
-	worker := NewCuvsWorker(5)
+	worker := NewAsyncWorkerPool(5, testCreateResource, testCleanupResource)
 
 	// Start the worker - now takes initFn
-	worker.Start(nil, func(_ *cuvs.Resource) error { return nil }) // Pass nil initFn
+	worker.Start(nil, func(_ any) error { return nil }) // Pass nil initFn
 
 	// Submit multiple tasks before starting the worker
 	numTasks := 5
 	taskIDs := make([]uint64, numTasks) // Still need to collect IDs
 	for i := 0; i < numTasks; i++ {
 		var err error
-		taskIDs[i], err = worker.Submit(func(res *cuvs.Resource) (any, error) {
+		taskIDs[i], err = worker.Submit(func(res any) (any, error) {
 			assert.NotNil(t, res)
 			return fmt.Sprintf("result-%d", i), nil
 		})
@@ -386,15 +296,14 @@ func TestCuvsWorker_MultipleSubmitsBeforeStart(t *testing.T) {
 	worker.Stop()
 }
 
-func TestCuvsWorker_GracefulShutdown(t *testing.T) {
-	skipIfNotCudaAvailable(t)
+func TestAsyncWorkerPool_GracefulShutdown(t *testing.T) {
 
-	worker := NewCuvsWorker(5)
-	worker.Start(nil, func(_ *cuvs.Resource) error { return nil }) // Pass nil initFn
+	worker := NewAsyncWorkerPool(5, testCreateResource, testCleanupResource)
+	worker.Start(nil, func(_ any) error { return nil }) // Pass nil initFn
 
 	var wg sync.WaitGroup
 	numTasks := 10
-	results := make(chan *CuvsTaskResult, numTasks) // Changed type
+	results := make(chan *AsyncTaskResult, numTasks) // Changed type
 
 	// Submit tasks
 	for i := 0; i < numTasks; i++ {
@@ -403,7 +312,7 @@ func TestCuvsWorker_GracefulShutdown(t *testing.T) {
 		loopIndex := i
 
 		var submitErr error
-		taskID, submitErr := worker.Submit(func(res *cuvs.Resource) (any, error) {
+		taskID, submitErr := worker.Submit(func(res any) (any, error) {
 			assert.NotNil(t, res)
 			time.Sleep(10 * time.Millisecond)                     // Simulate work
 			return fmt.Sprintf("final-result-%d", loopIndex), nil // Use captured loop index
@@ -434,24 +343,23 @@ func TestCuvsWorker_GracefulShutdown(t *testing.T) {
 	}
 
 	// Ensure new tasks cannot be submitted after stop
-	_, err := worker.Submit(func(res *cuvs.Resource) (any, error) { // Use := for first declaration of err in this scope
+	_, err := worker.Submit(func(res any) (any, error) { // Use := for first declaration of err in this scope
 		return "should not be processed", nil
 	})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "worker is stopped")
 }
 
-func TestCuvsWorker_SignalTermination(t *testing.T) {
-	skipIfNotCudaAvailable(t)
+func TestAsyncWorkerPool_SignalTermination(t *testing.T) {
 
-	worker := NewCuvsWorker(1) // Use 1 thread for easier control and observation
+	worker := NewAsyncWorkerPool(1, testCreateResource, testCleanupResource) // Use 1 thread for easier control and observation
 	require.NotNil(t, worker)
 
-	worker.Start(nil, func(_ *cuvs.Resource) error { return nil })
+	worker.Start(nil, func(_ any) error { return nil })
 
 	// Submit a task that will complete after the signal, to ensure graceful processing
 	taskDone := make(chan struct{})
-	taskID1, err := worker.Submit(func(res *cuvs.Resource) (any, error) {
+	taskID1, err := worker.Submit(func(res any) (any, error) {
 		assert.NotNil(t, res)
 		<-taskDone // Wait for signal to complete
 		return "task1 processed", nil
@@ -459,7 +367,7 @@ func TestCuvsWorker_SignalTermination(t *testing.T) {
 	require.NoError(t, err)
 
 	// Submit a second quick task that should complete before or around the signal
-	taskID2, err := worker.Submit(func(res *cuvs.Resource) (any, error) {
+	taskID2, err := worker.Submit(func(res any) (any, error) {
 		assert.NotNil(t, res)
 		return "task2 processed", nil
 	})
@@ -469,7 +377,7 @@ func TestCuvsWorker_SignalTermination(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Simulate SIGTERM by sending to the signal channel
-	t.Log("Simulating SIGTERM to CuvsWorker")
+	t.Log("Simulating SIGTERM to AsyncWorkerPool")
 	worker.sigc <- syscall.SIGTERM
 
 	// Allow some time for the signal handler to process and call worker.Stop()
@@ -497,27 +405,26 @@ func TestCuvsWorker_SignalTermination(t *testing.T) {
 	assert.Equal(t, "task2 processed", result2.Result)
 
 	// Attempt to submit a new task after termination. It should fail.
-	_, err = worker.Submit(func(res *cuvs.Resource) (any, error) {
+	_, err = worker.Submit(func(res any) (any, error) {
 		return "should not be processed", nil
 	})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "worker is stopped")
 }
 
-func TestCuvsWorker_GetFirstError(t *testing.T) {
-	skipIfNotCudaAvailable(t)
+func TestAsyncWorkerPool_GetFirstError(t *testing.T) {
 
 	var err error // Explicitly declare err here
 
-	worker := NewCuvsWorker(1)
+	worker := NewAsyncWorkerPool(1, testCreateResource, testCleanupResource)
 	assert.Nil(t, worker.GetFirstError(), "GetFirstError should be nil initially")
 
 	// Trigger an error in initFn, which will be pushed to w.errch
 	expectedErr1 := fmt.Errorf("simulated init error 1")
-	initFn1 := func(resource *cuvs.Resource) error {
+	initFn1 := func(resource any) error {
 		return expectedErr1
 	}
-	stopFn := func(_ *cuvs.Resource) error { return nil }
+	stopFn := func(_ any) error { return nil }
 
 	worker.Start(initFn1, stopFn)
 
@@ -529,7 +436,7 @@ func TestCuvsWorker_GetFirstError(t *testing.T) {
 
 	// Submit a task that causes an error (this error won't be saved as firstError via w.errch)
 	// This ensures that only errors propagated through w.errch are considered.
-	_, err = worker.Submit(func(res *cuvs.Resource) (any, error) { // Use = for assignment
+	_, err = worker.Submit(func(res any) (any, error) { // Use = for assignment
 		assert.NotNil(t, res)
 		return nil, fmt.Errorf("task error, should not affect GetFirstError()")
 	})
@@ -548,13 +455,12 @@ func TestCuvsWorker_GetFirstError(t *testing.T) {
 	assert.Equal(t, expectedErr1, worker.GetFirstError(), "GetFirstError should retain the first error after stopping")
 }
 
-func TestCuvsWorker_MultipleStopCalls(t *testing.T) {
-	skipIfNotCudaAvailable(t)
+func TestAsyncWorkerPool_MultipleStopCalls(t *testing.T) {
 
-	worker := NewCuvsWorker(1) // Use 1 thread
+	worker := NewAsyncWorkerPool(1, testCreateResource, testCleanupResource) // Use 1 thread
 	require.NotNil(t, worker)
 
-	worker.Start(nil, func(_ *cuvs.Resource) error { return nil })
+	worker.Start(nil, func(_ any) error { return nil })
 
 	// Call Stop multiple times from the main goroutine
 	worker.Stop()
@@ -574,45 +480,30 @@ func TestCuvsWorker_MultipleStopCalls(t *testing.T) {
 	// (Go's testing framework will catch panics)
 
 	// Optionally, try submitting a task again to ensure it's truly stopped
-	_, err := worker.Submit(func(res *cuvs.Resource) (any, error) { return nil, nil })
+	_, err := worker.Submit(func(res any) (any, error) { return nil, nil })
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "worker is stopped")
 
 	t.Log("Successfully called Stop multiple times without panic.")
 }
 
-// Helper to make cuvs.NewCudaStream and cuvs.NewResource mockable.
-// This requires modifying the original cudaworker.go to introduce variables
-// that can be swapped during testing. For now, this is a placeholder.
-/*
-var (
-	newCudaStream = cuvs.NewCudaStream
-	newResource   = cuvs.NewResource
-)
+func TestAsyncWorkerPool_NilCallbacks(t *testing.T) {
+	worker := NewAsyncWorkerPool(2, nil, nil)
+	require.NotNil(t, worker)
 
-func init() {
-	// In the cudaworker.go file, change calls from:
-	// stream, err := cuvs.NewCudaStream()
-	// resource, err := cuvs.NewResource(stream)
-	// To:
-	// stream, err := newCudaStream()
-	// resource, err := newResource(stream)
+	worker.Start(nil, nil)
+
+	expectedResult := "no resource needed"
+	taskID, err := worker.Submit(func(res any) (any, error) {
+		assert.Nil(t, res)
+		return expectedResult, nil
+	})
+	require.NoError(t, err)
+
+	result, err := worker.Wait(taskID)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, expectedResult, result.Result)
+
+	worker.Stop()
 }
-
-func mockCuvsFunctions() func() {
-	originalNewCudaStream := newCudaStream
-	originalNewResource := newResource
-
-	newCudaStream = func() (*cuvs.Stream, error) {
-		return &cuvs.Stream{}, nil // Return a dummy stream
-	}
-	newResource = func(stream *cuvs.Stream) (*cuvs.Resource, error) {
-		return &cuvs.Resource{}, nil // Return a dummy resource
-	}
-
-	return func() {
-		newCudaStream = originalNewCudaStream
-		newResource = originalNewResource
-	}
-}
-*/
