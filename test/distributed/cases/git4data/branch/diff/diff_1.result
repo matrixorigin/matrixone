@@ -30,8 +30,8 @@ insert into t2 values(5, 5);
 create snapshot sp2 for table test t2;
 data branch diff t2{snapshot="sp2"} against t1{snapshot="sp1"};
 diff t2 against t1    flag    a    b
-t2    INSERT    5    5
 t1    INSERT    4    4
+t2    INSERT    5    5
 data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"};
 diff t1 against t2    flag    a    b
 t1    INSERT    4    4
@@ -56,12 +56,12 @@ create snapshot sp2 for table test t2;
 data branch diff t2{snapshot="sp2"} against t1{snapshot="sp1"};
 diff t2 against t1    flag    a    b
 t2    INSERT    2    2
-t2    INSERT    5    5
 t1    INSERT    4    4
+t2    INSERT    5    5
 data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"};
 diff t1 against t2    flag    a    b
-t1    INSERT    4    4
 t2    INSERT    2    2
+t1    INSERT    4    4
 t2    INSERT    5    5
 drop snapshot sp1;
 drop snapshot sp2;
