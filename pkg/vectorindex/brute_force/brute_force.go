@@ -34,7 +34,7 @@ import (
 )
 
 type UsearchBruteForceIndex[T types.RealNumbers] struct {
-	Dataset      []T // flattend vector
+	Dataset      *[]T // flattend vector
 	Metric       usearch.Metric
 	Dimension    uint
 	Count        uint
@@ -105,10 +105,25 @@ func NewUsearchBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	idx.Count = uint(len(dataset))
 	idx.ElementSize = elemsz
 
-	idx.Dataset = make([]T, idx.Count*idx.Dimension)
+	reqSize := int(idx.Count * idx.Dimension)
+	var _t T
+	switch any(_t).(type) {
+	case float32:
+		p := get1D[float32](&pool1DF32, reqSize)
+		idx.Dataset = any(p).(*[]T)
+	case float64:
+		p := get1D[float64](&pool1DF64, reqSize)
+		idx.Dataset = any(p).(*[]T)
+	default:
+		// Fallback
+		ds := make([]T, reqSize)
+		idx.Dataset = &ds
+	}
+
+	ds := *idx.Dataset
 	for i := 0; i < len(dataset); i++ {
 		offset := i * int(dimension)
-		copy(idx.Dataset[offset:], dataset[i])
+		copy(ds[offset:], dataset[i])
 	}
 
 	return idx, nil
@@ -188,7 +203,7 @@ func (idx *UsearchBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries 
 	}
 
 	keys_ui64, distances_f32, err := usearch.ExactSearchUnsafe(
-		util.UnsafePointer(&(idx.Dataset[0])),
+		util.UnsafePointer(&((*idx.Dataset)[0])),
 		util.UnsafePointer(&(flatten[0])),
 		uint(idx.Count),
 		uint(len(queries)),
@@ -226,6 +241,18 @@ func (idx *UsearchBruteForceIndex[T]) UpdateConfig(sif cache.VectorIndexSearchIf
 }
 
 func (idx *UsearchBruteForceIndex[T]) Destroy() {
+	if idx.Dataset != nil {
+		var _t T
+		switch any(_t).(type) {
+		case float32:
+			p := any(idx.Dataset).(*[]float32)
+			put1D(&pool1DF32, p)
+		case float64:
+			p := any(idx.Dataset).(*[]float64)
+			put1D(&pool1DF64, p)
+		}
+		idx.Dataset = nil
+	}
 }
 
 func (idx *GoBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) error {
