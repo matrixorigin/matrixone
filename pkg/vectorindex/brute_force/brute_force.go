@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"runtime"
 	"slices"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/concurrent"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -113,6 +114,38 @@ func NewUsearchBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	return idx, nil
 }
 
+var (
+	pool1DF32 = sync.Pool{New: func() any { x := make([]float32, 0); return &x }}
+	pool1DF64 = sync.Pool{New: func() any { x := make([]float64, 0); return &x }}
+	pool1DI64 = sync.Pool{New: func() any { x := make([]int64, 0); return &x }}
+	pool2DResult = sync.Pool{New: func() any { x := make([][]vectorindex.SearchResult, 0); return &x }}
+	pool1DResult = sync.Pool{New: func() any { x := make([]vectorindex.SearchResult, 0); return &x }}
+)
+
+func get1D[T any](pool *sync.Pool, n int) *[]T {
+	val := pool.Get()
+	if val == nil {
+		newSlice := make([]T, n)
+		return &newSlice
+	}
+	v, ok := val.(*[]T)
+	if !ok || v == nil {
+		newSlice := make([]T, n)
+		return &newSlice
+	}
+	if cap(*v) < n {
+		pool.Put(v)
+		newSlice := make([]T, n)
+		return &newSlice
+	}
+	*v = (*v)[:n]
+	return v
+}
+
+func put1D[T any](pool *sync.Pool, v *[]T) {
+	pool.Put(v)
+}
+
 func (idx *UsearchBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return nil
 }
@@ -124,10 +157,23 @@ func (idx *UsearchBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries 
 	}
 
 	var flatten []T
+	var pFlatten *[]T
 	if len(queries) == 1 {
 		flatten = queries[0]
 	} else {
-		flatten = make([]T, len(queries)*int(idx.Dimension))
+		reqSize := len(queries) * int(idx.Dimension)
+		var _t T
+		switch any(_t).(type) {
+		case float32:
+			p := get1D[float32](&pool1DF32, reqSize)
+			defer put1D(&pool1DF32, p)
+			flatten = any(*p).([]T)
+		case float64:
+			p := get1D[float64](&pool1DF64, reqSize)
+			defer put1D(&pool1DF64, p)
+			flatten = any(*p).([]T)
+		}
+		
 		for i := 0; i < len(queries); i++ {
 			offset := i * int(idx.Dimension)
 			copy(flatten[offset:], queries[i])
@@ -170,6 +216,7 @@ func (idx *UsearchBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries 
 	keys = keys_i64
 
 	runtime.KeepAlive(flatten)
+	runtime.KeepAlive(pFlatten) // ensures defer hasn't fired before usearch call
 	runtime.KeepAlive(idx.Dataset)
 	return
 }
@@ -210,9 +257,16 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 	ndataset := len(idx.Dataset)
 
 	// create distance matric
-	results := make([][]vectorindex.SearchResult, nqueries)
+	pResults := get1D[[]vectorindex.SearchResult](&pool2DResult, nqueries)
+	defer put1D(&pool2DResult, pResults)
+	results := any(*pResults).([][]vectorindex.SearchResult)
+
+	pFlatResults := get1D[vectorindex.SearchResult](&pool1DResult, nqueries*ndataset)
+	defer put1D(&pool1DResult, pFlatResults)
+	flatResults := any(*pFlatResults).([]vectorindex.SearchResult)
+
 	for i := range results {
-		results[i] = make([]vectorindex.SearchResult, ndataset)
+		results[i] = flatResults[i*ndataset : (i+1)*ndataset]
 	}
 
 	exec := concurrent.NewThreadPoolExecutor(int(nthreads))
@@ -253,8 +307,13 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 	}
 
 	// get min
-	keys64 := make([]int64, nqueries*int(rt.Limit))
-	distances = make([]float64, nqueries*int(rt.Limit))
+	limit := int(rt.Limit)
+	totalReturn := nqueries * limit
+	
+	// Revert keys/distances to standard allocation since they are the return values
+	retKeys64 := make([]int64, totalReturn)
+	retDistances := make([]float64, totalReturn)
+
 	err = exec.Execute(
 		proc.GetContext(),
 		nqueries,
@@ -283,11 +342,11 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 	}
 
 	for i := 0; i < nqueries; i++ {
-		for j := 0; j < int(rt.Limit); j++ {
-			keys64[i*int(rt.Limit)+j] = results[i][j].Id
-			distances[i*int(rt.Limit)+j] = results[i][j].Distance
+		for j := 0; j < limit; j++ {
+			retKeys64[i*limit+j] = results[i][j].Id
+			retDistances[i*limit+j] = results[i][j].Distance
 		}
 	}
 
-	return keys64, distances, nil
+	return retKeys64, retDistances, nil
 }
