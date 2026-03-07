@@ -226,10 +226,11 @@ var (
 func get1D[T any](pool *sync.Pool, n int) *[]T {
 	v := pool.Get().(*[]T)
 	if cap(*v) < n {
-		*v = make([]T, n)
-	} else {
-		*v = (*v)[:n]
+		pool.Put(v)
+		newSlice := make([]T, n)
+		return &newSlice
 	}
+	*v = (*v)[:n]
 	return v
 }
 
