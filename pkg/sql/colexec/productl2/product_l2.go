@@ -156,7 +156,7 @@ func getIndex[T types.RealNumbers](ap *Productl2, proc *process.Process, analyze
 		centers[i] = c
 	}
 
-	algo, err := brute_force.NewBruteForceIndex[T](centers, uint(dim), ctr.metrictype, elemSize)
+	algo, err := brute_force.NewBruteForceIndex[T](centers, uint(dim), ctr.metrictype, elemSize, 1)
 	if err != nil {
 		return nil, err
 	}
