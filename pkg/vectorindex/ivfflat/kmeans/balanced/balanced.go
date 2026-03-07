@@ -19,10 +19,12 @@ import (
 	"math"
 	"math/rand/v2"
 	"runtime"
-	"sort"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/concurrent"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
@@ -38,6 +40,15 @@ type BalancedKMeans[T types.RealNumbers] struct {
 
 	centroids   [][]T
 	assignments []int
+
+	// pre-allocated buffers
+	indices     []int
+	c1          []T
+	c2          []T
+	diffs       []pointDiff
+	localAssign []int
+
+	deallocators []malloc.Deallocator
 }
 
 var _ kmeans.Clusterer = new(BalancedKMeans[float32])
@@ -63,6 +74,51 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 		nworker = runtime.NumCPU()
 	}
 
+	allocator := malloc.NewCAllocator()
+	var deallocators []malloc.Deallocator
+
+	allocSlice := func(size uint64) []byte {
+		slice, deallocator, err := allocator.Allocate(size, malloc.NoClear)
+		if err != nil {
+			panic(err) // OOM
+		}
+		deallocators = append(deallocators, deallocator)
+		return slice
+	}
+
+	dim := len(vectors[0])
+	numVectors := len(vectors)
+
+	// allocate centroids (outer slice + inner slices)
+	centroidsBytes := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[[]T]()))
+	centroids := util.UnsafeSliceCastToLength[[]T](centroidsBytes, clusterCnt)
+	for i := range centroids {
+		innerBytes := allocSlice(uint64(dim) * uint64(util.UnsafeSizeOf[T]()))
+		centroids[i] = util.UnsafeSliceCastToLength[T](innerBytes, dim)
+	}
+
+	// allocate assignments
+	assignmentsBytes := allocSlice(uint64(numVectors) * uint64(util.UnsafeSizeOf[int]()))
+	assignments := util.UnsafeSliceCastToLength[int](assignmentsBytes, numVectors)
+
+	// allocate indices
+	indicesBytes := allocSlice(uint64(numVectors) * uint64(util.UnsafeSizeOf[int]()))
+	indices := util.UnsafeSliceCastToLength[int](indicesBytes, numVectors)
+
+	// allocate c1, c2
+	c1Bytes := allocSlice(uint64(dim) * uint64(util.UnsafeSizeOf[T]()))
+	c1 := util.UnsafeSliceCastToLength[T](c1Bytes, dim)
+	c2Bytes := allocSlice(uint64(dim) * uint64(util.UnsafeSizeOf[T]()))
+	c2 := util.UnsafeSliceCastToLength[T](c2Bytes, dim)
+
+	// allocate diffs
+	diffsBytes := allocSlice(uint64(numVectors) * uint64(util.UnsafeSizeOf[pointDiff]()))
+	diffs := util.UnsafeSliceCastToLength[pointDiff](diffsBytes, numVectors)
+
+	// allocate localAssign
+	localAssignBytes := allocSlice(uint64(numVectors) * uint64(util.UnsafeSizeOf[int]()))
+	localAssign := util.UnsafeSliceCastToLength[int](localAssignBytes, numVectors)
+
 	return &BalancedKMeans[T]{
 		vectorList:    vectors,
 		clusterCnt:    clusterCnt,
@@ -70,8 +126,14 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 		distFn:        distanceFunction,
 		normalize:     normalize,
 		nworker:       nworker,
-		centroids:     make([][]T, clusterCnt),
-		assignments:   make([]int, len(vectors)),
+		centroids:     centroids,
+		assignments:   assignments,
+		indices:       indices,
+		c1:            c1,
+		c2:            c2,
+		diffs:         diffs,
+		localAssign:   localAssign,
+		deallocators:  deallocators,
 	}, nil
 }
 
@@ -109,6 +171,10 @@ func (km *BalancedKMeans[T]) InitCentroids(ctx context.Context) error {
 }
 
 func (km *BalancedKMeans[T]) Close() error {
+	for _, d := range km.deallocators {
+		d.Deallocate()
+	}
+	km.deallocators = nil
 	return nil
 }
 
@@ -126,19 +192,18 @@ func (km *BalancedKMeans[T]) Cluster(ctx context.Context) (any, error) {
 
 	if len(km.vectorList) == km.clusterCnt {
 		for i := 0; i < km.clusterCnt; i++ {
-			km.centroids[i] = km.vectorList[i]
+			copy(km.centroids[i], km.vectorList[i])
 			km.assignments[i] = i
 		}
 		return km.centroids, nil
 	}
 
-	indices := make([]int, len(km.vectorList))
-	for i := range indices {
-		indices[i] = i
+	for i := range km.indices {
+		km.indices[i] = i
 	}
 
 	exec := concurrent.NewThreadPoolExecutor(km.nworker)
-	err := km.bisectBalanced(ctx, indices, km.clusterCnt, 0, exec)
+	err := km.bisectBalanced(ctx, km.indices, km.clusterCnt, 0, exec, km.c1, km.c2, km.diffs, km.localAssign)
 	if err != nil {
 		return nil, err
 	}
@@ -152,9 +217,12 @@ func (km *BalancedKMeans[T]) bisectBalanced(
 	k int,
 	clusterStart int,
 	exec concurrent.ThreadPoolExecutor,
+	c1, c2 []T,
+	diffs []pointDiff,
+	localAssign []int,
 ) error {
 	if k == 1 {
-		km.centroids[clusterStart] = computeMeanFromIndices(km.vectorList, indices)
+		computeMeanFromIndicesInPlace(km.vectorList, indices, km.centroids[clusterStart])
 		if km.normalize {
 			metric.NormalizeL2(km.centroids[clusterStart], km.centroids[clusterStart])
 		}
@@ -176,11 +244,6 @@ func (km *BalancedKMeans[T]) bisectBalanced(
 	if n1 == n {
 		n1 = n - 1
 	}
-	n2 := n - n1
-
-	dim := len(km.vectorList[0])
-	c1 := make([]T, dim)
-	c2 := make([]T, dim)
 
 	// Random initial centers for the bisection
 	idx1 := rand.IntN(n)
@@ -191,47 +254,55 @@ func (km *BalancedKMeans[T]) bisectBalanced(
 	copy(c1, km.vectorList[indices[idx1]])
 	copy(c2, km.vectorList[indices[idx2]])
 
-	// Local assignments for bisection: 0 for left, 1 for right
-	localAssign := make([]int, n)
-	diffs := make([]pointDiff, n)
+	// use slices for this level of recursion
+	curDiffs := diffs[:n]
+	curAssign := localAssign[:n]
+
+	// Create the worker function once outside the iteration loop to avoid allocating closures
+	workerFn := func(ctx context.Context, thread_id int, start, end int) error {
+		for i := start; i < end; i++ {
+			vIdx := indices[i]
+			d1, err1 := km.distFn(km.vectorList[vIdx], c1)
+			if err1 != nil {
+				return err1
+			}
+			d2, err2 := km.distFn(km.vectorList[vIdx], c2)
+			if err2 != nil {
+				return err2
+			}
+			// diff < 0 means closer to c1
+			curDiffs[i] = pointDiff{index: i, diff: float64(d1) - float64(d2)}
+		}
+		return nil
+	}
 
 	for iter := 0; iter < km.maxIterations; iter++ {
-		err := exec.Execute(ctx, n, func(ctx context.Context, thread_id int, start, end int) error {
-			for i := start; i < end; i++ {
-				vIdx := indices[i]
-				d1, err1 := km.distFn(km.vectorList[vIdx], c1)
-				if err1 != nil {
-					return err1
-				}
-				d2, err2 := km.distFn(km.vectorList[vIdx], c2)
-				if err2 != nil {
-					return err2
-				}
-				// diff < 0 means closer to c1
-				diffs[i] = pointDiff{index: i, diff: float64(d1) - float64(d2)}
-			}
-			return nil
-		})
+		err := exec.Execute(ctx, n, workerFn)
 		if err != nil {
 			return err
 		}
 
-		sort.Slice(diffs, func(i, j int) bool {
-			return diffs[i].diff < diffs[j].diff
+		slices.SortFunc(curDiffs, func(a, b pointDiff) int {
+			if a.diff < b.diff {
+				return -1
+			} else if a.diff > b.diff {
+				return 1
+			}
+			return 0
 		})
 
 		changed := false
 		for i := 0; i < n1; i++ {
-			localIdx := diffs[i].index
-			if iter == 0 || localAssign[localIdx] != 0 {
-				localAssign[localIdx] = 0
+			localIdx := curDiffs[i].index
+			if iter == 0 || curAssign[localIdx] != 0 {
+				curAssign[localIdx] = 0
 				changed = true
 			}
 		}
 		for i := n1; i < n; i++ {
-			localIdx := diffs[i].index
-			if iter == 0 || localAssign[localIdx] != 1 {
-				localAssign[localIdx] = 1
+			localIdx := curDiffs[i].index
+			if iter == 0 || curAssign[localIdx] != 1 {
+				curAssign[localIdx] = 1
 				changed = true
 			}
 		}
@@ -240,26 +311,34 @@ func (km *BalancedKMeans[T]) bisectBalanced(
 			break
 		}
 
-		c1 = computeMeanFromIndicesAndAssign(km.vectorList, indices, localAssign, 0, dim)
-		c2 = computeMeanFromIndicesAndAssign(km.vectorList, indices, localAssign, 1, dim)
+		computeMeanFromIndicesAndAssignInPlace(km.vectorList, indices, curAssign, 0, c1)
+		computeMeanFromIndicesAndAssignInPlace(km.vectorList, indices, curAssign, 1, c2)
 	}
 
-	leftIndices := make([]int, 0, n1)
-	rightIndices := make([]int, 0, n2)
-	for i := 0; i < n; i++ {
-		if localAssign[i] == 0 {
-			leftIndices = append(leftIndices, indices[i])
-		} else {
-			rightIndices = append(rightIndices, indices[i])
+	// In-place partition of indices based on curAssign
+	left, right := 0, n-1
+	for left <= right {
+		for left <= right && curAssign[left] == 0 {
+			left++
+		}
+		for left <= right && curAssign[right] == 1 {
+			right--
+		}
+		if left < right {
+			indices[left], indices[right] = indices[right], indices[left]
+			curAssign[left], curAssign[right] = curAssign[right], curAssign[left]
+			left++
+			right--
 		}
 	}
 
-	err := km.bisectBalanced(ctx, leftIndices, k1, clusterStart, exec)
+	// We can reuse the buffers for the child calls since they are sequential
+	err := km.bisectBalanced(ctx, indices[:n1], k1, clusterStart, exec, c1, c2, diffs, localAssign)
 	if err != nil {
 		return err
 	}
 
-	err = km.bisectBalanced(ctx, rightIndices, k2, clusterStart+k1, exec)
+	err = km.bisectBalanced(ctx, indices[n1:], k2, clusterStart+k1, exec, c1, c2, diffs, localAssign)
 	if err != nil {
 		return err
 	}
@@ -267,41 +346,44 @@ func (km *BalancedKMeans[T]) bisectBalanced(
 	return nil
 }
 
-func computeMeanFromIndicesAndAssign[T types.RealNumbers](data [][]T, indices []int, assignments []int, target int, dim int) []T {
-	m := make([]T, dim)
+func computeMeanFromIndicesAndAssignInPlace[T types.RealNumbers](data [][]T, indices []int, assignments []int, target int, out []T) {
+	dim := len(out)
+	for j := 0; j < dim; j++ {
+		out[j] = 0
+	}
 	count := 0
 	for i, a := range assignments {
 		if a == target {
 			vIdx := indices[i]
 			for j := 0; j < dim; j++ {
-				m[j] += data[vIdx][j]
+				out[j] += data[vIdx][j]
 			}
 			count++
 		}
 	}
 	if count > 0 {
 		for j := 0; j < dim; j++ {
-			m[j] /= T(count)
+			out[j] /= T(count)
 		}
 	}
-	return m
 }
 
-func computeMeanFromIndices[T types.RealNumbers](data [][]T, indices []int) []T {
+func computeMeanFromIndicesInPlace[T types.RealNumbers](data [][]T, indices []int, out []T) {
 	if len(indices) == 0 {
-		return nil
+		return
 	}
-	dim := len(data[0])
-	m := make([]T, dim)
+	dim := len(out)
+	for j := 0; j < dim; j++ {
+		out[j] = 0
+	}
 	for _, vIdx := range indices {
 		for j := 0; j < dim; j++ {
-			m[j] += data[vIdx][j]
+			out[j] += data[vIdx][j]
 		}
 	}
 	for j := 0; j < dim; j++ {
-		m[j] /= T(len(indices))
+		out[j] /= T(len(indices))
 	}
-	return m
 }
 
 // SSE returns the sum of squared errors.

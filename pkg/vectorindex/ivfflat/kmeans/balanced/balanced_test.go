@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -178,5 +179,25 @@ func TestBalancedKMeans_LargeBalanced(t *testing.T) {
 	for i := 0; i < k; i++ {
 		// 1000 / 10 = 100 per cluster
 		require.Equal(t, 100, counts[i], fmt.Sprintf("Cluster %d is not balanced", i))
+	}
+}
+
+func BenchmarkBalancedKMeans(b *testing.B) {
+	ctx := context.Background()
+	n := 10000
+	k := 100
+	dim := 128
+	vectors := make([][]float32, n)
+	for i := 0; i < n; i++ {
+		vectors[i] = make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vectors[i][j] = rand.Float32()
+		}
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		km, _ := NewKMeans(vectors, k, 15, 0.01, metric.Metric_L2Distance, kmeans.Random, false, 8)
+		_, _ = km.Cluster(ctx)
 	}
 }

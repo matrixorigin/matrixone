@@ -16,7 +16,7 @@ package elkans
 
 import (
 	"context"
-	"math/rand"
+	"math/rand/v2"
 	"strconv"
 	"testing"
 
@@ -87,7 +87,7 @@ func Benchmark_kmeans(b *testing.B) {
 }
 
 func populateRandData(rowCnt int, dim int, vecs [][]float64) {
-	random := rand.New(rand.NewSource(kmeans.DefaultRandSeed))
+	random := rand.New(rand.NewPCG(uint64(kmeans.DefaultRandSeed), 0))
 	for r := 0; r < rowCnt; r++ {
 		vecs[r] = make([]float64, dim)
 		for c := 0; c < dim; c++ {
