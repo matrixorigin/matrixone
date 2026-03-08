@@ -128,4 +128,14 @@ drop table t1;
 create table t1(c1 int, c2 int, c3 int, key(c1));
 -- @separator:table
 explain select * from t1 where c1=1;
+drop table if exists t_repro;
+create table t_repro (
+    id  varchar(32) primary key,
+    uid varchar(64) not null,
+    typ varchar(20) not null,
+    flag smallint not null default 1,
+    index idx_uid_typ_flag (uid, typ, flag)
+);
+insert into t_repro values ('id1', 'alice', 'semantic', 1);
+select count(*) from t_repro where uid = 'alice' and flag = 1;
 drop database d1;

@@ -687,6 +687,11 @@ func tryMatchMoreLeadingFilters(idxDef *IndexDef, node *plan.Node, pos int32) []
 				break
 			}
 		}
+		// Composite index filters must match a contiguous leading prefix.
+		// If any intermediate part is missing, stop matching immediately.
+		if !found {
+			break
+		}
 	}
 	return leadingPos
 }

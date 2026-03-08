@@ -15,7 +15,10 @@
 package plan
 
 import (
+	"reflect"
 	"testing"
+
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 func TestCalculatePostFilterOverFetchFactor(t *testing.T) {
@@ -256,5 +259,58 @@ func TestCalculatePostFilterOverFetchFactor_MonotonicDecrease(t *testing.T) {
 		}
 
 		prevFactor = currentFactor
+	}
+}
+
+func TestTryMatchMoreLeadingFiltersRequiresContiguousPrefix(t *testing.T) {
+	idxDef := &IndexDef{
+		Parts: []string{"uid", "typ", "flag", "__mo_alias_id"},
+	}
+	node := &planpb.Node{
+		TableDef: &planpb.TableDef{
+			Name2ColIndex: map[string]int32{
+				"uid":  1,
+				"typ":  2,
+				"flag": 3,
+				"id":   0,
+			},
+		},
+		// Filters only on uid and flag, missing typ.
+		FilterList: []*planpb.Expr{
+			makeEqFilterExpr(1),
+			makeEqFilterExpr(3),
+		},
+	}
+
+	leadingPos := tryMatchMoreLeadingFilters(idxDef, node, 0)
+	if !reflect.DeepEqual([]int32{0}, leadingPos) {
+		t.Fatalf("unexpected leading positions, got=%v, want=%v", leadingPos, []int32{0})
+	}
+}
+
+func makeEqFilterExpr(colPos int32) *planpb.Expr {
+	return &planpb.Expr{
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "="},
+				Args: []*planpb.Expr{
+					{
+						Expr: &planpb.Expr_Col{
+							Col: &planpb.ColRef{
+								RelPos: 0,
+								ColPos: colPos,
+							},
+						},
+					},
+					{
+						Expr: &planpb.Expr_Lit{
+							Lit: &planpb.Literal{
+								Value: &planpb.Literal_I64Val{I64Val: 1},
+							},
+						},
+					},
+				},
+			},
+		},
 	}
 }
