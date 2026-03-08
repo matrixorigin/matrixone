@@ -286,4 +286,16 @@ Project
               Runtime Filter Probe: t1.__mo_fake_pk_col
         ->  Index Table Scan on t1.c1 [ForceOneCN]
               Filter Cond: prefix_eq(__mo_index_idx_col)
+drop table if exists t_repro;
+create table t_repro (
+    id  varchar(32) primary key,
+    uid varchar(64) not null,
+    typ varchar(20) not null,
+    flag smallint not null default 1,
+    index idx_uid_typ_flag (uid, typ, flag)
+);
+insert into t_repro values ('id1', 'alice', 'semantic', 1);
+select count(*) from t_repro where uid = 'alice' and flag = 1;
+count(*)
+1
 drop database d1;
