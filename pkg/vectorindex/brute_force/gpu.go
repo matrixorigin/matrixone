@@ -17,6 +17,8 @@
 package brute_force
 
 import (
+	"runtime"
+	
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
@@ -78,7 +80,21 @@ func NewGpuBruteForceIndex[T cuvs.VectorType](dataset [][]T,
 	}
 
 	dim := int(dimension)
-	flattened := make([]T, len(dataset)*dim)
+	reqSize := len(dataset) * dim
+	var flattened []T
+	var pFlattened *[]T
+
+	var _t T
+	switch any(_t).(type) {
+	case float32:
+		p := get1D[float32](&pool1DF32, reqSize)
+		defer put1D(&pool1DF32, p)
+		flattened = any(*p).([]T)
+	default:
+		ds := make([]T, reqSize)
+		flattened = ds
+	}
+	
 	for i, v := range dataset {
 		copy(flattened[i*dim:(i+1)*dim], v)
 	}
@@ -88,6 +104,8 @@ func NewGpuBruteForceIndex[T cuvs.VectorType](dataset [][]T,
 	if err != nil {
 		return nil, err
 	}
+	
+	runtime.KeepAlive(pFlattened)
 
 	return &GpuBruteForceIndex[T]{
 		index:     km,
@@ -114,7 +132,23 @@ func (idx *GpuBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any,
 	}
 
 	dim := int(idx.dimension)
-	flattenedQueries := make([]T, len(queriesvec)*dim)
+	reqSize := len(queriesvec) * dim
+	
+	var flattenedQueries []T
+	var pFlattenedQueries *[]T
+	
+	var _t T
+	switch any(_t).(type) {
+	case float32:
+		p := get1D[float32](&pool1DF32, reqSize)
+		defer put1D(&pool1DF32, p)
+		flattenedQueries = any(*p).([]T)
+	default:
+		// Not pooling other types, although T is likely only float32 for CUVS
+		ds := make([]T, reqSize)
+		flattenedQueries = ds
+	}
+	
 	for i, v := range queriesvec {
 		copy(flattenedQueries[i*dim:(i+1)*dim], v)
 	}
@@ -130,6 +164,7 @@ func (idx *GpuBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any,
 	}
 
 	retkeys = neighbors
+	runtime.KeepAlive(pFlattenedQueries)
 	return
 }
 
