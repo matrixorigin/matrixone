@@ -584,16 +584,18 @@ const (
 
 	IN_RANGE        = 404
 	PREFIX_IN_RANGE = 405
+	NULL_SAFE_EQUAL = 406
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 406
+	FUNCTION_END_NUMBER = 407
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
 	// operators
 	"=":            EQUAL,
+	"<=>":          NULL_SAFE_EQUAL,
 	">":            GREAT_THAN,
 	">=":           GREAT_EQUAL,
 	"<":            LESS_THAN,

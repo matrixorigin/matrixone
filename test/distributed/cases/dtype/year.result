@@ -969,9 +969,9 @@ drop table if exists t_year_null_cmp;
 create table t_year_null_cmp (id int, y year);
 insert into t_year_null_cmp values (1, 2024), (2, null), (3, 2020);
 select * from t_year_null_cmp where y = null;
-invalid argument operator cast, bad value [ANY YEAR]
+➤ id[4,32,0]  ¦  y[91,2147483647,0]
 select * from t_year_null_cmp where y <> null;
-invalid argument operator cast, bad value [ANY YEAR]
+➤ id[4,32,0]  ¦  y[91,2147483647,0]
 select * from t_year_null_cmp where y is null;
 ➤ id[4,32,0]  ¦  y[91,2147483647,0]  𝄀
 2  ¦  null
@@ -980,9 +980,11 @@ select * from t_year_null_cmp where y is not null order by id;
 1  ¦  2024-01-01  𝄀
 3  ¦  2020-01-01
 select * from t_year_null_cmp where y <=> null;
-'' is not yet implemented
+➤ id[4,32,0]  ¦  y[91,2147483647,0]  𝄀
+2  ¦  null
 select * from t_year_null_cmp where y <=> 2024;
-'' is not yet implemented
+➤ id[4,32,0]  ¦  y[91,2147483647,0]  𝄀
+1  ¦  2024-01-01
 drop table t_year_null_cmp;
 select greatest(2020, 2021, 2022);
 ➤ greatest(2020, 2021, 2022)[-5,64,0]  𝄀

@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCalculatePostFilterOverFetchFactor(t *testing.T) {
@@ -487,5 +488,56 @@ func BenchmarkCalculateAutoModeOverFetchFactor(b *testing.B) {
 		for _, limit := range limits {
 			_ = calculateAutoModeOverFetchFactor(limit, stats)
 		}
+	}
+}
+
+func TestTryMatchMoreLeadingFiltersRequiresContiguousPrefix(t *testing.T) {
+	idxDef := &IndexDef{
+		Parts: []string{"uid", "typ", "flag", "__mo_alias_id"},
+	}
+	node := &plan.Node{
+		TableDef: &plan.TableDef{
+			Name2ColIndex: map[string]int32{
+				"uid":  1,
+				"typ":  2,
+				"flag": 3,
+				"id":   0,
+			},
+		},
+		// Filters only on uid and flag, missing typ.
+		FilterList: []*plan.Expr{
+			makeEqFilterExpr(1),
+			makeEqFilterExpr(3),
+		},
+	}
+
+	leadingPos := tryMatchMoreLeadingFilters(idxDef, node, 0)
+	require.Equal(t, []int32{0}, leadingPos)
+}
+
+func makeEqFilterExpr(colPos int32) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: "="},
+				Args: []*plan.Expr{
+					{
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: 0,
+								ColPos: colPos,
+							},
+						},
+					},
+					{
+						Expr: &plan.Expr_Lit{
+							Lit: &plan.Literal{
+								Value: &plan.Literal_I64Val{I64Val: 1},
+							},
+						},
+					},
+				},
+			},
+		},
 	}
 }
