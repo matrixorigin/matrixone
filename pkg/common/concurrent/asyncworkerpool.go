@@ -126,7 +126,7 @@ type AsyncWorkerPool struct {
 	stopCh                chan struct{}
 	wg                    sync.WaitGroup
 	stopped               atomic.Bool // Indicates if the worker has been stopped
-	firstError            error
+	firstError            atomic.Value
 	*AsyncTaskResultStore // Embed the result store
 	nthread               uint
 	sigc                  chan os.Signal // Add this field
@@ -196,8 +196,8 @@ func (w *AsyncWorkerPool) Start(initFn func(res any) error, stopFn func(resource
 			}
 		case err := <-w.errch: // Listen for errors from worker goroutines
 			logutil.Error("AsyncWorkerPool received internal error, stopping...", zap.Error(err))
-			if w.firstError == nil {
-				w.firstError = err
+			if w.firstError.Load() == nil {
+				w.firstError.Store(err)
 			}
 			if w.stopped.CompareAndSwap(false, true) {
 				close(w.stopCh) // Signal run() to stop.
@@ -343,5 +343,9 @@ func (w *AsyncWorkerPool) Wait(jobID uint64) (*AsyncTaskResult, error) {
 
 // GetFirstError returns the first internal error encountered by the worker.
 func (w *AsyncWorkerPool) GetFirstError() error {
-	return w.firstError
+	err := w.firstError.Load()
+	if err == nil {
+		return nil
+	}
+	return err.(error)
 }
