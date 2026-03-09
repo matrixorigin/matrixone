@@ -264,6 +264,9 @@ func (km *BalancedKMeans[T]) bisectBalanced(
 	// Create the worker function once outside the iteration loop to avoid allocating closures
 	workerFn := func(ctx context.Context, thread_id int, start, end int) error {
 		for i := start; i < end; i++ {
+			if (i-start)%100 == 0 && ctx.Err() != nil {
+				return ctx.Err()
+			}
 			vIdx := indices[i]
 			d1, err1 := km.distFn(km.vectorList[vIdx], c1)
 			if err1 != nil {
