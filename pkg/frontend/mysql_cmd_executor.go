@@ -3405,7 +3405,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 	case COM_QUERY:
 		var query = commonutil.UnsafeBytesToString(req.GetData().([]byte))
 		// Inject rewrite rules hint before building UserInput
-		query, _ = rewriteSQL(ses, query)
+		query, _ = rewriteSQL(execCtx.reqCtx, ses, query)
 		ses.addSqlCount(1)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(commonutil.Abbreviate(query, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))))
 		input := &UserInput{sql: query}
@@ -3447,7 +3447,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		ses.SetCmd(COM_STMT_PREPARE)
 		sql = commonutil.UnsafeBytesToString(req.GetData().([]byte))
 		// Inject rewrite rules hint before prepare wrapping
-		sql, _ = rewriteSQL(ses, sql)
+		sql, _ = rewriteSQL(execCtx.reqCtx, ses, sql)
 		ses.addSqlCount(1)
 
 		// rewrite to "Prepare stmt_name from 'xxx'"

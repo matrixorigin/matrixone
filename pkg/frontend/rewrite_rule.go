@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -39,11 +40,14 @@ type rewriteHintPayload struct {
 // formatRewriteHint serializes a rules map into the /*+ {"rewrites": {...}} */ hint format.
 func formatRewriteHint(rules map[string]string) (string, error) {
 	payload := rewriteHintPayload{Rewrites: rules}
-	data, err := json.Marshal(payload)
-	if err != nil {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(payload); err != nil {
 		return "", fmt.Errorf("internal error: failed to serialize rewrite rules: %w", err)
 	}
-	return hintPrefix + string(data) + hintSuffix, nil
+	// Encode appends a trailing newline, trim it
+	return hintPrefix + strings.TrimSpace(buf.String()) + hintSuffix, nil
 }
 
 // parseRewriteHint parses a hint string back into a rules map.
@@ -63,9 +67,8 @@ func parseRewriteHint(hint string) (map[string]string, error) {
 // prepends a hint comment to the SQL string.
 // If ruleCache is nil (not yet loaded), it lazily loads rules via loadRuleCache.
 // If the rule set is empty, the original SQL is returned unchanged.
-func rewriteSQL(ses *Session, sql string) (string, error) {
+func rewriteSQL(ctx context.Context, ses *Session, sql string) (string, error) {
 	if ses.ruleCache == nil {
-		ctx := context.Background()
 		rules, err := loadRuleCache(ctx, ses)
 		if err != nil {
 			return sql, nil
@@ -94,7 +97,7 @@ func loadRuleCache(ctx context.Context, ses *Session) (map[string]string, error)
 	}
 	roleID := tenant.GetDefaultRoleID()
 
-	sql := fmt.Sprintf("select rule_name, rule from %s.%s where role_id = %d",
+	sql := fmt.Sprintf("select rule_name, `rule` from %s.%s where role_id = %d",
 		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, roleID)
 
 	bh := ses.GetBackgroundExec(ctx)
@@ -162,7 +165,7 @@ func handleAlterRoleAddRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRole
 	roleID := vr.id
 
 	// Step 2: Check if rule_name already exists for this role_id
-	checkSQL := fmt.Sprintf("select rule from %s.%s where role_id = %d and rule_name = '%s'",
+	checkSQL := fmt.Sprintf("select `rule` from %s.%s where role_id = %d and rule_name = '%s'",
 		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, roleID, strings.ReplaceAll(stmt.RuleName, "'", "''"))
 
 	bh.ClearExecResultSet()
@@ -180,14 +183,14 @@ func handleAlterRoleAddRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRole
 
 	if execResultArrayHasData(erArray) {
 		// Rule exists: UPDATE
-		updateSQL := fmt.Sprintf("update %s.%s set rule = '%s' where role_id = %d and rule_name = '%s'",
+		updateSQL := fmt.Sprintf("update %s.%s set `rule` = '%s' where role_id = %d and rule_name = '%s'",
 			catalog.MO_CATALOG, catalog.MO_ROLE_RULE, escapedRule, roleID, escapedRuleName)
 		if err = bh.Exec(ctx, updateSQL); err != nil {
 			return err
 		}
 	} else {
 		// Rule does not exist: INSERT
-		insertSQL := fmt.Sprintf("insert into %s.%s (role_id, rule_name, rule) values (%d, '%s', '%s')",
+		insertSQL := fmt.Sprintf("insert into %s.%s (role_id, rule_name, `rule`) values (%d, '%s', '%s')",
 			catalog.MO_CATALOG, catalog.MO_ROLE_RULE, roleID, escapedRuleName, escapedRule)
 		if err = bh.Exec(ctx, insertSQL); err != nil {
 			return err
@@ -229,7 +232,7 @@ func handleAlterRoleDropRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRol
 
 	// Step 2: Check if rule_name exists for this role_id
 	escapedRuleName := strings.ReplaceAll(stmt.RuleName, "'", "''")
-	checkSQL := fmt.Sprintf("select rule from %s.%s where role_id = %d and rule_name = '%s'",
+	checkSQL := fmt.Sprintf("select `rule` from %s.%s where role_id = %d and rule_name = '%s'",
 		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, roleID, escapedRuleName)
 
 	bh.ClearExecResultSet()
@@ -287,7 +290,7 @@ func handleShowRules(ses *Session, execCtx *ExecCtx, stmt *tree.ShowRules) error
 	roleID := vr.id
 
 	// Step 2: Query mo_role_rule for all rules of this role_id
-	querySQL := fmt.Sprintf("select rule_name, rule from %s.%s where role_id = %d",
+	querySQL := fmt.Sprintf("select rule_name, `rule` from %s.%s where role_id = %d",
 		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, roleID)
 
 	bh.ClearExecResultSet()
