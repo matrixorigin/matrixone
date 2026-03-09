@@ -38,27 +38,27 @@ type rewriteHintPayload struct {
 }
 
 // formatRewriteHint serializes a rules map into the /*+ {"rewrites": {...}} */ hint format.
-func formatRewriteHint(rules map[string]string) (string, error) {
+func formatRewriteHint(ctx context.Context, rules map[string]string) (string, error) {
 	payload := rewriteHintPayload{Rewrites: rules}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(payload); err != nil {
-		return "", fmt.Errorf("internal error: failed to serialize rewrite rules: %w", err)
+		return "", moerr.NewInternalErrorf(ctx, "failed to serialize rewrite rules: %v", err)
 	}
 	// Encode appends a trailing newline, trim it
 	return hintPrefix + strings.TrimSpace(buf.String()) + hintSuffix, nil
 }
 
 // parseRewriteHint parses a hint string back into a rules map.
-func parseRewriteHint(hint string) (map[string]string, error) {
+func parseRewriteHint(ctx context.Context, hint string) (map[string]string, error) {
 	if !strings.HasPrefix(hint, hintPrefix) || !strings.HasSuffix(hint, hintSuffix) {
-		return nil, fmt.Errorf("invalid rewrite hint format")
+		return nil, moerr.NewInternalErrorf(ctx, "invalid rewrite hint format")
 	}
 	jsonStr := hint[len(hintPrefix) : len(hint)-len(hintSuffix)]
 	var payload rewriteHintPayload
 	if err := json.Unmarshal([]byte(jsonStr), &payload); err != nil {
-		return nil, fmt.Errorf("failed to parse rewrite hint: %w", err)
+		return nil, moerr.NewInternalErrorf(ctx, "failed to parse rewrite hint: %v", err)
 	}
 	return payload.Rewrites, nil
 }
@@ -80,7 +80,7 @@ func rewriteSQL(ctx context.Context, ses *Session, sql string) (string, error) {
 		return sql, nil
 	}
 
-	hint, err := formatRewriteHint(ses.ruleCache)
+	hint, err := formatRewriteHint(ctx, ses.ruleCache)
 	if err != nil {
 		return sql, nil
 	}

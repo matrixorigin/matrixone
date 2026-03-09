@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"context"
 	"math/rand"
 	"reflect"
 	"strings"
@@ -81,13 +82,13 @@ func TestProperty9_HintRoundTrip(t *testing.T) {
 	}
 
 	prop := func(rules map[string]string) bool {
-		hint, err := formatRewriteHint(rules)
+		hint, err := formatRewriteHint(context.Background(), rules)
 		if err != nil {
 			t.Logf("formatRewriteHint error: %v", err)
 			return false
 		}
 
-		parsed, err := parseRewriteHint(hint)
+		parsed, err := parseRewriteHint(context.Background(), hint)
 		if err != nil {
 			t.Logf("parseRewriteHint error: %v for hint: %q", err, hint)
 			return false
@@ -173,7 +174,7 @@ func TestProperty7_RewriteInjection(t *testing.T) {
 	}
 
 	prop := func(input testInput) bool {
-		hint, err := formatRewriteHint(input.Rules)
+		hint, err := formatRewriteHint(context.Background(), input.Rules)
 		if err != nil {
 			t.Logf("formatRewriteHint error: %v", err)
 			return false
@@ -261,7 +262,7 @@ func TestProperty8_NoRulesNoRewrite(t *testing.T) {
 		if len(emptyRules) == 0 {
 			// No modification — this is the expected path
 		} else {
-			hint, err := formatRewriteHint(emptyRules)
+			hint, err := formatRewriteHint(context.Background(), emptyRules)
 			if err != nil {
 				t.Logf("formatRewriteHint error: %v", err)
 				return false
