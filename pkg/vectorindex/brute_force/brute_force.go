@@ -63,6 +63,11 @@ func get1D[T any](pool *sync.Pool, n int) *[]T {
 }
 
 func put1D[T any](pool *sync.Pool, v *[]T) {
+	var zero T
+	for i := range *v {
+		(*v)[i] = zero
+	}
+	*v = (*v)[:0]
 	pool.Put(v)
 }
 
