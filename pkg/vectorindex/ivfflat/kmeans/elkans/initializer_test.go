@@ -52,10 +52,10 @@ func TestRandom_InitCentroids(t *testing.T) {
 				},
 				k: 2,
 			},
-			            wantCentroids: [][]float64{
-			                {10, 3, 4, 5},
-			                {1, 2, 4, 5},
-			            },		},
+			wantCentroids: [][]float64{
+				{10, 3, 4, 5},
+				{1, 2, 4, 5},
+			}},
 	}
 	ctx := context.Background()
 

@@ -55,9 +55,9 @@ type ElkanClusterer[T types.RealNumbers] struct {
 	nextCentroids               [][]T
 	halfInterCentroidDistMatrix [][]T
 	minHalfInterCentroidDist    []T
-	
-	membersCount        []int64
-	centroidShiftDist   []T
+
+	membersCount      []int64
+	centroidShiftDist []T
 
 	// thresholds
 	maxIterations  int     // e in paper
