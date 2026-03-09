@@ -141,7 +141,7 @@ func getIndex[T types.RealNumbers](ap *Productl2, proc *process.Process, analyze
 
 	dim := centroidVec.GetType().Width
 	elemSize := uint(centroidVec.GetType().GetArrayElementSize())
-	
+
 	if len(nullvec) > 0 {
 		nullvec[0] = 1
 		for i := 1; i < len(nullvec); i++ {
@@ -235,9 +235,13 @@ func get1D[T any](pool *sync.Pool, n int) *[]T {
 		return &newSlice
 	}
 	if cap(*v) < n {
-		pool.Put(v)
-		newSlice := make([]T, n)
-		return &newSlice
+		if n > 0 {
+			pool.Put(v)
+			newSlice := make([]T, n)
+			return &newSlice
+		}
+		*v = (*v)[:0]
+		return v
 	}
 	*v = (*v)[:n]
 	return v
@@ -340,7 +344,7 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 		p := get1D[[]float32](&pool2DF32, probeCount)
 		defer put1D(&pool2DF32, p)
 		probes = any(*p).([][]T)
-		
+
 		n := get1D[float32](&pool1DF32, dim)
 		defer put1D(&pool1DF32, n)
 		nullvec = any(*n).([]T)
@@ -348,7 +352,7 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 		p := get1D[[]float64](&pool2DF64, probeCount)
 		defer put1D(&pool2DF64, p)
 		probes = any(*p).([][]T)
-		
+
 		n := get1D[float64](&pool1DF64, dim)
 		defer put1D(&pool1DF64, n)
 		nullvec = any(*n).([]T)
