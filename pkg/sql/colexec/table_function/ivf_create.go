@@ -266,6 +266,10 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 			}
 		}
 
+		if u.sample_ratio > 1.0 {
+			u.sample_ratio = 1.0
+		}
+
 		// run SQL
 		sql := fmt.Sprintf("SELECT SAMPLE(`%s`, %f PERCENT) FROM `%s`.`%s` WHERE `%s` IS NOT NULL LIMIT %d",
 			u.tblcfg.KeyPart,
