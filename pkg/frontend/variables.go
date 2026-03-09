@@ -1727,6 +1727,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemSystemEnumType("default_storage_engine", "InnoDB"),
 		Default:           "InnoDB",
 	},
+	"view_security_type": {
+		Name:              "view_security_type",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemSystemEnumType("view_security_type", "DEFINER", "INVOKER"),
+		Default:           "DEFINER",
+	},
 	"default_table_encryption": {
 		Name:              "default_table_encryption",
 		Scope:             ScopeBoth,
@@ -3598,14 +3606,6 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("ivf_preload_entries"),
 		Default:           int8(0),
-	},
-	"ivf_small_centroid_threshold": {
-		Name:              "ivf_small_centroid_threshold",
-		Scope:             ScopeBoth,
-		Dynamic:           true,
-		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("ivf_small_centroid_threshold", 0, 1024, false),
-		Default:           int64(0),
 	},
 	"enable_vector_prefilter_by_default": {
 		Name:              "enable_vector_prefilter_by_default",

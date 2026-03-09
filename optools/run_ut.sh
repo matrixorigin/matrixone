@@ -98,7 +98,7 @@ function run_tests(){
     THIRDPARTIES_INSTALL_DIR=${BUILD_WKSP}/thirdparties/install
 
     local CGO_CFLAGS="-I${BUILD_WKSP}/cgo -I${THIRDPARTIES_INSTALL_DIR}/include"
-    local CGO_LDFLAGS="-Wl,-rpath,${THIRDPARTIES_INSTALL_DIR}/lib -L${THIRDPARTIES_INSTALL_DIR}/lib -L${BUILD_WKSP}/cgo -lmo_c -lm"
+    local CGO_LDFLAGS="-Wl,-rpath,${THIRDPARTIES_INSTALL_DIR}/lib -L${THIRDPARTIES_INSTALL_DIR}/lib -L${BUILD_WKSP}/cgo -lmo -lm"
 
     if [[ $SKIP_TESTS == 'race' ]]; then
         logger "INF" "Run UT without race check"
