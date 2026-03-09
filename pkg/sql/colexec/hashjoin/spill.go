@@ -47,6 +47,70 @@ type bucketBuffer struct {
 	bat    *batch.Batch
 }
 
+func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process) (vm.CallResult, error) {
+	var result vm.CallResult
+	ctr := &hashJoin.ctr
+
+	for {
+		// Load next bucket if needed
+		if ctr.mp == nil || ctr.bucketProbeIdx >= len(ctr.bucketProbeBatches) {
+			if ctr.currentBucketIdx >= len(ctr.spilledBuildBuckets) {
+				return result, nil
+			}
+
+			buildBatches, err := loadSpilledBuildBucket(proc, ctr.spilledBuildBuckets[ctr.currentBucketIdx])
+			if err != nil {
+				return result, err
+			}
+
+			probeBatches, err := hashJoin.loadSpilledProbeBucket(proc, ctr.currentBucketIdx)
+			if err != nil {
+				return result, err
+			}
+
+			ctr.currentBucketIdx++
+
+			if len(buildBatches) == 0 || len(probeBatches) == 0 {
+				continue
+			}
+
+			// Rebuild hashmap for this bucket
+			tmpJoinMap, err := hashJoin.rebuildHashmapForBucket(proc, buildBatches)
+			if err != nil {
+				return result, err
+			}
+
+			ctr.bucketBuildBatches = buildBatches
+			ctr.bucketProbeBatches = probeBatches
+			ctr.bucketProbeIdx = 0
+			ctr.mp = tmpJoinMap
+			ctr.itr = nil
+
+			ctr.rightBats = ctr.mp.GetBatches()
+			ctr.rightRowCnt = ctr.mp.GetRowCount()
+
+			if hashJoin.IsRightJoin {
+				if ctr.rightRowCnt > 0 {
+					ctr.rightRowsMatched = &bitmap.Bitmap{}
+					ctr.rightRowsMatched.InitWithSize(ctr.rightRowCnt)
+					ctr.rightMatchedIter = nil
+					ctr.bitmapSynced = false
+				}
+			}
+
+			ctr.probeState = psNextBatch
+			ctr.lastIdx = 0
+			ctr.vsIdx = 0
+		}
+
+		if ctr.bucketProbeIdx < len(ctr.bucketProbeBatches) {
+			result.Batch = ctr.bucketProbeBatches[ctr.bucketProbeIdx]
+			ctr.bucketProbeIdx++
+			return result, nil
+		}
+	}
+}
+
 func flushBucketBuffer(proc *process.Process, buf *bucketBuffer, file *os.File, analyzer process.Analyzer) (int64, error) {
 	if buf.bat == nil || buf.bat.RowCount() == 0 {
 		return 0, nil
@@ -262,110 +326,6 @@ func (hashJoin *HashJoin) loadSpilledProbeBucket(proc *process.Process, bucketId
 	return batches, nil
 }
 
-func (hashJoin *HashJoin) processSpilledJoin(proc *process.Process, analyzer process.Analyzer) (*batch.Batch, error) {
-	ctr := &hashJoin.ctr
-
-	// Load next bucket if needed
-	if ctr.bucketJoinMap == nil {
-		if ctr.currentBucketIdx >= len(ctr.spilledBuildBuckets) {
-			return nil, nil
-		}
-
-		buildBatches, err := loadSpilledBuildBucket(proc, ctr.spilledBuildBuckets[ctr.currentBucketIdx])
-		if err != nil {
-			return nil, err
-		}
-
-		probeBatches, err := hashJoin.loadSpilledProbeBucket(proc, ctr.currentBucketIdx)
-		if err != nil {
-			return nil, err
-		}
-
-		ctr.currentBucketIdx++
-
-		if len(buildBatches) == 0 || len(probeBatches) == 0 {
-			// Empty bucket, try next one
-			return hashJoin.processSpilledJoin(proc, analyzer)
-		}
-
-		// Rebuild hashmap for this bucket
-		tmpJoinMap, err := hashJoin.rebuildHashmapForBucket(proc, buildBatches)
-		if err != nil {
-			return nil, err
-		}
-
-		ctr.bucketBuildBatches = buildBatches
-		ctr.bucketProbeBatches = probeBatches
-		ctr.bucketProbeIdx = 0
-		ctr.bucketJoinMap = tmpJoinMap
-	}
-
-	// Process one probe batch
-	if ctr.bucketProbeIdx >= len(ctr.bucketProbeBatches) {
-		// Done with this bucket, clean up and move to next
-		ctr.bucketJoinMap.Free()
-		ctr.bucketJoinMap = nil
-		for i := range ctr.bucketBuildBatches {
-			if ctr.bucketBuildBatches[i] != nil {
-				ctr.bucketBuildBatches[i].Clean(proc.Mp())
-			}
-		}
-		ctr.bucketBuildBatches = nil
-		for i := range ctr.bucketProbeBatches {
-			if ctr.bucketProbeBatches[i] != nil {
-				ctr.bucketProbeBatches[i].Clean(proc.Mp())
-			}
-		}
-		ctr.bucketProbeBatches = nil
-		return hashJoin.processSpilledJoin(proc, analyzer)
-	}
-
-	// Set up container state for regular probe
-	ctr.leftBat = ctr.bucketProbeBatches[ctr.bucketProbeIdx]
-	ctr.bucketProbeIdx++
-	ctr.mp = ctr.bucketJoinMap
-	ctr.rightBats = ctr.mp.GetBatches()
-	ctr.rightRowCnt = ctr.mp.GetRowCount()
-	if hashJoin.IsRightJoin {
-		if ctr.rightRowCnt > 0 {
-			ctr.rightRowsMatched = &bitmap.Bitmap{}
-			ctr.rightRowsMatched.InitWithSize(ctr.rightRowCnt)
-		}
-	}
-
-	// Reset iterator for new probe batch
-	ctr.itr = nil
-
-	// Prepare fresh result batch
-	ctr.resBat = batch.NewWithSize(len(hashJoin.ResultCols))
-	for i, rp := range hashJoin.ResultCols {
-		if rp.Rel == 0 {
-			ctr.resBat.Vecs[i] = vector.NewVec(hashJoin.LeftTypes[rp.Pos])
-		} else {
-			ctr.resBat.Vecs[i] = vector.NewVec(hashJoin.RightTypes[rp.Pos])
-		}
-	}
-
-	// Reset probe state
-	ctr.lastIdx = 0
-	ctr.probeState = psNextBatch
-
-	// Use regular probe logic
-	var result vm.CallResult
-	if err := ctr.probe(hashJoin, proc, &result); err != nil {
-		return nil, err
-	}
-
-	// Clean up for next call
-	ctr.leftBat = nil
-
-	if result.Batch == nil || result.Batch.RowCount() == 0 {
-		return hashJoin.processSpilledJoin(proc, analyzer)
-	}
-
-	return result.Batch, nil
-}
-
 func loadSpilledBuildBucket(proc *process.Process, bucketName string) ([]*batch.Batch, error) {
 	spillfs, err := proc.GetSpillFileService()
 	if err != nil {
@@ -450,5 +410,8 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, buildBa
 		return nil, err
 	}
 
-	return message.NewJoinMap(builder.MultiSels, builder.IntHashMap, builder.StrHashMap, nil, builder.Batches.Buf, proc.Mp()), nil
+	jm := message.NewJoinMap(builder.MultiSels, builder.IntHashMap, builder.StrHashMap, nil, builder.Batches.Buf, proc.Mp())
+	jm.SetRowCount(int64(builder.InputBatchRowCount))
+	jm.IncRef(1)
+	return jm, nil
 }

@@ -123,26 +123,11 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.skipProbe = true
 			}
 
-			// Check if we need to process spilled data
-			if ctr.mp != nil && ctr.mp.IsSpilled() {
-				ctr.state = ProcessSpilled
-			} else {
-				ctr.state = Probe
-			}
-
-		case ProcessSpilled:
-			result.Batch, err = hashJoin.processSpilledJoin(proc, analyzer)
-			if err != nil {
-				return result, err
-			}
-			if result.Batch == nil {
-				ctr.state = End
-			}
-			return result, nil
+			ctr.state = Probe
 
 		case Probe:
 			if ctr.leftBat == nil {
-				input, err = vm.ChildrenCall(hashJoin.GetChildren(0), proc, analyzer)
+				input, err = hashJoin.getInputBatch(proc, analyzer)
 				if err != nil {
 					return result, err
 				}
@@ -247,6 +232,16 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 			if result.Batch == nil {
 				ctr.state = End
+
+				// For spilled join, clean up current bucket and move to next
+				if ctr.mp != nil && ctr.mp.IsSpilled() {
+					ctr.cleanBucketBatches(proc)
+					ctr.cleanHashMap()
+
+					if ctr.currentBucketIdx < len(ctr.spilledBuildBuckets) {
+						ctr.state = Probe
+					}
+				}
 				continue
 			}
 
@@ -330,6 +325,16 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 	}
 
 	return nil
+}
+
+func (hashJoin *HashJoin) getInputBatch(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
+	// For unspilled join, simply call children
+	if len(hashJoin.ctr.spilledBuildBuckets) == 0 {
+		return vm.ChildrenCall(hashJoin.GetChildren(0), proc, analyzer)
+	}
+
+	// For spilled join, load bucket and return probe batches
+	return hashJoin.getSpilledInputBatch(proc)
 }
 
 func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *vm.CallResult) error {

@@ -37,7 +37,6 @@ const (
 	Probe
 	SyncBitmap
 	Finalize
-	ProcessSpilled
 	End
 )
 
@@ -100,7 +99,6 @@ type container struct {
 	bucketBuildBatches []*batch.Batch
 	bucketProbeBatches []*batch.Batch
 	bucketProbeIdx     int
-	bucketJoinMap      *message.JoinMap
 }
 
 type HashJoin struct {
@@ -173,6 +171,7 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	if !ctr.bitmapSynced && hashJoin.NumCPU > 1 && !hashJoin.IsMerger {
 		hashJoin.Channel <- nil
 	}
+	ctr.cleanBucketBatches(proc)
 	ctr.cleanHashMap()
 	ctr.resetNonEqCondExecutor()
 	ctr.resetEqCondExecutors()
@@ -183,17 +182,8 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.state = Build
 	ctr.probeState = psNextBatch
 	ctr.lastIdx = 0
-	hashJoin.cleanupSpillFiles(proc)
-	ctr.spilledBuildBuckets = nil
-	ctr.spilledBuildRowCnts = nil
-	ctr.spilledProbeBuckets = nil
+	ctr.cleanupSpillFiles(proc)
 	ctr.currentBucketIdx = 0
-	if ctr.bucketJoinMap != nil {
-		ctr.bucketJoinMap.Free()
-		ctr.bucketJoinMap = nil
-	}
-	ctr.bucketBuildBatches = nil
-	ctr.bucketProbeBatches = nil
 	ctr.bucketProbeIdx = 0
 
 	if hashJoin.OpAnalyzer != nil {
@@ -206,19 +196,23 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &hashJoin.ctr
 	ctr.cleanBatch(proc)
+	ctr.cleanBucketBatches(proc)
 	ctr.cleanHashMap()
 	ctr.cleanNonEqCondExecutor()
 	ctr.cleanEqCondExecutors()
-	hashJoin.cleanupSpillFiles(proc)
+	ctr.cleanupSpillFiles(proc)
 }
 
-func (hashJoin *HashJoin) cleanupSpillFiles(proc *process.Process) {
+func (ctr *container) cleanupSpillFiles(proc *process.Process) {
 	spillfs, err := proc.GetSpillFileService()
 	if err != nil {
 		return
 	}
-	spillfs.Delete(proc.Ctx, hashJoin.ctr.spilledBuildBuckets...)
-	spillfs.Delete(proc.Ctx, hashJoin.ctr.spilledProbeBuckets...)
+	spillfs.Delete(proc.Ctx, ctr.spilledBuildBuckets...)
+	spillfs.Delete(proc.Ctx, ctr.spilledProbeBuckets...)
+	ctr.spilledBuildBuckets = nil
+	ctr.spilledProbeBuckets = nil
+	ctr.spilledBuildRowCnts = nil
 }
 
 func (ctr *container) resetNonEqCondExecutor() {
@@ -246,6 +240,9 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 			ctr.joinBats[i] = nil
 		}
 	}
+}
+
+func (ctr *container) cleanBucketBatches(proc *process.Process) {
 	for i := range ctr.bucketBuildBatches {
 		if ctr.bucketBuildBatches[i] != nil {
 			ctr.bucketBuildBatches[i].Clean(proc.Mp())

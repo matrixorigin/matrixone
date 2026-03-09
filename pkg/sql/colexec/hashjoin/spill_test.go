@@ -326,17 +326,19 @@ func TestEmptyBucketHandling(t *testing.T) {
 	defer proc.Free()
 
 	analyzer := process.NewAnalyzer(0, false, false, "test")
+	// Test with spilled buckets but already processed all
 	hashJoin := &HashJoin{
 		ctr: container{
-			spilledBuildBuckets: []string{},
-			spilledProbeBuckets: []string{},
-			currentBucketIdx:    0,
+			spilledBuildBuckets: []string{"bucket1"},
+			spilledProbeBuckets: []string{"bucket1"},
+			currentBucketIdx:    1, // Already past the only bucket
+			state:               Probe,
 		},
 	}
 
-	result, err := hashJoin.processSpilledJoin(proc, analyzer)
+	result, err := hashJoin.getInputBatch(proc, analyzer)
 	require.NoError(t, err)
-	require.Nil(t, result)
+	require.Nil(t, result.Batch)
 }
 
 func TestMultipleDataTypes(t *testing.T) {
