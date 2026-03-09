@@ -18,6 +18,7 @@ package brute_force
 
 import (
 	"runtime"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -29,6 +30,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
+)
+
+var (
+	pool1DU16 = sync.Pool{New: func() any { x := make([]uint16, 0); return &x }}
 )
 
 type GpuBruteForceIndex[T cuvs.VectorType] struct {
