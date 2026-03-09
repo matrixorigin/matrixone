@@ -36,8 +36,6 @@ import (
 var (
 	pool1DF32 = sync.Pool{New: func() any { x := make([]float32, 0); return &x }}
 	pool1DF64 = sync.Pool{New: func() any { x := make([]float64, 0); return &x }}
-	pool1DU16 = sync.Pool{New: func() any { x := make([]uint16, 0); return &x }}
-	pool1DI64 = sync.Pool{New: func() any { x := make([]int64, 0); return &x }}
 	pool2DResult = sync.Pool{New: func() any { x := make([][]vectorindex.SearchResult, 0); return &x }}
 	pool1DResult = sync.Pool{New: func() any { x := make([]vectorindex.SearchResult, 0); return &x }}
 )
@@ -54,15 +52,24 @@ func get1D[T any](pool *sync.Pool, n int) *[]T {
 		return &newSlice
 	}
 	if cap(*v) < n {
-		pool.Put(v)
-		newSlice := make([]T, n)
-		return &newSlice
+		if n > 0 {
+			pool.Put(v)
+			newSlice := make([]T, n)
+			return &newSlice
+		}
+		*v = (*v)[:0]
+		return v
 	}
 	*v = (*v)[:n]
 	return v
 }
 
 func put1D[T any](pool *sync.Pool, v *[]T) {
+	var zero T
+	for i := range *v {
+		(*v)[i] = zero
+	}
+	*v = (*v)[:0]
 	pool.Put(v)
 }
 
