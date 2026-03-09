@@ -1,5 +1,3 @@
-//go:build gpu
-
 // Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -88,8 +86,4 @@ func BenchmarkUsearchBruteForce(b *testing.B) {
 	benchmarkBruteForce(b, func(dataset [][]float32, dim uint, m metric.MetricType, es uint, nt uint) (cache.VectorIndexSearchIf, error) {
 		return NewUsearchBruteForceIndex[float32](dataset, dim, m, es)
 	})
-}
-
-func BenchmarkGpuBruteForce(b *testing.B) {
-	benchmarkBruteForce(b, NewGpuBruteForceIndex[float32])
 }

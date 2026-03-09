@@ -17,6 +17,10 @@
 package brute_force
 
 import (
+	"runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
+	
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
@@ -62,6 +66,13 @@ func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
 		return NewCpuBruteForceIndex[T](dataset, dimension, m, elemsz)
 	case [][]float32:
 		return NewGpuBruteForceIndex[float32](dset, dimension, m, elemsz, nthread)
+	case [][]uint16:
+		// Convert [][]uint16 to [][]cuvs.Float16 to pass to NewGpuBruteForceIndex
+		f16dset := make([][]cuvs.Float16, len(dset))
+		for i, v := range dset {
+			f16dset[i] = util.UnsafeSliceCast[cuvs.Float16](v)
+		}
+		return NewGpuBruteForceIndex[cuvs.Float16](f16dset, dimension, m, elemsz, nthread)
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("type not supported for BruteForceIndex")
 	}
@@ -78,7 +89,32 @@ func NewGpuBruteForceIndex[T cuvs.VectorType](dataset [][]T,
 	}
 
 	dim := int(dimension)
-	flattened := make([]T, len(dataset)*dim)
+	reqSize := len(dataset) * dim
+	var flattened []T
+
+	var _t T
+	switch any(_t).(type) {
+	case float32:
+		allocator := malloc.GetDefault(nil)
+		slice, deallocator, err := allocator.Allocate(uint64(reqSize*4), malloc.NoClear)
+		if err != nil {
+			return nil, err
+		}
+		defer deallocator.Deallocate()
+		flattened = any(util.UnsafeSliceCast[float32](slice)).([]T)
+	case cuvs.Float16:
+		allocator := malloc.GetDefault(nil)
+		slice, deallocator, err := allocator.Allocate(uint64(reqSize*2), malloc.NoClear)
+		if err != nil {
+			return nil, err
+		}
+		defer deallocator.Deallocate()
+		flattened = any(util.UnsafeSliceCast[cuvs.Float16](slice)).([]T)
+	default:
+		ds := make([]T, reqSize)
+		flattened = ds
+	}
+	
 	for i, v := range dataset {
 		copy(flattened[i*dim:(i+1)*dim], v)
 	}
@@ -88,6 +124,7 @@ func NewGpuBruteForceIndex[T cuvs.VectorType](dataset [][]T,
 	if err != nil {
 		return nil, err
 	}
+	
 
 	return &GpuBruteForceIndex[T]{
 		index:     km,
@@ -114,7 +151,29 @@ func (idx *GpuBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any,
 	}
 
 	dim := int(idx.dimension)
-	flattenedQueries := make([]T, len(queriesvec)*dim)
+	reqSize := len(queriesvec) * dim
+	
+	var flattenedQueries []T
+	var pFlattenedQueries *[]T
+	
+	var _t T
+	switch any(_t).(type) {
+	case float32:
+		p := get1D[float32](&pool1DF32, reqSize)
+		defer put1D(&pool1DF32, p)
+		flattenedQueries = any(*p).([]T)
+		pFlattenedQueries = any(p).(*[]T)
+	case cuvs.Float16:
+		p := get1D[uint16](&pool1DU16, reqSize)
+		defer put1D(&pool1DU16, p)
+		flattenedQueries = any(util.UnsafeSliceCast[cuvs.Float16](*p)).([]T)
+		pFlattenedQueries = any(p).(*[]T)
+	default:
+		// Not pooling other types, although T is likely only float32 for CUVS
+		ds := make([]T, reqSize)
+		flattenedQueries = ds
+	}
+	
 	for i, v := range queriesvec {
 		copy(flattenedQueries[i*dim:(i+1)*dim], v)
 	}
@@ -130,6 +189,7 @@ func (idx *GpuBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any,
 	}
 
 	retkeys = neighbors
+	runtime.KeepAlive(pFlattenedQueries)
 	return
 }
 
