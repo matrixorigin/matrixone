@@ -76,8 +76,10 @@ func (idx *IvfflatSearchIndex[T]) LoadStats(
 	nthread int64) error {
 
 	logutil.Infof("IVFFLAT START: gets data size")
-	sql := fmt.Sprintf("SELECT COUNT(1) FROM `%s`.`%s`",
+	sql := fmt.Sprintf("SELECT COUNT(1) FROM `%s`.`%s` WHERE `%s` = %d",
 		tblcfg.DbName, tblcfg.EntriesTable,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+		idx.Version,
 	)
 
 	res, err := runSql(sqlproc, sql)

@@ -18,9 +18,10 @@ package brute_force
 
 import (
 	"runtime"
+
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
-	
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
@@ -114,7 +115,7 @@ func NewGpuBruteForceIndex[T cuvs.VectorType](dataset [][]T,
 		ds := make([]T, reqSize)
 		flattened = ds
 	}
-	
+
 	for i, v := range dataset {
 		copy(flattened[i*dim:(i+1)*dim], v)
 	}
@@ -124,7 +125,6 @@ func NewGpuBruteForceIndex[T cuvs.VectorType](dataset [][]T,
 	if err != nil {
 		return nil, err
 	}
-	
 
 	return &GpuBruteForceIndex[T]{
 		index:     km,
@@ -152,10 +152,10 @@ func (idx *GpuBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any,
 
 	dim := int(idx.dimension)
 	reqSize := len(queriesvec) * dim
-	
+
 	var flattenedQueries []T
 	var pFlattenedQueries *[]T
-	
+
 	var _t T
 	switch any(_t).(type) {
 	case float32:
@@ -173,7 +173,7 @@ func (idx *GpuBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any,
 		ds := make([]T, reqSize)
 		flattenedQueries = ds
 	}
-	
+
 	for i, v := range queriesvec {
 		copy(flattenedQueries[i*dim:(i+1)*dim], v)
 	}
