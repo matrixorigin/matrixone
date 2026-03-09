@@ -1982,6 +1982,51 @@ func Test_handleShowTableStatus(t *testing.T) {
 		convey.So(ses.data[0][5], convey.ShouldEqual, int64(128))
 	})
 
+	convey.Convey("handleShowTableStatus statement_info with rows should skip fallback", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses, ec, shv := newShowTableStatusFixture(
+			ctx, ctrl,
+			catalog.SystemOrdinaryRel, catalog.MO_STATEMENT,
+			uint32(moAdminRoleID),
+			&TenantInfo{
+				Tenant:        "acc_fallback",
+				TenantID:      1,
+				User:          "admin",
+				DefaultRole:   accountAdminRoleName,
+				DefaultRoleID: moAdminRoleID,
+			},
+			catalog.MO_SYSTEM,
+		)
+
+		statsRet := mock_frontend.NewMockExecResult(ctrl)
+		statsRet.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+		statsRet.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return(catalog.MO_STATEMENT, nil).AnyTimes()
+		statsRet.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(1)).Return(int64(3), nil).AnyTimes()
+		statsRet.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(2)).Return(int64(90), nil).AnyTimes()
+
+		countCalls := 0
+		execStub := gostub.Stub(&ExeSqlInBgSes, func(reqCtx context.Context, bh BackgroundExec, sql string) ([]ExecResult, error) {
+			switch {
+			case strings.Contains(sql, "mo_table_rows(db, tbl)"):
+				return []ExecResult{statsRet}, nil
+			case strings.Contains(sql, "select count(*) from `system`.`statement_info`"):
+				countCalls++
+				return nil, moerr.NewInternalErrorf(reqCtx, "count query should not be called, sql: %s", sql)
+			default:
+				return nil, moerr.NewInternalErrorf(reqCtx, "unexpected sql in test: %s", sql)
+			}
+		})
+		defer execStub.Reset()
+
+		convey.So(handleShowTableStatus(ses, ec, shv), convey.ShouldBeNil)
+		convey.So(countCalls, convey.ShouldEqual, 0)
+		convey.So(ses.data[0][3], convey.ShouldEqual, int64(3))
+		convey.So(ses.data[0][4], convey.ShouldEqual, int64(30))
+		convey.So(ses.data[0][5], convey.ShouldEqual, int64(90))
+	})
+
 	convey.Convey("handleShowTableStatus non-special table should not fallback", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -2048,7 +2093,7 @@ func Test_handleShowTableStatus(t *testing.T) {
 		statsRet := mock_frontend.NewMockExecResult(ctrl)
 		statsRet.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
 		statsRet.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return(catalog.MO_STATEMENT, nil).AnyTimes()
-		statsRet.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(1)).Return(int64(3), nil).AnyTimes()
+		statsRet.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(1)).Return(int64(0), nil).AnyTimes()
 		statsRet.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(2)).Return(int64(90), nil).AnyTimes()
 
 		countRet := mock_frontend.NewMockExecResult(ctrl)
@@ -2070,8 +2115,8 @@ func Test_handleShowTableStatus(t *testing.T) {
 
 		convey.So(handleShowTableStatus(ses, ec, shv), convey.ShouldBeNil)
 		convey.So(calls, convey.ShouldEqual, 2)
-		convey.So(ses.data[0][3], convey.ShouldEqual, int64(3))
-		convey.So(ses.data[0][4], convey.ShouldEqual, int64(30))
+		convey.So(ses.data[0][3], convey.ShouldEqual, int64(0))
+		convey.So(ses.data[0][4], convey.ShouldEqual, int64(0))
 		convey.So(ses.data[0][5], convey.ShouldEqual, int64(90))
 	})
 
@@ -2096,7 +2141,7 @@ func Test_handleShowTableStatus(t *testing.T) {
 		statsRet := mock_frontend.NewMockExecResult(ctrl)
 		statsRet.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
 		statsRet.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return(catalog.MO_STATEMENT, nil).AnyTimes()
-		statsRet.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(1)).Return(int64(3), nil).AnyTimes()
+		statsRet.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(1)).Return(int64(0), nil).AnyTimes()
 		statsRet.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(2)).Return(int64(90), nil).AnyTimes()
 
 		execStub := gostub.Stub(&ExeSqlInBgSes, func(reqCtx context.Context, bh BackgroundExec, sql string) ([]ExecResult, error) {
@@ -2135,7 +2180,7 @@ func Test_handleShowTableStatus(t *testing.T) {
 		statsRet := mock_frontend.NewMockExecResult(ctrl)
 		statsRet.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
 		statsRet.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return(catalog.MO_STATEMENT, nil).AnyTimes()
-		statsRet.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(1)).Return(int64(3), nil).AnyTimes()
+		statsRet.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(1)).Return(int64(0), nil).AnyTimes()
 		statsRet.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(2)).Return(int64(90), nil).AnyTimes()
 
 		countRet := mock_frontend.NewMockExecResult(ctrl)

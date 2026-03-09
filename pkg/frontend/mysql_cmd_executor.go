@@ -488,8 +488,10 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 	// For some system tables (for example `system.statement_info`), tenant queries
 	// are rewritten to sys account with account-level filtering. mo_table_rows/size
 	// does not reflect that rewritten visibility in all cases, so fallback to
-	// count(*) for Rows to keep SHOW TABLE STATUS consistent with SELECT semantics.
-	getSpecialTableRows := func(tblNames []string) (map[string]int64, error) {
+	// count(*) for Rows when mo_table_rows is empty/zero to keep SHOW TABLE STATUS
+	// consistent with SELECT semantics without paying the extra cost when stats are
+	// already populated.
+	getSpecialTableRows := func(tblNames []string, tableRows map[string]int64) (map[string]int64, error) {
 		rows := make(map[string]int64)
 		if len(tblNames) == 0 {
 			return rows, nil
@@ -508,6 +510,9 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 
 		for _, tblName := range tblNames {
 			if !ShouldSwitchToSysAccount(dbName, tblName) {
+				continue
+			}
+			if currentRows, ok := tableRows[tblName]; ok && currentRows > 0 {
 				continue
 			}
 			sql := fmt.Sprintf("select count(*) from `%s`.`%s`", escapeIdent(dbName), escapeIdent(tblName))
@@ -587,7 +592,7 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 	if err != nil {
 		return err
 	}
-	specialRows, err := getSpecialTableRows(tblNames)
+	specialRows, err := getSpecialTableRows(tblNames, rows)
 	if err != nil {
 		return err
 	}

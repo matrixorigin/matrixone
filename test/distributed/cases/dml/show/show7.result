@@ -9,8 +9,8 @@ select 2;
 select 3;
 3
 3
-select sleep(15);
-sleep(15)
+select case when count(*) > 0 then 0 else sleep(15) end as wait_for_statement_info_ready from system.statement_info;
+wait_for_statement_info_ready
 0
 select count(*) > 0 as has_data from system.statement_info;
 has_data
