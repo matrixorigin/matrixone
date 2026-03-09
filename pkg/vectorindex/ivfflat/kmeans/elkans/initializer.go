@@ -122,6 +122,7 @@ func (kpp *KMeansPlusPlus[T]) InitCentroids(ctx context.Context, _vectors any, k
 				subvec := vectors[start:end:end]
 				subdist := distances[start:end:end]
 
+				var localDist T
 				for i := range subvec {
 
 					if i%100 == 0 && ctx.Err() != nil {
@@ -137,13 +138,15 @@ func (kpp *KMeansPlusPlus[T]) InitCentroids(ctx context.Context, _vectors any, k
 					}
 
 					distance *= distance
-					mutex.Lock()
 					if distance < subdist[i] {
 						subdist[i] = distance
 					}
-					totalDistToExistingCenters += subdist[i]
-					mutex.Unlock()
+					localDist += subdist[i]
 				}
+
+				mutex.Lock()
+				totalDistToExistingCenters += localDist
+				mutex.Unlock()
 
 				return
 			})

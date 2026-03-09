@@ -739,13 +739,13 @@ func TestElkanClusterer_recalculateCentroids(t *testing.T) {
 				// Here we are only testing the working of recalculateCentroids() function.
 
 				rnd := rand.New(rand.NewPCG(uint64(kmeans.DefaultRandSeed), 0))
-				
+
 				newCentroids := make([][]float64, ekm.clusterCnt)
 				for i := range newCentroids {
 					newCentroids[i] = make([]float64, len(ekm.vectorList[0]))
 				}
 				membersCount := make([]int64, ekm.clusterCnt)
-				
+
 				got := ekm.recalculateCentroids(ctx, rnd, newCentroids, membersCount)
 				if !assertx.InEpsilonF64Slices(tt.want.centroids, got) {
 					t.Errorf("centroids got = %v, want %v", got, tt.want.centroids)

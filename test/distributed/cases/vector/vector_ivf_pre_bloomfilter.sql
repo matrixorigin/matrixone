@@ -1,49 +1,9 @@
 create database if not exists dd3;
 use dd3;
 
--- CASE 1: test merge small centroid
-
-set ivf_preload_entries = 0;
-set ivf_small_centroid_threshold = 2;
-set probe_limit  = 1;
-
--- Setup test tables
-CREATE TABLE vector_test_merge (
-    id INT PRIMARY KEY,
-    name VARCHAR(100),
-    category VARCHAR(50),
-    score FLOAT,
-    active BOOLEAN DEFAULT true,
-    embedding vecf32(16)
-);
-
-
--- Insert test data with diverse patterns
-INSERT INTO vector_test_merge (id, name, category, score, active, embedding) VALUES
-(1, 'Item A', 'cat1', 5.0, true, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1,0.2,0.3,0.4,0.5,0.6,0.7]'),
-(2, 'Item B', 'cat1', 4.5, true, '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]'),
-(3, 'Item C', 'cat2', 4.0, true, '[0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]'),
-(4, 'Item D', 'cat2', 3.5, false, '[0.4,0.5,0.6,0.7,0.8,0.9,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1]'),
-(5, 'Item E', 'cat3', 3.0, true, '[0.5,0.6,0.7,0.8,0.9,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1,0.2]'),
-(6, 'Item F', 'cat3', 2.5, false, '[0.6,0.7,0.8,0.9,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1,0.2,0.3]'),
-(7, 'Item G', 'cat1', 2.0, true, '[0.7,0.8,0.9,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1,0.2,0.3,0.4]'),
-(8, 'Item H', 'cat2', 1.5, true, '[0.8,0.9,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1,0.2,0.3,0.4,0.5]'),
-(9, 'Item I', 'cat3', 1.0, false, '[0.9,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1,0.2,0.3,0.4,0.5,0.6]'),
-(10, 'Item J', 'cat1', 0.5, true, '[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]');
-
-CREATE INDEX idx_vec_merge USING ivfflat ON vector_test_merge(embedding) lists=4 op_type 'vector_l2_ops';
-
-SELECT id, name, score FROM vector_test_merge
-WHERE category = 'cat1' AND active = true AND score < 3.0
-ORDER BY l2_distance(embedding,  '[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]')
-LIMIT 2 by rank with option 'mode=pre';
-
--- END test merge small centroid
-
 -- CASE 2: test build bloomfilter on the fly
 
 set ivf_preload_entries = 0;
-set ivf_small_centroid_threshold = 0;
 set probe_limit  = 5;
 
 -- Setup test tables
@@ -82,7 +42,6 @@ LIMIT 2 by rank with option 'mode=pre';
 -- CASE 3: test preload entries bloomfilter
 
 set ivf_preload_entries = 1;
-set ivf_small_centroid_threshold = 2;
 set probe_limit  = 5;
 
 -- Setup test tables
@@ -121,7 +80,6 @@ LIMIT 2 by rank with option 'mode=pre';
 -- CASE 4: test pre-filter with NIL centroid
 
 set ivf_preload_entries = 1;
-set ivf_small_centroid_threshold = 2;
 set probe_limit  = 5;
 
 -- Setup test tables
@@ -161,7 +119,6 @@ LIMIT 2 by rank with option 'mode=pre';
 -- CASE 5: test pre-filter with unique join key > #entries in centroids
 
 set ivf_preload_entries = 0;
-set ivf_small_centroid_threshold = 0;
 set probe_limit  = 1;
 
 -- Setup test tables
@@ -199,9 +156,7 @@ LIMIT 2 by rank with option 'mode=pre';
 
 -- Cleanup
 set ivf_preload_entries = 0;
-set ivf_small_centroid_threshold = 0;
 set probe_limit  = 5;
-drop table if exists vector_test_merge;
 drop table if exists vector_test_pre_bf;
 drop table if exists vector_test_pre_bf2;
 drop table if exists vector_test_pre_bf3;
