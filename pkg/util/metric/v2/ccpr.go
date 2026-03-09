@@ -312,3 +312,108 @@ var (
 	CCPRSyncProtectionUnregisterCounter = ccprSyncProtectionCounter.WithLabelValues("unregister")
 	CCPRSyncProtectionExpiredCounter    = ccprSyncProtectionCounter.WithLabelValues("expired")
 )
+
+// ============================================================================
+// CCPR Memory Pool Metrics
+// ============================================================================
+
+var (
+	// Memory allocation gauges - current memory usage by type
+	ccprMemoryGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "ccpr",
+			Name:      "memory_bytes",
+			Help:      "Current memory usage in bytes by type.",
+		}, []string{"type"})
+	CCPRMemoryObjectContentGauge    = ccprMemoryGauge.WithLabelValues("object_content")
+	CCPRMemoryDecompressBufferGauge = ccprMemoryGauge.WithLabelValues("decompress_buffer")
+	CCPRMemorySortIndexGauge        = ccprMemoryGauge.WithLabelValues("sort_index")
+	CCPRMemoryRowOffsetMapGauge     = ccprMemoryGauge.WithLabelValues("row_offset_map")
+	CCPRMemoryTotalGauge            = ccprMemoryGauge.WithLabelValues("total")
+
+	// Memory allocation counters - total allocations
+	ccprMemoryAllocCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "ccpr",
+			Name:      "memory_alloc_total",
+			Help:      "Total number of memory allocations by type.",
+		}, []string{"type"})
+	CCPRMemoryAllocObjectContentCounter    = ccprMemoryAllocCounter.WithLabelValues("object_content")
+	CCPRMemoryAllocDecompressBufferCounter = ccprMemoryAllocCounter.WithLabelValues("decompress_buffer")
+	CCPRMemoryAllocSortIndexCounter        = ccprMemoryAllocCounter.WithLabelValues("sort_index")
+	CCPRMemoryAllocRowOffsetMapCounter     = ccprMemoryAllocCounter.WithLabelValues("row_offset_map")
+
+	// Memory allocation bytes counters - total bytes allocated
+	ccprMemoryAllocBytesCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "ccpr",
+			Name:      "memory_alloc_bytes_total",
+			Help:      "Total bytes allocated by type.",
+		}, []string{"type"})
+	CCPRMemoryAllocBytesObjectContentCounter    = ccprMemoryAllocBytesCounter.WithLabelValues("object_content")
+	CCPRMemoryAllocBytesDecompressBufferCounter = ccprMemoryAllocBytesCounter.WithLabelValues("decompress_buffer")
+	CCPRMemoryAllocBytesSortIndexCounter        = ccprMemoryAllocBytesCounter.WithLabelValues("sort_index")
+	CCPRMemoryAllocBytesRowOffsetMapCounter     = ccprMemoryAllocBytesCounter.WithLabelValues("row_offset_map")
+
+	// Memory free counters
+	ccprMemoryFreeCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "ccpr",
+			Name:      "memory_free_total",
+			Help:      "Total number of memory frees by type.",
+		}, []string{"type"})
+	CCPRMemoryFreeObjectContentCounter    = ccprMemoryFreeCounter.WithLabelValues("object_content")
+	CCPRMemoryFreeDecompressBufferCounter = ccprMemoryFreeCounter.WithLabelValues("decompress_buffer")
+	CCPRMemoryFreeSortIndexCounter        = ccprMemoryFreeCounter.WithLabelValues("sort_index")
+	CCPRMemoryFreeRowOffsetMapCounter     = ccprMemoryFreeCounter.WithLabelValues("row_offset_map")
+
+	// Memory pool hit/miss counters for sync.Pool
+	ccprPoolCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "ccpr",
+			Name:      "pool_total",
+			Help:      "Total number of pool operations by type and result.",
+		}, []string{"type", "result"})
+	CCPRPoolGetChunkJobHitCounter      = ccprPoolCounter.WithLabelValues("get_chunk_job", "hit")
+	CCPRPoolGetChunkJobMissCounter     = ccprPoolCounter.WithLabelValues("get_chunk_job", "miss")
+	CCPRPoolWriteObjectJobHitCounter   = ccprPoolCounter.WithLabelValues("write_object_job", "hit")
+	CCPRPoolWriteObjectJobMissCounter  = ccprPoolCounter.WithLabelValues("write_object_job", "miss")
+	CCPRPoolFilterObjectJobHitCounter  = ccprPoolCounter.WithLabelValues("filter_object_job", "hit")
+	CCPRPoolFilterObjectJobMissCounter = ccprPoolCounter.WithLabelValues("filter_object_job", "miss")
+	CCPRPoolAObjectMappingHitCounter   = ccprPoolCounter.WithLabelValues("aobject_mapping", "hit")
+	CCPRPoolAObjectMappingMissCounter  = ccprPoolCounter.WithLabelValues("aobject_mapping", "miss")
+
+	// Memory allocation size histogram
+	CCPRMemoryAllocSizeHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "ccpr",
+			Name:      "memory_alloc_size_bytes",
+			Help:      "Bucketed histogram of memory allocation sizes.",
+			Buckets:   prometheus.ExponentialBuckets(1024, 2.0, 24), // 1KB to 16GB
+		}, []string{"type"})
+
+	// Memory wait time histogram (when memory limit is reached)
+	CCPRMemoryWaitDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "ccpr",
+			Name:      "memory_wait_duration_seconds",
+			Help:      "Bucketed histogram of memory wait duration when limit is reached.",
+			Buckets:   getDurationBuckets(),
+		})
+
+	// Memory limit gauge
+	CCPRMemoryLimitGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "ccpr",
+			Name:      "memory_limit_bytes",
+			Help:      "Configured memory limit in bytes.",
+		})
+)
