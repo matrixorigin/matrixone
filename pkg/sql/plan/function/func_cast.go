@@ -1831,6 +1831,15 @@ func jsonToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Varlena],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	switch toType.Oid {
+	case types.T_json:
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		for i := uint64(0); i < uint64(length); i++ {
+			v, null := source.GetStrValue(i)
+			if err := rs.AppendBytes(v, null); err != nil {
+				return err
+			}
+		}
+		return nil
 	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return jsonToStr(ctx, source, rs, length, selectList)

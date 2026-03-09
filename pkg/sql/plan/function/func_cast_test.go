@@ -2488,6 +2488,22 @@ func TestCastJsonToNumeric(t *testing.T) {
 	})
 }
 
+func TestCastJsonToJson(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	jsonTexts := []string{`{"a":1}`, `[1,true,{"b":"x"}]`, `null`}
+	nulls := []bool{false, false, false}
+	encoded := makeJSONEncodedFromText(t, jsonTexts, nulls)
+
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_json.ToType(), encoded, nulls),
+		NewFunctionTestInput(types.T_json.ToType(), []string{}, []bool{}),
+	}
+	expect := NewFunctionTestResult(types.T_json.ToType(), false, encoded, []bool{false, false, false})
+	fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
+	succeed, info := fcTC.Run()
+	require.True(t, succeed, info)
+}
+
 // emptySliceForCastTarget returns an empty slice of the right type for the second (target type) cast parameter.
 func emptySliceForCastTarget(oid types.T) any {
 	switch oid {
