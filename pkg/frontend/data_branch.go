@@ -1581,23 +1581,21 @@ func decideLCABranchTSFromBranchDAG(
 	// creation commit timestamp of the child table.
 	if lcaTableID, tarBranchTableID, baseBranchTableID, hasLca = dag.FindLCA(
 		tblStuff.tarRel.GetTableID(ctx), tblStuff.baseRel.GetTableID(ctx),
-	); hasLca {
-		if lcaTableID == tblStuff.baseRel.GetTableID(ctx) {
-			lcaType = lcaRight
-			baseBranchTableID = tarBranchTableID
-			var ts int64
-			if ts, hasLca = dag.GetCloneTS(tarBranchTableID); !hasLca {
-				err = moerr.NewInternalErrorNoCtxf("cannot find clone ts for table %d", tarBranchTableID)
+		); hasLca {
+			if lcaTableID == tblStuff.baseRel.GetTableID(ctx) {
+				lcaType = lcaRight
+				var ts int64
+				if ts, hasLca = dag.GetCloneTS(tarBranchTableID); !hasLca {
+					err = moerr.NewInternalErrorNoCtxf("cannot find clone ts for table %d", tarBranchTableID)
 				return
 			}
-			tarBranchTS = types.BuildTS(ts, 0)
-			baseBranchTS = tarBranchTS
-		} else if lcaTableID == tblStuff.tarRel.GetTableID(ctx) {
-			lcaType = lcaLeft
-			tarBranchTableID = baseBranchTableID
-			var ts int64
-			if ts, hasLca = dag.GetCloneTS(baseBranchTableID); !hasLca {
-				err = moerr.NewInternalErrorNoCtxf("cannot find clone ts for table %d", baseBranchTableID)
+				tarBranchTS = types.BuildTS(ts, 0)
+				baseBranchTS = tarBranchTS
+			} else if lcaTableID == tblStuff.tarRel.GetTableID(ctx) {
+				lcaType = lcaLeft
+				var ts int64
+				if ts, hasLca = dag.GetCloneTS(baseBranchTableID); !hasLca {
+					err = moerr.NewInternalErrorNoCtxf("cannot find clone ts for table %d", baseBranchTableID)
 				return
 			}
 			baseBranchTS = types.BuildTS(ts, 0)
