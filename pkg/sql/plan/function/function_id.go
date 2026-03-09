@@ -257,8 +257,8 @@ const (
 	LOAD_FILE = 227
 	SAVE_FILE = 228
 
-	//information functions
-	//Reference to : https://dev.mysql.com/doc/refman/8.0/en/information-functions.html
+	// information functions
+	// Reference to : https://dev.mysql.com/doc/refman/8.0/en/information-functions.html
 	DATABASE             = 229
 	USER                 = 230
 	CONNECTION_ID        = 231
@@ -360,7 +360,7 @@ const (
 	// be used: show pitr
 	CAST_RANGE_VALUE_UNIT = 309
 
-	//Sequence function
+	// Sequence function
 	NEXTVAL = 310
 	SETVAL  = 311
 	CURRVAL = 312
@@ -372,11 +372,11 @@ const (
 	L2_NORM           = 316 // L2 NORMALIZATION
 	INNER_PRODUCT     = 317
 	COSINE_SIMILARITY = 318
-	VECTOR_DIMS       = 319 //VECTOR DIMENSIONS
-	NORMALIZE_L2      = 320 //NORMALIZE L2
-	L2_DISTANCE       = 321 //L2_DISTANCE
-	L2_DISTANCE_SQ    = 322 //L2_DISTANCE_SQ
-	COSINE_DISTANCE   = 323 //COSINE_DISTANCE
+	VECTOR_DIMS       = 319 // VECTOR DIMENSIONS
+	NORMALIZE_L2      = 320 // NORMALIZE L2
+	L2_DISTANCE       = 321 // L2_DISTANCE
+	L2_DISTANCE_SQ    = 322 // L2_DISTANCE_SQ
+	COSINE_DISTANCE   = 323 // COSINE_DISTANCE
 	CLUSTER_CENTERS   = 324 // CLUSTER_CENTERS
 	SUB_VECTOR        = 325 // SUB_VECTOR
 
@@ -584,16 +584,18 @@ const (
 
 	IN_RANGE        = 404
 	PREFIX_IN_RANGE = 405
+	NULL_SAFE_EQUAL = 406
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 406
+	FUNCTION_END_NUMBER = 407
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
 	// operators
 	"=":            EQUAL,
+	"<=>":          NULL_SAFE_EQUAL,
 	">":            GREAT_THAN,
 	">=":           GREAT_EQUAL,
 	"<":            LESS_THAN,
@@ -678,10 +680,12 @@ var functionIdRegister = map[string]int32{
 	"any_value":             ANY_VALUE,
 	"median":                MEDIAN,
 	// count window
-	"rank":       RANK,
-	"row_number": ROW_NUMBER,
-	"dense_rank": DENSE_RANK,
-	"cume_dist":  CUME_DIST,
+	"rank":         RANK,
+	"row_number":   ROW_NUMBER,
+	"dense_rank":   DENSE_RANK,
+	"ntile":        NTILE,
+	"cume_dist":    CUME_DIST,
+	"percent_rank": PERCENT_RANK,
 	// value window functions
 	"lag":         LAG,
 	"lead":        LEAD,

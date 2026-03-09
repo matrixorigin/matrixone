@@ -60,7 +60,9 @@ class BaseCloneManager:
         if_not_exists_clause = "IF NOT EXISTS " if if_not_exists else ""
 
         if snapshot_name:
-            return f"CREATE DATABASE {if_not_exists_clause}{target_db} CLONE {source_db} {{snapshot = '{snapshot_name}'}}"
+            return (
+                f"CREATE DATABASE {if_not_exists_clause}{target_db} " f"CLONE {source_db} {{snapshot = \"{snapshot_name}\"}}"
+            )
         else:
             return f"CREATE DATABASE {if_not_exists_clause}{target_db} CLONE {source_db}"
 
@@ -77,7 +79,7 @@ class BaseCloneManager:
         if snapshot_name:
             return (
                 f"CREATE TABLE {if_not_exists_clause}{target_table} "
-                f"CLONE {source_table} {{snapshot = '{snapshot_name}'}}"
+                f"CLONE {source_table} {{snapshot = \"{snapshot_name}\"}}"
             )
         else:
             return f"CREATE TABLE {if_not_exists_clause}{target_table} CLONE {source_table}"

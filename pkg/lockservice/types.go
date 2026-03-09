@@ -245,6 +245,12 @@ type LockOptions struct {
 // Lock stores specific lock information. Since there are a large number of lock objects
 // in the LockStorage at runtime, this object has been specially designed to save memory
 // usage.
+//
+// WARNING: Lock is a Go value type. Methods with value receivers (e.g., addHolder)
+// operate on copies — modifications to the `value` field (which encodes the lock mode)
+// will NOT be reflected in the LockStorage. When the lock mode needs to change (e.g.,
+// a waiter is promoted to holder with a different mode), use setMode() and write the
+// returned Lock back to the store via store.Add(key, updated).
 type Lock struct {
 	createAt time.Time
 	// all lock info will encode into this field to save memory overhead

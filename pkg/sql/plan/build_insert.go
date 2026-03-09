@@ -57,7 +57,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		return nil, moerr.NewNYIf(ctx.GetContext(), "insert stream %s", tblName)
 	}
 
-	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "insert")
+	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, stmt.With, nil, "insert")
 	if err != nil {
 		return nil, err
 	}
@@ -95,6 +95,12 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	}
 
 	bindCtx := NewBindContext(builder, nil)
+
+	// Pass WITH clause from INSERT to SELECT if present
+	if stmt.With != nil && stmt.Rows != nil {
+		stmt.Rows.With = stmt.With
+	}
+
 	ifExistAutoPkCol, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap, err := initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
 	if err != nil {
 		return nil, err
