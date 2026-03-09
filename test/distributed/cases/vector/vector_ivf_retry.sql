@@ -201,6 +201,7 @@ drop table t_retry;
 -- Edge Cases and Boundary Tests
 -- =============================================================================
 
+set probe_limit = 2;
 drop table if exists t_edge;
 create table t_edge(id int primary key, vec vecf32(3), status int);
 
