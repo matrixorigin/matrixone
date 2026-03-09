@@ -394,15 +394,9 @@ var GetObjectFromUpstreamWithWorker = func(
 	// First, get offset 0 to get metadata (total_chunks, total_size, etc.)
 	// GETOBJECT returns: data, total_size, chunk_index, total_chunks, is_complete
 	// offset 0 returns metadata with data = nil
-	metaJob := NewGetMetaJob(ctx, upstreamExecutor, objectName, subscriptionAccountName, pubName)
-	if getChunkWorker != nil {
-		getChunkWorker.SubmitGetChunk(metaJob)
-	} else {
-		metaJob.Execute()
-	}
-	metaResult := metaJob.WaitDone().(*GetMetaJobResult)
-	if metaResult.Err != nil {
-		return nil, metaResult.Err
+	metaResult, err := getMetaWithRetry(ctx, upstreamExecutor, objectName, getChunkWorker, subscriptionAccountName, pubName)
+	if err != nil {
+		return nil, err
 	}
 
 	totalChunks := metaResult.TotalChunks
@@ -423,14 +417,19 @@ var GetObjectFromUpstreamWithWorker = func(
 		}
 	}
 
-	// Wait for all chunk jobs to complete
+	// Wait for all chunk jobs to complete, retry failed chunks
 	for i := int64(0); i < totalChunks; i++ {
 		chunkResult := chunkJobs[i].WaitDone().(*GetChunkJobResult)
 		if chunkResult.Err != nil {
-			return nil, chunkResult.Err
+			// Retry failed chunk
+			chunkData, err := getChunkWithRetry(ctx, upstreamExecutor, objectName, i+1, getChunkWorker, subscriptionAccountName, pubName)
+			if err != nil {
+				return nil, err
+			}
+			allChunks[i] = chunkData
+		} else {
+			allChunks[i] = chunkResult.ChunkData
 		}
-		// Store chunk at index i since chunkJobs is 0-indexed
-		allChunks[i] = chunkResult.ChunkData
 	}
 
 	// Combine all chunks
@@ -444,6 +443,85 @@ var GetObjectFromUpstreamWithWorker = func(
 	}
 
 	return objectContent, nil
+}
+
+// getMetaWithRetry gets object metadata with retry logic
+func getMetaWithRetry(
+	ctx context.Context,
+	upstreamExecutor SQLExecutor,
+	objectName string,
+	getChunkWorker GetChunkWorker,
+	subscriptionAccountName string,
+	pubName string,
+) (*GetMetaJobResult, error) {
+	const maxRetries = 3
+	var lastErr error
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		metaJob := NewGetMetaJob(ctx, upstreamExecutor, objectName, subscriptionAccountName, pubName)
+		if getChunkWorker != nil {
+			getChunkWorker.SubmitGetChunk(metaJob)
+		} else {
+			metaJob.Execute()
+		}
+		metaResult := metaJob.WaitDone().(*GetMetaJobResult)
+		if metaResult.Err == nil {
+			return metaResult, nil
+		}
+
+		lastErr = metaResult.Err
+		if !(DefaultClassifier{}).IsRetryable(lastErr) {
+			return nil, lastErr
+		}
+	}
+
+	return nil, moerr.NewInternalErrorf(ctx, "failed to get object metadata after %d retries: %v", maxRetries, lastErr)
+}
+
+// getChunkWithRetry gets a single chunk with retry logic
+func getChunkWithRetry(
+	ctx context.Context,
+	upstreamExecutor SQLExecutor,
+	objectName string,
+	chunkIndex int64,
+	getChunkWorker GetChunkWorker,
+	subscriptionAccountName string,
+	pubName string,
+) ([]byte, error) {
+	const maxRetries = 3
+	var lastErr error
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		chunkJob := NewGetChunkJob(ctx, upstreamExecutor, objectName, chunkIndex, subscriptionAccountName, pubName)
+		if getChunkWorker != nil {
+			getChunkWorker.SubmitGetChunk(chunkJob)
+		} else {
+			chunkJob.Execute()
+		}
+		chunkResult := chunkJob.WaitDone().(*GetChunkJobResult)
+		if chunkResult.Err == nil {
+			return chunkResult.ChunkData, nil
+		}
+
+		lastErr = chunkResult.Err
+		if !(DefaultClassifier{}).IsRetryable(lastErr) {
+			return nil, lastErr
+		}
+	}
+
+	return nil, moerr.NewInternalErrorf(ctx, "failed to get chunk %d after %d retries: %v", chunkIndex, maxRetries, lastErr)
 }
 
 // extractSortKeyFromObject extracts sortkey seqnum from object metadata

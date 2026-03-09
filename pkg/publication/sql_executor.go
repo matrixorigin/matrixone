@@ -331,6 +331,9 @@ func initAesKeyForPublication(ctx context.Context, executor SQLExecutor, cnUUID 
 			return err
 		}
 	} else {
+		if err := result.Err(); err != nil {
+			return moerr.NewInternalErrorf(ctx, "failed to read data key: %v", err)
+		}
 		return moerr.NewInternalError(ctx, "no data key found")
 	}
 

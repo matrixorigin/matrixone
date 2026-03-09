@@ -93,41 +93,79 @@ func NewGetMetaJob(ctx context.Context, upstreamExecutor SQLExecutor, objectName
 	}
 }
 
-// Execute runs the GetMetaJob
+// Execute runs the GetMetaJob with retry logic
 func (j *GetMetaJob) Execute() {
+	const maxRetries = 3
 	res := &GetMetaJobResult{}
 	getChunk0SQL := PublicationSQLBuilder.GetObjectSQL(j.subscriptionAccountName, j.pubName, j.objectName, 0)
 
-	result, cancel, err := j.upstreamExecutor.ExecSQL(j.ctx, nil, InvalidAccountID, getChunk0SQL, false, true, time.Second*10)
-	if err != nil {
-		res.Err = moerr.NewInternalErrorf(j.ctx, "failed to execute GETOBJECT query for offset 0: %v", err)
-		j.result <- res
-		return
-	}
-	if !result.Next() {
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		select {
+		case <-j.ctx.Done():
+			res.Err = j.ctx.Err()
+			j.result <- res
+			return
+		default:
+		}
+
+		result, cancel, err := j.upstreamExecutor.ExecSQL(j.ctx, nil, InvalidAccountID, getChunk0SQL, false, true, time.Second*10)
+		if err != nil {
+			lastErr = err
+			if !(DefaultClassifier{}).IsRetryable(err) {
+				res.Err = moerr.NewInternalErrorf(j.ctx, "failed to execute GETOBJECT query for offset 0: %v", err)
+				j.result <- res
+				return
+			}
+			continue
+		}
+
+		if !result.Next() {
+			if err := result.Err(); err != nil {
+				result.Close()
+				cancel()
+				lastErr = err
+				if !(DefaultClassifier{}).IsRetryable(err) {
+					res.Err = moerr.NewInternalErrorf(j.ctx, "failed to read metadata for %s: %v", j.objectName, err)
+					j.result <- res
+					return
+				}
+				continue
+			}
+			result.Close()
+			cancel()
+			res.Err = moerr.NewInternalErrorf(j.ctx, "no object content returned for %s", j.objectName)
+			j.result <- res
+			return
+		}
+
+		if err := result.Scan(&res.MetadataData, &res.TotalSize, &res.ChunkIndex, &res.TotalChunks, &res.IsComplete); err != nil {
+			result.Close()
+			cancel()
+			lastErr = err
+			if !(DefaultClassifier{}).IsRetryable(err) {
+				res.Err = moerr.NewInternalErrorf(j.ctx, "failed to scan offset 0: %v", err)
+				j.result <- res
+				return
+			}
+			continue
+		}
 		result.Close()
 		cancel()
-		res.Err = moerr.NewInternalErrorf(j.ctx, "no object content returned for %s", j.objectName)
+
+		if res.TotalChunks <= 0 {
+			res.Err = moerr.NewInternalErrorf(j.ctx, "invalid total_chunks: %d", res.TotalChunks)
+			j.result <- res
+			return
+		}
+
+		// Success
 		j.result <- res
 		return
 	}
 
-	if err := result.Scan(&res.MetadataData, &res.TotalSize, &res.ChunkIndex, &res.TotalChunks, &res.IsComplete); err != nil {
-		result.Close()
-		cancel()
-		res.Err = moerr.NewInternalErrorf(j.ctx, "failed to scan offset 0: %v", err)
-		j.result <- res
-		return
-	}
-	result.Close()
-	cancel()
-
-	if res.TotalChunks <= 0 {
-		res.Err = moerr.NewInternalErrorf(j.ctx, "invalid total_chunks: %d", res.TotalChunks)
-		j.result <- res
-		return
-	}
-
+	// All retries failed
+	res.Err = moerr.NewInternalErrorf(j.ctx, "failed to get metadata for %s after %d retries: %v", j.objectName, maxRetries, lastErr)
 	j.result <- res
 }
 
@@ -172,8 +210,9 @@ func NewGetChunkJob(ctx context.Context, upstreamExecutor SQLExecutor, objectNam
 	}
 }
 
-// Execute runs the GetChunkJob
+// Execute runs the GetChunkJob with retry logic
 func (j *GetChunkJob) Execute() {
+	const maxRetries = 3
 	res := &GetChunkJobResult{ChunkIndex: j.chunkIndex}
 
 	// Acquire semaphore for memory control (blocks if max concurrent limit reached)
@@ -189,35 +228,74 @@ func (j *GetChunkJob) Execute() {
 	defer func() { <-sem }()
 
 	getChunkSQL := PublicationSQLBuilder.GetObjectSQL(j.subscriptionAccountName, j.pubName, j.objectName, j.chunkIndex)
-	result, cancel, err := j.upstreamExecutor.ExecSQL(j.ctx, nil, InvalidAccountID, getChunkSQL, false, true, time.Minute)
-	if err != nil {
-		res.Err = moerr.NewInternalErrorf(j.ctx, "failed to execute GETOBJECT query for offset %d: %v, sql: %v", j.chunkIndex, err, getChunkSQL)
-		j.result <- res
-		return
-	}
-	if result.Next() {
-		var chunkData []byte
-		var totalSizeChk int64
-		var chunkIndexChk int64
-		var totalChunksChk int64
-		var isCompleteChk bool
-		if err := result.Scan(&chunkData, &totalSizeChk, &chunkIndexChk, &totalChunksChk, &isCompleteChk); err != nil {
+
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		select {
+		case <-j.ctx.Done():
+			res.Err = j.ctx.Err()
+			j.result <- res
+			return
+		default:
+		}
+
+		result, cancel, err := j.upstreamExecutor.ExecSQL(j.ctx, nil, InvalidAccountID, getChunkSQL, false, true, time.Minute)
+		if err != nil {
+			lastErr = err
+			if !(DefaultClassifier{}).IsRetryable(err) {
+				res.Err = moerr.NewInternalErrorf(j.ctx, "failed to execute GETOBJECT query for offset %d: %v, sql: %v", j.chunkIndex, err, getChunkSQL)
+				j.result <- res
+				return
+			}
+			continue
+		}
+
+		if result.Next() {
+			var chunkData []byte
+			var totalSizeChk int64
+			var chunkIndexChk int64
+			var totalChunksChk int64
+			var isCompleteChk bool
+			if err := result.Scan(&chunkData, &totalSizeChk, &chunkIndexChk, &totalChunksChk, &isCompleteChk); err != nil {
+				result.Close()
+				cancel()
+				lastErr = err
+				if !(DefaultClassifier{}).IsRetryable(err) {
+					res.Err = moerr.NewInternalErrorf(j.ctx, "failed to scan offset %d: %v", j.chunkIndex, err)
+					j.result <- res
+					return
+				}
+				continue
+			}
+			res.ChunkData = chunkData
 			result.Close()
-			res.Err = moerr.NewInternalErrorf(j.ctx, "failed to scan offset %d: %v", j.chunkIndex, err)
+			cancel()
+			// Success
+			j.result <- res
+			return
+		} else {
+			if err := result.Err(); err != nil {
+				result.Close()
+				cancel()
+				lastErr = err
+				if !(DefaultClassifier{}).IsRetryable(err) {
+					res.Err = moerr.NewInternalErrorf(j.ctx, "failed to read chunk %d of %s: %v", j.chunkIndex, j.objectName, err)
+					j.result <- res
+					return
+				}
+				continue
+			}
+			result.Close()
+			cancel()
+			// No data returned and no error - this is a real "no content" error, don't retry
+			res.Err = moerr.NewInternalErrorf(j.ctx, "no chunk content returned for chunk %d of %s", j.chunkIndex, j.objectName)
 			j.result <- res
 			return
 		}
-		res.ChunkData = chunkData
-	} else {
-		result.Close()
-		cancel()
-		res.Err = moerr.NewInternalErrorf(j.ctx, "no chunk content returned for chunk %d of %s", j.chunkIndex, j.objectName)
-		j.result <- res
-		return
 	}
-	result.Close()
-	cancel()
 
+	// All retries failed
+	res.Err = moerr.NewInternalErrorf(j.ctx, "failed to get chunk %d of %s after %d retries: %v", j.chunkIndex, j.objectName, maxRetries, lastErr)
 	j.result <- res
 }
 
