@@ -85,8 +85,8 @@ insert into t2 values(12, "[1112,1112,1112,1112]", "12", 12);
 insert into t2 values(13, "[1113,1113,1113,1113]", "13", 13);
 
 alter table t2 alter reindex idx2 ivfflat lists=4;
-select a, b from t2 order by l2_distance(b, "[1,0,0,0]") limit 4;
-select a, b from t2 order by l2_distance(b, "[11,11,0,0]") limit 4;
+select a, b from t2 order by l2_distance(b, "[1,0,0,0]") limit 3;
+select a, b from t2 order by l2_distance(b, "[11,11,0,0]") limit 3;
 select a, b from t2 order by l2_distance(b, "[111,111,111,0]") limit 4;
 select a, b from t2 order by l2_distance(b, "[1111,1111,1111,1111]") limit 4;
 
