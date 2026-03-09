@@ -475,7 +475,7 @@ func (node *ShowLogserviceSettings) StmtKind() StmtKind {
 }
 
 func (node *ShowRules) StmtKind() StmtKind {
-	return defaultResRowTyp
+	return compositeResRowType
 }
 
 func (node *AlterRoleAddRule) StmtKind() StmtKind {
