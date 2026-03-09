@@ -122,31 +122,31 @@ func (s *AsyncTaskResultStore) Stop() {
 
 // AsyncWorkerPool runs tasks in a dedicated OS thread with a CUDA context.
 type AsyncWorkerPool struct {
-	tasks                chan *AsyncTask
-	stopCh               chan struct{}
-	wg                   sync.WaitGroup
-	stopped              atomic.Bool // Indicates if the worker has been stopped
-	firstError           error
+	tasks                 chan *AsyncTask
+	stopCh                chan struct{}
+	wg                    sync.WaitGroup
+	stopped               atomic.Bool // Indicates if the worker has been stopped
+	firstError            error
 	*AsyncTaskResultStore // Embed the result store
-	nthread              uint
-	sigc                 chan os.Signal // Add this field
-	errch                chan error
-	createResource       func() (any, error)
-	cleanupResource      func(any)
+	nthread               uint
+	sigc                  chan os.Signal // Add this field
+	errch                 chan error
+	createResource        func() (any, error)
+	cleanupResource       func(any)
 }
 
 // NewAsyncWorkerPool creates a new AsyncWorkerPool.
 func NewAsyncWorkerPool(nthread uint, createResource func() (any, error), cleanupResource func(any)) *AsyncWorkerPool {
 	return &AsyncWorkerPool{
-		tasks:               make(chan *AsyncTask, nthread),
-		stopCh:              make(chan struct{}),
-		stopped:             atomic.Bool{}, // Initialize to false
+		tasks:                make(chan *AsyncTask, nthread),
+		stopCh:               make(chan struct{}),
+		stopped:              atomic.Bool{}, // Initialize to false
 		AsyncTaskResultStore: NewAsyncTaskResultStore(),
-		nthread:             nthread,
-		sigc:                make(chan os.Signal, 1),   // Initialize sigc
-		errch:               make(chan error, nthread), // Initialize errch
-		createResource:      createResource,
-		cleanupResource:     cleanupResource,
+		nthread:              nthread,
+		sigc:                 make(chan os.Signal, 1),   // Initialize sigc
+		errch:                make(chan error, nthread), // Initialize errch
+		createResource:       createResource,
+		cleanupResource:      cleanupResource,
 	}
 }
 
@@ -345,4 +345,3 @@ func (w *AsyncWorkerPool) Wait(jobID uint64) (*AsyncTaskResult, error) {
 func (w *AsyncWorkerPool) GetFirstError() error {
 	return w.firstError
 }
-
