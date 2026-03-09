@@ -19,6 +19,7 @@ package brute_force
 import (
 	"fmt"
 	"math/rand/v2"
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -150,4 +151,35 @@ func TestGoBruteForceConcurrent(t *testing.T) {
 
 func TestUsearchBruteForceConcurrent(t *testing.T) {
 	runBruteForceConcurrent(t, true)
+}
+
+func TestPut1D(t *testing.T) {
+	pool := sync.Pool{New: func() any { x := make([]float32, 0); return &x }}
+
+	slice := get1D[float32](&pool, 5)
+	for i := range *slice {
+		(*slice)[i] = float32(i + 1)
+	}
+
+	// Keep a reference to the underlying array
+	originalCap := cap(*slice)
+	underlyingArray := (*slice)[:originalCap]
+
+	put1D(&pool, slice)
+
+	// Verify that the slice returned from the pool is empty but retains capacity
+	returnedSlice := get1D[float32](&pool, 5)
+	if len(*returnedSlice) != 5 {
+		t.Errorf("Expected length 5, got %d", len(*returnedSlice))
+	}
+	if cap(*returnedSlice) < 5 {
+		t.Errorf("Expected capacity at least 5, got %d", cap(*returnedSlice))
+	}
+
+	// Verify that put1D cleared the elements (the underlying array should be zeroed)
+	for i := 0; i < 5; i++ {
+		if underlyingArray[i] != 0 {
+			t.Errorf("Expected element %d to be 0, got %f", i, underlyingArray[i])
+		}
+	}
 }
