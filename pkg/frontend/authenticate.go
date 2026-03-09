@@ -995,6 +995,7 @@ var (
 		catalog.MO_BRANCH_METADATA:    0,
 		catalog.MO_FEATURE_LIMIT:      0,
 		catalog.MO_FEATURE_REGISTRY:   0,
+		catalog.MO_ROLE_RULE:          0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL

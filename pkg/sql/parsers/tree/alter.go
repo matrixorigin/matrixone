@@ -355,7 +355,7 @@ func (node *AlterRole) reset() {
 func (node *AlterRole) GetStatementType() string { return "Alter Role" }
 func (node *AlterRole) GetQueryType() string     { return QueryTypeDCL }
 
-// AlterRoleAddRule represents ALTER ROLE <role> ADD RULE <rule_name>, <rule_sql> ON TABLE <db>.<tbl>
+// AlterRoleAddRule represents ALTER ROLE <role> ADD RULE <rule_sql> ON TABLE <db>.<tbl>
 type AlterRoleAddRule struct {
 	statementImpl
 	RoleName string
@@ -381,8 +381,6 @@ func (node *AlterRoleAddRule) Format(ctx *FmtCtx) {
 	ctx.WriteString("alter role ")
 	ctx.WriteString(node.RoleName)
 	ctx.WriteString(" add rule ")
-	ctx.WriteString(fmt.Sprintf("'%s'", node.RuleName))
-	ctx.WriteString(", ")
 	ctx.WriteString(fmt.Sprintf("'%s'", node.RuleSQL))
 	ctx.WriteString(" on table ")
 	ctx.WriteString(node.DbName)

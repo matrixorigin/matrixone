@@ -134,6 +134,13 @@ func loadRuleCache(ctx context.Context, ses *Session) (map[string]string, error)
 	return rules, nil
 }
 
+// escapeSQLString escapes a string for safe use in SQL literals using writeEscapedSQLString.
+func escapeSQLString(s string) string {
+	var buf bytes.Buffer
+	writeEscapedSQLString(&buf, []byte(s))
+	return buf.String()
+}
+
 // handleAlterRoleAddRule verifies role existence, then inserts or updates a mo_role_rule record.
 func handleAlterRoleAddRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRoleAddRule) error {
 	ctx := execCtx.reqCtx
@@ -164,37 +171,15 @@ func handleAlterRoleAddRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRole
 	}
 	roleID := vr.id
 
-	// Step 2: Check if rule_name already exists for this role_id
-	checkSQL := fmt.Sprintf("select `rule` from %s.%s where role_id = %d and rule_name = '%s'",
-		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, roleID, strings.ReplaceAll(stmt.RuleName, "'", "''"))
+	// Derive rule_name from db.tbl
+	ruleName := stmt.DbName + "." + stmt.TblName
 
-	bh.ClearExecResultSet()
-	if err = bh.Exec(ctx, checkSQL); err != nil {
+	// Use INSERT ... ON DUPLICATE KEY UPDATE for atomicity
+	upsertSQL := fmt.Sprintf("insert into %s.%s (role_id, rule_name, `rule`) values (%d, %s, %s) on duplicate key update `rule` = %s",
+		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, roleID,
+		escapeSQLString(ruleName), escapeSQLString(stmt.RuleSQL), escapeSQLString(stmt.RuleSQL))
+	if err = bh.Exec(ctx, upsertSQL); err != nil {
 		return err
-	}
-
-	erArray, err := getResultSet(ctx, bh)
-	if err != nil {
-		return err
-	}
-
-	escapedRuleName := strings.ReplaceAll(stmt.RuleName, "'", "''")
-	escapedRule := strings.ReplaceAll(stmt.RuleSQL, "'", "''")
-
-	if execResultArrayHasData(erArray) {
-		// Rule exists: UPDATE
-		updateSQL := fmt.Sprintf("update %s.%s set `rule` = '%s' where role_id = %d and rule_name = '%s'",
-			catalog.MO_CATALOG, catalog.MO_ROLE_RULE, escapedRule, roleID, escapedRuleName)
-		if err = bh.Exec(ctx, updateSQL); err != nil {
-			return err
-		}
-	} else {
-		// Rule does not exist: INSERT
-		insertSQL := fmt.Sprintf("insert into %s.%s (role_id, rule_name, `rule`) values (%d, '%s', '%s')",
-			catalog.MO_CATALOG, catalog.MO_ROLE_RULE, roleID, escapedRuleName, escapedRule)
-		if err = bh.Exec(ctx, insertSQL); err != nil {
-			return err
-		}
 	}
 
 	return err
@@ -231,9 +216,8 @@ func handleAlterRoleDropRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRol
 	roleID := vr.id
 
 	// Step 2: Check if rule_name exists for this role_id
-	escapedRuleName := strings.ReplaceAll(stmt.RuleName, "'", "''")
-	checkSQL := fmt.Sprintf("select `rule` from %s.%s where role_id = %d and rule_name = '%s'",
-		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, roleID, escapedRuleName)
+	checkSQL := fmt.Sprintf("select `rule` from %s.%s where role_id = %d and rule_name = %s",
+		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, roleID, escapeSQLString(stmt.RuleName))
 
 	bh.ClearExecResultSet()
 	if err = bh.Exec(ctx, checkSQL); err != nil {
@@ -250,8 +234,8 @@ func handleAlterRoleDropRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRol
 	}
 
 	// Step 3: Delete the matching record
-	deleteSQL := fmt.Sprintf("delete from %s.%s where role_id = %d and rule_name = '%s'",
-		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, roleID, escapedRuleName)
+	deleteSQL := fmt.Sprintf("delete from %s.%s where role_id = %d and rule_name = %s",
+		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, roleID, escapeSQLString(stmt.RuleName))
 	if err = bh.Exec(ctx, deleteSQL); err != nil {
 		return err
 	}

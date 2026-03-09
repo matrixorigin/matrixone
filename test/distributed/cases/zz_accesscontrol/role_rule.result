@@ -2,20 +2,21 @@ set global enable_privilege_cache = off;
 drop user if exists test_rule_user;
 drop role if exists test_rule_role;
 drop database if exists db1;
+create database db1;
 create table db1.t1(a int, age int);
-insert into db1.t1 (1,1),(2,2),(100,30);
+insert into db1.t1 values (1,1),(2,2),(100,30);
 create role test_rule_role;
-alter role test_rule_role add rule "db1.t1", "select * from db1.t1 where age > 28" on table db1.t1;
+alter role test_rule_role add rule "select * from db1.t1 where age > 28" on table db1.t1;
 show rules on role test_rule_role;
 rule_name    rule
 db1.t1    select * from db1.t1 where age > 28
-alter role non_existent_role add rule "db1.t1", "select * from db1.t1" on table db1.t1;
+alter role non_existent_role add rule "select * from db1.t1" on table db1.t1;
 internal error: there is no role non_existent_role
-alter role test_rule_role add rule "db1.t1", "select * from db1.t1 where age > 50" on table db1.t1;
+alter role test_rule_role add rule "select * from db1.t1 where age > 50" on table db1.t1;
 show rules on role test_rule_role;
 rule_name    rule
 db1.t1    select * from db1.t1 where age > 50
-alter role test_rule_role add rule "db2.t2", "select id from db2.t2_new" on table db2.t2;
+alter role test_rule_role add rule "select id from db2.t2_new" on table db2.t2;
 show rules on role test_rule_role;
 rule_name    rule
 db1.t1    select * from db1.t1 where age > 50
@@ -33,8 +34,8 @@ show rules on role test_rule_role;
 rule_name    rule
 show rules on role non_existent_role;
 internal error: there is no role non_existent_role
-alter role test_rule_role add rule "db1.t1", "select * from db1.t1 where age > 28" on table db1.t1;
-create user test_rule_user identified by '111111' default role test_rule_role;
+alter role test_rule_role add rule "select * from db1.t1 where age > 28" on table db1.t1;
+create user test_rule_user identified by '123456' default role test_rule_role;
 grant connect on account * to test_rule_role;
 grant select on table *.* to test_rule_role;
 set enable_remap_hint = 1;
@@ -43,4 +44,5 @@ a    age
 100    30
 drop user if exists test_rule_user;
 drop role if exists test_rule_role;
+drop database if exists db1;
 set global enable_privilege_cache = on;

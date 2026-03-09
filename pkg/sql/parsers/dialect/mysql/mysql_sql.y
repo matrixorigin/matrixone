@@ -3545,13 +3545,13 @@ alter_role_stmt:
         var newName = $6.Compare()
         $$ = tree.NewAlterRole(false, oldName, newName)
     }
-|   ALTER ROLE role_name ADD RULE STRING ',' STRING ON TABLE ident '.' ident
+|   ALTER ROLE role_name ADD RULE STRING ON TABLE ident '.' ident
     {
         var roleName = $3.Compare()
-        var ruleName = $6
-        var ruleSQL = $8
-        var dbName = $11.Compare()
-        var tblName = $13.Compare()
+        var ruleSQL = $6
+        var dbName = $9.Compare()
+        var tblName = $11.Compare()
+        var ruleName = dbName + "." + tblName
         $$ = tree.NewAlterRoleAddRule(roleName, ruleName, ruleSQL, dbName, tblName)
     }
 |   ALTER ROLE role_name DROP RULE STRING
