@@ -174,11 +174,17 @@ func handleAlterRoleAddRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRole
 	// Derive rule_name from db.tbl
 	ruleName := stmt.DbName + "." + stmt.TblName
 
-	// Use INSERT ... ON DUPLICATE KEY UPDATE for atomicity
-	upsertSQL := fmt.Sprintf("insert into %s.%s (role_id, rule_name, `rule`) values (%d, %s, %s) on duplicate key update `rule` = %s",
+	// Delete existing rule (if any), then insert the new one
+	deleteSQL := fmt.Sprintf("delete from %s.%s where role_id = %d and rule_name = %s",
+		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, roleID, escapeSQLString(ruleName))
+	if err = bh.Exec(ctx, deleteSQL); err != nil {
+		return err
+	}
+
+	insertSQL := fmt.Sprintf("insert into %s.%s (role_id, rule_name, `rule`) values (%d, %s, %s)",
 		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, roleID,
-		escapeSQLString(ruleName), escapeSQLString(stmt.RuleSQL), escapeSQLString(stmt.RuleSQL))
-	if err = bh.Exec(ctx, upsertSQL); err != nil {
+		escapeSQLString(ruleName), escapeSQLString(stmt.RuleSQL))
+	if err = bh.Exec(ctx, insertSQL); err != nil {
 		return err
 	}
 
