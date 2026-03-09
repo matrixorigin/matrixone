@@ -127,6 +127,33 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 
+	// After acquiring the exclusive lock on mo_database, temporarily advance
+	// the transaction's snapshot so that Relations() can see all tables
+	// committed by other CNs (e.g. concurrent CLONE) before the lock was
+	// granted.
+	//
+	// We MUST restore the original SnapshotTS before returning, because
+	// UpdateSnapshot changes txn.SnapshotTS which would affect the
+	// tombstone transfer range in subsequent IncrStatementID calls.
+	// In restore-cluster scenarios (multiple DDLs in one transaction),
+	// a permanently advanced SnapshotTS causes duplicate-key errors.
+	//
+	// Within DropDatabase, all internal SQL uses WithDisableIncrStatement(),
+	// so no tombstone transfer is triggered while SnapshotTS is advanced.
+	txnOp := c.proc.GetTxnOperator()
+	origSnapshotTS := txnOp.SnapshotTS()
+	if txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
+		now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
+		if err = txnOp.UpdateSnapshot(c.proc.Ctx, now); err != nil {
+			return err
+		}
+	}
+	defer func() {
+		// Restore SnapshotTS so that tombstone transfer in subsequent
+		// statements is not affected by the temporary advancement.
+		txnOp.TxnRef().SnapshotTS = origSnapshotTS
+	}()
+
 	// handle sub
 	if db.IsSubscription(c.proc.Ctx) {
 		if err = dropSubscription(c.proc.Ctx, c, dbName); err != nil {
@@ -3960,7 +3987,7 @@ func getLockBatch(proc *process.Process, accountId uint32, names []string) (*bat
 	return bat, nil
 }
 
-var doLockMoDatabase = func(c *Compile, dbName string, lockMode lock.LockMode) error {
+var lockMoDatabase = func(c *Compile, dbName string, lockMode lock.LockMode) error {
 	dbRel, err := getRelFromMoCatalog(c, catalog.MO_DATABASE)
 	if err != nil {
 		return err
@@ -3977,39 +4004,6 @@ var doLockMoDatabase = func(c *Compile, dbName string, lockMode lock.LockMode) e
 	if err := lockRows(c.e, c.proc, dbRel, bat, 0, lockMode, lock.Sharding_None, accountID); err != nil {
 		return err
 	}
-	return nil
-}
-
-var lockMoDatabase = func(c *Compile, dbName string, lockMode lock.LockMode) error {
-	if err := doLockMoDatabase(c, dbName, lockMode); err != nil {
-		return err
-	}
-
-	// After acquiring an exclusive lock on mo_database, refresh the
-	// transaction's snapshot to the latest commit timestamp.
-	//
-	// The lock service only checks mo_database rows (via hasNewVersionInRange)
-	// to decide whether to advance the snapshot. Concurrent operations that
-	// only modify mo_tables (e.g., CREATE TABLE, CLONE) will not trigger a
-	// snapshot advance. Without this explicit refresh, subsequent reads (e.g.,
-	// Relations()) may use a stale snapshot and miss recently committed tables,
-	// leading to orphan records in mo_tables and OkExpectedEOB panic on replay.
-	if lockMode == lock.LockMode_Exclusive {
-		txnOp := c.proc.GetTxnOperator()
-		if txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
-			latestCommitTS := c.proc.Base.TxnClient.GetLatestCommitTS()
-			if txnOp.Txn().SnapshotTS.Less(latestCommitTS) {
-				newTS, err := c.proc.Base.TxnClient.WaitLogTailAppliedAt(c.proc.Ctx, latestCommitTS)
-				if err != nil {
-					return err
-				}
-				if err := txnOp.UpdateSnapshot(c.proc.Ctx, newTS); err != nil {
-					return err
-				}
-			}
-		}
-	}
-
 	return nil
 }
 

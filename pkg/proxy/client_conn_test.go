@@ -709,6 +709,23 @@ func Test_connectToBackend(t *testing.T) {
 	require.Nil(t, sConn)
 }
 
+func Test_connectToBackend_SkipCacheOnMigration(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	logger := rt.Logger()
+	cache := &popCountConnCache{}
+	cConn := &clientConn{
+		ctx:        context.Background(),
+		router:     &routeErrRouter{},
+		mysqlProto: &frontend.MysqlProtocolImpl{},
+		connCache:  cache,
+		log:        logger,
+	}
+	sConn, err := cConn.connectToBackend("127.0.0.1:6001")
+	require.Error(t, err)
+	require.Nil(t, sConn)
+	require.Equal(t, 0, cache.popCount)
+}
+
 func TestHandleSetVar(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	var cc clientConn
