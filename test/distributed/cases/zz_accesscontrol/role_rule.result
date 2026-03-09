@@ -1,0 +1,42 @@
+set global enable_privilege_cache = off;
+drop user if exists test_rule_user;
+drop role if exists test_rule_role;
+create role test_rule_role;
+alter role test_rule_role add rule "db1.t1", "select * from db1.t1 where age > 28" on table db1.t1;
+show rules on role test_rule_role;
+rule_name    rule
+db1.t1    select * from db1.t1 where age > 28
+alter role non_existent_role add rule "db1.t1", "select * from db1.t1" on table db1.t1;
+internal error: there is no role non_existent_role
+alter role test_rule_role add rule "db1.t1", "select * from db1.t1 where age > 50" on table db1.t1;
+show rules on role test_rule_role;
+rule_name    rule
+db1.t1    select * from db1.t1 where age > 50
+alter role test_rule_role add rule "db2.t2", "select id from db2.t2_new" on table db2.t2;
+show rules on role test_rule_role;
+rule_name    rule
+db1.t1    select * from db1.t1 where age > 50
+db2.t2    select id from db2.t2_new
+alter role test_rule_role drop rule "db1.t1";
+show rules on role test_rule_role;
+rule_name    rule
+db2.t2    select id from db2.t2_new
+alter role non_existent_role drop rule "db1.t1";
+internal error: there is no role non_existent_role
+alter role test_rule_role drop rule "no_such_rule";
+internal error: rule 'no_such_rule' does not exist for role 'test_rule_role'
+alter role test_rule_role drop rule "db2.t2";
+show rules on role test_rule_role;
+rule_name    rule
+show rules on role non_existent_role;
+internal error: there is no role non_existent_role
+alter role test_rule_role add rule "db1.t1", "select * from db1.t1 where age > 28" on table db1.t1;
+create user test_rule_user identified by '111111' default role test_rule_role;
+grant connect on account * to test_rule_role;
+grant select on table *.* to test_rule_role;
+select 1;
+1
+1
+drop user if exists test_rule_user;
+drop role if exists test_rule_role;
+set global enable_privilege_cache = on;

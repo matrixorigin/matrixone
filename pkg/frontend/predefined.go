@@ -381,6 +381,12 @@ var (
 		('SNAPSHOT', '{"allowed_scope":["account","database","table"]}'),
 		('BRANCH', '{"allowed_scope":[]}')
 		on duplicate key update scope_spec = values(scope_spec);`, catalog.MO_FEATURE_REGISTRY)
+
+	MoCatalogMoRoleRuleDDL = fmt.Sprintf(`create table %s.%s (
+			role_id int signed,
+			rule_name varchar(100),
+			rule varchar(500)
+		)`, catalog.MO_CATALOG, catalog.MO_ROLE_RULE)
 )
 
 // `mo_catalog` database system tables

@@ -118,6 +118,9 @@ const (
 	FPDropUser
 	FPAlterUser
 	FPAlterRole
+	FPAlterRoleAddRule
+	FPAlterRoleDropRule
+	FPShowRules
 	FPCreateRole
 	FPDropRole
 	FPCreateFunction

@@ -146,7 +146,8 @@ type Session struct {
 
 	errInfo *errInfo
 
-	cache *privilegeCache
+	cache     *privilegeCache
+	ruleCache map[string]string // rewrite rule cache, nil means not loaded
 
 	mu sync.Mutex
 
@@ -945,6 +946,7 @@ func (ses *Session) InvalidatePrivilegeCache() {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.cache.invalidate()
+	ses.ruleCache = nil
 }
 
 // GetBackgroundExec generates a background executor

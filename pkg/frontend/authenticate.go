@@ -1032,6 +1032,7 @@ var (
 		MoCatalogFeatureLimitDDL,
 		MoCatalogFeatureRegistryDDL,
 		MoCatalogFeatureRegistryInitData,
+		MoCatalogMoRoleRuleDDL,
 	}
 
 	// drop tables for the tenant
