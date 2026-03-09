@@ -667,7 +667,6 @@ func diffMergeAgency(
 	); err != nil {
 		return
 	}
-
 	var (
 		done      bool
 		wg        = new(sync.WaitGroup)
@@ -952,7 +951,6 @@ func diffOnBase(
 			}
 		}
 	}
-
 	// has no lca
 	if tarHandle, baseHandle, err = constructChangeHandle(
 		ctx, ses, bh, tblStuff, &dagInfo,
@@ -1125,7 +1123,6 @@ func constructChangeHandle(
 	); err != nil {
 		return
 	}
-
 	for i := range tarRange.rel {
 		if handle, err = databranchutils.CollectChanges(
 			ctx,
@@ -1215,9 +1212,13 @@ func decideCollectRange(
 	tarCTS = tblCommitTS[0]
 	baseCTS = tblCommitTS[1]
 
-	// Note That:
-	// 1. the branchTS+1 cannot skip the cloned data, we need get the clone commitTS (the table creation commitTS)
-	//
+	// Boundary semantics:
+	// 1. childCreateCommitTS marks when the child table itself becomes visible.
+	//    The cloned rows are materialized by that DDL, so child-owned change collection
+	//    must start from childCreateCommitTS.Next() to avoid re-reading inherited rows.
+	// 2. branchTS marks the source snapshot on the parent/LCA side used by the clone.
+	//    Parent-side incremental comparison must start from branchTS.Next() because the
+	//    snapshot at branchTS is already included in the cloned contents.
 
 	// now we got the t1.snapshot, t1.branchTS, t2.snapshot, t2.branchTS and txnSnapshot,
 	// and then we need to decide the range that t1 and t2 should collect.
@@ -1401,7 +1402,6 @@ func getTablesCreationCommitTS(
 	base engine.Relation,
 	snapshot []types.TS,
 ) (commitTS []types.TS, err error) {
-
 	resolveSnapshot := func(idx int) types.TS {
 		if idx >= 0 && idx < len(snapshot) && !snapshot[idx].IsEmpty() {
 			return snapshot[idx]
@@ -1409,121 +1409,117 @@ func getTablesCreationCommitTS(
 		return types.TimestampToTS(ses.GetTxnHandler().GetTxn().SnapshotTS())
 	}
 
-	resolveOne := func(tableID uint64, sp types.TS) (types.TS, error) {
-		resolveAt := func(snapshotTS types.TS) (commit types.TS, ok bool, err error) {
-			txnOp := ses.GetTxnHandler().GetTxn().CloneSnapshotOp(snapshotTS.ToTimestamp())
-			_, _, moTablesRel, rerr := ses.GetTxnHandler().GetStorage().GetRelationById(ctx, txnOp, catalog.MO_TABLES_ID)
-			if rerr != nil {
-				return types.TS{}, false, rerr
-			}
-
-			relData, rerr := moTablesRel.Ranges(ctx, engine.DefaultRangesParam)
-			if rerr != nil {
-				return types.TS{}, false, rerr
-			}
-			readers, rerr := moTablesRel.BuildReaders(
-				ctx,
-				ses.proc,
-				nil,
-				relData,
-				1,
-				0,
-				false,
-				engine.Policy_CheckCommittedOnly,
-				engine.FilterHint{},
-			)
-			if rerr != nil {
-				return types.TS{}, false, rerr
-			}
-			defer func() {
-				for _, rd := range readers {
-					if rd != nil {
-						_ = rd.Close()
-					}
-				}
-			}()
-
-			attrs := []string{
-				catalog.SystemRelAttr_ID,
-				objectio.DefaultCommitTS_Attr,
-			}
-			readBatch := batch.NewWithSize(len(attrs))
-			readBatch.SetAttributes(attrs)
-			readBatch.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
-			readBatch.Vecs[1] = vector.NewVec(types.T_TS.ToType())
-			defer readBatch.Clean(ses.proc.Mp())
-
-			rowFound := false
-			commitFound := false
-			commitTS := types.TS{}
-			for _, rd := range readers {
-				for {
-					var isEnd bool
-					isEnd, rerr = rd.Read(ctx, attrs, nil, ses.proc.Mp(), readBatch)
-					if rerr != nil {
-						return types.TS{}, false, rerr
-					}
-					if isEnd {
-						break
-					}
-					if readBatch.RowCount() == 0 {
-						continue
-					}
-
-					relIDs := vector.MustFixedColWithTypeCheck[uint64](readBatch.Vecs[0])
-					commitCol := vector.MustFixedColWithTypeCheck[types.TS](readBatch.Vecs[1])
-					for i := range relIDs {
-						if relIDs[i] != tableID {
-							continue
-						}
-						rowFound = true
-						if !readBatch.Vecs[1].IsNull(uint64(i)) {
-							if !commitFound || commitCol[i].LT(&commitTS) {
-								commitTS = commitCol[i]
-							}
-							commitFound = true
-						}
-					}
-				}
-			}
-
-			if commitFound {
-				return commitTS, true, nil
-			}
-			return types.TS{}, rowFound, nil
-		}
-
-		if commit, ok, rerr := resolveAt(sp); rerr != nil {
-			return types.TS{}, rerr
-		} else if ok {
-			return commit, nil
-		}
-
-		curSnapshot := types.TimestampToTS(ses.GetTxnHandler().GetTxn().SnapshotTS())
-		if !curSnapshot.EQ(&sp) {
-			if commit, ok, rerr := resolveAt(curSnapshot); rerr != nil {
-				return types.TS{}, rerr
-			} else if ok {
-				return commit, nil
-			}
-		}
-
-		return types.TS{}, moerr.NewInternalErrorNoCtxf(
-			"cannot find table %d commit ts at snapshot %s",
-			tableID,
-			sp.ToString(),
-		)
-	}
-
-	tarCommitTS, err := resolveOne(tar.GetTableID(ctx), resolveSnapshot(0))
+	tarCommitTS, err := getTableCreationCommitTSByID(ctx, ses, tar.GetTableID(ctx), resolveSnapshot(0))
 	if err != nil {
 		return nil, err
 	}
-	baseCommitTS, err := resolveOne(base.GetTableID(ctx), resolveSnapshot(1))
+	baseCommitTS, err := getTableCreationCommitTSByID(ctx, ses, base.GetTableID(ctx), resolveSnapshot(1))
 	if err != nil {
 		return nil, err
 	}
 	return []types.TS{tarCommitTS, baseCommitTS}, nil
+}
+
+func getTableCreationCommitTSByID(
+	ctx context.Context,
+	ses *Session,
+	tableID uint64,
+	snapshotTS types.TS,
+) (types.TS, error) {
+	resolveAt := func(at types.TS) (commit types.TS, ok bool, err error) {
+		txnOp := ses.GetTxnHandler().GetTxn().CloneSnapshotOp(at.ToTimestamp())
+		_, _, moTablesRel, rerr := ses.GetTxnHandler().GetStorage().GetRelationById(ctx, txnOp, catalog.MO_TABLES_ID)
+		if rerr != nil {
+			return types.TS{}, false, rerr
+		}
+
+		relData, rerr := moTablesRel.Ranges(ctx, engine.DefaultRangesParam)
+		if rerr != nil {
+			return types.TS{}, false, rerr
+		}
+		readers, rerr := moTablesRel.BuildReaders(
+			ctx,
+			ses.proc,
+			nil,
+			relData,
+			1,
+			0,
+			false,
+			engine.Policy_CheckCommittedOnly,
+			engine.FilterHint{},
+		)
+		if rerr != nil {
+			return types.TS{}, false, rerr
+		}
+		defer func() {
+			for _, rd := range readers {
+				if rd != nil {
+					_ = rd.Close()
+				}
+			}
+		}()
+
+		attrs := []string{
+			catalog.SystemRelAttr_ID,
+			objectio.DefaultCommitTS_Attr,
+		}
+		readBatch := batch.NewWithSize(len(attrs))
+		readBatch.SetAttributes(attrs)
+		readBatch.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+		readBatch.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+		defer readBatch.Clean(ses.proc.Mp())
+
+		rowFound := false
+		commitFound := false
+		commitTS := types.TS{}
+		for _, rd := range readers {
+			for {
+				var isEnd bool
+				isEnd, rerr = rd.Read(ctx, attrs, nil, ses.proc.Mp(), readBatch)
+				if rerr != nil {
+					return types.TS{}, false, rerr
+				}
+				if isEnd {
+					break
+				}
+				if readBatch.RowCount() == 0 {
+					continue
+				}
+
+				relIDs := vector.MustFixedColWithTypeCheck[uint64](readBatch.Vecs[0])
+				commitCol := vector.MustFixedColWithTypeCheck[types.TS](readBatch.Vecs[1])
+				for i := range relIDs {
+					if relIDs[i] != tableID {
+						continue
+					}
+					rowFound = true
+					if !readBatch.Vecs[1].IsNull(uint64(i)) {
+						if !commitFound || commitCol[i].LT(&commitTS) {
+							commitTS = commitCol[i]
+						}
+						commitFound = true
+					}
+				}
+			}
+		}
+
+		if commitFound {
+			return commitTS, true, nil
+		}
+		return types.TS{}, rowFound, nil
+	}
+
+	if commit, ok, err := resolveAt(snapshotTS); err != nil {
+		return types.TS{}, err
+	} else if ok {
+		return commit, nil
+	}
+
+	return types.TS{}, moerr.NewInternalErrorNoCtxf(
+		"cannot find table %d commit ts at snapshot %s",
+		tableID,
+		snapshotTS.ToString(),
+	)
 }
 
 func decideLCABranchTSFromBranchDAG(
@@ -1539,22 +1535,22 @@ func decideLCABranchTSFromBranchDAG(
 	var (
 		dag *databranchutils.DataBranchDAG
 
-		tarTS   int64
-		baseTS  int64
-		hasLca  bool
-		lcaType int
+		tarBranchTableID  uint64
+		baseBranchTableID uint64
+		hasLca            bool
+		lcaType           int
 
 		lcaTableID   uint64
-		tarBranchTS  timestamp.Timestamp
-		baseBranchTS timestamp.Timestamp
+		tarBranchTS  types.TS
+		baseBranchTS types.TS
 	)
 
 	defer func() {
 		branchInfo = branchMetaInfo{
 			lcaType:      lcaType,
 			lcaTableId:   lcaTableID,
-			tarBranchTS:  types.TimestampToTS(tarBranchTS),
-			baseBranchTS: types.TimestampToTS(baseBranchTS),
+			tarBranchTS:  tarBranchTS,
+			baseBranchTS: baseBranchTS,
 		}
 	}()
 
@@ -1572,25 +1568,45 @@ func decideLCABranchTSFromBranchDAG(
 	//      3. t2 is the lca
 	//			t1's [branch_t1_ts + 1, now] join t2's [branch_t1_ts + 1, now]
 	//
-	// if a table is cloned table, the commit ts of the cloned data
-	// should be the creation time of the table.
-	if lcaTableID, tarTS, baseTS, hasLca = dag.FindLCA(
+	// The DAG only answers lineage questions. The branch timestamp attached to an
+	// outgoing edge is the source snapshot used by the clone operation, not the
+	// creation commit timestamp of the child table.
+	if lcaTableID, tarBranchTableID, baseBranchTableID, hasLca = dag.FindLCA(
 		tblStuff.tarRel.GetTableID(ctx), tblStuff.baseRel.GetTableID(ctx),
 	); hasLca {
 		if lcaTableID == tblStuff.baseRel.GetTableID(ctx) {
-			ts := timestamp.Timestamp{PhysicalTime: tarTS}
-			tarBranchTS = ts
-			baseBranchTS = ts
 			lcaType = lcaRight
+			baseBranchTableID = tarBranchTableID
+			var ts int64
+			if ts, hasLca = dag.GetCloneTS(tarBranchTableID); !hasLca {
+				err = moerr.NewInternalErrorNoCtxf("cannot find clone ts for table %d", tarBranchTableID)
+				return
+			}
+			tarBranchTS = types.BuildTS(ts, 0)
+			baseBranchTS = tarBranchTS
 		} else if lcaTableID == tblStuff.tarRel.GetTableID(ctx) {
-			ts := timestamp.Timestamp{PhysicalTime: baseTS}
-			tarBranchTS = ts
-			baseBranchTS = ts
 			lcaType = lcaLeft
+			tarBranchTableID = baseBranchTableID
+			var ts int64
+			if ts, hasLca = dag.GetCloneTS(baseBranchTableID); !hasLca {
+				err = moerr.NewInternalErrorNoCtxf("cannot find clone ts for table %d", baseBranchTableID)
+				return
+			}
+			baseBranchTS = types.BuildTS(ts, 0)
+			tarBranchTS = baseBranchTS
 		} else {
 			lcaType = lcaOther
-			tarBranchTS = timestamp.Timestamp{PhysicalTime: tarTS}
-			baseBranchTS = timestamp.Timestamp{PhysicalTime: baseTS}
+			var ts int64
+			if ts, hasLca = dag.GetCloneTS(tarBranchTableID); !hasLca {
+				err = moerr.NewInternalErrorNoCtxf("cannot find clone ts for table %d", tarBranchTableID)
+				return
+			}
+			tarBranchTS = types.BuildTS(ts, 0)
+			if ts, hasLca = dag.GetCloneTS(baseBranchTableID); !hasLca {
+				err = moerr.NewInternalErrorNoCtxf("cannot find clone ts for table %d", baseBranchTableID)
+				return
+			}
+			baseBranchTS = types.BuildTS(ts, 0)
 		}
 	} else if tblStuff.tarRel.GetTableID(ctx) == tblStuff.baseRel.GetTableID(ctx) {
 		lcaTableID = tblStuff.tarRel.GetTableID(ctx)
@@ -1608,7 +1624,6 @@ func decideLCABranchTSFromBranchDAG(
 			lcaType = lcaRight
 		}
 	}
-
 	return
 }
 
@@ -1636,7 +1651,10 @@ func constructBranchDAG(
 
 	if sqlRet, err = runSql(
 		sysCtx, ses, bh,
-		fmt.Sprintf(scanBranchMetadataSql, catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA),
+		fmt.Sprintf(
+			"select table_id, clone_ts, p_table_id, table_deleted from %s.%s",
+			catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
+		),
 		nil, nil,
 	); err != nil {
 		return
@@ -1647,11 +1665,13 @@ func constructBranchDAG(
 		tblIds := vector.MustFixedColNoTypeCheck[uint64](cols[0])
 		cloneTS := vector.MustFixedColNoTypeCheck[int64](cols[1])
 		pTblIds := vector.MustFixedColNoTypeCheck[uint64](cols[2])
+		tableDeleted := vector.MustFixedColNoTypeCheck[bool](cols[3])
 		for i := range tblIds {
 			rowData = append(rowData, databranchutils.DataBranchMetadata{
-				TableID:  tblIds[i],
-				CloneTS:  cloneTS[i],
-				PTableID: pTblIds[i],
+				TableID:      tblIds[i],
+				CloneTS:      cloneTS[i],
+				PTableID:     pTblIds[i],
+				TableDeleted: tableDeleted[i],
 			})
 		}
 		return true
