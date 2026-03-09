@@ -426,6 +426,35 @@ func TestPipeStart(t *testing.T) {
 	require.NoError(t, lastErr)
 }
 
+func TestPipePauseTimeout(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	clientProxy, serverProxy := net.Pipe()
+	defer clientProxy.Close()
+	defer serverProxy.Close()
+
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	logger := rt.Logger()
+	tun := newTunnel(context.Background(), logger, newCounterSet())
+
+	cc := newMySQLConn("client", clientProxy, 0, nil, nil, false, 0)
+	sc := newMySQLConn("server", serverProxy, 0, nil, nil, false, 0)
+	p := tun.newPipe(pipeClientToServer, cc, sc)
+
+	p.mu.Lock()
+	p.mu.started = true
+	p.mu.Unlock()
+
+	start := time.Now()
+	err := p.pause(ctx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(start), time.Second)
+}
+
 func TestPipeStartAndPause(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
@@ -840,4 +869,48 @@ func Test_transfer(t *testing.T) {
 	err = tun.transferSync(ctx)
 	assert.Error(t, err)
 
+}
+
+func TestTransferSync_SkipCachePopOnMigration(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+
+	ctx := context.Background()
+	tun := newTunnel(ctx, rt.Logger(), newCounterSet())
+	cache := &popCountConnCache{}
+
+	cc := &clientConn{
+		ctx:        ctx,
+		log:        rt.Logger(),
+		router:     &routeErrRouter{errMsg: "route failed in transfer"},
+		mysqlProto: &frontend.MysqlProtocolImpl{},
+		connCache:  cache,
+	}
+
+	serverProxy, server := net.Pipe()
+	defer serverProxy.Close()
+	defer server.Close()
+
+	tun.cc = cc
+	tun.mu.started = true
+	tun.mu.serverConn = newMySQLConn(
+		connServerName,
+		serverProxy,
+		0,
+		tun.reqC,
+		tun.respC,
+		false,
+		0,
+	)
+	tun.mu.scp = &pipe{}
+	tun.mu.csp = &pipe{}
+	now := time.Now()
+	tun.mu.csp.mu.lastCmdTime = now
+	tun.mu.scp.mu.lastCmdTime = now.Add(time.Second)
+
+	err := tun.transferSync(ctx)
+	require.Error(t, err)
+	require.Equal(t, 0, cache.popCount)
 }
