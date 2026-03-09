@@ -56,11 +56,18 @@ A comprehensive Python SDK for MatrixOne that provides SQLAlchemy-like interface
 - 📸 **Snapshot Management**: Create and manage database snapshots at multiple levels
 - ⏰ **Point-in-Time Recovery**: PITR functionality for precise data recovery
 - 🔄 **Table Cloning**: Clone databases and tables efficiently with data replication
+  - ⭐ **SQLAlchemy-style statement builders** (`clone_table()`, `clone_database()`)
+  - Snapshot-based point-in-time cloning
+  - Cross-tenant cloning with TO ACCOUNT support
+  - IF NOT EXISTS for idempotent operations
 - 🌿 **Branch Management**: Git-style version control for databases and tables
   - Create isolated branches for development and testing
   - Compare differences between branches with count-only optimization
   - Merge branches with conflict resolution strategies
   - Point-in-time branching from snapshots
+  - ⭐ **SQLAlchemy-style statement builders** (`create_table_branch()`, `diff_table_branch()`, etc.)
+  - Advanced DIFF output: COUNT, LIMIT, FILE export, snapshot on both sides
+  - Cross-tenant branching with TO ACCOUNT support
 - 👥 **Account Management**: Comprehensive user, role, and permission management
 - 📊 **Pub/Sub**: Real-time publication and subscription support
 - 🔧 **Version Management**: Automatic backend version detection and compatibility checking
@@ -1383,6 +1390,12 @@ Check out the `examples/` directory for comprehensive usage examples:
 
 **Stage Management Examples:**
 - `example_26_stage_operations.py` - External stage management and data loading from stages
+
+**Branch Builder Examples:**
+- `example_branch_builder.py` - SQLAlchemy-style branch statement builders (create, diff, merge)
+
+**Clone Builder Examples:**
+- `example_clone_builder.py` - SQLAlchemy-style clone statement builders (table, database)
 
 **Specialized Examples:**
 - `example_connection_hooks.py` - Connection hooks for custom initialization

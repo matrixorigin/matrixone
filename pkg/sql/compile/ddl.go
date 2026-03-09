@@ -127,6 +127,33 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 
+	// After acquiring the exclusive lock on mo_database, temporarily advance
+	// the transaction's snapshot so that Relations() can see all tables
+	// committed by other CNs (e.g. concurrent CLONE) before the lock was
+	// granted.
+	//
+	// We MUST restore the original SnapshotTS before returning, because
+	// UpdateSnapshot changes txn.SnapshotTS which would affect the
+	// tombstone transfer range in subsequent IncrStatementID calls.
+	// In restore-cluster scenarios (multiple DDLs in one transaction),
+	// a permanently advanced SnapshotTS causes duplicate-key errors.
+	//
+	// Within DropDatabase, all internal SQL uses WithDisableIncrStatement(),
+	// so no tombstone transfer is triggered while SnapshotTS is advanced.
+	txnOp := c.proc.GetTxnOperator()
+	origSnapshotTS := txnOp.SnapshotTS()
+	if txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
+		now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
+		if err = txnOp.UpdateSnapshot(c.proc.Ctx, now); err != nil {
+			return err
+		}
+	}
+	defer func() {
+		// Restore SnapshotTS so that tombstone transfer in subsequent
+		// statements is not affected by the temporary advancement.
+		txnOp.TxnRef().SnapshotTS = origSnapshotTS
+	}()
+
 	// handle sub
 	if db.IsSubscription(c.proc.Ctx) {
 		if err = dropSubscription(c.proc.Ctx, c, dbName); err != nil {

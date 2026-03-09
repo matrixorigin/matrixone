@@ -42,7 +42,7 @@ table ownership    table    *.*    0
 grant select,insert,update on testdb.* to test_role;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 36 near " testdb.* to test_role;";
 grant select,insert,update on account * to 'test_role';
-internal error: the privilege "select" can only be granted to the object type "table"
+internal error: the privilege "select" can only be granted to the object type "table" or "view"
 grant show tables,create,drop,alter on  testdb.* to 'test_role';
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 30 near ",alter on  testdb.* to 'test_role';";
 grant show tables,create,drop,alter on  table testdb.* to 'test_role';
@@ -54,7 +54,7 @@ SQL parser error: You have an error in your SQL syntax; check the manual that co
 grant select,insert,update on table testdb.* to 'trole';
 internal error: there is no role trole
 grant select,insert,create database on account * to test_role;
-internal error: the privilege "select" can only be granted to the object type "table"
+internal error: the privilege "select" can only be granted to the object type "table" or "view"
 grant select,insert,create database on account *.* to testuser;
 internal error: there is no role testuser
 grant role_not_exists to dump;
@@ -331,7 +331,7 @@ r5    database    create table    *.*
 grant create table on database *.* to r1,r2,r15,r4,r5;
 internal error: there is no role r15
 grant select on database *.* to r1,r2,r3,r4,r5;
-internal error: the privilege "select" can only be granted to the object type "table"
+internal error: the privilege "select" can only be granted to the object type "table" or "view"
 create user user1 identified by '12345678',user2 identified by '12345678',user3 identified by '12345678',user4 identified by '12345678',user5 identified by '12345678';
 grant r1,r2,r3,r4,r5 to user1,user2,user3,user4,user5;
 select count(*) from mo_catalog.mo_user_grant,mo_catalog.mo_user,mo_catalog.mo_role_privs where mo_user_grant.user_id=mo_user.user_id and mo_role_privs.role_id=mo_user_grant.role_id and role_name in ('r1','r2','r3','r4','r5');

@@ -3268,38 +3268,20 @@ func (builder *QueryBuilder) bindSelectClause(
 		return
 	}
 
-	if tableDef := builder.qry.Nodes[nodeID].GetTableDef(); tableDef != nil && builder.isForUpdate {
-		pkPos, pkTyp := getPkPos(tableDef, false)
-		lastTag := builder.qry.Nodes[nodeID].BindingTags[0]
-		lockTarget := &plan.LockTarget{
-			TableId:            tableDef.TblId,
-			PrimaryColIdxInBat: int32(pkPos),
-			PrimaryColRelPos:   lastTag,
-			PrimaryColTyp:      pkTyp,
-			Block:              true,
-			RefreshTsIdxInBat:  -1, //unsupport now
-		}
-
-		// If table is partitioned, attach partition column index for correct pruning
-		if tableDef.Partition != nil && len(tableDef.Partition.PartitionDefs) > 0 {
-			if colName := getPartitionColNameFromExpr(tableDef.Partition.PartitionDefs[0].Def); colName != "" {
-				if pos, ok := tableDef.Name2ColIndex[colName]; ok {
-					lockTarget.HasPartitionCol = true
-					lockTarget.PartitionColIdxInBat = pos
-				}
+	if builder.isForUpdate {
+		lockTargets := builder.collectLockTargets(nodeID)
+		if len(lockTargets) > 0 {
+			lockNode = &Node{
+				NodeType:    plan.Node_LOCK_OP,
+				Children:    []int32{nodeID},
+				TableDef:    builder.qry.Nodes[nodeID].GetTableDef(),
+				LockTargets: lockTargets,
+				BindingTags: []int32{builder.genNewBindTag()},
 			}
-		}
 
-		lockNode = &Node{
-			NodeType:    plan.Node_LOCK_OP,
-			Children:    []int32{nodeID},
-			TableDef:    tableDef,
-			LockTargets: []*plan.LockTarget{lockTarget},
-			BindingTags: []int32{builder.genNewBindTag()},
-		}
-
-		if astLimit == nil {
-			nodeID = builder.appendNode(lockNode, ctx)
+			if astLimit == nil {
+				nodeID = builder.appendNode(lockNode, ctx)
+			}
 		}
 	}
 
@@ -4370,6 +4352,14 @@ func (builder *QueryBuilder) appendStep(nodeID int32) int32 {
 
 func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32 {
 	nodeID := int32(len(builder.qry.Nodes))
+	if ctx != nil && len(ctx.viewChain) > 0 {
+		if len(node.OriginViews) == 0 {
+			node.OriginViews = append([]string{}, ctx.viewChain...)
+		}
+		if node.DirectView == "" {
+			node.DirectView = ctx.directView
+		}
+	}
 	node.NodeId = nodeID
 	builder.qry.Nodes = append(builder.qry.Nodes, node)
 	builder.ctxByNode = append(builder.ctxByNode, ctx)
@@ -4574,6 +4564,21 @@ func (builder *QueryBuilder) bindView(
 		defaultDatabase = obj.SubscriptionName
 	}
 	viewCtx.defaultDatabase = defaultDatabase
+	viewKey := schema + "#" + table
+	viewKeyWithSnapshot := viewKey
+	if IsSnapshotValid(snapshot) {
+		viewKeyWithSnapshot = FormatViewKeyWithSnapshot(viewKey, snapshot)
+	}
+	if ctx != nil && ctx.directView != "" {
+		viewCtx.directView = ctx.directView
+	} else {
+		viewCtx.directView = viewKeyWithSnapshot
+	}
+	if ctx != nil && len(ctx.viewChain) > 0 {
+		viewCtx.viewChain = append(append([]string{}, ctx.viewChain...), viewKey)
+	} else {
+		viewCtx.viewChain = []string{viewKey}
+	}
 
 	if viewCtx.viewInBinding(schema, table, viewStmt) {
 		return 0, moerr.NewParseErrorf(builder.GetContext(), "view %s reference itself", table)
@@ -4812,8 +4817,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 	case *tree.JoinTableExpr:
 		if tbl.Right == nil {
 			return builder.buildTable(tbl.Left, ctx, preNodeId, leftCtx)
-		} else if builder.isForUpdate {
-			return 0, moerr.NewInternalError(builder.GetContext(), "not support select from join table for update")
 		}
 		return builder.buildJoinTable(tbl, ctx)
 
@@ -5558,4 +5561,46 @@ func getPartitionColNameFromExpr(expr *plan.Expr) string {
 		}
 	}
 	return ""
+}
+
+// collectLockTargets traverses the plan tree rooted at nodeID and collects
+// LockTarget entries for all TABLE_SCAN nodes found. This supports SELECT ... FOR UPDATE
+// with JOIN tables by locking rows from every table involved in the query.
+func (builder *QueryBuilder) collectLockTargets(nodeID int32) []*plan.LockTarget {
+	node := builder.qry.Nodes[nodeID]
+	var targets []*plan.LockTarget
+
+	if node.NodeType == plan.Node_TABLE_SCAN {
+		tableDef := node.GetTableDef()
+		if tableDef != nil && tableDef.Pkey != nil {
+			pkPos, pkTyp := getPkPos(tableDef, false)
+			if pkPos >= 0 {
+				lockTarget := &plan.LockTarget{
+					TableId:            tableDef.TblId,
+					PrimaryColIdxInBat: int32(pkPos),
+					PrimaryColRelPos:   node.BindingTags[0],
+					PrimaryColTyp:      pkTyp,
+					Block:              true,
+					RefreshTsIdxInBat:  -1,
+				}
+
+				if tableDef.Partition != nil && len(tableDef.Partition.PartitionDefs) > 0 {
+					if colName := getPartitionColNameFromExpr(tableDef.Partition.PartitionDefs[0].Def); colName != "" {
+						if pos, ok := tableDef.Name2ColIndex[colName]; ok {
+							lockTarget.HasPartitionCol = true
+							lockTarget.PartitionColIdxInBat = pos
+						}
+					}
+				}
+
+				targets = append(targets, lockTarget)
+			}
+		}
+	}
+
+	for _, childID := range node.Children {
+		targets = append(targets, builder.collectLockTargets(childID)...)
+	}
+
+	return targets
 }
