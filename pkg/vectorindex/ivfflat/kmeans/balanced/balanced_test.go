@@ -30,7 +30,7 @@ import (
 
 func TestNewKMeans_Validation(t *testing.T) {
 	vectors := [][]float32{{1, 2}, {3, 4}, {5, 6}}
-	
+
 	// Valid
 	_, err := NewKMeans(vectors, 2, 10, 0.01, metric.Metric_L2Distance, kmeans.Random, false, 1)
 	require.NoError(t, err)
