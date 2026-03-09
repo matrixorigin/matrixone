@@ -1253,7 +1253,6 @@ func buildHashmapForTable(
 	tombstoneHashmap databranchutils.BranchHashmap,
 	err error,
 ) {
-
 	var (
 		atomicErr    atomic.Value
 		dataBat      *batch.Batch
