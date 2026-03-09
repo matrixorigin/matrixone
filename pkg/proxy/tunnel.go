@@ -766,6 +766,9 @@ func (p *pipe) waitReady(ctx context.Context) error {
 // sets paused to false again. When paused, the pipe should stop
 // and transfer server connection to a new one then start pipe again.
 func (p *pipe) pause(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.mu.closed {
@@ -778,6 +781,23 @@ func (p *pipe) pause(ctx context.Context) error {
 			_ = p.src.SetReadDeadline(time.Time{})
 		}
 	}()
+	// If the context is canceled while waiting on cond.Wait, wake the waiter
+	// to re-check ctx.Err and return promptly.
+	stopCtxWatcher := make(chan struct{})
+	if p.mu.started && p.mu.cond != nil {
+		go func() {
+			select {
+			case <-ctx.Done():
+				p.mu.Lock()
+				if p.mu.cond != nil {
+					p.mu.cond.Broadcast()
+				}
+				p.mu.Unlock()
+			case <-stopCtxWatcher:
+			}
+		}()
+		defer close(stopCtxWatcher)
+	}
 
 	for p.mu.started {
 		if ctx.Err() != nil {

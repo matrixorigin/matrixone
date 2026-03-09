@@ -62,12 +62,10 @@ type IvfflatSearch[T types.RealNumbers] struct {
 }
 
 type IvfflatMeta struct {
-	CenterStats          map[int64]int64
-	Nbits                uint64
-	K                    uint32
-	Seed                 uint64
-	SmallCenterThreshold int64
-	DataSize             int64
+	Nbits    uint64
+	K        uint32
+	Seed     uint64
+	DataSize int64
 }
 
 // LoadStats get the number of entries per centroid
@@ -77,70 +75,25 @@ func (idx *IvfflatSearchIndex[T]) LoadStats(
 	tblcfg vectorindex.IndexTableConfig,
 	nthread int64) error {
 
-	idx.Meta.SmallCenterThreshold = int64(0)
-	if sqlproc.GetResolveVariableFunc() != nil {
-		val, err := sqlproc.GetResolveVariableFunc()("ivf_small_centroid_threshold", true, false)
-		if err != nil {
-			return err
-		}
-		idx.Meta.SmallCenterThreshold = val.(int64)
+	logutil.Infof("IVFFLAT START: gets data size")
+	sql := fmt.Sprintf("SELECT COUNT(1) FROM `%s`.`%s`",
+		tblcfg.DbName, tblcfg.EntriesTable,
+	)
+
+	res, err := runSql(sqlproc, sql)
+	if err != nil {
+		return err
 	}
+	defer res.Close()
 
-	{
-		logutil.Infof("IVFFLAT START: gets data size")
-		sql := fmt.Sprintf("SELECT COUNT(1) FROM `%s`.`%s`",
-			tblcfg.DbName, tblcfg.EntriesTable,
-		)
+	// batch cannot be empty
+	bat := res.Batches[0]
 
-		res, err := runSql(sqlproc, sql)
-		if err != nil {
-			return err
-		}
-		defer res.Close()
-
-		// batch cannot be empty
-		bat := res.Batches[0]
-
-		cnt := vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0)
-		idx.Meta.DataSize = int64(cnt)
-		logutil.Infof("IVFFLAT END: gets data size = %d", cnt)
-
-	}
-
-	if idx.Meta.SmallCenterThreshold > 0 {
-		logutil.Infof("IVFFLAT loads CenterStats")
-		// Table Scan is slow here.
-		stats := make(map[int64]int64)
-		sql := fmt.Sprintf("SELECT `%s`, COUNT(`%s`) FROM `%s`.`%s` WHERE `%s` = %d GROUP BY `%s`",
-			catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
-			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
-			tblcfg.DbName, tblcfg.EntriesTable,
-			catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
-			idx.Version,
-			catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
-		)
-
-		res, err := runSql(sqlproc, sql)
-		if err != nil {
-			return err
-		}
-		defer res.Close()
-
-		for _, bat := range res.Batches {
-			cntvec := bat.Vecs[1]
-			idvec := bat.Vecs[0]
-
-			for i := 0; i < bat.RowCount(); i++ {
-				cid := vector.GetFixedAtNoTypeCheck[int64](idvec, i)
-				cnt := vector.GetFixedAtNoTypeCheck[int64](cntvec, i)
-				stats[cid] = cnt
-			}
-		}
-
-		idx.Meta.CenterStats = stats
-		logutil.Infof("IVFFLAT finished loading CenterStats")
-	}
+	cnt := vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0)
+	idx.Meta.DataSize = int64(cnt)
+	logutil.Infof("IVFFLAT END: gets data size = %d", cnt)
 	return nil
+
 }
 
 // load all entries primary key per centroid and build bloomfilter per centroids
@@ -331,40 +284,7 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *sqlexec.SqlProcess, idxcfg vec
 }
 
 func (idx *IvfflatSearchIndex[T]) getCentroidsSum(centroids_ids []int64, nlists uint) uint64 {
-	total := uint64(0)
-
-	if idx.Meta.CenterStats == nil {
-		total = uint64(idx.Meta.DataSize * int64(len(centroids_ids)) / int64(nlists))
-		return total
-	}
-
-	for _, k := range centroids_ids {
-		cnt, ok := idx.Meta.CenterStats[k]
-		if ok {
-			total += uint64(cnt)
-		}
-	}
-	return total
-}
-
-// merge the small centroids
-func (idx *IvfflatSearchIndex[T]) findMergedCentroids(sqlproc *sqlexec.SqlProcess, centroids_ids []int64, idxcfg vectorindex.IndexConfig, probe uint) ([]int64, error) {
-	n := 0
-	nprobe := uint(0)
-
-	for _, k := range centroids_ids {
-		n++
-		nprobe++
-		cnt, ok := idx.Meta.CenterStats[k]
-		if ok && cnt < idx.Meta.SmallCenterThreshold {
-			nprobe--
-		}
-		if nprobe == probe {
-			break
-		}
-
-	}
-	return centroids_ids[:n], nil
+	return uint64(idx.Meta.DataSize * int64(len(centroids_ids)) / int64(nlists))
 }
 
 func (idx *IvfflatSearchIndex[T]) findCentroids(sqlproc *sqlexec.SqlProcess, query []T, distfn metric.DistanceFunction[T], idxcfg vectorindex.IndexConfig, probe uint, _ int64) ([]int64, error) {
@@ -379,22 +299,11 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(sqlproc *sqlexec.SqlProcess, que
 	}
 
 	rtprobe := probe
-	if idx.Meta.CenterStats != nil && idx.Meta.SmallCenterThreshold > 0 {
-		rtprobe = probe * 2
-		if rtprobe > idxcfg.Ivfflat.Lists {
-			rtprobe = idxcfg.Ivfflat.Lists
-		}
-	}
-
 	queries := [][]T{query}
 	rt := vectorindex.RuntimeConfig{Limit: rtprobe, NThreads: 1}
 	keys, _, err := idx.Centroids.Search(sqlproc, queries, rt)
 	if err != nil {
 		return nil, err
-	}
-
-	if idx.Meta.CenterStats != nil && idx.Meta.SmallCenterThreshold > 0 {
-		return idx.findMergedCentroids(sqlproc, keys.([]int64), idxcfg, probe)
 	}
 	return keys.([]int64), nil
 }
