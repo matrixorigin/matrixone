@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/brute_force"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -61,11 +62,10 @@ type IvfflatSearch[T types.RealNumbers] struct {
 }
 
 type IvfflatMeta struct {
-	CenterStats          map[int64]int64
-	Nbits                uint64
-	K                    uint32
-	Seed                 uint64
-	SmallCenterThreshold int64
+	Nbits    uint64
+	K        uint32
+	Seed     uint64
+	DataSize int64
 }
 
 // LoadStats get the number of entries per centroid
@@ -75,24 +75,9 @@ func (idx *IvfflatSearchIndex[T]) LoadStats(
 	tblcfg vectorindex.IndexTableConfig,
 	nthread int64) error {
 
-	idx.Meta.SmallCenterThreshold = int64(0)
-	if sqlproc.GetResolveVariableFunc() != nil {
-		val, err := sqlproc.GetResolveVariableFunc()("ivf_small_centroid_threshold", true, false)
-		if err != nil {
-			return err
-		}
-		idx.Meta.SmallCenterThreshold = val.(int64)
-	}
-
-	stats := make(map[int64]int64)
-
-	sql := fmt.Sprintf("SELECT `%s`, COUNT(`%s`) FROM `%s`.`%s` WHERE `%s` = %d GROUP BY `%s`",
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
+	logutil.Infof("IVFFLAT START: gets data size")
+	sql := fmt.Sprintf("SELECT COUNT(1) FROM `%s`.`%s`",
 		tblcfg.DbName, tblcfg.EntriesTable,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
-		idx.Version,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
 	)
 
 	res, err := runSql(sqlproc, sql)
@@ -101,19 +86,14 @@ func (idx *IvfflatSearchIndex[T]) LoadStats(
 	}
 	defer res.Close()
 
-	for _, bat := range res.Batches {
-		cntvec := bat.Vecs[1]
-		idvec := bat.Vecs[0]
+	// batch cannot be empty
+	bat := res.Batches[0]
 
-		for i := 0; i < bat.RowCount(); i++ {
-			cid := vector.GetFixedAtNoTypeCheck[int64](idvec, i)
-			cnt := vector.GetFixedAtNoTypeCheck[int64](cntvec, i)
-			stats[cid] = cnt
-		}
-	}
-
-	idx.Meta.CenterStats = stats
+	cnt := vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0)
+	idx.Meta.DataSize = int64(cnt)
+	logutil.Infof("IVFFLAT END: gets data size = %d", cnt)
 	return nil
+
 }
 
 // load all entries primary key per centroid and build bloomfilter per centroids
@@ -130,19 +110,8 @@ func (idx *IvfflatSearchIndex[T]) LoadBloomFilters(
 		return
 	}
 
-	// calculate the row count for bloomfilter
-	if idx.Meta.CenterStats == nil {
-		// no stats
-		return
-	}
-
-	maxv := int64(0)
-	for _, v := range idx.Meta.CenterStats {
-		if v > maxv {
-			maxv = v
-		}
-	}
-
+	// average size per bucket to estimate the bloomfilter size
+	maxv := idx.Meta.DataSize / int64(idxcfg.Ivfflat.Lists)
 	if maxv == 0 {
 		// no entries found
 		return
@@ -182,6 +151,7 @@ func (idx *IvfflatSearchIndex[T]) LoadBloomFilters(
 		}
 	}()
 
+	logutil.Infof("IVFFLAT START: get bloomfilter")
 	for i := 0; i < int(idxcfg.Ivfflat.Lists); i++ {
 		err = func() error {
 			bf := bloomfilters[i]
@@ -210,12 +180,14 @@ func (idx *IvfflatSearchIndex[T]) LoadBloomFilters(
 			return
 		}
 	}
-
+	logutil.Infof("IVFFLAT END: get bloomfilter")
 	return
 }
 
 func (idx *IvfflatSearchIndex[T]) LoadCentroids(proc *sqlexec.SqlProcess, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64) error {
 
+	logutil.Infof("IVFFLAT START: Load Centroids")
+	defer logutil.Infof("IVFFLAT END: Load Centroids")
 	// load centroids
 	sql := fmt.Sprintf(
 		"SELECT `%s`, `%s` FROM `%s`.`%s` WHERE `%s` = %d",
@@ -264,7 +236,7 @@ func (idx *IvfflatSearchIndex[T]) LoadCentroids(proc *sqlexec.SqlProcess, idxcfg
 		return moerr.NewInternalErrorNoCtx("number of centroids in db != Nlist")
 	}
 
-	bfidx, err := brute_force.NewBruteForceIndex[T](centroids, idxcfg.Ivfflat.Dimensions, metric.MetricType(idxcfg.Ivfflat.Metric), uint(elemsz))
+	bfidx, err := brute_force.NewBruteForceIndex[T](centroids, idxcfg.Ivfflat.Dimensions, metric.MetricType(idxcfg.Ivfflat.Metric), uint(elemsz), uint(nthread))
 	if err != nil {
 		return err
 	}
@@ -311,40 +283,8 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *sqlexec.SqlProcess, idxcfg vec
 	return nil
 }
 
-func (idx *IvfflatSearchIndex[T]) getCentroidsSum(centroids_ids []int64) uint64 {
-	total := uint64(0)
-
-	if idx.Meta.CenterStats == nil {
-		return total
-	}
-
-	for _, k := range centroids_ids {
-		cnt, ok := idx.Meta.CenterStats[k]
-		if ok {
-			total += uint64(cnt)
-		}
-	}
-	return total
-}
-
-// merge the small centroids
-func (idx *IvfflatSearchIndex[T]) findMergedCentroids(sqlproc *sqlexec.SqlProcess, centroids_ids []int64, idxcfg vectorindex.IndexConfig, probe uint) ([]int64, error) {
-	n := 0
-	nprobe := uint(0)
-
-	for _, k := range centroids_ids {
-		n++
-		nprobe++
-		cnt, ok := idx.Meta.CenterStats[k]
-		if ok && cnt < idx.Meta.SmallCenterThreshold {
-			nprobe--
-		}
-		if nprobe == probe {
-			break
-		}
-
-	}
-	return centroids_ids[:n], nil
+func (idx *IvfflatSearchIndex[T]) getCentroidsSum(centroids_ids []int64, nlists uint) uint64 {
+	return uint64(idx.Meta.DataSize * int64(len(centroids_ids)) / int64(nlists))
 }
 
 func (idx *IvfflatSearchIndex[T]) findCentroids(sqlproc *sqlexec.SqlProcess, query []T, distfn metric.DistanceFunction[T], idxcfg vectorindex.IndexConfig, probe uint, _ int64) ([]int64, error) {
@@ -359,22 +299,11 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(sqlproc *sqlexec.SqlProcess, que
 	}
 
 	rtprobe := probe
-	if idx.Meta.CenterStats != nil && idx.Meta.SmallCenterThreshold > 0 {
-		rtprobe = probe * 2
-		if rtprobe > idxcfg.Ivfflat.Lists {
-			rtprobe = idxcfg.Ivfflat.Lists
-		}
-	}
-
 	queries := [][]T{query}
 	rt := vectorindex.RuntimeConfig{Limit: rtprobe, NThreads: 1}
 	keys, _, err := idx.Centroids.Search(sqlproc, queries, rt)
 	if err != nil {
 		return nil, err
-	}
-
-	if idx.Meta.CenterStats != nil && idx.Meta.SmallCenterThreshold > 0 {
-		return idx.findMergedCentroids(sqlproc, keys.([]int64), idxcfg, probe)
 	}
 	return keys.([]int64), nil
 }
@@ -477,7 +406,7 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 
 	if len(idx.BloomFilters) == 0 {
 
-		sum := idx.getCentroidsSum(centroids_ids)
+		sum := idx.getCentroidsSum(centroids_ids, idxcfg.Ivfflat.Lists)
 		if uint64(keyvec.Length()) < sum {
 			// unique join keys size is smaller than entries in centroids
 			return buildBloomFilterWithUniqueJoinKeys(keyvec)

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat"
@@ -80,6 +81,7 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 
 	nworker := vectorindex.GetConcurrencyForBuild(u.tblcfg.ThreadsBuild)
 
+	logutil.Infof("IVFFLAT START: Kmeans clustering")
 	// NOTE: We use L2 distance to caculate centroid.  Ivfflat metric just for searching.
 	var centers [][]T
 	if clusterer, err = device.NewKMeans(
@@ -99,6 +101,8 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 		return err
 	}
 
+	logutil.Infof("IVFFLAT END: Kmeans clustering")
+
 	centers, ok = anycenters.([][]T)
 	if !ok {
 		return moerr.NewInternalError(proc.Ctx, "centers is not [][]float64")
@@ -115,6 +119,7 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 		return moerr.NewInternalError(proc.Ctx, "output centroids is empty")
 	}
 
+	logutil.Infof("IVFFLAT START: After Kmeans clustering, insert centroids to table")
 	sql := fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`) VALUES %s", u.tblcfg.DbName, u.tblcfg.IndexTable,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
@@ -131,6 +136,7 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 		}
 		res.Close()
 	}
+	logutil.Infof("IVFFLAT END: After Kmeans clustering, insert centroids to table")
 
 	return nil
 }
@@ -261,19 +267,22 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		}
 
 		// run SQL
-		sql := fmt.Sprintf("SELECT `%s` FROM `%s`.`%s` WHERE `%s` IS NOT NULL AND RAND() < %f LIMIT %d",
+		sql := fmt.Sprintf("SELECT SAMPLE(`%s`, %f PERCENT) FROM `%s`.`%s` WHERE `%s` IS NOT NULL LIMIT %d",
 			u.tblcfg.KeyPart,
+			u.sample_ratio * 100,
 			u.tblcfg.DbName,
 			u.tblcfg.SrcTable,
 			u.tblcfg.KeyPart,
-			u.sample_ratio,
 			u.nsample)
+
+		logutil.Infof("IVFFLAT START: pick sample. %s", sql)
 
 		res, err := ivf_runSql(sqlexec.NewSqlProcess(proc), sql)
 		if err != nil {
 			return err
 		}
 		defer res.Close()
+		logutil.Infof("IVFFLAT END: pick sample")
 
 		if len(res.Batches) == 0 {
 			return nil
