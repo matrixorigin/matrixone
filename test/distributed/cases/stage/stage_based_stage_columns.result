@@ -264,43 +264,40 @@ drop table t5;
 drop stage stage05;
 drop stage substage05;
 drop table if exists t6;
-
 create table t6 (col1 varchar(20), col2 varchar(20));
-
 load data infile '$resources/load_data/test_enclosed_by01.csv' into table t6 fields terminated by ',' enclosed by '`' lines terminated by '\n';
-
 select * from t6;
-
+➤ col1[12,-1,0]  ¦  col2[12,-1,0]  𝄀
+"Hello""  ¦  "Hi"  𝄀
+"database"  ¦  ""db"
 drop stage if exists stage06;
-
 create stage stage06 url = 'file:///$resources/into_outfile';
-
 drop stage if exists substage06;
-
 create stage substage06 url = 'stage://stage06/stage';
-
 select * from mo_catalog.mo_stages;
-
+➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
+10198  ¦  stage06  ¦  file:////Users/ariznawl/code/matrixone/test/distributed/resources/into_outfile  ¦    ¦  in_use  ¦  2026-03-09 05:17:49  ¦    𝄀
+10199  ¦  substage06  ¦  stage://stage06/stage  ¦    ¦  in_use  ¦  2026-03-09 05:17:49  ¦  
 show stages;
-
-select col2 from t6 into outfile 'stage://substage06/local_stage_t006.csv';
-
+➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
+stage06  ¦  file:////Users/ariznawl/code/matrixone/test/distributed/resources/into_outfile  ¦  in_use  ¦    𝄀
+substage06  ¦  stage://stage06/stage  ¦  in_use  ¦  
+select col2 from t6 into outfile 'stage://substage06/local_stage_t006.csv' fields terminated by ',' enclosed by '' lines terminated by '\n' header 'false';
 drop table t6;
-
 create table t6 (col2 varchar(20));
-
-load data infile 'stage://substage06/local_stage_t006.csv' into table t6 fields terminated by ',' enclosed by '`' lines terminated by '\n' ignore 1 lines;
-
+load data infile 'stage://substage06/local_stage_t006.csv' into table t6 fields terminated by ',' enclosed by '`' lines terminated by '\n';
 select * from t6;
-
+➤ col2[12,-1,0]  𝄀
+"Hi"  𝄀
+""db"
 show create table t6;
-
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+t6  ¦  CREATE TABLE `t6` (
+  `col2` varchar(20) DEFAULT NULL
+)
 drop table t6;
-
 drop stage stage06;
-
 drop stage substage06;
-
 drop table if exists t7;
 create table t7(col1 text, col2 text);
 load data infile {'filepath'='$resources/load_data/text.csv.tar.gz', 'compression'='tar.gz'} into table t7 FIELDS  ENCLOSED BY '"' TERMINATED BY "," LINES TERMINATED BY '\n' parallel 'true';
