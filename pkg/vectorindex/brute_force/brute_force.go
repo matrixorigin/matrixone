@@ -33,6 +33,39 @@ import (
 	"github.com/viterin/partial"
 )
 
+var (
+	pool1DF32 = sync.Pool{New: func() any { x := make([]float32, 0); return &x }}
+	pool1DF64 = sync.Pool{New: func() any { x := make([]float64, 0); return &x }}
+	pool1DU16 = sync.Pool{New: func() any { x := make([]uint16, 0); return &x }}
+	pool1DI64 = sync.Pool{New: func() any { x := make([]int64, 0); return &x }}
+	pool2DResult = sync.Pool{New: func() any { x := make([][]vectorindex.SearchResult, 0); return &x }}
+	pool1DResult = sync.Pool{New: func() any { x := make([]vectorindex.SearchResult, 0); return &x }}
+)
+
+func get1D[T any](pool *sync.Pool, n int) *[]T {
+	val := pool.Get()
+	if val == nil {
+		newSlice := make([]T, n)
+		return &newSlice
+	}
+	v, ok := val.(*[]T)
+	if !ok || v == nil {
+		newSlice := make([]T, n)
+		return &newSlice
+	}
+	if cap(*v) < n {
+		pool.Put(v)
+		newSlice := make([]T, n)
+		return &newSlice
+	}
+	*v = (*v)[:n]
+	return v
+}
+
+func put1D[T any](pool *sync.Pool, v *[]T) {
+	pool.Put(v)
+}
+
 type UsearchBruteForceIndex[T types.RealNumbers] struct {
 	Dataset      *[]T // flattend vector
 	Metric       usearch.Metric
@@ -129,37 +162,7 @@ func NewUsearchBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	return idx, nil
 }
 
-var (
-	pool1DF32 = sync.Pool{New: func() any { x := make([]float32, 0); return &x }}
-	pool1DF64 = sync.Pool{New: func() any { x := make([]float64, 0); return &x }}
-	pool1DI64 = sync.Pool{New: func() any { x := make([]int64, 0); return &x }}
-	pool2DResult = sync.Pool{New: func() any { x := make([][]vectorindex.SearchResult, 0); return &x }}
-	pool1DResult = sync.Pool{New: func() any { x := make([]vectorindex.SearchResult, 0); return &x }}
-)
 
-func get1D[T any](pool *sync.Pool, n int) *[]T {
-	val := pool.Get()
-	if val == nil {
-		newSlice := make([]T, n)
-		return &newSlice
-	}
-	v, ok := val.(*[]T)
-	if !ok || v == nil {
-		newSlice := make([]T, n)
-		return &newSlice
-	}
-	if cap(*v) < n {
-		pool.Put(v)
-		newSlice := make([]T, n)
-		return &newSlice
-	}
-	*v = (*v)[:n]
-	return v
-}
-
-func put1D[T any](pool *sync.Pool, v *[]T) {
-	pool.Put(v)
-}
 
 func (idx *UsearchBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return nil
