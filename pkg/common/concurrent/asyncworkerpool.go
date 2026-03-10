@@ -122,31 +122,31 @@ func (s *AsyncTaskResultStore) Stop() {
 
 // AsyncWorkerPool runs tasks in a dedicated OS thread with a CUDA context.
 type AsyncWorkerPool struct {
-	tasks                chan *AsyncTask
-	stopCh               chan struct{}
-	wg                   sync.WaitGroup
-	stopped              atomic.Bool // Indicates if the worker has been stopped
-	firstError           error
+	tasks                 chan *AsyncTask
+	stopCh                chan struct{}
+	wg                    sync.WaitGroup
+	stopped               atomic.Bool // Indicates if the worker has been stopped
+	firstError            atomic.Value
 	*AsyncTaskResultStore // Embed the result store
-	nthread              uint
-	sigc                 chan os.Signal // Add this field
-	errch                chan error
-	createResource       func() (any, error)
-	cleanupResource      func(any)
+	nthread               uint
+	sigc                  chan os.Signal // Add this field
+	errch                 chan error
+	createResource        func() (any, error)
+	cleanupResource       func(any)
 }
 
 // NewAsyncWorkerPool creates a new AsyncWorkerPool.
 func NewAsyncWorkerPool(nthread uint, createResource func() (any, error), cleanupResource func(any)) *AsyncWorkerPool {
 	return &AsyncWorkerPool{
-		tasks:               make(chan *AsyncTask, nthread),
-		stopCh:              make(chan struct{}),
-		stopped:             atomic.Bool{}, // Initialize to false
+		tasks:                make(chan *AsyncTask, nthread),
+		stopCh:               make(chan struct{}),
+		stopped:              atomic.Bool{}, // Initialize to false
 		AsyncTaskResultStore: NewAsyncTaskResultStore(),
-		nthread:             nthread,
-		sigc:                make(chan os.Signal, 1),   // Initialize sigc
-		errch:               make(chan error, nthread), // Initialize errch
-		createResource:      createResource,
-		cleanupResource:     cleanupResource,
+		nthread:              nthread,
+		sigc:                 make(chan os.Signal, 1),   // Initialize sigc
+		errch:                make(chan error, nthread), // Initialize errch
+		createResource:       createResource,
+		cleanupResource:      cleanupResource,
 	}
 }
 
@@ -196,8 +196,8 @@ func (w *AsyncWorkerPool) Start(initFn func(res any) error, stopFn func(resource
 			}
 		case err := <-w.errch: // Listen for errors from worker goroutines
 			logutil.Error("AsyncWorkerPool received internal error, stopping...", zap.Error(err))
-			if w.firstError == nil {
-				w.firstError = err
+			if w.firstError.Load() == nil {
+				w.firstError.Store(err)
 			}
 			if w.stopped.CompareAndSwap(false, true) {
 				close(w.stopCh) // Signal run() to stop.
@@ -343,6 +343,9 @@ func (w *AsyncWorkerPool) Wait(jobID uint64) (*AsyncTaskResult, error) {
 
 // GetFirstError returns the first internal error encountered by the worker.
 func (w *AsyncWorkerPool) GetFirstError() error {
-	return w.firstError
+	err := w.firstError.Load()
+	if err == nil {
+		return nil
+	}
+	return err.(error)
 }
-

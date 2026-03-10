@@ -18,9 +18,11 @@ package brute_force
 
 import (
 	"runtime"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
-	
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
@@ -28,6 +30,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
+)
+
+var (
+	pool1DU16 = sync.Pool{New: func() any { x := make([]uint16, 0); return &x }}
 )
 
 type GpuBruteForceIndex[T cuvs.VectorType] struct {
@@ -95,7 +101,7 @@ func NewGpuBruteForceIndex[T cuvs.VectorType](dataset [][]T,
 	var _t T
 	switch any(_t).(type) {
 	case float32:
-		allocator := malloc.GetDefault(nil)
+		allocator := malloc.NewCAllocator()
 		slice, deallocator, err := allocator.Allocate(uint64(reqSize*4), malloc.NoClear)
 		if err != nil {
 			return nil, err
@@ -103,7 +109,7 @@ func NewGpuBruteForceIndex[T cuvs.VectorType](dataset [][]T,
 		defer deallocator.Deallocate()
 		flattened = any(util.UnsafeSliceCast[float32](slice)).([]T)
 	case cuvs.Float16:
-		allocator := malloc.GetDefault(nil)
+		allocator := malloc.NewCAllocator()
 		slice, deallocator, err := allocator.Allocate(uint64(reqSize*2), malloc.NoClear)
 		if err != nil {
 			return nil, err
@@ -114,7 +120,7 @@ func NewGpuBruteForceIndex[T cuvs.VectorType](dataset [][]T,
 		ds := make([]T, reqSize)
 		flattened = ds
 	}
-	
+
 	for i, v := range dataset {
 		copy(flattened[i*dim:(i+1)*dim], v)
 	}
@@ -124,7 +130,6 @@ func NewGpuBruteForceIndex[T cuvs.VectorType](dataset [][]T,
 	if err != nil {
 		return nil, err
 	}
-	
 
 	return &GpuBruteForceIndex[T]{
 		index:     km,
@@ -152,10 +157,10 @@ func (idx *GpuBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any,
 
 	dim := int(idx.dimension)
 	reqSize := len(queriesvec) * dim
-	
+
 	var flattenedQueries []T
 	var pFlattenedQueries *[]T
-	
+
 	var _t T
 	switch any(_t).(type) {
 	case float32:
@@ -173,7 +178,7 @@ func (idx *GpuBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any,
 		ds := make([]T, reqSize)
 		flattenedQueries = ds
 	}
-	
+
 	for i, v := range queriesvec {
 		copy(flattenedQueries[i*dim:(i+1)*dim], v)
 	}

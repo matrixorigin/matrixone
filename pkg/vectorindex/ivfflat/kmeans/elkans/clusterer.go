@@ -55,9 +55,9 @@ type ElkanClusterer[T types.RealNumbers] struct {
 	nextCentroids               [][]T
 	halfInterCentroidDistMatrix [][]T
 	minHalfInterCentroidDist    []T
-	
-	membersCount        []int64
-	centroidShiftDist   []T
+
+	membersCount      []int64
+	centroidShiftDist []T
 
 	// thresholds
 	maxIterations  int     // e in paper
@@ -164,6 +164,14 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 		nworker = runtime.NumCPU()
 	}
 
+	// allocate centroids
+	centroidsBytes := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[[]T]()))
+	centroids := util.UnsafeSliceCastToLength[[]T](centroidsBytes, clusterCnt)
+	for i := range centroids {
+		cBytes := allocSlice(uint64(len(vectors[0])) * uint64(util.UnsafeSizeOf[T]()))
+		centroids[i] = util.UnsafeSliceCastToLength[T](cBytes, len(vectors[0]))
+	}
+
 	// allocate nextCentroids
 	nextCentroidsBytes := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[[]T]()))
 	nextCentroids := util.UnsafeSliceCastToLength[[]T](nextCentroidsBytes, clusterCnt)
@@ -188,7 +196,7 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 		assignments: assignments,
 		vectorMetas: metas,
 
-		//centroids will be initialized by InitCentroids()
+		centroids:                   centroids,
 		nextCentroids:               nextCentroids,
 		halfInterCentroidDistMatrix: centroidDist,
 		minHalfInterCentroidDist:    minCentroidDist,
@@ -241,13 +249,21 @@ func (km *ElkanClusterer[T]) InitCentroids(ctx context.Context) error {
 	}
 
 	var ok bool
-	km.centroids, ok = anycentroids.([][]T)
+	initCentroids, ok := anycentroids.([][]T)
 	if !ok {
 		return moerr.NewInternalErrorNoCtx("InitCentroids not return [][]float32|float64")
 	}
 
 	// Add a dimension check for the initialized centroids
-	return checkCentroidDimension(km.centroids, len(km.vectorList[0]))
+	if err := checkCentroidDimension(initCentroids, len(km.vectorList[0])); err != nil {
+		return err
+	}
+
+	for i := range initCentroids {
+		copy(km.centroids[i], initCentroids[i])
+	}
+
+	return nil
 }
 
 // Cluster returns the final centroids and the error if any.
@@ -575,11 +591,9 @@ func (km *ElkanClusterer[T]) recalculateCentroids(ctx context.Context, rnd *rand
 			//newCentroids[c] = km.vectorList[rnd.IntN(km.vectorCnt)]
 
 			//// if the cluster is empty, reinitialize it to a random vector, since you can't find the mean of an empty set
-			randVector := make([]T, len(km.vectorList[0]))
-			for l := range randVector {
-				randVector[l] = T(rnd.Float32())
+			for l := range newCentroids[c] {
+				newCentroids[c][l] = T(rnd.Float32())
 			}
-			newCentroids[c] = randVector
 
 			// normalize the random vector
 			if km.normalize {

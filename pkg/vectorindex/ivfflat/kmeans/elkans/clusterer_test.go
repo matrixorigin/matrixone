@@ -436,10 +436,10 @@ func Test_Cluster(t *testing.T) {
 				initType:       kmeans.Random,
 			},
 			want: [][]float64{
-				{10, 3.1666666666666665, 4, 5},
-				{1, 2, 3.5, 4.5},
+				{10, 3.333333333333333, 4, 5},
+				{1, 2, 3.6666666666666665, 4.666666666666666},
 			},
-			wantSSE: 11.972222222222225,
+			wantSSE: 12,
 			wantErr: false,
 		},
 	}
@@ -739,13 +739,13 @@ func TestElkanClusterer_recalculateCentroids(t *testing.T) {
 				// Here we are only testing the working of recalculateCentroids() function.
 
 				rnd := rand.New(rand.NewPCG(uint64(kmeans.DefaultRandSeed), 0))
-				
+
 				newCentroids := make([][]float64, ekm.clusterCnt)
 				for i := range newCentroids {
 					newCentroids[i] = make([]float64, len(ekm.vectorList[0]))
 				}
 				membersCount := make([]int64, ekm.clusterCnt)
-				
+
 				got := ekm.recalculateCentroids(ctx, rnd, newCentroids, membersCount)
 				if !assertx.InEpsilonF64Slices(tt.want.centroids, got) {
 					t.Errorf("centroids got = %v, want %v", got, tt.want.centroids)
