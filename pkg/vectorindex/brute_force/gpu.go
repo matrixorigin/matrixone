@@ -101,7 +101,7 @@ func NewGpuBruteForceIndex[T cuvs.VectorType](dataset [][]T,
 	var _t T
 	switch any(_t).(type) {
 	case float32:
-		allocator := malloc.GetDefault(nil)
+		allocator := malloc.NewCAllocator()
 		slice, deallocator, err := allocator.Allocate(uint64(reqSize*4), malloc.NoClear)
 		if err != nil {
 			return nil, err
@@ -109,7 +109,7 @@ func NewGpuBruteForceIndex[T cuvs.VectorType](dataset [][]T,
 		defer deallocator.Deallocate()
 		flattened = any(util.UnsafeSliceCast[float32](slice)).([]T)
 	case cuvs.Float16:
-		allocator := malloc.GetDefault(nil)
+		allocator := malloc.NewCAllocator()
 		slice, deallocator, err := allocator.Allocate(uint64(reqSize*2), malloc.NoClear)
 		if err != nil {
 			return nil, err
