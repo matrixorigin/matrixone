@@ -15,6 +15,7 @@
 package vectorindex
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"container/heap"
 	"crypto/md5"
 	"encoding/hex"
@@ -152,4 +153,123 @@ func (h *SearchResultSafeHeap) Pop() SearchResultIf {
 	defer h.mutex.Unlock()
 	x := heap.Pop(&h.resheap).(SearchResultIf)
 	return x
+}
+
+// FastMaxHeap is a highly optimized, generic bounded max-heap designed specifically for 
+// vector search Top-K operations. 
+//
+// Benefits over standard container/heap:
+// 1. Zero Interface Boxing: By using generics and specific array layouts, it completely avoids 
+//    the heap-escape "boxing" allocations caused by passing interface{} around.
+// 2. Struct of Arrays (SoA): Uses independent slices for keys and distances rather than an 
+//    Array of Structs (AoS). This dramatically improves CPU cache locality during distance 
+//    comparisons.
+// 3. Inline Array Reuse: Requires passing pre-allocated backing buffers to ensure zero 
+//    allocations inside tight loops.
+// 4. Bounded Logic: Natively handles "Limit/K" bounded sizing directly during the push step, 
+//    reducing structural overhead.
+type FastMaxHeap[T types.RealNumbers] struct {
+	keys      []int64
+	distances []T
+	size      int
+	limit     int
+}
+
+// NewFastMaxHeap initializes the FastMaxHeap using caller-provided buffer slices 
+// to guarantee zero-allocation operations during tight query loops.
+func NewFastMaxHeap[T types.RealNumbers](limit int, keysBuf []int64, distsBuf []T) *FastMaxHeap[T] {
+	return &FastMaxHeap[T]{
+		keys:      keysBuf,
+		distances: distsBuf,
+		size:      0,
+		limit:     limit,
+	}
+}
+
+func (h *FastMaxHeap[T]) siftUp(j int) {
+	for {
+		i := (j - 1) / 2 // parent
+		if i == j || h.distances[j] <= h.distances[i] {
+			break
+		}
+		h.distances[i], h.distances[j] = h.distances[j], h.distances[i]
+		h.keys[i], h.keys[j] = h.keys[j], h.keys[i]
+		j = i
+	}
+}
+
+func (h *FastMaxHeap[T]) siftDown(i0, n int) {
+	i := i0
+	for {
+		j1 := 2*i + 1
+		if j1 >= n || j1 < 0 { // j1 < 0 after int overflow
+			break
+		}
+		j := j1 // left child
+		if j2 := j1 + 1; j2 < n && h.distances[j2] > h.distances[j1] {
+			j = j2 // right child
+		}
+		if h.distances[j] <= h.distances[i] {
+			break
+		}
+		h.distances[i], h.distances[j] = h.distances[j], h.distances[i]
+		h.keys[i], h.keys[j] = h.keys[j], h.keys[i]
+		i = j
+	}
+}
+
+// Push inserts a new element into the max-heap. If the heap is at its limit,
+// it replaces the maximum (root) element if the new distance is smaller.
+func (h *FastMaxHeap[T]) Push(key int64, dist T) {
+	if h.size < h.limit {
+		h.distances[h.size] = dist
+		h.keys[h.size] = key
+		h.siftUp(h.size)
+		h.size++
+	} else if dist < h.distances[0] {
+		h.distances[0] = dist
+		h.keys[0] = key
+		h.siftDown(0, h.limit)
+	}
+}
+
+// Pop extracts the element with the largest distance from the max-heap.
+func (h *FastMaxHeap[T]) Pop() (int64, T, bool) {
+	if h.size == 0 {
+		return -1, 0, false
+	}
+	h.size--
+	key := h.keys[0]
+	dist := h.distances[0]
+
+	h.keys[0] = h.keys[h.size]
+	h.distances[0] = h.distances[h.size]
+	h.siftDown(0, h.size)
+
+	return key, dist, true
+}
+
+// Thread-safe wrapper for FastMaxHeap
+type FastMaxHeapSafe[T types.RealNumbers] struct {
+	mutex sync.Mutex
+	heap  *FastMaxHeap[T]
+}
+
+// NewFastMaxHeapSafe creates a thread-safe FastMaxHeap
+func NewFastMaxHeapSafe[T types.RealNumbers](limit int, keysBuf []int64, distsBuf []T) *FastMaxHeapSafe[T] {
+	return &FastMaxHeapSafe[T]{
+		heap: NewFastMaxHeap(limit, keysBuf, distsBuf),
+	}
+}
+
+func (s *FastMaxHeapSafe[T]) Push(key int64, dist T) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.heap.Push(key, dist)
+}
+
+func (s *FastMaxHeapSafe[T]) Pop() (int64, T, bool) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	return s.heap.Pop()
 }

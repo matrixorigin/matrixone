@@ -211,3 +211,71 @@ func TestGetConcurrency(t *testing.T) {
 	require.Equal(t, int64(4), nthread)
 
 }
+
+func TestFastMaxHeap(t *testing.T) {
+	limit := 3
+	keysBuf := make([]int64, limit)
+	distsBuf := make([]float32, limit)
+	
+	h := NewFastMaxHeap(limit, keysBuf, distsBuf)
+	
+	// Add 5 items, we only want the 3 smallest distances
+	h.Push(10, float32(10.0))
+	h.Push(5, float32(5.0))
+	h.Push(20, float32(20.0))
+	h.Push(1, float32(1.0))
+	h.Push(8, float32(8.0))
+	
+	// Expected distances in the heap (the 3 smallest): 1.0, 5.0, 8.0
+	// Because it is a max-heap of the minimums, popping should return the largest distance first: 8.0, 5.0, 1.0
+	
+	key, dist, ok := h.Pop()
+	require.True(t, ok)
+	require.Equal(t, int64(8), key)
+	require.Equal(t, float32(8.0), dist)
+	
+	key, dist, ok = h.Pop()
+	require.True(t, ok)
+	require.Equal(t, int64(5), key)
+	require.Equal(t, float32(5.0), dist)
+	
+	key, dist, ok = h.Pop()
+	require.True(t, ok)
+	require.Equal(t, int64(1), key)
+	require.Equal(t, float32(1.0), dist)
+	
+	_, _, ok = h.Pop()
+	require.False(t, ok)
+}
+
+func TestFastMaxHeapSafe(t *testing.T) {
+	limit := 5
+	keysBuf := make([]int64, limit)
+	distsBuf := make([]float32, limit)
+	
+	h := NewFastMaxHeapSafe(limit, keysBuf, distsBuf)
+	
+	var wg sync.WaitGroup
+	// Push 100 elements concurrently. The 5 smallest should be 0, 1, 2, 3, 4
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(val int) {
+			defer wg.Done()
+			h.Push(int64(val), float32(val))
+		}(i)
+	}
+	
+	wg.Wait()
+	
+	// Because it's a bounded max-heap holding the K smallest distances, 
+	// popping should yield the largest of the top 5 first: 4, 3, 2, 1, 0
+	for expected := 4; expected >= 0; expected-- {
+		key, dist, ok := h.Pop()
+		require.True(t, ok)
+		require.Equal(t, int64(expected), key)
+		require.Equal(t, float32(expected), dist)
+	}
+	
+	_, _, ok := h.Pop()
+	require.False(t, ok)
+}
