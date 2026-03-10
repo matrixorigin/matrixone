@@ -15,11 +15,11 @@
 package vectorindex
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"container/heap"
 	"crypto/md5"
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"io"
 	"os"
 	"sync"
@@ -155,19 +155,19 @@ func (h *SearchResultSafeHeap) Pop() SearchResultIf {
 	return x
 }
 
-// FastMaxHeap is a highly optimized, generic bounded max-heap designed specifically for 
-// vector search Top-K operations. 
+// FastMaxHeap is a highly optimized, generic bounded max-heap designed specifically for
+// vector search Top-K operations.
 //
 // Benefits over standard container/heap:
-// 1. Zero Interface Boxing: By using generics and specific array layouts, it completely avoids 
-//    the heap-escape "boxing" allocations caused by passing interface{} around.
-// 2. Struct of Arrays (SoA): Uses independent slices for keys and distances rather than an 
-//    Array of Structs (AoS). This dramatically improves CPU cache locality during distance 
-//    comparisons.
-// 3. Inline Array Reuse: Requires passing pre-allocated backing buffers to ensure zero 
-//    allocations inside tight loops.
-// 4. Bounded Logic: Natively handles "Limit/K" bounded sizing directly during the push step, 
-//    reducing structural overhead.
+//  1. Zero Interface Boxing: By using generics and specific array layouts, it completely avoids
+//     the heap-escape "boxing" allocations caused by passing interface{} around.
+//  2. Struct of Arrays (SoA): Uses independent slices for keys and distances rather than an
+//     Array of Structs (AoS). This dramatically improves CPU cache locality during distance
+//     comparisons.
+//  3. Inline Array Reuse: Requires passing pre-allocated backing buffers to ensure zero
+//     allocations inside tight loops.
+//  4. Bounded Logic: Natively handles "Limit/K" bounded sizing directly during the push step,
+//     reducing structural overhead.
 type FastMaxHeap[T types.RealNumbers] struct {
 	keys      []int64
 	distances []T
@@ -175,7 +175,7 @@ type FastMaxHeap[T types.RealNumbers] struct {
 	limit     int
 }
 
-// NewFastMaxHeap initializes the FastMaxHeap using caller-provided buffer slices 
+// NewFastMaxHeap initializes the FastMaxHeap using caller-provided buffer slices
 // to guarantee zero-allocation operations during tight query loops.
 func NewFastMaxHeap[T types.RealNumbers](limit int, keysBuf []int64, distsBuf []T) *FastMaxHeap[T] {
 	return &FastMaxHeap[T]{
