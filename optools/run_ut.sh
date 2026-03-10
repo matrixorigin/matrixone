@@ -47,6 +47,27 @@ UT_COUNT="$G_WKSP/$G_TS-UT-Count.out"
 CODE_COVERAGE="$G_WKSP/$G_TS-UT-Coverage.html"
 RAW_COVERAGE="coverage.out"
 IS_BUILD_FAIL=""
+TAGS="matrixone_test"
+
+THIRDPARTIES_INSTALL_DIR=${BUILD_WKSP}/thirdparties/install
+CGO_CFLAGS="-I${BUILD_WKSP}/cgo -I${THIRDPARTIES_INSTALL_DIR}/include"
+CGO_LDFLAGS="-Wl,-rpath,${THIRDPARTIES_INSTALL_DIR}/lib:${BUILD_WKSP}/cgo -L${THIRDPARTIES_INSTALL_DIR}/lib -L${BUILD_WKSP}/cgo -lmo -lusearch_c -lm"
+LD_LIBRARY_PATH="${THIRDPARTIES_INSTALL_DIR}/lib:${BUILD_WKSP}/cgo"
+
+if [[ -n "${MO_CL_CUDA:-}" ]] ; then
+    if [[ ${MO_CL_CUDA} == "1" ]] ; then
+         if [[ -z "${CONDA_PREFIX:-}" ]] ; then
+		 echo "CONDA_PREFIX environment variable not found"
+		 exit 1
+	 fi
+
+         CUDA_HOME=/usr/local/cuda
+         CGO_CFLAGS="${CGO_CFLAGS} -I${CUDA_HOME}/include -I${CONDA_PREFIX}/include"
+         CGO_LDFLAGS="${CGO_LDFLAGS} -L${CUDA_HOME}/lib64/stubs -lcuda -L${CUDA_HOME}/lib64 -lcudart -L${CONDA_PREFIX}/lib -lcuvs -lcuvs_c -lstdc++"
+         LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${CUDA_HOME}/lib64:${CUDA_HOME}/extras/CUPTI/lib64:${CONDA_PREFIX}/lib"
+	 TAGS="${TAGS},gpu"
+    fi
+fi
 
 if [[ -f $SCA_REPORT ]]; then rm $SCA_REPORT; fi
 if [[ -f $UT_REPORT ]]; then rm $UT_REPORT; fi
@@ -70,7 +91,7 @@ function run_vet(){
 
     if [[ -f $SCA_REPORT ]]; then rm $SCA_REPORT; fi
     logger "INF" "Test is in progress... "
-    go vet -tags matrixone_test -unsafeptr=false ./pkg/... 2>&1 | tee $SCA_REPORT
+    LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go vet -tags "${TAGS}" -unsafeptr=false ./pkg/... 2>&1 | tee $SCA_REPORT
     logger "INF" "Refer to $SCA_REPORT for details"
 
 }
@@ -95,19 +116,14 @@ function run_tests(){
     local cover_profile='profile.raw'
     make cgo
     make thirdparties
-    THIRDPARTIES_INSTALL_DIR=${BUILD_WKSP}/thirdparties/install
-
-    local CGO_CFLAGS="-I${BUILD_WKSP}/cgo -I${THIRDPARTIES_INSTALL_DIR}/include"
-    local CGO_LDFLAGS="-Wl,-rpath,${THIRDPARTIES_INSTALL_DIR}/lib:${BUILD_WKSP}/cgo -L${THIRDPARTIES_INSTALL_DIR}/lib -L${BUILD_WKSP}/cgo -lmo -lusearch_c -lm"
-    local LD_LIBRARY_PATH="${THIRDPARTIES_INSTALL_DIR}/lib:${BUILD_WKSP}/cgo"
 
     if [[ $SKIP_TESTS == 'race' ]]; then
         logger "INF" "Run UT without race check"
-        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test -short -v -json -tags matrixone_test -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m"  $test_scope > $UT_REPORT
+        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m"  $test_scope > $UT_REPORT
 
     else
         logger "INF" "Run UT with race check"
-        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test -short -v -json -tags matrixone_test -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $test_scope > $UT_REPORT
+        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $test_scope > $UT_REPORT
     fi
 }
 
