@@ -202,8 +202,10 @@ func (km *BalancedKMeans[T]) Cluster(ctx context.Context) (any, error) {
 		km.indices[i] = i
 	}
 
+	rnd := rand.New(rand.NewPCG(uint64(kmeans.DefaultRandSeed), 0))
+
 	exec := concurrent.NewThreadPoolExecutor(km.nworker)
-	err := km.bisectBalanced(ctx, km.indices, km.clusterCnt, 0, exec, km.c1, km.c2, km.diffs, km.localAssign)
+	err := km.bisectBalanced(ctx, km.indices, km.clusterCnt, 0, exec, km.c1, km.c2, km.diffs, km.localAssign, rnd)
 	if err != nil {
 		return nil, err
 	}
@@ -220,6 +222,7 @@ func (km *BalancedKMeans[T]) bisectBalanced(
 	c1, c2 []T,
 	diffs []pointDiff,
 	localAssign []int,
+	rnd *rand.Rand,
 ) error {
 	if k == 1 {
 		computeMeanFromIndicesInPlace(km.vectorList, indices, km.centroids[clusterStart])
@@ -246,10 +249,10 @@ func (km *BalancedKMeans[T]) bisectBalanced(
 	}
 
 	// Random initial centers for the bisection
-	idx1 := rand.IntN(n)
-	idx2 := rand.IntN(n)
+	idx1 := rnd.IntN(n)
+	idx2 := rnd.IntN(n)
 	for idx1 == idx2 && n > 1 {
-		idx2 = rand.IntN(n)
+		idx2 = rnd.IntN(n)
 	}
 	copy(c1, km.vectorList[indices[idx1]])
 	copy(c2, km.vectorList[indices[idx2]])
@@ -261,6 +264,9 @@ func (km *BalancedKMeans[T]) bisectBalanced(
 	// Create the worker function once outside the iteration loop to avoid allocating closures
 	workerFn := func(ctx context.Context, thread_id int, start, end int) error {
 		for i := start; i < end; i++ {
+			if (i-start)%100 == 0 && ctx.Err() != nil {
+				return ctx.Err()
+			}
 			vIdx := indices[i]
 			d1, err1 := km.distFn(km.vectorList[vIdx], c1)
 			if err1 != nil {
@@ -333,12 +339,12 @@ func (km *BalancedKMeans[T]) bisectBalanced(
 	}
 
 	// We can reuse the buffers for the child calls since they are sequential
-	err := km.bisectBalanced(ctx, indices[:n1], k1, clusterStart, exec, c1, c2, diffs, localAssign)
+	err := km.bisectBalanced(ctx, indices[:n1], k1, clusterStart, exec, c1, c2, diffs, localAssign, rnd)
 	if err != nil {
 		return err
 	}
 
-	err = km.bisectBalanced(ctx, indices[n1:], k2, clusterStart+k1, exec, c1, c2, diffs, localAssign)
+	err = km.bisectBalanced(ctx, indices[n1:], k2, clusterStart+k1, exec, c1, c2, diffs, localAssign, rnd)
 	if err != nil {
 		return err
 	}
