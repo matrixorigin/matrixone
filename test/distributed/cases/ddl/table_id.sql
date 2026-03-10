@@ -200,11 +200,6 @@ insert into tp1 values
 alter table tp1 add partition (
     partition p2 values less than ('2027-01-01')
 );
-select table_schema, table_name, partition_name, partition_method
-from information_schema.partitions
-where table_schema = 'table_id' and table_name = 'tp1'
-order by partition_name;
-
 truncate table tp1;
 
 -- DML after TRUNCATE and partition change

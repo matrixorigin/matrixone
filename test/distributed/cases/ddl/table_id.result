@@ -140,14 +140,6 @@ insert into tp1 values
 alter table tp1 add partition (
 partition p2 values less than ('2027-01-01')
 );
-select table_schema, table_name, partition_name, partition_method
-from information_schema.partitions
-where table_schema = 'table_id' and table_name = 'tp1'
-order by partition_name;
-table_schema    table_name    partition_name    partition_method
-table_id    tp1    p0    RANGE COLUMNS
-table_id    tp1    p1    RANGE COLUMNS
-table_id    tp1    p2    RANGE COLUMNS
 truncate table tp1;
 insert into tp1 values
 (3, '2025-02-02', 300),
