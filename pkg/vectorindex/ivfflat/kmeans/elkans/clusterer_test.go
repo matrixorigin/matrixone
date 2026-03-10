@@ -16,6 +16,7 @@ package elkans
 
 import (
 	"context"
+	"math"
 	"math/rand/v2"
 	"reflect"
 	"testing"
@@ -1056,4 +1057,28 @@ func Test_checkCentroidDimension(t *testing.T) {
 	require.Error(t, err)
 	err = checkCentroidDimension(c, 3)
 	require.NoError(t, err)
+}
+
+func TestClusterer_Spherical(t *testing.T) {
+	ctx := context.Background()
+	// Vectors on unit circle
+	vectors := [][]float32{
+		{1, 0}, {0.99, 0.1},
+		{0, 1}, {0.1, 0.99},
+	}
+	km, err := NewKMeans(vectors, 2, 10, 0.01, metric.Metric_CosineDistance, kmeans.Random, true, 1)
+	require.NoError(t, err)
+
+	res, err := km.Cluster(ctx)
+	require.NoError(t, err)
+	centroids := res.([][]float32)
+
+	// Check if centroids are normalized
+	for _, c := range centroids {
+		norm := float32(0)
+		for _, v := range c {
+			norm += v * v
+		}
+		require.InDelta(t, 1.0, math.Sqrt(float64(norm)), 1e-5)
+	}
 }

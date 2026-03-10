@@ -319,6 +319,10 @@ func (km *BalancedKMeans[T]) bisectBalanced(
 
 		computeMeanFromIndicesAndAssignInPlace(km.vectorList, indices, curAssign, 0, c1)
 		computeMeanFromIndicesAndAssignInPlace(km.vectorList, indices, curAssign, 1, c2)
+		if km.normalize {
+			metric.NormalizeL2(c1, c1)
+			metric.NormalizeL2(c2, c2)
+		}
 	}
 
 	// In-place partition of indices based on curAssign
