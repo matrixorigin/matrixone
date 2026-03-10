@@ -221,7 +221,7 @@ func TestGoBruteForceHeapLogic(t *testing.T) {
 
 				require.InDeltaf(t, expectedDist, actualDist, 1e-5, "Distance mismatch at query %d, rank %d (limit %d)", i, j, limit)
 			}
-			
+
 			// Check that actual results are sorted
 			for j := 1; j < int(limit); j++ {
 				offset := i*int(limit) + j
