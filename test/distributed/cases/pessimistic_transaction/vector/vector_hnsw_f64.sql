@@ -107,7 +107,6 @@ select * from vector_index_07 order by  L2_DISTANCE(a, "[16, 15, 0, 0, 5, 46, 5,
 select * from vector_index_07 order by  L2_DISTANCE(b, "[16, 15, 3, 0, 0, 4, 3, 5, 51]") ASC LIMIT 2;
 select * from vector_index_07 order by  L2_DISTANCE(b, "abc") ASC LIMIT 2;
 
--- @bvt:issue#22794
 -- potential w-w conflict because of async task like reindex and drop column
 
 -- vector index: update/delete/truncate vector index
@@ -143,7 +142,6 @@ select * from vector_index_08;
 
 drop table vector_index_08;
 
--- @bvt:issue
 
 -- create vector index on NULL values
 create table vector_index_09(a bigint primary key, b vecf64(128),c int,key c_k(c));
