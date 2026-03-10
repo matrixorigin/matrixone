@@ -361,6 +361,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_json: {
+		types.T_json,
 		types.T_char, types.T_varchar, types.T_text,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,

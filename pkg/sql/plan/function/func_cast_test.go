@@ -2504,6 +2504,13 @@ func TestCastJsonToJson(t *testing.T) {
 	require.True(t, succeed, info)
 }
 
+func TestCastJsonToJsonOverloadResolution(t *testing.T) {
+	require.True(t, IfTypeCastSupported(types.T_json, types.T_json))
+
+	_, err := GetFunctionByName(context.Background(), "cast", []types.Type{types.T_json.ToType(), types.T_json.ToType()})
+	require.NoError(t, err)
+}
+
 // emptySliceForCastTarget returns an empty slice of the right type for the second (target type) cast parameter.
 func emptySliceForCastTarget(oid types.T) any {
 	switch oid {
