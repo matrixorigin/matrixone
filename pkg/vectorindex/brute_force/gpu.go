@@ -17,9 +17,6 @@
 package brute_force
 
 import (
-	"runtime"
-	"sync"
-
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 
@@ -30,10 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
-)
-
-var (
-	pool1DU16 = sync.Pool{New: func() any { x := make([]uint16, 0); return &x }}
 )
 
 type GpuBruteForceIndex[T cuvs.VectorType] struct {
@@ -159,20 +152,28 @@ func (idx *GpuBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any,
 	reqSize := len(queriesvec) * dim
 
 	var flattenedQueries []T
-	var pFlattenedQueries *[]T
+	var queryDeallocator malloc.Deallocator
 
 	var _t T
 	switch any(_t).(type) {
 	case float32:
-		p := get1D[float32](&pool1DF32, reqSize)
-		defer put1D(&pool1DF32, p)
-		flattenedQueries = any(*p).([]T)
-		pFlattenedQueries = any(p).(*[]T)
+		allocator := malloc.NewCAllocator()
+		slice, dealloc, err2 := allocator.Allocate(uint64(reqSize)*4, malloc.NoClear)
+		if err2 != nil {
+			return nil, nil, err2
+		}
+		queryDeallocator = dealloc
+		f32Slice := util.UnsafeSliceCastToLength[float32](slice, reqSize)
+		flattenedQueries = any(f32Slice).([]T)
 	case cuvs.Float16:
-		p := get1D[uint16](&pool1DU16, reqSize)
-		defer put1D(&pool1DU16, p)
-		flattenedQueries = any(util.UnsafeSliceCast[cuvs.Float16](*p)).([]T)
-		pFlattenedQueries = any(p).(*[]T)
+		allocator := malloc.NewCAllocator()
+		slice, dealloc, err2 := allocator.Allocate(uint64(reqSize)*2, malloc.NoClear)
+		if err2 != nil {
+			return nil, nil, err2
+		}
+		queryDeallocator = dealloc
+		f16Slice := util.UnsafeSliceCastToLength[cuvs.Float16](slice, reqSize)
+		flattenedQueries = any(f16Slice).([]T)
 	default:
 		// Not pooling other types, although T is likely only float32 for CUVS
 		ds := make([]T, reqSize)
@@ -181,6 +182,10 @@ func (idx *GpuBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any,
 
 	for i, v := range queriesvec {
 		copy(flattenedQueries[i*dim:(i+1)*dim], v)
+	}
+
+	if queryDeallocator != nil {
+		defer queryDeallocator.Deallocate()
 	}
 
 	neighbors, distances, err := idx.index.Search(flattenedQueries, uint64(len(queriesvec)), uint32(idx.dimension), uint32(rt.Limit))
@@ -194,7 +199,6 @@ func (idx *GpuBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any,
 	}
 
 	retkeys = neighbors
-	runtime.KeepAlive(pFlattenedQueries)
 	return
 }
 
