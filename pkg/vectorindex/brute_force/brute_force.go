@@ -148,36 +148,34 @@ func (idx *UsearchBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries 
 
 	var flatten []T
 	var queryDeallocator malloc.Deallocator
-	if len(queries) == 1 {
-		flatten = queries[0]
-	} else {
-		reqSize := len(queries) * int(idx.Dimension)
-		allocator := malloc.NewCAllocator()
-		var _t T
-		switch any(_t).(type) {
-		case float32:
-			slice, dealloc, err2 := allocator.Allocate(uint64(reqSize)*4, malloc.NoClear)
-			if err2 != nil {
-				return nil, nil, err2
-			}
-			queryDeallocator = dealloc
-			f32Slice := util.UnsafeSliceCastToLength[float32](slice, reqSize)
-			flatten = any(f32Slice).([]T)
-		case float64:
-			slice, dealloc, err2 := allocator.Allocate(uint64(reqSize)*8, malloc.NoClear)
-			if err2 != nil {
-				return nil, nil, err2
-			}
-			queryDeallocator = dealloc
-			f64Slice := util.UnsafeSliceCastToLength[float64](slice, reqSize)
-			flatten = any(f64Slice).([]T)
-		}
 
-		for i := 0; i < len(queries); i++ {
-			offset := i * int(idx.Dimension)
-			copy(flatten[offset:], queries[i])
+	reqSize := len(queries) * int(idx.Dimension)
+	allocator := malloc.NewCAllocator()
+	var _t T
+	switch any(_t).(type) {
+	case float32:
+		slice, dealloc, err2 := allocator.Allocate(uint64(reqSize)*4, malloc.NoClear)
+		if err2 != nil {
+			return nil, nil, err2
 		}
+		queryDeallocator = dealloc
+		f32Slice := util.UnsafeSliceCastToLength[float32](slice, reqSize)
+		flatten = any(f32Slice).([]T)
+	case float64:
+		slice, dealloc, err2 := allocator.Allocate(uint64(reqSize)*8, malloc.NoClear)
+		if err2 != nil {
+			return nil, nil, err2
+		}
+		queryDeallocator = dealloc
+		f64Slice := util.UnsafeSliceCastToLength[float64](slice, reqSize)
+		flatten = any(f64Slice).([]T)
 	}
+
+	for i := 0; i < len(queries); i++ {
+		offset := i * int(idx.Dimension)
+		copy(flatten[offset:], queries[i])
+	}
+
 	if queryDeallocator != nil {
 		defer queryDeallocator.Deallocate()
 	}
