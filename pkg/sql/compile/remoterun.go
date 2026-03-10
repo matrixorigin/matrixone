@@ -224,6 +224,15 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 				}
 			}
 		}
+		// Fulltext index table: attach FulltextBloomFilter from context.
+		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
+			n.TableDef.TableType == catalog.FullTextIndex_TblType {
+			if bfVal := s.Proc.Ctx.Value(defines.FulltextBloomFilter{}); bfVal != nil {
+				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
+					p.DataSource.BloomFilter = bf
+				}
+			}
+		}
 	}
 	// PreScope
 	p.Children = make([]*pipeline.Pipeline, len(s.PreScopes))
