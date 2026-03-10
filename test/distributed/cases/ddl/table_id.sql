@@ -201,7 +201,7 @@ alter table tp1 add partition (
 );
 select table_schema, table_name, partition_name, partition_method
 from information_schema.partitions
-where table_schema = 'mo_table_id_test' and table_name = 'tp1'
+where table_schema = 'table_id' and table_name = 'tp1'
 order by partition_name;
 
 truncate table tp1;
