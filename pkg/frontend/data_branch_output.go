@@ -568,20 +568,30 @@ func tryDiffAsCSV(
 	if sqlRet, err = runSql(ctx, ses, bh, sql, nil, nil); err != nil {
 		return false, err
 	}
+	defer sqlRet.Close()
 
-	if len(sqlRet.Batches) != 1 &&
-		sqlRet.Batches[0].RowCount() != 1 &&
-		sqlRet.Batches[0].VectorCount() != 1 {
-		return false, moerr.NewInternalErrorNoCtxf("cannot get count(*) of base table")
+	ok, err := shouldDiffAsCSV(sqlRet)
+	if err != nil {
+		return false, err
 	}
-
-	if vector.GetFixedAtWithTypeCheck[uint64](sqlRet.Batches[0].Vecs[0], 0) != 0 {
+	if !ok {
 		return false, nil
 	}
 
-	sqlRet.Close()
-
 	return true, writeCSV(ctx, ses, tblStuff, bh, stmt)
+}
+
+func shouldDiffAsCSV(sqlRet executor.Result) (bool, error) {
+	if len(sqlRet.Batches) != 1 ||
+		sqlRet.Batches[0] == nil ||
+		sqlRet.Batches[0].RowCount() != 1 ||
+		sqlRet.Batches[0].VectorCount() != 1 ||
+		len(sqlRet.Batches[0].Vecs) != 1 ||
+		sqlRet.Batches[0].Vecs[0] == nil {
+		return false, moerr.NewInternalErrorNoCtxf("cannot get count(*) of base table")
+	}
+
+	return vector.GetFixedAtWithTypeCheck[uint64](sqlRet.Batches[0].Vecs[0], 0) == 0, nil
 }
 
 func writeCSV(

@@ -25,11 +25,15 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/require"
 )
@@ -183,6 +187,48 @@ func TestDataBranchOutputBuildOutputSchema(t *testing.T) {
 		}
 		err := buildOutputSchema(ctx, ses, stmt, tblStuff)
 		require.Error(t, err)
+	})
+}
+
+func TestDataBranchOutputShouldDiffAsCSV(t *testing.T) {
+	t.Run("reject malformed result without panic", func(t *testing.T) {
+		ok, err := shouldDiffAsCSV(executor.Result{})
+		require.Error(t, err)
+		require.False(t, ok)
+	})
+
+	t.Run("reject non-zero base row count", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
+
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+		require.NoError(t, vector.AppendFixed[uint64](bat.Vecs[0], 3, false, mp))
+		bat.SetRowCount(1)
+
+		ok, err := shouldDiffAsCSV(executor.Result{
+			Batches: []*batch.Batch{bat},
+			Mp:      mp,
+		})
+		require.NoError(t, err)
+		require.False(t, ok)
+	})
+
+	t.Run("allow zero base row count", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
+
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+		require.NoError(t, vector.AppendFixed[uint64](bat.Vecs[0], 0, false, mp))
+		bat.SetRowCount(1)
+
+		ok, err := shouldDiffAsCSV(executor.Result{
+			Batches: []*batch.Batch{bat},
+			Mp:      mp,
+		})
+		require.NoError(t, err)
+		require.True(t, ok)
 	})
 }
 
