@@ -475,7 +475,7 @@ func TestAppendBatchToSpillFilesPartitioning(t *testing.T) {
 	}
 
 	analyzer := process.NewAnalyzer(0, false, false, "test")
-	rowCnts, err := appendBatchToSpillFiles(proc, bat, files, buffers, false, conditions, analyzer)
+	rowCnts, err := appendBuildBatchToSpillFiles(proc, bat, files, buffers, false, conditions, analyzer)
 	require.NoError(t, err)
 
 	// Verify total rows distributed
@@ -527,7 +527,7 @@ func TestEmptyBatchSpill(t *testing.T) {
 	}
 
 	analyzer := process.NewAnalyzer(0, false, false, "test")
-	rowCnts, err := appendBatchToSpillFiles(proc, bat, files, buffers, false, conditions, analyzer)
+	rowCnts, err := appendBuildBatchToSpillFiles(proc, bat, files, buffers, false, conditions, analyzer)
 	require.NoError(t, err)
 
 	totalRows := int64(0)

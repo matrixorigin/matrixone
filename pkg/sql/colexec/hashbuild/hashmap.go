@@ -163,12 +163,7 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
 	hb.MultiSels.Free()
-	for i := range hb.executors {
-		if hb.executors[i] != nil {
-			hb.executors[i].Free()
-		}
-	}
-	hb.executors = nil
+	hb.FreeExecutors()
 	hb.vecs = nil
 	for i := range hb.UniqueJoinKeys {
 		if hb.UniqueJoinKeys[i] != nil {
@@ -176,6 +171,15 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 		}
 	}
 	hb.UniqueJoinKeys = nil
+}
+
+func (hb *HashmapBuilder) FreeExecutors() {
+	for i := range hb.executors {
+		if hb.executors[i] != nil {
+			hb.executors[i].Free()
+		}
+	}
+	hb.executors = nil
 }
 
 func (hb *HashmapBuilder) FreeHashMapAndBatches(proc *process.Process) {

@@ -100,7 +100,7 @@ func createSpillFiles(proc *process.Process) ([]string, []*os.File, error) {
 	return buckets, files, nil
 }
 
-func appendBatchToSpillFiles(proc *process.Process, bat *batch.Batch, files []*os.File, buffers []*bucketBuffer, hashOnPK bool, conditions []*plan.Expr, analyzer process.Analyzer) ([]int64, error) {
+func appendBuildBatchToSpillFiles(proc *process.Process, bat *batch.Batch, files []*os.File, buffers []*bucketBuffer, hashOnPK bool, conditions []*plan.Expr, analyzer process.Analyzer) ([]int64, error) {
 	if bat.RowCount() == 0 {
 		return make([]int64, spillNumBuckets), nil
 	}

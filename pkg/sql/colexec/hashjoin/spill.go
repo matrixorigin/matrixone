@@ -70,18 +70,33 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process) (vm.CallRe
 
 			probeBatches, err := hashJoin.loadSpilledProbeBucket(proc, ctr.nextBucketIdx)
 			if err != nil {
+				for _, bat := range buildBatches {
+					bat.Clean(proc.Mp())
+				}
 				return result, err
 			}
 
 			ctr.nextBucketIdx++
 
 			if len(buildBatches) == 0 || len(probeBatches) == 0 {
+				for _, bat := range buildBatches {
+					bat.Clean(proc.Mp())
+				}
+				for _, bat := range probeBatches {
+					bat.Clean(proc.Mp())
+				}
 				continue
 			}
 
 			// Rebuild hashmap for this bucket
 			tmpJoinMap, err := hashJoin.rebuildHashmapForBucket(proc, buildBatches)
 			if err != nil {
+				for _, bat := range buildBatches {
+					bat.Clean(proc.Mp())
+				}
+				for _, bat := range probeBatches {
+					bat.Clean(proc.Mp())
+				}
 				return result, err
 			}
 
@@ -404,6 +419,7 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, buildBa
 	// Copy batches into builder
 	for _, bat := range buildBatches {
 		if err := builder.Batches.CopyIntoBatches(bat, proc); err != nil {
+			builder.Free(proc)
 			return nil, err
 		}
 		builder.InputBatchRowCount += bat.RowCount()
@@ -411,11 +427,16 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, buildBa
 
 	// Build hashmap
 	if err := builder.BuildHashmap(hashJoin.HashOnPK, true, false, proc); err != nil {
+		builder.Free(proc)
 		return nil, err
 	}
 
 	jm := message.NewJoinMap(builder.MultiSels, builder.IntHashMap, builder.StrHashMap, nil, builder.Batches.Buf, proc.Mp())
 	jm.SetRowCount(int64(builder.InputBatchRowCount))
 	jm.IncRef(1)
+
+	// Free only the executors - hashmaps, MultiSels, and batches are now owned by JoinMap
+	builder.FreeExecutors()
+
 	return jm, nil
 }
