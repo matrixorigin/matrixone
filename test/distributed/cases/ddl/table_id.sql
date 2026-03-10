@@ -113,6 +113,7 @@ insert into t6 values (1, 'alice', 'alice@test.com');
 insert into t6 values (2, 'bob',   'bob@test.com');
 alter table t6 add column comment varchar(50);
 -- This insert should fail due to duplicate email
+-- @pattern
 insert into t6 values (3, 'alice2', 'alice@test.com','default');
 
 select * from t6 order by id;
