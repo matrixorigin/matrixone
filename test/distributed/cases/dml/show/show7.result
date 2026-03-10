@@ -1,0 +1,22 @@
+drop account if exists show_table_status_acc_10163;
+create account show_table_status_acc_10163 admin_name = 'admin' identified by '111';
+select 1;
+1
+1
+select 2;
+2
+2
+select 3;
+3
+3
+select case when count(*) > 0 then 0 else sleep(15) end as wait_for_statement_info_ready from system.statement_info;
+wait_for_statement_info_ready
+0
+select count(*) > 0 as has_data from system.statement_info;
+has_data
+1
+show table status from system like 'statement_info';
+-- @regex("(?m)^statement_info.*Tae.*Dynamic.*[1-9][0-9]*.*$",true)
+➤ Name[12,-1,0]  ¦  Engine[12,-1,0]  ¦  Row_format[12,-1,0]  ¦  Rows[-5,64,0]  ¦  Avg_row_length[-5,64,0]  ¦  Data_length[-5,64,0]  ¦  Max_data_length[-5,64,0]  ¦  Index_length[-5,64,0]  ¦  Data_free[12,-1,0]  ¦  Auto_increment[-5,64,0]  ¦  Create_time[93,64,0]  ¦  Update_time[12,-1,0]  ¦  Check_time[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Checksum[12,-1,0]  ¦  Create_options[1,0,0]  ¦  Comment[12,-1,0]  ¦  Role_id[4,32,0]  ¦  Role_name[12,-1,0]  𝄀
+statement_info  ¦  Tae  ¦  Dynamic  ¦  1  ¦  0  ¦  0  ¦  0  ¦  0  ¦  NULL  ¦  1  ¦  2026-02-28 16:08:26  ¦  NULL  ¦  NULL  ¦  utf8mb4_bin  ¦  NULL  ¦    ¦  record each statement and stats info[mo_no_del_hint]  ¦  2  ¦  accountadmin
+drop account show_table_status_acc_10163;
