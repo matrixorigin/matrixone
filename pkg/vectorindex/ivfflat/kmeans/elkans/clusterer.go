@@ -602,8 +602,8 @@ func (km *ElkanClusterer[T]) recalculateCentroids(ctx context.Context, rnd *rand
 		} else {
 			// find the mean of the cluster members
 			metric.ScaleInPlace[T](newCentroids[c], 1.0/T(membersCount[c]))
-			
-			// For spherical k-means, the mean of normalized vectors must be re-normalized 
+
+			// For spherical k-means, the mean of normalized vectors must be re-normalized
 			// to project the centroid back onto the unit hypersphere.
 			if km.normalize {
 				metric.NormalizeL2(newCentroids[c], newCentroids[c])
