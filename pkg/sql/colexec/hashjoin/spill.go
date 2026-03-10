@@ -54,21 +54,26 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process) (vm.CallRe
 	for {
 		// Load next bucket if needed
 		if ctr.mp == nil || ctr.bucketProbeIdx >= len(ctr.bucketProbeBatches) {
-			if ctr.currentBucketIdx >= len(ctr.spilledBuildBuckets) {
+			// If current bucket probe is done and we have rightRowsMatched, return nil to trigger finalization
+			if ctr.mp != nil && ctr.rightRowsMatched != nil {
 				return result, nil
 			}
 
-			buildBatches, err := loadSpilledBuildBucket(proc, ctr.spilledBuildBuckets[ctr.currentBucketIdx])
+			if ctr.nextBucketIdx >= len(ctr.spilledBuildBuckets) {
+				return result, nil
+			}
+
+			buildBatches, err := loadSpilledBuildBucket(proc, ctr.spilledBuildBuckets[ctr.nextBucketIdx])
 			if err != nil {
 				return result, err
 			}
 
-			probeBatches, err := hashJoin.loadSpilledProbeBucket(proc, ctr.currentBucketIdx)
+			probeBatches, err := hashJoin.loadSpilledProbeBucket(proc, ctr.nextBucketIdx)
 			if err != nil {
 				return result, err
 			}
 
-			ctr.currentBucketIdx++
+			ctr.nextBucketIdx++
 
 			if len(buildBatches) == 0 || len(probeBatches) == 0 {
 				continue
@@ -94,7 +99,6 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process) (vm.CallRe
 					ctr.rightRowsMatched = &bitmap.Bitmap{}
 					ctr.rightRowsMatched.InitWithSize(ctr.rightRowCnt)
 					ctr.rightMatchedIter = nil
-					ctr.bitmapSynced = false
 				}
 			}
 

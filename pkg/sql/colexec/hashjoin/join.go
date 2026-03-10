@@ -234,11 +234,12 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.state = End
 
 				// For spilled join, clean up current bucket and move to next
-				if ctr.mp != nil && ctr.mp.IsSpilled() {
+				if len(ctr.spilledBuildBuckets) > 0 {
 					ctr.cleanBucketBatches(proc)
 					ctr.cleanHashMap()
+					ctr.rightRowsMatched = nil
 
-					if ctr.currentBucketIdx < len(ctr.spilledBuildBuckets) {
+					if ctr.nextBucketIdx < len(ctr.spilledBuildBuckets) {
 						ctr.state = Probe
 					}
 				}
@@ -271,7 +272,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 		// Handle spilled build side
 		if ctr.mp.IsSpilled() {
 			ctr.spilledBuildBuckets, ctr.spilledBuildRowCnts = ctr.mp.GetSpillBuckets()
-			ctr.currentBucketIdx = 0
+			ctr.nextBucketIdx = 0
 
 			// Create spill files for probe side
 			spilledProbeBuckets, spillProbeFiles, err := createProbeSpillFiles(proc)
@@ -312,8 +313,12 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 					}
 				}
 			}
+
+			ctr.mp = nil
+			return err
 		}
 	}
+
 	ctr.rightBats = ctr.mp.GetBatches()
 	ctr.rightRowCnt = ctr.mp.GetRowCount()
 
@@ -324,7 +329,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 		}
 	}
 
-	return nil
+	return
 }
 
 func (hashJoin *HashJoin) getInputBatch(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {

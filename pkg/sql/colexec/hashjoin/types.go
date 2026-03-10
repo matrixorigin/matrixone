@@ -92,7 +92,7 @@ type container struct {
 	spilledBuildBuckets []string
 	spilledBuildRowCnts []int64
 	spilledProbeBuckets []string
-	currentBucketIdx    int
+	nextBucketIdx       int
 	spillThreshold      int64
 
 	// state for processing current bucket
@@ -183,7 +183,7 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.probeState = psNextBatch
 	ctr.lastIdx = 0
 	ctr.cleanupSpillFiles(proc)
-	ctr.currentBucketIdx = 0
+	ctr.nextBucketIdx = 0
 	ctr.bucketProbeIdx = 0
 
 	if hashJoin.OpAnalyzer != nil {

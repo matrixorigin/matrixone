@@ -331,7 +331,7 @@ func TestEmptyBucketHandling(t *testing.T) {
 		ctr: container{
 			spilledBuildBuckets: []string{"bucket1"},
 			spilledProbeBuckets: []string{"bucket1"},
-			currentBucketIdx:    1, // Already past the only bucket
+			nextBucketIdx:       1, // Already past the only bucket
 			state:               Probe,
 		},
 	}
