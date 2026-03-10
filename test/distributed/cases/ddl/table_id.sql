@@ -1,9 +1,5 @@
 -- Keep table rel_logical_id (logical table_id) stable across DDL (ALTER/TRUNCATE)
 set global enable_privilege_cache = off;
-drop database if exists mo_table_id_test;
-create database mo_table_id_test;
-use mo_table_id_test;
-
 -- ============================================================
 -- Test 1: ALTER TABLE ADD COLUMN keeps rel_logical_id stable
 -- ============================================================

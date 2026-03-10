@@ -1,7 +1,4 @@
 set global enable_privilege_cache = off;
-drop database if exists mo_table_id_test;
-create database mo_table_id_test;
-use mo_table_id_test;
 drop table if exists t1;
 create table t1(id int primary key, v int);
 alter table t1 add column v2 int;
