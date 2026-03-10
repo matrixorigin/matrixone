@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -67,10 +68,22 @@ func parseRewriteHint(ctx context.Context, hint string) (map[string]string, erro
 // prepends a hint comment to the SQL string.
 // If ruleCache is nil (not yet loaded), it lazily loads rules via loadRuleCache.
 // If the rule set is empty, the original SQL is returned unchanged.
+// This function only injects hints when enable_remap_hint is true.
 func rewriteSQL(ctx context.Context, ses *Session, sql string) (string, error) {
+	// Check if enable_remap_hint is enabled
+	v, err := ses.GetSessionSysVar("enable_remap_hint")
+	if err != nil {
+		return sql, nil
+	}
+	if on, _ := valueIsBoolTrue(v); !on {
+		return sql, nil
+	}
+
 	if ses.ruleCache == nil {
 		rules, err := loadRuleCache(ctx, ses)
 		if err != nil {
+			// Log the error for debugging
+			ses.Error(ctx, "failed to load rewrite rule cache", logutil.ErrorField(err))
 			return sql, nil
 		}
 		ses.ruleCache = rules
