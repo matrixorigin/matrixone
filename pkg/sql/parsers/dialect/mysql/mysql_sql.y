@@ -3554,11 +3554,12 @@ alter_role_stmt:
         var ruleName = dbName + "." + tblName
         $$ = tree.NewAlterRoleAddRule(roleName, ruleName, ruleSQL, dbName, tblName)
     }
-|   ALTER ROLE role_name DROP RULE STRING
+|   ALTER ROLE role_name DROP RULE ON TABLE ident '.' ident
     {
         var roleName = $3.Compare()
-        var ruleName = $6
-        $$ = tree.NewAlterRoleDropRule(roleName, ruleName)
+        var dbName = $8.Compare()
+        var tblName = $10.Compare()
+        $$ = tree.NewAlterRoleDropRule(roleName, dbName, tblName)
     }
 
 partition_option:

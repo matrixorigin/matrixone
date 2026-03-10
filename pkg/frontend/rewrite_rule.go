@@ -221,9 +221,12 @@ func handleAlterRoleDropRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRol
 	}
 	roleID := vr.id
 
+	// Derive rule_name from db.tbl
+	ruleName := stmt.DbName + "." + stmt.TblName
+
 	// Step 2: Check if rule_name exists for this role_id
 	checkSQL := fmt.Sprintf("select `rule` from %s.%s where role_id = %d and rule_name = %s",
-		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, roleID, escapeSQLString(stmt.RuleName))
+		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, roleID, escapeSQLString(ruleName))
 
 	bh.ClearExecResultSet()
 	if err = bh.Exec(ctx, checkSQL); err != nil {
@@ -236,12 +239,12 @@ func handleAlterRoleDropRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRol
 	}
 
 	if !execResultArrayHasData(erArray) {
-		return moerr.NewInternalErrorf(ctx, "rule '%s' does not exist for role '%s'", stmt.RuleName, stmt.RoleName)
+		return moerr.NewInternalErrorf(ctx, "rule '%s' does not exist for role '%s'", ruleName, stmt.RoleName)
 	}
 
 	// Step 3: Delete the matching record
 	deleteSQL := fmt.Sprintf("delete from %s.%s where role_id = %d and rule_name = %s",
-		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, roleID, escapeSQLString(stmt.RuleName))
+		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, roleID, escapeSQLString(ruleName))
 	if err = bh.Exec(ctx, deleteSQL); err != nil {
 		return err
 	}

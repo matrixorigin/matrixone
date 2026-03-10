@@ -21,15 +21,15 @@ show rules on role test_rule_role;
 rule_name    rule
 db1.t1    select * from db1.t1 where age > 50
 db2.t2    select id from db2.t2_new
-alter role test_rule_role drop rule "db1.t1";
+alter role test_rule_role drop rule on table db1.t1;
 show rules on role test_rule_role;
 rule_name    rule
 db2.t2    select id from db2.t2_new
-alter role non_existent_role drop rule "db1.t1";
+alter role non_existent_role drop rule on table db1.t1;
 internal error: there is no role non_existent_role
-alter role test_rule_role drop rule "no_such_rule";
-internal error: rule 'no_such_rule' does not exist for role 'test_rule_role'
-alter role test_rule_role drop rule "db2.t2";
+alter role test_rule_role drop rule on table no_such.rule;
+internal error: rule 'no_such.rule' does not exist for role 'test_rule_role'
+alter role test_rule_role drop rule on table db2.t2;
 show rules on role test_rule_role;
 rule_name    rule
 show rules on role non_existent_role;

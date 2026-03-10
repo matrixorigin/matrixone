@@ -24,17 +24,17 @@ alter role test_rule_role add rule "select id from db2.t2_new" on table db2.t2;
 show rules on role test_rule_role;
 
 -- 5. DROP RULE normal case + SHOW RULES verification
-alter role test_rule_role drop rule "db1.t1";
+alter role test_rule_role drop rule on table db1.t1;
 show rules on role test_rule_role;
 
 -- 6. DROP RULE error case: non-existent role
-alter role non_existent_role drop rule "db1.t1";
+alter role non_existent_role drop rule on table db1.t1;
 
 -- 7. DROP RULE error case: non-existent rule
-alter role test_rule_role drop rule "no_such_rule";
+alter role test_rule_role drop rule on table no_such.rule;
 
 -- 8. SHOW RULES empty result set
-alter role test_rule_role drop rule "db2.t2";
+alter role test_rule_role drop rule on table db2.t2;
 show rules on role test_rule_role;
 
 -- 9. SHOW RULES error case: non-existent role

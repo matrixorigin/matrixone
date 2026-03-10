@@ -397,17 +397,19 @@ func (node *AlterRoleAddRule) reset() {
 func (node *AlterRoleAddRule) GetStatementType() string { return "Alter Role Add Rule" }
 func (node *AlterRoleAddRule) GetQueryType() string     { return QueryTypeDCL }
 
-// AlterRoleDropRule represents ALTER ROLE <role> DROP RULE <rule_name>
+// AlterRoleDropRule represents ALTER ROLE <role> DROP RULE ON TABLE <db>.<tbl>
 type AlterRoleDropRule struct {
 	statementImpl
 	RoleName string
-	RuleName string
+	DbName   string
+	TblName  string
 }
 
-func NewAlterRoleDropRule(roleName, ruleName string) *AlterRoleDropRule {
+func NewAlterRoleDropRule(roleName, dbName, tblName string) *AlterRoleDropRule {
 	node := reuse.Alloc[AlterRoleDropRule](nil)
 	node.RoleName = roleName
-	node.RuleName = ruleName
+	node.DbName = dbName
+	node.TblName = tblName
 	return node
 }
 
@@ -416,8 +418,10 @@ func (node *AlterRoleDropRule) Free() { reuse.Free[AlterRoleDropRule](node, nil)
 func (node *AlterRoleDropRule) Format(ctx *FmtCtx) {
 	ctx.WriteString("alter role ")
 	ctx.WriteString(node.RoleName)
-	ctx.WriteString(" drop rule ")
-	ctx.WriteString(fmt.Sprintf("'%s'", node.RuleName))
+	ctx.WriteString(" drop rule on table ")
+	ctx.WriteString(node.DbName)
+	ctx.WriteString(".")
+	ctx.WriteString(node.TblName)
 }
 
 func (node AlterRoleDropRule) TypeName() string { return "tree.AlterRoleDropRule" }

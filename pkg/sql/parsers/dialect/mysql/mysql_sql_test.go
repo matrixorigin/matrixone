@@ -1964,8 +1964,8 @@ var (
 			input:  `alter role role_name add rule "SELECT * FROM db1.tbl1 WHERE age > 28" on table db1.tbl1`,
 			output: "alter role role_name add rule 'SELECT * FROM db1.tbl1 WHERE age > 28' on table db1.tbl1",
 		}, {
-			input:  `alter role role_name drop rule "db1.tbl1"`,
-			output: "alter role role_name drop rule 'db1.tbl1'",
+			input:  `alter role role_name drop rule on table db1.tbl1`,
+			output: "alter role role_name drop rule on table db1.tbl1",
 		}, {
 			input: "show rules on role role_name",
 		}, {
