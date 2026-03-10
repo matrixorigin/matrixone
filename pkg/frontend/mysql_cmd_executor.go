@@ -430,7 +430,7 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 
 		// get table stats
 		var rets []ExecResult
-		if rets, err = executeSQLInBackgroundSession(ctx, bh, sqlBuilder.String()); err != nil {
+		if rets, err = ExeSqlInBgSes(ctx, bh, sqlBuilder.String()); err != nil {
 			return
 		}
 
@@ -466,7 +466,7 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 			sqlBuilder.WriteString(fmt.Sprintf("row('%s', '%s')", dbName, tblName))
 		}
 		sqlBuilder.WriteString(") as tmp(db, tbl)")
-		rets, err := executeSQLInBackgroundSession(ctx, bh, sqlBuilder.String())
+		rets, err := ExeSqlInBgSes(ctx, bh, sqlBuilder.String())
 		if err != nil {
 			return nil, err
 		}
@@ -483,6 +483,54 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 			}
 		}
 		return sizes, nil
+	}
+
+	// For some system tables (for example `system.statement_info`), tenant queries
+	// are rewritten to sys account with account-level filtering. mo_table_rows/size
+	// does not reflect that rewritten visibility in all cases, so fallback to
+	// count(*) for Rows when mo_table_rows is empty/zero to keep SHOW TABLE STATUS
+	// consistent with SELECT semantics without paying the extra cost when stats are
+	// already populated.
+	getSpecialTableRows := func(tblNames []string, tableRows map[string]int64) (map[string]int64, error) {
+		rows := make(map[string]int64)
+		if len(tblNames) == 0 {
+			return rows, nil
+		}
+		accountId, err := defines.GetAccountId(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if accountId == sysAccountID {
+			return rows, nil
+		}
+
+		escapeIdent := func(name string) string {
+			return strings.ReplaceAll(name, "`", "``")
+		}
+
+		for _, tblName := range tblNames {
+			if !ShouldSwitchToSysAccount(dbName, tblName) {
+				continue
+			}
+			if currentRows, ok := tableRows[tblName]; ok && currentRows > 0 {
+				continue
+			}
+			sql := fmt.Sprintf("select count(*) from `%s`.`%s`", escapeIdent(dbName), escapeIdent(tblName))
+			rets, err := ExeSqlInBgSes(ctx, bh, sql)
+			if err != nil {
+				return nil, err
+			}
+			if !execResultArrayHasData(rets) {
+				continue
+			}
+			cnt, err := rets[0].GetInt64(ctx, 0, 0)
+			if err != nil {
+				return nil, err
+			}
+			rows[tblName] = cnt
+		}
+
+		return rows, nil
 	}
 
 	var tblNames []string
@@ -544,6 +592,10 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 	if err != nil {
 		return err
 	}
+	specialRows, err := getSpecialTableRows(tblNames, rows)
+	if err != nil {
+		return err
+	}
 
 	indexLengths := make(map[string]int64, len(tblNames))
 	if len(indexTableSet) > 0 {
@@ -562,7 +614,11 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 
 	for i, tblName := range tblNames {
 		idx := tblIdxes[i]
-		ses.data[idx][3] = rows[tblName]
+		if cnt, ok := specialRows[tblName]; ok {
+			ses.data[idx][3] = cnt
+		} else {
+			ses.data[idx][3] = rows[tblName]
+		}
 		if rows[tblName] > 0 {
 			ses.data[idx][4] = sizes[tblName] / rows[tblName]
 		} else {
