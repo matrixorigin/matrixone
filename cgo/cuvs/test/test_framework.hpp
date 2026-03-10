@@ -26,7 +26,6 @@
 #include <atomic>
 #include <map>
 #include <stdexcept>
-#include <csignal> // For signal simulation
 #include <sstream> // For building string messages
 #include <algorithm> // For std::sort
 #include <any> // For std::any comparisons in assertions

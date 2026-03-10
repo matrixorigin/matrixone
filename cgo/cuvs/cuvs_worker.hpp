@@ -29,7 +29,6 @@
 #include <stdexcept>
 #include <thread>
 #include <vector>
-#include <csignal>
 
 #ifdef __linux__
 #include <pthread.h>
@@ -233,7 +232,6 @@ public:
     void start(user_task_fn init_fn = nullptr, user_task_fn stop_fn = nullptr) {
         if (started_.exchange(true)) return;
         main_thread_ = std::thread(&cuvs_worker_t::run_main_loop, this, std::move(init_fn), std::move(stop_fn));
-        signal_thread_ = std::thread(&cuvs_worker_t::signal_handler_loop, this);
     }
 
     void stop() {
@@ -247,7 +245,6 @@ public:
         event_cv_.notify_all();
 
         if (main_thread_.joinable()) main_thread_.join();
-        if (signal_thread_.joinable()) signal_thread_.join();
         for (auto& t : sub_workers_) if (t.joinable()) t.join();
         
         sub_workers_.clear();
@@ -350,22 +347,6 @@ private:
 #endif
     }
 
-    void signal_handler_loop() {
-        static std::atomic<bool> signal_received{false};
-        auto handler = [](int) { signal_received.store(true); };
-        std::signal(SIGTERM, handler);
-        std::signal(SIGINT, handler);
-
-        while (!stopped_.load() && !signal_received.load()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
-        }
-        if (signal_received.load()) {
-            std::lock_guard<std::mutex> lock(event_mu_);
-            should_stop_ = true;
-            event_cv_.notify_all();
-        }
-    }
-
     size_t n_threads_;
     int device_id_ = -1;
     std::vector<int> devices_;
@@ -375,7 +356,6 @@ private:
     thread_safe_queue_t<cuvs_task_t> tasks_;
     cuvs_task_result_store_t result_store_;
     std::thread main_thread_;
-    std::thread signal_thread_;
     std::vector<std::thread> sub_workers_;
 
     std::mutex event_mu_;
