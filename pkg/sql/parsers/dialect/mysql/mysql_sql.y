@@ -13293,6 +13293,8 @@ non_reserved_keyword:
 |   PAUSE
 |   PROFILES
 |   ROLE
+|   RULE
+|   RULES
 |   RANGE
 |   READ
 |   REAL
