@@ -100,9 +100,9 @@ func NewUsearchBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	idx.ElementSize = elemsz
 
 	reqSize := int(idx.Count * idx.Dimension)
-	
+
 	allocator := malloc.NewCAllocator()
-	
+
 	var _t T
 	switch any(_t).(type) {
 	case float32:
@@ -373,7 +373,7 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 					heapSize--
 					retKeys64[offset+j] = heapKeys[0]
 					retDistances[offset+j] = float64(heapDistances[0])
-					
+
 					heapKeys[0] = heapKeys[heapSize]
 					heapDistances[0] = heapDistances[heapSize]
 					siftDown(0, heapSize)
