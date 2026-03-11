@@ -26,17 +26,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
-func benchmarkBruteForce(b *testing.B, createFn func([][]float32, uint, metric.MetricType, uint, uint) (cache.VectorIndexSearchIf, error)) {
+func benchmarkBruteForceGeneric(b *testing.B, dsize, qsize int, dimension uint, ncpu uint, createFn func([][]float32, uint, metric.MetricType, uint, uint) (cache.VectorIndexSearchIf, error)) {
 	b.Helper()
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(b, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
-	dimension := uint(128)
-	ncpu := uint(8)
 	limit := uint(10)
 	elemsz := uint(4) // float32
 
-	dsize := 10000
 	dataset := make([][]float32, dsize)
 	for i := range dataset {
 		dataset[i] = make([]float32, dimension)
@@ -45,7 +42,6 @@ func benchmarkBruteForce(b *testing.B, createFn func([][]float32, uint, metric.M
 		}
 	}
 
-	qsize := 100
 	query := make([][]float32, qsize)
 	for i := range query {
 		query[i] = make([]float32, dimension)
@@ -76,6 +72,14 @@ func benchmarkBruteForce(b *testing.B, createFn func([][]float32, uint, metric.M
 	}
 }
 
+func benchmarkBruteForce(b *testing.B, createFn func([][]float32, uint, metric.MetricType, uint, uint) (cache.VectorIndexSearchIf, error)) {
+	benchmarkBruteForceGeneric(b, 10000, 100, 1024, 8, createFn)
+}
+
+func benchmarkCentroidSearch(b *testing.B, createFn func([][]float32, uint, metric.MetricType, uint, uint) (cache.VectorIndexSearchIf, error)) {
+	benchmarkBruteForceGeneric(b, 18000, 1, 1024, 1, createFn)
+}
+
 func BenchmarkGoBruteForce(b *testing.B) {
 	benchmarkBruteForce(b, func(dataset [][]float32, dim uint, m metric.MetricType, es uint, nt uint) (cache.VectorIndexSearchIf, error) {
 		return NewGoBruteForceIndex[float32](dataset, dim, m, es)
@@ -84,6 +88,18 @@ func BenchmarkGoBruteForce(b *testing.B) {
 
 func BenchmarkUsearchBruteForce(b *testing.B) {
 	benchmarkBruteForce(b, func(dataset [][]float32, dim uint, m metric.MetricType, es uint, nt uint) (cache.VectorIndexSearchIf, error) {
+		return NewUsearchBruteForceIndex[float32](dataset, dim, m, es)
+	})
+}
+
+func BenchmarkCentroidSearchGoBruteForce(b *testing.B) {
+	benchmarkCentroidSearch(b, func(dataset [][]float32, dim uint, m metric.MetricType, es uint, nt uint) (cache.VectorIndexSearchIf, error) {
+		return NewGoBruteForceIndex[float32](dataset, dim, m, es)
+	})
+}
+
+func BenchmarkCentroidSearchUsearchBruteForce(b *testing.B) {
+	benchmarkCentroidSearch(b, func(dataset [][]float32, dim uint, m metric.MetricType, es uint, nt uint) (cache.VectorIndexSearchIf, error) {
 		return NewUsearchBruteForceIndex[float32](dataset, dim, m, es)
 	})
 }
