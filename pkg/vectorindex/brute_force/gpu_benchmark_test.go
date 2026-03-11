@@ -23,3 +23,7 @@ import (
 func BenchmarkGpuBruteForce(b *testing.B) {
 	benchmarkBruteForce(b, NewGpuBruteForceIndex[float32])
 }
+
+func BenchmarkCentroidSearchGpuBruteForce(b *testing.B) {
+	benchmarkCentroidSearch(b, NewGpuBruteForceIndex[float32])
+}
