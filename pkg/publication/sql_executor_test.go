@@ -557,6 +557,11 @@ func (m *mockSQLExecutor) ExecSQL(ctx context.Context, ar *ActiveRoutine, accoun
 	return nil, func() {}, nil
 }
 
+func (m *mockSQLExecutor) ExecSQLInDatabase(ctx context.Context, ar *ActiveRoutine, accountID uint32, query string, database string, useTxn bool, needRetry bool, timeout time.Duration) (*Result, context.CancelFunc, error) {
+	// For mock, just delegate to ExecSQL (ignore database parameter)
+	return m.ExecSQL(ctx, ar, accountID, query, useTxn, needRetry, timeout)
+}
+
 // testMockResult is a mock implementation for testing that simulates Result behavior
 type testMockResult struct {
 	data       [][]interface{}
