@@ -311,10 +311,9 @@ type worker struct {
 	writeObjectWorker        WriteObjectWorker
 
 	// Sync protection keepalive management
-	syncProtectionMu      sync.RWMutex
-	syncProtectionJobs    map[string]*syncProtectionEntry
-	syncProtectionTicker  *time.Ticker
-	syncProtectionStarted atomic.Bool
+	syncProtectionMu     sync.RWMutex
+	syncProtectionJobs   map[string]*syncProtectionEntry
+	syncProtectionTicker *time.Ticker
 }
 
 type TaskContext struct {

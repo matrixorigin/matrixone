@@ -68,8 +68,6 @@ type MemoryController struct {
 
 	// Semaphore for limiting concurrent large allocations
 	largeSem chan struct{}
-
-	mu sync.RWMutex
 }
 
 // NewMemoryController creates a new MemoryController
