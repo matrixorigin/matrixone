@@ -4340,20 +4340,17 @@ func eltCheck(overloads []overload, inputs []types.Type) checkResult {
 	shouldCast := false
 	castTypes := make([]types.Type, len(inputs))
 
-	// First argument must be numeric (int64)
-	if !inputs[0].Oid.IsInteger() && inputs[0].Oid != types.T_any {
+	// First argument must be cast to int64 for the Elt executor.
+	// MySQL accepts any numeric type (int, float, decimal) and strings convertible to numbers.
+	if inputs[0].Oid == types.T_int64 || inputs[0].Oid == types.T_any {
+		castTypes[0] = inputs[0]
+	} else {
 		c, _ := tryToMatch([]types.Type{inputs[0]}, []types.T{types.T_int64})
 		if c == matchFailed {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
-		if c == matchByCast {
-			shouldCast = true
-			castTypes[0] = types.T_int64.ToType()
-		} else {
-			castTypes[0] = inputs[0]
-		}
-	} else {
-		castTypes[0] = inputs[0]
+		shouldCast = true
+		castTypes[0] = types.T_int64.ToType()
 	}
 
 	// Rest arguments must be strings

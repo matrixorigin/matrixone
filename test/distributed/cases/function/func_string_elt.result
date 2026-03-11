@@ -37,71 +37,10 @@ single
 CREATE TABLE t1(id INT, s1 VARCHAR(10), s2 VARCHAR(10), s3 VARCHAR(10));
 INSERT INTO t1 VALUES (1, 'a', 'b', 'c'), (2, 'x', 'y', 'z'), (3, '1', '2', '3');
 SELECT id, ELT(id, s1, s2, s3) AS elt_result FROM t1;
-internal error: panic type mismatch: casting INT vector to []int64: 
-github.com/matrixorigin/matrixone/pkg/container/vector.checkType[...]
-	/home/fengttt/m/matrixone/pkg/container/vector/vector.go:107
-github.com/matrixorigin/matrixone/pkg/container/vector.ToSlice[...]
-	/home/fengttt/m/matrixone/pkg/container/vector/vector.go:101
-github.com/matrixorigin/matrixone/pkg/container/vector.ToFixedCol[...]
-	/home/fengttt/m/matrixone/pkg/container/vector/tools.go:42
-github.com/matrixorigin/matrixone/pkg/container/vector.MustFixedColWithTypeCheck[...]
-	/home/fengttt/m/matrixone/pkg/container/vector/tools.go:56
-github.com/matrixorigin/matrixone/pkg/container/vector.GenerateFunctionFixedTypeParameter[...]
-	/home/fengttt/m/matrixone/pkg/container/vector/functionTools.go:67
-github.com/matrixorigin/matrixone/pkg/sql/plan/function.Elt
-	/home/fengttt/m/matrixone/pkg/sql/plan/function/func_binary.go:3166
-github.com/matrixorigin/matrixone/pkg/sql/colexec.(*FunctionExpressionExecutor).Eval
-	/home/fengttt/m/matrixone/pkg/sql/colexec/evalExpression.go:633
-github.com/matrixorigin/matrixone/pkg/sql/colexec/projection.(*Projection).Call
-	/home/fengttt/m/matrixone/pkg/sql/colexec/projection/projection.go:76
-github.com/matrixorigin/matrixone/pkg/vm.Exec
-	/home/fengttt/m/matrixone/pkg/vm/types.go:514
-github.com/matrixorigin/matrixone/pkg/vm.ChildrenCall
-	/home/fengttt/m/matrixone/pkg/vm/types.go:525
-github.com/matrixorigin/matrixone/pkg/sql/colexec/output.(*Output).Call
-	/home/fengttt/m/matrixone/pkg/sql/colexec/output/output.go:55
-github.com/matrixorigin/matrixone/pkg/vm.Exec
-	/home/fengttt/m/matrixone/pkg/vm/types.go:514
-github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).Run
-	/home/fengttt/m/matrixone/pkg/vm/pipeline/pipeline.go:71
-github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).RunWithReader
-	/home/fengttt/m/matrixone/pkg/vm/pipeline/pipeline.go:59
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).Run
-	/home/fengttt/m/matrixone/pkg/sql/compile/scope.go:198
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).ParallelRun
-	/home/fengttt/m/matrixone/pkg/sql/compile/scope.go:490
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).MergeRun
-	/home/fengttt/m/matrixone/pkg/sql/compile/scope.go:276
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).RemoteRun
-	/home/fengttt/m/matrixone/pkg/sql/compile/scope.go:395
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).run
-	/home/fengttt/m/matrixone/pkg/sql/compile/compile.go:375
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).runOnce
-	/home/fengttt/m/matrixone/pkg/sql/compile/compile.go:522
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).Run
-	/home/fengttt/m/matrixone/pkg/sql/compile/compile2.go:250
-github.com/matrixorigin/matrixone/pkg/frontend.executeResultRowStmt
-	/home/fengttt/m/matrixone/pkg/frontend/result_row_stmt.go:87
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmt
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2994
-github.com/matrixorigin/matrixone/pkg/frontend.dispatchStmt
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2847
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithIncrStmt
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2812
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithWorkspace
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2756
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithTxn
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2631
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithResponse
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2594
-github.com/matrixorigin/matrixone/pkg/frontend.doComQuery
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:3237
-github.com/matrixorigin/matrixone/pkg/frontend.ExecRequest
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:3317
-github.com/matrixorigin/matrixone/pkg/frontend.(*Routine).handleRequest
-	/home/fengttt/m/matrixone/pkg/frontend/routine.go:298
-github.com/matrixorigin/matrixone/pkg/frontend.(*RoutineManager).Handler
-	/home/fengttt/m/matrixone/pkg/frontend/routine_manager.go:384
+id    elt_result
+1    a
+2    y
+3    3
 DROP TABLE t1;
 CREATE TABLE t1(id INT, s1 VARCHAR(10), s2 VARCHAR(10));
 INSERT INTO t1 VALUES (1, 'a', 'b'), (2, 'x', 'y'), (3, '1', '2');
@@ -113,71 +52,38 @@ SELECT ELT(1, 'a', 'b', 'c') AS int64_index;
 int64_index
 a
 SELECT ELT(CAST(2 AS INT), 'a', 'b', 'c') AS int_index;
-internal error: panic type mismatch: casting INT vector to []int64: 
-github.com/matrixorigin/matrixone/pkg/container/vector.checkType[...]
-	/home/fengttt/m/matrixone/pkg/container/vector/vector.go:107
-github.com/matrixorigin/matrixone/pkg/container/vector.ToSlice[...]
-	/home/fengttt/m/matrixone/pkg/container/vector/vector.go:101
-github.com/matrixorigin/matrixone/pkg/container/vector.ToFixedCol[...]
-	/home/fengttt/m/matrixone/pkg/container/vector/tools.go:42
-github.com/matrixorigin/matrixone/pkg/container/vector.MustFixedColWithTypeCheck[...]
-	/home/fengttt/m/matrixone/pkg/container/vector/tools.go:56
-github.com/matrixorigin/matrixone/pkg/container/vector.GenerateFunctionFixedTypeParameter[...]
-	/home/fengttt/m/matrixone/pkg/container/vector/functionTools.go:67
-github.com/matrixorigin/matrixone/pkg/sql/plan/function.Elt
-	/home/fengttt/m/matrixone/pkg/sql/plan/function/func_binary.go:3166
-github.com/matrixorigin/matrixone/pkg/sql/colexec.(*FunctionExpressionExecutor).doFold
-	/home/fengttt/m/matrixone/pkg/sql/colexec/evalExpressionReset.go:171
-github.com/matrixorigin/matrixone/pkg/sql/colexec.(*FunctionExpressionExecutor).Eval
-	/home/fengttt/m/matrixone/pkg/sql/colexec/evalExpression.go:576
-github.com/matrixorigin/matrixone/pkg/sql/colexec.getReadonlyResultFromExpression
-	/home/fengttt/m/matrixone/pkg/sql/colexec/evalExpressionOpt.go:67
-github.com/matrixorigin/matrixone/pkg/sql/colexec.GetReadonlyResultFromExpression
-	/home/fengttt/m/matrixone/pkg/sql/colexec/evalExpressionOpt.go:57
-github.com/matrixorigin/matrixone/pkg/sql/plan/rule.(*ConstantFold).constantFold
-	/home/fengttt/m/matrixone/pkg/sql/plan/rule/constant_fold.go:190
-github.com/matrixorigin/matrixone/pkg/sql/plan/rule.(*ConstantFold).Apply
-	/home/fengttt/m/matrixone/pkg/sql/plan/rule/constant_fold.go:80
-github.com/matrixorigin/matrixone/pkg/sql/plan.(*BaseOptimizer).exploreNode
-	/home/fengttt/m/matrixone/pkg/sql/plan/optimize.go:87
-github.com/matrixorigin/matrixone/pkg/sql/plan.(*BaseOptimizer).optimize
-	/home/fengttt/m/matrixone/pkg/sql/plan/optimize.go:73
-github.com/matrixorigin/matrixone/pkg/sql/plan.(*BaseOptimizer).Optimize
-	/home/fengttt/m/matrixone/pkg/sql/plan/optimize.go:65
-github.com/matrixorigin/matrixone/pkg/frontend.buildPlan
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2079
-github.com/matrixorigin/matrixone/pkg/frontend.(*TxnComputationWrapper).Compile
-	/home/fengttt/m/matrixone/pkg/frontend/computation_wrapper.go:210
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmt
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2953
-github.com/matrixorigin/matrixone/pkg/frontend.dispatchStmt
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2847
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithIncrStmt
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2812
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithWorkspace
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2756
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithTxn
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2631
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithResponse
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2594
-github.com/matrixorigin/matrixone/pkg/frontend.doComQuery
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:3237
-github.com/matrixorigin/matrixone/pkg/frontend.ExecRequest
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:3317
-github.com/matrixorigin/matrixone/pkg/frontend.(*Routine).handleRequest
-	/home/fengttt/m/matrixone/pkg/frontend/routine.go:298
-github.com/matrixorigin/matrixone/pkg/frontend.(*RoutineManager).Handler
-	/home/fengttt/m/matrixone/pkg/frontend/routine_manager.go:384
-github.com/matrixorigin/matrixone/pkg/frontend.(*MOServer).handleRequest
-	/home/fengttt/m/matrixone/pkg/frontend/server.go:527
-github.com/matrixorigin/matrixone/pkg/frontend.(*MOServer).handleMessage
-	/home/fengttt/m/matrixone/pkg/frontend/server.go:495
-github.com/matrixorigin/matrixone/pkg/frontend.(*MOServer).handleLoop
-	/home/fengttt/m/matrixone/pkg/frontend/server.go:212
-github.com/matrixorigin/matrixone/pkg/frontend.(*MOServer).handleConn
-	/home/fengttt/m/matrixone/pkg/frontend/server.go:208
-runtime.goexit
-	/usr/local/go/src/runtime/asm_amd64.s:1693
+int_index
+b
+SELECT ELT(CAST(3 AS SMALLINT), 'a', 'b', 'c') AS smallint_index;
+smallint_index
+c
+SELECT ELT(CAST(1 AS TINYINT), 'a', 'b', 'c') AS tinyint_index;
+tinyint_index
+a
+SELECT ELT(CAST(2 AS UNSIGNED), 'a', 'b', 'c') AS uint_index;
+uint_index
+b
+SELECT ELT(1.9, 'a', 'b', 'c') AS float_trunc;
+float_trunc
+b
+SELECT ELT(2.1, 'a', 'b', 'c') AS float_trunc2;
+float_trunc2
+b
+SELECT ELT(2.9, 'a', 'b', 'c') AS float_trunc3;
+float_trunc3
+c
+SELECT ELT(0.9, 'a', 'b', 'c') AS float_zero;
+float_zero
+a
+SELECT ELT(1+1, 'a', 'b', 'c') AS expr_index;
+expr_index
+b
+SELECT ELT(TRUE, 'a', 'b', 'c') AS bool_true;
+bool_true
+a
+SELECT ELT(FALSE, 'a', 'b', 'c') AS bool_false;
+bool_false
+null
 SELECT ELT(1, 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j') AS elt_many;
 elt_many
 a
@@ -196,3 +102,6 @@ elt_unicode
 SELECT ELT(2, 'Hello', 'World', 'Test') AS elt_ascii;
 elt_ascii
 World
+SELECT ELT(FIELD('b', 'a', 'b', 'c'), 'a', 'b', 'c') AS elt_field;
+elt_field
+b

@@ -21,12 +21,10 @@ SELECT ELT(2, 'ej', NULL, 'hej', 'foo') AS elt_str_null2;
 # Single argument (should return NULL)
 SELECT ELT(1, 'single') AS elt_single;
 
-# Table usage
+# Table usage with INT column as index
 CREATE TABLE t1(id INT, s1 VARCHAR(10), s2 VARCHAR(10), s3 VARCHAR(10));
 INSERT INTO t1 VALUES (1, 'a', 'b', 'c'), (2, 'x', 'y', 'z'), (3, '1', '2', '3');
--- @bvt:issue#22992
 SELECT id, ELT(id, s1, s2, s3) AS elt_result FROM t1;
--- @bvt:issue
 DROP TABLE t1;
 
 # WHERE clause
@@ -37,9 +35,23 @@ DROP TABLE t1;
 
 # Different numeric types for index
 SELECT ELT(1, 'a', 'b', 'c') AS int64_index;
--- @bvt:issue#22992
 SELECT ELT(CAST(2 AS INT), 'a', 'b', 'c') AS int_index;
--- @bvt:issue
+SELECT ELT(CAST(3 AS SMALLINT), 'a', 'b', 'c') AS smallint_index;
+SELECT ELT(CAST(1 AS TINYINT), 'a', 'b', 'c') AS tinyint_index;
+SELECT ELT(CAST(2 AS UNSIGNED), 'a', 'b', 'c') AS uint_index;
+
+# Float index (MySQL truncates toward zero)
+SELECT ELT(1.9, 'a', 'b', 'c') AS float_trunc;
+SELECT ELT(2.1, 'a', 'b', 'c') AS float_trunc2;
+SELECT ELT(2.9, 'a', 'b', 'c') AS float_trunc3;
+SELECT ELT(0.9, 'a', 'b', 'c') AS float_zero;
+
+# Expression as index
+SELECT ELT(1+1, 'a', 'b', 'c') AS expr_index;
+
+# Boolean as index (TRUE=1, FALSE=0)
+SELECT ELT(TRUE, 'a', 'b', 'c') AS bool_true;
+SELECT ELT(FALSE, 'a', 'b', 'c') AS bool_false;
 
 # Many arguments
 SELECT ELT(1, 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j') AS elt_many;
@@ -53,3 +65,5 @@ SELECT ELT(2, 'a', '', 'c') AS elt_empty2;
 SELECT ELT(1, '你好', '世界', '测试') AS elt_unicode;
 SELECT ELT(2, 'Hello', 'World', 'Test') AS elt_ascii;
 
+# ELT is complement of FIELD
+SELECT ELT(FIELD('b', 'a', 'b', 'c'), 'a', 'b', 'c') AS elt_field;
