@@ -61,6 +61,13 @@ type sqlExecutor struct {
 	taskservice taskservice.TaskService
 }
 
+func ensureExecutorContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
+}
+
 // NewSQLExecutor returns a internal used sql service. It can execute sql in current CN.
 func NewSQLExecutor(
 	addr string,
@@ -93,6 +100,7 @@ func NewSQLExecutor(
 }
 
 func (s *sqlExecutor) NewTxnOperator(ctx context.Context) client.TxnOperator {
+	ctx = ensureExecutorContext(ctx)
 	var opts executor.Options
 
 	ctx, opts, err := s.adjustOptions(ctx, opts)
@@ -114,6 +122,7 @@ func (s *sqlExecutor) Exec(
 	sql string,
 	opts executor.Options,
 ) (executor.Result, error) {
+	ctx = ensureExecutorContext(ctx)
 	ctx = perfcounter.AttachTxnExecutorKey(ctx)
 
 	var (
@@ -154,6 +163,7 @@ func (s *sqlExecutor) ExecTxn(
 	execFunc func(executor.TxnExecutor) error,
 	opts executor.Options,
 ) error {
+	ctx = ensureExecutorContext(ctx)
 	ctx = perfcounter.AttachTxnExecutorKey(ctx)
 	exec, err := newTxnExecutor(ctx, s, opts)
 	if err != nil {
@@ -204,6 +214,7 @@ func (s *sqlExecutor) adjustOptions(
 	ctx context.Context,
 	opts executor.Options,
 ) (context.Context, executor.Options, error) {
+	ctx = ensureExecutorContext(ctx)
 	if ctx.Value(defines.TenantIDKey{}) == nil {
 		ctx = context.WithValue(
 			ctx,
@@ -251,6 +262,7 @@ func newTxnExecutor(
 	s *sqlExecutor,
 	opts executor.Options,
 ) (*txnExecutor, error) {
+	ctx = ensureExecutorContext(ctx)
 	ctx = perfcounter.AttachTxnExecutorKey(ctx)
 	ctx, opts, err := s.adjustOptions(ctx, opts)
 	if err != nil {
