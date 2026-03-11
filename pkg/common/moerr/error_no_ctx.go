@@ -503,3 +503,28 @@ func NewSchedulerClosedNoCtx() *Error {
 func NewVectorNeedRetryWithPreModeNoCtx() *Error {
 	return newError(Context(), ErrVectorNeedRetryWithPreMode)
 }
+
+// GC sync protection errors
+func NewGCIsRunningNoCtx() *Error {
+	return newError(Context(), ErrGCIsRunning)
+}
+
+func NewSyncProtectionNotFoundNoCtx(jobID string) *Error {
+	return newError(Context(), ErrSyncProtectionNotFound, jobID)
+}
+
+func NewSyncProtectionExistsNoCtx(jobID string) *Error {
+	return newError(Context(), ErrSyncProtectionExists, jobID)
+}
+
+func NewSyncProtectionMaxCountNoCtx(maxCount int) *Error {
+	return newError(Context(), ErrSyncProtectionMaxCount, maxCount)
+}
+
+func NewSyncProtectionSoftDeleteNoCtx(jobID string) *Error {
+	return newError(Context(), ErrSyncProtectionSoftDelete, jobID)
+}
+
+func NewSyncProtectionInvalidNoCtx() *Error {
+	return newError(Context(), ErrSyncProtectionInvalid)
+}
