@@ -38,32 +38,27 @@ const (
 	spillBufferSize = 8192 // Buffer 8192 rows before flushing
 )
 
-type bucketBuffer struct {
-	rowIds []int32
-	bat    *batch.Batch
-}
-
-func (ctr *container) flushBucketBuffer(proc *process.Process, buf *bucketBuffer, file *os.File, analyzer process.Analyzer) (int64, error) {
-	if buf.bat == nil || buf.bat.RowCount() == 0 {
+func (ctr *container) flushBucketBuffer(proc *process.Process, bat *batch.Batch, file *os.File, analyzer process.Analyzer) (int64, error) {
+	if bat == nil || bat.RowCount() == 0 {
 		return 0, nil
 	}
 
-	cnt := int64(buf.bat.RowCount())
+	cnt := int64(bat.RowCount())
 	ctr.spillWriteBuf.Reset()
 	ctr.spillWriteBuf.Write(types.EncodeInt64(&cnt))
 	// Reserve space for batchSize
 	batchSizePos := ctr.spillWriteBuf.Len()
 	ctr.spillWriteBuf.Write(types.EncodeInt64(new(int64)))
-	
+
 	// Write batch data directly to spillWriteBuf
 	batchStartPos := ctr.spillWriteBuf.Len()
-	buf.bat.MarshalBinaryWithBuffer(&ctr.spillWriteBuf, false)
+	bat.MarshalBinaryWithBuffer(&ctr.spillWriteBuf, false)
 	batchSize := int64(ctr.spillWriteBuf.Len() - batchStartPos)
-	
+
 	// Write batchSize at reserved position
 	batchSizeBytes := types.EncodeInt64(&batchSize)
 	copy(ctr.spillWriteBuf.Bytes()[batchSizePos:batchSizePos+len(batchSizeBytes)], batchSizeBytes)
-	
+
 	magic := uint64(spillMagic)
 	ctr.spillWriteBuf.Write(types.EncodeUint64(&magic))
 
@@ -72,10 +67,8 @@ func (ctr *container) flushBucketBuffer(proc *process.Process, buf *bucketBuffer
 		return 0, err
 	}
 	analyzer.Spill(int64(written))
+	analyzer.SpillRows(cnt)
 
-	buf.bat.Clean(proc.Mp())
-	buf.bat = nil
-	buf.rowIds = buf.rowIds[:0]
 	return cnt, nil
 }
 
@@ -106,19 +99,17 @@ func createSpillFiles(proc *process.Process) ([]string, []*os.File, error) {
 	return buckets, files, nil
 }
 
-func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *batch.Batch, files []*os.File, buffers []*bucketBuffer, hashOnPK bool, conditions []*plan.Expr, analyzer process.Analyzer) ([]int64, error) {
+func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *batch.Batch, files []*os.File, buffers []*batch.Batch, hashOnPK bool, conditions []*plan.Expr, analyzer process.Analyzer) error {
 	if bat.RowCount() == 0 {
-		return make([]int64, spillNumBuckets), nil
+		return nil
 	}
-
-	rowCnts := make([]int64, spillNumBuckets)
 
 	// Evaluate hash keys
 	executors := make([]colexec.ExpressionExecutor, len(conditions))
 	var err error
 	for i, expr := range conditions {
 		if executors[i], err = colexec.NewExpressionExecutor(proc, expr); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	defer func() {
@@ -133,7 +124,7 @@ func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *b
 	for i, exec := range executors {
 		vec, err := exec.Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		keyVecs[i] = vec
 	}
@@ -151,9 +142,9 @@ func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *b
 		ctr.spillHashValues = make([]uint64, rowCount)
 	}
 	hashValues := ctr.spillHashValues[:rowCount]
-	
+
 	if err := computeXXHash(keyVecs, hashValues); err != nil {
-		return nil, err
+		return err
 	}
 
 	// Reuse bucketRowIds buffer
@@ -177,35 +168,33 @@ func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *b
 		}
 
 		buf := buffers[bucketId]
-		if buf.bat == nil {
-			buf.bat = batch.NewWithSize(len(bat.Vecs))
+		if buf == nil {
+			buf = batch.NewWithSize(len(bat.Vecs))
 			for i, vec := range bat.Vecs {
 				typ := *vec.GetType()
-				buf.bat.Vecs[i] = vector.NewVec(typ)
+				buf.Vecs[i] = vector.NewOffHeapVecWithType(typ)
 			}
+			buffers[bucketId] = buf
 		}
 
 		// Append rows to buffer
-		for _, sel := range sels {
-			for i, vec := range bat.Vecs {
-				if err := buf.bat.Vecs[i].UnionOne(vec, int64(sel), proc.Mp()); err != nil {
-					return nil, err
-				}
+		for i, vec := range bat.Vecs {
+			if err := buf.Vecs[i].UnionInt32(vec, sels, proc.Mp()); err != nil {
+				return err
 			}
 		}
-		buf.bat.SetRowCount(buf.bat.RowCount() + len(sels))
-		rowCnts[bucketId] += int64(len(sels))
-		analyzer.SpillRows(int64(len(sels)))
+		buf.SetRowCount(buf.RowCount() + len(sels))
 
 		// Flush if buffer is full
-		if buf.bat.RowCount() >= spillBufferSize {
+		if buf.RowCount() >= spillBufferSize {
 			if _, err := ctr.flushBucketBuffer(proc, buf, files[bucketId], analyzer); err != nil {
-				return nil, err
+				return err
 			}
+			buf.CleanOnlyData()
 		}
 	}
 
-	return rowCnts, nil
+	return nil
 }
 
 func (ctr *container) memUsed() int64 {

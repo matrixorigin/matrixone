@@ -41,7 +41,6 @@ type container struct {
 	runtimeFilterIn bool
 	hashmapBuilder  HashmapBuilder
 	spilledBuckets  []string
-	spilledRowCnts  []int64
 	spillThreshold  int64
 
 	// reusable buffers for spill operations
@@ -116,7 +115,6 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 	hashBuild.ctr.hashmapBuilder.Reset(proc, !mapSucceed)
 	hashBuild.cleanupSpillFiles(proc)
 	hashBuild.ctr.spilledBuckets = nil
-	hashBuild.ctr.spilledRowCnts = nil
 	hashBuild.ctr.state = BuildHashMap
 	hashBuild.ctr.runtimeFilterIn = false
 	message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, runtimeSucceed, proc.GetMessageBoard())

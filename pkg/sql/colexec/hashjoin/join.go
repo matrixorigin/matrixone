@@ -235,8 +235,6 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 				// For spilled join, clean up current bucket and move to next
 				if len(ctr.spilledBuildBuckets) > 0 {
-					ctr.cleanBucketBatches(proc)
-					ctr.cleanHashMap()
 					ctr.rightRowsMatched = nil
 
 					if ctr.nextBucketIdx < len(ctr.spilledBuildBuckets) {
@@ -275,25 +273,22 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 			ctr.nextBucketIdx = 0
 
 			// Create spill files for probe side
-			spilledProbeBuckets, spillProbeFiles, err := createProbeSpillFiles(proc)
+			spilledBuckets, spillFiles, err := createProbeSpillFiles(proc)
 			if err != nil {
 				return err
 			}
-			ctr.spilledProbeBuckets = spilledProbeBuckets
-
-			spillBuffers := make([]*bucketBuffer, spillNumBuckets)
-			for i := range spillBuffers {
-				spillBuffers[i] = &bucketBuffer{}
-			}
+			ctr.spilledProbeBuckets = spilledBuckets
+			spillBuffers := make([]*batch.Batch, spillNumBuckets)
 
 			defer func() {
-				// Flush remaining buffered data
-				for i, buf := range spillBuffers {
-					ctr.flushBucketBuffer(proc, buf, spillProbeFiles[i], analyzer)
-				}
-				for _, f := range spillProbeFiles {
+				for _, f := range spillFiles {
 					if f != nil {
 						f.Close()
+					}
+				}
+				for _, buf := range spillBuffers {
+					if buf != nil {
+						buf.Clean(proc.Mp())
 					}
 				}
 			}()
@@ -308,9 +303,16 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 					break
 				}
 				if !input.Batch.IsEmpty() {
-					if err := ctr.appendProbeBatchToSpillFiles(proc, input.Batch, spillProbeFiles, spillBuffers, analyzer); err != nil {
+					if err := ctr.appendProbeBatchToSpillFiles(proc, input.Batch, spillFiles, spillBuffers, analyzer); err != nil {
 						return err
 					}
+				}
+			}
+
+			// Flush remaining buffered data
+			for i, buf := range spillBuffers {
+				if _, err := ctr.flushBucketBuffer(proc, buf, spillFiles[i], analyzer); err != nil {
+					return err
 				}
 			}
 

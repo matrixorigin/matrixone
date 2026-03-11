@@ -84,7 +84,7 @@ func TestFlushBucketBuffer(t *testing.T) {
 	ctr := &container{}
 
 	t.Run("empty_buffer", func(t *testing.T) {
-		buf := &bucketBuffer{}
+		var buf *batch.Batch
 		cnt, err := ctr.flushBucketBuffer(proc, buf, file, analyzer)
 		require.NoError(t, err)
 		require.Equal(t, int64(0), cnt)
@@ -95,11 +95,9 @@ func TestFlushBucketBuffer(t *testing.T) {
 		bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, proc.Mp())
 		bat.SetRowCount(3)
 
-		buf := &bucketBuffer{bat: bat}
-		cnt, err := ctr.flushBucketBuffer(proc, buf, file, analyzer)
+		cnt, err := ctr.flushBucketBuffer(proc, bat, file, analyzer)
 		require.NoError(t, err)
 		require.Equal(t, int64(3), cnt)
-		require.Nil(t, buf.bat)
 	})
 }
 
@@ -137,9 +135,8 @@ func TestLoadSpilledBuildBucket(t *testing.T) {
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{10, 20, 30}, nil, proc.Mp())
 	bat.SetRowCount(3)
 
-	buf := &bucketBuffer{bat: bat}
 	ctr := &container{}
-	_, err = ctr.flushBucketBuffer(proc, buf, file, analyzer)
+	_, err = ctr.flushBucketBuffer(proc, bat, file, analyzer)
 	require.NoError(t, err)
 	file.Close()
 
@@ -175,9 +172,8 @@ func TestLoadSpilledProbeBucket(t *testing.T) {
 	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"a", "b"}, nil, proc.Mp())
 	bat.SetRowCount(2)
 
-	buf := &bucketBuffer{bat: bat}
 	ctr := &container{}
-	_, err = ctr.flushBucketBuffer(proc, buf, file, analyzer)
+	_, err = ctr.flushBucketBuffer(proc, bat, file, analyzer)
 	require.NoError(t, err)
 	file.Close()
 
@@ -237,28 +233,23 @@ func TestBucketBufferReuse(t *testing.T) {
 		spillfs.Delete(context.Background(), "test_reuse")
 	}()
 
-	buf := &bucketBuffer{}
+	ctr := &container{}
 
 	// First batch
 	bat1 := batch.NewWithSize(1)
 	bat1.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
 	bat1.SetRowCount(2)
-	buf.bat = bat1
 
-	ctr := &container{}
-	_, err = ctr.flushBucketBuffer(proc, buf, file, analyzer)
+	_, err = ctr.flushBucketBuffer(proc, bat1, file, analyzer)
 	require.NoError(t, err)
-	require.Nil(t, buf.bat)
 
-	// Second batch - buffer should be reusable
+	// Second batch
 	bat2 := batch.NewWithSize(1)
 	bat2.Vecs[0] = testutil.MakeInt32Vector([]int32{3, 4}, nil, proc.Mp())
 	bat2.SetRowCount(2)
-	buf.bat = bat2
 
-	_, err = ctr.flushBucketBuffer(proc, buf, file, analyzer)
+	_, err = ctr.flushBucketBuffer(proc, bat2, file, analyzer)
 	require.NoError(t, err)
-	require.Nil(t, buf.bat)
 }
 
 func TestHashDistribution(t *testing.T) {
@@ -305,9 +296,8 @@ func TestSpillFileFormat(t *testing.T) {
 		bat.Vecs[0] = testutil.MakeInt32Vector([]int32{int32(i * 10), int32(i*10 + 1)}, nil, proc.Mp())
 		bat.SetRowCount(2)
 
-		buf := &bucketBuffer{bat: bat}
 		ctr := &container{}
-		_, err = ctr.flushBucketBuffer(proc, buf, file, analyzer)
+		_, err = ctr.flushBucketBuffer(proc, bat, file, analyzer)
 		require.NoError(t, err)
 	}
 	file.Close()
@@ -399,9 +389,8 @@ func TestLargeBufferFlush(t *testing.T) {
 	bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
 	bat.SetRowCount(size)
 
-	buf := &bucketBuffer{bat: bat}
 	ctr := &container{}
-	cnt, err := ctr.flushBucketBuffer(proc, buf, file, analyzer)
+	cnt, err := ctr.flushBucketBuffer(proc, bat, file, analyzer)
 	require.NoError(t, err)
 	require.Equal(t, int64(size), cnt)
 }
@@ -422,9 +411,8 @@ func TestSpillFileCleanup(t *testing.T) {
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
 	bat.SetRowCount(1)
 
-	buf := &bucketBuffer{bat: bat}
 	ctr := &container{}
-	_, err = ctr.flushBucketBuffer(proc, buf, file, analyzer)
+	_, err = ctr.flushBucketBuffer(proc, bat, file, analyzer)
 	require.NoError(t, err)
 	file.Close()
 
@@ -476,9 +464,8 @@ func TestFileWriteError(t *testing.T) {
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
 	bat.SetRowCount(1)
 
-	buf := &bucketBuffer{bat: bat}
 	ctr := &container{}
-	_, err := ctr.flushBucketBuffer(proc, buf, file, analyzer)
+	_, err := ctr.flushBucketBuffer(proc, bat, file, analyzer)
 	require.Error(t, err)
 
 	spillfs.Delete(context.Background(), "test_error")

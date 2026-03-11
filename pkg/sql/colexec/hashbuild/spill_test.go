@@ -83,7 +83,7 @@ func TestFlushBucketBufferBuild(t *testing.T) {
 	ctr := &container{}
 
 	t.Run("empty_buffer", func(t *testing.T) {
-		buf := &bucketBuffer{}
+		var buf *batch.Batch
 		cnt, err := ctr.flushBucketBuffer(proc, buf, file, analyzer)
 		require.NoError(t, err)
 		require.Equal(t, int64(0), cnt)
@@ -94,11 +94,9 @@ func TestFlushBucketBufferBuild(t *testing.T) {
 		bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, proc.Mp())
 		bat.SetRowCount(3)
 
-		buf := &bucketBuffer{bat: bat}
-		cnt, err := ctr.flushBucketBuffer(proc, buf, file, analyzer)
+		cnt, err := ctr.flushBucketBuffer(proc, bat, file, analyzer)
 		require.NoError(t, err)
 		require.Equal(t, int64(3), cnt)
-		require.Nil(t, buf.bat)
 	})
 }
 
@@ -137,9 +135,8 @@ func TestLoadSpilledBuildBucketHashBuild(t *testing.T) {
 	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"a", "b", "c"}, nil, proc.Mp())
 	bat.SetRowCount(3)
 
-	buf := &bucketBuffer{bat: bat}
 	ctr := &container{}
-	_, err = ctr.flushBucketBuffer(proc, buf, file, analyzer)
+	_, err = ctr.flushBucketBuffer(proc, bat, file, analyzer)
 	require.NoError(t, err)
 	file.Close()
 
@@ -247,8 +244,7 @@ func TestMultipleBatchesSpillFormat(t *testing.T) {
 		bat.Vecs[0] = testutil.MakeInt32Vector([]int32{int32(i * 10), int32(i*10 + 1)}, nil, proc.Mp())
 		bat.SetRowCount(2)
 
-		buf := &bucketBuffer{bat: bat}
-		_, err = ctr.flushBucketBuffer(proc, buf, file, analyzer)
+		_, err = ctr.flushBucketBuffer(proc, bat, file, analyzer)
 		require.NoError(t, err)
 	}
 	file.Close()
@@ -318,9 +314,8 @@ func TestLargeBufferFlushBuild(t *testing.T) {
 	bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
 	bat.SetRowCount(size)
 
-	buf := &bucketBuffer{bat: bat}
 	ctr := &container{}
-	cnt, err := ctr.flushBucketBuffer(proc, buf, file, analyzer)
+	cnt, err := ctr.flushBucketBuffer(proc, bat, file, analyzer)
 	require.NoError(t, err)
 	require.Equal(t, int64(size), cnt)
 }
@@ -341,9 +336,8 @@ func TestSpillFileCleanupBuild(t *testing.T) {
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
 	bat.SetRowCount(1)
 
-	buf := &bucketBuffer{bat: bat}
 	ctr := &container{}
-	_, err = ctr.flushBucketBuffer(proc, buf, file, analyzer)
+	_, err = ctr.flushBucketBuffer(proc, bat, file, analyzer)
 	require.NoError(t, err)
 	file.Close()
 
@@ -406,9 +400,8 @@ func TestFileWriteErrorBuild(t *testing.T) {
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
 	bat.SetRowCount(1)
 
-	buf := &bucketBuffer{bat: bat}
 	ctr := &container{}
-	_, err := ctr.flushBucketBuffer(proc, buf, file, analyzer)
+	_, err := ctr.flushBucketBuffer(proc, bat, file, analyzer)
 	require.Error(t, err)
 
 	spillfs.Delete(context.Background(), "test_error_build")
@@ -475,26 +468,16 @@ func TestAppendBatchToSpillFilesPartitioning(t *testing.T) {
 		},
 	}
 
-	buffers := make([]*bucketBuffer, spillNumBuckets)
-	for i := range buffers {
-		buffers[i] = &bucketBuffer{}
-	}
+	buffers := make([]*batch.Batch, spillNumBuckets)
 
 	analyzer := process.NewAnalyzer(0, false, false, "test")
 	ctr := &container{}
-	rowCnts, err := ctr.appendBuildBatchToSpillFiles(proc, bat, files, buffers, false, conditions, analyzer)
+	err = ctr.appendBuildBatchToSpillFiles(proc, bat, files, buffers, false, conditions, analyzer)
 	require.NoError(t, err)
-
-	// Verify total rows distributed
-	totalRows := int64(0)
-	for _, cnt := range rowCnts {
-		totalRows += cnt
-	}
-	require.Equal(t, int64(8), totalRows)
 
 	// Flush remaining buffers
 	for i, buf := range buffers {
-		if buf.bat != nil && buf.bat.RowCount() > 0 {
+		if buf != nil && buf.RowCount() > 0 {
 			_, err := ctr.flushBucketBuffer(proc, buf, files[i], analyzer)
 			require.NoError(t, err)
 		}
@@ -528,19 +511,10 @@ func TestEmptyBatchSpill(t *testing.T) {
 		},
 	}
 
-	buffers := make([]*bucketBuffer, spillNumBuckets)
-	for i := range buffers {
-		buffers[i] = &bucketBuffer{}
-	}
+	buffers := make([]*batch.Batch, spillNumBuckets)
 
 	analyzer := process.NewAnalyzer(0, false, false, "test")
 	ctr := &container{}
-	rowCnts, err := ctr.appendBuildBatchToSpillFiles(proc, bat, files, buffers, false, conditions, analyzer)
+	err = ctr.appendBuildBatchToSpillFiles(proc, bat, files, buffers, false, conditions, analyzer)
 	require.NoError(t, err)
-
-	totalRows := int64(0)
-	for _, cnt := range rowCnts {
-		totalRows += cnt
-	}
-	require.Equal(t, int64(0), totalRows)
 }
