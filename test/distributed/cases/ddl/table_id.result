@@ -1,0 +1,153 @@
+set global enable_privilege_cache = off;
+drop table if exists t1;
+create table t1(id int primary key, v int);
+alter table t1 add column v2 int;
+insert into t1(id, v, v2) values (1, 10, 20);
+select id, v, v2 from t1 order by id;
+id    v    v2
+1    10    20
+drop table if exists t2;
+create table t2(id int primary key, a int, b varchar(20));
+alter table t2 add column c bool;
+alter table t2 modify column b varchar(100);
+alter table t2 drop column a;
+alter table t2 alter column c set default true;
+show columns from t2;
+Field    Type    Null    Key    Default    Extra    Comment
+id    INT(32)    NO    PRI    null
+b    VARCHAR(100)    YES        null
+c    BOOL(0)    YES        true
+insert into t2(id, b) values (1, 'abc');
+select id, b, c from t2 order by id;
+id    b    c
+1    abc    1
+drop table if exists t3;
+create table t3(id int primary key, v int);
+insert into t3 values (1, 100), (2, 200);
+truncate table t3;
+insert into t3 values (3, 300);
+select id, v from t3 order by id;
+id    v
+3    300
+drop table if exists t4;
+create table t4(id int primary key, v int);
+insert into t4 values (1, 10), (2, 20);
+truncate table t4;
+alter table t4 add column comment varchar(50);
+truncate table t4;
+alter table t4 drop column v;
+show columns from t4;
+Field    Type    Null    Key    Default    Extra    Comment
+id    INT(32)    NO    PRI    null
+comment    VARCHAR(50)    YES        null
+insert into t4(id, comment) values (1, 'ok');
+select id, comment from t4 order by id;
+id    comment
+1    ok
+drop table if exists t5;
+create table t5(id int, v int, name varchar(50));
+alter table t5 add primary key (id);
+create index idx_t5_v on t5(v);
+drop index idx_t5_v on t5;
+delete from t5;
+insert into t5 values (1, 10, 'a');
+insert into t5 values (1, 20, 'b');
+Duplicate entry '1' for key 'id'
+insert into t5 values (2, 30, 'b');
+update t5 set v = v + 1 where id = 1;
+delete from t5 where name = 'b';
+select * from t5 order by id, v, name;
+id    v    name
+1    11    a
+drop table if exists t5;
+drop table if exists t6;
+create table t6(
+id   int primary key,
+name varchar(50),
+email varchar(100)
+);
+create unique index idx_t6_email on t6(email);
+insert into t6 values (1, 'alice', 'alice@test.com');
+insert into t6 values (2, 'bob',   'bob@test.com');
+alter table t6 add column comment varchar(50);
+insert into t6 values (3, 'alice2', 'alice@test.com','default');
+Duplicate entry 'alice@test.com' for key '(.*)'
+select * from t6 order by id;
+id    name    email    comment
+1    alice    alice@test.com    null
+2    bob    bob@test.com    null
+show index from t6;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t6    0    idx_t6_email    1    email    A    0    NULL    NULL    YES                    YES    email
+t6    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
+drop table if exists t6;
+drop table if exists t7;
+create table t7 (
+id int primary key,
+embedding vecf32(4) default null
+);
+create index idx_t7_ivf using ivfflat on t7(embedding) lists=2 op_type 'vector_l2_ops';
+insert into t7 values
+(1, '[0.1, 0.2, 0.3, 0.4]'),
+(2, '[0.2, 0.1, 0.4, 0.3]'),
+(3, '[0.9, 0.9, 0.9, 0.9]');
+select id, L2_DISTANCE(embedding, '[0.1, 0.2, 0.3, 0.4]') as dist
+from t7
+order by dist
+limit 3;
+id    dist
+1    0.0
+2    0.1999999977648258
+3    1.3190905542560198
+truncate table t7;
+insert into t7 values
+(1, '[0.1, 0.2, 0.3, 0.4]'),
+(2, '[0.2, 0.1, 0.4, 0.3]'),
+(3, '[0.9, 0.9, 0.9, 0.9]');
+select count(*) from t7;
+count(*)
+3
+drop index idx_t7_ivf on t7;
+drop table if exists t7;
+drop table if exists t8;
+create table t8(a int, b int);
+insert into t8 values (1, 10), (2, 20);
+alter table t8 rename column a to a_new;
+show columns from t8;
+Field    Type    Null    Key    Default    Extra    Comment
+a_new    INT(32)    YES        null
+b    INT(32)    YES        null
+update t8 set a_new = a_new + 1 where b = 10;
+delete from t8 where a_new > 3;
+select a_new, b from t8 order by a_new;
+a_new    b
+2    20
+2    10
+drop table if exists t8;
+drop table if exists tp1;
+create table tp1 (
+id int,
+dt date,
+v  int,
+primary key(id)
+) partition by range columns (dt) (
+partition p0 values less than ('2025-01-01'),
+partition p1 values less than ('2026-01-01')
+);
+insert into tp1 values
+(1, '2024-12-31', 100),
+(2, '2025-06-01', 200);
+alter table tp1 add partition (
+partition p2 values less than ('2027-01-01')
+);
+truncate table tp1;
+insert into tp1 values
+(3, '2025-02-02', 300),
+(4, '2026-06-06', 400);
+update tp1 set v = v * 2 where id = 3;
+delete from tp1 where dt >= '2026-01-01';
+select id, dt, v from tp1 order by id;
+id    dt    v
+3    2025-02-02    600
+drop table if exists tp1;
+set global enable_privilege_cache = on;
