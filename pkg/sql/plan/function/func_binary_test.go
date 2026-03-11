@@ -9164,3 +9164,33 @@ func TestGetFormat(t *testing.T) {
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
+
+func TestEltHandlesUnsignedAndBitOverflowIndexes(t *testing.T) {
+	testCases := []tcTemp{
+		{
+			info: "elt uint64 overflow returns null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{1, 2, math.MaxUint64}, []bool{false, false, false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"b"}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"a", "b", ""}, []bool{false, false, true}),
+		},
+		{
+			info: "elt bit overflow returns null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_bit.ToType(), []uint64{1, 2, math.MaxUint64}, []bool{false, false, false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"b"}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"a", "b", ""}, []bool{false, false, true}),
+		},
+	}
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Elt)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
