@@ -14,7 +14,7 @@
 package group_concat
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	plan "github.com/matrixorigin/matrixone/pkg/sql/planner"
 )
 
 // for example:

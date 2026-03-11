@@ -18,7 +18,7 @@ import (
 	"container/list"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	plan "github.com/matrixorigin/matrixone/pkg/sql/planner"
 )
 
 type cachedPlan struct {

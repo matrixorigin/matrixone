@@ -17,7 +17,7 @@ package bin
 import (
 	"math/bits"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner/function/builtin/binary"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )

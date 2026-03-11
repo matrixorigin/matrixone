@@ -17,7 +17,7 @@ package util
 import (
 	"strconv"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner/function/builtin/multi"
 
 	"github.com/fagongzi/util/format"
 	"github.com/matrixorigin/matrixone/pkg/catalog"

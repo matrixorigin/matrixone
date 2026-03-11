@@ -18,7 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/planner"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
