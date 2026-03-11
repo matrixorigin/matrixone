@@ -98,13 +98,15 @@ type container struct {
 	spillThreshold      int64
 
 	// state for processing current bucket
-	bucketProbeReader *spillBucketReader
+	probeBucketReader *spillBucketReader
 
 	// reusable buffers for spill operations
-	spillHashValues   []uint64
-	spillBucketRowIds [][]int32
-	spillWriteBuf     bytes.Buffer
-	spillReadBatch    *batch.Batch
+	spillHashValues      []uint64
+	spillBucketRowIds    [][]int32
+	spillWriteBuf        bytes.Buffer
+	spillBuildReadBatch  *batch.Batch
+	spillProbeReadBatch  *batch.Batch
+	spillHashBuf         []byte
 }
 
 type HashJoin struct {
@@ -245,16 +247,23 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 			ctr.joinBats[i] = nil
 		}
 	}
+	if ctr.rightRowsMatched != nil {
+		ctr.rightRowsMatched = nil
+	}
 }
 
 func (ctr *container) cleanBucketBatches(proc *process.Process) {
-	if ctr.bucketProbeReader != nil {
-		ctr.bucketProbeReader.close()
-		ctr.bucketProbeReader = nil
+	if ctr.probeBucketReader != nil {
+		ctr.probeBucketReader.close()
+		ctr.probeBucketReader = nil
 	}
-	if ctr.spillReadBatch != nil {
-		ctr.spillReadBatch.Clean(proc.Mp())
-		ctr.spillReadBatch = nil
+	if ctr.spillBuildReadBatch != nil {
+		ctr.spillBuildReadBatch.Clean(proc.Mp())
+		ctr.spillBuildReadBatch = nil
+	}
+	if ctr.spillProbeReadBatch != nil {
+		ctr.spillProbeReadBatch.Clean(proc.Mp())
+		ctr.spillProbeReadBatch = nil
 	}
 }
 

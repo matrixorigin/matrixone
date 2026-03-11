@@ -171,6 +171,7 @@ func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *b
 			for i, vec := range bat.Vecs {
 				typ := *vec.GetType()
 				buf.Vecs[i] = vector.NewOffHeapVecWithType(typ)
+				buf.Vecs[i].PreExtend(spillBufferSize, proc.Mp())
 			}
 			buffers[bucketId] = buf
 		}
@@ -255,4 +256,3 @@ func computeXXHash(keyVecs []*vector.Vector, hashValues []uint64) error {
 
 	return nil
 }
-

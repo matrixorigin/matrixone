@@ -43,7 +43,6 @@ const (
 type spillBucketReader struct {
 	file   *os.File
 	reader *bufio.Reader
-	proc   *process.Process
 	buf    []byte
 }
 
@@ -61,12 +60,11 @@ func newSpillBucketReader(proc *process.Process, bucketName string) (*spillBucke
 	return &spillBucketReader{
 		file:   file,
 		reader: bufio.NewReaderSize(file, spillBufferSize),
-		proc:   proc,
 		buf:    make([]byte, 8),
 	}, nil
 }
 
-func (r *spillBucketReader) readBatch(reuseBat *batch.Batch) (*batch.Batch, error) {
+func (r *spillBucketReader) readBatch(proc *process.Process, reuseBat *batch.Batch) (*batch.Batch, error) {
 	// Read count
 	if _, err := io.ReadFull(r.reader, r.buf); err != nil {
 		if err == io.EOF {
@@ -89,7 +87,7 @@ func (r *spillBucketReader) readBatch(reuseBat *batch.Batch) (*batch.Batch, erro
 	limitedReader := io.LimitReader(r.reader, batchSize)
 
 	// Unmarshal directly from reader
-	if err := reuseBat.UnmarshalFromReader(limitedReader, r.proc.Mp()); err != nil {
+	if err := reuseBat.UnmarshalFromReader(limitedReader, proc.Mp()); err != nil {
 		return nil, err
 	}
 
@@ -99,11 +97,11 @@ func (r *spillBucketReader) readBatch(reuseBat *batch.Batch) (*batch.Batch, erro
 	}
 	magic := types.DecodeUint64(r.buf)
 	if magic != spillMagic {
-		return nil, moerr.NewInternalError(r.proc.Ctx, "corrupted spill file")
+		return nil, moerr.NewInternalError(proc.Ctx, "corrupted spill file")
 	}
 
 	if reuseBat.RowCount() != int(cnt) {
-		return nil, moerr.NewInternalError(r.proc.Ctx, "row count mismatch")
+		return nil, moerr.NewInternalError(proc.Ctx, "row count mismatch")
 	}
 
 	return reuseBat, nil
@@ -112,6 +110,7 @@ func (r *spillBucketReader) readBatch(reuseBat *batch.Batch) (*batch.Batch, erro
 func (r *spillBucketReader) close() {
 	if r.file != nil {
 		r.file.Close()
+		r.file = nil
 	}
 }
 
@@ -121,13 +120,13 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process) (vm.CallRe
 
 	for {
 		// Try to read next probe batch from current bucket
-		if ctr.bucketProbeReader != nil {
+		if ctr.probeBucketReader != nil {
 			// Initialize reusable batch if needed
-			if ctr.spillReadBatch == nil {
-				ctr.spillReadBatch = batch.NewOffHeapWithSize(0)
+			if ctr.spillProbeReadBatch == nil {
+				ctr.spillProbeReadBatch = batch.NewOffHeapWithSize(0)
 			}
 
-			bat, err := ctr.bucketProbeReader.readBatch(ctr.spillReadBatch)
+			bat, err := ctr.probeBucketReader.readBatch(proc, ctr.spillProbeReadBatch)
 			if err != nil && err != io.EOF {
 				return result, err
 			}
@@ -137,9 +136,9 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process) (vm.CallRe
 				return result, nil
 			}
 
-			// EOF - done with this bucket
-			ctr.bucketProbeReader.close()
-			ctr.bucketProbeReader = nil
+			// EOF - done with this bucket, close the file
+			ctr.probeBucketReader.close()
+			ctr.probeBucketReader = nil
 
 			// Delete probe file
 			spillfs, _ := proc.GetSpillFileService()
@@ -179,7 +178,7 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process) (vm.CallRe
 			}
 
 			ctr.nextBucketIdx++
-			ctr.bucketProbeReader = probeReader
+			ctr.probeBucketReader = probeReader
 			ctr.mp = tmpJoinMap
 			ctr.itr = nil
 
@@ -271,7 +270,7 @@ func (ctr *container) appendProbeBatchToSpillFiles(proc *process.Process, bat *b
 	}
 	hashValues := ctr.spillHashValues[:rowCount]
 
-	if err := computeXXHash(ctr.eqCondVecs, hashValues); err != nil {
+	if err := computeXXHash(ctr.eqCondVecs, hashValues, &ctr.spillHashBuf); err != nil {
 		return err
 	}
 
@@ -301,6 +300,7 @@ func (ctr *container) appendProbeBatchToSpillFiles(proc *process.Process, bat *b
 			for i, vec := range bat.Vecs {
 				typ := *vec.GetType()
 				buf.Vecs[i] = vector.NewOffHeapVecWithType(typ)
+				buf.Vecs[i].PreExtend(spillBufferSize, proc.Mp())
 			}
 			buffers[bucketId] = buf
 		}
@@ -327,16 +327,18 @@ func (ctr *container) appendProbeBatchToSpillFiles(proc *process.Process, bat *b
 
 // computeXXHash computes xxhash values for partitioning
 // Must match the hash logic in hashbuild/spill.go
-func computeXXHash(keyVecs []*vector.Vector, hashValues []uint64) error {
+func computeXXHash(keyVecs []*vector.Vector, hashValues []uint64, buf *[]byte) error {
 	if len(keyVecs) == 0 || len(hashValues) == 0 {
 		return nil
 	}
 
 	rowCount := len(hashValues)
-	buf := make([]byte, 0, 128)
+	if cap(*buf) < 128 {
+		*buf = make([]byte, 0, 128)
+	}
 
 	for i := 0; i < rowCount; i++ {
-		buf = buf[:0]
+		*buf = (*buf)[:0]
 
 		// Encode all key columns for this row
 		for _, vec := range keyVecs {
@@ -348,17 +350,19 @@ func computeXXHash(keyVecs []*vector.Vector, hashValues []uint64) error {
 				continue
 			}
 
-			buf = append(buf, vec.GetRawBytesAt(idx)...)
+			*buf = append(*buf, vec.GetRawBytesAt(idx)...)
 		}
 
 		// Compute xxhash
-		hashValues[i] = xxhash.Sum64(buf)
+		hashValues[i] = xxhash.Sum64(*buf)
 	}
 
 	return nil
 }
 
 func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucketName string) (*message.JoinMap, error) {
+	ctr := &hashJoin.ctr
+
 	// Create a temporary hashmap builder
 	builder := &hashbuild.HashmapBuilder{}
 	if err := builder.Prepare(hashJoin.EqConds[1], -1, proc); err != nil {
@@ -373,12 +377,13 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucketN
 	}
 	defer reader.close()
 
-	// Reusable batch for reading
-	reuseBat := batch.NewOffHeapWithSize(0)
-	defer reuseBat.Clean(proc.Mp())
+	// Initialize reusable batch if needed
+	if ctr.spillBuildReadBatch == nil {
+		ctr.spillBuildReadBatch = batch.NewOffHeapWithSize(0)
+	}
 
 	for {
-		bat, err := reader.readBatch(reuseBat)
+		bat, err := reader.readBatch(proc, ctr.spillBuildReadBatch)
 		if err == io.EOF {
 			break
 		}

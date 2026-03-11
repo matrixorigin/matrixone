@@ -461,3 +461,21 @@ func TestHashJoinTypeCheckers(t *testing.T) {
 		})
 	}
 }
+
+func TestHashJoinGetOperatorBase(t *testing.T) {
+	arg := NewArgument()
+	base := arg.GetOperatorBase()
+	require.NotNil(t, base)
+	arg.Release()
+}
+
+func TestHashJoinExecProjection(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := NewArgument()
+	bat := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, false, 10, proc.Mp())
+	result, err := arg.ExecProjection(proc, bat)
+	require.NoError(t, err)
+	require.Equal(t, bat, result)
+	arg.Release()
+	proc.Free()
+}
