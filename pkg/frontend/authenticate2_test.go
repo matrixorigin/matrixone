@@ -23,7 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	plan3 "github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/planner"
 )
 
 func Test_verifyAccountCanOperateClusterTable(t *testing.T) {

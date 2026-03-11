@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	plan "github.com/matrixorigin/matrixone/pkg/sql/planner"
 )
 
 func Test_panic(t *testing.T) {

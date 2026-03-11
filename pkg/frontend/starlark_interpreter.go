@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/monlp/llm"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	plan "github.com/matrixorigin/matrixone/pkg/sql/planner"
 	ujson "github.com/matrixorigin/matrixone/pkg/util/json"
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"

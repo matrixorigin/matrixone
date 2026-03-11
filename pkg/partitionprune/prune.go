@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	p "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	p "github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 

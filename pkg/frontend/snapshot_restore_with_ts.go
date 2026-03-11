@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	plan "github.com/matrixorigin/matrixone/pkg/sql/planner"
 )
 
 func fkTablesTopoSortWithTS(ctx context.Context, bh BackgroundExec, dbName string, tblName string, ts int64, from, to uint32) (sortedTbls []string, err error) {

@@ -21,7 +21,7 @@ import (
 
 	"go.uber.org/zap"
 
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/tidwall/btree"
