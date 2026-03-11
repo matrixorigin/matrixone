@@ -1,0 +1,9 @@
+name: Settings Print (Manual)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  print-settings:
+    uses: matrixorigin/CI/.github/workflows/settings-check.yaml@main
+    secrets: inherit
