@@ -15,6 +15,8 @@
 package hashjoin
 
 import (
+	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -99,6 +101,11 @@ type container struct {
 	bucketBuildBatches []*batch.Batch
 	bucketProbeBatches []*batch.Batch
 	bucketProbeIdx     int
+
+	// reusable buffers for spill operations
+	spillHashValues   []uint64
+	spillBucketRowIds [][]int32
+	spillWriteBuf     bytes.Buffer
 }
 
 type HashJoin struct {

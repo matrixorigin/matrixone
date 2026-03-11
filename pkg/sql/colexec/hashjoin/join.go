@@ -289,7 +289,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 			defer func() {
 				// Flush remaining buffered data
 				for i, buf := range spillBuffers {
-					flushBucketBuffer(proc, buf, spillProbeFiles[i], analyzer)
+					ctr.flushBucketBuffer(proc, buf, spillProbeFiles[i], analyzer)
 				}
 				for _, f := range spillProbeFiles {
 					if f != nil {
@@ -308,7 +308,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 					break
 				}
 				if !input.Batch.IsEmpty() {
-					if err := appendProbeBatchToSpillFiles(proc, input.Batch, spillProbeFiles, spillBuffers, hashJoin.EqConds[0], ctr.eqCondExecs, analyzer); err != nil {
+					if err := ctr.appendProbeBatchToSpillFiles(proc, input.Batch, spillProbeFiles, spillBuffers, analyzer); err != nil {
 						return err
 					}
 				}

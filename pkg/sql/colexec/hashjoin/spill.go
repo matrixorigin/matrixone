@@ -15,7 +15,6 @@
 package hashjoin
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -28,8 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -130,24 +127,31 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process) (vm.CallRe
 	}
 }
 
-func flushBucketBuffer(proc *process.Process, buf *bucketBuffer, file *os.File, analyzer process.Analyzer) (int64, error) {
+func (ctr *container) flushBucketBuffer(proc *process.Process, buf *bucketBuffer, file *os.File, analyzer process.Analyzer) (int64, error) {
 	if buf.bat == nil || buf.bat.RowCount() == 0 {
 		return 0, nil
 	}
 
 	cnt := int64(buf.bat.RowCount())
-	batchData := &bytes.Buffer{}
-	buf.bat.MarshalBinaryWithBuffer(batchData, false)
-	batchSize := int64(batchData.Len())
-
-	writeBuf := bytes.NewBuffer(make([]byte, 0, batchSize+32))
-	writeBuf.Write(types.EncodeInt64(&cnt))
-	writeBuf.Write(types.EncodeInt64(&batchSize))
-	writeBuf.Write(batchData.Bytes())
+	ctr.spillWriteBuf.Reset()
+	ctr.spillWriteBuf.Write(types.EncodeInt64(&cnt))
+	// Reserve space for batchSize
+	batchSizePos := ctr.spillWriteBuf.Len()
+	ctr.spillWriteBuf.Write(types.EncodeInt64(new(int64)))
+	
+	// Write batch data directly to spillWriteBuf
+	batchStartPos := ctr.spillWriteBuf.Len()
+	buf.bat.MarshalBinaryWithBuffer(&ctr.spillWriteBuf, false)
+	batchSize := int64(ctr.spillWriteBuf.Len() - batchStartPos)
+	
+	// Write batchSize at reserved position
+	batchSizeBytes := types.EncodeInt64(&batchSize)
+	copy(ctr.spillWriteBuf.Bytes()[batchSizePos:batchSizePos+len(batchSizeBytes)], batchSizeBytes)
+	
 	magic := uint64(spillMagic)
-	writeBuf.Write(types.EncodeUint64(&magic))
+	ctr.spillWriteBuf.Write(types.EncodeUint64(&magic))
 
-	written, err := file.Write(writeBuf.Bytes())
+	written, err := file.Write(ctr.spillWriteBuf.Bytes())
 	if err != nil {
 		return 0, err
 	}
@@ -185,22 +189,28 @@ func createProbeSpillFiles(proc *process.Process) ([]string, []*os.File, error) 
 	return buckets, files, nil
 }
 
-func appendProbeBatchToSpillFiles(proc *process.Process, bat *batch.Batch, files []*os.File, buffers []*bucketBuffer, conditions []*plan.Expr, executors []colexec.ExpressionExecutor, analyzer process.Analyzer) error {
-	eqVecs := make([]*vector.Vector, len(conditions))
-	for i := range conditions {
-		vec, err := executors[i].Eval(proc, []*batch.Batch{bat}, nil)
-		if err != nil {
-			return err
-		}
-		eqVecs[i] = vec
-	}
+func (ctr *container) appendProbeBatchToSpillFiles(proc *process.Process, bat *batch.Batch, files []*os.File, buffers []*bucketBuffer, analyzer process.Analyzer) error {
+	ctr.evalJoinCondition(bat, proc)
 
-	hashValues := make([]uint64, bat.RowCount())
-	if err := computeXXHash(eqVecs, hashValues); err != nil {
+	// Reuse hashValues buffer
+	rowCount := bat.RowCount()
+	if cap(ctr.spillHashValues) < rowCount {
+		ctr.spillHashValues = make([]uint64, rowCount)
+	}
+	hashValues := ctr.spillHashValues[:rowCount]
+
+	if err := computeXXHash(ctr.eqCondVecs, hashValues); err != nil {
 		return err
 	}
 
-	bucketRowIds := make([][]int32, spillNumBuckets)
+	// Reuse bucketRowIds buffer
+	if cap(ctr.spillBucketRowIds) < spillNumBuckets {
+		ctr.spillBucketRowIds = make([][]int32, spillNumBuckets)
+	}
+	bucketRowIds := ctr.spillBucketRowIds[:spillNumBuckets]
+	for i := range bucketRowIds {
+		bucketRowIds[i] = bucketRowIds[i][:0]
+	}
 	for row := 0; row < bat.RowCount(); row++ {
 		bucketId := hashValues[row] & (spillNumBuckets - 1)
 		bucketRowIds[bucketId] = append(bucketRowIds[bucketId], int32(row))
@@ -235,7 +245,7 @@ func appendProbeBatchToSpillFiles(proc *process.Process, bat *batch.Batch, files
 
 		// Flush if buffer is full
 		if buf.bat.RowCount() >= spillBufferSize {
-			if _, err := flushBucketBuffer(proc, buf, files[bucketId], analyzer); err != nil {
+			if _, err := ctr.flushBucketBuffer(proc, buf, files[bucketId], analyzer); err != nil {
 				return err
 			}
 		}

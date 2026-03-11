@@ -80,10 +80,11 @@ func TestFlushBucketBufferBuild(t *testing.T) {
 	}()
 
 	analyzer := process.NewAnalyzer(0, false, false, "test")
+	ctr := &container{}
 
 	t.Run("empty_buffer", func(t *testing.T) {
 		buf := &bucketBuffer{}
-		cnt, err := flushBucketBuffer(proc, buf, file, analyzer)
+		cnt, err := ctr.flushBucketBuffer(proc, buf, file, analyzer)
 		require.NoError(t, err)
 		require.Equal(t, int64(0), cnt)
 	})
@@ -94,7 +95,7 @@ func TestFlushBucketBufferBuild(t *testing.T) {
 		bat.SetRowCount(3)
 
 		buf := &bucketBuffer{bat: bat}
-		cnt, err := flushBucketBuffer(proc, buf, file, analyzer)
+		cnt, err := ctr.flushBucketBuffer(proc, buf, file, analyzer)
 		require.NoError(t, err)
 		require.Equal(t, int64(3), cnt)
 		require.Nil(t, buf.bat)
@@ -137,7 +138,8 @@ func TestLoadSpilledBuildBucketHashBuild(t *testing.T) {
 	bat.SetRowCount(3)
 
 	buf := &bucketBuffer{bat: bat}
-	_, err = flushBucketBuffer(proc, buf, file, analyzer)
+	ctr := &container{}
+	_, err = ctr.flushBucketBuffer(proc, buf, file, analyzer)
 	require.NoError(t, err)
 	file.Close()
 
@@ -238,6 +240,7 @@ func TestMultipleBatchesSpillFormat(t *testing.T) {
 	file, err := spillfs.CreateFile(context.Background(), bucketName)
 	require.NoError(t, err)
 
+	ctr := &container{}
 	// Write 3 batches
 	for i := 0; i < 3; i++ {
 		bat := batch.NewWithSize(1)
@@ -245,7 +248,7 @@ func TestMultipleBatchesSpillFormat(t *testing.T) {
 		bat.SetRowCount(2)
 
 		buf := &bucketBuffer{bat: bat}
-		_, err = flushBucketBuffer(proc, buf, file, analyzer)
+		_, err = ctr.flushBucketBuffer(proc, buf, file, analyzer)
 		require.NoError(t, err)
 	}
 	file.Close()
@@ -316,7 +319,8 @@ func TestLargeBufferFlushBuild(t *testing.T) {
 	bat.SetRowCount(size)
 
 	buf := &bucketBuffer{bat: bat}
-	cnt, err := flushBucketBuffer(proc, buf, file, analyzer)
+	ctr := &container{}
+	cnt, err := ctr.flushBucketBuffer(proc, buf, file, analyzer)
 	require.NoError(t, err)
 	require.Equal(t, int64(size), cnt)
 }
@@ -338,7 +342,8 @@ func TestSpillFileCleanupBuild(t *testing.T) {
 	bat.SetRowCount(1)
 
 	buf := &bucketBuffer{bat: bat}
-	_, err = flushBucketBuffer(proc, buf, file, analyzer)
+	ctr := &container{}
+	_, err = ctr.flushBucketBuffer(proc, buf, file, analyzer)
 	require.NoError(t, err)
 	file.Close()
 
@@ -402,7 +407,8 @@ func TestFileWriteErrorBuild(t *testing.T) {
 	bat.SetRowCount(1)
 
 	buf := &bucketBuffer{bat: bat}
-	_, err := flushBucketBuffer(proc, buf, file, analyzer)
+	ctr := &container{}
+	_, err := ctr.flushBucketBuffer(proc, buf, file, analyzer)
 	require.Error(t, err)
 
 	spillfs.Delete(context.Background(), "test_error_build")
@@ -475,7 +481,8 @@ func TestAppendBatchToSpillFilesPartitioning(t *testing.T) {
 	}
 
 	analyzer := process.NewAnalyzer(0, false, false, "test")
-	rowCnts, err := appendBuildBatchToSpillFiles(proc, bat, files, buffers, false, conditions, analyzer)
+	ctr := &container{}
+	rowCnts, err := ctr.appendBuildBatchToSpillFiles(proc, bat, files, buffers, false, conditions, analyzer)
 	require.NoError(t, err)
 
 	// Verify total rows distributed
@@ -488,7 +495,7 @@ func TestAppendBatchToSpillFilesPartitioning(t *testing.T) {
 	// Flush remaining buffers
 	for i, buf := range buffers {
 		if buf.bat != nil && buf.bat.RowCount() > 0 {
-			_, err := flushBucketBuffer(proc, buf, files[i], analyzer)
+			_, err := ctr.flushBucketBuffer(proc, buf, files[i], analyzer)
 			require.NoError(t, err)
 		}
 	}
@@ -527,7 +534,8 @@ func TestEmptyBatchSpill(t *testing.T) {
 	}
 
 	analyzer := process.NewAnalyzer(0, false, false, "test")
-	rowCnts, err := appendBuildBatchToSpillFiles(proc, bat, files, buffers, false, conditions, analyzer)
+	ctr := &container{}
+	rowCnts, err := ctr.appendBuildBatchToSpillFiles(proc, bat, files, buffers, false, conditions, analyzer)
 	require.NoError(t, err)
 
 	totalRows := int64(0)

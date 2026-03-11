@@ -15,6 +15,8 @@
 package hashbuild
 
 import (
+	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
@@ -41,6 +43,11 @@ type container struct {
 	spilledBuckets  []string
 	spilledRowCnts  []int64
 	spillThreshold  int64
+
+	// reusable buffers for spill operations
+	spillHashValues   []uint64
+	spillBucketRowIds [][]int32
+	spillWriteBuf     bytes.Buffer
 }
 
 type HashBuild struct {

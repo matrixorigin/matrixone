@@ -157,7 +157,7 @@ func (ctr *container) build(hashBuild *HashBuild, proc *process.Process, analyze
 
 		// If in spill mode, spill this batch directly to open files
 		if spillMode {
-			rowCnts, err := appendBuildBatchToSpillFiles(proc, result.Batch, spillFiles, spillBuffers, hashBuild.HashOnPK, hashBuild.Conditions, analyzer)
+			rowCnts, err := ctr.appendBuildBatchToSpillFiles(proc, result.Batch, spillFiles, spillBuffers, hashBuild.HashOnPK, hashBuild.Conditions, analyzer)
 			if err != nil {
 				return err
 			}
@@ -189,7 +189,7 @@ func (ctr *container) build(hashBuild *HashBuild, proc *process.Process, analyze
 
 			// Spill all batches collected so far
 			for _, bat := range ctr.hashmapBuilder.Batches.Buf {
-				rowCnts, err := appendBuildBatchToSpillFiles(proc, bat, spillFiles, spillBuffers, hashBuild.HashOnPK, hashBuild.Conditions, analyzer)
+				rowCnts, err := ctr.appendBuildBatchToSpillFiles(proc, bat, spillFiles, spillBuffers, hashBuild.HashOnPK, hashBuild.Conditions, analyzer)
 				if err != nil {
 					return err
 				}
@@ -205,7 +205,7 @@ func (ctr *container) build(hashBuild *HashBuild, proc *process.Process, analyze
 	// Flush remaining buffered data and close spill files
 	if spillMode {
 		for i, buf := range spillBuffers {
-			if _, err := flushBucketBuffer(proc, buf, spillFiles[i], analyzer); err != nil {
+			if _, err := ctr.flushBucketBuffer(proc, buf, spillFiles[i], analyzer); err != nil {
 				return err
 			}
 		}

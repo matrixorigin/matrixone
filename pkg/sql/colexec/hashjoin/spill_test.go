@@ -81,10 +81,11 @@ func TestFlushBucketBuffer(t *testing.T) {
 	}()
 
 	analyzer := process.NewAnalyzer(0, false, false, "test")
+	ctr := &container{}
 
 	t.Run("empty_buffer", func(t *testing.T) {
 		buf := &bucketBuffer{}
-		cnt, err := flushBucketBuffer(proc, buf, file, analyzer)
+		cnt, err := ctr.flushBucketBuffer(proc, buf, file, analyzer)
 		require.NoError(t, err)
 		require.Equal(t, int64(0), cnt)
 	})
@@ -95,7 +96,7 @@ func TestFlushBucketBuffer(t *testing.T) {
 		bat.SetRowCount(3)
 
 		buf := &bucketBuffer{bat: bat}
-		cnt, err := flushBucketBuffer(proc, buf, file, analyzer)
+		cnt, err := ctr.flushBucketBuffer(proc, buf, file, analyzer)
 		require.NoError(t, err)
 		require.Equal(t, int64(3), cnt)
 		require.Nil(t, buf.bat)
@@ -137,7 +138,8 @@ func TestLoadSpilledBuildBucket(t *testing.T) {
 	bat.SetRowCount(3)
 
 	buf := &bucketBuffer{bat: bat}
-	_, err = flushBucketBuffer(proc, buf, file, analyzer)
+	ctr := &container{}
+	_, err = ctr.flushBucketBuffer(proc, buf, file, analyzer)
 	require.NoError(t, err)
 	file.Close()
 
@@ -174,7 +176,8 @@ func TestLoadSpilledProbeBucket(t *testing.T) {
 	bat.SetRowCount(2)
 
 	buf := &bucketBuffer{bat: bat}
-	_, err = flushBucketBuffer(proc, buf, file, analyzer)
+	ctr := &container{}
+	_, err = ctr.flushBucketBuffer(proc, buf, file, analyzer)
 	require.NoError(t, err)
 	file.Close()
 
@@ -242,7 +245,8 @@ func TestBucketBufferReuse(t *testing.T) {
 	bat1.SetRowCount(2)
 	buf.bat = bat1
 
-	_, err = flushBucketBuffer(proc, buf, file, analyzer)
+	ctr := &container{}
+	_, err = ctr.flushBucketBuffer(proc, buf, file, analyzer)
 	require.NoError(t, err)
 	require.Nil(t, buf.bat)
 
@@ -252,7 +256,7 @@ func TestBucketBufferReuse(t *testing.T) {
 	bat2.SetRowCount(2)
 	buf.bat = bat2
 
-	_, err = flushBucketBuffer(proc, buf, file, analyzer)
+	_, err = ctr.flushBucketBuffer(proc, buf, file, analyzer)
 	require.NoError(t, err)
 	require.Nil(t, buf.bat)
 }
@@ -302,7 +306,8 @@ func TestSpillFileFormat(t *testing.T) {
 		bat.SetRowCount(2)
 
 		buf := &bucketBuffer{bat: bat}
-		_, err = flushBucketBuffer(proc, buf, file, analyzer)
+		ctr := &container{}
+		_, err = ctr.flushBucketBuffer(proc, buf, file, analyzer)
 		require.NoError(t, err)
 	}
 	file.Close()
@@ -395,7 +400,8 @@ func TestLargeBufferFlush(t *testing.T) {
 	bat.SetRowCount(size)
 
 	buf := &bucketBuffer{bat: bat}
-	cnt, err := flushBucketBuffer(proc, buf, file, analyzer)
+	ctr := &container{}
+	cnt, err := ctr.flushBucketBuffer(proc, buf, file, analyzer)
 	require.NoError(t, err)
 	require.Equal(t, int64(size), cnt)
 }
@@ -417,7 +423,8 @@ func TestSpillFileCleanup(t *testing.T) {
 	bat.SetRowCount(1)
 
 	buf := &bucketBuffer{bat: bat}
-	_, err = flushBucketBuffer(proc, buf, file, analyzer)
+	ctr := &container{}
+	_, err = ctr.flushBucketBuffer(proc, buf, file, analyzer)
 	require.NoError(t, err)
 	file.Close()
 
@@ -470,7 +477,8 @@ func TestFileWriteError(t *testing.T) {
 	bat.SetRowCount(1)
 
 	buf := &bucketBuffer{bat: bat}
-	_, err := flushBucketBuffer(proc, buf, file, analyzer)
+	ctr := &container{}
+	_, err := ctr.flushBucketBuffer(proc, buf, file, analyzer)
 	require.Error(t, err)
 
 	spillfs.Delete(context.Background(), "test_error")
