@@ -565,10 +565,14 @@ func fillOutputBatchBySelectedRows(
 	if orderByLimit != nil {
 		if len(outputBat.Vecs) == len(columns) {
 			distVec := vector.NewVec(types.T_float64.ToType())
-			vector.AppendFixedList(distVec, dists, nil, mp)
+			if err = vector.AppendFixedList(distVec, dists, nil, mp); err != nil {
+				return err
+			}
 			outputBat.Vecs = append(outputBat.Vecs, distVec)
 		} else {
-			vector.AppendFixedList(outputBat.Vecs[len(outputBat.Vecs)-1], dists, nil, mp)
+			if err = vector.AppendFixedList(outputBat.Vecs[len(outputBat.Vecs)-1], dists, nil, mp); err != nil {
+				return err
+			}
 		}
 	}
 
