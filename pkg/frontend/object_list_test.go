@@ -369,6 +369,7 @@ func Test_handleObjectList_WithMockPermissionChecker(t *testing.T) {
 		txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
 		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 		txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{PhysicalTime: 1000}).AnyTimes()
+		txnOperator.EXPECT().CloneSnapshotOp(gomock.Any()).Return(txnOperator).AnyTimes()
 
 		// Mock txn client
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
