@@ -940,6 +940,7 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 	}
 
 	var err error
+	useGlobal := sv.Global
 
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
@@ -977,7 +978,7 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 		}
 
 		var value interface{}
-		if sv.Global {
+		if useGlobal {
 			if value, err = ses.GetGlobalSysVar(name); err != nil {
 				continue
 			}

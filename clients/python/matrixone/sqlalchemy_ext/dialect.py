@@ -83,6 +83,16 @@ class MatrixOneDialect(MySQLDialect):
 
     def get_table_names(self, connection, schema=None, **kw):
         """Get table names from MatrixOne database."""
+        # MatrixOne doesn't use schemas, use current database if schema is None
+        if schema is None:
+            try:
+                result = connection.execute(sqlalchemy.text("SELECT DATABASE()"))
+                schema = result.scalar()
+            except Exception:
+                raise ValueError("Failed to get current database. Use 'USE database_name' or specify schema parameter.")
+            if not schema:
+                raise ValueError("No database selected. Use 'USE database_name' or specify schema parameter.")
+
         return super().get_table_names(connection, schema, **kw)
 
     def has_table(self, connection, table_name, schema=None, **kw):
@@ -90,28 +100,13 @@ class MatrixOneDialect(MySQLDialect):
         # MatrixOne doesn't use schemas, but MySQL dialect requires schema to be not None
         # Use current database name as schema to satisfy MySQL dialect requirements
         if schema is None:
-            # Get current database name from connection URL or connection info
             try:
-                # Try to get database name from connection URL
-                if hasattr(connection, 'connection') and hasattr(connection.connection, 'get_dsn_parameters'):
-                    dsn_params = connection.connection.get_dsn_parameters()
-                    schema = dsn_params.get('dbname') or dsn_params.get('database')
-
-                # Fallback: try to get from connection string
-                if not schema and hasattr(connection, 'connection') and hasattr(connection.connection, 'dsn'):
-                    dsn = connection.connection.dsn
-                    if 'dbname=' in dsn:
-                        schema = dsn.split('dbname=')[1].split()[0]
-                    elif 'database=' in dsn:
-                        schema = dsn.split('database=')[1].split()[0]
-
-                # Final fallback: use default database name
-                if not schema:
-                    schema = "test"
-
+                result = connection.execute(sqlalchemy.text("SELECT DATABASE()"))
+                schema = result.scalar()
             except Exception:
-                # Ultimate fallback
-                schema = "test"
+                raise ValueError("Failed to get current database. Use 'USE database_name' or specify schema parameter.")
+            if not schema:
+                raise ValueError("No database selected. Use 'USE database_name' or specify schema parameter.")
 
         return super().has_table(connection, table_name, schema, **kw)
 

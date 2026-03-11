@@ -564,16 +564,14 @@ class VectorIndexDemo:
 
                     # Create test table
                     await async_client.execute("DROP TABLE IF EXISTS async_fulltext_docs")
-                    await async_client.execute(
-                        """
+                    await async_client.execute("""
                         CREATE TABLE async_fulltext_docs (
                             id INT PRIMARY KEY,
                             headline VARCHAR(200),
                             body TEXT,
                             category VARCHAR(50)
                         )
-                    """
-                    )
+                    """)
                     print("✓ Created async fulltext test table")
 
                     # Create fulltext index

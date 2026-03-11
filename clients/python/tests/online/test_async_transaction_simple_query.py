@@ -40,16 +40,14 @@ class TestAsyncTransactionSimpleQuery:
         await client.execute(f"USE {test_db}")
 
         await client.execute("DROP TABLE IF EXISTS async_tx_docs")
-        await client.execute(
-            """
+        await client.execute("""
             CREATE TABLE async_tx_docs (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 title VARCHAR(255) NOT NULL,
                 content TEXT NOT NULL,
                 category VARCHAR(100) NOT NULL
             )
-        """
-        )
+        """)
 
         # Insert test data
         test_docs = [
@@ -77,12 +75,10 @@ class TestAsyncTransactionSimpleQuery:
         ]
 
         for title, content, category in test_docs:
-            await client.execute(
-                f"""
+            await client.execute(f"""
                 INSERT INTO async_tx_docs (title, content, category) 
                 VALUES ('{title}', '{content}', '{category}')
-            """
-            )
+            """)
 
         # Create fulltext index
         await client.fulltext_index.create("async_tx_docs", "ftidx_async_tx", ["title", "content"])

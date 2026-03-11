@@ -134,46 +134,38 @@ class TestORMAdvancedFeatures:
                 print(f"Warning: Failed to create vector index: {e}")
 
             # Insert test data
-            test_client.execute(
-                """
+            test_client.execute("""
                 INSERT INTO test_users_advanced VALUES 
                 (1, 'John Doe', 'john@example.com', 30, 1, 75000.00),
                 (2, 'Jane Smith', 'jane@example.com', 25, 1, 80000.00),
                 (3, 'Bob Johnson', 'bob@example.com', 35, 2, 95000.00),
                 (4, 'Alice Brown', 'alice@example.com', 28, 2, 70000.00),
                 (5, 'Charlie Wilson', 'charlie@example.com', 32, 1, 85000.00)
-            """
-            )
+            """)
 
-            test_client.execute(
-                """
+            test_client.execute("""
                 INSERT INTO test_departments_advanced VALUES 
                 (1, 'Engineering', 100000.00),
                 (2, 'Marketing', 75000.00),
                 (3, 'Sales', 90000.00)
-            """
-            )
+            """)
 
-            test_client.execute(
-                """
+            test_client.execute("""
                 INSERT INTO test_products_advanced VALUES 
                 (1, 'Laptop', 999.99, 'Electronics', 10),
                 (2, 'Book', 19.99, 'Education', 50),
                 (3, 'Phone', 699.99, 'Electronics', 15),
                 (4, 'Pen', 2.99, 'Office', 100),
                 (5, 'Tablet', 499.99, 'Electronics', 8)
-            """
-            )
+            """)
 
-            test_client.execute(
-                """
+            test_client.execute("""
                 INSERT INTO test_ai_dataset (question_embedding, question, type, output_result, status) VALUES 
                 ('[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]', 'What is machine learning?', 'AI', 'Machine learning is a subset of artificial intelligence.', 1),
                 ('[0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]', 'How does neural network work?', 'AI', 'Neural networks are computing systems inspired by biological neural networks.', 1),
                 ('[0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]', 'What is deep learning?', 'AI', 'Deep learning is a subset of machine learning using neural networks.', 0),
                 ('[0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.1]', 'Explain natural language processing', 'NLP', 'NLP is a field of AI that focuses on interaction between computers and human language.', 1)
-            """
-            )
+            """)
 
             yield test_db
 
@@ -1596,26 +1588,22 @@ class TestORMAdvancedFeatures:
         test_client.query(Department).filter(Department.id.in_([1, 2, 3, 4])).delete()
 
         # Create test data
-        test_client.execute(
-            """
+        test_client.execute("""
             INSERT INTO test_departments_advanced (id, name, budget) VALUES 
             (1, 'Engineering', 100000),
             (2, 'Marketing', 50000),
             (3, 'Sales', 80000),
             (4, 'HR', 30000)
-        """
-        )
+        """)
 
-        test_client.execute(
-            """
+        test_client.execute("""
             INSERT INTO test_users_advanced (id, name, department_id, salary, email) VALUES 
             (1, 'John Doe', 1, 75000, 'john@example.com'),
             (2, 'Jane Smith', 1, 80000, 'jane@example.com'),
             (3, 'Bob Johnson', 2, 60000, 'bob@example.com'),
             (4, 'Alice Brown', 3, 70000, 'alice@example.com'),
             (5, 'Charlie Wilson', 4, 55000, 'charlie@example.com')
-        """
-        )
+        """)
 
         # Test subquery: Find users in departments with budget > 60000
         subquery = test_client.query(Department).select('id').filter('budget > ?', 60000)
@@ -1641,26 +1629,22 @@ class TestORMAdvancedFeatures:
         test_client.query(Department).filter(Department.id.in_([1, 2, 3, 4])).delete()
 
         # Create test data
-        test_client.execute(
-            """
+        test_client.execute("""
             INSERT INTO test_departments_advanced (id, name, budget) VALUES 
             (1, 'Engineering', 100000),
             (2, 'Marketing', 50000),
             (3, 'Sales', 80000),
             (4, 'HR', 30000)
-        """
-        )
+        """)
 
-        test_client.execute(
-            """
+        test_client.execute("""
             INSERT INTO test_users_advanced (id, name, department_id, salary, email) VALUES 
             (1, 'John Doe', 1, 75000, 'john@example.com'),
             (2, 'Jane Smith', 1, 80000, 'jane@example.com'),
             (3, 'Bob Johnson', 2, 60000, 'bob@example.com'),
             (4, 'Alice Brown', 3, 70000, 'alice@example.com'),
             (5, 'Charlie Wilson', 4, 55000, 'charlie@example.com')
-        """
-        )
+        """)
 
         # Test JOIN: Get users with their department information
         joined_results = (
@@ -1693,26 +1677,22 @@ class TestORMAdvancedFeatures:
         test_client.query(Department).filter(Department.id.in_([1, 2, 3, 4])).delete()
 
         # Create test data
-        test_client.execute(
-            """
+        test_client.execute("""
             INSERT INTO test_departments_advanced (id, name, budget) VALUES 
             (1, 'Engineering', 100000),
             (2, 'Marketing', 50000),
             (3, 'Sales', 80000),
             (4, 'HR', 30000)
-        """
-        )
+        """)
 
-        test_client.execute(
-            """
+        test_client.execute("""
             INSERT INTO test_users_advanced (id, name, department_id, salary, email) VALUES 
             (1, 'John Doe', 1, 75000, 'john@example.com'),
             (2, 'Jane Smith', 1, 80000, 'jane@example.com'),
             (3, 'Bob Johnson', 2, 60000, 'bob@example.com'),
             (4, 'Alice Brown', 3, 70000, 'alice@example.com'),
             (5, 'Charlie Wilson', 4, 55000, 'charlie@example.com')
-        """
-        )
+        """)
 
         # Test CTE: Find departments with average salary > 65000 using new CTE support
         # Create CTE for department average salary
@@ -1757,26 +1737,22 @@ class TestORMAdvancedFeatures:
         test_client.query(Department).filter(Department.id.in_([1, 2, 3, 4])).delete()
 
         # Create test data
-        test_client.execute(
-            """
+        test_client.execute("""
             INSERT INTO test_departments_advanced (id, name, budget) VALUES 
             (1, 'Engineering', 100000),
             (2, 'Marketing', 50000),
             (3, 'Sales', 80000),
             (4, 'HR', 30000)
-        """
-        )
+        """)
 
-        test_client.execute(
-            """
+        test_client.execute("""
             INSERT INTO test_users_advanced (id, name, department_id, salary, email) VALUES 
             (1, 'John Doe', 1, 75000, 'john@example.com'),
             (2, 'Jane Smith', 1, 80000, 'jane@example.com'),
             (3, 'Bob Johnson', 2, 60000, 'bob@example.com'),
             (4, 'Alice Brown', 3, 70000, 'alice@example.com'),
             (5, 'Charlie Wilson', 4, 55000, 'charlie@example.com')
-        """
-        )
+        """)
 
         # Test CTE: Find departments with high average salary using new CTE support
         dept_stats = (
@@ -1828,24 +1804,20 @@ class TestORMAdvancedFeatures:
         test_client.query(Department).filter(Department.id.in_([1, 2, 3, 4])).delete()
 
         # Create test data
-        test_client.execute(
-            """
+        test_client.execute("""
             INSERT INTO test_departments_advanced (id, name, budget) VALUES 
             (1, 'Engineering', 100000),
             (2, 'Marketing', 50000),
             (3, 'Sales', 80000)
-        """
-        )
+        """)
 
-        test_client.execute(
-            """
+        test_client.execute("""
             INSERT INTO test_users_advanced (id, name, department_id, salary, email) VALUES 
             (1, 'John Doe', 1, 75000, 'john@example.com'),
             (2, 'Jane Smith', 1, 80000, 'jane@example.com'),
             (3, 'Bob Johnson', 2, 60000, 'bob@example.com'),
             (4, 'Alice Brown', 3, 70000, 'alice@example.com')
-        """
-        )
+        """)
 
         # Create CTE for high-salary users using new CTE support
         high_salary_users = (
@@ -1884,24 +1856,20 @@ class TestORMAdvancedFeatures:
         test_client.query(Department).filter(Department.id.in_([1, 2, 3, 4])).delete()
 
         # Create test data
-        test_client.execute(
-            """
+        test_client.execute("""
             INSERT INTO test_departments_advanced (id, name, budget) VALUES 
             (1, 'Engineering', 100000),
             (2, 'Marketing', 50000),
             (3, 'Sales', 80000)
-        """
-        )
+        """)
 
-        test_client.execute(
-            """
+        test_client.execute("""
             INSERT INTO test_users_advanced (id, name, department_id, salary, email) VALUES 
             (1, 'John Doe', 1, 75000, 'john@example.com'),
             (2, 'Jane Smith', 1, 80000, 'jane@example.com'),
             (3, 'Bob Johnson', 2, 60000, 'bob@example.com'),
             (4, 'Alice Brown', 3, 70000, 'alice@example.com')
-        """
-        )
+        """)
 
         # Create first CTE: department statistics using new CTE support
         dept_stats = (
@@ -1963,15 +1931,13 @@ class TestORMAdvancedFeatures:
         test_client.query(AIDataset).filter(AIDataset.id.in_([1, 2, 3, 4])).delete()
 
         # Create test data
-        test_client.execute(
-            """
+        test_client.execute("""
             INSERT INTO test_ai_dataset (question_embedding, question, type, output_result, status) VALUES 
             ('[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]', 'What is machine learning?', 'AI', 'Machine learning is a subset of artificial intelligence.', 1),
             ('[0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]', 'How does neural network work?', 'AI', 'Neural networks are computing systems inspired by biological neural networks.', 1),
             ('[0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]', 'What is deep learning?', 'AI', 'Deep learning is a subset of machine learning using neural networks.', 0),
             ('[0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.1]', 'Explain natural language processing', 'NLP', 'NLP is a field of AI that focuses on interaction between computers and human language.', 1)
-        """
-        )
+        """)
 
         # Test vector similarity search using CTE with new support
         # Create CTE for vector distance calculation

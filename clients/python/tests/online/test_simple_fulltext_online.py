@@ -65,8 +65,7 @@ class TestSimpleFulltextOnline:
 
         # Create test table
         cls.client.execute("DROP TABLE IF EXISTS test_simple_fulltext_articles")
-        cls.client.execute(
-            """
+        cls.client.execute("""
             CREATE TABLE IF NOT EXISTS test_simple_fulltext_articles (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 title VARCHAR(255) NOT NULL,
@@ -74,8 +73,7 @@ class TestSimpleFulltextOnline:
                 category VARCHAR(100) NOT NULL,
                 tags VARCHAR(500)
             )
-        """
-        )
+        """)
 
         # Insert test data
         test_articles = [
@@ -143,12 +141,10 @@ class TestSimpleFulltextOnline:
             category_escaped = article[3].replace("'", "''")
             tags_escaped = article[4].replace("'", "''") if article[4] else ''
 
-            cls.client.execute(
-                f"""
+            cls.client.execute(f"""
                 INSERT INTO test_simple_fulltext_articles (id, title, content, category, tags) 
                 VALUES ({article[0]}, '{title_escaped}', '{content_escaped}', '{category_escaped}', '{tags_escaped}')
-            """
-            )
+            """)
 
         # Create fulltext index
         try:
@@ -645,12 +641,10 @@ class TestSimpleFulltextOnline:
     def test_chinese_text_search(self):
         """Test search with non-English text."""
         # Insert a Chinese article for testing
-        self.client.execute(
-            """
+        self.client.execute("""
             INSERT INTO test_simple_fulltext_articles (title, content, category, tags) 
             VALUES ('中文测试', '这是一个中文全文搜索测试', 'Test', 'chinese,test')
-        """
-        )
+        """)
 
         results = self.client.query(
             "test_simple_fulltext_articles.title",
@@ -712,25 +706,21 @@ class TestSimpleFulltextMigration:
 
         # Create test table
         cls.client.execute("DROP TABLE IF EXISTS migration_test")
-        cls.client.execute(
-            """
+        cls.client.execute("""
             CREATE TABLE IF NOT EXISTS migration_test (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 title VARCHAR(255) NOT NULL,
                 body TEXT NOT NULL
             )
-        """
-        )
+        """)
 
         # Insert test data
-        cls.client.execute(
-            """
+        cls.client.execute("""
             INSERT INTO migration_test (title, body) VALUES 
             ('Python Tutorial', 'Learn Python programming'),
             ('Java Guide', 'Complete Java development guide'),
             ('Machine Learning', 'AI and ML concepts')
-        """
-        )
+        """)
 
         # Create fulltext index
         try:

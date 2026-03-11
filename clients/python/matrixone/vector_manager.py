@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Union
 
 if TYPE_CHECKING:
     from .sqlalchemy_ext import VectorOpType
+    from .ivf_rank import IVFRankMode
 
 
 def _extract_table_name(table_name_or_model: Union[str, type]) -> str:
@@ -366,6 +367,123 @@ class VectorManager(_VectorManagerBase):
         except Exception as e:
             raise Exception(f"Failed to perform range search on table {table_name}: {e}")
 
+    def search_with_rank(
+        self,
+        table_name: Union[str, type],
+        vector_column: str,
+        query_vector: List[float],
+        limit: int = 10,
+        select_columns: List[str] = None,
+        where_clause: str = None,
+        distance_type: str = "l2",
+        rank_mode: Union[str, "IVFRankMode"] = None,
+        _log_mode: str = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Perform vector similarity search with IVF LIMIT BY RANK support.
+
+        This method executes vector search using MatrixOne's IVF index with
+        fine-grained control over ranking strategy via the LIMIT BY RANK
+        WITH OPTION clause.
+
+        Args:
+            table_name: Name of the table (string) or SQLAlchemy Model class.
+            vector_column: Name of the vector column to search.
+            query_vector: Query vector as list of floats.
+            limit: Maximum number of results to return. Defaults to 10.
+            select_columns: List of columns to select. If None, selects all.
+            where_clause: Optional WHERE clause for filtering before search.
+            distance_type: Distance metric - "l2", "cosine", or "inner_product".
+                          Defaults to "l2".
+            rank_mode: IVF ranking mode - "pre", "post", or "force".
+                      - "pre": Fast approximate search (default)
+                      - "post": Slower but more accurate search
+                      - "force": Force index usage with strict ranking
+                      If None, defaults to "post".
+            _log_mode: Internal logging mode parameter.
+
+        Returns:
+            List of dictionaries containing search results with distance column.
+
+        Raises:
+            Exception: If search fails or invalid parameters provided.
+
+        Example:
+            >>> # Complete runnable example
+            >>> from matrixone import Client, IVFRankMode
+            >>> client = Client()
+            >>> client.connect(database="test")
+            >>>
+            >>> # Create table
+            >>> client.execute('''
+            ...     CREATE TABLE IF NOT EXISTS documents (
+            ...         id INT PRIMARY KEY,
+            ...         title VARCHAR(200),
+            ...         embedding VECF32(4)
+            ...     )
+            ... ''')
+            >>>
+            >>> # Insert data
+            >>> client.execute("INSERT INTO documents VALUES (1, 'Doc 1', '[0.1,0.2,0.3,0.4]')")
+            >>> client.execute("INSERT INTO documents VALUES (2, 'Doc 2', '[0.2,0.3,0.4,0.5]')")
+            >>>
+            >>> # Create IVF index
+            >>> client.vector_ops.create_ivf('documents', 'idx_emb', 'embedding', lists=2)
+            >>>
+            >>> # Search with rank
+            >>> results = client.vector_ops.search_with_rank(
+            ...     table_name="documents",
+            ...     vector_column="embedding",
+            ...     query_vector=[0.15, 0.25, 0.35, 0.45],
+            ...     limit=2
+            ... )
+            >>> len(results)
+            2
+            >>>
+            >>> # Cleanup
+            >>> client.execute("DROP TABLE documents")
+            >>> client.disconnect()
+        """
+        from .ivf_rank import IVFRankMode
+
+        try:
+            table_name = _extract_table_name(table_name)
+
+            # Parse rank mode
+            if rank_mode is None:
+                rank_mode = IVFRankMode.POST
+            elif isinstance(rank_mode, str):
+                rank_mode = IVFRankMode(rank_mode.lower())
+            elif not isinstance(rank_mode, IVFRankMode):
+                raise ValueError(f"rank_mode must be IVFRankMode or string, got {type(rank_mode).__name__}")
+
+            # Build base similarity search SQL
+            columns = ", ".join(select_columns) if select_columns else "*"
+            vector_str = "[" + ",".join(str(v) for v in query_vector) + "]"
+
+            # Select distance function
+            if distance_type == "l2":
+                distance_func = "l2_distance"
+            elif distance_type == "cosine":
+                distance_func = "cosine_distance"
+            elif distance_type == "inner_product":
+                distance_func = "inner_product"
+            else:
+                distance_func = "l2_distance"
+
+            sql = f"SELECT {columns}, {distance_func}({vector_column}, '{vector_str}') as distance FROM {table_name}"
+
+            if where_clause:
+                sql += f" WHERE {where_clause}"
+
+            # Add LIMIT BY RANK WITH OPTION clause
+            sql += f" ORDER BY distance LIMIT {limit} BY RANK WITH OPTION 'mode={rank_mode.value}'"
+
+            result = self.executor.execute(sql, _log_mode=_log_mode)
+            return [dict(row._mapping) for row in result]
+        except Exception as e:
+            raise Exception(f"Failed to perform vector search with rank on table {table_name}: {e}") from e
+
     def get_ivf_stats(
         self,
         table_name: Union[str, type],
@@ -602,6 +720,127 @@ class AsyncVectorManager(_VectorManagerBase):
             return [dict(row._mapping) for row in result]
         except Exception as e:
             raise Exception(f"Failed to perform range search on table {table_name}: {e}")
+
+    async def search_with_rank(
+        self,
+        table_name: Union[str, type],
+        vector_column: str,
+        query_vector: List[float],
+        limit: int = 10,
+        select_columns: List[str] = None,
+        where_clause: str = None,
+        distance_type: str = "l2",
+        rank_mode: Union[str, "IVFRankMode"] = None,
+        _log_mode: str = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Perform vector similarity search with IVF LIMIT BY RANK support (async).
+
+        This method executes vector search using MatrixOne's IVF index with
+        fine-grained control over ranking strategy via the LIMIT BY RANK
+        WITH OPTION clause.
+
+        Args:
+            table_name: Name of the table (string) or SQLAlchemy Model class.
+            vector_column: Name of the vector column to search.
+            query_vector: Query vector as list of floats.
+            limit: Maximum number of results to return. Defaults to 10.
+            select_columns: List of columns to select. If None, selects all.
+            where_clause: Optional WHERE clause for filtering before search.
+            distance_type: Distance metric - "l2", "cosine", or "inner_product".
+                          Defaults to "l2".
+            rank_mode: IVF ranking mode - "pre", "post", or "force".
+                      - "pre": Fast approximate search (default)
+                      - "post": Slower but more accurate search
+                      - "force": Force index usage with strict ranking
+                      If None, defaults to "post".
+            _log_mode: Internal logging mode parameter.
+
+        Returns:
+            List of dictionaries containing search results with distance column.
+
+        Raises:
+            Exception: If search fails or invalid parameters provided.
+
+        Example:
+            >>> # Complete runnable example
+            >>> import asyncio
+            >>> from matrixone import AsyncClient, IVFRankMode
+            >>>
+            >>> async def example():
+            ...     client = AsyncClient()
+            ...     await client.connect(database="test")
+            ...
+            ...     # Create table
+            ...     await client.execute('''
+            ...         CREATE TABLE IF NOT EXISTS documents (
+            ...             id INT PRIMARY KEY,
+            ...             title VARCHAR(200),
+            ...             embedding VECF32(4)
+            ...         )
+            ...     ''')
+            ...
+            ...     # Insert data
+            ...     await client.execute("INSERT INTO documents VALUES (1, 'Doc 1', '[0.1,0.2,0.3,0.4]')")
+            ...     await client.execute("INSERT INTO documents VALUES (2, 'Doc 2', '[0.2,0.3,0.4,0.5]')")
+            ...
+            ...     # Create IVF index
+            ...     await client.vector_ops.create_ivf('documents', 'idx_emb', 'embedding', lists=2)
+            ...
+            ...     # Search with rank
+            ...     results = await client.vector_ops.search_with_rank(
+            ...         table_name="documents",
+            ...         vector_column="embedding",
+            ...         query_vector=[0.15, 0.25, 0.35, 0.45],
+            ...         limit=2
+            ...     )
+            ...     print(f"Found {len(results)} results")
+            ...
+            ...     # Cleanup
+            ...     await client.execute("DROP TABLE documents")
+            ...     await client.disconnect()
+            >>>
+            >>> asyncio.run(example())
+        """
+        from .ivf_rank import IVFRankMode
+
+        try:
+            table_name = _extract_table_name(table_name)
+
+            # Parse rank mode
+            if rank_mode is None:
+                rank_mode = IVFRankMode.POST
+            elif isinstance(rank_mode, str):
+                rank_mode = IVFRankMode(rank_mode.lower())
+            elif not isinstance(rank_mode, IVFRankMode):
+                raise ValueError(f"rank_mode must be IVFRankMode or string, got {type(rank_mode).__name__}")
+
+            # Build base similarity search SQL
+            columns = ", ".join(select_columns) if select_columns else "*"
+            vector_str = "[" + ",".join(str(v) for v in query_vector) + "]"
+
+            # Select distance function
+            if distance_type == "l2":
+                distance_func = "l2_distance"
+            elif distance_type == "cosine":
+                distance_func = "cosine_distance"
+            elif distance_type == "inner_product":
+                distance_func = "inner_product"
+            else:
+                distance_func = "l2_distance"
+
+            sql = f"SELECT {columns}, {distance_func}({vector_column}, '{vector_str}') as distance FROM {table_name}"
+
+            if where_clause:
+                sql += f" WHERE {where_clause}"
+
+            # Add LIMIT BY RANK WITH OPTION clause
+            sql += f" ORDER BY distance LIMIT {limit} BY RANK WITH OPTION 'mode={rank_mode.value}'"
+
+            result = await self.executor.execute(sql, _log_mode=_log_mode)
+            return [dict(row._mapping) for row in result]
+        except Exception as e:
+            raise Exception(f"Failed to perform vector search with rank on table {table_name}: {e}") from e
 
     async def get_ivf_stats(
         self,

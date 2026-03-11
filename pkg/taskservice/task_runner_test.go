@@ -308,9 +308,9 @@ func TestRunnerOptionSetters(t *testing.T) {
 	require.Equal(t, 4*time.Second, r.options.retryInterval)
 	require.Equal(t, 5*time.Second, r.options.heartbeatInterval)
 	require.Equal(t, 6*time.Second, r.options.heartbeatTimeout)
-	require.NotNil(t, r.getClient)
-	require.Nil(t, r.getClient())
-	require.Equal(t, "cn-1", r.cnUUID)
+	require.NotNil(t, r.hakeeper.getClient)
+	require.Nil(t, r.hakeeper.getClient())
+	require.Equal(t, "cn-1", r.hakeeper.cnUUID)
 }
 
 func TestRunnerWithOptionsSetter(t *testing.T) {
