@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"runtime"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/concurrent"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
@@ -31,46 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
-
-var (
-	pool1DI64 = sync.Pool{New: func() any { x := make([]int64, 0); return &x }}
-	pool1DF32 = sync.Pool{New: func() any { x := make([]float32, 0); return &x }}
-	pool1DF64 = sync.Pool{New: func() any { x := make([]float64, 0); return &x }}
-	pool1DInt = sync.Pool{New: func() any { x := make([]int, 0); return &x }}
-)
-
-func get1D[T any](pool *sync.Pool, n int) *[]T {
-	val := pool.Get()
-	if val == nil {
-		newSlice := make([]T, n)
-		return &newSlice
-	}
-	v, ok := val.(*[]T)
-	if !ok || v == nil {
-		newSlice := make([]T, n)
-		return &newSlice
-	}
-	if cap(*v) < n {
-		if n > 0 {
-			pool.Put(v)
-			newSlice := make([]T, n)
-			return &newSlice
-		}
-		*v = (*v)[:0]
-		return v
-	}
-	*v = (*v)[:n]
-	return v
-}
-
-func put1D[T any](pool *sync.Pool, v *[]T) {
-	var zero T
-	for i := range *v {
-		(*v)[i] = zero
-	}
-	*v = (*v)[:0]
-	pool.Put(v)
-}
 
 type UsearchBruteForceIndex[T types.RealNumbers] struct {
 	Dataset      *[]T // flattend vector
@@ -297,162 +256,24 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 		return nil, nil, err
 	}
 
-	nthreads := int(rt.NThreads)
-	if nthreads <= 0 {
-		nthreads = 1
-	}
+	nthreads := rt.NThreads
 	nqueries := len(queries)
-	ndataset := len(idx.Dataset)
 	limit := int(rt.Limit)
 
-	if limit == 0 || nqueries == 0 || ndataset == 0 {
-		return make([]int64, nqueries*limit), make([]float64, nqueries*limit), nil
-	}
-
-	if limit > ndataset {
-		limit = ndataset
+	if limit == 0 {
+		return []int64{}, []float64{}, nil
 	}
 
 	totalReturn := nqueries * limit
 	retKeys64 := make([]int64, totalReturn)
 	retDistances := make([]float64, totalReturn)
 
-	exec := concurrent.NewThreadPoolExecutor(nthreads)
-
-	// If we have enough queries to keep threads busy, parallelize over queries.
-	if nqueries >= nthreads {
-		err = exec.Execute(
-			proc.GetContext(),
-			nqueries,
-			func(ctx context.Context, thread_id int, start, end int) (err2 error) {
-				// Pre-allocate heap buffers for this thread
-				var heapKeysBuf []int64
-				var heapDistBuf []T
-				if limit > 1 {
-					heapKeysBuf = make([]int64, limit)
-					heapDistBuf = make([]T, limit)
-				}
-
-				for k := start; k < end; k++ {
-					q := queries[k]
-					if k%100 == 0 && ctx.Err() != nil {
-						return ctx.Err()
-					}
-
-					if limit == 1 {
-						minDist := metric.MaxFloat[T]()
-						minIdx := -1
-						for j := range idx.Dataset {
-							dist, err2 := distfn(q, idx.Dataset[j])
-							if err2 != nil {
-								return err2
-							}
-							if dist < minDist {
-								minDist = dist
-								minIdx = j
-							}
-						}
-						retKeys64[k*limit] = int64(minIdx)
-						retDistances[k*limit] = float64(minDist)
-						continue
-					}
-
-					// Max-heap logic for K > 1
-					h := vectorindex.NewFastMaxHeap(limit, heapKeysBuf, heapDistBuf)
-
-					for j := range idx.Dataset {
-						dist, err2 := distfn(q, idx.Dataset[j])
-						if err2 != nil {
-							return err2
-						}
-						h.Push(int64(j), dist)
-					}
-
-					// Extract from heap and place into results in sorted order (smallest first)
-					offset := k * limit
-					for j := limit - 1; j >= 0; j-- {
-						key, dist, ok := h.Pop()
-						if !ok {
-							retKeys64[offset+j] = -1
-							retDistances[offset+j] = 0
-							continue
-						}
-						retKeys64[offset+j] = key
-						retDistances[offset+j] = float64(dist)
-					}
-				}
-				return
-			})
-
-		if err != nil {
-			return nil, nil, err
-		}
-
-		return retKeys64, retDistances, nil
-	}
-
-	return idx.searchDatasetParallel(proc, queries, nthreads, limit, distfn, retKeys64, retDistances)
-}
-
-func (idx *GoBruteForceIndex[T]) searchDatasetParallel(
-	proc *sqlexec.SqlProcess,
-	queries [][]T,
-	nthreads int,
-	limit int,
-	distfn metric.DistanceFunction[T],
-	retKeys64 []int64,
-	retDistances []float64,
-) ([]int64, []float64, error) {
-	nqueries := len(queries)
-	ndataset := len(idx.Dataset)
-	exec := concurrent.NewThreadPoolExecutor(nthreads)
-
-	// If nqueries < nthreads (e.g. 1 query, 16 threads), parallelize over the dataset.
-	// We will collect top-K results from each thread and then merge them.
-	// Allocate a flattened block for thread results to minimize allocations
-	flatLen := nqueries * nthreads * limit
-	var flatKeys []int64
-	var flatDists []T
-	var pFlatKeys *[]int64
-	var pFlatDists *[]T
-
-	var _t T
-	switch any(_t).(type) {
-	case float32:
-		pFlatKeys = get1D[int64](&pool1DI64, flatLen)
-		flatKeys = *pFlatKeys
-
-		pFlatDists32 := get1D[float32](&pool1DF32, flatLen)
-		flatDists = any(*pFlatDists32).([]T)
-		pFlatDists = any(pFlatDists32).(*[]T)
-	case float64:
-		pFlatKeys = get1D[int64](&pool1DI64, flatLen)
-		flatKeys = *pFlatKeys
-
-		pFlatDists64 := get1D[float64](&pool1DF64, flatLen)
-		flatDists = any(*pFlatDists64).([]T)
-		pFlatDists = any(pFlatDists64).(*[]T)
-	}
-
-	defer func() {
-		put1D(&pool1DI64, pFlatKeys)
-		switch any(_t).(type) {
-		case float32:
-			put1D(&pool1DF32, any(pFlatDists).(*[]float32))
-		case float64:
-			put1D(&pool1DF64, any(pFlatDists).(*[]float64))
-		}
-	}()
-
-	// To track how many valid items each thread produced per query
-	pValidCounts := get1D[int](&pool1DInt, nqueries*nthreads)
-	validCounts := *pValidCounts
-	defer put1D(&pool1DInt, pValidCounts)
-
-	err := exec.Execute(
+	exec := concurrent.NewThreadPoolExecutor(int(nthreads))
+	err = exec.Execute(
 		proc.GetContext(),
-		ndataset,
+		nqueries,
 		func(ctx context.Context, thread_id int, start, end int) (err2 error) {
+			// Pre-allocate heap buffers for this thread
 			var heapKeysBuf []int64
 			var heapDistBuf []T
 			if limit > 1 {
@@ -460,130 +281,60 @@ func (idx *GoBruteForceIndex[T]) searchDatasetParallel(
 				heapDistBuf = make([]T, limit)
 			}
 
-			datasetChunk := idx.Dataset[start:end]
-
-			for k := 0; k < nqueries; k++ {
+			for k := start; k < end; k++ {
 				q := queries[k]
 				if k%100 == 0 && ctx.Err() != nil {
 					return ctx.Err()
 				}
 
-				baseOffset := (k*nthreads + thread_id) * limit
-
 				if limit == 1 {
 					minDist := metric.MaxFloat[T]()
 					minIdx := -1
-					for j := range datasetChunk {
-						dist, err2 := distfn(q, datasetChunk[j])
+					for j := range idx.Dataset {
+						dist, err2 := distfn(q, idx.Dataset[j])
 						if err2 != nil {
 							return err2
 						}
 						if dist < minDist {
 							minDist = dist
-							minIdx = start + j // Global ID
+							minIdx = j
 						}
 					}
-
-					// Store local result for this thread
-					if minIdx != -1 {
-						flatKeys[baseOffset] = int64(minIdx)
-						flatDists[baseOffset] = minDist
-						validCounts[k*nthreads+thread_id] = 1
-					} else {
-						validCounts[k*nthreads+thread_id] = 0
-					}
+					retKeys64[k*limit] = int64(minIdx)
+					retDistances[k*limit] = float64(minDist)
 					continue
 				}
 
 				// Max-heap logic for K > 1
 				h := vectorindex.NewFastMaxHeap(limit, heapKeysBuf, heapDistBuf)
 
-				for j := range datasetChunk {
-					dist, err2 := distfn(q, datasetChunk[j])
+				for j := range idx.Dataset {
+					dist, err2 := distfn(q, idx.Dataset[j])
 					if err2 != nil {
 						return err2
 					}
-					h.Push(int64(start+j), dist)
+					h.Push(int64(j), dist)
 				}
 
-				// Extract from local heap directly into the flat array
-				validCount := 0
+				// Extract from heap and place into results in sorted order (smallest first)
+				offset := k * limit
 				for j := limit - 1; j >= 0; j-- {
 					key, dist, ok := h.Pop()
 					if !ok {
+						// Pad with invalid if not enough data
+						retKeys64[offset+j] = -1
+						retDistances[offset+j] = 0
 						continue
 					}
-					flatKeys[baseOffset+j] = key
-					flatDists[baseOffset+j] = dist
-					validCount++
+					retKeys64[offset+j] = key
+					retDistances[offset+j] = float64(dist)
 				}
-
-				// Shift valid items to the front of this thread's block if we didn't fill the limit
-				if validCount > 0 && validCount < limit {
-					shift := limit - validCount
-					for j := 0; j < validCount; j++ {
-						flatKeys[baseOffset+j] = flatKeys[baseOffset+j+shift]
-						flatDists[baseOffset+j] = flatDists[baseOffset+j+shift]
-					}
-				}
-
-				validCounts[k*nthreads+thread_id] = validCount
 			}
 			return
 		})
 
 	if err != nil {
 		return nil, nil, err
-	}
-
-	// Merge the thread-local results for each query
-	var finalHeapKeysBuf []int64
-	var finalHeapDistBuf []T
-	if limit > 1 {
-		finalHeapKeysBuf = make([]int64, limit)
-		finalHeapDistBuf = make([]T, limit)
-	}
-
-	for k := 0; k < nqueries; k++ {
-		offset := k * limit
-
-		if limit == 1 {
-			minDist := metric.MaxFloat[T]()
-			minIdx := int64(-1)
-			for t := 0; t < nthreads; t++ {
-				validCount := validCounts[k*nthreads+t]
-				if validCount > 0 {
-					baseOffset := (k*nthreads + t) * limit
-					if flatDists[baseOffset] < minDist {
-						minDist = flatDists[baseOffset]
-						minIdx = flatKeys[baseOffset]
-					}
-				}
-			}
-			retKeys64[offset] = minIdx
-			retDistances[offset] = float64(minDist)
-			continue
-		}
-
-		h := vectorindex.NewFastMaxHeap(limit, finalHeapKeysBuf, finalHeapDistBuf)
-		for t := 0; t < nthreads; t++ {
-			validCount := validCounts[k*nthreads+t]
-			baseOffset := (k*nthreads + t) * limit
-			for j := 0; j < validCount; j++ {
-				h.Push(flatKeys[baseOffset+j], flatDists[baseOffset+j])
-			}
-		}
-
-		for j := limit - 1; j >= 0; j-- {
-			key, dist, ok := h.Pop()
-			if !ok {
-				retKeys64[offset+j] = -1
-				retDistances[offset+j] = 0
-				continue
-			}
-			retKeys64[offset+j] = key
-			retDistances[offset+j] = float64(dist)
-		}
 	}
 
 	return retKeys64, retDistances, nil
