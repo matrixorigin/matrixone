@@ -720,6 +720,7 @@ func BlockDataReadInner(
 	}
 	return
 }
+
 // buildTopInputRows constructs a slice of live row indices by excluding rows
 // present in the deleteMask. Returns nil if deleteMask is empty.
 func buildTopInputRows(length int, deleteMask objectio.Bitmap) []int64 {
