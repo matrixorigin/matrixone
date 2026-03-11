@@ -232,384 +232,129 @@ func TestHandleOrderByLimitOnSelectRows(t *testing.T) {
 
 // TestTopInputRowsConstruction tests the code section at lines 674-684
 // This tests the construction of topInputRows by filtering out deleted rows
-func TestTopInputRowsConstruction(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-
-	// Test case 1: Empty deleteMask - topInputRows should be nil
-	t.Run("empty_delete_mask", func(t *testing.T) {
-		deleteMask := objectio.GetReusableBitmap()
-		defer deleteMask.Release()
-
-		length := 100
-		capHint := length - deleteMask.Count()
-		if capHint < 0 {
-			capHint = 0
-		}
-
-		var topInputRows []int64
-		if !deleteMask.IsEmpty() {
-			topInputRows = make([]int64, 0, capHint)
-			for i := 0; i < length; i++ {
-				if !deleteMask.Contains(uint64(i)) {
-					topInputRows = append(topInputRows, int64(i))
-				}
-			}
-		}
-
-		require.Nil(t, topInputRows)
+func TestBuildTopInputRows(t *testing.T) {
+	// empty deleteMask returns nil
+	t.Run("empty_mask", func(t *testing.T) {
+		mask := objectio.GetReusableBitmap()
+		defer mask.Release()
+		require.Nil(t, buildTopInputRows(100, mask))
 	})
 
-	// Test case 2: All rows deleted - topInputRows should be empty
-	t.Run("all_rows_deleted", func(t *testing.T) {
-		deleteMask := objectio.GetReusableBitmap()
-		defer deleteMask.Release()
-
-		length := 10
-		for i := 0; i < length; i++ {
-			deleteMask.Add(uint64(i))
+	// all rows deleted returns empty slice
+	t.Run("all_deleted", func(t *testing.T) {
+		mask := objectio.GetReusableBitmap()
+		defer mask.Release()
+		for i := 0; i < 10; i++ {
+			mask.Add(uint64(i))
 		}
-
-		capHint := length - deleteMask.Count()
-		if capHint < 0 {
-			capHint = 0
-		}
-
-		var topInputRows []int64
-		if !deleteMask.IsEmpty() {
-			topInputRows = make([]int64, 0, capHint)
-			for i := 0; i < length; i++ {
-				if !deleteMask.Contains(uint64(i)) {
-					topInputRows = append(topInputRows, int64(i))
-				}
-			}
-		}
-
-		require.NotNil(t, topInputRows)
-		require.Equal(t, 0, len(topInputRows))
-		require.Equal(t, 0, cap(topInputRows))
+		rows := buildTopInputRows(10, mask)
+		require.NotNil(t, rows)
+		require.Equal(t, 0, len(rows))
+		require.Equal(t, 0, cap(rows))
 	})
 
-	// Test case 3: Some rows deleted - topInputRows should contain only live rows
-	t.Run("some_rows_deleted", func(t *testing.T) {
-		deleteMask := objectio.GetReusableBitmap()
-		defer deleteMask.Release()
-
-		length := 10
-		deletedIndices := []uint64{1, 3, 5, 7}
-		for _, idx := range deletedIndices {
-			deleteMask.Add(idx)
-		}
-
-		capHint := length - deleteMask.Count()
-		if capHint < 0 {
-			capHint = 0
-		}
-
-		var topInputRows []int64
-		if !deleteMask.IsEmpty() {
-			topInputRows = make([]int64, 0, capHint)
-			for i := 0; i < length; i++ {
-				if !deleteMask.Contains(uint64(i)) {
-					topInputRows = append(topInputRows, int64(i))
-				}
-			}
-		}
-
-		require.NotNil(t, topInputRows)
-		require.Equal(t, 6, len(topInputRows))
-		require.Equal(t, 6, cap(topInputRows))
-
-		expectedRows := []int64{0, 2, 4, 6, 8, 9}
-		require.Equal(t, expectedRows, topInputRows)
+	// some rows deleted
+	t.Run("some_deleted", func(t *testing.T) {
+		mask := objectio.GetReusableBitmap()
+		defer mask.Release()
+		mask.Add(1)
+		mask.Add(3)
+		mask.Add(5)
+		mask.Add(7)
+		rows := buildTopInputRows(10, mask)
+		require.Equal(t, []int64{0, 2, 4, 6, 8, 9}, rows)
+		require.Equal(t, 6, cap(rows))
 	})
 
-	// Test case 4: capHint calculation - negative capHint should be clamped to 0
-	t.Run("negative_caphint_clamped", func(t *testing.T) {
-		deleteMask := objectio.GetReusableBitmap()
-		defer deleteMask.Release()
-
-		length := 5
-		// Add more deletes than length (edge case)
-		for i := 0; i < length; i++ {
-			deleteMask.Add(uint64(i))
-		}
-
-		capHint := length - deleteMask.Count()
-		if capHint < 0 {
-			capHint = 0
-		}
-
-		require.Equal(t, 0, capHint)
-
-		var topInputRows []int64
-		if !deleteMask.IsEmpty() {
-			topInputRows = make([]int64, 0, capHint)
-			for i := 0; i < length; i++ {
-				if !deleteMask.Contains(uint64(i)) {
-					topInputRows = append(topInputRows, int64(i))
-				}
-			}
-		}
-
-		require.NotNil(t, topInputRows)
-		require.Equal(t, 0, len(topInputRows))
-		require.Equal(t, 0, cap(topInputRows))
-	})
-
-	// Test case 5: Large dataset with sparse deletes
-	t.Run("large_dataset_sparse_deletes", func(t *testing.T) {
-		deleteMask := objectio.GetReusableBitmap()
-		defer deleteMask.Release()
-
-		length := 1000
-		// Delete every 10th row
-		for i := 0; i < length; i += 10 {
-			deleteMask.Add(uint64(i))
-		}
-
-		capHint := length - deleteMask.Count()
-		if capHint < 0 {
-			capHint = 0
-		}
-
-		var topInputRows []int64
-		if !deleteMask.IsEmpty() {
-			topInputRows = make([]int64, 0, capHint)
-			for i := 0; i < length; i++ {
-				if !deleteMask.Contains(uint64(i)) {
-					topInputRows = append(topInputRows, int64(i))
-				}
-			}
-		}
-
-		require.NotNil(t, topInputRows)
-		require.Equal(t, 900, len(topInputRows))
-		require.Equal(t, 900, cap(topInputRows))
-
-		// Verify no deleted rows are in topInputRows
-		for _, row := range topInputRows {
-			require.False(t, deleteMask.Contains(uint64(row)))
-		}
-	})
-
-	// Test case 6: Single row dataset
-	t.Run("single_row_not_deleted", func(t *testing.T) {
-		deleteMask := objectio.GetReusableBitmap()
-		defer deleteMask.Release()
-
-		length := 1
-
-		capHint := length - deleteMask.Count()
-		if capHint < 0 {
-			capHint = 0
-		}
-
-		var topInputRows []int64
-		if !deleteMask.IsEmpty() {
-			topInputRows = make([]int64, 0, capHint)
-			for i := 0; i < length; i++ {
-				if !deleteMask.Contains(uint64(i)) {
-					topInputRows = append(topInputRows, int64(i))
-				}
-			}
-		}
-
-		require.Nil(t, topInputRows)
-	})
-
-	// Test case 7: Single row deleted
-	t.Run("single_row_deleted", func(t *testing.T) {
-		deleteMask := objectio.GetReusableBitmap()
-		defer deleteMask.Release()
-
-		length := 1
-		deleteMask.Add(0)
-
-		capHint := length - deleteMask.Count()
-		if capHint < 0 {
-			capHint = 0
-		}
-
-		var topInputRows []int64
-		if !deleteMask.IsEmpty() {
-			topInputRows = make([]int64, 0, capHint)
-			for i := 0; i < length; i++ {
-				if !deleteMask.Contains(uint64(i)) {
-					topInputRows = append(topInputRows, int64(i))
-				}
-			}
-		}
-
-		require.NotNil(t, topInputRows)
-		require.Equal(t, 0, len(topInputRows))
-		require.Equal(t, 0, cap(topInputRows))
-	})
-
-	// Test case 8: Consecutive deletes at start
-	t.Run("consecutive_deletes_at_start", func(t *testing.T) {
-		deleteMask := objectio.GetReusableBitmap()
-		defer deleteMask.Release()
-
-		length := 20
+	// capHint clamped to 0 when all deleted
+	t.Run("caphint_clamped", func(t *testing.T) {
+		mask := objectio.GetReusableBitmap()
+		defer mask.Release()
 		for i := 0; i < 5; i++ {
-			deleteMask.Add(uint64(i))
+			mask.Add(uint64(i))
 		}
-
-		capHint := length - deleteMask.Count()
-		if capHint < 0 {
-			capHint = 0
-		}
-
-		var topInputRows []int64
-		if !deleteMask.IsEmpty() {
-			topInputRows = make([]int64, 0, capHint)
-			for i := 0; i < length; i++ {
-				if !deleteMask.Contains(uint64(i)) {
-					topInputRows = append(topInputRows, int64(i))
-				}
-			}
-		}
-
-		require.NotNil(t, topInputRows)
-		require.Equal(t, 15, len(topInputRows))
-		require.Equal(t, int64(5), topInputRows[0])
-		require.Equal(t, int64(19), topInputRows[14])
+		rows := buildTopInputRows(5, mask)
+		require.NotNil(t, rows)
+		require.Equal(t, 0, len(rows))
 	})
 
-	// Test case 9: Consecutive deletes at end
-	t.Run("consecutive_deletes_at_end", func(t *testing.T) {
-		deleteMask := objectio.GetReusableBitmap()
-		defer deleteMask.Release()
+	// single row not deleted -> empty mask -> nil
+	t.Run("single_row_no_delete", func(t *testing.T) {
+		mask := objectio.GetReusableBitmap()
+		defer mask.Release()
+		require.Nil(t, buildTopInputRows(1, mask))
+	})
 
-		length := 20
+	// single row deleted
+	t.Run("single_row_deleted", func(t *testing.T) {
+		mask := objectio.GetReusableBitmap()
+		defer mask.Release()
+		mask.Add(0)
+		rows := buildTopInputRows(1, mask)
+		require.NotNil(t, rows)
+		require.Equal(t, 0, len(rows))
+	})
+
+	// large sparse deletes
+	t.Run("large_sparse", func(t *testing.T) {
+		mask := objectio.GetReusableBitmap()
+		defer mask.Release()
+		for i := 0; i < 1000; i += 10 {
+			mask.Add(uint64(i))
+		}
+		rows := buildTopInputRows(1000, mask)
+		require.Equal(t, 900, len(rows))
+		require.Equal(t, 900, cap(rows))
+		for _, r := range rows {
+			require.False(t, mask.Contains(uint64(r)))
+		}
+	})
+
+	// deletes at start
+	t.Run("deletes_at_start", func(t *testing.T) {
+		mask := objectio.GetReusableBitmap()
+		defer mask.Release()
+		for i := 0; i < 5; i++ {
+			mask.Add(uint64(i))
+		}
+		rows := buildTopInputRows(20, mask)
+		require.Equal(t, 15, len(rows))
+		require.Equal(t, int64(5), rows[0])
+	})
+
+	// deletes at end
+	t.Run("deletes_at_end", func(t *testing.T) {
+		mask := objectio.GetReusableBitmap()
+		defer mask.Release()
 		for i := 15; i < 20; i++ {
-			deleteMask.Add(uint64(i))
+			mask.Add(uint64(i))
 		}
-
-		capHint := length - deleteMask.Count()
-		if capHint < 0 {
-			capHint = 0
-		}
-
-		var topInputRows []int64
-		if !deleteMask.IsEmpty() {
-			topInputRows = make([]int64, 0, capHint)
-			for i := 0; i < length; i++ {
-				if !deleteMask.Contains(uint64(i)) {
-					topInputRows = append(topInputRows, int64(i))
-				}
-			}
-		}
-
-		require.NotNil(t, topInputRows)
-		require.Equal(t, 15, len(topInputRows))
-		require.Equal(t, int64(0), topInputRows[0])
-		require.Equal(t, int64(14), topInputRows[14])
+		rows := buildTopInputRows(20, mask)
+		require.Equal(t, 15, len(rows))
+		require.Equal(t, int64(14), rows[14])
 	})
 
-	// Test case 10: Alternating deletes (every other row)
-	t.Run("alternating_deletes", func(t *testing.T) {
-		deleteMask := objectio.GetReusableBitmap()
-		defer deleteMask.Release()
-
-		length := 20
-		for i := 0; i < length; i += 2 {
-			deleteMask.Add(uint64(i))
+	// alternating deletes
+	t.Run("alternating", func(t *testing.T) {
+		mask := objectio.GetReusableBitmap()
+		defer mask.Release()
+		for i := 0; i < 20; i += 2 {
+			mask.Add(uint64(i))
 		}
-
-		capHint := length - deleteMask.Count()
-		if capHint < 0 {
-			capHint = 0
-		}
-
-		var topInputRows []int64
-		if !deleteMask.IsEmpty() {
-			topInputRows = make([]int64, 0, capHint)
-			for i := 0; i < length; i++ {
-				if !deleteMask.Contains(uint64(i)) {
-					topInputRows = append(topInputRows, int64(i))
-				}
-			}
-		}
-
-		require.NotNil(t, topInputRows)
-		require.Equal(t, 10, len(topInputRows))
-
-		// Verify all rows are odd indices
-		for _, row := range topInputRows {
-			require.Equal(t, int64(1), row%2)
+		rows := buildTopInputRows(20, mask)
+		require.Equal(t, 10, len(rows))
+		for _, r := range rows {
+			require.Equal(t, int64(1), r%2)
 		}
 	})
 
-	// Test case 11: capHint accuracy - verify capacity matches expected live rows
-	t.Run("caphint_accuracy", func(t *testing.T) {
-		deleteMask := objectio.GetReusableBitmap()
-		defer deleteMask.Release()
-
-		length := 100
-		deleteCount := 25
-		for i := 0; i < deleteCount; i++ {
-			deleteMask.Add(uint64(i * 4))
-		}
-
-		capHint := length - deleteMask.Count()
-		if capHint < 0 {
-			capHint = 0
-		}
-
-		var topInputRows []int64
-		if !deleteMask.IsEmpty() {
-			topInputRows = make([]int64, 0, capHint)
-			for i := 0; i < length; i++ {
-				if !deleteMask.Contains(uint64(i)) {
-					topInputRows = append(topInputRows, int64(i))
-				}
-			}
-		}
-
-		require.NotNil(t, topInputRows)
-		require.Equal(t, capHint, len(topInputRows))
-		require.Equal(t, capHint, cap(topInputRows))
-	})
-
-	// Test case 12: Verify loop iteration covers all indices
-	t.Run("loop_covers_all_indices", func(t *testing.T) {
-		deleteMask := objectio.GetReusableBitmap()
-		defer deleteMask.Release()
-
-		length := 50
-		deleteMask.Add(10)
-		deleteMask.Add(25)
-		deleteMask.Add(49)
-
-		capHint := length - deleteMask.Count()
-		if capHint < 0 {
-			capHint = 0
-		}
-
-		var topInputRows []int64
-		if !deleteMask.IsEmpty() {
-			topInputRows = make([]int64, 0, capHint)
-			for i := 0; i < length; i++ {
-				if !deleteMask.Contains(uint64(i)) {
-					topInputRows = append(topInputRows, int64(i))
-				}
-			}
-		}
-
-		require.NotNil(t, topInputRows)
-		require.Equal(t, 47, len(topInputRows))
-
-		// Verify first and last elements
-		require.Equal(t, int64(0), topInputRows[0])
-		require.Equal(t, int64(48), topInputRows[46])
-
-		// Verify deleted indices are not present
-		for _, row := range topInputRows {
-			require.NotEqual(t, int64(10), row)
-			require.NotEqual(t, int64(25), row)
-			require.NotEqual(t, int64(49), row)
-		}
+	// length 0
+	t.Run("zero_length", func(t *testing.T) {
+		mask := objectio.GetReusableBitmap()
+		defer mask.Release()
+		mask.Add(0)
+		rows := buildTopInputRows(0, mask)
+		require.NotNil(t, rows)
+		require.Equal(t, 0, len(rows))
 	})
 }

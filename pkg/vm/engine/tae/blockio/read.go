@@ -669,20 +669,7 @@ func BlockDataReadInner(
 	// No pre-filter rows, but vector TopN pushdown is requested:
 	// apply TopN on live rows (exclude tombstones first), then materialize selected rows.
 	if orderByLimit != nil {
-		var topInputRows []int64
-		if !deleteMask.IsEmpty() {
-			length := int(info.MetaLocation().Rows())
-			capHint := length - deleteMask.Count()
-			if capHint < 0 {
-				capHint = 0
-			}
-			topInputRows = make([]int64, 0, capHint)
-			for i := 0; i < length; i++ {
-				if !deleteMask.Contains(uint64(i)) {
-					topInputRows = append(topInputRows, int64(i))
-				}
-			}
-		}
+		topInputRows := buildTopInputRows(int(info.MetaLocation().Rows()), deleteMask)
 
 		var dists []float64
 		selectRows, dists, err = handleOrderByLimitOnSelectRows(ctx, topInputRows, orderByLimit, phyAddrColumnPos, cacheVectors)
@@ -732,6 +719,24 @@ func BlockDataReadInner(
 		}
 	}
 	return
+}
+// buildTopInputRows constructs a slice of live row indices by excluding rows
+// present in the deleteMask. Returns nil if deleteMask is empty.
+func buildTopInputRows(length int, deleteMask objectio.Bitmap) []int64 {
+	if deleteMask.IsEmpty() {
+		return nil
+	}
+	capHint := length - deleteMask.Count()
+	if capHint < 0 {
+		capHint = 0
+	}
+	rows := make([]int64, 0, capHint)
+	for i := 0; i < length; i++ {
+		if !deleteMask.Contains(uint64(i)) {
+			rows = append(rows, int64(i))
+		}
+	}
+	return rows
 }
 
 func excludePhyAddrColumn(
