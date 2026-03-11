@@ -333,7 +333,7 @@ func (ctr *container) handleRuntimeFilter(hashBuild *HashBuild, proc *process.Pr
 		var err error
 		// Composite primary key
 		if spec.Expr.GetF() != nil {
-			bat := batch.NewWithSize(len(ctr.hashmapBuilder.UniqueJoinKeys))
+			bat := batch.NewOffHeapWithSize(len(ctr.hashmapBuilder.UniqueJoinKeys))
 			bat.SetRowCount(rowCount)
 			copy(bat.Vecs, ctr.hashmapBuilder.UniqueJoinKeys)
 

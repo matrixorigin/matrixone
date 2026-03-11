@@ -16,12 +16,10 @@ package hashbuild
 
 import (
 	"fmt"
-	"io"
 	"os"
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -169,7 +167,7 @@ func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *b
 
 		buf := buffers[bucketId]
 		if buf == nil {
-			buf = batch.NewWithSize(len(bat.Vecs))
+			buf = batch.NewOffHeapWithSize(len(bat.Vecs))
 			for i, vec := range bat.Vecs {
 				typ := *vec.GetType()
 				buf.Vecs[i] = vector.NewOffHeapVecWithType(typ)
@@ -258,70 +256,3 @@ func computeXXHash(keyVecs []*vector.Vector, hashValues []uint64) error {
 	return nil
 }
 
-func loadSpilledBuildBucket(proc *process.Process, bucketName string) ([]*batch.Batch, error) {
-	return loadSpilledBucket(proc, bucketName)
-}
-
-func loadSpilledBucket(proc *process.Process, bucketName string) ([]*batch.Batch, error) {
-	spillfs, err := proc.GetSpillFileService()
-	if err != nil {
-		return nil, err
-	}
-
-	file, err := spillfs.OpenFile(proc.Ctx, bucketName)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	batches := make([]*batch.Batch, 0)
-	buf := make([]byte, 8)
-
-	for {
-		// Read count
-		if _, err := io.ReadFull(file, buf); err != nil {
-			if err == io.EOF {
-				break
-			}
-			return nil, err
-		}
-		cnt := types.DecodeInt64(buf)
-
-		// Read batch size
-		if _, err := io.ReadFull(file, buf); err != nil {
-			return nil, err
-		}
-		batchSize := types.DecodeInt64(buf)
-
-		// Read batch data
-		batchData := make([]byte, batchSize)
-		if _, err := io.ReadFull(file, batchData); err != nil {
-			return nil, err
-		}
-
-		// Read magic
-		if _, err := io.ReadFull(file, buf); err != nil {
-			return nil, err
-		}
-		magic := types.DecodeUint64(buf)
-		if magic != spillMagic {
-			return nil, moerr.NewInternalError(proc.Ctx, "corrupted spill file")
-		}
-
-		bat := batch.NewWithSize(0)
-		if err := bat.UnmarshalBinary(batchData); err != nil {
-			return nil, err
-		}
-
-		if bat.RowCount() != int(cnt) {
-			return nil, moerr.NewInternalError(proc.Ctx, "row count mismatch")
-		}
-
-		batches = append(batches, bat)
-	}
-
-	// Delete the spill file after successful load
-	spillfs.Delete(proc.Ctx, bucketName)
-
-	return batches, nil
-}

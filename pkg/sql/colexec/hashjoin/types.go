@@ -98,14 +98,13 @@ type container struct {
 	spillThreshold      int64
 
 	// state for processing current bucket
-	bucketBuildBatches []*batch.Batch
-	bucketProbeBatches []*batch.Batch
-	bucketProbeIdx     int
+	bucketProbeReader *spillBucketReader
 
 	// reusable buffers for spill operations
 	spillHashValues   []uint64
 	spillBucketRowIds [][]int32
 	spillWriteBuf     bytes.Buffer
+	spillReadBatch    *batch.Batch
 }
 
 type HashJoin struct {
@@ -191,7 +190,6 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.lastIdx = 0
 	ctr.cleanupSpillFiles(proc)
 	ctr.nextBucketIdx = 0
-	ctr.bucketProbeIdx = 0
 
 	if hashJoin.OpAnalyzer != nil {
 		hashJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
@@ -250,18 +248,14 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 }
 
 func (ctr *container) cleanBucketBatches(proc *process.Process) {
-	for i := range ctr.bucketBuildBatches {
-		if ctr.bucketBuildBatches[i] != nil {
-			ctr.bucketBuildBatches[i].Clean(proc.Mp())
-		}
+	if ctr.bucketProbeReader != nil {
+		ctr.bucketProbeReader.close()
+		ctr.bucketProbeReader = nil
 	}
-	ctr.bucketBuildBatches = nil
-	for i := range ctr.bucketProbeBatches {
-		if ctr.bucketProbeBatches[i] != nil {
-			ctr.bucketProbeBatches[i].Clean(proc.Mp())
-		}
+	if ctr.spillReadBatch != nil {
+		ctr.spillReadBatch.Clean(proc.Mp())
+		ctr.spillReadBatch = nil
 	}
-	ctr.bucketProbeBatches = nil
 }
 
 func (ctr *container) cleanHashMap() {

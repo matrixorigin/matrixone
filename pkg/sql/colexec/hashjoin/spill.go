@@ -15,6 +15,7 @@
 package hashjoin
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"os"
@@ -39,65 +40,146 @@ const (
 	spillBufferSize = 8192
 )
 
+type spillBucketReader struct {
+	file   *os.File
+	reader *bufio.Reader
+	proc   *process.Process
+	buf    []byte
+}
+
+func newSpillBucketReader(proc *process.Process, bucketName string) (*spillBucketReader, error) {
+	spillfs, err := proc.GetSpillFileService()
+	if err != nil {
+		return nil, err
+	}
+
+	file, err := spillfs.OpenFile(proc.Ctx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+
+	return &spillBucketReader{
+		file:   file,
+		reader: bufio.NewReaderSize(file, spillBufferSize),
+		proc:   proc,
+		buf:    make([]byte, 8),
+	}, nil
+}
+
+func (r *spillBucketReader) readBatch(reuseBat *batch.Batch) (*batch.Batch, error) {
+	// Read count
+	if _, err := io.ReadFull(r.reader, r.buf); err != nil {
+		if err == io.EOF {
+			return nil, io.EOF
+		}
+		return nil, err
+	}
+	cnt := types.DecodeInt64(r.buf)
+
+	// Read batch size
+	if _, err := io.ReadFull(r.reader, r.buf); err != nil {
+		return nil, err
+	}
+	batchSize := types.DecodeInt64(r.buf)
+
+	// Clean previous data
+	reuseBat.CleanOnlyData()
+
+	// Create limited reader for exact batch size
+	limitedReader := io.LimitReader(r.reader, batchSize)
+
+	// Unmarshal directly from reader
+	if err := reuseBat.UnmarshalFromReader(limitedReader, r.proc.Mp()); err != nil {
+		return nil, err
+	}
+
+	// Read magic
+	if _, err := io.ReadFull(r.reader, r.buf); err != nil {
+		return nil, err
+	}
+	magic := types.DecodeUint64(r.buf)
+	if magic != spillMagic {
+		return nil, moerr.NewInternalError(r.proc.Ctx, "corrupted spill file")
+	}
+
+	if reuseBat.RowCount() != int(cnt) {
+		return nil, moerr.NewInternalError(r.proc.Ctx, "row count mismatch")
+	}
+
+	return reuseBat, nil
+}
+
+func (r *spillBucketReader) close() {
+	if r.file != nil {
+		r.file.Close()
+	}
+}
+
 func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process) (vm.CallResult, error) {
 	var result vm.CallResult
 	ctr := &hashJoin.ctr
 
 	for {
-		// Load next bucket if needed
-		if ctr.mp == nil || ctr.bucketProbeIdx >= len(ctr.bucketProbeBatches) {
-			// If current bucket probe is done and we have rightRowsMatched, return nil to trigger finalization
-			if ctr.mp != nil && ctr.rightRowsMatched != nil {
+		// Try to read next probe batch from current bucket
+		if ctr.bucketProbeReader != nil {
+			// Initialize reusable batch if needed
+			if ctr.spillReadBatch == nil {
+				ctr.spillReadBatch = batch.NewOffHeapWithSize(0)
+			}
+
+			bat, err := ctr.bucketProbeReader.readBatch(ctr.spillReadBatch)
+			if err != nil && err != io.EOF {
+				return result, err
+			}
+
+			if bat != nil {
+				result.Batch = bat
 				return result, nil
 			}
 
+			// EOF - done with this bucket
+			ctr.bucketProbeReader.close()
+			ctr.bucketProbeReader = nil
+
+			// Delete probe file
+			spillfs, _ := proc.GetSpillFileService()
+			spillfs.Delete(proc.Ctx, ctr.spilledProbeBuckets[ctr.nextBucketIdx-1])
+
+			// If we have rightRowsMatched, return nil to trigger finalization
+			// The hashmap will be cleaned after finalize completes
+			if ctr.rightRowsMatched != nil {
+				return result, nil
+			}
+
+			// For non-right joins, clean up immediately
+			ctr.cleanHashMap()
+		}
+
+		// Load next bucket if needed
+		if ctr.mp == nil {
 			if ctr.nextBucketIdx >= len(ctr.spilledBuildBuckets) {
 				return result, nil
 			}
 
-			ctr.cleanBucketBatches(proc)
-			ctr.cleanHashMap()
-
-			buildBatches, err := loadSpilledBucket(proc, ctr.spilledBuildBuckets[ctr.nextBucketIdx])
+			// Stream build batches into hashmap
+			tmpJoinMap, err := hashJoin.rebuildHashmapForBucket(proc, ctr.spilledBuildBuckets[ctr.nextBucketIdx])
 			if err != nil {
 				return result, err
 			}
 
-			probeBatches, err := loadSpilledBucket(proc, ctr.spilledProbeBuckets[ctr.nextBucketIdx])
+			// Delete build file
+			spillfs, _ := proc.GetSpillFileService()
+			spillfs.Delete(proc.Ctx, ctr.spilledBuildBuckets[ctr.nextBucketIdx])
+
+			// Open probe reader
+			probeReader, err := newSpillBucketReader(proc, ctr.spilledProbeBuckets[ctr.nextBucketIdx])
 			if err != nil {
-				for _, bat := range buildBatches {
-					bat.Clean(proc.Mp())
-				}
+				tmpJoinMap.Free()
 				return result, err
 			}
 
 			ctr.nextBucketIdx++
-
-			if len(buildBatches) == 0 || len(probeBatches) == 0 {
-				for _, bat := range buildBatches {
-					bat.Clean(proc.Mp())
-				}
-				for _, bat := range probeBatches {
-					bat.Clean(proc.Mp())
-				}
-				continue
-			}
-
-			// Rebuild hashmap for this bucket
-			tmpJoinMap, err := hashJoin.rebuildHashmapForBucket(proc, buildBatches)
-			if err != nil {
-				for _, bat := range buildBatches {
-					bat.Clean(proc.Mp())
-				}
-				for _, bat := range probeBatches {
-					bat.Clean(proc.Mp())
-				}
-				return result, err
-			}
-
-			ctr.bucketBuildBatches = buildBatches
-			ctr.bucketProbeBatches = probeBatches
-			ctr.bucketProbeIdx = 0
+			ctr.bucketProbeReader = probeReader
 			ctr.mp = tmpJoinMap
 			ctr.itr = nil
 
@@ -115,12 +197,6 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process) (vm.CallRe
 			ctr.probeState = psNextBatch
 			ctr.lastIdx = 0
 			ctr.vsIdx = 0
-		}
-
-		if ctr.bucketProbeIdx < len(ctr.bucketProbeBatches) {
-			result.Batch = ctr.bucketProbeBatches[ctr.bucketProbeIdx]
-			ctr.bucketProbeIdx++
-			return result, nil
 		}
 	}
 }
@@ -221,7 +297,7 @@ func (ctr *container) appendProbeBatchToSpillFiles(proc *process.Process, bat *b
 
 		buf := buffers[bucketId]
 		if buf == nil {
-			buf = batch.NewWithSize(len(bat.Vecs))
+			buf = batch.NewOffHeapWithSize(len(bat.Vecs))
 			for i, vec := range bat.Vecs {
 				typ := *vec.GetType()
 				buf.Vecs[i] = vector.NewOffHeapVecWithType(typ)
@@ -282,79 +358,35 @@ func computeXXHash(keyVecs []*vector.Vector, hashValues []uint64) error {
 	return nil
 }
 
-func loadSpilledBucket(proc *process.Process, bucketName string) ([]*batch.Batch, error) {
-	spillfs, err := proc.GetSpillFileService()
-	if err != nil {
-		return nil, err
-	}
-
-	file, err := spillfs.OpenFile(proc.Ctx, bucketName)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	batches := make([]*batch.Batch, 0)
-	buf := make([]byte, 8)
-
-	for {
-		// Read count
-		if _, err := io.ReadFull(file, buf); err != nil {
-			if err == io.EOF {
-				break
-			}
-			return nil, err
-		}
-		cnt := types.DecodeInt64(buf)
-
-		// Read batch size
-		if _, err := io.ReadFull(file, buf); err != nil {
-			return nil, err
-		}
-		batchSize := types.DecodeInt64(buf)
-
-		// Read batch data
-		batchData := make([]byte, batchSize)
-		if _, err := io.ReadFull(file, batchData); err != nil {
-			return nil, err
-		}
-
-		// Read magic
-		if _, err := io.ReadFull(file, buf); err != nil {
-			return nil, err
-		}
-		magic := types.DecodeUint64(buf)
-		if magic != spillMagic {
-			return nil, moerr.NewInternalError(proc.Ctx, "corrupted spill file")
-		}
-
-		bat := batch.NewWithSize(0)
-		if err := bat.UnmarshalBinary(batchData); err != nil {
-			return nil, err
-		}
-
-		if bat.RowCount() != int(cnt) {
-			return nil, moerr.NewInternalError(proc.Ctx, "row count mismatch")
-		}
-
-		batches = append(batches, bat)
-	}
-
-	// Delete the spill file after successful load
-	spillfs.Delete(proc.Ctx, bucketName)
-
-	return batches, nil
-}
-
-func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, buildBatches []*batch.Batch) (*message.JoinMap, error) {
+func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucketName string) (*message.JoinMap, error) {
 	// Create a temporary hashmap builder
 	builder := &hashbuild.HashmapBuilder{}
 	if err := builder.Prepare(hashJoin.EqConds[1], -1, proc); err != nil {
 		return nil, err
 	}
 
-	// Copy batches into builder
-	for _, bat := range buildBatches {
+	// Stream batches from file
+	reader, err := newSpillBucketReader(proc, bucketName)
+	if err != nil {
+		builder.Free(proc)
+		return nil, err
+	}
+	defer reader.close()
+
+	// Reusable batch for reading
+	reuseBat := batch.NewOffHeapWithSize(0)
+	defer reuseBat.Clean(proc.Mp())
+
+	for {
+		bat, err := reader.readBatch(reuseBat)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			builder.Free(proc)
+			return nil, err
+		}
+
 		if err := builder.Batches.CopyIntoBatches(bat, proc); err != nil {
 			builder.Free(proc)
 			return nil, err

@@ -15,7 +15,6 @@
 package hashbuild
 
 import (
-	"bytes"
 	"context"
 	"testing"
 
@@ -117,44 +116,6 @@ func TestCreateSpillFiles(t *testing.T) {
 	}
 }
 
-func TestLoadSpilledBuildBucketHashBuild(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	defer proc.Free()
-
-	spillfs, err := proc.GetSpillFileService()
-	require.NoError(t, err)
-
-	analyzer := process.NewAnalyzer(0, false, false, "test")
-	bucketName := "test_build_load"
-	file, err := spillfs.CreateFile(context.Background(), bucketName)
-	require.NoError(t, err)
-
-	// Write test data
-	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{10, 20, 30}, nil, proc.Mp())
-	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"a", "b", "c"}, nil, proc.Mp())
-	bat.SetRowCount(3)
-
-	ctr := &container{}
-	_, err = ctr.flushBucketBuffer(proc, bat, file, analyzer)
-	require.NoError(t, err)
-	file.Close()
-
-	// Load back
-	batches, err := loadSpilledBuildBucket(proc, bucketName)
-	require.NoError(t, err)
-	require.Equal(t, 1, len(batches))
-	require.Equal(t, 3, batches[0].RowCount())
-	require.Equal(t, 2, len(batches[0].Vecs))
-
-	vec := batches[0].Vecs[0]
-	require.Equal(t, int32(10), vector.GetFixedAtNoTypeCheck[int32](vec, 0))
-	require.Equal(t, int32(20), vector.GetFixedAtNoTypeCheck[int32](vec, 1))
-	require.Equal(t, int32(30), vector.GetFixedAtNoTypeCheck[int32](vec, 2))
-
-	batches[0].Clean(proc.Mp())
-}
-
 func TestShouldSpillBatches(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -197,70 +158,6 @@ func TestShouldSpillBatches(t *testing.T) {
 		hb.ctr.hashmapBuilder.Batches.Buf = []*batch.Batch{bat}
 		require.True(t, hb.shouldSpillBatches())
 	})
-}
-
-func TestSpillFileCorruptionBuild(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	defer proc.Free()
-
-	spillfs, err := proc.GetSpillFileService()
-	require.NoError(t, err)
-
-	bucketName := "test_build_corrupt"
-	file, err := spillfs.CreateFile(context.Background(), bucketName)
-	require.NoError(t, err)
-
-	// Write corrupted data
-	cnt := int64(1)
-	batchSize := int64(100)
-	file.Write(types.EncodeInt64(&cnt))
-	file.Write(types.EncodeInt64(&batchSize))
-	file.Write(make([]byte, 100))
-	wrongMagic := uint64(0xDEADBEEF)
-	file.Write(types.EncodeUint64(&wrongMagic))
-	file.Close()
-
-	_, err = loadSpilledBuildBucket(proc, bucketName)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "corrupted")
-}
-
-func TestMultipleBatchesSpillFormat(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	defer proc.Free()
-
-	spillfs, err := proc.GetSpillFileService()
-	require.NoError(t, err)
-
-	analyzer := process.NewAnalyzer(0, false, false, "test")
-	bucketName := "test_multi_batch"
-	file, err := spillfs.CreateFile(context.Background(), bucketName)
-	require.NoError(t, err)
-
-	ctr := &container{}
-	// Write 3 batches
-	for i := 0; i < 3; i++ {
-		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = testutil.MakeInt32Vector([]int32{int32(i * 10), int32(i*10 + 1)}, nil, proc.Mp())
-		bat.SetRowCount(2)
-
-		_, err = ctr.flushBucketBuffer(proc, bat, file, analyzer)
-		require.NoError(t, err)
-	}
-	file.Close()
-
-	// Load and verify
-	batches, err := loadSpilledBuildBucket(proc, bucketName)
-	require.NoError(t, err)
-	require.Equal(t, 3, len(batches))
-
-	for i, bat := range batches {
-		require.Equal(t, 2, bat.RowCount())
-		vec := bat.Vecs[0]
-		require.Equal(t, int32(i*10), vector.GetFixedAtNoTypeCheck[int32](vec, 0))
-		require.Equal(t, int32(i*10+1), vector.GetFixedAtNoTypeCheck[int32](vec, 1))
-		bat.Clean(proc.Mp())
-	}
 }
 
 func TestHashDistributionBuild(t *testing.T) {
@@ -320,36 +217,6 @@ func TestLargeBufferFlushBuild(t *testing.T) {
 	require.Equal(t, int64(size), cnt)
 }
 
-func TestSpillFileCleanupBuild(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	defer proc.Free()
-
-	spillfs, err := proc.GetSpillFileService()
-	require.NoError(t, err)
-
-	analyzer := process.NewAnalyzer(0, false, false, "test")
-	bucketName := "test_cleanup_build"
-	file, err := spillfs.CreateFile(context.Background(), bucketName)
-	require.NoError(t, err)
-
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
-	bat.SetRowCount(1)
-
-	ctr := &container{}
-	_, err = ctr.flushBucketBuffer(proc, bat, file, analyzer)
-	require.NoError(t, err)
-	file.Close()
-
-	// Load should delete the file
-	_, err = loadSpilledBuildBucket(proc, bucketName)
-	require.NoError(t, err)
-
-	// File should no longer exist
-	_, err = spillfs.OpenFile(context.Background(), bucketName)
-	require.Error(t, err)
-}
-
 func TestMultipleDataTypesBuild(t *testing.T) {
 	mp := mpool.MustNewZero()
 
@@ -405,39 +272,6 @@ func TestFileWriteErrorBuild(t *testing.T) {
 	require.Error(t, err)
 
 	spillfs.Delete(context.Background(), "test_error_build")
-}
-
-func TestRowCountMismatchBuild(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	defer proc.Free()
-
-	spillfs, err := proc.GetSpillFileService()
-	require.NoError(t, err)
-
-	bucketName := "test_mismatch_build"
-	file, err := spillfs.CreateFile(context.Background(), bucketName)
-	require.NoError(t, err)
-
-	// Write mismatched count
-	cnt := int64(10) // Wrong count
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
-	bat.SetRowCount(2)
-
-	batchData := &bytes.Buffer{}
-	bat.MarshalBinaryWithBuffer(batchData, false)
-	batchSize := int64(batchData.Len())
-
-	file.Write(types.EncodeInt64(&cnt))
-	file.Write(types.EncodeInt64(&batchSize))
-	file.Write(batchData.Bytes())
-	magic := uint64(spillMagic)
-	file.Write(types.EncodeUint64(&magic))
-	file.Close()
-
-	_, err = loadSpilledBuildBucket(proc, bucketName)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "mismatch")
 }
 
 func TestAppendBatchToSpillFilesPartitioning(t *testing.T) {

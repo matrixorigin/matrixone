@@ -236,6 +236,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				// For spilled join, clean up current bucket and move to next
 				if len(ctr.spilledBuildBuckets) > 0 {
 					ctr.rightRowsMatched = nil
+					ctr.cleanHashMap()
 
 					if ctr.nextBucketIdx < len(ctr.spilledBuildBuckets) {
 						ctr.state = Probe
