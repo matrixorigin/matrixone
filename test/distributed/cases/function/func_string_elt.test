@@ -65,5 +65,28 @@ SELECT ELT(2, 'a', '', 'c') AS elt_empty2;
 SELECT ELT(1, '你好', '世界', '测试') AS elt_unicode;
 SELECT ELT(2, 'Hello', 'World', 'Test') AS elt_ascii;
 
+# String as index (MySQL implicit conversion)
+SELECT ELT('2', 'a', 'b', 'c') AS str_index;
+SELECT ELT('0', 'a', 'b', 'c') AS str_zero;
+
+# Negative float index
+SELECT ELT(-0.1, 'a', 'b', 'c') AS neg_float;
+SELECT ELT(-999, 'a', 'b', 'c') AS large_neg;
+
+# Table with NULL index
+CREATE TABLE t2(id INT, s1 VARCHAR(10), s2 VARCHAR(10));
+INSERT INTO t2 VALUES (1, 'a', 'b'), (NULL, 'x', 'y'), (2, 'p', 'q');
+SELECT id, ELT(id, s1, s2) AS elt_result FROM t2;
+DROP TABLE t2;
+
+# Table with out-of-range index
+CREATE TABLE t3(id INT, s1 VARCHAR(10));
+INSERT INTO t3 VALUES (0, 'a'), (1, 'b'), (2, 'c');
+SELECT id, ELT(id, s1) AS elt_result FROM t3;
+DROP TABLE t3;
+
+# Binary return type
+SELECT ELT(1, CAST('hello' AS BINARY), 'world') AS bin_result;
+
 # ELT is complement of FIELD
 SELECT ELT(FIELD('b', 'a', 'b', 'c'), 'a', 'b', 'c') AS elt_field;
