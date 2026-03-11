@@ -259,6 +259,10 @@ func computeXXHash(keyVecs []*vector.Vector, hashValues []uint64) error {
 }
 
 func loadSpilledBuildBucket(proc *process.Process, bucketName string) ([]*batch.Batch, error) {
+	return loadSpilledBucket(proc, bucketName)
+}
+
+func loadSpilledBucket(proc *process.Process, bucketName string) ([]*batch.Batch, error) {
 	spillfs, err := proc.GetSpillFileService()
 	if err != nil {
 		return nil, err

@@ -58,12 +58,12 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process) (vm.CallRe
 			ctr.cleanBucketBatches(proc)
 			ctr.cleanHashMap()
 
-			buildBatches, err := loadSpilledBuildBucket(proc, ctr.spilledBuildBuckets[ctr.nextBucketIdx])
+			buildBatches, err := loadSpilledBucket(proc, ctr.spilledBuildBuckets[ctr.nextBucketIdx])
 			if err != nil {
 				return result, err
 			}
 
-			probeBatches, err := hashJoin.loadSpilledProbeBucket(proc, ctr.nextBucketIdx)
+			probeBatches, err := loadSpilledBucket(proc, ctr.spilledProbeBuckets[ctr.nextBucketIdx])
 			if err != nil {
 				for _, bat := range buildBatches {
 					bat.Clean(proc.Mp())
@@ -282,75 +282,7 @@ func computeXXHash(keyVecs []*vector.Vector, hashValues []uint64) error {
 	return nil
 }
 
-func (hashJoin *HashJoin) loadSpilledProbeBucket(proc *process.Process, bucketIdx int) ([]*batch.Batch, error) {
-	if bucketIdx >= len(hashJoin.ctr.spilledProbeBuckets) {
-		return nil, nil
-	}
-
-	spillfs, err := proc.GetSpillFileService()
-	if err != nil {
-		return nil, err
-	}
-
-	file, err := spillfs.OpenFile(proc.Ctx, hashJoin.ctr.spilledProbeBuckets[bucketIdx])
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	batches := make([]*batch.Batch, 0)
-	buf := make([]byte, 8)
-
-	for {
-		// Read count
-		if _, err := io.ReadFull(file, buf); err != nil {
-			if err == io.EOF {
-				break
-			}
-			return nil, err
-		}
-		cnt := types.DecodeInt64(buf)
-
-		// Read batch size
-		if _, err := io.ReadFull(file, buf); err != nil {
-			return nil, err
-		}
-		batchSize := types.DecodeInt64(buf)
-
-		// Read batch data
-		batchData := make([]byte, batchSize)
-		if _, err := io.ReadFull(file, batchData); err != nil {
-			return nil, err
-		}
-
-		// Read magic
-		if _, err := io.ReadFull(file, buf); err != nil {
-			return nil, err
-		}
-		magic := types.DecodeUint64(buf)
-		if magic != spillMagic {
-			return nil, moerr.NewInternalError(proc.Ctx, "corrupted spill file")
-		}
-
-		bat := batch.NewWithSize(0)
-		if err := bat.UnmarshalBinary(batchData); err != nil {
-			return nil, err
-		}
-
-		if bat.RowCount() != int(cnt) {
-			return nil, moerr.NewInternalError(proc.Ctx, "row count mismatch")
-		}
-
-		batches = append(batches, bat)
-	}
-
-	// Delete the spill file after successful load
-	spillfs.Delete(proc.Ctx, hashJoin.ctr.spilledProbeBuckets[bucketIdx])
-
-	return batches, nil
-}
-
-func loadSpilledBuildBucket(proc *process.Process, bucketName string) ([]*batch.Batch, error) {
+func loadSpilledBucket(proc *process.Process, bucketName string) ([]*batch.Batch, error) {
 	spillfs, err := proc.GetSpillFileService()
 	if err != nil {
 		return nil, err

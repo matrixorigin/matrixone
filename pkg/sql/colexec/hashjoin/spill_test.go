@@ -141,7 +141,7 @@ func TestLoadSpilledBuildBucket(t *testing.T) {
 	file.Close()
 
 	// Load back
-	batches, err := loadSpilledBuildBucket(proc, bucketName)
+	batches, err := loadSpilledBucket(proc, bucketName)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(batches))
 	require.Equal(t, 3, batches[0].RowCount())
@@ -177,13 +177,7 @@ func TestLoadSpilledProbeBucket(t *testing.T) {
 	require.NoError(t, err)
 	file.Close()
 
-	hashJoin := &HashJoin{
-		ctr: container{
-			spilledProbeBuckets: []string{bucketName},
-		},
-	}
-
-	batches, err := hashJoin.loadSpilledProbeBucket(proc, 0)
+	batches, err := loadSpilledBucket(proc, bucketName)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(batches))
 	require.Equal(t, 2, batches[0].RowCount())
@@ -213,7 +207,7 @@ func TestSpillFileCorruption(t *testing.T) {
 	file.Write(types.EncodeUint64(&wrongMagic))
 	file.Close()
 
-	_, err = loadSpilledBuildBucket(proc, bucketName)
+	_, err = loadSpilledBucket(proc, bucketName)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "corrupted")
 }
@@ -303,7 +297,7 @@ func TestSpillFileFormat(t *testing.T) {
 	file.Close()
 
 	// Load and verify
-	batches, err := loadSpilledBuildBucket(proc, bucketName)
+	batches, err := loadSpilledBucket(proc, bucketName)
 	require.NoError(t, err)
 	require.Equal(t, 3, len(batches))
 
@@ -417,7 +411,7 @@ func TestSpillFileCleanup(t *testing.T) {
 	file.Close()
 
 	// Load should delete the file
-	_, err = loadSpilledBuildBucket(proc, bucketName)
+	_, err = loadSpilledBucket(proc, bucketName)
 	require.NoError(t, err)
 
 	// File should no longer exist
@@ -433,21 +427,6 @@ func TestNullValues(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, uint64(0), hashValues[0])
 	require.NotEqual(t, uint64(0), hashValues[2])
-}
-
-func TestBucketIndexOutOfRange(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	defer proc.Free()
-
-	hashJoin := &HashJoin{
-		ctr: container{
-			spilledProbeBuckets: []string{"bucket1"},
-		},
-	}
-
-	batches, err := hashJoin.loadSpilledProbeBucket(proc, 10)
-	require.NoError(t, err)
-	require.Nil(t, batches)
 }
 
 func TestFileWriteError(t *testing.T) {
@@ -499,7 +478,7 @@ func TestRowCountMismatch(t *testing.T) {
 	file.Write(types.EncodeUint64(&magic))
 	file.Close()
 
-	_, err = loadSpilledBuildBucket(proc, bucketName)
+	_, err = loadSpilledBucket(proc, bucketName)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "mismatch")
 }
