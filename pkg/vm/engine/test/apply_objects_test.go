@@ -61,6 +61,10 @@ func (m *mockLocalExecutor) ExecSQL(ctx context.Context, ar *publication.ActiveR
 	// Return empty Result - all nil fields means Next() returns false (no rows)
 	return &publication.Result{}, nil, nil
 }
+func (m *mockLocalExecutor) ExecSQLInDatabase(ctx context.Context, ar *publication.ActiveRoutine, accountID uint32, query string, database string, useTxn bool, needRetry bool, timeout time.Duration) (*publication.Result, context.CancelFunc, error) {
+	// Return empty Result - all nil fields means Next() returns false (no rows)
+	return &publication.Result{}, nil, nil
+}
 
 // ObjectMapJSON represents the serializable format of objectmap
 type ObjectMapJSON struct {
