@@ -129,6 +129,16 @@ var (
 	FSReadDurationIOReadAll         = fsReadWriteDuration.WithLabelValues("io-read-all")
 
 	FSWriteDurationWrite = fsReadWriteDuration.WithLabelValues("write")
+
+	// S3FS Read internal phase metrics
+	FSReadDurationTotal    = fsReadWriteDuration.WithLabelValues("s3fs-read-total")
+	FSReadDurationIOMerger = fsReadWriteDuration.WithLabelValues("s3fs-read-io-merger")
+	FSReadDurationS3Read   = fsReadWriteDuration.WithLabelValues("s3fs-read-s3")
+
+	// S3FS Write internal phase metrics
+	FSWriteDurationExists       = fsReadWriteDuration.WithLabelValues("s3fs-write-exists")
+	FSWriteDurationStorage      = fsReadWriteDuration.WithLabelValues("s3fs-write-storage")
+	FSWriteDurationDiskCacheSet = fsReadWriteDuration.WithLabelValues("s3fs-write-disk-cache-setfile")
 )
 
 var (

@@ -1,0 +1,283 @@
+diff --git a/pkg/sql/plan/build_test.go b/pkg/sql/plan/build_test.go
+index e22350d1f..3edd6a829 100644
+--- a/pkg/sql/plan/build_test.go
++++ b/pkg/sql/plan/build_test.go
+@@ -541,6 +541,8 @@ func TestJoinTableSqlBuilder(t *testing.T) {
+ 		"select nation.n_name from nation join nation2 on nation.n_name !='a' join region on nation.n_regionkey = region.r_regionkey",
+ 		"select * from nation, nation2, region",
+ 		"select n_name from nation dedup join region on n_regionkey = r_regionkey",
++		"SELECT * FROM NATION a join REGION b on a.N_REGIONKEY = b.R_REGIONKEY WHERE a.N_REGIONKEY > 0 for update", //join for update
++		"select * from nation, nation2, region for update",                                                         //multi-table for update
+ 	}
+ 	runTestShouldPass(mock, t, sqls, false, false)
+ 
+@@ -550,8 +552,6 @@ func TestJoinTableSqlBuilder(t *testing.T) {
+ 		"SELECT N_NAME, R_REGIONKEY FROM NATION join REGION using(R_REGIONKEY)",                                              //column not exist
+ 		"SELECT N_NAME,N_REGIONKEY FROM NATION a join REGION b on a.N_REGIONKEY = b.R_REGIONKEY WHERE aaaaa.N_REGIONKEY > 0", //table alias not exist
+ 		"select *", //No table used
+-		"SELECT * FROM NATION a join REGION b on a.N_REGIONKEY = b.R_REGIONKEY WHERE a.N_REGIONKEY > 0 for update", //Not support
+-		"select * from nation, nation2, region for update",                                                         // Not support
+ 	}
+ 	runTestShouldError(mock, t, sqls)
+ }
+diff --git a/pkg/sql/plan/query_builder.go b/pkg/sql/plan/query_builder.go
+index 71767eb32..bab33c520 100644
+--- a/pkg/sql/plan/query_builder.go
++++ b/pkg/sql/plan/query_builder.go
+@@ -3268,38 +3268,20 @@ func (builder *QueryBuilder) bindSelectClause(
+ 		return
+ 	}
+ 
+-	if tableDef := builder.qry.Nodes[nodeID].GetTableDef(); tableDef != nil && builder.isForUpdate {
+-		pkPos, pkTyp := getPkPos(tableDef, false)
+-		lastTag := builder.qry.Nodes[nodeID].BindingTags[0]
+-		lockTarget := &plan.LockTarget{
+-			TableId:            tableDef.TblId,
+-			PrimaryColIdxInBat: int32(pkPos),
+-			PrimaryColRelPos:   lastTag,
+-			PrimaryColTyp:      pkTyp,
+-			Block:              true,
+-			RefreshTsIdxInBat:  -1, //unsupport now
+-		}
+-
+-		// If table is partitioned, attach partition column index for correct pruning
+-		if tableDef.Partition != nil && len(tableDef.Partition.PartitionDefs) > 0 {
+-			if colName := getPartitionColNameFromExpr(tableDef.Partition.PartitionDefs[0].Def); colName != "" {
+-				if pos, ok := tableDef.Name2ColIndex[colName]; ok {
+-					lockTarget.HasPartitionCol = true
+-					lockTarget.PartitionColIdxInBat = pos
+-				}
++	if builder.isForUpdate {
++		lockTargets := builder.collectLockTargets(nodeID)
++		if len(lockTargets) > 0 {
++			lockNode = &Node{
++				NodeType:    plan.Node_LOCK_OP,
++				Children:    []int32{nodeID},
++				TableDef:    builder.qry.Nodes[nodeID].GetTableDef(),
++				LockTargets: lockTargets,
++				BindingTags: []int32{builder.genNewBindTag()},
+ 			}
+-		}
+-
+-		lockNode = &Node{
+-			NodeType:    plan.Node_LOCK_OP,
+-			Children:    []int32{nodeID},
+-			TableDef:    tableDef,
+-			LockTargets: []*plan.LockTarget{lockTarget},
+-			BindingTags: []int32{builder.genNewBindTag()},
+-		}
+ 
+-		if astLimit == nil {
+-			nodeID = builder.appendNode(lockNode, ctx)
++			if astLimit == nil {
++				nodeID = builder.appendNode(lockNode, ctx)
++			}
+ 		}
+ 	}
+ 
+@@ -4812,8 +4794,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
+ 	case *tree.JoinTableExpr:
+ 		if tbl.Right == nil {
+ 			return builder.buildTable(tbl.Left, ctx, preNodeId, leftCtx)
+-		} else if builder.isForUpdate {
+-			return 0, moerr.NewInternalError(builder.GetContext(), "not support select from join table for update")
+ 		}
+ 		return builder.buildJoinTable(tbl, ctx)
+ 
+@@ -5559,3 +5539,45 @@ func getPartitionColNameFromExpr(expr *plan.Expr) string {
+ 	}
+ 	return ""
+ }
++
++// collectLockTargets traverses the plan tree rooted at nodeID and collects
++// LockTarget entries for all TABLE_SCAN nodes found. This supports SELECT ... FOR UPDATE
++// with JOIN tables by locking rows from every table involved in the query.
++func (builder *QueryBuilder) collectLockTargets(nodeID int32) []*plan.LockTarget {
++	node := builder.qry.Nodes[nodeID]
++	var targets []*plan.LockTarget
++
++	if node.NodeType == plan.Node_TABLE_SCAN {
++		tableDef := node.GetTableDef()
++		if tableDef != nil && tableDef.Pkey != nil {
++			pkPos, pkTyp := getPkPos(tableDef, false)
++			if pkPos >= 0 {
++				lockTarget := &plan.LockTarget{
++					TableId:            tableDef.TblId,
++					PrimaryColIdxInBat: int32(pkPos),
++					PrimaryColRelPos:   node.BindingTags[0],
++					PrimaryColTyp:      pkTyp,
++					Block:              true,
++					RefreshTsIdxInBat:  -1,
++				}
++
++				if tableDef.Partition != nil && len(tableDef.Partition.PartitionDefs) > 0 {
++					if colName := getPartitionColNameFromExpr(tableDef.Partition.PartitionDefs[0].Def); colName != "" {
++						if pos, ok := tableDef.Name2ColIndex[colName]; ok {
++							lockTarget.HasPartitionCol = true
++							lockTarget.PartitionColIdxInBat = pos
++						}
++					}
++				}
++
++				targets = append(targets, lockTarget)
++			}
++		}
++	}
++
++	for _, childID := range node.Children {
++		targets = append(targets, builder.collectLockTargets(childID)...)
++	}
++
++	return targets
++}
+diff --git a/test/distributed/cases/pessimistic_transaction/select_for_update.result b/test/distributed/cases/pessimistic_transaction/select_for_update.result
+index c0006a9b6..600f1600e 100644
+--- a/test/distributed/cases/pessimistic_transaction/select_for_update.result
++++ b/test/distributed/cases/pessimistic_transaction/select_for_update.result
+@@ -1113,4 +1113,72 @@ set @b=2;
+ execute s1 using @b;
+ a
+ 1
+-deallocate prepare s1;
+\ No newline at end of file
++deallocate prepare s1;
++
++drop table if exists su_join_t1;
++drop table if exists su_join_t2;
++drop table if exists su_join_t3;
++create table su_join_t1(id int primary key, name varchar(25), tid int);
++create table su_join_t2(id int primary key, val int);
++create table su_join_t3(id int primary key, tag varchar(10));
++insert into su_join_t1 values(1,'alice',10),(2,'bob',20),(3,'carol',30);
++insert into su_join_t2 values(10,100),(20,200),(30,300);
++insert into su_join_t3 values(1,'x'),(2,'y'),(3,'z');
++begin;
++select su_join_t1.id, su_join_t1.name, su_join_t2.val from su_join_t1 join su_join_t2 on su_join_t1.tid = su_join_t2.id where su_join_t1.id <= 2 for update;
++id    name    val
++1    alice    100
++2    bob    200
++use select_for_update;
++select * from su_join_t1 where id=1;
++id    name    tid
++1    alice    10
++select * from su_join_t2 where id=10;
++id    val
++10    100
++commit;
++begin;
++select a.id, b.val from su_join_t1 a left join su_join_t2 b on a.tid = b.id for update;
++id    val
++1    100
++2    200
++3    300
++commit;
++begin;
++select a.id, a.name, b.val, c.tag from su_join_t1 a join su_join_t2 b on a.tid = b.id join su_join_t3 c on a.id = c.id where a.id = 1 for update;
++id    name    val    tag
++1    alice    100    x
++commit;
++begin;
++select su_join_t1.id, su_join_t2.val from su_join_t1 join su_join_t2 on su_join_t1.tid = su_join_t2.id where su_join_t1.id = 1 for update;
++id    val
++1    100
++update su_join_t2 set val = 999 where id = 10;
++commit;
++select * from su_join_t2 where id = 10;
++id    val
++10    999
++begin;
++select a.id, b.val from su_join_t1 a inner join su_join_t2 b on a.tid = b.id for update;
++id    val
++1    999
++2    200
++3    300
++commit;
++drop table if exists su_join_nat1;
++drop table if exists su_join_nat2;
++create table su_join_nat1(c1 int primary key, c2 int);
++create table su_join_nat2(c1 int primary key, c2 int);
++insert into su_join_nat1 values(1,10),(2,20);
++insert into su_join_nat2 values(1,10),(2,20);
++begin;
++select * from su_join_nat1 natural join su_join_nat2 for update;
++c1    c2
++1    10
++2    20
++commit;
++drop table if exists su_join_t1;
++drop table if exists su_join_t2;
++drop table if exists su_join_t3;
++drop table if exists su_join_nat1;
++drop table if exists su_join_nat2;
+diff --git a/test/distributed/cases/pessimistic_transaction/select_for_update.sql b/test/distributed/cases/pessimistic_transaction/select_for_update.sql
+index 5282a1587..08122b8ee 100644
+--- a/test/distributed/cases/pessimistic_transaction/select_for_update.sql
++++ b/test/distributed/cases/pessimistic_transaction/select_for_update.sql
+@@ -785,4 +785,65 @@ insert into t1 values (1,2),(2,2);
+ prepare s1 from select a from t1 where b = ? order by b limit 1 for update;
+ set @b=2;
+ execute s1 using @b;
+-deallocate prepare s1;
+\ No newline at end of file
++deallocate prepare s1;
++
++-- select ... for update with join tables
++drop table if exists su_join_t1;
++drop table if exists su_join_t2;
++drop table if exists su_join_t3;
++create table su_join_t1(id int primary key, name varchar(25), tid int);
++create table su_join_t2(id int primary key, val int);
++create table su_join_t3(id int primary key, tag varchar(10));
++insert into su_join_t1 values(1,'alice',10),(2,'bob',20),(3,'carol',30);
++insert into su_join_t2 values(10,100),(20,200),(30,300);
++insert into su_join_t3 values(1,'x'),(2,'y'),(3,'z');
++
++-- inner join for update
++begin;
++select su_join_t1.id, su_join_t1.name, su_join_t2.val from su_join_t1 join su_join_t2 on su_join_t1.tid = su_join_t2.id where su_join_t1.id <= 2 for update;
++-- @session:id=1{
++use select_for_update;
++select * from su_join_t1 where id=1;
++select * from su_join_t2 where id=10;
++-- @session}
++commit;
++
++-- left join for update
++begin;
++select a.id, b.val from su_join_t1 a left join su_join_t2 b on a.tid = b.id for update;
++commit;
++
++-- three table join for update
++begin;
++select a.id, a.name, b.val, c.tag from su_join_t1 a join su_join_t2 b on a.tid = b.id join su_join_t3 c on a.id = c.id where a.id = 1 for update;
++commit;
++
++-- join for update with update in same transaction
++begin;
++select su_join_t1.id, su_join_t2.val from su_join_t1 join su_join_t2 on su_join_t1.tid = su_join_t2.id where su_join_t1.id = 1 for update;
++update su_join_t2 set val = 999 where id = 10;
++commit;
++select * from su_join_t2 where id = 10;
++
++-- join for update with alias
++begin;
++select a.id, b.val from su_join_t1 a inner join su_join_t2 b on a.tid = b.id for update;
++commit;
++
++-- natural join for update (no common columns, acts as cross join)
++drop table if exists su_join_nat1;
++drop table if exists su_join_nat2;
++create table su_join_nat1(c1 int primary key, c2 int);
++create table su_join_nat2(c1 int primary key, c2 int);
++insert into su_join_nat1 values(1,10),(2,20);
++insert into su_join_nat2 values(1,10),(2,20);
++begin;
++select * from su_join_nat1 natural join su_join_nat2 for update;
++commit;
++
++-- cleanup
++drop table if exists su_join_t1;
++drop table if exists su_join_t2;
++drop table if exists su_join_t3;
++drop table if exists su_join_nat1;
++drop table if exists su_join_nat2;

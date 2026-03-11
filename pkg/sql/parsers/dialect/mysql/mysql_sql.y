@@ -455,8 +455,9 @@ import (
 %token <str> CLUSTER_CENTERS KMEANS
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK ROW_NUMBER
-%token <str> DENSE_RANK BIT_CAST LAG LEAD FIRST_VALUE LAST_VALUE NTH_VALUE
+%token <str> DENSE_RANK CUME_DIST BIT_CAST LAG LEAD FIRST_VALUE LAST_VALUE NTH_VALUE NTILE PERCENT_RANK
 %token <str> BITMAP_BIT_POSITION BITMAP_BUCKET_NUMBER BITMAP_COUNT BITMAP_CONSTRUCT_AGG BITMAP_OR_AGG
+%token <str> GET_FORMAT
 
 // Sequence function
 %token <str> NEXTVAL SETVAL CURRVAL LASTVAL
@@ -511,7 +512,7 @@ import (
 
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
-%type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt upgrade_stmt
+%type <statement> create_stmt insert_stmt insert_no_with_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt upgrade_stmt
 %type <statement> delete_without_using_stmt delete_with_using_stmt
 %type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt drop_connector_stmt drop_function_stmt drop_procedure_stmt drop_sequence_stmt
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
@@ -798,6 +799,7 @@ import (
 %type <assignment> set_value
 %type <str> row_opt substr_option
 %type <str> time_unit time_stamp_unit
+%type <str> get_format_type
 %type <whenClause> when_clause
 %type <whenClauseList> when_clause_list
 %type <withClause> with_clause
@@ -5153,6 +5155,14 @@ replace_data:
 	}
 
 insert_stmt:
+    insert_no_with_stmt
+|   with_clause insert_no_with_stmt
+    {
+        $2.(*tree.Insert).With = $1
+        $$ = $2
+    }
+
+insert_no_with_stmt:
     INSERT into_table_name partition_clause_opt insert_data on_duplicate_key_update_opt
     {
         ins := $4
@@ -10540,6 +10550,34 @@ function_call_window:
             WindowSpec: $4,
         }
     }
+|	PERCENT_RANK '(' ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            WindowSpec: $4,
+        }
+    }
+|	NTILE '(' expression ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3},
+            WindowSpec: $5,
+        }
+    }
+|	CUME_DIST '(' ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            WindowSpec: $4,
+        }
+    }
 |	LAG '(' expression ')' window_spec
     {
         name := tree.NewUnresolvedColName($1)
@@ -11529,6 +11567,12 @@ time_stamp_unit:
 |    SQL_TSI_QUARTER
 |    SQL_TSI_YEAR
 
+get_format_type:
+    DATE
+|   TIME
+|   DATETIME
+|   TIMESTAMP
+
 function_call_nonkeyword:
     CURTIME datetime_scale
     {
@@ -11576,6 +11620,17 @@ function_call_nonkeyword:
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{arg1, $5, $7},
+        }
+	}
+|	GET_FORMAT '(' get_format_type ',' expression ')'
+	{
+        name := tree.NewUnresolvedColName($1)
+        str := strings.ToUpper($3)
+        arg1 := tree.NewNumVal(str, str, false, tree.P_char)
+		$$ =  &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{arg1, $5},
         }
 	}
 function_call_keyword:
@@ -13679,6 +13734,7 @@ not_keyword:
 |   AVG
 |	TIMESTAMPDIFF
 |	TIMESTAMPADD
+|	GET_FORMAT
 |   NEXTVAL
 |   SETVAL
 |   CURRVAL

@@ -24,16 +24,13 @@ This module provides fulltext index management functionality with:
 
 from typing import Union, List, TYPE_CHECKING
 
+from .exceptions import QueryError
+
 if TYPE_CHECKING:
     from .client import Client
     from .async_client import AsyncClient
 
-
-def _extract_table_name(table_name_or_model) -> str:
-    """Extract table name from string or SQLAlchemy model."""
-    if hasattr(table_name_or_model, '__tablename__'):
-        return table_name_or_model.__tablename__
-    return table_name_or_model
+from ._utils import get_table_name as _extract_table_name
 
 
 class _FulltextManagerBase:
@@ -177,12 +174,12 @@ class FulltextIndexManager(_FulltextManagerBase):
                 )
 
             if not success:
-                raise Exception(f"Failed to create fulltext index {name} on table {table_name}")
+                raise QueryError(f"Failed to create fulltext index {name} on table {table_name}")
 
             return self
         except Exception as e:
             if "Failed to create" not in str(e):
-                raise Exception(f"Failed to create fulltext index {name} on table {table_name}: {e}")
+                raise QueryError(f"Failed to create fulltext index {name} on table {table_name}: {e}")
             raise
 
     def drop(self, table_name_or_model, name: str) -> "FulltextIndexManager":
@@ -225,12 +222,12 @@ class FulltextIndexManager(_FulltextManagerBase):
                 success = FulltextIndex.drop_index(bind=conn, table_name=table_name, name=name)
 
             if not success:
-                raise Exception(f"Failed to drop fulltext index {name} from table {table_name}")
+                raise QueryError(f"Failed to drop fulltext index {name} from table {table_name}")
 
             return self
         except Exception as e:
             if "Failed to drop" not in str(e):
-                raise Exception(f"Failed to drop fulltext index {name} from table {table_name}: {e}")
+                raise QueryError(f"Failed to drop fulltext index {name} from table {table_name}: {e}")
             raise
 
     def enable_fulltext(self) -> "FulltextIndexManager":
@@ -249,7 +246,7 @@ class FulltextIndexManager(_FulltextManagerBase):
             self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to enable fulltext indexing: {e}")
+            raise QueryError(f"Failed to enable fulltext indexing: {e}")
 
     def disable_fulltext(self) -> "FulltextIndexManager":
         """
@@ -267,7 +264,7 @@ class FulltextIndexManager(_FulltextManagerBase):
             self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to disable fulltext indexing: {e}")
+            raise QueryError(f"Failed to disable fulltext indexing: {e}")
 
 
 class AsyncFulltextIndexManager(_FulltextManagerBase):
@@ -364,12 +361,12 @@ class AsyncFulltextIndexManager(_FulltextManagerBase):
                 )
 
             if not success:
-                raise Exception(f"Failed to create fulltext index {name} on table {table_name}")
+                raise QueryError(f"Failed to create fulltext index {name} on table {table_name}")
 
             return self
         except Exception as e:
             if "Failed to create" not in str(e):
-                raise Exception(f"Failed to create fulltext index {name} on table {table_name}: {e}")
+                raise QueryError(f"Failed to create fulltext index {name} on table {table_name}: {e}")
             raise
 
     async def drop(self, table_name_or_model, name: str) -> "AsyncFulltextIndexManager":
@@ -416,12 +413,12 @@ class AsyncFulltextIndexManager(_FulltextManagerBase):
                 )
 
             if not success:
-                raise Exception(f"Failed to drop fulltext index {name} from table {table_name}")
+                raise QueryError(f"Failed to drop fulltext index {name} from table {table_name}")
 
             return self
         except Exception as e:
             if "Failed to drop" not in str(e):
-                raise Exception(f"Failed to drop fulltext index {name} from table {table_name}: {e}")
+                raise QueryError(f"Failed to drop fulltext index {name} from table {table_name}: {e}")
             raise
 
     async def enable_fulltext(self) -> "AsyncFulltextIndexManager":
@@ -440,7 +437,7 @@ class AsyncFulltextIndexManager(_FulltextManagerBase):
             await self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to enable fulltext indexing: {e}")
+            raise QueryError(f"Failed to enable fulltext indexing: {e}")
 
     async def disable_fulltext(self) -> "AsyncFulltextIndexManager":
         """
@@ -458,4 +455,4 @@ class AsyncFulltextIndexManager(_FulltextManagerBase):
             await self.executor.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to disable fulltext indexing: {e}")
+            raise QueryError(f"Failed to disable fulltext indexing: {e}")
