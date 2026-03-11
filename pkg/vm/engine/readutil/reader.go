@@ -624,7 +624,13 @@ func (r *reader) Read(
 				return false, err
 			}
 
-			outBatch.Shuffle(sels, mp)
+			if len(sels) == 0 {
+				// All rows were NULL vectors — mark batch as empty so the
+				// caller skips it instead of seeing a row-count / dist-vec mismatch.
+				outBatch.SetRowCount(0)
+			} else {
+				outBatch.Shuffle(sels, mp)
+			}
 
 			// Reuse the detached distVec when possible to avoid per-batch allocation.
 			distVec := detachedDistVec
