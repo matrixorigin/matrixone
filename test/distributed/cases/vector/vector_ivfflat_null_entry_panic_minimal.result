@@ -9,11 +9,11 @@ KEY idx_emb USING ivfflat (embedding) lists = 2 op_type 'vector_l2_ops'
 INSERT INTO t1 (id, embedding)
 SELECT concat('r_', result), '[0.1,0.1,0.1,0.1]'
 FROM generate_series(1, 100) g;
-SELECT mo_ctl('dn', 'flush', 'vec_null_panic_db.t1');
-mo_ctl(dn, flush, vec_null_panic_db.t1)
+SELECT mo_ctl('dn', 'flush', 'vec_null_panic_db.t1') as f1;
+f1
 {\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
-SELECT mo_ctl('dn', 'checkpoint', '');
-mo_ctl(dn, checkpoint, )
+SELECT mo_ctl('dn', 'checkpoint', '') as f2;
+f2
 {\n  "method": "Checkpoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 set @tbl_id = (
 SELECT rel_id FROM mo_catalog.mo_tables
