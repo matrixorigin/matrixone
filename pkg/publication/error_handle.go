@@ -379,6 +379,10 @@ func (SyncProtectionTTLClassifier) IsRetryable(err error) bool {
 	if strings.Contains(errMsg, "sync protection TTL expired") {
 		return true
 	}
+	// Check for sync protection soft deleted errors
+	if strings.Contains(errMsg, "sync protection is soft deleted") {
+		return true
+	}
 
 	return false
 }
