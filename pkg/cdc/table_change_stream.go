@@ -763,7 +763,7 @@ func (s *TableChangeStream) processOneRound(ctx context.Context, ar *ActiveRouti
 	s.stateMu.Unlock()
 
 	// Handle StaleRead error
-	if moerr.IsMoErrCode(err, moerr.ErrStaleRead) {
+	if moerr.IsMoErrCode(err, moerr.ErrStaleRead) || moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 		recoveryErr := s.handleStaleRead(ctx, txnOp)
 		// If recovery succeeded (nil), mark as retryable and continue
 		if recoveryErr == nil {
@@ -932,8 +932,8 @@ func (s *TableChangeStream) determineRetryable(err error) bool {
 	}
 	// StatusUnknown: continue to check other error types below
 
-	// StaleRead errors are retryable if recovery is possible
-	if moerr.IsMoErrCode(err, moerr.ErrStaleRead) {
+	// StaleRead/FileNotFound errors are retryable if recovery is possible
+	if moerr.IsMoErrCode(err, moerr.ErrStaleRead) || moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 		// If startTs is set and noFull is false, StaleRead is fatal (handled in handleStaleRead)
 		// If handleStaleRead returns nil, recovery succeeded (retryable)
 		// If handleStaleRead returns error, recovery failed (non-retryable)
@@ -1031,8 +1031,8 @@ func (s *TableChangeStream) classifyErrorType(err error) string {
 		return "commit"
 	}
 
-	// StaleRead errors - fast retry (usually resolves quickly)
-	if moerr.IsMoErrCode(err, moerr.ErrStaleRead) {
+	// StaleRead/FileNotFound errors - fast retry (usually resolves quickly)
+	if moerr.IsMoErrCode(err, moerr.ErrStaleRead) || moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 		return "stale_read"
 	}
 
