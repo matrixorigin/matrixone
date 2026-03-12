@@ -9164,3 +9164,87 @@ func TestGetFormat(t *testing.T) {
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
+
+func TestEltHandlesUnsignedAndBitOverflowIndexes(t *testing.T) {
+	testCases := []tcTemp{
+		{
+			info: "elt uint64 overflow returns null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{1, 2, math.MaxUint64}, []bool{false, false, false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"b"}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"a", "b", ""}, []bool{false, false, true}),
+		},
+		{
+			info: "elt bit overflow returns null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_bit.ToType(), []uint64{1, 2, math.MaxUint64}, []bool{false, false, false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"b"}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"a", "b", ""}, []bool{false, false, true}),
+		},
+	}
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Elt)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestEltCoversSignedAndSelectListPaths(t *testing.T) {
+	t.Run("int64 path returns null for null string and out of range indexes", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		tc := tcTemp{
+			info: "elt int64 path",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 2, 3, -1, 0}, []bool{false, false, false, false, false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a"}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"b", "b", "b", "b", "b"}, []bool{false, true, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"a", "", "", "", ""}, []bool{false, true, true, true, true}),
+		}
+
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Elt)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	})
+
+	testSelectList := func(t *testing.T, indexType types.Type, indexValues any) {
+		proc := testutil.NewProcess(t)
+		ivecs := []*vector.Vector{
+			newVectorByType(proc.Mp(), indexType, indexValues, nil),
+			newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"a"}, nil),
+		}
+
+		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+		err := result.PreExtendAndReset(2)
+		require.NoError(t, err)
+
+		selectList := &FunctionSelectList{
+			AnyNull:    true,
+			SelectList: []bool{true, false},
+		}
+		err = Elt(ivecs, result, proc, 2, selectList)
+		require.NoError(t, err)
+
+		resultVec := result.GetResultVector()
+		strParam := vector.GenerateFunctionStrParameter(resultVec)
+
+		value, isNull := strParam.GetStrValue(0)
+		require.False(t, isNull)
+		require.Equal(t, "a", string(value))
+		require.True(t, resultVec.GetNulls().Contains(1))
+	}
+
+	t.Run("int64 selectList rows return null", func(t *testing.T) {
+		testSelectList(t, types.T_int64.ToType(), []int64{1, 1})
+	})
+
+	t.Run("uint64 selectList rows return null", func(t *testing.T) {
+		testSelectList(t, types.T_uint64.ToType(), []uint64{1, 1})
+	})
+}
