@@ -216,6 +216,7 @@ public:
                 if constexpr (sizeof(T) == 1) {
                     if (!quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
                     quantizer_.template transform<T>(*res, X_device_float.view(), X_device_target.data_handle(), true);
+                    raft::resource::sync_stream(*res);
                 } else {
                     raft::copy(*res, X_device_target.view(), X_device_float.view());
                 }
@@ -339,6 +340,7 @@ public:
                         quantizer_.train(*res, train_view);
                     }
                     quantizer_.template transform<T>(*res, X_device_float.view(), X_device_target.data_handle(), true);
+                    raft::resource::sync_stream(*res);
                 } else {
                     raft::copy(*res, X_device_target.view(), X_device_float.view());
                 }

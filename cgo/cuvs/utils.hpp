@@ -91,6 +91,7 @@ public:
         } else {
             auto out_view = raft::make_host_matrix_view<T, int64_t>(out_ptr, n_rows, n_cols);
             raft::copy(res, out_view, chunk_device_int8.view());
+            raft::resource::sync_stream(res);
         }
     }
 

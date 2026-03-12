@@ -521,6 +521,7 @@ public:
                     auto chunk_device_float = raft::make_device_matrix<float, int64_t>(*res, chunk_count, dimension);
                     raft::copy(*res, chunk_device_float.view(), raft::make_host_matrix_view<const float, int64_t>(chunk_data, chunk_count, dimension));
                     quantizer_.template transform<T>(*res, chunk_device_float.view(), flattened_host_dataset.data() + (row_offset * dimension), false);
+                    raft::resource::sync_stream(*res);
                 } else if constexpr (std::is_same_v<T, float>) {
                     std::copy(chunk_data, chunk_data + (chunk_count * dimension), flattened_host_dataset.begin() + (row_offset * dimension));
                 } else {
