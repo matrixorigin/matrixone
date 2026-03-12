@@ -1213,6 +1213,34 @@ func ExecuteIteration(
 		if injectCommitFailed {
 			commitErr = moerr.NewInternalErrorNoCtx(injectMessage)
 		}
+
+		// Unregister sync protection after commit/rollback
+		// This ensures sync protection is cleaned up regardless of commit success
+		if syncProtectionJobID != "" {
+			// Unregister from worker
+			if syncProtectionWorker != nil {
+				syncProtectionWorker.UnregisterSyncProtection(syncProtectionJobID)
+				logutil.Info("ccpr-iteration sync protection unregistered from worker",
+					zap.String("task_id", iterationCtx.String()),
+					zap.String("job_id", syncProtectionJobID),
+				)
+			}
+
+			// Unregister from GC (soft delete)
+			if unregErr := UnregisterSyncProtection(ctx, iterationCtx.LocalExecutor, syncProtectionJobID); unregErr != nil {
+				logutil.Warn("ccpr-iteration failed to unregister sync protection from GC",
+					zap.String("task_id", iterationCtx.String()),
+					zap.String("job_id", syncProtectionJobID),
+					zap.Error(unregErr),
+				)
+			} else {
+				logutil.Info("ccpr-iteration sync protection unregistered from GC",
+					zap.String("task_id", iterationCtx.String()),
+					zap.String("job_id", syncProtectionJobID),
+				)
+			}
+		}
+
 		if commitErr != nil {
 			logutil.Error("ccpr-iteration error",
 				zap.String("task_id", iterationCtx.String()),
@@ -1434,32 +1462,6 @@ func ExecuteIteration(
 
 		// Set job ID to workspace for TN commit check
 		localTxn.GetWorkspace().SetSyncProtectionJobID(syncProtectionJobID)
-
-		// Defer cleanup: first unregister from GC, then from worker
-		defer func() {
-			// Unregister from GC (soft delete)
-			if unregErr := UnregisterSyncProtection(ctx, iterationCtx.LocalExecutor, syncProtectionJobID); unregErr != nil {
-				logutil.Warn("ccpr-iteration failed to unregister sync protection from GC",
-					zap.String("task_id", iterationCtx.String()),
-					zap.String("job_id", syncProtectionJobID),
-					zap.Error(unregErr),
-				)
-			} else {
-				logutil.Info("ccpr-iteration sync protection unregistered from GC",
-					zap.String("task_id", iterationCtx.String()),
-					zap.String("job_id", syncProtectionJobID),
-				)
-			}
-
-			// Unregister from worker
-			if syncProtectionWorker != nil {
-				syncProtectionWorker.UnregisterSyncProtection(syncProtectionJobID)
-				logutil.Info("ccpr-iteration sync protection unregistered from worker",
-					zap.String("task_id", iterationCtx.String()),
-					zap.String("job_id", syncProtectionJobID),
-				)
-			}
-		}()
 
 		// CN commit check: renew sync protection before applying objects
 		newTTLExpireTS := time.Now().Add(GetSyncProtectionTTLDuration()).UnixNano()
