@@ -426,7 +426,8 @@ func NewUpstreamConnectionClassifier() *UpstreamConnectionClassifier {
 }
 
 // DownstreamConnectionClassifier is used when connecting to downstream.
-// It combines default and mysql classifiers.
+// It combines default, mysql, and commit classifiers.
+// CommitErrorClassifier is included to handle ErrTxnNeedRetry errors during statement execution.
 type DownstreamConnectionClassifier struct {
 	MultiClassifier
 }
@@ -438,6 +439,7 @@ func NewDownstreamConnectionClassifier() *DownstreamConnectionClassifier {
 			DefaultClassifier{},
 			MySQLErrorClassifier{},
 			SyncProtectionTTLClassifier{},
+			CommitErrorClassifier{},
 		},
 	}
 }
