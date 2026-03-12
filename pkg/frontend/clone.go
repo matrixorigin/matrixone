@@ -599,10 +599,17 @@ func updateBranchMetaTable(
 		return nil
 	}
 
-	if _, srcTblDef, err = ses.GetTxnCompileCtx().Resolve(
-		receipt.srcDb, receipt.srcTbl, receipt.snapshot,
-	); err != nil {
+	srcCtx := defines.AttachAccountId(ctx, receipt.srcAccount)
+	tcc := ses.GetTxnCompileCtx()
+	origCtx := tcc.GetContext()
+	tcc.SetContext(srcCtx)
+	defer tcc.SetContext(origCtx)
+
+	if _, srcTblDef, err = tcc.Resolve(receipt.srcDb, receipt.srcTbl, nil); err != nil {
 		return err
+	}
+	if srcTblDef == nil {
+		return moerr.NewNoSuchTable(srcCtx, receipt.srcDb, receipt.srcTbl)
 	}
 
 	dstCtx := defines.AttachAccountId(ctx, receipt.toAccount)

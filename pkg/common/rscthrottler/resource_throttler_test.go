@@ -130,3 +130,42 @@ func BenchmarkThrottler(b *testing.B) {
 		throttler.Available()
 	}
 }
+
+func TestAcquirePolicyForDataBranch(t *testing.T) {
+	t.Run("deny when projected usage exceeds rate limit", func(t *testing.T) {
+		throttler := &memThrottler{limitRate: 0.80}
+		throttler.actualTotalMemory.Store(100)
+		throttler.limit.Store(80)
+		throttler.rss.Store(70)
+		throttler.reserved.Store(5)
+
+		left, ok := AcquirePolicyForDataBranch(throttler, 11)
+		require.False(t, ok)
+		require.Equal(t, int64(0), left)
+		require.Equal(t, int64(5), throttler.reserved.Load())
+	})
+
+	t.Run("allow at boundary and reserve memory", func(t *testing.T) {
+		throttler := &memThrottler{limitRate: 0.80}
+		throttler.actualTotalMemory.Store(100)
+		throttler.limit.Store(80)
+		throttler.rss.Store(70)
+
+		left, ok := AcquirePolicyForDataBranch(throttler, 10)
+		require.True(t, ok)
+		require.Equal(t, int64(20), left)
+		require.Equal(t, int64(10), throttler.reserved.Load())
+	})
+
+	t.Run("fallback to default policy when rate check is disabled", func(t *testing.T) {
+		throttler := &memThrottler{limitRate: 0}
+		throttler.actualTotalMemory.Store(100)
+		throttler.limit.Store(80)
+		throttler.rss.Store(20)
+
+		left, ok := AcquirePolicyForDataBranch(throttler, 10)
+		require.True(t, ok)
+		require.Equal(t, int64(70), left)
+		require.Equal(t, int64(10), throttler.reserved.Load())
+	})
+}
