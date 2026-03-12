@@ -36,6 +36,7 @@ TEST(GpuKMeansTest, BasicFitAndPredict) {
     };
 
     gpu_kmeans_t<float> kmeans(n_clusters, dimension, cuvs::distance::DistanceType::L2Expanded, 20, 0, 1);
+    kmeans.start();
 
     auto fit_res = kmeans.fit(dataset.data(), n_samples);
     ASSERT_GE(fit_res.n_iter, 1);
@@ -60,6 +61,7 @@ TEST(GpuKMeansTest, FitPredict) {
     for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
 
     gpu_kmeans_t<float> kmeans(n_clusters, dimension, cuvs::distance::DistanceType::L2Expanded, 20, 0, 1);
+    kmeans.start();
 
     auto res = kmeans.fit_predict(dataset.data(), n_samples);
     ASSERT_EQ(res.labels.size(), (size_t)n_samples);
@@ -76,6 +78,7 @@ TEST(GpuKMeansTest, GetCentroids) {
     for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
 
     gpu_kmeans_t<float> kmeans(n_clusters, dimension, cuvs::distance::DistanceType::L2Expanded, 20, 0, 1);
+    kmeans.start();
 
     kmeans.fit(dataset.data(), n_samples);
     auto centroids = kmeans.get_centroids();

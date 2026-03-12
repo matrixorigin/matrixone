@@ -249,6 +249,11 @@ public:
         auto result_wait = worker->wait(job_id).get();
         if (result_wait.error) std::rethrow_exception(result_wait.error);
         is_loaded_ = true;
+        // Clear host dataset after building to save memory (IVF-PQ stores its own copy on device)
+        if (filename_.empty()) {
+            flattened_host_dataset.clear();
+            flattened_host_dataset.shrink_to_fit();
+        }
     }
 
     /**

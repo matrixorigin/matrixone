@@ -32,8 +32,20 @@ typedef void* gpu_brute_force_search_result_c;
 // Constructor for gpu_brute_force_t
 gpu_brute_force_c gpu_brute_force_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, distance_type_t metric, uint32_t nthread, int device_id, quantization_t qtype, void* errmsg);
 
+// Constructor for an empty index (pre-allocates)
+gpu_brute_force_c gpu_brute_force_new_empty(uint64_t total_count, uint32_t dimension, distance_type_t metric, uint32_t nthread, int device_id, quantization_t qtype, void* errmsg);
+
+// Starts the worker and initializes resources
+void gpu_brute_force_start(gpu_brute_force_c index_c, void* errmsg);
+
 // Loads the index to the GPU
 void gpu_brute_force_load(gpu_brute_force_c index_c, void* errmsg);
+
+// Add chunk of data (same type as index quantization)
+void gpu_brute_force_add_chunk(gpu_brute_force_c index_c, const void* chunk_data, uint64_t chunk_count, void* errmsg);
+
+// Add chunk of data (from float, with on-the-fly conversion if needed)
+void gpu_brute_force_add_chunk_float(gpu_brute_force_c index_c, const float* chunk_data, uint64_t chunk_count, void* errmsg);
 
 // Performs a search operation
 gpu_brute_force_search_result_c gpu_brute_force_search(gpu_brute_force_c index_c, const void* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, void* errmsg);

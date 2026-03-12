@@ -38,6 +38,9 @@ gpu_kmeans_c gpu_kmeans_new(uint32_t n_clusters, uint32_t dimension, distance_ty
 // Destructor
 void gpu_kmeans_destroy(gpu_kmeans_c kmeans_c, void* errmsg);
 
+// Starts the worker and initializes resources
+void gpu_kmeans_start(gpu_kmeans_c kmeans_c, void* errmsg);
+
 // Fit function
 typedef struct {
     float inertia;

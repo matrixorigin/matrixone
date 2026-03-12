@@ -40,6 +40,7 @@ TEST(GpuBruteForceTest, BasicLoadAndSearch) {
     std::vector<float> dataset = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
     
     gpu_brute_force_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 1, 0);
+    index.start();
     index.load();
 
     std::vector<float> queries = {1.0, 2.0, 3.0};
@@ -63,6 +64,7 @@ TEST(GpuBruteForceTest, SearchWithMultipleQueries) {
     };
     
     gpu_brute_force_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 1, 0);
+    index.start();
     index.load();
 
     std::vector<float> queries = {
@@ -85,6 +87,7 @@ TEST(GpuBruteForceTest, SearchWithFloat16) {
     std::vector<half> h_dataset = float_to_half(f_dataset);
     
     gpu_brute_force_t<half> index(h_dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 1, 0);
+    index.start();
     index.load();
 
     std::vector<float> f_queries = {1.0, 1.0};
@@ -107,6 +110,7 @@ TEST(GpuBruteForceTest, SearchWithInnerProduct) {
     };
     
     gpu_brute_force_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::InnerProduct, 1, 0);
+    index.start();
     index.load();
 
     std::vector<float> queries = {1.0, 0.0};
@@ -144,6 +148,7 @@ TEST(GpuBruteForceTest, LargeLimit) {
     std::vector<float> dataset(count * dimension, 1.0);
     
     gpu_brute_force_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 1, 0);
+    index.start();
     index.load();
 
     std::vector<float> queries(dimension, 1.0);
@@ -170,6 +175,7 @@ TEST(CuvsWorkerTest, BruteForceSearch) {
     for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
 
     gpu_brute_force_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 1, 0);
+    index.start();
     index.load();
 
     std::vector<float> queries = std::vector<float>(dataset.begin(), dataset.begin() + dimension);
@@ -194,6 +200,7 @@ TEST(CuvsWorkerTest, ConcurrentSearches) {
     }
 
     gpu_brute_force_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 4, 0);
+    index.start();
     index.load();
 
     const int num_threads = 4;

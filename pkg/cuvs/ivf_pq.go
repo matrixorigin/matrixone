@@ -134,7 +134,7 @@ func NewGpuIvfPqFromDataFile[T VectorType](datafilename string, metric DistanceT
 		return nil, moerr.NewInternalErrorNoCtx("failed to create GpuIvfPq from data file")
 	}
 
-	// dimension will be updated when GetDim() is called, but we can set it to 0 for now 
+	// dimension will be updated when GetDim() is called, but we can set it to 0 for now
 	// or ideally GetDim() should be used.
 	return &GpuIvfPq[T]{cIvfPq: cIvfPq, dimension: 0}, nil
 }

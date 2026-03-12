@@ -44,6 +44,7 @@
 // cuVS includes
 #include <cuvs/distance/distance.hpp>
 #include <cuvs/cluster/kmeans.hpp>
+#include "utils.hpp"
 #pragma GCC diagnostic pop
 
 namespace matrixone {
@@ -74,13 +75,28 @@ public:
         params.n_iters = static_cast<uint32_t>(max_iter);
         params.metric = metric;
 
-        // K-Means in cuVS is currently single-GPU focused in the main cluster API
         worker = std::make_unique<cuvs_worker_t>(nthread, device_id);
-        worker->start();
     }
 
     ~gpu_kmeans_t() {
         destroy();
+    }
+
+    /**
+     * @brief Starts the worker and initializes resources.
+     */
+    void start() {
+        auto init_fn = [](raft_handle_wrapper_t& handle) -> std::any {
+            return std::any();
+        };
+
+        auto stop_fn = [&](raft_handle_wrapper_t& handle) -> std::any {
+            std::unique_lock<std::shared_mutex> lock(mutex_);
+            centroids_.reset();
+            return std::any();
+        };
+
+        worker->start(init_fn, stop_fn);
     }
 
     struct fit_result_t {
@@ -213,7 +229,7 @@ public:
                                                        centroids_->view(),
                                                        labels_device.view());
                 } else {
-                    // Fallback for half and uint8_t which might missing fit_predict overload in some cuVS versions
+                    // Fallback for half and uint8_t
                     cuvs::cluster::kmeans::fit(*res, params,
                                                raft::make_const_mdspan(X_device.view()),
                                                centroids_->view());
