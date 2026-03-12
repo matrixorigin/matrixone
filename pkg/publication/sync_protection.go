@@ -358,26 +358,15 @@ func registerSyncProtectionOnDownstreamImpl(
 	// Generate a new UUID for job ID
 	jobID = uuid.New().String()
 
-	// 1. Query GC status on downstream
-	gcStatus, err := QueryGCStatus(ctx, downstreamExecutor)
-	if err != nil {
-		retryable = IsGCRunningError(err) || IsSyncProtectionMaxCountError(err)
-		return "", 0, retryable, moerr.NewInternalErrorf(ctx, "failed to query GC status on downstream: %v", err)
-	}
-
-	if gcStatus.Running {
-		return "", 0, true, moerr.NewInternalErrorNoCtx("GC is running on downstream, please retry later")
-	}
-
-	// 2. Build Bloom Filter
+	// 1. Build Bloom Filter
 	bfBase64, err := BuildBloomFilterFromObjectMap(objectMap, mp)
 	if err != nil {
 		return "", 0, false, moerr.NewInternalErrorf(ctx, "failed to build bloom filter: %v", err)
 	}
 
-	// 3. Register protection on downstream
+	// 2. Register protection on downstream (gcTS=0 since we skip gc_status query)
 	ttlExpireTS = time.Now().Add(GetSyncProtectionTTLDuration()).UnixNano()
-	err = RegisterSyncProtection(ctx, downstreamExecutor, jobID, bfBase64, gcStatus.TS, ttlExpireTS, taskID)
+	err = RegisterSyncProtection(ctx, downstreamExecutor, jobID, bfBase64, 0, ttlExpireTS, taskID)
 	if err != nil {
 		retryable = IsGCRunningError(err) || IsSyncProtectionMaxCountError(err)
 		return "", 0, retryable, moerr.NewInternalErrorf(ctx, "failed to register sync protection on downstream: %v", err)
