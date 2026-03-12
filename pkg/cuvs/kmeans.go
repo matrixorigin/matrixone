@@ -19,7 +19,6 @@ package cuvs
 /*
 #include "../../cgo/cuvs/kmeans_c.h"
 #include <stdlib.h>
-#include <stdbool.h>
 */
 import "C"
 import (
@@ -28,17 +27,16 @@ import (
 	"unsafe"
 )
 
-// GpuKMeans represents the C++ gpu_kmeans_t object.
+// GpuKMeans represents the C++ gpu_kmeans_t object
 type GpuKMeans[T VectorType] struct {
 	cKMeans   C.gpu_kmeans_c
 	nClusters uint32
 	dimension uint32
 }
 
-// NewGpuKMeans creates a new GpuKMeans instance.
+// NewGpuKMeans creates a new GpuKMeans instance
 func NewGpuKMeans[T VectorType](nClusters uint32, dimension uint32, metric DistanceType, maxIter int, deviceID int, nthread uint32) (*GpuKMeans[T], error) {
 	qtype := GetQuantization[T]()
-
 	var errmsg *C.char
 	cKMeans := C.gpu_kmeans_new(
 		C.uint32_t(nClusters),
@@ -60,6 +58,7 @@ func NewGpuKMeans[T VectorType](nClusters uint32, dimension uint32, metric Dista
 	if cKMeans == nil {
 		return nil, moerr.NewInternalErrorNoCtx("failed to create GpuKMeans")
 	}
+
 	return &GpuKMeans[T]{cKMeans: cKMeans, nClusters: nClusters, dimension: dimension}, nil
 }
 
@@ -86,6 +85,32 @@ func (gk *GpuKMeans[T]) Start() error {
 	}
 	var errmsg *C.char
 	C.gpu_kmeans_start(gk.cKMeans, unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
+// TrainQuantizer trains the scalar quantizer (if T is 1-byte)
+func (gk *GpuKMeans[T]) TrainQuantizer(trainData []float32, nSamples uint64) error {
+	if gk.cKMeans == nil {
+		return moerr.NewInternalErrorNoCtx("GpuKMeans is not initialized")
+	}
+	if len(trainData) == 0 || nSamples == 0 {
+		return nil
+	}
+
+	var errmsg *C.char
+	C.gpu_kmeans_train_quantizer(
+		gk.cKMeans,
+		(*C.float)(&trainData[0]),
+		C.uint64_t(nSamples),
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(trainData)
+
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))
@@ -158,6 +183,43 @@ func (gk *GpuKMeans[T]) Predict(dataset []T, nSamples uint64) ([]int64, float32,
 	return labels, float32(res.inertia), nil
 }
 
+// PredictFloat assigns labels to new float32 data based on existing centroids.
+func (gk *GpuKMeans[T]) PredictFloat(dataset []float32, nSamples uint64) ([]int64, float32, error) {
+	if gk.cKMeans == nil {
+		return nil, 0, moerr.NewInternalErrorNoCtx("GpuKMeans is not initialized")
+	}
+	if len(dataset) == 0 || nSamples == 0 {
+		return nil, 0, nil
+	}
+
+	var errmsg *C.char
+	res := C.gpu_kmeans_predict_float(
+		gk.cKMeans,
+		(*C.float)(unsafe.Pointer(&dataset[0])),
+		C.uint64_t(nSamples),
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(dataset)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return nil, 0, moerr.NewInternalErrorNoCtx(errStr)
+	}
+
+	if res.result_ptr == nil {
+		return nil, 0, moerr.NewInternalErrorNoCtx("predict returned nil result")
+	}
+
+	labels := make([]int64, nSamples)
+	C.gpu_kmeans_get_labels(res.result_ptr, C.uint64_t(nSamples), (*C.int64_t)(unsafe.Pointer(&labels[0])))
+	runtime.KeepAlive(labels)
+
+	C.gpu_kmeans_free_result(res.result_ptr)
+
+	return labels, float32(res.inertia), nil
+}
+
 // FitPredict performs both fitting and labeling in one step.
 func (gk *GpuKMeans[T]) FitPredict(dataset []T, nSamples uint64) ([]int64, float32, int64, error) {
 	if gk.cKMeans == nil {
@@ -171,6 +233,43 @@ func (gk *GpuKMeans[T]) FitPredict(dataset []T, nSamples uint64) ([]int64, float
 	res := C.gpu_kmeans_fit_predict(
 		gk.cKMeans,
 		unsafe.Pointer(&dataset[0]),
+		C.uint64_t(nSamples),
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(dataset)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return nil, 0, 0, moerr.NewInternalErrorNoCtx(errStr)
+	}
+
+	if res.result_ptr == nil {
+		return nil, 0, 0, moerr.NewInternalErrorNoCtx("fit_predict returned nil result")
+	}
+
+	labels := make([]int64, nSamples)
+	C.gpu_kmeans_get_labels(res.result_ptr, C.uint64_t(nSamples), (*C.int64_t)(unsafe.Pointer(&labels[0])))
+	runtime.KeepAlive(labels)
+
+	C.gpu_kmeans_free_result(res.result_ptr)
+
+	return labels, float32(res.inertia), int64(res.n_iter), nil
+}
+
+// FitPredictFloat performs both fitting and labeling in one step for float32 data.
+func (gk *GpuKMeans[T]) FitPredictFloat(dataset []float32, nSamples uint64) ([]int64, float32, int64, error) {
+	if gk.cKMeans == nil {
+		return nil, 0, 0, moerr.NewInternalErrorNoCtx("GpuKMeans is not initialized")
+	}
+	if len(dataset) == 0 || nSamples == 0 {
+		return nil, 0, 0, nil
+	}
+
+	var errmsg *C.char
+	res := C.gpu_kmeans_fit_predict_float(
+		gk.cKMeans,
+		(*C.float)(unsafe.Pointer(&dataset[0])),
 		C.uint64_t(nSamples),
 		unsafe.Pointer(&errmsg),
 	)

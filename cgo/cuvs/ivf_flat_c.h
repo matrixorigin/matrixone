@@ -63,7 +63,11 @@ void gpu_ivf_flat_add_chunk(gpu_ivf_flat_c index_c, const void* chunk_data, uint
 // Add chunk of data (from float, with on-the-fly quantization if needed)
 void gpu_ivf_flat_add_chunk_float(gpu_ivf_flat_c index_c, const float* chunk_data, uint64_t chunk_count, void* errmsg);
 
-// Save function
+// Trains the scalar quantizer (if T is 1-byte)
+void gpu_ivf_flat_train_quantizer(gpu_ivf_flat_c index_c, const float* train_data, uint64_t n_samples, void* errmsg);
+
+// Destructor
+
 void gpu_ivf_flat_save(gpu_ivf_flat_c index_c, const char* filename, void* errmsg);
 
 // Search function
@@ -72,9 +76,12 @@ typedef struct {
 } gpu_ivf_flat_search_res_t;
 
 gpu_ivf_flat_search_res_t gpu_ivf_flat_search(gpu_ivf_flat_c index_c, const void* queries_data, uint64_t num_queries, 
-                                              uint32_t query_dimension, uint32_t limit, 
-                                              ivf_flat_search_params_t search_params, void* errmsg);
+                                                uint32_t query_dimension, uint32_t limit, 
+                                                ivf_flat_search_params_t search_params, void* errmsg);
 
+gpu_ivf_flat_search_res_t gpu_ivf_flat_search_float(gpu_ivf_flat_c index_c, const float* queries_data, uint64_t num_queries, 
+                                                      uint32_t query_dimension, uint32_t limit, 
+                                                      ivf_flat_search_params_t search_params, void* errmsg);
 // Get results from result object
 void gpu_ivf_flat_get_neighbors(gpu_ivf_flat_result_c result_c, uint64_t total_elements, int64_t* neighbors);
 void gpu_ivf_flat_get_distances(gpu_ivf_flat_result_c result_c, uint64_t total_elements, float* distances);

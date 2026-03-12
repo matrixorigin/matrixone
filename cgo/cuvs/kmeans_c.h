@@ -41,6 +41,9 @@ void gpu_kmeans_destroy(gpu_kmeans_c kmeans_c, void* errmsg);
 // Starts the worker and initializes resources
 void gpu_kmeans_start(gpu_kmeans_c kmeans_c, void* errmsg);
 
+// Trains the scalar quantizer (if T is 1-byte)
+void gpu_kmeans_train_quantizer(gpu_kmeans_c kmeans_c, const float* train_data, uint64_t n_samples, void* errmsg);
+
 // Fit function
 typedef struct {
     float inertia;
@@ -57,6 +60,8 @@ typedef struct {
 
 gpu_kmeans_predict_res_t gpu_kmeans_predict(gpu_kmeans_c kmeans_c, const void* X_data, uint64_t n_samples, void* errmsg);
 
+gpu_kmeans_predict_res_t gpu_kmeans_predict_float(gpu_kmeans_c kmeans_c, const float* X_data, uint64_t n_samples, void* errmsg);
+
 // FitPredict function
 typedef struct {
     gpu_kmeans_result_c result_ptr;
@@ -65,6 +70,8 @@ typedef struct {
 } gpu_kmeans_fit_predict_res_t;
 
 gpu_kmeans_fit_predict_res_t gpu_kmeans_fit_predict(gpu_kmeans_c kmeans_c, const void* X_data, uint64_t n_samples, void* errmsg);
+
+gpu_kmeans_fit_predict_res_t gpu_kmeans_fit_predict_float(gpu_kmeans_c kmeans_c, const float* X_data, uint64_t n_samples, void* errmsg);
 
 // Get results from result object
 void gpu_kmeans_get_labels(gpu_kmeans_result_c result_c, uint64_t n_samples, int64_t* labels);

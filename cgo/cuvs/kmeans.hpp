@@ -93,6 +93,7 @@ public:
         auto stop_fn = [&](raft_handle_wrapper_t& handle) -> std::any {
             std::unique_lock<std::shared_mutex> lock(mutex_);
             centroids_.reset();
+            quantizer_.reset();
             return std::any();
         };
 
@@ -190,6 +191,61 @@ public:
         return std::any_cast<predict_result_t>(result.result);
     }
 
+    /**
+     * @brief Assigns labels to new float32 data, performing on-the-fly quantization if needed.
+     */
+    predict_result_t predict_float(const float* X_data, uint64_t n_samples) {
+        if constexpr (std::is_same_v<T, float>) {
+            return predict(X_data, n_samples);
+        }
+
+        if (!X_data || n_samples == 0) return {{}, 0};
+
+        uint64_t job_id = worker->submit(
+            [&, X_data, n_samples](raft_handle_wrapper_t& handle) -> std::any {
+                std::shared_lock<std::shared_mutex> lock(mutex_);
+                if (!centroids_) throw std::runtime_error("KMeans centroids not trained. Call fit() first.");
+
+                auto res = handle.get_raft_resources();
+                
+                // 1. Quantize/Convert float data to T on device
+                auto X_device_float = raft::make_device_matrix<float, int64_t>(*res, n_samples, dimension);
+                raft::copy(*res, X_device_float.view(), raft::make_host_matrix_view<const float, int64_t>(X_data, n_samples, dimension));
+                
+                auto X_device_target = raft::make_device_matrix<T, int64_t>(*res, n_samples, dimension);
+                if constexpr (sizeof(T) == 1) {
+                    if (!quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
+                    quantizer_.template transform<T>(*res, X_device_float.view(), X_device_target.data_handle(), true);
+                } else {
+                    raft::copy(*res, X_device_target.view(), X_device_float.view());
+                }
+
+                // 2. Perform prediction
+                predict_result_t res_out;
+                res_out.labels.resize(n_samples);
+                auto labels_device = raft::make_device_vector<uint32_t, int64_t>(*res, static_cast<int64_t>(n_samples));
+                
+                cuvs::cluster::kmeans::predict(*res, params,
+                                               raft::make_const_mdspan(X_device_target.view()),
+                                               raft::make_const_mdspan(centroids_->view()),
+                                               labels_device.view());
+
+                std::vector<uint32_t> host_labels(n_samples);
+                RAFT_CUDA_TRY(cudaMemcpyAsync(host_labels.data(), labels_device.data_handle(),
+                                         n_samples * sizeof(uint32_t), cudaMemcpyDeviceToHost,
+                                         raft::resource::get_cuda_stream(*res)));
+                
+                raft::resource::sync_stream(*res);
+                for(uint64_t i=0; i<n_samples; ++i) res_out.labels[i] = (int64_t)host_labels[i];
+                res_out.inertia = 0.0f;
+                return res_out;
+            }
+        );
+        auto result = worker->wait(job_id).get();
+        if (result.error) std::rethrow_exception(result.error);
+        return std::any_cast<predict_result_t>(result.result);
+    }
+
     struct fit_predict_result_t {
         std::vector<int64_t> labels;
         float inertia;
@@ -257,6 +313,80 @@ public:
     }
 
     /**
+     * @brief Performs fitting and prediction for float32 data, with on-the-fly quantization if needed.
+     */
+    fit_predict_result_t fit_predict_float(const float* X_data, uint64_t n_samples) {
+        if constexpr (std::is_same_v<T, float>) {
+            return fit_predict(X_data, n_samples);
+        }
+
+        if (!X_data || n_samples == 0) return {{}, 0, 0};
+
+        uint64_t job_id = worker->submit(
+            [&, X_data, n_samples](raft_handle_wrapper_t& handle) -> std::any {
+                std::unique_lock<std::shared_mutex> lock(mutex_);
+                auto res = handle.get_raft_resources();
+                
+                // 1. Quantize/Convert float data to T on device
+                auto X_device_float = raft::make_device_matrix<float, int64_t>(*res, n_samples, dimension);
+                raft::copy(*res, X_device_float.view(), raft::make_host_matrix_view<const float, int64_t>(X_data, n_samples, dimension));
+                
+                auto X_device_target = raft::make_device_matrix<T, int64_t>(*res, n_samples, dimension);
+                if constexpr (sizeof(T) == 1) {
+                    if (!quantizer_.is_trained()) {
+                        int64_t n_train = std::min(static_cast<int64_t>(n_samples), static_cast<int64_t>(500));
+                        auto train_view = raft::make_device_matrix_view<const float, int64_t>(X_device_float.data_handle(), n_train, dimension);
+                        quantizer_.train(*res, train_view);
+                    }
+                    quantizer_.template transform<T>(*res, X_device_float.view(), X_device_target.data_handle(), true);
+                } else {
+                    raft::copy(*res, X_device_target.view(), X_device_float.view());
+                }
+
+                // 2. Perform fit_predict
+                if (!centroids_) {
+                    centroids_ = std::make_unique<raft::device_matrix<CentroidT, int64_t>>(
+                        raft::make_device_matrix<CentroidT, int64_t>(*res, static_cast<int64_t>(n_clusters), static_cast<int64_t>(dimension)));
+                }
+
+                fit_predict_result_t res_out;
+                res_out.labels.resize(n_samples);
+                auto labels_device = raft::make_device_vector<uint32_t, int64_t>(*res, static_cast<int64_t>(n_samples));
+
+                if constexpr (std::is_same_v<T, int8_t>) {
+                    cuvs::cluster::kmeans::fit_predict(*res, params,
+                                                       raft::make_const_mdspan(X_device_target.view()),
+                                                       centroids_->view(),
+                                                       labels_device.view());
+                } else {
+                    // Fallback for half and uint8_t
+                    cuvs::cluster::kmeans::fit(*res, params,
+                                               raft::make_const_mdspan(X_device_target.view()),
+                                               centroids_->view());
+                    cuvs::cluster::kmeans::predict(*res, params,
+                                                   raft::make_const_mdspan(X_device_target.view()),
+                                                   raft::make_const_mdspan(centroids_->view()),
+                                                   labels_device.view());
+                }
+
+                std::vector<uint32_t> host_labels(n_samples);
+                RAFT_CUDA_TRY(cudaMemcpyAsync(host_labels.data(), labels_device.data_handle(),
+                                         n_samples * sizeof(uint32_t), cudaMemcpyDeviceToHost,
+                                         raft::resource::get_cuda_stream(*res)));
+                
+                raft::resource::sync_stream(*res);
+                for(uint64_t i=0; i<n_samples; ++i) res_out.labels[i] = (int64_t)host_labels[i];
+                res_out.inertia = 0.0f;
+                res_out.n_iter = static_cast<int64_t>(params.n_iters);
+                return res_out;
+            }
+        );
+        auto result = worker->wait(job_id).get();
+        if (result.error) std::rethrow_exception(result.error);
+        return std::any_cast<fit_predict_result_t>(result.result);
+    }
+
+    /**
      * @brief Returns the trained centroids.
      */
     std::vector<CentroidT> get_centroids() {
@@ -284,6 +414,24 @@ public:
     void destroy() {
         if (worker) worker->stop();
     }
+
+    void train_quantizer(const float* train_data, uint64_t n_samples) {
+        if (!train_data || n_samples == 0) return;
+        uint64_t job_id = worker->submit(
+            [&, train_data, n_samples](raft_handle_wrapper_t& handle) -> std::any {
+                auto res = handle.get_raft_resources();
+                auto train_device = raft::make_device_matrix<float, int64_t>(*res, n_samples, dimension);
+                raft::copy(*res, train_device.view(), raft::make_host_matrix_view<const float, int64_t>(train_data, n_samples, dimension));
+                quantizer_.train(*res, train_device.view());
+                return std::any();
+            }
+        );
+        auto result_wait = worker->wait(job_id).get();
+        if (result_wait.error) std::rethrow_exception(result_wait.error);
+    }
+
+private:
+    scalar_quantizer_t<float> quantizer_;
 };
 
 } // namespace matrixone

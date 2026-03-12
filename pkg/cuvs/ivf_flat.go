@@ -278,6 +278,32 @@ func (gi *GpuIvfFlat[T]) AddChunkFloat(chunk []float32, chunkCount uint64) error
 	return nil
 }
 
+// TrainQuantizer trains the scalar quantizer (if T is 1-byte)
+func (gi *GpuIvfFlat[T]) TrainQuantizer(trainData []float32, nSamples uint64) error {
+	if gi.cIvfFlat == nil {
+		return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
+	}
+	if len(trainData) == 0 || nSamples == 0 {
+		return nil
+	}
+
+	var errmsg *C.char
+	C.gpu_ivf_flat_train_quantizer(
+		gi.cIvfFlat,
+		(*C.float)(&trainData[0]),
+		C.uint64_t(nSamples),
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(trainData)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
 // Save serializes the index to a file
 func (gi *GpuIvfFlat[T]) Save(filename string) error {
 	if gi.cIvfFlat == nil {
@@ -313,6 +339,58 @@ func (gi *GpuIvfFlat[T]) Search(queries []T, numQueries uint64, dimension uint32
 	res := C.gpu_ivf_flat_search(
 		gi.cIvfFlat,
 		unsafe.Pointer(&queries[0]),
+		C.uint64_t(numQueries),
+		C.uint32_t(dimension),
+		C.uint32_t(limit),
+		cSP,
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(queries)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return SearchResultIvfFlat{}, moerr.NewInternalErrorNoCtx(errStr)
+	}
+
+	if res.result_ptr == nil {
+		return SearchResultIvfFlat{}, moerr.NewInternalErrorNoCtx("search returned nil result")
+	}
+
+	totalElements := uint64(numQueries) * uint64(limit)
+	neighbors := make([]int64, totalElements)
+	distances := make([]float32, totalElements)
+
+	C.gpu_ivf_flat_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(unsafe.Pointer(&neighbors[0])))
+	C.gpu_ivf_flat_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(unsafe.Pointer(&distances[0])))
+	runtime.KeepAlive(neighbors)
+	runtime.KeepAlive(distances)
+
+	C.gpu_ivf_flat_free_result(res.result_ptr)
+
+	return SearchResultIvfFlat{
+		Neighbors: neighbors,
+		Distances: distances,
+	}, nil
+}
+
+// SearchFloat performs a K-Nearest Neighbor search with float32 queries
+func (gi *GpuIvfFlat[T]) SearchFloat(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams) (SearchResultIvfFlat, error) {
+	if gi.cIvfFlat == nil {
+		return SearchResultIvfFlat{}, moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
+	}
+	if len(queries) == 0 || numQueries == 0 {
+		return SearchResultIvfFlat{}, nil
+	}
+
+	var errmsg *C.char
+	cSP := C.ivf_flat_search_params_t{
+		n_probes: C.uint32_t(sp.NProbes),
+	}
+
+	res := C.gpu_ivf_flat_search_float(
+		gi.cIvfFlat,
+		(*C.float)(unsafe.Pointer(&queries[0])),
 		C.uint64_t(numQueries),
 		C.uint32_t(dimension),
 		C.uint32_t(limit),

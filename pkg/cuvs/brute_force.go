@@ -219,6 +219,48 @@ func (gb *GpuBruteForce[T]) Search(queries []T, num_queries uint64, query_dimens
 	return neighbors, distances, nil
 }
 
+// SearchFloat performs a search operation with float32 queries
+func (gb *GpuBruteForce[T]) SearchFloat(queries []float32, num_queries uint64, query_dimension uint32, limit uint32) ([]int64, []float32, error) {
+	if gb.cIndex == nil {
+		return nil, nil, moerr.NewInternalErrorNoCtx("GpuBruteForce is not initialized")
+	}
+	if len(queries) == 0 || num_queries == 0 || query_dimension == 0 {
+		return nil, nil, moerr.NewInternalErrorNoCtx("queries, num_queries, and query_dimension cannot be zero")
+	}
+
+	var errmsg *C.char
+	cResult := C.gpu_brute_force_search_float(
+		gb.cIndex,
+		(*C.float)(unsafe.Pointer(&queries[0])),
+		C.uint64_t(num_queries),
+		C.uint32_t(query_dimension),
+		C.uint32_t(limit),
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(queries)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return nil, nil, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	if cResult == nil {
+		return nil, nil, moerr.NewInternalErrorNoCtx("search returned nil result")
+	}
+
+	// Allocate slices for results
+	neighbors := make([]int64, num_queries*uint64(limit))
+	distances := make([]float32, num_queries*uint64(limit))
+
+	C.gpu_brute_force_get_results(cResult, C.uint64_t(num_queries), C.uint32_t(limit), (*C.int64_t)(unsafe.Pointer(&neighbors[0])), (*C.float)(unsafe.Pointer(&distances[0])))
+	runtime.KeepAlive(neighbors)
+	runtime.KeepAlive(distances)
+
+	C.gpu_brute_force_free_search_result(cResult)
+
+	return neighbors, distances, nil
+}
+
 // Destroy frees the C++ GpuBruteForce instance
 func (gb *GpuBruteForce[T]) Destroy() error {
 	if gb.cIndex == nil {

@@ -168,6 +168,33 @@ gpu_brute_force_search_result_c gpu_brute_force_search(gpu_brute_force_c index_c
     }
 }
 
+gpu_brute_force_search_result_c gpu_brute_force_search_float(gpu_brute_force_c index_c, const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_brute_force_any_t*>(index_c);
+        void* result_ptr = nullptr;
+        switch (any->qtype) {
+            case Quantization_F32: {
+                auto res = std::make_unique<matrixone::gpu_brute_force_t<float>::search_result_t>();
+                *res = static_cast<matrixone::gpu_brute_force_t<float>*>(any->ptr)->search_float(queries_data, num_queries, query_dimension, limit);
+                result_ptr = res.release();
+                break;
+            }
+            case Quantization_F16: {
+                auto res = std::make_unique<matrixone::gpu_brute_force_t<half>::search_result_t>();
+                *res = static_cast<matrixone::gpu_brute_force_t<half>*>(any->ptr)->search_float(queries_data, num_queries, query_dimension, limit);
+                result_ptr = res.release();
+                break;
+            }
+            default: break;
+        }
+        return static_cast<gpu_brute_force_search_result_c>(result_ptr);
+    } catch (const std::exception& e) {
+        set_errmsg(errmsg, "Error in gpu_brute_force_search_float", e.what());
+        return nullptr;
+    }
+}
+
 void gpu_brute_force_get_results(gpu_brute_force_search_result_c result_c, uint64_t num_queries, uint32_t limit, int64_t* neighbors, float* distances) {
     if (!result_c) return;
     auto* search_result = static_cast<matrixone::gpu_brute_force_t<float>::search_result_t*>(result_c);

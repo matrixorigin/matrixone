@@ -171,6 +171,9 @@ public:
         auto result_wait = worker->wait(job_id).get();
         if (result_wait.error) std::rethrow_exception(result_wait.error);
         is_loaded_ = true;
+        // Clear host dataset after building to save memory
+        flattened_host_dataset.clear();
+        flattened_host_dataset.shrink_to_fit();
     }
 
     /**
@@ -190,7 +193,7 @@ public:
         if (!is_loaded_ || !index) return search_result_t{};
 
         uint64_t job_id = worker->submit(
-            [&, num_queries, limit](raft_handle_wrapper_t& handle) -> std::any {
+            [&, num_queries, limit, queries_data](raft_handle_wrapper_t& handle) -> std::any {
                 std::shared_lock<std::shared_mutex> lock(mutex_);
                 auto res = handle.get_raft_resources();
                 
@@ -208,6 +211,66 @@ public:
                 cuvs::neighbors::brute_force::search_params search_params;
                 cuvs::neighbors::brute_force::search(*res, search_params, *index,
                                                      raft::make_const_mdspan(queries_device.view()), neighbors_device.view(), distances_device.view());
+
+                search_result_t s_res;
+                s_res.neighbors.resize(num_queries * limit);
+                s_res.distances.resize(num_queries * limit);
+
+                RAFT_CUDA_TRY(cudaMemcpyAsync(s_res.neighbors.data(), neighbors_device.data_handle(),
+                                         s_res.neighbors.size() * sizeof(int64_t), cudaMemcpyDeviceToHost,
+                                         raft::resource::get_cuda_stream(*res)));
+                RAFT_CUDA_TRY(cudaMemcpyAsync(s_res.distances.data(), distances_device.data_handle(),
+                                         s_res.distances.size() * sizeof(float), cudaMemcpyDeviceToHost,
+                                         raft::resource::get_cuda_stream(*res)));
+
+                raft::resource::sync_stream(*res);
+
+                for (size_t i = 0; i < s_res.neighbors.size(); ++i) {
+                    if (s_res.neighbors[i] == std::numeric_limits<int64_t>::max() || 
+                        s_res.neighbors[i] == 4294967295LL || s_res.neighbors[i] < 0) {
+                        s_res.neighbors[i] = -1;
+                    }
+                }
+                return s_res;
+            }
+        );
+
+        auto result = worker->wait(job_id).get();
+        if (result.error) std::rethrow_exception(result.error);
+        return std::any_cast<search_result_t>(result.result);
+    }
+
+    /**
+     * @brief Performs brute-force search for given float32 queries, with on-the-fly conversion if needed.
+     */
+    search_result_t search_float(const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit) {
+        if constexpr (std::is_same_v<T, float>) {
+            return search(queries_data, num_queries, query_dimension, limit);
+        }
+
+        if (!queries_data || num_queries == 0 || dimension == 0) return search_result_t{};
+        if (query_dimension != this->dimension) throw std::runtime_error("dimension mismatch");
+        if (!is_loaded_ || !index) return search_result_t{};
+
+        uint64_t job_id = worker->submit(
+            [&, num_queries, limit, queries_data](raft_handle_wrapper_t& handle) -> std::any {
+                std::shared_lock<std::shared_mutex> lock(mutex_);
+                auto res = handle.get_raft_resources();
+                
+                auto queries_device_float = raft::make_device_matrix<float, int64_t>(*res, num_queries, dimension);
+                raft::copy(*res, queries_device_float.view(), raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, dimension));
+                
+                auto queries_device_target = raft::make_device_matrix<T, int64_t>(*res, num_queries, dimension);
+                raft::copy(*res, queries_device_target.view(), queries_device_float.view());
+
+                auto neighbors_device = raft::make_device_matrix<int64_t, int64_t, raft::layout_c_contiguous>(
+                    *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
+                auto distances_device = raft::make_device_matrix<float, int64_t, raft::layout_c_contiguous>(
+                    *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
+
+                cuvs::neighbors::brute_force::search_params search_params;
+                cuvs::neighbors::brute_force::search(*res, search_params, *index,
+                                                     raft::make_const_mdspan(queries_device_target.view()), neighbors_device.view(), distances_device.view());
 
                 search_result_t s_res;
                 s_res.neighbors.resize(num_queries * limit);

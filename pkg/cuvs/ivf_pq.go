@@ -240,6 +240,32 @@ func (gi *GpuIvfPq[T]) AddChunkFloat(chunk []float32, chunkCount uint64) error {
 	return nil
 }
 
+// TrainQuantizer trains the scalar quantizer (if T is 1-byte)
+func (gi *GpuIvfPq[T]) TrainQuantizer(trainData []float32, nSamples uint64) error {
+	if gi.cIvfPq == nil {
+		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
+	}
+	if len(trainData) == 0 || nSamples == 0 {
+		return nil
+	}
+
+	var errmsg *C.char
+	C.gpu_ivf_pq_train_quantizer(
+		gi.cIvfPq,
+		(*C.float)(&trainData[0]),
+		C.uint64_t(nSamples),
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(trainData)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
 // NewGpuIvfPqFromFile creates a new GpuIvfPq instance by loading from a file.
 func NewGpuIvfPqFromFile[T VectorType](filename string, dimension uint32, metric DistanceType,
 	bp IvfPqBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfPq[T], error) {
@@ -373,6 +399,58 @@ func (gi *GpuIvfPq[T]) Search(queries []T, numQueries uint64, dimension uint32, 
 	res := C.gpu_ivf_pq_search(
 		gi.cIvfPq,
 		unsafe.Pointer(&queries[0]),
+		C.uint64_t(numQueries),
+		C.uint32_t(dimension),
+		C.uint32_t(limit),
+		cSP,
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(queries)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return SearchResultIvfPq{}, moerr.NewInternalErrorNoCtx(errStr)
+	}
+
+	if res.result_ptr == nil {
+		return SearchResultIvfPq{}, moerr.NewInternalErrorNoCtx("search returned nil result")
+	}
+
+	totalElements := uint64(numQueries) * uint64(limit)
+	neighbors := make([]int64, totalElements)
+	distances := make([]float32, totalElements)
+
+	C.gpu_ivf_pq_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(unsafe.Pointer(&neighbors[0])))
+	C.gpu_ivf_pq_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(unsafe.Pointer(&distances[0])))
+	runtime.KeepAlive(neighbors)
+	runtime.KeepAlive(distances)
+
+	C.gpu_ivf_pq_free_result(res.result_ptr)
+
+	return SearchResultIvfPq{
+		Neighbors: neighbors,
+		Distances: distances,
+	}, nil
+}
+
+// SearchFloat performs an IVF-PQ search operation with float32 queries
+func (gi *GpuIvfPq[T]) SearchFloat(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams) (SearchResultIvfPq, error) {
+	if gi.cIvfPq == nil {
+		return SearchResultIvfPq{}, moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
+	}
+	if len(queries) == 0 || numQueries == 0 {
+		return SearchResultIvfPq{}, nil
+	}
+
+	var errmsg *C.char
+	cSP := C.ivf_pq_search_params_t{
+		n_probes: C.uint32_t(sp.NProbes),
+	}
+
+	res := C.gpu_ivf_pq_search_float(
+		gi.cIvfPq,
+		(*C.float)(unsafe.Pointer(&queries[0])),
 		C.uint64_t(numQueries),
 		C.uint32_t(dimension),
 		C.uint32_t(limit),

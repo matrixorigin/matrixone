@@ -50,6 +50,9 @@ void gpu_brute_force_add_chunk_float(gpu_brute_force_c index_c, const float* chu
 // Performs a search operation
 gpu_brute_force_search_result_c gpu_brute_force_search(gpu_brute_force_c index_c, const void* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, void* errmsg);
 
+// Performs a search operation with float32 queries
+gpu_brute_force_search_result_c gpu_brute_force_search_float(gpu_brute_force_c index_c, const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, void* errmsg);
+
 // Retrieves the results from a search operation
 void gpu_brute_force_get_results(gpu_brute_force_search_result_c result_c, uint64_t num_queries, uint32_t limit, int64_t* neighbors, float* distances);
 
