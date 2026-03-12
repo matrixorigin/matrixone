@@ -126,10 +126,10 @@ func (d *DataBranchDAG) HasParent(tableID uint64) bool {
 // FindLCA finds the Lowest Common Ancestor (LCA) for two given table IDs.
 // It returns:
 // 1. lcaTableID: The table_id of the common ancestor.
-// 2. branchTS1: The clone_ts of the direct child of the LCA that is on the path to tableID1.
-// 3. branchTS2: The clone_ts of the direct child of the LCA that is on the path to tableID2.
+// 2. childTableID1: The direct child table of the LCA that is on the path to tableID1.
+// 3. childTableID2: The direct child table of the LCA that is on the path to tableID2.
 // 4. ok: A boolean indicating if a common ancestor was found.
-func (d *DataBranchDAG) FindLCA(tableID1, tableID2 uint64) (lcaTableID uint64, branchTS1 int64, branchTS2 int64, ok bool) {
+func (d *DataBranchDAG) FindLCA(tableID1, tableID2 uint64) (lcaTableID uint64, childTableID1 uint64, childTableID2 uint64, ok bool) {
 	node1, exists1 := d.nodes[tableID1]
 	node2, exists2 := d.nodes[tableID2]
 
@@ -139,9 +139,9 @@ func (d *DataBranchDAG) FindLCA(tableID1, tableID2 uint64) (lcaTableID uint64, b
 	}
 
 	// If it's the same node, it is its own LCA.
-	// Both branch timestamps can be defined as the node's own creation timestamp.
+	// Both child table IDs collapse to the node itself.
 	if tableID1 == tableID2 {
-		return tableID1, node1.CloneTS, node1.CloneTS, true
+		return tableID1, node1.TableID, node1.TableID, true
 	}
 
 	// Keep references to the original nodes for the final step of finding branch timestamps.
@@ -182,28 +182,36 @@ func (d *DataBranchDAG) FindLCA(tableID1, tableID2 uint64) (lcaTableID uint64, b
 
 	// --- Step 3: Find the specific children of the LCA that lead to the original nodes ---
 
-	// Find the branch timestamp for the path to tableID1
+	// Find the direct child table on the path to tableID1.
 	child1 := originalNode1
 	if child1 != lcaNode { // If the original node is not the LCA itself
 		for child1 != nil && child1.Parent != lcaNode {
 			child1 = child1.Parent
 		}
-		branchTS1 = child1.CloneTS
+		childTableID1 = child1.TableID
 	} else { // If the original node IS the LCA (ancestor case)
-		branchTS1 = lcaNode.CloneTS
+		childTableID1 = lcaNode.TableID
 	}
 
-	// Find the branch timestamp for the path to tableID2
+	// Find the direct child table on the path to tableID2.
 	child2 := originalNode2
 	if child2 != lcaNode { // If the original node is not the LCA itself
 		for child2 != nil && child2.Parent != lcaNode {
 			child2 = child2.Parent
 		}
-		branchTS2 = child2.CloneTS
+		childTableID2 = child2.TableID
 	} else { // If the original node IS the LCA (ancestor case)
-		branchTS2 = lcaNode.CloneTS
+		childTableID2 = lcaNode.TableID
 	}
 
 	ok = true
 	return
+}
+
+func (d *DataBranchDAG) GetCloneTS(tableID uint64) (int64, bool) {
+	node, ok := d.nodes[tableID]
+	if !ok {
+		return 0, false
+	}
+	return node.CloneTS, true
 }

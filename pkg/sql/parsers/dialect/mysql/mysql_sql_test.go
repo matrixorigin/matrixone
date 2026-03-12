@@ -83,6 +83,26 @@ func TestOriginSQL(t *testing.T) {
 	}
 }
 
+func TestDataBranchDiffOutputModes(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), `data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"} output summary`, 1)
+	require.NoError(t, err)
+
+	diffStmt, ok := stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.NotNil(t, diffStmt.OutputOpt)
+	require.True(t, diffStmt.OutputOpt.Summary)
+	require.False(t, diffStmt.OutputOpt.Count)
+
+	stmt, err = ParseOne(context.TODO(), "data branch diff t1 against t2 output count", 1)
+	require.NoError(t, err)
+
+	diffStmt, ok = stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.NotNil(t, diffStmt.OutputOpt)
+	require.False(t, diffStmt.OutputOpt.Summary)
+	require.True(t, diffStmt.OutputOpt.Count)
+}
+
 var (
 	partitionSQL = struct {
 		input  string
