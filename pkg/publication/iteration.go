@@ -1192,6 +1192,9 @@ func ExecuteIteration(
 	iterationCtx.LocalTxn = localTxn
 	iterationCtx.LocalExecutor.(*InternalSQLExecutor).SetTxn(localTxn)
 
+	// Declare syncProtectionJobID here so it can be accessed in defer
+	var syncProtectionJobID string
+
 	needFlushCCPRLog := true
 	defer func() {
 		injectCommitFailed := false
@@ -1432,7 +1435,6 @@ func ExecuteIteration(
 
 	// === Sync Protection Integration ===
 	// Register sync protection after getting object list, before applying objects
-	var syncProtectionJobID string
 	var syncProtectionTTLExpireTS int64
 	if len(objectMap) > 0 {
 		// Register sync protection with retry (similar to WaitForSnapshotFlushed)
