@@ -179,6 +179,7 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 		for _, d := range deallocators {
 			d.Deallocate()
 		}
+		deallocators = nil
 		return nil, err
 	}
 
