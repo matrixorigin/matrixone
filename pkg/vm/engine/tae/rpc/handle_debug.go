@@ -812,7 +812,7 @@ func (h *Handle) HandleDiskCleaner(
 		}
 
 		syncMgr := h.db.DiskCleaner.GetCleaner().GetSyncProtectionManager()
-		if err = syncMgr.RegisterSyncProtection(req.JobID, req.BF, req.ValidTS); err != nil {
+		if err = syncMgr.RegisterSyncProtection(req.JobID, req.BF, req.ValidTS, req.TaskID); err != nil {
 			return nil, err
 		}
 		resp.ReturnStr = `{"status": "ok"}`

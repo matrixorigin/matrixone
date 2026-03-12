@@ -152,9 +152,9 @@ const (
 	// Returns: {"running": bool, "protections": int, "ts": int64}
 	PublicationGCStatusSqlTemplate = `SELECT mo_ctl('dn', 'gc_status', '')`
 
-	// Register sync protection: SELECT mo_ctl('dn', 'register_sync_protection', '{"job_id": "xxx", "bf": "base64...", "ts": 123, "ttl_expire_ts": 456}')
+	// Register sync protection: SELECT mo_ctl('dn', 'register_sync_protection', '{"job_id": "xxx", "bf": "base64...", "ts": 123, "ttl_expire_ts": 456, "task_id": "taskID-123"}')
 	// Returns: {"status": "ok"} or {"status": "error", "code": "ErrGCRunning", "message": "..."}
-	PublicationRegisterSyncProtectionSqlTemplate = `SELECT mo_ctl('dn', 'register_sync_protection', '{"job_id": "%s", "bf": "%s", "ts": %d, "ttl_expire_ts": %d}')`
+	PublicationRegisterSyncProtectionSqlTemplate = `SELECT mo_ctl('dn', 'register_sync_protection', '{"job_id": "%s", "bf": "%s", "ts": %d, "ttl_expire_ts": %d, "task_id": "%s"}')`
 
 	// Renew sync protection: SELECT mo_ctl('dn', 'renew_sync_protection', '{"job_id": "xxx", "ttl_expire_ts": 456}')
 	// Returns: {"status": "ok"} or {"status": "error", "code": "ErrProtectionNotFound", "message": "..."}
@@ -652,6 +652,7 @@ func (b publicationSQLBuilder) GCStatusSQL() string {
 //   - bf: base64 encoded bloom filter
 //   - ts: timestamp from gc_status (for validation)
 //   - ttlExpireTS: TTL expiration timestamp (nanoseconds)
+//   - taskID: CCPR iteration task ID with LSN (e.g., "taskID-123")
 //
 // Returns: {"status": "ok"} or {"status": "error", "code": "ErrGCRunning", "message": "..."}
 func (b publicationSQLBuilder) RegisterSyncProtectionSQL(
@@ -659,6 +660,7 @@ func (b publicationSQLBuilder) RegisterSyncProtectionSQL(
 	bf string,
 	ts int64,
 	ttlExpireTS int64,
+	taskID string,
 ) string {
 	return fmt.Sprintf(
 		PublicationRegisterSyncProtectionSqlTemplate,
@@ -666,6 +668,7 @@ func (b publicationSQLBuilder) RegisterSyncProtectionSQL(
 		bf, // bf is already base64 encoded, no need to escape
 		ts,
 		ttlExpireTS,
+		escapeSQLString(taskID),
 	)
 }
 

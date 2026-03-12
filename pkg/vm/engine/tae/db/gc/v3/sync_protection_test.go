@@ -57,13 +57,13 @@ func TestSyncProtectionManager_RegisterAndUnregister(t *testing.T) {
 	validTS := time.Now().UnixNano()
 
 	// Test register
-	err := mgr.RegisterSyncProtection(jobID, bfData, validTS)
+	err := mgr.RegisterSyncProtection(jobID, bfData, validTS, "test-task-1")
 	require.NoError(t, err)
 	assert.Equal(t, 1, mgr.GetProtectionCount())
 	assert.True(t, mgr.HasProtection(jobID))
 
 	// Test duplicate register
-	err = mgr.RegisterSyncProtection(jobID, bfData, validTS)
+	err = mgr.RegisterSyncProtection(jobID, bfData, validTS, "test-task-1")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "already exists")
 
@@ -94,7 +94,7 @@ func TestSyncProtectionManager_GCRunningBlock(t *testing.T) {
 	assert.True(t, mgr.IsGCRunning())
 
 	// Register should fail when GC is running
-	err := mgr.RegisterSyncProtection(jobID, bfData, validTS)
+	err := mgr.RegisterSyncProtection(jobID, bfData, validTS, "test-task-1")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "GC is running")
 
@@ -103,7 +103,7 @@ func TestSyncProtectionManager_GCRunningBlock(t *testing.T) {
 	assert.False(t, mgr.IsGCRunning())
 
 	// Register should succeed now
-	err = mgr.RegisterSyncProtection(jobID, bfData, validTS)
+	err = mgr.RegisterSyncProtection(jobID, bfData, validTS, "test-task-1")
 	require.NoError(t, err)
 }
 
@@ -115,7 +115,7 @@ func TestSyncProtectionManager_Renew(t *testing.T) {
 	validTS1 := time.Now().UnixNano()
 
 	// Register
-	err := mgr.RegisterSyncProtection(jobID, bfData, validTS1)
+	err := mgr.RegisterSyncProtection(jobID, bfData, validTS1, "test-task-1")
 	require.NoError(t, err)
 
 	// Renew
@@ -150,9 +150,9 @@ func TestSyncProtectionManager_CleanupSoftDeleted(t *testing.T) {
 	bfData1 := buildTestBF(t, []string{"obj1"})
 	bfData2 := buildTestBF(t, []string{"obj2"})
 
-	err := mgr.RegisterSyncProtection(job1, bfData1, validTS1)
+	err := mgr.RegisterSyncProtection(job1, bfData1, validTS1, "test-task-1")
 	require.NoError(t, err)
-	err = mgr.RegisterSyncProtection(job2, bfData2, validTS2)
+	err = mgr.RegisterSyncProtection(job2, bfData2, validTS2, "test-task-2")
 	require.NoError(t, err)
 
 	// Soft delete both
@@ -183,7 +183,7 @@ func TestSyncProtectionManager_CleanupExpired(t *testing.T) {
 
 	// Register with old validTS
 	oldValidTS := time.Now().Add(-200 * time.Millisecond).UnixNano()
-	err := mgr.RegisterSyncProtection(jobID, bfData, oldValidTS)
+	err := mgr.RegisterSyncProtection(jobID, bfData, oldValidTS, "test-task-1")
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, mgr.GetProtectionCount())
@@ -202,7 +202,7 @@ func TestSyncProtectionManager_CleanupExpired_NotSoftDeleted(t *testing.T) {
 
 	// Register with old validTS
 	oldValidTS := time.Now().Add(-200 * time.Millisecond).UnixNano()
-	err := mgr.RegisterSyncProtection(jobID, bfData, oldValidTS)
+	err := mgr.RegisterSyncProtection(jobID, bfData, oldValidTS, "test-task-1")
 	require.NoError(t, err)
 
 	// Soft delete it
@@ -221,7 +221,7 @@ func TestSyncProtectionManager_IsProtected(t *testing.T) {
 	bfData := buildTestBF(t, []string{"protected-obj"})
 	validTS := time.Now().UnixNano()
 
-	err := mgr.RegisterSyncProtection(jobID, bfData, validTS)
+	err := mgr.RegisterSyncProtection(jobID, bfData, validTS, "test-task-1")
 	require.NoError(t, err)
 
 	assert.True(t, mgr.IsProtected("protected-obj"))
@@ -235,7 +235,7 @@ func TestSyncProtectionManager_FilterProtectedFiles(t *testing.T) {
 	bfData := buildTestBF(t, []string{"protected1", "protected2"})
 	validTS := time.Now().UnixNano()
 
-	err := mgr.RegisterSyncProtection(jobID, bfData, validTS)
+	err := mgr.RegisterSyncProtection(jobID, bfData, validTS, "test-task-1")
 	require.NoError(t, err)
 
 	files := []string{"protected1", "protected2", "unprotected1", "unprotected2"}
@@ -268,13 +268,13 @@ func TestSyncProtectionManager_MaxCount(t *testing.T) {
 	bfData2 := buildTestBF(t, []string{"obj2"})
 	bfData3 := buildTestBF(t, []string{"obj3"})
 
-	err := mgr.RegisterSyncProtection("job-1", bfData1, validTS)
+	err := mgr.RegisterSyncProtection("job-1", bfData1, validTS, "test-task-1")
 	require.NoError(t, err)
-	err = mgr.RegisterSyncProtection("job-2", bfData2, validTS)
+	err = mgr.RegisterSyncProtection("job-2", bfData2, validTS, "test-task-2")
 	require.NoError(t, err)
 
 	// Should fail when max reached
-	err = mgr.RegisterSyncProtection("job-3", bfData3, validTS)
+	err = mgr.RegisterSyncProtection("job-3", bfData3, validTS, "test-task-3")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "max count reached")
 }
@@ -290,7 +290,7 @@ func TestSyncProtectionManager_ConcurrentAccess(t *testing.T) {
 			bfData := buildTestBF(t, []string{"obj"})
 			validTS := time.Now().UnixNano()
 
-			_ = mgr.RegisterSyncProtection(jobID, bfData, validTS)
+			_ = mgr.RegisterSyncProtection(jobID, bfData, validTS, "test-task-1")
 			_ = mgr.RenewSyncProtection(jobID, validTS+1000)
 			_ = mgr.UnregisterSyncProtection(jobID)
 			_ = mgr.IsProtected("obj")
@@ -314,7 +314,7 @@ func TestSyncProtectionManager_FullWorkflow(t *testing.T) {
 
 	// Step 1: Check GC not running, register protection
 	assert.False(t, mgr.IsGCRunning())
-	err := mgr.RegisterSyncProtection(jobID, bfData, validTS)
+	err := mgr.RegisterSyncProtection(jobID, bfData, validTS, "test-task-1")
 	require.NoError(t, err)
 
 	// Step 2: Simulate GC starts (should not affect existing protection)
@@ -348,7 +348,7 @@ func TestSyncProtectionManager_CheckpointWatermarkEdgeCase(t *testing.T) {
 	bfData := buildTestBF(t, []string{"obj"})
 	validTS := int64(1000)
 
-	err := mgr.RegisterSyncProtection(jobID, bfData, validTS)
+	err := mgr.RegisterSyncProtection(jobID, bfData, validTS, "test-task-1")
 	require.NoError(t, err)
 	err = mgr.UnregisterSyncProtection(jobID)
 	require.NoError(t, err)
@@ -369,18 +369,18 @@ func TestSyncProtectionManager_InvalidBFData(t *testing.T) {
 	validTS := time.Now().UnixNano()
 
 	// Test empty BF
-	err := mgr.RegisterSyncProtection(jobID, "", validTS)
+	err := mgr.RegisterSyncProtection(jobID, "", validTS, "test-task-1")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid sync protection")
 
 	// Test invalid base64
-	err = mgr.RegisterSyncProtection(jobID, "invalid-base64!!!", validTS)
+	err = mgr.RegisterSyncProtection(jobID, "invalid-base64!!!", validTS, "test-task-1")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid sync protection")
 
 	// Test invalid BloomFilter data
 	invalidBF := base64.StdEncoding.EncodeToString([]byte("not a bloom filter"))
-	err = mgr.RegisterSyncProtection(jobID, invalidBF, validTS)
+	err = mgr.RegisterSyncProtection(jobID, invalidBF, validTS, "test-task-1")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid sync protection")
 }
@@ -392,7 +392,7 @@ func TestSyncProtectionManager_FilterProtectedFiles_EmptyFiles(t *testing.T) {
 	bfData := buildTestBF(t, []string{"protected1"})
 	validTS := time.Now().UnixNano()
 
-	err := mgr.RegisterSyncProtection(jobID, bfData, validTS)
+	err := mgr.RegisterSyncProtection(jobID, bfData, validTS, "test-task-1")
 	require.NoError(t, err)
 
 	// Test with empty files list
@@ -409,9 +409,9 @@ func TestSyncProtectionManager_MultipleProtections(t *testing.T) {
 
 	validTS := time.Now().UnixNano()
 
-	err := mgr.RegisterSyncProtection("job-1", bfData1, validTS)
+	err := mgr.RegisterSyncProtection("job-1", bfData1, validTS, "test-task-1")
 	require.NoError(t, err)
-	err = mgr.RegisterSyncProtection("job-2", bfData2, validTS)
+	err = mgr.RegisterSyncProtection("job-2", bfData2, validTS, "test-task-2")
 	require.NoError(t, err)
 
 	// All objects should be protected
@@ -467,7 +467,7 @@ func TestSyncProtectionManager_CleanupExpired_NoExpired(t *testing.T) {
 	bfData := buildTestBF(t, []string{"object1"})
 	validTS := time.Now().UnixNano()
 
-	err := mgr.RegisterSyncProtection(jobID, bfData, validTS)
+	err := mgr.RegisterSyncProtection(jobID, bfData, validTS, "test-task-1")
 	require.NoError(t, err)
 
 	// Cleanup should not remove anything
@@ -482,7 +482,7 @@ func TestSyncProtectionManager_CleanupSoftDeleted_NoSoftDeleted(t *testing.T) {
 	bfData := buildTestBF(t, []string{"obj"})
 	validTS := int64(1000)
 
-	err := mgr.RegisterSyncProtection(jobID, bfData, validTS)
+	err := mgr.RegisterSyncProtection(jobID, bfData, validTS, "test-task-1")
 	require.NoError(t, err)
 
 	// Not soft deleted, cleanup should not remove

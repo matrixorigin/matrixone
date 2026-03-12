@@ -438,4 +438,5 @@ type SyncProtection struct {
 	BF         string `json:"bf"`          // Base64 encoded BloomFilter data (for register)
 	ValidTS    int64  `json:"valid_ts"`    // Valid timestamp in nanoseconds (for register and renew)
 	TestObject string `json:"test_object"` // Test object name for debugging (optional)
+	TaskID     string `json:"task_id"`     // CCPR iteration task ID with LSN (e.g., "taskID-123")
 }

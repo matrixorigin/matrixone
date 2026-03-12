@@ -80,11 +80,13 @@ func (m *SyncProtectionManager) IsGCRunning() bool {
 
 // RegisterSyncProtection registers a new sync protection with BloomFilter
 // bfData is base64 encoded BloomFilter bytes (using index.BloomFilter/xorfilter format)
+// taskID is the CCPR iteration task ID with LSN (e.g., "taskID-123") for logging
 // Returns error if GC is running or job already exists
 func (m *SyncProtectionManager) RegisterSyncProtection(
 	jobID string,
 	bfData string,
 	validTS int64,
+	taskID string,
 ) error {
 	m.Lock()
 	defer m.Unlock()
@@ -93,6 +95,7 @@ func (m *SyncProtectionManager) RegisterSyncProtection(
 	if m.gcRunning.Load() {
 		logutil.Warn(
 			"GC-Sync-Protection-Register-Rejected-GC-Running",
+			zap.String("task-id", taskID),
 			zap.String("job-id", jobID),
 		)
 		return moerr.NewGCIsRunningNoCtx()
@@ -102,6 +105,7 @@ func (m *SyncProtectionManager) RegisterSyncProtection(
 	if _, ok := m.protections[jobID]; ok {
 		logutil.Warn(
 			"GC-Sync-Protection-Register-Already-Exists",
+			zap.String("task-id", taskID),
 			zap.String("job-id", jobID),
 		)
 		return moerr.NewSyncProtectionExistsNoCtx(jobID)
@@ -111,6 +115,7 @@ func (m *SyncProtectionManager) RegisterSyncProtection(
 	if len(m.protections) >= m.maxCount {
 		logutil.Warn(
 			"GC-Sync-Protection-Register-Max-Count-Reached",
+			zap.String("task-id", taskID),
 			zap.String("job-id", jobID),
 			zap.Int("current-count", len(m.protections)),
 			zap.Int("max-count", m.maxCount),
@@ -122,6 +127,7 @@ func (m *SyncProtectionManager) RegisterSyncProtection(
 	if bfData == "" {
 		logutil.Error(
 			"GC-Sync-Protection-Register-Empty-BF",
+			zap.String("task-id", taskID),
 			zap.String("job-id", jobID),
 		)
 		return moerr.NewSyncProtectionInvalidNoCtx()
@@ -132,6 +138,7 @@ func (m *SyncProtectionManager) RegisterSyncProtection(
 	if err != nil {
 		logutil.Error(
 			"GC-Sync-Protection-Register-Decode-Error",
+			zap.String("task-id", taskID),
 			zap.String("job-id", jobID),
 			zap.Error(err),
 		)
@@ -144,6 +151,7 @@ func (m *SyncProtectionManager) RegisterSyncProtection(
 	if len(bfBytes) < 24 {
 		logutil.Error(
 			"GC-Sync-Protection-Register-Invalid-BF-Size",
+			zap.String("task-id", taskID),
 			zap.String("job-id", jobID),
 			zap.Int("size", len(bfBytes)),
 		)
@@ -154,6 +162,7 @@ func (m *SyncProtectionManager) RegisterSyncProtection(
 	if err = bf.Unmarshal(bfBytes); err != nil {
 		logutil.Error(
 			"GC-Sync-Protection-Register-Unmarshal-Error",
+			zap.String("task-id", taskID),
 			zap.String("job-id", jobID),
 			zap.Error(err),
 		)
@@ -170,6 +179,7 @@ func (m *SyncProtectionManager) RegisterSyncProtection(
 
 	logutil.Info(
 		"GC-Sync-Protection-Registered",
+		zap.String("task-id", taskID),
 		zap.String("job-id", jobID),
 		zap.Int64("valid-ts", validTS),
 		zap.Int("bf-size", len(bfBytes)),

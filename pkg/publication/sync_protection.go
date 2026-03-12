@@ -40,8 +40,9 @@ var RegisterSyncProtectionOnDownstreamFn = func(
 	downstreamExecutor SQLExecutor,
 	objectMap map[objectio.ObjectId]*ObjectWithTableInfo,
 	mp *mpool.MPool,
+	taskID string,
 ) (jobID string, ttlExpireTS int64, retryable bool, err error) {
-	return registerSyncProtectionOnDownstreamImpl(ctx, downstreamExecutor, objectMap, mp)
+	return registerSyncProtectionOnDownstreamImpl(ctx, downstreamExecutor, objectMap, mp, taskID)
 }
 
 // Note: BloomFilterExpectedItems and BloomFilterFalsePositiveRate are now
@@ -111,8 +112,9 @@ func RegisterSyncProtection(
 	bfBase64 string,
 	gcTS int64,
 	ttlExpireTS int64,
+	taskID string,
 ) error {
-	sql := PublicationSQLBuilder.RegisterSyncProtectionSQL(jobID, bfBase64, gcTS, ttlExpireTS)
+	sql := PublicationSQLBuilder.RegisterSyncProtectionSQL(jobID, bfBase64, gcTS, ttlExpireTS, taskID)
 
 	result, cancel, err := executor.ExecSQL(ctx, nil, InvalidAccountID, sql, false, true, time.Minute)
 	if err != nil {
@@ -340,8 +342,9 @@ func RegisterSyncProtectionOnDownstream(
 	downstreamExecutor SQLExecutor,
 	objectMap map[objectio.ObjectId]*ObjectWithTableInfo,
 	mp *mpool.MPool,
+	taskID string,
 ) (jobID string, ttlExpireTS int64, retryable bool, err error) {
-	return RegisterSyncProtectionOnDownstreamFn(ctx, downstreamExecutor, objectMap, mp)
+	return RegisterSyncProtectionOnDownstreamFn(ctx, downstreamExecutor, objectMap, mp, taskID)
 }
 
 // registerSyncProtectionOnDownstreamImpl is the actual implementation
@@ -350,6 +353,7 @@ func registerSyncProtectionOnDownstreamImpl(
 	downstreamExecutor SQLExecutor,
 	objectMap map[objectio.ObjectId]*ObjectWithTableInfo,
 	mp *mpool.MPool,
+	taskID string,
 ) (jobID string, ttlExpireTS int64, retryable bool, err error) {
 	// Generate a new UUID for job ID
 	jobID = uuid.New().String()
@@ -373,7 +377,7 @@ func registerSyncProtectionOnDownstreamImpl(
 
 	// 3. Register protection on downstream
 	ttlExpireTS = time.Now().Add(GetSyncProtectionTTLDuration()).UnixNano()
-	err = RegisterSyncProtection(ctx, downstreamExecutor, jobID, bfBase64, gcStatus.TS, ttlExpireTS)
+	err = RegisterSyncProtection(ctx, downstreamExecutor, jobID, bfBase64, gcStatus.TS, ttlExpireTS, taskID)
 	if err != nil {
 		retryable = IsGCRunningError(err) || IsSyncProtectionMaxCountError(err)
 		return "", 0, retryable, moerr.NewInternalErrorf(ctx, "failed to register sync protection on downstream: %v", err)
@@ -392,6 +396,7 @@ func registerSyncProtectionOnDownstreamImpl(
 //   - objectMap: map of objects to protect
 //   - mp: memory pool
 //   - retryOpt: retry options (nil to use default: 1s initial, 5min total timeout)
+//   - taskID: CCPR iteration task ID with LSN (e.g., "taskID-123")
 //
 // Returns:
 //   - jobID: the registered job ID
@@ -403,6 +408,7 @@ func RegisterSyncProtectionWithRetry(
 	objectMap map[objectio.ObjectId]*ObjectWithTableInfo,
 	mp *mpool.MPool,
 	retryOpt *SyncProtectionRetryOption,
+	taskID string,
 ) (jobID string, ttlExpireTS int64, err error) {
 	if retryOpt == nil {
 		retryOpt = DefaultSyncProtectionRetryOption()
@@ -410,7 +416,7 @@ func RegisterSyncProtectionWithRetry(
 
 	// If MaxTotalTime is 0 or negative, no retry - fail immediately on first error
 	if retryOpt.MaxTotalTime <= 0 {
-		jobID, ttlExpireTS, _, err = RegisterSyncProtectionOnDownstream(ctx, downstreamExecutor, objectMap, mp)
+		jobID, ttlExpireTS, _, err = RegisterSyncProtectionOnDownstream(ctx, downstreamExecutor, objectMap, mp, taskID)
 		return
 	}
 
@@ -421,7 +427,7 @@ func RegisterSyncProtectionWithRetry(
 	}
 
 	for {
-		jobID, ttlExpireTS, retryable, err := RegisterSyncProtectionOnDownstream(ctx, downstreamExecutor, objectMap, mp)
+		jobID, ttlExpireTS, retryable, err := RegisterSyncProtectionOnDownstream(ctx, downstreamExecutor, objectMap, mp, taskID)
 		if err == nil {
 			return jobID, ttlExpireTS, nil
 		}

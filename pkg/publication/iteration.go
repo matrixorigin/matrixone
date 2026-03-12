@@ -1414,6 +1414,7 @@ func ExecuteIteration(
 			objectMap,
 			mp,
 			syncProtectionRetryOpt,
+			iterationCtx.String(),
 		)
 		if err != nil {
 			err = moerr.NewInternalErrorf(ctx, "failed to register sync protection: %v", err)
