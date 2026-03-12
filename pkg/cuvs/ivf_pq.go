@@ -139,6 +139,109 @@ func NewGpuIvfPqFromDataFile[T VectorType](datafilename string, metric DistanceT
 	return &GpuIvfPq[T]{cIvfPq: cIvfPq, dimension: 0}, nil
 }
 
+// NewGpuIvfPqEmpty creates a new GpuIvfPq instance with pre-allocated buffer but no data yet.
+func NewGpuIvfPqEmpty[T VectorType](totalCount uint64, dimension uint32, metric DistanceType,
+	bp IvfPqBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfPq[T], error) {
+	if len(devices) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("at least one device must be specified")
+	}
+
+	qtype := GetQuantization[T]()
+	var errmsg *C.char
+	cDevices := make([]C.int, len(devices))
+	for i, d := range devices {
+		cDevices[i] = C.int(d)
+	}
+
+	cBP := C.ivf_pq_build_params_t{
+		n_lists:                  C.uint32_t(bp.NLists),
+		m:                        C.uint32_t(bp.M),
+		bits_per_code:            C.uint32_t(bp.BitsPerCode),
+		add_data_on_build:        C.bool(bp.AddDataOnBuild),
+		kmeans_trainset_fraction: C.double(bp.KmeansTrainsetFraction),
+	}
+
+	cIvfPq := C.gpu_ivf_pq_new_empty(
+		C.uint64_t(totalCount),
+		C.uint32_t(dimension),
+		C.distance_type_t(metric),
+		cBP,
+		&cDevices[0],
+		C.int(len(devices)),
+		C.uint32_t(nthread),
+		C.distribution_mode_t(mode),
+		C.quantization_t(qtype),
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(cDevices)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return nil, moerr.NewInternalErrorNoCtx(errStr)
+	}
+
+	if cIvfPq == nil {
+		return nil, moerr.NewInternalErrorNoCtx("failed to create GpuIvfPq")
+	}
+
+	return &GpuIvfPq[T]{cIvfPq: cIvfPq, dimension: dimension}, nil
+}
+
+// AddChunk adds a chunk of data to the pre-allocated buffer.
+func (gi *GpuIvfPq[T]) AddChunk(chunk []T, chunkCount uint64, rowOffset uint64) error {
+	if gi.cIvfPq == nil {
+		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
+	}
+	if len(chunk) == 0 || chunkCount == 0 {
+		return nil
+	}
+
+	var errmsg *C.char
+	C.gpu_ivf_pq_add_chunk(
+		gi.cIvfPq,
+		unsafe.Pointer(&chunk[0]),
+		C.uint64_t(chunkCount),
+		C.uint64_t(rowOffset),
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(chunk)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
+// AddChunkFloat adds a chunk of float32 data, performing on-the-fly quantization if needed.
+func (gi *GpuIvfPq[T]) AddChunkFloat(chunk []float32, chunkCount uint64, rowOffset uint64) error {
+	if gi.cIvfPq == nil {
+		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
+	}
+	if len(chunk) == 0 || chunkCount == 0 {
+		return nil
+	}
+
+	var errmsg *C.char
+	C.gpu_ivf_pq_add_chunk_float(
+		gi.cIvfPq,
+		(*C.float)(&chunk[0]),
+		C.uint64_t(chunkCount),
+		C.uint64_t(rowOffset),
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(chunk)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
 // NewGpuIvfPqFromFile creates a new GpuIvfPq instance by loading from a file.
 func NewGpuIvfPqFromFile[T VectorType](filename string, dimension uint32, metric DistanceType,
 	bp IvfPqBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfPq[T], error) {
@@ -199,6 +302,21 @@ func (gi *GpuIvfPq[T]) Destroy() error {
 	var errmsg *C.char
 	C.gpu_ivf_pq_destroy(gi.cIvfPq, unsafe.Pointer(&errmsg))
 	gi.cIvfPq = nil
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
+// Start initializes the worker and resources
+func (gi *GpuIvfPq[T]) Start() error {
+	if gi.cIvfPq == nil {
+		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
+	}
+	var errmsg *C.char
+	C.gpu_ivf_pq_start(gi.cIvfPq, unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))
@@ -342,6 +460,16 @@ func (gi *GpuIvfPq[T]) GetDimExt() uint32 {
 		return 0
 	}
 	return uint32(C.gpu_ivf_pq_get_dim_ext(gi.cIvfPq))
+}
+
+// GetDataset retrieves the flattened host dataset (for debugging).
+func (gi *GpuIvfPq[T]) GetDataset(totalElements uint64) []T {
+	if gi.cIvfPq == nil {
+		return nil
+	}
+	data := make([]T, totalElements)
+	C.gpu_ivf_pq_get_dataset(gi.cIvfPq, unsafe.Pointer(&data[0]))
+	return data
 }
 
 // SearchResultIvfPq contains the neighbors and distances from an IVF-PQ search.

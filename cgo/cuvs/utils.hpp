@@ -42,97 +42,67 @@ struct file_header_t {
 };
 #pragma pack(pop)
 
+/**
+ * @brief Helper to manage cuVS scalar quantizer lifecycle and operations.
+ * 
+ * @tparam S Source type (float, half, double)
+ */
+template <typename S>
+class scalar_quantizer_t {
+public:
+    using quantizer_type = cuvs::preprocessing::quantize::scalar::quantizer<S>;
+
+    scalar_quantizer_t() = default;
+
+    /**
+     * @brief Trains the quantizer on a device matrix.
+     */
+    void train(const raft::resources& res, raft::device_matrix_view<const S, int64_t> train_view) {
+        cuvs::preprocessing::quantize::scalar::params q_params;
+        quantizer_ = std::make_unique<quantizer_type>(
+            cuvs::preprocessing::quantize::scalar::train(res, q_params, train_view));
+    }
+
+    /**
+     * @brief Transforms a chunk of data into quantized 8-bit integers.
+     * 
+     * @tparam T Target type (int8_t or uint8_t)
+     * @param res RAFT resources handle.
+     * @param src_view Source data view on device.
+     * @param out_ptr Destination pointer (host or device).
+     * @param is_device_ptr Whether out_ptr is in device memory.
+     */
+    template <typename T>
+    void transform(const raft::resources& res, raft::device_matrix_view<const S, int64_t> src_view, T* out_ptr, bool is_device_ptr) {
+        if (!quantizer_) throw std::runtime_error("Quantizer not trained");
+        static_assert(sizeof(T) == 1, "Quantization target must be 1-byte");
+
+        int64_t n_rows = src_view.extent(0);
+        int64_t n_cols = src_view.extent(1);
+        size_t total_elements = n_rows * n_cols;
+
+        auto chunk_device_int8 = raft::make_device_matrix<int8_t, int64_t>(res, n_rows, n_cols);
+        cuvs::preprocessing::quantize::scalar::transform(res, *quantizer_, src_view, chunk_device_int8.view());
+
+        if (is_device_ptr) {
+            auto out_view = raft::make_device_matrix_view<T, int64_t>(out_ptr, n_rows, n_cols);
+            raft::copy(res, out_view, chunk_device_int8.view());
+        } else {
+            auto out_view = raft::make_host_matrix_view<T, int64_t>(out_ptr, n_rows, n_cols);
+            raft::copy(res, out_view, chunk_device_int8.view());
+        }
+    }
+
+    bool is_trained() const { return quantizer_ != nullptr; }
+    void reset() { quantizer_.reset(); }
+
+private:
+    std::unique_ptr<quantizer_type> quantizer_;
+};
+
 namespace detail {
 
 static constexpr int64_t DEFAULT_CHUNK_SIZE = 16384;
-
-/**
- * @brief Internal helper to perform chunked quantization or conversion from datafile to a raw pointer.
- * 
- * @tparam S Source type (type in file)
- * @tparam T Target type (requested type)
- * @tparam DoQuantize Whether to use cuVS scalar quantization (only for target size 1)
- * @param res RAFT resources handle.
- * @param filename Path to the input file.
- * @param header Parsed file header.
- * @param out_ptr Destination pointer (can be host or device memory).
- * @param is_device_ptr Whether the destination pointer is in device memory.
- */
-template <typename S, typename T, bool DoQuantize>
-void load_matrix_chunked_ptr(const raft::resources& res, const std::string& filename, const file_header_t& header, T* out_ptr, bool is_device_ptr) {
-    int64_t n_rows = static_cast<int64_t>(header.count);
-    int64_t n_cols = static_cast<int64_t>(header.dimension);
-    
-    if (n_rows == 0 || n_cols == 0) return;
-
-    std::ifstream file(filename, std::ios::binary);
-    file.seekg(sizeof(file_header_t));
-
-    // 1. If quantization requested, train quantizer on subset (up to 500 samples)
-    std::unique_ptr<cuvs::preprocessing::quantize::scalar::quantizer<S>> quantizer_ptr;
-
-    if constexpr (DoQuantize) {
-        int64_t n_train = std::min(n_rows, static_cast<int64_t>(500));
-        std::vector<S> train_host(n_train * n_cols);
-        file.read(reinterpret_cast<char*>(train_host.data()), train_host.size() * sizeof(S));
-        
-        auto train_device = raft::make_device_matrix<S, int64_t>(res, n_train, n_cols);
-        raft::copy(train_device.data_handle(), train_host.data(), train_host.size(), raft::resource::get_cuda_stream(res));
-        
-        cuvs::preprocessing::quantize::scalar::params q_params;
-        auto train_view = raft::make_device_matrix_view<const S, int64_t>(train_device.data_handle(), n_train, n_cols);
-        quantizer_ptr = std::make_unique<cuvs::preprocessing::quantize::scalar::quantizer<S>>(
-            cuvs::preprocessing::quantize::scalar::train(res, q_params, train_view));
-        file.seekg(sizeof(file_header_t)); // Reset to beginning of data
-    }
-
-    // 2. Transform in chunks
-    std::vector<S> chunk_host;
-    auto chunk_device_src = raft::make_device_matrix<S, int64_t>(res, DEFAULT_CHUNK_SIZE, n_cols);
-    
-    std::unique_ptr<raft::device_matrix<int8_t, int64_t>> chunk_device_int8;
-    if constexpr (DoQuantize) {
-        chunk_device_int8 = std::make_unique<raft::device_matrix<int8_t, int64_t>>(
-            raft::make_device_matrix<int8_t, int64_t>(res, DEFAULT_CHUNK_SIZE, n_cols));
-    }
-
-    for (int64_t row_offset = 0; row_offset < n_rows; row_offset += DEFAULT_CHUNK_SIZE) {
-        int64_t current_chunk_rows = std::min(DEFAULT_CHUNK_SIZE, n_rows - row_offset);
-        size_t total_chunk_elements = current_chunk_rows * n_cols;
-        
-        chunk_host.resize(total_chunk_elements);
-        file.read(reinterpret_cast<char*>(chunk_host.data()), total_chunk_elements * sizeof(S));
-        
-        raft::copy(chunk_device_src.data_handle(), chunk_host.data(), total_chunk_elements, raft::resource::get_cuda_stream(res));
-        
-        auto current_chunk_src_view = raft::make_device_matrix_view<const S, int64_t>(
-            chunk_device_src.data_handle(), current_chunk_rows, n_cols);
-
-        if constexpr (DoQuantize) {
-            auto current_chunk_int8_view = raft::make_device_matrix_view<int8_t, int64_t>(
-                chunk_device_int8->data_handle(), current_chunk_rows, n_cols);
-
-            cuvs::preprocessing::quantize::scalar::transform(res, *quantizer_ptr, current_chunk_src_view, current_chunk_int8_view);
-            
-            if (is_device_ptr) {
-                auto out_chunk_view = raft::make_device_matrix_view<T, int64_t>(out_ptr + (row_offset * n_cols), current_chunk_rows, n_cols);
-                raft::copy(res, out_chunk_view, current_chunk_int8_view);
-            } else {
-                auto out_chunk_view = raft::make_host_matrix_view<T, int64_t>(out_ptr + (row_offset * n_cols), current_chunk_rows, n_cols);
-                raft::copy(res, out_chunk_view, current_chunk_int8_view);
-            }
-        } else {
-            if (is_device_ptr) {
-                auto out_chunk_view = raft::make_device_matrix_view<T, int64_t>(out_ptr + (row_offset * n_cols), current_chunk_rows, n_cols);
-                raft::copy(res, out_chunk_view, current_chunk_src_view);
-            } else {
-                auto out_chunk_view = raft::make_host_matrix_view<T, int64_t>(out_ptr + (row_offset * n_cols), current_chunk_rows, n_cols);
-                raft::copy(res, out_chunk_view, current_chunk_src_view);
-            }
-        }
-    }
-    raft::resource::sync_stream(res);
-}
 
 /**
  * @brief Internal helper to read a binary file into a raw pointer using chunking.
@@ -148,28 +118,71 @@ void load_matrix_raw_ptr(const raft::resources& res, const std::string& filename
     file.seekg(sizeof(file_header_t));
 
     if (!is_device_ptr) {
-        // Direct read into host memory
         file.read(reinterpret_cast<char*>(out_ptr), n_rows * n_cols * sizeof(S));
         if (file.gcount() != static_cast<std::streamsize>(n_rows * n_cols * sizeof(S))) {
             throw std::runtime_error("Failed to read data content from: " + filename);
         }
     } else {
-        // Chunked read and copy to device
         std::vector<S> chunk_host;
         for (int64_t row_offset = 0; row_offset < n_rows; row_offset += DEFAULT_CHUNK_SIZE) {
             int64_t current_chunk_rows = std::min(DEFAULT_CHUNK_SIZE, n_rows - row_offset);
             size_t total_chunk_elements = current_chunk_rows * n_cols;
-            
             chunk_host.resize(total_chunk_elements);
             file.read(reinterpret_cast<char*>(chunk_host.data()), total_chunk_elements * sizeof(S));
-            if (file.gcount() != static_cast<std::streamsize>(total_chunk_elements * sizeof(S))) {
-                throw std::runtime_error("Failed to read data content from: " + filename);
-            }
-
             raft::copy(out_ptr + (row_offset * n_cols), chunk_host.data(), total_chunk_elements, raft::resource::get_cuda_stream(res));
         }
         raft::resource::sync_stream(res);
     }
+}
+
+/**
+ * @brief Internal helper to perform chunked quantization or conversion from datafile to a raw pointer.
+ */
+template <typename S, typename T, bool DoQuantize>
+void load_matrix_chunked_ptr(const raft::resources& res, const std::string& filename, const file_header_t& header, T* out_ptr, bool is_device_ptr) {
+    int64_t n_rows = static_cast<int64_t>(header.count);
+    int64_t n_cols = static_cast<int64_t>(header.dimension);
+    if (n_rows == 0 || n_cols == 0) return;
+
+    std::ifstream file(filename, std::ios::binary);
+    file.seekg(sizeof(file_header_t));
+
+    scalar_quantizer_t<S> quantizer;
+    if constexpr (DoQuantize) {
+        int64_t n_train = std::min(n_rows, static_cast<int64_t>(500));
+        std::vector<S> train_host(n_train * n_cols);
+        file.read(reinterpret_cast<char*>(train_host.data()), train_host.size() * sizeof(S));
+        auto train_device = raft::make_device_matrix<S, int64_t>(res, n_train, n_cols);
+        raft::copy(train_device.data_handle(), train_host.data(), train_host.size(), raft::resource::get_cuda_stream(res));
+        quantizer.train(res, train_device.view());
+        file.seekg(sizeof(file_header_t));
+    }
+
+    std::vector<S> chunk_host;
+    auto chunk_device_src = raft::make_device_matrix<S, int64_t>(res, DEFAULT_CHUNK_SIZE, n_cols);
+    
+    for (int64_t row_offset = 0; row_offset < n_rows; row_offset += DEFAULT_CHUNK_SIZE) {
+        int64_t current_chunk_rows = std::min(DEFAULT_CHUNK_SIZE, n_rows - row_offset);
+        size_t total_chunk_elements = current_chunk_rows * n_cols;
+        chunk_host.resize(total_chunk_elements);
+        file.read(reinterpret_cast<char*>(chunk_host.data()), total_chunk_elements * sizeof(S));
+        raft::copy(chunk_device_src.data_handle(), chunk_host.data(), total_chunk_elements, raft::resource::get_cuda_stream(res));
+        
+        auto current_chunk_src_view = raft::make_device_matrix_view<const S, int64_t>(chunk_device_src.data_handle(), current_chunk_rows, n_cols);
+
+        if constexpr (DoQuantize) {
+            quantizer.template transform<T>(res, current_chunk_src_view, out_ptr + (row_offset * n_cols), is_device_ptr);
+        } else {
+            if (is_device_ptr) {
+                auto out_chunk_view = raft::make_device_matrix_view<T, int64_t>(out_ptr + (row_offset * n_cols), current_chunk_rows, n_cols);
+                raft::copy(res, out_chunk_view, current_chunk_src_view);
+            } else {
+                auto out_chunk_view = raft::make_host_matrix_view<T, int64_t>(out_ptr + (row_offset * n_cols), current_chunk_rows, n_cols);
+                raft::copy(res, out_chunk_view, current_chunk_src_view);
+            }
+        }
+    }
+    raft::resource::sync_stream(res);
 }
 
 } // namespace detail

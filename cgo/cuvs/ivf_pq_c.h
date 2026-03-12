@@ -48,8 +48,23 @@ gpu_ivf_pq_c gpu_ivf_pq_load_file(const char* filename, uint32_t dimension, dist
                                       const int* devices, int device_count, uint32_t nthread, 
                                       distribution_mode_t dist_mode, quantization_t qtype, void* errmsg);
 
+// Constructor for an empty index (pre-allocates)
+gpu_ivf_pq_c gpu_ivf_pq_new_empty(uint64_t total_count, uint32_t dimension, distance_type_t metric, 
+                                       ivf_pq_build_params_t build_params,
+                                       const int* devices, int device_count, uint32_t nthread, 
+                                       distribution_mode_t dist_mode, quantization_t qtype, void* errmsg);
+
+// Add chunk of data (same type as index quantization)
+void gpu_ivf_pq_add_chunk(gpu_ivf_pq_c index_c, const void* chunk_data, uint64_t chunk_count, uint64_t row_offset, void* errmsg);
+
+// Add chunk of data (from float, with on-the-fly quantization if needed)
+void gpu_ivf_pq_add_chunk_float(gpu_ivf_pq_c index_c, const float* chunk_data, uint64_t chunk_count, uint64_t row_offset, void* errmsg);
+
 // Destructor
 void gpu_ivf_pq_destroy(gpu_ivf_pq_c index_c, void* errmsg);
+
+// Start function (initializes worker and resources)
+void gpu_ivf_pq_start(gpu_ivf_pq_c index_c, void* errmsg);
 
 // Load function (actually triggers the build/load logic)
 void gpu_ivf_pq_load(gpu_ivf_pq_c index_c, void* errmsg);
@@ -87,6 +102,9 @@ uint32_t gpu_ivf_pq_get_rot_dim(gpu_ivf_pq_c index_c);
 
 // Gets the extended dimension of the index (including norms and padding)
 uint32_t gpu_ivf_pq_get_dim_ext(gpu_ivf_pq_c index_c);
+
+// Gets the flattened dataset (for debugging)
+void gpu_ivf_pq_get_dataset(gpu_ivf_pq_c index_c, void* out_data);
 
 #ifdef __cplusplus
 }
