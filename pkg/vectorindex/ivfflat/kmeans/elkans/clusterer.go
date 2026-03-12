@@ -107,27 +107,40 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 	allocator := malloc.NewCAllocator()
 	var deallocators []malloc.Deallocator
 
-	allocSlice := func(size uint64) []byte {
+	allocSlice := func(size uint64) ([]byte, error) {
 		slice, deallocator, err := allocator.Allocate(size, malloc.NoClear)
 		if err != nil {
-			panic(err) // OOM
+			for _, d := range deallocators {
+				d.Deallocate()
+			}
+			deallocators = nil
+			return nil, err // OOM
 		}
 		deallocators = append(deallocators, deallocator)
-		return slice
+		return slice, nil
 	}
 
 	// allocate assignments
-	assignmentsBytes := allocSlice(uint64(len(vectors) * int(util.UnsafeSizeOf[int]())))
+	assignmentsBytes, err := allocSlice(uint64(len(vectors) * int(util.UnsafeSizeOf[int]())))
+	if err != nil {
+		return nil, err
+	}
 	assignments := util.UnsafeSliceCastToLength[int](assignmentsBytes, len(vectors))
 	for i := range assignments {
 		assignments[i] = 0
 	}
 
 	// allocate metas
-	metasBytes := allocSlice(uint64(len(vectors) * int(util.UnsafeSizeOf[vectorMeta[T]]())))
+	metasBytes, err := allocSlice(uint64(len(vectors) * int(util.UnsafeSizeOf[vectorMeta[T]]())))
+	if err != nil {
+		return nil, err
+	}
 	metas := util.UnsafeSliceCastToLength[vectorMeta[T]](metasBytes, len(vectors))
 	for i := range metas {
-		lowerBytes := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[T]()))
+		lowerBytes, err := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[T]()))
+		if err != nil {
+			return nil, err
+		}
 		lower := util.UnsafeSliceCastToLength[T](lowerBytes, clusterCnt)
 		for j := range lower {
 			lower[j] = 0
@@ -140,15 +153,24 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 	}
 
 	// allocate centroidDist
-	centroidDistBytes := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[[]T]()))
+	centroidDistBytes, err := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[[]T]()))
+	if err != nil {
+		return nil, err
+	}
 	centroidDist := util.UnsafeSliceCastToLength[[]T](centroidDistBytes, clusterCnt)
 	for i := range centroidDist {
-		distBytes := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[T]()))
+		distBytes, err := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[T]()))
+		if err != nil {
+			return nil, err
+		}
 		centroidDist[i] = util.UnsafeSliceCastToLength[T](distBytes, clusterCnt)
 	}
 
 	// allocate minCentroidDist
-	minCentroidDistBytes := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[T]()))
+	minCentroidDistBytes, err := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[T]()))
+	if err != nil {
+		return nil, err
+	}
 	minCentroidDist := util.UnsafeSliceCastToLength[T](minCentroidDistBytes, clusterCnt)
 
 	distanceFunction, normalize, err := metric.ResolveKmeansDistanceFn[T](distanceType, spherical)
@@ -165,27 +187,45 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 	}
 
 	// allocate centroids
-	centroidsBytes := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[[]T]()))
+	centroidsBytes, err := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[[]T]()))
+	if err != nil {
+		return nil, err
+	}
 	centroids := util.UnsafeSliceCastToLength[[]T](centroidsBytes, clusterCnt)
 	for i := range centroids {
-		cBytes := allocSlice(uint64(len(vectors[0])) * uint64(util.UnsafeSizeOf[T]()))
+		cBytes, err := allocSlice(uint64(len(vectors[0])) * uint64(util.UnsafeSizeOf[T]()))
+		if err != nil {
+			return nil, err
+		}
 		centroids[i] = util.UnsafeSliceCastToLength[T](cBytes, len(vectors[0]))
 	}
 
 	// allocate nextCentroids
-	nextCentroidsBytes := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[[]T]()))
+	nextCentroidsBytes, err := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[[]T]()))
+	if err != nil {
+		return nil, err
+	}
 	nextCentroids := util.UnsafeSliceCastToLength[[]T](nextCentroidsBytes, clusterCnt)
 	for i := range nextCentroids {
-		ncBytes := allocSlice(uint64(len(vectors[0])) * uint64(util.UnsafeSizeOf[T]()))
+		ncBytes, err := allocSlice(uint64(len(vectors[0])) * uint64(util.UnsafeSizeOf[T]()))
+		if err != nil {
+			return nil, err
+		}
 		nextCentroids[i] = util.UnsafeSliceCastToLength[T](ncBytes, len(vectors[0]))
 	}
 
 	// allocate membersCount
-	membersCountBytes := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[int64]()))
+	membersCountBytes, err := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[int64]()))
+	if err != nil {
+		return nil, err
+	}
 	membersCount := util.UnsafeSliceCastToLength[int64](membersCountBytes, clusterCnt)
 
 	// allocate centroidShiftDist
-	centroidShiftDistBytes := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[T]()))
+	centroidShiftDistBytes, err := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[T]()))
+	if err != nil {
+		return nil, err
+	}
 	centroidShiftDist := util.UnsafeSliceCastToLength[T](centroidShiftDistBytes, clusterCnt)
 
 	return &ElkanClusterer[T]{
