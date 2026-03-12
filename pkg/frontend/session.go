@@ -146,8 +146,9 @@ type Session struct {
 
 	errInfo *errInfo
 
-	cache     *privilegeCache
-	ruleCache map[string]string // rewrite rule cache, nil means not loaded
+	cache       *privilegeCache
+	ruleCache   map[string]string // rewrite rule cache, nil means not loaded
+	ruleCacheMu sync.RWMutex      // protects ruleCache
 
 	mu sync.Mutex
 
@@ -946,7 +947,11 @@ func (ses *Session) InvalidatePrivilegeCache() {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.cache.invalidate()
+
+	// Clear rule cache with proper locking
+	ses.ruleCacheMu.Lock()
 	ses.ruleCache = nil
+	ses.ruleCacheMu.Unlock()
 }
 
 // GetBackgroundExec generates a background executor

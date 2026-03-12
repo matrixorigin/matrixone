@@ -79,21 +79,36 @@ func rewriteSQL(ctx context.Context, ses *Session, sql string) (string, error) {
 		return sql, nil
 	}
 
-	if ses.ruleCache == nil {
+	// Check cache with read lock first
+	ses.ruleCacheMu.RLock()
+	cache := ses.ruleCache
+	ses.ruleCacheMu.RUnlock()
+
+	if cache == nil {
+		// Load rules if cache is empty
 		rules, err := loadRuleCache(ctx, ses)
 		if err != nil {
 			// Log the error for debugging
 			ses.Error(ctx, "failed to load rewrite rule cache", logutil.ErrorField(err))
 			return sql, nil
 		}
-		ses.ruleCache = rules
+
+		// Update cache with write lock and double-check
+		ses.ruleCacheMu.Lock()
+		if ses.ruleCache == nil {
+			ses.ruleCache = rules
+			cache = rules
+		} else {
+			cache = ses.ruleCache
+		}
+		ses.ruleCacheMu.Unlock()
 	}
 
-	if len(ses.ruleCache) == 0 {
+	if len(cache) == 0 {
 		return sql, nil
 	}
 
-	hint, err := formatRewriteHint(ctx, ses.ruleCache)
+	hint, err := formatRewriteHint(ctx, cache)
 	if err != nil {
 		return sql, nil
 	}
@@ -201,6 +216,14 @@ func handleAlterRoleAddRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRole
 		return err
 	}
 
+	// Invalidate current session's rule cache after successful rule modification
+	// Note: This only affects the current session. Other sessions using the same role
+	// will need to reconnect or execute SET ROLE to refresh their cache.
+	// TODO: Implement cross-session cache invalidation for better consistency.
+	ses.ruleCacheMu.Lock()
+	ses.ruleCache = nil
+	ses.ruleCacheMu.Unlock()
+
 	return err
 }
 
@@ -261,6 +284,14 @@ func handleAlterRoleDropRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRol
 	if err = bh.Exec(ctx, deleteSQL); err != nil {
 		return err
 	}
+
+	// Invalidate current session's rule cache after successful rule modification
+	// Note: This only affects the current session. Other sessions using the same role
+	// will need to reconnect or execute SET ROLE to refresh their cache.
+	// TODO: Implement cross-session cache invalidation for better consistency.
+	ses.ruleCacheMu.Lock()
+	ses.ruleCache = nil
+	ses.ruleCacheMu.Unlock()
 
 	return err
 }

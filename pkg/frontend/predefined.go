@@ -385,7 +385,7 @@ var (
 	MoCatalogMoRoleRuleDDL = fmt.Sprintf("create table %s.%s ("+
 		"role_id int signed,"+
 		"rule_name varchar(200),"+
-		"`rule` varchar(500),"+
+		"`rule` text,"+
 		"primary key(role_id, rule_name)"+
 		")", catalog.MO_CATALOG, catalog.MO_ROLE_RULE)
 )
