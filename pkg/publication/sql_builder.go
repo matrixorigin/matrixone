@@ -148,21 +148,21 @@ const (
 		`WHERE task_id = '%s'`
 
 	// Sync protection SQL templates using mo_ctl internal commands
-	// GC status query: SELECT mo_ctl('dn', 'gc_status', '')
+	// GC status query: SELECT mo_ctl('dn', 'diskcleaner', 'gc_status')
 	// Returns: {"running": bool, "protections": int, "ts": int64}
-	PublicationGCStatusSqlTemplate = `SELECT mo_ctl('dn', 'gc_status', '')`
+	PublicationGCStatusSqlTemplate = `SELECT mo_ctl('dn', 'diskcleaner', 'gc_status')`
 
-	// Register sync protection: SELECT mo_ctl('dn', 'register_sync_protection', '{"job_id": "xxx", "bf": "base64...", "ts": 123, "ttl_expire_ts": 456, "task_id": "taskID-123"}')
+	// Register sync protection: SELECT mo_ctl('dn', 'diskcleaner', 'register_sync_protection.{"job_id": "xxx", "bf": "base64...", "ts": 123, "valid_ts": 456, "task_id": "taskID-123"}')
 	// Returns: {"status": "ok"} or {"status": "error", "code": "ErrGCRunning", "message": "..."}
-	PublicationRegisterSyncProtectionSqlTemplate = `SELECT mo_ctl('dn', 'register_sync_protection', '{"job_id": "%s", "bf": "%s", "ts": %d, "ttl_expire_ts": %d, "task_id": "%s"}')`
+	PublicationRegisterSyncProtectionSqlTemplate = `SELECT mo_ctl('dn', 'diskcleaner', 'register_sync_protection.{"job_id": "%s", "bf": "%s", "ts": %d, "valid_ts": %d, "task_id": "%s"}')`
 
-	// Renew sync protection: SELECT mo_ctl('dn', 'renew_sync_protection', '{"job_id": "xxx", "ttl_expire_ts": 456}')
+	// Renew sync protection: SELECT mo_ctl('dn', 'diskcleaner', 'renew_sync_protection.{"job_id": "xxx", "valid_ts": 456}')
 	// Returns: {"status": "ok"} or {"status": "error", "code": "ErrProtectionNotFound", "message": "..."}
-	PublicationRenewSyncProtectionSqlTemplate = `SELECT mo_ctl('dn', 'renew_sync_protection', '{"job_id": "%s", "ttl_expire_ts": %d}')`
+	PublicationRenewSyncProtectionSqlTemplate = `SELECT mo_ctl('dn', 'diskcleaner', 'renew_sync_protection.{"job_id": "%s", "valid_ts": %d}')`
 
-	// Unregister sync protection: SELECT mo_ctl('dn', 'unregister_sync_protection', '{"job_id": "xxx"}')
+	// Unregister sync protection: SELECT mo_ctl('dn', 'diskcleaner', 'unregister_sync_protection.{"job_id": "xxx"}')
 	// Returns: {"status": "ok"}
-	PublicationUnregisterSyncProtectionSqlTemplate = `SELECT mo_ctl('dn', 'unregister_sync_protection', '{"job_id": "%s"}')`
+	PublicationUnregisterSyncProtectionSqlTemplate = `SELECT mo_ctl('dn', 'diskcleaner', 'unregister_sync_protection.{"job_id": "%s"}')`
 )
 
 const (
