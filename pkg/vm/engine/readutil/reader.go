@@ -124,6 +124,9 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 			mixin.columns.seqnums[i] = objectio.SEQNUM_ROWID
 			mixin.columns.colTypes[i] = objectio.RowidType
 			mixin.columns.phyAddrPos = i
+		} else if strings.EqualFold(column, objectio.DefaultCommitTS_Attr) {
+			mixin.columns.seqnums[i] = objectio.SEQNUM_COMMITTS
+			mixin.columns.colTypes[i] = types.T_TS.ToType()
 		} else {
 			if plan2.GetSortOrderByName(mixin.tableDef, column) == 0 {
 				mixin.columns.indexOfFirstSortedColumn = i
