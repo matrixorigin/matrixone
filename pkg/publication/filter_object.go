@@ -86,7 +86,7 @@ func FilterObject(
 	ttlChecker TTLChecker,
 ) (*FilterObjectResult, error) {
 	// Check TTL before processing
-	if ttlChecker != nil && ttlChecker() {
+	if ttlChecker != nil && !ttlChecker() {
 		return nil, ErrSyncProtectionTTLExpired
 	}
 
@@ -136,7 +136,7 @@ func filterAppendableObject(
 	ttlChecker TTLChecker,
 ) (*FilterObjectResult, error) {
 	// Check TTL before processing
-	if ttlChecker != nil && ttlChecker() {
+	if ttlChecker != nil && !ttlChecker() {
 		return nil, ErrSyncProtectionTTLExpired
 	}
 
@@ -150,7 +150,7 @@ func filterAppendableObject(
 	}
 
 	// Check TTL after getting object
-	if ttlChecker != nil && ttlChecker() {
+	if ttlChecker != nil && !ttlChecker() {
 		return nil, ErrSyncProtectionTTLExpired
 	}
 
@@ -333,7 +333,7 @@ func filterNonAppendableObject(
 	ttlChecker TTLChecker,
 ) (objectio.ObjectStats, error) {
 	// Check TTL before processing
-	if ttlChecker != nil && ttlChecker() {
+	if ttlChecker != nil && !ttlChecker() {
 		return objectio.ObjectStats{}, ErrSyncProtectionTTLExpired
 	}
 
@@ -347,7 +347,7 @@ func filterNonAppendableObject(
 	}
 
 	// Check TTL after getting object
-	if ttlChecker != nil && ttlChecker() {
+	if ttlChecker != nil && !ttlChecker() {
 		return objectio.ObjectStats{}, ErrSyncProtectionTTLExpired
 	}
 
