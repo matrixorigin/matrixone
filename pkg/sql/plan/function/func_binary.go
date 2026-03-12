@@ -1987,6 +1987,625 @@ func FieldString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ 
 	return nil
 }
 
+func eltCheck(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) < 2 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	shouldCast := false
+	castTypes := make([]types.Type, len(inputs))
+
+	// ELT accepts numeric and string-convertible indexes.
+	// Keep uint64/bit as-is so values greater than math.MaxInt64 can still be treated as out-of-range and return NULL.
+	if inputs[0].Oid == types.T_int64 || inputs[0].Oid == types.T_uint64 || inputs[0].Oid == types.T_bit || inputs[0].Oid == types.T_any {
+		castTypes[0] = inputs[0]
+	} else if inputs[0].Oid == types.T_bool || inputs[0].Oid.IsInteger() || inputs[0].Oid.IsFloat() ||
+		inputs[0].Oid == types.T_decimal64 || inputs[0].Oid == types.T_decimal128 {
+		shouldCast = true
+		castTypes[0] = types.T_int64.ToType()
+	} else {
+		c, _ := tryToMatch([]types.Type{inputs[0]}, []types.T{types.T_int64})
+		if c == matchFailed {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		shouldCast = true
+		castTypes[0] = types.T_int64.ToType()
+	}
+
+	// Rest arguments must be strings
+	for i := 1; i < len(inputs); i++ {
+		if !inputs[i].Oid.IsMySQLString() && inputs[i].Oid != types.T_any {
+			c, _ := tryToMatch([]types.Type{inputs[i]}, []types.T{types.T_varchar})
+			if c == matchFailed {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			if c == matchByCast {
+				shouldCast = true
+				castTypes[i] = types.T_varchar.ToType()
+			} else {
+				castTypes[i] = inputs[i]
+			}
+		} else {
+			castTypes[i] = inputs[i]
+		}
+	}
+
+	if shouldCast {
+		return newCheckResultWithCast(0, castTypes)
+	}
+	return newCheckResultWithSuccess(0)
+}
+
+// Elt: ELT(N, str1, str2, str3, ...) - Returns str1 if N = 1, str2 if N = 2, and so on.
+// Returns NULL if N is less than 1, greater than the number of strings, or NULL.
+func Elt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	// Rest arguments are strings
+	strParams := make([]vector.FunctionParameterWrapper[types.Varlena], len(ivecs)-1)
+	for i := 1; i < len(ivecs); i++ {
+		strParams[i-1] = vector.GenerateFunctionStrParameter(ivecs[i])
+	}
+
+	appendNull := func() error {
+		return rs.AppendBytes(nil, true)
+	}
+	appendValue := func(row uint64, idx uint64) error {
+		str, null := strParams[idx].GetStrValue(row)
+		if null {
+			return appendNull()
+		}
+		return rs.AppendBytes(str, false)
+	}
+
+	maxIndex := uint64(len(strParams))
+	switch ivecs[0].GetType().Oid {
+	case types.T_uint64, types.T_bit:
+		nParam := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
+		for i := uint64(0); i < uint64(length); i++ {
+			if selectList != nil && selectList.Contains(i) {
+				if err := appendNull(); err != nil {
+					return err
+				}
+				continue
+			}
+
+			n, null := nParam.GetValue(i)
+			if null || n < 1 || n > maxIndex {
+				if err := appendNull(); err != nil {
+					return err
+				}
+				continue
+			}
+
+			if err := appendValue(i, n-1); err != nil {
+				return err
+			}
+		}
+	default:
+		nParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+		for i := uint64(0); i < uint64(length); i++ {
+			if selectList != nil && selectList.Contains(i) {
+				if err := appendNull(); err != nil {
+					return err
+				}
+				continue
+			}
+
+			n, null := nParam.GetValue(i)
+			if null || n < 1 || n > int64(maxIndex) {
+				if err := appendNull(); err != nil {
+					return err
+				}
+				continue
+			}
+
+			if err := appendValue(i, uint64(n-1)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func makeSetCheck(overloads []overload, inputs []types.Type) checkResult {
+	// MAKE_SET(bits, str1, str2, ...)
+	// Minimum 2 arguments (bits + at least one string)
+	if len(inputs) < 2 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	shouldCast := false
+	castTypes := make([]types.Type, len(inputs))
+
+	// First argument (bits) must be numeric
+	isNumeric := inputs[0].Oid.IsInteger() || inputs[0].Oid.IsFloat() || inputs[0].Oid == types.T_decimal64 || inputs[0].Oid == types.T_decimal128 || inputs[0].Oid == types.T_bit
+	if !isNumeric && inputs[0].Oid != types.T_any {
+		c, _ := tryToMatch([]types.Type{inputs[0]}, []types.T{types.T_int64})
+		if c == matchFailed {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		if c == matchByCast {
+			shouldCast = true
+			castTypes[0] = types.T_int64.ToType()
+		} else {
+			castTypes[0] = inputs[0]
+		}
+	} else {
+		castTypes[0] = inputs[0]
+	}
+
+	// Rest arguments must be strings
+	for i := 1; i < len(inputs); i++ {
+		if !inputs[i].Oid.IsMySQLString() && inputs[i].Oid != types.T_any {
+			c, _ := tryToMatch([]types.Type{inputs[i]}, []types.T{types.T_varchar})
+			if c == matchFailed {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			if c == matchByCast {
+				shouldCast = true
+				castTypes[i] = types.T_varchar.ToType()
+			} else {
+				castTypes[i] = inputs[i]
+			}
+		} else {
+			castTypes[i] = inputs[i]
+		}
+	}
+
+	if shouldCast {
+		return newCheckResultWithCast(0, castTypes)
+	}
+	return newCheckResultWithSuccess(0)
+}
+
+// MakeSet: MAKE_SET(bits, str1, str2, ...) - Returns a set value (a string containing substrings separated by ',' characters) consisting of the strings that have the corresponding bit in bits set.
+func MakeSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	// First argument: bits (numeric) - handle different numeric types
+	bitsType := ivecs[0].GetType().Oid
+	var getBitsValue func(uint64) (uint64, bool)
+
+	// Create appropriate parameter wrapper based on type (once, outside loop)
+	switch bitsType {
+	case types.T_int8:
+		param := vector.GenerateFunctionFixedTypeParameter[int8](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_int16:
+		param := vector.GenerateFunctionFixedTypeParameter[int16](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_int32:
+		param := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_int64:
+		param := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_uint8:
+		param := vector.GenerateFunctionFixedTypeParameter[uint8](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_uint16:
+		param := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_uint32:
+		param := vector.GenerateFunctionFixedTypeParameter[uint32](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_uint64:
+		param := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return val, false
+		}
+	case types.T_float32:
+		param := vector.GenerateFunctionFixedTypeParameter[float32](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(int64(val)), false
+		}
+	case types.T_float64:
+		param := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(int64(val)), false
+		}
+	default:
+		// Fallback to int64
+		param := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	}
+
+	// Rest arguments are strings
+	strParams := make([]vector.FunctionParameterWrapper[types.Varlena], len(ivecs)-1)
+	for i := 1; i < len(ivecs); i++ {
+		strParams[i-1] = vector.GenerateFunctionStrParameter(ivecs[i])
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Extract bits value using the appropriate getter
+		bitsUint, nullBits := getBitsValue(i)
+		if nullBits {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Build the result string by checking each bit position
+		var parts []string
+		for j := 0; j < len(strParams); j++ {
+			// Check if bit j is set (0-based, so bit 0 corresponds to str1, bit 1 to str2, etc.)
+			if (bitsUint>>uint(j))&1 == 1 {
+				str, null := strParams[j].GetStrValue(i)
+				if !null {
+					parts = append(parts, functionUtil.QuickBytesToStr(str))
+				}
+			}
+		}
+
+		// Join with comma separator
+		resultStr := strings.Join(parts, ",")
+		if err := rs.AppendBytes([]byte(resultStr), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func exportSetCheck(overloads []overload, inputs []types.Type) checkResult {
+	// EXPORT_SET(bits, on, off[, separator[, number_of_bits]])
+	// Minimum 3 arguments, maximum 5 arguments
+	if len(inputs) < 3 || len(inputs) > 5 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	shouldCast := false
+	castTypes := make([]types.Type, len(inputs))
+
+	// First argument (bits) must be numeric
+	// Check if it's a numeric type (integer, float, or decimal)
+	isNumeric := inputs[0].Oid.IsInteger() || inputs[0].Oid.IsFloat() || inputs[0].Oid == types.T_decimal64 || inputs[0].Oid == types.T_decimal128 || inputs[0].Oid == types.T_bit
+	if !isNumeric && inputs[0].Oid != types.T_any {
+		c, _ := tryToMatch([]types.Type{inputs[0]}, []types.T{types.T_int64})
+		if c == matchFailed {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		if c == matchByCast {
+			shouldCast = true
+			castTypes[0] = types.T_int64.ToType()
+		} else {
+			castTypes[0] = inputs[0]
+		}
+	} else {
+		castTypes[0] = inputs[0]
+	}
+
+	// Second and third arguments (on, off) must be strings
+	for i := 1; i <= 2; i++ {
+		if !inputs[i].Oid.IsMySQLString() && inputs[i].Oid != types.T_any {
+			c, _ := tryToMatch([]types.Type{inputs[i]}, []types.T{types.T_varchar})
+			if c == matchFailed {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			if c == matchByCast {
+				shouldCast = true
+				castTypes[i] = types.T_varchar.ToType()
+			} else {
+				castTypes[i] = inputs[i]
+			}
+		} else {
+			castTypes[i] = inputs[i]
+		}
+	}
+
+	// Optional fourth argument (separator) must be string
+	if len(inputs) >= 4 {
+		if !inputs[3].Oid.IsMySQLString() && inputs[3].Oid != types.T_any {
+			c, _ := tryToMatch([]types.Type{inputs[3]}, []types.T{types.T_varchar})
+			if c == matchFailed {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			if c == matchByCast {
+				shouldCast = true
+				castTypes[3] = types.T_varchar.ToType()
+			} else {
+				castTypes[3] = inputs[3]
+			}
+		} else {
+			castTypes[3] = inputs[3]
+		}
+	}
+
+	// Optional fifth argument (number_of_bits) must be numeric
+	if len(inputs) >= 5 {
+		if !inputs[4].Oid.IsInteger() && inputs[4].Oid != types.T_any {
+			c, _ := tryToMatch([]types.Type{inputs[4]}, []types.T{types.T_int64})
+			if c == matchFailed {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			if c == matchByCast {
+				shouldCast = true
+				castTypes[4] = types.T_int64.ToType()
+			} else {
+				castTypes[4] = inputs[4]
+			}
+		} else {
+			castTypes[4] = inputs[4]
+		}
+	}
+
+	if shouldCast {
+		return newCheckResultWithCast(0, castTypes)
+	}
+	return newCheckResultWithSuccess(0)
+}
+
+// ExportSet: EXPORT_SET(bits, on, off[, separator[, number_of_bits]]) - Returns a string such that for every bit set in the value bits, you get an on string and for every bit not set, you get an off string.
+func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	// First argument: bits (numeric) - handle different numeric types
+	bitsType := ivecs[0].GetType().Oid
+	var bitsUint uint64
+	var nullBits bool
+
+	// Create appropriate parameter wrapper based on type (once, outside loop)
+	var getBitsValue func(uint64) (uint64, bool)
+	switch bitsType {
+	case types.T_int8:
+		param := vector.GenerateFunctionFixedTypeParameter[int8](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_int16:
+		param := vector.GenerateFunctionFixedTypeParameter[int16](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_int32:
+		param := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_int64:
+		param := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_uint8:
+		param := vector.GenerateFunctionFixedTypeParameter[uint8](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_uint16:
+		param := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_uint32:
+		param := vector.GenerateFunctionFixedTypeParameter[uint32](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_uint64:
+		param := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return val, false
+		}
+	case types.T_float32:
+		param := vector.GenerateFunctionFixedTypeParameter[float32](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(int64(val)), false
+		}
+	case types.T_float64:
+		param := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(int64(val)), false
+		}
+	default:
+		// Fallback to int64
+		param := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	}
+
+	// Second argument: on (string)
+	onParam := vector.GenerateFunctionStrParameter(ivecs[1])
+
+	// Third argument: off (string)
+	offParam := vector.GenerateFunctionStrParameter(ivecs[2])
+
+	// Optional fourth argument: separator (string, default ',')
+	var separatorParam vector.FunctionParameterWrapper[types.Varlena]
+	separatorProvided := len(ivecs) > 3
+	if separatorProvided {
+		separatorParam = vector.GenerateFunctionStrParameter(ivecs[3])
+	}
+
+	// Optional fifth argument: number_of_bits (int64, default 64)
+	var numberOfBitsParam vector.FunctionParameterWrapper[int64]
+	numberOfBitsProvided := len(ivecs) > 4
+	if numberOfBitsProvided {
+		numberOfBitsParam = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[4])
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Extract bits value using the appropriate getter
+		bitsUint, nullBits = getBitsValue(i)
+
+		if nullBits {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		on, nullOn := onParam.GetStrValue(i)
+		off, nullOff := offParam.GetStrValue(i)
+		if nullOn || nullOff {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Get separator (default ',')
+		separator := ","
+		if separatorProvided && !ivecs[3].IsConstNull() {
+			sep, nullSep := separatorParam.GetStrValue(i)
+			if !nullSep {
+				separator = functionUtil.QuickBytesToStr(sep)
+			}
+		}
+
+		// Get number_of_bits (default 64, max 64)
+		numberOfBits := int64(64)
+		if numberOfBitsProvided && !ivecs[4].IsConstNull() {
+			nBits, nullNBits := numberOfBitsParam.GetValue(i)
+			if !nullNBits {
+				if nBits < 1 {
+					numberOfBits = 1
+				} else if nBits > 64 {
+					numberOfBits = 64
+				} else {
+					numberOfBits = nBits
+				}
+			}
+		}
+
+		// Build the result string
+		var parts []string
+		for j := int64(0); j < numberOfBits; j++ {
+			if (bitsUint>>uint(j))&1 == 1 {
+				parts = append(parts, functionUtil.QuickBytesToStr(on))
+			} else {
+				parts = append(parts, functionUtil.QuickBytesToStr(off))
+			}
+		}
+
+		resultStr := strings.Join(parts, separator)
+		if err := rs.AppendBytes([]byte(resultStr), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func formatCheck(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) > 1 {
 		// if the first param's type is time type. return failed.
