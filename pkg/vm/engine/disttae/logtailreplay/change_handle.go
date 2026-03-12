@@ -250,7 +250,6 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 				logutil.Info("ChangesHandle-FileNotFound",
 					zap.String("err", err.Error()))
-				return moerr.NewErrStaleReadNoCtx(types.TS{}.ToString(), h.base.changesHandle.start.ToString())
 			}
 			h.base.changesHandle.readDuration += time.Since(t0)
 			return
@@ -384,7 +383,6 @@ func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 				logutil.Info("ChangesHandle-FileNotFound",
 					zap.String("err", err.Error()))
-				return moerr.NewErrStaleReadNoCtx(types.TS{}.ToString(), h.p.changesHandle.start.ToString())
 			}
 			h.p.changesHandle.readDuration += time.Since(t0)
 			return
@@ -878,6 +876,13 @@ func getObjectsFromCheckpointEntries(
 	return
 }
 
+// NewChangesHandler creates a ChangeHandler that reads changes from the partition state.
+//
+// Error contract:
+//   - Returns ErrStaleRead if state.start > start (logical range not covered).
+//   - Returns ErrFileNotFound if a referenced object file has been physically
+//     deleted by GC. Callers should treat this as recoverable and fall back
+//     to the snapshot read path (reading from checkpoint files).
 func NewChangesHandler(
 	ctx context.Context,
 	state *PartitionState,
@@ -904,6 +909,12 @@ func NewChangesHandler(
 		mp:            mp,
 		scheduler:     tasks.NewParallelJobScheduler(LoadParallism),
 	}
+	defer func() {
+		if err != nil {
+			changeHandle.scheduler.Stop()
+			changeHandle = nil
+		}
+	}()
 	changeHandle.tombstoneHandle, err = NewBaseHandler(state, changeHandle, start, end, mp, true, fs, ctx)
 	if err != nil {
 		return
@@ -921,10 +932,17 @@ func NewChangesHandler(
 		return
 	}
 	err = changeHandle.tombstoneHandle.init(ctx, changeHandle.quick, mp)
+	if err != nil {
+		changeHandle.dataHandle.Close()
+		changeHandle.tombstoneHandle.Close()
+	}
 	return
 }
 
 func (p *ChangeHandler) Close() error {
+	if p == nil {
+		return nil
+	}
 	p.dataHandle.Close()
 	p.tombstoneHandle.Close()
 	p.scheduler.Stop()
