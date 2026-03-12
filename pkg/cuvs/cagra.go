@@ -229,7 +229,7 @@ func NewGpuCagraEmpty[T VectorType](totalCount uint64, dimension uint32, metric 
 }
 
 // AddChunk adds a chunk of data to the pre-allocated buffer.
-func (gi *GpuCagra[T]) AddChunk(chunk []T, chunkCount uint64, rowOffset uint64) error {
+func (gi *GpuCagra[T]) AddChunk(chunk []T, chunkCount uint64) error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -242,7 +242,6 @@ func (gi *GpuCagra[T]) AddChunk(chunk []T, chunkCount uint64, rowOffset uint64) 
 		gi.cCagra,
 		unsafe.Pointer(&chunk[0]),
 		C.uint64_t(chunkCount),
-		C.uint64_t(rowOffset),
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(chunk)
@@ -256,7 +255,7 @@ func (gi *GpuCagra[T]) AddChunk(chunk []T, chunkCount uint64, rowOffset uint64) 
 }
 
 // AddChunkFloat adds a chunk of float32 data, performing on-the-fly quantization if needed.
-func (gi *GpuCagra[T]) AddChunkFloat(chunk []float32, chunkCount uint64, rowOffset uint64) error {
+func (gi *GpuCagra[T]) AddChunkFloat(chunk []float32, chunkCount uint64) error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -269,7 +268,6 @@ func (gi *GpuCagra[T]) AddChunkFloat(chunk []float32, chunkCount uint64, rowOffs
 		gi.cCagra,
 		(*C.float)(&chunk[0]),
 		C.uint64_t(chunkCount),
-		C.uint64_t(rowOffset),
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(chunk)

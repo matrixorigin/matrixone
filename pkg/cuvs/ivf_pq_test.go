@@ -156,7 +156,7 @@ func TestGpuIvfPqChunked(t *testing.T) {
 		for j := range chunk {
 			chunk[j] = val
 		}
-		err = index.AddChunkFloat(chunk, chunkSize, i)
+		err = index.AddChunkFloat(chunk, chunkSize)
 		if err != nil {
 			t.Fatalf("AddChunkFloat failed at offset %d: %v", i, err)
 		}

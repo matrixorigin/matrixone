@@ -58,10 +58,10 @@ gpu_ivf_flat_c gpu_ivf_flat_new_empty(uint64_t total_count, uint32_t dimension, 
                                            distribution_mode_t dist_mode, quantization_t qtype, void* errmsg);
 
 // Add chunk of data (same type as index quantization)
-void gpu_ivf_flat_add_chunk(gpu_ivf_flat_c index_c, const void* chunk_data, uint64_t chunk_count, uint64_t row_offset, void* errmsg);
+void gpu_ivf_flat_add_chunk(gpu_ivf_flat_c index_c, const void* chunk_data, uint64_t chunk_count, void* errmsg);
 
 // Add chunk of data (from float, with on-the-fly quantization if needed)
-void gpu_ivf_flat_add_chunk_float(gpu_ivf_flat_c index_c, const float* chunk_data, uint64_t chunk_count, uint64_t row_offset, void* errmsg);
+void gpu_ivf_flat_add_chunk_float(gpu_ivf_flat_c index_c, const float* chunk_data, uint64_t chunk_count, void* errmsg);
 
 // Save function
 void gpu_ivf_flat_save(gpu_ivf_flat_c index_c, const char* filename, void* errmsg);

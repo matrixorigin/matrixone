@@ -92,7 +92,7 @@ public:
                     cuvs::distance::DistanceType m, const ivf_pq_build_params_t& bp, 
                     const std::vector<int>& devices, uint32_t nthread, distribution_mode_t mode)
         : dimension(dimension), count(static_cast<uint32_t>(count_vectors)), metric(m), 
-          build_params(bp), dist_mode(mode), devices_(devices) {
+          build_params(bp), dist_mode(mode), devices_(devices), current_offset_(static_cast<uint32_t>(count_vectors)) {
         
         bool force_mg = (mode == DistributionMode_SHARDED || mode == DistributionMode_REPLICATED);
         worker = std::make_unique<cuvs_worker_t>(nthread, devices_, force_mg || (devices_.size() > 1));
@@ -106,7 +106,7 @@ public:
                     const ivf_pq_build_params_t& bp, const std::vector<int>& devices, 
                     uint32_t nthread, distribution_mode_t mode)
         : dimension(dimension), count(static_cast<uint32_t>(total_count)), metric(m), 
-          build_params(bp), dist_mode(mode), devices_(devices) {
+          build_params(bp), dist_mode(mode), devices_(devices), current_offset_(0) {
         
         bool force_mg = (mode == DistributionMode_SHARDED || mode == DistributionMode_REPLICATED);
         worker = std::make_unique<cuvs_worker_t>(nthread, devices_, force_mg || (devices_.size() > 1));
@@ -129,13 +129,14 @@ public:
         
         count = static_cast<uint32_t>(file_count);
         dimension = static_cast<uint32_t>(file_dim);
+        current_offset_ = count;
     }
 
     // Unified Constructor for loading from file
     gpu_ivf_pq_t(const std::string& filename, uint32_t dimension, cuvs::distance::DistanceType m, 
                     const ivf_pq_build_params_t& bp, const std::vector<int>& devices, uint32_t nthread, distribution_mode_t mode)
         : filename_(filename), dimension(dimension), metric(m), count(0), 
-          build_params(bp), dist_mode(mode), devices_(devices) {
+          build_params(bp), dist_mode(mode), devices_(devices), current_offset_(0) {
         
         bool force_mg = (mode == DistributionMode_SHARDED || mode == DistributionMode_REPLICATED);
         worker = std::make_unique<cuvs_worker_t>(nthread, devices_, force_mg || (devices_.size() > 1));
@@ -166,6 +167,11 @@ public:
     void load() {
         std::unique_lock<std::shared_mutex> lock(mutex_);
         if (is_loaded_) return;
+
+        if (filename_.empty() && current_offset_ > 0 && current_offset_ < count) {
+            count = static_cast<uint32_t>(current_offset_);
+            flattened_host_dataset.resize(count * dimension);
+        }
 
         uint64_t job_id = worker->submit(
             [&](raft_handle_wrapper_t& handle) -> std::any {
@@ -447,14 +453,16 @@ public:
         return dimension;
     }
 
-    void add_chunk(const T* chunk_data, uint64_t chunk_count, uint64_t row_offset) {
-        if (row_offset + chunk_count > count) throw std::runtime_error("offset out of bounds");
-        std::copy(chunk_data, chunk_data + (chunk_count * dimension), flattened_host_dataset.begin() + (row_offset * dimension));
+    void add_chunk(const T* chunk_data, uint64_t chunk_count) {
+        if (current_offset_ + chunk_count > count) throw std::runtime_error("offset out of bounds");
+        std::copy(chunk_data, chunk_data + (chunk_count * dimension), flattened_host_dataset.begin() + (current_offset_ * dimension));
+        current_offset_ += chunk_count;
     }
 
-    void add_chunk_float(const float* chunk_data, uint64_t chunk_count, uint64_t row_offset) {
-        if (row_offset + chunk_count > count) throw std::runtime_error("offset out of bounds");
+    void add_chunk_float(const float* chunk_data, uint64_t chunk_count) {
+        if (current_offset_ + chunk_count > count) throw std::runtime_error("offset out of bounds");
         
+        uint64_t row_offset = current_offset_;
         uint64_t job_id = worker->submit(
             [&, chunk_data, chunk_count, row_offset](raft_handle_wrapper_t& handle) -> std::any {
                 auto res = handle.get_raft_resources();
@@ -491,6 +499,7 @@ public:
         
         auto result_wait = worker->wait(job_id).get();
         if (result_wait.error) std::rethrow_exception(result_wait.error);
+        current_offset_ += chunk_count;
     }
 
     void destroy() {
@@ -499,6 +508,7 @@ public:
 
 private:
     scalar_quantizer_t<float> quantizer_;
+    uint64_t current_offset_ = 0;
 };
 
 } // namespace matrixone

@@ -189,7 +189,7 @@ func NewGpuIvfPqEmpty[T VectorType](totalCount uint64, dimension uint32, metric 
 }
 
 // AddChunk adds a chunk of data to the pre-allocated buffer.
-func (gi *GpuIvfPq[T]) AddChunk(chunk []T, chunkCount uint64, rowOffset uint64) error {
+func (gi *GpuIvfPq[T]) AddChunk(chunk []T, chunkCount uint64) error {
 	if gi.cIvfPq == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -202,7 +202,6 @@ func (gi *GpuIvfPq[T]) AddChunk(chunk []T, chunkCount uint64, rowOffset uint64) 
 		gi.cIvfPq,
 		unsafe.Pointer(&chunk[0]),
 		C.uint64_t(chunkCount),
-		C.uint64_t(rowOffset),
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(chunk)
@@ -216,7 +215,7 @@ func (gi *GpuIvfPq[T]) AddChunk(chunk []T, chunkCount uint64, rowOffset uint64) 
 }
 
 // AddChunkFloat adds a chunk of float32 data, performing on-the-fly quantization if needed.
-func (gi *GpuIvfPq[T]) AddChunkFloat(chunk []float32, chunkCount uint64, rowOffset uint64) error {
+func (gi *GpuIvfPq[T]) AddChunkFloat(chunk []float32, chunkCount uint64) error {
 	if gi.cIvfPq == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -229,7 +228,6 @@ func (gi *GpuIvfPq[T]) AddChunkFloat(chunk []float32, chunkCount uint64, rowOffs
 		gi.cIvfPq,
 		(*C.float)(&chunk[0]),
 		C.uint64_t(chunkCount),
-		C.uint64_t(rowOffset),
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(chunk)

@@ -179,15 +179,15 @@ gpu_cagra_c gpu_cagra_new_empty(uint64_t total_count, uint32_t dimension, distan
     }
 }
 
-void gpu_cagra_add_chunk(gpu_cagra_c index_c, const void* chunk_data, uint64_t chunk_count, uint64_t row_offset, void* errmsg) {
+void gpu_cagra_add_chunk(gpu_cagra_c index_c, const void* chunk_data, uint64_t chunk_count, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         auto* any = static_cast<gpu_cagra_any_t*>(index_c);
         switch (any->qtype) {
-            case Quantization_F32: static_cast<matrixone::gpu_cagra_t<float>*>(any->ptr)->add_chunk(static_cast<const float*>(chunk_data), chunk_count, row_offset); break;
-            case Quantization_F16: static_cast<matrixone::gpu_cagra_t<half>*>(any->ptr)->add_chunk(static_cast<const half*>(chunk_data), chunk_count, row_offset); break;
-            case Quantization_INT8: static_cast<matrixone::gpu_cagra_t<int8_t>*>(any->ptr)->add_chunk(static_cast<const int8_t*>(chunk_data), chunk_count, row_offset); break;
-            case Quantization_UINT8: static_cast<matrixone::gpu_cagra_t<uint8_t>*>(any->ptr)->add_chunk(static_cast<const uint8_t*>(chunk_data), chunk_count, row_offset); break;
+            case Quantization_F32: static_cast<matrixone::gpu_cagra_t<float>*>(any->ptr)->add_chunk(static_cast<const float*>(chunk_data), chunk_count); break;
+            case Quantization_F16: static_cast<matrixone::gpu_cagra_t<half>*>(any->ptr)->add_chunk(static_cast<const half*>(chunk_data), chunk_count); break;
+            case Quantization_INT8: static_cast<matrixone::gpu_cagra_t<int8_t>*>(any->ptr)->add_chunk(static_cast<const int8_t*>(chunk_data), chunk_count); break;
+            case Quantization_UINT8: static_cast<matrixone::gpu_cagra_t<uint8_t>*>(any->ptr)->add_chunk(static_cast<const uint8_t*>(chunk_data), chunk_count); break;
             default: break;
         }
     } catch (const std::exception& e) {
@@ -195,15 +195,15 @@ void gpu_cagra_add_chunk(gpu_cagra_c index_c, const void* chunk_data, uint64_t c
     }
 }
 
-void gpu_cagra_add_chunk_float(gpu_cagra_c index_c, const float* chunk_data, uint64_t chunk_count, uint64_t row_offset, void* errmsg) {
+void gpu_cagra_add_chunk_float(gpu_cagra_c index_c, const float* chunk_data, uint64_t chunk_count, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         auto* any = static_cast<gpu_cagra_any_t*>(index_c);
         switch (any->qtype) {
-            case Quantization_F32: static_cast<matrixone::gpu_cagra_t<float>*>(any->ptr)->add_chunk_float(chunk_data, chunk_count, row_offset); break;
-            case Quantization_F16: static_cast<matrixone::gpu_cagra_t<half>*>(any->ptr)->add_chunk_float(chunk_data, chunk_count, row_offset); break;
-            case Quantization_INT8: static_cast<matrixone::gpu_cagra_t<int8_t>*>(any->ptr)->add_chunk_float(chunk_data, chunk_count, row_offset); break;
-            case Quantization_UINT8: static_cast<matrixone::gpu_cagra_t<uint8_t>*>(any->ptr)->add_chunk_float(chunk_data, chunk_count, row_offset); break;
+            case Quantization_F32: static_cast<matrixone::gpu_cagra_t<float>*>(any->ptr)->add_chunk_float(chunk_data, chunk_count); break;
+            case Quantization_F16: static_cast<matrixone::gpu_cagra_t<half>*>(any->ptr)->add_chunk_float(chunk_data, chunk_count); break;
+            case Quantization_INT8: static_cast<matrixone::gpu_cagra_t<int8_t>*>(any->ptr)->add_chunk_float(chunk_data, chunk_count); break;
+            case Quantization_UINT8: static_cast<matrixone::gpu_cagra_t<uint8_t>*>(any->ptr)->add_chunk_float(chunk_data, chunk_count); break;
             default: break;
         }
     } catch (const std::exception& e) {
