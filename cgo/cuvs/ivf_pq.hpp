@@ -56,6 +56,15 @@
 namespace matrixone {
 
 /**
+ * @brief Search result containing neighbor IDs and distances.
+ * Common for all IVF-PQ instantiations.
+ */
+struct ivf_pq_search_result_t {
+    std::vector<int64_t> neighbors; // Indices of nearest neighbors
+    std::vector<float> distances;  // Distances to nearest neighbors
+};
+
+/**
  * @brief gpu_ivf_pq_t implements an IVF-PQ index that can run on a single GPU or sharded across multiple GPUs.
  * It automatically chooses between single-GPU and multi-GPU (SNMG) cuVS APIs based on the RAFT handle resources.
  */
@@ -64,6 +73,7 @@ class gpu_ivf_pq_t {
 public:
     using ivf_pq_index = cuvs::neighbors::ivf_pq::index<int64_t>;
     using mg_index = cuvs::neighbors::mg_index<ivf_pq_index, T, int64_t>;
+    using search_result_t = ivf_pq_search_result_t;
 
     std::vector<T> flattened_host_dataset;
     std::vector<int> devices_;
@@ -280,14 +290,6 @@ public:
         cuvs_task_result_t result = worker->wait(job_id).get();
         if (result.error) std::rethrow_exception(result.error);
     }
-
-    /**
-     * @brief Search result containing neighbor IDs and distances.
-     */
-    struct search_result_t {
-        std::vector<int64_t> neighbors; // Indices of nearest neighbors
-        std::vector<float> distances;  // Distances to nearest neighbors
-    };
 
     /**
      * @brief Performs IVF-PQ search for given queries.

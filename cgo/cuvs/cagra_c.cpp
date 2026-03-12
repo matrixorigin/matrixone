@@ -251,33 +251,23 @@ gpu_cagra_search_res_t gpu_cagra_search(gpu_cagra_c index_c, const void* queries
     gpu_cagra_search_res_t res = {nullptr};
     try {
         auto* any = static_cast<gpu_cagra_any_t*>(index_c);
+        auto* cpp_res = new matrixone::cagra_search_result_t();
         switch (any->qtype) {
-            case Quantization_F32: {
-                auto* cpp_res = new matrixone::gpu_cagra_t<float>::search_result_t();
+            case Quantization_F32: 
                 *cpp_res = static_cast<matrixone::gpu_cagra_t<float>*>(any->ptr)->search(static_cast<const float*>(queries_data), num_queries, query_dimension, limit, search_params);
-                res.result_ptr = static_cast<gpu_cagra_result_c>(cpp_res);
                 break;
-            }
-            case Quantization_F16: {
-                auto* cpp_res = new matrixone::gpu_cagra_t<half>::search_result_t();
+            case Quantization_F16: 
                 *cpp_res = static_cast<matrixone::gpu_cagra_t<half>*>(any->ptr)->search(static_cast<const half*>(queries_data), num_queries, query_dimension, limit, search_params);
-                res.result_ptr = static_cast<gpu_cagra_result_c>(cpp_res);
                 break;
-            }
-            case Quantization_INT8: {
-                auto* cpp_res = new matrixone::gpu_cagra_t<int8_t>::search_result_t();
+            case Quantization_INT8: 
                 *cpp_res = static_cast<matrixone::gpu_cagra_t<int8_t>*>(any->ptr)->search(static_cast<const int8_t*>(queries_data), num_queries, query_dimension, limit, search_params);
-                res.result_ptr = static_cast<gpu_cagra_result_c>(cpp_res);
                 break;
-            }
-            case Quantization_UINT8: {
-                auto* cpp_res = new matrixone::gpu_cagra_t<uint8_t>::search_result_t();
+            case Quantization_UINT8: 
                 *cpp_res = static_cast<matrixone::gpu_cagra_t<uint8_t>*>(any->ptr)->search(static_cast<const uint8_t*>(queries_data), num_queries, query_dimension, limit, search_params);
-                res.result_ptr = static_cast<gpu_cagra_result_c>(cpp_res);
                 break;
-            }
             default: break;
         }
+        res.result_ptr = static_cast<gpu_cagra_result_c>(cpp_res);
     } catch (const std::exception& e) {
         set_errmsg(errmsg, "Error in gpu_cagra_search", e.what());
     }
@@ -291,33 +281,23 @@ gpu_cagra_search_res_t gpu_cagra_search_float(gpu_cagra_c index_c, const float* 
     gpu_cagra_search_res_t res = {nullptr};
     try {
         auto* any = static_cast<gpu_cagra_any_t*>(index_c);
+        auto* cpp_res = new matrixone::cagra_search_result_t();
         switch (any->qtype) {
-            case Quantization_F32: {
-                auto* cpp_res = new matrixone::gpu_cagra_t<float>::search_result_t();
+            case Quantization_F32: 
                 *cpp_res = static_cast<matrixone::gpu_cagra_t<float>*>(any->ptr)->search_float(queries_data, num_queries, query_dimension, limit, search_params);
-                res.result_ptr = static_cast<gpu_cagra_result_c>(cpp_res);
                 break;
-            }
-            case Quantization_F16: {
-                auto* cpp_res = new matrixone::gpu_cagra_t<half>::search_result_t();
+            case Quantization_F16: 
                 *cpp_res = static_cast<matrixone::gpu_cagra_t<half>*>(any->ptr)->search_float(queries_data, num_queries, query_dimension, limit, search_params);
-                res.result_ptr = static_cast<gpu_cagra_result_c>(cpp_res);
                 break;
-            }
-            case Quantization_INT8: {
-                auto* cpp_res = new matrixone::gpu_cagra_t<int8_t>::search_result_t();
+            case Quantization_INT8: 
                 *cpp_res = static_cast<matrixone::gpu_cagra_t<int8_t>*>(any->ptr)->search_float(queries_data, num_queries, query_dimension, limit, search_params);
-                res.result_ptr = static_cast<gpu_cagra_result_c>(cpp_res);
                 break;
-            }
-            case Quantization_UINT8: {
-                auto* cpp_res = new matrixone::gpu_cagra_t<uint8_t>::search_result_t();
+            case Quantization_UINT8: 
                 *cpp_res = static_cast<matrixone::gpu_cagra_t<uint8_t>*>(any->ptr)->search_float(queries_data, num_queries, query_dimension, limit, search_params);
-                res.result_ptr = static_cast<gpu_cagra_result_c>(cpp_res);
                 break;
-            }
             default: break;
         }
+        res.result_ptr = static_cast<gpu_cagra_result_c>(cpp_res);
     } catch (const std::exception& e) {
         set_errmsg(errmsg, "Error in gpu_cagra_search_float", e.what());
     }
@@ -326,7 +306,7 @@ gpu_cagra_search_res_t gpu_cagra_search_float(gpu_cagra_c index_c, const float* 
 
 void gpu_cagra_get_neighbors(gpu_cagra_result_c result_c, uint64_t total_elements, uint32_t* neighbors) {
     if (!result_c) return;
-    auto* neighbors_vec = &static_cast<matrixone::gpu_cagra_t<float>::search_result_t*>(result_c)->neighbors;
+    auto* neighbors_vec = &static_cast<matrixone::cagra_search_result_t*>(result_c)->neighbors;
     if (neighbors_vec->size() >= total_elements) {
         std::copy(neighbors_vec->begin(), neighbors_vec->begin() + total_elements, neighbors);
     }
@@ -334,7 +314,7 @@ void gpu_cagra_get_neighbors(gpu_cagra_result_c result_c, uint64_t total_element
 
 void gpu_cagra_get_distances(gpu_cagra_result_c result_c, uint64_t total_elements, float* distances) {
     if (!result_c) return;
-    auto* distances_vec = &static_cast<matrixone::gpu_cagra_t<float>::search_result_t*>(result_c)->distances;
+    auto* distances_vec = &static_cast<matrixone::cagra_search_result_t*>(result_c)->distances;
     if (distances_vec->size() >= total_elements) {
         std::copy(distances_vec->begin(), distances_vec->begin() + total_elements, distances);
     }
@@ -342,7 +322,7 @@ void gpu_cagra_get_distances(gpu_cagra_result_c result_c, uint64_t total_element
 
 void gpu_cagra_free_result(gpu_cagra_result_c result_c) {
     if (!result_c) return;
-    delete static_cast<matrixone::gpu_cagra_t<float>::search_result_t*>(result_c);
+    delete static_cast<matrixone::cagra_search_result_t*>(result_c);
 }
 
 void gpu_cagra_extend(gpu_cagra_c index_c, const void* additional_data, uint64_t num_vectors, void* errmsg) {

@@ -50,11 +50,24 @@
 namespace matrixone {
 
 /**
+ * @brief Search/Predict result for K-Means.
+ * Common for all KMeans instantiations.
+ */
+struct kmeans_result_t {
+    std::vector<int64_t> labels;
+    float inertia;
+    int64_t n_iter;
+};
+
+/**
  * @brief gpu_kmeans_t implements K-Means clustering on GPU using cuVS.
  */
 template <typename T>
 class gpu_kmeans_t {
 public:
+    using predict_result_t = kmeans_result_t;
+    using fit_predict_result_t = kmeans_result_t;
+
     uint32_t n_clusters;
     uint32_t dimension;
     
@@ -141,16 +154,11 @@ public:
         return std::any_cast<fit_result_t>(result.result);
     }
 
-    struct predict_result_t {
-        std::vector<int64_t> labels;
-        float inertia;
-    };
-
     /**
      * @brief Assigns labels to new data based on existing centroids.
      */
     predict_result_t predict(const T* X_data, uint64_t n_samples) {
-        if (!X_data || n_samples == 0) return {{}, 0};
+        if (!X_data || n_samples == 0) return {{}, 0, 0};
 
         uint64_t job_id = worker->submit(
             [&, X_data, n_samples](raft_handle_wrapper_t& handle) -> std::any {
@@ -183,6 +191,7 @@ public:
                 raft::resource::sync_stream(*res);
                 for(uint64_t i=0; i<n_samples; ++i) res_out.labels[i] = (int64_t)host_labels[i];
                 res_out.inertia = 0.0f;
+                res_out.n_iter = 0;
                 return res_out;
             }
         );
@@ -199,7 +208,7 @@ public:
             return predict(X_data, n_samples);
         }
 
-        if (!X_data || n_samples == 0) return {{}, 0};
+        if (!X_data || n_samples == 0) return {{}, 0, 0};
 
         uint64_t job_id = worker->submit(
             [&, X_data, n_samples](raft_handle_wrapper_t& handle) -> std::any {
@@ -239,6 +248,7 @@ public:
                 raft::resource::sync_stream(*res);
                 for(uint64_t i=0; i<n_samples; ++i) res_out.labels[i] = (int64_t)host_labels[i];
                 res_out.inertia = 0.0f;
+                res_out.n_iter = 0;
                 return res_out;
             }
         );
@@ -246,12 +256,6 @@ public:
         if (result.error) std::rethrow_exception(result.error);
         return std::any_cast<predict_result_t>(result.result);
     }
-
-    struct fit_predict_result_t {
-        std::vector<int64_t> labels;
-        float inertia;
-        int64_t n_iter;
-    };
 
     /**
      * @brief Performs both fitting and labeling in one step.

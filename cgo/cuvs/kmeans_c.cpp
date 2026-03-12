@@ -153,37 +153,24 @@ gpu_kmeans_predict_res_t gpu_kmeans_predict(gpu_kmeans_c kmeans_c, const void* X
     gpu_kmeans_predict_res_t res = {nullptr, 0.0f};
     try {
         auto* any = static_cast<gpu_kmeans_any_t*>(kmeans_c);
+        auto* cpp_res = new matrixone::kmeans_result_t();
         switch (any->qtype) {
-            case Quantization_F32: {
-                auto* cpp_res = new matrixone::gpu_kmeans_t<float>::predict_result_t();
+            case Quantization_F32: 
                 *cpp_res = static_cast<matrixone::gpu_kmeans_t<float>*>(any->ptr)->predict(static_cast<const float*>(X_data), n_samples);
-                res.result_ptr = static_cast<gpu_kmeans_result_c>(cpp_res);
-                res.inertia = cpp_res->inertia;
                 break;
-            }
-            case Quantization_F16: {
-                auto* cpp_res = new matrixone::gpu_kmeans_t<half>::predict_result_t();
+            case Quantization_F16: 
                 *cpp_res = static_cast<matrixone::gpu_kmeans_t<half>*>(any->ptr)->predict(static_cast<const half*>(X_data), n_samples);
-                res.result_ptr = static_cast<gpu_kmeans_result_c>(cpp_res);
-                res.inertia = cpp_res->inertia;
                 break;
-            }
-            case Quantization_INT8: {
-                auto* cpp_res = new matrixone::gpu_kmeans_t<int8_t>::predict_result_t();
+            case Quantization_INT8: 
                 *cpp_res = static_cast<matrixone::gpu_kmeans_t<int8_t>*>(any->ptr)->predict(static_cast<const int8_t*>(X_data), n_samples);
-                res.result_ptr = static_cast<gpu_kmeans_result_c>(cpp_res);
-                res.inertia = cpp_res->inertia;
                 break;
-            }
-            case Quantization_UINT8: {
-                auto* cpp_res = new matrixone::gpu_kmeans_t<uint8_t>::predict_result_t();
+            case Quantization_UINT8: 
                 *cpp_res = static_cast<matrixone::gpu_kmeans_t<uint8_t>*>(any->ptr)->predict(static_cast<const uint8_t*>(X_data), n_samples);
-                res.result_ptr = static_cast<gpu_kmeans_result_c>(cpp_res);
-                res.inertia = cpp_res->inertia;
                 break;
-            }
             default: break;
         }
+        res.result_ptr = static_cast<gpu_kmeans_result_c>(cpp_res);
+        res.inertia = cpp_res->inertia;
     } catch (const std::exception& e) {
         set_errmsg(errmsg, "Error in gpu_kmeans_predict", e.what());
     }
@@ -195,37 +182,24 @@ gpu_kmeans_predict_res_t gpu_kmeans_predict_float(gpu_kmeans_c kmeans_c, const f
     gpu_kmeans_predict_res_t res = {nullptr, 0.0f};
     try {
         auto* any = static_cast<gpu_kmeans_any_t*>(kmeans_c);
+        auto* cpp_res = new matrixone::kmeans_result_t();
         switch (any->qtype) {
-            case Quantization_F32: {
-                auto* cpp_res = new matrixone::gpu_kmeans_t<float>::predict_result_t();
+            case Quantization_F32: 
                 *cpp_res = static_cast<matrixone::gpu_kmeans_t<float>*>(any->ptr)->predict_float(X_data, n_samples);
-                res.result_ptr = static_cast<gpu_kmeans_result_c>(cpp_res);
-                res.inertia = cpp_res->inertia;
                 break;
-            }
-            case Quantization_F16: {
-                auto* cpp_res = new matrixone::gpu_kmeans_t<half>::predict_result_t();
+            case Quantization_F16: 
                 *cpp_res = static_cast<matrixone::gpu_kmeans_t<half>*>(any->ptr)->predict_float(X_data, n_samples);
-                res.result_ptr = static_cast<gpu_kmeans_result_c>(cpp_res);
-                res.inertia = cpp_res->inertia;
                 break;
-            }
-            case Quantization_INT8: {
-                auto* cpp_res = new matrixone::gpu_kmeans_t<int8_t>::predict_result_t();
+            case Quantization_INT8: 
                 *cpp_res = static_cast<matrixone::gpu_kmeans_t<int8_t>*>(any->ptr)->predict_float(X_data, n_samples);
-                res.result_ptr = static_cast<gpu_kmeans_result_c>(cpp_res);
-                res.inertia = cpp_res->inertia;
                 break;
-            }
-            case Quantization_UINT8: {
-                auto* cpp_res = new matrixone::gpu_kmeans_t<uint8_t>::predict_result_t();
+            case Quantization_UINT8: 
                 *cpp_res = static_cast<matrixone::gpu_kmeans_t<uint8_t>*>(any->ptr)->predict_float(X_data, n_samples);
-                res.result_ptr = static_cast<gpu_kmeans_result_c>(cpp_res);
-                res.inertia = cpp_res->inertia;
                 break;
-            }
             default: break;
         }
+        res.result_ptr = static_cast<gpu_kmeans_result_c>(cpp_res);
+        res.inertia = cpp_res->inertia;
     } catch (const std::exception& e) {
         set_errmsg(errmsg, "Error in gpu_kmeans_predict_float", e.what());
     }
@@ -237,37 +211,24 @@ gpu_kmeans_fit_predict_res_t gpu_kmeans_fit_predict(gpu_kmeans_c kmeans_c, const
     gpu_kmeans_fit_predict_res_t res = {nullptr, 0.0f, 0};
     try {
         auto* any = static_cast<gpu_kmeans_any_t*>(kmeans_c);
+        auto* cpp_res = new matrixone::kmeans_result_t();
         switch (any->qtype) {
-            case Quantization_F32: {
-                auto* cpp_res = new matrixone::gpu_kmeans_t<float>::fit_predict_result_t();
+            case Quantization_F32: 
                 *cpp_res = static_cast<matrixone::gpu_kmeans_t<float>*>(any->ptr)->fit_predict(static_cast<const float*>(X_data), n_samples);
-                res.result_ptr = static_cast<gpu_kmeans_result_c>(cpp_res);
-                res.inertia = cpp_res->inertia; res.n_iter = cpp_res->n_iter;
                 break;
-            }
-            case Quantization_F16: {
-                auto* cpp_res = new matrixone::gpu_kmeans_t<half>::fit_predict_result_t();
+            case Quantization_F16: 
                 *cpp_res = static_cast<matrixone::gpu_kmeans_t<half>*>(any->ptr)->fit_predict(static_cast<const half*>(X_data), n_samples);
-                res.result_ptr = static_cast<gpu_kmeans_result_c>(cpp_res);
-                res.inertia = cpp_res->inertia; res.n_iter = cpp_res->n_iter;
                 break;
-            }
-            case Quantization_INT8: {
-                auto* cpp_res = new matrixone::gpu_kmeans_t<int8_t>::fit_predict_result_t();
+            case Quantization_INT8: 
                 *cpp_res = static_cast<matrixone::gpu_kmeans_t<int8_t>*>(any->ptr)->fit_predict(static_cast<const int8_t*>(X_data), n_samples);
-                res.result_ptr = static_cast<gpu_kmeans_result_c>(cpp_res);
-                res.inertia = cpp_res->inertia; res.n_iter = cpp_res->n_iter;
                 break;
-            }
-            case Quantization_UINT8: {
-                auto* cpp_res = new matrixone::gpu_kmeans_t<uint8_t>::fit_predict_result_t();
+            case Quantization_UINT8: 
                 *cpp_res = static_cast<matrixone::gpu_kmeans_t<uint8_t>*>(any->ptr)->fit_predict(static_cast<const uint8_t*>(X_data), n_samples);
-                res.result_ptr = static_cast<gpu_kmeans_result_c>(cpp_res);
-                res.inertia = cpp_res->inertia; res.n_iter = cpp_res->n_iter;
                 break;
-            }
             default: break;
         }
+        res.result_ptr = static_cast<gpu_kmeans_result_c>(cpp_res);
+        res.inertia = cpp_res->inertia; res.n_iter = cpp_res->n_iter;
     } catch (const std::exception& e) {
         set_errmsg(errmsg, "Error in gpu_kmeans_fit_predict", e.what());
     }
@@ -279,37 +240,24 @@ gpu_kmeans_fit_predict_res_t gpu_kmeans_fit_predict_float(gpu_kmeans_c kmeans_c,
     gpu_kmeans_fit_predict_res_t res = {nullptr, 0.0f, 0};
     try {
         auto* any = static_cast<gpu_kmeans_any_t*>(kmeans_c);
+        auto* cpp_res = new matrixone::kmeans_result_t();
         switch (any->qtype) {
-            case Quantization_F32: {
-                auto* cpp_res = new matrixone::gpu_kmeans_t<float>::fit_predict_result_t();
+            case Quantization_F32: 
                 *cpp_res = static_cast<matrixone::gpu_kmeans_t<float>*>(any->ptr)->fit_predict_float(X_data, n_samples);
-                res.result_ptr = static_cast<gpu_kmeans_result_c>(cpp_res);
-                res.inertia = cpp_res->inertia; res.n_iter = cpp_res->n_iter;
                 break;
-            }
-            case Quantization_F16: {
-                auto* cpp_res = new matrixone::gpu_kmeans_t<half>::fit_predict_result_t();
+            case Quantization_F16: 
                 *cpp_res = static_cast<matrixone::gpu_kmeans_t<half>*>(any->ptr)->fit_predict_float(X_data, n_samples);
-                res.result_ptr = static_cast<gpu_kmeans_result_c>(cpp_res);
-                res.inertia = cpp_res->inertia; res.n_iter = cpp_res->n_iter;
                 break;
-            }
-            case Quantization_INT8: {
-                auto* cpp_res = new matrixone::gpu_kmeans_t<int8_t>::fit_predict_result_t();
+            case Quantization_INT8: 
                 *cpp_res = static_cast<matrixone::gpu_kmeans_t<int8_t>*>(any->ptr)->fit_predict_float(X_data, n_samples);
-                res.result_ptr = static_cast<gpu_kmeans_result_c>(cpp_res);
-                res.inertia = cpp_res->inertia; res.n_iter = cpp_res->n_iter;
                 break;
-            }
-            case Quantization_UINT8: {
-                auto* cpp_res = new matrixone::gpu_kmeans_t<uint8_t>::fit_predict_result_t();
+            case Quantization_UINT8: 
                 *cpp_res = static_cast<matrixone::gpu_kmeans_t<uint8_t>*>(any->ptr)->fit_predict_float(X_data, n_samples);
-                res.result_ptr = static_cast<gpu_kmeans_result_c>(cpp_res);
-                res.inertia = cpp_res->inertia; res.n_iter = cpp_res->n_iter;
                 break;
-            }
             default: break;
         }
+        res.result_ptr = static_cast<gpu_kmeans_result_c>(cpp_res);
+        res.inertia = cpp_res->inertia; res.n_iter = cpp_res->n_iter;
     } catch (const std::exception& e) {
         set_errmsg(errmsg, "Error in gpu_kmeans_fit_predict_float", e.what());
     }
@@ -318,7 +266,7 @@ gpu_kmeans_fit_predict_res_t gpu_kmeans_fit_predict_float(gpu_kmeans_c kmeans_c,
 
 void gpu_kmeans_get_labels(gpu_kmeans_result_c result_c, uint64_t n_samples, int64_t* labels) {
     if (!result_c) return;
-    auto* labels_vec = &static_cast<matrixone::gpu_kmeans_t<float>::predict_result_t*>(result_c)->labels;
+    auto* labels_vec = &static_cast<matrixone::kmeans_result_t*>(result_c)->labels;
     if (labels_vec->size() >= n_samples) {
         std::copy(labels_vec->begin(), labels_vec->begin() + n_samples, labels);
     }
@@ -326,7 +274,7 @@ void gpu_kmeans_get_labels(gpu_kmeans_result_c result_c, uint64_t n_samples, int
 
 void gpu_kmeans_free_result(gpu_kmeans_result_c result_c) {
     if (!result_c) return;
-    delete static_cast<matrixone::gpu_kmeans_t<float>::predict_result_t*>(result_c);
+    delete static_cast<matrixone::kmeans_result_t*>(result_c);
 }
 
 void gpu_kmeans_get_centroids(gpu_kmeans_c kmeans_c, void* centroids, void* errmsg) {
@@ -341,17 +289,17 @@ void gpu_kmeans_get_centroids(gpu_kmeans_c kmeans_c, void* centroids, void* errm
             }
             case Quantization_F16: {
                 auto host_centers = static_cast<matrixone::gpu_kmeans_t<half>*>(any->ptr)->get_centroids();
-                std::copy(host_centers.begin(), host_centers.end(), static_cast<float*>(centroids));
+                for (size_t i = 0; i < host_centers.size(); ++i) static_cast<float*>(centroids)[i] = (float)host_centers[i];
                 break;
             }
             case Quantization_INT8: {
                 auto host_centers = static_cast<matrixone::gpu_kmeans_t<int8_t>*>(any->ptr)->get_centroids();
-                std::copy(host_centers.begin(), host_centers.end(), static_cast<float*>(centroids));
+                for (size_t i = 0; i < host_centers.size(); ++i) static_cast<float*>(centroids)[i] = (float)host_centers[i];
                 break;
             }
             case Quantization_UINT8: {
                 auto host_centers = static_cast<matrixone::gpu_kmeans_t<uint8_t>*>(any->ptr)->get_centroids();
-                std::copy(host_centers.begin(), host_centers.end(), static_cast<float*>(centroids));
+                for (size_t i = 0; i < host_centers.size(); ++i) static_cast<float*>(centroids)[i] = (float)host_centers[i];
                 break;
             }
             default: break;

@@ -56,6 +56,15 @@
 namespace matrixone {
 
 /**
+ * @brief Search result containing neighbor IDs and distances.
+ * Common for all IVF-Flat instantiations.
+ */
+struct ivf_flat_search_result_t {
+    std::vector<int64_t> neighbors; // Indices of nearest neighbors
+    std::vector<float> distances;  // Distances to nearest neighbors
+};
+
+/**
  * @brief gpu_ivf_flat_t implements an IVF-Flat index that can run on a single GPU or sharded across multiple GPUs.
  * It automatically chooses between single-GPU and multi-GPU (SNMG) cuVS APIs based on the RAFT handle resources.
  */
@@ -64,6 +73,7 @@ class gpu_ivf_flat_t {
 public:
     using ivf_flat_index = cuvs::neighbors::ivf_flat::index<T, int64_t>;
     using mg_index = cuvs::neighbors::mg_index<ivf_flat_index, T, int64_t>;
+    using search_result_t = ivf_flat_search_result_t;
 
     std::vector<T> flattened_host_dataset;
     std::vector<int> devices_;
@@ -272,14 +282,6 @@ public:
     }
 
     /**
-     * @brief Search result containing neighbor IDs and distances.
-     */
-    struct search_result_t {
-        std::vector<int64_t> neighbors; // Indices of nearest neighbors
-        std::vector<float> distances;  // Distances to nearest neighbors
-    };
-
-    /**
      * @brief Performs IVF-Flat search for given queries.
      * @param queries_data Pointer to flattened query vectors on host.
      * @param num_queries Number of query vectors.
@@ -384,6 +386,7 @@ public:
                 if constexpr (sizeof(T) == 1) {
                     if (!quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
                     quantizer_.template transform<T>(*res, queries_device_float.view(), queries_device_target.data_handle(), true);
+                    raft::resource::sync_stream(*res);
                 } else {
                     raft::copy(*res, queries_device_target.view(), queries_device_float.view());
                 }

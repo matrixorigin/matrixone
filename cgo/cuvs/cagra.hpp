@@ -55,6 +55,15 @@
 namespace matrixone {
 
 /**
+ * @brief Search result containing neighbor IDs and distances.
+ * Common for all CAGRA instantiations.
+ */
+struct cagra_search_result_t {
+    std::vector<uint32_t> neighbors; // Indices of nearest neighbors
+    std::vector<float> distances;   // Distances to nearest neighbors
+};
+
+/**
  * @brief gpu_cagra_t implements a CAGRA index that can run on a single GPU or sharded across multiple GPUs.
  * It automatically chooses between single-GPU and multi-GPU (SNMG) cuVS APIs based on the RAFT handle resources.
  */
@@ -63,6 +72,7 @@ class gpu_cagra_t {
 public:
     using cagra_index = cuvs::neighbors::cagra::index<T, uint32_t>;
     using mg_index = cuvs::neighbors::mg_index<cagra_index, T, uint32_t>;
+    using search_result_t = cagra_search_result_t;
 
     std::vector<T> flattened_host_dataset;
     std::vector<int> devices_;
@@ -133,7 +143,17 @@ public:
         
         // Merge result is currently a single-GPU index.
         worker = std::make_unique<cuvs_worker_t>(nthread, devices_, false);
-        worker->start();
+        
+        auto stop_fn = [&](raft_handle_wrapper_t& handle) -> std::any {
+            std::unique_lock<std::shared_mutex> lock(mutex_);
+            index_.reset();
+            mg_index_.reset();
+            quantizer_.reset();
+            dataset_device_ptr_.reset();
+            return std::any();
+        };
+        worker->start(nullptr, stop_fn);
+
         count = static_cast<uint32_t>(index_->size());
         build_params.graph_degree = static_cast<size_t>(index_->graph_degree());
         build_params.intermediate_graph_degree = build_params.graph_degree * 2; // Best guess
@@ -376,14 +396,6 @@ public:
     }
 
     /**
-     * @brief Search result containing neighbor IDs and distances.
-     */
-    struct search_result_t {
-        std::vector<uint32_t> neighbors; // Indices of nearest neighbors
-        std::vector<float> distances;   // Distances to nearest neighbors
-    };
-
-    /**
      * @brief Performs CAGRA search for given queries.
      * @param queries_data Pointer to flattened query vectors on host.
      * @param num_queries Number of query vectors.
@@ -488,6 +500,7 @@ public:
                 if constexpr (sizeof(T) == 1) {
                     if (!quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
                     quantizer_.template transform<T>(*res, queries_device_float.view(), queries_device_target.data_handle(), true);
+                    raft::resource::sync_stream(*res);
                 } else {
                     raft::copy(*res, queries_device_target.view(), queries_device_float.view());
                 }
