@@ -41,6 +41,11 @@ type container struct {
 	inBat       *batch.Batch // probe batch
 	metrictype  metric.MetricType
 	brute_force cache.VectorIndexSearchIf // brute_force.BruteForceIndex
+
+	centersF32 *[][]float32
+	centersF64 *[][]float64
+	nullvecF32 *[]float32
+	nullvecF64 *[]float64
 }
 
 type Productl2 struct {

@@ -16,6 +16,7 @@ package elkans
 
 import (
 	"context"
+	"math/rand/v2"
 	"reflect"
 	"testing"
 
@@ -435,12 +436,9 @@ func Test_Cluster(t *testing.T) {
 				initType:       kmeans.Random,
 			},
 			want: [][]float64{
-				//{0.15915269938161652, 0.31830539876323305, 0.5757527355814478, 0.7349054349630643}, // approx {1, 2, 3.6666666666666665, 4.666666666666666}
-				//{0.8077006350571528, 0.26637173227965466, 0.3230802540228611, 0.4038503175285764},  // approx {10, 3.333333333333333, 4, 5}
 				{10, 3.333333333333333, 4, 5},
 				{1, 2, 3.6666666666666665, 4.666666666666666},
 			},
-			//wantSSE: 0.0657884123589134,
 			wantSSE: 12,
 			wantErr: false,
 		},
@@ -740,7 +738,15 @@ func TestElkanClusterer_recalculateCentroids(t *testing.T) {
 				// NOTE: here km.Normalize() is skipped as we not calling km.Cluster() in this test.
 				// Here we are only testing the working of recalculateCentroids() function.
 
-				got := ekm.recalculateCentroids(ctx)
+				rnd := rand.New(rand.NewPCG(uint64(kmeans.DefaultRandSeed), 0))
+
+				newCentroids := make([][]float64, ekm.clusterCnt)
+				for i := range newCentroids {
+					newCentroids[i] = make([]float64, len(ekm.vectorList[0]))
+				}
+				membersCount := make([]int64, ekm.clusterCnt)
+
+				got := ekm.recalculateCentroids(ctx, rnd, newCentroids, membersCount)
 				if !assertx.InEpsilonF64Slices(tt.want.centroids, got) {
 					t.Errorf("centroids got = %v, want %v", got, tt.want.centroids)
 				}
@@ -880,7 +886,8 @@ func TestElkanClusterer_updateBounds(t *testing.T) {
 
 				// NOTE: here km.Normalize() is skipped as we not calling km.Cluster() in this test.
 				// Here we are only testing the working of updateBounds() function.
-				ekm.updateBounds(ctx, tt.state.newCentroids)
+				centroidShiftDist := make([]float64, ekm.clusterCnt)
+				ekm.updateBounds(ctx, tt.state.newCentroids, centroidShiftDist)
 
 				for i := 0; i < len(tt.want.vectorMetas); i++ {
 					if !assertx.InEpsilonF64Slice(tt.want.vectorMetas[i].lower, ekm.vectorMetas[i].lower) {
@@ -1032,7 +1039,8 @@ func TestElkanClusterer_updateBounds_Error(t *testing.T) {
 
 				// NOTE: here km.Normalize() is skipped as we not calling km.Cluster() in this test.
 				// Here we are only testing the working of updateBounds() function.
-				err := ekm.updateBounds(ctx, tt.state.newCentroids)
+				centroidShiftDist := make([]float64, ekm.clusterCnt)
+				err := ekm.updateBounds(ctx, tt.state.newCentroids, centroidShiftDist)
 				require.NotNil(t, err)
 			} else if !ok {
 				t.Errorf("km not of type ElkanClusterer")
@@ -1040,4 +1048,12 @@ func TestElkanClusterer_updateBounds_Error(t *testing.T) {
 
 		})
 	}
+}
+
+func Test_checkCentroidDimension(t *testing.T) {
+	c := [][]float32{{1, 2, 3}, {2, 3, 4}}
+	err := checkCentroidDimension(c, 2)
+	require.Error(t, err)
+	err = checkCentroidDimension(c, 3)
+	require.NoError(t, err)
 }
