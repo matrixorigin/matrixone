@@ -4699,6 +4699,10 @@ func TestCCPRErrorHandling2(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
+	// Disable sync protection validator for this test since we're mocking mo_ctl responses
+	// but not actually registering sync protection in TAE layer
+	taeHandler.GetDB().Runtime.SyncProtectionValidator = nil
+
 	// Register mock auto increment service
 	mockIncrService := NewMockAutoIncrementService(cnUUID)
 	incrservice.SetAutoIncrementServiceByID("", mockIncrService)

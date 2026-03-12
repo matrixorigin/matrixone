@@ -95,11 +95,13 @@ const (
 )
 
 // mo_ctl sync protection command patterns
+// Note: patterns should NOT include the trailing quote since the actual SQL has a dot after the command name
+// e.g., 'register_sync_protection.{"job_id": "xxx"}' not 'register_sync_protection'
 const (
-	moCtlGCStatus                 = `mo_ctl('dn', 'gc_status'`
-	moCtlRegisterSyncProtection   = `mo_ctl('dn', 'register_sync_protection'`
-	moCtlRenewSyncProtection      = `mo_ctl('dn', 'renew_sync_protection'`
-	moCtlUnregisterSyncProtection = `mo_ctl('dn', 'unregister_sync_protection'`
+	moCtlGCStatus                 = `mo_ctl('dn', 'diskcleaner', 'gc_status`
+	moCtlRegisterSyncProtection   = `mo_ctl('dn', 'diskcleaner', 'register_sync_protection`
+	moCtlRenewSyncProtection      = `mo_ctl('dn', 'diskcleaner', 'renew_sync_protection`
+	moCtlUnregisterSyncProtection = `mo_ctl('dn', 'diskcleaner', 'unregister_sync_protection`
 )
 
 // placeholderToEmpty converts the "-" placeholder back to empty string
@@ -1478,13 +1480,15 @@ func (h *UpstreamSQLHelper) handleGCStatusCmd(
 }
 
 // handleRegisterSyncProtectionCmd handles the mo_ctl('dn', 'register_sync_protection', ...) command
-// Returns a successful response
+// Returns a successful response in mo_ctl format
 func (h *UpstreamSQLHelper) handleRegisterSyncProtectionCmd(
 	ctx context.Context,
 ) (bool, *publication.Result, error) {
 	logutil.Info("UpstreamSQLHelper: handling register_sync_protection command, returning success")
 
-	responseJSON := `{"status": "ok"}`
+	// mo_ctl response format: {"method":"diskcleaner", "result":[{"ReturnStr":"..."}]}
+	// The inner ReturnStr contains the actual response: {"status": "ok"}
+	responseJSON := `{"method":"diskcleaner", "result":[{"ReturnStr":"{\"status\": \"ok\"}"}]}`
 
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"result"})
@@ -1503,13 +1507,15 @@ func (h *UpstreamSQLHelper) handleRegisterSyncProtectionCmd(
 }
 
 // handleRenewSyncProtectionCmd handles the mo_ctl('dn', 'renew_sync_protection', ...) command
-// Returns a successful response
+// Returns a successful response in mo_ctl format
 func (h *UpstreamSQLHelper) handleRenewSyncProtectionCmd(
 	ctx context.Context,
 ) (bool, *publication.Result, error) {
 	logutil.Info("UpstreamSQLHelper: handling renew_sync_protection command, returning success")
 
-	responseJSON := `{"status": "ok"}`
+	// mo_ctl response format: {"method":"diskcleaner", "result":[{"ReturnStr":"..."}]}
+	// The inner ReturnStr contains the actual response: {"status": "ok"}
+	responseJSON := `{"method":"diskcleaner", "result":[{"ReturnStr":"{\"status\": \"ok\"}"}]}`
 
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"result"})
@@ -1528,13 +1534,15 @@ func (h *UpstreamSQLHelper) handleRenewSyncProtectionCmd(
 }
 
 // handleUnregisterSyncProtectionCmd handles the mo_ctl('dn', 'unregister_sync_protection', ...) command
-// Returns a successful response
+// Returns a successful response in mo_ctl format
 func (h *UpstreamSQLHelper) handleUnregisterSyncProtectionCmd(
 	ctx context.Context,
 ) (bool, *publication.Result, error) {
 	logutil.Info("UpstreamSQLHelper: handling unregister_sync_protection command, returning success")
 
-	responseJSON := `{"status": "ok"}`
+	// mo_ctl response format: {"method":"diskcleaner", "result":[{"ReturnStr":"..."}]}
+	// The inner ReturnStr contains the actual response: {"status": "ok"}
+	responseJSON := `{"method":"diskcleaner", "result":[{"ReturnStr":"{\"status\": \"ok\"}"}]}`
 
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"result"})
