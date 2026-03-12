@@ -101,12 +101,12 @@ type container struct {
 	probeBucketReader *spillBucketReader
 
 	// reusable buffers for spill operations
-	spillHashValues      []uint64
-	spillBucketRowIds    [][]int32
-	spillWriteBuf        bytes.Buffer
-	spillBuildReadBatch  *batch.Batch
-	spillProbeReadBatch  *batch.Batch
-	spillHashBuf         []byte
+	spillHashValues     []uint64
+	spillBucketRowIds   [][]int32
+	spillWriteBuf       bytes.Buffer
+	spillBuildReadBatch *batch.Batch
+	spillProbeReadBatch *batch.Batch
+	spillHashBuf        []byte
 }
 
 type HashJoin struct {

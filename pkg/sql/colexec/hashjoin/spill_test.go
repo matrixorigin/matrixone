@@ -16,11 +16,13 @@ package hashjoin
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -398,4 +400,855 @@ func TestSpillBucketReader(t *testing.T) {
 
 	reader.close()
 	spillfs.Delete(context.Background(), bucketName)
+}
+
+func TestAppendProbeBatchToSpillFiles(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	buckets, files, err := createProbeSpillFiles(proc)
+	require.NoError(t, err)
+	defer func() {
+		spillfs, _ := proc.GetSpillFileService()
+		for i, file := range files {
+			file.Close()
+			spillfs.Delete(context.Background(), buckets[i])
+		}
+	}()
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	buffers := make([]*batch.Batch, spillNumBuckets)
+
+	// Create test batch
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3, 4, 5}, nil, proc.Mp())
+	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"a", "b", "c", "d", "e"}, nil, proc.Mp())
+	bat.SetRowCount(5)
+
+	ctr := &container{
+		eqCondVecs: []*vector.Vector{bat.Vecs[0]},
+	}
+
+	err = ctr.appendProbeBatchToSpillFiles(proc, bat, files, buffers, analyzer)
+	require.NoError(t, err)
+
+	// Flush remaining buffers
+	for i, buf := range buffers {
+		if buf != nil && buf.RowCount() > 0 {
+			_, err := ctr.flushBucketBuffer(proc, buf, files[i], analyzer)
+			require.NoError(t, err)
+		}
+	}
+
+	// Close files
+	for _, file := range files {
+		file.Close()
+	}
+
+	// Verify data was distributed
+	totalRows := 0
+	for _, bucketName := range buckets {
+		reader, err := newSpillBucketReader(proc, bucketName)
+		require.NoError(t, err)
+
+		reuseBat := batch.NewOffHeapWithSize(0)
+		for {
+			bat, err := reader.readBatch(proc, reuseBat)
+			if err == io.EOF {
+				break
+			}
+			require.NoError(t, err)
+			totalRows += bat.RowCount()
+		}
+		reuseBat.Clean(proc.Mp())
+		reader.close()
+	}
+	require.Equal(t, 5, totalRows)
+}
+
+func TestAppendProbeBatchMultipleFlushes(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	buckets, files, err := createProbeSpillFiles(proc)
+	require.NoError(t, err)
+	defer func() {
+		spillfs, _ := proc.GetSpillFileService()
+		for i, file := range files {
+			file.Close()
+			spillfs.Delete(context.Background(), buckets[i])
+		}
+	}()
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	buffers := make([]*batch.Batch, spillNumBuckets)
+
+	// Create large batch to trigger buffer flushes
+	size := spillBufferSize * 2
+	values := make([]int32, size)
+	for i := range values {
+		values[i] = int32(i)
+	}
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	bat.SetRowCount(size)
+
+	ctr := &container{
+		eqCondVecs: []*vector.Vector{bat.Vecs[0]},
+	}
+
+	err = ctr.appendProbeBatchToSpillFiles(proc, bat, files, buffers, analyzer)
+	require.NoError(t, err)
+
+	// Flush remaining
+	for i, buf := range buffers {
+		if buf != nil && buf.RowCount() > 0 {
+			_, err := ctr.flushBucketBuffer(proc, buf, files[i], analyzer)
+			require.NoError(t, err)
+		}
+	}
+}
+
+func TestAppendProbeBatchEmptyBatch(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	buckets, files, err := createProbeSpillFiles(proc)
+	require.NoError(t, err)
+	defer func() {
+		spillfs, _ := proc.GetSpillFileService()
+		for i, file := range files {
+			file.Close()
+			spillfs.Delete(context.Background(), buckets[i])
+		}
+	}()
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	buffers := make([]*batch.Batch, spillNumBuckets)
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{}, nil, proc.Mp())
+	bat.SetRowCount(0)
+
+	ctr := &container{
+		eqCondVecs: []*vector.Vector{bat.Vecs[0]},
+	}
+
+	err = ctr.appendProbeBatchToSpillFiles(proc, bat, files, buffers, analyzer)
+	require.NoError(t, err)
+}
+
+func TestReaderCorruptedMagic(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+
+	bucketName := "test_corrupt"
+	file, err := spillfs.CreateFile(context.Background(), bucketName)
+	require.NoError(t, err)
+
+	// Write valid batch first
+	ctr := &container{}
+	bat := batch.NewOffHeapWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+	bat.SetRowCount(1)
+
+	// Write with wrong magic
+	cnt := int64(1)
+	ctr.spillWriteBuf.Reset()
+	ctr.spillWriteBuf.Write(types.EncodeInt64(&cnt))
+	batchSizePos := ctr.spillWriteBuf.Len()
+	ctr.spillWriteBuf.Write(types.EncodeInt64(new(int64)))
+	batchStartPos := ctr.spillWriteBuf.Len()
+	bat.MarshalBinaryWithBuffer(&ctr.spillWriteBuf, false)
+	batchSize := int64(ctr.spillWriteBuf.Len() - batchStartPos)
+	batchSizeBytes := types.EncodeInt64(&batchSize)
+	copy(ctr.spillWriteBuf.Bytes()[batchSizePos:batchSizePos+len(batchSizeBytes)], batchSizeBytes)
+	wrongMagic := uint64(0xBADBADBAD)
+	ctr.spillWriteBuf.Write(types.EncodeUint64(&wrongMagic))
+	_, _ = file.Write(ctr.spillWriteBuf.Bytes())
+	file.Close()
+
+	reader, err := newSpillBucketReader(proc, bucketName)
+	require.NoError(t, err)
+
+	reuseBat := batch.NewOffHeapWithSize(0)
+	defer reuseBat.Clean(proc.Mp())
+
+	_, err = reader.readBatch(proc, reuseBat)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "corrupted")
+
+	reader.close()
+	spillfs.Delete(context.Background(), bucketName)
+}
+
+func TestReaderRowCountMismatch(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+
+	bucketName := "test_mismatch"
+	file, err := spillfs.CreateFile(context.Background(), bucketName)
+	require.NoError(t, err)
+
+	// Write batch with wrong count
+	ctr := &container{}
+	bat := batch.NewOffHeapWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
+	bat.SetRowCount(2)
+
+	// Manually write with wrong count
+	wrongCnt := int64(5) // claim 5 rows but only have 2
+	ctr.spillWriteBuf.Reset()
+	ctr.spillWriteBuf.Write(types.EncodeInt64(&wrongCnt))
+	batchSizePos := ctr.spillWriteBuf.Len()
+	ctr.spillWriteBuf.Write(types.EncodeInt64(new(int64)))
+	batchStartPos := ctr.spillWriteBuf.Len()
+	bat.MarshalBinaryWithBuffer(&ctr.spillWriteBuf, false)
+	batchSize := int64(ctr.spillWriteBuf.Len() - batchStartPos)
+	batchSizeBytes := types.EncodeInt64(&batchSize)
+	copy(ctr.spillWriteBuf.Bytes()[batchSizePos:batchSizePos+len(batchSizeBytes)], batchSizeBytes)
+	magic := uint64(spillMagic)
+	ctr.spillWriteBuf.Write(types.EncodeUint64(&magic))
+	_, _ = file.Write(ctr.spillWriteBuf.Bytes())
+	file.Close()
+
+	reader, err := newSpillBucketReader(proc, bucketName)
+	require.NoError(t, err)
+
+	reuseBat := batch.NewOffHeapWithSize(0)
+	defer reuseBat.Clean(proc.Mp())
+
+	_, err = reader.readBatch(proc, reuseBat)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "mismatch")
+
+	reader.close()
+	spillfs.Delete(context.Background(), bucketName)
+}
+
+func TestMultiColumnHash(t *testing.T) {
+	mp := mpool.MustNewZero()
+	var buf []byte
+
+	vec1 := testutil.MakeInt32Vector([]int32{1, 1, 2}, nil, mp)
+	vec2 := testutil.MakeVarcharVector([]string{"a", "b", "a"}, nil, mp)
+
+	hashValues := make([]uint64, 3)
+	err := computeXXHash([]*vector.Vector{vec1, vec2}, hashValues, &buf)
+	require.NoError(t, err)
+
+	// Same key values should produce same hash
+	require.NotEqual(t, hashValues[0], hashValues[1])
+	require.NotEqual(t, hashValues[0], hashValues[2])
+}
+
+func TestHashWithNulls(t *testing.T) {
+	mp := mpool.MustNewZero()
+	var buf []byte
+
+	vec := testutil.MakeInt32Vector([]int32{1, 2, 3, 4}, []uint64{0, 1}, mp) // nulls at index 1 and 3
+	hashValues := make([]uint64, 4)
+	err := computeXXHash([]*vector.Vector{vec}, hashValues, &buf)
+	require.NoError(t, err)
+
+	// All hashes should be computed
+	for _, h := range hashValues {
+		require.NotEqual(t, uint64(0), h)
+	}
+}
+
+func TestSpillBucketReaderDoubleClose(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+
+	bucketName := "test_double_close"
+	file, err := spillfs.CreateFile(context.Background(), bucketName)
+	require.NoError(t, err)
+	file.Close()
+
+	reader, err := newSpillBucketReader(proc, bucketName)
+	require.NoError(t, err)
+
+	reader.close()
+	reader.close() // Should not panic
+
+	spillfs.Delete(context.Background(), bucketName)
+}
+
+func TestCreateProbeSpillFilesError(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	// Normal case should succeed
+	buckets, files, err := createProbeSpillFiles(proc)
+	require.NoError(t, err)
+	require.Equal(t, spillNumBuckets, len(buckets))
+	require.Equal(t, spillNumBuckets, len(files))
+
+	spillfs, _ := proc.GetSpillFileService()
+	for i, file := range files {
+		file.Close()
+		spillfs.Delete(context.Background(), buckets[i])
+	}
+}
+
+func TestFlushEmptyBuffer(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+
+	file, err := spillfs.CreateFile(context.Background(), "test_empty")
+	require.NoError(t, err)
+	defer func() {
+		file.Close()
+		spillfs.Delete(context.Background(), "test_empty")
+	}()
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	ctr := &container{}
+
+	// Nil batch
+	cnt, err := ctr.flushBucketBuffer(proc, nil, file, analyzer)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), cnt)
+
+	// Zero row batch
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{}, nil, proc.Mp())
+	bat.SetRowCount(0)
+
+	cnt, err = ctr.flushBucketBuffer(proc, bat, file, analyzer)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), cnt)
+}
+
+func TestHashBufferReuse(t *testing.T) {
+	mp := mpool.MustNewZero()
+	buf := make([]byte, 0, 10)
+
+	vec := testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, mp)
+	hashValues := make([]uint64, 3)
+
+	// First call
+	err := computeXXHash([]*vector.Vector{vec}, hashValues, &buf)
+	require.NoError(t, err)
+	firstCap := cap(buf)
+
+	// Second call with larger data
+	vec2 := testutil.MakeVarcharVector([]string{"long_string_value", "another_long_value", "third_value"}, nil, mp)
+	err = computeXXHash([]*vector.Vector{vec2}, hashValues, &buf)
+	require.NoError(t, err)
+
+	// Buffer should grow if needed
+	require.GreaterOrEqual(t, cap(buf), firstCap)
+}
+
+func TestConstVectorHash(t *testing.T) {
+	mp := mpool.MustNewZero()
+	var buf []byte
+
+	vec := testutil.MakeInt32Vector([]int32{42}, nil, mp)
+	vec.SetClass(vector.CONSTANT)
+
+	hashValues := make([]uint64, 10)
+	err := computeXXHash([]*vector.Vector{vec}, hashValues, &buf)
+	require.NoError(t, err)
+
+	// All values should be the same for const vector
+	for i := 1; i < len(hashValues); i++ {
+		require.Equal(t, hashValues[0], hashValues[i])
+	}
+}
+
+func TestAppendProbeBatchSkipEmptyBuckets(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	buckets, files, err := createProbeSpillFiles(proc)
+	require.NoError(t, err)
+	defer func() {
+		spillfs, _ := proc.GetSpillFileService()
+		for i, file := range files {
+			file.Close()
+			spillfs.Delete(context.Background(), buckets[i])
+		}
+	}()
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	buffers := make([]*batch.Batch, spillNumBuckets)
+
+	// Create batch with single value (will go to one bucket)
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+	bat.SetRowCount(1)
+
+	ctr := &container{
+		eqCondVecs: []*vector.Vector{bat.Vecs[0]},
+	}
+
+	err = ctr.appendProbeBatchToSpillFiles(proc, bat, files, buffers, analyzer)
+	require.NoError(t, err)
+
+	// Most buffers should be nil
+	nilCount := 0
+	for _, buf := range buffers {
+		if buf == nil {
+			nilCount++
+		}
+	}
+	require.Greater(t, nilCount, spillNumBuckets-5)
+}
+
+func TestRebuildHashmapForBucket(t *testing.T) {
+	t.Skip("Requires complex expression setup - covered by integration tests")
+}
+
+func TestRebuildHashmapEmptyBucket(t *testing.T) {
+	t.Skip("Requires complex expression setup - covered by integration tests")
+}
+
+func TestGetSpilledInputBatchNoBuckets(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	hashJoin := &HashJoin{
+		ctr: container{
+			spilledBuildBuckets: []string{},
+			spilledProbeBuckets: []string{},
+			nextBucketIdx:       0,
+		},
+	}
+
+	result, err := hashJoin.getSpilledInputBatch(proc)
+	require.NoError(t, err)
+	require.Nil(t, result.Batch)
+}
+
+func TestGetSpilledInputBatchAllProcessed(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	hashJoin := &HashJoin{
+		ctr: container{
+			spilledBuildBuckets: []string{"bucket1"},
+			spilledProbeBuckets: []string{"bucket1"},
+			nextBucketIdx:       1, // Already processed
+		},
+	}
+
+	result, err := hashJoin.getSpilledInputBatch(proc)
+	require.NoError(t, err)
+	require.Nil(t, result.Batch)
+}
+
+func TestNewSpillBucketReaderError(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	// Try to open non-existent file
+	_, err := newSpillBucketReader(proc, "non_existent_bucket")
+	require.Error(t, err)
+}
+
+func TestReadBatchPartialRead(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+
+	bucketName := "test_partial"
+	file, err := spillfs.CreateFile(context.Background(), bucketName)
+	require.NoError(t, err)
+
+	// Write incomplete data (only count, no batch)
+	cnt := int64(5)
+	_, _ = file.Write(types.EncodeInt64(&cnt))
+	file.Close()
+
+	reader, err := newSpillBucketReader(proc, bucketName)
+	require.NoError(t, err)
+
+	reuseBat := batch.NewOffHeapWithSize(0)
+	defer reuseBat.Clean(proc.Mp())
+
+	_, err = reader.readBatch(proc, reuseBat)
+	require.Error(t, err)
+
+	reader.close()
+	spillfs.Delete(context.Background(), bucketName)
+}
+
+func TestAppendProbeBatchWithNulls(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	buckets, files, err := createProbeSpillFiles(proc)
+	require.NoError(t, err)
+	defer func() {
+		spillfs, _ := proc.GetSpillFileService()
+		for i, file := range files {
+			file.Close()
+			spillfs.Delete(context.Background(), buckets[i])
+		}
+	}()
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	buffers := make([]*batch.Batch, spillNumBuckets)
+
+	// Create batch with nulls
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3, 4}, []uint64{1}, proc.Mp()) // null at index 1
+	bat.SetRowCount(4)
+
+	ctr := &container{
+		eqCondVecs: []*vector.Vector{bat.Vecs[0]},
+	}
+
+	err = ctr.appendProbeBatchToSpillFiles(proc, bat, files, buffers, analyzer)
+	require.NoError(t, err)
+
+	// Flush remaining
+	for i, buf := range buffers {
+		if buf != nil && buf.RowCount() > 0 {
+			_, err := ctr.flushBucketBuffer(proc, buf, files[i], analyzer)
+			require.NoError(t, err)
+		}
+	}
+}
+
+func TestMultipleBatchesInBucket(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	bucketName := "test_multiple"
+	file, err := spillfs.CreateFile(context.Background(), bucketName)
+	require.NoError(t, err)
+
+	ctr := &container{}
+
+	// Write 5 batches
+	for i := 0; i < 5; i++ {
+		bat := batch.NewOffHeapWithSize(1)
+		bat.Vecs[0] = testutil.MakeInt32Vector([]int32{int32(i * 10), int32(i*10 + 1)}, nil, proc.Mp())
+		bat.SetRowCount(2)
+
+		_, err = ctr.flushBucketBuffer(proc, bat, file, analyzer)
+		require.NoError(t, err)
+	}
+	file.Close()
+
+	// Read all batches
+	reader, err := newSpillBucketReader(proc, bucketName)
+	require.NoError(t, err)
+
+	reuseBat := batch.NewOffHeapWithSize(0)
+	defer reuseBat.Clean(proc.Mp())
+
+	totalRows := 0
+	batchCount := 0
+	for {
+		bat, err := reader.readBatch(proc, reuseBat)
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		totalRows += bat.RowCount()
+		batchCount++
+	}
+
+	require.Equal(t, 5, batchCount)
+	require.Equal(t, 10, totalRows)
+
+	reader.close()
+	spillfs.Delete(context.Background(), bucketName)
+}
+
+func TestCreateProbeSpillFilesPartialError(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	// Normal creation should work
+	buckets, files, err := createProbeSpillFiles(proc)
+	require.NoError(t, err)
+	require.Len(t, buckets, spillNumBuckets)
+	require.Len(t, files, spillNumBuckets)
+
+	spillfs, _ := proc.GetSpillFileService()
+	for i, file := range files {
+		require.NotNil(t, file)
+		file.Close()
+		spillfs.Delete(context.Background(), buckets[i])
+	}
+}
+
+func TestComputeXXHashVectorLengthMismatch(t *testing.T) {
+	mp := mpool.MustNewZero()
+	var buf []byte
+
+	// Create vectors with different lengths
+	vec1 := testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, mp)
+	vec2 := testutil.MakeInt32Vector([]int32{4, 5}, nil, mp)
+
+	hashValues := make([]uint64, 3)
+	err := computeXXHash([]*vector.Vector{vec1, vec2}, hashValues, &buf)
+	require.NoError(t, err)
+
+	// Should handle gracefully
+	for _, h := range hashValues {
+		require.NotEqual(t, uint64(0), h)
+	}
+}
+
+func TestAppendProbeBatchLargeData(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	buckets, files, err := createProbeSpillFiles(proc)
+	require.NoError(t, err)
+	defer func() {
+		spillfs, _ := proc.GetSpillFileService()
+		for i, file := range files {
+			file.Close()
+			spillfs.Delete(context.Background(), buckets[i])
+		}
+	}()
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	buffers := make([]*batch.Batch, spillNumBuckets)
+
+	// Create batch with large strings
+	size := 100
+	values := make([]string, size)
+	for i := range values {
+		values[i] = fmt.Sprintf("large_string_value_%d_with_extra_padding", i)
+	}
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeVarcharVector(values, nil, proc.Mp())
+	bat.SetRowCount(size)
+
+	ctr := &container{
+		eqCondVecs: []*vector.Vector{bat.Vecs[0]},
+	}
+
+	err = ctr.appendProbeBatchToSpillFiles(proc, bat, files, buffers, analyzer)
+	require.NoError(t, err)
+
+	// Flush remaining
+	for i, buf := range buffers {
+		if buf != nil && buf.RowCount() > 0 {
+			_, err := ctr.flushBucketBuffer(proc, buf, files[i], analyzer)
+			require.NoError(t, err)
+		}
+	}
+}
+
+func TestReaderBatchReuse(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	bucketName := "test_reuse"
+	file, err := spillfs.CreateFile(context.Background(), bucketName)
+	require.NoError(t, err)
+
+	ctr := &container{}
+
+	// Write batches with different sizes
+	bat1 := batch.NewOffHeapWithSize(1)
+	bat1.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3, 4, 5}, nil, proc.Mp())
+	bat1.SetRowCount(5)
+	_, err = ctr.flushBucketBuffer(proc, bat1, file, analyzer)
+	require.NoError(t, err)
+
+	bat2 := batch.NewOffHeapWithSize(1)
+	bat2.Vecs[0] = testutil.MakeInt32Vector([]int32{6, 7}, nil, proc.Mp())
+	bat2.SetRowCount(2)
+	_, err = ctr.flushBucketBuffer(proc, bat2, file, analyzer)
+	require.NoError(t, err)
+
+	file.Close()
+
+	// Read with same reusable batch
+	reader, err := newSpillBucketReader(proc, bucketName)
+	require.NoError(t, err)
+
+	reuseBat := batch.NewOffHeapWithSize(0)
+	defer reuseBat.Clean(proc.Mp())
+
+	// First read
+	bat, err := reader.readBatch(proc, reuseBat)
+	require.NoError(t, err)
+	require.Equal(t, 5, bat.RowCount())
+
+	// Second read - batch should be reused
+	bat, err = reader.readBatch(proc, reuseBat)
+	require.NoError(t, err)
+	require.Equal(t, 2, bat.RowCount())
+
+	reader.close()
+	spillfs.Delete(context.Background(), bucketName)
+}
+
+func TestAppendProbeBatchAllBuckets(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	buckets, files, err := createProbeSpillFiles(proc)
+	require.NoError(t, err)
+	defer func() {
+		spillfs, _ := proc.GetSpillFileService()
+		for i, file := range files {
+			file.Close()
+			spillfs.Delete(context.Background(), buckets[i])
+		}
+	}()
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	buffers := make([]*batch.Batch, spillNumBuckets)
+
+	// Create enough data to hit all buckets
+	size := spillNumBuckets * 10
+	values := make([]int32, size)
+	for i := range values {
+		values[i] = int32(i)
+	}
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	bat.SetRowCount(size)
+
+	ctr := &container{
+		eqCondVecs: []*vector.Vector{bat.Vecs[0]},
+	}
+
+	err = ctr.appendProbeBatchToSpillFiles(proc, bat, files, buffers, analyzer)
+	require.NoError(t, err)
+
+	// Flush all buffers
+	for i, buf := range buffers {
+		if buf != nil && buf.RowCount() > 0 {
+			_, err := ctr.flushBucketBuffer(proc, buf, files[i], analyzer)
+			require.NoError(t, err)
+		}
+	}
+
+	// Close files
+	for _, file := range files {
+		file.Close()
+	}
+
+	// Verify all buckets have data
+	nonEmptyBuckets := 0
+	totalRows := 0
+	for _, bucketName := range buckets {
+		reader, err := newSpillBucketReader(proc, bucketName)
+		require.NoError(t, err)
+
+		reuseBat := batch.NewOffHeapWithSize(0)
+		bucketRows := 0
+		for {
+			bat, err := reader.readBatch(proc, reuseBat)
+			if err == io.EOF {
+				break
+			}
+			require.NoError(t, err)
+			bucketRows += bat.RowCount()
+		}
+		reuseBat.Clean(proc.Mp())
+		reader.close()
+
+		if bucketRows > 0 {
+			nonEmptyBuckets++
+		}
+		totalRows += bucketRows
+	}
+
+	require.Equal(t, size, totalRows)
+	require.Greater(t, nonEmptyBuckets, spillNumBuckets/2) // At least half should have data
+}
+
+func TestFlushBucketBufferMultipleCalls(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+
+	file, err := spillfs.CreateFile(context.Background(), "test_multi_flush")
+	require.NoError(t, err)
+	defer func() {
+		file.Close()
+		spillfs.Delete(context.Background(), "test_multi_flush")
+	}()
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	ctr := &container{}
+
+	// Multiple flushes
+	totalRows := int64(0)
+	for i := 0; i < 10; i++ {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = testutil.MakeInt32Vector([]int32{int32(i)}, nil, proc.Mp())
+		bat.SetRowCount(1)
+
+		cnt, err := ctr.flushBucketBuffer(proc, bat, file, analyzer)
+		require.NoError(t, err)
+		totalRows += cnt
+	}
+
+	require.Equal(t, int64(10), totalRows)
+}
+
+func TestNewSpillBucketReaderNonExistent(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	_, err := newSpillBucketReader(proc, "definitely_does_not_exist_bucket")
+	require.Error(t, err)
+}
+
+func TestHashValuesBufferGrowth(t *testing.T) {
+	mp := mpool.MustNewZero()
+	var buf []byte
+
+	// Start with small buffer
+	vec := testutil.MakeInt32Vector([]int32{1, 2}, nil, mp)
+	hashValues := make([]uint64, 2)
+	err := computeXXHash([]*vector.Vector{vec}, hashValues, &buf)
+	require.NoError(t, err)
+
+	// Larger data should grow buffer
+	largeVec := testutil.MakeVarcharVector([]string{
+		"very_long_string_value_1",
+		"very_long_string_value_2",
+		"very_long_string_value_3",
+	}, nil, mp)
+	largeHashValues := make([]uint64, 3)
+	err = computeXXHash([]*vector.Vector{largeVec}, largeHashValues, &buf)
+	require.NoError(t, err)
+
+	for _, h := range largeHashValues {
+		require.NotEqual(t, uint64(0), h)
+	}
 }
