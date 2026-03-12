@@ -110,6 +110,24 @@ typedef struct {
     uint32_t n_probes; // Number of lists to probe during search (default 20)
 } ivf_flat_search_params_t;
 
+/**
+ * @brief IVF-PQ index build parameters.
+ */
+typedef struct {
+    uint32_t n_lists;             // Number of inverted lists (clusters) (default 1024)
+    uint32_t m;                   // Number of sub-vectors (default 16)
+    uint32_t bits_per_code;       // Bits per code (default 8)
+    bool add_data_on_build;       // Whether to add data to the index during build (default true)
+    double kmeans_trainset_fraction; // Fraction of data to use for k-means training (default 0.5)
+} ivf_pq_build_params_t;
+
+/**
+ * @brief IVF-PQ search parameters.
+ */
+typedef struct {
+    uint32_t n_probes; // Number of lists to probe during search (default 20)
+} ivf_pq_search_params_t;
+
 #ifdef __cplusplus
 static inline cagra_build_params_t cagra_build_params_default() {
     return {128, 64, true};
@@ -124,6 +142,14 @@ static inline ivf_flat_build_params_t ivf_flat_build_params_default() {
 }
 
 static inline ivf_flat_search_params_t ivf_flat_search_params_default() {
+    return {20};
+}
+
+static inline ivf_pq_build_params_t ivf_pq_build_params_default() {
+    return {1024, 16, 8, true, 0.5};
+}
+
+static inline ivf_pq_search_params_t ivf_pq_search_params_default() {
     return {20};
 }
 #endif

@@ -136,6 +136,36 @@ func DefaultIvfFlatSearchParams() IvfFlatSearchParams {
     }
 }
 
+// IvfPqBuildParams maps to C.ivf_pq_build_params_t
+type IvfPqBuildParams struct {
+    NLists                 uint32
+    M                      uint32
+    BitsPerCode            uint32
+    AddDataOnBuild         bool
+    KmeansTrainsetFraction float64
+}
+
+func DefaultIvfPqBuildParams() IvfPqBuildParams {
+    return IvfPqBuildParams{
+        NLists:                 1024,
+        M:                      16,
+        BitsPerCode:            8,
+        AddDataOnBuild:         true,
+        KmeansTrainsetFraction: 0.5,
+    }
+}
+
+// IvfPqSearchParams maps to C.ivf_pq_search_params_t
+type IvfPqSearchParams struct {
+    NProbes uint32
+}
+
+func DefaultIvfPqSearchParams() IvfPqSearchParams {
+    return IvfPqSearchParams{
+        NProbes: 20,
+    }
+}
+
 // Float16 is a 16-bit floating point type (IEEE 754-2008).
 // Go does not have a native float16 type, so we use uint16 to represent its memory layout.
 type Float16 uint16

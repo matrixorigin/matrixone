@@ -24,7 +24,7 @@ LDFLAGS += -Xlinker -lpthread -Xlinker -lm
 TARGET := libmocuvs.so
 
 # Source files
-SRCS := brute_force_c.cpp ivf_flat_c.cpp cagra_c.cpp kmeans_c.cpp helper.cpp
+SRCS := brute_force_c.cpp ivf_flat_c.cpp ivf_pq_c.cpp cagra_c.cpp kmeans_c.cpp helper.cpp
 OBJS := $(SRCS:.cpp=.o)
 
 # Test configuration
@@ -34,6 +34,7 @@ TEST_EXE := test_cuvs_worker
 TEST_SRCS := $(TESTDIR)/main_test.cu \
              $(TESTDIR)/brute_force_test.cu \
              $(TESTDIR)/ivf_flat_test.cu \
+             $(TESTDIR)/ivf_pq_test.cu \
              $(TESTDIR)/cagra_test.cu \
              $(TESTDIR)/kmeans_test.cu
 
