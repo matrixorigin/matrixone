@@ -46,15 +46,21 @@ func newStartTask(r *taskRunner, t *daemonTask) *startTask {
 func (t *startTask) Handle(_ context.Context) error {
 	if err := t.runner.stopper.RunTask(func(ctx context.Context) {
 		var err error
+		var ok bool
 		defer func() {
 			// if cdc task quit without error
 			if t.task.task.TaskType == task.TaskType_CreateCdc && err == nil {
 				return
 			}
-			t.runner.removeDaemonTask(t.task.task.ID)
+			// Only remove the daemon task if this goroutine successfully
+			// started it. Otherwise we may remove a task that was started
+			// by a different goroutine for the same task ID.
+			if ok {
+				t.runner.removeDaemonTask(t.task.task.ID)
+			}
 		}()
 
-		ok, err := t.runner.startDaemonTask(ctx, t.task)
+		ok, err = t.runner.startDaemonTask(ctx, t.task)
 		if err != nil {
 			t.runner.setDaemonTaskError(ctx, t.task, err)
 			return
@@ -613,9 +619,14 @@ func (r *taskRunner) mergeTasks(tasksSlice ...[]task.DaemonTask) []task.DaemonTa
 // - status: task.TaskStatus_Created
 // - status: task.TaskStatus_Running AND last-heartbeat: timeout
 func (r *taskRunner) startTasks(ctx context.Context) []task.DaemonTask {
-	labels := NewCnLabels(r.cnUUID)
-	if r.getClient != nil {
-		hakeeperClient := r.getClient()
+	r.hakeeper.RLock()
+	getClient := r.hakeeper.getClient
+	cnUUID := r.hakeeper.cnUUID
+	r.hakeeper.RUnlock()
+
+	labels := NewCnLabels(cnUUID)
+	if getClient != nil {
+		hakeeperClient := getClient()
 		// account -> cn map. in all c
 		if hakeeperClient != nil {
 			ctx2, cancel := context.WithTimeoutCause(ctx, time.Second*5, moerr.CauseStartTasks)
@@ -824,6 +835,7 @@ func (r *taskRunner) startDaemonTask(ctx context.Context, dt *daemonTask) (bool,
 
 	// Clear the error message of the task when start it. And if it fails to
 	// start, new error message will be set again.
+	t.Details = cloneDaemonTaskDetails(t.Details)
 	t.Details.Error = ""
 
 	// When update the daemon task, add the condition that last heartbeat of
@@ -850,6 +862,7 @@ func (r *taskRunner) setDaemonTaskError(ctx context.Context, dt *daemonTask, err
 	t := dt.task
 	nowTime := time.Now()
 	t.UpdateAt = nowTime
+	t.Details = cloneDaemonTaskDetails(t.Details)
 	t.Details.Error = errMsg.Error()
 	// TODO(volgariver6): if it is a retryable error, do not update the status,
 	// otherwise, set the status to Error.
@@ -860,6 +873,17 @@ func (r *taskRunner) setDaemonTaskError(ctx context.Context, dt *daemonTask, err
 			zap.String("error message", errMsg.Error()),
 			zap.Error(err))
 	}
+}
+
+func cloneDaemonTaskDetails(d *task.Details) *task.Details {
+	if d == nil {
+		return &task.Details{}
+	}
+	// Shallow copy is enough for current use because callers only mutate the
+	// top-level Error field. If nested mutable fields are updated in future,
+	// this should be changed to a deep copy.
+	clone := *d
+	return &clone
 }
 
 func (r *taskRunner) addDaemonTask(dt *daemonTask) {

@@ -38,16 +38,14 @@ class TestTransactionInsertMethods:
         client.execute(f"USE {test_db}")
 
         # Create test table
-        client.execute(
-            f"""
+        client.execute(f"""
             CREATE TABLE {test_db}.test_table (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 name VARCHAR(255),
                 age INT,
                 email VARCHAR(255)
             )
-        """
-        )
+        """)
 
         yield client, test_db
 
@@ -72,16 +70,14 @@ class TestTransactionInsertMethods:
         await client.execute(f"USE {test_db}")
 
         # Create test table
-        await client.execute(
-            f"""
+        await client.execute(f"""
             CREATE TABLE {test_db}.test_table (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 name VARCHAR(255),
                 age INT,
                 email VARCHAR(255)
             )
-        """
-        )
+        """)
 
         yield client, test_db
 
@@ -143,15 +139,13 @@ class TestTransactionInsertMethods:
         client, test_db = sync_client_setup
 
         # Create table with vector column
-        client.execute(
-            f"""
+        client.execute(f"""
             CREATE TABLE {test_db}.vector_table (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 name VARCHAR(255),
                 vector JSON
             )
-        """
-        )
+        """)
 
         with client.session() as tx:
             # Test insert with vector data
@@ -234,15 +228,13 @@ class TestTransactionInsertMethods:
         client, test_db = async_client_setup
 
         # Create table with vector column
-        await client.execute(
-            f"""
+        await client.execute(f"""
             CREATE TABLE {test_db}.vector_table (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 name VARCHAR(255),
                 vector JSON
             )
-        """
-        )
+        """)
 
         async with client.session() as tx:
             # Test insert with vector data

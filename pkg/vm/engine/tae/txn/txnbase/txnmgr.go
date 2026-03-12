@@ -125,15 +125,16 @@ type TxnFactory = func(*TxnManager, txnif.TxnStore, []byte, types.TS, types.TS) 
 
 type TxnManager struct {
 	sm.ClosedState
-	walAndApplyQueue sm.Queue
-	applyQueue       sm.Queue
-	IdAlloc          *common.TxnIDAllocator
-	MaxCommittedTS   atomic.Pointer[types.TS]
-	TxnStoreFactory  TxnStoreFactory
-	TxnFactory       TxnFactory
-	Exception        *atomic.Value
-	CommitListener   *batchTxnCommitListener
-	workers          *ants.Pool
+	preWalQueue     sm.Queue
+	walQueue        sm.Queue
+	applyQueue      sm.Queue
+	IdAlloc         *common.TxnIDAllocator
+	MaxCommittedTS  atomic.Pointer[types.TS]
+	TxnStoreFactory TxnStoreFactory
+	TxnFactory      TxnFactory
+	Exception       *atomic.Value
+	CommitListener  *batchTxnCommitListener
+	workers         *ants.Pool
 
 	heartbeatJob atomic.Pointer[tasks.CancelableJob]
 
@@ -189,7 +190,8 @@ func NewTxnManager(
 	mgr.initMaxCommittedTS()
 
 	const batSize = 1000
-	mgr.walAndApplyQueue = sm.NewSafeQueue(20*batSize, batSize, mgr.onWalAndApply)
+	mgr.preWalQueue = sm.NewSafeQueue(20*batSize, batSize, mgr.onPreWalStage)
+	mgr.walQueue = sm.NewSafeQueue(20*batSize, batSize, mgr.onWalStage)
 	mgr.applyQueue = sm.NewSafeQueue(20*batSize, batSize, mgr.onApply)
 
 	mgr.workers, _ = ants.NewPool(runtime.GOMAXPROCS(0))
@@ -473,7 +475,7 @@ func (mgr *TxnManager) OnOpTxn(op *OpTxn) (err error) {
 	if op.Txn.GetStore().IsOffline() {
 		panic("offline txn should not be here")
 	}
-	_, err = mgr.walAndApplyQueue.Enqueue(op)
+	_, err = mgr.preWalQueue.Enqueue(op)
 	return
 }
 
@@ -807,7 +809,8 @@ func (mgr *TxnManager) Start(ctx context.Context) {
 	isReplayMode := mgr.IsReplayMode()
 	isWriteMode := mgr.IsWriteMode()
 	mgr.applyQueue.Start()
-	mgr.walAndApplyQueue.Start()
+	mgr.walQueue.Start()
+	mgr.preWalQueue.Start()
 	mgr.ResetHeartbeat()
 	logutil.Info(
 		"TxnManager-Started",
@@ -820,7 +823,8 @@ func (mgr *TxnManager) Stop() {
 	isReplayMode := mgr.IsReplayMode()
 	isWriteMode := mgr.IsWriteMode()
 	mgr.StopHeartbeat()
-	mgr.walAndApplyQueue.Stop()
+	mgr.preWalQueue.Stop()
+	mgr.walQueue.Stop()
 	mgr.applyQueue.Stop()
 	mgr.OnException(sm.ErrClose)
 	mgr.workers.Release()
@@ -831,58 +835,50 @@ func (mgr *TxnManager) Stop() {
 	)
 }
 
-/*
-overview:
-
-	 ---------------------------------------------
-	| txn op --> pre wal --> on wal --> post wal |
-	---------------------------------------------
-
-details:
-
-			            [------ on wal --------------]
-			pre wal ==> parallel marshal ==> flush wal        \\
-																	==> apply ==> done apply(commit/rollback) ==> push logtail
-			                             ==> collect logtail  //
-	                                         (wait marshal)			   [---------- post wal (wait flush) --------------------]
-*/
-func (mgr *TxnManager) onWalAndApply(items ...any) {
+func (mgr *TxnManager) onPreWalStage(items ...any) {
 	now := time.Now()
-
 	for _, item := range items {
-		t1 := time.Now()
 		op := item.(*OpTxn)
-
 		op.Txn.GetStore().TriggerTrace(txnif.TracePreWal)
-		// get things done before the writing ahead log
 		if !mgr.preWal(op) {
 			continue
 		}
+		if _, err := mgr.walQueue.Enqueue(op); err != nil {
+			panic(err)
+		}
+	}
+	common.DoIfDebugEnabled(func() {
+		logutil.Debug("[onPreWalStage]",
+			common.NameSpaceField("txns"),
+			common.DurationField(time.Since(now)),
+			common.CountField(len(items)))
+	})
+}
+
+func (mgr *TxnManager) onWalStage(items ...any) {
+	now := time.Now()
+	for _, item := range items {
+		t1 := time.Now()
+		op := item.(*OpTxn)
+		op.Txn.GetStore().TriggerTrace(txnif.TraceOnWal)
+		inWal := mgr.onWal(op)
 		t2 := time.Now()
 
-		op.Txn.GetStore().TriggerTrace(txnif.TraceOnWal)
-		// getting the wal ready and getting the wal flush down
-		inWal := mgr.onWal(op)
-
+		op.Txn.GetStore().TriggerTrace(txnif.TracePostWal)
+		mgr.postWal(op, inWal)
 		t3 := time.Now()
 
-		op.Txn.GetStore().TriggerTrace(txnif.TracePostWal)
-		// waiting the wal done and do some things
-		mgr.postWal(op, inWal)
-
-		if dur := time.Since(t1); dur > time.Second {
+		if dur := t3.Sub(t1); dur > time.Second {
 			logutil.Warn(
 				"SLOW-LOG",
 				zap.String("txn", op.Txn.String()),
-				zap.Duration("pre-wal-duration", t2.Sub(t1)),
-				zap.Duration("on-wal-duration", t3.Sub(t2)),
-				zap.Duration("post-wal-duration", time.Since(t3)),
+				zap.Duration("on-wal-duration", t2.Sub(t1)),
+				zap.Duration("post-wal-duration", t3.Sub(t2)),
 			)
 		}
 	}
-
 	common.DoIfDebugEnabled(func() {
-		logutil.Debug("[onWalAndApply]",
+		logutil.Debug("[onWalStage]",
 			common.NameSpaceField("txns"),
 			common.DurationField(time.Since(now)),
 			common.CountField(len(items)))

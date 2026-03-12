@@ -52,25 +52,21 @@ class TestFulltextComprehensive:
         test_client.execute("CREATE DATABASE IF NOT EXISTS fulltext_search_test")
         test_client.execute("USE fulltext_search_test")
 
-        test_client.execute(
-            """
+        test_client.execute("""
             CREATE TABLE IF NOT EXISTS test_documents (
                 id INT PRIMARY KEY AUTO_INCREMENT,
                 title VARCHAR(200),
                 content TEXT
             )
-        """
-        )
+        """)
 
         # Insert test data
-        test_client.execute(
-            """
+        test_client.execute("""
             INSERT INTO test_documents (title, content) VALUES 
             ('Machine Learning Guide', 'This is a comprehensive guide to machine learning concepts and algorithms'),
             ('Data Science Handbook', 'A complete handbook covering data science techniques and tools'),
             ('AI Research Paper', 'Latest research in artificial intelligence and neural networks')
-        """
-        )
+        """)
 
         # Create fulltext index
         test_client.fulltext_index.create("test_documents", name="ftidx_content", columns=["title", "content"])
@@ -109,26 +105,22 @@ class TestFulltextComprehensive:
         test_client.execute("CREATE DATABASE IF NOT EXISTS fulltext_tx_test")
         test_client.execute("USE fulltext_tx_test")
 
-        test_client.execute(
-            """
+        test_client.execute("""
             CREATE TABLE IF NOT EXISTS test_docs_tx (
                 id INT PRIMARY KEY,
                 title VARCHAR(100),
                 content TEXT
             )
-        """
-        )
+        """)
 
         # Clear any existing data and insert test data
         test_client.execute("DELETE FROM test_docs_tx")
-        test_client.execute(
-            """
+        test_client.execute("""
             INSERT INTO test_docs_tx (id, title, content) VALUES
             (1, 'Python Programming', 'Python is a great programming language for data science'),
             (2, 'Machine Learning', 'Machine learning algorithms can learn from data'),
             (3, 'Database Systems', 'Database systems store and manage data efficiently')
-        """
-        )
+        """)
 
         # Create fulltext index
         test_client.fulltext_index.create("test_docs_tx", name="ftidx_tx_docs", columns=["title", "content"])
@@ -168,26 +160,22 @@ class TestFulltextComprehensive:
         await test_async_client.execute("CREATE DATABASE IF NOT EXISTS async_fulltext_test")
         await test_async_client.execute("USE async_fulltext_test")
 
-        await test_async_client.execute(
-            """
+        await test_async_client.execute("""
             CREATE TABLE IF NOT EXISTS async_documents (
                 id INT PRIMARY KEY AUTO_INCREMENT,
                 title VARCHAR(200),
                 content TEXT
             )
-        """
-        )
+        """)
 
         # Clear existing data and insert test data
         await test_async_client.execute("DELETE FROM async_documents")
-        await test_async_client.execute(
-            """
+        await test_async_client.execute("""
             INSERT INTO async_documents (title, content) VALUES
             ('Database Design', 'Database design principles and best practices'),
             ('SQL Optimization', 'Techniques for optimizing SQL queries and performance'),
             ('NoSQL Systems', 'Understanding NoSQL database systems and their use cases')
-        """
-        )
+        """)
 
         # Create fulltext index
         await test_async_client.fulltext_index.create(
@@ -227,26 +215,22 @@ class TestFulltextComprehensive:
         await test_async_client.execute("CREATE DATABASE IF NOT EXISTS async_fulltext_tx_test")
         await test_async_client.execute("USE async_fulltext_tx_test")
 
-        await test_async_client.execute(
-            """
+        await test_async_client.execute("""
             CREATE TABLE IF NOT EXISTS async_docs_tx (
                 id INT PRIMARY KEY,
                 title VARCHAR(100),
                 content TEXT
             )
-        """
-        )
+        """)
 
         # Clear existing data and insert test data
         await test_async_client.execute("DELETE FROM async_docs_tx")
-        await test_async_client.execute(
-            """
+        await test_async_client.execute("""
             INSERT INTO async_docs_tx (id, title, content) VALUES
             (1, 'Async Programming', 'Async programming allows concurrent execution'),
             (2, 'Web Development', 'Web development involves frontend and backend'),
             (3, 'Cloud Computing', 'Cloud computing provides scalable resources')
-        """
-        )
+        """)
 
         # Create fulltext index
         await test_async_client.fulltext_index.create(
@@ -289,16 +273,14 @@ class TestFulltextComprehensive:
         test_client.fulltext_index.enable_fulltext()
 
         # Create test table
-        test_client.execute(
-            """
+        test_client.execute("""
             CREATE TABLE IF NOT EXISTS test_fulltext (
                 id BIGINT PRIMARY KEY,
                 title VARCHAR(255),
                 content TEXT,
                 category VARCHAR(50)
             )
-        """
-        )
+        """)
 
         yield "test_fulltext"
 
@@ -332,15 +314,13 @@ class TestFulltextComprehensive:
         await test_async_client.fulltext_index.enable_fulltext()
 
         # Create test table
-        await test_async_client.execute(
-            """
+        await test_async_client.execute("""
             CREATE TABLE IF NOT EXISTS test_fulltext_async (
                 id BIGINT PRIMARY KEY,
                 title VARCHAR(255),
                 content TEXT
             )
-        """
-        )
+        """)
 
         try:
             # Create fulltext index
@@ -387,15 +367,13 @@ class TestFulltextComprehensive:
         await test_async_client.fulltext_index.enable_fulltext()
 
         # Create test table
-        await test_async_client.execute(
-            """
+        await test_async_client.execute("""
             CREATE TABLE IF NOT EXISTS test_fulltext_drop_async (
                 id BIGINT PRIMARY KEY,
                 title VARCHAR(255),
                 content TEXT
             )
-        """
-        )
+        """)
 
         try:
             # Create index first
@@ -431,26 +409,22 @@ class TestFulltextComprehensive:
         test_client.execute("CREATE DATABASE IF NOT EXISTS manual_fulltext_tx_test")
         test_client.execute("USE manual_fulltext_tx_test")
 
-        test_client.execute(
-            """
+        test_client.execute("""
             CREATE TABLE IF NOT EXISTS manual_tx_docs (
                 id INT PRIMARY KEY,
                 title VARCHAR(100),
                 content TEXT
             )
-        """
-        )
+        """)
 
         # Clear any existing data and insert test data
         test_client.execute("DELETE FROM manual_tx_docs")
-        test_client.execute(
-            """
+        test_client.execute("""
             INSERT INTO manual_tx_docs (id, title, content) VALUES
             (1, 'Transaction Management', 'Transactions ensure data consistency'),
             (2, 'ACID Properties', 'ACID properties guarantee reliable processing'),
             (3, 'Concurrency Control', 'Concurrency control manages simultaneous access')
-        """
-        )
+        """)
 
         # Create fulltext index
         test_client.fulltext_index.create("manual_tx_docs", name="ftidx_manual_tx", columns=["title", "content"])
@@ -490,26 +464,22 @@ class TestFulltextComprehensive:
         await test_async_client.execute("CREATE DATABASE IF NOT EXISTS manual_async_fulltext_tx_test")
         await test_async_client.execute("USE manual_async_fulltext_tx_test")
 
-        await test_async_client.execute(
-            """
+        await test_async_client.execute("""
             CREATE TABLE IF NOT EXISTS manual_async_tx_docs (
                 id INT PRIMARY KEY,
                 title VARCHAR(100),
                 content TEXT
             )
-        """
-        )
+        """)
 
         # Clear existing data and insert test data
         await test_async_client.execute("DELETE FROM manual_async_tx_docs")
-        await test_async_client.execute(
-            """
+        await test_async_client.execute("""
             INSERT INTO manual_async_tx_docs (id, title, content) VALUES
             (1, 'Async Transactions', 'Async transactions handle concurrent operations'),
             (2, 'Event Loop', 'Event loop manages async operations efficiently'),
             (3, 'Promise Handling', 'Promise handling manages async results')
-        """
-        )
+        """)
 
         # Create fulltext index
         await test_async_client.fulltext_index.create(
@@ -551,8 +521,7 @@ class TestFulltextComprehensive:
         await test_async_client.execute("USE async_advanced_test")
 
         await test_async_client.execute("DROP TABLE IF EXISTS async_advanced_docs")
-        await test_async_client.execute(
-            """
+        await test_async_client.execute("""
             CREATE TABLE async_advanced_docs (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 title VARCHAR(255) NOT NULL,
@@ -561,8 +530,7 @@ class TestFulltextComprehensive:
                 priority INT DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """
-        )
+        """)
 
         # Insert test data
         test_docs = [
@@ -599,12 +567,10 @@ class TestFulltextComprehensive:
         ]
 
         for title, content, category, priority in test_docs:
-            await test_async_client.execute(
-                f"""
+            await test_async_client.execute(f"""
                 INSERT INTO async_advanced_docs (title, content, category, priority) 
                 VALUES ('{title}', '{content}', '{category}', {priority})
-            """
-            )
+            """)
 
         try:
             # Create fulltext index
@@ -728,16 +694,14 @@ class TestFulltextComprehensive:
         await test_async_client.execute("USE async_concurrent_test")
 
         await test_async_client.execute("DROP TABLE IF EXISTS async_concurrent_docs")
-        await test_async_client.execute(
-            """
+        await test_async_client.execute("""
             CREATE TABLE async_concurrent_docs (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 title VARCHAR(255) NOT NULL,
                 content TEXT NOT NULL,
                 category VARCHAR(100) NOT NULL
             )
-        """
-        )
+        """)
 
         # Insert test data
         test_docs = [
@@ -765,12 +729,10 @@ class TestFulltextComprehensive:
         ]
 
         for title, content, category in test_docs:
-            await test_async_client.execute(
-                f"""
+            await test_async_client.execute(f"""
                 INSERT INTO async_concurrent_docs (title, content, category) 
                 VALUES ('{title}', '{content}', '{category}')
-            """
-            )
+            """)
 
         try:
             # Create fulltext index
@@ -844,26 +806,22 @@ class TestFulltextComprehensive:
         test_client.execute("CREATE DATABASE IF NOT EXISTS fulltext_modes_test")
         test_client.execute("USE fulltext_modes_test")
 
-        test_client.execute(
-            """
+        test_client.execute("""
             CREATE TABLE IF NOT EXISTS test_modes (
                 id INT PRIMARY KEY,
                 title VARCHAR(100),
                 content TEXT
             )
-        """
-        )
+        """)
 
         # Clear any existing data and insert test data
         test_client.execute("DELETE FROM test_modes")
-        test_client.execute(
-            """
+        test_client.execute("""
             INSERT INTO test_modes (id, title, content) VALUES
             (1, 'Natural Language Processing', 'NLP is a field of AI that focuses on language'),
             (2, 'Machine Learning Algorithms', 'ML algorithms learn patterns from data'),
             (3, 'Deep Learning Networks', 'Deep learning uses neural networks with multiple layers')
-        """
-        )
+        """)
 
         # Create fulltext index
         test_client.fulltext_index.create("test_modes", name="ftidx_modes", columns=["title", "content"])
@@ -896,27 +854,23 @@ class TestFulltextComprehensive:
         test_client.execute("CREATE DATABASE IF NOT EXISTS fulltext_multi_col_test")
         test_client.execute("USE fulltext_multi_col_test")
 
-        test_client.execute(
-            """
+        test_client.execute("""
             CREATE TABLE IF NOT EXISTS test_multi_col (
                 id INT PRIMARY KEY,
                 title VARCHAR(100),
                 content TEXT,
                 tags VARCHAR(200)
             )
-        """
-        )
+        """)
 
         # Clear any existing data and insert test data
         test_client.execute("DELETE FROM test_multi_col")
-        test_client.execute(
-            """
+        test_client.execute("""
             INSERT INTO test_multi_col (id, title, content, tags) VALUES
             (1, 'Python Programming', 'Python is great for data science', 'python, programming, data'),
             (2, 'JavaScript Development', 'JavaScript powers web applications', 'javascript, web, frontend'),
             (3, 'Database Design', 'Good database design is crucial', 'database, design, sql')
-        """
-        )
+        """)
 
         # Create fulltext index on multiple columns
         test_client.fulltext_index.create(
@@ -1771,3 +1725,48 @@ class TestFulltextComprehensive:
         finally:
             test_client.drop_table(EdgeTest)
             test_client.execute("DROP DATABASE fulltext_edge_test")
+
+    def test_fulltext_index_create_all(self, test_client):
+        """Test FulltextIndex works with SQLAlchemy create_all()"""
+        test_client.execute("CREATE DATABASE IF NOT EXISTS fulltext_create_all_test")
+        test_client.execute("USE fulltext_create_all_test")
+
+        Base = declarative_base()
+
+        class Article(Base):
+            __tablename__ = 'articles'
+            id = Column(Integer, primary_key=True, autoincrement=True)
+            title = Column(String(200), nullable=False)
+            content = Column(Text, nullable=False)
+            __table_args__ = (FulltextIndex('ftidx_content', ['title', 'content']),)
+
+        try:
+            # Use create_all() to create table with fulltext index
+            with test_client.session() as session:
+                Base.metadata.create_all(session.get_bind())
+                session.commit()
+
+            # Verify index was created
+            result = test_client.execute("SHOW INDEX FROM articles WHERE Key_name = 'ftidx_content'")
+            rows = result.fetchall()
+            assert len(rows) == 2, "Should have 2 columns in fulltext index"
+            assert rows[0][10] == 'fulltext', "Index type should be fulltext"
+
+            # Test the index works
+            test_client.batch_insert(
+                Article,
+                [
+                    {"title": "Python Guide", "content": "Learn Python programming"},
+                    {"title": "Java Tutorial", "content": "Learn Java basics"},
+                ],
+            )
+
+            result = test_client.execute("SELECT title FROM articles WHERE MATCH(title, content) AGAINST('Python')")
+            rows = result.fetchall()
+            assert len(rows) == 1 and rows[0][0] == "Python Guide"
+
+        finally:
+            with test_client.session() as session:
+                Base.metadata.drop_all(session.get_bind())
+                session.commit()
+            test_client.execute("DROP DATABASE fulltext_create_all_test")

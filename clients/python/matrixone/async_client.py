@@ -23,11 +23,13 @@ except ImportError:
 
 try:
     from sqlalchemy import text
+    from sqlalchemy.engine import URL
     from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 except ImportError:
     create_async_engine = None
     AsyncEngine = None
     text = None
+    URL = None
 
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -38,6 +40,7 @@ from .fulltext_manager import AsyncFulltextIndexManager
 from .metadata import AsyncMetadataManager
 from .session import AsyncSession
 from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
+from .branch import AsyncBranchManager
 from .connection_hooks import ConnectionAction, ConnectionHook, create_connection_hook
 from .load_data import AsyncLoadDataManager
 from .stage import AsyncStageManager
@@ -594,6 +597,7 @@ class AsyncClient(BaseMatrixOneClient):
         # Initialize managers
         self._snapshots = AsyncSnapshotManager(self)
         self._clone = AsyncCloneManager(self)
+        self._branch = AsyncBranchManager(self)
         self._moctl = AsyncMoCtlManager(self)
         self._restore = AsyncRestoreManager(self)
         self._pitr = AsyncPitrManager(self)
@@ -860,19 +864,21 @@ class AsyncClient(BaseMatrixOneClient):
         if not create_async_engine:
             raise ConnectionError("SQLAlchemy async engine not available. Please install sqlalchemy[asyncio]")
 
-        # Build connection string for async engine
-        connection_string = (
-            f"mysql+aiomysql://{self._connection_params['user']}:"
-            f"{self._connection_params['password']}@"
-            f"{self._connection_params['host']}:"
-            f"{self._connection_params['port']}/"
-            f"{self._connection_params['database'] or ''}"
-            f"?charset={self._connection_params['charset']}"
+        # Build connection URL using SQLAlchemy's URL.create() for proper escaping
+        # of special characters in user/password (e.g., @, #, %, etc.)
+        url = URL.create(
+            drivername="mysql+aiomysql",
+            username=self._connection_params["user"],
+            password=self._connection_params["password"],
+            host=self._connection_params["host"],
+            port=self._connection_params["port"],
+            database=self._connection_params["database"] or None,
+            query={"charset": self._connection_params["charset"]},
         )
 
         # Create async engine with connection pooling
         engine = create_async_engine(
-            connection_string,
+            url,
             pool_size=5,  # Smaller pool size for testing
             max_overflow=10,  # Smaller max overflow
             pool_timeout=30,  # Default pool timeout
@@ -1013,9 +1019,7 @@ class AsyncClient(BaseMatrixOneClient):
 
         return self
 
-    async def _execute_with_logging(
-        self, connection, sql: str, context: str = "Async SQL execution", override_sql_log_mode: str = None
-    ):
+    async def _execute_with_logging(self, connection, sql: str, context: str = "Async SQL execution", log_mode: str = None):
         """
         Execute SQL asynchronously with proper logging through the client's logger.
 
@@ -1027,7 +1031,7 @@ class AsyncClient(BaseMatrixOneClient):
             connection: SQLAlchemy async connection object
             sql: SQL query string
             context: Context description for error logging (default: "Async SQL execution")
-            override_sql_log_mode: Temporarily override sql_log_mode for this query only
+            log_mode: Temporarily override sql_log_mode for this query only
 
         Returns::
 
@@ -1052,26 +1056,24 @@ class AsyncClient(BaseMatrixOneClient):
                 if result.returns_rows:
                     # For SELECT queries, we can't consume the result to count rows
                     # So we just log without row count
-                    self.logger.log_query(
-                        sql, execution_time, None, success=True, override_sql_log_mode=override_sql_log_mode
-                    )
+                    self.logger.log_query(sql, execution_time, None, success=True, log_mode=log_mode)
                 else:
                     # For DML queries (INSERT/UPDATE/DELETE), we can get rowcount
-                    self.logger.log_query(
-                        sql, execution_time, result.rowcount, success=True, override_sql_log_mode=override_sql_log_mode
-                    )
+                    self.logger.log_query(sql, execution_time, result.rowcount, success=True, log_mode=log_mode)
             except Exception:
                 # Fallback: just log the query without row count
-                self.logger.log_query(sql, execution_time, None, success=True, override_sql_log_mode=override_sql_log_mode)
+                self.logger.log_query(sql, execution_time, None, success=True, log_mode=log_mode)
 
             return result
         except Exception as e:
             execution_time = time.time() - start_time
-            self.logger.log_query(sql, execution_time, success=False, override_sql_log_mode=override_sql_log_mode)
+            self.logger.log_query(sql, execution_time, success=False, log_mode=log_mode)
             self.logger.log_error(e, context=context)
-            raise
+            from .client import _classify_db_error
 
-    async def execute(self, sql_or_stmt, params: Optional[Tuple] = None, _log_mode: str = None) -> AsyncResultSet:
+            raise _classify_db_error(e, sql) from None
+
+    async def execute(self, sql_or_stmt, params: Optional[Tuple] = None, log_mode: str = None) -> AsyncResultSet:
         """
         Execute SQL query or SQLAlchemy statement asynchronously without transaction isolation.
 
@@ -1105,7 +1107,7 @@ class AsyncClient(BaseMatrixOneClient):
                 substituted for '?' placeholders in order. Automatically escaped to prevent
                 SQL injection. Ignored for SQLAlchemy statements.
 
-            _log_mode (Optional[str]): Override SQL logging mode for this query only.
+            log_mode (Optional[str]): Override SQL logging mode for this query only.
                 Options: 'off', 'simple', 'full'. If None, uses client's global sql_log_mode
                 setting. Useful for debugging or disabling logs for frequently-executed queries.
 
@@ -1291,13 +1293,13 @@ class AsyncClient(BaseMatrixOneClient):
                 # Disable logging for frequently executed query
                 result = await client.execute(
                     select(User).where(User.id == 1),
-                    _log_mode='off'
+                    log_mode='off'
                 )
 
                 # Force full SQL logging for debugging
                 result = await client.execute(
                     select(User).where(User.name.like('%test%')),
-                    _log_mode='full'
+                    log_mode='full'
                 )
 
                 await client.disconnect()
@@ -1319,7 +1321,7 @@ class AsyncClient(BaseMatrixOneClient):
         2. **Use parameters**: Always use parameter binding to prevent SQL injection
         3. **Session for transactions**: Use client.session() for atomic operations
         4. **Use asyncio.gather()**: For concurrent independent queries
-        5. **Disable logging in production**: Use _log_mode='off' for hot paths
+        5. **Disable logging in production**: Use log_mode='off' for hot paths
         6. **Handle exceptions**: Wrap execute() in try-except for error handling
 
         See Also:
@@ -1340,7 +1342,8 @@ class AsyncClient(BaseMatrixOneClient):
             if not isinstance(sql_or_stmt, str):
                 # SQLAlchemy statement - delegate to session for consistent behavior
                 async with self.session() as session:
-                    result = await session.execute(sql_or_stmt, params)
+                    # Suppress session-level logging; AsyncClient logs below
+                    result = await session.execute(sql_or_stmt, params, log_mode='off')
 
                     # Convert SQLAlchemy result to AsyncResultSet
                     if hasattr(result, 'returns_rows') and result.returns_rows:
@@ -1354,7 +1357,7 @@ class AsyncClient(BaseMatrixOneClient):
                             execution_time,
                             len(rows),
                             success=True,
-                            override_sql_log_mode=_log_mode,
+                            log_mode=log_mode,
                         )
                         return async_result
                     else:
@@ -1366,7 +1369,7 @@ class AsyncClient(BaseMatrixOneClient):
                             execution_time,
                             result.rowcount,
                             success=True,
-                            override_sql_log_mode=_log_mode,
+                            log_mode=log_mode,
                         )
                         return async_result
 
@@ -1392,15 +1395,11 @@ class AsyncClient(BaseMatrixOneClient):
                     rows = result.fetchall()
                     columns = list(result.keys()) if hasattr(result, "keys") else []
                     async_result = AsyncResultSet(columns, rows)
-                    self.logger.log_query(
-                        sql_or_stmt, execution_time, len(rows), success=True, override_sql_log_mode=_log_mode
-                    )
+                    self.logger.log_query(sql_or_stmt, execution_time, len(rows), success=True, log_mode=log_mode)
                     return async_result
                 else:
                     async_result = AsyncResultSet([], [], affected_rows=result.rowcount)
-                    self.logger.log_query(
-                        sql_or_stmt, execution_time, result.rowcount, success=True, override_sql_log_mode=_log_mode
-                    )
+                    self.logger.log_query(sql_or_stmt, execution_time, result.rowcount, success=True, log_mode=log_mode)
                     return async_result
 
         except Exception as e:
@@ -1418,82 +1417,9 @@ class AsyncClient(BaseMatrixOneClient):
 
                 print(f"Warning: Error logging failed: {log_err}", file=sys.stderr)
 
-            # Extract user-friendly error message
-            error_msg = str(e)
+            from .client import _classify_db_error
 
-            # Handle common database errors with helpful messages
-            # Check for "does not exist" first before "syntax error"
-            if (
-                'does not exist' in error_msg.lower()
-                or 'no such table' in error_msg.lower()
-                or 'doesn\'t exist' in error_msg.lower()
-            ):
-                # Table doesn't exist
-                import re
-
-                match = re.search(r"(?:table|database)\s+[\"']?(\w+)[\"']?\s+does not exist", error_msg, re.IGNORECASE)
-                if match:
-                    obj_name = match.group(1)
-                    raise QueryError(
-                        f"Table or database '{obj_name}' does not exist. "
-                        f"Create it first using client.create_table() or CREATE TABLE/DATABASE statement."
-                    ) from None
-                else:
-                    raise QueryError(f"Object not found: {error_msg}") from None
-
-            elif 'already exists' in error_msg.lower() and '1050' in error_msg:
-                # Table already exists
-                import re
-
-                match = re.search(r"table\s+(\w+)\s+already\s+exists", error_msg, re.IGNORECASE)
-                if match:
-                    table_name = match.group(1)
-                    raise QueryError(
-                        f"Table '{table_name}' already exists. "
-                        f"Use DROP TABLE {table_name} or client.drop_table() to remove it first."
-                    ) from None
-                else:
-                    raise QueryError(f"Object already exists: {error_msg}") from None
-
-            elif 'duplicate' in error_msg.lower() and ('1062' in error_msg or '1061' in error_msg):
-                # Duplicate key/entry
-                raise QueryError(
-                    f"Duplicate entry error: {error_msg}. "
-                    f"Check for duplicate primary key or unique constraint violations."
-                ) from None
-
-            elif 'syntax error' in error_msg.lower() or '1064' in error_msg:
-                # SQL syntax error
-                sql_preview = final_sql[:200] + '...' if len(final_sql) > 200 else final_sql
-                raise QueryError(f"SQL syntax error: {error_msg}\n" f"Query: {sql_preview}") from None
-
-            elif 'column' in error_msg.lower() and ('unknown' in error_msg.lower() or 'not found' in error_msg.lower()):
-                # Column doesn't exist
-                raise QueryError(f"Column not found: {error_msg}. " f"Check your column names and table schema.") from None
-
-            elif 'cannot be null' in error_msg.lower() or '1048' in error_msg:
-                # NULL constraint violation
-                raise QueryError(
-                    f"NULL constraint violation: {error_msg}. " f"Some columns require non-NULL values."
-                ) from None
-
-            elif 'not supported' in error_msg.lower() and '20105' in error_msg:
-                # MatrixOne-specific: feature not supported
-                raise QueryError(
-                    f"MatrixOne feature limitation: {error_msg}. "
-                    f"This feature may require additional configuration or is not yet supported."
-                ) from None
-
-            elif 'bind parameter' in error_msg.lower() or 'InvalidRequestError' in error_msg:
-                # SQLAlchemy bind parameter error
-                raise QueryError(
-                    f"Parameter binding error: {error_msg}. "
-                    f"This might be caused by special characters in your data (colons in JSON, etc.)"
-                ) from None
-
-            else:
-                # Generic error - cleaner message without full SQLAlchemy stack
-                raise QueryError(f"Query execution failed: {error_msg}") from None
+            raise _classify_db_error(e, sql_or_stmt) from None
 
     def _substitute_parameters(self, sql: str, params: Optional[Tuple] = None) -> str:
         """
@@ -2062,6 +1988,51 @@ class AsyncClient(BaseMatrixOneClient):
     def clone(self) -> AsyncCloneManager:
         """Get async clone manager"""
         return self._clone
+
+    @property
+    def branch(self) -> AsyncBranchManager:
+        """
+        Get async branch manager for Git-style version control operations.
+
+        Provides asynchronous table and database branching, diffing, and merging capabilities.
+        Requires MatrixOne 3.0.5 or higher.
+
+        Returns:
+            AsyncBranchManager instance for async branch operations
+
+        Example::
+
+            import asyncio
+            from matrixone import AsyncClient
+
+            async def main():
+                client = AsyncClient()
+                await client.connect(database='test')
+
+                # Create table branch
+                await client.branch.create_table_branch('users_branch', 'users')
+
+                # Create database branch
+                await client.branch.create_database_branch('dev_db', 'production')
+
+                # Compare branches
+                diffs = await client.branch.diff_table('users_branch', 'users')
+
+                # Merge branches
+                await client.branch.merge_table('users_branch', 'users')
+
+                # Delete branches
+                await client.branch.delete_table_branch('users_branch')
+                await client.branch.delete_database_branch('dev_db')
+
+                await client.disconnect()
+
+            asyncio.run(main())
+
+        See Also:
+            - :doc:`branch_guide` - Complete branch management guide
+        """
+        return self._branch
 
     @property
     def moctl(self) -> AsyncMoCtlManager:

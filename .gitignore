@@ -67,6 +67,10 @@ docker-compose-log/
 etc/docker-multi-cn-local-disk/*.toml
 !etc/docker-multi-cn-local-disk/launch.toml
 
+# Allow Python SDK files
+!clients/python/matrixone/**/*.py
+!clients/python/tests/**/*.py
+!clients/python/examples/**/*.py
 # python
 **/__pycache__/
 *.pyc

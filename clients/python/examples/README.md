@@ -127,6 +127,17 @@ make test USE_SOURCE=0
 - `example_25_metadata_operations.py` - Metadata operations
 - `example_31_cdc_operations.py` - CDC task lifecycle operations
 
+### Git-Style Branch Operations (Git for Data)
+- `example_32_branch_operations.py` - Complete branch operations with 8 real-world scenarios:
+  1. Basic API - Simple string-based operations
+  2. ORM Model Support - SQLAlchemy model integration
+  3. Development Workflow - Create dev branch, test, merge
+  4. Safe Data Migration - Snapshot-based testing before applying
+  5. A/B Testing - Compare different data transformations
+  6. Multi-Team Development - Independent branches with conflict resolution
+  7. Database-Level Branching - Schema changes across entire databases
+  8. Async Operations - Non-blocking branch operations
+
 ## Prerequisites
 
 ### For Local Source Mode

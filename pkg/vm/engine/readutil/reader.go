@@ -589,6 +589,35 @@ func (r *reader) Read(
 
 	r.tryUpdateColumns(cols)
 
+	// source.Next() expects outBatch.Vecs to be aligned with cols/seqnums.
+	// For vector TopN pushdown we may have an extra distVec appended in the previous
+	// Read(), so detach it before source.Next() to avoid seqNums out-of-range panic in
+	// InMem paths. We keep one float64 distVec for reuse to avoid repeated allocations.
+	var detachedDistVec *vector.Vector
+	if r.orderByLimit != nil && len(outBatch.Vecs) > len(cols) {
+		if candidate := outBatch.Vecs[len(cols)]; candidate != nil &&
+			candidate.GetType().Oid == types.T_float64 {
+			candidate.CleanOnlyData()
+			detachedDistVec = candidate
+		}
+		for i := len(cols); i < len(outBatch.Vecs); i++ {
+			vec := outBatch.Vecs[i]
+			if vec != nil && vec != detachedDistVec {
+				vec.Free(mp)
+			}
+			// Clear references in the backing array so detached vectors can be reused/freed
+			// explicitly instead of being retained implicitly by slice capacity.
+			outBatch.Vecs[i] = nil
+		}
+		outBatch.Vecs = outBatch.Vecs[:len(cols)]
+	}
+	// If Read() exits early (error/end) before re-attaching the detached distVec, release it.
+	defer func() {
+		if detachedDistVec != nil {
+			detachedDistVec.Free(mp)
+		}
+	}()
+
 	blkInfo, state, err := r.source.Next(
 		ctx,
 		cols,
@@ -614,10 +643,24 @@ func (r *reader) Read(
 				return false, err
 			}
 
-			outBatch.Shuffle(sels, mp)
+			// Keep batch cardinality consistent with pushed-down vector TopN result.
+			// When sels is empty, batch.Shuffle is a no-op, so we must clear outBatch
+			// explicitly; otherwise rowCount can stay > 0 while distVec is empty.
+			if len(sels) == 0 {
+				outBatch.CleanOnlyData()
+			} else if err := outBatch.Shuffle(sels, mp); err != nil {
+				return false, err
+			}
 
-			distVec := vector.NewVec(types.T_float64.ToType())
-			vector.AppendFixedList(distVec, dists, nil, mp)
+			// Reuse the detached distVec when possible to avoid per-batch allocation.
+			distVec := detachedDistVec
+			if distVec == nil {
+				distVec = vector.NewVec(types.T_float64.ToType())
+			}
+			detachedDistVec = nil
+			if err := vector.AppendFixedList(distVec, dists, nil, mp); err != nil {
+				return false, err
+			}
 			outBatch.Vecs = append(outBatch.Vecs, distVec)
 		}
 
@@ -642,6 +685,11 @@ func (r *reader) Read(
 
 	if len(r.cacheVectors) == 0 {
 		r.cacheVectors = containers.NewVectors(len(r.columns.seqnums) + 1)
+	}
+	if r.orderByLimit != nil && detachedDistVec != nil {
+		// Re-attach the detached distVec so BlockDataRead can take its fast reuse branch.
+		outBatch.Vecs = append(outBatch.Vecs, detachedDistVec)
+		detachedDistVec = nil
 	}
 
 	err = blockio.BlockDataRead(

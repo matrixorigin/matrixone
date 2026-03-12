@@ -1,63 +1,90 @@
 SELECT GET_FORMAT(DATE, 'USA') AS result1;
-invalid input: column DATE does not exist
-SELECT GET_FORMAT(DATE, 'USA') AS date_usa;
-invalid input: column DATE does not exist
-SELECT GET_FORMAT(DATE, 'EUR') AS date_eur;
-invalid input: column DATE does not exist
-SELECT GET_FORMAT(DATE, 'JIS') AS date_jis;
-invalid input: column DATE does not exist
-SELECT GET_FORMAT(DATE, 'ISO') AS date_iso;
-invalid input: column DATE does not exist
-SELECT GET_FORMAT(DATE, 'INTERNAL') AS date_internal;
-invalid input: column DATE does not exist
-SELECT GET_FORMAT(TIME, 'USA') AS time_usa;
-invalid input: column TIME does not exist
-SELECT GET_FORMAT(TIME, 'EUR') AS time_eur;
-invalid input: column TIME does not exist
-SELECT GET_FORMAT(TIME, 'JIS') AS time_jis;
-invalid input: column TIME does not exist
-SELECT GET_FORMAT(TIME, 'ISO') AS time_iso;
-invalid input: column TIME does not exist
-SELECT GET_FORMAT(TIME, 'INTERNAL') AS time_internal;
-invalid input: column TIME does not exist
-SELECT GET_FORMAT(DATETIME, 'USA') AS datetime_usa;
-invalid input: column DATETIME does not exist
-SELECT GET_FORMAT(DATETIME, 'EUR') AS datetime_eur;
-invalid input: column DATETIME does not exist
-SELECT GET_FORMAT(DATETIME, 'JIS') AS datetime_jis;
-invalid input: column DATETIME does not exist
-SELECT GET_FORMAT(DATETIME, 'ISO') AS datetime_iso;
-invalid input: column DATETIME does not exist
-SELECT GET_FORMAT(DATETIME, 'INTERNAL') AS datetime_internal;
-invalid input: column DATETIME does not exist
-SELECT GET_FORMAT('date', 'usa') AS date_lowercase;
-date_lowercase
+result1
 %m.%d.%Y
-SELECT GET_FORMAT('DATE', 'Eur') AS date_mixed;
-date_mixed
+SELECT GET_FORMAT(DATE, 'USA') AS date_usa;
+date_usa
+%m.%d.%Y
+SELECT GET_FORMAT(DATE, 'EUR') AS date_eur;
+date_eur
 %d.%m.%Y
+SELECT GET_FORMAT(DATE, 'JIS') AS date_jis;
+date_jis
+%Y-%m-%d
+SELECT GET_FORMAT(DATE, 'ISO') AS date_iso;
+date_iso
+%Y-%m-%d
+SELECT GET_FORMAT(DATE, 'INTERNAL') AS date_internal;
+date_internal
+%Y%m%d
+SELECT GET_FORMAT(TIME, 'USA') AS time_usa;
+time_usa
+%h:%i:%s %p
+SELECT GET_FORMAT(TIME, 'EUR') AS time_eur;
+time_eur
+%H.%i.%s
+SELECT GET_FORMAT(TIME, 'JIS') AS time_jis;
+time_jis
+%H:%i:%s
+SELECT GET_FORMAT(TIME, 'ISO') AS time_iso;
+time_iso
+%H:%i:%s
+SELECT GET_FORMAT(TIME, 'INTERNAL') AS time_internal;
+time_internal
+%H%i%s
+SELECT GET_FORMAT(DATETIME, 'USA') AS datetime_usa;
+datetime_usa
+%Y-%m-%d %H.%i.%s
+SELECT GET_FORMAT(DATETIME, 'EUR') AS datetime_eur;
+datetime_eur
+%Y-%m-%d %H.%i.%s
+SELECT GET_FORMAT(DATETIME, 'JIS') AS datetime_jis;
+datetime_jis
+%Y-%m-%d %H:%i:%s
+SELECT GET_FORMAT(DATETIME, 'ISO') AS datetime_iso;
+datetime_iso
+%Y-%m-%d %H:%i:%s
+SELECT GET_FORMAT(DATETIME, 'INTERNAL') AS datetime_internal;
+datetime_internal
+%Y%m%d%H%i%s
+SELECT GET_FORMAT('date', 'usa') AS date_lowercase;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 24 near "'date', 'usa') AS date_lowercase;";
+SELECT GET_FORMAT('DATE', 'Eur') AS date_mixed;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 24 near "'DATE', 'Eur') AS date_mixed;";
 SELECT GET_FORMAT(NULL, 'USA') AS null_type;
-null_type
-null
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 22 near "NULL, 'USA') AS null_type;";
 SELECT GET_FORMAT(DATE, NULL) AS null_locale;
-invalid input: column DATE does not exist
+null_locale
+null
 SELECT GET_FORMAT(NULL, NULL) AS null_both;
-null_both
-null
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 22 near "NULL, NULL) AS null_both;";
 SELECT GET_FORMAT('INVALID', 'USA') AS invalid_type;
-invalid_type
-null
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 27 near "'INVALID', 'USA') AS invalid_type;";
 SELECT GET_FORMAT(DATE, 'INVALID') AS invalid_locale;
-invalid input: column DATE does not exist
+invalid_locale
+null
 CREATE TABLE t1(type_col VARCHAR(10), locale_col VARCHAR(10));
 INSERT INTO t1 VALUES ('DATE', 'USA'), ('TIME', 'EUR'), ('DATETIME', 'JIS');
 SELECT GET_FORMAT(type_col, locale_col) AS format_str FROM t1;
-format_str
-%m.%d.%Y
-%H.%i.%s
-%Y-%m-%d %H:%i:%s
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 26 near "type_col, locale_col) AS format_str FROM t1;";
 DROP TABLE t1;
 SELECT DATE_FORMAT('2024-12-20', GET_FORMAT(DATE, 'USA')) AS formatted_date;
-invalid input: column DATE does not exist
+formatted_date
+12.20.2024
 SELECT DATE_FORMAT('2024-12-20 15:30:45', GET_FORMAT(DATETIME, 'EUR')) AS formatted_datetime;
-invalid input: column DATETIME does not exist
+formatted_datetime
+2024-12-20 15.30.45
+SELECT GET_FORMAT(TIMESTAMP, 'USA') AS timestamp_usa;
+timestamp_usa
+%Y-%m-%d %H.%i.%s
+SELECT GET_FORMAT(TIMESTAMP, 'JIS') AS timestamp_jis;
+timestamp_jis
+%Y-%m-%d %H:%i:%s
+SELECT GET_FORMAT(TIMESTAMP, 'ISO') AS timestamp_iso;
+timestamp_iso
+%Y-%m-%d %H:%i:%s
+SELECT GET_FORMAT(TIMESTAMP, 'EUR') AS timestamp_eur;
+timestamp_eur
+%Y-%m-%d %H.%i.%s
+SELECT GET_FORMAT(TIMESTAMP, 'INTERNAL') AS timestamp_internal;
+timestamp_internal
+%Y%m%d%H%i%s

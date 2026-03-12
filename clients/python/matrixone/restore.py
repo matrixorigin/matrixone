@@ -161,7 +161,7 @@ class RestoreManager:
             result = self._get_executor().execute(sql)
             return result is not None
         except Exception as e:
-            raise RestoreError(f"Failed to restore cluster from snapshot '{snapshot_name}': {e}") from None
+            raise RestoreError(f"Failed to restore cluster from snapshot '{snapshot_name}': {e}") from e
 
     def restore_tenant(self, snapshot_name: str, account_name: str, to_account: Optional[str] = None) -> bool:
         """
@@ -202,7 +202,7 @@ class RestoreManager:
             result = self._get_executor().execute(sql)
             return result is not None
         except Exception as e:
-            raise RestoreError(f"Failed to restore tenant '{account_name}' from snapshot '{snapshot_name}': {e}") from None
+            raise RestoreError(f"Failed to restore tenant '{account_name}' from snapshot '{snapshot_name}': {e}") from e
 
     def restore_database(
         self,
@@ -248,9 +248,7 @@ class RestoreManager:
             result = self._get_executor().execute(sql)
             return result is not None
         except Exception as e:
-            raise RestoreError(
-                f"Failed to restore database '{database_name}' from snapshot '{snapshot_name}': {e}"
-            ) from None
+            raise RestoreError(f"Failed to restore database '{database_name}' from snapshot '{snapshot_name}': {e}") from e
 
     def restore_table(
         self,
@@ -300,7 +298,7 @@ class RestoreManager:
             result = self._get_executor().execute(sql)
             return result is not None
         except Exception as e:
-            raise RestoreError(f"Failed to restore table '{table_name}' from snapshot '{snapshot_name}': {e}") from None
+            raise RestoreError(f"Failed to restore table '{table_name}' from snapshot '{snapshot_name}': {e}") from e
 
 
 class AsyncRestoreManager:
@@ -434,7 +432,7 @@ class AsyncRestoreManager:
             result = await self._get_executor().execute(sql)
             return result is not None
         except Exception as e:
-            raise RestoreError(f"Failed to restore cluster from snapshot '{snapshot_name}': {e}") from None
+            raise RestoreError(f"Failed to restore cluster from snapshot '{snapshot_name}': {e}") from e
 
     async def restore_tenant(self, snapshot_name: str, account_name: str, to_account: Optional[str] = None) -> bool:
         """
@@ -467,7 +465,7 @@ class AsyncRestoreManager:
             result = await self._get_executor().execute(sql)
             return result is not None
         except Exception as e:
-            raise RestoreError(f"Failed to restore tenant '{account_name}' from snapshot '{snapshot_name}': {e}") from None
+            raise RestoreError(f"Failed to restore tenant '{account_name}' from snapshot '{snapshot_name}': {e}") from e
 
     async def restore_database(
         self,
@@ -509,9 +507,7 @@ class AsyncRestoreManager:
             result = await self._get_executor().execute(sql)
             return result is not None
         except Exception as e:
-            raise RestoreError(
-                f"Failed to restore database '{database_name}' from snapshot '{snapshot_name}': {e}"
-            ) from None
+            raise RestoreError(f"Failed to restore database '{database_name}' from snapshot '{snapshot_name}': {e}") from e
 
     async def restore_table(
         self,
@@ -557,4 +553,4 @@ class AsyncRestoreManager:
             result = await self._get_executor().execute(sql)
             return result is not None
         except Exception as e:
-            raise RestoreError(f"Failed to restore table '{table_name}' from snapshot '{snapshot_name}': {e}") from None
+            raise RestoreError(f"Failed to restore table '{table_name}' from snapshot '{snapshot_name}': {e}") from e

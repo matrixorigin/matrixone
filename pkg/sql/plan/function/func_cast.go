@@ -50,6 +50,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_date, types.T_datetime,
 		types.T_time, types.T_timestamp,
+		types.T_year,
 		types.T_array_float32, types.T_array_float64,
 		types.T_datalink,
 	},
@@ -360,6 +361,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_json: {
+		types.T_json,
 		types.T_char, types.T_varchar, types.T_text,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
@@ -1830,6 +1832,15 @@ func jsonToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Varlena],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	switch toType.Oid {
+	case types.T_json:
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		for i := uint64(0); i < uint64(length); i++ {
+			v, null := source.GetStrValue(i)
+			if err := rs.AppendBytes(v, null); err != nil {
+				return err
+			}
+		}
+		return nil
 	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return jsonToStr(ctx, source, rs, length, selectList)

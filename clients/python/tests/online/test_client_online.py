@@ -49,16 +49,14 @@ class TestClientOnline(unittest.TestCase):
         try:
             cls.client.execute(f"CREATE DATABASE IF NOT EXISTS {cls.test_db}")
             cls.client.execute(f"USE {cls.test_db}")
-            cls.client.execute(
-                f"""
+            cls.client.execute(f"""
                 CREATE TABLE IF NOT EXISTS {cls.test_table} (
                     id INT PRIMARY KEY,
                     name VARCHAR(100),
                     value INT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
-            """
-            )
+            """)
 
             # Insert test data
             cls.client.execute(f"INSERT INTO {cls.test_table} VALUES (1, 'test1', 100, NOW())")

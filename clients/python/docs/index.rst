@@ -50,6 +50,7 @@ type safety and extensive documentation.
    export_guide
    snapshot_restore_guide
    clone_guide
+   branch_guide
 
 .. toctree::
    :maxdepth: 2
@@ -90,6 +91,7 @@ Features
 * 📊 **Pub/Sub**: Real-time publication and subscription support
 * 🔧 **Version Management**: Automatic backend version detection and compatibility checking
 * 🛡️ **Type Safety**: Full type hints support with comprehensive documentation
+* 🌿 **Branch Management**: Git-style version control with BranchManager and SQLAlchemy-style statement builders
 * 📚 **SQLAlchemy Integration**: Seamless SQLAlchemy integration with enhanced ORM features
 * 🔗 **Enhanced Query Building**: Advanced query building with SQLAlchemy expressions
 * 🎯 **Logical Operations**: Enhanced logical operations including logical_in functionality

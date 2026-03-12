@@ -62,8 +62,7 @@ class TestMetadataOnline(unittest.TestCase):
         cls.client.execute("DROP TABLE IF EXISTS test_products")
 
         # Create test tables with indexes
-        cls.client.execute(
-            """
+        cls.client.execute("""
             CREATE TABLE test_users (
                 id INT PRIMARY KEY,
                 name VARCHAR(100) NOT NULL,
@@ -71,11 +70,9 @@ class TestMetadataOnline(unittest.TestCase):
                 age INT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """
-        )
+        """)
 
-        cls.client.execute(
-            """
+        cls.client.execute("""
             CREATE TABLE test_products (
                 id INT PRIMARY KEY,
                 name VARCHAR(200) NOT NULL,
@@ -83,8 +80,7 @@ class TestMetadataOnline(unittest.TestCase):
                 price INT NOT NULL,
                 stock INT DEFAULT 0
             )
-        """
-        )
+        """)
 
         # Create indexes
         try:
@@ -110,23 +106,19 @@ class TestMetadataOnline(unittest.TestCase):
 
         # Insert users
         for i in range(1, 51):  # 50 users
-            cls.client.execute(
-                f"""
+            cls.client.execute(f"""
                 INSERT INTO test_users (id, name, email, age) 
                 VALUES ({i}, 'User{i}', 'user{i}@example.com', {20 + (i % 50)})
-            """
-            )
+            """)
 
         # Insert products
         categories = ['Electronics', 'Books', 'Clothing', 'Home', 'Sports']
         for i in range(1, 31):  # 30 products
             category = categories[i % len(categories)]
-            cls.client.execute(
-                f"""
+            cls.client.execute(f"""
                 INSERT INTO test_products (id, name, category, price, stock) 
                 VALUES ({i}, 'Product{i}', '{category}', {100 + (i * 10)}, {50 + (i % 20)})
-            """
-            )
+            """)
 
     @classmethod
     def tearDownClass(cls):

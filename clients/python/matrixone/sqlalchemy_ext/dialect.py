@@ -17,7 +17,30 @@ MatrixOne SQLAlchemy dialect support.
 """
 
 import sqlalchemy
-from sqlalchemy.dialects.mysql.base import MySQLDialect
+from sqlalchemy.dialects.mysql.base import MySQLDialect, ischema_names as mysql_ischema_names
+
+from .vector_type import VectorType, VectorPrecision
+
+
+class _Vecf32Type(VectorType):
+    """VectorType with f32 precision for ischema_names registration."""
+
+    def __init__(self, dimension=None):
+        super().__init__(dimension=dimension, precision=VectorPrecision.F32)
+
+
+class _Vecf64Type(VectorType):
+    """VectorType with f64 precision for ischema_names registration."""
+
+    def __init__(self, dimension=None):
+        super().__init__(dimension=dimension, precision=VectorPrecision.F64)
+
+
+# Extend MySQL's ischema_names with MatrixOne-specific types
+_mo_ischema_names = mysql_ischema_names.copy()
+_mo_ischema_names["vecf32"] = _Vecf32Type
+_mo_ischema_names["vecf64"] = _Vecf64Type
+_mo_ischema_names["bool"] = mysql_ischema_names["boolean"]
 
 
 class MatrixOneDialect(MySQLDialect):
@@ -62,6 +85,8 @@ class MatrixOneDialect(MySQLDialect):
     name = "matrixone"
     driver = "pymysql"
 
+    ischema_names = _mo_ischema_names
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         # Initialize missing MySQL dialect attributes
@@ -83,6 +108,16 @@ class MatrixOneDialect(MySQLDialect):
 
     def get_table_names(self, connection, schema=None, **kw):
         """Get table names from MatrixOne database."""
+        # MatrixOne doesn't use schemas, use current database if schema is None
+        if schema is None:
+            try:
+                result = connection.execute(sqlalchemy.text("SELECT DATABASE()"))
+                schema = result.scalar()
+            except Exception:
+                raise ValueError("Failed to get current database. Use 'USE database_name' or specify schema parameter.")
+            if not schema:
+                raise ValueError("No database selected. Use 'USE database_name' or specify schema parameter.")
+
         return super().get_table_names(connection, schema, **kw)
 
     def has_table(self, connection, table_name, schema=None, **kw):
@@ -90,28 +125,13 @@ class MatrixOneDialect(MySQLDialect):
         # MatrixOne doesn't use schemas, but MySQL dialect requires schema to be not None
         # Use current database name as schema to satisfy MySQL dialect requirements
         if schema is None:
-            # Get current database name from connection URL or connection info
             try:
-                # Try to get database name from connection URL
-                if hasattr(connection, 'connection') and hasattr(connection.connection, 'get_dsn_parameters'):
-                    dsn_params = connection.connection.get_dsn_parameters()
-                    schema = dsn_params.get('dbname') or dsn_params.get('database')
-
-                # Fallback: try to get from connection string
-                if not schema and hasattr(connection, 'connection') and hasattr(connection.connection, 'dsn'):
-                    dsn = connection.connection.dsn
-                    if 'dbname=' in dsn:
-                        schema = dsn.split('dbname=')[1].split()[0]
-                    elif 'database=' in dsn:
-                        schema = dsn.split('database=')[1].split()[0]
-
-                # Final fallback: use default database name
-                if not schema:
-                    schema = "test"
-
+                result = connection.execute(sqlalchemy.text("SELECT DATABASE()"))
+                schema = result.scalar()
             except Exception:
-                # Ultimate fallback
-                schema = "test"
+                raise ValueError("Failed to get current database. Use 'USE database_name' or specify schema parameter.")
+            if not schema:
+                raise ValueError("No database selected. Use 'USE database_name' or specify schema parameter.")
 
         return super().has_table(connection, table_name, schema, **kw)
 

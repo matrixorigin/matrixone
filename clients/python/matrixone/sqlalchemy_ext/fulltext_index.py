@@ -266,6 +266,13 @@ class FulltextIndex(Index):
         if isinstance(columns, str):
             columns = [columns]
 
+        # Validate columns parameter
+        if not columns:
+            raise ValueError("FulltextIndex requires at least one column")
+
+        if not all(isinstance(col, str) for col in columns):
+            raise TypeError("All columns must be strings")
+
         self.algorithm = algorithm
         self.parser = parser
         self._column_names = columns.copy()  # Store column names for easy access
@@ -714,6 +721,13 @@ def compile_create_index(element, compiler, **kw):
 
     # Check if this is a FulltextIndex
     if isinstance(index, FulltextIndex):
+        # Validate table is bound
+        if index.table is None:
+            raise ValueError(
+                f"FulltextIndex '{index.name}' is not bound to a table. "
+                "Ensure the index is defined in __table_args__ or bound to a table."
+            )
+
         # Generate FULLTEXT index DDL
         columns_str = ", ".join(col.name for col in index.columns)
         sql = f"CREATE FULLTEXT INDEX {index.name} ON {index.table.name} ({columns_str})"
@@ -723,3 +737,27 @@ def compile_create_index(element, compiler, **kw):
 
     # Default behavior for regular indexes
     return compiler.visit_create_index(element, **kw)
+
+
+# Monkey-patch MySQLDDLCompiler to handle FulltextIndex at dialect level
+# This ensures create_all() generates correct FULLTEXT INDEX DDL
+try:
+    from sqlalchemy.dialects.mysql.base import MySQLDDLCompiler
+
+    _original_visit_create_index = MySQLDDLCompiler.visit_create_index
+
+    def _patched_visit_create_index(self, create, **kw):
+        """Patched visit_create_index to handle FulltextIndex."""
+        index = create.element
+        if isinstance(index, FulltextIndex):
+            columns_str = ", ".join(col.name for col in index.columns)
+            sql = f"CREATE FULLTEXT INDEX {index.name} ON {index.table.name} ({columns_str})"
+            if hasattr(index, 'parser') and index.parser:
+                sql += f" WITH PARSER {index.parser}"
+            return sql
+        return _original_visit_create_index(self, create, **kw)
+
+    MySQLDDLCompiler.visit_create_index = _patched_visit_create_index
+except ImportError:
+    # SQLAlchemy not installed or MySQL dialect not available
+    pass
