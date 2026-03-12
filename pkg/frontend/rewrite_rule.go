@@ -70,12 +70,8 @@ func parseRewriteHint(ctx context.Context, hint string) (map[string]string, erro
 // If the rule set is empty, the original SQL is returned unchanged.
 // This function only injects hints when enable_remap_hint is true.
 func rewriteSQL(ctx context.Context, ses *Session, sql string) (string, error) {
-	// Check if enable_remap_hint is enabled
-	v, err := ses.GetSessionSysVar("enable_remap_hint")
-	if err != nil {
-		return sql, nil
-	}
-	if on, _ := valueIsBoolTrue(v); !on {
+	// Check if enable_remap_hint is enabled using cached value
+	if !ses.rewriteEnabled.Load() {
 		return sql, nil
 	}
 
