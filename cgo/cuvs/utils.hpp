@@ -61,6 +61,7 @@ public:
         cuvs::preprocessing::quantize::scalar::params q_params;
         quantizer_ = std::make_unique<quantizer_type>(
             cuvs::preprocessing::quantize::scalar::train(res, q_params, train_view));
+        raft::resource::sync_stream(res);
     }
 
     /**
