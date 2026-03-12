@@ -364,6 +364,25 @@ func (GCRunningClassifier) IsRetryable(err error) bool {
 	return false
 }
 
+// SyncProtectionTTLClassifier recognises sync protection TTL expired errors.
+// These errors are retryable because the sync protection can be re-registered.
+type SyncProtectionTTLClassifier struct{}
+
+// IsRetryable implements ErrorClassifier.
+func (SyncProtectionTTLClassifier) IsRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errMsg := err.Error()
+	// Check for sync protection TTL expired errors
+	if strings.Contains(errMsg, "sync protection TTL expired") {
+		return true
+	}
+
+	return false
+}
+
 // DownstreamCommitClassifier is used when committing to downstream.
 // It combines default, mysql, commit, ut injection, stale read, and GC running classifiers.
 type DownstreamCommitClassifier struct {
@@ -380,6 +399,7 @@ func NewDownstreamCommitClassifier() *DownstreamCommitClassifier {
 			UTInjectionClassifier{},
 			StaleReadClassifier{},
 			GCRunningClassifier{},
+			SyncProtectionTTLClassifier{},
 		},
 	}
 }
@@ -413,6 +433,7 @@ func NewDownstreamConnectionClassifier() *DownstreamConnectionClassifier {
 		MultiClassifier: MultiClassifier{
 			DefaultClassifier{},
 			MySQLErrorClassifier{},
+			SyncProtectionTTLClassifier{},
 		},
 	}
 }

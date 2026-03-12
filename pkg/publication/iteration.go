@@ -1462,17 +1462,24 @@ func ExecuteIteration(
 		}()
 
 		// CN commit check: renew sync protection before applying objects
-		if renewErr := RenewSyncProtection(ctx, iterationCtx.LocalExecutor, syncProtectionJobID, time.Now().Add(GetSyncProtectionTTLDuration()).UnixNano()); renewErr != nil {
+		newTTLExpireTS := time.Now().Add(GetSyncProtectionTTLDuration()).UnixNano()
+		if renewErr := RenewSyncProtection(ctx, iterationCtx.LocalExecutor, syncProtectionJobID, newTTLExpireTS); renewErr != nil {
 			err = moerr.NewInternalErrorf(ctx, "failed to renew sync protection before apply: %v", renewErr)
 			return
+		}
+		// Update worker's TTL tracking after successful renew
+		if syncProtectionWorker != nil {
+			syncProtectionWorker.RegisterSyncProtection(syncProtectionJobID, newTTLExpireTS)
 		}
 	}
 
 	// Create TTL checker for ApplyObjects if sync protection is registered
+	// ttlChecker returns true when TTL is still valid, false when TTL has expired
 	var ttlChecker func() bool
 	if syncProtectionJobID != "" && syncProtectionWorker != nil {
 		ttlChecker = func() bool {
 			currentTTL := syncProtectionWorker.GetSyncProtectionTTL(syncProtectionJobID)
+			// Return true if TTL is valid (currentTTL > 0 and now < TTL)
 			return currentTTL > 0 && time.Now().UnixNano() < currentTTL
 		}
 	}
