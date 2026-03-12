@@ -45,8 +45,23 @@ gpu_ivf_flat_c gpu_ivf_flat_load_file(const char* filename, uint32_t dimension, 
 // Destructor
 void gpu_ivf_flat_destroy(gpu_ivf_flat_c index_c, void* errmsg);
 
+// Start function (initializes worker and resources)
+void gpu_ivf_flat_start(gpu_ivf_flat_c index_c, void* errmsg);
+
 // Load function (actually triggers the build/load logic)
 void gpu_ivf_flat_load(gpu_ivf_flat_c index_c, void* errmsg);
+
+// Constructor for an empty index (pre-allocates)
+gpu_ivf_flat_c gpu_ivf_flat_new_empty(uint64_t total_count, uint32_t dimension, distance_type_t metric, 
+                                           ivf_flat_build_params_t build_params,
+                                           const int* devices, int device_count, uint32_t nthread, 
+                                           distribution_mode_t dist_mode, quantization_t qtype, void* errmsg);
+
+// Add chunk of data (same type as index quantization)
+void gpu_ivf_flat_add_chunk(gpu_ivf_flat_c index_c, const void* chunk_data, uint64_t chunk_count, uint64_t row_offset, void* errmsg);
+
+// Add chunk of data (from float, with on-the-fly quantization if needed)
+void gpu_ivf_flat_add_chunk_float(gpu_ivf_flat_c index_c, const float* chunk_data, uint64_t chunk_count, uint64_t row_offset, void* errmsg);
 
 // Save function
 void gpu_ivf_flat_save(gpu_ivf_flat_c index_c, const char* filename, void* errmsg);

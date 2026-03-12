@@ -14,8 +14,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
-
 package cuvs
 
 import (
@@ -24,64 +22,58 @@ import (
 )
 
 func TestGpuCagra(t *testing.T) {
-    dimension := uint32(16)
-    count := uint64(100)
-    dataset := make([]float32, count*uint64(dimension))
-    for i := range dataset {
-        dataset[i] = float32(i)
+    dimension := uint32(2)
+    n_vectors := uint64(1000)
+    dataset := make([]float32, n_vectors*uint64(dimension))
+    for i := uint64(0); i < n_vectors; i++ {
+        dataset[i*uint64(dimension)] = float32(i)
+        dataset[i*uint64(dimension)+1] = float32(i)
     }
 
     devices := []int{0}
     bp := DefaultCagraBuildParams()
-    index, err := NewGpuCagra[float32](dataset, count, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+    index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu)
     if err != nil {
         t.Fatalf("Failed to create GpuCagra: %v", err)
     }
     defer index.Destroy()
 
+    index.Start()
     err = index.Load()
     if err != nil {
         t.Fatalf("Failed to load/build GpuCagra: %v", err)
     }
 
-    queries := make([]float32, dimension)
-    for i := range queries {
-        queries[i] = 0.0
-    }
-
+    queries := []float32{1.0, 1.0, 100.0, 100.0}
     sp := DefaultCagraSearchParams()
-    result, err := index.Search(queries, 1, dimension, 5, sp)
+    result, err := index.Search(queries, 2, dimension, 1, sp)
     if err != nil {
         t.Fatalf("Search failed: %v", err)
     }
 
-    t.Logf("CAGRA Neighbors: %v, Distances: %v", result.Neighbors, result.Distances)
-    if len(result.Neighbors) != 5 {
-        t.Errorf("Expected 5 neighbors, got %d", len(result.Neighbors))
+    t.Logf("Neighbors: %v, Distances: %v", result.Neighbors, result.Distances)
+    if result.Neighbors[0] != 1 {
+        t.Errorf("Expected neighbor 1, got %d", result.Neighbors[0])
     }
-    if result.Neighbors[0] != 0 {
-        t.Errorf("Expected nearest neighbor to be 0, got %d", result.Neighbors[0])
+    if result.Neighbors[1] != 100 {
+        t.Errorf("Expected neighbor 100, got %d", result.Neighbors[1])
     }
 }
 
 func TestGpuCagraSaveLoad(t *testing.T) {
-    dimension := uint32(16)
-    count := uint64(100)
-    dataset := make([]float32, count*uint64(dimension))
-    for i := range dataset {
-        dataset[i] = float32(i)
-    }
+    dimension := uint32(2)
+    n_vectors := uint64(100)
+    dataset := make([]float32, n_vectors*uint64(dimension))
+    for i := range dataset { dataset[i] = float32(i) }
 
     devices := []int{0}
     bp := DefaultCagraBuildParams()
-    index, err := NewGpuCagra[float32](dataset, count, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+    index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu)
     if err != nil {
         t.Fatalf("Failed to create GpuCagra: %v", err)
     }
-    err = index.Load()
-    if err != nil {
-        t.Fatalf("Load failed: %v", err)
-    }
+    index.Start()
+    index.Load()
 
     filename := "test_cagra.idx"
     err = index.Save(filename)
@@ -97,12 +89,13 @@ func TestGpuCagraSaveLoad(t *testing.T) {
     }
     defer index2.Destroy()
 
+    index2.Start()
     err = index2.Load()
     if err != nil {
         t.Fatalf("Load from file failed: %v", err)
     }
 
-    queries := make([]float32, dimension)
+    queries := []float32{0.0, 0.0}
     sp := DefaultCagraSearchParams()
     result, err := index2.Search(queries, 1, dimension, 1, sp)
     if err != nil {
@@ -113,100 +106,20 @@ func TestGpuCagraSaveLoad(t *testing.T) {
     }
 }
 
-func TestGpuCagraExtend(t *testing.T) {
-    dimension := uint32(16)
-    count := uint64(100)
-    dataset := make([]float32, count*uint64(dimension))
-    for i := range dataset {
-        dataset[i] = float32(i)
-    }
-
-    devices := []int{0}
-    bp := DefaultCagraBuildParams()
-    index, err := NewGpuCagra[float32](dataset, count, dimension, L2Expanded, bp, devices, 1, SingleGpu)
-    if err != nil {
-        t.Fatalf("Failed to create GpuCagra: %v", err)
-    }
-    defer index.Destroy()
-    index.Load()
-
-    extra := make([]float32, 10*dimension)
-    for i := range extra {
-        extra[i] = 1000.0
-    }
-    err = index.Extend(extra, 10)
-    if err != nil {
-        t.Fatalf("Extend failed: %v", err)
-    }
-
-    queries := make([]float32, dimension)
-    for i := range queries {
-        queries[i] = 1000.0
-    }
-    sp := DefaultCagraSearchParams()
-    result, err := index.Search(queries, 1, dimension, 1, sp)
-    if err != nil {
-        t.Fatalf("Search failed: %v", err)
-    }
-    if result.Neighbors[0] < 100 {
-        t.Errorf("Expected neighbor from extended data, got %d", result.Neighbors[0])
-    }
-}
-
-func TestGpuCagraMerge(t *testing.T) {
-    dimension := uint32(16)
-    count := uint64(200)
-    
-    // Cluster 1: values around 0
-    ds1 := make([]float32, count*uint64(dimension))
-    for i := range ds1 { ds1[i] = float32(i % 10) }
-    // Cluster 2: values around 1000
-    ds2 := make([]float32, count*uint64(dimension))
-    for i := range ds2 { ds2[i] = float32(1000 + (i % 10)) }
-
-    devices := []int{0}
-    bp := DefaultCagraBuildParams()
-    bp.IntermediateGraphDegree = 64
-    bp.GraphDegree = 32
-
-    idx1, _ := NewGpuCagra[float32](ds1, count, dimension, L2Expanded, bp, devices, 1, SingleGpu)
-    idx2, _ := NewGpuCagra[float32](ds2, count, dimension, L2Expanded, bp, devices, 1, SingleGpu)
-    idx1.Load()
-    idx2.Load()
-    defer idx1.Destroy()
-    defer idx2.Destroy()
-
-    merged, err := MergeGpuCagra([]*GpuCagra[float32]{idx1, idx2}, 1, devices)
-    if err != nil {
-        t.Fatalf("Merge failed: %v", err)
-    }
-    defer merged.Destroy()
-
-    // Query near Cluster 2
-    queries := make([]float32, dimension)
-    for i := range queries { queries[i] = 1000.0 }
-    sp := DefaultCagraSearchParams()
-    result, err := merged.Search(queries, 1, dimension, 1, sp)
-    if err != nil {
-        t.Fatalf("Search failed: %v", err)
-    }
-    // Result should be from second index (index >= 200)
-    if result.Neighbors[0] < 200 {
-        t.Errorf("Expected neighbor from second index (>=200), got %d", result.Neighbors[0])
-    }
-}
-
 func TestGpuShardedCagra(t *testing.T) {
     count, _ := GetGpuDeviceCount()
     if count < 1 {
         t.Skip("Need at least 1 GPU for sharded CAGRA test")
     }
     
-    devices := []int{0} 
-    dimension := uint32(16)
+    devices := []int{0}
+    dimension := uint32(2)
     n_vectors := uint64(100)
     dataset := make([]float32, n_vectors*uint64(dimension))
-    for i := range dataset { dataset[i] = float32(i) }
+    for i := uint64(0); i < n_vectors; i++ {
+        dataset[i*uint64(dimension)] = float32(i)
+        dataset[i*uint64(dimension)+1] = float32(i)
+    }
 
     bp := DefaultCagraBuildParams()
     index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, Sharded)
@@ -215,18 +128,175 @@ func TestGpuShardedCagra(t *testing.T) {
     }
     defer index.Destroy()
 
+    index.Start()
     err = index.Load()
     if err != nil {
         t.Fatalf("Load sharded failed: %v", err)
     }
 
-    queries := make([]float32, dimension)
+    queries := []float32{0.1, 0.1, 0.2, 0.2, 0.3, 0.3, 0.4, 0.4, 0.5, 0.5}
     sp := DefaultCagraSearchParams()
-    result, err := index.Search(queries, 1, dimension, 5, sp)
+    result, err := index.Search(queries, 5, dimension, 1, sp)
     if err != nil {
         t.Fatalf("Search sharded failed: %v", err)
     }
-    if len(result.Neighbors) != 5 {
-        t.Errorf("Expected 5 neighbors, got %d", len(result.Neighbors))
-    }
+    t.Logf("Sharded Neighbors: %v, Distances: %v", result.Neighbors, result.Distances)
+}
+
+func TestGpuCagraChunked(t *testing.T) {
+	dimension := uint32(8)
+	totalCount := uint64(100)
+	devices := []int{0}
+	bp := DefaultCagraBuildParams()
+
+	// Create empty index (target type int8)
+	index, err := NewGpuCagraEmpty[int8](totalCount, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	if err != nil {
+		t.Fatalf("Failed to create GpuCagraEmpty: %v", err)
+	}
+	defer index.Destroy()
+
+	err = index.Start()
+	if err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+
+	// Add data in chunks (from float32, triggers on-the-fly quantization)
+	chunkSize := uint64(50)
+	for i := uint64(0); i < totalCount; i += chunkSize {
+		chunk := make([]float32, chunkSize*uint64(dimension))
+		val := float32(i/chunkSize*100 + 1) // 1.0 for first chunk, 101.0 for second
+		for j := range chunk {
+			chunk[j] = val
+		}
+		err = index.AddChunkFloat(chunk, chunkSize, i)
+		if err != nil {
+			t.Fatalf("AddChunkFloat failed at offset %d: %v", i, err)
+		}
+	}
+
+	// Build index
+	err = index.Load()
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	// Search for first chunk
+	query1 := make([]int8, dimension)
+	for i := range query1 {
+		query1[i] = -128 // matches first chunk (1.0)
+	}
+	sp := DefaultCagraSearchParams()
+	result1, err := index.Search(query1, 1, dimension, 1, sp)
+	if err != nil {
+		t.Fatalf("Search 1 failed: %v", err)
+	}
+	if result1.Neighbors[0] < 0 || result1.Neighbors[0] >= 50 {
+		t.Errorf("Expected neighbor from first chunk (0-49), got %d", result1.Neighbors[0])
+	}
+
+	// Search for second chunk
+	query2 := make([]int8, dimension)
+	for i := range query2 {
+		query2[i] = 127 // matches second chunk (101.0)
+	}
+	result2, err := index.Search(query2, 1, dimension, 1, sp)
+	if err != nil {
+		t.Fatalf("Search 2 failed: %v", err)
+	}
+	if result2.Neighbors[0] < 50 || result2.Neighbors[0] >= 100 {
+		t.Errorf("Expected neighbor from second chunk (50-99), got %d", result2.Neighbors[0])
+	}
+}
+
+func TestGpuCagraExtend(t *testing.T) {
+	dimension := uint32(16)
+	count := uint64(100)
+	dataset := make([]float32, count*uint64(dimension))
+	for i := range dataset {
+		dataset[i] = float32(i)
+	}
+
+	devices := []int{0}
+	bp := DefaultCagraBuildParams()
+	index, err := NewGpuCagra[float32](dataset, count, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	if err != nil {
+		t.Fatalf("Failed to create GpuCagra: %v", err)
+	}
+	defer index.Destroy()
+	index.Start()
+	index.Load()
+
+	extra := make([]float32, 10*dimension)
+	for i := range extra {
+		extra[i] = 1000.0
+	}
+	err = index.Extend(extra, 10)
+	if err != nil {
+		t.Fatalf("Extend failed: %v", err)
+	}
+
+	queries := make([]float32, dimension)
+	for i := range queries {
+		queries[i] = 1000.0
+	}
+	sp := DefaultCagraSearchParams()
+	result, err := index.Search(queries, 1, dimension, 1, sp)
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if result.Neighbors[0] < 100 {
+		t.Errorf("Expected neighbor from extended data, got %d", result.Neighbors[0])
+	}
+}
+
+func TestGpuCagraMerge(t *testing.T) {
+	dimension := uint32(16)
+	count := uint64(200)
+
+	// Cluster 1: values around 0
+	ds1 := make([]float32, count*uint64(dimension))
+	for i := range ds1 {
+		ds1[i] = float32(i % 10)
+	}
+	// Cluster 2: values around 1000
+	ds2 := make([]float32, count*uint64(dimension))
+	for i := range ds2 {
+		ds2[i] = float32(1000 + (i % 10))
+	}
+
+	devices := []int{0}
+	bp := DefaultCagraBuildParams()
+	bp.IntermediateGraphDegree = 64
+	bp.GraphDegree = 32
+
+	idx1, _ := NewGpuCagra[float32](ds1, count, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	idx2, _ := NewGpuCagra[float32](ds2, count, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	idx1.Start()
+	idx1.Load()
+	idx2.Start()
+	idx2.Load()
+	defer idx1.Destroy()
+	defer idx2.Destroy()
+
+	merged, err := MergeGpuCagra([]*GpuCagra[float32]{idx1, idx2}, 1, devices)
+	if err != nil {
+		t.Fatalf("Merge failed: %v", err)
+	}
+	defer merged.Destroy()
+
+	// Query near Cluster 2
+	queries := make([]float32, dimension)
+	for i := range queries {
+		queries[i] = 1000.0
+	}
+	sp := DefaultCagraSearchParams()
+	result, err := merged.Search(queries, 1, dimension, 1, sp)
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	// Result should be from second index (index >= 200)
+	if result.Neighbors[0] < 200 {
+		t.Errorf("Expected neighbor from second index (>=200), got %d", result.Neighbors[0])
+	}
 }

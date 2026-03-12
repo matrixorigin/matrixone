@@ -45,10 +45,26 @@ gpu_cagra_c gpu_cagra_load_file(const char* filename, uint32_t dimension, distan
 // Destructor
 void gpu_cagra_destroy(gpu_cagra_c index_c, void* errmsg);
 
+// Start function (initializes worker and resources)
+void gpu_cagra_start(gpu_cagra_c index_c, void* errmsg);
+
 // Load function (actually triggers the build/load logic)
 void gpu_cagra_load(gpu_cagra_c index_c, void* errmsg);
 
-// Save function
+// Constructor for an empty index (pre-allocates)
+gpu_cagra_c gpu_cagra_new_empty(uint64_t total_count, uint32_t dimension, distance_type_t metric, 
+                                     cagra_build_params_t build_params,
+                                     const int* devices, int device_count, uint32_t nthread, 
+                                     distribution_mode_t dist_mode, quantization_t qtype, void* errmsg);
+
+// Add chunk of data (same type as index quantization)
+void gpu_cagra_add_chunk(gpu_cagra_c index_c, const void* chunk_data, uint64_t chunk_count, uint64_t row_offset, void* errmsg);
+
+// Add chunk of data (from float, with on-the-fly quantization if needed)
+void gpu_cagra_add_chunk_float(gpu_cagra_c index_c, const float* chunk_data, uint64_t chunk_count, uint64_t row_offset, void* errmsg);
+
+// Extend function
+
 void gpu_cagra_save(gpu_cagra_c index_c, const char* filename, void* errmsg);
 
 // Search function

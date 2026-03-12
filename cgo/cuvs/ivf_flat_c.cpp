@@ -115,6 +115,22 @@ void gpu_ivf_flat_destroy(gpu_ivf_flat_c index_c, void* errmsg) {
     }
 }
 
+void gpu_ivf_flat_start(gpu_ivf_flat_c index_c, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_ivf_flat_any_t*>(index_c);
+        switch (any->qtype) {
+            case Quantization_F32: static_cast<matrixone::gpu_ivf_flat_t<float>*>(any->ptr)->start(); break;
+            case Quantization_F16: static_cast<matrixone::gpu_ivf_flat_t<half>*>(any->ptr)->start(); break;
+            case Quantization_INT8: static_cast<matrixone::gpu_ivf_flat_t<int8_t>*>(any->ptr)->start(); break;
+            case Quantization_UINT8: static_cast<matrixone::gpu_ivf_flat_t<uint8_t>*>(any->ptr)->start(); break;
+            default: break;
+        }
+    } catch (const std::exception& e) {
+        set_errmsg(errmsg, "Error in gpu_ivf_flat_start", e.what());
+    }
+}
+
 void gpu_ivf_flat_load(gpu_ivf_flat_c index_c, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
@@ -128,6 +144,70 @@ void gpu_ivf_flat_load(gpu_ivf_flat_c index_c, void* errmsg) {
         }
     } catch (const std::exception& e) {
         set_errmsg(errmsg, "Error in gpu_ivf_flat_load", e.what());
+    }
+}
+
+gpu_ivf_flat_c gpu_ivf_flat_new_empty(uint64_t total_count, uint32_t dimension, distance_type_t metric_c, 
+                                           ivf_flat_build_params_t build_params,
+                                           const int* devices, int device_count, uint32_t nthread, 
+                                           distribution_mode_t dist_mode, quantization_t qtype, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        cuvs::distance::DistanceType metric = matrixone::convert_distance_type(metric_c);
+        std::vector<int> devs(devices, devices + device_count);
+        void* ivf_ptr = nullptr;
+        switch (qtype) {
+            case Quantization_F32:
+                ivf_ptr = new matrixone::gpu_ivf_flat_t<float>(total_count, dimension, metric, build_params, devs, nthread, dist_mode);
+                break;
+            case Quantization_F16:
+                ivf_ptr = new matrixone::gpu_ivf_flat_t<half>(total_count, dimension, metric, build_params, devs, nthread, dist_mode);
+                break;
+            case Quantization_INT8:
+                ivf_ptr = new matrixone::gpu_ivf_flat_t<int8_t>(total_count, dimension, metric, build_params, devs, nthread, dist_mode);
+                break;
+            case Quantization_UINT8:
+                ivf_ptr = new matrixone::gpu_ivf_flat_t<uint8_t>(total_count, dimension, metric, build_params, devs, nthread, dist_mode);
+                break;
+            default:
+                throw std::runtime_error("Unsupported quantization type for IVF-Flat");
+        }
+        return static_cast<gpu_ivf_flat_c>(new gpu_ivf_flat_any_t(qtype, ivf_ptr));
+    } catch (const std::exception& e) {
+        set_errmsg(errmsg, "Error in gpu_ivf_flat_new_empty", e.what());
+        return nullptr;
+    }
+}
+
+void gpu_ivf_flat_add_chunk(gpu_ivf_flat_c index_c, const void* chunk_data, uint64_t chunk_count, uint64_t row_offset, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_ivf_flat_any_t*>(index_c);
+        switch (any->qtype) {
+            case Quantization_F32: static_cast<matrixone::gpu_ivf_flat_t<float>*>(any->ptr)->add_chunk(static_cast<const float*>(chunk_data), chunk_count, row_offset); break;
+            case Quantization_F16: static_cast<matrixone::gpu_ivf_flat_t<half>*>(any->ptr)->add_chunk(static_cast<const half*>(chunk_data), chunk_count, row_offset); break;
+            case Quantization_INT8: static_cast<matrixone::gpu_ivf_flat_t<int8_t>*>(any->ptr)->add_chunk(static_cast<const int8_t*>(chunk_data), chunk_count, row_offset); break;
+            case Quantization_UINT8: static_cast<matrixone::gpu_ivf_flat_t<uint8_t>*>(any->ptr)->add_chunk(static_cast<const uint8_t*>(chunk_data), chunk_count, row_offset); break;
+            default: break;
+        }
+    } catch (const std::exception& e) {
+        set_errmsg(errmsg, "Error in gpu_ivf_flat_add_chunk", e.what());
+    }
+}
+
+void gpu_ivf_flat_add_chunk_float(gpu_ivf_flat_c index_c, const float* chunk_data, uint64_t chunk_count, uint64_t row_offset, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_ivf_flat_any_t*>(index_c);
+        switch (any->qtype) {
+            case Quantization_F32: static_cast<matrixone::gpu_ivf_flat_t<float>*>(any->ptr)->add_chunk_float(chunk_data, chunk_count, row_offset); break;
+            case Quantization_F16: static_cast<matrixone::gpu_ivf_flat_t<half>*>(any->ptr)->add_chunk_float(chunk_data, chunk_count, row_offset); break;
+            case Quantization_INT8: static_cast<matrixone::gpu_ivf_flat_t<int8_t>*>(any->ptr)->add_chunk_float(chunk_data, chunk_count, row_offset); break;
+            case Quantization_UINT8: static_cast<matrixone::gpu_ivf_flat_t<uint8_t>*>(any->ptr)->add_chunk_float(chunk_data, chunk_count, row_offset); break;
+            default: break;
+        }
+    } catch (const std::exception& e) {
+        set_errmsg(errmsg, "Error in gpu_ivf_flat_add_chunk_float", e.what());
     }
 }
 

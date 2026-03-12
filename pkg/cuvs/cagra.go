@@ -136,35 +136,152 @@ func NewGpuCagraFromFile[T VectorType](filename string, dimension uint32, metric
 }
 
 // Destroy frees the C++ gpu_cagra_t instance
-func (gc *GpuCagra[T]) Destroy() error {
-    if gc.cCagra == nil {
-        return nil
-    }
-    var errmsg *C.char
-    C.gpu_cagra_destroy(gc.cCagra, unsafe.Pointer(&errmsg))
-    gc.cCagra = nil
-    if errmsg != nil {
-        errStr := C.GoString(errmsg)
-        C.free(unsafe.Pointer(errmsg))
-        return moerr.NewInternalErrorNoCtx(errStr)
-    }
-    return nil
+func (gi *GpuCagra[T]) Destroy() error {
+	if gi.cCagra == nil {
+		return nil
+	}
+	var errmsg *C.char
+	C.gpu_cagra_destroy(gi.cCagra, unsafe.Pointer(&errmsg))
+	gi.cCagra = nil
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
+// Start initializes the worker and resources
+func (gi *GpuCagra[T]) Start() error {
+	if gi.cCagra == nil {
+		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
+	}
+	var errmsg *C.char
+	C.gpu_cagra_start(gi.cCagra, unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
 }
 
 // Load triggers the build or file loading process
-func (gc *GpuCagra[T]) Load() error {
-    if gc.cCagra == nil {
-        return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
-    }
-    var errmsg *C.char
-    C.gpu_cagra_load(gc.cCagra, unsafe.Pointer(&errmsg))
-    if errmsg != nil {
-        errStr := C.GoString(errmsg)
-        C.free(unsafe.Pointer(errmsg))
-        return moerr.NewInternalErrorNoCtx(errStr)
-    }
-    return nil
+func (gi *GpuCagra[T]) Load() error {
+	if gi.cCagra == nil {
+		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
+	}
+	var errmsg *C.char
+	C.gpu_cagra_load(gi.cCagra, unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
 }
+
+// NewGpuCagraEmpty creates a new GpuCagra instance with pre-allocated buffer but no data yet.
+func NewGpuCagraEmpty[T VectorType](totalCount uint64, dimension uint32, metric DistanceType,
+	bp CagraBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuCagra[T], error) {
+	if len(devices) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("at least one device must be specified")
+	}
+
+	qtype := GetQuantization[T]()
+	var errmsg *C.char
+	cDevices := make([]C.int, len(devices))
+	for i, d := range devices {
+		cDevices[i] = C.int(d)
+	}
+
+	cBP := C.cagra_build_params_t{
+		intermediate_graph_degree: C.size_t(bp.IntermediateGraphDegree),
+		graph_degree:              C.size_t(bp.GraphDegree),
+		attach_dataset_on_build:   C.bool(bp.AttachDatasetOnBuild),
+	}
+
+	cCagra := C.gpu_cagra_new_empty(
+		C.uint64_t(totalCount),
+		C.uint32_t(dimension),
+		C.distance_type_t(metric),
+		cBP,
+		&cDevices[0],
+		C.int(len(devices)),
+		C.uint32_t(nthread),
+		C.distribution_mode_t(mode),
+		C.quantization_t(qtype),
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(cDevices)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return nil, moerr.NewInternalErrorNoCtx(errStr)
+	}
+
+	if cCagra == nil {
+		return nil, moerr.NewInternalErrorNoCtx("failed to create GpuCagra")
+	}
+
+	return &GpuCagra[T]{cCagra: cCagra, dimension: dimension}, nil
+}
+
+// AddChunk adds a chunk of data to the pre-allocated buffer.
+func (gi *GpuCagra[T]) AddChunk(chunk []T, chunkCount uint64, rowOffset uint64) error {
+	if gi.cCagra == nil {
+		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
+	}
+	if len(chunk) == 0 || chunkCount == 0 {
+		return nil
+	}
+
+	var errmsg *C.char
+	C.gpu_cagra_add_chunk(
+		gi.cCagra,
+		unsafe.Pointer(&chunk[0]),
+		C.uint64_t(chunkCount),
+		C.uint64_t(rowOffset),
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(chunk)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
+// AddChunkFloat adds a chunk of float32 data, performing on-the-fly quantization if needed.
+func (gi *GpuCagra[T]) AddChunkFloat(chunk []float32, chunkCount uint64, rowOffset uint64) error {
+	if gi.cCagra == nil {
+		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
+	}
+	if len(chunk) == 0 || chunkCount == 0 {
+		return nil
+	}
+
+	var errmsg *C.char
+	C.gpu_cagra_add_chunk_float(
+		gi.cCagra,
+		(*C.float)(&chunk[0]),
+		C.uint64_t(chunkCount),
+		C.uint64_t(rowOffset),
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(chunk)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
 
 // Save serializes the index to a file
 func (gc *GpuCagra[T]) Save(filename string) error {

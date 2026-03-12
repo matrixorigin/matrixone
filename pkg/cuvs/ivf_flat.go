@@ -137,35 +137,150 @@ func NewGpuIvfFlatFromFile[T VectorType](filename string, dimension uint32, metr
 
 // Destroy frees the C++ gpu_ivf_flat_t instance
 func (gi *GpuIvfFlat[T]) Destroy() error {
-    if gi.cIvfFlat == nil {
-        return nil
-    }
-    var errmsg *C.char
-    C.gpu_ivf_flat_destroy(gi.cIvfFlat, unsafe.Pointer(&errmsg))
-    gi.cIvfFlat = nil
-    if errmsg != nil {
-        errStr := C.GoString(errmsg)
-        C.free(unsafe.Pointer(errmsg))
-        return moerr.NewInternalErrorNoCtx(errStr)
-    }
-    return nil
+	if gi.cIvfFlat == nil {
+		return nil
+	}
+	var errmsg *C.char
+	C.gpu_ivf_flat_destroy(gi.cIvfFlat, unsafe.Pointer(&errmsg))
+	gi.cIvfFlat = nil
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
+// Start initializes the worker and resources
+func (gi *GpuIvfFlat[T]) Start() error {
+	if gi.cIvfFlat == nil {
+		return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
+	}
+	var errmsg *C.char
+	C.gpu_ivf_flat_start(gi.cIvfFlat, unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
 }
 
 // Load triggers the build or file loading process
 func (gi *GpuIvfFlat[T]) Load() error {
-    if gi.cIvfFlat == nil {
-        return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
-    }
-    var errmsg *C.char
-    C.gpu_ivf_flat_load(gi.cIvfFlat, unsafe.Pointer(&errmsg))
-    if errmsg != nil {
-        errStr := C.GoString(errmsg)
-        C.free(unsafe.Pointer(errmsg))
-        return moerr.NewInternalErrorNoCtx(errStr)
-    }
-    return nil
+	if gi.cIvfFlat == nil {
+		return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
+	}
+	var errmsg *C.char
+	C.gpu_ivf_flat_load(gi.cIvfFlat, unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
 }
 
+// NewGpuIvfFlatEmpty creates a new GpuIvfFlat instance with pre-allocated buffer but no data yet.
+func NewGpuIvfFlatEmpty[T VectorType](totalCount uint64, dimension uint32, metric DistanceType,
+	bp IvfFlatBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfFlat[T], error) {
+	if len(devices) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("at least one device must be specified")
+	}
+
+	qtype := GetQuantization[T]()
+	var errmsg *C.char
+	cDevices := make([]C.int, len(devices))
+	for i, d := range devices {
+		cDevices[i] = C.int(d)
+	}
+
+	cBP := C.ivf_flat_build_params_t{
+		n_lists:                  C.uint32_t(bp.NLists),
+		add_data_on_build:        C.bool(bp.AddDataOnBuild),
+		kmeans_trainset_fraction: C.double(bp.KmeansTrainsetFraction),
+	}
+
+	cIvfFlat := C.gpu_ivf_flat_new_empty(
+		C.uint64_t(totalCount),
+		C.uint32_t(dimension),
+		C.distance_type_t(metric),
+		cBP,
+		&cDevices[0],
+		C.int(len(devices)),
+		C.uint32_t(nthread),
+		C.distribution_mode_t(mode),
+		C.quantization_t(qtype),
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(cDevices)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return nil, moerr.NewInternalErrorNoCtx(errStr)
+	}
+
+	if cIvfFlat == nil {
+		return nil, moerr.NewInternalErrorNoCtx("failed to create GpuIvfFlat")
+	}
+
+	return &GpuIvfFlat[T]{cIvfFlat: cIvfFlat, dimension: dimension}, nil
+}
+
+// AddChunk adds a chunk of data to the pre-allocated buffer.
+func (gi *GpuIvfFlat[T]) AddChunk(chunk []T, chunkCount uint64, rowOffset uint64) error {
+	if gi.cIvfFlat == nil {
+		return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
+	}
+	if len(chunk) == 0 || chunkCount == 0 {
+		return nil
+	}
+
+	var errmsg *C.char
+	C.gpu_ivf_flat_add_chunk(
+		gi.cIvfFlat,
+		unsafe.Pointer(&chunk[0]),
+		C.uint64_t(chunkCount),
+		C.uint64_t(rowOffset),
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(chunk)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
+// AddChunkFloat adds a chunk of float32 data, performing on-the-fly quantization if needed.
+func (gi *GpuIvfFlat[T]) AddChunkFloat(chunk []float32, chunkCount uint64, rowOffset uint64) error {
+	if gi.cIvfFlat == nil {
+		return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
+	}
+	if len(chunk) == 0 || chunkCount == 0 {
+		return nil
+	}
+
+	var errmsg *C.char
+	C.gpu_ivf_flat_add_chunk_float(
+		gi.cIvfFlat,
+		(*C.float)(&chunk[0]),
+		C.uint64_t(chunkCount),
+		C.uint64_t(rowOffset),
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(chunk)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
 // Save serializes the index to a file
 func (gi *GpuIvfFlat[T]) Save(filename string) error {
     if gi.cIvfFlat == nil {

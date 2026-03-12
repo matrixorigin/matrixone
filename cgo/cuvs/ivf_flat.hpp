@@ -49,6 +49,7 @@
 // cuVS includes
 #include <cuvs/distance/distance.hpp>    // cuVS distance API
 #include <cuvs/neighbors/ivf_flat.hpp>   // IVF-Flat include
+#include "utils.hpp"
 #pragma GCC diagnostic pop
 
 
@@ -101,6 +102,19 @@ public:
         std::copy(dataset_data, dataset_data + (count * dimension), flattened_host_dataset.begin());
     }
 
+    // Constructor for chunked input (pre-allocates)
+    gpu_ivf_flat_t(uint64_t total_count, uint32_t dimension, cuvs::distance::DistanceType m, 
+                    const ivf_flat_build_params_t& bp, const std::vector<int>& devices, 
+                    uint32_t nthread, distribution_mode_t mode)
+        : dimension(dimension), count(static_cast<uint32_t>(total_count)), metric(m), 
+          build_params(bp), dist_mode(mode), devices_(devices) {
+        
+        bool force_mg = (mode == DistributionMode_SHARDED || mode == DistributionMode_REPLICATED);
+        worker = std::make_unique<cuvs_worker_t>(nthread, devices_, force_mg || (devices_.size() > 1));
+
+        flattened_host_dataset.resize(count * dimension);
+    }
+
     // Unified Constructor for loading from file
     gpu_ivf_flat_t(const std::string& filename, uint32_t dimension, cuvs::distance::DistanceType m, 
                     const ivf_flat_build_params_t& bp, const std::vector<int>& devices, uint32_t nthread, distribution_mode_t mode)
@@ -112,103 +126,113 @@ public:
     }
 
     /**
+     * @brief Starts the worker and initializes resources.
+     */
+    void start() {
+        auto init_fn = [](raft_handle_wrapper_t& handle) -> std::any {
+            return std::any();
+        };
+
+        auto stop_fn = [&](raft_handle_wrapper_t& handle) -> std::any {
+            std::unique_lock<std::shared_mutex> lock(mutex_);
+            index_.reset();
+            mg_index_.reset();
+            quantizer_.reset();
+            dataset_device_ptr_.reset();
+            return std::any();
+        };
+
+        worker->start(init_fn, stop_fn);
+    }
+
+    /**
      * @brief Loads the index from file or builds it from the dataset.
      */
     void load() {
         std::unique_lock<std::shared_mutex> lock(mutex_);
         if (is_loaded_) return;
 
-        std::promise<bool> init_complete_promise;
-        std::future<bool> init_complete_future = init_complete_promise.get_future();
+        uint64_t job_id = worker->submit(
+            [&](raft_handle_wrapper_t& handle) -> std::any {
+                auto res = handle.get_raft_resources();
+                bool is_mg = is_snmg_handle(res);
 
-        auto init_fn = [&](raft_handle_wrapper_t& handle) -> std::any {
-            auto res = handle.get_raft_resources();
-            bool is_mg = is_snmg_handle(res);
-
-            if (!filename_.empty()) {
-                if (is_mg) {
-                    mg_index_ = std::make_unique<mg_index>(
-                        cuvs::neighbors::ivf_flat::deserialize<T, int64_t>(*res, filename_));
-                    // Update metadata
-                    count = 0;
-                    for (const auto& iface : mg_index_->ann_interfaces_) {
-                        if (iface.index_.has_value()) count += static_cast<uint32_t>(iface.index_.value().size());
-                    }
-                    if (!mg_index_->ann_interfaces_.empty() && mg_index_->ann_interfaces_[0].index_.has_value()) {
-                        build_params.n_lists = static_cast<uint32_t>(mg_index_->ann_interfaces_[0].index_.value().n_lists());
-                    }
-                } else {
-                    cuvs::neighbors::ivf_flat::index_params index_params;
-                    index_params.metric = metric;
-                    index_ = std::make_unique<ivf_flat_index>(*res, index_params, dimension);
-                    cuvs::neighbors::ivf_flat::deserialize(*res, filename_, index_.get());
-                    count = static_cast<uint32_t>(index_->size());
-                    build_params.n_lists = static_cast<uint32_t>(index_->n_lists());
-                }
-                raft::resource::sync_stream(*res);
-            } else if (!flattened_host_dataset.empty()) {
-                if (count < build_params.n_lists) {
-                    throw std::runtime_error("Dataset too small: count (" + std::to_string(count) + 
-                                            ") must be >= n_list (" + std::to_string(build_params.n_lists) + 
-                                            ") to build IVF index.");
-                }
-
-                if (is_mg) {
-                    auto dataset_host_view = raft::make_host_matrix_view<const T, int64_t>(
-                        flattened_host_dataset.data(), (int64_t)count, (int64_t)dimension);
-
-                    cuvs::neighbors::ivf_flat::index_params index_params;
-                    index_params.metric = metric;
-                    index_params.n_lists = build_params.n_lists;
-                    index_params.add_data_on_build = build_params.add_data_on_build;
-                    index_params.kmeans_trainset_fraction = build_params.kmeans_trainset_fraction;
-
-                    cuvs::neighbors::mg_index_params<cuvs::neighbors::ivf_flat::index_params> mg_params(index_params);
-                    if (dist_mode == DistributionMode_REPLICATED) {
-                        mg_params.mode = cuvs::neighbors::distribution_mode::REPLICATED;
+                if (!filename_.empty()) {
+                    if (is_mg) {
+                        mg_index_ = std::make_unique<mg_index>(
+                            cuvs::neighbors::ivf_flat::deserialize<T, int64_t>(*res, filename_));
+                        // Update metadata
+                        count = 0;
+                        for (const auto& iface : mg_index_->ann_interfaces_) {
+                            if (iface.index_.has_value()) count += static_cast<uint32_t>(iface.index_.value().size());
+                        }
+                        if (!mg_index_->ann_interfaces_.empty() && mg_index_->ann_interfaces_[0].index_.has_value()) {
+                            build_params.n_lists = static_cast<uint32_t>(mg_index_->ann_interfaces_[0].index_.value().n_lists());
+                        }
                     } else {
-                        mg_params.mode = cuvs::neighbors::distribution_mode::SHARDED;
+                        cuvs::neighbors::ivf_flat::index_params index_params;
+                        index_params.metric = metric;
+                        index_ = std::make_unique<ivf_flat_index>(*res, index_params, dimension);
+                        cuvs::neighbors::ivf_flat::deserialize(*res, filename_, index_.get());
+                        count = static_cast<uint32_t>(index_->size());
+                        build_params.n_lists = static_cast<uint32_t>(index_->n_lists());
+                    }
+                    raft::resource::sync_stream(*res);
+                } else if (!flattened_host_dataset.empty()) {
+                    if (count < build_params.n_lists) {
+                        throw std::runtime_error("Dataset too small: count (" + std::to_string(count) + 
+                                                ") must be >= n_list (" + std::to_string(build_params.n_lists) + 
+                                                ") to build IVF index.");
                     }
 
-                    mg_index_ = std::make_unique<mg_index>(
-                        cuvs::neighbors::ivf_flat::build(*res, mg_params, dataset_host_view));
-                } else {
-                    auto dataset_device = new auto(raft::make_device_matrix<T, int64_t, raft::layout_c_contiguous>(
-                        *res, static_cast<int64_t>(count), static_cast<int64_t>(dimension)));
-                    
-                    dataset_device_ptr_ = std::shared_ptr<void>(dataset_device, [](void* ptr) {
-                        delete static_cast<raft::device_matrix<T, int64_t, raft::layout_c_contiguous>*>(ptr);
-                    });
+                    if (is_mg) {
+                        auto dataset_host_view = raft::make_host_matrix_view<const T, int64_t>(
+                            flattened_host_dataset.data(), (int64_t)count, (int64_t)dimension);
 
-                    RAFT_CUDA_TRY(cudaMemcpyAsync(dataset_device->data_handle(), flattened_host_dataset.data(),
-                                             flattened_host_dataset.size() * sizeof(T), cudaMemcpyHostToDevice,
-                                             raft::resource::get_cuda_stream(*res)));
+                        cuvs::neighbors::ivf_flat::index_params index_params;
+                        index_params.metric = metric;
+                        index_params.n_lists = build_params.n_lists;
+                        index_params.add_data_on_build = build_params.add_data_on_build;
+                        index_params.kmeans_trainset_fraction = build_params.kmeans_trainset_fraction;
 
-                    cuvs::neighbors::ivf_flat::index_params index_params;
-                    index_params.metric = metric;
-                    index_params.n_lists = build_params.n_lists;
-                    index_params.add_data_on_build = build_params.add_data_on_build;
-                    index_params.kmeans_trainset_fraction = build_params.kmeans_trainset_fraction;
+                        cuvs::neighbors::mg_index_params<cuvs::neighbors::ivf_flat::index_params> mg_params(index_params);
+                        if (dist_mode == DistributionMode_REPLICATED) {
+                            mg_params.mode = cuvs::neighbors::distribution_mode::REPLICATED;
+                        } else {
+                            mg_params.mode = cuvs::neighbors::distribution_mode::SHARDED;
+                        }
 
-                    index_ = std::make_unique<ivf_flat_index>(
-                        cuvs::neighbors::ivf_flat::build(*res, index_params, raft::make_const_mdspan(dataset_device->view())));
+                        mg_index_ = std::make_unique<mg_index>(
+                            cuvs::neighbors::ivf_flat::build(*res, mg_params, dataset_host_view));
+                    } else {
+                        auto dataset_device = new auto(raft::make_device_matrix<T, int64_t, raft::layout_c_contiguous>(
+                            *res, static_cast<int64_t>(count), static_cast<int64_t>(dimension)));
+                        
+                        dataset_device_ptr_ = std::shared_ptr<void>(dataset_device, [](void* ptr) {
+                            delete static_cast<raft::device_matrix<T, int64_t, raft::layout_c_contiguous>*>(ptr);
+                        });
+
+                        RAFT_CUDA_TRY(cudaMemcpyAsync(dataset_device->data_handle(), flattened_host_dataset.data(),
+                                                 flattened_host_dataset.size() * sizeof(T), cudaMemcpyHostToDevice,
+                                                 raft::resource::get_cuda_stream(*res)));
+
+                        cuvs::neighbors::ivf_flat::index_params index_params;
+                        index_params.metric = metric;
+                        index_params.n_lists = build_params.n_lists;
+                        index_params.add_data_on_build = build_params.add_data_on_build;
+                        index_params.kmeans_trainset_fraction = build_params.kmeans_trainset_fraction;
+
+                        index_ = std::make_unique<ivf_flat_index>(
+                            cuvs::neighbors::ivf_flat::build(*res, index_params, raft::make_const_mdspan(dataset_device->view())));
+                    }
+                    raft::resource::sync_stream(*res);
                 }
-                raft::resource::sync_stream(*res);
+                return std::any();
             }
+        );
 
-            init_complete_promise.set_value(true);
-            return std::any();
-        };
-
-        auto stop_fn = [&](raft_handle_wrapper_t& handle) -> std::any {
-            index_.reset();
-            mg_index_.reset();
-            dataset_device_ptr_.reset();
-            return std::any();
-        };
-
-        worker->start(init_fn, stop_fn);
-        init_complete_future.get();
+        auto result_wait = worker->wait(job_id).get();
+        if (result_wait.error) std::rethrow_exception(result_wait.error);
         is_loaded_ = true;
     }
 
@@ -375,9 +399,53 @@ public:
         return build_params.n_lists;
     }
 
+    void add_chunk(const T* chunk_data, uint64_t chunk_count, uint64_t row_offset) {
+        if (row_offset + chunk_count > count) throw std::runtime_error("offset out of bounds");
+        std::copy(chunk_data, chunk_data + (chunk_count * dimension), flattened_host_dataset.begin() + (row_offset * dimension));
+    }
+
+    void add_chunk_float(const float* chunk_data, uint64_t chunk_count, uint64_t row_offset) {
+        if (row_offset + chunk_count > count) throw std::runtime_error("offset out of bounds");
+        
+        uint64_t job_id = worker->submit(
+            [&, chunk_data, chunk_count, row_offset](raft_handle_wrapper_t& handle) -> std::any {
+                auto res = handle.get_raft_resources();
+                
+                // If quantization is needed (T is 1-byte)
+                if constexpr (sizeof(T) == 1) {
+                    if (!quantizer_.is_trained()) {
+                        int64_t n_train = std::min(static_cast<int64_t>(chunk_count), static_cast<int64_t>(500));
+                        auto train_device = raft::make_device_matrix<float, int64_t>(*res, n_train, dimension);
+                        raft::copy(*res, train_device.view(), raft::make_host_matrix_view<const float, int64_t>(chunk_data, n_train, dimension));
+                        quantizer_.train(*res, train_device.view());
+                    }
+
+                    auto chunk_device_float = raft::make_device_matrix<float, int64_t>(*res, chunk_count, dimension);
+                    raft::copy(*res, chunk_device_float.view(), raft::make_host_matrix_view<const float, int64_t>(chunk_data, chunk_count, dimension));
+                    quantizer_.template transform<T>(*res, chunk_device_float.view(), flattened_host_dataset.data() + (row_offset * dimension), false);
+                } else if constexpr (std::is_same_v<T, float>) {
+                    std::copy(chunk_data, chunk_data + (chunk_count * dimension), flattened_host_dataset.begin() + (row_offset * dimension));
+                } else {
+                    auto chunk_device_float = raft::make_device_matrix<float, int64_t>(*res, chunk_count, dimension);
+                    raft::copy(*res, chunk_device_float.view(), raft::make_host_matrix_view<const float, int64_t>(chunk_data, chunk_count, dimension));
+                    auto out_view = raft::make_host_matrix_view<T, int64_t>(flattened_host_dataset.data() + (row_offset * dimension), chunk_count, dimension);
+                    raft::copy(*res, out_view, chunk_device_float.view());
+                    raft::resource::sync_stream(*res);
+                }
+                return std::any();
+            }
+        );
+        
+        auto result_wait = worker->wait(job_id).get();
+        if (result_wait.error) std::rethrow_exception(result_wait.error);
+    }
+
     void destroy() {
         if (worker) worker->stop();
     }
+
+private:
+    scalar_quantizer_t<float> quantizer_;
 };
 
 } // namespace matrixone
