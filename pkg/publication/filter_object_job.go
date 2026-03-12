@@ -525,7 +525,7 @@ func (j *FilterObjectJob) Execute() {
 	res := &FilterObjectJobResult{}
 
 	// Check TTL before starting
-	if j.ttlChecker != nil && j.ttlChecker() {
+	if j.ttlChecker != nil && !j.ttlChecker() {
 		res.Err = ErrSyncProtectionTTLExpired
 		j.result <- res
 		return

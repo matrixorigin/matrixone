@@ -415,7 +415,7 @@ func ApplyObjects(
 	ttlChecker TTLChecker,
 ) (err error) {
 	// Check TTL before starting
-	if ttlChecker != nil && ttlChecker() {
+	if ttlChecker != nil && !ttlChecker() {
 		return ErrSyncProtectionTTLExpired
 	}
 
