@@ -86,6 +86,59 @@ func NewGpuIvfPq[T VectorType](dataset []T, count uint64, dimension uint32, metr
 	return &GpuIvfPq[T]{cIvfPq: cIvfPq, dimension: dimension}, nil
 }
 
+// NewGpuIvfPqFromDataFile creates a new GpuIvfPq instance from a MODF datafile.
+func NewGpuIvfPqFromDataFile[T VectorType](datafilename string, metric DistanceType,
+	bp IvfPqBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfPq[T], error) {
+	if len(devices) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("at least one device must be specified")
+	}
+
+	qtype := GetQuantization[T]()
+	var errmsg *C.char
+	cFilename := C.CString(datafilename)
+	defer C.free(unsafe.Pointer(cFilename))
+
+	cDevices := make([]C.int, len(devices))
+	for i, d := range devices {
+		cDevices[i] = C.int(d)
+	}
+
+	cBP := C.ivf_pq_build_params_t{
+		n_lists:                  C.uint32_t(bp.NLists),
+		m:                        C.uint32_t(bp.M),
+		bits_per_code:            C.uint32_t(bp.BitsPerCode),
+		add_data_on_build:        C.bool(bp.AddDataOnBuild),
+		kmeans_trainset_fraction: C.double(bp.KmeansTrainsetFraction),
+	}
+
+	cIvfPq := C.gpu_ivf_pq_new_from_data_file(
+		cFilename,
+		C.distance_type_t(metric),
+		cBP,
+		&cDevices[0],
+		C.int(len(devices)),
+		C.uint32_t(nthread),
+		C.distribution_mode_t(mode),
+		C.quantization_t(qtype),
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(cDevices)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return nil, moerr.NewInternalErrorNoCtx(errStr)
+	}
+
+	if cIvfPq == nil {
+		return nil, moerr.NewInternalErrorNoCtx("failed to create GpuIvfPq from data file")
+	}
+
+	// dimension will be updated when GetDim() is called, but we can set it to 0 for now 
+	// or ideally GetDim() should be used.
+	return &GpuIvfPq[T]{cIvfPq: cIvfPq, dimension: 0}, nil
+}
+
 // NewGpuIvfPqFromFile creates a new GpuIvfPq instance by loading from a file.
 func NewGpuIvfPqFromFile[T VectorType](filename string, dimension uint32, metric DistanceType,
 	bp IvfPqBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfPq[T], error) {

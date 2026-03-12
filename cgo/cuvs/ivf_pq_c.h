@@ -36,6 +36,12 @@ gpu_ivf_pq_c gpu_ivf_pq_new(const void* dataset_data, uint64_t count_vectors, ui
                                  const int* devices, int device_count, uint32_t nthread, 
                                  distribution_mode_t dist_mode, quantization_t qtype, void* errmsg);
 
+// Constructor for building from MODF datafile
+gpu_ivf_pq_c gpu_ivf_pq_new_from_data_file(const char* data_filename, distance_type_t metric, 
+                                                ivf_pq_build_params_t build_params,
+                                                const int* devices, int device_count, uint32_t nthread, 
+                                                distribution_mode_t dist_mode, quantization_t qtype, void* errmsg);
+
 // Constructor for loading from file
 gpu_ivf_pq_c gpu_ivf_pq_load_file(const char* filename, uint32_t dimension, distance_type_t metric,
                                       ivf_pq_build_params_t build_params,

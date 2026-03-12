@@ -102,3 +102,41 @@ TEST(GpuIvfPqTest, SaveAndLoadFromFile) {
 
     std::remove(filename.c_str());
 }
+
+TEST(GpuIvfPqTest, BuildFromDataFile) {
+    const uint32_t dimension = 8;
+    const uint64_t count = 100;
+    std::vector<float> dataset(count * dimension);
+    for (size_t i = 0; i < dataset.size(); ++i) {
+        dataset[i] = static_cast<float>(i % 10);
+    }
+
+    std::string data_filename = "test_dataset.modf";
+    {
+        // Use our utility to save the dataset in MODF format
+        raft::resources res;
+        auto matrix = raft::make_host_matrix<float, int64_t>(count, dimension);
+        std::copy(dataset.begin(), dataset.end(), matrix.data_handle());
+        save_host_matrix(data_filename, matrix.view());
+    }
+
+    std::vector<int> devices = {0};
+    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
+    bp.n_lists = 10;
+    bp.m = 4;
+
+    gpu_ivf_pq_t<float> index(data_filename, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+    index.load();
+
+    ASSERT_EQ(index.get_dim(), dimension);
+    ASSERT_EQ(index.count, static_cast<uint32_t>(count));
+
+    std::vector<float> queries(dimension, 0.0f);
+    ivf_pq_search_params_t sp = ivf_pq_search_params_default();
+    auto result = index.search(queries.data(), 1, dimension, 1, sp);
+
+    ASSERT_EQ(result.neighbors.size(), (size_t)1);
+    
+    index.destroy();
+    std::remove(data_filename.c_str());
+}

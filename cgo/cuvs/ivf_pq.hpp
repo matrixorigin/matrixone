@@ -49,6 +49,7 @@
 // cuVS includes
 #include <cuvs/distance/distance.hpp>    // cuVS distance API
 #include <cuvs/neighbors/ivf_pq.hpp>   // IVF-PQ include
+#include "utils.hpp"
 #pragma GCC diagnostic pop
 
 
@@ -98,6 +99,23 @@ public:
 
         flattened_host_dataset.resize(count * dimension);
         std::copy(dataset_data, dataset_data + (count * dimension), flattened_host_dataset.begin());
+    }
+
+    // Constructor for building from MODF datafile
+    gpu_ivf_pq_t(const std::string& data_filename, cuvs::distance::DistanceType m, 
+                    const ivf_pq_build_params_t& bp, const std::vector<int>& devices, 
+                    uint32_t nthread, distribution_mode_t mode)
+        : metric(m), build_params(bp), dist_mode(mode), devices_(devices) {
+        
+        bool force_mg = (mode == DistributionMode_SHARDED || mode == DistributionMode_REPLICATED);
+        worker = std::make_unique<cuvs_worker_t>(nthread, devices_, force_mg || (devices_.size() > 1));
+
+        uint64_t file_count = 0;
+        uint64_t file_dim = 0;
+        load_host_matrix<T>(data_filename, flattened_host_dataset, file_count, file_dim);
+        
+        count = static_cast<uint32_t>(file_count);
+        dimension = static_cast<uint32_t>(file_dim);
     }
 
     // Unified Constructor for loading from file

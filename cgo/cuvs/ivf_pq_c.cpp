@@ -73,6 +73,39 @@ gpu_ivf_pq_c gpu_ivf_pq_new(const void* dataset_data, uint64_t count_vectors, ui
     }
 }
 
+gpu_ivf_pq_c gpu_ivf_pq_new_from_data_file(const char* data_filename, distance_type_t metric_c, 
+                                                ivf_pq_build_params_t build_params,
+                                                const int* devices, int device_count, uint32_t nthread, 
+                                                distribution_mode_t dist_mode, quantization_t qtype, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        cuvs::distance::DistanceType metric = matrixone::convert_distance_type(metric_c);
+        std::vector<int> devs(devices, devices + device_count);
+        void* ivf_ptr = nullptr;
+        std::string filename(data_filename);
+        switch (qtype) {
+            case Quantization_F32:
+                ivf_ptr = new matrixone::gpu_ivf_pq_t<float>(filename, metric, build_params, devs, nthread, dist_mode);
+                break;
+            case Quantization_F16:
+                ivf_ptr = new matrixone::gpu_ivf_pq_t<half>(filename, metric, build_params, devs, nthread, dist_mode);
+                break;
+            case Quantization_INT8:
+                ivf_ptr = new matrixone::gpu_ivf_pq_t<int8_t>(filename, metric, build_params, devs, nthread, dist_mode);
+                break;
+            case Quantization_UINT8:
+                ivf_ptr = new matrixone::gpu_ivf_pq_t<uint8_t>(filename, metric, build_params, devs, nthread, dist_mode);
+                break;
+            default:
+                throw std::runtime_error("Unsupported quantization type for IVF-PQ");
+        }
+        return static_cast<gpu_ivf_pq_c>(new gpu_ivf_pq_any_t(qtype, ivf_ptr));
+    } catch (const std::exception& e) {
+        set_errmsg(errmsg, "Error in gpu_ivf_pq_new_from_data_file", e.what());
+        return nullptr;
+    }
+}
+
 gpu_ivf_pq_c gpu_ivf_pq_load_file(const char* filename, uint32_t dimension, distance_type_t metric_c,
                                       ivf_pq_build_params_t build_params,
                                       const int* devices, int device_count, uint32_t nthread, 

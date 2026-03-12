@@ -36,7 +36,8 @@ TEST_SRCS := $(TESTDIR)/main_test.cu \
              $(TESTDIR)/ivf_flat_test.cu \
              $(TESTDIR)/ivf_pq_test.cu \
              $(TESTDIR)/cagra_test.cu \
-             $(TESTDIR)/kmeans_test.cu
+             $(TESTDIR)/kmeans_test.cu \
+             $(TESTDIR)/utils_test.cu
 
 TEST_OBJS := $(patsubst $(TESTDIR)/%.cu, $(OBJDIR)/test/%.o, $(TEST_SRCS))
 
