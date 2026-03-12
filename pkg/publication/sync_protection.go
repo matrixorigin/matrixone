@@ -381,3 +381,68 @@ func registerSyncProtectionOnDownstreamImpl(
 
 	return jobID, ttlExpireTS, false, nil
 }
+
+// RegisterSyncProtectionWithRetry registers sync protection with timeout-based retry
+// Similar to WaitForSnapshotFlushed, it retries on ErrGCRunning and ErrMaxCountReached
+// until the total timeout is reached.
+//
+// Parameters:
+//   - ctx: context for cancellation
+//   - downstreamExecutor: SQL executor for downstream cluster
+//   - objectMap: map of objects to protect
+//   - mp: memory pool
+//   - retryOpt: retry options (nil to use default: 1s initial, 5min total timeout)
+//
+// Returns:
+//   - jobID: the registered job ID
+//   - ttlExpireTS: the TTL expiration timestamp
+//   - err: error if registration failed after all retries
+func RegisterSyncProtectionWithRetry(
+	ctx context.Context,
+	downstreamExecutor SQLExecutor,
+	objectMap map[objectio.ObjectId]*ObjectWithTableInfo,
+	mp *mpool.MPool,
+	retryOpt *SyncProtectionRetryOption,
+) (jobID string, ttlExpireTS int64, err error) {
+	if retryOpt == nil {
+		retryOpt = DefaultSyncProtectionRetryOption()
+	}
+
+	// If MaxTotalTime is 0 or negative, no retry - fail immediately on first error
+	if retryOpt.MaxTotalTime <= 0 {
+		jobID, ttlExpireTS, _, err = RegisterSyncProtectionOnDownstream(ctx, downstreamExecutor, objectMap, mp)
+		return
+	}
+
+	startTime := time.Now()
+	interval := retryOpt.InitialInterval
+	if interval <= 0 {
+		interval = 1 * time.Second
+	}
+
+	for {
+		jobID, ttlExpireTS, retryable, err := RegisterSyncProtectionOnDownstream(ctx, downstreamExecutor, objectMap, mp)
+		if err == nil {
+			return jobID, ttlExpireTS, nil
+		}
+
+		// Check if error is retryable
+		if !retryable {
+			return "", 0, err
+		}
+
+		// Check if we've exceeded the total timeout
+		elapsed := time.Since(startTime)
+		if elapsed >= retryOpt.MaxTotalTime {
+			return "", 0, moerr.NewInternalErrorf(ctx, "sync protection registration timeout after %v: %v", elapsed, err)
+		}
+
+		// Wait before retry
+		select {
+		case <-ctx.Done():
+			return "", 0, ctx.Err()
+		case <-time.After(interval):
+			// Continue to next retry
+		}
+	}
+}

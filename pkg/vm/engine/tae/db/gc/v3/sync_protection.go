@@ -372,3 +372,28 @@ func (m *SyncProtectionManager) FilterProtectedFiles(files []string) []string {
 
 	return result
 }
+
+// ValidateSyncProtection validates that a sync protection is valid at the given prepareTS.
+// Returns nil if valid, or an error indicating the validation failure reason.
+// This is called by TN during PrepareCommit to ensure the sync protection is still active.
+func (m *SyncProtectionManager) ValidateSyncProtection(jobID string, prepareTS int64) error {
+	m.RLock()
+	defer m.RUnlock()
+
+	protection, exists := m.protections[jobID]
+	if !exists {
+		return moerr.NewSyncProtectionNotFoundNoCtx(jobID)
+	}
+
+	if protection.SoftDelete {
+		return moerr.NewSyncProtectionSoftDeleteNoCtx(jobID)
+	}
+
+	if protection.ValidTS < prepareTS {
+		return moerr.NewSyncProtectionExpiredNoCtx(jobID, protection.ValidTS, prepareTS)
+	}
+
+	return nil
+}
+
+

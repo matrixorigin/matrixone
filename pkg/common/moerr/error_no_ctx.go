@@ -528,3 +528,7 @@ func NewSyncProtectionSoftDeleteNoCtx(jobID string) *Error {
 func NewSyncProtectionInvalidNoCtx() *Error {
 	return newError(Context(), ErrSyncProtectionInvalid)
 }
+
+func NewSyncProtectionExpiredNoCtx(jobID string, validTS, prepareTS int64) *Error {
+	return newError(Context(), ErrSyncProtectionExpired, jobID, validTS, prepareTS)
+}

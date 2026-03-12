@@ -88,7 +88,10 @@ func genWriteReqs(
 	}
 	trace.GetService(txnCommit.proc.GetService()).TxnCommit(op, entries)
 	reqs := make([]txn.TxnRequest, 0, len(entries))
-	payload, err := types.Encode(&api.PrecommitWriteCmd{EntryList: entries})
+	payload, err := types.Encode(&api.PrecommitWriteCmd{
+		EntryList:           entries,
+		SyncProtectionJobId: txnCommit.GetSyncProtectionJobID(),
+	})
 	if err != nil {
 		return nil, err
 	}

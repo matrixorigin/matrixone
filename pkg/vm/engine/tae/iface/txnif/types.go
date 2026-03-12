@@ -85,6 +85,9 @@ type TxnReader interface {
 	SameTxn(txn TxnReader) bool
 	CommitBefore(startTs types.TS) bool
 	CommitAfter(startTs types.TS) bool
+
+	// GetSyncProtectionJobID returns the sync protection job ID for this transaction
+	GetSyncProtectionJobID() string
 }
 
 type TxnHandle interface {
@@ -126,6 +129,9 @@ type TxnChanger interface {
 
 	CommittingInRecovery() error
 	CommitInRecovery(ctx context.Context) error
+
+	// SetSyncProtectionJobID sets the sync protection job ID for this transaction
+	SetSyncProtectionJobID(jobID string)
 }
 
 type TxnWriter interface {

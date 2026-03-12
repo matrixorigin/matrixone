@@ -427,6 +427,7 @@ type Transaction struct {
 	isCloneTxn bool
 	isCCPRTxn  bool
 	ccprTaskID string
+	syncProtectionJobID string
 
 	writeWorkspaceThreshold      uint64
 	commitWorkspaceThreshold     uint64
@@ -459,6 +460,18 @@ func (txn *Transaction) SetCCPRTaskID(taskID string) {
 // Returns empty string if no task ID is set.
 func (txn *Transaction) GetCCPRTaskID() string {
 	return txn.ccprTaskID
+}
+
+// SetSyncProtectionJobID sets the sync protection job ID for this transaction.
+// This is used to pass the job ID to TN for commit-time validation.
+func (txn *Transaction) SetSyncProtectionJobID(jobID string) {
+	txn.syncProtectionJobID = jobID
+}
+
+// GetSyncProtectionJobID returns the sync protection job ID for this transaction.
+// Returns empty string if no job ID is set.
+func (txn *Transaction) GetSyncProtectionJobID() string {
+	return txn.syncProtectionJobID
 }
 
 type Summary struct {

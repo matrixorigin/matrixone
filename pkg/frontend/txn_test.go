@@ -58,6 +58,10 @@ func (txn *testWorkspace) SetCCPRTaskID(taskID string) {}
 
 func (txn *testWorkspace) GetCCPRTaskID() string { return "" }
 
+func (txn *testWorkspace) SetSyncProtectionJobID(jobID string) {}
+
+func (txn *testWorkspace) GetSyncProtectionJobID() string { return "" }
+
 func (txn *testWorkspace) Readonly() bool {
 	panic("implement me")
 }

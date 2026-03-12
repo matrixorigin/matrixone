@@ -294,6 +294,14 @@ type Workspace interface {
 	// GetCCPRTaskID returns the CCPR task ID for this transaction.
 	// Returns empty string if no task ID is set.
 	GetCCPRTaskID() string
+
+	// SetSyncProtectionJobID sets the sync protection job ID for this transaction.
+	// This is used to pass the job ID to TN for commit-time validation.
+	SetSyncProtectionJobID(jobID string)
+
+	// GetSyncProtectionJobID returns the sync protection job ID for this transaction.
+	// Returns empty string if no job ID is set.
+	GetSyncProtectionJobID() string
 }
 
 // TxnOverview txn overview include meta and status

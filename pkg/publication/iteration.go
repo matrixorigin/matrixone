@@ -1095,8 +1095,8 @@ func updateObjectStatsFlags(stats *objectio.ObjectStats, isTombstone bool, hasFa
 //
 // Parameters:
 //   - snapshotFlushInterval: interval between retries when waiting for snapshot to be flushed (default: 1min if 0)
-//   - syncProtectionWorker: UNUSED - reserved for future sync protection feature
-//   - syncProtectionRetryOpt: UNUSED - reserved for future sync protection feature
+//   - syncProtectionWorker: worker for sync protection keepalive management
+//   - syncProtectionRetryOpt: retry options for sync protection registration (nil to use default: 1s initial, 5min total)
 //   - sqlExecutorRetryOpts: retry options for SQL executor operations (nil to use default)
 func ExecuteIteration(
 	ctx context.Context,
@@ -1112,8 +1112,8 @@ func ExecuteIteration(
 	filterObjectWorker FilterObjectWorker,
 	getChunkWorker GetChunkWorker,
 	writeObjectWorker WriteObjectWorker,
-	syncProtectionWorker Worker, // Currently unused, reserved for future sync protection
-	syncProtectionRetryOpt *SyncProtectionRetryOption, // Currently unused, reserved for future sync protection
+	syncProtectionWorker Worker,
+	syncProtectionRetryOpt *SyncProtectionRetryOption,
 	sqlExecutorRetryOpts ...*SQLExecutorRetryOption,
 ) (err error) {
 	startTime := time.Now()
@@ -1402,6 +1402,80 @@ func ExecuteIteration(
 		return
 	}
 
+	// === Sync Protection Integration ===
+	// Register sync protection after getting object list, before applying objects
+	var syncProtectionJobID string
+	var syncProtectionTTLExpireTS int64
+	if len(objectMap) > 0 {
+		// Register sync protection with retry (similar to WaitForSnapshotFlushed)
+		syncProtectionJobID, syncProtectionTTLExpireTS, err = RegisterSyncProtectionWithRetry(
+			ctx,
+			iterationCtx.LocalExecutor,
+			objectMap,
+			mp,
+			syncProtectionRetryOpt,
+		)
+		if err != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to register sync protection: %v", err)
+			return
+		}
+
+		logutil.Info("ccpr-iteration sync protection registered",
+			zap.String("task_id", iterationCtx.String()),
+			zap.String("job_id", syncProtectionJobID),
+			zap.Int64("ttl_expire_ts", syncProtectionTTLExpireTS),
+		)
+
+		// Register to worker for keepalive
+		if syncProtectionWorker != nil {
+			syncProtectionWorker.RegisterSyncProtection(syncProtectionJobID, syncProtectionTTLExpireTS)
+		}
+
+		// Set job ID to workspace for TN commit check
+		localTxn.GetWorkspace().SetSyncProtectionJobID(syncProtectionJobID)
+
+		// Defer cleanup: first unregister from GC, then from worker
+		defer func() {
+			// Unregister from GC (soft delete)
+			if unregErr := UnregisterSyncProtection(ctx, iterationCtx.LocalExecutor, syncProtectionJobID); unregErr != nil {
+				logutil.Warn("ccpr-iteration failed to unregister sync protection from GC",
+					zap.String("task_id", iterationCtx.String()),
+					zap.String("job_id", syncProtectionJobID),
+					zap.Error(unregErr),
+				)
+			} else {
+				logutil.Info("ccpr-iteration sync protection unregistered from GC",
+					zap.String("task_id", iterationCtx.String()),
+					zap.String("job_id", syncProtectionJobID),
+				)
+			}
+
+			// Unregister from worker
+			if syncProtectionWorker != nil {
+				syncProtectionWorker.UnregisterSyncProtection(syncProtectionJobID)
+				logutil.Info("ccpr-iteration sync protection unregistered from worker",
+					zap.String("task_id", iterationCtx.String()),
+					zap.String("job_id", syncProtectionJobID),
+				)
+			}
+		}()
+
+		// CN commit check: renew sync protection before applying objects
+		if renewErr := RenewSyncProtection(ctx, iterationCtx.LocalExecutor, syncProtectionJobID, time.Now().Add(GetSyncProtectionTTLDuration()).UnixNano()); renewErr != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to renew sync protection before apply: %v", renewErr)
+			return
+		}
+	}
+
+	// Create TTL checker for ApplyObjects if sync protection is registered
+	var ttlChecker func() bool
+	if syncProtectionJobID != "" && syncProtectionWorker != nil {
+		ttlChecker = func() bool {
+			currentTTL := syncProtectionWorker.GetSyncProtectionTTL(syncProtectionJobID)
+			return currentTTL > 0 && time.Now().UnixNano() < currentTTL
+		}
+	}
+
 	err = ApplyObjects(
 		ctx,
 		iterationCtx.TaskID,
@@ -1422,7 +1496,7 @@ func ExecuteIteration(
 		iterationCtx.SubscriptionName,
 		cnEngine.(*disttae.Engine).GetCCPRTxnCache(),
 		iterationCtx.AObjectMap,
-		nil, // ttlChecker (sync protection disabled)
+		ttlChecker,
 	)
 	if err != nil {
 		err = moerr.NewInternalErrorf(ctx, "failed to apply object list: %v", err)

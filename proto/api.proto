@@ -120,6 +120,9 @@ message SyncLogTailResp {
 // tae/rpc/handle.go/HandlePreCommit function
 message PrecommitWriteCmd {
     repeated Entry entry_list = 1;
+    // Job ID for sync protection validation during CCPR commits.
+    // When non-empty, TN validates the sync protection is still valid at prepareTS.
+    string sync_protection_job_id = 2;
 };
 
 // CN--->TN, DDL

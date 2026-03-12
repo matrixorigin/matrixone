@@ -218,6 +218,16 @@ func (h *Handle) handleRequests(
 		return
 	}
 
+	// Extract sync protection job ID from the first payload for CCPR validation
+	if len(commitRequests.Payload) > 0 && commitRequests.Payload[0].CNRequest != nil {
+		var precommitCmd api.PrecommitWriteCmd
+		if unmarshalErr := precommitCmd.UnmarshalBinary(commitRequests.Payload[0].CNRequest.Payload); unmarshalErr == nil {
+			if precommitCmd.SyncProtectionJobId != "" {
+				txn.SetSyncProtectionJobID(precommitCmd.SyncProtectionJobId)
+			}
+		}
+	}
+
 	bigDelete = make([]uint64, 0)
 	var delM map[uint64]uint64 // tableID -> rows
 

@@ -258,6 +258,7 @@ const (
 	ErrSyncProtectionMaxCount   uint16 = 20645
 	ErrSyncProtectionSoftDelete uint16 = 20646
 	ErrSyncProtectionInvalid    uint16 = 20647
+	ErrSyncProtectionExpired    uint16 = 20648
 
 	// Group 7: lock service
 	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
@@ -525,6 +526,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrSyncProtectionMaxCount:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "sync protection max count reached: %d"},
 	ErrSyncProtectionSoftDelete: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "sync protection is soft deleted: %s"},
 	ErrSyncProtectionInvalid:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid sync protection request"},
+	ErrSyncProtectionExpired:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "sync protection expired: job %s validTS %d < prepareTS %d"},
 
 	// Group 7: lock service
 	ErrDeadLockDetected:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
@@ -1160,6 +1162,17 @@ func IsRPCClientClosed(err error) bool {
 		return false
 	}
 	return IsMoErrCode(err, ErrClientClosed)
+}
+
+// IsSyncProtectionValidationError checks if error is any sync protection validation error.
+// This allows CN to easily distinguish sync protection validation errors from other commit errors.
+func IsSyncProtectionValidationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return IsMoErrCode(err, ErrSyncProtectionNotFound) ||
+		IsMoErrCode(err, ErrSyncProtectionSoftDelete) ||
+		IsMoErrCode(err, ErrSyncProtectionExpired)
 }
 
 func NewTxnClosed(ctx context.Context, txnID []byte) *Error {

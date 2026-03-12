@@ -1310,6 +1310,32 @@ func (mr *MockWorkspaceMockRecorder) GetCCPRTaskID() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCCPRTaskID", reflect.TypeOf((*MockWorkspace)(nil).GetCCPRTaskID))
 }
 
+// SetSyncProtectionJobID mocks base method.
+func (m *MockWorkspace) SetSyncProtectionJobID(jobID string) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetSyncProtectionJobID", jobID)
+}
+
+// SetSyncProtectionJobID indicates an expected call of SetSyncProtectionJobID.
+func (mr *MockWorkspaceMockRecorder) SetSyncProtectionJobID(jobID interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetSyncProtectionJobID", reflect.TypeOf((*MockWorkspace)(nil).SetSyncProtectionJobID), jobID)
+}
+
+// GetSyncProtectionJobID mocks base method.
+func (m *MockWorkspace) GetSyncProtectionJobID() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetSyncProtectionJobID")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// GetSyncProtectionJobID indicates an expected call of GetSyncProtectionJobID.
+func (mr *MockWorkspaceMockRecorder) GetSyncProtectionJobID() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSyncProtectionJobID", reflect.TypeOf((*MockWorkspace)(nil).GetSyncProtectionJobID))
+}
+
 // SetHaveDDL mocks base method.
 func (m *MockWorkspace) SetHaveDDL(flag bool) {
 	m.ctrl.T.Helper()

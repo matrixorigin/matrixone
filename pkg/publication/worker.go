@@ -343,7 +343,7 @@ func NewWorker(
 	worker.ctx, worker.cancel = context.WithCancel(context.Background())
 	go worker.Run()
 	go worker.RunStatsPrinter()
-	// go worker.RunSyncProtectionKeepAlive()
+	go worker.RunSyncProtectionKeepAlive()
 	return worker
 }
 
@@ -516,7 +516,7 @@ func (w *worker) Stop() {
 }
 
 // ============================================================================
-// Sync Protection Management (currently disabled, kept for future use)
+// Sync Protection Management
 // ============================================================================
 
 // RegisterSyncProtection registers a sync protection job for keepalive
@@ -557,6 +557,90 @@ func (w *worker) GetSyncProtectionTTL(jobID string) int64 {
 		return entry.ttlExpireTS.Load()
 	}
 	return 0
+}
+
+// RunSyncProtectionKeepAlive runs a background goroutine that periodically renews
+// all registered sync protection jobs to prevent TTL expiration
+func (w *worker) RunSyncProtectionKeepAlive() {
+	renewInterval := GetSyncProtectionRenewInterval()
+	w.syncProtectionTicker = time.NewTicker(renewInterval)
+	defer w.syncProtectionTicker.Stop()
+
+	for {
+		select {
+		case <-w.ctx.Done():
+			return
+		case <-w.syncProtectionTicker.C:
+			w.renewAllSyncProtections()
+		}
+	}
+}
+
+// renewAllSyncProtections renews all registered sync protection jobs
+func (w *worker) renewAllSyncProtections() {
+	w.syncProtectionMu.RLock()
+	jobs := make([]string, 0, len(w.syncProtectionJobs))
+	for jobID := range w.syncProtectionJobs {
+		jobs = append(jobs, jobID)
+	}
+	w.syncProtectionMu.RUnlock()
+
+	if len(jobs) == 0 {
+		return
+	}
+
+	// Create executor for renewal
+	executor, err := NewInternalSQLExecutor(
+		w.cnUUID,
+		w.cnTxnClient,
+		w.cnEngine,
+		catalog.System_Account,
+		&SQLExecutorRetryOption{
+			MaxRetries:    DefaultSQLExecutorRetryOption().MaxRetries,
+			RetryInterval: DefaultSQLExecutorRetryOption().RetryInterval,
+			Classifier:    NewDownstreamConnectionClassifier(),
+		},
+		true,
+	)
+	if err != nil {
+		logutil.Warn("ccpr-worker failed to create executor for sync protection renewal",
+			zap.Error(err),
+		)
+		return
+	}
+
+	newTTLExpireTS := time.Now().Add(GetSyncProtectionTTLDuration()).UnixNano()
+
+	for _, jobID := range jobs {
+		// Check if job still exists (might have been unregistered)
+		w.syncProtectionMu.RLock()
+		entry, exists := w.syncProtectionJobs[jobID]
+		w.syncProtectionMu.RUnlock()
+		if !exists {
+			continue
+		}
+
+		// Renew the sync protection
+		ctx, cancel := context.WithTimeout(w.ctx, time.Minute)
+		err := RenewSyncProtection(ctx, executor, jobID, newTTLExpireTS)
+		cancel()
+
+		if err != nil {
+			logutil.Warn("ccpr-worker failed to renew sync protection",
+				zap.String("job_id", jobID),
+				zap.Error(err),
+			)
+			// Don't update TTL on failure - the job might have been unregistered
+			continue
+		}
+
+		// Update the TTL in our tracking
+		entry.ttlExpireTS.Store(newTTLExpireTS)
+		logutil.Debug("ccpr-worker renewed sync protection",
+			zap.String("job_id", jobID),
+			zap.Int64("new_ttl_expire_ts", newTTLExpireTS),
+		)
+	}
 }
 
 func (w *worker) updateIterationState(ctx context.Context, taskID string, iterationState int8) error {
