@@ -63,6 +63,30 @@ type SyncProtectionResponse struct {
 	Message string `json:"message,omitempty"`
 }
 
+// MoCtlResponse represents the outer response from mo_ctl commands
+// Format: {"method":"...", "result":[{"ReturnStr":"..."}]}
+type MoCtlResponse struct {
+	Method string              `json:"method"`
+	Result []MoCtlResultEntry `json:"result"`
+}
+
+// MoCtlResultEntry represents a single result entry from mo_ctl
+type MoCtlResultEntry struct {
+	ReturnStr string `json:"ReturnStr"`
+}
+
+// parseMoCtlResponse parses the mo_ctl response and extracts the inner ReturnStr
+func parseMoCtlResponse(responseJSON string) (string, error) {
+	var moCtlResp MoCtlResponse
+	if err := json.Unmarshal([]byte(responseJSON), &moCtlResp); err != nil {
+		return "", err
+	}
+	if len(moCtlResp.Result) == 0 {
+		return "", moerr.NewInternalErrorNoCtx("mo_ctl response has no result")
+	}
+	return moCtlResp.Result[0].ReturnStr, nil
+}
+
 // QueryGCStatus queries the GC status from upstream
 func QueryGCStatus(ctx context.Context, executor SQLExecutor) (*GCStatus, error) {
 	sql := PublicationSQLBuilder.GCStatusSQL()
@@ -145,8 +169,14 @@ func RegisterSyncProtection(
 		return moerr.NewInternalErrorNoCtx("register sync protection response is empty")
 	}
 
+	// Parse mo_ctl outer response to get ReturnStr
+	innerJSON, err := parseMoCtlResponse(responseJSON)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to parse mo_ctl response: %v", err)
+	}
+
 	var response SyncProtectionResponse
-	if err := json.Unmarshal([]byte(responseJSON), &response); err != nil {
+	if err := json.Unmarshal([]byte(innerJSON), &response); err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to parse register sync protection response: %v", err)
 	}
 
@@ -199,8 +229,14 @@ func RenewSyncProtection(
 		return moerr.NewInternalErrorNoCtx("renew sync protection response is empty")
 	}
 
+	// Parse mo_ctl outer response to get ReturnStr
+	innerJSON, err := parseMoCtlResponse(responseJSON)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to parse mo_ctl response: %v", err)
+	}
+
 	var response SyncProtectionResponse
-	if err := json.Unmarshal([]byte(responseJSON), &response); err != nil {
+	if err := json.Unmarshal([]byte(innerJSON), &response); err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to parse renew sync protection response: %v", err)
 	}
 
