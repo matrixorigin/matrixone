@@ -707,10 +707,16 @@ func NewSessionAllocator(pu *config.ParameterUnit) *SessionAllocator {
 }
 
 func (s *SessionAllocator) Alloc(capacity int) ([]byte, error) {
+	if capacity == 0 {
+		return []byte{}, nil
+	}
 	return s.allocator.Allocate(uint64(capacity), malloc.NoClear)
 }
 
 func (s SessionAllocator) Free(bs []byte) {
+	if bs == nil {
+		return
+	}
 	s.allocator.Deallocate(bs)
 }
 
