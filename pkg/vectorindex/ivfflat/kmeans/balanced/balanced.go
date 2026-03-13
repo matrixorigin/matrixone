@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
@@ -62,11 +63,17 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 
 	err := validateArgs[T](vectors, clusterCnt, maxIterations, deltaThreshold, distanceType, initType)
 	if err != nil {
+		logutil.Errorf("kmeans validateArgs error: %v", err)
 		return nil, err
 	}
 
+	dim := len(vectors[0])
+	numVectors := len(vectors)
+	logutil.Infof("kmeans summary: clusterCnt=%d, vectorCnt=%d, dim=%d, maxIterations=%d", clusterCnt, numVectors, dim, maxIterations)
+
 	distanceFunction, normalize, err := metric.ResolveKmeansDistanceFn[T](distanceType, spherical)
 	if err != nil {
+		logutil.Errorf("kmeans ResolveKmeansDistanceFn error: %v", err)
 		return nil, err
 	}
 
@@ -77,46 +84,76 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 	allocator := malloc.NewCAllocator()
 	var deallocators []malloc.Deallocator
 
-	allocSlice := func(size uint64) []byte {
+	allocSlice := func(name string, size uint64) ([]byte, error) {
+		logutil.Infof("kmeans malloc: %s, %d bytes", name, size)
 		slice, deallocator, err := allocator.Allocate(size, malloc.NoClear)
 		if err != nil {
-			panic(err) // OOM
+			logutil.Errorf("kmeans malloc error: %s, %d bytes, %v", name, size, err)
+			for _, d := range deallocators {
+				d.Deallocate()
+			}
+			deallocators = nil
+			return nil, err // OOM
 		}
 		deallocators = append(deallocators, deallocator)
-		return slice
+		return slice, nil
 	}
 
-	dim := len(vectors[0])
-	numVectors := len(vectors)
-
-	// allocate centroids (outer slice + inner slices)
-	centroidsBytes := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[[]T]()))
+	// allocate centroids headers
+	centroidsBytes, err := allocSlice("centroids_headers", uint64(clusterCnt)*uint64(util.UnsafeSizeOf[[]T]()))
+	if err != nil {
+		return nil, err
+	}
 	centroids := util.UnsafeSliceCastToLength[[]T](centroidsBytes, clusterCnt)
+
+	// allocate all centroids data at once
+	allCentroidsDataBytes, err := allocSlice("all_centroids_data", uint64(clusterCnt)*uint64(dim)*uint64(util.UnsafeSizeOf[T]()))
+	if err != nil {
+		return nil, err
+	}
+	allCentroidsData := util.UnsafeSliceCastToLength[T](allCentroidsDataBytes, clusterCnt*dim)
 	for i := range centroids {
-		innerBytes := allocSlice(uint64(dim) * uint64(util.UnsafeSizeOf[T]()))
-		centroids[i] = util.UnsafeSliceCastToLength[T](innerBytes, dim)
+		centroids[i] = allCentroidsData[i*dim : (i+1)*dim : (i+1)*dim]
 	}
 
 	// allocate assignments
-	assignmentsBytes := allocSlice(uint64(numVectors) * uint64(util.UnsafeSizeOf[int]()))
+	assignmentsBytes, err := allocSlice("assignments", uint64(numVectors)*uint64(util.UnsafeSizeOf[int]()))
+	if err != nil {
+		return nil, err
+	}
 	assignments := util.UnsafeSliceCastToLength[int](assignmentsBytes, numVectors)
 
 	// allocate indices
-	indicesBytes := allocSlice(uint64(numVectors) * uint64(util.UnsafeSizeOf[int]()))
+	indicesBytes, err := allocSlice("indices", uint64(numVectors)*uint64(util.UnsafeSizeOf[int]()))
+	if err != nil {
+		return nil, err
+	}
 	indices := util.UnsafeSliceCastToLength[int](indicesBytes, numVectors)
 
 	// allocate c1, c2
-	c1Bytes := allocSlice(uint64(dim) * uint64(util.UnsafeSizeOf[T]()))
+	c1Bytes, err := allocSlice("c1", uint64(dim)*uint64(util.UnsafeSizeOf[T]()))
+	if err != nil {
+		return nil, err
+	}
 	c1 := util.UnsafeSliceCastToLength[T](c1Bytes, dim)
-	c2Bytes := allocSlice(uint64(dim) * uint64(util.UnsafeSizeOf[T]()))
+	c2Bytes, err := allocSlice("c2", uint64(dim)*uint64(util.UnsafeSizeOf[T]()))
+	if err != nil {
+		return nil, err
+	}
 	c2 := util.UnsafeSliceCastToLength[T](c2Bytes, dim)
 
 	// allocate diffs
-	diffsBytes := allocSlice(uint64(numVectors) * uint64(util.UnsafeSizeOf[pointDiff]()))
+	diffsBytes, err := allocSlice("diffs", uint64(numVectors)*uint64(util.UnsafeSizeOf[pointDiff]()))
+	if err != nil {
+		return nil, err
+	}
 	diffs := util.UnsafeSliceCastToLength[pointDiff](diffsBytes, numVectors)
 
 	// allocate localAssign
-	localAssignBytes := allocSlice(uint64(numVectors) * uint64(util.UnsafeSizeOf[int]()))
+	localAssignBytes, err := allocSlice("localAssign", uint64(numVectors)*uint64(util.UnsafeSizeOf[int]()))
+	if err != nil {
+		return nil, err
+	}
 	localAssign := util.UnsafeSliceCastToLength[int](localAssignBytes, numVectors)
 
 	return &BalancedKMeans[T]{
@@ -141,16 +178,29 @@ func validateArgs[T types.RealNumbers](vectorList [][]T, clusterCnt,
 	maxIterations int, deltaThreshold float64,
 	distanceType metric.MetricType, initType kmeans.InitType) error {
 	if len(vectorList) == 0 || len(vectorList[0]) == 0 {
-		return moerr.NewInternalErrorNoCtx("input vectors is empty")
+		err := moerr.NewInternalErrorNoCtx("input vectors is empty")
+		logutil.Errorf("kmeans validateArgs error: %v", err)
+		return err
+	}
+	if clusterCnt <= 0 {
+		err := moerr.NewInternalErrorNoCtxf("cluster count must be greater than 0, got %d", clusterCnt)
+		logutil.Errorf("kmeans validateArgs error: %v", err)
+		return err
 	}
 	if clusterCnt > len(vectorList) {
-		return moerr.NewInternalErrorNoCtxf("cluster count is larger than vector count %d > %d", clusterCnt, len(vectorList))
+		err := moerr.NewInternalErrorNoCtxf("cluster count is larger than vector count %d > %d", clusterCnt, len(vectorList))
+		logutil.Errorf("kmeans validateArgs error: %v", err)
+		return err
 	}
 	if maxIterations < 0 {
-		return moerr.NewInternalErrorNoCtxf("max iteration is out of bounds (must be >= 0)")
+		err := moerr.NewInternalErrorNoCtxf("max iteration is out of bounds (must be >= 0)")
+		logutil.Errorf("kmeans validateArgs error: %v", err)
+		return err
 	}
 	if distanceType >= metric.Metric_TypeCount {
-		return moerr.NewInternalErrorNoCtx("distance type is not supported")
+		err := moerr.NewInternalErrorNoCtx("distance type is not supported")
+		logutil.Errorf("kmeans validateArgs error: %v", err)
+		return err
 	}
 
 	vlen := -1
@@ -159,7 +209,9 @@ func validateArgs[T types.RealNumbers](vectorList [][]T, clusterCnt,
 			vlen = len(v)
 		}
 		if vlen != len(v) {
-			return moerr.NewInternalErrorNoCtx("input vectors not in same dimension")
+			err := moerr.NewInternalErrorNoCtx("input vectors not in same dimension")
+			logutil.Errorf("kmeans validateArgs error: %v", err)
+			return err
 		}
 	}
 	return nil
@@ -207,6 +259,7 @@ func (km *BalancedKMeans[T]) Cluster(ctx context.Context) (any, error) {
 	exec := concurrent.NewThreadPoolExecutor(km.nworker)
 	err := km.bisectBalanced(ctx, km.indices, km.clusterCnt, 0, exec, km.c1, km.c2, km.diffs, km.localAssign, rnd)
 	if err != nil {
+		logutil.Errorf("kmeans bisectBalanced error: %v", err)
 		return nil, err
 	}
 
@@ -265,15 +318,19 @@ func (km *BalancedKMeans[T]) bisectBalanced(
 	workerFn := func(ctx context.Context, thread_id int, start, end int) error {
 		for i := start; i < end; i++ {
 			if (i-start)%100 == 0 && ctx.Err() != nil {
-				return ctx.Err()
+				err := ctx.Err()
+				logutil.Errorf("kmeans bisectBalanced context error: %v", err)
+				return err
 			}
 			vIdx := indices[i]
 			d1, err1 := km.distFn(km.vectorList[vIdx], c1)
 			if err1 != nil {
+				logutil.Errorf("kmeans bisectBalanced distFn d1 error: %v", err1)
 				return err1
 			}
 			d2, err2 := km.distFn(km.vectorList[vIdx], c2)
 			if err2 != nil {
+				logutil.Errorf("kmeans bisectBalanced distFn d2 error: %v", err2)
 				return err2
 			}
 			// diff < 0 means closer to c1
@@ -285,6 +342,7 @@ func (km *BalancedKMeans[T]) bisectBalanced(
 	for iter := 0; iter < km.maxIterations; iter++ {
 		err := exec.Execute(ctx, n, workerFn)
 		if err != nil {
+			logutil.Errorf("kmeans bisectBalanced exec error: %v", err)
 			return err
 		}
 
@@ -402,6 +460,7 @@ func (km *BalancedKMeans[T]) SSE() (float64, error) {
 	for i := range km.vectorList {
 		distErr, err := km.distFn(km.vectorList[i], km.centroids[km.assignments[i]])
 		if err != nil {
+			logutil.Errorf("kmeans SSE distFn error: %v", err)
 			return 0, err
 		}
 		sse += math.Pow(float64(distErr), 2)
