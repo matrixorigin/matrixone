@@ -37,7 +37,7 @@ void gpu_adhoc_brute_force_search(const void* dataset,
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         cudaSetDevice(device_id);
-        raft::resources res;
+        const auto& res = matrixone::get_raft_resources();
         auto m = static_cast<cuvs::distance::DistanceType>(metric);
 
         if (qtype == Quantization_F32) {

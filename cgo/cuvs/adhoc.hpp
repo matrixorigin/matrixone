@@ -60,11 +60,11 @@ void adhoc_brute_force_search(const raft::resources& res,
 
     // 1. Prepare Dataset on Device
     auto dataset_device = raft::make_device_matrix<T, int64_t>(res, n_rows, dim);
-    raft::copy(dataset_device.data_handle(), dataset, n_rows * dim, stream);
+    RAFT_CUDA_TRY(cudaMemcpy(dataset_device.data_handle(), dataset, n_rows * dim * sizeof(T), cudaMemcpyHostToDevice));
 
     // 2. Prepare Queries on Device
     auto queries_device = raft::make_device_matrix<T, int64_t>(res, n_queries, dim);
-    raft::copy(queries_device.data_handle(), queries, n_queries * dim, stream);
+    RAFT_CUDA_TRY(cudaMemcpy(queries_device.data_handle(), queries, n_queries * dim * sizeof(T), cudaMemcpyHostToDevice));
 
     // 3. Prepare Results on Device
     auto neighbors_device = raft::make_device_matrix<int64_t, int64_t>(res, n_queries, limit);
@@ -83,8 +83,8 @@ void adhoc_brute_force_search(const raft::resources& res,
                                          distances_device.view());
 
     // 6. Copy results back to host
-    raft::copy(neighbors, neighbors_device.data_handle(), n_queries * limit, stream);
-    raft::copy(distances, distances_device.data_handle(), n_queries * limit, stream);
+    RAFT_CUDA_TRY(cudaMemcpy(neighbors, neighbors_device.data_handle(), n_queries * limit * sizeof(int64_t), cudaMemcpyDeviceToHost));
+    RAFT_CUDA_TRY(cudaMemcpy(distances, distances_device.data_handle(), n_queries * limit * sizeof(float), cudaMemcpyDeviceToHost));
 
     // 7. Synchronize to ensure host data is ready
     raft::resource::sync_stream(res);

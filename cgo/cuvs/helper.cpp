@@ -53,6 +53,11 @@ cuvs::distance::DistanceType convert_distance_type(distance_type_t metric_c) {
             throw std::runtime_error("Unknown or unsupported distance type");
     }
 }
+
+const raft::resources& get_raft_resources() {
+    thread_local raft::resources res;
+    return res;
+}
 }
 
 // Vectorized kernel processing 2 elements per thread

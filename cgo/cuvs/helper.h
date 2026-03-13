@@ -61,6 +61,7 @@ void set_errmsg(void* errmsg, const char* prefix, const char* what);
 #include <cuvs/distance/distance.hpp>
 namespace matrixone {
     cuvs::distance::DistanceType convert_distance_type(distance_type_t metric_c);
+    const raft::resources& get_raft_resources();
 }
 #endif
 
