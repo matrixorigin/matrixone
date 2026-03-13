@@ -256,6 +256,8 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 
 		index.SetZMSum(zm, columnData.GetDownstreamVector())
 		// Update column meta zonemap
+		// Note: Write always writes to SchemaData, so UpdateBlockZM should also use SchemaData
+		// The tombstone flag is handled by WriteObjectMeta setting tombstonesColmeta
 		w.writer.UpdateBlockZM(objectio.SchemaData, int(block.GetID()), seqnums[i], zm)
 		// update object zonemap
 		w.objMetaBuilder.UpdateZm(i, zm)

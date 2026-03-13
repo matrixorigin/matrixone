@@ -1,4 +1,6 @@
 .idea/
+.kiro/
+.cursor/
 *.o
 *.a
 *.exe

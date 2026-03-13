@@ -1,0 +1,23 @@
+-- Test sync protection mo_ctl commands
+-- This test verifies the sync protection mechanism for cross-cluster sync
+
+-- Test 1: Register sync protection with invalid JSON (should fail gracefully)
+select mo_ctl('dn', 'diskcleaner', 'register_sync_protection.invalid_json');
+
+-- Test 2: Register sync protection with missing fields (should fail)
+select mo_ctl('dn', 'diskcleaner', 'register_sync_protection.{"job_id":"test-job-1"}');
+
+-- Test 3: Register sync protection with invalid base64 BF (should fail)
+select mo_ctl('dn', 'diskcleaner', 'register_sync_protection.{"job_id":"test-job-2","bf":"invalid!!!","valid_ts":1234567890}');
+
+-- Test 4: Renew non-existent protection (should fail)
+select mo_ctl('dn', 'diskcleaner', 'renew_sync_protection.{"job_id":"non-existent","valid_ts":1234567890}');
+
+-- Test 5: Unregister non-existent protection (should fail)
+select mo_ctl('dn', 'diskcleaner', 'unregister_sync_protection.{"job_id":"non-existent"}');
+
+-- Test 6: Test with empty command
+select mo_ctl('dn', 'diskcleaner', 'register_sync_protection.');
+
+-- Test 7: Test unknown sync protection command
+select mo_ctl('dn', 'diskcleaner', 'unknown_sync_protection.{}');

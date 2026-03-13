@@ -192,6 +192,18 @@ func (node *DropPublication) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
 
+func (node *DropCcprSubscription) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *ResumeCcprSubscription) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *PauseCcprSubscription) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
 func (node *ShowSubscriptions) StmtKind() StmtKind {
 	return compositeResRowType
 }
@@ -447,6 +459,14 @@ func (node *ShowCreatePublications) StmtKind() StmtKind {
 }
 
 func (node *ShowPublications) StmtKind() StmtKind {
+	return compositeResRowType
+}
+
+func (node *ShowPublicationCoverage) StmtKind() StmtKind {
+	return compositeResRowType
+}
+
+func (node *ShowCcprSubscriptions) StmtKind() StmtKind {
 	return compositeResRowType
 }
 

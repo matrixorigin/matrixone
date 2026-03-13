@@ -944,6 +944,9 @@ var (
 		catalog.MO_ISCP_LOG:           0,
 		catalog.MO_INDEX_UPDATE:       0,
 		catalog.MO_BRANCH_METADATA:    0,
+		catalog.MO_CCPR_LOG:           0,
+		catalog.MO_CCPR_TABLES:        0,
+		catalog.MO_CCPR_DBS:           0,
 		catalog.MO_FEATURE_LIMIT:      0,
 		catalog.MO_FEATURE_REGISTRY:   0,
 	}
@@ -993,6 +996,9 @@ var (
 		catalog.MO_ISCP_LOG:           0,
 		catalog.MO_INDEX_UPDATE:       0,
 		catalog.MO_BRANCH_METADATA:    0,
+		catalog.MO_CCPR_LOG:           0,
+		catalog.MO_CCPR_TABLES:        0,
+		catalog.MO_CCPR_DBS:           0,
 		catalog.MO_FEATURE_LIMIT:      0,
 		catalog.MO_FEATURE_REGISTRY:   0,
 	}
@@ -1038,6 +1044,9 @@ var (
 		MoCatalogMoISCPLogDDL,
 		MoCatalogMoIndexUpdateDDL,
 		MoCatalogBranchMetadataDDL,
+		MoCatalogMoCcprLogDDL,
+		MoCatalogMoCcprTablesDDL,
+		MoCatalogMoCcprDbsDDL,
 		MoCatalogFeatureLimitDDL,
 		MoCatalogFeatureRegistryDDL,
 		MoCatalogFeatureRegistryInitData,
@@ -4068,6 +4077,15 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			}
 		}
 
+		// mark all ccpr subscriptions of this account as dropped by setting drop_at and state = 3
+		// this must be done before dropping databases to allow dropping CCPR shared databases
+		sql = fmt.Sprintf("UPDATE mo_catalog.mo_ccpr_log SET drop_at = now(), state = 3 WHERE account_id = %d AND drop_at IS NULL", accountId)
+		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
+		rtnErr = bh.Exec(ctx, sql)
+		if rtnErr != nil {
+			return rtnErr
+		}
+
 		// drop databases created by user
 		databases = make(map[string]int8)
 		dbSql = "show databases;"
@@ -6238,7 +6256,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex,
 		*tree.ShowTableNumber, *tree.ShowColumnNumber,
 		*tree.ShowTableValues, *tree.ShowNodeList, *tree.ShowRolesStmt,
-		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus, *tree.ShowPublications, *tree.ShowSubscriptions,
+		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus, *tree.ShowPublications, *tree.ShowSubscriptions, *tree.ShowCcprSubscriptions, *tree.ShowPublicationCoverage,
 		*tree.ShowBackendServers, *tree.ShowStages, *tree.ShowConnectors, *tree.DropConnector,
 		*tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask, *tree.ShowRecoveryWindow:
 		objType = objectTypeNone
@@ -6285,6 +6303,27 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *InternalCmdFieldList:
 		objType = objectTypeNone
 		kind = privilegeKindNone
+	case *InternalCmdGetSnapshotTs:
+		objType = objectTypeNone
+		kind = privilegeKindNone
+	case *InternalCmdGetDatabases:
+		objType = objectTypeNone
+		kind = privilegeKindNone
+	case *InternalCmdGetMoIndexes:
+		objType = objectTypeNone
+		kind = privilegeKindNone
+	case *InternalCmdGetDdl:
+		objType = objectTypeNone
+		kind = privilegeKindNone
+	case *InternalCmdGetObject:
+		objType = objectTypeNone
+		kind = privilegeKindNone
+	case *InternalCmdObjectList:
+		objType = objectTypeNone
+		kind = privilegeKindNone
+	case *InternalCmdCheckSnapshotFlushed:
+		objType = objectTypeNone
+		kind = privilegeKindNone
 	case *tree.ValuesStatement:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeValues, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
@@ -6320,7 +6359,11 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.LockTableStmt, *tree.UnLockTableStmt:
 		objType = objectTypeNone
 		kind = privilegeKindNone
-	case *tree.CreatePublication, *tree.DropPublication, *tree.AlterPublication:
+	case *tree.CreatePublication, *tree.DropPublication, *tree.AlterPublication, *tree.DropCcprSubscription, *tree.PauseCcprSubscription, *tree.ResumeCcprSubscription:
+		typs = append(typs, PrivilegeTypeAccountAll)
+		objType = objectTypeDatabase
+		kind = privilegeKindNone
+	case *tree.CreateSubscription:
 		typs = append(typs, PrivilegeTypeAccountAll)
 		objType = objectTypeDatabase
 		kind = privilegeKindNone
@@ -8757,6 +8800,15 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 			return true
 		}
 		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_ISCP_LOG)) {
+			return true
+		}
+		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_CCPR_LOG)) {
+			return true
+		}
+		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE %s.%s", catalog.MO_CATALOG, catalog.MO_CCPR_TABLES)) {
+			return true
+		}
+		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE %s.%s", catalog.MO_CATALOG, catalog.MO_CCPR_DBS)) {
 			return true
 		}
 		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_INDEX_UPDATE)) {

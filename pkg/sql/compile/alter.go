@@ -293,7 +293,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 							// clone index table (with ISCP) may not be a complete clone
 							// so register ISCP job with startFromNow = false
 							sinker_type := getSinkerTypeFromAlgo(indexDef.IndexAlgo)
-							err = CreateIndexCdcTask(c, dbName, newTableDef.Name, indexDef.IndexName, sinker_type, false, "")
+							err = CreateIndexCdcTask(c, dbName, newTableDef.Name, newTableDef.TblId, indexDef.IndexName, sinker_type, false, "", newTableDef)
 							if err != nil {
 								return err
 							}
@@ -463,6 +463,11 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetAlterTable()
+
+	// Check if target table is a CCPR shared table (from publication)
+	if c.shouldBlockCCPRReadOnly(qry.TableDef) {
+		return moerr.NewCCPRReadOnly(c.proc.Ctx)
+	}
 
 	ps := c.proc.GetPartitionService()
 	if !ps.Enabled() ||

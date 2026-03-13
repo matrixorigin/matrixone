@@ -958,6 +958,9 @@ var (
 		catalog.MO_TABLE_STATS:        0,
 		catalog.MO_MERGE_SETTINGS:     0,
 		catalog.MO_BRANCH_METADATA:    0,
+		catalog.MO_CCPR_LOG:           0,
+		catalog.MO_CCPR_TABLES:        0,
+		catalog.MO_CCPR_DBS:           0,
 
 		catalog.MO_TABLES_LOGICAL_ID_INDEX_TABLE_NAME: 0,
 		catalog.MO_FEATURE_LIMIT:                      0,
