@@ -113,6 +113,7 @@ func init() {
 		"subject":                    SUBJECT,
 		"subpartition":               SUBPARTITION,
 		"subpartitions":              SUBPARTITIONS,
+		"summary":                    SUMMARY,
 		"snapshot":                   SNAPSHOT,
 		"snapshots":                  SNAPSHOTS,
 		"sysdate":                    SYSDATE,

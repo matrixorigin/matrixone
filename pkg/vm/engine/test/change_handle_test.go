@@ -1118,7 +1118,7 @@ func TestChangesHandleStaleFiles2(t *testing.T) {
 			assert.NoError(t, err)
 		}
 		data, tombstone, _, err := handle.Next(ctx, mp)
-		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrStaleRead))
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
 		assert.Nil(t, tombstone)
 		assert.Nil(t, data)
 	}
@@ -5579,4 +5579,214 @@ func TestIterationError(t *testing.T) {
 	encoded := base64.StdEncoding.EncodeToString([]byte("invalid sql"))
 	err = iscp.ProcessInitSQL(ctx, "", disttaeEngine.Engine, disttaeEngine.GetTxnClient(), encoded)
 	require.Error(t, err)
+}
+
+func TestFileNotFoundFallbackToSnapshotRead(t *testing.T) {
+	// When PartitionState references GC-ed object files, NewChangesHandler
+	// returns ErrFileNotFound. getNextChangeHandle should fall back to the
+	// snapshot read path and succeed.
+
+	catalog.SetupDefines("")
+
+	var (
+		accountId    = catalog.System_Account
+		tableName    = "test_fnf_fallback"
+		databaseName = "db_fnf_fallback"
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	schema := catalog2.MockSchemaAll(20, 0)
+	schema.Name = tableName
+	bat := catalog2.MockBatch(schema, 3)
+	defer bat.Close()
+	bats := bat.Split(3)
+
+	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	_, _, err := disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+
+	txn, rel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	require.Nil(t, rel.Append(ctx, bats[0]))
+	require.Nil(t, txn.Commit(ctx))
+	t1 := txn.GetCommitTS()
+
+	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	id := rel.GetMeta().(*catalog2.TableEntry).AsCommonID()
+	require.Nil(t, txn.Commit(ctx))
+
+	now := taeHandler.GetDB().TxnMgr.Now()
+	taeHandler.GetDB().ForceCheckpoint(ctx, now)
+	now = taeHandler.GetDB().TxnMgr.Now()
+	taeHandler.GetDB().ForceCheckpoint(ctx, now)
+
+	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	require.Nil(t, rel.Append(ctx, bats[1]))
+	require.Nil(t, txn.Commit(ctx))
+
+	now = taeHandler.GetDB().TxnMgr.Now()
+	taeHandler.GetDB().ForceCheckpoint(ctx, now)
+
+	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	require.Nil(t, rel.Append(ctx, bats[2]))
+	require.Nil(t, txn.Commit(ctx))
+
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, databaseName, tableName, false)
+	require.Nil(t, err)
+
+	mp := common.DebugAllocator
+
+	// Inject FileNotFound to simulate GC-ed object files while PartitionState
+	// still references them. The partition state path will fail, and the code
+	// should fall back to snapshot read.
+	chStub := gostub.Stub(
+		&disttae.NewPartitionStateChangesHandler,
+		func(
+			ctx context.Context,
+			state *logtailreplay.PartitionState,
+			start, end types.TS,
+			skipDeletes bool,
+			maxRow uint32,
+			primarySeqnum int,
+			mp *mpool.MPool,
+			fs fileservice.FileService,
+		) (*logtailreplay.ChangeHandler, error) {
+			return nil, moerr.NewFileNotFoundNoCtx("simulated-gc-deleted-object")
+		},
+	)
+	defer chStub.Reset()
+
+	ssStub := gostub.Stub(
+		&disttae.RequestSnapshotRead,
+		disttae.GetSnapshotReadFnWithHandler(
+			taeHandler.GetRPCHandle().HandleSnapshotRead,
+		),
+	)
+	defer ssStub.Reset()
+
+	{
+		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.Nil(t, err)
+
+		readToTS := taeHandler.GetDB().TxnMgr.Now()
+		handle, err := rel.CollectChanges(ctx, t1.Prev(), readToTS, false, mp)
+		// Should succeed via snapshot read fallback, not return ErrFileNotFound
+		assert.NoError(t, err, "expected fallback to snapshot read to succeed")
+		if handle != nil {
+			handle.Close()
+		}
+	}
+}
+
+func TestRealStaleReadStillReturnsError(t *testing.T) {
+	// A real ErrStaleRead (state.start > start, logical range not covered)
+	// must NOT be swallowed — it should propagate to the caller as error 22101.
+
+	catalog.SetupDefines("")
+
+	var (
+		accountId    = catalog.System_Account
+		tableName    = "test_real_stale"
+		databaseName = "db_real_stale"
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	schema := catalog2.MockSchemaAll(20, 0)
+	schema.Name = tableName
+	bat := catalog2.MockBatch(schema, 3)
+	defer bat.Close()
+	bats := bat.Split(3)
+
+	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	_, _, err := disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+
+	txn, rel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	require.Nil(t, rel.Append(ctx, bats[0]))
+	require.Nil(t, txn.Commit(ctx))
+	t1 := txn.GetCommitTS()
+
+	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	id := rel.GetMeta().(*catalog2.TableEntry).AsCommonID()
+	require.Nil(t, txn.Commit(ctx))
+
+	now := taeHandler.GetDB().TxnMgr.Now()
+	taeHandler.GetDB().ForceCheckpoint(ctx, now)
+	now = taeHandler.GetDB().TxnMgr.Now()
+	taeHandler.GetDB().ForceCheckpoint(ctx, now)
+
+	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	require.Nil(t, rel.Append(ctx, bats[1]))
+	require.Nil(t, txn.Commit(ctx))
+	t2 := txn.GetCommitTS()
+
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, databaseName, tableName, false)
+	require.Nil(t, err)
+
+	mp := common.DebugAllocator
+
+	// Force GC so that state.start > t1, making the partition state unable
+	// to serve the requested range. This is a real stale read.
+	disttaeEngine.Engine.ForceGC(ctx, t2.Next())
+
+	// Stub snapshot read to also fail (return entries that don't cover t1)
+	ssStub := gostub.Stub(
+		&disttae.RequestSnapshotRead,
+		disttae.GetSnapshotReadFnWithHandler(
+			func(ctx context.Context, meta pbtxn.TxnMeta, req *cmd_util.SnapshotReadReq, resp *cmd_util.SnapshotReadResp) (func(), error) {
+				t2ts := t2.ToTimestamp()
+				t2NextTs := t2.Next().ToTimestamp()
+				resp.Succeed = true
+				resp.Entries = []*cmd_util.CheckpointEntryResp{
+					{
+						Start:     &t2ts,
+						End:       &t2NextTs,
+						Location1: []byte("fake"),
+						Location2: []byte("fake"),
+						EntryType: 0,
+						Version:   1,
+					},
+				}
+				return func() {}, nil
+			},
+		),
+	)
+	defer ssStub.Reset()
+
+	{
+		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.Nil(t, err)
+
+		readToTS := taeHandler.GetDB().TxnMgr.Now()
+		handle, err := rel.CollectChanges(ctx, t1.Prev(), readToTS, false, mp)
+		// Real stale read: must return ErrStaleRead, not silently succeed
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrStaleRead),
+			"expected ErrStaleRead (22101), got: %v", err)
+		if handle != nil {
+			handle.Close()
+		}
+	}
 }

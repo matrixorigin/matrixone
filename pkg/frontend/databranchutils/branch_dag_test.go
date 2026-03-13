@@ -19,44 +19,43 @@ import "testing"
 func TestDAGFunctionality(t *testing.T) {
 
 	// --- Test Setup: Define a complex graph with multiple trees (a forest) ---
-	// NEW: Since fields cannot be null, we now use value types directly.
 	// A PTableID of 0 is used to signify a root node.
 	//
 	// The graph structure being tested remains the same:
 	// Tree 1 (Root 100)      Tree 2 (Root 200)      Tree 3 (Root 300)   Tree 4 (Root 400)
 	//
-	//       100(ts:100)             200(ts:200)             300(ts:300)         400(ts:400)
+	//          100                    200                    300                 400
 	//      /    |    \              /      \                  |
-	// 110(110) 120(120) 130(130)  210(210) 220(220)          301(301)
+	//       110    120   130         210    220              301
 	//   /   \       |               |                        |
-	// 111(111) 112(112) 121(121)    211(211)                  302(302)
+	// 111   112    121             211                       302
 	//           |
-	//        1121(1121)
+	//          1121
 	//
 	rows := []DataBranchMetadata{
 		// Tree 1
-		{TableID: 100, CloneTS: 100, PTableID: 0}, // PTableID: 0 indicates a root node
-		{TableID: 110, CloneTS: 110, PTableID: 100},
-		{TableID: 120, CloneTS: 120, PTableID: 100},
-		{TableID: 130, CloneTS: 130, PTableID: 100},
-		{TableID: 111, CloneTS: 111, PTableID: 110},
-		{TableID: 112, CloneTS: 112, PTableID: 110},
-		{TableID: 121, CloneTS: 121, PTableID: 120},
-		{TableID: 1121, CloneTS: 1121, PTableID: 112},
+		{TableID: 100, PTableID: 0}, // PTableID: 0 indicates a root node
+		{TableID: 110, PTableID: 100},
+		{TableID: 120, PTableID: 100},
+		{TableID: 130, PTableID: 100},
+		{TableID: 111, PTableID: 110},
+		{TableID: 112, PTableID: 110},
+		{TableID: 121, PTableID: 120},
+		{TableID: 1121, PTableID: 112},
 
 		// Tree 2
-		{TableID: 200, CloneTS: 200, PTableID: 0}, // PTableID: 0 indicates a root node
-		{TableID: 210, CloneTS: 210, PTableID: 200},
-		{TableID: 220, CloneTS: 220, PTableID: 200},
-		{TableID: 211, CloneTS: 211, PTableID: 210},
+		{TableID: 200, PTableID: 0}, // PTableID: 0 indicates a root node
+		{TableID: 210, PTableID: 200},
+		{TableID: 220, PTableID: 200},
+		{TableID: 211, PTableID: 210},
 
 		// Tree 3 (A simple chain)
-		{TableID: 300, CloneTS: 300, PTableID: 0}, // PTableID: 0 indicates a root node
-		{TableID: 301, CloneTS: 301, PTableID: 300},
-		{TableID: 302, CloneTS: 302, PTableID: 301},
+		{TableID: 300, PTableID: 0}, // PTableID: 0 indicates a root node
+		{TableID: 301, PTableID: 300},
+		{TableID: 302, PTableID: 301},
 
 		// Tree 4 (Isolated node)
-		{TableID: 400, CloneTS: 400, PTableID: 0}, // PTableID: 0 indicates a root node
+		{TableID: 400, PTableID: 0}, // PTableID: 0 indicates a root node
 	}
 
 	// Assuming your newDAG function has been updated to handle PTableID=0 as a root.
@@ -96,8 +95,8 @@ func TestDAGFunctionality(t *testing.T) {
 			name     string
 			id1, id2 uint64
 			wantLCA  uint64
-			wantTS1  int64
-			wantTS2  int64
+			wantTS1  uint64
+			wantTS2  uint64
 			wantOK   bool
 		}{
 			// --- Scenarios within a single complex tree (Tree 1) ---
@@ -174,7 +173,7 @@ func TestDAGFunctionality(t *testing.T) {
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
-				lcaID, ts1, ts2, ok := dag.FindLCA(tc.id1, tc.id2)
+				lcaID, childID1, childID2, ok := dag.FindLCA(tc.id1, tc.id2)
 
 				if ok != tc.wantOK {
 					t.Fatalf("FindLCA(%d, %d): expected ok=%v, got ok=%v", tc.id1, tc.id2, tc.wantOK, ok)
@@ -185,11 +184,11 @@ func TestDAGFunctionality(t *testing.T) {
 					if lcaID != tc.wantLCA {
 						t.Errorf("FindLCA(%d, %d): wrong LCA ID. got=%d, want=%d", tc.id1, tc.id2, lcaID, tc.wantLCA)
 					}
-					if ts1 != tc.wantTS1 {
-						t.Errorf("FindLCA(%d, %d): wrong branch TS1. got=%d, want=%d", tc.id1, tc.id2, ts1, tc.wantTS1)
+					if childID1 != tc.wantTS1 {
+						t.Errorf("FindLCA(%d, %d): wrong child table ID1. got=%d, want=%d", tc.id1, tc.id2, childID1, tc.wantTS1)
 					}
-					if ts2 != tc.wantTS2 {
-						t.Errorf("FindLCA(%d, %d): wrong branch TS2. got=%d, want=%d", tc.id1, tc.id2, ts2, tc.wantTS2)
+					if childID2 != tc.wantTS2 {
+						t.Errorf("FindLCA(%d, %d): wrong child table ID2. got=%d, want=%d", tc.id1, tc.id2, childID2, tc.wantTS2)
 					}
 				}
 			})

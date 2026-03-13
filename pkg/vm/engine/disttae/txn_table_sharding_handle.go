@@ -52,6 +52,8 @@ func (sr *shardingRemoteReader) updateCols(cols []string, tblDef *plan.TableDef)
 			column = strings.ToLower(column)
 			if objectio.IsPhysicalAddr(column) {
 				sr.colTypes[i] = objectio.RowidType
+			} else if strings.EqualFold(column, objectio.DefaultCommitTS_Attr) {
+				sr.colTypes[i] = types.T_TS.ToType()
 			} else {
 				colIdx := tblDef.Name2ColIndex[column]
 				colDef := tblDef.Cols[colIdx]
