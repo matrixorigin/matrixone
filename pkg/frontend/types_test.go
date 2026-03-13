@@ -27,7 +27,7 @@ import (
 func TestEngineColumnInfo(t *testing.T) {
 	ec := &engineColumnInfo{
 		name: "test_column",
-		typ:  types.T_int64,
+		typ:  types.New(types.T_int64, 0, 0),
 	}
 
 	assert.Equal(t, "test_column", ec.GetName())
