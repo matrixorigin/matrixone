@@ -231,7 +231,22 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 		}
 		h.cols[attr.ColIndex] = col
 		h.mappers[attr.ColIndex] = fn
-		h.pages[attr.ColIndex] = col.Pages()
+	}
+
+	// init RowGroup filtering (must be before page initialization)
+	h.rowGroups = h.file.RowGroups()
+	h.curRGIdx = 0
+	h.initRowGroupFilter(param)
+
+	// Open page iterators: when canFilter=true, pages are opened per-RowGroup
+	// in getDataByRowGroup; otherwise open whole-file iterators here.
+	if !h.canFilter {
+		for _, attr := range param.Attrs {
+			colIdx := attr.ColIndex
+			if h.cols[colIdx] != nil {
+				h.pages[colIdx] = h.cols[colIdx].Pages()
+			}
+		}
 	}
 
 	// init row reader if has nested columns
@@ -1771,6 +1786,9 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 	if h.hasNestedCols {
 		return h.getDataByRow(bat, param, proc)
 	}
+	if h.canFilter {
+		return h.getDataByRowGroup(bat, param, proc)
+	}
 	return h.getDataByPage(bat, param, proc)
 }
 
@@ -1967,6 +1985,12 @@ func parseStringToDecimal128(s string, precision, scale int32) (types.Decimal128
 // getParquetExpectedColCnt calculates the expected column count for parquet loading.
 // It excludes external hidden columns like __mo_filepath.
 func getParquetExpectedColCnt(param *ExternalParam) int {
+	// ColumnListLen comes from ExternScan.TbColToDataCol (built before column pruning),
+	// representing the original non-hidden column count unaffected by optimizer pruning.
+	if param.ColumnListLen > 0 {
+		return int(param.ColumnListLen)
+	}
+	// Fallback: count non-hidden attrs (for cases where ColumnListLen is not set)
 	cnt := 0
 	for _, attr := range param.Attrs {
 		if !catalog.ContainExternalHidenCol(attr.ColName) {

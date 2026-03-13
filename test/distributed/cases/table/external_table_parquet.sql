@@ -297,10 +297,53 @@ select count(*) as total_rows from ext_wildcard_v;
 select * from ext_wildcard_v order by id;
 
 -- ============================================================================
--- 12. Error Cases
+-- 12. RowGroup Filter (multi-RowGroup file with WHERE pushdown)
 -- ============================================================================
 
--- 12.1 External table does not support INSERT
+-- multi_rowgroup.parquet: 25 rows, 5 RowGroups (5 rows each)
+-- Schema: id BIGINT, value DOUBLE, name VARCHAR
+-- RG0: id [1,5],   value [10.5, 52.5]
+-- RG1: id [6,10],  value [63.0, 105.0]
+-- RG2: id [11,15], value [115.5, 157.5]
+-- RG3: id [16,20], value [168.0, 210.0]
+-- RG4: id [21,25], value [220.5, 262.5]
+
+drop table if exists ext_multi_rg;
+create external table ext_multi_rg (
+    id BIGINT,
+    value DOUBLE,
+    name VARCHAR(20)
+) infile{"filepath"='$resources/parquet/multi_rowgroup.parquet', "format"='parquet'};
+
+-- 12.1 Full scan (no filter) - should return all 25 rows
+select count(*) from ext_multi_rg;
+
+-- 12.2 Point query on id - should only need RG0 (id [1,5])
+select * from ext_multi_rg where id = 3;
+
+-- 12.3 Range query - should only need RG2 and RG3 (id [11,20])
+select id, name from ext_multi_rg where id >= 11 and id <= 20 order by id;
+
+-- 12.4 Filter on value column - should only need RG4 (value [220.5, 262.5])
+select id, value from ext_multi_rg where value > 220.0 order by id;
+
+-- 12.5 Filter that matches no RowGroup (id > 100)
+select count(*) from ext_multi_rg where id > 100;
+
+-- 12.6 Filter that matches all RowGroups (id > 0)
+select count(*) from ext_multi_rg where id > 0;
+
+-- 12.7 Aggregate with filter
+select min(id), max(id), count(*) from ext_multi_rg where id between 6 and 15;
+
+-- 12.8 String filter
+select id, name from ext_multi_rg where name = 'row_012';
+
+-- ============================================================================
+-- 13. Error Cases
+-- ============================================================================
+
+-- 13.1 External table does not support INSERT
 drop table if exists ext_readonly;
 create external table ext_readonly (
     id BIGINT,
@@ -308,10 +351,10 @@ create external table ext_readonly (
 ) infile{"filepath"='$resources/parquet/test_none.parquet', "format"='parquet'};
 insert into ext_readonly values (100, 'test');
 
--- 12.2 External table does not support UPDATE
+-- 13.2 External table does not support UPDATE
 update ext_readonly set name = 'updated' where id = 1;
 
--- 12.3 External table does not support DELETE
+-- 13.3 External table does not support DELETE
 delete from ext_readonly where id = 1;
 
 -- ============================================================================
@@ -337,5 +380,6 @@ drop table if exists ext_with_stats;
 drop table if exists ext_no_stats;
 drop table if exists ext_wide;
 drop table if exists ext_wildcard_v;
+drop table if exists ext_multi_rg;
 drop table if exists ext_readonly;
 drop database ext_parquet_db;

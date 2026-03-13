@@ -1579,7 +1579,7 @@ func TestParquet_ScanEmptyFile(t *testing.T) {
 
 // TestParquet_getParquetExpectedColCnt tests the helper function.
 func TestParquet_getParquetExpectedColCnt(t *testing.T) {
-	// Normal columns
+	// Normal columns (fallback path: ColumnListLen=0)
 	param := &ExternalParam{
 		ExParamConst: ExParamConst{
 			Attrs: []plan.ExternAttr{
@@ -1591,7 +1591,7 @@ func TestParquet_getParquetExpectedColCnt(t *testing.T) {
 	}
 	require.Equal(t, 3, getParquetExpectedColCnt(param))
 
-	// With hidden column __mo_filepath
+	// With hidden column __mo_filepath (fallback path)
 	param2 := &ExternalParam{
 		ExParamConst: ExParamConst{
 			Attrs: []plan.ExternAttr{
@@ -1602,4 +1602,30 @@ func TestParquet_getParquetExpectedColCnt(t *testing.T) {
 		},
 	}
 	require.Equal(t, 2, getParquetExpectedColCnt(param2))
+
+	// ColumnListLen set (from ExternScan.TbColToDataCol, pre-pruning count)
+	// This is the primary path after the empty-file fix.
+	param3 := &ExternalParam{
+		ExParamConst: ExParamConst{
+			ColumnListLen: 4, // original table has 4 non-hidden columns
+			Attrs: []plan.ExternAttr{
+				{ColName: "score"}, // pruned to 1 column (e.g. COUNT(*))
+			},
+		},
+	}
+	require.Equal(t, 4, getParquetExpectedColCnt(param3),
+		"should use ColumnListLen (original column count) over pruned Attrs count")
+
+	// ColumnListLen=0 falls back to Attrs count
+	param4 := &ExternalParam{
+		ExParamConst: ExParamConst{
+			ColumnListLen: 0,
+			Attrs: []plan.ExternAttr{
+				{ColName: "a"},
+				{ColName: "b"},
+			},
+		},
+	}
+	require.Equal(t, 2, getParquetExpectedColCnt(param4),
+		"ColumnListLen=0 should fall back to counting non-hidden Attrs")
 }
