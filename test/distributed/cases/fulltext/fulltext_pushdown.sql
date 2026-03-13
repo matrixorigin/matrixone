@@ -1,6 +1,8 @@
 -- fulltext pushdown: verify correctness of fulltext search with additional filter predicates
 -- The BloomFilter pushdown is transparent to query results, so we verify result correctness.
 
+set fulltext_bloom_filter_pushdown = 1;
+
 drop database if exists ft_pushdown_test;
 create database ft_pushdown_test;
 use ft_pushdown_test;
@@ -76,4 +78,5 @@ select count(*) from articles
 where match(title, body) against('machine learning')
   and category = 'tech';
 
+set fulltext_bloom_filter_pushdown = 0;
 drop database ft_pushdown_test;

@@ -348,6 +348,13 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	// When filters remain, use pre-filter pushdown (nested JOIN + runtime filter)
 	// to reduce the number of doc_ids that fulltext_index_scan must process.
 	pushdownEnabled := len(scanNode.FilterList) > 0
+	if pushdownEnabled {
+		if val, err := builder.compCtx.ResolveVariable("fulltext_bloom_filter_pushdown", true, false); err == nil {
+			if v, ok := val.(int8); ok && v == 0 {
+				pushdownEnabled = false
+			}
+		}
+	}
 
 	var joinnodeID int32
 

@@ -1,3 +1,4 @@
+set fulltext_bloom_filter_pushdown = 1;
 drop database if exists ft_pushdown_test;
 create database ft_pushdown_test;
 use ft_pushdown_test;
@@ -108,4 +109,5 @@ where match(title, body) against('machine learning')
 and category = 'tech';
 count(*)
 10
+set fulltext_bloom_filter_pushdown = 0;
 drop database ft_pushdown_test;
