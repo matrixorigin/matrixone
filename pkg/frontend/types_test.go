@@ -50,7 +50,8 @@ func TestInternalCmdFieldList(t *testing.T) {
 
 	t.Run("StmtKind", func(t *testing.T) {
 		kind := icfl.StmtKind()
-		assert.Equal(t, tree.Other, kind)
+		expected := tree.MakeStmtKind(tree.OUTPUT_STATUS, tree.RESP_STATUS, tree.EXEC_IN_FRONTEND)
+		assert.Equal(t, expected, kind)
 	})
 
 	t.Run("GetStatementType", func(t *testing.T) {
@@ -61,6 +62,7 @@ func TestInternalCmdFieldList(t *testing.T) {
 		assert.Equal(t, tree.QueryTypeDQL, icfl.GetQueryType())
 	})
 }
+
 
 func TestInternalCmdGetSnapshotTs(t *testing.T) {
 	ic := &InternalCmdGetSnapshotTs{}
@@ -76,7 +78,8 @@ func TestInternalCmdGetSnapshotTs(t *testing.T) {
 
 	t.Run("StmtKind", func(t *testing.T) {
 		kind := ic.StmtKind()
-		assert.Equal(t, tree.Other, kind)
+		expected := tree.MakeStmtKind(tree.OUTPUT_RESULT_ROW, tree.RESP_PREBUILD_RESULT_ROW, tree.EXEC_IN_FRONTEND)
+		assert.Equal(t, expected, kind)
 	})
 
 	t.Run("GetStatementType", func(t *testing.T) {
@@ -102,7 +105,8 @@ func TestInternalCmdGetDatabases(t *testing.T) {
 
 	t.Run("StmtKind", func(t *testing.T) {
 		kind := ic.StmtKind()
-		assert.Equal(t, tree.Other, kind)
+		expected := tree.MakeStmtKind(tree.OUTPUT_RESULT_ROW, tree.RESP_PREBUILD_RESULT_ROW, tree.EXEC_IN_FRONTEND)
+		assert.Equal(t, expected, kind)
 	})
 
 	t.Run("GetStatementType", func(t *testing.T) {
@@ -116,8 +120,10 @@ func TestInternalCmdGetDatabases(t *testing.T) {
 
 func TestInternalCmdGetMoIndexes(t *testing.T) {
 	ic := &InternalCmdGetMoIndexes{
-		dbName:    "testdb",
-		tableName: "testtable",
+		tableId:                 123,
+		subscriptionAccountName: "test_account",
+		publicationName:         "test_pub",
+		snapshotName:            "test_snapshot",
 	}
 
 	t.Run("Free", func(t *testing.T) {
@@ -131,7 +137,8 @@ func TestInternalCmdGetMoIndexes(t *testing.T) {
 
 	t.Run("StmtKind", func(t *testing.T) {
 		kind := ic.StmtKind()
-		assert.Equal(t, tree.Other, kind)
+		expected := tree.MakeStmtKind(tree.OUTPUT_RESULT_ROW, tree.RESP_PREBUILD_RESULT_ROW, tree.EXEC_IN_FRONTEND)
+		assert.Equal(t, expected, kind)
 	})
 
 	t.Run("GetStatementType", func(t *testing.T) {
@@ -145,8 +152,12 @@ func TestInternalCmdGetMoIndexes(t *testing.T) {
 
 func TestInternalCmdGetDdl(t *testing.T) {
 	ic := &InternalCmdGetDdl{
-		dbName:    "testdb",
-		tableName: "testtable",
+		snapshotName:            "test_snapshot",
+		subscriptionAccountName: "test_account",
+		publicationName:         "test_pub",
+		level:                   "database",
+		dbName:                  "testdb",
+		tableName:               "testtable",
 	}
 
 	t.Run("Free", func(t *testing.T) {
@@ -160,7 +171,8 @@ func TestInternalCmdGetDdl(t *testing.T) {
 
 	t.Run("StmtKind", func(t *testing.T) {
 		kind := ic.StmtKind()
-		assert.Equal(t, tree.Other, kind)
+		expected := tree.MakeStmtKind(tree.OUTPUT_RESULT_ROW, tree.RESP_PREBUILD_RESULT_ROW, tree.EXEC_IN_FRONTEND)
+		assert.Equal(t, expected, kind)
 	})
 
 	t.Run("GetStatementType", func(t *testing.T) {
@@ -174,7 +186,10 @@ func TestInternalCmdGetDdl(t *testing.T) {
 
 func TestInternalCmdGetObject(t *testing.T) {
 	ic := &InternalCmdGetObject{
-		objectName: "test_object",
+		subscriptionAccountName: "test_account",
+		publicationName:         "test_pub",
+		objectName:              "test_object",
+		chunkIndex:              0,
 	}
 
 	t.Run("Free", func(t *testing.T) {
@@ -188,7 +203,8 @@ func TestInternalCmdGetObject(t *testing.T) {
 
 	t.Run("StmtKind", func(t *testing.T) {
 		kind := ic.StmtKind()
-		assert.Equal(t, tree.Other, kind)
+		expected := tree.MakeStmtKind(tree.OUTPUT_RESULT_ROW, tree.RESP_PREBUILD_RESULT_ROW, tree.EXEC_IN_FRONTEND)
+		assert.Equal(t, expected, kind)
 	})
 
 	t.Run("GetStatementType", func(t *testing.T) {
@@ -202,8 +218,10 @@ func TestInternalCmdGetObject(t *testing.T) {
 
 func TestInternalCmdObjectList(t *testing.T) {
 	ic := &InternalCmdObjectList{
-		dbName:    "testdb",
-		tableName: "testtable",
+		snapshotName:            "test_snapshot",
+		againstSnapshotName:     "against_snapshot",
+		subscriptionAccountName: "test_account",
+		publicationName:         "test_pub",
 	}
 
 	t.Run("Free", func(t *testing.T) {
@@ -217,7 +235,8 @@ func TestInternalCmdObjectList(t *testing.T) {
 
 	t.Run("StmtKind", func(t *testing.T) {
 		kind := ic.StmtKind()
-		assert.Equal(t, tree.Other, kind)
+		expected := tree.MakeStmtKind(tree.OUTPUT_RESULT_ROW, tree.RESP_PREBUILD_RESULT_ROW, tree.EXEC_IN_FRONTEND)
+		assert.Equal(t, expected, kind)
 	})
 
 	t.Run("GetStatementType", func(t *testing.T) {
@@ -231,8 +250,9 @@ func TestInternalCmdObjectList(t *testing.T) {
 
 func TestInternalCmdCheckSnapshotFlushed(t *testing.T) {
 	ic := &InternalCmdCheckSnapshotFlushed{
-		dbName:    "testdb",
-		tableName: "testtable",
+		snapshotName:            "test_snapshot",
+		subscriptionAccountName: "test_account",
+		publicationName:         "test_pub",
 	}
 
 	t.Run("Free", func(t *testing.T) {
@@ -246,7 +266,8 @@ func TestInternalCmdCheckSnapshotFlushed(t *testing.T) {
 
 	t.Run("StmtKind", func(t *testing.T) {
 		kind := ic.StmtKind()
-		assert.Equal(t, tree.Other, kind)
+		expected := tree.MakeStmtKind(tree.OUTPUT_RESULT_ROW, tree.RESP_PREBUILD_RESULT_ROW, tree.EXEC_IN_FRONTEND)
+		assert.Equal(t, expected, kind)
 	})
 
 	t.Run("GetStatementType", func(t *testing.T) {
@@ -257,6 +278,7 @@ func TestInternalCmdCheckSnapshotFlushed(t *testing.T) {
 		assert.Equal(t, tree.QueryTypeDQL, ic.GetQueryType())
 	})
 }
+
 
 func TestExecResultArrayHasData(t *testing.T) {
 	t.Run("nil array", func(t *testing.T) {
