@@ -37,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/brute_force"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"go.uber.org/zap"
@@ -411,17 +410,11 @@ func HandleOrderByLimitOnIVFFlatIndex(
 		}
 
 		dim := uint(len(dataset[0]))
-		idx, err := brute_force.NewBruteForceIndex[float32](dataset, dim, metric.MetricType(orderByLimit.MetricType), 4, 1)
+		idx, err := brute_force.NewAdhocBruteForceIndex[float32](dataset, dim, metric.MetricType(orderByLimit.MetricType), 4)
 		if err != nil {
 			return nil, nil, err
 		}
 		defer idx.Destroy()
-
-		sqlproc := sqlexec.NewSqlProcessWithContext(&sqlexec.SqlContext{Ctx: ctx})
-		err = idx.Load(sqlproc)
-		if err != nil {
-			return nil, nil, err
-		}
 
 		query := [][]float32{types.BytesToArray[float32](orderByLimit.NumVec)}
 		rt := vectorindex.RuntimeConfig{
@@ -429,7 +422,7 @@ func HandleOrderByLimitOnIVFFlatIndex(
 			NThreads: 1,
 		}
 
-		resKeys, resDists, err := idx.Search(sqlproc, query, rt)
+		resKeys, resDists, err := idx.Search(nil, query, rt)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -484,17 +477,11 @@ func HandleOrderByLimitOnIVFFlatIndex(
 		}
 
 		dim := uint(len(dataset[0]))
-		idx, err := brute_force.NewBruteForceIndex[float64](dataset, dim, metric.MetricType(orderByLimit.MetricType), 8, 1)
+		idx, err := brute_force.NewAdhocBruteForceIndex[float64](dataset, dim, metric.MetricType(orderByLimit.MetricType), 8)
 		if err != nil {
 			return nil, nil, err
 		}
 		defer idx.Destroy()
-
-		sqlproc := sqlexec.NewSqlProcessWithContext(&sqlexec.SqlContext{Ctx: ctx})
-		err = idx.Load(sqlproc)
-		if err != nil {
-			return nil, nil, err
-		}
 
 		query := [][]float64{types.BytesToArray[float64](orderByLimit.NumVec)}
 		rt := vectorindex.RuntimeConfig{
@@ -502,7 +489,7 @@ func HandleOrderByLimitOnIVFFlatIndex(
 			NThreads: 1,
 		}
 
-		resKeys, resDists, err := idx.Search(sqlproc, query, rt)
+		resKeys, resDists, err := idx.Search(nil, query, rt)
 		if err != nil {
 			return nil, nil, err
 		}

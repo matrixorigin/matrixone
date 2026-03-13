@@ -24,7 +24,7 @@ LDFLAGS += -Xlinker -lpthread -Xlinker -lm
 TARGET := libmocuvs.so
 
 # Source files
-SRCS := brute_force_c.cpp ivf_flat_c.cpp ivf_pq_c.cpp cagra_c.cpp kmeans_c.cpp helper.cpp
+SRCS := brute_force_c.cpp ivf_flat_c.cpp ivf_pq_c.cpp cagra_c.cpp kmeans_c.cpp helper.cpp adhoc_c.cpp
 OBJS := $(SRCS:.cpp=.o)
 
 # Test configuration

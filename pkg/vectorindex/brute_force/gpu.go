@@ -29,6 +29,109 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
+type GpuAdhocBruteForceIndex[T cuvs.VectorType] struct {
+	dataset   []T
+	dimension uint
+	count     uint
+	metric    metric.MetricType
+}
+
+var _ cache.VectorIndexSearchIf = &GpuAdhocBruteForceIndex[float32]{}
+
+func NewAdhocBruteForceIndex[T types.RealNumbers](dataset [][]T,
+	dimension uint,
+	m metric.MetricType,
+	elemsz uint) (cache.VectorIndexSearchIf, error) {
+
+	switch dset := any(dataset).(type) {
+	case [][]float32:
+		return NewGpuAdhocBruteForceIndex[float32](dset, dimension, m, elemsz)
+	case [][]uint16:
+		// Convert [][]uint16 to [][]cuvs.Float16 to pass to NewGpuAdhocBruteForceIndex
+		f16dset := make([][]cuvs.Float16, len(dset))
+		for i, v := range dset {
+			f16dset[i] = util.UnsafeSliceCast[cuvs.Float16](v)
+		}
+		return NewGpuAdhocBruteForceIndex[cuvs.Float16](f16dset, dimension, m, elemsz)
+	default:
+		return NewCpuBruteForceIndex[T](dataset, dimension, m, elemsz)
+	}
+}
+
+func NewGpuAdhocBruteForceIndex[T cuvs.VectorType](dataset [][]T,
+	dimension uint,
+	m metric.MetricType,
+	elemsz uint) (cache.VectorIndexSearchIf, error) {
+
+	if len(dataset) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("empty dataset")
+	}
+
+	dim := int(dimension)
+	reqSize := len(dataset) * dim
+	flattened := make([]T, reqSize)
+
+	for i, v := range dataset {
+		copy(flattened[i*dim:(i+1)*dim], v)
+	}
+
+	return &GpuAdhocBruteForceIndex[T]{
+		dataset:   flattened,
+		dimension: dimension,
+		count:     uint(len(dataset)),
+		metric:    m,
+	}, nil
+}
+
+func (idx *GpuAdhocBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) error {
+	return nil
+}
+
+func (idx *GpuAdhocBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig) (retkeys any, retdistances []float64, err error) {
+	queriesvec, ok := _queries.([][]T)
+	if !ok {
+		return nil, nil, moerr.NewInternalErrorNoCtx("queries type invalid")
+	}
+
+	if len(queriesvec) == 0 {
+		return nil, nil, nil
+	}
+
+	dim := int(idx.dimension)
+	reqSize := len(queriesvec) * dim
+	flattenedQueries := make([]T, reqSize)
+
+	for i, v := range queriesvec {
+		copy(flattenedQueries[i*dim:(i+1)*dim], v)
+	}
+
+	deviceID := 0
+	neighbors, distances, err := cuvs.AdhocBruteForceSearch[T](
+		idx.dataset, uint64(idx.count), uint32(idx.dimension),
+		flattenedQueries, uint64(len(queriesvec)), uint32(rt.Limit),
+		resolveCuvsDistance(idx.metric), deviceID,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	retdistances = make([]float64, len(distances))
+	for i, d := range distances {
+		retdistances[i] = float64(d)
+	}
+
+	retkeys = neighbors
+	return
+}
+
+func (idx *GpuAdhocBruteForceIndex[T]) UpdateConfig(sif cache.VectorIndexSearchIf) error {
+	return nil
+}
+
+func (idx *GpuAdhocBruteForceIndex[T]) Destroy() {
+	idx.dataset = nil
+}
+
 type GpuBruteForceIndex[T cuvs.VectorType] struct {
 	index     *cuvs.GpuBruteForce[T]
 	dimension uint

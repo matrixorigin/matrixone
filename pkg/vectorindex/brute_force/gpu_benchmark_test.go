@@ -17,7 +17,12 @@
 package brute_force
 
 import (
+	"math/rand/v2"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
 func BenchmarkGpuBruteForce(b *testing.B) {
@@ -26,4 +31,52 @@ func BenchmarkGpuBruteForce(b *testing.B) {
 
 func BenchmarkCentroidSearchGpuBruteForce(b *testing.B) {
 	benchmarkCentroidSearch(b, NewGpuBruteForceIndex[float32])
+}
+
+func BenchmarkGpuAdhocBruteForce(b *testing.B) {
+	benchmarkBruteForce(b, func(dataset [][]float32, dim uint, m metric.MetricType, es uint, nt uint) (cache.VectorIndexSearchIf, error) {
+		return NewGpuAdhocBruteForceIndex[float32](dataset, dim, m, es)
+	})
+}
+
+func BenchmarkCentroidSearchGpuAdhocBruteForce(b *testing.B) {
+	benchmarkCentroidSearch(b, func(dataset [][]float32, dim uint, m metric.MetricType, es uint, nt uint) (cache.VectorIndexSearchIf, error) {
+		return NewGpuAdhocBruteForceIndex[float32](dataset, dim, m, es)
+	})
+}
+
+func BenchmarkGpuAdhocBruteForceSingle(b *testing.B) {
+	dsize := 10000
+	dimension := uint(1024)
+	limit := uint(10)
+	elemsz := uint(4) // float32
+
+	dataset := make([][]float32, dsize)
+	for i := range dataset {
+		dataset[i] = make([]float32, dimension)
+		for j := range dataset[i] {
+			dataset[i][j] = rand.Float32()
+		}
+	}
+
+	query := make([][]float32, 1)
+	query[0] = make([]float32, dimension)
+	for j := range query[0] {
+		query[0][j] = rand.Float32()
+	}
+
+	rt := vectorindex.RuntimeConfig{Limit: limit, NThreads: 1}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		idx, err := NewGpuAdhocBruteForceIndex[float32](dataset, dimension, metric.Metric_L2sqDistance, elemsz)
+		if err != nil {
+			b.Fatal(err)
+		}
+		_, _, err = idx.Search(nil, query, rt)
+		if err != nil {
+			b.Fatal(err)
+		}
+		idx.Destroy()
+	}
 }
