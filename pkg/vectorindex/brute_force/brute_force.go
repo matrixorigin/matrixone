@@ -148,36 +148,34 @@ func (idx *UsearchBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries 
 
 	var flatten []T
 	var queryDeallocator malloc.Deallocator
-	if len(queries) == 1 {
-		flatten = queries[0]
-	} else {
-		reqSize := len(queries) * int(idx.Dimension)
-		allocator := malloc.NewCAllocator()
-		var _t T
-		switch any(_t).(type) {
-		case float32:
-			slice, dealloc, err2 := allocator.Allocate(uint64(reqSize)*4, malloc.NoClear)
-			if err2 != nil {
-				return nil, nil, err2
-			}
-			queryDeallocator = dealloc
-			f32Slice := util.UnsafeSliceCastToLength[float32](slice, reqSize)
-			flatten = any(f32Slice).([]T)
-		case float64:
-			slice, dealloc, err2 := allocator.Allocate(uint64(reqSize)*8, malloc.NoClear)
-			if err2 != nil {
-				return nil, nil, err2
-			}
-			queryDeallocator = dealloc
-			f64Slice := util.UnsafeSliceCastToLength[float64](slice, reqSize)
-			flatten = any(f64Slice).([]T)
-		}
 
-		for i := 0; i < len(queries); i++ {
-			offset := i * int(idx.Dimension)
-			copy(flatten[offset:], queries[i])
+	reqSize := len(queries) * int(idx.Dimension)
+	allocator := malloc.NewCAllocator()
+	var _t T
+	switch any(_t).(type) {
+	case float32:
+		slice, dealloc, err2 := allocator.Allocate(uint64(reqSize)*4, malloc.NoClear)
+		if err2 != nil {
+			return nil, nil, err2
 		}
+		queryDeallocator = dealloc
+		f32Slice := util.UnsafeSliceCastToLength[float32](slice, reqSize)
+		flatten = any(f32Slice).([]T)
+	case float64:
+		slice, dealloc, err2 := allocator.Allocate(uint64(reqSize)*8, malloc.NoClear)
+		if err2 != nil {
+			return nil, nil, err2
+		}
+		queryDeallocator = dealloc
+		f64Slice := util.UnsafeSliceCastToLength[float64](slice, reqSize)
+		flatten = any(f64Slice).([]T)
 	}
+
+	for i := 0; i < len(queries); i++ {
+		offset := i * int(idx.Dimension)
+		copy(flatten[offset:], queries[i])
+	}
+
 	if queryDeallocator != nil {
 		defer queryDeallocator.Deallocate()
 	}
@@ -276,11 +274,11 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 		nqueries,
 		func(ctx context.Context, thread_id int, start, end int) (err2 error) {
 			// Pre-allocate heap buffers for this thread
-			var heapKeys []int64
-			var heapDistances []T
+			var heapKeysBuf []int64
+			var heapDistBuf []T
 			if limit > 1 {
-				heapKeys = make([]int64, limit)
-				heapDistances = make([]T, limit)
+				heapKeysBuf = make([]int64, limit)
+				heapDistBuf = make([]T, limit)
 			}
 
 			for k := start; k < end; k++ {
@@ -308,75 +306,28 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 				}
 
 				// Max-heap logic for K > 1
-				heapSize := 0
-
-				siftUp := func(j int) {
-					for {
-						i := (j - 1) / 2 // parent
-						if i == j || heapDistances[j] <= heapDistances[i] {
-							break
-						}
-						heapDistances[i], heapDistances[j] = heapDistances[j], heapDistances[i]
-						heapKeys[i], heapKeys[j] = heapKeys[j], heapKeys[i]
-						j = i
-					}
-				}
-
-				siftDown := func(i0, n int) {
-					i := i0
-					for {
-						j1 := 2*i + 1
-						if j1 >= n || j1 < 0 { // j1 < 0 after int overflow
-							break
-						}
-						j := j1 // left child
-						if j2 := j1 + 1; j2 < n && heapDistances[j2] > heapDistances[j1] {
-							j = j2 // right child
-						}
-						if heapDistances[j] <= heapDistances[i] {
-							break
-						}
-						heapDistances[i], heapDistances[j] = heapDistances[j], heapDistances[i]
-						heapKeys[i], heapKeys[j] = heapKeys[j], heapKeys[i]
-						i = j
-					}
-				}
+				h := vectorindex.NewFastMaxHeap(limit, heapKeysBuf, heapDistBuf)
 
 				for j := range idx.Dataset {
 					dist, err2 := distfn(q, idx.Dataset[j])
 					if err2 != nil {
 						return err2
 					}
-
-					if heapSize < limit {
-						heapDistances[heapSize] = dist
-						heapKeys[heapSize] = int64(j)
-						siftUp(heapSize)
-						heapSize++
-					} else if dist < heapDistances[0] {
-						heapDistances[0] = dist
-						heapKeys[0] = int64(j)
-						siftDown(0, limit)
-					}
+					h.Push(int64(j), dist)
 				}
 
 				// Extract from heap and place into results in sorted order (smallest first)
 				offset := k * limit
 				for j := limit - 1; j >= 0; j-- {
-					if heapSize == 0 {
+					key, dist, ok := h.Pop()
+					if !ok {
 						// Pad with invalid if not enough data
 						retKeys64[offset+j] = -1
 						retDistances[offset+j] = 0
 						continue
 					}
-					// Pop max
-					heapSize--
-					retKeys64[offset+j] = heapKeys[0]
-					retDistances[offset+j] = float64(heapDistances[0])
-
-					heapKeys[0] = heapKeys[heapSize]
-					heapDistances[0] = heapDistances[heapSize]
-					siftDown(0, heapSize)
+					retKeys64[offset+j] = key
+					retDistances[offset+j] = float64(dist)
 				}
 			}
 			return

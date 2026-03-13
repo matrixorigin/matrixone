@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/concurrent"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
@@ -62,7 +63,9 @@ func (r *Random) InitCentroids(ctx context.Context, vectors any, k int) (_centro
 		return centroids, nil
 
 	default:
-		return nil, moerr.NewInternalErrorNoCtx("InitCentroids type not supported")
+		err := moerr.NewInternalErrorNoCtx("InitCentroids type not supported")
+		logutil.Errorf("kmeans InitCentroids type error: %v", err)
+		return nil, err
 	}
 }
 
@@ -87,7 +90,15 @@ func (kpp *KMeansPlusPlus[T]) InitCentroids(ctx context.Context, _vectors any, k
 
 	vectors, ok := _vectors.([][]T)
 	if !ok {
-		panic("KmeanPlusPlus InitCentroids type not supported")
+		err := moerr.NewInternalErrorNoCtx("KmeanPlusPlus InitCentroids type not supported")
+		logutil.Errorf("kmeans KMeansPlusPlus.InitCentroids type error: %v", err)
+		return nil, err
+	}
+
+	if k <= 0 {
+		err := moerr.NewInternalErrorNoCtxf("k must be greater than 0, got %d", k)
+		logutil.Errorf("kmeans KMeansPlusPlus.InitCentroids k error: %v", err)
+		return nil, err
 	}
 
 	numSamples := len(vectors)
@@ -126,7 +137,9 @@ func (kpp *KMeansPlusPlus[T]) InitCentroids(ctx context.Context, _vectors any, k
 				for i := range subvec {
 
 					if i%100 == 0 && ctx.Err() != nil {
-						return ctx.Err()
+						err := ctx.Err()
+						logutil.Errorf("kmeans KMeansPlusPlus context error: %v", err)
+						return err
 					}
 
 					// this is a deviation from standard kmeans.here we are not using minDistance to all the existing centers.
@@ -152,9 +165,9 @@ func (kpp *KMeansPlusPlus[T]) InitCentroids(ctx context.Context, _vectors any, k
 			})
 
 		if err != nil {
+			logutil.Errorf("kmeans KMeansPlusPlus exec error: %v", err)
 			return nil, err
 		}
-
 		// 3. choose the next random center, using a weighted probability distribution
 		// where it is chosen with probability proportional to D(x)^2
 		// Ref: https://en.wikipedia.org/wiki/K-means%2B%2B#Improved_initialization_algorithm
