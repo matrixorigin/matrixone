@@ -218,7 +218,7 @@ func (ctr *container) build(hashBuild *HashBuild, proc *process.Process, analyze
 		}
 	}
 
-	if spillMode || !hashBuild.NeedBatches {
+	if !hashBuild.NeedBatches {
 		ctr.hashmapBuilder.Batches.Clean(proc.Mp())
 	}
 

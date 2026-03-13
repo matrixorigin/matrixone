@@ -126,13 +126,6 @@ func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *b
 		}
 		keyVecs[i] = vec
 	}
-	defer func() {
-		for _, vec := range keyVecs {
-			if vec != nil {
-				vec.Free(proc.Mp())
-			}
-		}
-	}()
 
 	// Reuse hashValues buffer
 	rowCount := bat.RowCount()
