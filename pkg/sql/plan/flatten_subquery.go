@@ -157,6 +157,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 			Children: []int32{nodeID, subID},
 			JoinType: joinType,
 			OnList:   joinPreds,
+			SpillMem: builder.joinSpillMem,
 		}, ctx)
 
 		if len(filterPreds) > 0 {
@@ -298,6 +299,7 @@ func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan
 		BindingTags: []int32{markTag},
 		JoinType:    plan.Node_MARK,
 		OnList:      joinPreds,
+		SpillMem:    builder.joinSpillMem,
 	}, ctx)
 
 	markExpr = &plan.Expr{

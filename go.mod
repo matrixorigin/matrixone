@@ -23,7 +23,7 @@ require (
 	github.com/aws/smithy-go v1.22.1
 	github.com/axiomhq/hyperloglog v0.0.0-20230201085229-3ddf4bad03dc
 	github.com/buger/jsonparser v1.1.1
-	github.com/bytedance/sonic v1.14.2
+	github.com/bytedance/sonic v1.15.0
 	github.com/cakturk/go-netstat v0.0.0-20200220111822-e5b49efee7a5
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/charmbracelet/bubbletea v1.3.10
@@ -134,7 +134,7 @@ require (
 	github.com/bits-and-blooms/bitset v1.22.0 // indirect
 	github.com/bufbuild/protocompile v0.6.0 // indirect
 	github.com/bytedance/gopkg v0.1.3 // indirect
-	github.com/bytedance/sonic/loader v0.4.0 // indirect
+	github.com/bytedance/sonic/loader v0.5.0 // indirect
 	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/charmbracelet/colorprofile v0.2.3-0.20250311203215-f60798e515dc // indirect
 	github.com/charmbracelet/lipgloss v1.1.0 // indirect
