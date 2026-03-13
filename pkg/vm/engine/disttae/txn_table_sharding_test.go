@@ -16,9 +16,13 @@ package disttae
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -107,4 +111,38 @@ func runIsLocalErrTests(
 	}
 
 	fn(tbl)
+}
+
+func TestShardingRemoteReaderUpdateCols(t *testing.T) {
+	reader := &shardingRemoteReader{}
+	tblDef := &plan.TableDef{
+		Name2ColIndex: map[string]int32{
+			"a": 0,
+		},
+		Cols: []*plan.ColDef{
+			{
+				Name: "a",
+				Typ: plan.Type{
+					Id:    int32(types.T_int64),
+					Width: 20,
+					Scale: 0,
+				},
+			},
+		},
+	}
+
+	cols := []string{
+		"a",
+		strings.ToUpper(objectio.DefaultCommitTS_Attr),
+		objectio.PhysicalAddr_Attr,
+	}
+	reader.updateCols(cols, tblDef)
+	require.Len(t, reader.colTypes, len(cols))
+	require.Equal(t, types.T_int64, reader.colTypes[0].Oid)
+	require.Equal(t, types.T_TS, reader.colTypes[1].Oid)
+	require.Equal(t, objectio.RowidType, reader.colTypes[2])
+
+	original := append([]types.Type(nil), reader.colTypes...)
+	reader.updateCols([]string{"unknown_col"}, &plan.TableDef{})
+	require.Equal(t, original, reader.colTypes)
 }

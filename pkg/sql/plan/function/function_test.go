@@ -203,6 +203,20 @@ func Test_GetFunctionByName(t *testing.T) {
 			shouldCast: true, requireTyp: []types.Type{types.T_bool.ToType(), types.T_int64.ToType(), types.T_int64.ToType()},
 			requireRet: types.T_int64.ToType(),
 		},
+		{
+			name: "elt", args: []types.Type{types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
+			shouldErr:  false,
+			requireFid: ELT, requireOid: 0,
+			shouldCast: false,
+			requireRet: types.T_varchar.ToType(),
+		},
+		{
+			name: "elt", args: []types.Type{types.T_bit.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
+			shouldErr:  false,
+			requireFid: ELT, requireOid: 0,
+			shouldCast: false,
+			requireRet: types.T_varchar.ToType(),
+		},
 	}
 
 	proc := testutil.NewProcess(t)

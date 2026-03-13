@@ -4340,20 +4340,21 @@ func eltCheck(overloads []overload, inputs []types.Type) checkResult {
 	shouldCast := false
 	castTypes := make([]types.Type, len(inputs))
 
-	// First argument must be numeric (int64)
-	if !inputs[0].Oid.IsInteger() && inputs[0].Oid != types.T_any {
+	// ELT accepts numeric and string-convertible indexes.
+	// Keep uint64/bit as-is so values greater than math.MaxInt64 can still be treated as out-of-range and return NULL.
+	if inputs[0].Oid == types.T_int64 || inputs[0].Oid == types.T_uint64 || inputs[0].Oid == types.T_bit || inputs[0].Oid == types.T_any {
+		castTypes[0] = inputs[0]
+	} else if inputs[0].Oid == types.T_bool || inputs[0].Oid.IsInteger() || inputs[0].Oid.IsFloat() ||
+		inputs[0].Oid == types.T_decimal64 || inputs[0].Oid == types.T_decimal128 {
+		shouldCast = true
+		castTypes[0] = types.T_int64.ToType()
+	} else {
 		c, _ := tryToMatch([]types.Type{inputs[0]}, []types.T{types.T_int64})
 		if c == matchFailed {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
-		if c == matchByCast {
-			shouldCast = true
-			castTypes[0] = types.T_int64.ToType()
-		} else {
-			castTypes[0] = inputs[0]
-		}
-	} else {
-		castTypes[0] = inputs[0]
+		shouldCast = true
+		castTypes[0] = types.T_int64.ToType()
 	}
 
 	// Rest arguments must be strings
@@ -4385,42 +4386,68 @@ func eltCheck(overloads []overload, inputs []types.Type) checkResult {
 func Elt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
-	// First argument is the index N
-	nParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
-
 	// Rest arguments are strings
 	strParams := make([]vector.FunctionParameterWrapper[types.Varlena], len(ivecs)-1)
 	for i := 1; i < len(ivecs); i++ {
 		strParams[i-1] = vector.GenerateFunctionStrParameter(ivecs[i])
 	}
 
-	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		n, null := nParam.GetValue(i)
-		if null || n < 1 || n > int64(len(strParams)) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		// Get the string at position n (1-based, so index is n-1)
-		str, null := strParams[n-1].GetStrValue(i)
+	appendNull := func() error {
+		return rs.AppendBytes(nil, true)
+	}
+	appendValue := func(row uint64, idx uint64) error {
+		str, null := strParams[idx].GetStrValue(row)
 		if null {
-			if err := rs.AppendBytes(nil, true); err != nil {
+			return appendNull()
+		}
+		return rs.AppendBytes(str, false)
+	}
+
+	maxIndex := uint64(len(strParams))
+	switch ivecs[0].GetType().Oid {
+	case types.T_uint64, types.T_bit:
+		nParam := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
+		for i := uint64(0); i < uint64(length); i++ {
+			if selectList != nil && selectList.Contains(i) {
+				if err := appendNull(); err != nil {
+					return err
+				}
+				continue
+			}
+
+			n, null := nParam.GetValue(i)
+			if null || n < 1 || n > maxIndex {
+				if err := appendNull(); err != nil {
+					return err
+				}
+				continue
+			}
+
+			if err := appendValue(i, n-1); err != nil {
 				return err
 			}
-			continue
 		}
+	default:
+		nParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+		for i := uint64(0); i < uint64(length); i++ {
+			if selectList != nil && selectList.Contains(i) {
+				if err := appendNull(); err != nil {
+					return err
+				}
+				continue
+			}
 
-		if err := rs.AppendBytes(str, false); err != nil {
-			return err
+			n, null := nParam.GetValue(i)
+			if null || n < 1 || n > int64(maxIndex) {
+				if err := appendNull(); err != nil {
+					return err
+				}
+				continue
+			}
+
+			if err := appendValue(i, uint64(n-1)); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
