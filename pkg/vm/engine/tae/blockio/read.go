@@ -35,7 +35,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/brute_force"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"go.uber.org/zap"
@@ -393,24 +395,52 @@ func HandleOrderByLimitOnIVFFlatIndex(
 		return nullsBm.Contains(uint64(row))
 	})
 
-	searchResults := make([]vectorindex.SearchResult, 0, len(selectRows))
+	if len(selectRows) == 0 {
+		return nil, nil, nil
+	}
+
+	var sels []int64
+	var dists []float64
 
 	switch orderByLimit.Typ {
 	case types.T_array_float32:
-		distFunc, err := metric.ResolveDistanceFn[float32](orderByLimit.MetricType)
+		dataset := make([][]float32, len(selectRows))
+		for i, row := range selectRows {
+			dataset[i] = types.BytesToArray[float32](vecCol.GetBytesAt(int(row)))
+		}
+
+		dim := uint(len(dataset[0]))
+		idx, err := brute_force.NewBruteForceIndex[float32](dataset, dim, metric.MetricType(orderByLimit.MetricType), 4, 1)
+		if err != nil {
+			return nil, nil, err
+		}
+		defer idx.Destroy()
+
+		sqlproc := sqlexec.NewSqlProcessWithContext(&sqlexec.SqlContext{Ctx: ctx})
+		err = idx.Load(sqlproc)
 		if err != nil {
 			return nil, nil, err
 		}
 
-		rhs := types.BytesToArray[float32](orderByLimit.NumVec)
+		query := [][]float32{types.BytesToArray[float32](orderByLimit.NumVec)}
+		rt := vectorindex.RuntimeConfig{
+			Limit:    uint(orderByLimit.Limit),
+			NThreads: 1,
+		}
 
-		for _, row := range selectRows {
-			dist, err := distFunc(types.BytesToArray[float32](vecCol.GetBytesAt(int(row))), rhs)
-			if err != nil {
-				return nil, nil, err
+		resKeys, resDists, err := idx.Search(sqlproc, query, rt)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		neighbors := resKeys.([]int64)
+		for i, neighbor := range neighbors {
+			if neighbor < 0 {
+				continue
 			}
-			dist64 := float64(dist)
+			dist64 := resDists[i]
 
+			// Check bounds
 			if orderByLimit.LowerBoundType == plan.BoundType_INCLUSIVE {
 				if dist64 < orderByLimit.LowerBound {
 					continue
@@ -430,6 +460,7 @@ func HandleOrderByLimitOnIVFFlatIndex(
 				}
 			}
 
+			// Update global heap if needed
 			if len(orderByLimit.DistHeap) >= int(orderByLimit.Limit) {
 				if dist64 < orderByLimit.DistHeap[0] {
 					orderByLimit.DistHeap[0] = dist64
@@ -441,26 +472,48 @@ func HandleOrderByLimitOnIVFFlatIndex(
 				heap.Push(&orderByLimit.DistHeap, dist64)
 			}
 
-			searchResults = append(searchResults, vectorindex.SearchResult{
-				Id:       row,
-				Distance: dist64,
-			})
+			sels = append(sels, selectRows[neighbor])
+			dists = append(dists, dist64)
 		}
 
 	case types.T_array_float64:
-		distFunc, err := metric.ResolveDistanceFn[float64](orderByLimit.MetricType)
+		dataset := make([][]float64, len(selectRows))
+		for i, row := range selectRows {
+			dataset[i] = types.BytesToArray[float64](vecCol.GetBytesAt(int(row)))
+		}
+
+		dim := uint(len(dataset[0]))
+		idx, err := brute_force.NewBruteForceIndex[float64](dataset, dim, metric.MetricType(orderByLimit.MetricType), 8, 1)
+		if err != nil {
+			return nil, nil, err
+		}
+		defer idx.Destroy()
+
+		sqlproc := sqlexec.NewSqlProcessWithContext(&sqlexec.SqlContext{Ctx: ctx})
+		err = idx.Load(sqlproc)
 		if err != nil {
 			return nil, nil, err
 		}
 
-		rhs := types.BytesToArray[float64](orderByLimit.NumVec)
+		query := [][]float64{types.BytesToArray[float64](orderByLimit.NumVec)}
+		rt := vectorindex.RuntimeConfig{
+			Limit:    uint(orderByLimit.Limit),
+			NThreads: 1,
+		}
 
-		for _, row := range selectRows {
-			dist64, err := distFunc(types.BytesToArray[float64](vecCol.GetBytesAt(int(row))), rhs)
-			if err != nil {
-				return nil, nil, err
+		resKeys, resDists, err := idx.Search(sqlproc, query, rt)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		neighbors := resKeys.([]int64)
+		for i, neighbor := range neighbors {
+			if neighbor < 0 {
+				continue
 			}
+			dist64 := resDists[i]
 
+			// Check bounds
 			if orderByLimit.LowerBoundType == plan.BoundType_INCLUSIVE {
 				if dist64 < orderByLimit.LowerBound {
 					continue
@@ -480,6 +533,7 @@ func HandleOrderByLimitOnIVFFlatIndex(
 				}
 			}
 
+			// Update global heap if needed
 			if len(orderByLimit.DistHeap) >= int(orderByLimit.Limit) {
 				if dist64 < orderByLimit.DistHeap[0] {
 					orderByLimit.DistHeap[0] = dist64
@@ -491,25 +545,26 @@ func HandleOrderByLimitOnIVFFlatIndex(
 				heap.Push(&orderByLimit.DistHeap, dist64)
 			}
 
-			searchResults = append(searchResults, vectorindex.SearchResult{
-				Id:       row,
-				Distance: dist64,
-			})
+			sels = append(sels, selectRows[neighbor])
+			dists = append(dists, dist64)
 		}
 
 	default:
 		return nil, nil, moerr.NewInternalError(ctx, fmt.Sprintf("only support float32/float64 type for topn: %s", orderByLimit.Typ))
 	}
 
-	searchResults = slices.DeleteFunc(searchResults, func(res vectorindex.SearchResult) bool {
-		return res.Distance > orderByLimit.DistHeap[0]
-	})
-
-	sels := make([]int64, len(searchResults))
-	dists := make([]float64, len(searchResults))
-	for i, res := range searchResults {
-		sels[i] = res.Id
-		dists[i] = res.Distance
+	if len(sels) > 0 {
+		maxDist := orderByLimit.DistHeap[0]
+		// Final filter to match heap state
+		filteredSels := make([]int64, 0, len(sels))
+		filteredDists := make([]float64, 0, len(dists))
+		for i := range sels {
+			if dists[i] <= maxDist {
+				filteredSels = append(filteredSels, sels[i])
+				filteredDists = append(filteredDists, dists[i])
+			}
+		}
+		return filteredSels, filteredDists, nil
 	}
 
 	return sels, dists, nil
