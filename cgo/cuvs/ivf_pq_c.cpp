@@ -244,19 +244,19 @@ void gpu_ivf_pq_start(gpu_ivf_pq_c index_c, void* errmsg) {
     }
 }
 
-void gpu_ivf_pq_load(gpu_ivf_pq_c index_c, void* errmsg) {
+void gpu_ivf_pq_build(gpu_ivf_pq_c index_c, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
         switch (any->qtype) {
-            case Quantization_F32: static_cast<matrixone::gpu_ivf_pq_t<float>*>(any->ptr)->load(); break;
-            case Quantization_F16: static_cast<matrixone::gpu_ivf_pq_t<half>*>(any->ptr)->load(); break;
-            case Quantization_INT8: static_cast<matrixone::gpu_ivf_pq_t<int8_t>*>(any->ptr)->load(); break;
-            case Quantization_UINT8: static_cast<matrixone::gpu_ivf_pq_t<uint8_t>*>(any->ptr)->load(); break;
+            case Quantization_F32: static_cast<matrixone::gpu_ivf_pq_t<float>*>(any->ptr)->build(); break;
+            case Quantization_F16: static_cast<matrixone::gpu_ivf_pq_t<half>*>(any->ptr)->build(); break;
+            case Quantization_INT8: static_cast<matrixone::gpu_ivf_pq_t<int8_t>*>(any->ptr)->build(); break;
+            case Quantization_UINT8: static_cast<matrixone::gpu_ivf_pq_t<uint8_t>*>(any->ptr)->build(); break;
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_ivf_pq_load", e.what());
+        set_errmsg(errmsg, "Error in gpu_ivf_pq_build", e.what());
     }
 }
 

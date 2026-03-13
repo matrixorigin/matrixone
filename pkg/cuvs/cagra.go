@@ -164,13 +164,13 @@ func (gi *GpuCagra[T]) Start() error {
 	return nil
 }
 
-// Load triggers the build or file loading process
-func (gi *GpuCagra[T]) Load() error {
+// Build triggers the build or file loading process
+func (gi *GpuCagra[T]) Build() error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
 	var errmsg *C.char
-	C.gpu_cagra_load(gi.cCagra, unsafe.Pointer(&errmsg))
+	C.gpu_cagra_build(gi.cCagra, unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))

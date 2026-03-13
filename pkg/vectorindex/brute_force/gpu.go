@@ -124,6 +124,7 @@ func NewGpuBruteForceIndex[T cuvs.VectorType](dataset [][]T,
 		return nil, err
 	}
 
+	km.Start()
 	return &GpuBruteForceIndex[T]{
 		index:     km,
 		dimension: dimension,
@@ -135,7 +136,7 @@ func (idx *GpuBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) (err error) 
 	if idx.index == nil {
 		return moerr.NewInternalErrorNoCtx("GpuBruteForce not initialized")
 	}
-	return idx.index.Load()
+	return idx.index.Build()
 }
 
 func (idx *GpuBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig) (retkeys any, retdistances []float64, err error) {

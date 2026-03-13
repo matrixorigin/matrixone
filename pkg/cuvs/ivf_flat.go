@@ -164,13 +164,13 @@ func (gi *GpuIvfFlat[T]) Start() error {
 	return nil
 }
 
-// Load triggers the build or file loading process
-func (gi *GpuIvfFlat[T]) Load() error {
+// Build triggers the build or file loading process
+func (gi *GpuIvfFlat[T]) Build() error {
 	if gi.cIvfFlat == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
 	var errmsg *C.char
-	C.gpu_ivf_flat_load(gi.cIvfFlat, unsafe.Pointer(&errmsg))
+	C.gpu_ivf_flat_build(gi.cIvfFlat, unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))

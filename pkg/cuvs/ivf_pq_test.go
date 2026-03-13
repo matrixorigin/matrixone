@@ -46,7 +46,7 @@ func TestGpuIvfPq(t *testing.T) {
 		t.Fatalf("Start failed: %v", err)
 	}
 
-	err = index.Load()
+	err = index.Build()
 	if err != nil {
 		t.Fatalf("Failed to load/build GpuIvfPq: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestGpuIvfPqSaveLoad(t *testing.T) {
 		t.Fatalf("Failed to create GpuIvfPq: %v", err)
 	}
 	index.Start()
-	index.Load()
+	index.Build()
 
 	filename := "test_ivf_pq.idx"
 	err = index.Save(filename)
@@ -112,7 +112,7 @@ func TestGpuIvfPqSaveLoad(t *testing.T) {
 		t.Fatalf("Start failed: %v", err)
 	}
 
-	err = index2.Load()
+	err = index2.Build()
 	if err != nil {
 		t.Fatalf("Load from file failed: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestGpuIvfPqChunked(t *testing.T) {
 	t.Logf("Dataset[0]: %v, Dataset[50*dim]: %v", ds[0], ds[50*uint64(dimension)])
 
 	// Build index
-	err = index.Load()
+	err = index.Build()
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}

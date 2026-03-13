@@ -36,7 +36,7 @@ func TestGpuBruteForce(t *testing.T) {
 	defer index.Destroy()
 
 	index.Start()
-	err = index.Load()
+	err = index.Build()
 	if err != nil {
 		t.Fatalf("Failed to load GpuBruteForce: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestGpuBruteForceChunked(t *testing.T) {
 	}
 
 	// Build index
-	err = index.Load()
+	err = index.Build()
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestGpuBruteForceFloat16(t *testing.T) {
 	defer index.Destroy()
 
 	index.Start()
-	err = index.Load()
+	err = index.Build()
 	if err != nil {
 		t.Fatalf("Failed to load: %v", err)
 	}

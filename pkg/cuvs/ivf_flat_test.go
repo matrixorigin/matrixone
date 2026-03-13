@@ -40,7 +40,7 @@ func TestGpuIvfFlat(t *testing.T) {
 	defer index.Destroy()
 
 	index.Start()
-	err = index.Load()
+	err = index.Build()
 	if err != nil {
 		t.Fatalf("Failed to load/build GpuIvfFlat: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestGpuIvfFlatSaveLoad(t *testing.T) {
 		t.Fatalf("Failed to create GpuIvfFlat: %v", err)
 	}
 	index.Start()
-	index.Load()
+	index.Build()
 
 	filename := "test_ivf_flat.idx"
 	err = index.Save(filename)
@@ -101,7 +101,7 @@ func TestGpuIvfFlatSaveLoad(t *testing.T) {
 	defer index2.Destroy()
 
 	index2.Start()
-	err = index2.Load()
+	err = index2.Build()
 	if err != nil {
 		t.Fatalf("Load from file failed: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestGpuShardedIvfFlat(t *testing.T) {
 	defer index.Destroy()
 
 	index.Start()
-	err = index.Load()
+	err = index.Build()
 	if err != nil {
 		t.Fatalf("Load sharded failed: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestGpuIvfFlatChunked(t *testing.T) {
 	}
 
 	// Build index
-	err = index.Load()
+	err = index.Build()
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}

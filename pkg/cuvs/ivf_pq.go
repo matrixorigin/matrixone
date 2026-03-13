@@ -349,13 +349,13 @@ func (gi *GpuIvfPq[T]) Start() error {
 	return nil
 }
 
-// Load triggers the build or file loading process
-func (gi *GpuIvfPq[T]) Load() error {
+// Build triggers the build or file loading process
+func (gi *GpuIvfPq[T]) Build() error {
 	if gi.cIvfPq == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
 	var errmsg *C.char
-	C.gpu_ivf_pq_load(gi.cIvfPq, unsafe.Pointer(&errmsg))
+	C.gpu_ivf_pq_build(gi.cIvfPq, unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))

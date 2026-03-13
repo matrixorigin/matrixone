@@ -48,8 +48,8 @@ void gpu_cagra_destroy(gpu_cagra_c index_c, void* errmsg);
 // Start function (initializes worker and resources)
 void gpu_cagra_start(gpu_cagra_c index_c, void* errmsg);
 
-// Load function (actually triggers the build/load logic)
-void gpu_cagra_load(gpu_cagra_c index_c, void* errmsg);
+// Build function (actually triggers the build/load logic)
+void gpu_cagra_build(gpu_cagra_c index_c, void* errmsg);
 
 // Constructor for an empty index (pre-allocates)
 gpu_cagra_c gpu_cagra_new_empty(uint64_t total_count, uint32_t dimension, distance_type_t metric, 

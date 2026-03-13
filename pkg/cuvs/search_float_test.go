@@ -50,7 +50,7 @@ func TestGpuSearchFloatAll(t *testing.T) {
 		if err != nil {
 			t.Fatalf("AddChunkFloat failed: %v", err)
 		}
-		index.Load()
+		index.Build()
 
 		queries := make([]float32, 2*uint64(dimension))
 		for i := range queries {
@@ -75,7 +75,7 @@ func TestGpuSearchFloatAll(t *testing.T) {
 		}
 		defer index.Destroy()
 		index.Start()
-		index.Load()
+		index.Build()
 
 		queries := make([]float32, uint64(dimension))
 		res, err := index.SearchFloat(queries, 1, dimension, 1, IvfFlatSearchParams{NProbes: 1})
@@ -97,7 +97,7 @@ func TestGpuSearchFloatAll(t *testing.T) {
 		}
 		defer index.Destroy()
 		index.Start()
-		index.Load()
+		index.Build()
 
 		queries := make([]float32, uint64(dimension))
 		res, err := index.SearchFloat(queries, 1, dimension, 1, CagraSearchParams{ItopkSize: 64, SearchWidth: 1})
@@ -118,7 +118,7 @@ func TestGpuSearchFloatAll(t *testing.T) {
 		}
 		defer index.Destroy()
 		index.Start()
-		index.Load()
+		index.Build()
 
 		queries := make([]float32, uint64(dimension))
 		neighbors, _, err := index.SearchFloat(queries, 1, dimension, 1)

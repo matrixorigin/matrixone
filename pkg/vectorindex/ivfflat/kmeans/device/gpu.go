@@ -119,6 +119,7 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 		if err != nil {
 			return nil, err
 		}
+		km.Start()
 
 		c := &GpuClusterer[float32]{
 			kmeans:  km,

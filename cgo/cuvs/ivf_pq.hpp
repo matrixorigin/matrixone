@@ -174,7 +174,7 @@ public:
     /**
      * @brief Loads the index from file or builds it from the dataset.
      */
-    void load() {
+    void build() {
         std::unique_lock<std::shared_mutex> lock(mutex_);
         if (is_loaded_) return;
 

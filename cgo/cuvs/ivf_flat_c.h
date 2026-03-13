@@ -48,8 +48,8 @@ void gpu_ivf_flat_destroy(gpu_ivf_flat_c index_c, void* errmsg);
 // Start function (initializes worker and resources)
 void gpu_ivf_flat_start(gpu_ivf_flat_c index_c, void* errmsg);
 
-// Load function (actually triggers the build/load logic)
-void gpu_ivf_flat_load(gpu_ivf_flat_c index_c, void* errmsg);
+// Build function (actually triggers the build/load logic)
+void gpu_ivf_flat_build(gpu_ivf_flat_c index_c, void* errmsg);
 
 // Constructor for an empty index (pre-allocates)
 gpu_ivf_flat_c gpu_ivf_flat_new_empty(uint64_t total_count, uint32_t dimension, distance_type_t metric, 

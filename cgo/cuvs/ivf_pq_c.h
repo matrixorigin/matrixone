@@ -69,8 +69,8 @@ void gpu_ivf_pq_destroy(gpu_ivf_pq_c index_c, void* errmsg);
 // Start function (initializes worker and resources)
 void gpu_ivf_pq_start(gpu_ivf_pq_c index_c, void* errmsg);
 
-// Load function (actually triggers the build/load logic)
-void gpu_ivf_pq_load(gpu_ivf_pq_c index_c, void* errmsg);
+// Build function (actually triggers the build/load logic)
+void gpu_ivf_pq_build(gpu_ivf_pq_c index_c, void* errmsg);
 
 // Save function
 void gpu_ivf_pq_save(gpu_ivf_pq_c index_c, const char* filename, void* errmsg);

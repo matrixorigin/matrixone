@@ -123,7 +123,7 @@ public:
     /**
      * @brief Loads the dataset to the GPU and builds the index.
      */
-    void load() {
+    void build() {
         std::unique_lock<std::shared_mutex> lock(mutex_);
         if (is_loaded_) return;
 

@@ -39,7 +39,7 @@ func TestGpuCagra(t *testing.T) {
 	defer index.Destroy()
 
 	index.Start()
-	err = index.Load()
+	err = index.Build()
 	if err != nil {
 		t.Fatalf("Failed to load/build GpuCagra: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestGpuCagraSaveLoad(t *testing.T) {
 		t.Fatalf("Failed to create GpuCagra: %v", err)
 	}
 	index.Start()
-	index.Load()
+	index.Build()
 
 	filename := "test_cagra.idx"
 	err = index.Save(filename)
@@ -92,7 +92,7 @@ func TestGpuCagraSaveLoad(t *testing.T) {
 	defer index2.Destroy()
 
 	index2.Start()
-	err = index2.Load()
+	err = index2.Build()
 	if err != nil {
 		t.Fatalf("Load from file failed: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestGpuShardedCagra(t *testing.T) {
 	defer index.Destroy()
 
 	index.Start()
-	err = index.Load()
+	err = index.Build()
 	if err != nil {
 		t.Fatalf("Load sharded failed: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestGpuCagraChunked(t *testing.T) {
 	}
 
 	// Build index
-	err = index.Load()
+	err = index.Build()
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestGpuCagraExtend(t *testing.T) {
 	}
 	defer index.Destroy()
 	index.Start()
-	index.Load()
+	index.Build()
 
 	extra := make([]float32, 10*dimension)
 	for i := range extra {
@@ -275,9 +275,9 @@ func TestGpuCagraMerge(t *testing.T) {
 	idx1, _ := NewGpuCagra[float32](ds1, count, dimension, L2Expanded, bp, devices, 1, SingleGpu)
 	idx2, _ := NewGpuCagra[float32](ds2, count, dimension, L2Expanded, bp, devices, 1, SingleGpu)
 	idx1.Start()
-	idx1.Load()
+	idx1.Build()
 	idx2.Start()
-	idx2.Load()
+	idx2.Build()
 	defer idx1.Destroy()
 	defer idx2.Destroy()
 

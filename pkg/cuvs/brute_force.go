@@ -110,13 +110,13 @@ func (gb *GpuBruteForce[T]) Start() error {
 	return nil
 }
 
-// Load triggers the dataset loading to GPU
-func (gb *GpuBruteForce[T]) Load() error {
+// Build triggers the dataset loading to GPU
+func (gb *GpuBruteForce[T]) Build() error {
 	if gb.cIndex == nil {
 		return moerr.NewInternalErrorNoCtx("GpuBruteForce is not initialized")
 	}
 	var errmsg *C.char
-	C.gpu_brute_force_load(gb.cIndex, unsafe.Pointer(&errmsg))
+	C.gpu_brute_force_build(gb.cIndex, unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))

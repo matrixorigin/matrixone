@@ -38,8 +38,8 @@ gpu_brute_force_c gpu_brute_force_new_empty(uint64_t total_count, uint32_t dimen
 // Starts the worker and initializes resources
 void gpu_brute_force_start(gpu_brute_force_c index_c, void* errmsg);
 
-// Loads the index to the GPU
-void gpu_brute_force_load(gpu_brute_force_c index_c, void* errmsg);
+// Builds the index (loads the dataset to the GPU)
+void gpu_brute_force_build(gpu_brute_force_c index_c, void* errmsg);
 
 // Add chunk of data (same type as index quantization)
 void gpu_brute_force_add_chunk(gpu_brute_force_c index_c, const void* chunk_data, uint64_t chunk_count, void* errmsg);

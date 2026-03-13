@@ -45,6 +45,7 @@ func getCenters(vecs [][]float32, dim int, clusterCnt int, distanceType cuvs.Dis
 		return nil, err
 	}
 	defer km.Destroy()
+	km.Start()
 
 	_, _, err = km.Fit(flattened, uint64(len(vecs)))
 	if err != nil {
@@ -89,8 +90,9 @@ func Search(datasetvec [][]float32, queriesvec [][]float32, limit uint, distance
 		return nil, nil, err
 	}
 	defer bf.Destroy()
+	bf.Start()
 
-	err = bf.Load()
+	err = bf.Build()
 	if err != nil {
 		return nil, nil, err
 	}
