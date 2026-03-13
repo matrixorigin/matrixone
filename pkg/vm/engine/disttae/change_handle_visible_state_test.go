@@ -117,6 +117,34 @@ func TestVisibleStateChangesHandleNext(t *testing.T) {
 	require.Nil(t, tombstone)
 }
 
+func TestVisibleStateChangesHandleCloseNilReceiver(t *testing.T) {
+	var h *VisibleStateChangesHandle
+	require.NotPanics(t, func() {
+		_ = h.Close()
+	})
+}
+
+func TestVisibleStateChangesHandleCloseNilMPoolAndTypedNilReader(t *testing.T) {
+	var nilReader *scriptedReader
+	h := &VisibleStateChangesHandle{
+		mp: nil,
+		currentAfter: func() *batch.Batch {
+			bat := batch.NewWithSize(1)
+			bat.SetAttributes([]string{"a"})
+			bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+			bat.SetRowCount(0)
+			return bat
+		}(),
+		afterReaders: []engine.Reader{
+			nilReader,
+		},
+	}
+	require.NotPanics(t, func() {
+		_ = h.Close()
+	})
+	require.Nil(t, h.currentAfter)
+}
+
 func makeInt32Batch(t *testing.T, mp *mpool.MPool, rows [][2]int32) *batch.Batch {
 	t.Helper()
 

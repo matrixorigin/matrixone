@@ -332,6 +332,7 @@ type AObjectHandle struct {
 	isTombstone        bool
 	start, end         types.TS
 	objectOffsetCursor int
+	blkOffsetCursor    int
 	rowOffsetCursor    int
 	currentBatch       *batch.Batch
 	batchLength        int
@@ -341,6 +342,27 @@ type AObjectHandle struct {
 	mp                 *mpool.MPool
 	cache              []*batch.Batch
 	p                  *baseHandle
+
+	// blockPlans caches block-level commit-ts overlap decisions for objects.
+	// It is only populated when checkpoint-range mode enables block pruning.
+	blockPlans map[string]*aobjBlockPlan
+}
+
+type aobjBlockPlan struct {
+	initialized      bool
+	evaluable        bool
+	shouldReadByBlks []bool
+	totalBlocks      int
+	evaluableBlocks  int
+	overlapBlocks    int
+	prunedBlocks     int
+	// nonEvaluableReasons counts why a block cannot be pruned by commit-ts
+	// zonemap, for example missing metadata or unsupported tail column type.
+	nonEvaluableReasons map[string]int
+	// nonEvaluableSamples stores a few representative block-level diagnostics.
+	nonEvaluableSamples []string
+	// evaluableSamples stores a few representative successful evaluations.
+	evaluableSamples []string
 }
 
 func NewAObjectHandle(ctx context.Context, p *baseHandle, isTombstone bool, start, end types.TS, objects []*objectio.ObjectEntry, fs fileservice.FileService, mp *mpool.MPool) *AObjectHandle {
@@ -353,20 +375,263 @@ func NewAObjectHandle(ctx context.Context, p *baseHandle, isTombstone bool, star
 		mp:          mp,
 		p:           p,
 		cache:       make([]*batch.Batch, 0),
+		blockPlans:  make(map[string]*aobjBlockPlan),
 	}
 	return handle
 }
+
+// nextPrefetchTarget returns the next object/block pair that should be loaded.
+// In checkpoint-range mode, TN-created non-appendable objects can be pruned by
+// commit-ts zonemap at block granularity before loading block data.
+func (h *AObjectHandle) nextPrefetchTarget(
+	ctx context.Context,
+) (obj *objectio.ObjectEntry, blk uint16, ok bool, err error) {
+	for {
+		if h.objectOffsetCursor >= len(h.objects) {
+			return nil, 0, false, nil
+		}
+		obj = h.objects[h.objectOffsetCursor]
+		blk = uint16(h.blkOffsetCursor)
+		h.blkOffsetCursor++
+		if h.blkOffsetCursor >= int(obj.BlkCnt()) {
+			h.blkOffsetCursor = 0
+			h.objectOffsetCursor++
+		}
+		okToRead, planErr := h.shouldReadBlock(ctx, obj, blk)
+		if planErr != nil {
+			return nil, 0, false, planErr
+		}
+		if okToRead {
+			return obj, blk, true, nil
+		}
+	}
+}
+
+// shouldReadBlock decides whether one block may contain rows in [start, end].
+//
+// For checkpoint-range recovery of TN-created non-appendable objects, this
+// method uses commit-ts zonemap to skip irrelevant blocks. If strict mode is
+// enabled and commit-ts zonemap is unavailable, it returns ErrFileNotFound so
+// caller can fall back to exact visible-state reconstruction.
+func (h *AObjectHandle) shouldReadBlock(
+	ctx context.Context,
+	obj *objectio.ObjectEntry,
+	blk uint16,
+) (bool, error) {
+	if obj == nil {
+		return false, nil
+	}
+	changes := h.p.changesHandle
+	if !changes.enableCommitTSBlockPrune {
+		return true, nil
+	}
+	// Row-commit-ts pruning is only meaningful for TN-created non-appendable
+	// objects. Appendable objects are kept on the existing path.
+	if obj.GetAppendable() || obj.GetCNCreated() {
+		return true, nil
+	}
+	key := obj.ObjectShortName().ShortString()
+	plan, ok := h.blockPlans[key]
+	if !ok {
+		plan = &aobjBlockPlan{}
+		h.blockPlans[key] = plan
+	}
+	if !plan.initialized {
+		if err := h.buildBlockPlan(ctx, obj, plan); err != nil {
+			return false, err
+		}
+	}
+	if !plan.evaluable {
+		if changes.strictCommitTSBlockPrune {
+			logutil.Warn(
+				"ChangesHandle-CommitTSBlockPlan strict fallback",
+				zap.String("object", obj.ObjectShortName().ShortString()),
+				zap.Bool("tombstone", h.isTombstone),
+				zap.String("start", h.start.ToString()),
+				zap.String("end", h.end.ToString()),
+				zap.Int("total-blocks", plan.totalBlocks),
+				zap.Int("evaluable-blocks", plan.evaluableBlocks),
+				zap.Int("overlap-blocks", plan.overlapBlocks),
+				zap.Int("pruned-blocks", plan.prunedBlocks),
+				zap.Float64("prune-rate", calcPruneRate(plan.prunedBlocks, plan.totalBlocks)),
+				zap.Any("non-evaluable-reasons", plan.nonEvaluableReasons),
+				zap.Strings("non-evaluable-samples", plan.nonEvaluableSamples),
+				zap.Strings("evaluable-samples", plan.evaluableSamples),
+			)
+			return false, moerr.NewFileNotFoundNoCtx(obj.ObjectName().String())
+		}
+		return true, nil
+	}
+	if int(blk) >= len(plan.shouldReadByBlks) {
+		return false, nil
+	}
+	return plan.shouldReadByBlks[blk], nil
+}
+
+func (h *AObjectHandle) buildBlockPlan(
+	ctx context.Context,
+	obj *objectio.ObjectEntry,
+	plan *aobjBlockPlan,
+) error {
+	plan.initialized = true
+	plan.evaluable = false
+	plan.shouldReadByBlks = make([]bool, int(obj.BlkCnt()))
+	plan.totalBlocks = int(obj.BlkCnt())
+	plan.evaluableBlocks = 0
+	plan.overlapBlocks = 0
+	plan.prunedBlocks = 0
+	plan.nonEvaluableReasons = make(map[string]int, 4)
+	plan.nonEvaluableSamples = make([]string, 0, 5)
+	plan.evaluableSamples = make([]string, 0, 5)
+	for i := range plan.shouldReadByBlks {
+		plan.shouldReadByBlks[i] = true
+	}
+	metaLoc := obj.ObjectLocation()
+	meta, err := objectio.FastLoadObjectMeta(ctx, &metaLoc, false, h.fs)
+	if err != nil {
+		logutil.Warn(
+			"ChangesHandle-CommitTSBlockPlan load object meta failed",
+			zap.String("object", obj.ObjectShortName().ShortString()),
+			zap.String("object-name", obj.ObjectName().String()),
+			zap.String("location", metaLoc.String()),
+			zap.Error(err),
+		)
+		return err
+	}
+	dataMeta := meta.MustGetMeta(objectio.SchemaData)
+	evaluableBlockCnt := 0
+	overlapBlockCnt := 0
+	for i := uint16(0); i < uint16(obj.BlkCnt()); i++ {
+		blk := dataMeta.GetBlockMeta(uint32(i))
+		overlap, evaluable, reason, detail := blockCommitTSOverlapsRange(blk, h.start, h.end)
+		if !evaluable {
+			// Keep non-evaluable blocks as "read=true" (default). We can still
+			// preserve correctness by row-wise commit-ts filtering after read.
+			plan.nonEvaluableReasons[reason]++
+			if len(plan.nonEvaluableSamples) < 5 {
+				plan.nonEvaluableSamples = append(
+					plan.nonEvaluableSamples,
+					fmt.Sprintf("blk=%d reason=%s %s", i, reason, detail),
+				)
+			}
+			continue
+		}
+		evaluableBlockCnt++
+		plan.shouldReadByBlks[i] = overlap
+		if overlap {
+			overlapBlockCnt++
+		} else {
+			plan.prunedBlocks++
+		}
+		if len(plan.evaluableSamples) < 5 {
+			plan.evaluableSamples = append(
+				plan.evaluableSamples,
+				fmt.Sprintf("blk=%d overlap=%t %s", i, overlap, detail),
+			)
+		}
+	}
+	// "evaluable" here means at least one block exposes usable commit-ts zonemap.
+	// If none does, strict mode can still choose the exact-scan fallback path.
+	plan.evaluable = evaluableBlockCnt > 0
+	plan.evaluableBlocks = evaluableBlockCnt
+	plan.overlapBlocks = overlapBlockCnt
+	if evaluableBlockCnt == 0 {
+		logutil.Warn(
+			"ChangesHandle-CommitTSBlockPlan no evaluable blocks",
+			zap.String("object", obj.ObjectShortName().ShortString()),
+			zap.Bool("tombstone", h.isTombstone),
+			zap.String("start", h.start.ToString()),
+			zap.String("end", h.end.ToString()),
+			zap.Int("total-blocks", plan.totalBlocks),
+			zap.Any("non-evaluable-reasons", plan.nonEvaluableReasons),
+			zap.Strings("non-evaluable-samples", plan.nonEvaluableSamples),
+		)
+	} else {
+		logutil.Info(
+			"ChangesHandle-CommitTSBlockPlan summary",
+			zap.String("object", obj.ObjectShortName().ShortString()),
+			zap.Bool("tombstone", h.isTombstone),
+			zap.Int("total-blocks", plan.totalBlocks),
+			zap.Int("evaluable-blocks", plan.evaluableBlocks),
+			zap.Int("overlap-blocks", plan.overlapBlocks),
+			zap.Int("pruned-blocks", plan.prunedBlocks),
+			zap.Float64("prune-rate", calcPruneRate(plan.prunedBlocks, plan.totalBlocks)),
+			zap.Any("non-evaluable-reasons", plan.nonEvaluableReasons),
+			zap.Strings("non-evaluable-samples", plan.nonEvaluableSamples),
+			zap.Strings("evaluable-samples", plan.evaluableSamples),
+		)
+	}
+	return nil
+}
+
+// blockCommitTSOverlapsRange checks whether one block's commit-ts zonemap
+// intersects [start, end]. The second return value is false when the block
+// does not expose a usable commit-ts zonemap.
+func blockCommitTSOverlapsRange(
+	blk objectio.BlockObject,
+	start, end types.TS,
+) (bool, bool, string, string) {
+	metaColCnt := blk.GetMetaColumnCount()
+	maxSeqnum := blk.GetMaxSeqnum()
+	base := fmt.Sprintf("meta_col_cnt=%d max_seqnum=%d", metaColCnt, maxSeqnum)
+	if metaColCnt == 0 {
+		return false, false, "no_meta_columns", base
+	}
+	// Commit-ts is stored as the trailing hidden column when available.
+	// Do not gate by max-seqnum here: merged/rewritten TN objects may expose
+	// different seqnum layouts while still carrying valid commit-ts zonemap.
+	commitCol := blk.ColumnMeta(metaColCnt - 1)
+	base = fmt.Sprintf("%s tail_col_type=%d", base, commitCol.DataType())
+	if commitCol.DataType() != uint8(types.T_TS) {
+		return false, false, "tail_column_not_ts", base
+	}
+	zm := commitCol.ZoneMap()
+	if !zm.IsInited() {
+		return false, false, "zonemap_not_inited", base
+	}
+	if zm.GetType() != types.T_TS {
+		return false, false, "zonemap_type_not_ts", fmt.Sprintf("%s zm_type=%s", base, zm.GetType().String())
+	}
+	minTS := types.DecodeFixed[types.TS](zm.GetMinBuf())
+	maxTS := types.DecodeFixed[types.TS](zm.GetMaxBuf())
+	detail := fmt.Sprintf(
+		"%s zm_type=%s zm_min=%s zm_max=%s range=[%s,%s]",
+		base,
+		zm.GetType().String(),
+		minTS.ToString(),
+		maxTS.ToString(),
+		start.ToString(),
+		end.ToString(),
+	)
+	if maxTS.LT(&start) || minTS.GT(&end) {
+		return false, true, "", detail
+	}
+	return true, true, "", detail
+}
+
+func calcPruneRate(pruned, total int) float64 {
+	if total <= 0 {
+		return 0
+	}
+	return float64(pruned) / float64(total)
+}
+
 func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 	t0 := time.Now()
 	jobs := make([]*tasks.Job, 0)
 	for i := 0; i < LoadParallism; i++ {
-		if h.objectOffsetCursor >= len(h.objects) {
+		obj, blk, ok, targetErr := h.nextPrefetchTarget(ctx)
+		if targetErr != nil {
+			err = targetErr
+			h.p.changesHandle.readDuration += time.Since(t0)
+			return
+		}
+		if !ok {
 			break
 		}
-		stats := h.objects[h.objectOffsetCursor].ObjectStats
-		job := prefetchObjects(ctx, 0, h.fs, &stats, h.p.changesHandle.scheduler)
+		stats := obj.ObjectStats
+		job := prefetchObjects(ctx, uint32(blk), h.fs, &stats, h.p.changesHandle.scheduler)
 		jobs = append(jobs, job)
-		h.objectOffsetCursor++
 	}
 	for _, job := range jobs {
 		res := job.GetResult()
@@ -410,6 +675,12 @@ func (h *AObjectHandle) getNextAObject(ctx context.Context) (err error) {
 			err = h.prefetch(ctx)
 			if err != nil {
 				return
+			}
+			if len(h.cache) == 0 {
+				if h.isEnd() {
+					return
+				}
+				continue
 			}
 		}
 		h.currentBatch = h.cache[0]
@@ -535,7 +806,22 @@ func NewBaseHandler(state *PartitionState, changesHandle *ChangeHandler, start, 
 	rowIter := state.rows.Iter()
 	defer rowIter.Release()
 	p.inMemoryHandle = p.newBatchHandleWithRowIterator(ctx, rowIter, start, end, tombstone, mp)
-	aobj, cnObj := p.getObjectEntries(iter, start, end)
+	aobj, cnObj, tnByCreateTS, tnCreateTSKeys := p.getObjectEntries(iter, start, end)
+	if p.changesHandle.enableDeleteChainResolve {
+		resolvedAObj, resolveErr := p.resolveVisibleObjectsByDeleteChain(
+			ctx, start, end, aobj, tnByCreateTS, tnCreateTSKeys, tombstone, "appendable",
+		)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		resolvedCNObj, resolveErr := p.resolveVisibleObjectsByDeleteChain(
+			ctx, start, end, cnObj, tnByCreateTS, tnCreateTSKeys, tombstone, "constant-commit-ts",
+		)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		aobj, cnObj = classifyResolvedObjects(resolvedAObj, resolvedCNObj)
+	}
 	p.aobjHandle = NewAObjectHandle(ctx, p, tombstone, start, end, aobj, fs, mp)
 	p.cnObjectHandle = NewCNObjectHandle(tombstone, cnObj, fs, p, mp)
 	return
@@ -603,6 +889,9 @@ func (p *baseHandle) IsSmall() bool {
 	return count < SmallBatchThreshold
 }
 func (p *baseHandle) Close() {
+	if p == nil {
+		return
+	}
 	if p.inMemoryHandle != nil {
 		p.inMemoryHandle.Close()
 	}
@@ -703,11 +992,21 @@ func (p *baseHandle) getBatchesFromRowIterator(iter btree.IterG[*RowEntry], star
 	}
 	return
 }
-func (p *baseHandle) getObjectEntries(objIter btree.IterG[objectio.ObjectEntry], start, end types.TS) (aobj, cnObj []*objectio.ObjectEntry) {
+func (p *baseHandle) getObjectEntries(
+	objIter btree.IterG[objectio.ObjectEntry],
+	start, end types.TS,
+) (
+	aobj, cnObj []*objectio.ObjectEntry,
+	tnByCreateTS map[types.TS][]*objectio.ObjectEntry,
+	tnCreateTSKeys []types.TS,
+) {
 	aobj = make([]*objectio.ObjectEntry, 0)
 	cnObj = make([]*objectio.ObjectEntry, 0)
+	tnByCreateTS = make(map[types.TS][]*objectio.ObjectEntry)
+	tnKeySet := make(map[types.TS]struct{})
 	for objIter.Next() {
 		entry := objIter.Item()
+		entryCopy := entry
 		if entry.GetAppendable() {
 			if entry.CreateTime.GT(&end) {
 				continue
@@ -715,16 +1014,22 @@ func (p *baseHandle) getObjectEntries(objIter btree.IterG[objectio.ObjectEntry],
 			if !entry.DeleteTime.IsEmpty() && entry.DeleteTime.LT(&start) {
 				continue
 			}
-			aobj = append(aobj, &entry)
+			aobj = append(aobj, &entryCopy)
 		} else {
-			if !entry.ObjectStats.GetCNCreated() {
+			if entry.ObjectStats.GetCNCreated() {
+				if entry.CreateTime.LT(&start) || entry.CreateTime.GT(&end) {
+					continue
+				}
+				cnObj = append(cnObj, &entryCopy)
 				continue
 			}
-			if entry.CreateTime.LT(&start) || entry.CreateTime.GT(&end) {
-				continue
-			}
-			cnObj = append(cnObj, &entry)
+			tnByCreateTS[entry.CreateTime] = append(tnByCreateTS[entry.CreateTime], &entryCopy)
+			tnKeySet[entry.CreateTime] = struct{}{}
 		}
+	}
+	tnCreateTSKeys = make([]types.TS, 0, len(tnKeySet))
+	for ts := range tnKeySet {
+		tnCreateTSKeys = append(tnCreateTSKeys, ts)
 	}
 	goSort.Slice(aobj, func(i, j int) bool {
 		return aobj[i].CreateTime.LT(&aobj[j].CreateTime)
@@ -732,7 +1037,224 @@ func (p *baseHandle) getObjectEntries(objIter btree.IterG[objectio.ObjectEntry],
 	goSort.Slice(cnObj, func(i, j int) bool {
 		return cnObj[i].CreateTime.LT(&cnObj[j].CreateTime)
 	})
+	goSort.Slice(tnCreateTSKeys, func(i, j int) bool {
+		return tnCreateTSKeys[i].LT(&tnCreateTSKeys[j])
+	})
 	return
+}
+
+func (p *baseHandle) resolveVisibleObjectsByDeleteChain(
+	ctx context.Context,
+	start, end types.TS,
+	visible []*objectio.ObjectEntry,
+	tnByCreateTS map[types.TS][]*objectio.ObjectEntry,
+	tnCreateTSKeys []types.TS,
+	isTombstone bool,
+	kind string,
+) ([]*objectio.ObjectEntry, error) {
+	if len(visible) == 0 {
+		return visible, nil
+	}
+	if len(tnByCreateTS) == 0 {
+		return visible, nil
+	}
+	resolved := make([]*objectio.ObjectEntry, 0, len(visible))
+	queue := make([]*objectio.ObjectEntry, 0, len(visible))
+	queue = append(queue, visible...)
+	visited := make(map[string]struct{}, len(visible))
+	missingCnt := 0
+	rewriteHopCnt := 0
+	fuzzyHopCnt := 0
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		if current == nil {
+			continue
+		}
+		name := current.ObjectShortName().ShortString()
+		if _, ok := visited[name]; ok {
+			continue
+		}
+		visited[name] = struct{}{}
+		// For snapshot-state range replay, we only need terminal objects that are
+		// still visible at range end. If a non-appendable object has already been
+		// deleted at or before end, keep following its delete-time chain instead
+		// of reading this transient intermediate object.
+		if !current.GetAppendable() && !current.DeleteTime.IsEmpty() && current.DeleteTime.LE(&end) {
+			next, successorTS, exact := lookupDeleteChainSuccessor(current.DeleteTime, tnByCreateTS, tnCreateTSKeys)
+			if len(next) == 0 {
+				logutil.Warn(
+					"ChangesHandle-DeleteChain no successor for non-visible object at end",
+					zap.String("kind", kind),
+					zap.Bool("tombstone", isTombstone),
+					zap.String("start", start.ToString()),
+					zap.String("end", end.ToString()),
+					zap.String("current", name),
+					zap.String("delete-time", current.DeleteTime.ToString()),
+				)
+				return nil, moerr.NewFileNotFoundNoCtx(current.ObjectName().String())
+			}
+			rewriteHopCnt++
+			if !exact {
+				fuzzyHopCnt++
+				logutil.Info(
+					"ChangesHandle-DeleteChain matched successor create-time",
+					zap.String("kind", kind),
+					zap.Bool("tombstone", isTombstone),
+					zap.String("current", name),
+					zap.String("delete-time", current.DeleteTime.ToString()),
+					zap.String("successor-create-time", successorTS.ToString()),
+				)
+			}
+			queue = append(queue, next...)
+			continue
+		}
+		exists, err := p.objectFileExists(ctx, current)
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			resolved = append(resolved, current)
+			continue
+		}
+		missingCnt++
+		if current.DeleteTime.IsEmpty() {
+			logutil.Warn(
+				"ChangesHandle-DeleteChain unresolved object without delete-time",
+				zap.String("kind", kind),
+				zap.Bool("tombstone", isTombstone),
+				zap.String("start", start.ToString()),
+				zap.String("end", end.ToString()),
+				zap.String("missing", name),
+			)
+			return nil, moerr.NewFileNotFoundNoCtx(current.ObjectName().String())
+		}
+		next, successorTS, exact := lookupDeleteChainSuccessor(current.DeleteTime, tnByCreateTS, tnCreateTSKeys)
+		if len(next) == 0 {
+			logutil.Warn(
+				"ChangesHandle-DeleteChain no replacement at delete-time",
+				zap.String("kind", kind),
+				zap.Bool("tombstone", isTombstone),
+				zap.String("start", start.ToString()),
+				zap.String("end", end.ToString()),
+				zap.String("missing", name),
+				zap.String("delete-time", current.DeleteTime.ToString()),
+			)
+			return nil, moerr.NewFileNotFoundNoCtx(current.ObjectName().String())
+		}
+		rewriteHopCnt++
+		if !exact {
+			fuzzyHopCnt++
+			logutil.Info(
+				"ChangesHandle-DeleteChain matched successor create-time",
+				zap.String("kind", kind),
+				zap.Bool("tombstone", isTombstone),
+				zap.String("missing", name),
+				zap.String("delete-time", current.DeleteTime.ToString()),
+				zap.String("successor-create-time", successorTS.ToString()),
+			)
+		}
+		queue = append(queue, next...)
+	}
+	goSort.Slice(resolved, func(i, j int) bool {
+		return resolved[i].CreateTime.LT(&resolved[j].CreateTime)
+	})
+	if missingCnt > 0 {
+		logutil.Info(
+			"ChangesHandle-DeleteChain resolved visible objects",
+			zap.String("kind", kind),
+			zap.Bool("tombstone", isTombstone),
+			zap.String("start", start.ToString()),
+			zap.String("end", end.ToString()),
+			zap.Int("input-visible", len(visible)),
+			zap.Int("output-readable", len(resolved)),
+			zap.Int("missing", missingCnt),
+			zap.Int("rewrite-hops", rewriteHopCnt),
+			zap.Int("fuzzy-hops", fuzzyHopCnt),
+		)
+	}
+	return resolved, nil
+}
+
+// lookupDeleteChainSuccessor returns replacement TN non-appendable objects for
+// a missing visible object. It first tries exact delete-time -> create-time
+// matching, and then falls back to the earliest TN create-time >= delete-time.
+func lookupDeleteChainSuccessor(
+	deleteTS types.TS,
+	tnByCreateTS map[types.TS][]*objectio.ObjectEntry,
+	tnCreateTSKeys []types.TS,
+) (next []*objectio.ObjectEntry, successorTS types.TS, exact bool) {
+	if objs := tnByCreateTS[deleteTS]; len(objs) > 0 {
+		return objs, deleteTS, true
+	}
+	if len(tnCreateTSKeys) == 0 {
+		return nil, types.TS{}, false
+	}
+	idx := goSort.Search(len(tnCreateTSKeys), func(i int) bool {
+		return !tnCreateTSKeys[i].LT(&deleteTS)
+	})
+	if idx >= len(tnCreateTSKeys) {
+		return nil, types.TS{}, false
+	}
+	successorTS = tnCreateTSKeys[idx]
+	return tnByCreateTS[successorTS], successorTS, false
+}
+
+// classifyResolvedObjects routes resolved objects into:
+//   - cnObjs: still CN-created non-appendable objects (constant commit-ts path)
+//   - aobjs: appendable objects and TN-created non-appendable objects
+//
+// TN-created replacements must run through the row-level commit-ts filter path,
+// so they must not remain on the CN-object constant commit-ts path.
+func classifyResolvedObjects(groups ...[]*objectio.ObjectEntry) (aobjs, cnObjs []*objectio.ObjectEntry) {
+	aobjs = make([]*objectio.ObjectEntry, 0)
+	cnObjs = make([]*objectio.ObjectEntry, 0)
+	seenA := make(map[string]struct{})
+	seenCN := make(map[string]struct{})
+	for _, group := range groups {
+		for _, obj := range group {
+			if obj == nil {
+				continue
+			}
+			name := obj.ObjectShortName().ShortString()
+			if obj.ObjectStats.GetCNCreated() {
+				if _, ok := seenCN[name]; ok {
+					continue
+				}
+				seenCN[name] = struct{}{}
+				cnObjs = append(cnObjs, obj)
+				continue
+			}
+			if _, ok := seenA[name]; ok {
+				continue
+			}
+			seenA[name] = struct{}{}
+			aobjs = append(aobjs, obj)
+		}
+	}
+	goSort.Slice(aobjs, func(i, j int) bool {
+		return aobjs[i].CreateTime.LT(&aobjs[j].CreateTime)
+	})
+	goSort.Slice(cnObjs, func(i, j int) bool {
+		return cnObjs[i].CreateTime.LT(&cnObjs[j].CreateTime)
+	})
+	return
+}
+
+func (p *baseHandle) objectFileExists(ctx context.Context, obj *objectio.ObjectEntry) (bool, error) {
+	if obj == nil {
+		return false, nil
+	}
+	// FastLoadObjectMeta may be satisfied by object-meta cache even after file
+	// GC. Use StatFile to validate physical existence before replay.
+	_, err := p.changesHandle.fs.StatFile(ctx, obj.ObjectName().String())
+	if err == nil {
+		return true, nil
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+		return false, nil
+	}
+	return false, err
 }
 
 type ChangeHandler struct {
@@ -754,6 +1276,15 @@ type ChangeHandler struct {
 	fs          fileservice.FileService
 	minTS       types.TS
 	skipDeletes bool
+
+	// commit-ts block prune is only enabled on the exact-range replay path used
+	// by snapshot-read semantics; CDC recovery keeps its existing behavior.
+	enableCommitTSBlockPrune bool
+	strictCommitTSBlockPrune bool
+
+	// When enabled, visible objects that were already GC-ed can be rewritten
+	// through delete-time linked TN non-appendable objects before replay starts.
+	enableDeleteChainResolve bool
 
 	LogThreshold time.Duration
 }
@@ -841,6 +1372,84 @@ func NewChangesHandlerWithCheckpointRange(
 	)
 }
 
+// NewChangesHandlerWithPartitionStateRange rebuilds CollectChanges(start, end)
+// from the partition state visible at the range end snapshot.
+//
+// Unlike CDC recovery, this path keeps exact range semantics and enables:
+//   - delete-time chain rewrite for GC-ed visible objects
+//   - commit-ts zonemap block pruning on TN non-appendable objects
+//
+// It is used only by snapshot-read policies that need exact range meaning after
+// normal partition-state replay can no longer read older object files.
+func NewChangesHandlerWithPartitionStateRange(
+	ctx context.Context,
+	state *PartitionState,
+	start, end types.TS,
+	skipDeletes bool,
+	maxRow uint32,
+	primarySeqnum int,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (changeHandle *ChangeHandler, err error) {
+	stateStart := state.GetStart()
+	if stateStart.GT(&start) {
+		return nil, moerr.NewErrStaleReadNoCtx(stateStart.ToString(), start.ToString())
+	}
+	changeHandle = &ChangeHandler{
+		coarseMaxRow:             int(maxRow),
+		start:                    start,
+		end:                      end,
+		fs:                       fs,
+		minTS:                    stateStart,
+		skipDeletes:              skipDeletes,
+		LogThreshold:             LogThreshold,
+		primarySeqnum:            primarySeqnum,
+		mp:                       mp,
+		scheduler:                tasks.NewParallelJobScheduler(LoadParallism),
+		enableCommitTSBlockPrune: true,
+		strictCommitTSBlockPrune: true,
+		enableDeleteChainResolve: true,
+	}
+	defer func() {
+		if err != nil {
+			if changeHandle != nil {
+				_ = changeHandle.Close()
+				changeHandle = nil
+			}
+		}
+	}()
+	changeHandle.tombstoneHandle, err = NewBaseHandler(state, changeHandle, start, end, mp, true, fs, ctx)
+	if err != nil {
+		return nil, err
+	}
+	changeHandle.dataHandle, err = NewBaseHandler(state, changeHandle, start, end, mp, false, fs, ctx)
+	if err != nil {
+		return nil, err
+	}
+	changeHandle.decideMode()
+	if err = changeHandle.dataHandle.init(ctx, changeHandle.quick, mp); err != nil {
+		return nil, err
+	}
+	if err = changeHandle.tombstoneHandle.init(ctx, changeHandle.quick, mp); err != nil {
+		return nil, err
+	}
+	changeHandle.tombstoneHandle.fillInSkipTSFromObjects(
+		start,
+		end,
+		changeHandle.dataHandle.aobjHandle.objects,
+		changeHandle.dataHandle.cnObjectHandle.objects,
+	)
+	logRangeReplaySelection(
+		start,
+		end,
+		changeHandle.dataHandle.aobjHandle.objects,
+		changeHandle.dataHandle.cnObjectHandle.objects,
+		changeHandle.tombstoneHandle.aobjHandle.objects,
+		changeHandle.tombstoneHandle.cnObjectHandle.objects,
+	)
+	return changeHandle, nil
+}
+
 func newChangesHandlerWithCheckpointEntries(
 	ctx context.Context,
 	tid uint64,
@@ -867,6 +1476,19 @@ func newChangesHandlerWithCheckpointEntries(
 		mp:             mp,
 		scheduler:      tasks.NewParallelJobScheduler(LoadParallism),
 		isRecoveryMode: isRecoveryMode,
+	}
+	defer func() {
+		if err == nil {
+			return
+		}
+		if changeHandle != nil {
+			_ = changeHandle.Close()
+			changeHandle = nil
+		}
+	}()
+	if selection == checkpointObjectSelectionRange {
+		changeHandle.enableCommitTSBlockPrune = true
+		changeHandle.strictCommitTSBlockPrune = true
 	}
 	dataAobj, dataCNObj, tombstoneAobj, tombstoneCNObj, err := getObjectsFromCheckpointEntries(
 		ctx,
@@ -898,12 +1520,12 @@ func newChangesHandlerWithCheckpointEntries(
 	}
 	if selection == checkpointObjectSelectionRange {
 		changeHandle.tombstoneHandle.fillInSkipTSFromObjects(start, end, dataAobj, dataCNObj)
-		logCheckpointRangeSelection(start, end, dataAobj, dataCNObj, tombstoneAobj, tombstoneCNObj)
+		logRangeReplaySelection(start, end, dataAobj, dataCNObj, tombstoneAobj, tombstoneCNObj)
 	}
 	return changeHandle, nil
 }
 
-func logCheckpointRangeSelection(
+func logRangeReplaySelection(
 	start, end types.TS,
 	dataAobj, dataCNObj, tombstoneAobj, tombstoneCNObj []*objectio.ObjectEntry,
 ) {
@@ -923,7 +1545,7 @@ func logCheckpointRangeSelection(
 				continue
 			}
 			logutil.Info(
-				"ChangesHandle-CheckpointRangeObject",
+				"ChangesHandle-RangeReplayObject",
 				zap.String("kind", kind),
 				zap.String("name", entry.ObjectShortName().ShortString()),
 				zap.String("create", entry.CreateTime.ToString()),
@@ -936,7 +1558,7 @@ func logCheckpointRangeSelection(
 	}
 
 	logutil.Info(
-		"ChangesHandle-CheckpointRangeSelection",
+		"ChangesHandle-RangeReplaySelection",
 		zap.String("start", start.ToString()),
 		zap.String("end", end.ToString()),
 		zap.Int("data-aobj-count", len(dataAobj)),
@@ -1140,9 +1762,15 @@ func (p *ChangeHandler) Close() error {
 	if p == nil {
 		return nil
 	}
-	p.dataHandle.Close()
-	p.tombstoneHandle.Close()
-	p.scheduler.Stop()
+	if p.dataHandle != nil {
+		p.dataHandle.Close()
+	}
+	if p.tombstoneHandle != nil {
+		p.tombstoneHandle.Close()
+	}
+	if p.scheduler != nil {
+		p.scheduler.Stop()
+	}
 	return nil
 }
 func (p *ChangeHandler) decideMode() {

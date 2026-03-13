@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"reflect"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -105,13 +106,22 @@ func NewVisibleStateChangesHandle(
 	if end.IsEmpty() || (!start.IsEmpty() && start.GT(&end)) {
 		return nil, moerr.NewInternalErrorNoCtx("invalid timestamp")
 	}
+	effectiveMP := mp
+	if effectiveMP == nil && tbl != nil {
+		if proc := tbl.proc.Load(); proc != nil {
+			effectiveMP = proc.Mp()
+		}
+	}
+	if effectiveMP == nil {
+		return nil, moerr.NewInternalErrorNoCtx("visible-state changes handle requires a non-nil mpool")
+	}
 	h := &VisibleStateChangesHandle{
 		tbl:          tbl,
 		start:        start,
 		end:          end,
 		skipDeletes:  skipDeletes,
 		coarseMaxRow: coarseMaxRow,
-		mp:           mp,
+		mp:           effectiveMP,
 		beforeRows:   make(map[string]visibleStateRow),
 		pkScanIdx:    -1,
 	}
@@ -236,17 +246,45 @@ func (h *VisibleStateChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (
 }
 
 func (h *VisibleStateChangesHandle) Close() error {
+	if h == nil {
+		return nil
+	}
 	if h.currentAfter != nil {
-		h.currentAfter.Clean(h.mp)
+		// Query cancellation may close a partially initialized handle. Keep Close
+		// panic-free even if mp is unexpectedly nil.
+		if h.mp != nil {
+			h.currentAfter.Clean(h.mp)
+		} else {
+			h.currentAfter.CleanOnlyData()
+		}
 		h.currentAfter = nil
 	}
 	for _, reader := range h.afterReaders {
-		if reader != nil {
-			_ = reader.Close()
-		}
+		closeEngineReader(reader)
 	}
 	h.afterReaders = nil
 	return nil
+}
+
+// closeEngineReader skips typed-nil interfaces and keeps Close idempotent.
+func closeEngineReader(reader engine.Reader) {
+	if isNilEngineReader(reader) {
+		return
+	}
+	_ = reader.Close()
+}
+
+func isNilEngineReader(reader engine.Reader) bool {
+	if reader == nil {
+		return true
+	}
+	value := reflect.ValueOf(reader)
+	switch value.Kind() {
+	case reflect.Ptr, reflect.Interface, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 func (h *VisibleStateChangesHandle) initSchema(ctx context.Context) error {
@@ -282,9 +320,7 @@ func (h *VisibleStateChangesHandle) loadVisibleRows(ctx context.Context, at type
 	}
 	defer func() {
 		for _, reader := range readers {
-			if reader != nil {
-				_ = reader.Close()
-			}
+			closeEngineReader(reader)
 		}
 	}()
 	for _, reader := range readers {
