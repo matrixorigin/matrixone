@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
 func TestUpdateCNDataBatch_RemoveTSVector(t *testing.T) {
@@ -105,6 +106,48 @@ func TestUpdateCNDataBatch_NoTSVector(t *testing.T) {
 	require.Equal(t, types.T_int64, bat.Vecs[0].GetType().Oid)
 	require.Equal(t, types.T_int64, bat.Vecs[1].GetType().Oid)
 	require.Equal(t, types.T_TS, bat.Vecs[2].GetType().Oid)
+
+	bat.Clean(mp)
+}
+
+func TestUpdateDataBatch_PreservesTrailingColumnsWithoutRowid(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	bat := batch.NewWithSize(4)
+	bat.SetAttributes([]string{"id", "created_at", "updated_at", objectio.DefaultCommitTS_Attr})
+
+	idVec := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(idVec, []byte("row-1"), false, mp))
+	bat.Vecs[0] = idVec
+
+	createdAt := vector.NewVec(types.New(types.T_datetime, 0, 6))
+	createdAtVal, err := types.ParseDatetime("2026-03-12 19:18:00.123456", 6)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendFixed(createdAt, createdAtVal, false, mp))
+	bat.Vecs[1] = createdAt
+
+	updatedAt := vector.NewVec(types.New(types.T_datetime, 0, 6))
+	updatedAtVal, err := types.ParseDatetime("2026-03-12 19:19:00.654321", 6)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendFixed(updatedAt, updatedAtVal, false, mp))
+	bat.Vecs[2] = updatedAt
+
+	commitTS := vector.NewVec(types.T_TS.ToType())
+	tsVal := types.BuildTS(100, 0)
+	require.NoError(t, vector.AppendFixed(commitTS, tsVal, false, mp))
+	bat.Vecs[3] = commitTS
+	bat.SetRowCount(1)
+
+	updateDataBatch(bat, types.BuildTS(50, 0), types.BuildTS(150, 0), mp)
+
+	require.Equal(t, 4, len(bat.Vecs))
+	require.Equal(t, []string{"id", "created_at", "updated_at", objectio.DefaultCommitTS_Attr}, bat.Attrs)
+	require.Equal(t, types.T_varchar, bat.Vecs[0].GetType().Oid)
+	require.Equal(t, types.T_datetime, bat.Vecs[1].GetType().Oid)
+	require.Equal(t, types.T_datetime, bat.Vecs[2].GetType().Oid)
+	require.Equal(t, types.T_TS, bat.Vecs[3].GetType().Oid)
+	require.Equal(t, updatedAtVal, vector.MustFixedColNoTypeCheck[types.Datetime](bat.Vecs[2])[0])
 
 	bat.Clean(mp)
 }

@@ -577,6 +577,20 @@ func (p *baseHandle) fillInSkipTS(iter btree.IterG[objectio.ObjectEntry], start,
 		}
 	}
 }
+
+func (p *baseHandle) fillInSkipTSFromObjects(start, end types.TS, groups ...[]*objectio.ObjectEntry) {
+	for _, group := range groups {
+		for _, obj := range group {
+			if obj == nil || obj.DeleteTime.IsEmpty() {
+				continue
+			}
+			ts := obj.DeleteTime
+			if ts.GE(&start) && ts.LE(&end) {
+				p.skipTS[ts] = struct{}{}
+			}
+		}
+	}
+}
 func (p *baseHandle) IsEmpty() bool {
 	return p.aobjHandle.IsEmpty() && p.inMemoryHandle.IsEmpty() && p.cnObjectHandle.IsEmpty()
 }
@@ -744,6 +758,21 @@ type ChangeHandler struct {
 	LogThreshold time.Duration
 }
 
+type checkpointObjectSelection uint8
+
+const (
+	checkpointObjectSelectionRecovery checkpointObjectSelection = iota
+	checkpointObjectSelectionRange
+)
+
+type checkpointObjectKind uint8
+
+const (
+	checkpointObjectKindIgnore checkpointObjectKind = iota
+	checkpointObjectKindRowCommitTS
+	checkpointObjectKindConstantCommitTS
+)
+
 func NewChangesHandlerWithCheckpointEntries(
 	ctx context.Context,
 	tid uint64,
@@ -756,6 +785,76 @@ func NewChangesHandlerWithCheckpointEntries(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (changeHandle *ChangeHandler, err error) {
+	return newChangesHandlerWithCheckpointEntries(
+		ctx,
+		tid,
+		sid,
+		checkpoints,
+		start,
+		end,
+		skipDeletes,
+		maxRow,
+		primarySeqnum,
+		mp,
+		fs,
+		checkpointObjectSelectionRecovery,
+		true,
+	)
+}
+
+// NewChangesHandlerWithCheckpointRange rebuilds CollectChanges(start, end)
+// semantics from checkpoint metadata. It uses the same object eligibility rules
+// as the normal partition-state path:
+//   - row-commit-ts objects are selected when their object lifetime can still
+//     contain rows committed in [start, end]
+//   - constant-commit-ts objects are selected by object create ts because that
+//     ts is also the commit ts of every row in the object
+//
+// This keeps snapshot-read recovery aligned with the meaning of the original
+// CollectChanges arguments instead of using CDC restart semantics.
+func NewChangesHandlerWithCheckpointRange(
+	ctx context.Context,
+	tid uint64,
+	sid string,
+	checkpoints []*checkpoint.CheckpointEntry,
+	start, end types.TS,
+	skipDeletes bool,
+	maxRow uint32,
+	primarySeqnum int,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (changeHandle *ChangeHandler, err error) {
+	return newChangesHandlerWithCheckpointEntries(
+		ctx,
+		tid,
+		sid,
+		checkpoints,
+		start,
+		end,
+		skipDeletes,
+		maxRow,
+		primarySeqnum,
+		mp,
+		fs,
+		checkpointObjectSelectionRange,
+		false,
+	)
+}
+
+func newChangesHandlerWithCheckpointEntries(
+	ctx context.Context,
+	tid uint64,
+	sid string,
+	checkpoints []*checkpoint.CheckpointEntry,
+	start, end types.TS,
+	skipDeletes bool,
+	maxRow uint32,
+	primarySeqnum int,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+	selection checkpointObjectSelection,
+	isRecoveryMode bool,
+) (changeHandle *ChangeHandler, err error) {
 	changeHandle = &ChangeHandler{
 		coarseMaxRow:   int(maxRow),
 		start:          start,
@@ -767,9 +866,19 @@ func NewChangesHandlerWithCheckpointEntries(
 		primarySeqnum:  primarySeqnum,
 		mp:             mp,
 		scheduler:      tasks.NewParallelJobScheduler(LoadParallism),
-		isRecoveryMode: true, // Checkpoint-based recovery: keep deletes in Case 2.2 for CDC consistency
+		isRecoveryMode: isRecoveryMode,
 	}
-	dataAobj, dataCNObj, tombstoneAobj, tombstoneCNObj, err := getObjectsFromCheckpointEntries(ctx, tid, sid, start, end, checkpoints, mp, fs)
+	dataAobj, dataCNObj, tombstoneAobj, tombstoneCNObj, err := getObjectsFromCheckpointEntries(
+		ctx,
+		tid,
+		sid,
+		start,
+		end,
+		checkpoints,
+		mp,
+		fs,
+		selection,
+	)
 	if err != nil {
 		return
 	}
@@ -787,7 +896,62 @@ func NewChangesHandlerWithCheckpointEntries(
 	if err = changeHandle.tombstoneHandle.init(ctx, changeHandle.quick, mp); err != nil {
 		return
 	}
+	if selection == checkpointObjectSelectionRange {
+		changeHandle.tombstoneHandle.fillInSkipTSFromObjects(start, end, dataAobj, dataCNObj)
+		logCheckpointRangeSelection(start, end, dataAobj, dataCNObj, tombstoneAobj, tombstoneCNObj)
+	}
 	return changeHandle, nil
+}
+
+func logCheckpointRangeSelection(
+	start, end types.TS,
+	dataAobj, dataCNObj, tombstoneAobj, tombstoneCNObj []*objectio.ObjectEntry,
+) {
+	sumRows := func(entries []*objectio.ObjectEntry) int {
+		total := 0
+		for _, entry := range entries {
+			if entry == nil {
+				continue
+			}
+			total += int(entry.Rows())
+		}
+		return total
+	}
+	logEntries := func(kind string, entries []*objectio.ObjectEntry) {
+		for _, entry := range entries {
+			if entry == nil {
+				continue
+			}
+			logutil.Info(
+				"ChangesHandle-CheckpointRangeObject",
+				zap.String("kind", kind),
+				zap.String("name", entry.ObjectShortName().ShortString()),
+				zap.String("create", entry.CreateTime.ToString()),
+				zap.String("delete", entry.DeleteTime.ToString()),
+				zap.Bool("appendable", entry.GetAppendable()),
+				zap.Bool("cn-created", entry.GetCNCreated()),
+				zap.Uint32("rows", entry.Rows()),
+			)
+		}
+	}
+
+	logutil.Info(
+		"ChangesHandle-CheckpointRangeSelection",
+		zap.String("start", start.ToString()),
+		zap.String("end", end.ToString()),
+		zap.Int("data-aobj-count", len(dataAobj)),
+		zap.Int("data-aobj-rows", sumRows(dataAobj)),
+		zap.Int("data-cnobj-count", len(dataCNObj)),
+		zap.Int("data-cnobj-rows", sumRows(dataCNObj)),
+		zap.Int("tombstone-aobj-count", len(tombstoneAobj)),
+		zap.Int("tombstone-aobj-rows", sumRows(tombstoneAobj)),
+		zap.Int("tombstone-cnobj-count", len(tombstoneCNObj)),
+		zap.Int("tombstone-cnobj-rows", sumRows(tombstoneCNObj)),
+	)
+	logEntries("data-aobj", dataAobj)
+	logEntries("data-cnobj", dataCNObj)
+	logEntries("tombstone-aobj", tombstoneAobj)
+	logEntries("tombstone-cnobj", tombstoneCNObj)
 }
 
 func getObjectsFromCheckpointEntries(
@@ -798,6 +962,7 @@ func getObjectsFromCheckpointEntries(
 	checkpoint []*checkpoint.CheckpointEntry,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
+	selection checkpointObjectSelection,
 ) (
 	dataAobj, dataCNObj, tombstoneAobj, tombstoneCNObj []*objectio.ObjectEntry,
 	err error,
@@ -825,22 +990,18 @@ func getObjectsFromCheckpointEntries(
 		if err = reader.ConsumeCheckpointWithTableID(
 			ctx,
 			func(ctx context.Context, fs fileservice.FileService, obj objectio.ObjectEntry, isTombstone bool) (err error) {
-				if obj.GetAppendable() {
-					if obj.CreateTime.GE(&start) {
-						if isTombstone {
-							tombstoneAobjMap[obj.ObjectShortName().ShortString()] = &obj
-						} else {
-							dataAobjMap[obj.ObjectShortName().ShortString()] = &obj
-						}
+				switch classifyCheckpointObject(obj, isTombstone, start, end, selection) {
+				case checkpointObjectKindRowCommitTS:
+					if isTombstone {
+						tombstoneAobjMap[obj.ObjectShortName().ShortString()] = &obj
+					} else {
+						dataAobjMap[obj.ObjectShortName().ShortString()] = &obj
 					}
-				}
-				if obj.GetCNCreated() {
-					if obj.CreateTime.GE(&start) {
-						if isTombstone {
-							tombstoneCNObjMap[obj.ObjectShortName().ShortString()] = &obj
-						} else {
-							dataCNObjMap[obj.ObjectShortName().ShortString()] = &obj
-						}
+				case checkpointObjectKindConstantCommitTS:
+					if isTombstone {
+						tombstoneCNObjMap[obj.ObjectShortName().ShortString()] = &obj
+					} else {
+						dataCNObjMap[obj.ObjectShortName().ShortString()] = &obj
 					}
 				}
 				return
@@ -849,23 +1010,68 @@ func getObjectsFromCheckpointEntries(
 			return
 		}
 	}
-	dataAobj = make([]*objectio.ObjectEntry, 0)
-	for _, obj := range dataAobjMap {
-		dataAobj = append(dataAobj, obj)
-	}
-	dataCNObj = make([]*objectio.ObjectEntry, 0)
-	for _, obj := range dataCNObjMap {
-		dataCNObj = append(dataCNObj, obj)
-	}
-	tombstoneAobj = make([]*objectio.ObjectEntry, 0)
-	for _, obj := range tombstoneAobjMap {
-		tombstoneAobj = append(tombstoneAobj, obj)
-	}
-	tombstoneCNObj = make([]*objectio.ObjectEntry, 0)
-	for _, obj := range tombstoneCNObjMap {
-		tombstoneCNObj = append(tombstoneCNObj, obj)
-	}
+	sortByCreateTime := selection == checkpointObjectSelectionRange
+	dataAobj = checkpointObjectMapToSlice(dataAobjMap, sortByCreateTime)
+	dataCNObj = checkpointObjectMapToSlice(dataCNObjMap, sortByCreateTime)
+	tombstoneAobj = checkpointObjectMapToSlice(tombstoneAobjMap, sortByCreateTime)
+	tombstoneCNObj = checkpointObjectMapToSlice(tombstoneCNObjMap, sortByCreateTime)
 	return
+}
+
+func classifyCheckpointObject(
+	obj objectio.ObjectEntry,
+	isTombstone bool,
+	start, end types.TS,
+	selection checkpointObjectSelection,
+) checkpointObjectKind {
+	switch selection {
+	case checkpointObjectSelectionRange:
+		if obj.GetAppendable() {
+			if obj.CreateTime.GT(&end) {
+				return checkpointObjectKindIgnore
+			}
+			if !obj.DeleteTime.IsEmpty() && obj.DeleteTime.LT(&start) {
+				return checkpointObjectKindIgnore
+			}
+			return checkpointObjectKindRowCommitTS
+		}
+		if obj.GetCNCreated() {
+			if obj.CreateTime.LT(&start) || obj.CreateTime.GT(&end) {
+				return checkpointObjectKindIgnore
+			}
+			return checkpointObjectKindConstantCommitTS
+		}
+		if obj.CreateTime.LT(&start) || obj.CreateTime.GT(&end) {
+			return checkpointObjectKindIgnore
+		}
+		// DN-created non-appendable objects may be rewritten by flush/merge, so
+		// object create time alone does not describe which rows belong to
+		// CollectChanges(start, end). Keep them on the row-commit-ts path and let
+		// the batch-level TS filter recover only the rows whose commit TS falls in
+		// the requested interval.
+		return checkpointObjectKindRowCommitTS
+	default:
+		if obj.GetAppendable() && obj.CreateTime.GE(&start) {
+			return checkpointObjectKindRowCommitTS
+		}
+		if obj.GetCNCreated() && obj.CreateTime.GE(&start) {
+			return checkpointObjectKindConstantCommitTS
+		}
+		return checkpointObjectKindIgnore
+	}
+}
+
+func checkpointObjectMapToSlice(entries map[string]*objectio.ObjectEntry, sortByCreateTime bool) []*objectio.ObjectEntry {
+	ret := make([]*objectio.ObjectEntry, 0, len(entries))
+	for _, obj := range entries {
+		ret = append(ret, obj)
+	}
+	if sortByCreateTime {
+		goSort.Slice(ret, func(i, j int) bool {
+			return ret[i].CreateTime.LT(&ret[j].CreateTime)
+		})
+	}
+	return ret
 }
 
 // NewChangesHandler creates a ChangeHandler that reads changes from the partition state.
@@ -1503,8 +1709,41 @@ func updateTombstoneBatch(bat *batch.Batch, start, end types.TS, skipTS map[type
 	}
 }
 func updateDataBatch(bat *batch.Batch, start, end types.TS, mp *mpool.MPool) {
-	bat.Vecs[len(bat.Vecs)-2].Free(mp) // rowid
-	bat.Vecs = append(bat.Vecs[:len(bat.Vecs)-2], bat.Vecs[len(bat.Vecs)-1])
+	filteredVecs := make([]*vector.Vector, 0, len(bat.Vecs))
+	var commitTSVec *vector.Vector
+	rebuildAttrs := len(bat.Attrs) == len(bat.Vecs)
+	filteredAttrs := make([]string, 0, len(bat.Attrs))
+	var commitTSAttr string
+
+	for i, vec := range bat.Vecs {
+		switch vec.GetType().Oid {
+		case types.T_Rowid:
+			vec.Free(mp)
+		case types.T_TS:
+			commitTSVec = vec
+			if rebuildAttrs {
+				commitTSAttr = bat.Attrs[i]
+			}
+		default:
+			filteredVecs = append(filteredVecs, vec)
+			if rebuildAttrs {
+				filteredAttrs = append(filteredAttrs, bat.Attrs[i])
+			}
+		}
+	}
+	if commitTSVec != nil {
+		filteredVecs = append(filteredVecs, commitTSVec)
+		if rebuildAttrs {
+			if commitTSAttr == "" {
+				commitTSAttr = objectio.DefaultCommitTS_Attr
+			}
+			filteredAttrs = append(filteredAttrs, commitTSAttr)
+		}
+	}
+	bat.Vecs = filteredVecs
+	if rebuildAttrs {
+		bat.Attrs = filteredAttrs
+	}
 	applyTSFilterForBatch(bat, len(bat.Vecs)-1, nil, start, end)
 }
 func updateCNTombstoneBatch(bat *batch.Batch, committs types.TS, mp *mpool.MPool) {
@@ -1550,7 +1789,24 @@ func TestGetObjectsFromCheckpointEntries(
 	dataAobj, dataCNObj, tombstoneAobj, tombstoneCNObj []*objectio.ObjectEntry,
 	err error,
 ) {
-	return getObjectsFromCheckpointEntries(ctx, tid, sid, start, end, checkpoint, mp, fs)
+	return getObjectsFromCheckpointEntries(ctx, tid, sid, start, end, checkpoint, mp, fs, checkpointObjectSelectionRecovery)
+}
+
+// TestGetObjectsFromCheckpointRange exposes the range-aware checkpoint object
+// selector for tests in other packages.
+func TestGetObjectsFromCheckpointRange(
+	ctx context.Context,
+	tid uint64,
+	sid string,
+	start, end types.TS,
+	checkpoint []*checkpoint.CheckpointEntry,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (
+	dataAobj, dataCNObj, tombstoneAobj, tombstoneCNObj []*objectio.ObjectEntry,
+	err error,
+) {
+	return getObjectsFromCheckpointEntries(ctx, tid, sid, start, end, checkpoint, mp, fs, checkpointObjectSelectionRange)
 }
 
 type CheckpointEntryReader = checkpointEntryReader

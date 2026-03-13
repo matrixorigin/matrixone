@@ -69,7 +69,21 @@ func (tbl *txnTable) CollectChanges(
 	if from.IsEmpty() {
 		return NewCheckpointChangesHandle(ctx, tbl, to, mp)
 	}
-	return NewPartitionChangesHandle(ctx, tbl, from, to, skipDeletes, mp)
+	return NewPartitionChangesHandle(
+		ctx,
+		tbl,
+		from,
+		to,
+		skipDeletes,
+		engine.SnapshotReadPolicyFromContext(ctx),
+		mp,
+	)
+}
+
+type queuedChangeBatch struct {
+	data      *batch.Batch
+	tombstone *batch.Batch
+	hint      engine.ChangesHandle_Hint
 }
 
 type PartitionChangesHandle struct {
@@ -83,10 +97,14 @@ type PartitionChangesHandle struct {
 	toTs   types.TS
 	tbl    *txnTable
 
-	skipDeletes   bool
-	primarySeqnum int
-	mp            *mpool.MPool
-	fs            fileservice.FileService
+	skipDeletes        bool
+	primarySeqnum      int
+	snapshotReadPolicy engine.SnapshotReadPolicy
+	mp                 *mpool.MPool
+	fs                 fileservice.FileService
+
+	bufferedBatches     []queuedChangeBatch
+	currentRangeDrained bool
 }
 
 func NewPartitionChangesHandle(
@@ -94,19 +112,21 @@ func NewPartitionChangesHandle(
 	tbl *txnTable,
 	from, to types.TS,
 	skipDeletes bool,
+	snapshotReadPolicy engine.SnapshotReadPolicy,
 	mp *mpool.MPool,
 ) (*PartitionChangesHandle, error) {
 	if to.IsEmpty() || from.GT(&to) {
 		return nil, moerr.NewInternalErrorNoCtx("invalid timestamp")
 	}
 	handle := &PartitionChangesHandle{
-		tbl:           tbl,
-		fromTs:        from,
-		toTs:          to,
-		skipDeletes:   skipDeletes,
-		primarySeqnum: tbl.primarySeqnum,
-		mp:            mp,
-		fs:            tbl.getTxn().engine.fs,
+		tbl:                tbl,
+		fromTs:             from,
+		toTs:               to,
+		skipDeletes:        skipDeletes,
+		primarySeqnum:      tbl.primarySeqnum,
+		snapshotReadPolicy: snapshotReadPolicy,
+		mp:                 mp,
+		fs:                 tbl.getTxn().engine.fs,
 	}
 	end, err := handle.getNextChangeHandle(ctx)
 	if err != nil {
@@ -119,6 +139,17 @@ func NewPartitionChangesHandle(
 }
 
 func (h *PartitionChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
+	// The normal path keeps the existing replay behavior. The VisibleState policy
+	// only changes how snapshot-read recovery rebuilds one logical range and
+	// should not affect callers that can still read directly from partition
+	// state.
+	if h.snapshotReadPolicy == engine.SnapshotReadPolicyVisibleState {
+		return h.nextWithVisibleState(ctx, mp)
+	}
+	return h.nextReplay(ctx, mp)
+}
+
+func (h *PartitionChangesHandle) nextReplay(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
 	for {
 		data, tombstone, hint, err = h.currentChangeHandle.Next(ctx, mp)
 		if err != nil {
@@ -138,7 +169,83 @@ func (h *PartitionChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (dat
 			return
 		}
 	}
+}
 
+// nextWithVisibleState drains one logical sub-range at a time. The whole
+// sub-range is buffered before anything is returned so that a late
+// FileNotFound can still switch the sub-range to visible-state reconstruction
+// without exposing a mix of range-replay batches and exact visible-state
+// batches for the same time window.
+func (h *PartitionChangesHandle) nextWithVisibleState(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
+	hint = engine.ChangesHandle_Tail_done
+	for {
+		if len(h.bufferedBatches) > 0 {
+			next := h.bufferedBatches[0]
+			h.bufferedBatches = h.bufferedBatches[1:]
+			return next.data, next.tombstone, next.hint, nil
+		}
+		if h.currentRangeDrained {
+			var end bool
+			end, err = h.getNextChangeHandle(ctx)
+			if err != nil {
+				return nil, nil, hint, err
+			}
+			if end {
+				return nil, nil, hint, nil
+			}
+			h.currentRangeDrained = false
+		}
+		if err = h.bufferCurrentRange(ctx, mp); err != nil {
+			return nil, nil, hint, err
+		}
+	}
+}
+
+// bufferCurrentRange eagerly consumes the current sub-range into memory. This
+// is only used by the visible-state policy because that policy must be able to
+// discard everything produced for the current sub-range if an object file
+// disappears in the middle of iteration and then rebuild the same range with a
+// different recovery semantic.
+func (h *PartitionChangesHandle) bufferCurrentRange(ctx context.Context, mp *mpool.MPool) (err error) {
+	var queued []queuedChangeBatch
+	cleanQueued := func() {
+		for i := range queued {
+			if queued[i].data != nil {
+				queued[i].data.Clean(mp)
+			}
+			if queued[i].tombstone != nil {
+				queued[i].tombstone.Clean(mp)
+			}
+		}
+	}
+	for {
+		data, tombstone, hint, nextErr := h.currentChangeHandle.Next(ctx, mp)
+		if nextErr != nil {
+			if moerr.IsMoErrCode(nextErr, moerr.ErrFileNotFound) {
+				// A late FileNotFound means the replay handle for this sub-range is
+				// no longer trustworthy. Drop the buffered replay output for the
+				// whole sub-range and rebuild it with visible-state semantics.
+				cleanQueued()
+				queued = nil
+				if err = h.swapCurrentHandleToVisibleState(ctx); err != nil {
+					return err
+				}
+				continue
+			}
+			cleanQueued()
+			return nextErr
+		}
+		if data == nil && tombstone == nil {
+			h.bufferedBatches = append(h.bufferedBatches, queued...)
+			h.currentRangeDrained = true
+			return nil
+		}
+		queued = append(queued, queuedChangeBatch{
+			data:      data,
+			tombstone: tombstone,
+			hint:      hint,
+		})
+	}
 }
 
 func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end bool, err error) {
@@ -273,19 +380,40 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 	if err != nil {
 		return
 	}
-	h.currentChangeHandle, err = logtailreplay.NewChangesHandlerWithCheckpointEntries(
-		ctx,
-		h.tbl.tableId,
-		h.tbl.proc.Load().GetService(),
-		checkpointEntries,
-		h.currentPSFrom,
-		h.currentPSTo,
-		h.skipDeletes,
-		objectio.BlockMaxRows,
-		h.primarySeqnum,
-		h.mp,
-		h.fs,
-	)
+	if h.snapshotReadPolicy == engine.SnapshotReadPolicyVisibleState {
+		// This policy keeps the exact CollectChanges(start, end) meaning during
+		// snapshot read. It first rebuilds the range from checkpoint-selected
+		// objects using the same interval rules as the normal partition-state
+		// path. Only if those object files are also gone do we fall back to the
+		// slower visible-state reconstruction in bufferCurrentRange.
+		h.currentChangeHandle, err = logtailreplay.NewChangesHandlerWithCheckpointRange(
+			ctx,
+			h.tbl.tableId,
+			h.tbl.proc.Load().GetService(),
+			checkpointEntries,
+			h.currentPSFrom,
+			h.currentPSTo,
+			h.skipDeletes,
+			objectio.BlockMaxRows,
+			h.primarySeqnum,
+			h.mp,
+			h.fs,
+		)
+	} else {
+		h.currentChangeHandle, err = logtailreplay.NewChangesHandlerWithCheckpointEntries(
+			ctx,
+			h.tbl.tableId,
+			h.tbl.proc.Load().GetService(),
+			checkpointEntries,
+			h.currentPSFrom,
+			h.currentPSTo,
+			h.skipDeletes,
+			objectio.BlockMaxRows,
+			h.primarySeqnum,
+			h.mp,
+			h.fs,
+		)
+	}
 	if err != nil {
 		return
 	}
@@ -295,6 +423,15 @@ func (h *PartitionChangesHandle) Close() error {
 	if h == nil {
 		return nil
 	}
+	for i := range h.bufferedBatches {
+		if h.bufferedBatches[i].data != nil {
+			h.bufferedBatches[i].data.Clean(h.mp)
+		}
+		if h.bufferedBatches[i].tombstone != nil {
+			h.bufferedBatches[i].tombstone.Clean(h.mp)
+		}
+	}
+	h.bufferedBatches = nil
 	return h.closeCurrentChangeHandle()
 }
 
@@ -309,6 +446,27 @@ func (h *PartitionChangesHandle) closeCurrentChangeHandle() (err error) {
 		h.currentChangeHandle = nil
 	}
 	return
+}
+
+func (h *PartitionChangesHandle) swapCurrentHandleToVisibleState(ctx context.Context) (err error) {
+	if h.snapshotReadPolicy != engine.SnapshotReadPolicyVisibleState {
+		return nil
+	}
+	if err = h.closeCurrentChangeHandle(); err != nil {
+		return err
+	}
+	// Rebuild the current logical sub-range from visible snapshots so the caller
+	// still receives one consistent semantic for this range after replay fails.
+	h.currentChangeHandle, err = NewVisibleStateChangesHandle(
+		ctx,
+		h.tbl,
+		h.currentPSFrom,
+		h.currentPSTo,
+		h.skipDeletes,
+		objectio.BlockMaxRows,
+		h.mp,
+	)
+	return err
 }
 
 type CheckpointChangesHandle struct {

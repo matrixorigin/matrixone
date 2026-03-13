@@ -101,6 +101,25 @@ func TestFormatValIntoString_UnsupportedType(t *testing.T) {
 	require.Contains(t, err.Error(), "not support type")
 }
 
+func TestAppendTupleValueToVector_VarlenaAndNull(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	varcharVec := vector.NewVec(types.New(types.T_varchar, 64, 0))
+	require.NoError(t, appendTupleValueToVector(varcharVec, []byte("hello"), mp))
+	require.Equal(t, 1, varcharVec.Length())
+	require.Equal(t, "hello", string(varcharVec.GetBytesAt(0)))
+
+	require.NoError(t, appendTupleValueToVector(varcharVec, nil, mp))
+	require.Equal(t, 2, varcharVec.Length())
+	require.True(t, varcharVec.GetNulls().Contains(1))
+
+	datetimeVec := vector.NewVec(types.New(types.T_datetime, 0, 6))
+	err := appendTupleValueToVector(datetimeVec, []byte("not-raw-fixed"), mp)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unexpected byte slice for fixed-width column")
+}
+
 func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 	ctx := context.Background()
 	ses := &Session{}

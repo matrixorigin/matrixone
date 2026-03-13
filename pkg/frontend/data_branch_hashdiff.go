@@ -952,13 +952,22 @@ func findDeleteAndUpdateBat(
 }
 
 func appendTupleToBat(ses *Session, bat *batch.Batch, tuple types.Tuple, tblStuff tableStuff) error {
-	// exclude the commit ts column
-	for j, val := range tuple[:len(tuple)-1] {
+	limit := len(tuple)
+	if limit == bat.VectorCount()+1 {
+		// Some change-collection paths keep commit ts in the encoded payload while
+		// others only materialize visible columns. Trim the trailing commit ts only
+		// when it is actually present.
+		limit--
+	}
+	if limit != bat.VectorCount() {
+		return moerr.NewInternalErrorNoCtxf(
+			"unexpected tuple width %d for batch with %d vectors on table %s",
+			len(tuple), bat.VectorCount(), tblStuff.tarRel.GetTableName(),
+		)
+	}
+	for j, val := range tuple[:limit] {
 		vec := bat.Vecs[j]
-
-		if err := vector.AppendAny(
-			vec, val, val == nil, ses.proc.Mp(),
-		); err != nil {
+		if err := appendTupleValueToVector(vec, val, ses.proc.Mp()); err != nil {
 			return err
 		}
 	}
@@ -966,6 +975,22 @@ func appendTupleToBat(ses *Session, bat *batch.Batch, tuple types.Tuple, tblStuf
 	bat.SetRowCount(bat.Vecs[0].Length())
 
 	return nil
+}
+
+func appendTupleValueToVector(vec *vector.Vector, val any, mp *mpool.MPool) error {
+	if val == nil {
+		return vector.AppendNull(vec, mp)
+	}
+	if raw, ok := val.([]byte); ok {
+		if !vec.GetType().IsVarlen() {
+			return moerr.NewInternalErrorNoCtxf(
+				"unexpected byte slice for fixed-width column type %s",
+				vec.GetType().String(),
+			)
+		}
+		return vector.AppendBytes(vec, raw, false, mp)
+	}
+	return vector.AppendAny(vec, val, false, mp)
 }
 
 func checkConflictAndAppendToBat(
@@ -1412,6 +1437,7 @@ func buildHashmapForTable(
 		}
 
 		tblStuff.maxTombstoneBatchCnt = maxByMem
+
 	}
 
 	if tblStuff.def.pkKind == fakeKind {
