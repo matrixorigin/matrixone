@@ -22,8 +22,8 @@ INSERT INTO t1 (id, embedding)
 SELECT concat('r_', result), '[0.1,0.1,0.1,0.1]'
 FROM generate_series(1, 100) g;
 
-SELECT mo_ctl('dn', 'flush', 'vec_null_panic_db.t1');
-SELECT mo_ctl('dn', 'checkpoint', '');
+SELECT mo_ctl('dn', 'flush', 'vec_null_panic_db.t1') as f1;
+SELECT mo_ctl('dn', 'checkpoint', '') as f2;
 
 -- 3) Locate the hidden ivfflat entries table.
 set @tbl_id = (

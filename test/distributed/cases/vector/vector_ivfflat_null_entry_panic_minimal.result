@@ -9,12 +9,28 @@ KEY idx_emb USING ivfflat (embedding) lists = 2 op_type 'vector_l2_ops'
 INSERT INTO t1 (id, embedding)
 SELECT concat('r_', result), '[0.1,0.1,0.1,0.1]'
 FROM generate_series(1, 100) g;
-SELECT mo_ctl('dn', 'flush', 'vec_null_panic_db.t1');
-mo_ctl(dn, flush, vec_null_panic_db.t1)
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
-SELECT mo_ctl('dn', 'checkpoint', '');
-mo_ctl(dn, checkpoint, )
-{\n  "method": "Checkpoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+SELECT mo_ctl('dn', 'flush', 'vec_null_panic_db.t1') as f1;
+➤ f1[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+SELECT mo_ctl('dn', 'checkpoint', '') as f2;
+➤ f2[12,-1,0]  𝄀
+{
+  "method": "Checkpoint",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
 set @tbl_id = (
 SELECT rel_id FROM mo_catalog.mo_tables
 WHERE relname = 't1' AND reldatabase = 'vec_null_panic_db'
@@ -41,8 +57,8 @@ set @q_sql = concat(
 );
 prepare p_q from @q_sql;
 execute p_q;
-__mo_index_pri_col    d
-r_1    0.64000004529953
+➤ __mo_index_pri_col[12,-1,0]  ¦  d[8,54,0]  𝄀
+r_1  ¦  0.64000004529953
 deallocate prepare p_q;
 DROP TABLE IF EXISTS t1;
 DROP DATABASE vec_null_panic_db;
