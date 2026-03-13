@@ -314,6 +314,9 @@ func TestExecuteIteration1(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
+	// Disable sync protection validator for this test since we're not registering sync protection
+	taeHandler.GetDB().Runtime.SyncProtectionValidator = nil
+
 	// Register mock auto increment service
 	mockIncrService := NewMockAutoIncrementService(cnUUID)
 	incrservice.SetAutoIncrementServiceByID("", mockIncrService)
@@ -853,6 +856,9 @@ func TestExecuteIterationDatabaseLevel(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
+	// Disable sync protection validator for this test since we're not registering sync protection
+	taeHandler.GetDB().Runtime.SyncProtectionValidator = nil
+
 	// Register mock auto increment service
 	mockIncrService := NewMockAutoIncrementService(cnUUID)
 	incrservice.SetAutoIncrementServiceByID("", mockIncrService)
@@ -1167,6 +1173,9 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 		taeHandler.Close(true)
 		rpcAgent.Close()
 	}()
+
+	// Disable sync protection validator for this test since we're not registering sync protection
+	taeHandler.GetDB().Runtime.SyncProtectionValidator = nil
 
 	// Register mock auto increment service
 	mockIncrService := NewMockAutoIncrementService(cnUUID)
@@ -1741,6 +1750,9 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
+	// Disable sync protection validator for this test since we're not registering sync protection
+	taeHandler.GetDB().Runtime.SyncProtectionValidator = nil
+
 	// Register mock auto increment service
 	mockIncrService := NewMockAutoIncrementService(cnUUID)
 	incrservice.SetAutoIncrementServiceByID("", mockIncrService)
@@ -2070,6 +2082,9 @@ func TestExecuteIterationWithCommitFailedInjection(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
+	// Disable sync protection validator for this test since we're not registering sync protection
+	taeHandler.GetDB().Runtime.SyncProtectionValidator = nil
+
 	// Register mock auto increment service
 	mockIncrService := NewMockAutoIncrementService(cnUUID)
 	incrservice.SetAutoIncrementServiceByID("", mockIncrService)
@@ -2309,6 +2324,9 @@ func TestCCPRGC(t *testing.T) {
 		taeHandler.Close(true)
 		rpcAgent.Close()
 	}()
+
+	// Disable sync protection validator for this test since we're not registering sync protection
+	taeHandler.GetDB().Runtime.SyncProtectionValidator = nil
 
 	// Register mock auto increment service
 	mockIncrService := NewMockAutoIncrementService(cnUUID)
@@ -2591,6 +2609,9 @@ func TestCCPRCreateDelete(t *testing.T) {
 		taeHandler.Close(true)
 		rpcAgent.Close()
 	}()
+
+	// Disable sync protection validator for this test since we're not registering sync protection
+	taeHandler.GetDB().Runtime.SyncProtectionValidator = nil
 
 	// Register mock auto increment service
 	mockIncrService := NewMockAutoIncrementService(cnUUID)
@@ -2982,6 +3003,9 @@ func TestCCPRAlterTable(t *testing.T) {
 		taeHandler.Close(true)
 		rpcAgent.Close()
 	}()
+
+	// Disable sync protection validator for this test since we're not registering sync protection
+	taeHandler.GetDB().Runtime.SyncProtectionValidator = nil
 
 	// Register mock auto increment service
 	mockIncrService := NewMockAutoIncrementService(cnUUID)
@@ -3421,6 +3445,9 @@ func TestCCPRErrorHandling1(t *testing.T) {
 		taeHandler.Close(true)
 		rpcAgent.Close()
 	}()
+
+	// Disable sync protection validator for this test since we're not registering sync protection
+	taeHandler.GetDB().Runtime.SyncProtectionValidator = nil
 
 	// Register mock auto increment service
 	mockIncrService := NewMockAutoIncrementService(cnUUID)
@@ -3927,6 +3954,9 @@ func TestCCPRDDLAccountLevel(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
+	// Disable sync protection validator for this test since we're not registering sync protection
+	taeHandler.GetDB().Runtime.SyncProtectionValidator = nil
+
 	// Register mock auto increment service
 	mockIncrService := NewMockAutoIncrementService(cnUUID)
 	incrservice.SetAutoIncrementServiceByID("", mockIncrService)
@@ -4273,6 +4303,9 @@ func TestCCPRExecutorWithGC(t *testing.T) {
 		taeHandler.Close(true)
 		rpcAgent.Close()
 	}()
+
+	// Disable sync protection validator for this test since we're not registering sync protection
+	taeHandler.GetDB().Runtime.SyncProtectionValidator = nil
 
 	// Register mock auto increment service
 	mockIncrService := NewMockAutoIncrementService(cnUUID)
@@ -5060,6 +5093,9 @@ func TestExecuteIterationWithStaleRead(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
+	// Disable sync protection validator for this test since we're not registering sync protection
+	taeHandler.GetDB().Runtime.SyncProtectionValidator = nil
+
 	// Register mock auto increment service
 	mockIncrService := NewMockAutoIncrementService(cnUUID)
 	incrservice.SetAutoIncrementServiceByID("", mockIncrService)
@@ -5492,6 +5528,8 @@ func TestCCPRSyncProtectionRetry(t *testing.T) {
 		taeHandler.Close(true)
 		rpcAgent.Close()
 	}()
+	// Disable sync protection validator for tests that don't register sync protection
+	taeHandler.GetDB().Runtime.SyncProtectionValidator = nil
 
 	// Register mock auto increment service
 	mockIncrService := NewMockAutoIncrementService(cnUUID)

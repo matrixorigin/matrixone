@@ -468,6 +468,8 @@ func runApplyObjects(
 		taeHandler.Close(true)
 		rpcAgent.Close()
 	}()
+	// Disable sync protection validator for tests that don't register sync protection
+	taeHandler.GetDB().Runtime.SyncProtectionValidator = nil
 
 	exportDir := dir
 	// Verify objectmap.json file exists and is readable
@@ -519,8 +521,8 @@ func runApplyObjects(
 	currentTS := types.TimestampToTS(disttaeEngine.Now())
 	// Use mock localExecutor that returns empty results for appendable object queries
 	localExecutor := &mockLocalExecutor{}
-	// Mock TTL checker that always returns false (TTL not expired)
-	mockTTLChecker := func() bool { return false }
+	// Mock TTL checker that always returns true (TTL check passes)
+	mockTTLChecker := func() bool { return true }
 	err = publication.ApplyObjects(
 		ctxWithTimeout,
 		taskID,
