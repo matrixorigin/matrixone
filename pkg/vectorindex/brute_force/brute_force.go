@@ -136,6 +136,27 @@ func NewUsearchBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	return idx, nil
 }
 
+func NewUsearchBruteForceIndexFlattened[T types.RealNumbers](dataset []T,
+	count uint,
+	dimension uint,
+	m metric.MetricType,
+	elemsz uint) (cache.VectorIndexSearchIf, error) {
+	var err error
+
+	idx := &UsearchBruteForceIndex[T]{}
+	idx.Metric = metric.MetricTypeToUsearchMetric[m]
+	idx.Quantization, err = GetUsearchQuantizationFromType(T(0))
+	if err != nil {
+		return nil, err
+	}
+	idx.Dimension = dimension
+	idx.Count = count
+	idx.ElementSize = elemsz
+	idx.Dataset = &dataset
+
+	return idx, nil
+}
+
 func (idx *UsearchBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return nil
 }

@@ -36,5 +36,14 @@ func NewAdhocBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	m metric.MetricType,
 	elemsz uint) (cache.VectorIndexSearchIf, error) {
 
-	return NewCpuBruteForceIndex[T](dataset, dimension, m, elemsz)
+	return NewUsearchBruteForceIndex[T](dataset, dimension, m, elemsz)
+}
+
+func NewAdhocBruteForceIndexFlattened[T types.RealNumbers](dataset []T,
+	count uint,
+	dimension uint,
+	m metric.MetricType,
+	elemsz uint) (cache.VectorIndexSearchIf, error) {
+
+	return NewUsearchBruteForceIndexFlattened[T](dataset, count, dimension, m, elemsz)
 }

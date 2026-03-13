@@ -43,6 +43,13 @@ func NewAdhocBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	m metric.MetricType,
 	elemsz uint) (cache.VectorIndexSearchIf, error) {
 
+	// Threshold for switching between CPU and GPU for adhoc search.
+	// For small datasets, CPU (usearch) is much faster due to lower overhead.
+	const cpuThreshold = 5000
+	if len(dataset) < cpuThreshold {
+		return NewUsearchBruteForceIndex[T](dataset, dimension, m, elemsz)
+	}
+
 	switch dset := any(dataset).(type) {
 	case [][]float32:
 		return NewGpuAdhocBruteForceIndex[float32](dset, dimension, m, elemsz)
@@ -54,7 +61,38 @@ func NewAdhocBruteForceIndex[T types.RealNumbers](dataset [][]T,
 		}
 		return NewGpuAdhocBruteForceIndex[cuvs.Float16](f16dset, dimension, m, elemsz)
 	default:
-		return NewCpuBruteForceIndex[T](dataset, dimension, m, elemsz)
+		return NewUsearchBruteForceIndex[T](dataset, dimension, m, elemsz)
+	}
+}
+
+func NewAdhocBruteForceIndexFlattened[T types.RealNumbers](dataset []T,
+	count uint,
+	dimension uint,
+	m metric.MetricType,
+	elemsz uint) (cache.VectorIndexSearchIf, error) {
+
+	const cpuThreshold = 5000
+	if count < cpuThreshold {
+		return NewUsearchBruteForceIndexFlattened[T](dataset, count, dimension, m, elemsz)
+	}
+
+	switch dset := any(dataset).(type) {
+	case []float32:
+		return &GpuAdhocBruteForceIndex[float32]{
+			dataset:   dset,
+			dimension: dimension,
+			count:     count,
+			metric:    m,
+		}, nil
+	case []cuvs.Float16:
+		return &GpuAdhocBruteForceIndex[cuvs.Float16]{
+			dataset:   dset,
+			dimension: dimension,
+			count:     count,
+			metric:    m,
+		}, nil
+	default:
+		return NewUsearchBruteForceIndexFlattened[T](dataset, count, dimension, m, elemsz)
 	}
 }
 

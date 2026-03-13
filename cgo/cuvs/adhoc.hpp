@@ -58,36 +58,53 @@ void adhoc_brute_force_search(const raft::resources& res,
                               float* distances) {
     auto stream = raft::resource::get_cuda_stream(res);
 
-    // 1. Prepare Dataset on Device
-    auto dataset_device = raft::make_device_matrix<T, int64_t>(res, n_rows, dim);
-    RAFT_CUDA_TRY(cudaMemcpy(dataset_device.data_handle(), dataset, n_rows * dim * sizeof(T), cudaMemcpyHostToDevice));
+    // 1. Calculate total buffer sizes
+    size_t dataset_bytes = n_rows * dim * sizeof(T);
+    size_t queries_bytes = n_queries * dim * sizeof(T);
+    size_t neighbors_bytes = n_queries * limit * sizeof(int64_t);
+    size_t distances_bytes = n_queries * limit * sizeof(float);
 
-    // 2. Prepare Queries on Device
-    auto queries_device = raft::make_device_matrix<T, int64_t>(res, n_queries, dim);
-    RAFT_CUDA_TRY(cudaMemcpy(queries_device.data_handle(), queries, n_queries * dim * sizeof(T), cudaMemcpyHostToDevice));
+    // Use a single allocation for all temporary buffers to reduce overhead
+    void* d_ptr = nullptr;
+    size_t total_bytes = dataset_bytes + queries_bytes + neighbors_bytes + distances_bytes;
+    RAFT_CUDA_TRY(cudaMallocAsync(&d_ptr, total_bytes, stream));
 
-    // 3. Prepare Results on Device
-    auto neighbors_device = raft::make_device_matrix<int64_t, int64_t>(res, n_queries, limit);
-    auto distances_device = raft::make_device_matrix<float, int64_t>(res, n_queries, limit);
+    char* d_dataset = static_cast<char*>(d_ptr);
+    char* d_queries = d_dataset + dataset_bytes;
+    char* d_neighbors = d_queries + queries_bytes;
+    char* d_distances = d_neighbors + neighbors_bytes;
+
+    // 2. Async copies to Device
+    RAFT_CUDA_TRY(cudaMemcpyAsync(d_dataset, dataset, dataset_bytes, cudaMemcpyHostToDevice, stream));
+    RAFT_CUDA_TRY(cudaMemcpyAsync(d_queries, queries, queries_bytes, cudaMemcpyHostToDevice, stream));
+
+    // 3. Prepare Views (zero allocation)
+    auto dataset_view = raft::make_device_matrix_view<const T, int64_t>(reinterpret_cast<const T*>(d_dataset), n_rows, dim);
+    auto queries_view = raft::make_device_matrix_view<const T, int64_t>(reinterpret_cast<const T*>(d_queries), n_queries, dim);
+    auto neighbors_view = raft::make_device_matrix_view<int64_t, int64_t>(reinterpret_cast<int64_t*>(d_neighbors), n_queries, limit);
+    auto distances_view = raft::make_device_matrix_view<float, int64_t>(reinterpret_cast<float*>(d_distances), n_queries, limit);
 
     // 4. Build temporary index (view-based, very fast)
     cuvs::neighbors::brute_force::index_params index_params;
     index_params.metric = metric;
-    auto index = cuvs::neighbors::brute_force::build(res, index_params, raft::make_const_mdspan(dataset_device.view()));
+    auto index = cuvs::neighbors::brute_force::build(res, index_params, raft::make_const_mdspan(dataset_view));
 
     // 5. Execute Search
     cuvs::neighbors::brute_force::search_params search_params;
     cuvs::neighbors::brute_force::search(res, search_params, index, 
-                                         raft::make_const_mdspan(queries_device.view()), 
-                                         neighbors_device.view(), 
-                                         distances_device.view());
+                                         raft::make_const_mdspan(queries_view), 
+                                         neighbors_view, 
+                                         distances_view);
 
-    // 6. Copy results back to host
-    RAFT_CUDA_TRY(cudaMemcpy(neighbors, neighbors_device.data_handle(), n_queries * limit * sizeof(int64_t), cudaMemcpyDeviceToHost));
-    RAFT_CUDA_TRY(cudaMemcpy(distances, distances_device.data_handle(), n_queries * limit * sizeof(float), cudaMemcpyDeviceToHost));
+    // 6. Async copy results back to host
+    RAFT_CUDA_TRY(cudaMemcpyAsync(neighbors, d_neighbors, neighbors_bytes, cudaMemcpyDeviceToHost, stream));
+    RAFT_CUDA_TRY(cudaMemcpyAsync(distances, d_distances, distances_bytes, cudaMemcpyDeviceToHost, stream));
 
-    // 7. Synchronize to ensure host data is ready
+    // 7. Synchronize
     raft::resource::sync_stream(res);
+
+    // 8. Async free
+    RAFT_CUDA_TRY(cudaFreeAsync(d_ptr, stream));
 
     // Handle invalid neighbor indices (consistent with existing brute_force.hpp)
     for (size_t i = 0; i < n_queries * limit; ++i) {

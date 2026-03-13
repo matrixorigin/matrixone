@@ -404,13 +404,18 @@ func HandleOrderByLimitOnIVFFlatIndex(
 
 	switch orderByLimit.Typ {
 	case types.T_array_float32:
-		dataset := make([][]float32, len(selectRows))
-		for i, row := range selectRows {
-			dataset[i] = types.BytesToArray[float32](vecCol.GetBytesAt(int(row)))
+		var dim uint
+		if len(selectRows) > 0 {
+			firstVec := types.BytesToArray[float32](vecCol.GetBytesAt(int(selectRows[0])))
+			dim = uint(len(firstVec))
 		}
 
-		dim := uint(len(dataset[0]))
-		idx, err := brute_force.NewAdhocBruteForceIndex[float32](dataset, dim, metric.MetricType(orderByLimit.MetricType), 4)
+		dataset := make([]float32, len(selectRows)*int(dim))
+		for i, row := range selectRows {
+			copy(dataset[i*int(dim):(i+1)*int(dim)], types.BytesToArray[float32](vecCol.GetBytesAt(int(row))))
+		}
+
+		idx, err := brute_force.NewAdhocBruteForceIndexFlattened[float32](dataset, uint(len(selectRows)), dim, metric.MetricType(orderByLimit.MetricType), 4)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -471,15 +476,28 @@ func HandleOrderByLimitOnIVFFlatIndex(
 		}
 
 	case types.T_array_float64:
-		dataset := make([][]float64, len(selectRows))
-		for i, row := range selectRows {
-			dataset[i] = types.BytesToArray[float64](vecCol.GetBytesAt(int(row)))
+		var dim uint
+		if len(selectRows) > 0 {
+			firstVec := types.BytesToArray[float64](vecCol.GetBytesAt(int(selectRows[0])))
+			dim = uint(len(firstVec))
 		}
 
-		dim := uint(len(dataset[0]))
-		idx, err := brute_force.NewAdhocBruteForceIndex[float64](dataset, dim, metric.MetricType(orderByLimit.MetricType), 8)
+		dataset := make([]float64, len(selectRows)*int(dim))
+		for i, row := range selectRows {
+			copy(dataset[i*int(dim):(i+1)*int(dim)], types.BytesToArray[float64](vecCol.GetBytesAt(int(row))))
+		}
+
+		idx, err := brute_force.NewAdhocBruteForceIndexFlattened[float64](dataset, uint(len(selectRows)), dim, metric.MetricType(orderByLimit.MetricType), 8)
 		if err != nil {
-			return nil, nil, err
+			// Fallback to non-flattened if not supported
+			dataset2 := make([][]float64, len(selectRows))
+			for i, row := range selectRows {
+				dataset2[i] = types.BytesToArray[float64](vecCol.GetBytesAt(int(row)))
+			}
+			idx, err = brute_force.NewAdhocBruteForceIndex[float64](dataset2, dim, metric.MetricType(orderByLimit.MetricType), 8)
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 		defer idx.Destroy()
 
