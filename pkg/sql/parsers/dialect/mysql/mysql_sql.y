@@ -365,7 +365,7 @@ import (
 %token <str> EXTENSION
 %token <str> RETENTION PERIOD
 %token <str> CLONE BRANCH LOG REVERT REBASE DIFF
-%token <str> CONFLICT CONFLICT_FAIL CONFLICT_SKIP CONFLICT_ACCEPT OUTPUT
+%token <str> CONFLICT CONFLICT_FAIL CONFLICT_SKIP CONFLICT_ACCEPT OUTPUT SUMMARY
 
 // Sequence
 %token <str> INCREMENT CYCLE MINVALUE
@@ -8276,6 +8276,12 @@ diff_output_opt:
            Count: true,
         }
     }
+    | OUTPUT SUMMARY
+    {
+    	$$ = &tree.DiffOutputOpt {
+           Summary: true,
+        }
+    }
 
 conflict_opt:
      %prec EMPTY
@@ -13251,6 +13257,7 @@ non_reserved_keyword:
 |   OPEN
 |   OPTION
 |   OUTPUT
+|   SUMMARY
 |   PACK_KEYS
 |   PARTIAL
 |   PARTITIONS
