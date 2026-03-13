@@ -70,6 +70,8 @@ func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
 	}
 
 	ctr := &hashJoin.ctr
+	ctr.setSpillThreshold(hashJoin.SpillThreshold)
+
 	if hashJoin.NonEqCond != nil && len(ctr.joinBats) == 0 {
 		ctr.joinBats = make([]*batch.Batch, 2)
 	}
@@ -125,7 +127,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			if ctr.leftBat == nil {
-				input, err = vm.ChildrenCall(hashJoin.GetChildren(0), proc, analyzer)
+				input, err = hashJoin.getInputBatch(proc, analyzer)
 				if err != nil {
 					return result, err
 				}
@@ -230,6 +232,16 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 			if result.Batch == nil {
 				ctr.state = End
+
+				// For spilled join, clean up current bucket and move to next
+				if len(ctr.spilledBuildBuckets) > 0 {
+					ctr.rightRowsMatched = nil
+					ctr.cleanHashMap()
+
+					if ctr.nextBucketIdx < len(ctr.spilledBuildBuckets) {
+						ctr.state = Probe
+					}
+				}
 				continue
 			}
 
@@ -255,7 +267,61 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
+
+		// Handle spilled build side
+		if ctr.mp.IsSpilled() {
+			ctr.spilledBuildBuckets, ctr.spilledBuildRowCnts = ctr.mp.GetSpillBuckets()
+			ctr.nextBucketIdx = 0
+
+			// Create spill files for probe side
+			spilledBuckets, spillFiles, err := createProbeSpillFiles(proc)
+			if err != nil {
+				return err
+			}
+			ctr.spilledProbeBuckets = spilledBuckets
+			spillBuffers := make([]*batch.Batch, spillNumBuckets)
+
+			defer func() {
+				for _, f := range spillFiles {
+					if f != nil {
+						f.Close()
+					}
+				}
+				for _, buf := range spillBuffers {
+					if buf != nil {
+						buf.Clean(proc.Mp())
+					}
+				}
+			}()
+
+			// Spill each probe batch as it arrives
+			for {
+				input, err := vm.ChildrenCall(hashJoin.GetChildren(0), proc, analyzer)
+				if err != nil {
+					return err
+				}
+				if input.Batch == nil {
+					break
+				}
+				if !input.Batch.IsEmpty() {
+					if err := ctr.appendProbeBatchToSpillFiles(proc, input.Batch, spillFiles, spillBuffers, analyzer); err != nil {
+						return err
+					}
+				}
+			}
+
+			// Flush remaining buffered data
+			for i, buf := range spillBuffers {
+				if _, err := ctr.flushBucketBuffer(proc, buf, spillFiles[i], analyzer); err != nil {
+					return err
+				}
+			}
+
+			ctr.mp = nil
+			return err
+		}
 	}
+
 	ctr.rightBats = ctr.mp.GetBatches()
 	ctr.rightRowCnt = ctr.mp.GetRowCount()
 
@@ -266,7 +332,17 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 		}
 	}
 
-	return nil
+	return
+}
+
+func (hashJoin *HashJoin) getInputBatch(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
+	// For unspilled join, simply call children
+	if len(hashJoin.ctr.spilledBuildBuckets) == 0 {
+		return vm.ChildrenCall(hashJoin.GetChildren(0), proc, analyzer)
+	}
+
+	// For spilled join, load bucket and return probe batches
+	return hashJoin.getSpilledInputBatch(proc)
 }
 
 func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *vm.CallResult) error {

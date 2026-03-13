@@ -1203,7 +1203,8 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *Ex
 		common.ConvertBytesToHumanReadable(a.AnalyzeInfo.MemoryMax))
 
 	if a.AnalyzeInfo.SpillSize > 0 {
-		fmt.Fprintf(buf, " SpillSize=%s (min=%s, max=%s)",
+		fmt.Fprintf(buf, " SpillRows=%d SpillSize=%s (min=%s, max=%s)",
+			a.AnalyzeInfo.SpillRows,
 			common.ConvertBytesToHumanReadable(a.AnalyzeInfo.SpillSize),
 			common.ConvertBytesToHumanReadable(a.AnalyzeInfo.SpillMin),
 			common.ConvertBytesToHumanReadable(a.AnalyzeInfo.SpillMax))
