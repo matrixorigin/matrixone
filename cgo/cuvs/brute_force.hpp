@@ -333,6 +333,14 @@ public:
         current_offset_ += chunk_count;
     }
 
+    uint32_t cap() const {
+        return count;
+    }
+
+    uint32_t len() const {
+        return static_cast<uint32_t>(current_offset_);
+    }
+
     void destroy() {
         if (worker) worker->stop();
     }

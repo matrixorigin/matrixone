@@ -261,6 +261,22 @@ func (gb *GpuBruteForce[T]) SearchFloat(queries []float32, num_queries uint64, q
 	return neighbors, distances, nil
 }
 
+// Cap returns the capacity of the index buffer
+func (gb *GpuBruteForce[T]) Cap() uint32 {
+	if gb.cIndex == nil {
+		return 0
+	}
+	return uint32(C.gpu_brute_force_cap(gb.cIndex))
+}
+
+// Len returns current number of vectors in index
+func (gb *GpuBruteForce[T]) Len() uint32 {
+	if gb.cIndex == nil {
+		return 0
+	}
+	return uint32(C.gpu_brute_force_len(gb.cIndex))
+}
+
 // Destroy frees the C++ GpuBruteForce instance
 func (gb *GpuBruteForce[T]) Destroy() error {
 	if gb.cIndex == nil {

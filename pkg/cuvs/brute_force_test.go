@@ -72,6 +72,13 @@ func TestGpuBruteForceChunked(t *testing.T) {
 		t.Fatalf("Start failed: %v", err)
 	}
 
+	if index.Cap() != uint32(totalCount) {
+		t.Errorf("Expected capacity %d, got %d", totalCount, index.Cap())
+	}
+	if index.Len() != 0 {
+		t.Errorf("Expected length 0, got %d", index.Len())
+	}
+
 	// Add data in chunks (from float32, triggers on-the-fly conversion to half)
 	chunkSize := uint64(50)
 	for i := uint64(0); i < totalCount; i += chunkSize {
@@ -83,6 +90,11 @@ func TestGpuBruteForceChunked(t *testing.T) {
 		err = index.AddChunkFloat(chunk, chunkSize)
 		if err != nil {
 			t.Fatalf("AddChunkFloat failed at offset %d: %v", i, err)
+		}
+
+		expectedLen := uint32(i + chunkSize)
+		if index.Len() != expectedLen {
+			t.Errorf("Expected length %d, got %d", expectedLen, index.Len())
 		}
 	}
 

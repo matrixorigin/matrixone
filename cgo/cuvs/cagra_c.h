@@ -90,6 +90,12 @@ void gpu_cagra_get_distances(gpu_cagra_result_c result_c, uint64_t total_element
 // Free result object
 void gpu_cagra_free_result(gpu_cagra_result_c result_c);
 
+// Returns the capacity of the index buffer
+uint32_t gpu_cagra_cap(gpu_cagra_c index_c);
+
+// Returns the current number of vectors in the index
+uint32_t gpu_cagra_len(gpu_cagra_c index_c);
+
 // Extend function
 void gpu_cagra_extend(gpu_cagra_c index_c, const void* additional_data, uint64_t num_vectors, void* errmsg);
 

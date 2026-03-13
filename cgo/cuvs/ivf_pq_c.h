@@ -95,6 +95,12 @@ void gpu_ivf_pq_get_distances(gpu_ivf_pq_result_c result_c, uint64_t total_eleme
 // Free result object
 void gpu_ivf_pq_free_result(gpu_ivf_pq_result_c result_c);
 
+// Returns the capacity of the index buffer
+uint32_t gpu_ivf_pq_cap(gpu_ivf_pq_c index_c);
+
+// Returns the current number of vectors in the index
+uint32_t gpu_ivf_pq_len(gpu_ivf_pq_c index_c);
+
 // Gets the trained centroids
 void gpu_ivf_pq_get_centers(gpu_ivf_pq_c index_c, float* centers, void* errmsg);
 

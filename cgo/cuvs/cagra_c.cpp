@@ -325,6 +325,30 @@ void gpu_cagra_free_result(gpu_cagra_result_c result_c) {
     delete static_cast<matrixone::cagra_search_result_t*>(result_c);
 }
 
+uint32_t gpu_cagra_cap(gpu_cagra_c index_c) {
+    if (!index_c) return 0;
+    auto* any = static_cast<gpu_cagra_any_t*>(index_c);
+    switch (any->qtype) {
+        case Quantization_F32: return static_cast<matrixone::gpu_cagra_t<float>*>(any->ptr)->cap();
+        case Quantization_F16: return static_cast<matrixone::gpu_cagra_t<half>*>(any->ptr)->cap();
+        case Quantization_INT8: return static_cast<matrixone::gpu_cagra_t<int8_t>*>(any->ptr)->cap();
+        case Quantization_UINT8: return static_cast<matrixone::gpu_cagra_t<uint8_t>*>(any->ptr)->cap();
+        default: return 0;
+    }
+}
+
+uint32_t gpu_cagra_len(gpu_cagra_c index_c) {
+    if (!index_c) return 0;
+    auto* any = static_cast<gpu_cagra_any_t*>(index_c);
+    switch (any->qtype) {
+        case Quantization_F32: return static_cast<matrixone::gpu_cagra_t<float>*>(any->ptr)->len();
+        case Quantization_F16: return static_cast<matrixone::gpu_cagra_t<half>*>(any->ptr)->len();
+        case Quantization_INT8: return static_cast<matrixone::gpu_cagra_t<int8_t>*>(any->ptr)->len();
+        case Quantization_UINT8: return static_cast<matrixone::gpu_cagra_t<uint8_t>*>(any->ptr)->len();
+        default: return 0;
+    }
+}
+
 void gpu_cagra_extend(gpu_cagra_c index_c, const void* additional_data, uint64_t num_vectors, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {

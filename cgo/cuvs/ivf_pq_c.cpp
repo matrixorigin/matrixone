@@ -357,6 +357,30 @@ void gpu_ivf_pq_free_result(gpu_ivf_pq_result_c result_c) {
     delete static_cast<matrixone::ivf_pq_search_result_t*>(result_c);
 }
 
+uint32_t gpu_ivf_pq_cap(gpu_ivf_pq_c index_c) {
+    if (!index_c) return 0;
+    auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
+    switch (any->qtype) {
+        case Quantization_F32: return static_cast<matrixone::gpu_ivf_pq_t<float>*>(any->ptr)->cap();
+        case Quantization_F16: return static_cast<matrixone::gpu_ivf_pq_t<half>*>(any->ptr)->cap();
+        case Quantization_INT8: return static_cast<matrixone::gpu_ivf_pq_t<int8_t>*>(any->ptr)->cap();
+        case Quantization_UINT8: return static_cast<matrixone::gpu_ivf_pq_t<uint8_t>*>(any->ptr)->cap();
+        default: return 0;
+    }
+}
+
+uint32_t gpu_ivf_pq_len(gpu_ivf_pq_c index_c) {
+    if (!index_c) return 0;
+    auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
+    switch (any->qtype) {
+        case Quantization_F32: return static_cast<matrixone::gpu_ivf_pq_t<float>*>(any->ptr)->len();
+        case Quantization_F16: return static_cast<matrixone::gpu_ivf_pq_t<half>*>(any->ptr)->len();
+        case Quantization_INT8: return static_cast<matrixone::gpu_ivf_pq_t<int8_t>*>(any->ptr)->len();
+        case Quantization_UINT8: return static_cast<matrixone::gpu_ivf_pq_t<uint8_t>*>(any->ptr)->len();
+        default: return 0;
+    }
+}
+
 void gpu_ivf_pq_get_centers(gpu_ivf_pq_c index_c, float* centers, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {

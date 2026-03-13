@@ -486,6 +486,22 @@ func (gi *GpuIvfPq[T]) SearchFloat(queries []float32, numQueries uint64, dimensi
 	}, nil
 }
 
+// Cap returns the capacity of the index buffer
+func (gi *GpuIvfPq[T]) Cap() uint32 {
+	if gi.cIvfPq == nil {
+		return 0
+	}
+	return uint32(C.gpu_ivf_pq_cap(gi.cIvfPq))
+}
+
+// Len returns current number of vectors in index
+func (gi *GpuIvfPq[T]) Len() uint32 {
+	if gi.cIvfPq == nil {
+		return 0
+	}
+	return uint32(C.gpu_ivf_pq_len(gi.cIvfPq))
+}
+
 // GetCenters retrieves the trained centroids.
 func (gi *GpuIvfPq[T]) GetCenters() ([]float32, error) {
 	if gi.cIvfPq == nil {

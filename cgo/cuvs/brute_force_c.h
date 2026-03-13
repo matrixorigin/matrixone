@@ -59,6 +59,12 @@ void gpu_brute_force_get_results(gpu_brute_force_search_result_c result_c, uint6
 // Frees the memory for a gpu_brute_force_search_result_c object
 void gpu_brute_force_free_search_result(gpu_brute_force_search_result_c result_c);
 
+// Returns the capacity of the index buffer
+uint32_t gpu_brute_force_cap(gpu_brute_force_c index_c);
+
+// Returns the current number of vectors in the index
+uint32_t gpu_brute_force_len(gpu_brute_force_c index_c);
+
 // Destroys the gpu_brute_force_t object and frees associated resources
 void gpu_brute_force_destroy(gpu_brute_force_c index_c, void* errmsg);
 

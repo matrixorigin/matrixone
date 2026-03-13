@@ -428,6 +428,22 @@ func (gc *GpuCagra[T]) SearchFloat(queries []float32, numQueries uint64, dimensi
 	}, nil
 }
 
+// Cap returns the capacity of the index buffer
+func (gc *GpuCagra[T]) Cap() uint32 {
+	if gc.cCagra == nil {
+		return 0
+	}
+	return uint32(C.gpu_cagra_cap(gc.cCagra))
+}
+
+// Len returns current number of vectors in index
+func (gc *GpuCagra[T]) Len() uint32 {
+	if gc.cCagra == nil {
+		return 0
+	}
+	return uint32(C.gpu_cagra_len(gc.cCagra))
+}
+
 // Extend adds more vectors to the index (single-GPU only)
 func (gc *GpuCagra[T]) Extend(additionalData []T, numVectors uint64) error {
 	if gc.cCagra == nil {
