@@ -140,6 +140,9 @@ func statementCanBeExecutedInUncommittedTransaction(
 	case *tree.CreateTable, *tree.CreateIndex, *tree.CreateView, *tree.AlterView, *tree.AlterTable:
 		// CTAS is allowed in explicit transactions now because its internal
 		// INSERT ... SELECT is executed in the same txn as CREATE TABLE.
+		//if createTblStmt, ok := stmt.(*tree.CreateTable); ok && createTblStmt.IsAsSelect {
+		//	return false, nil
+		//}
 		return true, nil
 	case *tree.CreateDatabase, *tree.DropDatabase:
 		return true, nil

@@ -331,6 +331,7 @@ type DiffOutputOpt struct {
 	As      TableName
 	Limit   *int64
 	Count   bool
+	Summary bool
 	DirPath string
 }
 

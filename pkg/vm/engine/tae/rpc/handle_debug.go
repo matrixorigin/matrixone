@@ -102,6 +102,12 @@ func (h *Handle) HandleSnapshotRead(
 	if maxCheckpoint != nil {
 		maxEnd = maxCheckpoint.GetEnd()
 	}
+	if maxEnd.IsEmpty() {
+		maxGlobal := h.db.BGCheckpointRunner.MaxGlobalCheckpoint()
+		if maxGlobal != nil {
+			maxEnd = maxGlobal.GetEnd()
+		}
+	}
 	snapshot := types.TimestampToTS(*req.Snapshot)
 	if snapshot.GT(&maxEnd) {
 		resp.Succeed = false
