@@ -690,9 +690,13 @@ func NewSessionAllocator(pu *config.ParameterUnit) *SessionAllocator {
 	// base
 	allocator := baseSessionAllocator()
 	// size bounded
+	var guestMmuLimit int64 = 1099511627776 // default: 1 << 40
+	if pu != nil && pu.SV != nil {
+		guestMmuLimit = pu.SV.GuestMmuLimitation
+	}
 	allocator = malloc.NewSizeBoundedAllocator(
 		allocator,
-		uint64(pu.SV.GuestMmuLimitation),
+		uint64(guestMmuLimit),
 		nil,
 	)
 	ret := &SessionAllocator{
