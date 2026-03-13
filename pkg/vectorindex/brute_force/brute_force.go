@@ -162,39 +162,47 @@ func (idx *UsearchBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 }
 
 func (idx *UsearchBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
-	queries, ok := _queries.([][]T)
-	if !ok {
-		return nil, nil, moerr.NewInternalErrorNoCtx("queries type invalid")
-	}
-
 	var flatten []T
 	var queryDeallocator malloc.Deallocator
+	var nQueries int
 
-	reqSize := len(queries) * int(idx.Dimension)
-	allocator := malloc.NewCAllocator()
-	var _t T
-	switch any(_t).(type) {
-	case float32:
-		slice, dealloc, err2 := allocator.Allocate(uint64(reqSize)*4, malloc.NoClear)
-		if err2 != nil {
-			return nil, nil, err2
+	switch queries := _queries.(type) {
+	case []T:
+		flatten = queries
+		nQueries = len(queries) / int(idx.Dimension)
+	case [][]T:
+		if len(queries) == 0 {
+			return nil, nil, nil
 		}
-		queryDeallocator = dealloc
-		f32Slice := util.UnsafeSliceCastToLength[float32](slice, reqSize)
-		flatten = any(f32Slice).([]T)
-	case float64:
-		slice, dealloc, err2 := allocator.Allocate(uint64(reqSize)*8, malloc.NoClear)
-		if err2 != nil {
-			return nil, nil, err2
+		nQueries = len(queries)
+		reqSize := nQueries * int(idx.Dimension)
+		allocator := malloc.NewCAllocator()
+		var _t T
+		switch any(_t).(type) {
+		case float32:
+			slice, dealloc, err2 := allocator.Allocate(uint64(reqSize)*4, malloc.NoClear)
+			if err2 != nil {
+				return nil, nil, err2
+			}
+			queryDeallocator = dealloc
+			f32Slice := util.UnsafeSliceCastToLength[float32](slice, reqSize)
+			flatten = any(f32Slice).([]T)
+		case float64:
+			slice, dealloc, err2 := allocator.Allocate(uint64(reqSize)*8, malloc.NoClear)
+			if err2 != nil {
+				return nil, nil, err2
+			}
+			queryDeallocator = dealloc
+			f64Slice := util.UnsafeSliceCastToLength[float64](slice, reqSize)
+			flatten = any(f64Slice).([]T)
 		}
-		queryDeallocator = dealloc
-		f64Slice := util.UnsafeSliceCastToLength[float64](slice, reqSize)
-		flatten = any(f64Slice).([]T)
-	}
 
-	for i := 0; i < len(queries); i++ {
-		offset := i * int(idx.Dimension)
-		copy(flatten[offset:], queries[i])
+		for i := 0; i < nQueries; i++ {
+			offset := i * int(idx.Dimension)
+			copy(flatten[offset:], queries[i])
+		}
+	default:
+		return nil, nil, moerr.NewInternalErrorNoCtx("queries type invalid")
 	}
 
 	if queryDeallocator != nil {
@@ -212,7 +220,7 @@ func (idx *UsearchBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries 
 		util.UnsafePointer(&((*idx.Dataset)[0])),
 		util.UnsafePointer(&(flatten[0])),
 		uint(idx.Count),
-		uint(len(queries)),
+		uint(nQueries),
 		idx.Dimension*idx.ElementSize,
 		idx.Dimension*idx.ElementSize,
 		idx.Dimension,

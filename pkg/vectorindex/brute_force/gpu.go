@@ -126,27 +126,36 @@ func (idx *GpuAdhocBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 }
 
 func (idx *GpuAdhocBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig) (retkeys any, retdistances []float64, err error) {
-	queriesvec, ok := _queries.([][]T)
-	if !ok {
+	var flattenedQueries []T
+	var nQueries uint64
+
+	switch queries := _queries.(type) {
+	case []T:
+		flattenedQueries = queries
+		nQueries = uint64(len(queries) / int(idx.dimension))
+	case [][]T:
+		if len(queries) == 0 {
+			return nil, nil, nil
+		}
+		dim := int(idx.dimension)
+		reqSize := len(queries) * dim
+		flattenedQueries = make([]T, reqSize)
+		for i, v := range queries {
+			copy(flattenedQueries[i*dim:(i+1)*dim], v)
+		}
+		nQueries = uint64(len(queries))
+	default:
 		return nil, nil, moerr.NewInternalErrorNoCtx("queries type invalid")
 	}
 
-	if len(queriesvec) == 0 {
+	if nQueries == 0 {
 		return nil, nil, nil
-	}
-
-	dim := int(idx.dimension)
-	reqSize := len(queriesvec) * dim
-	flattenedQueries := make([]T, reqSize)
-
-	for i, v := range queriesvec {
-		copy(flattenedQueries[i*dim:(i+1)*dim], v)
 	}
 
 	deviceID := 0
 	neighbors, distances, err := cuvs.AdhocBruteForceSearch[T](
 		idx.dataset, uint64(idx.count), uint32(idx.dimension),
-		flattenedQueries, uint64(len(queriesvec)), uint32(rt.Limit),
+		flattenedQueries, nQueries, uint32(rt.Limit),
 		resolveCuvsDistance(idx.metric), deviceID,
 	)
 	if err != nil {

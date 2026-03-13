@@ -220,7 +220,7 @@ func TestHandleOrderByLimitOnSelectRows(t *testing.T) {
 		DistHeap:   make(objectio.Float64Heap, 0, 2),
 	}
 
-	resSels, resDists, err := handleOrderByLimitOnSelectRows(ctx, selectRows, orderByLimit, -1, cacheVectors)
+	resSels, resDists, err := handleOrderByLimitOnSelectRows(ctx, selectRows, orderByLimit, -1, cacheVectors, mp)
 	require.NoError(t, err)
 	require.Equal(t, 2, len(resSels))
 	require.Equal(t, 2, len(resDists))
@@ -383,7 +383,7 @@ func TestHandleOrderByLimitAllNullVectors(t *testing.T) {
 		MetricType: metric.Metric_L2Distance,
 	}
 
-	sels, dists, err := HandleOrderByLimitOnIVFFlatIndex(ctx, nil, vecCol, orderByLimit)
+	sels, dists, err := HandleOrderByLimitOnIVFFlatIndex(ctx, nil, vecCol, orderByLimit, mp)
 	require.NoError(t, err)
 	require.Empty(t, sels, "sels should be empty when all vectors are NULL")
 	require.Empty(t, dists, "dists should be empty when all vectors are NULL")
