@@ -405,5 +405,3 @@ func (m *SyncProtectionManager) ValidateSyncProtection(jobID string, prepareTS i
 
 	return nil
 }
-
-

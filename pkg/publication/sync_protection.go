@@ -66,7 +66,7 @@ type SyncProtectionResponse struct {
 // MoCtlResponse represents the outer response from mo_ctl commands
 // Format: {"method":"...", "result":[{"ReturnStr":"..."}]}
 type MoCtlResponse struct {
-	Method string              `json:"method"`
+	Method string             `json:"method"`
 	Result []MoCtlResultEntry `json:"result"`
 }
 

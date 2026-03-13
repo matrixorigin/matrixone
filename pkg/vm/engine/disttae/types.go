@@ -423,10 +423,10 @@ type Transaction struct {
 
 	adjustCount int
 
-	haveDDL    atomic.Bool
-	isCloneTxn bool
-	isCCPRTxn  bool
-	ccprTaskID string
+	haveDDL             atomic.Bool
+	isCloneTxn          bool
+	isCCPRTxn           bool
+	ccprTaskID          string
 	syncProtectionJobID string
 
 	writeWorkspaceThreshold      uint64

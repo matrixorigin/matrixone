@@ -63,7 +63,6 @@ func TestInternalCmdFieldList(t *testing.T) {
 	})
 }
 
-
 func TestInternalCmdGetSnapshotTs(t *testing.T) {
 	ic := &InternalCmdGetSnapshotTs{}
 
@@ -278,7 +277,6 @@ func TestInternalCmdCheckSnapshotFlushed(t *testing.T) {
 		assert.Equal(t, tree.QueryTypeDQL, ic.GetQueryType())
 	})
 }
-
 
 func TestExecResultArrayHasData(t *testing.T) {
 	t.Run("nil array", func(t *testing.T) {
