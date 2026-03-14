@@ -442,8 +442,6 @@ func NewMOCollector(
 	return c
 }
 
-const maxPercentValue = 1000
-
 // calculateDefaultWorker
 // totalNum = int( #cpu * 0.1 + 0.5 )
 // default collectorCntP : generatorCntP : exporterCntP = 10 : 20 : 80.
@@ -482,17 +480,6 @@ func (c *MOCollector) calculateDefaultWorker(numCpu int) {
 	}
 	if c.exporterCnt > numCpu {
 		c.exporterCnt = numCpu
-	}
-
-	// last check: disable calculation
-	if c.collectorCnt >= maxPercentValue {
-		c.collectorCnt = numCpu
-	}
-	if c.generatorCntP >= maxPercentValue {
-		c.generatorCnt = numCpu
-	}
-	if c.exporterCnt >= maxPercentValue {
-		c.generatorCnt = numCpu
 	}
 }
 
