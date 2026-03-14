@@ -17,12 +17,14 @@ package elkans
 import (
 	"context"
 	"math"
-	"math/rand"
+	"math/rand/v2"
 	"runtime"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/concurrent"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
@@ -50,8 +52,12 @@ type ElkanClusterer[T types.RealNumbers] struct {
 
 	// for each of the k centroids, we keep track of the following data
 	centroids                   [][]T
+	nextCentroids               [][]T
 	halfInterCentroidDistMatrix [][]T
 	minHalfInterCentroidDist    []T
+
+	membersCount      []int64
+	centroidShiftDist []T
 
 	// thresholds
 	maxIterations  int     // e in paper
@@ -63,8 +69,10 @@ type ElkanClusterer[T types.RealNumbers] struct {
 
 	distFn    metric.DistanceFunction[T]
 	initType  kmeans.InitType
-	rand      *rand.Rand
 	normalize bool
+
+	// allocator tracking
+	deallocators []malloc.Deallocator
 
 	// number of worker threads
 	nworker int
@@ -96,30 +104,89 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 		return nil, err
 	}
 
-	assignments := make([]int, len(vectors))
-	var metas = make([]vectorMeta[T], len(vectors))
+	allocator := malloc.NewCAllocator()
+	var deallocators []malloc.Deallocator
+
+	allocSlice := func(size uint64) []byte {
+		slice, deallocator, err := allocator.Allocate(size, malloc.NoClear)
+		if err != nil {
+			panic(err) // OOM
+		}
+		deallocators = append(deallocators, deallocator)
+		return slice
+	}
+
+	// allocate assignments
+	assignmentsBytes := allocSlice(uint64(len(vectors) * int(util.UnsafeSizeOf[int]())))
+	assignments := util.UnsafeSliceCastToLength[int](assignmentsBytes, len(vectors))
+	for i := range assignments {
+		assignments[i] = 0
+	}
+
+	// allocate metas
+	metasBytes := allocSlice(uint64(len(vectors) * int(util.UnsafeSizeOf[vectorMeta[T]]())))
+	metas := util.UnsafeSliceCastToLength[vectorMeta[T]](metasBytes, len(vectors))
 	for i := range metas {
+		lowerBytes := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[T]()))
+		lower := util.UnsafeSliceCastToLength[T](lowerBytes, clusterCnt)
+		for j := range lower {
+			lower[j] = 0
+		}
 		metas[i] = vectorMeta[T]{
-			lower:     make([]T, clusterCnt),
+			lower:     lower,
 			upper:     0,
 			recompute: true,
 		}
 	}
 
-	centroidDist := make([][]T, clusterCnt)
+	// allocate centroidDist
+	centroidDistBytes := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[[]T]()))
+	centroidDist := util.UnsafeSliceCastToLength[[]T](centroidDistBytes, clusterCnt)
 	for i := range centroidDist {
-		centroidDist[i] = make([]T, clusterCnt)
+		distBytes := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[T]()))
+		centroidDist[i] = util.UnsafeSliceCastToLength[T](distBytes, clusterCnt)
 	}
-	minCentroidDist := make([]T, clusterCnt)
+
+	// allocate minCentroidDist
+	minCentroidDistBytes := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[T]()))
+	minCentroidDist := util.UnsafeSliceCastToLength[T](minCentroidDistBytes, clusterCnt)
 
 	distanceFunction, normalize, err := metric.ResolveKmeansDistanceFn[T](distanceType, spherical)
 	if err != nil {
+		// Before returning, we must clean up already allocated memory.
+		for _, d := range deallocators {
+			d.Deallocate()
+		}
 		return nil, err
 	}
 
 	if nworker <= 0 {
 		nworker = runtime.NumCPU()
 	}
+
+	// allocate centroids
+	centroidsBytes := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[[]T]()))
+	centroids := util.UnsafeSliceCastToLength[[]T](centroidsBytes, clusterCnt)
+	for i := range centroids {
+		cBytes := allocSlice(uint64(len(vectors[0])) * uint64(util.UnsafeSizeOf[T]()))
+		centroids[i] = util.UnsafeSliceCastToLength[T](cBytes, len(vectors[0]))
+	}
+
+	// allocate nextCentroids
+	nextCentroidsBytes := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[[]T]()))
+	nextCentroids := util.UnsafeSliceCastToLength[[]T](nextCentroidsBytes, clusterCnt)
+	for i := range nextCentroids {
+		ncBytes := allocSlice(uint64(len(vectors[0])) * uint64(util.UnsafeSizeOf[T]()))
+		nextCentroids[i] = util.UnsafeSliceCastToLength[T](ncBytes, len(vectors[0]))
+	}
+
+	// allocate membersCount
+	membersCountBytes := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[int64]()))
+	membersCount := util.UnsafeSliceCastToLength[int64](membersCountBytes, clusterCnt)
+
+	// allocate centroidShiftDist
+	centroidShiftDistBytes := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[T]()))
+	centroidShiftDist := util.UnsafeSliceCastToLength[T](centroidShiftDistBytes, clusterCnt)
 
 	return &ElkanClusterer[T]{
 		maxIterations:  maxIterations,
@@ -129,22 +196,30 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 		assignments: assignments,
 		vectorMetas: metas,
 
-		//centroids will be initialized by InitCentroids()
+		centroids:                   centroids,
+		nextCentroids:               nextCentroids,
 		halfInterCentroidDistMatrix: centroidDist,
 		minHalfInterCentroidDist:    minCentroidDist,
+
+		membersCount:      membersCount,
+		centroidShiftDist: centroidShiftDist,
 
 		distFn:     distanceFunction,
 		initType:   initType,
 		clusterCnt: clusterCnt,
 		vectorCnt:  len(vectors),
 
-		rand:      rand.New(rand.NewSource(kmeans.DefaultRandSeed)),
-		normalize: normalize,
-		nworker:   nworker,
+		normalize:    normalize,
+		deallocators: deallocators,
+		nworker:      nworker,
 	}, nil
 }
 
 func (km *ElkanClusterer[T]) Close() error {
+	for _, d := range km.deallocators {
+		d.Deallocate()
+	}
+	km.deallocators = nil
 	return nil
 }
 
@@ -174,13 +249,21 @@ func (km *ElkanClusterer[T]) InitCentroids(ctx context.Context) error {
 	}
 
 	var ok bool
-	km.centroids, ok = anycentroids.([][]T)
+	initCentroids, ok := anycentroids.([][]T)
 	if !ok {
 		return moerr.NewInternalErrorNoCtx("InitCentroids not return [][]float32|float64")
 	}
 
 	// Add a dimension check for the initialized centroids
-	return checkCentroidDimension(km.centroids, len(km.vectorList[0]))
+	if err := checkCentroidDimension(initCentroids, len(km.vectorList[0])); err != nil {
+		return err
+	}
+
+	for i := range initCentroids {
+		copy(km.centroids[i], initCentroids[i])
+	}
+
+	return nil
 }
 
 // Cluster returns the final centroids and the error if any.
@@ -207,6 +290,8 @@ func (km *ElkanClusterer[T]) Cluster(ctx context.Context) (any, error) {
 
 func (km *ElkanClusterer[T]) elkansCluster(ctx context.Context) ([][]T, error) {
 
+	rnd := rand.New(rand.NewPCG(uint64(kmeans.DefaultRandSeed), 0))
+
 	for iter := 0; ; iter++ {
 		km.computeCentroidDistances(ctx) // step 1
 
@@ -215,11 +300,11 @@ func (km *ElkanClusterer[T]) elkansCluster(ctx context.Context) ([][]T, error) {
 			return nil, err
 		}
 
-		newCentroids := km.recalculateCentroids(ctx) // step 4
+		newCentroids := km.recalculateCentroids(ctx, rnd, km.nextCentroids, km.membersCount) // step 4
 
-		km.updateBounds(ctx, newCentroids) // step 5 and 6
+		km.updateBounds(ctx, newCentroids, km.centroidShiftDist) // step 5 and 6
 
-		km.centroids = newCentroids // step 7
+		km.centroids, km.nextCentroids = newCentroids, km.centroids // step 7
 
 		logutil.Debugf("kmeans iter=%d, changes=%d\n", iter, changes)
 		if iter != 0 && km.isConverged(iter, changes) {
@@ -480,12 +565,14 @@ func (km *ElkanClusterer[T]) assignData(ctx context.Context) (int, error) {
 }
 
 // recalculateCentroids calculates the new mean centroids based on the new assignments.
-func (km *ElkanClusterer[T]) recalculateCentroids(ctx context.Context) [][]T {
-	membersCount := make([]int64, km.clusterCnt)
-
-	newCentroids := make([][]T, km.clusterCnt)
+func (km *ElkanClusterer[T]) recalculateCentroids(ctx context.Context, rnd *rand.Rand, newCentroids [][]T, membersCount []int64) [][]T {
+	for i := range membersCount {
+		membersCount[i] = 0
+	}
 	for c := range newCentroids {
-		newCentroids[c] = make([]T, len(km.vectorList[0]))
+		for i := range newCentroids[c] {
+			newCentroids[c][i] = 0
+		}
 	}
 
 	// sum of all the members of the cluster
@@ -501,14 +588,12 @@ func (km *ElkanClusterer[T]) recalculateCentroids(ctx context.Context) [][]T {
 	for c := range newCentroids {
 		if membersCount[c] == 0 {
 			// pick a vector randomly from existing vectors as the new centroid
-			//newCentroids[c] = km.vectorList[km.rand.Intn(km.vectorCnt)]
+			//newCentroids[c] = km.vectorList[rnd.IntN(km.vectorCnt)]
 
 			//// if the cluster is empty, reinitialize it to a random vector, since you can't find the mean of an empty set
-			randVector := make([]T, len(km.vectorList[0]))
-			for l := range randVector {
-				randVector[l] = T(km.rand.Float32())
+			for l := range newCentroids[c] {
+				newCentroids[c][l] = T(rnd.Float32())
 			}
-			newCentroids[c] = randVector
 
 			// normalize the random vector
 			if km.normalize {
@@ -516,8 +601,13 @@ func (km *ElkanClusterer[T]) recalculateCentroids(ctx context.Context) [][]T {
 			}
 		} else {
 			// find the mean of the cluster members
-			// note: we don't need to normalize here, since the vectors are already normalized
 			metric.ScaleInPlace[T](newCentroids[c], 1.0/T(membersCount[c]))
+
+			// For spherical k-means, the mean of normalized vectors must be re-normalized
+			// to project the centroid back onto the unit hypersphere.
+			if km.normalize {
+				metric.NormalizeL2(newCentroids[c], newCentroids[c])
+			}
 		}
 
 	}
@@ -526,11 +616,10 @@ func (km *ElkanClusterer[T]) recalculateCentroids(ctx context.Context) [][]T {
 }
 
 // updateBounds updates the lower and upper bounds for each vector.
-func (km *ElkanClusterer[T]) updateBounds(ctx context.Context, newCentroid [][]T) (err error) {
+func (km *ElkanClusterer[T]) updateBounds(ctx context.Context, newCentroid [][]T, centroidShiftDist []T) (err error) {
 
 	// compute the centroid shift distance matrix once.
 	// d(c', m(c')) in the paper
-	centroidShiftDist := make([]T, km.clusterCnt)
 	for c := 0; c < km.clusterCnt; c++ {
 		centroidShiftDist[c], err = km.distFn(km.centroids[c], newCentroid[c])
 		if err != nil {

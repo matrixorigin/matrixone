@@ -17,90 +17,125 @@
 package brute_force
 
 import (
-	//	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
-	cuvs "github.com/rapidsai/cuvs/go"
-	"github.com/rapidsai/cuvs/go/brute_force"
 )
 
-type GpuBruteForceIndex[T cuvs.TensorNumberType] struct {
-	Resource    *cuvs.Resource // shared resource for read-only index
-	Dataset     *cuvs.Tensor[T]
-	Index       *brute_force.BruteForceIndex
-	Metric      cuvs.Distance
-	Dimension   uint
-	Count       uint
-	ElementSize uint
+type GpuBruteForceIndex[T cuvs.VectorType] struct {
+	index     *cuvs.GpuBruteForce[T]
+	dimension uint
+	count     uint
 }
 
 var _ cache.VectorIndexSearchIf = &GpuBruteForceIndex[float32]{}
 
-// cuvs library has bug.  comment out the GPU version until cuvs fix the bug
+func resolveCuvsDistance(m metric.MetricType) cuvs.DistanceType {
+	switch m {
+	case metric.Metric_L2sqDistance:
+		return cuvs.L2Expanded
+	case metric.Metric_L2Distance:
+		return cuvs.L2Expanded
+	case metric.Metric_InnerProduct:
+		return cuvs.InnerProduct
+	case metric.Metric_CosineDistance:
+		return cuvs.CosineSimilarity
+	case metric.Metric_L1Distance:
+		return cuvs.L1
+	default:
+		return cuvs.L2Expanded
+	}
+}
+
 func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	dimension uint,
 	m metric.MetricType,
-	elemsz uint) (cache.VectorIndexSearchIf, error) {
+	elemsz uint,
+	nthread uint) (cache.VectorIndexSearchIf, error) {
 
 	switch dset := any(dataset).(type) {
 	case [][]float64:
 		return NewCpuBruteForceIndex[T](dataset, dimension, m, elemsz)
 	case [][]float32:
-		return NewCpuBruteForceIndex[float32](dset, dimension, m, elemsz)
-		//return NewGpuBruteForceIndex[float32](dset, dimension, m, elemsz)
+		return NewGpuBruteForceIndex[float32](dset, dimension, m, elemsz, nthread)
+	case [][]uint16:
+		// Convert [][]uint16 to [][]cuvs.Float16 to pass to NewGpuBruteForceIndex
+		f16dset := make([][]cuvs.Float16, len(dset))
+		for i, v := range dset {
+			f16dset[i] = util.UnsafeSliceCast[cuvs.Float16](v)
+		}
+		return NewGpuBruteForceIndex[cuvs.Float16](f16dset, dimension, m, elemsz, nthread)
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("type not supported for BruteForceIndex")
 	}
-
 }
 
-func NewGpuBruteForceIndex[T cuvs.TensorNumberType](dataset [][]T,
+func NewGpuBruteForceIndex[T cuvs.VectorType](dataset [][]T,
 	dimension uint,
 	m metric.MetricType,
-	elemsz uint) (cache.VectorIndexSearchIf, error) {
+	elemsz uint,
+	nthread uint) (cache.VectorIndexSearchIf, error) {
 
-	idx := &GpuBruteForceIndex[T]{}
-	resource, _ := cuvs.NewResource(nil)
-	idx.Resource = &resource
-	tensor, err := cuvs.NewTensor(dataset)
+	if len(dataset) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("empty dataset")
+	}
+
+	dim := int(dimension)
+	reqSize := len(dataset) * dim
+	var flattened []T
+
+	var _t T
+	switch any(_t).(type) {
+	case float32:
+		allocator := malloc.NewCAllocator()
+		slice, deallocator, err := allocator.Allocate(uint64(reqSize*4), malloc.NoClear)
+		if err != nil {
+			return nil, err
+		}
+		defer deallocator.Deallocate()
+		flattened = any(util.UnsafeSliceCast[float32](slice)).([]T)
+	case cuvs.Float16:
+		allocator := malloc.NewCAllocator()
+		slice, deallocator, err := allocator.Allocate(uint64(reqSize*2), malloc.NoClear)
+		if err != nil {
+			return nil, err
+		}
+		defer deallocator.Deallocate()
+		flattened = any(util.UnsafeSliceCast[cuvs.Float16](slice)).([]T)
+	default:
+		ds := make([]T, reqSize)
+		flattened = ds
+	}
+
+	for i, v := range dataset {
+		copy(flattened[i*dim:(i+1)*dim], v)
+	}
+
+	deviceID := 0 // Default to device 0
+	km, err := cuvs.NewGpuBruteForce[T](flattened, uint64(len(dataset)), uint32(dimension), resolveCuvsDistance(m), uint32(nthread), deviceID)
 	if err != nil {
 		return nil, err
 	}
-	idx.Dataset = &tensor
-	idx.Metric = metric.MetricTypeToCuvsMetric[m]
-	idx.Dimension = dimension
-	idx.Count = uint(len(dataset))
 
-	idx.ElementSize = elemsz
-	return idx, nil
-
+	return &GpuBruteForceIndex[T]{
+		index:     km,
+		dimension: dimension,
+		count:     uint(len(dataset)),
+	}, nil
 }
 
 func (idx *GpuBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
-	if _, err = idx.Dataset.ToDevice(idx.Resource); err != nil {
-		return err
+	if idx.index == nil {
+		return moerr.NewInternalErrorNoCtx("GpuBruteForce not initialized")
 	}
-
-	idx.Index, err = brute_force.CreateIndex()
-	if err != nil {
-		return
-	}
-
-	err = brute_force.BuildIndex[T](*idx.Resource, idx.Dataset, idx.Metric, 0, idx.Index)
-	if err != nil {
-		return
-	}
-
-	if err = idx.Resource.Sync(); err != nil {
-		return
-	}
-
-	return
+	return idx.index.Load()
 }
 
 func (idx *GpuBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig) (retkeys any, retdistances []float64, err error) {
@@ -109,77 +144,61 @@ func (idx *GpuBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any,
 		return nil, nil, moerr.NewInternalErrorNoCtx("queries type invalid")
 	}
 
-	// local resource for concurrent search
-	resource, err := cuvs.NewResource(nil)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer resource.Close()
-
-	queries, err := cuvs.NewTensor(queriesvec)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer queries.Close()
-
-	neighbors, err := cuvs.NewTensorOnDevice[int64](&resource, []int64{int64(len(queriesvec)), int64(rt.Limit)})
-	if err != nil {
-		return nil, nil, err
-	}
-	defer neighbors.Close()
-
-	distances, err := cuvs.NewTensorOnDevice[float32](&resource, []int64{int64(len(queriesvec)), int64(rt.Limit)})
-	if err != nil {
-		return nil, nil, err
-	}
-	defer distances.Close()
-
-	if _, err = queries.ToDevice(&resource); err != nil {
-		return nil, nil, err
+	if len(queriesvec) == 0 {
+		return nil, nil, nil
 	}
 
-	err = brute_force.SearchIndex(resource, *idx.Index, &queries, &neighbors, &distances)
-	if err != nil {
-		return nil, nil, err
-	}
+	dim := int(idx.dimension)
+	reqSize := len(queriesvec) * dim
 
-	if _, err = neighbors.ToHost(&resource); err != nil {
-		return nil, nil, err
-	}
+	var flattenedQueries []T
+	var queryDeallocator malloc.Deallocator
 
-	if _, err = distances.ToHost(&resource); err != nil {
-		return nil, nil, err
-	}
-
-	if err = resource.Sync(); err != nil {
-		return nil, nil, err
-	}
-
-	neighborsSlice, err := neighbors.Slice()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	distancesSlice, err := distances.Slice()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	//fmt.Printf("flattened %v\n", flatten)
-	retdistances = make([]float64, len(distancesSlice)*int(rt.Limit))
-	for i := range distancesSlice {
-		for j, dist := range distancesSlice[i] {
-			retdistances[i*int(rt.Limit)+j] = float64(dist)
+	var _t T
+	switch any(_t).(type) {
+	case float32:
+		allocator := malloc.NewCAllocator()
+		slice, dealloc, err2 := allocator.Allocate(uint64(reqSize)*4, malloc.NoClear)
+		if err2 != nil {
+			return nil, nil, err2
 		}
+		queryDeallocator = dealloc
+		f32Slice := util.UnsafeSliceCastToLength[float32](slice, reqSize)
+		flattenedQueries = any(f32Slice).([]T)
+	case cuvs.Float16:
+		allocator := malloc.NewCAllocator()
+		slice, dealloc, err2 := allocator.Allocate(uint64(reqSize)*2, malloc.NoClear)
+		if err2 != nil {
+			return nil, nil, err2
+		}
+		queryDeallocator = dealloc
+		f16Slice := util.UnsafeSliceCastToLength[cuvs.Float16](slice, reqSize)
+		flattenedQueries = any(f16Slice).([]T)
+	default:
+		// Not pooling other types, although T is likely only float32 for CUVS
+		ds := make([]T, reqSize)
+		flattenedQueries = ds
 	}
 
-	keys := make([]int64, len(neighborsSlice)*int(rt.Limit))
-	for i := range neighborsSlice {
-		for j, key := range neighborsSlice[i] {
-			keys[i*int(rt.Limit)+j] = int64(key)
-		}
+	for i, v := range queriesvec {
+		copy(flattenedQueries[i*dim:(i+1)*dim], v)
 	}
-	retkeys = keys
+
+	if queryDeallocator != nil {
+		defer queryDeallocator.Deallocate()
+	}
+
+	neighbors, distances, err := idx.index.Search(flattenedQueries, uint64(len(queriesvec)), uint32(idx.dimension), uint32(rt.Limit))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	retdistances = make([]float64, len(distances))
+	for i, d := range distances {
+		retdistances[i] = float64(d)
+	}
+
+	retkeys = neighbors
 	return
 }
 
@@ -188,13 +207,7 @@ func (idx *GpuBruteForceIndex[T]) UpdateConfig(sif cache.VectorIndexSearchIf) er
 }
 
 func (idx *GpuBruteForceIndex[T]) Destroy() {
-	if idx.Dataset != nil {
-		idx.Dataset.Close()
-	}
-	if idx.Resource != nil {
-		idx.Resource.Close()
-	}
-	if idx.Index != nil {
-		idx.Index.Close()
+	if idx.index != nil {
+		idx.index.Destroy()
 	}
 }
