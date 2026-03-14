@@ -3536,6 +3536,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		return resp, moerr.GetMysqlClientQuit()
 	case COM_QUERY:
 		var query = commonutil.UnsafeBytesToString(req.GetData().([]byte))
+<<<<<<< HEAD
 		// Sidecar offload: intercept /*+ SIDECAR */ or /*+ SIDECAR GPU */ hint
 		// before normal processing. If sidecar is not configured, silently
 		// fall through to normal MO execution.

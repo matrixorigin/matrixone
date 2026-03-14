@@ -3636,6 +3636,7 @@ alter_pitr_stmt:
        $$ = tree.NewAlterPitr(ifExists, name, pitrValue, pitrUnit)
     }
 
+<<<<<<< HEAD
 alter_sql_task_stmt:
     ALTER TASK ident SUSPEND
     {
@@ -4424,6 +4425,7 @@ show_stmt:
 |   show_logservice_stores_stmt
 |   show_logservice_settings_stmt
 |   show_rules_on_role_stmt
+<<<<<<< HEAD
 |   show_sql_tasks_stmt
 |   show_sql_task_runs_stmt
 
