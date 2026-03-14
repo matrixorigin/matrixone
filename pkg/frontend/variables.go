@@ -3631,6 +3631,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("enable_vector_auto_mode_by_default"),
 		Default:           int8(0),
 	},
+	"fulltext_bloom_filter_pushdown": {
+		Name:              "fulltext_bloom_filter_pushdown",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("fulltext_bloom_filter_pushdown"),
+		Default:           int8(0),
+	},
 	"probe_limit": {
 		Name:              "probe_limit",
 		Scope:             ScopeBoth,

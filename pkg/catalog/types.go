@@ -378,7 +378,10 @@ const (
 	SystemSI_IVFFLAT_TblCol_Entries_pk      = IndexTablePrimaryColName
 	SystemSI_IVFFLAT_TblCol_Entries_entry   = "__mo_index_centroid_fk_entry"
 
-	/************ 3. FULLTEXT Index **************/ /************ 3. FULLTEXT Index **************/
+	/************ 3. FULLTEXT Index **************/
+
+	// FULLTEXT Table Type
+	FullTextIndex_TblType = "fulltext"
 
 	FullTextIndex_TabCol_Word     = "word"
 	FullTextIndex_TabCol_Id       = "doc_id"

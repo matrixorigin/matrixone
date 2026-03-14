@@ -21,6 +21,7 @@ import (
 	"sync"
 
 	"github.com/bytedance/sonic"
+	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -60,6 +61,9 @@ type fulltextState struct {
 	minheap   vectorindex.SearchResultHeap
 	resbuf    []*vectorindex.SearchResultAnyKey
 	ranking   bool
+
+	// Serialized CBloomFilter bytes for reader-level doc_id filtering
+	fulltextBloomFilter []byte
 
 	// holding output batch
 	batch *batch.Batch
@@ -337,7 +341,13 @@ func runWordStats(
 		return
 	}
 
-	result, err = ft_runSql_streaming(ctx, sqlexec.NewSqlProcess(proc), sql, u.streamCh, u.errCh)
+	sqlProc := sqlexec.NewSqlProcess(proc)
+	// Attach CBloomFilter for reader-level doc_id filtering on fulltext index table.
+	if len(u.fulltextBloomFilter) > 0 {
+		sqlProc.FulltextBloomFilter = u.fulltextBloomFilter
+	}
+
+	result, err = ft_runSql_streaming(ctx, sqlProc, sql, u.streamCh, u.errCh)
 
 	return
 }
@@ -600,6 +610,17 @@ func fulltextIndexMatch(
 
 	opStats := tableFunction.OpAnalyzer.GetOpStats()
 
+	// Wait for BloomFilter runtime filter if configured (pre-filter pushdown)
+	if u.fulltextBloomFilter == nil && len(tableFunction.RuntimeFilterSpecs) > 0 {
+		bfResult, bfErr := waitFulltextBloomFilter(proc, tableFunction.RuntimeFilterSpecs)
+		if bfErr != nil {
+			return bfErr
+		}
+		if bfResult != nil {
+			u.fulltextBloomFilter = bfResult.bloomFilterBytes
+		}
+	}
+
 	if u.sacc == nil {
 		// parse the search string to []Pattern and create SearchAccum
 		s, err := fulltext.NewSearchAccum(srctbl, tblname, pattern, mode, "", scoreAlgo)
@@ -684,4 +705,48 @@ func fulltextIndexMatch(
 		os.Stderr.WriteString(u.mpool.String())
 	*/
 	return
+}
+
+const fulltextBfProbability = 0.001
+
+// fulltextBloomFilterResult holds the result from waiting for a BloomFilter runtime filter.
+type fulltextBloomFilterResult struct {
+	bloomFilterBytes []byte // serialized CBloomFilter for reader-level filtering
+}
+
+// waitFulltextBloomFilter waits for a BloomFilter runtime filter message,
+// deserializes the PK vector, and builds a CBloomFilter for reader-level doc_id filtering.
+func waitFulltextBloomFilter(proc *process.Process, specs []*plan.RuntimeFilterSpec) (*fulltextBloomFilterResult, error) {
+	if len(specs) == 0 {
+		return nil, nil
+	}
+	spec := specs[0]
+	if !spec.UseBloomFilter {
+		return nil, nil
+	}
+
+	sqlProc := sqlexec.NewSqlProcess(proc)
+	sqlProc.RuntimeFilterSpecs = specs
+
+	vecbytes, err := sqlexec.WaitBloomFilter(sqlProc)
+	if err != nil || len(vecbytes) == 0 {
+		return nil, err
+	}
+
+	keyvec := new(vector.Vector)
+	if err = keyvec.UnmarshalBinary(vecbytes); err != nil {
+		return nil, err
+	}
+	defer keyvec.Free(proc.Mp())
+
+	// Build CBloomFilter for reader-level doc_id filtering
+	bf := bloomfilter.NewCBloomFilterWithProbability(int64(keyvec.Length()), fulltextBfProbability)
+	bf.AddVector(keyvec)
+	bfBytes, marshalErr := bf.Marshal()
+	bf.Free()
+	if marshalErr != nil {
+		return nil, marshalErr
+	}
+
+	return &fulltextBloomFilterResult{bloomFilterBytes: bfBytes}, nil
 }
