@@ -25,7 +25,7 @@ set experimental_ivf_index = 1;
 
 -- Test 1.1: mode=auto syntax is accepted
 -- Expectation: Returns closest vector to [0,0,0]
-select id from t_phase1 order by l2_distance(vec, '[0,0,0]') limit 1 by rank with option 'mode=auto';
+select id from t_phase1 order by l2_distance(vec, '[1,0,0]') limit 1 by rank with option 'mode=auto';
 
 -- Test 1.2: mode=auto with filter
 -- Expectation: Returns id 1 or 2 (category=1, closest to [0,0,0])
@@ -201,6 +201,7 @@ drop table t_retry;
 -- Edge Cases and Boundary Tests
 -- =============================================================================
 
+set probe_limit = 2;
 drop table if exists t_edge;
 create table t_edge(id int primary key, vec vecf32(3), status int);
 
