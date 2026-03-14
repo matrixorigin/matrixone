@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -57,6 +58,10 @@ func (productl2 *Productl2) Prepare(proc *process.Process) error {
 		return moerr.NewInternalError(proc.Ctx, "ProductL2: vector optype not found")
 	}
 	productl2.ctr.metrictype = metrictype
+
+	if productl2.ctr.sqlproc == nil {
+		productl2.ctr.sqlproc = sqlexec.NewSqlProcess(proc)
+	}
 
 	return nil
 }
@@ -127,14 +132,7 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 
 }
 
-func NewNullVector[T types.RealNumbers](dim int32) []T {
-	// null vector with magnitude 1
-	nullvec := make([]T, dim)
-	nullvec[0] = 1
-	return nullvec
-}
-
-func getIndex[T types.RealNumbers](ap *Productl2, proc *process.Process, analyzer process.Analyzer) (cache.VectorIndexSearchIf, error) {
+func getIndex[T types.RealNumbers](ap *Productl2, proc *process.Process, analyzer process.Analyzer, centers [][]T, nullvec []T) (cache.VectorIndexSearchIf, error) {
 	ctr := &ap.ctr
 	buildCount := ctr.bat.RowCount()
 	centroidColPos := ap.OnExpr.GetF().GetArgs()[0].GetCol().GetColPos()
@@ -143,8 +141,13 @@ func getIndex[T types.RealNumbers](ap *Productl2, proc *process.Process, analyze
 
 	dim := centroidVec.GetType().Width
 	elemSize := uint(centroidVec.GetType().GetArrayElementSize())
-	centers := make([][]T, buildCount)
-	nullvec := NewNullVector[T](dim)
+
+	if len(nullvec) > 0 {
+		nullvec[0] = 1
+		for i := 1; i < len(nullvec); i++ {
+			nullvec[i] = 0
+		}
+	}
 
 	for i := 0; i < buildCount; i++ {
 		if centroidVec.IsNull(uint64(i)) {
@@ -156,12 +159,12 @@ func getIndex[T types.RealNumbers](ap *Productl2, proc *process.Process, analyze
 		centers[i] = c
 	}
 
-	algo, err := brute_force.NewBruteForceIndex[T](centers, uint(dim), ctr.metrictype, elemSize)
+	algo, err := brute_force.NewBruteForceIndex[T](centers, uint(dim), ctr.metrictype, elemSize, 1)
 	if err != nil {
 		return nil, err
 	}
 
-	err = algo.Load(sqlexec.NewSqlProcess(proc))
+	err = algo.Load(ctr.sqlproc)
 	if err != nil {
 		return nil, err
 	}
@@ -195,12 +198,16 @@ func (productl2 *Productl2) build(proc *process.Process, analyzer process.Analyz
 
 	switch centroidVec.GetType().Oid {
 	case types.T_array_float32:
-		ctr.brute_force, err = getIndex[float32](productl2, proc, analyzer)
+		ctr.centersF32 = get1D[[]float32](&pool2DF32, ctr.bat.RowCount())
+		ctr.nullvecF32 = get1D[float32](&pool1DF32, int(centroidVec.GetType().Width))
+		ctr.brute_force, err = getIndex[float32](productl2, proc, analyzer, *ctr.centersF32, *ctr.nullvecF32)
 		if err != nil {
 			return err
 		}
 	case types.T_array_float64:
-		ctr.brute_force, err = getIndex[float64](productl2, proc, analyzer)
+		ctr.centersF64 = get1D[[]float64](&pool2DF64, ctr.bat.RowCount())
+		ctr.nullvecF64 = get1D[float64](&pool1DF64, int(centroidVec.GetType().Width))
+		ctr.brute_force, err = getIndex[float64](productl2, proc, analyzer, *ctr.centersF64, *ctr.nullvecF64)
 		if err != nil {
 			return err
 		}
@@ -209,36 +216,59 @@ func (productl2 *Productl2) build(proc *process.Process, analyzer process.Analyz
 	return nil
 }
 
-//var (
-//	arrayF32Pool = sync.Pool{
-//		New: func() interface{} {
-//			s := make([]float32, 0)
-//			return &s
-//		},
-//	}
-//	arrayF64Pool = sync.Pool{
-//		New: func() interface{} {
-//			s := make([]float64, 0)
-//			return &s
-//		},
-//	}
-//)
+var (
+	pool1DF32 = sync.Pool{New: func() any { x := make([]float32, 0); return &x }}
+	pool1DF64 = sync.Pool{New: func() any { x := make([]float64, 0); return &x }}
+	pool2DF32 = sync.Pool{New: func() any { x := make([][]float32, 0); return &x }}
+	pool2DF64 = sync.Pool{New: func() any { x := make([][]float64, 0); return &x }}
+)
 
-func newMat[T types.RealNumbers](ctr *container, ap *Productl2) ([][]T, error) {
+func get1D[T any](pool *sync.Pool, n int) *[]T {
+	val := pool.Get()
+	if val == nil {
+		newSlice := make([]T, n)
+		return &newSlice
+	}
+	v, ok := val.(*[]T)
+	if !ok || v == nil {
+		newSlice := make([]T, n)
+		return &newSlice
+	}
+	if cap(*v) < n {
+		if n > 0 {
+			pool.Put(v)
+			newSlice := make([]T, n)
+			return &newSlice
+		}
+		*v = (*v)[:0]
+		return v
+	}
+	*v = (*v)[:n]
+	return v
+}
+
+func put1D[T any](pool *sync.Pool, v *[]T) {
+	var zero T
+	for i := range *v {
+		(*v)[i] = zero
+	}
+	*v = (*v)[:0]
+	pool.Put(v)
+}
+
+func newMat[T types.RealNumbers](ctr *container, ap *Productl2, probes [][]T, nullvec []T) ([][]T, error) {
 	probeCount := ctr.inBat.RowCount()
 	tblColPos := ap.OnExpr.GetF().GetArgs()[1].GetCol().GetColPos()
 	tblColVec := ctr.inBat.Vecs[tblColPos]
 
-	// dimension can only get from centroid column.  probe column input values can be null and dimension is 0.
-	centroidColPos := ap.OnExpr.GetF().GetArgs()[0].GetCol().GetColPos()
-	centroidVec := ctr.bat.Vecs[centroidColPos]
-	dim := centroidVec.GetType().Width
-	nullvec := NewNullVector[T](dim)
+	if len(nullvec) > 0 {
+		nullvec[0] = 1
+		for i := 1; i < len(nullvec); i++ {
+			nullvec[i] = 0
+		}
+	}
 
-	// embedding mat
-	probes := make([][]T, probeCount)
 	for j := 0; j < probeCount; j++ {
-
 		if tblColVec.IsNull(uint64(j)) {
 			probes[j] = nullvec
 			continue
@@ -266,12 +296,32 @@ func (ctr *container) release() {
 		ctr.brute_force.Destroy()
 		ctr.brute_force = nil
 	}
+	if ctr.centersF32 != nil {
+		put1D(&pool2DF32, ctr.centersF32)
+		ctr.centersF32 = nil
+	}
+	if ctr.centersF64 != nil {
+		put1D(&pool2DF64, ctr.centersF64)
+		ctr.centersF64 = nil
+	}
+	if ctr.nullvecF32 != nil {
+		put1D(&pool1DF32, ctr.nullvecF32)
+		ctr.nullvecF32 = nil
+	}
+	if ctr.nullvecF64 != nil {
+		put1D(&pool1DF64, ctr.nullvecF64)
+		ctr.nullvecF64 = nil
+	}
 }
 
 func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.Process, result *vm.CallResult) error {
 	probeCount := ctr.inBat.RowCount()
 	tblColPos := ap.OnExpr.GetF().GetArgs()[1].GetCol().GetColPos()
 	tblColVec := ctr.inBat.Vecs[tblColPos]
+
+	centroidColPos := ap.OnExpr.GetF().GetArgs()[0].GetCol().GetColPos()
+	centroidVec := ctr.bat.Vecs[centroidColPos]
+	dim := int(centroidVec.GetType().Width)
 
 	ncpu := runtime.NumCPU()
 	if probeCount < ncpu {
@@ -285,14 +335,37 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 		}
 	}
 
-	probes, err := newMat[T](ctr, ap)
+	var _t T
+	var probes [][]T
+	var nullvec []T
+
+	switch any(_t).(type) {
+	case float32:
+		p := get1D[[]float32](&pool2DF32, probeCount)
+		defer put1D(&pool2DF32, p)
+		probes = any(*p).([][]T)
+
+		n := get1D[float32](&pool1DF32, dim)
+		defer put1D(&pool1DF32, n)
+		nullvec = any(*n).([]T)
+	case float64:
+		p := get1D[[]float64](&pool2DF64, probeCount)
+		defer put1D(&pool2DF64, p)
+		probes = any(*p).([][]T)
+
+		n := get1D[float64](&pool1DF64, dim)
+		defer put1D(&pool1DF64, n)
+		nullvec = any(*n).([]T)
+	}
+
+	probes, err := newMat[T](ctr, ap, probes, nullvec)
 	if err != nil {
 		return err
 	}
 
 	rt := vectorindex.RuntimeConfig{Limit: 1, NThreads: uint(ncpu)}
 
-	anykeys, distances, err := ctr.brute_force.Search(sqlexec.NewSqlProcess(proc), probes, rt)
+	anykeys, distances, err := ctr.brute_force.Search(ctr.sqlproc, probes, rt)
 	if err != nil {
 		return err
 	}
