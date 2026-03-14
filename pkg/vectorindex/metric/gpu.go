@@ -17,15 +17,15 @@
 package metric
 
 import (
-	cuvs "github.com/rapidsai/cuvs/go"
+	"github.com/matrixorigin/matrixone/pkg/cuvs"
 )
 
 var (
-	MetricTypeToCuvsMetric = map[MetricType]cuvs.Distance{
-		Metric_L2sqDistance:   cuvs.DistanceSQEuclidean,
-		Metric_L2Distance:     cuvs.DistanceSQEuclidean,
-		Metric_InnerProduct:   cuvs.DistanceInnerProduct,
-		Metric_CosineDistance: cuvs.DistanceCosine,
-		Metric_L1Distance:     cuvs.DistanceL1,
+	MetricTypeToCuvsMetric = map[MetricType]cuvs.DistanceType{
+		Metric_L2sqDistance:   cuvs.L2Expanded,
+		Metric_L2Distance:     cuvs.L2Expanded,
+		Metric_InnerProduct:   cuvs.InnerProduct,
+		Metric_CosineDistance: cuvs.CosineExpanded,
+		Metric_L1Distance:     cuvs.L1,
 	}
 )
