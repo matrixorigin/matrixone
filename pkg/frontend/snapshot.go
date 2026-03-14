@@ -106,6 +106,7 @@ var (
 		"mo_user_grant":               0,
 		"mo_role_grant":               0,
 		"mo_role_privs":               0,
+		"mo_role_rule":                0,
 		"mo_user_defined_function":    0,
 		"mo_stored_procedure":         0,
 		"mo_mysql_compatibility_mode": 1,

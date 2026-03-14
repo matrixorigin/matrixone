@@ -326,6 +326,13 @@ var (
     	index(creator),
     	primary key(table_id)
 	)`, catalog.MO_BRANCH_METADATA)
+
+	MoCatalogMoRoleRuleDDL = fmt.Sprintf("create table %s.%s ("+
+		"role_id int signed,"+
+		"rule_name varchar(200),"+
+		"`rule` text,"+
+		"primary key(role_id, rule_name)"+
+		")", catalog.MO_CATALOG, catalog.MO_ROLE_RULE)
 )
 
 // `mo_catalog` database system tables
