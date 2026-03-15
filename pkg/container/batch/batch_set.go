@@ -258,10 +258,11 @@ func (bs *BatchSet) getOrCreateBatch(inBatch *Batch, reuseBuf *Batch, mpool *mpo
 		reuseBuf.CleanOnlyData()
 		return reuseBuf, nil
 	}
-	tmpBat := NewWithSize(len(inBatch.Vecs))
+	tmpBat := NewOffHeapWithSize(len(inBatch.Vecs))
 	for i := range tmpBat.Vecs {
-		tmpBat.Vecs[i] = vector.NewVec(*inBatch.Vecs[i].GetType())
+		tmpBat.Vecs[i] = vector.NewOffHeapVecWithType(*inBatch.Vecs[i].GetType())
 		if err := tmpBat.Vecs[i].PreExtend(bs.batchMaxRow, mpool); err != nil {
+			tmpBat.Clean(mpool)
 			return nil, err
 		}
 	}
