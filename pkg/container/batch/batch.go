@@ -307,6 +307,12 @@ func (bat *Batch) UnmarshalFromReader(r io.Reader, mp *mpool.MPool) (err error) 
 		if err := vecs[i].UnmarshalWithReader(limitedReader, mp); err != nil {
 			return err
 		}
+		// Ensure the vector consumed exactly the bytes allocated by its length prefix.
+		// Any leftover bytes indicate a serialization mismatch and would corrupt
+		// subsequent reads from the underlying reader.
+		if n, _ := io.Copy(io.Discard, limitedReader); n > 0 {
+			return moerr.NewInternalErrorNoCtxf("vector unmarshal did not consume all bytes: %d remaining", n)
+		}
 	}
 
 	l, err = types.ReadInt32AsInt(r)
