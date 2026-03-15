@@ -299,12 +299,19 @@ func (bat *Batch) UnmarshalFromReader(r io.Reader, mp *mpool.MPool) (err error) 
 	vecs := bat.Vecs
 
 	for i := 0; i < l; i++ {
-		_, bs, err := types.ReadSizeBytes(r)
+		vecL, err := types.ReadUint32(r)
 		if err != nil {
 			return err
 		}
-		if err := vecs[i].UnmarshalWithReader(bytes.NewReader(bs), mp); err != nil {
+		limitedReader := io.LimitReader(r, int64(vecL))
+		if err := vecs[i].UnmarshalWithReader(limitedReader, mp); err != nil {
 			return err
+		}
+		// Ensure the vector consumed exactly the bytes allocated by its length prefix.
+		// Any leftover bytes indicate a serialization mismatch and would corrupt
+		// subsequent reads from the underlying reader.
+		if n, _ := io.Copy(io.Discard, limitedReader); n > 0 {
+			return moerr.NewInternalErrorNoCtxf("vector unmarshal did not consume all bytes: %d remaining", n)
 		}
 	}
 
@@ -631,9 +638,9 @@ func (bat *Batch) UnionOne(bat2 *Batch, pos int64, m *mpool.MPool) error {
 	return nil
 }
 
-func (bat *Batch) PreExtend(m *mpool.MPool, rows int) error {
+func (bat *Batch) PreExtend(mp *mpool.MPool, rows int) error {
 	for i := range bat.Vecs {
-		if err := bat.Vecs[i].PreExtend(rows, m); err != nil {
+		if err := bat.Vecs[i].PreExtend(rows, mp); err != nil {
 			return err
 		}
 	}
@@ -643,9 +650,9 @@ func (bat *Batch) PreExtend(m *mpool.MPool, rows int) error {
 // AppendWithCopy is used to append data from batch `b` to another batch `bat`. The function
 // ensures that the batch structure is consistent and copies all vector data to the target batch.
 // WARING: this function will cause a memory allocation.
-func (bat *Batch) AppendWithCopy(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch, error) {
+func (bat *Batch) AppendWithCopy(ctx context.Context, mp *mpool.MPool, b *Batch) (*Batch, error) {
 	if bat == nil {
-		return b.Dup(mh)
+		return b.Dup(mp)
 	}
 	if len(bat.Vecs) != len(b.Vecs) {
 		return nil, moerr.NewInternalError(ctx, "unexpected error happens in batch append")
@@ -655,7 +662,7 @@ func (bat *Batch) AppendWithCopy(ctx context.Context, mh *mpool.MPool, b *Batch)
 	}
 
 	for i := range bat.Vecs {
-		if err := bat.Vecs[i].UnionBatch(b.Vecs[i], 0, b.Vecs[i].Length(), nil, mh); err != nil {
+		if err := bat.Vecs[i].UnionBatch(b.Vecs[i], 0, b.Vecs[i].Length(), nil, mp); err != nil {
 			return bat, err
 		}
 		bat.Vecs[i].SetSorted(false)
@@ -664,7 +671,7 @@ func (bat *Batch) AppendWithCopy(ctx context.Context, mh *mpool.MPool, b *Batch)
 	return bat, nil
 }
 
-func (bat *Batch) Append(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch, error) {
+func (bat *Batch) Append(ctx context.Context, mp *mpool.MPool, b *Batch) (*Batch, error) {
 	if bat == nil {
 		return b, nil
 	}
@@ -676,7 +683,7 @@ func (bat *Batch) Append(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch
 	}
 
 	for i := range bat.Vecs {
-		if err := bat.Vecs[i].UnionBatch(b.Vecs[i], 0, b.Vecs[i].Length(), nil, mh); err != nil {
+		if err := bat.Vecs[i].UnionBatch(b.Vecs[i], 0, b.Vecs[i].Length(), nil, mp); err != nil {
 			return bat, err
 		}
 		bat.Vecs[i].SetSorted(false)

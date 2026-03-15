@@ -17,11 +17,10 @@ package shuffle
 import (
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -30,7 +29,7 @@ type ShufflePool struct {
 	maxHolders   int32
 	holders      int32
 	finished     int32
-	batches      []*batch.CompactBatchs
+	batchSets    []*batch.BatchSet
 	lock         sync.Mutex
 	locks        []sync.Mutex
 	fullBatchIdx []int
@@ -40,9 +39,9 @@ func NewShufflePool(bucketNum int32, maxHolders int32) *ShufflePool {
 	sp := &ShufflePool{bucketNum: bucketNum, maxHolders: maxHolders}
 	sp.holders = 0
 	sp.finished = 0
-	sp.batches = make([]*batch.CompactBatchs, sp.bucketNum)
-	for i := range sp.batches {
-		sp.batches[i] = batch.NewCompactBatchs(objectio.BlockMaxRows)
+	sp.batchSets = make([]*batch.BatchSet, sp.bucketNum)
+	for i := range sp.batchSets {
+		sp.batchSets[i] = batch.NewBatchSet(objectio.BlockMaxRows)
 	}
 	sp.locks = make([]sync.Mutex, bucketNum)
 	sp.fullBatchIdx = make([]int, 0, bucketNum)
@@ -79,9 +78,9 @@ func (sp *ShufflePool) Reset(m *mpool.MPool, force bool) {
 		logutil.Errorf("shuffle pool reset with invalid state! maxHolders %v, holders %v, finished %v", sp.maxHolders, sp.holders, sp.finished)
 		panic("shuffle pool reset with invalid state! ")
 	}
-	for i := range sp.batches {
-		if sp.batches[i] != nil {
-			sp.batches[i].Clean(m)
+	for i := range sp.batchSets {
+		if sp.batchSets[i] != nil {
+			sp.batchSets[i].Clean(m)
 		}
 	}
 	sp.fullBatchIdx = sp.fullBatchIdx[:0]
@@ -93,8 +92,8 @@ func (sp *ShufflePool) Print() { // only for debug
 	sp.lock.Lock()
 	defer sp.lock.Unlock()
 	logutil.Warnf("shuffle pool print, maxHolders %v, holders %v, finished %v", sp.maxHolders, sp.holders, sp.finished)
-	for i := range sp.batches {
-		bat := sp.batches[i]
+	for i := range sp.batchSets {
+		bat := sp.batchSets[i]
 		if bat == nil {
 			logutil.Infof("shuffle pool %p batches[%v] is nil", sp, i)
 		} else {
@@ -110,8 +109,8 @@ func (sp *ShufflePool) GetEndingBatch(proc *process.Process) *batch.Batch {
 	if sp.finished < sp.maxHolders {
 		return nil
 	}
-	for i := range sp.batches {
-		bat := sp.batches[i].Pop()
+	for i := range sp.batchSets {
+		bat := sp.batchSets[i].Pop()
 		if bat != nil {
 			bat.ShuffleIDX = int32(i)
 			return bat
@@ -135,8 +134,8 @@ func (sp *ShufflePool) GetFullBatch(proc *process.Process) *batch.Batch {
 	defer sp.locks[fullIdx].Unlock()
 
 	var bat *batch.Batch
-	if sp.batches[fullIdx].Length() > 1 {
-		bat = sp.batches[fullIdx].PopFront()
+	if sp.batchSets[fullIdx].Length() > 1 {
+		bat = sp.batchSets[fullIdx].PopFront()
 		if bat != nil {
 			bat.ShuffleIDX = int32(fullIdx)
 		}
@@ -147,18 +146,18 @@ func (sp *ShufflePool) GetFullBatch(proc *process.Process) *batch.Batch {
 
 func (sp *ShufflePool) putBatchIntoShuffledPoolsBySels(srcBatch *batch.Batch, sels [][]int32, proc *process.Process) error {
 	var err error
-	for i := range sp.batches {
+	for i := range sp.batchSets {
 		currentSels := sels[i]
 		if len(currentSels) > 0 {
 			sp.locks[i].Lock()
 
-			err = sp.batches[i].Union(proc.Mp(), srcBatch, currentSels)
+			_, err = sp.batchSets[i].Union(proc.Mp(), srcBatch, currentSels, nil)
 			if err != nil {
 				sp.locks[i].Unlock()
 				return err
 			}
 
-			if sp.batches[i].Length() > 1 {
+			if sp.batchSets[i].Length() > 1 {
 				if sp.lock.TryLock() {
 					found := false
 					for _, j := range sp.fullBatchIdx {
