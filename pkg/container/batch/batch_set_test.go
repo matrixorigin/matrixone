@@ -348,6 +348,95 @@ func TestBatchSetUnionLargeSels(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+// TestBatchSetExtendReuseBuf verifies that Extend consumes reuseBuf (consumed=true)
+// in all three code paths: empty set, last-batch-full, and inBatch-full.
+func TestBatchSetExtendReuseBuf(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	// Path 1: empty set — reuseBuf should be consumed as the new batch
+	queue := NewBatchSet(TestBatchMaxRow)
+	src := makeTestBatch(10, mp)
+	reuse := makeTestBatch(0, mp)
+	reuse.rowCount = 0
+	consumed, err := queue.Extend(mp, src, reuse)
+	require.NoError(t, err)
+	require.True(t, consumed)
+	require.Equal(t, 1, queue.Length())
+	require.Equal(t, 10, queue.RowCount())
+	src.Clean(mp)
+	queue.Clean(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+
+	// Path 2: last batch is full — reuseBuf consumed as new batch
+	queue = NewBatchSet(TestBatchMaxRow)
+	full := makeTestBatch(TestBatchMaxRow, mp)
+	extra := makeTestBatch(5, mp)
+	reuse = makeTestBatch(5, mp)
+	_, _ = queue.Extend(mp, full, nil)
+	full.Clean(mp)
+	consumed, err = queue.Extend(mp, extra, reuse)
+	require.NoError(t, err)
+	require.True(t, consumed)
+	require.Equal(t, 2, queue.Length())
+	require.Equal(t, TestBatchMaxRow+5, queue.RowCount())
+	extra.Clean(mp)
+	queue.Clean(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+
+	// Path 3: inBatch is full — reuseBuf consumed, last partial batch pushed back
+	queue = NewBatchSet(TestBatchMaxRow)
+	partial := makeTestBatch(3, mp)
+	fullIn := makeTestBatch(TestBatchMaxRow, mp)
+	reuse = makeTestBatch(3, mp)
+	_, _ = queue.Extend(mp, partial, nil)
+	partial.Clean(mp)
+	consumed, err = queue.Extend(mp, fullIn, reuse)
+	require.NoError(t, err)
+	require.True(t, consumed)
+	require.Equal(t, 2, queue.Length())
+	require.Equal(t, TestBatchMaxRow+3, queue.RowCount())
+	fullIn.Clean(mp)
+	queue.Clean(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+// TestBatchSetUnionReuseBuf verifies that Union consumes reuseBuf when provided.
+func TestBatchSetUnionReuseBuf(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	// Empty set: reuseBuf consumed for the first new batch
+	queue := NewBatchSet(TestBatchMaxRow)
+	src := makeTestBatch(20, mp)
+	reuse := makeTestBatch(5, mp)
+	sels := []int32{0, 1, 2, 3, 4}
+	consumed, err := queue.Union(mp, src, sels, reuse)
+	require.NoError(t, err)
+	require.True(t, consumed)
+	require.Equal(t, 1, queue.Length())
+	require.Equal(t, 5, queue.RowCount())
+	src.Clean(mp)
+	queue.Clean(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+// TestBatchSetTakeBatches verifies TakeBatches transfers ownership and leaves set empty.
+func TestBatchSetTakeBatches(t *testing.T) {
+	mp := mpool.MustNewZero()
+	queue := NewBatchSet(TestBatchMaxRow)
+	bat := makeTestBatch(10, mp)
+	_ = queue.Push(mp, bat)
+	require.Equal(t, 1, queue.Length())
+
+	batches := queue.TakeBatches()
+	require.Equal(t, 1, len(batches))
+	require.Equal(t, 0, queue.Length())
+
+	for _, b := range batches {
+		b.Clean(mp)
+	}
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
 func makeTestBatch(max int, mp *mpool.MPool) *Batch {
 	bat := NewWithSize(2)
 	bat.Vecs[0] = makeTestVec(max, mp)
