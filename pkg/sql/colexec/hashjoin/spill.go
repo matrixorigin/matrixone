@@ -412,7 +412,7 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucketN
 		return nil, err
 	}
 
-	jm := message.NewJoinMap(builder.MultiSels, builder.IntHashMap, builder.StrHashMap, nil, builder.Batches.Buf, proc.Mp())
+	jm := message.NewJoinMap(builder.Sels, builder.IntHashMap, builder.StrHashMap, nil, builder.Batches.Buf, proc.Mp())
 	jm.SetRowCount(int64(builder.InputBatchRowCount))
 	jm.IncRef(1)
 
