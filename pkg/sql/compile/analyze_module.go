@@ -174,6 +174,7 @@ func applyOpStatsToNode(op *models.PhyOperator, qry *plan.Query, nodes []*plan.N
 		node.AnalyzeInfo.MemorySize += op.OpStats.MemorySize
 		node.AnalyzeInfo.MemoryMax = max(node.AnalyzeInfo.MemoryMax, op.OpStats.MemorySize)
 		node.AnalyzeInfo.SpillSize += op.OpStats.SpillSize
+		node.AnalyzeInfo.SpillRows += op.OpStats.SpillRows
 		node.AnalyzeInfo.SpillMax = max(node.AnalyzeInfo.SpillMax, op.OpStats.SpillSize)
 
 		// handle mem min/max,
