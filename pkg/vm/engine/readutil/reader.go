@@ -124,6 +124,9 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 			mixin.columns.seqnums[i] = objectio.SEQNUM_ROWID
 			mixin.columns.colTypes[i] = objectio.RowidType
 			mixin.columns.phyAddrPos = i
+		} else if strings.EqualFold(column, objectio.DefaultCommitTS_Attr) {
+			mixin.columns.seqnums[i] = objectio.SEQNUM_COMMITTS
+			mixin.columns.colTypes[i] = types.T_TS.ToType()
 		} else {
 			if plan2.GetSortOrderByName(mixin.tableDef, column) == 0 {
 				mixin.columns.indexOfFirstSortedColumn = i
@@ -624,7 +627,13 @@ func (r *reader) Read(
 				return false, err
 			}
 
-			outBatch.Shuffle(sels, mp)
+			if len(sels) == 0 {
+				// All rows were NULL vectors — mark batch as empty so the
+				// caller skips it instead of seeing a row-count / dist-vec mismatch.
+				outBatch.SetRowCount(0)
+			} else {
+				outBatch.Shuffle(sels, mp)
+			}
 
 			// Reuse the detached distVec when possible to avoid per-batch allocation.
 			distVec := detachedDistVec

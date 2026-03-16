@@ -1,6 +1,4 @@
-//go:build !gpu
-
-// Copyright 2022 Matrix Origin
+// Copyright 2026 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,19 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package brute_force
+package disttae
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/stretchr/testify/require"
 )
 
-func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
-	dimension uint,
-	m metric.MetricType,
-	elemsz uint,
-	nthread uint) (cache.VectorIndexSearchIf, error) {
-
-	return NewCpuBruteForceIndex[T](dataset, dimension, m, elemsz)
+func TestPartitionChangesHandleCloseWithTypedNil(t *testing.T) {
+	var handle engine.ChangesHandle = (*PartitionChangesHandle)(nil)
+	require.NoError(t, handle.Close())
 }

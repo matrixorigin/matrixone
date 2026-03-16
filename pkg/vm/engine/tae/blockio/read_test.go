@@ -302,3 +302,52 @@ func TestHandleOrderByLimitOnSelectRows(t *testing.T) {
 	require.Equal(t, int64(1), resSels[0])
 	require.Equal(t, int64(2), resSels[1])
 }
+
+// TestHandleOrderByLimitAllNullVectors verifies that HandleOrderByLimitOnIVFFlatIndex
+// returns empty sels/dists when all vector rows are NULL.
+// This is the root cause of the IVF-Flat entries table panic: when the InMem
+// path gets all-NULL vectors, empty sels caused Shuffle to be a no-op, leaving
+// the batch with a stale row count while the distance vector had 0 elements.
+func TestHandleOrderByLimitAllNullVectors(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	ctx := context.Background()
+
+	// Create a vector column where ALL rows are NULL.
+	vecCol := vector.NewVec(types.T_array_float32.ToType())
+	for i := 0; i < 5; i++ {
+		vector.AppendBytes(vecCol, nil, true, mp) // null = true
+	}
+
+	orderByLimit := &objectio.BlockReadTopOp{
+		ColPos: 0,
+		Limit:  2,
+		Typ:    types.T_array_float32,
+		NumVec: types.ArrayToBytes[float32]([]float32{0.0, 0.0}),
+		Metric: metric.Metric_L2Distance,
+	}
+
+	sels, dists, err := HandleOrderByLimitOnIVFFlatIndex(ctx, nil, vecCol, orderByLimit)
+	require.NoError(t, err)
+	require.Empty(t, sels, "sels should be empty when all vectors are NULL")
+	require.Empty(t, dists, "dists should be empty when all vectors are NULL")
+
+	// Verify that Shuffle with empty sels is a no-op (the bug scenario).
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	for i := 0; i < 5; i++ {
+		vector.AppendFixed(bat.Vecs[0], int32(i), false, mp)
+	}
+	bat.SetRowCount(5)
+
+	// Shuffle with empty sels does nothing — batch retains row count.
+	err = bat.Shuffle(sels, mp)
+	require.NoError(t, err)
+	require.Equal(t, 5, bat.RowCount(), "Shuffle with empty sels should NOT reset row count")
+
+	// The fix: caller must explicitly set row count to 0 when sels is empty.
+	if len(sels) == 0 {
+		bat.SetRowCount(0)
+	}
+	require.Equal(t, 0, bat.RowCount())
+}
