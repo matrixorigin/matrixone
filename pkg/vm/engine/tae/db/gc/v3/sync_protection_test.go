@@ -489,3 +489,26 @@ func TestSyncProtectionManager_CleanupSoftDeleted_NoSoftDeleted(t *testing.T) {
 	mgr.CleanupSoftDeleted(2000)
 	assert.Equal(t, 1, mgr.GetProtectionCount())
 }
+
+func TestSyncProtectionManager_HasProtection_NotFound(t *testing.T) {
+	mgr := NewSyncProtectionManager()
+	assert.False(t, mgr.HasProtection("nonexistent"))
+}
+
+func TestSyncProtectionManager_RegisterSmallBF(t *testing.T) {
+	mgr := NewSyncProtectionManager()
+	// 20 bytes < 24 minimum
+	smallBF := base64.StdEncoding.EncodeToString(make([]byte, 20))
+	err := mgr.RegisterSyncProtection("job1", smallBF, 1000, "task1")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid sync protection")
+}
+
+func TestSyncProtectionManager_GetProtectionCountByState_Active(t *testing.T) {
+	mgr := NewSyncProtectionManager()
+	bfData := buildTestBF(t, []string{"obj1"})
+	require.NoError(t, mgr.RegisterSyncProtection("job1", bfData, 1000, "task1"))
+	active, softDeleted := mgr.GetProtectionCountByState()
+	assert.Equal(t, 1, active)
+	assert.Equal(t, 0, softDeleted)
+}

@@ -755,3 +755,133 @@ func TestPolicyDo_BackoffZeroWait(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 2, calls)
 }
+
+// --- Round 4 additions ---
+
+func TestBuildErrorMetadata_NilOld_Retryable(t *testing.T) {
+	err := errors.New("timeout")
+	meta, shouldRetry := BuildErrorMetadata(nil, err, &mockClassifier{retryable: true})
+	assert.NotNil(t, meta)
+	assert.True(t, meta.IsRetryable)
+	assert.Equal(t, 1, meta.RetryCount)
+	assert.True(t, shouldRetry)
+	assert.Equal(t, "timeout", meta.Message)
+}
+
+func TestBuildErrorMetadata_NilOld_NonRetryable(t *testing.T) {
+	err := errors.New("fatal")
+	meta, shouldRetry := BuildErrorMetadata(nil, err, &mockClassifier{retryable: false})
+	assert.NotNil(t, meta)
+	assert.False(t, meta.IsRetryable)
+	assert.Equal(t, 1, meta.RetryCount)
+	assert.False(t, shouldRetry)
+}
+
+func TestBuildErrorMetadata_NilOld_NilClassifier(t *testing.T) {
+	err := errors.New("something")
+	meta, shouldRetry := BuildErrorMetadata(nil, err, nil)
+	assert.NotNil(t, meta)
+	assert.False(t, meta.IsRetryable)
+	assert.False(t, shouldRetry)
+}
+
+func TestUTInjectionClassifier_Nil(t *testing.T) {
+	c := UTInjectionClassifier{}
+	assert.False(t, c.IsRetryable(nil))
+}
+
+func TestUTInjectionClassifier_Match(t *testing.T) {
+	c := UTInjectionClassifier{}
+	assert.True(t, c.IsRetryable(errors.New("ut injection: publicationSnapshotFinished")))
+	assert.True(t, c.IsRetryable(errors.New("ut injection: commit failed retryable")))
+}
+
+func TestUTInjectionClassifier_NoMatch(t *testing.T) {
+	c := UTInjectionClassifier{}
+	assert.False(t, c.IsRetryable(errors.New("some other error")))
+}
+
+func TestNewUpstreamConnectionClassifier(t *testing.T) {
+	c := NewUpstreamConnectionClassifier()
+	assert.NotNil(t, c)
+	// Should classify EOF as retryable (via DefaultClassifier)
+	assert.True(t, c.IsRetryable(io.EOF))
+	// Should classify BadConn as retryable (via MySQLErrorClassifier)
+	assert.True(t, c.IsRetryable(driver.ErrBadConn))
+}
+
+func TestNewDownstreamConnectionClassifier(t *testing.T) {
+	c := NewDownstreamConnectionClassifier()
+	assert.NotNil(t, c)
+	assert.True(t, c.IsRetryable(io.EOF))
+	assert.True(t, c.IsRetryable(driver.ErrBadConn))
+}
+
+func TestDefaultClassifier_NetTimeout(t *testing.T) {
+	c := DefaultClassifier{}
+	// net.Error with Timeout() = true
+	err := &netTimeoutErr{}
+	assert.True(t, c.IsRetryable(err))
+}
+
+type netTimeoutErr struct{}
+
+func (e *netTimeoutErr) Error() string   { return "timeout" }
+func (e *netTimeoutErr) Timeout() bool   { return true }
+func (e *netTimeoutErr) Temporary() bool { return false }
+
+func TestDefaultClassifier_NetTemporary(t *testing.T) {
+	c := DefaultClassifier{}
+	err := &netTempErr{}
+	assert.True(t, c.IsRetryable(err))
+}
+
+type netTempErr struct{}
+
+func (e *netTempErr) Error() string   { return "temp" }
+func (e *netTempErr) Timeout() bool   { return false }
+func (e *netTempErr) Temporary() bool { return true }
+
+func TestMySQLErrorClassifier_RetryableCode1205(t *testing.T) {
+	c := MySQLErrorClassifier{}
+	err := &gomysql.MySQLError{Number: 1205, Message: "Lock wait timeout"}
+	assert.True(t, c.IsRetryable(err))
+}
+
+func TestPolicyDo_TimerContextCancel(t *testing.T) {
+	// Test the timer + context cancel path (L536-538)
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := 0
+	p := Policy{
+		MaxAttempts: 3,
+		Classifier:  &mockClassifier{retryable: true},
+		Backoff:     &ExponentialBackoff{Base: 5 * time.Second, Factor: 1},
+	}
+	// Cancel after first call to hit the timer cancel path
+	err := p.Do(ctx, func() error {
+		calls++
+		if calls == 1 {
+			go func() {
+				time.Sleep(10 * time.Millisecond)
+				cancel()
+			}()
+		}
+		return errors.New("retry me")
+	})
+	assert.Error(t, err)
+}
+
+func TestBuildErrorMetadata_ErrorTypeChanged_RetryableToRetryable(t *testing.T) {
+	old := &ErrorMetadata{
+		IsRetryable: true,
+		RetryCount:  2,
+		FirstSeen:   time.Now().Add(-time.Minute),
+		LastSeen:    time.Now().Add(-time.Second),
+		Message:     "old error",
+	}
+	err := errors.New("new retryable error")
+	meta, shouldRetry := BuildErrorMetadata(old, err, &mockClassifier{retryable: true})
+	assert.NotNil(t, meta)
+	assert.True(t, meta.IsRetryable)
+	assert.True(t, shouldRetry)
+}
