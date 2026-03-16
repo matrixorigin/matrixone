@@ -24,7 +24,7 @@ LDFLAGS += -Xlinker -lpthread -Xlinker -lm
 TARGET := libmocuvs.so
 
 # Source files
-SRCS := brute_force_c.cpp ivf_flat_c.cpp ivf_pq_c.cpp cagra_c.cpp kmeans_c.cpp helper.cpp adhoc_c.cpp
+SRCS := brute_force_c.cpp ivf_flat_c.cpp ivf_pq_c.cpp cagra_c.cpp kmeans_c.cpp helper.cpp adhoc_c.cpp distance_c.cpp
 OBJS := $(SRCS:.cpp=.o)
 
 # Test configuration
@@ -37,7 +37,8 @@ TEST_SRCS := $(TESTDIR)/main_test.cu \
              $(TESTDIR)/ivf_pq_test.cu \
              $(TESTDIR)/cagra_test.cu \
              $(TESTDIR)/kmeans_test.cu \
-             $(TESTDIR)/quantize_test.cu
+             $(TESTDIR)/quantize_test.cu \
+             $(TESTDIR)/distance_test.cu
 
 TEST_OBJS := $(patsubst $(TESTDIR)/%.cu, $(OBJDIR)/test/%.o, $(TEST_SRCS))
 
@@ -58,7 +59,7 @@ test: $(TEST_EXE)
 	@echo "Running tests..."
 	./$(TEST_EXE)
 
-$(TEST_EXE): $(TEST_OBJS)
+$(TEST_EXE): $(TEST_OBJS) helper.o
 	@echo "NVCCLD $@"
 	$(NVCC) $(subst -x cu,,$(NVCC_FLAGS)) $^ $(subst -shared,,$(LDFLAGS)) -o $@
 
