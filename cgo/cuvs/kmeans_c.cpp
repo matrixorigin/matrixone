@@ -114,6 +114,38 @@ void gpu_kmeans_train_quantizer(gpu_kmeans_c kmeans_c, const float* train_data, 
     }
 }
 
+void gpu_kmeans_set_quantizer(gpu_kmeans_c kmeans_c, float min, float max, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_kmeans_any_t*>(kmeans_c);
+        switch (any->qtype) {
+            case Quantization_F32: static_cast<matrixone::gpu_kmeans_t<float>*>(any->ptr)->set_quantizer(min, max); break;
+            case Quantization_F16: static_cast<matrixone::gpu_kmeans_t<half>*>(any->ptr)->set_quantizer(min, max); break;
+            case Quantization_INT8: static_cast<matrixone::gpu_kmeans_t<int8_t>*>(any->ptr)->set_quantizer(min, max); break;
+            case Quantization_UINT8: static_cast<matrixone::gpu_kmeans_t<uint8_t>*>(any->ptr)->set_quantizer(min, max); break;
+            default: break;
+        }
+    } catch (const std::exception& e) {
+        set_errmsg(errmsg, "Error in gpu_kmeans_set_quantizer", e.what());
+    }
+}
+
+void gpu_kmeans_get_quantizer(gpu_kmeans_c kmeans_c, float* min, float* max, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_kmeans_any_t*>(kmeans_c);
+        switch (any->qtype) {
+            case Quantization_F32: static_cast<matrixone::gpu_kmeans_t<float>*>(any->ptr)->get_quantizer(min, max); break;
+            case Quantization_F16: static_cast<matrixone::gpu_kmeans_t<half>*>(any->ptr)->get_quantizer(min, max); break;
+            case Quantization_INT8: static_cast<matrixone::gpu_kmeans_t<int8_t>*>(any->ptr)->get_quantizer(min, max); break;
+            case Quantization_UINT8: static_cast<matrixone::gpu_kmeans_t<uint8_t>*>(any->ptr)->get_quantizer(min, max); break;
+            default: break;
+        }
+    } catch (const std::exception& e) {
+        set_errmsg(errmsg, "Error in gpu_kmeans_get_quantizer", e.what());
+    }
+}
+
 gpu_kmeans_fit_res_t gpu_kmeans_fit(gpu_kmeans_c kmeans_c, const void* X_data, uint64_t n_samples, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     gpu_kmeans_fit_res_t res = {0.0f, 0};

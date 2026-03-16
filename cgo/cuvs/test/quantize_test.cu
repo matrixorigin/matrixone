@@ -307,8 +307,19 @@ TEST(UtilsTest, ScalarQuantizerLifecycle) {
     ASSERT_TRUE(quantizer4.is_trained());
     ASSERT_EQ(quantizer4.min(), q_min);
     ASSERT_EQ(quantizer4.max(), q_max);
+
+    // 6. SetQuantizer
+    scalar_quantizer_t<float> quantizer5;
+    quantizer5.set_quantizer(0.1f, 0.9f);
+    ASSERT_TRUE(quantizer5.is_trained());
+    ASSERT_EQ(quantizer5.min(), 0.1f);
+    ASSERT_EQ(quantizer5.max(), 0.9f);
+
+    // 7. Getters again
+    ASSERT_EQ(quantizer5.min(), 0.1f);
+    ASSERT_EQ(quantizer5.max(), 0.9f);
     
-    // 6. Transform
+    // 8. Transform
     std::vector<int8_t> result_host(count * dimension);
     quantizer.transform(res, matrix.view(), result_host.data(), false);
     

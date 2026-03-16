@@ -123,3 +123,25 @@ TEST(GpuIvfFlatTest, ShardedModeSimulation) {
 
     index.destroy();
 }
+
+TEST(GpuIvfFlatTest, SetGetQuantizer) {
+    const uint32_t dimension = 4;
+    const uint64_t count = 10;
+    ivf_flat_build_params_t bp = ivf_flat_build_params_default();
+    std::vector<int> devices = {0};
+    
+    gpu_ivf_flat_t<int8_t> index(count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+    
+    float min = -1.5f;
+    float max = 2.5f;
+    index.set_quantizer(min, max);
+    
+    float gMin = 0, gMax = 0;
+    index.get_quantizer(&gMin, &gMax);
+    
+    ASSERT_EQ(min, gMin);
+    ASSERT_EQ(max, gMax);
+    
+    index.destroy();
+}
+

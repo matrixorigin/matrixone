@@ -555,6 +555,16 @@ public:
         if (worker) worker->stop();
     }
 
+    void set_quantizer(float min, float max) {
+        quantizer_ = scalar_quantizer_t<float>(min, max);
+    }
+
+    void get_quantizer(float* min, float* max) const {
+        if (!quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
+        *min = quantizer_.min();
+        *max = quantizer_.max();
+    }
+
     void train_quantizer(const float* train_data, uint64_t n_samples) {
         if (!train_data || n_samples == 0) return;
         uint64_t job_id = worker->submit(

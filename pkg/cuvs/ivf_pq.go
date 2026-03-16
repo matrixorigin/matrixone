@@ -266,6 +266,51 @@ func (gi *GpuIvfPq[T]) TrainQuantizer(trainData []float32, nSamples uint64) erro
 	return nil
 }
 
+// SetQuantizer sets the scalar quantizer parameters (if T is 1-byte)
+func (gi *GpuIvfPq[T]) SetQuantizer(min, max float32) error {
+	if gi.cIvfPq == nil {
+		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
+	}
+
+	var errmsg *C.char
+	C.gpu_ivf_pq_set_quantizer(
+		gi.cIvfPq,
+		C.float(min),
+		C.float(max),
+		unsafe.Pointer(&errmsg),
+	)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
+// GetQuantizer gets the scalar quantizer parameters (if T is 1-byte)
+func (gi *GpuIvfPq[T]) GetQuantizer() (float32, float32, error) {
+	if gi.cIvfPq == nil {
+		return 0, 0, moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
+	}
+
+	var errmsg *C.char
+	var cMin, cMax C.float
+	C.gpu_ivf_pq_get_quantizer(
+		gi.cIvfPq,
+		&cMin,
+		&cMax,
+		unsafe.Pointer(&errmsg),
+	)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return 0, 0, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return float32(cMin), float32(cMax), nil
+}
+
 // NewGpuIvfPqFromFile creates a new GpuIvfPq instance by loading from a file.
 func NewGpuIvfPqFromFile[T VectorType](filename string, dimension uint32, metric DistanceType,
 	bp IvfPqBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfPq[T], error) {

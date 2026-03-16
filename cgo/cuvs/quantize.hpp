@@ -71,6 +71,13 @@ public:
     }
 
     /**
+     * @brief Sets the quantizer range manually.
+     */
+    void set_quantizer(S min, S max) {
+        quantizer_ = std::make_unique<quantizer_type>(quantizer_type{min, max});
+    }
+
+    /**
      * @brief Transforms a chunk of data into quantized 8-bit integers.
      * 
      * @tparam T Target type (int8_t or uint8_t)

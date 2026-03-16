@@ -44,6 +44,9 @@ void gpu_kmeans_start(gpu_kmeans_c kmeans_c, void* errmsg);
 // Trains the scalar quantizer (if T is 1-byte)
 void gpu_kmeans_train_quantizer(gpu_kmeans_c kmeans_c, const float* train_data, uint64_t n_samples, void* errmsg);
 
+void gpu_kmeans_set_quantizer(gpu_kmeans_c kmeans_c, float min, float max, void* errmsg);
+void gpu_kmeans_get_quantizer(gpu_kmeans_c kmeans_c, float* min, float* max, void* errmsg);
+
 // Fit function
 typedef struct {
     float inertia;

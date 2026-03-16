@@ -304,6 +304,51 @@ func (gi *GpuIvfFlat[T]) TrainQuantizer(trainData []float32, nSamples uint64) er
 	return nil
 }
 
+// SetQuantizer sets the scalar quantizer parameters (if T is 1-byte)
+func (gi *GpuIvfFlat[T]) SetQuantizer(min, max float32) error {
+	if gi.cIvfFlat == nil {
+		return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
+	}
+
+	var errmsg *C.char
+	C.gpu_ivf_flat_set_quantizer(
+		gi.cIvfFlat,
+		C.float(min),
+		C.float(max),
+		unsafe.Pointer(&errmsg),
+	)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
+// GetQuantizer gets the scalar quantizer parameters (if T is 1-byte)
+func (gi *GpuIvfFlat[T]) GetQuantizer() (float32, float32, error) {
+	if gi.cIvfFlat == nil {
+		return 0, 0, moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
+	}
+
+	var errmsg *C.char
+	var cMin, cMax C.float
+	C.gpu_ivf_flat_get_quantizer(
+		gi.cIvfFlat,
+		&cMin,
+		&cMax,
+		unsafe.Pointer(&errmsg),
+	)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return 0, 0, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return float32(cMin), float32(cMax), nil
+}
+
 // Save serializes the index to a file
 func (gi *GpuIvfFlat[T]) Save(filename string) error {
 	if gi.cIvfFlat == nil {

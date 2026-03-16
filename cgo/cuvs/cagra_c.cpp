@@ -154,6 +154,38 @@ void gpu_cagra_train_quantizer(gpu_cagra_c index_c, const float* train_data, uin
     }
 }
 
+void gpu_cagra_set_quantizer(gpu_cagra_c index_c, float min, float max, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_cagra_any_t*>(index_c);
+        switch (any->qtype) {
+            case Quantization_F32: static_cast<matrixone::gpu_cagra_t<float>*>(any->ptr)->set_quantizer(min, max); break;
+            case Quantization_F16: static_cast<matrixone::gpu_cagra_t<half>*>(any->ptr)->set_quantizer(min, max); break;
+            case Quantization_INT8: static_cast<matrixone::gpu_cagra_t<int8_t>*>(any->ptr)->set_quantizer(min, max); break;
+            case Quantization_UINT8: static_cast<matrixone::gpu_cagra_t<uint8_t>*>(any->ptr)->set_quantizer(min, max); break;
+            default: break;
+        }
+    } catch (const std::exception& e) {
+        set_errmsg(errmsg, "Error in gpu_cagra_set_quantizer", e.what());
+    }
+}
+
+void gpu_cagra_get_quantizer(gpu_cagra_c index_c, float* min, float* max, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_cagra_any_t*>(index_c);
+        switch (any->qtype) {
+            case Quantization_F32: static_cast<matrixone::gpu_cagra_t<float>*>(any->ptr)->get_quantizer(min, max); break;
+            case Quantization_F16: static_cast<matrixone::gpu_cagra_t<half>*>(any->ptr)->get_quantizer(min, max); break;
+            case Quantization_INT8: static_cast<matrixone::gpu_cagra_t<int8_t>*>(any->ptr)->get_quantizer(min, max); break;
+            case Quantization_UINT8: static_cast<matrixone::gpu_cagra_t<uint8_t>*>(any->ptr)->get_quantizer(min, max); break;
+            default: break;
+        }
+    } catch (const std::exception& e) {
+        set_errmsg(errmsg, "Error in gpu_cagra_get_quantizer", e.what());
+    }
+}
+
 gpu_cagra_c gpu_cagra_load_file(const char* filename, uint32_t dimension, distance_type_t metric_c,
                                       cagra_build_params_t build_params,
                                       const int* devices, int device_count, uint32_t nthread, 

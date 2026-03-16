@@ -119,6 +119,51 @@ func (gk *GpuKMeans[T]) TrainQuantizer(trainData []float32, nSamples uint64) err
 	return nil
 }
 
+// SetQuantizer sets the scalar quantizer parameters (if T is 1-byte)
+func (gk *GpuKMeans[T]) SetQuantizer(min, max float32) error {
+	if gk.cKMeans == nil {
+		return moerr.NewInternalErrorNoCtx("GpuKMeans is not initialized")
+	}
+
+	var errmsg *C.char
+	C.gpu_kmeans_set_quantizer(
+		gk.cKMeans,
+		C.float(min),
+		C.float(max),
+		unsafe.Pointer(&errmsg),
+	)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
+// GetQuantizer gets the scalar quantizer parameters (if T is 1-byte)
+func (gk *GpuKMeans[T]) GetQuantizer() (float32, float32, error) {
+	if gk.cKMeans == nil {
+		return 0, 0, moerr.NewInternalErrorNoCtx("GpuKMeans is not initialized")
+	}
+
+	var errmsg *C.char
+	var cMin, cMax C.float
+	C.gpu_kmeans_get_quantizer(
+		gk.cKMeans,
+		&cMin,
+		&cMax,
+		unsafe.Pointer(&errmsg),
+	)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return 0, 0, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return float32(cMin), float32(cMax), nil
+}
+
 // Fit computes the cluster centroids
 func (gk *GpuKMeans[T]) Fit(dataset []T, nSamples uint64) (float32, int64, error) {
 	if gk.cKMeans == nil {

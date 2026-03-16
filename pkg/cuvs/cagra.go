@@ -304,6 +304,51 @@ func (gi *GpuCagra[T]) TrainQuantizer(trainData []float32, nSamples uint64) erro
 	return nil
 }
 
+// SetQuantizer sets the scalar quantizer parameters (if T is 1-byte)
+func (gi *GpuCagra[T]) SetQuantizer(min, max float32) error {
+	if gi.cCagra == nil {
+		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
+	}
+
+	var errmsg *C.char
+	C.gpu_cagra_set_quantizer(
+		gi.cCagra,
+		C.float(min),
+		C.float(max),
+		unsafe.Pointer(&errmsg),
+	)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
+// GetQuantizer gets the scalar quantizer parameters (if T is 1-byte)
+func (gi *GpuCagra[T]) GetQuantizer() (float32, float32, error) {
+	if gi.cCagra == nil {
+		return 0, 0, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
+	}
+
+	var errmsg *C.char
+	var cMin, cMax C.float
+	C.gpu_cagra_get_quantizer(
+		gi.cCagra,
+		&cMin,
+		&cMax,
+		unsafe.Pointer(&errmsg),
+	)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return 0, 0, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return float32(cMin), float32(cMax), nil
+}
+
 // Save serializes the index to a file
 func (gc *GpuCagra[T]) Save(filename string) error {
 	if gc.cCagra == nil {
