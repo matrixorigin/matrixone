@@ -58,21 +58,30 @@ void adhoc_brute_force_search(const raft::resources& res,
                               float* distances) {
     auto stream = raft::resource::get_cuda_stream(res);
 
-    // 1. Calculate total buffer sizes
+    // Helper to align sizes to 256 bytes (CUDA default alignment)
+    auto align_size = [](size_t size) {
+        return (size + 255) & ~255;
+    };
+
+    // 1. Calculate total buffer sizes with alignment
     size_t dataset_bytes = n_rows * dim * sizeof(T);
     size_t queries_bytes = n_queries * dim * sizeof(T);
     size_t neighbors_bytes = n_queries * limit * sizeof(int64_t);
     size_t distances_bytes = n_queries * limit * sizeof(float);
 
+    size_t dataset_alloc = align_size(dataset_bytes);
+    size_t queries_alloc = align_size(queries_bytes);
+    size_t neighbors_alloc = align_size(neighbors_bytes);
+    size_t total_bytes = dataset_alloc + queries_alloc + neighbors_alloc + distances_bytes;
+
     // Use a single allocation for all temporary buffers to reduce overhead
     void* d_ptr = nullptr;
-    size_t total_bytes = dataset_bytes + queries_bytes + neighbors_bytes + distances_bytes;
     RAFT_CUDA_TRY(cudaMallocAsync(&d_ptr, total_bytes, stream));
 
     char* d_dataset = static_cast<char*>(d_ptr);
-    char* d_queries = d_dataset + dataset_bytes;
-    char* d_neighbors = d_queries + queries_bytes;
-    char* d_distances = d_neighbors + neighbors_bytes;
+    char* d_queries = d_dataset + dataset_alloc;
+    char* d_neighbors = d_queries + queries_alloc;
+    char* d_distances = d_neighbors + neighbors_alloc;
 
     // 2. Async copies to Device
     RAFT_CUDA_TRY(cudaMemcpyAsync(d_dataset, dataset, dataset_bytes, cudaMemcpyHostToDevice, stream));
