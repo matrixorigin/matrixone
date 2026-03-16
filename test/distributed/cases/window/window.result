@@ -568,6 +568,52 @@ create table t5 (a int, b int);
 select a, b, percent_rank() over (order by a) from t5;
 a    b    percent_rank() over (order by a)
 drop table t5;
+drop table if exists t_issue_23853;
+create table t_issue_23853 (id int, name varchar(20), score int);
+insert into t_issue_23853 values(1, 'Alice', 90), (2, 'Bob', 85), (3, 'Charlie', 90), (4, 'David', 75), (5, 'Eve', 85);
+select id, name, percent_rank() over (order by name) from t_issue_23853;
+id    name    percent_rank() over (order by name)
+1    Alice    0.0
+2    Bob    0.25
+3    Charlie    0.5
+4    David    0.75
+5    Eve    1.0
+select id, name, rank() over (order by name) from t_issue_23853;
+id    name    rank() over (order by name)
+1    Alice    1
+2    Bob    2
+3    Charlie    3
+4    David    4
+5    Eve    5
+select id, name, dense_rank() over (order by name) from t_issue_23853;
+id    name    dense_rank() over (order by name)
+1    Alice    1
+2    Bob    2
+3    Charlie    3
+4    David    4
+5    Eve    5
+select id, name, row_number() over (order by name) from t_issue_23853;
+id    name    row_number() over (order by name)
+1    Alice    1
+2    Bob    2
+3    Charlie    3
+4    David    4
+5    Eve    5
+select id, name, percent_rank() over (partition by score order by name) from t_issue_23853;
+id    name    percent_rank() over (partition by score order by name)
+4    David    0.0
+2    Bob    0.0
+5    Eve    1.0
+1    Alice    0.0
+3    Charlie    1.0
+select id, name, score, percent_rank() over (order by name, score) from t_issue_23853;
+id    name    score    percent_rank() over (order by name, score)
+1    Alice    90    0.0
+2    Bob    85    0.25
+3    Charlie    90    0.5
+4    David    75    0.75
+5    Eve    85    1.0
+drop table t_issue_23853;
 drop table if exists t1;
 create table t1 (a int, b int);
 insert into t1 values(1, 1), (1, 2), (2, 1), (2, 2), (2, 3);
@@ -645,7 +691,12 @@ drop table if exists t4;
 create table t4 (name varchar(20), score int);
 insert into t4 values('Alice', 90), ('Bob', 85), ('Charlie', 90), ('David', 75), ('Eve', 85);
 select name, score, cume_dist() over (order by name) from t4;
-SQL parser error: Window '<unnamed window>' with RANGE N PRECEDING/FOLLOWING frame requires exactly one ORDER BY expression, of numeric or temporal type
+name    score    cume_dist() over (order by name)
+Alice    90    0.2
+Bob    85    0.4
+Charlie    90    0.6
+David    75    0.8
+Eve    85    1.0
 select name, score, cume_dist() over (order by score) from t4;
 name    score    cume_dist() over (order by score)
 David    75    0.2
@@ -654,7 +705,12 @@ Eve    85    0.6
 Alice    90    1.0
 Charlie    90    1.0
 select name, score, cume_dist() over (partition by score order by name) from t4;
-SQL parser error: Window '<unnamed window>' with RANGE N PRECEDING/FOLLOWING frame requires exactly one ORDER BY expression, of numeric or temporal type
+name    score    cume_dist() over (partition by score order by name)
+David    75    1.0
+Bob    85    0.5
+Eve    85    1.0
+Alice    90    0.5
+Charlie    90    1.0
 drop table t4;
 drop table if exists t5;
 create table t5 (id int, dt date);
@@ -2004,7 +2060,14 @@ col1    col2    col3    col4
 2002-06-09    null    01:01:01    null
 2015-08-01    1990-01-01 01:02:03    null    null
 select dense_rank() over (partition by col1 order by date_format(col1,'%m-%d-%Y')) from date02;
-SQL parser error: Window '<unnamed window>' with RANGE N PRECEDING/FOLLOWING frame requires exactly one ORDER BY expression, of numeric or temporal type
+dense_rank() over (partition by col1 order by date_format(col1, %m-%d-%Y))
+1
+1
+1
+1
+1
+1
+1
 select max(col2) over (partition by col3 order by date(col2) desc) from date02;
 max(col2) over (partition by col3 order by date(col2) desc)
 1990-01-01 01:02:03
