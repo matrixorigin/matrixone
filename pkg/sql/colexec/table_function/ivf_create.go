@@ -81,7 +81,7 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 
 	nworker := vectorindex.GetConcurrencyForBuild(u.tblcfg.ThreadsBuild)
 
-	logutil.Infof("IVFFLAT START: Kmeans clustering")
+	logutil.Infof("IVFFLAT START: Kmeans clustering CREATE")
 	// NOTE: We use L2 distance to caculate centroid.  Ivfflat metric just for searching.
 	var centers [][]T
 	if clusterer, err = device.NewKMeans(
@@ -94,14 +94,21 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 		int(nworker)); err != nil {
 		return err
 	}
-	defer clusterer.Close()
+	logutil.Infof("IVFFLAT END: Kmeans clustering CREATE")
+	defer func() {
+		if clusterer != nil {
+			logutil.Infof("IVFFLAT START: Kmeans clustering Closed")
+			clusterer.Close()
+			logutil.Infof("IVFFLAT END: Kmeans clustering Closed")
+		}
+	}()
 
+	logutil.Infof("IVFFLAT START: Kmeans clustering RUN")
 	anycenters, err := clusterer.Cluster(proc.Ctx)
 	if err != nil {
 		return err
 	}
-
-	logutil.Infof("IVFFLAT END: Kmeans clustering")
+	logutil.Infof("IVFFLAT END: Kmeans clustering RUN")
 
 	centers, ok = anycenters.([][]T)
 	if !ok {
