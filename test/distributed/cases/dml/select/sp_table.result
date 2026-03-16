@@ -29,6 +29,7 @@ mo_pubs    r
 mo_role    r
 mo_role_grant    r
 mo_role_privs    r
+mo_role_rule    r
 mo_sessions    v
 mo_shards    r
 mo_shards_metadata    r
