@@ -42,3 +42,27 @@ func BenchmarkPairWiseDistance(b *testing.B) {
 		}
 	})
 }
+
+func BenchmarkPairWiseDistanceLarge(b *testing.B) {
+	nX, nY, dim := 10000, 5, 1024
+	x := make([]float32, nX*dim)
+	y := make([]float32, nY*dim)
+	for i := range x {
+		x[i] = rand.Float32()
+	}
+	for i := range y {
+		y[i] = rand.Float32()
+	}
+
+	b.Run("PairWiseDistance-Large", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_, _ = PairWiseDistance(x, nX, y, nY, dim, Metric_L2sqDistance, 0)
+		}
+	})
+
+	b.Run("GoPairWiseDistance-Large", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_, _ = GoPairWiseDistance(x, nX, y, nY, dim, Metric_L2sqDistance)
+		}
+	})
+}

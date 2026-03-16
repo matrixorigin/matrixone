@@ -47,7 +47,7 @@ func PairWiseDistance[T types.RealNumbers](
 	}
 
 	cuvsMetric, ok := MetricTypeToCuvsMetric[metric]
-	if !ok {
+	if !ok || nX*nY*dim < 40000*1024 {
 		return GoPairWiseDistance(x, nX, y, nY, dim, metric)
 	}
 
