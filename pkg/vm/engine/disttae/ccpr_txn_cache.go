@@ -179,9 +179,10 @@ func (c *CCPRTxnCache) OnFileWritten(objectName string) {
 }
 
 // OnTxnCommit is called when a transaction commits successfully.
-// It removes all object entries associated with this transaction.
+// It removes this transaction's txnID from all associated object entries.
+// If an object entry has no more txnIDs after removal, the entry is removed from the cache.
 // Since the transaction committed successfully, the objects are persisted and
-// no longer need cache tracking.
+// no GC is needed (unlike OnTxnRollback).
 //
 // Parameters:
 //   - txnID: the ID of the committed transaction
@@ -195,9 +196,27 @@ func (c *CCPRTxnCache) OnTxnCommit(txnID []byte) {
 		return
 	}
 
-	// Delete all object entries for this transaction
+	// Remove this txnID from all associated object entries
 	for _, objectName := range txnEntry.objectNames {
-		c.items.Delete(ItemEntry{objectName: objectName})
+		entry, found := c.items.Get(ItemEntry{objectName: objectName})
+		if !found {
+			continue
+		}
+
+		// Find and remove this txnID from the entry
+		for i, id := range entry.txnIDs {
+			if bytes.Equal(id, txnID) {
+				if len(entry.txnIDs) == 1 {
+					// This was the only txnID, safe to remove the entry
+					c.items.Delete(entry)
+				} else {
+					// Remove this txnID from the list, keep the entry for other txns
+					entry.txnIDs = append(entry.txnIDs[:i], entry.txnIDs[i+1:]...)
+					c.items.Set(entry)
+				}
+				break
+			}
+		}
 	}
 
 	// Remove the txnIndex entry
