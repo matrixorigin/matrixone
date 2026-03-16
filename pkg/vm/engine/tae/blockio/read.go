@@ -23,7 +23,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/brute_force"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -383,7 +381,6 @@ func HandleOrderByLimitOnIVFFlatIndex(
 	selectRows []int64,
 	vecCol *vector.Vector,
 	orderByLimit *objectio.IndexReaderTopOp,
-	mp *mpool.MPool,
 ) ([]int64, []float64, error) {
 	if selectRows == nil {
 		selectRows = make([]int64, vecCol.Length())
@@ -397,59 +394,24 @@ func HandleOrderByLimitOnIVFFlatIndex(
 		return nullsBm.Contains(uint64(row))
 	})
 
-	if len(selectRows) == 0 {
-		return nil, nil, nil
-	}
-
-	var sels []int64
-	var dists []float64
+	searchResults := make([]vectorindex.SearchResult, 0, len(selectRows))
 
 	switch orderByLimit.Typ {
 	case types.T_array_float32:
-		var dim uint
-		if len(selectRows) > 0 {
-			firstVec := types.BytesToArray[float32](vecCol.GetBytesAt(int(selectRows[0])))
-			dim = uint(len(firstVec))
-		}
-
-		datasetBS, err := mp.Alloc(len(selectRows)*int(dim)*4, true)
-		if err != nil {
-			return nil, nil, err
-		}
-		dataset := util.UnsafeSliceCast[float32](datasetBS)
-		for i, row := range selectRows {
-			copy(dataset[i*int(dim):(i+1)*int(dim)], types.BytesToArray[float32](vecCol.GetBytesAt(int(row))))
-		}
-
-		idx, err := brute_force.NewAdhocBruteForceIndexFlattened[float32](dataset, uint(len(selectRows)), dim, metric.MetricType(orderByLimit.MetricType), 4)
-		if err != nil {
-			mp.Free(datasetBS)
-			return nil, nil, err
-		}
-		defer func() {
-			idx.Destroy()
-			mp.Free(datasetBS)
-		}()
-
-		query := types.BytesToArray[float32](orderByLimit.NumVec)
-		rt := vectorindex.RuntimeConfig{
-			Limit:    uint(orderByLimit.Limit),
-			NThreads: 1,
-		}
-
-		resKeys, resDists, err := idx.Search(nil, query, rt)
+		distFunc, err := metric.ResolveDistanceFn[float32](orderByLimit.MetricType)
 		if err != nil {
 			return nil, nil, err
 		}
 
-		neighbors := resKeys.([]int64)
-		for i, neighbor := range neighbors {
-			if neighbor < 0 {
-				continue
+		rhs := types.BytesToArray[float32](orderByLimit.NumVec)
+
+		for _, row := range selectRows {
+			dist, err := distFunc(types.BytesToArray[float32](vecCol.GetBytesAt(int(row))), rhs)
+			if err != nil {
+				return nil, nil, err
 			}
-			dist64 := resDists[i]
+			dist64 := float64(dist)
 
-			// Check bounds
 			if orderByLimit.LowerBoundType == plan.BoundType_INCLUSIVE {
 				if dist64 < orderByLimit.LowerBound {
 					continue
@@ -469,7 +431,6 @@ func HandleOrderByLimitOnIVFFlatIndex(
 				}
 			}
 
-			// Update global heap if needed
 			if len(orderByLimit.DistHeap) >= int(orderByLimit.Limit) {
 				if dist64 < orderByLimit.DistHeap[0] {
 					orderByLimit.DistHeap[0] = dist64
@@ -481,55 +442,26 @@ func HandleOrderByLimitOnIVFFlatIndex(
 				heap.Push(&orderByLimit.DistHeap, dist64)
 			}
 
-			sels = append(sels, selectRows[neighbor])
-			dists = append(dists, dist64)
+			searchResults = append(searchResults, vectorindex.SearchResult{
+				Id:       row,
+				Distance: dist64,
+			})
 		}
 
 	case types.T_array_float64:
-		var dim uint
-		if len(selectRows) > 0 {
-			firstVec := types.BytesToArray[float64](vecCol.GetBytesAt(int(selectRows[0])))
-			dim = uint(len(firstVec))
-		}
-
-		datasetBS, err := mp.Alloc(len(selectRows)*int(dim)*8, true)
-		if err != nil {
-			return nil, nil, err
-		}
-		dataset := util.UnsafeSliceCast[float64](datasetBS)
-		for i, row := range selectRows {
-			copy(dataset[i*int(dim):(i+1)*int(dim)], types.BytesToArray[float64](vecCol.GetBytesAt(int(row))))
-		}
-
-		idx, err := brute_force.NewAdhocBruteForceIndexFlattened[float64](dataset, uint(len(selectRows)), dim, metric.MetricType(orderByLimit.MetricType), 8)
-		if err != nil {
-			mp.Free(datasetBS)
-			return nil, nil, err
-		}
-		defer func() {
-			idx.Destroy()
-			mp.Free(datasetBS)
-		}()
-
-		query := types.BytesToArray[float64](orderByLimit.NumVec)
-		rt := vectorindex.RuntimeConfig{
-			Limit:    uint(orderByLimit.Limit),
-			NThreads: 1,
-		}
-
-		resKeys, resDists, err := idx.Search(nil, query, rt)
+		distFunc, err := metric.ResolveDistanceFn[float64](orderByLimit.MetricType)
 		if err != nil {
 			return nil, nil, err
 		}
 
-		neighbors := resKeys.([]int64)
-		for i, neighbor := range neighbors {
-			if neighbor < 0 {
-				continue
+		rhs := types.BytesToArray[float64](orderByLimit.NumVec)
+
+		for _, row := range selectRows {
+			dist64, err := distFunc(types.BytesToArray[float64](vecCol.GetBytesAt(int(row))), rhs)
+			if err != nil {
+				return nil, nil, err
 			}
-			dist64 := resDists[i]
 
-			// Check bounds
 			if orderByLimit.LowerBoundType == plan.BoundType_INCLUSIVE {
 				if dist64 < orderByLimit.LowerBound {
 					continue
@@ -549,7 +481,6 @@ func HandleOrderByLimitOnIVFFlatIndex(
 				}
 			}
 
-			// Update global heap if needed
 			if len(orderByLimit.DistHeap) >= int(orderByLimit.Limit) {
 				if dist64 < orderByLimit.DistHeap[0] {
 					orderByLimit.DistHeap[0] = dist64
@@ -561,26 +492,25 @@ func HandleOrderByLimitOnIVFFlatIndex(
 				heap.Push(&orderByLimit.DistHeap, dist64)
 			}
 
-			sels = append(sels, selectRows[neighbor])
-			dists = append(dists, dist64)
+			searchResults = append(searchResults, vectorindex.SearchResult{
+				Id:       row,
+				Distance: dist64,
+			})
 		}
 
 	default:
 		return nil, nil, moerr.NewInternalError(ctx, fmt.Sprintf("only support float32/float64 type for topn: %s", orderByLimit.Typ))
 	}
 
-	if len(sels) > 0 {
-		maxDist := orderByLimit.DistHeap[0]
-		// Final filter to match heap state
-		filteredSels := make([]int64, 0, len(sels))
-		filteredDists := make([]float64, 0, len(dists))
-		for i := range sels {
-			if dists[i] <= maxDist {
-				filteredSels = append(filteredSels, sels[i])
-				filteredDists = append(filteredDists, dists[i])
-			}
-		}
-		return filteredSels, filteredDists, nil
+	searchResults = slices.DeleteFunc(searchResults, func(res vectorindex.SearchResult) bool {
+		return res.Distance > orderByLimit.DistHeap[0]
+	})
+
+	sels := make([]int64, len(searchResults))
+	dists := make([]float64, len(searchResults))
+	for i, res := range searchResults {
+		sels[i] = res.Id
+		dists[i] = res.Distance
 	}
 
 	return sels, dists, nil
@@ -697,7 +627,7 @@ func BlockDataReadInner(
 		var dists []float64
 
 		if orderByLimit != nil {
-			selectRows, dists, err = handleOrderByLimitOnSelectRows(ctx, selectRows, orderByLimit, phyAddrColumnPos, cacheVectors, mp)
+			selectRows, dists, err = handleOrderByLimitOnSelectRows(ctx, selectRows, orderByLimit, phyAddrColumnPos, cacheVectors)
 			if err != nil {
 				return err
 			}
@@ -748,7 +678,7 @@ func BlockDataReadInner(
 		topInputRows := buildTopInputRows(int(info.MetaLocation().Rows()), deleteMask)
 
 		var dists []float64
-		selectRows, dists, err = handleOrderByLimitOnSelectRows(ctx, topInputRows, orderByLimit, phyAddrColumnPos, cacheVectors, mp)
+		selectRows, dists, err = handleOrderByLimitOnSelectRows(ctx, topInputRows, orderByLimit, phyAddrColumnPos, cacheVectors)
 		if err != nil {
 			return err
 		}
@@ -961,7 +891,6 @@ func handleOrderByLimitOnSelectRows(
 	orderByLimit *objectio.IndexReaderTopOp,
 	phyAddrColumnPos int,
 	cacheVectors containers.Vectors,
-	mp *mpool.MPool,
 ) ([]int64, []float64, error) {
 	vecColPos := orderByLimit.ColPos
 	if phyAddrColumnPos >= 0 && vecColPos > int32(phyAddrColumnPos) {
@@ -969,5 +898,5 @@ func handleOrderByLimitOnSelectRows(
 	}
 	vecCol := &cacheVectors[vecColPos]
 
-	return HandleOrderByLimitOnIVFFlatIndex(ctx, selectRows, vecCol, orderByLimit, mp)
+	return HandleOrderByLimitOnIVFFlatIndex(ctx, selectRows, vecCol, orderByLimit)
 }
