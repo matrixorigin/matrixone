@@ -26,6 +26,10 @@ import (
 )
 
 var (
+	Handler *versionHandle
+)
+
+func init() {
 	Handler = &versionHandle{
 		metadata: versions.Version{
 			Version:           "3.0.1",
@@ -35,7 +39,7 @@ var (
 			VersionOffset:     uint32(len(tenantUpgEntries) + len(clusterUpgEntries)),
 		},
 	}
-)
+}
 
 type versionHandle struct {
 	metadata versions.Version
