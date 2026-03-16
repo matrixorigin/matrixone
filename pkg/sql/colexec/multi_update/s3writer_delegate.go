@@ -81,7 +81,7 @@ func newDeleteBlockData(inputBatch *batch.Batch, pkIdx int) *deleteBlockData {
 }
 
 type s3WriterDelegate struct {
-	cacheBatches *batch.CompactBatchs
+	cacheBatches *batch.BatchSet
 	segmentMap   map[string]int32
 
 	action   actionType
@@ -122,7 +122,7 @@ func newS3Writer(
 
 	tableCount := len(update.MultiUpdateCtx)
 	writer := &s3WriterDelegate{
-		cacheBatches:   batch.NewCompactBatchs(objectio.BlockMaxRows),
+		cacheBatches:   batch.NewBatchSet(objectio.BlockMaxRows),
 		updateCtxInfos: update.ctr.updateCtxInfos,
 		seqnums:        make([][]uint16, 0, tableCount),
 		sortIndexes:    make([]int, 0, tableCount),
@@ -190,7 +190,7 @@ func newS3Writer(
 }
 
 func (writer *s3WriterDelegate) cleanCachedBatches(mp *mpool.MPool) {
-	bats := writer.cacheBatches.TakeBatchs()
+	bats := writer.cacheBatches.TakeBatches()
 	for _, bat := range bats {
 		bat.Clean(mp)
 	}
@@ -214,7 +214,7 @@ func (writer *s3WriterDelegate) append(
 		acquireGranted bool
 	)
 
-	err = writer.cacheBatches.Extend(proc.Mp(), inBatch)
+	_, err = writer.cacheBatches.Extend(proc.Mp(), inBatch, nil)
 	if err != nil {
 		return
 	}
@@ -329,7 +329,7 @@ func (writer *s3WriterDelegate) prepareDeleteBatches(
 	slices.SortFunc(blkids, func(a, b types.Blockid) int {
 		return a.Compare(&b)
 	})
-	deleteBats := batch.NewCompactBatchs(objectio.BlockMaxRows)
+	deleteBats := batch.NewBatchSet(objectio.BlockMaxRows)
 	for _, blkid := range blkids {
 		bat := blockMap[blkid].bat
 		delete(blockMap, blkid)
@@ -338,7 +338,7 @@ func (writer *s3WriterDelegate) prepareDeleteBatches(
 			return nil, err
 		}
 	}
-	retBatchs := deleteBats.TakeBatchs()
+	retBatchs := deleteBats.TakeBatches()
 	return retBatchs, nil
 }
 
@@ -363,7 +363,7 @@ func (writer *s3WriterDelegate) sortAndSync(proc *process.Process, analyzer proc
 		// delete s3
 		if len(updateCtx.DeleteCols) > 0 {
 			var delBatches []*batch.Batch
-			if bats, err = fetchSomeVecFromCompactBatches(
+			if bats, err = fetchSomeVecFromBatchSet(
 				writer.cacheBatches, updateCtx.DeleteCols, DeleteBatchAttrs,
 			); err != nil {
 				return
@@ -423,13 +423,13 @@ func (writer *s3WriterDelegate) sortAndSync(proc *process.Process, analyzer proc
 
 			if needClone {
 				sortIdx := writer.sortIndexes[i]
-				if bats, err = cloneSelectedVecsFromCompactBatches(
+				if bats, err = cloneSelectedVecsFromBatchSet(
 					writer.cacheBatches, updateCtx.InsertCols, insertAttrs, sortIdx, proc.Mp(),
 				); err != nil {
 					return
 				}
 			} else {
-				if bats, err = fetchSomeVecFromCompactBatches(
+				if bats, err = fetchSomeVecFromBatchSet(
 					writer.cacheBatches, updateCtx.InsertCols, insertAttrs,
 				); err != nil {
 					return
@@ -669,7 +669,7 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 	}
 
 	//write tail batch to workspace
-	bats := writer.cacheBatches.TakeBatchs()
+	bats := writer.cacheBatches.TakeBatches()
 	defer func() {
 		for i := range bats {
 			if bats[i] != nil {
@@ -849,8 +849,8 @@ func appendCfgToWriter(
 // `selectColsCheckNullColIdx` is 1
 // then the columns of the new batch are [a, c, e]
 // the new batch is sorted by b
-func cloneSelectedVecsFromCompactBatches(
-	sourceBats *batch.CompactBatchs,
+func cloneSelectedVecsFromBatchSet(
+	sourceBats *batch.BatchSet,
 	selectCols []int,
 	selectAttrs []string,
 	selectColsCheckNullColIdx int,
@@ -898,10 +898,10 @@ func cloneSelectedVecsFromCompactBatches(
 	return cloned, nil
 }
 
-// fetchSomeVecFromCompactBatches fetch some vectors from CompactBatchs
+// fetchSomeVecFromBatchSet fetch some vectors from BatchSet
 // do not clean these batchs
-func fetchSomeVecFromCompactBatches(
-	src *batch.CompactBatchs,
+func fetchSomeVecFromBatchSet(
+	src *batch.BatchSet,
 	cols []int,
 	attrs []string,
 ) (retBats []*batch.Batch, err error) {

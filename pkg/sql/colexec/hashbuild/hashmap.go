@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package hashmap_util
+package hashbuild
 
 import (
 	"runtime"
@@ -65,6 +65,13 @@ func (hb *HashmapBuilder) GetSize() int64 {
 		return hb.StrHashMap.Size()
 	}
 	return 0
+}
+
+func (hb *HashmapBuilder) GetJoinMap() *message.JoinMap {
+	if hb.InputBatchRowCount == 0 {
+		return nil
+	}
+	return message.NewJoinMap(hb.MultiSels, hb.IntHashMap, hb.StrHashMap, hb.DelRows, hb.Batches.Buf, nil)
 }
 
 func (hb *HashmapBuilder) GetGroupCount() uint64 {
@@ -156,12 +163,7 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
 	hb.MultiSels.Free()
-	for i := range hb.executors {
-		if hb.executors[i] != nil {
-			hb.executors[i].Free()
-		}
-	}
-	hb.executors = nil
+	hb.FreeExecutors()
 	hb.vecs = nil
 	for i := range hb.UniqueJoinKeys {
 		if hb.UniqueJoinKeys[i] != nil {
@@ -169,6 +171,15 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 		}
 	}
 	hb.UniqueJoinKeys = nil
+}
+
+func (hb *HashmapBuilder) FreeExecutors() {
+	for i := range hb.executors {
+		if hb.executors[i] != nil {
+			hb.executors[i].Free()
+		}
+	}
+	hb.executors = nil
 }
 
 func (hb *HashmapBuilder) FreeHashMapAndBatches(proc *process.Process) {
@@ -231,6 +242,19 @@ func (hb *HashmapBuilder) evalJoinCondition(proc *process.Process) error {
 	}
 
 	return nil
+}
+
+// ClearHashmap clears the hashmap to save memory when entering spill mode
+func (hb *HashmapBuilder) ClearHashmap() {
+	if hb.IntHashMap != nil {
+		hb.IntHashMap.Free()
+		hb.IntHashMap = nil
+	}
+	if hb.StrHashMap != nil {
+		hb.StrHashMap.Free()
+		hb.StrHashMap = nil
+	}
+	hb.vecs = nil
 }
 
 func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, needUniqueVec bool, proc *process.Process) error {
@@ -397,7 +421,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 			if len(hb.UniqueJoinKeys) == 0 {
 				hb.UniqueJoinKeys = make([]*vector.Vector, len(hb.executors))
 				for j, vec := range hb.vecs[vecIdx1] {
-					hb.UniqueJoinKeys[j] = vector.NewVec(*vec.GetType())
+					hb.UniqueJoinKeys[j] = vector.NewOffHeapVecWithType(*vec.GetType())
 				}
 			}
 
