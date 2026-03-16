@@ -60,15 +60,17 @@ func (shuffle *ShuffleV2) Call(proc *process.Process) (vm.CallResult, error) {
 
 	result := vm.NewCallResult()
 
+	// Put old buf back to pool after cleaning data
 	if shuffle.ctr.buf != nil {
-		shuffle.ctr.buf.Clean(proc.Mp())
+		shuffle.ctr.buf.CleanOnlyData()
+		shuffle.ctr.shufflePool.putBatchToPool(shuffle.ctr.buf, proc.Mp())
 		shuffle.ctr.buf = nil
 	}
 
 	tmpBat := shuffle.ctr.shufflePool.getFullBatch(shuffle.CurrentShuffleIdx)
 	if tmpBat != nil && tmpBat.RowCount() > 0 {
 		shuffle.ctr.buf = tmpBat
-		result.Batch = shuffle.ctr.buf
+		result.Batch = tmpBat
 		return result, nil
 	}
 
@@ -93,7 +95,7 @@ func (shuffle *ShuffleV2) Call(proc *process.Process) (vm.CallResult, error) {
 		tmpBat := shuffle.ctr.shufflePool.getFullBatch(shuffle.CurrentShuffleIdx)
 		if tmpBat != nil { // find a full batch
 			shuffle.ctr.buf = tmpBat
-			result.Batch = shuffle.ctr.buf
+			result.Batch = tmpBat
 			return result, nil
 		}
 

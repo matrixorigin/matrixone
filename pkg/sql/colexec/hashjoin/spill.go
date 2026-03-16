@@ -91,6 +91,13 @@ func (r *spillBucketReader) readBatch(proc *process.Process, reuseBat *batch.Bat
 		return nil, err
 	}
 
+	// Verify the batch unmarshal consumed exactly batchSize bytes. Leftover bytes
+	// mean the serialized format is inconsistent with what was written, which would
+	// silently misalign all subsequent reads in the spill file.
+	if n, _ := io.Copy(io.Discard, limitedReader); n > 0 {
+		return nil, moerr.NewInternalErrorf(proc.Ctx, "batch unmarshal did not consume all bytes: %d remaining", n)
+	}
+
 	// Read magic
 	if _, err := io.ReadFull(r.reader, r.buf); err != nil {
 		return nil, err
