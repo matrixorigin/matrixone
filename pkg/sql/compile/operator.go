@@ -143,6 +143,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 			op.ShuffleIdx = t.ShuffleIdx
 		}
 		op.RuntimeFilterSpec = t.RuntimeFilterSpec
+		op.SpillThreshold = t.SpillThreshold
 		op.IsDedup = t.IsDedup
 		op.OnDuplicateAction = t.OnDuplicateAction
 		op.DedupColTypes = t.DedupColTypes
@@ -192,6 +193,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		if t.ShuffleIdx == -1 { // shuffleV2
 			op.ShuffleIdx = int32(index)
 		}
+		op.SpillThreshold = t.SpillThreshold
 		op.SetInfo(&info)
 		return op
 
@@ -939,6 +941,8 @@ func constructHashJoin(node, left *plan.Node, left_types, right_types []types.Ty
 	arg.HashOnPK = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.HashOnPK
 	arg.CanSkipProbe = node.JoinType == plan.Node_SEMI && !node.IsRightJoin && left.NodeType == plan.Node_TABLE_SCAN
 	arg.IsShuffle = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle
+	arg.SpillThreshold = node.SpillMem
+
 	for i := range node.SendMsgList {
 		if node.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
 			arg.JoinMapTag = node.SendMsgList[i].MsgTag
@@ -1625,12 +1629,13 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 	return ret
 }
 
-func constructShuffleHashBuild(op vm.Operator, proc *process.Process) *hashbuild.HashBuild {
+func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Process) *hashbuild.HashBuild {
 	ret := hashbuild.NewArgument()
 	ret.NeedHashMap = true
 	ret.IsShuffle = true
 	ret.JoinMapRefCnt = 1
 	ret.DelColIdx = -1
+	ret.SpillThreshold = node.SpillMem
 
 	switch op.OpType() {
 	case vm.HashJoin:

@@ -77,6 +77,14 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		}
 	}
 
+	var joinSpillMem int64
+	joinSpillMemInt, err := ctx.ResolveVariable("join_spill_mem", true, false)
+	if err == nil {
+		if joinSpillMemVal, ok := joinSpillMemInt.(int64); ok {
+			joinSpillMem = joinSpillMemVal
+		}
+	}
+
 	var maxDop int64
 	maxDopInt, err := ctx.ResolveVariable("max_dop", true, false)
 	if err == nil {
@@ -98,6 +106,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		nextBindTag:          0,
 		mysqlCompatible:      mysqlCompatible,
 		aggSpillMem:          aggSpillMem,
+		joinSpillMem:         joinSpillMem,
 		tag2Table:            make(map[int32]*TableDef),
 		tag2NodeID:           make(map[int32]int32),
 		isPrepareStatement:   isPrepareStatement,
@@ -674,6 +683,8 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 	case plan.Node_JOIN:
+		node.SpillMem = builder.joinSpillMem
+
 		for _, expr := range node.OnList {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
@@ -5156,6 +5167,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		Children:     []int32{leftChildID, rightChildID},
 		JoinType:     joinType,
 		ExtraOptions: tbl.Option,
+		SpillMem:     builder.joinSpillMem,
 	}
 	nodeID := builder.appendNode(node, ctx)
 

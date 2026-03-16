@@ -307,6 +307,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 				NodeType: plan.Node_JOIN,
 				Children: children,
 				JoinType: plan.Node_INNER,
+				SpillMem: builder.joinSpillMem,
 			}, nil)
 
 			for i, adj := range adjMat[nextSibling*nLeaf : (nextSibling+1)*nLeaf] {
@@ -324,6 +325,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 					NodeType: plan.Node_JOIN,
 					Children: children,
 					JoinType: plan.Node_INNER,
+					SpillMem: builder.joinSpillMem,
 				}, nil)
 			}
 		}
@@ -340,6 +342,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 				NodeType: plan.Node_JOIN,
 				Children: children,
 				JoinType: plan.Node_INNER,
+				SpillMem: builder.joinSpillMem,
 			}, nil)
 		}
 	}
@@ -557,6 +560,7 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 			NodeType: plan.Node_JOIN,
 			Children: children,
 			JoinType: plan.Node_INNER,
+			SpillMem: builder.joinSpillMem,
 		}, nil)
 
 		vertex.node = builder.qry.Nodes[nodeID]

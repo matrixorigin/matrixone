@@ -101,15 +101,21 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 
 	err := validateArgs[T](vectors, clusterCnt, maxIterations, deltaThreshold, distanceType, initType)
 	if err != nil {
+		logutil.Errorf("kmeans validateArgs error: %v", err)
 		return nil, err
 	}
+
+	dim := len(vectors[0])
+	logutil.Infof("kmeans summary: clusterCnt=%d, vectorCnt=%d, dim=%d, maxIterations=%d", clusterCnt, len(vectors), dim, maxIterations)
 
 	allocator := malloc.NewCAllocator()
 	var deallocators []malloc.Deallocator
 
-	allocSlice := func(size uint64) ([]byte, error) {
+	allocSlice := func(name string, size uint64) ([]byte, error) {
+		logutil.Infof("kmeans malloc: %s, %d bytes", name, size)
 		slice, deallocator, err := allocator.Allocate(size, malloc.NoClear)
 		if err != nil {
+			logutil.Errorf("kmeans malloc error: %s, %d bytes, %v", name, size, err)
 			for _, d := range deallocators {
 				d.Deallocate()
 			}
@@ -121,8 +127,9 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 	}
 
 	// allocate assignments
-	assignmentsBytes, err := allocSlice(uint64(len(vectors) * int(util.UnsafeSizeOf[int]())))
+	assignmentsBytes, err := allocSlice("assignments", uint64(len(vectors))*uint64(util.UnsafeSizeOf[int]()))
 	if err != nil {
+		logutil.Errorf("kmeans allocate assignments error: %v", err)
 		return nil, err
 	}
 	assignments := util.UnsafeSliceCastToLength[int](assignmentsBytes, len(vectors))
@@ -131,50 +138,62 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 	}
 
 	// allocate metas
-	metasBytes, err := allocSlice(uint64(len(vectors) * int(util.UnsafeSizeOf[vectorMeta[T]]())))
+	metasBytes, err := allocSlice("metas", uint64(len(vectors))*uint64(util.UnsafeSizeOf[vectorMeta[T]]()))
 	if err != nil {
+		logutil.Errorf("kmeans allocate metas error: %v", err)
 		return nil, err
 	}
 	metas := util.UnsafeSliceCastToLength[vectorMeta[T]](metasBytes, len(vectors))
+
+	// allocate all meta_lower at once to reduce malloc calls and logging
+	allLowerBytes, err := allocSlice("all_meta_lower", uint64(len(vectors))*uint64(clusterCnt)*uint64(util.UnsafeSizeOf[T]()))
+	if err != nil {
+		logutil.Errorf("kmeans allocate all_meta_lower error: %v", err)
+		return nil, err
+	}
+	allLower := util.UnsafeSliceCastToLength[T](allLowerBytes, len(vectors)*clusterCnt)
+	for i := range allLower {
+		allLower[i] = 0
+	}
+
 	for i := range metas {
-		lowerBytes, err := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[T]()))
-		if err != nil {
-			return nil, err
-		}
-		lower := util.UnsafeSliceCastToLength[T](lowerBytes, clusterCnt)
-		for j := range lower {
-			lower[j] = 0
-		}
 		metas[i] = vectorMeta[T]{
-			lower:     lower,
+			lower:     allLower[i*clusterCnt : (i+1)*clusterCnt : (i+1)*clusterCnt],
 			upper:     0,
 			recompute: true,
 		}
 	}
 
-	// allocate centroidDist
-	centroidDistBytes, err := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[[]T]()))
+	// allocate centroidDist headers
+	centroidDistBytes, err := allocSlice("centroid_dist_headers", uint64(clusterCnt)*uint64(util.UnsafeSizeOf[[]T]()))
 	if err != nil {
+		logutil.Errorf("kmeans allocate centroidDist error: %v", err)
 		return nil, err
 	}
 	centroidDist := util.UnsafeSliceCastToLength[[]T](centroidDistBytes, clusterCnt)
+
+	// allocate all centroid distances at once
+	allDistBytes, err := allocSlice("all_centroid_dist", uint64(clusterCnt)*uint64(clusterCnt)*uint64(util.UnsafeSizeOf[T]()))
+	if err != nil {
+		logutil.Errorf("kmeans allocate all_centroid_dist error: %v", err)
+		return nil, err
+	}
+	allDist := util.UnsafeSliceCastToLength[T](allDistBytes, clusterCnt*clusterCnt)
 	for i := range centroidDist {
-		distBytes, err := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[T]()))
-		if err != nil {
-			return nil, err
-		}
-		centroidDist[i] = util.UnsafeSliceCastToLength[T](distBytes, clusterCnt)
+		centroidDist[i] = allDist[i*clusterCnt : (i+1)*clusterCnt : (i+1)*clusterCnt]
 	}
 
 	// allocate minCentroidDist
-	minCentroidDistBytes, err := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[T]()))
+	minCentroidDistBytes, err := allocSlice("min_centroid_dist", uint64(clusterCnt)*uint64(util.UnsafeSizeOf[T]()))
 	if err != nil {
+		logutil.Errorf("kmeans allocate minCentroidDist error: %v", err)
 		return nil, err
 	}
 	minCentroidDist := util.UnsafeSliceCastToLength[T](minCentroidDistBytes, clusterCnt)
 
 	distanceFunction, normalize, err := metric.ResolveKmeansDistanceFn[T](distanceType, spherical)
 	if err != nil {
+		logutil.Errorf("kmeans ResolveKmeansDistanceFn error: %v", err)
 		// Before returning, we must clean up already allocated memory.
 		for _, d := range deallocators {
 			d.Deallocate()
@@ -187,44 +206,56 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 		nworker = runtime.NumCPU()
 	}
 
-	// allocate centroids
-	centroidsBytes, err := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[[]T]()))
+	// allocate centroids headers
+	centroidsBytes, err := allocSlice("centroids_headers", uint64(clusterCnt)*uint64(util.UnsafeSizeOf[[]T]()))
 	if err != nil {
+		logutil.Errorf("kmeans allocate centroids error: %v", err)
 		return nil, err
 	}
 	centroids := util.UnsafeSliceCastToLength[[]T](centroidsBytes, clusterCnt)
+
+	// allocate all centroids data at once
+	allCentroidsDataBytes, err := allocSlice("all_centroids_data", uint64(clusterCnt)*uint64(dim)*uint64(util.UnsafeSizeOf[T]()))
+	if err != nil {
+		logutil.Errorf("kmeans allocate all_centroids_data error: %v", err)
+		return nil, err
+	}
+	allCentroidsData := util.UnsafeSliceCastToLength[T](allCentroidsDataBytes, clusterCnt*dim)
 	for i := range centroids {
-		cBytes, err := allocSlice(uint64(len(vectors[0])) * uint64(util.UnsafeSizeOf[T]()))
-		if err != nil {
-			return nil, err
-		}
-		centroids[i] = util.UnsafeSliceCastToLength[T](cBytes, len(vectors[0]))
+		centroids[i] = allCentroidsData[i*dim : (i+1)*dim : (i+1)*dim]
 	}
 
-	// allocate nextCentroids
-	nextCentroidsBytes, err := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[[]T]()))
+	// allocate nextCentroids headers
+	nextCentroidsBytes, err := allocSlice("next_centroids_headers", uint64(clusterCnt)*uint64(util.UnsafeSizeOf[[]T]()))
 	if err != nil {
+		logutil.Errorf("kmeans allocate nextCentroids error: %v", err)
 		return nil, err
 	}
 	nextCentroids := util.UnsafeSliceCastToLength[[]T](nextCentroidsBytes, clusterCnt)
+
+	// allocate all nextCentroids data at once
+	allNextCentroidsDataBytes, err := allocSlice("all_next_centroids_data", uint64(clusterCnt)*uint64(dim)*uint64(util.UnsafeSizeOf[T]()))
+	if err != nil {
+		logutil.Errorf("kmeans allocate all_next_centroids_data error: %v", err)
+		return nil, err
+	}
+	allNextCentroidsData := util.UnsafeSliceCastToLength[T](allNextCentroidsDataBytes, clusterCnt*dim)
 	for i := range nextCentroids {
-		ncBytes, err := allocSlice(uint64(len(vectors[0])) * uint64(util.UnsafeSizeOf[T]()))
-		if err != nil {
-			return nil, err
-		}
-		nextCentroids[i] = util.UnsafeSliceCastToLength[T](ncBytes, len(vectors[0]))
+		nextCentroids[i] = allNextCentroidsData[i*dim : (i+1)*dim : (i+1)*dim]
 	}
 
 	// allocate membersCount
-	membersCountBytes, err := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[int64]()))
+	membersCountBytes, err := allocSlice("members_count", uint64(clusterCnt)*uint64(util.UnsafeSizeOf[int64]()))
 	if err != nil {
+		logutil.Errorf("kmeans allocate membersCount error: %v", err)
 		return nil, err
 	}
 	membersCount := util.UnsafeSliceCastToLength[int64](membersCountBytes, clusterCnt)
 
 	// allocate centroidShiftDist
-	centroidShiftDistBytes, err := allocSlice(uint64(clusterCnt) * uint64(util.UnsafeSizeOf[T]()))
+	centroidShiftDistBytes, err := allocSlice("centroid_shift_dist", uint64(clusterCnt)*uint64(util.UnsafeSizeOf[T]()))
 	if err != nil {
+		logutil.Errorf("kmeans allocate centroidShiftDist error: %v", err)
 		return nil, err
 	}
 	centroidShiftDist := util.UnsafeSliceCastToLength[T](centroidShiftDistBytes, clusterCnt)
@@ -267,7 +298,9 @@ func (km *ElkanClusterer[T]) Close() error {
 func checkCentroidDimension[T types.RealNumbers](centroids [][]T, expectedDim int) error {
 	for i, c := range centroids {
 		if len(c) != expectedDim {
-			return moerr.NewInternalErrorNoCtxf("initialized centroid %d has dimension %d, expected %d", i, len(c), expectedDim)
+			err := moerr.NewInternalErrorNoCtxf("initialized centroid %d has dimension %d, expected %d", i, len(c), expectedDim)
+			logutil.Errorf("kmeans checkCentroidDimension error: %v", err)
+			return err
 		}
 	}
 	return nil
@@ -286,17 +319,21 @@ func (km *ElkanClusterer[T]) InitCentroids(ctx context.Context) error {
 	}
 	anycentroids, err := initializer.InitCentroids(ctx, km.vectorList, km.clusterCnt)
 	if err != nil {
+		logutil.Errorf("kmeans initializer.InitCentroids error: %v", err)
 		return err
 	}
 
 	var ok bool
 	initCentroids, ok := anycentroids.([][]T)
 	if !ok {
-		return moerr.NewInternalErrorNoCtx("InitCentroids not return [][]float32|float64")
+		err = moerr.NewInternalErrorNoCtx("InitCentroids not return [][]float32|float64")
+		logutil.Errorf("kmeans InitCentroids type error: %v", err)
+		return err
 	}
 
 	// Add a dimension check for the initialized centroids
 	if err := checkCentroidDimension(initCentroids, len(km.vectorList[0])); err != nil {
+		logutil.Errorf("kmeans checkCentroidDimension error: %v", err)
 		return err
 	}
 
@@ -319,31 +356,49 @@ func (km *ElkanClusterer[T]) Cluster(ctx context.Context) (any, error) {
 		return km.vectorList, nil
 	}
 
+	logutil.Infof("kmeans InitCentroids")
 	err := km.InitCentroids(ctx) // step 0.1
 	if err != nil {
+		logutil.Errorf("kmeans InitCentroids error: %v", err)
 		return nil, err
 	}
 
-	km.initBounds(ctx) // step 0.2
+	logutil.Infof("kmeans InitBounds")
+	err = km.initBounds(ctx) // step 0.2
+	if err != nil {
+		logutil.Errorf("kmeans initBounds error: %v", err)
+		return nil, err
+	}
 
 	return km.elkansCluster(ctx)
 }
 
 func (km *ElkanClusterer[T]) elkansCluster(ctx context.Context) ([][]T, error) {
 
+	logutil.Infof("kmeans elkansCluster START")
+	defer logutil.Infof("kmeans elkansCluster END")
 	rnd := rand.New(rand.NewPCG(uint64(kmeans.DefaultRandSeed), 0))
 
 	for iter := 0; ; iter++ {
-		km.computeCentroidDistances(ctx) // step 1
+		err := km.computeCentroidDistances(ctx) // step 1
+		if err != nil {
+			logutil.Errorf("kmeans computeCentroidDistances error: %v", err)
+			return nil, err
+		}
 
 		changes, err := km.assignData(ctx) // step 2 and 3
 		if err != nil {
+			logutil.Errorf("kmeans assignData error: %v", err)
 			return nil, err
 		}
 
 		newCentroids := km.recalculateCentroids(ctx, rnd, km.nextCentroids, km.membersCount) // step 4
 
-		km.updateBounds(ctx, newCentroids, km.centroidShiftDist) // step 5 and 6
+		err = km.updateBounds(ctx, newCentroids, km.centroidShiftDist) // step 5 and 6
+		if err != nil {
+			logutil.Errorf("kmeans updateBounds error: %v", err)
+			return nil, err
+		}
 
 		km.centroids, km.nextCentroids = newCentroids, km.centroids // step 7
 
@@ -359,22 +414,39 @@ func validateArgs[T types.RealNumbers](vectorList [][]T, clusterCnt,
 	maxIterations int, deltaThreshold float64,
 	distanceType metric.MetricType, initType kmeans.InitType) error {
 	if len(vectorList) == 0 || len(vectorList[0]) == 0 {
-		return moerr.NewInternalErrorNoCtx("input vectors is empty")
+		err := moerr.NewInternalErrorNoCtx("input vectors is empty")
+		logutil.Errorf("kmeans validateArgs error: %v", err)
+		return err
+	}
+	if clusterCnt <= 0 {
+		err := moerr.NewInternalErrorNoCtxf("cluster count must be greater than 0, got %d", clusterCnt)
+		logutil.Errorf("kmeans validateArgs error: %v", err)
+		return err
 	}
 	if clusterCnt > len(vectorList) {
-		return moerr.NewInternalErrorNoCtxf("cluster count is larger than vector count %d > %d", clusterCnt, len(vectorList))
+		err := moerr.NewInternalErrorNoCtxf("cluster count is larger than vector count %d > %d", clusterCnt, len(vectorList))
+		logutil.Errorf("kmeans validateArgs error: %v", err)
+		return err
 	}
 	if maxIterations < 0 {
-		return moerr.NewInternalErrorNoCtxf("max iteration is out of bounds (must be >= 0)")
+		err := moerr.NewInternalErrorNoCtxf("max iteration is out of bounds (must be >= 0)")
+		logutil.Errorf("kmeans validateArgs error: %v", err)
+		return err
 	}
 	if deltaThreshold <= 0.0 || deltaThreshold >= 1.0 {
-		return moerr.NewInternalErrorNoCtx("delta threshold is out of bounds (must be > 0.0 and < 1.0)")
+		err := moerr.NewInternalErrorNoCtx("delta threshold is out of bounds (must be > 0.0 and < 1.0)")
+		logutil.Errorf("kmeans validateArgs error: %v", err)
+		return err
 	}
 	if distanceType >= metric.Metric_TypeCount {
-		return moerr.NewInternalErrorNoCtx("distance type is not supported")
+		err := moerr.NewInternalErrorNoCtx("distance type is not supported")
+		logutil.Errorf("kmeans validateArgs error: %v", err)
+		return err
 	}
 	if initType > 1 {
-		return moerr.NewInternalErrorNoCtx("init type is not supported")
+		err := moerr.NewInternalErrorNoCtx("init type is not supported")
+		logutil.Errorf("kmeans validateArgs error: %v", err)
+		return err
 	}
 
 	vlen := -1
@@ -383,14 +455,18 @@ func validateArgs[T types.RealNumbers](vectorList [][]T, clusterCnt,
 			vlen = len(v)
 		}
 		if vlen != len(v) {
-			return moerr.NewInternalErrorNoCtx("input vectors not in same dimension")
+			err := moerr.NewInternalErrorNoCtx("input vectors not in same dimension")
+			logutil.Errorf("kmeans validateArgs error: %v", err)
+			return err
 		}
 	}
 	// We need to validate that all vectors have the same dimension.
 	// This is already done by moarray.ToGonumVectors, so skipping it here.
 
 	if (clusterCnt * clusterCnt) > math.MaxInt {
-		return moerr.NewInternalErrorNoCtx("cluster count is too large for int*int")
+		err := moerr.NewInternalErrorNoCtx("cluster count is too large for int*int")
+		logutil.Errorf("kmeans validateArgs error: %v", err)
+		return err
 	}
 
 	return nil
@@ -423,7 +499,9 @@ func (km *ElkanClusterer[T]) initBounds(ctx context.Context) (err error) {
 			for x := range subvec {
 
 				if x%100 == 0 && ctx.Err() != nil {
-					return ctx.Err()
+					err := ctx.Err()
+					logutil.Errorf("kmeans initBounds context error: %v", err)
+					return err
 				}
 
 				minDist := metric.MaxFloat[T]()
@@ -431,6 +509,7 @@ func (km *ElkanClusterer[T]) initBounds(ctx context.Context) (err error) {
 				for c := range km_centroids {
 					dist, err2 := km.distFn(subvec[x], km_centroids[c])
 					if err2 != nil {
+						logutil.Errorf("kmeans initBounds distFn error: %v", err2)
 						return err2
 					}
 
@@ -471,13 +550,16 @@ func (km *ElkanClusterer[T]) computeCentroidDistances(ctx context.Context) error
 			for x := range subcentroids {
 
 				if x%100 == 0 && ctx.Err() != nil {
-					return ctx.Err()
+					err := ctx.Err()
+					logutil.Errorf("kmeans computeCentroidDistances context error: %v", err)
+					return err
 				}
 
 				i := start + x
 				for j := i + 1; j < km.clusterCnt; j++ {
 					dist, err2 := km.distFn(subcentroids[x], km.centroids[j])
 					if err2 != nil {
+						logutil.Errorf("kmeans computeCentroidDistances distFn error: %v", err2)
 						return err2
 					}
 					dist *= 0.5
@@ -490,6 +572,7 @@ func (km *ElkanClusterer[T]) computeCentroidDistances(ctx context.Context) error
 		})
 
 	if err != nil {
+		logutil.Errorf("kmeans computeCentroidDistances exec error: %v", err)
 		return err
 	}
 
@@ -530,7 +613,9 @@ func (km *ElkanClusterer[T]) assignData(ctx context.Context) (int, error) {
 			for currVector := range subvec {
 
 				if currVector%100 == 0 && ctx.Err() != nil {
-					return ctx.Err()
+					err := ctx.Err()
+					logutil.Errorf("kmeans assignData context error: %v", err)
+					return err
 				}
 
 				// step 2
@@ -557,6 +642,7 @@ func (km *ElkanClusterer[T]) assignData(ctx context.Context) (int, error) {
 
 							dxcx, err2 = km.distFn(subvec[currVector], km.centroids[subassigns[currVector]])
 							if err2 != nil {
+								logutil.Errorf("kmeans assignData distFn error (recompute): %v", err2)
 								return err2
 							}
 							submetas[currVector].upper = dxcx
@@ -583,6 +669,7 @@ func (km *ElkanClusterer[T]) assignData(ctx context.Context) (int, error) {
 
 							dxc, err2 := km.distFn(subvec[currVector], km.centroids[c]) // d(x,c) in the paper
 							if err2 != nil {
+								logutil.Errorf("kmeans assignData distFn error (update): %v", err2)
 								return err2
 							}
 							submetas[currVector].lower[c] = dxc
@@ -599,6 +686,7 @@ func (km *ElkanClusterer[T]) assignData(ctx context.Context) (int, error) {
 		})
 
 	if err != nil {
+		logutil.Errorf("kmeans assignData exec error: %v", err)
 		return 0, err
 	}
 
@@ -659,6 +747,7 @@ func (km *ElkanClusterer[T]) updateBounds(ctx context.Context, newCentroid [][]T
 	for c := 0; c < km.clusterCnt; c++ {
 		centroidShiftDist[c], err = km.distFn(km.centroids[c], newCentroid[c])
 		if err != nil {
+			logutil.Errorf("kmeans updateBounds distFn error: %v", err)
 			return err
 		}
 		//logutil.Debugf("centroidShiftDist[%d]=%f", c, centroidShiftDist[c])
@@ -703,6 +792,7 @@ func (km *ElkanClusterer[T]) SSE() (float64, error) {
 	for i := range km.vectorList {
 		distErr, err := km.distFn(km.vectorList[i], km.centroids[km.assignments[i]])
 		if err != nil {
+			logutil.Errorf("kmeans SSE distFn error: %v", err)
 			return 0, err
 		}
 		sse += math.Pow(float64(distErr), 2)

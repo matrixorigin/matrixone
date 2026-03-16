@@ -83,6 +83,26 @@ func TestOriginSQL(t *testing.T) {
 	}
 }
 
+func TestDataBranchDiffOutputModes(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), `data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"} output summary`, 1)
+	require.NoError(t, err)
+
+	diffStmt, ok := stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.NotNil(t, diffStmt.OutputOpt)
+	require.True(t, diffStmt.OutputOpt.Summary)
+	require.False(t, diffStmt.OutputOpt.Count)
+
+	stmt, err = ParseOne(context.TODO(), "data branch diff t1 against t2 output count", 1)
+	require.NoError(t, err)
+
+	diffStmt, ok = stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.NotNil(t, diffStmt.OutputOpt)
+	require.False(t, diffStmt.OutputOpt.Summary)
+	require.True(t, diffStmt.OutputOpt.Count)
+}
+
 var (
 	partitionSQL = struct {
 		input  string
@@ -1960,6 +1980,14 @@ var (
 		}, {
 			input:  "alter role 'role1' rename to 'role2'",
 			output: "alter role role1 rename to role2",
+		}, {
+			input:  `alter role role_name add rule "SELECT * FROM db1.tbl1 WHERE age > 28" on table db1.tbl1`,
+			output: "alter role role_name add rule 'SELECT * FROM db1.tbl1 WHERE age > 28' on table db1.tbl1",
+		}, {
+			input:  `alter role role_name drop rule on table db1.tbl1`,
+			output: "alter role role_name drop rule on table db1.tbl1",
+		}, {
+			input: "show rules on role role_name",
 		}, {
 			input: "grant all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a to u1, u2 with grant option",
 		}, {
