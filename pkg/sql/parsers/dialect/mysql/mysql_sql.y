@@ -415,7 +415,7 @@ import (
 %token <str> OVER PRECEDING FOLLOWING GROUPS
 
 // Supported SHOW tokens
-%token <str> DATABASES TABLES SEQUENCES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS NODE LOCKS ROLES
+%token <str> DATABASES TABLES SEQUENCES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS NODE LOCKS ROLES RULE RULES
 %token <str> TABLE_NUMBER COLUMN_NUMBER TABLE_VALUES TABLE_SIZE
 
 // SET tokens
@@ -519,7 +519,7 @@ import (
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_procedure_stmt create_sequence_stmt
 %type <statement> create_source_stmt create_connector_stmt pause_daemon_task_stmt cancel_daemon_task_stmt resume_daemon_task_stmt
-%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt show_snapshots_stmt show_upgrade_stmt
+%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt show_snapshots_stmt show_upgrade_stmt show_rules_on_role_stmt
 %type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_procedure_status_stmt show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
@@ -3570,12 +3570,33 @@ alter_pitr_stmt:
     }
 
 alter_role_stmt:
-    ALTER ROLE exists_opt role_name RENAME TO role_name
+    ALTER ROLE IF EXISTS role_name RENAME TO role_name
     {
-        var ifExists = $3
-        var oldName = $4.Compare()
-        var newName = $7.Compare()
-        $$ = tree.NewAlterRole(ifExists, oldName, newName)
+        var oldName = $5.Compare()
+        var newName = $8.Compare()
+        $$ = tree.NewAlterRole(true, oldName, newName)
+    }
+|   ALTER ROLE role_name RENAME TO role_name
+    {
+        var oldName = $3.Compare()
+        var newName = $6.Compare()
+        $$ = tree.NewAlterRole(false, oldName, newName)
+    }
+|   ALTER ROLE role_name ADD RULE STRING ON TABLE ident '.' ident
+    {
+        var roleName = $3.Compare()
+        var ruleSQL = $6
+        var dbName = $9.Compare()
+        var tblName = $11.Compare()
+        var ruleName = dbName + "." + tblName
+        $$ = tree.NewAlterRoleAddRule(roleName, ruleName, ruleSQL, dbName, tblName)
+    }
+|   ALTER ROLE role_name DROP RULE ON TABLE ident '.' ident
+    {
+        var roleName = $3.Compare()
+        var dbName = $8.Compare()
+        var tblName = $10.Compare()
+        $$ = tree.NewAlterRoleDropRule(roleName, dbName, tblName)
     }
 
 partition_option:
@@ -4286,6 +4307,7 @@ show_stmt:
 |   show_logservice_replicas_stmt
 |   show_logservice_stores_stmt
 |   show_logservice_settings_stmt
+|   show_rules_on_role_stmt
 
 show_logservice_replicas_stmt:
     SHOW LOGSERVICE REPLICAS
@@ -4303,6 +4325,14 @@ show_logservice_settings_stmt:
     SHOW LOGSERVICE SETTINGS
     {
         $$ = &tree.ShowLogserviceSettings{}
+    }
+
+show_rules_on_role_stmt:
+    SHOW RULES ON ROLE role_name
+    {
+        $$ = &tree.ShowRules{
+            RoleName: $5.Compare(),
+        }
     }
 
 show_collation_stmt:
@@ -13446,6 +13476,8 @@ non_reserved_keyword:
 |   PAUSE
 |   PROFILES
 |   ROLE
+|   RULE
+|   RULES
 |   RANGE
 |   READ
 |   REAL

@@ -381,6 +381,26 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleAlterRole(ses, execCtx, st); err != nil {
 			return
 		}
+	case *tree.AlterRoleAddRule:
+		ses.EnterFPrint(FPAlterRoleAddRule)
+		defer ses.ExitFPrint(FPAlterRoleAddRule)
+		ses.InvalidatePrivilegeCache()
+		if err = handleAlterRoleAddRule(ses, execCtx, st); err != nil {
+			return
+		}
+	case *tree.AlterRoleDropRule:
+		ses.EnterFPrint(FPAlterRoleDropRule)
+		defer ses.ExitFPrint(FPAlterRoleDropRule)
+		ses.InvalidatePrivilegeCache()
+		if err = handleAlterRoleDropRule(ses, execCtx, st); err != nil {
+			return
+		}
+	case *tree.ShowRules:
+		ses.EnterFPrint(FPShowRules)
+		defer ses.ExitFPrint(FPShowRules)
+		if err = handleShowRules(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.CreateFunction:
 		ses.EnterFPrint(FPCreateFunction)
 		defer ses.ExitFPrint(FPCreateFunction)

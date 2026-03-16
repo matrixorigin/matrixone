@@ -281,6 +281,7 @@ mo_pubs  𝄀
 mo_role  𝄀
 mo_role_grant  𝄀
 mo_role_privs  𝄀
+mo_role_rule  𝄀
 mo_sessions  𝄀
 mo_shards  𝄀
 mo_shards_metadata  𝄀
@@ -301,7 +302,7 @@ mo_variables  𝄀
 mo_version
 show table_number from mo_catalog;
 ➤ Number of tables in mo_catalog[-5,64,0]  𝄀
-46
+47
 show column_number from mo_database;
 ➤ Number of columns in mo_database[-5,64,0]  𝄀
 9

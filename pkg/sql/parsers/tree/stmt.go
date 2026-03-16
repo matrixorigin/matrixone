@@ -494,6 +494,18 @@ func (node *ShowLogserviceSettings) StmtKind() StmtKind {
 	return compositeResRowType
 }
 
+func (node *ShowRules) StmtKind() StmtKind {
+	return compositeResRowType
+}
+
+func (node *AlterRoleAddRule) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *AlterRoleDropRule) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
 func (node *AlterTable) StmtKind() StmtKind {
 	return defaultStatusTyp
 }

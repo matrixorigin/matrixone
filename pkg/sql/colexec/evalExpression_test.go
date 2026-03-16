@@ -248,6 +248,45 @@ func TestColumnExpressionExecutor(t *testing.T) {
 	require.Equal(t, curr, proc.Mp().CurrNB())
 }
 
+// TestColumnExpressionExecutor_RelIndexOutOfRange verifies that Eval returns
+// an error instead of panicking when relIndex >= len(batches).
+// This reproduces the crash seen when IVF-Flat entries table contains NULL
+// vectors and L2_DISTANCE + ORDER BY LIMIT triggers the Top operator.
+func TestColumnExpressionExecutor_RelIndexOutOfRange(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// relIndex=2 but we will only pass 2 batches (valid indices: 0, 1).
+	col := &plan.Expr{
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 2,
+				ColPos: 0,
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_int32),
+			NotNullable: true,
+		},
+	}
+	executor, err := NewExpressionExecutor(proc, col)
+	require.NoError(t, err)
+	defer executor.Free()
+
+	bat := testutil.NewBatch(
+		[]types.Type{types.T_int32.ToType()},
+		true, 5, proc.Mp())
+
+	// Two batches → relIndex 2 is out of range.
+	_, err = executor.Eval(proc, []*batch.Batch{bat, bat}, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "relIndex 2 out of range")
+
+	// Single batch → the existing len==1 hack forces relIndex to 0, should succeed.
+	vec, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
+	require.NoError(t, err)
+	require.Equal(t, 5, vec.Length())
+}
+
 func TestFunctionExpressionExecutor(t *testing.T) {
 	{
 		proc := testutil.NewProcess(t)
