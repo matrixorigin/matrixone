@@ -256,3 +256,177 @@ func TestCalculateBloomFilterProbability(t *testing.T) {
 		})
 	}
 }
+
+func TestHashBuildTypeName(t *testing.T) {
+	arg := NewArgument()
+	require.Equal(t, "hash_build", arg.TypeName())
+	arg.Release()
+}
+
+func TestHashBuildOpType(t *testing.T) {
+	arg := NewArgument()
+	require.Equal(t, vm.HashBuild, arg.OpType())
+	arg.Release()
+}
+
+func TestHashBuildReleaseAndReuse(t *testing.T) {
+	arg := NewArgument()
+	arg.JoinMapTag = 100
+	arg.Release()
+
+	arg2 := NewArgument()
+	require.Equal(t, int32(0), arg2.JoinMapTag)
+	arg2.Release()
+}
+
+func TestHashBuildWithRuntimeFilter(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.SetMessageBoard(message.NewMessageBoard())
+	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
+	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
+		Ch2: make(chan process.PipelineSignal, 10),
+	}
+
+	arg := &HashBuild{
+		JoinMapTag:    1,
+		JoinMapRefCnt: 1,
+		Conditions: []*plan.Expr{
+			newExpr(0, types.T_int32.ToType()),
+		},
+		NeedHashMap: true,
+		RuntimeFilterSpec: &plan.RuntimeFilterSpec{
+			Tag: 1,
+		},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
+		},
+	}
+
+	err := arg.Prepare(proc)
+	require.NoError(t, err)
+
+	bat := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, false, 10, proc.Mp())
+	proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(bat, nil, proc.Mp())
+	proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, proc.Mp())
+	proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, proc.Mp())
+
+	marg := &merge.Merge{}
+	err = marg.Prepare(proc)
+	require.NoError(t, err)
+	arg.SetChildren([]vm.Operator{marg})
+
+	ok, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, ok.Status)
+
+	arg.Free(proc, false, nil)
+	proc.Free()
+}
+
+func TestHashBuildMultipleTypes(t *testing.T) {
+	tests := []struct {
+		name string
+		typ  types.Type
+	}{
+		{"int16", types.T_int16.ToType()},
+		{"int32", types.T_int32.ToType()},
+		{"int64", types.T_int64.ToType()},
+		{"uint8", types.T_uint8.ToType()},
+		{"varchar", types.T_varchar.ToType()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tc := newTestCase(t, []bool{false}, []types.Type{tt.typ}, []*plan.Expr{newExpr(0, tt.typ)})
+			err := tc.marg.Prepare(tc.proc)
+			require.NoError(t, err)
+			err = tc.arg.Prepare(tc.proc)
+			require.NoError(t, err)
+			tc.arg.SetChildren([]vm.Operator{tc.marg})
+			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(newBatch(tc.types, tc.proc, Rows), nil, tc.proc.Mp())
+			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, tc.proc.Mp())
+			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
+			ok, err := vm.Exec(tc.arg, tc.proc)
+			require.NoError(t, err)
+			require.Equal(t, vm.ExecStop, ok.Status)
+			tc.arg.Free(tc.proc, false, nil)
+			tc.proc.Free()
+		})
+	}
+}
+
+func TestHashBuildNullable(t *testing.T) {
+	tc := newTestCase(t, []bool{true}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
+	err := tc.marg.Prepare(tc.proc)
+	require.NoError(t, err)
+	err = tc.arg.Prepare(tc.proc)
+	require.NoError(t, err)
+	tc.arg.SetChildren([]vm.Operator{tc.marg})
+	bat := testutil.NewBatch(tc.types, true, int(Rows), tc.proc.Mp())
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(bat, nil, tc.proc.Mp())
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, tc.proc.Mp())
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
+	ok, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, ok.Status)
+	tc.arg.Free(tc.proc, false, nil)
+	tc.proc.Free()
+}
+
+func TestHashBuildEmptyBatch(t *testing.T) {
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
+	err := tc.marg.Prepare(tc.proc)
+	require.NoError(t, err)
+	err = tc.arg.Prepare(tc.proc)
+	require.NoError(t, err)
+	tc.arg.SetChildren([]vm.Operator{tc.marg})
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, tc.proc.Mp())
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
+	ok, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, ok.Status)
+	tc.arg.Free(tc.proc, false, nil)
+	tc.proc.Free()
+}
+
+func TestHashBuildHashOnPK(t *testing.T) {
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
+	tc.arg.HashOnPK = true
+	err := tc.marg.Prepare(tc.proc)
+	require.NoError(t, err)
+	err = tc.arg.Prepare(tc.proc)
+	require.NoError(t, err)
+	tc.arg.SetChildren([]vm.Operator{tc.marg})
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(newBatch(tc.types, tc.proc, Rows), nil, tc.proc.Mp())
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, tc.proc.Mp())
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
+	ok, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, ok.Status)
+	tc.arg.Free(tc.proc, false, nil)
+	tc.proc.Free()
+}
+
+func TestHashBuildIsShuffle(t *testing.T) {
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
+	tc.arg.IsShuffle = true
+	tc.arg.ShuffleIdx = 0
+	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: 1}
+	err := tc.marg.Prepare(tc.proc)
+	require.NoError(t, err)
+	err = tc.arg.Prepare(tc.proc)
+	require.NoError(t, err)
+	tc.arg.SetChildren([]vm.Operator{tc.marg})
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(newBatch(tc.types, tc.proc, Rows), nil, tc.proc.Mp())
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, tc.proc.Mp())
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
+	ok, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, ok.Status)
+	tc.arg.Free(tc.proc, false, nil)
+	tc.proc.Free()
+}

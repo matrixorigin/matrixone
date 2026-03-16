@@ -1,0 +1,119 @@
+drop database if exists d1;
+create database d1;
+use d1;
+drop table if exists t1;
+drop table if exists t2;
+create table t1(c1 int not null, c2 int not null, c3 int not null) cluster by c1;
+create table t2(c1 int not null, c2 int not null, c3 int not null) cluster by c1;
+insert into t1 select *,*,* from generate_series(5000000) g;
+insert into t2 select *,*,* from generate_series(4000000) g;
+set @@join_spill_mem = 100;
+-- @separator:table
+select mo_ctl('dn', 'flush', 'd1.t1');
+-- @separator:table
+select mo_ctl('dn', 'flush', 'd1.t2');
+select Sleep(1);
+-- @separator:table
+explain select count(*) from t1,t2 where t1.c1=t2.c1;
+select count(*) from t1,t2 where t1.c1=t2.c1;
+-- @separator:table
+explain select count(*) as cnt from t1,t2 where t1.c1=t2.c1 group by t1.c1 having cnt>1;
+select count(*) as cnt from t1,t2 where t1.c1=t2.c1 group by t1.c1 having cnt>1;
+-- @separator:table
+explain select count(*) from t1,t2 where t1.c1=t2.c2;
+select count(*) from t1,t2 where t1.c1=t2.c2;
+-- @separator:table
+explain select count(*) from t1,t2 where t1.c2=t2.c1;
+select count(*) from t1,t2 where t1.c2=t2.c1;
+-- @separator:table
+explain select count(*) from t1,t2 where t1.c2=t2.c2;
+select count(*) from t1,t2 where t1.c2=t2.c2;
+-- @bvt:issue#19733
+-- @separator:table
+explain select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<500000;
+-- @bvt:issue
+select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<500000;
+-- @bvt:issue#19733
+-- @separator:table
+explain select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<1500000;
+-- @bvt:issue
+select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<1500000;
+-- @separator:table
+explain select count(*) from t1 group by c1 limit 5;
+select count(*) from t1 group by c1 limit 5;
+-- @separator:table
+explain select count(*) from t1 group by c2 limit 5;
+select count(*) from t1 group by c2 limit 5;
+-- @bvt:issue#19733
+-- @separator:table
+explain select count(*) from t1 where t1.c2 in ( select c2 from t2 where t2.c3>100000 );
+-- @bvt:issue
+select count(*) from t1 where t1.c2 in ( select c2 from t2 where t2.c3>100000 );
+-- @bvt:issue#19733
+-- @separator:table
+explain select count(*) from t1 where t1.c2 not in ( select c3 from t2 where t2.c3 between 100 and 700000 );
+-- @bvt:issue
+select count(*) from t1 where t1.c2 not in ( select c3 from t2 where t2.c3 between 100 and 700000 );
+-- @bvt:issue#19733
+-- @separator:table
+explain select count(*) from t1 where t1.c3<800000 and t1.c2 not in ( select c3 from t2 where t2.c3 between 10000 and 600000 );
+-- @bvt:issue
+select count(*) from t1 where  t1.c3<800000 and t1.c2 not in ( select c3 from t2 where t2.c3 between 10000 and 600000 );
+-- @bvt:issue#19733
+-- @separator:table
+explain select count(*) from t1 where t1.c1 <300000 and  t1.c2 in ( select c2 from t2 where t2.c3>100000 );
+-- @bvt:issue
+select count(*) from t1 where t1.c1 <300000 and  t1.c2 in ( select c2 from t2 where t2.c3>100000 );
+-- @bvt:issue#19733
+-- @separator:table
+explain select count(*) from t1 left join t2 on t1.c1=t2.c1 where t1.c3 >5000000;
+-- @bvt:issue
+select count(*) from t1 left join t2 on t1.c1=t2.c1 where t1.c3 >5000000;
+-- @separator:table
+explain select count(*) from t1 left join t2 on t1.c1=t2.c1 and t1.c3 >t2.c3;
+select count(*) from t1 left join t2 on t1.c1=t2.c1 and t1.c3 >t2.c3;
+create table t3(c1 int not null, c2 int not null)cluster by c1;
+insert into t3 select *,* from generate_series(1,1000000)g;
+-- @separator:table
+select mo_ctl('dn', 'flush', 'd1.t3');
+-- @bvt:issue#19733
+-- @separator:table
+explain select count(*) from t3 where t3.c2 in (select c3 from t1 where t1.c2!=20000 and  t1.c2 not in ( select c2 from t2 where t2.c3>150000 ));
+-- @bvt:issue
+select count(*) from t3 where t3.c2 in (select c3 from t1 where t1.c2!=20000 and  t1.c2 not in ( select c2 from t2 where t2.c3>150000 ));
+select count(*) from t3 where t3.c1<100000 and t3.c2 not in (select c3 from t1 where t1.c2!=30000 and  t1.c2  in ( select c2 from t2 where t2.c3<850000 ));
+select count(*) from t1,t2,t3 where t1.c1=t2.c1 and t1.c2=t3.c2 and t2.c2<900000 and t3.c1<500000;
+-- @bvt:issue#19733
+-- @separator:table
+explain select count(*) from (select c1 from t1 group by c1) s1, t2 where s1.c1=t2.c1 and t2.c2<1000000;
+-- @bvt:issue
+select count(*) from (select c1 from t1 group by c1) s1, t2 where s1.c1=t2.c1 and t2.c2<1000000;
+delete from t1 where c3%5=1;
+insert into t1 values(-1,-2,-3);
+insert into t1 values(10,11,12);
+select count(*) from t1 where c3!=0;
+drop table t3;
+create table t4(c1 int not null, c2  int unsigned) cluster by c1;
+insert into t4 select *,* from generate_series(1000000) g;
+insert into t4 select result+10000000,result+10000000 from generate_series(1000000) g;
+-- @separator:table
+select mo_ctl('dn', 'flush', 'd1.t4');
+-- @separator:table
+explain select count(*) as cnt from t4 group by c1 having cnt>1;
+select count(*) as cnt from t4 group by c1 having cnt>1;
+-- @separator:table
+explain select count(*) as cnt from t4 group by c2 having cnt>1;
+select count(*) as cnt from t4 group by c2 having cnt>1;
+drop database if exists d1;
+drop database if exists test;
+create database test;
+use test;
+create table t1(a int primary key, b int);
+select enable_fault_injection();
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'test.t1');
+insert into t1 select *, 1 from generate_series(1, 1000*1000*10)g;
+select sum(b) from t1;
+update t1 set b = b + 1 where a mod 100 = 0;
+select sum(b) from t1;
+select disable_fault_injection();
+drop database if exists test;
