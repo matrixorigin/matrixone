@@ -15,10 +15,16 @@
 package publication
 
 import (
+	"context"
+	"database/sql/driver"
 	"errors"
+	"fmt"
+	"io"
 	"testing"
 	"time"
 
+	gomysql "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -511,4 +517,241 @@ func TestExponentialBackoff_Next_NegativeMax(t *testing.T) {
 	// Max <= 0 means no cap
 	// attempt = 4: 100ms * 2^3 = 800ms (not capped)
 	assert.Equal(t, 800*time.Millisecond, b.Next(4))
+}
+
+// ============================================================
+// Tests for Parse function
+// ============================================================
+
+func TestParse_EmptyString(t *testing.T) {
+	assert.Nil(t, Parse(""))
+}
+
+func TestParse_RetryableFormat(t *testing.T) {
+	now := time.Now().Unix()
+	msg := fmt.Sprintf("R:3:%d:%d:some error", now, now+10)
+	m := Parse(msg)
+	assert.True(t, m.IsRetryable)
+	assert.Equal(t, 3, m.RetryCount)
+	assert.Equal(t, "some error", m.Message)
+}
+
+func TestParse_NonRetryableFormat(t *testing.T) {
+	now := time.Now().Unix()
+	msg := fmt.Sprintf("N:%d:fatal:error:with:colons", now)
+	m := Parse(msg)
+	assert.False(t, m.IsRetryable)
+	assert.Equal(t, 0, m.RetryCount)
+	assert.Equal(t, "fatal:error:with:colons", m.Message)
+}
+
+func TestParse_LegacyFormat(t *testing.T) {
+	m := Parse("just a plain error")
+	assert.False(t, m.IsRetryable)
+	assert.Equal(t, "just a plain error", m.Message)
+}
+
+// ============================================================
+// Tests for Format method
+// ============================================================
+
+func TestFormat_Nil(t *testing.T) {
+	var m *ErrorMetadata
+	assert.Equal(t, "", m.Format())
+}
+
+func TestFormat_Retryable(t *testing.T) {
+	m := &ErrorMetadata{IsRetryable: true, RetryCount: 2, FirstSeen: time.Unix(100, 0), LastSeen: time.Unix(200, 0), Message: "err"}
+	assert.Equal(t, "R:2:100:200:err", m.Format())
+}
+
+func TestFormat_NonRetryable(t *testing.T) {
+	m := &ErrorMetadata{IsRetryable: false, FirstSeen: time.Unix(100, 0), Message: "err"}
+	assert.Equal(t, "N:100:err", m.Format())
+}
+
+// ============================================================
+// Tests for classifiers
+// ============================================================
+
+func TestDefaultClassifier_Nil(t *testing.T) {
+	assert.False(t, (DefaultClassifier{}).IsRetryable(nil))
+}
+
+func TestDefaultClassifier_EOF(t *testing.T) {
+	assert.True(t, (DefaultClassifier{}).IsRetryable(io.EOF))
+	assert.True(t, (DefaultClassifier{}).IsRetryable(io.ErrUnexpectedEOF))
+}
+
+func TestDefaultClassifier_DeadlineExceeded(t *testing.T) {
+	assert.True(t, (DefaultClassifier{}).IsRetryable(context.DeadlineExceeded))
+}
+
+func TestDefaultClassifier_Patterns(t *testing.T) {
+	for _, p := range []string{"connection reset", "dial tcp", "broken pipe", "i/o timeout", "service unavailable"} {
+		assert.True(t, (DefaultClassifier{}).IsRetryable(errors.New(p)), p)
+	}
+	assert.False(t, (DefaultClassifier{}).IsRetryable(errors.New("unique constraint violation")))
+}
+
+func TestMySQLErrorClassifier_Nil(t *testing.T) {
+	assert.False(t, (MySQLErrorClassifier{}).IsRetryable(nil))
+}
+
+func TestMySQLErrorClassifier_BadConn(t *testing.T) {
+	assert.True(t, (MySQLErrorClassifier{}).IsRetryable(driver.ErrBadConn))
+}
+
+func TestMySQLErrorClassifier_RetryableCode(t *testing.T) {
+	err := &gomysql.MySQLError{Number: 1205, Message: "Lock wait timeout"}
+	assert.True(t, (MySQLErrorClassifier{}).IsRetryable(err))
+}
+
+func TestMySQLErrorClassifier_NonRetryableCode(t *testing.T) {
+	err := &gomysql.MySQLError{Number: 1062, Message: "Duplicate entry"}
+	assert.False(t, (MySQLErrorClassifier{}).IsRetryable(err))
+}
+
+func TestCommitErrorClassifier_Nil(t *testing.T) {
+	assert.False(t, (CommitErrorClassifier{}).IsRetryable(nil))
+}
+
+func TestCommitErrorClassifier_TxnNeedRetry(t *testing.T) {
+	err := moerr.NewTxnNeedRetryNoCtx()
+	assert.True(t, (CommitErrorClassifier{}).IsRetryable(err))
+}
+
+func TestCommitErrorClassifier_RCMode(t *testing.T) {
+	assert.True(t, (CommitErrorClassifier{}).IsRetryable(errors.New("txn need retry in rc mode")))
+	assert.False(t, (CommitErrorClassifier{}).IsRetryable(errors.New("some other error")))
+}
+
+func TestStaleReadClassifier(t *testing.T) {
+	assert.False(t, (StaleReadClassifier{}).IsRetryable(nil))
+	assert.True(t, (StaleReadClassifier{}).IsRetryable(errors.New("stale read detected")))
+	assert.False(t, (StaleReadClassifier{}).IsRetryable(errors.New("other")))
+}
+
+func TestGCRunningClassifier(t *testing.T) {
+	assert.False(t, (GCRunningClassifier{}).IsRetryable(nil))
+	assert.True(t, (GCRunningClassifier{}).IsRetryable(errors.New("GC is running")))
+	assert.False(t, (GCRunningClassifier{}).IsRetryable(errors.New("other")))
+}
+
+func TestSyncProtectionTTLClassifier(t *testing.T) {
+	assert.False(t, (SyncProtectionTTLClassifier{}).IsRetryable(nil))
+	assert.True(t, (SyncProtectionTTLClassifier{}).IsRetryable(errors.New("sync protection TTL expired")))
+	assert.True(t, (SyncProtectionTTLClassifier{}).IsRetryable(errors.New("sync protection is soft deleted")))
+	assert.False(t, (SyncProtectionTTLClassifier{}).IsRetryable(errors.New("other")))
+}
+
+func TestIsRetryableError(t *testing.T) {
+	assert.True(t, IsRetryableError(io.EOF))
+	assert.False(t, IsRetryableError(errors.New("unique constraint")))
+}
+
+func TestMultiClassifier(t *testing.T) {
+	mc := MultiClassifier{DefaultClassifier{}, CommitErrorClassifier{}}
+	assert.True(t, mc.IsRetryable(io.EOF))
+	assert.True(t, mc.IsRetryable(errors.New("txn need retry in rc mode")))
+	assert.False(t, mc.IsRetryable(errors.New("unique constraint")))
+	assert.False(t, mc.IsRetryable(nil))
+}
+
+// ============================================================
+// Tests for Policy.Do
+// ============================================================
+
+func TestPolicyDo_MaxAttemptsZero(t *testing.T) {
+	p := Policy{MaxAttempts: 0}
+	err := p.Do(context.Background(), func() error { return nil })
+	assert.Error(t, err)
+}
+
+func TestPolicyDo_Success(t *testing.T) {
+	p := Policy{MaxAttempts: 3, Classifier: DefaultClassifier{}}
+	err := p.Do(context.Background(), func() error { return nil })
+	assert.NoError(t, err)
+}
+
+func TestPolicyDo_NonRetryable(t *testing.T) {
+	calls := 0
+	p := Policy{MaxAttempts: 3, Classifier: DefaultClassifier{}}
+	err := p.Do(context.Background(), func() error { calls++; return errors.New("unique constraint") })
+	assert.Error(t, err)
+	assert.Equal(t, 1, calls)
+}
+
+func TestPolicyDo_ErrNonRetryable(t *testing.T) {
+	calls := 0
+	p := Policy{MaxAttempts: 3, Classifier: DefaultClassifier{}}
+	err := p.Do(context.Background(), func() error { calls++; return ErrNonRetryable })
+	assert.Error(t, err)
+	assert.Equal(t, 1, calls)
+}
+
+func TestPolicyDo_RetryThenSuccess(t *testing.T) {
+	calls := 0
+	p := Policy{MaxAttempts: 3, Classifier: DefaultClassifier{}}
+	err := p.Do(context.Background(), func() error {
+		calls++
+		if calls < 2 {
+			return io.EOF
+		}
+		return nil
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, 2, calls)
+}
+
+func TestPolicyDo_ContextCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	p := Policy{
+		MaxAttempts: 3,
+		Classifier:  DefaultClassifier{},
+		Backoff:     ExponentialBackoff{Base: time.Second},
+	}
+	err := p.Do(ctx, func() error { return io.EOF })
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
+func TestPolicyDo_NoClassifier(t *testing.T) {
+	calls := 0
+	p := Policy{MaxAttempts: 3}
+	err := p.Do(context.Background(), func() error { calls++; return errors.New("err") })
+	assert.Error(t, err)
+	assert.Equal(t, 1, calls)
+}
+
+func TestPolicyDo_NilBackoff(t *testing.T) {
+	calls := 0
+	p := Policy{MaxAttempts: 3, Classifier: DefaultClassifier{}}
+	err := p.Do(context.Background(), func() error {
+		calls++
+		if calls < 3 {
+			return io.EOF
+		}
+		return nil
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, 3, calls)
+}
+
+func TestPolicyDo_BackoffZeroWait(t *testing.T) {
+	calls := 0
+	p := Policy{
+		MaxAttempts: 3,
+		Classifier:  DefaultClassifier{},
+		Backoff:     ExponentialBackoff{Base: 0},
+	}
+	err := p.Do(context.Background(), func() error {
+		calls++
+		if calls < 2 {
+			return io.EOF
+		}
+		return nil
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, 2, calls)
 }

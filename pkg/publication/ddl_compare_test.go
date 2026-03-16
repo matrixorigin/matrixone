@@ -224,7 +224,7 @@ func TestGenerateAddIndexStatement_IVFFlat(t *testing.T) {
 	idx := &indexInfo{
 		name:                  "vec_idx",
 		columns:               []string{"embedding"},
-		indexType:              "ivfflat",
+		indexType:             "ivfflat",
 		algoParamList:         100,
 		algoParamVectorOpType: "vector_l2_ops",
 	}
@@ -238,7 +238,7 @@ func TestGenerateAddIndexStatement_HNSW(t *testing.T) {
 	idx := &indexInfo{
 		name:                  "hnsw_idx",
 		columns:               []string{"embedding"},
-		indexType:              "hnsw",
+		indexType:             "hnsw",
 		hnswM:                 16,
 		hnswEfConstruction:    200,
 		algoParamVectorOpType: "vector_l2_ops",
@@ -367,4 +367,52 @@ func TestCompareTableDefsAndGenerateAlterStatements_ColumnRename(t *testing.T) {
 
 func TestFormatTypeReference_Nil(t *testing.T) {
 	assert.Equal(t, "", formatTypeReference(nil))
+}
+
+func TestCompareTableDefs_IndexVisibilityChange(t *testing.T) {
+	ctx := context.Background()
+	oldSQL := "CREATE TABLE t1 (id INT, name VARCHAR(50), INDEX idx_name (name))"
+	newSQL := "CREATE TABLE t1 (id INT, name VARCHAR(50), INDEX idx_name (name) INVISIBLE)"
+	stmts, _, err := compareTableDefsAndGenerateAlterStatements(ctx, "db", "t1", oldSQL, newSQL)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+	assert.Contains(t, stmts[0], "INVISIBLE")
+}
+
+func TestGenerateAddIndexStatement_IVFFlatWithParams(t *testing.T) {
+	idx := &indexInfo{
+		columns:               []string{"embedding"},
+		indexType:             "ivfflat",
+		algoParamList:         100,
+		algoParamVectorOpType: "vector_l2_ops",
+	}
+	stmt := generateAddIndexStatement("`db`.`t1`", "idx_emb", idx)
+	assert.Contains(t, stmt, "USING ivfflat")
+	assert.Contains(t, stmt, "LISTS = 100")
+	assert.Contains(t, stmt, "OP_TYPE 'vector_l2_ops'")
+}
+
+func TestGenerateAddIndexStatement_HNSWWithParams(t *testing.T) {
+	idx := &indexInfo{
+		columns:               []string{"embedding"},
+		indexType:             "hnsw",
+		hnswM:                 16,
+		hnswEfConstruction:    200,
+		algoParamVectorOpType: "vector_l2_ops",
+	}
+	stmt := generateAddIndexStatement("`db`.`t1`", "idx_emb", idx)
+	assert.Contains(t, stmt, "USING hnsw")
+	assert.Contains(t, stmt, "M = 16")
+	assert.Contains(t, stmt, "EF_CONSTRUCTION = 200")
+	assert.Contains(t, stmt, "OP_TYPE 'vector_l2_ops'")
+}
+
+func TestCanDoColumnChangesInplace_NullableDiff(t *testing.T) {
+	oldCols := map[string]*columnInfo{
+		"id": {typ: "INT", position: 0, nullable: false},
+	}
+	newCols := map[string]*columnInfo{
+		"id": {typ: "INT", position: 0, nullable: true},
+	}
+	assert.False(t, canDoColumnChangesInplace(oldCols, newCols))
 }
