@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"go.uber.org/zap"
 )
@@ -33,7 +32,7 @@ var (
 			MinUpgradeVersion: "3.0.0",
 			UpgradeCluster:    versions.No,
 			UpgradeTenant:     versions.Yes,
-			VersionOffset:     uint32(len(tenantUpgEntries)),
+			VersionOffset:     uint32(len(tenantUpgEntries) + len(clusterUpgEntries)),
 		},
 	}
 )
@@ -61,14 +60,12 @@ func (v *versionHandle) HandleTenantUpgrade(
 ) error {
 
 	var (
-		err    error
-		goon   bool
-		logger func(msg string, fields ...zap.Field)
+		err  error
+		goon bool
 	)
 
 	for _, upgEntry := range tenantUpgEntries {
 		goon = false
-		logger = logutil.Error
 
 		start := time.Now()
 		err = upgEntry.Upgrade(txn, uint32(tenantID))
@@ -76,18 +73,25 @@ func (v *versionHandle) HandleTenantUpgrade(
 		duration := time.Since(start)
 
 		if err == nil {
-			logger = logutil.Info
 			goon = true
+			getLogger(txn.Txn().TxnOptions().CN).Info("tenant upgrade",
+				zap.String("cn", txn.Txn().TxnOptions().CN),
+				zap.String("entry", upgEntry.String()),
+				zap.Int32("tenantId", tenantID),
+				zap.String("version", v.metadata.Version),
+				zap.Duration("duration", duration),
+				zap.Error(err),
+			)
+		} else {
+			getLogger(txn.Txn().TxnOptions().CN).Error("tenant upgrade",
+				zap.String("cn", txn.Txn().TxnOptions().CN),
+				zap.String("entry", upgEntry.String()),
+				zap.Int32("tenantId", tenantID),
+				zap.String("version", v.metadata.Version),
+				zap.Duration("duration", duration),
+				zap.Error(err),
+			)
 		}
-
-		logger("tenant upgrade",
-			zap.String("cn", txn.Txn().TxnOptions().CN),
-			zap.String("entry", upgEntry.String()),
-			zap.Int32("tenantId", tenantID),
-			zap.String("version", v.metadata.Version),
-			zap.Duration("duration", duration),
-			zap.Error(err),
-		)
 
 		if goon {
 			continue
