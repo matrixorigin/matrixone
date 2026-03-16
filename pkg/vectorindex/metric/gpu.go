@@ -17,6 +17,9 @@
 package metric
 
 import (
+	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 )
 
@@ -29,3 +32,49 @@ var (
 		Metric_L1Distance:     cuvs.L1,
 	}
 )
+
+func PairWiseDistance[T types.RealNumbers](
+	x []T,
+	nX int,
+	y []T,
+	nY int,
+	dim int,
+	metric MetricType,
+	deviceID int,
+) ([]float32, error) {
+	if nX == 0 || nY == 0 {
+		return nil, nil
+	}
+
+	cuvsMetric, ok := MetricTypeToCuvsMetric[metric]
+	if !ok {
+		return GoPairWiseDistance(x, nX, y, nY, dim, metric)
+	}
+
+	// T must be float32 for cuvs.PairwiseDistance as per VectorType constraint
+	// RealNumbers only includes float32/float64. cuvs.VectorType includes float32, Float16, int8, uint8.
+	// For now we only support float32 on GPU via this interface if T is float32.
+	var zero T
+	if any(zero).(interface{}) == any(float32(0)).(interface{}) {
+		xf32 := any(x).([]float32)
+		yf32 := any(y).([]float32)
+
+		res, err := cuvs.PairwiseDistance(xf32, uint64(nX), yf32, uint64(nY), uint32(dim), cuvsMetric, deviceID)
+		if err != nil {
+			return nil, err
+		}
+
+		if metric == Metric_L2Distance {
+			for i := range res {
+				res[i] = float32(math.Sqrt(float64(res[i])))
+			}
+		} else if metric == Metric_InnerProduct {
+			for i := range res {
+				res[i] = -res[i]
+			}
+		}
+		return res, nil
+	}
+
+	return GoPairWiseDistance(x, nX, y, nY, dim, metric)
+}
