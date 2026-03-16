@@ -832,6 +832,14 @@ func (ses *Session) updateSqlModeNoAutoValueOnZero(val interface{}) {
 	}
 }
 
+func parseNoAutoValueOnZero(val interface{}) (bool, bool) {
+	mode, ok := val.(string)
+	if !ok {
+		return false, false
+	}
+	return strings.Contains(strings.ToUpper(mode), "NO_AUTO_VALUE_ON_ZERO"), true
+}
+
 func (ses *Session) GetPrivilegeCache() *privilegeCache {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
