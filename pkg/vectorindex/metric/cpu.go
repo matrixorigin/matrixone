@@ -21,13 +21,10 @@ import (
 )
 
 func PairWiseDistance[T types.RealNumbers](
-	x []T,
-	nX int,
-	y []T,
-	nY int,
-	dim int,
+	x [][]T,
+	y [][]T,
 	metric MetricType,
 	_ int,
 ) ([]float32, error) {
-	return GoPairWiseDistance(x, nX, y, nY, dim, metric)
+	return GoPairWiseDistance(x, y, metric)
 }

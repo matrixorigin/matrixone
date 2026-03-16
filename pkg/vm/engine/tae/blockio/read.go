@@ -34,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -394,23 +393,34 @@ func HandleOrderByLimitOnIVFFlatIndex(
 		return nullsBm.Contains(uint64(row))
 	})
 
-	searchResults := make([]vectorindex.SearchResult, 0, len(selectRows))
-
 	switch orderByLimit.Typ {
 	case types.T_array_float32:
-		distFunc, err := metric.ResolveDistanceFn[float32](orderByLimit.MetricType)
+		rhs := types.BytesToArray[float32](orderByLimit.NumVec)
+		dim := len(rhs)
+		if dim == 0 {
+			return nil, nil, moerr.NewInternalError(ctx, "empty query vector")
+		}
+		nX := len(selectRows)
+		if nX == 0 {
+			return nil, nil, nil
+		}
+
+		lhs := make([][]float32, nX)
+		for i, row := range selectRows {
+			lhs[i] = types.BytesToArray[float32](vecCol.GetBytesAt(int(row)))
+		}
+
+		pairwiseDists, err := metric.PairWiseDistance(lhs, [][]float32{rhs}, orderByLimit.MetricType, 0)
 		if err != nil {
 			return nil, nil, err
 		}
 
-		rhs := types.BytesToArray[float32](orderByLimit.NumVec)
+		resIdx := 0
+		sels := make([]int64, nX)
+		dists := make([]float64, nX)
 
-		for _, row := range selectRows {
-			dist, err := distFunc(types.BytesToArray[float32](vecCol.GetBytesAt(int(row))), rhs)
-			if err != nil {
-				return nil, nil, err
-			}
-			dist64 := float64(dist)
+		for i, row := range selectRows {
+			dist64 := float64(pairwiseDists[i])
 
 			if orderByLimit.LowerBoundType == plan.BoundType_INCLUSIVE {
 				if dist64 < orderByLimit.LowerBound {
@@ -442,25 +452,50 @@ func HandleOrderByLimitOnIVFFlatIndex(
 				heap.Push(&orderByLimit.DistHeap, dist64)
 			}
 
-			searchResults = append(searchResults, vectorindex.SearchResult{
-				Id:       row,
-				Distance: dist64,
-			})
+			sels[resIdx] = row
+			dists[resIdx] = dist64
+			resIdx++
 		}
+		sels = sels[:resIdx]
+		dists = dists[:resIdx]
+
+		finalIdx := 0
+		for i := 0; i < len(sels); i++ {
+			if dists[i] <= orderByLimit.DistHeap[0] {
+				sels[finalIdx] = sels[i]
+				dists[finalIdx] = dists[i]
+				finalIdx++
+			}
+		}
+		return sels[:finalIdx], dists[:finalIdx], nil
 
 	case types.T_array_float64:
-		distFunc, err := metric.ResolveDistanceFn[float64](orderByLimit.MetricType)
+		rhs := types.BytesToArray[float64](orderByLimit.NumVec)
+		dim := len(rhs)
+		if dim == 0 {
+			return nil, nil, moerr.NewInternalError(ctx, "empty query vector")
+		}
+		nX := len(selectRows)
+		if nX == 0 {
+			return nil, nil, nil
+		}
+
+		lhs := make([][]float64, nX)
+		for i, row := range selectRows {
+			lhs[i] = types.BytesToArray[float64](vecCol.GetBytesAt(int(row)))
+		}
+
+		pairwiseDists, err := metric.PairWiseDistance(lhs, [][]float64{rhs}, orderByLimit.MetricType, 0)
 		if err != nil {
 			return nil, nil, err
 		}
 
-		rhs := types.BytesToArray[float64](orderByLimit.NumVec)
+		resIdx := 0
+		sels := make([]int64, nX)
+		dists := make([]float64, nX)
 
-		for _, row := range selectRows {
-			dist64, err := distFunc(types.BytesToArray[float64](vecCol.GetBytesAt(int(row))), rhs)
-			if err != nil {
-				return nil, nil, err
-			}
+		for i, row := range selectRows {
+			dist64 := float64(pairwiseDists[i])
 
 			if orderByLimit.LowerBoundType == plan.BoundType_INCLUSIVE {
 				if dist64 < orderByLimit.LowerBound {
@@ -492,28 +527,26 @@ func HandleOrderByLimitOnIVFFlatIndex(
 				heap.Push(&orderByLimit.DistHeap, dist64)
 			}
 
-			searchResults = append(searchResults, vectorindex.SearchResult{
-				Id:       row,
-				Distance: dist64,
-			})
+			sels[resIdx] = row
+			dists[resIdx] = dist64
+			resIdx++
 		}
+		sels = sels[:resIdx]
+		dists = dists[:resIdx]
+
+		finalIdx := 0
+		for i := 0; i < len(sels); i++ {
+			if dists[i] <= orderByLimit.DistHeap[0] {
+				sels[finalIdx] = sels[i]
+				dists[finalIdx] = dists[i]
+				finalIdx++
+			}
+		}
+		return sels[:finalIdx], dists[:finalIdx], nil
 
 	default:
 		return nil, nil, moerr.NewInternalError(ctx, fmt.Sprintf("only support float32/float64 type for topn: %s", orderByLimit.Typ))
 	}
-
-	searchResults = slices.DeleteFunc(searchResults, func(res vectorindex.SearchResult) bool {
-		return res.Distance > orderByLimit.DistHeap[0]
-	})
-
-	sels := make([]int64, len(searchResults))
-	dists := make([]float64, len(searchResults))
-	for i, res := range searchResults {
-		sels[i] = res.Id
-		dists[i] = res.Distance
-	}
-
-	return sels, dists, nil
 }
 
 func fillOutputBatchBySelectedRows(

@@ -22,15 +22,15 @@ import (
 )
 
 func TestPairWiseDistance(t *testing.T) {
-	nX, nY, dim := 3, 2, 4
-	x := []float32{
-		1, 0, 0, 0,
-		0, 1, 0, 0,
-		0, 0, 1, 0,
+	nX, nY := 3, 2
+	x := [][]float32{
+		{1, 0, 0, 0},
+		{0, 1, 0, 0},
+		{0, 0, 1, 0},
 	}
-	y := []float32{
-		1, 0, 0, 0,
-		0, 1, 1, 0,
+	y := [][]float32{
+		{1, 0, 0, 0},
+		{0, 1, 1, 0},
 	}
 
 	metrics := []MetricType{
@@ -43,7 +43,7 @@ func TestPairWiseDistance(t *testing.T) {
 
 	for _, m := range metrics {
 		t.Run(MetricTypeToDistFuncName[m], func(t *testing.T) {
-			dist, err := PairWiseDistance(x, nX, y, nY, dim, m, 0)
+			dist, err := PairWiseDistance(x, y, m, 0)
 			require.NoError(t, err)
 			require.Equal(t, nX*nY, len(dist))
 
@@ -53,7 +53,7 @@ func TestPairWiseDistance(t *testing.T) {
 
 			for i := 0; i < nX; i++ {
 				for j := 0; j < nY; j++ {
-					expected, err := distFn(x[i*dim:(i+1)*dim], y[j*dim:(j+1)*dim])
+					expected, err := distFn(x[i], y[j])
 					require.NoError(t, err)
 
 					val := dist[i*nY+j]
@@ -69,11 +69,10 @@ func TestPairWiseDistance(t *testing.T) {
 }
 
 func TestGoPairWiseDistance(t *testing.T) {
-	nX, nY, dim := 2, 2, 2
-	x := []float64{1, 0, 0, 1}
-	y := []float64{1, 0, 1, 1}
+	x := [][]float64{{1, 0}, {0, 1}}
+	y := [][]float64{{1, 0}, {1, 1}}
 
-	dist, err := GoPairWiseDistance(x, nX, y, nY, dim, Metric_L2sqDistance)
+	dist, err := GoPairWiseDistance(x, y, Metric_L2sqDistance)
 	require.NoError(t, err)
 	require.Equal(t, 4, len(dist))
 

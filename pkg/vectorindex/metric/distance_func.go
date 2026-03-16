@@ -524,11 +524,8 @@ func ResolveDistanceFn[T types.RealNumbers](metric MetricType) (DistanceFunction
 }
 
 func GoPairWiseDistance[T types.RealNumbers](
-	x []T,
-	nX int,
-	y []T,
-	nY int,
-	dim int,
+	x [][]T,
+	y [][]T,
 	metric MetricType,
 ) ([]float32, error) {
 	distFn, err := ResolveDistanceFn[T](metric)
@@ -536,10 +533,12 @@ func GoPairWiseDistance[T types.RealNumbers](
 		return nil, err
 	}
 
+	nX := len(x)
+	nY := len(y)
 	res := make([]float32, nX*nY)
 	for i := 0; i < nX; i++ {
 		for j := 0; j < nY; j++ {
-			d, err := distFn(x[i*dim:(i+1)*dim], y[j*dim:(j+1)*dim])
+			d, err := distFn(x[i], y[j])
 			if err != nil {
 				return nil, err
 			}

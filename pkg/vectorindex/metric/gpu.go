@@ -19,6 +19,8 @@ package metric
 import (
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 )
@@ -34,21 +36,21 @@ var (
 )
 
 func PairWiseDistance[T types.RealNumbers](
-	x []T,
-	nX int,
-	y []T,
-	nY int,
-	dim int,
+	x [][]T,
+	y [][]T,
 	metric MetricType,
 	deviceID int,
 ) ([]float32, error) {
+	nX := len(x)
+	nY := len(y)
 	if nX == 0 || nY == 0 {
 		return nil, nil
 	}
+	dim := len(x[0])
 
 	cuvsMetric, ok := MetricTypeToCuvsMetric[metric]
 	if !ok || nX*nY*dim < 40000*1024 {
-		return GoPairWiseDistance(x, nX, y, nY, dim, metric)
+		return GoPairWiseDistance(x, y, metric)
 	}
 
 	// T must be float32 for cuvs.PairwiseDistance as per VectorType constraint
@@ -56,8 +58,27 @@ func PairWiseDistance[T types.RealNumbers](
 	// For now we only support float32 on GPU via this interface if T is float32.
 	var zero T
 	if any(zero).(interface{}) == any(float32(0)).(interface{}) {
-		xf32 := any(x).([]float32)
-		yf32 := any(y).([]float32)
+		allocator := malloc.NewCAllocator()
+
+		xf32Slice, xDeallocator, err := allocator.Allocate(uint64(nX*dim*4), malloc.NoClear)
+		if err != nil {
+			return nil, err
+		}
+		defer xDeallocator.Deallocate()
+		xf32 := util.UnsafeSliceCast[float32](xf32Slice)
+		for i, v := range x {
+			copy(xf32[i*dim:(i+1)*dim], any(v).([]float32))
+		}
+
+		yf32Slice, yDeallocator, err := allocator.Allocate(uint64(nY*dim*4), malloc.NoClear)
+		if err != nil {
+			return nil, err
+		}
+		defer yDeallocator.Deallocate()
+		yf32 := util.UnsafeSliceCast[float32](yf32Slice)
+		for i, v := range y {
+			copy(yf32[i*dim:(i+1)*dim], any(v).([]float32))
+		}
 
 		res, err := cuvs.PairwiseDistance(xf32, uint64(nX), yf32, uint64(nY), uint32(dim), cuvsMetric, deviceID)
 		if err != nil {
@@ -76,5 +97,5 @@ func PairWiseDistance[T types.RealNumbers](
 		return res, nil
 	}
 
-	return GoPairWiseDistance(x, nX, y, nY, dim, metric)
+	return GoPairWiseDistance(x, y, metric)
 }
