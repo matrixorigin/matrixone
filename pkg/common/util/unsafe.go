@@ -110,3 +110,8 @@ func UnsafeUintptr[P *T, T any](p P) uintptr {
 func UnsafePointer[P *T, T any](p P) unsafe.Pointer {
 	return unsafe.Pointer(p)
 }
+
+func UnsafeSizeOf[T any]() uintptr {
+	var zero T
+	return unsafe.Sizeof(zero)
+}
