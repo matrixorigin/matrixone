@@ -22,7 +22,18 @@ import (
 )
 
 var tenantUpgEntries = []versions.UpgradeEntry{
+	enableBranchMetadata,
 	enableRoleRule,
+}
+
+var enableBranchMetadata = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_BRANCH_METADATA,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoCatalogBranchMetadataDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA)
+	},
 }
 
 var enableRoleRule = versions.UpgradeEntry{
