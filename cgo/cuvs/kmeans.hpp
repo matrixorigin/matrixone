@@ -44,7 +44,7 @@
 // cuVS includes
 #include <cuvs/distance/distance.hpp>
 #include <cuvs/cluster/kmeans.hpp>
-#include "utils.hpp"
+#include "quantize.hpp"
 #pragma GCC diagnostic pop
 
 namespace matrixone {

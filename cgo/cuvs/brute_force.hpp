@@ -49,7 +49,7 @@
 // cuVS includes
 #include <cuvs/distance/distance.hpp>    // cuVS distance API
 #include <cuvs/neighbors/brute_force.hpp>
-#include "utils.hpp"
+#include "quantize.hpp"
 #pragma GCC diagnostic pop
 
 

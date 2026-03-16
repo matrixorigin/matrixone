@@ -38,7 +38,7 @@ TEST(GpuIvfPqTest, BasicLoadSearchAndCenters) {
     bp.m = 8;
     gpu_ivf_pq_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
     index.start();
-    index.load();
+    index.build();
 
     // Verify centers
     auto centers = index.get_centers();
@@ -78,7 +78,7 @@ TEST(GpuIvfPqTest, SaveAndLoadFromFile) {
         bp.m = 2;
         gpu_ivf_pq_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
         index.start();
-        index.load();
+        index.build();
         index.save(filename);
         index.destroy();
     }
@@ -90,7 +90,7 @@ TEST(GpuIvfPqTest, SaveAndLoadFromFile) {
         bp.m = 2;
         gpu_ivf_pq_t<float> index(filename, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
         index.start();
-        index.load();
+        index.build();
         
         std::vector<float> queries = {10.5, 10.5, 10.5, 10.5};
         ivf_pq_search_params_t sp = ivf_pq_search_params_default();
@@ -130,7 +130,7 @@ TEST(GpuIvfPqTest, BuildFromDataFile) {
 
     gpu_ivf_pq_t<float> index(data_filename, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
     index.start();
-    index.load();
+    index.build();
 
     ASSERT_EQ(index.get_dim(), dimension);
     ASSERT_EQ(index.count, static_cast<uint32_t>(count));

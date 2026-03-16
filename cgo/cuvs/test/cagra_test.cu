@@ -32,7 +32,7 @@ TEST(GpuCagraTest, BasicLoadAndSearch) {
     cagra_build_params_t bp = cagra_build_params_default();
     gpu_cagra_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
     index.start();
-    index.load();
+    index.build();
 
     std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
     cagra_search_params_t sp = cagra_search_params_default();
@@ -57,7 +57,7 @@ TEST(GpuCagraTest, SaveAndLoadFromFile) {
         cagra_build_params_t bp = cagra_build_params_default();
         gpu_cagra_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
         index.start();
-        index.load();
+        index.build();
         index.save(filename);
         index.destroy();
     }
@@ -67,7 +67,7 @@ TEST(GpuCagraTest, SaveAndLoadFromFile) {
         cagra_build_params_t bp = cagra_build_params_default();
         gpu_cagra_t<float> index(filename, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
         index.start();
-        index.load();
+        index.build();
         
         std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
         cagra_search_params_t sp = cagra_search_params_default();
@@ -92,7 +92,7 @@ TEST(GpuCagraTest, ShardedModeSimulation) {
     cagra_build_params_t bp = cagra_build_params_default();
     gpu_cagra_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SHARDED);
     index.start();
-    index.load();
+    index.build();
     std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
     cagra_search_params_t sp = cagra_search_params_default();
     auto result = index.search(queries.data(), 1, dimension, 5, sp);

@@ -41,7 +41,7 @@ TEST(GpuBruteForceTest, BasicLoadAndSearch) {
     
     gpu_brute_force_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 1, 0);
     index.start();
-    index.load();
+    index.build();
 
     std::vector<float> queries = {1.0, 2.0, 3.0};
     auto result = index.search(queries.data(), 1, dimension, 1);
@@ -65,7 +65,7 @@ TEST(GpuBruteForceTest, SearchWithMultipleQueries) {
     
     gpu_brute_force_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 1, 0);
     index.start();
-    index.load();
+    index.build();
 
     std::vector<float> queries = {
         1.0, 0.0, 0.0, 0.0, // Should match ID 0
@@ -88,7 +88,7 @@ TEST(GpuBruteForceTest, SearchWithFloat16) {
     
     gpu_brute_force_t<half> index(h_dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 1, 0);
     index.start();
-    index.load();
+    index.build();
 
     std::vector<float> f_queries = {1.0, 1.0};
     std::vector<half> h_queries = float_to_half(f_queries);
@@ -111,7 +111,7 @@ TEST(GpuBruteForceTest, SearchWithInnerProduct) {
     
     gpu_brute_force_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::InnerProduct, 1, 0);
     index.start();
-    index.load();
+    index.build();
 
     std::vector<float> queries = {1.0, 0.0};
     auto result = index.search(queries.data(), 1, dimension, 2);
@@ -132,7 +132,7 @@ TEST(GpuBruteForceTest, EmptyDataset) {
     const uint64_t count = 0;
     
     gpu_brute_force_t<float> index(nullptr, count, dimension, cuvs::distance::DistanceType::L2Expanded, 1, 0);
-    index.load();
+    index.build();
 
     std::vector<float> queries(dimension, 0.0);
     auto result = index.search(queries.data(), 1, dimension, 5);
@@ -149,7 +149,7 @@ TEST(GpuBruteForceTest, LargeLimit) {
     
     gpu_brute_force_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 1, 0);
     index.start();
-    index.load();
+    index.build();
 
     std::vector<float> queries(dimension, 1.0);
     uint32_t limit = 10;
@@ -176,7 +176,7 @@ TEST(CuvsWorkerTest, BruteForceSearch) {
 
     gpu_brute_force_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 1, 0);
     index.start();
-    index.load();
+    index.build();
 
     std::vector<float> queries = std::vector<float>(dataset.begin(), dataset.begin() + dimension);
     auto result = index.search(queries.data(), 1, dimension, 5);
@@ -201,7 +201,7 @@ TEST(CuvsWorkerTest, ConcurrentSearches) {
 
     gpu_brute_force_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, 4, 0);
     index.start();
-    index.load();
+    index.build();
 
     const int num_threads = 4;
     std::vector<std::future<void>> futures;

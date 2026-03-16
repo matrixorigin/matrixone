@@ -37,7 +37,7 @@ TEST(GpuIvfFlatTest, BasicLoadSearchAndCenters) {
     bp.n_lists = 2;
     gpu_ivf_flat_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
     index.start();
-    index.load();
+    index.build();
 
     // Verify centers
     auto centers = index.get_centers();
@@ -69,7 +69,7 @@ TEST(GpuIvfFlatTest, SaveAndLoadFromFile) {
         bp.n_lists = 2;
         gpu_ivf_flat_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
         index.start();
-        index.load();
+        index.build();
         index.save(filename);
         index.destroy();
     }
@@ -80,7 +80,7 @@ TEST(GpuIvfFlatTest, SaveAndLoadFromFile) {
         bp.n_lists = 2;
         gpu_ivf_flat_t<float> index(filename, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
         index.start();
-        index.load();
+        index.build();
 
         std::vector<float> queries = {100.5, 100.5};
 
@@ -108,7 +108,7 @@ TEST(GpuIvfFlatTest, ShardedModeSimulation) {
     bp.n_lists = 5;
     gpu_ivf_flat_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SHARDED);
     index.start();
-    index.load();
+    index.build();
 
     auto centers = index.get_centers();
     ASSERT_EQ(centers.size(), (size_t)(5 * dimension));

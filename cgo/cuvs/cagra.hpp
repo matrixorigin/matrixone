@@ -49,7 +49,7 @@
 // cuVS includes
 #include <cuvs/distance/distance.hpp>
 #include <cuvs/neighbors/cagra.hpp>
-#include "utils.hpp"
+#include "quantize.hpp"
 #pragma GCC diagnostic pop
 
 namespace matrixone {

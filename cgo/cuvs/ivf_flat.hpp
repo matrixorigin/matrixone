@@ -49,7 +49,7 @@
 // cuVS includes
 #include <cuvs/distance/distance.hpp>    // cuVS distance API
 #include <cuvs/neighbors/ivf_flat.hpp>   // IVF-Flat include
-#include "utils.hpp"
+#include "quantize.hpp"
 #pragma GCC diagnostic pop
 
 

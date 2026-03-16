@@ -55,6 +55,12 @@ public:
     scalar_quantizer_t() = default;
 
     /**
+     * @brief Constructor that initializes the quantizer with specific min and max values.
+     */
+    scalar_quantizer_t(S min, S max)
+        : quantizer_(std::make_unique<quantizer_type>(quantizer_type{min, max})) {}
+
+    /**
      * @brief Trains the quantizer on a device matrix.
      */
     void train(const raft::resources& res, raft::device_matrix_view<const S, int64_t> train_view) {
@@ -97,6 +103,61 @@ public:
 
     bool is_trained() const { return quantizer_ != nullptr; }
     void reset() { quantizer_.reset(); }
+
+    /**
+     * @brief Gets the minimum value of the quantizer range.
+     */
+    S min() const {
+        if (!quantizer_) throw std::runtime_error("Quantizer not trained");
+        return quantizer_->min_;
+    }
+
+    /**
+     * @brief Gets the maximum value of the quantizer range.
+     */
+    S max() const {
+        if (!quantizer_) throw std::runtime_error("Quantizer not trained");
+        return quantizer_->max_;
+    }
+
+    /**
+     * @brief Serializes the quantizer state to an output stream.
+     */
+    void serialize(std::ostream& os) const {
+        if (!quantizer_) throw std::runtime_error("Quantizer not trained");
+        os.write(reinterpret_cast<const char*>(&quantizer_->min_), sizeof(S));
+        os.write(reinterpret_cast<const char*>(&quantizer_->max_), sizeof(S));
+    }
+
+    /**
+     * @brief Deserializes the quantizer state from an input stream.
+     */
+    void deserialize(std::istream& is) {
+        S params[2];
+        is.read(reinterpret_cast<char*>(params), 2 * sizeof(S));
+        if (is.gcount() != static_cast<std::streamsize>(2 * sizeof(S))) {
+            throw std::runtime_error("Failed to read quantizer parameters from stream");
+        }
+        quantizer_ = std::make_unique<quantizer_type>(quantizer_type{params[0], params[1]});
+    }
+
+    /**
+     * @brief Saves the quantizer state to a file.
+     */
+    void save_to_file(const std::string& filename) const {
+        std::ofstream os(filename, std::ios::binary);
+        if (!os.is_open()) throw std::runtime_error("Failed to open file for writing: " + filename);
+        serialize(os);
+    }
+
+    /**
+     * @brief Loads the quantizer state from a file.
+     */
+    void load_from_file(const std::string& filename) {
+        std::ifstream is(filename, std::ios::binary);
+        if (!is.is_open()) throw std::runtime_error("Failed to open file for reading: " + filename);
+        deserialize(is);
+    }
 
 private:
     std::unique_ptr<quantizer_type> quantizer_;
