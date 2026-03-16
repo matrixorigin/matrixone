@@ -792,6 +792,46 @@ func (ses *Session) UpdateDebugString() {
 	ses.debugStr = sb.String()
 }
 
+func (ses *Session) GetSqlModeNoAutoValueOnZero() (bool, bool) {
+	v := atomic.LoadInt32(&ses.sqlModeNoAutoValueOnZero)
+	if v == 1 {
+		return true, true
+	}
+	if v == 0 {
+		return false, true
+	}
+	if ses.sesSysVars == nil {
+		return false, false
+	}
+	val, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return false, false
+	}
+	has, ok := parseNoAutoValueOnZero(val)
+	if !ok {
+		return false, false
+	}
+	if has {
+		atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, 1)
+	} else {
+		atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, 0)
+	}
+	return has, true
+}
+
+func (ses *Session) updateSqlModeNoAutoValueOnZero(val interface{}) {
+	has, ok := parseNoAutoValueOnZero(val)
+	if !ok {
+		atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, -1)
+		return
+	}
+	if has {
+		atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, 1)
+	} else {
+		atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, 0)
+	}
+}
+
 func (ses *Session) GetPrivilegeCache() *privilegeCache {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
