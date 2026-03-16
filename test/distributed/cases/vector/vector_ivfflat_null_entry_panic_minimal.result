@@ -58,7 +58,7 @@ set @q_sql = concat(
 prepare p_q from @q_sql;
 execute p_q;
 ➤ __mo_index_pri_col[12,-1,0]  ¦  d[8,54,0]  𝄀
-r_1  ¦  0.64000004529953
+r_1  ¦  0.800000011920929
 deallocate prepare p_q;
 DROP TABLE IF EXISTS t1;
 DROP DATABASE vec_null_panic_db;
