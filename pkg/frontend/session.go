@@ -190,6 +190,10 @@ type Session struct {
 	statsCache   *plan2.StatsCache
 	seqCurValues map[uint64]string
 
+	// sqlModeNoAutoValueOnZero caches whether sql_mode contains NO_AUTO_VALUE_ON_ZERO
+	// -1: unknown, 0: false, 1: true
+	sqlModeNoAutoValueOnZero int32
+
 	/*
 		CORNER CASE:
 
