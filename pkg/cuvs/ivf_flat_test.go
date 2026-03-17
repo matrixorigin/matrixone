@@ -209,7 +209,7 @@ func BenchmarkGpuShardedIvfFlat(b *testing.B) {
 
 	bp := DefaultIvfFlatBuildParams()
 	bp.NLists = 100
-	index, err := NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, Sharded)
+	index, err := NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, Sharded)
 	if err != nil {
 		b.Fatalf("Failed to create sharded IVF-Flat: %v", err)
 	}
@@ -252,7 +252,7 @@ func BenchmarkGpuSingleIvfFlat(b *testing.B) {
 
 	bp := DefaultIvfFlatBuildParams()
 	bp.NLists = 100
-	index, err := NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	index, err := NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, SingleGpu)
 	if err != nil {
 		b.Fatalf("Failed to create single IVF-Flat: %v", err)
 	}

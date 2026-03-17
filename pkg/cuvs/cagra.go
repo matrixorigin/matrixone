@@ -32,6 +32,8 @@ import (
 type GpuCagra[T VectorType] struct {
 	cCagra    C.gpu_cagra_c
 	dimension uint32
+	nthread   uint32
+	distMode  DistributionMode
 }
 
 // NewGpuCagra creates a new GpuCagra instance from a dataset.
@@ -80,7 +82,12 @@ func NewGpuCagra[T VectorType](dataset []T, count uint64, dimension uint32, metr
 		return nil, moerr.NewInternalErrorNoCtx("failed to create GpuCagra")
 	}
 
-	return &GpuCagra[T]{cCagra: cCagra, dimension: dimension}, nil
+	return &GpuCagra[T]{
+		cCagra:    cCagra,
+		dimension: dimension,
+		nthread:   nthread,
+		distMode:  mode,
+	}, nil
 }
 
 // NewGpuCagraFromFile creates a new GpuCagra instance by loading from a file.
@@ -130,7 +137,12 @@ func NewGpuCagraFromFile[T VectorType](filename string, dimension uint32, metric
 		return nil, moerr.NewInternalErrorNoCtx("failed to load GpuCagra from file")
 	}
 
-	return &GpuCagra[T]{cCagra: cCagra, dimension: dimension}, nil
+	return &GpuCagra[T]{
+		cCagra:    cCagra,
+		dimension: dimension,
+		nthread:   nthread,
+		distMode:  mode,
+	}, nil
 }
 
 // Destroy frees the C++ gpu_cagra_t instance
@@ -154,6 +166,17 @@ func (gi *GpuCagra[T]) Start() error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
+
+	if gi.distMode == Replicated && gi.nthread > 1 {
+		var errmsg *C.char
+		C.gpu_cagra_set_per_thread_device(gi.cCagra, C.bool(true), unsafe.Pointer(&errmsg))
+		if errmsg != nil {
+			errStr := C.GoString(errmsg)
+			C.free(unsafe.Pointer(errmsg))
+			return moerr.NewInternalErrorNoCtx(errStr)
+		}
+	}
+
 	var errmsg *C.char
 	C.gpu_cagra_start(gi.cCagra, unsafe.Pointer(&errmsg))
 	if errmsg != nil {
@@ -220,11 +243,16 @@ func NewGpuCagraEmpty[T VectorType](totalCount uint64, dimension uint32, metric 
 	}
 
 	if cCagra == nil {
-		return nil, moerr.NewInternalErrorNoCtx("failed to create GpuCagra")
+		return nil, moerr.NewInternalErrorNoCtx("failed to create empty GpuCagra")
 	}
 
-	return &GpuCagra[T]{cCagra: cCagra, dimension: dimension}, nil
-}
+	return &GpuCagra[T]{
+		cCagra:    cCagra,
+		dimension: dimension,
+		nthread:   nthread,
+		distMode:  mode,
+	}, nil
+	}
 
 // AddChunk adds a chunk of data to the pre-allocated buffer.
 func (gi *GpuCagra[T]) AddChunk(chunk []T, chunkCount uint64) error {

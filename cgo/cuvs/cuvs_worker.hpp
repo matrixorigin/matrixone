@@ -234,6 +234,8 @@ public:
         main_thread_ = std::thread(&cuvs_worker_t::run_main_loop, this, std::move(init_fn), std::move(stop_fn));
     }
 
+    void set_per_thread_device(bool enable) { per_thread_device_ = enable; }
+
     void stop() {
         if (!started_.load() || stopped_.exchange(true)) return;
 
@@ -268,7 +270,7 @@ public:
 private:
     void run_main_loop(user_task_fn init_fn, user_task_fn stop_fn) {
         pin_thread(0);
-        auto resource = setup_resource();
+        auto resource = setup_resource(0);
         if (!resource) return;
 
         if (init_fn) {
@@ -285,16 +287,16 @@ private:
             while (tasks_.pop(task)) execute_task(task, *resource);
         } else {
             for (size_t i = 0; i < n_threads_; ++i) {
-                sub_workers_.emplace_back(&cuvs_worker_t::worker_sub_loop, this);
+                sub_workers_.emplace_back(&cuvs_worker_t::worker_sub_loop, this, i);
             }
             std::unique_lock<std::mutex> lock(event_mu_);
             event_cv_.wait(lock, [this] { return should_stop_ || fatal_error_; });
         }
     }
 
-    void worker_sub_loop() {
+    void worker_sub_loop(size_t thread_idx) {
         pin_thread(-1);
-        auto resource = setup_resource();
+        auto resource = setup_resource(thread_idx);
         if (!resource) return;
 
         cuvs_task_t task;
@@ -312,9 +314,13 @@ private:
         result_store_.store(res);
     }
 
-    std::unique_ptr<raft_handle> setup_resource() {
+    std::unique_ptr<raft_handle> setup_resource(size_t thread_idx = 0) {
         try {
             if (!devices_.empty()) {
+                if (per_thread_device_ && n_threads_ > 1) {
+                    int dev = devices_[thread_idx % devices_.size()];
+                    return std::make_unique<raft_handle>(dev);
+                }
                 return std::make_unique<raft_handle>(devices_, force_mg_);
             } else if (device_id_ >= 0) {
                 return std::make_unique<raft_handle>(device_id_);
@@ -352,6 +358,7 @@ private:
     int device_id_ = -1;
     std::vector<int> devices_;
     bool force_mg_ = false;
+    bool per_thread_device_ = false;
     std::atomic<bool> started_{false};
     std::atomic<bool> stopped_{false};
     thread_safe_queue_t<cuvs_task_t> tasks_;

@@ -302,7 +302,7 @@ func BenchmarkGpuShardedIvfPq(b *testing.B) {
 	bp := DefaultIvfPqBuildParams()
 	bp.NLists = 100
 	bp.M = 128 // 1024 / 8
-	index, err := NewGpuIvfPq[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, Sharded)
+	index, err := NewGpuIvfPq[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, Sharded)
 	if err != nil {
 		b.Fatalf("Failed to create sharded IVF-PQ: %v", err)
 	}
@@ -346,7 +346,7 @@ func BenchmarkGpuSingleIvfPq(b *testing.B) {
 	bp := DefaultIvfPqBuildParams()
 	bp.NLists = 100
 	bp.M = 128 // 1024 / 8
-	index, err := NewGpuIvfPq[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	index, err := NewGpuIvfPq[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, SingleGpu)
 	if err != nil {
 		b.Fatalf("Failed to create single IVF-PQ: %v", err)
 	}

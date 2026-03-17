@@ -33,6 +33,8 @@ import (
 type GpuIvfPq[T VectorType] struct {
 	cIvfPq    C.gpu_ivf_pq_c
 	dimension uint32
+	nthread   uint32
+	distMode  DistributionMode
 }
 
 // NewGpuIvfPq creates a new GpuIvfPq instance from a dataset.
@@ -83,7 +85,12 @@ func NewGpuIvfPq[T VectorType](dataset []T, count uint64, dimension uint32, metr
 		return nil, moerr.NewInternalErrorNoCtx("failed to create GpuIvfPq")
 	}
 
-	return &GpuIvfPq[T]{cIvfPq: cIvfPq, dimension: dimension}, nil
+	return &GpuIvfPq[T]{
+		cIvfPq:    cIvfPq,
+		dimension: dimension,
+		nthread:   nthread,
+		distMode:  mode,
+	}, nil
 }
 
 // NewGpuIvfPqFromDataFile creates a new GpuIvfPq instance from a MODF datafile.
@@ -136,7 +143,12 @@ func NewGpuIvfPqFromDataFile[T VectorType](datafilename string, metric DistanceT
 
 	// dimension will be updated when GetDim() is called, but we can set it to 0 for now
 	// or ideally GetDim() should be used.
-	return &GpuIvfPq[T]{cIvfPq: cIvfPq, dimension: 0}, nil
+	return &GpuIvfPq[T]{
+		cIvfPq:    cIvfPq,
+		dimension: 0,
+		nthread:   nthread,
+		distMode:  mode,
+	}, nil
 }
 
 // NewGpuIvfPqEmpty creates a new GpuIvfPq instance with pre-allocated buffer but no data yet.
@@ -182,11 +194,16 @@ func NewGpuIvfPqEmpty[T VectorType](totalCount uint64, dimension uint32, metric 
 	}
 
 	if cIvfPq == nil {
-		return nil, moerr.NewInternalErrorNoCtx("failed to create GpuIvfPq")
+		return nil, moerr.NewInternalErrorNoCtx("failed to create empty GpuIvfPq")
 	}
 
-	return &GpuIvfPq[T]{cIvfPq: cIvfPq, dimension: dimension}, nil
-}
+	return &GpuIvfPq[T]{
+		cIvfPq:    cIvfPq,
+		dimension: dimension,
+		nthread:   nthread,
+		distMode:  mode,
+	}, nil
+	}
 
 // AddChunk adds a chunk of data to the pre-allocated buffer.
 func (gi *GpuIvfPq[T]) AddChunk(chunk []T, chunkCount uint64) error {
@@ -360,7 +377,12 @@ func NewGpuIvfPqFromFile[T VectorType](filename string, dimension uint32, metric
 		return nil, moerr.NewInternalErrorNoCtx("failed to load GpuIvfPq from file")
 	}
 
-	return &GpuIvfPq[T]{cIvfPq: cIvfPq, dimension: dimension}, nil
+	return &GpuIvfPq[T]{
+		cIvfPq:    cIvfPq,
+		dimension: dimension,
+		nthread:   nthread,
+		distMode:  mode,
+	}, nil
 }
 
 // Destroy frees the C++ gpu_ivf_pq_t instance
@@ -384,6 +406,17 @@ func (gi *GpuIvfPq[T]) Start() error {
 	if gi.cIvfPq == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
+
+	if gi.distMode == Replicated && gi.nthread > 1 {
+		var errmsg *C.char
+		C.gpu_ivf_pq_set_per_thread_device(gi.cIvfPq, C.bool(true), unsafe.Pointer(&errmsg))
+		if errmsg != nil {
+			errStr := C.GoString(errmsg)
+			C.free(unsafe.Pointer(errmsg))
+			return moerr.NewInternalErrorNoCtx(errStr)
+		}
+	}
+
 	var errmsg *C.char
 	C.gpu_ivf_pq_start(gi.cIvfPq, unsafe.Pointer(&errmsg))
 	if errmsg != nil {

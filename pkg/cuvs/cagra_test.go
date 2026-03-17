@@ -379,7 +379,7 @@ func BenchmarkGpuShardedCagra(b *testing.B) {
 	}
 
 	bp := DefaultCagraBuildParams()
-	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, Sharded)
+	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, Sharded)
 	if err != nil {
 		b.Fatalf("Failed to create sharded CAGRA: %v", err)
 	}
@@ -420,7 +420,7 @@ func BenchmarkGpuSingleCagra(b *testing.B) {
 	}
 
 	bp := DefaultCagraBuildParams()
-	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, SingleGpu)
 	if err != nil {
 		b.Fatalf("Failed to create single CAGRA: %v", err)
 	}

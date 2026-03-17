@@ -32,6 +32,8 @@ import (
 type GpuIvfFlat[T VectorType] struct {
 	cIvfFlat  C.gpu_ivf_flat_c
 	dimension uint32
+	nthread   uint32
+	distMode  DistributionMode
 }
 
 // NewGpuIvfFlat creates a new GpuIvfFlat instance from a dataset.
@@ -80,7 +82,12 @@ func NewGpuIvfFlat[T VectorType](dataset []T, count uint64, dimension uint32, me
 		return nil, moerr.NewInternalErrorNoCtx("failed to create GpuIvfFlat")
 	}
 
-	return &GpuIvfFlat[T]{cIvfFlat: cIvfFlat, dimension: dimension}, nil
+	return &GpuIvfFlat[T]{
+		cIvfFlat:  cIvfFlat,
+		dimension: dimension,
+		nthread:   nthread,
+		distMode:  mode,
+	}, nil
 }
 
 // NewGpuIvfFlatFromFile creates a new GpuIvfFlat instance by loading from a file.
@@ -130,7 +137,12 @@ func NewGpuIvfFlatFromFile[T VectorType](filename string, dimension uint32, metr
 		return nil, moerr.NewInternalErrorNoCtx("failed to load GpuIvfFlat from file")
 	}
 
-	return &GpuIvfFlat[T]{cIvfFlat: cIvfFlat, dimension: dimension}, nil
+	return &GpuIvfFlat[T]{
+		cIvfFlat:  cIvfFlat,
+		dimension: dimension,
+		nthread:   nthread,
+		distMode:  mode,
+	}, nil
 }
 
 // Destroy frees the C++ gpu_ivf_flat_t instance
@@ -154,6 +166,17 @@ func (gi *GpuIvfFlat[T]) Start() error {
 	if gi.cIvfFlat == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
+
+	if gi.distMode == Replicated && gi.nthread > 1 {
+		var errmsg *C.char
+		C.gpu_ivf_flat_set_per_thread_device(gi.cIvfFlat, C.bool(true), unsafe.Pointer(&errmsg))
+		if errmsg != nil {
+			errStr := C.GoString(errmsg)
+			C.free(unsafe.Pointer(errmsg))
+			return moerr.NewInternalErrorNoCtx(errStr)
+		}
+	}
+
 	var errmsg *C.char
 	C.gpu_ivf_flat_start(gi.cIvfFlat, unsafe.Pointer(&errmsg))
 	if errmsg != nil {
@@ -220,11 +243,16 @@ func NewGpuIvfFlatEmpty[T VectorType](totalCount uint64, dimension uint32, metri
 	}
 
 	if cIvfFlat == nil {
-		return nil, moerr.NewInternalErrorNoCtx("failed to create GpuIvfFlat")
+		return nil, moerr.NewInternalErrorNoCtx("failed to create empty GpuIvfFlat")
 	}
 
-	return &GpuIvfFlat[T]{cIvfFlat: cIvfFlat, dimension: dimension}, nil
-}
+	return &GpuIvfFlat[T]{
+		cIvfFlat:  cIvfFlat,
+		dimension: dimension,
+		nthread:   nthread,
+		distMode:  mode,
+	}, nil
+	}
 
 // AddChunk adds a chunk of data to the pre-allocated buffer.
 func (gi *GpuIvfFlat[T]) AddChunk(chunk []T, chunkCount uint64) error {
