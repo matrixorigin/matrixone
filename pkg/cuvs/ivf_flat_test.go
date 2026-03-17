@@ -226,7 +226,7 @@ func BenchmarkGpuShardedIvfFlat(b *testing.B) {
 	sp := DefaultIvfFlatSearchParams()
 	sp.NProbes = 10
 
-	for _, useBatching := range []bool{true, false} {
+	for _, useBatching := range []bool{false, true} {
 		b.Run(fmt.Sprintf("Batching%v", useBatching), func(b *testing.B) {
 			index.SetUseBatching(useBatching)
 			b.ResetTimer()
@@ -274,7 +274,7 @@ func BenchmarkGpuSingleIvfFlat(b *testing.B) {
 	sp := DefaultIvfFlatSearchParams()
 	sp.NProbes = 10
 
-	for _, useBatching := range []bool{true, false} {
+	for _, useBatching := range []bool{false, true} {
 		b.Run(fmt.Sprintf("Batching%v", useBatching), func(b *testing.B) {
 			index.SetUseBatching(useBatching)
 			b.ResetTimer()
@@ -325,7 +325,7 @@ func BenchmarkGpuReplicatedIvfFlat(b *testing.B) {
 	sp := DefaultIvfFlatSearchParams()
 	sp.NProbes = 10
 
-	for _, useBatching := range []bool{true, false} {
+	for _, useBatching := range []bool{false, true} {
 		b.Run(fmt.Sprintf("Batching%v", useBatching), func(b *testing.B) {
 			index.SetUseBatching(useBatching)
 			b.ResetTimer()

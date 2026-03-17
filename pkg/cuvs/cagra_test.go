@@ -395,7 +395,7 @@ func BenchmarkGpuShardedCagra(b *testing.B) {
 
 	sp := DefaultCagraSearchParams()
 
-	for _, useBatching := range []bool{true, false} {
+	for _, useBatching := range []bool{false, true} {
 		b.Run(fmt.Sprintf("Batching%v", useBatching), func(b *testing.B) {
 			index.SetUseBatching(useBatching)
 			b.ResetTimer()
@@ -441,7 +441,7 @@ func BenchmarkGpuSingleCagra(b *testing.B) {
 
 	sp := DefaultCagraSearchParams()
 
-	for _, useBatching := range []bool{true, false} {
+	for _, useBatching := range []bool{false, true} {
 		b.Run(fmt.Sprintf("Batching%v", useBatching), func(b *testing.B) {
 			index.SetUseBatching(useBatching)
 			b.ResetTimer()
@@ -490,7 +490,7 @@ func BenchmarkGpuReplicatedCagra(b *testing.B) {
 
 	sp := DefaultCagraSearchParams()
 
-	for _, useBatching := range []bool{true, false} {
+	for _, useBatching := range []bool{false, true} {
 		b.Run(fmt.Sprintf("Batching%v", useBatching), func(b *testing.B) {
 			index.SetUseBatching(useBatching)
 			b.ResetTimer()
