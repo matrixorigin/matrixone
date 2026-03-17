@@ -4,22 +4,22 @@ prepare stmt1 from 'select * from t1 where a > ?';
 insert into t1 values (1, 11), (2, 22), (3, 33);
 set @a_var = 1;
 execute stmt1 using @a_var;
-a	b
-2	22
-3	33
+a    b
+2    22
+3    33
 set @a_var = 2;
 execute stmt1 using @a_var;
-a	b
-3	33
+a    b
+3    33
 insert into t1 values (4, 44);
 execute stmt1 using @a_var;
-a	b
-3	33
-4	44
+a    b
+3    33
+4    44
 delete from t1 where a > 3;
 execute stmt1 using @a_var;
-a	b
-3	33
+a    b
+3    33
 deallocate prepare stmt1;
 execute stmt1 using @a_var;
 invalid state prepared statement 'stmt1' does not exist
@@ -27,17 +27,17 @@ prepare stmt1 from 'update t1 set a=999 where b = ?';
 set @b_var = 33;
 execute stmt1 using @b_var;
 select * from t1;
-a	b
-1	11
-2	22
-999	33
+a    b
+1    11
+2    22
+999    33
 deallocate prepare stmt1;
 prepare stmt1 from 'delete from t1 where b = ?';
 execute stmt1 using @b_var;
 select * from t1;
-a	b
-1	11
-2	22
+a    b
+1    11
+2    22
 deallocate prepare stmt1;
 prepare stmt1 from "insert into t1 values (?, ?), (?, 99)";
 set @a_var=5;
@@ -45,11 +45,11 @@ set @b_var=55;
 set @c_var=9;
 execute stmt1 using @a_var, @b_var, @c_var;
 select * from t1;
-a	b
-1	11
-2	22
-5	55
-9	99
+a    b
+1    11
+2    22
+5    55
+9    99
 deallocate prepare stmt1;
 drop table t1;
 create table t1(a timestamp(6));
@@ -76,8 +76,8 @@ prepare stmt1 from 'update t1 set a=a+? where b = 1';
 set @a=0.1111;
 execute stmt1 using @a;
 select a, b from t1;
-a	b
-12.3333	1
+a    b
+12.3333    1
 drop table if exists t1;
 create table t1 (a decimal(12,2));
 insert into t1 values (30000);
@@ -93,12 +93,12 @@ drop table if exists t1;
 prepare s6 from 'create table t1(a int)';
 execute s6;
 show tables;
-tables_in_db1
+Tables_in_prepare
 t1
 prepare s7 from 'drop table t1';
 execute s7;
 show tables;
-tables_in_db1
+Tables_in_prepare
 drop table if exists t1;
 create table t1(a int);
 set autocommit=0;
@@ -288,8 +288,8 @@ create table t1 (a int, b int);
 prepare stmt1 from 'show columns from t1';
 execute stmt1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null
-b    INT(32)    YES        null
+a    INT(32)    YES        null        
+b    INT(32)    YES        null        
 prepare stmt1 from 'show variables like "aaaa"';
 execute stmt1;
 Variable_name    Value
@@ -304,7 +304,7 @@ create table t1( a int unique key,  b int,  c int );
 prepare stmt1 from 'INSERT INTO t1 values(1, 2, 3)';
 execute stmt1;
 execute stmt1;
-Duplicate entry '1' for key '(.*)'
+Duplicate entry '1' for key 'a'
 select * from t1;
 a    b    c
 1    2    3
@@ -749,3 +749,26 @@ commit;
 deallocate prepare stmt_tuple_in;
 drop table t_tuple_in;
 drop database db1;
+drop database if exists db_ps_null_json;
+create database db_ps_null_json;
+use db_ps_null_json;
+drop table if exists t_ps_null_json;
+create table t_ps_null_json (id int, meta json);
+prepare stmt_null_json from 'insert into t_ps_null_json (id, meta) values (?, ?)';
+set @a=1, @b=null;
+execute stmt_null_json using @a, @b;
+set @a=2, @b=null;
+execute stmt_null_json using @a, @b;
+set @a=3, @b='{"k":"v"}';
+execute stmt_null_json using @a, @b;
+set @a=4, @b=null;
+execute stmt_null_json using @a, @b;
+deallocate prepare stmt_null_json;
+select id, meta from t_ps_null_json order by id;
+id    meta
+1    null
+2    null
+3    {"k": "v"}
+4    null
+drop table t_ps_null_json;
+drop database db_ps_null_json;
