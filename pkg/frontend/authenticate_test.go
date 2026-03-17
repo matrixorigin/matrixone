@@ -502,6 +502,7 @@ func Test_determinePrivilege(t *testing.T) {
 		{stmt: &tree.AlterUser{}},
 		{stmt: &tree.CreateRole{}},
 		{stmt: &tree.DropRole{}},
+		{stmt: &tree.AlterRole{}},
 		{stmt: &tree.GrantRole{}},
 		{stmt: &tree.RevokeRole{}},
 		{stmt: &tree.GrantPrivilege{}},
