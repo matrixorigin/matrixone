@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -130,7 +131,8 @@ func (ctr *container) setSpillMem(m int64, aggs []aggexec.AggFuncExecExpression)
 
 	if m == 0 {
 		// 0 means auto config.   Here the formula is made up on the fly.
-		mem := int64(system.MemoryTotal()) / int64(system.GoMaxProcs()) / 8
+		fileCacheMem := fileservice.GlobalMemoryCacheSizeHint.Load()
+		mem := (int64(system.MemoryTotal()) - fileCacheMem) / int64(system.GoMaxProcs()) / 8
 		// min 128MB
 		if mem < common.MiB*128 {
 			mem = common.MiB * 128
