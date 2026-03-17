@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
@@ -1074,6 +1075,38 @@ func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool, phas
 	return
 }
 
+// resolveIndexColName resolves the internal index column name (e.g. __mo_index_idx_col)
+// back to the user-visible index name by looking up the parent table's constraint info.
+// This is only called on the error path, so performance is not a concern.
+func (tbl *txnTable) resolveIndexColName(colName string) string {
+	if colName != "__mo_index_idx_col" {
+		return colName
+	}
+	indexTableName := tbl.dataTable.schema.Name
+	db := tbl.entry.GetDB()
+	it := db.MakeTableIt(false)
+	for it.Valid() {
+		te := it.Get().GetPayload()
+		schema := te.GetLastestSchema(false)
+		if schema.Constraint != nil {
+			c := new(engine.ConstraintDef)
+			if err := c.UnmarshalBinary(schema.Constraint); err == nil {
+				for _, ct := range c.Cts {
+					if idxDef, ok := ct.(*engine.IndexDef); ok {
+						for _, idx := range idxDef.Indexes {
+							if idx.IndexTableName == indexTableName {
+								return idx.IndexName
+							}
+						}
+					}
+				}
+			}
+		}
+		it.Next()
+	}
+	return colName
+}
+
 // DedupSnapByPK 1. checks whether these primary keys exist in the list of block
 // which are visible and not dropped at txn's snapshot timestamp.
 // 2. It is called when appending data into this table.
@@ -1115,7 +1148,7 @@ func (tbl *txnTable) DedupSnapByPK(
 			} else {
 				entry = common.TypeStringValue(*keys.GetType(), keys.Get(i), false)
 			}
-			return moerr.NewDuplicateEntryNoCtx(entry, colName)
+			return moerr.NewDuplicateEntryNoCtx(entry, tbl.resolveIndexColName(colName))
 		}
 	}
 	return
@@ -1244,7 +1277,7 @@ func (tbl *txnTable) DoPrecommitDedupByPK(
 					zap.String("to", ts.ToString()),
 				)
 				entry := common.TypeStringValue(*pks.GetType(), pks.Get(i), false)
-				err = moerr.NewDuplicateEntryNoCtx(entry, colName)
+				err = moerr.NewDuplicateEntryNoCtx(entry, tbl.resolveIndexColName(colName))
 				return
 			}
 		}
@@ -1313,7 +1346,7 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, stats objectio.
 			if !rowIDs.IsNull(i) {
 				colName := tbl.getSchema(false).GetPrimaryKey().Name
 				entry := common.TypeStringValue(*pks.GetType(), pks.Get(i), false)
-				err = moerr.NewDuplicateEntryNoCtx(entry, colName)
+				err = moerr.NewDuplicateEntryNoCtx(entry, tbl.resolveIndexColName(colName))
 				return
 			}
 		}
