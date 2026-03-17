@@ -2414,7 +2414,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	tqry := s.Plan.GetDdl().GetTruncateTable()
 	dbName := tqry.GetDatabase()
 	tblName := tqry.GetTable()
-	oldId := tqry.GetTableId()
+	var oldId uint64
 	keepAutoIncrement := false
 	affectedRows := uint64(0)
 
