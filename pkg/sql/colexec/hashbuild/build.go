@@ -173,7 +173,7 @@ func (ctr *container) build(hashBuild *HashBuild, proc *process.Process, analyze
 		}
 
 		// Check if we should enter spill mode based on batch memory size
-		if hashBuild.NeedHashMap && hashBuild.shouldSpillBatches() {
+		if hashBuild.shouldSpillBatches() {
 			spillMode = true
 			// Create spill files once
 			spilledBuckets, spillFiles, err = createSpillFiles(proc)

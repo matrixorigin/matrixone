@@ -150,6 +150,8 @@ func TestShouldSpillBatches(t *testing.T) {
 		hb := &HashBuild{
 			IsShuffle:      true,
 			SpillThreshold: 1, // 1 byte
+			CanSpill:       true,
+			NeedHashMap:    true,
 		}
 		hb.ctr.setSpillThreshold(1)
 		bat := batch.NewWithSize(1)
@@ -528,6 +530,8 @@ func TestShouldSpillBatchesRowThreshold(t *testing.T) {
 	hb := &HashBuild{
 		IsShuffle:      true,
 		SpillThreshold: 10, // Small row threshold
+		CanSpill:       true,
+		NeedHashMap:    true,
 	}
 	hb.ctr.setSpillThreshold(10)
 

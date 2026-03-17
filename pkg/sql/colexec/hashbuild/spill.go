@@ -206,8 +206,11 @@ func (ctr *container) rowCnt() int64 {
 }
 
 func (hashBuild *HashBuild) shouldSpillBatches() bool {
+	if !hashBuild.CanSpill || !hashBuild.IsShuffle || !hashBuild.NeedHashMap {
+		return false
+	}
 	ctr := &hashBuild.ctr
-	if !hashBuild.IsShuffle || ctr.spillThreshold <= 0 {
+	if ctr.spillThreshold <= 0 {
 		return false
 	}
 	if ctr.spillThreshold <= 100000 {
