@@ -38,7 +38,9 @@ func TestGpuCagra(t *testing.T) {
 	}
 	defer index.Destroy()
 
-	index.Start()
+	if err := index.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
 	err = index.Build()
 	if err != nil {
 		t.Fatalf("Failed to load/build GpuCagra: %v", err)
@@ -74,7 +76,9 @@ func TestGpuCagraSaveLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create GpuCagra: %v", err)
 	}
-	index.Start()
+	if err := index.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
 	index.Build()
 
 	filename := "test_cagra.idx"
@@ -91,7 +95,9 @@ func TestGpuCagraSaveLoad(t *testing.T) {
 	}
 	defer index2.Destroy()
 
-	index2.Start()
+	if err := index2.Start(); err != nil {
+		t.Fatalf("index2 Start failed: %v", err)
+	}
 	err = index2.Build()
 	if err != nil {
 		t.Fatalf("Load from file failed: %v", err)
@@ -130,7 +136,9 @@ func TestGpuShardedCagra(t *testing.T) {
 	}
 	defer index.Destroy()
 
-	index.Start()
+	if err := index.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
 	err = index.Build()
 	if err != nil {
 		t.Fatalf("Load sharded failed: %v", err)
@@ -226,7 +234,9 @@ func TestGpuCagraExtend(t *testing.T) {
 		t.Fatalf("Failed to create GpuCagra: %v", err)
 	}
 	defer index.Destroy()
-	index.Start()
+	if err := index.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
 	index.Build()
 
 	extra := make([]float32, 10*dimension)
@@ -272,11 +282,21 @@ func TestGpuCagraMerge(t *testing.T) {
 	bp.IntermediateGraphDegree = 64
 	bp.GraphDegree = 32
 
-	idx1, _ := NewGpuCagra[float32](ds1, count, dimension, L2Expanded, bp, devices, 1, SingleGpu)
-	idx2, _ := NewGpuCagra[float32](ds2, count, dimension, L2Expanded, bp, devices, 1, SingleGpu)
-	idx1.Start()
+	idx1, err := NewGpuCagra[float32](ds1, count, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	if err != nil {
+		t.Fatalf("Failed to create idx1: %v", err)
+	}
+	idx2, err := NewGpuCagra[float32](ds2, count, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	if err != nil {
+		t.Fatalf("Failed to create idx2: %v", err)
+	}
+	if err := idx1.Start(); err != nil {
+		t.Fatalf("idx1 Start failed: %v", err)
+	}
 	idx1.Build()
-	idx2.Start()
+	if err := idx2.Start(); err != nil {
+		t.Fatalf("idx2 Start failed: %v", err)
+	}
 	idx2.Build()
 	defer idx1.Destroy()
 	defer idx2.Destroy()
@@ -286,6 +306,10 @@ func TestGpuCagraMerge(t *testing.T) {
 		t.Fatalf("Merge failed: %v", err)
 	}
 	defer merged.Destroy()
+
+	if err := merged.Start(); err != nil {
+		t.Fatalf("merged Start failed: %v", err)
+	}
 
 	// Query near Cluster 2
 	queries := make([]float32, dimension)

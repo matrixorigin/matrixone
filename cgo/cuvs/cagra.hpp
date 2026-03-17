@@ -144,16 +144,6 @@ public:
         // Merge result is currently a single-GPU index.
         worker = std::make_unique<cuvs_worker_t>(nthread, devices_, false);
         
-        auto stop_fn = [&](raft_handle_wrapper_t& handle) -> std::any {
-            std::unique_lock<std::shared_mutex> lock(mutex_);
-            index_.reset();
-            mg_index_.reset();
-            quantizer_.reset();
-            dataset_device_ptr_.reset();
-            return std::any();
-        };
-        worker->start(nullptr, stop_fn);
-
         count = static_cast<uint32_t>(index_->size());
         build_params.graph_degree = static_cast<size_t>(index_->graph_degree());
         build_params.intermediate_graph_degree = build_params.graph_degree * 2; // Best guess
