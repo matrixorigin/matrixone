@@ -400,8 +400,8 @@ public:
         if (query_dimension != dimension) throw std::runtime_error("dimension mismatch");
         if (!is_loaded_ || (!index_ && !mg_index_)) return search_result_t{};
 
-        // For large batches, skip dynamic batching
-        if (num_queries > 16) {
+        // For large batches or if batching is explicitly disabled, use standard path
+        if (num_queries > 16 || !worker->use_batching()) {
             uint64_t job_id = worker->submit(
                 [&, num_queries, limit, sp, queries_data](raft_handle_wrapper_t& handle) -> std::any {
                     return this->search_internal(handle, queries_data, num_queries, limit, sp);
@@ -540,8 +540,8 @@ public:
         if (query_dimension != dimension) throw std::runtime_error("dimension mismatch");
         if (!is_loaded_ || (!index_ && !mg_index_)) return search_result_t{};
 
-        // For large batches, skip dynamic batching
-        if (num_queries > 16) {
+        // For large batches or if batching is explicitly disabled, use standard path
+        if (num_queries > 16 || !worker->use_batching()) {
             uint64_t job_id = worker->submit(
                 [&, num_queries, limit, sp, queries_data](raft_handle_wrapper_t& handle) -> std::any {
                     return this->search_float_internal(handle, queries_data, num_queries, query_dimension, limit, sp);

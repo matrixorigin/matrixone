@@ -238,6 +238,7 @@ public:
 
     void set_per_thread_device(bool enable) { per_thread_device_ = enable; }
     void set_use_batching(bool enable) { use_batching_ = enable; }
+    bool use_batching() const { return use_batching_; }
 
     void stop() {
         if (!started_.load() || stopped_.exchange(true)) return;
