@@ -37,7 +37,7 @@ type HashmapBuilder struct {
 	vecs               [][]*vector.Vector
 	IntHashMap         *hashmap.IntHashMap
 	StrHashMap         *hashmap.StrHashMap
-	MultiSels          message.JoinSels
+	Sels               message.GroupSels
 	keyWidth           int // keyWidth is the width of hash columns, it determines which hash map to use.
 	Batches            colexec.Batches
 	executors          []colexec.ExpressionExecutor
@@ -71,7 +71,7 @@ func (hb *HashmapBuilder) GetJoinMap() *message.JoinMap {
 	if hb.InputBatchRowCount == 0 {
 		return nil
 	}
-	return message.NewJoinMap(hb.MultiSels, hb.IntHashMap, hb.StrHashMap, hb.DelRows, hb.Batches.Buf, nil)
+	return message.NewJoinMap(hb.Sels, hb.IntHashMap, hb.StrHashMap, hb.DelRows, hb.Batches.Buf, nil)
 }
 
 func (hb *HashmapBuilder) GetGroupCount() uint64 {
@@ -146,7 +146,6 @@ func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool)
 		}
 	}
 	hb.UniqueJoinKeys = nil
-	hb.MultiSels.Free()
 	for i := range hb.executors {
 		if hb.executors[i] != nil {
 			hb.executors[i].ResetForNextQuery()
@@ -162,7 +161,6 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 	hb.Batches.Reset()
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
-	hb.MultiSels.Free()
 	hb.FreeExecutors()
 	hb.vecs = nil
 	for i := range hb.UniqueJoinKeys {
@@ -316,7 +314,9 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 	}
 
 	if needAllocateSels {
-		hb.MultiSels.InitSel(hb.InputBatchRowCount)
+		if err := hb.Sels.Init(hb.InputBatchRowCount, proc.Mp()); err != nil {
+			return err
+		}
 	}
 
 	if hb.IsDedup && hb.OnDuplicateAction == plan.Node_IGNORE {
@@ -372,7 +372,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 		}
 		for k, v := range vals[:n] {
 			if hb.IsDedup && hb.OnDuplicateAction == plan.Node_UPDATE {
-				hb.MultiSels.InsertSel(int32(v), int32(i+k))
+				hb.Sels.Insert(int32(v), int32(i+k))
 				continue
 			}
 
@@ -413,7 +413,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 					cardinality = v
 				}
 			} else if !hashOnPK && needAllocateSels {
-				hb.MultiSels.InsertSel(int32(v-1), int32(i+k))
+				hb.Sels.Insert(int32(v-1), int32(i+k))
 			}
 		}
 
@@ -493,19 +493,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 		hb.InputBatchRowCount = hb.Batches.RowCount()
 	}
 
-	// if groupcount == inputrowcount, it means building hashmap on unique rows
-	// we can free sels now
-	if hb.keyWidth <= 8 {
-		if hb.InputBatchRowCount == int(hb.IntHashMap.GroupCount()) {
-			hb.MultiSels.Free()
-		}
-	} else {
-		if hb.InputBatchRowCount == int(hb.StrHashMap.GroupCount()) {
-			hb.MultiSels.Free()
-		}
-	}
-
-	return nil
+	return hb.Sels.Finalize(int(hb.GetGroupCount()), hb.InputBatchRowCount, proc.Mp())
 }
 
 // ExtractCachedIteratorsForReuse detaches and returns cached iterators so they
