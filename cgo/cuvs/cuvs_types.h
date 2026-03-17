@@ -128,6 +128,18 @@ typedef struct {
     uint32_t n_probes; // Number of lists to probe during search (default 20)
 } ivf_pq_search_params_t;
 
+/**
+ * @brief Brute-force index build parameters (dummy).
+ */
+typedef struct {
+} brute_force_build_params_t;
+
+/**
+ * @brief K-Means build parameters (dummy for inheritance).
+ */
+typedef struct {
+} kmeans_build_params_t;
+
 #ifdef __cplusplus
 static inline cagra_build_params_t cagra_build_params_default() {
     return {128, 64, true};
@@ -151,6 +163,14 @@ static inline ivf_pq_build_params_t ivf_pq_build_params_default() {
 
 static inline ivf_pq_search_params_t ivf_pq_search_params_default() {
     return {20};
+}
+
+static inline brute_force_build_params_t brute_force_build_params_default() {
+    return {};
+}
+
+static inline kmeans_build_params_t kmeans_build_params_default() {
+    return {};
 }
 #endif
 

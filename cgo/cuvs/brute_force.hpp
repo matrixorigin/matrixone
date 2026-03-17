@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "index_base.hpp"
 #include "cuvs_worker.hpp" // For cuvs_worker_t and raft_handle_wrapper_t
 #include <raft/util/cudart_utils.hpp> // For RAFT_CUDA_TRY
 #include <cuda_fp16.h> // For half
@@ -60,35 +61,31 @@ namespace matrixone {
  * @tparam T Data type of the vector elements (e.g., float, half).
  */
 template <typename T>
-class gpu_brute_force_t {
+class gpu_brute_force_t : public gpu_index_base_t<T, brute_force_build_params_t> {
 public:
-    std::vector<T> flattened_host_dataset;
     std::unique_ptr<cuvs::neighbors::brute_force::index<T, float>> index;
-    cuvs::distance::DistanceType metric;
-    uint32_t dimension;
-    uint32_t count;
-    int device_id_;
-    std::unique_ptr<cuvs_worker_t> worker;
-    std::shared_mutex mutex_;
-    bool is_loaded_ = false;
-    std::shared_ptr<void> dataset_device_ptr_;
-    uint64_t current_offset_ = 0;
 
-    ~gpu_brute_force_t() {
-        destroy();
+    ~gpu_brute_force_t() override {
+        this->destroy();
     }
 
     /**
      * @brief Constructor for brute-force search.
      */
     gpu_brute_force_t(const T* dataset_data, uint64_t count_vectors, uint32_t dimension, cuvs::distance::DistanceType m,
-                       uint32_t nthread, int device_id = 0)
-        : dimension(dimension), count(static_cast<uint32_t>(count_vectors)), metric(m), device_id_(device_id), current_offset_(static_cast<uint32_t>(count_vectors)) {
-        worker = std::make_unique<cuvs_worker_t>(nthread, device_id_);
+                       uint32_t nthread, int device_id = 0) {
+        
+        this->dimension = dimension;
+        this->count = static_cast<uint32_t>(count_vectors);
+        this->metric = m;
+        this->devices_ = {device_id};
+        this->current_offset_ = static_cast<uint32_t>(count_vectors);
 
-        flattened_host_dataset.resize(count * dimension);
+        this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_);
+
+        this->flattened_host_dataset.resize(this->count * this->dimension);
         if (dataset_data) {
-            std::copy(dataset_data, dataset_data + (count * dimension), flattened_host_dataset.begin());
+            std::copy(dataset_data, dataset_data + (this->count * this->dimension), this->flattened_host_dataset.begin());
         }
     }
 
@@ -96,10 +93,16 @@ public:
      * @brief Constructor for an empty index (chunked addition support).
      */
     gpu_brute_force_t(uint64_t total_count, uint32_t dimension, cuvs::distance::DistanceType m, 
-                       uint32_t nthread, int device_id = 0)
-        : dimension(dimension), count(static_cast<uint32_t>(total_count)), metric(m), device_id_(device_id), current_offset_(0) {
-        worker = std::make_unique<cuvs_worker_t>(nthread, device_id_);
-        flattened_host_dataset.resize(count * dimension);
+                       uint32_t nthread, int device_id = 0) {
+        
+        this->dimension = dimension;
+        this->count = static_cast<uint32_t>(total_count);
+        this->metric = m;
+        this->devices_ = {device_id};
+        this->current_offset_ = 0;
+
+        this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_);
+        this->flattened_host_dataset.resize(this->count * this->dimension);
     }
 
     /**
@@ -111,54 +114,54 @@ public:
         };
 
         auto stop_fn = [&](raft_handle_wrapper_t&) -> std::any {
-            std::unique_lock<std::shared_mutex> lock(mutex_);
+            std::unique_lock<std::shared_mutex> lock(this->mutex_);
             index.reset();
-            dataset_device_ptr_.reset();
+            this->dataset_device_ptr_.reset();
             return std::any();
         };
 
-        worker->start(init_fn, stop_fn);
+        this->worker->start(init_fn, stop_fn);
     }
 
     /**
      * @brief Loads the dataset to the GPU and builds the index.
      */
     void build() {
-        std::unique_lock<std::shared_mutex> lock(mutex_);
-        if (is_loaded_) return;
+        std::unique_lock<std::shared_mutex> lock(this->mutex_);
+        if (this->is_loaded_) return;
 
-        if (count == 0) {
+        if (this->count == 0) {
             index = nullptr;
-            is_loaded_ = true;
+            this->is_loaded_ = true;
             return;
         }
 
-        if (current_offset_ > 0 && current_offset_ < count) {
-            count = static_cast<uint32_t>(current_offset_);
-            flattened_host_dataset.resize(count * dimension);
+        if (this->current_offset_ > 0 && this->current_offset_ < this->count) {
+            this->count = static_cast<uint32_t>(this->current_offset_);
+            this->flattened_host_dataset.resize(this->count * this->dimension);
         }
 
-        uint64_t job_id = worker->submit(
+        uint64_t job_id = this->worker->submit(
             [&](raft_handle_wrapper_t& handle) -> std::any {
                 auto res = handle.get_raft_resources();
-                if (flattened_host_dataset.empty()) {
+                if (this->flattened_host_dataset.empty()) {
                     index = nullptr;
                     return std::any();
                 }
 
                 auto dataset_device = new auto(raft::make_device_matrix<T, int64_t, raft::layout_c_contiguous>(
-                    *res, static_cast<int64_t>(count), static_cast<int64_t>(dimension)));
+                    *res, static_cast<int64_t>(this->count), static_cast<int64_t>(this->dimension)));
                 
-                dataset_device_ptr_ = std::shared_ptr<void>(dataset_device, [](void* ptr) {
+                this->dataset_device_ptr_ = std::shared_ptr<void>(dataset_device, [](void* ptr) {
                     delete static_cast<raft::device_matrix<T, int64_t, raft::layout_c_contiguous>*>(ptr);
                 });
 
-                RAFT_CUDA_TRY(cudaMemcpyAsync(dataset_device->data_handle(), flattened_host_dataset.data(),
-                                         flattened_host_dataset.size() * sizeof(T), cudaMemcpyHostToDevice,
+                RAFT_CUDA_TRY(cudaMemcpyAsync(dataset_device->data_handle(), this->flattened_host_dataset.data(),
+                                         this->flattened_host_dataset.size() * sizeof(T), cudaMemcpyHostToDevice,
                                          raft::resource::get_cuda_stream(*res)));
 
                 cuvs::neighbors::brute_force::index_params index_params;
-                index_params.metric = metric;
+                index_params.metric = this->metric;
 
                 index = std::make_unique<cuvs::neighbors::brute_force::index<T, float>>(
                     cuvs::neighbors::brute_force::build(*res, index_params, raft::make_const_mdspan(dataset_device->view())));
@@ -168,12 +171,12 @@ public:
             }
         );
 
-        auto result_wait = worker->wait(job_id).get();
+        auto result_wait = this->worker->wait(job_id).get();
         if (result_wait.error) std::rethrow_exception(result_wait.error);
-        is_loaded_ = true;
+        this->is_loaded_ = true;
         // Clear host dataset after building to save memory
-        flattened_host_dataset.clear();
-        flattened_host_dataset.shrink_to_fit();
+        this->flattened_host_dataset.clear();
+        this->flattened_host_dataset.shrink_to_fit();
     }
 
     /**
@@ -188,19 +191,19 @@ public:
      * @brief Performs brute-force search for given queries.
      */
     search_result_t search(const T* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit) {
-        if (!queries_data || num_queries == 0 || dimension == 0) return search_result_t{};
+        if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
         if (query_dimension != this->dimension) throw std::runtime_error("dimension mismatch");
-        if (!is_loaded_ || !index) return search_result_t{};
+        if (!this->is_loaded_ || !index) return search_result_t{};
 
-        uint64_t job_id = worker->submit(
+        uint64_t job_id = this->worker->submit(
             [&, num_queries, limit, queries_data](raft_handle_wrapper_t& handle) -> std::any {
-                std::shared_lock<std::shared_mutex> lock(mutex_);
+                std::shared_lock<std::shared_mutex> lock(this->mutex_);
                 auto res = handle.get_raft_resources();
                 
                 auto queries_device = raft::make_device_matrix<T, int64_t, raft::layout_c_contiguous>(
-                    *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(dimension));
+                    *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(this->dimension));
                 RAFT_CUDA_TRY(cudaMemcpyAsync(queries_device.data_handle(), queries_data,
-                                         num_queries * dimension * sizeof(T), cudaMemcpyHostToDevice,
+                                         num_queries * this->dimension * sizeof(T), cudaMemcpyHostToDevice,
                                          raft::resource::get_cuda_stream(*res)));
 
                 auto neighbors_device = raft::make_device_matrix<int64_t, int64_t, raft::layout_c_contiguous>(
@@ -235,7 +238,7 @@ public:
             }
         );
 
-        auto result = worker->wait(job_id).get();
+        auto result = this->worker->wait(job_id).get();
         if (result.error) std::rethrow_exception(result.error);
         return std::any_cast<search_result_t>(result.result);
     }
@@ -248,19 +251,19 @@ public:
             return search(queries_data, num_queries, query_dimension, limit);
         }
 
-        if (!queries_data || num_queries == 0 || dimension == 0) return search_result_t{};
+        if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
         if (query_dimension != this->dimension) throw std::runtime_error("dimension mismatch");
-        if (!is_loaded_ || !index) return search_result_t{};
+        if (!this->is_loaded_ || !index) return search_result_t{};
 
-        uint64_t job_id = worker->submit(
+        uint64_t job_id = this->worker->submit(
             [&, num_queries, limit, queries_data](raft_handle_wrapper_t& handle) -> std::any {
-                std::shared_lock<std::shared_mutex> lock(mutex_);
+                std::shared_lock<std::shared_mutex> lock(this->mutex_);
                 auto res = handle.get_raft_resources();
                 
-                auto queries_device_float = raft::make_device_matrix<float, int64_t>(*res, num_queries, dimension);
-                raft::copy(*res, queries_device_float.view(), raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, dimension));
+                auto queries_device_float = raft::make_device_matrix<float, int64_t>(*res, num_queries, this->dimension);
+                raft::copy(*res, queries_device_float.view(), raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
                 
-                auto queries_device_target = raft::make_device_matrix<T, int64_t>(*res, num_queries, dimension);
+                auto queries_device_target = raft::make_device_matrix<T, int64_t>(*res, num_queries, this->dimension);
                 raft::copy(*res, queries_device_target.view(), queries_device_float.view());
 
                 auto neighbors_device = raft::make_device_matrix<int64_t, int64_t, raft::layout_c_contiguous>(
@@ -295,54 +298,9 @@ public:
             }
         );
 
-        auto result = worker->wait(job_id).get();
+        auto result = this->worker->wait(job_id).get();
         if (result.error) std::rethrow_exception(result.error);
         return std::any_cast<search_result_t>(result.result);
-    }
-
-    void add_chunk(const T* chunk_data, uint64_t chunk_count) {
-        if (current_offset_ + chunk_count > count) throw std::runtime_error("offset out of bounds");
-        std::copy(chunk_data, chunk_data + (chunk_count * dimension), flattened_host_dataset.begin() + (current_offset_ * dimension));
-        current_offset_ += chunk_count;
-    }
-
-    void add_chunk_float(const float* chunk_data, uint64_t chunk_count) {
-        if (current_offset_ + chunk_count > count) throw std::runtime_error("offset out of bounds");
-        
-        uint64_t row_offset = current_offset_;
-        uint64_t job_id = worker->submit(
-            [&, chunk_data, chunk_count, row_offset](raft_handle_wrapper_t& handle) -> std::any {
-                auto res = handle.get_raft_resources();
-                
-                // If conversion is needed
-                if constexpr (!std::is_same_v<T, float>) {
-                    auto chunk_device_float = raft::make_device_matrix<float, int64_t>(*res, chunk_count, dimension);
-                    raft::copy(*res, chunk_device_float.view(), raft::make_host_matrix_view<const float, int64_t>(chunk_data, chunk_count, dimension));
-                    auto out_view = raft::make_host_matrix_view<T, int64_t>(flattened_host_dataset.data() + (row_offset * dimension), chunk_count, dimension);
-                    raft::copy(*res, out_view, chunk_device_float.view());
-                    raft::resource::sync_stream(*res);
-                } else {
-                    std::copy(chunk_data, chunk_data + (chunk_count * dimension), flattened_host_dataset.begin() + (row_offset * dimension));
-                }
-                return std::any();
-            }
-        );
-        
-        auto result_wait = worker->wait(job_id).get();
-        if (result_wait.error) std::rethrow_exception(result_wait.error);
-        current_offset_ += chunk_count;
-    }
-
-    uint32_t cap() const {
-        return count;
-    }
-
-    uint32_t len() const {
-        return static_cast<uint32_t>(current_offset_);
-    }
-
-    void destroy() {
-        if (worker) worker->stop();
     }
 };
 
