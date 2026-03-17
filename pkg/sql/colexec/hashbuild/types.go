@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -56,6 +57,7 @@ type HashBuild struct {
 	NeedBatches       bool
 	NeedAllocateSels  bool
 	IsShuffle         bool
+	CanSpill          bool
 	Conditions        []*plan.Expr
 	JoinMapTag        int32
 	JoinMapRefCnt     int32
@@ -145,7 +147,8 @@ func (hashBuild *HashBuild) ExecProjection(proc *process.Process, input *batch.B
 func (ctr *container) setSpillThreshold(threshold int64) {
 	if threshold == 0 {
 		// 0 means auto config
-		mem := int64(system.MemoryTotal()) / int64(system.GoMaxProcs()) / 8
+		fileCacheMem := fileservice.GlobalMemoryCacheSizeHint.Load()
+		mem := (int64(system.MemoryTotal()) - fileCacheMem) / int64(system.GoMaxProcs()) / 8
 		// min 128MB
 		if mem < common.MiB*128 {
 			mem = common.MiB * 128
