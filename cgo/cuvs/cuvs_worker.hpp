@@ -302,7 +302,8 @@ private:
     }
 
     void execute_task(const cuvs_task_t& task, raft_handle& resource) {
-        cuvs_task_result_t res{task.id};
+        cuvs_task_result_t res;
+        res.id = task.id;
         try { res.result = task.fn(resource); }
         catch (...) { 
             res.error = std::current_exception(); 

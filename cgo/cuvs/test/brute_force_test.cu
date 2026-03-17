@@ -47,7 +47,7 @@ TEST(GpuBruteForceTest, BasicLoadAndSearch) {
     auto result = index.search(queries.data(), 1, dimension, 1);
 
     ASSERT_EQ(result.neighbors.size(), (size_t)1);
-    ASSERT_EQ(result.neighbors[0], 0);
+    ASSERT_EQ(result.neighbors[0], 0u);
     ASSERT_EQ(result.distances[0], 0.0);
 
     index.destroy();
@@ -74,8 +74,8 @@ TEST(GpuBruteForceTest, SearchWithMultipleQueries) {
     auto result = index.search(queries.data(), 2, dimension, 1);
 
     ASSERT_EQ(result.neighbors.size(), (size_t)2);
-    ASSERT_EQ(result.neighbors[0], 0);
-    ASSERT_EQ(result.neighbors[1], 2);
+    ASSERT_EQ(result.neighbors[0], 0u);
+    ASSERT_EQ(result.neighbors[1], 2u);
 
     index.destroy();
 }
@@ -95,7 +95,7 @@ TEST(GpuBruteForceTest, SearchWithFloat16) {
     auto result = index.search(h_queries.data(), 1, dimension, 1);
 
     ASSERT_EQ(result.neighbors.size(), (size_t)1);
-    ASSERT_EQ(result.neighbors[0], 0);
+    ASSERT_EQ(result.neighbors[0], 0u);
     ASSERT_EQ(result.distances[0], 0.0);
 
     index.destroy();
@@ -117,8 +117,8 @@ TEST(GpuBruteForceTest, SearchWithInnerProduct) {
     auto result = index.search(queries.data(), 1, dimension, 2);
 
     ASSERT_EQ(result.neighbors.size(), (size_t)2);
-    ASSERT_EQ(result.neighbors[0], 0);
-    ASSERT_EQ(result.neighbors[1], 1);
+    ASSERT_EQ(result.neighbors[0], 0u);
+    ASSERT_EQ(result.neighbors[1], 1u);
     
     // dot product should be 1.0 for exact match
     ASSERT_TRUE(std::abs(result.distances[0] - 1.0) < 1e-5);
@@ -182,7 +182,7 @@ TEST(CuvsWorkerTest, BruteForceSearch) {
     auto result = index.search(queries.data(), 1, dimension, 5);
 
     ASSERT_EQ(result.neighbors.size(), (size_t)5);
-    ASSERT_EQ(result.neighbors[0], 0);
+    ASSERT_EQ(result.neighbors[0], 0u);
 
     index.destroy();
     worker.stop();

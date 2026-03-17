@@ -119,7 +119,7 @@ TEST(GpuIvfFlatTest, ShardedModeSimulation) {
     auto result = index.search(queries.data(), 1, dimension, 5, sp);
 
     ASSERT_EQ(result.neighbors.size(), (size_t)5);
-    ASSERT_EQ(result.neighbors[0], 0);
+    ASSERT_EQ(result.neighbors[0], 0u);
 
     index.destroy();
 }

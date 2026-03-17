@@ -39,7 +39,7 @@ TEST(GpuCagraTest, BasicLoadAndSearch) {
     auto result = index.search(queries.data(), 1, dimension, 5, sp);
 
     ASSERT_EQ(result.neighbors.size(), (size_t)5);
-    ASSERT_EQ(result.neighbors[0], 0);
+    ASSERT_EQ(result.neighbors[0], 0u);
 
     index.destroy();
 }
@@ -74,7 +74,7 @@ TEST(GpuCagraTest, SaveAndLoadFromFile) {
         auto result = index.search(queries.data(), 1, dimension, 5, sp);
         
         ASSERT_EQ(result.neighbors.size(), (size_t)5);
-        ASSERT_EQ(result.neighbors[0], 0);
+        ASSERT_EQ(result.neighbors[0], 0u);
 
         index.destroy();
     }
@@ -98,7 +98,7 @@ TEST(GpuCagraTest, ShardedModeSimulation) {
     auto result = index.search(queries.data(), 1, dimension, 5, sp);
 
     ASSERT_EQ(result.neighbors.size(), (size_t)5);
-    ASSERT_EQ(result.neighbors[0], 0);
+    ASSERT_EQ(result.neighbors[0], 0u);
 
     index.destroy();
 }

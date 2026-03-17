@@ -93,7 +93,6 @@ public:
 
         int64_t n_rows = src_view.extent(0);
         int64_t n_cols = src_view.extent(1);
-        size_t total_elements = n_rows * n_cols;
 
         auto chunk_device_int8 = raft::make_device_matrix<int8_t, int64_t>(res, n_rows, n_cols);
         cuvs::preprocessing::quantize::scalar::transform(res, *quantizer_, src_view, chunk_device_int8.view());

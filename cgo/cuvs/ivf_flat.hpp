@@ -139,11 +139,11 @@ public:
      * @brief Starts the worker and initializes resources.
      */
     void start() {
-        auto init_fn = [](raft_handle_wrapper_t& handle) -> std::any {
+        auto init_fn = [](raft_handle_wrapper_t&) -> std::any {
             return std::any();
         };
 
-        auto stop_fn = [&](raft_handle_wrapper_t& handle) -> std::any {
+        auto stop_fn = [&](raft_handle_wrapper_t&) -> std::any {
             std::unique_lock<std::shared_mutex> lock(mutex_);
             index_.reset();
             mg_index_.reset();
