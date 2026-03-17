@@ -1,0 +1,695 @@
+drop database if exists ntile_func;
+create database ntile_func;
+use ntile_func;
+drop table if exists test_ntile_basic;
+create table test_ntile_basic (
+id int primary key,
+department varchar(50),
+employee varchar(50),
+salary decimal(10, 2)
+);
+insert into test_ntile_basic values
+(1,  'engineering', 'alice',   80000),
+(2,  'engineering', 'bob',     90000),
+(3,  'engineering', 'charlie', 90000),
+(4,  'engineering', 'david',   100000),
+(5,  'engineering', 'eve',     110000),
+(6,  'sales',      'frank',   50000),
+(7,  'sales',      'grace',   60000),
+(8,  'sales',      'hank',    70000),
+(9,  'hr',         'ivy',     65000),
+(10, 'hr',         'jack',    65000);
+select
+employee,
+salary,
+ntile(2) over (order by salary) as bucket_2
+from test_ntile_basic
+order by salary;
+➤ employee[12,50,0]  ¦  salary[3,10,2]  ¦  bucket_2[-5,21,0]  𝄀
+frank  ¦  50000.00  ¦  1  𝄀
+grace  ¦  60000.00  ¦  1  𝄀
+ivy  ¦  65000.00  ¦  1  𝄀
+jack  ¦  65000.00  ¦  1  𝄀
+hank  ¦  70000.00  ¦  1  𝄀
+alice  ¦  80000.00  ¦  2  𝄀
+bob  ¦  90000.00  ¦  2  𝄀
+charlie  ¦  90000.00  ¦  2  𝄀
+david  ¦  100000.00  ¦  2  𝄀
+eve  ¦  110000.00  ¦  2
+select
+employee,
+salary,
+ntile(3) over (order by salary) as bucket_3
+from test_ntile_basic
+order by salary;
+➤ employee[12,50,0]  ¦  salary[3,10,2]  ¦  bucket_3[-5,21,0]  𝄀
+frank  ¦  50000.00  ¦  1  𝄀
+grace  ¦  60000.00  ¦  1  𝄀
+ivy  ¦  65000.00  ¦  1  𝄀
+jack  ¦  65000.00  ¦  1  𝄀
+hank  ¦  70000.00  ¦  2  𝄀
+alice  ¦  80000.00  ¦  2  𝄀
+bob  ¦  90000.00  ¦  2  𝄀
+charlie  ¦  90000.00  ¦  3  𝄀
+david  ¦  100000.00  ¦  3  𝄀
+eve  ¦  110000.00  ¦  3
+select
+employee,
+salary,
+ntile(4) over (order by salary) as bucket_4
+from test_ntile_basic
+order by salary;
+➤ employee[12,50,0]  ¦  salary[3,10,2]  ¦  bucket_4[-5,21,0]  𝄀
+frank  ¦  50000.00  ¦  1  𝄀
+grace  ¦  60000.00  ¦  1  𝄀
+ivy  ¦  65000.00  ¦  1  𝄀
+jack  ¦  65000.00  ¦  2  𝄀
+hank  ¦  70000.00  ¦  2  𝄀
+alice  ¦  80000.00  ¦  2  𝄀
+bob  ¦  90000.00  ¦  3  𝄀
+charlie  ¦  90000.00  ¦  3  𝄀
+david  ¦  100000.00  ¦  4  𝄀
+eve  ¦  110000.00  ¦  4
+select
+employee,
+salary,
+ntile(5) over (order by salary) as bucket_5
+from test_ntile_basic
+order by salary;
+➤ employee[12,50,0]  ¦  salary[3,10,2]  ¦  bucket_5[-5,21,0]  𝄀
+frank  ¦  50000.00  ¦  1  𝄀
+grace  ¦  60000.00  ¦  1  𝄀
+ivy  ¦  65000.00  ¦  2  𝄀
+jack  ¦  65000.00  ¦  2  𝄀
+hank  ¦  70000.00  ¦  3  𝄀
+alice  ¦  80000.00  ¦  3  𝄀
+bob  ¦  90000.00  ¦  4  𝄀
+charlie  ¦  90000.00  ¦  4  𝄀
+david  ¦  100000.00  ¦  5  𝄀
+eve  ¦  110000.00  ¦  5
+select
+employee,
+salary,
+ntile(10) over (order by salary) as bucket_10
+from test_ntile_basic
+order by salary;
+➤ employee[12,50,0]  ¦  salary[3,10,2]  ¦  bucket_10[-5,21,0]  𝄀
+frank  ¦  50000.00  ¦  1  𝄀
+grace  ¦  60000.00  ¦  2  𝄀
+ivy  ¦  65000.00  ¦  3  𝄀
+jack  ¦  65000.00  ¦  4  𝄀
+hank  ¦  70000.00  ¦  5  𝄀
+alice  ¦  80000.00  ¦  6  𝄀
+bob  ¦  90000.00  ¦  7  𝄀
+charlie  ¦  90000.00  ¦  8  𝄀
+david  ¦  100000.00  ¦  9  𝄀
+eve  ¦  110000.00  ¦  10
+select
+employee,
+salary,
+ntile(1) over (order by salary) as bucket_1
+from test_ntile_basic
+order by salary;
+➤ employee[12,50,0]  ¦  salary[3,10,2]  ¦  bucket_1[-5,21,0]  𝄀
+frank  ¦  50000.00  ¦  1  𝄀
+grace  ¦  60000.00  ¦  1  𝄀
+ivy  ¦  65000.00  ¦  1  𝄀
+jack  ¦  65000.00  ¦  1  𝄀
+hank  ¦  70000.00  ¦  1  𝄀
+alice  ¦  80000.00  ¦  1  𝄀
+bob  ¦  90000.00  ¦  1  𝄀
+charlie  ¦  90000.00  ¦  1  𝄀
+david  ¦  100000.00  ¦  1  𝄀
+eve  ¦  110000.00  ¦  1
+select
+employee,
+salary,
+ntile(20) over (order by salary) as bucket_20
+from test_ntile_basic
+order by salary;
+➤ employee[12,50,0]  ¦  salary[3,10,2]  ¦  bucket_20[-5,21,0]  𝄀
+frank  ¦  50000.00  ¦  1  𝄀
+grace  ¦  60000.00  ¦  2  𝄀
+ivy  ¦  65000.00  ¦  3  𝄀
+jack  ¦  65000.00  ¦  4  𝄀
+hank  ¦  70000.00  ¦  5  𝄀
+alice  ¦  80000.00  ¦  6  𝄀
+bob  ¦  90000.00  ¦  7  𝄀
+charlie  ¦  90000.00  ¦  8  𝄀
+david  ¦  100000.00  ¦  9  𝄀
+eve  ¦  110000.00  ¦  10
+select
+department,
+employee,
+salary,
+ntile(2) over (partition by department order by salary) as bucket
+from test_ntile_basic
+order by department, salary;
+➤ department[12,50,0]  ¦  employee[12,50,0]  ¦  salary[3,10,2]  ¦  bucket[-5,21,0]  𝄀
+engineering  ¦  alice  ¦  80000.00  ¦  1  𝄀
+engineering  ¦  bob  ¦  90000.00  ¦  1  𝄀
+engineering  ¦  charlie  ¦  90000.00  ¦  1  𝄀
+engineering  ¦  david  ¦  100000.00  ¦  2  𝄀
+engineering  ¦  eve  ¦  110000.00  ¦  2  𝄀
+hr  ¦  ivy  ¦  65000.00  ¦  1  𝄀
+hr  ¦  jack  ¦  65000.00  ¦  2  𝄀
+sales  ¦  frank  ¦  50000.00  ¦  1  𝄀
+sales  ¦  grace  ¦  60000.00  ¦  1  𝄀
+sales  ¦  hank  ¦  70000.00  ¦  2
+select
+employee,
+salary,
+ntile(3) over (order by salary desc) as bucket_desc
+from test_ntile_basic
+order by salary desc;
+➤ employee[12,50,0]  ¦  salary[3,10,2]  ¦  bucket_desc[-5,21,0]  𝄀
+eve  ¦  110000.00  ¦  1  𝄀
+david  ¦  100000.00  ¦  1  𝄀
+bob  ¦  90000.00  ¦  1  𝄀
+charlie  ¦  90000.00  ¦  1  𝄀
+alice  ¦  80000.00  ¦  2  𝄀
+hank  ¦  70000.00  ¦  2  𝄀
+ivy  ¦  65000.00  ¦  2  𝄀
+jack  ¦  65000.00  ¦  3  𝄀
+grace  ¦  60000.00  ¦  3  𝄀
+frank  ¦  50000.00  ¦  3
+drop table if exists test_ntile_multi_part;
+create table test_ntile_multi_part (
+region varchar(20),
+department varchar(20),
+employee varchar(20),
+salary int
+);
+insert into test_ntile_multi_part values
+('east', 'it', 'a', 100), ('east', 'it', 'b', 200), ('east', 'it', 'c', 300),
+('east', 'hr', 'd', 150), ('east', 'hr', 'e', 250),
+('west', 'it', 'f', 120), ('west', 'it', 'g', 180);
+select
+region, department, employee, salary,
+ntile(2) over (partition by region, department order by salary) as bucket
+from test_ntile_multi_part
+order by region, department, salary;
+➤ region[12,20,0]  ¦  department[12,20,0]  ¦  employee[12,20,0]  ¦  salary[4,11,0]  ¦  bucket[-5,21,0]  𝄀
+east  ¦  hr  ¦  d  ¦  150  ¦  1  𝄀
+east  ¦  hr  ¦  e  ¦  250  ¦  2  𝄀
+east  ¦  it  ¦  a  ¦  100  ¦  1  𝄀
+east  ¦  it  ¦  b  ¦  200  ¦  1  𝄀
+east  ¦  it  ¦  c  ¦  300  ¦  2  𝄀
+west  ¦  it  ¦  f  ¦  120  ¦  1  𝄀
+west  ¦  it  ¦  g  ¦  180  ¦  2
+drop table if exists test_ntile_multi_part;
+select
+employee,
+salary,
+ntile(2) over (order by salary) as bucket_2,
+ntile(3) over (order by salary) as bucket_3,
+ntile(4) over (order by salary) as bucket_4
+from test_ntile_basic
+order by salary;
+➤ employee[12,50,0]  ¦  salary[3,10,2]  ¦  bucket_2[-5,21,0]  ¦  bucket_3[-5,21,0]  ¦  bucket_4[-5,21,0]  𝄀
+frank  ¦  50000.00  ¦  1  ¦  1  ¦  1  𝄀
+grace  ¦  60000.00  ¦  1  ¦  1  ¦  1  𝄀
+ivy  ¦  65000.00  ¦  1  ¦  1  ¦  1  𝄀
+jack  ¦  65000.00  ¦  1  ¦  1  ¦  2  𝄀
+hank  ¦  70000.00  ¦  1  ¦  2  ¦  2  𝄀
+alice  ¦  80000.00  ¦  2  ¦  2  ¦  2  𝄀
+bob  ¦  90000.00  ¦  2  ¦  2  ¦  3  𝄀
+charlie  ¦  90000.00  ¦  2  ¦  3  ¦  3  𝄀
+david  ¦  100000.00  ¦  2  ¦  3  ¦  4  𝄀
+eve  ¦  110000.00  ¦  2  ¦  3  ¦  4
+drop table if exists test_ntile_basic;
+drop table if exists test_ntile_single;
+create table test_ntile_single (id int, val int);
+insert into test_ntile_single values (1, 100);
+select val, ntile(1) over (order by val) as b1,
+ntile(3) over (order by val) as b3,
+ntile(100) over (order by val) as b100
+from test_ntile_single;
+➤ val[4,11,0]  ¦  b1[-5,21,0]  ¦  b3[-5,21,0]  ¦  b100[-5,21,0]  𝄀
+100  ¦  1  ¦  1  ¦  1
+drop table if exists test_ntile_single;
+drop table if exists test_ntile_all_same;
+create table test_ntile_all_same (id int, val int);
+insert into test_ntile_all_same values (1, 50), (2, 50), (3, 50), (4, 50), (5, 50), (6, 50);
+select id, val, ntile(3) over (order by val) as bucket
+from test_ntile_all_same order by id;
+➤ id[4,11,0]  ¦  val[4,11,0]  ¦  bucket[-5,21,0]  𝄀
+1  ¦  50  ¦  1  𝄀
+2  ¦  50  ¦  1  𝄀
+3  ¦  50  ¦  2  𝄀
+4  ¦  50  ¦  2  𝄀
+5  ¦  50  ¦  3  𝄀
+6  ¦  50  ¦  3
+drop table if exists test_ntile_all_same;
+drop table if exists test_ntile_empty;
+create table test_ntile_empty (id int, val int);
+select val, ntile(3) over (order by val) as bucket from test_ntile_empty;
+➤ val[4,11,0]  ¦  bucket[-5,21,0]
+drop table if exists test_ntile_empty;
+drop table if exists test_ntile_two;
+create table test_ntile_two (id int, val int);
+insert into test_ntile_two values (1, 10), (2, 20);
+select val, ntile(2) over (order by val) as b2,
+ntile(3) over (order by val) as b3
+from test_ntile_two;
+➤ val[4,11,0]  ¦  b2[-5,21,0]  ¦  b3[-5,21,0]  𝄀
+10  ¦  1  ¦  1  𝄀
+20  ¦  2  ¦  2
+drop table if exists test_ntile_two;
+drop table if exists test_ntile_null;
+create table test_ntile_null (id int, val int);
+insert into test_ntile_null values (1, null), (2, 10), (3, 20), (4, null), (5, 30);
+select id, val, ntile(3) over (order by val) as bucket
+from test_ntile_null order by val;
+➤ id[4,11,0]  ¦  val[4,11,0]  ¦  bucket[-5,21,0]  𝄀
+1  ¦  null  ¦  1  𝄀
+4  ¦  null  ¦  1  𝄀
+2  ¦  10  ¦  2  𝄀
+3  ¦  20  ¦  2  𝄀
+5  ¦  30  ¦  3
+drop table if exists test_ntile_null;
+drop table if exists test_ntile_all_null;
+create table test_ntile_all_null (id int, val int);
+insert into test_ntile_all_null values (1, null), (2, null), (3, null);
+select id, val, ntile(2) over (order by val) as bucket
+from test_ntile_all_null order by id;
+➤ id[4,11,0]  ¦  val[4,11,0]  ¦  bucket[-5,21,0]  𝄀
+1  ¦  null  ¦  1  𝄀
+2  ¦  null  ¦  1  𝄀
+3  ¦  null  ¦  2
+drop table if exists test_ntile_all_null;
+drop table if exists test_ntile_large;
+create table test_ntile_large (id int, val int);
+insert into test_ntile_large values
+(1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(10,10),
+(11,11),(12,12),(13,13),(14,14),(15,15),(16,16),(17,17),(18,18),(19,19),(20,20),
+(21,21),(22,22),(23,23),(24,24),(25,25),(26,26),(27,27),(28,28),(29,29),(30,30),
+(31,31),(32,32),(33,33),(34,34),(35,35),(36,36),(37,37),(38,38),(39,39),(40,40),
+(41,41),(42,42),(43,43),(44,44),(45,45),(46,46),(47,47),(48,48),(49,49),(50,50),
+(51,51),(52,52),(53,53),(54,54),(55,55),(56,56),(57,57),(58,58),(59,59),(60,60),
+(61,61),(62,62),(63,63),(64,64),(65,65),(66,66),(67,67),(68,68),(69,69),(70,70),
+(71,71),(72,72),(73,73),(74,74),(75,75),(76,76),(77,77),(78,78),(79,79),(80,80),
+(81,81),(82,82),(83,83),(84,84),(85,85),(86,86),(87,87),(88,88),(89,89),(90,90),
+(91,91),(92,92),(93,93),(94,94),(95,95),(96,96),(97,97),(98,98),(99,99),(100,100);
+select id, val, ntile(4) over (order by val) as bucket
+from test_ntile_large
+where id in (1, 25, 26, 50, 51, 75, 76, 100)
+order by val;
+➤ id[4,11,0]  ¦  val[4,11,0]  ¦  bucket[-5,21,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+25  ¦  25  ¦  1  𝄀
+26  ¦  26  ¦  2  𝄀
+50  ¦  50  ¦  2  𝄀
+51  ¦  51  ¦  3  𝄀
+75  ¦  75  ¦  3  𝄀
+76  ¦  76  ¦  4  𝄀
+100  ¦  100  ¦  4
+select id, val, ntile(3) over (order by val) as bucket
+from test_ntile_large
+where id in (1, 34, 35, 67, 68, 100)
+order by val;
+➤ id[4,11,0]  ¦  val[4,11,0]  ¦  bucket[-5,21,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+34  ¦  34  ¦  1  𝄀
+35  ¦  35  ¦  2  𝄀
+67  ¦  67  ¦  2  𝄀
+68  ¦  68  ¦  3  𝄀
+100  ¦  100  ¦  3
+select min(bucket) as min_b, max(bucket) as max_b
+from (
+select ntile(4) over (order by val) as bucket from test_ntile_large
+) t;
+➤ min_b[-5,21,0]  ¦  max_b[-5,21,0]  𝄀
+1  ¦  4
+drop table if exists test_ntile_large;
+drop table if exists test_ntile_tinyint;
+create table test_ntile_tinyint (id int, val tinyint);
+insert into test_ntile_tinyint values (1, -128), (2, -1), (3, 0), (4, 1), (5, 127);
+select val, ntile(3) over (order by val) as bucket from test_ntile_tinyint order by val;
+➤ val[-6,4,0]  ¦  bucket[-5,21,0]  𝄀
+-128  ¦  1  𝄀
+-1  ¦  1  𝄀
+0  ¦  2  𝄀
+1  ¦  2  𝄀
+127  ¦  3
+drop table if exists test_ntile_tinyint;
+drop table if exists test_ntile_smallint;
+create table test_ntile_smallint (id int, val smallint);
+insert into test_ntile_smallint values (1, -32768), (2, 0), (3, 32767);
+select val, ntile(2) over (order by val) as bucket from test_ntile_smallint order by val;
+➤ val[5,6,0]  ¦  bucket[-5,21,0]  𝄀
+-32768  ¦  1  𝄀
+0  ¦  1  𝄀
+32767  ¦  2
+drop table if exists test_ntile_smallint;
+drop table if exists test_ntile_int;
+create table test_ntile_int (id int, val int);
+insert into test_ntile_int values (1, -2147483648), (2, 0), (3, 2147483647);
+select val, ntile(2) over (order by val) as bucket from test_ntile_int order by val;
+➤ val[4,11,0]  ¦  bucket[-5,21,0]  𝄀
+-2147483648  ¦  1  𝄀
+0  ¦  1  𝄀
+2147483647  ¦  2
+drop table if exists test_ntile_int;
+drop table if exists test_ntile_bigint;
+create table test_ntile_bigint (id int, val bigint);
+insert into test_ntile_bigint values (1, -9223372036854775808), (2, 0), (3, 9223372036854775807);
+select val, ntile(2) over (order by val) as bucket from test_ntile_bigint order by val;
+➤ val[-5,20,0]  ¦  bucket[-5,21,0]  𝄀
+-9223372036854775808  ¦  1  𝄀
+0  ¦  1  𝄀
+9223372036854775807  ¦  2
+drop table if exists test_ntile_bigint;
+drop table if exists test_ntile_bigint_u;
+create table test_ntile_bigint_u (id int, val bigint unsigned);
+insert into test_ntile_bigint_u values (1, 0), (2, 9223372036854775808), (3, 18446744073709551615);
+select val, ntile(2) over (order by val) as bucket from test_ntile_bigint_u order by val;
+➤ val[-5,20,0]  ¦  bucket[-5,21,0]  𝄀
+0  ¦  1  𝄀
+9223372036854775808  ¦  1  𝄀
+18446744073709551615  ¦  2
+drop table if exists test_ntile_bigint_u;
+drop table if exists test_ntile_float;
+create table test_ntile_float (id int, val float);
+insert into test_ntile_float values (1, -3.14), (2, 0), (3, 1.5), (4, 3.14), (5, 99.99);
+select val, ntile(3) over (order by val) as bucket from test_ntile_float order by val;
+➤ val[7,12,31]  ¦  bucket[-5,21,0]  𝄀
+-3.14  ¦  1  𝄀
+0.0  ¦  1  𝄀
+1.5  ¦  2  𝄀
+3.14  ¦  2  𝄀
+99.99  ¦  3
+drop table if exists test_ntile_float;
+drop table if exists test_ntile_double;
+create table test_ntile_double (id int, val double);
+insert into test_ntile_double values (1, -1.79769e+308), (2, 0), (3, 1.79769e+308);
+select val, ntile(2) over (order by val) as bucket from test_ntile_double order by val;
+➤ val[8,22,31]  ¦  bucket[-5,21,0]  𝄀
+-1.79769E308  ¦  1  𝄀
+0.0  ¦  1  𝄀
+1.79769E308  ¦  2
+drop table if exists test_ntile_double;
+drop table if exists test_ntile_decimal;
+create table test_ntile_decimal (id int, val decimal(18, 6));
+insert into test_ntile_decimal values
+(1, -999999.999999), (2, 0.000001), (3, 123456.789012), (4, 999999.999999);
+select val, ntile(2) over (order by val) as bucket from test_ntile_decimal order by val;
+➤ val[3,18,6]  ¦  bucket[-5,21,0]  𝄀
+-999999.999999  ¦  1  𝄀
+0.000001  ¦  1  𝄀
+123456.789012  ¦  2  𝄀
+999999.999999  ¦  2
+drop table if exists test_ntile_decimal;
+drop table if exists test_ntile_char;
+create table test_ntile_char (id int, val char(10));
+insert into test_ntile_char values (1, 'apple'), (2, 'banana'), (3, 'cherry'), (4, 'date');
+select val, ntile(2) over (order by val) as bucket from test_ntile_char order by val;
+➤ val[1,10,0]  ¦  bucket[-5,21,0]  𝄀
+apple  ¦  1  𝄀
+banana  ¦  1  𝄀
+cherry  ¦  2  𝄀
+date  ¦  2
+drop table if exists test_ntile_char;
+drop table if exists test_ntile_varchar;
+create table test_ntile_varchar (id int, val varchar(255));
+insert into test_ntile_varchar values (1, 'aaa'), (2, 'aab'), (3, 'bbb'), (4, 'zzz');
+select val, ntile(2) over (order by val) as bucket from test_ntile_varchar order by val;
+➤ val[12,255,0]  ¦  bucket[-5,21,0]  𝄀
+aaa  ¦  1  𝄀
+aab  ¦  1  𝄀
+bbb  ¦  2  𝄀
+zzz  ¦  2
+drop table if exists test_ntile_varchar;
+drop table if exists test_ntile_text;
+create table test_ntile_text (id int, val text);
+insert into test_ntile_text values (1, 'short'), (2, 'medium length text'), (3, 'zzz last');
+select val, ntile(2) over (order by val) as bucket from test_ntile_text order by val;
+➤ val[-1,65535,0]  ¦  bucket[-5,21,0]  𝄀
+medium length text  ¦  1  𝄀
+short  ¦  1  𝄀
+zzz last  ¦  2
+drop table if exists test_ntile_text;
+drop table if exists test_ntile_date;
+create table test_ntile_date (id int, val date);
+insert into test_ntile_date values
+(1, '2020-01-01'), (2, '2022-06-15'), (3, '2024-12-31'), (4, '2025-01-01');
+select val, ntile(2) over (order by val) as bucket from test_ntile_date order by val;
+➤ val[91,10,0]  ¦  bucket[-5,21,0]  𝄀
+2020-01-01  ¦  1  𝄀
+2022-06-15  ¦  1  𝄀
+2024-12-31  ¦  2  𝄀
+2025-01-01  ¦  2
+drop table if exists test_ntile_date;
+drop table if exists test_ntile_datetime;
+create table test_ntile_datetime (id int, val datetime);
+insert into test_ntile_datetime values
+(1, '2024-01-01 00:00:00'),
+(2, '2024-01-01 00:00:01'),
+(3, '2024-06-15 12:30:45'),
+(4, '2024-12-31 23:59:59');
+select val, ntile(2) over (order by val) as bucket from test_ntile_datetime order by val;
+➤ val[93,19,0]  ¦  bucket[-5,21,0]  𝄀
+2024-01-01 00:00:00  ¦  1  𝄀
+2024-01-01 00:00:01  ¦  1  𝄀
+2024-06-15 12:30:45  ¦  2  𝄀
+2024-12-31 23:59:59  ¦  2
+drop table if exists test_ntile_datetime;
+drop table if exists test_ntile_timestamp;
+create table test_ntile_timestamp (id int, val timestamp);
+insert into test_ntile_timestamp values
+(1, '2020-01-01 00:00:00'),
+(2, '2022-06-15 12:00:00'),
+(3, '2025-12-31 23:59:59');
+select val, ntile(2) over (order by val) as bucket from test_ntile_timestamp order by val;
+➤ val[93,19,0]  ¦  bucket[-5,21,0]  𝄀
+2020-01-01 00:00:00  ¦  1  𝄀
+2022-06-15 12:00:00  ¦  1  𝄀
+2025-12-31 23:59:59  ¦  2
+drop table if exists test_ntile_timestamp;
+drop table if exists test_ntile_time;
+create table test_ntile_time (id int, val time);
+insert into test_ntile_time values
+(1, '00:00:00'), (2, '08:30:00'), (3, '12:00:00'), (4, '23:59:59');
+select val, ntile(2) over (order by val) as bucket from test_ntile_time order by val;
+➤ val[92,10,0]  ¦  bucket[-5,21,0]  𝄀
+00:00:00  ¦  1  𝄀
+08:30:00  ¦  1  𝄀
+12:00:00  ¦  2  𝄀
+23:59:59  ¦  2
+drop table if exists test_ntile_time;
+drop table if exists test_ntile_blob;
+[unknown result because it is related to issue#23863]
+create table test_ntile_blob (id int, val blob);
+[unknown result because it is related to issue#23863]
+insert into test_ntile_blob values (1, 'abc'), (2, 'def'), (3, 'xyz');
+[unknown result because it is related to issue#23863]
+select id, ntile(2) over (order by val) as bucket from test_ntile_blob order by val;
+[unknown result because it is related to issue#23863]
+drop table if exists test_ntile_blob;
+[unknown result because it is related to issue#23863]
+drop table if exists test_ntile_enum;
+[unknown result because it is related to issue#23863]
+create table test_ntile_enum (id int, val enum('low', 'medium', 'high', 'critical'));
+[unknown result because it is related to issue#23863]
+insert into test_ntile_enum values (1, 'low'), (2, 'medium'), (3, 'high'), (4, 'critical');
+[unknown result because it is related to issue#23863]
+select val, ntile(2) over (order by val) as bucket from test_ntile_enum order by val;
+[unknown result because it is related to issue#23863]
+drop table if exists test_ntile_enum;
+[unknown result because it is related to issue#23863]
+drop table if exists test_ntile_json;
+create table test_ntile_json (id int, val json);
+insert into test_ntile_json values (1, '{"a":1}'), (2, '{"a":2}'), (3, '{"a":3}');
+select id, val, ntile(2) over (order by id) as bucket from test_ntile_json order by id;
+➤ id[4,11,0]  ¦  val[-1,2147483647,0]  ¦  bucket[-5,21,0]  𝄀
+1  ¦  {"a": 1}  ¦  1  𝄀
+2  ¦  {"a": 2}  ¦  1  𝄀
+3  ¦  {"a": 3}  ¦  2
+drop table if exists test_ntile_json;
+drop table if exists test_ntile_bool;
+create table test_ntile_bool (id int, val boolean);
+insert into test_ntile_bool values (1, false), (2, false), (3, true), (4, true);
+select val, ntile(2) over (order by val) as bucket from test_ntile_bool order by val;
+➤ val[-7,1,0]  ¦  bucket[-5,21,0]  𝄀
+0  ¦  1  𝄀
+0  ¦  1  𝄀
+1  ¦  2  𝄀
+1  ¦  2
+drop table if exists test_ntile_bool;
+drop table if exists test_ntile_pk;
+create table test_ntile_pk (
+id int primary key,
+val int
+);
+insert into test_ntile_pk values (1, 30), (2, 10), (3, 20), (4, 50), (5, 40);
+select id, val, ntile(3) over (order by val) as bucket from test_ntile_pk order by val;
+➤ id[4,11,0]  ¦  val[4,11,0]  ¦  bucket[-5,21,0]  𝄀
+2  ¦  10  ¦  1  𝄀
+3  ¦  20  ¦  1  𝄀
+1  ¦  30  ¦  2  𝄀
+5  ¦  40  ¦  2  𝄀
+4  ¦  50  ¦  3
+select id, val, ntile(3) over (order by id) as bucket from test_ntile_pk order by id;
+➤ id[4,11,0]  ¦  val[4,11,0]  ¦  bucket[-5,21,0]  𝄀
+1  ¦  30  ¦  1  𝄀
+2  ¦  10  ¦  1  𝄀
+3  ¦  20  ¦  2  𝄀
+4  ¦  50  ¦  2  𝄀
+5  ¦  40  ¦  3
+drop table if exists test_ntile_pk;
+drop table if exists test_ntile_notnull;
+create table test_ntile_notnull (
+id int not null,
+name varchar(50) not null,
+score int not null
+);
+insert into test_ntile_notnull values (1, 'alice', 85), (2, 'bob', 90), (3, 'carol', 75);
+select name, score, ntile(2) over (order by score) as bucket
+from test_ntile_notnull order by score;
+➤ name[12,50,0]  ¦  score[4,11,0]  ¦  bucket[-5,21,0]  𝄀
+carol  ¦  75  ¦  1  𝄀
+alice  ¦  85  ¦  1  𝄀
+bob  ¦  90  ¦  2
+drop table if exists test_ntile_notnull;
+drop table if exists test_ntile_autoinc;
+create table test_ntile_autoinc (
+id bigint primary key auto_increment,
+val varchar(20)
+);
+insert into test_ntile_autoinc (val) values ('first'), ('second'), ('third'), ('fourth'), ('fifth');
+select id, val, ntile(2) over (order by id) as bucket from test_ntile_autoinc order by id;
+➤ id[-5,20,0]  ¦  val[12,20,0]  ¦  bucket[-5,21,0]  𝄀
+1  ¦  first  ¦  1  𝄀
+2  ¦  second  ¦  1  𝄀
+3  ¦  third  ¦  1  𝄀
+4  ¦  fourth  ¦  2  𝄀
+5  ¦  fifth  ¦  2
+drop table if exists test_ntile_autoinc;
+drop table if exists test_ntile_unique;
+create table test_ntile_unique (
+id int primary key,
+email varchar(100) unique,
+score int
+);
+insert into test_ntile_unique values
+(1, 'a@test.com', 80), (2, 'b@test.com', 90),
+(3, 'c@test.com', 70), (4, 'd@test.com', 85);
+select email, score, ntile(2) over (order by score) as bucket
+from test_ntile_unique order by score;
+➤ email[12,100,0]  ¦  score[4,11,0]  ¦  bucket[-5,21,0]  𝄀
+c@test.com  ¦  70  ¦  1  𝄀
+a@test.com  ¦  80  ¦  1  𝄀
+d@test.com  ¦  85  ¦  2  𝄀
+b@test.com  ¦  90  ¦  2
+drop table if exists test_ntile_unique;
+drop table if exists test_ntile_default;
+create table test_ntile_default (
+id int,
+priority int default 5,
+status varchar(20) default 'active'
+);
+insert into test_ntile_default (id) values (1), (2), (3);
+insert into test_ntile_default values (4, 10, 'inactive'), (5, 1, 'active');
+select id, priority, ntile(2) over (order by priority) as bucket
+from test_ntile_default order by priority;
+➤ id[4,11,0]  ¦  priority[4,11,0]  ¦  bucket[-5,21,0]  𝄀
+5  ¦  1  ¦  1  𝄀
+1  ¦  5  ¦  1  𝄀
+2  ¦  5  ¦  1  𝄀
+3  ¦  5  ¦  2  𝄀
+4  ¦  10  ¦  2
+drop table if exists test_ntile_default;
+drop table if exists test_ntile_combo;
+create table test_ntile_combo (id int, val int);
+insert into test_ntile_combo values (1,10),(2,20),(3,30),(4,40),(5,50),(6,60);
+select
+id, val,
+ntile(3) over (order by val) as bucket,
+rank() over (order by val) as rnk,
+dense_rank() over (order by val) as dense_rnk,
+row_number() over (order by val) as rn,
+percent_rank() over (order by val) as pct_rank
+from test_ntile_combo order by val;
+➤ id[4,11,0]  ¦  val[4,11,0]  ¦  bucket[-5,21,0]  ¦  rnk[-5,21,0]  ¦  dense_rnk[-5,21,0]  ¦  rn[-5,21,0]  ¦  pct_rank[8,23,31]  𝄀
+1  ¦  10  ¦  1  ¦  1  ¦  1  ¦  1  ¦  0.0  𝄀
+2  ¦  20  ¦  1  ¦  2  ¦  2  ¦  2  ¦  0.2  𝄀
+3  ¦  30  ¦  2  ¦  3  ¦  3  ¦  3  ¦  0.4  𝄀
+4  ¦  40  ¦  2  ¦  4  ¦  4  ¦  4  ¦  0.6  𝄀
+5  ¦  50  ¦  3  ¦  5  ¦  5  ¦  5  ¦  0.8  𝄀
+6  ¦  60  ¦  3  ¦  6  ¦  6  ¦  6  ¦  1.0
+drop table if exists test_ntile_combo;
+drop table if exists test_ntile_subq;
+create table test_ntile_subq (id int, val int);
+insert into test_ntile_subq values (1,10),(2,20),(3,30),(4,40),(5,50),(6,60);
+select * from (
+select id, val, ntile(3) over (order by val) as bucket
+from test_ntile_subq
+) t where bucket = 1;
+➤ id[4,11,0]  ¦  val[4,11,0]  ¦  bucket[-5,21,0]  𝄀
+1  ¦  10  ¦  1  𝄀
+2  ¦  20  ¦  1
+drop table if exists test_ntile_subq;
+drop table if exists test_ntile_where;
+create table test_ntile_where (id int, department varchar(20), val int);
+insert into test_ntile_where values
+(1, 'a', 10), (2, 'a', 20), (3, 'a', 30),
+(4, 'b', 40), (5, 'b', 50), (6, 'b', 60);
+select id, val, ntile(2) over (order by val) as bucket
+from test_ntile_where
+where department = 'a'
+order by val;
+➤ id[4,11,0]  ¦  val[4,11,0]  ¦  bucket[-5,21,0]  𝄀
+1  ¦  10  ¦  1  𝄀
+2  ¦  20  ¦  1  𝄀
+3  ¦  30  ¦  2
+drop table if exists test_ntile_where;
+drop table if exists test_ntile_t1;
+drop table if exists test_ntile_t2;
+create table test_ntile_t1 (id int, name varchar(20));
+create table test_ntile_t2 (id int, score int);
+insert into test_ntile_t1 values (1, 'alice'), (2, 'bob'), (3, 'carol'), (4, 'dave');
+insert into test_ntile_t2 values (1, 85), (2, 92), (3, 78), (4, 95);
+select t1.name, t2.score,
+ntile(2) over (order by t2.score) as bucket
+from test_ntile_t1 t1 join test_ntile_t2 t2 on t1.id = t2.id
+order by t2.score;
+➤ name[12,20,0]  ¦  score[4,11,0]  ¦  bucket[-5,21,0]  𝄀
+carol  ¦  78  ¦  1  𝄀
+alice  ¦  85  ¦  1  𝄀
+bob  ¦  92  ¦  2  𝄀
+dave  ¦  95  ¦  2
+drop table if exists test_ntile_t1;
+drop table if exists test_ntile_t2;
+drop table if exists test_ntile_group;
+create table test_ntile_group (department varchar(20), val int);
+insert into test_ntile_group values
+('a', 10), ('a', 20), ('a', 30),
+('b', 40), ('b', 50),
+('c', 60);
+select * from (
+select department, sum(val) as total,
+ntile(2) over (order by sum(val)) as bucket
+from test_ntile_group
+group by department
+) t order by total;
+➤ department[12,20,0]  ¦  total[3,32,0]  ¦  bucket[-5,21,0]  𝄀
+a  ¦  60  ¦  1  𝄀
+c  ¦  60  ¦  1  𝄀
+b  ¦  90  ¦  2
+drop table if exists test_ntile_group;
+drop table if exists test_ntile_having;
+create table test_ntile_having (category varchar(20), amount int);
+insert into test_ntile_having values
+('x', 10), ('x', 20), ('y', 30), ('y', 40), ('y', 50), ('z', 5);
+select * from (
+select category, count(*) as cnt, sum(amount) as total,
+ntile(2) over (order by sum(amount)) as bucket
+from test_ntile_having
+group by category
+having count(*) >= 2
+) t order by total;
+➤ category[12,20,0]  ¦  cnt[-5,21,0]  ¦  total[3,32,0]  ¦  bucket[-5,21,0]  𝄀
+x  ¦  2  ¦  30  ¦  1  𝄀
+y  ¦  3  ¦  120  ¦  2
+drop table if exists test_ntile_having;
+drop database if exists ntile_func;
