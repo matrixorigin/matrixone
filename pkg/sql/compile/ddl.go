@@ -54,6 +54,31 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
+func getTruncateIndexTableNames(tableDef *plan.TableDef) []string {
+	if tableDef == nil || len(tableDef.Indexes) == 0 {
+		return nil
+	}
+
+	indexTableNames := make([]string, 0, len(tableDef.Indexes))
+	for _, indexdef := range tableDef.Indexes {
+		switch {
+		case indexdef.TableExist && catalog.IsRegularIndexAlgo(indexdef.IndexAlgo):
+			indexTableNames = append(indexTableNames, indexdef.IndexTableName)
+		case indexdef.TableExist && catalog.IsIvfIndexAlgo(indexdef.IndexAlgo):
+			if indexdef.IndexAlgoTableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
+				indexTableNames = append(indexTableNames, indexdef.IndexTableName)
+			}
+		case indexdef.TableExist && catalog.IsMasterIndexAlgo(indexdef.IndexAlgo):
+			indexTableNames = append(indexTableNames, indexdef.IndexTableName)
+		case indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo):
+			indexTableNames = append(indexTableNames, indexdef.IndexTableName)
+		case indexdef.TableExist && catalog.IsHnswIndexAlgo(indexdef.IndexAlgo):
+			indexTableNames = append(indexTableNames, indexdef.IndexTableName)
+		}
+	}
+	return indexTableNames
+}
+
 func (s *Scope) CreateDatabase(c *Compile) error {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
@@ -2436,6 +2461,12 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		}
 	}
 
+	oldId = rel.GetTableID(c.proc.Ctx)
+	indexTableNames := tqry.IndexTableNames
+	if !isTemp {
+		indexTableNames = getTruncateIndexTableNames(rel.GetTableDef(c.proc.Ctx))
+	}
+
 	if tqry.IsDelete {
 		keepAutoIncrement = true
 		affectedRows, err = rel.Rows(c.proc.Ctx)
@@ -2457,7 +2488,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	}
 
 	// Truncate Index Tables if needed
-	for _, name := range tqry.IndexTableNames {
+	for _, name := range indexTableNames {
 		var err error
 		var oldIndexId, newIndexId uint64
 		var idxtblname string
