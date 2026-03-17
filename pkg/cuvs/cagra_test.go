@@ -17,6 +17,7 @@
 package cuvs
 
 import (
+	"math/rand"
 	"os"
 	"testing"
 )
@@ -64,7 +65,7 @@ func TestGpuCagra(t *testing.T) {
 
 func TestGpuCagraSaveLoad(t *testing.T) {
 	dimension := uint32(2)
-	n_vectors := uint64(100)
+	n_vectors := uint64(1000)
 	dataset := make([]float32, n_vectors*uint64(dimension))
 	for i := range dataset {
 		dataset[i] = float32(i)
@@ -115,14 +116,13 @@ func TestGpuCagraSaveLoad(t *testing.T) {
 }
 
 func TestGpuShardedCagra(t *testing.T) {
-	count, _ := GetGpuDeviceCount()
-	if count < 1 {
+	devices, err := GetGpuDeviceList()
+	if err != nil || len(devices) < 1 {
 		t.Skip("Need at least 1 GPU for sharded CAGRA test")
 	}
 
-	devices := []int{0}
 	dimension := uint32(2)
-	n_vectors := uint64(100)
+	n_vectors := uint64(1000)
 	dataset := make([]float32, n_vectors*uint64(dimension))
 	for i := uint64(0); i < n_vectors; i++ {
 		dataset[i*uint64(dimension)] = float32(i)
@@ -325,4 +325,171 @@ func TestGpuCagraMerge(t *testing.T) {
 	if result.Neighbors[0] < 200 {
 		t.Errorf("Expected neighbor from second index (>=200), got %d", result.Neighbors[0])
 	}
+}
+
+func TestGpuReplicatedCagra(t *testing.T) {
+	devices, err := GetGpuDeviceList()
+	if err != nil || len(devices) < 1 {
+		t.Skip("Need at least 1 GPU for replicated CAGRA test")
+	}
+
+	dimension := uint32(2)
+	n_vectors := uint64(1000)
+	dataset := make([]float32, n_vectors*uint64(dimension))
+	for i := uint64(0); i < n_vectors; i++ {
+		dataset[i*uint64(dimension)] = float32(i)
+		dataset[i*uint64(dimension)+1] = float32(i)
+	}
+
+	bp := DefaultCagraBuildParams()
+	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, Replicated)
+	if err != nil {
+		t.Fatalf("Failed to create replicated CAGRA: %v", err)
+	}
+	defer index.Destroy()
+
+	if err := index.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	err = index.Build()
+	if err != nil {
+		t.Fatalf("Load replicated failed: %v", err)
+	}
+
+	queries := []float32{0.1, 0.1, 0.2, 0.2, 0.3, 0.3, 0.4, 0.4, 0.5, 0.5}
+	sp := DefaultCagraSearchParams()
+	result, err := index.Search(queries, 5, dimension, 1, sp)
+	if err != nil {
+		t.Fatalf("Search replicated failed: %v", err)
+	}
+	t.Logf("Replicated Neighbors: %v, Distances: %v", result.Neighbors, result.Distances)
+}
+
+func BenchmarkGpuShardedCagra(b *testing.B) {
+	devices, err := GetGpuDeviceList()
+	if err != nil || len(devices) < 1 {
+		b.Skip("Need at least 1 GPU for sharded CAGRA benchmark")
+	}
+
+	dimension := uint32(1024)
+	n_vectors := uint64(100000)
+	dataset := make([]float32, n_vectors*uint64(dimension))
+	for i := range dataset {
+		dataset[i] = rand.Float32()
+	}
+
+	bp := DefaultCagraBuildParams()
+	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, Sharded)
+	if err != nil {
+		b.Fatalf("Failed to create sharded CAGRA: %v", err)
+	}
+	defer index.Destroy()
+
+	if err := index.Start(); err != nil {
+		b.Fatalf("Start failed: %v", err)
+	}
+	if err := index.Build(); err != nil {
+		b.Fatalf("Build failed: %v", err)
+	}
+
+	sp := DefaultCagraSearchParams()
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		queries := make([]float32, dimension)
+		for i := range queries {
+			queries[i] = rand.Float32()
+		}
+		for pb.Next() {
+			_, err := index.Search(queries, 1, dimension, 10, sp)
+			if err != nil {
+				b.Fatalf("Search failed: %v", err)
+			}
+		}
+	})
+}
+
+func BenchmarkGpuSingleCagra(b *testing.B) {
+	devices := []int{0}
+
+	dimension := uint32(1024)
+	n_vectors := uint64(100000)
+	dataset := make([]float32, n_vectors*uint64(dimension))
+	for i := range dataset {
+		dataset[i] = rand.Float32()
+	}
+
+	bp := DefaultCagraBuildParams()
+	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	if err != nil {
+		b.Fatalf("Failed to create single CAGRA: %v", err)
+	}
+	defer index.Destroy()
+
+	if err := index.Start(); err != nil {
+		b.Fatalf("Start failed: %v", err)
+	}
+	if err := index.Build(); err != nil {
+		b.Fatalf("Build failed: %v", err)
+	}
+
+	sp := DefaultCagraSearchParams()
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		queries := make([]float32, dimension)
+		for i := range queries {
+			queries[i] = rand.Float32()
+		}
+		for pb.Next() {
+			_, err := index.Search(queries, 1, dimension, 10, sp)
+			if err != nil {
+				b.Fatalf("Search failed: %v", err)
+			}
+		}
+	})
+}
+
+func BenchmarkGpuReplicatedCagra(b *testing.B) {
+	devices, err := GetGpuDeviceList()
+	if err != nil || len(devices) < 1 {
+		b.Skip("Need at least 1 GPU for replicated CAGRA benchmark")
+	}
+
+	dimension := uint32(1024)
+	n_vectors := uint64(100000)
+	dataset := make([]float32, n_vectors*uint64(dimension))
+	for i := range dataset {
+		dataset[i] = rand.Float32()
+	}
+
+	bp := DefaultCagraBuildParams()
+	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, Replicated)
+	if err != nil {
+		b.Fatalf("Failed to create replicated CAGRA: %v", err)
+	}
+	defer index.Destroy()
+
+	if err := index.Start(); err != nil {
+		b.Fatalf("Start failed: %v", err)
+	}
+	if err := index.Build(); err != nil {
+		b.Fatalf("Build failed: %v", err)
+	}
+
+	sp := DefaultCagraSearchParams()
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		queries := make([]float32, dimension)
+		for i := range queries {
+			queries[i] = rand.Float32()
+		}
+		for pb.Next() {
+			_, err := index.Search(queries, 1, dimension, 10, sp)
+			if err != nil {
+				b.Fatalf("Search failed: %v", err)
+			}
+		}
+	})
 }

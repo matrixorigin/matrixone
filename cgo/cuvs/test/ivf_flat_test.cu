@@ -16,6 +16,7 @@
 
 #include "cuvs_worker.hpp"
 #include "ivf_flat.hpp"
+#include "helper.h"
 #include "test_framework.hpp"
 #include <cstdio>
 #include <cstdlib>
@@ -99,7 +100,7 @@ TEST(GpuIvfFlatTest, SaveAndLoadFromFile) {
 
 TEST(GpuIvfFlatTest, ShardedModeSimulation) {
     const uint32_t dimension = 16;
-    const uint64_t count = 100;
+    const uint64_t count = 1000;
     std::vector<float> dataset(count * dimension);
     for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)i / dataset.size();
     
@@ -116,6 +117,32 @@ TEST(GpuIvfFlatTest, ShardedModeSimulation) {
     std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
     ivf_flat_search_params_t sp = ivf_flat_search_params_default();
     sp.n_probes = 2;
+    auto result = index.search(queries.data(), 1, dimension, 5, sp);
+
+    ASSERT_EQ(result.neighbors.size(), (size_t)5);
+    ASSERT_EQ(result.neighbors[0], 0u);
+
+    index.destroy();
+}
+
+TEST(GpuIvfFlatTest, ReplicatedModeSimulation) {
+    const uint32_t dimension = 16;
+    const uint64_t count = 1000;
+    std::vector<float> dataset(count * dimension);
+    for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
+    
+    int dev_count = gpu_get_device_count();
+    ASSERT_TRUE(dev_count > 0);
+    std::vector<int> devices(dev_count);
+    gpu_get_device_list(devices.data(), dev_count);
+
+    ivf_flat_build_params_t bp = ivf_flat_build_params_default();
+    bp.n_lists = 10;
+    gpu_ivf_flat_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_REPLICATED);
+    index.start();
+    index.build();
+    std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
+    ivf_flat_search_params_t sp = ivf_flat_search_params_default();
     auto result = index.search(queries.data(), 1, dimension, 5, sp);
 
     ASSERT_EQ(result.neighbors.size(), (size_t)5);

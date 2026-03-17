@@ -17,13 +17,14 @@
 package cuvs
 
 import (
+	"math/rand"
 	"os"
 	"testing"
 )
 
 func TestGpuIvfPq(t *testing.T) {
 	dimension := uint32(16)
-	n_vectors := uint64(1000)
+	n_vectors := uint64(100)
 	dataset := make([]float32, n_vectors*uint64(dimension))
 	for i := uint64(0); i < n_vectors; i++ {
 		for j := uint32(0); j < dimension; j++ {
@@ -199,4 +200,226 @@ func TestGpuIvfPqChunked(t *testing.T) {
 	if result2.Neighbors[0] < 50 || result2.Neighbors[0] >= 100 {
 		t.Errorf("Expected neighbor from second chunk (50-99), got %d", result2.Neighbors[0])
 	}
+}
+
+func TestGpuShardedIvfPq(t *testing.T) {
+	devices, err := GetGpuDeviceList()
+	if err != nil || len(devices) < 1 {
+		t.Skip("Need at least 1 GPU for sharded IVF-PQ test")
+	}
+
+	dimension := uint32(4)
+	n_vectors := uint64(1000)
+	dataset := make([]float32, n_vectors*uint64(dimension))
+	for i := uint64(0); i < n_vectors; i++ {
+		for j := uint32(0); j < dimension; j++ {
+			dataset[i*uint64(dimension)+uint64(j)] = float32(i)
+		}
+	}
+
+	bp := DefaultIvfPqBuildParams()
+	bp.NLists = 10
+	bp.M = 2
+	index, err := NewGpuIvfPq[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, Sharded)
+	if err != nil {
+		t.Fatalf("Failed to create sharded IVF-PQ: %v", err)
+	}
+	defer index.Destroy()
+
+	if err := index.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	err = index.Build()
+	if err != nil {
+		t.Fatalf("Load sharded failed: %v", err)
+	}
+
+	queries := []float32{0.1, 0.1, 0.1, 0.1, 10.1, 10.1, 10.1, 10.1}
+	sp := DefaultIvfPqSearchParams()
+	sp.NProbes = 5
+	result, err := index.Search(queries, 2, dimension, 1, sp)
+	if err != nil {
+		t.Fatalf("Search sharded failed: %v", err)
+	}
+	t.Logf("Sharded Neighbors: %v, Distances: %v", result.Neighbors, result.Distances)
+}
+
+func TestGpuReplicatedIvfPq(t *testing.T) {
+	devices, err := GetGpuDeviceList()
+	if err != nil || len(devices) < 1 {
+		t.Skip("Need at least 1 GPU for replicated IVF-PQ test")
+	}
+
+	dimension := uint32(4)
+	n_vectors := uint64(1000)
+	dataset := make([]float32, n_vectors*uint64(dimension))
+	for i := uint64(0); i < n_vectors; i++ {
+		for j := uint32(0); j < dimension; j++ {
+			dataset[i*uint64(dimension)+uint64(j)] = float32(i)
+		}
+	}
+
+	bp := DefaultIvfPqBuildParams()
+	bp.NLists = 10
+	bp.M = 2
+	index, err := NewGpuIvfPq[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, Replicated)
+	if err != nil {
+		t.Fatalf("Failed to create replicated IVF-PQ: %v", err)
+	}
+	defer index.Destroy()
+
+	if err := index.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	err = index.Build()
+	if err != nil {
+		t.Fatalf("Load replicated failed: %v", err)
+	}
+
+	queries := []float32{0.1, 0.1, 0.1, 0.1, 10.1, 10.1, 10.1, 10.1}
+	sp := DefaultIvfPqSearchParams()
+	sp.NProbes = 5
+	result, err := index.Search(queries, 2, dimension, 1, sp)
+	if err != nil {
+		t.Fatalf("Search replicated failed: %v", err)
+	}
+	t.Logf("Replicated Neighbors: %v, Distances: %v", result.Neighbors, result.Distances)
+}
+
+func BenchmarkGpuShardedIvfPq(b *testing.B) {
+	devices, err := GetGpuDeviceList()
+	if err != nil || len(devices) < 1 {
+		b.Skip("Need at least 1 GPU for sharded IVF-PQ benchmark")
+	}
+
+	dimension := uint32(1024)
+	n_vectors := uint64(100000)
+	dataset := make([]float32, n_vectors*uint64(dimension))
+	for i := range dataset {
+		dataset[i] = rand.Float32()
+	}
+
+	bp := DefaultIvfPqBuildParams()
+	bp.NLists = 100
+	bp.M = 128 // 1024 / 8
+	index, err := NewGpuIvfPq[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, Sharded)
+	if err != nil {
+		b.Fatalf("Failed to create sharded IVF-PQ: %v", err)
+	}
+	defer index.Destroy()
+
+	if err := index.Start(); err != nil {
+		b.Fatalf("Start failed: %v", err)
+	}
+	if err := index.Build(); err != nil {
+		b.Fatalf("Build failed: %v", err)
+	}
+
+	sp := DefaultIvfPqSearchParams()
+	sp.NProbes = 10
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		queries := make([]float32, dimension)
+		for i := range queries {
+			queries[i] = rand.Float32()
+		}
+		for pb.Next() {
+			_, err := index.Search(queries, 1, dimension, 10, sp)
+			if err != nil {
+				b.Fatalf("Search failed: %v", err)
+			}
+		}
+	})
+}
+
+func BenchmarkGpuSingleIvfPq(b *testing.B) {
+	devices := []int{0}
+
+	dimension := uint32(1024)
+	n_vectors := uint64(100000)
+	dataset := make([]float32, n_vectors*uint64(dimension))
+	for i := range dataset {
+		dataset[i] = rand.Float32()
+	}
+
+	bp := DefaultIvfPqBuildParams()
+	bp.NLists = 100
+	bp.M = 128 // 1024 / 8
+	index, err := NewGpuIvfPq[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	if err != nil {
+		b.Fatalf("Failed to create single IVF-PQ: %v", err)
+	}
+	defer index.Destroy()
+
+	if err := index.Start(); err != nil {
+		b.Fatalf("Start failed: %v", err)
+	}
+	if err := index.Build(); err != nil {
+		b.Fatalf("Build failed: %v", err)
+	}
+
+	sp := DefaultIvfPqSearchParams()
+	sp.NProbes = 10
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		queries := make([]float32, dimension)
+		for i := range queries {
+			queries[i] = rand.Float32()
+		}
+		for pb.Next() {
+			_, err := index.Search(queries, 1, dimension, 10, sp)
+			if err != nil {
+				b.Fatalf("Search failed: %v", err)
+			}
+		}
+	})
+}
+
+func BenchmarkGpuReplicatedIvfPq(b *testing.B) {
+	devices, err := GetGpuDeviceList()
+	if err != nil || len(devices) < 1 {
+		b.Skip("Need at least 1 GPU for replicated IVF-PQ benchmark")
+	}
+
+	dimension := uint32(1024)
+	n_vectors := uint64(100000)
+	dataset := make([]float32, n_vectors*uint64(dimension))
+	for i := range dataset {
+		dataset[i] = rand.Float32()
+	}
+
+	bp := DefaultIvfPqBuildParams()
+	bp.NLists = 100
+	bp.M = 128 // 1024 / 8
+	index, err := NewGpuIvfPq[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, Replicated)
+	if err != nil {
+		b.Fatalf("Failed to create replicated IVF-PQ: %v", err)
+	}
+	defer index.Destroy()
+
+	if err := index.Start(); err != nil {
+		b.Fatalf("Start failed: %v", err)
+	}
+	if err := index.Build(); err != nil {
+		b.Fatalf("Build failed: %v", err)
+	}
+
+	sp := DefaultIvfPqSearchParams()
+	sp.NProbes = 10
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		queries := make([]float32, dimension)
+		for i := range queries {
+			queries[i] = rand.Float32()
+		}
+		for pb.Next() {
+			_, err := index.Search(queries, 1, dimension, 10, sp)
+			if err != nil {
+				b.Fatalf("Search failed: %v", err)
+			}
+		}
+	})
 }

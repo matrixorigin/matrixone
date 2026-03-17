@@ -16,6 +16,7 @@
 
 #include "cuvs_worker.hpp"
 #include "cagra.hpp"
+#include "helper.h"
 #include "test_framework.hpp"
 #include <cstdio>
 #include <cstdlib>
@@ -24,7 +25,7 @@ using namespace matrixone;
 
 TEST(GpuCagraTest, BasicLoadAndSearch) {
     const uint32_t dimension = 16;
-    const uint64_t count = 100;
+    const uint64_t count = 1000;
     std::vector<float> dataset(count * dimension);
     for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
     
@@ -46,7 +47,7 @@ TEST(GpuCagraTest, BasicLoadAndSearch) {
 
 TEST(GpuCagraTest, SaveAndLoadFromFile) {
     const uint32_t dimension = 16;
-    const uint64_t count = 100;
+    const uint64_t count = 1000;
     std::vector<float> dataset(count * dimension);
     for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
     std::string filename = "test_cagra.bin";
@@ -84,13 +85,42 @@ TEST(GpuCagraTest, SaveAndLoadFromFile) {
 
 TEST(GpuCagraTest, ShardedModeSimulation) {
     const uint32_t dimension = 16;
-    const uint64_t count = 100;
+    const uint64_t count = 1000;
     std::vector<float> dataset(count * dimension);
     for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
     
-    std::vector<int> devices = {0};
+    int dev_count = gpu_get_device_count();
+    ASSERT_TRUE(dev_count > 0);
+    std::vector<int> devices(dev_count);
+    gpu_get_device_list(devices.data(), dev_count);
+
     cagra_build_params_t bp = cagra_build_params_default();
     gpu_cagra_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SHARDED);
+    index.start();
+    index.build();
+    std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
+    cagra_search_params_t sp = cagra_search_params_default();
+    auto result = index.search(queries.data(), 1, dimension, 5, sp);
+
+    ASSERT_EQ(result.neighbors.size(), (size_t)5);
+    ASSERT_EQ(result.neighbors[0], 0u);
+
+    index.destroy();
+}
+
+TEST(GpuCagraTest, ReplicatedModeSimulation) {
+    const uint32_t dimension = 16;
+    const uint64_t count = 1000;
+    std::vector<float> dataset(count * dimension);
+    for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
+    
+    int dev_count = gpu_get_device_count();
+    ASSERT_TRUE(dev_count > 0);
+    std::vector<int> devices(dev_count);
+    gpu_get_device_list(devices.data(), dev_count);
+
+    cagra_build_params_t bp = cagra_build_params_default();
+    gpu_cagra_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_REPLICATED);
     index.start();
     index.build();
     std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);

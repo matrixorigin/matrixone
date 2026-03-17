@@ -17,6 +17,7 @@
 package cuvs
 
 import (
+	"math/rand"
 	"os"
 	"testing"
 )
@@ -70,7 +71,7 @@ func TestGpuIvfFlat(t *testing.T) {
 
 func TestGpuIvfFlatSaveLoad(t *testing.T) {
 	dimension := uint32(2)
-	n_vectors := uint64(100)
+	n_vectors := uint64(1000)
 	dataset := make([]float32, n_vectors*uint64(dimension))
 	for i := range dataset {
 		dataset[i] = float32(i)
@@ -118,14 +119,13 @@ func TestGpuIvfFlatSaveLoad(t *testing.T) {
 }
 
 func TestGpuShardedIvfFlat(t *testing.T) {
-	count, _ := GetGpuDeviceCount()
-	if count < 1 {
+	devices, err := GetGpuDeviceList()
+	if err != nil || len(devices) < 1 {
 		t.Skip("Need at least 1 GPU for sharded IVF-Flat test")
 	}
 
-	devices := []int{0}
 	dimension := uint32(2)
-	n_vectors := uint64(100)
+	n_vectors := uint64(1000)
 	dataset := make([]float32, n_vectors*uint64(dimension))
 	for i := uint64(0); i < n_vectors; i++ {
 		dataset[i*uint64(dimension)] = float32(i)
@@ -133,7 +133,7 @@ func TestGpuShardedIvfFlat(t *testing.T) {
 	}
 
 	bp := DefaultIvfFlatBuildParams()
-	bp.NLists = 5
+	bp.NLists = 10
 	index, err := NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, Sharded)
 	if err != nil {
 		t.Fatalf("Failed to create sharded IVF-Flat: %v", err)
@@ -153,6 +153,180 @@ func TestGpuShardedIvfFlat(t *testing.T) {
 		t.Fatalf("Search sharded failed: %v", err)
 	}
 	t.Logf("Sharded Neighbors: %v, Distances: %v", result.Neighbors, result.Distances)
+}
+
+func TestGpuReplicatedIvfFlat(t *testing.T) {
+	devices, err := GetGpuDeviceList()
+	if err != nil || len(devices) < 1 {
+		t.Skip("Need at least 1 GPU for replicated IVF-Flat test")
+	}
+
+	dimension := uint32(2)
+	n_vectors := uint64(1000)
+	dataset := make([]float32, n_vectors*uint64(dimension))
+	for i := uint64(0); i < n_vectors; i++ {
+		dataset[i*uint64(dimension)] = float32(i)
+		dataset[i*uint64(dimension)+1] = float32(i)
+	}
+
+	bp := DefaultIvfFlatBuildParams()
+	bp.NLists = 10
+	index, err := NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, Replicated)
+	if err != nil {
+		t.Fatalf("Failed to create replicated IVF-Flat: %v", err)
+	}
+	defer index.Destroy()
+
+	if err := index.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	err = index.Build()
+	if err != nil {
+		t.Fatalf("Load replicated failed: %v", err)
+	}
+
+	queries := []float32{0.1, 0.1, 0.2, 0.2, 0.3, 0.3, 0.4, 0.4, 0.5, 0.5}
+	sp := DefaultIvfFlatSearchParams()
+	result, err := index.Search(queries, 5, dimension, 1, sp)
+	if err != nil {
+		t.Fatalf("Search replicated failed: %v", err)
+	}
+	t.Logf("Replicated Neighbors: %v, Distances: %v", result.Neighbors, result.Distances)
+}
+
+func BenchmarkGpuShardedIvfFlat(b *testing.B) {
+	devices, err := GetGpuDeviceList()
+	if err != nil || len(devices) < 1 {
+		b.Skip("Need at least 1 GPU for sharded IVF-Flat benchmark")
+	}
+
+	dimension := uint32(1024)
+	n_vectors := uint64(100000)
+	dataset := make([]float32, n_vectors*uint64(dimension))
+	for i := range dataset {
+		dataset[i] = rand.Float32()
+	}
+
+	bp := DefaultIvfFlatBuildParams()
+	bp.NLists = 100
+	index, err := NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, Sharded)
+	if err != nil {
+		b.Fatalf("Failed to create sharded IVF-Flat: %v", err)
+	}
+	defer index.Destroy()
+
+	if err := index.Start(); err != nil {
+		b.Fatalf("Start failed: %v", err)
+	}
+	if err := index.Build(); err != nil {
+		b.Fatalf("Build failed: %v", err)
+	}
+
+	sp := DefaultIvfFlatSearchParams()
+	sp.NProbes = 10
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		queries := make([]float32, dimension)
+		for i := range queries {
+			queries[i] = rand.Float32()
+		}
+		for pb.Next() {
+			_, err := index.Search(queries, 1, dimension, 10, sp)
+			if err != nil {
+				b.Fatalf("Search failed: %v", err)
+			}
+		}
+	})
+}
+
+func BenchmarkGpuSingleIvfFlat(b *testing.B) {
+	devices := []int{0}
+
+	dimension := uint32(1024)
+	n_vectors := uint64(100000)
+	dataset := make([]float32, n_vectors*uint64(dimension))
+	for i := range dataset {
+		dataset[i] = rand.Float32()
+	}
+
+	bp := DefaultIvfFlatBuildParams()
+	bp.NLists = 100
+	index, err := NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	if err != nil {
+		b.Fatalf("Failed to create single IVF-Flat: %v", err)
+	}
+	defer index.Destroy()
+
+	if err := index.Start(); err != nil {
+		b.Fatalf("Start failed: %v", err)
+	}
+	if err := index.Build(); err != nil {
+		b.Fatalf("Build failed: %v", err)
+	}
+
+	sp := DefaultIvfFlatSearchParams()
+	sp.NProbes = 10
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		queries := make([]float32, dimension)
+		for i := range queries {
+			queries[i] = rand.Float32()
+		}
+		for pb.Next() {
+			_, err := index.Search(queries, 1, dimension, 10, sp)
+			if err != nil {
+				b.Fatalf("Search failed: %v", err)
+			}
+		}
+	})
+}
+
+func BenchmarkGpuReplicatedIvfFlat(b *testing.B) {
+	devices, err := GetGpuDeviceList()
+	if err != nil || len(devices) < 1 {
+		b.Skip("Need at least 1 GPU for replicated IVF-Flat benchmark")
+	}
+
+	dimension := uint32(1024)
+	n_vectors := uint64(100000)
+	dataset := make([]float32, n_vectors*uint64(dimension))
+	for i := range dataset {
+		dataset[i] = rand.Float32()
+	}
+
+	bp := DefaultIvfFlatBuildParams()
+	bp.NLists = 100
+	index, err := NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, Replicated)
+	if err != nil {
+		b.Fatalf("Failed to create replicated IVF-Flat: %v", err)
+	}
+	defer index.Destroy()
+
+	if err := index.Start(); err != nil {
+		b.Fatalf("Start failed: %v", err)
+	}
+	if err := index.Build(); err != nil {
+		b.Fatalf("Build failed: %v", err)
+	}
+
+	sp := DefaultIvfFlatSearchParams()
+	sp.NProbes = 10
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		queries := make([]float32, dimension)
+		for i := range queries {
+			queries[i] = rand.Float32()
+		}
+		for pb.Next() {
+			_, err := index.Search(queries, 1, dimension, 10, sp)
+			if err != nil {
+				b.Fatalf("Search failed: %v", err)
+			}
+		}
+	})
 }
 
 func TestGpuIvfFlatChunked(t *testing.T) {
