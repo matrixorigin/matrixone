@@ -193,7 +193,7 @@ public:
             this->flattened_host_dataset.resize(this->count * this->dimension);
         }
 
-        uint64_t job_id = this->worker->submit(
+        uint64_t job_id = this->worker->submit_main(
             [&](raft_handle_wrapper_t& handle) -> std::any {
                 auto res = handle.get_raft_resources();
                 bool is_mg = is_snmg_handle(res);
@@ -283,7 +283,7 @@ public:
     void save(const std::string& filename) {
         if (!this->is_loaded_ || (!index_ && !mg_index_)) throw std::runtime_error("index not loaded");
 
-        uint64_t job_id = this->worker->submit(
+        uint64_t job_id = this->worker->submit_main(
             [&](raft_handle_wrapper_t& handle) -> std::any {
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
                 auto res = handle.get_raft_resources();
@@ -597,7 +597,7 @@ public:
     std::vector<T> get_centers() {
         if (!this->is_loaded_ || (!index_ && !mg_index_)) return {};
 
-        uint64_t job_id = this->worker->submit(
+        uint64_t job_id = this->worker->submit_main(
             [&](raft_handle_wrapper_t& handle) -> std::any {
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
                 auto res = handle.get_raft_resources();

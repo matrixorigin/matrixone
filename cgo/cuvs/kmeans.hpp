@@ -124,7 +124,7 @@ public:
     fit_result_t fit(const T* X_data, uint64_t n_samples) {
         if (!X_data || n_samples == 0) return {0, 0};
 
-        uint64_t job_id = this->worker->submit(
+        uint64_t job_id = this->worker->submit_main(
             [&, X_data, n_samples](raft_handle_wrapper_t& handle) -> std::any {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 auto res = handle.get_raft_resources();
@@ -160,7 +160,7 @@ public:
     predict_result_t predict(const T* X_data, uint64_t n_samples) {
         if (!X_data || n_samples == 0) return {{}, 0, 0};
 
-        uint64_t job_id = this->worker->submit(
+        uint64_t job_id = this->worker->submit_main(
             [&, X_data, n_samples](raft_handle_wrapper_t& handle) -> std::any {
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
                 if (!centroids_) throw std::runtime_error("KMeans centroids not trained. Call fit() first.");
@@ -210,7 +210,7 @@ public:
 
         if (!X_data || n_samples == 0) return {{}, 0, 0};
 
-        uint64_t job_id = this->worker->submit(
+        uint64_t job_id = this->worker->submit_main(
             [&, X_data, n_samples](raft_handle_wrapper_t& handle) -> std::any {
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
                 if (!centroids_) throw std::runtime_error("KMeans centroids not trained. Call fit() first.");
@@ -263,7 +263,7 @@ public:
     fit_predict_result_t fit_predict(const T* X_data, uint64_t n_samples) {
         if (!X_data || n_samples == 0) return {{}, 0, 0};
 
-        uint64_t job_id = this->worker->submit(
+        uint64_t job_id = this->worker->submit_main(
             [&, X_data, n_samples](raft_handle_wrapper_t& handle) -> std::any {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 auto res = handle.get_raft_resources();
@@ -327,7 +327,7 @@ public:
 
         if (!X_data || n_samples == 0) return {{}, 0, 0};
 
-        uint64_t job_id = this->worker->submit(
+        uint64_t job_id = this->worker->submit_main(
             [&, X_data, n_samples](raft_handle_wrapper_t& handle) -> std::any {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 auto res = handle.get_raft_resources();
@@ -396,7 +396,7 @@ public:
      * @brief Returns the trained centroids.
      */
     std::vector<CentroidT> get_centroids() {
-        uint64_t job_id = this->worker->submit(
+        uint64_t job_id = this->worker->submit_main(
             [&](raft_handle_wrapper_t& handle) -> std::any {
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
                 if (!centroids_) return std::vector<CentroidT>{};

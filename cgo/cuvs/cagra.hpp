@@ -193,7 +193,7 @@ public:
             this->flattened_host_dataset.resize(this->count * this->dimension);
         }
 
-        uint64_t job_id = this->worker->submit(
+        uint64_t job_id = this->worker->submit_main(
             [&](raft_handle_wrapper_t& handle) -> std::any {
                 auto res = handle.get_raft_resources();
                 bool is_mg = is_snmg_handle(res);
@@ -288,7 +288,7 @@ public:
 
             std::unique_lock<std::shared_mutex> lock(this->mutex_);
 
-            uint64_t job_id = this->worker->submit(
+            uint64_t job_id = this->worker->submit_main(
                 [&, additional_data, num_vectors](raft_handle_wrapper_t& handle) -> std::any {
                     auto res = handle.get_raft_resources();
                     
@@ -336,7 +336,7 @@ public:
         cuvs_worker_t transient_worker(1, devices, false);
         transient_worker.start();
 
-        uint64_t job_id = transient_worker.submit(
+        uint64_t job_id = transient_worker.submit_main(
             [&indices](raft_handle_wrapper_t& handle) -> std::any {
                 auto res = handle.get_raft_resources();
                 
@@ -376,7 +376,7 @@ public:
     void save(const std::string& filename) {
         if (!this->is_loaded_ || (!index_ && !mg_index_)) throw std::runtime_error("index not loaded");
 
-        uint64_t job_id = this->worker->submit(
+        uint64_t job_id = this->worker->submit_main(
             [&](raft_handle_wrapper_t& handle) -> std::any {
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
                 auto res = handle.get_raft_resources();

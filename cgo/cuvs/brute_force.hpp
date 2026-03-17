@@ -141,7 +141,7 @@ public:
             this->flattened_host_dataset.resize(this->count * this->dimension);
         }
 
-        uint64_t job_id = this->worker->submit(
+        uint64_t job_id = this->worker->submit_main(
             [&](raft_handle_wrapper_t& handle) -> std::any {
                 auto res = handle.get_raft_resources();
                 if (this->flattened_host_dataset.empty()) {

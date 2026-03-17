@@ -117,6 +117,14 @@ public:
         return true;
     }
 
+    bool try_pop(T& value) {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (queue_.empty()) return false;
+        value = std::move(queue_.front());
+        queue_.pop_front();
+        return true;
+    }
+
     void stop() {
         {
             std::lock_guard<std::mutex> lock(mu_);
@@ -128,6 +136,11 @@ public:
     bool is_stopped() const {
         std::lock_guard<std::mutex> lock(mu_);
         return stopped_;
+    }
+
+    bool empty() const {
+        std::lock_guard<std::mutex> lock(mu_);
+        return queue_.empty();
     }
 
 private:
@@ -243,12 +256,13 @@ public:
     void stop() {
         if (!started_.load() || stopped_.exchange(true)) return;
 
-        tasks_.stop();
         {
-            std::lock_guard<std::mutex> lock(event_mu_);
+            std::lock_guard<std::mutex> lock(worker_mu_);
             should_stop_ = true;
+            main_tasks_.stop();
+            worker_tasks_.stop();
         }
-        event_cv_.notify_all();
+        worker_cv_.notify_all();
 
         if (main_thread_.joinable()) main_thread_.join();
         for (auto& t : sub_workers_) if (t.joinable()) t.join();
@@ -260,7 +274,22 @@ public:
     uint64_t submit(user_task_fn fn) {
         if (stopped_.load()) throw std::runtime_error("Cannot submit task: worker stopped");
         uint64_t id = result_store_.get_next_job_id();
-        tasks_.push({id, std::move(fn)});
+        {
+            std::lock_guard<std::mutex> lock(worker_mu_);
+            worker_tasks_.push({id, std::move(fn)});
+        }
+        worker_cv_.notify_all();
+        return id;
+    }
+
+    uint64_t submit_main(user_task_fn fn) {
+        if (stopped_.load()) throw std::runtime_error("Cannot submit main task: worker stopped");
+        uint64_t id = result_store_.get_next_job_id();
+        {
+            std::lock_guard<std::mutex> lock(worker_mu_);
+            main_tasks_.push({id, std::move(fn)});
+        }
+        worker_cv_.notify_all();
         return id;
     }
 
@@ -392,7 +421,7 @@ public:
 private:
     void run_main_loop(user_task_fn init_fn, user_task_fn stop_fn) {
         pin_thread(0);
-        auto resource = setup_resource(0);
+        auto resource = setup_resource_internal(0, true);
         if (!resource) return;
 
         if (init_fn) {
@@ -400,29 +429,66 @@ private:
             catch (...) { report_fatal_error(std::current_exception()); return; }
         }
 
-        // Defer stop_fn cleanup
         auto defer_cleanup = [&]() { if (stop_fn) try { stop_fn(*resource); } catch (...) {} };
         std::shared_ptr<void> cleanup_guard(nullptr, [&](...) { defer_cleanup(); });
 
-        if (n_threads_ == 1) {
-            cuvs_task_t task;
-            while (tasks_.pop(task)) execute_task(task, *resource);
-        } else {
-            for (size_t i = 0; i < n_threads_; ++i) {
+        if (n_threads_ > 1) {
+            for (size_t i = 1; i < n_threads_; ++i) {
                 sub_workers_.emplace_back(&cuvs_worker_t::worker_sub_loop, this, i);
             }
-            std::unique_lock<std::mutex> lock(event_mu_);
-            event_cv_.wait(lock, [this] { return should_stop_ || fatal_error_; });
+        }
+
+        while (true) {
+            cuvs_task_t task;
+            bool found = false;
+
+            {
+                std::unique_lock<std::mutex> lock(worker_mu_);
+                worker_cv_.wait(lock, [&] {
+                    return !main_tasks_.empty() || !worker_tasks_.empty() || should_stop_ || fatal_error_;
+                });
+
+                if (should_stop_ || fatal_error_) break;
+
+                if (main_tasks_.try_pop(task)) {
+                    found = true;
+                } else if (worker_tasks_.try_pop(task)) {
+                    found = true;
+                }
+            }
+
+            if (found) {
+                execute_task(task, *resource);
+            }
         }
     }
 
     void worker_sub_loop(size_t thread_idx) {
         pin_thread(-1);
-        auto resource = setup_resource(thread_idx);
+        auto resource = setup_resource_internal(thread_idx, false);
         if (!resource) return;
 
-        cuvs_task_t task;
-        while (tasks_.pop(task)) execute_task(task, *resource);
+        while (true) {
+            cuvs_task_t task;
+            bool found = false;
+
+            {
+                std::unique_lock<std::mutex> lock(worker_mu_);
+                worker_cv_.wait(lock, [&] {
+                    return !worker_tasks_.empty() || should_stop_ || fatal_error_;
+                });
+
+                if (should_stop_ || fatal_error_) break;
+
+                if (worker_tasks_.try_pop(task)) {
+                    found = true;
+                }
+            }
+
+            if (found) {
+                execute_task(task, *resource);
+            }
+        }
     }
 
     void execute_task(const cuvs_task_t& task, raft_handle& resource) {
@@ -436,9 +502,12 @@ private:
         result_store_.store(res);
     }
 
-    std::unique_ptr<raft_handle> setup_resource(size_t thread_idx = 0) {
+    std::unique_ptr<raft_handle> setup_resource_internal(size_t thread_idx, bool is_main_thread) {
         try {
             if (!devices_.empty()) {
+                if (is_main_thread) {
+                    return std::make_unique<raft_handle>(devices_, force_mg_);
+                }
                 if (per_thread_device_ && n_threads_ > 1) {
                     int dev = devices_[thread_idx % devices_.size()];
                     return std::make_unique<raft_handle>(dev);
@@ -459,8 +528,11 @@ private:
     void report_fatal_error(std::exception_ptr err) {
         std::lock_guard<std::mutex> lock(event_mu_);
         if (!fatal_error_) fatal_error_ = err;
-        should_stop_ = true;
-        event_cv_.notify_all();
+        {
+            std::lock_guard<std::mutex> lock_w(worker_mu_);
+            // Let the loops check fatal_error_
+        }
+        worker_cv_.notify_all();
     }
 
     void pin_thread(int cpu_id) {
@@ -484,14 +556,19 @@ private:
     bool use_batching_ = false;
     std::atomic<bool> started_{false};
     std::atomic<bool> stopped_{false};
-    thread_safe_queue_t<cuvs_task_t> tasks_;
+    
+    // Unified Task Management
+    std::mutex worker_mu_;
+    std::condition_variable worker_cv_;
+    thread_safe_queue_t<cuvs_task_t> main_tasks_;
+    thread_safe_queue_t<cuvs_task_t> worker_tasks_;
+    bool should_stop_ = false;
+
     cuvs_task_result_store_t result_store_;
     std::thread main_thread_;
     std::vector<std::thread> sub_workers_;
 
     std::mutex event_mu_;
-    std::condition_variable event_cv_;
-    bool should_stop_ = false;
     std::exception_ptr fatal_error_;
 
     // Batching support

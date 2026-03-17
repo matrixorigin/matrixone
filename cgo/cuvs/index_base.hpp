@@ -93,7 +93,7 @@ public:
 
     void train_quantizer(const float* train_data, uint64_t n_samples) {
         if (!train_data || n_samples == 0) return;
-        uint64_t job_id = worker->submit(
+        uint64_t job_id = worker->submit_main(
             [&, train_data, n_samples](raft_handle_wrapper_t& handle) -> std::any {
                 auto res = handle.get_raft_resources();
                 auto train_device = raft::make_device_matrix<float, int64_t>(*res, n_samples, dimension);
@@ -116,7 +116,7 @@ public:
         if (current_offset_ + chunk_count > count) throw std::runtime_error("offset out of bounds");
         
         uint64_t row_offset = current_offset_;
-        uint64_t job_id = worker->submit(
+        uint64_t job_id = worker->submit_main(
             [&, chunk_data, chunk_count, row_offset](raft_handle_wrapper_t& handle) -> std::any {
                 auto res = handle.get_raft_resources();
                 
