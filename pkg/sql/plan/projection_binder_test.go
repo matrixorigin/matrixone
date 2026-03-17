@@ -1170,19 +1170,21 @@ func TestProjectionBinderBindWinFunc(t *testing.T) {
 	// Setup basic binding context
 	typ := types.T_int64.ToType()
 	plan2Type := makePlan2Type(&typ)
+	varcharTyp := types.T_varchar.ToType()
+	varcharPlan2Type := makePlan2Type(&varcharTyp)
 	bind := &Binding{
 		tag:            1,
 		nodeId:         0,
 		db:             "test_db",
 		table:          "test_table",
 		tableID:        0,
-		cols:           []string{"a", "b"},
-		colIsHidden:    []bool{false, false},
-		types:          []*plan.Type{&plan2Type, &plan2Type},
-		refCnts:        []uint{0, 0},
-		colIdByName:    map[string]int32{"a": 0, "b": 1},
+		cols:           []string{"a", "b", "c"},
+		colIsHidden:    []bool{false, false, false},
+		types:          []*plan.Type{&plan2Type, &plan2Type, &varcharPlan2Type},
+		refCnts:        []uint{0, 0, 0},
+		colIdByName:    map[string]int32{"a": 0, "b": 1, "c": 2},
 		isClusterTable: false,
-		defaults:       []string{"", ""},
+		defaults:       []string{"", "", ""},
 	}
 	bindCtx.bindings = append(bindCtx.bindings, bind)
 	bindCtx.bindingByTable[bind.table] = bind
@@ -1596,6 +1598,57 @@ func TestProjectionBinderBindWinFunc(t *testing.T) {
 				require.NoError(t, err)
 				require.NotNil(t, expr)
 			},
+		},
+		{
+			name:     "Window function with RANGE UNBOUNDED frame and varchar ORDER BY - issue #23853",
+			funcName: "percent_rank",
+			astExpr: &tree.FuncExpr{
+				Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("percent_rank")),
+				Type:  tree.FUNC_TYPE_DEFAULT,
+				Exprs: nil,
+				WindowSpec: &tree.WindowSpec{
+					OrderBy: tree.OrderBy{
+						&tree.Order{
+							Expr:      tree.NewUnresolvedColName("c"),
+							Direction: tree.Ascending,
+						},
+					},
+					Frame: &tree.FrameClause{
+						Type:  tree.Range,
+						Start: &tree.FrameBound{Type: tree.Preceding, UnBounded: true},
+						End:   &tree.FrameBound{Type: tree.CurrentRow},
+					},
+				},
+			},
+			expectError: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+			},
+		},
+		{
+			name:     "Window function with RANGE N PRECEDING and varchar ORDER BY - should error",
+			funcName: "sum",
+			astExpr: &tree.FuncExpr{
+				Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("sum")),
+				Type:  tree.FUNC_TYPE_DEFAULT,
+				Exprs: []tree.Expr{tree.NewUnresolvedColName("a")},
+				WindowSpec: &tree.WindowSpec{
+					OrderBy: tree.OrderBy{
+						&tree.Order{
+							Expr:      tree.NewUnresolvedColName("c"),
+							Direction: tree.Ascending,
+						},
+					},
+					Frame: &tree.FrameClause{
+						Type:  tree.Range,
+						Start: &tree.FrameBound{Type: tree.Preceding, UnBounded: false, Expr: tree.NewNumVal(int64(5), "5", false, tree.P_int64)},
+						End:   &tree.FrameBound{Type: tree.CurrentRow},
+					},
+				},
+			},
+			expectError:   true,
+			errorContains: "numeric or temporal type",
 		},
 	}
 

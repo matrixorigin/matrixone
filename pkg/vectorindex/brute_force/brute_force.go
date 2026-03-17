@@ -18,9 +18,9 @@ import (
 	"context"
 	"fmt"
 	"runtime"
-	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/concurrent"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -29,16 +29,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	usearch "github.com/unum-cloud/usearch/golang"
-	"github.com/viterin/partial"
 )
 
 type UsearchBruteForceIndex[T types.RealNumbers] struct {
-	Dataset      []T // flattend vector
+	Dataset      *[]T // flattend vector
 	Metric       usearch.Metric
 	Dimension    uint
 	Count        uint
 	Quantization usearch.Quantization
 	ElementSize  uint
+	deallocator  malloc.Deallocator
 }
 
 type GoBruteForceIndex[T types.RealNumbers] struct {
@@ -67,12 +67,7 @@ func NewCpuBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	m metric.MetricType,
 	elemsz uint) (cache.VectorIndexSearchIf, error) {
 
-	switch m {
-	case metric.Metric_L1Distance:
-		return NewGoBruteForceIndex(dataset, dimension, m, elemsz)
-	default:
-		return NewUsearchBruteForceIndex(dataset, dimension, m, elemsz)
-	}
+	return NewGoBruteForceIndex(dataset, dimension, m, elemsz)
 }
 
 func NewGoBruteForceIndex[T types.RealNumbers](dataset [][]T,
@@ -104,10 +99,38 @@ func NewUsearchBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	idx.Count = uint(len(dataset))
 	idx.ElementSize = elemsz
 
-	idx.Dataset = make([]T, idx.Count*idx.Dimension)
+	reqSize := int(idx.Count * idx.Dimension)
+
+	allocator := malloc.NewCAllocator()
+
+	var _t T
+	switch any(_t).(type) {
+	case float32:
+		slice, deallocator, err := allocator.Allocate(uint64(reqSize)*4, malloc.NoClear)
+		if err != nil {
+			return nil, err
+		}
+		idx.deallocator = deallocator
+		f32Slice := util.UnsafeSliceCastToLength[float32](slice, reqSize)
+		idx.Dataset = any(&f32Slice).(*[]T)
+	case float64:
+		slice, deallocator, err := allocator.Allocate(uint64(reqSize)*8, malloc.NoClear)
+		if err != nil {
+			return nil, err
+		}
+		idx.deallocator = deallocator
+		f64Slice := util.UnsafeSliceCastToLength[float64](slice, reqSize)
+		idx.Dataset = any(&f64Slice).(*[]T)
+	default:
+		// Fallback
+		ds := make([]T, reqSize)
+		idx.Dataset = &ds
+	}
+
+	ds := *idx.Dataset
 	for i := 0; i < len(dataset); i++ {
 		offset := i * int(dimension)
-		copy(idx.Dataset[offset:], dataset[i])
+		copy(ds[offset:], dataset[i])
 	}
 
 	return idx, nil
@@ -124,14 +147,37 @@ func (idx *UsearchBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries 
 	}
 
 	var flatten []T
-	if len(queries) == 1 {
-		flatten = queries[0]
-	} else {
-		flatten = make([]T, len(queries)*int(idx.Dimension))
-		for i := 0; i < len(queries); i++ {
-			offset := i * int(idx.Dimension)
-			copy(flatten[offset:], queries[i])
+	var queryDeallocator malloc.Deallocator
+
+	reqSize := len(queries) * int(idx.Dimension)
+	allocator := malloc.NewCAllocator()
+	var _t T
+	switch any(_t).(type) {
+	case float32:
+		slice, dealloc, err2 := allocator.Allocate(uint64(reqSize)*4, malloc.NoClear)
+		if err2 != nil {
+			return nil, nil, err2
 		}
+		queryDeallocator = dealloc
+		f32Slice := util.UnsafeSliceCastToLength[float32](slice, reqSize)
+		flatten = any(f32Slice).([]T)
+	case float64:
+		slice, dealloc, err2 := allocator.Allocate(uint64(reqSize)*8, malloc.NoClear)
+		if err2 != nil {
+			return nil, nil, err2
+		}
+		queryDeallocator = dealloc
+		f64Slice := util.UnsafeSliceCastToLength[float64](slice, reqSize)
+		flatten = any(f64Slice).([]T)
+	}
+
+	for i := 0; i < len(queries); i++ {
+		offset := i * int(idx.Dimension)
+		copy(flatten[offset:], queries[i])
+	}
+
+	if queryDeallocator != nil {
+		defer queryDeallocator.Deallocate()
 	}
 	//fmt.Printf("flattened %v\n", flatten)
 
@@ -142,7 +188,7 @@ func (idx *UsearchBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries 
 	}
 
 	keys_ui64, distances_f32, err := usearch.ExactSearchUnsafe(
-		util.UnsafePointer(&(idx.Dataset[0])),
+		util.UnsafePointer(&((*idx.Dataset)[0])),
 		util.UnsafePointer(&(flatten[0])),
 		uint(idx.Count),
 		uint(len(queries)),
@@ -179,6 +225,13 @@ func (idx *UsearchBruteForceIndex[T]) UpdateConfig(sif cache.VectorIndexSearchIf
 }
 
 func (idx *UsearchBruteForceIndex[T]) Destroy() {
+	if idx.deallocator != nil {
+		idx.deallocator.Deallocate()
+		idx.deallocator = nil
+		idx.Dataset = nil
+	} else if idx.Dataset != nil {
+		idx.Dataset = nil
+	}
 }
 
 func (idx *GoBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) error {
@@ -204,36 +257,77 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 	}
 
 	nthreads := rt.NThreads
-
-	// datasize * nqueries
 	nqueries := len(queries)
-	ndataset := len(idx.Dataset)
+	limit := int(rt.Limit)
 
-	// create distance matric
-	results := make([][]vectorindex.SearchResult, nqueries)
-	for i := range results {
-		results[i] = make([]vectorindex.SearchResult, ndataset)
+	if limit == 0 {
+		return []int64{}, []float64{}, nil
 	}
+
+	totalReturn := nqueries * limit
+	retKeys64 := make([]int64, totalReturn)
+	retDistances := make([]float64, totalReturn)
 
 	exec := concurrent.NewThreadPoolExecutor(int(nthreads))
 	err = exec.Execute(
 		proc.GetContext(),
 		nqueries,
 		func(ctx context.Context, thread_id int, start, end int) (err2 error) {
-			subqueries := queries[start:end:end]
-			subresults := results[start:end:end]
-			for k, q := range subqueries {
+			// Pre-allocate heap buffers for this thread
+			var heapKeysBuf []int64
+			var heapDistBuf []T
+			if limit > 1 {
+				heapKeysBuf = make([]int64, limit)
+				heapDistBuf = make([]T, limit)
+			}
+
+			for k := start; k < end; k++ {
+				q := queries[k]
 				if k%100 == 0 && ctx.Err() != nil {
 					return ctx.Err()
 				}
+
+				if limit == 1 {
+					minDist := metric.MaxFloat[T]()
+					minIdx := -1
+					for j := range idx.Dataset {
+						dist, err2 := distfn(q, idx.Dataset[j])
+						if err2 != nil {
+							return err2
+						}
+						if dist < minDist {
+							minDist = dist
+							minIdx = j
+						}
+					}
+					retKeys64[k*limit] = int64(minIdx)
+					retDistances[k*limit] = float64(minDist)
+					continue
+				}
+
+				// Max-heap logic for K > 1
+				h := vectorindex.NewFastMaxHeap(limit, heapKeysBuf, heapDistBuf)
 
 				for j := range idx.Dataset {
 					dist, err2 := distfn(q, idx.Dataset[j])
 					if err2 != nil {
 						return err2
 					}
-					subresults[k][j].Id = int64(j)
-					subresults[k][j].Distance = float64(dist)
+					h.Push(int64(j), dist)
+				}
+
+				// Extract from heap and place into results in sorted order (smallest first)
+				offset := k * limit
+				for j := limit - 1; j >= 0; j-- {
+					key, dist, ok := h.Pop()
+					if !ok {
+						// Pad with invalid if not enough data
+						retKeys64[offset+j] = -1
+						retDistances[offset+j] = 0
+						continue
+					}
+					retKeys64[offset+j] = key
+					retDistances[offset+j] = float64(dist)
 				}
 			}
 			return
@@ -243,51 +337,5 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 		return nil, nil, err
 	}
 
-	cmpfn := func(a, b vectorindex.SearchResult) int {
-		if a.Distance < b.Distance {
-			return -1
-		} else if a.Distance == b.Distance {
-			return 0
-		}
-		return 1
-	}
-
-	// get min
-	keys64 := make([]int64, nqueries*int(rt.Limit))
-	distances = make([]float64, nqueries*int(rt.Limit))
-	err = exec.Execute(
-		proc.GetContext(),
-		nqueries,
-		func(ctx context.Context, thread_id int, start, end int) (err2 error) {
-			subresults := results[start:end:end]
-			for j := range subresults {
-				if j%100 == 0 && ctx.Err() != nil {
-					return ctx.Err()
-				}
-
-				if rt.Limit == 1 {
-					// min
-					first := slices.MinFunc(subresults[j], cmpfn)
-					subresults[j][0] = first
-
-				} else {
-					// partial sort
-					partial.SortFunc(subresults[j], int(rt.Limit), cmpfn)
-
-				}
-			}
-			return
-		})
-	if err != nil {
-		return nil, nil, err
-	}
-
-	for i := 0; i < nqueries; i++ {
-		for j := 0; j < int(rt.Limit); j++ {
-			keys64[i*int(rt.Limit)+j] = results[i][j].Id
-			distances[i*int(rt.Limit)+j] = results[i][j].Distance
-		}
-	}
-
-	return keys64, distances, nil
+	return retKeys64, retDistances, nil
 }
