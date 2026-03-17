@@ -136,3 +136,35 @@ func TestJobStats_GetTopWriteObjectDurations_Empty(t *testing.T) {
 	s := &JobStats{}
 	assert.Empty(t, s.GetTopWriteObjectDurations())
 }
+
+// ---- worker.Submit closed error ----
+
+func TestWorker_Submit_Closed(t *testing.T) {
+	w := &worker{
+		taskChan: make(chan *TaskContext, 10),
+	}
+	w.closed.Store(true)
+	err := w.Submit("task1", 1, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "closed")
+}
+
+// ---- JobStats top durations printing branches ----
+
+func TestJobStats_TopDurations_NonEmpty(t *testing.T) {
+	s := &JobStats{}
+	s.RecordGetChunkDuration("obj1", 0, 100*time.Millisecond)
+	s.RecordGetChunkDuration("obj2", 1, 200*time.Millisecond)
+	s.RecordGetChunkDuration("obj3", 2, 300*time.Millisecond)
+
+	top := s.GetTopGetChunkDurations()
+	require.Len(t, top, 3)
+	assert.Equal(t, "obj3", top[0].ObjectName)
+
+	s.RecordWriteObjectDuration("w1", 1024, 50*time.Millisecond)
+	s.RecordWriteObjectDuration("w2", 2048, 150*time.Millisecond)
+
+	topW := s.GetTopWriteObjectDurations()
+	require.Len(t, topW, 2)
+	assert.Equal(t, "w2", topW[0].ObjectName)
+}
