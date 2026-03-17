@@ -401,7 +401,6 @@ insert into test_pr_varchar_cn values (1, '阿里'), (2, '百度'), (3, '腾讯'
 drop table if exists test_pr_text;
 create table test_pr_text (id int, val text);
 insert into test_pr_text values (1, 'short'), (2, 'medium length text'), (3, 'zzz last');
-drop table if exists test_pr_text;
 drop table if exists test_pr_blob;
 create table test_pr_blob (id int, val blob);
 insert into test_pr_blob values (1, 'abc'), (2, 'def'), (3, 'xyz');
@@ -880,12 +879,10 @@ drop table if exists test_pr_null_partition;
 drop table if exists test_pr_empty_str;
 create table test_pr_empty_str (id int, val varchar(50));
 insert into test_pr_empty_str values (1, ''), (2, 'a'), (3, 'b'), (4, '');
-drop table if exists test_pr_empty_str;
 drop table if exists test_pr_special_char;
 create table test_pr_special_char (id int, val varchar(50));
 insert into test_pr_special_char values
 (1, '!abc'), (2, '#def'), (3, '123'), (4, 'abc'), (5, 'abc');
-drop table if exists test_pr_special_char;
 drop table if exists test_pr_date_boundary;
 create table test_pr_date_boundary (id int, val date);
 insert into test_pr_date_boundary values
@@ -913,7 +910,6 @@ insert into test_pr_long_str values
 (1, repeat('a', 1000)),
 (2, repeat('b', 1000)),
 (3, repeat('a', 999));
-drop table if exists test_pr_long_str;
 drop table if exists test_pr_partition_size;
 create table test_pr_partition_size (grp int, val int);
 insert into test_pr_partition_size values
@@ -1471,144 +1467,197 @@ salary,
 percent_rank() over (order by department, salary) as pct_rank
 from test_pr_basic
 order by department, salary;
-[unknown result because it is related to issue#23853]
+➤ department[12,-1,0]  ¦  employee[12,-1,0]  ¦  salary[3,10,2]  ¦  pct_rank[8,54,0]  𝄀
+engineering  ¦  alice  ¦  80000.00  ¦  0.0  𝄀
+engineering  ¦  bob  ¦  90000.00  ¦  0.1111111111111111  𝄀
+engineering  ¦  charlie  ¦  90000.00  ¦  0.1111111111111111  𝄀
+engineering  ¦  david  ¦  100000.00  ¦  0.3333333333333333  𝄀
+engineering  ¦  eve  ¦  110000.00  ¦  0.4444444444444444  𝄀
+hr  ¦  ivy  ¦  65000.00  ¦  0.5555555555555556  𝄀
+hr  ¦  jack  ¦  65000.00  ¦  0.5555555555555556  𝄀
+sales  ¦  frank  ¦  50000.00  ¦  0.7777777777777778  𝄀
+sales  ¦  grace  ¦  60000.00  ¦  0.8888888888888888  𝄀
+sales  ¦  hank  ¦  70000.00  ¦  1.0
 select val, percent_rank() over (order by val) as pct_rank from test_pr_char order by val;
-[unknown result because it is related to issue#23853]
+➤ val[1,10,0]  ¦  pct_rank[8,54,0]  𝄀
+apple  ¦  0.0  𝄀
+banana  ¦  0.3333333333333333  𝄀
+cherry  ¦  0.6666666666666666  𝄀
+date  ¦  1.0
 select val, percent_rank() over (order by val) as pct_rank from test_pr_varchar order by val;
-[unknown result because it is related to issue#23853]
+SQL parser error: table "test_pr_varchar" does not exist
 select val, percent_rank() over (order by val) as pct_rank from test_pr_varchar_cn order by val;
-[unknown result because it is related to issue#23853]
+➤ val[12,-1,0]  ¦  pct_rank[8,54,0]  𝄀
+百度  ¦  0.0  𝄀
+腾讯  ¦  0.5  𝄀
+阿里  ¦  1.0
 select val, percent_rank() over (order by val) as pct_rank from test_pr_text order by val;
-[unknown result because it is related to issue#23853]
+➤ val[12,0,0]  ¦  pct_rank[8,54,0]  𝄀
+medium length text  ¦  0.0  𝄀
+short  ¦  0.5  𝄀
+zzz last  ¦  1.0
 select id, percent_rank() over (order by val) as pct_rank from test_pr_blob order by val;
-[unknown result because it is related to issue#23853]
+[unknown result because it is related to issue#23863]
 select id, percent_rank() over (order by val) as pct_rank from test_pr_binary order by val;
-[unknown result because it is related to issue#23853]
+[unknown result because it is related to issue#23863]
 select id, percent_rank() over (order by val) as pct_rank from test_pr_varbinary order by val;
-[unknown result because it is related to issue#23853]
+[unknown result because it is related to issue#23863]
 select val, percent_rank() over (order by val) as pct_rank from test_pr_bool order by val;
-[unknown result because it is related to issue#23853]
+➤ val[-7,1,0]  ¦  pct_rank[8,54,0]  𝄀
+0  ¦  0.0  𝄀
+0  ¦  0.0  𝄀
+1  ¦  0.6666666666666666  𝄀
+1  ¦  0.6666666666666666
 select val, percent_rank() over (order by val) as pct_rank from test_pr_enum order by val;
-[unknown result because it is related to issue#23853]
+➤ val[12,-1,0]  ¦  pct_rank[8,54,0]  𝄀
+critical  ¦  0.0  𝄀
+high  ¦  0.3333333333333333  𝄀
+low  ¦  0.6666666666666666  𝄀
+medium  ¦  1.0
 select id, status, percent_rank() over (order by status) as pct_rank
 from test_pr_default order by status;
-[unknown result because it is related to issue#23853]
+➤ id[4,32,0]  ¦  status[12,-1,0]  ¦  pct_rank[8,54,0]  𝄀
+1  ¦  active  ¦  0.0  𝄀
+2  ¦  active  ¦  0.0  𝄀
+3  ¦  active  ¦  0.0  𝄀
+5  ¦  active  ¦  0.0  𝄀
+4  ¦  inactive  ¦  1.0
 select id, val, percent_rank() over (order by val) as pct_rank
 from test_pr_empty_str order by val, id;
-[unknown result because it is related to issue#23853]
+➤ id[4,32,0]  ¦  val[12,-1,0]  ¦  pct_rank[8,54,0]  𝄀
+1  ¦    ¦  0.0  𝄀
+4  ¦    ¦  0.0  𝄀
+2  ¦  a  ¦  0.6666666666666666  𝄀
+3  ¦  b  ¦  1.0
 select val, percent_rank() over (order by val) as pct_rank
 from test_pr_special_char order by val;
-[unknown result because it is related to issue#23853]
+➤ val[12,-1,0]  ¦  pct_rank[8,54,0]  𝄀
+!abc  ¦  0.0  𝄀
+#def  ¦  0.25  𝄀
+123  ¦  0.5  𝄀
+abc  ¦  0.75  𝄀
+abc  ¦  0.75
 insert into test_pr_ts_boundary values
 (1, '0001-01-01 00:00:00'),
 (2, '9999-12-31 23:59:59');
-[unknown result because it is related to issue#23853]
+no such table percent_rank_func.test_pr_ts_boundary
 select id, length(val) as len, percent_rank() over (order by val) as pct_rank
 from test_pr_long_str order by val;
-[unknown result because it is related to issue#23853]
+➤ id[4,32,0]  ¦  len[-5,64,0]  ¦  pct_rank[8,54,0]  𝄀
+3  ¦  999  ¦  0.0  𝄀
+1  ¦  1000  ¦  0.5  𝄀
+2  ¦  1000  ¦  1.0
 select col_varchar, percent_rank() over (order by col_varchar) as pr from temp_pr_all_types;
-[unknown result because it is related to issue#23853]
+➤ col_varchar[12,-1,0]  ¦  pr[8,54,0]  𝄀
+hello  ¦  0.0  𝄀
+world  ¦  1.0
 select col_bool, percent_rank() over (order by col_bool) as pr from temp_pr_all_types;
-[unknown result because it is related to issue#23853]
+➤ col_bool[-7,1,0]  ¦  pr[8,54,0]  𝄀
+0  ¦  0.0  𝄀
+1  ¦  1.0
 select col_enum, percent_rank() over (order by col_enum) as pr from temp_pr_all_types;
-[unknown result because it is related to issue#23853]
+➤ col_enum[12,-1,0]  ¦  pr[8,54,0]  𝄀
+a  ¦  0.0  𝄀
+c  ¦  1.0
 drop table if exists test_pr_uuid;
-[unknown result because it is related to issue#23853]
 create table test_pr_uuid (id int, val uuid);
-[unknown result because it is related to issue#23853]
 insert into test_pr_uuid values
 (1, '00000000-0000-0000-0000-000000000001'),
 (2, '550e8400-e29b-41d4-a716-446655440000'),
 (3, 'ffffffff-ffff-ffff-ffff-ffffffffffff');
-[unknown result because it is related to issue#23853]
 select val, percent_rank() over (order by val) as pct_rank from test_pr_uuid order by val;
-[unknown result because it is related to issue#23853]
+➤ val[12,-1,0]  ¦  pct_rank[8,54,0]  𝄀
+00000000-0000-0000-0000-000000000001  ¦  0.0  𝄀
+550e8400-e29b-41d4-a716-446655440000  ¦  0.5  𝄀
+ffffffff-ffff-ffff-ffff-ffffffffffff  ¦  1.0
 drop table if exists test_pr_uuid;
-[unknown result because it is related to issue#23853]
 drop table if exists test_pr_uuid_null;
-[unknown result because it is related to issue#23853]
 create table test_pr_uuid_null (id int, val uuid);
-[unknown result because it is related to issue#23853]
 insert into test_pr_uuid_null values
 (1, null),
 (2, '00000000-0000-0000-0000-000000000001'),
 (3, 'ffffffff-ffff-ffff-ffff-ffffffffffff'),
 (4, null);
-[unknown result because it is related to issue#23853]
 select id, val, percent_rank() over (order by val) as pct_rank
 from test_pr_uuid_null order by val;
-[unknown result because it is related to issue#23853]
+➤ id[4,32,0]  ¦  val[12,-1,0]  ¦  pct_rank[8,54,0]  𝄀
+1  ¦  null  ¦  0.0  𝄀
+4  ¦  null  ¦  0.0  𝄀
+2  ¦  00000000-0000-0000-0000-000000000001  ¦  0.6666666666666666  𝄀
+3  ¦  ffffffff-ffff-ffff-ffff-ffffffffffff  ¦  1.0
 drop table if exists test_pr_uuid_null;
-[unknown result because it is related to issue#23853]
 drop table if exists test_pr_uuid_part;
-[unknown result because it is related to issue#23853]
 create table test_pr_uuid_part (grp int, val uuid);
-[unknown result because it is related to issue#23853]
 insert into test_pr_uuid_part values
 (1, '00000000-0000-0000-0000-000000000001'),
 (1, '550e8400-e29b-41d4-a716-446655440000'),
 (1, 'ffffffff-ffff-ffff-ffff-ffffffffffff'),
 (2, '11111111-1111-1111-1111-111111111111'),
 (2, '22222222-2222-2222-2222-222222222222');
-[unknown result because it is related to issue#23853]
 select grp, val,
 percent_rank() over (partition by grp order by val) as pct_rank
 from test_pr_uuid_part order by grp, val;
-[unknown result because it is related to issue#23853]
+➤ grp[4,32,0]  ¦  val[12,-1,0]  ¦  pct_rank[8,54,0]  𝄀
+1  ¦  00000000-0000-0000-0000-000000000001  ¦  0.0  𝄀
+1  ¦  550e8400-e29b-41d4-a716-446655440000  ¦  0.5  𝄀
+1  ¦  ffffffff-ffff-ffff-ffff-ffffffffffff  ¦  1.0  𝄀
+2  ¦  11111111-1111-1111-1111-111111111111  ¦  0.0  𝄀
+2  ¦  22222222-2222-2222-2222-222222222222  ¦  1.0
 drop table if exists test_pr_uuid_part;
-[unknown result because it is related to issue#23853]
 drop table if exists test_pr_vecf32;
-[unknown result because it is related to issue#23853]
 create table test_pr_vecf32 (id int, val vecf32(3));
-[unknown result because it is related to issue#23853]
 insert into test_pr_vecf32 values (1, '[1,2,3]'), (2, '[4,5,6]'), (3, '[7,8,9]');
-[unknown result because it is related to issue#23853]
 select id, val, percent_rank() over (order by id) as pct_rank from test_pr_vecf32 order by id;
-[unknown result because it is related to issue#23853]
+➤ id[4,32,0]  ¦  val[12,3,0]  ¦  pct_rank[8,54,0]  𝄀
+1  ¦  [1, 2, 3]  ¦  0.0  𝄀
+2  ¦  [4, 5, 6]  ¦  0.5  𝄀
+3  ¦  [7, 8, 9]  ¦  1.0
 drop table if exists test_pr_vecf32;
-[unknown result because it is related to issue#23853]
 drop table if exists test_pr_vecf64;
-[unknown result because it is related to issue#23853]
 create table test_pr_vecf64 (id int, val vecf64(2));
-[unknown result because it is related to issue#23853]
 insert into test_pr_vecf64 values (1, '[1.1,2.2]'), (2, '[3.3,4.4]'), (3, '[5.5,6.6]');
-[unknown result because it is related to issue#23853]
 select id, val, percent_rank() over (order by id) as pct_rank from test_pr_vecf64 order by id;
-[unknown result because it is related to issue#23853]
+➤ id[4,32,0]  ¦  val[12,2,0]  ¦  pct_rank[8,54,0]  𝄀
+1  ¦  [1.1, 2.2]  ¦  0.0  𝄀
+2  ¦  [3.3, 4.4]  ¦  0.5  𝄀
+3  ¦  [5.5, 6.6]  ¦  1.0
 drop table if exists test_pr_vecf64;
-[unknown result because it is related to issue#23853]
 drop table if exists test_pr_vec_partition;
-[unknown result because it is related to issue#23853]
 create table test_pr_vec_partition (id int, grp varchar(10), val vecf32(3), score int);
-[unknown result because it is related to issue#23853]
 insert into test_pr_vec_partition values
 (1, 'a', '[1,0,0]', 10), (2, 'a', '[0,1,0]', 20), (3, 'a', '[0,0,1]', 30),
 (4, 'b', '[1,1,0]', 15), (5, 'b', '[0,1,1]', 25);
-[unknown result because it is related to issue#23853]
 select id, grp, val, score,
 percent_rank() over (partition by grp order by score) as pct_rank
 from test_pr_vec_partition order by grp, score;
-[unknown result because it is related to issue#23853]
+➤ id[4,32,0]  ¦  grp[12,-1,0]  ¦  val[12,3,0]  ¦  score[4,32,0]  ¦  pct_rank[8,54,0]  𝄀
+1  ¦  a  ¦  [1, 0, 0]  ¦  10  ¦  0.0  𝄀
+2  ¦  a  ¦  [0, 1, 0]  ¦  20  ¦  0.5  𝄀
+3  ¦  a  ¦  [0, 0, 1]  ¦  30  ¦  1.0  𝄀
+4  ¦  b  ¦  [1, 1, 0]  ¦  15  ¦  0.0  𝄀
+5  ¦  b  ¦  [0, 1, 1]  ¦  25  ¦  1.0
 drop table if exists test_pr_vec_partition;
-[unknown result because it is related to issue#23853]
 create temporary table temp_pr_mo_types (
 id int,
 col_uuid uuid,
 col_vec vecf32(3),
 score int
 );
-[unknown result because it is related to issue#23853]
 insert into temp_pr_mo_types values
 (1, '00000000-0000-0000-0000-000000000001', '[1,2,3]', 100),
 (2, '550e8400-e29b-41d4-a716-446655440000', '[4,5,6]', 200),
 (3, 'ffffffff-ffff-ffff-ffff-ffffffffffff', '[7,8,9]', 300);
-[unknown result because it is related to issue#23853]
 select id, col_uuid, percent_rank() over (order by col_uuid) as pct_rank
 from temp_pr_mo_types order by col_uuid;
-[unknown result because it is related to issue#23853]
+➤ id[4,32,0]  ¦  col_uuid[12,-1,0]  ¦  pct_rank[8,54,0]  𝄀
+1  ¦  00000000-0000-0000-0000-000000000001  ¦  0.0  𝄀
+2  ¦  550e8400-e29b-41d4-a716-446655440000  ¦  0.5  𝄀
+3  ¦  ffffffff-ffff-ffff-ffff-ffffffffffff  ¦  1.0
 select id, col_vec, score, percent_rank() over (order by score) as pct_rank
 from temp_pr_mo_types order by score;
-[unknown result because it is related to issue#23853]
+➤ id[4,32,0]  ¦  col_vec[12,3,0]  ¦  score[4,32,0]  ¦  pct_rank[8,54,0]  𝄀
+1  ¦  [1, 2, 3]  ¦  100  ¦  0.0  𝄀
+2  ¦  [4, 5, 6]  ¦  200  ¦  0.5  𝄀
+3  ¦  [7, 8, 9]  ¦  300  ¦  1.0
 drop table temp_pr_mo_types;
-[unknown result because it is related to issue#23853]
 drop database if exists percent_rank_func;

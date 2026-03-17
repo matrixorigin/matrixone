@@ -512,7 +512,6 @@ insert into test_pr_varchar_cn values (1, '阿里'), (2, '百度'), (3, '腾讯'
 drop table if exists test_pr_text;
 create table test_pr_text (id int, val text);
 insert into test_pr_text values (1, 'short'), (2, 'medium length text'), (3, 'zzz last');
-drop table if exists test_pr_text;
 
 -- ============================================================================
 -- test 3.19: blob 类型
@@ -1068,7 +1067,6 @@ drop table if exists test_pr_null_partition;
 drop table if exists test_pr_empty_str;
 create table test_pr_empty_str (id int, val varchar(50));
 insert into test_pr_empty_str values (1, ''), (2, 'a'), (3, 'b'), (4, '');
-drop table if exists test_pr_empty_str;
 
 -- ============================================================================
 -- test 6.5: 特殊字符排序
@@ -1077,7 +1075,6 @@ drop table if exists test_pr_special_char;
 create table test_pr_special_char (id int, val varchar(50));
 insert into test_pr_special_char values
 (1, '!abc'), (2, '#def'), (3, '123'), (4, 'abc'), (5, 'abc');
-drop table if exists test_pr_special_char;
 
 -- ============================================================================
 -- test 6.6: date 边界值
@@ -1116,7 +1113,6 @@ insert into test_pr_long_str values
 (1, repeat('a', 1000)),
 (2, repeat('b', 1000)),
 (3, repeat('a', 999));
-drop table if exists test_pr_long_str;
 
 -- ============================================================================
 -- test 6.9: 单分区多行 vs 多分区单行
@@ -1643,7 +1639,6 @@ drop table if exists test_pr_salary_analysis;
 -- ============================================
 -- MO 的 percent_rank 窗口函数不支持非数值/时间类型的 ORDER BY
 -- ============================================
--- @bvt:issue#23853
 select
     department,
     employee,
@@ -1666,15 +1661,13 @@ select val, percent_rank() over (order by val) as pct_rank from test_pr_varchar_
 
 select val, percent_rank() over (order by val) as pct_rank from test_pr_text order by val;
 
-
+-- @bvt:issue#23863
 select id, percent_rank() over (order by val) as pct_rank from test_pr_blob order by val;
-
 
 select id, percent_rank() over (order by val) as pct_rank from test_pr_binary order by val;
 
-
 select id, percent_rank() over (order by val) as pct_rank from test_pr_varbinary order by val;
-
+-- @bvt:issue
 
 select val, percent_rank() over (order by val) as pct_rank from test_pr_bool order by val;
 -- 预期: false(0)→0, false(0)→0, true(1)→0.6667, true(1)→0.6667
@@ -1829,6 +1822,5 @@ from temp_pr_mo_types order by score;
 -- 预期: 0, 0.5, 1.0
 
 drop table temp_pr_mo_types;
--- @bvt:issue
 drop database if exists percent_rank_func;
 
