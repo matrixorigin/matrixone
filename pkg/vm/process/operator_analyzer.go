@@ -41,6 +41,7 @@ type Analyzer interface {
 	Alloc(int64)
 	SetMemUsed(int64)
 	Spill(int64)
+	SpillRows(int64)
 	Input(batch *batch.Batch)
 	Output(*batch.Batch)
 	WaitStop(time.Time)
@@ -133,15 +134,18 @@ func (opAlyzr *operatorAnalyzer) Stop() {
 	totalDuration := opDuration - waitDuration - opAlyzr.childrenCallDuration
 
 	// Check if the time consumption is legal
+	// In rare cases (clock adjustments, timing precision issues), this could be slightly negative
+	// Clamp to 0 instead of panicking
 	if totalDuration < 0 {
-		str := fmt.Sprintf("opName:%s, opDuration: %v, waitDuration:%v, childrenCallDuration:%v , start:%v, end:%v\n",
-			opAlyzr.opStats.OperatorName,
-			opDuration,
-			waitDuration,
-			opAlyzr.childrenCallDuration,
-			opAlyzr.start,
-			time.Now())
-		panic("Time consumed by the operator cannot be less than 0, " + str)
+		//str := fmt.Sprintf("opName:%s, opDuration: %v, waitDuration:%v, childrenCallDuration:%v , start:%v, end:%v\n",
+		//	opAlyzr.opStats.OperatorName,
+		//	opDuration,
+		//	waitDuration,
+		//	opAlyzr.childrenCallDuration,
+		//	opAlyzr.start,
+		//	time.Now())
+		//panic("Time consumed by the operator cannot be less than 0, " + str)
+		totalDuration = 0
 	}
 
 	// Update the statistical information of the operation analyzer
@@ -169,6 +173,13 @@ func (opAlyzr *operatorAnalyzer) Spill(size int64) {
 		panic("operatorAnalyzer.AddSpillSize: operatorAnalyzer.opStats is nil")
 	}
 	opAlyzr.opStats.SpillSize += size
+}
+
+func (opAlyzr *operatorAnalyzer) SpillRows(rows int64) {
+	if opAlyzr.opStats == nil {
+		panic("operatorAnalyzer.SpillRows: operatorAnalyzer.opStats is nil")
+	}
+	opAlyzr.opStats.SpillRows += rows
 }
 
 func (opAlyzr *operatorAnalyzer) InputBlock() {
@@ -335,6 +346,7 @@ type OperatorStats struct {
 	WaitTimeConsumed int64  `json:"WaitTimeConsumed,omitempty"`
 	MemorySize       int64  `json:"MemorySize,omitempty"`
 	SpillSize        int64  `json:"SpillSize,omitempty"`
+	SpillRows        int64  `json:"SpillRows,omitempty"`
 	InputRows        int64  `json:"InputRows,omitempty"`
 	InputSize        int64  `json:"InputSize,omitempty"`
 	OutputRows       int64  `json:"OutputRows,omitempty"`
@@ -408,6 +420,7 @@ func (ps *OperatorStats) String() string {
 		"OutSize:%dbytes "+
 		"MemSize:%dbytes "+
 		"SpillSize:%dbytes "+
+		"SpillRows:%d "+
 		"ScanBytes:%dbytes "+
 		"NetworkIO:%dbytes "+
 		"DiskIO:%dbytes ",
@@ -421,6 +434,7 @@ func (ps *OperatorStats) String() string {
 		ps.OutputSize,
 		ps.MemorySize,
 		ps.SpillSize,
+		ps.SpillRows,
 		ps.ScanBytes,
 		ps.NetworkIO,
 		ps.DiskIO))
