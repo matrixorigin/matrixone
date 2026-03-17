@@ -274,7 +274,7 @@ func NewGpuCagraEmpty[T VectorType](totalCount uint64, dimension uint32, metric 
 		nthread:   nthread,
 		distMode:  mode,
 	}, nil
-	}
+}
 
 // AddChunk adds a chunk of data to the pre-allocated buffer.
 func (gi *GpuCagra[T]) AddChunk(chunk []T, chunkCount uint64) error {

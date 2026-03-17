@@ -1,6 +1,6 @@
 //go:build gpu
 
-/* 
+/*
  * Copyright 2021 Matrix Origin
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,9 +24,9 @@ package cuvs
 */
 import "C"
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"runtime"
 	"unsafe"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // PairwiseDistance performs a pairwise distance calculation on GPU.

@@ -1,6 +1,6 @@
 //go:build gpu
 
-/* 
+/*
  * Copyright 2021 Matrix Origin
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,8 +24,8 @@ package cuvs
 */
 import "C"
 import (
-	"unsafe"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"unsafe"
 )
 
 // AdhocBruteForceSearch performs an ad-hoc brute-force search on GPU without using a worker thread.

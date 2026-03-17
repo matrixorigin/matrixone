@@ -39,7 +39,7 @@ func TestGpuSearchFloatAll(t *testing.T) {
 		}
 		defer index.Destroy()
 		index.Start()
-		
+
 		// Explicitly train quantizer before adding data
 		err = index.TrainQuantizer(dataset[:dimension*10], 10)
 		if err != nil {
@@ -144,7 +144,7 @@ func TestGpuSearchFloatAll(t *testing.T) {
 		for i := range dataset {
 			dataset[i] = float32(i % 10)
 		}
-		
+
 		// Explicitly train quantizer
 		err = km.TrainQuantizer(dataset[:dimension*10], 10)
 		if err != nil {
