@@ -17,6 +17,7 @@
 package cuvs
 
 import (
+	"fmt"
 	"math/rand"
 	"os"
 	"testing"
@@ -209,7 +210,7 @@ func BenchmarkGpuShardedIvfFlat(b *testing.B) {
 
 	bp := DefaultIvfFlatBuildParams()
 	bp.NLists = 100
-	index, err := NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, Sharded)
+	index, err := NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, Sharded)
 	if err != nil {
 		b.Fatalf("Failed to create sharded IVF-Flat: %v", err)
 	}
@@ -225,19 +226,24 @@ func BenchmarkGpuShardedIvfFlat(b *testing.B) {
 	sp := DefaultIvfFlatSearchParams()
 	sp.NProbes = 10
 
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		queries := make([]float32, dimension)
-		for i := range queries {
-			queries[i] = rand.Float32()
-		}
-		for pb.Next() {
-			_, err := index.Search(queries, 1, dimension, 10, sp)
-			if err != nil {
-				b.Fatalf("Search failed: %v", err)
-			}
-		}
-	})
+	for _, useBatching := range []bool{true, false} {
+		b.Run(fmt.Sprintf("Batching%v", useBatching), func(b *testing.B) {
+			index.SetUseBatching(useBatching)
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				queries := make([]float32, dimension)
+				for i := range queries {
+					queries[i] = rand.Float32()
+				}
+				for pb.Next() {
+					_, err := index.Search(queries, 1, dimension, 10, sp)
+					if err != nil {
+						b.Fatalf("Search failed: %v", err)
+					}
+				}
+			})
+		})
+	}
 }
 
 func BenchmarkGpuSingleIvfFlat(b *testing.B) {
@@ -268,19 +274,24 @@ func BenchmarkGpuSingleIvfFlat(b *testing.B) {
 	sp := DefaultIvfFlatSearchParams()
 	sp.NProbes = 10
 
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		queries := make([]float32, dimension)
-		for i := range queries {
-			queries[i] = rand.Float32()
-		}
-		for pb.Next() {
-			_, err := index.Search(queries, 1, dimension, 10, sp)
-			if err != nil {
-				b.Fatalf("Search failed: %v", err)
-			}
-		}
-	})
+	for _, useBatching := range []bool{true, false} {
+		b.Run(fmt.Sprintf("Batching%v", useBatching), func(b *testing.B) {
+			index.SetUseBatching(useBatching)
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				queries := make([]float32, dimension)
+				for i := range queries {
+					queries[i] = rand.Float32()
+				}
+				for pb.Next() {
+					_, err := index.Search(queries, 1, dimension, 10, sp)
+					if err != nil {
+						b.Fatalf("Search failed: %v", err)
+					}
+				}
+			})
+		})
+	}
 }
 
 func BenchmarkGpuReplicatedIvfFlat(b *testing.B) {
@@ -314,19 +325,24 @@ func BenchmarkGpuReplicatedIvfFlat(b *testing.B) {
 	sp := DefaultIvfFlatSearchParams()
 	sp.NProbes = 10
 
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		queries := make([]float32, dimension)
-		for i := range queries {
-			queries[i] = rand.Float32()
-		}
-		for pb.Next() {
-			_, err := index.Search(queries, 1, dimension, 10, sp)
-			if err != nil {
-				b.Fatalf("Search failed: %v", err)
-			}
-		}
-	})
+	for _, useBatching := range []bool{true, false} {
+		b.Run(fmt.Sprintf("Batching%v", useBatching), func(b *testing.B) {
+			index.SetUseBatching(useBatching)
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				queries := make([]float32, dimension)
+				for i := range queries {
+					queries[i] = rand.Float32()
+				}
+				for pb.Next() {
+					_, err := index.Search(queries, 1, dimension, 10, sp)
+					if err != nil {
+						b.Fatalf("Search failed: %v", err)
+					}
+				}
+			})
+		})
+	}
 }
 
 func TestGpuIvfFlatChunked(t *testing.T) {

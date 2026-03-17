@@ -17,6 +17,7 @@
 package cuvs
 
 import (
+	"fmt"
 	"math/rand"
 	"os"
 	"testing"
@@ -379,7 +380,7 @@ func BenchmarkGpuShardedCagra(b *testing.B) {
 	}
 
 	bp := DefaultCagraBuildParams()
-	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, Sharded)
+	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, Sharded)
 	if err != nil {
 		b.Fatalf("Failed to create sharded CAGRA: %v", err)
 	}
@@ -394,19 +395,24 @@ func BenchmarkGpuShardedCagra(b *testing.B) {
 
 	sp := DefaultCagraSearchParams()
 
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		queries := make([]float32, dimension)
-		for i := range queries {
-			queries[i] = rand.Float32()
-		}
-		for pb.Next() {
-			_, err := index.Search(queries, 1, dimension, 10, sp)
-			if err != nil {
-				b.Fatalf("Search failed: %v", err)
-			}
-		}
-	})
+	for _, useBatching := range []bool{true, false} {
+		b.Run(fmt.Sprintf("Batching%v", useBatching), func(b *testing.B) {
+			index.SetUseBatching(useBatching)
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				queries := make([]float32, dimension)
+				for i := range queries {
+					queries[i] = rand.Float32()
+				}
+				for pb.Next() {
+					_, err := index.Search(queries, 1, dimension, 10, sp)
+					if err != nil {
+						b.Fatalf("Search failed: %v", err)
+					}
+				}
+			})
+		})
+	}
 }
 
 func BenchmarkGpuSingleCagra(b *testing.B) {
@@ -435,19 +441,24 @@ func BenchmarkGpuSingleCagra(b *testing.B) {
 
 	sp := DefaultCagraSearchParams()
 
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		queries := make([]float32, dimension)
-		for i := range queries {
-			queries[i] = rand.Float32()
-		}
-		for pb.Next() {
-			_, err := index.Search(queries, 1, dimension, 10, sp)
-			if err != nil {
-				b.Fatalf("Search failed: %v", err)
-			}
-		}
-	})
+	for _, useBatching := range []bool{true, false} {
+		b.Run(fmt.Sprintf("Batching%v", useBatching), func(b *testing.B) {
+			index.SetUseBatching(useBatching)
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				queries := make([]float32, dimension)
+				for i := range queries {
+					queries[i] = rand.Float32()
+				}
+				for pb.Next() {
+					_, err := index.Search(queries, 1, dimension, 10, sp)
+					if err != nil {
+						b.Fatalf("Search failed: %v", err)
+					}
+				}
+			})
+		})
+	}
 }
 
 func BenchmarkGpuReplicatedCagra(b *testing.B) {
@@ -479,17 +490,22 @@ func BenchmarkGpuReplicatedCagra(b *testing.B) {
 
 	sp := DefaultCagraSearchParams()
 
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		queries := make([]float32, dimension)
-		for i := range queries {
-			queries[i] = rand.Float32()
-		}
-		for pb.Next() {
-			_, err := index.Search(queries, 1, dimension, 10, sp)
-			if err != nil {
-				b.Fatalf("Search failed: %v", err)
-			}
-		}
-	})
+	for _, useBatching := range []bool{true, false} {
+		b.Run(fmt.Sprintf("Batching%v", useBatching), func(b *testing.B) {
+			index.SetUseBatching(useBatching)
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				queries := make([]float32, dimension)
+				for i := range queries {
+					queries[i] = rand.Float32()
+				}
+				for pb.Next() {
+					_, err := index.Search(queries, 1, dimension, 10, sp)
+					if err != nil {
+						b.Fatalf("Search failed: %v", err)
+					}
+				}
+			})
+		})
+	}
 }

@@ -30,10 +30,26 @@ import (
 
 // GpuIvfFlat represents the C++ gpu_ivf_flat_t object.
 type GpuIvfFlat[T VectorType] struct {
-	cIvfFlat  C.gpu_ivf_flat_c
-	dimension uint32
-	nthread   uint32
-	distMode  DistributionMode
+	cIvfFlat    C.gpu_ivf_flat_c
+	dimension   uint32
+	nthread     uint32
+	distMode    DistributionMode
+	useBatching bool
+}
+
+// SetUseBatching enables or disables dynamic batching for search operations.
+func (gi *GpuIvfFlat[T]) SetUseBatching(enable bool) error {
+	gi.useBatching = enable
+	if gi.cIvfFlat != nil {
+		var errmsg *C.char
+		C.gpu_ivf_flat_set_use_batching(gi.cIvfFlat, C.bool(enable), unsafe.Pointer(&errmsg))
+		if errmsg != nil {
+			errStr := C.GoString(errmsg)
+			C.free(unsafe.Pointer(errmsg))
+			return moerr.NewInternalErrorNoCtx(errStr)
+		}
+	}
+	return nil
 }
 
 // NewGpuIvfFlat creates a new GpuIvfFlat instance from a dataset.
@@ -174,6 +190,12 @@ func (gi *GpuIvfFlat[T]) Start() error {
 			errStr := C.GoString(errmsg)
 			C.free(unsafe.Pointer(errmsg))
 			return moerr.NewInternalErrorNoCtx(errStr)
+		}
+	}
+
+	if gi.useBatching {
+		if err := gi.SetUseBatching(true); err != nil {
+			return err
 		}
 	}
 

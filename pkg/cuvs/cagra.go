@@ -30,10 +30,26 @@ import (
 
 // GpuCagra represents the C++ gpu_cagra_t object.
 type GpuCagra[T VectorType] struct {
-	cCagra    C.gpu_cagra_c
-	dimension uint32
-	nthread   uint32
-	distMode  DistributionMode
+	cCagra      C.gpu_cagra_c
+	dimension   uint32
+	nthread     uint32
+	distMode    DistributionMode
+	useBatching bool
+}
+
+// SetUseBatching enables or disables dynamic batching for search operations.
+func (gi *GpuCagra[T]) SetUseBatching(enable bool) error {
+	gi.useBatching = enable
+	if gi.cCagra != nil {
+		var errmsg *C.char
+		C.gpu_cagra_set_use_batching(gi.cCagra, C.bool(enable), unsafe.Pointer(&errmsg))
+		if errmsg != nil {
+			errStr := C.GoString(errmsg)
+			C.free(unsafe.Pointer(errmsg))
+			return moerr.NewInternalErrorNoCtx(errStr)
+		}
+	}
+	return nil
 }
 
 // NewGpuCagra creates a new GpuCagra instance from a dataset.
@@ -174,6 +190,12 @@ func (gi *GpuCagra[T]) Start() error {
 			errStr := C.GoString(errmsg)
 			C.free(unsafe.Pointer(errmsg))
 			return moerr.NewInternalErrorNoCtx(errStr)
+		}
+	}
+
+	if gi.useBatching {
+		if err := gi.SetUseBatching(true); err != nil {
+			return err
 		}
 	}
 

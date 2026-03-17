@@ -67,6 +67,7 @@ void gpu_cagra_add_chunk_float(gpu_cagra_c index_c, const float* chunk_data, uin
 void gpu_cagra_train_quantizer(gpu_cagra_c index_c, const float* train_data, uint64_t n_samples, void* errmsg);
 
 void gpu_cagra_set_per_thread_device(gpu_cagra_c index_c, bool enable, void* errmsg);
+void gpu_cagra_set_use_batching(gpu_cagra_c index_c, bool enable, void* errmsg);
 
 void gpu_cagra_set_quantizer(gpu_cagra_c index_c, float min, float max, void* errmsg);
 void gpu_cagra_get_quantizer(gpu_cagra_c index_c, float* min, float* max, void* errmsg);

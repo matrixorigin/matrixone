@@ -19,6 +19,7 @@
 #include <any>
 #include <atomic>
 #include <condition_variable>
+#include <chrono>
 #include <deque>
 #include <functional>
 #include <future>
@@ -208,6 +209,7 @@ class cuvs_worker_t {
 public:
     using raft_handle = raft_handle_wrapper_t;
     using user_task_fn = std::function<std::any(raft_handle&)>;
+    using batch_exec_fn = std::function<void(raft_handle&, const std::vector<std::any>&, const std::vector<std::function<void(std::any)>>&)>;
 
     struct cuvs_task_t {
         uint64_t id;
@@ -235,6 +237,7 @@ public:
     }
 
     void set_per_thread_device(bool enable) { per_thread_device_ = enable; }
+    void set_use_batching(bool enable) { use_batching_ = enable; }
 
     void stop() {
         if (!started_.load() || stopped_.exchange(true)) return;
@@ -261,6 +264,124 @@ public:
     }
 
     std::future<cuvs_task_result_t> wait(uint64_t id) { return result_store_.wait(id); }
+
+    /**
+     * @brief Submits a task that can be merged with other tasks having the same batch_key.
+     * 
+     * @tparam T The expected return type.
+     * @param batch_key Unique identifier for grouping compatible tasks.
+     * @param request The data for this individual request.
+     * @param exec_fn Callback to execute the combined batch.
+     * @return std::future<T> Future for the individual result.
+     */
+    template<typename T>
+    std::future<T> submit_batched(const std::string& batch_key, std::any request, batch_exec_fn exec_fn) {
+        if (stopped_.load()) throw std::runtime_error("Cannot submit batched task: worker stopped");
+
+        if (!use_batching_ || n_threads_ <= 1) {
+            // Direct submission without batching
+            auto promise = std::make_shared<std::promise<T>>();
+            auto future = promise->get_future();
+            submit([promise, request, exec_fn](raft_handle& handle) -> std::any {
+                try {
+                    std::vector<std::any> reqs = {request};
+                    std::vector<std::function<void(std::any)>> setters = {[promise](std::any val) {
+                        try {
+                            if (val.type() == typeid(std::exception_ptr)) promise->set_exception(std::any_cast<std::exception_ptr>(val));
+                            else promise->set_value(std::any_cast<T>(val));
+                        } catch (...) { promise->set_exception(std::current_exception()); }
+                    }};
+                    exec_fn(handle, reqs, setters);
+                } catch (...) {
+                    promise->set_exception(std::current_exception());
+                }
+                return std::any();
+            });
+            return future;
+        }
+
+        auto promise = std::make_shared<std::promise<T>>();
+        auto future = promise->get_future();
+
+        // Setter to resolve the promise from a std::any result
+        auto setter = [promise](std::any val) {
+            try {
+                if (val.type() == typeid(std::exception_ptr)) {
+                    promise->set_exception(std::any_cast<std::exception_ptr>(val));
+                } else {
+                    promise->set_value(std::any_cast<T>(val));
+                }
+            } catch (...) {
+                promise->set_exception(std::current_exception());
+            }
+        };
+
+        std::shared_ptr<batch_t> batch;
+        {
+            std::lock_guard<std::mutex> lock(batches_mu_);
+            auto it = batches_.find(batch_key);
+            if (it == batches_.end()) {
+                batch = std::make_shared<batch_t>();
+                batches_[batch_key] = batch;
+            } else {
+                batch = it->second;
+            }
+
+            // Simple periodic cleanup of old batches
+            static size_t cleanup_counter = 0;
+            if (++cleanup_counter % 1000 == 0) {
+                for (auto bit = batches_.begin(); bit != batches_.end(); ) {
+                    std::lock_guard<std::mutex> block(bit->second->mu);
+                    if (!bit->second->scheduled && bit->second->requests.empty()) {
+                        bit = batches_.erase(bit);
+                    } else {
+                        ++bit;
+                    }
+                }
+            }
+        }
+
+        bool trigger = false;
+        {
+            std::lock_guard<std::mutex> lock(batch->mu);
+            batch->requests.push_back(std::move(request));
+            batch->setters.push_back(std::move(setter));
+            if (!batch->scheduled) {
+                batch->scheduled = true;
+                trigger = true;
+            }
+        }
+
+        if (trigger) {
+            // Submit a trigger task that will wait a tiny bit then drain the batch
+            submit([this, batch, exec_fn](raft_handle& handle) -> std::any {
+                // Micro-batching wait: allows more goroutines to join the batch
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
+
+                std::vector<std::any> reqs;
+                std::vector<std::function<void(std::any)>> setters;
+
+                {
+                    std::lock_guard<std::mutex> lock(batch->mu);
+                    reqs = std::move(batch->requests);
+                    setters = std::move(batch->setters);
+                    batch->scheduled = false;
+                }
+
+                if (!reqs.empty()) {
+                    try {
+                        exec_fn(handle, reqs, setters);
+                    } catch (...) {
+                        auto err = std::current_exception();
+                        for (auto& s : setters) s(err);
+                    }
+                }
+                return std::any();
+            });
+        }
+
+        return future;
+    }
 
     std::exception_ptr get_first_error() {
         std::lock_guard<std::mutex> lock(event_mu_);
@@ -359,6 +480,7 @@ private:
     std::vector<int> devices_;
     bool force_mg_ = false;
     bool per_thread_device_ = false;
+    bool use_batching_ = false;
     std::atomic<bool> started_{false};
     std::atomic<bool> stopped_{false};
     thread_safe_queue_t<cuvs_task_t> tasks_;
@@ -370,6 +492,16 @@ private:
     std::condition_variable event_cv_;
     bool should_stop_ = false;
     std::exception_ptr fatal_error_;
+
+    // Batching support
+    struct batch_t {
+        std::mutex mu;
+        std::vector<std::any> requests;
+        std::vector<std::function<void(std::any)>> setters;
+        bool scheduled = false;
+    };
+    std::mutex batches_mu_;
+    std::map<std::string, std::shared_ptr<batch_t>> batches_;
 };
 
 } // namespace matrixone
