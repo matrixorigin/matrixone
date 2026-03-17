@@ -172,14 +172,3 @@ func TestSetGetCCPRTaskID(t *testing.T) {
 	txn.SetCCPRTaskID("task-123")
 	assert.Equal(t, "task-123", txn.GetCCPRTaskID())
 }
-
-// newCleanFS2 is a helper that creates a memory FS for testing
-func newCleanFS2(t *testing.T) fileservice.FileService {
-	fs, err := fileservice.NewMemoryFS(
-		defines.SharedFileServiceName,
-		fileservice.DisabledCacheConfig,
-		nil,
-	)
-	require.NoError(t, err)
-	return fs
-}
