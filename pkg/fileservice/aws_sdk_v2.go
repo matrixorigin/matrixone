@@ -423,12 +423,16 @@ func (a *AwsSDKv2) Write(
 		}
 
 	} else {
+		data, err := io.ReadAll(r)
+		if err != nil {
+			return err
+		}
 		_, err = a.putObject(
 			ctx,
 			&s3.PutObjectInput{
 				Bucket:        ptrTo(a.bucket),
 				Key:           ptrTo(key),
-				Body:          r,
+				Body:          bytes.NewReader(data),
 				ContentLength: sizeHint,
 				Expires:       expire,
 			},
