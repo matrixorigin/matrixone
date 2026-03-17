@@ -159,10 +159,10 @@ void gpu_cagra_set_per_thread_device(gpu_cagra_c index_c, bool enable, void* err
     try {
         auto* any = static_cast<gpu_cagra_any_t*>(index_c);
         switch (any->qtype) {
-            case Quantization_F32: static_cast<matrixone::gpu_cagra_t<float>*>(any->ptr)->worker->set_per_thread_device(enable); break;
-            case Quantization_F16: static_cast<matrixone::gpu_cagra_t<half>*>(any->ptr)->worker->set_per_thread_device(enable); break;
-            case Quantization_INT8: static_cast<matrixone::gpu_cagra_t<int8_t>*>(any->ptr)->worker->set_per_thread_device(enable); break;
-            case Quantization_UINT8: static_cast<matrixone::gpu_cagra_t<uint8_t>*>(any->ptr)->worker->set_per_thread_device(enable); break;
+            case Quantization_F32: static_cast<matrixone::gpu_cagra_t<float>*>(any->ptr)->set_per_thread_device(enable); break;
+            case Quantization_F16: static_cast<matrixone::gpu_cagra_t<half>*>(any->ptr)->set_per_thread_device(enable); break;
+            case Quantization_INT8: static_cast<matrixone::gpu_cagra_t<int8_t>*>(any->ptr)->set_per_thread_device(enable); break;
+            case Quantization_UINT8: static_cast<matrixone::gpu_cagra_t<uint8_t>*>(any->ptr)->set_per_thread_device(enable); break;
             default: break;
         }
     } catch (const std::exception& e) {
@@ -175,10 +175,10 @@ void gpu_cagra_set_use_batching(gpu_cagra_c index_c, bool enable, void* errmsg) 
     try {
         auto* any = static_cast<gpu_cagra_any_t*>(index_c);
         switch (any->qtype) {
-            case Quantization_F32: static_cast<matrixone::gpu_cagra_t<float>*>(any->ptr)->worker->set_use_batching(enable); break;
-            case Quantization_F16: static_cast<matrixone::gpu_cagra_t<half>*>(any->ptr)->worker->set_use_batching(enable); break;
-            case Quantization_INT8: static_cast<matrixone::gpu_cagra_t<int8_t>*>(any->ptr)->worker->set_use_batching(enable); break;
-            case Quantization_UINT8: static_cast<matrixone::gpu_cagra_t<uint8_t>*>(any->ptr)->worker->set_use_batching(enable); break;
+            case Quantization_F32: static_cast<matrixone::gpu_cagra_t<float>*>(any->ptr)->set_use_batching(enable); break;
+            case Quantization_F16: static_cast<matrixone::gpu_cagra_t<half>*>(any->ptr)->set_use_batching(enable); break;
+            case Quantization_INT8: static_cast<matrixone::gpu_cagra_t<int8_t>*>(any->ptr)->set_use_batching(enable); break;
+            case Quantization_UINT8: static_cast<matrixone::gpu_cagra_t<uint8_t>*>(any->ptr)->set_use_batching(enable); break;
             default: break;
         }
     } catch (const std::exception& e) {

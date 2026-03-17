@@ -38,7 +38,8 @@ TEST_SRCS := $(TESTDIR)/main_test.cu \
              $(TESTDIR)/cagra_test.cu \
              $(TESTDIR)/kmeans_test.cu \
              $(TESTDIR)/quantize_test.cu \
-             $(TESTDIR)/distance_test.cu
+             $(TESTDIR)/distance_test.cu \
+             $(TESTDIR)/batching_test.cu
 
 TEST_OBJS := $(patsubst $(TESTDIR)/%.cu, $(OBJDIR)/test/%.o, $(TEST_SRCS))
 

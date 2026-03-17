@@ -682,6 +682,14 @@ public:
         if (worker) worker->stop();
     }
 
+    void set_use_batching(bool enable) {
+        if (worker) worker->set_use_batching(enable);
+    }
+
+    void set_per_thread_device(bool enable) {
+        if (worker) worker->set_per_thread_device(enable);
+    }
+
     void set_quantizer(float min, float max) {
         quantizer_ = scalar_quantizer_t<float>(min, max);
     }
