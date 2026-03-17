@@ -41,7 +41,7 @@ func TestLength(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 
 	{
-		//Array Float32
+		// Array Float32
 		mp := mpool.MustNewZero()
 		vec := NewVec(types.New(types.T_array_float32, 3, 0))
 		err := AppendArrayList[float32](vec, [][]float32{{1, 2, 3}, {4, 5, 6}}, nil, mp)
@@ -51,7 +51,7 @@ func TestLength(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{
-		//Array Float64
+		// Array Float64
 		mp := mpool.MustNewZero()
 		vec := NewVec(types.New(types.T_array_float64, 3, 0))
 		err := AppendArrayList[float64](vec, [][]float64{{1, 2, 3}, {4, 5, 6}}, nil, mp)
@@ -69,7 +69,7 @@ func TestSize(t *testing.T) {
 	vec.Free(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
 	{
-		//Array Float32
+		// Array Float32
 		mp := mpool.MustNewZero()
 		vec := NewVec(types.New(types.T_array_float32, 4, 0))
 		require.Equal(t, 0, vec.Size())
@@ -77,7 +77,7 @@ func TestSize(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{
-		//Array Float64
+		// Array Float64
 		mp := mpool.MustNewZero()
 		vec := NewVec(types.New(types.T_array_float64, 4, 0))
 		require.Equal(t, 0, vec.Size())
@@ -685,7 +685,7 @@ func TestShrinkByMask(t *testing.T) {
 	var bmask bitmap.BMask
 	bmask.Init(&bm)
 
-	//{ // Array Float32
+	// { // Array Float32
 	//	v := NewVec(types.T_array_float32.ToType())
 	//	err := AppendArrayList[float32](v, [][]float32{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}, nil, mp)
 	//	require.NoError(t, err)
@@ -701,7 +701,7 @@ func TestShrinkByMask(t *testing.T) {
 	//	require.Equal(t, [][]float32{{1, 1, 1}}, MustArrayCol[float32](v))
 	//	v.Free(mp)
 	//	require.Equal(t, int64(0), mp.CurrNB())
-	//}
+	// }
 	{ // Array Float64
 		v := NewVec(types.T_array_float64.ToType())
 		err := AppendArrayList[float64](v, [][]float64{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}, nil, mp)
@@ -1570,7 +1570,7 @@ func TestCloneWindowWithMpNil(t *testing.T) {
 	require.Equal(t, 3, len(vec4.GetBytesAt(2)))
 	require.True(t, vec4.GetNulls().Contains(uint64(1)))
 
-	{ //Array Float32
+	{ // Array Float32
 		mp := mpool.MustNewZero()
 		vec5 := NewVec(types.New(types.T_array_float32, 2, 0))
 		AppendArray[float32](vec5, []float32{1, 1}, false, mp)
@@ -1588,7 +1588,7 @@ func TestCloneWindowWithMpNil(t *testing.T) {
 		require.True(t, vec6.GetNulls().Contains(uint64(1)))
 		require.Equal(t, []float32{3, 3}, GetArrayAt[float32](vec6, 2))
 	}
-	{ //Array Float64
+	{ // Array Float64
 		mp := mpool.MustNewZero()
 		vec5 := NewVec(types.New(types.T_array_float64, 2, 0))
 		AppendArray(vec5, []float64{1, 1}, false, mp)
@@ -1759,7 +1759,7 @@ func TestWindowWith(t *testing.T) {
 	vec3.Free(mp)
 
 	{
-		//Array Float32
+		// Array Float32
 
 		vec7 := NewVec(types.T_array_float32.ToType())
 		AppendArray(vec7, []float32{1, 1, 1}, false, mp)
@@ -1792,7 +1792,7 @@ func TestWindowWith(t *testing.T) {
 	}
 
 	{
-		//Array Float64
+		// Array Float64
 
 		vec7 := NewVec(types.T_array_float64.ToType())
 		AppendArray(vec7, []float64{1, 1, 1}, false, mp)
@@ -3171,4 +3171,77 @@ func TestProtoVector(t *testing.T) {
 	require.NoError(t, err)
 	_, err = ProtoVectorToVector(vec2)
 	require.NoError(t, err)
+}
+
+func TestVectorPoolTypeChangeBug_Issue23295(t *testing.T) {
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	// Step 1: Create vector with int8 type, allocate small buffer (8 bytes)
+	vec := NewVec(types.T_int8.ToType())
+	err = AppendMultiFixed(vec, int8(1), false, 8, mp)
+	require.NoError(t, err)
+	// Now: cap(data)=8, col.Cap=8 (for int8, 8 bytes = 8 elements)
+
+	// Step 2: Reset to TS type (12 bytes per element)
+	// cap(data)=8 < 12, so setFromVector's condition `cap(v.data) >= sz` fails
+	// Without the fix, col.Ptr and col.Cap keep stale values (Cap=8)
+	tsType := types.T_TS.ToType()
+	vec.ResetWithNewType(&tsType)
+
+	// Step 3: ToSlice with stale Cap=8 would create invalid slice
+	// It thinks there are 8 TS elements (96 bytes), but buffer is only 8 bytes!
+	// With -race, checkType will panic on type mismatch if col.Ptr is stale
+	var col []types.TS
+	ToSlice(vec, &col)
+	require.Equal(t, 0, cap(col)) // After fix: cap should be 0, not stale value 8
+
+	// AppendMultiFixed(vec, types.TS{}, false, 0, mp) also triggers this bug,
+	// because it calls ToSlice without extending buffer
+
+	vec.Free(mp)
+}
+
+func TestResetWithSameTypeResetsClass(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	vec := NewVec(types.T_varchar.ToType())
+	defer vec.Free(mp)
+
+	err := appendOneBytes(vec, []byte("hello"), false, mp)
+	require.NoError(t, err)
+	vec.ToConst()
+	require.True(t, vec.IsConst())
+
+	vec.ResetWithSameType()
+	require.False(t, vec.IsConst())
+	require.Equal(t, FLAT, vec.class)
+	require.Equal(t, 0, vec.Length())
+
+	// after reset, should be able to append normally
+	err = appendOneBytes(vec, []byte("world"), false, mp)
+	require.NoError(t, err)
+	require.Equal(t, 1, vec.Length())
+	require.False(t, vec.IsConst())
+}
+
+func TestFunctionResultAppendNullAfterToConst(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	wrapper := NewFunctionResultWrapper(types.T_json.ToType(), mp)
+	defer wrapper.Free()
+
+	result := MustFunctionResult[types.Varlena](wrapper)
+
+	// first round: append null, then fold to const
+	require.NoError(t, wrapper.PreExtendAndReset(1))
+	require.NoError(t, result.AppendBytes(nil, true))
+	result.vec.ToConst()
+	require.True(t, result.vec.IsConstNull())
+
+	// second round: simulate doFold reuse — PreExtendAndReset should reset class to FLAT
+	require.NoError(t, wrapper.PreExtendAndReset(1))
+	require.False(t, result.vec.IsConst()) // class should be FLAT now
+	require.NoError(t, result.AppendBytes(nil, true))
+	result.vec.ToConst()
+	require.True(t, result.vec.IsConstNull()) // must still be recognized as const null
 }
