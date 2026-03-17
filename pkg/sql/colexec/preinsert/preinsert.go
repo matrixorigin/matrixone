@@ -66,7 +66,39 @@ func (preInsert *PreInsert) Prepare(proc *process.Process) (err error) {
 			return
 		}
 	}
+	if preInsert.HasAutoCol {
+		if err = preInsert.refreshAutoIncrementTableID(proc); err != nil {
+			return
+		}
+	}
 	return
+}
+
+func (preInsert *PreInsert) refreshAutoIncrementTableID(proc *proc) error {
+	if preInsert.TableDef == nil || preInsert.TableDef.Name == "" || preInsert.SchemaName == "" {
+		return nil
+	}
+	if preInsert.TableDef.IsTemporary {
+		return nil
+	}
+	if proc.Base.SessionInfo.StorageEngine == nil || proc.Base.TxnOperator == nil {
+		return nil
+	}
+
+	db, err := proc.Base.SessionInfo.StorageEngine.Database(proc.Ctx, preInsert.SchemaName, proc.Base.TxnOperator)
+	if err != nil {
+		return err
+	}
+	rel, err := db.Relation(proc.Ctx, preInsert.TableDef.Name, nil)
+	if err != nil {
+		return err
+	}
+	preInsert.TableDef.TblId = rel.GetTableID(proc.Ctx)
+	return nil
+}
+
+func (preInsert *PreInsert) retryWithDefChanged() error {
+	return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 }
 
 func (preInsert *PreInsert) constructColBuf(proc *proc, bat *batch.Batch, first bool) (err error) {
@@ -258,10 +290,12 @@ func checkIfNeedReGenAutoIncrCol(bat *batch.Batch, preInsert *PreInsert) map[str
 }
 
 func genAutoIncrCol(bat *batch.Batch, proc *proc, preInsert *PreInsert) error {
-	tableID := preInsert.TableDef.TblId
 	eng := proc.Base.SessionInfo.StorageEngine
 	currentTxn := proc.Base.TxnOperator
+	retriedWithFreshTableID := false
 
+retryInsertValues:
+	tableID := preInsert.TableDef.TblId
 	needReCheck := checkIfNeedReGenAutoIncrCol(bat, preInsert)
 
 	// FIX: Capture lastAllocateAt BEFORE InsertValues to avoid false negative bug
@@ -286,8 +320,24 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, preInsert *PreInsert) error {
 	)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			if preInsert.TableDef.IsTemporary {
+				logutil.Error("insert auto increment column failed", zap.Error(err))
+				return moerr.NewNoSuchTableNoCtx(preInsert.SchemaName, preInsert.TableDef.Name)
+			}
+			if !retriedWithFreshTableID {
+				retriedWithFreshTableID = true
+				if refreshErr := preInsert.refreshAutoIncrementTableID(proc); refreshErr != nil {
+					if moerr.IsMoErrCode(refreshErr, moerr.ErrNoSuchTable) {
+						return preInsert.retryWithDefChanged()
+					}
+					return refreshErr
+				}
+				if preInsert.TableDef.TblId != tableID {
+					goto retryInsertValues
+				}
+			}
 			logutil.Error("insert auto increment column failed", zap.Error(err))
-			return moerr.NewNoSuchTableNoCtx(preInsert.SchemaName, preInsert.TableDef.Name)
+			return preInsert.retryWithDefChanged()
 		}
 		return err
 	}
