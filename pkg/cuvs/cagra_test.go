@@ -34,6 +34,8 @@ func TestGpuCagra(t *testing.T) {
 
 	devices := []int{0}
 	bp := DefaultCagraBuildParams()
+	bp.IntermediateGraphDegree = 256
+	bp.GraphDegree = 128
 	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu)
 	if err != nil {
 		t.Fatalf("Failed to create GpuCagra: %v", err)
@@ -50,6 +52,8 @@ func TestGpuCagra(t *testing.T) {
 
 	queries := []float32{1.0, 1.0, 100.0, 100.0}
 	sp := DefaultCagraSearchParams()
+	sp.ItopkSize = 128
+	sp.SearchWidth = 3
 	result, err := index.Search(queries, 2, dimension, 1, sp)
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
@@ -74,6 +78,8 @@ func TestGpuCagraSaveLoad(t *testing.T) {
 
 	devices := []int{0}
 	bp := DefaultCagraBuildParams()
+	bp.IntermediateGraphDegree = 256
+	bp.GraphDegree = 128
 	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu)
 	if err != nil {
 		t.Fatalf("Failed to create GpuCagra: %v", err)
@@ -107,6 +113,8 @@ func TestGpuCagraSaveLoad(t *testing.T) {
 
 	queries := []float32{0.0, 0.0}
 	sp := DefaultCagraSearchParams()
+	sp.ItopkSize = 128
+	sp.SearchWidth = 3
 	result, err := index2.Search(queries, 1, dimension, 1, sp)
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
@@ -131,6 +139,8 @@ func TestGpuShardedCagra(t *testing.T) {
 	}
 
 	bp := DefaultCagraBuildParams()
+	bp.IntermediateGraphDegree = 256
+	bp.GraphDegree = 128
 	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, Sharded)
 	if err != nil {
 		t.Fatalf("Failed to create sharded CAGRA: %v", err)
@@ -147,6 +157,8 @@ func TestGpuShardedCagra(t *testing.T) {
 
 	queries := []float32{0.1, 0.1, 0.2, 0.2, 0.3, 0.3, 0.4, 0.4, 0.5, 0.5}
 	sp := DefaultCagraSearchParams()
+	sp.ItopkSize = 128
+	sp.SearchWidth = 3
 	result, err := index.Search(queries, 5, dimension, 1, sp)
 	if err != nil {
 		t.Fatalf("Search sharded failed: %v", err)
@@ -159,6 +171,8 @@ func TestGpuCagraChunked(t *testing.T) {
 	totalCount := uint64(100)
 	devices := []int{0}
 	bp := DefaultCagraBuildParams()
+	bp.IntermediateGraphDegree = 256
+	bp.GraphDegree = 128
 
 	// Create empty index (target type int8)
 	index, err := NewGpuCagraEmpty[int8](totalCount, dimension, L2Expanded, bp, devices, 1, SingleGpu)
@@ -198,6 +212,8 @@ func TestGpuCagraChunked(t *testing.T) {
 		query1[i] = -128 // matches first chunk (1.0)
 	}
 	sp := DefaultCagraSearchParams()
+	sp.ItopkSize = 128
+	sp.SearchWidth = 3
 	result1, err := index.Search(query1, 1, dimension, 1, sp)
 	if err != nil {
 		t.Fatalf("Search 1 failed: %v", err)
@@ -230,6 +246,8 @@ func TestGpuCagraExtend(t *testing.T) {
 
 	devices := []int{0}
 	bp := DefaultCagraBuildParams()
+	bp.IntermediateGraphDegree = 256
+	bp.GraphDegree = 128
 	index, err := NewGpuCagra[float32](dataset, count, dimension, L2Expanded, bp, devices, 1, SingleGpu)
 	if err != nil {
 		t.Fatalf("Failed to create GpuCagra: %v", err)
@@ -254,6 +272,8 @@ func TestGpuCagraExtend(t *testing.T) {
 		queries[i] = 1000.0
 	}
 	sp := DefaultCagraSearchParams()
+	sp.ItopkSize = 128
+	sp.SearchWidth = 3
 	result, err := index.Search(queries, 1, dimension, 1, sp)
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
@@ -280,8 +300,8 @@ func TestGpuCagraMerge(t *testing.T) {
 
 	devices := []int{0}
 	bp := DefaultCagraBuildParams()
-	bp.IntermediateGraphDegree = 64
-	bp.GraphDegree = 32
+	bp.IntermediateGraphDegree = 256
+	bp.GraphDegree = 128
 
 	idx1, err := NewGpuCagra[float32](ds1, count, dimension, L2Expanded, bp, devices, 1, SingleGpu)
 	if err != nil {
@@ -318,6 +338,8 @@ func TestGpuCagraMerge(t *testing.T) {
 		queries[i] = 1000.0
 	}
 	sp := DefaultCagraSearchParams()
+	sp.ItopkSize = 128
+	sp.SearchWidth = 3
 	result, err := merged.Search(queries, 1, dimension, 1, sp)
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
@@ -343,6 +365,8 @@ func TestGpuReplicatedCagra(t *testing.T) {
 	}
 
 	bp := DefaultCagraBuildParams()
+	bp.IntermediateGraphDegree = 256
+	bp.GraphDegree = 128
 	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, Replicated)
 	if err != nil {
 		t.Fatalf("Failed to create replicated CAGRA: %v", err)
@@ -359,6 +383,8 @@ func TestGpuReplicatedCagra(t *testing.T) {
 
 	queries := []float32{0.1, 0.1, 0.2, 0.2, 0.3, 0.3, 0.4, 0.4, 0.5, 0.5}
 	sp := DefaultCagraSearchParams()
+	sp.ItopkSize = 128
+	sp.SearchWidth = 3
 	result, err := index.Search(queries, 5, dimension, 1, sp)
 	if err != nil {
 		t.Fatalf("Search replicated failed: %v", err)
@@ -380,6 +406,8 @@ func BenchmarkGpuShardedCagra(b *testing.B) {
 	}
 
 	bp := DefaultCagraBuildParams()
+	bp.IntermediateGraphDegree = 256
+	bp.GraphDegree = 128
 	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, Sharded)
 	if err != nil {
 		b.Fatalf("Failed to create sharded CAGRA: %v", err)
@@ -395,10 +423,21 @@ func BenchmarkGpuShardedCagra(b *testing.B) {
 	index.Info()
 
 	sp := DefaultCagraSearchParams()
+	sp.ItopkSize = 128
+	sp.SearchWidth = 3
 
 	for _, useBatching := range []bool{false, true} {
 		b.Run(fmt.Sprintf("Batching%v", useBatching), func(b *testing.B) {
 			index.SetUseBatching(useBatching)
+
+			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]uint32, error) {
+				res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+				if err != nil {
+					return nil, err
+				}
+				return res.Neighbors, nil
+			})
+
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
 				queries := make([]float32, dimension)
@@ -427,6 +466,8 @@ func BenchmarkGpuSingleCagra(b *testing.B) {
 	}
 
 	bp := DefaultCagraBuildParams()
+	bp.IntermediateGraphDegree = 256
+	bp.GraphDegree = 128
 	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, SingleGpu)
 	if err != nil {
 		b.Fatalf("Failed to create single CAGRA: %v", err)
@@ -442,10 +483,21 @@ func BenchmarkGpuSingleCagra(b *testing.B) {
 	index.Info()
 
 	sp := DefaultCagraSearchParams()
+	sp.ItopkSize = 128
+	sp.SearchWidth = 3
 
 	for _, useBatching := range []bool{false, true} {
 		b.Run(fmt.Sprintf("Batching%v", useBatching), func(b *testing.B) {
 			index.SetUseBatching(useBatching)
+
+			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]uint32, error) {
+				res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+				if err != nil {
+					return nil, err
+				}
+				return res.Neighbors, nil
+			})
+
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
 				queries := make([]float32, dimension)
@@ -477,6 +529,8 @@ func BenchmarkGpuReplicatedCagra(b *testing.B) {
 	}
 
 	bp := DefaultCagraBuildParams()
+	bp.IntermediateGraphDegree = 256
+	bp.GraphDegree = 128
 	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, Replicated)
 	if err != nil {
 		b.Fatalf("Failed to create replicated CAGRA: %v", err)
@@ -492,10 +546,21 @@ func BenchmarkGpuReplicatedCagra(b *testing.B) {
 	index.Info()
 
 	sp := DefaultCagraSearchParams()
+	sp.ItopkSize = 128
+	sp.SearchWidth = 3
 
 	for _, useBatching := range []bool{false, true} {
 		b.Run(fmt.Sprintf("Batching%v", useBatching), func(b *testing.B) {
 			index.SetUseBatching(useBatching)
+
+			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]uint32, error) {
+				res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+				if err != nil {
+					return nil, err
+				}
+				return res.Neighbors, nil
+			})
+
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
 				queries := make([]float32, dimension)
@@ -514,12 +579,19 @@ func BenchmarkGpuReplicatedCagra(b *testing.B) {
 }
 
 func BenchmarkGpuAddChunkAndSearchCagraF16(b *testing.B) {
-	const dimension = 128
+	const dimension = 1024
 	const totalCount = 100000
 	const chunkSize = 10000
 
+	dataset := make([]float32, totalCount*dimension)
+	for i := range dataset {
+		dataset[i] = rand.Float32()
+	}
+
 	devices := []int{0}
 	bp := DefaultCagraBuildParams()
+	bp.IntermediateGraphDegree = 256
+	bp.GraphDegree = 128
 	// Use Float16 as internal type
 	index, err := NewGpuCagraEmpty[Float16](uint64(totalCount), dimension, L2Expanded, bp, devices, 8, SingleGpu)
 	if err != nil {
@@ -533,10 +605,7 @@ func BenchmarkGpuAddChunkAndSearchCagraF16(b *testing.B) {
 
 	// Add data in chunks using AddChunkFloat
 	for i := 0; i < totalCount; i += chunkSize {
-		chunk := make([]float32, chunkSize*dimension)
-		for j := range chunk {
-			chunk[j] = rand.Float32()
-		}
+		chunk := dataset[i*dimension : (i+chunkSize)*dimension]
 		if err := index.AddChunkFloat(chunk, uint64(chunkSize)); err != nil {
 			b.Fatalf("AddChunkFloat failed at %d: %v", i, err)
 		}
@@ -548,6 +617,16 @@ func BenchmarkGpuAddChunkAndSearchCagraF16(b *testing.B) {
 	index.Info()
 
 	sp := DefaultCagraSearchParams()
+	sp.ItopkSize = 128
+	sp.SearchWidth = 3
+
+	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]uint32, error) {
+		res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+		if err != nil {
+			return nil, err
+		}
+		return res.Neighbors, nil
+	})
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -565,12 +644,19 @@ func BenchmarkGpuAddChunkAndSearchCagraF16(b *testing.B) {
 }
 
 func BenchmarkGpuAddChunkAndSearchCagraInt8(b *testing.B) {
-	const dimension = 128
+	const dimension = 1024
 	const totalCount = 100000
 	const chunkSize = 10000
 
+	dataset := make([]float32, totalCount*dimension)
+	for i := range dataset {
+		dataset[i] = rand.Float32()
+	}
+
 	devices := []int{0}
 	bp := DefaultCagraBuildParams()
+	bp.IntermediateGraphDegree = 256
+	bp.GraphDegree = 128
 	// Use int8 as internal type
 	index, err := NewGpuCagraEmpty[int8](uint64(totalCount), dimension, L2Expanded, bp, devices, 8, SingleGpu)
 	if err != nil {
@@ -584,10 +670,7 @@ func BenchmarkGpuAddChunkAndSearchCagraInt8(b *testing.B) {
 
 	// Add data in chunks using AddChunkFloat
 	for i := 0; i < totalCount; i += chunkSize {
-		chunk := make([]float32, chunkSize*dimension)
-		for j := range chunk {
-			chunk[j] = rand.Float32()
-		}
+		chunk := dataset[i*dimension : (i+chunkSize)*dimension]
 		if err := index.AddChunkFloat(chunk, uint64(chunkSize)); err != nil {
 			b.Fatalf("AddChunkFloat failed at %d: %v", i, err)
 		}
@@ -599,6 +682,16 @@ func BenchmarkGpuAddChunkAndSearchCagraInt8(b *testing.B) {
 	index.Info()
 
 	sp := DefaultCagraSearchParams()
+	sp.ItopkSize = 128
+	sp.SearchWidth = 3
+
+	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]uint32, error) {
+		res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+		if err != nil {
+			return nil, err
+		}
+		return res.Neighbors, nil
+	})
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {

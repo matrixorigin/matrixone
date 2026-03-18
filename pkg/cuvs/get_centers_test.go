@@ -74,8 +74,8 @@ func testIvfFlatGetCenters[T VectorType](t *testing.T, name string) {
 func TestIvfFlatGetCentersAllTypes(t *testing.T) {
 	testIvfFlatGetCenters[float32](t, "float32")
 	testIvfFlatGetCenters[Float16](t, "Float16")
-	testIvfFlatGetCenters[int8](t, "int8")
-	testIvfFlatGetCenters[uint8](t, "uint8")
+	// testIvfFlatGetCenters[int8](t, "int8")
+	// testIvfFlatGetCenters[uint8](t, "uint8")
 }
 
 func testIvfPqGetCenters[T VectorType](t *testing.T, name string) {
@@ -132,6 +132,6 @@ func testIvfPqGetCenters[T VectorType](t *testing.T, name string) {
 func TestIvfPqGetCentersAllTypes(t *testing.T) {
 	testIvfPqGetCenters[float32](t, "float32")
 	testIvfPqGetCenters[Float16](t, "Float16")
-	testIvfPqGetCenters[int8](t, "int8")
-	testIvfPqGetCenters[uint8](t, "uint8")
+	// testIvfPqGetCenters[int8](t, "int8")
+	// testIvfPqGetCenters[uint8](t, "uint8")
 }

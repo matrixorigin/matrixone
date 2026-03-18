@@ -162,9 +162,14 @@ func TestGpuBruteForceFloat16(t *testing.T) {
 }
 
 func BenchmarkGpuAddChunkAndSearchBruteForceF16(b *testing.B) {
-	const dimension = 128
+	const dimension = 1024
 	const totalCount = 100000
 	const chunkSize = 10000
+
+	dataset := make([]float32, totalCount*dimension)
+	for i := range dataset {
+		dataset[i] = rand.Float32()
+	}
 
 	// Use Float16 as internal type
 	index, err := NewGpuBruteForceEmpty[Float16](uint64(totalCount), dimension, L2Expanded, 8, 0)
@@ -173,14 +178,13 @@ func BenchmarkGpuAddChunkAndSearchBruteForceF16(b *testing.B) {
 	}
 	defer index.Destroy()
 
-	index.Start()
+	if err := index.Start(); err != nil {
+		b.Fatalf("Start failed: %v", err)
+	}
 
 	// Add data in chunks using AddChunkFloat
 	for i := 0; i < totalCount; i += chunkSize {
-		chunk := make([]float32, chunkSize*dimension)
-		for j := range chunk {
-			chunk[j] = rand.Float32()
-		}
+		chunk := dataset[i*dimension : (i+chunkSize)*dimension]
 		if err := index.AddChunkFloat(chunk, uint64(chunkSize)); err != nil {
 			b.Fatalf("AddChunkFloat failed at %d: %v", i, err)
 		}
@@ -190,6 +194,14 @@ func BenchmarkGpuAddChunkAndSearchBruteForceF16(b *testing.B) {
 		b.Fatalf("Build failed: %v", err)
 	}
 	index.Info()
+
+	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
+		neighbors, _, err := index.SearchFloat(queries, numQueries, dimension, limit)
+		if err != nil {
+			return nil, err
+		}
+		return neighbors, nil
+	})
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {

@@ -209,7 +209,7 @@ func BenchmarkGpuShardedIvfFlat(b *testing.B) {
 	}
 
 	bp := DefaultIvfFlatBuildParams()
-	bp.NLists = 100
+	bp.NLists = 1000
 	index, err := NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, Sharded)
 	if err != nil {
 		b.Fatalf("Failed to create sharded IVF-Flat: %v", err)
@@ -225,11 +225,20 @@ func BenchmarkGpuShardedIvfFlat(b *testing.B) {
 	index.Info()
 
 	sp := DefaultIvfFlatSearchParams()
-	sp.NProbes = 10
+	sp.NProbes = 3
 
 	for _, useBatching := range []bool{false, true} {
 		b.Run(fmt.Sprintf("Batching%v", useBatching), func(b *testing.B) {
 			index.SetUseBatching(useBatching)
+
+			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
+				res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+				if err != nil {
+					return nil, err
+				}
+				return res.Neighbors, nil
+			})
+
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
 				queries := make([]float32, dimension)
@@ -258,7 +267,7 @@ func BenchmarkGpuSingleIvfFlat(b *testing.B) {
 	}
 
 	bp := DefaultIvfFlatBuildParams()
-	bp.NLists = 100
+	bp.NLists = 1000
 	index, err := NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, SingleGpu)
 	if err != nil {
 		b.Fatalf("Failed to create single IVF-Flat: %v", err)
@@ -274,11 +283,20 @@ func BenchmarkGpuSingleIvfFlat(b *testing.B) {
 	index.Info()
 
 	sp := DefaultIvfFlatSearchParams()
-	sp.NProbes = 10
+	sp.NProbes = 3
 
 	for _, useBatching := range []bool{false, true} {
 		b.Run(fmt.Sprintf("Batching%v", useBatching), func(b *testing.B) {
 			index.SetUseBatching(useBatching)
+
+			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
+				res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+				if err != nil {
+					return nil, err
+				}
+				return res.Neighbors, nil
+			})
+
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
 				queries := make([]float32, dimension)
@@ -310,7 +328,7 @@ func BenchmarkGpuReplicatedIvfFlat(b *testing.B) {
 	}
 
 	bp := DefaultIvfFlatBuildParams()
-	bp.NLists = 100
+	bp.NLists = 1000
 	index, err := NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, Replicated)
 	if err != nil {
 		b.Fatalf("Failed to create replicated IVF-Flat: %v", err)
@@ -326,11 +344,20 @@ func BenchmarkGpuReplicatedIvfFlat(b *testing.B) {
 	index.Info()
 
 	sp := DefaultIvfFlatSearchParams()
-	sp.NProbes = 10
+	sp.NProbes = 3
 
 	for _, useBatching := range []bool{false, true} {
 		b.Run(fmt.Sprintf("Batching%v", useBatching), func(b *testing.B) {
 			index.SetUseBatching(useBatching)
+
+			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
+				res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+				if err != nil {
+					return nil, err
+				}
+				return res.Neighbors, nil
+			})
+
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
 				queries := make([]float32, dimension)
@@ -349,13 +376,18 @@ func BenchmarkGpuReplicatedIvfFlat(b *testing.B) {
 }
 
 func BenchmarkGpuAddChunkAndSearchIvfFlatF16(b *testing.B) {
-	const dimension = 128
+	const dimension = 1024
 	const totalCount = 100000
 	const chunkSize = 10000
 
+	dataset := make([]float32, totalCount*dimension)
+	for i := range dataset {
+		dataset[i] = rand.Float32()
+	}
+
 	devices := []int{0}
 	bp := DefaultIvfFlatBuildParams()
-	bp.NLists = 100
+	bp.NLists = 1000
 	// Use Float16 as internal type
 	index, err := NewGpuIvfFlatEmpty[Float16](uint64(totalCount), dimension, L2Expanded, bp, devices, 8, SingleGpu)
 	if err != nil {
@@ -369,10 +401,7 @@ func BenchmarkGpuAddChunkAndSearchIvfFlatF16(b *testing.B) {
 
 	// Add data in chunks using AddChunkFloat
 	for i := 0; i < totalCount; i += chunkSize {
-		chunk := make([]float32, chunkSize*dimension)
-		for j := range chunk {
-			chunk[j] = rand.Float32()
-		}
+		chunk := dataset[i*dimension : (i+chunkSize)*dimension]
 		if err := index.AddChunkFloat(chunk, uint64(chunkSize)); err != nil {
 			b.Fatalf("AddChunkFloat failed at %d: %v", i, err)
 		}
@@ -384,7 +413,15 @@ func BenchmarkGpuAddChunkAndSearchIvfFlatF16(b *testing.B) {
 	index.Info()
 
 	sp := DefaultIvfFlatSearchParams()
-	sp.NProbes = 10
+	sp.NProbes = 3
+
+	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
+		res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+		if err != nil {
+			return nil, err
+		}
+		return res.Neighbors, nil
+	})
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -402,13 +439,18 @@ func BenchmarkGpuAddChunkAndSearchIvfFlatF16(b *testing.B) {
 }
 
 func BenchmarkGpuAddChunkAndSearchIvfFlatInt8(b *testing.B) {
-	const dimension = 128
+	const dimension = 1024
 	const totalCount = 100000
 	const chunkSize = 10000
 
+	dataset := make([]float32, totalCount*dimension)
+	for i := range dataset {
+		dataset[i] = rand.Float32()
+	}
+
 	devices := []int{0}
 	bp := DefaultIvfFlatBuildParams()
-	bp.NLists = 100
+	bp.NLists = 1000
 	// Use int8 as internal type
 	index, err := NewGpuIvfFlatEmpty[int8](uint64(totalCount), dimension, L2Expanded, bp, devices, 8, SingleGpu)
 	if err != nil {
@@ -422,10 +464,7 @@ func BenchmarkGpuAddChunkAndSearchIvfFlatInt8(b *testing.B) {
 
 	// Add data in chunks using AddChunkFloat
 	for i := 0; i < totalCount; i += chunkSize {
-		chunk := make([]float32, chunkSize*dimension)
-		for j := range chunk {
-			chunk[j] = rand.Float32()
-		}
+		chunk := dataset[i*dimension : (i+chunkSize)*dimension]
 		if err := index.AddChunkFloat(chunk, uint64(chunkSize)); err != nil {
 			b.Fatalf("AddChunkFloat failed at %d: %v", i, err)
 		}
@@ -437,7 +476,15 @@ func BenchmarkGpuAddChunkAndSearchIvfFlatInt8(b *testing.B) {
 	index.Info()
 
 	sp := DefaultIvfFlatSearchParams()
-	sp.NProbes = 10
+	sp.NProbes = 3
+
+	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
+		res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+		if err != nil {
+			return nil, err
+		}
+		return res.Neighbors, nil
+	})
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -499,7 +546,7 @@ func TestGpuIvfFlatChunked(t *testing.T) {
 		query1[i] = -128 // matches first chunk (1.0)
 	}
 	sp := DefaultIvfFlatSearchParams()
-	sp.NProbes = 10
+	sp.NProbes = 3
 	result1, err := index.Search(query1, 1, dimension, 1, sp)
 	if err != nil {
 		t.Fatalf("Search 1 failed: %v", err)
