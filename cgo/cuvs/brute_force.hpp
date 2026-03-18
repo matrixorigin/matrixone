@@ -143,30 +143,7 @@ public:
 
         uint64_t job_id = this->worker->submit_main(
             [&](raft_handle_wrapper_t& handle) -> std::any {
-                auto res = handle.get_raft_resources();
-                if (this->flattened_host_dataset.empty()) {
-                    index = nullptr;
-                    return std::any();
-                }
-
-                auto dataset_device = new auto(raft::make_device_matrix<T, int64_t, raft::layout_c_contiguous>(
-                    *res, static_cast<int64_t>(this->count), static_cast<int64_t>(this->dimension)));
-                
-                this->dataset_device_ptr_ = std::shared_ptr<void>(dataset_device, [](void* ptr) {
-                    delete static_cast<raft::device_matrix<T, int64_t, raft::layout_c_contiguous>*>(ptr);
-                });
-
-                RAFT_CUDA_TRY(cudaMemcpyAsync(dataset_device->data_handle(), this->flattened_host_dataset.data(),
-                                         this->flattened_host_dataset.size() * sizeof(T), cudaMemcpyHostToDevice,
-                                         raft::resource::get_cuda_stream(*res)));
-
-                cuvs::neighbors::brute_force::index_params index_params;
-                index_params.metric = this->metric;
-
-                index = std::make_unique<cuvs::neighbors::brute_force::index<T, float>>(
-                    cuvs::neighbors::brute_force::build(*res, index_params, raft::make_const_mdspan(dataset_device->view())));
-
-                raft::resource::sync_stream(*res);
+                this->build_internal(handle);
                 return std::any();
             }
         );
@@ -177,6 +154,36 @@ public:
         // Clear host dataset after building to save memory
         this->flattened_host_dataset.clear();
         this->flattened_host_dataset.shrink_to_fit();
+    }
+
+    /**
+     * @brief Internal build implementation (no worker submission)
+     */
+    void build_internal(raft_handle_wrapper_t& handle) {
+        auto res = handle.get_raft_resources();
+        if (this->flattened_host_dataset.empty()) {
+            index = nullptr;
+            return;
+        }
+
+        auto dataset_device = new auto(raft::make_device_matrix<T, int64_t, raft::layout_c_contiguous>(
+            *res, static_cast<int64_t>(this->count), static_cast<int64_t>(this->dimension)));
+        
+        this->dataset_device_ptr_ = std::shared_ptr<void>(dataset_device, [](void* ptr) {
+            delete static_cast<raft::device_matrix<T, int64_t, raft::layout_c_contiguous>*>(ptr);
+        });
+
+        RAFT_CUDA_TRY(cudaMemcpyAsync(dataset_device->data_handle(), this->flattened_host_dataset.data(),
+                                    this->flattened_host_dataset.size() * sizeof(T), cudaMemcpyHostToDevice,
+                                    raft::resource::get_cuda_stream(*res)));
+
+        cuvs::neighbors::brute_force::index_params index_params;
+        index_params.metric = this->metric;
+
+        index = std::make_unique<cuvs::neighbors::brute_force::index<T, float>>(
+            cuvs::neighbors::brute_force::build(*res, index_params, raft::make_const_mdspan(dataset_device->view())));
+
+        raft::resource::sync_stream(*res);
     }
 
     /**

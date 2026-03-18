@@ -126,32 +126,39 @@ public:
 
         uint64_t job_id = this->worker->submit_main(
             [&, X_data, n_samples](raft_handle_wrapper_t& handle) -> std::any {
-                std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                auto res = handle.get_raft_resources();
-                
-                auto X_device = raft::make_device_matrix<T, int64_t>(
-                    *res, static_cast<int64_t>(n_samples), static_cast<int64_t>(this->dimension));
-                
-                RAFT_CUDA_TRY(cudaMemcpyAsync(X_device.data_handle(), X_data,
-                                         n_samples * this->dimension * sizeof(T), cudaMemcpyHostToDevice,
-                                         raft::resource::get_cuda_stream(*res)));
-
-                if (!centroids_) {
-                    centroids_ = std::make_unique<raft::device_matrix<CentroidT, int64_t>>(
-                        raft::make_device_matrix<CentroidT, int64_t>(*res, static_cast<int64_t>(n_clusters), static_cast<int64_t>(this->dimension)));
-                }
-
-                cuvs::cluster::kmeans::fit(*res, params, 
-                                           raft::make_const_mdspan(X_device.view()), 
-                                           centroids_->view());
-
-                raft::resource::sync_stream(*res);
-                return fit_result_t{0.0f, static_cast<int64_t>(params.n_iters)};
+                return this->fit_internal(handle, X_data, n_samples);
             }
         );
         auto result = this->worker->wait(job_id).get();
         if (result.error) std::rethrow_exception(result.error);
         return std::any_cast<fit_result_t>(result.result);
+    }
+
+    /**
+     * @brief Internal fit implementation (no worker submission)
+     */
+    fit_result_t fit_internal(raft_handle_wrapper_t& handle, const T* X_data, uint64_t n_samples) {
+        std::unique_lock<std::shared_mutex> lock(this->mutex_);
+        auto res = handle.get_raft_resources();
+        
+        auto X_device = raft::make_device_matrix<T, int64_t>(
+            *res, static_cast<int64_t>(n_samples), static_cast<int64_t>(this->dimension));
+        
+        RAFT_CUDA_TRY(cudaMemcpyAsync(X_device.data_handle(), X_data,
+                                    n_samples * this->dimension * sizeof(T), cudaMemcpyHostToDevice,
+                                    raft::resource::get_cuda_stream(*res)));
+
+        if (!centroids_) {
+            centroids_ = std::make_unique<raft::device_matrix<CentroidT, int64_t>>(
+                raft::make_device_matrix<CentroidT, int64_t>(*res, static_cast<int64_t>(n_clusters), static_cast<int64_t>(this->dimension)));
+        }
+
+        cuvs::cluster::kmeans::fit(*res, params, 
+                                    raft::make_const_mdspan(X_device.view()), 
+                                    centroids_->view());
+
+        raft::resource::sync_stream(*res);
+        return fit_result_t{0.0f, static_cast<int64_t>(params.n_iters)};
     }
 
     /**
