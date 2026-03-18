@@ -27,10 +27,10 @@ import (
 // trivialGroupCtx satisfies AggGroupExecContext with no-op marshal/unmarshal.
 type trivialGroupCtx struct{}
 
-func (trivialGroupCtx) Marshal() []byte                  { return nil }
-func (trivialGroupCtx) MarshalBinary() ([]byte, error)   { return nil, nil }
-func (trivialGroupCtx) Unmarshal([]byte)                 {}
-func (trivialGroupCtx) Size() int64                      { return 0 }
+func (trivialGroupCtx) Marshal() []byte                { return nil }
+func (trivialGroupCtx) MarshalBinary() ([]byte, error) { return nil, nil }
+func (trivialGroupCtx) Unmarshal([]byte)               {}
+func (trivialGroupCtx) Size() int64                    { return 0 }
 
 // TestGrowGroupContexts exercises growGroupContexts via an agg registered with
 // a non-nil initGroupContext.
