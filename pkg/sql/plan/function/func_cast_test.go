@@ -2111,3 +2111,78 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 		})
 	}
 }
+
+// Test_strToArray_DimensionCheck tests that strToArray correctly validates
+// vector dimension against the target type's width (vecf32(N) / vecf64(N)).
+// This is the regression test for https://github.com/matrixorigin/matrixone/issues/23872
+func Test_strToArray_DimensionCheck(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// vecf32(3): dimension match should succeed
+	tc1 := tcTemp{
+		info: "str to vecf32(3) - dimension match",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"[1,2,3]"}, nil),
+			NewFunctionTestInput(types.New(types.T_array_float32, 3, 0), [][]float32{}, nil),
+		},
+		expect: NewFunctionTestResult(types.New(types.T_array_float32, 3, 0), false,
+			[][]float32{{1, 2, 3}}, []bool{false}),
+	}
+	fcTC := NewFunctionTestCase(proc, tc1.inputs, tc1.expect, NewCast)
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc1.info, info))
+
+	// vecf32(3): dimension mismatch (5-dim into vecf32(3)) should fail
+	tc2 := tcTemp{
+		info: "str to vecf32(3) - dimension mismatch should error",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"[1,2,3,4,5]"}, nil),
+			NewFunctionTestInput(types.New(types.T_array_float32, 3, 0), [][]float32{}, nil),
+		},
+		expect: NewFunctionTestResult(types.New(types.T_array_float32, 3, 0), true, nil, nil),
+	}
+	fcTC = NewFunctionTestCase(proc, tc2.inputs, tc2.expect, NewCast)
+	s, info = fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc2.info, info))
+
+	// vecf64(3): dimension match should succeed
+	tc3 := tcTemp{
+		info: "str to vecf64(3) - dimension match",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"[1,2,3]"}, nil),
+			NewFunctionTestInput(types.New(types.T_array_float64, 3, 0), [][]float64{}, nil),
+		},
+		expect: NewFunctionTestResult(types.New(types.T_array_float64, 3, 0), false,
+			[][]float64{{1, 2, 3}}, []bool{false}),
+	}
+	fcTC = NewFunctionTestCase(proc, tc3.inputs, tc3.expect, NewCast)
+	s, info = fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc3.info, info))
+
+	// vecf64(3): dimension mismatch (5-dim into vecf64(3)) should fail
+	tc4 := tcTemp{
+		info: "str to vecf64(3) - dimension mismatch should error",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"[1,2,3,4,5]"}, nil),
+			NewFunctionTestInput(types.New(types.T_array_float64, 3, 0), [][]float64{}, nil),
+		},
+		expect: NewFunctionTestResult(types.New(types.T_array_float64, 3, 0), true, nil, nil),
+	}
+	fcTC = NewFunctionTestCase(proc, tc4.inputs, tc4.expect, NewCast)
+	s, info = fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc4.info, info))
+
+	// vecf32(MaxArrayDimension): should bypass dimension check (any dimension accepted)
+	tc5 := tcTemp{
+		info: "str to vecf32(MaxDim) - bypass dimension check",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"[1,2,3,4,5]"}, nil),
+			NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{}, nil),
+		},
+		expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
+			[][]float32{{1, 2, 3, 4, 5}}, []bool{false}),
+	}
+	fcTC = NewFunctionTestCase(proc, tc5.inputs, tc5.expect, NewCast)
+	s, info = fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc5.info, info))
+}
