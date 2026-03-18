@@ -430,14 +430,6 @@ func BenchmarkGpuShardedCagra(b *testing.B) {
 		b.Run(fmt.Sprintf("Batching%v", useBatching), func(b *testing.B) {
 			index.SetUseBatching(useBatching)
 
-			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]uint32, error) {
-				res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
-				if err != nil {
-					return nil, err
-				}
-				return res.Neighbors, nil
-			})
-
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
 				queries := make([]float32, dimension)
@@ -450,6 +442,14 @@ func BenchmarkGpuShardedCagra(b *testing.B) {
 						b.Fatalf("Search failed: %v", err)
 					}
 				}
+			})
+			b.StopTimer()
+			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]uint32, error) {
+				res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+				if err != nil {
+					return nil, err
+				}
+				return res.Neighbors, nil
 			})
 		})
 	}
@@ -490,14 +490,6 @@ func BenchmarkGpuSingleCagra(b *testing.B) {
 		b.Run(fmt.Sprintf("Batching%v", useBatching), func(b *testing.B) {
 			index.SetUseBatching(useBatching)
 
-			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]uint32, error) {
-				res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
-				if err != nil {
-					return nil, err
-				}
-				return res.Neighbors, nil
-			})
-
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
 				queries := make([]float32, dimension)
@@ -510,6 +502,14 @@ func BenchmarkGpuSingleCagra(b *testing.B) {
 						b.Fatalf("Search failed: %v", err)
 					}
 				}
+			})
+			b.StopTimer()
+			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]uint32, error) {
+				res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+				if err != nil {
+					return nil, err
+				}
+				return res.Neighbors, nil
 			})
 		})
 	}
@@ -553,14 +553,6 @@ func BenchmarkGpuReplicatedCagra(b *testing.B) {
 		b.Run(fmt.Sprintf("Batching%v", useBatching), func(b *testing.B) {
 			index.SetUseBatching(useBatching)
 
-			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]uint32, error) {
-				res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
-				if err != nil {
-					return nil, err
-				}
-				return res.Neighbors, nil
-			})
-
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
 				queries := make([]float32, dimension)
@@ -573,6 +565,14 @@ func BenchmarkGpuReplicatedCagra(b *testing.B) {
 						b.Fatalf("Search failed: %v", err)
 					}
 				}
+			})
+			b.StopTimer()
+			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]uint32, error) {
+				res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+				if err != nil {
+					return nil, err
+				}
+				return res.Neighbors, nil
 			})
 		})
 	}
@@ -620,14 +620,6 @@ func BenchmarkGpuAddChunkAndSearchCagraF16(b *testing.B) {
 	sp.ItopkSize = 128
 	sp.SearchWidth = 3
 
-	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]uint32, error) {
-		res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
-		if err != nil {
-			return nil, err
-		}
-		return res.Neighbors, nil
-	})
-
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		queries := make([]float32, dimension)
@@ -640,6 +632,14 @@ func BenchmarkGpuAddChunkAndSearchCagraF16(b *testing.B) {
 				b.Fatalf("Search failed: %v", err)
 			}
 		}
+	})
+	b.StopTimer()
+	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]uint32, error) {
+		res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+		if err != nil {
+			return nil, err
+		}
+		return res.Neighbors, nil
 	})
 }
 
@@ -685,14 +685,6 @@ func BenchmarkGpuAddChunkAndSearchCagraInt8(b *testing.B) {
 	sp.ItopkSize = 128
 	sp.SearchWidth = 3
 
-	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]uint32, error) {
-		res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
-		if err != nil {
-			return nil, err
-		}
-		return res.Neighbors, nil
-	})
-
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		queries := make([]float32, dimension)
@@ -705,5 +697,13 @@ func BenchmarkGpuAddChunkAndSearchCagraInt8(b *testing.B) {
 				b.Fatalf("Search failed: %v", err)
 			}
 		}
+	})
+	b.StopTimer()
+	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]uint32, error) {
+		res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+		if err != nil {
+			return nil, err
+		}
+		return res.Neighbors, nil
 	})
 }

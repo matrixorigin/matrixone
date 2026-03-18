@@ -56,7 +56,7 @@ func testIvfFlatGetCenters[T VectorType](t *testing.T, name string) {
 		if len(centers) != expectedLen {
 			t.Errorf("Expected centers length %d, got %d", expectedLen, len(centers))
 		}
-		
+
 		// Check that centers are not all zeros (simple sanity check)
 		allZeros := true
 		for _, v := range centers {

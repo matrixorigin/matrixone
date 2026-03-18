@@ -195,14 +195,6 @@ func BenchmarkGpuAddChunkAndSearchBruteForceF16(b *testing.B) {
 	}
 	index.Info()
 
-	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
-		neighbors, _, err := index.SearchFloat(queries, numQueries, dimension, limit)
-		if err != nil {
-			return nil, err
-		}
-		return neighbors, nil
-	})
-
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		queries := make([]float32, dimension)
@@ -215,5 +207,13 @@ func BenchmarkGpuAddChunkAndSearchBruteForceF16(b *testing.B) {
 				b.Fatalf("Search failed: %v", err)
 			}
 		}
+	})
+	b.StopTimer()
+	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
+		neighbors, _, err := index.SearchFloat(queries, numQueries, dimension, limit)
+		if err != nil {
+			return nil, err
+		}
+		return neighbors, nil
 	})
 }

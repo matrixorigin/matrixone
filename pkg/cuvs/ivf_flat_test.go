@@ -231,6 +231,20 @@ func BenchmarkGpuShardedIvfFlat(b *testing.B) {
 		b.Run(fmt.Sprintf("Batching%v", useBatching), func(b *testing.B) {
 			index.SetUseBatching(useBatching)
 
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				queries := make([]float32, dimension)
+				for i := range queries {
+					queries[i] = rand.Float32()
+				}
+				for pb.Next() {
+					_, err := index.SearchFloat(queries, 1, dimension, 10, sp)
+					if err != nil {
+						b.Fatalf("Search failed: %v", err)
+					}
+				}
+			})
+			b.StopTimer()
 			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
 				res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
 				if err != nil {
@@ -239,19 +253,6 @@ func BenchmarkGpuShardedIvfFlat(b *testing.B) {
 				return res.Neighbors, nil
 			})
 
-			b.ResetTimer()
-			b.RunParallel(func(pb *testing.PB) {
-				queries := make([]float32, dimension)
-				for i := range queries {
-					queries[i] = rand.Float32()
-				}
-				for pb.Next() {
-					_, err := index.Search(queries, 1, dimension, 10, sp)
-					if err != nil {
-						b.Fatalf("Search failed: %v", err)
-					}
-				}
-			})
 		})
 	}
 }
@@ -289,6 +290,20 @@ func BenchmarkGpuSingleIvfFlat(b *testing.B) {
 		b.Run(fmt.Sprintf("Batching%v", useBatching), func(b *testing.B) {
 			index.SetUseBatching(useBatching)
 
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				queries := make([]float32, dimension)
+				for i := range queries {
+					queries[i] = rand.Float32()
+				}
+				for pb.Next() {
+					_, err := index.SearchFloat(queries, 1, dimension, 10, sp)
+					if err != nil {
+						b.Fatalf("Search failed: %v", err)
+					}
+				}
+			})
+			b.StopTimer()
 			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
 				res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
 				if err != nil {
@@ -297,19 +312,6 @@ func BenchmarkGpuSingleIvfFlat(b *testing.B) {
 				return res.Neighbors, nil
 			})
 
-			b.ResetTimer()
-			b.RunParallel(func(pb *testing.PB) {
-				queries := make([]float32, dimension)
-				for i := range queries {
-					queries[i] = rand.Float32()
-				}
-				for pb.Next() {
-					_, err := index.Search(queries, 1, dimension, 10, sp)
-					if err != nil {
-						b.Fatalf("Search failed: %v", err)
-					}
-				}
-			})
 		})
 	}
 }
@@ -350,6 +352,20 @@ func BenchmarkGpuReplicatedIvfFlat(b *testing.B) {
 		b.Run(fmt.Sprintf("Batching%v", useBatching), func(b *testing.B) {
 			index.SetUseBatching(useBatching)
 
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				queries := make([]float32, dimension)
+				for i := range queries {
+					queries[i] = rand.Float32()
+				}
+				for pb.Next() {
+					_, err := index.SearchFloat(queries, 1, dimension, 10, sp)
+					if err != nil {
+						b.Fatalf("Search failed: %v", err)
+					}
+				}
+			})
+			b.StopTimer()
 			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
 				res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
 				if err != nil {
@@ -358,19 +374,6 @@ func BenchmarkGpuReplicatedIvfFlat(b *testing.B) {
 				return res.Neighbors, nil
 			})
 
-			b.ResetTimer()
-			b.RunParallel(func(pb *testing.PB) {
-				queries := make([]float32, dimension)
-				for i := range queries {
-					queries[i] = rand.Float32()
-				}
-				for pb.Next() {
-					_, err := index.Search(queries, 1, dimension, 10, sp)
-					if err != nil {
-						b.Fatalf("Search failed: %v", err)
-					}
-				}
-			})
 		})
 	}
 }
@@ -415,14 +418,6 @@ func BenchmarkGpuAddChunkAndSearchIvfFlatF16(b *testing.B) {
 	sp := DefaultIvfFlatSearchParams()
 	sp.NProbes = 3
 
-	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
-		res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
-		if err != nil {
-			return nil, err
-		}
-		return res.Neighbors, nil
-	})
-
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		queries := make([]float32, dimension)
@@ -436,6 +431,15 @@ func BenchmarkGpuAddChunkAndSearchIvfFlatF16(b *testing.B) {
 			}
 		}
 	})
+	b.StopTimer()
+	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
+		res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+		if err != nil {
+			return nil, err
+		}
+		return res.Neighbors, nil
+	})
+
 }
 
 func BenchmarkGpuAddChunkAndSearchIvfFlatInt8(b *testing.B) {
@@ -478,14 +482,6 @@ func BenchmarkGpuAddChunkAndSearchIvfFlatInt8(b *testing.B) {
 	sp := DefaultIvfFlatSearchParams()
 	sp.NProbes = 3
 
-	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
-		res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
-		if err != nil {
-			return nil, err
-		}
-		return res.Neighbors, nil
-	})
-
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		queries := make([]float32, dimension)
@@ -499,6 +495,15 @@ func BenchmarkGpuAddChunkAndSearchIvfFlatInt8(b *testing.B) {
 			}
 		}
 	})
+	b.StopTimer()
+	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
+		res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
+		if err != nil {
+			return nil, err
+		}
+		return res.Neighbors, nil
+	})
+
 }
 
 func TestGpuIvfFlatChunked(t *testing.T) {

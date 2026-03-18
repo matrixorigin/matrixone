@@ -17,7 +17,7 @@
 package cuvs
 
 import (
-	"fmt"
+	//"fmt"
 	"math/rand"
 	"testing"
 )
@@ -35,14 +35,14 @@ func GenerateRandomDataset(n_vectors uint64, dimension uint32) []float32 {
 	return dataset
 }
 
-// ReportRecall reports the self-recall for an index. 
+// ReportRecall reports the self-recall for an index.
 // It verifies that querying with a point already in the index returns that point's ID.
 func ReportRecall[T NeighborType](b *testing.B, dataset []float32, n_vectors uint64, dimension uint32, limit uint32, searchFunc func(queries []float32, numQueries uint64, limit uint32) ([]T, error)) {
 	numQueries := uint64(100)
 	if n_vectors < numQueries {
 		numQueries = n_vectors
 	}
-	
+
 	// Use the first numQueries vectors from the dataset as queries.
 	// Since these are the first vectors, we expect their IDs to be 0, 1, 2, ..., numQueries-1.
 	recallQueries := dataset[:numQueries*uint64(dimension)]
@@ -71,6 +71,6 @@ func ReportRecall[T NeighborType](b *testing.B, dataset []float32, n_vectors uin
 	}
 
 	recall := float64(hitCount) / float64(numQueries)
-	fmt.Printf("Benchmark %s: self_recall_at_%d = %.4f\n", b.Name(), int(limit), recall)
-	b.ReportMetric(recall, "self-recall")
+	//fmt.Printf("Benchmark %s: self_recall_at_%d = %.4f\n", b.Name(), int(limit), recall)
+	b.ReportMetric(recall*float64(b.N), "recall")
 }
