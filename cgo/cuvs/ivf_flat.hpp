@@ -101,7 +101,9 @@ public:
         this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_, force_mg || (this->devices_.size() > 1));
 
         this->flattened_host_dataset.resize(this->count * this->dimension);
-        std::copy(dataset_data, dataset_data + (this->count * this->dimension), this->flattened_host_dataset.begin());
+        if (dataset_data) {
+            std::copy(dataset_data, dataset_data + (this->count * this->dimension), this->flattened_host_dataset.begin());
+        }
     }
 
     // Constructor for chunked input (pre-allocates)
@@ -138,6 +140,17 @@ public:
 
         bool force_mg = (mode == DistributionMode_SHARDED || mode == DistributionMode_REPLICATED);
         this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_, force_mg || (this->devices_.size() > 1));
+    }
+
+    void destroy() override {
+        if (this->worker) {
+            this->worker->stop();
+        }
+        std::unique_lock<std::shared_mutex> lock(this->mutex_);
+        index_.reset();
+        mg_index_.reset();
+        this->quantizer_.reset();
+        this->dataset_device_ptr_.reset();
     }
 
     /**
@@ -320,6 +333,13 @@ public:
             return std::any_cast<search_result_t>(result_wait.result);
         }
 
+        return this->search_batch_internal(queries_data, num_queries, limit, sp);
+    }
+
+    /**
+     * @brief Internal batch search implementation
+     */
+    search_result_t search_batch_internal(const T* queries_data, uint64_t num_queries, uint32_t limit, const ivf_flat_search_params_t& sp) {
         // Dynamic batching for small query counts
         struct search_req_t {
             const T* data;
@@ -460,6 +480,13 @@ public:
             return std::any_cast<search_result_t>(result_wait.result);
         }
 
+        return this->search_float_batch_internal(queries_data, num_queries, limit, sp);
+    }
+
+    /**
+     * @brief Internal batch search implementation for float32 queries
+     */
+    search_result_t search_float_batch_internal(const float* queries_data, uint64_t num_queries, uint32_t limit, const ivf_flat_search_params_t& sp) {
         // Dynamic batching for small query counts
         struct search_req_t {
             const float* data;
@@ -554,7 +581,8 @@ public:
 
             cuvs::neighbors::mg_search_params<cuvs::neighbors::ivf_flat::search_params> mg_search_params(search_params);
             cuvs::neighbors::ivf_flat::search(*res, *mg_index_, mg_search_params,
-                                                queries_host_target.view(), neighbors_host_view, distances_host_view);
+                                                queries_host_target.view(), 
+                                                neighbors_host_view, distances_host_view);
         } else if (local_index) {
             auto neighbors_device = raft::make_device_matrix<int64_t, int64_t, raft::layout_c_contiguous>(
                 *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
@@ -595,12 +623,15 @@ public:
                 auto res = handle.get_raft_resources();
                 
                 const ivf_flat_index* local_index = nullptr;
-                if (is_snmg_handle(res)) {
-                    for (const auto& iface : mg_index_->ann_interfaces_) {
-                        if (iface.index_.has_value()) { local_index = &iface.index_.value(); break; }
-                    }
-                } else {
+                if (index_) {
                     local_index = index_.get();
+                } else if (mg_index_) {
+                    for (const auto& iface : mg_index_->ann_interfaces_) {
+                        if (iface.index_.has_value()) {
+                            local_index = &iface.index_.value();
+                            break;
+                        }
+                    }
                 }
 
                 if (!local_index) return std::vector<T>{};
@@ -613,21 +644,19 @@ public:
                 RAFT_CUDA_TRY(cudaMemcpyAsync(host_centers.data(), centers_view.data_handle(),
                                          host_centers.size() * sizeof(T), cudaMemcpyDeviceToHost,
                                          raft::resource::get_cuda_stream(*res)));
-
+                
                 raft::resource::sync_stream(*res);
                 return host_centers;
             }
         );
 
-        cuvs_task_result_t result = this->worker->wait(job_id).get();
+        auto result = this->worker->wait(job_id).get();
         if (result.error) std::rethrow_exception(result.error);
         return std::any_cast<std::vector<T>>(result.result);
     }
 
     uint32_t get_n_list() {
         std::shared_lock<std::shared_mutex> lock(this->mutex_);
-        if (!this->is_loaded_) return this->build_params.n_lists;
-        
         if (index_) return static_cast<uint32_t>(index_->n_lists());
         if (mg_index_) {
             for (const auto& iface : mg_index_->ann_interfaces_) {

@@ -450,22 +450,32 @@ void gpu_ivf_flat_info(gpu_ivf_flat_c index_c, void* errmsg) {
     }
 }
 
-void gpu_ivf_flat_get_centers(gpu_ivf_flat_c index_c, float* centers, void* errmsg) {
+void gpu_ivf_flat_get_centers(gpu_ivf_flat_c index_c, void* centers, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         auto* any = static_cast<gpu_ivf_flat_any_t*>(index_c);
-        if (any->qtype == Quantization_F32) {
-            auto host_centers = static_cast<matrixone::gpu_ivf_flat_t<float>*>(any->ptr)->get_centers();
-            std::copy(host_centers.begin(), host_centers.end(), centers);
-        } else if (any->qtype == Quantization_F16) {
-            auto host_centers = static_cast<matrixone::gpu_ivf_flat_t<half>*>(any->ptr)->get_centers();
-            for (size_t i = 0; i < host_centers.size(); ++i) centers[i] = (float)host_centers[i];
-        } else if (any->qtype == Quantization_INT8) {
-            auto host_centers = static_cast<matrixone::gpu_ivf_flat_t<int8_t>*>(any->ptr)->get_centers();
-            for (size_t i = 0; i < host_centers.size(); ++i) centers[i] = (float)host_centers[i];
-        } else if (any->qtype == Quantization_UINT8) {
-            auto host_centers = static_cast<matrixone::gpu_ivf_flat_t<uint8_t>*>(any->ptr)->get_centers();
-            for (size_t i = 0; i < host_centers.size(); ++i) centers[i] = (float)host_centers[i];
+        switch (any->qtype) {
+            case Quantization_F32: {
+                auto host_centers = static_cast<matrixone::gpu_ivf_flat_t<float>*>(any->ptr)->get_centers();
+                std::copy(host_centers.begin(), host_centers.end(), static_cast<float*>(centers));
+                break;
+            }
+            case Quantization_F16: {
+                auto host_centers = static_cast<matrixone::gpu_ivf_flat_t<half>*>(any->ptr)->get_centers();
+                std::copy(host_centers.begin(), host_centers.end(), static_cast<half*>(centers));
+                break;
+            }
+            case Quantization_INT8: {
+                auto host_centers = static_cast<matrixone::gpu_ivf_flat_t<int8_t>*>(any->ptr)->get_centers();
+                std::copy(host_centers.begin(), host_centers.end(), static_cast<int8_t*>(centers));
+                break;
+            }
+            case Quantization_UINT8: {
+                auto host_centers = static_cast<matrixone::gpu_ivf_flat_t<uint8_t>*>(any->ptr)->get_centers();
+                std::copy(host_centers.begin(), host_centers.end(), static_cast<uint8_t*>(centers));
+                break;
+            }
+            default: throw std::runtime_error("Unsupported quantization type");
         }
     } catch (const std::exception& e) {
         set_errmsg(errmsg, "Error in gpu_ivf_flat_get_centers", e.what());

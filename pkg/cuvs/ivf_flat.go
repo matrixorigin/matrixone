@@ -553,13 +553,13 @@ func (gi *GpuIvfFlat[T]) Info() error {
 }
 
 // GetCenters retrieves the trained centroids.
-func (gi *GpuIvfFlat[T]) GetCenters(nLists uint32) ([]float32, error) {
+func (gi *GpuIvfFlat[T]) GetCenters(nLists uint32) ([]T, error) {
 	if gi.cIvfFlat == nil {
 		return nil, moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
-	centers := make([]float32, nLists*gi.dimension)
+	centers := make([]T, nLists*gi.dimension)
 	var errmsg *C.char
-	C.gpu_ivf_flat_get_centers(gi.cIvfFlat, (*C.float)(&centers[0]), unsafe.Pointer(&errmsg))
+	C.gpu_ivf_flat_get_centers(gi.cIvfFlat, unsafe.Pointer(&centers[0]), unsafe.Pointer(&errmsg))
 	runtime.KeepAlive(centers)
 
 	if errmsg != nil {

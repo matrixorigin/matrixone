@@ -66,8 +66,7 @@ struct ivf_pq_search_result_t {
 };
 
 /**
- * @brief gpu_ivf_pq_t implements an IVF-PQ index that can run on a single GPU or sharded across multiple GPUs.
- * It automatically chooses between single-GPU and multi-GPU (SNMG) cuVS APIs based on the RAFT handle resources.
+ * @brief gpu_ivf_pq_t implements an IVF-PQ index that can run on a single GPU or sharded/replicated across multiple GPUs.
  */
 template <typename T>
 class gpu_ivf_pq_t : public gpu_index_base_t<T, ivf_pq_build_params_t> {
@@ -101,7 +100,9 @@ public:
         this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_, force_mg || (this->devices_.size() > 1));
 
         this->flattened_host_dataset.resize(this->count * this->dimension);
-        std::copy(dataset_data, dataset_data + (this->count * this->dimension), this->flattened_host_dataset.begin());
+        if (dataset_data) {
+            std::copy(dataset_data, dataset_data + (this->count * this->dimension), this->flattened_host_dataset.begin());
+        }
     }
 
     // Constructor for chunked input (pre-allocates)
@@ -162,6 +163,17 @@ public:
         this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_, force_mg || (this->devices_.size() > 1));
     }
 
+    void destroy() override {
+        if (this->worker) {
+            this->worker->stop();
+        }
+        std::unique_lock<std::shared_mutex> lock(this->mutex_);
+        index_.reset();
+        mg_index_.reset();
+        this->quantizer_.reset();
+        this->dataset_device_ptr_.reset();
+    }
+
     /**
      * @brief Starts the worker and initializes resources.
      */
@@ -175,6 +187,7 @@ public:
             index_.reset();
             mg_index_.reset();
             this->quantizer_.reset();
+            this->dataset_device_ptr_.reset();
             return std::any();
         };
 
@@ -335,6 +348,13 @@ public:
             return std::any_cast<search_result_t>(result_wait.result);
         }
 
+        return this->search_batch_internal(queries_data, num_queries, limit, sp);
+    }
+
+    /**
+     * @brief Internal batch search implementation
+     */
+    search_result_t search_batch_internal(const T* queries_data, uint64_t num_queries, uint32_t limit, const ivf_pq_search_params_t& sp) {
         // Dynamic batching for small query counts
         struct search_req_t {
             const T* data;
@@ -356,6 +376,76 @@ public:
             }
 
             auto results = this->search_internal(handle, aggregated_queries.data(), total_queries, this->dimension, limit, sp);
+
+            offset = 0;
+            for (size_t i = 0; i < reqs.size(); ++i) {
+                auto req = std::any_cast<search_req_t>(reqs[i]);
+                search_result_t individual_res;
+                individual_res.neighbors.resize(req.n * limit);
+                individual_res.distances.resize(req.n * limit);
+                std::copy(results.neighbors.begin() + (offset * limit), results.neighbors.begin() + ((offset + req.n) * limit), individual_res.neighbors.begin());
+                std::copy(results.distances.begin() + (offset * limit), results.distances.begin() + ((offset + req.n) * limit), individual_res.distances.begin());
+                setters[i](individual_res);
+                offset += req.n;
+            }
+        };
+
+        auto future = this->worker->template submit_batched<search_result_t>(batch_key, search_req_t{queries_data, num_queries}, exec_fn);
+        return future.get();
+    }
+
+    /**
+     * @brief Performs IVF-PQ search for given float32 queries, with on-the-fly quantization if needed.
+     */
+    search_result_t search_float(const float* queries_data, uint64_t num_queries, uint32_t query_dimension, 
+                               uint32_t limit, const ivf_pq_search_params_t& sp) {
+        if constexpr (std::is_same_v<T, float>) {
+            return search(queries_data, num_queries, query_dimension, limit, sp);
+        }
+
+        if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
+        if (query_dimension != this->dimension) throw std::runtime_error("dimension mismatch");
+        if (!this->is_loaded_ || (!index_ && !mg_index_)) return search_result_t{};
+
+        if (num_queries > 16 || !this->worker->use_batching()) {
+            uint64_t job_id = this->worker->submit(
+                [&, num_queries, limit, sp, queries_data](raft_handle_wrapper_t& handle) -> std::any {
+                    return this->search_float_internal(handle, queries_data, num_queries, query_dimension, limit, sp);
+                }
+            );
+            auto result_wait = this->worker->wait(job_id).get();
+            if (result_wait.error) std::rethrow_exception(result_wait.error);
+            return std::any_cast<search_result_t>(result_wait.result);
+        }
+
+        return this->search_float_batch_internal(queries_data, num_queries, limit, sp);
+    }
+
+    /**
+     * @brief Internal batch search implementation for float32 queries
+     */
+    search_result_t search_float_batch_internal(const float* queries_data, uint64_t num_queries, uint32_t limit, const ivf_pq_search_params_t& sp) {
+        // Dynamic batching for small query counts
+        struct search_req_t {
+            const float* data;
+            uint64_t n;
+        };
+
+        std::string batch_key = "ivf_pq_sf_" + std::to_string((uintptr_t)this) + "_" + std::to_string(limit) + "_" + std::to_string(sp.n_probes);
+        
+        auto exec_fn = [this, limit, sp](cuvs_worker_t::raft_handle& handle, const std::vector<std::any>& reqs, const std::vector<std::function<void(std::any)>>& setters) {
+            uint64_t total_queries = 0;
+            for (const auto& r : reqs) total_queries += std::any_cast<search_req_t>(r).n;
+
+            std::vector<float> aggregated_queries(total_queries * this->dimension);
+            uint64_t offset = 0;
+            for (const auto& r : reqs) {
+                auto req = std::any_cast<search_req_t>(r);
+                std::copy(req.data, req.data + (req.n * this->dimension), aggregated_queries.begin() + (offset * this->dimension));
+                offset += req.n;
+            }
+
+            auto results = this->search_float_internal(handle, aggregated_queries.data(), total_queries, this->dimension, limit, sp);
 
             offset = 0;
             for (size_t i = 0; i < reqs.size(); ++i) {
@@ -452,70 +542,6 @@ public:
     }
 
     /**
-     * @brief Performs IVF-PQ search for given float32 queries, with on-the-fly quantization if needed.
-     */
-    search_result_t search_float(const float* queries_data, uint64_t num_queries, uint32_t query_dimension, 
-                        uint32_t limit, const ivf_pq_search_params_t& sp) {
-        if constexpr (std::is_same_v<T, float>) {
-            return search(queries_data, num_queries, query_dimension, limit, sp);
-        }
-
-        if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
-        if (query_dimension != this->dimension) throw std::runtime_error("dimension mismatch");
-        if (!this->is_loaded_ || (!index_ && !mg_index_)) return search_result_t{};
-
-        // For large batches or if batching is explicitly disabled, use standard path
-        if (num_queries > 16 || !this->worker->use_batching()) {
-            uint64_t job_id = this->worker->submit(
-                [&, num_queries, limit, sp, queries_data](raft_handle_wrapper_t& handle) -> std::any {
-                    return this->search_float_internal(handle, queries_data, num_queries, query_dimension, limit, sp);
-                }
-            );
-            auto result_wait = this->worker->wait(job_id).get();
-            if (result_wait.error) std::rethrow_exception(result_wait.error);
-            return std::any_cast<search_result_t>(result_wait.result);
-        }
-
-        // Dynamic batching for small query counts
-        struct search_req_t {
-            const float* data;
-            uint64_t n;
-        };
-
-        std::string batch_key = "ivf_pq_sf_" + std::to_string((uintptr_t)this) + "_" + std::to_string(limit) + "_" + std::to_string(sp.n_probes);
-        
-        auto exec_fn = [this, limit, sp](cuvs_worker_t::raft_handle& handle, const std::vector<std::any>& reqs, const std::vector<std::function<void(std::any)>>& setters) {
-            uint64_t total_queries = 0;
-            for (const auto& r : reqs) total_queries += std::any_cast<search_req_t>(r).n;
-
-            std::vector<float> aggregated_queries(total_queries * this->dimension);
-            uint64_t offset = 0;
-            for (const auto& r : reqs) {
-                auto req = std::any_cast<search_req_t>(r);
-                std::copy(req.data, req.data + (req.n * this->dimension), aggregated_queries.begin() + (offset * this->dimension));
-                offset += req.n;
-            }
-
-            auto results = this->search_float_internal(handle, aggregated_queries.data(), total_queries, this->dimension, limit, sp);
-
-            offset = 0;
-            for (size_t i = 0; i < reqs.size(); ++i) {
-                auto req = std::any_cast<search_req_t>(reqs[i]);
-                search_result_t individual_res;
-                individual_res.neighbors.resize(req.n * limit);
-                individual_res.distances.resize(req.n * limit);
-                std::copy(results.neighbors.begin() + (offset * limit), results.neighbors.begin() + ((offset + req.n) * limit), individual_res.neighbors.begin());
-                std::copy(results.distances.begin() + (offset * limit), results.distances.begin() + ((offset + req.n) * limit), individual_res.distances.begin());
-                setters[i](individual_res);
-                offset += req.n;
-            }
-        };
-
-        auto future = this->worker->template submit_batched<search_result_t>(batch_key, search_req_t{queries_data, num_queries}, exec_fn);
-        return future.get();
-    }
-
-    /**
      * @brief Internal search_float implementation (no worker submission)
      */
     search_result_t search_float_internal(raft_handle_wrapper_t& handle, const float* queries_data, uint64_t num_queries, uint32_t query_dimension, 
@@ -569,7 +595,8 @@ public:
 
             cuvs::neighbors::mg_search_params<cuvs::neighbors::ivf_pq::search_params> mg_search_params(search_params);
             cuvs::neighbors::ivf_pq::search(*res, *mg_index_, mg_search_params,
-                                                queries_host_target.view(), neighbors_host_view, distances_host_view);
+                                                queries_host_target.view(), 
+                                                neighbors_host_view, distances_host_view);
         } else if (local_index) {
             auto neighbors_device = raft::make_device_matrix<int64_t, int64_t, raft::layout_c_contiguous>(
                 *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
@@ -601,7 +628,7 @@ public:
         return search_res;
     }
 
-    std::vector<T> get_centers() {
+    std::vector<float> get_centers() {
         if (!this->is_loaded_ || (!index_ && !mg_index_)) return {};
 
         uint64_t job_id = this->worker->submit_main(
@@ -610,39 +637,40 @@ public:
                 auto res = handle.get_raft_resources();
                 
                 const ivf_pq_index* local_index = nullptr;
-                if (is_snmg_handle(res)) {
-                    for (const auto& iface : mg_index_->ann_interfaces_) {
-                        if (iface.index_.has_value()) { local_index = &iface.index_.value(); break; }
-                    }
-                } else {
+                if (index_) {
                     local_index = index_.get();
+                } else if (mg_index_) {
+                    for (const auto& iface : mg_index_->ann_interfaces_) {
+                        if (iface.index_.has_value()) {
+                            local_index = &iface.index_.value();
+                            break;
+                        }
+                    }
                 }
 
-                if (!local_index) return std::vector<T>{};
+                if (!local_index) return std::vector<float>{};
 
                 auto centers_view = local_index->centers();
                 size_t n_centers = centers_view.extent(0);
                 size_t dim = centers_view.extent(1);
-                std::vector<T> host_centers(n_centers * dim);
+                std::vector<float> host_centers(n_centers * dim);
 
                 RAFT_CUDA_TRY(cudaMemcpyAsync(host_centers.data(), centers_view.data_handle(),
-                                         host_centers.size() * sizeof(T), cudaMemcpyDeviceToHost,
+                                         host_centers.size() * sizeof(float), cudaMemcpyDeviceToHost,
                                          raft::resource::get_cuda_stream(*res)));
-
+                
                 raft::resource::sync_stream(*res);
                 return host_centers;
             }
         );
 
-        cuvs_task_result_t result = this->worker->wait(job_id).get();
+        auto result = this->worker->wait(job_id).get();
         if (result.error) std::rethrow_exception(result.error);
-        return std::any_cast<std::vector<T>>(result.result);
+        return std::any_cast<std::vector<float>>(result.result);
     }
 
     uint32_t get_n_list() {
         std::shared_lock<std::shared_mutex> lock(this->mutex_);
-        if (!this->is_loaded_) return this->build_params.n_lists;
-        
         if (index_) return static_cast<uint32_t>(index_->n_lists());
         if (mg_index_) {
             for (const auto& iface : mg_index_->ann_interfaces_) {
@@ -652,10 +680,30 @@ public:
         return this->build_params.n_lists;
     }
 
+    uint32_t get_pq_dim() {
+        std::shared_lock<std::shared_mutex> lock(this->mutex_);
+        if (index_) return static_cast<uint32_t>(index_->pq_dim());
+        if (mg_index_) {
+            for (const auto& iface : mg_index_->ann_interfaces_) {
+                if (iface.index_.has_value()) return static_cast<uint32_t>(iface.index_.value().pq_dim());
+            }
+        }
+        return this->build_params.m;
+    }
+
+    uint32_t get_pq_bits() {
+        std::shared_lock<std::shared_mutex> lock(this->mutex_);
+        if (index_) return static_cast<uint32_t>(index_->pq_bits());
+        if (mg_index_) {
+            for (const auto& iface : mg_index_->ann_interfaces_) {
+                if (iface.index_.has_value()) return static_cast<uint32_t>(iface.index_.value().pq_bits());
+            }
+        }
+        return this->build_params.bits_per_code;
+    }
+
     uint32_t get_dim() {
         std::shared_lock<std::shared_mutex> lock(this->mutex_);
-        if (!this->is_loaded_) return this->dimension;
-        
         if (index_) return static_cast<uint32_t>(index_->dim());
         if (mg_index_) {
             for (const auto& iface : mg_index_->ann_interfaces_) {
@@ -667,8 +715,6 @@ public:
 
     uint32_t get_rot_dim() {
         std::shared_lock<std::shared_mutex> lock(this->mutex_);
-        if (!this->is_loaded_) return this->dimension;
-        
         if (index_) return static_cast<uint32_t>(index_->rot_dim());
         if (mg_index_) {
             for (const auto& iface : mg_index_->ann_interfaces_) {
@@ -680,8 +726,6 @@ public:
 
     uint32_t get_dim_ext() {
         std::shared_lock<std::shared_mutex> lock(this->mutex_);
-        if (!this->is_loaded_) return this->dimension;
-        
         if (index_) return static_cast<uint32_t>(index_->dim_ext());
         if (mg_index_) {
             for (const auto& iface : mg_index_->ann_interfaces_) {

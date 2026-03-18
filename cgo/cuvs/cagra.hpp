@@ -286,12 +286,18 @@ public:
      * @param num_vectors Number of vectors to add.
      */
     void extend(const T* additional_data, uint64_t num_vectors) {
+        if (!this->is_loaded_ || !index_) {
+            uint64_t old_size = this->flattened_host_dataset.size();
+            this->flattened_host_dataset.resize(old_size + num_vectors * this->dimension);
+            std::copy(additional_data, additional_data + num_vectors * this->dimension, this->flattened_host_dataset.begin() + old_size);
+            this->count += static_cast<uint32_t>(num_vectors);
+            this->current_offset_ += static_cast<uint32_t>(num_vectors);
+            return;
+        }
+
         if constexpr (std::is_same_v<T, half>) {
              throw std::runtime_error("CAGRA single-GPU extend is not supported for float16 (half) by cuVS.");
         } else {
-            if (!this->is_loaded_ || !index_) {
-                throw std::runtime_error("index must be loaded before extending (or it is a multi-GPU index, which doesn't support extend).");
-            }
             if (num_vectors == 0) return;
 
             std::unique_lock<std::shared_mutex> lock(this->mutex_);
@@ -318,26 +324,20 @@ public:
             cuvs_task_result_t result = this->worker->wait(job_id).get();
             if (result.error) std::rethrow_exception(result.error);
 
-            this->count += static_cast<uint32_t>(num_vectors);
+            this->count = static_cast<uint32_t>(index_->size());
             this->current_offset_ = this->count;
-            if (!this->flattened_host_dataset.empty()) {
-                size_t old_size = this->flattened_host_dataset.size();
-                this->flattened_host_dataset.resize(old_size + num_vectors * this->dimension);
-                std::copy(additional_data, additional_data + num_vectors * this->dimension, this->flattened_host_dataset.begin() + old_size);
-            }
         }
     }
 
     /**
-     * @brief Merges multiple single-GPU CAGRA indices into one.
-     * @param indices List of pointers to CAGRA indices.
+     * @brief Merges multiple single-GPU CAGRA indices into a single index.
+     * @param indices Vector of pointers to indices to merge.
      * @param nthread Number of worker threads for the merged index.
      * @param devices GPU devices to use for the merged index.
      * @return A new merged CAGRA index.
      */
     static std::unique_ptr<gpu_cagra_t<T>> merge(const std::vector<gpu_cagra_t<T>*>& indices, uint32_t nthread, const std::vector<int>& devices) {
-        if (indices.empty()) return nullptr;
-        
+        if (indices.empty()) throw std::invalid_argument("indices empty");
         uint32_t dim = indices[0]->dimension;
         cuvs::distance::DistanceType m = indices[0]->metric;
 
@@ -355,26 +355,30 @@ public:
                     }
                     cagra_indices.push_back(idx->index_.get());
                 }
-
-                cuvs::neighbors::cagra::index_params index_params;
                 
-                auto merged_index = std::make_unique<cagra_index>(
-                    cuvs::neighbors::cagra::merge(*res, index_params, cagra_indices)
-                );
-
+                cuvs::neighbors::cagra::index_params index_params;
+                auto merged = cuvs::neighbors::cagra::merge(*res, index_params, cagra_indices);
                 raft::resource::sync_stream(*res);
-                return merged_index.release(); 
+                return new cagra_index(std::move(merged));
             }
         );
 
-        cuvs_task_result_t result = transient_worker.wait(job_id).get();
-        if (result.error) std::rethrow_exception(result.error);
-
-        auto* merged_index_raw = std::any_cast<cagra_index*>(result.result);
-        auto merged_index_ptr = std::unique_ptr<cagra_index>(merged_index_raw);
+        auto result = transient_worker.wait(job_id).get();
+        if (result.error) {
+            transient_worker.stop();
+            std::rethrow_exception(result.error);
+        }
+        
+        auto* merged_idx_ptr = std::any_cast<cagra_index*>(result.result);
+        std::unique_ptr<cagra_index> merged_idx(merged_idx_ptr);
         transient_worker.stop();
-
-        return std::make_unique<gpu_cagra_t<T>>(std::move(merged_index_ptr), dim, m, nthread, devices);
+        
+        auto new_idx = std::make_unique<gpu_cagra_t<T>>(
+            std::move(merged_idx),
+            dim, m, nthread, devices
+        );
+        new_idx->is_loaded_ = true;
+        return new_idx;
     }
 
     /**
@@ -429,6 +433,13 @@ public:
             return std::any_cast<search_result_t>(result_wait.result);
         }
 
+        return this->search_batch_internal(queries_data, num_queries, limit, sp);
+    }
+
+    /**
+     * @brief Internal batch search implementation
+     */
+    search_result_t search_batch_internal(const T* queries_data, uint64_t num_queries, uint32_t limit, const cagra_search_params_t& sp) {
         // Dynamic batching for small query counts
         struct search_req_t {
             const T* data;
@@ -569,6 +580,13 @@ public:
             return std::any_cast<search_result_t>(result_wait.result);
         }
 
+        return this->search_float_batch_internal(queries_data, num_queries, limit, sp);
+    }
+
+    /**
+     * @brief Internal batch search implementation for float32 queries
+     */
+    search_result_t search_float_batch_internal(const float* queries_data, uint64_t num_queries, uint32_t limit, const cagra_search_params_t& sp) {
         // Dynamic batching for small query counts
         struct search_req_t {
             const float* data;
@@ -664,7 +682,8 @@ public:
 
             cuvs::neighbors::mg_search_params<cuvs::neighbors::cagra::search_params> mg_search_params(search_params);
             cuvs::neighbors::cagra::search(*res, *mg_index_, mg_search_params,
-                                                queries_host_target.view(), neighbors_host_view, distances_host_view);
+                                                queries_host_target.view(), 
+                                                neighbors_host_view, distances_host_view);
         } else if (local_index) {
             auto neighbors_device = raft::make_device_matrix<uint32_t, int64_t, raft::layout_c_contiguous>(
                 *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
@@ -717,6 +736,17 @@ public:
         } else {
             std::cout << "  (Index not built yet)" << std::endl;
         }
+    }
+
+    void destroy() override {
+        if (this->worker) {
+            this->worker->stop();
+        }
+        std::unique_lock<std::shared_mutex> lock(this->mutex_);
+        index_.reset();
+        mg_index_.reset();
+        this->quantizer_.reset();
+        this->dataset_device_ptr_.reset();
     }
 };
 
