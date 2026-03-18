@@ -18,6 +18,9 @@ import (
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
 )
 
@@ -130,4 +133,24 @@ func TestGetResultVarClampsTinyVarianceToZero(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, math.IsNaN(got))
 	require.Equal(t, 0.0, got)
+}
+
+func TestNumericToFloat64ViaVarExec(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	param := types.T_int32.ToType()
+	exec := makeVarStdDevExec(mp, true, true, 0, false, param)
+	require.NoError(t, exec.GroupGrow(1))
+
+	v := vector.NewVec(param)
+	require.NoError(t, vector.AppendFixed(v, int32(4), false, mp))
+	require.NoError(t, exec.Fill(0, 0, []*vector.Vector{v}))
+	v.Free(mp)
+
+	vecs, err := exec.Flush()
+	require.NoError(t, err)
+	for _, vec := range vecs {
+		vec.Free(mp)
+	}
+	exec.Free()
 }

@@ -84,7 +84,15 @@ func (exec *medianColumnExecSelf[T, R]) UnmarshalFromReader(reader io.Reader, mp
 		exec.groups = make([]*Vectors[T], ngrp)
 		for i := range exec.groups {
 			exec.groups[i] = NewEmptyVectors[T]()
-			if err = exec.groups[i].UnmarshalFromReader(reader, exec.singleAggInfo.argType, mp); err != nil {
+			sz, err := types.ReadUint32(reader)
+			if err != nil {
+				return err
+			}
+			lr := io.LimitReader(reader, int64(sz))
+			if err = exec.groups[i].UnmarshalFromReader(lr, exec.singleAggInfo.argType, mp); err != nil {
+				return err
+			}
+			if _, err = io.Copy(io.Discard, lr); err != nil {
 				return err
 			}
 		}
