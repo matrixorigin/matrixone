@@ -93,7 +93,6 @@ func (exec *jsonArrayAggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MP
 	return nil
 }
 
-
 func newJsonArrayAggExec(mp *mpool.MPool, info multiAggInfo) *jsonArrayAggExec {
 	return &jsonArrayAggExec{
 		multiAggInfo: info,
@@ -309,7 +308,6 @@ func (exec *jsonObjectAggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.M
 	}
 	return nil
 }
-
 
 func newJsonObjectAggExec(mg *mpool.MPool, info multiAggInfo) *jsonObjectAggExec {
 	return &jsonObjectAggExec{

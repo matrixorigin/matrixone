@@ -87,20 +87,6 @@ func fromValueListToVector(
 	return v
 }
 
-func fromIdxListToNullList(start, end int, idxList []int) []bool {
-	if len(idxList) == 0 {
-		return nil
-	}
-
-	bs := make([]bool, end-start+1)
-	for _, idx := range idxList {
-		if realIndex := idx - start; realIndex >= 0 && idx <= end {
-			bs[realIndex] = true
-		}
-	}
-	return bs
-}
-
 func TestJsonArrayAggBinaryUnsupported(t *testing.T) {
 	mg := mpool.MustNewZero()
 	info := multiAggInfo{

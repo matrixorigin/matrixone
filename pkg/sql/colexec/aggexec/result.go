@@ -259,37 +259,6 @@ type optSplitResult struct {
 	distinct []distinctHash
 }
 
-// this API is broken.  It should not need to return those [][]byte
-func (r *optSplitResult) marshalToBytes() ([][]byte, [][]byte, [][]byte, error) {
-	var err error
-
-	// WTF?   min(r.nowIdx1+1, len...)
-	resultData := make([][]byte, min(r.nowIdx1+1, len(r.resultList)))
-	emptyData := make([][]byte, min(r.nowIdx1+1, len(r.emptyList)))
-
-	for i := range resultData {
-		if resultData[i], err = r.resultList[i].MarshalBinary(); err != nil {
-			return nil, nil, nil, err
-		}
-	}
-	for i := range emptyData {
-		if emptyData[i], err = r.emptyList[i].MarshalBinary(); err != nil {
-			return nil, nil, nil, err
-		}
-	}
-
-	if len(r.distinct) > 0 {
-		distinctData := make([][]byte, min(r.nowIdx1+1, len(r.distinct)))
-		for i := range r.distinct {
-			if distinctData[i], err = r.distinct[i].marshal(); err != nil {
-				return nil, nil, nil, err
-			}
-		}
-		return resultData, emptyData, distinctData, nil
-	}
-	return resultData, emptyData, nil, nil
-}
-
 func (r *optSplitResult) marshalToBuffers(flags [][]uint8, buf *bytes.Buffer) error {
 	rvec := vector.NewOffHeapVecWithType(r.resultType)
 	defer rvec.Free(r.mp)

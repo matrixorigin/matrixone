@@ -563,26 +563,6 @@ func unmarshalFromReader[T encoding.BinaryUnmarshaler](reader io.Reader, ret *op
 	return res, extra, nil
 }
 
-func (ag *AggFuncExecExpression) MarshalToBuffer(buf *bytes.Buffer) error {
-	buf.Write(types.EncodeInt64(&ag.aggID))
-	buf.Write(types.EncodeBool(&ag.isDistinct))
-	argLen := int32(len(ag.argExpressions))
-	buf.Write(types.EncodeInt32(&argLen))
-	for _, expr := range ag.argExpressions {
-		bs, err := proto.Marshal(expr)
-		if err != nil {
-			return err
-		}
-		bsLen := int32(len(bs))
-		buf.Write(types.EncodeInt32(&bsLen))
-		buf.Write(bs)
-	}
-	exLen := int32(len(ag.extraConfig))
-	buf.Write(types.EncodeInt32(&exLen))
-	buf.Write(ag.extraConfig)
-	return nil
-}
-
 func (ag *AggFuncExecExpression) UnmarshalFromReader(r io.Reader) error {
 	var err error
 	if ag.aggID, err = types.ReadInt64(r); err != nil {
