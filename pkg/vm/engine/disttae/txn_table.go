@@ -2298,10 +2298,59 @@ func (tbl *txnTable) PKPersistedBetween(
 		}
 	}
 	if checkTombstone {
-		return p.HasTombstoneChanged(from, to), nil
-	} else {
+		pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
+		pkType := plan2.ExprType2Type(&pkDef.Typ)
+		return tombstonePKExistsInRange(ctx, p, from, keys, pkType, fs)
+	}
+	return false, nil
+}
+
+// tombstonePKExistsInRange checks whether any tombstone object created or deleted
+// after 'from' contains a PK that intersects with 'keys'.
+// If the total tombstone rows exceed the threshold, it conservatively returns true.
+func tombstonePKExistsInRange(
+	ctx context.Context,
+	p *logtailreplay.PartitionState,
+	from types.TS,
+	keys *vector.Vector,
+	pkType types.Type,
+	fs fileservice.FileService,
+) (bool, error) {
+	tombObjs := p.GetChangedTombstoneObjsBetween(from)
+	if len(tombObjs) == 0 {
 		return false, nil
 	}
+	const tombstoneRowsThreshold = 50000
+	var totalRows uint32
+	for i := range tombObjs {
+		totalRows += tombObjs[i].Rows()
+		if totalRows > tombstoneRowsThreshold {
+			return true, nil
+		}
+	}
+	searchKeys := LinearSearchOffsetByValFactory(keys)
+	for _, obj := range tombObjs {
+		for blkIdx := uint32(0); blkIdx < obj.BlkCnt(); blkIdx++ {
+			loc := obj.BlockLocation(uint16(blkIdx), objectio.BlockMaxRows)
+			isCNCreated := obj.GetCNCreated()
+			vecCount := 3
+			if isCNCreated {
+				vecCount = 2
+			}
+			tombVectors := containers.NewVectors(vecCount)
+			_, release, err := ioutil.ReadDeletes(ctx, loc, fs, isCNCreated, tombVectors, &pkType)
+			if err != nil {
+				return true, nil
+			}
+			pkVec := tombVectors[1]
+			hits := searchKeys(&pkVec)
+			release()
+			if len(hits) > 0 {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 func (tbl *txnTable) PrimaryKeysMayBeUpserted(
