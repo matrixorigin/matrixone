@@ -17,40 +17,38 @@
 #pragma once
 
 #include "index_base.hpp"
-#include "cuvs_worker.hpp" // For cuvs_worker_t and raft_handle_wrapper_t
-#include "cuvs_types.h"    // For distance_type_t, ivf_pq_build_params_t, etc.
-#include <raft/util/cudart_utils.hpp> // For RAFT_CUDA_TRY
-#include <cuda_fp16.h> // For half
+#include "cuvs_worker.hpp"
+#include "cuvs_types.h"
+#include "quantize.hpp"
 
-// Standard library includes
-#include <algorithm>   // For std::copy
-#include <iostream>    // For simulation debug logs
+#include <cuda_fp16.h>
+#include <raft/util/cudart_utils.hpp>
+
+#include <algorithm>
+#include <future>
+#include <iostream>
+#include <limits>
 #include <memory>
-#include <numeric>     // For std::iota
-#include <stdexcept>   // For std::runtime_error
+#include <numeric>
+#include <shared_mutex>
+#include <stdexcept>
 #include <string>      
 #include <type_traits> 
 #include <vector>
-#include <future>      // For std::promise and std::future
-#include <limits>      // For std::numeric_limits
-#include <shared_mutex> // For std::shared_mutex
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
-// RAFT includes
-#include <raft/core/device_mdarray.hpp> // For raft::device_matrix
-#include <raft/core/device_mdspan.hpp>   // Required for device_matrix_view
-#include <raft/core/host_mdarray.hpp> // For raft::host_matrix
-#include <raft/core/resources.hpp>       // Core resource handle
-#include <raft/core/copy.cuh>            // For raft::copy with type conversion
-#include <raft/core/device_resources_snmg.hpp> // For checking SNMG type
+#include <raft/core/copy.cuh>
+#include <raft/core/device_mdarray.hpp>
+#include <raft/core/device_mdspan.hpp>
+#include <raft/core/device_resources_snmg.hpp>
+#include <raft/core/host_mdarray.hpp>
+#include <raft/core/resources.hpp>
 
-// cuVS includes
-#include <cuvs/distance/distance.hpp>    // cuVS distance API
-#include <cuvs/neighbors/ivf_pq.hpp>     // IVF-PQ include
-#include "quantize.hpp"
+#include <cuvs/distance/distance.hpp>
+#include <cuvs/neighbors/ivf_pq.hpp>
 #pragma GCC diagnostic pop
 
 
