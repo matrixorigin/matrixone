@@ -15,6 +15,7 @@
 package group
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"os"
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -109,6 +111,14 @@ type container struct {
 	spillAggList    []aggexec.AggFuncExec
 	spillBkts       list.Deque[*spillBucket]
 	currentSpillBkt []*spillBucket
+
+	// reusable buffers for spill to avoid per-call allocations
+	spillFlagFlat   []uint8       // scratch flags for one batch's rows during spill
+	spillChunkFlags [][]uint8     // full-length flags slice passed to SaveIntermediateResult
+	spillHashCodes  []uint64      // reused buffer for AllGroupHash output
+	spillReader     *bufio.Reader // reused across loadSpilledData calls
+	spillGbBatch    *batch.Batch  // reused staging batch across spillDataToDisk calls
+	spillBuf        *bytes.Buffer // reused write buffer across spillDataToDisk calls
 }
 
 func (ctr *container) isSpilling() bool {
@@ -130,7 +140,8 @@ func (ctr *container) setSpillMem(m int64, aggs []aggexec.AggFuncExecExpression)
 
 	if m == 0 {
 		// 0 means auto config.   Here the formula is made up on the fly.
-		mem := int64(system.MemoryTotal()) / int64(system.GoMaxProcs()) / 8
+		fileCacheMem := fileservice.GlobalMemoryCacheSizeHint.Load()
+		mem := (int64(system.MemoryTotal()) - fileCacheMem) / int64(system.GoMaxProcs()) / 8
 		// min 128MB
 		if mem < common.MiB*128 {
 			mem = common.MiB * 128
@@ -204,6 +215,10 @@ func (ctr *container) free() {
 	ctr.freeAggList()
 	ctr.freeSpillAggList()
 	ctr.freeSpillBkts()
+	if ctr.spillGbBatch != nil {
+		ctr.spillGbBatch.Clean(ctr.mp)
+		ctr.spillGbBatch = nil
+	}
 
 	mpool.DeleteMPool(ctr.mp)
 	ctr.mp = nil

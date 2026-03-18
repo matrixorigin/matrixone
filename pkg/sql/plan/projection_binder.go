@@ -237,7 +237,7 @@ func (b *ProjectionBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, 
 		}
 		typ = &w.OrderBy[0].Expr.Typ
 		t := types.Type{Oid: types.T(typ.Id)}
-		if !t.IsNumericOrTemporal() {
+		if isNRange(ws.Frame) && !t.IsNumericOrTemporal() {
 			return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>' with RANGE N PRECEDING/FOLLOWING frame requires exactly one ORDER BY expression, of numeric or temporal type")
 		}
 	case tree.Groups:

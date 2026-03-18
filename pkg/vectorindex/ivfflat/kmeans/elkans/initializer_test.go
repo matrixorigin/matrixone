@@ -53,12 +53,9 @@ func TestRandom_InitCentroids(t *testing.T) {
 				k: 2,
 			},
 			wantCentroids: [][]float64{
-				// NOTE: values of random initialization need not be farther apart, it is random.
-				// NOTE: we get the same random values in the test case because we are using a constant seed value.
+				{10, 3, 4, 5},
 				{1, 2, 4, 5},
-				{1, 2, 3, 4},
-			},
-		},
+			}},
 	}
 	ctx := context.Background()
 
@@ -108,8 +105,8 @@ func TestKMeansPlusPlus_InitCentroids(t *testing.T) {
 			},
 			// Kmeans++ picked the relatively farthest points as the initial centroids
 			wantCentroids: [][]float64{
+				{10, 3, 4, 5},
 				{1, 2, 4, 5},
-				{10, 5, 4, 5},
 			},
 		},
 	}

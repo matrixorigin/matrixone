@@ -419,10 +419,11 @@ type ListExpressionExecutor struct {
 func (expr *ListExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
 
 	if expr.resultVector == nil {
-		expr.resultVector = vector.NewVec(expr.typ)
+		expr.resultVector = vector.NewOffHeapVecWithType(expr.typ)
 	} else {
 		expr.resultVector.CleanOnlyData()
 	}
+	expr.resultVector.PreExtend(len(expr.parameterExecutor), proc.Mp())
 	for i := range expr.parameterExecutor {
 		vec, err := expr.parameterExecutor[i].Eval(proc, batches, selectList)
 		if err != nil {
@@ -470,7 +471,7 @@ func (expr *ListExpressionExecutor) Init(proc *process.Process, typ types.Type, 
 	expr.typ = typ
 	expr.mp = m
 	expr.parameterExecutor = make([]ExpressionExecutor, parameterNum)
-	expr.resultVector = vector.NewVec(typ)
+	expr.resultVector = vector.NewOffHeapVecWithType(typ)
 }
 
 func (expr *ListExpressionExecutor) SetParameter(index int, executor ExpressionExecutor) {
@@ -685,6 +686,12 @@ func (expr *ColumnExpressionExecutor) Eval(_ *process.Process, batches []*batch.
 	// XXX it's a bad hack here. root cause is pipeline set a wrong relation index here.
 	if len(batches) == 1 {
 		relIndex = 0
+	}
+
+	if relIndex >= len(batches) {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"column expression eval: relIndex %d out of range, batches length %d",
+			relIndex, len(batches))
 	}
 
 	vec := batches[relIndex].Vecs[expr.colIndex]
@@ -955,11 +962,12 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 
 func NewJoinBatch(bat *batch.Batch, mp *mpool.MPool) (*batch.Batch,
 	[]func(*vector.Vector, *vector.Vector, int64, int) error) {
-	rbat := batch.NewWithSize(bat.VectorCount())
+	rbat := batch.NewOffHeapWithSize(bat.VectorCount())
 	cfs := make([]func(*vector.Vector, *vector.Vector, int64, int) error, bat.VectorCount())
 	for i, vec := range bat.Vecs {
 		typ := *vec.GetType()
 		rbat.Vecs[i] = vector.NewConstNull(typ, 0, nil)
+		rbat.Vecs[i].SetOffHeap(true)
 		cfs[i] = vector.GetConstSetFunction(typ, mp)
 	}
 	return rbat, cfs

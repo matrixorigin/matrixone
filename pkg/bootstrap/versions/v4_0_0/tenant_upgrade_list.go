@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -27,6 +28,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	enablePartitionMetadata,
 	enablePartitionTables,
 	upg_alter_mo_snapshots,
+	enableRoleRule,
 }
 
 var enablePartitionMetadata = versions.UpgradeEntry{
@@ -52,6 +54,16 @@ var enablePartitionTables = versions.UpgradeEntry{
 }
 
 const kind = "kind"
+
+var enableRoleRule = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_ROLE_RULE,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoCatalogMoRoleRuleDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_ROLE_RULE)
+	},
+}
 
 var upg_alter_mo_snapshots = versions.UpgradeEntry{
 	Schema:    catalog.MO_CATALOG,

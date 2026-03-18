@@ -146,7 +146,13 @@ type Session struct {
 
 	errInfo *errInfo
 
-	cache *privilegeCache
+	cache       *privilegeCache
+	ruleCache   map[string]string // rewrite rule cache, nil means not loaded
+	ruleCacheMu sync.RWMutex      // protects ruleCache
+
+	// rewriteEnabled caches the enable_remap_hint system variable state
+	// to avoid expensive GetSessionSysVar calls on every SQL query
+	rewriteEnabled atomic.Bool
 
 	mu sync.Mutex
 
@@ -275,6 +281,13 @@ func (ses *Session) InitSystemVariables(ctx context.Context, bh BackgroundExec) 
 	ses.gSysVars = sv
 	ses.sesSysVars = ses.gSysVars.Clone()
 	atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, -1)
+
+	// Initialize rewriteEnabled cache
+	if v := ses.sesSysVars.Get("enable_remap_hint"); v != nil {
+		if on, convErr := valueIsBoolTrue(v); convErr == nil {
+			ses.rewriteEnabled.Store(on)
+		}
+	}
 	return
 }
 
@@ -945,6 +958,11 @@ func (ses *Session) InvalidatePrivilegeCache() {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.cache.invalidate()
+
+	// Clear rule cache with proper locking
+	ses.ruleCacheMu.Lock()
+	ses.ruleCache = nil
+	ses.ruleCacheMu.Unlock()
 }
 
 // GetBackgroundExec generates a background executor
