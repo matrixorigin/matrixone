@@ -534,6 +534,48 @@ Product C  ¦  350.00  ¦  650.00  ¦  1
 "test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"
 }
 } */
+WITH ranked_sales AS (
+SELECT
+product,
+amount,
+SUM(amount) OVER (PARTITION BY product) AS product_total,
+ROW_NUMBER() OVER (PARTITION BY product ORDER BY amount DESC) AS rank_in_product
+FROM test_cte_rewrite.sales
+)
+SELECT product FROM ranked_sales
+WHERE rank_in_product = 1
+ORDER BY product;
+➤ product[12,-1,0]  𝄀
+Product A  𝄀
+Product B  𝄀
+Product C
+/*+ {
+"rewrites" : {
+"test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"
+}
+} */
+WITH ranked_sales AS (
+SELECT
+product,
+amount,
+SUM(amount) OVER (PARTITION BY product) AS product_total,
+ROW_NUMBER() OVER (PARTITION BY product ORDER BY amount DESC) AS rank_in_product
+FROM test_cte_rewrite.sales
+)
+SELECT product FROM ranked_sales
+WHERE product_total > 500
+ORDER BY product;
+➤ product[12,-1,0]  𝄀
+Product B  𝄀
+Product B  𝄀
+Product B  𝄀
+Product C  𝄀
+Product C
+/*+ {
+"rewrites" : {
+"test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"
+}
+} */
 WITH categorized_sales AS (
 SELECT
 product,

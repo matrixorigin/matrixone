@@ -189,3 +189,33 @@ func TestRemapWindowClause(t *testing.T) {
 		require.Error(t, err)
 	})
 }
+
+func TestBuildWindowFilterOnNonProjectedColumns(t *testing.T) {
+	mock := NewMockOptimizer(false)
+
+	sqls := []string{
+		`WITH ranked AS (
+			SELECT
+				a,
+				b,
+				SUM(a) OVER (PARTITION BY a) AS product_total,
+				ROW_NUMBER() OVER (PARTITION BY a ORDER BY b DESC) AS rank_in_product
+			FROM cte_test.t1
+		)
+		SELECT a FROM ranked WHERE rank_in_product = 1 ORDER BY a;`,
+		`WITH ranked AS (
+			SELECT
+				a,
+				b,
+				SUM(a) OVER (PARTITION BY a) AS product_total,
+				ROW_NUMBER() OVER (PARTITION BY a ORDER BY b DESC) AS rank_in_product
+			FROM cte_test.t1
+		)
+		SELECT a FROM ranked WHERE product_total > 1 ORDER BY a;`,
+	}
+
+	for _, sql := range sqls {
+		_, err := buildSingleStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+	}
+}

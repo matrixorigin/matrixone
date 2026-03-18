@@ -511,6 +511,42 @@ SELECT * FROM ranked_sales
 WHERE product_total > 500
 ORDER BY product, amount;
 
+-- CTE + 窗口函数 + 聚合 + Rewrite + filter current window output without projecting it
+/*+ {
+    "rewrites" : {
+        "test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"
+    }
+} */
+WITH ranked_sales AS (
+    SELECT
+        product,
+        amount,
+        SUM(amount) OVER (PARTITION BY product) AS product_total,
+            ROW_NUMBER() OVER (PARTITION BY product ORDER BY amount DESC) AS rank_in_product
+    FROM test_cte_rewrite.sales
+)
+SELECT product FROM ranked_sales
+WHERE rank_in_product = 1
+ORDER BY product;
+
+-- CTE + 窗口函数 + 聚合 + Rewrite + filter previous window output without projecting it
+/*+ {
+    "rewrites" : {
+        "test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"
+    }
+} */
+WITH ranked_sales AS (
+    SELECT
+        product,
+        amount,
+        SUM(amount) OVER (PARTITION BY product) AS product_total,
+            ROW_NUMBER() OVER (PARTITION BY product ORDER BY amount DESC) AS rank_in_product
+    FROM test_cte_rewrite.sales
+)
+SELECT product FROM ranked_sales
+WHERE product_total > 500
+ORDER BY product;
+
 
 -- CTE + CASE 表达式 + 聚合 + Rewrite
 /*+ {
