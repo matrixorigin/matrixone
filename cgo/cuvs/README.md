@@ -75,30 +75,45 @@
 
   ---
 
-  6. Currently Supported Indexes
-  The architecture is extensible, currently supporting the following index types:
+ 6. Automatic Type Quantization
+  To optimize memory footprint and search speed, the architecture features an automated quantization pipeline that converts
+  high-precision float32 vectors into compressed formats.
+
+   * Transparent Conversion: The Go layer can consistently provide float32 data. The system automatically handles the conversion
+     to the index's internal type (half, int8, or uint8) directly on the GPU.
+   * FP16 (Half Precision):
+       * Mechanism: Uses raft::copy to perform bit-level conversion from 32-bit to 16-bit floating point.
+       * Benefit: 2x memory reduction with negligible impact on search recall.
+   * 8-Bit Integer (int8/uint8):
+       * Mechanism: Implements a learned Scalar Quantizer. The system samples the dataset to determine optimal min and max
+         clipping bounds.
+       * Training: Before building, the quantizer is "trained" on a subset of the data to ensure the 256 available integer levels
+         are mapped to the most significant range of the distribution.
+       * Benefit: 4x memory reduction, enabling massive datasets to reside in VRAM.
+   * GPU-Accelerated: All quantization kernels are executed on the device. This minimizes CPU usage and avoids the latency of
+     converting data before sending it over the PCIe bus.
+
+  7. Supported Index Types
+  The following indexes are fully integrated into the MatrixOne GPU architecture:
 
 
-  ┌────────────┬────────────────────────┬────────────────────────────────────────────────────────────────────────┐
-  │ Index Type │ Internal Algorithm     │ Primary Strength                                                       │
-  ├────────────┼────────────────────────┼────────────────────────────────────────────────────────────────────────┤
-  │ CAGRA      │ Graph-based            │ State-of-the-art search speed and high recall. Optimized for GPU graph │
-  │            │ (Hardware-accelerated) │ traversal.                                                             │
-  │ IVF-Flat   │ Inverted File Index    │ High accuracy, good balance between build time and search speed.       │
-  │ IVF-PQ     │ Product Quantization   │ Massive compression. Can store billions of vectors by compressing them │
-  │            │                        │ into codes.                                                            │
-  │ Brute      │ Exact Flat Search      │ 100% recall. Used for ground-truth verification and small datasets.    │
-  │ Force      │                        │                                                                        │
-  │ K-Means    │ Clustering             │ High-performance centroid calculation for data partitioning and        │
-  │            │                        │ unsupervised learning.                                                 │
-  └────────────┴────────────────────────┴────────────────────────────────────────────────────────────────────────┘
+  ┌──────────┬──────────────────────┬───────────────────────────────────────────────────────────────────────────────┐
+  │ Index    │ Algorithm            │ Strengths                                                                     │
+  ├──────────┼──────────────────────┼───────────────────────────────────────────────────────────────────────────────┤
+  │ CAGRA    │ Hardware-accelerated │ Best-in-class search speed and high recall. Optimized for hardware graph      │
+  │          │ Graph                │ traversal.                                                                    │
+  │ IVF-Flat │ Inverted File Index  │ High accuracy and fast search. Excellent for general-purpose use.             │
+  │ IVF-PQ   │ Product Quantization │ Extreme compression. Supports billions of vectors via lossy code compression. │
+  │ Brute    │ Exact Flat Search    │ 100% recall. Ideal for small datasets or generating ground-truth for          │
+  │ Force    │                      │ benchmarks.                                                                   │
+  │ K-Means  │ Clustering           │ High-performance centroid calculation for data partitioning and unsupervised  │
+  │          │                      │ learning.                                                                     │
+  └──────────┴──────────────────────┴───────────────────────────────────────────────────────────────────────────────┘
 
-  ---
 
-  7. Operational Metadata (Info())
-  Every index supports a JSON-formatted Info() method. This provides structured telemetry including:
-   * Shared Specs: Element size, vector dimension, distance metric, and current capacity.
-   * Topology: The list of active GPU device IDs.
-   * Algorithm Specifics: Graph degrees (CAGRA), Number of lists (IVF), or PQ bits (IVF-PQ).
-   * Status: Loading state and current vector count.
-                                                                      
+  8. Operational Telemetry
+  All indexes implement a unified Info() method that returns a JSON-formatted string. This allows the database to programmatically
+  verify:
+   * Hardware Mapping: Which GPU devices are holding which shards.
+   * Data Layout: Element sizes, dimensions, and current vector counts.
+   * Hyper-parameters: Internal tuning values like NLists, GraphDegree, or PQBits.
