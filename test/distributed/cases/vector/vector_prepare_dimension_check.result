@@ -4,8 +4,8 @@ DROP TABLE IF EXISTS t_vecf32;
 CREATE TABLE t_vecf32 (id INT, v vecf32(3));
 INSERT INTO t_vecf32 VALUES (1, '[1.0, 2.0, 3.0]');
 SELECT id, v, vector_dims(v) AS dim FROM t_vecf32 WHERE id = 1;
-➤ id[4,32,0]  ¦  v[12,3,0]  ¦  dim[-5,64,0]  𝄀
-1  ¦  [1, 2, 3]  ¦  3
+id    v    dim
+1    [1, 2, 3]    3
 INSERT INTO t_vecf32 VALUES (2, '[1.0, 2.0, 3.0, 4.0, 5.0]');
 invalid input: expected vector dimension 3 != actual dimension 5.
 PREPARE stmt1 FROM 'INSERT INTO t_vecf32 VALUES (?, ?)';
@@ -14,21 +14,21 @@ SET @v_bad = '[1.0, 2.0, 3.0, 4.0, 5.0]';
 EXECUTE stmt1 USING @id, @v_bad;
 invalid input: expected vector dimension 3 != actual dimension 5.
 SELECT count(*) AS cnt FROM t_vecf32 WHERE id = 3;
-➤ cnt[-5,64,0]  𝄀
+cnt
 0
 SET @id = 4;
 SET @v_ok = '[4.0, 5.0, 6.0]';
 EXECUTE stmt1 USING @id, @v_ok;
 SELECT id, v, vector_dims(v) AS dim FROM t_vecf32 WHERE id = 4;
-➤ id[4,32,0]  ¦  v[12,3,0]  ¦  dim[-5,64,0]  𝄀
-4  ¦  [4, 5, 6]  ¦  3
+id    v    dim
+4    [4, 5, 6]    3
 DEALLOCATE PREPARE stmt1;
 DROP TABLE IF EXISTS t_vecf64;
 CREATE TABLE t_vecf64 (id INT, v vecf64(4));
 INSERT INTO t_vecf64 VALUES (1, '[1.0, 2.0, 3.0, 4.0]');
 SELECT id, vector_dims(v) AS dim FROM t_vecf64 WHERE id = 1;
-➤ id[4,32,0]  ¦  dim[-5,64,0]  𝄀
-1  ¦  4
+id    dim
+1    4
 INSERT INTO t_vecf64 VALUES (2, '[1.0, 2.0]');
 invalid input: expected vector dimension 4 != actual dimension 2.
 PREPARE stmt2 FROM 'INSERT INTO t_vecf64 VALUES (?, ?)';
@@ -37,16 +37,16 @@ SET @v_bad64 = '[1.0, 2.0]';
 EXECUTE stmt2 USING @id, @v_bad64;
 invalid input: expected vector dimension 4 != actual dimension 2.
 SELECT count(*) AS cnt FROM t_vecf64 WHERE id = 3;
-➤ cnt[-5,64,0]  𝄀
+cnt
 0
 DEALLOCATE PREPARE stmt2;
 SELECT id, v, vector_dims(v) AS dim FROM t_vecf32 ORDER BY id;
-➤ id[4,32,0]  ¦  v[12,3,0]  ¦  dim[-5,64,0]  𝄀
-1  ¦  [1, 2, 3]  ¦  3  𝄀
-4  ¦  [4, 5, 6]  ¦  3
+id    v    dim
+1    [1, 2, 3]    3
+4    [4, 5, 6]    3
 SELECT id, v, vector_dims(v) AS dim FROM t_vecf64 ORDER BY id;
-➤ id[4,32,0]  ¦  v[12,4,0]  ¦  dim[-5,64,0]  𝄀
-1  ¦  [1, 2, 3, 4]  ¦  4
+id    v    dim
+1    [1, 2, 3, 4]    4
 DROP TABLE IF EXISTS t_vecf32;
 DROP TABLE IF EXISTS t_vecf64;
 DROP DATABASE test_vec_prepare_db;
