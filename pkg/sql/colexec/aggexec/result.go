@@ -115,17 +115,6 @@ func (r *aggResultWithFixedType[T]) Size() int64 {
 	return size
 }
 
-func (r *aggResultWithFixedType[T]) unmarshalFromBytes(resultData, emptyData, distData [][]byte) error {
-	if err := r.optSplitResult.unmarshalFromBytes(resultData, emptyData, distData); err != nil {
-		return err
-	}
-	r.values = make([][]T, len(resultData))
-	for i := range r.values {
-		r.values[i] = vector.MustFixedColNoTypeCheck[T](r.optSplitResult.resultList[i])
-	}
-	return nil
-}
-
 func (r *aggResultWithFixedType[T]) setupT() {
 	if len(r.optSplitResult.resultList) > 0 {
 		r.values = make([][]T, len(r.optSplitResult.resultList))
@@ -299,43 +288,6 @@ func (r *optSplitResult) marshalToBytes() ([][]byte, [][]byte, [][]byte, error) 
 		return resultData, emptyData, distinctData, nil
 	}
 	return resultData, emptyData, nil, nil
-}
-
-func (r *optSplitResult) unmarshalFromBytes(resultData, emptyData, distinctData [][]byte) (err error) {
-	r.free()
-	defer func() {
-		if err != nil {
-			r.free()
-		}
-	}()
-
-	r.resultList = make([]*vector.Vector, len(resultData))
-	r.emptyList = make([]*vector.Vector, len(emptyData))
-	r.bsFromEmptyList = make([][]bool, len(emptyData))
-	r.nowIdx1 = max(0, len(resultData)-1)
-	for i := range r.resultList {
-		r.resultList[i] = vector.NewOffHeapVecWithType(r.resultType)
-		if err = vectorUnmarshal(r.resultList[i], resultData[i], r.mp); err != nil {
-			return err
-		}
-	}
-	for i := range r.emptyList {
-		r.emptyList[i] = vector.NewOffHeapVecWithType(types.T_bool.ToType())
-		if err = vectorUnmarshal(r.emptyList[i], emptyData[i], r.mp); err != nil {
-			return err
-		}
-		r.bsFromEmptyList[i] = vector.MustFixedColNoTypeCheck[bool](r.emptyList[i])
-	}
-
-	if len(distinctData) != 0 {
-		r.distinct = make([]distinctHash, len(distinctData))
-		for i := range distinctData {
-			if err = r.distinct[i].unmarshal(distinctData[i], r.mp); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
 }
 
 func (r *optSplitResult) marshalToBuffers(flags [][]uint8, buf *bytes.Buffer) error {

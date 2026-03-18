@@ -92,22 +92,6 @@ func (exec *medianColumnExecSelf[T, R]) UnmarshalFromReader(reader io.Reader, mp
 	return nil
 }
 
-func (exec *medianColumnExecSelf[T, R]) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
-	if len(groups) > 0 {
-		exec.groups = make([]*Vectors[T], len(groups))
-		for i := range exec.groups {
-			exec.groups[i] = NewEmptyVectors[T]()
-			var err error
-			if err = exec.groups[i].Unmarshal(groups[i], exec.singleAggInfo.argType, mp); err != nil {
-				return err
-			}
-		}
-	}
-	// XXX: unless we do not support median(distinct X), this is a bug.
-	// group, so distinct is not used.
-	return exec.ret.unmarshalFromBytes(result, empties, nil)
-}
-
 func newMedianColumnExecSelf[T numeric | types.Decimal64 | types.Decimal128, R float64 | types.Decimal128](mg *mpool.MPool, info singleAggInfo) medianColumnExecSelf[T, R] {
 	var r R
 	// XXX: this distinct impl. is totall screwed.

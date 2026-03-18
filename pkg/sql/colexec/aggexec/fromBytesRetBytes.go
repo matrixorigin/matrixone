@@ -103,12 +103,6 @@ func (exec *aggregatorFromBytesToBytes) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 
-func (exec *aggregatorFromBytesToBytes) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
-	exec.execContext.decodeGroupContexts(groups, exec.singleAggInfo.retType, exec.singleAggInfo.argType)
-	// this groups is not distict
-	return exec.ret.unmarshalFromBytes(result, empties, nil)
-}
-
 func (exec *aggregatorFromBytesToBytes) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
 	return marshalRetAndGroupsToBuffer[dummyBinaryMarshaler](
 		cnt, flags, buf,

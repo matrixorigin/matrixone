@@ -41,28 +41,6 @@ func vectorAppendWildly[T numeric | types.Decimal64 | types.Decimal128](v *vecto
 	return nil
 }
 
-/*
-func vectorAppendBytesWildly(v *vector.Vector, mp *mpool.MPool, value []byte) error {
-	var va types.Varlena
-	if err := vector.BuildVarlenaFromByteSlice(v, &va, &value, mp); err != nil {
-		return err
-	}
-
-	oldLen := v.Length()
-	if oldLen == v.Capacity() {
-		if err := v.PreExtend(10, mp); err != nil {
-			return err
-		}
-	}
-	v.SetLength(oldLen + 1)
-
-	var vs []types.Varlena
-	vector.ToSliceNoTypeCheck(v, &vs)
-	vs[oldLen] = va
-	return nil
-}
-*/
-
 // vectorUnmarshal is instead of vector.UnmarshalBinary.
 // it will check if mp is nil first.
 func vectorUnmarshal(v *vector.Vector, data []byte, mp *mpool.MPool) error {

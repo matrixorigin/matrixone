@@ -93,34 +93,6 @@ func (exec *jsonArrayAggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MP
 	return nil
 }
 
-func (exec *jsonArrayAggExec) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
-	if err := exec.ret.unmarshalFromBytes(result, empties, nil); err != nil {
-		return err
-	}
-
-	offset := 0
-	if exec.IsDistinct() {
-		if len(groups) == 0 {
-			return moerr.NewInternalErrorNoCtx("json_arrayagg distinct data missing")
-		}
-		if err := exec.distinctHash.unmarshal(groups[0], mp); err != nil {
-			return err
-		}
-		offset = 1
-	}
-
-	groupCount := exec.ret.totalGroupCount()
-	exec.groups = make([]jsonArrayAggGroup, groupCount)
-	for i := 0; i < groupCount && offset+i < len(groups); i++ {
-		if len(groups[offset+i]) == 0 {
-			continue
-		}
-		if err := unmarshalJsonArrayGroup(&exec.groups[i], groups[offset+i]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
 
 func newJsonArrayAggExec(mp *mpool.MPool, info multiAggInfo) *jsonArrayAggExec {
 	return &jsonArrayAggExec{
@@ -338,34 +310,6 @@ func (exec *jsonObjectAggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.M
 	return nil
 }
 
-func (exec *jsonObjectAggExec) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
-	if err := exec.ret.unmarshalFromBytes(result, empties, nil); err != nil {
-		return err
-	}
-
-	offset := 0
-	if exec.IsDistinct() {
-		if len(groups) == 0 {
-			return moerr.NewInternalErrorNoCtx("json_objectagg distinct data missing")
-		}
-		if err := exec.distinctHash.unmarshal(groups[0], mp); err != nil {
-			return err
-		}
-		offset = 1
-	}
-
-	groupCount := exec.ret.totalGroupCount()
-	exec.groups = make([]jsonObjectAggGroup, groupCount)
-	for i := 0; i < groupCount && offset+i < len(groups); i++ {
-		if len(groups[offset+i]) == 0 {
-			continue
-		}
-		if err := unmarshalJsonObjectGroup(&exec.groups[i], groups[offset+i]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
 
 func newJsonObjectAggExec(mg *mpool.MPool, info multiAggInfo) *jsonObjectAggExec {
 	return &jsonObjectAggExec{

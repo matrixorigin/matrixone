@@ -38,13 +38,6 @@ func (exec *groupConcatExec) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 
-func (exec *groupConcatExec) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
-	if err := exec.SetExtraInformation(groups[0], 0); err != nil {
-		return err
-	}
-	return exec.ret.unmarshalFromBytes(result, empties, groups[1:])
-}
-
 func (exec *groupConcatExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
 	err := marshalRetAndGroupsToBuffer[dummyBinaryMarshaler](
 		cnt, flags, buf,
