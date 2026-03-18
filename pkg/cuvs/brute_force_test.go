@@ -194,8 +194,8 @@ func BenchmarkGpuAddChunkAndSearchBruteForceF16(b *testing.B) {
 	if err := index.Build(); err != nil {
 		b.Fatalf("Build failed: %v", err)
 	}
-	info, _ := index.Info()
-	fmt.Println(info)
+	// info, _ := index.Info()
+	// fmt.Println(info)
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
