@@ -19,7 +19,6 @@ import (
 	"fmt"
 	io "io"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -220,24 +219,6 @@ func (exec *aggregatorFromFixedToBytes[from]) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 
-func (exec *aggregatorFromFixedToBytes[from]) marshal() ([]byte, error) {
-	d := exec.singleAggInfo.getEncoded()
-	r, em, dist, err := exec.ret.marshalToBytes()
-	if err != nil {
-		return nil, err
-	}
-	if dist != nil {
-		return nil, moerr.NewInternalErrorNoCtx("dist should have been nil")
-	}
-	encoded := EncodedAgg{
-		Info:    d,
-		Result:  r,
-		Empties: em,
-		Groups:  exec.execContext.getGroupContextEncodings(),
-	}
-	return encoded.Marshal()
-}
-
 func (exec *aggregatorFromFixedToBytes[from]) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
 	return marshalRetAndGroupsToBuffer[dummyBinaryMarshaler](
 		cnt, flags, buf,
@@ -260,12 +241,6 @@ func (exec *aggregatorFromFixedToBytes[from]) UnmarshalFromReader(reader io.Read
 	// exec.ret.setupT()
 	exec.execContext.decodeGroupContexts(bs, exec.singleAggInfo.retType, exec.singleAggInfo.argType)
 	return nil
-}
-
-func (exec *aggregatorFromFixedToBytes[from]) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
-	exec.execContext.decodeGroupContexts(groups, exec.singleAggInfo.retType, exec.singleAggInfo.argType)
-	// groups used above, dist is nil
-	return exec.ret.unmarshalFromBytes(result, empties, nil)
 }
 
 func (exec *aggregatorFromFixedToBytes[from]) init(

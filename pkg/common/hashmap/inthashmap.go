@@ -371,6 +371,6 @@ func (m *IntHashMap) UnmarshalFrom(r io.Reader, mp *mpool.MPool) (int64, error) 
 	return n, nil
 }
 
-func (m *IntHashMap) AllGroupHash() []uint64 {
-	return m.hashMap.AllGroupHash()
+func (m *IntHashMap) AppendAllGroupHash(dst []uint64) []uint64 {
+	return m.hashMap.AppendAllGroupHash(dst)
 }

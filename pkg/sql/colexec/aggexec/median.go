@@ -57,33 +57,6 @@ func (exec *medianColumnExecSelf[T, R]) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 
-func (exec *medianColumnExecSelf[T, R]) marshal() ([]byte, error) {
-	d := exec.singleAggInfo.getEncoded()
-	r, em, dist, err := exec.ret.marshalToBytes()
-	if err != nil {
-		return nil, err
-	}
-	if dist != nil {
-		return nil, moerr.NewInternalErrorNoCtx("dist should have been nil")
-	}
-
-	encoded := &EncodedAgg{
-		Info:    d,
-		Result:  r,
-		Empties: em,
-		Groups:  nil,
-	}
-	if len(exec.groups) > 0 {
-		encoded.Groups = make([][]byte, len(exec.groups))
-		for i := range encoded.Groups {
-			if encoded.Groups[i], err = exec.groups[i].MarshalBinary(); err != nil {
-				return nil, err
-			}
-		}
-	}
-	return encoded.Marshal()
-}
-
 func (exec *medianColumnExecSelf[T, R]) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
 	return marshalRetAndGroupsToBuffer(
 		cnt, flags, buf,
@@ -111,11 +84,7 @@ func (exec *medianColumnExecSelf[T, R]) UnmarshalFromReader(reader io.Reader, mp
 		exec.groups = make([]*Vectors[T], ngrp)
 		for i := range exec.groups {
 			exec.groups[i] = NewEmptyVectors[T]()
-			_, bs, err := types.ReadSizeBytes(reader)
-			if err != nil {
-				return err
-			}
-			if err = exec.groups[i].Unmarshal(bs, exec.singleAggInfo.argType, mp); err != nil {
+			if err = exec.groups[i].UnmarshalFromReader(reader, exec.singleAggInfo.argType, mp); err != nil {
 				return err
 			}
 		}

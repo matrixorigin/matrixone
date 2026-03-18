@@ -52,41 +52,6 @@ func (exec *jsonArrayAggExec) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 
-func (exec *jsonArrayAggExec) marshal() ([]byte, error) {
-	d := exec.multiAggInfo.getEncoded()
-	r, em, _, err := exec.ret.marshalToBytes()
-	if err != nil {
-		return nil, err
-	}
-
-	var groupData [][]byte
-	if len(exec.groups) > 0 {
-		groupData = make([][]byte, 0, len(exec.groups)+1)
-		if exec.IsDistinct() {
-			data, err := exec.distinctHash.marshal()
-			if err != nil {
-				return nil, err
-			}
-			groupData = append(groupData, data)
-		}
-		for i := range exec.groups {
-			data, err := marshalJsonArrayGroup(exec.groups[i])
-			if err != nil {
-				return nil, err
-			}
-			groupData = append(groupData, data)
-		}
-	}
-
-	encoded := EncodedAgg{
-		Info:    d,
-		Result:  r,
-		Empties: em,
-		Groups:  groupData,
-	}
-	return encoded.Marshal()
-}
-
 func (exec *jsonArrayAggExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
 	return marshalRetAndGroupsToBuffer(
 		cnt, flags, buf,
@@ -329,41 +294,6 @@ type jsonObjectAggExec struct {
 
 func (exec *jsonObjectAggExec) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
-}
-
-func (exec *jsonObjectAggExec) marshal() ([]byte, error) {
-	d := exec.multiAggInfo.getEncoded()
-	r, em, _, err := exec.ret.marshalToBytes()
-	if err != nil {
-		return nil, err
-	}
-
-	var groupData [][]byte
-	if len(exec.groups) > 0 {
-		groupData = make([][]byte, 0, len(exec.groups)+1)
-		if exec.IsDistinct() {
-			data, err := exec.distinctHash.marshal()
-			if err != nil {
-				return nil, err
-			}
-			groupData = append(groupData, data)
-		}
-		for i := range exec.groups {
-			data, err := marshalJsonObjectGroup(exec.groups[i])
-			if err != nil {
-				return nil, err
-			}
-			groupData = append(groupData, data)
-		}
-	}
-
-	encoded := EncodedAgg{
-		Info:    d,
-		Result:  r,
-		Empties: em,
-		Groups:  groupData,
-	}
-	return encoded.Marshal()
 }
 
 func (exec *jsonObjectAggExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {

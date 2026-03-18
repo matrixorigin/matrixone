@@ -240,72 +240,128 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 	}
 
 	// compute spill bucket.
-	hashCodes := ctr.hr.Hash.AllGroupHash()
+	n := int(ctr.hr.Hash.GroupCount())
+	if cap(ctr.spillHashCodes) < n {
+		ctr.spillHashCodes = make([]uint64, n)
+	}
+	hashCodes := ctr.hr.Hash.AppendAllGroupHash(ctr.spillHashCodes[:n])
 	// our hash code from Hash is NOT random, esp, int32/uint32 will hash to a 32 bit value,
 	// bummer.
 	ctr.computeBucketIndex(hashCodes, uint64(myLv))
 
 	// tmp batch and buffer to write.   it is OK to pass in a nil vec, as
 	// ctr.groupByTypes is already initialized.
-	gbBatch := ctr.createNewGroupByBatch(nil, aggBatchSize)
-	defer gbBatch.Clean(ctr.mp)
-	buf := bytes.NewBuffer(make([]byte, 0, common.MiB))
+	if ctr.spillGbBatch == nil {
+		ctr.spillGbBatch = ctr.createNewGroupByBatch(nil, aggBatchSize)
+	}
+	gbBatch := ctr.spillGbBatch
+	if ctr.spillBuf == nil {
+		ctr.spillBuf = bytes.NewBuffer(make([]byte, 0, common.MiB))
+	}
+	buf := ctr.spillBuf
 
-	for i := 0; i < spillNumBuckets; i++ {
-		buf.Reset()
+	// reusable per-bucket flag slice for a single batch's rows
+	var batchFlags []uint8
 
-		cnt, flags := computeChunkFlags(hashCodes, uint64(i), aggBatchSize)
-		buf.Write(types.EncodeInt64(&cnt))
-		if cnt == 0 {
+	// Process one groupByBatch at a time to avoid holding all batches in memory.
+	// For each batch, compute bucket assignments in a single pass, then write one
+	// record per bucket that has matching rows.
+	//
+	// fullFlags is a [][]uint8 of length len(groupByBatches) passed to SaveIntermediateResult.
+	// All entries are nil (→ cnt=0, skipped by reader) except the current batch's index.
+	nBatches := len(ctr.groupByBatches)
+	if cap(ctr.spillChunkFlags) < nBatches {
+		ctr.spillChunkFlags = make([][]uint8, nBatches)
+	}
+	fullFlags := ctr.spillChunkFlags[:nBatches]
+	for i := range fullFlags {
+		fullFlags[i] = []uint8{} // empty (not nil) so UnionBatch skips it
+	}
+
+	hcOffset := 0
+	for nthBatch, gb := range ctr.groupByBatches {
+		rc := gb.RowCount()
+		if rc == 0 {
 			continue
 		}
+		batchHC := hashCodes[hcOffset : hcOffset+rc]
+		hcOffset += rc
 
-		// extend the group by batch to the new size, set row count to 0, then we union
-		// group by batches to the parent batch.
-		gbBatch.CleanOnlyData()
-		gbBatch.PreExtend(ctr.mp, int(cnt))
+		// single pass: compute per-bucket flags and counts for this batch
+		var bktCounts [spillNumBuckets]int64
+		if cap(batchFlags) < rc {
+			batchFlags = make([]uint8, rc)
+		}
+		flags := batchFlags[:rc]
 
-		for nthBatch, gb := range ctr.groupByBatches {
-			if gb.RowCount() == 0 {
+		for j, h := range batchHC {
+			b := h & (spillNumBuckets - 1)
+			flags[j] = uint8(b)
+			bktCounts[b]++
+		}
+
+		// reuse spillFlagFlat as the per-bucket 0/1 flag array
+		if cap(ctr.spillFlagFlat) < rc {
+			ctr.spillFlagFlat = make([]uint8, rc)
+		}
+		bktFlags := ctr.spillFlagFlat[:rc]
+
+		for i := 0; i < spillNumBuckets; i++ {
+			cnt := bktCounts[i]
+			if cnt == 0 {
 				continue
 			}
+
+			// fill bktFlags: 1 if row belongs to bucket i
+			for j := range bktFlags {
+				if flags[j] == uint8(i) {
+					bktFlags[j] = 1
+				} else {
+					bktFlags[j] = 0
+				}
+			}
+
+			buf.Reset()
+			buf.Write(types.EncodeInt64(&cnt))
+
+			// build gbBatch for this bucket's rows from this batch
+			gbBatch.CleanOnlyData()
+			if err := gbBatch.PreExtend(ctr.mp, int(cnt)); err != nil {
+				return err
+			}
 			for j := range gb.Vecs {
-				err := gbBatch.Vecs[j].UnionBatch(
-					gb.Vecs[j], 0, len(flags[nthBatch]), flags[nthBatch], ctr.mp)
-				if err != nil {
+				if err := gbBatch.Vecs[j].UnionBatch(gb.Vecs[j], 0, rc, bktFlags, ctr.mp); err != nil {
 					return err
 				}
 			}
-		}
+			gbBatch.SetRowCount(int(cnt))
+			gbBatch.MarshalBinaryWithBuffer(buf, false)
 
-		// Oh, this API.
-		gbBatch.SetRowCount(int(cnt))
-		// write batch to buf
-		gbBatch.MarshalBinaryWithBuffer(buf, false)
+			// write marker
+			var magic uint64 = 0x12345678DEADBEEF
+			buf.Write(types.EncodeInt64(&cnt))
+			buf.Write(types.EncodeUint64(&magic))
 
-		// write marker
-		var magic uint64 = 0x12345678DEADBEEF
-		buf.Write(types.EncodeInt64(&cnt))
-		buf.Write(types.EncodeUint64(&magic))
+			// save aggs: pass full-length flags with only nthBatch populated.
+			// SaveIntermediateResult writes cnt=0 for nil entries (skipped on read).
+			nAggs := int32(len(ctr.aggList))
+			buf.Write(types.EncodeInt32(&nAggs))
+			fullFlags[nthBatch] = bktFlags
+			for _, ag := range ctr.aggList {
+				if err := ag.SaveIntermediateResult(cnt, fullFlags, buf); err != nil {
+					return err
+				}
+			}
+			fullFlags[nthBatch] = nil
 
-		// save aggs to buf
-		nAggs := int32(len(ctr.aggList))
-		buf.Write(types.EncodeInt32(&nAggs))
+			magic = 0xdeadbeef12345678
+			buf.Write(types.EncodeInt64(&cnt))
+			buf.Write(types.EncodeUint64(&magic))
 
-		for _, ag := range ctr.aggList {
-			if err := ag.SaveIntermediateResult(cnt, flags, buf); err != nil {
+			ctr.currentSpillBkt[i].cnt += cnt
+			if _, err := ctr.currentSpillBkt[i].file.Write(buf.Bytes()); err != nil {
 				return err
 			}
-		}
-
-		magic = 0xdeadbeef12345678
-		buf.Write(types.EncodeInt64(&cnt))
-		buf.Write(types.EncodeUint64(&magic))
-
-		ctr.currentSpillBkt[i].cnt += cnt
-		_, err := ctr.currentSpillBkt[i].file.Write(buf.Bytes())
-		if err != nil {
-			return err
 		}
 	}
 
@@ -342,13 +398,17 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 
 	// we reset ctr state, and create a new group by batch.
 	ctr.resetForSpill()
-	gbBatch := ctr.createNewGroupByBatch(nil, aggBatchSize)
-	defer func() {
-		gbBatch.Clean(ctr.mp)
-	}()
-	totalCnt := int64(0)
+	if ctr.spillGbBatch == nil {
+		ctr.spillGbBatch = ctr.createNewGroupByBatch(nil, aggBatchSize)
+	}
+	gbBatch := ctr.spillGbBatch
 
-	bufferedFile := bufio.NewReaderSize(bkt.file, 1024*1024)
+	if ctr.spillReader == nil {
+		ctr.spillReader = bufio.NewReaderSize(bkt.file, 8192)
+	} else {
+		ctr.spillReader.Reset(bkt.file)
+	}
+	bufferedFile := ctr.spillReader
 
 	for {
 		// load next batch from the spill bucket.
@@ -363,7 +423,6 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 		if cnt == 0 {
 			continue
 		}
-		totalCnt += cnt
 
 		if len(ctr.aggList) != len(aggExprs) {
 			ctr.aggList, err = ctr.makeAggList(aggExprs)
@@ -619,13 +678,5 @@ func (ctr *container) sanityCheck() {
 		if batchRowCount != int(originGroupCount) {
 			panic(moerr.NewInternalErrorNoCtx("group count mismatch"))
 		}
-
-		// this check only works for agg using aggState framework.
-		// disable for now.
-		// for aggIdx, ag := range ctr.aggList {
-		//	if ag.Size() != int64(batchRowCount) {
-		//		panic(moerr.NewInternalErrorNoCtxf("agg %d count mismatch", aggIdx))
-		//	}
-		//}
 	}
 }

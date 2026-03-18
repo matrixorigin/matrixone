@@ -70,8 +70,6 @@ func (ag *AggFuncExecExpression) GetExtraConfig() []byte {
 
 // AggFuncExec is an interface to do execution for aggregation.
 type AggFuncExec interface {
-	marshal() ([]byte, error)
-	unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error
 	GetOptResult() SplitResult
 
 	AggID() int64

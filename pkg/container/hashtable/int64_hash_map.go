@@ -404,14 +404,14 @@ func (ht *Int64HashMap) UnmarshalFrom(r io.Reader, mp *mpool.MPool) (n int64, er
 	return
 }
 
-func (ht *Int64HashMap) AllGroupHash() []uint64 {
-	ret := make([]uint64, ht.elemCnt)
+func (ht *Int64HashMap) AppendAllGroupHash(dst []uint64) []uint64 {
+	dst = dst[:ht.elemCnt]
 	for i := range ht.cells {
 		for _, c := range ht.cells[i] {
 			if c.Mapped != 0 {
-				ret[c.Mapped-1] = c.Key
+				dst[c.Mapped-1] = c.Key
 			}
 		}
 	}
-	return ret
+	return dst
 }

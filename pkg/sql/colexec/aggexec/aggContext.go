@@ -96,17 +96,6 @@ func (a *AggContext) getGroupContext(i int) AggGroupExecContext {
 	return nil
 }
 
-func (a *AggContext) getGroupContextEncodings() [][]byte {
-	if !a.hasGroupContext {
-		return nil
-	}
-	encodings := make([][]byte, len(a.groupContext))
-	for i := range a.groupContext {
-		encodings[i] = a.groupContext[i].Marshal()
-	}
-	return encodings
-}
-
 func (a *AggContext) getGroupContextEncodingsForFlags(cnt int64, flags [][]uint8) [][]byte {
 	if !a.hasGroupContext {
 		return nil
