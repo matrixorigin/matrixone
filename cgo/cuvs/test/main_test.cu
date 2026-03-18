@@ -63,6 +63,96 @@ TEST(ThreadSafeQueueTest, StopQueue) {
     ASSERT_TRUE(q.is_stopped());
 }
 
+TEST(ThreadSafeQueueTest, PushBlocking) {
+    thread_safe_queue_t<int> q;
+    q.set_capacity(2);
+    
+    q.push(1);
+    q.push(2);
+    
+    std::atomic<bool> pushed_third{false};
+    std::thread t([&]() {
+        q.push(3); // Should block
+        pushed_third.store(true);
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    ASSERT_FALSE(pushed_third.load());
+
+    int val;
+    ASSERT_TRUE(q.pop(val));
+    ASSERT_EQ(val, 1);
+
+    // Now the third push should unblock
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    ASSERT_TRUE(pushed_third.load());
+
+    ASSERT_TRUE(q.pop(val));
+    ASSERT_EQ(val, 2);
+    ASSERT_TRUE(q.pop(val));
+    ASSERT_EQ(val, 3);
+    
+    t.join();
+}
+
+TEST(ThreadSafeQueueTest, ProducerConsumerStress) {
+    thread_safe_queue_t<int> q;
+    q.set_capacity(10);
+    const int num_producers = 4;
+    const int num_consumers = 4;
+    const int items_per_producer = 1000;
+    
+    std::atomic<int> sum_pushed{0};
+    std::atomic<int> sum_popped{0};
+    std::atomic<int> count_popped{0};
+
+    auto producer = [&]() {
+        for (int i = 0; i < items_per_producer; ++i) {
+            q.push(1);
+            sum_pushed.fetch_add(1);
+        }
+    };
+
+    auto consumer = [&]() {
+        int val;
+        while (q.pop(val)) {
+            sum_popped.fetch_add(val);
+            count_popped.fetch_add(1);
+            if (count_popped.load() == num_producers * items_per_producer) {
+                q.stop();
+            }
+        }
+    };
+
+    std::vector<std::thread> threads;
+    for (int i = 0; i < num_producers; ++i) threads.emplace_back(producer);
+    for (int i = 0; i < num_consumers; ++i) threads.emplace_back(consumer);
+
+    for (auto& t : threads) t.join();
+
+    ASSERT_EQ(sum_pushed.load(), sum_popped.load());
+    ASSERT_EQ(count_popped.load(), num_producers * items_per_producer);
+}
+
+TEST(ThreadSafeQueueTest, StopUnblocksProducer) {
+    thread_safe_queue_t<int> q;
+    q.set_capacity(1);
+    q.push(1);
+
+    std::atomic<bool> push_exited{false};
+    std::thread t([&]() {
+        q.push(2); // Blocks
+        push_exited.store(true);
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    ASSERT_FALSE(push_exited.load());
+
+    q.stop();
+    t.join();
+    ASSERT_TRUE(push_exited.load());
+}
+
 // --- cuvs_task_result_store_t Tests ---
 
 TEST(CuvsTaskResultStoreTest, BasicStoreRetrieve) {
