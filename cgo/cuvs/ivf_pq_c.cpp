@@ -445,6 +445,23 @@ uint32_t gpu_ivf_pq_len(gpu_ivf_pq_c index_c) {
     }
 }
 
+void gpu_ivf_pq_info(gpu_ivf_pq_c index_c, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    if (!index_c) return;
+    try {
+        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
+        switch (any->qtype) {
+            case Quantization_F32: static_cast<matrixone::gpu_ivf_pq_t<float>*>(any->ptr)->info(); break;
+            case Quantization_F16: static_cast<matrixone::gpu_ivf_pq_t<half>*>(any->ptr)->info(); break;
+            case Quantization_INT8: static_cast<matrixone::gpu_ivf_pq_t<int8_t>*>(any->ptr)->info(); break;
+            case Quantization_UINT8: static_cast<matrixone::gpu_ivf_pq_t<uint8_t>*>(any->ptr)->info(); break;
+            default: break;
+        }
+    } catch (const std::exception& e) {
+        set_errmsg(errmsg, "Error in gpu_ivf_pq_info", e.what());
+    }
+}
+
 void gpu_ivf_pq_get_centers(gpu_ivf_pq_c index_c, float* centers, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {

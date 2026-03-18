@@ -416,6 +416,17 @@ public:
         if (result.error) std::rethrow_exception(result.error);
         return std::any_cast<std::vector<CentroidT>>(result.result);
     }
+
+    void info() const override {
+        gpu_index_base_t<T, kmeans_build_params_t>::info();
+        std::cout << "KMeans Specific Info:" << std::endl;
+        std::cout << "  N Clusters: " << n_clusters << std::endl;
+        if (centroids_) {
+            std::cout << "  Centroids: Trained" << std::endl;
+        } else {
+            std::cout << "  Centroids: Not Trained" << std::endl;
+        }
+    }
 };
 
 } // namespace matrixone

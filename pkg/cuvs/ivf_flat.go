@@ -537,6 +537,21 @@ func (gi *GpuIvfFlat[T]) Len() uint32 {
 	return uint32(C.gpu_ivf_flat_len(gi.cIvfFlat))
 }
 
+// Info prints detailed information about the index.
+func (gi *GpuIvfFlat[T]) Info() error {
+	if gi.cIvfFlat == nil {
+		return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
+	}
+	var errmsg *C.char
+	C.gpu_ivf_flat_info(gi.cIvfFlat, unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
 // GetCenters retrieves the trained centroids.
 func (gi *GpuIvfFlat[T]) GetCenters(nLists uint32) ([]float32, error) {
 	if gi.cIvfFlat == nil {

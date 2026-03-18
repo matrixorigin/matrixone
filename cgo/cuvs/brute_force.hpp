@@ -302,6 +302,16 @@ public:
         if (result.error) std::rethrow_exception(result.error);
         return std::any_cast<search_result_t>(result.result);
     }
+
+    void info() const override {
+        gpu_index_base_t<T, brute_force_build_params_t>::info();
+        std::cout << "Brute-Force Specific Info:" << std::endl;
+        if (index) {
+            std::cout << "  Size: " << index->size() << std::endl;
+        } else {
+            std::cout << "  (Index not built yet)" << std::endl;
+        }
+    }
 };
 
 } // namespace matrixone

@@ -356,3 +356,18 @@ func (gk *GpuKMeans[T]) GetCentroids() ([]T, error) {
 	}
 	return centroids, nil
 }
+
+// Info prints detailed information about the kmeans clustering.
+func (gk *GpuKMeans[T]) Info() error {
+	if gk.cKMeans == nil {
+		return moerr.NewInternalErrorNoCtx("GpuKMeans is not initialized")
+	}
+	var errmsg *C.char
+	C.gpu_kmeans_info(gk.cKMeans, unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}

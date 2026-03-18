@@ -172,6 +172,14 @@ type VectorType interface {
 	float32 | Float16 | int8 | uint8
 }
 
+// GpuIndex is an interface for all GPU-accelerated indexes.
+type GpuIndex interface {
+	Start() error
+	Build() error
+	Destroy() error
+	Info() error
+}
+
 // GetQuantization returns the Quantization enum for a given VectorType.
 func GetQuantization[T VectorType]() Quantization {
 	var zero T

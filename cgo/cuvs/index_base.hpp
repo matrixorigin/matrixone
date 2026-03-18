@@ -159,6 +159,18 @@ public:
         return static_cast<uint32_t>(current_offset_);
     }
 
+    virtual void info() const {
+        std::cout << "Index Info:" << std::endl;
+        std::cout << "  Dimension: " << dimension << std::endl;
+        std::cout << "  Metric: " << (int)metric << std::endl;
+        std::cout << "  Status: " << (is_loaded_ ? "Loaded" : "Not Loaded") << std::endl;
+        std::cout << "  Capacity: " << count << std::endl;
+        std::cout << "  Current Length: " << current_offset_ << std::endl;
+        std::cout << "  Devices: ";
+        for (int dev : devices_) std::cout << dev << " ";
+        std::cout << std::endl;
+    }
+
 protected:
     scalar_quantizer_t<float> quantizer_;
     uint64_t current_offset_ = 0;

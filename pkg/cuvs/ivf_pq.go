@@ -602,6 +602,21 @@ func (gi *GpuIvfPq[T]) Len() uint32 {
 	return uint32(C.gpu_ivf_pq_len(gi.cIvfPq))
 }
 
+// Info prints detailed information about the index.
+func (gi *GpuIvfPq[T]) Info() error {
+	if gi.cIvfPq == nil {
+		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
+	}
+	var errmsg *C.char
+	C.gpu_ivf_pq_info(gi.cIvfPq, unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
 // GetCenters retrieves the trained centroids.
 func (gi *GpuIvfPq[T]) GetCenters() ([]float32, error) {
 	if gi.cIvfPq == nil {

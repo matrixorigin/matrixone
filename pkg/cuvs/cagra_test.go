@@ -392,6 +392,7 @@ func BenchmarkGpuShardedCagra(b *testing.B) {
 	if err := index.Build(); err != nil {
 		b.Fatalf("Build failed: %v", err)
 	}
+	index.Info()
 
 	sp := DefaultCagraSearchParams()
 
@@ -438,6 +439,7 @@ func BenchmarkGpuSingleCagra(b *testing.B) {
 	if err := index.Build(); err != nil {
 		b.Fatalf("Build failed: %v", err)
 	}
+	index.Info()
 
 	sp := DefaultCagraSearchParams()
 
@@ -487,6 +489,7 @@ func BenchmarkGpuReplicatedCagra(b *testing.B) {
 	if err := index.Build(); err != nil {
 		b.Fatalf("Build failed: %v", err)
 	}
+	index.Info()
 
 	sp := DefaultCagraSearchParams()
 

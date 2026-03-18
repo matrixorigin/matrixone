@@ -629,6 +629,30 @@ public:
         }
         return this->build_params.n_lists;
     }
+
+    void info() const override {
+        gpu_index_base_t<T, ivf_flat_build_params_t>::info();
+        std::cout << "IVF-Flat Specific Info:" << std::endl;
+        if (index_) {
+            std::cout << "  [Single-GPU Index]" << std::endl;
+            std::cout << "    Size: " << index_->size() << std::endl;
+            std::cout << "    N Lists: " << index_->n_lists() << std::endl;
+        } else if (mg_index_) {
+            std::cout << "  [Multi-GPU Index]" << std::endl;
+            for (size_t i = 0; i < mg_index_->ann_interfaces_.size(); ++i) {
+                const auto& iface = mg_index_->ann_interfaces_[i];
+                std::cout << "    Device " << this->devices_[i] << " Shard:" << std::endl;
+                if (iface.index_.has_value()) {
+                    std::cout << "      Size: " << iface.index_.value().size() << std::endl;
+                    std::cout << "      N Lists: " << iface.index_.value().n_lists() << std::endl;
+                } else {
+                    std::cout << "      (Not loaded on this device)" << std::endl;
+                }
+            }
+        } else {
+            std::cout << "  (Index not built yet)" << std::endl;
+        }
+    }
 };
 
 } // namespace matrixone

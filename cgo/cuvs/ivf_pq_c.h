@@ -107,6 +107,9 @@ uint32_t gpu_ivf_pq_cap(gpu_ivf_pq_c index_c);
 // Returns the current number of vectors in the index
 uint32_t gpu_ivf_pq_len(gpu_ivf_pq_c index_c);
 
+// Prints info about the index
+void gpu_ivf_pq_info(gpu_ivf_pq_c index_c, void* errmsg);
+
 // Gets the trained centroids
 void gpu_ivf_pq_get_centers(gpu_ivf_pq_c index_c, float* centers, void* errmsg);
 
