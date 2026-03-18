@@ -315,7 +315,8 @@ func BenchmarkGpuShardedIvfPq(b *testing.B) {
 	if err := index.Build(); err != nil {
 		b.Fatalf("Build failed: %v", err)
 	}
-	index.Info()
+	info, _ := index.Info()
+	fmt.Println(info)
 
 	sp := DefaultIvfPqSearchParams()
 	sp.NProbes = 3
@@ -375,7 +376,8 @@ func BenchmarkGpuSingleIvfPq(b *testing.B) {
 	if err := index.Build(); err != nil {
 		b.Fatalf("Build failed: %v", err)
 	}
-	index.Info()
+	info, _ := index.Info()
+	fmt.Println(info)
 
 	sp := DefaultIvfPqSearchParams()
 	sp.NProbes = 3
@@ -438,7 +440,8 @@ func BenchmarkGpuReplicatedIvfPq(b *testing.B) {
 	if err := index.Build(); err != nil {
 		b.Fatalf("Build failed: %v", err)
 	}
-	index.Info()
+	info, _ := index.Info()
+	fmt.Println(info)
 
 	sp := DefaultIvfPqSearchParams()
 	sp.NProbes = 3
@@ -508,7 +511,8 @@ func BenchmarkGpuAddChunkAndSearchIvfPqF16(b *testing.B) {
 	if err := index.Build(); err != nil {
 		b.Fatalf("Build failed: %v", err)
 	}
-	index.Info()
+	info, _ := index.Info()
+	fmt.Println(info)
 
 	sp := DefaultIvfPqSearchParams()
 	sp.NProbes = 3
@@ -571,7 +575,8 @@ func BenchmarkGpuAddChunkAndSearchIvfPqInt8(b *testing.B) {
 	if err := index.Build(); err != nil {
 		b.Fatalf("Build failed: %v", err)
 	}
-	index.Info()
+	info, _ := index.Info()
+	fmt.Println(info)
 
 	sp := DefaultIvfPqSearchParams()
 	sp.NProbes = 3

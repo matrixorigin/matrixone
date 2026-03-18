@@ -539,19 +539,27 @@ func (gc *GpuCagra[T]) Len() uint32 {
 	return uint32(C.gpu_cagra_len(gc.cCagra))
 }
 
-// Info prints detailed information about the index.
-func (gc *GpuCagra[T]) Info() error {
+// Info returns detailed information about the index as a JSON string.
+func (gc *GpuCagra[T]) Info() (string, error) {
 	if gc.cCagra == nil {
-		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
+		return "", moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
 	var errmsg *C.char
-	C.gpu_cagra_info(gc.cCagra, unsafe.Pointer(&errmsg))
+	infoPtr := C.gpu_cagra_info(gc.cCagra, unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))
-		return moerr.NewInternalErrorNoCtx(errStr)
+		if infoPtr != nil {
+			C.free(unsafe.Pointer(infoPtr))
+		}
+		return "", moerr.NewInternalErrorNoCtx(errStr)
 	}
-	return nil
+	if infoPtr == nil {
+		return "{}", nil
+	}
+	info := C.GoString(infoPtr)
+	C.free(unsafe.Pointer(infoPtr))
+	return info, nil
 }
 
 // Extend adds more vectors to the index (single-GPU only)

@@ -277,19 +277,27 @@ func (gb *GpuBruteForce[T]) Len() uint32 {
 	return uint32(C.gpu_brute_force_len(gb.cIndex))
 }
 
-// Info prints detailed information about the index.
-func (gb *GpuBruteForce[T]) Info() error {
+// Info returns detailed information about the index as a JSON string.
+func (gb *GpuBruteForce[T]) Info() (string, error) {
 	if gb.cIndex == nil {
-		return moerr.NewInternalErrorNoCtx("GpuBruteForce is not initialized")
+		return "", moerr.NewInternalErrorNoCtx("GpuBruteForce is not initialized")
 	}
 	var errmsg *C.char
-	C.gpu_brute_force_info(gb.cIndex, unsafe.Pointer(&errmsg))
+	infoPtr := C.gpu_brute_force_info(gb.cIndex, unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))
-		return moerr.NewInternalErrorNoCtx(errStr)
+		if infoPtr != nil {
+			C.free(unsafe.Pointer(infoPtr))
+		}
+		return "", moerr.NewInternalErrorNoCtx(errStr)
 	}
-	return nil
+	if infoPtr == nil {
+		return "{}", nil
+	}
+	info := C.GoString(infoPtr)
+	C.free(unsafe.Pointer(infoPtr))
+	return info, nil
 }
 
 // Destroy frees the C++ GpuBruteForce instance
