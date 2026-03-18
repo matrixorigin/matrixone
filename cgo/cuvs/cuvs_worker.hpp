@@ -30,6 +30,7 @@
 #include <stdexcept>
 #include <thread>
 #include <vector>
+#include <limits>
 
 #ifdef __linux__
 #include <pthread.h>
@@ -100,28 +101,35 @@ static inline bool is_snmg_handle(raft::resources* res) {
 template <typename T>
 class thread_safe_queue_t {
 public:
+    void set_capacity(size_t capacity) {
+        std::lock_guard<std::mutex> lock(mu_);
+        capacity_ = capacity;
+    }
+
     void push(T value) {
-        {
-            std::lock_guard<std::mutex> lock(mu_);
-            queue_.push_back(std::move(value));
-        }
-        cv_.notify_one();
+        std::unique_lock<std::mutex> lock(mu_);
+        cv_full_.wait(lock, [this] { return queue_.size() < capacity_ || stopped_; });
+        if (stopped_) return;
+        queue_.push_back(std::move(value));
+        cv_empty_.notify_one();
     }
 
     bool pop(T& value) {
         std::unique_lock<std::mutex> lock(mu_);
-        cv_.wait(lock, [this] { return !queue_.empty() || stopped_; });
+        cv_empty_.wait(lock, [this] { return !queue_.empty() || stopped_; });
         if (queue_.empty()) return false;
         value = std::move(queue_.front());
         queue_.pop_front();
+        cv_full_.notify_one();
         return true;
     }
 
     bool try_pop(T& value) {
         std::lock_guard<std::mutex> lock(mu_);
-        if (queue_.empty()) return false;
+        if (queue_.empty() || stopped_) return false;
         value = std::move(queue_.front());
         queue_.pop_front();
+        cv_full_.notify_one();
         return true;
     }
 
@@ -130,7 +138,8 @@ public:
             std::lock_guard<std::mutex> lock(mu_);
             stopped_ = true;
         }
-        cv_.notify_all();
+        cv_empty_.notify_all();
+        cv_full_.notify_all();
     }
 
     bool is_stopped() const {
@@ -143,10 +152,17 @@ public:
         return queue_.empty();
     }
 
+    size_t size() const {
+        std::lock_guard<std::mutex> lock(mu_);
+        return queue_.size();
+    }
+
 private:
     std::deque<T> queue_;
     mutable std::mutex mu_;
-    std::condition_variable cv_;
+    std::condition_variable cv_empty_;
+    std::condition_variable cv_full_;
+    size_t capacity_ = std::numeric_limits<size_t>::max();
     bool stopped_ = false;
 };
 
@@ -232,11 +248,17 @@ public:
     explicit cuvs_worker_t(size_t n_threads, int device_id = -1) 
         : n_threads_(n_threads), device_id_(device_id) {
         if (n_threads == 0) throw std::invalid_argument("Thread count must be > 0");
+        size_t cap = 2 * n_threads;
+        main_tasks_.set_capacity(cap);
+        worker_tasks_.set_capacity(cap);
     }
 
     cuvs_worker_t(size_t n_threads, const std::vector<int>& devices, bool force_mg = false)
         : n_threads_(n_threads), devices_(devices), force_mg_(force_mg) {
         if (n_threads == 0) throw std::invalid_argument("Thread count must be > 0");
+        size_t cap = 2 * n_threads;
+        main_tasks_.set_capacity(cap);
+        worker_tasks_.set_capacity(cap);
     }
 
     ~cuvs_worker_t() { stop(); }
@@ -274,10 +296,7 @@ public:
     uint64_t submit(user_task_fn fn) {
         if (stopped_.load()) throw std::runtime_error("Cannot submit task: worker stopped");
         uint64_t id = result_store_.get_next_job_id();
-        {
-            std::lock_guard<std::mutex> lock(worker_mu_);
-            worker_tasks_.push({id, std::move(fn)});
-        }
+        worker_tasks_.push({id, std::move(fn)});
         worker_cv_.notify_all();
         return id;
     }
@@ -285,10 +304,7 @@ public:
     uint64_t submit_main(user_task_fn fn) {
         if (stopped_.load()) throw std::runtime_error("Cannot submit main task: worker stopped");
         uint64_t id = result_store_.get_next_job_id();
-        {
-            std::lock_guard<std::mutex> lock(worker_mu_);
-            main_tasks_.push({id, std::move(fn)});
-        }
+        main_tasks_.push({id, std::move(fn)});
         worker_cv_.notify_all();
         return id;
     }
@@ -468,26 +484,10 @@ private:
         auto resource = setup_resource_internal(thread_idx, false);
         if (!resource) return;
 
-        while (true) {
-            cuvs_task_t task;
-            bool found = false;
-
-            {
-                std::unique_lock<std::mutex> lock(worker_mu_);
-                worker_cv_.wait(lock, [&] {
-                    return !worker_tasks_.empty() || should_stop_ || fatal_error_;
-                });
-
-                if (should_stop_ || fatal_error_) break;
-
-                if (worker_tasks_.try_pop(task)) {
-                    found = true;
-                }
-            }
-
-            if (found) {
-                execute_task(task, *resource);
-            }
+        cuvs_task_t task;
+        while (worker_tasks_.pop(task)) {
+            if (fatal_error_) break;
+            execute_task(task, *resource);
         }
     }
 
@@ -530,7 +530,6 @@ private:
         if (!fatal_error_) fatal_error_ = err;
         {
             std::lock_guard<std::mutex> lock_w(worker_mu_);
-            // Let the loops check fatal_error_
         }
         worker_cv_.notify_all();
     }
