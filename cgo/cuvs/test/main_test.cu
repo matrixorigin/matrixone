@@ -181,6 +181,107 @@ TEST(CuvsWorkerTest, TaskErrorHandling) {
     worker.stop();
 }
 
+TEST(CuvsWorkerTest, SubmitMain) {
+    uint32_t n_threads = 2;
+    cuvs_worker_t worker(n_threads);
+    worker.start();
+
+    // Task that identifies the thread it's running on
+    auto task = [](raft_handle_wrapper_t&) -> std::any {
+        return std::this_thread::get_id();
+    };
+
+    // Submit many tasks to main to ensure they are picked up
+    std::vector<uint64_t> ids;
+    for(int i=0; i<10; ++i) {
+        ids.push_back(worker.submit_main(task));
+    }
+
+    for(auto id : ids) {
+        auto res = worker.wait(id).get();
+        ASSERT_TRUE(res.error == nullptr);
+    }
+
+    worker.stop();
+}
+
+TEST(CuvsWorkerTest, BoundedQueueStress) {
+    const uint32_t n_workers = 4;
+    const uint32_t n_producers = 4;
+    const uint32_t tasks_per_producer = 500;
+    
+    cuvs_worker_t worker(n_workers);
+    worker.start();
+
+    std::atomic<uint32_t> tasks_completed{0};
+    auto task = [&](raft_handle_wrapper_t&) -> std::any {
+        tasks_completed.fetch_add(1);
+        // Small sleep to ensure queue builds up
+        std::this_thread::sleep_for(std::chrono::microseconds(10));
+        return std::any();
+    };
+
+    std::vector<std::thread> producers;
+    for (uint32_t i = 0; i < n_producers; ++i) {
+        producers.emplace_back([&, i]() {
+            for (uint32_t j = 0; j < tasks_per_producer; ++j) {
+                // Mix of submit and submit_main
+                if ((i + j) % 2 == 0) {
+                    worker.submit(task);
+                } else {
+                    worker.submit_main(task);
+                }
+            }
+        });
+    }
+
+    for (auto& t : producers) t.join();
+
+    // Wait for all tasks to complete (since we didn't keep track of IDs here for simplicity,
+    // we just check the counter)
+    const uint32_t total_tasks = n_producers * tasks_per_producer;
+    auto start_time = std::chrono::steady_clock::now();
+    while (tasks_completed.load() < total_tasks) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        if (std::chrono::steady_clock::now() - start_time > std::chrono::seconds(10)) {
+            REPORT_FAILURE("BoundedQueueStress timed out - possible hang");
+        }
+    }
+
+    ASSERT_EQ(tasks_completed.load(), total_tasks);
+    worker.stop();
+}
+
+TEST(CuvsWorkerTest, StopUnderLoad) {
+    const uint32_t n_workers = 4;
+    cuvs_worker_t worker(n_workers);
+    worker.start();
+
+    std::atomic<bool> producer_should_stop{false};
+    std::thread producer([&]() {
+        auto task = [](raft_handle_wrapper_t&) -> std::any {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            return std::any();
+        };
+        while (!producer_should_stop.load()) {
+            try {
+                worker.submit(task);
+            } catch (...) {
+                // Expected when worker stops
+                break;
+            }
+        }
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    
+    // Stop the worker while tasks are being submitted/processed
+    worker.stop();
+    
+    producer_should_stop.store(true);
+    if (producer.joinable()) producer.join();
+}
+
 int main() {
     return RUN_ALL_TESTS();
 }
