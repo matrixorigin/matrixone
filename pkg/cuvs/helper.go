@@ -177,7 +177,7 @@ type GpuIndex interface {
 	Start() error
 	Build() error
 	Destroy() error
-	Info() error
+	Info() (string, error)
 }
 
 // GetQuantization returns the Quantization enum for a given VectorType.
