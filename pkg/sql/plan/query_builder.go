@@ -1222,6 +1222,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			err = builder.remapWindowClause(
 				expr,
 				windowTag,
+				node.GetWindowIdx(),
 				int32(l),
 				childRemapping.globalToLocal,
 				&remapInfo)
