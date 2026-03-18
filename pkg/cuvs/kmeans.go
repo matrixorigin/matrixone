@@ -379,4 +379,3 @@ func (gk *GpuKMeans[T]) Info() (string, error) {
 	C.free(unsafe.Pointer(infoPtr))
 	return info, nil
 }
-

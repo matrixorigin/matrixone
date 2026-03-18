@@ -17,7 +17,6 @@
 package cuvs
 
 import (
-	"fmt"
 	"math/rand"
 	"testing"
 )

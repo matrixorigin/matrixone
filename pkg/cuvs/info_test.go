@@ -66,9 +66,9 @@ func TestIndexInfoComprehensive(t *testing.T) {
 
 	dimension := uint32(128)
 	n_vectors := uint64(10000)
-	
+
 	// Test combinations of Index Type, Distribution Mode, and Data Type
-	
+
 	testCases := []struct {
 		indexType string
 		distMode  DistributionMode
