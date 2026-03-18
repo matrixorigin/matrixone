@@ -117,7 +117,7 @@ public:
     bool pop(T& value) {
         std::unique_lock<std::mutex> lock(mu_);
         cv_empty_.wait(lock, [this] { return !queue_.empty() || stopped_; });
-        if (queue_.empty()) return false;
+        if (stopped_) return false;
         value = std::move(queue_.front());
         queue_.pop_front();
         cv_full_.notify_one();
@@ -530,6 +530,7 @@ private:
         if (!fatal_error_) fatal_error_ = err;
         {
             std::lock_guard<std::mutex> lock_w(worker_mu_);
+            should_stop_ = true; // NEW: Ensure we signal stop on fatal error
         }
         worker_cv_.notify_all();
     }
