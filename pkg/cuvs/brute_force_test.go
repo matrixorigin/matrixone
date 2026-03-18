@@ -17,6 +17,7 @@
 package cuvs
 
 import (
+	"math/rand"
 	"testing"
 )
 
@@ -158,4 +159,49 @@ func TestGpuBruteForceFloat16(t *testing.T) {
 	if distances[0] != 0.0 {
 		t.Errorf("Expected distance 0.0, got %f", distances[0])
 	}
+}
+
+func BenchmarkGpuAddChunkAndSearchBruteForceF16(b *testing.B) {
+	const dimension = 128
+	const totalCount = 100000
+	const chunkSize = 10000
+
+	// Use Float16 as internal type
+	index, err := NewGpuBruteForceEmpty[Float16](uint64(totalCount), dimension, L2Expanded, 8, 0)
+	if err != nil {
+		b.Fatalf("Failed to create index: %v", err)
+	}
+	defer index.Destroy()
+
+	index.Start()
+
+	// Add data in chunks using AddChunkFloat
+	for i := 0; i < totalCount; i += chunkSize {
+		chunk := make([]float32, chunkSize*dimension)
+		for j := range chunk {
+			chunk[j] = rand.Float32()
+		}
+		if err := index.AddChunkFloat(chunk, uint64(chunkSize)); err != nil {
+			b.Fatalf("AddChunkFloat failed at %d: %v", i, err)
+		}
+	}
+
+	if err := index.Build(); err != nil {
+		b.Fatalf("Build failed: %v", err)
+	}
+	index.Info()
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		queries := make([]float32, dimension)
+		for i := range queries {
+			queries[i] = rand.Float32()
+		}
+		for pb.Next() {
+			_, _, err := index.SearchFloat(queries, 1, dimension, 10)
+			if err != nil {
+				b.Fatalf("Search failed: %v", err)
+			}
+		}
+	})
 }

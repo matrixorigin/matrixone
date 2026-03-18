@@ -161,6 +161,7 @@ public:
 
     virtual void info() const {
         std::cout << "Index Info:" << std::endl;
+        std::cout << "  Element Size: " << sizeof(T) << " bytes" << std::endl;
         std::cout << "  Dimension: " << dimension << std::endl;
         std::cout << "  Metric: " << (int)metric << std::endl;
         std::cout << "  Status: " << (is_loaded_ ? "Loaded" : "Not Loaded") << std::endl;

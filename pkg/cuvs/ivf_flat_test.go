@@ -348,6 +348,112 @@ func BenchmarkGpuReplicatedIvfFlat(b *testing.B) {
 	}
 }
 
+func BenchmarkGpuAddChunkAndSearchIvfFlatF16(b *testing.B) {
+	const dimension = 128
+	const totalCount = 100000
+	const chunkSize = 10000
+
+	devices := []int{0}
+	bp := DefaultIvfFlatBuildParams()
+	bp.NLists = 100
+	// Use Float16 as internal type
+	index, err := NewGpuIvfFlatEmpty[Float16](uint64(totalCount), dimension, L2Expanded, bp, devices, 8, SingleGpu)
+	if err != nil {
+		b.Fatalf("Failed to create index: %v", err)
+	}
+	defer index.Destroy()
+
+	if err := index.Start(); err != nil {
+		b.Fatalf("Start failed: %v", err)
+	}
+
+	// Add data in chunks using AddChunkFloat
+	for i := 0; i < totalCount; i += chunkSize {
+		chunk := make([]float32, chunkSize*dimension)
+		for j := range chunk {
+			chunk[j] = rand.Float32()
+		}
+		if err := index.AddChunkFloat(chunk, uint64(chunkSize)); err != nil {
+			b.Fatalf("AddChunkFloat failed at %d: %v", i, err)
+		}
+	}
+
+	if err := index.Build(); err != nil {
+		b.Fatalf("Build failed: %v", err)
+	}
+	index.Info()
+
+	sp := DefaultIvfFlatSearchParams()
+	sp.NProbes = 10
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		queries := make([]float32, dimension)
+		for i := range queries {
+			queries[i] = rand.Float32()
+		}
+		for pb.Next() {
+			_, err := index.SearchFloat(queries, 1, dimension, 10, sp)
+			if err != nil {
+				b.Fatalf("Search failed: %v", err)
+			}
+		}
+	})
+}
+
+func BenchmarkGpuAddChunkAndSearchIvfFlatInt8(b *testing.B) {
+	const dimension = 128
+	const totalCount = 100000
+	const chunkSize = 10000
+
+	devices := []int{0}
+	bp := DefaultIvfFlatBuildParams()
+	bp.NLists = 100
+	// Use int8 as internal type
+	index, err := NewGpuIvfFlatEmpty[int8](uint64(totalCount), dimension, L2Expanded, bp, devices, 8, SingleGpu)
+	if err != nil {
+		b.Fatalf("Failed to create index: %v", err)
+	}
+	defer index.Destroy()
+
+	if err := index.Start(); err != nil {
+		b.Fatalf("Start failed: %v", err)
+	}
+
+	// Add data in chunks using AddChunkFloat
+	for i := 0; i < totalCount; i += chunkSize {
+		chunk := make([]float32, chunkSize*dimension)
+		for j := range chunk {
+			chunk[j] = rand.Float32()
+		}
+		if err := index.AddChunkFloat(chunk, uint64(chunkSize)); err != nil {
+			b.Fatalf("AddChunkFloat failed at %d: %v", i, err)
+		}
+	}
+
+	if err := index.Build(); err != nil {
+		b.Fatalf("Build failed: %v", err)
+	}
+	index.Info()
+
+	sp := DefaultIvfFlatSearchParams()
+	sp.NProbes = 10
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		queries := make([]float32, dimension)
+		for i := range queries {
+			queries[i] = rand.Float32()
+		}
+		for pb.Next() {
+			_, err := index.SearchFloat(queries, 1, dimension, 10, sp)
+			if err != nil {
+				b.Fatalf("Search failed: %v", err)
+			}
+		}
+	})
+}
+
 func TestGpuIvfFlatChunked(t *testing.T) {
 	dimension := uint32(8)
 	totalCount := uint64(100)
