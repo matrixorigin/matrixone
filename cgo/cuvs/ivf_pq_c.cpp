@@ -462,20 +462,32 @@ void gpu_ivf_pq_info(gpu_ivf_pq_c index_c, void* errmsg) {
     }
 }
 
-void gpu_ivf_pq_get_centers(gpu_ivf_pq_c index_c, float* centers, void* errmsg) {
+void gpu_ivf_pq_get_centers(gpu_ivf_pq_c index_c, void* centers, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        std::vector<float> host_centers;
         switch (any->qtype) {
-            case Quantization_F32: host_centers = static_cast<matrixone::gpu_ivf_pq_t<float>*>(any->ptr)->get_centers(); break;
-            case Quantization_F16: host_centers = static_cast<matrixone::gpu_ivf_pq_t<half>*>(any->ptr)->get_centers(); break;
-            case Quantization_INT8: host_centers = static_cast<matrixone::gpu_ivf_pq_t<int8_t>*>(any->ptr)->get_centers(); break;
-            case Quantization_UINT8: host_centers = static_cast<matrixone::gpu_ivf_pq_t<uint8_t>*>(any->ptr)->get_centers(); break;
+            case Quantization_F32: {
+                auto host_centers = static_cast<matrixone::gpu_ivf_pq_t<float>*>(any->ptr)->get_centers();
+                if (!host_centers.empty()) std::copy(host_centers.begin(), host_centers.end(), static_cast<float*>(centers));
+                break;
+            }
+            case Quantization_F16: {
+                auto host_centers = static_cast<matrixone::gpu_ivf_pq_t<half>*>(any->ptr)->get_centers();
+                if (!host_centers.empty()) std::copy(host_centers.begin(), host_centers.end(), static_cast<half*>(centers));
+                break;
+            }
+            case Quantization_INT8: {
+                auto host_centers = static_cast<matrixone::gpu_ivf_pq_t<int8_t>*>(any->ptr)->get_centers();
+                if (!host_centers.empty()) std::copy(host_centers.begin(), host_centers.end(), static_cast<int8_t*>(centers));
+                break;
+            }
+            case Quantization_UINT8: {
+                auto host_centers = static_cast<matrixone::gpu_ivf_pq_t<uint8_t>*>(any->ptr)->get_centers();
+                if (!host_centers.empty()) std::copy(host_centers.begin(), host_centers.end(), static_cast<uint8_t*>(centers));
+                break;
+            }
             default: throw std::runtime_error("Unsupported quantization type");
-        }
-        if (!host_centers.empty()) {
-            std::copy(host_centers.begin(), host_centers.end(), centers);
         }
     } catch (const std::exception& e) {
         set_errmsg(errmsg, "Error in gpu_ivf_pq_get_centers", e.what());

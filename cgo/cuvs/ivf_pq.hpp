@@ -626,7 +626,7 @@ public:
         return search_res;
     }
 
-    std::vector<float> get_centers() {
+    std::vector<T> get_centers() {
         if (!this->is_loaded_ || (!index_ && !mg_index_)) return {};
 
         uint64_t job_id = this->worker->submit_main(
@@ -646,15 +646,25 @@ public:
                     }
                 }
 
-                if (!local_index) return std::vector<float>{};
+                if (!local_index) return std::vector<T>{};
 
                 auto centers_view = local_index->centers();
                 size_t n_centers = centers_view.extent(0);
                 size_t dim = centers_view.extent(1);
-                std::vector<float> host_centers(n_centers * dim);
 
-                RAFT_CUDA_TRY(cudaMemcpyAsync(host_centers.data(), centers_view.data_handle(),
-                                         host_centers.size() * sizeof(float), cudaMemcpyDeviceToHost,
+                // 1. Convert centers from float to T on device
+                auto centers_device_target = raft::make_device_matrix<T, int64_t>(*res, n_centers, dim);
+                if constexpr (sizeof(T) == 1) {
+                    if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
+                    this->quantizer_.template transform<T>(*res, centers_view, centers_device_target.data_handle(), true);
+                } else {
+                    raft::copy(*res, centers_device_target.view(), centers_view);
+                }
+
+                // 2. Copy to host
+                std::vector<T> host_centers(n_centers * dim);
+                RAFT_CUDA_TRY(cudaMemcpyAsync(host_centers.data(), centers_device_target.data_handle(),
+                                         host_centers.size() * sizeof(T), cudaMemcpyDeviceToHost,
                                          raft::resource::get_cuda_stream(*res)));
                 
                 raft::resource::sync_stream(*res);
@@ -664,7 +674,7 @@ public:
 
         auto result = this->worker->wait(job_id).get();
         if (result.error) std::rethrow_exception(result.error);
-        return std::any_cast<std::vector<float>>(result.result);
+        return std::any_cast<std::vector<T>>(result.result);
     }
 
     uint32_t get_n_list() {

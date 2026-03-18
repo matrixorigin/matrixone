@@ -110,8 +110,8 @@ func testIvfPqGetCenters[T VectorType](t *testing.T, name string) {
 		}
 
 		nLists := index.GetNList()
-		dimExt := index.GetDimExt()
-		expectedLen := int(nLists * dimExt)
+		rotDim := index.GetRotDim()
+		expectedLen := int(nLists * rotDim)
 		if len(centers) != expectedLen {
 			t.Errorf("Expected centers length %d, got %d", expectedLen, len(centers))
 		}

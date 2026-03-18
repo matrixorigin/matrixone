@@ -111,7 +111,7 @@ uint32_t gpu_ivf_pq_len(gpu_ivf_pq_c index_c);
 void gpu_ivf_pq_info(gpu_ivf_pq_c index_c, void* errmsg);
 
 // Gets the trained centroids
-void gpu_ivf_pq_get_centers(gpu_ivf_pq_c index_c, float* centers, void* errmsg);
+void gpu_ivf_pq_get_centers(gpu_ivf_pq_c index_c, void* centers, void* errmsg);
 
 // Gets the number of lists (centroids)
 uint32_t gpu_ivf_pq_get_n_list(gpu_ivf_pq_c index_c);

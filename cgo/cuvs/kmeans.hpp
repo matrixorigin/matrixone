@@ -402,17 +402,27 @@ public:
     /**
      * @brief Returns the trained centroids.
      */
-    std::vector<CentroidT> get_centroids() {
+    std::vector<T> get_centroids() {
         uint64_t job_id = this->worker->submit_main(
             [&](raft_handle_wrapper_t& handle) -> std::any {
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
-                if (!centroids_) return std::vector<CentroidT>{};
+                if (!centroids_) return std::vector<T>{};
 
                 auto res = handle.get_raft_resources();
-                std::vector<CentroidT> host_centroids(n_clusters * this->dimension);
+                
+                // 1. Convert centroids from float to T on device
+                auto centroids_device_target = raft::make_device_matrix<T, int64_t>(*res, n_clusters, this->dimension);
+                if constexpr (sizeof(T) == 1) {
+                    if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
+                    this->quantizer_.template transform<T>(*res, centroids_->view(), centroids_device_target.data_handle(), true);
+                } else {
+                    raft::copy(*res, centroids_device_target.view(), centroids_->view());
+                }
 
-                RAFT_CUDA_TRY(cudaMemcpyAsync(host_centroids.data(), centroids_->data_handle(),
-                                         host_centroids.size() * sizeof(CentroidT), cudaMemcpyDeviceToHost,
+                // 2. Copy to host
+                std::vector<T> host_centroids(n_clusters * this->dimension);
+                RAFT_CUDA_TRY(cudaMemcpyAsync(host_centroids.data(), centroids_device_target.data_handle(),
+                                         host_centroids.size() * sizeof(T), cudaMemcpyDeviceToHost,
                                          raft::resource::get_cuda_stream(*res)));
 
                 raft::resource::sync_stream(*res);
@@ -421,7 +431,7 @@ public:
         );
         auto result = this->worker->wait(job_id).get();
         if (result.error) std::rethrow_exception(result.error);
-        return std::any_cast<std::vector<CentroidT>>(result.result);
+        return std::any_cast<std::vector<T>>(result.result);
     }
 
     void info() const override {

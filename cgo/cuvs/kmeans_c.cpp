@@ -321,17 +321,17 @@ void gpu_kmeans_get_centroids(gpu_kmeans_c kmeans_c, void* centroids, void* errm
             }
             case Quantization_F16: {
                 auto host_centers = static_cast<matrixone::gpu_kmeans_t<half>*>(any->ptr)->get_centroids();
-                for (size_t i = 0; i < host_centers.size(); ++i) static_cast<float*>(centroids)[i] = (float)host_centers[i];
+                std::copy(host_centers.begin(), host_centers.end(), static_cast<half*>(centroids));
                 break;
             }
             case Quantization_INT8: {
                 auto host_centers = static_cast<matrixone::gpu_kmeans_t<int8_t>*>(any->ptr)->get_centroids();
-                for (size_t i = 0; i < host_centers.size(); ++i) static_cast<float*>(centroids)[i] = (float)host_centers[i];
+                std::copy(host_centers.begin(), host_centers.end(), static_cast<int8_t*>(centroids));
                 break;
             }
             case Quantization_UINT8: {
                 auto host_centers = static_cast<matrixone::gpu_kmeans_t<uint8_t>*>(any->ptr)->get_centroids();
-                for (size_t i = 0; i < host_centers.size(); ++i) static_cast<float*>(centroids)[i] = (float)host_centers[i];
+                std::copy(host_centers.begin(), host_centers.end(), static_cast<uint8_t*>(centroids));
                 break;
             }
             default: break;

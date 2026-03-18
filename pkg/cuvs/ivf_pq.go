@@ -618,15 +618,15 @@ func (gi *GpuIvfPq[T]) Info() error {
 }
 
 // GetCenters retrieves the trained centroids.
-func (gi *GpuIvfPq[T]) GetCenters() ([]float32, error) {
+func (gi *GpuIvfPq[T]) GetCenters() ([]T, error) {
 	if gi.cIvfPq == nil {
 		return nil, moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
-	nLists := gi.GetNList()
-	dimExt := gi.GetDimExt()
-	centers := make([]float32, nLists*dimExt)
+	nList := gi.GetNList()
+	dim := gi.GetRotDim()
+	centers := make([]T, nList*dim)
 	var errmsg *C.char
-	C.gpu_ivf_pq_get_centers(gi.cIvfPq, (*C.float)(&centers[0]), unsafe.Pointer(&errmsg))
+	C.gpu_ivf_pq_get_centers(gi.cIvfPq, unsafe.Pointer(&centers[0]), unsafe.Pointer(&errmsg))
 	runtime.KeepAlive(centers)
 
 	if errmsg != nil {
