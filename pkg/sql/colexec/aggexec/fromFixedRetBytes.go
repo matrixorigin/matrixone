@@ -281,7 +281,7 @@ func (exec *aggregatorFromFixedToBytes[from]) GroupGrow(more int) error {
 		return err
 	}
 	// deal with execContext.
-	exec.execContext.growsGroupContext(more, exec.singleAggInfo.retType, exec.singleAggInfo.argType)
+	exec.execContext.growGroupContexts(more, exec.singleAggInfo.retType, exec.singleAggInfo.argType)
 	return nil
 }
 

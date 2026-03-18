@@ -75,7 +75,7 @@ func TestGetResultClampsTinyVarianceToZero(t *testing.T) {
 	exec := &varStdDevExec[float64, float64]{
 		isVar: false,
 		isPop: true,
-		f2t:   simpleF2T,
+		f2t:   float64ToResult,
 	}
 
 	tests := []struct {
@@ -111,7 +111,7 @@ func TestGetResultKeepsNonTrivialVariance(t *testing.T) {
 	exec := &varStdDevExec[float64, float64]{
 		isVar: false,
 		isPop: true,
-		f2t:   simpleF2T,
+		f2t:   float64ToResult,
 	}
 
 	got, err := exec.getResult(4.0, 4.0*(1.0+1e-8), 4)
@@ -123,7 +123,7 @@ func TestGetResultVarClampsTinyVarianceToZero(t *testing.T) {
 	exec := &varStdDevExec[float64, float64]{
 		isVar: true,
 		isPop: true,
-		f2t:   simpleF2T,
+		f2t:   float64ToResult,
 	}
 
 	got, err := exec.getResult(4.0, 4.0*(1.0-1e-16), 4)

@@ -404,7 +404,7 @@ func (ht *Int64HashMap) UnmarshalFrom(r io.Reader, mp *mpool.MPool) (n int64, er
 	return
 }
 
-func (ht *Int64HashMap) AppendAllGroupHash(dst []uint64) []uint64 {
+func (ht *Int64HashMap) FillGroupHashes(dst []uint64) []uint64 {
 	dst = dst[:ht.elemCnt]
 	for i := range ht.cells {
 		for _, c := range ht.cells[i] {

@@ -128,7 +128,7 @@ func TestResultSerialization(t *testing.T) {
 		r1.optSplitResult.optInformation.doesThisNeedEmptyList = true
 		r1.init(mp, types.T_int64.ToType(), true, false)
 
-		_, _, _, _, err := r1.resExtend(7)
+		_, _, _, _, err := r1.extendResult(7)
 		require.NoError(t, err)
 
 		data1, data2, dist, err := r1.marshalToBytes()
@@ -163,7 +163,7 @@ func TestResultSerialization(t *testing.T) {
 		r1.optSplitResult.optInformation.doesThisNeedEmptyList = true
 		r1.init(mp, types.T_varchar.ToType(), true, false)
 
-		_, _, _, _, err := r1.resExtend(15)
+		_, _, _, _, err := r1.extendResult(15)
 		require.NoError(t, err)
 
 		data1, data2, dist, err := r1.marshalToBytes()

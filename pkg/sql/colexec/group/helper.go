@@ -244,7 +244,7 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 	if cap(ctr.spillHashCodes) < n {
 		ctr.spillHashCodes = make([]uint64, n)
 	}
-	hashCodes := ctr.hr.Hash.AppendAllGroupHash(ctr.spillHashCodes[:n])
+	hashCodes := ctr.hr.Hash.FillGroupHashes(ctr.spillHashCodes[:n])
 	// our hash code from Hash is NOT random, esp, int32/uint32 will hash to a 32 bit value,
 	// bummer.
 	ctr.computeBucketIndex(hashCodes, uint64(myLv))

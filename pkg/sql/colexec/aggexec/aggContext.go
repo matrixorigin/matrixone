@@ -64,7 +64,7 @@ func (a *AggContext) preAllocate(more int) {
 	a.groupContext = a.groupContext[:oldLen]
 }
 
-func (a *AggContext) growsGroupContext(
+func (a *AggContext) growGroupContexts(
 	more int,
 	resultType types.Type, parameters ...types.Type) {
 	if !a.hasGroupContext {

@@ -136,7 +136,7 @@ func (r *aggResultWithFixedType[T]) setupT() {
 }
 
 func (r *aggResultWithFixedType[T]) grows(more int) error {
-	x1, y1, x2, y2, err := r.resExtend(more)
+	x1, y1, x2, y2, err := r.extendResult(more)
 	if err != nil {
 		return err
 	}
@@ -174,7 +174,7 @@ func (r *aggResultWithBytesType) Size() int64 {
 }
 
 func (r *aggResultWithBytesType) grows(more int) error {
-	x1, y1, x2, y2, err := r.resExtend(more)
+	x1, y1, x2, y2, err := r.extendResult(more)
 	if err != nil {
 		return err
 	}
@@ -555,7 +555,7 @@ func (r *optSplitResult) flushAll() []*vector.Vector {
 // try to expand the length forward from the current position.
 // if there is not enough free space, do memory allocation first.
 //
-// do not call this method directly, plz use the preExtend and resExtend.
+// do not call this method directly, plz use the preExtend and extendResult.
 func (r *optSplitResult) extendResultPurely(more int) error {
 
 	// try tp full the using part first.
@@ -688,9 +688,9 @@ func (r *optSplitResult) preExtend(more int) (err error) {
 	return nil
 }
 
-// resExtend obtains memory of length more from the current position for use,
+// extendResult obtains memory of length more from the current position for use,
 // while also altering the memory usage indicators and other structure related.
-func (r *optSplitResult) resExtend(more int) (startX, startY, endX, endY int, err error) {
+func (r *optSplitResult) extendResult(more int) (startX, startY, endX, endY int, err error) {
 	startX = r.nowIdx1
 	startY = r.resultList[startX].Length()
 
