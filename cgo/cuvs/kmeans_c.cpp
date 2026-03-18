@@ -341,20 +341,23 @@ void gpu_kmeans_get_centroids(gpu_kmeans_c kmeans_c, void* centroids, void* errm
     }
 }
 
-void gpu_kmeans_info(gpu_kmeans_c kmeans_c, void* errmsg) {
+char* gpu_kmeans_info(gpu_kmeans_c kmeans_c, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
-    if (!kmeans_c) return;
+    if (!kmeans_c) return nullptr;
     try {
         auto* any = static_cast<gpu_kmeans_any_t*>(kmeans_c);
+        std::string info;
         switch (any->qtype) {
-            case Quantization_F32: static_cast<matrixone::gpu_kmeans_t<float>*>(any->ptr)->info(); break;
-            case Quantization_F16: static_cast<matrixone::gpu_kmeans_t<half>*>(any->ptr)->info(); break;
-            case Quantization_INT8: static_cast<matrixone::gpu_kmeans_t<int8_t>*>(any->ptr)->info(); break;
-            case Quantization_UINT8: static_cast<matrixone::gpu_kmeans_t<uint8_t>*>(any->ptr)->info(); break;
-            default: break;
+            case Quantization_F32: info = static_cast<matrixone::gpu_kmeans_t<float>*>(any->ptr)->info(); break;
+            case Quantization_F16: info = static_cast<matrixone::gpu_kmeans_t<half>*>(any->ptr)->info(); break;
+            case Quantization_INT8: info = static_cast<matrixone::gpu_kmeans_t<int8_t>*>(any->ptr)->info(); break;
+            case Quantization_UINT8: info = static_cast<matrixone::gpu_kmeans_t<uint8_t>*>(any->ptr)->info(); break;
+            default: return nullptr;
         }
+        return strdup(info.c_str());
     } catch (const std::exception& e) {
         set_errmsg(errmsg, "Error in gpu_kmeans_info", e.what());
+        return nullptr;
     }
 }
 

@@ -310,14 +310,16 @@ public:
         return std::any_cast<search_result_t>(result.result);
     }
 
-    void info() const override {
-        gpu_index_base_t<T, brute_force_build_params_t>::info();
-        std::cout << "Brute-Force Specific Info:" << std::endl;
+    std::string info() const override {
+        std::string json = gpu_index_base_t<T, brute_force_build_params_t>::info();
+        json += ", \"type\": \"BruteForce\", \"brute_force\": {";
         if (index) {
-            std::cout << "  Size: " << index->size() << std::endl;
+            json += "\"size\": " + std::to_string(index->size());
         } else {
-            std::cout << "  (Index not built yet)" << std::endl;
+            json += "\"size\": 0, \"built\": false";
         }
+        json += "}}";
+        return json;
     }
 };
 

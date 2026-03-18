@@ -238,18 +238,21 @@ uint32_t gpu_brute_force_len(gpu_brute_force_c index_c) {
     }
 }
 
-void gpu_brute_force_info(gpu_brute_force_c index_c, void* errmsg) {
+char* gpu_brute_force_info(gpu_brute_force_c index_c, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
-    if (!index_c) return;
+    if (!index_c) return nullptr;
     try {
         auto* any = static_cast<gpu_brute_force_any_t*>(index_c);
+        std::string info;
         switch (any->qtype) {
-            case Quantization_F32: static_cast<matrixone::gpu_brute_force_t<float>*>(any->ptr)->info(); break;
-            case Quantization_F16: static_cast<matrixone::gpu_brute_force_t<half>*>(any->ptr)->info(); break;
-            default: break;
+            case Quantization_F32: info = static_cast<matrixone::gpu_brute_force_t<float>*>(any->ptr)->info(); break;
+            case Quantization_F16: info = static_cast<matrixone::gpu_brute_force_t<half>*>(any->ptr)->info(); break;
+            default: return nullptr;
         }
+        return strdup(info.c_str());
     } catch (const std::exception& e) {
         set_errmsg(errmsg, "Error in gpu_brute_force_info", e.what());
+        return nullptr;
     }
 }
 

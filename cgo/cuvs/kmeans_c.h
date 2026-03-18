@@ -85,8 +85,8 @@ void gpu_kmeans_free_result(gpu_kmeans_result_c result_c);
 // Get centroids
 void gpu_kmeans_get_centroids(gpu_kmeans_c kmeans_c, void* centroids, void* errmsg);
 
-// Prints info about the kmeans
-void gpu_kmeans_info(gpu_kmeans_c kmeans_c, void* errmsg);
+// Returns info about the kmeans as a JSON string
+char* gpu_kmeans_info(gpu_kmeans_c kmeans_c, void* errmsg);
 
 #ifdef __cplusplus
 }

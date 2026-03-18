@@ -743,32 +743,35 @@ public:
         return this->dimension;
     }
 
-    void info() const override {
-        gpu_index_base_t<T, ivf_pq_build_params_t>::info();
-        std::cout << "IVF-PQ Specific Info:" << std::endl;
+    std::string info() const override {
+        std::string json = gpu_index_base_t<T, ivf_pq_build_params_t>::info();
+        json += ", \"type\": \"IVF-PQ\", \"ivf_pq\": {";
         if (index_) {
-            std::cout << "  [Single-GPU Index]" << std::endl;
-            std::cout << "    Size: " << index_->size() << std::endl;
-            std::cout << "    N Lists: " << index_->n_lists() << std::endl;
-            std::cout << "    PQ Dim: " << index_->pq_dim() << std::endl;
-            std::cout << "    PQ Bits: " << index_->pq_bits() << std::endl;
+            json += "\"mode\": \"Single-GPU\", \"size\": " + std::to_string(index_->size()) + 
+                    ", \"n_lists\": " + std::to_string(index_->n_lists()) +
+                    ", \"pq_dim\": " + std::to_string(index_->pq_dim()) +
+                    ", \"pq_bits\": " + std::to_string(index_->pq_bits());
         } else if (mg_index_) {
-            std::cout << "  [Multi-GPU Index]" << std::endl;
+            json += "\"mode\": \"Multi-GPU\", \"shards\": [";
             for (size_t i = 0; i < mg_index_->ann_interfaces_.size(); ++i) {
                 const auto& iface = mg_index_->ann_interfaces_[i];
-                std::cout << "    Device " << this->devices_[i] << " Shard:" << std::endl;
+                json += "{\"device\": " + std::to_string(this->devices_[i]);
                 if (iface.index_.has_value()) {
-                    std::cout << "      Size: " << iface.index_.value().size() << std::endl;
-                    std::cout << "      N Lists: " << iface.index_.value().n_lists() << std::endl;
-                    std::cout << "      PQ Dim: " << iface.index_.value().pq_dim() << std::endl;
-                    std::cout << "      PQ Bits: " << iface.index_.value().pq_bits() << std::endl;
+                    json += ", \"size\": " + std::to_string(iface.index_.value().size()) + 
+                            ", \"n_lists\": " + std::to_string(iface.index_.value().n_lists()) +
+                            ", \"pq_dim\": " + std::to_string(iface.index_.value().pq_dim()) +
+                            ", \"pq_bits\": " + std::to_string(iface.index_.value().pq_bits());
                 } else {
-                    std::cout << "      (Not loaded on this device)" << std::endl;
+                    json += ", \"status\": \"Not loaded\"";
                 }
+                json += "}" + std::string(i == mg_index_->ann_interfaces_.size() - 1 ? "" : ", ");
             }
+            json += "]";
         } else {
-            std::cout << "  (Index not built yet)" << std::endl;
+            json += "\"built\": false";
         }
+        json += "}}";
+        return json;
     }
 };
 

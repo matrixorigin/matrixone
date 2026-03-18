@@ -65,8 +65,8 @@ uint32_t gpu_brute_force_cap(gpu_brute_force_c index_c);
 // Returns the current number of vectors in the index
 uint32_t gpu_brute_force_len(gpu_brute_force_c index_c);
 
-// Prints info about the index
-void gpu_brute_force_info(gpu_brute_force_c index_c, void* errmsg);
+// Returns info about the index as a JSON string
+char* gpu_brute_force_info(gpu_brute_force_c index_c, void* errmsg);
 
 // Destroys the gpu_brute_force_t object and frees associated resources
 void gpu_brute_force_destroy(gpu_brute_force_c index_c, void* errmsg);

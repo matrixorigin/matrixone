@@ -434,15 +434,13 @@ public:
         return std::any_cast<std::vector<T>>(result.result);
     }
 
-    void info() const override {
-        gpu_index_base_t<T, kmeans_build_params_t>::info();
-        std::cout << "KMeans Specific Info:" << std::endl;
-        std::cout << "  N Clusters: " << n_clusters << std::endl;
-        if (centroids_) {
-            std::cout << "  Centroids: Trained" << std::endl;
-        } else {
-            std::cout << "  Centroids: Not Trained" << std::endl;
-        }
+    std::string info() const override {
+        std::string json = gpu_index_base_t<T, kmeans_build_params_t>::info();
+        json += ", \"type\": \"KMeans\", \"kmeans\": {";
+        json += "\"n_clusters\": " + std::to_string(n_clusters) + ", ";
+        json += "\"centroids_trained\": " + std::string(centroids_ ? "true" : "false");
+        json += "}}";
+        return json;
     }
 };
 

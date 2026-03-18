@@ -101,8 +101,8 @@ uint32_t gpu_ivf_flat_cap(gpu_ivf_flat_c index_c);
 // Returns the current number of vectors in the index
 uint32_t gpu_ivf_flat_len(gpu_ivf_flat_c index_c);
 
-// Prints info about the index
-void gpu_ivf_flat_info(gpu_ivf_flat_c index_c, void* errmsg);
+// Returns info about the index as a JSON string
+char* gpu_ivf_flat_info(gpu_ivf_flat_c index_c, void* errmsg);
 
 // Gets the trained centroids
 void gpu_ivf_flat_get_centers(gpu_ivf_flat_c index_c, void* centers, void* errmsg);

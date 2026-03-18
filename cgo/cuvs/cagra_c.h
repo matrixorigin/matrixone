@@ -102,8 +102,8 @@ uint32_t gpu_cagra_cap(gpu_cagra_c index_c);
 // Returns the current number of vectors in the index
 uint32_t gpu_cagra_len(gpu_cagra_c index_c);
 
-// Prints info about the index
-void gpu_cagra_info(gpu_cagra_c index_c, void* errmsg);
+// Returns info about the index as a JSON string
+char* gpu_cagra_info(gpu_cagra_c index_c, void* errmsg);
 
 // Extend function
 void gpu_cagra_extend(gpu_cagra_c index_c, const void* additional_data, uint64_t num_vectors, void* errmsg);

@@ -159,17 +159,20 @@ public:
         return static_cast<uint32_t>(current_offset_);
     }
 
-    virtual void info() const {
-        std::cout << "Index Info:" << std::endl;
-        std::cout << "  Element Size: " << sizeof(T) << " bytes" << std::endl;
-        std::cout << "  Dimension: " << dimension << std::endl;
-        std::cout << "  Metric: " << (int)metric << std::endl;
-        std::cout << "  Status: " << (is_loaded_ ? "Loaded" : "Not Loaded") << std::endl;
-        std::cout << "  Capacity: " << count << std::endl;
-        std::cout << "  Current Length: " << current_offset_ << std::endl;
-        std::cout << "  Devices: ";
-        for (int dev : devices_) std::cout << dev << " ";
-        std::cout << std::endl;
+    virtual std::string info() const {
+        std::string json = "{";
+        json += "\"element_size\": " + std::to_string(sizeof(T)) + ", ";
+        json += "\"dimension\": " + std::to_string(dimension) + ", ";
+        json += "\"metric\": " + std::to_string(static_cast<int>(metric)) + ", ";
+        json += "\"status\": \"" + std::string(is_loaded_ ? "Loaded" : "Not Loaded") + "\", ";
+        json += "\"capacity\": " + std::to_string(count) + ", ";
+        json += "\"current_length\": " + std::to_string(current_offset_) + ", ";
+        json += "\"devices\": [";
+        for (size_t i = 0; i < devices_.size(); ++i) {
+            json += std::to_string(devices_[i]) + (i == devices_.size() - 1 ? "" : ", ");
+        }
+        json += "]";
+        return json; // Caller will close the object or add more fields
     }
 
 protected:
