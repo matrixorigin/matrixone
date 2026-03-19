@@ -593,6 +593,23 @@ func TestPrepareClientLockedNormalizesInitialConnectionError(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF))
 }
 
+func TestNewManagedHAKeeperClientNormalizesInitialConnectionError(t *testing.T) {
+	original := newHAKeeperClientFunc
+	newHAKeeperClientFunc = func(
+		context.Context,
+		string,
+		HAKeeperClientConfig,
+	) (*hakeeperClient, error) {
+		return nil, net.ErrClosed
+	}
+	defer func() {
+		newHAKeeperClientFunc = original
+	}()
+
+	_, err := newManagedHAKeeperClient(context.Background(), "", HAKeeperClientConfig{})
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF))
+}
+
 func TestHAKeeperClientRetryableEOFError(t *testing.T) {
 	c := &managedHAKeeperClient{}
 	ctx := context.Background()
@@ -646,6 +663,37 @@ func TestAllocateIDRetriesPrepareClientError(t *testing.T) {
 	require.Equal(t, 1, sendCalls)
 }
 
+func TestAllocateIDRetriesPrepareClientErrorUntilContextDone(t *testing.T) {
+	originalNew := newHAKeeperClientFunc
+	originalRetryInterval := hakeeperClientRetryInterval
+	defer func() {
+		newHAKeeperClientFunc = originalNew
+		hakeeperClientRetryInterval = originalRetryInterval
+	}()
+
+	attempts := 0
+	newHAKeeperClientFunc = func(
+		context.Context,
+		string,
+		HAKeeperClientConfig,
+	) (*hakeeperClient, error) {
+		attempts++
+		return nil, net.ErrClosed
+	}
+	hakeeperClientRetryInterval = 20 * time.Millisecond
+
+	c := &managedHAKeeperClient{
+		cfg: HAKeeperClientConfig{AllocateIDBatch: 2},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 55*time.Millisecond)
+	defer cancel()
+
+	_, err := c.AllocateID(ctx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.GreaterOrEqual(t, attempts, 2)
+	require.Less(t, attempts, 10)
+}
+
 func TestAllocateBatchIDRetriesPrepareClientError(t *testing.T) {
 	originalNew := newHAKeeperClientFunc
 	originalSend := sendCNAllocateIDFunc
@@ -689,6 +737,38 @@ func TestAllocateBatchIDRetriesPrepareClientError(t *testing.T) {
 	require.Equal(t, uint64(100), firstID)
 	require.Equal(t, 2, attempts)
 	require.Equal(t, 1, sendCalls)
+}
+
+func TestAllocateBatchIDRetriesPrepareClientErrorUntilContextDone(t *testing.T) {
+	originalNew := newHAKeeperClientFunc
+	originalRetryInterval := hakeeperClientRetryInterval
+	defer func() {
+		newHAKeeperClientFunc = originalNew
+		hakeeperClientRetryInterval = originalRetryInterval
+	}()
+
+	attempts := 0
+	newHAKeeperClientFunc = func(
+		context.Context,
+		string,
+		HAKeeperClientConfig,
+	) (*hakeeperClient, error) {
+		attempts++
+		return nil, net.ErrClosed
+	}
+	hakeeperClientRetryInterval = 20 * time.Millisecond
+
+	c := &managedHAKeeperClient{
+		cfg: HAKeeperClientConfig{AllocateIDBatch: 2},
+	}
+	c.mu.allocIDByKey = make(map[string]*allocID)
+	ctx, cancel := context.WithTimeout(context.Background(), 55*time.Millisecond)
+	defer cancel()
+
+	_, err := c.AllocateIDByKeyWithBatch(ctx, "x", 2)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.GreaterOrEqual(t, attempts, 2)
+	require.Less(t, attempts, 10)
 }
 
 func TestHAKeeperClientUpdateCNWorkState(t *testing.T) {

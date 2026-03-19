@@ -37,6 +37,8 @@ const (
 	defaultBackendReadTimeout = time.Second * 8
 )
 
+var hakeeperClientRetryInterval = 10 * time.Millisecond
+
 type basicHAKeeperClient interface {
 	// Close closes the hakeeper client.
 	Close() error
@@ -233,7 +235,7 @@ func newManagedHAKeeperClient(
 ) (*managedHAKeeperClient, error) {
 	c, err := newHAKeeperClientFunc(ctx, sid, cfg)
 	if err != nil {
-		return nil, err
+		return nil, normalizeHAKeeperClientError(ctx, err)
 	}
 
 	mc := &managedHAKeeperClient{
@@ -349,24 +351,26 @@ func (c *managedHAKeeperClient) GetClusterState(ctx context.Context) (pb.Checker
 
 func (c *managedHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) {
 	c.mu.Lock()
-	if c.mu.sharedAllocID.nextID != c.mu.sharedAllocID.lastID {
-		v := c.mu.sharedAllocID.nextID
-		c.mu.sharedAllocID.nextID++
-		c.mu.Unlock()
-		if v == 0 {
-			logutil.Error("id should not be 0",
-				zap.Uint64("nextID", c.mu.sharedAllocID.nextID),
-				zap.Uint64("lastID", c.mu.sharedAllocID.lastID))
-		}
-		return v, nil
-	}
-
 	defer c.mu.Unlock()
 
 	batchSize := c.cfg.AllocateIDBatch
 	for {
+		if c.mu.sharedAllocID.nextID != c.mu.sharedAllocID.lastID {
+			v := c.mu.sharedAllocID.nextID
+			c.mu.sharedAllocID.nextID++
+			if v == 0 {
+				logutil.Error("id should not be 0",
+					zap.Uint64("nextID", c.mu.sharedAllocID.nextID),
+					zap.Uint64("lastID", c.mu.sharedAllocID.lastID))
+			}
+			return v, nil
+		}
+
 		if err := c.prepareClientLocked(ctx); err != nil {
 			if c.isRetryableError(err) {
+				if err := c.waitRetryLocked(ctx); err != nil {
+					return 0, err
+				}
 				continue
 			}
 			return 0, err
@@ -376,6 +380,9 @@ func (c *managedHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) 
 		if err != nil {
 			c.resetClientLocked()
 			if c.isRetryableError(err) {
+				if err := c.waitRetryLocked(ctx); err != nil {
+					return 0, err
+				}
 				continue
 			}
 			logutil.Error("failed to allocate id",
@@ -412,21 +419,25 @@ func (c *managedHAKeeperClient) AllocateIDByKeyWithBatch(
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	allocIDs, ok := c.mu.allocIDByKey[key]
-	if !ok {
-		allocIDs = &allocID{nextID: 0, lastID: 0}
-		c.mu.allocIDByKey[key] = allocIDs
-	}
-
-	if allocIDs.nextID != allocIDs.lastID {
-		v := allocIDs.nextID
-		allocIDs.nextID++
-		return v, nil
-	}
 
 	for {
+		allocIDs, ok := c.mu.allocIDByKey[key]
+		if !ok {
+			allocIDs = &allocID{nextID: 0, lastID: 0}
+			c.mu.allocIDByKey[key] = allocIDs
+		}
+
+		if allocIDs.nextID != allocIDs.lastID {
+			v := allocIDs.nextID
+			allocIDs.nextID++
+			return v, nil
+		}
+
 		if err := c.prepareClientLocked(ctx); err != nil {
 			if c.isRetryableError(err) {
+				if err := c.waitRetryLocked(ctx); err != nil {
+					return 0, err
+				}
 				continue
 			}
 			return 0, err
@@ -435,6 +446,9 @@ func (c *managedHAKeeperClient) AllocateIDByKeyWithBatch(
 		if err != nil {
 			c.resetClientLocked()
 			if c.isRetryableError(err) {
+				if err := c.waitRetryLocked(ctx); err != nil {
+					return 0, err
+				}
 				continue
 			}
 			return 0, err
@@ -709,6 +723,21 @@ func (c *managedHAKeeperClient) prepareClientLocked(ctx context.Context) error {
 	}
 	c.mu.client = cc
 	return nil
+}
+
+func (c *managedHAKeeperClient) waitRetryLocked(ctx context.Context) error {
+	c.mu.Unlock()
+	defer c.mu.Lock()
+
+	timer := time.NewTimer(hakeeperClientRetryInterval)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func normalizeHAKeeperClientError(ctx context.Context, err error) error {
