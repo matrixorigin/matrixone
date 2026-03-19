@@ -303,6 +303,36 @@ func TestIndex(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestDedupOpDuplicateEntry(t *testing.T) {
+	colType := types.T_int64.ToType()
+	tree := map[any]uint32{int64(7): 1}
+
+	err := DedupOp(&colType, "pk", []int64{3, 7}, tree)
+	assert.Error(t, err)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+}
+
+func TestInsertOpDuplicateEntry(t *testing.T) {
+	t.Run("dedup input", func(t *testing.T) {
+		colType := types.T_int64.ToType()
+		tree := make(map[any]uint32)
+
+		err := InsertOp(&colType, "pk", []int64{5, 5}, 0, 2, 0, true, tree)
+		assert.Error(t, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+		assert.Len(t, tree, 0)
+	})
+
+	t.Run("tree conflict", func(t *testing.T) {
+		colType := types.T_int64.ToType()
+		tree := map[any]uint32{int64(9): 2}
+
+		err := InsertOp(&colType, "pk", []int64{9, 10}, 0, 2, 0, false, tree)
+		assert.Error(t, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	})
+}
+
 func TestLoad(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
