@@ -786,6 +786,54 @@ func TestQueryBuilder_bindOrderBy(t *testing.T) {
 	require.Equal(t, plan.OrderBySpec_ASC, boundOrderBys[1].Flag)
 }
 
+func TestQueryBuilder_bindOrderByEnum(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	bindCtx := NewBindContext(builder, nil)
+
+	enumType := types.T_enum.ToType()
+	plan2Type := makePlan2Type(&enumType)
+	plan2Type.Enumvalues = "low,medium,high,critical"
+
+	intType := types.T_int64.ToType()
+	plan2IntType := makePlan2Type(&intType)
+
+	bind := &Binding{
+		tag:            1,
+		nodeId:         0,
+		db:             "select_test",
+		table:          "bind_select",
+		tableID:        0,
+		cols:           []string{"id", "val"},
+		colIsHidden:    []bool{false, false},
+		types:          []*plan.Type{&plan2IntType, &plan2Type},
+		refCnts:        []uint{0, 0},
+		colIdByName:    map[string]int32{"id": 0, "val": 1},
+		isClusterTable: false,
+		defaults:       []string{"", ""},
+	}
+	bindCtx.bindings = append(bindCtx.bindings, bind)
+	bindCtx.bindingByTable[bind.table] = bind
+	for _, col := range bind.cols {
+		bindCtx.bindingByCol[col] = bind
+	}
+	bindCtx.bindingByTag[bind.tag] = bind
+
+	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select id, val from select_test.bind_select order by val", 1)
+	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
+	orderList := stmts[0].(*tree.Select).OrderBy
+
+	havingBinder := NewHavingBinder(builder, bindCtx)
+	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+	_, _, err := builder.bindProjection(bindCtx, projectionBinder, selectClause.Exprs, false)
+	require.NoError(t, err)
+
+	boundOrderBys, err := builder.bindOrderBy(bindCtx, orderList, projectionBinder, selectClause.Exprs)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(boundOrderBys))
+	// The ORDER BY expression should use the original ENUM type (uint16), not varchar
+	require.Equal(t, int32(types.T_enum), boundOrderBys[0].Expr.Typ.Id)
+}
+
 func TestQueryBuilder_bindLimit(t *testing.T) {
 	builder, bindCtx := genBuilderAndCtx()
 
