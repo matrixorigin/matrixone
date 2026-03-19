@@ -165,6 +165,45 @@ func TestLockWithRetryStopsWhenContextCanceledDuringRetryWait(t *testing.T) {
 	require.Less(t, time.Since(start), defaultWaitTimeOnRetryLock)
 }
 
+func TestLockWithRetryRetriesInsideLoopAndReturnsSecondResult(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+
+	ctx := context.Background()
+	expected := lock.Result{HasConflict: true}
+
+	gomock.InOrder(
+		lockSvc.EXPECT().
+			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+			Return(lock.Result{}, moerr.NewBackendCannotConnectNoCtx("retryable")),
+		txnOp.EXPECT().HasLockTable(uint64(1)).Return(false),
+		lockSvc.EXPECT().
+			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+			Return(expected, nil),
+	)
+
+	start := time.Now()
+	result, err := lockWithRetry(
+		ctx,
+		lockSvc,
+		1,
+		nil,
+		[]byte("txn1"),
+		lock.LockOptions{},
+		txnOp,
+		nil,
+		nil,
+		LockOptions{},
+		types.Type{},
+	)
+	require.NoError(t, err)
+	require.Equal(t, expected, result)
+	require.GreaterOrEqual(t, time.Since(start), defaultWaitTimeOnRetryLock)
+}
+
 func TestLockWithRetryKeepsSuccessfulResultAfterContextCanceled(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
