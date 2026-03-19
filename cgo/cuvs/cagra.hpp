@@ -488,63 +488,60 @@ public:
         search_res.neighbors.resize(num_queries * limit);
         search_res.distances.resize(num_queries * limit);
 
-        cuvs::neighbors::cagra::search_params search_params;
-        search_params.itopk_size = sp.itopk_size;
-        search_params.search_width = sp.search_width;
+        // Scope for temporary device resources
+        {
+            cuvs::neighbors::cagra::search_params search_params;
+            search_params.itopk_size = sp.itopk_size;
+            search_params.search_width = sp.search_width;
 
-        const cagra_index* local_index = index_.get();
-        if (!local_index && mg_index_) {
-            int current_device;
-            RAFT_CUDA_TRY(cudaGetDevice(&current_device));
-            for (size_t i = 0; i < this->devices_.size(); ++i) {
-                if (this->devices_[i] == current_device && i < mg_index_->ann_interfaces_.size()) {
-                    if (mg_index_->ann_interfaces_[i].index_.has_value()) {
-                        local_index = &mg_index_->ann_interfaces_[i].index_.value();
-                        break;
+            const cagra_index* local_index = index_.get();
+            if (!local_index && mg_index_) {
+                int current_device;
+                cudaGetDevice(&current_device);
+                for (size_t i = 0; i < this->devices_.size(); ++i) {
+                    if (this->devices_[i] == current_device && i < mg_index_->ann_interfaces_.size()) {
+                        if (mg_index_->ann_interfaces_[i].index_.has_value()) {
+                            local_index = &mg_index_->ann_interfaces_[i].index_.value();
+                            break;
+                        }
                     }
                 }
             }
-        }
 
-        if (is_snmg_handle(res) && mg_index_) {
-            auto queries_host_view = raft::make_host_matrix_view<const T, int64_t>(
-                queries_data, (int64_t)num_queries, (int64_t)this->dimension);
-            
-            auto neighbors_host_view = raft::make_host_matrix_view<int64_t, int64_t>(
-                search_res.neighbors.data(), (int64_t)num_queries, (int64_t)limit);
-            auto distances_host_view = raft::make_host_matrix_view<float, int64_t>(
-                search_res.distances.data(), (int64_t)num_queries, (int64_t)limit);
+            if (is_snmg_handle(res) && mg_index_) {
+                auto queries_host_view = raft::make_host_matrix_view<const T, int64_t>(
+                    queries_data, (int64_t)num_queries, (int64_t)this->dimension);
+                
+                auto neighbors_host_view = raft::make_host_matrix_view<int64_t, int64_t>(
+                    search_res.neighbors.data(), (int64_t)num_queries, (int64_t)limit);
+                auto distances_host_view = raft::make_host_matrix_view<float, int64_t>(
+                    search_res.distances.data(), (int64_t)num_queries, (int64_t)limit);
 
-            cuvs::neighbors::mg_search_params<cuvs::neighbors::cagra::search_params> mg_search_params(search_params);
-            cuvs::neighbors::cagra::search(*res, *mg_index_, mg_search_params,
-                                                queries_host_view, neighbors_host_view, distances_host_view);
-        } else if (local_index) {
-            auto queries_device = raft::make_device_matrix<T, int64_t, raft::layout_c_contiguous>(
-                *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(this->dimension));
-            RAFT_CUDA_TRY(cudaMemcpyAsync(queries_device.data_handle(), queries_data,
-                                        num_queries * this->dimension * sizeof(T), cudaMemcpyHostToDevice,
-                                        raft::resource::get_cuda_stream(*res)));
+                cuvs::neighbors::mg_search_params<cuvs::neighbors::cagra::search_params> mg_search_params(search_params);
+                cuvs::neighbors::cagra::search(*res, *mg_index_, mg_search_params,
+                                                    queries_host_view, neighbors_host_view, distances_host_view);
+            } else if (local_index) {
+                auto queries_device = raft::make_device_matrix<T, int64_t, raft::layout_c_contiguous>(
+                    *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(this->dimension));
+                raft::copy(*res, queries_device.view(), raft::make_host_matrix_view<const T, int64_t>(queries_data, num_queries, this->dimension));
 
-            auto neighbors_device = raft::make_device_matrix<int64_t, int64_t, raft::layout_c_contiguous>(
-                *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
-            auto distances_device = raft::make_device_matrix<float, int64_t, raft::layout_c_contiguous>(
-                *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
+                auto neighbors_device = raft::make_device_matrix<int64_t, int64_t, raft::layout_c_contiguous>(
+                    *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
+                auto distances_device = raft::make_device_matrix<float, int64_t, raft::layout_c_contiguous>(
+                    *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
 
-            cuvs::neighbors::cagra::search(*res, search_params, *local_index,
-                                            raft::make_const_mdspan(queries_device.view()), 
-                                            neighbors_device.view(), distances_device.view());
+                cuvs::neighbors::cagra::search(*res, search_params, *local_index,
+                                                raft::make_const_mdspan(queries_device.view()), 
+                                                neighbors_device.view(), distances_device.view());
 
-            RAFT_CUDA_TRY(cudaMemcpyAsync(search_res.neighbors.data(), neighbors_device.data_handle(),
-                                        search_res.neighbors.size() * sizeof(int64_t), cudaMemcpyDeviceToHost,
-                                        raft::resource::get_cuda_stream(*res)));
-            RAFT_CUDA_TRY(cudaMemcpyAsync(search_res.distances.data(), distances_device.data_handle(),
-                                        search_res.distances.size() * sizeof(float), cudaMemcpyDeviceToHost,
-                                        raft::resource::get_cuda_stream(*res)));
-        } else {
-            throw std::runtime_error("Index not loaded or failed to find local index shard for current device.");
-        }
+                raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device.view());
+                raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device.view());
+            } else {
+                throw std::runtime_error("Index not loaded or failed to find local index shard for current device.");
+            }
 
-        raft::resource::sync_stream(*res);
+            raft::resource::sync_stream(*res);
+        } // <- Temporary device resources are destroyed HERE while lock is held
 
         for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
             if (search_res.neighbors[i] == std::numeric_limits<int64_t>::max() || 
@@ -634,76 +631,78 @@ public:
         std::shared_lock<std::shared_mutex> lock(this->mutex_);
         auto res = handle.get_raft_resources();
 
-        // 1. Quantize/Convert float queries to T on device
-        auto queries_device_float = raft::make_device_matrix<float, int64_t>(*res, num_queries, this->dimension);
-        raft::copy(*res, queries_device_float.view(), raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
-        
-        auto queries_device_target = raft::make_device_matrix<T, int64_t>(*res, num_queries, this->dimension);
-        if constexpr (sizeof(T) == 1) {
-            if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
-            this->quantizer_.template transform<T>(*res, queries_device_float.view(), queries_device_target.data_handle(), true);
-        } else {
-            raft::copy(*res, queries_device_target.view(), queries_device_float.view());
-        }
-        raft::resource::sync_stream(*res);
-
-        // 2. Perform search
         search_result_t search_res;
         search_res.neighbors.resize(num_queries * limit);
         search_res.distances.resize(num_queries * limit);
 
-        cuvs::neighbors::cagra::search_params search_params;
-        search_params.itopk_size = sp.itopk_size;
-        search_params.search_width = sp.search_width;
+        // Scope for temporary device resources
+        {
+            // 1. Quantize/Convert float queries to T on device
+            auto queries_device_float = raft::make_device_matrix<float, int64_t>(*res, num_queries, this->dimension);
+            raft::copy(*res, queries_device_float.view(), raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
+            
+            auto queries_device_target = raft::make_device_matrix<T, int64_t>(*res, num_queries, this->dimension);
+            if constexpr (sizeof(T) == 1) {
+                if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
+                this->quantizer_.template transform<T>(*res, queries_device_float.view(), queries_device_target.data_handle(), true);
+            } else {
+                raft::copy(*res, queries_device_target.view(), queries_device_float.view());
+            }
+            raft::resource::sync_stream(*res);
 
-        const cagra_index* local_index = index_.get();
-        if (!local_index && mg_index_) {
-            int current_device;
-            cudaGetDevice(&current_device);
-            for (size_t i = 0; i < this->devices_.size(); ++i) {
-                if (this->devices_[i] == current_device && i < mg_index_->ann_interfaces_.size()) {
-                    if (mg_index_->ann_interfaces_[i].index_.has_value()) {
-                        local_index = &mg_index_->ann_interfaces_[i].index_.value();
-                        break;
+            // 2. Perform search
+            cuvs::neighbors::cagra::search_params search_params;
+            search_params.itopk_size = sp.itopk_size;
+            search_params.search_width = sp.search_width;
+
+            const cagra_index* local_index = index_.get();
+            if (!local_index && mg_index_) {
+                int current_device;
+                cudaGetDevice(&current_device);
+                for (size_t i = 0; i < this->devices_.size(); ++i) {
+                    if (this->devices_[i] == current_device && i < mg_index_->ann_interfaces_.size()) {
+                        if (mg_index_->ann_interfaces_[i].index_.has_value()) {
+                            local_index = &mg_index_->ann_interfaces_[i].index_.value();
+                            break;
+                        }
                     }
                 }
             }
-        }
 
-        if (is_snmg_handle(res) && mg_index_) {
-            auto queries_host_target = raft::make_host_matrix<T, int64_t>(num_queries, this->dimension);
-            raft::copy(*res, queries_host_target.view(), queries_device_target.view());
+            if (is_snmg_handle(res) && mg_index_) {
+                auto queries_host_target = raft::make_host_matrix<T, int64_t>(num_queries, this->dimension);
+                raft::copy(*res, queries_host_target.view(), queries_device_target.view());
+                raft::resource::sync_stream(*res);
+
+                auto neighbors_host_view = raft::make_host_matrix_view<int64_t, int64_t>(
+                    search_res.neighbors.data(), (int64_t)num_queries, (int64_t)limit);
+                auto distances_host_view = raft::make_host_matrix_view<float, int64_t>(
+                    search_res.distances.data(), (int64_t)num_queries, (int64_t)limit);
+
+                cuvs::neighbors::mg_search_params<cuvs::neighbors::cagra::search_params> mg_search_params(search_params);
+                cuvs::neighbors::cagra::search(*res, *mg_index_, mg_search_params,
+                                                    queries_host_target.view(), 
+                                                    neighbors_host_view, distances_host_view);
+            } else if (local_index) {
+                auto neighbors_device = raft::make_device_matrix<int64_t, int64_t, raft::layout_c_contiguous>(
+                    *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
+                auto distances_device = raft::make_device_matrix<float, int64_t, raft::layout_c_contiguous>(
+                    *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
+
+                cuvs::neighbors::cagra::search(*res, search_params, *local_index,
+                                                raft::make_const_mdspan(queries_device_target.view()), 
+                                                neighbors_device.view(), distances_device.view());
+
+                raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device.view());
+                raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device.view());
+            } else {
+                throw std::runtime_error("Index not loaded or failed to find local index shard for current device.");
+            }
+
             raft::resource::sync_stream(*res);
-
-            auto neighbors_host_view = raft::make_host_matrix_view<int64_t, int64_t>(
-                search_res.neighbors.data(), (int64_t)num_queries, (int64_t)limit);
-            auto distances_host_view = raft::make_host_matrix_view<float, int64_t>(
-                search_res.distances.data(), (int64_t)num_queries, (int64_t)limit);
-
-            cuvs::neighbors::mg_search_params<cuvs::neighbors::cagra::search_params> mg_search_params(search_params);
-            cuvs::neighbors::cagra::search(*res, *mg_index_, mg_search_params,
-                                                queries_host_target.view(), 
-                                                neighbors_host_view, distances_host_view);
-        } else if (local_index) {
-            auto neighbors_device = raft::make_device_matrix<int64_t, int64_t, raft::layout_c_contiguous>(
-                *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
-            auto distances_device = raft::make_device_matrix<float, int64_t, raft::layout_c_contiguous>(
-                *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
-
-            cuvs::neighbors::cagra::search(*res, search_params, *local_index,
-                                            raft::make_const_mdspan(queries_device_target.view()), 
-                                            neighbors_device.view(), distances_device.view());
-
-            raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device.view());
-            raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device.view());
-        } else {
-            throw std::runtime_error("Index not loaded or failed to find local index shard for current device.");
-        }
-
-        raft::resource::sync_stream(*res);
+        } // <- ALL temporary device matrices are destroyed HERE while lock is held
 
         for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
-            // Correctly handle the -1 sentinel value
             if (search_res.neighbors[i] == std::numeric_limits<int64_t>::max() || 
                 search_res.neighbors[i] == 4294967295LL || search_res.neighbors[i] < 0) {
                 search_res.neighbors[i] = -1; 
