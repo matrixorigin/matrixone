@@ -2336,8 +2336,10 @@ func (s *Scope) DropIndex(c *Compile) error {
 			return err
 		}
 
-		if session := c.proc.GetSession(); session != nil {
-			session.RemoveTempTableByRealName(indexTableName)
+		if oldTableDef.GetIsTemporary() {
+			if session := c.proc.GetSession(); session != nil {
+				session.RemoveTempTableByRealName(indexTableName)
+			}
 		}
 	}
 
@@ -2958,8 +2960,10 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 			return err
 		}
 
-		if sess := c.proc.GetSession(); sess != nil {
-			sess.RemoveTempTableByRealName(name)
+		if isTemp {
+			if sess := c.proc.GetSession(); sess != nil {
+				sess.RemoveTempTableByRealName(name)
+			}
 		}
 
 	}
