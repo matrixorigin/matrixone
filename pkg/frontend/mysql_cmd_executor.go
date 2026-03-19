@@ -3385,6 +3385,20 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 		err = executeStmtWithResponse(ses, execCtx)
 		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+				txnOp := ses.GetTxnHandler().GetTxn()
+				snapshot := ""
+				if txnOp != nil {
+					snapshot = txnOp.SnapshotTS().DebugString()
+				}
+				logutil.Warn("CN-DUPKEY",
+					zap.String("stmt", execCtx.sqlOfStmt),
+					zap.String("stmtType", fmt.Sprintf("%T", stmt)),
+					zap.Bool("inActiveTxn", ses.GetTxnHandler().InActiveTxn()),
+					zap.String("txnSnapshot", snapshot),
+					zap.Error(err),
+				)
+			}
 			return err
 		}
 

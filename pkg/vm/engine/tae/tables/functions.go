@@ -436,6 +436,12 @@ func dedupNABlkClosure(
 	return func(v any, _ bool, _ int) (err error) {
 		if _, existed := compute.GetOffsetByVal(vec, v, mask); existed {
 			entry := common.TypeStringValue(*vec.GetType(), v, false)
+			logutil.Warn("TAE-DUPKEY",
+				zap.String("where", "tables.dedupNABlkClosure"),
+				zap.String("attr", def.Name),
+				zap.String("entry", entry),
+				zap.String("txn", txn.Repr()),
+			)
 			return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
 		}
 		return nil
@@ -484,6 +490,14 @@ func dedupABlkClosureFactory(
 					return txnif.ErrTxnWWConflict
 				}
 				entry := common.TypeStringValue(*vec.GetType(), v1, false)
+				logutil.Warn("TAE-DUPKEY",
+					zap.String("where", "tables.dedupABlkClosureFactory"),
+					zap.String("attr", def.Name),
+					zap.String("entry", entry),
+					zap.String("txn", txn.Repr()),
+					zap.Int("row offset", row),
+					zap.String("commit ts", commitTS.ToString()),
+				)
 				return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
 			}, nil)
 		}

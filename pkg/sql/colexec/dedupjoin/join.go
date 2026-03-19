@@ -26,11 +26,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 const opName = "dedup_join"
@@ -465,6 +467,22 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 					}
 					rowStr = "(" + strings.Join(rowItems, ",") + ")"
 				}
+				txnOp := proc.GetTxnOperator()
+				snapshot := ""
+				txnID := ""
+				if txnOp != nil {
+					snapshot = txnOp.Txn().SnapshotTS.DebugString()
+					txnID = txnOp.Txn().DebugString()
+				}
+				logutil.Warn("CN-DEDUPJOIN-DUPKEY",
+					zap.String("dedupCol", ap.DedupColName),
+					zap.String("dedupValue", rowStr),
+					zap.String("onDuplicateAction", ap.OnDuplicateAction.String()),
+					zap.Bool("isPessimistic", isPessimistic),
+					zap.Int64("buildRows", ctr.batchRowCount),
+					zap.String("txn", txnID),
+					zap.String("txnSnapshot", snapshot),
+				)
 				return moerr.NewDuplicateEntry(proc.Ctx, rowStr, ap.DedupColName)
 
 			case plan.Node_IGNORE:

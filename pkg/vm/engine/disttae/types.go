@@ -981,19 +981,16 @@ func (txn *Transaction) advanceSnapshot(
 	return nil
 }
 
-// For RC isolation, update the snapshot TS of transaction for each statement.
-// only 2 cases need to reset snapshot
-// 1. cn sync latest commit ts from mo_ctl
-// 2. not first sql
+// For RC isolation, update the snapshot TS for every statement execution.
+// RC should observe the latest committed schema/data at statement start,
+// including the first statement in an explicit transaction.
 func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) (bool, error) {
-	needResetSnapshot := false
 	newTimes := txn.proc.Base.TxnClient.GetSyncLatestCommitTSTimes()
 	if newTimes > txn.syncCommittedTSCount {
 		txn.syncCommittedTSCount = newTimes
-		needResetSnapshot = true
 	}
 
-	if !commit && (txn.GetSQLCount() > 0 || needResetSnapshot) {
+	if !commit {
 		trace.GetService(txn.proc.GetService()).TxnUpdateSnapshot(
 			txn.op, 0, "before execute")
 
@@ -1021,6 +1018,11 @@ type Entry struct {
 	bat       *batch.Batch
 	tnStore   DNStore
 	pkChkByTN int8
+
+	// pkCheckPos is the primary-key vector position in bat at write time.
+	// -1 means no PK duplicate check is needed for this entry.
+	pkCheckPos   int
+	pkCheckReady bool
 }
 
 func (e *Entry) String() string {
