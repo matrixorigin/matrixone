@@ -22,20 +22,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"go.uber.org/zap"
 )
 
 var notFoundErr = moerr.NewNotFoundNoCtx()
 
-func newDuplicateEntryWithLog(attr, entry, where string) error {
-	logutil.Warn("TAE-DUPKEY",
-		zap.String("where", where),
-		zap.String("attr", attr),
-		zap.String("entry", entry),
-	)
+func newDuplicateEntryWithLog(attr, entry, _ string) error {
 	return moerr.NewDuplicateEntryNoCtx(entry, attr)
 }
 
