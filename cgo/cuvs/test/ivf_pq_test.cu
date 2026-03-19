@@ -33,16 +33,26 @@ TEST(GpuIvfPqTest, BasicLoadSearchAndCenters) {
         }
     }
     
-    std::vector<int> devices = {0};
+    int dev_count = gpu_get_device_count();
+    ASSERT_TRUE(dev_count > 0);
+    std::vector<int> devices(1);
+    gpu_get_device_list(devices.data(), 1);
+    TEST_LOG("Using device " << devices[0]);
+
     ivf_pq_build_params_t bp = ivf_pq_build_params_default();
     bp.n_lists = 2;
     bp.m = 8;
     gpu_ivf_pq_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+    
+    TEST_LOG("Starting worker...");
     index.start();
+    TEST_LOG("Building index...");
     index.build();
 
-    // Verify centers
+    TEST_LOG("Getting centers...");
     auto centers = index.get_centers();
+    TEST_LOG("Got centers, size=" << centers.size());
+    
     ASSERT_TRUE(centers.size() % index.get_n_list() == 0);
     ASSERT_EQ(centers.size(), (size_t)(index.get_n_list() * index.get_dim_ext()));
 
@@ -51,13 +61,15 @@ TEST(GpuIvfPqTest, BasicLoadSearchAndCenters) {
     
     ivf_pq_search_params_t sp = ivf_pq_search_params_default();
     sp.n_probes = 2;
+    TEST_LOG("Searching...");
     auto result = index.search(queries.data(), 1, dimension, 2, sp);
+    TEST_LOG("Search finished.");
 
     ASSERT_EQ(result.neighbors.size(), (size_t)2);
-    // Should be either 0 or 1
     ASSERT_TRUE(result.neighbors[0] == 0 || result.neighbors[0] == 1);
 
     index.destroy();
+    TEST_LOG("Index destroyed.");
 }
 
 TEST(GpuIvfPqTest, SaveAndLoadFromFile) {
@@ -70,7 +82,10 @@ TEST(GpuIvfPqTest, SaveAndLoadFromFile) {
         11.0, 11.0, 11.0, 11.0
     };
     std::string filename = "test_ivf_pq.bin";
-    std::vector<int> devices = {0};
+    int dev_count = gpu_get_device_count();
+    ASSERT_TRUE(dev_count > 0);
+    std::vector<int> devices(1);
+    gpu_get_device_list(devices.data(), 1);
 
     // 1. Build and Save
     {
@@ -124,7 +139,10 @@ TEST(GpuIvfPqTest, BuildFromDataFile) {
         save_host_matrix(data_filename, matrix.view());
     }
 
-    std::vector<int> devices = {0};
+    int dev_count = gpu_get_device_count();
+    ASSERT_TRUE(dev_count > 0);
+    std::vector<int> devices(1);
+    gpu_get_device_list(devices.data(), 1);
     ivf_pq_build_params_t bp = ivf_pq_build_params_default();
     bp.n_lists = 10;
     bp.m = 4;

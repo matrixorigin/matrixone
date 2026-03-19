@@ -436,17 +436,27 @@ public:
 
 private:
     void run_main_loop(user_task_fn init_fn, user_task_fn stop_fn) {
-        pin_thread(0);
+        pin_thread(-1);
         auto resource = setup_resource_internal(0, true);
-        if (!resource) return;
+        if (!resource) {
+            result_store_.stop(); // Ensure waiters are unblocked if setup fails
+            return;
+        }
 
         if (init_fn) {
             try { init_fn(*resource); }
-            catch (...) { report_fatal_error(std::current_exception()); return; }
+            catch (...) { 
+                report_fatal_error(std::current_exception()); 
+                result_store_.stop();
+                return; 
+            }
         }
 
         auto defer_cleanup = [&]() { if (stop_fn) try { stop_fn(*resource); } catch (...) {} };
-        std::shared_ptr<void> cleanup_guard(nullptr, [&](...) { defer_cleanup(); });
+        std::shared_ptr<void> cleanup_guard(nullptr, [&](...) { 
+            defer_cleanup(); 
+            result_store_.stop(); // Final unblock
+        });
 
         if (n_threads_ > 1) {
             for (size_t i = 1; i < n_threads_; ++i) {

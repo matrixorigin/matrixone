@@ -29,7 +29,10 @@ TEST(GpuCagraTest, BasicLoadAndSearch) {
     std::vector<float> dataset(count * dimension);
     for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
     
-    std::vector<int> devices = {0};
+    int dev_count = gpu_get_device_count();
+    ASSERT_TRUE(dev_count > 0);
+    std::vector<int> devices(1);
+    gpu_get_device_list(devices.data(), 1);
     cagra_build_params_t bp = cagra_build_params_default();
     gpu_cagra_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
     index.start();
@@ -51,7 +54,10 @@ TEST(GpuCagraTest, SaveAndLoadFromFile) {
     std::vector<float> dataset(count * dimension);
     for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
     std::string filename = "test_cagra.bin";
-    std::vector<int> devices = {0};
+    int dev_count = gpu_get_device_count();
+    ASSERT_TRUE(dev_count > 0);
+    std::vector<int> devices(1);
+    gpu_get_device_list(devices.data(), 1);
 
     // 1. Build and Save
     {
