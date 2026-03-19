@@ -16,7 +16,9 @@ package logservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"math/rand"
 	"sync"
 	"time"
@@ -361,6 +363,9 @@ func (c *managedHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) 
 	batchSize := c.cfg.AllocateIDBatch
 	for {
 		if err := c.prepareClientLocked(ctx); err != nil {
+			if c.isRetryableError(err) {
+				continue
+			}
 			return 0, err
 		}
 		firstID, err := c.mu.client.sendCNAllocateID(ctx, "", batchSize)
@@ -418,6 +423,9 @@ func (c *managedHAKeeperClient) AllocateIDByKeyWithBatch(
 
 	for {
 		if err := c.prepareClientLocked(ctx); err != nil {
+			if c.isRetryableError(err) {
+				continue
+			}
 			return 0, err
 		}
 		firstID, err := c.mu.client.sendCNAllocateID(ctx, key, batchSize)
@@ -654,7 +662,11 @@ func (c *managedHAKeeperClient) UpdateNonVotingLocality(
 }
 
 func (c *managedHAKeeperClient) isRetryableError(err error) bool {
-	return moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper)
+	return errors.Is(err, io.EOF) ||
+		errors.Is(err, io.ErrUnexpectedEOF) ||
+		logutil.IsExpectedConnectionCloseError(err) ||
+		moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper) ||
+		moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF)
 }
 
 func (c *managedHAKeeperClient) resetClient() {
@@ -690,10 +702,28 @@ func (c *managedHAKeeperClient) prepareClientLocked(ctx context.Context) error {
 
 	cc, err := newHAKeeperClient(ctx, c.sid, c.cfg)
 	if err != nil {
-		return err
+		return normalizeHAKeeperClientError(ctx, err)
 	}
 	c.mu.client = cc
 	return nil
+}
+
+func normalizeHAKeeperClientError(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if _, ok := err.(*moerr.Error); ok {
+		return err
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	if errors.Is(err, io.EOF) ||
+		errors.Is(err, io.ErrUnexpectedEOF) ||
+		logutil.IsExpectedConnectionCloseError(err) {
+		return moerr.NewUnexpectedEOF(ctx, err.Error())
+	}
+	return err
 }
 
 type hakeeperClient struct {
@@ -1044,12 +1074,12 @@ func (c *hakeeperClient) request(ctx context.Context, req pb.Request) (pb.Respon
 	r.Request = req
 	future, err := c.client.Send(ctx, c.addr, r)
 	if err != nil {
-		return pb.Response{}, err
+		return pb.Response{}, normalizeHAKeeperClientError(ctx, err)
 	}
 	defer future.Close()
 	msg, err := future.Get()
 	if err != nil {
-		return pb.Response{}, err
+		return pb.Response{}, normalizeHAKeeperClientError(ctx, err)
 	}
 	response, ok := msg.(*RPCResponse)
 	if !ok {

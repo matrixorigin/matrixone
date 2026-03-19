@@ -16,6 +16,8 @@ package logservice
 
 import (
 	"context"
+	"io"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -558,6 +560,28 @@ func TestAllocateBatchIDError(t *testing.T) {
 		require.Error(t, err)
 	}
 	runServiceTest(t, true, true, fn)
+}
+
+func TestNormalizeHAKeeperClientError(t *testing.T) {
+	ctx := context.Background()
+
+	err := normalizeHAKeeperClientError(ctx, io.EOF)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF))
+
+	err = normalizeHAKeeperClientError(ctx, net.ErrClosed)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF))
+
+	err = normalizeHAKeeperClientError(ctx, context.DeadlineExceeded)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestHAKeeperClientRetryableEOFError(t *testing.T) {
+	c := &managedHAKeeperClient{}
+	ctx := context.Background()
+
+	require.True(t, c.isRetryableError(io.EOF))
+	require.True(t, c.isRetryableError(io.ErrUnexpectedEOF))
+	require.True(t, c.isRetryableError(moerr.NewUnexpectedEOF(ctx, io.EOF.Error())))
 }
 
 func TestHAKeeperClientUpdateCNWorkState(t *testing.T) {
