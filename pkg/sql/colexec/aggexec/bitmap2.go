@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"io"
 	"slices"
 
 	"github.com/RoaringBitmap/roaring"
@@ -32,6 +33,11 @@ func (b *bmp) MarshalBinary() ([]byte, error) {
 }
 func (b *bmp) UnmarshalBinary(data []byte) error {
 	return b.Bitmap.UnmarshalBinary(data)
+}
+
+func (b *bmp) UnmarshalFromReader(r io.Reader) error {
+	_, err := b.Bitmap.ReadFrom(r)
+	return err
 }
 
 func makeBmp(mp *mpool.MPool) (*bmp, error) {

@@ -3607,14 +3607,6 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("ivf_preload_entries"),
 		Default:           int8(0),
 	},
-	"ivf_small_centroid_threshold": {
-		Name:              "ivf_small_centroid_threshold",
-		Scope:             ScopeBoth,
-		Dynamic:           true,
-		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("ivf_small_centroid_threshold", 0, 1024, false),
-		Default:           int64(0),
-	},
 	"enable_vector_prefilter_by_default": {
 		Name:              "enable_vector_prefilter_by_default",
 		Scope:             ScopeSession,
@@ -3885,6 +3877,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("agg_spill_mem", 0, common.TiB, false),
+		Default:           int64(0),
+	},
+	"join_spill_mem": {
+		Name:              "join_spill_mem",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("join_spill_mem", 0, common.TiB, false),
 		Default:           int64(0),
 	},
 	"max_dop": {

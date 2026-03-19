@@ -400,14 +400,6 @@ func TestValueWindowExec_ErrorMethods(t *testing.T) {
 	exec, err := makeValueWindowExec(mp, WinIdOfLag, false, []types.Type{types.T_int64.ToType()})
 	require.NoError(t, err)
 
-	// Test marshal (should return error)
-	_, err = exec.(*valueWindowExec).marshal()
-	require.Error(t, err)
-
-	// Test unmarshal (should return error)
-	err = exec.(*valueWindowExec).unmarshal(mp, nil, nil, nil)
-	require.Error(t, err)
-
 	// Test BulkFill (should return error)
 	err = exec.BulkFill(0, nil)
 	require.Error(t, err)
@@ -1414,30 +1406,6 @@ func TestPercentRank(t *testing.T) {
 		exec.Free()
 	})
 
-	t.Run("marshal_unmarshal", func(t *testing.T) {
-		exec, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
-		require.NoError(t, err)
-		err = exec.GroupGrow(2)
-		require.NoError(t, err)
-
-		vec := vector.NewVec(types.T_int64.ToType())
-		err = vector.AppendFixedList(vec, []int64{0, 1, 2}, nil, mp)
-		require.NoError(t, err)
-		defer vec.Free(mp)
-
-		for i := 0; i < 3; i++ {
-			err = exec.Fill(0, i, []*vector.Vector{vec})
-			require.NoError(t, err)
-		}
-
-		prExec := exec.(*percentRankExec)
-		data, err := prExec.marshal()
-		require.NoError(t, err)
-		require.NotEmpty(t, data)
-
-		exec.Free()
-	})
-
 	t.Run("save_intermediate_result", func(t *testing.T) {
 		exec, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
 		require.NoError(t, err)
@@ -1514,63 +1482,6 @@ func TestPercentRank(t *testing.T) {
 		var buf bytes.Buffer
 		err = prExec.SaveIntermediateResultOfChunk(0, &buf)
 		require.NoError(t, err)
-
-		exec.Free()
-	})
-
-	t.Run("unmarshal", func(t *testing.T) {
-		exec1, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
-		require.NoError(t, err)
-		err = exec1.GroupGrow(1)
-		require.NoError(t, err)
-
-		vec := vector.NewVec(types.T_int64.ToType())
-		err = vector.AppendFixedList(vec, []int64{0, 1}, nil, mp)
-		require.NoError(t, err)
-		defer vec.Free(mp)
-
-		err = exec1.Fill(0, 0, []*vector.Vector{vec})
-		require.NoError(t, err)
-
-		prExec1 := exec1.(*percentRankExec)
-		data, err := prExec1.marshal()
-		require.NoError(t, err)
-
-		var encoded EncodedAgg
-		err = encoded.Unmarshal(data)
-		require.NoError(t, err)
-
-		exec2, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
-		require.NoError(t, err)
-		err = exec2.GroupGrow(1)
-		require.NoError(t, err)
-		prExec2 := exec2.(*percentRankExec)
-		err = prExec2.unmarshal(mp, encoded.Result, encoded.Empties, encoded.Groups)
-		require.NoError(t, err)
-
-		exec1.Free()
-		exec2.Free()
-	})
-
-	t.Run("unmarshal_empty_groups", func(t *testing.T) {
-		exec, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
-		require.NoError(t, err)
-
-		prExec := exec.(*percentRankExec)
-		err = prExec.unmarshal(mp, [][]byte{}, [][]byte{}, [][]byte{})
-		require.NoError(t, err)
-
-		exec.Free()
-	})
-
-	t.Run("marshal_empty_groups", func(t *testing.T) {
-		exec, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
-		require.NoError(t, err)
-
-		prExec := exec.(*percentRankExec)
-		data, err := prExec.marshal()
-		require.NoError(t, err)
-		require.NotEmpty(t, data)
 
 		exec.Free()
 	})
@@ -2100,74 +2011,6 @@ func TestNtileExec_MultiplePartitions(t *testing.T) {
 	})
 }
 
-// TestNtileExec_Serialization tests marshal/unmarshal
-func TestNtileExec_Serialization(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mp.Free(nil)
-
-	t.Run("marshal_unmarshal_roundtrip", func(t *testing.T) {
-		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
-		require.NoError(t, err)
-
-		osVec := vector.NewVec(types.T_int64.ToType())
-		err = vector.AppendFixedList(osVec, []int64{0, 1, 2, 3, 4}, nil, mp)
-		require.NoError(t, err)
-		defer osVec.Free(mp)
-
-		bucketVec := vector.NewVec(types.T_int64.ToType())
-		err = vector.AppendFixedList(bucketVec, []int64{2}, nil, mp)
-		require.NoError(t, err)
-		defer bucketVec.Free(mp)
-
-		err = exec.GroupGrow(2)
-		require.NoError(t, err)
-
-		for o := 0; o <= 4; o++ {
-			err = exec.Fill(0, o, []*vector.Vector{osVec, bucketVec})
-			require.NoError(t, err)
-		}
-
-		data, err := exec.(*ntileWindowExec).marshal()
-		require.NoError(t, err)
-		require.NotNil(t, data)
-
-		// Create exec2 with same group count to match unmarshal logic
-		exec2, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
-		require.NoError(t, err)
-
-		err = exec2.GroupGrow(2)
-		require.NoError(t, err)
-
-		var encoded EncodedAgg
-		err = encoded.Unmarshal(data)
-		require.NoError(t, err)
-
-		err = exec2.(*ntileWindowExec).unmarshal(mp, encoded.Result, encoded.Empties, encoded.Groups)
-		require.NoError(t, err)
-
-		// Verify bucketCounts were restored
-		ntileExec2 := exec2.(*ntileWindowExec)
-		require.Equal(t, int64(2), ntileExec2.bucketCounts[0])
-
-		exec.Free()
-		exec2.Free()
-	})
-
-	t.Run("marshal_with_empty_groups", func(t *testing.T) {
-		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
-		require.NoError(t, err)
-
-		err = exec.GroupGrow(2)
-		require.NoError(t, err)
-
-		data, err := exec.(*ntileWindowExec).marshal()
-		require.NoError(t, err)
-		require.NotNil(t, data)
-
-		exec.Free()
-	})
-}
-
 // TestNtileExec_MemoryManagement tests memory-related methods
 func TestNtileExec_MemoryManagement(t *testing.T) {
 	mp := mpool.MustNewZero()
@@ -2500,46 +2343,6 @@ func TestCumeDistWindowExec_PanicMethods(t *testing.T) {
 	})
 
 	exec.Free()
-}
-
-// TestCumeDistWindowExec_MarshalUnmarshal tests marshal and unmarshal operations
-func TestCumeDistWindowExec_MarshalUnmarshal(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mp.Free(nil)
-
-	exec, err := makeWindowExec(mp, WinIdOfCumeDist, false)
-	require.NoError(t, err)
-
-	vec := vector.NewVec(types.T_int64.ToType())
-	err = vector.AppendFixedList(vec, []int64{0, 1, 2}, nil, mp)
-	require.NoError(t, err)
-	defer vec.Free(mp)
-
-	err = exec.GroupGrow(3)
-	require.NoError(t, err)
-
-	for i := 0; i < 3; i++ {
-		err = exec.Fill(i, i, []*vector.Vector{vec})
-		require.NoError(t, err)
-	}
-
-	cExec := exec.(*cumeDistWindowExec)
-
-	// Test marshal
-	data, err := cExec.marshal()
-	require.NoError(t, err)
-	require.NotNil(t, data)
-
-	// Test unmarshal
-	exec2, err := makeWindowExec(mp, WinIdOfCumeDist, false)
-	require.NoError(t, err)
-	cExec2 := exec2.(*cumeDistWindowExec)
-
-	err = cExec2.unmarshal(mp, nil, nil, nil)
-	require.NoError(t, err)
-
-	exec.Free()
-	exec2.Free()
 }
 
 // TestCumeDistWindowExec_SaveIntermediateResult tests SaveIntermediateResult

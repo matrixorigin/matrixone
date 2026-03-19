@@ -115,17 +115,6 @@ func (r *aggResultWithFixedType[T]) Size() int64 {
 	return size
 }
 
-func (r *aggResultWithFixedType[T]) unmarshalFromBytes(resultData, emptyData, distData [][]byte) error {
-	if err := r.optSplitResult.unmarshalFromBytes(resultData, emptyData, distData); err != nil {
-		return err
-	}
-	r.values = make([][]T, len(resultData))
-	for i := range r.values {
-		r.values[i] = vector.MustFixedColNoTypeCheck[T](r.optSplitResult.resultList[i])
-	}
-	return nil
-}
-
 func (r *aggResultWithFixedType[T]) setupT() {
 	if len(r.optSplitResult.resultList) > 0 {
 		r.values = make([][]T, len(r.optSplitResult.resultList))
@@ -136,7 +125,7 @@ func (r *aggResultWithFixedType[T]) setupT() {
 }
 
 func (r *aggResultWithFixedType[T]) grows(more int) error {
-	x1, y1, x2, y2, err := r.resExtend(more)
+	x1, y1, x2, y2, err := r.extendResult(more)
 	if err != nil {
 		return err
 	}
@@ -174,7 +163,7 @@ func (r *aggResultWithBytesType) Size() int64 {
 }
 
 func (r *aggResultWithBytesType) grows(more int) error {
-	x1, y1, x2, y2, err := r.resExtend(more)
+	x1, y1, x2, y2, err := r.extendResult(more)
 	if err != nil {
 		return err
 	}
@@ -270,76 +259,8 @@ type optSplitResult struct {
 	distinct []distinctHash
 }
 
-// this API is broken.  It should not need to return those [][]byte
-func (r *optSplitResult) marshalToBytes() ([][]byte, [][]byte, [][]byte, error) {
-	var err error
-
-	// WTF?   min(r.nowIdx1+1, len...)
-	resultData := make([][]byte, min(r.nowIdx1+1, len(r.resultList)))
-	emptyData := make([][]byte, min(r.nowIdx1+1, len(r.emptyList)))
-
-	for i := range resultData {
-		if resultData[i], err = r.resultList[i].MarshalBinary(); err != nil {
-			return nil, nil, nil, err
-		}
-	}
-	for i := range emptyData {
-		if emptyData[i], err = r.emptyList[i].MarshalBinary(); err != nil {
-			return nil, nil, nil, err
-		}
-	}
-
-	if len(r.distinct) > 0 {
-		distinctData := make([][]byte, min(r.nowIdx1+1, len(r.distinct)))
-		for i := range r.distinct {
-			if distinctData[i], err = r.distinct[i].marshal(); err != nil {
-				return nil, nil, nil, err
-			}
-		}
-		return resultData, emptyData, distinctData, nil
-	}
-	return resultData, emptyData, nil, nil
-}
-
-func (r *optSplitResult) unmarshalFromBytes(resultData, emptyData, distinctData [][]byte) (err error) {
-	r.free()
-	defer func() {
-		if err != nil {
-			r.free()
-		}
-	}()
-
-	r.resultList = make([]*vector.Vector, len(resultData))
-	r.emptyList = make([]*vector.Vector, len(emptyData))
-	r.bsFromEmptyList = make([][]bool, len(emptyData))
-	r.nowIdx1 = max(0, len(resultData)-1)
-	for i := range r.resultList {
-		r.resultList[i] = vector.NewOffHeapVecWithType(r.resultType)
-		if err = vectorUnmarshal(r.resultList[i], resultData[i], r.mp); err != nil {
-			return err
-		}
-	}
-	for i := range r.emptyList {
-		r.emptyList[i] = vector.NewOffHeapVecWithType(types.T_bool.ToType())
-		if err = vectorUnmarshal(r.emptyList[i], emptyData[i], r.mp); err != nil {
-			return err
-		}
-		r.bsFromEmptyList[i] = vector.MustFixedColNoTypeCheck[bool](r.emptyList[i])
-	}
-
-	if len(distinctData) != 0 {
-		r.distinct = make([]distinctHash, len(distinctData))
-		for i := range distinctData {
-			if err = r.distinct[i].unmarshal(distinctData[i], r.mp); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 func (r *optSplitResult) marshalToBuffers(flags [][]uint8, buf *bytes.Buffer) error {
-	rvec := vector.NewVec(r.resultType)
+	rvec := vector.NewOffHeapVecWithType(r.resultType)
 	defer rvec.Free(r.mp)
 
 	for i := range r.resultList {
@@ -353,7 +274,7 @@ func (r *optSplitResult) marshalToBuffers(flags [][]uint8, buf *bytes.Buffer) er
 	cnt = int64(len(r.emptyList))
 	buf.Write(types.EncodeInt64(&cnt))
 	if cnt > 0 {
-		mvec := vector.NewVec(types.T_bool.ToType())
+		mvec := vector.NewOffHeapVecWithType(types.T_bool.ToType())
 		defer mvec.Free(r.mp)
 		for i := range r.emptyList {
 			mvec.UnionBatch(r.emptyList[i], 0, r.emptyList[i].Length(), flags[i], r.mp)
@@ -555,7 +476,7 @@ func (r *optSplitResult) flushAll() []*vector.Vector {
 // try to expand the length forward from the current position.
 // if there is not enough free space, do memory allocation first.
 //
-// do not call this method directly, plz use the preExtend and resExtend.
+// do not call this method directly, plz use the preExtend and extendResult.
 func (r *optSplitResult) extendResultPurely(more int) error {
 
 	// try tp full the using part first.
@@ -688,9 +609,9 @@ func (r *optSplitResult) preExtend(more int) (err error) {
 	return nil
 }
 
-// resExtend obtains memory of length more from the current position for use,
+// extendResult obtains memory of length more from the current position for use,
 // while also altering the memory usage indicators and other structure related.
-func (r *optSplitResult) resExtend(more int) (startX, startY, endX, endY int, err error) {
+func (r *optSplitResult) extendResult(more int) (startX, startY, endX, endY int, err error) {
 	startX = r.nowIdx1
 	startY = r.resultList[startX].Length()
 

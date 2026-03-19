@@ -38,6 +38,7 @@ const (
 type MarshalerUnmarshaler interface {
 	MarshalBinary() ([]byte, error)
 	UnmarshalBinary([]byte) error
+	UnmarshalFromReader(io.Reader) error
 }
 
 type aggInfo struct {
@@ -97,7 +98,7 @@ func (ag *aggState) init(mp *mpool.MPool, l, c int32, info *aggInfo, setNulls bo
 	if !info.saveArg {
 		ag.vecs = make([]*vector.Vector, len(info.stateTypes))
 		for i, typ := range info.stateTypes {
-			ag.vecs[i] = vector.NewVec(typ)
+			ag.vecs[i] = vector.NewOffHeapVecWithType(typ)
 			if err = ag.vecs[i].PreExtend(int(c), mp); err != nil {
 				return err
 			}
@@ -250,11 +251,6 @@ func (ag *aggState) writeStateToBuf(mp *mpool.MPool, info *aggInfo, flags []uint
 		}
 	}
 
-	if err := types.WriteUint64(buf, magicNumber); err != nil {
-		return err
-	}
-	defer types.WriteUint64(buf, magicNumber)
-
 	types.WriteInt32(buf, cnt)
 	if cnt == 0 {
 		return nil
@@ -305,11 +301,6 @@ func (ag *aggState) writeStateToBuf(mp *mpool.MPool, info *aggInfo, flags []uint
 }
 
 func (ag *aggState) writeAllStatesToBuf(buf *bytes.Buffer, info *aggInfo) error {
-	if err := types.WriteUint64(buf, magicNumber); err != nil {
-		return err
-	}
-	defer types.WriteUint64(buf, magicNumber)
-
 	types.WriteInt32(buf, ag.length)
 	if ag.length == 0 {
 		return nil
@@ -344,9 +335,6 @@ func (ag *aggState) writeAllStatesToBuf(buf *bytes.Buffer, info *aggInfo) error 
 }
 
 func (ag *aggState) readState(mp *mpool.MPool, reader io.Reader, info *aggInfo) (int32, error) {
-	checkAggStateMagic(reader)
-	defer checkAggStateMagic(reader)
-
 	cnt, err := types.ReadInt32(reader)
 	if err != nil {
 		return 0, err
@@ -372,15 +360,18 @@ func (ag *aggState) readState(mp *mpool.MPool, reader io.Reader, info *aggInfo) 
 			for i := range cnt {
 				if ag.mobs[i], err = info.makeMarshalerUnmarshaler(mp); err != nil {
 					return 0, err
-				} else {
-					if sz, bs, err := types.ReadSizeBytes(reader); err != nil {
+				}
+				sz, err := types.ReadInt32(reader)
+				if err != nil {
+					return 0, err
+				}
+				if sz > 0 {
+					lr := io.LimitReader(reader, int64(sz))
+					if err := ag.mobs[i].UnmarshalFromReader(lr); err != nil {
 						return 0, err
-					} else {
-						if sz > 0 {
-							if err := ag.mobs[i].UnmarshalBinary(bs); err != nil {
-								return 0, err
-							}
-						}
+					}
+					if n, _ := io.Copy(io.Discard, lr); n > 0 {
+						return 0, moerr.NewInternalErrorNoCtxf("mob unmarshal did not consume all bytes: %d remaining", n)
 					}
 				}
 			}
@@ -586,14 +577,6 @@ type aggExec struct {
 	aggInfo
 	chunkSize int
 	state     []aggState
-}
-
-func (ae *aggExec) marshal() ([]byte, error) {
-	panic("not implemented")
-}
-
-func (ae *aggExec) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
-	panic("not implemented")
 }
 
 func (ae *aggExec) getChunkSize() int {

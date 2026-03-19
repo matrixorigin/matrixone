@@ -57,33 +57,6 @@ func (exec *medianColumnExecSelf[T, R]) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 
-func (exec *medianColumnExecSelf[T, R]) marshal() ([]byte, error) {
-	d := exec.singleAggInfo.getEncoded()
-	r, em, dist, err := exec.ret.marshalToBytes()
-	if err != nil {
-		return nil, err
-	}
-	if dist != nil {
-		return nil, moerr.NewInternalErrorNoCtx("dist should have been nil")
-	}
-
-	encoded := &EncodedAgg{
-		Info:    d,
-		Result:  r,
-		Empties: em,
-		Groups:  nil,
-	}
-	if len(exec.groups) > 0 {
-		encoded.Groups = make([][]byte, len(exec.groups))
-		for i := range encoded.Groups {
-			if encoded.Groups[i], err = exec.groups[i].MarshalBinary(); err != nil {
-				return nil, err
-			}
-		}
-	}
-	return encoded.Marshal()
-}
-
 func (exec *medianColumnExecSelf[T, R]) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
 	return marshalRetAndGroupsToBuffer(
 		cnt, flags, buf,
@@ -111,32 +84,20 @@ func (exec *medianColumnExecSelf[T, R]) UnmarshalFromReader(reader io.Reader, mp
 		exec.groups = make([]*Vectors[T], ngrp)
 		for i := range exec.groups {
 			exec.groups[i] = NewEmptyVectors[T]()
-			_, bs, err := types.ReadSizeBytes(reader)
+			sz, err := types.ReadUint32(reader)
 			if err != nil {
 				return err
 			}
-			if err = exec.groups[i].Unmarshal(bs, exec.singleAggInfo.argType, mp); err != nil {
+			lr := io.LimitReader(reader, int64(sz))
+			if err = exec.groups[i].UnmarshalFromReader(lr, exec.singleAggInfo.argType, mp); err != nil {
+				return err
+			}
+			if _, err = io.Copy(io.Discard, lr); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
-}
-
-func (exec *medianColumnExecSelf[T, R]) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
-	if len(groups) > 0 {
-		exec.groups = make([]*Vectors[T], len(groups))
-		for i := range exec.groups {
-			exec.groups[i] = NewEmptyVectors[T]()
-			var err error
-			if err = exec.groups[i].Unmarshal(groups[i], exec.singleAggInfo.argType, mp); err != nil {
-				return err
-			}
-		}
-	}
-	// XXX: unless we do not support median(distinct X), this is a bug.
-	// group, so distinct is not used.
-	return exec.ret.unmarshalFromBytes(result, empties, nil)
 }
 
 func newMedianColumnExecSelf[T numeric | types.Decimal64 | types.Decimal128, R float64 | types.Decimal128](mg *mpool.MPool, info singleAggInfo) medianColumnExecSelf[T, R] {

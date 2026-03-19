@@ -39,7 +39,7 @@ func (projection *Projection) PrepareProjection(proc *process.Process) (err erro
 		}
 	}
 	if projection.projectBat == nil {
-		projection.projectBat = batch.NewWithSize(len(projection.ProjectList))
+		projection.projectBat = batch.NewOffHeapWithSize(len(projection.ProjectList))
 	}
 
 	return

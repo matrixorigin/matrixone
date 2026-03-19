@@ -1,0 +1,25 @@
+drop database if exists test_load_vec_dim;
+create database test_load_vec_dim;
+use test_load_vec_dim;
+drop table if exists t_vecf32;
+create table t_vecf32 (id int, v vecf32(3));
+load data infile '$resources/load_data/vec_f32_dim_ok.csv' into table t_vecf32 fields terminated by ',' ignore 1 lines;
+select id, vector_dims(v) as dim from t_vecf32 order by id;
+id    dim
+1    3
+2    3
+drop table if exists t_vecf32_bad;
+create table t_vecf32_bad (id int, v vecf32(3));
+load data infile '$resources/load_data/vec_f32_dim_bad.csv' into table t_vecf32_bad fields terminated by ',' ignore 1 lines;
+invalid input: expected vector dimension 3 != actual dimension 5.
+select count(*) as cnt from t_vecf32_bad;
+cnt
+0
+drop table if exists t_vecf64_bad;
+create table t_vecf64_bad (id int, v vecf64(4));
+load data infile '$resources/load_data/vec_f64_dim_bad.csv' into table t_vecf64_bad fields terminated by ',' ignore 1 lines;
+invalid input: expected vector dimension 4 != actual dimension 2.
+select count(*) as cnt from t_vecf64_bad;
+cnt
+0
+drop database test_load_vec_dim;
