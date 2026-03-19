@@ -509,14 +509,22 @@ public:
         if (is_snmg_handle(res) && mg_index_) {
             auto queries_host_view = raft::make_host_matrix_view<const T, int64_t>(
                 queries_data, (int64_t)num_queries, (int64_t)this->dimension);
-            auto neighbors_host_view = raft::make_host_matrix_view<uint32_t, int64_t>(
-                search_res.neighbors.data(), (int64_t)num_queries, (int64_t)limit);
+            
+            // In multi-GPU mode, neighbors are returned as int64_t global IDs
+            std::vector<int64_t> neighbors_int64(num_queries * limit);
+            auto neighbors_host_view = raft::make_host_matrix_view<int64_t, int64_t>(
+                neighbors_int64.data(), (int64_t)num_queries, (int64_t)limit);
             auto distances_host_view = raft::make_host_matrix_view<float, int64_t>(
                 search_res.distances.data(), (int64_t)num_queries, (int64_t)limit);
 
             cuvs::neighbors::mg_search_params<cuvs::neighbors::cagra::search_params> mg_search_params(search_params);
             cuvs::neighbors::cagra::search(*res, *mg_index_, mg_search_params,
                                                 queries_host_view, neighbors_host_view, distances_host_view);
+            
+            // Convert int64_t neighbors to uint32_t
+            for (size_t i = 0; i < neighbors_int64.size(); ++i) {
+                search_res.neighbors[i] = static_cast<uint32_t>(neighbors_int64[i]);
+            }
         } else if (local_index) {
             auto queries_device = raft::make_device_matrix<T, int64_t, raft::layout_c_contiguous>(
                 *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(this->dimension));
