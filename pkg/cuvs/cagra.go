@@ -454,10 +454,10 @@ func (gc *GpuCagra[T]) Search(queries []T, numQueries uint64, dimension uint32, 
 	}
 
 	totalElements := uint64(numQueries) * uint64(limit)
-	neighbors := make([]uint32, totalElements)
+	neighbors := make([]int64, totalElements)
 	distances := make([]float32, totalElements)
 
-	C.gpu_cagra_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.uint32_t)(unsafe.Pointer(&neighbors[0])))
+	C.gpu_cagra_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(unsafe.Pointer(&neighbors[0])))
 	C.gpu_cagra_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(unsafe.Pointer(&distances[0])))
 	runtime.KeepAlive(neighbors)
 	runtime.KeepAlive(distances)
@@ -507,10 +507,10 @@ func (gc *GpuCagra[T]) SearchFloat(queries []float32, numQueries uint64, dimensi
 	}
 
 	totalElements := uint64(numQueries) * uint64(limit)
-	neighbors := make([]uint32, totalElements)
+	neighbors := make([]int64, totalElements)
 	distances := make([]float32, totalElements)
 
-	C.gpu_cagra_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.uint32_t)(unsafe.Pointer(&neighbors[0])))
+	C.gpu_cagra_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(unsafe.Pointer(&neighbors[0])))
 	C.gpu_cagra_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(unsafe.Pointer(&distances[0])))
 	runtime.KeepAlive(neighbors)
 	runtime.KeepAlive(distances)
@@ -634,6 +634,6 @@ func MergeGpuCagra[T VectorType](indices []*GpuCagra[T], nthread uint32, devices
 
 // SearchResult contains the neighbors and distances from a search.
 type SearchResult struct {
-	Neighbors []uint32
+	Neighbors []int64
 	Distances []float32
 }

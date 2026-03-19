@@ -368,7 +368,7 @@ gpu_cagra_search_res_t gpu_cagra_search_float(gpu_cagra_c index_c, const float* 
     return res;
 }
 
-void gpu_cagra_get_neighbors(gpu_cagra_result_c result_c, uint64_t total_elements, uint32_t* neighbors) {
+void gpu_cagra_get_neighbors(gpu_cagra_result_c result_c, uint64_t total_elements, int64_t* neighbors) {
     if (!result_c) return;
     auto* neighbors_vec = &static_cast<matrixone::cagra_search_result_t*>(result_c)->neighbors;
     if (neighbors_vec->size() >= total_elements) {
