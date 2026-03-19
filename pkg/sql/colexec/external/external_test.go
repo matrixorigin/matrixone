@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -851,7 +852,7 @@ func Test_getMOCSVReader(t *testing.T) {
 // vector dimension against the column definition vecf32(N)/vecf64(N) during LOAD DATA.
 // This is the regression test for the external.go part of https://github.com/matrixorigin/matrixone/issues/23872
 func Test_getColData_VecDimensionCheck(t *testing.T) {
-	mp := testutil.TestUtilMp
+	mp := mpool.MustNewZero()
 
 	tests := []struct {
 		name    string
