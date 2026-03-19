@@ -19,7 +19,7 @@ alter table dis_table_02 rename column a to newA;
 use ww_conflict;
 begin;
 update dis_table_02 set b='dpqweoe' where a>1;
--- @regex("invalid input: column ('dis_table_02\.a'|a) does not exist", true)
+-- @regex("invalid input: column ('dis_table_02.a'|a) does not exist", true)
 invalid input: column a does not exist
 update dis_table_02 set b='dpqweoe' where newA>1;
 commit;
