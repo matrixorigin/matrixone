@@ -821,25 +821,14 @@ func LockWithMayUpgrade(
 }
 
 func canRetryLock(ctx context.Context, table uint64, txn client.TxnOperator, err error) bool {
-	if ctx.Err() != nil {
+	if ctx.Err() != nil || !isRetryLockError(err) {
 		return false
 	}
-	if moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) {
-		return waitToRetryLock(ctx)
-	}
-	if txn.HasLockTable(table) {
+	if !moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) &&
+		txn.HasLockTable(table) {
 		return false
 	}
-	if moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
-		moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound) {
-		return waitToRetryLock(ctx)
-	}
-	if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
-		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
-		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) {
-		return waitToRetryLock(ctx)
-	}
-	return false
+	return waitToRetryLock(ctx)
 }
 
 func waitToRetryLock(ctx context.Context) bool {
