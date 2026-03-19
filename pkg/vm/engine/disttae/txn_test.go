@@ -29,9 +29,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -243,7 +245,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	})
 
-	t.Run("out of range and unique", func(t *testing.T) {
+	t.Run("no pk check and unique", func(t *testing.T) {
 		proc := testutil.NewProc(t)
 		txn := &Transaction{
 			op:          newTxnOperatorForTest(t),
@@ -257,7 +259,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 					tableName:    "tbl",
 					databaseName: "db",
 					bat:          newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1, 2}),
-					pkCheckPos:   3,
+					pkCheckPos:   -1,
 					pkCheckReady: true,
 				},
 				{
@@ -270,6 +272,85 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 					pkCheckPos:   1,
 					pkCheckReady: true,
 				},
+			},
+		}
+
+		require.NoError(t, txn.checkDup())
+	})
+
+	t.Run("out of range falls back to legacy", func(t *testing.T) {
+		txn := newTransactionWithActivePKTableForTest(t, "pk")
+		txn.writes = []Entry{
+			{
+				typ:          INSERT,
+				accountId:    1,
+				tableId:      42,
+				databaseId:   7,
+				tableName:    "tbl",
+				databaseName: "db",
+				bat:          newInt64BatchForTest(t, txn.proc, []string{"pk"}, []int64{9, 9}),
+				pkCheckPos:   3,
+				pkCheckReady: true,
+			},
+		}
+
+		err := txn.checkDup()
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	})
+
+	t.Run("legacy insert with rowid duplicate", func(t *testing.T) {
+		txn := newTransactionWithActivePKTableForTest(t, "pk")
+		txn.writes = []Entry{
+			{
+				typ:          INSERT,
+				accountId:    1,
+				tableId:      42,
+				databaseId:   7,
+				tableName:    "tbl",
+				databaseName: "db",
+				bat:          newInsertBatchWithRowIDForTest(t, txn.proc, []int64{8, 8}),
+				pkCheckReady: false,
+			},
+		}
+
+		err := txn.checkDup()
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	})
+
+	t.Run("legacy delete duplicate", func(t *testing.T) {
+		txn := newTransactionWithActivePKTableForTest(t, "pk")
+		txn.writes = []Entry{
+			{
+				typ:          DELETE,
+				accountId:    1,
+				tableId:      42,
+				databaseId:   7,
+				tableName:    "tbl",
+				databaseName: "db",
+				bat:          newDeleteBatchForTest(t, txn.proc, []int64{6, 6}),
+				pkCheckReady: false,
+			},
+		}
+
+		err := txn.checkDup()
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	})
+
+	t.Run("legacy delete without pk vector", func(t *testing.T) {
+		txn := newTransactionWithActivePKTableForTest(t, "pk")
+		txn.writes = []Entry{
+			{
+				typ:          DELETE,
+				accountId:    1,
+				tableId:      42,
+				databaseId:   7,
+				tableName:    "tbl",
+				databaseName: "db",
+				bat:          newInt64BatchForTest(t, txn.proc, []string{"pk"}, []int64{1}),
+				pkCheckReady: false,
 			},
 		}
 
@@ -313,6 +394,54 @@ func TestResolvePKCheckPosForWriteEarlyExit(t *testing.T) {
 	require.Equal(t, -1, pos)
 }
 
+func TestResolvePKCheckPosForWriteWithActiveTxnTable(t *testing.T) {
+	txn := newTransactionWithActivePKTableForTest(t, "pk")
+
+	pos, err := txn.resolvePKCheckPosForWrite(
+		INSERT,
+		1,
+		"db",
+		"tbl",
+		42,
+		newInt64BatchForTest(t, txn.proc, []string{"pk"}, []int64{1}),
+	)
+	require.NoError(t, err)
+	require.Equal(t, 0, pos)
+
+	pos, err = txn.resolvePKCheckPosForWrite(
+		INSERT,
+		1,
+		"db",
+		"tbl",
+		42,
+		newInt64BatchForTest(t, txn.proc, []string{"PK"}, []int64{1}),
+	)
+	require.NoError(t, err)
+	require.Equal(t, 0, pos)
+
+	pos, err = txn.resolvePKCheckPosForWrite(
+		DELETE,
+		1,
+		"db",
+		"tbl",
+		42,
+		newDeleteBatchForTest(t, txn.proc, []int64{1}),
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, pos)
+
+	pos, err = txn.resolvePKCheckPosForWrite(
+		INSERT,
+		1,
+		"db",
+		"tbl",
+		42,
+		newInt64BatchForTest(t, txn.proc, []string{"other"}, []int64{1}),
+	)
+	require.NoError(t, err)
+	require.Equal(t, -1, pos)
+}
+
 func TestWriteFileLockedMarksPKCheckReady(t *testing.T) {
 	proc := testutil.NewProc(t)
 	txn := &Transaction{proc: proc}
@@ -329,12 +458,63 @@ func TestWriteFileLockedMarksPKCheckReady(t *testing.T) {
 }
 
 func newTxnOperatorForTest(t *testing.T) *mock_frontend.MockTxnOperator {
+	return newTxnOperatorForTestWithWorkspace(t, nil)
+}
+
+func newTxnOperatorForTestWithWorkspace(
+	t *testing.T,
+	workspace client.Workspace,
+) *mock_frontend.MockTxnOperator {
 	t.Helper()
 	ctrl := gomock.NewController(t)
 	op := mock_frontend.NewMockTxnOperator(ctrl)
 	op.EXPECT().Txn().Return(txnpb.TxnMeta{ID: []byte("txn-test")}).AnyTimes()
 	op.EXPECT().NextSequence().Return(uint64(1)).AnyTimes()
+	op.EXPECT().Status().Return(txnpb.TxnStatus_Active).AnyTimes()
+	op.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
 	return op
+}
+
+func newTransactionWithActivePKTableForTest(
+	t *testing.T,
+	pkName string,
+) *Transaction {
+	t.Helper()
+	proc := testutil.NewProc(t)
+	txn := &Transaction{
+		proc:        proc,
+		engine:      &Engine{},
+		tableOps:    newTableOps(),
+		databaseOps: newDbOps(),
+	}
+	op := newTxnOperatorForTestWithWorkspace(t, txn)
+	txn.op = op
+
+	db := &txnDatabase{
+		op:           op,
+		databaseId:   7,
+		databaseName: "db",
+	}
+	txn.databaseOps.addCreateDatabase(genDatabaseKey(1, "db"), 0, db)
+	txn.tableOps.addCreateTable(
+		genTableKey(1, "tbl", 7, "db"),
+		0,
+		&txnTable{
+			accountId: 1,
+			tableId:   42,
+			tableName: "tbl",
+			db:        db,
+			tableDef: &pbplan.TableDef{
+				Cols: []*pbplan.ColDef{
+					{Name: pkName},
+				},
+				Pkey: &pbplan.PrimaryKeyDef{
+					PkeyColName: pkName,
+				},
+			},
+		},
+	)
+	return txn
 }
 
 func newInt64BatchForTest(
@@ -356,6 +536,32 @@ func newInt64BatchForTest(
 }
 
 func newDeleteBatchForTest(
+	t *testing.T,
+	proc *process.Process,
+	pks []int64,
+) *batch.Batch {
+	t.Helper()
+	rowids := make([]types.Rowid, len(pks))
+	for i := range rowids {
+		rowids[i] = types.RandomRowid()
+	}
+
+	bat := batch.NewWithSize(2)
+	bat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "pk"})
+
+	rowidVec := vector.NewVec(types.T_Rowid.ToType())
+	require.NoError(t, vector.AppendFixedList(rowidVec, rowids, nil, proc.Mp()))
+	bat.Vecs[0] = rowidVec
+
+	pkVec := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(pkVec, pks, nil, proc.Mp()))
+	bat.Vecs[1] = pkVec
+
+	bat.SetRowCount(len(pks))
+	return bat
+}
+
+func newInsertBatchWithRowIDForTest(
 	t *testing.T,
 	proc *process.Process,
 	pks []int64,

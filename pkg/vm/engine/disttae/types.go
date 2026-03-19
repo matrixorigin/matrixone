@@ -408,7 +408,6 @@ type Transaction struct {
 	removed              bool
 	startStatementCalled bool
 	incrStatementCalled  bool
-	syncCommittedTSCount uint64
 	pkCount              int
 
 	adjustCount int
@@ -498,9 +497,8 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 		deletedBlocks: &deletedBlocks{
 			offsets: map[types.Blockid][]int64{},
 		},
-		cnObjsSummary:        map[types.Objectid]Summary{},
-		batchSelectList:      make(map[*batch.Batch][]int64),
-		syncCommittedTSCount: eng.cli.GetSyncLatestCommitTSTimes(),
+		cnObjsSummary:   map[types.Objectid]Summary{},
+		batchSelectList: make(map[*batch.Batch][]int64),
 		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
 
 		commitWorkspaceThreshold: eng.config.commitWorkspaceThreshold,
@@ -985,11 +983,6 @@ func (txn *Transaction) advanceSnapshot(
 // RC should observe the latest committed schema/data at statement start,
 // including the first statement in an explicit transaction.
 func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) (bool, error) {
-	newTimes := txn.proc.Base.TxnClient.GetSyncLatestCommitTSTimes()
-	if newTimes > txn.syncCommittedTSCount {
-		txn.syncCommittedTSCount = newTimes
-	}
-
 	if !commit {
 		trace.GetService(txn.proc.GetService()).TxnUpdateSnapshot(
 			txn.op, 0, "before execute")
