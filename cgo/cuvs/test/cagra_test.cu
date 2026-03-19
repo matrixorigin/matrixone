@@ -209,7 +209,7 @@ TEST(GpuCagraTest, ConcurrentShardedSearch) {
 
 void reproduce_sharded_cagra() {
     const uint32_t dimension = 1024;
-    const uint64_t count = 10000;
+    const uint64_t count = 100000;
     
     printf("[INFO    ] Generating %lu vectors of dimension %u...\n", count, dimension);
     std::vector<float> dataset(count * dimension);

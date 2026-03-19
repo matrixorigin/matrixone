@@ -9,14 +9,17 @@ ifeq ($(CONDA_PREFIX),)
 endif
 
 # Compilation flags
+# Added --extended-lambda because raft/core/copy.cuh requires it for some internal headers
 NVCC_FLAGS := -std=c++17 -Xcompiler "-Wall -Wextra -fPIC -O2" --extended-lambda --expt-relaxed-constexpr
 
 # Target architectures: sm_75 (T4/RTX 20), sm_80 (A100), sm_86 (A10), sm_89 (L40), sm_90 (H100)
+# Including both sm_XX (SASS) and compute_XX (PTX) for each architecture to ensure compatibility.
 ARCH_FLAGS := -gencode arch=compute_75,code=sm_75
 ARCH_FLAGS += -gencode arch=compute_80,code=sm_80
 ARCH_FLAGS += -gencode arch=compute_86,code=sm_86
 ARCH_FLAGS += -gencode arch=compute_89,code=sm_89
 ARCH_FLAGS += -gencode arch=compute_90,code=sm_90
+# Add generic compute_86 PTX fallback
 ARCH_FLAGS += -gencode arch=compute_86,code=compute_86
 
 NVCC_FLAGS += $(ARCH_FLAGS)
@@ -24,7 +27,8 @@ NVCC_FLAGS += -I. -I$(CUDA_PATH)/include -I$(CONDA_PREFIX)/include -I$(CONDA_PRE
 NVCC_FLAGS += -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE -DRAFT_SYSTEM_LITTLE_ENDIAN=1
 
 # Linking flags
-LDFLAGS := -L$(CUDA_PATH)/lib64/stubs -lcuda -L$(CUDA_PATH)/lib64 -lcudart
+LDFLAGS := -shared
+LDFLAGS += -L$(CUDA_PATH)/lib64/stubs -lcuda -L$(CUDA_PATH)/lib64 -lcudart
 LDFLAGS += -L$(CONDA_PREFIX)/lib -lcuvs -lcuvs_c -ldl -lrmm -lrapids_logger
 LDFLAGS += -Xlinker -lpthread -Xlinker -lm
 
@@ -56,11 +60,11 @@ TEST_OBJS := $(patsubst $(TESTDIR)/%.cu, $(OBJDIR)/test/%.o, $(TEST_SRCS))
 all: $(TARGET)
 
 debug: NVCC_FLAGS := $(subst -O2,-O0,$(NVCC_FLAGS)) -g -lineinfo
-debug: $(TEST_EXE)
+debug: all $(TEST_EXE)
 
 $(TARGET): $(OBJS)
 	@echo "Linking shared library $@"
-	$(NVCC) $(NVCC_FLAGS) -shared $(LDFLAGS) $^ -o $@
+	$(NVCC) $(NVCC_FLAGS) $(LDFLAGS) $^ -o $@
 
 %.o: %.cpp
 	@echo "Compiling $< with NVCC"
@@ -71,9 +75,9 @@ test: $(TEST_EXE)
 	@echo "Running tests..."
 	./$(TEST_EXE)
 
-$(TEST_EXE): $(TEST_OBJS) $(OBJS)
+$(TEST_EXE): $(TEST_OBJS) helper.o
 	@echo "NVCCLD $@"
-	$(NVCC) $(NVCC_FLAGS) $^ $(LDFLAGS) -o $@
+	$(NVCC) $(NVCC_FLAGS) $^ $(subst -shared,,$(LDFLAGS)) -o $@
 
 $(OBJDIR)/test/%.o: $(TESTDIR)/%.cu
 	@mkdir -p $(@D)

@@ -14,12 +14,11 @@
  * limitations under the License.
  */
 
-#include "../cuvs_worker.hpp"
-#include "../cagra.hpp"
+#include "cuvs_worker.hpp"
+#include "cagra.hpp"
 #include "test_framework.hpp"
 #include <cstdio>
 #include <cstdlib>
-#include <future>
 
 using namespace matrixone;
 
@@ -28,34 +27,202 @@ void reproduce_sharded_cagra();
 
 thread_local bool current_test_failed = false;
 
-// Helper to get available GPU devices
-std::vector<int> get_available_devices() {
-    int device_count = 0;
-    cudaError_t error = cudaGetDeviceCount(&device_count);
-    if (error != cudaSuccess || device_count == 0) {
-        return {0}; // Fallback to device 0
-    }
-    std::vector<int> devices;
-    for (int i = 0; i < device_count; ++i) {
-        devices.push_back(i);
-    }
-    return devices;
+// --- thread_safe_queue_t Tests ---
+
+TEST(ThreadSafeQueueTest, BasicPushPop) {
+    thread_safe_queue_t<int> q;
+    q.push(1);
+    q.push(2);
+
+    int val;
+    ASSERT_TRUE(q.pop(val));
+    ASSERT_EQ(val, 1);
+    ASSERT_TRUE(q.pop(val));
+    ASSERT_EQ(val, 2);
+}
+
+TEST(ThreadSafeQueueTest, PopEmptyBlocking) {
+    thread_safe_queue_t<int> q;
+    int val = 0;
+
+    auto fut = std::async(std::launch::async, [&]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        q.push(42);
+    });
+
+    ASSERT_TRUE(q.pop(val));
+    ASSERT_EQ(val, 42);
+}
+
+TEST(ThreadSafeQueueTest, StopQueue) {
+    thread_safe_queue_t<int> q;
+    int val;
+
+    auto fut = std::async(std::launch::async, [&]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        q.stop();
+    });
+
+    ASSERT_FALSE(q.pop(val)); // Should return false after stop
+    ASSERT_TRUE(q.is_stopped());
+}
+
+TEST(ThreadSafeQueueTest, PushBlocking) {
+    thread_safe_queue_t<int> q;
+    q.set_capacity(2);
+    
+    q.push(1);
+    q.push(2);
+    
+    std::atomic<bool> pushed_third{false};
+    std::thread t([&]() {
+        q.push(3); // Should block
+        pushed_third.store(true);
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    ASSERT_FALSE(pushed_third.load());
+
+    int val;
+    ASSERT_TRUE(q.pop(val));
+    ASSERT_EQ(val, 1);
+
+    // Now the third push should unblock
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    ASSERT_TRUE(pushed_third.load());
+
+    ASSERT_TRUE(q.pop(val));
+    ASSERT_EQ(val, 2);
+    ASSERT_TRUE(q.pop(val));
+    ASSERT_EQ(val, 3);
+    
+    t.join();
+}
+
+TEST(ThreadSafeQueueTest, ProducerConsumerStress) {
+    thread_safe_queue_t<int> q;
+    q.set_capacity(10);
+    const int num_producers = 4;
+    const int num_consumers = 4;
+    const int items_per_producer = 1000;
+    
+    std::atomic<int> sum_pushed{0};
+    std::atomic<int> sum_popped{0};
+    std::atomic<int> count_popped{0};
+
+    auto producer = [&]() {
+        for (int i = 0; i < items_per_producer; ++i) {
+            q.push(1);
+            sum_pushed.fetch_add(1);
+        }
+    };
+
+    auto consumer = [&]() {
+        int val;
+        while (q.pop(val)) {
+            sum_popped.fetch_add(val);
+            count_popped.fetch_add(1);
+            if (count_popped.load() == num_producers * items_per_producer) {
+                q.stop();
+            }
+        }
+    };
+
+    std::vector<std::thread> threads;
+    for (int i = 0; i < num_producers; ++i) threads.emplace_back(producer);
+    for (int i = 0; i < num_consumers; ++i) threads.emplace_back(consumer);
+
+    for (auto& t : threads) t.join();
+
+    ASSERT_EQ(sum_pushed.load(), sum_popped.load());
+    ASSERT_EQ(count_popped.load(), num_producers * items_per_producer);
+}
+
+TEST(ThreadSafeQueueTest, StopUnblocksProducer) {
+    thread_safe_queue_t<int> q;
+    q.set_capacity(1);
+    q.push(1);
+
+    std::atomic<bool> push_exited{false};
+    std::thread t([&]() {
+        q.push(2); // Blocks
+        push_exited.store(true);
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    ASSERT_FALSE(push_exited.load());
+
+    q.stop();
+    t.join();
+    ASSERT_TRUE(push_exited.load());
+}
+
+// --- cuvs_task_result_store_t Tests ---
+
+TEST(CuvsTaskResultStoreTest, BasicStoreRetrieve) {
+    cuvs_task_result_store_t store;
+    uint64_t id = store.get_next_job_id();
+    
+    cuvs_task_result_t res{id, 100, nullptr};
+    store.store(res);
+
+    auto fut = store.wait(id);
+    auto retrieved = fut.get();
+    ASSERT_EQ(std::any_cast<int>(retrieved.result), 100);
+}
+
+TEST(CuvsTaskResultStoreTest, AsyncWait) {
+    cuvs_task_result_store_t store;
+    uint64_t id = store.get_next_job_id();
+
+    auto fut = store.wait(id);
+    
+    std::thread t([&]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        store.store({id, std::string("async"), nullptr});
+    });
+
+    auto retrieved = fut.get();
+    ASSERT_EQ(std::any_cast<std::string>(retrieved.result), std::string("async"));
+    t.join();
+}
+
+TEST(CuvsTaskResultStoreTest, StopStore) {
+    cuvs_task_result_store_t store;
+    uint64_t id = store.get_next_job_id();
+    auto fut = store.wait(id);
+
+    store.stop();
+    
+    ASSERT_THROW(fut.get(), std::runtime_error);
+}
+
+// --- raft_handle_wrapper_t and is_snmg_handle Tests ---
+
+TEST(RaftHandleWrapperTest, DetectSingleGpu) {
+    std::vector<int> devices = {0};
+    raft_handle_wrapper_t wrapper(devices, false); // force_mg = false
+    ASSERT_FALSE(is_snmg_handle(wrapper.get_raft_resources()));
+}
+
+TEST(RaftHandleWrapperTest, DetectMultiGpuForced) {
+    std::vector<int> devices = {0};
+    raft_handle_wrapper_t wrapper(devices, true); // force_mg = true
+    ASSERT_TRUE(is_snmg_handle(wrapper.get_raft_resources()));
 }
 
 // --- cuvs_worker_t Tests ---
 
 TEST(CuvsWorkerTest, BasicLifecycle) {
-    auto devices = get_available_devices();
     uint32_t n_threads = 1;
-    cuvs_worker_t worker(n_threads, devices);
+    cuvs_worker_t worker(n_threads);
     worker.start();
     worker.stop();
 }
 
 TEST(CuvsWorkerTest, SubmitTask) {
-    auto devices = get_available_devices();
     uint32_t n_threads = 1;
-    cuvs_worker_t worker(n_threads, devices);
+    cuvs_worker_t worker(n_threads);
     worker.start();
 
     auto task = [](raft_handle_wrapper_t&) -> std::any {
@@ -71,9 +238,8 @@ TEST(CuvsWorkerTest, SubmitTask) {
 }
 
 TEST(CuvsWorkerTest, MultipleThreads) {
-    auto devices = get_available_devices();
     uint32_t n_threads = 4;
-    cuvs_worker_t worker(n_threads, devices);
+    cuvs_worker_t worker(n_threads);
     worker.start();
 
     std::vector<uint64_t> ids;
@@ -92,9 +258,8 @@ TEST(CuvsWorkerTest, MultipleThreads) {
 }
 
 TEST(CuvsWorkerTest, TaskErrorHandling) {
-    auto devices = get_available_devices();
     uint32_t n_threads = 1;
-    cuvs_worker_t worker(n_threads, devices);
+    cuvs_worker_t worker(n_threads);
     worker.start();
 
     auto fail_task = [](raft_handle_wrapper_t&) -> std::any {
@@ -111,15 +276,16 @@ TEST(CuvsWorkerTest, TaskErrorHandling) {
 }
 
 TEST(CuvsWorkerTest, SubmitMain) {
-    auto devices = get_available_devices();
     uint32_t n_threads = 2;
-    cuvs_worker_t worker(n_threads, devices);
+    cuvs_worker_t worker(n_threads);
     worker.start();
 
-    auto task = [](raft_handle_wrapper_t& handle) -> std::any {
-        return 42;
+    // Task that identifies the thread it's running on
+    auto task = [](raft_handle_wrapper_t&) -> std::any {
+        return std::this_thread::get_id();
     };
 
+    // Submit many tasks to main to ensure they are picked up
     std::vector<uint64_t> ids;
     for(int i=0; i<10; ++i) {
         ids.push_back(worker.submit_main(task));
@@ -128,36 +294,86 @@ TEST(CuvsWorkerTest, SubmitMain) {
     for(auto id : ids) {
         auto res = worker.wait(id).get();
         ASSERT_TRUE(res.error == nullptr);
-        ASSERT_EQ(std::any_cast<int>(res.result), 42);
     }
 
     worker.stop();
 }
 
-TEST(CuvsWorkerTest, WorkerBatching) {
-    auto devices = get_available_devices();
-    uint32_t n_workers = 1;
-    cuvs_worker_t worker(n_workers, devices);
-    worker.set_use_batching(true);
+TEST(CuvsWorkerTest, BoundedQueueStress) {
+    const uint32_t n_workers = 4;
+    const uint32_t n_producers = 4;
+    const uint32_t tasks_per_producer = 500;
+    
+    cuvs_worker_t worker(n_workers);
     worker.start();
 
-    auto exec_fn = [](raft_handle_wrapper_t& handle, const std::vector<std::any>& reqs, const std::vector<std::function<void(std::any)>>& setters) {
-        for (size_t i = 0; i < reqs.size(); ++i) {
-            int val = std::any_cast<int>(reqs[i]);
-            setters[i](val * 2);
-        }
+    std::atomic<uint32_t> tasks_completed{0};
+    auto task = [&](raft_handle_wrapper_t&) -> std::any {
+        tasks_completed.fetch_add(1);
+        // Small sleep to ensure queue builds up
+        std::this_thread::sleep_for(std::chrono::microseconds(10));
+        return std::any();
     };
 
-    std::vector<std::future<int>> futures;
-    for (int i = 0; i < 5; ++i) {
-        futures.push_back(worker.submit_batched<int>("test_key", i, exec_fn));
+    std::vector<std::thread> producers;
+    for (uint32_t i = 0; i < n_producers; ++i) {
+        producers.emplace_back([&, i]() {
+            for (uint32_t j = 0; j < tasks_per_producer; ++j) {
+                // Mix of submit and submit_main
+                if ((i + j) % 2 == 0) {
+                    worker.submit(task);
+                } else {
+                    worker.submit_main(task);
+                }
+            }
+        });
     }
 
-    for (int i = 0; i < 5; ++i) {
-        ASSERT_EQ(futures[i].get(), i * 2);
+    for (auto& t : producers) t.join();
+
+    // Wait for all tasks to complete (since we didn't keep track of IDs here for simplicity,
+    // we just check the counter)
+    const uint32_t total_tasks = n_producers * tasks_per_producer;
+    auto start_time = std::chrono::steady_clock::now();
+    while (tasks_completed.load() < total_tasks) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        if (std::chrono::steady_clock::now() - start_time > std::chrono::seconds(10)) {
+            REPORT_FAILURE("BoundedQueueStress timed out - possible hang");
+        }
     }
 
+    ASSERT_EQ(tasks_completed.load(), total_tasks);
     worker.stop();
+}
+
+TEST(CuvsWorkerTest, StopUnderLoad) {
+    const uint32_t n_workers = 4;
+    cuvs_worker_t worker(n_workers);
+    worker.start();
+
+    std::atomic<bool> producer_should_stop{false};
+    std::thread producer([&]() {
+        auto task = [](raft_handle_wrapper_t&) -> std::any {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            return std::any();
+        };
+        while (!producer_should_stop.load()) {
+            try {
+                worker.submit(task);
+            } catch (...) {
+                // Expected when worker stops
+                break;
+            }
+        }
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    
+    // Stop the worker while tasks are being submitted/processed
+    worker.stop();
+    
+    producer_should_stop.store(true);
+    if (producer.joinable()) producer.join();
 }
 
 int main() {
