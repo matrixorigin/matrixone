@@ -567,3 +567,23 @@ drop role prepare_role1;
 -- @session
 
 drop account prepare_account_01;
+
+-- prepare insert null json multiple times
+drop database if exists db_ps_null_json;
+create database db_ps_null_json;
+use db_ps_null_json;
+drop table if exists t_ps_null_json;
+create table t_ps_null_json (id int, meta json);
+prepare stmt_null_json from 'insert into t_ps_null_json (id, meta) values (?, ?)';
+set @a=1, @b=null;
+execute stmt_null_json using @a, @b;
+set @a=2, @b=null;
+execute stmt_null_json using @a, @b;
+set @a=3, @b='{"k":"v"}';
+execute stmt_null_json using @a, @b;
+set @a=4, @b=null;
+execute stmt_null_json using @a, @b;
+deallocate prepare stmt_null_json;
+select id, meta from t_ps_null_json order by id;
+drop table t_ps_null_json;
+drop database db_ps_null_json;

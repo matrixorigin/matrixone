@@ -65,7 +65,7 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vector
 	)
 
 	//os.Stderr.WriteString(fmt.Sprintf("Load Index SQL = %s\n", sql))
-	res, err := runSql(proc, sql)
+	res, err := runSql(sqlexec.NewSqlProcess(proc), sql)
 	if err != nil {
 		return err
 	}
@@ -117,14 +117,14 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T
 				heap.Fix(&hp, 0)
 			}
 		} else {
-			hp.Push(&vectorindex.SearchResult{Id: c.Id, Distance: dist64})
+			heap.Push(&hp, &vectorindex.SearchResult{Id: c.Id, Distance: dist64})
 		}
 	}
 
 	n := hp.Len()
 	res := make([]int64, 0, n)
 	for range n {
-		srif := hp.Pop()
+		srif := heap.Pop(&hp)
 		sr, ok := srif.(*vectorindex.SearchResult)
 		if !ok {
 			return nil, moerr.NewInternalError(proc.Ctx, "findCentroids: heap return key is not int64")
@@ -181,7 +181,9 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	//fmt.Println("IVFFlat SQL: ", sql)
 	//os.Stderr.WriteString(sql)
 
-	res, err := runSql(proc, sql)
+	sqlProc := sqlexec.NewSqlProcess(proc)
+	sqlProc.BloomFilter = rt.BloomFilter
+	res, err := runSql(sqlProc, sql)
 	if err != nil {
 		return
 	}
@@ -197,12 +199,19 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		return resid, distances, nil
 	}
 
+	var rowCount int64
 	for _, bat := range res.Batches {
+		rowCount += int64(bat.RowCount())
 		for i := 0; i < bat.RowCount(); i++ {
+			if bat.Vecs[1].IsNull(uint64(i)) {
+				continue
+			}
+
 			pk := vector.GetAny(bat.Vecs[0], i, true)
 			resid = append(resid, pk)
 
 			dist := vector.GetFixedAtNoTypeCheck[float64](bat.Vecs[1], i)
+			dist = metric.DistanceTransformIvfflat(dist, metric.DistFuncNameToMetricType[rt.OrigFuncName], metric.MetricType(idxcfg.Ivfflat.Metric))
 			distances = append(distances, dist)
 		}
 	}
@@ -264,6 +273,5 @@ func (s *IvfflatSearch[T]) Load(proc *process.Process) error {
 
 // check config and update some parameters such as ef_search
 func (s *IvfflatSearch[T]) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
-
 	return nil
 }

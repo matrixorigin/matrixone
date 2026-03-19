@@ -221,8 +221,12 @@ func (u *hnswSearchState) start(tf *TableFunction, proc *process.Process, nthRow
 
 	algo := newHnswAlgo(u.idxcfg, u.tblcfg)
 
+	rt := vectorindex.RuntimeConfig{
+		Limit:        uint(u.limit),
+		OrigFuncName: u.tblcfg.OrigFuncName,
+	}
 	var keys any
-	keys, u.distances, err = veccache.Cache.Search(proc, u.tblcfg.IndexTable, algo, f32a, vectorindex.RuntimeConfig{Limit: uint(u.limit)})
+	keys, u.distances, err = veccache.Cache.Search(proc, u.tblcfg.IndexTable, algo, f32a, rt)
 	if err != nil {
 		return err
 	}

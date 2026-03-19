@@ -349,3 +349,76 @@ func TestDatetime_DayOfYear(t *testing.T) {
 		})
 	}
 }
+
+func TestDatetime_TruncateToScale(t *testing.T) {
+	// Test datetime with full microsecond precision: 2024-01-15 10:20:30.123456
+	dt := DatetimeFromClock(2024, 1, 15, 10, 20, 30, 123456)
+
+	// Test scale 0 (seconds, no fractional part)
+	truncated := dt.TruncateToScale(0)
+	expected := DatetimeFromClock(2024, 1, 15, 10, 20, 30, 0)
+	require.Equal(t, expected, truncated, "scale 0 should truncate to seconds")
+
+	// Test scale 3 (milliseconds) - should truncate to .123000
+	truncated = dt.TruncateToScale(3)
+	expected = DatetimeFromClock(2024, 1, 15, 10, 20, 30, 123000)
+	require.Equal(t, expected, truncated, "scale 3 should truncate to milliseconds")
+
+	// Test scale 6 (microseconds) - should not change
+	truncated = dt.TruncateToScale(6)
+	require.Equal(t, dt, truncated, "scale 6 should not change")
+
+	// Test rounding up: .123500 with scale 3 should round to .124000
+	dt2 := DatetimeFromClock(2024, 1, 15, 10, 20, 30, 123500)
+	truncated = dt2.TruncateToScale(3)
+	expected = DatetimeFromClock(2024, 1, 15, 10, 20, 30, 124000)
+	require.Equal(t, expected, truncated, "scale 3 should round .123500 up to .124000")
+
+	// Test rounding up to next second: .999999 with scale 0 should round to next second
+	dt3 := DatetimeFromClock(2024, 1, 15, 10, 20, 30, 999999)
+	truncated = dt3.TruncateToScale(0)
+	expected = DatetimeFromClock(2024, 1, 15, 10, 20, 31, 0)
+	require.Equal(t, expected, truncated, "scale 0 should round .999999 to next second")
+
+	// Test scale 1 (0.1 seconds): .156789 should round to .200000
+	dt4 := DatetimeFromClock(2024, 1, 15, 10, 20, 30, 156789)
+	truncated = dt4.TruncateToScale(1)
+	expected = DatetimeFromClock(2024, 1, 15, 10, 20, 30, 200000)
+	require.Equal(t, expected, truncated, "scale 1 should round .156789 to .200000")
+
+	// Test scale 2 (0.01 seconds): .125678 should round to .130000
+	dt5 := DatetimeFromClock(2024, 1, 15, 10, 20, 30, 125678)
+	truncated = dt5.TruncateToScale(2)
+	expected = DatetimeFromClock(2024, 1, 15, 10, 20, 30, 130000)
+	require.Equal(t, expected, truncated, "scale 2 should round .125678 to .130000")
+
+	// Test scale 4: .123456 should truncate to .123500 (rounds up from .123456)
+	dt6 := DatetimeFromClock(2024, 1, 15, 10, 20, 30, 123456)
+	truncated = dt6.TruncateToScale(4)
+	expected = DatetimeFromClock(2024, 1, 15, 10, 20, 30, 123500)
+	require.Equal(t, expected, truncated, "scale 4 should round .123456 to .123500")
+
+	// Test scale 5: .123456 should truncate to .123460
+	dt7 := DatetimeFromClock(2024, 1, 15, 10, 20, 30, 123456)
+	truncated = dt7.TruncateToScale(5)
+	expected = DatetimeFromClock(2024, 1, 15, 10, 20, 30, 123460)
+	require.Equal(t, expected, truncated, "scale 5 should round .123456 to .123460")
+
+	// Edge case: Test rounding at minute boundary
+	dt8 := DatetimeFromClock(2024, 1, 15, 10, 20, 59, 999999)
+	truncated = dt8.TruncateToScale(0)
+	expected = DatetimeFromClock(2024, 1, 15, 10, 21, 0, 0)
+	require.Equal(t, expected, truncated, "scale 0 should round 59.999999 to next minute")
+
+	// Edge case: Test rounding at hour boundary
+	dt9 := DatetimeFromClock(2024, 1, 15, 10, 59, 59, 999999)
+	truncated = dt9.TruncateToScale(0)
+	expected = DatetimeFromClock(2024, 1, 15, 11, 0, 0, 0)
+	require.Equal(t, expected, truncated, "scale 0 should round to next hour")
+
+	// Edge case: Test rounding at day boundary
+	dt10 := DatetimeFromClock(2024, 1, 15, 23, 59, 59, 999999)
+	truncated = dt10.TruncateToScale(0)
+	expected = DatetimeFromClock(2024, 1, 16, 0, 0, 0, 0)
+	require.Equal(t, expected, truncated, "scale 0 should round to next day")
+}

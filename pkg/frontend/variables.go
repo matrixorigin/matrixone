@@ -3549,7 +3549,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("experimental_ivf_index"),
-		Default:           int64(0),
+		Default:           int64(1), // Deprecated: always enabled, kept for compatibility
 	},
 	"ivf_threads_build": {
 		Name:              "ivf_threads_build",
@@ -3566,6 +3566,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("ivf_threads_search", 0, 1024, false),
 		Default:           int64(0),
+	},
+	"enable_vector_prefilter_by_default": {
+		Name:              "enable_vector_prefilter_by_default",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("enable_vector_prefilter_by_default"),
+		Default:           int8(0),
 	},
 	"probe_limit": {
 		Name:              "probe_limit",
@@ -3605,7 +3613,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("experimental_fulltext_index"),
-		Default:           int64(0),
+		Default:           int64(1), // Deprecated: always enabled, kept for compatibility
 	},
 	"ft_relevancy_algorithm": {
 		Name:              fulltext.FulltextRelevancyAlgo,

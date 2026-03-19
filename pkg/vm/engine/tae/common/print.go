@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -127,14 +128,12 @@ func TypeStringValue(t types.Type, v any, isNull bool, opts ...TypePrintOpt) str
 			tuple, err := types.Unpack(buf)
 			if err == nil {
 				var w bytes.Buffer
-				w.WriteString("(")
-				for pos, col := range tuple.SQLStrings(nil) {
-					if pos > 0 {
-						w.WriteString(",")
-					}
-					w.WriteString(col)
+				content := strings.Join(tuple.SQLStrings(nil), ",")
+				if len(content) > 0 {
+					w.WriteString("(")
+					w.WriteString(content)
+					w.WriteString(")")
 				}
-				w.WriteString(")")
 				return w.String()
 			}
 		}

@@ -56,4 +56,13 @@ id    name    sex    f32
 15    user15    false    null
 16    user16    true    null
 drop stage parqstage;
+create table t5(id bigint, name varchar, int8column tinyint, int16column smallint, binarycolumn binary, varbinarycolumn varbinary(32), blobcolumn blob);
+load data infile {'filepath'='$resources/load_data/int8_int16_binary_varbinary_blob.parq', 'format'='parquet'} into table t5;
+select * from t5;
+id    name    int8column    int16column    binarycolumn    varbinarycolumn    blobcolumn
+1    Alice    1    100    binary1    varbinary1    blob1
+2    Bob    2    200    binary2    varbinary2    blob2
+3    Charlie    3    300    binary3    varbinary3    blob3
+4    Diana    4    400    binary4    varbinary4    blob4
+5    Eve    5    500    binary5    varbinary5    blob5
 drop database parq;

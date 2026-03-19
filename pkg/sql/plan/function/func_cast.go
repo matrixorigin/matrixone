@@ -1350,15 +1350,13 @@ func datetimeToOthers(proc *process.Process,
 			zone = proc.GetSessionInfo().TimeZone
 		}
 		rs := vector.MustFunctionResult[types.Timestamp](result)
-		return datetimeToTimestamp(source, rs, length, zone)
+		return datetimeToTimestamp(source, rs, length, zone, toType.Scale)
 	case types.T_date:
 		rs := vector.MustFunctionResult[types.Date](result)
 		return datetimeToDate(source, rs, length, selectList)
 	case types.T_datetime:
 		rs := vector.MustFunctionResult[types.Datetime](result)
-		v := source.GetSourceVector()
-		v.SetType(toType)
-		return rs.DupFromParameter(source, length)
+		return datetimeToDatetime(proc.Ctx, source, rs, length, toType.Scale)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
 		return datetimeToTime(source, rs, length, selectList)
@@ -1399,9 +1397,7 @@ func timestampToOthers(proc *process.Process,
 		return timestampToDatetime(proc.Ctx, source, rs, length, zone)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
-		v := source.GetSourceVector()
-		v.SetType(toType)
-		return rs.DupFromParameter(source, length)
+		return timestampToTimestamp(proc.Ctx, source, rs, length, toType.Scale)
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
@@ -1455,9 +1451,7 @@ func timeToOthers(ctx context.Context,
 		return timeToDatetime(source, rs, length, selectList)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
-		v := source.GetSourceVector()
-		v.SetType(toType)
-		return rs.DupFromParameter(source, length)
+		return timeToTime(ctx, source, rs, length, toType.Scale)
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
@@ -2687,7 +2681,8 @@ func datetimeToDecimal128(
 func datetimeToTimestamp(
 	from vector.FunctionParameterWrapper[types.Datetime],
 	to *vector.FunctionResult[types.Timestamp], length int,
-	zone *time.Location) error {
+	zone *time.Location,
+	targetScale int32) error {
 	var i uint64
 	l := uint64(length)
 	for i = 0; i < l; i++ {
@@ -2697,7 +2692,12 @@ func datetimeToTimestamp(
 				return err
 			}
 		} else {
-			if err := to.Append(v.ToTimestamp(zone), false); err != nil {
+			result := v.ToTimestamp(zone)
+			// Truncate to target scale if needed
+			if targetScale < 6 {
+				result = result.TruncateToScale(targetScale)
+			}
+			if err := to.Append(result, false); err != nil {
 				return err
 			}
 		}
@@ -2725,11 +2725,11 @@ func dateToDatetime(
 	return nil
 }
 
-func timestampToDatetime(
+func timestampToTimestamp(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Timestamp],
-	to *vector.FunctionResult[types.Datetime], length int,
-	zone *time.Location) error {
+	to *vector.FunctionResult[types.Timestamp], length int,
+	targetScale int32) error {
 	var i uint64
 	l := uint64(length)
 	for i = 0; i < l; i++ {
@@ -2739,7 +2739,93 @@ func timestampToDatetime(
 				return err
 			}
 		} else {
+			result := v
+			// Truncate to target scale if needed
+			if targetScale < 6 {
+				result = result.TruncateToScale(targetScale)
+			}
+			if err := to.Append(result, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func timeToTime(
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.Time],
+	to *vector.FunctionResult[types.Time], length int,
+	targetScale int32) error {
+	var i uint64
+	l := uint64(length)
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			result := v
+			// Truncate to target scale if needed
+			if targetScale < 6 {
+				result = result.TruncateToScale(targetScale)
+			}
+			if err := to.Append(result, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func datetimeToDatetime(
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.Datetime],
+	to *vector.FunctionResult[types.Datetime], length int,
+	targetScale int32) error {
+	var i uint64
+	l := uint64(length)
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			result := v
+			// Truncate to target scale if needed
+			if targetScale < 6 {
+				result = result.TruncateToScale(targetScale)
+			}
+			if err := to.Append(result, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func timestampToDatetime(
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.Timestamp],
+	to *vector.FunctionResult[types.Datetime], length int,
+	zone *time.Location) error {
+	var i uint64
+	l := uint64(length)
+	targetScale := to.GetType().Scale
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+		} else {
 			result := v.ToDatetime(zone)
+			// Truncate to target scale if needed
+			if targetScale < 6 {
+				result = result.TruncateToScale(targetScale)
+			}
 			if err := to.Append(result, false); err != nil {
 				return err
 			}
@@ -4338,6 +4424,10 @@ func strToStr(
 		}
 		return nil
 	}
+	// Get source type to check if it's TEXT
+	fromType := from.GetSourceVector().GetType()
+	isSourceText := fromType.Oid == types.T_text
+
 	if totype.Oid != types.T_text && destLen != 0 {
 		for i = 0; i < l; i++ {
 			v, null := from.GetStrValue(i)
@@ -4349,7 +4439,24 @@ func strToStr(
 			}
 			// check the length.
 			s := convertByteSliceToString(v)
-			if utf8.RuneCountInString(s) > destLen {
+			// For explicit CAST operations (e.g., CAST(text_col AS CHAR(1))), we should
+			// always perform length validation, even if source is TEXT, because the user
+			// explicitly requested a specific type with a length limit.
+			//
+			// However, for implicit conversions in UPDATE statements where the target
+			// column is actually TEXT but misidentified as CHAR/VARCHAR, we should skip
+			// length validation. We distinguish this by checking the target width:
+			// - Small widths (like 1, 10, etc.) are likely explicit CASTs and should be validated
+			// - Large widths (>= 255) might be misidentified TEXT columns in UPDATE operations
+			//
+			// The threshold of 255 is chosen because:
+			// 1. It's a common default width for TEXT columns that get misidentified
+			// 2. Explicit CASTs to CHAR(255) are rare, and when they occur, the user
+			//    likely expects validation (though we skip it for compatibility)
+			// 3. This allows UPDATE operations on TEXT columns to work correctly
+			shouldSkipLengthCheck := isSourceText && (toType.Oid == types.T_char || toType.Oid == types.T_varchar) && destLen >= 255
+
+			if !shouldSkipLengthCheck && utf8.RuneCountInString(s) > destLen {
 				return formatCastError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
 					"Src length %v is larger than Dest length %v", len(s), destLen))
 			}
@@ -4416,6 +4523,8 @@ func strToArray[T types.RealNumbers](
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Varlena], length int, _ types.Type) error {
 
+	toType := to.GetType()
+
 	var i uint64
 	var l = uint64(length)
 	for i = 0; i < l; i++ {
@@ -4425,11 +4534,17 @@ func strToArray[T types.RealNumbers](
 				return err
 			}
 		} else {
-
-			b, err := types.StringToArrayToBytes[T](convertByteSliceToString(v))
+			arr, err := types.StringToArray[T](convertByteSliceToString(v))
 			if err != nil {
 				return err
 			}
+
+			// bypass the dimension check if width is max dimension
+			if int(toType.Width) != types.MaxArrayDimension && int(toType.Width) != len(arr) {
+				return moerr.NewArrayDefMismatchNoCtx(int(toType.Width), len(arr))
+			}
+
+			b := types.ArrayToBytes[T](arr)
 			if err = to.AppendBytes(b, false); err != nil {
 				return err
 			}

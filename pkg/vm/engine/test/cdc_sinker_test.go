@@ -39,7 +39,7 @@ func TestCDC_Sinker1(t *testing.T) {
 	stub := gostub.Stub(&cdc.OpenDbConn, mockFn)
 	defer stub.Reset()
 
-	sink, err := cdc.NewMysqlSink(
+	executor, err := cdc.NewExecutor(
 		"root",
 		"123456",
 		"127.0.0.1",
@@ -50,20 +50,58 @@ func TestCDC_Sinker1(t *testing.T) {
 		false,
 	)
 	require.NoError(t, err)
-	defer sink.Close()
+	defer executor.Close()
 
-	ctx := context.Background()
+	ar := cdc.NewCdcActiveRoutine()
+	sink := cdc.NewMysqlSinker2(
+		executor,
+		1,
+		"task1",
+		&cdc.DbTableInfo{
+			SinkDbName:  "test_db",
+			SinkTblName: "test_tbl",
+		},
+		nil, // watermark updater not required for this test
+		nil, // statement builder not required for transaction commands
+		ar,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go sink.Run(ctx, ar)
 
 	mock.ExpectBegin()
-	err = sink.SendBegin(ctx)
-	require.NoError(t, err)
-	mock.ExpectCommit()
-	err = sink.SendCommit(ctx)
-	require.NoError(t, err)
+	sink.SendBegin()
+	sink.SendDummy()
+	require.Eventually(t, func() bool {
+		return executor.HasActiveTx()
+	}, time.Second, 10*time.Millisecond)
+
 	mock.ExpectRollback()
-	err = sink.SendRollback(ctx)
-	require.Error(t, err)
-	sink.Reset()
+	sink.SendRollback()
+	sink.SendDummy()
+	require.Eventually(t, func() bool {
+		return !executor.HasActiveTx()
+	}, time.Second, 10*time.Millisecond)
+
+	mock.ExpectBegin()
+	sink.SendBegin()
+	sink.SendDummy()
+	require.Eventually(t, func() bool {
+		return executor.HasActiveTx()
+	}, time.Second, 10*time.Millisecond)
+
+	mock.ExpectCommit()
+	sink.SendCommit()
+	sink.SendDummy()
+	require.Eventually(t, func() bool {
+		return !executor.HasActiveTx()
+	}, time.Second, 10*time.Millisecond)
+
+	cancel()
+	sink.Close()
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestCDCUtil1(t *testing.T) {

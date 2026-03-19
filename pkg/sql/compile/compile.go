@@ -31,6 +31,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -520,7 +522,7 @@ func (c *Compile) runOnce() (err error) {
 					if e := recover(); e != nil {
 						err := moerr.ConvertPanicError(c.proc.Ctx, e)
 						c.proc.Error(c.proc.Ctx, "panic in run",
-							zap.String("sql", c.sql),
+							zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
 							zap.String("error", err.Error()))
 						errC <- err
 					}
@@ -1634,7 +1636,11 @@ func (c *Compile) compileExternScanParallelWrite(n *plan.Node, param *tree.Exter
 	scope := c.constructScopeForExternal("", false)
 	currentFirstFlag := c.anal.isFirst
 	extern := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
-	extern.Es.ParallelLoad = true
+	parallelLoad := true
+	if len(fileList) > 0 && external.GetCompressType(param, fileList[0]) != tree.NOCOMPRESS {
+		parallelLoad = false
+	}
+	extern.Es.ParallelLoad = parallelLoad
 	extern.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	scope.setRootOperator(extern)
 	c.anal.isFirst = false
@@ -4201,9 +4207,13 @@ func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.R
 	var txnOp client.TxnOperator
 
 	if onRemoteCN {
-		ws := disttae.NewTxnWorkSpace(c.e.(*disttae.Engine), c.proc)
-		c.proc.GetTxnOperator().AddWorkspace(ws)
-		ws.BindTxnOp(c.proc.GetTxnOperator())
+		// Workspace may have been created earlier in remote run scenario (e.g., in remoterunServer.go).
+		// Only create if it doesn't exist to avoid duplicate creation.
+		if c.proc.GetTxnOperator().GetWorkspace() == nil {
+			ws := disttae.NewTxnWorkSpace(c.e.(*disttae.Engine), c.proc)
+			c.proc.GetTxnOperator().AddWorkspace(ws)
+			ws.BindTxnOp(c.proc.GetTxnOperator())
+		}
 	}
 
 	//------------------------------------------------------------------------------------------------------------------
@@ -4293,6 +4303,21 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		partialResults, _, _ := checkAggOptimize(n)
 		if partialResults != nil {
 			forceSingle = true
+		} else if n.Stats != nil && n.Stats.ForceOneCN {
+			// ForceOneCN is already set by CalcNodeDOP for distinct aggregation
+			// Use it directly instead of checking again
+			forceSingle = true
+		} else {
+			// Fallback: Check if any aggregation function uses distinct flag
+			// This is defensive programming in case CalcNodeDOP didn't set ForceOneCN
+			for _, agg := range n.AggList {
+				if f, ok := agg.Expr.(*plan.Expr_F); ok {
+					if (uint64(f.F.Func.Obj) & function.Distinct) != 0 {
+						forceSingle = true
+						break
+					}
+				}
+			}
 		}
 	}
 	//if len(n.OrderBy) > 0 {
@@ -4746,16 +4771,41 @@ func (c *Compile) runSqlWithResult(sql string, accountId int32) (executor.Result
 	return c.runSqlWithResultAndOptions(sql, accountId, executor.StatementOption{})
 }
 
+func (c *Compile) getInternalSQLExecutor() executor.SQLExecutor {
+	// Prefer an executor built on current compile engine so follow-up SQL
+	// (for example CTAS INSERT ... SELECT on temporary tables) can see
+	// session-bound temporary engine state in the same transaction.
+	if c != nil &&
+		c.e != nil &&
+		c.proc != nil &&
+		c.proc.Base != nil &&
+		c.proc.Base.TxnClient != nil &&
+		c.proc.GetFileService() != nil &&
+		c.proc.GetQueryClient() != nil {
+		return NewSQLExecutor(
+			c.addr,
+			c.e,
+			c.proc.Mp(),
+			c.proc.Base.TxnClient,
+			c.proc.GetFileService(),
+			c.proc.GetQueryClient(),
+			c.proc.GetHaKeeper(),
+			c.proc.Base.UdfService,
+		)
+	}
+
+	v, ok := moruntime.ServiceRuntime(c.proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		panic("missing lock service")
+	}
+	return v.(executor.SQLExecutor)
+}
+
 func (c *Compile) runSqlWithResultAndOptions(
 	sql string,
 	accountId int32,
 	options executor.StatementOption,
 ) (executor.Result, error) {
-	v, ok := moruntime.ServiceRuntime(c.proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
-	if !ok {
-		panic("missing lock service")
-	}
-
 	lower := c.getLower()
 
 	if qry, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
@@ -4764,7 +4814,7 @@ func (c *Compile) runSqlWithResultAndOptions(
 		}
 	}
 
-	exec := v.(executor.SQLExecutor)
+	exec := c.getInternalSQLExecutor()
 	opts := executor.Options{}.
 		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
 		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
@@ -4777,6 +4827,14 @@ func (c *Compile) runSqlWithResultAndOptions(
 		WithResolveVariableFunc(c.proc.GetResolveVariableFunc())
 
 	ctx := c.proc.Ctx
+	// Ensure ParameterUnit is available in ctx for downstream helpers which call config.GetParameterUnit(ctx)
+	if ctx.Value(config.ParameterUnitKey) == nil {
+		if v, ok := moruntime.ServiceRuntime(c.proc.GetService()).GetGlobalVariables("parameter-unit"); ok {
+			if pu, ok2 := v.(*config.ParameterUnit); ok2 && pu != nil {
+				ctx = context.WithValue(ctx, config.ParameterUnitKey, pu)
+			}
+		}
+	}
 	if accountId >= 0 {
 		ctx = defines.AttachAccountId(c.proc.Ctx, uint32(accountId))
 	}
@@ -4843,7 +4901,7 @@ func detectFkSelfRefer(c *Compile, detectSqls []string) error {
 
 // runDetectSql runs the fk detecting sql
 func runDetectSql(c *Compile, sql string) error {
-	res, err := c.runSqlWithResult(sql, NoAccountId)
+	res, err := c.runSqlWithResultAndOptions(sql, NoAccountId, executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		c.proc.Errorf(c.proc.Ctx, "The sql that caused the fk self refer check failed is %s, and generated background sql is %s", c.sql, sql)
 		return err
@@ -4864,7 +4922,7 @@ func runDetectSql(c *Compile, sql string) error {
 
 // runDetectFkReferToDBSql runs the fk detecting sql
 func runDetectFkReferToDBSql(c *Compile, sql string) error {
-	res, err := c.runSqlWithResult(sql, NoAccountId)
+	res, err := c.runSqlWithResultAndOptions(sql, NoAccountId, executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		c.proc.Errorf(c.proc.Ctx, "The sql that caused the fk self refer check failed is %s, and generated background sql is %s", c.sql, sql)
 		return err

@@ -33,7 +33,31 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/tidwall/btree"
+	"go.uber.org/zap"
 )
+
+// Reader lifecycle constants
+const (
+	DefaultFrequency     = 200 * time.Millisecond
+	RetryableErrorPrefix = "retryable error:"
+)
+
+// ErrorContext provides context for error message updates
+type ErrorContext struct {
+	IsRetryable     bool // Whether the error is retryable
+	IsPauseOrCancel bool // Whether this is a pause/cancel control signal (optional, auto-detected if not set)
+}
+
+// WatermarkUpdater manages CDC watermarks
+type WatermarkUpdater interface {
+	RemoveCachedWM(ctx context.Context, key *WatermarkKey) (err error)
+	UpdateWatermarkErrMsg(ctx context.Context, key *WatermarkKey, errMsg string, errorCtx *ErrorContext) (err error)
+	GetFromCache(ctx context.Context, key *WatermarkKey) (watermark types.TS, err error)
+	GetOrAddCommitted(ctx context.Context, key *WatermarkKey, watermark *types.TS) (ret types.TS, err error)
+	UpdateWatermarkOnly(ctx context.Context, key *WatermarkKey, watermark *types.TS) (err error)
+	IsCircuitBreakerOpen(key *WatermarkKey) bool
+	GetCommitFailureCount(key *WatermarkKey) uint32
+}
 
 const (
 	CDCSourceUriPrefix = "mysql://"
@@ -119,16 +143,23 @@ func NewTaskId() TaskId {
 // 	return uuid.Parse(s)
 // }
 
-type Reader interface {
+// ChangeReader represents a CDC change data capture reader
+// It monitors table changes and streams them to a downstream sinker
+type ChangeReader interface {
+	// Run starts the change reader in blocking mode
+	// It should be called in a goroutine
 	Run(ctx context.Context, ar *ActiveRoutine)
-	Close()
-}
 
-type TableReader interface {
-	Run(ctx context.Context, ar *ActiveRoutine)
+	// Close closes the reader and releases resources
 	Close()
-	Info() *DbTableInfo
-	GetWg() *sync.WaitGroup
+
+	// Wait blocks until the reader goroutine completes
+	// This is used for graceful shutdown and testing
+	Wait()
+
+	// GetTableInfo returns the source table information
+	// This is used to identify the reader and check for table ID changes
+	GetTableInfo() *DbTableInfo
 }
 
 // Sinker manages and drains the sql parts
@@ -159,14 +190,19 @@ type Sink interface {
 
 type ActiveRoutine struct {
 	sync.Mutex
-	Pause  chan struct{}
-	Cancel chan struct{}
+	Pause        chan struct{}
+	Cancel       chan struct{}
+	pauseClosed  bool // Track if Pause channel is closed
+	cancelClosed bool // Track if Cancel channel is closed
 }
 
 func (ar *ActiveRoutine) ClosePause() {
 	ar.Lock()
 	defer ar.Unlock()
-	close(ar.Pause)
+	if !ar.pauseClosed {
+		close(ar.Pause)
+		ar.pauseClosed = true
+	}
 	// can't set to nil, because some goroutines may still be running, when it goes next round loop,
 	// it found the channel is nil, not closed, will hang there forever
 }
@@ -174,13 +210,18 @@ func (ar *ActiveRoutine) ClosePause() {
 func (ar *ActiveRoutine) CloseCancel() {
 	ar.Lock()
 	defer ar.Unlock()
-	close(ar.Cancel)
+	if !ar.cancelClosed {
+		close(ar.Cancel)
+		ar.cancelClosed = true
+	}
 }
 
 func NewCdcActiveRoutine() *ActiveRoutine {
 	return &ActiveRoutine{
-		Pause:  make(chan struct{}),
-		Cancel: make(chan struct{}),
+		Pause:        make(chan struct{}),
+		Cancel:       make(chan struct{}),
+		pauseClosed:  false,
+		cancelClosed: false,
 	}
 }
 
@@ -279,6 +320,10 @@ type AtomicBatch struct {
 	Mp      *mpool.MPool
 	Batches []*batch.Batch
 	Rows    *btree.BTreeG[AtomicBatchRow]
+
+	totalRows       int
+	duplicateRows   int
+	duplicateLogged bool
 }
 
 func NewAtomicBatch(mp *mpool.MPool) *AtomicBatch {
@@ -312,19 +357,30 @@ func (row AtomicBatchRow) Less(other AtomicBatchRow) bool {
 }
 
 func (bat *AtomicBatch) RowCount() int {
-	c := 0
-	for _, b := range bat.Batches {
-		rows := 0
-		if b != nil && len(b.Vecs) > 0 {
-			rows = b.Vecs[0].Length()
-		}
-		c += rows
+	if bat == nil {
+		return 0
 	}
+	if bat.Rows == nil {
+		panic("RowCount() called on closed AtomicBatch (Fail Fast)")
+	}
+	unique := bat.Rows.Len()
+	if bat.duplicateRows > 0 && !bat.duplicateLogged {
+		logutil.Warn("cdc.atomic_batch.dedup",
+			zap.Int("unique-rows", unique),
+			zap.Int("total-rows", bat.totalRows),
+			zap.Int("duplicate-rows", bat.duplicateRows),
+		)
+		bat.duplicateLogged = true
+	}
+	return unique
+}
 
-	if c != bat.Rows.Len() {
-		logutil.Errorf("inconsistent row count, sum rows of batches: %d, rows of btree: %d\n", c, bat.Rows.Len())
-	}
-	return c
+func (bat *AtomicBatch) TotalRows() int {
+	return bat.totalRows
+}
+
+func (bat *AtomicBatch) DuplicateRows() int {
+	return bat.duplicateRows
 }
 
 func (bat *AtomicBatch) Allocated() int {
@@ -364,7 +420,11 @@ func (bat *AtomicBatch) Append(
 				Offset: i,
 				Src:    batch,
 			}
-			bat.Rows.Set(row)
+			_, replaced := bat.Rows.Set(row)
+			bat.totalRows++
+			if replaced {
+				bat.duplicateRows++
+			}
 		}
 
 		bat.Batches = append(bat.Batches, batch)
@@ -381,6 +441,9 @@ func (bat *AtomicBatch) Close() {
 	}
 	bat.Batches = nil
 	bat.Mp = nil
+	bat.totalRows = 0
+	bat.duplicateRows = 0
+	bat.duplicateLogged = false
 }
 
 func (bat *AtomicBatch) GetRowIterator() RowIterator {

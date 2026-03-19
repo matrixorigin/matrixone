@@ -135,6 +135,7 @@ func (v *Vector) Reset(typ types.Type) {
 }
 
 func (v *Vector) ResetWithSameType() {
+	v.class = FLAT
 	if v.area != nil {
 		v.area = v.area[:0]
 	}

@@ -86,6 +86,9 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 	}
 
 	logExporter := newCounterLogExporter(s.counterSet)
+	// Unregister first to handle the case where a previous registration might still exist
+	// (e.g., from a previous test run or failed initialization).
+	stats.Unregister(statsFamilyName)
 	stats.Register(statsFamilyName, stats.WithLogExporter(logExporter))
 
 	s.stopper = stopper.NewStopper("mo-proxy", stopper.WithLogger(s.runtime.Logger().RawLogger()))

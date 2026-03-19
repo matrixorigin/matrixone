@@ -1,0 +1,267 @@
+DROP DATABASE IF EXISTS test_datetime_precision;
+CREATE DATABASE test_datetime_precision;
+USE test_datetime_precision;
+DROP TABLE IF EXISTS t_datetime_basic;
+CREATE TABLE t_datetime_basic (
+id INT,
+dt0 DATETIME(0),
+dt3 DATETIME(3),
+dt6 DATETIME(6)
+);
+INSERT INTO t_datetime_basic VALUES (1, '2024-01-15 12:34:56.123456', '2024-01-15 12:34:56.123456', '2024-01-15 12:34:56.123456');
+SELECT id, dt0, dt3, dt6,
+EXTRACT(MICROSECOND FROM dt0) AS dt0_micro,
+EXTRACT(MICROSECOND FROM dt3) AS dt3_micro,
+EXTRACT(MICROSECOND FROM dt6) AS dt6_micro
+FROM t_datetime_basic;
+id    dt0    dt3    dt6    dt0_micro    dt3_micro    dt6_micro
+1    2024-01-15 12:34:56    2024-01-15 12:34:56.123000000    2024-01-15 12:34:56.123456000    0    123000    123456
+DROP TABLE t_datetime_basic;
+DROP TABLE IF EXISTS t_datetime_rounding;
+CREATE TABLE t_datetime_rounding (
+scale_val INT,
+input_str VARCHAR(30),
+dt DATETIME(6)
+);
+INSERT INTO t_datetime_rounding VALUES (0, '2024-01-15 12:34:56.123456', CAST('2024-01-15 12:34:56.123456' AS DATETIME(0)));
+INSERT INTO t_datetime_rounding VALUES (1, '2024-01-15 12:34:56.123456', CAST('2024-01-15 12:34:56.123456' AS DATETIME(1)));
+INSERT INTO t_datetime_rounding VALUES (2, '2024-01-15 12:34:56.123456', CAST('2024-01-15 12:34:56.123456' AS DATETIME(2)));
+INSERT INTO t_datetime_rounding VALUES (3, '2024-01-15 12:34:56.123456', CAST('2024-01-15 12:34:56.123456' AS DATETIME(3)));
+INSERT INTO t_datetime_rounding VALUES (4, '2024-01-15 12:34:56.123456', CAST('2024-01-15 12:34:56.123456' AS DATETIME(4)));
+INSERT INTO t_datetime_rounding VALUES (5, '2024-01-15 12:34:56.123456', CAST('2024-01-15 12:34:56.123456' AS DATETIME(5)));
+INSERT INTO t_datetime_rounding VALUES (6, '2024-01-15 12:34:56.123456', CAST('2024-01-15 12:34:56.123456' AS DATETIME(6)));
+SELECT scale_val, input_str, dt, EXTRACT(MICROSECOND FROM dt) AS microseconds
+FROM t_datetime_rounding
+ORDER BY scale_val;
+scale_val    input_str    dt    microseconds
+0    2024-01-15 12:34:56.123456    2024-01-15 12:34:56    0
+1    2024-01-15 12:34:56.123456    2024-01-15 12:34:56.100000000    100000
+2    2024-01-15 12:34:56.123456    2024-01-15 12:34:56.120000000    120000
+3    2024-01-15 12:34:56.123456    2024-01-15 12:34:56.123000000    123000
+4    2024-01-15 12:34:56.123456    2024-01-15 12:34:56.123500000    123500
+5    2024-01-15 12:34:56.123456    2024-01-15 12:34:56.123460000    123460
+6    2024-01-15 12:34:56.123456    2024-01-15 12:34:56.123456000    123456
+DROP TABLE t_datetime_rounding;
+SELECT CAST(CAST('2024-01-15 12:34:56.999999' AS DATETIME(6)) AS DATETIME(0)) AS datetime_6_to_0;
+datetime_6_to_0
+2024-01-15 12:34:57
+SELECT CAST(CAST('2024-01-15 12:34:56' AS DATETIME(0)) AS DATETIME(6)) AS datetime_0_to_6;
+datetime_0_to_6
+2024-01-15 12:34:56
+SELECT CAST(CAST('2024-01-15 12:34:56.789' AS DATETIME(3)) AS DATETIME(0)) AS datetime_3_to_0;
+datetime_3_to_0
+2024-01-15 12:34:57
+DROP TABLE IF EXISTS t_datetime_update;
+CREATE TABLE t_datetime_update (
+id INT PRIMARY KEY,
+dt0 DATETIME(0),
+dt3 DATETIME(3)
+);
+INSERT INTO t_datetime_update VALUES (1, '2024-01-15 12:00:00', '2024-01-15 12:00:00.000');
+UPDATE t_datetime_update SET dt0 = '2024-01-15 12:34:56.789012' WHERE id = 1;
+UPDATE t_datetime_update SET dt3 = '2024-01-15 12:34:56.789012' WHERE id = 1;
+SELECT id, dt0, dt3
+FROM t_datetime_update;
+id    dt0    dt3
+1    2024-01-15 12:34:57    2024-01-15 12:34:56.789000000
+DROP TABLE t_datetime_update;
+DROP TABLE IF EXISTS t_datetime_where;
+CREATE TABLE t_datetime_where (
+id INT,
+dt3 DATETIME(3)
+);
+INSERT INTO t_datetime_where VALUES (1, '2024-01-15 12:34:56.789456');
+SELECT COUNT(*) AS match_with_rounded
+FROM t_datetime_where
+WHERE dt3 = '2024-01-15 12:34:56.789';
+match_with_rounded
+1
+SELECT COUNT(*) AS match_with_original
+FROM t_datetime_where
+WHERE dt3 = '2024-01-15 12:34:56.789456';
+match_with_original
+1
+DROP TABLE t_datetime_where;
+SELECT CAST('2024-01-15 12:34:56' AS DATETIME(0)) = CAST('2024-01-15 12:34:56.000000' AS DATETIME(6)) AS datetime_0_eq_6_same;
+datetime_0_eq_6_same
+true
+SELECT CAST('2024-01-15 12:34:56' AS DATETIME(0)) = CAST('2024-01-15 12:34:56.123456' AS DATETIME(6)) AS datetime_0_eq_6_diff;
+datetime_0_eq_6_diff
+false
+DROP TABLE IF EXISTS t_datetime_half;
+CREATE TABLE t_datetime_half (
+id INT,
+description VARCHAR(50),
+dt0 DATETIME(0),
+dt1 DATETIME(1),
+dt2 DATETIME(2)
+);
+INSERT INTO t_datetime_half VALUES (1, 'scale 0 half', CAST('2024-01-15 12:34:56.500000' AS DATETIME(0)), NULL, NULL);
+INSERT INTO t_datetime_half VALUES (2, 'scale 1 half', NULL, CAST('2024-01-15 12:34:56.150000' AS DATETIME(1)), NULL);
+INSERT INTO t_datetime_half VALUES (3, 'scale 2 half', NULL, NULL, CAST('2024-01-15 12:34:56.125000' AS DATETIME(2)));
+SELECT id, description, dt0, dt1, dt2
+FROM t_datetime_half
+ORDER BY id;
+id    description    dt0    dt1    dt2
+1    scale 0 half    2024-01-15 12:34:57    null    null
+2    scale 1 half    null    2024-01-15 12:34:56.200000000    null
+3    scale 2 half    null    null    2024-01-15 12:34:56.130000000
+DROP TABLE t_datetime_half;
+SELECT DATE_ADD('2024-01-15 12:34:56.123456', INTERVAL 1 HOUR) AS result,
+EXTRACT(MICROSECOND FROM DATE_ADD('2024-01-15 12:34:56.123456', INTERVAL 1 HOUR)) AS microseconds;
+result    microseconds
+2024-01-15 13:34:56.123456000    123456
+SELECT DATE_SUB('2024-01-15 12:34:56.789012', INTERVAL 30 MINUTE) AS result,
+EXTRACT(MICROSECOND FROM DATE_SUB('2024-01-15 12:34:56.789012', INTERVAL 30 MINUTE)) AS microseconds;
+result    microseconds
+2024-01-15 12:04:56.789012000    789012
+SELECT DATE_ADD('2024-01-15 12:34:56', INTERVAL 500000 MICROSECOND) AS result,
+EXTRACT(MICROSECOND FROM DATE_ADD('2024-01-15 12:34:56', INTERVAL 500000 MICROSECOND)) AS microseconds;
+result    microseconds
+2024-01-15 12:34:56.500000000    500000
+DROP TABLE IF EXISTS t_date_to_datetime;
+CREATE TABLE t_date_to_datetime (
+id INT,
+d DATE,
+dt0 DATETIME(0),
+dt3 DATETIME(3),
+dt6 DATETIME(6)
+);
+INSERT INTO t_date_to_datetime VALUES (1, '2024-01-15', CAST('2024-01-15' AS DATETIME(0)), CAST('2024-01-15' AS DATETIME(3)), CAST('2024-01-15' AS DATETIME(6)));
+SELECT id, dt0, dt3, dt6,
+EXTRACT(MICROSECOND FROM dt0) AS dt0_micro,
+EXTRACT(MICROSECOND FROM dt3) AS dt3_micro,
+EXTRACT(MICROSECOND FROM dt6) AS dt6_micro
+FROM t_date_to_datetime;
+id    dt0    dt3    dt6    dt0_micro    dt3_micro    dt6_micro
+1    2024-01-15 00:00:00    2024-01-15 00:00:00    2024-01-15 00:00:00    0    0    0
+DROP TABLE t_date_to_datetime;
+DROP TABLE IF EXISTS t_datetime_range;
+CREATE TABLE t_datetime_range (
+id INT,
+dt0 DATETIME(0)
+);
+INSERT INTO t_datetime_range VALUES (1, '2024-01-15 12:34:56.100000');
+INSERT INTO t_datetime_range VALUES (2, '2024-01-15 12:34:56.200000');
+INSERT INTO t_datetime_range VALUES (3, '2024-01-15 12:34:56.300000');
+INSERT INTO t_datetime_range VALUES (4, '2024-01-15 12:34:56.400000');
+SELECT COUNT(*) AS total_count,
+COUNT(DISTINCT dt0) AS distinct_count
+FROM t_datetime_range;
+total_count    distinct_count
+4    1
+SELECT COUNT(*) AS match_count
+FROM t_datetime_range
+WHERE dt0 = '2024-01-15 12:34:56';
+match_count
+4
+DROP TABLE t_datetime_range;
+SELECT STR_TO_DATE('2024-01-15 12:34:56.123456', '%Y-%m-%d %H:%i:%s.%f') AS result,
+EXTRACT(MICROSECOND FROM STR_TO_DATE('2024-01-15 12:34:56.123456', '%Y-%m-%d %H:%i:%s.%f')) AS microseconds;
+result    microseconds
+2024-01-15 12:34:56    123456
+SELECT '2024-01-15 12:34:56.123456' + INTERVAL 1 DAY AS result,
+EXTRACT(MICROSECOND FROM ('2024-01-15 12:34:56.123456' + INTERVAL 1 DAY)) AS microseconds;
+result    microseconds
+2024-01-16 12:34:56.123456000    123456
+SELECT '2024-01-15 12:34:56.789012' - INTERVAL 2 HOUR AS result,
+EXTRACT(MICROSECOND FROM ('2024-01-15 12:34:56.789012' - INTERVAL 2 HOUR)) AS microseconds;
+result    microseconds
+2024-01-15 10:34:56.789012000    789012
+DROP TABLE IF EXISTS t_now_scales;
+CREATE TABLE t_now_scales (
+id INT,
+dt0 DATETIME(0),
+dt3 DATETIME(3),
+dt6 DATETIME(6)
+);
+INSERT INTO t_now_scales VALUES (1, NOW(), NOW(), NOW());
+SELECT id,
+EXTRACT(MICROSECOND FROM dt0) % 1000000 AS dt0_micro,
+EXTRACT(MICROSECOND FROM dt3) % 1000 AS dt3_sub_milli
+FROM t_now_scales;
+id    dt0_micro    dt3_sub_milli
+1    0    0
+DROP TABLE t_now_scales;
+DROP TABLE IF EXISTS t_datetime_compare;
+CREATE TABLE t_datetime_compare (
+id INT,
+dt3 DATETIME(3)
+);
+INSERT INTO t_datetime_compare VALUES (1, '2024-01-15 12:34:56.123456');
+SELECT COUNT(*) AS match_with_123
+FROM t_datetime_compare
+WHERE dt3 = '2024-01-15 12:34:56.123';
+match_with_123
+1
+SELECT COUNT(*) AS match_with_124
+FROM t_datetime_compare
+WHERE dt3 = '2024-01-15 12:34:56.124';
+match_with_124
+0
+DROP TABLE t_datetime_compare;
+DROP TABLE IF EXISTS t_datetime_funcs;
+CREATE TABLE t_datetime_funcs (
+id INT,
+dt0 DATETIME(0)
+);
+INSERT INTO t_datetime_funcs VALUES (1, '2024-01-15 12:34:56.999999');
+SELECT id, dt0
+FROM t_datetime_funcs;
+id    dt0
+1    2024-01-15 12:34:57
+SELECT DATE_ADD(dt0, INTERVAL 1 DAY) AS result,
+EXTRACT(MICROSECOND FROM DATE_ADD(dt0, INTERVAL 1 DAY)) AS microseconds
+FROM t_datetime_funcs;
+result    microseconds
+2024-01-16 12:34:57    0
+DROP TABLE t_datetime_funcs;
+DROP TABLE IF EXISTS t_dateadd_scale;
+CREATE TABLE t_dateadd_scale (
+id INT PRIMARY KEY,
+dt0 DATETIME(0),
+dt3 DATETIME(3),
+dt6 DATETIME(6)
+);
+INSERT INTO t_dateadd_scale VALUES
+(1, '2024-01-15 12:34:56', '2024-01-15 12:34:56.789', '2024-01-15 12:34:56.123456');
+SELECT
+id,
+DATE_ADD(dt0, INTERVAL 1 MINUTE) AS dt0_add_min,
+EXTRACT(MICROSECOND FROM DATE_ADD(dt0, INTERVAL 1 MINUTE)) AS dt0_micro,
+DATE_ADD(dt3, INTERVAL 1 HOUR) AS dt3_add_hour,
+EXTRACT(MICROSECOND FROM DATE_ADD(dt3, INTERVAL 1 HOUR)) AS dt3_micro,
+DATE_ADD(dt6, INTERVAL 1 DAY) AS dt6_add_day,
+EXTRACT(MICROSECOND FROM DATE_ADD(dt6, INTERVAL 1 DAY)) AS dt6_micro
+FROM t_dateadd_scale;
+id    dt0_add_min    dt0_micro    dt3_add_hour    dt3_micro    dt6_add_day    dt6_micro
+1    2024-01-15 12:35:56    0    2024-01-15 13:34:56.789000000    789000    2024-01-16 12:34:56.123456000    123456
+SELECT
+id,
+DATE_ADD(dt0, INTERVAL 1 MICROSECOND) AS dt0_add_micro,
+EXTRACT(MICROSECOND FROM DATE_ADD(dt0, INTERVAL 1 MICROSECOND)) AS dt0_result_micro,
+DATE_SUB(dt0, INTERVAL 1 MICROSECOND) AS dt0_sub_micro,
+EXTRACT(MICROSECOND FROM DATE_SUB(dt0, INTERVAL 1 MICROSECOND)) AS dt0_sub_result_micro
+FROM t_dateadd_scale;
+id    dt0_add_micro    dt0_result_micro    dt0_sub_micro    dt0_sub_result_micro
+1    2024-01-15 12:34:56.000001000    1    2024-01-15 12:34:55.999999000    999999
+SELECT
+id,
+DATE_ADD(dt6, INTERVAL 123 MICROSECOND) AS dt6_add_micro,
+EXTRACT(MICROSECOND FROM DATE_ADD(dt6, INTERVAL 123 MICROSECOND)) AS result_micro,
+DATE_SUB(dt6, INTERVAL 456 MICROSECOND) AS dt6_sub_micro,
+EXTRACT(MICROSECOND FROM DATE_SUB(dt6, INTERVAL 456 MICROSECOND)) AS sub_result_micro
+FROM t_dateadd_scale;
+id    dt6_add_micro    result_micro    dt6_sub_micro    sub_result_micro
+1    2024-01-15 12:34:56.123579000    123579    2024-01-15 12:34:56.123000000    123000
+SELECT
+id,
+DATE_ADD(dt0, INTERVAL 1 SECOND) AS dt0_add_sec,
+EXTRACT(MICROSECOND FROM DATE_ADD(dt0, INTERVAL 1 SECOND)) AS dt0_sec_micro,
+DATE_ADD(dt3, INTERVAL 2 SECOND) AS dt3_add_sec,
+EXTRACT(MICROSECOND FROM DATE_ADD(dt3, INTERVAL 2 SECOND)) AS dt3_sec_micro
+FROM t_dateadd_scale;
+id    dt0_add_sec    dt0_sec_micro    dt3_add_sec    dt3_sec_micro
+1    2024-01-15 12:34:57    0    2024-01-15 12:34:58.789000000    789000
+DROP TABLE t_dateadd_scale;
+DROP DATABASE test_datetime_precision;

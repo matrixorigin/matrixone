@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
@@ -122,4 +123,127 @@ func UpdateCurrentCNReader(cmd string, cfgs ...string) string {
 	}
 
 	return fmt.Sprintf("successed cmd: %s, cfg: %v", cmd, cfgs)
+}
+
+// handlePrefetchOnSubscribed distributes user-provided regex patterns to all CNs
+// and updates disttae.Engine's PrefetchOnSubscribed configuration on each CN.
+// `parameter` accepts comma or newline separated patterns, each optionally
+// wrapped in single or double quotes, e.g.:
+//
+//	'^mo_catalog\.mo_tables$', '^mysql\..*$', '^test1\..*$', '^test2\.t1$'
+//
+// 'Clean All' to clean all patterns
+func handlePrefetchOnSubscribed(
+	proc *process.Process,
+	service serviceType,
+	parameter string,
+	sender requestSender,
+) (Result, error) {
+	if service != cn {
+		return Result{}, moerr.NewWrongServiceNoCtx("only cn supported", string(service))
+	}
+
+	patterns, err := parsePrefetchOnSubscribed(parameter)
+	if err != nil {
+		return Result{}, err
+	}
+
+	cns := make([]string, 0)
+	clusterservice.GetMOCluster(proc.GetService()).GetCNService(clusterservice.Selector{}, func(cn metadata.CNService) bool {
+		cns = append(cns, cn.ServiceID)
+		return true
+	})
+
+	info := map[string]string{}
+	for idx := range cns {
+		if cns[idx] == proc.GetQueryClient().ServiceID() {
+			info[cns[idx]] = UpdateCurrentCNPrefetchOnSubscribed(patterns)
+			continue
+		}
+
+		request := proc.GetQueryClient().NewRequest(query.CmdMethod_CtlPrefetchOnSubscribed)
+		request.CtlPrefetchOnSubscribedRequest = &query.CtlPrefetchOnSubscribedRequest{
+			Patterns: patterns,
+		}
+
+		resp, err := TransferRequest2OtherCNs(proc, cns[idx], request)
+		if resp == nil || err != nil {
+			info[cns[idx]] = fmt.Sprintf("transfer to %s failed, err: %v", cns[idx], err)
+			continue
+		}
+		if resp.CtlPrefetchOnSubscribedResponse != nil {
+			info[cns[idx]] = resp.CtlPrefetchOnSubscribedResponse.Resp
+		}
+	}
+
+	data := ""
+	for k, v := range info {
+		data += fmt.Sprintf("%s:%s; ", k, v)
+	}
+
+	return Result{
+		Method: PrefetchOnSubscribed,
+		Data:   data,
+	}, nil
+}
+
+func UpdateCurrentCNPrefetchOnSubscribed(patterns []string) string {
+	if err := engine.SetPrefetchOnSubscribed(patterns); err != nil {
+		return fmt.Sprintf("set prefetch_on_subscribed failed: %v", err)
+	}
+	return fmt.Sprintf("prefetch_on_subscribed updated, patterns: %d", len(patterns))
+}
+
+func parsePrefetchOnSubscribed(parameter string) ([]string, error) {
+	if len(strings.TrimSpace(parameter)) == 0 {
+		return nil, moerr.NewInvalidInputNoCtx("prefetch_on_subscribed requires at least one pattern")
+	}
+
+	var result []string
+	var start int
+	var quote rune
+	input := parameter
+
+	appendToken := func(token string) {
+		token = strings.TrimSpace(token)
+		if token == "" {
+			return
+		}
+		runes := []rune(token)
+		if len(runes) >= 2 && runes[0] == runes[len(runes)-1] && (runes[0] == '\'' || runes[0] == '"') {
+			token = string(runes[1 : len(runes)-1])
+		}
+		if token != "" {
+			result = append(result, token)
+		}
+	}
+
+	for i, r := range input {
+		switch r {
+		case '\'', '"':
+			if quote == 0 {
+				quote = r
+			} else if quote == r {
+				quote = 0
+			}
+		case ',', '\n', '\r':
+			if quote == 0 {
+				appendToken(input[start:i])
+				start = i + 1
+			}
+		}
+	}
+	if start <= len(input) {
+		appendToken(input[start:])
+	}
+
+	if len(result) == 0 {
+		return nil, moerr.NewInvalidInputNoCtx("prefetch_on_subscribed requires at least one pattern")
+	}
+	for _, pattern := range result {
+		if !utf8.ValidString(pattern) {
+			return nil, moerr.NewInvalidInputNoCtxf("invalid utf-8 pattern: %s", pattern)
+		}
+	}
+	return result, nil
 }

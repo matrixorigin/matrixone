@@ -16,6 +16,7 @@ package tree
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -31,6 +32,7 @@ type Select struct {
 	TimeWindow     *TimeWindow
 	OrderBy        OrderBy
 	Limit          *Limit
+	RankOption     *RankOption
 	With           *With
 	Ep             *ExportParam
 	SelectLockInfo *SelectLockInfo
@@ -53,6 +55,10 @@ func (node *Select) Format(ctx *FmtCtx) {
 	if node.Limit != nil {
 		ctx.WriteByte(' ')
 		node.Limit.Format(ctx)
+	}
+	if node.RankOption != nil {
+		ctx.WriteByte(' ')
+		node.RankOption.Format(ctx)
 	}
 	if node.Ep != nil {
 		ctx.WriteByte(' ')
@@ -290,6 +296,38 @@ func NewLimit(o, c Expr) *Limit {
 	return &Limit{
 		Offset: o,
 		Count:  c,
+	}
+}
+
+type RankOption struct {
+	Option map[string]string
+}
+
+func (node *RankOption) Format(ctx *FmtCtx) {
+	if node == nil {
+		return
+	}
+
+	ctx.WriteString("by rank")
+	if len(node.Option) == 0 {
+		return
+	}
+
+	ctx.WriteString(" with option ")
+	keys := make([]string, 0, len(node.Option))
+	for key := range node.Option {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for idx, key := range keys {
+		if idx > 0 {
+			ctx.WriteString(", ")
+		}
+		ctx.WriteByte('\'')
+		ctx.WriteString(key)
+		ctx.WriteString("=")
+		ctx.WriteString(node.Option[key])
+		ctx.WriteByte('\'')
 	}
 }
 

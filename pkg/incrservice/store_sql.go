@@ -127,7 +127,9 @@ func (s *sqlStore) Allocate(
 		}
 	}
 	retry := false
+	retryCnt := 3
 	for {
+		retry = false
 		err := s.exec.ExecTxn(
 			ctx,
 			func(te executor.TxnExecutor) error {
@@ -152,14 +154,26 @@ func (s *sqlStore) Allocate(
 						return err
 					}
 					trace.GetService(s.ls.GetConfig().ServiceID).Sync()
-					getLogger(s.ls.GetConfig().ServiceID).Fatal("BUG: read incr record invalid",
-						zap.String("fetch-sql", fetchSQL),
+					if ctxDone() {
+						return ctx.Err()
+					}
+
+					fields := []zap.Field{zap.String("fetch-sql", fetchSQL),
 						zap.Any("account", accountID),
 						zap.Uint64("table", tableID),
 						zap.String("col", colName),
 						zap.Int("rows", rows),
 						zap.Duration("cost", time.Since(start)),
-						zap.Bool("ctx-done", ctxDone()))
+						zap.Bool("ctx-done", ctxDone())}
+
+					retry = true
+					if retryCnt > 0 {
+						retryCnt--
+						getLogger(s.ls.GetConfig().ServiceID).Error("read incr record invalid", fields...)
+						return moerr.NewTxnNeedRetryNoCtx()
+					} else {
+						getLogger(s.ls.GetConfig().ServiceID).Fatal("BUG: read incr record invalid", fields...)
+					}
 				}
 
 				next = getNext(current, count, int(step))
@@ -226,6 +240,19 @@ func (s *sqlStore) Allocate(
 
 	from, to := getNextRange(current, next, int(step))
 	commitTs := txnOp.GetOverview().Meta.CommitTS
+	// Fix: When the transaction has not committed yet (e.g., during CREATE TABLE),
+	// CommitTS is zero. Use SnapshotTS as a fallback to avoid setting lastAllocateAt to zero,
+	// which would cause PrimaryKeysMayBeUpserted to scan an excessively large time range.
+	if commitTs.IsEmpty() {
+		snapshotTs := txnOp.SnapshotTS()
+		getLogger(s.ls.GetConfig().ServiceID).Debug("auto-increment allocate: CommitTS is empty, using SnapshotTS as fallback",
+			zap.Uint64("table-id", tableID),
+			zap.String("col-name", colName),
+			zap.Uint64("from", from),
+			zap.Uint64("to", to),
+			zap.String("snapshot-ts", snapshotTs.DebugString()))
+		commitTs = snapshotTs
+	}
 	return from, to, commitTs, nil
 }
 

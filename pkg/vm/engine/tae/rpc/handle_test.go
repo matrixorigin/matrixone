@@ -18,29 +18,16 @@ import (
 	"context"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/stretchr/testify/require"
 )
 
-func TestHandlePrecommitWriteError(t *testing.T) {
+func TestHandlePrecommitWrite_Deprecated(t *testing.T) {
 	h := mockTAEHandle(context.Background(), t, &options.Options{})
 
-	list := []*apipb.Entry{
-		{
-			EntryType: apipb.Entry_Insert,
-			Bat:       &apipb.Batch{Vecs: []apipb.Vector{{Type: types.NewProtoType(types.T_char)}}},
-		},
-		{
-			EntryType:  apipb.Entry_Insert,
-			DatabaseId: 1,
-			TableId:    3,
-			Bat:        &apipb.Batch{Vecs: []apipb.Vector{{Type: types.NewProtoType(types.T_char)}}},
-		},
-	}
-
-	err := h.HandlePreCommitWrite(context.Background(), txn.TxnMeta{}, &apipb.PrecommitWriteCmd{EntryList: list}, &apipb.TNStringResponse{})
-	require.Error(t, err)
+	// HandlePreCommitWrite is deprecated and does nothing
+	err := h.HandlePreCommitWrite(context.Background(), txn.TxnMeta{}, &apipb.PrecommitWriteCmd{}, &apipb.TNStringResponse{})
+	require.NoError(t, err)
 }

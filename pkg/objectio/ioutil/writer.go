@@ -233,20 +233,17 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 			w.objMetaBuilder.AddRowCnt(vec.Length())
 		}
 
-		// PXU TODO: change this logic
-		if !w.isTombstone {
-			// only skip SchemaData type
-			if vec.GetType().Oid == types.T_Rowid || vec.GetType().Oid == types.T_TS {
-				continue
-			}
-		}
+		zmOnlyHiddenColumn := !w.isTombstone &&
+			(vec.GetType().Oid == types.T_Rowid || vec.GetType().Oid == types.T_TS)
 
 		if w.isSetPK && w.pk == uint16(i) {
 			isPK = true
 		}
 		columnData := containers.ToTNVector(vec, common.DefaultAllocator)
-		// update null count and distinct value
-		w.objMetaBuilder.InspectVector(i, columnData, isPK)
+		if !zmOnlyHiddenColumn {
+			// update null count and distinct value
+			w.objMetaBuilder.InspectVector(i, columnData, isPK)
+		}
 
 		// Build ZM
 		zm := index.NewZM(vec.GetType().Oid, vec.GetType().Scale)
@@ -259,6 +256,9 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		w.writer.UpdateBlockZM(objectio.SchemaData, int(block.GetID()), seqnums[i], zm)
 		// update object zonemap
 		w.objMetaBuilder.UpdateZm(i, zm)
+		if zmOnlyHiddenColumn {
+			continue
+		}
 
 		if !w.isSetPK || w.pk != uint16(i) {
 			continue

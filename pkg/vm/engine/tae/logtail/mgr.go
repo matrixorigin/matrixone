@@ -202,7 +202,7 @@ func (mgr *Manager) generateLogtailWithTxn(txn *txnWithLogtails) {
 		mgr.previousSaveTS = to
 		// Send ts in order to initialize waterline of logtail service
 		mgr.eventOnce.Do(func() {
-			logutil.Infof("init waterline to %v", from.ToString())
+			logutil.Info("logtail.mgr.init.waterline", zap.String("ts", from.ToString()))
 			callback.call(from.ToTimestamp(), from.ToTimestamp(), txn.closeCB)
 		})
 		callback.call(from.ToTimestamp(), to.ToTimestamp(), txn.closeCB, *txn.tails...)

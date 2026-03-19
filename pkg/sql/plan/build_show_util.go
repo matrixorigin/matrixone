@@ -339,20 +339,30 @@ func ConstructCreateTableSQL(
 			fkTableDef = tableDef
 		} else {
 			if ctx.GetQueryingSubscription() != nil {
-				_, fkTableDef, err = ctx.ResolveSubscriptionTableById(fk.ForeignTbl, ctx.GetQueryingSubscription())
-				fkTableDef, err = updateFKTableDef(fkTableDef)
+				if _, fkTableDef, err = ctx.ResolveSubscriptionTableById(fk.ForeignTbl, ctx.GetQueryingSubscription()); err != nil {
+					return "", nil, err
+				}
+				if fkTableDef, err = updateFKTableDef(fkTableDef); err != nil {
+					return "", nil, err
+				}
 			} else {
-				_, fkTableDef, err = ctx.ResolveById(fk.ForeignTbl, snapshot)
-				fkTableDef, err = updateFKTableDef(fkTableDef)
-			}
-			if err != nil {
-				return "", nil, err
+				if _, fkTableDef, err = ctx.ResolveById(fk.ForeignTbl, snapshot); err != nil {
+					return "", nil, err
+				}
+				if fkTableDef, err = updateFKTableDef(fkTableDef); err != nil {
+					return "", nil, err
+				}
 			}
 		}
 
 		// fkTable may not exist in snapshot restoration
 		if fkTableDef == nil {
-			return "", nil, moerr.NewInternalErrorNoCtxf("can't find fkTable from fk %s.(%s) {%s}", tableDef.Name, strings.Join(colOriginNames, ","), snapshot.String())
+			return "", nil, moerr.NewInternalErrorNoCtxf(
+				"can't find fkTable from fk %s.%s.(%s) {%s}",
+				tableDef.DbName, tableDef.Name,
+				strings.Join(colOriginNames, ","),
+				snapshot.String(),
+			)
 		}
 
 		fkColIdToOriginName := make(map[uint64]string)
@@ -373,7 +383,7 @@ func ConstructCreateTableSQL(
 			fkRefDbTblName = fmt.Sprintf("`%s`.`%s`", formatStr(fkTableDef.DbName), formatStr(fkTableDef.Name))
 		}
 		createStr += fmt.Sprintf("  CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES %s (`%s`) ON DELETE %s ON UPDATE %s",
-			formatStr(fk.Name), strings.Join(colOriginNames, "`,`"), fkRefDbTblName, strings.Join(fkColOriginNames, "`,`"), fk.OnDelete.String(), fk.OnUpdate.String())
+			formatStr(fk.Name), strings.Join(colOriginNames, "`,`"), fkRefDbTblName, strings.Join(fkColOriginNames, "`,`"), strings.ReplaceAll(fk.OnDelete.String(), "_", " "), strings.ReplaceAll(fk.OnUpdate.String(), "_", " "))
 	}
 
 	if rowCount != 0 {

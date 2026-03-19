@@ -229,11 +229,18 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	data = data[8:]
 
 	l := types.DecodeInt32(data[:4])
-	if int(l) != len(bat.Vecs) {
-		if len(bat.Vecs) > 0 {
+	// Fix for bug #23156: Handle Vecs length changes (from d4b79f12) while maintaining revert version's firstTime logic
+	firstTime := bat.Vecs == nil
+	vecsLen := int(l)
+	vecsLenChanged := !firstTime && vecsLen != len(bat.Vecs)
+
+	// CRITICAL FIX: When batch is reused (not firstTime), always reallocate Vecs if length changed
+	// This ensures Vecs are properly reset and prevents stale data from previous unmarshal operations
+	if firstTime || vecsLenChanged {
+		if vecsLenChanged && len(bat.Vecs) > 0 {
 			bat.Clean(mp)
 		}
-		bat.Vecs = make([]*vector.Vector, l)
+		bat.Vecs = make([]*vector.Vector, vecsLen)
 		for i := range bat.Vecs {
 			if bat.offHeap {
 				bat.Vecs[i] = vector.NewOffHeapVec()
@@ -246,7 +253,7 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	vecs := bat.Vecs
 	data = data[4:]
 
-	for i := 0; i < int(l); i++ {
+	for i := 0; i < vecsLen; i++ {
 		size := types.DecodeInt32(data[:4])
 		data = data[4:]
 
@@ -258,15 +265,59 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	}
 
 	l = types.DecodeInt32(data[:4])
-	if int(l) != len(bat.Attrs) {
-		bat.Attrs = make([]string, l)
+	// Fix for bug #23156: Attrs length MUST always match Vecs length
+	// Vecs length (vecsLen) is authoritative - it's already allocated and deserialized
+	// If serialized Attrs length differs from Vecs length, we use Vecs length as the source of truth
+	// This handles cases where serialized data has inconsistent lengths (which can occur in practice)
+	serializedAttrsLen := int(l)
+	// CRITICAL FIX: Always reallocate Attrs to ensure clean state for batch reuse
+	// This prevents stale Attrs values from previous unmarshal operations
+	// Special case: if vecsLen == 0 but serializedAttrsLen > 0, use serializedAttrsLen
+	// This handles cases where Vecs are empty but Attrs are preserved (e.g., in tests)
+	attrsLen := vecsLen
+	if vecsLen == 0 && serializedAttrsLen > 0 {
+		attrsLen = serializedAttrsLen
+	}
+	if attrsLen != len(bat.Attrs) {
+		if attrsLen == 0 {
+			// If attrsLen is 0, keep Attrs as nil (not empty array) for consistency
+			bat.Attrs = nil
+		} else {
+			bat.Attrs = make([]string, attrsLen)
+		}
+	} else if !firstTime {
+		// When batch is reused and lengths match, still clear Attrs to prevent stale values
+		// This is critical for UPDATE operations where batch is reused multiple times
+		// Performance note: This is O(n) where n is typically small (dozens of columns)
+		// The cost is acceptable compared to data corruption issues
+		for i := range bat.Attrs {
+			bat.Attrs[i] = ""
+		}
 	}
 	data = data[4:]
 
-	for i := 0; i < int(l); i++ {
+	// Read serialized Attrs, but only up to min(serializedAttrsLen, attrsLen)
+	// If serialized length > attrsLen: ignore excess (data inconsistency, attrsLen is authoritative)
+	// If serialized length < attrsLen: read what's available (remaining will be empty strings, should not happen normally)
+	attrsToRead := serializedAttrsLen
+	if attrsToRead > attrsLen {
+		attrsToRead = attrsLen
+	}
+	for i := 0; i < attrsToRead; i++ {
 		size := types.DecodeInt32(data[:4])
 		data = data[4:]
 		bat.Attrs[i] = string(data[:size])
+		data = data[size:]
+	}
+	// CRITICAL FIX: Clear remaining Attrs to prevent stale values when serializedAttrsLen < attrsLen
+	// This is essential for batch reuse scenarios (e.g., UPDATE operations with IVF index)
+	for i := attrsToRead; i < attrsLen; i++ {
+		bat.Attrs[i] = ""
+	}
+	// If serialized Attrs length > vecsLen, skip the excess data
+	for i := attrsToRead; i < serializedAttrsLen; i++ {
+		size := types.DecodeInt32(data[:4])
+		data = data[4:]
 		data = data[size:]
 	}
 

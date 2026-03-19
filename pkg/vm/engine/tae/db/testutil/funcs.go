@@ -494,6 +494,20 @@ func AppendClosure(t *testing.T, data *containers.Batch, name string, e *db.DB, 
 	}
 }
 
+func AppendClosureWithDBName(t *testing.T, data *containers.Batch, db, name string, e *db.DB, wg *sync.WaitGroup) func() {
+	return func() {
+		if wg != nil {
+			defer wg.Done()
+		}
+		txn, _ := e.StartTxn(nil)
+		database, _ := txn.GetDatabase(db)
+		rel, _ := database.GetRelationByName(name)
+		err := rel.Append(context.Background(), data)
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit(context.Background()))
+	}
+}
+
 func CompactBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema *catalog.Schema, skipConflict bool) {
 	txn, rel := GetRelation(t, tenantID, e, dbName, schema.Name)
 

@@ -130,30 +130,83 @@ MatrixOne 是一款超融合异构分布式数据库，通过云原生化和存�
 
 ## 💎 **<a id="user-values">用户价值</a>**
 
-<details>
-  <summary><b><font size=4>简化数据开发和运维</b></font></summary>
-      随着业务发展，企业使用的数据引擎和中间件越来越多，而每一个数据引擎平均依赖 5+ 个基础组件，存储 3+ 个数据副本，每一个数据引擎都要各自安装、监控、补丁和升级。这些都导致数据引擎的选型、开发及运维成本高昂且不可控。在 MatrixOne 的一体化架构下，用户使用单个数据库即可服务多种数据应用，引入的数据组件和技术栈减少 80%，大大简化了数据库管理和维护的成本。
-</details>
-<details>
-  <summary><b><font size=4>消减数据碎片和不一致</b></font></summary>
-    在既有复杂的系统架构内，存在多条数据管道多份数据存储冗余。数据依赖复杂，导致数据更新维护复杂，上下游数据不一致问题频发，人工校对难度增大。MatrixOne 的高内聚架构和独有的增量物化视图能力，使得下游可以支持上游数据的实时更新，摆脱冗余的 ETL 流程，实现端到端实时数据处理。
-</details>
-<details>
-  <summary><b><font size=4>无需绑定基础设施</b></font></summary>
-    因为基础设施的碎片化，企业的私有化数据集群和公有云数据集群之间数据架构和建设方案割裂，数据迁移成本高。而数据上云一旦选型确定数据库厂商，后续的集群扩容、其他组件采购等都将被既有厂商绑定。MatrixOne 提供统一的云边基础架构和高效统一的数据管理，企业数据架构不再被基础设施绑定，实现单数据集群跨云无感知扩缩容，提升性价比。
-</details>
-<details>
-  <summary><b><font size=4>极速的分析性能</b></font></summary>  
-    目前，由于缓慢的复杂查询性能以及冗余的中间表，数据仓库在业务敏捷性上的表现不尽人意，大量宽表的创建也严重影响迭代速度。MatrixOne 通过特有的因子化计算和向量化执行引擎，支持极速的复杂查询，单表、星型和雪花查询都具备极速分析性能。
-</details>
-<details>
-  <summary><b><font size=4>像 TP 一样可靠的 AP 体验</b></font></summary>
-    传统数据仓库数据更新代价非常高，很难做到数据更新即可见。在营销风控，无人驾驶，智能工厂等实时计算要求高的场景或者上游数据变化快的场景中，当前的大数据分析系统无法支持增量更新，往往需要做全量的更新，耗时耗力。MatrixOne 通过提供跨存储引擎的高性能全局分布式事务能力，支持条级别的实时增量更新，在保证极速分析性能的同时支持更新、删除和实时点查询。
-</details>
-<details>
-  <summary><b><font size=4>不停服自动扩缩容</b></font></summary>
-    传统数仓无法兼顾性能和灵活度，性价比无法做到最优。MatrixOne 基于存算分离的技术架构，支持存储节点与计算节点独立扩缩容，高效应对负载变化。
-</details>
+## 📚 教程与示例
+
+深入了解 MatrixOne！浏览我们全面的实践教程和真实案例：
+
+### 🎯 入门教程
+
+| 教程 | 语言/框架 | 说明 |
+|----------|-------------------|-------------|
+| [Java CRUD 示例](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/develop-java-crud-demo/) | Java | Java 应用开发 |
+| [SpringBoot 和 JPA CRUD 示例](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/springboot-hibernate-crud-demo/) | Java | SpringBoot + Hibernate/JPA |
+| [PyMySQL CRUD 示例](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/develop-python-crud-demo/) | Python | Python 基础数据库操作 |
+| [SQLAlchemy CRUD 示例](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/sqlalchemy-python-crud-demo/) | Python | Python + SQLAlchemy ORM |
+| [Django CRUD 示例](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/django-python-crud-demo/) | Python | Django Web 框架 |
+| [Golang CRUD 示例](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/develop-golang-crud-demo/) | Go | Go 应用开发 |
+| [Gorm CRUD 示例](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/gorm-golang-crud-demo/) | Go | Go + Gorm ORM |
+| [C# CRUD 示例](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/c-net-crud-demo/) | C# | .NET 应用开发 |
+| [TypeScript CRUD 示例](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/typescript-crud-demo/) | TypeScript | TypeScript 应用开发 |
+
+### 🚀 高级功能教程
+
+| 教程 | 使用场景 | 相关 MatrixOne 特性 |
+|----------|----------|---------------------------|
+| [Pinecone 兼容向量检索](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/pinecone-vector-demo/) | AI 与搜索 | 向量检索，Pinecone 兼容 API |
+| [IVF 索引健康监控](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/ivf-index-health-demo/) | AI 与搜索 | 向量检索，IVF 索引 |
+| [HNSW 向量索引](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/hnsw-vector-demo/) | AI 与搜索 | 向量检索，HNSW 索引 |
+| [全文自然语言搜索](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/fulltext-natural-search-demo/) | AI 与搜索 | 全文检索，自然语言 |
+| [全文布尔搜索](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/fulltext-boolean-search-demo/) | AI 与搜索 | 全文检索，布尔运算符 |
+| [全文 JSON 搜索](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/fulltext-json-search-demo/) | AI 与搜索 | 全文检索，JSON 数据 |
+| [混合搜索](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/hybrid-search-demo/) | AI 与搜索 | 混合搜索，向量+全文+SQL |
+| [RAG 应用示例](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/rag-demo/) | AI 与搜索 | RAG，向量检索，全文检索 |
+| [图文搜索应用](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/search-picture-demo/) | AI 与搜索 | 多模态搜索，图像相似度 |
+| [Dify 集成示例](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/dify-mo-demo/) | AI 与搜索 | AI 平台集成 |
+| [HTAP 应用示例](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/htap-demo/) | 性能 | HTAP，实时分析 |
+| [多团队开发即时克隆](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/efficient-clone-demo/) | 性能 | 即时克隆，Git for Data |
+| [生产环境安全升级与即时回滚](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/snapshot-rollback-demo/) | 性能 | 快照，回滚，Git for Data |
+
+📖 **[查看所有教程 →](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/snapshot-rollback-demo/)**
+
+## 🛠️ <a id="installation--deployment">安装与部署</a>
+
+MatrixOne 支持多种安装方式，选择最适合您需求的方式：
+
+### 🐳 本地多 CN 开发环境
+
+在本地运行完整的分布式集群，包含多个 CN 节点、负载均衡和便捷的配置管理。
+
+```bash
+# 快速开始
+make dev-build && make dev-up
+
+# 通过代理连接（负载均衡）
+mysql -h 127.0.0.1 -P 6001 -u root -p111
+
+# 配置特定服务（交互式编辑器）
+make dev-edit-cn1          # 编辑 CN1 配置
+make dev-restart-cn1       # 仅重启 CN1（快速！）
+```
+
+📖 **[完整开发指南 →](etc/DEV_README.md)** - 涵盖单机设置、多 CN 集群、监控、指标、配置和所有 `make dev-*` 命令的完整指南
+
+### 🎯 使用 mo_ctl 工具（推荐）
+
+官方 [mo_ctl](https://github.com/matrixorigin/mo_ctl_standalone) 工具提供一键部署和生命周期管理。自动处理安装、升级、备份和健康监控。
+
+📖 **[完整 mo_ctl 安装指南 →](INSTALLATION.md#using-moctl-tool)**
+
+### ⚙️ 从源码构建
+
+从源码构建 MatrixOne，适用于开发、定制或参与贡献。需要 Go 1.22、GCC/Clang、Git 和 Make。
+
+📖 **[完整源码构建指南 →](BUILD.md)**
+
+### 🐳 其他方式
+
+Docker、Kubernetes、二进制包等更多部署选项。
+
+📖 **[所有安装选项 →](INSTALLATION.md)**
 
 ## 🔎 <a id="architecture">架构一览</a>
 
@@ -210,7 +263,7 @@ __Tips__: 建议 MySQL 客户端版本为 8.0.30 版本及以上。
 
 通过以下命令一键安装 mo_ctl 工具:
 
-```  
+```
 wget https://raw.githubusercontent.com/matrixorigin/mo_ctl_standalone/main/install.sh && sudo -u $(whoami) bash +x ./install.sh
 ```
 
@@ -240,7 +293,7 @@ mo_ctl set_conf MO_DEPLOY_MODE=docker #设置MatrixOne部署方式，此为docke
 
     **main** 分支是默认分支，主分支上的代码总是最新的，但不够稳定。
 
-    ```  
+    ```
     mo_ctl deploy main
     ```
 
@@ -1020,7 +1073,7 @@ __Tips__: 连接和登录账号为初始账号 `root` 和密码 `111`，请在�
 
 ## 🙌 <a id="contributing">参与贡献</a>
 
-欢迎大家对 MatrixOne 的贡献。  
+欢迎大家对 MatrixOne 的贡献。
 请查看[贡献指南](https://docs.matrixorigin.cn/latest/MatrixOne/Contribution-Guide/make-your-first-contribution/)来了解有关提交补丁和完成整个贡献流程的详细信息。
 
 ## <a id="license">License</a>

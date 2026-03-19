@@ -158,6 +158,7 @@ func buildInsertPlans(
 	ifNeedCheckPkDup := !builder.qry.LoadTag
 	var indexSourceColTypes []*plan.Type
 	var fuzzymessage *OriginTableMessageForFuzzy
+	var skipIndexesCoyp map[string]bool
 
 	if v := builder.compCtx.GetContext().Value(defines.AlterCopyOpt{}); v != nil {
 		dedupOpt := v.(*plan.AlterCopyOpt)
@@ -178,10 +179,13 @@ func buildInsertPlans(
 				}
 			}
 		}
+		skipIndexesCoyp = dedupOpt.SkipIndexesCopy
 	}
 	return buildInsertPlansWithRelatedHiddenTable(stmt, ctx, builder, insertBindCtx, objRef, tableDef,
 		updateColLength, sourceStep, addAffectedRows, isFkRecursionCall, updatePkCol, pkFilterExpr,
-		newPartitionExpr, ifExistAutoPkCol, ifNeedCheckPkDup, indexSourceColTypes, fuzzymessage, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap, nil)
+		newPartitionExpr, ifExistAutoPkCol, ifNeedCheckPkDup, indexSourceColTypes, fuzzymessage,
+		insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap, nil, skipIndexesCoyp,
+	)
 }
 
 // buildUpdatePlans  build update plan.
@@ -266,7 +270,7 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	return buildInsertPlansWithRelatedHiddenTable(nil, ctx, builder, insertBindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef,
 		updatePlanCtx.updateColLength, sourceStep, addAffectedRows, updatePlanCtx.isFkRecursionCall, updatePlanCtx.updatePkCol,
 		updatePlanCtx.pkFilterExprs, partitionExpr, ifExistAutoPkCol, ifNeedCheckPkDup, indexSourceColTypes, fuzzymessage, nil, nil,
-		updatePlanCtx.updateColPosMap)
+		updatePlanCtx.updateColPosMap, nil)
 }
 
 func getStepByNodeId(builder *QueryBuilder, nodeId int32) int {
@@ -853,7 +857,7 @@ func buildInsertPlansWithRelatedHiddenTable(
 	updatePkCol bool, pkFilterExprs []*Expr, partitionExpr *Expr, ifExistAutoPkCol bool,
 	checkInsertPkDupForHiddenIndexTable bool, indexSourceColTypes []*plan.Type, fuzzymessage *OriginTableMessageForFuzzy,
 	insertWithoutUniqueKeyMap map[string]bool, ifInsertFromUniqueColMap map[string]bool,
-	updateColPosMap map[string]int,
+	updateColPosMap map[string]int, skipIndexesCopy map[string]bool,
 ) error {
 	//var lastNodeId int32
 	var err error
@@ -867,6 +871,11 @@ func buildInsertPlansWithRelatedHiddenTable(
 	for idx, indexdef := range tableDef.Indexes {
 		if updateColLength == 0 {
 			if indexdef.GetUnique() && (insertWithoutUniqueKeyMap != nil && insertWithoutUniqueKeyMap[indexdef.IndexName]) {
+				continue
+			}
+
+			// we will clone this index data to new index table, skip insert.
+			if skipIndexesCopy != nil && skipIndexesCopy[indexdef.IndexName] {
 				continue
 			}
 
@@ -2409,17 +2418,45 @@ func appendDeleteIndexTablePlan(
 	}
 
 	/*
-		For the hidden table of the secondary index, there will be no null situation, so there is no need to use right join
-		For why right join is needed, you can consider the following SQL :
+		Why we need RIGHT JOIN for both UNIQUE KEY and SECONDARY INDEX:
 
-		create table t1(a int, b int, c int, unique key(a));
-		insert into t1 values(null, 1, 1);
-		explain verbose update t1 set a = 1 where a is null;
+		JOIN Structure:
+		  - Left table (RelPos=0):  Index table (existing index records)
+		  - Right table (RelPos=1): Main table data (from ON DUPLICATE KEY or UPDATE)
+		  - Join condition: index_table.__mo_index_idx_col = main_data.index_columns
+
+		Scenario 1: UNIQUE KEY with NULL values
+		  create table t1(a int, b int, c int, unique key(a));
+		  insert into t1 values(null, 1, 1);  -- NULL exists in main table but NOT in index table
+		  update t1 set a = 1 where a is null;
+
+		  Data flow:
+		    Right table (main): (null, 1, 1) → (1, 1, 1)
+		    Left table (index): empty (NULL not indexed)
+		    INNER JOIN: row filtered out ❌
+		    RIGHT JOIN: NULL + (1, 1, 1) → preserved ✅
+
+		Scenario 2: ON DUPLICATE KEY UPDATE with mixed insert/update (no explicit primary key)
+		  insert into t1 values (1, 'alice@x.com', 'Alice'), (2, 'bob@x.com', 'Bob')
+		  on duplicate key update name = values(name);
+
+		  Data flow:
+		    Right table (main): ('Alice', pk1) -- update existing
+		                       ('Bob', pk2)   -- new insert
+		    Left table (idx_name): ('Alice', pk1) -- only existing record
+		    INNER JOIN: only ('Alice', pk1) matched, 'Bob' filtered out ❌
+		    RIGHT JOIN: both rows preserved ✅
+
+		Conclusion: RIGHT JOIN ensures all rows from main table are preserved, regardless of
+		whether they exist in the index table. This is critical for:
+		  1. UNIQUE KEY: handling NULL values that don't exist in index
+		  2. SECONDARY INDEX: handling new inserts in ON DUPLICATE KEY UPDATE scenarios
+
+		Note: The original assumption "secondary index won't have null situation" was incorrect.
+		While secondary indexes don't store NULL values, they DO need RIGHT JOIN to handle
+		new inserts that don't yet exist in the index table.
 	*/
-	joinType := plan.Node_INNER
-	if isUK {
-		joinType = plan.Node_RIGHT
-	}
+	joinType := plan.Node_RIGHT
 
 	sid := builder.compCtx.GetProcess().GetService()
 	lastNodeId = builder.appendNode(&plan.Node{
@@ -3198,7 +3235,8 @@ func runSql(ctx CompilerContext, sql string) (executor.Result, error) {
 		WithTxn(proc.GetTxnOperator()).
 		WithDatabase(proc.GetSessionInfo().Database).
 		WithTimeZone(proc.GetSessionInfo().TimeZone).
-		WithAccountID(accountId)
+		WithAccountID(accountId).
+		WithStatementOption(executor.StatementOption{}.WithDisableLog())
 	return exec.Exec(topContext, sql, opts)
 }
 
@@ -3242,7 +3280,7 @@ func (fk FkReferDef) String() string {
 // that refer to the table
 func GetSqlForFkReferredTo(db, table string) string {
 	return fmt.Sprintf(
-		"select "+
+		"SELECT "+
 			"db_name, "+
 			"table_name, "+
 			"constraint_name, "+
@@ -3250,13 +3288,13 @@ func GetSqlForFkReferredTo(db, table string) string {
 			"refer_column_name, "+
 			"on_delete, "+
 			"on_update "+
-			"from "+
+			"FROM "+
 			"`mo_catalog`.`mo_foreign_keys` "+
-			"where "+
-			"refer_db_name = '%s' and refer_table_name = '%s' "+
-			" and "+
-			"(db_name != '%s' or db_name = '%s' and table_name != '%s') "+
-			"order by db_name, table_name, constraint_name;",
+			"WHERE "+
+			"refer_db_name = '%s' AND refer_table_name = '%s' "+
+			"AND "+
+			"(db_name != '%s' OR db_name = '%s' AND table_name != '%s') "+
+			"ORDER BY db_name, table_name, constraint_name;",
 		db, table, db, db, table)
 }
 
@@ -3336,8 +3374,8 @@ func getSqlForAddFk(db, table string, data *FkData) string {
 	row := make([]string, 16)
 	rows := 0
 	sb := strings.Builder{}
-	sb.WriteString("insert into `mo_catalog`.`mo_foreign_keys`  ")
-	sb.WriteString(" values ")
+	sb.WriteString("INSERT INTO `mo_catalog`.`mo_foreign_keys` ")
+	sb.WriteString("VALUES ")
 	for childIdx, childCol := range data.Cols.Cols {
 		row[0] = data.Def.Name
 		row[1] = "0"
@@ -3379,9 +3417,9 @@ func getSqlForAddFk(db, table string, data *FkData) string {
 // on the table
 func getSqlForDeleteTable(db, tbl string) string {
 	sb := strings.Builder{}
-	sb.WriteString("delete from `mo_catalog`.`mo_foreign_keys` where ")
-	sb.WriteString(fmt.Sprintf(
-		"db_name = '%s' and table_name = '%s'", db, tbl))
+	sb.WriteString("DELETE FROM `mo_catalog`.`mo_foreign_keys` ")
+	sb.WriteString(fmt.Sprintf("WHERE db_name = '%s' AND table_name = '%s'",
+		db, tbl))
 	return sb.String()
 }
 
@@ -3389,9 +3427,8 @@ func getSqlForDeleteTable(db, tbl string) string {
 // on the table
 func getSqlForDeleteConstraint(db, tbl, constraint string) string {
 	sb := strings.Builder{}
-	sb.WriteString("delete from `mo_catalog`.`mo_foreign_keys` where ")
-	sb.WriteString(fmt.Sprintf(
-		"constraint_name = '%s' and db_name = '%s' and table_name = '%s'",
+	sb.WriteString("DELETE FROM `mo_catalog`.`mo_foreign_keys` ")
+	sb.WriteString(fmt.Sprintf("WHERE constraint_name = '%s' AND db_name = '%s' AND table_name = '%s'",
 		constraint, db, tbl))
 	return sb.String()
 }
@@ -3400,23 +3437,25 @@ func getSqlForDeleteConstraint(db, tbl, constraint string) string {
 // on the database
 func getSqlForDeleteDB(db string) string {
 	sb := strings.Builder{}
-	sb.WriteString("delete from `mo_catalog`.`mo_foreign_keys` where ")
-	sb.WriteString(fmt.Sprintf("db_name = '%s'", db))
+	sb.WriteString("DELETE FROM `mo_catalog`.`mo_foreign_keys` ")
+	sb.WriteString(fmt.Sprintf("WHERE db_name = '%s'", db))
 	return sb.String()
 }
 
 // getSqlForRenameTable returns the sqls that rename the table of all fk relationships in mo_foreign_keys
 func getSqlForRenameTable(db, oldName, newName string) (ret []string) {
 	sb := strings.Builder{}
-	sb.WriteString("update `mo_catalog`.`mo_foreign_keys` ")
-	sb.WriteString(fmt.Sprintf("set table_name = '%s' ", newName))
-	sb.WriteString(fmt.Sprintf("where db_name = '%s' and table_name = '%s' ; ", db, oldName))
+	sb.WriteString("UPDATE `mo_catalog`.`mo_foreign_keys` ")
+	sb.WriteString(fmt.Sprintf("SET table_name = '%s' ", newName))
+	sb.WriteString(fmt.Sprintf("WHERE db_name = '%s' AND table_name = '%s' ; ",
+		db, oldName))
 	ret = append(ret, sb.String())
 
 	sb.Reset()
-	sb.WriteString("update `mo_catalog`.`mo_foreign_keys` ")
-	sb.WriteString(fmt.Sprintf("set refer_table_name = '%s' ", newName))
-	sb.WriteString(fmt.Sprintf("where refer_db_name = '%s' and refer_table_name = '%s' ; ", db, oldName))
+	sb.WriteString("UPDATE `mo_catalog`.`mo_foreign_keys` ")
+	sb.WriteString(fmt.Sprintf("SET refer_table_name = '%s' ", newName))
+	sb.WriteString(fmt.Sprintf("WHERE refer_db_name = '%s' AND refer_table_name = '%s' ; ",
+		db, oldName))
 	ret = append(ret, sb.String())
 	return
 }
@@ -3424,16 +3463,16 @@ func getSqlForRenameTable(db, oldName, newName string) (ret []string) {
 // getSqlForRenameColumn returns the sqls that rename the column of all fk relationships in mo_foreign_keys
 func getSqlForRenameColumn(db, table, oldName, newName string) (ret []string) {
 	sb := strings.Builder{}
-	sb.WriteString("update `mo_catalog`.`mo_foreign_keys` ")
-	sb.WriteString(fmt.Sprintf("set column_name = '%s' ", newName))
-	sb.WriteString(fmt.Sprintf("where db_name = '%s' and table_name = '%s' and column_name = '%s' ; ",
+	sb.WriteString("UPDATE `mo_catalog`.`mo_foreign_keys` ")
+	sb.WriteString(fmt.Sprintf("SET column_name = '%s' ", newName))
+	sb.WriteString(fmt.Sprintf("WHERE db_name = '%s' AND table_name = '%s' AND column_name = '%s' ; ",
 		db, table, oldName))
 	ret = append(ret, sb.String())
 
 	sb.Reset()
-	sb.WriteString("update `mo_catalog`.`mo_foreign_keys` ")
-	sb.WriteString(fmt.Sprintf("set refer_column_name = '%s' ", newName))
-	sb.WriteString(fmt.Sprintf("where refer_db_name = '%s' and refer_table_name = '%s' and refer_column_name = '%s' ; ",
+	sb.WriteString("UPDATE `mo_catalog`.`mo_foreign_keys` ")
+	sb.WriteString(fmt.Sprintf("SET refer_column_name = '%s' ", newName))
+	sb.WriteString(fmt.Sprintf("WHERE refer_db_name = '%s' AND refer_table_name = '%s' AND refer_column_name = '%s' ; ",
 		db, table, oldName))
 	ret = append(ret, sb.String())
 	return
@@ -3443,8 +3482,9 @@ func getSqlForRenameColumn(db, table, oldName, newName string) (ret []string) {
 // that refer to it.
 func getSqlForCheckHasDBRefersTo(db string) string {
 	sb := strings.Builder{}
-	sb.WriteString("select count(*) > 0 from `mo_catalog`.`mo_foreign_keys` ")
-	sb.WriteString(fmt.Sprintf("where refer_db_name = '%s' and db_name != '%s';", db, db))
+	sb.WriteString("SELECT COUNT(*) > 0 FROM `mo_catalog`.`mo_foreign_keys` ")
+	sb.WriteString(fmt.Sprintf("WHERE refer_db_name = '%s' AND db_name != '%s'",
+		db, db))
 	return sb.String()
 }
 
@@ -4371,7 +4411,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 		})
 	}
 
-	ftcols := _getColDefs(tokenizeColDefs)
+	ftcols := DeepCopyColDefList(tokenizeColDefs)
 	ftcols[0].Typ = tableDef.Cols[pkPos].Typ
 
 	tablefunc := &plan.Node{
@@ -4385,7 +4425,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 			},
 			Cols: ftcols,
 		},
-		BindingTags:     []int32{builder.genNewTag()},
+		BindingTags:     []int32{builder.genNewBindTag()},
 		TblFuncExprList: args,
 		//Children:        []int32{lastNodeId},
 	}
@@ -4409,7 +4449,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 		NodeType:    plan.Node_APPLY,
 		Children:    []int32{lastNodeId, tableFuncId},
 		ApplyType:   plan.Node_CROSSAPPLY,
-		BindingTags: []int32{builder.genNewTag()},
+		BindingTags: []int32{builder.genNewBindTag()},
 		ProjectList: apply_project,
 	}, bindCtx)
 

@@ -570,16 +570,18 @@ func (mr *MockTxnOperatorMockRecorder) EnterRollbackStmt() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EnterRollbackStmt", reflect.TypeOf((*MockTxnOperator)(nil).EnterRollbackStmt))
 }
 
-// EnterRunSql mocks base method.
-func (m *MockTxnOperator) EnterRunSql() {
+// EnterRunSqlWithTokenAndSQL mocks base method.
+func (m *MockTxnOperator) EnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) uint64 {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "EnterRunSql")
+	ret := m.ctrl.Call(m, "EnterRunSqlWithTokenAndSQL", cancel, sql)
+	ret0, _ := ret[0].(uint64)
+	return ret0
 }
 
-// EnterRunSql indicates an expected call of EnterRunSql.
-func (mr *MockTxnOperatorMockRecorder) EnterRunSql() *gomock.Call {
+// EnterRunSqlWithTokenAndSQL indicates an expected call of EnterRunSqlWithTokenAndSQL.
+func (mr *MockTxnOperatorMockRecorder) EnterRunSqlWithTokenAndSQL(cancel, sql interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EnterRunSql", reflect.TypeOf((*MockTxnOperator)(nil).EnterRunSql))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EnterRunSqlWithTokenAndSQL", reflect.TypeOf((*MockTxnOperator)(nil).EnterRunSqlWithTokenAndSQL), cancel, sql)
 }
 
 // ExitIncrStmt mocks base method.
@@ -606,16 +608,16 @@ func (mr *MockTxnOperatorMockRecorder) ExitRollbackStmt() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExitRollbackStmt", reflect.TypeOf((*MockTxnOperator)(nil).ExitRollbackStmt))
 }
 
-// ExitRunSql mocks base method.
-func (m *MockTxnOperator) ExitRunSql() {
+// ExitRunSqlWithToken mocks base method.
+func (m *MockTxnOperator) ExitRunSqlWithToken(token uint64) {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "ExitRunSql")
+	m.ctrl.Call(m, "ExitRunSqlWithToken", token)
 }
 
-// ExitRunSql indicates an expected call of ExitRunSql.
-func (mr *MockTxnOperatorMockRecorder) ExitRunSql() *gomock.Call {
+// ExitRunSqlWithToken indicates an expected call of ExitRunSqlWithToken.
+func (mr *MockTxnOperatorMockRecorder) ExitRunSqlWithToken(token interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExitRunSql", reflect.TypeOf((*MockTxnOperator)(nil).ExitRunSql))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExitRunSqlWithToken", reflect.TypeOf((*MockTxnOperator)(nil).ExitRunSqlWithToken), token)
 }
 
 // GetOverview mocks base method.

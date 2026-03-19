@@ -15,10 +15,12 @@
 package plan
 
 import (
+	"context"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestRemapWindowClause(t *testing.T) {
@@ -43,7 +45,13 @@ func TestRemapWindowClause(t *testing.T) {
 		Typ: plan.Type{},
 	}
 	colMap := make(map[[2]int32][2]int32)
-	var b *QueryBuilder
+	var b *QueryBuilder = &QueryBuilder{
+		compCtx: &MockCompilerContext{
+			ctx: context.Background(),
+		},
+		optimizationHistory: []string{"test optimization history"},
+	}
 	err := b.remapWindowClause(f, 1, 1, colMap, nil)
+	t.Log(err)
 	require.Error(t, err)
 }

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -65,7 +66,39 @@ func (preInsert *PreInsert) Prepare(proc *process.Process) (err error) {
 			return
 		}
 	}
+	if preInsert.HasAutoCol {
+		if err = preInsert.refreshAutoIncrementTableID(proc); err != nil {
+			return
+		}
+	}
 	return
+}
+
+func (preInsert *PreInsert) refreshAutoIncrementTableID(proc *proc) error {
+	if preInsert.TableDef == nil || preInsert.TableDef.Name == "" || preInsert.SchemaName == "" {
+		return nil
+	}
+	if preInsert.TableDef.IsTemporary {
+		return nil
+	}
+	if proc.Base.SessionInfo.StorageEngine == nil || proc.Base.TxnOperator == nil {
+		return nil
+	}
+
+	db, err := proc.Base.SessionInfo.StorageEngine.Database(proc.Ctx, preInsert.SchemaName, proc.Base.TxnOperator)
+	if err != nil {
+		return err
+	}
+	rel, err := db.Relation(proc.Ctx, preInsert.TableDef.Name, nil)
+	if err != nil {
+		return err
+	}
+	preInsert.TableDef.TblId = rel.GetTableID(proc.Ctx)
+	return nil
+}
+
+func (preInsert *PreInsert) retryWithDefChanged() error {
+	return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 }
 
 func (preInsert *PreInsert) constructColBuf(proc *proc, bat *batch.Batch, first bool) (err error) {
@@ -257,11 +290,27 @@ func checkIfNeedReGenAutoIncrCol(bat *batch.Batch, preInsert *PreInsert) map[str
 }
 
 func genAutoIncrCol(bat *batch.Batch, proc *proc, preInsert *PreInsert) error {
-	tableID := preInsert.TableDef.TblId
 	eng := proc.Base.SessionInfo.StorageEngine
 	currentTxn := proc.Base.TxnOperator
+	retriedWithFreshTableID := false
 
+retryInsertValues:
+	tableID := preInsert.TableDef.TblId
 	needReCheck := checkIfNeedReGenAutoIncrCol(bat, preInsert)
+
+	// FIX: Capture lastAllocateAt BEFORE InsertValues to avoid false negative bug
+	// If InsertValues triggers a new allocation, lastAllocateAt will be updated,
+	// which would cause PrimaryKeysMayBeUpserted to check a narrower time range
+	// and miss manual inserts that happened between the old and new allocation.
+	lastAllocateTSMap := make(map[string]timestamp.Timestamp)
+	for col := range needReCheck {
+		ts, err := proc.GetIncrService().GetLastAllocateTS(proc.Ctx, tableID, col)
+		if err != nil {
+			return err
+		}
+		lastAllocateTSMap[col] = ts
+	}
+
 	lastInsertValue, err := proc.GetIncrService().InsertValues(
 		proc.Ctx,
 		tableID,
@@ -271,8 +320,24 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, preInsert *PreInsert) error {
 	)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			if preInsert.TableDef.IsTemporary {
+				logutil.Error("insert auto increment column failed", zap.Error(err))
+				return moerr.NewNoSuchTableNoCtx(preInsert.SchemaName, preInsert.TableDef.Name)
+			}
+			if !retriedWithFreshTableID {
+				retriedWithFreshTableID = true
+				if refreshErr := preInsert.refreshAutoIncrementTableID(proc); refreshErr != nil {
+					if moerr.IsMoErrCode(refreshErr, moerr.ErrNoSuchTable) {
+						return preInsert.retryWithDefChanged()
+					}
+					return refreshErr
+				}
+				if preInsert.TableDef.TblId != tableID {
+					goto retryInsertValues
+				}
+			}
 			logutil.Error("insert auto increment column failed", zap.Error(err))
-			return moerr.NewNoSuchTableNoCtx(preInsert.SchemaName, preInsert.TableDef.Name)
+			return preInsert.retryWithDefChanged()
 		}
 		return err
 	}
@@ -294,16 +359,12 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, preInsert *PreInsert) error {
 			return err
 		}
 
+		// Use the captured lastAllocateAt timestamps (before InsertValues)
 		for col, idx := range needReCheck {
-			from, err := proc.GetIncrService().GetLastAllocateTS(proc.Ctx, tableID, col)
-			if err != nil {
-				return err
-			}
-			fromTs := types.TimestampToTS(from)
+			fromTs := types.TimestampToTS(lastAllocateTSMap[col])
 			toTs := types.TimestampToTS(proc.Base.TxnOperator.SnapshotTS())
 			if mayChanged, err := rel.PrimaryKeysMayBeUpserted(proc.Ctx, fromTs, toTs, bat, preInsert.ColOffset+int32(idx)); err == nil {
 				if mayChanged {
-					logutil.Debugf("user may have manually specified the value to be inserted into the auto pk col before this transaction.")
 					return moerr.NewTxnNeedRetry(proc.Ctx)
 				}
 			} else {

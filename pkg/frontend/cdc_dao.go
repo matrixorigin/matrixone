@@ -22,13 +22,18 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"go.uber.org/zap"
 )
 
 const (
@@ -112,10 +117,20 @@ func (t *CDCDao) CreateTask(
 
 	var (
 		details *task.Details
+		ts      taskservice.TaskService
 	)
 	if details, err = opts.BuildTaskDetails(); err != nil {
 		return
 	}
+
+	// Get TaskService - handle nil case gracefully instead of panicking
+	if t.ts == nil && t.ses != nil {
+		t.ts = getPu(t.ses.GetService()).TaskService
+	}
+	if t.ts == nil {
+		return moerr.NewInternalError(ctx, "TaskService is not available. CDC task creation requires TaskService to be initialized.")
+	}
+	ts = t.ts
 
 	creatTaskJob := func(
 		ctx context.Context,
@@ -134,9 +149,19 @@ func (t *CDCDao) CreateTask(
 		return int(rowsAffected), nil
 	}
 
-	_, err = t.MustGetTaskService().AddCDCTask(
+	_, err = ts.AddCDCTask(
 		ctx, opts.BuildTaskMetadata(), details, creatTaskJob,
 	)
+	if err != nil {
+		return
+	}
+
+	// Sync commit timestamp to ensure the user session can see the created task
+	if err = t.syncCommitTimestamp(ctx); err != nil {
+		logutil.Errorf("failed to sync commit timestamp after creating CDC task: %v", err)
+		// Don't fail the task creation if sync fails, just log it
+		err = nil
+	}
 	return
 }
 
@@ -183,7 +208,10 @@ func (t *CDCDao) ShowTasks(
 
 	snapTS = txnOp.SnapshotTS().ToStdTime().In(time.Local).String()
 	startTS := types.TimestampToTS(txnOp.SnapshotTS())
-	logutil.Infof("XXX-DEBUG-21848-show-task-snap-ts: %s", startTS.ToString())
+	logutil.Debug(
+		"cdc.frontend.dao.show_tasks_snapshot",
+		zap.String("snapshot-ts", startTS.ToString()),
+	)
 	sql := cdc.CDCSQLBuilder.ShowTaskSQL(
 		uint64(t.ses.GetTenantInfo().GetTenantID()),
 		req.Option.All,
@@ -199,9 +227,15 @@ func (t *CDCDao) ShowTasks(
 		return
 	}
 
-	logutil.Infof("XXX-DEBUG-21848-show-task-result length %d", len(execResultSet))
+	logutil.Debug(
+		"cdc.frontend.dao.show_tasks_result_length",
+		zap.Int("result-set-length", len(execResultSet)),
+	)
 	for _, result := range execResultSet {
-		logutil.Infof("XXX-DEBUG-21848-show-task-result row count %d", result.GetRowCount())
+		logutil.Debug(
+			"cdc.frontend.dao.show_tasks_row_count",
+			zap.Int("row-count", int(result.GetRowCount())),
+		)
 		for rowIdx, rowCnt := uint64(0), result.GetRowCount(); rowIdx < rowCnt; rowIdx++ {
 			for colIdx, colName := range queryAttrs {
 				switch colName {
@@ -468,4 +502,76 @@ var ForeachQueriedRow = func(
 		}
 	}
 	return
+}
+
+// syncCommitTimestamp syncs the commit timestamp across all CNs to ensure
+// the current session can see the committed changes from other CNs.
+// This is necessary when using mysqlstore transactions which don't automatically
+// update the session's latestCommitTS.
+func (t *CDCDao) syncCommitTimestamp(ctx context.Context) error {
+	// Get query client from session's process
+	if t.ses == nil || t.ses.proc == nil {
+		return moerr.NewInternalError(ctx, "session or process is nil")
+	}
+
+	queryClient := t.ses.proc.GetQueryClient()
+	if queryClient == nil {
+		return moerr.NewInternalError(ctx, "query client is nil")
+	}
+
+	// Get MOCluster to find all CN services
+	moCluster := clusterservice.GetMOCluster(t.ses.GetService())
+	if moCluster == nil {
+		return moerr.NewInternalError(ctx, "mo cluster is nil")
+	}
+
+	// Collect all CN addresses
+	var cnAddrs []string
+	moCluster.GetCNService(
+		clusterservice.NewSelector(),
+		func(c metadata.CNService) bool {
+			cnAddrs = append(cnAddrs, c.QueryAddress)
+			return true
+		},
+	)
+
+	if len(cnAddrs) == 0 {
+		logutil.Warn("no CN services found for commit timestamp sync")
+		return nil
+	}
+
+	// Create a context with timeout for the sync operation
+	syncCtx, cancel := context.WithTimeoutCause(ctx, time.Second*10, moerr.CauseHandleSyncCommit)
+	defer cancel()
+
+	// Step 1: Get the maximum commit timestamp from all CNs
+	maxCommitTS := timestamp.Timestamp{}
+	for _, addr := range cnAddrs {
+		req := queryClient.NewRequest(querypb.CmdMethod_GetCommit)
+		resp, err := queryClient.SendMessage(syncCtx, addr, req)
+		if err != nil {
+			logutil.Warnf("failed to get commit ts from CN %s: %v", addr, err)
+			continue
+		}
+		if resp.GetCommit != nil && maxCommitTS.Less(resp.GetCommit.CurrentCommitTS) {
+			maxCommitTS = resp.GetCommit.CurrentCommitTS
+		}
+		queryClient.Release(resp)
+	}
+
+	if maxCommitTS.IsEmpty() {
+		logutil.Warn("failed to get any valid commit timestamp from CNs")
+		return nil
+	}
+
+	// Step 2: Get the txn client from the process
+	if t.ses.proc.Base.TxnClient == nil {
+		return moerr.NewInternalError(ctx, "txn client is nil")
+	}
+
+	// Step 3: Sync the commit timestamp to the current CN
+	t.ses.proc.Base.TxnClient.SyncLatestCommitTS(maxCommitTS)
+
+	logutil.Infof("synced commit timestamp to %s after CDC task creation", maxCommitTS.DebugString())
+	return nil
 }

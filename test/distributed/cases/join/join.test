@@ -201,3 +201,16 @@ select count(*) from x2 inner join x1 on x1.a = x2.a;
 select * from x2 inner join x1 on x1.a = x2.a order by x1.a limit 10;
 drop table x1;
 drop table x2;
+
+-- @case
+-- @desc:鲁棒性测试 - LEFT JOIN with type mismatch (INT = VARCHAR) should return error instead of panic
+-- @label:bvt
+drop table if exists t1;
+drop table if exists t2;
+CREATE TABLE t1 (id INT);
+CREATE TABLE t2 (name VARCHAR(100));
+INSERT INTO t1 VALUES (1), (2);
+INSERT INTO t2 VALUES ('abc'), ('123');
+SELECT * FROM t1 LEFT JOIN t2 ON t1.id = t2.name;
+drop table if exists t1;
+drop table if exists t2;

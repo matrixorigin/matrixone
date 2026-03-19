@@ -45,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
@@ -186,6 +187,18 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		}
 		if !receiver.needNotReply {
 			s = appendWriteBackOperator(runCompile, s)
+		}
+
+		// For remote run, workspace needs to be created early before any code
+		// that might access it (e.g., operator Prepare methods, InitPipelineContextToExecuteQuery).
+		// Previously, workspace was only created in handleDbRelContext which is called
+		// later in MergeRun, causing potential nil pointer panics.
+		if runCompile.proc.GetTxnOperator() != nil && runCompile.proc.GetTxnOperator().GetWorkspace() == nil {
+			if disttaeEngine, ok := runCompile.e.(*disttae.Engine); ok {
+				ws := disttae.NewTxnWorkSpace(disttaeEngine, runCompile.proc)
+				runCompile.proc.GetTxnOperator().AddWorkspace(ws)
+				ws.BindTxnOp(runCompile.proc.GetTxnOperator())
+			}
 		}
 
 		runCompile.scopes = []*Scope{s}

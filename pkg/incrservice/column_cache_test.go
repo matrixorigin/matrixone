@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/exp/constraints"
@@ -542,4 +543,97 @@ func runColumnCacheTestsWithInitOffset(
 		},
 	)
 
+}
+
+// TestLastAllocateAtUpdate verifies that lastAllocateAt is correctly updated
+// when new ranges are allocated. This is critical for multi-CN scenarios where
+// lastAllocateAt is used for PrimaryKeysMayBeUpserted check.
+func TestLastAllocateAtUpdate(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			col := AutoColumn{
+				ColName: "test_col",
+				TableID: 100,
+				Offset:  0,
+				Step:    1,
+			}
+			cc := &columnCache{
+				logger:      getLogger(sid),
+				col:         col,
+				cfg:         Config{CountPerAllocate: 100},
+				ranges:      &ranges{step: 1, values: make([]uint64, 0, 1)},
+				committed:   true,
+				allocatingC: make(chan error, 1), // Initialize allocatingC channel
+			}
+
+			// Test 1: Initial allocation with valid timestamp
+			ts1 := timestamp.Timestamp{PhysicalTime: 1000, LogicalTime: 1}
+			cc.applyAllocateLocked(1, 100, ts1, nil)
+			assert.Equal(t, ts1, cc.lastAllocateAt, "lastAllocateAt should be updated to ts1")
+
+			// Reset allocatingC for next test (applyAllocateLocked closes it)
+			cc.allocatingC = make(chan error, 1)
+
+			// Test 2: Subsequent allocation with larger timestamp should update
+			ts2 := timestamp.Timestamp{PhysicalTime: 2000, LogicalTime: 2}
+			cc.applyAllocateLocked(101, 200, ts2, nil)
+			assert.Equal(t, ts2, cc.lastAllocateAt, "lastAllocateAt should be updated to ts2")
+
+			// Reset allocatingC for next test
+			cc.allocatingC = make(chan error, 1)
+
+			// Test 3: Allocation with smaller timestamp should NOT update
+			ts3 := timestamp.Timestamp{PhysicalTime: 1500, LogicalTime: 1}
+			cc.applyAllocateLocked(201, 300, ts3, nil)
+			assert.Equal(t, ts2, cc.lastAllocateAt, "lastAllocateAt should remain ts2 (larger timestamp)")
+
+			// Reset allocatingC for next test
+			cc.allocatingC = make(chan error, 1)
+
+			// Test 4: Allocation with empty timestamp should NOT update
+			cc.applyAllocateLocked(301, 400, timestamp.Timestamp{}, nil)
+			assert.Equal(t, ts2, cc.lastAllocateAt, "lastAllocateAt should remain ts2 (empty timestamp ignored)")
+		},
+	)
+}
+
+// TestLastAllocateAtEmptyInitial verifies that lastAllocateAt is correctly
+// initialized from empty state when first allocation happens.
+func TestLastAllocateAtEmptyInitial(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			col := AutoColumn{
+				ColName: "test_col",
+				TableID: 100,
+				Offset:  0,
+				Step:    1,
+			}
+			cc := &columnCache{
+				logger:      getLogger(sid),
+				col:         col,
+				cfg:         Config{CountPerAllocate: 100},
+				ranges:      &ranges{step: 1, values: make([]uint64, 0, 1)},
+				committed:   true,
+				allocatingC: make(chan error, 1), // Initialize allocatingC channel
+				// lastAllocateAt is zero-value (empty)
+			}
+
+			// Verify initial state
+			assert.True(t, cc.lastAllocateAt.IsEmpty(), "Initial lastAllocateAt should be empty")
+
+			// First allocation should set lastAllocateAt
+			ts1 := timestamp.Timestamp{PhysicalTime: 1000, LogicalTime: 1}
+			cc.applyAllocateLocked(1, 100, ts1, nil)
+			assert.Equal(t, ts1, cc.lastAllocateAt, "lastAllocateAt should be set to ts1 from empty")
+			assert.False(t, cc.lastAllocateAt.IsEmpty(), "lastAllocateAt should no longer be empty")
+		},
+	)
 }

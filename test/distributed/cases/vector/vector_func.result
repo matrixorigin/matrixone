@@ -211,14 +211,14 @@ select inner_product(vecf32_3,vecf32_3) - inner_product(vecf32_5,vecf32_5) from 
 inner_product(vecf32_3, vecf32_3) - inner_product(vecf32_5, vecf32_5)
 null
 null
-2.1505920759827025E7
-7.591049478768596E7
+2.1505920967041016E7
+7.5910489125E7
 select inner_product(vecf32_3,vecf32_3) * inner_product(vecf32_5,vecf32_5) from vtab32;
 inner_product(vecf32_3, vecf32_3) * inner_product(vecf32_5, vecf32_5)
 null
 null
-2.0152634222080513E10
-5.175445836024754E13
+2.0152634790196777E10
+5.175445488507E13
 select inner_product(vecf64_3,vecf64_3) + inner_product(vecf64_5,vecf64_5) from vtab64;
 inner_product(vecf64_3, vecf64_3) + inner_product(vecf64_5, vecf64_5)
 null

@@ -16,6 +16,7 @@ package gc
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -152,4 +153,21 @@ func (c *MockCleaner) GetDetails(ctx context.Context) (map[uint32]*TableStats, e
 
 func (c *MockCleaner) Verify(ctx context.Context) string {
 	return ""
+}
+
+func (c *MockCleaner) CDCTables() (map[uint64]types.TS, error) {
+	return nil, nil
+}
+
+func (c *MockCleaner) SetBackupProtection(protectedTS types.TS) {
+}
+
+func (c *MockCleaner) UpdateBackupProtection(protectedTS types.TS) {
+}
+
+func (c *MockCleaner) RemoveBackupProtection() {
+}
+
+func (c *MockCleaner) GetBackupProtection() (protectedTS types.TS, lastUpdateTime time.Time, isActive bool) {
+	return types.TS{}, time.Time{}, false
 }

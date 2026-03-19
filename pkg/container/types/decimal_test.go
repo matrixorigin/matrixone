@@ -26,6 +26,49 @@ func TestParse64(t *testing.T) {
 		panic("Decimal64Parse wrong")
 	}
 }
+
+// TestParse64ScientificNotation tests parsing decimal with scientific notation including + sign
+func TestParse64ScientificNotation(t *testing.T) {
+	// Test case 1: e+06 format (the bug case from issue #22396)
+	x1, err1 := ParseDecimal64("1.23456789e+06", 10, 2)
+	if err1 != nil {
+		t.Errorf("Failed to parse '1.23456789e+06': %v", err1)
+	}
+	expected1 := Decimal64(123456789) // 1234567.89 in scale 2
+	if x1 != expected1 {
+		t.Errorf("ParseDecimal64('1.23456789e+06', 10, 2) = %v, expected %v", x1, expected1)
+	}
+
+	// Test case 2: e6 format (should also work)
+	x2, err2 := ParseDecimal64("1.23456789e6", 10, 2)
+	if err2 != nil {
+		t.Errorf("Failed to parse '1.23456789e6': %v", err2)
+	}
+	if x2 != expected1 {
+		t.Errorf("ParseDecimal64('1.23456789e6', 10, 2) = %v, expected %v", x2, expected1)
+	}
+
+	// Test case 3: e-06 format (negative exponent)
+	x3, err3 := ParseDecimal64("1.23456789e-06", 10, 8)
+	if err3 != nil {
+		t.Errorf("Failed to parse '1.23456789e-06': %v", err3)
+	}
+	expected3 := Decimal64(123) // 0.00000123 in scale 8
+	if x3 != expected3 {
+		t.Errorf("ParseDecimal64('1.23456789e-06', 10, 8) = %v, expected %v", x3, expected3)
+	}
+
+	// Test case 4: e+2 format (small positive exponent)
+	x4, err4 := ParseDecimal64("12.34e+2", 10, 2)
+	if err4 != nil {
+		t.Errorf("Failed to parse '12.34e+2': %v", err4)
+	}
+	expected4 := Decimal64(123400) // 1234.00 in scale 2
+	if x4 != expected4 {
+		t.Errorf("ParseDecimal64('12.34e+2', 10, 2) = %v, expected %v", x4, expected4)
+	}
+}
+
 func TestParse128(t *testing.T) {
 	x, y := ParseDecimal128("99999.999999999999999999999999999999999", 12, 6)
 	if y != nil || x.B0_63 != 100000000000 {

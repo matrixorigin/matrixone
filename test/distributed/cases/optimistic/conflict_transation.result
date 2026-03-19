@@ -114,7 +114,7 @@ a    b    c    d
 3    90    2111-02-09    10.01
 3    90    2111-02-09    10.01
 commit;
-Duplicate entry '3a150341170bc28c' for key '__mo_cpkey_col'
+Duplicate entry '(3,2111-02-09)' for key '__mo_cpkey_col'
 select * from ct_07;
 a    b    c    d
 1    901    2011-09-29    0.01

@@ -15,8 +15,13 @@
 package bloomfilter
 
 import (
+	"bytes"
+
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
@@ -112,6 +117,81 @@ func (bf *BloomFilter) TestAndAdd(v *vector.Vector, callBack func(bool, int)) {
 		callBack(exist, beginIdx+idx)
 	})
 
+}
+
+// Marshal encodes BloomFilter into byte sequence for transmission via runtime filter message within the same CN.
+// Encoding format:
+//
+//	[seedCount:uint32][seeds...:uint64][bitmapLen:uint32][bitmapBytes...]
+func (bf *BloomFilter) Marshal() ([]byte, error) {
+	var buf bytes.Buffer
+
+	seedCount := uint32(len(bf.hashSeed))
+	buf.Write(types.EncodeUint32(&seedCount))
+	for i := 0; i < int(seedCount); i++ {
+		buf.Write(types.EncodeUint64(&bf.hashSeed[i]))
+	}
+
+	bmBytes := bf.bitmap.Marshal()
+	bmLen := uint32(len(bmBytes))
+	buf.Write(types.EncodeUint32(&bmLen))
+	buf.Write(bmBytes)
+
+	return buf.Bytes(), nil
+}
+
+// Unmarshal restores BloomFilter from byte sequence.
+// Initializes internal structures (keys / states / vals / addVals) based on encoded seedCount and bitmap.
+func (bf *BloomFilter) Unmarshal(data []byte) error {
+	if len(data) < 4 {
+		return moerr.NewInternalErrorNoCtx("invalid bloomfilter data")
+	}
+
+	seedCount := int(types.DecodeUint32(data[:4]))
+	data = data[4:]
+
+	if seedCount <= 0 {
+		return moerr.NewInternalErrorNoCtx("invalid bloomfilter seed count")
+	}
+
+	hashSeed := make([]uint64, seedCount)
+	for i := 0; i < seedCount; i++ {
+		if len(data) < 8 {
+			return moerr.NewInternalErrorNoCtx("invalid bloomfilter data (seed truncated)")
+		}
+		hashSeed[i] = types.DecodeUint64(data[:8])
+		data = data[8:]
+	}
+
+	if len(data) < 4 {
+		return moerr.NewInternalErrorNoCtx("invalid bloomfilter data (no bitmap length)")
+	}
+	bmLen := int(types.DecodeUint32(data[:4]))
+	data = data[4:]
+	if bmLen < 0 || len(data) < bmLen {
+		return moerr.NewInternalErrorNoCtx("invalid bloomfilter data (bitmap truncated)")
+	}
+
+	var bm bitmap.Bitmap
+	bm.Unmarshal(data[:bmLen])
+
+	// Reinitialize internal auxiliary structures for subsequent Test/TestAndAdd
+	vals := make([][]uint64, hashmap.UnitLimit)
+	keys := make([][]byte, hashmap.UnitLimit)
+	states := make([][3]uint64, hashmap.UnitLimit)
+	for j := 0; j < hashmap.UnitLimit; j++ {
+		vals[j] = make([]uint64, seedCount*3)
+	}
+
+	bf.bitmap = bm
+	bf.hashSeed = hashSeed
+	bf.keys = keys
+	bf.states = states
+	bf.vals = vals
+	bf.addVals = make([]uint64, hashmap.UnitLimit*3*seedCount)
+	bf.valLength = len(hashSeed) * 3
+
+	return nil
 }
 
 // for an incoming vector, compute the hash value of each of its elements, and manipulate it with func tf.fn

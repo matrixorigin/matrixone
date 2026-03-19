@@ -182,3 +182,79 @@ func newTestCase(t testing.TB, flgs []bool, ts []types.Type, cs []*plan.Expr) bu
 func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
+
+func TestCalculateBloomFilterProbability(t *testing.T) {
+	tests := []struct {
+		name     string
+		rowCount int
+		wantProb float64
+	}{
+		{
+			name:     "very small row count",
+			rowCount: 1000,
+			wantProb: 0.00001,
+		},
+		{
+			name:     "small row count boundary",
+			rowCount: 10_0000,
+			wantProb: 0.00001,
+		},
+		{
+			name:     "medium row count lower bound",
+			rowCount: 10_0001,
+			wantProb: 0.000003,
+		},
+		{
+			name:     "medium row count upper bound",
+			rowCount: 100_0000,
+			wantProb: 0.000003,
+		},
+		{
+			name:     "large row count lower bound",
+			rowCount: 100_0001,
+			wantProb: 0.000001,
+		},
+		{
+			name:     "large row count upper bound",
+			rowCount: 1000_0000,
+			wantProb: 0.000001,
+		},
+		{
+			name:     "very large row count lower bound",
+			rowCount: 1000_0001,
+			wantProb: 0.0000005,
+		},
+		{
+			name:     "very large row count upper bound",
+			rowCount: 1_0000_0000,
+			wantProb: 0.0000005,
+		},
+		{
+			name:     "huge row count lower bound",
+			rowCount: 1_0000_0001,
+			wantProb: 0.0000002,
+		},
+		{
+			name:     "huge row count upper bound",
+			rowCount: 10_0000_0000,
+			wantProb: 0.0000002,
+		},
+		{
+			name:     "extremely large row count",
+			rowCount: 10_0000_0001,
+			wantProb: 0.0000001,
+		},
+		{
+			name:     "maximum row count",
+			rowCount: 100_0000_0000,
+			wantProb: 0.0000001,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := calculateBloomFilterProbability(tt.rowCount)
+			require.Equal(t, tt.wantProb, got, "calculateBloomFilterProbability(%d) = %v, want %v", tt.rowCount, got, tt.wantProb)
+		})
+	}
+}

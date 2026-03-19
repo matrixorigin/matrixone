@@ -52,13 +52,13 @@ func GetInFilterCardLimitOnPK(
 	return int32(upper)
 }
 
-func mustRuntimeFilter(n *plan.Node) bool {
-	switch n.JoinType {
+func mustRuntimeFilter(node *plan.Node) bool {
+	switch node.JoinType {
 	case plan.Node_INDEX:
 		return true
 
 	case plan.Node_DEDUP:
-		return !n.IsRightJoin
+		return !node.IsRightJoin
 	}
 	return false
 }

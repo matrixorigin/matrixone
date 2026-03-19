@@ -1,0 +1,15 @@
+create database repro;
+use repro;
+create table t1 (a int primary key, b int);
+insert into t1 values (1,10),(2,20),(3,30),(4,40);
+select mo_ctl('dn','flush','repro.t1');
+mo_ctl(dn, flush, repro.t1)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+use repro;
+begin;
+create table t2 clone t1;
+update t1 set b = b + 1 where a = 1;
+select a, count(*) as cnt from t1 group by a having cnt > 1;
+a    cnt
+commit;
+drop database repro;

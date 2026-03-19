@@ -1,0 +1,21 @@
+DROP TABLE IF EXISTS t_ivfflat_inmem;
+CREATE TABLE t_ivfflat_inmem (
+id INT PRIMARY KEY,
+embedding vecf32(4) DEFAULT NULL
+);
+CREATE INDEX idx_ivf_inmem USING ivfflat ON t_ivfflat_inmem(embedding) lists=2 op_type 'vector_l2_ops';
+BEGIN;
+INSERT INTO t_ivfflat_inmem SELECT result,       '[0.1, 0.2, 0.3, 0.4]' FROM generate_series(1, 7000) g;
+INSERT INTO t_ivfflat_inmem SELECT result+7000,  '[0.1, 0.2, 0.3, 0.4]' FROM generate_series(1, 5000) g;
+SELECT id, L2_DISTANCE(embedding, '[0.5, 0.5, 0.5, 0.5]') AS dist
+FROM t_ivfflat_inmem
+ORDER BY dist ASC
+LIMIT 5;
+id    dist
+2    0.5477225411817617
+3    0.5477225411817617
+4    0.5477225411817617
+5    0.5477225411817617
+1    0.5477225411817617
+COMMIT;
+DROP TABLE IF EXISTS t_ivfflat_inmem;

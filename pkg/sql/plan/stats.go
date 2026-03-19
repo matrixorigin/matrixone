@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -350,13 +351,29 @@ func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.Stats
 			s.MinValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMinBuf()))
 			s.MaxValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMaxBuf()))
 		case types.T_decimal64:
-			s.MinValMap[colName] = float64(types.DecodeDecimal64(info.ColumnZMs[i].GetMinBuf()))
-			s.MaxValMap[colName] = float64(types.DecodeDecimal64(info.ColumnZMs[i].GetMaxBuf()))
+			// Fix: Use Decimal64ToFloat64 with proper scale to handle negative values correctly
+			// Direct cast to float64 treats negative values (stored as two's complement) as large positive numbers
+			// IMPORTANT: Use ZoneMap's scale, not TableDef's scale
+			// ZoneMap stores the scale from when data was written (may differ from current schema after ALTER TABLE)
+			scale := info.ColumnZMs[i].GetScale()
+			minDec := types.DecodeDecimal64(info.ColumnZMs[i].GetMinBuf())
+			maxDec := types.DecodeDecimal64(info.ColumnZMs[i].GetMaxBuf())
+			minFloat := types.Decimal64ToFloat64(minDec, scale)
+			maxFloat := types.Decimal64ToFloat64(maxDec, scale)
+			s.MinValMap[colName] = minFloat
+			s.MaxValMap[colName] = maxFloat
+
 		case types.T_decimal128:
-			val := types.DecodeDecimal128(info.ColumnZMs[i].GetMinBuf())
-			s.MinValMap[colName] = float64(types.Decimal128ToFloat64(val, 0))
-			val = types.DecodeDecimal128(info.ColumnZMs[i].GetMaxBuf())
-			s.MaxValMap[colName] = float64(types.Decimal128ToFloat64(val, 0))
+			// Fix: Use actual scale from ZoneMap (not TableDef)
+			// This ensures consistency with getMinMaxValueByFloat64 in disttae/stats.go
+			scale := info.ColumnZMs[i].GetScale()
+			minDec := types.DecodeDecimal128(info.ColumnZMs[i].GetMinBuf())
+			maxDec := types.DecodeDecimal128(info.ColumnZMs[i].GetMaxBuf())
+			minFloat := types.Decimal128ToFloat64(minDec, scale)
+			maxFloat := types.Decimal128ToFloat64(maxDec, scale)
+			s.MinValMap[colName] = minFloat
+			s.MaxValMap[colName] = maxFloat
+
 		}
 
 		if info.ShuffleRanges[i] != nil {
@@ -502,6 +519,64 @@ func getExprNdv(expr *plan.Expr, builder *QueryBuilder) float64 {
 		case "substring":
 			// no good way to calc ndv for substring
 			return math.Min(getExprNdv(exprImpl.F.Args[0], builder), 25)
+		case "%", "mod":
+			// For modulo operations like b%N, the NDV is at most N
+			if len(exprImpl.F.Args) < 2 {
+				return getExprNdv(exprImpl.F.Args[0], builder)
+			}
+			lit := exprImpl.F.Args[1].GetLit()
+			if lit == nil {
+				// Second argument is not a literal, fallback to column NDV
+				return getExprNdv(exprImpl.F.Args[0], builder)
+			}
+
+			var modValue float64
+			switch v := lit.Value.(type) {
+			case *plan.Literal_I64Val:
+				if v.I64Val > 0 {
+					modValue = float64(v.I64Val)
+				}
+			case *plan.Literal_I32Val:
+				if v.I32Val > 0 {
+					modValue = float64(v.I32Val)
+				}
+			case *plan.Literal_I16Val:
+				if v.I16Val > 0 {
+					modValue = float64(v.I16Val)
+				}
+			case *plan.Literal_I8Val:
+				if v.I8Val > 0 {
+					modValue = float64(v.I8Val)
+				}
+			case *plan.Literal_U64Val:
+				if v.U64Val > 0 && v.U64Val <= math.MaxInt64 {
+					modValue = float64(v.U64Val)
+				}
+			case *plan.Literal_U32Val:
+				if v.U32Val > 0 {
+					modValue = float64(v.U32Val)
+				}
+			case *plan.Literal_U16Val:
+				if v.U16Val > 0 {
+					modValue = float64(v.U16Val)
+				}
+			case *plan.Literal_U8Val:
+				if v.U8Val > 0 {
+					modValue = float64(v.U8Val)
+				}
+			}
+
+			if modValue > 0 {
+				// Take min of column NDV and modulo value for conservative estimate
+				colNdv := getExprNdv(exprImpl.F.Args[0], builder)
+				if colNdv > 0 {
+					return math.Min(colNdv, modValue)
+				}
+				// Unknown NDV should remain unknown, not become a small certain value
+				return colNdv
+			}
+			// Invalid modValue (zero, negative, or overflow), fallback to column NDV
+			return getExprNdv(exprImpl.F.Args[0], builder)
 		default:
 			return getExprNdv(exprImpl.F.Args[0], builder)
 		}
@@ -532,6 +607,97 @@ func estimateEqualitySelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.S
 	return 0.01
 }
 
+// calcSelectivityByMinMaxForDecimal handles decimal types with proper scale conversion
+func calcSelectivityByMinMaxForDecimal(funcName string, min, max float64, expr *plan.Expr) (ret float64) {
+	if max < min {
+		return 0.1
+	}
+
+	// Extract literal expressions with type information (which includes scale)
+	fn := expr.GetF()
+	if fn == nil || len(fn.Args) < 2 {
+		return 0.1
+	}
+
+	// Get scale from the literal expr's type
+	var val1, val2 float64
+	var ok bool
+
+	switch funcName {
+	case ">", ">=", "<", "<=":
+		lit := fn.Args[1].GetLit()
+		if lit == nil {
+			return 0.1
+		}
+		// Use the expr's type which contains scale information
+		scale := fn.Args[1].Typ.Scale
+		val1, ok = getDecimalLiteralValue(lit, scale)
+		if !ok {
+			return 0.1
+		}
+
+		switch funcName {
+		case ">", ">=":
+			// If value is greater than max, almost no rows will match
+			if val1 > max {
+				return 0.00000001
+			}
+			ret = (max - val1 + 1) / (max - min)
+		case "<", "<=":
+			// If value is less than min, almost no rows will match
+			if val1 < min {
+				return 0.00000001
+			}
+			ret = (val1 - min + 1) / (max - min)
+		}
+
+	case "between":
+		lit1 := fn.Args[1].GetLit()
+		lit2 := fn.Args[2].GetLit()
+		if lit1 == nil || lit2 == nil {
+			return 0.1
+		}
+		scale1 := fn.Args[1].Typ.Scale
+		scale2 := fn.Args[2].Typ.Scale
+		val1, ok = getDecimalLiteralValue(lit1, scale1)
+		if !ok {
+			return 0.1
+		}
+		val2, ok = getDecimalLiteralValue(lit2, scale2)
+		if !ok {
+			return 0.1
+		}
+		ret = (val2 - val1 + 1) / (max - min)
+	default:
+		return 0.1
+	}
+
+	if ret < 0 {
+		// Value out of range, return low selectivity
+		return 0.00000001
+	}
+	if ret > 1 {
+		return 1.0
+	}
+	return ret
+}
+
+// getDecimalLiteralValue extracts the actual float64 value from a decimal literal using its scale
+func getDecimalLiteralValue(lit *plan.Literal, scale int32) (float64, bool) {
+	if val64, ok := lit.Value.(*plan.Literal_Decimal64Val); ok {
+		dec64 := types.Decimal64(val64.Decimal64Val.A)
+		return types.Decimal64ToFloat64(dec64, scale), true
+	}
+	if val128, ok := lit.Value.(*plan.Literal_Decimal128Val); ok {
+		dec128 := types.Decimal128{
+			B0_63:   uint64(val128.Decimal128Val.A),
+			B64_127: uint64(val128.Decimal128Val.B),
+		}
+		return types.Decimal128ToFloat64(dec128, scale), true
+	}
+	return 0, false
+}
+
 func calcSelectivityByMinMax(funcName string, min, max float64, typ types.T, vals []*plan.Literal) (ret float64) {
 	var ok bool
 	var val1, val2 float64
@@ -557,6 +723,7 @@ func calcSelectivityByMinMax(funcName string, min, max float64, typ types.T, val
 	default:
 		ret = 0.1
 	}
+
 	if ret < 0 {
 		// val out of range, return low sel
 		return 0.00000001
@@ -628,6 +795,8 @@ func getFloat64Value(typ types.T, lit *plan.Literal) (float64, bool) {
 		}
 	case types.T_decimal64:
 		if val, valOk := lit.Value.(*plan.Literal_Decimal64Val); valOk {
+			// Note: This path is only used for non-decimal column types
+			// For decimal columns, use calcSelectivityByMinMaxForDecimal instead
 			return float64(val.Decimal64Val.A), true
 		}
 	case types.T_decimal128:
@@ -667,6 +836,12 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 
 		switch colFnName {
 		case "":
+			// CRITICAL FIX: For decimal types, we need to pass the expr to get scale information
+			// Decimal literals store internal scaled values, need proper conversion
+			if typ == types.T_decimal64 || typ == types.T_decimal128 {
+				return calcSelectivityByMinMaxForDecimal(
+					funcName, w.Stats.MinValMap[colRef.Name], w.Stats.MaxValMap[colRef.Name], expr)
+			}
 			return calcSelectivityByMinMax(
 				funcName, w.Stats.MinValMap[colRef.Name], w.Stats.MaxValMap[colRef.Name], typ, literals)
 		case "year":
@@ -1708,10 +1883,15 @@ func setNodeDOP(p *plan.Plan, rootID int32, dop int32) {
 	if len(node.Children) > 0 {
 		setNodeDOP(p, node.Children[0], dop)
 	}
-	if node.NodeType == plan.Node_JOIN && node.Stats.HashmapStats.Shuffle {
+	if node.NodeType == plan.Node_JOIN &&
+		node.Stats != nil &&
+		node.Stats.HashmapStats != nil &&
+		node.Stats.HashmapStats.Shuffle {
 		setNodeDOP(p, node.Children[1], dop)
 	}
-	node.Stats.Dop = dop
+	if node.Stats != nil {
+		node.Stats.Dop = dop
+	}
 }
 
 func CalcNodeDOP(p *plan.Plan, rootID int32, ncpu int32, lencn int) {
@@ -1720,6 +1900,32 @@ func CalcNodeDOP(p *plan.Plan, rootID int32, ncpu int32, lencn int) {
 	for i := range node.Children {
 		CalcNodeDOP(p, node.Children[i], ncpu, lencn)
 	}
+
+	// Check if node has distinct aggregation, which should run in single CPU
+	hasDistinctAgg := false
+	if node.NodeType == plan.Node_AGG && len(node.AggList) > 0 {
+		for _, agg := range node.AggList {
+			if f, ok := agg.Expr.(*plan.Expr_F); ok {
+				if (uint64(f.F.Func.Obj) & function.Distinct) != 0 {
+					hasDistinctAgg = true
+					break
+				}
+			}
+		}
+	}
+
+	if hasDistinctAgg {
+		// distinct aggregation should run in only one node and without any parallel
+		if node.Stats == nil {
+			// If Stats is nil, create it first
+			// This should be rare for AGG nodes, but we handle it for safety
+			node.Stats = DefaultStats()
+		}
+		setNodeDOP(p, rootID, 1)
+		node.Stats.ForceOneCN = true
+		return
+	}
+
 	if node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle && node.NodeType != plan.Node_TABLE_SCAN {
 		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP {
 			setNodeDOP(p, rootID, ncpu)

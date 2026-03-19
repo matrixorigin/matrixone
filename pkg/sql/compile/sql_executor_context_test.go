@@ -15,13 +15,17 @@
 package compile
 
 import (
+	"context"
 	"testing"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -86,4 +90,83 @@ func TestCompilerContext_Database(t *testing.T) {
 
 	sql := c.GetRootSql()
 	require.Equal(t, sql, "")
+}
+
+func TestCompilerContextGetRelationFallbackToTempTable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	eng := mock_frontend.NewMockEngine(ctrl)
+	mainDB := mock_frontend.NewMockDatabase(ctrl)
+	tempDB := mock_frontend.NewMockDatabase(ctrl)
+	tempRel := mock_frontend.NewMockRelation(ctrl)
+
+	mainErr := moerr.NewNoSuchTable(context.Background(), "testdb", "t1")
+	eng.EXPECT().Database(gomock.Any(), "testdb", nil).Return(mainDB, nil)
+	mainDB.EXPECT().Relation(gomock.Any(), "t1", nil).Return(nil, mainErr)
+	eng.EXPECT().HasTempEngine().Return(true)
+	eng.EXPECT().Database(gomock.Any(), defines.TEMPORARY_DBNAME, nil).Return(tempDB, nil)
+	tempDB.EXPECT().Relation(gomock.Any(), engine.GetTempTableName("testdb", "t1"), nil).Return(tempRel, nil)
+
+	c := &compilerContext{
+		proc:      proc,
+		engine:    eng,
+		defaultDB: "testdb",
+	}
+
+	ctx, rel, err := c.getRelation("", "t1", nil)
+	require.NoError(t, err)
+	require.NotNil(t, ctx)
+	require.Same(t, tempRel, rel)
+}
+
+func TestCompilerContextGetRelationReturnsNilWhenTempDbUnavailable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	eng := mock_frontend.NewMockEngine(ctrl)
+	mainDB := mock_frontend.NewMockDatabase(ctrl)
+
+	mainErr := moerr.NewNoSuchTable(context.Background(), "testdb", "t1")
+	eng.EXPECT().Database(gomock.Any(), "testdb", nil).Return(mainDB, nil)
+	mainDB.EXPECT().Relation(gomock.Any(), "t1", nil).Return(nil, mainErr)
+	eng.EXPECT().HasTempEngine().Return(true)
+	eng.EXPECT().Database(gomock.Any(), defines.TEMPORARY_DBNAME, nil).Return(nil, moerr.NewInternalErrorNoCtx("temp db not found"))
+
+	c := &compilerContext{
+		proc:      proc,
+		engine:    eng,
+		defaultDB: "testdb",
+	}
+
+	ctx, rel, err := c.getRelation("testdb", "t1", nil)
+	require.NoError(t, err)
+	require.Nil(t, ctx)
+	require.Nil(t, rel)
+}
+
+func TestCompilerContextGetRelationPropagatesNonNoSuchTableError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	eng := mock_frontend.NewMockEngine(ctrl)
+	mainDB := mock_frontend.NewMockDatabase(ctrl)
+
+	relationErr := moerr.NewInternalErrorNoCtx("relation failed")
+	eng.EXPECT().Database(gomock.Any(), "testdb", nil).Return(mainDB, nil)
+	mainDB.EXPECT().Relation(gomock.Any(), "t1", nil).Return(nil, relationErr)
+
+	c := &compilerContext{
+		proc:      proc,
+		engine:    eng,
+		defaultDB: "testdb",
+	}
+
+	ctx, rel, err := c.getRelation("testdb", "t1", nil)
+	require.Error(t, err)
+	require.Nil(t, ctx)
+	require.Nil(t, rel)
 }

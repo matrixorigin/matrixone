@@ -1,5 +1,3 @@
-SET experimental_ivf_index = 1;
-
 -- pre
 drop database if exists vecdb2;
 create database vecdb2;
@@ -694,5 +692,4 @@ alter table vector_index_08 add column d vecf32(3) not null after c;
 select * from vector_index_08;
 
 -- post
-SET experimental_ivf_index = 0;
 drop database vecdb2;

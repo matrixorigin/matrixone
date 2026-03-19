@@ -67,6 +67,7 @@ type Options struct {
 	sql                     string
 	forceRebuildPlan        bool
 	resolveVariableFunc     func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	keepTxnAlive            bool
 }
 
 // StatementOption statement execute option.

@@ -931,6 +931,7 @@ var (
 		"mo_cdc_watermark":            0,
 		catalog.MO_TABLE_STATS:        0,
 		catalog.MO_MERGE_SETTINGS:     0,
+		catalog.MO_BRANCH_METADATA:    0,
 	}
 	sysAccountTables = map[string]struct{}{
 		catalog.MOVersionTable:       {},
@@ -973,6 +974,7 @@ var (
 		catalog.MO_TABLE_STATS:        0,
 		catalog.MO_ACCOUNT_LOCK:       0,
 		catalog.MO_MERGE_SETTINGS:     0,
+		catalog.MO_BRANCH_METADATA:    0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
@@ -1013,6 +1015,7 @@ var (
 		MoCatalogMoAccountLockDDL,
 		MoCatalogMergeSettingsDDL,
 		MoCatalogMergeSettingsInitData,
+		MoCatalogBranchMetadataDDL,
 	}
 
 	//drop tables for the tenant
@@ -1239,6 +1242,8 @@ const (
 	roleNameOfRoleIdFormat = `select role_name from mo_catalog.mo_role where role_id = %d;`
 
 	roleIdOfRoleFormat = `select role_id from mo_catalog.mo_role where role_name = "%s" order by role_id;`
+
+	updateRoleNameFormat = `update mo_catalog.mo_role set role_name = "%s" where role_name = "%s" order by role_id;`
 
 	//operations on the mo_user_grant
 	getRoleOfUserFormat = `select r.role_id from  mo_catalog.mo_role r, mo_catalog.mo_user_grant ug where ug.role_id = r.role_id and ug.user_id = %d and r.role_name = "%s";`
@@ -1744,6 +1749,18 @@ func getSqlForRoleIdOfRole(ctx context.Context, roleName string) (string, error)
 		return "", err
 	}
 	return fmt.Sprintf(roleIdOfRoleFormat, roleName), nil
+}
+
+func getSqlForUpdateRoleName(ctx context.Context, oldName, newName string) (string, error) {
+	err := inputNameIsInvalid(ctx, oldName)
+	if err != nil {
+		return "", err
+	}
+	err = inputNameIsInvalid(ctx, newName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(updateRoleNameFormat, newName, oldName), nil
 }
 
 func getSqlForRoleOfUser(ctx context.Context, userID int64, roleName string) (string, error) {
@@ -3513,30 +3530,53 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) (err
 	return err
 }
 
+func tryDecodeStagePath(
+	ses *Session,
+	filePath string,
+) (retPath string, ok bool, err error) {
+
+	var (
+		s stage.StageDef
+	)
+
+	if strings.HasPrefix(filePath, stage.STAGE_PROTOCOL+"://") {
+		// stage:// URL
+		if s, err = stageutil.UrlToStageDef(filePath, ses.proc); err != nil {
+			return
+		}
+
+		// s.ToPath() returns the fileservice filepath, i.e. s3,...:/path for S3 or /path for local file
+		if retPath, _, err = s.ToPath(); err != nil {
+			return
+		}
+
+		ok = true
+	}
+
+	return
+}
+
 func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) (err error) {
-	//var err error
-	var filePath string
 	if ep == nil {
 		return err
 	}
 
 	// detect filepath contain stage or not
-	filePath = ep.FilePath
-	if strings.HasPrefix(filePath, stage.STAGE_PROTOCOL+"://") {
-		// stage:// URL
-		s, err := stageutil.UrlToStageDef(filePath, ses.proc)
-		if err != nil {
-			return err
-		}
+	//var err error
+	var (
+		ok       bool
+		filePath string
+	)
 
-		// s.ToPath() returns the fileservice filepath, i.e. s3,...:/path for S3 or /path for local file
-		ses.ep.userConfig.StageFilePath, _, err = s.ToPath()
-		if err != nil {
-			return err
-		}
+	if filePath, ok, err = tryDecodeStagePath(ses, ep.FilePath); err != nil {
+		return
 	}
-	return err
 
+	if ok {
+		ses.ep.userConfig.StageFilePath = filePath
+	}
+
+	return
 }
 
 func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err error) {
@@ -4241,6 +4281,135 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 				return err
 			}
 		}
+	}
+
+	return err
+}
+
+// doAlterRole accomplishes the AlterRole statement
+func doAlterRole(ctx context.Context, ses *Session, ar *tree.AlterRole) (err error) {
+	var vr *verifiedRole
+	var sql string
+	var erArray []ExecResult
+	var exists int
+	account := ses.GetTenantInfo()
+
+	// Normalize old and new role names
+	oldName, err := normalizeName(ctx, ar.OldName)
+	if err != nil {
+		return err
+	}
+	newName, err := normalizeName(ctx, ar.NewName)
+	if err != nil {
+		return err
+	}
+
+	// Check if old name and new name are the same
+	if oldName == newName {
+		return moerr.NewInternalErrorf(ctx, "the new role name is the same as the old role name")
+	}
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	//put it into the single transaction
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return err
+	}
+
+	//step1: check old role exists or not.
+	sql, err = getSqlForRoleIdOfRole(ctx, oldName)
+	if err != nil {
+		return err
+	}
+	vr, err = verifyRoleFunc(ctx, bh, sql, oldName, roleType)
+	if err != nil {
+		return err
+	}
+
+	if vr == nil {
+		if !ar.IfExists {
+			return moerr.NewInternalErrorf(ctx, "there is no role %s", oldName)
+		}
+		// If IF EXISTS is set and role doesn't exist, just return success
+		return nil
+	}
+
+	//step2: check if the role is the admin role (moadmin,accountadmin) or public,
+	//the role can not be renamed.
+	if account.IsNameOfAdminRoles(vr.name) || isPublicRole(vr.name) {
+		return moerr.NewInternalErrorf(ctx, "can not rename the role %s", vr.name)
+	}
+
+	//step3: check if new role name already exists (as role or user)
+	exists = 0
+	if isPredefinedRole(newName) {
+		exists = 3
+	} else {
+		// Check if new name exists as a role
+		sql, err = getSqlForRoleIdOfRole(ctx, newName)
+		if err != nil {
+			return err
+		}
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return err
+		}
+
+		erArray, err = getResultSet(ctx, bh)
+		if err != nil {
+			return err
+		}
+		if execResultArrayHasData(erArray) {
+			exists = 1
+		}
+
+		// Check if new name exists as a user
+		if exists == 0 {
+			sql, err = getSqlForPasswordOfUser(ctx, newName)
+			if err != nil {
+				return err
+			}
+			bh.ClearExecResultSet()
+			err = bh.Exec(ctx, sql)
+			if err != nil {
+				return err
+			}
+
+			erArray, err = getResultSet(ctx, bh)
+			if err != nil {
+				return err
+			}
+			if execResultArrayHasData(erArray) {
+				exists = 2
+			}
+		}
+	}
+
+	if exists != 0 {
+		if exists == 1 {
+			return moerr.NewInternalErrorf(ctx, "the role %s already exists", newName)
+		} else if exists == 2 {
+			return moerr.NewInternalErrorf(ctx, "there is a user with the same name as the role %s", newName)
+		} else if exists == 3 {
+			return moerr.NewInternalErrorf(ctx, "can not use the name %s. it is the name of the predefined role", newName)
+		}
+	}
+
+	//step4: update the role name
+	sql, err = getSqlForUpdateRoleName(ctx, oldName, newName)
+	if err != nil {
+		return err
+	}
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return err
 	}
 
 	return err
@@ -5394,6 +5563,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeCreateRole, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 	case *tree.DropRole:
 		typs = append(typs, PrivilegeTypeDropRole, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeRoleOwnership*/)
+	case *tree.AlterRole:
+		typs = append(typs, PrivilegeTypeAlterRole, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeRoleOwnership*/)
 	case *tree.Grant:
 		if st.Typ == tree.GrantTypeRole {
 			kind = privilegeKindInherit
@@ -5726,13 +5897,18 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeNone
 		kind = privilegeKindSpecial
 		special = specialTagAdmin
-	case *tree.CloneTable:
+	case
+		*tree.CloneTable,
+		*tree.DataBranchCreateTable,
+		*tree.DataBranchDeleteTable,
+		*tree.DataBranchDiff,
+		*tree.DataBranchMerge:
 		objType = objectTypeTable
-		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+		typs = append(typs, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
-	case *tree.CloneDatabase:
+	case *tree.CloneDatabase, *tree.DataBranchCreateDatabase, *tree.DataBranchDeleteDatabase:
 		objType = objectTypeDatabase
-		typs = append(typs, PrivilegeTypeCreateDatabase, PrivilegeTypeAccountAll)
+		typs = append(typs, PrivilegeTypeDatabaseAll, PrivilegeTypeAccountAll)
 		writeDatabaseAndTableDirectly = true
 	default:
 		panic(fmt.Sprintf("does not have the privilege definition of the statement %s", stmt))
@@ -6729,7 +6905,10 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 			}
 			tbName := string(st.Names[0].ObjectName)
 			return checkRoleWhetherTableOwner(ctx, ses, dbName, tbName, ok)
-		case *tree.CloneTable, *tree.CloneDatabase:
+		case *tree.CloneTable, *tree.CloneDatabase,
+			*tree.DataBranchDiff, *tree.DataBranchMerge,
+			*tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase,
+			*tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase:
 			return true, stats, nil
 		}
 	}
@@ -6907,6 +7086,17 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 	var stats statistic.StatsArray
 	stats.Reset()
 
+	if st, ok := stmt.(*tree.CreateTable); ok && st.IsAsSelect {
+		// CTAS needs source-query SELECT privilege even when target-table CREATE
+		// is valid, so we check the source plan explicitly here.
+		ok, delta, err := authenticateCreateTableAsSelectSourcePrivilege(ctx, ses, st)
+		if err != nil {
+			return false, stats, err
+		}
+		stats.Add(&delta)
+		return ok, stats, nil
+	}
+
 	priv := determinePrivilegeSetOfStatement(stmt)
 	if priv.objectType() == objectTypeTable {
 		//only sys account, moadmin role can exec mo_ctrl
@@ -6932,6 +7122,36 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 		return ok, stats, nil
 	}
 	return true, stats, nil
+}
+
+func authenticateCreateTableAsSelectSourcePrivilege(
+	ctx context.Context,
+	ses *Session,
+	st *tree.CreateTable,
+) (bool, statistic.StatsArray, error) {
+	var stats statistic.StatsArray
+	stats.Reset()
+	if st == nil || st.AsSource == nil {
+		return true, stats, nil
+	}
+
+	// Rebuild source-select plan and reuse normal table-scan privilege extraction,
+	// instead of manually parsing AST table references.
+	sourcePlan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), st.AsSource)
+	if err != nil {
+		return false, stats, err
+	}
+	arr := extractPrivilegeTipsFromPlan(sourcePlan)
+	if len(arr) == 0 {
+		return true, stats, nil
+	}
+
+	sourcePriv := determinePrivilegeSetOfStatement(st.AsSource)
+	convertPrivilegeTipsToPrivilege(sourcePriv, arr)
+
+	ok, delta, err := determineUserHasPrivilegeSet(ctx, ses, sourcePriv)
+	stats.Add(&delta)
+	return ok, stats, err
 }
 
 // formSqlFromGrantPrivilege makes the sql for querying the database.
@@ -7774,6 +7994,11 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_ACCOUNT_LOCK)) {
 			return true
 		}
+
+		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_BRANCH_METADATA)) {
+			return true
+		}
+
 		return false
 	}
 

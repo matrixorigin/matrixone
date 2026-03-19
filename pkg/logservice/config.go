@@ -116,6 +116,9 @@ type Config struct {
 	LogDBBufferSize uint64 `toml:"logdb-buffer-size"`
 	// LogDBMaxLogFileSize is the max size of the log db file.
 	LogDBMaxLogFileSize uint64 `toml:"logdb-max-log-file-size"`
+	// LogDBDisablePrealloc disables file preallocation using fallocate. This is useful
+	// when the filesystem (e.g., NFS) does not support fallocate system call.
+	LogDBDisablePrealloc bool `toml:"logdb-disable-prealloc"`
 	// GossipAddress is the address used for accepting gossip communication.
 	// It is deprecated and will be removed.
 	GossipAddress string `toml:"gossip-address" user_setting:"advanced"`

@@ -79,7 +79,7 @@ func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResul
 	}
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 
-	resultValue := types.UnixNanoToTimestamp(proc.GetUnixTime())
+	resultValue := types.UnixNanoToTimestamp(proc.GetUnixTime()).TruncateToScale(scale)
 	for i := uint64(0); i < uint64(length); i++ {
 		if err := rs.Append(resultValue, false); err != nil {
 			return err
@@ -98,7 +98,7 @@ func builtInSysdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	}
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 
-	resultValue := types.UnixNanoToTimestamp(time.Now().UnixNano())
+	resultValue := types.UnixNanoToTimestamp(time.Now().UnixNano()).TruncateToScale(scale)
 	for i := uint64(0); i < uint64(length); i++ {
 		if err := rs.Append(resultValue, false); err != nil {
 			return err
@@ -623,7 +623,7 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 	exec := v.(executor.SQLExecutor)
 
 	deleteTable := func(tbl *table.Table, dateStr string) error {
-		sql := fmt.Sprintf("delete from `%s`.`%s` where `%s` < %q",
+		sql := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` < %q",
 			tbl.Database, tbl.Table, tbl.TimestampColumn.Name, dateStr)
 		opts := executor.Options{}.WithDatabase(tbl.Database).
 			WithTxn(proc.GetTxnOperator()).
@@ -644,7 +644,7 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 		opts := executor.Options{}.WithDatabase(tbl.Database).
 			WithTimeZone(proc.GetSessionInfo().TimeZone)
 		// fixme: hours should > 24 * time.Hour
-		runPruneSql := fmt.Sprintf(`select mo_ctl('dn', 'inspect', 'objprune -t %s.%s -d %s -f')`, tbl.Database, tbl.Table, hours)
+		runPruneSql := fmt.Sprintf(`SELECT mo_ctl('dn', 'inspect', 'objprune -t %s.%s -d %s -f')`, tbl.Database, tbl.Table, hours)
 		res, err := exec.Exec(proc.Ctx, runPruneSql, opts)
 		if err != nil {
 			return "", err
