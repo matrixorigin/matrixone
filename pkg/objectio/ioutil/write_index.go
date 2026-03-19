@@ -17,6 +17,7 @@ package ioutil
 import (
 	hll "github.com/axiomhq/hyperloglog"
 	"github.com/cespare/xxhash/v2"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
@@ -84,6 +85,9 @@ func (b *ObjectColumnMetasBuilder) UpdateZm(idx int, zm index.ZM) {
 	// min and max can be nil if the input vector is null vector
 	if !zm.IsInited() {
 		return
+	}
+	if b.zms[idx] == nil {
+		b.zms[idx] = index.NewZM(types.T(zm.GetType()), zm.GetScale())
 	}
 	index.UpdateZM(b.zms[idx], zm.GetMinBuf())
 	index.UpdateZM(b.zms[idx], zm.GetMaxBuf())
