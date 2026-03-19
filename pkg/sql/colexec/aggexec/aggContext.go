@@ -64,7 +64,7 @@ func (a *AggContext) preAllocate(more int) {
 	a.groupContext = a.groupContext[:oldLen]
 }
 
-func (a *AggContext) growsGroupContext(
+func (a *AggContext) growGroupContexts(
 	more int,
 	resultType types.Type, parameters ...types.Type) {
 	if !a.hasGroupContext {
@@ -94,17 +94,6 @@ func (a *AggContext) getGroupContext(i int) AggGroupExecContext {
 		return a.groupContext[i]
 	}
 	return nil
-}
-
-func (a *AggContext) getGroupContextEncodings() [][]byte {
-	if !a.hasGroupContext {
-		return nil
-	}
-	encodings := make([][]byte, len(a.groupContext))
-	for i := range a.groupContext {
-		encodings[i] = a.groupContext[i].Marshal()
-	}
-	return encodings
 }
 
 func (a *AggContext) getGroupContextEncodingsForFlags(cnt int64, flags [][]uint8) [][]byte {

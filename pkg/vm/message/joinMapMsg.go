@@ -236,15 +236,6 @@ func (jm *JoinMap) GetSpillBuckets() ([]string, []int64) {
 	return jm.SpillBuckets, jm.SpillRowCnts
 }
 
-func (jm *JoinMap) AllGroupHash() []uint64 {
-	if jm.ihm != nil {
-		return jm.ihm.AllGroupHash()
-	} else if jm.shm != nil {
-		return jm.shm.AllGroupHash()
-	}
-	return nil
-}
-
 func (jm *JoinMap) IsDeleted(row uint64) bool {
 	return jm.delRows != nil && jm.delRows.Contains(uint64(row))
 }
