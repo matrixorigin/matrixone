@@ -993,12 +993,18 @@ func (txn *Transaction) getTable(
 	dbName string,
 	tbName string,
 ) (engine.Relation, error) {
+	if txn.engine == nil {
+		return nil, moerr.NewInternalErrorNoCtx("disttae txn engine is nil")
+	}
+
 	var txnOp client.TxnOperator
-	if txn.proc != nil {
+	if txn.op != nil {
+		txnOp = txn.op
+	} else if txn.proc != nil {
 		txnOp = txn.proc.GetTxnOperator()
 	}
 	if txnOp == nil {
-		txnOp = txn.op
+		return nil, moerr.NewInternalErrorNoCtx("disttae txn operator is nil")
 	}
 
 	ctx := context.WithValue(
