@@ -33,14 +33,29 @@ TEST(GpuCagraTest, BasicLoadAndSearch) {
     ASSERT_TRUE(dev_count > 0);
     std::vector<int> devices(1);
     gpu_get_device_list(devices.data(), 1);
+    
     cagra_build_params_t bp = cagra_build_params_default();
+    // Use smaller degrees for small test dataset to speed up build
+    bp.intermediate_graph_degree = 32;
+    bp.graph_degree = 16;
+
     gpu_cagra_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+    
+    auto start_time = std::chrono::steady_clock::now();
     index.start();
     index.build();
+    auto end_time = std::chrono::steady_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+    TEST_LOG("CAGRA Build took " << duration << " ms");
 
     std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
     cagra_search_params_t sp = cagra_search_params_default();
+    
+    start_time = std::chrono::steady_clock::now();
     auto result = index.search(queries.data(), 1, dimension, 5, sp);
+    end_time = std::chrono::steady_clock::now();
+    duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+    TEST_LOG("CAGRA Search took " << duration << " ms");
 
     ASSERT_EQ(result.neighbors.size(), (size_t)5);
     ASSERT_EQ(result.neighbors[0], 0u);
@@ -62,6 +77,8 @@ TEST(GpuCagraTest, SaveAndLoadFromFile) {
     // 1. Build and Save
     {
         cagra_build_params_t bp = cagra_build_params_default();
+        bp.intermediate_graph_degree = 32;
+        bp.graph_degree = 16;
         gpu_cagra_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
         index.start();
         index.build();
@@ -72,6 +89,8 @@ TEST(GpuCagraTest, SaveAndLoadFromFile) {
     // 2. Load and Search
     {
         cagra_build_params_t bp = cagra_build_params_default();
+        bp.intermediate_graph_degree = 32;
+        bp.graph_degree = 16;
         gpu_cagra_t<float> index(filename, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
         index.start();
         index.build();
@@ -101,6 +120,8 @@ TEST(GpuCagraTest, ShardedModeSimulation) {
     gpu_get_device_list(devices.data(), dev_count);
 
     cagra_build_params_t bp = cagra_build_params_default();
+    bp.intermediate_graph_degree = 32;
+    bp.graph_degree = 16;
     gpu_cagra_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SHARDED);
     index.start();
     index.build();
@@ -126,6 +147,8 @@ TEST(GpuCagraTest, ReplicatedModeSimulation) {
     gpu_get_device_list(devices.data(), dev_count);
 
     cagra_build_params_t bp = cagra_build_params_default();
+    bp.intermediate_graph_degree = 32;
+    bp.graph_degree = 16;
     gpu_cagra_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_REPLICATED);
     index.start();
     index.build();
