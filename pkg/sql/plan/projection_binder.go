@@ -171,6 +171,12 @@ func (b *ProjectionBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, 
 				return nil, err
 			}
 
+			// unwrap cast_index_to_value for ENUM columns so that
+			// window ORDER BY sorts by definition order, not alphabetically
+			if fn := expr.GetF(); fn != nil && fn.Func.ObjName == moEnumCastIndexToValueFun {
+				expr = fn.Args[1]
+			}
+
 			orderBy := &plan.OrderBySpec{
 				Expr: expr,
 				Flag: plan.OrderBySpec_INTERNAL,

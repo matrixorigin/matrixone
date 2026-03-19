@@ -3756,6 +3756,28 @@ func (builder *QueryBuilder) bindOrderBy(
 			return
 		}
 
+		// If the ORDER BY expression references a projected cast_index_to_value(enum_str, col),
+		// replace it with the original ENUM column so that sorting uses the internal integer
+		// value (definition order) instead of the string value (alphabetical order).
+		if col := expr.GetCol(); col != nil && col.RelPos == ctx.projectTag {
+			if projExpr := ctx.projects[col.ColPos]; projExpr != nil {
+				if fn := projExpr.GetF(); fn != nil && fn.Func.ObjName == moEnumCastIndexToValueFun {
+					enumColExpr := fn.Args[1]
+					colPos := int32(len(ctx.projects))
+					ctx.projects = append(ctx.projects, enumColExpr)
+					expr = &plan.Expr{
+						Typ: enumColExpr.Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: ctx.projectTag,
+								ColPos: colPos,
+							},
+						},
+					}
+				}
+			}
+		}
+
 		orderBy := &plan.OrderBySpec{
 			Expr: expr,
 			Flag: plan.OrderBySpec_INTERNAL,
