@@ -90,12 +90,13 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 	case plan.Node_WINDOW:
 		windowTag := node.BindingTags[0]
+		windowIdx := node.GetWindowIdx()
 
 		for _, filter := range filters {
-			if !containsTag(filter, windowTag) {
-				canPushdown = append(canPushdown, replaceColRefs(filter, windowTag, node.WinSpecList))
-			} else {
+			if containsTagCol(filter, windowTag, windowIdx) {
 				node.FilterList = append(node.FilterList, filter)
+			} else {
+				canPushdown = append(canPushdown, filter)
 			}
 		}
 

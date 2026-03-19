@@ -4662,4 +4662,27 @@ grp    a    bucket
 2    5    1
 2    8    2
 drop table t_ntile;
+drop table if exists test_pr_blob;
+create table test_pr_blob (id int, val blob);
+insert into test_pr_blob values (1, 'abc'), (2, 'def'), (3, 'xyz');
+select id, percent_rank() over (order by val) as pct_rank from test_pr_blob order by val;
+id    pct_rank
+1    0.0
+2    0.5
+3    1.0
+select id, rank() over (order by val) as rnk from test_pr_blob order by val;
+id    rnk
+1    1
+2    2
+3    3
+drop table test_pr_blob;
+drop table if exists test_pr_binary;
+create table test_pr_binary (id int, val varbinary(20));
+insert into test_pr_binary values (1, 'abc'), (2, 'def'), (3, 'xyz');
+select id, percent_rank() over (order by val) as pct_rank from test_pr_binary order by val;
+id    pct_rank
+1    0.0
+2    0.5
+3    1.0
+drop table test_pr_binary;
 drop database test;
