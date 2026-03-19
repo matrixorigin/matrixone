@@ -123,14 +123,14 @@ func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexD
 			pKeyMsg = "serial("
 			for i, part := range originTableDef.Pkey.Names {
 				if i == 0 {
-					pKeyMsg += "`" + part + "`"
+					pKeyMsg += quoteMySQLIdent(part)
 				} else {
-					pKeyMsg += "," + "`" + part + "`"
+					pKeyMsg += "," + quoteMySQLIdent(part)
 				}
 			}
 			pKeyMsg += ")"
 		} else {
-			pKeyMsg = pkeyName
+			pKeyMsg = quoteMySQLQualifiedIdent(pkeyName)
 		}
 		if len(indexDef.Parts) == 1 {
 			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, temp, pKeyMsg, DBName, originTableDef.Name, temp)
@@ -156,14 +156,14 @@ func genInsertIndexTableSqlForMasterIndex(originTableDef *plan.TableDef, indexDe
 		pKeyMsg = "serial("
 		for i, part := range originTableDef.Pkey.Names {
 			if i == 0 {
-				pKeyMsg += part
+				pKeyMsg += quoteMySQLIdent(part)
 			} else {
-				pKeyMsg += "," + part
+				pKeyMsg += "," + quoteMySQLIdent(part)
 			}
 		}
 		pKeyMsg += ")"
 	} else {
-		pKeyMsg = pkeyName
+		pKeyMsg = quoteMySQLQualifiedIdent(pkeyName)
 	}
 
 	colSeqNumMap := make(map[string]string)
@@ -175,9 +175,10 @@ func genInsertIndexTableSqlForMasterIndex(originTableDef *plan.TableDef, indexDe
 	}
 
 	for i, part := range indexDef.Parts {
+		resolvedPart := catalog.ResolveAlias(part)
 		insertSQLs[i] = fmt.Sprintf(insertIntoMasterIndexTableFormat,
 			DBName, indexDef.IndexTableName,
-			colSeqNumMap[part], part, pKeyMsg, pKeyMsg, DBName, originTableDef.Name)
+			colSeqNumMap[resolvedPart], quoteMySQLQualifiedIdent(resolvedPart), pKeyMsg, pKeyMsg, DBName, originTableDef.Name)
 	}
 
 	return insertSQLs
@@ -426,16 +427,9 @@ func (s *Scope) checkTableWithValidIndexes(c *Compile, relation engine.Relation)
 		if idxdef, ok := constraint.(*engine.IndexDef); ok && len(idxdef.Indexes) > 0 {
 			for _, idx := range idxdef.Indexes {
 				if idx.TableExist {
-					var indexflag string
+					// Only check hnswIndexFlag
 					if catalog.IsHnswIndexAlgo(idx.IndexAlgo) {
-						indexflag = hnswIndexFlag
-					} else if catalog.IsIvfIndexAlgo(idx.IndexAlgo) {
-						indexflag = ivfFlatIndexFlag
-					} else if catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
-						indexflag = fulltextIndexFlag
-					}
-
-					if len(indexflag) > 0 {
+						indexflag := hnswIndexFlag
 						if ok, err := s.isExperimentalEnabled(c, indexflag); err != nil {
 							return err
 						} else if !ok {
@@ -457,6 +451,7 @@ func partsToColsStr(parts []string) string {
 	var temp string
 	for i, part := range parts {
 		part = catalog.ResolveAlias(part)
+		part = quoteMySQLQualifiedIdent(part)
 		if i == 0 {
 			temp += part
 		} else {
@@ -464,6 +459,18 @@ func partsToColsStr(parts []string) string {
 		}
 	}
 	return temp
+}
+
+func quoteMySQLIdent(ident string) string {
+	return "`" + strings.ReplaceAll(ident, "`", "``") + "`"
+}
+
+func quoteMySQLQualifiedIdent(ident string) string {
+	parts := strings.Split(ident, ".")
+	for i := range parts {
+		parts[i] = quoteMySQLIdent(parts[i])
+	}
+	return strings.Join(parts, ".")
 }
 
 // haveSinkScanInPlan Start from the `curNodeIdx` node, recursively check its Subtree all nodes,

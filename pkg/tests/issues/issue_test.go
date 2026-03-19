@@ -17,13 +17,16 @@ package issues
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"fmt"
 	"math/rand"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -46,6 +49,149 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/stretchr/testify/require"
 )
+
+func TestIssue23861FulltextSnapshotRestore(t *testing.T) {
+	embed.RunBaseClusterTests(
+		func(c embed.Cluster) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*240)
+			defer cancel()
+
+			cn, err := c.GetCNService(0)
+			require.NoError(t, err)
+
+			port := cn.GetServiceConfig().CN.Frontend.Port
+			dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?multiStatements=true", port)
+			sqlDB, err := sql.Open("mysql", dsn)
+			require.NoError(t, err)
+			defer sqlDB.Close()
+			sqlDB.SetMaxOpenConns(4)
+
+			dbName := strings.ToLower(testutils.GetDatabaseName(t))
+			tableName := "ft_test"
+			snapshotName1 := fmt.Sprintf("snap_23861_a_%d", time.Now().UnixNano())
+			snapshotName2 := fmt.Sprintf("snap_23861_b_%d", time.Now().UnixNano())
+
+			defer execSQLMaybe(t, ctx, sqlDB, fmt.Sprintf("drop snapshot if exists %s", snapshotName1))
+			defer execSQLMaybe(t, ctx, sqlDB, fmt.Sprintf("drop snapshot if exists %s", snapshotName2))
+			defer execSQLMaybe(t, ctx, sqlDB, fmt.Sprintf("drop database if exists `%s`", dbName))
+
+			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf("drop snapshot if exists %s", snapshotName1))
+			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf("drop snapshot if exists %s", snapshotName2))
+			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf("drop database if exists `%s`", dbName))
+			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf("create database `%s`", dbName))
+			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf(
+				"create table `%s`.`%s` (id int primary key, content text, fulltext index ft_content (content) with parser ngram)",
+				dbName,
+				tableName,
+			))
+			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf("insert into `%s`.`%s` values (1, 'hello')", dbName, tableName))
+			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf("create snapshot %s for account sys", snapshotName1))
+			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf("delete from `%s`.`%s`", dbName, tableName))
+			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf("insert into `%s`.`%s` values (2, 'world')", dbName, tableName))
+			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf("create snapshot %s for account sys", snapshotName2))
+
+			conn1, err := sqlDB.Conn(ctx)
+			require.NoError(t, err)
+			defer conn1.Close()
+
+			conn2, err := sqlDB.Conn(ctx)
+			require.NoError(t, err)
+			defer conn2.Close()
+
+			restoreSQL1 := fmt.Sprintf(
+				"delete from `%s`.`%s`; insert into `%s`.`%s` select * from `%s`.`%s` {SNAPSHOT='%s'};",
+				dbName,
+				tableName,
+				dbName,
+				tableName,
+				dbName,
+				tableName,
+				snapshotName1,
+			)
+			restoreSQL2 := fmt.Sprintf(
+				"delete from `%s`.`%s`; insert into `%s`.`%s` select * from `%s`.`%s` {SNAPSHOT='%s'};",
+				dbName,
+				tableName,
+				dbName,
+				tableName,
+				dbName,
+				tableName,
+				snapshotName2,
+			)
+
+			for round := 0; round < 20; round++ {
+				runConcurrentRestoreRound(t, ctx, restoreSQL1, restoreSQL2, conn1, conn2, round)
+			}
+
+			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf("delete from `%s`.`%s`", dbName, tableName))
+			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf("insert into `%s`.`%s` values (3, 'world-again')", dbName, tableName))
+
+			rows, err := sqlDB.QueryContext(ctx, fmt.Sprintf("select id, content from `%s`.`%s` order by id", dbName, tableName))
+			require.NoError(t, err)
+			defer rows.Close()
+
+			type row struct {
+				id      int
+				content string
+			}
+			var got []row
+			for rows.Next() {
+				var r row
+				require.NoError(t, rows.Scan(&r.id, &r.content))
+				got = append(got, r)
+			}
+			require.NoError(t, rows.Err())
+			require.Equal(t, []row{
+				{id: 3, content: "world-again"},
+			}, got)
+		},
+	)
+}
+
+func runConcurrentRestoreRound(
+	t *testing.T,
+	ctx context.Context,
+	restoreSQL1 string,
+	restoreSQL2 string,
+	conn1 *sql.Conn,
+	conn2 *sql.Conn,
+	round int,
+) {
+	t.Helper()
+
+	start := make(chan struct{})
+	errC := make(chan error, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	run := func(conn *sql.Conn, restoreSQL string) {
+		defer wg.Done()
+		<-start
+		_, err := conn.ExecContext(ctx, restoreSQL)
+		errC <- err
+	}
+
+	go run(conn1, restoreSQL1)
+	go run(conn2, restoreSQL2)
+	close(start)
+	wg.Wait()
+	close(errC)
+
+	for err := range errC {
+		require.NoErrorf(t, err, "concurrent fulltext snapshot restore failed at round %d", round)
+	}
+}
+
+func execSQLRequire(t *testing.T, ctx context.Context, db *sql.DB, statement string) {
+	t.Helper()
+	_, err := db.ExecContext(ctx, statement)
+	require.NoErrorf(t, err, "exec failed: %s", statement)
+}
+
+func execSQLMaybe(t *testing.T, ctx context.Context, db *sql.DB, statement string) {
+	t.Helper()
+	_, _ = db.ExecContext(ctx, statement)
+}
 
 func TestWWConflict(t *testing.T) {
 	embed.RunBaseClusterTests(
@@ -647,29 +793,36 @@ func TestIssue19551(t *testing.T) {
 
 			// workflow:
 			// start txn1, txn2 on cn1
+			// txn1, txn2 both do insert before CN is marked invalid
 			// mark cn1 invalid
-			// commit txn1
-			// wait abort active txn completed
-			// commit txn2
+			// txn1 commits first, gets ErrCannotCommitOnInvalidCN, triggers markAllActiveTxnAborted
+			// wait abort active txn completed (service resume)
+			// txn2 commits, gets ErrTxnClosed (already marked aborted)
 			// start txn3 and commit will success
+			//
+			// Note: txn1 may also get ErrTxnClosed if a background task (e.g. mo_table_stats)
+			// commits while CN is invalid and triggers markAllActiveTxnAborted before txn1.
 
 			var wg sync.WaitGroup
 			wg.Add(2)
 
 			txn1StartedC := make(chan struct{})
 			txn2StartedC := make(chan struct{})
+			txn1InsertedC := make(chan struct{})
+			txn2InsertedC := make(chan struct{})
 			invalidMarkedC := make(chan struct{})
+			txn1CommittedC := make(chan struct{})
 
 			// txn1
 			exec := testutils.GetSQLExecutor(cn1)
 			go func() {
 				defer wg.Done()
+				defer close(txn1CommittedC)
 
 				err := exec.ExecTxn(
 					ctx,
 					func(txn executor.TxnExecutor) error {
 						close(txn1StartedC)
-						<-invalidMarkedC
 
 						res, err := txn.Exec(
 							"insert into "+table+" values (1, 1)",
@@ -679,14 +832,23 @@ func TestIssue19551(t *testing.T) {
 							return err
 						}
 						res.Close()
+
+						close(txn1InsertedC)
+						// wait until CN is marked invalid, then return to trigger commit
+						<-invalidMarkedC
 						return nil
 					},
 					executor.Options{}.WithDatabase(db),
 				)
 				require.Error(t, err)
+				// txn1 gets ErrCannotCommitOnInvalidCN when its commit reaches TN validation.
+				// However, if a background task (e.g. mo_table_stats) commits while CN is invalid
+				// before txn1, it triggers markAllActiveTxnAborted first, marking txn1 as aborted,
+				// in which case txn1 gets ErrTxnClosed instead.
 				require.Truef(
 					t,
-					moerr.IsMoErrCode(err, moerr.ErrCannotCommitOnInvalidCN),
+					moerr.IsMoErrCode(err, moerr.ErrCannotCommitOnInvalidCN) ||
+						moerr.IsMoErrCode(err, moerr.ErrTxnClosed),
 					fmt.Sprintf("got: %v", err))
 			}()
 
@@ -707,7 +869,11 @@ func TestIssue19551(t *testing.T) {
 						}
 						res.Close()
 
-						// wait valid service resume, means all active in txn client is marked aborted
+						close(txn2InsertedC)
+						// wait txn1 committed first, which triggers markAllActiveTxnAborted
+						<-txn1CommittedC
+
+						// wait service resume, which means markAllActiveTxnAborted + Resume completed
 						for {
 							if !allocator.HasInvalidService(lockSID) {
 								break
@@ -728,6 +894,11 @@ func TestIssue19551(t *testing.T) {
 
 			<-txn1StartedC
 			<-txn2StartedC
+			// wait both txns to finish insert before marking CN invalid,
+			// so that commit happens immediately after invalidMarkedC is closed,
+			// minimizing the window for background tasks to interfere.
+			<-txn1InsertedC
+			<-txn2InsertedC
 
 			// mark cn1 invalid
 			allocator.AddInvalidService(lockSID)

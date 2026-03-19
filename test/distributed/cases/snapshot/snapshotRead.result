@@ -607,7 +607,7 @@ drop snapshot if exists sp06;
 create snapshot sp06 for account;
 select count(*) from mo_catalog.mo_tables{snapshot = sp06} where reldatabase = 'mo_catalog';
 count(*)
-50
+52
 select * from mo_catalog.mo_database{snapshot = sp06} where datname = 'mo_catalog';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
 1    mo_catalog    mo_catalog        0    0    2025-07-18 22:30:42    0    
@@ -689,7 +689,7 @@ create snapshot sp07 for account;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 sp07    2025-07-17 19:14:27.430645    account    sys        
-account_sp    2025-07-17 19:12:33.077715    account    sys        
+account_sp    2025-07-17 19:12:33.077715    account    sys
 select count(*) from pt_table{snapshot = 'sp07'};
 count(*)
 11

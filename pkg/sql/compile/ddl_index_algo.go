@@ -32,9 +32,7 @@ import (
 )
 
 const (
-	ivfFlatIndexFlag  = "experimental_ivf_index"
-	fulltextIndexFlag = "experimental_fulltext_index"
-	hnswIndexFlag     = "experimental_hnsw_index"
+	hnswIndexFlag = "experimental_hnsw_index"
 )
 
 func (s *Scope) handleUniqueIndexTable(
@@ -115,7 +113,7 @@ func (s *Scope) handleMasterIndexTable(
 
 	insertSQLs := genInsertIndexTableSqlForMasterIndex(originalTableDef, indexDef, qryDatabase)
 	for _, insertSQL := range insertSQLs {
-		err = c.runSql(insertSQL)
+		err = c.runSqlWithOptions(insertSQL, executor.StatementOption{}.WithDisableLog())
 		if err != nil {
 			return err
 		}
@@ -133,11 +131,6 @@ func (s *Scope) handleFullTextIndexTable(
 	originalTableDef *plan.TableDef,
 	indexInfo *plan.CreateTable,
 ) error {
-	if ok, err := s.isExperimentalEnabled(c, fulltextIndexFlag); err != nil {
-		return err
-	} else if !ok {
-		return moerr.NewInternalErrorNoCtx("FullText index is not enabled")
-	}
 	if len(indexInfo.GetIndexTables()) != 1 {
 		return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
 	}
@@ -150,7 +143,7 @@ func (s *Scope) handleFullTextIndexTable(
 
 	insertSQLs := genInsertIndexTableSqlForFullTextIndex(originalTableDef, indexDef, qryDatabase)
 	for _, insertSQL := range insertSQLs {
-		err = c.runSql(insertSQL)
+		err = c.runSqlWithOptions(insertSQL, executor.StatementOption{}.WithDisableLog())
 		if err != nil {
 			return err
 		}
@@ -161,11 +154,15 @@ func (s *Scope) handleFullTextIndexTable(
 func (s *Scope) handleIndexColCount(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) (int64, error) {
 
 	indexColumnName := indexDef.Parts[0]
-	countTotalSql := fmt.Sprintf("select count(`%s`) from `%s`.`%s`;",
+	countTotalSql := fmt.Sprintf("SELECT COUNT(`%s`) FROM `%s`.`%s`;",
 		indexColumnName,
 		qryDatabase,
 		originalTableDef.Name)
-	rs, err := c.runSqlWithResult(countTotalSql, NoAccountId)
+	rs, err := c.runSqlWithResultAndOptions(
+		countTotalSql,
+		NoAccountId,
+		executor.StatementOption{}.WithDisableLog(),
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -193,7 +190,7 @@ func (s *Scope) handleIvfIndexMetaTable(c *Compile, indexDef *plan.IndexDef, qry
 		INSERT INTO meta (`key`, `value`) VALUES ('version', '0') ON DUPLICATE KEY UPDATE `value` = CAST( (cast(`value` AS BIGINT) + 1) AS CHAR);
 	*/
 
-	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`) values('version', '0')"+
+	insertSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`) VALUES('version', '0')"+
 		"ON DUPLICATE KEY UPDATE `%s` = CAST( (CAST(`%s` AS BIGINT) + 1) AS CHAR);",
 		qryDatabase,
 		indexDef.IndexTableName,
@@ -204,7 +201,8 @@ func (s *Scope) handleIvfIndexMetaTable(c *Compile, indexDef *plan.IndexDef, qry
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
 	)
 
-	err := c.runSql(insertSQL)
+	// Disable SQL logging for vector index metadata table operations
+	err := c.runSqlWithOptions(insertSQL, executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
 	}
@@ -255,7 +253,8 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 			metadataTableName,
 			catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
 		)
-		err := c.runSql(initSQL)
+		// Disable SQL logging for vector index centroids table initialization
+		err := c.runSqlWithOptions(initSQL, executor.StatementOption{}.WithDisableLog())
 		if err != nil {
 			return err
 		}
@@ -287,21 +286,18 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 		return err
 	}
 
-	part := src_alias + "." + indexDef.Parts[0]
-	insertIntoIvfIndexTableFormat := "SELECT f.* from `%s`.`%s` AS %s CROSS APPLY ivf_create('%s', '%s', %s) AS f;"
+	insertIntoIvfIndexTableFormat := "SELECT * FROM ivf_create('%s', '%s') AS f;"
 	sql := fmt.Sprintf(insertIntoIvfIndexTableFormat,
-		qryDatabase, originalTableDef.Name,
-		src_alias,
 		params_str,
-		string(cfgbytes),
-		part)
+		string(cfgbytes))
 
 	err = s.logTimestamp(c, qryDatabase, metadataTableName, "clustering_start")
 	if err != nil {
 		return err
 	}
 
-	err = c.runSql(sql)
+	// Disable SQL logging for vector index centroids clustering
+	err = c.runSqlWithOptions(sql, executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
 	}
@@ -345,7 +341,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 	}
 
 	// 2. insert into entries table
-	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`, `%s`) ",
+	insertSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`, `%s`) ",
 		qryDatabase,
 		indexDef.IndexTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
@@ -355,9 +351,9 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 	)
 
 	// 3. centroids table with latest version
-	centroidsTableForCurrentVersionSql := fmt.Sprintf("(select * from "+
-		"`%s`.`%s` where `%s` = "+
-		"(select CAST(%s as BIGINT) from `%s`.`%s` where `%s` = 'version'))  as `%s`",
+	centroidsTableForCurrentVersionSql := fmt.Sprintf("(SELECT * FROM "+
+		"`%s`.`%s` WHERE `%s` = "+
+		"(SELECT CAST(%s as BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version'))  as `%s`",
 		qryDatabase,
 		centroidsTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
@@ -373,8 +369,8 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 	indexColumnName := indexDef.Parts[0]
 	centroidsCrossL2JoinTbl := fmt.Sprintf("%s "+
 		"SELECT `%s`, `%s`,  %s, `%s`"+
-		" FROM `%s`.`%s` CENTROIDX ('%s') join %s "+
-		" using (`%s`, `%s`) ",
+		" FROM `%s`.`%s` CENTROIDX ('%s') JOIN %s "+
+		" USING (`%s`, `%s`) ",
 		insertSQL,
 
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
@@ -396,7 +392,8 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		return err
 	}
 
-	err = c.runSql(centroidsCrossL2JoinTbl)
+	// Disable SQL logging for vector index entries table mapping
+	err = c.runSqlWithOptions(centroidsCrossL2JoinTbl, executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
 	}
@@ -410,9 +407,10 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 }
 
 func (s *Scope) logTimestamp(c *Compile, qryDatabase, metadataTableName, metrics string) error {
-	return c.runSql(fmt.Sprintf("INSERT INTO `%s`.`%s` (%s, %s) "+
-		" VALUES ('%s', NOW()) "+
-		" ON DUPLICATE KEY UPDATE %s = NOW();",
+	// Disable SQL logging for vector index timestamp logging
+	return c.runSqlWithOptions(fmt.Sprintf("INSERT INTO `%s`.`%s` (%s, %s) "+
+		"VALUES ('%s', NOW()) "+
+		"ON DUPLICATE KEY UPDATE %s = NOW();",
 		qryDatabase,
 		metadataTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
@@ -421,14 +419,13 @@ func (s *Scope) logTimestamp(c *Compile, qryDatabase, metadataTableName, metrics
 		metrics,
 
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-	))
+	), executor.StatementOption{}.WithDisableLog())
 }
 
 func (s *Scope) isExperimentalEnabled(c *Compile, flag string) (bool, error) {
-
 	if s.Magic == TableClone {
 		skipFlags := []string{
-			fulltextIndexFlag, ivfFlatIndexFlag, hnswIndexFlag,
+			hnswIndexFlag,
 		}
 
 		// if the scope is a table clone means we are trying to
@@ -487,12 +484,13 @@ func (s *Scope) handleIvfIndexDeleteOldEntries(c *Compile,
 		return err
 	}
 
-	err = c.runSql(pruneCentroidsTbl)
+	// Disable SQL logging for vector index old entries pruning
+	err = c.runSqlWithOptions(pruneCentroidsTbl, executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
 	}
 
-	err = c.runSql(pruneEntriesTbl)
+	err = c.runSqlWithOptions(pruneEntriesTbl, executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
 	}
@@ -551,7 +549,8 @@ func (s *Scope) handleVectorHnswIndex(
 		}
 
 		for _, sql := range sqls {
-			err = c.runSql(sql)
+			// Disable SQL logging for vector index SQL execution
+			err = c.runSqlWithOptions(sql, executor.StatementOption{}.WithDisableLog())
 			if err != nil {
 				return err
 			}
@@ -565,7 +564,8 @@ func (s *Scope) handleVectorHnswIndex(
 	}
 
 	for _, sql := range sqls {
-		err = c.runSql(sql)
+		// Disable SQL logging for vector index SQL execution
+		err = c.runSqlWithOptions(sql, executor.StatementOption{}.WithDisableLog())
 		if err != nil {
 			return err
 		}

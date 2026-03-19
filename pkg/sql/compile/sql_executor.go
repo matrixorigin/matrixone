@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -110,19 +111,38 @@ func (s *sqlExecutor) Exec(
 	opts executor.Options,
 ) (executor.Result, error) {
 	ctx = perfcounter.AttachTxnExecutorKey(ctx)
-	var res executor.Result
-	err := s.ExecTxn(
-		ctx,
-		func(exec executor.TxnExecutor) error {
-			v, err := exec.Exec(sql, opts.StatementOption())
-			res = v
-			return err
-		},
-		opts.WithSQL(sql))
-	if err != nil {
-		return executor.Result{}, err
+
+	var (
+		res executor.Result
+	)
+
+	// use an outer txn to execute this sql and DO NOT
+	// commit or rollback after this execution finished.
+	if opts.ExistsTxn() && opts.KeepTxnAlive() {
+		var (
+			err  error
+			exec *txnExecutor
+		)
+
+		if exec, err = newTxnExecutor(ctx, s, opts); err != nil {
+			return res, err
+		}
+
+		return exec.Exec(sql, opts.StatementOption())
+	} else {
+		err := s.ExecTxn(
+			ctx,
+			func(exec executor.TxnExecutor) error {
+				v, err := exec.Exec(sql, opts.StatementOption())
+				res = v
+				return err
+			},
+			opts.WithSQL(sql))
+		if err != nil {
+			return executor.Result{}, err
+		}
+		return res, nil
 	}
-	return res, nil
 }
 
 func (s *sqlExecutor) ExecTxn(
@@ -139,7 +159,7 @@ func (s *sqlExecutor) ExecTxn(
 	if err != nil {
 		logutil.Error("internal sql executor error",
 			zap.Error(err),
-			zap.String("sql", opts.SQL()),
+			zap.String("sql", commonutil.Abbreviate(opts.SQL(), 500)),
 			zap.String("txn", exec.Txn().Txn().DebugString()),
 		)
 		return exec.rollback(err)
@@ -166,13 +186,18 @@ func (s *sqlExecutor) getCompileContext(
 	proc *process.Process,
 	db string,
 	lower int64) *compilerContext {
-	return &compilerContext{
+	cc := &compilerContext{
 		ctx:       ctx,
 		defaultDB: db,
 		engine:    s.eng,
 		proc:      proc,
 		lower:     lower,
 	}
+	// For testing: check if a stats cache is provided in context
+	if statsCache, ok := ctx.Value("test_stats_cache").(*plan.StatsCache); ok {
+		cc.statsCache = statsCache
+	}
+	return cc
 }
 
 func (s *sqlExecutor) adjustOptions(
@@ -357,6 +382,8 @@ func (exec *txnExecutor) Exec(
 					Query: optimized,
 				},
 			}
+		} else {
+			return executor.Result{}, err
 		}
 	default:
 		pn, err = plan.BuildPlan(compileContext, stmt, prepared)
@@ -416,9 +443,6 @@ func (exec *txnExecutor) Exec(
 	result := executor.NewResult(exec.s.mp)
 
 	stream_chan, err_chan, streaming := exec.opts.Streaming()
-	if streaming {
-		defer close(stream_chan)
-	}
 
 	if exec.opts.ForceRebuildPlan() {
 		pn, err = c.buildPlanFunc(proc.Ctx)
@@ -484,12 +508,8 @@ func (exec *txnExecutor) Exec(
 	}
 
 	if !statementOption.DisableLog() {
-		printSql := sql
-		if len(printSql) > 1000 {
-			printSql = printSql[:1000] + "..."
-		}
 		logutil.Info("sql_executor exec",
-			zap.String("sql", printSql),
+			zap.String("sql", commonutil.Abbreviate(sql, 500)),
 			zap.String("txn-id", hex.EncodeToString(exec.opts.Txn().Txn().ID)),
 			zap.Duration("duration", time.Since(receiveAt)),
 			zap.Int("BatchSize", len(batches)),

@@ -185,6 +185,32 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			}
 			return nil
 		}
+	case types.T_int8:
+		if st.Kind() != parquet.Int32 {
+			break
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			if page.Dictionary() != nil {
+				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
+			}
+			data := page.Data()
+			return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) int8 {
+				return int8(v)
+			})
+		}
+	case types.T_int16:
+		if st.Kind() != parquet.Int32 {
+			break
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			if page.Dictionary() != nil {
+				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
+			}
+			data := page.Data()
+			return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) int16 {
+				return int16(v)
+			})
+		}
 	case types.T_int32:
 		if st.Kind() != parquet.Int32 {
 			break
@@ -364,7 +390,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				return moerr.NewInternalError(proc.Ctx, "unknown unit")
 			}
 		}
-	case types.T_char, types.T_varchar:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob:
 		if st.Kind() != parquet.ByteArray && st.Kind() != parquet.FixedLenByteArray {
 			break
 		}

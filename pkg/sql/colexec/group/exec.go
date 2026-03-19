@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -103,6 +104,9 @@ func (group *Group) prepareGroup(proc *process.Process) (err error) {
 		group.ctr.keyNullable = group.ctr.keyNullable || (!expr.Typ.NotNullable)
 	}
 	for _, expr := range group.Exprs {
+		if expr.Typ.Id == int32(types.T_tuple) {
+			return moerr.NewInternalErrorNoCtx("tuple is not supported as group by column")
+		}
 		width := GetKeyWidth(types.T(expr.Typ.Id), expr.Typ.Width, group.ctr.keyNullable)
 		group.ctr.keyWidth += width
 	}

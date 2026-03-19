@@ -236,6 +236,10 @@ func (node *AlterUser) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
 
+func (node *AlterRole) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
 func (node *CreateRole) StmtKind() StmtKind {
 	return frontendStatusTyp
 }

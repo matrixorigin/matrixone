@@ -502,6 +502,7 @@ func Test_determinePrivilege(t *testing.T) {
 		{stmt: &tree.AlterUser{}},
 		{stmt: &tree.CreateRole{}},
 		{stmt: &tree.DropRole{}},
+		{stmt: &tree.AlterRole{}},
 		{stmt: &tree.GrantRole{}},
 		{stmt: &tree.RevokeRole{}},
 		{stmt: &tree.GrantPrivilege{}},
@@ -11542,4 +11543,25 @@ func Test_authenticateUserCanExecuteStatementWithObjectTypeNone(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
+}
+
+func Test_determinePrivilegeSetOfStatement_CreateTableAsSelect(t *testing.T) {
+	stmt := &tree.CreateTable{
+		IsAsSelect: true,
+	}
+	priv := determinePrivilegeSetOfStatement(stmt)
+
+	require.Equal(t, objectTypeDatabase, priv.objectType())
+	require.NotEmpty(t, priv.entries)
+
+	seen := make(map[PrivilegeType]bool)
+	for _, entry := range priv.entries {
+		seen[entry.privilegeId] = true
+	}
+
+	require.True(t, seen[PrivilegeTypeCreateTable])
+	require.True(t, seen[PrivilegeTypeDatabaseAll])
+	require.True(t, seen[PrivilegeTypeDatabaseOwnership])
+	require.False(t, seen[PrivilegeTypeSelect])
+	require.False(t, seen[PrivilegeTypeInsert])
 }

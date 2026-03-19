@@ -1,6 +1,4 @@
--- TODO: run all tests with both experimental_fulltext_index = 0 and 1
 -- TODO: GENERATE the test case to cover all combinations of types (varchar, char and text)
-set experimental_fulltext_index=1;
 set ft_relevancy_algorithm="BM25";
 
 create table src (id bigint primary key, body varchar, title text);
@@ -185,7 +183,7 @@ drop table src2;
 
 -- bytejson parser
 create table src (id bigint primary key, json1 json, json2 json);
-insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"winter"}'), 
+insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"winter"}'),
 (1, '{"a":2, "b":"中文學習教材"}', '["apple", "orange", "banana", "指引"]'),
 (2, '{"a":3, "b":"red blue"}', '{"d":"兒童中文"}');
 

@@ -16,6 +16,12 @@ package plan
 
 import (
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/stretchr/testify/require"
 )
 
 // only use in developing
@@ -81,9 +87,200 @@ func TestCompositeUniqueIndexTableInsertSQL(t *testing.T) {
 		"insert into dept select * from dept where deptno = 10",
 		"insert into dept select * from dept where dname = 'RESEARCH'",
 		"insert into dept select * from dept where deptno = 10 order by dname limit 1",
+		"insert into constraint_test.emp (empno, ename, job) values (1, 'SMITH', 'CLERK')",
+		"insert into emp values (1, 'SMITH', 'CLERK', 7788, '2024-01-01', 3000, 0, 10)",
 	}
 
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueLockKeyMaterialized(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	sql := "insert into constraint_test.emp values (1, 'SMITH', 'CLERK', 7788, '2024-01-01', 3000, 0, 10)"
+
+	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), sql, 1)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+
+	stmt, ok := stmts[0].(*tree.Insert)
+	require.True(t, ok)
+
+	builder := NewQueryBuilder(planpb.Query_SELECT, mock.CurrentContext(), false, true)
+	bindCtx := NewBindContext(builder, nil)
+
+	dmlCtx := NewDMLContext()
+	objRef, tableDef, err := builder.compCtx.Resolve("constraint_test", "emp", nil)
+	require.NoError(t, err)
+	require.NotNil(t, objRef)
+	require.NotNil(t, tableDef)
+	dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
+	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
+
+	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
+		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false,
+	)
+	require.NoError(t, err)
+
+	// Force dedup path for composite unique index to cover lock-key materialization branch.
+	forced := false
+	for i, idxDef := range dmlCtx.tableDefs[0].Indexes {
+		if idxDef.Unique && len(idxDef.Parts) > 1 {
+			skipUniqueIdx[i] = false
+			forced = true
+		}
+	}
+	require.True(t, forced)
+
+	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil,
+	)
+	require.NoError(t, err)
+}
+
+func TestAppendDedupAndMultiUpdateNodesForBindInsert_SingleUniqueMissingCol(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	sql := "insert into constraint_test.dept values (10, 'RESEARCH', 'NEW YORK')"
+
+	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), sql, 1)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+	stmt, ok := stmts[0].(*tree.Insert)
+	require.True(t, ok)
+
+	builder := NewQueryBuilder(planpb.Query_SELECT, mock.CurrentContext(), false, true)
+	bindCtx := NewBindContext(builder, nil)
+
+	dmlCtx := NewDMLContext()
+	objRef, tableDef, err := builder.compCtx.Resolve("constraint_test", "dept", nil)
+	require.NoError(t, err)
+	dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
+	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
+
+	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
+		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false,
+	)
+	require.NoError(t, err)
+
+	delete(colName2Idx, tableDef.Name+".dname")
+
+	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "can not find colName = dname")
+}
+
+func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueMissingPartInProjection(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	sql := "insert into constraint_test.emp values (1, 'SMITH', 'CLERK', 7788, '2024-01-01', 3000, 0, 10)"
+
+	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), sql, 1)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+	stmt, ok := stmts[0].(*tree.Insert)
+	require.True(t, ok)
+
+	builder := NewQueryBuilder(planpb.Query_SELECT, mock.CurrentContext(), false, true)
+	bindCtx := NewBindContext(builder, nil)
+
+	dmlCtx := NewDMLContext()
+	objRef, tableDef, err := builder.compCtx.Resolve("constraint_test", "emp", nil)
+	require.NoError(t, err)
+	dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
+	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
+
+	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
+		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false,
+	)
+	require.NoError(t, err)
+
+	for i, idxDef := range dmlCtx.tableDefs[0].Indexes {
+		if idxDef.Unique && len(idxDef.Parts) > 1 {
+			skipUniqueIdx[i] = false
+			lockColName := idxDef.IndexTableName + "." + catalog.IndexTableIndexColName
+			colName2Idx[lockColName] = 0
+		}
+	}
+
+	delete(colName2Idx, tableDef.Name+".job")
+
+	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "can not find colName = job")
+}
+
+func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueMissingPartInLockMaterialization(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	sql := "insert into constraint_test.emp values (1, 'SMITH', 'CLERK', 7788, '2024-01-01', 3000, 0, 10)"
+
+	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), sql, 1)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+	stmt, ok := stmts[0].(*tree.Insert)
+	require.True(t, ok)
+
+	builder := NewQueryBuilder(planpb.Query_SELECT, mock.CurrentContext(), false, true)
+	bindCtx := NewBindContext(builder, nil)
+
+	dmlCtx := NewDMLContext()
+	objRef, tableDef, err := builder.compCtx.Resolve("constraint_test", "emp", nil)
+	require.NoError(t, err)
+	dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
+	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
+
+	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
+		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false,
+	)
+	require.NoError(t, err)
+
+	for i, idxDef := range dmlCtx.tableDefs[0].Indexes {
+		if idxDef.Unique && len(idxDef.Parts) > 1 {
+			skipUniqueIdx[i] = false
+		}
+	}
+
+	delete(colName2Idx, tableDef.Name+".job")
+
+	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "can not find colName = job")
+}
+
+func TestAppendDedupAndMultiUpdateNodesForBindInsert_SecondaryIndexMissingPart(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	sql := "insert into constraint_test.dept values (10, 'RESEARCH', 'NEW YORK')"
+
+	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), sql, 1)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+	stmt, ok := stmts[0].(*tree.Insert)
+	require.True(t, ok)
+
+	builder := NewQueryBuilder(planpb.Query_SELECT, mock.CurrentContext(), false, true)
+	bindCtx := NewBindContext(builder, nil)
+
+	dmlCtx := NewDMLContext()
+	objRef, tableDef, err := builder.compCtx.Resolve("constraint_test", "dept", nil)
+	require.NoError(t, err)
+	dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
+	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
+
+	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
+		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false,
+	)
+	require.NoError(t, err)
+
+	delete(colName2Idx, tableDef.Name+".loc")
+
+	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "can not find colName = loc")
 }
 
 func TestCompositeUniqueIndexTableDeleteSQL(t *testing.T) {

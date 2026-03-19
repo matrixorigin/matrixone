@@ -17,9 +17,10 @@ package disttae
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
+	"regexp"
 	"slices"
 	"strconv"
 	"sync"
@@ -52,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -193,6 +195,28 @@ func WithCNTransferTxnLifespanThreshold(th time.Duration) EngineOptions {
 	}
 }
 
+func WithPrefetchOnSubscribed(th []string) EngineOptions {
+	return func(e *Engine) {
+		var (
+			err error
+		)
+
+		for i := range th {
+			r, err2 := regexp.Compile(th[i])
+			if err2 != nil {
+				err = errors.Join(err, err2)
+				continue
+			}
+			e.config.prefetchOnSubscribed = append(e.config.prefetchOnSubscribed, r)
+		}
+
+		logutil.Info("Set-Prefetch-On-Subscribed-By-TOML",
+			zap.Strings("patterns", th),
+			zap.Error(err),
+		)
+	}
+}
+
 func WithSQLExecFunc(f func() ie.InternalExecutor) EngineOptions {
 	return func(e *Engine) {
 		e.config.ieFactory = f
@@ -233,6 +257,7 @@ type Engine struct {
 
 		memThrottler rscthrottler.RSCThrottler
 
+		prefetchOnSubscribed           []*regexp.Regexp
 		cnTransferTxnLifespanThreshold time.Duration
 
 		ieFactory            func() ie.InternalExecutor
@@ -273,6 +298,13 @@ type Engine struct {
 	skipConsume bool
 
 	cloneTxnCache *CloneTxnCache
+}
+
+func (e *Engine) getPrefetchOnSubscribed() []*regexp.Regexp {
+	if overridden, regs := engine.GetPrefetchOnSubscribed(); overridden {
+		return regs
+	}
+	return e.config.prefetchOnSubscribed
 }
 
 func (e *Engine) SetService(svr string) {
@@ -850,17 +882,20 @@ func (txn *Transaction) GCObjsByIdxRange(start, end int) (err error) {
 func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	txn.op.EnterRollbackStmt()
 	defer txn.op.ExitRollbackStmt()
+	v2.TxnRollbackLastStatementCounter.Inc()
 	var (
 		beforeEntries int
 		afterEntries  int
 	)
 	defer func() {
-		logutil.Info(
-			"RollbackLastStatement",
-			zap.String("txn", hex.EncodeToString(txn.op.Txn().ID)),
-			zap.Int("before", beforeEntries),
-			zap.Int("after", afterEntries),
-		)
+		common.DoIfDebugEnabled(func() {
+			logutil.Debug(
+				"RollbackLastStatement",
+				zap.String("txn", txn.op.Txn().DebugString()),
+				zap.Int("before", beforeEntries),
+				zap.Int("after", afterEntries),
+			)
+		})
 	}()
 	txn.Lock()
 	defer txn.Unlock()

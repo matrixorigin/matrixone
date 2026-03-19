@@ -401,6 +401,8 @@ a	SUM( b)
 SELECT DISTINCT a, AVG( b) FROM t1 GROUP BY a HAVING AVG( b) > 50;
 a	AVG( b)
 1	32768.5000
+select count(distinct(a, b)) from t1;
+internal error: tuple is not supported as group by column
 DROP TABLE t1;
 CREATE TABLE t1 (a INT);
 INSERT INTO t1 SELECT result FROM generate_series(1,100000) g;

@@ -87,6 +87,7 @@ import (
     orderBy tree.OrderBy
     order *tree.Order
     limit *tree.Limit
+    rankOption *tree.RankOption
     unionTypeRecord *tree.UnionTypeRecord
     parenTableExpr *tree.ParenTableExpr
     identifierList tree.IdentifierList
@@ -230,6 +231,9 @@ import (
     indexVisibility tree.VisibleType
 
     killOption tree.KillOption
+    toAccountOpt *tree.ToAccountOpt
+    conflictOpt *tree.ConflictOpt
+    diffOutputOpt   *tree.DiffOutputOpt
     statementOption tree.StatementOption
 
     tableLock tree.TableLock
@@ -350,7 +354,8 @@ import (
 %token <str> PREPARE DEALLOCATE RESET
 %token <str> EXTENSION
 %token <str> RETENTION PERIOD
-%token <str> CLONE
+%token <str> CLONE BRANCH LOG REVERT REBASE DIFF
+%token <str> CONFLICT CONFLICT_FAIL CONFLICT_SKIP CONFLICT_ACCEPT OUTPUT SUMMARY
 
 // Sequence
 %token <str> INCREMENT CYCLE MINVALUE
@@ -441,7 +446,7 @@ import (
 %token <str> CLUSTER_CENTERS KMEANS
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK ROW_NUMBER
-%token <str> DENSE_RANK BIT_CAST
+%token <str> DENSE_RANK BIT_CAST LAG LEAD FIRST_VALUE LAST_VALUE NTH_VALUE
 %token <str> BITMAP_BIT_POSITION BITMAP_BUCKET_NUMBER BITMAP_COUNT BITMAP_CONSTRUCT_AGG BITMAP_OR_AGG
 
 // Sequence function
@@ -511,7 +516,7 @@ import (
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
 %type <statement> show_servers_stmt show_connectors_stmt show_logservice_replicas_stmt show_logservice_stores_stmt show_logservice_settings_stmt
-%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt rename_stmt
+%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt alter_role_stmt rename_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt savepoint_stmt release_savepoint_stmt rollback_to_savepoint_stmt
 %type <statement> explain_stmt explainable_stmt
 %type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt set_transaction_stmt set_connection_id_stmt set_logservice_non_voting_replica_num
@@ -559,6 +564,10 @@ import (
 %type <subscriptionOption> subscription_opt
 %type <accountsSetOption> alter_publication_accounts_opt create_publication_accounts
 %type <str> alter_publication_db_name_opt
+%type <statement> branch_stmt
+%type <toAccountOpt> to_account_opt
+%type <conflictOpt> conflict_opt
+%type <diffOutputOpt> diff_output_opt
 
 %type <select> select_stmt select_no_parens
 %type <selectStatement> simple_select select_with_parens simple_select_clause
@@ -575,6 +584,7 @@ import (
 %type <order> order
 %type <orderBy> order_list order_by_clause order_by_opt
 %type <limit> limit_opt limit_clause
+%type <rankOption> rank_opt
 %type <str> insert_column optype_opt
 %type <str> optype
 %type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_list
@@ -952,6 +962,7 @@ normal_stmt:
 |   pause_cdc_stmt
 |   resume_cdc_stmt
 |   restart_cdc_stmt
+|   branch_stmt
 
 
 backup_stmt:
@@ -3319,6 +3330,7 @@ alter_stmt:
 |   alter_stage_stmt
 |   alter_sequence_stmt
 |   alter_pitr_stmt
+|   alter_role_stmt
 |   rename_stmt
 // |    alter_ddl_stmt
 
@@ -3446,6 +3458,15 @@ alter_pitr_stmt:
        var pitrValue = $6
        var pitrUnit = $7
        $$ = tree.NewAlterPitr(ifExists, name, pitrValue, pitrUnit)
+    }
+
+alter_role_stmt:
+    ALTER ROLE exists_opt role_name RENAME TO role_name
+    {
+        var ifExists = $3
+        var oldName = $4.Compare()
+        var newName = $7.Compare()
+        $$ = tree.NewAlterRole(ifExists, oldName, newName)
     }
 
 partition_option:
@@ -3656,7 +3677,6 @@ algorithm_type:
 |   INSTANT
 |   INPLACE
 |   COPY
-|   CLONE
 
 able_type:
     DISABLE
@@ -5350,29 +5370,29 @@ select_stmt:
     }
 
 select_no_parens:
-    simple_select time_window_opt order_by_opt limit_opt export_data_param_opt select_lock_opt
+    simple_select time_window_opt order_by_opt limit_opt rank_opt export_data_param_opt select_lock_opt
     {
-        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, Ep: $5, SelectLockInfo: $6}
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6, SelectLockInfo: $7}
     }
 |   select_with_parens time_window_opt order_by_clause export_data_param_opt
     {
         $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Ep: $4}
     }
-|   select_with_parens time_window_opt order_by_opt limit_clause export_data_param_opt
+|   select_with_parens time_window_opt order_by_opt limit_clause rank_opt export_data_param_opt
     {
-        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, Ep: $5}
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6}
     }
-|   with_clause simple_select time_window_opt order_by_opt limit_opt export_data_param_opt select_lock_opt
+|   with_clause simple_select time_window_opt order_by_opt limit_opt rank_opt export_data_param_opt select_lock_opt
     {
-        $$ = &tree.Select{Select: $2, TimeWindow: $3, OrderBy: $4, Limit: $5, Ep: $6, SelectLockInfo:$7, With: $1}
+        $$ = &tree.Select{Select: $2, TimeWindow: $3, OrderBy: $4, Limit: $5, RankOption: $6, Ep: $7, SelectLockInfo:$8, With: $1}
     }
 |   with_clause select_with_parens order_by_clause export_data_param_opt
     {
         $$ = &tree.Select{Select: $2, OrderBy: $3, Ep: $4, With: $1}
     }
-|   with_clause select_with_parens order_by_opt limit_clause export_data_param_opt
+|   with_clause select_with_parens order_by_opt limit_clause rank_opt export_data_param_opt
     {
-        $$ = &tree.Select{Select: $2, OrderBy: $3, Limit: $4, Ep: $5, With: $1}
+        $$ = &tree.Select{Select: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6, With: $1}
     }
 
 time_window_opt:
@@ -5533,6 +5553,45 @@ limit_clause:
 |   LIMIT expression OFFSET expression
     {
         $$ = &tree.Limit{Offset: $4, Count: $2}
+    }
+
+rank_opt:
+    {
+        $$ = nil
+    }
+|   BY RANK WITH OPTION expression_list
+    {
+        // Parse option strings to extract key=value pairs into a map
+        optionMap := make(map[string]string)
+        
+        for _, expr := range $5 {
+            var str string
+            // Handle both NumVal (P_char) and StrVal
+            if numVal, ok := expr.(*tree.NumVal); ok && numVal.ValType == tree.P_char {
+                str = numVal.String()
+            } else if strVal, ok := expr.(*tree.StrVal); ok {
+                str = strVal.String()
+            } else {
+                continue
+            }
+            
+            // Remove quotes if present
+            if len(str) >= 2 && ((str[0] == '\'' && str[len(str)-1] == '\'') || (str[0] == '"' && str[len(str)-1] == '"')) {
+                str = str[1 : len(str)-1]
+            }
+            
+            // Parse key=value pairs
+            parts := strings.Split(str, "=")
+            if len(parts) == 2 {
+                key := strings.TrimSpace(strings.ToLower(parts[0]))
+                value := strings.TrimSpace(parts[1])
+                optionMap[key] = value
+            }
+        }
+        
+        $$ = &tree.RankOption{
+            Option: optionMap,
+        }
     }
 
 order_by_opt:
@@ -7480,6 +7539,26 @@ role_name:
 	{
     	$$ = tree.NewCStr($1, 1)
     }
+|   LAG
+        {
+        $$ = tree.NewCStr("lag", 1)
+    }
+|   LEAD
+        {
+        $$ = tree.NewCStr("lead", 1)
+    }
+|   FIRST_VALUE
+        {
+        $$ = tree.NewCStr("first_value", 1)
+    }
+|   LAST_VALUE
+        {
+        $$ = tree.NewCStr("last_value", 1)
+    }
+|   NTH_VALUE
+        {
+        $$ = tree.NewCStr("nth_value", 1)
+    }
 
 index_prefix:
     {
@@ -7744,21 +7823,13 @@ create_database_stmt:
         )
     }
 // CREATE comment_opt database_or_schema comment_opt not_exists_opt ident
-|   CREATE database_or_schema not_exists_opt db_name CLONE db_name table_snapshot_opt
+|   CREATE database_or_schema not_exists_opt db_name CLONE db_name table_snapshot_opt to_account_opt
     {
     	var t = tree.NewCloneDatabase()
     	t.DstDatabase = tree.Identifier($4)
     	t.SrcDatabase = tree.Identifier($6)
     	t.AtTsExpr = $7
-    	$$ = t
-    }
-|   CREATE database_or_schema not_exists_opt db_name CLONE db_name table_snapshot_opt TO ACCOUNT ident
-    {
-    	var t = tree.NewCloneDatabase()
-    	t.DstDatabase = tree.Identifier($4)
-    	t.SrcDatabase = tree.Identifier($6)
-    	t.AtTsExpr = $7
-    	t.ToAccountName = tree.Identifier($10.Compare())
+    	t.ToAccountOpt = $8
     	$$ = t
     }
 
@@ -7946,7 +8017,126 @@ replace_opt:
     }
 
 
+branch_stmt:
+    DATA BRANCH CREATE TABLE table_name FROM table_name to_account_opt
+    {
+    	t := tree.NewDataBranchCreateTable()
+    	t.CreateTable.Table = *$5
+        t.CreateTable.LikeTableName = *$7
+        t.CreateTable.IsAsLike = true
+        t.SrcTable = *$7
+        t.ToAccountOpt = $8
+        $$ = t
+    }
+|   DATA BRANCH CREATE DATABASE db_name FROM db_name table_snapshot_opt to_account_opt
+    {
+    	t := tree.NewDataBranchCreateDatabase()
+        t.DstDatabase = tree.Identifier($5)
+        t.SrcDatabase = tree.Identifier($7)
+        t.AtTsExpr = $8
+        t.ToAccountOpt = $9
+        $$ = t
+    }
+|   DATA BRANCH DELETE TABLE table_name
+    {
+    	t := tree.NewDataBranchDeleteTable()
+    	t.TableName = *$5
+    	$$ = t
+    }
+|   DATA BRANCH DELETE DATABASE db_name
+    {
+	t := tree.NewDataBranchDeleteDatabase()
+	t.DatabaseName = tree.Identifier($5)
+	$$ = t
+    }
+|   DATA BRANCH DIFF table_name AGAINST table_name diff_output_opt
+    {
+    	t := tree.NewDataBranchDiff()
+    	t.TargetTable = *$4
+    	t.BaseTable = *$6
+    	t.OutputOpt = $7
+    	$$ = t
+    }
+|   DATA BRANCH MERGE table_name INTO table_name conflict_opt
+    {
+    	t := tree.NewDataBranchMerge()
+    	t.SrcTable = *$4
+    	t.DstTable = *$6
+    	t.ConflictOpt = $7
+    	$$ = t
+    }
 
+
+diff_output_opt:
+    {
+       $$ = nil
+    }
+    | OUTPUT AS table_name
+    {
+        $$ = &tree.DiffOutputOpt {
+            As: *$3,
+        }
+    }
+    | OUTPUT FILE STRING
+    {
+        $$ = &tree.DiffOutputOpt {
+            DirPath: $3,
+        }
+    }
+    | OUTPUT LIMIT INTEGRAL
+    {
+    	x := $3.(int64)
+    	$$ = &tree.DiffOutputOpt {
+           Limit: &x,
+        }
+    }
+    | OUTPUT COUNT
+    {
+    	$$ = &tree.DiffOutputOpt {
+           Count: true,
+        }
+    }
+    | OUTPUT SUMMARY
+    {
+    	$$ = &tree.DiffOutputOpt {
+           Summary: true,
+        }
+    }
+
+conflict_opt:
+     {
+     	$$ = nil
+     }
+     | WHEN CONFLICT CONFLICT_FAIL
+     {
+     	$$ = &tree.ConflictOpt {
+             Opt: tree.CONFLICT_FAIL,
+     	}
+     }
+    | WHEN CONFLICT CONFLICT_SKIP
+    {
+     	$$ = &tree.ConflictOpt {
+             Opt: tree.CONFLICT_SKIP,
+     	}
+    }
+    | WHEN CONFLICT CONFLICT_ACCEPT
+    {
+    	$$ = &tree.ConflictOpt {
+            Opt: tree.CONFLICT_ACCEPT,
+    	}
+    }
+
+to_account_opt:
+    /* empty */
+    {
+    	$$ = nil
+    }
+    | TO ACCOUNT ident
+    {
+    	$$ = &tree.ToAccountOpt {
+    	    AccountName: tree.Identifier($3.Compare()),
+    	}
+    }
 
 create_table_stmt:
     CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list_opt partition_by_opt cluster_by_opt
@@ -8051,23 +8241,14 @@ create_table_stmt:
         t.SubscriptionOption = $6
         $$ = t
     }
-|   CREATE temporary_opt TABLE not_exists_opt table_name CLONE table_name
+|   CREATE temporary_opt TABLE not_exists_opt table_name CLONE table_name to_account_opt
     {
 	t := tree.NewCloneTable()
 	t.CreateTable.Table = *$5
 	t.CreateTable.LikeTableName = *$7
 	t.CreateTable.IsAsLike = true
 	t.SrcTable = *$7
-	$$ = t
-    }
-|   CREATE temporary_opt TABLE not_exists_opt table_name CLONE table_name TO ACCOUNT ident
-    {
-	t := tree.NewCloneTable()
-	t.CreateTable.Table = *$5
-	t.CreateTable.LikeTableName = *$7
-	t.CreateTable.IsAsLike = true
-	t.SrcTable = *$7
-	t.ToAccountName = tree.Identifier($10.Compare())
+	t.ToAccountOpt = $8
 	$$ = t
     }
 
@@ -9988,6 +10169,96 @@ function_call_window:
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             WindowSpec: $4,
+        }
+    }
+|	LAG '(' expression ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3},
+            WindowSpec: $5,
+        }
+    }
+|	LAG '(' expression ',' expression ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3, $5},
+            WindowSpec: $7,
+        }
+    }
+|	LAG '(' expression ',' expression ',' expression ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3, $5, $7},
+            WindowSpec: $9,
+        }
+    }
+|	LEAD '(' expression ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3},
+            WindowSpec: $5,
+        }
+    }
+|	LEAD '(' expression ',' expression ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3, $5},
+            WindowSpec: $7,
+        }
+    }
+|	LEAD '(' expression ',' expression ',' expression ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3, $5, $7},
+            WindowSpec: $9,
+        }
+    }
+|	FIRST_VALUE '(' expression ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3},
+            WindowSpec: $5,
+        }
+    }
+|	LAST_VALUE '(' expression ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3},
+            WindowSpec: $5,
+        }
+    }
+|	NTH_VALUE '(' expression ',' expression ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3, $5},
+            WindowSpec: $7,
         }
     }
 
@@ -12595,7 +12866,6 @@ equal_opt:
 //|   TABLE_VALUES
 //|   RETURNS
 //|   MYSQL_COMPATIBILITY_MODE
-//|   CLONE
 
 non_reserved_keyword:
     ACCOUNT
@@ -12611,6 +12881,8 @@ non_reserved_keyword:
 |   BIT
 |   BLOB
 |   BOOL
+|   BRANCH
+|   CLONE
 |   CANCEL
 |   CHAIN
 |   CHECKSUM
@@ -12623,6 +12895,10 @@ non_reserved_keyword:
 |   COLUMNS
 |   CONNECTION
 |   CONSISTENT
+|   CONFLICT
+|   CONFLICT_ACCEPT
+|   CONFLICT_FAIL
+|   CONFLICT_SKIP
 |   COMPRESSED
 |   COMPACT
 |   COLUMN_FORMAT
@@ -12636,6 +12912,7 @@ non_reserved_keyword:
 |   CASCADE
 |   DAEMON
 |   DATA
+|   DIFF
 |	DAY
 |   DATETIME
 |   DECIMAL
@@ -12715,6 +12992,8 @@ non_reserved_keyword:
 |   OPTIMIZE
 |   OPEN
 |   OPTION
+|   OUTPUT
+|   SUMMARY
 |   PACK_KEYS
 |   PARTIAL
 |   PARTITIONS
@@ -12963,6 +13242,11 @@ non_reserved_keyword:
 |   RETRY
 |   SQL_BUFFER_RESULT
 |	INTERNAL
+|   LAG
+|   LEAD
+|   FIRST_VALUE
+|   LAST_VALUE
+|   NTH_VALUE
 
 func_not_keyword:
     DATE_ADD

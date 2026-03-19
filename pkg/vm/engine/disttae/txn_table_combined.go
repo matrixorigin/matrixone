@@ -221,6 +221,7 @@ func (t *combinedTxnTable) CollectTombstones(
 func (t *combinedTxnTable) CollectChanges(
 	ctx context.Context,
 	from, to types.TS,
+	_ bool,
 	mp *mpool.MPool,
 ) (engine.ChangesHandle, error) {
 	panic("not implemented")

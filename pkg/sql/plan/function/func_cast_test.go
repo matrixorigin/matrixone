@@ -17,11 +17,13 @@ package function
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"math"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -156,8 +158,9 @@ func initCastTestCase() []tcTemp {
 					[]types.Datetime{66122056321728512}, []bool{false}),
 				NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{}, []bool{}),
 			},
+			// When casting to datetime(0), .728512 microseconds should round to next second
 			expect: NewFunctionTestResult(types.T_datetime.ToType(), false,
-				[]types.Datetime{66122056321728512}, []bool{false}),
+				[]types.Datetime{66122056322000000}, []bool{false}),
 		},
 		{
 			info: "timestamp to timestamp",
@@ -166,8 +169,9 @@ func initCastTestCase() []tcTemp {
 					[]types.Timestamp{66122026122739712}, []bool{false}),
 				NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{}, []bool{}),
 			},
+			// When casting to timestamp(0), .739712 microseconds should round to next second
 			expect: NewFunctionTestResult(types.T_timestamp.ToType(), false,
-				[]types.Timestamp{66122026122739712}, []bool{false}),
+				[]types.Timestamp{66122026123000000}, []bool{false}),
 		},
 		{
 			info: "time to time",
@@ -176,8 +180,9 @@ func initCastTestCase() []tcTemp {
 					[]types.Time{661220261227}, []bool{false}),
 				NewFunctionTestInput(types.T_time.ToType(), []types.Time{}, []bool{}),
 			},
+			// When casting to time(0), .261227 microseconds should be truncated (2 < 5, no rounding)
 			expect: NewFunctionTestResult(types.T_time.ToType(), false,
-				[]types.Time{661220261227}, []bool{false}),
+				[]types.Time{661220000000}, []bool{false}),
 		},
 		{
 			info: "vecf32 to vecf32",
@@ -1948,4 +1953,236 @@ func Benchmark_strToSigned_Binary(b *testing.B) {
 			}
 		})
 	}
+}
+
+// Test_strToStr_TextToCharVarchar tests that TEXT type can be cast to CHAR/VARCHAR
+// without length validation errors, even when the string length exceeds the target length.
+// This is important for UPDATE operations on TEXT columns with CONCAT operations.
+func Test_strToStr_TextToCharVarchar(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+
+	// Helper function to create long strings
+	longString260 := strings.Repeat("a", 260) // 260 characters
+	longString100 := strings.Repeat("b", 100) // 100 characters
+
+	tests := []struct {
+		name      string
+		inputs    []string
+		nulls     []uint64
+		fromType  types.Type
+		toType    types.Type
+		want      []string
+		wantNulls []uint64
+		wantErr   bool
+		errMsg    string
+	}{
+		{
+			name:     "TEXT to CHAR(255) with length 260 - should succeed",
+			inputs:   []string{longString260},
+			fromType: types.T_text.ToType(),
+			toType:   types.New(types.T_char, 255, 0),
+			want:     []string{longString260}, // Should keep original length
+			wantErr:  false,
+		},
+		{
+			name:     "TEXT to VARCHAR(255) with length 260 - should succeed",
+			inputs:   []string{longString260},
+			fromType: types.T_text.ToType(),
+			toType:   types.New(types.T_varchar, 255, 0),
+			want:     []string{longString260}, // Should keep original length
+			wantErr:  false,
+		},
+		{
+			name:      "TEXT to CHAR(255) with NULL - should handle NULL",
+			inputs:    []string{"", "test"},
+			nulls:     []uint64{0},
+			fromType:  types.T_text.ToType(),
+			toType:    types.New(types.T_char, 255, 0),
+			want:      []string{"", "test"},
+			wantNulls: []uint64{0},
+			wantErr:   false,
+		},
+		{
+			name:     "VARCHAR to CHAR(10) with length 100 - should fail (normal behavior)",
+			inputs:   []string{longString100},
+			fromType: types.New(types.T_varchar, 100, 0),
+			toType:   types.New(types.T_char, 10, 0),
+			wantErr:  true,
+			errMsg:   "larger than Dest length",
+		},
+		{
+			name:     "TEXT to CHAR(1) with length > 1 - should fail (explicit CAST)",
+			inputs:   []string{"ab"},
+			fromType: types.T_text.ToType(),
+			toType:   types.New(types.T_char, 1, 0),
+			wantErr:  true,
+			errMsg:   "larger than Dest length",
+		},
+		{
+			name:     "TEXT to CHAR(10) with length 100 - should fail (explicit CAST to small width)",
+			inputs:   []string{longString100},
+			fromType: types.T_text.ToType(),
+			toType:   types.New(types.T_char, 10, 0),
+			wantErr:  true,
+			errMsg:   "larger than Dest length",
+		},
+		{
+			name:     "TEXT to VARCHAR(10) with length 100 - should fail (explicit CAST to small width)",
+			inputs:   []string{longString100},
+			fromType: types.T_text.ToType(),
+			toType:   types.New(types.T_varchar, 10, 0),
+			wantErr:  true,
+			errMsg:   "larger than Dest length",
+		},
+		{
+			name:     "TEXT to TEXT - should succeed",
+			inputs:   []string{"test text"},
+			fromType: types.T_text.ToType(),
+			toType:   types.T_text.ToType(),
+			want:     []string{"test text"},
+			wantErr:  false,
+		},
+		{
+			name:     "TEXT to CHAR(255) with multiple values",
+			inputs:   []string{"short", longString260, "medium length string"},
+			fromType: types.T_text.ToType(),
+			toType:   types.New(types.T_char, 255, 0),
+			want:     []string{"short", longString260, "medium length string"},
+			wantErr:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create input vector based on source type
+			var inputVec *vector.Vector
+			if tt.fromType.Oid == types.T_text {
+				inputVec = testutil.MakeTextVector(tt.inputs, tt.nulls)
+			} else {
+				inputVec = testutil.MakeVarcharVector(tt.inputs, tt.nulls)
+				// Set the type explicitly for non-TEXT types
+				inputVec.SetType(tt.fromType)
+			}
+			defer inputVec.Free(mp)
+
+			from := vector.GenerateFunctionStrParameter(inputVec)
+
+			resultType := tt.toType
+			to := vector.NewFunctionResultWrapper(resultType, mp).(*vector.FunctionResult[types.Varlena])
+			defer to.Free()
+			err := to.PreExtendAndReset(len(tt.inputs))
+			require.NoError(t, err)
+
+			err = strToStr(ctx, from, to, len(tt.inputs), tt.toType)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errMsg != "" {
+					require.Contains(t, err.Error(), tt.errMsg)
+				}
+				return
+			}
+			require.NoError(t, err)
+
+			resultVec := to.GetResultVector()
+			r := vector.GenerateFunctionStrParameter(resultVec)
+
+			for i := 0; i < len(tt.want); i++ {
+				want := tt.want[i]
+				get, null := r.GetStrValue(uint64(i))
+
+				if contains(tt.wantNulls, uint64(i)) {
+					require.True(t, null, "row %d should be null", i)
+				} else {
+					require.False(t, null, "row %d should not be null", i)
+					require.Equal(t, want, string(get), "row %d value not match", i)
+				}
+			}
+
+			resultNulls := to.GetResultVector().GetNulls()
+			if len(tt.wantNulls) > 0 {
+				for _, pos := range tt.wantNulls {
+					require.True(t, resultNulls.Contains(pos))
+				}
+			} else {
+				require.True(t, resultNulls.IsEmpty())
+			}
+		})
+	}
+}
+
+// Test_strToArray_DimensionCheck tests that strToArray correctly validates
+// vector dimension against the target type's width (vecf32(N) / vecf64(N)).
+// This is the regression test for https://github.com/matrixorigin/matrixone/issues/23872
+func Test_strToArray_DimensionCheck(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// vecf32(3): dimension match should succeed
+	tc1 := tcTemp{
+		info: "str to vecf32(3) - dimension match",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"[1,2,3]"}, nil),
+			NewFunctionTestInput(types.New(types.T_array_float32, 3, 0), [][]float32{}, nil),
+		},
+		expect: NewFunctionTestResult(types.New(types.T_array_float32, 3, 0), false,
+			[][]float32{{1, 2, 3}}, []bool{false}),
+	}
+	fcTC := NewFunctionTestCase(proc, tc1.inputs, tc1.expect, NewCast)
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc1.info, info))
+
+	// vecf32(3): dimension mismatch (5-dim into vecf32(3)) should fail
+	tc2 := tcTemp{
+		info: "str to vecf32(3) - dimension mismatch should error",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"[1,2,3,4,5]"}, nil),
+			NewFunctionTestInput(types.New(types.T_array_float32, 3, 0), [][]float32{}, nil),
+		},
+		expect: NewFunctionTestResult(types.New(types.T_array_float32, 3, 0), true, nil, nil),
+	}
+	fcTC = NewFunctionTestCase(proc, tc2.inputs, tc2.expect, NewCast)
+	s, info = fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc2.info, info))
+
+	// vecf64(3): dimension match should succeed
+	tc3 := tcTemp{
+		info: "str to vecf64(3) - dimension match",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"[1,2,3]"}, nil),
+			NewFunctionTestInput(types.New(types.T_array_float64, 3, 0), [][]float64{}, nil),
+		},
+		expect: NewFunctionTestResult(types.New(types.T_array_float64, 3, 0), false,
+			[][]float64{{1, 2, 3}}, []bool{false}),
+	}
+	fcTC = NewFunctionTestCase(proc, tc3.inputs, tc3.expect, NewCast)
+	s, info = fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc3.info, info))
+
+	// vecf64(3): dimension mismatch (5-dim into vecf64(3)) should fail
+	tc4 := tcTemp{
+		info: "str to vecf64(3) - dimension mismatch should error",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"[1,2,3,4,5]"}, nil),
+			NewFunctionTestInput(types.New(types.T_array_float64, 3, 0), [][]float64{}, nil),
+		},
+		expect: NewFunctionTestResult(types.New(types.T_array_float64, 3, 0), true, nil, nil),
+	}
+	fcTC = NewFunctionTestCase(proc, tc4.inputs, tc4.expect, NewCast)
+	s, info = fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc4.info, info))
+
+	// vecf32(MaxArrayDimension): should bypass dimension check (any dimension accepted)
+	tc5 := tcTemp{
+		info: "str to vecf32(MaxDim) - bypass dimension check",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"[1,2,3,4,5]"}, nil),
+			NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{}, nil),
+		},
+		expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
+			[][]float32{{1, 2, 3, 4, 5}}, []bool{false}),
+	}
+	fcTC = NewFunctionTestCase(proc, tc5.inputs, tc5.expect, NewCast)
+	s, info = fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc5.info, info))
 }

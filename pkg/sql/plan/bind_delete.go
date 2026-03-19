@@ -166,7 +166,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 					idxTableDef.Name2ColIndex[col.Name] = int32(colIdx)
 				}
 			}
-			idxTag := builder.genNewTag()
+			idxTag := builder.genNewBindTag()
 			builder.addNameByColRef(idxTag, idxTableDef)
 
 			idxScanNodes[i][j] = &plan.Node{
@@ -252,7 +252,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 
 	dmlNode := &plan.Node{
 		NodeType:    plan.Node_MULTI_UPDATE,
-		BindingTags: []int32{builder.genNewTag()},
+		BindingTags: []int32{builder.genNewBindTag()},
 	}
 	selectNodeTag := selectNode.BindingTags[0]
 	var lockTargets []*plan.LockTarget
@@ -355,7 +355,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 			NodeType:    plan.Node_LOCK_OP,
 			Children:    []int32{lastNodeID},
 			TableDef:    dmlCtx.tableDefs[0],
-			BindingTags: []int32{builder.genNewTag()},
+			BindingTags: []int32{builder.genNewBindTag()},
 			LockTargets: lockTargets,
 		}, bindCtx)
 

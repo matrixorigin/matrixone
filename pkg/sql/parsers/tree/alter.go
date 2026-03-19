@@ -27,6 +27,12 @@ func init() {
 		reuse.DefaultOptions[AlterUser](), //.
 	) // WithEnableChecker()
 
+	reuse.CreatePool[AlterRole](
+		func() *AlterRole { return &AlterRole{} },
+		func(a *AlterRole) { a.reset() },
+		reuse.DefaultOptions[AlterRole](), //.
+	) // WithEnableChecker()
+
 	reuse.CreatePool[AlterAccount](
 		func() *AlterAccount { return &AlterAccount{} },
 		func(a *AlterAccount) { a.reset() },
@@ -293,6 +299,43 @@ func (node *AlterUser) reset() {
 
 func (node *AlterUser) GetStatementType() string { return "Alter User" }
 func (node *AlterUser) GetQueryType() string     { return QueryTypeDCL }
+
+type AlterRole struct {
+	statementImpl
+	IfExists bool
+	OldName  string
+	NewName  string
+}
+
+func NewAlterRole(ifExists bool, oldName string, newName string) *AlterRole {
+	alter := reuse.Alloc[AlterRole](nil)
+	alter.IfExists = ifExists
+	alter.OldName = oldName
+	alter.NewName = newName
+	return alter
+}
+
+func (node *AlterRole) Free() { reuse.Free[AlterRole](node, nil) }
+
+func (node *AlterRole) Format(ctx *FmtCtx) {
+	ctx.WriteString("alter role")
+	if node.IfExists {
+		ctx.WriteString(" if exists")
+	}
+	ctx.WriteString(" ")
+	ctx.WriteString(node.OldName)
+	ctx.WriteString(" rename to ")
+	ctx.WriteString(node.NewName)
+}
+
+func (node AlterRole) TypeName() string { return "tree.AlterRole" }
+
+func (node *AlterRole) reset() {
+	*node = AlterRole{}
+}
+
+func (node *AlterRole) GetStatementType() string { return "Alter Role" }
+func (node *AlterRole) GetQueryType() string     { return QueryTypeDCL }
 
 type AlterAccountAuthOption struct {
 	Exist          bool

@@ -605,7 +605,15 @@ func (m *mockSQLExecutor) Insert(
 	// pkColumnIds: [1, 0]
 	pkColumnIds := make([]int, len(pkColumns))
 	for i, pk := range pkColumns {
-		pkColumnIds[i] = columnsIdMap[columnIds[pk]]
+		fullColIdx, ok := columnIds[pk]
+		if !ok {
+			return moerr.NewInternalErrorNoCtxf("primary key column %s not found in table columns", pk)
+		}
+		inputColIdx, ok := columnsIdMap[fullColIdx]
+		if !ok {
+			return moerr.NewInternalErrorNoCtxf("primary key column %s not found in input columns", pk)
+		}
+		pkColumnIds[i] = inputColIdx
 	}
 
 	// insert mode check:
@@ -652,6 +660,9 @@ func (m *mockSQLExecutor) Insert(
 		for _, tuple := range tuples {
 			pkValues = pkValues[:0]
 			for _, id := range pkColumnIds {
+				if id >= len(tuple) {
+					return moerr.NewInternalErrorNoCtxf("primary key column index %d out of range (tuple length: %d)", id, len(tuple))
+				}
 				pkValues = append(pkValues, tuple[id])
 			}
 			pkValue := strings.Join(pkValues, ",")
@@ -661,8 +672,23 @@ func (m *mockSQLExecutor) Insert(
 				continue
 			}
 			oldRow := tableData[offset]
+			// Only update columns that are present in the input tuple
+			// i is the input column index, columns[i] is the column name
+			// columnIds[columns[i]] is the full column index in the table
 			for i, cell := range tuple {
-				oldRow[columnsIdMap[i]] = cell
+				if i >= len(columns) {
+					return moerr.NewInternalErrorNoCtxf("tuple index %d out of range (columns length: %d)", i, len(columns))
+				}
+				columnName := columns[i]
+				fullColIdx, ok := columnIds[columnName]
+				if !ok {
+					// Column not found in table - skip (shouldn't happen if SQL is correct)
+					continue
+				}
+				if fullColIdx >= len(oldRow) {
+					return moerr.NewInternalErrorNoCtxf("column index %d out of range (row length: %d)", fullColIdx, len(oldRow))
+				}
+				oldRow[fullColIdx] = cell
 			}
 			tableData[offset] = oldRow
 		}
@@ -724,7 +750,7 @@ func initMockSQLExecutorForWatermarkUpdater(t *testing.T) *mockSQLExecutor {
 	ie.CreateTable(
 		"mo_catalog",
 		"mo_cdc_watermark",
-		[]string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
+		[]string{"account_id", "task_id", "db_name", "table_name", "watermark", "err_msg"},
 		[]string{"account_id", "task_id", "db_name", "table_name"},
 	)
 	return ie

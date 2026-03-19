@@ -5,6 +5,8 @@
 *.lib
 *.swp
 *.fatbin
+*.py
+*.sh
 bin/
 y.go
 *.output
@@ -12,13 +14,21 @@ y.go
 **/cover.out
 .vscode
 .env
+config.env
 *.iml
 tags
 coverage.txt
 out.txt
+logs/
+prometheus-local-data/
+prometheus-data/
+grafana-local-data/
+grafana-data/
+sdk_demo/
 vendor/
 gen_config
 main
+mo-tool
 /mo-server
 /mo-service
 /mo-debug
@@ -52,3 +62,9 @@ test/distributed/resources/json/export_*.csv
 
 # docker compose bvt generate files
 docker-compose-log/
+
+# docker-multi-cn-local-disk generated configuration files
+etc/docker-multi-cn-local-disk/*.toml
+!etc/docker-multi-cn-local-disk/launch.toml
+
+*.pyc

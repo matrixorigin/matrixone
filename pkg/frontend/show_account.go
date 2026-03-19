@@ -416,8 +416,6 @@ func getAccountsStorageUsage(
 				}
 				ret[k][0] = v
 			}
-			logutil.Info("show accounts",
-				zap.Int("get size from mts (acc cnt)", len(sizes)))
 		}
 	}()
 

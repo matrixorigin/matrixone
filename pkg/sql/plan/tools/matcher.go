@@ -390,7 +390,7 @@ func (matcher *JoinMatcher) String() string {
 }
 
 func parseSql(sql string) tree.Expr {
-	exSql := "select " + sql
+	exSql := "SELECT " + sql
 	one, err := parsers.ParseOne(context.Background(), dialect.MYSQL, exSql, 1)
 	if err != nil {
 		panic(err)

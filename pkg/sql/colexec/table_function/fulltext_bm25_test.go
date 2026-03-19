@@ -27,7 +27,7 @@ import (
 // argvec [src_tbl, index_tbl, pattern, mode int64]
 func TestFullTextCallBM25(t *testing.T) {
 
-	ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs, fulltext.ALGO_BM25)
+	ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs, fulltext.ALGO_BM25, uint64(0))
 
 	inbat := makeBatchFT(ut.proc)
 
@@ -82,7 +82,7 @@ func TestFullTextCallBM25(t *testing.T) {
 // argvec [src_tbl, index_tbl, pattern, mode int64]
 func TestFullTextCallOneAttrBM25(t *testing.T) {
 
-	ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs[0:1], fulltext.ALGO_BM25)
+	ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs[0:1], fulltext.ALGO_BM25, uint64(0))
 
 	inbat := makeBatchFT(ut.proc)
 
@@ -137,7 +137,7 @@ func TestFullTextCallOneAttrBM25(t *testing.T) {
 // argvec [src_tbl, index_tbl, pattern, mode int64]
 func TestFullTextEarlyFreeBM25(t *testing.T) {
 
-	ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs[0:1], fulltext.ALGO_BM25)
+	ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs[0:1], fulltext.ALGO_BM25, uint64(0))
 
 	inbat := makeBatchFT(ut.proc)
 

@@ -1,0 +1,31 @@
+-- @suit
+-- @case
+-- @desc:test for issue #22701 - current_timestamp(0) precision bug
+-- @label:bvt
+
+drop database if exists test_timestamp_scale_0;
+create database test_timestamp_scale_0;
+use test_timestamp_scale_0;
+
+-- Test the original reported issue
+drop table if exists t1;
+create table t1 (id int not null, dt0 datetime default null, primary key (id));
+insert into t1 values (1, current_timestamp(0));
+select id, extract(microsecond from dt0) as microseconds, case when extract(microsecond from dt0) = 0 then 'PASS: No fractional seconds' else 'FAIL: Has fractional seconds' end as result from t1;
+drop table t1;
+
+-- Test with TIMESTAMP(0) as well
+drop table if exists t2;
+create table t2 (id int not null, ts0 timestamp(0) default null, primary key (id));
+insert into t2 values (1, current_timestamp(0));
+select id, extract(microsecond from ts0) as microseconds, case when extract(microsecond from ts0) = 0 then 'PASS: No fractional seconds' else 'FAIL: Has fractional seconds' end as result from t2;
+drop table t2;
+
+-- Test scale 0 with rounding (should round .999999 to next second)
+drop table if exists t3;
+create table t3 (id int not null, dt0 datetime(0), dt6 datetime(6));
+insert into t3 values (1, '2024-01-15 10:20:30.999999', '2024-01-15 10:20:30.999999');
+select id, dt0, dt6, case when dt0 = '2024-01-15 10:20:31' then 'PASS: Rounded to next second' else 'FAIL: Did not round correctly' end as dt0_result from t3;
+drop table t3;
+
+drop database test_timestamp_scale_0;

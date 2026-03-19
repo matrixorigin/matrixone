@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 )
 
@@ -132,6 +133,17 @@ func (b *ProjectionBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, 
 		return nil, err
 	}
 	w.Name = funcName
+
+	// Check if this is a WIN_VALUE function (LAG, LEAD, FIRST_VALUE, LAST_VALUE, NTH_VALUE)
+	isWinValueFunc := function.GetFunctionIsWinValueFunByName(funcName)
+
+	// For WIN_VALUE functions without explicit frame, use ROWS frame instead of RANGE
+	if isWinValueFunc && !ws.HasFrame {
+		ws.Frame = &tree.FrameClause{Type: tree.Rows}
+		ws.Frame.Start = &tree.FrameBound{Type: tree.Preceding, UnBounded: true}
+		ws.Frame.End = &tree.FrameBound{Type: tree.Following, UnBounded: true}
+	}
+
 	// partition by
 	for _, group := range ws.PartitionBy {
 		expr, err := b.BindExpr(group, depth, isRoot)

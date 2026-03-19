@@ -98,7 +98,7 @@ func (builder *QueryBuilder) buildMetadataScan(tbl *tree.TableFunction, ctx *Bin
 			},
 			Cols: MetadataScanColDefs,
 		},
-		BindingTags:     []int32{builder.genNewTag()},
+		BindingTags:     []int32{builder.genNewBindTag()},
 		Children:        children,
 		TblFuncExprList: exprs,
 	}

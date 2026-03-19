@@ -388,7 +388,7 @@ func (de *TestDisttaeEngine) SubscribeTable(
 			break
 		}
 
-		err = de.Engine.TryToSubscribeTable(ctx, dbID, tbID, dbName, tblName)
+		err = de.Engine.TryToSubscribeTable(ctx, 0, dbID, tbID, dbName, tblName)
 		if err != nil {
 			timeout--
 			logutil.Errorf("test disttae engine subscribe table err %v, left trie %d", err, timeout)
@@ -419,7 +419,7 @@ func (de *TestDisttaeEngine) GetPartitionStateStats(
 	)
 
 	ts := types.TimestampToTS(de.Now())
-	state = de.Engine.GetOrCreateLatestPart(databaseId, tableId).Snapshot()
+	state = de.Engine.GetOrCreateLatestPart(ctx, 0, databaseId, tableId).Snapshot()
 
 	// data objects
 	if err = de.analyzeDataObjects(state, &stats, ts); err != nil {

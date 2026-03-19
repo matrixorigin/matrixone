@@ -27,8 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -146,7 +146,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
 			c.proc.Error(c.proc.Ctx, "panic in scope run",
-				zap.String("sql", c.sql),
+				zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
 				zap.String("error", err.Error()))
 		}
 		if p != nil {
@@ -288,6 +288,8 @@ func (s *Scope) MergeRun(c *Compile) error {
 
 		submitPreScope := ants.Submit(
 			func() {
+				defer wg.Done()
+
 				switch scope.Magic {
 				case Normal:
 					preScopeResultReceiveChan <- scope.Run(c)
@@ -300,14 +302,13 @@ func (s *Scope) MergeRun(c *Compile) error {
 					cleanPipelineWitchStartFail(scope, err, c.isPrepare)
 					preScopeResultReceiveChan <- err
 				}
-				wg.Done()
 			})
 
 		// build routine failed.
 		if submitPreScope != nil {
+			wg.Done() // this is necessary, because the submitPreScope may panic.
 			cleanPipelineWitchStartFail(scope, submitPreScope, c.isPrepare)
 			preScopeResultReceiveChan <- submitPreScope
-			wg.Done()
 		}
 	}
 
@@ -445,7 +446,7 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
 			c.proc.Error(c.proc.Ctx, "panic in scope run",
-				zap.String("sql", c.sql),
+				zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
 				zap.String("error", err.Error()))
 		}
 
@@ -596,7 +597,6 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 	}
 
 	//need to shuffle blocks when cncnt>1
-	var commited engine.RelData
 	rsp := &engine.RangesShuffleParam{
 		Node:  s.DataSource.node,
 		CNCNT: s.NodeInfo.CNCNT,
@@ -607,32 +607,10 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 		rsp.IsLocalCN = true
 	}
 
-	commited, err = c.expandRanges(
-		s.DataSource.node,
-		rel,
-		db,
-		ctx,
-		blockExprList,
-		engine.Policy_CollectCommittedPersistedData,
-		rsp)
-	if err != nil {
-		return err
-	}
+	policyForLocal := engine.DataCollectPolicy(engine.Policy_CollectAllData)
+	policyForRemote := engine.DataCollectPolicy(engine.Policy_CollectCommittedPersistedData)
 
-	average := float64(s.DataSource.node.Stats.BlockNum / s.NodeInfo.CNCNT)
-	if commited.DataCnt() < int(average*0.8) ||
-		commited.DataCnt() > int(average*1.2) {
-		logutil.Warnf(
-			"workload table %v maybe not balanced! stats blocks %v, cncnt %v cnidx %v average %v , get %v blocks",
-			s.DataSource.TableDef.Name,
-			s.DataSource.node.Stats.BlockNum,
-			s.NodeInfo.CNCNT,
-			s.NodeInfo.CNIDX,
-			average,
-			commited.DataCnt())
-	}
-
-	//collect uncommited data if it's local cn
+	// local
 	if !s.IsRemote {
 		s.NodeInfo.Data, err = c.expandRanges(
 			s.DataSource.node,
@@ -640,21 +618,31 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 			db,
 			ctx,
 			blockExprList,
-			engine.Policy_CollectUncommittedData|
-				engine.Policy_CollectCommittedInmemData,
-			nil)
-		if err != nil {
-			return err
-		}
+			policyForLocal,
+			rsp,
+		)
+		return err
+	}
 
-		s.NodeInfo.Data.AppendBlockInfoSlice(commited.GetBlockInfoSlice())
-	} else {
+	// remote
+	var commited engine.RelData
+	commited, err = c.expandRanges(
+		s.DataSource.node,
+		rel,
+		db,
+		ctx,
+		blockExprList,
+		policyForRemote,
+		rsp,
+	)
+
+	if err == nil {
 		tombstones := s.NodeInfo.Data.GetTombstones()
 		commited.AttachTombstones(tombstones)
 		s.NodeInfo.Data = commited
-
 	}
-	return nil
+
+	return err
 }
 
 func (s *Scope) waitForRuntimeFilters(c *Compile) ([]*plan.Expr, bool, error) {
@@ -905,7 +893,7 @@ func (s *Scope) replace(c *Compile) error {
 
 	delAffectedRows := uint64(0)
 	if deleteCond != "" {
-		result, err := c.runSqlWithResult(fmt.Sprintf("delete from `%s`.`%s` where %s", dbName, tblName, deleteCond), NoAccountId)
+		result, err := c.runSqlWithResult(fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s", dbName, tblName, deleteCond), NoAccountId)
 		if err != nil {
 			return err
 		}
@@ -1071,6 +1059,19 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		crs := new(perfcounter.CounterSet)
 		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
 
+		hint := engine.FilterHint{}
+		// Pass runtime BloomFilter to reader via FilterHint (only for ivf entries table).
+		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
+			n.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
+			if len(s.DataSource.BloomFilter) > 0 {
+				hint.BloomFilter = s.DataSource.BloomFilter
+			} else if bfVal := c.proc.Ctx.Value(defines.IvfBloomFilter{}); bfVal != nil {
+				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
+					hint.BloomFilter = bf
+				}
+			}
+		}
+
 		readers, err = s.DataSource.Rel.BuildReaders(
 			newCtx,
 			c.proc,
@@ -1080,7 +1081,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			s.TxnOffset,
 			len(s.DataSource.OrderBy) > 0,
 			engine.Policy_CheckAll,
-			engine.FilterHint{},
+			hint,
 		)
 
 		stats.AddScopePrepareS3Request(statistic.S3Request{
@@ -1134,6 +1135,18 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		crs := new(perfcounter.CounterSet)
 		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
 
+		hint := engine.FilterHint{}
+		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
+			n.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
+			if len(s.DataSource.BloomFilter) > 0 {
+				hint.BloomFilter = s.DataSource.BloomFilter
+			} else if bfVal := c.proc.Ctx.Value(defines.IvfBloomFilter{}); bfVal != nil {
+				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
+					hint.BloomFilter = bf
+				}
+			}
+		}
+
 		mainRds, err = s.DataSource.Rel.BuildReaders(
 			newCtx,
 			c.proc,
@@ -1143,7 +1156,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			s.TxnOffset,
 			len(s.DataSource.OrderBy) > 0,
 			engine.Policy_CheckAll,
-			engine.FilterHint{},
+			hint,
 		)
 		if err != nil {
 			return

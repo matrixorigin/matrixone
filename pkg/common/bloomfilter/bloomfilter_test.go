@@ -111,3 +111,157 @@ func BenchmarkBloomFiltrerTestAndAdd(b *testing.B) {
 		}
 	}
 }
+
+func TestMarshal(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := testutil.NewVector(testCount, types.New(types.T_int64, 0, 0), mp, false, nil)
+	defer vec.Free(mp)
+
+	bf := New(testCount, testRate)
+	bf.Add(vec)
+
+	data, err := bf.Marshal()
+	require.NoError(t, err)
+	require.NotNil(t, data)
+	require.Greater(t, len(data), 0)
+
+	// Verify basic structure: should have at least seedCount (4 bytes) + some seeds + bitmapLen (4 bytes) + bitmap data
+	require.GreaterOrEqual(t, len(data), 8, "marshaled data should have at least seedCount and bitmapLen")
+}
+
+func TestUnmarshal(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := testutil.NewVector(testCount, types.New(types.T_int64, 0, 0), mp, false, nil)
+	defer vec.Free(mp)
+
+	// Test normal case: marshal and unmarshal
+	bf1 := New(testCount, testRate)
+	bf1.Add(vec)
+
+	data, err := bf1.Marshal()
+	require.NoError(t, err)
+
+	bf2 := BloomFilter{}
+	err = bf2.Unmarshal(data)
+	require.NoError(t, err)
+
+	// Verify that unmarshaled filter has same functionality
+	allFound := true
+	bf2.Test(vec, func(exists bool, _ int) {
+		allFound = allFound && exists
+	})
+	require.True(t, allFound, "unmarshaled filter should find all added elements")
+
+	// Test error cases
+	tests := []struct {
+		name    string
+		data    []byte
+		wantErr bool
+	}{
+		{
+			name:    "empty data",
+			data:    []byte{},
+			wantErr: true,
+		},
+		{
+			name:    "data too short (< 4 bytes)",
+			data:    []byte{1, 2, 3},
+			wantErr: true,
+		},
+		{
+			name:    "invalid seed count (0)",
+			data:    []byte{0, 0, 0, 0}, // seedCount = 0
+			wantErr: true,
+		},
+		{
+			name:    "seed data truncated",
+			data:    []byte{1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7}, // seedCount=1, but only 7 bytes for seed (need 8)
+			wantErr: true,
+		},
+		{
+			name:    "no bitmap length",
+			data:    []byte{1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8}, // seedCount=1, one seed, but no bitmapLen
+			wantErr: true,
+		},
+		{
+			name:    "bitmap data truncated",
+			data:    []byte{1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 0, 0, 0, 1, 2, 3}, // seedCount=1, one seed, bitmapLen=10, but only 3 bytes
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bf := BloomFilter{}
+			err := bf.Unmarshal(tt.data)
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestMarshalUnmarshal(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vecs := make([]*vector.Vector, vecCount)
+	for i := 0; i < vecCount; i++ {
+		vecs[i] = testutil.NewVector(testCount/vecCount, types.New(types.T_int64, 0, 0), mp, false, nil)
+	}
+	defer func() {
+		for i := 0; i < vecCount; i++ {
+			vecs[i].Free(mp)
+		}
+	}()
+
+	// Create and populate original filter
+	bf1 := New(testCount, testRate)
+	for j := 0; j < vecCount; j++ {
+		bf1.Add(vecs[j])
+	}
+
+	// Marshal
+	data, err := bf1.Marshal()
+	require.NoError(t, err)
+	require.NotNil(t, data)
+
+	// Unmarshal into new filter
+	bf2 := BloomFilter{}
+	err = bf2.Unmarshal(data)
+	require.NoError(t, err)
+
+	// Verify both filters behave the same
+	testVec := testutil.NewVector(testCount/vecCount, types.New(types.T_int64, 0, 0), mp, false, nil)
+	defer testVec.Free(mp)
+
+	// Test original filter
+	allFound1 := true
+	bf1.Test(testVec, func(exists bool, _ int) {
+		allFound1 = allFound1 && exists
+	})
+
+	// Test unmarshaled filter
+	allFound2 := true
+	bf2.Test(testVec, func(exists bool, _ int) {
+		allFound2 = allFound2 && exists
+	})
+
+	require.Equal(t, allFound1, allFound2, "original and unmarshaled filters should behave the same")
+
+	// Test with new data that wasn't added
+	newVec := testutil.NewVector(testCount*2, types.New(types.T_int64, 0, 0), mp, false, nil)
+	defer newVec.Free(mp)
+
+	allFoundNew1 := true
+	bf1.Test(newVec, func(exists bool, _ int) {
+		allFoundNew1 = allFoundNew1 && exists
+	})
+
+	allFoundNew2 := true
+	bf2.Test(newVec, func(exists bool, _ int) {
+		allFoundNew2 = allFoundNew2 && exists
+	})
+
+	require.Equal(t, allFoundNew1, allFoundNew2, "original and unmarshaled filters should behave the same for new data")
+}

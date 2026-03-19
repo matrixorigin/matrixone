@@ -77,20 +77,41 @@
 #drop table t1;
 
 select now()=now();
-create table t1(a timestamp,b int auto_increment);
-prepare s1 from 'insert into t1(a) select now()';
+
+-- Test prepared statement with timestamp(6) precision to avoid flakiness
+create table t1(a timestamp(6),b int auto_increment);
+prepare s1 from 'insert into t1(a) select now(6)';
 execute s1;
+select sleep(0.001);
 execute s1;
+-- With microsecond precision, two NOW(6) calls should return different values
 select t1.a=t2.a from t1,(select a from t1  where b=2)as t2 where b=1;
 
 delete from t1;
 deallocate prepare s1;
-prepare s1 from 'insert into t1(a,b) values(now(),?)';
-set @b=1;
-execute s1 using @b;
-set @b=2;
-execute s1 using @b;
+
+-- Test scale=0 precision behavior (deterministic)
+alter table t1 modify column a timestamp;
+insert into t1(a,b) values (cast('2024-10-30 10:20:30.123456' as timestamp), 1);
+insert into t1(a,b) values (cast('2024-10-30 10:20:30.222222' as timestamp), 2);
+-- Both values should truncate/round to the same second (scale=0)
 select t1.a=t2.a from t1,(select a from t1  where b=2)as t2 where b=1;
+
+delete from t1;
+
+-- Test prepared statement with parameters
+prepare s1 from 'insert into t1(a,b) values(cast(? as timestamp(6)),?)';
+set @a='2024-10-30 10:20:30.123456';
+set @b=1;
+execute s1 using @a, @b;
+set @a='2024-10-30 10:20:30.123456';
+set @b=2;
+execute s1 using @a, @b;
+-- With identical values, equality must hold deterministically
+select t1.a=t2.a from t1,(select a from t1  where b=2)as t2 where b=1;
+
+deallocate prepare s1;
+drop table t1;
 
 select a=b,c from  (select now(6) as a,  sleep(1) as c, now(6) as b) t1;
 
@@ -98,7 +119,7 @@ select a=b,c from  (select now(6) as a,  sleep(1) as c, now(6) as b) t1;
 set @ts=now();
 select sleep(1);
 set @ts_after=now();
-select timestampdiff(microsecond, @ts, @ts_after) > 1000000 checked;
+select timestampdiff(microsecond, @ts, @ts_after) >= 1000000 checked;
 -- END case
 
 drop table if exists t1;

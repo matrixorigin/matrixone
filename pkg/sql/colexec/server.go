@@ -43,7 +43,7 @@ func NewServer(client logservice.CNHAKeeperClient) *Server {
 	s = &Server{
 		hakeeper:      client,
 		uuidCsChanMap: UuidProcMap{mp: make(map[uuid.UUID]uuidProcMapItem, 1024)},
-		cnSegmentMap:  CnSegmentMap{mp: make(map[objectio.Segmentid]int32, 1024)},
+		cnSegmentMap:  CnSegmentMap{mp: make(map[string]int32, 1024)},
 		receivedRunningPipeline: RunningPipelineMapForRemoteNode{
 			fromRpcClientToRelatedPipeline: make(map[rpcClientItem]runningPipelineInfo, 1024),
 		},
@@ -109,17 +109,19 @@ func (srv *Server) DeleteUuids(uuids []uuid.UUID) {
 	}
 }
 
-func (srv *Server) PutCnSegment(sid *objectio.Segmentid, segmentType int32) {
+func (srv *Server) PutCnSegment(txnID []byte, tableId uint64, sid *objectio.Segmentid, segmentType int32) {
 	srv.cnSegmentMap.Lock()
 	defer srv.cnSegmentMap.Unlock()
-	srv.cnSegmentMap.mp[*sid] = segmentType
+	srv.cnSegmentMap.mp[segmentKey(txnID, tableId, sid)] = segmentType
 }
 
-func (srv *Server) DeleteTxnSegmentIds(sids []objectio.Segmentid) {
+func (srv *Server) DeleteTxnSegmentIds(txnID []byte) {
 	srv.cnSegmentMap.Lock()
 	defer srv.cnSegmentMap.Unlock()
-	for _, segmentName := range sids {
-		delete(srv.cnSegmentMap.mp, segmentName)
+	for key := range srv.cnSegmentMap.mp {
+		if segmentKeyHasTxn(key, txnID) {
+			delete(srv.cnSegmentMap.mp, key)
+		}
 	}
 }
 
@@ -128,15 +130,15 @@ func (srv *Server) GetCnSegmentMap() map[string]int32 {
 	defer srv.cnSegmentMap.Unlock()
 	new_mp := make(map[string]int32)
 	for k, v := range srv.cnSegmentMap.mp {
-		new_mp[string(k[:])] = v
+		new_mp[k] = v
 	}
 	return new_mp
 }
 
-func (srv *Server) GetCnSegmentType(sid *objectio.Segmentid) int32 {
+func (srv *Server) GetCnSegmentType(sid *objectio.Segmentid, tableId uint64, txnID []byte) int32 {
 	srv.cnSegmentMap.Lock()
 	defer srv.cnSegmentMap.Unlock()
-	return srv.cnSegmentMap.mp[*sid]
+	return srv.cnSegmentMap.mp[segmentKey(txnID, tableId, sid)]
 }
 
 // GenerateObject used to generate a new object name for CN

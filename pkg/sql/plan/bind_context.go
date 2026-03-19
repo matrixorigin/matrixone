@@ -62,7 +62,7 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 }
 
 func (bc *BindContext) rootTag() int32 {
-	if bc.bindingRecurCte() {
+	if bc.bindingRecurCte() && bc.sinkTag > 0 {
 		return bc.sinkTag
 	} else if bc.resultTag > 0 {
 		return bc.resultTag
@@ -458,7 +458,12 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 			col := exprImpl.ColName()
 			if expandAlias == AliasBeforeColumn {
 				if selectItem, ok := bc.aliasMap[col]; ok {
-					return selectItem.astExpr, nil
+					if selectItem.astExpr != nil {
+						return selectItem.astExpr, nil
+					}
+					// aliasMap entry exists but astExpr is nil (e.g., UNION context)
+					// Return the original expression unchanged - let the binder handle it
+					return astExpr, nil
 				}
 			}
 
@@ -474,7 +479,12 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 
 			if expandAlias == AliasAfterColumn {
 				if selectItem, ok := bc.aliasMap[col]; ok {
-					return selectItem.astExpr, nil
+					if selectItem.astExpr != nil {
+						return selectItem.astExpr, nil
+					}
+					// aliasMap entry exists but astExpr is nil (e.g., UNION context)
+					// Return the original expression unchanged - let the binder handle it
+					return astExpr, nil
 				}
 			}
 		}

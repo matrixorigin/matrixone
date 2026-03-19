@@ -291,7 +291,7 @@ func explainStep(ctx context.Context, step *plan.Node, nodes []*plan.Node, setti
 			}
 
 			if nodedescImpl.Node.NodeType == plan.Node_LOCK_OP {
-				if nodedescImpl.Node.LockTargets != nil {
+				if len(nodedescImpl.Node.LockTargets) > 0 {
 					buf := bytes.NewBuffer(make([]byte, 0, 360))
 					buf.WriteString("Lock level: ")
 					if nodedescImpl.Node.LockTargets[0].LockTable {

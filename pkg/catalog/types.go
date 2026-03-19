@@ -172,6 +172,8 @@ const (
 	MO_MERGE_SETTINGS = "mo_merge_settings"
 
 	MO_STORED_PROCEDURE = "mo_stored_procedure"
+
+	MO_BRANCH_METADATA = "mo_branch_metadata"
 )
 
 func IsSystemTable(id uint64) bool {

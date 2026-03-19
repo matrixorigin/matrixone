@@ -99,8 +99,8 @@ func Test_mce(t *testing.T) {
 		txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
-		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -341,8 +341,8 @@ func Test_mce_selfhandle(t *testing.T) {
 		txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
-		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -394,8 +394,8 @@ func Test_mce_selfhandle(t *testing.T) {
 		txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
-		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -717,8 +717,8 @@ func Test_handleShowVariables(t *testing.T) {
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
-		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -907,8 +907,8 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 				txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
 				txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 				txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-				txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
-				txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+				txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+				txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 
 				txnClient := mock_frontend.NewMockTxnClient(ctrl)
 				txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -949,6 +949,7 @@ func Test_statement_type(t *testing.T) {
 		}
 		kases := []kase{
 			{&tree.CreateTable{}},
+			{&tree.CreateTable{IsAsSelect: true}},
 			{&tree.Insert{}},
 			{&tree.BeginTransaction{}},
 			{&tree.ShowTables{}},
@@ -1119,6 +1120,84 @@ func TestProcessLoadLocal(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(buffer[:10], convey.ShouldResemble, []byte("helloworld"))
 		convey.So(buffer[10:], convey.ShouldResemble, make([]byte, 4096-10))
+	})
+}
+
+// networkTimeoutError implements net.Error interface for testing network timeout
+type networkTimeoutError struct {
+	msg string
+}
+
+func (e *networkTimeoutError) Error() string   { return e.msg }
+func (e *networkTimeoutError) Timeout() bool   { return true }
+func (e *networkTimeoutError) Temporary() bool { return true }
+
+// timeoutTestConn is a test connection that returns timeout error on read
+type timeoutTestConn struct {
+	testConn
+	returnTimeout bool
+}
+
+func (tc *timeoutTestConn) Read(b []byte) (n int, err error) {
+	if tc.returnTimeout {
+		return 0, &networkTimeoutError{msg: "read timeout"}
+	}
+	return tc.testConn.Read(b)
+}
+
+func TestProcessLoadLocal_NetworkTimeout(t *testing.T) {
+	convey.Convey("processLoadLocal handles network timeout", t, func() {
+		param := &tree.ExternParam{
+			ExParamConst: tree.ExParamConst{
+				Filepath: "test.csv",
+			},
+		}
+		proc := testutil.NewProc(t)
+		var writer *io.PipeWriter
+		proc.Base.LoadLocalReader, writer = io.Pipe()
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		// Create a timeout connection that will return timeout error
+		tConn := &timeoutTestConn{returnTimeout: true}
+
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, nil, nil, nil)
+		pu.SV.SkipCheckUser = true
+		setSessionAlloc("", NewLeakCheckAllocator())
+		setPu("", pu)
+		ioses, err := NewIOSession(tConn, pu, "")
+		convey.So(err, convey.ShouldBeNil)
+		proto := &testMysqlWriter{
+			ioses: ioses,
+		}
+
+		ses := &Session{
+			feSessionImpl: feSessionImpl{
+				respr: NewMysqlResp(proto),
+			},
+		}
+
+		// Read in background to avoid pipe block
+		go func() {
+			buf := make([]byte, 4096)
+			for {
+				_, err := proc.Base.LoadLocalReader.Read(buf)
+				if err != nil {
+					break
+				}
+			}
+		}()
+
+		ec := newTestExecCtx(context.Background(), ctrl)
+		err = processLoadLocal(ses, ec, param, writer, proc.GetLoadLocalReader())
+
+		// Should return error containing "network read timeout"
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "network read timeout")
 	})
 }
 
@@ -1436,8 +1515,8 @@ func Test_ExecRequest(t *testing.T) {
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
-		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -1652,8 +1731,8 @@ func Test_handleShowTableStatus(t *testing.T) {
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
-		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()

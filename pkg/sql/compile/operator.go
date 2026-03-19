@@ -679,6 +679,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.UpdateColIdxList = t.UpdateColIdxList
 		op.UpdateColExprList = t.UpdateColExprList
 		op.DelColIdx = t.DelColIdx
+		op.SetInfo(&info)
 		return op
 	case vm.PostDml:
 		t := sourceOp.(*postdml.PostDml)
@@ -1023,6 +1024,8 @@ func constructTableFunction(n *plan.Node, qry *plan.Query) *table_function.Table
 	arg.Params = n.TableDef.TblFunc.Param
 	arg.IsSingle = n.TableDef.TblFunc.IsSingle
 	arg.Limit = n.Limit
+	// probe side runtime filter specs
+	arg.RuntimeFilterSpecs = n.RuntimeFilterProbeList
 	return arg
 }
 

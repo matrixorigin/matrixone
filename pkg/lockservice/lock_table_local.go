@@ -415,6 +415,15 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 				// only new holder can added lock into txn.
 				// newHolder is false means prev op of txn has already added lock into txn
 				if newHolder {
+					if updated, changed := lock.setMode(c.opts.Mode); changed {
+						l.mu.store.Add(key, updated)
+						// Range lock is stored as two entries (start + end) with
+						// independent Lock.value bytes. When we update the mode on
+						// one end we must also update the paired entry so that
+						// subsequent isLockModeAllowed checks on either key see the
+						// correct mode.
+						l.setModePairedRangeLock(key, updated, c.opts.Mode)
+					}
 					err := c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{key}, l.logger)
 					if err != nil {
 						return err
@@ -647,6 +656,13 @@ func (l *localLockTable) addRangeLockLocked(
 				// only new holder can added lock into txn.
 				// newHolder is false means prev op of txn has already added lock into txn
 				if newHolder {
+					if updated, changed := conflictWith.setMode(c.opts.Mode); changed {
+						l.mu.store.Add(conflictKey, updated)
+						// Range lock is stored as two entries (start + end) with
+						// independent Lock.value bytes. Update the paired entry
+						// so both ends reflect the correct mode.
+						l.setModePairedRangeLock(conflictKey, updated, c.opts.Mode)
+					}
 					err := c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{conflictKey}, l.logger)
 					if err != nil {
 						return nil, Lock{}, err
@@ -762,6 +778,62 @@ func (l *localLockTable) mustGetRangeStart(endKey []byte) []byte {
 		panic("missing start key")
 	}
 	return v
+}
+
+// setModePairedRangeLock updates the mode of the paired range lock entry.
+// A range lock is stored as two entries (range-start and range-end) with
+// independent Lock.value bytes. When setMode updates one end, this helper
+// finds and updates the other end so both entries have a consistent mode.
+// It is a no-op for row locks.
+// setModePairedRangeLock updates the paired range lock entry's mode to keep
+// both ends consistent. For range-end it scans backward to find range-start;
+// for range-start it scans forward to find range-end.
+func (l *localLockTable) setModePairedRangeLock(key []byte, lock Lock, mode pb.LockMode) {
+	if lock.isLockRow() {
+		return
+	}
+	pairedKey, pairedLock, ok := l.findPairedRangeLock(key, lock)
+	if !ok {
+		return
+	}
+	if updated, changed := pairedLock.setMode(mode); changed {
+		l.mu.store.Add(pairedKey, updated)
+	}
+}
+
+// findPairedRangeLock locates the other end of a range lock pair.
+// Between range-start and range-end there may be interleaved row locks
+// from other transactions, so we scan until we find the matching entry.
+func (l *localLockTable) findPairedRangeLock(key []byte, lock Lock) ([]byte, Lock, bool) {
+	if lock.isLockRangeEnd() {
+		cur := key
+		for {
+			prevKey, prevLock, ok := l.mu.store.Prev(cur)
+			if !ok {
+				return nil, Lock{}, false
+			}
+			if prevLock.isLockRangeStart() {
+				return prevKey, prevLock, true
+			}
+			cur = prevKey
+		}
+	}
+	// isLockRangeStart: scan forward
+	var pairedKey []byte
+	var pairedLock Lock
+	var found bool
+	l.mu.store.Range(
+		nextKey(key, nil),
+		nil,
+		func(k []byte, v Lock) bool {
+			if v.isLockRangeEnd() {
+				pairedKey, pairedLock, found = k, v, true
+				return false
+			}
+			return true
+		},
+	)
+	return pairedKey, pairedLock, found
 }
 
 func nextKey(src, dst []byte) []byte {

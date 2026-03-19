@@ -11,3 +11,8 @@ port-base = 19000
 [malloc]
 check-fraction = 65536
 enable-metrics = true
+
+[observability]
+disableMetric = false
+enable-metric-to-prom = true
+status-port = 7001

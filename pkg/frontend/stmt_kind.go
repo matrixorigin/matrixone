@@ -138,9 +138,11 @@ func statementCanBeExecutedInUncommittedTransaction(
 	switch st := stmt.(type) {
 	//ddl statement
 	case *tree.CreateTable, *tree.CreateIndex, *tree.CreateView, *tree.AlterView, *tree.AlterTable:
-		if createTblStmt, ok := stmt.(*tree.CreateTable); ok && createTblStmt.IsAsSelect {
-			return false, nil
-		}
+		// CTAS is allowed in explicit transactions now because its internal
+		// INSERT ... SELECT is executed in the same txn as CREATE TABLE.
+		//if createTblStmt, ok := stmt.(*tree.CreateTable); ok && createTblStmt.IsAsSelect {
+		//	return false, nil
+		//}
 		return true, nil
 	case *tree.CreateDatabase, *tree.DropDatabase:
 		return true, nil
@@ -229,7 +231,12 @@ func statementCanBeExecutedInUncommittedTransaction(
 		return ses.IsBackgroundSession() || !ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), nil
 	case *tree.SetVar:
 		return true, nil
-	case *tree.CloneTable, *tree.CloneDatabase:
+	case *tree.CloneTable,
+		*tree.CloneDatabase,
+		*tree.DataBranchCreateTable,
+		*tree.DataBranchCreateDatabase,
+		*tree.DataBranchDeleteTable,
+		*tree.DataBranchDeleteDatabase:
 		return true, nil
 	case *tree.CallStmt:
 		// Call procedure can be executed in an uncommitted transaction, usually used in

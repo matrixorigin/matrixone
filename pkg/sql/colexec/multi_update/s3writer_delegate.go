@@ -287,7 +287,15 @@ func (writer *s3WriterDelegate) prepareDeleteBatches(
 					return nil, err
 				}
 
-				if colexec.IsDeletionOnTxnUnCommit(writer.segmentMap, &segid) {
+				tableId := uint64(0)
+				txnID := []byte(nil)
+				if idx < len(writer.updateCtxs) && writer.updateCtxs[idx] != nil && writer.updateCtxs[idx].TableDef != nil {
+					tableId = writer.updateCtxs[idx].TableDef.TblId
+				}
+				if txnOp := proc.GetTxnOperator(); txnOp != nil {
+					txnID = txnOp.Txn().ID
+				}
+				if colexec.IsDeletionOnTxnUnCommit(writer.segmentMap, &segid, tableId, txnID) {
 					blockMap[blkid].typ = deletion.DeletionOnTxnUnCommit
 				} else {
 					blockMap[blkid].typ = deletion.DeletionOnCommitted
@@ -875,7 +883,8 @@ func cloneSelectedVecsFromCompactBatches(
 		}
 
 		if selectColsCheckNullColIdx > -1 && tmpBat.Vecs[selectColsCheckNullColIdx].HasNull() {
-			sortKeyNulls := tmpBat.Vecs[selectColsCheckNullColIdx].GetNulls().GetBitmap()
+			// Clone bitmap to avoid in-place mutation during shrink.
+			sortKeyNulls := tmpBat.Vecs[selectColsCheckNullColIdx].GetNulls().GetBitmap().Clone()
 			tmpBat.ShrinkByMask(sortKeyNulls, true, 0)
 		}
 		if tmpBat.RowCount() == 0 {

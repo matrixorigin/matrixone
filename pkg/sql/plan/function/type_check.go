@@ -62,8 +62,8 @@ func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 			}
 		}
 
-		setTargetScaleFromSource(&s1, &t1)
-		setTargetScaleFromSource(&s2, &t2)
+		SetTargetScaleFromSource(&s1, &t1)
+		SetTargetScaleFromSource(&s2, &t2)
 
 		if (t1.Oid.IsArrayRelate() && t2.IsNumeric()) || (t1.IsNumeric() && t2.Oid.IsArrayRelate()) {
 			// Vector <Op> Scalar or
@@ -120,8 +120,8 @@ func fixedTypeCastRule2(s1, s2 types.Type) (bool, types.Type, types.Type) {
 			}
 		}
 
-		setTargetScaleFromSource(&s1, &t1)
-		setTargetScaleFromSource(&s2, &t2)
+		SetTargetScaleFromSource(&s1, &t1)
+		SetTargetScaleFromSource(&s2, &t2)
 
 		if t1.Oid.IsArrayRelate() && t2.IsNumeric() {
 			// Vector / Scalar => Vector
@@ -179,7 +179,7 @@ func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 			castType[i] = inputs[i]
 		} else {
 			castType[i] = ov.args[i].ToType()
-			setTargetScaleFromSource(&inputs[i], &castType[i])
+			SetTargetScaleFromSource(&inputs[i], &castType[i])
 		}
 	}
 	return newCheckResultWithCast(minIndex, castType)
@@ -270,7 +270,7 @@ var fixedBinaryCastRule1 [300][300]tarTypes
 var fixedBinaryCastRule2 [300][300]tarTypes
 var fixedCanImplicitCastRule [300]implicitTypeCastRule
 
-func setTargetScaleFromSource(source, target *types.Type) {
+func SetTargetScaleFromSource(source, target *types.Type) {
 	if source.Oid == target.Oid {
 		target.Width = source.Width
 		target.Scale = source.Scale

@@ -41,15 +41,20 @@ import (
 
 const DefaultLoadParallism = 20
 
+// NewPartitionStateChangesHandler is the function used to create a ChangeHandler
+// from the partition state. It is a variable so tests can stub it.
+var NewPartitionStateChangesHandler = logtailreplay.NewChangesHandler
+
 func (tbl *txnTable) CollectChanges(
 	ctx context.Context,
 	from, to types.TS,
+	skipDeletes bool,
 	mp *mpool.MPool,
 ) (engine.ChangesHandle, error) {
 	if from.IsEmpty() {
 		return NewCheckpointChangesHandle(ctx, tbl, to, mp)
 	}
-	return NewPartitionChangesHandle(ctx, tbl, from, to, mp)
+	return NewPartitionChangesHandle(ctx, tbl, from, to, skipDeletes, mp)
 }
 
 type PartitionChangesHandle struct {
@@ -63,6 +68,7 @@ type PartitionChangesHandle struct {
 	toTs   types.TS
 	tbl    *txnTable
 
+	skipDeletes   bool
 	primarySeqnum int
 	mp            *mpool.MPool
 	fs            fileservice.FileService
@@ -72,12 +78,14 @@ func NewPartitionChangesHandle(
 	ctx context.Context,
 	tbl *txnTable,
 	from, to types.TS,
+	skipDeletes bool,
 	mp *mpool.MPool,
 ) (*PartitionChangesHandle, error) {
 	handle := &PartitionChangesHandle{
 		tbl:           tbl,
 		fromTs:        from,
 		toTs:          to,
+		skipDeletes:   skipDeletes,
 		primarySeqnum: tbl.primarySeqnum,
 		mp:            mp,
 		fs:            tbl.getTxn().engine.fs,
@@ -116,7 +124,9 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 	if h.currentPSTo.EQ(&h.toTs) {
 		return true, nil
 	}
-	state, err := h.tbl.getPartitionState(ctx)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	state, err := h.tbl.getPartitionState(ctxWithTimeout)
 	if err != nil {
 		return
 	}
@@ -127,7 +137,8 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		nextFrom = h.currentPSTo.Next()
 	}
 	stateStart := state.GetStart()
-	if stateStart.LT(&nextFrom) {
+
+	if stateStart.LE(&nextFrom) {
 		h.currentPSTo = h.toTs
 		h.currentPSFrom = nextFrom
 		if h.handleIdx != 0 {
@@ -144,20 +155,38 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 			)
 		}
 		h.handleIdx++
-		h.currentChangeHandle, err = logtailreplay.NewChangesHandler(
+		h.currentChangeHandle, err = NewPartitionStateChangesHandler(
 			ctx,
 			state,
 			h.currentPSFrom,
 			h.currentPSTo,
+			h.skipDeletes,
 			objectio.BlockMaxRows,
 			h.primarySeqnum,
 			h.mp,
 			h.fs,
 		)
 		if err != nil {
+			// If the partition state references GC-ed object files,
+			// fall through to the snapshot read path which reads from
+			// checkpoint files instead of the deleted object files.
+			// Only FileNotFound is recoverable; a real ErrStaleRead means
+			// the partition state's logical range doesn't cover the request.
+			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+				logutil.Warn("ChangesHandle-Split partition state file missing, falling back to snapshot read",
+					zap.String("table", fmt.Sprintf("%d", h.tbl.tableId)),
+					zap.String("nextFrom", nextFrom.ToString()),
+					zap.String("stateStart", stateStart.ToString()),
+					zap.Error(err),
+				)
+				_ = h.closeCurrentChangeHandle()
+				err = nil
+			} else {
+				return
+			}
+		} else {
 			return
 		}
-		return
 	}
 
 	logutil.Info("ChangesHandle-Split request snapshot read",
@@ -170,6 +199,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		return
 	}
 	resp, ok := response.(*cmd_util.SnapshotReadResp)
+
 	var checkpointEntries []*checkpoint.CheckpointEntry
 	minTS := types.MaxTs()
 	maxTS := types.TS{}
@@ -177,6 +207,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		checkpointEntries = make([]*checkpoint.CheckpointEntry, 0, len(resp.Entries))
 		entries := resp.Entries
 		for _, entry := range entries {
+			logutil.Infof("ChangesHandle-Split get checkpoint entry: %v", entry.String())
 			start := types.TimestampToTS(*entry.Start)
 			end := types.TimestampToTS(*entry.End)
 			if start.LT(&minTS) {
@@ -192,6 +223,16 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		}
 	}
 	if nextFrom.LT(&minTS) || nextFrom.GT(&maxTS) {
+		logutil.Info("ChangesHandle-Split stale read",
+			zap.String("table", fmt.Sprintf("%d", h.tbl.tableId)),
+			zap.String("nextFrom", nextFrom.ToString()),
+			zap.String("stateStart", stateStart.ToString()),
+			zap.String("minTS", minTS.ToString()),
+			zap.String("maxTS", maxTS.ToString()),
+			zap.Int("checkpointEntries", len(checkpointEntries)),
+			zap.Bool("nextFrom<minTS", nextFrom.LT(&minTS)),
+			zap.Bool("nextFrom>maxTS", nextFrom.GT(&maxTS)),
+		)
 		return false, moerr.NewErrStaleReadNoCtx(minTS.ToString(), nextFrom.ToString())
 	}
 	h.currentPSFrom = nextFrom
@@ -218,6 +259,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		checkpointEntries,
 		h.currentPSFrom,
 		h.currentPSTo,
+		h.skipDeletes,
 		objectio.BlockMaxRows,
 		h.primarySeqnum,
 		h.mp,
@@ -229,10 +271,16 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 	return false, nil
 }
 func (h *PartitionChangesHandle) Close() error {
+	if h == nil {
+		return nil
+	}
 	return h.closeCurrentChangeHandle()
 }
 
 func (h *PartitionChangesHandle) closeCurrentChangeHandle() (err error) {
+	if h == nil {
+		return nil
+	}
 	h.closeMu.Lock()
 	defer h.closeMu.Unlock()
 	if h.currentChangeHandle != nil {

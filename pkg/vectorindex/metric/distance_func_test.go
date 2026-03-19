@@ -68,6 +68,12 @@ func Test_ResolveFun(t *testing.T) {
 			normalize:  false,
 		},
 		{
+			metricType: Metric_L2sqDistance,
+			spherical:  false,
+			distfn:     L2DistanceSq[float32],
+			normalize:  false,
+		},
+		{
 			metricType: Metric_InnerProduct,
 			spherical:  false,
 			distfn:     L2Distance[float32],
@@ -88,6 +94,12 @@ func Test_ResolveFun(t *testing.T) {
 
 		{
 			metricType: Metric_L2Distance,
+			spherical:  true,
+			distfn:     L2Distance[float32],
+			normalize:  false,
+		},
+		{
+			metricType: Metric_L2sqDistance,
 			spherical:  true,
 			distfn:     L2Distance[float32],
 			normalize:  false,
@@ -131,13 +143,15 @@ func Test_ZeroVector(t *testing.T) {
 
 	v1 := []float64{0, 0, 0}
 	v2 := []float64{0, 0, 0}
-	_, err := CosineDistance[float64](v1, v2)
-	require.NotNil(t, err)
+	dist64, err := CosineDistance[float64](v1, v2)
+	require.NoError(t, err)
+	require.Equal(t, dist64, float64(1))
 
 	v1f32 := []float32{0, 0, 0}
 	v2f32 := []float32{0, 0, 0}
-	_, err = CosineDistance[float32](v1f32, v2f32)
-	require.NotNil(t, err)
+	dist32, err := CosineDistance[float32](v1f32, v2f32)
+	require.NoError(t, err)
+	require.Equal(t, dist32, float32(1))
 
 }
 
@@ -181,7 +195,7 @@ func Test_L2Distance(t *testing.T) {
 				v1: []float64{4, 1},
 				v2: []float64{1, 4},
 			},
-			want: 4.242640687119286,
+			want: 4.242640687119285,
 		},
 		{
 			name: "Test 3.c",
@@ -190,6 +204,14 @@ func Test_L2Distance(t *testing.T) {
 				v2: []float64{1, 1},
 			},
 			want: 3,
+		},
+		{
+			name: "Test 4",
+			args: args{
+				v1: []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+				v2: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
+			},
+			want: 3.1622776601683795,
 		},
 	}
 	for _, tt := range tests {
@@ -251,6 +273,14 @@ func Test_L1Distance(t *testing.T) {
 			},
 			want: 3,
 		},
+		{
+			name: "Test 4",
+			args: args{
+				v1: []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+				v2: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
+			},
+			want: 10,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -310,6 +340,14 @@ func Test_CosineDistance(t *testing.T) {
 				v2: []float64{1, 1},
 			},
 			want: 0.1425070742874559,
+		},
+		{
+			name: "Test 4",
+			args: args{
+				v1: []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+				v2: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
+			},
+			want: 0.0021238962030426523,
 		},
 	}
 	for _, tt := range tests {
@@ -371,6 +409,14 @@ func Test_InnerProduct(t *testing.T) {
 			},
 			want: -5,
 		},
+		{
+			name: "Test 4",
+			args: args{
+				v1: []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+				v2: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
+			},
+			want: -440,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -430,6 +476,14 @@ func Test_L2DistanceSq(t *testing.T) {
 				v2: []float64{1, 1},
 			},
 			want: 9,
+		},
+		{
+			name: "Test 4",
+			args: args{
+				v1: []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+				v2: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
+			},
+			want: 10,
 		},
 	}
 	for _, tt := range tests {
@@ -493,6 +547,15 @@ func Test_AngularDistance(t *testing.T) {
 			},
 			want: 0.5,
 		},
+		{
+			name: "Test 4",
+			args: args{
+				v1: []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+				v2: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
+			},
+			want: 0,
+		},
+
 		// Test 4: Triangle Inequality check on **normalized** vector
 		// A(1,0),B(2,2), C(0,1) => AB + AC >= BC => 0.25 + 0.25 >= 0.5
 		//{

@@ -21,12 +21,10 @@ linters:
     depguard:
       rules:
         main:
+          list-mode: lax
           files:
             - $all
             - '!$test'
-          # allow:
-          #   - $gostd
-          #   - github.com
           deny:
             - pkg: github.com/OpenPeeDeeP/depguard
               desc: example to deny some package

@@ -30,13 +30,17 @@ var _ vm.Operator = new(TableFunction)
 type TableFunction struct {
 	ctr container
 
-	Rets        []*plan.ColDef
-	Args        []*plan.Expr
-	Attrs       []string
-	Params      []byte
-	FuncName    string
-	Limit       *plan.Expr
-	IsSingle    bool
+	Rets     []*plan.ColDef
+	Args     []*plan.Expr
+	Attrs    []string
+	Params   []byte
+	FuncName string
+	Limit    *plan.Expr
+	IsSingle bool
+
+	// probe side runtime filter specs (including BloomFilter)
+	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
+
 	OffsetTotal [][2]int64
 	CanOpt      bool
 

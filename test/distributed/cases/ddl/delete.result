@@ -29,4 +29,28 @@ drop table if exists t1;
 create table t1 (a int primary key, b int, c int, d int, e int, f int, g int, key b_idx(b), key c_idx(c), key d_idx(d), key e_idx(d), key f_idx(f), key g_idx(g));
 insert into t1 select *,*,*,*,*,*,* from generate_series(0,2000000,1)g;
 delete from t1 where a < 1000002 and a > 1000000;
+drop table if exists update_controller_portal5;
+create table update_controller_portal5 (
+id int not null,
+payload varchar(50) default null,
+primary key (id),
+key idx_this_id (id)
+);
+insert into update_controller_portal5 (id, payload) values (13, 'row-13');
+delete from update_controller_portal5 where id = 13;
+select count(*) as remaining from update_controller_portal5 where id = 13;
+remaining
+0
+drop table if exists t_dup_idx;
+create table t_dup_idx (
+id int not null,
+payload varchar(50) default null,
+primary key (id)
+);
+insert into t_dup_idx (id, payload) values (1, 'a'), (2, 'b');
+create index idx_dup on t_dup_idx (id);
+delete from t_dup_idx where id = 2;
+select group_concat(id order by id) as remaining_ids from t_dup_idx;
+remaining_ids
+1
 drop database test_delete;

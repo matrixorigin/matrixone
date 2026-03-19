@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"go.uber.org/zap"
 )
@@ -52,4 +53,28 @@ func isDisallowedError(err error) bool {
 		return true
 	}
 	return false
+}
+
+// IsExpectedConnectionCloseError checks if the error is an expected error when closing connections.
+// These errors occur during normal connection lifecycle and should be logged at DEBUG level.
+// Currently only "use of closed network connection" is considered as expected.
+func IsExpectedConnectionCloseError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "use of closed network connection")
+}
+
+// LogConnectionCloseError logs connection close errors at appropriate level.
+// Expected errors (like "use of closed network connection") are logged at DEBUG level,
+// while unexpected errors are logged at ERROR level.
+func LogConnectionCloseError(msg string, err error, fields ...zap.Field) {
+	if IsExpectedConnectionCloseError(err) {
+		allFields := append([]zap.Field{zap.Error(err)}, fields...)
+		Debug(msg+" (connection closed)", allFields...)
+	} else {
+		allFields := append([]zap.Field{zap.Error(err)}, fields...)
+		Error(msg, allFields...)
+	}
 }

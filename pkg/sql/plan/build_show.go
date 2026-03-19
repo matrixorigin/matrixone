@@ -74,7 +74,7 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 		return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATEDATABASE)
 	}
 
-	sqlStr := "select \"%s\" as `Database`, \"%s\" as `Create Database`"
+	sqlStr := "SELECT \"%s\" AS `Database`, \"%s\" AS `Create Database`"
 	createSql := fmt.Sprintf("CREATE DATABASE `%s`", name)
 	sqlStr = fmt.Sprintf(sqlStr, name, createSql)
 
@@ -148,7 +148,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		}
 		buf.WriteRune(ch)
 	}
-	sql := "select \"%s\" as `Table`, \"%s\" as `Create Table`"
+	sql := "SELECT \"%s\" AS `Table`, \"%s\" AS `Create Table`"
 	sql = fmt.Sprintf(sql, tblName, buf.String())
 
 	return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATETABLE)
@@ -231,7 +231,7 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 
 	// Any account should show database MO_CATALOG_DB_NAME
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and datname = '%s')", accountId, MO_CATALOG_DB_NAME)
-	sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database %s where (%s) ORDER BY %s", MO_CATALOG_DB_NAME, snapshotSpec, accountClause, catalog.SystemDBAttr_Name)
+	sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database %s WHERE (%s) ORDER BY %s", MO_CATALOG_DB_NAME, snapshotSpec, accountClause, catalog.SystemDBAttr_Name)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
@@ -256,7 +256,7 @@ func buildShowSequences(stmt *tree.ShowSequences, ctx CompilerContext) (*Plan, e
 
 	ddlType := plan.DataDefinition_SHOW_SEQUENCES
 
-	sql := fmt.Sprintf("select %s.mo_tables.relname as `Names`, mo_show_visible_bin(%s.mo_columns.atttyp, 2) as 'Data Type' from %s.mo_tables left join %s.mo_columns on %s.mo_tables.rel_id = %s.mo_columns.att_relname_id where %s.mo_tables.relkind = '%s' and %s.mo_tables.reldatabase = '%s' and %s.mo_columns.attname = '%s'", MO_CATALOG_DB_NAME,
+	sql := fmt.Sprintf("SELECT %s.mo_tables.relname AS `Names`, mo_show_visible_bin(%s.mo_columns.atttyp, 2) AS 'Data Type' FROM %s.mo_tables LEFT JOIN %s.mo_columns ON %s.mo_tables.rel_id = %s.mo_columns.att_relname_id WHERE %s.mo_tables.relkind = '%s' AND %s.mo_tables.reldatabase = '%s' AND %s.mo_columns.attname = '%s'", MO_CATALOG_DB_NAME,
 		MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, catalog.SystemSequenceRel, MO_CATALOG_DB_NAME, dbName, MO_CATALOG_DB_NAME, Sequence_cols_name[0])
 
 	if stmt.Where != nil {
@@ -1071,7 +1071,7 @@ func buildShowCreatePublications(stmt *tree.ShowCreatePublications, ctx Compiler
 	if err != nil {
 		return nil, err
 	}
-	sql := fmt.Sprintf("select pub_name as Publication, 'CREATE PUBLICATION ' || pub_name || ' DATABASE ' || database_name || case table_list when '*' then '' else ' TABLE ' || table_list end || ' ACCOUNT ' || account_list as 'Create Publication' from mo_catalog.mo_pubs where account_id = %d and pub_name='%s';", accountId, stmt.Name)
+	sql := fmt.Sprintf("SELECT pub_name AS Publication, 'CREATE PUBLICATION ' || pub_name || ' DATABASE ' || database_name || CASE table_list WHEN '*' THEN '' ELSE ' TABLE ' || table_list END || ' ACCOUNT ' || account_list AS 'Create Publication' FROM mo_catalog.mo_pubs WHERE account_id = %d AND pub_name='%s';", accountId, stmt.Name)
 	ctx.SetContext(defines.AttachAccountId(ctx.GetContext(), catalog.System_Account))
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
@@ -1079,10 +1079,10 @@ func buildShowCreatePublications(stmt *tree.ShowCreatePublications, ctx Compiler
 func returnByRewriteSQL(ctx CompilerContext, sql string,
 	ddlType plan.DataDefinition_DdlType) (*Plan, error) {
 	newStmt, err := getRewriteSQLStmt(ctx, sql)
-	defer newStmt.Free()
 	if err != nil {
 		return nil, err
 	}
+	defer newStmt.Free()
 	return getReturnDdlBySelectStmt(ctx, newStmt, ddlType)
 }
 

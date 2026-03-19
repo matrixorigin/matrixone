@@ -687,6 +687,12 @@ func (expr *ColumnExpressionExecutor) Eval(_ *process.Process, batches []*batch.
 		relIndex = 0
 	}
 
+	if relIndex >= len(batches) {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"column expression eval: relIndex %d out of range, batches length %d",
+			relIndex, len(batches))
+	}
+
 	vec := batches[relIndex].Vecs[expr.colIndex]
 	if vec.IsConstNull() {
 		vec = expr.getConstNullVec(expr.typ, vec.Length())

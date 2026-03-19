@@ -232,6 +232,122 @@ func TestCompactBatchsUnion(t *testing.T) {
 	bats.Clean(mp)
 }
 
+func TestCompactBatchsUnionLargeSels(t *testing.T) {
+	mp := mpool.MustNewZero()
+	bats := NewCompactBatchs(TestBatchMaxRow)
+
+	// Test case 1: Union with selsLen > batchMaxRow when bats.Length() == 0
+	bat1 := makeTestBatch(20000, mp) // Create a large batch
+	var sels []int32
+	for i := 0; i < 15000; i++ {
+		sels = append(sels, int32(i))
+	}
+	err := bats.Union(mp, bat1, sels)
+	require.NoError(t, err)
+
+	// Should create multiple batches since selsLen (15000) > batchMaxRow (8192)
+	expectedBatches1 := (15000 + TestBatchMaxRow - 1) / TestBatchMaxRow // Ceiling division
+	require.Equal(t, expectedBatches1, bats.Length())
+	require.Equal(t, 15000, bats.RowCount())
+
+	// Verify each batch doesn't exceed batchMaxRow
+	for i := 0; i < bats.Length(); i++ {
+		bat := bats.Get(i)
+		require.NotNil(t, bat)
+		require.LessOrEqual(t, bat.rowCount, TestBatchMaxRow)
+		if i < bats.Length()-1 {
+			// All batches except the last should be exactly batchMaxRow
+			require.Equal(t, TestBatchMaxRow, bat.rowCount)
+		}
+	}
+
+	bat1.Clean(mp)
+	bats.Clean(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+
+	// Test case 2: Union with selsLen == batchMaxRow when bats.Length() == 0
+	bats = NewCompactBatchs(TestBatchMaxRow)
+	bat2 := makeTestBatch(TestBatchMaxRow, mp)
+	sels = nil
+	for i := 0; i < TestBatchMaxRow; i++ {
+		sels = append(sels, int32(i))
+	}
+	err = bats.Union(mp, bat2, sels)
+	require.NoError(t, err)
+	require.Equal(t, 1, bats.Length())
+	require.Equal(t, TestBatchMaxRow, bats.RowCount())
+	require.Equal(t, TestBatchMaxRow, bats.Get(0).rowCount)
+
+	bat2.Clean(mp)
+	bats.Clean(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+
+	// Test case 3: Union with selsLen > batchMaxRow when lastBat is already full
+	bats = NewCompactBatchs(TestBatchMaxRow)
+	bat3 := makeTestBatch(TestBatchMaxRow, mp)
+	sels = nil
+	for i := 0; i < TestBatchMaxRow; i++ {
+		sels = append(sels, int32(i))
+	}
+	// Fill first batch to full
+	err = bats.Union(mp, bat3, sels)
+	require.NoError(t, err)
+	require.Equal(t, 1, bats.Length())
+	require.Equal(t, TestBatchMaxRow, bats.Get(0).rowCount)
+
+	// Now Union with large sels again
+	bat4 := makeTestBatch(20000, mp)
+	sels = nil
+	for i := 0; i < 10000; i++ {
+		sels = append(sels, int32(i))
+	}
+	err = bats.Union(mp, bat4, sels)
+	require.NoError(t, err)
+	// Should create new batches since lastBat is full
+	// First batch is full (8192), remaining 10000 sels should create 2 batches: 8192 + 1808
+	expectedBatches3 := 1 + (10000+TestBatchMaxRow-1)/TestBatchMaxRow
+	require.Equal(t, expectedBatches3, bats.Length())
+	require.Equal(t, TestBatchMaxRow+10000, bats.RowCount())
+	require.Equal(t, TestBatchMaxRow, bats.Get(0).rowCount)
+	require.Equal(t, TestBatchMaxRow, bats.Get(1).rowCount)
+	require.Equal(t, 10000-TestBatchMaxRow, bats.Get(2).rowCount) // 10000 - 8192 = 1808
+
+	bat3.Clean(mp)
+	bat4.Clean(mp)
+	bats.Clean(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+
+	// Test case 4: Union with selsLen > batchMaxRow when lastBat has some rows
+	bats = NewCompactBatchs(TestBatchMaxRow)
+	bat5 := makeTestBatch(10000, mp)
+	sels = nil
+	for i := 0; i < 5000; i++ {
+		sels = append(sels, int32(i))
+	}
+	// First Union: creates batch with 5000 rows
+	err = bats.Union(mp, bat5, sels)
+	require.NoError(t, err)
+	require.Equal(t, 1, bats.Length())
+	require.Equal(t, 5000, bats.Get(0).rowCount)
+
+	// Second Union: with 10000 sels, should fill first batch to 8192, then create new batch
+	sels = nil
+	for i := 0; i < 10000; i++ {
+		sels = append(sels, int32(i))
+	}
+	err = bats.Union(mp, bat5, sels)
+	require.NoError(t, err)
+	// First batch should be filled to 8192 (5000 + 3192), second batch has remaining 6808
+	require.Equal(t, 2, bats.Length())
+	require.Equal(t, 5000+10000, bats.RowCount())
+	require.Equal(t, TestBatchMaxRow, bats.Get(0).rowCount)
+	require.Equal(t, 10000-3192, bats.Get(1).rowCount) // 10000 - (8192-5000) = 6808
+
+	bat5.Clean(mp)
+	bats.Clean(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
 func makeTestBatch(max int, mp *mpool.MPool) *Batch {
 	bat := NewWithSize(2)
 	bat.Vecs[0] = makeTestVec(max, mp)

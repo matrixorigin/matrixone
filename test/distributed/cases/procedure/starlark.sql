@@ -13,7 +13,6 @@ create or replace procedure sp_empty () language 'starlark'
 call sp_empty();
 call sp_empty('foo');
 
--- @bvt:issue#22165
 create or replace procedure sp_empty () language 'starlark'
 '
 def add(x, y):
@@ -24,13 +23,12 @@ foo = add(1, 2)
 
 call sp_empty();
 call sp_empty('foo');
--- @bvt:issue
 
 
-create procedure sp_badparam(in mo int) language 'starlark'
+create procedure sp_badparam(in `mo` int) language 'starlark'
 '';
 
-create procedure sp_badparam(in mo.foo int) language 'starlark'
+create procedure sp_badparam(in `mo.foo` int) language 'starlark'
 '';
 
 create procedure sp_badparam(inout out_foo int) language 'starlark'

@@ -326,11 +326,11 @@ func (e *testEngine) AllocateIDByKey(ctx context.Context, key string) (uint64, e
 	return 0, nil
 }
 
-func (e *testEngine) TryToSubscribeTable(ctx context.Context, dbID, tbID uint64, dbName, tblName string) error {
+func (e *testEngine) TryToSubscribeTable(ctx context.Context, accId, dbID, tbID uint64, dbName, tblName string) error {
 	return nil
 }
 
-func (e *testEngine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error {
+func (e *testEngine) UnsubscribeTable(ctx context.Context, accId, dbID, tbID uint64) error {
 	return nil
 }
 
@@ -493,9 +493,11 @@ func (o *testOperator) NextSequence() uint64 {
 	panic("should not call")
 }
 
-func (o *testOperator) EnterRunSql() {}
+func (o *testOperator) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) uint64 {
+	return 0
+}
 
-func (o *testOperator) ExitRunSql() {}
+func (o *testOperator) ExitRunSqlWithToken(_ uint64) {}
 
 func (o *testOperator) GetWaitActiveCost() time.Duration {
 	return time.Duration(0)

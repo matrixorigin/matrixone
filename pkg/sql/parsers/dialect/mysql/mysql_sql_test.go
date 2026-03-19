@@ -83,6 +83,26 @@ func TestOriginSQL(t *testing.T) {
 	}
 }
 
+func TestDataBranchDiffOutputModes(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), `data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"} output summary`, 1)
+	require.NoError(t, err)
+
+	diffStmt, ok := stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.NotNil(t, diffStmt.OutputOpt)
+	require.True(t, diffStmt.OutputOpt.Summary)
+	require.False(t, diffStmt.OutputOpt.Count)
+
+	stmt, err = ParseOne(context.TODO(), "data branch diff t1 against t2 output count", 1)
+	require.NoError(t, err)
+
+	diffStmt, ok = stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.NotNil(t, diffStmt.OutputOpt)
+	require.False(t, diffStmt.OutputOpt.Summary)
+	require.True(t, diffStmt.OutputOpt.Count)
+}
+
 var (
 	partitionSQL = struct {
 		input  string
@@ -1560,6 +1580,15 @@ var (
 			input:  "create role 'admin', 'developer'",
 			output: "create role admin, developer",
 		}, {
+			input:  "alter role old_role rename to new_role",
+			output: "alter role old_role rename to new_role",
+		}, {
+			input:  "alter role if exists old_role rename to new_role",
+			output: "alter role if exists old_role rename to new_role",
+		}, {
+			input:  "alter role 'old_role' rename to 'new_role'",
+			output: "alter role old_role rename to new_role",
+		}, {
 			input:  "create index idx1 on a (a) KEY_BLOCK_SIZE 10 with parser x comment 'x' invisible",
 			output: "create index idx1 on a (a) KEY_BLOCK_SIZE 10 with parser x comment x invisible",
 		}, {
@@ -1919,6 +1948,13 @@ var (
 			input: "drop role if exists role1",
 		}, {
 			input: "drop role role1",
+		}, {
+			input: "alter role role1 rename to role2",
+		}, {
+			input: "alter role if exists role1 rename to role2",
+		}, {
+			input:  "alter role 'role1' rename to 'role2'",
+			output: "alter role role1 rename to role2",
 		}, {
 			input: "grant all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a to u1, u2 with grant option",
 		}, {
@@ -3496,5 +3532,95 @@ func TestFaultTolerance(t *testing.T) {
 			t.Errorf("Fault tolerant ases (%q) should parse errors", tcase.input)
 			continue
 		}
+	}
+}
+
+func TestLimitByRank(t *testing.T) {
+	ctx := context.TODO()
+	testCases := []struct {
+		input   string
+		output  string // expected output from tree.String
+		checkFn func(*testing.T, tree.Statement)
+	}{
+		{
+			input:  "SELECT a, b, c FROM T LIMIT 20 BY RANK WITH OPTION 'fudge_factor=3.0', 'nprobe=10'",
+			output: "select a, b, c from t limit 20 by rank with option 'fudge_factor=3.0', 'nprobe=10'",
+			checkFn: func(t *testing.T, stmt tree.Statement) {
+				selectStmt, ok := stmt.(*tree.Select)
+				require.True(t, ok)
+				require.NotNil(t, selectStmt.Limit)
+				require.NotNil(t, selectStmt.RankOption)
+				require.NotNil(t, selectStmt.RankOption.Option)
+				require.Equal(t, "3.0", selectStmt.RankOption.Option["fudge_factor"])
+				require.Equal(t, "10", selectStmt.RankOption.Option["nprobe"])
+			},
+		},
+		{
+			input:  "SELECT * FROM T LIMIT 10 BY RANK WITH OPTION 'fudge_factor=2.5', 'mode=pre'",
+			output: "select * from t limit 10 by rank with option 'fudge_factor=2.5', 'mode=pre'",
+			checkFn: func(t *testing.T, stmt tree.Statement) {
+				selectStmt, ok := stmt.(*tree.Select)
+				require.True(t, ok)
+				require.NotNil(t, selectStmt.Limit)
+				require.NotNil(t, selectStmt.RankOption)
+				require.NotNil(t, selectStmt.RankOption.Option)
+				require.Equal(t, "2.5", selectStmt.RankOption.Option["fudge_factor"])
+				require.Equal(t, "pre", selectStmt.RankOption.Option["mode"])
+			},
+		},
+		{
+			input:  "SELECT * FROM T LIMIT 10 BY RANK WITH OPTION 'fudge_factor=1.0', 'mode=post'",
+			output: "select * from t limit 10 by rank with option 'fudge_factor=1.0', 'mode=post'",
+			checkFn: func(t *testing.T, stmt tree.Statement) {
+				selectStmt, ok := stmt.(*tree.Select)
+				require.True(t, ok)
+				require.NotNil(t, selectStmt.Limit)
+				require.NotNil(t, selectStmt.RankOption)
+				require.NotNil(t, selectStmt.RankOption.Option)
+				require.Equal(t, "1.0", selectStmt.RankOption.Option["fudge_factor"])
+				require.Equal(t, "post", selectStmt.RankOption.Option["mode"])
+			},
+		},
+		{
+			input:  "SELECT * FROM T LIMIT 5, 10 BY RANK WITH OPTION 'nprobe=20'",
+			output: "select * from t limit 10 offset 5 by rank with option 'nprobe=20'",
+			checkFn: func(t *testing.T, stmt tree.Statement) {
+				selectStmt, ok := stmt.(*tree.Select)
+				require.True(t, ok)
+				require.NotNil(t, selectStmt.Limit)
+				require.NotNil(t, selectStmt.RankOption)
+				require.NotNil(t, selectStmt.RankOption.Option)
+				require.Equal(t, "20", selectStmt.RankOption.Option["nprobe"])
+				require.NotNil(t, selectStmt.Limit.Offset)
+			},
+		},
+		{
+			input:  "SELECT * FROM T LIMIT 10 OFFSET 5 BY RANK WITH OPTION 'fudge_factor=4.0'",
+			output: "select * from t limit 10 offset 5 by rank with option 'fudge_factor=4.0'",
+			checkFn: func(t *testing.T, stmt tree.Statement) {
+				selectStmt, ok := stmt.(*tree.Select)
+				require.True(t, ok)
+				require.NotNil(t, selectStmt.Limit)
+				require.NotNil(t, selectStmt.RankOption)
+				require.NotNil(t, selectStmt.RankOption.Option)
+				require.Equal(t, "4.0", selectStmt.RankOption.Option["fudge_factor"])
+				require.NotNil(t, selectStmt.Limit.Offset)
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.input, func(t *testing.T) {
+			ast, err := ParseOne(ctx, tc.input, 1)
+			require.NoError(t, err, "Failed to parse: %s", tc.input)
+			if tc.checkFn != nil {
+				tc.checkFn(t, ast)
+			}
+			// Test tree.String conversion
+			if tc.output != "" {
+				out := tree.String(ast, dialect.MYSQL)
+				require.Equal(t, tc.output, out, "tree.String output mismatch for input: %s", tc.input)
+			}
+		})
 	}
 }

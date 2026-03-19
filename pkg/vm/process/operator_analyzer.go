@@ -52,12 +52,16 @@ type Analyzer interface {
 	AddS3RequestCount(counter *perfcounter.CounterSet)
 	AddFileServiceCacheInfo(counter *perfcounter.CounterSet)
 	AddDiskIO(counter *perfcounter.CounterSet)
+	AddReadSizeInfo(counter *perfcounter.CounterSet)
 
 	GetOpCounterSet() *perfcounter.CounterSet
 	GetOpStats() *OperatorStats
 
 	InputBlock()
 	ScanBytes(*batch.Batch)
+	AddReadSize(int64)     // AddReadSize: add actual bytes read from storage layer (excluding rowid tombstone)
+	AddS3ReadSize(int64)   // AddS3ReadSize: add actual bytes read from S3 (excluding rowid tombstone)
+	AddDiskReadSize(int64) // AddDiskReadSize: add actual bytes read from disk cache (excluding rowid tombstone)
 
 	Reset()
 }
@@ -147,6 +151,8 @@ func (opAlyzr *operatorAnalyzer) Stop() {
 	opAlyzr.opStats.CallNum++
 }
 
+// Alloc records memory allocation for the operator.
+// It accumulates the allocated memory size in the operator's statistics.
 func (opAlyzr *operatorAnalyzer) Alloc(size int64) {
 	if opAlyzr.opStats == nil {
 		panic("operatorAnalyzer.Alloc: operatorAnalyzer.opStats is nil")
@@ -201,6 +207,27 @@ func (opAlyzr *operatorAnalyzer) ScanBytes(bat *batch.Batch) {
 	if bat != nil {
 		opAlyzr.opStats.ScanBytes += int64(bat.Size())
 	}
+}
+
+func (opAlyzr *operatorAnalyzer) AddReadSize(bytes int64) {
+	if opAlyzr.opStats == nil {
+		panic("operatorAnalyzer.AddReadSize: operatorAnalyzer.opStats is nil")
+	}
+	opAlyzr.opStats.ReadSize += bytes
+}
+
+func (opAlyzr *operatorAnalyzer) AddS3ReadSize(bytes int64) {
+	if opAlyzr.opStats == nil {
+		panic("operatorAnalyzer.AddS3ReadSize: operatorAnalyzer.opStats is nil")
+	}
+	opAlyzr.opStats.S3ReadSize += bytes
+}
+
+func (opAlyzr *operatorAnalyzer) AddDiskReadSize(bytes int64) {
+	if opAlyzr.opStats == nil {
+		panic("operatorAnalyzer.AddDiskReadSize: operatorAnalyzer.opStats is nil")
+	}
+	opAlyzr.opStats.DiskReadSize += bytes
 }
 
 func (opAlyzr *operatorAnalyzer) Network(bat *batch.Batch) {
@@ -296,6 +323,16 @@ func (opAlyzr *operatorAnalyzer) AddDiskIO(counter *perfcounter.CounterSet) {
 	opAlyzr.opStats.DiskIO += counter.FileService.FileWithChecksum.Write.Load()
 }
 
+func (opAlyzr *operatorAnalyzer) AddReadSizeInfo(counter *perfcounter.CounterSet) {
+	if opAlyzr.opStats == nil {
+		panic("operatorAnalyzer.AddReadSizeInfo: operatorAnalyzer.opStats is nil")
+	}
+
+	opAlyzr.opStats.ReadSize += counter.FileService.ReadSize.Load()
+	opAlyzr.opStats.S3ReadSize += counter.FileService.S3ReadSize.Load()
+	opAlyzr.opStats.DiskReadSize += counter.FileService.DiskReadSize.Load()
+}
+
 func (opAlyzr *operatorAnalyzer) GetOpStats() *OperatorStats {
 	if opAlyzr.opStats == nil {
 		panic("operatorAnalyzer.GetOpStats(): operatorAnalyzer.opStats is nil")
@@ -308,18 +345,21 @@ type OperatorStats struct {
 	CallNum          int    `json:"CallCount,omitempty"`
 	TimeConsumed     int64  `json:"TimeConsumed,omitempty"`
 	WaitTimeConsumed int64  `json:"WaitTimeConsumed,omitempty"`
-	MemorySize       int64  `json:"MemorySize,omitempty"`
-	InputRows        int64  `json:"InputRows,omitempty"`
-	InputSize        int64  `json:"InputSize,omitempty"`
-	OutputRows       int64  `json:"OutputRows,omitempty"`
-	OutputSize       int64  `json:"OutputSize,omitempty"`
+	MemorySize       int64  `json:"MemorySize,omitempty"` // MemorySize: total memory allocated by the operator (accumulated via Alloc calls)
+	InputRows        int64  `json:"InputRows,omitempty"`  // InputRows: number of input rows processed by the operator
+	InputSize        int64  `json:"InputSize,omitempty"`  // InputSize: total size of input batches received from upstream operators
+	OutputRows       int64  `json:"OutputRows,omitempty"` // OutputRows: number of output rows produced by the operator
+	OutputSize       int64  `json:"OutputSize,omitempty"` // OutputSize: total size of output batches sent to downstream operators
 	NetworkIO        int64  `json:"NetworkIO,omitempty"`
 	DiskIO           int64  `json:"DiskIO,omitempty"`
 
-	InputBlocks int64 `json:"-"`
-	ScanBytes   int64 `json:"-"`
-	WrittenRows int64 `json:"WrittenRows,omitempty"` // WrittenRows Used to estimate S3input
-	DeletedRows int64 `json:"DeletedRows,omitempty"` // DeletedRows Used to estimate S3input
+	InputBlocks  int64 `json:"-"`
+	ScanBytes    int64 `json:"-"`
+	ReadSize     int64 `json:"ReadSize,omitempty"`     // ReadSize: actual bytes read from storage layer (excluding rowid tombstone)
+	S3ReadSize   int64 `json:"S3ReadSize,omitempty"`   // S3ReadSize: actual bytes read from S3 (excluding rowid tombstone)
+	DiskReadSize int64 `json:"DiskReadSize,omitempty"` // DiskReadSize: actual bytes read from disk cache (excluding rowid tombstone)
+	WrittenRows  int64 `json:"WrittenRows,omitempty"`  // WrittenRows: used to estimate S3input
+	DeletedRows  int64 `json:"DeletedRows,omitempty"`  // DeletedRows: used to estimate S3input
 
 	S3List      int64 `json:"S3List,omitempty"`
 	S3Head      int64 `json:"S3Head,omitempty"`
@@ -421,6 +461,15 @@ func (ps *OperatorStats) String() string {
 		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("S3DeleteMul:%d ", ps.S3DeleteMul))
 	}
 	//---------------------------------------------------------------------------------------------
+	if ps.ReadSize > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("ReadSize:%dbytes ", ps.ReadSize))
+	}
+	if ps.S3ReadSize > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("S3ReadSize:%dbytes ", ps.S3ReadSize))
+	}
+	if ps.DiskReadSize > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("DiskReadSize:%dbytes ", ps.DiskReadSize))
+	}
 	if ps.CacheRead > 0 {
 		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("CacheRead:%d ", ps.CacheRead))
 	}

@@ -48,10 +48,12 @@ func TestNewServer(t *testing.T) {
 	hc := &mockHAKeeperClient{}
 	s, err := NewServer(ctx, cfg, WithRuntime(runtime.DefaultRuntime()),
 		WithHAKeeperClient(hc))
-	defer func() {
-		err := s.Close()
-		require.NoError(t, err)
-	}()
 	require.NoError(t, err)
 	require.NotNil(t, s)
+	defer func() {
+		if s != nil {
+			err := s.Close()
+			require.NoError(t, err)
+		}
+	}()
 }

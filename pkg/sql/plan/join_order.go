@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -204,6 +205,7 @@ func HasColExpr(expr *plan.Expr, pos int32) int32 {
 }
 
 func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
+	originalNodeID := nodeID
 	if builder.optimizerHints != nil && builder.optimizerHints.joinOrdering != 0 {
 		return nodeID
 	}
@@ -223,6 +225,9 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 	}
 
 	leaves, conds := builder.gatherJoinLeavesAndConds(node, nil, nil)
+	// Record middle: gathered leaves and conditions
+	builder.optimizationHistory = append(builder.optimizationHistory,
+		fmt.Sprintf("determineJoinOrder:middle (nodeID: %d, leaves: %d, conds: %d)", nodeID, len(leaves), len(conds)))
 	newConds := deduceNewOnList(conds)
 	conds = append(conds, newConds...)
 	vertices := builder.getJoinGraph(leaves, conds)
@@ -346,6 +351,14 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 			Children:   []int32{nodeID},
 			FilterList: conds,
 		}, nil)
+	}
+	// Record after determineJoinOrder
+	if nodeID != originalNodeID {
+		builder.optimizationHistory = append(builder.optimizationHistory,
+			fmt.Sprintf("determineJoinOrder:after (nodeID: %d -> %d, remainingConds: %d)", originalNodeID, nodeID, len(conds)))
+	} else {
+		builder.optimizationHistory = append(builder.optimizationHistory,
+			fmt.Sprintf("determineJoinOrder:after (nodeID: %d, no change, remainingConds: %d)", nodeID, len(conds)))
 	}
 	return nodeID
 }
