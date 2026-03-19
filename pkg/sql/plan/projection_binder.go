@@ -171,6 +171,12 @@ func (b *ProjectionBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, 
 				return nil, err
 			}
 
+			// unwrap cast_index_to_value for ENUM columns so that
+			// window ORDER BY sorts by definition order, not alphabetically
+			if fn := expr.GetF(); fn != nil && fn.Func.ObjName == moEnumCastIndexToValueFun {
+				expr = fn.Args[1]
+			}
+
 			orderBy := &plan.OrderBySpec{
 				Expr: expr,
 				Flag: plan.OrderBySpec_INTERNAL,
@@ -237,7 +243,7 @@ func (b *ProjectionBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, 
 		}
 		typ = &w.OrderBy[0].Expr.Typ
 		t := types.Type{Oid: types.T(typ.Id)}
-		if !t.IsNumericOrTemporal() {
+		if isNRange(ws.Frame) && !t.IsNumericOrTemporal() {
 			return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>' with RANGE N PRECEDING/FOLLOWING frame requires exactly one ORDER BY expression, of numeric or temporal type")
 		}
 	case tree.Groups:

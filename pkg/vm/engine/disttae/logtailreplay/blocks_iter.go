@@ -177,6 +177,36 @@ func (p *PartitionState) HasTombstoneChanged(from, to types.TS) (exist bool) {
 	return false
 }
 
+// GetChangedTombstoneObjsBetween returns tombstone objects whose CreateTime >= from or DeleteTime >= from.
+func (p *PartitionState) GetChangedTombstoneObjsBetween(from types.TS) (objs []objectio.ObjectEntry) {
+	if p.tombstoneObjectDTSIndex.Len() == 0 {
+		return
+	}
+	iter := p.tombstoneObjectDTSIndex.Iter()
+
+	// tombstoneObjectDTSIndex is sorted by DeleteTime asc (empty=MaxTs last).
+	// Seek to DeleteTime=from, step back one.
+	// Live objects (DeleteTime=empty=MaxTs) are always at the end and will be visited.
+	pivot := objectio.ObjectEntry{DeleteTime: from}
+	iter.Seek(pivot)
+	if !iter.Prev() && p.tombstoneObjectDTSIndex.Len() > 0 {
+		// Seeked to the first item; reset iter so Next() starts from the beginning.
+		iter.Release()
+		iter = p.tombstoneObjectDTSIndex.Iter()
+	}
+
+	for ok := iter.Next(); ok; ok = iter.Next() {
+		entry := iter.Item()
+		if entry.CreateTime.GE(&from) {
+			objs = append(objs, entry)
+		} else if !entry.DeleteTime.IsEmpty() && entry.DeleteTime.GE(&from) {
+			objs = append(objs, entry)
+		}
+	}
+	iter.Release()
+	return
+}
+
 // GetChangedObjsBetween get changed objects between [begin, end],
 // notice that if an object is created after begin and deleted before end, it will be ignored.
 func (p *PartitionState) GetChangedObjsBetween(

@@ -18,6 +18,9 @@ import (
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
 )
 
@@ -75,7 +78,7 @@ func TestGetResultClampsTinyVarianceToZero(t *testing.T) {
 	exec := &varStdDevExec[float64, float64]{
 		isVar: false,
 		isPop: true,
-		f2t:   simpleF2T,
+		f2t:   float64ToResult,
 	}
 
 	tests := []struct {
@@ -111,7 +114,7 @@ func TestGetResultKeepsNonTrivialVariance(t *testing.T) {
 	exec := &varStdDevExec[float64, float64]{
 		isVar: false,
 		isPop: true,
-		f2t:   simpleF2T,
+		f2t:   float64ToResult,
 	}
 
 	got, err := exec.getResult(4.0, 4.0*(1.0+1e-8), 4)
@@ -123,11 +126,31 @@ func TestGetResultVarClampsTinyVarianceToZero(t *testing.T) {
 	exec := &varStdDevExec[float64, float64]{
 		isVar: true,
 		isPop: true,
-		f2t:   simpleF2T,
+		f2t:   float64ToResult,
 	}
 
 	got, err := exec.getResult(4.0, 4.0*(1.0-1e-16), 4)
 	require.NoError(t, err)
 	require.False(t, math.IsNaN(got))
 	require.Equal(t, 0.0, got)
+}
+
+func TestNumericToFloat64ViaVarExec(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	param := types.T_int32.ToType()
+	exec := makeVarStdDevExec(mp, true, true, 0, false, param)
+	require.NoError(t, exec.GroupGrow(1))
+
+	v := vector.NewVec(param)
+	require.NoError(t, vector.AppendFixed(v, int32(4), false, mp))
+	require.NoError(t, exec.Fill(0, 0, []*vector.Vector{v}))
+	v.Free(mp)
+
+	vecs, err := exec.Flush()
+	require.NoError(t, err)
+	for _, vec := range vecs {
+		vec.Free(mp)
+	}
+	exec.Free()
 }

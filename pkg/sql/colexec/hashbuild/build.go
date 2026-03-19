@@ -93,12 +93,12 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 			if ctr.hashmapBuilder.InputBatchRowCount > 0 {
 				if spillMode {
 					// In spill mode: send empty JoinMap with spill info, no batches
-					jm = message.NewJoinMap(message.JoinSels{}, nil, nil, nil, nil, proc.Mp())
+					jm = message.NewJoinMap(message.GroupSels{}, nil, nil, nil, nil, proc.Mp())
 					jm.Spilled = true
 					jm.SpillBuckets = ctr.spilledBuckets
 				} else {
 					// Normal mode: send hashmap and batches
-					jm = message.NewJoinMap(ctr.hashmapBuilder.MultiSels, ctr.hashmapBuilder.IntHashMap, ctr.hashmapBuilder.StrHashMap, ctr.hashmapBuilder.DelRows, ctr.hashmapBuilder.Batches.Buf, proc.Mp())
+					jm = message.NewJoinMap(ctr.hashmapBuilder.Sels, ctr.hashmapBuilder.IntHashMap, ctr.hashmapBuilder.StrHashMap, ctr.hashmapBuilder.DelRows, ctr.hashmapBuilder.Batches.Buf, proc.Mp())
 					jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
 				}
 				jm.SetRowCount(int64(ctr.hashmapBuilder.InputBatchRowCount))
@@ -173,7 +173,7 @@ func (ctr *container) build(hashBuild *HashBuild, proc *process.Process, analyze
 		}
 
 		// Check if we should enter spill mode based on batch memory size
-		if hashBuild.NeedHashMap && hashBuild.shouldSpillBatches() {
+		if hashBuild.shouldSpillBatches() {
 			spillMode = true
 			// Create spill files once
 			spilledBuckets, spillFiles, err = createSpillFiles(proc)
