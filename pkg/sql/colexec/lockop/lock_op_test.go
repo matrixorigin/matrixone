@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -28,6 +29,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -58,6 +61,141 @@ var testFunc = func(
 var (
 	sid = ""
 )
+
+func TestLockWithRetryStopsOnDeadlineExceededContext(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	lockSvc.EXPECT().
+		Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+		Return(lock.Result{}, moerr.NewBackendCannotConnectNoCtx("retryable")).
+		Times(1)
+
+	start := time.Now()
+	_, err := lockWithRetry(
+		ctx,
+		lockSvc,
+		1,
+		nil,
+		[]byte("txn1"),
+		lock.LockOptions{},
+		txnOp,
+		nil,
+		nil,
+		LockOptions{},
+		types.Type{},
+	)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(start), 200*time.Millisecond)
+}
+
+func TestLockWithRetryStopsOnCanceledContext(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	lockSvc.EXPECT().
+		Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+		Return(lock.Result{}, moerr.NewBackendCannotConnectNoCtx("retryable")).
+		Times(1)
+
+	start := time.Now()
+	_, err := lockWithRetry(
+		ctx,
+		lockSvc,
+		1,
+		nil,
+		[]byte("txn1"),
+		lock.LockOptions{},
+		txnOp,
+		nil,
+		nil,
+		LockOptions{},
+		types.Type{},
+	)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Less(t, time.Since(start), 200*time.Millisecond)
+}
+
+func TestLockWithRetryKeepsSuccessfulResultAfterContextCanceled(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	lockSvc.EXPECT().
+		Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+		DoAndReturn(func(context.Context, uint64, [][]byte, []byte, lock.LockOptions) (lock.Result, error) {
+			cancel()
+			return lock.Result{}, nil
+		}).
+		Times(1)
+
+	_, err := lockWithRetry(
+		ctx,
+		lockSvc,
+		1,
+		nil,
+		[]byte("txn1"),
+		lock.LockOptions{},
+		txnOp,
+		nil,
+		nil,
+		LockOptions{},
+		types.Type{},
+	)
+	require.NoError(t, err)
+}
+
+func TestLockWithRetryKeepsNonRetryableErrorAfterContextCanceled(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	expectedErr := moerr.NewInternalErrorNoCtx("boom")
+
+	lockSvc.EXPECT().
+		Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+		DoAndReturn(func(context.Context, uint64, [][]byte, []byte, lock.LockOptions) (lock.Result, error) {
+			cancel()
+			return lock.Result{}, expectedErr
+		}).
+		Times(1)
+
+	_, err := lockWithRetry(
+		ctx,
+		lockSvc,
+		1,
+		nil,
+		[]byte("txn1"),
+		lock.LockOptions{},
+		txnOp,
+		nil,
+		nil,
+		LockOptions{},
+		types.Type{},
+	)
+	require.ErrorIs(t, err, expectedErr)
+}
 
 func TestCallLockOpWithNoConflict(t *testing.T) {
 	runLockNonBlockingOpTest(
