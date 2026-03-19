@@ -893,6 +893,20 @@ func (node *ShowLogserviceSettings) Format(ctx *FmtCtx) {
 func (node *ShowLogserviceSettings) GetStatementType() string { return "Show Logservice Settings" }
 func (node *ShowLogserviceSettings) GetQueryType() string     { return QueryTypeOth }
 
+// ShowRules represents SHOW RULES ON ROLE <role_name>
+type ShowRules struct {
+	showImpl
+	RoleName string
+}
+
+func (node *ShowRules) Format(ctx *FmtCtx) {
+	ctx.WriteString("show rules on role ")
+	ctx.WriteString(node.RoleName)
+}
+
+func (node *ShowRules) GetStatementType() string { return "Show Rules" }
+func (node *ShowRules) GetQueryType() string     { return QueryTypeOth }
+
 type EmptyStmt struct {
 	statementImpl
 }

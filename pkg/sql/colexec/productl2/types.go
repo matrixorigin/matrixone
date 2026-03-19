@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -41,6 +42,13 @@ type container struct {
 	inBat       *batch.Batch // probe batch
 	metrictype  metric.MetricType
 	brute_force cache.VectorIndexSearchIf // brute_force.BruteForceIndex
+
+	sqlproc *sqlexec.SqlProcess
+
+	centersF32 *[][]float32
+	centersF64 *[][]float64
+	nullvecF32 *[]float32
+	nullvecF64 *[]float64
 }
 
 type Productl2 struct {

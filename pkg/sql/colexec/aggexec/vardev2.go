@@ -37,11 +37,11 @@ type varStdDevExec[
 
 const varianceNearZeroToleranceInULP = 8.0
 
-func simpleA2F[A types.Ints | types.UInts | types.Floats](a A, scale int32) float64 {
+func numericToFloat64[A types.Ints | types.UInts | types.Floats](a A, scale int32) float64 {
 	return float64(a)
 }
 
-func simpleF2T(f float64, scale int32) (float64, error) {
+func float64ToResult(f float64, scale int32) (float64, error) {
 	return f, nil
 }
 
@@ -264,27 +264,27 @@ func makeVarStdDevExec(mp *mpool.MPool,
 	aggID int64, isDistinct bool, param types.Type) AggFuncExec {
 	switch param.Oid {
 	case types.T_int8:
-		return newVarStdDevExec[float64, int8](mp, isVar, isPop, aggID, isDistinct, param, simpleA2F, simpleF2T)
+		return newVarStdDevExec[float64, int8](mp, isVar, isPop, aggID, isDistinct, param, numericToFloat64, float64ToResult)
 	case types.T_int16:
-		return newVarStdDevExec[float64, int16](mp, isVar, isPop, aggID, isDistinct, param, simpleA2F, simpleF2T)
+		return newVarStdDevExec[float64, int16](mp, isVar, isPop, aggID, isDistinct, param, numericToFloat64, float64ToResult)
 	case types.T_int32:
-		return newVarStdDevExec[float64, int32](mp, isVar, isPop, aggID, isDistinct, param, simpleA2F, simpleF2T)
+		return newVarStdDevExec[float64, int32](mp, isVar, isPop, aggID, isDistinct, param, numericToFloat64, float64ToResult)
 	case types.T_int64:
-		return newVarStdDevExec[float64, int64](mp, isVar, isPop, aggID, isDistinct, param, simpleA2F, simpleF2T)
+		return newVarStdDevExec[float64, int64](mp, isVar, isPop, aggID, isDistinct, param, numericToFloat64, float64ToResult)
 	case types.T_uint8:
-		return newVarStdDevExec[float64, uint8](mp, isVar, isPop, aggID, isDistinct, param, simpleA2F, simpleF2T)
+		return newVarStdDevExec[float64, uint8](mp, isVar, isPop, aggID, isDistinct, param, numericToFloat64, float64ToResult)
 	case types.T_uint16:
-		return newVarStdDevExec[float64, uint16](mp, isVar, isPop, aggID, isDistinct, param, simpleA2F, simpleF2T)
+		return newVarStdDevExec[float64, uint16](mp, isVar, isPop, aggID, isDistinct, param, numericToFloat64, float64ToResult)
 	case types.T_uint32:
-		return newVarStdDevExec[float64, uint32](mp, isVar, isPop, aggID, isDistinct, param, simpleA2F, simpleF2T)
+		return newVarStdDevExec[float64, uint32](mp, isVar, isPop, aggID, isDistinct, param, numericToFloat64, float64ToResult)
 	case types.T_uint64:
-		return newVarStdDevExec[float64, uint64](mp, isVar, isPop, aggID, isDistinct, param, simpleA2F, simpleF2T)
+		return newVarStdDevExec[float64, uint64](mp, isVar, isPop, aggID, isDistinct, param, numericToFloat64, float64ToResult)
 	case types.T_bit:
-		return newVarStdDevExec[float64, uint64](mp, isVar, isPop, aggID, isDistinct, param, simpleA2F, simpleF2T)
+		return newVarStdDevExec[float64, uint64](mp, isVar, isPop, aggID, isDistinct, param, numericToFloat64, float64ToResult)
 	case types.T_float32:
-		return newVarStdDevExec[float64, float32](mp, isVar, isPop, aggID, isDistinct, param, simpleA2F, simpleF2T)
+		return newVarStdDevExec[float64, float32](mp, isVar, isPop, aggID, isDistinct, param, numericToFloat64, float64ToResult)
 	case types.T_float64:
-		return newVarStdDevExec[float64, float64](mp, isVar, isPop, aggID, isDistinct, param, simpleA2F, simpleF2T)
+		return newVarStdDevExec[float64, float64](mp, isVar, isPop, aggID, isDistinct, param, numericToFloat64, float64ToResult)
 	case types.T_decimal64:
 		return newVarStdDevExec[types.Decimal128, types.Decimal64](mp, isVar, isPop, aggID, isDistinct, param, dec64ToF, fToDec128)
 	case types.T_decimal128:

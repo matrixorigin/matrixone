@@ -45,14 +45,15 @@ var _ cache.VectorIndexSearchIf = &GpuBruteForceIndex[float32]{}
 func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	dimension uint,
 	m metric.MetricType,
-	elemsz uint) (cache.VectorIndexSearchIf, error) {
+	elemsz uint,
+	nthread uint) (cache.VectorIndexSearchIf, error) {
 
 	switch dset := any(dataset).(type) {
 	case [][]float64:
 		return NewCpuBruteForceIndex[T](dataset, dimension, m, elemsz)
 	case [][]float32:
 		return NewCpuBruteForceIndex[float32](dset, dimension, m, elemsz)
-		//return NewGpuBruteForceIndex[float32](dset, dimension, m, elemsz)
+		//return NewGpuBruteForceIndex[float32](dset, dimension, m, elemsz, nthread)
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("type not supported for BruteForceIndex")
 	}
@@ -62,7 +63,8 @@ func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
 func NewGpuBruteForceIndex[T cuvs.TensorNumberType](dataset [][]T,
 	dimension uint,
 	m metric.MetricType,
-	elemsz uint) (cache.VectorIndexSearchIf, error) {
+	elemsz uint,
+	nthread uint) (cache.VectorIndexSearchIf, error) {
 
 	idx := &GpuBruteForceIndex[T]{}
 	resource, _ := cuvs.NewResource(nil)
