@@ -909,3 +909,8 @@ func IsUniqueIndexTable(name string) bool {
 func IsSecondaryIndexTable(name string) bool {
 	return strings.HasPrefix(name, SecondaryIndexTableNamePrefix)
 }
+
+func IsFullTextIndexTableType(tableType string, tableName string) bool {
+	return tableType == FullTextIndex_TblType ||
+		(tableType == SystemIndexRel && strings.HasPrefix(tableName, FullTextIndexTableNamePrefix))
+}

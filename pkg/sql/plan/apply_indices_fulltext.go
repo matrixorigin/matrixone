@@ -447,44 +447,56 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 			OnList:   []*Expr{innerJoinOn},
 		}, ctx)
 
-		// BloomFilter runtime filter: secondScan(build) -> ft_func(probe)
-		rfTag := builder.genNewMsgTag()
-
-		buildExpr := &plan.Expr{
-			Typ: pkType,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: secondProjectTag,
-					ColPos: 0,
-				},
-			},
-		}
-		buildSpec := MakeRuntimeFilter(rfTag, false, 0, buildExpr, false)
-		buildSpec.UseBloomFilter = true
+		// BloomFilter runtime filter: secondScan(build) -> all ft_func(probe)
 		innerJoinNode := builder.qry.Nodes[innerJoinNodeID]
-		innerJoinNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{buildSpec}
 
-		// Probe on the first fulltext table function node
-		firstFtNodeID := int32(-1)
-		if len(ret_filter_node_ids) > 0 {
-			firstFtNodeID = ret_filter_node_ids[0]
+		// Collect all unique ft_func node IDs for BF probe
+		allFtNodeIDs := make([]int32, 0, len(ret_filter_node_ids)+len(ret_proj_node_ids))
+		seen := make(map[int32]bool)
+		for _, id := range ret_filter_node_ids {
+			if !seen[id] {
+				seen[id] = true
+				allFtNodeIDs = append(allFtNodeIDs, id)
+			}
 		}
-		if firstFtNodeID < 0 && len(ret_proj_node_ids) > 0 {
-			firstFtNodeID = ret_proj_node_ids[0]
+		for _, id := range ret_proj_node_ids {
+			if !seen[id] {
+				seen[id] = true
+				allFtNodeIDs = append(allFtNodeIDs, id)
+			}
 		}
-		firstFtNode := builder.qry.Nodes[firstFtNodeID]
-		probeExpr := &plan.Expr{
-			Typ: pkType,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: firstFtNode.BindingTags[0],
-					ColPos: 0,
+
+		// For each ft_func node, create an independent BF build/probe pair
+		for _, ftNodeID := range allFtNodeIDs {
+			tag := builder.genNewMsgTag()
+			ftNode := builder.qry.Nodes[ftNodeID]
+
+			bExpr := &plan.Expr{
+				Typ: pkType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: secondProjectTag,
+						ColPos: 0,
+					},
 				},
-			},
+			}
+			bSpec := MakeRuntimeFilter(tag, false, 0, bExpr, false)
+			bSpec.UseBloomFilter = true
+			innerJoinNode.RuntimeFilterBuildList = append(innerJoinNode.RuntimeFilterBuildList, bSpec)
+
+			pExpr := &plan.Expr{
+				Typ: pkType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: ftNode.BindingTags[0],
+						ColPos: 0,
+					},
+				},
+			}
+			pSpec := MakeRuntimeFilter(tag, false, 0, pExpr, false)
+			pSpec.UseBloomFilter = true
+			ftNode.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{pSpec}
 		}
-		probeSpec := MakeRuntimeFilter(rfTag, false, 0, probeExpr, false)
-		probeSpec.UseBloomFilter = true
-		firstFtNode.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{probeSpec}
 
 		// Outer join: (scanNode JOIN innerJoin)
 		outerOn, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{

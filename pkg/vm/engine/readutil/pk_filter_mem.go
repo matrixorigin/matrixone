@@ -247,7 +247,7 @@ func NewMemPKFilter(
 			}
 		}
 		// For fulltext index table, use doc_id column for BF filtering.
-		if filter.BFSeqNum == -1 && tableDef.TableType == catalog.FullTextIndex_TblType {
+		if filter.BFSeqNum == -1 && catalog.IsFullTextIndexTableType(tableDef.TableType, tableDef.Name) {
 			for _, col := range tableDef.Cols {
 				if col.Name == catalog.FullTextIndex_TabCol_Id {
 					filter.BFSeqNum = int16(col.Seqnum)

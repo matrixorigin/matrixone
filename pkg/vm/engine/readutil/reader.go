@@ -195,7 +195,7 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	// Internal SQL queries only select doc_id/pos/word columns (not __mo_fake_pk_col),
 	// so this must be handled independently of pkPos.
 	if mixin.filterState.hasBF &&
-		mixin.tableDef.TableType == catalog.FullTextIndex_TblType {
+		catalog.IsFullTextIndexTableType(mixin.tableDef.TableType, mixin.tableDef.Name) {
 		docIdColName := strings.ToLower(catalog.FullTextIndex_TabCol_Id)
 		docIdPos := -1
 		for i, col := range cols {
