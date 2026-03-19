@@ -166,7 +166,7 @@ TEST(GpuBruteForceTest, LargeLimit) {
 
 TEST(CuvsWorkerTest, BruteForceSearch) {
     uint32_t n_threads = 1;
-    cuvs_worker_t worker(n_threads, 0); // Added device_id
+    cuvs_worker_t worker(n_threads, {0}); // Added device_id as vector
     worker.start();
 
     const uint32_t dimension = 128;
