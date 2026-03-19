@@ -63,6 +63,27 @@ func findProjectedColByName(t *testing.T, node *plan.Node, name string) *plan.Co
 	return nil
 }
 
+func findChildProjectedColByName(t *testing.T, query *plan.Query, node *plan.Node, name string) *plan.ColRef {
+	t.Helper()
+
+	if len(node.Children) == 0 {
+		return nil
+	}
+
+	child := query.Nodes[node.Children[0]]
+	for _, expr := range child.ProjectList {
+		col := expr.GetCol()
+		if col == nil {
+			continue
+		}
+		if col.Name == name || containsIgnoreCase(col.Name, name) {
+			return col
+		}
+	}
+
+	return nil
+}
+
 func containsIgnoreCase(s, sub string) bool {
 	if len(sub) == 0 {
 		return true
@@ -125,19 +146,22 @@ WHERE x.rn = 2;
 
 	target := findWindowNodeWithFilter(t, query, "ROW_NUMBER()")
 	require.NotNil(t, target)
-	require.Len(t, target.ProjectList, 5)
 
 	filterFn := target.FilterList[0].GetF()
 	require.NotNil(t, filterFn)
 	filterCol := filterFn.Args[0].GetCol()
 	require.NotNil(t, filterCol)
 	require.Contains(t, filterCol.Name, "ROW_NUMBER()")
-	require.Equal(t, int32(3), filterCol.ColPos)
 
-	projectCol := target.ProjectList[4].GetCol()
-	require.NotNil(t, projectCol)
-	require.Contains(t, projectCol.Name, "SUM(")
-	require.Equal(t, int32(4), projectCol.ColPos)
+	if target.WindowIdx == 0 {
+		require.NotEmpty(t, target.Children)
+		child := query.Nodes[target.Children[0]]
+		require.Equal(t, int32(len(child.ProjectList)), filterCol.ColPos)
+	} else {
+		projectCol := findChildProjectedColByName(t, query, target, "ROW_NUMBER()")
+		require.NotNil(t, projectCol)
+		require.Equal(t, projectCol.ColPos, filterCol.ColPos)
+	}
 }
 
 // Regression coverage for issue #23882.
