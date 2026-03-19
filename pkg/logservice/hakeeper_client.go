@@ -119,6 +119,9 @@ var _ TNHAKeeperClient = (*managedHAKeeperClient)(nil)
 var _ LogHAKeeperClient = (*managedHAKeeperClient)(nil)
 var _ ProxyHAKeeperClient = (*managedHAKeeperClient)(nil)
 
+var newHAKeeperClientFunc = newHAKeeperClient
+var sendCNAllocateIDFunc = (*hakeeperClient).sendCNAllocateID
+
 func NewClusterHAKeeperClient(
 	ctx context.Context, sid string, cfg HAKeeperClientConfig,
 ) (ClusterHAKeeperClient, error) {
@@ -228,7 +231,7 @@ func newManagedHAKeeperClient(
 	sid string,
 	cfg HAKeeperClientConfig,
 ) (*managedHAKeeperClient, error) {
-	c, err := newHAKeeperClient(ctx, sid, cfg)
+	c, err := newHAKeeperClientFunc(ctx, sid, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -368,7 +371,7 @@ func (c *managedHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) 
 			}
 			return 0, err
 		}
-		firstID, err := c.mu.client.sendCNAllocateID(ctx, "", batchSize)
+		firstID, err := sendCNAllocateIDFunc(c.mu.client, ctx, "", batchSize)
 
 		if err != nil {
 			c.resetClientLocked()
@@ -428,7 +431,7 @@ func (c *managedHAKeeperClient) AllocateIDByKeyWithBatch(
 			}
 			return 0, err
 		}
-		firstID, err := c.mu.client.sendCNAllocateID(ctx, key, batchSize)
+		firstID, err := sendCNAllocateIDFunc(c.mu.client, ctx, key, batchSize)
 		if err != nil {
 			c.resetClientLocked()
 			if c.isRetryableError(err) {
@@ -700,7 +703,7 @@ func (c *managedHAKeeperClient) prepareClientLocked(ctx context.Context) error {
 	ctx = SetBackendOptions(ctx, c.backendOptions...)
 	ctx = SetClientOptions(ctx, c.clientOptions...)
 
-	cc, err := newHAKeeperClient(ctx, c.sid, c.cfg)
+	cc, err := newHAKeeperClientFunc(ctx, c.sid, c.cfg)
 	if err != nil {
 		return normalizeHAKeeperClientError(ctx, err)
 	}
