@@ -2131,7 +2131,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 	case types.T_uint32:
 		return func(v, w *Vector, sel int64, length int) error {
 			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
-				return appendOneFixed(v, uint32(0), true, mp)
+				return SetConstNull(v, length, mp)
 			}
 			ws := MustFixedColNoTypeCheck[uint32](w)
 			if w.IsConst() {
