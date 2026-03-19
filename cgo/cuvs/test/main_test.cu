@@ -15,11 +15,15 @@
  */
 
 #include "cuvs_worker.hpp"
+#include "cagra.hpp"
 #include "test_framework.hpp"
 #include <cstdio>
 #include <cstdlib>
 
 using namespace matrixone;
+
+// Forward declaration from cagra_test.cu
+void reproduce_sharded_cagra();
 
 thread_local bool current_test_failed = false;
 
@@ -373,5 +377,8 @@ TEST(CuvsWorkerTest, StopUnderLoad) {
 }
 
 int main() {
+    printf("[INFO    ] Starting Reproduction Case...\n");
+    reproduce_sharded_cagra();
+    printf("[INFO    ] Reproduction Case Finished. Running other tests...\n");
     return RUN_ALL_TESTS();
 }

@@ -336,11 +336,13 @@ public:
 
         // For large batches or if batching is explicitly disabled, use standard path
         if (num_queries > 16 || !this->worker->use_batching()) {
-            uint64_t job_id = this->worker->submit(
-                [&, num_queries, limit, sp, queries_data](raft_handle_wrapper_t& handle) -> std::any {
-                    return this->search_internal(handle, queries_data, num_queries, query_dimension, limit, sp);
-                }
-            );
+            auto task = [this, num_queries, limit, sp, queries_data, query_dimension](raft_handle_wrapper_t& handle) -> std::any {
+                return this->search_internal(handle, queries_data, num_queries, query_dimension, limit, sp);
+            };
+            // Use submit_main only for SHARDED multi-GPU indices to avoid concurrent NCCL/collective searches on the same GPUs.
+            // REPLICATED mode is safe for concurrent searches as each GPU acts independently.
+            bool use_main = (mg_index_ && this->dist_mode == DistributionMode_SHARDED);
+            uint64_t job_id = use_main ? this->worker->submit_main(task) : this->worker->submit(task);
             auto result_wait = this->worker->wait(job_id).get();
             if (result_wait.error) std::rethrow_exception(result_wait.error);
             return std::any_cast<search_result_t>(result_wait.result);
@@ -406,11 +408,13 @@ public:
         if (!this->is_loaded_ || (!index_ && !mg_index_)) return search_result_t{};
 
         if (num_queries > 16 || !this->worker->use_batching()) {
-            uint64_t job_id = this->worker->submit(
-                [&, num_queries, limit, sp, queries_data](raft_handle_wrapper_t& handle) -> std::any {
-                    return this->search_float_internal(handle, queries_data, num_queries, query_dimension, limit, sp);
-                }
-            );
+            auto task = [this, num_queries, limit, sp, queries_data, query_dimension](raft_handle_wrapper_t& handle) -> std::any {
+                return this->search_float_internal(handle, queries_data, num_queries, query_dimension, limit, sp);
+            };
+            // Use submit_main only for SHARDED multi-GPU indices to avoid concurrent NCCL/collective searches on the same GPUs.
+            // REPLICATED mode is safe for concurrent searches as each GPU acts independently.
+            bool use_main = (mg_index_ && this->dist_mode == DistributionMode_SHARDED);
+            uint64_t job_id = use_main ? this->worker->submit_main(task) : this->worker->submit(task);
             auto result_wait = this->worker->wait(job_id).get();
             if (result_wait.error) std::rethrow_exception(result_wait.error);
             return std::any_cast<search_result_t>(result_wait.result);
@@ -502,6 +506,11 @@ public:
             cuvs::neighbors::mg_search_params<cuvs::neighbors::ivf_pq::search_params> mg_search_params(search_params);
             cuvs::neighbors::ivf_pq::search(*res, *mg_index_, mg_search_params,
                                                 queries_host_view, neighbors_host_view, distances_host_view);
+
+            // Ensure all participating GPUs are synchronized before returning.
+            handle.sync_all_devices();
+            } else if (local_index) {
+            // Task 1: Ensure all participating GPUs are synchronized before returning.
         } else if (local_index) {
             auto queries_device = raft::make_device_matrix<T, int64_t, raft::layout_c_contiguous>(
                 *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(this->dimension));
@@ -595,6 +604,9 @@ public:
             cuvs::neighbors::ivf_pq::search(*res, *mg_index_, mg_search_params,
                                                 queries_host_target.view(), 
                                                 neighbors_host_view, distances_host_view);
+            
+            // Ensure all participating GPUs are synchronized before returning.
+            handle.sync_all_devices();
         } else if (local_index) {
             auto neighbors_device = raft::make_device_matrix<int64_t, int64_t, raft::layout_c_contiguous>(
                 *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));

@@ -10,7 +10,13 @@ endif
 
 # Compilation flags
 # Added --extended-lambda because raft/core/copy.cuh requires it for some internal headers
-NVCC_FLAGS := -std=c++17 -x cu -Xcompiler "-Wall -Wextra -fPIC -O2" --extended-lambda --expt-relaxed-constexpr
+NVCC_FLAGS := -std=c++17 -Xcompiler "-Wall -Wextra -fPIC -O2" --extended-lambda --expt-relaxed-constexpr
+# Target architectures: sm_75 (T4/RTX 20), sm_80 (A100), sm_86 (A10), sm_89 (L40), sm_90 (H100)
+NVCC_FLAGS += -gencode arch=compute_75,code=sm_75
+NVCC_FLAGS += -gencode arch=compute_80,code=sm_80
+NVCC_FLAGS += -gencode arch=compute_86,code=sm_86
+NVCC_FLAGS += -gencode arch=compute_89,code=sm_89
+NVCC_FLAGS += -gencode arch=compute_90,code=sm_90
 NVCC_FLAGS += -I. -I$(CUDA_PATH)/include -I$(CONDA_PREFIX)/include -I$(CONDA_PREFIX)/include/rapids -I$(CONDA_PREFIX)/include/raft -I$(CONDA_PREFIX)/include/cuvs
 NVCC_FLAGS += -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE -DRAFT_SYSTEM_LITTLE_ENDIAN=1
 
@@ -43,9 +49,12 @@ TEST_SRCS := $(TESTDIR)/main_test.cu \
 
 TEST_OBJS := $(patsubst $(TESTDIR)/%.cu, $(OBJDIR)/test/%.o, $(TEST_SRCS))
 
-.PHONY: all clean test
+.PHONY: all clean test debug
 
-all: $(OBJS)
+all: $(TARGET)
+
+debug: NVCC_FLAGS := $(subst -O2,-O0,$(NVCC_FLAGS)) -g -G
+debug: all $(TEST_EXE)
 
 $(TARGET): $(OBJS)
 	@echo "Linking shared library $@"
@@ -53,7 +62,7 @@ $(TARGET): $(OBJS)
 
 %.o: %.cpp
 	@echo "Compiling $< with NVCC"
-	$(NVCC) $(NVCC_FLAGS) -c $< -o $@
+	$(NVCC) -x cu $(NVCC_FLAGS) -c $< -o $@
 
 # Test targets
 test: $(TEST_EXE)
@@ -62,12 +71,12 @@ test: $(TEST_EXE)
 
 $(TEST_EXE): $(TEST_OBJS) helper.o
 	@echo "NVCCLD $@"
-	$(NVCC) $(subst -x cu,,$(NVCC_FLAGS)) $^ $(subst -shared,,$(LDFLAGS)) -o $@
+	$(NVCC) $(NVCC_FLAGS) $^ $(subst -shared,,$(LDFLAGS)) -o $@
 
 $(OBJDIR)/test/%.o: $(TESTDIR)/%.cu
 	@mkdir -p $(@D)
 	@echo "NVCC $<"
-	$(NVCC) -std=c++17 -Xcompiler "-Wall -Wextra -fPIC -O2" --extended-lambda --expt-relaxed-constexpr -I. -I$(CUDA_PATH)/include -I$(CONDA_PREFIX)/include -I$(CONDA_PREFIX)/include/rapids -I$(CONDA_PREFIX)/include/raft -I$(CONDA_PREFIX)/include/cuvs -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE -DRAFT_SYSTEM_LITTLE_ENDIAN=1 -c $< -o $@
+	$(NVCC) -x cu $(NVCC_FLAGS) -c $< -o $@
 
 clean:
 	@echo "Cleaning up..."

@@ -167,12 +167,26 @@ public:
             return std::any();
         };
 
-        auto stop_fn = [&](raft_handle_wrapper_t&) -> std::any {
-            std::unique_lock<std::shared_mutex> lock(this->mutex_);
-            index_.reset();
-            mg_index_.reset();
-            this->quantizer_.reset();
-            this->dataset_device_ptr_.reset();
+        auto stop_fn = [&](raft_handle_wrapper_t& handle) -> std::any {
+            auto res = handle.get_raft_resources();
+            bool is_main = is_snmg_handle(res);
+            
+            // Critical: Multi-GPU index (mg_index_) MUST be destroyed by the thread 
+            // that owns the SNMG resources (the main worker thread).
+            if (is_main || !mg_index_) {
+                std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                // Ensure GPU is done before destroying index
+                handle.sync_all_devices();
+                index_.reset();
+                mg_index_.reset();
+                this->quantizer_.reset();
+                this->dataset_device_ptr_.reset();
+            } else {
+                // Sub-workers only clear their local pointers/quantizers if safe,
+                // but single-GPU index shards are usually owned by mg_index_.
+                std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                this->quantizer_.reset();
+            }
             return std::any();
         };
 
@@ -202,8 +216,9 @@ public:
         if (result_wait.error) std::rethrow_exception(result_wait.error);
         
         this->is_loaded_ = true;
-        // Clear host dataset after building to save memory
-        if (this->filename_.empty()) {
+        // Clear host dataset after building to save memory, but keep it for sharded mode
+        // as shards might hold references to it in some configurations.
+        if (this->filename_.empty() && this->dist_mode != DistributionMode_SHARDED) {
             this->flattened_host_dataset.clear();
             this->flattened_host_dataset.shrink_to_fit();
         }
@@ -233,11 +248,13 @@ public:
                 this->count = static_cast<uint32_t>(index_->size());
                 this->build_params.graph_degree = static_cast<size_t>(index_->graph_degree());
             }
-            raft::resource::sync_stream(*res);
+            handle.sync_all_devices();
         } else if (!this->flattened_host_dataset.empty()) {
             if (is_mg) {
-                auto dataset_host_view = raft::make_host_matrix_view<const T, int64_t>(
-                    this->flattened_host_dataset.data(), (int64_t)this->count, (int64_t)this->dimension);
+                // Use pinned host memory for sharded build dataset to ensure safe access from all GPUs
+                auto dataset_host = raft::make_host_matrix<T, int64_t, raft::layout_c_contiguous>(*res, (int64_t)this->count, (int64_t)this->dimension);
+                std::copy(this->flattened_host_dataset.begin(), this->flattened_host_dataset.end(), dataset_host.data_handle());
+                handle.sync_all_devices();
 
                 cuvs::neighbors::cagra::index_params index_params;
                 index_params.metric = this->metric;
@@ -252,7 +269,9 @@ public:
                 }
 
                 mg_index_ = std::make_unique<mg_index>(
-                    cuvs::neighbors::cagra::build(*res, mg_params, dataset_host_view));
+                    cuvs::neighbors::cagra::build(*res, mg_params, dataset_host.view()));
+                
+                handle.sync_all_devices();
             } else {
                 auto dataset_device = new auto(raft::make_device_matrix<T, int64_t, raft::layout_c_contiguous>(
                     *res, static_cast<int64_t>(this->count), static_cast<int64_t>(this->dimension)));
@@ -274,7 +293,7 @@ public:
                 index_ = std::make_unique<cagra_index>(
                     cuvs::neighbors::cagra::build(*res, index_params, raft::make_const_mdspan(dataset_device->view())));
             }
-            raft::resource::sync_stream(*res);
+            handle.sync_all_devices();
         }
     }
 
@@ -314,7 +333,7 @@ public:
                     cuvs::neighbors::cagra::extend_params params;
                     cuvs::neighbors::cagra::extend(*res, params, raft::make_const_mdspan(additional_dataset_device.view()), *index_);
 
-                    raft::resource::sync_stream(*res);
+                    handle.sync_all_devices();
                     return std::any();
                 }
             );
@@ -356,7 +375,7 @@ public:
                 
                 cuvs::neighbors::cagra::index_params index_params;
                 auto merged = cuvs::neighbors::cagra::merge(*res, index_params, cagra_indices);
-                raft::resource::sync_stream(*res);
+                handle.sync_all_devices();
                 return new cagra_index(std::move(merged));
             }
         );
@@ -395,7 +414,7 @@ public:
                 } else {
                     cuvs::neighbors::cagra::serialize(*res, filename, *index_);
                 }
-                raft::resource::sync_stream(*res);
+                handle.sync_all_devices();
                 return std::any();
             }
         );
@@ -421,11 +440,13 @@ public:
 
         // For large batches or if batching is explicitly disabled, use standard path
         if (num_queries > 16 || !this->worker->use_batching()) {
-            uint64_t job_id = this->worker->submit(
-                [&, num_queries, limit, sp, queries_data](raft_handle_wrapper_t& handle) -> std::any {
-                    return this->search_internal(handle, queries_data, num_queries, limit, sp);
-                }
-            );
+            auto task = [this, num_queries, limit, sp, queries_data](raft_handle_wrapper_t& handle) -> std::any {
+                return this->search_internal(handle, queries_data, num_queries, limit, sp);
+            };
+            // Use submit_main only for SHARDED multi-GPU indices to avoid concurrent NCCL/collective searches on the same GPUs.
+            // REPLICATED mode is safe for concurrent searches as each GPU acts independently.
+            bool use_main = (mg_index_ && this->dist_mode == DistributionMode_SHARDED);
+            uint64_t job_id = use_main ? this->worker->submit_main(task) : this->worker->submit(task);
             auto result_wait = this->worker->wait(job_id).get();
             if (result_wait.error) std::rethrow_exception(result_wait.error);
             return std::any_cast<search_result_t>(result_wait.result);
@@ -509,23 +530,34 @@ public:
             }
 
             if (is_snmg_handle(res) && mg_index_) {
-                auto queries_host_view = raft::make_host_matrix_view<const T, int64_t>(
-                    queries_data, (int64_t)num_queries, (int64_t)this->dimension);
+                // Use pinned host memory for SNMG collectives to ensure safe access from all GPUs
+                auto queries_host = raft::make_host_matrix<T, int64_t, raft::layout_c_contiguous>(*res, num_queries, this->dimension);
+                raft::copy(*res, queries_host.view(), raft::make_host_matrix_view<const T, int64_t>(queries_data, num_queries, this->dimension));
                 
-                auto neighbors_host_view = raft::make_host_matrix_view<int64_t, int64_t>(
-                    search_res.neighbors.data(), (int64_t)num_queries, (int64_t)limit);
-                auto distances_host_view = raft::make_host_matrix_view<float, int64_t>(
+                std::vector<uint32_t> neighbors_host_u32(num_queries * limit);
+                auto neighbors_host_view = raft::make_host_matrix_view<uint32_t, int64_t, raft::layout_c_contiguous>(
+                    neighbors_host_u32.data(), (int64_t)num_queries, (int64_t)limit);
+                auto distances_host_view = raft::make_host_matrix_view<float, int64_t, raft::layout_c_contiguous>(
                     search_res.distances.data(), (int64_t)num_queries, (int64_t)limit);
 
                 cuvs::neighbors::mg_search_params<cuvs::neighbors::cagra::search_params> mg_search_params(search_params);
                 cuvs::neighbors::cagra::search(*res, *mg_index_, mg_search_params,
-                                                    queries_host_view, neighbors_host_view, distances_host_view);
+                                                    raft::make_const_mdspan(queries_host.view()), 
+                                                    neighbors_host_view, distances_host_view);
+                
+                // Ensure all participating GPUs are synchronized before returning.
+                handle.sync_all_devices();
+
+                for (size_t i = 0; i < neighbors_host_u32.size(); ++i) {
+                    search_res.neighbors[i] = (neighbors_host_u32[i] == 4294967295U) ? -1 : (int64_t)neighbors_host_u32[i];
+                }
             } else if (local_index) {
                 auto queries_device = raft::make_device_matrix<T, int64_t, raft::layout_c_contiguous>(
                     *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(this->dimension));
                 raft::copy(*res, queries_device.view(), raft::make_host_matrix_view<const T, int64_t>(queries_data, num_queries, this->dimension));
 
-                auto neighbors_device = raft::make_device_matrix<int64_t, int64_t, raft::layout_c_contiguous>(
+                // Local index uses uint32_t for IDs
+                auto neighbors_device = raft::make_device_matrix<uint32_t, int64_t, raft::layout_c_contiguous>(
                     *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
                 auto distances_device = raft::make_device_matrix<float, int64_t, raft::layout_c_contiguous>(
                     *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
@@ -534,8 +566,14 @@ public:
                                                 raft::make_const_mdspan(queries_device.view()), 
                                                 neighbors_device.view(), distances_device.view());
 
-                raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device.view());
-                raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device.view());
+                std::vector<uint32_t> neighbors_host_u32(num_queries * limit);
+                raft::copy(*res, raft::make_host_matrix_view<uint32_t, int64_t, raft::layout_c_contiguous>(neighbors_host_u32.data(), num_queries, limit), neighbors_device.view());
+                raft::copy(*res, raft::make_host_matrix_view<float, int64_t, raft::layout_c_contiguous>(search_res.distances.data(), num_queries, limit), distances_device.view());
+                raft::resource::sync_stream(*res);
+
+                for (size_t i = 0; i < neighbors_host_u32.size(); ++i) {
+                    search_res.neighbors[i] = (neighbors_host_u32[i] == 4294967295U) ? -1 : (int64_t)neighbors_host_u32[i];
+                }
             } else {
                 throw std::runtime_error("Index not loaded or failed to find local index shard for current device.");
             }
@@ -543,12 +581,6 @@ public:
             raft::resource::sync_stream(*res);
         } // <- Temporary device resources are destroyed HERE while lock is held
 
-        for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
-            if (search_res.neighbors[i] == std::numeric_limits<int64_t>::max() || 
-                search_res.neighbors[i] == 4294967295LL || search_res.neighbors[i] < 0) {
-                search_res.neighbors[i] = -1; 
-            }
-        }
         return search_res;
     }
 
@@ -567,11 +599,13 @@ public:
 
         // For large batches or if batching is explicitly disabled, use standard path
         if (num_queries > 16 || !this->worker->use_batching()) {
-            uint64_t job_id = this->worker->submit(
-                [&, num_queries, limit, sp, queries_data](raft_handle_wrapper_t& handle) -> std::any {
-                    return this->search_float_internal(handle, queries_data, num_queries, query_dimension, limit, sp);
-                }
-            );
+            auto task = [this, num_queries, limit, sp, queries_data, query_dimension](raft_handle_wrapper_t& handle) -> std::any {
+                return this->search_float_internal(handle, queries_data, num_queries, query_dimension, limit, sp);
+            };
+            // Use submit_main only for SHARDED multi-GPU indices to avoid concurrent NCCL/collective searches on the same GPUs.
+            // REPLICATED mode is safe for concurrent searches as each GPU acts independently.
+            bool use_main = (mg_index_ && this->dist_mode == DistributionMode_SHARDED);
+            uint64_t job_id = use_main ? this->worker->submit_main(task) : this->worker->submit(task);
             auto result_wait = this->worker->wait(job_id).get();
             if (result_wait.error) std::rethrow_exception(result_wait.error);
             return std::any_cast<search_result_t>(result_wait.result);
@@ -638,10 +672,10 @@ public:
         // Scope for temporary device resources
         {
             // 1. Quantize/Convert float queries to T on device
-            auto queries_device_float = raft::make_device_matrix<float, int64_t>(*res, num_queries, this->dimension);
-            raft::copy(*res, queries_device_float.view(), raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
+            auto queries_device_float = raft::make_device_matrix<float, int64_t, raft::layout_c_contiguous>(*res, num_queries, this->dimension);
+            raft::copy(*res, queries_device_float.view(), raft::make_host_matrix_view<const float, int64_t, raft::layout_c_contiguous>(queries_data, num_queries, this->dimension));
             
-            auto queries_device_target = raft::make_device_matrix<T, int64_t>(*res, num_queries, this->dimension);
+            auto queries_device_target = raft::make_device_matrix<T, int64_t, raft::layout_c_contiguous>(*res, num_queries, this->dimension);
             if constexpr (sizeof(T) == 1) {
                 if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
                 this->quantizer_.template transform<T>(*res, queries_device_float.view(), queries_device_target.data_handle(), true);
@@ -670,21 +704,33 @@ public:
             }
 
             if (is_snmg_handle(res) && mg_index_) {
-                auto queries_host_target = raft::make_host_matrix<T, int64_t>(num_queries, this->dimension);
+                // For SNMG, convert queries back to host if they were quantized on device,
+                // or just use host views if they were not.
+                // Use pinned host memory for safe SNMG collective access.
+                auto queries_host_target = raft::make_host_matrix<T, int64_t, raft::layout_c_contiguous>(*res, num_queries, this->dimension);
                 raft::copy(*res, queries_host_target.view(), queries_device_target.view());
                 raft::resource::sync_stream(*res);
 
-                auto neighbors_host_view = raft::make_host_matrix_view<int64_t, int64_t>(
-                    search_res.neighbors.data(), (int64_t)num_queries, (int64_t)limit);
-                auto distances_host_view = raft::make_host_matrix_view<float, int64_t>(
+                std::vector<uint32_t> neighbors_host_u32(num_queries * limit);
+                auto neighbors_host_view = raft::make_host_matrix_view<uint32_t, int64_t, raft::layout_c_contiguous>(
+                    neighbors_host_u32.data(), (int64_t)num_queries, (int64_t)limit);
+                auto distances_host_view = raft::make_host_matrix_view<float, int64_t, raft::layout_c_contiguous>(
                     search_res.distances.data(), (int64_t)num_queries, (int64_t)limit);
 
                 cuvs::neighbors::mg_search_params<cuvs::neighbors::cagra::search_params> mg_search_params(search_params);
                 cuvs::neighbors::cagra::search(*res, *mg_index_, mg_search_params,
-                                                    queries_host_target.view(), 
+                                                    raft::make_const_mdspan(queries_host_target.view()), 
                                                     neighbors_host_view, distances_host_view);
+                
+                // Ensure all participating GPUs are synchronized before returning.
+                handle.sync_all_devices();
+
+                for (size_t i = 0; i < neighbors_host_u32.size(); ++i) {
+                    search_res.neighbors[i] = (neighbors_host_u32[i] == 4294967295U) ? -1 : (int64_t)neighbors_host_u32[i];
+                }
             } else if (local_index) {
-                auto neighbors_device = raft::make_device_matrix<int64_t, int64_t, raft::layout_c_contiguous>(
+                // Local index uses uint32_t for IDs
+                auto neighbors_device = raft::make_device_matrix<uint32_t, int64_t, raft::layout_c_contiguous>(
                     *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
                 auto distances_device = raft::make_device_matrix<float, int64_t, raft::layout_c_contiguous>(
                     *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
@@ -693,8 +739,14 @@ public:
                                                 raft::make_const_mdspan(queries_device_target.view()), 
                                                 neighbors_device.view(), distances_device.view());
 
-                raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device.view());
-                raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device.view());
+                std::vector<uint32_t> neighbors_host_u32(num_queries * limit);
+                raft::copy(*res, raft::make_host_matrix_view<uint32_t, int64_t, raft::layout_c_contiguous>(neighbors_host_u32.data(), num_queries, limit), neighbors_device.view());
+                raft::copy(*res, raft::make_host_matrix_view<float, int64_t, raft::layout_c_contiguous>(search_res.distances.data(), num_queries, limit), distances_device.view());
+                raft::resource::sync_stream(*res);
+
+                for (size_t i = 0; i < neighbors_host_u32.size(); ++i) {
+                    search_res.neighbors[i] = (neighbors_host_u32[i] == 4294967295U) ? -1 : (int64_t)neighbors_host_u32[i];
+                }
             } else {
                 throw std::runtime_error("Index not loaded or failed to find local index shard for current device.");
             }
@@ -702,12 +754,6 @@ public:
             raft::resource::sync_stream(*res);
         } // <- ALL temporary device matrices are destroyed HERE while lock is held
 
-        for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
-            if (search_res.neighbors[i] == std::numeric_limits<int64_t>::max() || 
-                search_res.neighbors[i] == 4294967295LL || search_res.neighbors[i] < 0) {
-                search_res.neighbors[i] = -1; 
-            }
-        }
         return search_res;
     }
 

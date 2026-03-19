@@ -20,6 +20,8 @@
 #include "test_framework.hpp"
 #include <cstdio>
 #include <cstdlib>
+#include <thread>
+#include <future>
 
 using namespace matrixone;
 
@@ -160,4 +162,105 @@ TEST(GpuCagraTest, ReplicatedModeSimulation) {
     ASSERT_EQ(result.neighbors[0], 0u);
 
     index.destroy();
+}
+
+TEST(GpuCagraTest, ConcurrentShardedSearch) {
+    const uint32_t dimension = 64;
+    const uint64_t count = 5000;
+    std::vector<float> dataset(count * dimension);
+    for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
+    
+    int dev_count = gpu_get_device_count();
+    if (dev_count < 2) {
+        TEST_LOG("Skipping ConcurrentShardedSearch: need at least 2 GPUs");
+        return;
+    }
+    std::vector<int> devices(dev_count);
+    gpu_get_device_list(devices.data(), dev_count);
+
+    cagra_build_params_t bp = cagra_build_params_default();
+    bp.intermediate_graph_degree = 32;
+    bp.graph_degree = 16;
+    gpu_cagra_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 8, DistributionMode_SHARDED);
+    index.set_use_batching(false); // Force serialized/parallel path
+    index.start();
+    index.build();
+
+    const int num_threads = 8;
+    const int num_queries_per_thread = 20;
+    std::vector<std::future<void>> futures;
+    
+    for (int i = 0; i < num_threads; ++i) {
+        futures.push_back(std::async(std::launch::async, [&index, dimension, num_queries_per_thread]() {
+            std::vector<float> query(dimension);
+            cagra_search_params_t sp = cagra_search_params_default();
+            for (int q = 0; q < num_queries_per_thread; ++q) {
+                for (uint32_t j = 0; j < dimension; ++j) query[j] = (float)rand() / RAND_MAX;
+                auto result = index.search(query.data(), 1, dimension, 5, sp);
+                ASSERT_EQ(result.neighbors.size(), (size_t)5);
+            }
+        }));
+    }
+
+    for (auto& f : futures) f.get();
+
+    index.destroy();
+}
+
+void reproduce_sharded_cagra() {
+    const uint32_t dimension = 1024;
+    const uint64_t count = 100000;
+    
+    printf("[INFO    ] Generating %lu vectors of dimension %u...\n", count, dimension);
+    std::vector<float> dataset(count * dimension);
+    for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
+    
+    int dev_count = gpu_get_device_count();
+    if (dev_count < 1) {
+        printf("[INFO    ] Skipping reproduction: need at least 1 GPU\n");
+        return;
+    }
+    std::vector<int> devices(dev_count);
+    gpu_get_device_list(devices.data(), dev_count);
+
+    cagra_build_params_t bp = cagra_build_params_default();
+    bp.intermediate_graph_degree = 256;
+    bp.graph_degree = 128;
+    
+    printf("[INFO    ] Building sharded CAGRA index...\n");
+    gpu_cagra_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 8, DistributionMode_SHARDED);
+    index.set_use_batching(false); // Reproduce Batchingfalse path
+    index.start();
+    index.build();
+
+    const int num_threads = 16;
+    const int num_queries_per_thread = 50;
+    printf("[INFO    ] Starting concurrent search with %d threads...\n", num_threads);
+    
+    std::vector<std::future<void>> futures;
+    for (int i = 0; i < num_threads; ++i) {
+        futures.push_back(std::async(std::launch::async, [&index, dimension, num_queries_per_thread]() {
+            std::vector<float> query(dimension);
+            cagra_search_params_t sp = cagra_search_params_default();
+            sp.itopk_size = 128;
+            sp.search_width = 3;
+            
+            for (int q = 0; q < num_queries_per_thread; ++q) {
+                for (uint32_t j = 0; j < dimension; ++j) query[j] = (float)rand() / RAND_MAX;
+                auto result = index.search(query.data(), 1, dimension, 10, sp);
+                if (result.neighbors.size() != 10) {
+                    printf("[ERROR   ] Search failed: got %zu neighbors\n", result.neighbors.size());
+                }
+            }
+        }));
+    }
+
+    for (auto& f : futures) f.get();
+    printf("[INFO    ] Concurrent search finished successfully.\n");
+
+    index.destroy();
+}
+
+TEST(GpuCagraTest, ReproduceBenchmarkGpuShardedCagra) {
+    reproduce_sharded_cagra();
 }

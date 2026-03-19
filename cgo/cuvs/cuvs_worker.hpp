@@ -51,16 +51,26 @@
 namespace matrixone {
 
 /**
+ * @brief Helper to check if a RAFT handle is configured for Multi-GPU (SNMG).
+ */
+static inline bool is_snmg_handle(const raft::resources* res) {
+    return dynamic_cast<const raft::device_resources_snmg*>(res) != nullptr;
+}
+
+/**
  * @brief Wrapper for RAFT resources to manage their lifecycle.
  * Supports both single-GPU and single-node multi-GPU (SNMG) modes.
  */
 class raft_handle_wrapper_t {
 public:
     // Default constructor for single-GPU mode (uses current device)
-    raft_handle_wrapper_t() : resources_(std::make_unique<raft::device_resources>()) {}
+    raft_handle_wrapper_t() : resources_(std::make_unique<raft::device_resources>()) {
+        int dev;
+        if (cudaGetDevice(&dev) == cudaSuccess) devices_ = {dev};
+    }
 
     // Constructor for single-GPU mode with a specific device ID
-    explicit raft_handle_wrapper_t(int device_id) {
+    explicit raft_handle_wrapper_t(int device_id) : devices_({device_id}) {
         cudaError_t err = cudaSetDevice(device_id);
         if (err != cudaSuccess) throw std::runtime_error("cudaSetDevice failed");
         resources_ = std::make_unique<raft::device_resources>();
@@ -68,7 +78,8 @@ public:
 
     // Constructor for multi-GPU mode (SNMG)
     // force_mg: If true, use device_resources_snmg even if devices.size() == 1 (useful for testing)
-    explicit raft_handle_wrapper_t(const std::vector<int>& devices, bool force_mg = false) {
+    explicit raft_handle_wrapper_t(const std::vector<int>& devices, bool force_mg = false)
+        : devices_(devices) {
         if (devices.empty()) {
             resources_ = std::make_unique<raft::device_resources>();
         } else if (devices.size() == 1 && !force_mg) {
@@ -87,16 +98,35 @@ public:
 
     raft::resources* get_raft_resources() const { return resources_.get(); }
 
+    void wait_comms_all() {
+        if (is_snmg_handle(resources_.get())) {
+            int num_ranks = raft::resource::get_num_ranks(*resources_);
+            for (int i = 0; i < num_ranks; ++i) {
+                auto& res = raft::resource::get_device_resources_for_rank(*resources_, i);
+                if (raft::resource::comms_initialized(res)) {
+                    auto& comm = raft::resource::get_comms(res);
+                    comm.sync_stream(raft::resource::get_cuda_stream(res));
+                }
+            }
+        }
+    }
+
+    void sync_all_devices() {
+        if (is_snmg_handle(resources_.get())) {
+            int num_ranks = raft::resource::get_num_ranks(*resources_);
+            for (int i = 0; i < num_ranks; ++i) {
+                auto& res = raft::resource::get_device_resources_for_rank(*resources_, i);
+                raft::resource::sync_stream(res);
+            }
+        } else {
+            raft::resource::sync_stream(*resources_);
+        }
+    }
+
 private:
     std::unique_ptr<raft::resources> resources_;
+    std::vector<int> devices_;
 };
-
-/**
- * @brief Helper to check if a RAFT handle is configured for Multi-GPU (SNMG).
- */
-static inline bool is_snmg_handle(raft::resources* res) {
-    return dynamic_cast<const raft::device_resources_snmg*>(res) != nullptr;
-}
 
 /**
  * @brief A thread-safe blocking queue for task distribution.
@@ -290,11 +320,13 @@ public:
         }
         worker_cv_.notify_all();
 
+        // Stop result store first to unblock any waiters (like build() holding a mutex)
+        result_store_.stop();
+
         if (main_thread_.joinable()) main_thread_.join();
         for (auto& t : sub_workers_) if (t.joinable()) t.join();
         
         sub_workers_.clear();
-        result_store_.stop();
     }
 
     uint64_t submit(user_task_fn fn) {
@@ -512,7 +544,13 @@ private:
     void execute_task(const cuvs_task_t& task, raft_handle& resource) {
         cuvs_task_result_t res;
         res.id = task.id;
-        try { res.result = task.fn(resource); }
+        try { 
+            // Ensure communication channels (NCCL/UCX) are ready for collective ops
+            resource.wait_comms_all();
+            res.result = task.fn(resource); 
+            // Ensure any pending CUDA kernels are finished across all participating GPUs
+            resource.sync_all_devices();
+        }
         catch (...) { 
             res.error = std::current_exception(); 
             std::cerr << "ERROR: Task " << task.id << " failed." << std::endl;
@@ -532,17 +570,16 @@ private:
 
                 // CASE 2: Multi-GPU mode
                 if (is_main_thread) {
+                    // Main thread gets the SNMG handle for coordinated multi-GPU tasks (Sharded mode)
                     return std::make_unique<raft_handle>(devices_, force_mg_);
                 }
                 
-                // If per-thread device is enabled, each sub-worker gets one GPU
-                if (per_thread_device_) {
-                    int dev = devices_[thread_idx % devices_.size()];
-                    return std::make_unique<raft_handle>(dev);
-                }
-                
-                // Otherwise, sub-workers share the SNMG context
-                return std::make_unique<raft_handle>(devices_, force_mg_);
+                // For sub-workers, default to a single-GPU handle pinned to one of the GPUs.
+                // This is efficient for Replicated mode and avoids redundant SNMG/NCCL initialization.
+                int dev = devices_[thread_idx % devices_.size()];
+                cudaError_t err = cudaSetDevice(dev);
+                if (err != cudaSuccess) throw std::runtime_error("cudaSetDevice failed in sub-worker setup");
+                return std::make_unique<raft_handle>(dev);
             } else if (device_id_ >= 0) {
                 return std::make_unique<raft_handle>(device_id_);
             } else {
