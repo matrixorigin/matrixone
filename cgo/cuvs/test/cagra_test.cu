@@ -60,7 +60,7 @@ TEST(GpuCagraTest, BasicLoadAndSearch) {
     TEST_LOG("CAGRA Search took " << duration << " ms");
 
     ASSERT_EQ(result.neighbors.size(), (size_t)5);
-    ASSERT_EQ(result.neighbors[0], 0u);
+    ASSERT_EQ(result.neighbors[0], 0U);
 
     index.destroy();
 }
@@ -102,7 +102,7 @@ TEST(GpuCagraTest, SaveAndLoadFromFile) {
         auto result = index.search(queries.data(), 1, dimension, 5, sp);
         
         ASSERT_EQ(result.neighbors.size(), (size_t)5);
-        ASSERT_EQ(result.neighbors[0], 0u);
+        ASSERT_EQ(result.neighbors[0], 0U);
 
         index.destroy();
     }
@@ -132,7 +132,7 @@ TEST(GpuCagraTest, ShardedModeSimulation) {
     auto result = index.search(queries.data(), 1, dimension, 5, sp);
 
     ASSERT_EQ(result.neighbors.size(), (size_t)5);
-    ASSERT_EQ(result.neighbors[0], 0u);
+    ASSERT_EQ(result.neighbors[0], 0U);
 
     index.destroy();
 }
@@ -159,7 +159,7 @@ TEST(GpuCagraTest, ReplicatedModeSimulation) {
     auto result = index.search(queries.data(), 1, dimension, 5, sp);
 
     ASSERT_EQ(result.neighbors.size(), (size_t)5);
-    ASSERT_EQ(result.neighbors[0], 0u);
+    ASSERT_EQ(result.neighbors[0], 0U);
 
     index.destroy();
 }

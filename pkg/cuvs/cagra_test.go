@@ -218,7 +218,7 @@ func TestGpuCagraChunked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search 1 failed: %v", err)
 	}
-	if result1.Neighbors[0] < 0 || result1.Neighbors[0] >= 50 {
+	if result1.Neighbors[0] == 4294967295 || result1.Neighbors[0] >= 50 {
 		t.Errorf("Expected neighbor from first chunk (0-49), got %d", result1.Neighbors[0])
 	}
 
@@ -445,7 +445,7 @@ func BenchmarkGpuShardedCagra(b *testing.B) {
 				}
 			})
 			b.StopTimer()
-			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
+			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]uint32, error) {
 				res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
 				if err != nil {
 					return nil, err
@@ -506,7 +506,7 @@ func BenchmarkGpuSingleCagra(b *testing.B) {
 				}
 			})
 			b.StopTimer()
-			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
+			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]uint32, error) {
 				res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
 				if err != nil {
 					return nil, err
@@ -570,7 +570,7 @@ func BenchmarkGpuReplicatedCagra(b *testing.B) {
 				}
 			})
 			b.StopTimer()
-			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
+			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]uint32, error) {
 				res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
 				if err != nil {
 					return nil, err
@@ -638,7 +638,7 @@ func BenchmarkGpuAddChunkAndSearchCagraF16(b *testing.B) {
 		}
 	})
 	b.StopTimer()
-	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
+	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]uint32, error) {
 		res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
 		if err != nil {
 			return nil, err
@@ -704,7 +704,7 @@ func BenchmarkGpuAddChunkAndSearchCagraInt8(b *testing.B) {
 		}
 	})
 	b.StopTimer()
-	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
+	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]uint32, error) {
 		res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
 		if err != nil {
 			return nil, err
