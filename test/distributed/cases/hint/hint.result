@@ -22,13 +22,13 @@ insert into users values
 }
 } */
 select * from hint_test.users;
-➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  ¦  city[12,-1,0]  𝄀
-2  ¦  Bob  ¦  30  ¦  Shanghai  𝄀
-3  ¦  Charlie  ¦  35  ¦  Guangzhou
+id    name    age    city
+2    Bob    30    Shanghai
+3    Charlie    35    Guangzhou
 select * from users where age > 28;
-➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  ¦  city[12,-1,0]  𝄀
-2  ¦  Bob  ¦  30  ¦  Shanghai  𝄀
-3  ¦  Charlie  ¦  35  ¦  Guangzhou
+id    name    age    city
+2    Bob    30    Shanghai
+3    Charlie    35    Guangzhou
 drop table users;
 drop table if exists orders;
 drop table if exists products;
@@ -63,11 +63,11 @@ insert into products values
 select o.order_id, o.amount, p.product_name, p.price
 from orders o, products p
 where o.user_id = 1;
-➤ order_id[4,32,0]  ¦  amount[3,10,2]  ¦  product_name[12,-1,0]  ¦  price[3,10,2]  𝄀
-1  ¦  100.00  ¦  Laptop  ¦  5000.00  𝄀
-3  ¦  150.00  ¦  Laptop  ¦  5000.00  𝄀
-1  ¦  100.00  ¦  Mouse  ¦  50.00  𝄀
-3  ¦  150.00  ¦  Mouse  ¦  50.00
+order_id    amount    product_name    price
+1    100.00    Laptop    5000.00
+3    150.00    Laptop    5000.00
+1    100.00    Mouse    50.00
+3    150.00    Mouse    50.00
 drop table orders;
 drop table products;
 drop table if exists users;
@@ -88,8 +88,8 @@ insert into users values
 }
 } */
 select * from users;
-➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  ¦  city[12,-1,0]  𝄀
-1  ¦  Alice  ¦  25  ¦  Beijing
+id    name    age    city
+1    Alice    25    Beijing
 drop table if exists sales;
 create table sales (
 sale_id int primary key,
@@ -109,10 +109,10 @@ insert into sales values
 }
 } */
 select * from hint_test.sales_summary where total_quantity > 20;
-➤ product_id[4,32,0]  ¦  total_quantity[-5,64,0]  ¦  sale_count[-5,64,0]  𝄀
-1  ¦  25  ¦  2  𝄀
-2  ¦  45  ¦  2  𝄀
-3  ¦  30  ¦  1
+product_id    total_quantity    sale_count
+1    25    2
+2    45    2
+3    30    1
 drop table sales;
 drop view if exists active_users;
 create view active_users as
@@ -125,8 +125,8 @@ where age between 25 and 35;
 }
 } */
 select * from user_list where city = 'Shanghai';
-➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  ¦  city[12,-1,0]  𝄀
-2  ¦  Bob  ¦  30  ¦  Shanghai
+id    name    age    city
+2    Bob    30    Shanghai
 drop table if exists transactions;
 create table transactions (
 trans_id int,
@@ -151,9 +151,9 @@ select trans_date, trans_type, total_amount
 from daily_summary
 where trans_type = 'purchase'
 order by trans_date;
-➤ trans_date[91,64,0]  ¦  trans_type[12,-1,0]  ¦  total_amount[3,38,2]  𝄀
-2024-01-01  ¦  purchase  ¦  300.00  𝄀
-2024-01-02  ¦  purchase  ¦  450.00
+trans_date    trans_type    total_amount
+2024-01-01    purchase    300.00
+2024-01-02    purchase    450.00
 /*+ {
 "rewrites": {
 "hint_test.user_monthly_stats": "SELECT user_id, DATE_FORMAT(trans_date, '%Y-%m') as month, trans_type, COUNT(*) as count, SUM(amount) as total, AVG(amount) as avg_amount FROM transactions GROUP BY user_id, DATE_FORMAT(trans_date, '%Y-%m'), trans_type"
@@ -163,10 +163,10 @@ select user_id, month, trans_type, total
 from user_monthly_stats
 where total > 100
 order by user_id, month;
-➤ user_id[4,32,0]  ¦  month[12,-1,0]  ¦  trans_type[12,-1,0]  ¦  total[3,38,2]  𝄀
-1  ¦  2024-01  ¦  purchase  ¦  300.00  𝄀
-2  ¦  2024-01  ¦  purchase  ¦  300.00  𝄀
-3  ¦  2024-01  ¦  purchase  ¦  150.00
+user_id    month    trans_type    total
+1    2024-01    purchase    300.00
+2    2024-01    purchase    300.00
+3    2024-01    purchase    150.00
 drop table if exists customer_orders;
 create table customer_orders (
 customer_id int,
@@ -191,9 +191,9 @@ insert into customer_orders values
 select customer_name, order_count, total_spent
 from high_value_customers
 order by total_spent desc;
-➤ customer_name[12,-1,0]  ¦  order_count[-5,64,0]  ¦  total_spent[3,38,2]  𝄀
-Charlie  ¦  3  ¦  3000.00  𝄀
-Alice  ¦  3  ¦  1000.00
+customer_name    order_count    total_spent
+Charlie    3    3000.00
+Alice    3    1000.00
 drop table customer_orders;
 drop table if exists employee_sales;
 create table employee_sales (
@@ -218,11 +218,11 @@ select emp_name, department, monthly_sales, dept_rank
 from dept_rankings
 where dept_rank <= 2
 order by department, dept_rank;
-➤ emp_name[12,-1,0]  ¦  department[12,-1,0]  ¦  monthly_sales[8,54,0]  ¦  dept_rank[-5,64,0]  𝄀
-David  ¦  Marketing  ¦  12000.0  ¦  1  𝄀
-Eve  ¦  Marketing  ¦  9000.0  ¦  2  𝄀
-Bob  ¦  Sales  ¦  15000.0  ¦  1  𝄀
-Alice  ¦  Sales  ¦  10000.0  ¦  2
+emp_name    department    monthly_sales    dept_rank
+David    Marketing    12000.0    1
+Eve    Marketing    9000.0    2
+Bob    Sales    15000.0    1
+Alice    Sales    10000.0    2
 drop table employee_sales;
 drop table if exists sales;
 create table sales (
@@ -256,9 +256,9 @@ insert into products values
 select product_name, category, quantity, category_avg_qty
 from top_products
 order by category, quantity desc;
-➤ product_name[12,-1,0]  ¦  category[12,-1,0]  ¦  quantity[4,32,0]  ¦  category_avg_qty[8,54,0]  𝄀
-Mouse  ¦  Electronics  ¦  25  ¦  17.5  𝄀
-Mouse  ¦  Electronics  ¦  20  ¦  17.5
+product_name    category    quantity    category_avg_qty
+Mouse    Electronics    25    17.5
+Mouse    Electronics    20    17.5
 drop table sales;
 drop table if exists online_sales;
 drop table if exists offline_sales;
@@ -287,8 +287,8 @@ select product, total_revenue, sale_count
 from all_sales
 where total_revenue > 100
 order by total_revenue desc;
-➤ product[12,-1,0]  ¦  total_revenue[3,38,2]  ¦  sale_count[-5,64,0]  𝄀
-Laptop  ¦  2300.00  ¦  2
+product    total_revenue    sale_count
+Laptop    2300.00    2
 drop table if exists online_sales;
 drop table if exists offline_sales;
 drop table if exists sales;
@@ -319,27 +319,27 @@ select category, high_price_qty, mid_price_qty, low_price_qty, product_variety
 from sales_segments
 where product_variety >= 2
 order by category;
-➤ category[12,-1,0]  ¦  high_price_qty[-5,64,0]  ¦  mid_price_qty[-5,64,0]  ¦  low_price_qty[-5,64,0]  ¦  product_variety[-5,64,0]  𝄀
-Electronics  ¦  5  ¦  20  ¦  80  ¦  4  𝄀
-Furniture  ¦  8  ¦  25  ¦  0  ¦  3  𝄀
-Stationery  ¦  0  ¦  0  ¦  300  ¦  2
+category    high_price_qty    mid_price_qty    low_price_qty    product_variety
+Electronics    5    20    80    4
+Furniture    8    25    0    3
+Stationery    0    0    300    2
 drop table sales;
 /*+ {
 "rewrites": {}
 } */
 select * from users;
-➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  ¦  city[12,-1,0]  𝄀
-1  ¦  Alice  ¦  25  ¦  Beijing  𝄀
-2  ¦  Bob  ¦  30  ¦  Shanghai  𝄀
-3  ¦  Charlie  ¦  35  ¦  Guangzhou  𝄀
-4  ¦  David  ¦  28  ¦  Shenzhen
+id    name    age    city
+1    Alice    25    Beijing
+2    Bob    30    Shanghai
+3    Charlie    35    Guangzhou
+4    David    28    Shenzhen
 /*+ {} */
 select * from users;
-➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  ¦  city[12,-1,0]  𝄀
-1  ¦  Alice  ¦  25  ¦  Beijing  𝄀
-2  ¦  Bob  ¦  30  ¦  Shanghai  𝄀
-3  ¦  Charlie  ¦  35  ¦  Guangzhou  𝄀
-4  ¦  David  ¦  28  ¦  Shenzhen
+id    name    age    city
+1    Alice    25    Beijing
+2    Bob    30    Shanghai
+3    Charlie    35    Guangzhou
+4    David    28    Shenzhen
 /*+ {
 "rewrites": {
 "hint_test.t1": "SELECT * FROM users WHERE id = 1",
@@ -357,9 +357,9 @@ select * from users;
 select * from t1
 union all
 select * from t2;
-➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  ¦  city[12,-1,0]  𝄀
-1  ¦  Alice  ¦  25  ¦  Beijing  𝄀
-2  ¦  Bob  ¦  30  ¦  Shanghai
+id    name    age    city
+2    Bob    30    Shanghai
+1    Alice    25    Beijing
 drop table if exists `user_data`;
 create table `user-data` (
 id int,
@@ -372,8 +372,8 @@ insert into `user-data` values (1, 'test');
 }
 } */
 select * from `user-data`;
-➤ id[4,32,0]  ¦  value[12,-1,0]  𝄀
-1  ¦  test
+id    value
+1    test
 drop table `user-data`;
 /*+ {
 "rewrites": {
@@ -420,10 +420,10 @@ SQL parser error: You have an error in your SQL syntax; check the manual that co
 }
 } */
 select * from users;
-➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  ¦  city[12,-1,0]  𝄀
-2  ¦  Bob  ¦  30  ¦  Shanghai  𝄀
-3  ¦  Charlie  ¦  35  ¦  Guangzhou  𝄀
-4  ¦  David  ¦  28  ¦  Shenzhen
+id    name    age    city
+2    Bob    30    Shanghai
+3    Charlie    35    Guangzhou
+4    David    28    Shenzhen
 /*! {
 "rewrites": {
 "hint_test.users": "SELECT * FROM users WHERE age > 25"
@@ -450,20 +450,20 @@ Column count doesn't match value count at row 1
 }
 } */
 SELECT * FROM users;
-➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  ¦  city[12,-1,0]  𝄀
-1  ¦  Alice  ¦  25  ¦  Beijing
+id    name    age    city
+1    Alice    25    Beijing
 SELECT * FROM USERS;
-➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  ¦  city[12,-1,0]  𝄀
-1  ¦  Alice  ¦  25  ¦  Beijing  𝄀
-2  ¦  Bob  ¦  30  ¦  Shanghai  𝄀
-3  ¦  Charlie  ¦  35  ¦  Guangzhou  𝄀
-4  ¦  David  ¦  28  ¦  Shenzhen
+id    name    age    city
+1    Alice    25    Beijing
+2    Bob    30    Shanghai
+3    Charlie    35    Guangzhou
+4    David    28    Shenzhen
 SELECT * FROM Users;
-➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  ¦  city[12,-1,0]  𝄀
-1  ¦  Alice  ¦  25  ¦  Beijing  𝄀
-2  ¦  Bob  ¦  30  ¦  Shanghai  𝄀
-3  ¦  Charlie  ¦  35  ¦  Guangzhou  𝄀
-4  ¦  David  ¦  28  ¦  Shenzhen
+id    name    age    city
+1    Alice    25    Beijing
+2    Bob    30    Shanghai
+3    Charlie    35    Guangzhou
+4    David    28    Shenzhen
 drop table if exists users;
 create table users (
 id int primary key,
@@ -499,9 +499,9 @@ insert into orders values
 }
 } */
 select * from users, orders where users.id = orders.user_id;
-➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  ¦  city[12,-1,0]  ¦  order_id[4,32,0]  ¦  user_id[4,32,0]  ¦  amount[3,10,2]  ¦  status[12,-1,0]  𝄀
-2  ¦  Bob  ¦  30  ¦  Shanghai  ¦  2  ¦  2  ¦  200.00  ¦  pending  𝄀
-3  ¦  Charlie  ¦  35  ¦  Guangzhou  ¦  4  ¦  3  ¦  300.00  ¦  cancelled
+id    name    age    city    order_id    user_id    amount    status
+2    Bob    30    Shanghai    2    2    200.00    pending
+3    Charlie    35    Guangzhou    4    3    300.00    cancelled
 drop database hint_test;
 set enable_remap_hint = 1;
 drop database if exists acc01_test;
@@ -519,10 +519,10 @@ insert into large_table select result, 2 from generate_series(1, 1000000) g;
 }
 } */
 select count(*) from large_table;
-➤ count(*)[-5,64,0]  𝄀
+count(*)
 999
 select count(*) from large_table where id < 1000;
-➤ count(*)[-5,64,0]  𝄀
+count(*)
 999
 set ft_relevancy_algorithm="TF-IDF";
 drop table if exists t_user;
@@ -572,10 +572,10 @@ insert into t_order(order_id,user_id,amount,order_date,note,detail,payload,statu
 } */
 select t_user.id, t_user.username, t_order.amount, t_order.order_date
 from t_user join t_order on t_user.id = t_order.user_id;
-➤ id[4,32,0]  ¦  username[12,-1,0]  ¦  amount[7,24,0]  ¦  order_date[91,64,0]  𝄀
-1  ¦  admin  ¦  99.9  ¦  2025-01-10  𝄀
-1  ¦  admin  ¦  10.0  ¦  2025-03-01  𝄀
-2  ¦  user123  ¦  250.5  ¦  2025-02-15
+id    username    amount    order_date
+1    admin    99.9    2025-01-10
+1    admin    10.0    2025-03-01
+2    user123    250.5    2025-02-15
 /*+ {
 "rewrites": {
 "acc01_test.t_order": "select user_id, sum(amount) as total_amt from t_order where status='PAID' group by user_id"
@@ -584,9 +584,9 @@ from t_user join t_order on t_user.id = t_order.user_id;
 select t_user.id, t_user.username, t_order.total_amt
 from t_user join t_order on t_user.id=t_order.user_id
 order by t_user.id;
-➤ id[4,32,0]  ¦  username[12,-1,0]  ¦  total_amt[8,54,0]  𝄀
-1  ¦  admin  ¦  99.9000015258789  𝄀
-2  ¦  user123  ¦  250.5
+id    username    total_amt
+1    admin    99.9000015258789
+2    user123    250.5
 /*+ {
 "rewrites": {
 "acc01_test.t_user": "select id, profile from t_user where profile like '%1%'",
@@ -596,26 +596,26 @@ order by t_user.id;
 select t_user.id, t_order.cnt
 from t_user left join t_order on t_user.id=t_order.user_id
 order by t_user.id;
-➤ id[4,32,0]  ¦  cnt[-5,64,0]  𝄀
-1  ¦  1  𝄀
-3  ¦  null
+id    cnt
+1    1
+3    null
 /*+ {
 "rewrites": {
 "acc01_test.t_user": "select id, username from t_user where id = 2"
 }
 } */
 select id, username from t_user;
-➤ id[4,32,0]  ¦  username[12,-1,0]  𝄀
-2  ¦  user123
+id    username
+2    user123
 /*+ {
 "rewrites": {
 "acc01_test.t_user": "select id, username from t_user where id in (1,3)"
 }
 } */
 select t_user.id, t_user.username from t_user order by id;
-➤ id[4,32,0]  ¦  username[12,-1,0]  𝄀
-1  ¦  admin  𝄀
-3  ¦  test_user
+id    username
+1    admin
+3    test_user
 /*+ {
 "rewrites": {
 "acc01_test.t_user": "select id, length(avatar) as av_len, hex(bin_tag) as bin_hex from t_user where avatar is not null"
@@ -623,17 +623,17 @@ select t_user.id, t_user.username from t_user order by id;
 } */
 select t_user.id, t_user.av_len, t_user.bin_hex
 from t_user order by id;
-➤ id[4,32,0]  ¦  av_len[-5,64,0]  ¦  bin_hex[12,-1,0]  𝄀
-1  ¦  1  ¦  0102030405060708  𝄀
-2  ¦  1  ¦  1111111111111111
+id    av_len    bin_hex
+1    1    0102030405060708
+2    1    1111111111111111
 /*+ {
 "rewrites": {
 "acc01_test.t_user": "select id, ft from t_user where ft like '%Matrix%'"
 }
 } */
 select t_user.id, t_user.ft from t_user;
-➤ id[4,32,0]  ¦  ft[12,-1,0]  𝄀
-1  ¦  Matrix Origin
+id    ft
+1    Matrix Origin
 /*+ {
 "rewrites": {
 "acc01_test.t_order": "select order_id, user_id, status from t_order where status='PAID'",
@@ -643,8 +643,8 @@ select t_user.id, t_user.ft from t_user;
 select t_order.order_id, t_user.email
 from t_order join t_user on t_order.user_id=t_user.id
 order by t_order.order_id;
-➤ order_id[4,32,0]  ¦  email[12,-1,0]  𝄀
-101  ¦  admin@company.com
+order_id    email
+101    admin@company.com
 /*+ {
 "rewrites": {
 "acc01_test.t_order": "select user_id, count(*) as c from t_order where created_ts >= '2025-01-01 00:00:00' and status <> 'CANCEL' group by user_id"
@@ -653,19 +653,19 @@ order by t_order.order_id;
 select t_user.id, coalesce(t_order.c,0) as recent_cnt
 from t_user left join t_order on t_user.id=t_order.user_id
 order by t_user.id;
-➤ id[4,32,0]  ¦  recent_cnt[-5,64,0]  𝄀
-1  ¦  2  𝄀
-2  ¦  1  𝄀
-3  ¦  0
+id    recent_cnt
+1    2
+2    1
+3    0
 /*+ {
 "rewrites": {
 "acc01_test.t_user": "select id, username, phone from t_user where username is not null and phone is not null"
 }
 } */
 select t_user.id, t_user.username, t_user.phone from t_user order by id;
-➤ id[4,32,0]  ¦  username[12,-1,0]  ¦  phone[12,-1,0]  𝄀
-1  ¦  admin  ¦  13812345678  𝄀
-2  ¦  user123  ¦  18998765432
+id    username    phone
+1    admin    13812345678
+2    user123    18998765432
 /*+ {
 "rewrites": {
 "acc01_test.t_user": "select id, username from t_user where username like 'user%'",
@@ -675,8 +675,8 @@ select t_user.id, t_user.username, t_user.phone from t_user order by id;
 select t_user.id, t_user.username, t_order.s
 from t_user join t_order on t_user.id=t_order.user_id
 order by t_user.id;
-➤ id[4,32,0]  ¦  username[12,-1,0]  ¦  s[8,54,0]  𝄀
-2  ¦  user123  ¦  250.5
+id    username    s
+2    user123    250.5
 /*+ {
 "rewrites": {
 "acc01_test.t_user": "select id, status from t_user where status='active'",
@@ -687,9 +687,9 @@ select t_user.id, t_order.last_day
 from t_user left join t_order on t_user.id=t_order.user_id
 where t_order.last_day is not null
 order by t_user.id;
-➤ id[4,32,0]  ¦  last_day[91,64,0]  𝄀
-1  ¦  2025-03-01  𝄀
-2  ¦  2025-02-15
+id    last_day
+1    2025-03-01
+2    2025-02-15
 drop database if exists acc01_test;
 set enable_remap_hint = 0;
 drop account acc01;

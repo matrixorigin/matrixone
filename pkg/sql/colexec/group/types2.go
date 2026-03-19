@@ -15,6 +15,7 @@
 package group
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"os"
@@ -110,6 +111,14 @@ type container struct {
 	spillAggList    []aggexec.AggFuncExec
 	spillBkts       list.Deque[*spillBucket]
 	currentSpillBkt []*spillBucket
+
+	// reusable buffers for spill to avoid per-call allocations
+	spillFlagFlat   []uint8       // scratch flags for one batch's rows during spill
+	spillChunkFlags [][]uint8     // full-length flags slice passed to SaveIntermediateResult
+	spillHashCodes  []uint64      // reused buffer for AllGroupHash output
+	spillReader     *bufio.Reader // reused across loadSpilledData calls
+	spillGbBatch    *batch.Batch  // reused staging batch across spillDataToDisk calls
+	spillBuf        *bytes.Buffer // reused write buffer across spillDataToDisk calls
 }
 
 func (ctr *container) isSpilling() bool {
@@ -206,6 +215,10 @@ func (ctr *container) free() {
 	ctr.freeAggList()
 	ctr.freeSpillAggList()
 	ctr.freeSpillBkts()
+	if ctr.spillGbBatch != nil {
+		ctr.spillGbBatch.Clean(ctr.mp)
+		ctr.spillGbBatch = nil
+	}
 
 	mpool.DeleteMPool(ctr.mp)
 	ctr.mp = nil

@@ -19,7 +19,6 @@ import (
 	io "io"
 
 	hll "github.com/axiomhq/hyperloglog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -37,34 +36,6 @@ type approxCountFixedExec[T types.FixedSizeTExceptStrType] struct {
 
 func (exec *approxCountFixedExec[T]) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
-}
-
-func (exec *approxCountFixedExec[T]) marshal() ([]byte, error) {
-	d := exec.singleAggInfo.getEncoded()
-	r, em, dist, err := exec.ret.marshalToBytes()
-	if err != nil {
-		return nil, err
-	}
-	if dist != nil {
-		return nil, moerr.NewInternalErrorNoCtx("distinct should have been nil")
-	}
-
-	encoded := EncodedAgg{
-		Info:    d,
-		Result:  r,
-		Empties: em,
-		Groups:  nil,
-	}
-	if len(exec.groups) > 0 {
-		encoded.Groups = make([][]byte, len(exec.groups))
-		for i := range encoded.Groups {
-			encoded.Groups[i], err = exec.groups[i].MarshalBinary()
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-	return encoded.Marshal()
 }
 
 func (exec *approxCountFixedExec[T]) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
@@ -89,24 +60,6 @@ func (exec *approxCountFixedExec[T]) UnmarshalFromReader(reader io.Reader, mp *m
 	return nil
 }
 
-func (exec *approxCountFixedExec[T]) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
-	// distinct is nil
-	err := exec.ret.unmarshalFromBytes(result, empties, nil)
-	if err != nil {
-		return err
-	}
-	if len(groups) > 0 {
-		exec.groups = make([]*hll.Sketch, len(groups))
-		for i := range exec.groups {
-			exec.groups[i] = hll.New()
-			if err = exec.groups[i].UnmarshalBinary(groups[i]); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 type approxCountVarExec struct {
 	singleAggInfo
 	singleAggExecExtraInformation
@@ -118,34 +71,6 @@ type approxCountVarExec struct {
 
 func (exec *approxCountVarExec) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
-}
-
-func (exec *approxCountVarExec) marshal() ([]byte, error) {
-	d := exec.singleAggInfo.getEncoded()
-	r, em, dist, err := exec.ret.marshalToBytes()
-	if err != nil {
-		return nil, err
-	}
-	if dist != nil {
-		return nil, moerr.NewInternalErrorNoCtx("dist should have been nil")
-	}
-
-	encoded := EncodedAgg{
-		Info:    d,
-		Result:  r,
-		Empties: em,
-		Groups:  nil,
-	}
-	if len(exec.groups) > 0 {
-		encoded.Groups = make([][]byte, len(exec.groups))
-		for i := range encoded.Groups {
-			encoded.Groups[i], err = exec.groups[i].MarshalBinary()
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-	return encoded.Marshal()
 }
 
 func (exec *approxCountVarExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
@@ -166,23 +91,6 @@ func (exec *approxCountVarExec) UnmarshalFromReader(reader io.Reader, mp *mpool.
 	}
 	exec.ret.setupT()
 	exec.groups = groups
-	return nil
-}
-
-func (exec *approxCountVarExec) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
-	err := exec.ret.unmarshalFromBytes(result, empties, nil)
-	if err != nil {
-		return err
-	}
-	if len(groups) > 0 {
-		exec.groups = make([]*hll.Sketch, len(groups))
-		for i := range exec.groups {
-			exec.groups[i] = hll.New()
-			if err = exec.groups[i].UnmarshalBinary(groups[i]); err != nil {
-				return err
-			}
-		}
-	}
 	return nil
 }
 

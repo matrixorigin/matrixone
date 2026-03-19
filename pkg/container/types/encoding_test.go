@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -595,4 +596,129 @@ func TestWriteValuesErrorPerType(t *testing.T) {
 		_, err := WriteValues(&errWriter{failAt: 0}, val)
 		require.Error(t, err, "expected error when encoding %T", val)
 	}
+}
+
+func TestIOHelpers(t *testing.T) {
+	var buf bytes.Buffer
+
+	// int64
+	require.NoError(t, WriteInt64(&buf, -1234567890123))
+	v64, err := ReadInt64(bytes.NewReader(buf.Bytes()))
+	require.NoError(t, err)
+	require.Equal(t, int64(-1234567890123), v64)
+	buf.Reset()
+
+	// uint64
+	require.NoError(t, WriteUint64(&buf, 9876543210))
+	u64, err := ReadUint64(bytes.NewReader(buf.Bytes()))
+	require.NoError(t, err)
+	require.Equal(t, uint64(9876543210), u64)
+	buf.Reset()
+
+	// int32
+	require.NoError(t, WriteInt32(&buf, -42))
+	v32, err := ReadInt32(bytes.NewReader(buf.Bytes()))
+	require.NoError(t, err)
+	require.Equal(t, int32(-42), v32)
+	buf.Reset()
+
+	// uint32
+	require.NoError(t, WriteUint32(&buf, 99))
+	u32, err := ReadUint32(bytes.NewReader(buf.Bytes()))
+	require.NoError(t, err)
+	require.Equal(t, uint32(99), u32)
+	buf.Reset()
+
+	// int16
+	require.NoError(t, WriteInt16(&buf, -7))
+	v16, err := ReadInt16(bytes.NewReader(buf.Bytes()))
+	require.NoError(t, err)
+	require.Equal(t, int16(-7), v16)
+	buf.Reset()
+
+	// uint16
+	require.NoError(t, WriteUint16(&buf, 1000))
+	u16, err := ReadUint16(bytes.NewReader(buf.Bytes()))
+	require.NoError(t, err)
+	require.Equal(t, uint16(1000), u16)
+	buf.Reset()
+
+	// bool
+	b, err := ReadBool(bytes.NewReader([]byte{1}))
+	require.NoError(t, err)
+	require.True(t, b)
+
+	// byte / byteAsInt / int32AsInt
+	by, err := ReadByte(bytes.NewReader([]byte{0xAB}))
+	require.NoError(t, err)
+	require.Equal(t, byte(0xAB), by)
+
+	bi, err := ReadByteAsInt(bytes.NewReader([]byte{5}))
+	require.NoError(t, err)
+	require.Equal(t, 5, bi)
+
+	require.NoError(t, WriteInt32(&buf, 123))
+	i32i, err := ReadInt32AsInt(bytes.NewReader(buf.Bytes()))
+	require.NoError(t, err)
+	require.Equal(t, 123, i32i)
+	buf.Reset()
+
+	// ReadType roundtrip
+	typ := T_int64.ToType()
+	buf.Write(EncodeType(&typ))
+	rt, err := ReadType(bytes.NewReader(buf.Bytes()))
+	require.NoError(t, err)
+	require.Equal(t, typ, rt)
+	buf.Reset()
+
+	// WriteSizeBytes / ReadSizeBytes roundtrip
+	payload := []byte("hello")
+	require.NoError(t, WriteSizeBytes(payload, &buf))
+	_, got, err := ReadSizeBytes(bytes.NewReader(buf.Bytes()))
+	require.NoError(t, err)
+	require.Equal(t, payload, got)
+	buf.Reset()
+
+	// WriteSizeBytes with empty slice
+	require.NoError(t, WriteSizeBytes(nil, &buf))
+	sz, got, err := ReadSizeBytes(bytes.NewReader(buf.Bytes()))
+	require.NoError(t, err)
+	require.Equal(t, int32(0), sz)
+	require.Nil(t, got)
+	buf.Reset()
+
+	// ReadSizeBytesToBuf — fits in existing buf
+	require.NoError(t, WriteSizeBytes([]byte("world"), &buf))
+	existing := make([]byte, 0, 16)
+	n, out, err := ReadSizeBytesToBuf(bytes.NewReader(buf.Bytes()), existing, 0)
+	require.NoError(t, err)
+	require.Equal(t, int32(5), n)
+	require.Equal(t, []byte("world"), out)
+	buf.Reset()
+
+	// ReadSizeBytesToBuf — needs new allocation
+	require.NoError(t, WriteSizeBytes([]byte("overflow"), &buf))
+	small := make([]byte, 0, 2)
+	n, out, err = ReadSizeBytesToBuf(bytes.NewReader(buf.Bytes()), small, 0)
+	require.NoError(t, err)
+	require.Equal(t, int32(8), n)
+	require.Equal(t, []byte("overflow"), out)
+	buf.Reset()
+
+	// ReadSizeBytesMp
+	mp := mpool.MustNewZero()
+	require.NoError(t, WriteSizeBytes([]byte("mpool"), &buf))
+	n, out, err = ReadSizeBytesMp(bytes.NewReader(buf.Bytes()), nil, mp, false)
+	require.NoError(t, err)
+	require.Equal(t, int32(5), n)
+	require.Equal(t, []byte("mpool"), out[:5])
+	mp.Free(out)
+	buf.Reset()
+
+	// ReadSizeBytesMp with sz==0 (bs becomes nil/empty)
+	require.NoError(t, WriteSizeBytes(nil, &buf))
+	n, out, err = ReadSizeBytesMp(bytes.NewReader(buf.Bytes()), nil, mp, false)
+	require.NoError(t, err)
+	require.Equal(t, int32(0), n)
+	buf.Reset()
 }
