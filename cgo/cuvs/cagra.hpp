@@ -55,16 +55,14 @@ namespace matrixone {
 
 /**
  * @brief Search result containing neighbor IDs and distances.
- * Unified to use uint32_t for neighbors across all CAGRA paths.
  */
 struct cagra_search_result_t {
-    std::vector<uint32_t> neighbors; // Indices of nearest neighbors
-    std::vector<float> distances;   // Distances to nearest neighbors
+    std::vector<uint32_t> neighbors; 
+    std::vector<float> distances;   
 };
 
 /**
  * @brief gpu_cagra_t implements a CAGRA index that can run on a single GPU or sharded across multiple GPUs.
- * It automatically chooses between single-GPU and multi-GPU (SNMG) cuVS APIs based on the RAFT handle resources.
  */
 template <typename T>
 class gpu_cagra_t : public gpu_index_base_t<T, cagra_build_params_t> {
@@ -76,12 +74,12 @@ public:
     // Internal index storage
     std::unique_ptr<cagra_index> index_;
     std::unique_ptr<mg_index> mg_index_;
+    int build_device_id_ = -1;
 
     ~gpu_cagra_t() override {
         this->destroy();
     }
 
-    // Unified Constructor for building from dataset
     gpu_cagra_t(const T* dataset_data, uint64_t count_vectors, uint32_t dimension, 
                   cuvs::distance::DistanceType m, const cagra_build_params_t& bp,
                   const std::vector<int>& devices, uint32_t nthread, distribution_mode_t mode) {
@@ -103,7 +101,6 @@ public:
         }
     }
 
-    // Constructor for chunked input (pre-allocates)
     gpu_cagra_t(uint64_t total_count, uint32_t dimension, cuvs::distance::DistanceType m, 
                     const cagra_build_params_t& bp, const std::vector<int>& devices, 
                     uint32_t nthread, distribution_mode_t mode) {
@@ -122,7 +119,6 @@ public:
         this->flattened_host_dataset.resize(this->count * this->dimension);
     }
 
-    // Unified Constructor for loading from file
     gpu_cagra_t(const std::string& filename, uint32_t dimension, cuvs::distance::DistanceType m, 
                     const cagra_build_params_t& bp, const std::vector<int>& devices, uint32_t nthread, distribution_mode_t mode) {
         
@@ -139,7 +135,6 @@ public:
         this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_, force_mg || (this->devices_.size() > 1));
     }
 
-    // Private constructor for creating from an existing cuVS index (used by merge)
     gpu_cagra_t(std::unique_ptr<cagra_index> idx, 
                   uint32_t dim, cuvs::distance::DistanceType m, uint32_t nthread, const std::vector<int>& devices)
         : index_(std::move(idx)) {
@@ -147,30 +142,20 @@ public:
         this->metric = m;
         this->dimension = dim;
         this->devices_ = devices;
-
-        // Merge result is currently a single-GPU index.
         this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_, false);
-        
         this->count = static_cast<uint32_t>(index_->size());
         this->build_params.graph_degree = static_cast<size_t>(index_->graph_degree());
-        this->build_params.intermediate_graph_degree = this->build_params.graph_degree * 2; // Best guess
+        this->build_params.intermediate_graph_degree = this->build_params.graph_degree * 2;
         this->dist_mode = DistributionMode_SINGLE_GPU;
         this->current_offset_ = this->count;
         this->is_loaded_ = true;
+        cudaGetDevice(&this->build_device_id_);
     }
 
-    /**
-     * @brief Starts the worker and initializes resources.
-     */
     void start() {
-        auto init_fn = [](raft_handle_wrapper_t&) -> std::any {
-            return std::any();
-        };
-
+        auto init_fn = [](raft_handle_wrapper_t&) -> std::any { return std::any(); };
         auto stop_fn = [&](raft_handle_wrapper_t& handle) -> std::any {
-            auto res = handle.get_raft_resources();
-            bool is_main = is_snmg_handle(res);
-            
+            bool is_main = (handle.get_rank() == 0);
             if (is_main || !mg_index_) {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 handle.sync_all_devices();
@@ -184,32 +169,18 @@ public:
             }
             return std::any();
         };
-
         this->worker->start(init_fn, stop_fn);
     }
 
-    /**
-     * @brief Loads the index from file or builds it from the dataset.
-     */
     void build() {
         std::unique_lock<std::shared_mutex> lock(this->mutex_);
         if (this->is_loaded_) return;
-
-        if (this->filename_.empty() && !index_ && this->current_offset_ > 0 && this->current_offset_ < this->count) {
-            this->count = static_cast<uint32_t>(this->current_offset_);
-            this->flattened_host_dataset.resize(this->count * this->dimension);
-        }
-
-        uint64_t job_id = this->worker->submit_main(
-            [&](raft_handle_wrapper_t& handle) -> std::any {
-                this->build_internal(handle);
-                return std::any();
-            }
-        );
-
+        uint64_t job_id = this->worker->submit_main([&](raft_handle_wrapper_t& handle) -> std::any {
+            this->build_internal(handle);
+            return std::any();
+        });
         auto result_wait = this->worker->wait(job_id).get();
         if (result_wait.error) std::rethrow_exception(result_wait.error);
-        
         this->is_loaded_ = true;
         if (this->filename_.empty() && this->dist_mode != DistributionMode_SHARDED) {
             this->flattened_host_dataset.clear();
@@ -217,17 +188,14 @@ public:
         }
     }
 
-    /**
-     * @brief Internal build implementation (no worker submission)
-     */
     void build_internal(raft_handle_wrapper_t& handle) {
         auto res = handle.get_raft_resources();
         bool is_mg = is_snmg_handle(res);
+        this->build_device_id_ = handle.get_device_id();
 
         if (!this->filename_.empty()) {
             if (is_mg) {
-                mg_index_ = std::make_unique<mg_index>(
-                    cuvs::neighbors::cagra::deserialize<T, uint32_t>(*res, this->filename_));
+                mg_index_ = std::make_unique<mg_index>(cuvs::neighbors::cagra::deserialize<T, uint32_t>(*res, this->filename_));
                 this->count = 0;
                 for (const auto& iface : mg_index_->ann_interfaces_) {
                     if (iface.index_.has_value()) this->count += static_cast<uint32_t>(iface.index_.value().size());
@@ -246,46 +214,32 @@ public:
             index_params.attach_dataset_on_build = this->build_params.attach_dataset_on_build;
 
             if (is_mg) {
-                // Use pinned host memory with EXPLICIT extents to avoid mdspan corruption.
                 auto dataset_host = raft::make_host_matrix<T, int64_t, raft::row_major>(*res, (int64_t)this->count, (int64_t)this->dimension);
                 std::copy(this->flattened_host_dataset.begin(), this->flattened_host_dataset.end(), dataset_host.data_handle());
                 handle.sync_all_devices();
-
                 cuvs::neighbors::mg_index_params<cuvs::neighbors::cagra::index_params> mg_params(index_params);
                 mg_params.mode = (this->dist_mode == DistributionMode_REPLICATED) ? 
                                     cuvs::neighbors::distribution_mode::REPLICATED : 
                                     cuvs::neighbors::distribution_mode::SHARDED;
-
-                // Pass EXPLICIT view to build.
                 auto dataset_view = raft::make_host_matrix_view<const T, int64_t, raft::row_major>(
                     dataset_host.data_handle(), (int64_t)this->count, (int64_t)this->dimension);
-
-                mg_index_ = std::make_unique<mg_index>(
-                    cuvs::neighbors::cagra::build(*res, mg_params, dataset_view));
-                
+                mg_index_ = std::make_unique<mg_index>(cuvs::neighbors::cagra::build(*res, mg_params, dataset_view));
                 handle.sync_all_devices();
             } else {
                 auto dataset_device = new auto(raft::make_device_matrix<T, int64_t, raft::layout_c_contiguous>(
                     *res, static_cast<int64_t>(this->count), static_cast<int64_t>(this->dimension)));
-                
                 this->dataset_device_ptr_ = std::shared_ptr<void>(dataset_device, [](void* ptr) {
                     delete static_cast<raft::device_matrix<T, int64_t, raft::layout_c_contiguous>*>(ptr);
                 });
-
                 RAFT_CUDA_TRY(cudaMemcpyAsync(dataset_device->data_handle(), this->flattened_host_dataset.data(),
                                             this->flattened_host_dataset.size() * sizeof(T), cudaMemcpyHostToDevice,
                                             raft::resource::get_cuda_stream(*res)));
-
-                index_ = std::make_unique<cagra_index>(
-                    cuvs::neighbors::cagra::build(*res, index_params, raft::make_const_mdspan(dataset_device->view())));
+                index_ = std::make_unique<cagra_index>(cuvs::neighbors::cagra::build(*res, index_params, raft::make_const_mdspan(dataset_device->view())));
             }
             handle.sync_all_devices();
         }
     }
 
-    /**
-     * @brief Extends the existing index with additional vectors (Single-GPU only).
-     */
     void extend(const T* additional_data, uint64_t num_vectors) {
         if (!this->is_loaded_ || !index_) {
             uint64_t old_size = this->flattened_host_dataset.size();
@@ -295,290 +249,171 @@ public:
             this->current_offset_ += static_cast<uint32_t>(num_vectors);
             return;
         }
-
         if constexpr (std::is_same_v<T, half>) {
-             throw std::runtime_error("CAGRA single-GPU extend is not supported for float16 (half) by cuVS.");
+             throw std::runtime_error("CAGRA single-GPU extend is not supported for float16.");
         } else {
             if (num_vectors == 0) return;
             std::unique_lock<std::shared_mutex> lock(this->mutex_);
-            uint64_t job_id = this->worker->submit_main(
-                [&, additional_data, num_vectors](raft_handle_wrapper_t& handle) -> std::any {
-                    auto res = handle.get_raft_resources();
-                    auto additional_dataset_device = raft::make_device_matrix<T, int64_t, raft::layout_c_contiguous>(
-                        *res, static_cast<int64_t>(num_vectors), static_cast<int64_t>(this->dimension));
-                    RAFT_CUDA_TRY(cudaMemcpyAsync(additional_dataset_device.data_handle(), additional_data,
-                                            num_vectors * this->dimension * sizeof(T), cudaMemcpyHostToDevice,
-                                            raft::resource::get_cuda_stream(*res)));
-                    cuvs::neighbors::cagra::extend_params params;
-                    cuvs::neighbors::cagra::extend(*res, params, raft::make_const_mdspan(additional_dataset_device.view()), *index_);
-                    handle.sync_all_devices();
-                    return std::any();
-                }
-            );
-            auto result = this->worker->wait(job_id).get();
-            if (result.error) std::rethrow_exception(result.error);
+            uint64_t job_id = this->worker->submit_main([&, additional_data, num_vectors](raft_handle_wrapper_t& handle) -> std::any {
+                auto res = handle.get_raft_resources();
+                auto extra_device = raft::make_device_matrix<T, int64_t, raft::layout_c_contiguous>(*res, (int64_t)num_vectors, (int64_t)this->dimension);
+                RAFT_CUDA_TRY(cudaMemcpyAsync(extra_device.data_handle(), additional_data, num_vectors * this->dimension * sizeof(T), cudaMemcpyHostToDevice, raft::resource::get_cuda_stream(*res)));
+                cuvs::neighbors::cagra::extend_params params;
+                cuvs::neighbors::cagra::extend(*res, params, raft::make_const_mdspan(extra_device.view()), *index_);
+                handle.sync_all_devices();
+                return std::any();
+            });
+            this->worker->wait(job_id).get();
             this->count = static_cast<uint32_t>(index_->size());
-            this->current_offset_ = this->count;
         }
     }
 
-    /**
-     * @brief Merges multiple single-GPU CAGRA indices into a single index.
-     */
     static std::unique_ptr<gpu_cagra_t<T>> merge(const std::vector<gpu_cagra_t<T>*>& indices, uint32_t nthread, const std::vector<int>& devices) {
         if (indices.empty()) throw std::invalid_argument("indices empty");
         uint32_t dim = indices[0]->dimension;
         cuvs::distance::DistanceType m = indices[0]->metric;
-
         cuvs_worker_t transient_worker(1, devices, false);
         transient_worker.start();
-
-        uint64_t job_id = transient_worker.submit_main(
-            [&indices](raft_handle_wrapper_t& handle) -> std::any {
-                auto res = handle.get_raft_resources();
-                std::vector<cagra_index*> cagra_indices;
-                for (auto* idx : indices) {
-                    if (!idx->is_loaded_ || !idx->index_) {
-                        throw std::runtime_error("One of the indices to merge is not loaded or is a multi-GPU index.");
-                    }
-                    cagra_indices.push_back(idx->index_.get());
-                }
-                cuvs::neighbors::cagra::index_params index_params;
-                auto merged = cuvs::neighbors::cagra::merge(*res, index_params, cagra_indices);
-                handle.sync_all_devices();
-                return new cagra_index(std::move(merged));
-            }
-        );
-
-        auto result = transient_worker.wait(job_id).get();
-        if (result.error) {
-            transient_worker.stop();
-            std::rethrow_exception(result.error);
-        }
-        
-        auto* merged_idx_ptr = std::any_cast<cagra_index*>(result.result);
-        std::unique_ptr<cagra_index> merged_idx(merged_idx_ptr);
-        transient_worker.stop();
-        
-        auto new_idx = std::make_unique<gpu_cagra_t<T>>(std::move(merged_idx), dim, m, nthread, devices);
+        uint64_t job_id = transient_worker.submit_main([&indices](raft_handle_wrapper_t& handle) -> std::any {
+            auto res = handle.get_raft_resources();
+            std::vector<cagra_index*> cagra_indices;
+            for (auto* idx : indices) cagra_indices.push_back(idx->index_.get());
+            cuvs::neighbors::cagra::index_params index_params;
+            auto merged = cuvs::neighbors::cagra::merge(*res, index_params, cagra_indices);
+            handle.sync_all_devices();
+            return new cagra_index(std::move(merged));
+        });
+        auto* merged_idx_ptr = std::any_cast<cagra_index*>(transient_worker.wait(job_id).get().result);
+        auto new_idx = std::make_unique<gpu_cagra_t<T>>(std::unique_ptr<cagra_index>(merged_idx_ptr), dim, m, nthread, devices);
         new_idx->is_loaded_ = true;
         return new_idx;
     }
 
-    /**
-     * @brief Serializes the index to a file.
-     */
     void save(const std::string& filename) {
         if (!this->is_loaded_ || (!index_ && !mg_index_)) throw std::runtime_error("index not loaded");
-        uint64_t job_id = this->worker->submit_main(
-            [&](raft_handle_wrapper_t& handle) -> std::any {
-                std::shared_lock<std::shared_mutex> lock(this->mutex_);
-                auto res = handle.get_raft_resources();
-                if (is_snmg_handle(res)) {
-                    cuvs::neighbors::cagra::serialize(*res, *mg_index_, filename);
-                } else {
-                    cuvs::neighbors::cagra::serialize(*res, filename, *index_);
-                }
-                handle.sync_all_devices();
-                return std::any();
-            }
-        );
-        auto result = this->worker->wait(job_id).get();
-        if (result.error) std::rethrow_exception(result.error);
+        uint64_t job_id = this->worker->submit_main([&](raft_handle_wrapper_t& handle) -> std::any {
+            std::shared_lock<std::shared_mutex> lock(this->mutex_);
+            auto res = handle.get_raft_resources();
+            if (is_snmg_handle(res)) cuvs::neighbors::cagra::serialize(*res, *mg_index_, filename);
+            else cuvs::neighbors::cagra::serialize(*res, filename, *index_);
+            handle.sync_all_devices();
+            return std::any();
+        });
+        this->worker->wait(job_id).get();
     }
 
-    /**
-     * @brief Performs CAGRA search for given queries.
-     */
-    search_result_t search(const T* queries_data, uint64_t num_queries, uint32_t query_dimension, 
-                        uint32_t limit, const cagra_search_params_t& sp) {
+    search_result_t search(const T* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const cagra_search_params_t& sp) {
         if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
-        if (query_dimension != this->dimension) throw std::runtime_error("dimension mismatch");
-        if (!this->is_loaded_ || (!index_ && !mg_index_)) return search_result_t{};
-
-        if (num_queries > 16 || !this->worker->use_batching()) {
-            auto task = [this, num_queries, limit, sp, queries_data](raft_handle_wrapper_t& handle) -> std::any {
-                return this->search_internal(handle, queries_data, num_queries, limit, sp);
-            };
-            bool use_main = (mg_index_ && this->dist_mode == DistributionMode_SHARDED);
-            uint64_t job_id = use_main ? this->worker->submit_main(task) : this->worker->submit(task);
-            auto result_wait = this->worker->wait(job_id).get();
-            if (result_wait.error) std::rethrow_exception(result_wait.error);
-            return std::any_cast<search_result_t>(result_wait.result);
-        }
-        return this->search_batch_internal(queries_data, num_queries, limit, sp);
+        auto task = [this, num_queries, limit, sp, queries_data](raft_handle_wrapper_t& handle) -> std::any {
+            return this->search_internal(handle, queries_data, num_queries, limit, sp);
+        };
+        bool use_main = (mg_index_ && this->dist_mode == DistributionMode_SHARDED) || (index_ && !mg_index_);
+        uint64_t job_id = use_main ? this->worker->submit_main(task) : 
+                         ((num_queries > 16 || !this->worker->use_batching()) ? this->worker->submit(task) : 0);
+        if (job_id == 0 && !use_main) return this->search_batch_internal(queries_data, num_queries, limit, sp);
+        auto res = this->worker->wait(job_id).get();
+        if (res.error) std::rethrow_exception(res.error);
+        return std::any_cast<search_result_t>(res.result);
     }
 
-    /**
-     * @brief Internal search implementation (no worker submission)
-     */
     search_result_t search_internal(raft_handle_wrapper_t& handle, const T* queries_data, uint64_t num_queries, uint32_t limit, const cagra_search_params_t& sp) {
         std::shared_lock<std::shared_mutex> lock(this->mutex_);
         auto res = handle.get_raft_resources();
-
         search_result_t search_res;
         search_res.neighbors.resize(num_queries * limit);
         search_res.distances.resize(num_queries * limit);
+        cuvs::neighbors::cagra::search_params search_params;
+        search_params.itopk_size = sp.itopk_size;
+        search_params.search_width = sp.search_width;
 
-        {
-            cuvs::neighbors::cagra::search_params search_params;
-            search_params.itopk_size = sp.itopk_size;
-            search_params.search_width = sp.search_width;
-
-            if (is_snmg_handle(res) && mg_index_) {
-                // SNMG collectives REQUIRE pinned host memory with EXPLICIT extents.
-                auto queries_host = raft::make_host_matrix<T, int64_t, raft::row_major>(*res, (int64_t)num_queries, (int64_t)this->dimension);
-                raft::copy(*res, queries_host.view(), raft::make_host_matrix_view<const T, int64_t, raft::row_major>(queries_data, num_queries, this->dimension));
-                
-                auto neighbors_host = raft::make_host_matrix<uint32_t, int64_t, raft::row_major>(*res, (int64_t)num_queries, (int64_t)limit);
-                auto distances_host = raft::make_host_matrix<float, int64_t, raft::row_major>(*res, (int64_t)num_queries, (int64_t)limit);
-
-                cuvs::neighbors::mg_search_params<cuvs::neighbors::cagra::search_params> mg_search_params(search_params);
-                
-                // Pass EXPLICIT views.
-                auto q_view = raft::make_host_matrix_view<const T, int64_t, raft::row_major>(queries_host.data_handle(), (int64_t)num_queries, (int64_t)this->dimension);
-                auto n_view = raft::make_host_matrix_view<uint32_t, int64_t, raft::row_major>(neighbors_host.data_handle(), (int64_t)num_queries, (int64_t)limit);
-                auto d_view = raft::make_host_matrix_view<float, int64_t, raft::row_major>(distances_host.data_handle(), (int64_t)num_queries, (int64_t)limit);
-
-                cuvs::neighbors::cagra::search(*res, *mg_index_, mg_search_params, q_view, n_view, d_view);
-                handle.sync_all_devices();
-
-                std::copy(neighbors_host.data_handle(), neighbors_host.data_handle() + (num_queries * limit), search_res.neighbors.begin());
-                std::copy(distances_host.data_handle(), distances_host.data_handle() + (num_queries * limit), search_res.distances.begin());
-            } else if (index_) {
-                auto queries_device = raft::make_device_matrix<T, int64_t, raft::layout_c_contiguous>(
-                    *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(this->dimension));
-                raft::copy(*res, queries_device.view(), raft::make_host_matrix_view<const T, int64_t, raft::layout_c_contiguous>(queries_data, num_queries, this->dimension));
-
-                auto neighbors_device = raft::make_device_matrix<uint32_t, int64_t, raft::layout_c_contiguous>(
-                    *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
-                auto distances_device = raft::make_device_matrix<float, int64_t, raft::layout_c_contiguous>(
-                    *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
-
-                cuvs::neighbors::cagra::search(*res, search_params, *index_,
-                                                raft::make_const_mdspan(queries_device.view()), 
-                                                neighbors_device.view(), distances_device.view());
-
-                raft::copy(*res, raft::make_host_matrix_view<uint32_t, int64_t, raft::layout_c_contiguous>(search_res.neighbors.data(), num_queries, limit), neighbors_device.view());
-                raft::copy(*res, raft::make_host_matrix_view<float, int64_t, raft::layout_c_contiguous>(search_res.distances.data(), num_queries, limit), distances_device.view());
-            } else {
-                throw std::runtime_error("Index not loaded.");
-            }
-            raft::resource::sync_stream(*res);
+        if (is_snmg_handle(res) && mg_index_) {
+            auto q_host = raft::make_host_matrix<T, int64_t, raft::row_major>(*res, (int64_t)num_queries, (int64_t)this->dimension);
+            raft::copy(*res, q_host.view(), raft::make_host_matrix_view<const T, int64_t, raft::row_major>(queries_data, num_queries, this->dimension));
+            auto n_host = raft::make_host_matrix<uint32_t, int64_t, raft::row_major>(*res, (int64_t)num_queries, (int64_t)limit);
+            auto d_host = raft::make_host_matrix<float, int64_t, raft::row_major>(*res, (int64_t)num_queries, (int64_t)limit);
+            cuvs::neighbors::mg_search_params<cuvs::neighbors::cagra::search_params> mg_sp(search_params);
+            cuvs::neighbors::cagra::search(*res, *mg_index_, mg_sp, q_host.view(), n_host.view(), d_host.view());
+            handle.sync_all_devices();
+            std::copy(n_host.data_handle(), n_host.data_handle() + (num_queries * limit), search_res.neighbors.begin());
+            std::copy(d_host.data_handle(), d_host.data_handle() + (num_queries * limit), search_res.distances.begin());
+        } else if (index_) {
+            if (handle.get_device_id() != this->build_device_id_) cudaSetDevice(this->build_device_id_);
+            auto q_dev = raft::make_device_matrix<T, int64_t, raft::layout_c_contiguous>(*res, (int64_t)num_queries, (int64_t)this->dimension);
+            raft::copy(*res, q_dev.view(), raft::make_host_matrix_view<const T, int64_t, raft::layout_c_contiguous>(queries_data, num_queries, this->dimension));
+            auto n_dev = raft::make_device_matrix<uint32_t, int64_t, raft::layout_c_contiguous>(*res, (int64_t)num_queries, (int64_t)limit);
+            auto d_dev = raft::make_device_matrix<float, int64_t, raft::layout_c_contiguous>(*res, (int64_t)num_queries, (int64_t)limit);
+            cuvs::neighbors::cagra::search(*res, search_params, *index_, raft::make_const_mdspan(q_dev.view()), n_dev.view(), d_dev.view());
+            raft::copy(*res, raft::make_host_matrix_view<uint32_t, int64_t, raft::layout_c_contiguous>(search_res.neighbors.data(), num_queries, limit), n_dev.view());
+            raft::copy(*res, raft::make_host_matrix_view<float, int64_t, raft::layout_c_contiguous>(search_res.distances.data(), num_queries, limit), d_dev.view());
         }
+        raft::resource::sync_stream(*res);
         return search_res;
     }
 
-    /**
-     * @brief Performs CAGRA search for given float32 queries, with on-the-fly quantization if needed.
-     */
-    search_result_t search_float(const float* queries_data, uint64_t num_queries, uint32_t query_dimension, 
-                        uint32_t limit, const cagra_search_params_t& sp) {
-        if constexpr (std::is_same_v<T, float>) {
-            return search(queries_data, num_queries, query_dimension, limit, sp);
-        }
-
+    search_result_t search_float(const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const cagra_search_params_t& sp) {
+        if constexpr (std::is_same_v<T, float>) return search(queries_data, num_queries, query_dimension, limit, sp);
         if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
-        if (query_dimension != this->dimension) throw std::runtime_error("dimension mismatch");
-        if (!this->is_loaded_ || (!index_ && !mg_index_)) return search_result_t{};
-
-        if (num_queries > 16 || !this->worker->use_batching()) {
-            auto task = [this, num_queries, limit, sp, queries_data, query_dimension](raft_handle_wrapper_t& handle) -> std::any {
-                return this->search_float_internal(handle, queries_data, num_queries, query_dimension, limit, sp);
-            };
-            bool use_main = (mg_index_ && this->dist_mode == DistributionMode_SHARDED);
-            uint64_t job_id = use_main ? this->worker->submit_main(task) : this->worker->submit(task);
-            auto result_wait = this->worker->wait(job_id).get();
-            if (result_wait.error) std::rethrow_exception(result_wait.error);
-            return std::any_cast<search_result_t>(result_wait.result);
-        }
-        return this->search_float_batch_internal(queries_data, num_queries, limit, sp);
+        auto task = [this, num_queries, limit, sp, queries_data, query_dimension](raft_handle_wrapper_t& handle) -> std::any {
+            return this->search_float_internal(handle, queries_data, num_queries, query_dimension, limit, sp);
+        };
+        bool use_main = (mg_index_ && this->dist_mode == DistributionMode_SHARDED) || (index_ && !mg_index_);
+        uint64_t job_id = use_main ? this->worker->submit_main(task) : 
+                         ((num_queries > 16 || !this->worker->use_batching()) ? this->worker->submit(task) : 0);
+        if (job_id == 0 && !use_main) return this->search_float_batch_internal(queries_data, num_queries, limit, sp);
+        auto res = this->worker->wait(job_id).get();
+        if (res.error) std::rethrow_exception(res.error);
+        return std::any_cast<search_result_t>(res.result);
     }
 
-    /**
-     * @brief Internal search_float implementation (no worker submission)
-     */
-    search_result_t search_float_internal(raft_handle_wrapper_t& handle, const float* queries_data, uint64_t num_queries, uint32_t query_dimension, 
-                        uint32_t limit, const cagra_search_params_t& sp) {
+    search_result_t search_float_internal(raft_handle_wrapper_t& handle, const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const cagra_search_params_t& sp) {
         std::shared_lock<std::shared_mutex> lock(this->mutex_);
         auto res = handle.get_raft_resources();
-
         search_result_t search_res;
         search_res.neighbors.resize(num_queries * limit);
         search_res.distances.resize(num_queries * limit);
+        auto q_dev_f = raft::make_device_matrix<float, int64_t, raft::layout_c_contiguous>(*res, num_queries, this->dimension);
+        raft::copy(*res, q_dev_f.view(), raft::make_host_matrix_view<const float, int64_t, raft::layout_c_contiguous>(queries_data, num_queries, this->dimension));
+        auto q_dev_t = raft::make_device_matrix<T, int64_t, raft::layout_c_contiguous>(*res, num_queries, this->dimension);
+        if constexpr (sizeof(T) == 1) {
+            if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
+            this->quantizer_.template transform<T>(*res, q_dev_f.view(), q_dev_t.data_handle(), true);
+        } else { raft::copy(*res, q_dev_t.view(), q_dev_f.view()); }
+        raft::resource::sync_stream(*res);
+        cuvs::neighbors::cagra::search_params search_params;
+        search_params.itopk_size = sp.itopk_size;
+        search_params.search_width = sp.search_width;
 
-        {
-            // 1. Quantize/Convert float queries to T on device
-            auto queries_device_float = raft::make_device_matrix<float, int64_t, raft::layout_c_contiguous>(*res, num_queries, this->dimension);
-            raft::copy(*res, queries_device_float.view(), raft::make_host_matrix_view<const float, int64_t, raft::layout_c_contiguous>(queries_data, num_queries, this->dimension));
-            
-            auto queries_device_target = raft::make_device_matrix<T, int64_t, raft::layout_c_contiguous>(*res, num_queries, this->dimension);
-            if constexpr (sizeof(T) == 1) {
-                if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
-                this->quantizer_.template transform<T>(*res, queries_device_float.view(), queries_device_target.data_handle(), true);
-            } else {
-                raft::copy(*res, queries_device_target.view(), queries_device_float.view());
-            }
-            raft::resource::sync_stream(*res);
-
-            // 2. Perform search
-            cuvs::neighbors::cagra::search_params search_params;
-            search_params.itopk_size = sp.itopk_size;
-            search_params.search_width = sp.search_width;
-
-            if (is_snmg_handle(res) && mg_index_) {
-                auto queries_host_target = raft::make_host_matrix<T, int64_t, raft::row_major>(*res, (int64_t)num_queries, (int64_t)this->dimension);
-                raft::copy(*res, queries_host_target.view(), queries_device_target.view());
-                raft::resource::sync_stream(*res);
-
-                auto neighbors_host = raft::make_host_matrix<uint32_t, int64_t, raft::row_major>(*res, (int64_t)num_queries, (int64_t)limit);
-                auto distances_host = raft::make_host_matrix<float, int64_t, raft::row_major>(*res, (int64_t)num_queries, (int64_t)limit);
-
-                cuvs::neighbors::mg_search_params<cuvs::neighbors::cagra::search_params> mg_search_params(search_params);
-                
-                auto q_view = raft::make_host_matrix_view<const T, int64_t, raft::row_major>(queries_host_target.data_handle(), (int64_t)num_queries, (int64_t)this->dimension);
-                auto n_view = raft::make_host_matrix_view<uint32_t, int64_t, raft::row_major>(neighbors_host.data_handle(), (int64_t)num_queries, (int64_t)limit);
-                auto d_view = raft::make_host_matrix_view<float, int64_t, raft::row_major>(distances_host.data_handle(), (int64_t)num_queries, (int64_t)limit);
-
-                cuvs::neighbors::cagra::search(*res, *mg_index_, mg_search_params, q_view, n_view, d_view);
-                handle.sync_all_devices();
-
-                std::copy(neighbors_host.data_handle(), neighbors_host.data_handle() + (num_queries * limit), search_res.neighbors.begin());
-                std::copy(distances_host.data_handle(), distances_host.data_handle() + (num_queries * limit), search_res.distances.begin());
-            } else if (index_) {
-                auto neighbors_device = raft::make_device_matrix<uint32_t, int64_t, raft::layout_c_contiguous>(
-                    *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
-                auto distances_device = raft::make_device_matrix<float, int64_t, raft::layout_c_contiguous>(
-                    *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
-
-                cuvs::neighbors::cagra::search(*res, search_params, *index_,
-                                                raft::make_const_mdspan(queries_device_target.view()), 
-                                                neighbors_device.view(), distances_device.view());
-
-                raft::copy(*res, raft::make_host_matrix_view<uint32_t, int64_t, raft::layout_c_contiguous>(search_res.neighbors.data(), num_queries, limit), neighbors_device.view());
-                raft::copy(*res, raft::make_host_matrix_view<float, int64_t, raft::layout_c_contiguous>(search_res.distances.data(), num_queries, limit), distances_device.view());
-            } else {
-                throw std::runtime_error("Index not loaded.");
-            }
-            raft::resource::sync_stream(*res);
+        if (is_snmg_handle(res) && mg_index_) {
+            auto q_host_t = raft::make_host_matrix<T, int64_t, raft::row_major>(*res, (int64_t)num_queries, (int64_t)this->dimension);
+            raft::copy(*res, q_host_t.view(), q_dev_t.view());
+            auto n_host = raft::make_host_matrix<uint32_t, int64_t, raft::row_major>(*res, (int64_t)num_queries, (int64_t)limit);
+            auto d_host = raft::make_host_matrix<float, int64_t, raft::row_major>(*res, (int64_t)num_queries, (int64_t)limit);
+            cuvs::neighbors::mg_search_params<cuvs::neighbors::cagra::search_params> mg_sp(search_params);
+            cuvs::neighbors::cagra::search(*res, *mg_index_, mg_sp, q_host_t.view(), n_host.view(), d_host.view());
+            handle.sync_all_devices();
+            std::copy(n_host.data_handle(), n_host.data_handle() + (num_queries * limit), search_res.neighbors.begin());
+            std::copy(d_host.data_handle(), d_host.data_handle() + (num_queries * limit), search_res.distances.begin());
+        } else if (index_) {
+            if (handle.get_device_id() != this->build_device_id_) cudaSetDevice(this->build_device_id_);
+            auto n_dev = raft::make_device_matrix<uint32_t, int64_t, raft::layout_c_contiguous>(*res, (int64_t)num_queries, (int64_t)limit);
+            auto d_dev = raft::make_device_matrix<float, int64_t, raft::layout_c_contiguous>(*res, (int64_t)num_queries, (int64_t)limit);
+            cuvs::neighbors::cagra::search(*res, search_params, *index_, raft::make_const_mdspan(q_dev_t.view()), n_dev.view(), d_dev.view());
+            raft::copy(*res, raft::make_host_matrix_view<uint32_t, int64_t, raft::layout_c_contiguous>(search_res.neighbors.data(), num_queries, limit), n_dev.view());
+            raft::copy(*res, raft::make_host_matrix_view<float, int64_t, raft::layout_c_contiguous>(search_res.distances.data(), num_queries, limit), d_dev.view());
         }
+        raft::resource::sync_stream(*res);
         return search_res;
     }
 
-    // Batching implementation details (omitted for brevity, assume they call search_internal)
     search_result_t search_batch_internal(const T* queries_data, uint64_t num_queries, uint32_t limit, const cagra_search_params_t& sp);
     search_result_t search_float_batch_internal(const float* queries_data, uint64_t num_queries, uint32_t limit, const cagra_search_params_t& sp);
 
     std::string info() const override {
         std::string json = gpu_index_base_t<T, cagra_build_params_t>::info();
         json += ", \"type\": \"CAGRA\", \"cagra\": {";
-        if (index_) {
-            json += "\"mode\": \"Single-GPU\", \"size\": " + std::to_string(index_->size());
-        } else if (mg_index_) {
-            json += "\"mode\": \"Multi-GPU\", \"ranks\": " + std::to_string(mg_index_->ann_interfaces_.size());
-        } else {
-            json += "\"built\": false";
-        }
+        if (index_) json += "\"mode\": \"Single-GPU\", \"size\": " + std::to_string(index_->size());
+        else if (mg_index_) json += "\"mode\": \"Multi-GPU\", \"ranks\": " + std::to_string(mg_index_->ann_interfaces_.size());
+        else json += "\"built\": false";
         json += "}}";
         return json;
     }
@@ -592,8 +427,6 @@ public:
         this->dataset_device_ptr_.reset();
     }
 };
-
-// --- Out-of-line Batching Implementations ---
 
 template <typename T>
 cagra_search_result_t gpu_cagra_t<T>::search_batch_internal(const T* queries_data, uint64_t num_queries, uint32_t limit, const cagra_search_params_t& sp) {
@@ -614,8 +447,7 @@ cagra_search_result_t gpu_cagra_t<T>::search_batch_internal(const T* queries_dat
         for (size_t i = 0; i < reqs.size(); ++i) {
             auto req = std::any_cast<search_req_t>(reqs[i]);
             search_result_t individual_res;
-            individual_res.neighbors.resize(req.n * limit);
-            individual_res.distances.resize(req.n * limit);
+            individual_res.neighbors.resize(req.n * limit); individual_res.distances.resize(req.n * limit);
             std::copy(results.neighbors.begin() + (offset * limit), results.neighbors.begin() + ((offset + req.n) * limit), individual_res.neighbors.begin());
             std::copy(results.distances.begin() + (offset * limit), results.distances.begin() + ((offset + req.n) * limit), individual_res.distances.begin());
             setters[i](individual_res);
@@ -644,8 +476,7 @@ cagra_search_result_t gpu_cagra_t<T>::search_float_batch_internal(const float* q
         for (size_t i = 0; i < reqs.size(); ++i) {
             auto req = std::any_cast<search_req_t>(reqs[i]);
             search_result_t individual_res;
-            individual_res.neighbors.resize(req.n * limit);
-            individual_res.distances.resize(req.n * limit);
+            individual_res.neighbors.resize(req.n * limit); individual_res.distances.resize(req.n * limit);
             std::copy(results.neighbors.begin() + (offset * limit), results.neighbors.begin() + ((offset + req.n) * limit), individual_res.neighbors.begin());
             std::copy(results.distances.begin() + (offset * limit), results.distances.begin() + ((offset + req.n) * limit), individual_res.distances.begin());
             setters[i](individual_res);
