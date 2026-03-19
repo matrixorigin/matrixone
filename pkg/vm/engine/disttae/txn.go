@@ -442,34 +442,38 @@ func (txn *Transaction) checkDup() error {
 			continue
 		}
 		if e.typ == INSERT {
+			fallbackToLegacy := !e.pkCheckReady
 			if e.pkCheckReady {
 				index := e.pkCheckPos
 				if index >= 0 {
 					if index >= len(e.bat.Vecs) || index >= len(e.bat.Attrs) {
 						logutil.Warnf("pk check pos out of range, database:%s, table:%s, pos:%d, attrs:%v",
 							e.databaseName, e.tableName, index, e.bat.Attrs)
-						continue
-					}
-					if _, ok := insertPks[e.tableId]; !ok {
-						insertPks[e.tableId] = make(map[any]bool)
-					}
-					if dup, pk := checkPKDup(
-						insertPks[e.tableId],
-						e.bat.Vecs[index],
-						0,
-						e.bat.RowCount()); dup {
-						logutil.Errorf("txn:%s wants to insert duplicate primary key:%s in table:[%v-%v:%s-%s], mode:%s",
-							hex.EncodeToString(txn.op.Txn().ID),
-							pk,
-							e.databaseId,
-							e.tableId,
-							e.databaseName,
-							e.tableName,
-							"write-entry")
-						return moerr.NewDuplicateEntryNoCtx(pk, e.bat.Attrs[index])
+						fallbackToLegacy = true
+					} else {
+						if _, ok := insertPks[e.tableId]; !ok {
+							insertPks[e.tableId] = make(map[any]bool)
+						}
+						if dup, pk := checkPKDup(
+							insertPks[e.tableId],
+							e.bat.Vecs[index],
+							0,
+							e.bat.RowCount()); dup {
+							logutil.Errorf("txn:%s wants to insert duplicate primary key:%s in table:[%v-%v:%s-%s], mode:%s",
+								hex.EncodeToString(txn.op.Txn().ID),
+								pk,
+								e.databaseId,
+								e.tableId,
+								e.databaseName,
+								e.tableName,
+								"write-entry")
+							return moerr.NewDuplicateEntryNoCtx(pk, e.bat.Attrs[index])
+						}
 					}
 				}
-				continue
+				if !fallbackToLegacy {
+					continue
+				}
 			}
 
 			bat := e.bat
@@ -508,34 +512,38 @@ func (txn *Transaction) checkDup() error {
 		}
 		//if entry.tyep is DELETE, then e.bat.Vecs[0] is rowid,e.bat.Vecs[1] is PK
 		if e.typ == DELETE {
+			fallbackToLegacy := !e.pkCheckReady
 			if e.pkCheckReady {
 				index := e.pkCheckPos
 				if index >= 0 {
 					if index >= len(e.bat.Vecs) || index >= len(e.bat.Attrs) {
 						logutil.Warnf("pk check pos out of range, database:%s, table:%s, pos:%d, attrs:%v",
 							e.databaseName, e.tableName, index, e.bat.Attrs)
-						continue
-					}
-					if _, ok := delPks[e.tableId]; !ok {
-						delPks[e.tableId] = make(map[any]bool)
-					}
-					if dup, pk := checkPKDup(
-						delPks[e.tableId],
-						e.bat.Vecs[index],
-						0,
-						e.bat.RowCount()); dup {
-						logutil.Errorf("txn:%s wants to delete duplicate primary key:%s in table:[%v-%v:%s-%s], mode:%s",
-							hex.EncodeToString(txn.op.Txn().ID),
-							pk,
-							e.databaseId,
-							e.tableId,
-							e.databaseName,
-							e.tableName,
-							"write-entry")
-						return moerr.NewDuplicateEntryNoCtx(pk, e.bat.Attrs[index])
+						fallbackToLegacy = true
+					} else {
+						if _, ok := delPks[e.tableId]; !ok {
+							delPks[e.tableId] = make(map[any]bool)
+						}
+						if dup, pk := checkPKDup(
+							delPks[e.tableId],
+							e.bat.Vecs[index],
+							0,
+							e.bat.RowCount()); dup {
+							logutil.Errorf("txn:%s wants to delete duplicate primary key:%s in table:[%v-%v:%s-%s], mode:%s",
+								hex.EncodeToString(txn.op.Txn().ID),
+								pk,
+								e.databaseId,
+								e.tableId,
+								e.databaseName,
+								e.tableName,
+								"write-entry")
+							return moerr.NewDuplicateEntryNoCtx(pk, e.bat.Attrs[index])
+						}
 					}
 				}
-				continue
+				if !fallbackToLegacy {
+					continue
+				}
 			}
 
 			if len(e.bat.Vecs) < 2 {
