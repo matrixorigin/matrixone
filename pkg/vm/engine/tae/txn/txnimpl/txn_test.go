@@ -303,6 +303,152 @@ func TestIndex(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestDedupOpDuplicateEntry(t *testing.T) {
+	colType := types.T_int64.ToType()
+	tree := map[any]uint32{int64(7): 1}
+
+	err := DedupOp(&colType, "pk", []int64{3, 7}, tree)
+	assert.Error(t, err)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+}
+
+func TestInsertOpDuplicateEntry(t *testing.T) {
+	t.Run("dedup input", func(t *testing.T) {
+		colType := types.T_int64.ToType()
+		tree := make(map[any]uint32)
+
+		err := InsertOp(&colType, "pk", []int64{5, 5}, 0, 2, 0, true, tree)
+		assert.Error(t, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+		assert.Len(t, tree, 0)
+	})
+
+	t.Run("tree conflict", func(t *testing.T) {
+		colType := types.T_int64.ToType()
+		tree := map[any]uint32{int64(9): 2}
+
+		err := InsertOp(&colType, "pk", []int64{9, 10}, 0, 2, 0, false, tree)
+		assert.Error(t, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	})
+}
+
+func TestSimpleTableIndexVarlenDuplicatePaths(t *testing.T) {
+	t.Run("string batch insert dedup input", func(t *testing.T) {
+		idx := NewSimpleTableIndex()
+		vec := makeWorkspaceVector(types.T_varchar.ToType())
+		defer vec.Close()
+		vec.Append([]byte("dup"), false)
+		vec.Append([]byte("dup"), false)
+
+		err := idx.BatchInsert("pk", vec, 0, vec.Length(), 0, true)
+		assert.Error(t, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	})
+
+	t.Run("string batch insert tree conflict", func(t *testing.T) {
+		idx := NewSimpleTableIndex()
+		idx.tree["dup"] = 1
+		vec := makeWorkspaceVector(types.T_varchar.ToType())
+		defer vec.Close()
+		vec.Append([]byte("dup"), false)
+
+		err := idx.BatchInsert("pk", vec, 0, vec.Length(), 0, false)
+		assert.Error(t, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	})
+
+	t.Run("string batch dedup", func(t *testing.T) {
+		idx := NewSimpleTableIndex()
+		idx.tree["dup"] = 1
+		vec := makeWorkspaceVector(types.T_varchar.ToType())
+		defer vec.Close()
+		vec.Append([]byte("dup"), false)
+
+		err := idx.BatchDedup("pk", vec)
+		assert.Error(t, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	})
+
+	t.Run("array32 batch insert dedup input", func(t *testing.T) {
+		idx := NewSimpleTableIndex()
+		vec := makeWorkspaceVector(types.T_array_float32.ToType())
+		defer vec.Close()
+		val := types.ArrayToBytes([]float32{1, 2})
+		vec.Append(val, false)
+		vec.Append(val, false)
+
+		err := idx.BatchInsert("pk", vec, 0, vec.Length(), 0, true)
+		assert.Error(t, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	})
+
+	t.Run("array32 batch insert tree conflict", func(t *testing.T) {
+		idx := NewSimpleTableIndex()
+		key := types.ArrayToString([]float32{1, 2})
+		idx.tree[key] = 1
+		vec := makeWorkspaceVector(types.T_array_float32.ToType())
+		defer vec.Close()
+		vec.Append(types.ArrayToBytes([]float32{1, 2}), false)
+
+		err := idx.BatchInsert("pk", vec, 0, vec.Length(), 0, false)
+		assert.Error(t, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	})
+
+	t.Run("array32 batch dedup", func(t *testing.T) {
+		idx := NewSimpleTableIndex()
+		key := types.ArrayToString([]float32{1, 2})
+		idx.tree[key] = 1
+		vec := makeWorkspaceVector(types.T_array_float32.ToType())
+		defer vec.Close()
+		vec.Append(types.ArrayToBytes([]float32{1, 2}), false)
+
+		err := idx.BatchDedup("pk", vec)
+		assert.Error(t, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	})
+
+	t.Run("array64 batch insert dedup input", func(t *testing.T) {
+		idx := NewSimpleTableIndex()
+		vec := makeWorkspaceVector(types.T_array_float64.ToType())
+		defer vec.Close()
+		val := types.ArrayToBytes([]float64{1, 2})
+		vec.Append(val, false)
+		vec.Append(val, false)
+
+		err := idx.BatchInsert("pk", vec, 0, vec.Length(), 0, true)
+		assert.Error(t, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	})
+
+	t.Run("array64 batch insert tree conflict", func(t *testing.T) {
+		idx := NewSimpleTableIndex()
+		key := types.ArrayToString([]float64{1, 2})
+		idx.tree[key] = 1
+		vec := makeWorkspaceVector(types.T_array_float64.ToType())
+		defer vec.Close()
+		vec.Append(types.ArrayToBytes([]float64{1, 2}), false)
+
+		err := idx.BatchInsert("pk", vec, 0, vec.Length(), 0, false)
+		assert.Error(t, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	})
+
+	t.Run("array64 batch dedup", func(t *testing.T) {
+		idx := NewSimpleTableIndex()
+		key := types.ArrayToString([]float64{1, 2})
+		idx.tree[key] = 1
+		vec := makeWorkspaceVector(types.T_array_float64.ToType())
+		defer vec.Close()
+		vec.Append(types.ArrayToBytes([]float64{1, 2}), false)
+
+		err := idx.BatchDedup("pk", vec)
+		assert.Error(t, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	})
+}
+
 func TestLoad(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
