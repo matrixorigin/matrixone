@@ -47,15 +47,6 @@ func (info singleAggInfo) TypesInfo() ([]types.Type, types.Type) {
 	return []types.Type{info.argType}, info.retType
 }
 
-func (info singleAggInfo) getEncoded() EncodedBasicInfo {
-	return EncodedBasicInfo{
-		Id:         info.aggID,
-		IsDistinct: info.distinct,
-		Args:       []types.Type{info.argType},
-		Ret:        info.retType,
-	}
-}
-
 // singleAggExecExtraInformation is the extra information of single column agg to optimize the execution.
 type singleAggExecExtraInformation struct {
 	partialGroup  int
@@ -98,13 +89,4 @@ func (info multiAggInfo) IsDistinct() bool {
 
 func (info multiAggInfo) TypesInfo() ([]types.Type, types.Type) {
 	return info.argTypes, info.retType
-}
-
-func (info multiAggInfo) getEncoded() EncodedBasicInfo {
-	return EncodedBasicInfo{
-		Id:         info.aggID,
-		IsDistinct: info.distinct,
-		Args:       info.argTypes,
-		Ret:        info.retType,
-	}
 }

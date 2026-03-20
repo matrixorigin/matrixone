@@ -225,3 +225,96 @@ func TestLeftJoinOrFilterWithAndKeepsLeftJoin(t *testing.T) {
 	require.Equal(t, plan.Node_LEFT, builder.qry.Nodes[nodeID].JoinType)
 	require.Len(t, cantPushdown, 1)
 }
+
+func TestWindowFilterPushesDownToOwningWindowNode(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+
+	baseTag := builder.genNewBindTag()
+	windowTag := builder.genNewBindTag()
+	intType := Type{Id: int32(types.T_int64)}
+
+	baseCol := &plan.Expr{
+		Typ: intType,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: baseTag,
+				ColPos: 0,
+			},
+		},
+	}
+	prevWindowCol := &plan.Expr{
+		Typ: intType,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: windowTag,
+				ColPos: 0,
+			},
+		},
+	}
+	currentWindowCol := &plan.Expr{
+		Typ: intType,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: windowTag,
+				ColPos: 1,
+			},
+		},
+	}
+
+	filterOnPrevWindow, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*plan.Expr{
+		DeepCopyExpr(prevWindowCol),
+		{
+			Typ: intType,
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{
+					Value: &plan.Literal_I64Val{I64Val: 1},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	filterOnCurrentWindow, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*plan.Expr{
+		DeepCopyExpr(currentWindowCol),
+		{
+			Typ: intType,
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{
+					Value: &plan.Literal_I64Val{I64Val: 1},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	builder.qry.Nodes = []*plan.Node{
+		{
+			NodeType:    plan.Node_TABLE_SCAN,
+			BindingTags: []int32{baseTag},
+			ProjectList: []*plan.Expr{DeepCopyExpr(baseCol)},
+		},
+		{
+			NodeType:    plan.Node_WINDOW,
+			Children:    []int32{0},
+			WindowIdx:   0,
+			BindingTags: []int32{windowTag},
+			WinSpecList: []*plan.Expr{DeepCopyExpr(prevWindowCol)},
+		},
+		{
+			NodeType:    plan.Node_WINDOW,
+			Children:    []int32{1},
+			WindowIdx:   1,
+			BindingTags: []int32{windowTag},
+			WinSpecList: []*plan.Expr{DeepCopyExpr(currentWindowCol)},
+		},
+	}
+
+	nodeID, cantPushdown := builder.pushdownFilters(2, []*plan.Expr{filterOnPrevWindow, filterOnCurrentWindow}, false)
+	require.Equal(t, int32(2), nodeID)
+	require.Empty(t, cantPushdown)
+	require.Len(t, builder.qry.Nodes[2].FilterList, 1)
+	require.Len(t, builder.qry.Nodes[1].FilterList, 1)
+	require.Same(t, filterOnCurrentWindow, builder.qry.Nodes[2].FilterList[0])
+	require.Same(t, filterOnPrevWindow, builder.qry.Nodes[1].FilterList[0])
+}

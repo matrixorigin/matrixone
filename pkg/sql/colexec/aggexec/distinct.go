@@ -178,33 +178,6 @@ func (d *distinctHash) Size() int64 {
 	return size
 }
 
-func (d *distinctHash) marshal() ([]byte, error) {
-	if len(d.maps) == 0 {
-		return nil, nil
-	}
-
-	var buf bytes.Buffer
-	n := uint64(len(d.maps))
-	if _, err := buf.Write(types.EncodeUint64(&n)); err != nil {
-		return nil, err
-	}
-
-	for _, m := range d.maps {
-		data, err := m.MarshalBinary()
-		if err != nil {
-			return nil, err
-		}
-		l := uint64(len(data))
-		if _, err := buf.Write(types.EncodeUint64(&l)); err != nil {
-			return nil, err
-		}
-		if _, err := buf.Write(data); err != nil {
-			return nil, err
-		}
-	}
-	return buf.Bytes(), nil
-}
-
 func (d *distinctHash) marshalToBuffers(flags []uint8, buf *bytes.Buffer) error {
 	var cnt int64
 	if flags == nil {

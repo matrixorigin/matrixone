@@ -954,3 +954,10 @@ func TestTableScanner_PrintActiveRunners(t *testing.T) {
 	cdcStateManager.PrintActiveRunners(0)
 	assert.Equal(t, 1, len(cdcStateManager.activeRunners))
 }
+
+func TestTableScanner_PrintActiveRunners_NilReceiver(t *testing.T) {
+	var cdcStateManager *CDCStateManager
+	assert.NotPanics(t, func() {
+		cdcStateManager.PrintActiveRunners(0)
+	})
+}

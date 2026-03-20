@@ -70,3 +70,13 @@ execute s1 using @a, @b;
 select * from t1;
 a    b
 1    10
+drop table if exists t2;
+CREATE TABLE t2 (id INT PRIMARY KEY, c INT UNSIGNED);
+INSERT INTO t2 VALUES (1, 100);
+PREPARE s2 FROM 'INSERT INTO t2 (id, c) VALUES (?, ?) ON DUPLICATE KEY UPDATE c=VALUES(c)';
+SET @a=1, @b=NULL;
+EXECUTE s2 USING @a, @b;
+select * from t2;
+id    c
+1    null
+drop table if exists t2;
