@@ -342,7 +342,7 @@ func TestDecimal256ArithmeticFns(t *testing.T) {
 			NewFunctionTestInput(dec4, []types.Decimal256{left}, []bool{false}),
 			NewFunctionTestInput(dec2, []types.Decimal256{right}, []bool{false}),
 		},
-		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{2}, []bool{false}),
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{3}, []bool{false}),
 		integerDivFn,
 	)
 	ok, info = intDivTC.Run()

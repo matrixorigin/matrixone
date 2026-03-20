@@ -802,7 +802,7 @@ func truncateDecimal256(x types.Decimal256, digits int64, scale int32, isConst b
 	if k > 65 {
 		k = 65
 	}
-	y, _, _ := x.Mod(types.Decimal256{1, 0, 0, 0}, k, 0)
+	y, _, _ := x.Mod(types.Decimal256{B0_63: 1}, k, 0)
 	x, _ = x.Sub256(y)
 	if isConst {
 		if int32(digits) < 0 {
@@ -5295,6 +5295,30 @@ func FromUnixTimeFloat64(ivecs []*vector.Vector, result vector.FunctionResultWra
 	return nil
 }
 
+func FromUnixTimeDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	rs := vector.MustFunctionResult[types.Datetime](result)
+	vs := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](ivecs[0])
+	scale := ivecs[0].GetType().Scale
+	rs.TempSetType(types.New(types.T_datetime, 0, 6))
+	var d types.Datetime
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := vs.GetValue(i)
+		f := types.Decimal256ToFloat64(v, scale)
+
+		if null || (f < 0 || f > maxUnixTimestampInt) {
+			if err = rs.Append(d, true); err != nil {
+				return err
+			}
+		} else {
+			x, y := splitDecimalToIntAndFrac(f)
+			if err = rs.Append(types.DatetimeFromUnixWithNsec(proc.GetSessionInfo().TimeZone, x, y), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func FromUnixTimeInt64Format(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	if !ivecs[1].IsConst() {
 		return moerr.NewInvalidArg(proc.Ctx, "from_unixtime format", "not constant")
@@ -5380,6 +5404,41 @@ func FromUnixTimeFloat64Format(ivecs []*vector.Vector, result vector.FunctionRes
 		} else {
 			buf.Reset()
 			x, y := splitDecimalToIntAndFrac(v)
+			r := types.DatetimeFromUnixWithNsec(proc.GetSessionInfo().TimeZone, x, y)
+			if err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
+				return err
+			}
+			if err = rs.AppendBytes(buf.Bytes(), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func FromUnixTimeDecimal256Format(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if !ivecs[1].IsConst() {
+		return moerr.NewInvalidArg(proc.Ctx, "from_unixtime format", "not constant")
+	}
+
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	vs := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](ivecs[0])
+	scale := ivecs[0].GetType().Scale
+	formatMask, null1 := vector.GenerateFunctionStrParameter(ivecs[1]).GetStrValue(0)
+	f := string(formatMask)
+
+	var buf bytes.Buffer
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := vs.GetValue(i)
+		fv := types.Decimal256ToFloat64(v, scale)
+
+		if null || (fv < 0 || fv > maxUnixTimestampInt) || null1 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			buf.Reset()
+			x, y := splitDecimalToIntAndFrac(fv)
 			r := types.DatetimeFromUnixWithNsec(proc.GetSessionInfo().TimeZone, x, y)
 			if err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
 				return err

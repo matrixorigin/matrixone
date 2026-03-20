@@ -85,6 +85,13 @@ func TestParse256(t *testing.T) {
 		t.Fatalf("unexpected decimal256 format: %s", got)
 	}
 }
+
+func TestDecimal256ToFloat64NegativeScale(t *testing.T) {
+	x := Decimal256FromInt64(123)
+	if got := Decimal256ToFloat64(x, -2); got != 12300 {
+		t.Fatalf("unexpected Decimal256ToFloat64 result: %v", got)
+	}
+}
 func TestCompare64(t *testing.T) {
 	x := Decimal64(0)
 	y := ^x

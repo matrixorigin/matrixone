@@ -3189,6 +3189,18 @@ func initFromUnixTimeTestCase() []tcTemp {
 				[]bool{false}),
 		},
 		{
+			info: "test from unix time decimal256",
+			typ:  types.T_decimal256,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.New(types.T_decimal256, 65, 6),
+					[]types.Decimal256{types.Decimal256FromInt64(1451606400999999)},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_datetime.ToType(), false,
+				[]types.Datetime{d3},
+				[]bool{false}),
+		},
+		{
 			info: "test from unix time float64",
 			typ:  types.T_varchar,
 			inputs: []FunctionTestInput{
@@ -3233,6 +3245,9 @@ func TestFromUnixTime(t *testing.T) {
 		case types.T_float64:
 			fcTC = NewFunctionTestCase(proc,
 				tc.inputs, tc.expect, FromUnixTimeFloat64)
+		case types.T_decimal256:
+			fcTC = NewFunctionTestCase(proc,
+				tc.inputs, tc.expect, FromUnixTimeDecimal256)
 		case types.T_varchar:
 			fcTC = NewFunctionTestCase(proc,
 				tc.inputs, tc.expect, FromUnixTimeInt64Format)

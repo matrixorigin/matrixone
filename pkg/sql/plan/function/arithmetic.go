@@ -1615,7 +1615,7 @@ func decimalIntegerDiv[T templateDec](parameters []*vector.Vector, result vector
 				return divErr
 			}
 			if resultScale > 0 {
-				divResult, divErr = divResult.ScaleTruncate(-resultScale)
+				divResult, divErr = divResult.Scale(-resultScale)
 				if divErr != nil {
 					return divErr
 				}
@@ -1640,7 +1640,7 @@ func decimalIntegerDiv[T templateDec](parameters []*vector.Vector, result vector
 				return divErr
 			}
 			if resultScale > 0 {
-				divResult, divErr = divResult.ScaleTruncate(-resultScale)
+				divResult, divErr = divResult.Scale(-resultScale)
 				if divErr != nil {
 					return divErr
 				}
@@ -1654,7 +1654,7 @@ func decimalIntegerDiv[T templateDec](parameters []*vector.Vector, result vector
 				return divErr
 			}
 			if resultScale > 0 {
-				divResult, divErr = divResult.ScaleTruncate(-resultScale)
+				divResult, divErr = divResult.Scale(-resultScale)
 				if divErr != nil {
 					return divErr
 				}

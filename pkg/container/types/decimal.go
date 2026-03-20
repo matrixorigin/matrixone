@@ -1634,7 +1634,15 @@ func Decimal64ToFloat64(x Decimal64, scale int32) float64 {
 		scale -= 19
 		y /= float64(Pow10[19])
 	}
-	y /= float64(Pow10[scale])
+	if scale >= 0 {
+		y /= float64(Pow10[scale])
+	} else {
+		for scale < -19 {
+			scale += 19
+			y *= float64(Pow10[19])
+		}
+		y *= float64(Pow10[-scale])
+	}
 	if signx {
 		y = -y
 	}
@@ -1652,7 +1660,15 @@ func Decimal128ToFloat64(x Decimal128, scale int32) float64 {
 		scale -= 19
 		y /= float64(Pow10[19])
 	}
-	y /= float64(Pow10[scale])
+	if scale >= 0 {
+		y /= float64(Pow10[scale])
+	} else {
+		for scale < -19 {
+			scale += 19
+			y *= float64(Pow10[19])
+		}
+		y *= float64(Pow10[-scale])
+	}
 	if signx {
 		y = -y
 	}
