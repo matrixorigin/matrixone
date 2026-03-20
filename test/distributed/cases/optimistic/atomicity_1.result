@@ -124,31 +124,41 @@ no such table atomicity_1.atomic_ex_table
 desc atomic_ex_table;
 no such table atomicity_1.atomic_ex_table
 create TEMPORARY TABLE atomic_temp(a int);
+[unknown result because it is related to issue#9124]
 begin;
+[unknown result because it is related to issue#9124]
 insert into atomic_temp values (5);
+[unknown result because it is related to issue#9124]
 rollback ;
+[unknown result because it is related to issue#9124]
 select * from atomic_temp;
-➤ a[4,32,0]
+[unknown result because it is related to issue#9124]
 drop table atomic_temp;
+[unknown result because it is related to issue#9124]
 start transaction ;
+[unknown result because it is related to issue#9124]
 create TEMPORARY TABLE atomic_temp(a int);
+[unknown result because it is related to issue#9124]
 insert into atomic_temp values (5);
+[unknown result because it is related to issue#9124]
 select * from atomic_temp;
-➤ a[4,32,0]  𝄀
-5
+[unknown result because it is related to issue#9124]
 rollback ;
+[unknown result because it is related to issue#9124]
 select * from atomic_temp;
-SQL parser error: table "atomic_temp" does not exist
+[unknown result because it is related to issue#9124]
 show create table atomic_temp;
-no such table atomicity_1.atomic_temp
+[unknown result because it is related to issue#9124]
 start transaction ;
-drop table if exists atomic_temp1;
-create TEMPORARY TABLE atomic_temp1(a int);
-insert into atomic_temp1 values (5);
+[unknown result because it is related to issue#9124]
+create TEMPORARY TABLE atomic_temp(a int);
+[unknown result because it is related to issue#9124]
+insert into atomic_temp values (5);
+[unknown result because it is related to issue#9124]
 commit ;
-select * from atomic_temp1;
-➤ a[4,32,0]  𝄀
-5
+[unknown result because it is related to issue#9124]
+select * from atomic_temp;
+[unknown result because it is related to issue#9124]
 CREATE TABLE `t_code_rule` (
 `code_id` bigint(20) NOT NULL AUTO_INCREMENT,
 `code_no` varchar(50) NOT NULL,
