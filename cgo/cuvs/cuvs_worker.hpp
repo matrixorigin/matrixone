@@ -35,23 +35,116 @@
 
 /*
  * The cuvs_worker_t manages a pool of threads, each assigned a unique rank and its own device-specific
- * RAFT resources. This architecture addresses several critical issues previously found in sharded (SNMG) mode:
+ * RAFT resources. This architecture addresses several critical issues found in sharded (SNMG) mode:
  *
- * 1. Build Coordination: Collective builds are correctly detected and performed by ensuring all ranks
- *    participate in the clique initialization.
- * 2. Memory Safety: All multi-GPU query and result buffers use pinned host memory (raft::make_host_matrix)
- *    to satisfy NCCL requirements and prevent corruption.
- * 3. Multi-threaded Search: Search operations can now be executed on any worker thread (using submit())
- *    rather than being restricted to the main thread (Rank 0). The worker handles internal synchronization
- *    and rank coordination required by collective cuVS APIs.
+ * 1. Build Coordination: Collective builds are correctly performed by ensuring all ranks participate.
+ * 2. Memory Safety: All multi-GPU query and result buffers must use pinned host memory (raft::make_host_matrix)
+ *    to satisfy NCCL requirements.
+ * 3. Multi-threaded Search: Search operations can be executed on any worker thread (using submit())
+ *    rather than being restricted to the main thread.
  * 4. Rank Integrity: Each worker thread maintains its own raft_handle_wrapper_t with a unique rank
- *    and device assignment, ensuring correct shard identification during collective operations.
- *
- * NOTE: Only CAGRA index uses uint32_t for neighbor IDs. IVF-Flat, IVF-PQ, and Brute-Force indices
- * use int64_t for neighbor IDs to maintain compatibility and handle larger datasets.
+ *    and device assignment.
  */
 
 namespace matrixone {
+
+/**
+ * @brief Thread-safe queue for worker tasks.
+ */
+template <typename T>
+class thread_safe_queue_t {
+public:
+    void push(T item) {
+        std::unique_lock<std::mutex> lock(mu_);
+        cond_can_push_.wait(lock, [this]() { return stopped_ || (capacity_ == 0 || queue_.size() < capacity_); });
+        if (stopped_) return;
+        queue_.push(std::move(item));
+        cond_can_pop_.notify_one();
+    }
+
+    bool pop(T& item) {
+        std::unique_lock<std::mutex> lock(mu_);
+        cond_can_pop_.wait(lock, [this]() { return stopped_ || !queue_.empty(); });
+        if (queue_.empty()) return false;
+        item = std::move(queue_.front());
+        queue_.pop();
+        cond_can_push_.notify_one();
+        return true;
+    }
+
+    void stop() {
+        std::lock_guard<std::mutex> lock(mu_);
+        stopped_ = true;
+        cond_can_pop_.notify_all();
+        cond_can_push_.notify_all();
+    }
+
+    bool is_stopped() const {
+        std::lock_guard<std::mutex> lock(mu_);
+        return stopped_;
+    }
+
+    void set_capacity(size_t capacity) {
+        std::lock_guard<std::mutex> lock(mu_);
+        capacity_ = capacity;
+    }
+
+private:
+    std::queue<T> queue_;
+    mutable std::mutex mu_;
+    std::condition_variable cond_can_pop_;
+    std::condition_variable cond_can_push_;
+    size_t capacity_ = 0;
+    bool stopped_ = false;
+};
+
+struct cuvs_task_result_t {
+    std::any result;
+    std::exception_ptr error;
+};
+
+/**
+ * @brief Store for tracking and waiting on async task results.
+ */
+class cuvs_task_result_store_t {
+public:
+    uint64_t get_next_job_id() { return next_id_++; }
+
+    void store(uint64_t id, cuvs_task_result_t result) {
+        std::lock_guard<std::mutex> lock(mu_);
+        results_[id] = result;
+        auto it = placeholders_.find(id);
+        if (it != placeholders_.end()) {
+            it->second.set_value(result);
+            placeholders_.erase(it);
+        }
+    }
+
+    std::shared_future<cuvs_task_result_t> wait(uint64_t id) {
+        std::lock_guard<std::mutex> lock(mu_);
+        auto it = results_.find(id);
+        if (it != results_.end()) {
+            std::promise<cuvs_task_result_t> p;
+            p.set_value(it->second);
+            return p.get_future().share();
+        }
+        return placeholders_[id].get_future().share();
+    }
+
+    void stop() {
+        std::lock_guard<std::mutex> lock(mu_);
+        for (auto& pair : placeholders_) {
+            pair.second.set_exception(std::make_exception_ptr(std::runtime_error("Worker stopped")));
+        }
+        placeholders_.clear();
+    }
+
+private:
+    std::atomic<uint64_t> next_id_{0};
+    std::map<uint64_t, cuvs_task_result_t> results_;
+    std::map<uint64_t, std::promise<cuvs_task_result_t>> placeholders_;
+    std::mutex mu_;
+};
 
 /**
  * @brief Helper to check if a raft handle has SNMG resources initialized.
@@ -103,11 +196,6 @@ private:
     std::shared_ptr<raft::resources> res_;
 };
 
-struct cuvs_task_result_t {
-    std::any result;
-    std::exception_ptr error;
-};
-
 class cuvs_worker_t {
 public:
     using raft_handle = raft_handle_wrapper_t;
@@ -116,7 +204,6 @@ public:
     struct cuvs_task_t {
         uint64_t id;
         task_fn_t fn;
-        std::shared_ptr<std::promise<cuvs_task_result_t>> promise;
         bool is_main_only;
     };
 
@@ -159,39 +246,33 @@ public:
             if (w.joinable()) w.join();
         }
         workers_.clear();
+        results_store_.stop();
     }
 
     uint64_t submit(task_fn_t fn) {
-        uint64_t id = next_task_id_++;
-        auto promise = std::make_shared<std::promise<cuvs_task_result_t>>();
+        uint64_t id = results_store_.get_next_job_id();
         {
             std::lock_guard<std::mutex> lock(queue_mutex_);
-            tasks_.push({id, std::move(fn), promise, false});
+            if (!running_) throw std::runtime_error("Worker is not running");
+            tasks_.push({id, std::move(fn), false});
         }
         queue_cond_.notify_all();
         return id;
     }
 
     uint64_t submit_main(task_fn_t fn) {
-        uint64_t id = next_task_id_++;
-        auto promise = std::make_shared<std::promise<cuvs_task_result_t>>();
+        uint64_t id = results_store_.get_next_job_id();
         {
             std::lock_guard<std::mutex> lock(queue_mutex_);
-            main_tasks_.push({id, std::move(fn), promise, true});
+            if (!running_) throw std::runtime_error("Worker is not running");
+            main_tasks_.push({id, std::move(fn), true});
         }
         queue_cond_.notify_all();
         return id;
     }
 
     std::shared_future<cuvs_task_result_t> wait(uint64_t task_id) {
-        std::lock_guard<std::mutex> lock(results_mutex_);
-        auto it = results_.find(task_id);
-        if (it == results_.end()) {
-            return results_placeholders_[task_id].get_future().share();
-        }
-        std::promise<cuvs_task_result_t> p;
-        p.set_value(it->second);
-        return p.get_future().share();
+        return results_store_.wait(task_id);
     }
 
     void set_use_batching(bool enable) { use_batching_ = enable; }
@@ -217,7 +298,11 @@ public:
         auto future = promise->get_future();
         batch->reqs.push_back(req);
         batch->setters.push_back([promise](std::any res) {
-            promise->set_value(std::any_cast<ResT>(res));
+            if (res.type() == typeid(std::exception_ptr)) {
+                promise->set_exception(std::any_cast<std::exception_ptr>(res));
+            } else {
+                promise->set_value(std::any_cast<ResT>(res));
+            }
         });
 
         if (batch->reqs.size() >= 16) {
@@ -279,14 +364,7 @@ private:
         } catch (...) {
             result.error = std::current_exception();
         }
-
-        std::lock_guard<std::mutex> lock(results_mutex_);
-        results_[task.id] = result;
-        auto it = results_placeholders_.find(task.id);
-        if (it != results_placeholders_.end()) {
-            it->second.set_value(result);
-            results_placeholders_.erase(it);
-        }
+        results_store_.store(task.id, result);
     }
 
     void flush_batch(const std::string& key) {
@@ -300,7 +378,12 @@ private:
         }
         if (batch->reqs.empty()) return;
         this->submit([batch](raft_handle& handle) -> std::any {
-            batch->exec_fn(handle, batch->reqs, batch->setters);
+            try {
+                batch->exec_fn(handle, batch->reqs, batch->setters);
+            } catch (...) {
+                auto err = std::current_exception();
+                for (auto& setter : batch->setters) setter(err);
+            }
             return std::any();
         });
     }
@@ -319,9 +402,7 @@ private:
     std::queue<cuvs_task_t> main_tasks_;
     std::shared_ptr<raft::device_resources_snmg> mg_resources_;
 
-    std::mutex results_mutex_;
-    std::map<uint64_t, cuvs_task_result_t> results_;
-    std::map<uint64_t, std::promise<cuvs_task_result_t>> results_placeholders_;
+    cuvs_task_result_store_t results_store_;
 
     std::mutex batch_mutex_;
     std::map<std::string, std::shared_ptr<batch_t>> batches_;

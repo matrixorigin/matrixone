@@ -92,7 +92,6 @@ typedef struct {
 typedef struct {
     size_t itopk_size;   // Internal top-k size (default 64)
     size_t search_width; // Number of search paths (default 1)
-    size_t max_queries;  // Maximum number of queries (default 1024)
 } cagra_search_params_t;
 
 /**
@@ -136,9 +135,18 @@ typedef struct {
 } brute_force_build_params_t;
 
 /**
+ * @brief Brute-force search parameters (dummy).
+ */
+typedef struct {
+} brute_force_search_params_t;
+
+/**
  * @brief K-Means build parameters (dummy for inheritance).
  */
 typedef struct {
+    uint32_t k;
+    int max_iter;
+    float tol;
 } kmeans_build_params_t;
 
 #ifdef __cplusplus
@@ -147,7 +155,11 @@ static inline cagra_build_params_t cagra_build_params_default() {
 }
 
 static inline cagra_search_params_t cagra_search_params_default() {
-    return {64, 1, 1024};
+    return {64, 1};
+}
+
+static inline brute_force_search_params_t brute_force_search_params_default() {
+    return {};
 }
 
 static inline ivf_flat_build_params_t ivf_flat_build_params_default() {

@@ -43,7 +43,7 @@ TEST(PairwiseDistanceTest, BasicF32) {
     std::vector<float> dist(n_x * n_y);
     const raft::resources& res = get_raft_resources();
 
-    pairwise_distance<float>(res, x.data(), n_x, y.data(), n_y, dimension, cuvs::distance::DistanceType::L2Expanded, dist.data());
+    pairwise_distance<float>(res, x.data(), n_x, y.data(), n_y, dimension, DistanceType_L2Expanded, dist.data());
 
     // Expected results for L2Squared:
     // dist[0,0] = (1-1)^2 + (0-0)^2 + (0-0)^2 = 0
@@ -68,7 +68,7 @@ TEST(PairwiseDistanceTest, BasicF16) {
     std::vector<float> dist(n_x * n_y);
     const raft::resources& res = get_raft_resources();
 
-    pairwise_distance<half>(res, x.data(), n_x, y.data(), n_y, dimension, cuvs::distance::DistanceType::L2Expanded, dist.data());
+    pairwise_distance<half>(res, x.data(), n_x, y.data(), n_y, dimension, DistanceType_L2Expanded, dist.data());
 
     ASSERT_NEAR(dist[0], 0.0f, 1e-3f);
 }
@@ -90,7 +90,7 @@ TEST(PairwiseDistanceTest, InnerProductF32) {
     std::vector<float> dist(n_x * n_y);
     const raft::resources& res = get_raft_resources();
 
-    pairwise_distance<float>(res, x.data(), n_x, y.data(), n_y, dimension, cuvs::distance::DistanceType::InnerProduct, dist.data());
+    pairwise_distance<float>(res, x.data(), n_x, y.data(), n_y, dimension, DistanceType_InnerProduct, dist.data());
 
     // Inner product:
     // dist[0,0] = 1*1 + 0*0 = 1

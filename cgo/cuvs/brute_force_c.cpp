@@ -14,6 +14,11 @@
  * limitations under the License.
  */
 
+/*
+ * Brute-Force C Wrapper Implementation
+ * Supported data types (via quantization_t): Quantization_F32, Quantization_F16
+ */
+
 #include "brute_force_c.h"
 #include "brute_force.hpp"
 #include <iostream>
@@ -42,20 +47,20 @@ struct gpu_brute_force_any_t {
 extern "C" {
 
 gpu_brute_force_c gpu_brute_force_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, distance_type_t metric_c, uint32_t nthread, int device_id, quantization_t qtype, void* errmsg) {
+    void* index_ptr = nullptr;
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        cuvs::distance::DistanceType metric = matrixone::convert_distance_type(metric_c);
-        void* index_ptr = nullptr;
         switch (qtype) {
             case Quantization_F32:
-                index_ptr = new matrixone::gpu_brute_force_t<float>(static_cast<const float*>(dataset_data), count_vectors, dimension, metric, nthread, device_id);
+                index_ptr = new matrixone::gpu_brute_force_t<float>(static_cast<const float*>(dataset_data), count_vectors, dimension, metric_c, nthread, device_id);
                 break;
             case Quantization_F16:
-                index_ptr = new matrixone::gpu_brute_force_t<half>(static_cast<const half*>(dataset_data), count_vectors, dimension, metric, nthread, device_id);
+                index_ptr = new matrixone::gpu_brute_force_t<half>(static_cast<const half*>(dataset_data), count_vectors, dimension, metric_c, nthread, device_id);
                 break;
             default:
                 throw std::runtime_error("Unsupported quantization type for brute force (only f32 and f16 supported)");
         }
+        if (index_ptr) static_cast<matrixone::gpu_index_base_t<float, brute_force_build_params_t>*>(index_ptr)->start();
         return static_cast<gpu_brute_force_c>(new gpu_brute_force_any_t(qtype, index_ptr));
     } catch (const std::exception& e) {
         set_errmsg(errmsg, "Error in gpu_brute_force_new", e.what());
@@ -64,20 +69,20 @@ gpu_brute_force_c gpu_brute_force_new(const void* dataset_data, uint64_t count_v
 }
 
 gpu_brute_force_c gpu_brute_force_new_empty(uint64_t total_count, uint32_t dimension, distance_type_t metric_c, uint32_t nthread, int device_id, quantization_t qtype, void* errmsg) {
+    void* index_ptr = nullptr;
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        cuvs::distance::DistanceType metric = matrixone::convert_distance_type(metric_c);
-        void* index_ptr = nullptr;
         switch (qtype) {
             case Quantization_F32:
-                index_ptr = new matrixone::gpu_brute_force_t<float>(total_count, dimension, metric, nthread, device_id);
+                index_ptr = new matrixone::gpu_brute_force_t<float>(total_count, dimension, metric_c, nthread, device_id);
                 break;
             case Quantization_F16:
-                index_ptr = new matrixone::gpu_brute_force_t<half>(total_count, dimension, metric, nthread, device_id);
+                index_ptr = new matrixone::gpu_brute_force_t<half>(total_count, dimension, metric_c, nthread, device_id);
                 break;
             default:
                 throw std::runtime_error("Unsupported quantization type for brute force (only f32 and f16 supported)");
         }
+        if (index_ptr) static_cast<matrixone::gpu_index_base_t<float, brute_force_build_params_t>*>(index_ptr)->start();
         return static_cast<gpu_brute_force_c>(new gpu_brute_force_any_t(qtype, index_ptr));
     } catch (const std::exception& e) {
         set_errmsg(errmsg, "Error in gpu_brute_force_new_empty", e.what());
@@ -149,13 +154,13 @@ gpu_brute_force_search_result_c gpu_brute_force_search(gpu_brute_force_c index_c
         switch (any->qtype) {
             case Quantization_F32: {
                 auto res = std::make_unique<matrixone::gpu_brute_force_t<float>::search_result_t>();
-                *res = static_cast<matrixone::gpu_brute_force_t<float>*>(any->ptr)->search(static_cast<const float*>(queries_data), num_queries, query_dimension, limit);
+                *res = static_cast<matrixone::gpu_brute_force_t<float>*>(any->ptr)->search(static_cast<const float*>(queries_data), num_queries, query_dimension, limit, brute_force_search_params_default());
                 result_ptr = res.release();
                 break;
             }
             case Quantization_F16: {
                 auto res = std::make_unique<matrixone::gpu_brute_force_t<half>::search_result_t>();
-                *res = static_cast<matrixone::gpu_brute_force_t<half>*>(any->ptr)->search(static_cast<const half*>(queries_data), num_queries, query_dimension, limit);
+                *res = static_cast<matrixone::gpu_brute_force_t<half>*>(any->ptr)->search(static_cast<const half*>(queries_data), num_queries, query_dimension, limit, brute_force_search_params_default());
                 result_ptr = res.release();
                 break;
             }
@@ -176,13 +181,13 @@ gpu_brute_force_search_result_c gpu_brute_force_search_float(gpu_brute_force_c i
         switch (any->qtype) {
             case Quantization_F32: {
                 auto res = std::make_unique<matrixone::gpu_brute_force_t<float>::search_result_t>();
-                *res = static_cast<matrixone::gpu_brute_force_t<float>*>(any->ptr)->search_float(queries_data, num_queries, query_dimension, limit);
+                *res = static_cast<matrixone::gpu_brute_force_t<float>*>(any->ptr)->search_float(queries_data, num_queries, query_dimension, limit, brute_force_search_params_default());
                 result_ptr = res.release();
                 break;
             }
             case Quantization_F16: {
                 auto res = std::make_unique<matrixone::gpu_brute_force_t<half>::search_result_t>();
-                *res = static_cast<matrixone::gpu_brute_force_t<half>*>(any->ptr)->search_float(queries_data, num_queries, query_dimension, limit);
+                *res = static_cast<matrixone::gpu_brute_force_t<half>*>(any->ptr)->search_float(queries_data, num_queries, query_dimension, limit, brute_force_search_params_default());
                 result_ptr = res.release();
                 break;
             }

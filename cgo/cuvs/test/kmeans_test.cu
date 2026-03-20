@@ -35,7 +35,7 @@ TEST(GpuKMeansTest, BasicFitAndPredict) {
         20.1f, 20.1f, 20.0f, 20.2f, 20.2f, 20.0f  // Cluster 2
     };
 
-    gpu_kmeans_t<float> kmeans(n_clusters, dimension, cuvs::distance::DistanceType::L2Expanded, 20, 0, 1);
+    gpu_kmeans_t<float> kmeans(n_clusters, dimension, DistanceType_L2Expanded, 20, 0, 1);
     kmeans.start();
 
     auto fit_res = kmeans.fit(dataset.data(), n_samples);
@@ -60,7 +60,7 @@ TEST(GpuKMeansTest, FitPredict) {
     std::vector<float> dataset(n_samples * dimension);
     for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
 
-    gpu_kmeans_t<float> kmeans(n_clusters, dimension, cuvs::distance::DistanceType::L2Expanded, 20, 0, 1);
+    gpu_kmeans_t<float> kmeans(n_clusters, dimension, DistanceType_L2Expanded, 20, 0, 1);
     kmeans.start();
 
     auto res = kmeans.fit_predict(dataset.data(), n_samples);
@@ -77,7 +77,7 @@ TEST(GpuKMeansTest, GetCentroids) {
     std::vector<float> dataset(n_samples * dimension);
     for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
 
-    gpu_kmeans_t<float> kmeans(n_clusters, dimension, cuvs::distance::DistanceType::L2Expanded, 20, 0, 1);
+    gpu_kmeans_t<float> kmeans(n_clusters, dimension, DistanceType_L2Expanded, 20, 0, 1);
     kmeans.start();
 
     kmeans.fit(dataset.data(), n_samples);

@@ -47,7 +47,7 @@ void pairwise_distance(const raft::resources& res,
                        const T* y,
                        uint64_t n_y,
                        uint32_t dim,
-                       cuvs::distance::DistanceType metric,
+                       distance_type_t metric,
                        float* dist) {
     auto stream = raft::resource::get_cuda_stream(res);
 
@@ -83,7 +83,7 @@ void pairwise_distance(const raft::resources& res,
     auto dist_view = raft::make_device_matrix_view<float, int64_t>(reinterpret_cast<float*>(d_dist), (int64_t)n_x, (int64_t)n_y);
 
     // 4. Execute Pairwise Distance
-    cuvs::distance::pairwise_distance(res, x_view, y_view, dist_view, metric);
+    cuvs::distance::pairwise_distance(res, x_view, y_view, dist_view, static_cast<cuvs::distance::DistanceType>(metric));
 
     // 5. Async copy results back to host
     RAFT_CUDA_TRY(cudaMemcpyAsync(dist, d_dist, dist_bytes, cudaMemcpyDeviceToHost, stream));

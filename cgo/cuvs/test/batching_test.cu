@@ -34,7 +34,7 @@ TEST(DynamicBatchingTest, CagraConcurrentSearch) {
 
     std::vector<int> devices = {0};
     cagra_build_params_t bp = cagra_build_params_default();
-    gpu_cagra_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 8, DistributionMode_SINGLE_GPU);
+    gpu_cagra_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 8, DistributionMode_SINGLE_GPU);
     
     index.set_use_batching(true);
     index.start();
@@ -69,7 +69,7 @@ TEST(DynamicBatchingTest, IvfFlatConcurrentSearch) {
     std::vector<int> devices = {0};
     ivf_flat_build_params_t bp = ivf_flat_build_params_default();
     bp.n_lists = 10;
-    gpu_ivf_flat_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 8, DistributionMode_SINGLE_GPU);
+    gpu_ivf_flat_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 8, DistributionMode_SINGLE_GPU);
     
     index.set_use_batching(true);
     index.start();
@@ -105,7 +105,7 @@ TEST(DynamicBatchingTest, IvfPqConcurrentSearch) {
     ivf_pq_build_params_t bp = ivf_pq_build_params_default();
     bp.n_lists = 10;
     bp.m = 8;
-    gpu_ivf_pq_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 8, DistributionMode_SINGLE_GPU);
+    gpu_ivf_pq_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 8, DistributionMode_SINGLE_GPU);
     
     index.set_use_batching(true);
     index.start();

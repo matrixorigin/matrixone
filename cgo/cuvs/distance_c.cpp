@@ -37,12 +37,11 @@ void gpu_pairwise_distance(const void* x,
 
         RAFT_CUDA_TRY(cudaSetDevice(device_id));
         const raft::resources& res = matrixone::get_raft_resources();
-        cuvs::distance::DistanceType metric_cuvs = matrixone::convert_distance_type(metric);
 
         if (qtype == Quantization_F32) {
-            matrixone::pairwise_distance<float>(res, static_cast<const float*>(x), n_x, static_cast<const float*>(y), n_y, dim, metric_cuvs, dist);
+            matrixone::pairwise_distance<float>(res, static_cast<const float*>(x), n_x, static_cast<const float*>(y), n_y, dim, metric, dist);
         } else if (qtype == Quantization_F16) {
-            matrixone::pairwise_distance<half>(res, static_cast<const half*>(x), n_x, static_cast<const half*>(y), n_y, dim, metric_cuvs, dist);
+            matrixone::pairwise_distance<half>(res, static_cast<const half*>(x), n_x, static_cast<const half*>(y), n_y, dim, metric, dist);
         } else {
             throw std::runtime_error("Unsupported quantization type for pairwise_distance");
         }

@@ -14,6 +14,12 @@
  * limitations under the License.
  */
 
+/*
+ * IVF-Flat Index Implementation
+ * Supported data types (T): float, half, int8_t, uint8_t
+ * Neighbor ID type: int64_t
+ */
+
 #pragma once
 
 #include "index_base.hpp"
@@ -83,7 +89,7 @@ public:
 
     // Unified Constructor for building from dataset
     gpu_ivf_flat_t(const T* dataset_data, uint64_t count_vectors, uint32_t dimension,
-                    cuvs::distance::DistanceType m, const ivf_flat_build_params_t& bp,
+                    distance_type_t m, const ivf_flat_build_params_t& bp,
                     const std::vector<int>& devices, uint32_t nthread, distribution_mode_t mode) {
 
         this->dimension = dimension;
@@ -104,7 +110,7 @@ public:
     }
 
     // Constructor for chunked input (pre-allocates)
-    gpu_ivf_flat_t(uint64_t total_count, uint32_t dimension, cuvs::distance::DistanceType m,
+    gpu_ivf_flat_t(uint64_t total_count, uint32_t dimension, distance_type_t m,
                     const ivf_flat_build_params_t& bp, const std::vector<int>& devices,
                     uint32_t nthread, distribution_mode_t mode) {
 
@@ -123,7 +129,7 @@ public:
     }
 
     // Constructor for loading from file
-    gpu_ivf_flat_t(const std::string& filename, uint32_t dimension, cuvs::distance::DistanceType m,
+    gpu_ivf_flat_t(const std::string& filename, uint32_t dimension, distance_type_t m,
                     const ivf_flat_build_params_t& bp, const std::vector<int>& devices,
                     uint32_t nthread, distribution_mode_t mode) {
 
@@ -171,7 +177,7 @@ public:
         auto res = handle.get_raft_resources();
 
         cuvs::neighbors::ivf_flat::index_params index_params;
-        index_params.metric = this->metric;
+        index_params.metric = static_cast<cuvs::distance::DistanceType>(this->metric);
         index_params.n_lists = this->build_params.n_lists;
 
         if (this->dist_mode == DistributionMode_SHARDED || this->dist_mode == DistributionMode_REPLICATED) {
@@ -330,7 +336,7 @@ public:
             return std::any_cast<search_result_t>(result_wait.result);
         }
 
-        return this->search_batch_internal(queries_data, num_queries, limit, sp);
+        return this->search_float_batch_internal(queries_data, num_queries, limit, sp);
     }
 
     search_result_t search_float_batch_internal(const float* queries_data, uint64_t num_queries, uint32_t limit, const ivf_flat_search_params_t& sp) {
@@ -481,7 +487,7 @@ public:
         return json;
     }
 
-    void save(const std::string& filename) const override {
+    void save(const std::string& filename) const {
         if (!this->is_loaded_ || (!index_ && !mg_index_)) throw std::runtime_error("Index not built");
         if (mg_index_) throw std::runtime_error("Saving multi-GPU index not supported yet");
         
@@ -494,7 +500,7 @@ public:
         this->worker->wait(job_id).get();
     }
 
-    void load(const std::string& filename) override {
+    void load(const std::string& filename) {
         uint64_t job_id = this->worker->submit_main(
             [&](raft_handle_wrapper_t& handle) -> std::any {
                 auto res = handle.get_raft_resources();
