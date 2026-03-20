@@ -20,11 +20,15 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -216,6 +220,22 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 	}
 }
 
+func newRelExpr(relPos, colPos int32, typ types.Type) *plan.Expr {
+	return &plan.Expr{
+		Typ: plan.Type{
+			Scale: typ.Scale,
+			Width: typ.Width,
+			Id:    int32(typ.Oid),
+		},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: relPos,
+				ColPos: colPos,
+			},
+		},
+	}
+}
+
 func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) joinTestCase {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
@@ -364,4 +384,195 @@ func TestCheckSnapshotAdvancedDuplicates_SkipsOldKeyDedupPaths(t *testing.T) {
 
 	err := arg.checkSnapshotAdvancedDuplicates(proc)
 	require.NoError(t, err)
+}
+
+func TestCheckSnapshotAdvancedDuplicates_SkipsWithoutSnapshotAdvance(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc := testutil.NewProcess(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	initialTS := timestamp.Timestamp{PhysicalTime: 3}
+	proc.Base.TxnOperator = txnOp
+
+	arg := &DedupJoin{
+		OnDuplicateAction: plan.Node_FAIL,
+		TargetTableID:     42,
+		InitialSnapshotTS: initialTS,
+		DedupColName:      "id",
+		DedupColTypes:     []plan.Type{{Id: int32(types.T_int32)}},
+		DelColIdx:         -1,
+		Conditions: [][]*plan.Expr{
+			nil,
+			{newRelExpr(1, 0, types.T_int32.ToType())},
+		},
+	}
+	arg.ctr.batchRowCount = 1
+
+	txnOp.EXPECT().SnapshotTS().Return(initialTS)
+
+	err := arg.checkSnapshotAdvancedDuplicates(proc)
+	require.NoError(t, err)
+}
+
+func TestCheckSnapshotAdvancedDuplicates_SkipsWithoutEngine(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc := testutil.NewProcess(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	initialTS := timestamp.Timestamp{PhysicalTime: 3}
+	currentTS := timestamp.Timestamp{PhysicalTime: 4}
+	proc.Base.TxnOperator = txnOp
+
+	arg := &DedupJoin{
+		OnDuplicateAction: plan.Node_FAIL,
+		TargetTableID:     42,
+		InitialSnapshotTS: initialTS,
+		DedupColName:      "id",
+		DedupColTypes:     []plan.Type{{Id: int32(types.T_int32)}},
+		DelColIdx:         -1,
+		Conditions: [][]*plan.Expr{
+			nil,
+			{newRelExpr(1, 0, types.T_int32.ToType())},
+		},
+	}
+	arg.ctr.batchRowCount = 1
+
+	txnOp.EXPECT().SnapshotTS().Return(currentTS)
+
+	err := arg.checkSnapshotAdvancedDuplicates(proc)
+	require.NoError(t, err)
+}
+
+func TestCheckSnapshotAdvancedDuplicates_ReturnsDuplicate(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc := testutil.NewProcess(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	rel := mock_frontend.NewMockRelation(ctrl)
+
+	initialTS := timestamp.Timestamp{PhysicalTime: 1}
+	currentTS := timestamp.Timestamp{PhysicalTime: 2}
+	proc.Base.TxnOperator = txnOp
+	proc.GetSessionInfo().StorageEngine = eng
+
+	buildBat := batch.NewWithSize(1)
+	buildBat.Vecs[0] = testutil.MakeInt32Vector([]int32{10, 20}, nil)
+	buildBat.SetRowCount(2)
+
+	arg := &DedupJoin{
+		OnDuplicateAction: plan.Node_FAIL,
+		TargetTableID:     42,
+		InitialSnapshotTS: initialTS,
+		DedupColName:      "id",
+		DedupColTypes:     []plan.Type{{Id: int32(types.T_int32)}},
+		DelColIdx:         -1,
+		Conditions: [][]*plan.Expr{
+			nil,
+			{newRelExpr(1, 0, types.T_int32.ToType())},
+		},
+	}
+	arg.ctr.batches = []*batch.Batch{buildBat}
+	arg.ctr.batchRowCount = int64(buildBat.RowCount())
+
+	gomock.InOrder(
+		txnOp.EXPECT().SnapshotTS().Return(currentTS),
+		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(42)).Return("testdb", "t1", rel, nil),
+		rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(42)),
+		rel.EXPECT().PrimaryKeysMayBeUpserted(gomock.Any(), types.BuildTS(1, 0), types.BuildTS(2, 0), gomock.Any(), int32(0)).DoAndReturn(
+			func(_ context.Context, _, _ types.TS, bat *batch.Batch, _ int32) (bool, error) {
+				require.Equal(t, 2, bat.RowCount())
+				return true, nil
+			},
+		),
+		rel.EXPECT().PrimaryKeysMayBeUpserted(gomock.Any(), types.BuildTS(1, 0), types.BuildTS(2, 0), gomock.Any(), int32(0)).DoAndReturn(
+			func(_ context.Context, _, _ types.TS, bat *batch.Batch, _ int32) (bool, error) {
+				require.Equal(t, 1, bat.RowCount())
+				return bat.GetVector(0).RowToString(0) == "10", nil
+			},
+		),
+	)
+
+	err := arg.checkSnapshotAdvancedDuplicates(proc)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	require.Contains(t, err.Error(), "Duplicate entry '10' for key 'id'")
+}
+
+func TestResolveTargetRelation_DetectsDefinitionChange(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc := testutil.NewProcess(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	db := mock_frontend.NewMockDatabase(ctrl)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	proc.Base.TxnOperator = txnOp
+
+	arg := &DedupJoin{
+		TargetTableRef: &plan.ObjectRef{
+			SchemaName: "testdb",
+			ObjName:    "t1",
+		},
+		TargetTableID: 42,
+	}
+
+	gomock.InOrder(
+		eng.EXPECT().Database(gomock.Any(), "testdb", txnOp).Return(db, nil),
+		db.EXPECT().Relation(gomock.Any(), "t1", proc).Return(rel, nil),
+		rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(99)),
+	)
+
+	resolvedRel, resolvedID, err := arg.resolveTargetRelation(proc, eng)
+	require.Error(t, err)
+	require.Nil(t, resolvedRel)
+	require.Equal(t, uint64(99), resolvedID)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
+}
+
+func TestFormatDedupRow_IndexTableTuple(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	vec := vector.NewVec(types.T_varchar.ToType())
+	packer := types.NewPacker()
+	defer packer.Close()
+
+	packer.EncodeInt32(7)
+	packer.EncodeStringType([]byte("abc"))
+	require.NoError(t, vector.AppendBytes(vec, packer.GetBuf(), false, proc.Mp()))
+
+	rowStr, err := formatDedupRow(
+		vec,
+		0,
+		catalog.IndexTableIndexColName,
+		[]plan.Type{{Id: int32(types.T_varchar)}},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "(7,abc)", rowStr)
+}
+
+func TestFormatDedupRow_CompositeTuple(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	vec := vector.NewVec(types.T_varchar.ToType())
+	packer := types.NewPacker()
+	defer packer.Close()
+
+	packer.EncodeInt32(8)
+	packer.EncodeStringType([]byte("xyz"))
+	require.NoError(t, vector.AppendBytes(vec, packer.GetBuf(), false, proc.Mp()))
+
+	rowStr, err := formatDedupRow(
+		vec,
+		0,
+		"pk",
+		[]plan.Type{
+			{Id: int32(types.T_int32)},
+			{Id: int32(types.T_varchar)},
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "(8,xyz)", rowStr)
 }

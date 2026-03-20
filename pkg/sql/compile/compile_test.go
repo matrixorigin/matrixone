@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -44,10 +45,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -140,6 +143,138 @@ func TestNewCompileResetsStmtSnapshotTS(t *testing.T) {
 
 	c := NewCompile("test", "test", "select 1", "", "", nil, proc, nil, false, nil, time.Now())
 	require.True(t, c.proc.GetStmtSnapshotTS().IsEmpty())
+}
+
+func makeJoinColExpr(relPos, colPos int32, typ types.Type) *plan.Expr {
+	return &plan.Expr{
+		Typ: plan.Type{
+			Id:    int32(typ.Oid),
+			Width: typ.Width,
+			Scale: typ.Scale,
+		},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: relPos,
+				ColPos: colPos,
+			},
+		},
+	}
+}
+
+func makeEqualJoinCond(t *testing.T, typ types.Type) *plan.Expr {
+	t.Helper()
+
+	fr, err := function.GetFunctionByName(context.Background(), "=", []types.Type{typ, typ})
+	require.NoError(t, err)
+
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{
+					Obj:     fr.GetEncodedOverloadID(),
+					ObjName: "=",
+				},
+				Args: []*plan.Expr{
+					makeJoinColExpr(0, 0, typ),
+					makeJoinColExpr(1, 0, typ),
+				},
+			},
+		},
+	}
+}
+
+func TestConstructDedupJoinCapturesSnapshotAndProbeScan(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc := testutil.NewProcess(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	snapshotTS := timestamp.Timestamp{PhysicalTime: 12, LogicalTime: 3}
+	txnOp.EXPECT().SnapshotTS().Return(snapshotTS)
+	proc.Base.TxnOperator = txnOp
+
+	typ := types.T_int64.ToType()
+	scanNode := &plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		ObjRef: &plan.ObjectRef{
+			SchemaName: "testdb",
+			ObjName:    "t1",
+		},
+		TableDef: &plan.TableDef{TblId: 42},
+	}
+	left := &plan.Node{
+		NodeType: plan.Node_JOIN,
+		Children: []int32{1},
+	}
+	qry := &plan.Query{Nodes: []*plan.Node{left, scanNode}}
+	n := &plan.Node{
+		ProjectList: []*plan.Expr{makeJoinColExpr(1, 0, typ)},
+		OnList:      []*plan.Expr{makeEqualJoinCond(t, typ)},
+		Stats:       &plan.Stats{},
+		SendMsgList: []plan.MsgHeader{{
+			MsgType: int32(message.MsgJoinMap),
+			MsgTag:  7,
+		}},
+		OnDuplicateAction: plan.Node_FAIL,
+		DedupColName:      "id",
+		DedupColTypes:     []plan.Type{{Id: int32(typ.Oid)}},
+	}
+
+	arg := constructDedupJoin(n, left, qry, []types.Type{typ}, []types.Type{typ}, proc)
+
+	require.Equal(t, snapshotTS, arg.InitialSnapshotTS)
+	require.Equal(t, snapshotTS, proc.GetStmtSnapshotTS())
+	require.Equal(t, scanNode.ObjRef, arg.TargetTableRef)
+	require.Equal(t, uint64(42), arg.TargetTableID)
+	require.Equal(t, int32(7), arg.JoinMapTag)
+	require.Len(t, arg.Conditions, 2)
+	require.Len(t, arg.Conditions[0], 1)
+	require.Len(t, arg.Conditions[1], 1)
+
+	rightCol, ok := arg.Conditions[1][0].Expr.(*plan.Expr_Col)
+	require.True(t, ok)
+	require.Equal(t, int32(1), rightCol.Col.RelPos)
+	require.Equal(t, int32(0), rightCol.Col.ColPos)
+}
+
+func TestConstructDedupJoinPreservesStmtSnapshotAndProbeScanGuards(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	existingTS := timestamp.Timestamp{PhysicalTime: 99, LogicalTime: 1}
+	proc.SetStmtSnapshotTS(existingTS)
+
+	typ := types.T_int32.ToType()
+	n := &plan.Node{
+		ProjectList: []*plan.Expr{makeJoinColExpr(0, 0, typ)},
+		OnList:      []*plan.Expr{makeEqualJoinCond(t, typ)},
+		Stats:       &plan.Stats{},
+		SendMsgList: []plan.MsgHeader{{
+			MsgType: int32(message.MsgJoinMap),
+			MsgTag:  11,
+		}},
+	}
+
+	arg := constructDedupJoin(
+		n,
+		&plan.Node{NodeType: plan.Node_JOIN, Children: []int32{-1, 2}},
+		nil,
+		[]types.Type{typ},
+		[]types.Type{typ},
+		proc,
+	)
+
+	require.Equal(t, existingTS, arg.InitialSnapshotTS)
+	require.Equal(t, existingTS, proc.GetStmtSnapshotTS())
+	require.Nil(t, arg.TargetTableRef)
+	require.Zero(t, arg.TargetTableID)
+	require.Equal(t, int32(11), arg.JoinMapTag)
+
+	require.Nil(t, findProbeTableScan(nil, nil))
+	require.Nil(t, findProbeTableScan(&plan.Node{NodeType: plan.Node_JOIN}, nil))
+	require.Nil(t, findProbeTableScan(
+		&plan.Node{NodeType: plan.Node_JOIN, Children: []int32{-1, 2}},
+		&plan.Query{Nodes: []*plan.Node{{NodeType: plan.Node_VALUE_SCAN}}},
+	))
 }
 
 func TestCompile(t *testing.T) {
