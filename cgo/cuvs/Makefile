@@ -36,9 +36,9 @@ TEST_SRCS := test/main_test.cu test/brute_force_test.cu test/ivf_flat_test.cu te
 OBJS := $(C_SRCS:.cpp=.o) $(CPP_SRCS:.cpp=.o)
 TEST_OBJS := $(patsubst test/%.cu,obj/test/%.o,$(TEST_SRCS))
 
-.PHONY: all clean debug snmg
+.PHONY: all clean debug
 
-all: libmocuvs.so test_cuvs_worker
+all: libmocuvs.so
 
 debug: NVCC_FLAGS += -O0 -g -lineinfo
 debug: LDFLAGS += -g
@@ -60,11 +60,7 @@ test_cuvs_worker: $(TEST_OBJS) $(OBJS)
 	@echo "Linking $@"
 	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
 
-snmg: test/test_snmg_init.cu
-	@echo "Compiling and linking test_snmg_init"
-	$(NVCC) $(NVCC_FLAGS) $(LDFLAGS) $< $(LIBS) -o test_snmg_init
-
 clean:
 	@echo "Cleaning up..."
-	rm -f libmocuvs.so *.o test_cuvs_worker test_snmg_init
+	rm -f libmocuvs.so *.o test_cuvs_worker
 	rm -rf obj
