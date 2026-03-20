@@ -232,10 +232,10 @@ drop stage if exists stage06;
 create stage stage06 url = 'file:///$resources/into_outfile/stage';
 select * from mo_catalog.mo_stages;
 ➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
-10055  ¦  stage06  ¦  file:////Users/ariznawl/code/matrixone/test/distributed/resources/into_outfile/stage  ¦    ¦  in_use  ¦  2026-03-09 04:58:42  ¦
+6  ¦  stage06  ¦  file:////Users/ariznawl/code/matrixone/test/distributed/resources/into_outfile/stage  ¦    ¦  in_use  ¦  2026-03-20 10:24:08  ¦  
 show stages;
 ➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
-stage06  ¦  file:////Users/ariznawl/code/matrixone/test/distributed/resources/into_outfile/stage  ¦  in_use  ¦
+stage06  ¦  file:////Users/ariznawl/code/matrixone/test/distributed/resources/into_outfile/stage  ¦  in_use  ¦  
 select * from t6 into outfile 'stage://stage06/local_stage_table06.csv' fields terminated by ',' enclosed by '' lines terminated by '\n' header 'false';
 truncate t6;
 load data infile 'stage://stage06/local_stage_table06.csv' into table t6 fields terminated by ',' enclosed by '`' lines terminated by '\n';

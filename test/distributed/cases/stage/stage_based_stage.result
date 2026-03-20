@@ -259,12 +259,12 @@ drop stage if exists substage06;
 create stage substage06 url = 'stage://stage06/stage';
 select * from mo_catalog.mo_stages;
 ➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
-10138  ¦  stage06  ¦  file:////Users/ariznawl/code/matrixone/test/distributed/resources/into_outfile  ¦    ¦  in_use  ¦  2026-03-09 05:13:22  ¦    𝄀
-10139  ¦  substage06  ¦  stage://stage06/stage  ¦    ¦  in_use  ¦  2026-03-09 05:13:22  ¦
+172  ¦  stage06  ¦  file:////Users/ariznawl/code/matrixone/test/distributed/resources/into_outfile  ¦    ¦  in_use  ¦  2026-03-20 10:47:05  ¦    𝄀
+173  ¦  substage06  ¦  stage://stage06/stage  ¦    ¦  in_use  ¦  2026-03-20 10:47:05  ¦  
 show stages;
 ➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
 stage06  ¦  file:////Users/ariznawl/code/matrixone/test/distributed/resources/into_outfile  ¦  in_use  ¦    𝄀
-substage06  ¦  stage://stage06/stage  ¦  in_use  ¦
+substage06  ¦  stage://stage06/stage  ¦  in_use  ¦  
 select * from t6 into outfile 'stage://substage06/local_stage_t06.csv' fields terminated by ',' enclosed by '' lines terminated by '\n' header 'false';
 truncate t6;
 load data infile 'stage://substage06/local_stage_t06.csv' into table t6 fields terminated by ',' enclosed by '`' lines terminated by '\n' ignore 1 lines;
