@@ -31,7 +31,6 @@ import (
 
 const (
 	spillNumBuckets = 32
-	spillMaxPass    = 3
 	spillMagic      = 0x12345678DEADBEEF
 	spillBufferSize = 8192 // Buffer 8192 rows before flushing
 )
@@ -190,9 +189,12 @@ func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *b
 }
 
 func (ctr *container) memUsed() int64 {
-	sz := ctr.hashmapBuilder.GetSize()
-	for _, bat := range ctr.hashmapBuilder.Batches.Buf {
-		sz += int64(bat.Size())
+	sz := ctr.hashmapBuilder.GetSize() + ctr.hashmapBuilder.Batches.MemSize
+	// If MemSize is 0 but Buf is non-empty (e.g. set directly in tests), fall back to summing.
+	if sz == 0 {
+		for _, bat := range ctr.hashmapBuilder.Batches.Buf {
+			sz += int64(bat.Size())
+		}
 	}
 	return sz
 }

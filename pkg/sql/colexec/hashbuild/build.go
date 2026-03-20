@@ -69,14 +69,14 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case BuildHashMap:
-			if err := ctr.build(hashBuild, proc, analyzer); err != nil {
+			if err := hashBuild.build(proc, analyzer); err != nil {
 				return result, err
 			}
 
 			ctr.state = HandleRuntimeFilter
 
 		case HandleRuntimeFilter:
-			if err := ctr.handleRuntimeFilter(hashBuild, proc); err != nil {
+			if err := hashBuild.handleRuntimeFilter(proc); err != nil {
 				return result, err
 			}
 
@@ -98,7 +98,7 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 					jm.SpillBuckets = ctr.spilledBuckets
 				} else {
 					// Normal mode: send hashmap and batches
-					jm = message.NewJoinMap(ctr.hashmapBuilder.Sels, ctr.hashmapBuilder.IntHashMap, ctr.hashmapBuilder.StrHashMap, ctr.hashmapBuilder.DelRows, ctr.hashmapBuilder.Batches.Buf, proc.Mp())
+					jm = ctr.hashmapBuilder.GetJoinMap(proc.Mp())
 					jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
 				}
 				jm.SetRowCount(int64(ctr.hashmapBuilder.InputBatchRowCount))
@@ -123,7 +123,8 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) build(hashBuild *HashBuild, proc *process.Process, analyzer process.Analyzer) error {
+func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyzer) error {
+	ctr := &hashBuild.ctr
 	spillMode := false
 	var spilledBuckets []string
 	var spillFiles []*os.File
@@ -246,7 +247,8 @@ func calculateBloomFilterProbability(rowCount int) float64 {
 	}
 }
 
-func (ctr *container) handleRuntimeFilter(hashBuild *HashBuild, proc *process.Process) error {
+func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
+	ctr := &hashBuild.ctr
 	if hashBuild.IsShuffle {
 		//only support runtime filter pass for now in shuffle join
 		var runtimeFilter message.RuntimeFilterMessage

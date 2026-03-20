@@ -42,6 +42,12 @@ const (
 	End
 )
 
+type spillBucket struct {
+	buildFile string
+	probeFile string
+	depth     int
+}
+
 type probeState int
 
 const (
@@ -91,14 +97,12 @@ type container struct {
 	maxAllocSize int64
 
 	// spill support
-	spilledBuildBuckets []string
-	spilledBuildRowCnts []int64
-	spilledProbeBuckets []string
-	nextBucketIdx       int
-	spillThreshold      int64
+	spillQueue     []spillBucket // multi-level spill work queue
+	spillThreshold int64
 
 	// state for processing current bucket
-	probeBucketReader *spillBucketReader
+	probeBucketReader   *spillBucketReader
+	probeBucketFileName string
 
 	// reusable buffers for spill operations
 	spillHashValues     []uint64
@@ -107,6 +111,8 @@ type container struct {
 	spillBuildReadBatch *batch.Batch
 	spillProbeReadBatch *batch.Batch
 	spillHashBuf        []byte
+	spillBuildSubBufs   []*batch.Batch
+	spillProbeSubBufs   []*batch.Batch
 }
 
 type HashJoin struct {
@@ -191,7 +197,6 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.probeState = psNextBatch
 	ctr.lastIdx = 0
 	ctr.cleanupSpillFiles(proc)
-	ctr.nextBucketIdx = 0
 
 	if hashJoin.OpAnalyzer != nil {
 		hashJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
@@ -215,11 +220,11 @@ func (ctr *container) cleanupSpillFiles(proc *process.Process) {
 	if err != nil {
 		return
 	}
-	spillfs.Delete(proc.Ctx, ctr.spilledBuildBuckets...)
-	spillfs.Delete(proc.Ctx, ctr.spilledProbeBuckets...)
-	ctr.spilledBuildBuckets = nil
-	ctr.spilledProbeBuckets = nil
-	ctr.spilledBuildRowCnts = nil
+	for _, sb := range ctr.spillQueue {
+		spillfs.Delete(proc.Ctx, sb.buildFile)
+		spillfs.Delete(proc.Ctx, sb.probeFile)
+	}
+	ctr.spillQueue = nil
 }
 
 func (ctr *container) resetNonEqCondExecutor() {
@@ -256,6 +261,12 @@ func (ctr *container) cleanBucketBatches(proc *process.Process) {
 	if ctr.probeBucketReader != nil {
 		ctr.probeBucketReader.close()
 		ctr.probeBucketReader = nil
+		if ctr.probeBucketFileName != "" {
+			if spillfs, err := proc.GetSpillFileService(); err == nil {
+				spillfs.Delete(proc.Ctx, ctr.probeBucketFileName)
+			}
+			ctr.probeBucketFileName = ""
+		}
 	}
 	if ctr.spillBuildReadBatch != nil {
 		ctr.spillBuildReadBatch.Clean(proc.Mp())
@@ -265,6 +276,7 @@ func (ctr *container) cleanBucketBatches(proc *process.Process) {
 		ctr.spillProbeReadBatch.Clean(proc.Mp())
 		ctr.spillProbeReadBatch = nil
 	}
+	ctr.cleanSpillBufferPool(proc)
 }
 
 func (ctr *container) cleanHashMap() {

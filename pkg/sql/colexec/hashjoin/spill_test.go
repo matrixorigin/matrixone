@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -34,14 +35,14 @@ func TestComputeXXHash(t *testing.T) {
 	var buf []byte
 
 	t.Run("empty", func(t *testing.T) {
-		err := computeXXHash(nil, nil, &buf)
+		err := computeXXHash(nil, nil, &buf, 0)
 		require.NoError(t, err)
 	})
 
 	t.Run("single_int32", func(t *testing.T) {
 		vec := testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, mp)
 		hashValues := make([]uint64, 3)
-		err := computeXXHash([]*vector.Vector{vec}, hashValues, &buf)
+		err := computeXXHash([]*vector.Vector{vec}, hashValues, &buf, 0)
 		require.NoError(t, err)
 		require.NotEqual(t, uint64(0), hashValues[0])
 		require.NotEqual(t, hashValues[0], hashValues[1])
@@ -52,7 +53,7 @@ func TestComputeXXHash(t *testing.T) {
 		vec1 := testutil.MakeInt32Vector([]int32{1, 2}, nil, mp)
 		vec2 := testutil.MakeVarcharVector([]string{"a", "b"}, nil, mp)
 		hashValues := make([]uint64, 2)
-		err := computeXXHash([]*vector.Vector{vec1, vec2}, hashValues, &buf)
+		err := computeXXHash([]*vector.Vector{vec1, vec2}, hashValues, &buf, 0)
 		require.NoError(t, err)
 		require.NotEqual(t, hashValues[0], hashValues[1])
 	})
@@ -61,7 +62,7 @@ func TestComputeXXHash(t *testing.T) {
 		vec := testutil.MakeInt32Vector([]int32{5}, nil, mp)
 		vec.SetClass(vector.CONSTANT)
 		hashValues := make([]uint64, 3)
-		err := computeXXHash([]*vector.Vector{vec}, hashValues, &buf)
+		err := computeXXHash([]*vector.Vector{vec}, hashValues, &buf, 0)
 		require.NoError(t, err)
 		require.Equal(t, hashValues[0], hashValues[1])
 		require.Equal(t, hashValues[1], hashValues[2])
@@ -107,7 +108,7 @@ func TestCreateProbeSpillFiles(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	buckets, files, err := createProbeSpillFiles(proc)
+	buckets, files, err := createRootProbeSpillBucketFiles(proc)
 	require.NoError(t, err)
 	require.Equal(t, spillNumBuckets, len(buckets))
 	require.Equal(t, spillNumBuckets, len(files))
@@ -162,7 +163,7 @@ func TestHashDistribution(t *testing.T) {
 		11, 12, 13, 14, 15, 16, 17, 18, 19, 20}, nil, mp)
 
 	hashValues := make([]uint64, 20)
-	err := computeXXHash([]*vector.Vector{vec}, hashValues, &buf)
+	err := computeXXHash([]*vector.Vector{vec}, hashValues, &buf, 0)
 	require.NoError(t, err)
 
 	bucketCounts := make([]int, spillNumBuckets)
@@ -210,18 +211,15 @@ func TestEmptyBucketHandling(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	analyzer := process.NewAnalyzer(0, false, false, "test")
-	// Test with spilled buckets but already processed all
+	// Test with empty spill queue - should return nil immediately
 	hashJoin := &HashJoin{
 		ctr: container{
-			spilledBuildBuckets: []string{"bucket1"},
-			spilledProbeBuckets: []string{"bucket1"},
-			nextBucketIdx:       1, // Already past the only bucket
-			state:               Probe,
+			spillQueue: []spillBucket{},
+			state:      Probe,
 		},
 	}
 
-	result, err := hashJoin.getInputBatch(proc, analyzer)
+	result, err := hashJoin.getSpilledInputBatch(proc, process.NewAnalyzer(0, false, false, "test"))
 	require.NoError(t, err)
 	require.Nil(t, result.Batch)
 }
@@ -246,7 +244,7 @@ func TestMultipleDataTypes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			hashValues := make([]uint64, 3)
-			err := computeXXHash([]*vector.Vector{tt.vec}, hashValues, &buf)
+			err := computeXXHash([]*vector.Vector{tt.vec}, hashValues, &buf, 0)
 			require.NoError(t, err)
 			require.NotEqual(t, uint64(0), hashValues[0])
 			require.NotEqual(t, hashValues[0], hashValues[1])
@@ -320,7 +318,7 @@ func TestNullValues(t *testing.T) {
 	var buf []byte
 	vec := testutil.MakeInt32Vector([]int32{1, 2, 3}, []uint64{1}, mp)
 	hashValues := make([]uint64, 3)
-	err := computeXXHash([]*vector.Vector{vec}, hashValues, &buf)
+	err := computeXXHash([]*vector.Vector{vec}, hashValues, &buf, 0)
 	require.NoError(t, err)
 	require.NotEqual(t, uint64(0), hashValues[0])
 	require.NotEqual(t, uint64(0), hashValues[2])
@@ -406,7 +404,7 @@ func TestAppendProbeBatchToSpillFiles(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	buckets, files, err := createProbeSpillFiles(proc)
+	buckets, files, err := createRootProbeSpillBucketFiles(proc)
 	require.NoError(t, err)
 	defer func() {
 		spillfs, _ := proc.GetSpillFileService()
@@ -429,7 +427,7 @@ func TestAppendProbeBatchToSpillFiles(t *testing.T) {
 		eqCondVecs: []*vector.Vector{bat.Vecs[0]},
 	}
 
-	err = ctr.appendProbeBatchToSpillFiles(proc, bat, files, buffers, analyzer)
+	err = ctr.appendProbeBatchToSpillFiles(proc, bat, files, buffers, analyzer, 0)
 	require.NoError(t, err)
 
 	// Flush remaining buffers
@@ -470,7 +468,7 @@ func TestAppendProbeBatchMultipleFlushes(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	buckets, files, err := createProbeSpillFiles(proc)
+	buckets, files, err := createRootProbeSpillBucketFiles(proc)
 	require.NoError(t, err)
 	defer func() {
 		spillfs, _ := proc.GetSpillFileService()
@@ -498,7 +496,7 @@ func TestAppendProbeBatchMultipleFlushes(t *testing.T) {
 		eqCondVecs: []*vector.Vector{bat.Vecs[0]},
 	}
 
-	err = ctr.appendProbeBatchToSpillFiles(proc, bat, files, buffers, analyzer)
+	err = ctr.appendProbeBatchToSpillFiles(proc, bat, files, buffers, analyzer, 0)
 	require.NoError(t, err)
 
 	// Flush remaining
@@ -514,7 +512,7 @@ func TestAppendProbeBatchEmptyBatch(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	buckets, files, err := createProbeSpillFiles(proc)
+	buckets, files, err := createRootProbeSpillBucketFiles(proc)
 	require.NoError(t, err)
 	defer func() {
 		spillfs, _ := proc.GetSpillFileService()
@@ -535,7 +533,7 @@ func TestAppendProbeBatchEmptyBatch(t *testing.T) {
 		eqCondVecs: []*vector.Vector{bat.Vecs[0]},
 	}
 
-	err = ctr.appendProbeBatchToSpillFiles(proc, bat, files, buffers, analyzer)
+	err = ctr.appendProbeBatchToSpillFiles(proc, bat, files, buffers, analyzer, 0)
 	require.NoError(t, err)
 }
 
@@ -641,7 +639,7 @@ func TestMultiColumnHash(t *testing.T) {
 	vec2 := testutil.MakeVarcharVector([]string{"a", "b", "a"}, nil, mp)
 
 	hashValues := make([]uint64, 3)
-	err := computeXXHash([]*vector.Vector{vec1, vec2}, hashValues, &buf)
+	err := computeXXHash([]*vector.Vector{vec1, vec2}, hashValues, &buf, 0)
 	require.NoError(t, err)
 
 	// Same key values should produce same hash
@@ -655,7 +653,7 @@ func TestHashWithNulls(t *testing.T) {
 
 	vec := testutil.MakeInt32Vector([]int32{1, 2, 3, 4}, []uint64{0, 1}, mp) // nulls at index 1 and 3
 	hashValues := make([]uint64, 4)
-	err := computeXXHash([]*vector.Vector{vec}, hashValues, &buf)
+	err := computeXXHash([]*vector.Vector{vec}, hashValues, &buf, 0)
 	require.NoError(t, err)
 
 	// All hashes should be computed
@@ -690,7 +688,7 @@ func TestCreateProbeSpillFilesError(t *testing.T) {
 	defer proc.Free()
 
 	// Normal case should succeed
-	buckets, files, err := createProbeSpillFiles(proc)
+	buckets, files, err := createRootProbeSpillBucketFiles(proc)
 	require.NoError(t, err)
 	require.Equal(t, spillNumBuckets, len(buckets))
 	require.Equal(t, spillNumBuckets, len(files))
@@ -742,13 +740,13 @@ func TestHashBufferReuse(t *testing.T) {
 	hashValues := make([]uint64, 3)
 
 	// First call
-	err := computeXXHash([]*vector.Vector{vec}, hashValues, &buf)
+	err := computeXXHash([]*vector.Vector{vec}, hashValues, &buf, 0)
 	require.NoError(t, err)
 	firstCap := cap(buf)
 
 	// Second call with larger data
 	vec2 := testutil.MakeVarcharVector([]string{"long_string_value", "another_long_value", "third_value"}, nil, mp)
-	err = computeXXHash([]*vector.Vector{vec2}, hashValues, &buf)
+	err = computeXXHash([]*vector.Vector{vec2}, hashValues, &buf, 0)
 	require.NoError(t, err)
 
 	// Buffer should grow if needed
@@ -763,7 +761,7 @@ func TestConstVectorHash(t *testing.T) {
 	vec.SetClass(vector.CONSTANT)
 
 	hashValues := make([]uint64, 10)
-	err := computeXXHash([]*vector.Vector{vec}, hashValues, &buf)
+	err := computeXXHash([]*vector.Vector{vec}, hashValues, &buf, 0)
 	require.NoError(t, err)
 
 	// All values should be the same for const vector
@@ -776,7 +774,7 @@ func TestAppendProbeBatchSkipEmptyBuckets(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	buckets, files, err := createProbeSpillFiles(proc)
+	buckets, files, err := createRootProbeSpillBucketFiles(proc)
 	require.NoError(t, err)
 	defer func() {
 		spillfs, _ := proc.GetSpillFileService()
@@ -798,7 +796,7 @@ func TestAppendProbeBatchSkipEmptyBuckets(t *testing.T) {
 		eqCondVecs: []*vector.Vector{bat.Vecs[0]},
 	}
 
-	err = ctr.appendProbeBatchToSpillFiles(proc, bat, files, buffers, analyzer)
+	err = ctr.appendProbeBatchToSpillFiles(proc, bat, files, buffers, analyzer, 0)
 	require.NoError(t, err)
 
 	// Most buffers should be nil
@@ -811,27 +809,17 @@ func TestAppendProbeBatchSkipEmptyBuckets(t *testing.T) {
 	require.Greater(t, nilCount, spillNumBuckets-5)
 }
 
-func TestRebuildHashmapForBucket(t *testing.T) {
-	t.Skip("Requires complex expression setup - covered by integration tests")
-}
-
-func TestRebuildHashmapEmptyBucket(t *testing.T) {
-	t.Skip("Requires complex expression setup - covered by integration tests")
-}
-
 func TestGetSpilledInputBatchNoBuckets(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	hashJoin := &HashJoin{
 		ctr: container{
-			spilledBuildBuckets: []string{},
-			spilledProbeBuckets: []string{},
-			nextBucketIdx:       0,
+			spillQueue: []spillBucket{},
 		},
 	}
 
-	result, err := hashJoin.getSpilledInputBatch(proc)
+	result, err := hashJoin.getSpilledInputBatch(proc, process.NewAnalyzer(0, false, false, "test"))
 	require.NoError(t, err)
 	require.Nil(t, result.Batch)
 }
@@ -842,15 +830,53 @@ func TestGetSpilledInputBatchAllProcessed(t *testing.T) {
 
 	hashJoin := &HashJoin{
 		ctr: container{
-			spilledBuildBuckets: []string{"bucket1"},
-			spilledProbeBuckets: []string{"bucket1"},
-			nextBucketIdx:       1, // Already processed
+			spillQueue: []spillBucket{}, // empty = all processed
 		},
 	}
 
-	result, err := hashJoin.getSpilledInputBatch(proc)
+	result, err := hashJoin.getSpilledInputBatch(proc, process.NewAnalyzer(0, false, false, "test"))
 	require.NoError(t, err)
 	require.Nil(t, result.Batch)
+}
+
+func TestGetInputBatchReadsCurrentSpillReaderWhenQueueEmpty(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+
+	const bucketName = "test_get_input_batch_spill_reader"
+	file, err := spillfs.CreateFile(context.Background(), bucketName)
+	require.NoError(t, err)
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+
+	ctr := &container{}
+	writeBat := batch.NewWithSize(1)
+	writeBat.Vecs[0] = testutil.MakeInt32Vector([]int32{42}, nil, proc.Mp())
+	writeBat.SetRowCount(1)
+	_, err = ctr.flushBucketBuffer(proc, writeBat, file, analyzer)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+
+	reader, err := newSpillBucketReader(proc, bucketName)
+	require.NoError(t, err)
+
+	hashJoin := &HashJoin{
+		ctr: container{
+			probeBucketReader:   reader,
+			probeBucketFileName: bucketName,
+		},
+	}
+	hashJoin.AppendChild(colexec.NewMockOperator())
+
+	result, err := hashJoin.getInputBatch(proc, analyzer)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, 1, result.Batch.RowCount())
+
+	hashJoin.ctr.cleanBucketBatches(proc)
 }
 
 func TestNewSpillBucketReaderError(t *testing.T) {
@@ -895,7 +921,7 @@ func TestAppendProbeBatchWithNulls(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	buckets, files, err := createProbeSpillFiles(proc)
+	buckets, files, err := createRootProbeSpillBucketFiles(proc)
 	require.NoError(t, err)
 	defer func() {
 		spillfs, _ := proc.GetSpillFileService()
@@ -917,7 +943,7 @@ func TestAppendProbeBatchWithNulls(t *testing.T) {
 		eqCondVecs: []*vector.Vector{bat.Vecs[0]},
 	}
 
-	err = ctr.appendProbeBatchToSpillFiles(proc, bat, files, buffers, analyzer)
+	err = ctr.appendProbeBatchToSpillFiles(proc, bat, files, buffers, analyzer, 0)
 	require.NoError(t, err)
 
 	// Flush remaining
@@ -985,7 +1011,7 @@ func TestCreateProbeSpillFilesPartialError(t *testing.T) {
 	defer proc.Free()
 
 	// Normal creation should work
-	buckets, files, err := createProbeSpillFiles(proc)
+	buckets, files, err := createRootProbeSpillBucketFiles(proc)
 	require.NoError(t, err)
 	require.Len(t, buckets, spillNumBuckets)
 	require.Len(t, files, spillNumBuckets)
@@ -1007,7 +1033,7 @@ func TestComputeXXHashVectorLengthMismatch(t *testing.T) {
 	vec2 := testutil.MakeInt32Vector([]int32{4, 5}, nil, mp)
 
 	hashValues := make([]uint64, 3)
-	err := computeXXHash([]*vector.Vector{vec1, vec2}, hashValues, &buf)
+	err := computeXXHash([]*vector.Vector{vec1, vec2}, hashValues, &buf, 0)
 	require.NoError(t, err)
 
 	// Should handle gracefully
@@ -1020,7 +1046,7 @@ func TestAppendProbeBatchLargeData(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	buckets, files, err := createProbeSpillFiles(proc)
+	buckets, files, err := createRootProbeSpillBucketFiles(proc)
 	require.NoError(t, err)
 	defer func() {
 		spillfs, _ := proc.GetSpillFileService()
@@ -1048,7 +1074,7 @@ func TestAppendProbeBatchLargeData(t *testing.T) {
 		eqCondVecs: []*vector.Vector{bat.Vecs[0]},
 	}
 
-	err = ctr.appendProbeBatchToSpillFiles(proc, bat, files, buffers, analyzer)
+	err = ctr.appendProbeBatchToSpillFiles(proc, bat, files, buffers, analyzer, 0)
 	require.NoError(t, err)
 
 	// Flush remaining
@@ -1114,7 +1140,7 @@ func TestAppendProbeBatchAllBuckets(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	buckets, files, err := createProbeSpillFiles(proc)
+	buckets, files, err := createRootProbeSpillBucketFiles(proc)
 	require.NoError(t, err)
 	defer func() {
 		spillfs, _ := proc.GetSpillFileService()
@@ -1142,7 +1168,7 @@ func TestAppendProbeBatchAllBuckets(t *testing.T) {
 		eqCondVecs: []*vector.Vector{bat.Vecs[0]},
 	}
 
-	err = ctr.appendProbeBatchToSpillFiles(proc, bat, files, buffers, analyzer)
+	err = ctr.appendProbeBatchToSpillFiles(proc, bat, files, buffers, analyzer, 0)
 	require.NoError(t, err)
 
 	// Flush all buffers
@@ -1235,7 +1261,7 @@ func TestHashValuesBufferGrowth(t *testing.T) {
 	// Start with small buffer
 	vec := testutil.MakeInt32Vector([]int32{1, 2}, nil, mp)
 	hashValues := make([]uint64, 2)
-	err := computeXXHash([]*vector.Vector{vec}, hashValues, &buf)
+	err := computeXXHash([]*vector.Vector{vec}, hashValues, &buf, 0)
 	require.NoError(t, err)
 
 	// Larger data should grow buffer
@@ -1245,7 +1271,7 @@ func TestHashValuesBufferGrowth(t *testing.T) {
 		"very_long_string_value_3",
 	}, nil, mp)
 	largeHashValues := make([]uint64, 3)
-	err = computeXXHash([]*vector.Vector{largeVec}, largeHashValues, &buf)
+	err = computeXXHash([]*vector.Vector{largeVec}, largeHashValues, &buf, 0)
 	require.NoError(t, err)
 
 	for _, h := range largeHashValues {

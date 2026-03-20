@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -34,7 +35,7 @@ import (
 type HashmapBuilder struct {
 	needDupVec         bool
 	InputBatchRowCount int
-	vecs               [][]*vector.Vector
+	curVecs            []*vector.Vector // evaluated key vecs for the current batch
 	IntHashMap         *hashmap.IntHashMap
 	StrHashMap         *hashmap.StrHashMap
 	Sels               message.GroupSels
@@ -54,7 +55,6 @@ type HashmapBuilder struct {
 	IgnoreRows *bitmap.Bitmap
 
 	delColIdx int32
-	delVecs   []*vector.Vector
 	DelRows   *bitmap.Bitmap
 }
 
@@ -67,11 +67,11 @@ func (hb *HashmapBuilder) GetSize() int64 {
 	return 0
 }
 
-func (hb *HashmapBuilder) GetJoinMap() *message.JoinMap {
+func (hb *HashmapBuilder) GetJoinMap(mp *mpool.MPool) *message.JoinMap {
 	if hb.InputBatchRowCount == 0 {
 		return nil
 	}
-	return message.NewJoinMap(hb.Sels, hb.IntHashMap, hb.StrHashMap, hb.DelRows, hb.Batches.Buf, nil)
+	return message.NewJoinMap(hb.Sels, hb.IntHashMap, hb.StrHashMap, hb.DelRows, hb.Batches.Buf, mp)
 }
 
 func (hb *HashmapBuilder) GetGroupCount() uint64 {
@@ -87,7 +87,6 @@ func (hb *HashmapBuilder) Prepare(keyCols []*plan.Expr, delColIdx int32, proc *p
 	var err error
 	if len(hb.executors) == 0 {
 		hb.needDupVec = false
-		hb.vecs = make([][]*vector.Vector, 0)
 		hb.executors = make([]colexec.ExpressionExecutor, len(keyCols))
 		hb.keyWidth = 0
 		hb.InputBatchRowCount = 0
@@ -125,21 +124,20 @@ func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool)
 	}
 
 	if hb.needDupVec {
-		for i := range hb.vecs {
-			if hb.vecs[i] != nil {
-				for j := range hb.vecs[i] {
-					if hb.vecs[i][j] != nil {
-						hb.vecs[i][j].Free(proc.Mp())
-					}
-				}
+		for i := range hb.curVecs {
+			if hb.curVecs[i] != nil {
+				hb.curVecs[i].Free(proc.Mp())
 			}
 		}
 	}
+	for i := range hb.curVecs {
+		hb.curVecs[i] = nil
+	}
+	hb.curVecs = nil
 	hb.InputBatchRowCount = 0
 	hb.Batches.Reset()
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
-	hb.vecs = nil
 	for i := range hb.UniqueJoinKeys {
 		if hb.UniqueJoinKeys[i] != nil {
 			hb.UniqueJoinKeys[i].Free(proc.Mp())
@@ -162,7 +160,7 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
 	hb.FreeExecutors()
-	hb.vecs = nil
+	hb.curVecs = nil
 	for i := range hb.UniqueJoinKeys {
 		if hb.UniqueJoinKeys[i] != nil {
 			hb.UniqueJoinKeys[i].Free(proc.Mp())
@@ -192,53 +190,34 @@ func (hb *HashmapBuilder) FreeHashMapAndBatches(proc *process.Process) {
 	hb.Batches.Clean(proc.Mp())
 }
 
-// cleanupPartiallyCreatedVecs frees all vectors in hb.vecs that were successfully created.
-// This is used when an error occurs during evalJoinCondition to prevent memory leaks
-// and nil pointer dereferences in Reset.
-func (hb *HashmapBuilder) cleanupPartiallyCreatedVecs(proc *process.Process) {
-	for i := 0; i < len(hb.vecs); i++ {
-		if hb.vecs[i] != nil {
-			for j := 0; j < len(hb.vecs[i]); j++ {
-				if hb.vecs[i][j] != nil {
-					hb.vecs[i][j].Free(proc.Mp())
-				}
+// evalBatch evaluates join key expressions for one batch, storing results in hb.curVecs.
+// If needDupVec, the previous curVecs are freed first.
+func (hb *HashmapBuilder) evalBatch(batchIdx int, proc *process.Process) error {
+	bat := hb.Batches.Buf[batchIdx]
+	if hb.curVecs == nil {
+		hb.curVecs = make([]*vector.Vector, len(hb.executors))
+	} else if hb.needDupVec {
+		for i := range hb.curVecs {
+			if hb.curVecs[i] != nil {
+				hb.curVecs[i].Free(proc.Mp())
+				hb.curVecs[i] = nil
 			}
 		}
 	}
-	hb.vecs = nil
-}
-
-func (hb *HashmapBuilder) evalJoinCondition(proc *process.Process) error {
-	for idx1 := range hb.Batches.Buf {
-		tmpVes := make([]*vector.Vector, len(hb.executors))
-		hb.vecs = append(hb.vecs, tmpVes)
-		for idx2 := range hb.executors {
-			vec, err := hb.executors[idx2].Eval(proc, []*batch.Batch{hb.Batches.Buf[idx1]}, nil)
+	for idx2 := range hb.executors {
+		vec, err := hb.executors[idx2].Eval(proc, []*batch.Batch{bat}, nil)
+		if err != nil {
+			return err
+		}
+		if hb.needDupVec {
+			hb.curVecs[idx2], err = vec.Dup(proc.Mp())
 			if err != nil {
-				// Clean up partially created vecs to prevent nil pointer issues in Reset
-				hb.cleanupPartiallyCreatedVecs(proc)
 				return err
 			}
-			if hb.needDupVec {
-				hb.vecs[idx1][idx2], err = vec.Dup(proc.Mp())
-				if err != nil {
-					// Clean up partially created vecs to prevent nil pointer issues in Reset
-					hb.cleanupPartiallyCreatedVecs(proc)
-					return err
-				}
-			} else {
-				hb.vecs[idx1][idx2] = vec
-			}
+		} else {
+			hb.curVecs[idx2] = vec
 		}
 	}
-
-	if hb.delColIdx != -1 {
-		hb.delVecs = make([]*vector.Vector, len(hb.Batches.Buf))
-		for i := range hb.Batches.Buf {
-			hb.delVecs[i] = hb.Batches.Buf[i].Vecs[hb.delColIdx]
-		}
-	}
-
 	return nil
 }
 
@@ -252,13 +231,19 @@ func (hb *HashmapBuilder) ClearHashmap() {
 		hb.StrHashMap.Free()
 		hb.StrHashMap = nil
 	}
-	hb.vecs = nil
+	hb.curVecs = nil
 }
 
-func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, needUniqueVec bool, proc *process.Process) error {
+func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, needUniqueVec bool, proc *process.Process) (retErr error) {
 	if hb.InputBatchRowCount == 0 {
 		return nil
 	}
+	defer func() {
+		if retErr != nil {
+			hb.cachedIntIterator = nil
+			hb.cachedStrIterator = nil
+		}
+	}()
 
 	// Defensive: cached iterators must not hold owners before reuse to avoid pinning old hashmaps.
 	if hb.cachedIntIterator != nil {
@@ -269,10 +254,6 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 	}
 
 	var err error
-	if err = hb.evalJoinCondition(proc); err != nil {
-		return err
-	}
-
 	var itr hashmap.Iterator
 	if hb.keyWidth <= 8 {
 		if hb.IntHashMap, err = hashmap.NewIntHashMap(false, proc.Mp()); err != nil {
@@ -327,6 +308,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 	var (
 		vOld        uint64
 		cardinality uint64
+		lastBatch   = -1
 	)
 
 	for i := 0; i < hb.InputBatchRowCount; i += hashmap.UnitLimit {
@@ -366,7 +348,13 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 
 		vecIdx1 := i / colexec.DefaultBatchSize
 		vecIdx2 := i % colexec.DefaultBatchSize
-		vals, zvals, err := itr.Insert(vecIdx2, n, hb.vecs[vecIdx1])
+		if vecIdx1 != lastBatch {
+			if err = hb.evalBatch(vecIdx1, proc); err != nil {
+				return err
+			}
+			lastBatch = vecIdx1
+		}
+		vals, zvals, err := itr.Insert(vecIdx2, n, hb.curVecs)
 		if err != nil {
 			return err
 		}
@@ -387,8 +375,8 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 						var rowStr string
 						if len(hb.DedupColTypes) == 1 {
 							if hb.DedupColName == catalog.IndexTableIndexColName {
-								if hb.vecs[vecIdx1][0].GetType().Oid == types.T_varchar {
-									t, _, schema, err := types.DecodeTuple(hb.vecs[vecIdx1][0].GetBytesAt(vecIdx2 + k))
+								if hb.curVecs[0].GetType().Oid == types.T_varchar {
+									t, _, schema, err := types.DecodeTuple(hb.curVecs[0].GetBytesAt(vecIdx2 + k))
 									if err == nil && len(schema) > 1 {
 										rowStr = t.ErrString(make([]int32, len(schema)))
 									}
@@ -396,10 +384,10 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 							}
 
 							if len(rowStr) == 0 {
-								rowStr = hb.vecs[vecIdx1][0].RowToString(vecIdx2 + k)
+								rowStr = hb.curVecs[0].RowToString(vecIdx2 + k)
 							}
 						} else {
-							rowItems, err := types.StringifyTuple(hb.vecs[vecIdx1][0].GetBytesAt(vecIdx2+k), hb.DedupColTypes)
+							rowItems, err := types.StringifyTuple(hb.curVecs[0].GetBytesAt(vecIdx2+k), hb.DedupColTypes)
 							if err != nil {
 								return err
 							}
@@ -420,13 +408,13 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 		if needUniqueVec {
 			if len(hb.UniqueJoinKeys) == 0 {
 				hb.UniqueJoinKeys = make([]*vector.Vector, len(hb.executors))
-				for j, vec := range hb.vecs[vecIdx1] {
+				for j, vec := range hb.curVecs {
 					hb.UniqueJoinKeys[j] = vector.NewOffHeapVecWithType(*vec.GetType())
 				}
 			}
 
 			if hashOnPK {
-				for j, vec := range hb.vecs[vecIdx1] {
+				for j, vec := range hb.curVecs {
 					err = hb.UniqueJoinKeys[j].UnionBatch(vec, int64(vecIdx2), n, nil, proc.Mp())
 					if err != nil {
 						return err
@@ -445,7 +433,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 				}
 				hb.uniqueSels = newSels
 
-				for j, vec := range hb.vecs[vecIdx1] {
+				for j, vec := range hb.curVecs {
 					err = hb.UniqueJoinKeys[j].Union(vec, newSels, proc.Mp())
 					if err != nil {
 						return err
@@ -471,7 +459,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 
 			vecIdx1 := i / colexec.DefaultBatchSize
 			vecIdx2 := i % colexec.DefaultBatchSize
-			tmpVecs[0] = hb.delVecs[vecIdx1]
+			tmpVecs[0] = hb.Batches.Buf[vecIdx1].Vecs[hb.delColIdx]
 			vals, zvals := itr.Find(vecIdx2, n, tmpVecs)
 
 			for k, v := range vals[:n] {
