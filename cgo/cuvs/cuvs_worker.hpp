@@ -300,30 +300,39 @@ public:
     template <typename ResT, typename ReqT>
     std::future<ResT> submit_batched(const std::string& key, ReqT req, 
                                      std::function<void(raft_handle&, const std::vector<std::any>&, const std::vector<std::function<void(std::any)>>&)> exec_fn) {
-        std::lock_guard<std::mutex> lock(batch_mutex_);
-        auto& batch = batches_[key];
-        if (!batch) {
-            batch = std::make_shared<batch_t>();
-            batch->exec_fn = exec_fn;
-            batch->timer = std::thread([this, key, batch] {
-                std::this_thread::sleep_for(std::chrono::microseconds(500));
-                this->flush_batch(key);
+        bool should_flush = false;
+        std::future<ResT> future;
+        
+        {
+            std::lock_guard<std::mutex> lock(batch_mutex_);
+            auto& batch = batches_[key];
+            if (!batch) {
+                batch = std::make_shared<batch_t>();
+                batch->exec_fn = exec_fn;
+                batch->timer = std::thread([this, key, batch] {
+                    std::this_thread::sleep_for(std::chrono::microseconds(500));
+                    this->flush_batch(key);
+                });
+                batch->timer.detach();
+            }
+
+            auto promise = std::make_shared<std::promise<ResT>>();
+            future = promise->get_future();
+            batch->reqs.push_back(req);
+            batch->setters.push_back([promise](std::any res) {
+                if (res.type() == typeid(std::exception_ptr)) {
+                    promise->set_exception(std::any_cast<std::exception_ptr>(res));
+                } else {
+                    promise->set_value(std::any_cast<ResT>(res));
+                }
             });
-            batch->timer.detach();
+
+            if (batch->reqs.size() >= 16) {
+                should_flush = true;
+            }
         }
 
-        auto promise = std::make_shared<std::promise<ResT>>();
-        auto future = promise->get_future();
-        batch->reqs.push_back(req);
-        batch->setters.push_back([promise](std::any res) {
-            if (res.type() == typeid(std::exception_ptr)) {
-                promise->set_exception(std::any_cast<std::exception_ptr>(res));
-            } else {
-                promise->set_value(std::any_cast<ResT>(res));
-            }
-        });
-
-        if (batch->reqs.size() >= 16) {
+        if (should_flush) {
             this->flush_batch(key);
         }
 

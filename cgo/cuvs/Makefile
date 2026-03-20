@@ -16,15 +16,15 @@ NVCC := /usr/local/cuda/bin/nvcc
 CC   := gcc
 CXX  := g++
 
-# Added UCX, UCXX, NCCL libraries
+# Libraries
 LIBS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64/cudart -L/home/ubuntu/miniconda/envs/go/lib -lcuvs -lcuvs_c -lnccl -lucxx -lucp -luct -lucs -lucm -ldl -lrmm -lrapids_logger -Xlinker -lpthread -Xlinker -lm
 
 INCLUDES := -I. -I/usr/local/cuda/include -I/home/ubuntu/miniconda/envs/go/include -I/home/ubuntu/miniconda/envs/go/include/rapids -I/home/ubuntu/miniconda/envs/go/include/raft -I/home/ubuntu/miniconda/envs/go/include/cuvs
 
-# NVCC_FLAGS are for compilation
-NVCC_FLAGS := -std=c++17 -x cu -Xcompiler "-Wall -Wextra -fPIC" --extended-lambda --expt-relaxed-constexpr $(INCLUDES) -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE -DRAFT_SYSTEM_LITTLE_ENDIAN=1
+# NVCC_FLAGS are for compilation only. -x cu tells nvcc to treat .cpp as .cu
+NVCC_FLAGS := -std=c++17 -x cu -Xcompiler "-Wall -Wextra -fPIC" --extended-lambda --expt-relaxed-constexpr $(INCLUDES) -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE -DRAFT_SYSTEM_LITTLE_ENDIAN=1 -gencode arch=compute_86,code=sm_86
 
-# LDFLAGS for linking
+# LDFLAGS for linking only. DO NOT include -x cu here.
 LDFLAGS := -std=c++17 -Xcompiler "-Wall -Wextra -fPIC"
 
 # Source files
@@ -36,9 +36,11 @@ TEST_SRCS := test/main_test.cu test/brute_force_test.cu test/ivf_flat_test.cu te
 OBJS := $(C_SRCS:.cpp=.o) $(CPP_SRCS:.cpp=.o)
 TEST_OBJS := $(patsubst test/%.cu,obj/test/%.o,$(TEST_SRCS))
 
-.PHONY: all clean debug
+.PHONY: all clean debug test
 
 all: libmocuvs.so
+
+test: test_cuvs_worker benchmark_cuvs
 
 debug: NVCC_FLAGS += -O0 -g -lineinfo
 debug: LDFLAGS += -g
@@ -60,7 +62,11 @@ test_cuvs_worker: $(TEST_OBJS) $(OBJS)
 	@echo "Linking $@"
 	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
 
+benchmark_cuvs: obj/test/benchmark_cuvs.o $(OBJS)
+	@echo "Linking $@"
+	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
+
 clean:
 	@echo "Cleaning up..."
-	rm -f libmocuvs.so *.o test_cuvs_worker
+	rm -f libmocuvs.so *.o test_cuvs_worker benchmark_cuvs
 	rm -rf obj

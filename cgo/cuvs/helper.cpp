@@ -39,25 +39,21 @@ void init_mg_comms(raft::resources& mg_res, const std::vector<int>& devices) {
     int world_size = static_cast<int>(devices.size());
     if (world_size <= 1) return;
 
-    ncclUniqueId id;
-    ncclGetUniqueId(&id);
-
-    std::vector<std::thread> inits;
     std::vector<ncclComm_t> comms(world_size);
 
-    for (int i = 0; i < world_size; ++i) {
-        inits.emplace_back([&, i, world_size, id]() {
-            cudaSetDevice(devices[i]);
-            ncclCommInitRank(&comms[i], world_size, id, i);
-            
-            raft::resources& rank_res = const_cast<raft::resources&>(
-                raft::resource::get_device_resources_for_rank(mg_res, i));
-            
-            raft::comms::build_comms_nccl_only(&rank_res, comms[i], world_size, i);
-        });
+    // ncclCommInitAll is the most robust way to initialize multiple GPUs 
+    // from a single thread in a single process.
+    ncclResult_t res = ncclCommInitAll(comms.data(), world_size, devices.data());
+    if (res != ncclSuccess) {
+        throw std::runtime_error("ncclCommInitAll failed with error code " + std::to_string(res));
     }
 
-    for (auto& t : inits) t.join();
+    for (int i = 0; i < world_size; ++i) {
+        raft::resources& rank_res = const_cast<raft::resources&>(
+            raft::resource::get_device_resources_for_rank(mg_res, i));
+        
+        raft::comms::build_comms_nccl_only(&rank_res, comms[i], world_size, i);
+    }
 }
 
 void inject_nccl_comm(raft::resources* res, void* nccl_comm, int size, int rank) {
