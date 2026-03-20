@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "memoria": {
+      "_version": "0.2.1",
+      "args": [
+        "mcp",
+        "--db-url",
+        "mysql://root:111@localhost:6001/memoria_dev",
+        "--user",
+        "default"
+      ],
+      "command": "/home/xupeng/github/Memoria/memoria/target/release/memoria",
+      "env": {
+        "EMBEDDING_API_KEY": "sk-etpoezborerprqydjtzcppfikkanqfcfezgcttttujnvyfkd",
+        "EMBEDDING_BASE_URL": "https://api.siliconflow.cn/v1",
+        "EMBEDDING_DIM": "1024",
+        "EMBEDDING_MODEL": "BAAI/bge-m3",
+        "EMBEDDING_PROVIDER": "openai",
+        "MEMORIA_GOVERNANCE_ENABLED": "",
+        "MEMORIA_GOVERNANCE_PLUGIN_BINDING": "default",
+        "_README": "EMBEDDING_*: required for semantic search. Use 'openai' provider with any OpenAI-compatible API (SiliconFlow, Ollama, etc). MEMORIA_GOVERNANCE_PLUGIN_BINDING selects the shared repository binding resolved at startup."
+      }
+    }
+  }
+}
