@@ -146,6 +146,7 @@ WHERE x.rn = 2;
 
 	target := findWindowNodeWithFilter(t, query, "ROW_NUMBER()")
 	require.NotNil(t, target)
+	require.Equal(t, int32(1), target.WindowIdx)
 
 	filterFn := target.FilterList[0].GetF()
 	require.NotNil(t, filterFn)
@@ -153,15 +154,9 @@ WHERE x.rn = 2;
 	require.NotNil(t, filterCol)
 	require.Contains(t, filterCol.Name, "ROW_NUMBER()")
 
-	if target.WindowIdx == 0 {
-		require.NotEmpty(t, target.Children)
-		child := query.Nodes[target.Children[0]]
-		require.Equal(t, int32(len(child.ProjectList)), filterCol.ColPos)
-	} else {
-		projectCol := findChildProjectedColByName(t, query, target, "ROW_NUMBER()")
-		require.NotNil(t, projectCol)
-		require.Equal(t, projectCol.ColPos, filterCol.ColPos)
-	}
+	projectCol := findChildProjectedColByName(t, query, target, "ROW_NUMBER()")
+	require.NotNil(t, projectCol)
+	require.Equal(t, projectCol.ColPos, filterCol.ColPos)
 }
 
 // Regression coverage for issue #23882.
