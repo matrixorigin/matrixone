@@ -202,6 +202,9 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 		case defines.MYSQL_TYPE_YEAR:
 			return plan.Type{Id: int32(types.T_year), Width: 4}, nil
 		case defines.MYSQL_TYPE_DECIMAL:
+			if n.InternalType.DisplayWith > 38 {
+				return plan.Type{Id: int32(types.T_decimal256), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
+			}
 			if n.InternalType.DisplayWith > 16 {
 				return plan.Type{Id: int32(types.T_decimal128), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
 			}

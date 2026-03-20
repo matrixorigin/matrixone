@@ -650,6 +650,16 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
+				overloadId: 100,
+				args:       []types.T{types.T_decimal256, types.T_decimal256},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Decimal256]().operatorIn
+				},
+			},
+			{
 				overloadId: 12,
 				args:       []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
@@ -1188,6 +1198,16 @@ var supportedOperators = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpOperatorFixedIn[types.Decimal128]().operatorNotIn
+				},
+			},
+			{
+				overloadId: 100,
+				args:       []types.T{types.T_decimal256, types.T_decimal256},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Decimal256]().operatorNotIn
 				},
 			},
 			{
@@ -2458,6 +2478,16 @@ var supportedOperators = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return CoalesceGeneral[types.Decimal128]
+				},
+			},
+			{
+				overloadId: 100,
+				args:       []types.T{types.T_decimal256},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceGeneral[types.Decimal256]
 				},
 			},
 			{

@@ -1685,6 +1685,11 @@ func adjustBytes(bs []byte) {
 }
 
 func UpdateZM(zm ZM, v []byte) {
+	if zm.GetType() == types.T_decimal256 {
+		// Decimal256 values exceed the fixed raw byte budget of the current ZM layout.
+		// Keep the type usable by skipping ZM maintenance instead of panicking in flush.
+		return
+	}
 	if !zm.IsInited() {
 		if zm.IsArray() {
 			// If the zm is of type ARRAY, we don't init it.
@@ -1722,6 +1727,9 @@ func UpdateZMAny(zm ZM, v any) {
 }
 
 func BatchUpdateZM(zm ZM, vec *vector.Vector) (err error) {
+	if vec.GetType().Oid == types.T_decimal256 {
+		return nil
+	}
 	if ok, minv, maxv := vec.GetMinMaxValue(); ok {
 		UpdateZM(zm, minv)
 		UpdateZM(zm, maxv)

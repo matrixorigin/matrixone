@@ -18,7 +18,10 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"math/big"
 	"math/bits"
+	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -1461,6 +1464,16 @@ func Decimal128FromFloat64(x float64, width, scale int32) (y Decimal128, err err
 	return
 }
 
+func Decimal256FromFloat64(x float64, width, scale int32) (y Decimal256, err error) {
+	if math.IsInf(x, 0) || math.IsNaN(x) {
+		return Decimal256{}, moerr.NewInvalidInputNoCtx("Can't convert Float64 To Decimal256, Float64 is Inf or NaN")
+	}
+	if width > 76 || width < 1 || scale > width || scale < 0 {
+		return Decimal256{}, moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal256: %f(%d,%d)", x, width, scale)
+	}
+	return ParseDecimal256(strconv.FormatFloat(x, 'g', -1, 64), width, scale)
+}
+
 func Decimal128FromInt64(x int64) Decimal128 {
 	if x >= 0 {
 		return Decimal128{uint64(x), 0}
@@ -1836,6 +1849,144 @@ func Parse128(x string) (y Decimal128, scale int32, err error) {
 	return
 }
 
+func Parse256(x string) (y Decimal256, scale int32, err error) {
+	if x == "" {
+		return Decimal256{}, 0, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal256")
+	}
+	var z Decimal256
+	width := 0
+	t := false
+	scale = -1
+	i := 0
+	flag := false
+	floatflag := false
+	scalecount := int32(0)
+	scalesign := false
+	signx := false
+	if x[0] == '-' {
+		i++
+		signx = true
+	}
+	for i < len(x) {
+		if x[i] == ' ' || x[i] == '+' {
+			i++
+			continue
+		}
+		if x[i] == 'x' && i != 0 && x[i-1] == '0' &&
+			y.B0_63 == 0 && y.B64_127 == 0 && y.B128_191 == 0 && y.B192_255 == 0 {
+			t = true
+			i++
+			continue
+		}
+		if t {
+			if (x[i] >= '0' && x[i] <= '9') || (x[i] >= 'a' && x[i] <= 'f') || (x[i] >= 'A' && x[i] <= 'F') {
+				xx := uint64(0)
+				if x[i] >= '0' && x[i] <= '9' {
+					xx = uint64(x[i] - '0')
+				} else if x[i] >= 'a' && x[i] <= 'f' {
+					xx = uint64(x[i]-'a') + 10
+				} else {
+					xx = uint64(x[i]-'A') + 10
+				}
+				flag = true
+				z, err = y.Mul256(Decimal256{16, 0, 0, 0})
+				if err == nil {
+					y, err = z.Add256(Decimal256{xx, 0, 0, 0})
+				}
+				if err != nil {
+					err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256.", x)
+					return
+				}
+			} else {
+				err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal256.", x)
+				return
+			}
+			i++
+			continue
+		}
+		if x[i] == '.' {
+			if scale == -1 {
+				scale = 0
+			} else {
+				err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal256.", x)
+				return
+			}
+		} else if x[i] < '0' || x[i] > '9' {
+			if x[i] == 'e' {
+				floatflag = true
+				i++
+				continue
+			}
+			if x[i] == '-' && floatflag {
+				scalesign = true
+				i++
+				continue
+			}
+			err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal256.", x)
+			return
+		} else if !floatflag {
+			if width == 76 {
+				if scale == -1 {
+					err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256.", x)
+					return
+				}
+				if x[i] >= '5' {
+					y, err = y.Add256(Decimal256{1, 0, 0, 0})
+					if err != nil {
+						err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256.", x)
+						return
+					}
+					if y1, _ := y.Mod256(Decimal256{10, 0, 0, 0}); y1.B0_63 == 0 && y1.B64_127 == 0 && y1.B128_191 == 0 && y1.B192_255 == 0 {
+						scale--
+						y, _ = y.Scale(-1)
+					}
+				}
+				break
+			}
+			flag = true
+			z, err = y.Mul256(Decimal256{Pow10[1], 0, 0, 0})
+			if err == nil {
+				y, err = z.Add256(Decimal256{uint64(x[i] - '0'), 0, 0, 0})
+			}
+			if err != nil {
+				err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256.", x)
+				return
+			}
+			width++
+			if scale != -1 {
+				scale++
+			}
+		} else {
+			scalecount = scalecount*10 + int32(x[i]-'0')
+		}
+		i++
+	}
+	if !flag {
+		err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal256.", x)
+		return
+	}
+	if scale == -1 {
+		scale = 0
+	}
+	if floatflag {
+		if scalesign {
+			scalecount = -scalecount
+		}
+		scale -= scalecount
+		if scale < 0 {
+			y, err = y.Scale(-scale)
+			scale = 0
+			if err != nil {
+				err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256.", x)
+			}
+		}
+	}
+	if signx {
+		y = y.Minus()
+	}
+	return
+}
+
 func ParseDecimal128(x string, width, scale int32) (y Decimal128, err error) {
 	if x == "" {
 		return Decimal128{0, 0}, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal128")
@@ -1878,6 +2029,65 @@ func ParseDecimal128(x string, width, scale int32) (y Decimal128, err error) {
 	return
 }
 
+func decimal256Pow10(width int32) (Decimal256, error) {
+	result := Decimal256{1, 0, 0, 0}
+	for width > 19 {
+		next, err := result.Mul256(Decimal256{Pow10[19], 0, 0, 0})
+		if err != nil {
+			return Decimal256{}, err
+		}
+		result = next
+		width -= 19
+	}
+	if width > 0 {
+		next, err := result.Mul256(Decimal256{Pow10[width], 0, 0, 0})
+		if err != nil {
+			return Decimal256{}, err
+		}
+		result = next
+	}
+	return result, nil
+}
+
+func ParseDecimal256(x string, width, scale int32) (y Decimal256, err error) {
+	if x == "" {
+		return Decimal256{}, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal256")
+	}
+	if width > 76 {
+		width = 76
+	}
+	n := int32(0)
+	y, n, err = Parse256(x)
+	if err != nil {
+		err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256(%d,%d).", x, width, scale)
+		return
+	}
+	if n > scale {
+		y, _ = y.Scale(scale - n)
+	} else {
+		y, err = y.Scale(scale - n)
+		if err != nil {
+			err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256(%d,%d).", x, width, scale)
+			return
+		}
+	}
+	z, err := decimal256Pow10(width)
+	if err != nil {
+		err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256(%d,%d).", x, width, scale)
+		return
+	}
+	if y.Sign() {
+		if y.Less(z.Minus()) {
+			err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256(%d,%d).", x, width, scale)
+			return
+		}
+	} else if !y.Less(z) {
+		err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256(%d,%d).", x, width, scale)
+		return
+	}
+	return
+}
+
 func ParseDecimal128FromByte(x string, width, scale int32) (y Decimal128, err error) {
 	if x == "" {
 		return Decimal128{0, 0}, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal128")
@@ -1891,6 +2101,25 @@ func ParseDecimal128FromByte(x string, width, scale int32) (y Decimal128, err er
 			return
 		}
 		y, err = y.Add128(Decimal128{uint64(x[i]), 0})
+		if err != nil {
+			return
+		}
+	}
+	return
+}
+
+func ParseDecimal256FromByte(x string, width, scale int32) (y Decimal256, err error) {
+	if x == "" {
+		return Decimal256{}, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal256")
+	}
+	y = Decimal256{}
+	n := len(x)
+	for i := 0; i < n; i++ {
+		y, err = y.Mul256(Decimal256{256, 0, 0, 0})
+		if err != nil {
+			return
+		}
+		y, err = y.Add256(Decimal256{uint64(x[i]), 0, 0, 0})
 		if err != nil {
 			return
 		}
@@ -1963,7 +2192,30 @@ func (x Decimal128) Format(scale int32) string {
 }
 
 func (x Decimal256) Format(scale int32) string {
-	a := ""
+	signx := x.Sign()
+	if signx {
+		x = x.Minus()
+	}
+	var n big.Int
+	n.SetUint64(x.B192_255)
+	n.Lsh(&n, 64)
+	n.Add(&n, new(big.Int).SetUint64(x.B128_191))
+	n.Lsh(&n, 64)
+	n.Add(&n, new(big.Int).SetUint64(x.B64_127))
+	n.Lsh(&n, 64)
+	n.Add(&n, new(big.Int).SetUint64(x.B0_63))
+
+	a := n.String()
+	if scale > 0 {
+		if len(a) <= int(scale) {
+			a = strings.Repeat("0", int(scale)-len(a)+1) + a
+		}
+		idx := len(a) - int(scale)
+		a = a[:idx] + "." + a[idx:]
+	}
+	if signx {
+		a = "-" + a
+	}
 	return a
 }
 

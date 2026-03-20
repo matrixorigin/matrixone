@@ -797,6 +797,8 @@ func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool) FunctionResultWra
 		return newResultFunc[types.Decimal64](typ, mp)
 	case types.T_decimal128:
 		return newResultFunc[types.Decimal128](typ, mp)
+	case types.T_decimal256:
+		return newResultFunc[types.Decimal256](typ, mp)
 	case types.T_TS:
 		return newResultFunc[types.TS](typ, mp)
 	case types.T_Rowid:

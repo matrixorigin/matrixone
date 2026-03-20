@@ -1,0 +1,25 @@
+drop table if exists decimal_256_t;
+create table decimal_256_t (
+id int primary key,
+d decimal(65,30)
+);
+show create table decimal_256_t;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+decimal_256_t  ¦  CREATE TABLE `decimal_256_t` (
+  `id` int NOT NULL,
+  `d` decimal(65,30) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
+insert into decimal_256_t values
+(1, 12345678901234567890123456789012345.123456789012345678901234567890),
+(2, cast(42 as decimal(65,30))),
+(3, cast('-0.000000000000000000000000000001' as decimal(65,30)));
+select id, d from decimal_256_t order by id;
+➤ id[4,32,0]  ¦  d[3,65,30]  𝄀
+1  ¦  12345678901234567890123456789012345.123456789012345678901234567890  𝄀
+2  ¦  42.000000000000000000000000000000  𝄀
+3  ¦  -1E-30
+select cast('12345678901234567890123456789012345.123456789012345678901234567890' as decimal(65,30));
+➤ cast(12345678901234567890123456789012345.123456789012345678901234567890 as decimal(65, 30))[3,65,30]  𝄀
+12345678901234567890123456789012345.123456789012345678901234567890
+drop table decimal_256_t;

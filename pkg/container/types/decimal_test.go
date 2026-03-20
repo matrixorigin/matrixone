@@ -75,6 +75,16 @@ func TestParse128(t *testing.T) {
 		panic("Decimal128Parse wrong")
 	}
 }
+
+func TestParse256(t *testing.T) {
+	x, err := ParseDecimal256("12345678901234567890123456789012345.123456789012345678901234567890", 65, 30)
+	if err != nil {
+		t.Fatalf("ParseDecimal256 failed: %v", err)
+	}
+	if got := x.Format(30); got != "12345678901234567890123456789012345.123456789012345678901234567890" {
+		t.Fatalf("unexpected decimal256 format: %s", got)
+	}
+}
 func TestCompare64(t *testing.T) {
 	x := Decimal64(0)
 	y := ^x

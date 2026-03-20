@@ -1,0 +1,22 @@
+-- @suite
+-- @case
+-- @desc:test for decimal(65,30)
+-- @label:bvt
+
+drop table if exists decimal_256_t;
+create table decimal_256_t (
+    id int primary key,
+    d decimal(65,30)
+);
+
+show create table decimal_256_t;
+
+insert into decimal_256_t values
+    (1, 12345678901234567890123456789012345.123456789012345678901234567890),
+    (2, cast(42 as decimal(65,30))),
+    (3, cast('-0.000000000000000000000000000001' as decimal(65,30)));
+
+select id, d from decimal_256_t order by id;
+select cast('12345678901234567890123456789012345.123456789012345678901234567890' as decimal(65,30));
+
+drop table decimal_256_t;

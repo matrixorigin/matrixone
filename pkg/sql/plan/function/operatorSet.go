@@ -34,7 +34,7 @@ var (
 		types.T_bit,
 		types.T_uuid,
 		types.T_date, types.T_datetime, types.T_timestamp, types.T_time,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_json, types.T_datalink,
 	}
 )
@@ -182,6 +182,8 @@ func caseFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 		return generalCaseFn[types.Decimal64](parameters, result, proc, length, selectList)
 	case types.T_decimal128:
 		return generalCaseFn[types.Decimal128](parameters, result, proc, length, selectList)
+	case types.T_decimal256:
+		return generalCaseFn[types.Decimal256](parameters, result, proc, length, selectList)
 	case types.T_enum:
 		return generalCaseFn[types.Enum](parameters, result, proc, length, selectList)
 	case types.T_char:
@@ -199,7 +201,7 @@ func caseFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 }
 
 func generalCaseFn[T constraints.Integer | constraints.Float | bool | types.Date | types.Datetime |
-	types.Decimal64 | types.Decimal128 | types.Timestamp | types.Uuid](vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	types.Decimal64 | types.Decimal128 | types.Decimal256 | types.Timestamp | types.Uuid](vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	// case Xn then Yn else Z
 	xs := make([]vector.FunctionParameterWrapper[bool], 0, len(vecs)/2)
 	ys := make([]vector.FunctionParameterWrapper[T], 0, len(vecs)/2)
@@ -322,7 +324,7 @@ var (
 		types.T_bool, types.T_date, types.T_datetime,
 		types.T_bit,
 		types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_json,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_timestamp, types.T_time, types.T_datalink,
 	}
 )
@@ -421,6 +423,8 @@ func iffFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 		return generalIffFn[types.Decimal64](parameters, result, proc, length, selectList)
 	case types.T_decimal128:
 		return generalIffFn[types.Decimal128](parameters, result, proc, length, selectList)
+	case types.T_decimal256:
+		return generalIffFn[types.Decimal256](parameters, result, proc, length, selectList)
 	case types.T_time:
 		return generalIffFn[types.Time](parameters, result, proc, length, selectList)
 	case types.T_timestamp:
@@ -434,7 +438,7 @@ func iffFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 func generalIffFn[T constraints.Integer | constraints.Float | bool | types.Date | types.Datetime |
-	types.Decimal64 | types.Decimal128 | types.Timestamp | types.Uuid](vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	types.Decimal64 | types.Decimal128 | types.Decimal256 | types.Timestamp | types.Uuid](vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[bool](vecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[T](vecs[1])
 	p3 := vector.GenerateFunctionFixedTypeParameter[T](vecs[2])

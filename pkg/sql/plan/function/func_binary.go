@@ -782,6 +782,7 @@ type NormalType interface {
 		types.Datetime |
 		types.Decimal64 |
 		types.Decimal128 |
+		types.Decimal256 |
 		types.Timestamp |
 		types.Uuid |
 		constraints.Integer

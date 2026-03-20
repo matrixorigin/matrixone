@@ -65,22 +65,30 @@ func MakePlan2Decimal128ExprWithType(v types.Decimal128, typ *Type) *plan.Expr {
 }
 
 func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) (*plan.Expr, error) {
-	_, scale, err := types.Parse128(v)
-	if err != nil {
-		return nil, err
-	}
 	var typ plan.Type
-	if scale < 18 && len(v) < 18 {
+	_, scale, err := types.Parse128(v)
+	if err == nil && scale < 18 && len(v) < 18 {
 		typ = plan.Type{
 			Id:          int32(types.T_decimal64),
 			Width:       18,
 			Scale:       scale,
 			NotNullable: true,
 		}
-	} else {
+	} else if err == nil {
 		typ = plan.Type{
 			Id:          int32(types.T_decimal128),
 			Width:       38,
+			Scale:       scale,
+			NotNullable: true,
+		}
+	} else {
+		_, scale, err = types.Parse256(v)
+		if err != nil {
+			return nil, err
+		}
+		typ = plan.Type{
+			Id:          int32(types.T_decimal256),
+			Width:       65,
 			Scale:       scale,
 			NotNullable: true,
 		}
@@ -654,6 +662,10 @@ func rewriteDecimalTypeIfNecessary(typ *plan.Type) *plan.Type {
 	if typ.Id == int32(types.T_decimal64) && typ.Scale == 0 && typ.Width == 0 {
 		typ.Scale = 2
 		typ.Width = 6 // width
+	}
+	if typ.Id == int32(types.T_decimal256) && typ.Scale == 0 && typ.Width == 0 {
+		typ.Scale = 10
+		typ.Width = 65 // width
 	}
 	return typ
 }
