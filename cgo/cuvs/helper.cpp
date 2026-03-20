@@ -58,6 +58,11 @@ void init_mg_comms(raft::resources& mg_res, const std::vector<int>& devices) {
     for (auto& t : inits) t.join();
 }
 
+void inject_nccl_comm(raft::resources* res, void* nccl_comm, int size, int rank) {
+    ncclComm_t comm = static_cast<ncclComm_t>(nccl_comm);
+    raft::comms::build_comms_nccl_only(res, comm, size, rank);
+}
+
 void save_host_matrix(const std::string& filename, raft::host_matrix_view<const float, int64_t, raft::row_major> view) {
     std::ofstream out(filename, std::ios::binary);
     if (!out) throw std::runtime_error("Failed to open file for writing: " + filename);

@@ -35,6 +35,12 @@ bool is_snmg_handle(const raft::resources& res);
 void init_mg_comms(raft::resources& mg_res, const std::vector<int>& devices);
 
 /**
+ * @brief Inject a raw NCCL communicator into raft::resources.
+ * This is a wrapper to avoid multiple definitions of std_comms.hpp.
+ */
+void inject_nccl_comm(raft::resources* res, void* nccl_comm, int size, int rank);
+
+/**
  * @brief Save a host matrix to a file in MODF format.
  */
 void save_host_matrix(const std::string& filename, raft::host_matrix_view<const float, int64_t, raft::row_major> view);
