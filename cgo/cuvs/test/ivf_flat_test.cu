@@ -33,10 +33,7 @@ TEST(GpuIvfFlatTest, BasicLoadSearchAndCenters) {
         101.0, 101.0
     };
     
-    int dev_count = gpu_get_device_count();
-    ASSERT_TRUE(dev_count > 0);
-    std::vector<int> devices(1);
-    gpu_get_device_list(devices.data(), 1);
+    std::vector<int> devices = {0};
     ivf_flat_build_params_t bp = ivf_flat_build_params_default();
     bp.n_lists = 2;
     gpu_ivf_flat_t<float> index(dataset.data(), count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
@@ -65,10 +62,7 @@ TEST(GpuIvfFlatTest, SaveAndLoadFromFile) {
     const uint64_t count = 4;
     std::vector<float> dataset = {1.0, 1.0, 1.1, 1.1, 100.0, 100.0, 101.0, 101.0};
     std::string filename = "test_ivf_flat.bin";
-    int dev_count = gpu_get_device_count();
-    ASSERT_TRUE(dev_count > 0);
-    std::vector<int> devices(1);
-    gpu_get_device_list(devices.data(), 1);
+    std::vector<int> devices = {0};
 
     // 1. Build and Save
     {
@@ -161,10 +155,7 @@ TEST(GpuIvfFlatTest, SetGetQuantizer) {
     const uint32_t dimension = 4;
     const uint64_t count = 10;
     ivf_flat_build_params_t bp = ivf_flat_build_params_default();
-    int dev_count = gpu_get_device_count();
-    ASSERT_TRUE(dev_count > 0);
-    std::vector<int> devices(1);
-    gpu_get_device_list(devices.data(), 1);
+    std::vector<int> devices = {0};
     
     gpu_ivf_flat_t<int8_t> index(count, dimension, cuvs::distance::DistanceType::L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
     
