@@ -57,6 +57,8 @@ type container struct {
 	joinBat2 *batch.Batch
 	cfs2     []func(*vector.Vector, *vector.Vector, int64, int) error
 
+	savedVecs []*vector.Vector
+
 	evecs []evalVector
 	vecs  []*vector.Vector
 

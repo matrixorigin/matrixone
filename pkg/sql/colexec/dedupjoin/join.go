@@ -359,6 +359,14 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 					ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.batches[0], proc.Mp())
 				}
 
+				if ctr.savedVecs == nil && len(ap.UpdateColIdxList) > 0 {
+					ctr.savedVecs = make([]*vector.Vector, len(ap.UpdateColIdxList))
+				}
+
+				for j, pos := range ap.UpdateColIdxList {
+					ctr.savedVecs[j] = ctr.joinBat1.Vecs[pos]
+				}
+
 				for _, sel := range sels[1:] {
 					idx1, idx2 = sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
 					err = colexec.SetJoinBatchValues(ctr.joinBat2, ctr.batches[idx1], int64(idx2), 1, ctr.cfs2)
@@ -390,6 +398,12 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 						}
 					}
 				}
+
+				// Restore original joinBat1 vectors to prevent corruption of
+				// expression executor internal caches by subsequent iterations.
+				for j, pos := range ap.UpdateColIdxList {
+					ctr.joinBat1.Vecs[pos] = ctr.savedVecs[j]
+				}
 			}
 
 			ap.ctr.buf[batIdx].AddRowCount(1)
@@ -418,6 +432,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 		}
 		if ctr.joinBat2 == nil && ctr.batchRowCount > 0 {
 			ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.batches[0], proc.Mp())
+		}
+		if ctr.savedVecs == nil && len(ap.UpdateColIdxList) > 0 {
+			ctr.savedVecs = make([]*vector.Vector, len(ap.UpdateColIdxList))
 		}
 	}
 
@@ -479,10 +496,14 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 					}
 
 					for j, pos := range ap.UpdateColIdxList {
+						ctr.savedVecs[j] = ctr.joinBat1.Vecs[pos]
 						ctr.joinBat1.Vecs[pos] = vecs[j]
 					}
 				} else {
 					sels := ctr.mp.GetSels(vals[k])
+					for j, pos := range ap.UpdateColIdxList {
+						ctr.savedVecs[j] = ctr.joinBat1.Vecs[pos]
+					}
 					for _, sel := range sels {
 						idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
 						err = colexec.SetJoinBatchValues(ctr.joinBat2, ctr.batches[idx1], int64(idx2), 1, ctr.cfs2)
@@ -522,6 +543,13 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 							return err
 						}
 					}
+				}
+
+				// Restore original joinBat1 vectors to prevent corruption of
+				// expression executor internal caches (e.g. nullVecCache) by
+				// subsequent SetJoinBatchValues calls.
+				for j, pos := range ap.UpdateColIdxList {
+					ctr.joinBat1.Vecs[pos] = ctr.savedVecs[j]
 				}
 
 				ctr.matched.Add(vals[k] - 1)
