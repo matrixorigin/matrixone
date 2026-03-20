@@ -1128,6 +1128,49 @@ func TestCanApplyRegularIndex_Success(t *testing.T) {
 	assert.True(t, result)
 }
 
+func TestExtractColRefs_SubqueryNoop(t *testing.T) {
+	colRefCnt := make(map[[2]int32]int)
+	expr := &plan.Expr{
+		Expr: &plan.Expr_Sub{
+			Sub: &plan.SubqueryRef{
+				NodeId: 1,
+				Child: &plan.Expr{
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 10,
+							ColPos: 3,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	extractColRefs(expr, 10, colRefCnt)
+
+	assert.Empty(t, colRefCnt)
+}
+
+func TestRefsColumn_SubqueryReturnsFalse(t *testing.T) {
+	expr := &plan.Expr{
+		Expr: &plan.Expr_Sub{
+			Sub: &plan.SubqueryRef{
+				NodeId: 1,
+				Child: &plan.Expr{
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 10,
+							ColPos: 3,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	assert.False(t, refsColumn(expr, 10, 3))
+}
+
 // ============================================================================
 // Tests for colRefsWithin
 // ============================================================================
