@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -131,6 +132,14 @@ func NewMockCompile(t *testing.T) *Compile {
 		proc: testutil.NewProcess(t),
 		ncpu: system.GoMaxProcs(),
 	}
+}
+
+func TestNewCompileResetsStmtSnapshotTS(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetStmtSnapshotTS(timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4})
+
+	c := NewCompile("test", "test", "select 1", "", "", nil, proc, nil, false, nil, time.Now())
+	require.True(t, c.proc.GetStmtSnapshotTS().IsEmpty())
 }
 
 func TestCompile(t *testing.T) {

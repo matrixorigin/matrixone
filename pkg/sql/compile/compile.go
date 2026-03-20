@@ -125,6 +125,11 @@ func NewCompile(
 	c.uid = uid
 	c.sql = sql
 	c.proc.SetMessageBoard(c.MessageBoard)
+	// StmtSnapshotTS is statement-scoped. Process objects are reused across
+	// statements, so a fresh compile must clear any snapshot that was only meant
+	// for a previous statement retry. prepareRetry restores the original value
+	// explicitly for same-statement retries.
+	c.proc.SetStmtSnapshotTS(timestamp.Timestamp{})
 	c.stmt = stmt
 	c.addr = addr
 	c.isInternal = isInternal
