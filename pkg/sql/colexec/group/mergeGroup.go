@@ -82,8 +82,11 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 			}
 
 			if needSpill {
-				if err := mergeGroup.ctr.spillDataToDisk(proc, nil); err != nil {
+				if bytes, rows, err := mergeGroup.ctr.spillDataToDisk(proc, nil); err != nil {
 					return vm.CancelResult, err
+				} else {
+					mergeGroup.OpAnalyzer.Spill(bytes)
+					mergeGroup.OpAnalyzer.SpillRows(rows)
 				}
 			}
 		}
@@ -100,8 +103,11 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 		}
 
 		if mergeGroup.ctr.isSpilling() {
-			if err := mergeGroup.ctr.spillDataToDisk(proc, nil); err != nil {
+			if bytes, rows, err := mergeGroup.ctr.spillDataToDisk(proc, nil); err != nil {
 				return vm.CancelResult, err
+			} else {
+				mergeGroup.OpAnalyzer.Spill(bytes)
+				mergeGroup.OpAnalyzer.SpillRows(rows)
 			}
 			if _, err := mergeGroup.ctr.loadSpilledData(proc, mergeGroup.OpAnalyzer, mergeGroup.Aggs); err != nil {
 				return vm.CancelResult, err

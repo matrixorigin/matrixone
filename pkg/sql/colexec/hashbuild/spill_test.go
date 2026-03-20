@@ -308,7 +308,9 @@ func TestAppendBatchToSpillFilesPartitioning(t *testing.T) {
 
 	analyzer := process.NewAnalyzer(0, false, false, "test")
 	ctr := &container{}
-	err = ctr.appendBuildBatchToSpillFiles(proc, bat, files, buffers, false, conditions, analyzer)
+	_, err = ctr.initSpillExprExecs(proc, conditions)
+	require.NoError(t, err)
+	err = ctr.appendBuildBatchToSpillFiles(proc, bat, files, buffers, ctr.spillExprExecs, analyzer)
 	require.NoError(t, err)
 
 	// Flush remaining buffers
@@ -351,7 +353,9 @@ func TestEmptyBatchSpill(t *testing.T) {
 
 	analyzer := process.NewAnalyzer(0, false, false, "test")
 	ctr := &container{}
-	err = ctr.appendBuildBatchToSpillFiles(proc, bat, files, buffers, false, conditions, analyzer)
+	_, err = ctr.initSpillExprExecs(proc, conditions)
+	require.NoError(t, err)
+	err = ctr.appendBuildBatchToSpillFiles(proc, bat, files, buffers, ctr.spillExprExecs, analyzer)
 	require.NoError(t, err)
 }
 
@@ -393,7 +397,9 @@ func TestAppendBuildBatchMultipleFlushes(t *testing.T) {
 	analyzer := process.NewAnalyzer(0, false, false, "test")
 	ctr := &container{}
 
-	err = ctr.appendBuildBatchToSpillFiles(proc, bat, files, buffers, false, conditions, analyzer)
+	_, err = ctr.initSpillExprExecs(proc, conditions)
+	require.NoError(t, err)
+	err = ctr.appendBuildBatchToSpillFiles(proc, bat, files, buffers, ctr.spillExprExecs, analyzer)
 	require.NoError(t, err)
 
 	// Flush remaining
@@ -436,7 +442,9 @@ func TestAppendBuildBatchWithNulls(t *testing.T) {
 	analyzer := process.NewAnalyzer(0, false, false, "test")
 	ctr := &container{}
 
-	err = ctr.appendBuildBatchToSpillFiles(proc, bat, files, buffers, false, conditions, analyzer)
+	_, err = ctr.initSpillExprExecs(proc, conditions)
+	require.NoError(t, err)
+	err = ctr.appendBuildBatchToSpillFiles(proc, bat, files, buffers, ctr.spillExprExecs, analyzer)
 	require.NoError(t, err)
 
 	// Flush remaining
@@ -486,7 +494,9 @@ func TestAppendBuildBatchMultiColumn(t *testing.T) {
 	analyzer := process.NewAnalyzer(0, false, false, "test")
 	ctr := &container{}
 
-	err = ctr.appendBuildBatchToSpillFiles(proc, bat, files, buffers, false, conditions, analyzer)
+	_, err = ctr.initSpillExprExecs(proc, conditions)
+	require.NoError(t, err)
+	err = ctr.appendBuildBatchToSpillFiles(proc, bat, files, buffers, ctr.spillExprExecs, analyzer)
 	require.NoError(t, err)
 
 	// Flush remaining
@@ -677,7 +687,9 @@ func TestAppendBuildBatchSingleBucket(t *testing.T) {
 	analyzer := process.NewAnalyzer(0, false, false, "test")
 	ctr := &container{}
 
-	err = ctr.appendBuildBatchToSpillFiles(proc, bat, files, buffers, false, conditions, analyzer)
+	_, err = ctr.initSpillExprExecs(proc, conditions)
+	require.NoError(t, err)
+	err = ctr.appendBuildBatchToSpillFiles(proc, bat, files, buffers, ctr.spillExprExecs, analyzer)
 	require.NoError(t, err)
 
 	// Most buffers should be nil
@@ -717,12 +729,15 @@ func TestBufferReuse(t *testing.T) {
 	analyzer := process.NewAnalyzer(0, false, false, "test")
 	ctr := &container{}
 
+	_, err = ctr.initSpillExprExecs(proc, conditions)
+	require.NoError(t, err)
+
 	// First batch
 	bat1 := batch.NewWithSize(1)
 	bat1.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
 	bat1.SetRowCount(2)
 
-	err = ctr.appendBuildBatchToSpillFiles(proc, bat1, files, buffers, false, conditions, analyzer)
+	err = ctr.appendBuildBatchToSpillFiles(proc, bat1, files, buffers, ctr.spillExprExecs, analyzer)
 	require.NoError(t, err)
 
 	// Second batch - buffers should be reused
@@ -730,7 +745,7 @@ func TestBufferReuse(t *testing.T) {
 	bat2.Vecs[0] = testutil.MakeInt32Vector([]int32{3, 4}, nil, proc.Mp())
 	bat2.SetRowCount(2)
 
-	err = ctr.appendBuildBatchToSpillFiles(proc, bat2, files, buffers, false, conditions, analyzer)
+	err = ctr.appendBuildBatchToSpillFiles(proc, bat2, files, buffers, ctr.spillExprExecs, analyzer)
 	require.NoError(t, err)
 }
 

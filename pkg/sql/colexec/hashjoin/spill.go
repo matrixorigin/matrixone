@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -429,7 +430,15 @@ func (hashJoin *HashJoin) reSpillBucket(proc *process.Process, bucket spillBucke
 				spillfs.Delete(proc.Ctx, subProbeNames...)
 			}
 		}
+		// Free cached expression executors
+		ctr.freeSpillBuildExprExecs()
 	}()
+
+	// Initialize spill executors once for reuse across all batches
+	execs, err := ctr.initSpillBuildExprExecs(proc, hashJoin.EqConds[1])
+	if err != nil {
+		return nil, err
+	}
 
 	subBuildBufs := ctr.acquireReusableSpillBuffers(true)
 	subProbeBufs := ctr.acquireReusableSpillBuffers(false)
@@ -437,7 +446,7 @@ func (hashJoin *HashJoin) reSpillBucket(proc *process.Process, bucket spillBucke
 
 	// Re-partition all accumulated build batches
 	for _, b := range builder.Batches.Buf {
-		if respillErr = hashJoin.appendBuildBatchToSubFiles(proc, b, subBuildFiles, subBuildBufs, seed, analyzer); respillErr != nil {
+		if respillErr = hashJoin.appendBuildBatchToSubFiles(proc, b, subBuildFiles, subBuildBufs, execs, seed, analyzer); respillErr != nil {
 			return nil, respillErr
 		}
 	}
@@ -452,7 +461,7 @@ func (hashJoin *HashJoin) reSpillBucket(proc *process.Process, bucket spillBucke
 			respillErr = err
 			return nil, respillErr
 		}
-		if respillErr = hashJoin.appendBuildBatchToSubFiles(proc, b, subBuildFiles, subBuildBufs, seed, analyzer); respillErr != nil {
+		if respillErr = hashJoin.appendBuildBatchToSubFiles(proc, b, subBuildFiles, subBuildBufs, execs, seed, analyzer); respillErr != nil {
 			return nil, respillErr
 		}
 	}
@@ -526,31 +535,17 @@ func (hashJoin *HashJoin) reSpillBucket(proc *process.Process, bucket spillBucke
 // appendBuildBatchToSubFiles partitions a build batch into sub-bucket files using the given seed.
 // It evaluates buildKeyExprs against bat to get the key vectors for hashing, matching
 // the same key-based partitioning used by the initial hashbuild spill.
-func (hashJoin *HashJoin) appendBuildBatchToSubFiles(proc *process.Process, bat *batch.Batch, files []*os.File, buffers []*batch.Batch, seed uint64, analyzer process.Analyzer) error {
+func (hashJoin *HashJoin) appendBuildBatchToSubFiles(proc *process.Process, bat *batch.Batch, files []*os.File, buffers []*batch.Batch, execs []colexec.ExpressionExecutor, seed uint64, analyzer process.Analyzer) error {
 	ctr := &hashJoin.ctr
-	// Evaluate build-side key expressions to get key vectors
-	keyVecs := make([]*vector.Vector, len(hashJoin.EqConds[1]))
-	execs := make([]colexec.ExpressionExecutor, len(hashJoin.EqConds[1]))
-	for i, expr := range hashJoin.EqConds[1] {
-		var err error
-		if execs[i], err = colexec.NewExpressionExecutor(proc, expr); err != nil {
-			for j := 0; j < i; j++ {
-				execs[j].Free()
-			}
+	// Evaluate build-side key expressions using pre-initialized executors
+	keyVecs := make([]*vector.Vector, len(execs))
+	for i, exec := range execs {
+		vec, err := exec.Eval(proc, []*batch.Batch{bat}, nil)
+		if err != nil {
 			return err
 		}
-		if keyVecs[i], err = execs[i].Eval(proc, []*batch.Batch{bat}, nil); err != nil {
-			for j := 0; j <= i; j++ {
-				execs[j].Free()
-			}
-			return err
-		}
+		keyVecs[i] = vec
 	}
-	defer func() {
-		for _, e := range execs {
-			e.Free()
-		}
-	}()
 	return ctr.scatterBatchToFiles(proc, bat, keyVecs, files, buffers, analyzer, seed)
 }
 
@@ -571,17 +566,42 @@ func (ctr *container) scatterBatchToFiles(proc *process.Process, bat *batch.Batc
 		ctr.spillBucketRowIds = make([][]int32, spillNumBuckets)
 	}
 	bucketRowIds := ctr.spillBucketRowIds[:spillNumBuckets]
-	for i := range bucketRowIds {
-		bucketRowIds[i] = bucketRowIds[i][:0]
-	}
+
+	// Pre-count rows per bucket to pre-allocate slices and avoid repeated append reallocations
+	var bktCounts [spillNumBuckets]int32
 	for row := 0; row < rowCount; row++ {
-		bucketRowIds[hashValues[row]&(spillNumBuckets-1)] = append(bucketRowIds[hashValues[row]&(spillNumBuckets-1)], int32(row))
+		bktCounts[hashValues[row]&(spillNumBuckets-1)]++
 	}
-	for bucketId := 0; bucketId < spillNumBuckets; bucketId++ {
-		sels := bucketRowIds[bucketId]
-		if len(sels) == 0 {
-			continue
+
+	// Pre-allocate bucket slices to exact size needed
+	for i := 0; i < spillNumBuckets; i++ {
+		if bktCounts[i] > 0 {
+			if cap(bucketRowIds[i]) < int(bktCounts[i]) {
+				bucketRowIds[i] = make([]int32, 0, bktCounts[i])
+			} else {
+				bucketRowIds[i] = bucketRowIds[i][:0]
+			}
+		} else {
+			bucketRowIds[i] = bucketRowIds[i][:0]
 		}
+	}
+
+	// Fill bucket slices with row indices
+	for row := 0; row < rowCount; row++ {
+		bucketId := hashValues[row] & (spillNumBuckets - 1)
+		bucketRowIds[bucketId] = append(bucketRowIds[bucketId], int32(row))
+	}
+
+	// Collect non-empty buckets once to avoid iterating all 32 when data is sparse
+	nonEmptyBuckets := make([]int, 0, spillNumBuckets)
+	for i := 0; i < spillNumBuckets; i++ {
+		if bktCounts[i] > 0 {
+			nonEmptyBuckets = append(nonEmptyBuckets, i)
+		}
+	}
+
+	for _, bucketId := range nonEmptyBuckets {
+		sels := bucketRowIds[bucketId]
 		buf := buffers[bucketId]
 		if buf == nil {
 			buf = batch.NewOffHeapWithSize(len(bat.Vecs))
@@ -654,6 +674,36 @@ func cleanSpillBuffers(buffers []*batch.Batch, proc *process.Process) {
 			buf.Clean(proc.Mp())
 		}
 	}
+}
+
+// initSpillBuildExprExecs initializes or validates cached build expression executors for re-spill.
+// Called once per reSpillBucket operation to reuse executors across all batches.
+func (ctr *container) initSpillBuildExprExecs(proc *process.Process, conditions []*plan.Expr) ([]colexec.ExpressionExecutor, error) {
+	if len(ctr.spillBuildExprExecs) != len(conditions) {
+		ctr.freeSpillBuildExprExecs()
+		ctr.spillBuildExprExecs = make([]colexec.ExpressionExecutor, len(conditions))
+		for i, expr := range conditions {
+			var err error
+			if ctr.spillBuildExprExecs[i], err = colexec.NewExpressionExecutor(proc, expr); err != nil {
+				for j := 0; j < i; j++ {
+					ctr.spillBuildExprExecs[j].Free()
+				}
+				ctr.spillBuildExprExecs = nil
+				return nil, err
+			}
+		}
+	}
+	return ctr.spillBuildExprExecs, nil
+}
+
+// freeSpillBuildExprExecs frees cached build expression executors.
+func (ctr *container) freeSpillBuildExprExecs() {
+	for _, exec := range ctr.spillBuildExprExecs {
+		if exec != nil {
+			exec.Free()
+		}
+	}
+	ctr.spillBuildExprExecs = nil
 }
 
 func (ctr *container) acquireReusableSpillBuffers(forBuild bool) []*batch.Batch {

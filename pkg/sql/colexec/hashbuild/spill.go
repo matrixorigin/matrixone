@@ -96,27 +96,12 @@ func createSpillFiles(proc *process.Process) ([]string, []*os.File, error) {
 	return buckets, files, nil
 }
 
-func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *batch.Batch, files []*os.File, buffers []*batch.Batch, hashOnPK bool, conditions []*plan.Expr, analyzer process.Analyzer) error {
+func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *batch.Batch, files []*os.File, buffers []*batch.Batch, executors []colexec.ExpressionExecutor, analyzer process.Analyzer) error {
 	if bat.RowCount() == 0 {
 		return nil
 	}
 
-	// Evaluate hash keys
-	executors := make([]colexec.ExpressionExecutor, len(conditions))
-	var err error
-	for i, expr := range conditions {
-		if executors[i], err = colexec.NewExpressionExecutor(proc, expr); err != nil {
-			return err
-		}
-	}
-	defer func() {
-		for _, exec := range executors {
-			if exec != nil {
-				exec.Free()
-			}
-		}
-	}()
-
+	// Evaluate hash keys using pre-initialized executors
 	keyVecs := make([]*vector.Vector, len(executors))
 	for i, exec := range executors {
 		vec, err := exec.Eval(proc, []*batch.Batch{bat}, nil)
@@ -142,20 +127,43 @@ func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *b
 		ctr.spillBucketRowIds = make([][]int32, spillNumBuckets)
 	}
 	bucketRowIds := ctr.spillBucketRowIds[:spillNumBuckets]
-	for i := range bucketRowIds {
-		bucketRowIds[i] = bucketRowIds[i][:0]
+
+	// Pre-count rows per bucket to pre-allocate slices and avoid repeated append reallocations
+	var bktCounts [spillNumBuckets]int32
+	for row := 0; row < rowCount; row++ {
+		bktCounts[hashValues[row]&(spillNumBuckets-1)]++
 	}
-	for row := 0; row < bat.RowCount(); row++ {
+
+	// Pre-allocate bucket slices to exact size needed
+	for i := 0; i < spillNumBuckets; i++ {
+		if bktCounts[i] > 0 {
+			if cap(bucketRowIds[i]) < int(bktCounts[i]) {
+				bucketRowIds[i] = make([]int32, 0, bktCounts[i])
+			} else {
+				bucketRowIds[i] = bucketRowIds[i][:0]
+			}
+		} else {
+			bucketRowIds[i] = bucketRowIds[i][:0]
+		}
+	}
+
+	// Fill bucket slices with row indices
+	for row := 0; row < rowCount; row++ {
 		bucketId := hashValues[row] & (spillNumBuckets - 1)
 		bucketRowIds[bucketId] = append(bucketRowIds[bucketId], int32(row))
 	}
 
-	// Add rows to buffers and flush when needed
-	for bucketId := 0; bucketId < spillNumBuckets; bucketId++ {
-		sels := bucketRowIds[bucketId]
-		if len(sels) == 0 {
-			continue
+	// Collect non-empty buckets once to avoid iterating all 32 when data is sparse
+	nonEmptyBuckets := make([]int, 0, spillNumBuckets)
+	for i := 0; i < spillNumBuckets; i++ {
+		if bktCounts[i] > 0 {
+			nonEmptyBuckets = append(nonEmptyBuckets, i)
 		}
+	}
+
+	// Add rows to buffers and flush when needed
+	for _, bucketId := range nonEmptyBuckets {
+		sels := bucketRowIds[bucketId]
 
 		buf := buffers[bucketId]
 		if buf == nil {
@@ -186,6 +194,63 @@ func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *b
 	}
 
 	return nil
+}
+
+// initSpillExprExecs initializes or validates spill expression executors.
+// Returns the executors slice ready for use. Called once when entering spill mode.
+func (ctr *container) initSpillExprExecs(proc *process.Process, conditions []*plan.Expr) ([]colexec.ExpressionExecutor, error) {
+	if len(ctr.spillExprExecs) != len(conditions) {
+		// Clean up old executors if count changed
+		ctr.freeSpillExprExecs()
+		ctr.spillExprExecs = make([]colexec.ExpressionExecutor, len(conditions))
+		for i, expr := range conditions {
+			var err error
+			if ctr.spillExprExecs[i], err = colexec.NewExpressionExecutor(proc, expr); err != nil {
+				// Clean up what we already created
+				for j := 0; j < i; j++ {
+					ctr.spillExprExecs[j].Free()
+				}
+				ctr.spillExprExecs = nil
+				return nil, err
+			}
+		}
+	}
+	return ctr.spillExprExecs, nil
+}
+
+// freeSpillExprExecs frees all cached spill expression executors.
+func (ctr *container) freeSpillExprExecs() {
+	for _, exec := range ctr.spillExprExecs {
+		if exec != nil {
+			exec.Free()
+		}
+	}
+	ctr.spillExprExecs = nil
+}
+
+// acquireSpillBuffers returns a slice of spillNumBuckets buffers, reusing from pool if available.
+// All returned buffers have CleanOnlyData() called to reset them for fresh use.
+func (ctr *container) acquireSpillBuffers(proc *process.Process) []*batch.Batch {
+	if len(ctr.spillBuffers) < spillNumBuckets {
+		ctr.spillBuffers = append(ctr.spillBuffers, make([]*batch.Batch, spillNumBuckets-len(ctr.spillBuffers))...)
+	}
+	bufs := ctr.spillBuffers[:spillNumBuckets]
+	for i := range bufs {
+		if bufs[i] != nil {
+			bufs[i].CleanOnlyData()
+		}
+	}
+	return bufs
+}
+
+// cleanSpillBufferPool cleans all pooled buffers.
+func (ctr *container) cleanSpillBufferPool(proc *process.Process) {
+	for _, buf := range ctr.spillBuffers {
+		if buf != nil {
+			buf.Clean(proc.Mp())
+		}
+	}
+	ctr.spillBuffers = nil
 }
 
 func (ctr *container) memUsed() int64 {

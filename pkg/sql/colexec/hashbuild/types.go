@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -48,6 +49,10 @@ type container struct {
 	spillHashValues   []uint64
 	spillBucketRowIds [][]int32
 	spillWriteBuf     bytes.Buffer
+	spillBuffers      []*batch.Batch // pool of reusable bucket buffers
+
+	// cached expression executors for spill (reused across batches)
+	spillExprExecs []colexec.ExpressionExecutor
 }
 
 type HashBuild struct {
@@ -125,6 +130,7 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
 	hashBuild.cleanupSpillFiles(proc)
 	hashBuild.ctr.hashmapBuilder.Free(proc)
+	hashBuild.ctr.cleanSpillBufferPool(proc)
 }
 
 func (hashBuild *HashBuild) cleanupSpillFiles(proc *process.Process) {

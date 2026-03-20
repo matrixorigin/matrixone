@@ -141,6 +141,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 				buf.Clean(proc.Mp())
 			}
 		}
+		ctr.freeSpillExprExecs()
 	}()
 
 	for {
@@ -160,7 +161,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 
 		// If in spill mode, spill this batch directly to open files
 		if spillMode {
-			err := ctr.appendBuildBatchToSpillFiles(proc, result.Batch, spillFiles, spillBuffers, hashBuild.HashOnPK, hashBuild.Conditions, analyzer)
+			err := ctr.appendBuildBatchToSpillFiles(proc, result.Batch, spillFiles, spillBuffers, ctr.spillExprExecs, analyzer)
 			if err != nil {
 				return err
 			}
@@ -176,16 +177,22 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		// Check if we should enter spill mode based on batch memory size
 		if hashBuild.shouldSpillBatches() {
 			spillMode = true
+			// Initialize spill executors once for reuse across all batches
+			if ctr.spillExprExecs == nil {
+				if _, err := ctr.initSpillExprExecs(proc, hashBuild.Conditions); err != nil {
+					return err
+				}
+			}
 			// Create spill files once
 			spilledBuckets, spillFiles, err = createSpillFiles(proc)
 			if err != nil {
 				return err
 			}
-			spillBuffers = make([]*batch.Batch, spillNumBuckets)
+			spillBuffers = ctr.acquireSpillBuffers(proc)
 
 			// Spill all batches collected so far
 			for _, bat := range ctr.hashmapBuilder.Batches.Buf {
-				err := ctr.appendBuildBatchToSpillFiles(proc, bat, spillFiles, spillBuffers, hashBuild.HashOnPK, hashBuild.Conditions, analyzer)
+				err := ctr.appendBuildBatchToSpillFiles(proc, bat, spillFiles, spillBuffers, ctr.spillExprExecs, analyzer)
 				if err != nil {
 					return err
 				}

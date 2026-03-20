@@ -247,8 +247,11 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 			if needSpill {
 				// we need to spill the data to disk.
 				if group.NeedEval {
-					if err := group.ctr.spillDataToDisk(proc, nil); err != nil {
+					if bytes, rows, err := group.ctr.spillDataToDisk(proc, nil); err != nil {
 						return vm.CancelResult, err
+					} else {
+						group.OpAnalyzer.Spill(bytes)
+						group.OpAnalyzer.SpillRows(rows)
 					}
 					// continue the loop, to receive more data.
 				} else {
@@ -263,8 +266,11 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 
 		// spilling -- spill whatever left in memory, and load first spilled bucket.
 		if group.ctr.isSpilling() {
-			if err = group.ctr.spillDataToDisk(proc, nil); err != nil {
+			if bytes, rows, err := group.ctr.spillDataToDisk(proc, nil); err != nil {
 				return vm.CancelResult, err
+			} else {
+				group.OpAnalyzer.Spill(bytes)
+				group.OpAnalyzer.SpillRows(rows)
 			}
 			if _, err = group.ctr.loadSpilledData(proc, group.OpAnalyzer, group.Aggs); err != nil {
 				return vm.CancelResult, err

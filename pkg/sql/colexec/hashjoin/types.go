@@ -113,6 +113,9 @@ type container struct {
 	spillHashBuf        []byte
 	spillBuildSubBufs   []*batch.Batch
 	spillProbeSubBufs   []*batch.Batch
+
+	// cached expression executors for re-spill (reused across batches)
+	spillBuildExprExecs []colexec.ExpressionExecutor
 }
 
 type HashJoin struct {
