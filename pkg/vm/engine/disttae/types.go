@@ -408,7 +408,6 @@ type Transaction struct {
 	removed              bool
 	startStatementCalled bool
 	incrStatementCalled  bool
-	syncCommittedTSCount uint64
 	pkCount              int
 
 	adjustCount int
@@ -498,9 +497,8 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 		deletedBlocks: &deletedBlocks{
 			offsets: map[types.Blockid][]int64{},
 		},
-		cnObjsSummary:        map[types.Objectid]Summary{},
-		batchSelectList:      make(map[*batch.Batch][]int64),
-		syncCommittedTSCount: eng.cli.GetSyncLatestCommitTSTimes(),
+		cnObjsSummary:   map[types.Objectid]Summary{},
+		batchSelectList: make(map[*batch.Batch][]int64),
 		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
 
 		commitWorkspaceThreshold: eng.config.commitWorkspaceThreshold,
@@ -981,19 +979,11 @@ func (txn *Transaction) advanceSnapshot(
 	return nil
 }
 
-// For RC isolation, update the snapshot TS of transaction for each statement.
-// only 2 cases need to reset snapshot
-// 1. cn sync latest commit ts from mo_ctl
-// 2. not first sql
+// For RC isolation, update the snapshot TS for every statement execution.
+// RC should observe the latest committed schema/data at statement start,
+// including the first statement in an explicit transaction.
 func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) (bool, error) {
-	needResetSnapshot := false
-	newTimes := txn.proc.Base.TxnClient.GetSyncLatestCommitTSTimes()
-	if newTimes > txn.syncCommittedTSCount {
-		txn.syncCommittedTSCount = newTimes
-		needResetSnapshot = true
-	}
-
-	if !commit && (txn.GetSQLCount() > 0 || needResetSnapshot) {
+	if !commit {
 		trace.GetService(txn.proc.GetService()).TxnUpdateSnapshot(
 			txn.op, 0, "before execute")
 
@@ -1021,6 +1011,12 @@ type Entry struct {
 	bat       *batch.Batch
 	tnStore   DNStore
 	pkChkByTN int8
+
+	// pkCheckPos is the primary-key vector position resolved at write time.
+	// pkCheckReady indicates whether write-time resolution was reliable.
+	// When it is false, duplicate checks must fall back to legacy table-def lookup.
+	pkCheckPos   int
+	pkCheckReady bool
 }
 
 func (e *Entry) String() string {
