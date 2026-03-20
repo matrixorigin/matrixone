@@ -61,8 +61,7 @@ public:
 
     // Constructor for single-GPU mode with a specific device ID
     explicit raft_handle_wrapper_t(int device_id) {
-        cudaError_t err = cudaSetDevice(device_id);
-        if (err != cudaSuccess) throw std::runtime_error("cudaSetDevice failed");
+        RAFT_CUDA_TRY(cudaSetDevice(device_id));
         resources_ = std::make_unique<raft::device_resources>();
     }
 
@@ -72,13 +71,11 @@ public:
         if (devices.empty()) {
             resources_ = std::make_unique<raft::device_resources>();
         } else if (devices.size() == 1 && !force_mg) {
-            cudaError_t err = cudaSetDevice(devices[0]);
-            if (err != cudaSuccess) throw std::runtime_error("cudaSetDevice failed");
+            RAFT_CUDA_TRY(cudaSetDevice(devices[0]));
             resources_ = std::make_unique<raft::device_resources>();
         } else {
             // Ensure the main device is set before creating SNMG resources
-            cudaError_t err = cudaSetDevice(devices[0]);
-            if (err != cudaSuccess) throw std::runtime_error("cudaSetDevice failed");
+            RAFT_CUDA_TRY(cudaSetDevice(devices[0]));
             resources_ = std::make_unique<raft::device_resources_snmg>(devices);
         }
     }
@@ -251,7 +248,6 @@ public:
     explicit cuvs_worker_t(size_t n_threads, int device_id = -1) 
         : n_threads_(n_threads), device_id_(device_id) {
         if (n_threads == 0) throw std::invalid_argument("Thread count must be > 0");
-        if (device_id >= 0) devices_ = {device_id}; // NEW: Ensure devices_ is populated
         size_t cap = 2 * n_threads;
         main_tasks_.set_capacity(cap);
         worker_tasks_.set_capacity(cap);
@@ -521,8 +517,6 @@ private:
             if (!devices_.empty()) {
                 // CASE 1: Single device provided - Force ALL threads to this device
                 if (devices_.size() == 1) {
-                    cudaError_t err = cudaSetDevice(devices_[0]);
-                    if (err != cudaSuccess) throw std::runtime_error("cudaSetDevice failed in setup_resource_internal");
                     return std::make_unique<raft_handle>(devices_[0]);
                 }
 
