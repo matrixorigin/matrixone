@@ -440,11 +440,7 @@ public:
 
 private:
     void run_main_loop(user_task_fn init_fn, user_task_fn stop_fn) {
-        if (!devices_.empty()) {
-            pin_thread(devices_[0]);
-        } else {
-            pin_thread(-1);
-        }
+        pin_thread(-1);
         auto resource = setup_resource_internal(0, true);
         if (!resource) {
             result_store_.stop(); // Ensure waiters are unblocked if setup fails

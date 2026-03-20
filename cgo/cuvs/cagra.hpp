@@ -642,10 +642,10 @@ public:
         if constexpr (sizeof(T) == 1) {
             if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
             this->quantizer_.template transform<T>(*res, queries_device_float.view(), queries_device_target.data_handle(), true);
+            raft::resource::sync_stream(*res);
         } else {
             raft::copy(*res, queries_device_target.view(), queries_device_float.view());
         }
-        raft::resource::sync_stream(*res);
 
         // 2. Perform search
         search_result_t search_res;
@@ -659,7 +659,7 @@ public:
         const cagra_index* local_index = index_.get();
         if (!local_index && mg_index_) {
             int current_device;
-            cudaGetDevice(&current_device);
+            RAFT_CUDA_TRY(cudaGetDevice(&current_device));
             for (size_t i = 0; i < this->devices_.size(); ++i) {
                 if (this->devices_[i] == current_device && i < mg_index_->ann_interfaces_.size()) {
                     if (mg_index_->ann_interfaces_[i].index_.has_value()) {
@@ -694,8 +694,12 @@ public:
                                             raft::make_const_mdspan(queries_device_target.view()), 
                                             neighbors_device.view(), distances_device.view());
 
-            raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device.view());
-            raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device.view());
+            RAFT_CUDA_TRY(cudaMemcpyAsync(search_res.neighbors.data(), neighbors_device.data_handle(),
+                                        search_res.neighbors.size() * sizeof(int64_t), cudaMemcpyDeviceToHost,
+                                        raft::resource::get_cuda_stream(*res)));
+            RAFT_CUDA_TRY(cudaMemcpyAsync(search_res.distances.data(), distances_device.data_handle(),
+                                        search_res.distances.size() * sizeof(float), cudaMemcpyDeviceToHost,
+                                        raft::resource::get_cuda_stream(*res)));
         } else {
             throw std::runtime_error("Index not loaded or failed to find local index shard for current device.");
         }
