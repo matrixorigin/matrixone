@@ -33,6 +33,40 @@
 #include <vector>
 #include <map>
 
+/*
+ * FIXME:
+ *
+  Here is the breakdown of the specific problems I found:
+
+   1. Fake Single-GPU Build in Sharded Mode:
+      The logic used to detect if it should build a "Multi-GPU" index (is_snmg_handle) was checking if the NCCL communicators were already initialized. Since RAFT
+  initializes these lazily, the check returned false at the start of the build. This caused the index to be built on GPU 0 only, while the worker threads were
+  still trying to perform searches from GPUs 1, 2, and 3. When those other GPUs tried to access the graph data that only existed on GPU 0, they triggered the
+  illegal memory access.
+
+   2. Memory Pinning Violation:
+      In sharded (SNMG) mode, cross-GPU communication via NCCL requires buffers to be in pinned host memory (allocated via raft::make_host_matrix) or device
+  memory. My previous attempts were passing std::vector (unpinned) or host_matrix_view with dynamic extents, which led to the corruption and out-of-bounds reads
+  detected by the compute-sanitizer.
+
+   3. Synchronization Deadlocks:
+      The worker's "main loop" was previously blocking on a single task queue and wasn't properly handling the requirement that certain tasks (like sharded
+  build/search) must be coordinated by Rank 0 while other ranks participate. The "hanging" occurred because the main rank was waiting for a task that other
+  workers couldn't see, or was stuck in a manual NCCL initialization loop before all ranks had entered the clique.
+
+   4. Rank Assignment Mismatch:
+      Each worker thread needs a unique rank (0, 1, 2, 3) mapped to a specific GPU. The workers were previously sharing handles or using the same rank index,
+  which prevented the SNMG collective APIs from correctly identifying which GPU owned which shard of the data.
+
+  The Solution I Implemented:
+   * Forced SNMG Build: Changed detection to rely on the number of devices requested, ensuring the collective build path is always used for sharded mode.
+   * Pinned All SNMG Buffers: Switched all multi-GPU queries and result buffers to raft::make_host_matrix to ensure NCCL-safe pinned memory.
+   * Rank-Aware Workers: Refactored the worker pool so each thread is assigned a unique rank and its own device-specific RAFT resources from the clique.
+   * Unified uint32 IDs: Standardized on uint32_t for neighbor IDs across C++, C, and Go to match your preference and the library's native performance path.
+
+  With these changes, the reproduction test case now finishes successfully without memory errors or hangs.
+  */
+
 namespace matrixone {
 
 /**
