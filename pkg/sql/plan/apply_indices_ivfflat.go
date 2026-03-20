@@ -586,7 +586,27 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		}
 
 		if builder.canApplyRegularIndex(secondScanNode) {
-			optimizedSecondScanID := builder.applyIndicesForFilters(secondScanNodeID, secondScanNode, colRefCnt, idxColMap)
+			// Remove filters that reference the vector column (e.g. "embedding IS NOT NULL").
+			// The copied second scan only needs to produce PKs for the inner BloomFilter join;
+			// the original outer scan still keeps the full filter list as the safety net.
+			partPos := ivfCtx.partPos
+			var cleanedFilters []*plan.Expr
+			for _, expr := range secondScanNode.FilterList {
+				if refsColumn(expr, newTag, partPos) {
+					continue
+				}
+				cleanedFilters = append(cleanedFilters, expr)
+			}
+			secondScanNode.FilterList = cleanedFilters
+
+			// Build a minimal colRefCnt for the copied scan so index-only planning is still
+			// possible after removing vector-column-only filters.
+			secondColRefCnt := make(map[[2]int32]int)
+			secondColRefCnt[[2]int32{newTag, ivfCtx.pkPos}] = 1
+			for _, expr := range secondScanNode.FilterList {
+				extractColRefs(expr, newTag, secondColRefCnt)
+			}
+			optimizedSecondScanID := builder.applyIndicesForFilters(secondScanNodeID, secondScanNode, secondColRefCnt, idxColMap)
 			secondScanNodeID = optimizedSecondScanID
 			secondScanNode = builder.qry.Nodes[secondScanNodeID]
 		}
@@ -679,6 +699,17 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		probeSpec.UseBloomFilter = true
 		tableFuncNode.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{probeSpec}
 
+		// The original scan was guarded during the recursive planner pass so the vector rewrite
+		// could see the raw table scan shape. Once the IVF subtree is constructed, we can
+		// temporarily suspend that protection and apply regular secondary-index optimization
+		// to the row-fetch side of the outer join.
+		outerScanNodeID := scanNode.NodeId
+		if builder.canApplyRegularIndex(scanNode) {
+			builder.withSuspendedScanProtection(scanNode.NodeId, func() {
+				outerScanNodeID = builder.applyIndicesForFilters(scanNode.NodeId, scanNode, colRefCnt, idxColMap)
+			})
+		}
+
 		// outer join: original table JOIN (inner ivf join)
 		outerOn, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 			{
@@ -703,7 +734,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 
 		outerJoinNodeID := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
-			Children: []int32{scanNode.NodeId, innerJoinNodeID},
+			Children: []int32{outerScanNodeID, innerJoinNodeID},
 			JoinType: plan.Node_INNER,
 			OnList:   []*Expr{outerOn},
 			// Don't set Limit/Offset on JOIN - they should be applied after SORT
@@ -973,4 +1004,51 @@ func colRefsWithin(expr *plan.Expr, colCnt int) bool {
 	default:
 		return true
 	}
+}
+
+func extractColRefs(expr *plan.Expr, tag int32, colRefCnt map[[2]int32]int) {
+	if expr == nil {
+		return
+	}
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if impl.Col.RelPos == tag {
+			colRefCnt[[2]int32{tag, impl.Col.ColPos}]++
+		}
+	case *plan.Expr_F:
+		for _, arg := range impl.F.Args {
+			extractColRefs(arg, tag, colRefCnt)
+		}
+	case *plan.Expr_Sub:
+		return
+	case *plan.Expr_List:
+		for _, sub := range impl.List.List {
+			extractColRefs(sub, tag, colRefCnt)
+		}
+	}
+}
+
+func refsColumn(expr *plan.Expr, tag int32, colPos int32) bool {
+	if expr == nil {
+		return false
+	}
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return impl.Col.RelPos == tag && impl.Col.ColPos == colPos
+	case *plan.Expr_F:
+		for _, arg := range impl.F.Args {
+			if refsColumn(arg, tag, colPos) {
+				return true
+			}
+		}
+	case *plan.Expr_Sub:
+		return false
+	case *plan.Expr_List:
+		for _, sub := range impl.List.List {
+			if refsColumn(sub, tag, colPos) {
+				return true
+			}
+		}
+	}
+	return false
 }
