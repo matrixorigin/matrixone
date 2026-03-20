@@ -323,6 +323,10 @@ CREATE TABLE `parquet_01` (
 load data infile {'filepath'='$resources/parquet/Iris.parquet', 'format'='parquet'} into table parquet_01;
 select count(*) from parquet_01;
 
+drop table if exists parquet_06;
+create table parquet_06(PassengerId bigint,Survived bigint, Pclass bigint,Name varchar(50),Sex varchar(50),Age double,SibSp bigint,Parch bigint,Ticket varchar(50),Fare double,Cabin varchar(50),Embarked varchar(50));
+load data infile {'filepath'='$resources/parquet/Titanic.parquet','format'='parquet'} into table parquet_06;
+select count(*) from parquet_06;
 
 -- post
 drop database parq;
