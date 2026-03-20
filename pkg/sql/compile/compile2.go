@@ -368,7 +368,9 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 	// improved to refresh expression in the future.
 
 	var e error
+	stmtSnapshotTS := c.proc.GetStmtSnapshotTS()
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	runC.proc.SetStmtSnapshotTS(stmtSnapshotTS)
 	runC.SetOriginSQL(c.originSQL)
 	defer func() {
 		if e != nil {

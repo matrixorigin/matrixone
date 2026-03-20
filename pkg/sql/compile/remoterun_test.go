@@ -329,6 +329,46 @@ func Test_convertToVmInstruction(t *testing.T) {
 	}
 }
 
+func TestDedupJoinRemoteRoundTripPreservesSnapshotMetadata(t *testing.T) {
+	ctx := &scopeContext{
+		id:       1,
+		plan:     nil,
+		scope:    nil,
+		root:     &scopeContext{},
+		parent:   &scopeContext{},
+		children: nil,
+		pipe:     nil,
+		regs:     nil,
+	}
+
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
+
+	source := &dedupjoin.DedupJoin{
+		Conditions:        [][]*plan.Expr{nil, nil},
+		TargetTableID:     42,
+		TargetTableRef:    &plan.ObjectRef{SchemaName: "memoria_rs", ObjName: "t"},
+		InitialSnapshotTS: timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4},
+	}
+
+	in, _, err := convertToPipelineInstruction(source, proc, ctx, 1)
+	require.NoError(t, err)
+	require.NotNil(t, in.DedupJoin)
+	require.Equal(t, uint64(42), in.DedupJoin.TargetTableId)
+	require.Equal(t, "memoria_rs", in.DedupJoin.TargetTableRef.SchemaName)
+	require.Equal(t, "t", in.DedupJoin.TargetTableRef.ObjName)
+	require.Equal(t, int64(123), in.DedupJoin.InitialSnapshotTs.PhysicalTime)
+	require.Equal(t, uint32(4), in.DedupJoin.InitialSnapshotTs.LogicalTime)
+
+	op, err := convertToVmOperator(in, ctx, nil)
+	require.NoError(t, err)
+
+	roundTripped := op.(*dedupjoin.DedupJoin)
+	require.Equal(t, uint64(42), roundTripped.TargetTableID)
+	require.Equal(t, &plan.ObjectRef{SchemaName: "memoria_rs", ObjName: "t"}, roundTripped.TargetTableRef)
+	require.Equal(t, timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4}, roundTripped.InitialSnapshotTS)
+}
+
 func Test_convertToProcessLimitation(t *testing.T) {
 	lim := pipeline.ProcessLimitation{
 		Size: 100,
