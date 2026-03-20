@@ -312,7 +312,7 @@ drop table if exists agg01;
 create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeowqehwgqjhenw'), key (col2));
 drop table if exists agg01;
 
--- issue#23892: ENUM ORDER BY should sort by definition order, not alphabetically
+-- ENUM ORDER BY should sort by definition order, not alphabetically
 drop table if exists test_enum_order;
 create table test_enum_order (id int, val enum('low', 'medium', 'high', 'critical'));
 insert into test_enum_order values (1, 'low'), (2, 'medium'), (3, 'high'), (4, 'critical');
