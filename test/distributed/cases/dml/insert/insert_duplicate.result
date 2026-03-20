@@ -624,7 +624,7 @@ SELECT * FROM indup_02;
 col1    col2    col3    col4
 3    paper    up    100
 1    updated_from_select    new_left    null
-2    bear    new_right    1500
+2    updated_from_select    new_right    1500
 10    wine    down    30
 INSERT INTO indup_02 VALUES(10,'test','test',999)
 ON DUPLICATE KEY UPDATE col2='constant_value', col4=12345;
@@ -632,7 +632,7 @@ SELECT * FROM indup_02;
 col1    col2    col3    col4
 3    paper    up    100
 1    updated_from_select    new_left    null
-2    bear    new_right    1500
+2    updated_from_select    new_right    1500
 10    constant_value    down    12345
 INSERT INTO indup_02 VALUES(10,'test','test',999)
 ON DUPLICATE KEY UPDATE col3='', col4=NULL;
@@ -640,14 +640,14 @@ SELECT * FROM indup_02;
 col1    col2    col3    col4
 3    paper    up    100
 1    updated_from_select    new_left    null
-2    bear    new_right    1500
+2    updated_from_select    new_right    1500
 10    constant_value        null
 INSERT INTO indup_02 VALUES(3,'test','test',999)
 ON DUPLICATE KEY UPDATE col3=CONCAT(col3, '_suffix'), col2=UPPER(col2);
 SELECT * FROM indup_02;
 col1    col2    col3    col4
 1    updated_from_select    new_left    null
-2    bear    new_right    1500
+2    updated_from_select    new_right    1500
 10    constant_value        null
 3    PAPER    up_suffix    100
 DELETE FROM indup_02;

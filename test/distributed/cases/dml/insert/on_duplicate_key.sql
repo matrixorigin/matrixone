@@ -159,3 +159,11 @@ select id, counter, create_at = update_at from users;
 select sleep(1);
 insert into users (id, counter) values ('112',2) on duplicate key update counter=counter+values(counter), create_at=current_timestamp();
 select id, counter, create_at = update_at from users;
+
+-- test for on duplicate key update with NULL values in multi-row insert
+drop table if exists t_null_dup;
+create table t_null_dup (id int primary key, a int, b int);
+insert into t_null_dup values (1, 100, 100), (3, 300, 300);
+insert into t_null_dup (id, a, b) values (1, NULL, NULL), (3, NULL, 30) on duplicate key update a = values(a), b = values(b);
+select * from t_null_dup order by id;
+drop table if exists t_null_dup;
