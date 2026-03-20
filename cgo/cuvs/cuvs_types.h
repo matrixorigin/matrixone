@@ -92,6 +92,7 @@ typedef struct {
 typedef struct {
     size_t itopk_size;   // Internal top-k size (default 64)
     size_t search_width; // Number of search paths (default 1)
+    size_t max_queries;  // Maximum number of queries (default 1024)
 } cagra_search_params_t;
 
 /**
@@ -146,7 +147,7 @@ static inline cagra_build_params_t cagra_build_params_default() {
 }
 
 static inline cagra_search_params_t cagra_search_params_default() {
-    return {64, 1};
+    return {64, 1, 1024};
 }
 
 static inline ivf_flat_build_params_t ivf_flat_build_params_default() {

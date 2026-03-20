@@ -152,7 +152,7 @@ func TestGpuShardedCagra(t *testing.T) {
 	}
 	err = index.Build()
 	if err != nil {
-		t.Fatalf("Load sharded failed: %v", err)
+		t.Fatalf("Failed to build sharded index: %v", err)
 	}
 
 	queries := []float32{0.1, 0.1, 0.2, 0.2, 0.3, 0.3, 0.4, 0.4, 0.5, 0.5}
@@ -378,7 +378,7 @@ func TestGpuReplicatedCagra(t *testing.T) {
 	}
 	err = index.Build()
 	if err != nil {
-		t.Fatalf("Load replicated failed: %v", err)
+		t.Fatalf("Failed to build replicated index: %v", err)
 	}
 
 	queries := []float32{0.1, 0.1, 0.2, 0.2, 0.3, 0.3, 0.4, 0.4, 0.5, 0.5}
@@ -408,7 +408,7 @@ func BenchmarkGpuShardedCagra(b *testing.B) {
 	bp := DefaultCagraBuildParams()
 	bp.IntermediateGraphDegree = 256
 	bp.GraphDegree = 128
-	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, Sharded)
+	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 16, Sharded)
 	if err != nil {
 		b.Fatalf("Failed to create sharded CAGRA: %v", err)
 	}
@@ -420,8 +420,6 @@ func BenchmarkGpuShardedCagra(b *testing.B) {
 	if err := index.Build(); err != nil {
 		b.Fatalf("Build failed: %v", err)
 	}
-	// info, _ := index.Info()
-	// fmt.Println(info)
 
 	sp := DefaultCagraSearchParams()
 	sp.ItopkSize = 128
@@ -481,8 +479,6 @@ func BenchmarkGpuSingleCagra(b *testing.B) {
 	if err := index.Build(); err != nil {
 		b.Fatalf("Build failed: %v", err)
 	}
-	// info, _ := index.Info()
-	// fmt.Println(info)
 
 	sp := DefaultCagraSearchParams()
 	sp.ItopkSize = 128
@@ -545,8 +541,6 @@ func BenchmarkGpuReplicatedCagra(b *testing.B) {
 	if err := index.Build(); err != nil {
 		b.Fatalf("Build failed: %v", err)
 	}
-	// info, _ := index.Info()
-	// fmt.Println(info)
 
 	sp := DefaultCagraSearchParams()
 	sp.ItopkSize = 128
@@ -617,8 +611,6 @@ func BenchmarkGpuAddChunkAndSearchCagraF16(b *testing.B) {
 	if err := index.Build(); err != nil {
 		b.Fatalf("Build failed: %v", err)
 	}
-	// info, _ := index.Info()
-	// fmt.Println(info)
 
 	sp := DefaultCagraSearchParams()
 	sp.ItopkSize = 128
@@ -683,8 +675,6 @@ func BenchmarkGpuAddChunkAndSearchCagraInt8(b *testing.B) {
 	if err := index.Build(); err != nil {
 		b.Fatalf("Build failed: %v", err)
 	}
-	// info, _ := index.Info()
-	// fmt.Println(info)
 
 	sp := DefaultCagraSearchParams()
 	sp.ItopkSize = 128

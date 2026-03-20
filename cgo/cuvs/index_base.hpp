@@ -61,12 +61,18 @@ public:
     std::unique_ptr<cuvs_worker_t> worker;
     mutable std::shared_mutex mutex_;
     bool is_loaded_ = false;
+    int build_device_id_ = 0;
     std::shared_ptr<void> dataset_device_ptr_; // Keep device memory alive
 
     gpu_index_base_t() = default;
     virtual ~gpu_index_base_t() {
         destroy();
     }
+
+    virtual void start() {}
+    virtual void build() {}
+    virtual void save(const std::string& filename) const {}
+    virtual void load(const std::string& filename) {}
 
     // Common management methods
     virtual void destroy() {

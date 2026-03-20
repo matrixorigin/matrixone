@@ -17,12 +17,13 @@
 #pragma once
 
 #include "index_base.hpp"
-#include "cuvs_worker.hpp" // For cuvs_worker_t and raft_handle_wrapper_t
-#include "cuvs_types.h"    // For distance_type_t and quantization_t
-#include <raft/util/cudart_utils.hpp> // For RAFT_CUDA_TRY
-#include <cuda_fp16.h> // For half
+#include "cuvs_worker.hpp"
+#include "cuvs_types.h"
+#include "quantize.hpp"
 
-// Standard library includes
+#include <cuda_fp16.h>
+#include <raft/util/cudart_utils.hpp>
+
 #include <algorithm>   
 #include <memory>
 #include <vector>
@@ -45,14 +46,12 @@
 // cuVS includes
 #include <cuvs/distance/distance.hpp>
 #include <cuvs/cluster/kmeans.hpp>
-#include "quantize.hpp"
 #pragma GCC diagnostic pop
 
 namespace matrixone {
 
 /**
  * @brief Search/Predict result for K-Means.
- * Common for all KMeans instantiations.
  */
 struct kmeans_result_t {
     std::vector<int64_t> labels;
@@ -98,7 +97,7 @@ public:
     /**
      * @brief Starts the worker and initializes resources.
      */
-    void start() {
+    void start() override {
         auto init_fn = [](raft_handle_wrapper_t&) -> std::any {
             return std::any();
         };
@@ -167,7 +166,7 @@ public:
     predict_result_t predict(const T* X_data, uint64_t n_samples) {
         if (!X_data || n_samples == 0) return {{}, 0, 0};
 
-        uint64_t job_id = this->worker->submit_main(
+        uint64_t job_id = this->worker->submit(
             [&, X_data, n_samples](raft_handle_wrapper_t& handle) -> std::any {
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
                 if (!centroids_) throw std::runtime_error("KMeans centroids not trained. Call fit() first.");
@@ -190,13 +189,13 @@ public:
                                                raft::make_const_mdspan(centroids_->view()),
                                                labels_device.view());
 
-                std::vector<uint32_t> host_labels(n_samples);
-                RAFT_CUDA_TRY(cudaMemcpyAsync(host_labels.data(), labels_device.data_handle(),
+                std::vector<uint32_t> labels_host(n_samples);
+                RAFT_CUDA_TRY(cudaMemcpyAsync(labels_host.data(), labels_device.data_handle(),
                                          n_samples * sizeof(uint32_t), cudaMemcpyDeviceToHost,
                                          raft::resource::get_cuda_stream(*res)));
                 
                 raft::resource::sync_stream(*res);
-                for(uint64_t i=0; i<n_samples; ++i) res_out.labels[i] = (int64_t)host_labels[i];
+                std::copy(labels_host.begin(), labels_host.end(), res_out.labels.begin());
                 res_out.inertia = 0.0f;
                 res_out.n_iter = 0;
                 return res_out;
@@ -217,7 +216,7 @@ public:
 
         if (!X_data || n_samples == 0) return {{}, 0, 0};
 
-        uint64_t job_id = this->worker->submit_main(
+        uint64_t job_id = this->worker->submit(
             [&, X_data, n_samples](raft_handle_wrapper_t& handle) -> std::any {
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
                 if (!centroids_) throw std::runtime_error("KMeans centroids not trained. Call fit() first.");
@@ -247,13 +246,13 @@ public:
                                                raft::make_const_mdspan(centroids_->view()),
                                                labels_device.view());
 
-                std::vector<uint32_t> host_labels(n_samples);
-                RAFT_CUDA_TRY(cudaMemcpyAsync(host_labels.data(), labels_device.data_handle(),
+                std::vector<uint32_t> labels_host(n_samples);
+                RAFT_CUDA_TRY(cudaMemcpyAsync(labels_host.data(), labels_device.data_handle(),
                                          n_samples * sizeof(uint32_t), cudaMemcpyDeviceToHost,
                                          raft::resource::get_cuda_stream(*res)));
                 
                 raft::resource::sync_stream(*res);
-                for(uint64_t i=0; i<n_samples; ++i) res_out.labels[i] = (int64_t)host_labels[i];
+                std::copy(labels_host.begin(), labels_host.end(), res_out.labels.begin());
                 res_out.inertia = 0.0f;
                 res_out.n_iter = 0;
                 return res_out;
@@ -307,13 +306,13 @@ public:
                                                    labels_device.view());
                 }
 
-                std::vector<uint32_t> host_labels(n_samples);
-                RAFT_CUDA_TRY(cudaMemcpyAsync(host_labels.data(), labels_device.data_handle(),
+                std::vector<uint32_t> labels_host(n_samples);
+                RAFT_CUDA_TRY(cudaMemcpyAsync(labels_host.data(), labels_device.data_handle(),
                                          n_samples * sizeof(uint32_t), cudaMemcpyDeviceToHost,
                                          raft::resource::get_cuda_stream(*res)));
                 
                 raft::resource::sync_stream(*res);
-                for(uint64_t i=0; i<n_samples; ++i) res_out.labels[i] = (int64_t)host_labels[i];
+                std::copy(labels_host.begin(), labels_host.end(), res_out.labels.begin());
                 res_out.inertia = 0.0f;
                 res_out.n_iter = static_cast<int64_t>(params.n_iters);
                 return res_out;
@@ -382,13 +381,13 @@ public:
                                                    labels_device.view());
                 }
 
-                std::vector<uint32_t> host_labels(n_samples);
-                RAFT_CUDA_TRY(cudaMemcpyAsync(host_labels.data(), labels_device.data_handle(),
+                std::vector<uint32_t> labels_host(n_samples);
+                RAFT_CUDA_TRY(cudaMemcpyAsync(labels_host.data(), labels_device.data_handle(),
                                          n_samples * sizeof(uint32_t), cudaMemcpyDeviceToHost,
                                          raft::resource::get_cuda_stream(*res)));
                 
                 raft::resource::sync_stream(*res);
-                for(uint64_t i=0; i<n_samples; ++i) res_out.labels[i] = (int64_t)host_labels[i];
+                std::copy(labels_host.begin(), labels_host.end(), res_out.labels.begin());
                 res_out.inertia = 0.0f;
                 res_out.n_iter = static_cast<int64_t>(params.n_iters);
                 return res_out;
