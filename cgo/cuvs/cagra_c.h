@@ -90,7 +90,7 @@ gpu_cagra_search_res_t gpu_cagra_search_float(gpu_cagra_c index_c, const float* 
                                                   uint32_t query_dimension, uint32_t limit, 
                                                   cagra_search_params_t search_params, void* errmsg);
 // Get results from result object
-void gpu_cagra_get_neighbors(gpu_cagra_result_c result_c, uint64_t total_elements, int64_t* neighbors);
+void gpu_cagra_get_neighbors(gpu_cagra_result_c result_c, uint64_t total_elements, uint32_t* neighbors);
 void gpu_cagra_get_distances(gpu_cagra_result_c result_c, uint64_t total_elements, float* distances);
 
 // Free result object

@@ -58,7 +58,7 @@ namespace matrixone {
  * Common for all CAGRA instantiations.
  */
 struct cagra_search_result_t {
-    std::vector<int64_t> neighbors; // Indices of nearest neighbors
+    std::vector<uint32_t> neighbors; // Indices of nearest neighbors
     std::vector<float> distances;   // Distances to nearest neighbors
 };
 
@@ -510,14 +510,21 @@ public:
             auto queries_host_view = raft::make_host_matrix_view<const T, int64_t>(
                 queries_data, (int64_t)num_queries, (int64_t)this->dimension);
             
+            // In multi-GPU mode, neighbors are returned as int64_t global IDs
+            std::vector<int64_t> neighbors_int64(num_queries * limit);
             auto neighbors_host_view = raft::make_host_matrix_view<int64_t, int64_t>(
-                search_res.neighbors.data(), (int64_t)num_queries, (int64_t)limit);
+                neighbors_int64.data(), (int64_t)num_queries, (int64_t)limit);
             auto distances_host_view = raft::make_host_matrix_view<float, int64_t>(
                 search_res.distances.data(), (int64_t)num_queries, (int64_t)limit);
 
             cuvs::neighbors::mg_search_params<cuvs::neighbors::cagra::search_params> mg_search_params(search_params);
             cuvs::neighbors::cagra::search(*res, *mg_index_, mg_search_params,
                                                 queries_host_view, neighbors_host_view, distances_host_view);
+            
+            // Convert int64_t neighbors to uint32_t
+            for (size_t i = 0; i < neighbors_int64.size(); ++i) {
+                search_res.neighbors[i] = static_cast<uint32_t>(neighbors_int64[i]);
+            }
         } else if (local_index) {
             auto queries_device = raft::make_device_matrix<T, int64_t, raft::layout_c_contiguous>(
                 *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(this->dimension));
@@ -525,7 +532,7 @@ public:
                                         num_queries * this->dimension * sizeof(T), cudaMemcpyHostToDevice,
                                         raft::resource::get_cuda_stream(*res)));
 
-            auto neighbors_device = raft::make_device_matrix<int64_t, int64_t, raft::layout_c_contiguous>(
+            auto neighbors_device = raft::make_device_matrix<uint32_t, int64_t, raft::layout_c_contiguous>(
                 *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
             auto distances_device = raft::make_device_matrix<float, int64_t, raft::layout_c_contiguous>(
                 *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
@@ -535,7 +542,7 @@ public:
                                             neighbors_device.view(), distances_device.view());
 
             RAFT_CUDA_TRY(cudaMemcpyAsync(search_res.neighbors.data(), neighbors_device.data_handle(),
-                                        search_res.neighbors.size() * sizeof(int64_t), cudaMemcpyDeviceToHost,
+                                        search_res.neighbors.size() * sizeof(uint32_t), cudaMemcpyDeviceToHost,
                                         raft::resource::get_cuda_stream(*res)));
             RAFT_CUDA_TRY(cudaMemcpyAsync(search_res.distances.data(), distances_device.data_handle(),
                                         search_res.distances.size() * sizeof(float), cudaMemcpyDeviceToHost,
@@ -547,9 +554,8 @@ public:
         raft::resource::sync_stream(*res);
 
         for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
-            if (search_res.neighbors[i] == std::numeric_limits<int64_t>::max() || 
-                search_res.neighbors[i] == 4294967295LL || search_res.neighbors[i] < 0) {
-                search_res.neighbors[i] = -1; 
+            if (search_res.neighbors[i] == std::numeric_limits<uint32_t>::max()) {
+                search_res.neighbors[i] = static_cast<uint32_t>(-1); 
             }
         }
         return search_res;
@@ -675,7 +681,7 @@ public:
             raft::copy(*res, queries_host_target.view(), queries_device_target.view());
             raft::resource::sync_stream(*res);
 
-            auto neighbors_host_view = raft::make_host_matrix_view<int64_t, int64_t>(
+            auto neighbors_host_view = raft::make_host_matrix_view<uint32_t, int64_t>(
                 search_res.neighbors.data(), (int64_t)num_queries, (int64_t)limit);
             auto distances_host_view = raft::make_host_matrix_view<float, int64_t>(
                 search_res.distances.data(), (int64_t)num_queries, (int64_t)limit);
@@ -685,7 +691,7 @@ public:
                                                 queries_host_target.view(), 
                                                 neighbors_host_view, distances_host_view);
         } else if (local_index) {
-            auto neighbors_device = raft::make_device_matrix<int64_t, int64_t, raft::layout_c_contiguous>(
+            auto neighbors_device = raft::make_device_matrix<uint32_t, int64_t, raft::layout_c_contiguous>(
                 *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
             auto distances_device = raft::make_device_matrix<float, int64_t, raft::layout_c_contiguous>(
                 *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
@@ -695,7 +701,7 @@ public:
                                             neighbors_device.view(), distances_device.view());
 
             RAFT_CUDA_TRY(cudaMemcpyAsync(search_res.neighbors.data(), neighbors_device.data_handle(),
-                                        search_res.neighbors.size() * sizeof(int64_t), cudaMemcpyDeviceToHost,
+                                        search_res.neighbors.size() * sizeof(uint32_t), cudaMemcpyDeviceToHost,
                                         raft::resource::get_cuda_stream(*res)));
             RAFT_CUDA_TRY(cudaMemcpyAsync(search_res.distances.data(), distances_device.data_handle(),
                                         search_res.distances.size() * sizeof(float), cudaMemcpyDeviceToHost,
@@ -707,10 +713,8 @@ public:
         raft::resource::sync_stream(*res);
 
         for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
-            // Correctly handle the -1 sentinel value
-            if (search_res.neighbors[i] == std::numeric_limits<int64_t>::max() || 
-                search_res.neighbors[i] == 4294967295LL || search_res.neighbors[i] < 0) {
-                search_res.neighbors[i] = -1; 
+            if (search_res.neighbors[i] == std::numeric_limits<uint32_t>::max()) {
+                search_res.neighbors[i] = static_cast<uint32_t>(-1); 
             }
         }
         return search_res;
