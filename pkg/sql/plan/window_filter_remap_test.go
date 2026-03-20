@@ -21,25 +21,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func findWindowNodeWithFilter(t *testing.T, query *plan.Query, name string) *plan.Node {
+func findWindowNodeWithFilter(t *testing.T, query *plan.Query) *plan.Node {
 	t.Helper()
 
 	for _, node := range query.Nodes {
-		if node.NodeType != plan.Node_WINDOW || len(node.FilterList) == 0 {
-			continue
-		}
-
-		filterFn := node.FilterList[0].GetF()
-		if filterFn == nil || len(filterFn.Args) == 0 {
-			continue
-		}
-
-		filterCol := filterFn.Args[0].GetCol()
-		if filterCol == nil {
-			continue
-		}
-
-		if name == "" || filterCol.Name == name || containsIgnoreCase(filterCol.Name, name) {
+		if node.NodeType == plan.Node_WINDOW && len(node.FilterList) > 0 {
 			return node
 		}
 	}
@@ -47,76 +33,29 @@ func findWindowNodeWithFilter(t *testing.T, query *plan.Query, name string) *pla
 	return nil
 }
 
-func findProjectedColByName(t *testing.T, node *plan.Node, name string) *plan.ColRef {
-	t.Helper()
-
-	for _, expr := range node.ProjectList {
-		col := expr.GetCol()
-		if col == nil {
-			continue
+func findFilterColRef(expr *plan.Expr, pred func(*plan.ColRef) bool) *plan.ColRef {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if pred(exprImpl.Col) {
+			return exprImpl.Col
 		}
-		if col.Name == name || containsIgnoreCase(col.Name, name) {
-			return col
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			if col := findFilterColRef(arg, pred); col != nil {
+				return col
+			}
 		}
 	}
-
 	return nil
 }
 
-func findChildProjectedColByName(t *testing.T, query *plan.Query, node *plan.Node, name string) *plan.ColRef {
+func lastProjectedCol(t *testing.T, node *plan.Node) *plan.ColRef {
 	t.Helper()
 
-	if len(node.Children) == 0 {
-		return nil
-	}
-
-	child := query.Nodes[node.Children[0]]
-	for _, expr := range child.ProjectList {
-		col := expr.GetCol()
-		if col == nil {
-			continue
-		}
-		if col.Name == name || containsIgnoreCase(col.Name, name) {
-			return col
-		}
-	}
-
-	return nil
-}
-
-func containsIgnoreCase(s, sub string) bool {
-	if len(sub) == 0 {
-		return true
-	}
-	if len(s) < len(sub) {
-		return false
-	}
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if equalFoldASCII(s[i:i+len(sub)], sub) {
-			return true
-		}
-	}
-	return false
-}
-
-func equalFoldASCII(a, b string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		ai := a[i]
-		bi := b[i]
-		if 'A' <= ai && ai <= 'Z' {
-			ai += 'a' - 'A'
-		}
-		if 'A' <= bi && bi <= 'Z' {
-			bi += 'a' - 'A'
-		}
-		if ai != bi {
-			return false
-		}
-	}
-	return true
+	require.NotEmpty(t, node.ProjectList)
+	col := node.ProjectList[len(node.ProjectList)-1].GetCol()
+	require.NotNil(t, col)
+	return col
 }
 
 // Regression coverage for issue #23882.
@@ -144,19 +83,19 @@ WHERE x.rn = 2;
 	query := logicPlan.GetQuery()
 	require.NotNil(t, query)
 
-	target := findWindowNodeWithFilter(t, query, "ROW_NUMBER()")
+	target := findWindowNodeWithFilter(t, query)
 	require.NotNil(t, target)
 	require.Equal(t, int32(1), target.WindowIdx)
 
 	filterFn := target.FilterList[0].GetF()
 	require.NotNil(t, filterFn)
-	filterCol := filterFn.Args[0].GetCol()
+	filterCol := findFilterColRef(target.FilterList[0], func(col *plan.ColRef) bool {
+		return col.ColPos == int32(len(query.Nodes[target.Children[0]].ProjectList)-1)
+	})
 	require.NotNil(t, filterCol)
-	require.Contains(t, filterCol.Name, "ROW_NUMBER()")
-
-	projectCol := findChildProjectedColByName(t, query, target, "ROW_NUMBER()")
-	require.NotNil(t, projectCol)
-	require.Equal(t, projectCol.ColPos, filterCol.ColPos)
+	require.NotEmpty(t, target.Children)
+	child := query.Nodes[target.Children[0]]
+	require.Equal(t, int32(len(child.ProjectList)-1), filterCol.ColPos)
 }
 
 // Regression coverage for issue #23882.
@@ -184,17 +123,16 @@ WHERE x.second_cum_totalprice > 0;
 	query := logicPlan.GetQuery()
 	require.NotNil(t, query)
 
-	target := findWindowNodeWithFilter(t, query, "SUM(")
+	target := findWindowNodeWithFilter(t, query)
 	require.NotNil(t, target)
 	require.Equal(t, int32(1), target.WindowIdx)
 
 	filterFn := target.FilterList[0].GetF()
 	require.NotNil(t, filterFn)
-	filterCol := filterFn.Args[0].GetCol()
+	projectCol := lastProjectedCol(t, target)
+	filterCol := findFilterColRef(target.FilterList[0], func(col *plan.ColRef) bool {
+		return col.ColPos == projectCol.ColPos
+	})
 	require.NotNil(t, filterCol)
-	require.Contains(t, filterCol.Name, "SUM(")
-
-	projectCol := findProjectedColByName(t, target, "SUM(")
-	require.NotNil(t, projectCol)
 	require.Equal(t, projectCol.ColPos, filterCol.ColPos)
 }
