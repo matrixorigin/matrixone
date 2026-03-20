@@ -434,15 +434,14 @@ select val, cume_dist() over (order by val) as cd from test_cd_time order by val
 23:59:59  ¦  1.0
 drop table if exists test_cd_time;
 drop table if exists test_cd_blob;
-[unknown result because it is related to issue#23863]
 create table test_cd_blob (id int, val blob);
-[unknown result because it is related to issue#23863]
 insert into test_cd_blob values (1, 'abc'), (2, 'def'), (3, 'xyz');
-[unknown result because it is related to issue#23863]
 select id, cume_dist() over (order by val) as cd from test_cd_blob order by val;
-[unknown result because it is related to issue#23863]
+➤ id[4,11,0]  ¦  cd[8,23,31]  𝄀
+1  ¦  0.3333333333333333  𝄀
+2  ¦  0.6666666666666666  𝄀
+3  ¦  1.0
 drop table if exists test_cd_blob;
-[unknown result because it is related to issue#23863]
 drop table if exists test_cd_enum;
 create table test_cd_enum (id int, val enum('low', 'medium', 'high', 'critical'));
 insert into test_cd_enum values (1, 'low'), (2, 'medium'), (3, 'high'), (4, 'critical');

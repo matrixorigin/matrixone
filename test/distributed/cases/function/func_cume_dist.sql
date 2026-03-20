@@ -507,7 +507,6 @@ drop table if exists test_cd_time;
 -- ============================================================================
 -- test 3.17: blob 类型
 -- ============================================================================
--- @bvt:issue#23863
 drop table if exists test_cd_blob;
 create table test_cd_blob (id int, val blob);
 insert into test_cd_blob values (1, 'abc'), (2, 'def'), (3, 'xyz');
@@ -515,7 +514,6 @@ insert into test_cd_blob values (1, 'abc'), (2, 'def'), (3, 'xyz');
 select id, cume_dist() over (order by val) as cd from test_cd_blob order by val;
 
 drop table if exists test_cd_blob;
--- @bvt:issue
 -- ============================================================================
 -- test 3.18: enum 类型
 -- ============================================================================
