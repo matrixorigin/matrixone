@@ -398,12 +398,21 @@ func TestCloseIdleBackends(t *testing.T) {
 	}
 	c.mu.Lock()
 	require.Equal(t, 2, len(c.mu.backends["b1"]), "second backend must be created")
-	idleBackend := c.mu.backends["b1"][0]
-	activeBackend := c.mu.backends["b1"][1]
+	// b is the locked backend returned by getBackend; find the active (non-b) backend
+	// without assuming slice order, since concurrent creation may append in any order.
+	var activeBackend Backend
+	for _, bk := range c.mu.backends["b1"] {
+		if bk != b {
+			activeBackend = bk
+			break
+		}
+	}
 	c.mu.Unlock()
+	require.NotNil(t, activeBackend, "active backend not found")
 
-	idleBackend.Unlock()
-	tb := idleBackend.(*testBackend)
+	// b is the idle backend: unlock it and zero activeTime so GC will close it
+	b.Unlock()
+	tb := b.(*testBackend)
 	tb.Lock()
 	tb.activeTime = time.Time{}
 	tb.Unlock()
