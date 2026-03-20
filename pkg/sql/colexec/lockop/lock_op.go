@@ -775,18 +775,16 @@ func lockWithRetry(
 	var err error
 
 	result, err = LockWithMayUpgrade(ctx, lockService, tableID, rows, txnID, options, fetchFunc, vec, opts, pkType)
-	if !canRetryLock(tableID, txnOp, err) {
-		return result, err
+	if !canRetryLock(ctx, tableID, txnOp, err) {
+		return result, getLockRetryExitError(ctx, err)
 	}
 
 	for {
 		result, err = lockService.Lock(ctx, tableID, rows, txnID, options)
-		if !canRetryLock(tableID, txnOp, err) {
-			break
+		if !canRetryLock(ctx, tableID, txnOp, err) {
+			return result, getLockRetryExitError(ctx, err)
 		}
 	}
-
-	return result, err
 }
 
 func LockWithMayUpgrade(
@@ -822,26 +820,43 @@ func LockWithMayUpgrade(
 	return lockService.Lock(ctx, tableID, nrows, txnID, options)
 }
 
-func canRetryLock(table uint64, txn client.TxnOperator, err error) bool {
-	if moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) {
-		time.Sleep(defaultWaitTimeOnRetryLock)
-		return true
-	}
-	if txn.HasLockTable(table) {
+func canRetryLock(ctx context.Context, table uint64, txn client.TxnOperator, err error) bool {
+	if ctx.Err() != nil || !isRetryLockError(err) {
 		return false
 	}
-	if moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
-		moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound) {
-		time.Sleep(defaultWaitTimeOnRetryLock)
-		return true
+	if !moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) &&
+		txn.HasLockTable(table) {
+		return false
 	}
-	if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
+	return waitToRetryLock(ctx)
+}
+
+func waitToRetryLock(ctx context.Context) bool {
+	timer := time.NewTimer(defaultWaitTimeOnRetryLock)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return ctx.Err() == nil
+	}
+}
+
+func getLockRetryExitError(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil && isRetryLockError(err) {
+		return ctxErr
+	}
+	return err
+}
+
+func isRetryLockError(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) ||
+		moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
+		moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
-		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) {
-		time.Sleep(defaultWaitTimeOnRetryLock)
-		return true
-	}
-	return false
+		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend)
 }
 
 // DefaultLockOptions create a default lock operation. The parker is used to
