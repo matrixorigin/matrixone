@@ -180,16 +180,10 @@ public:
 
     void build() override {
         if (!this->data_filename_.empty() && this->flattened_host_dataset.empty()) {
-            // Load dataset from MODF file
-            std::ifstream in(this->data_filename_, std::ios::binary);
-            if (!in) throw std::runtime_error("Failed to open data file: " + this->data_filename_);
-            int64_t rows, cols;
-            in.read(reinterpret_cast<char*>(&rows), sizeof(rows));
-            in.read(reinterpret_cast<char*>(&cols), sizeof(cols));
+            uint64_t rows, cols;
+            load_host_matrix<T>(this->data_filename_, this->flattened_host_dataset, rows, cols);
             this->count = static_cast<uint32_t>(rows);
             this->dimension = static_cast<uint32_t>(cols);
-            this->flattened_host_dataset.resize(this->count * this->dimension);
-            in.read(reinterpret_cast<char*>(this->flattened_host_dataset.data()), this->count * this->dimension * sizeof(T));
         }
 
         if (this->count == 0) {
@@ -499,7 +493,7 @@ public:
         return search_res;
     }
 
-    std::vector<float> get_centers() {
+    std::vector<T> get_centers() {
         if (!this->is_loaded_ || (!index_ && !mg_index_)) return {};
 
         uint64_t job_id = this->worker->submit_main(
@@ -507,26 +501,42 @@ public:
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
                 auto res = handle.get_raft_resources();
 
-                const ivf_pq_index* local_index = index_.get();
-                if (!local_index && mg_index_ && !mg_index_->ann_interfaces_.empty()) {
-                    local_index = &mg_index_->ann_interfaces_[0].index_.value();
+                const ivf_pq_index* local_index = nullptr;
+                if (index_) {
+                    local_index = index_.get();
+                } else if (mg_index_) {
+                    for (const auto& iface : mg_index_->ann_interfaces_) {
+                        if (iface.index_.has_value()) {
+                            local_index = &iface.index_.value();
+                            break;
+                        }
+                    }
                 }
 
-                if (!local_index) return std::vector<float>{};
+                if (!local_index) return std::vector<T>{};
 
                 auto centers_view = local_index->centers();
-                auto centers_device = raft::make_device_matrix<float, int64_t>(*res, centers_view.extent(0), centers_view.extent(1));
-                raft::copy(*res, centers_device.view(), centers_view);
-                
-                std::vector<float> centers_host(centers_view.size());
-                raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(centers_host.data(), centers_view.extent(0), centers_view.extent(1)), centers_device.view());
+                size_t n_centers = centers_view.extent(0);
+                size_t dim = centers_view.extent(1);
+
+                auto centers_device_target = raft::make_device_matrix<T, int64_t>(*res, n_centers, dim);
+                if constexpr (sizeof(T) == 1) {
+                    if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
+                    auto centers_float_view = raft::make_device_matrix_view<const float, int64_t>(centers_view.data_handle(), n_centers, dim);
+                    this->quantizer_.template transform<T>(*res, centers_float_view, centers_device_target.data_handle(), true);
+                } else {
+                    raft::copy(*res, centers_device_target.view(), centers_view);
+                }
+
+                std::vector<T> host_centers(n_centers * dim);
+                raft::copy(*res, raft::make_host_matrix_view<T, int64_t>(host_centers.data(), n_centers, dim), centers_device_target.view());
                 raft::resource::sync_stream(*res);
-                return centers_host;
+                return host_centers;
             }
         );
         auto result = this->worker->wait(job_id).get();
         if (result.error) std::rethrow_exception(result.error);
-        return std::any_cast<std::vector<float>>(result.result);
+        return std::any_cast<std::vector<T>>(result.result);
     }
 
     std::string info() const override {

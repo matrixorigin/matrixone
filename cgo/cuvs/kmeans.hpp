@@ -307,8 +307,6 @@ public:
     }
 
     kmeans_result_t fit_predict_float(const float* dataset_data, uint64_t count_vectors) {
-        // Implementation for fit_predict_float
-        kmeans_build_params_t orig_bp = this->build_params;
         this->count = static_cast<uint32_t>(count_vectors);
         
         uint64_t job_id = this->worker->submit_main(
@@ -350,22 +348,34 @@ public:
         return std::any_cast<kmeans_result_t>(res_wait.result);
     }
 
-    std::vector<float> get_centroids() {
+    std::vector<T> get_centroids() {
         if (!centroids_) return {};
         
         uint64_t job_id = this->worker->submit_main(
             [&](raft_handle_wrapper_t& handle) -> std::any {
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
                 auto res = handle.get_raft_resources();
-                std::vector<float> centroids_host(centroids_->size());
-                raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(centroids_host.data(), centroids_->extent(0), centroids_->extent(1)), centroids_->view());
+                
+                size_t n_clusters = centroids_->extent(0);
+                size_t dim = centroids_->extent(1);
+
+                auto centroids_device_target = raft::make_device_matrix<T, int64_t>(*res, n_clusters, dim);
+                if constexpr (sizeof(T) == 1) {
+                    if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
+                    this->quantizer_.template transform<T>(*res, centroids_->view(), centroids_device_target.data_handle(), true);
+                } else {
+                    raft::copy(*res, centroids_device_target.view(), centroids_->view());
+                }
+
+                std::vector<T> centroids_host(n_clusters * dim);
+                raft::copy(*res, raft::make_host_matrix_view<T, int64_t>(centroids_host.data(), n_clusters, dim), centroids_device_target.view());
                 raft::resource::sync_stream(*res);
                 return centroids_host;
             }
         );
         auto result = this->worker->wait(job_id).get();
         if (result.error) std::rethrow_exception(result.error);
-        return std::any_cast<std::vector<float>>(result.result);
+        return std::any_cast<std::vector<T>>(result.result);
     }
 
     std::string info() const override {

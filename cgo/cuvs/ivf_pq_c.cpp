@@ -77,6 +77,38 @@ gpu_ivf_pq_c gpu_ivf_pq_new(const void* dataset_data, uint64_t count_vectors, ui
     return nullptr;
 }
 
+gpu_ivf_pq_c gpu_ivf_pq_new_from_data_file(const char* data_filename, distance_type_t metric_c, 
+                                                ivf_pq_build_params_t build_params,
+                                                const int* devices, int device_count, uint32_t nthread, 
+                                                distribution_mode_t dist_mode, quantization_t qtype, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        std::vector<int> devs(devices, devices + device_count);
+        void* ptr = nullptr;
+        switch (qtype) {
+            case Quantization_F32:
+                ptr = new gpu_ivf_pq_t<float>(std::string(data_filename), metric_c, build_params, devs, nthread, dist_mode);
+                break;
+            case Quantization_F16:
+                ptr = new gpu_ivf_pq_t<half>(std::string(data_filename), metric_c, build_params, devs, nthread, dist_mode);
+                break;
+            case Quantization_INT8:
+                ptr = new gpu_ivf_pq_t<int8_t>(std::string(data_filename), metric_c, build_params, devs, nthread, dist_mode);
+                break;
+            case Quantization_UINT8:
+                ptr = new gpu_ivf_pq_t<uint8_t>(std::string(data_filename), metric_c, build_params, devs, nthread, dist_mode);
+                break;
+            default: return nullptr;
+        }
+        static_cast<gpu_index_base_t<float, ivf_pq_build_params_t>*>(ptr)->start();
+        return static_cast<gpu_ivf_pq_c>(new gpu_ivf_pq_any_t(qtype, ptr));
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_ivf_pq_new_from_data_file", e.what());
+    }
+    return nullptr;
+}
+
 gpu_ivf_pq_c gpu_ivf_pq_new_empty(uint64_t total_count, uint32_t dimension, distance_type_t metric_c, 
                                          ivf_pq_build_params_t build_params,
                                          const int* devices, int device_count, uint32_t nthread, 
@@ -430,6 +462,116 @@ char* gpu_ivf_pq_info(gpu_ivf_pq_c index_c, void* errmsg) {
         matrixone::set_errmsg(errmsg, 
  "Error in gpu_ivf_pq_info", e.what());
         return nullptr;
+    }
+}
+
+void gpu_ivf_pq_get_centers(gpu_ivf_pq_c index_c, void* centers, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
+        switch (any->qtype) {
+            case Quantization_F32: {
+                auto host_centers = static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->get_centers();
+                if (!host_centers.empty()) std::copy(host_centers.begin(), host_centers.end(), static_cast<float*>(centers));
+                break;
+            }
+            case Quantization_F16: {
+                auto host_centers = static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->get_centers();
+                if (!host_centers.empty()) std::copy(host_centers.begin(), host_centers.end(), static_cast<half*>(centers));
+                break;
+            }
+            case Quantization_INT8: {
+                auto host_centers = static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->get_centers();
+                if (!host_centers.empty()) std::copy(host_centers.begin(), host_centers.end(), static_cast<int8_t*>(centers));
+                break;
+            }
+            case Quantization_UINT8: {
+                auto host_centers = static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->get_centers();
+                if (!host_centers.empty()) std::copy(host_centers.begin(), host_centers.end(), static_cast<uint8_t*>(centers));
+                break;
+            }
+            default: break;
+        }
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_ivf_pq_get_centers", e.what());
+    }
+}
+
+uint32_t gpu_ivf_pq_get_n_list(gpu_ivf_pq_c index_c) {
+    if (!index_c) return 0;
+    auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
+    switch (any->qtype) {
+        case Quantization_F32: return static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->get_n_list();
+        case Quantization_F16: return static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->get_n_list();
+        case Quantization_INT8: return static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->get_n_list();
+        case Quantization_UINT8: return static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->get_n_list();
+        default: return 0;
+    }
+}
+
+uint32_t gpu_ivf_pq_get_dim(gpu_ivf_pq_c index_c) {
+    if (!index_c) return 0;
+    auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
+    switch (any->qtype) {
+        case Quantization_F32: return static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->get_dim();
+        case Quantization_F16: return static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->get_dim();
+        case Quantization_INT8: return static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->get_dim();
+        case Quantization_UINT8: return static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->get_dim();
+        default: return 0;
+    }
+}
+
+uint32_t gpu_ivf_pq_get_rot_dim(gpu_ivf_pq_c index_c) {
+    if (!index_c) return 0;
+    auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
+    switch (any->qtype) {
+        case Quantization_F32: return static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->get_rot_dim();
+        case Quantization_F16: return static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->get_rot_dim();
+        case Quantization_INT8: return static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->get_rot_dim();
+        case Quantization_UINT8: return static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->get_rot_dim();
+        default: return 0;
+    }
+}
+
+uint32_t gpu_ivf_pq_get_dim_ext(gpu_ivf_pq_c index_c) {
+    if (!index_c) return 0;
+    auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
+    switch (any->qtype) {
+        case Quantization_F32: return static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->get_dim_ext();
+        case Quantization_F16: return static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->get_dim_ext();
+        case Quantization_INT8: return static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->get_dim_ext();
+        case Quantization_UINT8: return static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->get_dim_ext();
+        default: return 0;
+    }
+}
+
+void gpu_ivf_pq_get_dataset(gpu_ivf_pq_c index_c, void* out_data) {
+    // This is for debugging, we just copy the host dataset if it exists
+    if (!index_c) return;
+    auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
+    switch (any->qtype) {
+        case Quantization_F32: {
+            auto& ds = static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->flattened_host_dataset;
+            if (!ds.empty()) std::copy(ds.begin(), ds.end(), static_cast<float*>(out_data));
+            break;
+        }
+        case Quantization_F16: {
+            auto& ds = static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->flattened_host_dataset;
+            if (!ds.empty()) std::copy(ds.begin(), ds.end(), static_cast<half*>(out_data));
+            break;
+        }
+        case Quantization_INT8: {
+            auto& ds = static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->flattened_host_dataset;
+            if (!ds.empty()) std::copy(ds.begin(), ds.end(), static_cast<int8_t*>(out_data));
+            break;
+        }
+        case Quantization_UINT8: {
+            auto& ds = static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->flattened_host_dataset;
+            if (!ds.empty()) std::copy(ds.begin(), ds.end(), static_cast<uint8_t*>(out_data));
+            break;
+        }
+        default: break;
     }
 }
 

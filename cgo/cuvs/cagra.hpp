@@ -146,6 +146,23 @@ public:
         this->current_offset_ = 0;
     }
 
+    // Private constructor for creating from an existing cuVS index (used by merge)
+    gpu_cagra_t(std::unique_ptr<cagra_index> idx, 
+                  uint32_t dim, distance_type_t m, uint32_t nthread, const std::vector<int>& devices)
+        : index_(std::move(idx)) {
+        
+        this->metric = m;
+        this->dimension = dim;
+        this->devices_ = devices;
+        this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_, false);
+        
+        this->count = static_cast<uint32_t>(index_->size());
+        this->build_params.graph_degree = static_cast<size_t>(index_->graph_degree());
+        this->dist_mode = DistributionMode_SINGLE_GPU;
+        this->current_offset_ = this->count;
+        this->is_loaded_ = true;
+    }
+
     void start() override {
         auto init_fn = [](raft_handle_wrapper_t&) -> std::any { return std::any(); };
         auto stop_fn = [&](raft_handle_wrapper_t&) -> std::any {
@@ -218,6 +235,98 @@ public:
             this->dataset_device_ptr_ = std::make_shared<dataset_t>(std::move(dataset_device));
             raft::resource::sync_stream(*res);
         }
+    }
+
+    void extend(const T* additional_data, uint64_t num_vectors) {
+        if (!this->is_loaded_ || !index_) {
+            uint64_t old_size = this->flattened_host_dataset.size();
+            this->flattened_host_dataset.resize(old_size + num_vectors * this->dimension);
+            std::copy(additional_data, additional_data + num_vectors * this->dimension, this->flattened_host_dataset.begin() + old_size);
+            this->count += static_cast<uint32_t>(num_vectors);
+            this->current_offset_ += static_cast<uint32_t>(num_vectors);
+            return;
+        }
+
+        if constexpr (std::is_same_v<T, half>) {
+             throw std::runtime_error("CAGRA single-GPU extend is not supported for float16 (half) by cuVS.");
+        } else {
+            if (num_vectors == 0) return;
+
+            std::unique_lock<std::shared_mutex> lock(this->mutex_);
+
+            uint64_t job_id = this->worker->submit_main(
+                [&, additional_data, num_vectors](raft_handle_wrapper_t& handle) -> std::any {
+                    auto res = handle.get_raft_resources();
+                    
+                    auto additional_dataset_device = raft::make_device_matrix<T, int64_t>(
+                        *res, static_cast<int64_t>(num_vectors), static_cast<int64_t>(this->dimension));
+                    
+                    RAFT_CUDA_TRY(cudaMemcpyAsync(additional_dataset_device.data_handle(), additional_data,
+                                            num_vectors * this->dimension * sizeof(T), cudaMemcpyHostToDevice,
+                                            raft::resource::get_cuda_stream(*res)));
+
+                    cuvs::neighbors::cagra::extend_params params;
+                    cuvs::neighbors::cagra::extend(*res, params, raft::make_const_mdspan(additional_dataset_device.view()), *index_);
+
+                    raft::resource::sync_stream(*res);
+                    return std::any();
+                }
+            );
+
+            auto result = this->worker->wait(job_id).get();
+            if (result.error) std::rethrow_exception(result.error);
+
+            this->count = static_cast<uint32_t>(index_->size());
+            this->current_offset_ = this->count;
+        }
+    }
+
+    static std::unique_ptr<gpu_cagra_t<T>> merge(const std::vector<gpu_index_base_t<T, cagra_build_params_t>*>& base_indices, uint32_t nthread, const std::vector<int>& devs) {
+        if (base_indices.empty()) throw std::invalid_argument("base_indices empty");
+        
+        std::vector<gpu_cagra_t<T>*> indices;
+        for (auto* bi : base_indices) indices.push_back(static_cast<gpu_cagra_t<T>*>(bi));
+
+        uint32_t dim = indices[0]->dimension;
+        distance_type_t m = indices[0]->metric;
+
+        cuvs_worker_t transient_worker(1, devs, false);
+        transient_worker.start();
+
+        uint64_t job_id = transient_worker.submit_main(
+            [&indices](raft_handle_wrapper_t& handle) -> std::any {
+                auto res = handle.get_raft_resources();
+                
+                std::vector<cagra_index*> cagra_indices;
+                for (auto* idx : indices) {
+                    if (!idx->is_loaded_ || !idx->index_) {
+                        throw std::runtime_error("One of the indices to merge is not loaded or is a multi-GPU index.");
+                    }
+                    cagra_indices.push_back(idx->index_.get());
+                }
+                
+                cuvs::neighbors::cagra::index_params index_params;
+                auto merged = cuvs::neighbors::cagra::merge(*res, index_params, cagra_indices);
+                raft::resource::sync_stream(*res);
+                return new cagra_index(std::move(merged));
+            }
+        );
+
+        auto result = transient_worker.wait(job_id).get();
+        if (result.error) {
+            transient_worker.stop();
+            std::rethrow_exception(result.error);
+        }
+        
+        auto* merged_idx_ptr = std::any_cast<cagra_index*>(result.result);
+        std::unique_ptr<cagra_index> merged_idx(merged_idx_ptr);
+        transient_worker.stop();
+        
+        auto new_idx = std::make_unique<gpu_cagra_t<T>>(
+            std::move(merged_idx),
+            dim, m, nthread, devs
+        );
+        return new_idx;
     }
 
     search_result_t search(const T* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const cagra_search_params_t& sp) {
@@ -494,14 +603,6 @@ public:
         auto res = this->worker->wait(job_id).get();
         if (res.error) std::rethrow_exception(res.error);
         this->is_loaded_ = true;
-    }
-
-    void extend(const T* additional_data, uint64_t num_vectors) {
-        throw std::runtime_error("CAGRA extend not implemented");
-    }
-
-    static std::unique_ptr<gpu_cagra_t<T>> merge(const std::vector<gpu_index_base_t<T, cagra_build_params_t>*>& indices, uint32_t nthread, const std::vector<int>& devs) {
-        throw std::runtime_error("CAGRA merge not implemented");
     }
 
     void destroy() override {

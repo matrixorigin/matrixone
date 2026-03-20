@@ -189,7 +189,6 @@ public:
             auto mg_res = this->worker->get_mg_resources();
             if (!mg_res) throw std::runtime_error("MG resources not initialized for sharded mode");
 
-            // For MG build, use factory function and store in shared_ptr<void>
             auto dataset_pinned = raft::make_host_matrix<T, int64_t, raft::row_major>(*mg_res, (int64_t)this->count, (int64_t)this->dimension);
             std::copy(this->flattened_host_dataset.begin(), this->flattened_host_dataset.end(), dataset_pinned.data_handle());
 
@@ -474,21 +473,37 @@ public:
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
                 auto res = handle.get_raft_resources();
 
-                const ivf_flat_index* local_index = index_.get();
-                if (!local_index && mg_index_ && !mg_index_->ann_interfaces_.empty()) {
-                    local_index = &mg_index_->ann_interfaces_[0].index_.value();
+                const ivf_flat_index* local_index = nullptr;
+                if (index_) {
+                    local_index = index_.get();
+                } else if (mg_index_) {
+                    for (const auto& iface : mg_index_->ann_interfaces_) {
+                        if (iface.index_.has_value()) {
+                            local_index = &iface.index_.value();
+                            break;
+                        }
+                    }
                 }
 
                 if (!local_index) return std::vector<T>{};
 
                 auto centers_view = local_index->centers();
-                auto centers_device = raft::make_device_matrix<T, int64_t>(*res, centers_view.extent(0), centers_view.extent(1));
-                raft::copy(*res, centers_device.view(), centers_view);
-                
-                std::vector<T> centers_host(centers_view.size());
-                raft::copy(*res, raft::make_host_matrix_view<T, int64_t>(centers_host.data(), centers_view.extent(0), centers_view.extent(1)), centers_device.view());
+                size_t n_centers = centers_view.extent(0);
+                size_t dim = centers_view.extent(1);
+
+                auto centers_device_target = raft::make_device_matrix<T, int64_t>(*res, n_centers, dim);
+                if constexpr (sizeof(T) == 1) {
+                    if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
+                    auto centers_float_view = raft::make_device_matrix_view<const float, int64_t>(centers_view.data_handle(), n_centers, dim);
+                    this->quantizer_.template transform<T>(*res, centers_float_view, centers_device_target.data_handle(), true);
+                } else {
+                    raft::copy(*res, centers_device_target.view(), centers_view);
+                }
+
+                std::vector<T> host_centers(n_centers * dim);
+                raft::copy(*res, raft::make_host_matrix_view<T, int64_t>(host_centers.data(), n_centers, dim), centers_device_target.view());
                 raft::resource::sync_stream(*res);
-                return centers_host;
+                return host_centers;
             }
         );
         auto result = this->worker->wait(job_id).get();
