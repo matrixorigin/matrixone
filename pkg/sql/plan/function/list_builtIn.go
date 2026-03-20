@@ -3917,6 +3917,16 @@ var supportedMathBuiltIns = []FuncNew{
 			},
 			{
 				overloadId: 5,
+				args:       []types.T{types.T_decimal256},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return AbsDecimal256
+				},
+			},
+			{
+				overloadId: 6,
 				args:       []types.T{types.T_array_float32},
 				retType: func(parameters []types.Type) types.Type {
 					return parameters[0]
@@ -3926,7 +3936,7 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId: 6,
+				overloadId: 7,
 				args:       []types.T{types.T_array_float64},
 				retType: func(parameters []types.Type) types.Type {
 					return parameters[0]
@@ -4033,6 +4043,16 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return SignDecimal128
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_decimal256},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return SignDecimal256
 				},
 			},
 		},
@@ -4395,6 +4415,26 @@ var supportedMathBuiltIns = []FuncNew{
 			},
 			{
 				overloadId: 10,
+				args:       []types.T{types.T_decimal256},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return CeilDecimal256
+				},
+			},
+			{
+				overloadId: 11,
+				args:       []types.T{types.T_decimal256, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return CeilDecimal256
+				},
+			},
+			{
+				overloadId: 12,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_float64.ToType()
@@ -4605,6 +4645,26 @@ var supportedMathBuiltIns = []FuncNew{
 			},
 			{
 				overloadId: 10,
+				args:       []types.T{types.T_decimal256},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return FloorDecimal256
+				},
+			},
+			{
+				overloadId: 11,
+				args:       []types.T{types.T_decimal256, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return FloorDecimal256
+				},
+			},
+			{
+				overloadId: 12,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_float64.ToType()
@@ -5189,6 +5249,26 @@ var supportedMathBuiltIns = []FuncNew{
 					return RoundDecimal128
 				},
 			},
+			{
+				overloadId: 10,
+				args:       []types.T{types.T_decimal256},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return RoundDecimal256
+				},
+			},
+			{
+				overloadId: 11,
+				args:       []types.T{types.T_decimal256, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return RoundDecimal256
+				},
+			},
 		},
 	},
 
@@ -5298,6 +5378,26 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return TruncateDecimal128
+				},
+			},
+			{
+				overloadId: 10,
+				args:       []types.T{types.T_decimal256},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return TruncateDecimal256
+				},
+			},
+			{
+				overloadId: 11,
+				args:       []types.T{types.T_decimal256, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return TruncateDecimal256
 				},
 			},
 		},

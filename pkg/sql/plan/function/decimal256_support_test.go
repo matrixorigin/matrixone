@@ -49,6 +49,19 @@ func hasOverload(functionID int, args ...types.T) bool {
 	return false
 }
 
+func resolvedReturnType(t *testing.T, functionID int, inputs []types.Type) types.Type {
+	t.Helper()
+	fn := allSupportedFunctions[functionID]
+	result := fn.checkFn(fn.Overloads, inputs)
+	require.NotEqual(t, failedFunctionParametersWrong, result.status)
+
+	finalTypes := inputs
+	if result.status == succeedWithCast {
+		finalTypes = result.finalType
+	}
+	return fn.Overloads[result.idx].retType(finalTypes)
+}
+
 func TestDecimal256CompareFns(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	decType := types.New(types.T_decimal256, 65, 2)
@@ -229,4 +242,265 @@ func TestDecimal256ConditionalOperators(t *testing.T) {
 	)
 	ok, info = coalesceTC.Run()
 	require.True(t, ok, info)
+}
+
+func TestDecimal256ArithmeticTypeResolution(t *testing.T) {
+	dec2 := types.New(types.T_decimal256, 65, 2)
+	dec4 := types.New(types.T_decimal256, 65, 4)
+
+	plusType := resolvedReturnType(t, PLUS, []types.Type{dec2, dec4})
+	require.Equal(t, types.T_decimal256, plusType.Oid)
+	require.Equal(t, int32(65), plusType.Width)
+	require.Equal(t, int32(4), plusType.Scale)
+
+	minusType := resolvedReturnType(t, MINUS, []types.Type{dec2, dec4})
+	require.Equal(t, types.T_decimal256, minusType.Oid)
+	require.Equal(t, int32(65), minusType.Width)
+	require.Equal(t, int32(4), minusType.Scale)
+
+	multiType := resolvedReturnType(t, MULTI, []types.Type{dec2, dec4})
+	require.Equal(t, types.T_decimal256, multiType.Oid)
+	require.Equal(t, int32(65), multiType.Width)
+	require.Equal(t, int32(6), multiType.Scale)
+
+	divType := resolvedReturnType(t, DIV, []types.Type{dec4, dec2})
+	require.Equal(t, types.T_decimal256, divType.Oid)
+	require.Equal(t, int32(65), divType.Width)
+	require.Equal(t, int32(10), divType.Scale)
+
+	require.True(t, hasOverload(UNARY_PLUS, types.T_decimal256))
+	require.True(t, hasOverload(UNARY_MINUS, types.T_decimal256))
+}
+
+func TestDecimal256ArithmeticFns(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	dec2 := types.New(types.T_decimal256, 65, 2)
+	dec4 := types.New(types.T_decimal256, 65, 4)
+	dec6 := types.New(types.T_decimal256, 65, 6)
+	dec10 := types.New(types.T_decimal256, 65, 10)
+
+	left := mustParseDecimal256(t, "5.2500", 4)
+	right := mustParseDecimal256(t, "2.00", 2)
+
+	plusTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(dec4, []types.Decimal256{left}, []bool{false}),
+			NewFunctionTestInput(dec2, []types.Decimal256{right}, []bool{false}),
+		},
+		NewFunctionTestResult(dec4, false, []types.Decimal256{mustParseDecimal256(t, "7.2500", 4)}, []bool{false}),
+		plusFn,
+	)
+	ok, info := plusTC.Run()
+	require.True(t, ok, info)
+
+	minusTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(dec4, []types.Decimal256{left}, []bool{false}),
+			NewFunctionTestInput(dec2, []types.Decimal256{right}, []bool{false}),
+		},
+		NewFunctionTestResult(dec4, false, []types.Decimal256{mustParseDecimal256(t, "3.2500", 4)}, []bool{false}),
+		minusFn,
+	)
+	ok, info = minusTC.Run()
+	require.True(t, ok, info)
+
+	multiTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(dec4, []types.Decimal256{left}, []bool{false}),
+			NewFunctionTestInput(dec2, []types.Decimal256{right}, []bool{false}),
+		},
+		NewFunctionTestResult(dec6, false, []types.Decimal256{mustParseDecimal256(t, "10.500000", 6)}, []bool{false}),
+		multiFn,
+	)
+	ok, info = multiTC.Run()
+	require.True(t, ok, info)
+
+	divTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(dec4, []types.Decimal256{left}, []bool{false}),
+			NewFunctionTestInput(dec2, []types.Decimal256{right}, []bool{false}),
+		},
+		NewFunctionTestResult(dec10, false, []types.Decimal256{mustParseDecimal256(t, "2.6250000000", 10)}, []bool{false}),
+		divFn,
+	)
+	ok, info = divTC.Run()
+	require.True(t, ok, info)
+
+	modTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(dec4, []types.Decimal256{left}, []bool{false}),
+			NewFunctionTestInput(dec2, []types.Decimal256{right}, []bool{false}),
+		},
+		NewFunctionTestResult(dec4, false, []types.Decimal256{mustParseDecimal256(t, "1.2500", 4)}, []bool{false}),
+		modFn,
+	)
+	ok, info = modTC.Run()
+	require.True(t, ok, info)
+
+	intDivTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(dec4, []types.Decimal256{left}, []bool{false}),
+			NewFunctionTestInput(dec2, []types.Decimal256{right}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{2}, []bool{false}),
+		integerDivFn,
+	)
+	ok, info = intDivTC.Run()
+	require.True(t, ok, info)
+}
+
+func TestDecimal256UnaryOperators(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	dec4 := types.New(types.T_decimal256, 65, 4)
+	positive := mustParseDecimal256(t, "5.2500", 4)
+	negative := mustParseDecimal256(t, "-5.2500", 4)
+
+	unaryPlusTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(dec4, []types.Decimal256{negative}, []bool{false}),
+		},
+		NewFunctionTestResult(dec4, false, []types.Decimal256{negative}, []bool{false}),
+		operatorUnaryPlus[types.Decimal256],
+	)
+	ok, info := unaryPlusTC.Run()
+	require.True(t, ok, info)
+
+	unaryMinusTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(dec4, []types.Decimal256{positive}, []bool{false}),
+		},
+		NewFunctionTestResult(dec4, false, []types.Decimal256{negative}, []bool{false}),
+		operatorUnaryMinusDecimal256,
+	)
+	ok, info = unaryMinusTC.Run()
+	require.True(t, ok, info)
+}
+
+func TestDecimal256MathFunctions(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	dec4 := types.New(types.T_decimal256, 65, 4)
+	digitsType := types.T_int64.ToType()
+	positive := mustParseDecimal256(t, "12.3412", 4)
+	negative := mustParseDecimal256(t, "-12.3412", 4)
+	zero := mustParseDecimal256(t, "0.0000", 4)
+
+	require.True(t, hasOverload(ABS, types.T_decimal256))
+	require.True(t, hasOverload(SIGN, types.T_decimal256))
+	require.True(t, hasOverload(CEIL, types.T_decimal256))
+	require.True(t, hasOverload(CEIL, types.T_decimal256, types.T_int64))
+	require.True(t, hasOverload(FLOOR, types.T_decimal256))
+	require.True(t, hasOverload(FLOOR, types.T_decimal256, types.T_int64))
+	require.True(t, hasOverload(ROUND, types.T_decimal256))
+	require.True(t, hasOverload(ROUND, types.T_decimal256, types.T_int64))
+	require.True(t, hasOverload(TRUNCATE, types.T_decimal256))
+	require.True(t, hasOverload(TRUNCATE, types.T_decimal256, types.T_int64))
+
+	absTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(dec4, []types.Decimal256{positive, negative, zero}, []bool{false, false, false}),
+		},
+		NewFunctionTestResult(dec4, false, []types.Decimal256{positive, positive, zero}, []bool{false, false, false}),
+		AbsDecimal256,
+	)
+	ok, info := absTC.Run()
+	require.True(t, ok, info)
+
+	signTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(dec4, []types.Decimal256{positive, zero, negative}, []bool{false, false, false}),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1, 0, -1}, []bool{false, false, false}),
+		SignDecimal256,
+	)
+	ok, info = signTC.Run()
+	require.True(t, ok, info)
+
+	digitsInput := []FunctionTestInput{
+		NewFunctionTestInput(dec4, []types.Decimal256{positive, negative}, []bool{false, false}),
+		NewFunctionTestConstInput(digitsType, []int64{2}, []bool{false}),
+	}
+
+	ceilTC := NewFunctionTestCase(proc,
+		digitsInput,
+		NewFunctionTestResult(dec4, false,
+			[]types.Decimal256{
+				mustParseDecimal256(t, "12.3500", 4),
+				mustParseDecimal256(t, "-12.3400", 4),
+			},
+			[]bool{false, false}),
+		CeilDecimal256,
+	)
+	ok, info = ceilTC.Run()
+	require.True(t, ok, info)
+
+	floorTC := NewFunctionTestCase(proc,
+		digitsInput,
+		NewFunctionTestResult(dec4, false,
+			[]types.Decimal256{
+				mustParseDecimal256(t, "12.3400", 4),
+				mustParseDecimal256(t, "-12.3500", 4),
+			},
+			[]bool{false, false}),
+		FloorDecimal256,
+	)
+	ok, info = floorTC.Run()
+	require.True(t, ok, info)
+
+	roundTC := NewFunctionTestCase(proc,
+		digitsInput,
+		NewFunctionTestResult(dec4, false,
+			[]types.Decimal256{
+				mustParseDecimal256(t, "12.3400", 4),
+				mustParseDecimal256(t, "-12.3400", 4),
+			},
+			[]bool{false, false}),
+		RoundDecimal256,
+	)
+	ok, info = roundTC.Run()
+	require.True(t, ok, info)
+
+	truncateTC := NewFunctionTestCase(proc,
+		digitsInput,
+		NewFunctionTestResult(dec4, false,
+			[]types.Decimal256{
+				mustParseDecimal256(t, "12.3400", 4),
+				mustParseDecimal256(t, "-12.3400", 4),
+			},
+			[]bool{false, false}),
+		TruncateDecimal256,
+	)
+	ok, info = truncateTC.Run()
+	require.True(t, ok, info)
+}
+
+func TestDecimal256StringTypeCoercion(t *testing.T) {
+	dec4 := types.New(types.T_decimal256, 65, 4)
+	varchar := types.T_varchar.ToType()
+
+	ok, left, right := fixedTypeCastRule1(dec4, varchar)
+	require.True(t, ok)
+	require.Equal(t, types.T_decimal256, left.Oid)
+	require.Equal(t, types.T_decimal256, right.Oid)
+	require.GreaterOrEqual(t, left.Width, int32(65))
+	require.GreaterOrEqual(t, right.Width, int32(65))
+	require.Equal(t, int32(4), left.Scale)
+	require.Equal(t, int32(4), right.Scale)
+
+	ok, left, right = fixedTypeCastRule1(varchar, dec4)
+	require.True(t, ok)
+	require.Equal(t, types.T_decimal256, left.Oid)
+	require.Equal(t, types.T_decimal256, right.Oid)
+	require.GreaterOrEqual(t, left.Width, int32(65))
+	require.GreaterOrEqual(t, right.Width, int32(65))
+	require.Equal(t, int32(4), left.Scale)
+	require.Equal(t, int32(4), right.Scale)
+
+	ok, left, right = fixedTypeCastRule2(dec4, varchar)
+	require.True(t, ok)
+	require.Equal(t, types.T_decimal256, left.Oid)
+	require.Equal(t, types.T_decimal256, right.Oid)
+	require.GreaterOrEqual(t, left.Width, int32(65))
+	require.GreaterOrEqual(t, right.Width, int32(65))
+	require.Equal(t, int32(4), left.Scale)
+	require.Equal(t, int32(4), right.Scale)
 }
