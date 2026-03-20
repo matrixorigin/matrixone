@@ -582,6 +582,14 @@ func (dedupJoin *DedupJoin) checkSnapshotAdvancedDuplicates(proc *process.Proces
 	if dedupJoin.OnDuplicateAction != plan.Node_FAIL || ctr.batchRowCount == 0 || (dedupJoin.TargetTableID == 0 && dedupJoin.TargetTableRef == nil) {
 		return nil
 	}
+	// Dedup joins with an old-key column (UPDATE/REPLACE-style paths) already
+	// use DelRows in the normal hash/probe flow to exclude self-conflicts. This
+	// snapshot-range fallback only knows "a key changed in the range", so it
+	// cannot distinguish a same-row key transition from a real external
+	// duplicate. Restrict it to pure insert-like dedup joins.
+	if dedupJoin.DelColIdx != -1 {
+		return nil
+	}
 
 	currentTS := proc.GetTxnOperator().SnapshotTS()
 	if !dedupJoin.InitialSnapshotTS.Less(currentTS) {

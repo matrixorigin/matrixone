@@ -352,3 +352,16 @@ func TestCheckDuplicateKeysInRange_ReturnsActualDuplicateRow(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "50", rowStr)
 }
+
+func TestCheckSnapshotAdvancedDuplicates_SkipsOldKeyDedupPaths(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	arg := &DedupJoin{
+		OnDuplicateAction: plan.Node_FAIL,
+		TargetTableID:     42,
+		DelColIdx:         0,
+	}
+	arg.ctr.batchRowCount = 1
+
+	err := arg.checkSnapshotAdvancedDuplicates(proc)
+	require.NoError(t, err)
+}
