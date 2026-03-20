@@ -581,6 +581,7 @@ func (dedupJoin *DedupJoin) checkSnapshotAdvancedDuplicates(proc *process.Proces
 
 	fromTS := types.BuildTS(dedupJoin.InitialSnapshotTS.PhysicalTime, dedupJoin.InitialSnapshotTS.LogicalTime)
 	toTS := types.BuildTS(currentTS.PhysicalTime, currentTS.LogicalTime)
+	keyBat := batch.NewWithSize(1)
 
 	for _, buildBat := range ctr.batches {
 		if buildBat == nil || buildBat.IsEmpty() {
@@ -592,7 +593,6 @@ func (dedupJoin *DedupJoin) checkSnapshotAdvancedDuplicates(proc *process.Proces
 			return err
 		}
 
-		keyBat := batch.NewWithSize(1)
 		keyBat.Vecs[0] = keyVec
 		keyBat.SetRowCount(buildBat.RowCount())
 
@@ -644,7 +644,26 @@ func checkDuplicateKeysInRange(
 	if !mayChanged {
 		return "", nil
 	}
-	return formatDedupRow(keyVec, 0, dedupColName, dedupColTypes)
+
+	singleRowBat := batch.NewWithSize(1)
+	for row := 0; row < keyBat.RowCount(); row++ {
+		rowVec, err := keyVec.Window(row, row+1)
+		if err != nil {
+			return "", err
+		}
+		singleRowBat.Vecs[0] = rowVec
+		singleRowBat.SetRowCount(1)
+
+		rowChanged, err := rel.PrimaryKeysMayBeUpserted(proc.Ctx, fromTS, toTS, singleRowBat, 0)
+		rowVec.Free(proc.Mp())
+		if err != nil {
+			return "", err
+		}
+		if rowChanged {
+			return formatDedupRow(keyVec, row, dedupColName, dedupColTypes)
+		}
+	}
+	return "", nil
 }
 
 func formatDedupRow(vec *vector.Vector, row int, dedupColName string, dedupColTypes []plan.Type) (string, error) {
