@@ -47,7 +47,7 @@ void gpu_pairwise_distance(const void* x,
         }
 
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_pairwise_distance", e.what());
+        matrixone::set_errmsg(errmsg, "Error in gpu_pairwise_distance", e.what());
     }
 }
 

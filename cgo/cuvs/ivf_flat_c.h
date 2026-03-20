@@ -18,6 +18,7 @@
 #define IVF_FLAT_C_H
 
 #include "helper.h"
+#include "cuvs_types.h"
 #include <stdbool.h>
 
 #ifdef __cplusplus

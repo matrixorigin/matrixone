@@ -18,6 +18,7 @@
 #define BRUTE_FORCE_C_H
 
 #include "helper.h"
+#include "cuvs_types.h"
 
 #ifdef __cplusplus
 extern "C" {

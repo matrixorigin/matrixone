@@ -245,7 +245,11 @@ public:
             auto labels_device = raft::make_device_vector<int64_t, int64_t>(*res, (int64_t)num_queries);
             
             float inertia;
-            cuvs::cluster::kmeans::predict(*res, cuvs::cluster::kmeans::params{}, queries_device_f.view(), std::nullopt, centroids_->view(), 
+            cuvs::cluster::kmeans::params kmeans_params;
+            kmeans_params.n_clusters = this->build_params.k;
+            kmeans_params.metric = static_cast<cuvs::distance::DistanceType>(this->metric);
+
+            cuvs::cluster::kmeans::predict(*res, kmeans_params, queries_device_f.view(), std::nullopt, centroids_->view(), 
                                             labels_device.view(), true, raft::make_host_scalar_view<float>(&inertia));
             
             std::vector<int64_t> labels_host(num_queries);
@@ -274,7 +278,11 @@ public:
             
             auto labels_device = raft::make_device_vector<int64_t, int64_t>(*res, (int64_t)num_queries);
             float inertia;
-            cuvs::cluster::kmeans::predict(*res, cuvs::cluster::kmeans::params{}, queries_device_f.view(), std::nullopt, centroids_->view(), 
+            cuvs::cluster::kmeans::params kmeans_params;
+            kmeans_params.n_clusters = this->build_params.k;
+            kmeans_params.metric = static_cast<cuvs::distance::DistanceType>(this->metric);
+
+            cuvs::cluster::kmeans::predict(*res, kmeans_params, queries_device_f.view(), std::nullopt, centroids_->view(), 
                                             labels_device.view(), true, raft::make_host_scalar_view<float>(&inertia));
             
             std::vector<int64_t> labels_host(num_queries);
@@ -299,7 +307,47 @@ public:
     }
 
     kmeans_result_t fit_predict_float(const float* dataset_data, uint64_t count_vectors) {
-        throw std::runtime_error("fit_predict_float not implemented");
+        // Implementation for fit_predict_float
+        kmeans_build_params_t orig_bp = this->build_params;
+        this->count = static_cast<uint32_t>(count_vectors);
+        
+        uint64_t job_id = this->worker->submit_main(
+            [&](raft_handle_wrapper_t& handle) -> std::any {
+                std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                auto res = handle.get_raft_resources();
+
+                auto dataset_device_f = raft::make_device_matrix<float, int64_t>(*res, (int64_t)this->count, (int64_t)this->dimension);
+                raft::copy(*res, dataset_device_f.view(), raft::make_host_matrix_view<const float, int64_t>(dataset_data, this->count, this->dimension));
+
+                cuvs::cluster::kmeans::params kmeans_params;
+                kmeans_params.n_clusters = this->build_params.k;
+                kmeans_params.metric = static_cast<cuvs::distance::DistanceType>(this->metric);
+                kmeans_params.max_iter = this->build_params.max_iter;
+                kmeans_params.tol = this->build_params.tol;
+
+                centroids_ = std::make_unique<raft::device_matrix<float, int64_t>>(
+                    raft::make_device_matrix<float, int64_t>(*res, (int64_t)kmeans_params.n_clusters, (int64_t)this->dimension));
+                
+                float inertia;
+                int64_t n_iter;
+                cuvs::cluster::kmeans::fit(*res, kmeans_params, dataset_device_f.view(), std::nullopt, centroids_->view(), 
+                                            raft::make_host_scalar_view<float>(&inertia), raft::make_host_scalar_view<int64_t>(&n_iter));
+                
+                auto labels_device = raft::make_device_vector<int64_t, int64_t>(*res, (int64_t)this->count);
+                cuvs::cluster::kmeans::predict(*res, kmeans_params, dataset_device_f.view(), std::nullopt, centroids_->view(), 
+                                                labels_device.view(), true, raft::make_host_scalar_view<float>(&inertia));
+
+                std::vector<int64_t> labels_host(this->count);
+                raft::copy(*res, raft::make_host_vector_view<int64_t, int64_t>(labels_host.data(), (int64_t)this->count), labels_device.view());
+                raft::resource::sync_stream(*res);
+
+                return kmeans_result_t{labels_host, inertia, n_iter};
+            }
+        );
+        auto res_wait = this->worker->wait(job_id).get();
+        if (res_wait.error) std::rethrow_exception(res_wait.error);
+        this->is_loaded_ = true;
+        return std::any_cast<kmeans_result_t>(res_wait.result);
     }
 
     std::vector<float> get_centroids() {

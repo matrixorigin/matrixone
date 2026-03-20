@@ -14,55 +14,45 @@
  * limitations under the License.
  */
 
-#ifndef MO_CUVS_C_HELPER_H
-#define MO_CUVS_C_HELPER_H
+#pragma once
 
+#include <raft/core/resources.hpp>
+#include <raft/core/host_mdspan.hpp>
+#include <vector>
+#include <string>
 #include "cuvs_types.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-/**
- * @brief Returns the number of CUDA-capable devices available.
- * @return Number of GPU devices.
- */
-int gpu_get_device_count();
-
-/**
- * @brief Lists the IDs of available CUDA devices.
- * @param devices Output array to store device IDs.
- * @param max_count Maximum number of device IDs to store.
- * @return Number of device IDs written to the array.
- */
-int gpu_get_device_list(int* devices, int max_count);
-
-/**
- * @brief Converts float32 data to float16 (half) on GPU.
- * @param src Pointer to source float32 data on host or device.
- * @param dst Pointer to destination float16 data on device.
- * @param total_elements Total number of elements to convert.
- * @param device_id ID of the GPU device to use.
- * @param errmsg Pointer to store error message if any.
- */
-void gpu_convert_f32_to_f16(const float* src, void* dst, uint64_t total_elements, int device_id, void* errmsg);
-
-/**
- * @brief Standardized helper to set an error message.
- * @param errmsg Pointer to the error message destination.
- * @param prefix Prefix for the error message (e.g., function name).
- * @param what The actual error description.
- */
-void set_errmsg(void* errmsg, const char* prefix, const char* what);
-
-#ifdef __cplusplus
-}
-
-#include <cuvs/distance/distance.hpp>
 namespace matrixone {
-    cuvs::distance::DistanceType convert_distance_type(distance_type_t metric_c);
-    const raft::resources& get_raft_resources();
-}
-#endif
 
-#endif // MO_CUVS_C_HELPER_H
+/**
+ * @brief Helper to check if a raft handle has SNMG resources initialized.
+ */
+bool is_snmg_handle(const raft::resources& res);
+
+/**
+ * @brief Initialize NCCL communicators for a multi-GPU resource container.
+ */
+void init_mg_comms(raft::resources& mg_res, const std::vector<int>& devices);
+
+/**
+ * @brief Save a host matrix to a file in MODF format.
+ */
+void save_host_matrix(const std::string& filename, raft::host_matrix_view<const float, int64_t, raft::row_major> view);
+
+/**
+ * @brief Helper to set an error message in a C-compatible way.
+ */
+void set_errmsg(void* errmsg, const char* context, const char* message);
+
+/**
+ * @brief Get global raft resources (for ad-hoc operations).
+ */
+const raft::resources& get_raft_resources();
+
+} // namespace matrixone
+
+// C-compatible wrappers if needed
+extern "C" {
+    int gpu_get_device_count();
+    void gpu_get_device_list(int* devices, int count);
+}

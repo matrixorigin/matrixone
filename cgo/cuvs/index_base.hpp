@@ -49,6 +49,7 @@ public:
     mutable std::shared_mutex mutex_;
     bool is_loaded_ = false;
     int build_device_id_ = 0;
+    // Use shared_ptr<void> to keep various RAFT resources alive
     std::shared_ptr<void> dataset_device_ptr_; // Keep device memory alive
 
     gpu_index_base_t() = default;

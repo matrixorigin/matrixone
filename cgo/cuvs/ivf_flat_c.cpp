@@ -71,7 +71,8 @@ gpu_ivf_flat_c gpu_ivf_flat_new(const void* dataset_data, uint64_t count_vectors
         static_cast<gpu_index_base_t<float, ivf_flat_build_params_t>*>(ptr)->start();
         return static_cast<gpu_ivf_flat_c>(new gpu_ivf_flat_any_t(qtype, ptr));
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_ivf_flat_new", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_ivf_flat_new", e.what());
     }
     return nullptr;
 }
@@ -102,7 +103,8 @@ gpu_ivf_flat_c gpu_ivf_flat_new_empty(uint64_t total_count, uint32_t dimension, 
         static_cast<gpu_index_base_t<float, ivf_flat_build_params_t>*>(ptr)->start();
         return static_cast<gpu_ivf_flat_c>(new gpu_ivf_flat_any_t(qtype, ptr));
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_ivf_flat_new_empty", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_ivf_flat_new_empty", e.what());
     }
     return nullptr;
 }
@@ -133,7 +135,8 @@ gpu_ivf_flat_c gpu_ivf_flat_load_file(const char* filename, uint32_t dimension, 
         static_cast<gpu_index_base_t<float, ivf_flat_build_params_t>*>(ptr)->start();
         return static_cast<gpu_ivf_flat_c>(new gpu_ivf_flat_any_t(qtype, ptr));
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_ivf_flat_load_file", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_ivf_flat_load_file", e.what());
     }
     return nullptr;
 }
@@ -143,7 +146,8 @@ void gpu_ivf_flat_destroy(gpu_ivf_flat_c index_c, void* errmsg) {
     try {
         delete static_cast<gpu_ivf_flat_any_t*>(index_c);
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_ivf_flat_destroy", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_ivf_flat_destroy", e.what());
     }
 }
 
@@ -159,7 +163,8 @@ void gpu_ivf_flat_start(gpu_ivf_flat_c index_c, void* errmsg) {
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_ivf_flat_start", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_ivf_flat_start", e.what());
     }
 }
 
@@ -175,7 +180,8 @@ void gpu_ivf_flat_build(gpu_ivf_flat_c index_c, void* errmsg) {
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_ivf_flat_build", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_ivf_flat_build", e.what());
     }
 }
 
@@ -191,7 +197,8 @@ void gpu_ivf_flat_add_chunk(gpu_ivf_flat_c index_c, const void* chunk_data, uint
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_ivf_flat_add_chunk", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_ivf_flat_add_chunk", e.what());
     }
 }
 
@@ -207,7 +214,8 @@ void gpu_ivf_flat_add_chunk_float(gpu_ivf_flat_c index_c, const float* chunk_dat
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_ivf_flat_add_chunk_float", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_ivf_flat_add_chunk_float", e.what());
     }
 }
 
@@ -223,7 +231,8 @@ void gpu_ivf_flat_train_quantizer(gpu_ivf_flat_c index_c, const float* train_dat
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_ivf_flat_train_quantizer", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_ivf_flat_train_quantizer", e.what());
     }
 }
 
@@ -239,7 +248,8 @@ void gpu_ivf_flat_set_per_thread_device(gpu_ivf_flat_c index_c, bool enable, voi
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_ivf_flat_set_per_thread_device", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_ivf_flat_set_per_thread_device", e.what());
     }
 }
 
@@ -255,7 +265,8 @@ void gpu_ivf_flat_set_use_batching(gpu_ivf_flat_c index_c, bool enable, void* er
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_ivf_flat_set_use_batching", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_ivf_flat_set_use_batching", e.what());
     }
 }
 
@@ -271,7 +282,8 @@ void gpu_ivf_flat_set_quantizer(gpu_ivf_flat_c index_c, float min, float max, vo
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_ivf_flat_set_quantizer", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_ivf_flat_set_quantizer", e.what());
     }
 }
 
@@ -287,7 +299,8 @@ void gpu_ivf_flat_get_quantizer(gpu_ivf_flat_c index_c, float* min, float* max, 
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_ivf_flat_get_quantizer", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_ivf_flat_get_quantizer", e.what());
     }
 }
 
@@ -303,7 +316,8 @@ void gpu_ivf_flat_save(gpu_ivf_flat_c index_c, const char* filename, void* errms
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_ivf_flat_save", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_ivf_flat_save", e.what());
     }
 }
 
@@ -324,7 +338,8 @@ gpu_ivf_flat_search_res_t gpu_ivf_flat_search(gpu_ivf_flat_c index_c, const void
         }
         result.result_ptr = static_cast<gpu_ivf_flat_result_c>(cpp_res);
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_ivf_flat_search", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_ivf_flat_search", e.what());
     }
     return result;
 }
@@ -346,7 +361,8 @@ gpu_ivf_flat_search_res_t gpu_ivf_flat_search_float(gpu_ivf_flat_c index_c, cons
         }
         result.result_ptr = static_cast<gpu_ivf_flat_result_c>(cpp_res);
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_ivf_flat_search_float", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_ivf_flat_search_float", e.what());
     }
     return result;
 }
@@ -411,7 +427,8 @@ char* gpu_ivf_flat_info(gpu_ivf_flat_c index_c, void* errmsg) {
         }
         return strdup(info.c_str());
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_ivf_flat_info", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_ivf_flat_info", e.what());
         return nullptr;
     }
 }
@@ -444,7 +461,8 @@ void gpu_ivf_flat_get_centers(gpu_ivf_flat_c index_c, void* centers, void* errms
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_ivf_flat_get_centers", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_ivf_flat_get_centers", e.what());
     }
 }
 

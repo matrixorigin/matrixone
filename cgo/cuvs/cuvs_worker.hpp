@@ -19,6 +19,7 @@
 #include <raft/core/device_resources_snmg.hpp>
 #include <raft/core/resource/comms.hpp>
 #include <raft/core/resources.hpp>
+#include "helper.h"
 
 #include <any>
 #include <atomic>
@@ -32,19 +33,6 @@
 #include <thread>
 #include <vector>
 #include <map>
-
-/*
- * The cuvs_worker_t manages a pool of threads, each assigned a unique rank and its own device-specific
- * RAFT resources. This architecture addresses several critical issues found in sharded (SNMG) mode:
- *
- * 1. Build Coordination: Collective builds are correctly performed by ensuring all ranks participate.
- * 2. Memory Safety: All multi-GPU query and result buffers must use pinned host memory (raft::make_host_matrix)
- *    to satisfy NCCL requirements.
- * 3. Multi-threaded Search: Search operations can be executed on any worker thread (using submit())
- *    rather than being restricted to the main thread.
- * 4. Rank Integrity: Each worker thread maintains its own raft_handle_wrapper_t with a unique rank
- *    and device assignment.
- */
 
 namespace matrixone {
 
@@ -72,6 +60,15 @@ public:
         return true;
     }
 
+    bool try_pop(T& item) {
+        std::unique_lock<std::mutex> lock(mu_);
+        if (queue_.empty()) return false;
+        item = std::move(queue_.front());
+        queue_.pop();
+        cond_can_push_.notify_one();
+        return true;
+    }
+
     void stop() {
         std::lock_guard<std::mutex> lock(mu_);
         stopped_ = true;
@@ -87,6 +84,16 @@ public:
     void set_capacity(size_t capacity) {
         std::lock_guard<std::mutex> lock(mu_);
         capacity_ = capacity;
+    }
+
+    size_t size() const {
+        std::lock_guard<std::mutex> lock(mu_);
+        return queue_.size();
+    }
+
+    bool empty() const {
+        std::lock_guard<std::mutex> lock(mu_);
+        return queue_.empty();
     }
 
 private:
@@ -134,7 +141,9 @@ public:
     void stop() {
         std::lock_guard<std::mutex> lock(mu_);
         for (auto& pair : placeholders_) {
-            pair.second.set_exception(std::make_exception_ptr(std::runtime_error("Worker stopped")));
+            try {
+                pair.second.set_exception(std::make_exception_ptr(std::runtime_error("Worker stopped")));
+            } catch (...) {}
         }
         placeholders_.clear();
     }
@@ -145,13 +154,6 @@ private:
     std::map<uint64_t, std::promise<cuvs_task_result_t>> placeholders_;
     std::mutex mu_;
 };
-
-/**
- * @brief Helper to check if a raft handle has SNMG resources initialized.
- */
-inline bool is_snmg_handle(const std::shared_ptr<raft::resources>& res) {
-    return res && raft::resource::get_num_ranks(*res) > 1;
-}
 
 /**
  * @brief Wrapper around raft::resources to provide a consistent interface for workers.
@@ -181,7 +183,13 @@ public:
         raft::resource::sync_stream(*res_);
 
         if (rank_ == 0) {
-            int num_ranks = raft::resource::get_num_ranks(*res_);
+            int num_ranks = 0;
+            if (raft::resource::comms_initialized(*res_)) {
+                num_ranks = raft::resource::get_comms(*res_).get_size();
+            } else {
+                num_ranks = raft::resource::get_num_ranks(*res_);
+            }
+
             for (int i = 1; i < num_ranks; ++i) {
                 auto rank_res = raft::resource::get_device_resources_for_rank(*mg_res_, i);
                 raft::resource::sync_stream(rank_res);
@@ -204,14 +212,16 @@ public:
     struct cuvs_task_t {
         uint64_t id;
         task_fn_t fn;
-        bool is_main_only;
     };
 
     cuvs_worker_t(uint32_t nthread, const std::vector<int>& devices, bool use_mg = false)
-        : nthread_(nthread), devices_(devices), running_(false), next_task_id_(0), use_batching_(false), per_thread_device_(false) {
+        : nthread_(nthread), devices_(devices), running_(false), use_batching_(false), per_thread_device_(false) {
         if (use_mg) {
             mg_resources_ = std::make_shared<raft::device_resources_snmg>(devices);
+            init_mg_comms(*mg_resources_, devices);
         }
+        tasks_.set_capacity(1000);
+        main_tasks_.set_capacity(1000);
     }
 
     ~cuvs_worker_t() { stop(); }
@@ -236,43 +246,51 @@ public:
 
     void stop() {
         if (!running_) return;
+        running_ = false;
+        
+        tasks_.stop();
+        main_tasks_.stop();
+        
         {
-            std::lock_guard<std::mutex> lock(queue_mutex_);
-            running_ = false;
+            std::lock_guard<std::mutex> lock(shared_cv_mu_);
+            shared_cv_.notify_all();
         }
-        queue_cond_.notify_all();
 
-        for (auto& w : workers_) {
-            if (w.joinable()) w.join();
+        for (size_t i = 0; i < workers_.size(); ++i) {
+            if (workers_[i].joinable()) workers_[i].join();
         }
         workers_.clear();
         results_store_.stop();
     }
 
     uint64_t submit(task_fn_t fn) {
+        if (!running_) throw std::runtime_error("Worker is not running");
         uint64_t id = results_store_.get_next_job_id();
+        tasks_.push({id, std::move(fn)});
         {
-            std::lock_guard<std::mutex> lock(queue_mutex_);
-            if (!running_) throw std::runtime_error("Worker is not running");
-            tasks_.push({id, std::move(fn), false});
+            std::lock_guard<std::mutex> lock(shared_cv_mu_);
+            shared_cv_.notify_all();
         }
-        queue_cond_.notify_all();
         return id;
     }
 
     uint64_t submit_main(task_fn_t fn) {
+        if (!running_) throw std::runtime_error("Worker is not running");
         uint64_t id = results_store_.get_next_job_id();
+        main_tasks_.push({id, std::move(fn)});
         {
-            std::lock_guard<std::mutex> lock(queue_mutex_);
-            if (!running_) throw std::runtime_error("Worker is not running");
-            main_tasks_.push({id, std::move(fn), true});
+            std::lock_guard<std::mutex> lock(shared_cv_mu_);
+            shared_cv_.notify_all();
         }
-        queue_cond_.notify_all();
         return id;
     }
 
     std::shared_future<cuvs_task_result_t> wait(uint64_t task_id) {
         return results_store_.wait(task_id);
+    }
+
+    std::shared_ptr<raft::device_resources_snmg> get_mg_resources() const {
+        return mg_resources_;
     }
 
     void set_use_batching(bool enable) { use_batching_ = enable; }
@@ -321,15 +339,8 @@ private:
     };
 
     void run_worker_loop(raft_handle& handle, std::function<std::any(raft_handle&)> stop_fn) {
-        while (true) {
-            cuvs_task_t task;
-            {
-                std::unique_lock<std::mutex> lock(queue_mutex_);
-                queue_cond_.wait(lock, [this] { return !running_ || !tasks_.empty(); });
-                if (!running_ && tasks_.empty()) break;
-                task = std::move(tasks_.front());
-                tasks_.pop();
-            }
+        cuvs_task_t task;
+        while (tasks_.pop(task)) {
             execute_task(task, handle);
         }
         if (stop_fn) stop_fn(handle);
@@ -338,20 +349,24 @@ private:
     void run_main_loop(raft_handle& handle, std::function<std::any(raft_handle&)> stop_fn) {
         while (true) {
             cuvs_task_t task;
-            {
-                std::unique_lock<std::mutex> lock(queue_mutex_);
-                queue_cond_.wait(lock, [this] { return !running_ || !main_tasks_.empty() || !tasks_.empty(); });
+            bool found = false;
+            
+            if (main_tasks_.try_pop(task)) {
+                found = true;
+            } else if (tasks_.try_pop(task)) {
+                found = true;
+            }
+
+            if (found) {
+                execute_task(task, handle);
+            } else {
                 if (!running_ && main_tasks_.empty() && tasks_.empty()) break;
                 
-                if (!main_tasks_.empty()) {
-                    task = std::move(main_tasks_.front());
-                    main_tasks_.pop();
-                } else {
-                    task = std::move(tasks_.front());
-                    tasks_.pop();
-                }
+                std::unique_lock<std::mutex> lock(shared_cv_mu_);
+                shared_cv_.wait_for(lock, std::chrono::milliseconds(10), [this]() {
+                    return !main_tasks_.empty() || !tasks_.empty() || !running_;
+                });
             }
-            execute_task(task, handle);
         }
         if (stop_fn) stop_fn(handle);
     }
@@ -377,30 +392,35 @@ private:
             batches_.erase(it);
         }
         if (batch->reqs.empty()) return;
-        this->submit([batch](raft_handle& handle) -> std::any {
-            try {
-                batch->exec_fn(handle, batch->reqs, batch->setters);
-            } catch (...) {
-                auto err = std::current_exception();
-                for (auto& setter : batch->setters) setter(err);
-            }
-            return std::any();
-        });
+        try {
+            this->submit([batch](raft_handle& handle) -> std::any {
+                try {
+                    batch->exec_fn(handle, batch->reqs, batch->setters);
+                } catch (...) {
+                    auto err = std::current_exception();
+                    for (auto& setter : batch->setters) setter(err);
+                }
+                return std::any();
+            });
+        } catch (...) {
+            auto err = std::current_exception();
+            for (auto& setter : batch->setters) setter(err);
+        }
     }
 
     uint32_t nthread_;
     std::vector<int> devices_;
     std::vector<std::thread> workers_;
     std::atomic<bool> running_;
-    std::atomic<uint64_t> next_task_id_;
     bool use_batching_;
     bool per_thread_device_;
 
-    std::mutex queue_mutex_;
-    std::condition_variable queue_cond_;
-    std::queue<cuvs_task_t> tasks_;
-    std::queue<cuvs_task_t> main_tasks_;
+    thread_safe_queue_t<cuvs_task_t> tasks_;
+    thread_safe_queue_t<cuvs_task_t> main_tasks_;
     std::shared_ptr<raft::device_resources_snmg> mg_resources_;
+
+    std::mutex shared_cv_mu_;
+    std::condition_variable shared_cv_;
 
     cuvs_task_result_store_t results_store_;
 

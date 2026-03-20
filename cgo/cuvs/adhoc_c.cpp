@@ -58,7 +58,7 @@ void gpu_adhoc_brute_force_search(const void* dataset,
             throw std::runtime_error("Unsupported quantization type for adhoc search");
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_adhoc_brute_force_search", e.what());
+        matrixone::set_errmsg(errmsg, "Error in gpu_adhoc_brute_force_search", e.what());
     }
 }
 

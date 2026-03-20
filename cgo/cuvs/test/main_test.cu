@@ -197,17 +197,16 @@ TEST(CuvsTaskResultStoreTest, StopStore) {
 
 TEST(RaftHandleWrapperTest, DetectSingleGpu) {
     raft_handle_wrapper_t wrapper(0, 0, nullptr); // device_id=0, rank=0, mg_res=nullptr
-    ASSERT_FALSE(is_snmg_handle(wrapper.get_raft_resources()));
+    ASSERT_FALSE(is_snmg_handle(*wrapper.get_raft_resources()));
 }
 
 TEST(RaftHandleWrapperTest, DetectMultiGpu) {
-    std::vector<int> devices = {0, 0}; // Simulation
+    std::vector<int> devices = {0, 1}; // Distinct devices for simulation
     auto mg_res = std::make_shared<raft::device_resources_snmg>(devices);
+    init_mg_comms(*mg_res, devices);
     raft_handle_wrapper_t wrapper(0, 0, mg_res); 
     
-    // is_snmg_handle checks for has_comms() AND num_ranks > 1.
-    // raft::device_resources_snmg constructor initializes the clique and comms.
-    ASSERT_TRUE(is_snmg_handle(wrapper.get_raft_resources()));
+    ASSERT_TRUE(is_snmg_handle(*wrapper.get_raft_resources()));
 }
 
 // --- cuvs_worker_t Tests ---
@@ -335,9 +334,10 @@ TEST(CuvsWorkerTest, BoundedQueueStress) {
     const uint32_t total_tasks = n_producers * tasks_per_producer;
     auto start_time = std::chrono::steady_clock::now();
     while (tasks_completed.load() < total_tasks) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        std::this_thread::yield();
         if (std::chrono::steady_clock::now() - start_time > std::chrono::seconds(10)) {
             REPORT_FAILURE("BoundedQueueStress timed out - possible hang");
+            break;
         }
     }
 
@@ -359,6 +359,11 @@ TEST(CuvsWorkerTest, StopUnderLoad) {
         while (!producer_should_stop.load()) {
             try {
                 worker.submit(task);
+            } catch (const std::runtime_error& e) {
+                if (std::string(e.what()) == "Worker is not running") {
+                    break;
+                }
+                throw;
             } catch (...) {
                 // Expected when worker stops
                 break;

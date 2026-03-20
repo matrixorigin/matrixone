@@ -18,6 +18,7 @@
 #define IVF_PQ_C_H
 
 #include "helper.h"
+#include "cuvs_types.h"
 #include <stdbool.h>
 
 #ifdef __cplusplus

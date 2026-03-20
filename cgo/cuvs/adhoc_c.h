@@ -18,6 +18,7 @@
 #define ADHOC_C_H
 
 #include "helper.h"
+#include "cuvs_types.h"
 #include <stdint.h>
 
 #ifdef __cplusplus

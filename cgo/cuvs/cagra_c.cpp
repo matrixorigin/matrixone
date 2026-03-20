@@ -71,7 +71,8 @@ gpu_cagra_c gpu_cagra_new(const void* dataset_data, uint64_t count_vectors, uint
         static_cast<gpu_index_base_t<float, cagra_build_params_t>*>(ptr)->start();
         return static_cast<gpu_cagra_c>(new gpu_cagra_any_t(qtype, ptr));
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_cagra_new", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_cagra_new", e.what());
     }
     return nullptr;
 }
@@ -102,7 +103,8 @@ gpu_cagra_c gpu_cagra_new_empty(uint64_t total_count, uint32_t dimension, distan
         static_cast<gpu_index_base_t<float, cagra_build_params_t>*>(ptr)->start();
         return static_cast<gpu_cagra_c>(new gpu_cagra_any_t(qtype, ptr));
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_cagra_new_empty", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_cagra_new_empty", e.what());
     }
     return nullptr;
 }
@@ -133,7 +135,8 @@ gpu_cagra_c gpu_cagra_load_file(const char* filename, uint32_t dimension, distan
         static_cast<gpu_index_base_t<float, cagra_build_params_t>*>(ptr)->start();
         return static_cast<gpu_cagra_c>(new gpu_cagra_any_t(qtype, ptr));
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_cagra_load_file", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_cagra_load_file", e.what());
     }
     return nullptr;
 }
@@ -143,7 +146,8 @@ void gpu_cagra_destroy(gpu_cagra_c index_c, void* errmsg) {
     try {
         delete static_cast<gpu_cagra_any_t*>(index_c);
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_cagra_destroy", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_cagra_destroy", e.what());
     }
 }
 
@@ -159,7 +163,8 @@ void gpu_cagra_start(gpu_cagra_c index_c, void* errmsg) {
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_cagra_start", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_cagra_start", e.what());
     }
 }
 
@@ -175,7 +180,8 @@ void gpu_cagra_build(gpu_cagra_c index_c, void* errmsg) {
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_cagra_build", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_cagra_build", e.what());
     }
 }
 
@@ -191,7 +197,8 @@ void gpu_cagra_add_chunk(gpu_cagra_c index_c, const void* chunk_data, uint64_t c
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_cagra_add_chunk", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_cagra_add_chunk", e.what());
     }
 }
 
@@ -207,7 +214,8 @@ void gpu_cagra_add_chunk_float(gpu_cagra_c index_c, const float* chunk_data, uin
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_cagra_add_chunk_float", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_cagra_add_chunk_float", e.what());
     }
 }
 
@@ -223,7 +231,8 @@ void gpu_cagra_train_quantizer(gpu_cagra_c index_c, const float* train_data, uin
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_cagra_train_quantizer", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_cagra_train_quantizer", e.what());
     }
 }
 
@@ -239,7 +248,8 @@ void gpu_cagra_set_per_thread_device(gpu_cagra_c index_c, bool enable, void* err
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_cagra_set_per_thread_device", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_cagra_set_per_thread_device", e.what());
     }
 }
 
@@ -255,7 +265,8 @@ void gpu_cagra_set_use_batching(gpu_cagra_c index_c, bool enable, void* errmsg) 
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_cagra_set_use_batching", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_cagra_set_use_batching", e.what());
     }
 }
 
@@ -271,7 +282,8 @@ void gpu_cagra_set_quantizer(gpu_cagra_c index_c, float min, float max, void* er
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_cagra_set_quantizer", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_cagra_set_quantizer", e.what());
     }
 }
 
@@ -287,7 +299,8 @@ void gpu_cagra_get_quantizer(gpu_cagra_c index_c, float* min, float* max, void* 
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_cagra_get_quantizer", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_cagra_get_quantizer", e.what());
     }
 }
 
@@ -303,7 +316,8 @@ void gpu_cagra_save(gpu_cagra_c index_c, const char* filename, void* errmsg) {
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_cagra_save", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_cagra_save", e.what());
     }
 }
 
@@ -324,7 +338,8 @@ gpu_cagra_search_res_t gpu_cagra_search(gpu_cagra_c index_c, const void* queries
         }
         result.result_ptr = static_cast<gpu_cagra_result_c>(cpp_res);
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_cagra_search", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_cagra_search", e.what());
     }
     return result;
 }
@@ -346,7 +361,8 @@ gpu_cagra_search_res_t gpu_cagra_search_float(gpu_cagra_c index_c, const float* 
         }
         result.result_ptr = static_cast<gpu_cagra_result_c>(cpp_res);
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_cagra_search_float", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_cagra_search_float", e.what());
     }
     return result;
 }
@@ -411,7 +427,8 @@ char* gpu_cagra_info(gpu_cagra_c index_c, void* errmsg) {
         }
         return strdup(info.c_str());
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_cagra_info", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_cagra_info", e.what());
         return nullptr;
     }
 }
@@ -428,7 +445,8 @@ void gpu_cagra_extend(gpu_cagra_c index_c, const void* additional_data, uint64_t
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_cagra_extend", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_cagra_extend", e.what());
     }
 }
 
@@ -470,7 +488,8 @@ gpu_cagra_c gpu_cagra_merge(gpu_cagra_c* indices_c, int num_indices, uint32_t nt
         }
         return static_cast<gpu_cagra_c>(new gpu_cagra_any_t(qtype, merged_ptr));
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_cagra_merge", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_cagra_merge", e.what());
     }
     return nullptr;
 }

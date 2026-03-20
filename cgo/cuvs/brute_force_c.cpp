@@ -63,7 +63,8 @@ gpu_brute_force_c gpu_brute_force_new(const void* dataset_data, uint64_t count_v
         if (index_ptr) static_cast<matrixone::gpu_index_base_t<float, brute_force_build_params_t>*>(index_ptr)->start();
         return static_cast<gpu_brute_force_c>(new gpu_brute_force_any_t(qtype, index_ptr));
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_brute_force_new", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_brute_force_new", e.what());
         return nullptr;
     }
 }
@@ -85,7 +86,8 @@ gpu_brute_force_c gpu_brute_force_new_empty(uint64_t total_count, uint32_t dimen
         if (index_ptr) static_cast<matrixone::gpu_index_base_t<float, brute_force_build_params_t>*>(index_ptr)->start();
         return static_cast<gpu_brute_force_c>(new gpu_brute_force_any_t(qtype, index_ptr));
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_brute_force_new_empty", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_brute_force_new_empty", e.what());
         return nullptr;
     }
 }
@@ -100,7 +102,8 @@ void gpu_brute_force_start(gpu_brute_force_c index_c, void* errmsg) {
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_brute_force_start", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_brute_force_start", e.what());
     }
 }
 
@@ -114,7 +117,8 @@ void gpu_brute_force_build(gpu_brute_force_c index_c, void* errmsg) {
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_brute_force_build", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_brute_force_build", e.what());
     }
 }
 
@@ -128,7 +132,8 @@ void gpu_brute_force_add_chunk(gpu_brute_force_c index_c, const void* chunk_data
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_brute_force_add_chunk", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_brute_force_add_chunk", e.what());
     }
 }
 
@@ -142,7 +147,8 @@ void gpu_brute_force_add_chunk_float(gpu_brute_force_c index_c, const float* chu
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_brute_force_add_chunk_float", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_brute_force_add_chunk_float", e.what());
     }
 }
 
@@ -168,7 +174,8 @@ gpu_brute_force_search_result_c gpu_brute_force_search(gpu_brute_force_c index_c
         }
         return static_cast<gpu_brute_force_search_result_c>(result_ptr);
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_brute_force_search", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_brute_force_search", e.what());
         return nullptr;
     }
 }
@@ -195,7 +202,8 @@ gpu_brute_force_search_result_c gpu_brute_force_search_float(gpu_brute_force_c i
         }
         return static_cast<gpu_brute_force_search_result_c>(result_ptr);
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_brute_force_search_float", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_brute_force_search_float", e.what());
         return nullptr;
     }
 }
@@ -256,7 +264,8 @@ char* gpu_brute_force_info(gpu_brute_force_c index_c, void* errmsg) {
         }
         return strdup(info.c_str());
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_brute_force_info", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_brute_force_info", e.what());
         return nullptr;
     }
 }
@@ -267,7 +276,8 @@ void gpu_brute_force_destroy(gpu_brute_force_c index_c, void* errmsg) {
         auto* any = static_cast<gpu_brute_force_any_t*>(index_c);
         delete any;
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_brute_force_destroy", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_brute_force_destroy", e.what());
     }
 }
 

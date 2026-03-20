@@ -68,7 +68,7 @@ TEST(GpuCagraTest, SaveAndLoadFromFile) {
         cagra_build_params_t bp = cagra_build_params_default();
         gpu_cagra_t<float> index(filename, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
         index.start();
-        index.build();
+        index.load(filename);
         
         std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
         cagra_search_params_t sp = cagra_search_params_default();

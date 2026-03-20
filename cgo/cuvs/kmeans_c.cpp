@@ -69,7 +69,8 @@ gpu_kmeans_c gpu_kmeans_new(uint32_t n_clusters, uint32_t dimension, distance_ty
         if (ptr) static_cast<gpu_index_base_t<float, kmeans_build_params_t>*>(ptr)->start();
         return static_cast<gpu_kmeans_c>(new gpu_kmeans_any_t(qtype, ptr));
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_kmeans_new", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_kmeans_new", e.what());
     }
     return nullptr;
 }
@@ -79,7 +80,8 @@ void gpu_kmeans_destroy(gpu_kmeans_c kmeans_c, void* errmsg) {
     try {
         delete static_cast<gpu_kmeans_any_t*>(kmeans_c);
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_kmeans_destroy", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_kmeans_destroy", e.what());
     }
 }
 
@@ -95,7 +97,8 @@ void gpu_kmeans_start(gpu_kmeans_c kmeans_c, void* errmsg) {
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_kmeans_start", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_kmeans_start", e.what());
     }
 }
 
@@ -111,7 +114,8 @@ void gpu_kmeans_train_quantizer(gpu_kmeans_c kmeans_c, const float* train_data, 
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_kmeans_train_quantizer", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_kmeans_train_quantizer", e.what());
     }
 }
 
@@ -127,7 +131,8 @@ void gpu_kmeans_set_quantizer(gpu_kmeans_c kmeans_c, float min, float max, void*
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_kmeans_set_quantizer", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_kmeans_set_quantizer", e.what());
     }
 }
 
@@ -143,7 +148,8 @@ void gpu_kmeans_get_quantizer(gpu_kmeans_c kmeans_c, float* min, float* max, voi
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_kmeans_get_quantizer", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_kmeans_get_quantizer", e.what());
     }
 }
 
@@ -163,7 +169,8 @@ gpu_kmeans_fit_res_t gpu_kmeans_fit(gpu_kmeans_c kmeans_c, const void* X_data, u
         result.inertia = res.inertia;
         result.n_iter = (int)res.n_iter;
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_kmeans_fit", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_kmeans_fit", e.what());
     }
     return result;
 }
@@ -184,7 +191,8 @@ gpu_kmeans_predict_res_t gpu_kmeans_predict(gpu_kmeans_c kmeans_c, const void* X
         result.result_ptr = static_cast<gpu_kmeans_result_c>(cpp_res);
         result.inertia = cpp_res->inertia;
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_kmeans_predict", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_kmeans_predict", e.what());
     }
     return result;
 }
@@ -205,7 +213,8 @@ gpu_kmeans_predict_res_t gpu_kmeans_predict_float(gpu_kmeans_c kmeans_c, const f
         result.result_ptr = static_cast<gpu_kmeans_result_c>(cpp_res);
         result.inertia = cpp_res->inertia;
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_kmeans_predict_float", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_kmeans_predict_float", e.what());
     }
     return result;
 }
@@ -227,7 +236,8 @@ gpu_kmeans_fit_predict_res_t gpu_kmeans_fit_predict(gpu_kmeans_c kmeans_c, const
         result.inertia = cpp_res->inertia;
         result.n_iter = (int)cpp_res->n_iter;
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_kmeans_fit_predict", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_kmeans_fit_predict", e.what());
     }
     return result;
 }
@@ -249,7 +259,8 @@ gpu_kmeans_fit_predict_res_t gpu_kmeans_fit_predict_float(gpu_kmeans_c kmeans_c,
         result.inertia = cpp_res->inertia;
         result.n_iter = (int)cpp_res->n_iter;
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_kmeans_fit_predict_float", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_kmeans_fit_predict_float", e.what());
     }
     return result;
 }
@@ -295,7 +306,8 @@ void gpu_kmeans_get_centroids(gpu_kmeans_c kmeans_c, void* centroids, void* errm
             default: break;
         }
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_kmeans_get_centroids", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_kmeans_get_centroids", e.what());
     }
 }
 
@@ -314,7 +326,8 @@ char* gpu_kmeans_info(gpu_kmeans_c kmeans_c, void* errmsg) {
         }
         return strdup(info.c_str());
     } catch (const std::exception& e) {
-        set_errmsg(errmsg, "Error in gpu_kmeans_info", e.what());
+        matrixone::set_errmsg(errmsg, 
+ "Error in gpu_kmeans_info", e.what());
         return nullptr;
     }
 }
