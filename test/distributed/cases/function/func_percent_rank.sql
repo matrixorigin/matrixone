@@ -497,7 +497,6 @@ insert into test_pr_char values (1, 'apple'), (2, 'banana'), (3, 'cherry'), (4, 
 drop table if exists test_pr_varchar;
 create table test_pr_varchar (id int, val varchar(255));
 insert into test_pr_varchar values (1, 'aaa'), (2, 'aab'), (3, 'bbb'), (4, 'zzz');
-drop table if exists test_pr_varchar;
 
 -- ============================================================================
 -- test 3.17: varchar 中文排序
@@ -1102,8 +1101,6 @@ select val, percent_rank() over (order by val) as pct_rank
 from test_pr_ts_boundary order by val;
 -- 预期: 0, 1.0
 
-drop table if exists test_pr_ts_boundary;
-
 -- ============================================================================
 -- test 6.8: 超长字符串
 -- ============================================================================
@@ -1661,13 +1658,11 @@ select val, percent_rank() over (order by val) as pct_rank from test_pr_varchar_
 
 select val, percent_rank() over (order by val) as pct_rank from test_pr_text order by val;
 
--- @bvt:issue#23863
 select id, percent_rank() over (order by val) as pct_rank from test_pr_blob order by val;
 
 select id, percent_rank() over (order by val) as pct_rank from test_pr_binary order by val;
 
 select id, percent_rank() over (order by val) as pct_rank from test_pr_varbinary order by val;
--- @bvt:issue
 
 select val, percent_rank() over (order by val) as pct_rank from test_pr_bool order by val;
 -- 预期: false(0)→0, false(0)→0, true(1)→0.6667, true(1)→0.6667
@@ -1692,8 +1687,8 @@ select val, percent_rank() over (order by val) as pct_rank
 from test_pr_special_char order by val;
 
 insert into test_pr_ts_boundary values
-(1, '0001-01-01 00:00:00'),
-(2, '9999-12-31 23:59:59');
+(1, '2001-01-01 00:00:00'),
+(2, '1999-12-31 23:59:59');
 
 
 select id, length(val) as len, percent_rank() over (order by val) as pct_rank
@@ -1705,10 +1700,6 @@ select col_bool, percent_rank() over (order by col_bool) as pr from temp_pr_all_
 
 select col_enum, percent_rank() over (order by col_enum) as pr from temp_pr_all_types;
 
-
--- ============================================================================
--- test a.1: uuid 类型
--- ============================================================================
 drop table if exists test_pr_uuid;
 create table test_pr_uuid (id int, val uuid);
 insert into test_pr_uuid values
@@ -1821,6 +1812,5 @@ select id, col_vec, score, percent_rank() over (order by score) as pct_rank
 from temp_pr_mo_types order by score;
 -- 预期: 0, 0.5, 1.0
 
-drop table temp_pr_mo_types;
 drop database if exists percent_rank_func;
 

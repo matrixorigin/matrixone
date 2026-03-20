@@ -444,15 +444,15 @@ select id, cume_dist() over (order by val) as cd from test_cd_blob order by val;
 drop table if exists test_cd_blob;
 [unknown result because it is related to issue#23863]
 drop table if exists test_cd_enum;
-[unknown result because it is related to issue#23863]
 create table test_cd_enum (id int, val enum('low', 'medium', 'high', 'critical'));
-[unknown result because it is related to issue#23863]
 insert into test_cd_enum values (1, 'low'), (2, 'medium'), (3, 'high'), (4, 'critical');
-[unknown result because it is related to issue#23863]
 select val, cume_dist() over (order by val) as cd from test_cd_enum order by val;
-[unknown result because it is related to issue#23863]
+➤ val[1,8,0]  ¦  cd[8,23,31]  𝄀
+low  ¦  0.25  𝄀
+medium  ¦  0.5  𝄀
+high  ¦  0.75  𝄀
+critical  ¦  1.0
 drop table if exists test_cd_enum;
-[unknown result because it is related to issue#23863]
 drop table if exists test_cd_json;
 create table test_cd_json (id int, val json);
 insert into test_cd_json values (1, '{"a":1}'), (2, '{"a":2}'), (3, '{"a":3}');

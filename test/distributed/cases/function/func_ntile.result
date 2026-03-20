@@ -478,25 +478,24 @@ select val, ntile(2) over (order by val) as bucket from test_ntile_time order by
 23:59:59  ¦  2
 drop table if exists test_ntile_time;
 drop table if exists test_ntile_blob;
-[unknown result because it is related to issue#23863]
 create table test_ntile_blob (id int, val blob);
-[unknown result because it is related to issue#23863]
 insert into test_ntile_blob values (1, 'abc'), (2, 'def'), (3, 'xyz');
-[unknown result because it is related to issue#23863]
 select id, ntile(2) over (order by val) as bucket from test_ntile_blob order by val;
-[unknown result because it is related to issue#23863]
+➤ id[4,11,0]  ¦  bucket[-5,21,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  2
 drop table if exists test_ntile_blob;
-[unknown result because it is related to issue#23863]
 drop table if exists test_ntile_enum;
-[unknown result because it is related to issue#23863]
 create table test_ntile_enum (id int, val enum('low', 'medium', 'high', 'critical'));
-[unknown result because it is related to issue#23863]
 insert into test_ntile_enum values (1, 'low'), (2, 'medium'), (3, 'high'), (4, 'critical');
-[unknown result because it is related to issue#23863]
 select val, ntile(2) over (order by val) as bucket from test_ntile_enum order by val;
-[unknown result because it is related to issue#23863]
+➤ val[1,8,0]  ¦  bucket[-5,21,0]  𝄀
+low  ¦  1  𝄀
+medium  ¦  1  𝄀
+high  ¦  2  𝄀
+critical  ¦  2
 drop table if exists test_ntile_enum;
-[unknown result because it is related to issue#23863]
 drop table if exists test_ntile_json;
 create table test_ntile_json (id int, val json);
 insert into test_ntile_json values (1, '{"a":1}'), (2, '{"a":2}'), (3, '{"a":3}');

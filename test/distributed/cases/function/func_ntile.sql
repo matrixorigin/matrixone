@@ -475,7 +475,6 @@ drop table if exists test_ntile_time;
 -- ============================================================================
 -- test 3.16: blob 类型
 -- ============================================================================
--- @bvt:issue#23863
 drop table if exists test_ntile_blob;
 create table test_ntile_blob (id int, val blob);
 insert into test_ntile_blob values (1, 'abc'), (2, 'def'), (3, 'xyz');
@@ -483,11 +482,9 @@ insert into test_ntile_blob values (1, 'abc'), (2, 'def'), (3, 'xyz');
 select id, ntile(2) over (order by val) as bucket from test_ntile_blob order by val;
 
 drop table if exists test_ntile_blob;
--- @bvt:issue
 -- ============================================================================
 -- test 3.17: enum 类型
 -- ============================================================================
--- @bvt:issue#23863
 drop table if exists test_ntile_enum;
 create table test_ntile_enum (id int, val enum('low', 'medium', 'high', 'critical'));
 insert into test_ntile_enum values (1, 'low'), (2, 'medium'), (3, 'high'), (4, 'critical');
@@ -495,7 +492,6 @@ insert into test_ntile_enum values (1, 'low'), (2, 'medium'), (3, 'high'), (4, '
 select val, ntile(2) over (order by val) as bucket from test_ntile_enum order by val;
 
 drop table if exists test_ntile_enum;
--- @bvt:issue
 -- ============================================================================
 -- test 3.18: json 类型 (order by id)
 -- ============================================================================

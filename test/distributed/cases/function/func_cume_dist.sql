@@ -519,7 +519,6 @@ drop table if exists test_cd_blob;
 -- ============================================================================
 -- test 3.18: enum 类型
 -- ============================================================================
--- @bvt:issue#23863
 drop table if exists test_cd_enum;
 create table test_cd_enum (id int, val enum('low', 'medium', 'high', 'critical'));
 insert into test_cd_enum values (1, 'low'), (2, 'medium'), (3, 'high'), (4, 'critical');
@@ -527,7 +526,6 @@ insert into test_cd_enum values (1, 'low'), (2, 'medium'), (3, 'high'), (4, 'cri
 select val, cume_dist() over (order by val) as cd from test_cd_enum order by val;
 
 drop table if exists test_cd_enum;
--- @bvt:issue
 
 -- ============================================================================
 -- test 3.19: json 类型 (order by id)
