@@ -1240,23 +1240,10 @@ func constructDedupJoin(n, left *plan.Node, qry *plan.Query, leftTypes, rightTyp
 	arg.InitialSnapshotTS = proc.GetStmtSnapshotTS()
 	if arg.InitialSnapshotTS.IsEmpty() {
 		arg.InitialSnapshotTS = proc.GetTxnOperator().SnapshotTS()
+		proc.SetStmtSnapshotTS(arg.InitialSnapshotTS)
 	}
 	if scanNode := findProbeTableScan(left, qry); scanNode != nil {
-		if scanNode.ObjRef != nil {
-			arg.TargetTableRef = &plan.ObjectRef{
-				Server:           scanNode.ObjRef.Server,
-				Db:               scanNode.ObjRef.Db,
-				Schema:           scanNode.ObjRef.Schema,
-				Obj:              scanNode.ObjRef.Obj,
-				ServerName:       scanNode.ObjRef.ServerName,
-				DbName:           scanNode.ObjRef.DbName,
-				SchemaName:       scanNode.ObjRef.SchemaName,
-				ObjName:          scanNode.ObjRef.ObjName,
-				SubscriptionName: scanNode.ObjRef.SubscriptionName,
-				PubInfo:          scanNode.ObjRef.PubInfo,
-				NotLockMeta:      scanNode.ObjRef.NotLockMeta,
-			}
-		}
+		arg.TargetTableRef = scanNode.ObjRef
 		if scanNode.TableDef != nil {
 			arg.TargetTableID = scanNode.TableDef.TblId
 		}

@@ -134,7 +134,6 @@ func NewCompile(
 	c.ncpu = system.GoMaxProcs()
 	c.lockMeta = NewLockMeta()
 	if c.proc.GetTxnOperator() != nil {
-		c.proc.SetStmtSnapshotTS(c.proc.GetTxnOperator().SnapshotTS())
 		// TODO: The action of updating the WriteOffset logic should be executed in the `func (c *Compile) Run(_ uint64)` method.
 		// However, considering that the delay ranges are not completed yet, the UpdateSnapshotWriteOffset() and
 		// the assignment of `Compile.TxnOffset` should be moved into the `func (c *Compile) Run(_ uint64)` method in the later stage.
@@ -206,7 +205,6 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	}
 	c.startAt = startAt
 	if c.proc.GetTxnOperator() != nil {
-		c.proc.SetStmtSnapshotTS(c.proc.GetTxnOperator().SnapshotTS())
 		c.proc.GetTxnOperator().GetWorkspace().UpdateSnapshotWriteOffset()
 		c.TxnOffset = c.proc.GetTxnOperator().GetWorkspace().GetSnapshotWriteOffset()
 

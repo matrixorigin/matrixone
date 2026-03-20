@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -351,7 +352,7 @@ func TestDedupJoinRemoteRoundTripPreservesSnapshotMetadata(t *testing.T) {
 		InitialSnapshotTS: timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4},
 	}
 
-	in, _, err := convertToPipelineInstruction(source, proc, ctx, 1)
+	_, in, err := convertToPipelineInstruction(source, proc, ctx, 1)
 	require.NoError(t, err)
 	require.NotNil(t, in.DedupJoin)
 	require.Equal(t, uint64(42), in.DedupJoin.TargetTableId)
