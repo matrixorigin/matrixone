@@ -515,23 +515,13 @@ private:
     std::unique_ptr<raft_handle> setup_resource_internal(size_t thread_idx, bool is_main_thread) {
         try {
             if (!devices_.empty()) {
-                // CASE 1: Single device provided - Force ALL threads to this device
-                if (devices_.size() == 1) {
-                    return std::make_unique<raft_handle>(devices_[0]);
-                }
-
-                // CASE 2: Multi-GPU mode
                 if (is_main_thread) {
                     return std::make_unique<raft_handle>(devices_, force_mg_);
                 }
-                
-                // If per-thread device is enabled, each sub-worker gets one GPU
-                if (per_thread_device_) {
+                if (per_thread_device_ && n_threads_ > 1) {
                     int dev = devices_[thread_idx % devices_.size()];
                     return std::make_unique<raft_handle>(dev);
                 }
-                
-                // Otherwise, sub-workers share the SNMG context
                 return std::make_unique<raft_handle>(devices_, force_mg_);
             } else if (device_id_ >= 0) {
                 return std::make_unique<raft_handle>(device_id_);
