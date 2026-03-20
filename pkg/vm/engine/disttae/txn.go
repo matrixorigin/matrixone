@@ -213,7 +213,7 @@ func (txn *Transaction) WriteBatch(
 	pkCheckPos := -1
 	pkCheckReady := false
 	if typ == INSERT || typ == DELETE {
-		pkCheckPos, err = txn.resolvePKCheckPosForWrite(
+		pkCheckPos, pkCheckReady, err = txn.resolvePKCheckPosForWrite(
 			typ,
 			accountId,
 			databaseName,
@@ -224,7 +224,6 @@ func (txn *Transaction) WriteBatch(
 		if err != nil {
 			return nil, err
 		}
-		pkCheckReady = true
 	}
 
 	e := Entry{
@@ -1038,27 +1037,27 @@ func (txn *Transaction) resolvePKCheckPosForWrite(
 	databaseName, tableName string,
 	tableId uint64,
 	bat *batch.Batch,
-) (int, error) {
+) (int, bool, error) {
 	if bat == nil || bat.RowCount() == 0 {
-		return -1, nil
+		return -1, true, nil
 	}
 
 	if typ != INSERT && typ != DELETE {
-		return -1, nil
+		return -1, true, nil
 	}
 
 	if tableId == catalog.MO_TABLES_ID ||
 		tableId == catalog.MO_COLUMNS_ID ||
 		tableId == catalog.MO_DATABASE_ID {
-		return -1, nil
+		return -1, true, nil
 	}
 	if txn.engine == nil {
-		return -1, nil
+		return -1, false, nil
 	}
 
 	tbl, err := txn.getTable(accountId, databaseName, tableName)
 	if err != nil {
-		return -1, err
+		return -1, false, err
 	}
 	tableDefCtx := context.Background()
 	if txn.proc != nil && txn.proc.Ctx != nil {
@@ -1066,38 +1065,38 @@ func (txn *Transaction) resolvePKCheckPosForWrite(
 	}
 	tableDef := tbl.GetTableDef(tableDefCtx)
 	if tableDef == nil || tableDef.Pkey == nil {
-		return -1, nil
+		return -1, true, nil
 	}
 
 	pkName := tableDef.Pkey.PkeyColName
 	if pkName == "" ||
 		pkName == catalog.FakePrimaryKeyColName ||
 		pkName == catalog.CPrimaryKeyColName {
-		return -1, nil
+		return -1, true, nil
 	}
 
 	if typ == DELETE {
 		if len(bat.Vecs) < 2 {
 			logutil.Warnf("delete has no pk vector, database:%s, table:%s", databaseName, tableName)
-			return -1, nil
+			return -1, false, nil
 		}
-		return 1, nil
+		return 1, true, nil
 	}
 
 	for i, attr := range bat.Attrs {
 		if attr == pkName {
-			return i, nil
+			return i, true, nil
 		}
 	}
 	for i, attr := range bat.Attrs {
 		if strings.EqualFold(attr, pkName) {
-			return i, nil
+			return i, true, nil
 		}
 	}
 
 	logutil.Warnf("pk column %s not found in write attrs, database:%s, table:%s, attrs:%v",
 		pkName, databaseName, tableName, bat.Attrs)
-	return -1, nil
+	return -1, false, nil
 }
 
 // vec contains block infos.

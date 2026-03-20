@@ -1012,8 +1012,9 @@ type Entry struct {
 	tnStore   DNStore
 	pkChkByTN int8
 
-	// pkCheckPos is the primary-key vector position in bat at write time.
-	// -1 means no PK duplicate check is needed for this entry.
+	// pkCheckPos is the primary-key vector position resolved at write time.
+	// pkCheckReady indicates whether write-time resolution was reliable.
+	// When it is false, duplicate checks must fall back to legacy table-def lookup.
 	pkCheckPos   int
 	pkCheckReady bool
 }

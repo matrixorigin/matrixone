@@ -168,30 +168,56 @@ func TestWriteBatchRecordsPKCheckState(t *testing.T) {
 	proc := testutil.NewProc(t)
 	op := newTxnOperatorForTest(t)
 
-	t.Run("insert", func(t *testing.T) {
+	t.Run("insert without engine falls back", func(t *testing.T) {
 		txn := &Transaction{proc: proc, op: op}
 		bat := newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1, 2})
 
-		_, err := txn.WriteBatch(INSERT, "", 0, 1, 2, "db", "tbl", bat, DNStore{})
+		_, err := txn.WriteBatch(INSERT, "", 0, 1, 42, "db", "tbl", bat, DNStore{})
 		require.NoError(t, err)
 		require.Len(t, txn.writes, 1)
-		require.True(t, txn.writes[0].pkCheckReady)
+		require.False(t, txn.writes[0].pkCheckReady)
 		require.Equal(t, -1, txn.writes[0].pkCheckPos)
 
 		bat.Clean(proc.Mp())
 	})
 
-	t.Run("delete", func(t *testing.T) {
+	t.Run("delete without engine falls back", func(t *testing.T) {
 		txn := &Transaction{proc: proc, op: op}
 		bat := newDeleteBatchForTest(t, proc, []int64{1})
 
-		_, err := txn.WriteBatch(DELETE, "", 0, 1, 2, "db", "tbl", bat, DNStore{})
+		_, err := txn.WriteBatch(DELETE, "", 0, 1, 42, "db", "tbl", bat, DNStore{})
 		require.NoError(t, err)
 		require.Len(t, txn.writes, 1)
-		require.True(t, txn.writes[0].pkCheckReady)
+		require.False(t, txn.writes[0].pkCheckReady)
 		require.Equal(t, -1, txn.writes[0].pkCheckPos)
 
 		bat.Clean(proc.Mp())
+	})
+
+	t.Run("insert with active pk table resolves position", func(t *testing.T) {
+		txn := newTransactionWithActivePKTableForTest(t, "pk")
+		bat := newInt64BatchForTest(t, txn.proc, []string{"pk"}, []int64{1, 2})
+
+		_, err := txn.WriteBatch(INSERT, "", 1, 7, 42, "db", "tbl", bat, DNStore{})
+		require.NoError(t, err)
+		require.Len(t, txn.writes, 1)
+		require.True(t, txn.writes[0].pkCheckReady)
+		require.Equal(t, 1, txn.writes[0].pkCheckPos)
+
+		bat.Clean(txn.proc.Mp())
+	})
+
+	t.Run("missing pk attr keeps legacy fallback", func(t *testing.T) {
+		txn := newTransactionWithActivePKTableForTest(t, "pk")
+		bat := newInt64BatchForTest(t, txn.proc, []string{"other"}, []int64{1, 2})
+
+		_, err := txn.WriteBatch(INSERT, "", 1, 7, 42, "db", "tbl", bat, DNStore{})
+		require.NoError(t, err)
+		require.Len(t, txn.writes, 1)
+		require.False(t, txn.writes[0].pkCheckReady)
+		require.Equal(t, -1, txn.writes[0].pkCheckPos)
+
+		bat.Clean(txn.proc.Mp())
 	})
 }
 
@@ -374,30 +400,34 @@ func TestTransactionGetTableNilGuards(t *testing.T) {
 func TestResolvePKCheckPosForWriteEarlyExit(t *testing.T) {
 	txn := &Transaction{}
 
-	pos, err := txn.resolvePKCheckPosForWrite(INSERT, 0, "db", "tbl", 1, nil)
+	pos, ready, err := txn.resolvePKCheckPosForWrite(INSERT, 0, "db", "tbl", 1, nil)
 	require.NoError(t, err)
+	require.True(t, ready)
 	require.Equal(t, -1, pos)
 
 	proc := testutil.NewProc(t)
 	bat := newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1})
 
-	pos, err = txn.resolvePKCheckPosForWrite(ALTER, 0, "db", "tbl", 1, bat)
+	pos, ready, err = txn.resolvePKCheckPosForWrite(ALTER, 0, "db", "tbl", 1, bat)
 	require.NoError(t, err)
+	require.True(t, ready)
 	require.Equal(t, -1, pos)
 
-	pos, err = txn.resolvePKCheckPosForWrite(INSERT, 0, "db", "tbl", catalog.MO_TABLES_ID, bat)
+	pos, ready, err = txn.resolvePKCheckPosForWrite(INSERT, 0, "db", "tbl", catalog.MO_TABLES_ID, bat)
 	require.NoError(t, err)
+	require.True(t, ready)
 	require.Equal(t, -1, pos)
 
-	pos, err = txn.resolvePKCheckPosForWrite(INSERT, 0, "db", "tbl", 1, bat)
+	pos, ready, err = txn.resolvePKCheckPosForWrite(INSERT, 0, "db", "tbl", 42, bat)
 	require.NoError(t, err)
+	require.False(t, ready)
 	require.Equal(t, -1, pos)
 }
 
 func TestResolvePKCheckPosForWriteWithActiveTxnTable(t *testing.T) {
 	txn := newTransactionWithActivePKTableForTest(t, "pk")
 
-	pos, err := txn.resolvePKCheckPosForWrite(
+	pos, ready, err := txn.resolvePKCheckPosForWrite(
 		INSERT,
 		1,
 		"db",
@@ -406,9 +436,10 @@ func TestResolvePKCheckPosForWriteWithActiveTxnTable(t *testing.T) {
 		newInt64BatchForTest(t, txn.proc, []string{"pk"}, []int64{1}),
 	)
 	require.NoError(t, err)
+	require.True(t, ready)
 	require.Equal(t, 0, pos)
 
-	pos, err = txn.resolvePKCheckPosForWrite(
+	pos, ready, err = txn.resolvePKCheckPosForWrite(
 		INSERT,
 		1,
 		"db",
@@ -417,9 +448,10 @@ func TestResolvePKCheckPosForWriteWithActiveTxnTable(t *testing.T) {
 		newInt64BatchForTest(t, txn.proc, []string{"PK"}, []int64{1}),
 	)
 	require.NoError(t, err)
+	require.True(t, ready)
 	require.Equal(t, 0, pos)
 
-	pos, err = txn.resolvePKCheckPosForWrite(
+	pos, ready, err = txn.resolvePKCheckPosForWrite(
 		DELETE,
 		1,
 		"db",
@@ -428,9 +460,10 @@ func TestResolvePKCheckPosForWriteWithActiveTxnTable(t *testing.T) {
 		newDeleteBatchForTest(t, txn.proc, []int64{1}),
 	)
 	require.NoError(t, err)
+	require.True(t, ready)
 	require.Equal(t, 1, pos)
 
-	pos, err = txn.resolvePKCheckPosForWrite(
+	pos, ready, err = txn.resolvePKCheckPosForWrite(
 		INSERT,
 		1,
 		"db",
@@ -439,6 +472,7 @@ func TestResolvePKCheckPosForWriteWithActiveTxnTable(t *testing.T) {
 		newInt64BatchForTest(t, txn.proc, []string{"other"}, []int64{1}),
 	)
 	require.NoError(t, err)
+	require.False(t, ready)
 	require.Equal(t, -1, pos)
 }
 
