@@ -136,6 +136,7 @@ public:
             this->is_loaded_ = true;
             return;
         }
+        this->train_quantizer_if_needed();
         uint64_t job_id = this->worker->submit_main(
             [&](raft_handle_wrapper_t& handle) -> std::any {
                 this->build_internal(handle);

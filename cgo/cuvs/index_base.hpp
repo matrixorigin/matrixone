@@ -145,6 +145,20 @@ public:
         worker->wait(job_id).get();
     }
 
+    void train_quantizer_if_needed() {
+        if constexpr (sizeof(T) == 1) {
+            if (!quantizer_.is_trained() && !flattened_host_dataset.empty()) {
+                uint64_t n_train = std::min(static_cast<uint64_t>(500), static_cast<uint64_t>(count));
+                if (n_train == 0) return;
+                std::vector<float> train_data(n_train * dimension);
+                for (size_t i = 0; i < n_train * dimension; ++i) {
+                    train_data[i] = static_cast<float>(flattened_host_dataset[i]);
+                }
+                train_quantizer(train_data.data(), n_train);
+            }
+        }
+    }
+
     void set_quantizer(float min, float max) {
         quantizer_.set_quantizer(min, max);
     }

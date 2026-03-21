@@ -202,6 +202,7 @@ public:
             this->is_loaded_ = true;
             return;
         }
+        this->train_quantizer_if_needed();
         if (!this->worker) throw std::runtime_error("Worker not initialized");
         uint64_t job_id = this->worker->submit_main(
             [&](raft_handle_wrapper_t& handle) -> std::any {
@@ -624,6 +625,7 @@ public:
         auto res = this->worker->wait(job_id).get();
         if (res.error) std::rethrow_exception(res.error);
         this->is_loaded_ = true;
+        this->train_quantizer_if_needed();
     }
 
     void destroy() override {
