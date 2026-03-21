@@ -103,12 +103,11 @@ public:
         this->devices_ = devices;
         this->current_offset_ = static_cast<uint32_t>(count_vectors);
 
-        bool force_mg = (mode == DistributionMode_SHARDED || mode == DistributionMode_REPLICATED);
         std::vector<int> worker_devices = this->devices_;
         if (mode == DistributionMode_SINGLE_GPU && !worker_devices.empty()) {
             worker_devices = {worker_devices[0]};
         }
-        this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, force_mg);
+        this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
 
         this->flattened_host_dataset.resize(this->count * this->dimension);
         if (dataset_data) {
@@ -129,12 +128,11 @@ public:
         this->devices_ = devices;
         this->current_offset_ = 0;
 
-        bool force_mg = (mode == DistributionMode_SHARDED || mode == DistributionMode_REPLICATED);
         std::vector<int> worker_devices = this->devices_;
         if (mode == DistributionMode_SINGLE_GPU && !worker_devices.empty()) {
             worker_devices = {worker_devices[0]};
         }
-        this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, force_mg);
+        this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
 
         this->flattened_host_dataset.resize(this->count * this->dimension);
     }
@@ -150,12 +148,11 @@ public:
         this->devices_ = devices;
         this->data_filename_ = filename;
 
-        bool force_mg = (mode == DistributionMode_SHARDED || mode == DistributionMode_REPLICATED);
         std::vector<int> worker_devices = this->devices_;
         if (mode == DistributionMode_SINGLE_GPU && !worker_devices.empty()) {
             worker_devices = {worker_devices[0]};
         }
-        this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, force_mg);
+        this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
 
         this->current_offset_ = 0;
     }
@@ -171,12 +168,11 @@ public:
         this->dist_mode = mode;
         this->devices_ = devices;
 
-        bool force_mg = (mode == DistributionMode_SHARDED || mode == DistributionMode_REPLICATED);
         std::vector<int> worker_devices = this->devices_;
         if (mode == DistributionMode_SINGLE_GPU && !worker_devices.empty()) {
             worker_devices = {worker_devices[0]};
         }
-        this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, force_mg);
+        this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
 
         this->current_offset_ = 0;
     }
@@ -257,7 +253,7 @@ public:
             
             using dataset_t = raft::host_matrix<T, int64_t, raft::row_major>;
             this->dataset_device_ptr_ = std::make_shared<dataset_t>(std::move(dataset_pinned));
-            handle.sync_all_devices();
+            handle.sync(true);
         } else {
             std::cout << "[DEBUG] IVF-PQ build_internal: Single-GPU build" << std::endl;
             auto res = handle.get_raft_resources();
@@ -271,7 +267,7 @@ public:
             
             using dataset_t = raft::device_matrix<T, int64_t>;
             this->dataset_device_ptr_ = std::make_shared<dataset_t>(std::move(dataset_device));
-            raft::resource::sync_stream(*res);
+            handle.sync();
         }
         std::cout << "[DEBUG] IVF-PQ build_internal: Completed internal build" << std::endl;
     }
@@ -346,7 +342,7 @@ public:
 
         auto res = handle.get_raft_resources();
 
-        if (is_snmg_handle(*res) && mg_index_) {
+        if (this->dist_mode == DistributionMode_SHARDED && is_snmg_handle(*res) && mg_index_) {
             auto q_host = raft::make_host_matrix<T, int64_t, raft::row_major>(*res, (int64_t)num_queries, (int64_t)this->dimension);
             raft::copy(*res, q_host.view(), raft::make_host_matrix_view<const T, int64_t, raft::row_major>(queries_data, num_queries, this->dimension));
             auto n_host = raft::make_host_matrix<int64_t, int64_t, raft::row_major>(*res, (int64_t)num_queries, (int64_t)limit);
@@ -357,7 +353,7 @@ public:
             auto mg_res = this->worker->get_mg_resources();
             cuvs::neighbors::ivf_pq::search(*mg_res, *mg_index_, mg_search_params, q_host.view(), n_host.view(), d_host.view());
             
-            handle.sync_all_devices();
+            handle.sync(true);
 
             std::copy(n_host.data_handle(), n_host.data_handle() + (num_queries * limit), search_res.neighbors.begin());
             std::copy(d_host.data_handle(), d_host.data_handle() + (num_queries * limit), search_res.distances.begin());
@@ -380,21 +376,21 @@ public:
                 auto queries_device = raft::make_device_matrix<T, int64_t>(*res, static_cast<int64_t>(num_queries), static_cast<int64_t>(this->dimension));
                 raft::copy(*res, queries_device.view(), raft::make_host_matrix_view<const T, int64_t>(queries_data, num_queries, this->dimension));
 
-                auto neighbors_device = raft::make_device_matrix<int64_t, int64_t>(*res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
-                auto distances_device = raft::make_device_matrix<float, int64_t>(*res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
+                auto neighbors_device_internal = raft::make_device_matrix<int64_t, int64_t>(*res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
+                auto distances_device_internal = raft::make_device_matrix<float, int64_t>(*res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
 
                 cuvs::neighbors::ivf_pq::search(*res, search_params, *local_index,
                                                     raft::make_const_mdspan(queries_device.view()), 
-                                                    neighbors_device.view(), distances_device.view());
+                                                    neighbors_device_internal.view(), distances_device_internal.view());
 
-                raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device.view());
-                raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device.view());
+                raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device_internal.view());
+                raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device_internal.view());
             } else {
                 throw std::runtime_error("Index not loaded or failed to find local index shard for current device.");
             }
+            handle.sync();
         }
 
-        raft::resource::sync_stream(*res);
         return search_res;
     }
 
@@ -481,7 +477,7 @@ public:
         cuvs::neighbors::ivf_pq::search_params search_params;
         search_params.n_probes = sp.n_probes;
 
-        if (is_snmg_handle(*res) && mg_index_) {
+        if (this->dist_mode == DistributionMode_SHARDED && is_snmg_handle(*res) && mg_index_) {
             auto q_host = raft::make_host_matrix<T, int64_t, raft::row_major>(*res, (int64_t)num_queries, (int64_t)this->dimension);
             raft::copy(*res, q_host.view(), q_dev_t.view());
             auto n_host = raft::make_host_matrix<int64_t, int64_t, raft::row_major>(*res, (int64_t)num_queries, (int64_t)limit);
@@ -492,7 +488,7 @@ public:
             auto mg_res = this->worker->get_mg_resources();
             cuvs::neighbors::ivf_pq::search(*mg_res, *mg_index_, mg_search_params, q_host.view(), n_host.view(), d_host.view());
             
-            handle.sync_all_devices();
+            handle.sync(true);
 
             std::copy(n_host.data_handle(), n_host.data_handle() + (num_queries * limit), search_res.neighbors.begin());
             std::copy(d_host.data_handle(), d_host.data_handle() + (num_queries * limit), search_res.distances.begin());
@@ -524,9 +520,9 @@ public:
             } else {
                 throw std::runtime_error("Index not loaded or failed to find local index shard for current device.");
             }
+            handle.sync();
         }
 
-        raft::resource::sync_stream(*res);
         return search_res;
     }
 

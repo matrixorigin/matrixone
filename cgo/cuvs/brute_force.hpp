@@ -15,7 +15,7 @@
  */
 
 /*
- * Brute Force Index Implementation
+ * Brute-force Index Implementation (Flat)
  * Supported data types (T): float, half, int8_t, uint8_t
  * Neighbor ID type: int64_t
  */
@@ -58,6 +58,7 @@
 #include <cuvs/neighbors/brute_force.hpp>
 #pragma GCC diagnostic pop
 
+
 namespace matrixone {
 
 /**
@@ -88,15 +89,22 @@ public:
 
     // Unified Constructor for building from dataset
     gpu_brute_force_t(const T* dataset_data, uint64_t count_vectors, uint32_t dimension,
-                       distance_type_t m, uint32_t nthread, int device_id) {
+                    distance_type_t m, const brute_force_build_params_t& bp,
+                    const std::vector<int>& devices, uint32_t nthread, distribution_mode_t mode) {
 
         this->dimension = dimension;
         this->count = static_cast<uint32_t>(count_vectors);
         this->metric = m;
-        this->devices_ = {device_id};
+        this->build_params = bp;
+        this->dist_mode = mode;
+        this->devices_ = devices;
         this->current_offset_ = static_cast<uint32_t>(count_vectors);
 
-        this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_, false);
+        std::vector<int> worker_devices = this->devices_;
+        if (mode == DistributionMode_SINGLE_GPU && !worker_devices.empty()) {
+            worker_devices = {worker_devices[0]};
+        }
+        this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
 
         this->flattened_host_dataset.resize(this->count * this->dimension);
         if (dataset_data) {
@@ -104,17 +112,57 @@ public:
         }
     }
 
-    // Constructor for chunked input (pre-allocates)
+    // Compatibility constructor for tests
+    gpu_brute_force_t(const T* dataset_data, uint64_t count_vectors, uint32_t dimension,
+                       distance_type_t m, int nthread, int device_id) {
+        this->dimension = dimension;
+        this->count = static_cast<uint32_t>(count_vectors);
+        this->metric = m;
+        this->dist_mode = DistributionMode_SINGLE_GPU;
+        this->devices_ = {device_id};
+        this->current_offset_ = static_cast<uint32_t>(count_vectors);
+
+        this->worker = std::make_unique<cuvs_worker_t>(static_cast<uint32_t>(nthread), this->devices_, this->dist_mode);
+
+        this->flattened_host_dataset.resize(this->count * this->dimension);
+        if (dataset_data) {
+            std::copy(dataset_data, dataset_data + (this->count * this->dimension), this->flattened_host_dataset.begin());
+        }
+    }
+
+    // Compatibility constructor for brute_force_c.cpp (empty/chunked build)
     gpu_brute_force_t(uint64_t total_count, uint32_t dimension, distance_type_t m,
                        uint32_t nthread, int device_id) {
+        this->dimension = dimension;
+        this->count = static_cast<uint32_t>(total_count);
+        this->metric = m;
+        this->dist_mode = DistributionMode_SINGLE_GPU;
+        this->devices_ = {device_id};
+        this->current_offset_ = 0;
+
+        this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_, this->dist_mode);
+
+        this->flattened_host_dataset.resize(this->count * this->dimension);
+    }
+
+    // Constructor for chunked input (pre-allocates)
+    gpu_brute_force_t(uint64_t total_count, uint32_t dimension, distance_type_t m,
+                    const brute_force_build_params_t& bp, const std::vector<int>& devices,
+                    uint32_t nthread, distribution_mode_t mode) {
 
         this->dimension = dimension;
         this->count = static_cast<uint32_t>(total_count);
         this->metric = m;
-        this->devices_ = {device_id};
+        this->build_params = bp;
+        this->dist_mode = mode;
+        this->devices_ = devices;
         this->current_offset_ = 0;
 
-        this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_, false);
+        std::vector<int> worker_devices = this->devices_;
+        if (mode == DistributionMode_SINGLE_GPU && !worker_devices.empty()) {
+            worker_devices = {worker_devices[0]};
+        }
+        this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
 
         this->flattened_host_dataset.resize(this->count * this->dimension);
     }
@@ -136,6 +184,9 @@ public:
             this->is_loaded_ = true;
             return;
         }
+
+        std::cout << "[DEBUG] Brute-Force build: Starting build count=" << this->count << " dim=" << this->dimension << " metric=" << (int)this->metric << std::endl;
+
         this->train_quantizer_if_needed();
         uint64_t job_id = this->worker->submit_main(
             [&](raft_handle_wrapper_t& handle) -> std::any {
@@ -168,12 +219,14 @@ public:
         
         // Store the mdarray in shared_ptr<void> to keep it alive
         this->dataset_device_ptr_ = std::make_shared<dataset_t>(std::move(dataset_device));
-        raft::resource::sync_stream(*res);
+        handle.sync();
     }
 
     search_result_t search(const T* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const brute_force_search_params_t& sp) {
         if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
         if (!this->is_loaded_ || !index_) return search_result_t{};
+
+        std::cout << "[DEBUG] Brute-Force search: num_queries=" << num_queries << " limit=" << limit << std::endl;
 
         auto task = [this, num_queries, limit, sp, queries_data](raft_handle_wrapper_t& handle) -> std::any {
             return this->search_internal(handle, queries_data, num_queries, limit, sp);
@@ -187,7 +240,7 @@ public:
     search_result_t search_internal(raft_handle_wrapper_t& handle, const T* queries_data, uint64_t num_queries, uint32_t limit, const brute_force_search_params_t& sp) {
         std::shared_lock<std::shared_mutex> lock(this->mutex_);
         auto res = handle.get_raft_resources();
-
+        
         search_result_t search_res;
         search_res.neighbors.resize(num_queries * limit);
         search_res.distances.resize(num_queries * limit);
@@ -205,7 +258,7 @@ public:
         raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device.view());
         raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device.view());
 
-        raft::resource::sync_stream(*res);
+        handle.sync();
         return search_res;
     }
 
@@ -213,6 +266,8 @@ public:
         if constexpr (std::is_same_v<T, float>) return search(queries_data, num_queries, query_dimension, limit, sp);
         if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
         if (!this->is_loaded_ || !index_) return search_result_t{};
+
+        std::cout << "[DEBUG] Brute-Force search_float: num_queries=" << num_queries << " limit=" << limit << " query_dimension=" << query_dimension << std::endl;
 
         auto task = [this, num_queries, query_dimension, limit, sp, queries_data](raft_handle_wrapper_t& handle) -> std::any {
             return this->search_float_internal(handle, queries_data, num_queries, query_dimension, limit, sp);
@@ -253,7 +308,7 @@ public:
         raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device.view());
         raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device.view());
 
-        raft::resource::sync_stream(*res);
+        handle.sync();
         return search_res;
     }
 

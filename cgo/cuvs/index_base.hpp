@@ -110,7 +110,7 @@ public:
                     
                     std::vector<T> chunk_host_target(chunk_count * dimension);
                     raft::copy(*res, raft::make_host_matrix_view<T, int64_t>(chunk_host_target.data(), chunk_count, dimension), chunk_device_target.view());
-                    raft::resource::sync_stream(*res);
+                    handle.sync();
 
                     std::unique_lock<std::shared_mutex> lock(mutex_);
                     size_t old_size = flattened_host_dataset.size();
@@ -138,7 +138,7 @@ public:
                 auto train_device = raft::make_device_matrix<float, int64_t>(*res, n_samples, dimension);
                 raft::copy(*res, train_device.view(), train_host_view);
                 quantizer_.train(*res, train_device.view());
-                raft::resource::sync_stream(*res);
+                handle.sync();
                 return std::any();
             }
         );

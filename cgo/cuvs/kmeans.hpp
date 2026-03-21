@@ -92,10 +92,29 @@ public:
         this->count = static_cast<uint32_t>(count_vectors);
         this->metric = m;
         this->build_params = bp;
+        this->dist_mode = DistributionMode_SINGLE_GPU;
         this->devices_ = {device_id};
         this->current_offset_ = static_cast<uint32_t>(count_vectors);
 
-        this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_);
+        this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_, this->dist_mode);
+
+        this->flattened_host_dataset.resize(this->count * this->dimension);
+        if (dataset_data) {
+            std::copy(dataset_data, dataset_data + (this->count * this->dimension), this->flattened_host_dataset.begin());
+        }
+    }
+
+    // Compatibility constructor for tests
+    gpu_kmeans_t(const T* dataset_data, uint64_t count_vectors, uint32_t dimension,
+                    distance_type_t m, int nthread, int device_id) {
+        this->dimension = dimension;
+        this->count = static_cast<uint32_t>(count_vectors);
+        this->metric = m;
+        this->dist_mode = DistributionMode_SINGLE_GPU;
+        this->devices_ = {device_id};
+        this->current_offset_ = static_cast<uint32_t>(count_vectors);
+
+        this->worker = std::make_unique<cuvs_worker_t>(static_cast<uint32_t>(nthread), this->devices_, this->dist_mode);
 
         this->flattened_host_dataset.resize(this->count * this->dimension);
         if (dataset_data) {
@@ -111,10 +130,11 @@ public:
         this->count = static_cast<uint32_t>(total_count);
         this->metric = m;
         this->build_params = bp;
+        this->dist_mode = DistributionMode_SINGLE_GPU;
         this->devices_ = {device_id};
         this->current_offset_ = 0;
 
-        this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_);
+        this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_, this->dist_mode);
 
         this->flattened_host_dataset.resize(this->count * this->dimension);
     }
@@ -127,8 +147,9 @@ public:
         this->build_params.k = n_clusters;
         this->build_params.max_iter = max_iter;
         this->build_params.tol = 1e-4f;
+        this->dist_mode = DistributionMode_SINGLE_GPU;
         this->devices_ = {device_id};
-        this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_);
+        this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_, this->dist_mode);
     }
 
     void start() override {
@@ -143,6 +164,11 @@ public:
     }
 
     void build() override {
+        if (this->count == 0) {
+            this->is_loaded_ = true;
+            return;
+        }
+        this->train_quantizer_if_needed();
         uint64_t job_id = this->worker->submit_main(
             [&](raft_handle_wrapper_t& handle) -> std::any {
                 this->build_internal(handle);
@@ -183,13 +209,15 @@ public:
         cuvs::cluster::kmeans::fit(*res, kmeans_params, dataset_device_f.view(), std::nullopt, centroids_->view(), 
                                     raft::make_host_scalar_view<float>(&inertia), raft::make_host_scalar_view<int64_t>(&n_iter));
         
-        raft::resource::sync_stream(*res);
+        handle.sync();
     }
 
     kmeans_result_t fit(const T* dataset_data, uint64_t count_vectors) {
         this->count = static_cast<uint32_t>(count_vectors);
         this->flattened_host_dataset.resize(this->count * this->dimension);
         std::copy(dataset_data, dataset_data + (this->count * this->dimension), this->flattened_host_dataset.begin());
+        
+        this->train_quantizer_if_needed();
         
         uint64_t job_id = this->worker->submit_main(
             [&](raft_handle_wrapper_t& handle) -> std::any {
@@ -217,7 +245,7 @@ public:
                 cuvs::cluster::kmeans::fit(*res, kmeans_params, dataset_device_f.view(), std::nullopt, centroids_->view(), 
                                             raft::make_host_scalar_view<float>(&inertia), raft::make_host_scalar_view<int64_t>(&n_iter));
                 
-                raft::resource::sync_stream(*res);
+                handle.sync();
                 return std::make_pair(inertia, n_iter);
             }
         );
@@ -254,7 +282,7 @@ public:
             
             std::vector<int64_t> labels_host(num_queries);
             raft::copy(*res, raft::make_host_vector_view<int64_t, int64_t>(labels_host.data(), (int64_t)num_queries), labels_device.view());
-            raft::resource::sync_stream(*res);
+            handle.sync();
 
             return kmeans_result_t{labels_host, inertia, 0};
         };
@@ -287,7 +315,7 @@ public:
             
             std::vector<int64_t> labels_host(num_queries);
             raft::copy(*res, raft::make_host_vector_view<int64_t, int64_t>(labels_host.data(), (int64_t)num_queries), labels_device.view());
-            raft::resource::sync_stream(*res);
+            handle.sync();
 
             return kmeans_result_t{labels_host, inertia, 0};
         };
@@ -308,6 +336,7 @@ public:
 
     kmeans_result_t fit_predict_float(const float* dataset_data, uint64_t count_vectors) {
         this->count = static_cast<uint32_t>(count_vectors);
+        this->train_quantizer_if_needed();
         
         uint64_t job_id = this->worker->submit_main(
             [&](raft_handle_wrapper_t& handle) -> std::any {
@@ -337,7 +366,7 @@ public:
 
                 std::vector<int64_t> labels_host(this->count);
                 raft::copy(*res, raft::make_host_vector_view<int64_t, int64_t>(labels_host.data(), (int64_t)this->count), labels_device.view());
-                raft::resource::sync_stream(*res);
+                handle.sync();
 
                 return kmeans_result_t{labels_host, inertia, n_iter};
             }
@@ -369,7 +398,7 @@ public:
 
                 std::vector<T> centroids_host(n_clusters * dim);
                 raft::copy(*res, raft::make_host_matrix_view<T, int64_t>(centroids_host.data(), n_clusters, dim), centroids_device_target.view());
-                raft::resource::sync_stream(*res);
+                handle.sync();
                 return centroids_host;
             }
         );

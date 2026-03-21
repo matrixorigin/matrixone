@@ -20,6 +20,7 @@
 #include <raft/core/resource/comms.hpp>
 #include <raft/core/resources.hpp>
 #include "helper.h"
+#include "cuvs_types.h"
 
 #include <any>
 #include <atomic>
@@ -160,8 +161,9 @@ private:
  */
 class raft_handle_wrapper_t {
 public:
-    raft_handle_wrapper_t(int device_id, int rank = 0, std::shared_ptr<raft::device_resources_snmg> mg_res = nullptr) 
-        : device_id_(device_id), rank_(rank), mg_res_(mg_res) {
+    raft_handle_wrapper_t(int device_id, int rank = 0, std::shared_ptr<raft::device_resources_snmg> mg_res = nullptr,
+                         distribution_mode_t mode = DistributionMode_SINGLE_GPU) 
+        : device_id_(device_id), rank_(rank), mg_res_(mg_res), mode_(mode) {
         cudaSetDevice(device_id);
         if (mg_res) {
             res_ = std::make_shared<raft::resources>(raft::resource::get_device_resources_for_rank(*mg_res, rank));
@@ -173,16 +175,16 @@ public:
     std::shared_ptr<raft::resources> get_raft_resources() const { return res_; }
     int get_device_id() const { return device_id_; }
     int get_rank() const { return rank_; }
+    distribution_mode_t get_mode() const { return mode_; }
 
-    void sync_all_devices() {
-        if (!mg_res_) {
-            raft::resource::sync_stream(*res_);
-            return;
-        }
-        
+    /**
+     * @brief Performs synchronization.
+     * @param force_all_ranks If true, performs a collective sync across all ranks.
+     */
+    void sync(bool force_all_ranks = false) {
         raft::resource::sync_stream(*res_);
 
-        if (rank_ == 0) {
+        if (force_all_ranks && mg_res_ && rank_ == 0) {
             int num_ranks = 0;
             if (raft::resource::comms_initialized(*res_)) {
                 num_ranks = raft::resource::get_comms(*res_).get_size();
@@ -197,11 +199,15 @@ public:
         }
     }
 
+    // Deprecated: use sync()
+    void sync_all_devices() { sync(true); }
+
 private:
     int device_id_;
     int rank_;
     std::shared_ptr<raft::device_resources_snmg> mg_res_;
     std::shared_ptr<raft::resources> res_;
+    distribution_mode_t mode_;
 };
 
 class cuvs_worker_t {
@@ -214,9 +220,10 @@ public:
         task_fn_t fn;
     };
 
-    cuvs_worker_t(uint32_t nthread, const std::vector<int>& devices, bool use_mg = false)
-        : nthread_(nthread), devices_(devices), running_(false), use_batching_(false), per_thread_device_(false) {
-        if (use_mg) {
+    cuvs_worker_t(uint32_t nthread, const std::vector<int>& devices, distribution_mode_t mode = DistributionMode_SINGLE_GPU)
+        : nthread_(nthread), devices_(devices), mode_(mode), running_(false), use_batching_(false), per_thread_device_(false) {
+        
+        if (mode == DistributionMode_SHARDED || mode == DistributionMode_REPLICATED) {
             mg_resources_ = std::make_shared<raft::device_resources_snmg>(devices);
             init_mg_comms(*mg_resources_, devices);
         }
@@ -236,7 +243,7 @@ public:
             int rank = i % devices_.size(); 
 
             workers_.emplace_back([this, device_id, rank, init_fn, stop_fn, i] {
-                raft_handle handle(device_id, rank, mg_resources_);
+                raft_handle handle(device_id, rank, mg_resources_, mode_);
                 if (init_fn) init_fn(handle);
                 if (i == 0) this->run_main_loop(handle, stop_fn);
                 else this->run_worker_loop(handle, stop_fn);
@@ -292,6 +299,8 @@ public:
     std::shared_ptr<raft::device_resources_snmg> get_mg_resources() const {
         return mg_resources_;
     }
+
+    distribution_mode_t get_mode() const { return mode_; }
 
     void set_use_batching(bool enable) { use_batching_ = enable; }
     bool use_batching() const { return use_batching_; }
@@ -384,7 +393,7 @@ private:
         cuvs_task_result_t result;
         try {
             result.result = task.fn(handle);
-            handle.sync_all_devices();
+            // No global sync here; indices call handle.sync() as needed.
         } catch (...) {
             result.error = std::current_exception();
         }
@@ -419,6 +428,7 @@ private:
 
     uint32_t nthread_;
     std::vector<int> devices_;
+    distribution_mode_t mode_;
     std::vector<std::thread> workers_;
     std::atomic<bool> running_;
     bool use_batching_;
