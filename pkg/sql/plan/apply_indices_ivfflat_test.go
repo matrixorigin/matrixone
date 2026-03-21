@@ -690,6 +690,36 @@ func TestBuildPkExprFromNode_TableScan_Success(t *testing.T) {
 	assert.Equal(t, "id", col.Name)
 }
 
+func TestBuildPkExprFromNode_IndexTableScan_UsesIndexPrimaryColumn(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+
+	scanNode := &plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		TableDef: &plan.TableDef{
+			Name2ColIndex: map[string]int32{
+				catalog.IndexTableIndexColName:   0,
+				catalog.IndexTablePrimaryColName: 1,
+			},
+		},
+		BindingTags: []int32{101},
+		IndexScanInfo: plan.IndexScanInfo{
+			IsIndexScan: true,
+		},
+	}
+
+	builder.qry.Nodes = append(builder.qry.Nodes, scanNode)
+
+	pkType := plan.Type{Id: int32(types.T_int64)}
+	result := builder.buildPkExprFromNode(0, pkType, "id")
+
+	require.NotNil(t, result)
+	col := result.GetCol()
+	require.NotNil(t, col)
+	assert.Equal(t, int32(101), col.RelPos)
+	assert.Equal(t, int32(1), col.ColPos)
+	assert.Equal(t, "id", col.Name)
+}
+
 // TestBuildPkExprFromNode_TableScan_NilTableDef tests TABLE_SCAN with nil TableDef
 func TestBuildPkExprFromNode_TableScan_NilTableDef(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
@@ -799,6 +829,47 @@ func TestBuildPkExprFromNode_Join_Recursive(t *testing.T) {
 
 	result := builder.buildPkExprFromNode(1, plan.Type{Id: int32(types.T_int64)}, "id")
 	require.NotNil(t, result)
+}
+
+// ============================================================================
+// Tests for findScanNodeByTag
+// ============================================================================
+
+func TestFindScanNodeByTag_FindsMatchingScan(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+
+	scanNode := &plan.Node{
+		NodeType:    plan.Node_TABLE_SCAN,
+		BindingTags: []int32{321},
+	}
+	projNode := &plan.Node{
+		NodeType: plan.Node_PROJECT,
+		Children: []int32{0},
+	}
+
+	builder.qry.Nodes = append(builder.qry.Nodes, scanNode, projNode)
+
+	result := builder.findScanNodeByTag(1, 321)
+	assert.Equal(t, int32(0), result)
+}
+
+func TestFindScanNodeByTag_CycleDoesNotLoop(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+
+	// Create a malformed graph cycle: node0 -> node1 -> node0.
+	node0 := &plan.Node{
+		NodeType: plan.Node_PROJECT,
+		Children: []int32{1},
+	}
+	node1 := &plan.Node{
+		NodeType: plan.Node_JOIN,
+		Children: []int32{0},
+	}
+
+	builder.qry.Nodes = append(builder.qry.Nodes, node0, node1)
+
+	result := builder.findScanNodeByTag(0, 999)
+	assert.Equal(t, int32(-1), result)
 }
 
 // ============================================================================

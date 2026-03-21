@@ -217,8 +217,6 @@ func (builder *QueryBuilder) suspendScanProtection(scanID int32) func() {
 	return func() {
 		if wasProtected {
 			builder.protectedScans[scanID] = originalCount
-		} else {
-			delete(builder.protectedScans, scanID)
 		}
 	}
 }

@@ -49,6 +49,18 @@ func TestSuspendScanProtection_NoExistingProtection(t *testing.T) {
 	assert.False(t, exists)
 }
 
+func TestSuspendScanProtection_DoesNotDeleteNewProtection(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	const scanID int32 = 88
+
+	restore := builder.suspendScanProtection(scanID)
+	builder.protectedScans[scanID] = 1
+
+	restore()
+
+	assert.Equal(t, 1, builder.protectedScans[scanID])
+}
+
 func TestWithSuspendedScanProtection_RestoresAfterPanic(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	const scanID int32 = 64
