@@ -1717,6 +1717,37 @@ func TestCanApplyRegularIndex_Success(t *testing.T) {
 	assert.True(t, result)
 }
 
+func TestClearLimitOffsetInSubtree_ClearsAllNodes(t *testing.T) {
+	qry := &plan.Query{}
+	scan := &plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		Limit:    &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 1}}}},
+		Offset:   &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 2}}}},
+	}
+	join := &plan.Node{
+		NodeType: plan.Node_JOIN,
+		Children: []int32{0},
+		Limit:    &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 3}}}},
+		Offset:   &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 4}}}},
+	}
+	proj := &plan.Node{
+		NodeType: plan.Node_PROJECT,
+		Children: []int32{1},
+		Limit:    &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 5}}}},
+		Offset:   &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 6}}}},
+	}
+	qry.Nodes = append(qry.Nodes, scan, join, proj)
+
+	clearLimitOffsetInSubtree(qry, 2)
+
+	assert.Nil(t, qry.Nodes[0].Limit)
+	assert.Nil(t, qry.Nodes[0].Offset)
+	assert.Nil(t, qry.Nodes[1].Limit)
+	assert.Nil(t, qry.Nodes[1].Offset)
+	assert.Nil(t, qry.Nodes[2].Limit)
+	assert.Nil(t, qry.Nodes[2].Offset)
+}
+
 // ============================================================================
 // Tests for colRefsWithin
 // ============================================================================

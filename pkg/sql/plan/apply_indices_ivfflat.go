@@ -564,8 +564,6 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		// secondScanNode: copy original scanNode for JOIN(ivf, table)
 		secondScanNodeID := builder.copyNode(ctx, scanNode.NodeId)
 		secondScanNode := builder.qry.Nodes[secondScanNodeID]
-		baseSecondScan := secondScanNode
-
 		oldTag := secondScanNode.BindingTags[0]
 		builder.rebindScanNode(secondScanNode)
 		newTag := secondScanNode.BindingTags[0]
@@ -612,23 +610,15 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		}
 
 		// Otherwise BloomFilter will only see the truncated primary key set, causing data loss.
-		secondScanNode.Limit = nil
-		secondScanNode.Offset = nil
+		clearLimitOffsetInSubtree(builder.qry, secondScanNodeID)
 
 		// Add a PROJECT node above secondScanNode to output only the primary key column
 		secondProjectTag := builder.genNewBindTag()
 		secondPkExpr := builder.buildPkExprFromNode(secondScanNodeID, ivfCtx.pkType, scanNode.TableDef.Pkey.PkeyColName)
 		if secondPkExpr == nil {
-			secondPkExpr = &plan.Expr{
-				Typ: ivfCtx.pkType,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: baseSecondScan.BindingTags[0],
-						ColPos: ivfCtx.pkPos,
-						Name:   scanNode.TableDef.Cols[ivfCtx.pkPos].Name,
-					},
-				},
-			}
+			// If an optimized second-scan subtree can't provide a stable PK expression,
+			// skip IVF rewrite to avoid wiring stale bindings into join/runtime-filter paths.
+			return nodeID, nil
 		}
 		secondProjectNodeID := builder.appendNode(&plan.Node{
 			NodeType:    plan.Node_PROJECT,
@@ -1014,6 +1004,18 @@ func (builder *QueryBuilder) canApplyRegularIndex(node *plan.Node) bool {
 		}
 	}
 	return len(node.FilterList) > 0
+}
+
+func clearLimitOffsetInSubtree(qry *plan.Query, nodeID int32) {
+	if qry == nil || nodeID < 0 {
+		return
+	}
+	node := qry.Nodes[nodeID]
+	node.Limit = nil
+	node.Offset = nil
+	for _, childID := range node.Children {
+		clearLimitOffsetInSubtree(qry, childID)
+	}
 }
 
 func colRefsWithin(expr *plan.Expr, colCnt int) bool {
