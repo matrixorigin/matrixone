@@ -606,9 +606,9 @@ func (builder *QueryBuilder) buildPkExprFromNode(nodeID int32, pkType plan.Type,
 				}
 			}
 		}
-		if len(node.Children) > 0 {
-			return builder.buildPkExprFromNode(node.Children[0], pkType, pkName)
-		}
+		// If PROJECT doesn't expose PK, don't recurse to child: using child's binding tag here
+		// would produce stale ColRef(RelPos) for joins/runtime filters above this PROJECT.
+		return nil
 	case plan.Node_JOIN:
 		if len(node.Children) > 0 {
 			return builder.buildPkExprFromNode(node.Children[0], pkType, pkName)

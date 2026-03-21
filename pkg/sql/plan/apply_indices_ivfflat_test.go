@@ -804,7 +804,7 @@ func TestBuildPkExprFromNode_Project_Recursive(t *testing.T) {
 	builder.qry.Nodes = append(builder.qry.Nodes, scanNode, projNode)
 
 	result := builder.buildPkExprFromNode(1, plan.Type{Id: int32(types.T_int64)}, "id")
-	require.NotNil(t, result)
+	assert.Nil(t, result)
 }
 
 // TestBuildPkExprFromNode_Join_Recursive tests JOIN node
@@ -829,6 +829,37 @@ func TestBuildPkExprFromNode_Join_Recursive(t *testing.T) {
 
 	result := builder.buildPkExprFromNode(1, plan.Type{Id: int32(types.T_int64)}, "id")
 	require.NotNil(t, result)
+}
+
+func TestBuildPkExprFromNode_Project_ExposesPk_Success(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder.nameByColRef = make(map[[2]int32]string)
+	builder.nameByColRef[[2]int32{200, 1}] = "id"
+
+	projNode := &plan.Node{
+		NodeType: plan.Node_PROJECT,
+		ProjectList: []*plan.Expr{
+			{
+				Typ: plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 200,
+						ColPos: 1,
+						Name:   "id",
+					},
+				},
+			},
+		},
+		Children: []int32{0},
+	}
+	builder.qry.Nodes = append(builder.qry.Nodes, &plan.Node{}, projNode)
+
+	result := builder.buildPkExprFromNode(1, plan.Type{Id: int32(types.T_int64)}, "id")
+	require.NotNil(t, result)
+	col := result.GetCol()
+	require.NotNil(t, col)
+	assert.Equal(t, int32(200), col.RelPos)
+	assert.Equal(t, int32(1), col.ColPos)
 }
 
 // ============================================================================
