@@ -102,7 +102,11 @@ public:
         this->current_offset_ = static_cast<uint32_t>(count_vectors);
 
         bool force_mg = (mode == DistributionMode_SHARDED || mode == DistributionMode_REPLICATED);
-        this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_, force_mg || (this->devices_.size() > 1));
+        std::vector<int> worker_devices = this->devices_;
+        if (mode == DistributionMode_SINGLE_GPU && !worker_devices.empty()) {
+            worker_devices = {worker_devices[0]};
+        }
+        this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, force_mg);
 
         this->flattened_host_dataset.resize(this->count * this->dimension);
         if (dataset_data) {
@@ -124,7 +128,11 @@ public:
         this->current_offset_ = 0;
 
         bool force_mg = (mode == DistributionMode_SHARDED || mode == DistributionMode_REPLICATED);
-        this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_, force_mg || (this->devices_.size() > 1));
+        std::vector<int> worker_devices = this->devices_;
+        if (mode == DistributionMode_SINGLE_GPU && !worker_devices.empty()) {
+            worker_devices = {worker_devices[0]};
+        }
+        this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, force_mg);
 
         this->flattened_host_dataset.resize(this->count * this->dimension);
     }
@@ -141,7 +149,11 @@ public:
         this->devices_ = devices;
 
         bool force_mg = (mode == DistributionMode_SHARDED || mode == DistributionMode_REPLICATED);
-        this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_, force_mg || (this->devices_.size() > 1));
+        std::vector<int> worker_devices = this->devices_;
+        if (mode == DistributionMode_SINGLE_GPU && !worker_devices.empty()) {
+            worker_devices = {worker_devices[0]};
+        }
+        this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, force_mg);
 
         this->current_offset_ = 0;
     }
@@ -285,7 +297,8 @@ public:
 
         auto res = handle.get_raft_resources();
 
-        if (is_snmg_handle(*res) && mg_index_) {
+        if (this->dist_mode != DistributionMode_SINGLE_GPU && is_snmg_handle(*res) && mg_index_) {
+            std::cout << "[DEBUG] IVF-Flat search_internal: Using SNMG path" << std::endl;
             auto q_host = raft::make_host_matrix<T, int64_t, raft::row_major>(*res, (int64_t)num_queries, (int64_t)this->dimension);
             raft::copy(*res, q_host.view(), raft::make_host_matrix_view<const T, int64_t, raft::row_major>(queries_data, num_queries, this->dimension));
             auto n_host = raft::make_host_matrix<int64_t, int64_t, raft::row_major>(*res, (int64_t)num_queries, (int64_t)limit);
@@ -301,6 +314,7 @@ public:
             std::copy(n_host.data_handle(), n_host.data_handle() + (num_queries * limit), search_res.neighbors.begin());
             std::copy(d_host.data_handle(), d_host.data_handle() + (num_queries * limit), search_res.distances.begin());
         } else {
+            std::cout << "[DEBUG] IVF-Flat search_internal: Using Single-GPU path Device=" << handle.get_device_id() << std::endl;
             const ivf_flat_index* local_index = index_.get();
             if (!local_index && mg_index_) {
                 int current_device;
@@ -343,7 +357,7 @@ public:
         if (!this->is_loaded_ || (!index_ && !mg_index_)) return search_result_t{};
 
         if (num_queries > 16 || !this->worker->use_batching()) {
-            auto task = [this, num_queries, limit, sp, queries_data, query_dimension](raft_handle_wrapper_t& handle) -> std::any {
+            auto task = [this, num_queries, query_dimension, limit, sp, queries_data](raft_handle_wrapper_t& handle) -> std::any {
                 return this->search_float_internal(handle, queries_data, num_queries, query_dimension, limit, sp);
             };
             if (!this->worker) throw std::runtime_error("Worker not initialized");
@@ -392,8 +406,7 @@ public:
         return future.get();
     }
 
-    search_result_t search_float_internal(raft_handle_wrapper_t& handle, const float* queries_data, uint64_t num_queries, uint32_t query_dimension, 
-                        uint32_t limit, const ivf_flat_search_params_t& sp) {
+    search_result_t search_float_internal(raft_handle_wrapper_t& handle, const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const ivf_flat_search_params_t& sp) {
         std::shared_lock<std::shared_mutex> lock(this->mutex_);
         auto res = handle.get_raft_resources();
 
@@ -416,7 +429,8 @@ public:
         cuvs::neighbors::ivf_flat::search_params search_params;
         search_params.n_probes = sp.n_probes;
 
-        if (is_snmg_handle(*res) && mg_index_) {
+        if (this->dist_mode != DistributionMode_SINGLE_GPU && is_snmg_handle(*res) && mg_index_) {
+            std::cout << "[DEBUG] IVF-Flat search_float_internal: Using SNMG path" << std::endl;
             auto q_host = raft::make_host_matrix<T, int64_t, raft::row_major>(*res, (int64_t)num_queries, (int64_t)this->dimension);
             raft::copy(*res, q_host.view(), q_dev_t.view());
             auto n_host = raft::make_host_matrix<int64_t, int64_t, raft::row_major>(*res, (int64_t)num_queries, (int64_t)limit);
@@ -432,6 +446,7 @@ public:
             std::copy(n_host.data_handle(), n_host.data_handle() + (num_queries * limit), search_res.neighbors.begin());
             std::copy(d_host.data_handle(), d_host.data_handle() + (num_queries * limit), search_res.distances.begin());
         } else {
+            std::cout << "[DEBUG] IVF-Flat search_float_internal: Using Single-GPU path Device=" << handle.get_device_id() << std::endl;
             const ivf_flat_index* local_index = index_.get();
             if (!local_index && mg_index_) {
                 int current_device;

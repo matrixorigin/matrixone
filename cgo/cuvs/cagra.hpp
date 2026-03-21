@@ -102,7 +102,14 @@ public:
         this->current_offset_ = static_cast<uint32_t>(count_vectors);
 
         bool force_mg = (mode == DistributionMode_SHARDED || mode == DistributionMode_REPLICATED);
-        this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_, force_mg || (this->devices_.size() > 1));
+        
+        // CRITICAL: For SINGLE_GPU mode, the worker pool MUST only use the device where the index is built.
+        // If we allow worker threads to bind to other devices, cross-device access will cause Illegal Address errors.
+        std::vector<int> worker_devices = this->devices_;
+        if (mode == DistributionMode_SINGLE_GPU && !worker_devices.empty()) {
+            worker_devices = {worker_devices[0]};
+        }
+        this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, force_mg);
 
         this->flattened_host_dataset.resize(this->count * this->dimension);
         if (dataset_data) {
@@ -124,7 +131,14 @@ public:
         this->current_offset_ = 0;
 
         bool force_mg = (mode == DistributionMode_SHARDED || mode == DistributionMode_REPLICATED);
-        this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_, force_mg || (this->devices_.size() > 1));
+        
+        // CRITICAL: For SINGLE_GPU mode, the worker pool MUST only use the device where the index is built.
+        // If we allow worker threads to bind to other devices, cross-device access will cause Illegal Address errors.
+        std::vector<int> worker_devices = this->devices_;
+        if (mode == DistributionMode_SINGLE_GPU && !worker_devices.empty()) {
+            worker_devices = {worker_devices[0]};
+        }
+        this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, force_mg);
 
         this->flattened_host_dataset.resize(this->count * this->dimension);
     }
@@ -141,7 +155,14 @@ public:
         this->devices_ = devices;
 
         bool force_mg = (mode == DistributionMode_SHARDED || mode == DistributionMode_REPLICATED);
-        this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_, force_mg || (this->devices_.size() > 1));
+        
+        // CRITICAL: For SINGLE_GPU mode, the worker pool MUST only use the device where the index is built.
+        // If we allow worker threads to bind to other devices, cross-device access will cause Illegal Address errors.
+        std::vector<int> worker_devices = this->devices_;
+        if (mode == DistributionMode_SINGLE_GPU && !worker_devices.empty()) {
+            worker_devices = {worker_devices[0]};
+        }
+        this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, force_mg);
 
         this->current_offset_ = 0;
     }

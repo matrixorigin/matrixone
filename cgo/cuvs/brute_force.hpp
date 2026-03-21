@@ -213,8 +213,8 @@ public:
         if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
         if (!this->is_loaded_ || !index_) return search_result_t{};
 
-        auto task = [this, num_queries, limit, sp, queries_data](raft_handle_wrapper_t& handle) -> std::any {
-            return this->search_float_internal(handle, queries_data, num_queries, limit, sp);
+        auto task = [this, num_queries, query_dimension, limit, sp, queries_data](raft_handle_wrapper_t& handle) -> std::any {
+            return this->search_float_internal(handle, queries_data, num_queries, query_dimension, limit, sp);
         };
         uint64_t job_id = this->worker->submit(task);
         auto result_wait = this->worker->wait(job_id).get();
@@ -222,7 +222,7 @@ public:
         return std::any_cast<search_result_t>(result_wait.result);
     }
 
-    search_result_t search_float_internal(raft_handle_wrapper_t& handle, const float* queries_data, uint64_t num_queries, uint32_t limit, const brute_force_search_params_t& sp) {
+    search_result_t search_float_internal(raft_handle_wrapper_t& handle, const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const brute_force_search_params_t& sp) {
         std::shared_lock<std::shared_mutex> lock(this->mutex_);
         auto res = handle.get_raft_resources();
 

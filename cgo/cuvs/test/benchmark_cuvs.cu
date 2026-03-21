@@ -1,14 +1,14 @@
 /* 
  * Copyright 2021 Matrix Origin
  *
- * Licensed under the Apache License, Version 2.0 (the \"License\");
+ * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an \"AS IS\" BASIS,
+ * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
@@ -27,6 +27,7 @@
 #include <atomic>
 #include <iomanip>
 #include <string>
+#include <cuda_fp16.h>
 
 using namespace matrixone;
 
@@ -83,6 +84,12 @@ template<typename T>
 std::vector<T> convert_dataset(const std::vector<float>& src, uint64_t n_vectors, uint32_t dim) {
     if constexpr (std::is_same_v<T, float>) {
         return src;
+    } else if constexpr (std::is_same_v<T, half>) {
+        std::vector<T> dst(src.size());
+        for(size_t i = 0; i < src.size(); ++i) {
+            dst[i] = __float2half(src[i]);
+        }
+        return dst;
     } else {
         std::vector<T> dst(src.size());
         for(size_t i = 0; i < src.size(); ++i) {
