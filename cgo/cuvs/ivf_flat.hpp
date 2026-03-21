@@ -329,15 +329,9 @@ public:
         } else {
             const ivf_flat_index* local_index = index_.get();
             if (!local_index && mg_index_) {
-                int current_device;
-                RAFT_CUDA_TRY(cudaGetDevice(&current_device));
-                for (size_t i = 0; i < this->devices_.size(); ++i) {
-                    if (this->devices_[i] == current_device && i < mg_index_->ann_interfaces_.size()) {
-                        if (mg_index_->ann_interfaces_[i].index_.has_value()) {
-                            local_index = &mg_index_->ann_interfaces_[i].index_.value();
-                            break;
-                        }
-                    }
+                int rank = handle.get_rank();
+                if (rank < (int)mg_index_->ann_interfaces_.size() && mg_index_->ann_interfaces_[rank].index_.has_value()) {
+                    local_index = &mg_index_->ann_interfaces_[rank].index_.value();
                 }
             }
 
@@ -464,15 +458,9 @@ public:
         } else {
             const ivf_flat_index* local_index = index_.get();
             if (!local_index && mg_index_) {
-                int current_device;
-                RAFT_CUDA_TRY(cudaGetDevice(&current_device));
-                for (size_t i = 0; i < this->devices_.size(); ++i) {
-                    if (this->devices_[i] == current_device && i < mg_index_->ann_interfaces_.size()) {
-                        if (mg_index_->ann_interfaces_[i].index_.has_value()) {
-                            local_index = &mg_index_->ann_interfaces_[i].index_.value();
-                            break;
-                        }
-                    }
+                int rank = handle.get_rank();
+                if (rank < (int)mg_index_->ann_interfaces_.size() && mg_index_->ann_interfaces_[rank].index_.has_value()) {
+                    local_index = &mg_index_->ann_interfaces_[rank].index_.value();
                 }
             }
 

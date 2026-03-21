@@ -94,15 +94,23 @@ public:
         int64_t n_rows = src_view.extent(0);
         int64_t n_cols = src_view.extent(1);
 
-        auto chunk_device_int8 = raft::make_device_matrix<int8_t, int64_t>(res, n_rows, n_cols);
-        cuvs::preprocessing::quantize::scalar::transform(res, *quantizer_, src_view, chunk_device_int8.view());
-
         if (is_device_ptr) {
-            auto out_view = raft::make_device_matrix_view<T, int64_t>(out_ptr, n_rows, n_cols);
-            raft::copy(res, out_view, chunk_device_int8.view());
+            if constexpr (std::is_same_v<T, int8_t>) {
+                auto out_view = raft::make_device_matrix_view<int8_t, int64_t>(out_ptr, n_rows, n_cols);
+                cuvs::preprocessing::quantize::scalar::transform(res, *quantizer_, src_view, out_view);
+            } else {
+                // T is uint8_t, but cuVS transform expects int8_t output
+                auto chunk_device_int8 = raft::make_device_matrix<int8_t, int64_t>(res, n_rows, n_cols);
+                cuvs::preprocessing::quantize::scalar::transform(res, *quantizer_, src_view, chunk_device_int8.view());
+                auto out_view = raft::make_device_matrix_view<T, int64_t>(out_ptr, n_rows, n_cols);
+                raft::copy(res, out_view, chunk_device_int8.view());
+            }
         } else {
+            // For host pointers, we must use a temporary device buffer for the transform
+            auto tmp_dev = raft::make_device_matrix<int8_t, int64_t>(res, n_rows, n_cols);
+            cuvs::preprocessing::quantize::scalar::transform(res, *quantizer_, src_view, tmp_dev.view());
             auto out_view = raft::make_host_matrix_view<T, int64_t>(out_ptr, n_rows, n_cols);
-            raft::copy(res, out_view, chunk_device_int8.view());
+            raft::copy(res, out_view, tmp_dev.view());
             raft::resource::sync_stream(res);
         }
     }
