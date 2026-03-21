@@ -22,11 +22,6 @@
 #include "helper.h"
 #include "cuvs_types.h"
 
-#include <rmm/mr/device_memory_resource.hpp>
-#include <rmm/mr/pool_memory_resource.hpp>
-#include <rmm/mr/cuda_memory_resource.hpp>
-#include <rmm/mr/per_device_resource.hpp>
-
 #include <any>
 #include <atomic>
 #include <condition_variable>
@@ -234,23 +229,6 @@ public:
         }
         tasks_.set_capacity(1000);
         main_tasks_.set_capacity(1000);
-
-        // Initialize RMM pools for each device
-        for (int dev_id : devices) {
-            std::lock_guard<std::mutex> lock(mr_mutex_);
-            if (mrs_.find(dev_id) == mrs_.end()) {
-                cudaSetDevice(dev_id);
-                auto cuda_mr = std::make_shared<rmm::mr::cuda_memory_resource>();
-                // Initialize with 256MB pool per GPU, growing as needed
-                auto pool_mr = std::make_shared<rmm::mr::pool_memory_resource<rmm::mr::cuda_memory_resource>>(
-                    cuda_mr.get(), 256 * 1024 * 1024);
-                mrs_[dev_id] = pool_mr;
-                cuda_mrs_[dev_id] = cuda_mr;
-                
-                // Set as per-device resource
-                rmm::mr::set_per_device_resource(rmm::cuda_device_id{dev_id}, pool_mr.get());
-            }
-        }
     }
 
     ~cuvs_worker_t() { stop(); }
@@ -276,12 +254,35 @@ public:
                 else this->run_worker_loop(handle, stop_fn);
             });
         }
+
+        // Always start batcher thread if we have worker threads
+        if (nthread_ > 0) {
+            batcher_running_ = true;
+            batcher_thread_ = std::thread([this]() {
+                while (batcher_running_) {
+                    std::this_thread::sleep_for(std::chrono::microseconds(500));
+                    
+                    std::vector<std::string> keys;
+                    {
+                        std::lock_guard<std::mutex> lock(batch_mutex_);
+                        if (batches_.empty()) continue;
+                        for (auto const& [key, _] : batches_) keys.push_back(key);
+                    }
+                    for (auto const& key : keys) {
+                        this->flush_batch(key);
+                    }
+                }
+            });
+        }
     }
 
     void stop() {
         if (!running_) return;
         running_ = false;
         
+        batcher_running_ = false;
+        if (batcher_thread_.joinable()) batcher_thread_.join();
+
         tasks_.stop();
         main_tasks_.stop();
         
@@ -295,6 +296,16 @@ public:
         }
         workers_.clear();
         results_store_.stop();
+
+        // Flush remaining batches
+        std::vector<std::string> keys;
+        {
+            std::lock_guard<std::mutex> lock(batch_mutex_);
+            for (auto const& [key, _] : batches_) keys.push_back(key);
+        }
+        for (auto const& key : keys) {
+            this->flush_batch(key);
+        }
     }
 
     uint64_t submit(task_fn_t fn) {
@@ -341,15 +352,12 @@ public:
         
         {
             std::lock_guard<std::mutex> lock(batch_mutex_);
+            if (!running_) throw std::runtime_error("Worker not running");
+
             auto& batch = batches_[key];
             if (!batch) {
                 batch = std::make_shared<batch_t>();
                 batch->exec_fn = exec_fn;
-                batch->timer = std::thread([this, key, batch] {
-                    std::this_thread::sleep_for(std::chrono::microseconds(500));
-                    this->flush_batch(key);
-                });
-                batch->timer.detach();
             }
 
             auto promise = std::make_shared<std::promise<ResT>>();
@@ -380,7 +388,6 @@ private:
         std::vector<std::any> reqs;
         std::vector<std::function<void(std::any)>> setters;
         std::function<void(raft_handle&, const std::vector<std::any>&, const std::vector<std::function<void(std::any)>>&)> exec_fn;
-        std::thread timer;
     };
 
     void run_worker_loop(raft_handle& handle, std::function<std::any(raft_handle&)> stop_fn) {
@@ -461,6 +468,9 @@ private:
     bool use_batching_;
     bool per_thread_device_;
 
+    std::thread batcher_thread_;
+    std::atomic<bool> batcher_running_{false};
+
     thread_safe_queue_t<cuvs_task_t> tasks_;
     thread_safe_queue_t<cuvs_task_t> main_tasks_;
     std::shared_ptr<raft::device_resources_snmg> mg_resources_;
@@ -472,11 +482,6 @@ private:
 
     std::mutex batch_mutex_;
     std::map<std::string, std::shared_ptr<batch_t>> batches_;
-
-    // Static MRS store to avoid re-init
-    inline static std::map<int, std::shared_ptr<rmm::mr::device_memory_resource>> mrs_;
-    inline static std::map<int, std::shared_ptr<rmm::mr::device_memory_resource>> cuda_mrs_;
-    inline static std::mutex mr_mutex_;
 };
 
 } // namespace matrixone

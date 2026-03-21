@@ -156,7 +156,7 @@ void benchmark_all_indices(const std::vector<float>& dataset, const benchmark_co
         bp.intermediate_graph_degree = 256;
         bp.graph_degree = 128;
         
-        for (auto mode : {DistributionMode_REPLICATED}) {
+        for (auto mode : {DistributionMode_SINGLE_GPU}) {
             if (mode != DistributionMode_SINGLE_GPU && cfg.devices.size() < 2) continue;
             
             gpu_cagra_t<T> index(converted.data(), cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, bp, cfg.devices, cfg.n_threads, mode);
@@ -175,7 +175,7 @@ void benchmark_all_indices(const std::vector<float>& dataset, const benchmark_co
         ivf_flat_build_params_t bp = ivf_flat_build_params_default();
         bp.n_lists = 1024;
         
-        for (auto mode : {DistributionMode_REPLICATED}) {
+        for (auto mode : {DistributionMode_SINGLE_GPU}) {
             if (mode != DistributionMode_SINGLE_GPU && cfg.devices.size() < 2) continue;
 
             gpu_ivf_flat_t<T> index(converted.data(), cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, bp, cfg.devices, cfg.n_threads, mode);
@@ -195,7 +195,7 @@ void benchmark_all_indices(const std::vector<float>& dataset, const benchmark_co
         bp.n_lists = 1024;
         bp.m = 64;
         
-        for (auto mode : {DistributionMode_REPLICATED}) {
+        for (auto mode : {DistributionMode_SINGLE_GPU}) {
             if (mode != DistributionMode_SINGLE_GPU && cfg.devices.size() < 2) continue;
 
             gpu_ivf_pq_t<T> index(converted.data(), cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, bp, cfg.devices, cfg.n_threads, mode);
