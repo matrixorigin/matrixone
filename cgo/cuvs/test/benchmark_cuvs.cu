@@ -49,7 +49,8 @@ template<> const char* type_name<uint8_t>() { return "uint8"; }
 std::vector<float> generate_random_data(uint64_t count, uint32_t dim) {
     std::vector<float> data(count * dim);
     std::mt19937 gen(42);
-    std::uniform_real_distribution<float> dis(0.0, 1.0);
+    // Use a wider range to have more signal for int8 benchmarks
+    std::uniform_real_distribution<float> dis(-100.0, 100.0);
     for (size_t i = 0; i < data.size(); ++i) {
         data[i] = dis(gen);
     }
@@ -93,7 +94,7 @@ std::vector<T> convert_dataset(const std::vector<float>& src, uint64_t n_vectors
     } else {
         std::vector<T> dst(src.size());
         for(size_t i = 0; i < src.size(); ++i) {
-            dst[i] = static_cast<T>(src[i]);
+            dst[i] = static_cast<T>(std::round(src[i]));
         }
         return dst;
     }
