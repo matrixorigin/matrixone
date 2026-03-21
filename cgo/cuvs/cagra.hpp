@@ -541,15 +541,19 @@ public:
 
         std::cout << "[DEBUG] CAGRA search_float_internal: num_queries=" << num_queries << " limit=" << limit << " device=" << handle.get_device_id() << std::endl;
 
-        auto q_dev_f = raft::make_device_matrix<float, int64_t>(*res, num_queries, this->dimension);
-        raft::copy(*res, q_dev_f.view(), raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
-        
         auto q_dev_t = raft::make_device_matrix<T, int64_t>(*res, num_queries, this->dimension);
+        
         if constexpr (sizeof(T) == 1) {
+            // For INT8/UINT8, we usually need quantization. 
+            // Copy float to device first, then transform.
+            auto q_dev_f = raft::make_device_matrix<float, int64_t>(*res, num_queries, this->dimension);
+            raft::copy(*res, q_dev_f.view(), raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
+            
             if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
             this->quantizer_.template transform<T>(*res, q_dev_f.view(), q_dev_t.data_handle(), true);
         } else {
-            raft::copy(*res, q_dev_t.view(), q_dev_f.view());
+            // For float and half, RAFT can copy and convert directly from host float*
+            raft::copy(*res, q_dev_t.view(), raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
         }
         raft::resource::sync_stream(*res);
 

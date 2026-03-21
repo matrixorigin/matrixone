@@ -22,6 +22,11 @@
 #include "helper.h"
 #include "cuvs_types.h"
 
+#include <rmm/mr/device_memory_resource.hpp>
+#include <rmm/mr/pool_memory_resource.hpp>
+#include <rmm/mr/cuda_memory_resource.hpp>
+#include <rmm/mr/per_device_resource.hpp>
+
 #include <any>
 #include <atomic>
 #include <condition_variable>
@@ -229,6 +234,23 @@ public:
         }
         tasks_.set_capacity(1000);
         main_tasks_.set_capacity(1000);
+
+        // Initialize RMM pools for each device
+        for (int dev_id : devices) {
+            std::lock_guard<std::mutex> lock(mr_mutex_);
+            if (mrs_.find(dev_id) == mrs_.end()) {
+                cudaSetDevice(dev_id);
+                auto cuda_mr = std::make_shared<rmm::mr::cuda_memory_resource>();
+                // Initialize with 256MB pool per GPU, growing as needed
+                auto pool_mr = std::make_shared<rmm::mr::pool_memory_resource<rmm::mr::cuda_memory_resource>>(
+                    cuda_mr.get(), 256 * 1024 * 1024);
+                mrs_[dev_id] = pool_mr;
+                cuda_mrs_[dev_id] = cuda_mr;
+                
+                // Set as per-device resource
+                rmm::mr::set_per_device_resource(rmm::cuda_device_id{dev_id}, pool_mr.get());
+            }
+        }
     }
 
     ~cuvs_worker_t() { stop(); }
@@ -445,6 +467,11 @@ private:
 
     std::mutex batch_mutex_;
     std::map<std::string, std::shared_ptr<batch_t>> batches_;
+
+    // Static MRS store to avoid re-init
+    inline static std::map<int, std::shared_ptr<rmm::mr::device_memory_resource>> mrs_;
+    inline static std::map<int, std::shared_ptr<rmm::mr::device_memory_resource>> cuda_mrs_;
+    inline static std::mutex mr_mutex_;
 };
 
 } // namespace matrixone
