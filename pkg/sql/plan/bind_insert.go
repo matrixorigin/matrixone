@@ -258,7 +258,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		if !idxDef.Unique || skipUniqueIdx[i] {
 			continue
 		}
-		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[0], idxDef.IndexTableName, bindCtx.snapshot)
+		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[0], idxDef.IndexTableName, currentDMLTargetSnapshot())
 		if err != nil {
 			return 0, err
 		}
@@ -433,7 +433,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				continue
 			}
 
-			idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot)
+			idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, currentDMLTargetSnapshot())
 			if err != nil {
 				return 0, err
 			}
@@ -467,7 +467,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				TableDef:     tableDef,
 				ObjRef:       objRef,
 				BindingTags:  []int32{scanTag},
-				ScanSnapshot: bindCtx.snapshot,
+				ScanSnapshot: currentDMLTargetSnapshot(),
 			}, bindCtx)
 
 			pkPos := tableDef.Name2ColIndex[pkName]
@@ -559,7 +559,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			}
 
 			// for the following cases, prepare for inserting data into the index table
-			idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot)
+			idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, currentDMLTargetSnapshot())
 			if err != nil {
 				return 0, err
 			}
@@ -603,7 +603,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				TableDef:     idxTableDefs[i],
 				ObjRef:       idxObjRefs[i],
 				BindingTags:  []int32{idxTag},
-				ScanSnapshot: bindCtx.snapshot,
+				ScanSnapshot: currentDMLTargetSnapshot(),
 			}
 			idxTableNodeID := builder.appendNode(idxScanNode, bindCtx)
 
@@ -874,7 +874,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				TableDef:     idxTableDefs[i],
 				ObjRef:       idxObjRefs[i],
 				BindingTags:  []int32{idxTag},
-				ScanSnapshot: bindCtx.snapshot,
+				ScanSnapshot: currentDMLTargetSnapshot(),
 			}
 			idxTableNodeID := builder.appendNode(idxScanNode, bindCtx)
 

@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -71,7 +72,6 @@ func (dedupJoin *DedupJoin) Prepare(proc *process.Process) (err error) {
 			}
 		}
 	}
-
 	return err
 }
 
@@ -103,6 +103,9 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 			bat := result.Batch
 			if bat == nil {
+				if err := dedupJoin.checkSnapshotAdvancedDuplicates(proc); err != nil {
+					return result, err
+				}
 				ctr.state = Finalize
 				dedupJoin.ctr.buf = nil
 				continue
@@ -461,26 +464,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 					continue
 				}
 
-				var rowStr string
-				if len(ap.DedupColTypes) == 1 {
-					if ap.DedupColName == catalog.IndexTableIndexColName {
-						if ctr.vecs[0].GetType().Oid == types.T_varchar {
-							t, _, schema, err := types.DecodeTuple(ctr.vecs[0].GetBytesAt(i + k))
-							if err == nil && len(schema) > 1 {
-								rowStr = t.ErrString(make([]int32, len(schema)))
-							}
-						}
-					}
-
-					if len(rowStr) == 0 {
-						rowStr = ctr.vecs[0].RowToString(i + k)
-					}
-				} else {
-					rowItems, err := types.StringifyTuple(ctr.vecs[0].GetBytesAt(i+k), ap.DedupColTypes)
-					if err != nil {
-						return err
-					}
-					rowStr = "(" + strings.Join(rowItems, ",") + ")"
+				rowStr, err := formatDedupRow(ctr.vecs[0], i+k, ap.DedupColName, ap.DedupColTypes)
+				if err != nil {
+					return err
 				}
 				return moerr.NewDuplicateEntry(proc.Ctx, rowStr, ap.DedupColName)
 
@@ -589,6 +575,153 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, proc *process.Process)
 		ctr.evecs[i].vec = vec
 	}
 	return nil
+}
+
+func (dedupJoin *DedupJoin) checkSnapshotAdvancedDuplicates(proc *process.Process) error {
+	ctr := &dedupJoin.ctr
+	if dedupJoin.OnDuplicateAction != plan.Node_FAIL || ctr.batchRowCount == 0 || (dedupJoin.TargetTableID == 0 && dedupJoin.TargetTableRef == nil) {
+		return nil
+	}
+	// Dedup joins with an old-key column (UPDATE/REPLACE-style paths) already
+	// use DelRows in the normal hash/probe flow to exclude self-conflicts. This
+	// snapshot-range fallback only knows "a key changed in the range", so it
+	// cannot distinguish a same-row key transition from a real external
+	// duplicate. Restrict it to pure insert-like dedup joins.
+	if dedupJoin.DelColIdx != -1 {
+		return nil
+	}
+
+	currentTS := proc.GetTxnOperator().SnapshotTS()
+	if !dedupJoin.InitialSnapshotTS.Less(currentTS) {
+		return nil
+	}
+	if len(dedupJoin.Conditions) < 2 || len(dedupJoin.Conditions[1]) != 1 {
+		return nil
+	}
+
+	eng := proc.GetSessionInfo().StorageEngine
+	if eng == nil {
+		return nil
+	}
+
+	rel, _, err := dedupJoin.resolveTargetRelation(proc, eng)
+	if err != nil {
+		return err
+	}
+
+	keyExecutor, err := colexec.NewExpressionExecutor(proc, dedupJoin.Conditions[1][0])
+	if err != nil {
+		return err
+	}
+	defer keyExecutor.Free()
+
+	fromTS := types.BuildTS(dedupJoin.InitialSnapshotTS.PhysicalTime, dedupJoin.InitialSnapshotTS.LogicalTime)
+	toTS := types.BuildTS(currentTS.PhysicalTime, currentTS.LogicalTime)
+	keyBat := batch.NewWithSize(1)
+
+	for _, buildBat := range ctr.batches {
+		if buildBat == nil || buildBat.IsEmpty() {
+			continue
+		}
+
+		keyVec, err := keyExecutor.Eval(proc, []*batch.Batch{nil, buildBat}, nil)
+		if err != nil {
+			return err
+		}
+
+		keyBat.Vecs[0] = keyVec
+		keyBat.SetRowCount(buildBat.RowCount())
+
+		rowStr, err := checkDuplicateKeysInRange(proc, rel, fromTS, toTS, keyBat, keyVec, dedupJoin.DedupColName, dedupJoin.DedupColTypes)
+		if err != nil {
+			return err
+		}
+		if rowStr == "" {
+			continue
+		}
+		return moerr.NewDuplicateEntry(proc.Ctx, rowStr, dedupJoin.DedupColName)
+	}
+
+	return nil
+}
+
+func (dedupJoin *DedupJoin) resolveTargetRelation(proc *process.Process, eng engine.Engine) (engine.Relation, uint64, error) {
+	if dedupJoin.TargetTableRef != nil {
+		rel, err := colexec.GetRelationByObjRef(proc.Ctx, proc, eng, dedupJoin.TargetTableRef)
+		if err != nil {
+			return nil, 0, err
+		}
+		resolvedTableID := rel.GetTableID(proc.Ctx)
+		if dedupJoin.TargetTableID != 0 && resolvedTableID != 0 && resolvedTableID != dedupJoin.TargetTableID {
+			return nil, resolvedTableID, moerr.NewTxnNeedRetryWithDefChanged(proc.Ctx)
+		}
+		return rel, resolvedTableID, nil
+	}
+	_, _, rel, err := eng.GetRelationById(proc.Ctx, proc.GetTxnOperator(), dedupJoin.TargetTableID)
+	if err != nil {
+		return nil, 0, err
+	}
+	return rel, rel.GetTableID(proc.Ctx), nil
+}
+
+func checkDuplicateKeysInRange(
+	proc *process.Process,
+	rel engine.Relation,
+	fromTS, toTS types.TS,
+	keyBat *batch.Batch,
+	keyVec *vector.Vector,
+	dedupColName string,
+	dedupColTypes []plan.Type,
+) (string, error) {
+	mayChanged, err := rel.PrimaryKeysMayBeUpserted(proc.Ctx, fromTS, toTS, keyBat, 0)
+	if err != nil {
+		return "", err
+	}
+	if !mayChanged {
+		return "", nil
+	}
+
+	singleRowBat := batch.NewWithSize(1)
+	for row := 0; row < keyBat.RowCount(); row++ {
+		rowVec, err := keyVec.Window(row, row+1)
+		if err != nil {
+			return "", err
+		}
+		singleRowBat.Vecs[0] = rowVec
+		singleRowBat.SetRowCount(1)
+
+		rowChanged, err := rel.PrimaryKeysMayBeUpserted(proc.Ctx, fromTS, toTS, singleRowBat, 0)
+		rowVec.Free(proc.Mp())
+		if err != nil {
+			return "", err
+		}
+		if rowChanged {
+			return formatDedupRow(keyVec, row, dedupColName, dedupColTypes)
+		}
+	}
+	return "", nil
+}
+
+func formatDedupRow(vec *vector.Vector, row int, dedupColName string, dedupColTypes []plan.Type) (string, error) {
+	var rowStr string
+	if len(dedupColTypes) == 1 {
+		if dedupColName == catalog.IndexTableIndexColName && vec.GetType().Oid == types.T_varchar {
+			t, _, schema, err := types.DecodeTuple(vec.GetBytesAt(row))
+			if err == nil && len(schema) > 1 {
+				rowStr = t.ErrString(make([]int32, len(schema)))
+			}
+		}
+		if len(rowStr) == 0 {
+			rowStr = vec.RowToString(row)
+		}
+		return rowStr, nil
+	}
+
+	rowItems, err := types.StringifyTuple(vec.GetBytesAt(row), dedupColTypes)
+	if err != nil {
+		return "", err
+	}
+	return "(" + strings.Join(rowItems, ",") + ")", nil
 }
 
 func (dedupJoin *DedupJoin) resetRBat() {

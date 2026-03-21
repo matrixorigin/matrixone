@@ -181,6 +181,53 @@ func TestDataBranchDiffAsFile(t *testing.T) {
 		})
 }
 
+func TestAutoIncrementPrimaryKeyDuplicateChecks(t *testing.T) {
+	embed.RunBaseClusterTests(
+		func(c embed.Cluster) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*180)
+			defer cancel()
+
+			cn1, err := c.GetCNService(0)
+			require.NoError(t, err)
+
+			port := cn1.GetServiceConfig().CN.Frontend.Port
+			dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port)
+			sqlDB, err := sql.Open("mysql", dsn)
+			require.NoError(t, err)
+			defer sqlDB.Close()
+
+			dbName := testutils.GetDatabaseName(t)
+			execSQLDB(t, ctx, sqlDB, fmt.Sprintf("create database `%s`", dbName))
+			defer func() {
+				execSQLDB(t, ctx, sqlDB, "use mo_catalog")
+				execSQLDB(t, ctx, sqlDB, fmt.Sprintf("drop database if exists `%s`", dbName))
+			}()
+			execSQLDB(t, ctx, sqlDB, fmt.Sprintf("use `%s`", dbName))
+
+			execSQLDB(t, ctx, sqlDB, "create table t3(a int primary key auto_increment, b varchar(10))")
+			execSQLDB(t, ctx, sqlDB, "insert into t3 values (-19, 'aaa')")
+			execSQLDB(t, ctx, sqlDB, "insert into t3(b) values ('bbb')")
+			require.Equal(t, [][]string{{"-19", "aaa"}, {"1", "bbb"}}, fetchDiffRowsAsStrings(t, ctx, sqlDB, "select a, b from t3 order by a"))
+
+			execSQLDB(t, ctx, sqlDB, "delete from t3 where b='bbb'")
+			execSQLDB(t, ctx, sqlDB, "insert into t3(b) values ('bbb')")
+			require.Equal(t, [][]string{{"-19", "aaa"}, {"2", "bbb"}}, fetchDiffRowsAsStrings(t, ctx, sqlDB, "select a, b from t3 order by a"))
+
+			execSQLDB(t, ctx, sqlDB, "insert into t3 values (1, 'aaa')")
+
+			_, err = sqlDB.ExecContext(ctx, "update t3 set a=10 where b='aaa'")
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "Duplicate entry '10' for key 'a'")
+
+			execSQLDB(t, ctx, sqlDB, "update t3 set a=10 where b='bbb'")
+			require.Equal(t, [][]string{{"-19", "aaa"}, {"1", "aaa"}, {"10", "bbb"}}, fetchDiffRowsAsStrings(t, ctx, sqlDB, "select a, b from t3 order by a"))
+
+			execSQLDB(t, ctx, sqlDB, "insert into t3 values (2, 'ccc')")
+			require.Equal(t, [][]string{{"-19", "aaa"}, {"1", "aaa"}, {"2", "ccc"}, {"10", "bbb"}}, fetchDiffRowsAsStrings(t, ctx, sqlDB, "select a, b from t3 order by a"))
+		},
+	)
+}
+
 func runSinglePKWithBase(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	t.Helper()
 

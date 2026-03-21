@@ -353,7 +353,8 @@ func TestPreInsertPrepareRefreshesAutoIncrementTableID(t *testing.T) {
 
 	err := argument.Prepare(proc)
 	require.NoError(t, err)
-	require.Equal(t, uint64(200), argument.TableDef.TblId)
+	require.Equal(t, uint64(100), argument.TableDef.TblId)
+	require.Equal(t, uint64(200), argument.autoIncrementTableID)
 }
 
 func TestPreInsertPrepareSkipsTemporaryTableRefresh(t *testing.T) {
@@ -399,6 +400,7 @@ func TestPreInsertPrepareSkipsTemporaryTableRefresh(t *testing.T) {
 	err := argument.Prepare(proc)
 	require.NoError(t, err)
 	require.Equal(t, uint64(100), argument.TableDef.TblId)
+	require.Equal(t, uint64(100), argument.getAutoIncrementTableID())
 }
 
 func TestGenAutoIncrColRefreshesStaleTableID(t *testing.T) {
@@ -459,7 +461,8 @@ func TestGenAutoIncrColRefreshesStaleTableID(t *testing.T) {
 
 	err := genAutoIncrCol(bat, proc, preInsert)
 	require.NoError(t, err)
-	require.Equal(t, uint64(200), preInsert.TableDef.TblId)
+	require.Equal(t, uint64(100), preInsert.TableDef.TblId)
+	require.Equal(t, uint64(200), preInsert.autoIncrementTableID)
 }
 
 func TestGenAutoIncrColReturnsRetryWhenDefinitionStillChanged(t *testing.T) {

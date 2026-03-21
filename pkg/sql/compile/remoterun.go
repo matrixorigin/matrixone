@@ -830,6 +830,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			RightTypes:             convertToPlanTypes(t.RightTypes),
 			UpdateColIdxList:       t.UpdateColIdxList,
 			UpdateColExprList:      t.UpdateColExprList,
+			TargetTableId:          t.TargetTableID,
+			InitialSnapshotTs:      t.InitialSnapshotTS,
+			TargetTableRef:         t.TargetTableRef,
 		}
 	case *rightdedupjoin.RightDedupJoin:
 		relList, colList := getRelColList(t.Result)
@@ -1369,6 +1372,9 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.DelColIdx = t.DelColIdx
 		arg.UpdateColIdxList = t.UpdateColIdxList
 		arg.UpdateColExprList = t.UpdateColExprList
+		arg.TargetTableID = t.TargetTableId
+		arg.InitialSnapshotTS = t.InitialSnapshotTs
+		arg.TargetTableRef = t.TargetTableRef
 		op = arg
 	case vm.RightDedupJoin:
 		arg := rightdedupjoin.NewArgument()

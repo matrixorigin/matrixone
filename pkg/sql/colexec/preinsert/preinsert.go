@@ -67,11 +67,26 @@ func (preInsert *PreInsert) Prepare(proc *process.Process) (err error) {
 		}
 	}
 	if preInsert.HasAutoCol {
+		preInsert.autoIncrementTableID = preInsert.getPlanTableID()
 		if err = preInsert.refreshAutoIncrementTableID(proc); err != nil {
 			return
 		}
 	}
 	return
+}
+
+func (preInsert *PreInsert) getPlanTableID() uint64 {
+	if preInsert.TableDef == nil {
+		return 0
+	}
+	return preInsert.TableDef.TblId
+}
+
+func (preInsert *PreInsert) getAutoIncrementTableID() uint64 {
+	if preInsert.autoIncrementTableID != 0 {
+		return preInsert.autoIncrementTableID
+	}
+	return preInsert.getPlanTableID()
 }
 
 func (preInsert *PreInsert) refreshAutoIncrementTableID(proc *proc) error {
@@ -93,7 +108,7 @@ func (preInsert *PreInsert) refreshAutoIncrementTableID(proc *proc) error {
 	if err != nil {
 		return err
 	}
-	preInsert.TableDef.TblId = rel.GetTableID(proc.Ctx)
+	preInsert.autoIncrementTableID = rel.GetTableID(proc.Ctx)
 	return nil
 }
 
@@ -295,7 +310,7 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, preInsert *PreInsert) error {
 	retriedWithFreshTableID := false
 
 retryInsertValues:
-	tableID := preInsert.TableDef.TblId
+	tableID := preInsert.getAutoIncrementTableID()
 	needReCheck := checkIfNeedReGenAutoIncrCol(bat, preInsert)
 
 	// FIX: Capture lastAllocateAt BEFORE InsertValues to avoid false negative bug
@@ -332,7 +347,7 @@ retryInsertValues:
 					}
 					return refreshErr
 				}
-				if preInsert.TableDef.TblId != tableID {
+				if preInsert.getAutoIncrementTableID() != tableID {
 					goto retryInsertValues
 				}
 			}
