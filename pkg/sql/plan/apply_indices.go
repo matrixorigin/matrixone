@@ -204,6 +204,29 @@ func (builder *QueryBuilder) isScanProtected(scanID int32) bool {
 	return builder.protectedScans[scanID] > 0
 }
 
+func (builder *QueryBuilder) suspendScanProtection(scanID int32) func() {
+	if builder == nil || builder.protectedScans == nil {
+		return func() {}
+	}
+
+	originalCount, wasProtected := builder.protectedScans[scanID]
+	if wasProtected {
+		delete(builder.protectedScans, scanID)
+	}
+
+	return func() {
+		if wasProtected {
+			builder.protectedScans[scanID] = originalCount
+		}
+	}
+}
+
+func (builder *QueryBuilder) withSuspendedScanProtection(scanID int32, callback func()) {
+	restore := builder.suspendScanProtection(scanID)
+	defer restore()
+	callback()
+}
+
 func containsInt32(list []int32, target int32) bool {
 	for _, v := range list {
 		if v == target {
