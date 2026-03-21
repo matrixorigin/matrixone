@@ -606,7 +606,6 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 			}
 			optimizedSecondScanID := builder.applyIndicesForFilters(secondScanNodeID, secondScanNode, secondColRefCnt, idxColMap)
 			secondScanNodeID = optimizedSecondScanID
-			secondScanNode = builder.qry.Nodes[secondScanNodeID]
 		}
 
 		// Otherwise BloomFilter will only see the truncated primary key set, causing data loss.
