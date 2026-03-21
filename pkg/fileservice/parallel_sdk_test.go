@@ -371,20 +371,14 @@ func TestAwsParallelMultipartDoesNotDeadlockOnTinyGlobalPool(t *testing.T) {
 	size := int64(len(data))
 
 	oldPool := parallelUploadPool
-	oldOnce := parallelUploadPoolOnce
 	tinyPool, err := ants.NewPool(1)
 	if err != nil {
 		t.Fatalf("create ants pool: %v", err)
 	}
-	parallelUploadPool = nil
-	parallelUploadPoolOnce = sync.Once{}
-	parallelUploadPoolOnce.Do(func() {
-		parallelUploadPool = tinyPool
-	})
+	parallelUploadPool = tinyPool
 	defer func() {
 		tinyPool.Release()
 		parallelUploadPool = oldPool
-		parallelUploadPoolOnce = oldOnce
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
