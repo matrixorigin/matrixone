@@ -265,7 +265,12 @@ public:
             int rank = i % devices_.size(); 
 
             workers_.emplace_back([this, device_id, rank, init_fn, stop_fn, i] {
-                raft_handle handle(device_id, rank, mg_resources_, mode_);
+                // Optimization: Non-main threads in REPLICATED mode (or SHARDED when doing local work)
+                // should use plain raft::resources to avoid SNMG/NCCL overhead.
+                // Main thread (i=0) always gets MG resources for collective builds/merges.
+                bool give_mg = (mg_resources_ != nullptr) && (i == 0 || mode_ == DistributionMode_SHARDED);
+                
+                raft_handle handle(device_id, rank, give_mg ? mg_resources_ : nullptr, mode_);
                 if (init_fn) init_fn(handle);
                 if (i == 0) this->run_main_loop(handle, stop_fn);
                 else this->run_worker_loop(handle, stop_fn);
