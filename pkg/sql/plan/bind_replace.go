@@ -94,7 +94,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			TableDef:     tableDef,
 			ObjRef:       objRef,
 			BindingTags:  []int32{oldScanTag},
-			ScanSnapshot: bindCtx.snapshot,
+			ScanSnapshot: currentDMLTargetSnapshot(),
 		}, bindCtx)
 
 		for i, col := range tableDef.Cols {
@@ -112,7 +112,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 		var err error
 		for i, idxDef := range tableDef.Indexes {
-			idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot)
+			idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, currentDMLTargetSnapshot())
 			if err != nil {
 				return 0, err
 			}
@@ -201,7 +201,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			TableDef:     tableDef,
 			ObjRef:       objRef,
 			BindingTags:  []int32{scanTag},
-			ScanSnapshot: bindCtx.snapshot,
+			ScanSnapshot: currentDMLTargetSnapshot(),
 		}, bindCtx)
 
 		pkPos := tableDef.Name2ColIndex[pkName]
@@ -281,7 +281,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			TableDef:     idxTableDefs[i],
 			ObjRef:       idxObjRefs[i],
 			BindingTags:  []int32{idxTag},
-			ScanSnapshot: bindCtx.snapshot,
+			ScanSnapshot: currentDMLTargetSnapshot(),
 		}
 		idxTableNodeID := builder.appendNode(idxScanNode, bindCtx)
 
@@ -365,7 +365,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			TableDef:     idxTableDefs[i],
 			ObjRef:       idxObjRefs[i],
 			BindingTags:  []int32{idxTag},
-			ScanSnapshot: bindCtx.snapshot,
+			ScanSnapshot: currentDMLTargetSnapshot(),
 		}
 		idxTableNodeID := builder.appendNode(idxScanNode, bindCtx)
 

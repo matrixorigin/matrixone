@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -90,6 +91,9 @@ type DedupJoin struct {
 	OnDuplicateAction plan.Node_OnDuplicateAction
 	DedupColName      string
 	DedupColTypes     []plan.Type
+	TargetTableID     uint64
+	TargetTableRef    *plan.ObjectRef
+	InitialSnapshotTS timestamp.Timestamp
 	DelColIdx         int32
 	UpdateColIdxList  []int32
 	UpdateColExprList []*plan.Expr

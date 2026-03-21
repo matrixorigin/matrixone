@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	tspb "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
@@ -135,6 +136,103 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueLockKeyMater
 		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil,
 	)
 	require.NoError(t, err)
+}
+
+func TestAppendDedupAndMultiUpdateNodesForBindInsert_TargetScansIgnoreSourceSnapshot(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	sql := "insert into constraint_test.dept values (10, 'RESEARCH', 'NEW YORK')"
+
+	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), sql, 1)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+
+	stmt, ok := stmts[0].(*tree.Insert)
+	require.True(t, ok)
+
+	builder := NewQueryBuilder(planpb.Query_SELECT, mock.CurrentContext(), false, true)
+	bindCtx := NewBindContext(builder, nil)
+	bindCtx.snapshot = &planpb.Snapshot{TS: &tspb.Timestamp{PhysicalTime: 1}}
+
+	dmlCtx := NewDMLContext()
+	objRef, tableDef, err := builder.compCtx.Resolve("constraint_test", "dept", nil)
+	require.NoError(t, err)
+	dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
+	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
+
+	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
+		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false,
+	)
+	require.NoError(t, err)
+
+	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil,
+	)
+	require.NoError(t, err)
+
+	assertTargetTableScansUseCurrentSnapshot(t, builder.qry.Nodes, tableDef.Name, tableDef.Indexes)
+}
+
+func TestAppendDedupAndMultiUpdateNodesForBindReplace_TargetScansIgnoreSourceSnapshot(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	sql := "replace into constraint_test.dept values (10, 'RESEARCH', 'NEW YORK')"
+
+	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), sql, 1)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+
+	stmt, ok := stmts[0].(*tree.Replace)
+	require.True(t, ok)
+
+	builder := NewQueryBuilder(planpb.Query_SELECT, mock.CurrentContext(), false, true)
+	bindCtx := NewBindContext(builder, nil)
+	bindCtx.snapshot = &planpb.Snapshot{TS: &tspb.Timestamp{PhysicalTime: 1}}
+
+	dmlCtx := NewDMLContext()
+	objRef, tableDef, err := builder.compCtx.Resolve("constraint_test", "dept", nil)
+	require.NoError(t, err)
+	dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
+	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
+
+	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
+		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], true,
+	)
+	require.NoError(t, err)
+
+	_, err = builder.appendDedupAndMultiUpdateNodesForBindReplace(
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx,
+	)
+	require.NoError(t, err)
+
+	assertTargetTableScansUseCurrentSnapshot(t, builder.qry.Nodes, tableDef.Name, tableDef.Indexes)
+}
+
+func assertTargetTableScansUseCurrentSnapshot(
+	t *testing.T,
+	nodes []*planpb.Node,
+	targetTable string,
+	indexes []*planpb.IndexDef,
+) {
+	t.Helper()
+
+	targets := make(map[string]struct{}, len(indexes)+1)
+	targets[targetTable] = struct{}{}
+	for _, idx := range indexes {
+		targets[idx.IndexTableName] = struct{}{}
+	}
+
+	matched := 0
+	for _, node := range nodes {
+		if node.NodeType != planpb.Node_TABLE_SCAN || node.ObjRef == nil {
+			continue
+		}
+		if _, ok := targets[node.ObjRef.ObjName]; !ok {
+			continue
+		}
+		matched++
+		require.Nilf(t, node.ScanSnapshot, "target scan for %s should use current snapshot", node.ObjRef.ObjName)
+	}
+
+	require.Greater(t, matched, 0)
 }
 
 func TestAppendDedupAndMultiUpdateNodesForBindInsert_SingleUniqueMissingCol(t *testing.T) {
