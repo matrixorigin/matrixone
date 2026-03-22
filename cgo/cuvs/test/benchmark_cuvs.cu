@@ -104,7 +104,7 @@ template<typename IndexT, typename SearchParamsT, typename T>
 void run_benchmark(const std::string& index_name, distribution_mode_t mode, 
                   IndexT& index, const std::vector<float>& dataset, const benchmark_config_t& cfg, const SearchParamsT& sp) {
     
-    for (bool batching : {true}) {
+    for (bool batching : {false}) {
         index.set_use_batching(batching);
         
         std::string full_name = index_name + "_" + mode_name(mode) + "_" + type_name<T>() + (batching ? "_BatchingON" : "_BatchingOFF");
@@ -151,16 +151,21 @@ template<typename T>
 void benchmark_all_indices(const std::vector<float>& dataset, const benchmark_config_t& cfg) {
     auto converted = convert_dataset<T>(dataset, cfg.n_vectors, cfg.dimension);
 
+    std::vector<distribution_mode_t> modes = {DistributionMode_REPLICATED};
+
     // CAGRA
     {
         cagra_build_params_t bp = cagra_build_params_default();
         bp.intermediate_graph_degree = 256;
         bp.graph_degree = 128;
         
-        for (auto mode : {DistributionMode_REPLICATED}) {
-            if (mode != DistributionMode_SINGLE_GPU && cfg.devices.size() < 2) continue;
+        for (auto mode : modes) {
+            std::vector<int> active_devices = (mode == DistributionMode_SINGLE_GPU) ? 
+                                              std::vector<int>{cfg.devices[0]} : cfg.devices;
             
-            gpu_cagra_t<T> index(converted.data(), cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, bp, cfg.devices, cfg.n_threads, mode);
+            if (mode != DistributionMode_SINGLE_GPU && active_devices.size() < 2) continue;
+            
+            gpu_cagra_t<T> index(converted.data(), cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, bp, active_devices, cfg.n_threads, mode);
             index.start();
             index.build();
             
@@ -176,10 +181,13 @@ void benchmark_all_indices(const std::vector<float>& dataset, const benchmark_co
         ivf_flat_build_params_t bp = ivf_flat_build_params_default();
         bp.n_lists = 1024;
         
-        for (auto mode : {DistributionMode_REPLICATED}) {
-            if (mode != DistributionMode_SINGLE_GPU && cfg.devices.size() < 2) continue;
+        for (auto mode : modes) {
+            std::vector<int> active_devices = (mode == DistributionMode_SINGLE_GPU) ? 
+                                              std::vector<int>{cfg.devices[0]} : cfg.devices;
 
-            gpu_ivf_flat_t<T> index(converted.data(), cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, bp, cfg.devices, cfg.n_threads, mode);
+            if (mode != DistributionMode_SINGLE_GPU && active_devices.size() < 2) continue;
+
+            gpu_ivf_flat_t<T> index(converted.data(), cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, bp, active_devices, cfg.n_threads, mode);
             index.start();
             index.build();
 
@@ -196,10 +204,13 @@ void benchmark_all_indices(const std::vector<float>& dataset, const benchmark_co
         bp.n_lists = 1024;
         bp.m = 64;
         
-        for (auto mode : {DistributionMode_REPLICATED}) {
-            if (mode != DistributionMode_SINGLE_GPU && cfg.devices.size() < 2) continue;
+        for (auto mode : modes) {
+            std::vector<int> active_devices = (mode == DistributionMode_SINGLE_GPU) ? 
+                                              std::vector<int>{cfg.devices[0]} : cfg.devices;
 
-            gpu_ivf_pq_t<T> index(converted.data(), cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, bp, cfg.devices, cfg.n_threads, mode);
+            if (mode != DistributionMode_SINGLE_GPU && active_devices.size() < 2) continue;
+
+            gpu_ivf_pq_t<T> index(converted.data(), cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, bp, active_devices, cfg.n_threads, mode);
             index.start();
             index.build();
 

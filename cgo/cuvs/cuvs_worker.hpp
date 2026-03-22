@@ -34,8 +34,26 @@
 #include <thread>
 #include <vector>
 #include <map>
+#include <chrono>
+#include <iomanip>
+#include <sstream>
+#include <ctime>
+#include <iostream>
 
 namespace matrixone {
+
+inline std::string get_timestamp() {
+    auto now = std::chrono::system_clock::now();
+    auto now_c = std::chrono::system_clock::to_time_t(now);
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
+    std::tm now_tm;
+    localtime_r(&now_c, &now_tm);
+    char buf[64];
+    std::strftime(buf, sizeof(buf), "%H:%M:%S", &now_tm);
+    std::stringstream ss;
+    ss << buf << "." << std::setfill('0') << std::setw(3) << ms.count();
+    return ss.str();
+}
 
 /**
  * @brief Thread-safe queue for worker tasks.
@@ -54,6 +72,18 @@ public:
     bool pop(T& item) {
         std::unique_lock<std::mutex> lock(mu_);
         cond_can_pop_.wait(lock, [this]() { return stopped_ || !queue_.empty(); });
+        if (queue_.empty()) return false;
+        item = std::move(queue_.front());
+        queue_.pop();
+        cond_can_push_.notify_one();
+        return true;
+    }
+
+    bool pop_wait(T& item, std::chrono::microseconds timeout) {
+        std::unique_lock<std::mutex> lock(mu_);
+        if (!cond_can_pop_.wait_for(lock, timeout, [this]() { return stopped_ || !queue_.empty(); })) {
+            return false;
+        }
         if (queue_.empty()) return false;
         item = std::move(queue_.front());
         queue_.pop();
@@ -119,41 +149,53 @@ public:
     uint64_t get_next_job_id() { return next_id_++; }
 
     void store(uint64_t id, cuvs_task_result_t result) {
-        std::lock_guard<std::mutex> lock(mu_);
-        results_[id] = result;
-        auto it = placeholders_.find(id);
-        if (it != placeholders_.end()) {
+        auto& shard = shards_[id % num_shards];
+        std::lock_guard<std::mutex> lock(shard.mu);
+        shard.results[id] = result;
+        auto it = shard.placeholders.find(id);
+        if (it != shard.placeholders.end()) {
             it->second.set_value(result);
-            placeholders_.erase(it);
+            shard.placeholders.erase(it);
         }
     }
 
     std::shared_future<cuvs_task_result_t> wait(uint64_t id) {
-        std::lock_guard<std::mutex> lock(mu_);
-        auto it = results_.find(id);
-        if (it != results_.end()) {
+        auto& shard = shards_[id % num_shards];
+        std::lock_guard<std::mutex> lock(shard.mu);
+        auto it = shard.results.find(id);
+        if (it != shard.results.end()) {
             std::promise<cuvs_task_result_t> p;
-            p.set_value(it->second);
+            auto res = std::move(it->second);
+            shard.results.erase(it);
+            p.set_value(res);
             return p.get_future().share();
         }
-        return placeholders_[id].get_future().share();
+        return shard.placeholders[id].get_future().share();
     }
 
     void stop() {
-        std::lock_guard<std::mutex> lock(mu_);
-        for (auto& pair : placeholders_) {
-            try {
-                pair.second.set_exception(std::make_exception_ptr(std::runtime_error("Worker stopped")));
-            } catch (...) {}
+        for (uint32_t i = 0; i < num_shards; ++i) {
+            auto& shard = shards_[i];
+            std::lock_guard<std::mutex> lock(shard.mu);
+            for (auto& pair : shard.placeholders) {
+                try {
+                    pair.second.set_exception(std::make_exception_ptr(std::runtime_error("Worker stopped")));
+                } catch (...) {}
+            }
+            shard.placeholders.clear();
         }
-        placeholders_.clear();
     }
 
 private:
+    static constexpr uint32_t num_shards = 64;
+    struct shard_t {
+        std::map<uint64_t, cuvs_task_result_t> results;
+        std::map<uint64_t, std::promise<cuvs_task_result_t>> placeholders;
+        std::mutex mu;
+    };
+
     std::atomic<uint64_t> next_id_{0};
-    std::map<uint64_t, cuvs_task_result_t> results_;
-    std::map<uint64_t, std::promise<cuvs_task_result_t>> placeholders_;
-    std::mutex mu_;
+    shard_t shards_[num_shards];
 };
 
 /**
@@ -164,7 +206,6 @@ public:
     raft_handle_wrapper_t(int device_id, int rank = 0, std::shared_ptr<raft::device_resources_snmg> mg_res = nullptr,
                          distribution_mode_t mode = DistributionMode_SINGLE_GPU) 
         : device_id_(device_id), rank_(rank), mg_res_(mg_res), mode_(mode) {
-        cudaSetDevice(device_id);
         if (mg_res) {
             res_ = std::make_shared<raft::resources>(raft::resource::get_device_resources_for_rank(*mg_res, rank));
         } else {
@@ -202,12 +243,16 @@ public:
     // Deprecated: use sync()
     void sync_all_devices() { sync(true); }
 
+    void set_index_ptr(std::any ptr) { index_ptr_ = ptr; }
+    std::any get_index_ptr() const { return index_ptr_; }
+
 private:
     int device_id_;
     int rank_;
     std::shared_ptr<raft::device_resources_snmg> mg_res_;
     std::shared_ptr<raft::resources> res_;
     distribution_mode_t mode_;
+    std::any index_ptr_;
 };
 
 class cuvs_worker_t {
@@ -221,13 +266,17 @@ public:
     };
 
     cuvs_worker_t(uint32_t nthread, const std::vector<int>& devices, distribution_mode_t mode = DistributionMode_SINGLE_GPU)
-        : nthread_(nthread), devices_(devices), mode_(mode), running_(false), use_batching_(false), per_thread_device_(false) {
+        : nthread_(nthread), devices_(devices), mode_(mode), running_(false), use_batching_(false), per_thread_device_(false), next_device_idx_(0) {
         
         if (mode == DistributionMode_SHARDED || mode == DistributionMode_REPLICATED) {
             mg_resources_ = std::make_shared<raft::device_resources_snmg>(devices);
             init_mg_comms(*mg_resources_, devices);
         }
-        tasks_.set_capacity(1000);
+        for (size_t i = 0; i < devices_.size(); ++i) {
+            auto q = std::make_unique<thread_safe_queue_t<cuvs_task_t>>();
+            q->set_capacity(1000);
+            device_queues_.push_back(std::move(q));
+        }
         main_tasks_.set_capacity(1000);
     }
 
@@ -238,16 +287,18 @@ public:
         if (running_) return;
         running_ = true;
 
-        for (uint32_t i = 0; i < nthread_; ++i) {
-            int device_id = devices_[i % devices_.size()];
+        for (uint32_t i = 0; i <= nthread_; ++i) {
+            int device_idx = i % devices_.size();
+            int device_id = devices_[device_idx];
             int rank = i % devices_.size(); 
 
-            workers_.emplace_back([this, device_id, rank, init_fn, stop_fn, i] {
+            workers_.emplace_back([this, device_id, device_idx, rank, init_fn, stop_fn, i] {
+                cudaSetDevice(device_id);
                 bool give_mg = (mg_resources_ != nullptr) && (i == 0 || mode_ == DistributionMode_SHARDED);
                 raft_handle handle(device_id, rank, give_mg ? mg_resources_ : nullptr, mode_);
                 if (init_fn) init_fn(handle);
                 if (i == 0) this->run_main_loop(handle, stop_fn);
-                else this->run_worker_loop(handle, stop_fn);
+                else this->run_worker_loop(handle, stop_fn, device_idx);
             });
         }
     }
@@ -256,14 +307,9 @@ public:
         if (!running_) return;
         running_ = false;
 
-        tasks_.stop();
+        for (auto& q : device_queues_) q->stop();
         main_tasks_.stop();
         
-        {
-            std::lock_guard<std::mutex> lock(shared_cv_mu_);
-            shared_cv_.notify_all();
-        }
-
         for (size_t i = 0; i < workers_.size(); ++i) {
             if (workers_[i].joinable()) workers_[i].join();
         }
@@ -274,22 +320,17 @@ public:
     uint64_t submit(task_fn_t fn) {
         if (!running_) throw std::runtime_error("Worker is not running");
         uint64_t id = results_store_.get_next_job_id();
-        tasks_.push({id, std::move(fn)});
-        {
-            std::lock_guard<std::mutex> lock(shared_cv_mu_);
-            shared_cv_.notify_all();
-        }
+        uint32_t d_idx = next_device_idx_++ % devices_.size();
+        std::cout << "[DEBUG " << get_timestamp() << "] Worker submit id=" << id << " to device queue " << d_idx << std::endl;
+        device_queues_[d_idx]->push({id, std::move(fn)});
         return id;
     }
 
     uint64_t submit_main(task_fn_t fn) {
         if (!running_) throw std::runtime_error("Worker is not running");
         uint64_t id = results_store_.get_next_job_id();
+        std::cout << "[DEBUG " << get_timestamp() << "] Worker submit_main id=" << id << " to main_tasks_ queue" << std::endl;
         main_tasks_.push({id, std::move(fn)});
-        {
-            std::lock_guard<std::mutex> lock(shared_cv_mu_);
-            shared_cv_.notify_all();
-        }
         return id;
     }
 
@@ -303,6 +344,8 @@ public:
 
     distribution_mode_t get_mode() const { return mode_; }
 
+    uint32_t nthread() const { return nthread_; }
+
     void set_use_batching(bool enable) { use_batching_ = enable; }
     bool use_batching() const { return use_batching_; }
     void set_per_thread_device(bool enable) { per_thread_device_ = enable; }
@@ -310,7 +353,8 @@ public:
     template <typename ResT, typename ReqT>
     std::future<ResT> submit_batched(const std::string& key, ReqT req, 
                                      std::function<void(raft_handle&, const std::vector<std::any>&, const std::vector<std::function<void(std::any)>>&)> exec_fn) {
-        bool should_flush = false;
+        bool should_flush_now = false;
+        bool should_schedule = false;
         std::future<ResT> future;
         
         {
@@ -321,6 +365,12 @@ public:
             if (!batch) {
                 batch = std::make_shared<batch_t>();
                 batch->exec_fn = exec_fn;
+                batch->scheduled = false;
+            }
+
+            if (!batch->scheduled) {
+                batch->scheduled = true;
+                should_schedule = true;
             }
 
             auto promise = std::make_shared<std::promise<ResT>>();
@@ -335,12 +385,18 @@ public:
             });
 
             if (batch->reqs.size() >= 16) {
-                should_flush = true;
+                should_flush_now = true;
             }
         }
 
-        if (should_flush) {
+        if (should_flush_now) {
             this->flush_batch(key);
+        } else if (should_schedule) {
+            this->submit([this, key](raft_handle&) -> std::any {
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
+                this->flush_batch(key);
+                return std::any();
+            });
         }
 
         return future;
@@ -351,49 +407,25 @@ private:
         std::vector<std::any> reqs;
         std::vector<std::function<void(std::any)>> setters;
         std::function<void(raft_handle&, const std::vector<std::any>&, const std::vector<std::function<void(std::any)>>&)> exec_fn;
+        std::atomic<bool> scheduled;
     };
 
-    void run_worker_loop(raft_handle& handle, std::function<std::any(raft_handle&)> stop_fn) {
+    void run_worker_loop(raft_handle& handle, std::function<std::any(raft_handle&)> stop_fn, uint32_t d_idx) {
         cuvs_task_t task;
-        while (tasks_.pop(task)) {
+        std::cout << "[DEBUG " << get_timestamp() << "] Worker loop starting rank=" << handle.get_rank() << " device_queue=" << d_idx << std::endl;
+        while (device_queues_[d_idx]->pop(task)) {
+            std::cout << "[DEBUG " << get_timestamp() << "] Worker loop got task id=" << task.id << " rank=" << handle.get_rank() << std::endl;
             execute_task(task, handle);
         }
         if (stop_fn) stop_fn(handle);
     }
 
     void run_main_loop(raft_handle& handle, std::function<std::any(raft_handle&)> stop_fn) {
-        while (true) {
-            cuvs_task_t task;
-            bool found = false;
-            
-            if (main_tasks_.try_pop(task)) {
-                found = true;
-            } else if (tasks_.try_pop(task)) {
-                found = true;
-            }
-
-            if (found) {
-                execute_task(task, handle);
-            } else {
-                if (!running_ && main_tasks_.empty() && tasks_.empty()) break;
-
-                // Handle batching if no tasks are available
-                if (use_batching_) {
-                    std::vector<std::string> keys;
-                    {
-                        std::lock_guard<std::mutex> lock(batch_mutex_);
-                        for (auto const& [key, _] : batches_) keys.push_back(key);
-                    }
-                    for (auto const& key : keys) {
-                        this->flush_batch(key);
-                    }
-                }
-                
-                std::unique_lock<std::mutex> lock(shared_cv_mu_);
-                shared_cv_.wait_for(lock, std::chrono::milliseconds(10), [this]() {
-                    return !main_tasks_.empty() || !tasks_.empty() || !running_;
-                });
-            }
+        cuvs_task_t task;
+        std::cout << "[DEBUG " << get_timestamp() << "] Main loop starting rank=" << handle.get_rank() << std::endl;
+        while (main_tasks_.pop(task)) {
+            std::cout << "[DEBUG " << get_timestamp() << "] Main loop got task id=" << task.id << " rank=" << handle.get_rank() << std::endl;
+            execute_task(task, handle);
         }
         if (stop_fn) stop_fn(handle);
     }
@@ -401,14 +433,12 @@ private:
     void execute_task(const cuvs_task_t& task, raft_handle& handle) {
         cuvs_task_result_t result;
         try {
-            std::cout << "[DEBUG] Worker execute_task starting id=" << task.id << " rank=" << handle.get_rank() << std::endl;
             result.result = task.fn(handle);
-            std::cout << "[DEBUG] Worker execute_task finished id=" << task.id << " rank=" << handle.get_rank() << std::endl;
         } catch (const std::exception& e) {
-            std::cout << "[DEBUG] Worker execute_task error id=" << task.id << " rank=" << handle.get_rank() << ": " << e.what() << std::endl;
+            std::cout << "[ERROR " << get_timestamp() << "] Worker execute_task error id=" << task.id << " rank=" << handle.get_rank() << ": " << e.what() << std::endl;
             result.error = std::current_exception();
         } catch (...) {
-            std::cout << "[DEBUG] Worker execute_task unknown error id=" << task.id << " rank=" << handle.get_rank() << std::endl;
+            std::cout << "[ERROR " << get_timestamp() << "] Worker execute_task unknown error id=" << task.id << " rank=" << handle.get_rank() << std::endl;
             result.error = std::current_exception();
         }
         results_store_.store(task.id, result);
@@ -425,19 +455,15 @@ private:
         }
         if (batch->reqs.empty()) return;
         
-        std::cout << "[DEBUG] Worker flush_batch key=" << key << " size=" << batch->reqs.size() << std::endl;
-
         auto task_fn = [batch, key](raft_handle& handle) -> std::any {
             try {
-                std::cout << "[DEBUG] Worker batch exec_fn starting key=" << key << " rank=" << handle.get_rank() << std::endl;
                 batch->exec_fn(handle, batch->reqs, batch->setters);
-                std::cout << "[DEBUG] Worker batch exec_fn finished key=" << key << " rank=" << handle.get_rank() << std::endl;
             } catch (const std::exception& e) {
-                std::cout << "[DEBUG] Worker batch exec_fn error key=" << key << ": " << e.what() << std::endl;
+                std::cout << "[ERROR " << get_timestamp() << "] Worker batch exec_fn error key=" << key << ": " << e.what() << std::endl;
                 auto err = std::current_exception();
                 for (auto& setter : batch->setters) setter(err);
             } catch (...) {
-                std::cout << "[DEBUG] Worker batch exec_fn unknown error key=" << key << std::endl;
+                std::cout << "[ERROR " << get_timestamp() << "] Worker batch exec_fn unknown error key=" << key << std::endl;
                 auto err = std::current_exception();
                 for (auto& setter : batch->setters) setter(err);
             }
@@ -464,12 +490,10 @@ private:
     bool use_batching_;
     bool per_thread_device_;
 
-    thread_safe_queue_t<cuvs_task_t> tasks_;
+    std::vector<std::unique_ptr<thread_safe_queue_t<cuvs_task_t>>> device_queues_;
     thread_safe_queue_t<cuvs_task_t> main_tasks_;
     std::shared_ptr<raft::device_resources_snmg> mg_resources_;
-
-    std::mutex shared_cv_mu_;
-    std::condition_variable shared_cv_;
+    std::atomic<uint32_t> next_device_idx_;
 
     cuvs_task_result_store_t results_store_;
 

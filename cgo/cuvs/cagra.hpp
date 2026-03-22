@@ -362,7 +362,7 @@ public:
 
         std::cout << "[DEBUG] CAGRA search: num_queries=" << num_queries << " limit=" << limit << " itopk=" << sp.itopk_size << std::endl;
 
-        if (num_queries > 16 || !this->worker->use_batching()) {
+        if (!this->worker->use_batching()) {
             auto task = [this, num_queries, limit, sp, queries_data](raft_handle_wrapper_t& handle) -> std::any {
                 return this->search_internal(handle, queries_data, num_queries, limit, sp);
             };
@@ -416,7 +416,7 @@ public:
         std::shared_lock<std::shared_mutex> lock(this->mutex_);
         auto res = handle.get_raft_resources();
 
-        std::cout << "[DEBUG] CAGRA search_internal: num_queries=" << num_queries << " limit=" << limit << " device=" << handle.get_device_id() << std::endl;
+        std::cout << "[DEBUG " << get_timestamp() << "] CAGRA search_internal: num_queries=" << num_queries << " limit=" << limit << " device=" << handle.get_device_id() << std::endl;
 
         search_result_t search_res;
         search_res.neighbors.resize(num_queries * limit);
@@ -441,12 +441,19 @@ public:
             std::copy(n_host.data_handle(), n_host.data_handle() + (num_queries * limit), search_res.neighbors.begin());
             std::copy(d_host.data_handle(), d_host.data_handle() + (num_queries * limit), search_res.distances.begin());
         } else {
-            const cagra_index* local_index = index_.get();
-            if (!local_index && mg_index_) {
-                int rank = handle.get_rank();
-                if (rank < (int)mg_index_->ann_interfaces_.size() && mg_index_->ann_interfaces_[rank].index_.has_value()) {
-                    local_index = &mg_index_->ann_interfaces_[rank].index_.value();
+            const cagra_index* local_index = nullptr;
+            std::any cached_ptr = handle.get_index_ptr();
+            if (cached_ptr.has_value()) {
+                local_index = std::any_cast<const cagra_index*>(cached_ptr);
+            } else {
+                local_index = index_.get();
+                if (!local_index && mg_index_) {
+                    int rank = handle.get_rank();
+                    if (rank < (int)mg_index_->ann_interfaces_.size() && mg_index_->ann_interfaces_[rank].index_.has_value()) {
+                        local_index = &mg_index_->ann_interfaces_[rank].index_.value();
+                    }
                 }
+                if (local_index) handle.set_index_ptr(local_index);
             }
 
             if (local_index) {
@@ -468,6 +475,7 @@ public:
             handle.sync(); // Local sync
         }
 
+        std::cout << "[DEBUG " << get_timestamp() << "] CAGRA search_internal finished working" << std::endl;
         return search_res;
     }
 
@@ -478,7 +486,7 @@ public:
 
         std::cout << "[DEBUG] CAGRA search_float: num_queries=" << num_queries << " limit=" << limit << std::endl;
 
-        if (num_queries > 16 || !this->worker->use_batching()) {
+        if (!this->worker->use_batching()) {
             auto task = [this, num_queries, limit, sp, queries_data, query_dimension](raft_handle_wrapper_t& handle) -> std::any {
                 return this->search_float_internal(handle, queries_data, num_queries, query_dimension, limit, sp);
             };
@@ -533,7 +541,7 @@ public:
         std::shared_lock<std::shared_mutex> lock(this->mutex_);
         auto res = handle.get_raft_resources();
 
-        std::cout << "[DEBUG] CAGRA search_float_internal: num_queries=" << num_queries << " limit=" << limit << " device=" << handle.get_device_id() << std::endl;
+        std::cout << "[DEBUG " << get_timestamp() << "] CAGRA search_float_internal: num_queries=" << num_queries << " limit=" << limit << " device=" << handle.get_device_id() << std::endl;
 
         auto q_dev_t = raft::make_device_matrix<T, int64_t>(*res, num_queries, this->dimension);
         
@@ -574,12 +582,19 @@ public:
             std::copy(n_host.data_handle(), n_host.data_handle() + (num_queries * limit), search_res.neighbors.begin());
             std::copy(d_host.data_handle(), d_host.data_handle() + (num_queries * limit), search_res.distances.begin());
         } else {
-            const cagra_index* local_index = index_.get();
-            if (!local_index && mg_index_) {
-                int rank = handle.get_rank();
-                if (rank < (int)mg_index_->ann_interfaces_.size() && mg_index_->ann_interfaces_[rank].index_.has_value()) {
-                    local_index = &mg_index_->ann_interfaces_[rank].index_.value();
+            const cagra_index* local_index = nullptr;
+            std::any cached_ptr = handle.get_index_ptr();
+            if (cached_ptr.has_value()) {
+                local_index = std::any_cast<const cagra_index*>(cached_ptr);
+            } else {
+                local_index = index_.get();
+                if (!local_index && mg_index_) {
+                    int rank = handle.get_rank();
+                    if (rank < (int)mg_index_->ann_interfaces_.size() && mg_index_->ann_interfaces_[rank].index_.has_value()) {
+                        local_index = &mg_index_->ann_interfaces_[rank].index_.value();
+                    }
                 }
+                if (local_index) handle.set_index_ptr(local_index);
             }
 
             if (local_index) {
@@ -598,6 +613,7 @@ public:
             handle.sync(); // Local sync
         }
 
+        std::cout << "[DEBUG " << get_timestamp() << "] CAGRA search_internal finished working" << std::endl;
         return search_res;
     }
 
