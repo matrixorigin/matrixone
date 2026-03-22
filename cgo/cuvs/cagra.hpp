@@ -178,11 +178,11 @@ public:
         auto init_fn = [&](raft_handle_wrapper_t& handle) -> std::any {
             std::shared_lock<std::shared_mutex> lock(this->mutex_);
             if (index_) {
-                handle.set_index_ptr(index_.get());
+                handle.set_index_ptr(static_cast<const cagra_index*>(index_.get()));
             } else if (mg_index_) {
                 int rank = handle.get_rank();
                 if (rank < (int)mg_index_->ann_interfaces_.size() && mg_index_->ann_interfaces_[rank].index_.has_value()) {
-                    handle.set_index_ptr(&mg_index_->ann_interfaces_[rank].index_.value());
+                    handle.set_index_ptr(static_cast<const cagra_index*>(&mg_index_->ann_interfaces_[rank].index_.value()));
                 }
             }
             return std::any();
@@ -508,8 +508,16 @@ public:
             const cagra_index* local_index = nullptr;
             std::any cached_ptr = handle.get_index_ptr();
             if (cached_ptr.has_value()) {
-                local_index = std::any_cast<const cagra_index*>(cached_ptr);
-            } else {
+                if (cached_ptr.type() == typeid(const cagra_index*)) {
+                    local_index = std::any_cast<const cagra_index*>(cached_ptr);
+                } else if (cached_ptr.type() == typeid(cagra_index*)) {
+                    local_index = std::any_cast<cagra_index*>(cached_ptr);
+                } else {
+                    handle.set_index_ptr(std::any()); // Clear invalid cache
+                }
+            }
+            
+            if (!local_index) {
                 // Tiered fallback: Replicated -> Single -> Multi (Sharded)
                 if (!this->replicated_indices_.empty()) {
                     std::shared_lock<std::shared_mutex> lock(this->mutex_);
@@ -664,8 +672,16 @@ public:
             const cagra_index* local_index = nullptr;
             std::any cached_ptr = handle.get_index_ptr();
             if (cached_ptr.has_value()) {
-                local_index = std::any_cast<const cagra_index*>(cached_ptr);
-            } else {
+                if (cached_ptr.type() == typeid(const cagra_index*)) {
+                    local_index = std::any_cast<const cagra_index*>(cached_ptr);
+                } else if (cached_ptr.type() == typeid(cagra_index*)) {
+                    local_index = std::any_cast<cagra_index*>(cached_ptr);
+                } else {
+                    handle.set_index_ptr(std::any()); // Clear invalid cache
+                }
+            }
+            
+            if (!local_index) {
                 // Tiered fallback: Replicated -> Single -> Multi (Sharded)
                 if (!this->replicated_indices_.empty()) {
                     std::shared_lock<std::shared_mutex> lock(this->mutex_);

@@ -143,7 +143,7 @@ template<typename T>
 void benchmark_all_indices(const std::vector<float>& dataset, const benchmark_config_t& cfg) {
     auto converted = convert_dataset<T>(dataset, cfg.n_vectors, cfg.dimension);
 
-    std::vector<distribution_mode_t> modes = {DistributionMode_REPLICATED};
+    std::vector<distribution_mode_t> modes = {DistributionMode_SINGLE_GPU, DistributionMode_REPLICATED};
 
     // CAGRA
     {
