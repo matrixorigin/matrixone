@@ -34,6 +34,7 @@
 #include <thread>
 #include <vector>
 #include <map>
+#include <unordered_map>
 #include <chrono>
 #include <iomanip>
 #include <sstream>
@@ -53,6 +54,15 @@ inline std::string get_timestamp() {
     std::stringstream ss;
     ss << buf << "." << std::setfill('0') << std::setw(3) << ms.count();
     return ss.str();
+}
+
+inline const char* mode_name(distribution_mode_t mode) {
+    switch (mode) {
+        case DistributionMode_SINGLE_GPU: return "SINGLE_GPU";
+        case DistributionMode_SHARDED: return "SHARDED";
+        case DistributionMode_REPLICATED: return "REPLICATED";
+        default: return "UNKNOWN";
+    }
 }
 
 /**
@@ -189,8 +199,8 @@ public:
 private:
     static constexpr uint32_t num_shards = 64;
     struct shard_t {
-        std::map<uint64_t, cuvs_task_result_t> results;
-        std::map<uint64_t, std::promise<cuvs_task_result_t>> placeholders;
+        std::unordered_map<uint64_t, cuvs_task_result_t> results;
+        std::unordered_map<uint64_t, std::promise<cuvs_task_result_t>> placeholders;
         std::mutex mu;
     };
 
@@ -294,7 +304,7 @@ public:
 
             workers_.emplace_back([this, device_id, device_idx, rank, init_fn, stop_fn, i] {
                 cudaSetDevice(device_id);
-                bool give_mg = (mg_resources_ != nullptr) && (i == 0 || mode_ == DistributionMode_SHARDED);
+                bool give_mg = (mg_resources_ != nullptr) && (i == 0 || mode_ != DistributionMode_SINGLE_GPU);
                 raft_handle handle(device_id, rank, give_mg ? mg_resources_ : nullptr, mode_);
                 if (init_fn) init_fn(handle);
                 if (i == 0) this->run_main_loop(handle, stop_fn);
@@ -321,7 +331,7 @@ public:
         if (!running_) throw std::runtime_error("Worker is not running");
         uint64_t id = results_store_.get_next_job_id();
         uint32_t d_idx = next_device_idx_++ % devices_.size();
-        std::cout << "[DEBUG " << get_timestamp() << "] Worker submit id=" << id << " to device queue " << d_idx << std::endl;
+        // // std::cout << "[DEBUG " << get_timestamp() << "] Worker submit id=" << id << " to device queue " << d_idx << std::endl;
         device_queues_[d_idx]->push({id, std::move(fn)});
         return id;
     }
@@ -329,9 +339,31 @@ public:
     uint64_t submit_main(task_fn_t fn) {
         if (!running_) throw std::runtime_error("Worker is not running");
         uint64_t id = results_store_.get_next_job_id();
-        std::cout << "[DEBUG " << get_timestamp() << "] Worker submit_main id=" << id << " to main_tasks_ queue" << std::endl;
+        // std::cout << "[DEBUG " << get_timestamp() << "] Worker submit_main id=" << id << " to main_tasks_ queue" << std::endl;
         main_tasks_.push({id, std::move(fn)});
         return id;
+    }
+
+    void run_on_all_devices(task_fn_t fn) {
+        if (!running_) throw std::runtime_error("Worker is not running");
+        std::vector<uint64_t> ids;
+        for (size_t i = 0; i < devices_.size(); ++i) {
+            uint64_t id = results_store_.get_next_job_id();
+            device_queues_[i]->push({id, fn});
+            ids.push_back(id);
+        }
+        for (auto id : ids) wait(id).get();
+    }
+
+    void broadcast(task_fn_t fn) {
+        if (!running_) throw std::runtime_error("Worker is not running");
+        std::vector<uint64_t> ids;
+        for (uint32_t i = 0; i < nthread_; ++i) {
+            uint64_t id = results_store_.get_next_job_id();
+            device_queues_[i % devices_.size()]->push({id, fn});
+            ids.push_back(id);
+        }
+        for (auto id : ids) wait(id).get();
     }
 
     std::shared_future<cuvs_task_result_t> wait(uint64_t task_id) {
@@ -357,17 +389,22 @@ public:
         bool should_schedule = false;
         std::future<ResT> future;
         
+        std::shared_ptr<batch_t> batch;
         {
             std::lock_guard<std::mutex> lock(batch_mutex_);
             if (!running_) throw std::runtime_error("Worker not running");
 
-            auto& batch = batches_[key];
-            if (!batch) {
-                batch = std::make_shared<batch_t>();
-                batch->exec_fn = exec_fn;
-                batch->scheduled = false;
+            auto& b = batches_[key];
+            if (!b) {
+                b = std::make_shared<batch_t>();
+                b->exec_fn = exec_fn;
+                b->scheduled = false;
             }
+            batch = b;
+        }
 
+        {
+            std::lock_guard<std::mutex> lock(batch->mu);
             if (!batch->scheduled) {
                 batch->scheduled = true;
                 should_schedule = true;
@@ -408,13 +445,14 @@ private:
         std::vector<std::function<void(std::any)>> setters;
         std::function<void(raft_handle&, const std::vector<std::any>&, const std::vector<std::function<void(std::any)>>&)> exec_fn;
         std::atomic<bool> scheduled;
+        std::mutex mu;
     };
 
     void run_worker_loop(raft_handle& handle, std::function<std::any(raft_handle&)> stop_fn, uint32_t d_idx) {
         cuvs_task_t task;
-        std::cout << "[DEBUG " << get_timestamp() << "] Worker loop starting rank=" << handle.get_rank() << " device_queue=" << d_idx << std::endl;
+        // std::cout << "[DEBUG " << get_timestamp() << "] Worker loop starting rank=" << handle.get_rank() << " device_queue=" << d_idx << std::endl;
         while (device_queues_[d_idx]->pop(task)) {
-            std::cout << "[DEBUG " << get_timestamp() << "] Worker loop got task id=" << task.id << " rank=" << handle.get_rank() << std::endl;
+            // std::cout << "[DEBUG " << get_timestamp() << "] Worker loop got task id=" << task.id << " rank=" << handle.get_rank() << std::endl;
             execute_task(task, handle);
         }
         if (stop_fn) stop_fn(handle);
@@ -422,9 +460,9 @@ private:
 
     void run_main_loop(raft_handle& handle, std::function<std::any(raft_handle&)> stop_fn) {
         cuvs_task_t task;
-        std::cout << "[DEBUG " << get_timestamp() << "] Main loop starting rank=" << handle.get_rank() << std::endl;
+        // std::cout << "[DEBUG " << get_timestamp() << "] Main loop starting rank=" << handle.get_rank() << std::endl;
         while (main_tasks_.pop(task)) {
-            std::cout << "[DEBUG " << get_timestamp() << "] Main loop got task id=" << task.id << " rank=" << handle.get_rank() << std::endl;
+            // std::cout << "[DEBUG " << get_timestamp() << "] Main loop got task id=" << task.id << " rank=" << handle.get_rank() << std::endl;
             execute_task(task, handle);
         }
         if (stop_fn) stop_fn(handle);
@@ -451,21 +489,33 @@ private:
             auto it = batches_.find(key);
             if (it == batches_.end()) return;
             batch = it->second;
-            batches_.erase(it);
         }
-        if (batch->reqs.empty()) return;
+
+        std::vector<std::any> reqs;
+        std::vector<std::function<void(std::any)>> setters;
+        {
+            std::lock_guard<std::mutex> lock(batch->mu);
+            if (batch->reqs.empty()) {
+                batch->scheduled = false;
+                return;
+            }
+            reqs = std::move(batch->reqs);
+            setters = std::move(batch->setters);
+            batch->scheduled = false;
+        }
         
-        auto task_fn = [batch, key](raft_handle& handle) -> std::any {
+        auto exec_fn = batch->exec_fn;
+        auto task_fn = [reqs = std::move(reqs), setters = std::move(setters), exec_fn, key](raft_handle& handle) -> std::any {
             try {
-                batch->exec_fn(handle, batch->reqs, batch->setters);
+                exec_fn(handle, reqs, setters);
             } catch (const std::exception& e) {
                 std::cout << "[ERROR " << get_timestamp() << "] Worker batch exec_fn error key=" << key << ": " << e.what() << std::endl;
                 auto err = std::current_exception();
-                for (auto& setter : batch->setters) setter(err);
+                for (auto& setter : setters) setter(err);
             } catch (...) {
                 std::cout << "[ERROR " << get_timestamp() << "] Worker batch exec_fn unknown error key=" << key << std::endl;
                 auto err = std::current_exception();
-                for (auto& setter : batch->setters) setter(err);
+                for (auto& setter : setters) setter(err);
             }
             return std::any();
         };
@@ -478,7 +528,7 @@ private:
             }
         } catch (...) {
             auto err = std::current_exception();
-            for (auto& setter : batch->setters) setter(err);
+            for (auto& setter : setters) setter(err);
         }
     }
 

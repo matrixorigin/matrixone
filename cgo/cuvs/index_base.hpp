@@ -52,6 +52,10 @@ public:
     // Use shared_ptr<void> to keep various RAFT resources alive
     std::shared_ptr<void> dataset_device_ptr_; // Keep device memory alive
 
+    // For REPLICATED mode: keep local resources alive for every device
+    std::map<int, std::shared_ptr<void>> replicated_indices_;
+    std::map<int, std::shared_ptr<void>> replicated_datasets_;
+
     gpu_index_base_t() = default;
     virtual ~gpu_index_base_t() {
         destroy();

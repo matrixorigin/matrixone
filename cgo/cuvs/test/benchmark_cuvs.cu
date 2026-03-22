@@ -73,14 +73,6 @@ double calculate_recall(const std::vector<NeighborT>& neighbors, uint32_t n_quer
     return static_cast<double>(hit_count) / n_queries;
 }
 
-const char* mode_name(distribution_mode_t mode) {
-    switch (mode) {
-        case DistributionMode_SHARDED: return "Sharded";
-        case DistributionMode_REPLICATED: return "Replicated";
-        default: return "Single";
-    }
-}
-
 template<typename T>
 std::vector<T> convert_dataset(const std::vector<float>& src, uint64_t n_vectors, uint32_t dim) {
     if constexpr (std::is_same_v<T, float>) {
@@ -107,7 +99,7 @@ void run_benchmark(const std::string& index_name, distribution_mode_t mode,
     for (bool batching : {false}) {
         index.set_use_batching(batching);
         
-        std::string full_name = index_name + "_" + mode_name(mode) + "_" + type_name<T>() + (batching ? "_BatchingON" : "_BatchingOFF");
+        std::string full_name = index_name + "_" + matrixone::mode_name(mode) + "_" + type_name<T>() + (batching ? "_BatchingON" : "_BatchingOFF");
 
         auto queries = generate_random_data(cfg.n_queries, cfg.dimension);
         

@@ -22,10 +22,10 @@ LIBS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64/cudart -L/h
 INCLUDES := -I. -I/usr/local/cuda/include -I/home/ubuntu/miniconda/envs/go/include -I/home/ubuntu/miniconda/envs/go/include/rapids -I/home/ubuntu/miniconda/envs/go/include/raft -I/home/ubuntu/miniconda/envs/go/include/cuvs
 
 # NVCC_FLAGS are for compilation only. -x cu tells nvcc to treat .cpp as .cu
-NVCC_FLAGS := -std=c++17 -x cu -Xcompiler "-Wall -Wextra -fPIC" --extended-lambda --expt-relaxed-constexpr $(INCLUDES) -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE -DRAFT_SYSTEM_LITTLE_ENDIAN=1 -gencode arch=compute_86,code=sm_86
+NVCC_FLAGS := -O3 -std=c++17 -x cu -Xcompiler "-Wall -Wextra -fPIC" --extended-lambda --expt-relaxed-constexpr $(INCLUDES) -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE -DRAFT_SYSTEM_LITTLE_ENDIAN=1 -gencode arch=compute_86,code=sm_86
 
 # LDFLAGS for linking only. DO NOT include -x cu here.
-LDFLAGS := -std=c++17 -Xcompiler "-Wall -Wextra -fPIC"
+LDFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -Wextra -fPIC"
 
 # Source files
 C_SRCS := brute_force_c.cpp ivf_flat_c.cpp ivf_pq_c.cpp cagra_c.cpp kmeans_c.cpp adhoc_c.cpp distance_c.cpp
@@ -36,14 +36,16 @@ TEST_SRCS := test/main_test.cu test/brute_force_test.cu test/ivf_flat_test.cu te
 OBJS := $(C_SRCS:.cpp=.o) $(CPP_SRCS:.cpp=.o)
 TEST_OBJS := $(patsubst test/%.cu,obj/test/%.o,$(TEST_SRCS))
 
-.PHONY: all clean debug test
+.PHONY: all clean debug release test
 
 all: libmocuvs.so
 
 test: test_cuvs_worker benchmark_cuvs
 
-debug: NVCC_FLAGS += -O0 -g -lineinfo
-debug: LDFLAGS += -g
+release: all
+
+debug: NVCC_FLAGS := $(filter-out -O3,$(NVCC_FLAGS)) -O0 -g -lineinfo
+debug: LDFLAGS := $(filter-out -O3,$(LDFLAGS)) -g
 debug: all
 
 libmocuvs.so: $(OBJS)
