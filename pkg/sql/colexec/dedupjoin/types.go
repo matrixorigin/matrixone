@@ -57,7 +57,8 @@ type container struct {
 	joinBat2 *batch.Batch
 	cfs2     []func(*vector.Vector, *vector.Vector, int64, int) error
 
-	savedVecs []*vector.Vector
+	savedVecs      []*vector.Vector
+	updateExprVecs []*vector.Vector
 
 	evecs []evalVector
 	vecs  []*vector.Vector
@@ -168,6 +169,7 @@ func (ctr *container) resetExprExecutor() {
 	for i := range ctr.exprExecs {
 		ctr.exprExecs[i].ResetForNextQuery()
 	}
+	ctr.updateExprVecs = nil
 }
 
 func (ctr *container) cleanExprExecutor() {
@@ -175,6 +177,7 @@ func (ctr *container) cleanExprExecutor() {
 		ctr.exprExecs[i].Free()
 		ctr.exprExecs[i] = nil
 	}
+	ctr.updateExprVecs = nil
 }
 
 func (ctr *container) cleanBuf(proc *process.Process) {

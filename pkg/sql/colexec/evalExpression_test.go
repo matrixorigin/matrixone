@@ -286,6 +286,34 @@ func TestColumnExpressionExecutor_RelIndexOutOfRange(t *testing.T) {
 	require.Equal(t, 5, vec.Length())
 }
 
+func TestColumnExpressionExecutor_RelIndexNilBatch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	col := &plan.Expr{
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 1,
+				ColPos: 0,
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_int32),
+			NotNullable: true,
+		},
+	}
+	executor, err := NewExpressionExecutor(proc, col)
+	require.NoError(t, err)
+	defer executor.Free()
+
+	bat := testutil.NewBatch(
+		[]types.Type{types.T_int32.ToType()},
+		true, 3, proc.Mp())
+
+	_, err = executor.Eval(proc, []*batch.Batch{bat, nil}, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "batch at relIndex 1 is nil")
+}
+
 func TestFunctionExpressionExecutor(t *testing.T) {
 	{
 		proc := testutil.NewProcess(t)
