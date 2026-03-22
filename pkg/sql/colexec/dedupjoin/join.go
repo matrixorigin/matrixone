@@ -53,6 +53,16 @@ func (dedupJoin *DedupJoin) Prepare(proc *process.Process) (err error) {
 		dedupJoin.OpAnalyzer.Reset()
 	}
 
+	// DedupJoin is reused when prepared compile is reused. Refresh the statement
+	// snapshot for each query execution so range duplicate checks do not carry
+	// stale visibility from previous EXECUTE calls.
+	stmtSnapshotTS := proc.GetStmtSnapshotTS()
+	if stmtSnapshotTS.IsEmpty() && proc.GetTxnOperator() != nil {
+		stmtSnapshotTS = proc.GetTxnOperator().SnapshotTS()
+		proc.SetStmtSnapshotTS(stmtSnapshotTS)
+	}
+	dedupJoin.InitialSnapshotTS = stmtSnapshotTS
+
 	if len(dedupJoin.ctr.vecs) == 0 {
 		dedupJoin.ctr.vecs = make([]*vector.Vector, len(dedupJoin.Conditions[0]))
 		dedupJoin.ctr.evecs = make([]evalVector, len(dedupJoin.Conditions[0]))

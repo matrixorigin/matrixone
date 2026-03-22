@@ -758,6 +758,34 @@ id    name    value
 2    second    200
 1    updated_first    200
 10    tenth    1000
+DROP TABLE IF EXISTS test_lock;
+CREATE TABLE test_lock (
+lock_key VARCHAR(255) PRIMARY KEY,
+holder_id VARCHAR(255),
+acquired_at TIMESTAMP,
+expires_at TIMESTAMP
+);
+DELETE FROM test_lock WHERE lock_key = 'bug_repro';
+PREPARE ins FROM 'INSERT INTO test_lock (lock_key, holder_id, acquired_at, expires_at) VALUES (?, ?, NOW(), DATE_ADD(NOW(), INTERVAL 60 SECOND))';
+SET @k='bug_repro', @h='h1';
+EXECUTE ins USING @k, @h;
+SELECT COUNT(*) FROM test_lock WHERE lock_key = @k;
+COUNT(*)
+1
+DELETE FROM test_lock WHERE lock_key = @k;
+SELECT COUNT(*) FROM test_lock WHERE lock_key = @k;
+COUNT(*)
+0
+SET @h='h2';
+EXECUTE ins USING @k, @h;
+SELECT COUNT(*) FROM test_lock WHERE lock_key = @k;
+COUNT(*)
+1
+SELECT lock_key, holder_id FROM test_lock WHERE lock_key = @k;
+lock_key    holder_id
+bug_repro    h2
+DEALLOCATE PREPARE ins;
+DROP TABLE test_lock;
 DEALLOCATE PREPARE stmt1;
 DROP TABLE IF EXISTS indup_07;
 CREATE TABLE indup_07(

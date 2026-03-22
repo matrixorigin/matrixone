@@ -579,6 +579,52 @@ func TestResolveTargetRelation_DetectsDefinitionChange(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
 }
 
+func TestPrepare_RefreshesInitialSnapshotTSFromProcess(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc := testutil.NewProcess(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	proc.Base.TxnOperator = txnOp
+
+	currentTS := timestamp.Timestamp{PhysicalTime: 11}
+	txnOp.EXPECT().SnapshotTS().Return(currentTS)
+
+	arg := &DedupJoin{
+		InitialSnapshotTS: timestamp.Timestamp{PhysicalTime: 1},
+		Conditions: [][]*plan.Expr{
+			{newExpr(0, types.T_int32.ToType())},
+			{newRelExpr(1, 0, types.T_int32.ToType())},
+		},
+	}
+
+	require.NoError(t, arg.Prepare(proc))
+	require.Equal(t, currentTS, arg.InitialSnapshotTS)
+	require.Equal(t, currentTS, proc.GetStmtSnapshotTS())
+
+	arg.Free(proc, false, nil)
+	proc.Free()
+}
+
+func TestPrepare_UsesExistingStmtSnapshotTS(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	existingTS := timestamp.Timestamp{PhysicalTime: 21}
+	proc.SetStmtSnapshotTS(existingTS)
+
+	arg := &DedupJoin{
+		Conditions: [][]*plan.Expr{
+			{newExpr(0, types.T_int32.ToType())},
+			{newRelExpr(1, 0, types.T_int32.ToType())},
+		},
+	}
+
+	require.NoError(t, arg.Prepare(proc))
+	require.Equal(t, existingTS, arg.InitialSnapshotTS)
+
+	arg.Free(proc, false, nil)
+	proc.Free()
+}
+
 func TestFormatDedupRow_IndexTableTuple(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	vec := vector.NewVec(types.T_varchar.ToType())

@@ -1104,6 +1104,7 @@ func (lockOp *LockOp) Reset(proc *process.Process, pipelineFailed bool, err erro
 	lockOp.resetParker()
 	lockOp.ctr.retryError = nil
 	lockOp.ctr.defChanged = false
+	lockOp.ctr.lockCount = 0
 }
 
 // Free free mem
