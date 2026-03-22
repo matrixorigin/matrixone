@@ -112,12 +112,16 @@ func (tableFunction *TableFunction) Reset(proc *process.Process, pipelineFailed 
 			tableFunction.ctr.executorsForArgs[i].ResetForNextQuery()
 		}
 	}
-	tableFunction.ctr.state.reset(tableFunction, proc)
+	if tableFunction.ctr.state != nil {
+		tableFunction.ctr.state.reset(tableFunction, proc)
+	}
 }
 
 func (tableFunction *TableFunction) Free(proc *process.Process, pipelineFailed bool, err error) {
 	tableFunction.ctr.cleanExecutors()
-	tableFunction.ctr.state.free(tableFunction, proc, pipelineFailed, err)
+	if tableFunction.ctr.state != nil {
+		tableFunction.ctr.state.free(tableFunction, proc, pipelineFailed, err)
+	}
 }
 
 func (tableFunction *TableFunction) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

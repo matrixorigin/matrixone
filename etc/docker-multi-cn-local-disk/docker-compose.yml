@@ -59,10 +59,11 @@ services:
       - matrixone
     user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}" # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
     entrypoint: [ "/mo-service" ]
-    command: [ "-cfg", "/etc/docker-multi-cn-local-disk/log.toml" ]
+    command: [ "-cfg", "/etc/docker-multi-cn-local-disk/log.toml", "-debug-http", "0.0.0.0:6060" ]
     ports:
       - "32001:32001" # HAKeeper port
       - "7001:7001" # Status port
+      - "6060:6060" # pprof debug port
     volumes:
       - ../../mo-data:/mo-data
       - ../../logs:/logs
@@ -89,9 +90,11 @@ services:
       - matrixone
     user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}" # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
     entrypoint: [ "/mo-service" ]
-    command: [ "-cfg", "/etc/docker-multi-cn-local-disk/tn.toml" ]
+    command: [ "-cfg", "/etc/docker-multi-cn-local-disk/tn.toml", "-debug-http", "0.0.0.0:6060" ]
     cap_add:
       - NET_ADMIN # Required for network chaos testing with tc (traffic control)
+    ports:
+      - "6062:6060" # pprof debug port
     volumes:
       - ../../mo-data:/mo-data
       - ../../logs:/logs
@@ -115,11 +118,12 @@ services:
       - matrixone
     user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}" # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
     entrypoint: [ "/mo-service" ]
-    command: [ "-cfg", "/etc/docker-multi-cn-local-disk/cn1.toml" ]
+    command: [ "-cfg", "/etc/docker-multi-cn-local-disk/cn1.toml", "-debug-http", "0.0.0.0:6060" ]
     cap_add:
       - NET_ADMIN # Required for network chaos testing with tc (traffic control)
     ports:
       - "16001:16001" # SQL port
+      - "6061:6060" # pprof debug port
     volumes:
       - ../../mo-data:/mo-data
       - ../../logs:/logs
@@ -143,11 +147,12 @@ services:
       - matrixone
     user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}" # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
     entrypoint: [ "/mo-service" ]
-    command: [ "-cfg", "/etc/docker-multi-cn-local-disk/cn2.toml" ]
+    command: [ "-cfg", "/etc/docker-multi-cn-local-disk/cn2.toml", "-debug-http", "0.0.0.0:6060" ]
     cap_add:
       - NET_ADMIN # Required for network chaos testing with tc (traffic control)
     ports:
       - "16002:16002" # SQL port
+      - "6063:6060" # pprof debug port
     volumes:
       - ../../mo-data:/mo-data
       - ../../logs:/logs

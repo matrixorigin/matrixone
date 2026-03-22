@@ -50,3 +50,16 @@ func TestPrepare(t *testing.T) {
 	err = arg.Prepare(testutil.NewProc(t))
 	require.Error(t, err)
 }
+
+func TestResetAndFreeWithNilState(t *testing.T) {
+	proc := testutil.NewProc(t)
+	arg := &TableFunction{}
+
+	require.NotPanics(t, func() {
+		arg.Reset(proc, false, nil)
+	})
+
+	require.NotPanics(t, func() {
+		arg.Free(proc, false, nil)
+	})
+}

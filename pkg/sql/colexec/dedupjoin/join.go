@@ -35,6 +35,7 @@ import (
 )
 
 const opName = "dedup_join"
+const duplicateProbeChunkSize = 64
 
 func (dedupJoin *DedupJoin) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
@@ -374,16 +375,12 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 						return err
 					}
 
-					vecs := make([]*vector.Vector, len(ctr.exprExecs))
-					for j, exprExec := range ctr.exprExecs {
-						vecs[j], err = exprExec.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2}, nil)
-						if err != nil {
-							return err
-						}
+					if err = ctr.evalUpdateExprs(proc); err != nil {
+						return err
 					}
 
 					for j, pos := range ap.UpdateColIdxList {
-						ctr.joinBat1.Vecs[pos] = vecs[j]
+						ctr.joinBat1.Vecs[pos] = ctr.updateExprVecs[j]
 					}
 				}
 
@@ -478,6 +475,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 				if err != nil {
 					return err
 				}
+				restoreJoinBat1 := func() {
+					for j, pos := range ap.UpdateColIdxList {
+						ctr.joinBat1.Vecs[pos] = ctr.savedVecs[j]
+					}
+				}
 
 				if ctr.mp.HashOnUnique() {
 					sel := vals[k] - 1
@@ -487,17 +489,13 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 						return err
 					}
 
-					vecs := make([]*vector.Vector, len(ctr.exprExecs))
-					for j, exprExec := range ctr.exprExecs {
-						vecs[j], err = exprExec.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2}, nil)
-						if err != nil {
-							return err
-						}
+					if err = ctr.evalUpdateExprs(proc); err != nil {
+						return err
 					}
 
 					for j, pos := range ap.UpdateColIdxList {
 						ctr.savedVecs[j] = ctr.joinBat1.Vecs[pos]
-						ctr.joinBat1.Vecs[pos] = vecs[j]
+						ctr.joinBat1.Vecs[pos] = ctr.updateExprVecs[j]
 					}
 				} else {
 					sels := ctr.mp.GetSels(vals[k])
@@ -511,16 +509,12 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 							return err
 						}
 
-						vecs := make([]*vector.Vector, len(ctr.exprExecs))
-						for j, exprExec := range ctr.exprExecs {
-							vecs[j], err = exprExec.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2}, nil)
-							if err != nil {
-								return err
-							}
+						if err = ctr.evalUpdateExprs(proc); err != nil {
+							return err
 						}
 
 						for j, pos := range ap.UpdateColIdxList {
-							ctr.joinBat1.Vecs[pos] = vecs[j]
+							ctr.joinBat1.Vecs[pos] = ctr.updateExprVecs[j]
 						}
 					}
 				}
@@ -536,10 +530,12 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 							srcVec = ctr.joinBat1.Vecs[rp.Pos]
 						}
 						if err := ctr.rbat.Vecs[j].UnionOne(srcVec, 0, proc.Mp()); err != nil {
+							restoreJoinBat1()
 							return err
 						}
 					} else {
 						if err := ctr.rbat.Vecs[j].UnionOne(bat.Vecs[rp.Pos], int64(i+k), proc.Mp()); err != nil {
+							restoreJoinBat1()
 							return err
 						}
 					}
@@ -548,9 +544,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 				// Restore original joinBat1 vectors to prevent corruption of
 				// expression executor internal caches (e.g. nullVecCache) by
 				// subsequent SetJoinBatchValues calls.
-				for j, pos := range ap.UpdateColIdxList {
-					ctr.joinBat1.Vecs[pos] = ctr.savedVecs[j]
-				}
+				restoreJoinBat1()
 
 				ctr.matched.Add(vals[k] - 1)
 				rowCntInc++
@@ -575,6 +569,92 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, proc *process.Process)
 		ctr.evecs[i].vec = vec
 	}
 	return nil
+}
+
+func (ctr *container) evalUpdateExprs(proc *process.Process) error {
+	if len(ctr.exprExecs) == 0 {
+		return nil
+	}
+	if len(ctr.updateExprVecs) < len(ctr.exprExecs) {
+		ctr.updateExprVecs = make([]*vector.Vector, len(ctr.exprExecs))
+	}
+	for j, exprExec := range ctr.exprExecs {
+		vec, err := exprExec.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2}, nil)
+		if err != nil {
+			return err
+		}
+		ctr.updateExprVecs[j] = vec
+	}
+	return nil
+}
+
+func mayRangeContainDuplicate(
+	proc *process.Process,
+	rel engine.Relation,
+	fromTS, toTS types.TS,
+	keyVec *vector.Vector,
+	start, end int,
+	rangeBat *batch.Batch,
+) (bool, error) {
+	rangeVec, err := keyVec.Window(start, end+1)
+	if err != nil {
+		return false, err
+	}
+	rangeBat.Vecs[0] = rangeVec
+	rangeBat.SetRowCount(end - start + 1)
+	changed, err := rel.PrimaryKeysMayBeUpserted(proc.Ctx, fromTS, toTS, rangeBat, 0)
+	rangeBat.Vecs[0] = nil
+	rangeVec.Free(proc.Mp())
+	return changed, err
+}
+
+func findFirstDuplicateByChunkScan(
+	proc *process.Process,
+	rel engine.Relation,
+	fromTS, toTS types.TS,
+	keyVec *vector.Vector,
+	rowCount int,
+) (int, error) {
+	if rowCount <= 0 {
+		return -1, nil
+	}
+	rangeBat := batch.NewWithSize(1)
+	singleRowBat := batch.NewWithSize(1)
+	for start := 0; start < rowCount; start += duplicateProbeChunkSize {
+		end := start + duplicateProbeChunkSize - 1
+		if end >= rowCount {
+			end = rowCount - 1
+		}
+
+		changed := true
+		var err error
+		if !(start == 0 && rowCount <= duplicateProbeChunkSize) {
+			changed, err = mayRangeContainDuplicate(proc, rel, fromTS, toTS, keyVec, start, end, rangeBat)
+		}
+		if err != nil {
+			return -1, err
+		}
+		if !changed {
+			continue
+		}
+		for row := start; row <= end; row++ {
+			rowVec, err := keyVec.Window(row, row+1)
+			if err != nil {
+				return -1, err
+			}
+			singleRowBat.Vecs[0] = rowVec
+			singleRowBat.SetRowCount(1)
+			rowChanged, err := rel.PrimaryKeysMayBeUpserted(proc.Ctx, fromTS, toTS, singleRowBat, 0)
+			rowVec.Free(proc.Mp())
+			if err != nil {
+				return -1, err
+			}
+			if rowChanged {
+				return row, nil
+			}
+		}
+	}
+	return -1, nil
 }
 
 func (dedupJoin *DedupJoin) checkSnapshotAdvancedDuplicates(proc *process.Process) error {
@@ -681,23 +761,12 @@ func checkDuplicateKeysInRange(
 		return "", nil
 	}
 
-	singleRowBat := batch.NewWithSize(1)
-	for row := 0; row < keyBat.RowCount(); row++ {
-		rowVec, err := keyVec.Window(row, row+1)
-		if err != nil {
-			return "", err
-		}
-		singleRowBat.Vecs[0] = rowVec
-		singleRowBat.SetRowCount(1)
-
-		rowChanged, err := rel.PrimaryKeysMayBeUpserted(proc.Ctx, fromTS, toTS, singleRowBat, 0)
-		rowVec.Free(proc.Mp())
-		if err != nil {
-			return "", err
-		}
-		if rowChanged {
-			return formatDedupRow(keyVec, row, dedupColName, dedupColTypes)
-		}
+	row, err := findFirstDuplicateByChunkScan(proc, rel, fromTS, toTS, keyVec, keyBat.RowCount())
+	if err != nil {
+		return "", err
+	}
+	if row >= 0 {
+		return formatDedupRow(keyVec, row, dedupColName, dedupColTypes)
 	}
 	return "", nil
 }

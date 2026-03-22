@@ -373,6 +373,51 @@ func TestCheckDuplicateKeysInRange_ReturnsActualDuplicateRow(t *testing.T) {
 	require.Equal(t, "50", rowStr)
 }
 
+func TestCheckDuplicateKeysInRange_UsesChunkProbeForLargeBatch(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc := testutil.NewProcess(t)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	keys := make([]int32, duplicateProbeChunkSize+1)
+	for i := range keys {
+		keys[i] = int32(i + 1)
+	}
+	keyVec := testutil.MakeInt32Vector(keys, nil)
+	keyBat := batch.NewWithSize(1)
+	keyBat.Vecs[0] = keyVec
+	keyBat.SetRowCount(len(keys))
+
+	call := 0
+	rel.EXPECT().PrimaryKeysMayBeUpserted(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), int32(0)).
+		DoAndReturn(func(_ context.Context, _, _ types.TS, bat *batch.Batch, _ int32) (bool, error) {
+			call++
+			if call == 1 {
+				require.Equal(t, len(keys), bat.RowCount())
+				return true, nil
+			}
+			if call == 2 {
+				require.Equal(t, duplicateProbeChunkSize, bat.RowCount())
+				return false, nil
+			}
+			require.Equal(t, 1, bat.RowCount())
+			return bat.GetVector(0).RowToString(0) == "65", nil
+		}).AnyTimes()
+
+	rowStr, err := checkDuplicateKeysInRange(
+		proc,
+		rel,
+		types.BuildTS(1, 0),
+		types.BuildTS(2, 0),
+		keyBat,
+		keyVec,
+		"id",
+		[]plan.Type{{Id: int32(types.T_int32)}},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "65", rowStr)
+}
+
 func TestCheckSnapshotAdvancedDuplicates_SkipsOldKeyDedupPaths(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	arg := &DedupJoin{
