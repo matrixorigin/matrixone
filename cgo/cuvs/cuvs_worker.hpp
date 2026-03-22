@@ -243,35 +243,11 @@ public:
             int rank = i % devices_.size(); 
 
             workers_.emplace_back([this, device_id, rank, init_fn, stop_fn, i] {
-                // Optimization: Non-main threads in REPLICATED mode (or SHARDED when doing local work)
-                // should use plain raft::resources to avoid SNMG/NCCL overhead.
-                // Main thread (i=0) always gets MG resources for collective builds/merges.
                 bool give_mg = (mg_resources_ != nullptr) && (i == 0 || mode_ == DistributionMode_SHARDED);
-                
                 raft_handle handle(device_id, rank, give_mg ? mg_resources_ : nullptr, mode_);
                 if (init_fn) init_fn(handle);
                 if (i == 0) this->run_main_loop(handle, stop_fn);
                 else this->run_worker_loop(handle, stop_fn);
-            });
-        }
-
-        // Always start batcher thread if we have worker threads
-        if (nthread_ > 0) {
-            batcher_running_ = true;
-            batcher_thread_ = std::thread([this]() {
-                while (batcher_running_) {
-                    std::this_thread::sleep_for(std::chrono::microseconds(500));
-                    
-                    std::vector<std::string> keys;
-                    {
-                        std::lock_guard<std::mutex> lock(batch_mutex_);
-                        if (batches_.empty()) continue;
-                        for (auto const& [key, _] : batches_) keys.push_back(key);
-                    }
-                    for (auto const& key : keys) {
-                        this->flush_batch(key);
-                    }
-                }
             });
         }
     }
@@ -279,9 +255,6 @@ public:
     void stop() {
         if (!running_) return;
         running_ = false;
-        
-        batcher_running_ = false;
-        if (batcher_thread_.joinable()) batcher_thread_.join();
 
         tasks_.stop();
         main_tasks_.stop();
@@ -296,16 +269,6 @@ public:
         }
         workers_.clear();
         results_store_.stop();
-
-        // Flush remaining batches
-        std::vector<std::string> keys;
-        {
-            std::lock_guard<std::mutex> lock(batch_mutex_);
-            for (auto const& [key, _] : batches_) keys.push_back(key);
-        }
-        for (auto const& key : keys) {
-            this->flush_batch(key);
-        }
     }
 
     uint64_t submit(task_fn_t fn) {
@@ -413,6 +376,18 @@ private:
                 execute_task(task, handle);
             } else {
                 if (!running_ && main_tasks_.empty() && tasks_.empty()) break;
+
+                // Handle batching if no tasks are available
+                if (use_batching_) {
+                    std::vector<std::string> keys;
+                    {
+                        std::lock_guard<std::mutex> lock(batch_mutex_);
+                        for (auto const& [key, _] : batches_) keys.push_back(key);
+                    }
+                    for (auto const& key : keys) {
+                        this->flush_batch(key);
+                    }
+                }
                 
                 std::unique_lock<std::mutex> lock(shared_cv_mu_);
                 shared_cv_.wait_for(lock, std::chrono::milliseconds(10), [this]() {
@@ -426,9 +401,14 @@ private:
     void execute_task(const cuvs_task_t& task, raft_handle& handle) {
         cuvs_task_result_t result;
         try {
+            std::cout << "[DEBUG] Worker execute_task starting id=" << task.id << " rank=" << handle.get_rank() << std::endl;
             result.result = task.fn(handle);
-            // No global sync here; indices call handle.sync() as needed.
+            std::cout << "[DEBUG] Worker execute_task finished id=" << task.id << " rank=" << handle.get_rank() << std::endl;
+        } catch (const std::exception& e) {
+            std::cout << "[DEBUG] Worker execute_task error id=" << task.id << " rank=" << handle.get_rank() << ": " << e.what() << std::endl;
+            result.error = std::current_exception();
         } catch (...) {
+            std::cout << "[DEBUG] Worker execute_task unknown error id=" << task.id << " rank=" << handle.get_rank() << std::endl;
             result.error = std::current_exception();
         }
         results_store_.store(task.id, result);
@@ -444,16 +424,32 @@ private:
             batches_.erase(it);
         }
         if (batch->reqs.empty()) return;
+        
+        std::cout << "[DEBUG] Worker flush_batch key=" << key << " size=" << batch->reqs.size() << std::endl;
+
+        auto task_fn = [batch, key](raft_handle& handle) -> std::any {
+            try {
+                std::cout << "[DEBUG] Worker batch exec_fn starting key=" << key << " rank=" << handle.get_rank() << std::endl;
+                batch->exec_fn(handle, batch->reqs, batch->setters);
+                std::cout << "[DEBUG] Worker batch exec_fn finished key=" << key << " rank=" << handle.get_rank() << std::endl;
+            } catch (const std::exception& e) {
+                std::cout << "[DEBUG] Worker batch exec_fn error key=" << key << ": " << e.what() << std::endl;
+                auto err = std::current_exception();
+                for (auto& setter : batch->setters) setter(err);
+            } catch (...) {
+                std::cout << "[DEBUG] Worker batch exec_fn unknown error key=" << key << std::endl;
+                auto err = std::current_exception();
+                for (auto& setter : batch->setters) setter(err);
+            }
+            return std::any();
+        };
+
         try {
-            this->submit([batch](raft_handle& handle) -> std::any {
-                try {
-                    batch->exec_fn(handle, batch->reqs, batch->setters);
-                } catch (...) {
-                    auto err = std::current_exception();
-                    for (auto& setter : batch->setters) setter(err);
-                }
-                return std::any();
-            });
+            if (mode_ == DistributionMode_SHARDED) {
+                this->submit_main(task_fn);
+            } else {
+                this->submit(task_fn);
+            }
         } catch (...) {
             auto err = std::current_exception();
             for (auto& setter : batch->setters) setter(err);
@@ -467,9 +463,6 @@ private:
     std::atomic<bool> running_;
     bool use_batching_;
     bool per_thread_device_;
-
-    std::thread batcher_thread_;
-    std::atomic<bool> batcher_running_{false};
 
     thread_safe_queue_t<cuvs_task_t> tasks_;
     thread_safe_queue_t<cuvs_task_t> main_tasks_;

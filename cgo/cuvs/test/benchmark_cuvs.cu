@@ -104,7 +104,7 @@ template<typename IndexT, typename SearchParamsT, typename T>
 void run_benchmark(const std::string& index_name, distribution_mode_t mode, 
                   IndexT& index, const std::vector<float>& dataset, const benchmark_config_t& cfg, const SearchParamsT& sp) {
     
-    for (bool batching : {false, true}) {
+    for (bool batching : {true}) {
         index.set_use_batching(batching);
         
         std::string full_name = index_name + "_" + mode_name(mode) + "_" + type_name<T>() + (batching ? "_BatchingON" : "_BatchingOFF");
