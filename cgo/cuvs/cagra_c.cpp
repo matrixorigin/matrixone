@@ -34,10 +34,30 @@ struct gpu_cagra_any_t {
     gpu_cagra_any_t(quantization_t q, void* p) : qtype(q), ptr(p) {}
     ~gpu_cagra_any_t() {
         switch (qtype) {
-            case Quantization_F32: delete static_cast<gpu_cagra_t<float>*>(ptr); break;
-            case Quantization_F16: delete static_cast<gpu_cagra_t<half>*>(ptr); break;
-            case Quantization_INT8: delete static_cast<gpu_cagra_t<int8_t>*>(ptr); break;
-            case Quantization_UINT8: delete static_cast<gpu_cagra_t<uint8_t>*>(ptr); break;
+            case Quantization_F32: {
+                auto* p = static_cast<gpu_cagra_t<float>*>(ptr);
+                p->destroy();
+                delete p;
+                break;
+            }
+            case Quantization_F16: {
+                auto* p = static_cast<gpu_cagra_t<half>*>(ptr);
+                p->destroy();
+                delete p;
+                break;
+            }
+            case Quantization_INT8: {
+                auto* p = static_cast<gpu_cagra_t<int8_t>*>(ptr);
+                p->destroy();
+                delete p;
+                break;
+            }
+            case Quantization_UINT8: {
+                auto* p = static_cast<gpu_cagra_t<uint8_t>*>(ptr);
+                p->destroy();
+                delete p;
+                break;
+            }
             default: break;
         }
     }
