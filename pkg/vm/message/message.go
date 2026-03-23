@@ -17,6 +17,7 @@ package message
 import (
 	"bytes"
 	"context"
+	"runtime"
 	"strconv"
 	"sync"
 	"time"
@@ -88,7 +89,12 @@ func NewMessageBoard() *MessageBoard {
 		waiters:  make([]chan bool, 0, 16),
 		rwMutex:  &sync.RWMutex{},
 	}
+	runtime.SetFinalizer(m, (*MessageBoard).finalize)
 	return m
+}
+
+func (m *MessageBoard) finalize() {
+	m.cleanupQueuedMessages()
 }
 
 func (m *MessageBoard) DebugString() string {
@@ -143,15 +149,32 @@ func (m *MessageBoard) Reset() *MessageBoard {
 	}
 	m.rwMutex.Lock()
 	defer m.rwMutex.Unlock()
-	for i := range m.messages {
-		message := *m.messages[i]
-		message.Destroy()
-	}
-	m.messages = m.messages[:0]
-	m.waiters = m.waiters[:0]
+	m.cleanupQueuedMessagesLocked()
 	m.multiCN = false
 	m.reset = true
 	return m
+}
+
+func (m *MessageBoard) cleanupQueuedMessages() {
+	if m == nil || m.rwMutex == nil {
+		return
+	}
+	m.rwMutex.Lock()
+	defer m.rwMutex.Unlock()
+	m.cleanupQueuedMessagesLocked()
+}
+
+func (m *MessageBoard) cleanupQueuedMessagesLocked() {
+	for i := range m.messages {
+		if m.messages[i] == nil {
+			continue
+		}
+		message := *m.messages[i]
+		message.Destroy()
+		m.messages[i] = nil
+	}
+	m.messages = m.messages[:0]
+	m.waiters = m.waiters[:0]
 }
 
 type MessageReceiver struct {
