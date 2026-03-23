@@ -263,22 +263,6 @@ func containsTag(expr *plan.Expr, tag int32) bool {
 	return ret
 }
 
-func containsTagCol(expr *plan.Expr, tag, colPos int32) bool {
-	var ret bool
-
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			ret = ret || containsTagCol(arg, tag, colPos)
-		}
-
-	case *plan.Expr_Col:
-		return exprImpl.Col.RelPos == tag && exprImpl.Col.ColPos == colPos
-	}
-
-	return ret
-}
-
 func replaceColRefs(expr *plan.Expr, tag int32, projects []*plan.Expr) *plan.Expr {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:

@@ -1915,6 +1915,8 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetCreateIndex()
+	tempIndexNameMap := map[string]string{}
+	var tempTableSession process.Session
 
 	if qry.GetTableDef().GetIsTemporary() {
 		session := c.proc.GetSession()
@@ -1939,6 +1941,18 @@ func (s *Scope) CreateIndex(c *Compile) error {
 			if renamed, ok := indexNameMap[idx.IndexTableName]; ok {
 				idx.IndexTableName = renamed
 			}
+		}
+		tempIndexNameMap = indexNameMap
+		tempTableSession = session
+	}
+	registerTempIndexAliases := func() {
+		if tempTableSession == nil {
+			return
+		}
+		for alias, realName := range tempIndexNameMap {
+			// Register temp index aliases after DDL succeeds, so failed
+			// CREATE INDEX does not leave stale session mappings.
+			tempTableSession.AddTempTable(qry.Database, alias, realName)
 		}
 	}
 	{
@@ -1970,7 +1984,11 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	ps := c.proc.GetPartitionService()
 	if !ps.Enabled() ||
 		!features.IsPartitioned(r.GetExtraInfo().FeatureFlag) {
-		return s.doCreateIndex(c, qry, dbSource, r)
+		if err := s.doCreateIndex(c, qry, dbSource, r); err != nil {
+			return err
+		}
+		registerTempIndexAliases()
+		return nil
 	}
 
 	metadata, err := ps.GetPartitionMetadata(
@@ -2002,6 +2020,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 			return err
 		}
 	}
+	registerTempIndexAliases()
 	return nil
 }
 
@@ -2315,6 +2334,12 @@ func (s *Scope) DropIndex(c *Compile) error {
 
 		if err = d.Delete(c.proc.Ctx, indexTableName); err != nil {
 			return err
+		}
+
+		if oldTableDef.GetIsTemporary() {
+			if session := c.proc.GetSession(); session != nil {
+				session.RemoveTempTableByRealName(indexTableName)
+			}
 		}
 	}
 
@@ -2933,6 +2958,12 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 
 		if err := dbSource.Delete(c.proc.Ctx, name); err != nil {
 			return err
+		}
+
+		if isTemp {
+			if sess := c.proc.GetSession(); sess != nil {
+				sess.RemoveTempTableByRealName(name)
+			}
 		}
 
 	}

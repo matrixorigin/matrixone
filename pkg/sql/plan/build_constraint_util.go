@@ -322,10 +322,16 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 
 	nowIdx := len(tblInfo.tableDefs)
 	tblInfo.isClusterTable = append(tblInfo.isClusterTable, isClusterTable)
+	objName := tblName
+	if obj != nil && obj.ObjName != "" {
+		// Use resolved object name in DML refs so INSERT/UPDATE/DELETE share
+		// the same physical-name view (especially for temporary tables).
+		objName = obj.ObjName
+	}
 	tblInfo.objRef = append(tblInfo.objRef, &ObjectRef{
 		Obj:        int64(tableDef.TblId),
 		SchemaName: dbName,
-		ObjName:    tblName,
+		ObjName:    objName,
 	})
 	tblInfo.tableDefs = append(tblInfo.tableDefs, tableDef)
 	key := dbName + "." + tblName

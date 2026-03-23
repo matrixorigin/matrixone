@@ -76,9 +76,10 @@ type SqlProcess struct {
 
 	// Optional RuntimeFilterSpec
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
-	// Optional BloomFilter bytes attached by vector index runtime.
-	// Used to drive additional filtering in internal SQL executor (e.g. ivf entries scan).
-	BloomFilter []byte
+	// Optional BloomFilter bytes for ivf entries scan.
+	IvfBloomFilter []byte
+	// Optional BloomFilter bytes for fulltext index scan.
+	FulltextBloomFilter []byte
 	// Optional exact primary-key filter list (SQL literals, comma-separated).
 	// When set, ivf_search uses it to build "pk IN (...)" and skip centroid filtering.
 	ExactPkFilter string
@@ -130,21 +131,16 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 
 		//-------------------------------------------------------
 		topContext := proc.GetTopContext()
-		// Attach optional Ivf BloomFilter to context for internal executor.
-		if len(sqlproc.BloomFilter) > 0 {
-			topContext = context.WithValue(
-				topContext,
-				defines.IvfBloomFilter{},
-				sqlproc.BloomFilter,
-			)
+		// Attach optional BloomFilter to context for internal executor.
+		if len(sqlproc.IvfBloomFilter) > 0 {
+			topContext = context.WithValue(topContext, defines.IvfBloomFilter{}, sqlproc.IvfBloomFilter)
+		}
+		if len(sqlproc.FulltextBloomFilter) > 0 {
+			topContext = context.WithValue(topContext, defines.FulltextBloomFilter{}, sqlproc.FulltextBloomFilter)
 		}
 		// Attach optional DistRange to context for internal executor.
 		if sqlproc.IndexReaderParam != nil {
-			topContext = context.WithValue(
-				topContext,
-				defines.IvfReaderParam{},
-				sqlproc.IndexReaderParam,
-			)
+			topContext = context.WithValue(topContext, defines.IvfReaderParam{}, sqlproc.IndexReaderParam)
 		}
 		accountId, err := defines.GetAccountId(proc.Ctx)
 		if err != nil {
@@ -205,6 +201,13 @@ func RunStreamingSql(
 		}
 
 		//-------------------------------------------------------
+		// Attach optional BloomFilter to context for internal executor.
+		if len(sqlproc.IvfBloomFilter) > 0 {
+			ctx = context.WithValue(ctx, defines.IvfBloomFilter{}, sqlproc.IvfBloomFilter)
+		}
+		if len(sqlproc.FulltextBloomFilter) > 0 {
+			ctx = context.WithValue(ctx, defines.FulltextBloomFilter{}, sqlproc.FulltextBloomFilter)
+		}
 		accountId, err := defines.GetAccountId(proc.Ctx)
 		if err != nil {
 			return executor.Result{}, err
