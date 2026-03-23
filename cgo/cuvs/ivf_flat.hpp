@@ -697,6 +697,8 @@ public:
         std::unique_lock<std::shared_mutex> lock(this->mutex_);
         index_.reset();
         mg_index_.reset();
+        this->replicated_indices_.clear();
+        this->replicated_datasets_.clear();
         this->quantizer_.reset();
         this->dataset_device_ptr_.reset();
     }
