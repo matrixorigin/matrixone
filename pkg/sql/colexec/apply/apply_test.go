@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -51,10 +52,14 @@ func TestNilTableFunctionLifecycle(t *testing.T) {
 	arg := NewArgument()
 
 	err := arg.Prepare(proc)
-	require.ErrorContains(t, err, "apply table function is nil")
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState))
+	require.ErrorContains(t, err, "apply operator missing table function")
 
 	_, err = arg.Call(proc)
-	require.ErrorContains(t, err, "apply table function is nil")
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState))
+	require.ErrorContains(t, err, "apply operator missing table function")
 
 	require.NotPanics(t, func() {
 		arg.Reset(proc, false, nil)

@@ -53,7 +53,7 @@ func (apply *Apply) Prepare(proc *process.Process) (err error) {
 	}
 
 	if apply.TableFunction == nil {
-		return moerr.NewInternalError(proc.Ctx, "apply table function is nil")
+		return moerr.NewInvalidState(proc.Ctx, "apply operator missing table function")
 	}
 
 	err = apply.TableFunction.ApplyPrepare(proc)
@@ -65,7 +65,7 @@ func (apply *Apply) Prepare(proc *process.Process) (err error) {
 
 func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
 	if apply.TableFunction == nil {
-		return vm.CancelResult, moerr.NewInternalError(proc.Ctx, "apply table function is nil")
+		return vm.CancelResult, moerr.NewInvalidState(proc.Ctx, "apply operator missing table function")
 	}
 
 	analyzer := apply.OpAnalyzer
