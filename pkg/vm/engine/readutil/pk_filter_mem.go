@@ -239,10 +239,20 @@ func NewMemPKFilter(
 	if filter.FilterHint.BF != nil && filter.FilterHint.BF.Valid() {
 		filter.HasBF = true
 		filter.BFSeqNum = -1
+		// For IVF entries table, use __mo_index_pri_col for BF filtering.
 		for _, col := range tableDef.Cols {
 			if col.Name == catalog.IndexTablePrimaryColName {
 				filter.BFSeqNum = int16(col.Seqnum)
 				break
+			}
+		}
+		// For fulltext index table, use doc_id column for BF filtering.
+		if filter.BFSeqNum == -1 && catalog.IsFullTextIndexTableType(tableDef.TableType, tableDef.Name) {
+			for _, col := range tableDef.Cols {
+				if col.Name == catalog.FullTextIndex_TabCol_Id {
+					filter.BFSeqNum = int16(col.Seqnum)
+					break
+				}
 			}
 		}
 	}
