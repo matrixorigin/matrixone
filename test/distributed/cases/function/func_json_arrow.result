@@ -96,3 +96,314 @@ SELECT a ->> '$[3]' AS no_quotes, a ->> '$[4][1]' AS nested_unquote FROM tj_mixe
 17  ¦  y  𝄀
 x  ¦  null
 DROP TABLE tj_mixed;
+drop table if exists jt;
+create table jt(id int primary key, doc json);
+insert into jt values (1, '{"name": "alice", "age": 30}');
+select doc -> '$.name' from jt where id = 1;
+➤ doc -> '$.name'[-1,-1,0]  𝄀
+"alice"
+select json_extract(doc, '$.name') from jt where id = 1;
+➤ json_extract(doc, '$.name')[-1,-1,0]  𝄀
+"alice"
+select doc -> '$.age' from jt where id = 1;
+➤ doc -> '$.age'[-1,-1,0]  𝄀
+30
+truncate table jt;
+insert into jt values (1, '{"user": {"name": "bob", "addr": {"city": "beijing", "zip": "100000"}}}');
+select doc -> '$.user.name' from jt where id = 1;
+➤ doc -> '$.user.name'[-1,-1,0]  𝄀
+"bob"
+select doc -> '$.user.addr.city' from jt where id = 1;
+➤ doc -> '$.user.addr.city'[-1,-1,0]  𝄀
+"beijing"
+select doc -> '$.user.addr' from jt where id = 1;
+➤ doc -> '$.user.addr'[-1,-1,0]  𝄀
+{"city": "beijing", "zip": "100000"}
+truncate table jt;
+insert into jt values (1, '{"arr": [10, 20, 30], "nested": [[1,2],[3,4]]}');
+select doc -> '$.arr' from jt where id = 1;
+➤ doc -> '$.arr'[-1,-1,0]  𝄀
+[10, 20, 30]
+select doc -> '$.arr[0]' from jt where id = 1;
+➤ doc -> '$.arr[0]'[-1,-1,0]  𝄀
+10
+select doc -> '$.arr[2]' from jt where id = 1;
+➤ doc -> '$.arr[2]'[-1,-1,0]  𝄀
+30
+select doc -> '$.nested[0][1]' from jt where id = 1;
+➤ doc -> '$.nested[0][1]'[-1,-1,0]  𝄀
+2
+select doc -> '$.nonexistent' from jt where id = 1;
+➤ doc -> '$.nonexistent'[-1,-1,0]  𝄀
+null
+select doc -> '$.arr[99]' from jt where id = 1;
+➤ doc -> '$.arr[99]'[-1,-1,0]  𝄀
+null
+truncate table jt;
+insert into jt values (1, '{"str": "hello", "num": 42, "flt": 3.14, "bool_t": true, "bool_f": false, "nil": null}');
+select doc -> '$.str' from jt where id = 1;
+➤ doc -> '$.str'[-1,-1,0]  𝄀
+"hello"
+select doc -> '$.num' from jt where id = 1;
+➤ doc -> '$.num'[-1,-1,0]  𝄀
+42
+select doc -> '$.flt' from jt where id = 1;
+➤ doc -> '$.flt'[-1,-1,0]  𝄀
+3.14
+select doc -> '$.bool_t' from jt where id = 1;
+➤ doc -> '$.bool_t'[-1,-1,0]  𝄀
+true
+select doc -> '$.bool_f' from jt where id = 1;
+➤ doc -> '$.bool_f'[-1,-1,0]  𝄀
+false
+select doc -> '$.nil' from jt where id = 1;
+➤ doc -> '$.nil'[-1,-1,0]  𝄀
+null
+truncate table jt;
+insert into jt values (1, '{"status": "active", "score": 90}');
+insert into jt values (2, '{"status": "inactive", "score": 60}');
+insert into jt values (3, '{"status": "active", "score": 85}');
+select id from jt where doc -> '$.score' > 80 order by id;
+➤ id[4,11,0]  𝄀
+1  𝄀
+3
+truncate table jt;
+insert into jt values (1, '{"tags": ["go", "rust", "python"]}');
+truncate table jt;
+insert into jt values (1, '{}');
+insert into jt values (2, '[]');
+select doc -> '$.anything' from jt where id = 1;
+➤ doc -> '$.anything'[-1,-1,0]  𝄀
+null
+select doc -> '$[0]' from jt where id = 2;
+➤ doc -> '$[0]'[-1,-1,0]  𝄀
+null
+truncate table jt;
+insert into jt values (1, '{"a":{"b":{"c":{"d":{"e":"deep"}}}}}');
+select doc -> '$.a.b.c.d.e' from jt where id = 1;
+➤ doc -> '$.a.b.c.d.e'[-1,-1,0]  𝄀
+"deep"
+truncate table jt;
+insert into jt values (1, '{"key with space": 1, "key-dash": 2}');
+select doc -> '$."key with space"' from jt where id = 1;
+➤ doc -> '$."key with space"'[-1,-1,0]  𝄀
+1
+select doc -> '$."key-dash"' from jt where id = 1;
+➤ doc -> '$."key-dash"'[-1,-1,0]  𝄀
+2
+truncate table jt;
+insert into jt values (1, concat('{"big": "', repeat('x', 10000), '"}'));
+truncate table jt;
+insert into jt values (1, null);
+select doc -> '$.key' from jt where id = 1;
+➤ doc -> '$.key'[-1,-1,0]  𝄀
+null
+drop table jt;
+drop table if exists jt2;
+create table jt2(id int primary key, doc json);
+insert into jt2 values (1, '{"name": "alice", "age": 30}');
+select doc -> '$.name' from jt2 where id = 1;
+➤ doc -> '$.name'[-1,-1,0]  𝄀
+"alice"
+select doc ->> '$.name' from jt2 where id = 1;
+➤ doc ->> '$.name'[-1,-1,0]  𝄀
+alice
+select json_unquote(json_extract(doc, '$.name')) from jt2 where id = 1;
+➤ json_unquote(json_extract(doc, '$.name'))[-1,-1,0]  𝄀
+alice
+select doc ->> '$.age' from jt2 where id = 1;
+➤ doc ->> '$.age'[-1,-1,0]  𝄀
+30
+truncate table jt2;
+insert into jt2 values (1, '{"user": {"name": "bob", "addr": {"city": "shanghai"}}}');
+select doc ->> '$.user.name' from jt2 where id = 1;
+➤ doc ->> '$.user.name'[-1,-1,0]  𝄀
+bob
+select doc ->> '$.user.addr.city' from jt2 where id = 1;
+➤ doc ->> '$.user.addr.city'[-1,-1,0]  𝄀
+shanghai
+select doc ->> '$.user.addr' from jt2 where id = 1;
+➤ doc ->> '$.user.addr'[-1,-1,0]  𝄀
+{"city": "shanghai"}
+truncate table jt2;
+insert into jt2 values (1, '{"arr": ["hello", "world"], "nums": [1, 2, 3]}');
+select doc ->> '$.arr[0]' from jt2 where id = 1;
+➤ doc ->> '$.arr[0]'[-1,-1,0]  𝄀
+hello
+select doc ->> '$.arr[1]' from jt2 where id = 1;
+➤ doc ->> '$.arr[1]'[-1,-1,0]  𝄀
+world
+select doc ->> '$.nums[0]' from jt2 where id = 1;
+➤ doc ->> '$.nums[0]'[-1,-1,0]  𝄀
+1
+select doc ->> '$.nonexistent' from jt2 where id = 1;
+➤ doc ->> '$.nonexistent'[-1,-1,0]  𝄀
+null
+truncate table jt2;
+insert into jt2 values (1, '{"str": "hello", "num": 42, "flt": 3.14, "bool_t": true, "bool_f": false, "nil": null}');
+select doc ->> '$.str' from jt2 where id = 1;
+➤ doc ->> '$.str'[-1,-1,0]  𝄀
+hello
+select doc ->> '$.num' from jt2 where id = 1;
+➤ doc ->> '$.num'[-1,-1,0]  𝄀
+42
+select doc ->> '$.flt' from jt2 where id = 1;
+➤ doc ->> '$.flt'[-1,-1,0]  𝄀
+3.14
+select doc ->> '$.bool_t' from jt2 where id = 1;
+➤ doc ->> '$.bool_t'[-1,-1,0]  𝄀
+true
+select doc ->> '$.bool_f' from jt2 where id = 1;
+➤ doc ->> '$.bool_f'[-1,-1,0]  𝄀
+false
+select doc ->> '$.nil' from jt2 where id = 1;
+➤ doc ->> '$.nil'[-1,-1,0]  𝄀
+null
+truncate table jt2;
+insert into jt2 values (1, '{"status": "active", "score": 90}');
+insert into jt2 values (2, '{"status": "inactive", "score": 60}');
+insert into jt2 values (3, '{"status": "active", "score": 85}');
+select id from jt2 where doc ->> '$.status' = 'active' order by id;
+➤ id[4,11,0]  𝄀
+1  𝄀
+3
+select id, doc ->> '$.score' as score from jt2 order by doc ->> '$.score' desc;
+➤ id[4,11,0]  ¦  score[-1,-1,0]  𝄀
+1  ¦  90  𝄀
+3  ¦  85  𝄀
+2  ¦  60
+truncate table jt2;
+insert into jt2 values (1, '{"msg": "hello\\nworld", "path": "c:\\\\temp"}');
+select doc ->> '$.msg' from jt2 where id = 1;
+➤ doc ->> '$.msg'[-1,-1,0]  𝄀
+hello
+world
+truncate table jt2;
+insert into jt2 values (1, '{"cn": "中文测试", "emoji": "🎉"}');
+select doc ->> '$.cn' from jt2 where id = 1;
+➤ doc ->> '$.cn'[-1,-1,0]  𝄀
+中文测试
+select doc ->> '$.emoji' from jt2 where id = 1;
+➤ doc ->> '$.emoji'[-1,-1,0]  𝄀
+🎉
+truncate table jt2;
+insert into jt2 values (1, '{"empty": ""}');
+select doc ->> '$.empty' from jt2 where id = 1;
+➤ doc ->> '$.empty'[-1,-1,0]  𝄀
+
+truncate table jt2;
+insert into jt2 values (1, '{"a":{"b":{"c":{"d":{"e":"deep_value"}}}}}');
+select doc ->> '$.a.b.c.d.e' from jt2 where id = 1;
+➤ doc ->> '$.a.b.c.d.e'[-1,-1,0]  𝄀
+deep_value
+truncate table jt2;
+insert into jt2 values (1, null);
+select doc ->> '$.key' from jt2 where id = 1;
+➤ doc ->> '$.key'[-1,-1,0]  𝄀
+null
+drop table jt2;
+drop table if exists json_constrained;
+create table json_constrained(
+id int primary key auto_increment,
+doc json not null,
+label varchar(50) default 'none',
+created_at timestamp default current_timestamp
+);
+insert into json_constrained(doc, label) values ('{"k": "v1"}', 'first');
+insert into json_constrained(doc, label) values ('{"k": "v2"}', 'second');
+insert into json_constrained(doc) values ('{"k": "v3"}');
+select id, doc -> '$.k' as jval from json_constrained order by id;
+➤ id[4,11,0]  ¦  jval[-1,-1,0]  𝄀
+1  ¦  "v1"  𝄀
+2  ¦  "v2"  𝄀
+3  ¦  "v3"
+select id, doc ->> '$.k' as jval, label from json_constrained order by id;
+➤ id[4,11,0]  ¦  jval[-1,-1,0]  ¦  label[12,50,0]  𝄀
+1  ¦  v1  ¦  first  𝄀
+2  ¦  v2  ¦  second  𝄀
+3  ¦  v3  ¦  none
+drop table json_constrained;
+create temporary table tmp_json(id int, doc json);
+insert into tmp_json values (1, '{"temp": true}');
+select doc -> '$.temp' from tmp_json;
+➤ doc -> '$.temp'[-1,-1,0]  𝄀
+true
+select doc ->> '$.temp' from tmp_json;
+➤ doc ->> '$.temp'[-1,-1,0]  𝄀
+true
+drop table tmp_json;
+drop table if exists orders;
+drop table if exists customers;
+create table customers(id int primary key, info json);
+create table orders(id int primary key, cust_id int, detail json);
+insert into customers values (1, '{"name": "alice", "vip": true}');
+insert into customers values (2, '{"name": "bob", "vip": false}');
+insert into orders values (1, 1, '{"product": "laptop", "price": 999}');
+insert into orders values (2, 1, '{"product": "mouse", "price": 29}');
+insert into orders values (3, 2, '{"product": "keyboard", "price": 79}');
+select c.info ->> '$.name' as customer,
+o.detail ->> '$.product' as product,
+o.detail ->> '$.price' as price
+from customers c
+join orders o on c.id = o.cust_id
+order by c.id, o.id;
+➤ customer[-1,-1,0]  ¦  product[-1,-1,0]  ¦  price[-1,-1,0]  𝄀
+alice  ¦  laptop  ¦  999  𝄀
+alice  ¦  mouse  ¦  29  𝄀
+bob  ¦  keyboard  ¦  79
+drop table if exists orders;
+drop table if exists customers;
+drop table if exists sub_json;
+create table sub_json(id int primary key, doc json);
+insert into sub_json values (1, '{"score": 90}');
+insert into sub_json values (2, '{"score": 60}');
+insert into sub_json values (3, '{"score": 85}');
+select id from sub_json where cast(doc ->> '$.score' as decimal) > (select avg(cast(doc ->> '$.score' as decimal)) from sub_json) order by id;
+➤ id[4,11,0]  𝄀
+1  𝄀
+3
+drop table sub_json;
+drop table if exists grp_json;
+create table grp_json(id int primary key, doc json);
+insert into grp_json values (1, '{"dept": "eng", "salary": 100}');
+insert into grp_json values (2, '{"dept": "eng", "salary": 120}');
+insert into grp_json values (3, '{"dept": "sales", "salary": 80}');
+insert into grp_json values (4, '{"dept": "sales", "salary": 90}');
+select doc ->> '$.dept' as dept, count(*) as cnt, sum(cast(doc ->> '$.salary' as decimal)) as total
+from grp_json
+group by doc ->> '$.dept'
+order by dept;
+➤ dept[-1,-1,0]  ¦  cnt[-5,21,0]  ¦  total[3,32,0]  𝄀
+eng  ¦  2  ¦  220  𝄀
+sales  ¦  2  ¦  170
+drop table grp_json;
+drop table if exists jc1;
+drop table if exists jc2;
+drop table if exists jc3;
+create table jc1(id int primary key, data json);
+create table jc2(id int primary key, info json);
+create table jc3(id int primary key, meta json);
+insert into jc1 values (1, '{"type": "A", "val": 100}');
+insert into jc2 values (1, '{"type": "B", "val": 200}');
+insert into jc3 values (1, '{"type": "C", "val": 300}');
+select data -> '$.type' from jc1;
+➤ data -> '$.type'[-1,-1,0]  𝄀
+"A"
+select info ->> '$.type' from jc2;
+➤ info ->> '$.type'[-1,-1,0]  𝄀
+B
+select meta ->> '$.val' from jc3;
+➤ meta ->> '$.val'[-1,-1,0]  𝄀
+300
+drop table jc1, jc2, jc3;
+drop table if exists jc1;
+drop table if exists jc2;
+drop table if exists jc3;
+drop table if exists jt_diff;
+create table jt_diff(id int primary key, doc json);
+insert into jt_diff values (1, '{"status": "active", "score": 90}');
+insert into jt_diff values (2, '{"status": "inactive", "score": 60}');
+insert into jt_diff values (3, '{"status": "active", "score": 85}');
+select id from jt_diff where doc -> '$.status' = '"active"' order by id;
+➤ id[4,11,0]
+drop table if exists jt_diff;
