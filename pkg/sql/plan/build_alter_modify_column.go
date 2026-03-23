@@ -147,7 +147,7 @@ func checkChangeTypeCompatible(
 		return nil
 	}
 	// The enumeration type has an independent cast function to handle it
-	if isEnumPlanType(origin) || isEnumPlanType(to) || isSetPlanType(origin) || isSetPlanType(to) {
+	if origin.Id == int32(types.T_enum) || to.Id == int32(types.T_enum) || isSetPlanType(origin) || isSetPlanType(to) {
 		return nil
 	}
 
