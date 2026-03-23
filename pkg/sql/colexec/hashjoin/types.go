@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -101,18 +102,22 @@ type container struct {
 	spillThreshold int64
 
 	// state for processing current bucket
-	probeBucketReader   *spillBucketReader
+	probeBucketReader   *spillBucketReader // reused across buckets; buffer allocated once
 	probeBucketFileName string
+	spillBuildReader    *spillBucketReader // reused for build file (and probe in reSpillBucket)
+	spillFS             fileservice.MutableFileService // cached once; avoids repeated registry lookups
 
 	// reusable buffers for spill operations
-	spillHashValues     []uint64
-	spillBucketRowIds   [][]int32
-	spillWriteBuf       bytes.Buffer
-	spillBuildReadBatch *batch.Batch
-	spillProbeReadBatch *batch.Batch
-	spillHashBuf        []byte
-	spillBuildSubBufs   []*batch.Batch
-	spillProbeSubBufs   []*batch.Batch
+	spillHashValues      []uint64
+	spillBucketRowIds    [][]int32
+	spillNonEmptyBuckets []int
+	spillKeyVecs         []*vector.Vector
+	spillWriteBuf        bytes.Buffer
+	spillBuildReadBatch  *batch.Batch
+	spillProbeReadBatch  *batch.Batch
+	spillHashBuf         []byte
+	spillBuildSubBufs    []*batch.Batch
+	spillProbeSubBufs    []*batch.Batch
 
 	// cached expression executors for re-spill (reused across batches)
 	spillBuildExprExecs []colexec.ExpressionExecutor

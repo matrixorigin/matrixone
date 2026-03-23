@@ -48,7 +48,8 @@ func TestRebuildHashmapForBucket(t *testing.T) {
 	require.NoError(t, err)
 
 	ctr := &container{}
-	_, err = ctr.flushBucketBuffer(proc, buildBat, buildFile, analyzer)
+	buildFile_sw := spillBucketWriter{file: buildFile}
+	_, err = ctr.flushBucketBuffer(proc, buildBat, &buildFile_sw, analyzer)
 	require.NoError(t, err)
 	buildFile.Close()
 
@@ -86,7 +87,7 @@ func TestRebuildHashmapForBucket(t *testing.T) {
 	}
 
 	// Call rebuildHashmapForBucket
-	jm, err := hashJoin.rebuildHashmapForBucket(proc, bucket, analyzer)
+	jm, _, err := hashJoin.rebuildHashmapForBucket(proc, bucket, analyzer)
 	require.NoError(t, err)
 	require.NotNil(t, jm, "should return a JoinMap when no re-spill occurs")
 	require.Equal(t, int64(100), jm.GetRowCount())
@@ -136,14 +137,16 @@ func TestReSpillBucket(t *testing.T) {
 	require.NoError(t, err)
 
 	ctr := &container{}
-	_, err = ctr.flushBucketBuffer(proc, buildBat, buildFile, analyzer)
+	buildFile_sw := spillBucketWriter{file: buildFile}
+	_, err = ctr.flushBucketBuffer(proc, buildBat, &buildFile_sw, analyzer)
 	require.NoError(t, err)
 	buildFile.Close()
 
 	probeBucketName := "test_respill_probe"
 	probeFile, err := spillfs.CreateFile(context.Background(), probeBucketName)
 	require.NoError(t, err)
-	_, err = ctr.flushBucketBuffer(proc, probeBat, probeFile, analyzer)
+	probeFile_sw := spillBucketWriter{file: probeFile}
+	_, err = ctr.flushBucketBuffer(proc, probeBat, &probeFile_sw, analyzer)
 	require.NoError(t, err)
 	probeFile.Close()
 
@@ -190,7 +193,7 @@ func TestReSpillBucket(t *testing.T) {
 	hashJoin.ctr.spillThreshold = 1000 // 1KB - will definitely trigger re-spill
 
 	// Call rebuildHashmapForBucket - should trigger re-spill
-	jm, err := hashJoin.rebuildHashmapForBucket(proc, bucket, analyzer)
+	jm, _, err := hashJoin.rebuildHashmapForBucket(proc, bucket, analyzer)
 	require.NoError(t, err)
 	require.Nil(t, jm, "should return nil when re-spilling occurs")
 
@@ -200,11 +203,13 @@ func TestReSpillBucket(t *testing.T) {
 
 	// Verify sub-bucket files exist
 	subBucket := hashJoin.ctr.spillQueue[0]
-	buildReader, err := newSpillBucketReader(proc, subBucket.buildFile)
+	buildReader := &spillBucketReader{}
+	err = buildReader.resetForFile(proc.Ctx, spillfs, subBucket.buildFile)
 	require.NoError(t, err)
 	buildReader.close()
 
-	probeReader, err := newSpillBucketReader(proc, subBucket.probeFile)
+	probeReader := &spillBucketReader{}
+	err = probeReader.resetForFile(proc.Ctx, spillfs, subBucket.probeFile)
 	require.NoError(t, err)
 	probeReader.close()
 
@@ -240,14 +245,16 @@ func TestReSpillBucketDepthLimit(t *testing.T) {
 	require.NoError(t, err)
 
 	ctr := &container{}
-	_, err = ctr.flushBucketBuffer(proc, buildBat, buildFile, analyzer)
+	buildFile_sw := spillBucketWriter{file: buildFile}
+	_, err = ctr.flushBucketBuffer(proc, buildBat, &buildFile_sw, analyzer)
 	require.NoError(t, err)
 	buildFile.Close()
 
 	probeBucketName := "test_depth_limit_probe"
 	probeFile, err := spillfs.CreateFile(context.Background(), probeBucketName)
 	require.NoError(t, err)
-	_, err = ctr.flushBucketBuffer(proc, probeBat, probeFile, analyzer)
+	probeFile_sw := spillBucketWriter{file: probeFile}
+	_, err = ctr.flushBucketBuffer(proc, probeBat, &probeFile_sw, analyzer)
 	require.NoError(t, err)
 	probeFile.Close()
 
@@ -285,7 +292,7 @@ func TestReSpillBucketDepthLimit(t *testing.T) {
 	hashJoin.ctr.spillThreshold = 1000
 
 	// Call rebuildHashmapForBucket
-	jm, err := hashJoin.rebuildHashmapForBucket(proc, bucket, analyzer)
+	jm, _, err := hashJoin.rebuildHashmapForBucket(proc, bucket, analyzer)
 	require.NoError(t, err)
 	require.NotNil(t, jm, "should return JoinMap even if memory exceeds threshold at max depth")
 	require.Equal(t, 0, len(hashJoin.ctr.spillQueue), "should not create sub-buckets at max depth")
@@ -329,14 +336,16 @@ func TestMultiLevelSpillIntegration(t *testing.T) {
 	require.NoError(t, err)
 
 	ctr := &container{}
-	_, err = ctr.flushBucketBuffer(proc, buildBat, buildFile, analyzer)
+	buildFile_sw := spillBucketWriter{file: buildFile}
+	_, err = ctr.flushBucketBuffer(proc, buildBat, &buildFile_sw, analyzer)
 	require.NoError(t, err)
 	buildFile.Close()
 
 	probeBucketName := "test_multilevel_probe"
 	probeFile, err := spillfs.CreateFile(context.Background(), probeBucketName)
 	require.NoError(t, err)
-	_, err = ctr.flushBucketBuffer(proc, probeBat, probeFile, analyzer)
+	probeFile_sw := spillBucketWriter{file: probeFile}
+	_, err = ctr.flushBucketBuffer(proc, probeBat, &probeFile_sw, analyzer)
 	require.NoError(t, err)
 	probeFile.Close()
 
@@ -373,7 +382,7 @@ func TestMultiLevelSpillIntegration(t *testing.T) {
 	hashJoin.ctr.spillThreshold = 2000 // 2KB
 
 	// First rebuild - should re-spill
-	jm, err := hashJoin.rebuildHashmapForBucket(proc, bucket, analyzer)
+	jm, _, err := hashJoin.rebuildHashmapForBucket(proc, bucket, analyzer)
 	require.NoError(t, err)
 	require.Nil(t, jm, "first rebuild should re-spill")
 	require.Greater(t, len(hashJoin.ctr.spillQueue), 0)
@@ -385,7 +394,7 @@ func TestMultiLevelSpillIntegration(t *testing.T) {
 	subBucket := hashJoin.ctr.spillQueue[0]
 	hashJoin.ctr.spillQueue = hashJoin.ctr.spillQueue[1:]
 
-	jm2, err := hashJoin.rebuildHashmapForBucket(proc, subBucket, analyzer)
+	jm2, _, err := hashJoin.rebuildHashmapForBucket(proc, subBucket, analyzer)
 	require.NoError(t, err)
 	// jm2 might be nil (re-spilled) or non-nil (fits in memory) depending on data distribution
 
