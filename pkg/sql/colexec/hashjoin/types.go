@@ -16,6 +16,8 @@ package hashjoin
 
 import (
 	"bytes"
+	"context"
+	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -44,8 +46,9 @@ const (
 )
 
 type spillBucket struct {
-	buildFile string
-	probeFile string
+	buildFile string   // named file from hashbuild (level 0 only)
+	buildFd   *os.File // fd-based build file (levels 1+); nil if level 0
+	probeFd   *os.File // fd-based probe file (all levels); nil = empty probe
 	depth     int
 }
 
@@ -102,10 +105,10 @@ type container struct {
 	spillThreshold int64
 
 	// state for processing current bucket
-	probeBucketReader   *spillBucketReader // reused across buckets; buffer allocated once
-	probeBucketFileName string
-	spillBuildReader    *spillBucketReader // reused for build file (and probe in reSpillBucket)
-	spillFS             fileservice.MutableFileService // cached once; avoids repeated registry lookups
+	probeBucketReader  *spillBucketReader // reused across buckets; buffer allocated once
+	probeBucketActive  bool               // true while reading a probe file
+	spillBuildReader   *spillBucketReader // reused for build file (and probe in reSpillBucket)
+	spillFS            fileservice.MutableFileService // cached once; avoids repeated registry lookups
 
 	// reusable buffers for spill operations
 	spillHashValues      []uint64
@@ -224,13 +227,29 @@ func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err e
 }
 
 func (ctr *container) cleanupSpillFiles(proc *process.Process) {
-	spillfs, err := proc.GetSpillFileService()
-	if err != nil {
+	if ctr.probeBucketActive && ctr.probeBucketReader != nil {
+		ctr.probeBucketReader.close()
+		ctr.probeBucketActive = false
+	}
+	if len(ctr.spillQueue) == 0 {
 		return
 	}
+	var spillfs fileservice.MutableFileService
 	for _, sb := range ctr.spillQueue {
-		spillfs.Delete(proc.Ctx, sb.buildFile)
-		spillfs.Delete(proc.Ctx, sb.probeFile)
+		if sb.buildFile != "" {
+			if spillfs == nil {
+				spillfs, _ = proc.GetSpillFileService()
+			}
+			if spillfs != nil {
+				spillfs.RemoveFile(context.Background(), sb.buildFile)
+			}
+		}
+		if sb.buildFd != nil {
+			sb.buildFd.Close()
+		}
+		if sb.probeFd != nil {
+			sb.probeFd.Close()
+		}
 	}
 	ctr.spillQueue = nil
 }
@@ -269,12 +288,7 @@ func (ctr *container) cleanBucketBatches(proc *process.Process) {
 	if ctr.probeBucketReader != nil {
 		ctr.probeBucketReader.close()
 		ctr.probeBucketReader = nil
-		if ctr.probeBucketFileName != "" {
-			if spillfs, err := proc.GetSpillFileService(); err == nil {
-				spillfs.Delete(proc.Ctx, ctr.probeBucketFileName)
-			}
-			ctr.probeBucketFileName = ""
-		}
+		ctr.probeBucketActive = false
 	}
 	if ctr.spillBuildReadBatch != nil {
 		ctr.spillBuildReadBatch.Clean(proc.Mp())

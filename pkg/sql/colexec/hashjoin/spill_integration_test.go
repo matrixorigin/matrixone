@@ -53,12 +53,6 @@ func TestRebuildHashmapForBucket(t *testing.T) {
 	require.NoError(t, err)
 	buildFile.Close()
 
-	// Create probe spill file (empty for this test)
-	probeBucketName := "test_rebuild_probe"
-	probeFile, err := spillfs.CreateFile(context.Background(), probeBucketName)
-	require.NoError(t, err)
-	probeFile.Close()
-
 	// Setup HashJoin with EqConds
 	hashJoin := &HashJoin{
 		EqConds: [][]*plan.Expr{
@@ -82,7 +76,7 @@ func TestRebuildHashmapForBucket(t *testing.T) {
 
 	bucket := spillBucket{
 		buildFile: buildBucketName,
-		probeFile: probeBucketName,
+		probeFd:   nil, // empty probe
 		depth:     0,
 	}
 
@@ -108,8 +102,6 @@ func TestRebuildHashmapForBucket(t *testing.T) {
 	_, err = spillfs.OpenFile(context.Background(), buildBucketName)
 	require.Error(t, err, "build file should be deleted after rebuild")
 
-	// Cleanup
-	spillfs.Delete(context.Background(), probeBucketName)
 }
 
 // TestReSpillBucket tests the re-spilling logic when memory threshold is exceeded
@@ -143,12 +135,12 @@ func TestReSpillBucket(t *testing.T) {
 	buildFile.Close()
 
 	probeBucketName := "test_respill_probe"
-	probeFile, err := spillfs.CreateFile(context.Background(), probeBucketName)
+	probeFile, err := spillfs.CreateAndRemoveFile(context.Background(), probeBucketName)
 	require.NoError(t, err)
 	probeFile_sw := spillBucketWriter{file: probeFile}
 	_, err = ctr.flushBucketBuffer(proc, probeBat, &probeFile_sw, analyzer)
 	require.NoError(t, err)
-	probeFile.Close()
+	probeFd := probeFile_sw.handOffFd()
 
 	// Setup HashJoin with EqConds
 	hashJoin := &HashJoin{
@@ -185,7 +177,7 @@ func TestReSpillBucket(t *testing.T) {
 
 	bucket := spillBucket{
 		buildFile: buildBucketName,
-		probeFile: probeBucketName,
+		probeFd:   probeFd,
 		depth:     0,
 	}
 
@@ -201,22 +193,18 @@ func TestReSpillBucket(t *testing.T) {
 	require.Greater(t, len(hashJoin.ctr.spillQueue), 0, "spillQueue should have sub-buckets")
 	require.Equal(t, 1, hashJoin.ctr.spillQueue[0].depth, "sub-buckets should be at depth 1")
 
-	// Verify sub-bucket files exist
+	// Verify sub-bucket fds are valid
 	subBucket := hashJoin.ctr.spillQueue[0]
-	buildReader := &spillBucketReader{}
-	err = buildReader.resetForFile(proc.Ctx, spillfs, subBucket.buildFile)
-	require.NoError(t, err)
-	buildReader.close()
-
-	probeReader := &spillBucketReader{}
-	err = probeReader.resetForFile(proc.Ctx, spillfs, subBucket.probeFile)
-	require.NoError(t, err)
-	probeReader.close()
+	require.NotNil(t, subBucket.buildFd, "sub-bucket should have a build fd")
 
 	// Cleanup all sub-buckets
 	for _, sb := range hashJoin.ctr.spillQueue {
-		spillfs.Delete(context.Background(), sb.buildFile)
-		spillfs.Delete(context.Background(), sb.probeFile)
+		if sb.buildFd != nil {
+			sb.buildFd.Close()
+		}
+		if sb.probeFd != nil {
+			sb.probeFd.Close()
+		}
 	}
 }
 
@@ -251,12 +239,12 @@ func TestReSpillBucketDepthLimit(t *testing.T) {
 	buildFile.Close()
 
 	probeBucketName := "test_depth_limit_probe"
-	probeFile, err := spillfs.CreateFile(context.Background(), probeBucketName)
+	probeFile, err := spillfs.CreateAndRemoveFile(context.Background(), probeBucketName)
 	require.NoError(t, err)
 	probeFile_sw := spillBucketWriter{file: probeFile}
 	_, err = ctr.flushBucketBuffer(proc, probeBat, &probeFile_sw, analyzer)
 	require.NoError(t, err)
-	probeFile.Close()
+	depthProbeFd := probeFile_sw.handOffFd()
 
 	// Setup HashJoin
 	hashJoin := &HashJoin{
@@ -284,7 +272,7 @@ func TestReSpillBucketDepthLimit(t *testing.T) {
 	// Bucket at max depth
 	bucket := spillBucket{
 		buildFile: buildBucketName,
-		probeFile: probeBucketName,
+		probeFd:   depthProbeFd,
 		depth:     spillMaxPass, // at max depth
 	}
 
@@ -298,7 +286,6 @@ func TestReSpillBucketDepthLimit(t *testing.T) {
 	require.Equal(t, 0, len(hashJoin.ctr.spillQueue), "should not create sub-buckets at max depth")
 
 	jm.Free()
-	spillfs.Delete(context.Background(), probeBucketName)
 }
 
 // TestMultiLevelSpillIntegration tests the full multi-level spill flow
@@ -342,12 +329,12 @@ func TestMultiLevelSpillIntegration(t *testing.T) {
 	buildFile.Close()
 
 	probeBucketName := "test_multilevel_probe"
-	probeFile, err := spillfs.CreateFile(context.Background(), probeBucketName)
+	probeFile, err := spillfs.CreateAndRemoveFile(context.Background(), probeBucketName)
 	require.NoError(t, err)
 	probeFile_sw := spillBucketWriter{file: probeFile}
 	_, err = ctr.flushBucketBuffer(proc, probeBat, &probeFile_sw, analyzer)
 	require.NoError(t, err)
-	probeFile.Close()
+	multiProbeFd := probeFile_sw.handOffFd()
 
 	// Setup HashJoin
 	hashJoin := &HashJoin{
@@ -374,7 +361,7 @@ func TestMultiLevelSpillIntegration(t *testing.T) {
 
 	bucket := spillBucket{
 		buildFile: buildBucketName,
-		probeFile: probeBucketName,
+		probeFd:   multiProbeFd,
 		depth:     0,
 	}
 
@@ -402,10 +389,14 @@ func TestMultiLevelSpillIntegration(t *testing.T) {
 		jm2.Free()
 	}
 
-	// Cleanup all remaining buckets
+	// Cleanup all remaining buckets (fd close releases inode)
 	for _, sb := range hashJoin.ctr.spillQueue {
-		spillfs.Delete(context.Background(), sb.buildFile)
-		spillfs.Delete(context.Background(), sb.probeFile)
+		if sb.buildFd != nil {
+			sb.buildFd.Close()
+		}
+		if sb.probeFd != nil {
+			sb.probeFd.Close()
+		}
 	}
 }
 

@@ -16,6 +16,7 @@ package hashbuild
 
 import (
 	"bytes"
+	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -120,7 +121,11 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 	mapSucceed := hashBuild.ctr.state == SendSucceed
 
 	hashBuild.ctr.hashmapBuilder.Reset(proc, !mapSucceed)
-	hashBuild.cleanupSpillFiles(proc)
+	// Only clean up build files when the join map was NOT successfully sent.
+	// When mapSucceed=true, hashjoin owns the files and deletes them after reading.
+	if !mapSucceed {
+		hashBuild.cleanupSpillFiles(proc)
+	}
 	hashBuild.ctr.spilledBuckets = nil
 	hashBuild.ctr.state = BuildHashMap
 	hashBuild.ctr.runtimeFilterIn = false
@@ -142,7 +147,9 @@ func (hashBuild *HashBuild) cleanupSpillFiles(proc *process.Process) {
 		return
 	}
 	for _, bucket := range hashBuild.ctr.spilledBuckets {
-		spillfs.Delete(proc.Ctx, bucket)
+		// Use context.Background() so cleanup succeeds even when proc.Ctx is cancelled
+		// (e.g. client disconnected abnormally).
+		spillfs.Delete(context.Background(), bucket)
 	}
 }
 

@@ -234,11 +234,11 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.state = End
 
 				// For spilled join, clean up current bucket and move to next
-				if len(ctr.spillQueue) > 0 || ctr.probeBucketFileName != "" {
+				if len(ctr.spillQueue) > 0 || ctr.probeBucketActive {
 					ctr.rightRowsMatched = nil
 					ctr.cleanHashMap()
 
-					if len(ctr.spillQueue) > 0 || ctr.probeBucketFileName != "" {
+					if len(ctr.spillQueue) > 0 || ctr.probeBucketActive {
 						ctr.state = Probe
 					}
 				}
@@ -272,15 +272,15 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 		if ctr.mp.IsSpilled() {
 			spilledBuildBuckets, _ := ctr.mp.GetSpillBuckets()
 
-			// Create spill files for probe side
-			spillfs, err := ctr.getSpillFS(proc)
-			if err != nil {
-				return err
+			// Register build files in spillQueue immediately so cleanupSpillFiles
+			// can delete them even if we return early (e.g. context cancelled).
+			ctr.spillQueue = make([]spillBucket, len(spilledBuildBuckets))
+			for i, buildFile := range spilledBuildBuckets {
+				ctr.spillQueue[i] = spillBucket{buildFile: buildFile, depth: 0}
 			}
-			spillWriters, err := createRootProbeSpillBucketFiles(proc.Ctx, spillfs)
-			if err != nil {
-				return err
-			}
+
+			// Create writers for probe side (files created lazily on first write)
+			spillWriters := createRootProbeSpillBucketFiles()
 			spillBuffers := make([]*batch.Batch, spillNumBuckets)
 
 			defer func() {
@@ -317,14 +317,10 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 				}
 			}
 
-			// Build the spillQueue from build and probe bucket pairs
-			ctr.spillQueue = make([]spillBucket, len(spilledBuildBuckets))
-			for i, buildFile := range spilledBuildBuckets {
-				ctr.spillQueue[i] = spillBucket{
-					buildFile: buildFile,
-					probeFile: spillWriters[i].name,
-					depth:     0,
-				}
+			// Transfer probe fd ownership into spillQueue.
+			// handOffFd seeks fd to 0; returns nil if probe bucket was empty.
+			for i := range ctr.spillQueue {
+				ctr.spillQueue[i].probeFd = spillWriters[i].handOffFd()
 			}
 
 			ctr.mp = nil
@@ -349,7 +345,7 @@ func (hashJoin *HashJoin) getInputBatch(proc *process.Process, analyzer process.
 	// For unspilled join, simply call children.
 	// In spill mode, spillQueue can become empty while we are still reading the
 	// currently loaded bucket via probeBucketReader.
-	if len(hashJoin.ctr.spillQueue) == 0 && hashJoin.ctr.probeBucketFileName == "" {
+	if len(hashJoin.ctr.spillQueue) == 0 && !hashJoin.ctr.probeBucketActive {
 		return vm.ChildrenCall(hashJoin.GetChildren(0), proc, analyzer)
 	}
 

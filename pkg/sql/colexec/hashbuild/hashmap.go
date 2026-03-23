@@ -221,19 +221,6 @@ func (hb *HashmapBuilder) evalBatch(batchIdx int, proc *process.Process) error {
 	return nil
 }
 
-// ClearHashmap clears the hashmap to save memory when entering spill mode
-func (hb *HashmapBuilder) ClearHashmap() {
-	if hb.IntHashMap != nil {
-		hb.IntHashMap.Free()
-		hb.IntHashMap = nil
-	}
-	if hb.StrHashMap != nil {
-		hb.StrHashMap.Free()
-		hb.StrHashMap = nil
-	}
-	hb.curVecs = nil
-}
-
 func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, needUniqueVec bool, proc *process.Process) (retErr error) {
 	if hb.InputBatchRowCount == 0 {
 		return nil
