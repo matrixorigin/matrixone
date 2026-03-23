@@ -254,6 +254,10 @@ type InSp struct{}
 // This key is set on context when invoking internal SQL from ivf_search.
 type IvfBloomFilter struct{}
 
+// FulltextBloomFilter carries BloomFilter bytes for fulltext index scan in internal SQL executor.
+// This key is set on context when invoking internal SQL from fulltext_index_match.
+type FulltextBloomFilter struct{}
+
 // IvfReaderParam carries DistRange for ivf entries scan in internal SQL executor.
 // This key is set on context when invoking internal SQL from ivf_search.
 type IvfReaderParam struct{}

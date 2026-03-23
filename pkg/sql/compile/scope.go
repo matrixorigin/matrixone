@@ -1147,6 +1147,15 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 				}
 			}
 		}
+		// Pass runtime BloomFilter to reader via FilterHint (for fulltext index table).
+		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
+			catalog.IsFullTextIndexTableType(n.TableDef.TableType, n.TableDef.Name) {
+			if bfVal := c.proc.Ctx.Value(defines.FulltextBloomFilter{}); bfVal != nil {
+				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
+					hint.BloomFilter = bf
+				}
+			}
+		}
 
 		readers, err = s.DataSource.Rel.BuildReaders(
 			newCtx,
@@ -1217,6 +1226,15 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			if len(s.DataSource.BloomFilter) > 0 {
 				hint.BloomFilter = s.DataSource.BloomFilter
 			} else if bfVal := c.proc.Ctx.Value(defines.IvfBloomFilter{}); bfVal != nil {
+				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
+					hint.BloomFilter = bf
+				}
+			}
+		}
+		// Pass runtime BloomFilter to reader via FilterHint (for fulltext index table).
+		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
+			catalog.IsFullTextIndexTableType(n.TableDef.TableType, n.TableDef.Name) {
+			if bfVal := c.proc.Ctx.Value(defines.FulltextBloomFilter{}); bfVal != nil {
 				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
 					hint.BloomFilter = bf
 				}
