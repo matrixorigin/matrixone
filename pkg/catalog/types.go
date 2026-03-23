@@ -378,7 +378,10 @@ const (
 	SystemSI_IVFFLAT_TblCol_Entries_pk      = IndexTablePrimaryColName
 	SystemSI_IVFFLAT_TblCol_Entries_entry   = "__mo_index_centroid_fk_entry"
 
-	/************ 3. FULLTEXT Index **************/ /************ 3. FULLTEXT Index **************/
+	/************ 3. FULLTEXT Index **************/
+
+	// FULLTEXT Table Type
+	FullTextIndex_TblType = "fulltext"
 
 	FullTextIndex_TabCol_Word     = "word"
 	FullTextIndex_TabCol_Id       = "doc_id"
@@ -906,4 +909,9 @@ func IsUniqueIndexTable(name string) bool {
 
 func IsSecondaryIndexTable(name string) bool {
 	return strings.HasPrefix(name, SecondaryIndexTableNamePrefix)
+}
+
+func IsFullTextIndexTableType(tableType string, tableName string) bool {
+	return tableType == FullTextIndex_TblType ||
+		(tableType == SystemIndexRel && strings.HasPrefix(tableName, FullTextIndexTableNamePrefix))
 }

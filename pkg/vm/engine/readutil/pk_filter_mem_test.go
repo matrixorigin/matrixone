@@ -60,6 +60,37 @@ func TestNewMemPKFilter_WithBF(t *testing.T) {
 	require.Equal(t, int16(1), filter.BFSeqNum)
 }
 
+func TestNewMemPKFilter_WithBF_FulltextTable(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Name:      "__mo_index_secondary_fulltext",
+		TableType: catalog.FullTextIndex_TblType,
+		Pkey: &plan.PrimaryKeyDef{
+			Names: []string{catalog.FakePrimaryKeyColName},
+		},
+		Cols: []*plan.ColDef{
+			{Name: catalog.FullTextIndex_TabCol_Id, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "pos", Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "word", Seqnum: 2, Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: catalog.FakePrimaryKeyColName, Seqnum: 3, Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	ts := types.MaxTs().ToTimestamp()
+	packerPool := fileservice.NewPool(8, func() *types.Packer { return types.NewPacker() }, func(p *types.Packer) { p.Reset() }, func(p *types.Packer) { p.Close() })
+
+	bf := bloomfilter.NewCBloomFilterWithProbability(100, 0.01)
+	defer bf.Free()
+
+	hint := engine.FilterHint{BF: bf}
+	base := BasePKFilter{Op: function.EQUAL, Valid: true, Oid: types.T_int64, LB: types.EncodeFixed(int64(1))}
+
+	filter, err := NewMemPKFilter(tableDef, ts, packerPool, base, hint)
+	require.NoError(t, err)
+	require.True(t, filter.HasBF)
+	// Should use doc_id column (seqnum=0), not __mo_index_pri_col (absent)
+	require.Equal(t, int16(0), filter.BFSeqNum)
+}
+
 func TestNewMemPKFilter(t *testing.T) {
 
 	lb, ub := 10, 20
