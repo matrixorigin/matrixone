@@ -75,7 +75,7 @@ func TestFlushBucketBufferBuild(t *testing.T) {
 	require.NoError(t, err)
 	defer func() {
 		file.Close()
-		spillfs.Delete(context.Background(), "test_build_flush")
+		spillfs.RemoveFile(context.Background(), "test_build_flush")
 	}()
 
 	analyzer := process.NewAnalyzer(0, false, false, "test")
@@ -112,7 +112,7 @@ func TestCreateSpillFiles(t *testing.T) {
 	for i, file := range files {
 		require.NotNil(t, file)
 		file.Close()
-		spillfs.Delete(context.Background(), buckets[i])
+		spillfs.RemoveFile(context.Background(), buckets[i])
 	}
 }
 
@@ -199,7 +199,7 @@ func TestLargeBufferFlushBuild(t *testing.T) {
 	require.NoError(t, err)
 	defer func() {
 		file.Close()
-		spillfs.Delete(context.Background(), "test_large_build")
+		spillfs.RemoveFile(context.Background(), "test_large_build")
 	}()
 
 	// Create large batch
@@ -273,7 +273,7 @@ func TestFileWriteErrorBuild(t *testing.T) {
 	_, err := ctr.flushBucketBuffer(proc, bat, file, analyzer)
 	require.Error(t, err)
 
-	spillfs.Delete(context.Background(), "test_error_build")
+	spillfs.RemoveFile(context.Background(), "test_error_build")
 }
 
 func TestAppendBatchToSpillFilesPartitioning(t *testing.T) {
@@ -286,7 +286,7 @@ func TestAppendBatchToSpillFilesPartitioning(t *testing.T) {
 		spillfs, _ := proc.GetSpillFileService()
 		for i, file := range files {
 			file.Close()
-			spillfs.Delete(context.Background(), buckets[i])
+			spillfs.RemoveFile(context.Background(), buckets[i])
 		}
 	}()
 
@@ -332,7 +332,7 @@ func TestEmptyBatchSpill(t *testing.T) {
 		spillfs, _ := proc.GetSpillFileService()
 		for i, file := range files {
 			file.Close()
-			spillfs.Delete(context.Background(), buckets[i])
+			spillfs.RemoveFile(context.Background(), buckets[i])
 		}
 	}()
 
@@ -369,7 +369,7 @@ func TestAppendBuildBatchMultipleFlushes(t *testing.T) {
 		spillfs, _ := proc.GetSpillFileService()
 		for i, file := range files {
 			file.Close()
-			spillfs.Delete(context.Background(), buckets[i])
+			spillfs.RemoveFile(context.Background(), buckets[i])
 		}
 	}()
 
@@ -421,7 +421,7 @@ func TestAppendBuildBatchWithNulls(t *testing.T) {
 		spillfs, _ := proc.GetSpillFileService()
 		for i, file := range files {
 			file.Close()
-			spillfs.Delete(context.Background(), buckets[i])
+			spillfs.RemoveFile(context.Background(), buckets[i])
 		}
 	}()
 
@@ -466,7 +466,7 @@ func TestAppendBuildBatchMultiColumn(t *testing.T) {
 		spillfs, _ := proc.GetSpillFileService()
 		for i, file := range files {
 			file.Close()
-			spillfs.Delete(context.Background(), buckets[i])
+			spillfs.RemoveFile(context.Background(), buckets[i])
 		}
 	}()
 
@@ -594,7 +594,7 @@ func TestCreateSpillFilesError(t *testing.T) {
 	spillfs, _ := proc.GetSpillFileService()
 	for i, file := range files {
 		file.Close()
-		spillfs.Delete(context.Background(), buckets[i])
+		spillfs.RemoveFile(context.Background(), buckets[i])
 	}
 }
 
@@ -640,7 +640,7 @@ func TestFlushZeroRowBatch(t *testing.T) {
 	require.NoError(t, err)
 	defer func() {
 		file.Close()
-		spillfs.Delete(context.Background(), "test_zero")
+		spillfs.RemoveFile(context.Background(), "test_zero")
 	}()
 
 	analyzer := process.NewAnalyzer(0, false, false, "test")
@@ -665,7 +665,7 @@ func TestAppendBuildBatchSingleBucket(t *testing.T) {
 		spillfs, _ := proc.GetSpillFileService()
 		for i, file := range files {
 			file.Close()
-			spillfs.Delete(context.Background(), buckets[i])
+			spillfs.RemoveFile(context.Background(), buckets[i])
 		}
 	}()
 
@@ -712,7 +712,7 @@ func TestBufferReuse(t *testing.T) {
 		spillfs, _ := proc.GetSpillFileService()
 		for i, file := range files {
 			file.Close()
-			spillfs.Delete(context.Background(), buckets[i])
+			spillfs.RemoveFile(context.Background(), buckets[i])
 		}
 	}()
 

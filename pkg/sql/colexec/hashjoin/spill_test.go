@@ -80,7 +80,7 @@ func TestFlushBucketBuffer(t *testing.T) {
 	require.NoError(t, err)
 	defer func() {
 		file.Close()
-		spillfs.Delete(context.Background(), "test_flush")
+		spillfs.RemoveFile(context.Background(), "test_flush")
 	}()
 
 	analyzer := process.NewAnalyzer(0, false, false, "test")
@@ -128,7 +128,7 @@ func TestBucketBufferReuse(t *testing.T) {
 	require.NoError(t, err)
 	defer func() {
 		file.Close()
-		spillfs.Delete(context.Background(), "test_reuse")
+		spillfs.RemoveFile(context.Background(), "test_reuse")
 	}()
 
 	ctr := &container{}
@@ -262,7 +262,7 @@ func TestLargeBufferFlush(t *testing.T) {
 	require.NoError(t, err)
 	defer func() {
 		file.Close()
-		spillfs.Delete(context.Background(), "test_large")
+		spillfs.RemoveFile(context.Background(), "test_large")
 	}()
 
 	// Create large batch
@@ -310,7 +310,7 @@ func TestSpillFileCleanup(t *testing.T) {
 	require.NoError(t, err)
 
 	// Clean up
-	spillfs.Delete(context.Background(), bucketName)
+	spillfs.RemoveFile(context.Background(), bucketName)
 }
 
 func TestNullValues(t *testing.T) {
@@ -343,7 +343,7 @@ func TestFileWriteError(t *testing.T) {
 	_, err := ctr.flushBucketBuffer(proc, bat, &file_sw, analyzer)
 	require.Error(t, err)
 
-	spillfs.Delete(context.Background(), "test_error")
+	spillfs.RemoveFile(context.Background(), "test_error")
 }
 
 func TestSpillBucketReader(t *testing.T) {
@@ -401,7 +401,7 @@ func TestSpillBucketReader(t *testing.T) {
 	require.Nil(t, bat)
 
 	reader.close()
-	spillfs.Delete(context.Background(), bucketName)
+	spillfs.RemoveFile(context.Background(), bucketName)
 }
 
 func TestAppendProbeBatchToSpillFiles(t *testing.T) {
@@ -572,7 +572,7 @@ func TestReaderCorruptedMagic(t *testing.T) {
 	require.Contains(t, err.Error(), "corrupted")
 
 	reader.close()
-	spillfs.Delete(context.Background(), bucketName)
+	spillfs.RemoveFile(context.Background(), bucketName)
 }
 
 func TestReaderRowCountMismatch(t *testing.T) {
@@ -620,7 +620,7 @@ func TestReaderRowCountMismatch(t *testing.T) {
 	require.Contains(t, err.Error(), "mismatch")
 
 	reader.close()
-	spillfs.Delete(context.Background(), bucketName)
+	spillfs.RemoveFile(context.Background(), bucketName)
 }
 
 func TestMultiColumnHash(t *testing.T) {
@@ -673,7 +673,7 @@ func TestSpillBucketReaderDoubleClose(t *testing.T) {
 	reader.close()
 	reader.close() // Should not panic
 
-	spillfs.Delete(context.Background(), bucketName)
+	spillfs.RemoveFile(context.Background(), bucketName)
 }
 
 func TestFlushEmptyBuffer(t *testing.T) {
@@ -687,7 +687,7 @@ func TestFlushEmptyBuffer(t *testing.T) {
 	require.NoError(t, err)
 	defer func() {
 		file.Close()
-		spillfs.Delete(context.Background(), "test_empty")
+		spillfs.RemoveFile(context.Background(), "test_empty")
 	}()
 
 	analyzer := process.NewAnalyzer(0, false, false, "test")
@@ -883,7 +883,7 @@ func TestReadBatchPartialRead(t *testing.T) {
 	require.Error(t, err)
 
 	reader.close()
-	spillfs.Delete(context.Background(), bucketName)
+	spillfs.RemoveFile(context.Background(), bucketName)
 }
 
 func TestAppendProbeBatchWithNulls(t *testing.T) {
@@ -971,7 +971,7 @@ func TestMultipleBatchesInBucket(t *testing.T) {
 	require.Equal(t, 10, totalRows)
 
 	reader.close()
-	spillfs.Delete(context.Background(), bucketName)
+	spillfs.RemoveFile(context.Background(), bucketName)
 }
 
 func TestComputeXXHashVectorLengthMismatch(t *testing.T) {
@@ -1083,7 +1083,7 @@ func TestReaderBatchReuse(t *testing.T) {
 	require.Equal(t, 2, bat.RowCount())
 
 	reader.close()
-	spillfs.Delete(context.Background(), bucketName)
+	spillfs.RemoveFile(context.Background(), bucketName)
 }
 
 func TestAppendProbeBatchAllBuckets(t *testing.T) {
@@ -1167,7 +1167,7 @@ func TestFlushBucketBufferMultipleCalls(t *testing.T) {
 	require.NoError(t, err)
 	defer func() {
 		file.Close()
-		spillfs.Delete(context.Background(), "test_multi_flush")
+		spillfs.RemoveFile(context.Background(), "test_multi_flush")
 	}()
 
 	analyzer := process.NewAnalyzer(0, false, false, "test")

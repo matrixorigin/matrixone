@@ -149,7 +149,7 @@ func (hashBuild *HashBuild) cleanupSpillFiles(proc *process.Process) {
 	for _, bucket := range hashBuild.ctr.spilledBuckets {
 		// Use context.Background() so cleanup succeeds even when proc.Ctx is cancelled
 		// (e.g. client disconnected abnormally).
-		spillfs.Delete(context.Background(), bucket)
+		spillfs.RemoveFile(context.Background(), bucket)
 	}
 }
 
