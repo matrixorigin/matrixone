@@ -842,8 +842,8 @@ func TestGetInputBatchReadsCurrentSpillReaderWhenQueueEmpty(t *testing.T) {
 
 	hashJoin := &HashJoin{
 		ctr: container{
-			probeBucketReader:  reader,
-			probeBucketActive:  true,
+			probeBucketReader: reader,
+			probeBucketActive: true,
 		},
 	}
 	hashJoin.AppendChild(colexec.NewMockOperator())

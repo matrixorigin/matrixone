@@ -106,10 +106,10 @@ type container struct {
 	spillThreshold int64
 
 	// state for processing current bucket
-	probeBucketReader  *spillBucketReader // reused across buckets; buffer allocated once
-	probeBucketActive  bool               // true while reading a probe file
-	spillBuildReader   *spillBucketReader // reused for build file (and probe in reSpillBucket)
-	spillFS            fileservice.MutableFileService // cached once; avoids repeated registry lookups
+	probeBucketReader *spillBucketReader             // reused across buckets; buffer allocated once
+	probeBucketActive bool                           // true while reading a probe file
+	spillBuildReader  *spillBucketReader             // reused for build file (and probe in reSpillBucket)
+	spillFS           fileservice.MutableFileService // cached once; avoids repeated registry lookups
 
 	// reusable buffers for spill operations
 	spillHashValues      []uint64

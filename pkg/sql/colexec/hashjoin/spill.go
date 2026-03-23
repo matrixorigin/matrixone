@@ -29,8 +29,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -75,7 +75,6 @@ type spillBucketReader struct {
 	buf    []byte
 	empty  bool // true when no file exists (lazy-created file was never written)
 }
-
 
 func (r *spillBucketReader) readBatch(proc *process.Process, reuseBat *batch.Batch) (*batch.Batch, error) {
 	if r.empty {
