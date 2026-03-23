@@ -582,7 +582,6 @@ from
 drop index idx_1 on t12;
 drop table t12;
 
--- issue #23929: information_schema.statistics INDEX_TYPE should not be null
 drop table if exists t13;
 create table t13(a int primary key, b varchar(100), c varchar(100), fulltext index ftidx(b, c));
 select
