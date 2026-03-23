@@ -19,10 +19,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
 var tenantUpgEntries = []versions.UpgradeEntry{
 	drop_mo_retention,
+	upg_information_schema_statistics,
 }
 
 var drop_mo_retention = versions.UpgradeEntry{
@@ -34,4 +36,23 @@ var drop_mo_retention = versions.UpgradeEntry{
 		exist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, "mo_retention")
 		return !exist, err
 	},
+}
+
+var upg_information_schema_statistics = versions.UpgradeEntry{
+	Schema:    sysview.InformationDBConst,
+	TableName: "STATISTICS",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql:    sysview.InformationSchemaStatisticsDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "STATISTICS")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == sysview.InformationSchemaStatisticsDDL {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "STATISTICS"),
 }
