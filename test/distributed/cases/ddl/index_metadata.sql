@@ -589,7 +589,8 @@ select
     column_name,
     index_type
 from
-    information_schema.statistics where table_schema = 'db6' and table_name = 't13';
+    information_schema.statistics where table_schema = 'db6' and table_name = 't13'
+    order by index_name, seq_in_index;
 drop table t13;
 
 drop database db6;
