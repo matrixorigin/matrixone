@@ -172,21 +172,24 @@ use dis_db_02;
 select b,c from dis_table_02;
 insert into dis_table_02(b,c) values ('','1999-06-04');
 ------------------------------
--- @bvt:issue#9124
+drop database if exists temp_db;
+create database temp_db;
+use temp_db;
 create temporary table dis_temp_01(a int,b varchar(100),primary key(a));
 begin ;
 insert into dis_temp_01 values (233,'uuuu');
 -- @session:id=1{
+use temp_db;
 select * from dis_temp_01;
 -- @session}
 select * from dis_temp_01;
 -- @session:id=1{
+use temp_db;
 truncate table dis_temp_01;
 -- @session}
 rollback ;
 select * from dis_temp_01;
 drop table dis_temp_01;
--- @bvt:issue
 
 -- @bvt:issue#10585
 start transaction;
@@ -311,7 +314,6 @@ select * from dis_table_04;
 -- @session}
 -- @bvt:issue
 ----------------------------
--- @bvt:issue#9124
 begin ;
 use isolation_2;
 create temporary table dis_table_05(a int,b varchar(25) not null,c datetime,primary key(a),unique key bstr (b),key cdate (c));
@@ -327,7 +329,6 @@ select * from dis_table_05;
 select * from dis_table_05;
 -- @session}
 drop table dis_table_05;
--- @bvt:issue
 
 -- auto_increment 主键冲突
 use isolation_2;
@@ -387,3 +388,4 @@ select * from dis_table_07;
 commit;
 select * from dis_table_07;
 drop table dis_table_07;
+drop database temp_db;

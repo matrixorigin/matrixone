@@ -26,6 +26,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -38,6 +39,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	smithy "github.com/aws/smithy-go"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -47,11 +49,12 @@ import (
 )
 
 type AwsSDKv2 struct {
-	name            string
-	bucket          string
-	client          *s3.Client
-	perfCounterSets []*perfcounter.CounterSet
-	listMaxKeys     int32
+	name               string
+	bucket             string
+	client             *s3.Client
+	perfCounterSets    []*perfcounter.CounterSet
+	listMaxKeys        int32
+	disableMultiDelete atomic.Bool
 }
 
 func NewAwsSDKv2(
@@ -426,6 +429,17 @@ func (a *AwsSDKv2) Write(
 		}
 
 	} else {
+		if _, ok := r.(io.Seeker); !ok {
+			// Large non-seekable readers are incompatible with the raw PutObject path
+			// on some S3-compatible backends (for example OBS behind non-TLS or custom
+			// payload-hash behavior). Fall back to multipart upload with concurrency=1
+			// so callers do not need parallel-mode=1 just to avoid the 64MB raw PUT path.
+			return a.WriteMultipartParallel(ctx, key, r, sizeHint, &ParallelMultipartOption{
+				PartSize:    defaultParallelMultipartPartSize,
+				Concurrency: 1,
+				Expire:      expire,
+			})
+		}
 		_, err = a.putObject(
 			ctx,
 			&s3.PutObjectInput{
@@ -566,9 +580,14 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 
 	jobCh := make(chan partJob, options.Concurrency*2)
 
-	startWorker := func() error {
+	startWorker := func() {
 		wg.Add(1)
-		return getParallelUploadPool().Submit(func() {
+		// Use plain goroutines instead of the global parallelUploadPool to avoid
+		// pool-starvation deadlock: when many concurrent WriteMultipartParallel calls
+		// (e.g. LOAD DATA with 15+ parallel scopes) all compete for a tiny global pool
+		// (capacity = NumCPU), every caller blocks on pool.Submit() waiting for workers
+		// that are themselves held by other callers — classic circular wait.
+		go func() {
 			defer wg.Done()
 			for job := range jobCh {
 				if ctx.Err() != nil {
@@ -603,14 +622,11 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 				})
 				partsLock.Unlock()
 			}
-		})
+		}()
 	}
 
 	for i := 0; i < options.Concurrency; i++ {
-		if submitErr := startWorker(); submitErr != nil {
-			setErr(submitErr)
-			break
-		}
+		startWorker()
 	}
 
 	sendJob := func(bufPtr *[]byte, buf []byte, n int) bool {
@@ -811,6 +827,9 @@ func (a *AwsSDKv2) deleteSingle(ctx context.Context, key string) error {
 func (a *AwsSDKv2) deleteMultiObj(ctx context.Context, objs []types.ObjectIdentifier) error {
 	ctx, span := trace.Start(ctx, "AwsSDKv2.deleteMultiObj")
 	defer span.End()
+	if a.disableMultiDelete.Load() {
+		return a.deleteMultiObjOneByOne(ctx, objs)
+	}
 	output, err := a.deleteObjects(ctx, &s3.DeleteObjectsInput{
 		Bucket: ptrTo(a.bucket),
 		Delete: &types.Delete{
@@ -821,6 +840,17 @@ func (a *AwsSDKv2) deleteMultiObj(ctx context.Context, objs []types.ObjectIdenti
 	})
 	// delete api failed
 	if err != nil {
+		if isS3APIErrorCode(err, "MalformedXML") {
+			a.disableMultiDelete.Store(true)
+			logutil.Warn(
+				"s3 delete objects returned MalformedXML, disabling multi-delete and falling back to single deletes",
+				zap.String("fs", a.name),
+				zap.String("bucket", a.bucket),
+				zap.Int("count", len(objs)),
+				zap.Error(err),
+			)
+			return a.deleteMultiObjOneByOne(ctx, objs)
+		}
 		return err
 	}
 	// delete api success, but with delete file failed.
@@ -835,6 +865,27 @@ func (a *AwsSDKv2) deleteMultiObj(ctx context.Context, objs []types.ObjectIdenti
 	}
 	if message.Len() > 0 {
 		return moerr.NewInternalErrorNoCtxf("S3 Delete failed: %s", message.String())
+	}
+	return nil
+}
+
+func (a *AwsSDKv2) deleteMultiObjOneByOne(ctx context.Context, objs []types.ObjectIdentifier) error {
+	message := strings.Builder{}
+	for _, obj := range objs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		if obj.Key == nil {
+			return moerr.NewInternalErrorNoCtx("S3 delete fallback got nil key")
+		}
+
+		if err := a.deleteSingle(ctx, *obj.Key); err != nil {
+			message.WriteString(fmt.Sprintf("%s: %v;", *obj.Key, err))
+		}
+	}
+	if message.Len() > 0 {
+		return moerr.NewInternalErrorNoCtxf("S3 delete fallback failed: %s", message.String())
 	}
 	return nil
 }
@@ -962,6 +1013,11 @@ func (a *AwsSDKv2) deleteObjects(ctx context.Context, params *s3.DeleteObjectsIn
 		maxRetryAttemps,
 		IsRetryableError,
 	)
+}
+
+func isS3APIErrorCode(err error, code string) bool {
+	var apiErr smithy.APIError
+	return errors.As(err, &apiErr) && apiErr.ErrorCode() == code
 }
 
 func (a *AwsSDKv2) mapError(err error, path string) error {

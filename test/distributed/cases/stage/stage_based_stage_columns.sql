@@ -181,7 +181,6 @@ drop stage substage05;
 
 
 -- load data with fields terminated by ',' enclosed by '`' lines terminated by '\n' from stage and upload to table
--- @bvt:issue#18712
 drop table if exists t6;
 create table t6 (col1 varchar(20), col2 varchar(20));
 load data infile '$resources/load_data/test_enclosed_by01.csv' into table t6 fields terminated by ',' enclosed by '`' lines terminated by '\n';
@@ -194,16 +193,15 @@ create stage substage06 url = 'stage://stage06/stage';
 select * from mo_catalog.mo_stages;
 -- @ignore:1
 show stages;
-select col2 from t6 into outfile 'stage://substage06/local_stage_t006.csv';
+select col2 from t6 into outfile 'stage://substage06/local_stage_t006.csv' fields terminated by ',' enclosed by '' lines terminated by '\n' header 'false';
 drop table t6;
 create table t6 (col2 varchar(20));
-load data infile 'stage://substage06/local_stage_t006.csv' into table t6 fields terminated by ',' enclosed by '`' lines terminated by '\n' ignore 1 lines;
+load data infile 'stage://substage06/local_stage_t006.csv' into table t6 fields terminated by ',' enclosed by '`' lines terminated by '\n';
 select * from t6;
 show create table t6;
 drop table t6;
 drop stage stage06;
 drop stage substage06;
--- @bvt:issue
 
 
 
