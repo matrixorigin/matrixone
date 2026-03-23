@@ -180,9 +180,13 @@ public:
     }
 
     void build() override {
+        this->count = static_cast<uint32_t>(this->current_offset_);
         if (this->count == 0) {
             this->is_loaded_ = true;
             return;
+        }
+        if (this->flattened_host_dataset.size() > (size_t)this->count * this->dimension) {
+            this->flattened_host_dataset.resize((size_t)this->count * this->dimension);
         }
 
         std::cout << "[DEBUG] Brute-Force build: Starting build count=" << this->count << " dim=" << this->dimension << " metric=" << (int)this->metric << std::endl;

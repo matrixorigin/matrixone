@@ -204,6 +204,7 @@ func TestGpuIvfPqChunked(t *testing.T) {
 }
 
 func TestGpuShardedIvfPq(t *testing.T) {
+	t.Skip("Sharded mode is currently disabled due to a suspected bug in cuVS (SIZE_MAX mdspan extents)")
 	devices, err := GetGpuDeviceList()
 	if err != nil || len(devices) < 1 {
 		t.Skip("Need at least 1 GPU for sharded IVF-PQ test")
@@ -288,6 +289,7 @@ func TestGpuReplicatedIvfPq(t *testing.T) {
 }
 
 func BenchmarkGpuShardedIvfPq(b *testing.B) {
+	b.Skip("Sharded mode is currently disabled due to a suspected bug in cuVS (SIZE_MAX mdspan extents)")
 	devices, err := GetGpuDeviceList()
 	if err != nil || len(devices) < 1 {
 		b.Skip("Need at least 1 GPU for sharded IVF-PQ benchmark")

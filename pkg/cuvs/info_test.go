@@ -86,6 +86,9 @@ func TestIndexInfoComprehensive(t *testing.T) {
 	}
 
 	runTest := func(t *testing.T, indexType string, distMode DistributionMode, modeName string, dataType string) {
+		if distMode == Sharded {
+			t.Skip("Sharded mode is currently disabled due to a suspected bug in cuVS")
+		}
 		name := fmt.Sprintf("%s/%s/%s", indexType, modeName, dataType)
 		t.Run(name, func(t *testing.T) {
 			var index GpuIndex

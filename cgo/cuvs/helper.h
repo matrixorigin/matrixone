@@ -16,12 +16,14 @@
 
 #pragma once
 
+#include "cuvs_types.h"
+
+#ifdef __cplusplus
 #include <raft/core/resources.hpp>
 #include <raft/core/host_mdspan.hpp>
 #include <cuvs/distance/distance.hpp>
 #include <vector>
 #include <string>
-#include "cuvs_types.h"
 
 namespace matrixone {
 
@@ -62,10 +64,15 @@ const raft::resources& get_raft_resources();
 cuvs::distance::DistanceType convert_distance_type(distance_type_t metric_c);
 
 } // namespace matrixone
+#endif
 
 // C-compatible wrappers if needed
+#ifdef __cplusplus
 extern "C" {
+#endif
     int gpu_get_device_count();
     void gpu_get_device_list(int* devices, int count);
     void gpu_convert_f32_to_f16(const float* src, void* dst, uint64_t total_elements, int device_id, void* errmsg);
+#ifdef __cplusplus
 }
+#endif

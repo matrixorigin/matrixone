@@ -209,14 +209,18 @@ public:
             load_host_matrix<T>(this->data_filename_, this->flattened_host_dataset, rows, cols);
             this->count = static_cast<uint32_t>(rows);
             this->dimension = static_cast<uint32_t>(cols);
+            this->current_offset_ = this->count;
+        } else {
+            this->count = static_cast<uint32_t>(this->current_offset_);
         }
-
-        std::cout << "[DEBUG] IVF-PQ build: Starting build count=" << this->count << " dim=" << this->dimension << " metric=" << (int)this->metric << std::endl;
 
         if (this->count == 0) {
             this->is_loaded_ = true;
             std::cout << "[DEBUG] IVF-PQ build: Empty dataset, build skipped" << std::endl;
             return;
+        }
+        if (this->flattened_host_dataset.size() > (size_t)this->count * this->dimension) {
+            this->flattened_host_dataset.resize((size_t)this->count * this->dimension);
         }
         this->train_quantizer_if_needed();
         if (!this->worker) throw std::runtime_error("Worker not initialized");

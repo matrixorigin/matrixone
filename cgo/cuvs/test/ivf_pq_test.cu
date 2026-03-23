@@ -147,9 +147,12 @@ TEST(GpuIvfPqTest, BuildFromDataFile) {
 
 /*
 // Sharded mode is currently disabled due to a suspected bug in cuVS or its integration.
-// GDB trace showed mdspan extents being set to 18446744073709551615ul (SIZE_MAX),
-// which suggests a dynamic extent initialization failure or dimension overflow/underflow
-// within the multi-GPU search path.
+// In gdb output, the mdspan extents showed 18446744073709551615ul (SIZE_MAX). 
+// This usually means a dynamic extent wasn't initialized correctly or a 
+// calculation for the number of rows/columns overflowed/underflowed.
+// Action: Check the dimensions of your input query matrix and indices. 
+// If n_queries or k is being passed as a negative number or uninitialized variable, 
+// cuvs might be trying to allocate a workspace based on a massive, invalid number.
 TEST(GpuIvfPqTest, ShardedModeSimulation) {
     const uint32_t dimension = 16;
     const uint64_t count = 1000;

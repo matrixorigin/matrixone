@@ -245,10 +245,10 @@ func GetGpuDeviceList() ([]int, error) {
 	}
 
 	cDevices := make([]C.int, count)
-	actualCount := int(C.gpu_get_device_list(&cDevices[0], C.int(count)))
+	C.gpu_get_device_list(&cDevices[0], C.int(count))
 
-	devices := make([]int, actualCount)
-	for i := 0; i < actualCount; i++ {
+	devices := make([]int, count)
+	for i := 0; i < count; i++ {
 		devices[i] = int(cDevices[i])
 	}
 	runtime.KeepAlive(cDevices)

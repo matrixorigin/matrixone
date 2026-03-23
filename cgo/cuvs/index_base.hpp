@@ -80,16 +80,21 @@ public:
     }
 
     uint32_t cap() const { return count; }
-    uint32_t len() const { return count; }
+    uint32_t len() const { return static_cast<uint32_t>(current_offset_); }
 
     void add_chunk(const T* chunk_data, uint64_t chunk_count) {
         std::unique_lock<std::shared_mutex> lock(mutex_);
         if (is_loaded_) throw std::runtime_error("Cannot add chunk to built index");
         
-        size_t old_size = flattened_host_dataset.size();
-        flattened_host_dataset.resize(old_size + chunk_count * dimension);
-        std::copy(chunk_data, chunk_data + chunk_count * dimension, flattened_host_dataset.begin() + old_size);
+        size_t required_size = (current_offset_ + chunk_count) * dimension;
+        if (flattened_host_dataset.size() < required_size) {
+            flattened_host_dataset.resize(required_size);
+        }
+        std::copy(chunk_data, chunk_data + chunk_count * dimension, flattened_host_dataset.begin() + (current_offset_ * dimension));
         current_offset_ += static_cast<uint32_t>(chunk_count);
+        if (current_offset_ > count) {
+            count = current_offset_;
+        }
     }
 
     void add_chunk_float(const float* chunk_data, uint64_t chunk_count) {
@@ -117,16 +122,26 @@ public:
                     handle.sync();
 
                     std::unique_lock<std::shared_mutex> lock(mutex_);
-                    size_t old_size = flattened_host_dataset.size();
-                    flattened_host_dataset.resize(old_size + chunk_count * dimension);
-                    std::copy(chunk_host_target.begin(), chunk_host_target.end(), flattened_host_dataset.begin() + old_size);
+                    size_t required_size = (current_offset_ + chunk_count) * dimension;
+                    if (flattened_host_dataset.size() < required_size) {
+                        flattened_host_dataset.resize(required_size);
+                    }
+                    std::copy(chunk_host_target.begin(), chunk_host_target.end(), flattened_host_dataset.begin() + (current_offset_ * dimension));
                     current_offset_ += static_cast<uint32_t>(chunk_count);
+                    if (current_offset_ > count) {
+                        count = current_offset_;
+                    }
                 } else {
                     std::unique_lock<std::shared_mutex> lock(mutex_);
-                    size_t old_size = flattened_host_dataset.size();
-                    flattened_host_dataset.resize(old_size + chunk_count * dimension);
-                    std::copy(chunk_data, chunk_data + chunk_count * dimension, flattened_host_dataset.begin() + old_size);
+                    size_t required_size = (current_offset_ + chunk_count) * dimension;
+                    if (flattened_host_dataset.size() < required_size) {
+                        flattened_host_dataset.resize(required_size);
+                    }
+                    std::copy(chunk_data, chunk_data + chunk_count * dimension, flattened_host_dataset.begin() + (current_offset_ * dimension));
                     current_offset_ += static_cast<uint32_t>(chunk_count);
+                    if (current_offset_ > count) {
+                        count = current_offset_;
+                    }
                 }
                 return std::any();
             }
@@ -174,10 +189,13 @@ public:
 
     virtual std::string info() const {
         std::string json = "{";
+        json += "\"element_size\": " + std::to_string(sizeof(T)) + ", ";
         json += "\"dimension\": " + std::to_string(dimension) + ", ";
-        json += "\"count\": " + std::to_string(count) + ", ";
-        json += "\"metric\": \"" + std::to_string((int)metric) + "\", ";
-        json += "\"dist_mode\": \"" + std::to_string((int)dist_mode) + "\", ";
+        json += "\"metric\": " + std::to_string((int)metric) + ", ";
+        json += "\"status\": \"" + std::string(is_loaded_ ? "Loaded" : "Empty") + "\", ";
+        json += "\"capacity\": " + std::to_string(count) + ", ";
+        json += "\"current_length\": " + std::to_string(current_offset_) + ", ";
+        json += "\"dist_mode\": " + std::to_string((int)dist_mode) + ", ";
         json += "\"devices\": [";
         for (size_t i = 0; i < devices_.size(); ++i) {
             json += std::to_string(devices_[i]) + (i == devices_.size() - 1 ? "" : ", ");
