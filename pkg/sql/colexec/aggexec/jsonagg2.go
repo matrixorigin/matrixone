@@ -63,12 +63,6 @@ func (exec *jsonArrayAggExec) IsDistinct() bool {
 	return exec.distinct
 }
 
-func (exec *jsonArrayAggExec) ensureGroup(idx int) {
-	if len(exec.groups) <= idx {
-		exec.groups = append(exec.groups, make([]struct{}, idx-len(exec.groups)+1)...)
-	}
-}
-
 func (exec *jsonArrayAggExec) GroupGrow(more int) error {
 	if exec.distinct {
 		if err := exec.distinctHash.grows(more); err != nil {
@@ -246,12 +240,6 @@ func newJsonObjectAggExec(mg *mpool.MPool, info multiAggInfo) *jsonObjectAggExec
 
 func (exec *jsonObjectAggExec) IsDistinct() bool {
 	return exec.distinct
-}
-
-func (exec *jsonObjectAggExec) ensureGroup(idx int) {
-	if len(exec.groups) <= idx {
-		exec.groups = append(exec.groups, make([]struct{}, idx-len(exec.groups)+1)...)
-	}
 }
 
 func (exec *jsonObjectAggExec) GroupGrow(more int) error {

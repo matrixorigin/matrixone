@@ -127,3 +127,177 @@ func TestAvgTwDecimalRoundTrip(t *testing.T) {
 	resultExec.Free()
 	input.Free(mp)
 }
+
+func TestAvgTwFactoriesAndErrorPaths(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	for _, typ := range []types.Type{
+		types.T_int8.ToType(),
+		types.T_uint16.ToType(),
+		types.T_float64.ToType(),
+		types.New(types.T_decimal64, 10, 2),
+		types.New(types.T_decimal128, 20, 2),
+	} {
+		exec, err := makeAvgTwCacheExec(mp, 1, typ)
+		require.NoError(t, err)
+		exec.Free()
+	}
+
+	for _, typ := range []types.Type{
+		types.T_char.ToType(),
+		types.New(types.T_varchar, types.MaxVarcharLen, 2),
+	} {
+		exec, err := makeAvgTwResultExec(mp, 1, typ)
+		require.NoError(t, err)
+		exec.Free()
+	}
+
+	_, err := makeAvgTwCacheExec(mp, 1, types.T_varchar.ToType())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported type")
+
+	_, err = makeAvgTwResultExec(mp, 1, types.T_int64.ToType())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported type")
+
+	floatExec := newAvgTwResultFloatExec(mp, 1, types.T_char.ToType())
+	require.NoError(t, floatExec.GroupGrow(1))
+	badFloat := buildVarlenVec(t, mp, types.T_char.ToType(), []string{"x"})
+	err = floatExec.Fill(0, 0, []*vector.Vector{badFloat})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid float cache payload")
+
+	decimalExec := newAvgTwResultDecimalExec(mp, 1, types.New(types.T_varchar, types.MaxVarcharLen, 2))
+	require.NoError(t, decimalExec.GroupGrow(1))
+	badDecimal := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"short"})
+	err = decimalExec.Fill(0, 0, []*vector.Vector{badDecimal})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid decimal cache payload")
+
+	badFloat.Free(mp)
+	badDecimal.Free(mp)
+	floatExec.Free()
+	decimalExec.Free()
+}
+
+func TestAvgTwCacheAndResultMergeBranches(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	left := newAvgTwCacheNumericExec[int32](mp, 1, types.T_int32.ToType())
+	right := newAvgTwCacheNumericExec[int32](mp, 1, types.T_int32.ToType())
+	require.NoError(t, left.GroupGrow(2))
+	require.NoError(t, right.GroupGrow(2))
+	require.NoError(t, left.SetExtraInformation(nil, 0))
+
+	constVec, err := vector.NewConstFixed(types.T_int32.ToType(), int32(5), 3, mp)
+	require.NoError(t, err)
+	require.NoError(t, left.BatchFill(0, []uint64{1, GroupNotMatched, 2}, []*vector.Vector{constVec}))
+	require.NoError(t, left.Fill(0, 0, []*vector.Vector{constVec}))
+	require.NoError(t, left.BulkFill(1, []*vector.Vector{constVec}))
+
+	rightVec := buildFixedVec(t, mp, types.T_int32.ToType(), []int32{7, 9})
+	require.NoError(t, right.BatchFill(0, []uint64{1, 2}, []*vector.Vector{rightVec}))
+	require.NoError(t, left.Merge(right, 0, 0))
+	require.NoError(t, left.BatchMerge(right, 0, []uint64{1, 2}))
+
+	cacheVecs, err := left.Flush()
+	require.NoError(t, err)
+	require.Len(t, cacheVecs, 1)
+	require.Equal(t, 24.0, types.DecodeFloat64(cacheVecs[0].GetBytesAt(0)[0:]))
+	require.Equal(t, int64(4), types.DecodeInt64(cacheVecs[0].GetBytesAt(0)[8:]))
+	require.Equal(t, 29.0, types.DecodeFloat64(cacheVecs[0].GetBytesAt(1)[0:]))
+	require.Equal(t, int64(5), types.DecodeInt64(cacheVecs[0].GetBytesAt(1)[8:]))
+
+	resultExec := newAvgTwResultFloatExec(mp, 2, types.T_char.ToType())
+	require.NoError(t, resultExec.GroupGrow(3))
+	require.NoError(t, resultExec.BatchFill(0, []uint64{1, 2, GroupNotMatched}, cacheVecs))
+	resultVecs, err := resultExec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, 6.0, vector.GetFixedAtNoTypeCheck[float64](resultVecs[0], 0))
+	require.Equal(t, 5.8, vector.GetFixedAtNoTypeCheck[float64](resultVecs[0], 1))
+	require.True(t, resultVecs[0].IsNull(2))
+
+	cacheVecs[0].Free(mp)
+	resultVecs[0].Free(mp)
+	constVec.Free(mp)
+	rightVec.Free(mp)
+	left.Free()
+	right.Free()
+	resultExec.Free()
+}
+
+func TestAvgTwDecimalAndResultWrapperPaths(t *testing.T) {
+	mp := mpool.MustNewZero()
+	typ := types.New(types.T_decimal64, 10, 2)
+
+	cacheLeft := newAvgTwCacheDecimalExec[types.Decimal64](mp, 1, typ)
+	cacheRight := newAvgTwCacheDecimalExec[types.Decimal64](mp, 1, typ)
+	require.NoError(t, cacheLeft.GroupGrow(1))
+	require.NoError(t, cacheRight.GroupGrow(1))
+	require.NoError(t, cacheLeft.SetExtraInformation(nil, 0))
+
+	input := vector.NewVec(typ)
+	require.NoError(t, vector.AppendFixedList(input, mustDecimal64s(t, "1.00", "3.00"), nil, mp))
+	require.NoError(t, cacheLeft.Fill(0, 0, []*vector.Vector{input}))
+	require.NoError(t, cacheLeft.BulkFill(0, []*vector.Vector{input}))
+	require.NoError(t, cacheRight.Fill(0, 1, []*vector.Vector{input}))
+	require.NoError(t, cacheLeft.Merge(cacheRight, 0, 0))
+	require.NoError(t, cacheLeft.BatchMerge(cacheRight, 0, []uint64{1}))
+
+	cacheVecs, err := cacheLeft.Flush()
+	require.NoError(t, err)
+
+	resultExec := newAvgTwResultDecimalExec(mp, 2, AvgTwCacheReturnType([]types.Type{typ}))
+	resultOther := newAvgTwResultDecimalExec(mp, 2, AvgTwCacheReturnType([]types.Type{typ}))
+	require.NoError(t, resultExec.GroupGrow(1))
+	require.NoError(t, resultOther.GroupGrow(1))
+	require.NoError(t, resultExec.SetExtraInformation(nil, 0))
+	require.NoError(t, resultExec.Fill(0, 0, cacheVecs))
+	require.NoError(t, resultOther.BulkFill(0, cacheVecs))
+	require.NoError(t, resultExec.Merge(resultOther, 0, 0))
+	require.NoError(t, resultExec.BatchMerge(resultOther, 0, []uint64{1}))
+
+	resultVecs, err := resultExec.Flush()
+	require.NoError(t, err)
+	require.False(t, resultVecs[0].IsNull(0))
+
+	cacheVecs[0].Free(mp)
+	resultVecs[0].Free(mp)
+	input.Free(mp)
+	cacheLeft.Free()
+	cacheRight.Free()
+	resultExec.Free()
+	resultOther.Free()
+}
+
+func TestAvgTwResultFloatWrapperPaths(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	cacheExec := newAvgTwCacheNumericExec[int32](mp, 1, types.T_int32.ToType())
+	require.NoError(t, cacheExec.GroupGrow(1))
+	input := buildFixedVec(t, mp, types.T_int32.ToType(), []int32{2, 4})
+	require.NoError(t, cacheExec.BulkFill(0, []*vector.Vector{input}))
+	cacheVecs, err := cacheExec.Flush()
+	require.NoError(t, err)
+
+	left := newAvgTwResultFloatExec(mp, 2, types.T_char.ToType())
+	right := newAvgTwResultFloatExec(mp, 2, types.T_char.ToType())
+	require.NoError(t, left.GroupGrow(1))
+	require.NoError(t, right.GroupGrow(1))
+	require.NoError(t, left.SetExtraInformation(nil, 0))
+	require.NoError(t, left.BulkFill(0, cacheVecs))
+	require.NoError(t, right.Fill(0, 0, cacheVecs))
+	require.NoError(t, left.Merge(right, 0, 0))
+	require.NoError(t, left.BatchMerge(right, 0, []uint64{1}))
+
+	vecs, err := left.Flush()
+	require.NoError(t, err)
+	require.False(t, vecs[0].IsNull(0))
+
+	cacheVecs[0].Free(mp)
+	vecs[0].Free(mp)
+	input.Free(mp)
+	cacheExec.Free()
+	left.Free()
+	right.Free()
+}

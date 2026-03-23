@@ -64,74 +64,6 @@ func (d *distinctHash) fill(group int, vs []*vector.Vector, row int) (bool, erro
 	return d.itrs[group].DetectDup(vs, row)
 }
 
-func (d *distinctHash) bulkFill(group int, vs []*vector.Vector) ([]bool, error) {
-	rowCount := vs[0].Length()
-
-	if cap(d.bs) < rowCount {
-		d.bs = make([]bool, rowCount)
-	}
-	if cap(d.bs1) < hashmap.UnitLimit {
-		d.bs1 = make([]bool, hashmap.UnitLimit)
-	}
-	d.bs = d.bs[:rowCount]
-	d.bs1 = d.bs1[:hashmap.UnitLimit]
-
-	iterator := d.itrs[group]
-
-	for i := 0; i < rowCount; i += hashmap.UnitLimit {
-		n := rowCount - i
-		if n > hashmap.UnitLimit {
-			n = hashmap.UnitLimit
-		}
-		for j := 0; j < n; j++ {
-			d.bs1[j] = false
-		}
-
-		oldLen := d.maps[group].GroupCount()
-		indexOffset := oldLen + 1
-
-		values, _, err := iterator.Insert(i, n, vs)
-		if err != nil {
-			return nil, err
-		}
-
-		dd := d.bs[i:]
-		for k, v := range values {
-			if v > oldLen && !d.bs1[v-indexOffset] {
-				d.bs1[v-indexOffset] = true
-				dd[k] = true
-			} else {
-				dd[k] = false
-			}
-		}
-	}
-	return d.bs, nil
-}
-
-func (d *distinctHash) batchFill(vs []*vector.Vector, offset int, groups []uint64) ([]bool, error) {
-	rowCount := len(groups)
-
-	if cap(d.bs) < rowCount {
-		d.bs = make([]bool, rowCount)
-	}
-	d.bs = d.bs[:0]
-
-	for _, group := range groups {
-		if group != GroupNotMatched {
-			ok, err := d.fill(int(group-1), vs, offset)
-			if err != nil {
-				return nil, err
-			}
-			d.bs = append(d.bs, ok)
-		} else {
-			d.bs = append(d.bs, false)
-		}
-		offset++
-	}
-
-	return d.bs, nil
-}
-
 // merge was the method to merge two groups of distinct agg.
 // but distinct agg should be run in only one node and without any parallel.
 // because the distinct agg need to store all the source data to make sure the result is correct if we use parallel.
@@ -199,14 +131,6 @@ func (d *distinctHash) marshalToBuffers(flags []uint8, buf *bytes.Buffer) error 
 		}
 	}
 	return nil
-}
-
-func (d *distinctHash) unmarshal(data []byte, mp *mpool.MPool) error {
-	if len(data) == 0 {
-		return nil
-	}
-	buf := bytes.NewBuffer(data)
-	return d.unmarshalFromReader(buf, mp)
 }
 
 func (d *distinctHash) unmarshalFromReader(buf io.Reader, mp *mpool.MPool) error {
