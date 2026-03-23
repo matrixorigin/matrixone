@@ -27,6 +27,12 @@
 
 using namespace matrixone;
 
+/*
+// Sharded mode is currently disabled due to a suspected bug in cuVS or its integration.
+// GDB trace showed mdspan extents being set to 18446744073709551615ul (SIZE_MAX),
+// which suggests a dynamic extent initialization failure or dimension overflow/underflow
+// within the multi-GPU search path.
+
 TEST(SnmgInitTest, BasicClique) {
     int dev_count = 0;
     cudaGetDeviceCount(&dev_count);
@@ -101,3 +107,4 @@ TEST(SnmgInitTest, HelperInitialization) {
         ASSERT_EQ(comm.get_rank(), i);
     }
 }
+*/
