@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/require"
 )
 
 type applyTestCase struct {
@@ -43,6 +44,25 @@ func TestString(t *testing.T) {
 }
 
 func TestApply(t *testing.T) {
+}
+
+func TestNilTableFunctionLifecycle(t *testing.T) {
+	proc := testutil.NewProc(t)
+	arg := NewArgument()
+
+	err := arg.Prepare(proc)
+	require.ErrorContains(t, err, "apply table function is nil")
+
+	_, err = arg.Call(proc)
+	require.ErrorContains(t, err, "apply table function is nil")
+
+	require.NotPanics(t, func() {
+		arg.Reset(proc, false, nil)
+	})
+
+	require.NotPanics(t, func() {
+		arg.Free(proc, false, nil)
+	})
 }
 
 func newTestCase(t *testing.T, applyType int) applyTestCase {

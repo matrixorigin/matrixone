@@ -18,8 +18,12 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -62,4 +66,52 @@ func TestResetAndFreeWithNilState(t *testing.T) {
 	require.NotPanics(t, func() {
 		arg.Free(proc, false, nil)
 	})
+}
+
+func TestResetAndFreeWithPartiallyInitializedExecutors(t *testing.T) {
+	proc := testutil.NewProc(t)
+	executor := &stubExpressionExecutor{}
+	arg := &TableFunction{}
+	arg.ctr.executorsForArgs = []colexec.ExpressionExecutor{executor}
+
+	require.NotPanics(t, func() {
+		arg.Reset(proc, false, nil)
+	})
+	require.Equal(t, 1, executor.resetCount)
+
+	require.NotPanics(t, func() {
+		arg.Free(proc, false, nil)
+	})
+	require.Equal(t, 1, executor.freeCount)
+	require.Nil(t, arg.ctr.argVecs)
+	require.Nil(t, arg.ctr.executorsForArgs)
+}
+
+type stubExpressionExecutor struct {
+	resetCount int
+	freeCount  int
+}
+
+func (s *stubExpressionExecutor) Eval(*process.Process, []*batch.Batch, []bool) (*vector.Vector, error) {
+	return nil, nil
+}
+
+func (s *stubExpressionExecutor) EvalWithoutResultReusing(*process.Process, []*batch.Batch, []bool) (*vector.Vector, error) {
+	return nil, nil
+}
+
+func (s *stubExpressionExecutor) ResetForNextQuery() {
+	s.resetCount++
+}
+
+func (s *stubExpressionExecutor) Free() {
+	s.freeCount++
+}
+
+func (s *stubExpressionExecutor) IsColumnExpr() bool {
+	return false
+}
+
+func (s *stubExpressionExecutor) TypeName() string {
+	return "stub"
 }
