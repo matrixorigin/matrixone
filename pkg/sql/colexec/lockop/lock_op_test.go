@@ -572,6 +572,19 @@ func TestLockWithHasNewVersionInLockedTS(t *testing.T) {
 	stopper.Stop()
 }
 
+func TestLockOpResetClearsLockCount(t *testing.T) {
+	arg := NewArgumentByEngine(nil)
+	arg.ctr.lockCount = 7
+	arg.ctr.defChanged = true
+	arg.ctr.retryError = moerr.NewTxnNeedRetryNoCtx()
+
+	arg.Reset(nil, false, nil)
+
+	require.Equal(t, int64(0), arg.ctr.lockCount)
+	require.False(t, arg.ctr.defChanged)
+	require.Nil(t, arg.ctr.retryError)
+}
+
 func runLockNonBlockingOpTest(
 	t *testing.T,
 	tables []uint64,

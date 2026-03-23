@@ -183,6 +183,9 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	// clean up the process for a new query.
 	proc.ResetQueryContext()
 	proc.ResetCloneTxnOperator()
+	// Statement snapshot timestamp is statement-scoped; clear it for every new execution
+	// when reusing a prepared Compile to avoid carrying snapshot visibility across EXECUTEs.
+	proc.SetStmtSnapshotTS(timestamp.Timestamp{})
 	c.proc = proc
 
 	c.fill = fill
