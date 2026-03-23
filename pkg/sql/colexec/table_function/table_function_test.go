@@ -18,8 +18,16 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -62,4 +70,82 @@ func TestResetAndFreeWithNilState(t *testing.T) {
 	require.NotPanics(t, func() {
 		arg.Free(proc, false, nil)
 	})
+}
+
+func TestResetAndFreeWithPartiallyInitializedExecutors(t *testing.T) {
+	proc := testutil.NewProc(t)
+	executor := &stubExpressionExecutor{}
+	arg := &TableFunction{}
+	arg.ctr.executorsForArgs = []colexec.ExpressionExecutor{executor}
+
+	require.NotPanics(t, func() {
+		arg.Reset(proc, false, nil)
+	})
+	require.Equal(t, 1, executor.resetCount)
+
+	require.NotPanics(t, func() {
+		arg.Free(proc, false, nil)
+	})
+	require.Equal(t, 1, executor.freeCount)
+	require.Nil(t, arg.ctr.argVecs)
+	require.Nil(t, arg.ctr.executorsForArgs)
+}
+
+func TestGenerateSeriesPrepareFaultLeavesPartialInitSafeToFree(t *testing.T) {
+	proc := testutil.NewProc(t)
+	fault.Enable()
+	defer fault.Disable()
+
+	require.NoError(t, fault.AddFaultPoint(proc.Ctx, "fj/cn/generate_series_partial_prepare", ":::", "echo", 0, "apply teardown repro", false))
+	defer func() {
+		_, err := fault.RemoveFaultPoint(proc.Ctx, "fj/cn/generate_series_partial_prepare")
+		require.NoError(t, err)
+	}()
+
+	arg := &TableFunction{
+		Args: []*plan.Expr{
+			plan2.MakePlan2Int64ConstExprWithType(1),
+			plan2.MakePlan2Int64ConstExprWithType(3),
+		},
+	}
+
+	state, err := generateSeriesPrepare(proc, arg)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState))
+	require.NotNil(t, state)
+	require.NotNil(t, arg.ctr.executorsForArgs)
+	require.Nil(t, arg.ctr.argVecs)
+
+	require.NotPanics(t, func() {
+		arg.Free(proc, false, nil)
+	})
+}
+
+type stubExpressionExecutor struct {
+	resetCount int
+	freeCount  int
+}
+
+func (s *stubExpressionExecutor) Eval(*process.Process, []*batch.Batch, []bool) (*vector.Vector, error) {
+	return nil, nil
+}
+
+func (s *stubExpressionExecutor) EvalWithoutResultReusing(*process.Process, []*batch.Batch, []bool) (*vector.Vector, error) {
+	return nil, nil
+}
+
+func (s *stubExpressionExecutor) ResetForNextQuery() {
+	s.resetCount++
+}
+
+func (s *stubExpressionExecutor) Free() {
+	s.freeCount++
+}
+
+func (s *stubExpressionExecutor) IsColumnExpr() bool {
+	return false
+}
+
+func (s *stubExpressionExecutor) TypeName() string {
+	return "stub"
 }
