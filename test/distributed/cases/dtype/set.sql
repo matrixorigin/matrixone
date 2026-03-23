@@ -90,7 +90,7 @@ select distinct colors from set01 order by colors;
 -- 3. GROUP BY on SET column
 select colors, count(*) as cnt from set01 group by colors order by colors;
 
--- 4. LOAD DATA with invalid member (row should be skipped, table stays empty)
+-- 4. LOAD DATA with invalid member (error expected)
 drop table if exists set_load_err;
 create table set_load_err (id int primary key, colors set('red','green','blue'));
 load data infile '$resources/load_data/set_bad.csv'
