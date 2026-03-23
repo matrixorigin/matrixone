@@ -16,7 +16,9 @@ package hashbuild
 
 import (
 	"bytes"
+	"context"
 	"os"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -96,6 +98,17 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 					jm = message.NewJoinMap(message.GroupSels{}, nil, nil, nil, nil, proc.Mp())
 					jm.Spilled = true
 					jm.SpillBuckets = ctr.spilledBuckets
+					// Register a cleanup so FreeMemory deletes the spill files even if
+					// hashjoin cancels before receiving this message. Files may already
+					// be deleted by hashjoin in the normal path — errors are ignored.
+					if spillfs, fsErr := proc.GetSpillFileService(); fsErr == nil {
+						buckets := slices.Clone(ctr.spilledBuckets)
+						jm.SetSpillCleanup(func() {
+							for _, b := range buckets {
+								_ = spillfs.RemoveFile(context.Background(), b)
+							}
+						})
+					}
 				} else {
 					// Normal mode: send hashmap and batches
 					jm = ctr.hashmapBuilder.GetJoinMap(proc.Mp())

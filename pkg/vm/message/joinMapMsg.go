@@ -139,6 +139,12 @@ type JoinMap struct {
 	Spilled      bool
 	SpillBuckets []string // bucket file names
 	SpillRowCnts []int64  // rows per bucket
+
+	// spillCleanup deletes spill bucket files when this JoinMap is freed.
+	// Called from FreeMemory so files are cleaned up even if the receiver
+	// (hashjoin) cancelled before reading the message. Files may already
+	// be deleted by hashjoin in the normal path — errors are ignored.
+	spillCleanup func()
 }
 
 func NewJoinMap(sels GroupSels, ihm *hashmap.IntHashMap, shm *hashmap.StrHashMap, delRows *bitmap.Bitmap, batches []*batch.Batch, m *mpool.MPool) *JoinMap {
@@ -236,11 +242,19 @@ func (jm *JoinMap) GetSpillBuckets() ([]string, []int64) {
 	return jm.SpillBuckets, jm.SpillRowCnts
 }
 
+func (jm *JoinMap) SetSpillCleanup(f func()) {
+	jm.spillCleanup = f
+}
+
 func (jm *JoinMap) IsDeleted(row uint64) bool {
 	return jm.delRows != nil && jm.delRows.Contains(uint64(row))
 }
 
 func (jm *JoinMap) FreeMemory() {
+	if jm.spillCleanup != nil {
+		jm.spillCleanup()
+		jm.spillCleanup = nil
+	}
 	jm.sels.Free(jm.mpool)
 	if jm.ihm != nil {
 		jm.ihm.Free()

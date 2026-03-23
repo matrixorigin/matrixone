@@ -274,9 +274,12 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 
 			// Register build files in spillQueue immediately so cleanupSpillFiles
 			// can delete them even if we return early (e.g. context cancelled).
+			// baseName strips the "join_" prefix and "_build" suffix from buildFile
+			// (e.g. "join_<uuid>_3_build" → "<uuid>_3") for use as the sub-bucket prefix.
 			ctr.spillQueue = make([]spillBucket, len(spilledBuildBuckets))
 			for i, buildFile := range spilledBuildBuckets {
-				ctr.spillQueue[i] = spillBucket{buildFile: buildFile, depth: 0}
+				baseName := buildFile[len("join_") : len(buildFile)-len("_build")]
+				ctr.spillQueue[i] = spillBucket{buildFile: buildFile, baseName: baseName, depth: 0}
 			}
 
 			// Create writers for probe side (files created lazily on first write)

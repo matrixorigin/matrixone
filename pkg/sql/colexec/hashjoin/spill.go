@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -224,12 +225,12 @@ func (w *spillBucketWriter) delete() {
 	w.close()
 }
 
-// makeSpillBucketWriters creates spillNumBuckets writers whose names are derived from
-// parentName. No files are created on disk; file creation is deferred to the first write.
-func makeSpillBucketWriters(parentName string) []spillBucketWriter {
+// makeSpillBucketWriters creates spillNumBuckets writers with names "join_<uid>_<i>_<suffix>".
+// No files are created on disk; file creation is deferred to the first write.
+func makeSpillBucketWriters(uid, suffix string) []spillBucketWriter {
 	writers := make([]spillBucketWriter, spillNumBuckets)
 	for i := range writers {
-		writers[i].name = fmt.Sprintf("%s_%d", parentName, i)
+		writers[i].name = fmt.Sprintf("join_%s_%d_%s", uid, i, suffix)
 	}
 	return writers
 }
@@ -380,7 +381,9 @@ func (ctr *container) flushBucketBuffer(proc *process.Process, bat *batch.Batch,
 
 func createRootProbeSpillBucketFiles() []spillBucketWriter {
 	uid, _ := uuid.NewV7()
-	return makeSpillBucketWriters(fmt.Sprintf("join_probe_%s", uid.String()))
+	uidStr := uid.String()
+	logutil.Infof("creating probe spill files, base: %s", uidStr)
+	return makeSpillBucketWriters(uidStr, "probe")
 }
 
 func (ctr *container) appendProbeBatchToSpillFiles(proc *process.Process, bat *batch.Batch, writers []spillBucketWriter, buffers []*batch.Batch, analyzer process.Analyzer, seed uint64) error {
@@ -463,6 +466,7 @@ func (ctr *container) shouldReSpill(builder *hashbuild.HashmapBuilder) bool {
 // it re-spills into sub-buckets (prepended to spillQueue) and returns nil, nil.
 func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket spillBucket, analyzer process.Analyzer) (jm *message.JoinMap, reSpilled bool, err error) {
 	ctr := &hashJoin.ctr
+	logutil.Infof("rebuilding hashmap for spill bucket: %s, depth: %d", bucket.baseName, bucket.depth+1)
 
 	// Create a temporary hashmap builder
 	builder := &hashbuild.HashmapBuilder{}
@@ -575,6 +579,7 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket 
 // Sub-bucket files are created lazily: a file is only written when it actually receives data.
 func (hashJoin *HashJoin) reSpillBucket(proc *process.Process, bucket spillBucket, builder *hashbuild.HashmapBuilder, reader *spillBucketReader, nextDepth int, analyzer process.Analyzer) (*message.JoinMap, error) {
 	ctr := &hashJoin.ctr
+	logutil.Infof("re-spilling bucket: %s, depth: %d -> %d", bucket.baseName, bucket.depth+1, nextDepth+1)
 
 	spillfs, err := ctr.getSpillFS(proc)
 	if err != nil {
@@ -582,12 +587,10 @@ func (hashJoin *HashJoin) reSpillBucket(proc *process.Process, bucket spillBucke
 	}
 
 	// Generate sub-bucket writers without creating files (lazy creation on first write).
-	// Names are used only as the path arg to CreateAndRemoveFile; the file is immediately
-	// unlinked, so any unique names work. Derive them from a fresh UUID per re-spill.
-	uid, _ := uuid.NewV7()
-	base := fmt.Sprintf("join_spill_%s_d%d", uid.String(), nextDepth)
-	subBuildWriters := makeSpillBucketWriters(base + "_b")
-	subProbeWriters := makeSpillBucketWriters(base + "_p")
+	// Names follow "join_<baseName>_<j>_build/probe", e.g. join_<uuid>_3_5_build for
+	// root bucket 3, sub-bucket 5. baseName already encodes the full ancestry.
+	subBuildWriters := makeSpillBucketWriters(bucket.baseName, "build")
+	subProbeWriters := makeSpillBucketWriters(bucket.baseName, "probe")
 
 	// Defer file closing and cleanup on error.
 	var respillErr error
@@ -734,9 +737,10 @@ func (hashJoin *HashJoin) reSpillBucket(proc *process.Process, bucket spillBucke
 	for i := 0; i < spillNumBuckets; i++ {
 		if validBuckets[i] {
 			subBuckets = append(subBuckets, spillBucket{
-				buildFd: subBuildWriters[i].handOffFd(),
-				probeFd: subProbeWriters[i].handOffFd(),
-				depth:   nextDepth,
+				buildFd:  subBuildWriters[i].handOffFd(),
+				probeFd:  subProbeWriters[i].handOffFd(),
+				baseName: fmt.Sprintf("%s_%d", bucket.baseName, i),
+				depth:    nextDepth,
 			})
 		}
 	}

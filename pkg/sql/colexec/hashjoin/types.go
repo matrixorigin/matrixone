@@ -49,6 +49,7 @@ type spillBucket struct {
 	buildFile string   // named file from hashbuild (level 0 only)
 	buildFd   *os.File // fd-based build file (levels 1+); nil if level 0
 	probeFd   *os.File // fd-based probe file (all levels); nil = empty probe
+	baseName  string   // base name for deriving sub-bucket file paths on re-spill
 	depth     int
 }
 

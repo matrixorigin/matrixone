@@ -76,14 +76,14 @@ func createSpillFiles(proc *process.Process) ([]string, []*os.File, error) {
 	}
 
 	uid, _ := uuid.NewV7()
-	baseName := fmt.Sprintf("join_build_%s", uid.String())
-	logutil.Infof("creating spill files, base: %s", baseName)
+	uidStr := uid.String()
+	logutil.Infof("creating spill files, base: %s", uidStr)
 
 	buckets := make([]string, spillNumBuckets)
 	files := make([]*os.File, spillNumBuckets)
 
 	for i := 0; i < spillNumBuckets; i++ {
-		buckets[i] = fmt.Sprintf("%s_%d", baseName, i)
+		buckets[i] = fmt.Sprintf("join_%s_%d_build", uidStr, i)
 		if files[i], err = spillfs.CreateFile(proc.Ctx, buckets[i]); err != nil {
 			// Close any opened files on error
 			for j := 0; j < i; j++ {
