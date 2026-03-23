@@ -28,6 +28,10 @@ import (
 
 var notFoundErr = moerr.NewNotFoundNoCtx()
 
+func newDuplicateEntryWithLog(attr, entry, _ string) error {
+	return moerr.NewDuplicateEntryNoCtx(entry, attr)
+}
+
 type TableIndex interface {
 	io.Closer
 	BatchDedup(string, containers.Vector) error
@@ -60,7 +64,7 @@ func DedupOp[T comparable](
 	for _, v := range vs {
 		if _, ok := tree[v]; ok {
 			entry := common.TypeStringValue(*t, v, false)
-			return moerr.NewDuplicateEntryNoCtx(entry, attr)
+			return newDuplicateEntryWithLog(attr, entry, "txnimpl.DedupOp")
 		}
 	}
 	return
@@ -79,7 +83,7 @@ func InsertOp[T comparable](
 		for _, v := range vals[start : start+count] {
 			if _, ok := set[v]; ok {
 				entry := common.TypeStringValue(*t, v, false)
-				return moerr.NewDuplicateEntryNoCtx(entry, attr)
+				return newDuplicateEntryWithLog(attr, entry, "txnimpl.InsertOp.dedupInput")
 			}
 			set[v] = true
 		}
@@ -88,7 +92,7 @@ func InsertOp[T comparable](
 	for _, v := range vals[start : start+count] {
 		if _, ok := tree[v]; ok {
 			entry := common.TypeStringValue(*t, v, false)
-			return moerr.NewDuplicateEntryNoCtx(entry, attr)
+			return newDuplicateEntryWithLog(attr, entry, "txnimpl.InsertOp.tree")
 		}
 		tree[v] = fromRow
 		fromRow++
@@ -303,7 +307,7 @@ func (idx *simpleTableIndex) BatchInsert(
 				v := vec.UnsafeGetStringAt(i)
 				if _, ok := set[v]; ok {
 					entry := common.TypeStringValue(*colType, []byte(v), false)
-					return moerr.NewDuplicateEntryNoCtx(entry, attr)
+					return newDuplicateEntryWithLog(attr, entry, "txnimpl.BatchInsert.string.dedupInput")
 				}
 				set[v] = true
 			}
@@ -313,7 +317,7 @@ func (idx *simpleTableIndex) BatchInsert(
 			v := vec.UnsafeGetStringAt(i)
 			if _, ok := idx.tree[v]; ok {
 				entry := common.TypeStringValue(*colType, []byte(v), false)
-				return moerr.NewDuplicateEntryNoCtx(entry, attr)
+				return newDuplicateEntryWithLog(attr, entry, "txnimpl.BatchInsert.string.tree")
 			}
 			idx.tree[v] = row
 			row++
@@ -326,7 +330,7 @@ func (idx *simpleTableIndex) BatchInsert(
 				v := types.ArrayToString[float32](vector.GetArrayAt[float32](vec, i))
 				if _, ok := set[v]; ok {
 					entry := common.TypeStringValue(*colType, vec.GetBytesAt(i), false)
-					return moerr.NewDuplicateEntryNoCtx(entry, attr)
+					return newDuplicateEntryWithLog(attr, entry, "txnimpl.BatchInsert.array32.dedupInput")
 				}
 				set[v] = true
 			}
@@ -336,7 +340,7 @@ func (idx *simpleTableIndex) BatchInsert(
 			v := types.ArrayToString[float32](vector.GetArrayAt[float32](vec, i))
 			if _, ok := idx.tree[v]; ok {
 				entry := common.TypeStringValue(*colType, vec.GetBytesAt(i), false)
-				return moerr.NewDuplicateEntryNoCtx(entry, attr)
+				return newDuplicateEntryWithLog(attr, entry, "txnimpl.BatchInsert.array32.tree")
 			}
 			idx.tree[v] = row
 			row++
@@ -349,7 +353,7 @@ func (idx *simpleTableIndex) BatchInsert(
 				v := types.ArrayToString[float64](vector.GetArrayAt[float64](vec, i))
 				if _, ok := set[v]; ok {
 					entry := common.TypeStringValue(*colType, vec.GetBytesAt(i), false)
-					return moerr.NewDuplicateEntryNoCtx(entry, attr)
+					return newDuplicateEntryWithLog(attr, entry, "txnimpl.BatchInsert.array64.dedupInput")
 				}
 				set[v] = true
 			}
@@ -359,7 +363,7 @@ func (idx *simpleTableIndex) BatchInsert(
 			v := types.ArrayToString[float64](vector.GetArrayAt[float64](vec, i))
 			if _, ok := idx.tree[v]; ok {
 				entry := common.TypeStringValue(*colType, vec.GetBytesAt(i), false)
-				return moerr.NewDuplicateEntryNoCtx(entry, attr)
+				return newDuplicateEntryWithLog(attr, entry, "txnimpl.BatchInsert.array64.tree")
 			}
 			idx.tree[v] = row
 			row++
@@ -453,7 +457,7 @@ func (idx *simpleTableIndex) BatchDedup(attr string, col containers.Vector) erro
 			v := util.UnsafeBytesToString(bs)
 			if _, ok := idx.tree[v]; ok {
 				entry := common.TypeStringValue(*colType, bs, false)
-				return moerr.NewDuplicateEntryNoCtx(entry, attr)
+				return newDuplicateEntryWithLog(attr, entry, "txnimpl.BatchDedup.string")
 			}
 		}
 	case types.T_array_float32:
@@ -463,7 +467,7 @@ func (idx *simpleTableIndex) BatchDedup(attr string, col containers.Vector) erro
 			v := types.BytesToArrayToString[float32](bs)
 			if _, ok := idx.tree[v]; ok {
 				entry := common.TypeStringValue(*colType, bs, false)
-				return moerr.NewDuplicateEntryNoCtx(entry, attr)
+				return newDuplicateEntryWithLog(attr, entry, "txnimpl.BatchDedup.array32")
 			}
 		}
 	case types.T_array_float64:
@@ -473,7 +477,7 @@ func (idx *simpleTableIndex) BatchDedup(attr string, col containers.Vector) erro
 			v := types.BytesToArrayToString[float64](bs)
 			if _, ok := idx.tree[v]; ok {
 				entry := common.TypeStringValue(*colType, bs, false)
-				return moerr.NewDuplicateEntryNoCtx(entry, attr)
+				return newDuplicateEntryWithLog(attr, entry, "txnimpl.BatchDedup.array64")
 			}
 		}
 	default:

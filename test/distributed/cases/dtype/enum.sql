@@ -311,3 +311,14 @@ create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeo
 drop table if exists agg01;
 create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeowqehwgqjhenw'), key (col2));
 drop table if exists agg01;
+
+-- ENUM ORDER BY should sort by definition order, not alphabetically
+drop table if exists test_enum_order;
+create table test_enum_order (id int, val enum('low', 'medium', 'high', 'critical'));
+insert into test_enum_order values (1, 'low'), (2, 'medium'), (3, 'high'), (4, 'critical');
+select id, val from test_enum_order order by val;
+select id, val from test_enum_order order by val desc;
+select val, cume_dist() over (order by val) as cd from test_enum_order order by val;
+select val, percent_rank() over (order by val) as pr from test_enum_order order by val;
+select val, rank() over (order by val) as rnk from test_enum_order order by val;
+drop table test_enum_order;

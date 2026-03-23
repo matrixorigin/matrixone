@@ -1634,7 +1634,7 @@ select a % 3 as grp, a, ntile(2) over (partition by a % 3 order by a) as bucket 
 
 drop table t_ntile;
 
--- issue#23863: percent_rank with blob column
+-- percent_rank with blob column
 drop table if exists test_pr_blob;
 create table test_pr_blob (id int, val blob);
 insert into test_pr_blob values (1, 'abc'), (2, 'def'), (3, 'xyz');
@@ -1642,7 +1642,7 @@ select id, percent_rank() over (order by val) as pct_rank from test_pr_blob orde
 select id, rank() over (order by val) as rnk from test_pr_blob order by val;
 drop table test_pr_blob;
 
--- issue#23863: percent_rank with binary/varbinary column
+-- percent_rank with binary/varbinary column
 drop table if exists test_pr_binary;
 create table test_pr_binary (id int, val varbinary(20));
 insert into test_pr_binary values (1, 'abc'), (2, 'def'), (3, 'xyz');

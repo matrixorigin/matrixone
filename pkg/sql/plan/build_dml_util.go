@@ -356,37 +356,34 @@ func checkDeleteOptToTruncate(ctx CompilerContext) (bool, error) {
 	[o1]sink_scan -> join[f1 inner join c4 on f1.id = c4.fid, get c3.*, update cols] -> sink ...(like update)   // update stmt: if have refChild table with cascade
 */
 func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx) error {
-	if sinkOrUnionNodeId, ok := builder.deleteNode[delCtx.tableDef.TblId]; ok {
-		sinkOrUnionNode := builder.qry.Nodes[sinkOrUnionNodeId]
-		if sinkOrUnionNode.NodeType == plan.Node_SINK {
-			step := getStepByNodeId(builder, sinkOrUnionNodeId)
-			if step == -1 || delCtx.sourceStep == -1 {
-				panic("steps should not be -1")
-			}
-
-			oldDelPlanSinkScanNodeId := appendSinkScanNode(builder, bindCtx, int32(step))
-			thisDelPlanSinkScanNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
-			unionProjection := getProjectionByLastNode(builder, sinkOrUnionNodeId)
-			unionNode := &plan.Node{
-				NodeType:    plan.Node_UNION,
-				Children:    []int32{oldDelPlanSinkScanNodeId, thisDelPlanSinkScanNodeId},
-				ProjectList: unionProjection,
-			}
-			unionNodeId := builder.appendNode(unionNode, bindCtx)
-			newSinkNodeId := appendSinkNode(builder, bindCtx, unionNodeId)
-			endStep := builder.appendStep(newSinkNodeId)
-			for i, n := range builder.qry.Nodes {
-				if n.NodeType == plan.Node_SINK_SCAN && n.SourceStep[0] == int32(step) && i != int(oldDelPlanSinkScanNodeId) {
-					n.SourceStep[0] = endStep
-				}
-			}
-			builder.deleteNode[delCtx.tableDef.TblId] = unionNodeId
-		} else {
-			// todo : we need make union operator to support more than two children.
-			panic("unsuport more than two plans to delete one table")
-			// thisDelPlanSinkScanNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
-			// sinkOrUnionNode.Children = append(sinkOrUnionNode.Children, thisDelPlanSinkScanNodeId)
+	// When the same child table is reached multiple times (e.g. two FKs pointing to the
+	// same parent), we merge the delete sources with a UNION chain.  `deleteNode[tblId]`
+	// always stores the SINK node id of the current merged plan so every subsequent entry
+	// can follow the same code path regardless of how many times we merge.
+	if sinkNodeId, ok := builder.deleteNode[delCtx.tableDef.TblId]; ok {
+		step := getStepByNodeId(builder, sinkNodeId)
+		if step == -1 || delCtx.sourceStep == -1 {
+			panic("steps should not be -1")
 		}
+
+		oldDelPlanSinkScanNodeId := appendSinkScanNode(builder, bindCtx, int32(step))
+		thisDelPlanSinkScanNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
+		unionProjection := getProjectionByLastNode(builder, sinkNodeId)
+		unionNode := &plan.Node{
+			NodeType:    plan.Node_UNION,
+			Children:    []int32{oldDelPlanSinkScanNodeId, thisDelPlanSinkScanNodeId},
+			ProjectList: unionProjection,
+		}
+		unionNodeId := builder.appendNode(unionNode, bindCtx)
+		newSinkNodeId := appendSinkNode(builder, bindCtx, unionNodeId)
+		endStep := builder.appendStep(newSinkNodeId)
+		for i, n := range builder.qry.Nodes {
+			if n.NodeType == plan.Node_SINK_SCAN && n.SourceStep[0] == int32(step) && i != int(oldDelPlanSinkScanNodeId) {
+				n.SourceStep[0] = endStep
+			}
+		}
+		// Store the new SINK (not the UNION) so the next merge can find the step directly.
+		builder.deleteNode[delCtx.tableDef.TblId] = newSinkNodeId
 		return nil
 	} else {
 		builder.deleteNode[delCtx.tableDef.TblId] = builder.qry.Steps[delCtx.sourceStep]
@@ -450,7 +447,12 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		}
 		baseProject := getProjectionByLastNode(builder, lastNodeId)
 
+		seenChild := make(map[uint64]bool)
 		for _, tableId := range delCtx.tableDef.RefChildTbls {
+			if seenChild[tableId] {
+				continue
+			}
+			seenChild[tableId] = true
 			// stmt: delete p, c from child_tbl c join parent_tbl p on c.pid = p.id , skip
 			if _, existInDelTable := delCtx.allDelTableIDs[tableId]; existInDelTable {
 				continue
@@ -1059,13 +1061,21 @@ func appendPureInsertBranch(ctx CompilerContext, builder *QueryBuilder, bindCtx 
 		insertProjection = insertProjection[:len(tableDef.Cols)]
 	}
 
+	insertObjRef := objRef
+	if objRef != nil && tableDef.GetIsTemporary() && tableDef.Name != "" && objRef.ObjName != tableDef.Name {
+		// Use the physical temp table name in execution nodes. Runtime executors
+		// may not always carry session alias mappings.
+		insertObjRef = DeepCopyObjectRef(objRef)
+		insertObjRef.ObjName = tableDef.Name
+	}
+
 	insertNode := &Node{
 		NodeType: plan.Node_INSERT,
 		Children: []int32{lastNodeId},
-		ObjRef:   objRef,
+		ObjRef:   insertObjRef,
 		TableDef: tableDef,
 		InsertCtx: &plan.InsertCtx{
-			Ref:             objRef,
+			Ref:             insertObjRef,
 			AddAffectedRows: addAffectedRows,
 			IsClusterTable:  tableDef.TableType == catalog.SystemClusterRel,
 			TableDef:        tableDef,
