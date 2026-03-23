@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -374,6 +375,35 @@ func TestDecimal256UnaryOperators(t *testing.T) {
 	)
 	ok, info = unaryMinusTC.Run()
 	require.True(t, ok, info)
+}
+
+func TestDecimal256PlusFnRespectsSelectListNulls(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	dec4 := types.New(types.T_decimal256, 65, 4)
+	left := mustParseDecimal256(t, "5.2500", 4)
+	right := mustParseDecimal256(t, "2.0000", 4)
+
+	ivecs := []*vector.Vector{
+		newVectorByType(proc.Mp(), dec4, []types.Decimal256{left, left}, nil),
+		newVectorByType(proc.Mp(), dec4, []types.Decimal256{right, right}, nil),
+	}
+	defer ivecs[0].Free(proc.Mp())
+	defer ivecs[1].Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(dec4, proc.Mp())
+	require.NoError(t, result.PreExtendAndReset(2))
+
+	selectList := &FunctionSelectList{
+		AnyNull:    true,
+		SelectList: []bool{true, false},
+	}
+	err := plusFn(ivecs, result, proc, 2, selectList)
+	require.NoError(t, err)
+
+	resultVec := result.GetResultVector()
+	values := vector.MustFixedColNoTypeCheck[types.Decimal256](resultVec)
+	require.Equal(t, mustParseDecimal256(t, "7.2500", 4), values[0])
+	require.True(t, resultVec.GetNulls().Contains(1))
 }
 
 func TestDecimal256MathFunctions(t *testing.T) {

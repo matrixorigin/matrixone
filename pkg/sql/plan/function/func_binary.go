@@ -5273,6 +5273,78 @@ func splitDecimalToIntAndFrac(f float64) (int64, int64) {
 	return intPart, fracPart
 }
 
+func decimal256ToInt64ForUnix(v types.Decimal256) (int64, error) {
+	if v.Sign() {
+		if v.B64_127 != ^uint64(0) || v.B128_191 != ^uint64(0) || v.B192_255 != ^uint64(0) {
+			return 0, moerr.NewOutOfRangeNoCtx("BIGINT", "")
+		}
+		if v.B0_63 < 0x8000000000000000 {
+			return 0, moerr.NewOutOfRangeNoCtx("BIGINT", "")
+		}
+		negated := v.Minus()
+		return -int64(negated.B0_63), nil
+	}
+
+	if v.B64_127 != 0 || v.B128_191 != 0 || v.B192_255 != 0 {
+		return 0, moerr.NewOutOfRangeNoCtx("BIGINT", "")
+	}
+	if v.B0_63 > 0x7FFFFFFFFFFFFFFF {
+		return 0, moerr.NewOutOfRangeNoCtx("BIGINT", "")
+	}
+	return int64(v.B0_63), nil
+}
+
+func decimal256UnixTimeParts(v types.Decimal256, scale int32) (sec int64, nsec int64, ok bool, err error) {
+	if v.Sign() {
+		return 0, 0, false, nil
+	}
+
+	whole, err := v.ScaleTruncate(-scale)
+	if err != nil {
+		return 0, 0, false, nil
+	}
+	sec, err = decimal256ToInt64ForUnix(whole)
+	if err != nil {
+		return 0, 0, false, nil
+	}
+	if sec < 0 || sec > maxUnixTimestampInt {
+		return 0, 0, false, nil
+	}
+
+	if scale <= 0 {
+		return sec, 0, true, nil
+	}
+
+	wholeScaled, err := whole.Scale(scale)
+	if err != nil {
+		return 0, 0, false, nil
+	}
+	frac, err := v.Sub256(wholeScaled)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	if frac.B0_63 == 0 && frac.B64_127 == 0 && frac.B128_191 == 0 && frac.B192_255 == 0 {
+		return sec, 0, true, nil
+	}
+
+	if scale > 9 {
+		frac, err = frac.ScaleTruncate(-(scale - 9))
+	} else if scale < 9 {
+		frac, err = frac.Scale(9 - scale)
+	}
+	if err != nil {
+		return 0, 0, false, err
+	}
+	nsec, err = decimal256ToInt64ForUnix(frac)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	if sec == maxUnixTimestampInt && nsec > 0 {
+		return 0, 0, false, nil
+	}
+	return sec, nsec, true, nil
+}
+
 func FromUnixTimeFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Datetime](result)
 	vs := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
@@ -5303,15 +5375,17 @@ func FromUnixTimeDecimal256(ivecs []*vector.Vector, result vector.FunctionResult
 	var d types.Datetime
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
-		f := types.Decimal256ToFloat64(v, scale)
+		sec, nsec, ok, convErr := decimal256UnixTimeParts(v, scale)
+		if convErr != nil {
+			return convErr
+		}
 
-		if null || (f < 0 || f > maxUnixTimestampInt) {
+		if null || !ok {
 			if err = rs.Append(d, true); err != nil {
 				return err
 			}
 		} else {
-			x, y := splitDecimalToIntAndFrac(f)
-			if err = rs.Append(types.DatetimeFromUnixWithNsec(proc.GetSessionInfo().TimeZone, x, y), false); err != nil {
+			if err = rs.Append(types.DatetimeFromUnixWithNsec(proc.GetSessionInfo().TimeZone, sec, nsec), false); err != nil {
 				return err
 			}
 		}
@@ -5430,16 +5504,18 @@ func FromUnixTimeDecimal256Format(ivecs []*vector.Vector, result vector.Function
 	var buf bytes.Buffer
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
-		fv := types.Decimal256ToFloat64(v, scale)
+		sec, nsec, ok, convErr := decimal256UnixTimeParts(v, scale)
+		if convErr != nil {
+			return convErr
+		}
 
-		if null || (fv < 0 || fv > maxUnixTimestampInt) || null1 {
+		if null || !ok || null1 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
 			buf.Reset()
-			x, y := splitDecimalToIntAndFrac(fv)
-			r := types.DatetimeFromUnixWithNsec(proc.GetSessionInfo().TimeZone, x, y)
+			r := types.DatetimeFromUnixWithNsec(proc.GetSessionInfo().TimeZone, sec, nsec)
 			if err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
 				return err
 			}

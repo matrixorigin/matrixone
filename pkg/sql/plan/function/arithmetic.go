@@ -244,20 +244,11 @@ func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 	}
 
 	if resultType.Oid == types.T_decimal256 {
-		inputHasNull := func(vec *vector.Vector) bool {
-			ns := vec.GetNulls()
-			return ns != nil && !ns.IsEmpty()
-		}
-		noNullInput := !inputHasNull(parameters[0]) && !inputHasNull(parameters[1])
-
 		if err := decimalArith[types.Decimal256](parameters, result, proc, length, func(v1, v2 types.Decimal256, scale1, scale2 int32) (types.Decimal256, error) {
 			r, _, err := v1.Add(v2, scale1, scale2)
 			return r, err
 		}, selectList, false); err != nil {
 			return err
-		}
-		if noNullInput {
-			result.GetResultVector().GetNulls().Reset()
 		}
 		return nil
 	}
