@@ -1453,3 +1453,54 @@ select * from (select i_manufact_id, sum(ss_sales_price) sum_sales, avg(sum(ss_s
 -- information_schema is now a table which is compatible with mysql, it is now an empty table
 select group_concat(c.column_name order by ordinal_position) key_columns  from information_schema.key_column_usage c where c.table_schema='test1' and c.table_name='region' and constraint_name='PRIMARY';
 drop database test;
+
+-- issue #23940: window function with ORDER BY on varchar type
+drop database if exists test_issue_23940;
+create database test_issue_23940;
+use test_issue_23940;
+drop table if exists t_issue_23940;
+create table t_issue_23940 (id int, name varchar(20), score int);
+insert into t_issue_23940 values(1, 'Alice', 90), (2, 'Bob', 85), (3, 'Charlie', 90), (4, 'David', 75), (5, 'Eve', 85);
+select id, name, row_number() over (order by name) from t_issue_23940;
+select id, name, rank() over (order by name) from t_issue_23940;
+select id, name, dense_rank() over (order by name) from t_issue_23940;
+select id, name, rank() over (partition by score order by name) from t_issue_23940;
+
+drop table if exists ms_t_stk_sis;
+CREATE TABLE `ms_t_stk_sis` (
+    `SITXDT` varchar(24) DEFAULT NULL,
+    `SISTKC` varchar(10) DEFAULT NULL,
+    `SISTKN` varchar(100) DEFAULT NULL,
+    `SIHIGH` decimal(16,4) DEFAULT NULL,
+    `SILOW` decimal(16,4) DEFAULT NULL,
+    `SICLSE` decimal(16,4) DEFAULT NULL,
+    `SIVOL` bigint DEFAULT NULL
+);
+INSERT INTO ms_t_stk_sis (SITXDT, SISTKC, SISTKN, SIHIGH, SILOW, SICLSE, SIVOL) VALUES ('02JAN2025:00:00:00', '01870', 'ACME INTL HLDGS', 1.8400, 1.7600, 1.8400, 1395000), ('02JAN2025:00:00:00', '01871', 'CHINA ORIENTED', NULL, NULL, 0.1990, 0), ('02JAN2025:00:00:00', '01872', 'GUAN CHAO HLDGS', 1.2400, 1.0100, 1.0600, 230500);
+WITH daily_prices AS (
+    SELECT
+      SISTKC,
+      SISTKN,
+      SITXDT,
+      SICLSE,
+      ROW_NUMBER() OVER (PARTITION BY SISTKC ORDER BY SITXDT) as rn
+    FROM ms_t_stk_sis
+    WHERE SITXDT >= '01JAN2025:00:00:00' AND SITXDT <= '31MAR2025:23:59:59'
+  ),
+  moving_avg AS (
+    SELECT
+      r1.SISTKC,
+      r1.SISTKN,
+      r1.SITXDT,
+      r1.SICLSE,
+      AVG(r2.SICLSE) AS ma_50
+    FROM daily_prices r1
+    JOIN daily_prices r2
+      ON r1.SISTKC = r2.SISTKC
+      AND r2.rn BETWEEN r1.rn - 49 AND r1.rn
+    GROUP BY r1.SISTKC, r1.SISTKN, r1.SITXDT, r1.SICLSE
+  )
+  SELECT SISTKC, SISTKN
+  FROM moving_avg
+  WHERE SICLSE > ma_50;
+drop database test_issue_23940;

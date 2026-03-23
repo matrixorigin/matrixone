@@ -1648,7 +1648,14 @@ col1    col2    col3    col4
 2002-06-09    null    01:01:01    null
 2015-08-01    1990-01-01 01:02:03    null    null
 select dense_rank() over (partition by col1 order by date_format(col1,'%m-%d-%Y')) from date02;
-SQL parser error: Window '<unnamed window>' with RANGE N PRECEDING/FOLLOWING frame requires exactly one ORDER BY expression, of numeric or temporal type
+dense_rank() over (partition by col1 order by date_format(col1, %m-%d-%Y))
+1
+1
+1
+1
+1
+1
+1
 select max(col2) over (partition by col3 order by date(col2) desc) from date02;
 max(col2) over (partition by col3 order by date(col2) desc)
 1990-01-01 01:02:03
@@ -4157,3 +4164,76 @@ i_manufact_id    sum_sales    avg_quarterly_sales
 select group_concat(c.column_name order by ordinal_position) key_columns  from information_schema.key_column_usage c where c.table_schema='test1' and c.table_name='region' and constraint_name='PRIMARY';
 key_columns
 drop database test;
+drop database if exists test_issue_23940;
+create database test_issue_23940;
+use test_issue_23940;
+drop table if exists t_issue_23940;
+create table t_issue_23940 (id int, name varchar(20), score int);
+insert into t_issue_23940 values(1, 'Alice', 90), (2, 'Bob', 85), (3, 'Charlie', 90), (4, 'David', 75), (5, 'Eve', 85);
+select id, name, row_number() over (order by name) from t_issue_23940;
+id    name    row_number() over (order by name)
+1    Alice    1
+2    Bob    2
+3    Charlie    3
+4    David    4
+5    Eve    5
+select id, name, rank() over (order by name) from t_issue_23940;
+id    name    rank() over (order by name)
+1    Alice    1
+2    Bob    2
+3    Charlie    3
+4    David    4
+5    Eve    5
+select id, name, dense_rank() over (order by name) from t_issue_23940;
+id    name    dense_rank() over (order by name)
+1    Alice    1
+2    Bob    2
+3    Charlie    3
+4    David    4
+5    Eve    5
+select id, name, rank() over (partition by score order by name) from t_issue_23940;
+id    name    rank() over (partition by score order by name)
+4    David    1
+2    Bob    1
+5    Eve    2
+1    Alice    1
+3    Charlie    2
+drop table if exists ms_t_stk_sis;
+CREATE TABLE `ms_t_stk_sis` (
+`SITXDT` varchar(24) DEFAULT NULL,
+`SISTKC` varchar(10) DEFAULT NULL,
+`SISTKN` varchar(100) DEFAULT NULL,
+`SIHIGH` decimal(16,4) DEFAULT NULL,
+`SILOW` decimal(16,4) DEFAULT NULL,
+`SICLSE` decimal(16,4) DEFAULT NULL,
+`SIVOL` bigint DEFAULT NULL
+);
+INSERT INTO ms_t_stk_sis (SITXDT, SISTKC, SISTKN, SIHIGH, SILOW, SICLSE, SIVOL) VALUES ('02JAN2025:00:00:00', '01870', 'ACME INTL HLDGS', 1.8400, 1.7600, 1.8400, 1395000), ('02JAN2025:00:00:00', '01871', 'CHINA ORIENTED', NULL, NULL, 0.1990, 0), ('02JAN2025:00:00:00', '01872', 'GUAN CHAO HLDGS', 1.2400, 1.0100, 1.0600, 230500);
+WITH daily_prices AS (
+SELECT
+SISTKC,
+SISTKN,
+SITXDT,
+SICLSE,
+ROW_NUMBER() OVER (PARTITION BY SISTKC ORDER BY SITXDT) as rn
+FROM ms_t_stk_sis
+WHERE SITXDT >= '01JAN2025:00:00:00' AND SITXDT <= '31MAR2025:23:59:59'
+),
+moving_avg AS (
+SELECT
+r1.SISTKC,
+r1.SISTKN,
+r1.SITXDT,
+r1.SICLSE,
+AVG(r2.SICLSE) AS ma_50
+FROM daily_prices r1
+JOIN daily_prices r2
+ON r1.SISTKC = r2.SISTKC
+AND r2.rn BETWEEN r1.rn - 49 AND r1.rn
+GROUP BY r1.SISTKC, r1.SISTKN, r1.SITXDT, r1.SICLSE
+)
+SELECT SISTKC, SISTKN
+FROM moving_avg
+WHERE SICLSE > ma_50;
+SISTKC    SISTKN
+drop database test_issue_23940;
