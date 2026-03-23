@@ -150,7 +150,7 @@ TEST(GpuIvfPqTest, ShardedModeSimulation) {
     const uint64_t count = 1000;
     std::vector<float> dataset(count * dimension);
     for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
-    
+
     int dev_count = gpu_get_device_count();
     if (dev_count > 4) dev_count = 4;
     std::vector<int> devices(dev_count);
@@ -162,6 +162,7 @@ TEST(GpuIvfPqTest, ShardedModeSimulation) {
     gpu_ivf_pq_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SHARDED);
     index.start();
     index.build();
+
     std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
     ivf_pq_search_params_t sp = ivf_pq_search_params_default();
     auto result = index.search(queries.data(), 1, dimension, 5, sp);

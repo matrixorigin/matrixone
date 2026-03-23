@@ -158,6 +158,56 @@ TEST(GpuIvfFlatTest, ReplicatedModeSimulation) {
     index.destroy();
 }
 
+TEST(GpuIvfFlatTest, ReplicatedLoadSearch) {
+    const uint32_t dimension = 16;
+    const uint64_t count = 1000;
+    std::vector<float> dataset(count * dimension);
+    for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
+    
+    std::string filename = "test_ivf_flat_replicated.bin";
+    std::vector<int> single_device = {0};
+
+    // 1. Build and Save on Single GPU
+    {
+        ivf_flat_build_params_t bp = ivf_flat_build_params_default();
+        bp.n_lists = 10;
+        gpu_ivf_flat_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, single_device, 1, DistributionMode_SINGLE_GPU);
+        index.start();
+        index.build();
+        index.save(filename);
+        index.destroy();
+    }
+
+    // 2. Load and Search in Replicated Mode (Multi-GPU)
+    {
+        int dev_count = gpu_get_device_count();
+        if (dev_count > 4) dev_count = 4;
+        std::vector<int> devices(dev_count);
+        gpu_get_device_list(devices.data(), dev_count);
+
+        ivf_flat_build_params_t bp = ivf_flat_build_params_default();
+        bp.n_lists = 10;
+        
+        gpu_ivf_flat_t<float> index(filename, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_REPLICATED);
+        index.start();
+        index.load(filename);
+
+        std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
+        ivf_flat_search_params_t sp = ivf_flat_search_params_default();
+        
+        // Search multiple times to likely hit different GPUs/threads
+        for (int i = 0; i < dev_count * 2; ++i) {
+            auto result = index.search(queries.data(), 1, dimension, 5, sp);
+            ASSERT_EQ(result.neighbors.size(), (size_t)5);
+            ASSERT_EQ(result.neighbors[0], 0);
+        }
+
+        index.destroy();
+    }
+
+    std::remove(filename.c_str());
+}
+
 TEST(GpuIvfFlatTest, SetGetQuantizer) {
     const uint32_t dimension = 4;
     const uint64_t count = 10;

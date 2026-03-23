@@ -278,26 +278,6 @@ public:
             });
         }
 
-        // Cache the index pointer on all worker threads for maximum search performance
-        this->worker->broadcast([&](raft_handle_wrapper_t& handle) -> std::any {
-            const cagra_index* local_index = index_.get();
-            if (!local_index && mg_index_) {
-                int rank = handle.get_rank();
-                if (rank < (int)mg_index_->ann_interfaces_.size() && mg_index_->ann_interfaces_[rank].index_.has_value()) {
-                    local_index = &mg_index_->ann_interfaces_[rank].index_.value();
-                }
-            }
-            if (!local_index && !this->replicated_indices_.empty()) {
-                std::shared_lock<std::shared_mutex> lock(this->mutex_);
-                auto it = this->replicated_indices_.find(handle.get_device_id());
-                if (it != this->replicated_indices_.end()) {
-                    local_index = static_cast<const cagra_index*>(it->second.get());
-                }
-            }
-            if (local_index) handle.set_index_ptr(static_cast<const cagra_index*>(local_index));
-            return std::any();
-        });
-
         this->is_loaded_ = true;
         this->flattened_host_dataset.clear();
         this->flattened_host_dataset.shrink_to_fit();
@@ -751,18 +731,40 @@ public:
     }
 
     void load(const std::string& filename) {
-        uint64_t job_id = this->worker->submit_main(
-            [&](raft_handle_wrapper_t& handle) -> std::any {
-                auto res = handle.get_raft_resources();
-                index_.reset(new cagra_index(*res));
-                cuvs::neighbors::cagra::deserialize(*res, filename, index_.get());
-                this->count = static_cast<uint32_t>(index_->size());
-                this->dimension = static_cast<uint32_t>(index_->dim());
-                return std::any();
+        auto task = [&](raft_handle_wrapper_t& handle) -> std::any {
+            auto res = handle.get_raft_resources();
+            auto local_idx = std::make_unique<cagra_index>(*res);
+            cuvs::neighbors::cagra::deserialize(*res, filename, local_idx.get());
+            
+            {
+                std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                this->count = static_cast<uint32_t>(local_idx->size());
+                this->dimension = static_cast<uint32_t>(local_idx->dim());
+                
+                if (this->dist_mode == DistributionMode_SINGLE_GPU) {
+                    index_ = std::move(local_idx);
+                } else if (this->dist_mode == DistributionMode_REPLICATED) {
+                    this->replicated_indices_[handle.get_device_id()] = std::shared_ptr<cagra_index>(std::move(local_idx));
+                } else if (this->dist_mode == DistributionMode_SHARDED) {
+                    // For SHARDED, each rank would normally load its part.
+                    // But MatrixOne's save doesn't support SHARDED yet.
+                    throw std::runtime_error("SHARDED mode load is not yet supported in cuVS-MatrixOne");
+                }
             }
-        );
-        auto res = this->worker->wait(job_id).get();
-        if (res.error) std::rethrow_exception(res.error);
+            return std::any();
+        };
+
+        if (this->dist_mode == DistributionMode_SINGLE_GPU) {
+            uint64_t job_id = this->worker->submit_main(task);
+            auto res = this->worker->wait(job_id).get();
+            if (res.error) std::rethrow_exception(res.error);
+        } else if (this->dist_mode == DistributionMode_REPLICATED) {
+            this->worker->run_on_all_devices(task);
+        } else {
+            // SHARDED
+            this->worker->run_on_all_devices(task);
+        }
+
         this->is_loaded_ = true;
         this->train_quantizer_if_needed();
     }

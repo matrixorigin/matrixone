@@ -88,7 +88,7 @@ TEST(GpuCagraTest, ShardedModeSimulation) {
     const uint64_t count = 1000;
     std::vector<float> dataset(count * dimension);
     for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
-    
+
     int dev_count = gpu_get_device_count();
     ASSERT_TRUE(dev_count > 0);
     std::vector<int> devices(dev_count);
@@ -107,7 +107,6 @@ TEST(GpuCagraTest, ShardedModeSimulation) {
 
     index.destroy();
 }
-
 TEST(GpuCagraTest, ReplicatedModeSimulation) {
     const uint32_t dimension = 16;
     const uint64_t count = 1000;

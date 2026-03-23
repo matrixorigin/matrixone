@@ -276,9 +276,10 @@ public:
     };
 
     cuvs_worker_t(uint32_t nthread, const std::vector<int>& devices, distribution_mode_t mode = DistributionMode_SINGLE_GPU)
-        : nthread_(nthread), devices_(devices), mode_(mode), running_(false), use_batching_(false), per_thread_device_(false), next_device_idx_(0) {
+        : nthread_(std::max(nthread, (uint32_t)devices.size())), devices_(devices), mode_(mode), running_(false), use_batching_(false), per_thread_device_(false), next_device_idx_(0) {
         
-        if (mode == DistributionMode_SHARDED || mode == DistributionMode_REPLICATED) {
+
+        if (mode == DistributionMode_SHARDED) {
             mg_resources_ = std::make_shared<raft::device_resources_snmg>(devices);
             init_mg_comms(*mg_resources_, devices);
         }
@@ -297,18 +298,27 @@ public:
         if (running_) return;
         running_ = true;
 
-        for (uint32_t i = 0; i <= nthread_; ++i) {
+        // Start Main Thread (only for main_tasks_)
+        main_thread_ = std::thread([this, init_fn, stop_fn] {
+            int device_id = devices_[0];
+            cudaSetDevice(device_id);
+            raft_handle handle(device_id, 0, mg_resources_, mode_);
+            if (init_fn) init_fn(handle);
+            this->run_main_loop(handle, stop_fn);
+        });
+
+        // Start Worker Threads (for device_queues_)
+        for (uint32_t i = 0; i < nthread_; ++i) {
             int device_idx = i % devices_.size();
             int device_id = devices_[device_idx];
             int rank = i % devices_.size(); 
 
             workers_.emplace_back([this, device_id, device_idx, rank, init_fn, stop_fn, i] {
                 cudaSetDevice(device_id);
-                bool give_mg = (mg_resources_ != nullptr) && (i == 0 || mode_ != DistributionMode_SINGLE_GPU);
+                bool give_mg = (mg_resources_ != nullptr) && (mode_ != DistributionMode_SINGLE_GPU);
                 raft_handle handle(device_id, rank, give_mg ? mg_resources_ : nullptr, mode_);
                 if (init_fn) init_fn(handle);
-                if (i == 0) this->run_main_loop(handle, stop_fn);
-                else this->run_worker_loop(handle, stop_fn, device_idx);
+                this->run_worker_loop(handle, stop_fn, device_idx);
             });
         }
     }
@@ -319,14 +329,14 @@ public:
 
         for (auto& q : device_queues_) q->stop();
         main_tasks_.stop();
-        
+
+        if (main_thread_.joinable()) main_thread_.join();
         for (size_t i = 0; i < workers_.size(); ++i) {
             if (workers_[i].joinable()) workers_[i].join();
         }
         workers_.clear();
         results_store_.stop();
     }
-
     uint64_t submit(task_fn_t fn) {
         if (!running_) throw std::runtime_error("Worker is not running");
         uint64_t id = results_store_.get_next_job_id();
@@ -535,6 +545,7 @@ private:
     uint32_t nthread_;
     std::vector<int> devices_;
     distribution_mode_t mode_;
+    std::thread main_thread_;
     std::vector<std::thread> workers_;
     std::atomic<bool> running_;
     bool use_batching_;
