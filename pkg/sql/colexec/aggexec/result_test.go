@@ -23,6 +23,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func initAggResultWithBytesTypeResult(
+	mp *mpool.MPool,
+	resultType types.Type,
+	setEmptyGroupToNull bool, initialValue string, hasDistinct bool) aggResultWithBytesType {
+	res := aggResultWithBytesType{}
+	res.init(mp, resultType, setEmptyGroupToNull, hasDistinct)
+	res.InitialValue = []byte(initialValue)
+	return res
+}
+
 // there is very important to check the result's extendResultPurely first.
 //
 // we do test for the following three cases:

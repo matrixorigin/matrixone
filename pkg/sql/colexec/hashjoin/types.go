@@ -119,7 +119,6 @@ type container struct {
 	spillWriteBuf        bytes.Buffer
 	spillBuildReadBatch  *batch.Batch
 	spillProbeReadBatch  *batch.Batch
-	spillHashBuf         []byte
 	spillBuildSubBufs    []*batch.Batch
 	spillProbeSubBufs    []*batch.Batch
 
@@ -381,7 +380,8 @@ func (hashJoin *HashJoin) IsRightSingle() bool {
 func (ctr *container) setSpillThreshold(threshold int64) {
 	if threshold == 0 {
 		// 0 means auto config
-		mem := int64(system.MemoryTotal()) / int64(system.GoMaxProcs()) / 8
+		fileCacheMem := fileservice.GlobalMemoryCacheSizeHint.Load()
+		mem := (int64(system.MemoryTotal()) - fileCacheMem) / int64(system.GoMaxProcs()) / 8
 		// min 128MB
 		if mem < common.MiB*128 {
 			mem = common.MiB * 128
