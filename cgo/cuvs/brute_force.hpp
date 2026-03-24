@@ -209,7 +209,7 @@ public:
             this->flattened_host_dataset.resize((size_t)this->count * this->dimension);
         }
 
-        std::cout << "[DEBUG] Brute-Force build: Starting build count=" << this->count << " dim=" << this->dimension << " metric=" << (int)this->metric << std::endl;
+        // std::cout << "[DEBUG] Brute-Force build: Starting build count=" << this->count << " dim=" << this->dimension << " metric=" << (int)this->metric << std::endl;
 
         this->train_quantizer_if_needed();
         uint64_t job_id = this->worker->submit_main(
@@ -250,7 +250,7 @@ public:
         if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
         if (!this->is_loaded_ || !index_) return search_result_t{};
 
-        std::cout << "[DEBUG] Brute-Force search: num_queries=" << num_queries << " limit=" << limit << std::endl;
+        // std::cout << "[DEBUG] Brute-Force search: num_queries=" << num_queries << " limit=" << limit << std::endl;
 
         auto task = [this, num_queries, limit, sp, queries_data](raft_handle_wrapper_t& handle) -> std::any {
             return this->search_internal(handle, queries_data, num_queries, limit, sp);
@@ -300,7 +300,7 @@ public:
         if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
         if (!this->is_loaded_ || !index_) return search_result_t{};
 
-        std::cout << "[DEBUG] Brute-Force search_float: num_queries=" << num_queries << " limit=" << limit << " query_dimension=" << query_dimension << std::endl;
+        // std::cout << "[DEBUG] Brute-Force search_float: num_queries=" << num_queries << " limit=" << limit << " query_dimension=" << query_dimension << std::endl;
 
         auto task = [this, num_queries, query_dimension, limit, sp, queries_data](raft_handle_wrapper_t& handle) -> std::any {
             return this->search_float_internal(handle, queries_data, num_queries, query_dimension, limit, sp);

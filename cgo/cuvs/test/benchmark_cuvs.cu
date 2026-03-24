@@ -49,7 +49,6 @@ template<> const char* type_name<uint8_t>() { return "uint8"; }
 std::vector<float> generate_random_data(uint64_t count, uint32_t dim) {
     std::vector<float> data(count * dim);
     std::mt19937 gen(42);
-    // Use a wider range to have more signal for int8 benchmarks
     std::uniform_real_distribution<float> dis(-100.0, 100.0);
     for (size_t i = 0; i < data.size(); ++i) {
         data[i] = dis(gen);
@@ -58,12 +57,13 @@ std::vector<float> generate_random_data(uint64_t count, uint32_t dim) {
 }
 
 template<typename NeighborT>
-double calculate_recall(const std::vector<NeighborT>& neighbors, uint32_t n_queries, uint32_t limit) {
+double calculate_recall(const std::vector<NeighborT>& neighbors, const std::vector<int64_t>& expected_ids, uint32_t n_queries, uint32_t limit) {
     int hit_count = 0;
     for (uint32_t i = 0; i < n_queries; ++i) {
         bool found = false;
+        int64_t expected = expected_ids[i];
         for (uint32_t j = 0; j < limit; ++j) {
-            if (static_cast<int64_t>(neighbors[i * limit + j]) == static_cast<int64_t>(i)) {
+            if (static_cast<int64_t>(neighbors[i * limit + j]) == expected) {
                 found = true;
                 break;
             }
@@ -94,9 +94,10 @@ std::vector<T> convert_dataset(const std::vector<float>& src, uint64_t n_vectors
 
 template<typename IndexT, typename SearchParamsT, typename T>
 void run_benchmark(const std::string& index_name, distribution_mode_t mode, 
-                  IndexT& index, const std::vector<float>& dataset, const benchmark_config_t& cfg, const SearchParamsT& sp) {
+                  IndexT& index, const std::vector<float>& recall_queries, const std::vector<int64_t>& recall_expected_ids, 
+                  const benchmark_config_t& cfg, const SearchParamsT& sp) {
     
-    for (bool batching : {false}) {
+    for (bool batching : {false, true}) {
         index.set_use_batching(batching);
         
         std::string full_name = index_name + "_" + matrixone::mode_name(mode) + "_" + type_name<T>() + (batching ? "_BatchingON" : "_BatchingOFF");
@@ -129,9 +130,8 @@ void run_benchmark(const std::string& index_name, distribution_mode_t mode,
         double qps = total_completed.load() / diff.count();
         
         // Self-recall
-        auto recall_queries = dataset.data(); // Use first n_queries from dataset
-        auto res = index.search_float(recall_queries, cfg.n_queries, cfg.dimension, cfg.limit, sp);
-        double recall = calculate_recall(res.neighbors, cfg.n_queries, cfg.limit);
+        auto res = index.search_float(recall_queries.data(), cfg.n_queries, cfg.dimension, cfg.limit, sp);
+        double recall = calculate_recall(res.neighbors, recall_expected_ids, cfg.n_queries, cfg.limit);
 
         std::cout << std::left << std::setw(45) << full_name 
                   << ": QPS=" << std::fixed << std::setprecision(2) << std::right << std::setw(10) << qps 
@@ -143,7 +143,22 @@ template<typename T>
 void benchmark_all_indices(const std::vector<float>& dataset, const benchmark_config_t& cfg) {
     auto converted = convert_dataset<T>(dataset, cfg.n_vectors, cfg.dimension);
 
-    std::vector<distribution_mode_t> modes = {DistributionMode_SINGLE_GPU, DistributionMode_REPLICATED};
+    // Prepare recall queries from 4 different shards
+    std::vector<float> recall_queries;
+    std::vector<int64_t> recall_expected_ids;
+    uint32_t q_per_shard = cfg.n_queries / 4;
+    for (int s = 0; s < 4; ++s) {
+        uint64_t shard_start = s * (cfg.n_vectors / 4);
+        for (uint32_t i = 0; i < q_per_shard; ++i) {
+            uint64_t row = shard_start + i;
+            recall_expected_ids.push_back((int64_t)row);
+            for (uint32_t d = 0; d < cfg.dimension; ++d) {
+                recall_queries.push_back(dataset[row * cfg.dimension + d]);
+            }
+        }
+    }
+
+    std::vector<distribution_mode_t> modes = {DistributionMode_SINGLE_GPU, DistributionMode_REPLICATED, DistributionMode_SHARDED};
 
     // CAGRA
     {
@@ -163,7 +178,7 @@ void benchmark_all_indices(const std::vector<float>& dataset, const benchmark_co
             
             cagra_search_params_t sp = cagra_search_params_default();
             sp.itopk_size = 128;
-            run_benchmark<gpu_cagra_t<T>, cagra_search_params_t, T>("Cagra", mode, index, dataset, cfg, sp);
+            run_benchmark<gpu_cagra_t<T>, cagra_search_params_t, T>("Cagra", mode, index, recall_queries, recall_expected_ids, cfg, sp);
             index.destroy();
         }
     }
@@ -185,7 +200,7 @@ void benchmark_all_indices(const std::vector<float>& dataset, const benchmark_co
 
             ivf_flat_search_params_t sp = ivf_flat_search_params_default();
             sp.n_probes = 64;
-            run_benchmark<gpu_ivf_flat_t<T>, ivf_flat_search_params_t, T>("IvfFlat", mode, index, dataset, cfg, sp);
+            run_benchmark<gpu_ivf_flat_t<T>, ivf_flat_search_params_t, T>("IvfFlat", mode, index, recall_queries, recall_expected_ids, cfg, sp);
             index.destroy();
         }
     }
@@ -208,7 +223,7 @@ void benchmark_all_indices(const std::vector<float>& dataset, const benchmark_co
 
             ivf_pq_search_params_t sp = ivf_pq_search_params_default();
             sp.n_probes = 64;
-            run_benchmark<gpu_ivf_pq_t<T>, ivf_pq_search_params_t, T>("IvfPq", mode, index, dataset, cfg, sp);
+            run_benchmark<gpu_ivf_pq_t<T>, ivf_pq_search_params_t, T>("IvfPq", mode, index, recall_queries, recall_expected_ids, cfg, sp);
             index.destroy();
         }
     }

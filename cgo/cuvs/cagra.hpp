@@ -263,7 +263,7 @@ public:
             this->flattened_host_dataset.resize((size_t)this->count * this->dimension);
         }
 
-        std::cout << "[DEBUG] CAGRA build: Starting build count=" << this->count << " dim=" << this->dimension << " metric=" << (int)this->metric << std::endl;
+        // std::cout << "[DEBUG] CAGRA build: Starting build count=" << this->count << " dim=" << this->dimension << " metric=" << (int)this->metric << std::endl;
 
         this->train_quantizer_if_needed();
         if (!this->worker) throw std::runtime_error("Worker not initialized");
@@ -288,7 +288,7 @@ public:
         this->is_loaded_ = true;
         this->flattened_host_dataset.clear();
         this->flattened_host_dataset.shrink_to_fit();
-        std::cout << "[DEBUG] CAGRA build: Build completed successfully" << std::endl;
+        // std::cout << "[DEBUG] CAGRA build: Build completed successfully" << std::endl;
     }
 
     void build_internal(raft_handle_wrapper_t& handle) {
@@ -324,7 +324,7 @@ public:
             uint64_t start_row = rank * rows_per_shard;
             uint64_t num_rows = (rank == num_shards - 1) ? (this->count - start_row) : rows_per_shard;
 
-            std::cout << "[DEBUG] CAGRA build SHARDED: rank=" << rank << " start_row=" << start_row << " num_rows=" << num_rows << std::endl;
+            // std::cout << "[DEBUG] CAGRA build SHARDED: rank=" << rank << " start_row=" << start_row << " num_rows=" << num_rows << std::endl;
 
             auto dataset_device = raft::make_device_matrix<T, int64_t>(*res, (int64_t)num_rows, (int64_t)this->dimension);
             RAFT_CUDA_TRY(cudaMemcpyAsync(dataset_device.data_handle(), 
@@ -439,7 +439,7 @@ public:
             return std::any_cast<search_result_t>(final_res_wait.result);
         }
 
-        std::cout << "[DEBUG] CAGRA search: num_queries=" << num_queries << " limit=" << limit << " itopk=" << sp.itopk_size << std::endl;
+        // std::cout << "[DEBUG] CAGRA search: num_queries=" << num_queries << " limit=" << limit << " itopk=" << sp.itopk_size << std::endl;
 
         if (!this->worker->use_batching()) {
             auto task = [this, num_queries, limit, sp, queries_data](raft_handle_wrapper_t& handle) -> std::any {
@@ -602,7 +602,7 @@ public:
             return std::any_cast<search_result_t>(final_res_wait.result);
         }
 
-        std::cout << "[DEBUG] CAGRA search_float: num_queries=" << num_queries << " limit=" << limit << std::endl;
+        // std::cout << "[DEBUG] CAGRA search_float: num_queries=" << num_queries << " limit=" << limit << std::endl;
 
         if (!this->worker->use_batching()) {
             auto task = [this, num_queries, limit, sp, queries_data, query_dimension](raft_handle_wrapper_t& handle) -> std::any {

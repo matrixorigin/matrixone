@@ -219,7 +219,7 @@ public:
 
         if (this->count == 0) {
             this->is_loaded_ = true;
-            std::cout << "[DEBUG] IVF-PQ build: Empty dataset, build skipped" << std::endl;
+            // std::cout << "[DEBUG] IVF-PQ build: Empty dataset, build skipped" << std::endl;
             return;
         }
         if (this->flattened_host_dataset.size() > (size_t)this->count * this->dimension) {
@@ -248,7 +248,7 @@ public:
         this->is_loaded_ = true;
         this->flattened_host_dataset.clear();
         this->flattened_host_dataset.shrink_to_fit();
-        std::cout << "[DEBUG] IVF-PQ build: Build completed successfully" << std::endl;
+        // std::cout << "[DEBUG] IVF-PQ build: Build completed successfully" << std::endl;
     }
 
     void build_internal(raft_handle_wrapper_t& handle) {
@@ -285,7 +285,7 @@ public:
             uint64_t start_row = rank * rows_per_shard;
             uint64_t num_rows = (rank == num_shards - 1) ? (this->count - start_row) : rows_per_shard;
 
-            std::cout << "[DEBUG] IVF-PQ build SHARDED: rank=" << rank << " start_row=" << start_row << " num_rows=" << num_rows << std::endl;
+            // std::cout << "[DEBUG] IVF-PQ build SHARDED: rank=" << rank << " start_row=" << start_row << " num_rows=" << num_rows << std::endl;
 
             auto dataset_device = raft::make_device_matrix<T, int64_t>(*res, (int64_t)num_rows, (int64_t)this->dimension);
             RAFT_CUDA_TRY(cudaMemcpyAsync(dataset_device.data_handle(), 
@@ -352,7 +352,7 @@ public:
             return std::any_cast<search_result_t>(final_res_wait.result);
         }
 
-        std::cout << "[DEBUG] IVF-PQ search: num_queries=" << num_queries << " limit=" << limit << " n_probes=" << sp.n_probes << std::endl;
+        // std::cout << "[DEBUG] IVF-PQ search: num_queries=" << num_queries << " limit=" << limit << " n_probes=" << sp.n_probes << std::endl;
 
         if (!this->worker->use_batching()) {
             auto task = [this, num_queries, limit, sp, queries_data](raft_handle_wrapper_t& handle) -> std::any {
@@ -511,7 +511,7 @@ public:
             return std::any_cast<search_result_t>(final_res_wait.result);
         }
 
-        std::cout << "[DEBUG] IVF-PQ search_float: num_queries=" << num_queries << " limit=" << limit << std::endl;
+        // std::cout << "[DEBUG] IVF-PQ search_float: num_queries=" << num_queries << " limit=" << limit << std::endl;
 
         if (!this->worker->use_batching()) {
             auto task = [this, num_queries, query_dimension, limit, sp, queries_data](raft_handle_wrapper_t& handle) -> std::any {
