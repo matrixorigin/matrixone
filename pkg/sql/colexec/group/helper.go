@@ -185,7 +185,8 @@ func (ctr *container) computeBucketIndex(hashCodes []uint64, myLv uint64) {
 	}
 }
 
-func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBucket) error {
+func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBucket) (int64, int64, error) {
+	var totalBytes, totalRows int64
 	var parentLv int
 	if parentBkt != nil {
 		parentLv = parentBkt.lv
@@ -200,7 +201,7 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 		// to select the spill bucket.  Default params, 32^3 = 32768 spill buckets -- if this
 		// is still not enough, probably we cannot do much anyway, just fail the query.
 		if parentLv >= spillMaxPass {
-			return moerr.NewInternalError(proc.Ctx, "spill level too deep")
+			return 0, 0, moerr.NewInternalError(proc.Ctx, "spill level too deep")
 		}
 
 		var parentName string
@@ -213,7 +214,7 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 
 		spillfs, err := proc.GetSpillFileService()
 		if err != nil {
-			return err
+			return 0, 0, err
 		}
 		logutil.Infof("spilling data to disk, level %d, parent file %s", myLv, parentName)
 		// now create the current spill bucket.
@@ -229,14 +230,14 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 			// up the operator.
 			if ctr.currentSpillBkt[i].file, err = spillfs.CreateAndRemoveFile(
 				proc.Ctx, ctr.currentSpillBkt[i].name); err != nil {
-				return err
+				return 0, 0, err
 			}
 		}
 	}
 
 	// nothing to spill,
 	if ctr.hr.IsEmpty() {
-		return nil
+		return 0, 0, nil
 	}
 
 	// compute spill bucket.
@@ -306,16 +307,30 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 		}
 		bktFlags := ctr.spillFlagFlat[:rc]
 
-		for i := 0; i < spillNumBuckets; i++ {
-			cnt := bktCounts[i]
-			if cnt == 0 {
-				continue
-			}
+		// reuse spillRowIndices for collecting row indices per bucket
+		if cap(ctr.spillRowIndices) < rc {
+			ctr.spillRowIndices = make([]int32, rc)
+		}
 
-			// fill bktFlags: 1 if row belongs to bucket i
-			for j := range bktFlags {
+		// Optimization: collect non-empty bucket list once, avoiding 32 iterations when data is sparse
+		nonEmptyBuckets := make([]int, 0, spillNumBuckets)
+		for i := 0; i < spillNumBuckets; i++ {
+			if bktCounts[i] > 0 {
+				nonEmptyBuckets = append(nonEmptyBuckets, i)
+			}
+		}
+
+		for _, i := range nonEmptyBuckets {
+			cnt := bktCounts[i]
+
+			// fill bktFlags: set to 1 only for rows belonging to bucket i
+			// Use spillRowIndices to track which rows were set to 1
+			setIdx := 0
+			for j := 0; j < rc; j++ {
 				if flags[j] == uint8(i) {
 					bktFlags[j] = 1
+					ctr.spillRowIndices[setIdx] = int32(j)
+					setIdx++
 				} else {
 					bktFlags[j] = 0
 				}
@@ -327,11 +342,11 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 			// build gbBatch for this bucket's rows from this batch
 			gbBatch.CleanOnlyData()
 			if err := gbBatch.PreExtend(ctr.mp, int(cnt)); err != nil {
-				return err
+				return 0, 0, err
 			}
 			for j := range gb.Vecs {
 				if err := gbBatch.Vecs[j].UnionBatch(gb.Vecs[j], 0, rc, bktFlags, ctr.mp); err != nil {
-					return err
+					return 0, 0, err
 				}
 			}
 			gbBatch.SetRowCount(int(cnt))
@@ -349,7 +364,7 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 			fullFlags[nthBatch] = bktFlags
 			for _, ag := range ctr.aggList {
 				if err := ag.SaveIntermediateResult(cnt, fullFlags, buf); err != nil {
-					return err
+					return 0, 0, err
 				}
 			}
 			fullFlags[nthBatch] = nil
@@ -359,15 +374,18 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 			buf.Write(types.EncodeUint64(&magic))
 
 			ctr.currentSpillBkt[i].cnt += cnt
-			if _, err := ctr.currentSpillBkt[i].file.Write(buf.Bytes()); err != nil {
-				return err
+			written, err := ctr.currentSpillBkt[i].file.Write(buf.Bytes())
+			totalBytes += int64(written)
+			totalRows += cnt
+			if err != nil {
+				return 0, 0, err
 			}
 		}
 	}
 
 	// reset ctr for next spill
 	ctr.resetForSpill()
-	return nil
+	return totalBytes, totalRows, nil
 }
 
 // load spilled data from the spill bucket queue.
@@ -534,16 +552,22 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 		ctr.freeSpillAggList()
 
 		if ctr.needSpill(opAnalyzer) {
-			if err := ctr.spillDataToDisk(proc, bkt); err != nil {
+			if bytes, rows, err := ctr.spillDataToDisk(proc, bkt); err != nil {
 				return false, err
+			} else {
+				opAnalyzer.Spill(bytes)
+				opAnalyzer.SpillRows(rows)
 			}
 		}
 	}
 
 	// respilling happened, so we finish the last batch and recursive down
 	if ctr.isSpilling() {
-		if err := ctr.spillDataToDisk(proc, bkt); err != nil {
+		if bytes, rows, err := ctr.spillDataToDisk(proc, bkt); err != nil {
 			return false, err
+		} else {
+			opAnalyzer.Spill(bytes)
+			opAnalyzer.SpillRows(rows)
 		}
 		return ctr.loadSpilledData(proc, opAnalyzer, aggExprs)
 	}
@@ -630,9 +654,6 @@ func (ctr *container) needSpill(opAnalyzer process.Analyzer) bool {
 		needSpill = memUsed > ctr.spillMem
 	}
 
-	if needSpill {
-		opAnalyzer.Spill(memUsed)
-	}
 	return needSpill
 }
 

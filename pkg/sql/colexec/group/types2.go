@@ -119,6 +119,7 @@ type container struct {
 	spillReader     *bufio.Reader // reused across loadSpilledData calls
 	spillGbBatch    *batch.Batch  // reused staging batch across spillDataToDisk calls
 	spillBuf        *bytes.Buffer // reused write buffer across spillDataToDisk calls
+	spillRowIndices []int32       // reusable row indices for bucket (avoids O(rows*buckets) flag clearing)
 }
 
 func (ctr *container) isSpilling() bool {
