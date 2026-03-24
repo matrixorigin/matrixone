@@ -385,7 +385,7 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 }
 
 // load spilled data from the spill bucket queue.
-func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.Analyzer, aggExprs []aggexec.AggFuncExecExpression) (bool, error) {
+func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.Analyzer, aggExprs []aggexec.AggFuncExecExpression) (_ bool, retErr error) {
 	// first, if there is current spill bucket, transfer it to the spill bucket queue.
 	if ctr.currentSpillBkt != nil {
 		if ctr.spillBkts == nil {
@@ -393,7 +393,10 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 		}
 		for _, bkt := range ctr.currentSpillBkt {
 			if bkt.cnt > 0 {
-				bkt.flushWriter()
+				if err := bkt.flushWriter(); err != nil {
+					bkt.free()
+					return false, err
+				}
 				ctr.spillBkts.PushBack(bkt)
 			} else {
 				bkt.free()
@@ -410,7 +413,11 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 
 	// popped bkt must be defer freed.
 	bkt := ctr.spillBkts.PopBack().Value
-	defer bkt.free()
+	defer func() {
+		if err := bkt.free(); err != nil && retErr == nil {
+			retErr = err
+		}
+	}()
 
 	// reposition to the start of the file.
 	bkt.file.Seek(0, io.SeekStart)

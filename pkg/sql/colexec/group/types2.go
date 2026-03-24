@@ -74,21 +74,27 @@ type spillBucket struct {
 	writer *bufio.Writer // buffered writer wrapping file; nil until first write
 }
 
-func (bkt *spillBucket) flushWriter() {
+func (bkt *spillBucket) flushWriter() error {
 	if bkt.writer != nil {
-		bkt.writer.Flush()
+		err := bkt.writer.Flush()
 		bkt.writer = nil
+		return err
 	}
+	return nil
 }
 
-func (bkt *spillBucket) free() {
-	if bkt != nil {
-		bkt.flushWriter()
-		if bkt.file != nil {
-			bkt.file.Close()
-			bkt.file = nil
-		}
+func (bkt *spillBucket) free() error {
+	if bkt == nil {
+		return nil
 	}
+	err := bkt.flushWriter()
+	if bkt.file != nil {
+		if closeErr := bkt.file.Close(); err == nil {
+			err = closeErr
+		}
+		bkt.file = nil
+	}
+	return err
 }
 
 // container running context.
