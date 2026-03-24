@@ -354,7 +354,7 @@ public:
         return id;
     }
 
-    void run_on_all_devices(task_fn_t fn) {
+    void submit_all_devices(task_fn_t fn) {
         if (!running_) throw std::runtime_error("Worker is not running");
         std::vector<uint64_t> ids;
         for (size_t i = 0; i < devices_.size(); ++i) {

@@ -207,7 +207,7 @@ public:
             if (result_wait.error) std::rethrow_exception(result_wait.error);
         } else {
             // Collective build requires participation from all GPUs
-            this->worker->run_on_all_devices([&](raft_handle_wrapper_t& handle) -> std::any {
+            this->worker->submit_all_devices([&](raft_handle_wrapper_t& handle) -> std::any {
                 this->build_internal(handle);
                 return std::any();
             });
@@ -684,10 +684,10 @@ public:
             auto res = this->worker->wait(job_id).get();
             if (res.error) std::rethrow_exception(res.error);
         } else if (this->dist_mode == DistributionMode_REPLICATED) {
-            this->worker->run_on_all_devices(task);
+            this->worker->submit_all_devices(task);
         } else {
             // SHARDED
-            this->worker->run_on_all_devices(task);
+            this->worker->submit_all_devices(task);
         }
 
         this->is_loaded_ = true;
