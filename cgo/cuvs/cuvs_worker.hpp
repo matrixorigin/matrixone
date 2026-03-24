@@ -221,7 +221,7 @@ public:
         } else if (device_id >= 0) {
             res_ = std::make_shared<raft::resources>();
         } else {
-            // CPU worker, no raft::resources needed for now or uses host resources
+            // CPU Context
             res_ = nullptr;
         }
     }
@@ -287,13 +287,14 @@ public:
             mg_resources_ = std::make_shared<raft::device_resources_snmg>(devices);
             init_mg_comms(*mg_resources_, devices);
         }
+        
+        // One queue per physical GPU device
         for (size_t i = 0; i < devices_.size(); ++i) {
             auto q = std::make_unique<thread_safe_queue_t<cuvs_task_t>>();
             q->set_capacity(1000);
             device_queues_.push_back(std::move(q));
         }
         main_tasks_.set_capacity(1000);
-        worker_tasks_.set_capacity(1000);
     }
 
     ~cuvs_worker_t() { stop(); }
@@ -312,29 +313,26 @@ public:
             this->run_main_loop(handle, stop_fn);
         });
 
-        // Start Device Worker Threads (for device_queues_)
+        // Start Pool of Device Worker Threads
         for (uint32_t i = 0; i < nthread_; ++i) {
             if (devices_.empty()) break;
-            int device_idx = i % devices_.size();
+            
+            // Shared Pool with Device Affinity
+            int device_idx = i % devices_.size(); 
             int device_id = devices_[device_idx];
-            int rank = i % devices_.size(); 
+            int rank = device_idx; 
 
-            device_threads_.emplace_back([this, device_id, device_idx, rank, init_fn, stop_fn, i] {
+            device_threads_.emplace_back([this, device_id, device_idx, rank, init_fn, stop_fn] {
                 cudaSetDevice(device_id);
                 bool give_mg = (mg_resources_ != nullptr) && (mode_ != DistributionMode_SINGLE_GPU);
+                
+                // Each thread in the pool gets its own raft::resources (so separate CUDA streams)
                 raft_handle handle(device_id, rank, give_mg ? mg_resources_ : nullptr, mode_);
+                
                 if (init_fn) init_fn(handle);
                 this->run_device_loop(handle, stop_fn, device_idx);
             });
         }
-
-        // Start CPU Worker Threads (for worker_tasks_)
-        // For now start 1 CPU worker thread, can be scaled if needed.
-        worker_threads_.emplace_back([this, init_fn, stop_fn] {
-            raft_handle handle(-1, 0, nullptr, mode_);
-            if (init_fn) init_fn(handle);
-            this->run_worker_loop(handle, stop_fn);
-        });
     }
 
     void stop() {
@@ -343,17 +341,12 @@ public:
 
         for (auto& q : device_queues_) q->stop();
         main_tasks_.stop();
-        worker_tasks_.stop();
 
         if (main_thread_.joinable()) main_thread_.join();
         for (auto& w : device_threads_) {
             if (w.joinable()) w.join();
         }
         device_threads_.clear();
-        for (auto& w : worker_threads_) {
-            if (w.joinable()) w.join();
-        }
-        worker_threads_.clear();
         results_store_.stop();
     }
 
@@ -369,13 +362,6 @@ public:
         if (!running_) throw std::runtime_error("Worker is not running");
         uint64_t id = results_store_.get_next_job_id();
         main_tasks_.push({id, std::move(fn)});
-        return id;
-    }
-
-    uint64_t submit_worker(task_fn_t fn) {
-        if (!running_) throw std::runtime_error("Worker is not running");
-        uint64_t id = results_store_.get_next_job_id();
-        worker_tasks_.push({id, std::move(fn)});
         return id;
     }
 
@@ -398,9 +384,11 @@ public:
     void broadcast(task_fn_t fn) {
         if (!running_) throw std::runtime_error("Worker is not running");
         std::vector<uint64_t> ids;
-        for (uint32_t i = 0; i < nthread_; ++i) {
+        // In shared pool mode, "broadcast" means push to ALL device queues
+        // Multiple threads per queue will pick them up
+        for (size_t i = 0; i < devices_.size(); ++i) {
             uint64_t id = results_store_.get_next_job_id();
-            device_queues_[i % devices_.size()]->push({id, fn});
+            device_queues_[i]->push({id, fn});
             ids.push_back(id);
         }
         for (auto id : ids) wait(id).get();
@@ -504,14 +492,6 @@ private:
         if (stop_fn) stop_fn(handle);
     }
 
-    void run_worker_loop(raft_handle& handle, std::function<std::any(raft_handle&)> stop_fn) {
-        cuvs_task_t task;
-        while (worker_tasks_.pop(task)) {
-            execute_task(task, handle);
-        }
-        if (stop_fn) stop_fn(handle);
-    }
-
     void execute_task(const cuvs_task_t& task, raft_handle& handle) {
         cuvs_task_result_t result;
         try {
@@ -581,14 +561,12 @@ private:
     distribution_mode_t mode_;
     std::thread main_thread_;
     std::vector<std::thread> device_threads_;
-    std::vector<std::thread> worker_threads_;
     std::atomic<bool> running_;
     bool use_batching_;
     bool per_thread_device_;
 
     std::vector<std::unique_ptr<thread_safe_queue_t<cuvs_task_t>>> device_queues_;
     thread_safe_queue_t<cuvs_task_t> main_tasks_;
-    thread_safe_queue_t<cuvs_task_t> worker_tasks_;
     std::shared_ptr<raft::device_resources_snmg> mg_resources_;
     std::atomic<uint32_t> next_device_idx_;
 

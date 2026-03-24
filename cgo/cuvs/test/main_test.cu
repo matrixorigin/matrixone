@@ -306,8 +306,8 @@ TEST(CuvsWorkerTest, SubmitMain) {
     worker.stop();
 }
 
-TEST(CuvsWorkerTest, SubmitWorker) {
-    uint32_t n_threads = 2;
+TEST(CuvsWorkerTest, SubmitToPool) {
+    uint32_t n_threads = 4;
     cuvs_worker_t worker(n_threads, std::vector<int>{0});
     worker.start();
 
@@ -318,14 +318,14 @@ TEST(CuvsWorkerTest, SubmitWorker) {
 
     std::vector<uint64_t> ids;
     for(int i=0; i<10; ++i) {
-        ids.push_back(worker.submit_worker(task));
+        ids.push_back(worker.submit(task));
     }
 
     for(auto id : ids) {
         auto res = worker.wait(id).get();
         ASSERT_TRUE(res.error == nullptr);
         auto pair = std::any_cast<std::pair<int, std::thread::id>>(res.result);
-        ASSERT_EQ(pair.first, -1); // CPU worker
+        ASSERT_EQ(pair.first, 0); // Should run on GPU 0 thread pool
     }
 
     worker.stop();
