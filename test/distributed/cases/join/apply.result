@@ -301,16 +301,16 @@ create table t_apply_prepare_fault(a int, b int);
 insert into t_apply_prepare_fault values(1,3);
 select enable_fault_injection();
 enable_fault_injection()
-true
+1
 select add_fault_point('fj/cn/generate_series_partial_prepare', ':::', 'echo', 0, 'apply teardown repro');
 add_fault_point(fj/cn/generate_series_partial_prepare, :::, echo, 0, apply teardown repro)
-true
+1
 prepare s_apply_fault from select * from t_apply_prepare_fault cross apply generate_series(t_apply_prepare_fault.a, t_apply_prepare_fault.b) g;
 execute s_apply_fault;
 invalid state generate_series partial prepare fault: apply teardown repro
 deallocate prepare s_apply_fault;
 select disable_fault_injection();
 disable_fault_injection()
-true
+1
 drop table t_apply_prepare_fault;
 drop database join_test;
