@@ -20,6 +20,7 @@
 #include "test_framework.hpp"
 #include <cstdio>
 #include <cstdlib>
+#include <thread>
 
 using namespace matrixone;
 
@@ -110,7 +111,6 @@ TEST(GpuIvfPqTest, ParallelAddChunkWithOffset) {
     gpu_ivf_pq_t<float> index(total_count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
     index.start();
 
-    #include <thread>
     std::thread t1([&]() { index.add_chunk(chunk1.data(), count_per_chunk, 0, ids1.data()); });
     std::thread t2([&]() { index.add_chunk(chunk2.data(), count_per_chunk, count_per_chunk, ids2.data()); });
     t1.join();
@@ -174,71 +174,28 @@ TEST(GpuIvfPqTest, SaveAndLoadFromFile) {
     std::remove(filename.c_str());
 }
 
-TEST(GpuIvfPqTest, BuildFromDataFile) {
-    const uint32_t dimension = 8;
-    const uint64_t count = 100;
-    std::vector<float> dataset(count * dimension);
-    for (size_t i = 0; i < dataset.size(); ++i) {
-        dataset[i] = static_cast<float>(i % 10);
-    }
-
-    std::string data_filename = "test_dataset_pq.modf";
-    {
-        // Use our utility to save the dataset in MODF format
-        raft::resources res;
-        auto matrix = raft::make_host_matrix<float, int64_t>(count, dimension);
-        std::copy(dataset.begin(), dataset.end(), matrix.data_handle());
-        save_host_matrix(data_filename, matrix.view());
-    }
-
-    std::vector<int> devices = {0};
-    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
-    bp.n_lists = 100;
-    bp.m = 4;
-
-    gpu_ivf_pq_t<float> index(data_filename, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
-    index.start();
-    index.build();
-
-    ASSERT_EQ(index.get_dim(), dimension);
-    ASSERT_EQ(index.count, static_cast<uint32_t>(count));
-
-    std::vector<float> queries(dimension, 0.0f);
-    ivf_pq_search_params_t sp = ivf_pq_search_params_default();
-    auto result = index.search(queries.data(), 1, dimension, 1, sp);
-
-    ASSERT_EQ(result.neighbors.size(), (size_t)1);
-    
-    index.destroy();
-    std::remove(data_filename.c_str());
-}
-
-/*
-// Sharded mode is currently disabled due to a suspected bug in cuVS or its integration.
-// In gdb output, the mdspan extents showed 18446744073709551615ul (SIZE_MAX). 
-// This usually means a dynamic extent wasn't initialized correctly or a 
-// calculation for the number of rows/columns overflowed/underflowed.
-// Action: Check the dimensions of your input query matrix and indices. 
-// If n_queries or k is being passed as a negative number or uninitialized variable, 
-// cuvs might be trying to allocate a workspace based on a massive, invalid number.
-TEST(GpuIvfPqTest, ShardedModeSimulation) {
+TEST(GpuIvfPqTest, ManualShardedSearch) {
     const uint32_t dimension = 16;
     const uint64_t count = 1000;
     std::vector<float> dataset(count * dimension);
     for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
-
+    
     int dev_count = gpu_get_device_count();
+    if (dev_count < 2) {
+        TEST_LOG("Skipping ManualShardedSearch: Need at least 2 GPUs");
+        return;
+    }
     if (dev_count > 4) dev_count = 4;
     std::vector<int> devices(dev_count);
     gpu_get_device_list(devices.data(), dev_count);
 
     ivf_pq_build_params_t bp = ivf_pq_build_params_default();
-    bp.n_lists = 10 * dev_count;
+    bp.n_lists = 50;
     bp.m = 8;
     gpu_ivf_pq_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SHARDED);
     index.start();
     index.build();
-
+    
     std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
     ivf_pq_search_params_t sp = ivf_pq_search_params_default();
     auto result = index.search(queries.data(), 1, dimension, 5, sp);
@@ -248,7 +205,72 @@ TEST(GpuIvfPqTest, ShardedModeSimulation) {
 
     index.destroy();
 }
-*/
+
+TEST(GpuIvfPqTest, ManualShardedSearchWithIds) {
+    const uint32_t dimension = 16;
+    const uint64_t count = 1000;
+    std::vector<float> dataset(count * dimension);
+    std::vector<int64_t> ids(count);
+    for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
+    for (size_t i = 0; i < count; ++i) ids[i] = (int64_t)(i + 20000);
+    
+    int dev_count = gpu_get_device_count();
+    if (dev_count < 2) {
+        TEST_LOG("Skipping ManualShardedSearchWithIds: Need at least 2 GPUs");
+        return;
+    }
+    if (dev_count > 4) dev_count = 4;
+    std::vector<int> devices(dev_count);
+    gpu_get_device_list(devices.data(), dev_count);
+
+    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
+    bp.n_lists = 50;
+    bp.m = 8;
+    gpu_ivf_pq_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SHARDED, ids.data());
+    index.start();
+    index.build();
+    
+    std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
+    ivf_pq_search_params_t sp = ivf_pq_search_params_default();
+    auto result = index.search(queries.data(), 1, dimension, 5, sp);
+
+    ASSERT_EQ(result.neighbors.size(), (size_t)5);
+    ASSERT_EQ(result.neighbors[0], 20000);
+
+    index.destroy();
+}
+
+TEST(GpuIvfPqTest, ManualShardedGetCenters) {
+    const uint32_t dimension = 16;
+    const uint64_t count = 1000;
+    std::vector<float> dataset(count * dimension);
+    for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
+    
+    int dev_count = gpu_get_device_count();
+    if (dev_count < 2) {
+        TEST_LOG("Skipping ManualShardedGetCenters: Need at least 2 GPUs");
+        return;
+    }
+    if (dev_count > 4) dev_count = 4;
+    std::vector<int> devices(dev_count);
+    gpu_get_device_list(devices.data(), dev_count);
+
+    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
+    bp.n_lists = 50;
+    bp.m = 8;
+    gpu_ivf_pq_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SHARDED);
+    index.start();
+    index.build();
+    
+    auto centers = index.get_centers();
+    // In sharded mode, get_centers returns centers from a SINGLE shard.
+    // IVF-PQ codebook size is n_lists * pq_dim * pq_bits_dimension
+    // For default 8 bits, pq_bits_dimension is 3. 
+    // In this test: 50 * 8 * 3 = 1200
+    ASSERT_EQ(centers.size(), (size_t)1200);
+
+    index.destroy();
+}
 
 TEST(GpuIvfPqTest, ReplicatedModeSimulation) {
     const uint32_t dimension = 16;

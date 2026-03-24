@@ -164,6 +164,7 @@ TEST(GpuCagraTest, ReplicatedModeSimulation) {
     
     int dev_count = gpu_get_device_count();
     ASSERT_TRUE(dev_count > 0);
+    if (dev_count > 4) dev_count = 4;
     std::vector<int> devices(dev_count);
     gpu_get_device_list(devices.data(), dev_count);
 
@@ -177,6 +178,68 @@ TEST(GpuCagraTest, ReplicatedModeSimulation) {
 
     ASSERT_EQ(result.neighbors.size(), (size_t)5);
     ASSERT_EQ(result.neighbors[0], 0u);
+
+    index.destroy();
+}
+
+TEST(GpuCagraTest, ManualShardedSearch) {
+    const uint32_t dimension = 16;
+    const uint64_t count = 1000;
+    std::vector<float> dataset(count * dimension);
+    for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
+    
+    int dev_count = gpu_get_device_count();
+    if (dev_count < 2) {
+        TEST_LOG("Skipping ManualShardedSearch: Need at least 2 GPUs");
+        return;
+    }
+    if (dev_count > 4) dev_count = 4;
+    std::vector<int> devices(dev_count);
+    gpu_get_device_list(devices.data(), dev_count);
+
+    cagra_build_params_t bp = cagra_build_params_default();
+    gpu_cagra_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SHARDED);
+    index.start();
+    index.build();
+    
+    std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
+    cagra_search_params_t sp = cagra_search_params_default();
+    auto result = index.search(queries.data(), 1, dimension, 5, sp);
+
+    ASSERT_EQ(result.neighbors.size(), (size_t)5);
+    ASSERT_EQ(result.neighbors[0], 0u);
+
+    index.destroy();
+}
+
+TEST(GpuCagraTest, ManualShardedSearchWithIds) {
+    const uint32_t dimension = 16;
+    const uint64_t count = 1000;
+    std::vector<float> dataset(count * dimension);
+    std::vector<uint32_t> ids(count);
+    for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
+    for (size_t i = 0; i < count; ++i) ids[i] = (uint32_t)(i + 20000);
+    
+    int dev_count = gpu_get_device_count();
+    if (dev_count < 2) {
+        TEST_LOG("Skipping ManualShardedSearchWithIds: Need at least 2 GPUs");
+        return;
+    }
+    if (dev_count > 4) dev_count = 4;
+    std::vector<int> devices(dev_count);
+    gpu_get_device_list(devices.data(), dev_count);
+
+    cagra_build_params_t bp = cagra_build_params_default();
+    gpu_cagra_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SHARDED, ids.data());
+    index.start();
+    index.build();
+    
+    std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
+    cagra_search_params_t sp = cagra_search_params_default();
+    auto result = index.search(queries.data(), 1, dimension, 5, sp);
+
+    ASSERT_EQ(result.neighbors.size(), (size_t)5);
+    ASSERT_EQ(result.neighbors[0], 20000u);
 
     index.destroy();
 }
