@@ -27,6 +27,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -99,4 +100,22 @@ func Test_versionHandle_HandleClusterUpgrade(t *testing.T) {
 		executor2,
 	)
 	assert.Nil(t, err)
+}
+
+func Test_upgrade_view(t *testing.T) {
+	stubs := gostub.Stub(&versions.CheckViewDefinition, func(txn executor.TxnExecutor, accountId uint32, schema string, viewName string) (bool, string, error) {
+		return true, "", moerr.NewInternalErrorNoCtx("return error")
+	})
+	defer stubs.Reset()
+	_, err := upg_information_schema_columns.CheckFunc(nil, 0)
+	assert.Error(t, err)
+}
+
+func Test_upgrade_view2(t *testing.T) {
+	stubs := gostub.Stub(&versions.CheckViewDefinition, func(txn executor.TxnExecutor, accountId uint32, schema string, viewName string) (bool, string, error) {
+		return true, upg_information_schema_columns.UpgSql, nil
+	})
+	defer stubs.Reset()
+	_, err := upg_information_schema_columns.CheckFunc(nil, 0)
+	assert.NoError(t, err)
 }
