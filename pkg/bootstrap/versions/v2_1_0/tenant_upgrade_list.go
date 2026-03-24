@@ -14,6 +14,33 @@
 
 package v2_1_0
 
-import "github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+import (
+	"fmt"
 
-var tenantUpgEntries = []versions.UpgradeEntry{}
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
+)
+
+var tenantUpgEntries = []versions.UpgradeEntry{
+	upg_information_schema_columns,
+}
+
+var upg_information_schema_columns = versions.UpgradeEntry{
+	Schema:    sysview.InformationDBConst,
+	TableName: "COLUMNS",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql:    sysview.InformationSchemaColumnsDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "COLUMNS")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == sysview.InformationSchemaColumnsDDL {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "COLUMNS"),
+}
