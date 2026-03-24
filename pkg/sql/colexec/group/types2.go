@@ -67,16 +67,27 @@ type Group struct {
 }
 
 type spillBucket struct {
-	lv   int      // spill level
-	name string   // spill bucket name
-	cnt  int64    // number of rows in this spill bucket
-	file *os.File // spill file
+	lv     int            // spill level
+	name   string         // spill bucket name
+	cnt    int64          // number of rows in this spill bucket
+	file   *os.File       // spill file
+	writer *bufio.Writer  // buffered writer wrapping file; nil until first write
+}
+
+func (bkt *spillBucket) flushWriter() {
+	if bkt.writer != nil {
+		bkt.writer.Flush()
+		bkt.writer = nil
+	}
 }
 
 func (bkt *spillBucket) free() {
-	if bkt != nil && bkt.file != nil {
-		bkt.file.Close()
-		bkt.file = nil
+	if bkt != nil {
+		bkt.flushWriter()
+		if bkt.file != nil {
+			bkt.file.Close()
+			bkt.file = nil
+		}
 	}
 }
 
@@ -113,13 +124,14 @@ type container struct {
 	currentSpillBkt []*spillBucket
 
 	// reusable buffers for spill to avoid per-call allocations
-	spillFlagFlat   []uint8       // scratch flags for one batch's rows during spill
-	spillChunkFlags [][]uint8     // full-length flags slice passed to SaveIntermediateResult
-	spillHashCodes  []uint64      // reused buffer for AllGroupHash output
-	spillReader     *bufio.Reader // reused across loadSpilledData calls
-	spillGbBatch    *batch.Batch  // reused staging batch across spillDataToDisk calls
-	spillBuf        *bytes.Buffer // reused write buffer across spillDataToDisk calls
-	spillRowIndices []int32       // reusable row indices for bucket (avoids O(rows*buckets) flag clearing)
+	spillFlagFlat        []uint8       // scratch 0/1 flags for one batch's rows during spill
+	spillChunkFlags      [][]uint8     // full-length flags slice passed to SaveIntermediateResult
+	spillHashCodes       []uint64      // reused buffer for AllGroupHash output
+	spillReader          *bufio.Reader // reused across loadSpilledData calls
+	spillGbBatch         *batch.Batch  // reused staging batch across spillDataToDisk calls
+	spillBuf             *bytes.Buffer // reused write buffer across spillDataToDisk calls
+	spillNonEmptyBuckets []int         // reused list of non-empty bucket indices
+	spillBucketRowIds    [][]int32     // per-bucket row index lists, reused across batches
 }
 
 func (ctr *container) isSpilling() bool {
