@@ -17,6 +17,7 @@ package apply
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -51,6 +52,10 @@ func (apply *Apply) Prepare(proc *process.Process) (err error) {
 		apply.ctr.sels = make([]int32, 0)
 	}
 
+	if apply.TableFunction == nil {
+		return moerr.NewInvalidState(proc.Ctx, "apply operator missing table function")
+	}
+
 	err = apply.TableFunction.ApplyPrepare(proc)
 	if err != nil {
 		return
@@ -59,6 +64,10 @@ func (apply *Apply) Prepare(proc *process.Process) (err error) {
 }
 
 func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
+	if apply.TableFunction == nil {
+		return vm.CancelResult, moerr.NewInvalidState(proc.Ctx, "apply operator missing table function")
+	}
+
 	analyzer := apply.OpAnalyzer
 
 	input := vm.NewCallResult()
