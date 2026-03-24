@@ -93,19 +93,29 @@ func (apply *Apply) Release() {
 }
 
 func (apply *Apply) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	if apply == nil {
+		return
+	}
 	ctr := &apply.ctr
 
 	ctr.inbat = nil
-	apply.TableFunction.Reset(proc, pipelineFailed, err)
+	if apply.TableFunction != nil {
+		apply.TableFunction.Reset(proc, pipelineFailed, err)
+	}
 }
 
 func (apply *Apply) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if apply == nil {
+		return
+	}
 	ctr := &apply.ctr
 
 	ctr.cleanBatch(proc.Mp())
 	ctr.sels = nil
 
-	apply.TableFunction.Free(proc, pipelineFailed, err)
+	if apply.TableFunction != nil {
+		apply.TableFunction.Free(proc, pipelineFailed, err)
+	}
 }
 
 func (apply *Apply) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
