@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -42,7 +43,9 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
 )
 
 func newBranchHashmapAllocator(limitRate float64) *branchHashmapAllocator {
@@ -897,6 +900,7 @@ func getTableStuff(
 		},
 	}
 	tblStuff.hashmapAllocator = newBranchHashmapAllocator(dataBranchHashmapLimitRate)
+	tblStuff.lcaReaderProbeMode = &atomic.Bool{}
 
 	return
 
@@ -1020,12 +1024,39 @@ func getRelationById(
 ) (rel engine.Relation, err error) {
 
 	txnOp := bh.(*backExec).backSes.GetTxnHandler().txnOp
+	snapshotStr := "current"
 
 	if snapshot != nil && snapshot.TS != nil {
 		txnOp = txnOp.CloneSnapshotOp(*snapshot.TS)
+		snapshotStr = types.TimestampToTS(*snapshot.TS).ToString()
 	}
 
+	logutil.Info(
+		"DataBranch-GetRelationByID-Start",
+		zap.Uint64("table-id", tableId),
+		zap.String("snapshot-ts", snapshotStr),
+		zap.String("txn", txnOp.Txn().DebugString()),
+	)
 	_, _, rel, err = ses.GetTxnHandler().GetStorage().GetRelationById(ctx, txnOp, tableId)
+	if err != nil {
+		logutil.Error(
+			"DataBranch-GetRelationByID-Error",
+			zap.Uint64("table-id", tableId),
+			zap.String("snapshot-ts", snapshotStr),
+			zap.String("txn", txnOp.Txn().DebugString()),
+			zap.Error(err),
+		)
+		return nil, err
+	}
+	if rel != nil {
+		logutil.Info(
+			"DataBranch-GetRelationByID-Done",
+			zap.Uint64("table-id", tableId),
+			zap.String("table-name", rel.GetTableName()),
+			zap.String("db-name", rel.GetTableDef(ctx).DbName),
+			zap.String("snapshot-ts", snapshotStr),
+		)
+	}
 	return rel, err
 }
 
@@ -1089,22 +1120,80 @@ func getRelations(
 		return
 	}
 
+	tarSnapStr := "current"
+	if tarSnap != nil && tarSnap.TS != nil {
+		tarSnapStr = types.TimestampToTS(*tarSnap.TS).ToString()
+	}
+	baseSnapStr := "current"
+	if baseSnap != nil && baseSnap.TS != nil {
+		baseSnapStr = types.TimestampToTS(*baseSnap.TS).ToString()
+	}
+	logutil.Info(
+		"DataBranch-GetRelations-Start",
+		zap.String("target-db", tarDBName),
+		zap.String("target-table", tarTblName),
+		zap.String("target-snapshot-ts", tarSnapStr),
+		zap.String("base-db", baseDBName),
+		zap.String("base-table", baseTblName),
+		zap.String("base-snapshot-ts", baseSnapStr),
+		zap.String("target-txn", txnOpA.Txn().DebugString()),
+		zap.String("base-txn", txnOpB.Txn().DebugString()),
+	)
+
 	eng := ses.proc.GetSessionInfo().StorageEngine
 	if tarDB, err = eng.Database(ctx, tarDBName, txnOpA); err != nil {
+		logutil.Error(
+			"DataBranch-GetRelations-TargetDB-Error",
+			zap.String("target-db", tarDBName),
+			zap.String("target-table", tarTblName),
+			zap.String("target-snapshot-ts", tarSnapStr),
+			zap.String("target-txn", txnOpA.Txn().DebugString()),
+			zap.Error(err),
+		)
 		return
 	}
 
 	if tarRel, err = tarDB.Relation(ctx, tarTblName, nil); err != nil {
+		logutil.Error(
+			"DataBranch-GetRelations-TargetTable-Error",
+			zap.String("target-db", tarDBName),
+			zap.String("target-table", tarTblName),
+			zap.String("target-snapshot-ts", tarSnapStr),
+			zap.Error(err),
+		)
 		return
 	}
 
 	if baseDB, err = eng.Database(ctx, baseDBName, txnOpB); err != nil {
+		logutil.Error(
+			"DataBranch-GetRelations-BaseDB-Error",
+			zap.String("base-db", baseDBName),
+			zap.String("base-table", baseTblName),
+			zap.String("base-snapshot-ts", baseSnapStr),
+			zap.String("base-txn", txnOpB.Txn().DebugString()),
+			zap.Error(err),
+		)
 		return
 	}
 
 	if baseRel, err = baseDB.Relation(ctx, baseTblName, nil); err != nil {
+		logutil.Error(
+			"DataBranch-GetRelations-BaseTable-Error",
+			zap.String("base-db", baseDBName),
+			zap.String("base-table", baseTblName),
+			zap.String("base-snapshot-ts", baseSnapStr),
+			zap.Error(err),
+		)
 		return
 	}
+
+	logutil.Info(
+		"DataBranch-GetRelations-Done",
+		zap.Uint64("target-table-id", tarRel.GetTableID(ctx)),
+		zap.Uint64("base-table-id", baseRel.GetTableID(ctx)),
+		zap.String("target-db", tarRel.GetTableDef(ctx).DbName),
+		zap.String("base-db", baseRel.GetTableDef(ctx).DbName),
+	)
 
 	return
 }
@@ -1417,11 +1506,33 @@ func getTablesCreationCommitTS(
 		return types.TimestampToTS(ses.GetTxnHandler().GetTxn().SnapshotTS())
 	}
 
-	tarCommitTS, err := getTableCreationCommitTSByID(ctx, ses, tar.GetTableID(ctx), resolveSnapshot(0))
+	// Prefer getTableCreationCommitTSByID because it reads the real
+	// commit TS stored in data blocks.  The CollectChanges approach
+	// (getTableCreationCommitTSByCollectChanges) replaces commit TS
+	// with a constant when the checkpoint fallback is used (e.g. after
+	// restart + GC), which makes the returned timestamp incorrect
+	// and causes the diff range to miss pre-checkpoint changes.
+	//
+	// Fall back to CollectChanges only when the primary method fails
+	// (e.g. no available checkpoints for newly created tables).
+	resolve := func(tableID uint64, snap types.TS) (types.TS, error) {
+		ts, err := getTableCreationCommitTSByID(ctx, ses, tableID, snap)
+		if err == nil {
+			return ts, nil
+		}
+		logutil.Warn("getTablesCreationCommitTS: primary method failed, trying CollectChanges fallback",
+			zap.Uint64("table-id", tableID),
+			zap.String("snapshot", snap.ToString()),
+			zap.Error(err),
+		)
+		return getTableCreationCommitTSByCollectChanges(ctx, ses, tableID, snap)
+	}
+
+	tarCommitTS, err := resolve(tar.GetTableID(ctx), resolveSnapshot(0))
 	if err != nil {
 		return nil, err
 	}
-	baseCommitTS, err := getTableCreationCommitTSByID(ctx, ses, base.GetTableID(ctx), resolveSnapshot(1))
+	baseCommitTS, err := resolve(base.GetTableID(ctx), resolveSnapshot(1))
 	if err != nil {
 		return nil, err
 	}
@@ -1435,65 +1546,35 @@ func getTableCreationCommitTSByID(
 	snapshotTS types.TS,
 ) (types.TS, error) {
 	resolveAt := func(at types.TS) (commit types.TS, ok bool, err error) {
-		txnOp := ses.GetTxnHandler().GetTxn().CloneSnapshotOp(at.ToTimestamp())
-		_, _, moTablesRel, rerr := ses.GetTxnHandler().GetStorage().GetRelationById(ctx, txnOp, catalog.MO_TABLES_ID)
-		if rerr != nil {
-			return types.TS{}, false, rerr
-		}
-
-		relData, rerr := moTablesRel.Ranges(ctx, engine.DefaultRangesParam)
-		if rerr != nil {
-			return types.TS{}, false, rerr
-		}
-		readers, rerr := moTablesRel.BuildReaders(
-			ctx,
-			ses.proc,
-			nil,
-			relData,
-			1,
-			0,
-			false,
-			engine.Policy_CheckCommittedOnly,
-			engine.FilterHint{},
-		)
-		if rerr != nil {
-			return types.TS{}, false, rerr
-		}
-		defer func() {
-			for _, rd := range readers {
-				if rd != nil {
-					_ = rd.Close()
-				}
-			}
-		}()
-
 		attrs := []string{
 			catalog.SystemRelAttr_ID,
 			objectio.DefaultCommitTS_Attr,
 		}
-		readBatch := batch.NewWithSize(len(attrs))
-		readBatch.SetAttributes(attrs)
-		readBatch.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
-		readBatch.Vecs[1] = vector.NewVec(types.T_TS.ToType())
-		defer readBatch.Clean(ses.proc.Mp())
+		colTypes := []types.Type{
+			types.T_uint64.ToType(),
+			types.T_TS.ToType(),
+		}
+		filterVec := vector.NewVec(types.T_uint64.ToType())
+		defer filterVec.Free(ses.proc.Mp())
+		if err = vector.AppendFixed(filterVec, tableID, false, ses.proc.Mp()); err != nil {
+			return types.TS{}, false, err
+		}
+		filterExpr := readutil.ConstructInExpr(ctx, catalog.SystemRelAttr_ID, filterVec)
 
 		rowFound := false
 		commitFound := false
 		commitTS := types.TS{}
-		for _, rd := range readers {
-			for {
-				var isEnd bool
-				isEnd, rerr = rd.Read(ctx, attrs, nil, ses.proc.Mp(), readBatch)
-				if rerr != nil {
-					return types.TS{}, false, rerr
-				}
-				if isEnd {
-					break
-				}
-				if readBatch.RowCount() == 0 {
-					continue
-				}
 
+		err = scanSnapshotRelationByID(
+			ctx,
+			"table-creation-commit-ts",
+			ses,
+			catalog.MO_TABLES_ID,
+			at,
+			attrs,
+			colTypes,
+			filterExpr,
+			func(readBatch *batch.Batch) error {
 				relIDs := vector.MustFixedColWithTypeCheck[uint64](readBatch.Vecs[0])
 				commitCol := vector.MustFixedColWithTypeCheck[types.TS](readBatch.Vecs[1])
 				for i := range relIDs {
@@ -1508,7 +1589,11 @@ func getTableCreationCommitTSByID(
 						commitFound = true
 					}
 				}
-			}
+				return nil
+			},
+		)
+		if err != nil {
+			return types.TS{}, false, err
 		}
 
 		if commitFound {
@@ -1521,6 +1606,117 @@ func getTableCreationCommitTSByID(
 		return types.TS{}, err
 	} else if ok {
 		return commit, nil
+	}
+
+	return types.TS{}, moerr.NewInternalErrorNoCtxf(
+		"cannot find table %d commit ts at snapshot %s",
+		tableID,
+		snapshotTS.ToString(),
+	)
+}
+
+func getTableCreationCommitTSByCollectChanges(
+	ctx context.Context,
+	ses *Session,
+	tableID uint64,
+	snapshotTS types.TS,
+) (types.TS, error) {
+	storage := ses.GetTxnHandler().GetStorage()
+	txnOp := ses.GetTxnHandler().GetTxn()
+	mp := ses.proc.Mp()
+
+	_, _, rel, err := storage.GetRelationById(ctx, txnOp, catalog.MO_TABLES_ID)
+	if err != nil {
+		return types.TS{}, err
+	}
+
+	// Use BuildTS(0, 1) instead of types.TS{} so that from.IsEmpty() is false
+	// and CollectChanges takes the partition-state path, which preserves the
+	// real per-row commit timestamps.  The checkpoint path (from.IsEmpty())
+	// replaces commit TS with a constant equal to snapshotTS, which would
+	// make the downstream collect-range empty and incorrect.
+	//
+	// Enable SnapshotReadPolicyVisibleState so that when the partition state
+	// has been truncated past BuildTS(0,1) (e.g. after checkpoints), the
+	// handler falls back through snapshot-state range → checkpoint range →
+	// visible-state exact scan instead of returning a stale-read error.
+	ctx = engine.WithSnapshotReadPolicy(ctx, engine.SnapshotReadPolicyVisibleState)
+	handle, err := rel.CollectChanges(ctx, types.BuildTS(0, 1), snapshotTS, true, mp)
+	if err != nil {
+		return types.TS{}, err
+	}
+	defer handle.Close()
+
+	commitFound := false
+	commitTS := types.TS{}
+
+	for {
+		data, tombstone, _, err := handle.Next(ctx, mp)
+		if err != nil {
+			return types.TS{}, err
+		}
+		if data == nil && tombstone == nil {
+			break
+		}
+
+		if data == nil {
+			if tombstone != nil {
+				tombstone.Clean(mp)
+			}
+			continue
+		}
+
+		relIDIdx := -1
+		commitTSIdx := -1
+		for i, attr := range data.Attrs {
+			switch attr {
+			case catalog.SystemRelAttr_ID:
+				relIDIdx = i
+			case objectio.DefaultCommitTS_Attr:
+				commitTSIdx = i
+			}
+		}
+		if relIDIdx < 0 || commitTSIdx < 0 {
+			// Batches read from aobj (on-disk appendable objects) don't have
+			// Attrs set because ReadOneBlockAllColumns/NewWithSize only
+			// creates Vecs.  Fall back to positional access:
+			//   - rel_id is the first user column (MO_TABLES_REL_ID_IDX = 0)
+			//     after updateDataBatch strips rowid and moves commitTS to end
+			//   - commitTS is always the last vector
+			relIDIdx = catalog.MO_TABLES_REL_ID_IDX
+			commitTSIdx = len(data.Vecs) - 1
+		}
+		if relIDIdx >= len(data.Vecs) || commitTSIdx >= len(data.Vecs) {
+			data.Clean(mp)
+			if tombstone != nil {
+				tombstone.Clean(mp)
+			}
+			continue
+		}
+
+		relIDs := vector.MustFixedColWithTypeCheck[uint64](data.Vecs[relIDIdx])
+		commitCol := vector.MustFixedColWithTypeCheck[types.TS](data.Vecs[commitTSIdx])
+
+		for i := range relIDs {
+			if relIDs[i] != tableID {
+				continue
+			}
+			if !data.Vecs[commitTSIdx].IsNull(uint64(i)) {
+				if !commitFound || commitCol[i].LT(&commitTS) {
+					commitTS = commitCol[i]
+				}
+				commitFound = true
+			}
+		}
+
+		data.Clean(mp)
+		if tombstone != nil {
+			tombstone.Clean(mp)
+		}
+	}
+
+	if commitFound {
+		return commitTS, nil
 	}
 
 	return types.TS{}, moerr.NewInternalErrorNoCtxf(

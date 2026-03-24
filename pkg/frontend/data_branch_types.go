@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -75,6 +76,10 @@ const (
 	defaultRowBytes  = int64(128)
 	tombstoneRowMult = int64(3)
 	tombstoneRowDiv  = int64(2)
+	// Once LCA SQL probe is proven unreliable (for example due to post-GC
+	// FileNotFound), branch diff can switch to reader probe mode and use larger
+	// tombstone batches to reduce repeated snapshot scans.
+	lcaReaderProbeBatchScale = 5
 )
 
 type collectRange struct {
@@ -110,6 +115,10 @@ type tableStuff struct {
 	worker               *ants.Pool
 	hashmapAllocator     *branchHashmapAllocator
 	maxTombstoneBatchCnt int
+	// lcaReaderProbeMode is shared across copies of tableStuff in a single diff
+	// request. When enabled, LCA probing skips SQL and directly uses reader
+	// fallback.
+	lcaReaderProbeMode *atomic.Bool
 
 	retPool *retBatchList
 

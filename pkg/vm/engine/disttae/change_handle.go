@@ -528,6 +528,14 @@ func (h *PartitionChangesHandle) swapCurrentHandleToCheckpointRange(
 	if from.LT(&minTS) || from.GT(&maxTS) {
 		return moerr.NewErrStaleReadNoCtx(from.ToString(), maxTS.ToString())
 	}
+	// Restrict currentPSTo to checkpoint coverage so that the outer
+	// getNextChangeHandle loop will create another partition-state
+	// handler for the remaining [maxTS+1, toTs] range.  Without this,
+	// in-memory rows created after the last checkpoint (e.g. recent
+	// catalog changes) are silently skipped.
+	if maxTS.LT(&h.currentPSTo) {
+		h.currentPSTo = maxTS
+	}
 	if err = h.closeCurrentChangeHandle(); err != nil {
 		return err
 	}

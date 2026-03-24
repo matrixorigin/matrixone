@@ -101,6 +101,52 @@ func TestFormatValIntoString_UnsupportedType(t *testing.T) {
 	require.Contains(t, err.Error(), "not support type")
 }
 
+func TestShouldUseLCAReaderFallback(t *testing.T) {
+	ctx := context.Background()
+	testCases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "nil",
+			err:  nil,
+			want: false,
+		},
+		{
+			name: "stale read",
+			err:  moerr.NewErrStaleReadNoCtx("10-0", "9-0"),
+			want: true,
+		},
+		{
+			name: "file not found",
+			err:  moerr.NewFileNotFoundNoCtx("obj"),
+			want: true,
+		},
+		{
+			name: "unknown database",
+			err:  moerr.NewBadDB(ctx, "test"),
+			want: true,
+		},
+		{
+			name: "unknown table",
+			err:  moerr.NewNoSuchTable(ctx, "test", "t0"),
+			want: true,
+		},
+		{
+			name: "other error",
+			err:  moerr.NewInvalidInput(ctx, "other"),
+			want: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, shouldUseLCAReaderFallback(tc.err))
+		})
+	}
+}
+
 func TestAppendTupleValueToVector_VarlenaAndNull(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)

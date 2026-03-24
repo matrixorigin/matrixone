@@ -27,15 +27,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
+	"go.uber.org/zap"
 )
 
 // should read the LCA table to get all column values.
@@ -53,139 +57,206 @@ func handleDelsOnLCA(
 	}
 
 	var (
-		sql    string
 		sqlRet executor.Result
-		mots   = fmt.Sprintf("{MO_TS=%d} ", snapshot.PhysicalTime)
-
-		sqlBuf  = acquireBuffer(tblStuff.bufPool)
-		valsBuf = acquireBuffer(tblStuff.bufPool)
 
 		lcaTblDef  = tblStuff.lcaRel.GetTableDef(ctx)
 		baseTblDef = tblStuff.baseRel.GetTableDef(ctx)
 
 		colTypes           = tblStuff.def.colTypes
 		expandedPKColIdxes = tblStuff.def.pkColIdxes
+		snapshotTS         = types.TimestampToTS(snapshot)
 	)
 
-	defer func() {
-		releaseBuffer(tblStuff.bufPool, sqlBuf)
-		releaseBuffer(tblStuff.bufPool, valsBuf)
-	}()
+	forceReaderProbe := tblStuff.lcaReaderProbeMode != nil && tblStuff.lcaReaderProbeMode.Load()
+	if forceReaderProbe {
+		sqlRet, err = runLCAProbeWithReaderFallback(ctx, ses, tBat, tblStuff, snapshotTS)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		sqlBuf := acquireBuffer(tblStuff.bufPool)
+		valsBuf := acquireBuffer(tblStuff.bufPool)
+		defer func() {
+			releaseBuffer(tblStuff.bufPool, sqlBuf)
+			releaseBuffer(tblStuff.bufPool, valsBuf)
+		}()
 
-	pkNames := lcaTblDef.Pkey.Names
+		// Keep SQL as the fast path because it is much cheaper than reader-based
+		// probing. However, this path still relies on name-based time travelling
+		// like db.table{MO_TS=...}. After GC, if no snapshot or PITR history was
+		// created for the corresponding account/db/table, catalog lookup at that
+		// timestamp may fail with unknown db/table even though the caller already
+		// knows the stable table ID.
+		mots := fmt.Sprintf("{MO_TS=%d} ", snapshot.PhysicalTime)
+		pkNames := lcaTblDef.Pkey.Names
 
-	// composite pk
-	if baseTblDef.Pkey.CompPkeyCol != nil {
-		var (
-			tuple types.Tuple
-		)
-
-		cols, area := vector.MustVarlenaRawData(tBat.Vecs[0])
-		for i := range cols {
-			b := cols[i].GetByteSlice(area)
-			if tuple, err = types.Unpack(b); err != nil {
-				return nil, err
-			}
-
-			valsBuf.WriteString(fmt.Sprintf("row(%d,", i))
-
-			for j := range tuple {
-				if err = formatValIntoString(
-					ses, tuple[j], colTypes[expandedPKColIdxes[j]], valsBuf,
-				); err != nil {
+		// composite pk
+		if baseTblDef.Pkey.CompPkeyCol != nil {
+			var tuple types.Tuple
+			cols, area := vector.MustVarlenaRawData(tBat.Vecs[0])
+			for i := range cols {
+				b := cols[i].GetByteSlice(area)
+				if tuple, err = types.Unpack(b); err != nil {
 					return nil, err
 				}
-				if j != len(tuple)-1 {
+
+				valsBuf.WriteString(fmt.Sprintf("row(%d,", i))
+				for j := range tuple {
+					if err = formatValIntoString(
+						ses, tuple[j], colTypes[expandedPKColIdxes[j]], valsBuf,
+					); err != nil {
+						return nil, err
+					}
+					if j != len(tuple)-1 {
+						valsBuf.WriteString(", ")
+					}
+				}
+				valsBuf.WriteString(")")
+				if i != len(cols)-1 {
 					valsBuf.WriteString(", ")
 				}
 			}
-
-			valsBuf.WriteString(")")
-
-			if i != len(cols)-1 {
-				valsBuf.WriteString(", ")
+		} else if baseTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+			// fake pk
+			pks := vector.MustFixedColNoTypeCheck[uint64](tBat.Vecs[0])
+			for i := range pks {
+				valsBuf.WriteString(fmt.Sprintf("row(%d,%d)", i, pks[i]))
+				if i != len(pks)-1 {
+					valsBuf.WriteString(", ")
+				}
+			}
+		} else {
+			// real pk
+			valsBuf.Reset()
+			for i := range tBat.Vecs[0].Length() {
+				valsBuf.WriteString(fmt.Sprintf("row(%d,", i))
+				b := tBat.Vecs[0].GetRawBytesAt(i)
+				val := types.DecodeValue(b, tBat.Vecs[0].GetType().Oid)
+				switch x := val.(type) {
+				case []byte:
+					valsBuf.WriteString("'")
+					valsBuf.WriteString(string(x))
+					valsBuf.WriteString("'")
+				case string:
+					valsBuf.WriteString("'")
+					valsBuf.WriteString(string(x))
+					valsBuf.WriteString("'")
+				default:
+					valsBuf.WriteString(fmt.Sprintf("%v", x))
+				}
+				valsBuf.WriteString(")")
+				if i != tBat.Vecs[0].Length()-1 {
+					valsBuf.WriteString(",")
+				}
 			}
 		}
 
-		// fake pk
-	} else if baseTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+		sqlBuf.Reset()
+		sqlBuf.WriteString(fmt.Sprintf(
+			"select pks.__idx_, lca.* from %s.%s%s as lca ",
+			lcaTblDef.DbName, lcaTblDef.Name, mots),
+		)
+		sqlBuf.WriteString(fmt.Sprintf(
+			"right join (values %s) as pks(__idx_,%s) on ",
+			valsBuf.String(), strings.Join(pkNames, ",")),
+		)
 
-		pks := vector.MustFixedColNoTypeCheck[uint64](tBat.Vecs[0])
-		for i := range pks {
-			valsBuf.WriteString(fmt.Sprintf("row(%d,%d)", i, pks[i]))
-			if i != len(pks)-1 {
-				valsBuf.WriteString(", ")
-			}
-		}
-
-		// real pk
-	} else {
-		valsBuf.Reset()
-		for i := range tBat.Vecs[0].Length() {
-			valsBuf.WriteString(fmt.Sprintf("row(%d,", i))
-			b := tBat.Vecs[0].GetRawBytesAt(i)
-			val := types.DecodeValue(b, tBat.Vecs[0].GetType().Oid)
-			switch x := val.(type) {
-			case []byte:
-				valsBuf.WriteString("'")
-				valsBuf.WriteString(string(x))
-				valsBuf.WriteString("'")
-			case string:
-				valsBuf.WriteString("'")
-				valsBuf.WriteString(string(x))
-				valsBuf.WriteString("'")
+		for i := range pkNames {
+			sqlBuf.WriteString(fmt.Sprintf("lca.%s = ", pkNames[i]))
+			switch typ := colTypes[expandedPKColIdxes[i]]; typ.Oid {
+			case types.T_int32:
+				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as INT)", pkNames[i]))
+			case types.T_int64:
+				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as BIGINT)", pkNames[i]))
+			case types.T_uint32:
+				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as INT UNSIGNED)", pkNames[i]))
+			case types.T_uint64:
+				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as BIGINT UNSIGNED)", pkNames[i]))
+			case types.T_float32:
+				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as FLOAT)", pkNames[i]))
+			case types.T_float64:
+				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as DOUBLE)", pkNames[i]))
+			case types.T_varchar:
+				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as VARCHAR)", pkNames[i]))
 			default:
-				valsBuf.WriteString(fmt.Sprintf("%v", x))
+				sqlBuf.WriteString(fmt.Sprintf("pks.%s", pkNames[i]))
 			}
-			valsBuf.WriteString(")")
+			if i != len(pkNames)-1 {
+				sqlBuf.WriteString(" AND ")
+			}
+		}
+		sqlBuf.WriteString(" order by pks.__idx_")
 
-			if i != tBat.Vecs[0].Length()-1 {
-				valsBuf.WriteString(",")
+		sqlPreview := sqlBuf.String()
+		if len(sqlPreview) > 512 {
+			sqlPreview = sqlPreview[:512]
+		}
+		logutil.Info(
+			"DataBranch-LCA-SQL-Start",
+			zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
+			zap.String("db-name", lcaTblDef.DbName),
+			zap.String("table-name", lcaTblDef.Name),
+			zap.Int("input-pk-rows", tBat.RowCount()),
+			zap.String("snapshot-ts", snapshotTS.ToString()),
+			zap.Int("sql-len", sqlBuf.Len()),
+			zap.String("sql-preview", sqlPreview),
+		)
+
+		if sqlRet, err = runSql(ctx, ses, bh, sqlBuf.String(), nil, nil); err != nil {
+			logutil.Error(
+				"DataBranch-LCA-SQL-Error",
+				zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
+				zap.String("db-name", lcaTblDef.DbName),
+				zap.String("table-name", lcaTblDef.Name),
+				zap.Int("input-pk-rows", tBat.RowCount()),
+				zap.String("snapshot-ts", snapshotTS.ToString()),
+				zap.Error(err),
+			)
+			if shouldUseLCAReaderFallback(err) {
+				if tblStuff.lcaReaderProbeMode != nil {
+					tblStuff.lcaReaderProbeMode.Store(true)
+				}
+				logutil.Info(
+					"DataBranch-LCA-SQL-Fallback-Start",
+					zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
+					zap.String("table-name", lcaTblDef.Name),
+					zap.Int("input-pk-rows", tBat.RowCount()),
+					zap.String("snapshot-ts", snapshotTS.ToString()),
+					zap.Error(err),
+				)
+				sqlRet, err = runLCAProbeWithReaderFallback(ctx, ses, tBat, tblStuff, snapshotTS)
+				if err != nil {
+					logutil.Error(
+						"DataBranch-LCA-SQL-Fallback-Error",
+						zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
+						zap.String("table-name", lcaTblDef.Name),
+						zap.Int("input-pk-rows", tBat.RowCount()),
+						zap.String("snapshot-ts", snapshotTS.ToString()),
+						zap.Error(err),
+					)
+					return nil, err
+				}
+				logutil.Info(
+					"DataBranch-LCA-SQL-Fallback-Done",
+					zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
+					zap.String("table-name", lcaTblDef.Name),
+					zap.Int("input-pk-rows", tBat.RowCount()),
+					zap.Int("fallback-batches", len(sqlRet.Batches)),
+				)
+			} else {
+				return nil, err
 			}
 		}
 	}
 
-	sqlBuf.Reset()
-	sqlBuf.WriteString(fmt.Sprintf(
-		"select pks.__idx_, lca.* from %s.%s%s as lca ",
-		lcaTblDef.DbName, lcaTblDef.Name, mots),
-	)
-
-	sqlBuf.WriteString(fmt.Sprintf(
-		"right join (values %s) as pks(__idx_,%s) on ",
-		valsBuf.String(), strings.Join(pkNames, ",")),
-	)
-
-	for i := range pkNames {
-		sqlBuf.WriteString(fmt.Sprintf("lca.%s = ", pkNames[i]))
-		switch typ := colTypes[expandedPKColIdxes[i]]; typ.Oid {
-		case types.T_int32:
-			sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as INT)", pkNames[i]))
-		case types.T_int64:
-			sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as BIGINT)", pkNames[i]))
-		case types.T_uint32:
-			sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as INT UNSIGNED)", pkNames[i]))
-		case types.T_uint64:
-			sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as BIGINT UNSIGNED)", pkNames[i]))
-		case types.T_float32:
-			sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as FLOAT)", pkNames[i]))
-		case types.T_float64:
-			sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as DOUBLE)", pkNames[i]))
-		case types.T_varchar:
-			sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as VARCHAR)", pkNames[i]))
-		default:
-			sqlBuf.WriteString(fmt.Sprintf("pks.%s", pkNames[i]))
-		}
-		if i != len(pkNames)-1 {
-			sqlBuf.WriteString(" AND ")
-		}
-	}
-
-	sqlBuf.WriteString(" order by pks.__idx_")
-
-	sql = sqlBuf.String()
-	if sqlRet, err = runSql(ctx, ses, bh, sql, nil, nil); err != nil {
-		return
+	if forceReaderProbe {
+		logutil.Info(
+			"DataBranch-LCA-ReaderProbe-Direct",
+			zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
+			zap.String("table-name", lcaTblDef.Name),
+			zap.Int("input-pk-rows", tBat.RowCount()),
+			zap.String("snapshot-ts", snapshotTS.ToString()),
+		)
 	}
 
 	notExist := func(cols []*vector.Vector, r int) bool {
@@ -204,14 +275,20 @@ func handleDelsOnLCA(
 	endIdx := dBat.VectorCount() - 1
 
 	sels := make([]int64, 0, 100)
+	joinedRows := 0
+	lcaHitRows := 0
+	lcaMissRows := 0
 	sqlRet.ReadRows(func(rowCnt int, cols []*vector.Vector) bool {
+		joinedRows += rowCnt
 		for i := range rowCnt {
 			if notExist(cols[1:], i) {
 				idx := vector.GetFixedAtNoTypeCheck[int64](cols[0], i)
 				sels = append(sels, int64(idx))
+				lcaMissRows++
 				continue
 			}
 
+			lcaHitRows++
 			for j := 1; j < len(cols); j++ {
 				if err = dBat.Vecs[j-1].UnionOne(cols[j], int64(i), ses.proc.Mp()); err != nil {
 					return false
@@ -230,6 +307,16 @@ func handleDelsOnLCA(
 	})
 
 	sqlRet.Close()
+	logutil.Info(
+		"DataBranch-LCA-Join-Result",
+		zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
+		zap.String("table-name", lcaTblDef.Name),
+		zap.Int("joined-rows", joinedRows),
+		zap.Int("lca-hit-rows", lcaHitRows),
+		zap.Int("lca-miss-rows", lcaMissRows),
+		zap.Int("delete-candidate-rows", len(sels)),
+		zap.Int("output-dbat-rows", dBat.RowCount()),
+	)
 
 	if len(sels) == 0 {
 		tBat.Vecs[0].CleanOnlyData()
@@ -238,8 +325,208 @@ func handleDelsOnLCA(
 		tBat.Vecs[0].Shrink(sels, false)
 		tBat.SetRowCount(tBat.Vecs[0].Length())
 	}
+	logutil.Info(
+		"DataBranch-LCA-PostProcess-Done",
+		zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
+		zap.String("table-name", lcaTblDef.Name),
+		zap.Int("remaining-tbat-rows", tBat.RowCount()),
+		zap.Int("remaining-dbat-rows", dBat.RowCount()),
+	)
 
 	return
+}
+
+// runLCAProbeWithReaderFallback reconstructs the same row shape as
+// "select pks.__idx_, lca.* ... right join(values ...)" using snapshot readers.
+// It returns an executor.Result so handleDelsOnLCA can reuse the same post-SQL
+// processing logic regardless of whether SQL or reader fallback produced rows.
+func runLCAProbeWithReaderFallback(
+	ctx context.Context,
+	ses *Session,
+	tBat *batch.Batch,
+	tblStuff tableStuff,
+	snapshotTS types.TS,
+) (sqlRet executor.Result, err error) {
+	sqlRet.Mp = ses.proc.Mp()
+	if tBat == nil {
+		return sqlRet, nil
+	}
+	rowCount := tBat.RowCount()
+	if rowCount == 0 {
+		bat := batch.NewWithSize(len(tblStuff.def.colNames) + 1)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		for i, typ := range tblStuff.def.colTypes {
+			bat.Vecs[i+1] = vector.NewVec(typ)
+		}
+		bat.SetRowCount(0)
+		sqlRet.Batches = []*batch.Batch{bat}
+		return sqlRet, nil
+	}
+
+	mp := ses.proc.Mp()
+	pkVec := tBat.Vecs[0]
+	inputKeys := make(map[string]struct{}, rowCount)
+	for i := 0; i < rowCount; i++ {
+		key := string(pkVec.GetRawBytesAt(i))
+		inputKeys[key] = struct{}{}
+	}
+	lcaTblDef := tblStuff.lcaRel.GetTableDef(ctx)
+	// Build a sorted IN vector for reader-side PK filtering.
+	// The sorted-search path uses binary search over the IN value array and
+	// assumes the array is ordered; an unsorted IN vector can drop valid hits.
+	filterVec := vector.NewVec(*pkVec.GetType())
+	defer filterVec.Free(mp)
+	if err = filterVec.UnionBatch(pkVec, 0, rowCount, nil, mp); err != nil {
+		return executor.Result{}, err
+	}
+	filterVec.InplaceSort()
+	pkFilterExpr := readutil.ConstructInExpr(ctx, lcaTblDef.Pkey.PkeyColName, filterVec)
+
+	tmp := batch.NewWithSize(len(tblStuff.def.colNames))
+	for i, typ := range tblStuff.def.colTypes {
+		tmp.Vecs[i] = vector.NewVec(typ)
+	}
+	defer tmp.Clean(mp)
+	tmpRowByKey := make(map[string]int, rowCount)
+	var (
+		scannedBatchCnt int
+		scannedRowCnt   int
+		acceptedRowCnt  int
+		duplicateRows   int
+	)
+	logutil.Info(
+		"DataBranch-LCA-ReaderFallback-ScanStart",
+		zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
+		zap.String("table-name", lcaTblDef.Name),
+		zap.Int("input-pk-rows", rowCount),
+		zap.Int("input-unique-keys", len(inputKeys)),
+		zap.String("snapshot-ts", snapshotTS.ToString()),
+	)
+
+	err = scanSnapshotRelationByID(
+		ctx,
+		"lca-reader-fallback",
+		ses,
+		tblStuff.lcaRel.GetTableID(ctx),
+		snapshotTS,
+		tblStuff.def.colNames,
+		tblStuff.def.colTypes,
+		pkFilterExpr,
+		func(readBatch *batch.Batch) error {
+			scannedBatchCnt++
+			scannedRowCnt += readBatch.RowCount()
+			readPK := readBatch.Vecs[tblStuff.def.pkColIdx]
+			sels := make([]int64, 0, readBatch.RowCount())
+			keys := make([]string, 0, readBatch.RowCount())
+			for row := 0; row < readBatch.RowCount(); row++ {
+				key := string(readPK.GetRawBytesAt(row))
+				if _, ok := inputKeys[key]; !ok {
+					continue
+				}
+				if _, exists := tmpRowByKey[key]; exists {
+					duplicateRows++
+					continue
+				}
+				sels = append(sels, int64(row))
+				keys = append(keys, key)
+			}
+			if len(sels) == 0 {
+				return nil
+			}
+			base := tmp.Vecs[0].Length()
+			for colIdx := range tblStuff.def.colNames {
+				if err = tmp.Vecs[colIdx].Union(readBatch.Vecs[colIdx], sels, mp); err != nil {
+					return err
+				}
+			}
+			for i, key := range keys {
+				tmpRowByKey[key] = base + i
+			}
+			acceptedRowCnt += len(sels)
+			return nil
+		},
+	)
+	if err != nil {
+		return executor.Result{}, err
+	}
+	logutil.Info(
+		"DataBranch-LCA-ReaderFallback-ScanDone",
+		zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
+		zap.String("table-name", lcaTblDef.Name),
+		zap.Int("scan-batch-cnt", scannedBatchCnt),
+		zap.Int("scan-row-cnt", scannedRowCnt),
+		zap.Int("accepted-row-cnt", acceptedRowCnt),
+		zap.Int("dedup-row-cnt", duplicateRows),
+		zap.Int("accepted-key-cnt", len(tmpRowByKey)),
+	)
+
+	out := batch.NewWithSize(len(tblStuff.def.colNames) + 1)
+	out.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	for i, typ := range tblStuff.def.colTypes {
+		out.Vecs[i+1] = vector.NewVec(typ)
+	}
+	defer func() {
+		if err != nil {
+			out.Clean(mp)
+		}
+	}()
+
+	orderedIdx := make([]int64, rowCount)
+	sels := make([]int64, rowCount)
+	missedRows := make([]uint64, 0)
+	hasAnyHit := false
+	for i := 0; i < rowCount; i++ {
+		orderedIdx[i] = int64(i)
+		key := string(pkVec.GetRawBytesAt(i))
+		if rowIdx, ok := tmpRowByKey[key]; ok {
+			sels[i] = int64(rowIdx)
+			hasAnyHit = true
+		} else {
+			missedRows = append(missedRows, uint64(i))
+		}
+	}
+
+	if err = vector.AppendFixedList(out.Vecs[0], orderedIdx, nil, mp); err != nil {
+		return executor.Result{}, err
+	}
+
+	if !hasAnyHit {
+		for colIdx := range tblStuff.def.colNames {
+			nullConst := vector.NewConstNull(tblStuff.def.colTypes[colIdx], rowCount, mp)
+			err = out.Vecs[colIdx+1].UnionBatch(nullConst, 0, rowCount, nil, mp)
+			nullConst.Free(mp)
+			if err != nil {
+				return executor.Result{}, err
+			}
+		}
+	} else if len(missedRows) == 0 {
+		for colIdx := range tblStuff.def.colNames {
+			if err = out.Vecs[colIdx+1].UnionBatch(tmp.Vecs[colIdx], 0, rowCount, nil, mp); err != nil {
+				return executor.Result{}, err
+			}
+		}
+	} else {
+		for colIdx := range tblStuff.def.colNames {
+			if err = out.Vecs[colIdx+1].Union(tmp.Vecs[colIdx], sels, mp); err != nil {
+				return executor.Result{}, err
+			}
+			for _, rowIdx := range missedRows {
+				nulls.Add(out.Vecs[colIdx+1].GetNulls(), rowIdx)
+			}
+		}
+	}
+	out.SetRowCount(rowCount)
+	sqlRet.Batches = []*batch.Batch{out}
+	logutil.Info(
+		"DataBranch-LCA-ReaderFallback-Output",
+		zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
+		zap.String("table-name", lcaTblDef.Name),
+		zap.Int("output-rows", rowCount),
+		zap.Bool("has-any-hit", hasAnyHit),
+		zap.Int("missed-rows", len(missedRows)),
+		zap.Int("matched-keys", len(tmpRowByKey)),
+	)
+	return sqlRet, nil
 }
 
 func hashDiff(
@@ -748,6 +1035,22 @@ func findDeleteAndUpdateBat(
 	if maxTombstoneBatchCnt <= 0 {
 		maxTombstoneBatchCnt = maxSqlBatchCnt
 	}
+	readerProbeBatchCnt := maxTombstoneBatchCnt
+	if readerProbeBatchCnt < maxSqlBatchCnt {
+		scaled := readerProbeBatchCnt * lcaReaderProbeBatchScale
+		if scaled > maxSqlBatchCnt {
+			scaled = maxSqlBatchCnt
+		}
+		if scaled > readerProbeBatchCnt {
+			readerProbeBatchCnt = scaled
+		}
+	}
+	currentProbeBatchCnt := func() int {
+		if tblStuff.lcaReaderProbeMode != nil && tblStuff.lcaReaderProbeMode.Load() {
+			return readerProbeBatchCnt
+		}
+		return maxTombstoneBatchCnt
+	}
 
 	if err = tombstoneHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
 		var (
@@ -923,7 +1226,7 @@ func findDeleteAndUpdateBat(
 			}
 
 			tBat1.SetRowCount(tBat1.Vecs[0].Length())
-			if tBat1.RowCount() >= maxTombstoneBatchCnt {
+			if tBat1.RowCount() >= currentProbeBatchCnt() {
 				tombBat := tBat1
 				tBat1 = nil
 				if err2 = processBatch(tombBat); err2 != nil {
@@ -1440,9 +1743,12 @@ func buildHashmapForTable(
 
 	}
 
-	if tblStuff.def.pkKind == fakeKind {
-		return
-	}
+	// For fake PK tables, each row version has a unique fake PK, so there are
+	// no same-key duplicates. However, the dedup phase also pairs tombstones
+	// with their corresponding data entries. For example, INSERT(1,1) with
+	// FK_old then UPDATE→(1,11) produces tombstone FK_old + stale data FK_old
+	// + live data FK_new. Without cleanup, the stale data (1,1) would survive
+	// and appear in the diff output with the wrong value.
 
 	/*
 		case 1:
@@ -1489,11 +1795,10 @@ func buildHashmapForTable(
 			if tombstoneRet, err3 = cursor.GetByEncodedKey(key); err3 != nil {
 				return err3
 			}
-			if len(tombstoneRet.Rows) <= 1 {
+			if len(tombstoneRet.Rows) == 0 {
 				return nil
 			}
 
-			//tsMap := make(map[types.TS]struct{})
 			maxIdx = 0
 			maxTs = types.MinTs()
 			for i := 0; i < len(tombstoneRet.Rows); i++ {
@@ -1505,20 +1810,28 @@ func buildHashmapForTable(
 					maxTs = cur
 					maxIdx = i
 				}
-				//tsMap[cur] = struct{}{}
 			}
-			//delete(tsMap, maxTs)
 
-			for i := range tombstoneRet.Rows {
-				if i != maxIdx {
-					if _, err3 = cursor.PopByEncodedKeyValue(
-						key, tombstoneRet.Rows[i], false,
-					); err3 != nil {
-						return err3
+			totalTombstones := len(tombstoneRet.Rows)
+
+			// Remove stale tombstone entries (only needed when multiple exist)
+			if len(tombstoneRet.Rows) > 1 {
+				for i := range tombstoneRet.Rows {
+					if i != maxIdx {
+						if _, err3 = cursor.PopByEncodedKeyValue(
+							key, tombstoneRet.Rows[i], false,
+						); err3 != nil {
+							return err3
+						}
 					}
 				}
 			}
 
+			// Remove data entries older than the latest tombstone.
+			// Count how many stale data entries are removed — each one
+			// "consumes" one tombstone from an intermediate operation
+			// (e.g., insert→update creates 1 tombstone + 1 stale data entry).
+			staleDataCount := 0
 			if dataRet, err3 = dataHashmap.GetByEncodedKey(key); err3 != nil {
 				return err3
 			}
@@ -1529,15 +1842,35 @@ func buildHashmapForTable(
 						return err3
 					}
 					cur := types.TS(tuple[len(tuple)-1].([]uint8))
-					// cannot use tsMap to filter, why?
-					// cannot use cur != maxTS to filter, why?
 					if cur.LT(&maxTs) {
 						if _, err3 = dataHashmap.PopByEncodedKeyValue(
 							key, dataRet.Rows[i], false,
 						); err3 != nil {
 							return err3
 						}
+						staleDataCount++
 					}
+				}
+			}
+
+			// If all tombstones are consumed by stale data entries, the net
+			// effect is a pure INSERT (not a delete). Remove the remaining
+			// tombstone so that findDeleteAndUpdateBat doesn't incorrectly
+			// cancel the surviving data entry.
+			//
+			// Example: insert(1,1) → update→(1,11) produces 1 tombstone +
+			// 1 stale data (1,1) + 1 live data (1,11). staleDataCount=1
+			// matches totalTombstones=1, so the tombstone is intermediate.
+			//
+			// Contrast: update LCA row (0,0)→(0,10) produces 1 tombstone +
+			// 0 stale data (the original (0,0) is outside the change range).
+			// staleDataCount=0 < totalTombstones=1, so the tombstone stays
+			// and findDeleteAndUpdateBat correctly detects UPDATE on the LCA.
+			if staleDataCount >= totalTombstones {
+				if _, err3 = cursor.PopByEncodedKeyValue(
+					key, tombstoneRet.Rows[maxIdx], false,
+				); err3 != nil {
+					return err3
 				}
 			}
 			return nil
