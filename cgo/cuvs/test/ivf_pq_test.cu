@@ -71,7 +71,7 @@ TEST(GpuIvfPqTest, BasicLoadAndSearchWithIds) {
     
     std::vector<int> devices = {0};
     ivf_pq_build_params_t bp = ivf_pq_build_params_default();
-    bp.n_lists = 10;
+    bp.n_lists = 100;
     gpu_ivf_pq_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU, ids.data());
     index.start();
     index.build();
@@ -106,7 +106,7 @@ TEST(GpuIvfPqTest, ParallelAddChunkWithOffset) {
 
     std::vector<int> devices = {0};
     ivf_pq_build_params_t bp = ivf_pq_build_params_default();
-    bp.n_lists = 10;
+    bp.n_lists = 100;
     gpu_ivf_pq_t<float> index(total_count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
     index.start();
 
@@ -193,7 +193,7 @@ TEST(GpuIvfPqTest, BuildFromDataFile) {
 
     std::vector<int> devices = {0};
     ivf_pq_build_params_t bp = ivf_pq_build_params_default();
-    bp.n_lists = 10;
+    bp.n_lists = 100;
     bp.m = 4;
 
     gpu_ivf_pq_t<float> index(data_filename, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
@@ -262,7 +262,7 @@ TEST(GpuIvfPqTest, ReplicatedModeSimulation) {
     gpu_get_device_list(devices.data(), dev_count);
 
     ivf_pq_build_params_t bp = ivf_pq_build_params_default();
-    bp.n_lists = 10;
+    bp.n_lists = 100;
     bp.m = 8;
     gpu_ivf_pq_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_REPLICATED);
     index.start();

@@ -306,6 +306,31 @@ TEST(CuvsWorkerTest, SubmitMain) {
     worker.stop();
 }
 
+TEST(CuvsWorkerTest, SubmitWorker) {
+    uint32_t n_threads = 2;
+    cuvs_worker_t worker(n_threads, std::vector<int>{0});
+    worker.start();
+
+    // Task that identifies the thread it's running on
+    auto task = [](raft_handle_wrapper_t& handle) -> std::any {
+        return std::make_pair(handle.get_device_id(), std::this_thread::get_id());
+    };
+
+    std::vector<uint64_t> ids;
+    for(int i=0; i<10; ++i) {
+        ids.push_back(worker.submit_worker(task));
+    }
+
+    for(auto id : ids) {
+        auto res = worker.wait(id).get();
+        ASSERT_TRUE(res.error == nullptr);
+        auto pair = std::any_cast<std::pair<int, std::thread::id>>(res.result);
+        ASSERT_EQ(pair.first, -1); // CPU worker
+    }
+
+    worker.stop();
+}
+
 TEST(CuvsWorkerTest, BoundedQueueStress) {
     const uint32_t n_workers = 4;
     const uint32_t n_producers = 4;
