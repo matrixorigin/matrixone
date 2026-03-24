@@ -361,6 +361,15 @@ public:
         this->quantizer_.reset();
         this->dataset_device_ptr_.reset();
     }
+
+    std::string info() const override {
+        std::string json = gpu_index_base_t<T, brute_force_build_params_t, int64_t>::info();
+        json += ", \"type\": \"Brute-Force\", \"brute_force\": {";
+        if (index_) json += "\"built\": true";
+        else json += "\"built\": false";
+        json += "}}";
+        return json;
+    }
 };
 
 } // namespace matrixone
