@@ -218,3 +218,48 @@ func BenchmarkGpuAddChunkAndSearchBruteForceF16(b *testing.B) {
 		return neighbors, nil
 	})
 }
+
+func BenchmarkGpuBruteForceF32(b *testing.B) {
+	const dimension = 1024
+	const totalCount = 100000
+
+	dataset := make([]float32, totalCount*dimension)
+	for i := range dataset {
+		dataset[i] = rand.Float32()
+	}
+
+	index, err := NewGpuBruteForce[float32](dataset, uint64(totalCount), dimension, L2Expanded, 8, 0)
+	if err != nil {
+		b.Fatalf("Failed to create index: %v", err)
+	}
+	defer index.Destroy()
+
+	if err := index.Start(); err != nil {
+		b.Fatalf("Start failed: %v", err)
+	}
+	if err := index.Build(); err != nil {
+		b.Fatalf("Build failed: %v", err)
+	}
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		queries := make([]float32, dimension)
+		for i := range queries {
+			queries[i] = rand.Float32()
+		}
+		for pb.Next() {
+			_, _, err := index.SearchFloat(queries, 1, dimension, 10)
+			if err != nil {
+				b.Fatalf("Search failed: %v", err)
+			}
+		}
+	})
+	b.StopTimer()
+	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
+		neighbors, _, err := index.SearchFloat(queries, numQueries, dimension, limit)
+		if err != nil {
+			return nil, err
+		}
+		return neighbors, nil
+	})
+}

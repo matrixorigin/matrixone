@@ -125,7 +125,6 @@ func TestGpuCagraSaveLoad(t *testing.T) {
 }
 
 func TestGpuShardedCagra(t *testing.T) {
-	t.Skip("Sharded mode is currently disabled due to a suspected bug in cuVS (SIZE_MAX mdspan extents)")
 	devices, err := GetGpuDeviceList()
 	if err != nil || len(devices) < 1 {
 		t.Skip("Need at least 1 GPU for sharded CAGRA test")
@@ -394,7 +393,6 @@ func TestGpuReplicatedCagra(t *testing.T) {
 }
 
 func BenchmarkGpuShardedCagra(b *testing.B) {
-	b.Skip("Sharded mode is currently disabled due to a suspected bug in cuVS (SIZE_MAX mdspan extents)")
 	devices, err := GetGpuDeviceList()
 	if err != nil || len(devices) < 1 {
 		b.Skip("Need at least 1 GPU for sharded CAGRA benchmark")
