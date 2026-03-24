@@ -15,6 +15,7 @@
 package message
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"runtime"
 	"runtime/debug"
 	"sync"
@@ -63,7 +64,8 @@ func (m testMessage) Destroy() {
 }
 
 func TestJoinMapMsgDestroyReleasesJoinMapMemory(t *testing.T) {
-	shm, err := hashmap.NewStrHashMap(false)
+	m := mpool.MustNewZero()
+	shm, err := hashmap.NewStrHashMap(false, m)
 	require.NoError(t, err)
 
 	jm := &JoinMap{
@@ -75,6 +77,7 @@ func TestJoinMapMsgDestroyReleasesJoinMapMemory(t *testing.T) {
 
 	require.Nil(t, jm.shm)
 	require.False(t, jm.valid)
+	shm.Free()
 }
 
 func TestMessageBoardResetDestroysQueuedMessages(t *testing.T) {
