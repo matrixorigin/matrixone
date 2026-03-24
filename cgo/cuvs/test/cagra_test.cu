@@ -20,6 +20,7 @@
 #include "test_framework.hpp"
 #include <cstdio>
 #include <cstdlib>
+#include <thread>
 
 using namespace matrixone;
 
@@ -45,18 +46,89 @@ TEST(GpuCagraTest, BasicLoadAndSearch) {
     index.destroy();
 }
 
+TEST(GpuCagraTest, BasicLoadAndSearchWithIds) {
+    const uint32_t dimension = 16;
+    const uint64_t count = 1000;
+    std::vector<float> dataset(count * dimension);
+    std::vector<uint32_t> ids(count);
+    for (size_t i = 0; i < count; ++i) {
+        for (size_t j = 0; j < dimension; ++j) dataset[i * dimension + j] = (float)rand() / RAND_MAX;
+        ids[i] = (uint32_t)(i + 1000); // Offset IDs
+    }
+    
+    std::vector<int> devices = {0};
+    cagra_build_params_t bp = cagra_build_params_default();
+    gpu_cagra_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU, ids.data());
+    index.start();
+    index.build();
+
+    std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
+    cagra_search_params_t sp = cagra_search_params_default();
+    auto result = index.search(queries.data(), 1, dimension, 5, sp);
+
+    ASSERT_EQ(result.neighbors.size(), (size_t)5);
+    ASSERT_EQ(result.neighbors[0], 1000u); // Should return the provided ID
+
+    index.destroy();
+}
+
+TEST(GpuCagraTest, ParallelAddChunkWithOffset) {
+    const uint32_t dimension = 16;
+    const uint64_t count_per_chunk = 500;
+    const uint64_t total_count = count_per_chunk * 2;
+    std::vector<float> chunk1(count_per_chunk * dimension);
+    std::vector<float> chunk2(count_per_chunk * dimension);
+    std::vector<uint32_t> ids1(count_per_chunk);
+    std::vector<uint32_t> ids2(count_per_chunk);
+
+    for (size_t i = 0; i < count_per_chunk; ++i) {
+        for (size_t j = 0; j < dimension; ++j) {
+            chunk1[i * dimension + j] = (float)rand() / RAND_MAX;
+            chunk2[i * dimension + j] = (float)rand() / RAND_MAX;
+        }
+        ids1[i] = (uint32_t)i;
+        ids2[i] = (uint32_t)(i + count_per_chunk);
+    }
+
+    std::vector<int> devices = {0};
+    cagra_build_params_t bp = cagra_build_params_default();
+    // Pre-allocate with total_count
+    gpu_cagra_t<float> index(total_count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+    index.start();
+
+    // Add chunks in parallel threads
+    std::thread t1([&]() { index.add_chunk(chunk1.data(), count_per_chunk, 0, ids1.data()); });
+    std::thread t2([&]() { index.add_chunk(chunk2.data(), count_per_chunk, count_per_chunk, ids2.data()); });
+    t1.join();
+    t2.join();
+
+    index.build();
+
+    // Query for a vector from the second chunk
+    std::vector<float> queries(chunk2.begin(), chunk2.begin() + dimension);
+    cagra_search_params_t sp = cagra_search_params_default();
+    auto result = index.search(queries.data(), 1, dimension, 5, sp);
+
+    ASSERT_EQ(result.neighbors[0], (uint32_t)count_per_chunk);
+
+    index.destroy();
+}
+
 TEST(GpuCagraTest, SaveAndLoadFromFile) {
     const uint32_t dimension = 16;
     const uint64_t count = 1000;
     std::vector<float> dataset(count * dimension);
+    std::vector<uint32_t> ids(count);
     for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
+    for (size_t i = 0; i < count; ++i) ids[i] = (uint32_t)(i + 5000);
+
     std::string filename = "test_cagra.bin";
     std::vector<int> devices = {0};
 
     // 1. Build and Save
     {
         cagra_build_params_t bp = cagra_build_params_default();
-        gpu_cagra_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+        gpu_cagra_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU, ids.data());
         index.start();
         index.build();
         index.save(filename);
@@ -75,47 +147,15 @@ TEST(GpuCagraTest, SaveAndLoadFromFile) {
         auto result = index.search(queries.data(), 1, dimension, 5, sp);
         
         ASSERT_EQ(result.neighbors.size(), (size_t)5);
-        ASSERT_EQ(result.neighbors[0], 0u);
+        ASSERT_EQ(result.neighbors[0], 5000u);
 
         index.destroy();
     }
 
     std::remove(filename.c_str());
+    std::remove((filename + ".ids").c_str());
 }
 
-/*
-// Sharded mode is currently disabled due to a suspected bug in cuVS or its integration.
-// In gdb output, the mdspan extents showed 18446744073709551615ul (SIZE_MAX). 
-// This usually means a dynamic extent wasn't initialized correctly or a 
-// calculation for the number of rows/columns overflowed/underflowed.
-// Action: Check the dimensions of your input query matrix and indices. 
-// If n_queries or k is being passed as a negative number or uninitialized variable, 
-// cuvs might be trying to allocate a workspace based on a massive, invalid number.
-TEST(GpuCagraTest, ShardedModeSimulation) {
-    const uint32_t dimension = 16;
-    const uint64_t count = 1000;
-    std::vector<float> dataset(count * dimension);
-    for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
-
-    int dev_count = gpu_get_device_count();
-    ASSERT_TRUE(dev_count > 0);
-    std::vector<int> devices(dev_count);
-    gpu_get_device_list(devices.data(), dev_count);
-
-    cagra_build_params_t bp = cagra_build_params_default();
-    gpu_cagra_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SHARDED);
-    index.start();
-    index.build();
-    std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
-    cagra_search_params_t sp = cagra_search_params_default();
-    auto result = index.search(queries.data(), 1, dimension, 5, sp);
-
-    ASSERT_EQ(result.neighbors.size(), (size_t)5);
-    ASSERT_EQ(result.neighbors[0], 0u);
-
-    index.destroy();
-}
-*/
 TEST(GpuCagraTest, ReplicatedModeSimulation) {
     const uint32_t dimension = 16;
     const uint64_t count = 1000;

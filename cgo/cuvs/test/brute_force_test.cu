@@ -53,6 +53,66 @@ TEST(GpuBruteForceTest, BasicLoadAndSearch) {
     index.destroy();
 }
 
+TEST(GpuBruteForceTest, BasicLoadAndSearchWithIds) {
+    const uint32_t dimension = 16;
+    const uint64_t count = 1000;
+    std::vector<float> dataset(count * dimension);
+    std::vector<int64_t> ids(count);
+    for (size_t i = 0; i < count; ++i) {
+        for (size_t j = 0; j < dimension; ++j) dataset[i * dimension + j] = (float)rand() / RAND_MAX;
+        ids[i] = (int64_t)(i + 3000);
+    }
+    
+    gpu_brute_force_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, 1, 0, ids.data());
+    index.start();
+    index.build();
+
+    std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
+    auto result = index.search(queries.data(), 1, dimension, 5, brute_force_search_params_default());
+
+    ASSERT_EQ(result.neighbors.size(), (size_t)5);
+    ASSERT_EQ(result.neighbors[0], 3000);
+
+    index.destroy();
+}
+
+TEST(GpuBruteForceTest, ParallelAddChunkWithOffset) {
+    const uint32_t dimension = 16;
+    const uint64_t count_per_chunk = 500;
+    const uint64_t total_count = count_per_chunk * 2;
+    std::vector<float> chunk1(count_per_chunk * dimension);
+    std::vector<float> chunk2(count_per_chunk * dimension);
+    std::vector<int64_t> ids1(count_per_chunk);
+    std::vector<int64_t> ids2(count_per_chunk);
+
+    for (size_t i = 0; i < count_per_chunk; ++i) {
+        for (size_t j = 0; j < dimension; ++j) {
+            chunk1[i * dimension + j] = (float)rand() / RAND_MAX;
+            chunk2[i * dimension + j] = (float)rand() / RAND_MAX;
+        }
+        ids1[i] = (int64_t)i;
+        ids2[i] = (int64_t)(i + count_per_chunk);
+    }
+
+    gpu_brute_force_t<float> index(total_count, dimension, DistanceType_L2Expanded, 1, 0);
+    index.start();
+
+    #include <thread>
+    std::thread t1([&]() { index.add_chunk(chunk1.data(), count_per_chunk, 0, ids1.data()); });
+    std::thread t2([&]() { index.add_chunk(chunk2.data(), count_per_chunk, count_per_chunk, ids2.data()); });
+    t1.join();
+    t2.join();
+
+    index.build();
+
+    std::vector<float> queries(chunk2.begin(), chunk2.begin() + dimension);
+    auto result = index.search(queries.data(), 1, dimension, 5, brute_force_search_params_default());
+
+    ASSERT_EQ(result.neighbors[0], (int64_t)count_per_chunk);
+
+    index.destroy();
+}
+
 TEST(GpuBruteForceTest, SearchWithMultipleQueries) {
     const uint32_t dimension = 4;
     const uint64_t count = 4;

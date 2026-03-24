@@ -74,7 +74,7 @@ struct cagra_search_result_t {
  * @brief gpu_cagra_t implements a CAGRA index that can run on a single GPU or sharded across multiple GPUs.
  */
 template <typename T>
-class gpu_cagra_t : public gpu_index_base_t<T, cagra_build_params_t> {
+class gpu_cagra_t : public gpu_index_base_t<T, cagra_build_params_t, uint32_t> {
 public:
     using cagra_index = cuvs::neighbors::cagra::index<T, uint32_t>;
     using mg_index = cuvs::neighbors::mg_index<cagra_index, T, uint32_t>;
@@ -91,7 +91,8 @@ public:
     // Unified Constructor for building from dataset
     gpu_cagra_t(const T* dataset_data, uint64_t count_vectors, uint32_t dimension,
                     distance_type_t m, const cagra_build_params_t& bp,
-                    const std::vector<int>& devices, uint32_t nthread, distribution_mode_t mode) {
+                    const std::vector<int>& devices, uint32_t nthread, distribution_mode_t mode,
+                    const uint32_t* ids = nullptr) {
 
         this->dimension = dimension;
         this->count = static_cast<uint32_t>(count_vectors);
@@ -111,12 +112,18 @@ public:
         if (dataset_data) {
             std::copy(dataset_data, dataset_data + (this->count * this->dimension), this->flattened_host_dataset.begin());
         }
+
+        if (ids) {
+            this->host_ids.resize(this->count);
+            std::copy(ids, ids + this->count, this->host_ids.begin());
+        }
     }
 
     // Constructor for chunked input (pre-allocates)
     gpu_cagra_t(uint64_t total_count, uint32_t dimension, distance_type_t m,
                     const cagra_build_params_t& bp, const std::vector<int>& devices,
-                    uint32_t nthread, distribution_mode_t mode) {
+                    uint32_t nthread, distribution_mode_t mode,
+                    const uint32_t* ids = nullptr) {
 
         this->dimension = dimension;
         this->count = static_cast<uint32_t>(total_count);
@@ -133,6 +140,10 @@ public:
         this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
 
         this->flattened_host_dataset.resize(this->count * this->dimension);
+        if (ids) {
+            this->host_ids.resize(this->count);
+            std::copy(ids, ids + this->count, this->host_ids.begin());
+        }
     }
 
     // Constructor for loading from file
@@ -204,7 +215,7 @@ public:
      * @brief Merges multiple CAGRA indices into a single index.
      * Only works for SINGLE_GPU indices.
      */
-    static std::unique_ptr<gpu_cagra_t<T>> merge(const std::vector<gpu_index_base_t<T, cagra_build_params_t>*>& base_indices, uint32_t nthread, const std::vector<int>& devs) {
+    static std::unique_ptr<gpu_cagra_t<T>> merge(const std::vector<gpu_index_base_t<T, cagra_build_params_t, uint32_t>*>& base_indices, uint32_t nthread, const std::vector<int>& devs) {
         if (base_indices.empty()) throw std::invalid_argument("base_indices empty");
         
         uint32_t dim = base_indices[0]->dimension;
@@ -546,12 +557,19 @@ public:
             handle.sync(); // Local sync
         }
 
+        if (!this->host_ids.empty()) {
+            for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
+                if (search_res.neighbors[i] != (uint32_t)-1) {
+                    search_res.neighbors[i] = this->host_ids[search_res.neighbors[i]];
+                }
+            }
+        }
+
         // std::cout << "[DEBUG " << get_timestamp() << "] CAGRA search_internal finished working" << std::endl;
         return search_res;
     }
 
     search_result_t search_float(const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const cagra_search_params_t& sp) {
-        if constexpr (std::is_same_v<T, float>) return search(queries_data, num_queries, query_dimension, limit, sp);
         if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
         if (!this->is_loaded_ || (!index_ && !mg_index_ && this->replicated_indices_.empty())) return search_result_t{};
 
@@ -700,11 +718,19 @@ public:
                 raft::copy(*res, raft::make_host_matrix_view<uint32_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device.view());
                 raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device.view());
             } else {
-                std::string msg = "CAGRA search_float error: No valid index found for device " + std::to_string(handle.get_device_id()) + 
+                std::string msg = "CAGRA search error: No valid index found for device " + std::to_string(handle.get_device_id()) + 
                                  " (Mode: " + mode_name(this->dist_mode) + ")";
                 throw std::runtime_error(msg);
             }
-            handle.sync(); // Local sync
+            handle.sync();
+        }
+
+        if (!this->host_ids.empty()) {
+            for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
+                if (search_res.neighbors[i] != (uint32_t)-1) {
+                    search_res.neighbors[i] = this->host_ids[search_res.neighbors[i]];
+                }
+            }
         }
 
         // std::cout << "[DEBUG " << get_timestamp() << "] CAGRA search_internal finished working" << std::endl;
@@ -712,7 +738,7 @@ public:
     }
 
     std::string info() const override {
-        std::string json = gpu_index_base_t<T, cagra_build_params_t>::info();
+        std::string json = gpu_index_base_t<T, cagra_build_params_t, uint32_t>::info();
         json += ", \"type\": \"CAGRA\", \"cagra\": {";
         if (index_) json += "\"mode\": \"Single-GPU\", \"size\": " + std::to_string(index_->size());
         else if (mg_index_) json += "\"mode\": \"Multi-GPU\", \"ranks\": " + std::to_string(mg_index_->ann_interfaces_.size());
@@ -732,6 +758,9 @@ public:
             }
         );
         this->worker->wait(job_id).get();
+        if (!this->host_ids.empty()) {
+            this->save_ids(filename + ".ids");
+        }
     }
 
     void load(const std::string& filename) {
@@ -767,6 +796,12 @@ public:
         } else {
             // SHARDED
             this->worker->submit_all_devices(task);
+        }
+
+        try {
+            this->load_ids(filename + ".ids");
+        } catch (...) {
+            // IDs might not exist, that's okay
         }
 
         this->is_loaded_ = true;

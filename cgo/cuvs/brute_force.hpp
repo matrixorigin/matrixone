@@ -90,7 +90,8 @@ public:
     // Unified Constructor for building from dataset
     gpu_brute_force_t(const T* dataset_data, uint64_t count_vectors, uint32_t dimension,
                     distance_type_t m, const brute_force_build_params_t& bp,
-                    const std::vector<int>& devices, uint32_t nthread, distribution_mode_t mode) {
+                    const std::vector<int>& devices, uint32_t nthread, distribution_mode_t mode,
+                    const int64_t* ids = nullptr) {
 
         this->dimension = dimension;
         this->count = static_cast<uint32_t>(count_vectors);
@@ -110,11 +111,16 @@ public:
         if (dataset_data) {
             std::copy(dataset_data, dataset_data + (this->count * this->dimension), this->flattened_host_dataset.begin());
         }
+
+        if (ids) {
+            this->host_ids.resize(this->count);
+            std::copy(ids, ids + this->count, this->host_ids.begin());
+        }
     }
 
     // Compatibility constructor for tests
     gpu_brute_force_t(const T* dataset_data, uint64_t count_vectors, uint32_t dimension,
-                       distance_type_t m, int nthread, int device_id) {
+                       distance_type_t m, int nthread, int device_id, const int64_t* ids = nullptr) {
         this->dimension = dimension;
         this->count = static_cast<uint32_t>(count_vectors);
         this->metric = m;
@@ -128,11 +134,16 @@ public:
         if (dataset_data) {
             std::copy(dataset_data, dataset_data + (this->count * this->dimension), this->flattened_host_dataset.begin());
         }
+
+        if (ids) {
+            this->host_ids.resize(this->count);
+            std::copy(ids, ids + this->count, this->host_ids.begin());
+        }
     }
 
     // Compatibility constructor for brute_force_c.cpp (empty/chunked build)
     gpu_brute_force_t(uint64_t total_count, uint32_t dimension, distance_type_t m,
-                       uint32_t nthread, int device_id) {
+                       uint32_t nthread, int device_id, const int64_t* ids = nullptr) {
         this->dimension = dimension;
         this->count = static_cast<uint32_t>(total_count);
         this->metric = m;
@@ -143,12 +154,17 @@ public:
         this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_, this->dist_mode);
 
         this->flattened_host_dataset.resize(this->count * this->dimension);
+        if (ids) {
+            this->host_ids.resize(this->count);
+            std::copy(ids, ids + this->count, this->host_ids.begin());
+        }
     }
 
     // Constructor for chunked input (pre-allocates)
     gpu_brute_force_t(uint64_t total_count, uint32_t dimension, distance_type_t m,
                     const brute_force_build_params_t& bp, const std::vector<int>& devices,
-                    uint32_t nthread, distribution_mode_t mode) {
+                    uint32_t nthread, distribution_mode_t mode,
+                    const int64_t* ids = nullptr) {
 
         this->dimension = dimension;
         this->count = static_cast<uint32_t>(total_count);
@@ -165,6 +181,10 @@ public:
         this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
 
         this->flattened_host_dataset.resize(this->count * this->dimension);
+        if (ids) {
+            this->host_ids.resize(this->count);
+            std::copy(ids, ids + this->count, this->host_ids.begin());
+        }
     }
 
     void start() override {
@@ -263,6 +283,15 @@ public:
         raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device.view());
 
         handle.sync();
+
+        if (!this->host_ids.empty()) {
+            for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
+                if (search_res.neighbors[i] != -1) {
+                    search_res.neighbors[i] = (int64_t)this->host_ids[search_res.neighbors[i]];
+                }
+            }
+        }
+
         return search_res;
     }
 
@@ -313,6 +342,15 @@ public:
         raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device.view());
 
         handle.sync();
+
+        if (!this->host_ids.empty()) {
+            for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
+                if (search_res.neighbors[i] != -1) {
+                    search_res.neighbors[i] = (int64_t)this->host_ids[search_res.neighbors[i]];
+                }
+            }
+        }
+
         return search_res;
     }
 

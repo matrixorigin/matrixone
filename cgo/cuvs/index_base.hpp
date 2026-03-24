@@ -24,6 +24,8 @@
 #include <string>
 #include <memory>
 #include <shared_mutex>
+#include <algorithm>
+#include <fstream>
 
 namespace matrixone {
 
@@ -34,7 +36,7 @@ using ::distribution_mode_t;
 /**
  * @brief Base class for GPU-based indices.
  */
-template <typename T, typename BuildParams>
+template <typename T, typename BuildParams, typename IdT = int64_t>
 class gpu_index_base_t {
 public:
     uint32_t dimension = 0;
@@ -43,6 +45,7 @@ public:
     BuildParams build_params;
     std::vector<int> devices_;
     std::vector<T> flattened_host_dataset;
+    std::vector<IdT> host_ids;
     distribution_mode_t dist_mode;
 
     std::unique_ptr<cuvs_worker_t> worker;
@@ -63,8 +66,6 @@ public:
 
     virtual void start() {}
     virtual void build() {}
-    // virtual void save(const std::string& filename) const {}
-    // virtual void load(const std::string& filename) {}
 
     // Common management methods
     virtual void destroy() {
@@ -82,24 +83,40 @@ public:
     uint32_t cap() const { return count; }
     uint32_t len() const { return static_cast<uint32_t>(current_offset_); }
 
-    void add_chunk(const T* chunk_data, uint64_t chunk_count) {
+    void add_chunk(const T* chunk_data, uint64_t chunk_count, int64_t offset = -1, const IdT* ids = nullptr) {
         std::unique_lock<std::shared_mutex> lock(mutex_);
         if (is_loaded_) throw std::runtime_error("Cannot add chunk to built index");
         
-        size_t required_size = (current_offset_ + chunk_count) * dimension;
-        if (flattened_host_dataset.size() < required_size) {
-            flattened_host_dataset.resize(required_size);
+        uint64_t target_offset;
+        if (offset == -1) {
+            target_offset = current_offset_;
+            current_offset_ += static_cast<uint32_t>(chunk_count);
+        } else {
+            target_offset = static_cast<uint64_t>(offset);
+            if (target_offset + chunk_count > current_offset_) {
+                current_offset_ = target_offset + chunk_count;
+            }
         }
-        std::copy(chunk_data, chunk_data + chunk_count * dimension, flattened_host_dataset.begin() + (current_offset_ * dimension));
-        current_offset_ += static_cast<uint32_t>(chunk_count);
-        if (current_offset_ > count) {
-            count = current_offset_;
+        if (current_offset_ > count) count = current_offset_;
+
+        size_t required_elements = (size_t)current_offset_ * dimension;
+        if (flattened_host_dataset.size() < required_elements) {
+            flattened_host_dataset.resize(required_elements);
+        }
+        
+        std::copy(chunk_data, chunk_data + chunk_count * dimension, flattened_host_dataset.begin() + (target_offset * dimension));
+        
+        if (ids) {
+            if (host_ids.size() < current_offset_) {
+                host_ids.resize(current_offset_);
+            }
+            std::copy(ids, ids + chunk_count, host_ids.begin() + target_offset);
         }
     }
 
-    void add_chunk_float(const float* chunk_data, uint64_t chunk_count) {
+    void add_chunk_float(const float* chunk_data, uint64_t chunk_count, int64_t offset = -1, const IdT* ids = nullptr) {
         uint64_t job_id = worker->submit_main(
-            [this, chunk_data, chunk_count](raft_handle_wrapper_t& handle) -> std::any {
+            [this, chunk_data, chunk_count, offset, ids](raft_handle_wrapper_t& handle) -> std::any {
                 auto res = handle.get_raft_resources();
                 
                 // If quantization is needed (T is 1-byte)
@@ -122,25 +139,55 @@ public:
                     handle.sync();
 
                     std::unique_lock<std::shared_mutex> lock(mutex_);
-                    size_t required_size = (current_offset_ + chunk_count) * dimension;
-                    if (flattened_host_dataset.size() < required_size) {
-                        flattened_host_dataset.resize(required_size);
+                    uint64_t target_offset;
+                    if (offset == -1) {
+                        target_offset = current_offset_;
+                        current_offset_ += static_cast<uint32_t>(chunk_count);
+                    } else {
+                        target_offset = static_cast<uint64_t>(offset);
+                        if (target_offset + chunk_count > current_offset_) {
+                            current_offset_ = target_offset + chunk_count;
+                        }
                     }
-                    std::copy(chunk_host_target.begin(), chunk_host_target.end(), flattened_host_dataset.begin() + (current_offset_ * dimension));
-                    current_offset_ += static_cast<uint32_t>(chunk_count);
-                    if (current_offset_ > count) {
-                        count = current_offset_;
+                    if (current_offset_ > count) count = current_offset_;
+
+                    size_t required_elements = (size_t)current_offset_ * dimension;
+                    if (flattened_host_dataset.size() < required_elements) {
+                        flattened_host_dataset.resize(required_elements);
+                    }
+                    std::copy(chunk_host_target.begin(), chunk_host_target.end(), flattened_host_dataset.begin() + (target_offset * dimension));
+                    
+                    if (ids) {
+                        if (host_ids.size() < current_offset_) {
+                            host_ids.resize(current_offset_);
+                        }
+                        std::copy(ids, ids + chunk_count, host_ids.begin() + target_offset);
                     }
                 } else {
                     std::unique_lock<std::shared_mutex> lock(mutex_);
-                    size_t required_size = (current_offset_ + chunk_count) * dimension;
-                    if (flattened_host_dataset.size() < required_size) {
-                        flattened_host_dataset.resize(required_size);
+                    uint64_t target_offset;
+                    if (offset == -1) {
+                        target_offset = current_offset_;
+                        current_offset_ += static_cast<uint32_t>(chunk_count);
+                    } else {
+                        target_offset = static_cast<uint64_t>(offset);
+                        if (target_offset + chunk_count > current_offset_) {
+                            current_offset_ = target_offset + chunk_count;
+                        }
                     }
-                    std::copy(chunk_data, chunk_data + chunk_count * dimension, flattened_host_dataset.begin() + (current_offset_ * dimension));
-                    current_offset_ += static_cast<uint32_t>(chunk_count);
-                    if (current_offset_ > count) {
-                        count = current_offset_;
+                    if (current_offset_ > count) count = current_offset_;
+
+                    size_t required_elements = (size_t)current_offset_ * dimension;
+                    if (flattened_host_dataset.size() < required_elements) {
+                        flattened_host_dataset.resize(required_elements);
+                    }
+                    std::copy(chunk_data, chunk_data + chunk_count * dimension, flattened_host_dataset.begin() + (target_offset * dimension));
+                    
+                    if (ids) {
+                        if (host_ids.size() < current_offset_) {
+                            host_ids.resize(current_offset_);
+                        }
+                        std::copy(ids, ids + chunk_count, host_ids.begin() + target_offset);
                     }
                 }
                 return std::any();
@@ -187,6 +234,31 @@ public:
         *max = quantizer_.max();
     }
 
+    const IdT* get_host_ids() const {
+        return host_ids.empty() ? nullptr : host_ids.data();
+    }
+
+    void save_ids(const std::string& filename) const {
+        std::ofstream os(filename, std::ios::binary);
+        if (!os) throw std::runtime_error("Failed to open file for saving IDs: " + filename);
+        uint64_t size = host_ids.size();
+        os.write(reinterpret_cast<const char*>(&size), sizeof(size));
+        if (size > 0) {
+            os.write(reinterpret_cast<const char*>(host_ids.data()), size * sizeof(IdT));
+        }
+    }
+
+    void load_ids(const std::string& filename) {
+        std::ifstream is(filename, std::ios::binary);
+        if (!is) throw std::runtime_error("Failed to open file for loading IDs: " + filename);
+        uint64_t size;
+        is.read(reinterpret_cast<char*>(&size), sizeof(size));
+        host_ids.resize(size);
+        if (size > 0) {
+            is.read(reinterpret_cast<char*>(host_ids.data()), size * sizeof(IdT));
+        }
+    }
+
     virtual std::string info() const {
         std::string json = "{";
         json += "\"element_size\": " + std::to_string(sizeof(T)) + ", ";
@@ -196,6 +268,7 @@ public:
         json += "\"capacity\": " + std::to_string(count) + ", ";
         json += "\"current_length\": " + std::to_string(current_offset_) + ", ";
         json += "\"dist_mode\": " + std::to_string((int)dist_mode) + ", ";
+        json += "\"has_ids\": " + std::string(host_ids.empty() ? "false" : "true") + ", ";
         json += "\"devices\": [";
         for (size_t i = 0; i < devices_.size(); ++i) {
             json += std::to_string(devices_[i]) + (i == devices_.size() - 1 ? "" : ", ");

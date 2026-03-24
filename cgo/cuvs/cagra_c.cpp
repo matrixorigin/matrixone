@@ -481,25 +481,25 @@ gpu_cagra_c gpu_cagra_merge(gpu_cagra_c* indices_c, int num_indices, uint32_t nt
         
         switch (qtype) {
             case Quantization_F32: {
-                std::vector<gpu_index_base_t<float, cagra_build_params_t>*> base_indices;
+                std::vector<gpu_index_base_t<float, cagra_build_params_t, uint32_t>*> base_indices;
                 for (int i = 0; i < num_indices; ++i) base_indices.push_back(static_cast<gpu_cagra_t<float>*>(static_cast<gpu_cagra_any_t*>(indices_c[i])->ptr));
                 merged_ptr = gpu_cagra_t<float>::merge(base_indices, nthread, devs).release();
                 break;
             }
             case Quantization_F16: {
-                std::vector<gpu_index_base_t<half, cagra_build_params_t>*> base_indices;
+                std::vector<gpu_index_base_t<half, cagra_build_params_t, uint32_t>*> base_indices;
                 for (int i = 0; i < num_indices; ++i) base_indices.push_back(static_cast<gpu_cagra_t<half>*>(static_cast<gpu_cagra_any_t*>(indices_c[i])->ptr));
                 merged_ptr = gpu_cagra_t<half>::merge(base_indices, nthread, devs).release();
                 break;
             }
             case Quantization_INT8: {
-                std::vector<gpu_index_base_t<int8_t, cagra_build_params_t>*> base_indices;
+                std::vector<gpu_index_base_t<int8_t, cagra_build_params_t, uint32_t>*> base_indices;
                 for (int i = 0; i < num_indices; ++i) base_indices.push_back(static_cast<gpu_cagra_t<int8_t>*>(static_cast<gpu_cagra_any_t*>(indices_c[i])->ptr));
                 merged_ptr = gpu_cagra_t<int8_t>::merge(base_indices, nthread, devs).release();
                 break;
             }
             case Quantization_UINT8: {
-                std::vector<gpu_index_base_t<uint8_t, cagra_build_params_t>*> base_indices;
+                std::vector<gpu_index_base_t<uint8_t, cagra_build_params_t, uint32_t>*> base_indices;
                 for (int i = 0; i < num_indices; ++i) base_indices.push_back(static_cast<gpu_cagra_t<uint8_t>*>(static_cast<gpu_cagra_any_t*>(indices_c[i])->ptr));
                 merged_ptr = gpu_cagra_t<uint8_t>::merge(base_indices, nthread, devs).release();
                 break;

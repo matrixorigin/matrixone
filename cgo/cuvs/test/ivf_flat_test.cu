@@ -20,6 +20,7 @@
 #include "test_framework.hpp"
 #include <cstdio>
 #include <cstdlib>
+#include <thread>
 
 using namespace matrixone;
 
@@ -53,6 +54,73 @@ TEST(GpuIvfFlatTest, BasicLoadSearchAndCenters) {
     ASSERT_EQ(result.neighbors.size(), (size_t)2);
     // Should be either 0 or 1
     ASSERT_TRUE(result.neighbors[0] == 0 || result.neighbors[0] == 1);
+
+    index.destroy();
+}
+
+TEST(GpuIvfFlatTest, BasicLoadAndSearchWithIds) {
+    const uint32_t dimension = 16;
+    const uint64_t count = 1000;
+    std::vector<float> dataset(count * dimension);
+    std::vector<int64_t> ids(count);
+    for (size_t i = 0; i < count; ++i) {
+        for (size_t j = 0; j < dimension; ++j) dataset[i * dimension + j] = (float)rand() / RAND_MAX;
+        ids[i] = (int64_t)(i + 1000);
+    }
+    
+    std::vector<int> devices = {0};
+    ivf_flat_build_params_t bp = ivf_flat_build_params_default();
+    bp.n_lists = 100;
+    gpu_ivf_flat_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU, ids.data());
+    index.start();
+    index.build();
+
+    std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
+    ivf_flat_search_params_t sp = ivf_flat_search_params_default();
+    auto result = index.search(queries.data(), 1, dimension, 5, sp);
+
+    ASSERT_EQ(result.neighbors.size(), (size_t)5);
+    ASSERT_EQ(result.neighbors[0], 1000);
+
+    index.destroy();
+}
+
+TEST(GpuIvfFlatTest, ParallelAddChunkWithOffset) {
+    const uint32_t dimension = 16;
+    const uint64_t count_per_chunk = 500;
+    const uint64_t total_count = count_per_chunk * 2;
+    std::vector<float> chunk1(count_per_chunk * dimension);
+    std::vector<float> chunk2(count_per_chunk * dimension);
+    std::vector<int64_t> ids1(count_per_chunk);
+    std::vector<int64_t> ids2(count_per_chunk);
+
+    for (size_t i = 0; i < count_per_chunk; ++i) {
+        for (size_t j = 0; j < dimension; ++j) {
+            chunk1[i * dimension + j] = (float)rand() / RAND_MAX;
+            chunk2[i * dimension + j] = (float)rand() / RAND_MAX;
+        }
+        ids1[i] = (int64_t)i;
+        ids2[i] = (int64_t)(i + count_per_chunk);
+    }
+
+    std::vector<int> devices = {0};
+    ivf_flat_build_params_t bp = ivf_flat_build_params_default();
+    bp.n_lists = 100;
+    gpu_ivf_flat_t<float> index(total_count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+    index.start();
+
+    std::thread t1([&]() { index.add_chunk(chunk1.data(), count_per_chunk, 0, ids1.data()); });
+    std::thread t2([&]() { index.add_chunk(chunk2.data(), count_per_chunk, count_per_chunk, ids2.data()); });
+    t1.join();
+    t2.join();
+
+    index.build();
+
+    std::vector<float> queries(chunk2.begin(), chunk2.begin() + dimension);
+    ivf_flat_search_params_t sp = ivf_flat_search_params_default();
+    auto result = index.search(queries.data(), 1, dimension, 5, sp);
+
+    ASSERT_EQ(result.neighbors[0], (int64_t)count_per_chunk);
 
     index.destroy();
 }
@@ -98,47 +166,6 @@ TEST(GpuIvfFlatTest, SaveAndLoadFromFile) {
 
     std::remove(filename.c_str());
 }
-
-/*
-// Sharded mode is currently disabled due to a suspected bug in cuVS or its integration.
-// In gdb output, the mdspan extents showed 18446744073709551615ul (SIZE_MAX). 
-// This usually means a dynamic extent wasn't initialized correctly or a 
-// calculation for the number of rows/columns overflowed/underflowed.
-// Action: Check the dimensions of your input query matrix and indices. 
-// If n_queries or k is being passed as a negative number or uninitialized variable, 
-// cuvs might be trying to allocate a workspace based on a massive, invalid number.
-TEST(GpuIvfFlatTest, ShardedModeSimulation) {
-    const uint32_t dimension = 16;
-    const uint64_t count = 1000;
-    std::vector<float> dataset(count * dimension);
-    for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)i / dataset.size();
-    
-    // Use multiple devices if available to test sharding correctly
-    int dev_count = gpu_get_device_count();
-    if (dev_count > 4) dev_count = 4;
-    std::vector<int> devices(dev_count);
-    gpu_get_device_list(devices.data(), dev_count);
-
-    ivf_flat_build_params_t bp = ivf_flat_build_params_default();
-    bp.n_lists = 5 * dev_count; // Scale n_lists with rank count
-    gpu_ivf_flat_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SHARDED);
-    index.start();
-    index.build();
-
-    auto centers = index.get_centers();
-    ASSERT_TRUE(centers.size() > 0);
-
-    std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
-    ivf_flat_search_params_t sp = ivf_flat_search_params_default();
-    sp.n_probes = 2;
-    auto result = index.search(queries.data(), 1, dimension, 5, sp);
-
-    ASSERT_EQ(result.neighbors.size(), (size_t)5);
-    ASSERT_EQ(result.neighbors[0], 0);
-
-    index.destroy();
-}
-*/
 
 TEST(GpuIvfFlatTest, ReplicatedModeSimulation) {
     const uint32_t dimension = 16;
@@ -221,6 +248,7 @@ TEST(GpuIvfFlatTest, SetGetQuantizer) {
     const uint32_t dimension = 4;
     const uint64_t count = 10;
     ivf_flat_build_params_t bp = ivf_flat_build_params_default();
+    bp.n_lists = 5;
     std::vector<int> devices = {0};
     
     gpu_ivf_flat_t<int8_t> index(count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);

@@ -59,6 +59,74 @@ TEST(GpuIvfPqTest, BasicLoadSearchAndCenters) {
     index.destroy();
 }
 
+TEST(GpuIvfPqTest, BasicLoadAndSearchWithIds) {
+    const uint32_t dimension = 16;
+    const uint64_t count = 1000;
+    std::vector<float> dataset(count * dimension);
+    std::vector<int64_t> ids(count);
+    for (size_t i = 0; i < count; ++i) {
+        for (size_t j = 0; j < dimension; ++j) dataset[i * dimension + j] = (float)rand() / RAND_MAX;
+        ids[i] = (int64_t)(i + 2000);
+    }
+    
+    std::vector<int> devices = {0};
+    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
+    bp.n_lists = 10;
+    gpu_ivf_pq_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU, ids.data());
+    index.start();
+    index.build();
+
+    std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
+    ivf_pq_search_params_t sp = ivf_pq_search_params_default();
+    auto result = index.search(queries.data(), 1, dimension, 5, sp);
+
+    ASSERT_EQ(result.neighbors.size(), (size_t)5);
+    ASSERT_EQ(result.neighbors[0], 2000);
+
+    index.destroy();
+}
+
+TEST(GpuIvfPqTest, ParallelAddChunkWithOffset) {
+    const uint32_t dimension = 16;
+    const uint64_t count_per_chunk = 500;
+    const uint64_t total_count = count_per_chunk * 2;
+    std::vector<float> chunk1(count_per_chunk * dimension);
+    std::vector<float> chunk2(count_per_chunk * dimension);
+    std::vector<int64_t> ids1(count_per_chunk);
+    std::vector<int64_t> ids2(count_per_chunk);
+
+    for (size_t i = 0; i < count_per_chunk; ++i) {
+        for (size_t j = 0; j < dimension; ++j) {
+            chunk1[i * dimension + j] = (float)rand() / RAND_MAX;
+            chunk2[i * dimension + j] = (float)rand() / RAND_MAX;
+        }
+        ids1[i] = (int64_t)i;
+        ids2[i] = (int64_t)(i + count_per_chunk);
+    }
+
+    std::vector<int> devices = {0};
+    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
+    bp.n_lists = 10;
+    gpu_ivf_pq_t<float> index(total_count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+    index.start();
+
+    #include <thread>
+    std::thread t1([&]() { index.add_chunk(chunk1.data(), count_per_chunk, 0, ids1.data()); });
+    std::thread t2([&]() { index.add_chunk(chunk2.data(), count_per_chunk, count_per_chunk, ids2.data()); });
+    t1.join();
+    t2.join();
+
+    index.build();
+
+    std::vector<float> queries(chunk2.begin(), chunk2.begin() + dimension);
+    ivf_pq_search_params_t sp = ivf_pq_search_params_default();
+    auto result = index.search(queries.data(), 1, dimension, 5, sp);
+
+    ASSERT_EQ(result.neighbors[0], (int64_t)count_per_chunk);
+
+    index.destroy();
+}
+
 TEST(GpuIvfPqTest, SaveAndLoadFromFile) {
     const uint32_t dimension = 4;
     const uint64_t count = 4;

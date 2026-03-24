@@ -91,7 +91,8 @@ public:
     // Unified Constructor for building from dataset
     gpu_ivf_flat_t(const T* dataset_data, uint64_t count_vectors, uint32_t dimension,
                     distance_type_t m, const ivf_flat_build_params_t& bp,
-                    const std::vector<int>& devices, uint32_t nthread, distribution_mode_t mode) {
+                    const std::vector<int>& devices, uint32_t nthread, distribution_mode_t mode,
+                    const int64_t* ids = nullptr) {
 
         this->dimension = dimension;
         this->count = static_cast<uint32_t>(count_vectors);
@@ -111,12 +112,18 @@ public:
         if (dataset_data) {
             std::copy(dataset_data, dataset_data + (this->count * this->dimension), this->flattened_host_dataset.begin());
         }
+
+        if (ids) {
+            this->host_ids.resize(this->count);
+            std::copy(ids, ids + this->count, this->host_ids.begin());
+        }
     }
 
     // Constructor for chunked input (pre-allocates)
     gpu_ivf_flat_t(uint64_t total_count, uint32_t dimension, distance_type_t m,
                     const ivf_flat_build_params_t& bp, const std::vector<int>& devices,
-                    uint32_t nthread, distribution_mode_t mode) {
+                    uint32_t nthread, distribution_mode_t mode,
+                    const int64_t* ids = nullptr) {
 
         this->dimension = dimension;
         this->count = static_cast<uint32_t>(total_count);
@@ -133,6 +140,10 @@ public:
         this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
 
         this->flattened_host_dataset.resize(this->count * this->dimension);
+        if (ids) {
+            this->host_ids.resize(this->count);
+            std::copy(ids, ids + this->count, this->host_ids.begin());
+        }
     }
 
     // Constructor for loading from file
@@ -417,20 +428,26 @@ public:
 
                 raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device.view());
                 raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device.view());
-            } else {
+                } else {
                 std::string msg = "IVF-Flat search error: No valid index found for device " + std::to_string(handle.get_device_id()) + 
                                  " (Mode: " + mode_name(this->dist_mode) + ")";
                 throw std::runtime_error(msg);
-            }
-            handle.sync();
-        }
+                }
+                handle.sync();
+                }
 
-        // std::cout << "[DEBUG " << get_timestamp() << "] IVF-Flat search_internal finished working" << std::endl;
-        return search_res;
-    }
+                if (!this->host_ids.empty()) {
+                for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
+                if (search_res.neighbors[i] != -1) {
+                    search_res.neighbors[i] = (int64_t)this->host_ids[search_res.neighbors[i]];
+                }
+                }
+                }
 
+                // std::cout << "[DEBUG " << get_timestamp() << "] IVF-Flat search_internal finished working" << std::endl;
+                return search_res;
+                }
     search_result_t search_float(const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const ivf_flat_search_params_t& sp) {
-        if constexpr (std::is_same_v<T, float>) return search(queries_data, num_queries, query_dimension, limit, sp);
         if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
         if (!this->is_loaded_ || (!index_ && !mg_index_ && this->replicated_indices_.empty())) return search_result_t{};
 
@@ -653,6 +670,9 @@ public:
             }
         );
         this->worker->wait(job_id).get();
+        if (!this->host_ids.empty()) {
+            this->save_ids(filename + ".ids");
+        }
     }
 
     void load(const std::string& filename) {
@@ -688,6 +708,12 @@ public:
         } else {
             // SHARDED
             this->worker->submit_all_devices(task);
+        }
+
+        try {
+            this->load_ids(filename + ".ids");
+        } catch (...) {
+            // IDs might not exist
         }
 
         this->is_loaded_ = true;
