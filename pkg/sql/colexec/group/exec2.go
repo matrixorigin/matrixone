@@ -43,7 +43,7 @@ const (
 	spillMaskBits   = 5 // log2(spillNumBuckets)
 	spillMaxPass    = 3
 	spillIOBufSize  = 1024 * 1024 // 1 MiB read-ahead buffer for spill file reads
-	spillWrBufSize  = 64 * 1024       // 64 KiB write buffer per spill bucket
+	spillWrBufSize  = 64 * 1024   // 64 KiB write buffer per spill bucket
 )
 
 func (group *Group) Prepare(proc *process.Process) (err error) {

@@ -67,11 +67,11 @@ type Group struct {
 }
 
 type spillBucket struct {
-	lv     int            // spill level
-	name   string         // spill bucket name
-	cnt    int64          // number of rows in this spill bucket
-	file   *os.File       // spill file
-	writer *bufio.Writer  // buffered writer wrapping file; nil until first write
+	lv     int           // spill level
+	name   string        // spill bucket name
+	cnt    int64         // number of rows in this spill bucket
+	file   *os.File      // spill file
+	writer *bufio.Writer // buffered writer wrapping file; nil until first write
 }
 
 func (bkt *spillBucket) flushWriter() {
