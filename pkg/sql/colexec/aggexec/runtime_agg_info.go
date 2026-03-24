@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-// singleAggInfo is the basic information of single column agg.
+// singleAggInfo is shared runtime metadata for single-input executors such as window functions.
 type singleAggInfo struct {
 	aggID    int64
 	distinct bool
@@ -47,19 +47,7 @@ func (info singleAggInfo) TypesInfo() ([]types.Type, types.Type) {
 	return []types.Type{info.argType}, info.retType
 }
 
-// singleAggExecExtraInformation is the extra information of single column agg to optimize the execution.
-type singleAggExecExtraInformation struct {
-	partialGroup  int
-	partialResult any
-}
-
-func (optimized *singleAggExecExtraInformation) SetExtraInformation(partialResult any, groupIndex int) error {
-	optimized.partialGroup = groupIndex
-	optimized.partialResult = partialResult
-	return nil
-}
-
-// multiAggInfo is the basic information of multi column agg.
+// multiAggInfo is shared runtime metadata for multi-input executors.
 type multiAggInfo struct {
 	aggID    int64
 	distinct bool

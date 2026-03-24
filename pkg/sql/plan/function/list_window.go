@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/agg"
 )
 
 var supportedWindowInNewFramework = []FuncNew{
@@ -39,7 +38,7 @@ var supportedWindowInNewFramework = []FuncNew{
 				retType:    aggexec.SingleWindowReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "rank",
-					aggRegister: agg.RegisterRank,
+					aggRegister: aggexec.RegisterRankWin,
 				},
 			},
 		},
@@ -61,7 +60,7 @@ var supportedWindowInNewFramework = []FuncNew{
 				retType:    aggexec.SingleWindowReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "row_number",
-					aggRegister: agg.RegisterRowNumber,
+					aggRegister: aggexec.RegisterRowNumberWin,
 				},
 			},
 		},
@@ -83,7 +82,7 @@ var supportedWindowInNewFramework = []FuncNew{
 				retType:    aggexec.SingleWindowReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "dense_rank",
-					aggRegister: agg.RegisterDenseRank,
+					aggRegister: aggexec.RegisterDenseRankWin,
 				},
 			},
 		},
@@ -107,7 +106,7 @@ var supportedWindowInNewFramework = []FuncNew{
 				},
 				aggFramework: aggregationLogicOfOverload{
 					str:         "percent_rank",
-					aggRegister: agg.RegisterPercentRank,
+					aggRegister: aggexec.RegisterPercentRankWin,
 				},
 			},
 		},
@@ -129,7 +128,7 @@ var supportedWindowInNewFramework = []FuncNew{
 				retType:    aggexec.SingleWindowReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "ntile",
-					aggRegister: agg.RegisterNtile,
+					aggRegister: aggexec.RegisterNtileWin,
 				},
 			},
 		},
@@ -151,7 +150,7 @@ var supportedWindowInNewFramework = []FuncNew{
 				retType:    aggexec.CumeDistReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "cume_dist",
-					aggRegister: agg.RegisterCumeDist,
+					aggRegister: aggexec.RegisterCumeDistWin,
 				},
 			},
 		},
@@ -181,7 +180,7 @@ var supportedWindowInNewFramework = []FuncNew{
 				},
 				aggFramework: aggregationLogicOfOverload{
 					str:         "lag",
-					aggRegister: agg.RegisterLag,
+					aggRegister: aggexec.RegisterLagWin,
 				},
 			},
 		},
@@ -211,7 +210,7 @@ var supportedWindowInNewFramework = []FuncNew{
 				},
 				aggFramework: aggregationLogicOfOverload{
 					str:         "lead",
-					aggRegister: agg.RegisterLead,
+					aggRegister: aggexec.RegisterLeadWin,
 				},
 			},
 		},
@@ -239,7 +238,7 @@ var supportedWindowInNewFramework = []FuncNew{
 				},
 				aggFramework: aggregationLogicOfOverload{
 					str:         "first_value",
-					aggRegister: agg.RegisterFirstValue,
+					aggRegister: aggexec.RegisterFirstValueWin,
 				},
 			},
 		},
@@ -267,7 +266,7 @@ var supportedWindowInNewFramework = []FuncNew{
 				},
 				aggFramework: aggregationLogicOfOverload{
 					str:         "last_value",
-					aggRegister: agg.RegisterLastValue,
+					aggRegister: aggexec.RegisterLastValueWin,
 				},
 			},
 		},
@@ -296,7 +295,7 @@ var supportedWindowInNewFramework = []FuncNew{
 				},
 				aggFramework: aggregationLogicOfOverload{
 					str:         "nth_value",
-					aggRegister: agg.RegisterNthValue,
+					aggRegister: aggexec.RegisterNthValueWin,
 				},
 			},
 		},
