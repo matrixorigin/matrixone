@@ -3762,6 +3762,8 @@ func (builder *QueryBuilder) bindOrderBy(
 		// Skip this unwrap when DISTINCT is active, because DISTINCT inserts an AGG node
 		// whose GroupBy only covers the original projection columns; appending a new
 		// project column here would create a reference the AGG node cannot resolve.
+		// TODO: Preserve the original enum/set index ordering for DISTINCT + ORDER BY
+		// without introducing extra projection columns that the rewritten AGG cannot bind.
 		if !ctx.isDistinct {
 			if col := expr.GetCol(); col != nil && col.RelPos == ctx.projectTag {
 				if projExpr := ctx.projects[col.ColPos]; projExpr != nil {
