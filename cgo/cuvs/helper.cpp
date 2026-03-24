@@ -187,4 +187,28 @@ void gpu_convert_f32_to_f16(const float* src, void* dst, uint64_t total_elements
     }
 }
 
+void* gpu_alloc_pinned(uint64_t size, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        void* ptr = nullptr;
+        // Use cudaHostAllocMapped to allow direct device access if needed later
+        RAFT_CUDA_TRY(cudaHostAlloc(&ptr, size, cudaHostAllocMapped));
+        return ptr;
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_alloc_pinned", e.what());
+        return nullptr;
+    }
+}
+
+void gpu_free_pinned(void* ptr, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        if (ptr) {
+            RAFT_CUDA_TRY(cudaFreeHost(ptr));
+        }
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_free_pinned", e.what());
+    }
+}
+
 }

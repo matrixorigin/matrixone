@@ -254,3 +254,40 @@ func GetGpuDeviceList() ([]int, error) {
 	runtime.KeepAlive(cDevices)
 	return devices, nil
 }
+
+// GpuAllocPinned allocates pinned (non-pageable) host memory.
+func GpuAllocPinned(size uint64) (unsafe.Pointer, error) {
+	if size == 0 {
+		return nil, nil
+	}
+
+	var errmsg *C.char
+	ptr := C.gpu_alloc_pinned(C.uint64_t(size), unsafe.Pointer(&errmsg))
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return nil, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	if ptr == nil {
+		return nil, moerr.NewInternalErrorNoCtx("gpu_alloc_pinned returned nil")
+	}
+	return ptr, nil
+}
+
+// GpuFreePinned frees pinned host memory.
+func GpuFreePinned(ptr unsafe.Pointer) error {
+	if ptr == nil {
+		return nil
+	}
+
+	var errmsg *C.char
+	C.gpu_free_pinned(ptr, unsafe.Pointer(&errmsg))
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}

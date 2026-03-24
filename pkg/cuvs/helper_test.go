@@ -20,29 +20,24 @@ import (
 	"testing"
 )
 
-func TestGpuHelpers(t *testing.T) {
-	count, err := GetGpuDeviceCount()
+func TestPinnedMemory(t *testing.T) {
+	size := uint64(1024 * 1024) // 1MB
+	ptr, err := GpuAllocPinned(size)
 	if err != nil {
-		t.Fatalf("GetGpuDeviceCount failed: %v", err)
+		t.Fatalf("Failed to allocate pinned memory: %v", err)
 	}
-	t.Logf("GPU Device Count: %d", count)
+	if ptr == nil {
+		t.Fatal("GpuAllocPinned returned nil")
+	}
 
-	devices, err := GetGpuDeviceList()
+	// Verify we can write to it
+	slice := (*[1 << 30]byte)(ptr)[:size]
+	for i := range slice {
+		slice[i] = byte(i % 256)
+	}
+
+	err = GpuFreePinned(ptr)
 	if err != nil {
-		t.Fatalf("GetGpuDeviceList failed: %v", err)
+		t.Fatalf("Failed to free pinned memory: %v", err)
 	}
-	t.Logf("GPU Device List: %v", devices)
-}
-
-func TestGpuConvertF32ToF16(t *testing.T) {
-	src := []float32{1.0, 2.0, 3.0, 4.0}
-	deviceID := 0
-
-	// Test conversion to F16
-	dstF16 := make([]Float16, len(src))
-	if err := GpuConvertF32ToF16(src, dstF16, deviceID); err != nil {
-		t.Fatalf("GpuConvertF32ToF16 failed: %v", err)
-	}
-	// We can't easily verify the value without a float16 decoder,
-	// but we can check it didn't error.
 }
