@@ -49,6 +49,7 @@ template<> const char* type_name<uint8_t>() { return "uint8"; }
 std::vector<float> generate_random_data(uint64_t count, uint32_t dim) {
     std::vector<float> data(count * dim);
     std::mt19937 gen(42);
+    // Use a wider range to have more signal for int8 benchmarks
     std::uniform_real_distribution<float> dis(-100.0, 100.0);
     for (size_t i = 0; i < data.size(); ++i) {
         data[i] = dis(gen);
@@ -226,6 +227,20 @@ void benchmark_all_indices(const std::vector<float>& dataset, const benchmark_co
             run_benchmark<gpu_ivf_pq_t<T>, ivf_pq_search_params_t, T>("IvfPq", mode, index, recall_queries, recall_expected_ids, cfg, sp);
             index.destroy();
         }
+    }
+
+    // Brute Force (Only SINGLE_GPU, float32/half)
+    if constexpr (std::is_same_v<T, float> || std::is_same_v<T, half>) {
+        distribution_mode_t mode = DistributionMode_SINGLE_GPU;
+        std::vector<int> active_devices = {cfg.devices[0]};
+        
+        gpu_brute_force_t<T> index(converted.data(), cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, cfg.n_threads, active_devices[0]);
+        index.start();
+        index.build();
+
+        brute_force_search_params_t sp = brute_force_search_params_default();
+        run_benchmark<gpu_brute_force_t<T>, brute_force_search_params_t, T>("BruteForce", mode, index, recall_queries, recall_expected_ids, cfg, sp);
+        index.destroy();
     }
 }
 
