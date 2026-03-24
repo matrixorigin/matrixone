@@ -295,7 +295,13 @@ func handleDelsOnLCA(
 				}
 			}
 
-			if tblStuff.def.pkKind != normalKind {
+			// For composite/fake PK tables, the hidden PK column (__cpkey__
+			// or __mo_fake_pk_col) may not be returned by SQL "select *".
+			// Fill it from the tombstone batch when the loop above didn't
+			// cover endIdx.  The reader fallback returns ALL columns so the
+			// loop already fills endIdx — skip the extra append to avoid
+			// doubling Vecs[endIdx].Length() vs RowCount().
+			if tblStuff.def.pkKind != normalKind && len(cols)-2 < endIdx {
 				if err = dBat.Vecs[endIdx].UnionOne(tBat.Vecs[0], int64(i), ses.proc.Mp()); err != nil {
 					return false
 				}
@@ -1098,6 +1104,17 @@ func findDeleteAndUpdateBat(
 
 			// find update
 			if dBat.RowCount() > 0 {
+				pkVecLen := dBat.Vecs[tblStuff.def.pkColIdx].Length()
+				if pkVecLen != dBat.RowCount() {
+					logutil.Error(
+						"DataBranch-findDeleteAndUpdateBat-VecLenMismatch",
+						zap.String("table-name", tblName),
+						zap.Int("dBat-row-count", dBat.RowCount()),
+						zap.Int("pkVec-length", pkVecLen),
+						zap.Int("pkColIdx", tblStuff.def.pkColIdx),
+						zap.Int("vec-count", dBat.VectorCount()),
+					)
+				}
 				tBat2 := tblStuff.retPool.acquireRetBatch(tblStuff, false)
 				seen := make([]bool, dBat.RowCount())
 				var updateBat *batch.Batch
