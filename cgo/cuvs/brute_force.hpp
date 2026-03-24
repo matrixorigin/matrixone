@@ -74,7 +74,7 @@ struct brute_force_search_result_t {
  * @brief gpu_brute_force_t implements a Brute Force index that can run on a single GPU.
  */
 template <typename T>
-class gpu_brute_force_t : public gpu_index_base_t<T, brute_force_build_params_t> {
+class gpu_brute_force_t : public gpu_index_base_t<T, brute_force_build_params_t, int64_t> {
 public:
     // We force DistT=float for all our indices to avoid template bloat and satisfy cuVS
     using brute_force_index = cuvs::neighbors::brute_force::index<T, float>;

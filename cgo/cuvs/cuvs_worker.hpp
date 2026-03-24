@@ -379,7 +379,7 @@ public:
         return id;
     }
 
-    void submit_all_devices(task_fn_t fn) {
+    std::vector<uint64_t> submit_all_devices_no_wait(task_fn_t fn) {
         if (!running_) throw std::runtime_error("Worker is not running");
         std::vector<uint64_t> ids;
         for (size_t i = 0; i < devices_.size(); ++i) {
@@ -387,6 +387,11 @@ public:
             device_queues_[i]->push({id, fn});
             ids.push_back(id);
         }
+        return ids;
+    }
+
+    void submit_all_devices(task_fn_t fn) {
+        auto ids = submit_all_devices_no_wait(fn);
         for (auto id : ids) wait(id).get();
     }
 

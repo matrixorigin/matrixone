@@ -75,7 +75,7 @@ struct ivf_pq_search_result_t {
  * @brief gpu_ivf_pq_t implements an IVF-PQ index that can run on a single GPU or sharded/replicated across multiple GPUs.
  */
 template <typename T>
-class gpu_ivf_pq_t : public gpu_index_base_t<T, ivf_pq_build_params_t> {
+class gpu_ivf_pq_t : public gpu_index_base_t<T, ivf_pq_build_params_t, int64_t> {
 public:
     using ivf_pq_index = cuvs::neighbors::ivf_pq::index<int64_t>;
     using mg_index = cuvs::neighbors::mg_index<ivf_pq_index, T, int64_t>;

@@ -265,3 +265,96 @@ TEST(GpuIvfFlatTest, SetGetQuantizer) {
     
     index.destroy();
 }
+
+TEST(GpuIvfFlatTest, ManualShardedSearch) {
+    const uint32_t dimension = 16;
+    const uint64_t count = 1000;
+    std::vector<float> dataset(count * dimension);
+    for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
+    
+    int dev_count = gpu_get_device_count();
+    if (dev_count < 2) {
+        TEST_LOG("Skipping ManualShardedSearch: Need at least 2 GPUs");
+        return;
+    }
+    if (dev_count > 4) dev_count = 4;
+    std::vector<int> devices(dev_count);
+    gpu_get_device_list(devices.data(), dev_count);
+
+    ivf_flat_build_params_t bp = ivf_flat_build_params_default();
+    bp.n_lists = 50;
+    gpu_ivf_flat_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SHARDED);
+    index.start();
+    index.build();
+    
+    std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
+    ivf_flat_search_params_t sp = ivf_flat_search_params_default();
+    auto result = index.search(queries.data(), 1, dimension, 5, sp);
+
+    ASSERT_EQ(result.neighbors.size(), (size_t)5);
+    ASSERT_EQ(result.neighbors[0], 0);
+
+    index.destroy();
+}
+
+TEST(GpuIvfFlatTest, ManualShardedSearchWithIds) {
+    const uint32_t dimension = 16;
+    const uint64_t count = 1000;
+    std::vector<float> dataset(count * dimension);
+    std::vector<int64_t> ids(count);
+    for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
+    for (size_t i = 0; i < count; ++i) ids[i] = (int64_t)(i + 10000);
+    
+    int dev_count = gpu_get_device_count();
+    if (dev_count < 2) {
+        TEST_LOG("Skipping ManualShardedSearchWithIds: Need at least 2 GPUs");
+        return;
+    }
+    if (dev_count > 4) dev_count = 4;
+    std::vector<int> devices(dev_count);
+    gpu_get_device_list(devices.data(), dev_count);
+
+    ivf_flat_build_params_t bp = ivf_flat_build_params_default();
+    bp.n_lists = 50;
+    gpu_ivf_flat_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SHARDED, ids.data());
+    index.start();
+    index.build();
+    
+    std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
+    ivf_flat_search_params_t sp = ivf_flat_search_params_default();
+    auto result = index.search(queries.data(), 1, dimension, 5, sp);
+
+    ASSERT_EQ(result.neighbors.size(), (size_t)5);
+    ASSERT_EQ(result.neighbors[0], 10000);
+
+    index.destroy();
+}
+
+TEST(GpuIvfFlatTest, ManualShardedGetCenters) {
+    const uint32_t dimension = 16;
+    const uint64_t count = 1000;
+    std::vector<float> dataset(count * dimension);
+    for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
+    
+    int dev_count = gpu_get_device_count();
+    if (dev_count < 2) {
+        TEST_LOG("Skipping ManualShardedGetCenters: Need at least 2 GPUs");
+        return;
+    }
+    if (dev_count > 4) dev_count = 4;
+    std::vector<int> devices(dev_count);
+    gpu_get_device_list(devices.data(), dev_count);
+
+    ivf_flat_build_params_t bp = ivf_flat_build_params_default();
+    bp.n_lists = 50;
+    gpu_ivf_flat_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SHARDED);
+    index.start();
+    index.build();
+    
+    // In sharded mode, each GPU built its own index with n_lists=50.
+    // get_centers() returns centers from the "primary" or first available index it finds.
+    auto centers = index.get_centers();
+    ASSERT_EQ(centers.size(), (size_t)(bp.n_lists * dimension));
+
+    index.destroy();
+}
