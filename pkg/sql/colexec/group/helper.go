@@ -270,6 +270,9 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 		ctr.spillChunkFlags = make([][]uint8, nBatches)
 	}
 	fullFlags := ctr.spillChunkFlags[:nBatches]
+	// Clear any stale pointers left by a previous call that returned early on error
+	// (the per-bucket cleanup at the end of each iteration may have been skipped).
+	clear(fullFlags)
 
 	// Ensure per-bucket row-index slices are allocated.
 	if cap(ctr.spillBucketRowIds) < spillNumBuckets {
@@ -420,7 +423,9 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 	}()
 
 	// reposition to the start of the file.
-	bkt.file.Seek(0, io.SeekStart)
+	if _, err := bkt.file.Seek(0, io.SeekStart); err != nil {
+		return false, err
+	}
 
 	// we reset ctr state, and create a new group by batch.
 	ctr.resetForSpill()
