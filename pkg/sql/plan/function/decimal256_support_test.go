@@ -138,6 +138,31 @@ func TestDecimal256CompareFns(t *testing.T) {
 	require.True(t, ok, info)
 }
 
+func TestDecimal256CompareScaleOverflowReturnsError(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	dec0 := types.New(types.T_decimal256, 65, 0)
+	dec2 := types.New(types.T_decimal256, 65, 2)
+
+	left := types.Decimal256{
+		B0_63:    ^uint64(0),
+		B64_127:  ^uint64(0),
+		B128_191: ^uint64(0),
+		B192_255: ^uint64(0) >> 1,
+	}
+	right := mustParseDecimal256(t, "0.00", 2)
+
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(dec0, []types.Decimal256{left}, []bool{false}),
+			NewFunctionTestInput(dec2, []types.Decimal256{right}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_bool.ToType(), true, []bool{}, []bool{}),
+		equalFn,
+	)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
 func TestDecimal256RangeAndInOperators(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	decType := types.New(types.T_decimal256, 65, 2)

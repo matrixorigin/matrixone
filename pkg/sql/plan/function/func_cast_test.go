@@ -214,6 +214,51 @@ func Test_CastToDecimal256(t *testing.T) {
 	}
 }
 
+func Test_CastFromDecimal256(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	decimal256Type := types.New(types.T_decimal256, 65, 2)
+	value, err := types.ParseDecimal256("42.00", 65, 2)
+	require.NoError(t, err)
+
+	testCases := []tcTemp{
+		{
+			info: "cast decimal256 to int64",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(decimal256Type, []types.Decimal256{value}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{42}, []bool{false}),
+		},
+		{
+			info: "cast decimal256 to uint64",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(decimal256Type, []types.Decimal256{value}, []bool{false}),
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{42}, []bool{false}),
+		},
+		{
+			info: "cast decimal256 to bit",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(decimal256Type, []types.Decimal256{value}, []bool{false}),
+				NewFunctionTestInput(types.T_bit.ToType(), []uint64{}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.T_bit.ToType(), false,
+				[]uint64{42}, []bool{false}),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.info, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, tc.info, info)
+		})
+	}
+}
+
 func initCastTestCase() []tcTemp {
 	var testCases []tcTemp
 

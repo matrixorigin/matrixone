@@ -256,6 +256,9 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_decimal256: {
+		types.T_bit,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
@@ -1723,6 +1726,33 @@ func decimal256ToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Decimal256],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	switch toType.Oid {
+	case types.T_bit:
+		rs := vector.MustFunctionResult[uint64](result)
+		return decimal256ToBit(ctx, source, rs, int(toType.Width), length, selectList)
+	case types.T_int8:
+		rs := vector.MustFunctionResult[int8](result)
+		return decimal256ToSigned(ctx, source, rs, 8, length, selectList)
+	case types.T_int16:
+		rs := vector.MustFunctionResult[int16](result)
+		return decimal256ToSigned(ctx, source, rs, 16, length, selectList)
+	case types.T_int32:
+		rs := vector.MustFunctionResult[int32](result)
+		return decimal256ToSigned(ctx, source, rs, 32, length, selectList)
+	case types.T_int64:
+		rs := vector.MustFunctionResult[int64](result)
+		return decimal256ToSigned(ctx, source, rs, 64, length, selectList)
+	case types.T_uint8:
+		rs := vector.MustFunctionResult[uint8](result)
+		return decimal256ToUnsigned(ctx, source, rs, 8, length, selectList)
+	case types.T_uint16:
+		rs := vector.MustFunctionResult[uint16](result)
+		return decimal256ToUnsigned(ctx, source, rs, 16, length, selectList)
+	case types.T_uint32:
+		rs := vector.MustFunctionResult[uint32](result)
+		return decimal256ToUnsigned(ctx, source, rs, 32, length, selectList)
+	case types.T_uint64:
+		rs := vector.MustFunctionResult[uint64](result)
+		return decimal256ToUnsigned(ctx, source, rs, 64, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
 		return decimal256ToDecimal64(source, rs, length, selectList)
@@ -3781,7 +3811,10 @@ func decimal64ToSigned[T constraints.Signed](
 				return err
 			}
 		} else {
-			x, _ := v.Scale(-fromTyp.Scale)
+			x, err := v.Scale(-fromTyp.Scale)
+			if err != nil {
+				return err
+			}
 			xStr := x.Format(0)
 			result, err := strconv.ParseInt(xStr, 10, bitSize)
 			if err != nil {
@@ -3812,7 +3845,10 @@ func decimal128ToSigned[T constraints.Signed](
 				return err
 			}
 		} else {
-			x, _ := v.Scale(-fromTyp.Scale)
+			x, err := v.Scale(-fromTyp.Scale)
+			if err != nil {
+				return err
+			}
 			xStr := x.Format(0)
 			result, err := strconv.ParseInt(xStr, 10, bitSize)
 			if err != nil {
@@ -3844,7 +3880,10 @@ func decimal64ToYear(
 				return err
 			}
 		} else {
-			x, _ := v.Scale(-fromTyp.Scale)
+			x, err := v.Scale(-fromTyp.Scale)
+			if err != nil {
+				return err
+			}
 			xStr := x.Format(0)
 			result, err := strconv.ParseInt(xStr, 10, 16)
 			if err != nil {
@@ -3877,7 +3916,10 @@ func decimal128ToYear(
 				return err
 			}
 		} else {
-			x, _ := v.Scale(-fromTyp.Scale)
+			x, err := v.Scale(-fromTyp.Scale)
+			if err != nil {
+				return err
+			}
 			xStr := x.Format(0)
 			result, err := strconv.ParseInt(xStr, 10, 16)
 			if err != nil {
@@ -3952,6 +3994,70 @@ func decimal128ToUnsigned[T constraints.Unsigned](
 			}
 			err = to.Append(T(result), false)
 			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func decimal256ToSigned[T constraints.Signed](
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.Decimal256],
+	to *vector.FunctionResult[T], bitSize int, length int, selectList *FunctionSelectList) error {
+	var i uint64
+	l := uint64(length)
+	fromTyp := from.GetType()
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			x, err := v.Scale(-fromTyp.Scale)
+			if err != nil {
+				return err
+			}
+			xStr := x.Format(0)
+			result, err := strconv.ParseInt(xStr, 10, bitSize)
+			if err != nil {
+				return moerr.NewOutOfRangef(ctx,
+					fmt.Sprintf("int%d", bitSize),
+					"value '%v'", xStr)
+			}
+			if err = to.Append(T(result), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func decimal256ToUnsigned[T constraints.Unsigned](
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.Decimal256],
+	to *vector.FunctionResult[T], bitSize int,
+	length int, selectList *FunctionSelectList) error {
+	var i uint64
+	l := uint64(length)
+	fromType := from.GetType()
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			xStr := v.Format(fromType.Scale)
+			xStr = strings.Split(xStr, ".")[0]
+			result, err := strconv.ParseUint(xStr, 10, bitSize)
+			if err != nil {
+				return moerr.NewOutOfRangef(ctx,
+					fmt.Sprintf("uint%d", bitSize),
+					"value '%v'", xStr)
+			}
+			if err = to.Append(T(result), false); err != nil {
 				return err
 			}
 		}
@@ -4718,6 +4824,31 @@ func decimal128ToBit(
 			xStr := v.Format(from.GetType().Scale)
 			xStr = strings.Split(xStr, ".")[0]
 			if result, err = strconv.ParseUint(xStr, 10, bitSize); err != nil {
+				return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value '%v'", xStr)
+			}
+			if err = to.Append(result, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func decimal256ToBit(
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.Decimal256],
+	to *vector.FunctionResult[uint64], bitSize int, length int, selectList *FunctionSelectList) error {
+	for i := 0; i < length; i++ {
+		v, null := from.GetValue(uint64(i))
+		if null {
+			if err := to.Append(uint64(0), true); err != nil {
+				return err
+			}
+		} else {
+			xStr := v.Format(from.GetType().Scale)
+			xStr = strings.Split(xStr, ".")[0]
+			result, err := strconv.ParseUint(xStr, 10, bitSize)
+			if err != nil {
 				return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value '%v'", xStr)
 			}
 			if err = to.Append(result, false); err != nil {
