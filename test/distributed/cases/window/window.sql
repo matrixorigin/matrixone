@@ -111,17 +111,17 @@ create table t5 (a int, b int);
 select a, b, percent_rank() over (order by a) from t5;
 drop table t5;
 
--- issue #23853: window function with ORDER BY on non-numeric/temporal type
-drop table if exists t_issue_23853;
-create table t_issue_23853 (id int, name varchar(20), score int);
-insert into t_issue_23853 values(1, 'Alice', 90), (2, 'Bob', 85), (3, 'Charlie', 90), (4, 'David', 75), (5, 'Eve', 85);
-select id, name, percent_rank() over (order by name) from t_issue_23853;
-select id, name, rank() over (order by name) from t_issue_23853;
-select id, name, dense_rank() over (order by name) from t_issue_23853;
-select id, name, row_number() over (order by name) from t_issue_23853;
-select id, name, percent_rank() over (partition by score order by name) from t_issue_23853;
-select id, name, score, percent_rank() over (order by name, score) from t_issue_23853;
-drop table t_issue_23853;
+-- window function with ORDER BY on varchar
+drop table if exists window_order_by_name_case;
+create table window_order_by_name_case (id int, name varchar(20), score int);
+insert into window_order_by_name_case values(1, 'Alice', 90), (2, 'Bob', 85), (3, 'Charlie', 90), (4, 'David', 75), (5, 'Eve', 85);
+select id, name, percent_rank() over (order by name) from window_order_by_name_case;
+select id, name, rank() over (order by name) from window_order_by_name_case;
+select id, name, dense_rank() over (order by name) from window_order_by_name_case;
+select id, name, row_number() over (order by name) from window_order_by_name_case;
+select id, name, percent_rank() over (partition by score order by name) from window_order_by_name_case;
+select id, name, score, percent_rank() over (order by name, score) from window_order_by_name_case;
+drop table window_order_by_name_case;
 
 -- test cume_dist
 drop table if exists t1;

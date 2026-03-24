@@ -1,0 +1,16 @@
+drop table if exists approx_count_01;
+create table approx_count_01(a int, b varchar(10));
+insert into approx_count_01 values
+    (1, 'a'),
+    (1, 'a'),
+    (1, 'b'),
+    (2, null),
+    (2, 'x'),
+    (2, 'y'),
+    (2, 'y');
+
+select approx_count(a) from approx_count_01;
+select a, approx_count(b) from approx_count_01 group by a order by a;
+select approx_count_distinct(b) from approx_count_01;
+
+drop table approx_count_01;
