@@ -83,18 +83,6 @@ func initAggResultWithFixedTypeResult[T types.FixedSizeTExceptStrType](
 	return res
 }
 
-func initAggResultWithBytesTypeResult(
-	mp *mpool.MPool,
-	resultType types.Type,
-	setEmptyGroupToNull bool, initialValue string, hasDistinct bool) aggResultWithBytesType {
-
-	res := aggResultWithBytesType{}
-	res.init(mp, resultType, setEmptyGroupToNull, hasDistinct)
-	res.InitialValue = []byte(initialValue)
-
-	return res
-}
-
 type aggResultWithFixedType[T types.FixedSizeTExceptStrType] struct {
 	optSplitResult
 

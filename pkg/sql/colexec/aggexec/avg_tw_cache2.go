@@ -75,29 +75,38 @@ func (exec *avgTwCacheNumericExec[A]) BulkFill(groupIndex int, vectors []*vector
 }
 
 func (exec *avgTwCacheNumericExec[A]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	isConst := vec.IsConst()
+	lastX := -1
+	var sums []float64
+	var cnts []int64
+	var sumVec, cntVec *vector.Vector
+
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
 			continue
 		}
 		row := offset + i
-		if vectors[0].IsConst() {
+		if isConst {
 			row = 0
 		}
-		if vectors[0].IsNull(uint64(row)) {
+		if vec.IsNull(uint64(row)) {
 			continue
 		}
 
 		x, y := exec.getXY(grp - 1)
-		sumVec := exec.state[x].vecs[0]
-		cntVec := exec.state[x].vecs[1]
+		if x != lastX {
+			lastX = x
+			sumVec = exec.state[x].vecs[0]
+			cntVec = exec.state[x].vecs[1]
+			sums = vector.MustFixedColNoTypeCheck[float64](sumVec)
+			cnts = vector.MustFixedColNoTypeCheck[int64](cntVec)
+		}
 		if sumVec.IsNull(uint64(y)) {
 			sumVec.UnsetNull(uint64(y))
 			cntVec.UnsetNull(uint64(y))
 		}
-
-		sums := vector.MustFixedColNoTypeCheck[float64](sumVec)
-		cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
-		sums[y] += float64(vector.GetFixedAtNoTypeCheck[A](vectors[0], row))
+		sums[y] += float64(vector.GetFixedAtNoTypeCheck[A](vec, row))
 		cnts[y]++
 	}
 	return nil
@@ -199,29 +208,39 @@ func (exec *avgTwCacheDecimalExec[A]) BulkFill(groupIndex int, vectors []*vector
 }
 
 func (exec *avgTwCacheDecimalExec[A]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	isConst := vec.IsConst()
+	lastX := -1
+	var sums []types.Decimal128
+	var cnts []int64
+	var sumVec, cntVec *vector.Vector
+
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
 			continue
 		}
 		row := offset + i
-		if vectors[0].IsConst() {
+		if isConst {
 			row = 0
 		}
-		if vectors[0].IsNull(uint64(row)) {
+		if vec.IsNull(uint64(row)) {
 			continue
 		}
 
 		x, y := exec.getXY(grp - 1)
-		sumVec := exec.state[x].vecs[0]
-		cntVec := exec.state[x].vecs[1]
+		if x != lastX {
+			lastX = x
+			sumVec = exec.state[x].vecs[0]
+			cntVec = exec.state[x].vecs[1]
+			sums = vector.MustFixedColNoTypeCheck[types.Decimal128](sumVec)
+			cnts = vector.MustFixedColNoTypeCheck[int64](cntVec)
+		}
 		if sumVec.IsNull(uint64(y)) {
 			sumVec.UnsetNull(uint64(y))
 			cntVec.UnsetNull(uint64(y))
 		}
 
-		sums := vector.MustFixedColNoTypeCheck[types.Decimal128](sumVec)
-		cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
-		val := vector.GetFixedAtNoTypeCheck[A](vectors[0], row)
+		val := vector.GetFixedAtNoTypeCheck[A](vec, row)
 		var err error
 		switch v := any(val).(type) {
 		case types.Decimal64:

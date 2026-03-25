@@ -386,7 +386,7 @@ var (
 		"NULL AS `SUB_PART`," +
 		"NULL AS `PACKED`," +
 		"if((`tcl`.`attnotnull` = 0),'YES','') AS `NULLABLE`," +
-		"NULL AS `INDEX_TYPE`," +
+		"`idx`.`algo` AS `INDEX_TYPE`," +
 		"if(((`idx`.`type` = 'PRIMARY') or (`idx`.`type` = 'UNIQUE')),'','') AS `COMMENT`," +
 		"`idx`.`comment` AS `INDEX_COMMENT`," +
 		"if(`idx`.`is_visible`,'YES','NO') AS `IS_VISIBLE`," +

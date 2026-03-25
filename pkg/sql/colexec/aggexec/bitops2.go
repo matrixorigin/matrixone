@@ -78,24 +78,33 @@ func (exec *bitOpExecFixed[T]) BulkFill(groupIndex int, vectors []*vector.Vector
 }
 
 func (exec *bitOpExecFixed[T]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	lastX := -1
+	var aggs []uint64
+	var aggVec *vector.Vector
+
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
 			continue
 		}
-
 		idx := uint64(i) + uint64(offset)
-		if vectors[0].IsNull(idx) {
+		if vec.IsNull(idx) {
 			continue
+		}
+
+		x, y := exec.getXY(grp - 1)
+		if x != lastX {
+			lastX = x
+			aggVec = exec.state[x].vecs[0]
+			aggs = vector.MustFixedColNoTypeCheck[uint64](aggVec)
+		}
+
+		value := vector.GetFixedAtNoTypeCheck[T](vec, int(idx))
+		if aggVec.IsNull(uint64(y)) {
+			aggVec.UnsetNull(uint64(y))
+			aggs[y] = uint64(value)
 		} else {
-			x, y := exec.getXY(grp - 1)
-			value := vector.GetFixedAtNoTypeCheck[T](vectors[0], int(idx))
-			aggs := vector.MustFixedColNoTypeCheck[uint64](exec.state[x].vecs[0])
-			if exec.state[x].vecs[0].IsNull(uint64(y)) {
-				exec.state[x].vecs[0].UnsetNull(uint64(y))
-				aggs[y] = uint64(value)
-			} else {
-				aggs[y] = exec.op.compute(aggs[y], uint64(value))
-			}
+			aggs[y] = exec.op.compute(aggs[y], uint64(value))
 		}
 	}
 	return nil

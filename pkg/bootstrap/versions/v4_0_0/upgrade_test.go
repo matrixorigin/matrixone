@@ -20,6 +20,9 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
+	"github.com/stretchr/testify/assert"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,8 +30,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/prashantv/gostub"
-	"github.com/stretchr/testify/assert"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
 func mockTenantUpgrade(t *testing.T) {
@@ -102,7 +104,16 @@ func Test_versionHandle_HandleClusterUpgrade(t *testing.T) {
 	assert.Nil(t, err)
 }
 
-func Test_upgrade_view(t *testing.T) {
+func Test_upg_statistics_view_check_error(t *testing.T) {
+	stubs := gostub.Stub(&versions.CheckViewDefinition, func(txn executor.TxnExecutor, accountId uint32, schema string, viewName string) (bool, string, error) {
+		return true, "", moerr.NewInternalErrorNoCtx("return error")
+	})
+	defer stubs.Reset()
+	_, err := upg_information_schema_statistics.CheckFunc(nil, 0)
+	assert.Error(t, err)
+}
+
+func Test_upg_columns_view_check_error(t *testing.T) {
 	stubs := gostub.Stub(&versions.CheckViewDefinition, func(txn executor.TxnExecutor, accountId uint32, schema string, viewName string) (bool, string, error) {
 		return true, "", moerr.NewInternalErrorNoCtx("return error")
 	})
@@ -111,11 +122,42 @@ func Test_upgrade_view(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func Test_upgrade_view2(t *testing.T) {
+func Test_upg_columns_view_check_match(t *testing.T) {
 	stubs := gostub.Stub(&versions.CheckViewDefinition, func(txn executor.TxnExecutor, accountId uint32, schema string, viewName string) (bool, string, error) {
 		return true, upg_information_schema_columns.UpgSql, nil
 	})
 	defer stubs.Reset()
-	_, err := upg_information_schema_columns.CheckFunc(nil, 0)
+	ok, err := upg_information_schema_columns.CheckFunc(nil, 0)
 	assert.NoError(t, err)
+	assert.True(t, ok)
+}
+
+func Test_upg_statistics_view_check_match(t *testing.T) {
+	stubs := gostub.Stub(&versions.CheckViewDefinition, func(txn executor.TxnExecutor, accountId uint32, schema string, viewName string) (bool, string, error) {
+		return true, sysview.InformationSchemaStatisticsDDL, nil
+	})
+	defer stubs.Reset()
+	ok, err := upg_information_schema_statistics.CheckFunc(nil, 0)
+	assert.NoError(t, err)
+	assert.True(t, ok)
+}
+
+func Test_upg_columns_view_check_mismatch(t *testing.T) {
+	stubs := gostub.Stub(&versions.CheckViewDefinition, func(txn executor.TxnExecutor, accountId uint32, schema string, viewName string) (bool, string, error) {
+		return true, "old_view_def", nil
+	})
+	defer stubs.Reset()
+	ok, err := upg_information_schema_columns.CheckFunc(nil, 0)
+	assert.NoError(t, err)
+	assert.False(t, ok)
+}
+
+func Test_upg_statistics_view_check_mismatch(t *testing.T) {
+	stubs := gostub.Stub(&versions.CheckViewDefinition, func(txn executor.TxnExecutor, accountId uint32, schema string, viewName string) (bool, string, error) {
+		return true, "old_view_def", nil
+	})
+	defer stubs.Reset()
+	ok, err := upg_information_schema_statistics.CheckFunc(nil, 0)
+	assert.NoError(t, err)
+	assert.False(t, ok)
 }

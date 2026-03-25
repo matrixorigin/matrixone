@@ -43,11 +43,19 @@ func (exec *countStarExec) BulkFill(groupIndex int, vectors []*vector.Vector) er
 }
 
 func (exec *countStarExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	lastX := -1
+	var vals []int64
+
 	for _, grp := range groups {
 		if grp == GroupNotMatched {
 			continue
 		}
-		exec.Fill(int(grp-1), 0, vectors)
+		x, y := exec.getXY(uint64(grp - 1))
+		if x != lastX {
+			lastX = x
+			vals = vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[0])
+		}
+		vals[y] += 1
 	}
 	return nil
 }
@@ -114,19 +122,25 @@ func (exec *countColumnExec) BatchFill(offset int, groups []uint64, vectors []*v
 		return exec.batchFillArgs(offset, groups, vectors, true)
 	}
 
+	vec := vectors[0]
+	lastX := -1
+	var vals []int64
+
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
 			continue
 		}
-
 		idx := uint64(i) + uint64(offset)
-		if vectors[0].IsNull(idx) {
+		if vec.IsNull(idx) {
 			continue
-		} else {
-			x, y := exec.getXY(grp - 1)
-			vals := vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[0])
-			vals[y] += 1
 		}
+
+		x, y := exec.getXY(grp - 1)
+		if x != lastX {
+			lastX = x
+			vals = vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[0])
+		}
+		vals[y] += 1
 	}
 	return nil
 }
