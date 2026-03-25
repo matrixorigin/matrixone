@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/cespare/xxhash/v2"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -179,9 +178,15 @@ func countNonZeroAndFindKth(values []uint8, k int) (count int, kth int) {
 }
 
 func (ctr *container) computeBucketIndex(hashCodes []uint64, myLv uint64) {
+	// Fibonacci hashing: multiply by a level-dependent odd constant and extract
+	// the top bits. This replaces a per-element xxhash call with a single
+	// multiply+shift while still providing good bucket distribution even when the
+	// source hash has poor low-bit entropy (e.g. int32 keys that produce only
+	// 32-bit hash values). Different levels use different multipliers so groups
+	// landing in the same bucket at level N get split at level N+1.
+	mult := uint64(0x9e3779b97f4a7c15) + myLv*2
 	for i := range hashCodes {
-		x := hashCodes[i] + myLv
-		hashCodes[i] = xxhash.Sum64(types.EncodeUint64(&x)) & (spillNumBuckets - 1)
+		hashCodes[i] = (hashCodes[i] * mult) >> (64 - spillMaskBits)
 	}
 }
 
@@ -212,25 +217,13 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 			parentName = fmt.Sprintf("spill_%s", uuid.String())
 		}
 
-		spillfs, err := proc.GetSpillFileService()
-		if err != nil {
-			return 0, 0, err
-		}
 		logutil.Infof("spilling data to disk, level %d, parent file %s", myLv, parentName)
-		// now create the current spill bucket.
+		// Create bucket objects; files are created lazily on first write.
 		ctr.currentSpillBkt = make([]*spillBucket, spillNumBuckets)
 		for i := range ctr.currentSpillBkt {
 			ctr.currentSpillBkt[i] = &spillBucket{
 				lv:   myLv,
 				name: fmt.Sprintf("%s_%d", parentName, i),
-			}
-
-			// it is OK to fail here, as all the opened files are tracked by
-			// current spill bucket, and we will close them all when we clean
-			// up the operator.
-			if ctr.currentSpillBkt[i].file, err = spillfs.CreateAndRemoveFile(
-				proc.Ctx, ctr.currentSpillBkt[i].name); err != nil {
-				return 0, 0, err
 			}
 		}
 	}
@@ -261,23 +254,31 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 	}
 	buf := ctr.spillBuf
 
-	// reusable per-bucket flag slice for a single batch's rows
-	var batchFlags []uint8
+	spillfs, err := proc.GetSpillFileService()
+	if err != nil {
+		return 0, 0, err
+	}
 
 	// Process one groupByBatch at a time to avoid holding all batches in memory.
-	// For each batch, compute bucket assignments in a single pass, then write one
-	// record per bucket that has matching rows.
+	// For each batch, build per-bucket row-index lists in a single pass, then
+	// write one record per non-empty bucket.
 	//
 	// fullFlags is a [][]uint8 of length len(groupByBatches) passed to SaveIntermediateResult.
-	// All entries are nil (→ cnt=0, skipped by reader) except the current batch's index.
+	// All entries are empty (→ cnt=0, skipped by reader) except the current batch's index.
 	nBatches := len(ctr.groupByBatches)
 	if cap(ctr.spillChunkFlags) < nBatches {
 		ctr.spillChunkFlags = make([][]uint8, nBatches)
 	}
 	fullFlags := ctr.spillChunkFlags[:nBatches]
-	for i := range fullFlags {
-		fullFlags[i] = []uint8{} // empty (not nil) so UnionBatch skips it
+	// Clear any stale pointers left by a previous call that returned early on error
+	// (the per-bucket cleanup at the end of each iteration may have been skipped).
+	clear(fullFlags)
+
+	// Ensure per-bucket row-index slices are allocated.
+	if cap(ctr.spillBucketRowIds) < spillNumBuckets {
+		ctr.spillBucketRowIds = make([][]int32, spillNumBuckets)
 	}
+	bucketRowIds := ctr.spillBucketRowIds[:spillNumBuckets]
 
 	hcOffset := 0
 	for nthBatch, gb := range ctr.groupByBatches {
@@ -288,64 +289,48 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 		batchHC := hashCodes[hcOffset : hcOffset+rc]
 		hcOffset += rc
 
-		// single pass: compute per-bucket flags and counts for this batch
-		var bktCounts [spillNumBuckets]int64
-		if cap(batchFlags) < rc {
-			batchFlags = make([]uint8, rc)
+		// Single pass: build per-bucket row-index lists.
+		for i := 0; i < spillNumBuckets; i++ {
+			bucketRowIds[i] = bucketRowIds[i][:0]
 		}
-		flags := batchFlags[:rc]
-
 		for j, h := range batchHC {
 			b := h & (spillNumBuckets - 1)
-			flags[j] = uint8(b)
-			bktCounts[b]++
+			bucketRowIds[b] = append(bucketRowIds[b], int32(j))
 		}
 
-		// reuse spillFlagFlat as the per-bucket 0/1 flag array
+		// Collect non-empty bucket indices (reuse cached slice).
+		ctr.spillNonEmptyBuckets = ctr.spillNonEmptyBuckets[:0]
+		for i := 0; i < spillNumBuckets; i++ {
+			if len(bucketRowIds[i]) > 0 {
+				ctr.spillNonEmptyBuckets = append(ctr.spillNonEmptyBuckets, i)
+			}
+		}
+
+		// Ensure 0/1 flag array for SaveIntermediateResult.
 		if cap(ctr.spillFlagFlat) < rc {
 			ctr.spillFlagFlat = make([]uint8, rc)
 		}
 		bktFlags := ctr.spillFlagFlat[:rc]
 
-		// reuse spillRowIndices for collecting row indices per bucket
-		if cap(ctr.spillRowIndices) < rc {
-			ctr.spillRowIndices = make([]int32, rc)
-		}
+		for _, i := range ctr.spillNonEmptyBuckets {
+			indices := bucketRowIds[i]
+			cnt := int64(len(indices))
 
-		// Optimization: collect non-empty bucket list once, avoiding 32 iterations when data is sparse
-		nonEmptyBuckets := make([]int, 0, spillNumBuckets)
-		for i := 0; i < spillNumBuckets; i++ {
-			if bktCounts[i] > 0 {
-				nonEmptyBuckets = append(nonEmptyBuckets, i)
-			}
-		}
-
-		for _, i := range nonEmptyBuckets {
-			cnt := bktCounts[i]
-
-			// fill bktFlags: set to 1 only for rows belonging to bucket i
-			// Use spillRowIndices to track which rows were set to 1
-			setIdx := 0
-			for j := 0; j < rc; j++ {
-				if flags[j] == uint8(i) {
-					bktFlags[j] = 1
-					ctr.spillRowIndices[setIdx] = int32(j)
-					setIdx++
-				} else {
-					bktFlags[j] = 0
-				}
+			// Set flags for this bucket's rows (O(cnt), not O(rc)).
+			for _, idx := range indices {
+				bktFlags[idx] = 1
 			}
 
 			buf.Reset()
 			buf.Write(types.EncodeInt64(&cnt))
 
-			// build gbBatch for this bucket's rows from this batch
+			// Build gbBatch using per-bucket row indices (avoids full-row scan).
 			gbBatch.CleanOnlyData()
 			if err := gbBatch.PreExtend(ctr.mp, int(cnt)); err != nil {
 				return 0, 0, err
 			}
 			for j := range gb.Vecs {
-				if err := gbBatch.Vecs[j].UnionBatch(gb.Vecs[j], 0, rc, bktFlags, ctr.mp); err != nil {
+				if err := gbBatch.Vecs[j].UnionInt32(gb.Vecs[j], indices, ctr.mp); err != nil {
 					return 0, 0, err
 				}
 			}
@@ -373,12 +358,26 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 			buf.Write(types.EncodeInt64(&cnt))
 			buf.Write(types.EncodeUint64(&magic))
 
-			ctr.currentSpillBkt[i].cnt += cnt
-			written, err := ctr.currentSpillBkt[i].file.Write(buf.Bytes())
+			// Lazy file + buffered writer creation.
+			bkt := ctr.currentSpillBkt[i]
+			if bkt.file == nil {
+				if bkt.file, err = spillfs.CreateAndRemoveFile(
+					proc.Ctx, bkt.name); err != nil {
+					return 0, 0, err
+				}
+				bkt.writer = bufio.NewWriterSize(bkt.file, spillWrBufSize)
+			}
+			bkt.cnt += cnt
+			written, err := bkt.writer.Write(buf.Bytes())
 			totalBytes += int64(written)
 			totalRows += cnt
 			if err != nil {
 				return 0, 0, err
+			}
+
+			// Clear only the flags we set (O(cnt), not O(rc)).
+			for _, idx := range indices {
+				bktFlags[idx] = 0
 			}
 		}
 	}
@@ -389,14 +388,22 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 }
 
 // load spilled data from the spill bucket queue.
-func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.Analyzer, aggExprs []aggexec.AggFuncExecExpression) (bool, error) {
+func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.Analyzer, aggExprs []aggexec.AggFuncExecExpression) (_ bool, retErr error) {
 	// first, if there is current spill bucket, transfer it to the spill bucket queue.
 	if ctr.currentSpillBkt != nil {
 		if ctr.spillBkts == nil {
 			ctr.spillBkts = list.New[*spillBucket]()
 		}
 		for _, bkt := range ctr.currentSpillBkt {
-			ctr.spillBkts.PushBack(bkt)
+			if bkt.cnt > 0 {
+				if err := bkt.flushWriter(); err != nil {
+					bkt.free()
+					return false, err
+				}
+				ctr.spillBkts.PushBack(bkt)
+			} else {
+				bkt.free()
+			}
 		}
 		ctr.currentSpillBkt = nil
 	}
@@ -409,10 +416,16 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 
 	// popped bkt must be defer freed.
 	bkt := ctr.spillBkts.PopBack().Value
-	defer bkt.free()
+	defer func() {
+		if err := bkt.free(); err != nil && retErr == nil {
+			retErr = err
+		}
+	}()
 
 	// reposition to the start of the file.
-	bkt.file.Seek(0, io.SeekStart)
+	if _, err := bkt.file.Seek(0, io.SeekStart); err != nil {
+		return false, err
+	}
 
 	// we reset ctr state, and create a new group by batch.
 	ctr.resetForSpill()
@@ -422,7 +435,7 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 	gbBatch := ctr.spillGbBatch
 
 	if ctr.spillReader == nil {
-		ctr.spillReader = bufio.NewReaderSize(bkt.file, 8192)
+		ctr.spillReader = bufio.NewReaderSize(bkt.file, spillIOBufSize)
 	} else {
 		ctr.spillReader.Reset(bkt.file)
 	}

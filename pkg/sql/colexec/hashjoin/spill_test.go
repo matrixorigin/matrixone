@@ -32,17 +32,16 @@ import (
 
 func TestComputeXXHash(t *testing.T) {
 	mp := mpool.MustNewZero()
-	var buf []byte
 
 	t.Run("empty", func(t *testing.T) {
-		err := computeXXHash(nil, nil, &buf, 0)
+		err := computeXXHash(nil, nil, 0)
 		require.NoError(t, err)
 	})
 
 	t.Run("single_int32", func(t *testing.T) {
 		vec := testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, mp)
 		hashValues := make([]uint64, 3)
-		err := computeXXHash([]*vector.Vector{vec}, hashValues, &buf, 0)
+		err := computeXXHash([]*vector.Vector{vec}, hashValues, 0)
 		require.NoError(t, err)
 		require.NotEqual(t, uint64(0), hashValues[0])
 		require.NotEqual(t, hashValues[0], hashValues[1])
@@ -53,7 +52,7 @@ func TestComputeXXHash(t *testing.T) {
 		vec1 := testutil.MakeInt32Vector([]int32{1, 2}, nil, mp)
 		vec2 := testutil.MakeVarcharVector([]string{"a", "b"}, nil, mp)
 		hashValues := make([]uint64, 2)
-		err := computeXXHash([]*vector.Vector{vec1, vec2}, hashValues, &buf, 0)
+		err := computeXXHash([]*vector.Vector{vec1, vec2}, hashValues, 0)
 		require.NoError(t, err)
 		require.NotEqual(t, hashValues[0], hashValues[1])
 	})
@@ -62,7 +61,7 @@ func TestComputeXXHash(t *testing.T) {
 		vec := testutil.MakeInt32Vector([]int32{5}, nil, mp)
 		vec.SetClass(vector.CONSTANT)
 		hashValues := make([]uint64, 3)
-		err := computeXXHash([]*vector.Vector{vec}, hashValues, &buf, 0)
+		err := computeXXHash([]*vector.Vector{vec}, hashValues, 0)
 		require.NoError(t, err)
 		require.Equal(t, hashValues[0], hashValues[1])
 		require.Equal(t, hashValues[1], hashValues[2])
@@ -154,13 +153,13 @@ func TestBucketBufferReuse(t *testing.T) {
 
 func TestHashDistribution(t *testing.T) {
 	mp := mpool.MustNewZero()
-	var buf []byte
+
 	// Test that hash values distribute across buckets
 	vec := testutil.MakeInt32Vector([]int32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
 		11, 12, 13, 14, 15, 16, 17, 18, 19, 20}, nil, mp)
 
 	hashValues := make([]uint64, 20)
-	err := computeXXHash([]*vector.Vector{vec}, hashValues, &buf, 0)
+	err := computeXXHash([]*vector.Vector{vec}, hashValues, 0)
 	require.NoError(t, err)
 
 	bucketCounts := make([]int, spillNumBuckets)
@@ -224,7 +223,6 @@ func TestEmptyBucketHandling(t *testing.T) {
 
 func TestMultipleDataTypes(t *testing.T) {
 	mp := mpool.MustNewZero()
-	var buf []byte
 
 	tests := []struct {
 		name string
@@ -242,7 +240,7 @@ func TestMultipleDataTypes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			hashValues := make([]uint64, 3)
-			err := computeXXHash([]*vector.Vector{tt.vec}, hashValues, &buf, 0)
+			err := computeXXHash([]*vector.Vector{tt.vec}, hashValues, 0)
 			require.NoError(t, err)
 			require.NotEqual(t, uint64(0), hashValues[0])
 			require.NotEqual(t, hashValues[0], hashValues[1])
@@ -315,10 +313,10 @@ func TestSpillFileCleanup(t *testing.T) {
 
 func TestNullValues(t *testing.T) {
 	mp := mpool.MustNewZero()
-	var buf []byte
+
 	vec := testutil.MakeInt32Vector([]int32{1, 2, 3}, []uint64{1}, mp)
 	hashValues := make([]uint64, 3)
-	err := computeXXHash([]*vector.Vector{vec}, hashValues, &buf, 0)
+	err := computeXXHash([]*vector.Vector{vec}, hashValues, 0)
 	require.NoError(t, err)
 	require.NotEqual(t, uint64(0), hashValues[0])
 	require.NotEqual(t, uint64(0), hashValues[2])
@@ -625,13 +623,12 @@ func TestReaderRowCountMismatch(t *testing.T) {
 
 func TestMultiColumnHash(t *testing.T) {
 	mp := mpool.MustNewZero()
-	var buf []byte
 
 	vec1 := testutil.MakeInt32Vector([]int32{1, 1, 2}, nil, mp)
 	vec2 := testutil.MakeVarcharVector([]string{"a", "b", "a"}, nil, mp)
 
 	hashValues := make([]uint64, 3)
-	err := computeXXHash([]*vector.Vector{vec1, vec2}, hashValues, &buf, 0)
+	err := computeXXHash([]*vector.Vector{vec1, vec2}, hashValues, 0)
 	require.NoError(t, err)
 
 	// Same key values should produce same hash
@@ -641,11 +638,10 @@ func TestMultiColumnHash(t *testing.T) {
 
 func TestHashWithNulls(t *testing.T) {
 	mp := mpool.MustNewZero()
-	var buf []byte
 
 	vec := testutil.MakeInt32Vector([]int32{1, 2, 3, 4}, []uint64{0, 1}, mp) // nulls at index 1 and 3
 	hashValues := make([]uint64, 4)
-	err := computeXXHash([]*vector.Vector{vec}, hashValues, &buf, 0)
+	err := computeXXHash([]*vector.Vector{vec}, hashValues, 0)
 	require.NoError(t, err)
 
 	// All hashes should be computed
@@ -710,36 +706,34 @@ func TestFlushEmptyBuffer(t *testing.T) {
 	require.Equal(t, int64(0), cnt)
 }
 
-func TestHashBufferReuse(t *testing.T) {
+func TestHashDeterminism(t *testing.T) {
 	mp := mpool.MustNewZero()
-	buf := make([]byte, 0, 10)
 
 	vec := testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, mp)
-	hashValues := make([]uint64, 3)
+	hashValues1 := make([]uint64, 3)
+	hashValues2 := make([]uint64, 3)
 
-	// First call
-	err := computeXXHash([]*vector.Vector{vec}, hashValues, &buf, 0)
+	// Two calls with the same input should produce identical results
+	err := computeXXHash([]*vector.Vector{vec}, hashValues1, 0)
 	require.NoError(t, err)
-	firstCap := cap(buf)
-
-	// Second call with larger data
-	vec2 := testutil.MakeVarcharVector([]string{"long_string_value", "another_long_value", "third_value"}, nil, mp)
-	err = computeXXHash([]*vector.Vector{vec2}, hashValues, &buf, 0)
+	err = computeXXHash([]*vector.Vector{vec}, hashValues2, 0)
 	require.NoError(t, err)
+	require.Equal(t, hashValues1, hashValues2)
 
-	// Buffer should grow if needed
-	require.GreaterOrEqual(t, cap(buf), firstCap)
+	// Different seed should produce different results
+	err = computeXXHash([]*vector.Vector{vec}, hashValues2, 42)
+	require.NoError(t, err)
+	require.NotEqual(t, hashValues1, hashValues2)
 }
 
 func TestConstVectorHash(t *testing.T) {
 	mp := mpool.MustNewZero()
-	var buf []byte
 
 	vec := testutil.MakeInt32Vector([]int32{42}, nil, mp)
 	vec.SetClass(vector.CONSTANT)
 
 	hashValues := make([]uint64, 10)
-	err := computeXXHash([]*vector.Vector{vec}, hashValues, &buf, 0)
+	err := computeXXHash([]*vector.Vector{vec}, hashValues, 0)
 	require.NoError(t, err)
 
 	// All values should be the same for const vector
@@ -976,14 +970,13 @@ func TestMultipleBatchesInBucket(t *testing.T) {
 
 func TestComputeXXHashVectorLengthMismatch(t *testing.T) {
 	mp := mpool.MustNewZero()
-	var buf []byte
 
 	// Create vectors with different lengths
 	vec1 := testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, mp)
 	vec2 := testutil.MakeInt32Vector([]int32{4, 5}, nil, mp)
 
 	hashValues := make([]uint64, 3)
-	err := computeXXHash([]*vector.Vector{vec1, vec2}, hashValues, &buf, 0)
+	err := computeXXHash([]*vector.Vector{vec1, vec2}, hashValues, 0)
 	require.NoError(t, err)
 
 	// Should handle gracefully
@@ -1191,12 +1184,11 @@ func TestFlushBucketBufferMultipleCalls(t *testing.T) {
 
 func TestHashValuesBufferGrowth(t *testing.T) {
 	mp := mpool.MustNewZero()
-	var buf []byte
 
 	// Start with small buffer
 	vec := testutil.MakeInt32Vector([]int32{1, 2}, nil, mp)
 	hashValues := make([]uint64, 2)
-	err := computeXXHash([]*vector.Vector{vec}, hashValues, &buf, 0)
+	err := computeXXHash([]*vector.Vector{vec}, hashValues, 0)
 	require.NoError(t, err)
 
 	// Larger data should grow buffer
@@ -1206,7 +1198,7 @@ func TestHashValuesBufferGrowth(t *testing.T) {
 		"very_long_string_value_3",
 	}, nil, mp)
 	largeHashValues := make([]uint64, 3)
-	err = computeXXHash([]*vector.Vector{largeVec}, largeHashValues, &buf, 0)
+	err = computeXXHash([]*vector.Vector{largeVec}, largeHashValues, 0)
 	require.NoError(t, err)
 
 	for _, h := range largeHashValues {

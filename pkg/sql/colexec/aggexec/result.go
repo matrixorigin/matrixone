@@ -83,18 +83,6 @@ func initAggResultWithFixedTypeResult[T types.FixedSizeTExceptStrType](
 	return res
 }
 
-func initAggResultWithBytesTypeResult(
-	mp *mpool.MPool,
-	resultType types.Type,
-	setEmptyGroupToNull bool, initialValue string, hasDistinct bool) aggResultWithBytesType {
-
-	res := aggResultWithBytesType{}
-	res.init(mp, resultType, setEmptyGroupToNull, hasDistinct)
-	res.InitialValue = []byte(initialValue)
-
-	return res
-}
-
 type aggResultWithFixedType[T types.FixedSizeTExceptStrType] struct {
 	optSplitResult
 
@@ -136,14 +124,6 @@ func (r *aggResultWithFixedType[T]) grows(more int) error {
 	}
 	setValueFromX1Y1ToX2Y2(r.values, x1, y1, x2, y2, r.InitialValue)
 	return nil
-}
-
-func (r *aggResultWithFixedType[T]) get() T {
-	return r.values[r.accessIdx1][r.accessIdx2]
-}
-
-func (r *aggResultWithFixedType[T]) set(value T) {
-	r.values[r.accessIdx1][r.accessIdx2] = value
 }
 
 func (r *aggResultWithFixedType[T]) free() {
@@ -197,19 +177,6 @@ func (r *aggResultWithBytesType) grows(more int) error {
 		}
 	}
 	return nil
-}
-
-func (r *aggResultWithBytesType) get() []byte {
-	// never return the source pointer directly.
-	//
-	// if not so, the append action outside like `r = append(r, "more")` will cause memory contamination to other data row.
-	newr := r.resultList[r.accessIdx1].GetBytesAt(r.accessIdx2)
-	newr = newr[:len(newr):len(newr)]
-	return newr
-}
-
-func (r *aggResultWithBytesType) set(value []byte) error {
-	return vector.SetBytesAt(r.resultList[r.accessIdx1], r.accessIdx2, value, r.mp)
 }
 
 func (r *aggResultWithBytesType) free() {
@@ -435,28 +402,8 @@ func (r *optSplitResult) updateNextAccessIdx(idx int) (x, y int) {
 	return r.accessIdx1, r.accessIdx2
 }
 
-func (r *optSplitResult) setNextAccessDirectly(x, y int) {
-	r.accessIdx1, r.accessIdx2 = x, y
-}
-
-func (r *optSplitResult) totalGroupCount() int {
-	return r.resultList[r.nowIdx1].Length() + (len(r.resultList)-1)*r.optInformation.chunkSize
-}
-
-func (r *optSplitResult) isGroupEmpty(x, y int) bool {
-	return r.bsFromEmptyList[x][y]
-}
-
-func (r *optSplitResult) setGroupNotEmpty(x, y int) {
-	r.bsFromEmptyList[x][y] = false
-}
-
 func (r *optSplitResult) MergeAnotherEmpty(x, y int, anotherIsEmpty bool) {
 	r.bsFromEmptyList[x][y] = r.bsFromEmptyList[x][y] && anotherIsEmpty
-}
-
-func (r *optSplitResult) getEachBlockLimitation() int {
-	return r.optInformation.chunkSize
 }
 
 // flushAll return all the result.
@@ -709,24 +656,4 @@ func setValueFromX1Y1ToX2Y2[T types.FixedSizeTExceptStrType](
 	for i := 0; i < y2; i++ {
 		src[x2][i] = value
 	}
-}
-
-// fill in distict.   return true if need to update agg state, false if not distinct.
-func (r *optSplitResult) distinctFill(x, y int, vecs []*vector.Vector, row int) (bool, error) {
-	if !r.optInformation.hasDistinct {
-		// if has no distinct, always need to update agg
-		return true, nil
-	}
-
-	need, err := r.distinct[x].fill(y, vecs, row)
-	return need, err
-}
-
-func (r *optSplitResult) distinctMerge(x1 int, other *optSplitResult, x2 int) error {
-	if !r.optInformation.hasDistinct {
-		// this is fine.
-		return nil
-	}
-	// thank god, the following will bomb out if they collide.
-	return r.distinct[x1].merge(&other.distinct[x2])
 }

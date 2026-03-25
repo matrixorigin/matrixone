@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
 var tenantUpgEntries = []versions.UpgradeEntry{
@@ -29,6 +30,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	enablePartitionTables,
 	upg_alter_mo_snapshots,
 	enableRoleRule,
+	upg_information_schema_statistics,
 }
 
 var enablePartitionMetadata = versions.UpgradeEntry{
@@ -81,4 +83,23 @@ var upg_alter_mo_snapshots = versions.UpgradeEntry{
 
 		return info.IsExits, nil
 	},
+}
+
+var upg_information_schema_statistics = versions.UpgradeEntry{
+	Schema:    sysview.InformationDBConst,
+	TableName: "STATISTICS",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql:    sysview.InformationSchemaStatisticsDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "STATISTICS")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == sysview.InformationSchemaStatisticsDDL {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "STATISTICS"),
 }
