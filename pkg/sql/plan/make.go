@@ -563,6 +563,18 @@ func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr,
 		if err != nil {
 			return nil, err
 		}
+		if isSameColumnType(expr.Typ, targetType) {
+			return expr, nil
+		}
+	}
+	if isSetPlanType(&targetType) {
+		expr, err = funcCastForSetType(ctx, expr, targetType)
+		if err != nil {
+			return nil, err
+		}
+		if isSameColumnType(expr.Typ, targetType) {
+			return expr, nil
+		}
 	}
 
 	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
@@ -592,6 +604,7 @@ func funcCastForEnumType(ctx context.Context, expr *Expr, targetType Type) (*Exp
 	if targetType.Id != int32(types.T_enum) {
 		return expr, nil
 	}
+	sourceExpr := expr
 
 	astArgs := []tree.Expr{
 		tree.NewNumVal(targetType.Enumvalues, targetType.Enumvalues, false, tree.P_char),
@@ -604,14 +617,14 @@ func funcCastForEnumType(ctx context.Context, expr *Expr, targetType Type) (*Exp
 		if idx == len(args)-1 {
 			continue
 		}
-		expr, err := binder.BindExpr(arg, 0, false)
+		argExpr, err := binder.BindExpr(arg, 0, false)
 		if err != nil {
 			return nil, err
 		}
-		args[idx] = expr
+		args[idx] = argExpr
 	}
-	args[len(args)-1] = expr
-	if 20 <= expr.Typ.Id && expr.Typ.Id <= 29 {
+	args[len(args)-1] = sourceExpr
+	if 20 <= sourceExpr.Typ.Id && sourceExpr.Typ.Id <= 29 {
 		expr, err = BindFuncExprImplByPlanExpr(ctx, moEnumCastIndexValueToIndexFun, args)
 		if err != nil {
 			return nil, err
@@ -622,6 +635,50 @@ func funcCastForEnumType(ctx context.Context, expr *Expr, targetType Type) (*Exp
 			return nil, err
 		}
 	}
+	expr.Typ = targetType
+	return expr, nil
+}
+
+func funcCastForSetType(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
+	var err error
+	if !isSetPlanType(&targetType) {
+		return expr, nil
+	}
+	if isSetPlanType(&expr.Typ) && expr.Typ.Enumvalues == targetType.Enumvalues {
+		expr.Typ = targetType
+		return expr, nil
+	}
+	sourceExpr := expr
+
+	astArgs := []tree.Expr{
+		tree.NewNumVal(targetType.Enumvalues, targetType.Enumvalues, false, tree.P_char),
+	}
+
+	args := make([]*Expr, len(astArgs)+1)
+	binder := NewDefaultBinder(ctx, nil, nil, targetType, nil)
+	for idx, arg := range astArgs {
+		if idx == len(args)-1 {
+			continue
+		}
+		argExpr, err := binder.BindExpr(arg, 0, false)
+		if err != nil {
+			return nil, err
+		}
+		args[idx] = argExpr
+	}
+	args[len(args)-1] = sourceExpr
+	if types.T(sourceExpr.Typ.Id).IsInteger() {
+		expr, err = BindFuncExprImplByPlanExpr(ctx, moSetCastIndexValueToIndexFun, args)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		expr, err = BindFuncExprImplByPlanExpr(ctx, moSetCastValueToIndexFun, args)
+		if err != nil {
+			return nil, err
+		}
+	}
+	expr.Typ = targetType
 	return expr, nil
 }
 
@@ -711,10 +768,13 @@ func isSameColumnType(t1 Type, t2 Type) bool {
 	if t1.Id != t2.Id {
 		return false
 	}
+	if t1.Enumvalues != t2.Enumvalues {
+		return false
+	}
 	if t1.Width == t2.Width && t1.Scale == t2.Scale {
 		return true
 	}
-	return true
+	return false
 }
 
 // GetColDefFromTable Find the target column definition from the predefined

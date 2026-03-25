@@ -396,10 +396,14 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		}
 	}
 
-	if typ != nil && typ.Id == int32(types.T_enum) && len(typ.GetEnumvalues()) != 0 {
+	if isEnumOrSetPlanType(typ) {
 		if err != nil {
 			errutil.ReportError(b.GetContext(), err)
 			return
+		}
+		indexToValueFun, _, _, funErr := mysqlSpecialTypeFuncNames(typ)
+		if funErr != nil {
+			return nil, funErr
 		}
 		astArgs := []tree.Expr{
 			tree.NewNumVal(typ.Enumvalues, typ.Enumvalues, false, tree.P_char),
@@ -428,7 +432,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			},
 		}
 
-		return BindFuncExprImplByPlanExpr(b.GetContext(), moEnumCastIndexToValueFun, args)
+		return BindFuncExprImplByPlanExpr(b.GetContext(), indexToValueFun, args)
 	}
 
 	if colPos != NotFound {

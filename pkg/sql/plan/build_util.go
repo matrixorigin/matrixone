@@ -237,6 +237,13 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 			}
 
 			return plan.Type{Id: int32(types.T_enum), Enumvalues: strings.Join(n.InternalType.EnumValues, ",")}, nil
+		case defines.MYSQL_TYPE_SET:
+			setValues, err := types.NormalizeSetValues(n.InternalType.EnumValues)
+			if err != nil {
+				return plan.Type{}, err
+			}
+
+			return plan.Type{Id: int32(types.T_uint64), Enumvalues: strings.Join(setValues, ",")}, nil
 		default:
 			return plan.Type{}, moerr.NewNYIf(ctx, "data type: '%s'", tree.String(&n.InternalType, dialect.MYSQL))
 		}

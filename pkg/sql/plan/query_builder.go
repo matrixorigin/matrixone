@@ -3465,9 +3465,13 @@ func (builder *QueryBuilder) bindProjection(
 
 	resultLen = len(ctx.projects)
 	for i, proj := range ctx.projects {
-		exprStr := proj.String()
-		if _, ok := ctx.projectByExpr[exprStr]; !ok {
-			ctx.projectByExpr[exprStr] = int32(i)
+		exprKey, keyErr := projectExprKey(proj)
+		if keyErr != nil {
+			err = keyErr
+			return
+		}
+		if _, ok := ctx.projectByExpr[exprKey]; !ok {
+			ctx.projectByExpr[exprKey] = int32(i)
 		}
 
 		if exprCol, ok := proj.Expr.(*plan.Expr_Col); ok {
@@ -3623,6 +3627,33 @@ func (builder *QueryBuilder) bindOrderBy(
 			return
 		}
 
+		// If the ORDER BY expression references a projected cast_index_to_value(enum_str, col),
+		// replace it with a hidden projection of the original ENUM/SET column so that sorting
+		// uses the internal definition order instead of the visible string order.
+		// This hidden raw key is a 1:1 mapping of the visible value, so keeping it through
+		// DISTINCT preserves dedup semantics and the final result projection trims it away.
+		if col := expr.GetCol(); col != nil && col.RelPos == ctx.projectTag {
+			if projExpr := ctx.projects[col.ColPos]; projExpr != nil {
+				if fn := projExpr.GetF(); fn != nil &&
+					(fn.Func.ObjName == moEnumCastIndexToValueFun || fn.Func.ObjName == moSetCastIndexToValueFun) {
+					orderKeyExpr := DeepCopyExpr(fn.Args[1])
+					colPos, appendErr := appendOrderByProjectExpr(ctx, orderKeyExpr)
+					if appendErr != nil {
+						return nil, appendErr
+					}
+					expr = &plan.Expr{
+						Typ: orderKeyExpr.Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: ctx.projectTag,
+								ColPos: colPos,
+							},
+						},
+					}
+				}
+			}
+		}
+
 		orderBy := &plan.OrderBySpec{
 			Expr: expr,
 			Flag: plan.OrderBySpec_INTERNAL,
@@ -3646,6 +3677,32 @@ func (builder *QueryBuilder) bindOrderBy(
 	}
 
 	return
+}
+
+// projectExprKey uses the full proto encoding so large ORDER BY expressions
+// dedupe the same way as small ones.
+func projectExprKey(expr *plan.Expr) (string, error) {
+	exprBytes := make([]byte, expr.ProtoSize())
+	if _, err := expr.MarshalToSizedBuffer(exprBytes); err != nil {
+		return "", err
+	}
+	return string(exprBytes), nil
+}
+
+func appendOrderByProjectExpr(ctx *BindContext, expr *plan.Expr) (int32, error) {
+	exprKey, err := projectExprKey(expr)
+	if err != nil {
+		return 0, err
+	}
+
+	if colPos, ok := ctx.projectByExpr[exprKey]; ok {
+		return colPos, nil
+	}
+
+	colPos := int32(len(ctx.projects))
+	ctx.projectByExpr[exprKey] = colPos
+	ctx.projects = append(ctx.projects, expr)
+	return colPos, nil
 }
 
 func (builder *QueryBuilder) bindLimit(

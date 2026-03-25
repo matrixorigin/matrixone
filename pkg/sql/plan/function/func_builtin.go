@@ -255,8 +255,11 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 		if err != nil {
 			return nil, err
 		}
-		if typ.Oid != types.T_enum {
-			return nil, moerr.NewNotSupportedf(proc.Ctx, "show visible bin enum, the type must be enum, but got %s", typ.String())
+		typeName := "ENUM"
+		if typ.Oid == types.T_uint64 {
+			typeName = "SET"
+		} else if typ.Oid != types.T_enum {
+			return nil, moerr.NewNotSupportedf(proc.Ctx, "show visible bin enum, the type must be enum/set, but got %s", typ.String())
 		}
 
 		// get enum values
@@ -268,7 +271,7 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 				enumVal += ","
 			}
 		}
-		ret := fmt.Sprintf("%s(%s)", typ.String(), enumVal)
+		ret := fmt.Sprintf("%s(%s)", typeName, enumVal)
 		return functionUtil.QuickStrToBytes(ret), nil
 	}
 

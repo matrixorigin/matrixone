@@ -213,7 +213,7 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select) ([]*ColDef, error) 
 			}
 		case *plan.Expr_F:
 			// enum
-			if e.F.Func.ObjName == moEnumCastIndexToValueFun {
+			if e.F.Func.ObjName == moEnumCastIndexToValueFun || e.F.Func.ObjName == moSetCastIndexToValueFun {
 				// cast_index_to_value('apple,banana,orange', cast(col_name as T_uint16))
 				colRef := e.F.Args[1].Expr.(*plan.Expr_Col).Col
 				tblName, colName := getTblAndColName(colRef.RelPos, colRef.ColPos)
@@ -1062,8 +1062,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					if colType.GetId() == int32(types.T_array_float32) || colType.GetId() == int32(types.T_array_float64) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECTOR column '%s' cannot be in primary key", colNameOrigin))
 					}
-					if colType.GetId() == int32(types.T_enum) {
+					if isEnumPlanType(&colType) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ENUM column '%s' cannot be in primary key", colNameOrigin))
+					}
+					if isSetPlanType(&colType) {
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("SET column '%s' cannot be in primary key", colNameOrigin))
 
 					}
 					pks = append(pks, colName)
@@ -1078,8 +1081,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 						return moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
 					}
 				case *tree.AttributeUnique, *tree.AttributeUniqueKey:
-					if colType.GetId() == int32(types.T_enum) {
+					if isEnumPlanType(&colType) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ENUM column '%s' cannot be in unique index", colNameOrigin))
+					}
+					if isSetPlanType(&colType) {
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("SET column '%s' cannot be in unique index", colNameOrigin))
 
 					}
 					uniqueIndexInfos = append(uniqueIndexInfos, &tree.UniqueIndex{
@@ -1157,8 +1163,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				}
 
 				if col, ok := colMap[name]; ok {
-					if col.Typ.Id == int32(types.T_enum) {
+					if isEnumPlanType(&col.Typ) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ENUM column '%s' cannot be in primary key", name))
+					}
+					if isSetPlanType(&col.Typ) {
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("SET column '%s' cannot be in primary key", name))
 					}
 				}
 
@@ -1177,7 +1186,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				name := key.ColName.ColName()
 
 				if col, ok := colMap[name]; ok {
-					if col.Typ.Id == int32(types.T_enum) {
+					if isEnumPlanType(&col.Typ) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ENUM column '%s' cannot be in secondary index", name))
 					}
 				}
@@ -1195,8 +1204,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				name := key.ColName.ColName()
 
 				if col, ok := colMap[name]; ok {
-					if col.Typ.Id == int32(types.T_enum) {
+					if isEnumPlanType(&col.Typ) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ENUM column '%s' cannot be in unique index", name))
+					}
+					if isSetPlanType(&col.Typ) {
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("SET column '%s' cannot be in unique index", name))
 					}
 				}
 
