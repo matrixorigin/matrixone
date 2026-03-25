@@ -729,7 +729,12 @@ func (dedupJoin *DedupJoin) checkSnapshotAdvancedDuplicates(proc *process.Proces
 		if rowStr == "" {
 			continue
 		}
-		return moerr.NewDuplicateEntry(proc.Ctx, rowStr, dedupJoin.DedupColName)
+		// Return a retryable error instead of DuplicateEntry.  The
+		// PrimaryKeysMayBeUpserted check is probabilistic (bloom-filter /
+		// range overlap) and can produce false positives.  By triggering a
+		// statement retry the probe side will re-scan at the new snapshot
+		// and return an accurate DuplicateEntry if the conflict is real.
+		return moerr.NewTxnNeedRetry(proc.Ctx)
 	}
 
 	return nil
