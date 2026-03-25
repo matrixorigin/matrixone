@@ -64,31 +64,42 @@ func (exec *avgTwResultFloatExec) BulkFill(groupIndex int, vectors []*vector.Vec
 }
 
 func (exec *avgTwResultFloatExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	isConst := vec.IsConst()
+	lastX := -1
+	var sums []float64
+	var cnts []int64
+	var sumVec *vector.Vector
+	var cntVec *vector.Vector
+
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
 			continue
 		}
 		row := offset + i
-		if vectors[0].IsConst() {
+		if isConst {
 			row = 0
 		}
-		if vectors[0].IsNull(uint64(row)) {
+		if vec.IsNull(uint64(row)) {
 			continue
 		}
-		value := vectors[0].GetBytesAt(row)
+		value := vec.GetBytesAt(row)
 		if len(value) < 16 {
 			return moerr.NewInternalErrorNoCtx("avg_tw_result: invalid float cache payload")
 		}
 
 		x, y := exec.getXY(grp - 1)
-		sumVec := exec.state[x].vecs[0]
-		cntVec := exec.state[x].vecs[1]
+		if x != lastX {
+			lastX = x
+			sumVec = exec.state[x].vecs[0]
+			cntVec = exec.state[x].vecs[1]
+			sums = vector.MustFixedColNoTypeCheck[float64](sumVec)
+			cnts = vector.MustFixedColNoTypeCheck[int64](cntVec)
+		}
 		if sumVec.IsNull(uint64(y)) {
 			sumVec.UnsetNull(uint64(y))
 			cntVec.UnsetNull(uint64(y))
 		}
-		sums := vector.MustFixedColNoTypeCheck[float64](sumVec)
-		cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
 		sums[y] += types.DecodeFloat64(value[0:])
 		cnts[y] += types.DecodeInt64(value[8:])
 	}
@@ -184,18 +195,26 @@ func (exec *avgTwResultDecimalExec) BulkFill(groupIndex int, vectors []*vector.V
 }
 
 func (exec *avgTwResultDecimalExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	isConst := vec.IsConst()
+	lastX := -1
+	var sums []types.Decimal128
+	var cnts []int64
+	var scales []int32
+	var sumVec, cntVec, scaleVec *vector.Vector
+
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
 			continue
 		}
 		row := offset + i
-		if vectors[0].IsConst() {
+		if isConst {
 			row = 0
 		}
-		if vectors[0].IsNull(uint64(row)) {
+		if vec.IsNull(uint64(row)) {
 			continue
 		}
-		value := vectors[0].GetBytesAt(row)
+		value := vec.GetBytesAt(row)
 		if len(value) < 28 {
 			return moerr.NewInternalErrorNoCtx("avg_tw_result: invalid decimal cache payload")
 		}
@@ -208,17 +227,20 @@ func (exec *avgTwResultDecimalExec) BatchFill(offset int, groups []uint64, vecto
 		scale := types.DecodeInt32(value[24:])
 
 		x, y := exec.getXY(grp - 1)
-		sumVec := exec.state[x].vecs[0]
-		cntVec := exec.state[x].vecs[1]
-		scaleVec := exec.state[x].vecs[2]
+		if x != lastX {
+			lastX = x
+			sumVec = exec.state[x].vecs[0]
+			cntVec = exec.state[x].vecs[1]
+			scaleVec = exec.state[x].vecs[2]
+			sums = vector.MustFixedColNoTypeCheck[types.Decimal128](sumVec)
+			cnts = vector.MustFixedColNoTypeCheck[int64](cntVec)
+			scales = vector.MustFixedColNoTypeCheck[int32](scaleVec)
+		}
 		if sumVec.IsNull(uint64(y)) {
 			sumVec.UnsetNull(uint64(y))
 			cntVec.UnsetNull(uint64(y))
 			scaleVec.UnsetNull(uint64(y))
 		}
-		sums := vector.MustFixedColNoTypeCheck[types.Decimal128](sumVec)
-		cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
-		scales := vector.MustFixedColNoTypeCheck[int32](scaleVec)
 		var err error
 		sums[y], err = sums[y].Add128(sum)
 		if err != nil {

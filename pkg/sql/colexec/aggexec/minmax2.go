@@ -47,26 +47,33 @@ func (exec *minMaxExecFixed[T]) BulkFill(groupIndex int, vectors []*vector.Vecto
 }
 
 func (exec *minMaxExecFixed[T]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	lastX := -1
+	var aggs []T
+	var aggVec *vector.Vector
+
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
 			continue
 		}
-
 		idx := uint64(i) + uint64(offset)
-		if vectors[0].IsNull(idx) {
+		if vec.IsNull(idx) {
 			continue
-		} else {
-			x, y := exec.getXY(grp - 1)
-			aggs := vector.MustFixedColNoTypeCheck[T](exec.state[x].vecs[0])
-			value := vector.GetFixedAtNoTypeCheck[T](vectors[0], int(idx))
-			if exec.state[x].vecs[0].IsNull(uint64(y)) {
-				exec.state[x].vecs[0].UnsetNull(uint64(y))
-				aggs[y] = value
-			} else {
-				if exec.comp(value, aggs[y]) < 0 {
-					aggs[y] = value
-				}
-			}
+		}
+
+		x, y := exec.getXY(grp - 1)
+		if x != lastX {
+			lastX = x
+			aggVec = exec.state[x].vecs[0]
+			aggs = vector.MustFixedColNoTypeCheck[T](aggVec)
+		}
+
+		value := vector.GetFixedAtNoTypeCheck[T](vec, int(idx))
+		if aggVec.IsNull(uint64(y)) {
+			aggVec.UnsetNull(uint64(y))
+			aggs[y] = value
+		} else if exec.comp(value, aggs[y]) < 0 {
+			aggs[y] = value
 		}
 	}
 	return nil

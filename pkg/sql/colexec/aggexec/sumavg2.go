@@ -124,37 +124,76 @@ func (exec *sumAvgExec[T, A]) BatchFill(offset int, groups []uint64, vectors []*
 	if exec.IsDistinct() {
 		return exec.batchFillArgs(offset, groups, vectors, true)
 	}
+	if exec.isSum {
+		return exec.batchFillSum(offset, groups, vectors)
+	}
+	return exec.batchFillAvg(offset, groups, vectors)
+}
+
+func (exec *sumAvgExec[T, A]) batchFillSum(offset int, groups []uint64, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	lastX := -1
+	var sums []T
+	var sumVec *vector.Vector
 
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
 			continue
 		}
-
 		idx := uint64(i) + uint64(offset)
-		if vectors[0].IsNull(idx) {
+		if vec.IsNull(idx) {
 			continue
-		} else {
-			x, y := exec.getXY(grp - 1)
-			sumVec := exec.state[x].vecs[0]
-			sums := vector.MustFixedColNoTypeCheck[T](sumVec)
-			val := vector.GetFixedAtNoTypeCheck[A](vectors[0], int(idx))
-			result := sums[y] + T(val)
-			if err := exec.ofCheck(sums[y], T(val), result); err != nil {
-				return err
-			}
-
-			if exec.isSum {
-				if sumVec.IsNull(uint64(y)) {
-					sumVec.UnsetNull(uint64(y))
-				}
-				sums[y] = result
-			} else {
-				sums[y] = result
-				cntVec := exec.state[x].vecs[1]
-				cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
-				cnts[y] += 1
-			}
 		}
+
+		x, y := exec.getXY(grp - 1)
+		if x != lastX {
+			lastX = x
+			sumVec = exec.state[x].vecs[0]
+			sums = vector.MustFixedColNoTypeCheck[T](sumVec)
+		}
+
+		val := vector.GetFixedAtNoTypeCheck[A](vec, int(idx))
+		result := sums[y] + T(val)
+		if err := exec.ofCheck(sums[y], T(val), result); err != nil {
+			return err
+		}
+		if sumVec.IsNull(uint64(y)) {
+			sumVec.UnsetNull(uint64(y))
+		}
+		sums[y] = result
+	}
+	return nil
+}
+
+func (exec *sumAvgExec[T, A]) batchFillAvg(offset int, groups []uint64, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	lastX := -1
+	var sums []T
+	var cnts []int64
+
+	for i, grp := range groups {
+		if grp == GroupNotMatched {
+			continue
+		}
+		idx := uint64(i) + uint64(offset)
+		if vec.IsNull(idx) {
+			continue
+		}
+
+		x, y := exec.getXY(grp - 1)
+		if x != lastX {
+			lastX = x
+			sums = vector.MustFixedColNoTypeCheck[T](exec.state[x].vecs[0])
+			cnts = vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])
+		}
+
+		val := vector.GetFixedAtNoTypeCheck[A](vec, int(idx))
+		result := sums[y] + T(val)
+		if err := exec.ofCheck(sums[y], T(val), result); err != nil {
+			return err
+		}
+		sums[y] = result
+		cnts[y] += 1
 	}
 	return nil
 }

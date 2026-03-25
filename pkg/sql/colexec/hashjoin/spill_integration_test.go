@@ -77,7 +77,7 @@ func TestRebuildHashmapForBucket(t *testing.T) {
 	bucket := spillBucket{
 		buildFile: buildBucketName,
 		probeFd:   nil, // empty probe
-		depth:     0,
+		depth:     1,
 	}
 
 	// Call rebuildHashmapForBucket
@@ -178,7 +178,7 @@ func TestReSpillBucket(t *testing.T) {
 	bucket := spillBucket{
 		buildFile: buildBucketName,
 		probeFd:   probeFd,
-		depth:     0,
+		depth:     1,
 	}
 
 	// Set a very low threshold to force re-spilling
@@ -191,7 +191,7 @@ func TestReSpillBucket(t *testing.T) {
 
 	// Verify sub-buckets were created and prepended to spillQueue
 	require.Greater(t, len(hashJoin.ctr.spillQueue), 0, "spillQueue should have sub-buckets")
-	require.Equal(t, 1, hashJoin.ctr.spillQueue[0].depth, "sub-buckets should be at depth 1")
+	require.Equal(t, 2, hashJoin.ctr.spillQueue[0].depth, "sub-buckets should be at depth 2")
 
 	// Verify sub-bucket fds are valid
 	subBucket := hashJoin.ctr.spillQueue[0]
@@ -362,7 +362,7 @@ func TestMultiLevelSpillIntegration(t *testing.T) {
 	bucket := spillBucket{
 		buildFile: buildBucketName,
 		probeFd:   multiProbeFd,
-		depth:     0,
+		depth:     1,
 	}
 
 	// Set very low threshold to force multiple levels of spilling
