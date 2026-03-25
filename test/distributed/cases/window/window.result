@@ -4236,4 +4236,8 @@ SELECT SISTKC, SISTKN
 FROM moving_avg
 WHERE SICLSE > ma_50;
 SISTKC    SISTKN
+select sum(score) over (order by name) from t_issue_23940;
+SQL parser error: Window '<unnamed window>' with RANGE frame requires ORDER BY expression of numeric or temporal type
+select avg(score) over (order by name range between unbounded preceding and current row) from t_issue_23940;
+SQL parser error: Window '<unnamed window>' with RANGE frame requires ORDER BY expression of numeric or temporal type
 drop database test_issue_23940;

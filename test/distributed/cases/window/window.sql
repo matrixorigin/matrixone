@@ -1503,4 +1503,9 @@ WITH daily_prices AS (
   SELECT SISTKC, SISTKN
   FROM moving_avg
   WHERE SICLSE > ma_50;
+
+-- aggregate window function + varchar ORDER BY should error (RANGE frame)
+select sum(score) over (order by name) from t_issue_23940;
+select avg(score) over (order by name range between unbounded preceding and current row) from t_issue_23940;
+
 drop database test_issue_23940;

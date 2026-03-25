@@ -271,7 +271,7 @@ func TestBindWindowFuncExprValidationAndHelpers(t *testing.T) {
 		require.Error(t, err)
 	})
 
-	t.Run("range frame rejects non-numeric order by", func(t *testing.T) {
+	t.Run("range frame rejects non-numeric order by for non-WIN_ORDER func", func(t *testing.T) {
 		binder := &stubWindowBinder{
 			bindExprFunc: func(tree.Expr, int32, bool) (*planpb.Expr, error) {
 				return makePlan2StringConstExprWithType("x"), nil
