@@ -14,6 +14,8 @@
 
 package fileservice
 
+import "context"
+
 type Policy uint64
 
 const (
@@ -48,4 +50,21 @@ func (c Policy) CacheIOEntry() bool {
 
 func (c Policy) CacheFullFile() bool {
 	return !c.Any(SkipFullFilePreloads)
+}
+
+type contextKeyPolicy struct{}
+
+// WithFileServicePolicy attaches a read/write cache policy to ctx.
+// Callers deeper in the stack (e.g. LoadPersistedColumnDatas) will pick it
+// up automatically, so no interface changes are required.
+func WithFileServicePolicy(ctx context.Context, policy Policy) context.Context {
+	return context.WithValue(ctx, contextKeyPolicy{}, policy)
+}
+
+// GetFileServicePolicy returns the Policy stored in ctx, or Policy(0) if none.
+func GetFileServicePolicy(ctx context.Context) Policy {
+	if p, ok := ctx.Value(contextKeyPolicy{}).(Policy); ok {
+		return p
+	}
+	return Policy(0)
 }

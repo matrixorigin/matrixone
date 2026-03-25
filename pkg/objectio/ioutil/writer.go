@@ -129,6 +129,7 @@ type BlockWriter struct {
 	nameStr        string
 	name           objectio.ObjectName
 	prefix         []index.PrefixFn
+	hashBuf        []uint64 // scratch buffer reused across WriteBatch calls for filter construction
 
 	isTombstone bool
 }
@@ -266,20 +267,20 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		w.objMetaBuilder.AddPKData(columnData)
 		var bf index.StaticFilter
 		if w.pkType == index.BF {
-			bf, err = index.NewBloomFilter(columnData)
+			bf, err = index.NewBloomFilter(columnData, &w.hashBuf)
 		} else if w.pkType == index.PBF {
 			if len(w.prefix) < 1 {
 				return nil, index.ErrPrefix
 			}
 			prefix := w.prefix[0]
-			bf, err = index.NewPrefixBloomFilter(columnData, prefix.Id, prefix.Fn)
+			bf, err = index.NewPrefixBloomFilter(columnData, prefix.Id, prefix.Fn, &w.hashBuf)
 		} else if w.pkType == index.HBF {
 			if len(w.prefix) < 2 {
 				return nil, index.ErrPrefix
 			}
 			prefixL1 := w.prefix[0]
 			prefixL2 := w.prefix[1]
-			bf, err = index.NewHybridBloomFilter(columnData, prefixL1.Id, prefixL1.Fn, prefixL2.Id, prefixL2.Fn)
+			bf, err = index.NewHybridBloomFilter(columnData, prefixL1.Id, prefixL1.Fn, prefixL2.Id, prefixL2.Fn, &w.hashBuf)
 		}
 		if err != nil {
 			return nil, err

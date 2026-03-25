@@ -61,6 +61,7 @@ func (a *WriteArena) Reset() {
 type objectWriterV1 struct {
 	sync.RWMutex
 	arena             *WriteArena
+	lz4c              lz4.Compressor
 	schemaVer         uint32
 	seqnums           *Seqnums
 	object            *Object
@@ -73,6 +74,7 @@ type objectWriterV1 struct {
 	lastId            uint32
 	name              ObjectName
 	compressBuf       []byte
+	buf               bytes.Buffer
 	bloomFilter       []byte
 	objStats          ObjectStats
 	sortKeySeqnum     uint16
@@ -637,22 +639,22 @@ func (w *objectWriterV1) GetDataStats() ObjectStats {
 }
 
 func (w *objectWriterV1) WriteWithCompress(offset uint32, buf []byte) (data []byte, extent Extent, err error) {
-	var tmpData []byte
 	dataLen := len(buf)
 	compressBlockBound := lz4.CompressBlockBound(dataLen)
 	if len(w.compressBuf) < compressBlockBound {
 		w.compressBuf = make([]byte, compressBlockBound)
 	}
-	if tmpData, err = compress.Compress(buf, w.compressBuf[:compressBlockBound], compress.Lz4); err != nil {
+	n, err := w.lz4c.CompressBlock(buf, w.compressBuf[:compressBlockBound])
+	if err != nil {
 		return
 	}
-	length := uint32(len(tmpData))
+	length := uint32(n)
 	if w.arena != nil {
 		data = w.arena.Alloc(int(length))
 	} else {
 		data = make([]byte, length)
 	}
-	copy(data, tmpData[:length])
+	copy(data, w.compressBuf[:length])
 	extent = NewExtent(compress.Lz4, offset, length, uint32(dataLen))
 	return
 }
@@ -664,7 +666,6 @@ func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, ba
 
 	block := blockData{meta: blockMeta, seqnums: seqnums}
 	var data []byte
-	var buf bytes.Buffer
 	var rows int
 	var size int
 	for i, vec := range bat.Vecs {
@@ -677,15 +678,15 @@ func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, ba
 			}
 			logutil.Debugf("%s unmatched length, expect %d, get %d", attr, rows, vec.Length())
 		}
-		buf.Reset()
+		w.buf.Reset()
 		h := IOEntryHeader{IOET_ColData, IOET_ColumnData_CurrVer}
-		buf.Write(EncodeIOEntryHeader(&h))
-		err := vec.MarshalBinaryWithBuffer(&buf)
-		if err != nil {
+		w.buf.Write(EncodeIOEntryHeader(&h))
+		if err := vec.MarshalBinaryWithBuffer(&w.buf); err != nil {
 			return 0, err
 		}
 		var ext Extent
-		if data, ext, err = w.WriteWithCompress(0, buf.Bytes()); err != nil {
+		var err error
+		if data, ext, err = w.WriteWithCompress(0, w.buf.Bytes()); err != nil {
 			return 0, err
 		}
 		size += len(data)

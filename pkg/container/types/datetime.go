@@ -118,84 +118,154 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 	var err error
 
 	if s[4] == '-' || s[4] == '/' || s[4] == ':' {
-		var num int64
 		var unum uint64
-		// Support both space-separated format (2024-12-20 10:30:45) and ISO 8601 format (2024-12-20T10:30:45)
-		var strArr []string
-		if strings.Contains(s, "T") {
-			strArr = strings.Split(s, "T")
-		} else {
-			strArr = strings.Split(s, " ")
-		}
-		if len(strArr) != 2 {
-			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
-		}
-		// solve year/month/day
-		// Use the separator found at position 4 (between year and month)
-		dateSep := s[4:5]
-		front := strings.Split(strArr[0], dateSep)
-		if len(front) != 3 {
-			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
-		}
-		num, err = strconv.ParseInt(front[0], 10, 32)
-		if err != nil {
-			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
-		}
-		year = int32(num)
-		unum, err = strconv.ParseUint(front[1], 10, 8)
-		if err != nil {
-			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
-		}
-		month = uint8(unum)
-		unum, err = strconv.ParseUint(front[2], 10, 8)
-		if err != nil {
-			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
-		}
-		day = uint8(unum)
+		dateSep := s[4]
 
-		if !ValidDate(year, month, day) {
-			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
-		}
-
-		middleAndBack := strings.Split(strArr[1], ".")
-		// solve hour/minute/second
-		middle := strings.Split(middleAndBack[0], ":")
-		if len(middle) != 3 {
-			if len(middle) == 2 {
-				middle = append(middle, "00")
-			} else {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
-			}
-		}
-		if len(middle) == 3 && middle[2] == "" {
-			middle[2] = "00"
-		}
-		unum, err = strconv.ParseUint(middle[0], 10, 8)
-		if err != nil {
-			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
-		}
-		hour = uint8(unum)
-		unum, err = strconv.ParseUint(middle[1], 10, 8)
-		if err != nil {
-			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
-		}
-		minute = uint8(unum)
-		unum, err = strconv.ParseUint(middle[2], 10, 8)
-		if err != nil {
-			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
-		}
-		second = uint8(unum)
-		if !ValidTimeInDay(hour, minute, second) {
-			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
-		}
-		// solve microsecond
-		if len(middleAndBack) == 2 {
-			msec, carry, err = getMsec(middleAndBack[1], scale)
+		// Fast path: standard zero-padded format "yyyy-mm-dd hh:mm:ss[.f...]"
+		// or ISO 8601 "yyyy-mm-ddThh:mm:ss[.f...]" with fixed-width fields.
+		// Separators at known positions; no slice allocations needed.
+		if len(s) >= 19 && s[7] == dateSep && (s[10] == ' ' || s[10] == 'T') &&
+			s[13] == ':' && s[16] == ':' {
+			var num int64
+			num, err = strconv.ParseInt(s[0:4], 10, 32)
 			if err != nil {
 				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
 			}
-		} else if len(middleAndBack) > 2 {
-			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			year = int32(num)
+			unum, err = strconv.ParseUint(s[5:7], 10, 8)
+			if err != nil {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			month = uint8(unum)
+			unum, err = strconv.ParseUint(s[8:10], 10, 8)
+			if err != nil {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			day = uint8(unum)
+			if !ValidDate(year, month, day) {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			unum, err = strconv.ParseUint(s[11:13], 10, 8)
+			if err != nil {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			hour = uint8(unum)
+			unum, err = strconv.ParseUint(s[14:16], 10, 8)
+			if err != nil {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			minute = uint8(unum)
+			unum, err = strconv.ParseUint(s[17:19], 10, 8)
+			if err != nil {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			second = uint8(unum)
+			if !ValidTimeInDay(hour, minute, second) {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			if len(s) == 19 {
+				// nothing
+			} else if s[19] == '.' {
+				msec, carry, err = getMsec(s[20:], scale)
+				if err != nil {
+					return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				}
+			} else {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+		} else {
+			// Slow path: variable-width fields. Use IndexByte instead of
+			// strings.Split to avoid []string allocations.
+			dtSepIdx := strings.IndexByte(s, ' ')
+			if dtSepIdx < 0 {
+				dtSepIdx = strings.IndexByte(s, 'T')
+			}
+			if dtSepIdx < 0 || dtSepIdx == len(s)-1 {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			dateStr := s[:dtSepIdx]
+			timeStr := s[dtSepIdx+1:]
+
+			// Parse date: find second occurrence of dateSep
+			p2 := 5 + strings.IndexByte(dateStr[5:], dateSep)
+			if p2 < 5 || p2 >= len(dateStr)-1 {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			var num int64
+			num, err = strconv.ParseInt(dateStr[:4], 10, 32)
+			if err != nil {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			year = int32(num)
+			unum, err = strconv.ParseUint(dateStr[5:p2], 10, 8)
+			if err != nil {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			month = uint8(unum)
+			unum, err = strconv.ParseUint(dateStr[p2+1:], 10, 8)
+			if err != nil {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			day = uint8(unum)
+			if !ValidDate(year, month, day) {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+
+			// Parse time: split off microseconds
+			dotIdx := strings.IndexByte(timeStr, '.')
+			hmsStr := timeStr
+			if dotIdx >= 0 {
+				hmsStr = timeStr[:dotIdx]
+			}
+			c1 := strings.IndexByte(hmsStr, ':')
+			if c1 < 0 {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			c2 := c1 + 1 + strings.IndexByte(hmsStr[c1+1:], ':')
+			var secStr string
+			if c2 <= c1 {
+				// only h:mm — treat seconds as "00"
+				if len(hmsStr)-c1-1 == 0 {
+					return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				}
+				secStr = "00"
+			} else {
+				secStr = hmsStr[c2+1:]
+				if secStr == "" {
+					secStr = "00"
+				}
+			}
+			unum, err = strconv.ParseUint(hmsStr[:c1], 10, 8)
+			if err != nil {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			hour = uint8(unum)
+			end := c2
+			if c2 <= c1 {
+				end = len(hmsStr)
+			}
+			unum, err = strconv.ParseUint(hmsStr[c1+1:end], 10, 8)
+			if err != nil {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			minute = uint8(unum)
+			unum, err = strconv.ParseUint(secStr, 10, 8)
+			if err != nil {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			second = uint8(unum)
+			if !ValidTimeInDay(hour, minute, second) {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			if dotIdx >= 0 {
+				if dotIdx == len(timeStr)-1 {
+					return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				}
+				msec, carry, err = getMsec(timeStr[dotIdx+1:], scale)
+				if err != nil {
+					return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				}
+			}
 		}
 	} else {
 		year = int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')

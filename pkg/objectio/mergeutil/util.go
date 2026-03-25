@@ -155,12 +155,27 @@ func (m *merge[T]) initHeap() {
 }
 
 func (m *merge[T]) getNextPos() (batchIndex, rowIndex, size int) {
-	data := m.pushNext()
-	if data == nil {
-		// now, m.size is 0
+	if m.size == 0 {
 		return -1, -1, m.size
 	}
-	return data.batIndex, data.rowIndex, m.size
+	data := heapPop(m.heap)
+	batchIndex = data.batIndex
+	rowIndex = data.rowIndex
+	m.rowIdx[batchIndex]++
+	if m.rowIdx[batchIndex] >= m.ds.length(batchIndex) {
+		m.rowIdx[batchIndex] = -1
+		m.size--
+	}
+	if m.rowIdx[batchIndex] != -1 {
+		heapPush(m.heap, heapElem[T]{
+			data:     m.ds.at(batchIndex, m.rowIdx[batchIndex]),
+			isNull:   m.nulls[batchIndex].Contains(uint64(m.rowIdx[batchIndex])),
+			batIndex: batchIndex,
+			rowIndex: m.rowIdx[batchIndex],
+		})
+	}
+	size = m.size
+	return
 }
 
 func (m *merge[T]) pushNext() *heapElem[T] {

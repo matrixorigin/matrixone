@@ -20,12 +20,6 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -33,10 +27,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
@@ -113,10 +110,12 @@ func newCNMergeTask(
 	proc := tbl.proc.Load()
 	fs := proc.Base.FileService
 
+	var totalInputSize uint64
 	blkCnts := make([]int, len(targets))
 	blkIters := make([]*objectio.StatsBlkIter, len(targets))
 	for i, objStats := range targets {
 		blkCnts[i] = int(objStats.BlkCnt())
+		totalInputSize += uint64(objStats.OriginSize())
 
 		loc := objStats.ObjectLocation()
 		meta, err := objectio.FastLoadObjectMeta(ctx, &loc, false, fs)
@@ -127,9 +126,13 @@ func newCNMergeTask(
 		blkIters[i] = objectio.NewStatsBlkIter(&objStats, meta.MustDataMeta())
 	}
 
+	arenaSize := targetObjSize
+	if totalInputSize < uint64(arenaSize) {
+		arenaSize = uint32(totalInputSize)
+	}
 	var arena *objectio.WriteArena
-	if targetObjSize > 300*common.Const1MBytes {
-		arena = objectio.NewArena(300 * common.Const1MBytes)
+	if arenaSize > 0 {
+		arena = objectio.NewArena(int(arenaSize))
 	}
 
 	return &cnMergeTask{

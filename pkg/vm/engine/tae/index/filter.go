@@ -16,8 +16,6 @@ package index
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"go.uber.org/zap"
 	"strconv"
 	"strings"
 
@@ -27,8 +25,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/samber/lo"
+	"go.uber.org/zap"
 )
 
 const FuseFilterErrorMsg = "too many iterations"
@@ -66,8 +66,10 @@ type bloomFilter struct {
 	xorfilter.BinaryFuse8
 }
 
-func NewBloomFilter(vec containers.Vector) (StaticFilter, error) {
-	return NewBloomFilter2([]containers.Vector{vec})
+// NewBloomFilter builds a BinaryFuse8 bloom filter for a single vector.
+// buf is an optional scratch buffer; pass &mySlice to reuse it across calls.
+func NewBloomFilter(vec containers.Vector, buf *[]uint64) (StaticFilter, error) {
+	return NewBloomFilter2([]containers.Vector{vec}, buf)
 }
 
 func buildFuseFilter(hashes []uint64) (*bloomFilter, error) {
@@ -97,11 +99,26 @@ func buildFuseFilter(hashes []uint64) (*bloomFilter, error) {
 	return sf, nil
 }
 
-func NewBloomFilter2(vectors []containers.Vector) (StaticFilter, error) {
-	hashes := make([]uint64, 0)
+// NewBloomFilter2 builds a BinaryFuse8 bloom filter over multiple vectors.
+// buf is an optional scratch buffer; pass &mySlice to reuse it across calls.
+func NewBloomFilter2(vectors []containers.Vector, buf *[]uint64) (StaticFilter, error) {
+	totalLen := 0
+	for _, v := range vectors {
+		totalLen += v.Length()
+	}
+	var hashes []uint64
+	if buf != nil {
+		if cap(*buf) < totalLen {
+			*buf = make([]uint64, 0, totalLen)
+		} else {
+			*buf = (*buf)[:0]
+		}
+		hashes = *buf
+	} else {
+		hashes = make([]uint64, 0, totalLen)
+	}
 	op := func(v []byte, _ bool, _ int) error {
-		hash := hashV1(v)
-		hashes = append(hashes, hash)
+		hashes = append(hashes, hashV1(v))
 		return nil
 	}
 	var err error
@@ -109,6 +126,9 @@ func NewBloomFilter2(vectors []containers.Vector) (StaticFilter, error) {
 		if err = containers.ForeachWindowBytes(data.GetDownstreamVector(), 0, data.Length(), op, nil); err != nil {
 			return nil, err
 		}
+	}
+	if buf != nil {
+		*buf = hashes
 	}
 	return buildFuseFilter(hashes)
 }

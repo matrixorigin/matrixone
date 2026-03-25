@@ -33,29 +33,50 @@ type hybridFilter struct {
 	bloomFilter  bloomFilter
 }
 
+// NewHybridBloomFilter builds three BinaryFuse8 filters (full-key, level-1 prefix,
+// level-2 prefix) in a single ForeachWindowBytes pass.
+// buf is an optional scratch buffer; pass &mySlice to reuse it across calls.
+// When provided, the buffer is grown to 3×n capacity and partitioned into three
+// non-overlapping sub-slices — one allocation for all three hash arrays.
 func NewHybridBloomFilter(
 	data containers.Vector,
 	level1PrefixFnId uint8,
 	level1Prefix func([]byte) []byte,
 	level2PrefixFnId uint8,
 	level2Prefix func([]byte) []byte,
+	buf *[]uint64,
 ) (StaticFilter, error) {
-	hashes := make([]uint64, 0)
-	level1Hashes := make([]uint64, 0)
-	level2Hashes := make([]uint64, 0)
+	n := data.Length()
+	var hashes, level1Hashes, level2Hashes []uint64
+	if buf != nil {
+		need := 3 * n
+		if cap(*buf) < need {
+			*buf = make([]uint64, 0, need)
+		}
+		// Extend len to need so we can sub-slice the three regions.
+		// For slices, s[:high] is valid when high <= cap(s).
+		raw := (*buf)[:need]
+		hashes = raw[:0:n]
+		level1Hashes = raw[n : n : 2*n]
+		level2Hashes = raw[2*n : 2*n : 3*n]
+	} else {
+		hashes = make([]uint64, 0, n)
+		level1Hashes = make([]uint64, 0, n)
+		level2Hashes = make([]uint64, 0, n)
+	}
 	op := func(v []byte, _ bool, _ int) error {
-		level1Hash := hashV1(level1Prefix(v))
-		level2Hash := hashV1(level2Prefix(v))
-		hash := hashV1(v)
-		hashes = append(hashes, hash)
-		level1Hashes = append(level1Hashes, level1Hash)
-		level2Hashes = append(level2Hashes, level2Hash)
+		hashes = append(hashes, hashV1(v))
+		level1Hashes = append(level1Hashes, hashV1(level1Prefix(v)))
+		level2Hashes = append(level2Hashes, hashV1(level2Prefix(v)))
 		return nil
 	}
 	if err := containers.ForeachWindowBytes(
-		data.GetDownstreamVector(), 0, data.Length(), op, nil,
+		data.GetDownstreamVector(), 0, n, op, nil,
 	); err != nil {
 		return nil, err
+	}
+	if buf != nil {
+		*buf = (*buf)[:3*n]
 	}
 	bf, err := buildFuseFilter(hashes)
 	if err != nil {

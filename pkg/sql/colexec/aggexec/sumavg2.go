@@ -240,19 +240,32 @@ func (exec *sumAvgExec[T, A]) SetExtraInformation(partialResult any, _ int) erro
 	return nil
 }
 
-func (exec *sumAvgExec[T, A]) Flush() ([]*vector.Vector, error) {
+func (exec *sumAvgExec[T, A]) Flush() (_ []*vector.Vector, retErr error) {
 	resultType := exec.aggInfo.retType
 	vecs := make([]*vector.Vector, len(exec.state))
+	defer func() {
+		if retErr != nil {
+			for _, v := range vecs {
+				if v != nil {
+					v.Free(exec.mp)
+				}
+			}
+		}
+	}()
 
 	if exec.IsDistinct() {
 		for i := range vecs {
 			vecs[i] = vector.NewOffHeapVecWithType(resultType)
-			vecs[i].PreExtend(int(exec.state[i].length), exec.mp)
+			if err := vecs[i].PreExtend(int(exec.state[i].length), exec.mp); err != nil {
+				return nil, err
+			}
 		}
 		for i := range vecs {
 			for j := 0; j < int(exec.state[i].length); j++ {
 				if exec.state[i].argCnt[j] == 0 {
-					vector.AppendNull(vecs[i], exec.mp)
+					if err := vector.AppendNull(vecs[i], exec.mp); err != nil {
+						return nil, err
+					}
 					continue
 				} else {
 					sum := T(0)
@@ -276,9 +289,13 @@ func (exec *sumAvgExec[T, A]) Flush() ([]*vector.Vector, error) {
 					}
 
 					if exec.isSum {
-						vector.AppendFixed(vecs[i], sum, false, exec.mp)
+						if err := vector.AppendFixed(vecs[i], sum, false, exec.mp); err != nil {
+							return nil, err
+						}
 					} else {
-						vector.AppendFixed(vecs[i], float64(sum)/float64(exec.state[i].argCnt[j]), false, exec.mp)
+						if err := vector.AppendFixed(vecs[i], float64(sum)/float64(exec.state[i].argCnt[j]), false, exec.mp); err != nil {
+							return nil, err
+						}
 					}
 				}
 			}
@@ -556,21 +573,34 @@ func decAvg(sum types.Decimal128, count int64, argScale, resultScale int32) type
 	return a
 }
 
-func (exec *sumAvgDecExec[A]) Flush() ([]*vector.Vector, error) {
+func (exec *sumAvgDecExec[A]) Flush() (_ []*vector.Vector, retErr error) {
 	var err error
 	resultType := exec.aggInfo.retType
 	vecs := make([]*vector.Vector, len(exec.state))
+	defer func() {
+		if retErr != nil {
+			for _, v := range vecs {
+				if v != nil {
+					v.Free(exec.mp)
+				}
+			}
+		}
+	}()
 
 	if exec.IsDistinct() {
 		for i := range vecs {
 			vecs[i] = vector.NewOffHeapVecWithType(resultType)
-			vecs[i].PreExtend(int(exec.state[i].length), exec.mp)
+			if err := vecs[i].PreExtend(int(exec.state[i].length), exec.mp); err != nil {
+				return nil, err
+			}
 		}
 
 		for i := range vecs {
 			for j := 0; j < int(exec.state[i].length); j++ {
 				if exec.state[i].argCnt[j] == 0 {
-					vector.AppendNull(vecs[i], exec.mp)
+					if err := vector.AppendNull(vecs[i], exec.mp); err != nil {
+						return nil, err
+					}
 					continue
 				} else {
 					var sum types.Decimal128
@@ -601,10 +631,14 @@ func (exec *sumAvgDecExec[A]) Flush() ([]*vector.Vector, error) {
 					}
 
 					if exec.isSum {
-						vector.AppendFixed(vecs[i], sum, false, exec.mp)
+						if err := vector.AppendFixed(vecs[i], sum, false, exec.mp); err != nil {
+							return nil, err
+						}
 					} else {
 						avg := decAvg(sum, int64(exec.state[i].argCnt[j]), exec.aggInfo.argTypes[0].Scale, resultType.Scale)
-						vector.AppendFixed(vecs[i], avg, false, exec.mp)
+						if err := vector.AppendFixed(vecs[i], avg, false, exec.mp); err != nil {
+							return nil, err
+						}
 					}
 				}
 			}

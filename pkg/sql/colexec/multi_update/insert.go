@@ -39,13 +39,13 @@ func (update *MultiUpdate) insert_main_table(
 
 	// init buffer
 	if ctr.insertBuf[tableIndex] == nil {
-		bat := batch.NewWithSize(len(updateCtx.InsertCols))
+		bat := batch.NewOffHeapWithSize(len(updateCtx.InsertCols))
 		attrs := make([]string, 0, len(updateCtx.TableDef.Cols)-1)
 		for _, col := range updateCtx.TableDef.Cols {
 			if col.Name == catalog.Row_ID {
 				continue
 			}
-			bat.Vecs[len(attrs)] = vector.NewVec(plan.MakeTypeByPlan2Type(col.Typ))
+			bat.Vecs[len(attrs)] = vector.NewOffHeapVecWithType(plan.MakeTypeByPlan2Type(col.Typ))
 			attrs = append(attrs, col.GetOriginCaseName())
 		}
 		bat.SetAttributes(attrs)
@@ -77,10 +77,10 @@ func (update *MultiUpdate) insert_unique_index_table(
 
 	// init buffer
 	if ctr.insertBuf[tableIndex] == nil {
-		ctr.insertBuf[tableIndex] = batch.NewWithSize(2)
+		ctr.insertBuf[tableIndex] = batch.NewOffHeapWithSize(2)
 		ctr.insertBuf[tableIndex].Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName}
 		for insertIdx, inputIdx := range updateCtx.InsertCols {
-			ctr.insertBuf[tableIndex].Vecs[insertIdx] = vector.NewVec(*inputBatch.Vecs[inputIdx].GetType())
+			ctr.insertBuf[tableIndex].Vecs[insertIdx] = vector.NewOffHeapVecWithType(*inputBatch.Vecs[inputIdx].GetType())
 		}
 	}
 
@@ -110,9 +110,9 @@ func (update *MultiUpdate) insert_secondary_index_table(
 			}
 		}
 
-		ctr.insertBuf[tableIndex] = batch.New(attrs)
+		ctr.insertBuf[tableIndex] = batch.NewOffHeap(attrs)
 		for insertIdx, inputIdx := range updateCtx.InsertCols {
-			ctr.insertBuf[tableIndex].Vecs[insertIdx] = vector.NewVec(*inputBatch.Vecs[inputIdx].GetType())
+			ctr.insertBuf[tableIndex].Vecs[insertIdx] = vector.NewOffHeapVecWithType(*inputBatch.Vecs[inputIdx].GetType())
 		}
 	}
 

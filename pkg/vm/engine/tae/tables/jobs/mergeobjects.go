@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -155,8 +156,12 @@ func NewMergeObjectsTask(
 	task.attrs = append(task.attrs, objectio.TombstoneAttr_CommitTs_Attr)
 	task.BaseTask = tasks.NewBaseTask(task, tasks.DataCompactionTask, ctx)
 
-	if task.GetTotalSize() > 300*common.Const1MBytes {
-		task.arena = objectio.NewArena(300 * common.Const1MBytes)
+	arenaSize := task.targetObjSize
+	if totalInput := task.GetTotalSize(); totalInput < uint64(arenaSize) {
+		arenaSize = uint32(totalInput)
+	}
+	if arenaSize > 0 {
+		task.arena = objectio.NewArena(int(arenaSize))
 	}
 	return
 }
@@ -268,6 +273,7 @@ func (task *mergeObjectsTask) LoadNextBatch(
 	}()
 
 	obj := task.mergedObjsHandle[objIdx]
+	ctx = fileservice.WithFileServicePolicy(ctx, fileservice.SkipCacheReads)
 	if task.isTombstone {
 		err = obj.Scan(
 			ctx,
