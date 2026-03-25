@@ -490,7 +490,11 @@ func TestCheckSnapshotAdvancedDuplicates_SkipsWithoutEngine(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestCheckSnapshotAdvancedDuplicates_ReturnsDuplicate(t *testing.T) {
+// TestCheckSnapshotAdvancedDuplicates_TriggersRetry verifies that the
+// probabilistic snapshot-range check returns ErrTxnNeedRetry (not
+// ErrDuplicateEntry) and advances StmtSnapshotTS so that the retry
+// converges.
+func TestCheckSnapshotAdvancedDuplicates_TriggersRetry(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -523,17 +527,20 @@ func TestCheckSnapshotAdvancedDuplicates_ReturnsDuplicate(t *testing.T) {
 	arg.ctr.batches = []*batch.Batch{buildBat}
 	arg.ctr.batchRowCount = int64(buildBat.RowCount())
 
+	fromTS := types.BuildTS(initialTS.PhysicalTime, initialTS.LogicalTime)
+	toTS := types.BuildTS(currentTS.PhysicalTime, currentTS.LogicalTime)
+
 	gomock.InOrder(
 		txnOp.EXPECT().SnapshotTS().Return(currentTS),
 		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(42)).Return("testdb", "t1", rel, nil),
 		rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(42)),
-		rel.EXPECT().PrimaryKeysMayBeUpserted(gomock.Any(), types.BuildTS(1, 0), types.BuildTS(2, 0), gomock.Any(), int32(0)).DoAndReturn(
+		rel.EXPECT().PrimaryKeysMayBeUpserted(gomock.Any(), fromTS, toTS, gomock.Any(), int32(0)).DoAndReturn(
 			func(_ context.Context, _, _ types.TS, bat *batch.Batch, _ int32) (bool, error) {
 				require.Equal(t, 2, bat.RowCount())
 				return true, nil
 			},
 		),
-		rel.EXPECT().PrimaryKeysMayBeUpserted(gomock.Any(), types.BuildTS(1, 0), types.BuildTS(2, 0), gomock.Any(), int32(0)).DoAndReturn(
+		rel.EXPECT().PrimaryKeysMayBeUpserted(gomock.Any(), fromTS, toTS, gomock.Any(), int32(0)).DoAndReturn(
 			func(_ context.Context, _, _ types.TS, bat *batch.Batch, _ int32) (bool, error) {
 				require.Equal(t, 1, bat.RowCount())
 				return bat.GetVector(0).RowToString(0) == "10", nil
@@ -588,14 +595,17 @@ func TestCheckSnapshotAdvancedDuplicates_FalsePositive(t *testing.T) {
 	arg.ctr.batches = []*batch.Batch{buildBat}
 	arg.ctr.batchRowCount = int64(buildBat.RowCount())
 
+	fromTS := types.BuildTS(initialTS.PhysicalTime, initialTS.LogicalTime)
+	toTS := types.BuildTS(currentTS.PhysicalTime, currentTS.LogicalTime)
+
 	gomock.InOrder(
 		txnOp.EXPECT().SnapshotTS().Return(currentTS),
 		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(42)).Return("testdb", "t1", rel, nil),
 		rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(42)),
 		// Batch-level check: range [10, 20] had changes → true
-		rel.EXPECT().PrimaryKeysMayBeUpserted(gomock.Any(), types.BuildTS(1, 0), types.BuildTS(2, 0), gomock.Any(), int32(0)).Return(true, nil),
+		rel.EXPECT().PrimaryKeysMayBeUpserted(gomock.Any(), fromTS, toTS, gomock.Any(), int32(0)).Return(true, nil),
 		// Row-level: key 10 was modified by another txn → true (false positive)
-		rel.EXPECT().PrimaryKeysMayBeUpserted(gomock.Any(), types.BuildTS(1, 0), types.BuildTS(2, 0), gomock.Any(), int32(0)).Return(true, nil),
+		rel.EXPECT().PrimaryKeysMayBeUpserted(gomock.Any(), fromTS, toTS, gomock.Any(), int32(0)).Return(true, nil),
 	)
 
 	err := arg.checkSnapshotAdvancedDuplicates(proc)
