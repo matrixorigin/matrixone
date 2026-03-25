@@ -289,6 +289,81 @@ func TestBindWindowFuncExprValidationAndHelpers(t *testing.T) {
 		require.Error(t, err)
 	})
 
+	t.Run("range frame allows non-numeric order by for WIN_ORDER func", func(t *testing.T) {
+		binder := &stubWindowBinder{
+			bindExprFunc: func(tree.Expr, int32, bool) (*planpb.Expr, error) {
+				return makePlan2StringConstExprWithType("x"), nil
+			},
+			bindFuncExprFunc: func(string, []tree.Expr, int32) (*planpb.Expr, error) {
+				return makePlan2Int64ConstExprWithType(1), nil
+			},
+			makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) {
+				return makePlan2Int64ConstExprWithType(1), nil
+			},
+		}
+		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
+
+		// row_number is WIN_ORDER, should succeed with varchar ORDER BY
+		_, err := bindWindowFuncExpr(
+			binder,
+			ctx,
+			"row_number",
+			testWindowFuncExpr(
+				"row_number",
+				tree.FUNC_TYPE_DEFAULT,
+				&tree.WindowSpec{
+					OrderBy: tree.OrderBy{tree.NewOrder(testNumVal(1), tree.Ascending, tree.DefaultNullsPosition, false)},
+					Frame: &tree.FrameClause{
+						Type:  tree.Range,
+						Start: &tree.FrameBound{Type: tree.Preceding, UnBounded: true},
+						End:   &tree.FrameBound{Type: tree.Following, UnBounded: true},
+					},
+				},
+			),
+			0,
+			true,
+		)
+		require.NoError(t, err)
+	})
+
+	t.Run("range unbounded frame rejects non-numeric order by for agg func", func(t *testing.T) {
+		binder := &stubWindowBinder{
+			bindExprFunc: func(tree.Expr, int32, bool) (*planpb.Expr, error) {
+				return makePlan2StringConstExprWithType("x"), nil
+			},
+			bindFuncExprFunc: func(string, []tree.Expr, int32) (*planpb.Expr, error) {
+				return makePlan2Int64ConstExprWithType(1), nil
+			},
+			makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) {
+				return makePlan2Int64ConstExprWithType(1), nil
+			},
+		}
+		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
+
+		// sum with RANGE UNBOUNDED + varchar ORDER BY should fail
+		_, err := bindWindowFuncExpr(
+			binder,
+			ctx,
+			"sum",
+			testWindowFuncExpr(
+				"sum",
+				tree.FUNC_TYPE_DEFAULT,
+				&tree.WindowSpec{
+					OrderBy: tree.OrderBy{tree.NewOrder(testNumVal(1), tree.Ascending, tree.DefaultNullsPosition, false)},
+					Frame: &tree.FrameClause{
+						Type:  tree.Range,
+						Start: &tree.FrameBound{Type: tree.Preceding, UnBounded: true},
+						End:   &tree.FrameBound{Type: tree.CurrentRow},
+					},
+				},
+				testNumVal(1),
+			),
+			0,
+			true,
+		)
+		require.Error(t, err)
+	})
+
 	t.Run("buildWindowColRefExpr keeps tag and column", func(t *testing.T) {
 		expr := buildWindowColRefExpr(&BindContext{windowTag: 17}, planpb.Type{Id: int32(types.T_int64)}, 3)
 		require.Equal(t, int32(17), expr.GetCol().RelPos)
