@@ -125,7 +125,7 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 		// or ISO 8601 "yyyy-mm-ddThh:mm:ss[.f...]" with fixed-width fields.
 		// Separators at known positions; no slice allocations needed.
 		if len(s) >= 19 && s[7] == dateSep && (s[10] == ' ' || s[10] == 'T') &&
-			s[13] == ':' && s[16] == ':' {
+			s[13] == ':' && s[16] == ':' && (len(s) == 19 || s[19] == '.') {
 			var num int64
 			num, err = strconv.ParseInt(s[0:4], 10, 32)
 			if err != nil {
