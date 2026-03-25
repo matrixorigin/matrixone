@@ -77,7 +77,8 @@ type mergeObjectsTask struct {
 	segmentID *objectio.Segmentid
 	num       uint16
 
-	arena *objectio.WriteArena
+	arena      *objectio.WriteArena
+	tnDataBats []*containers.Batch // cached TN batch wrappers, one per merged object
 }
 
 func NewMergeObjectsTask(
@@ -112,6 +113,7 @@ func NewMergeObjectsTask(
 		isTombstone:      isTombstone,
 		nMergedBlk:       make([]int, len(mergedObjs)),
 		blkCnt:           make([]int, len(mergedObjs)),
+		tnDataBats:       make([]*containers.Batch, len(mergedObjs)),
 		targetObjSize:    targetObjSize,
 		createAt:         time.Now(),
 		segmentID:        objectio.NewSegmentid(),
@@ -247,13 +249,19 @@ func (task *mergeObjectsTask) LoadNextBatch(
 		if reuseBatch.RowCount() != 0 {
 			panic("reuseBatch is not empty")
 		}
-		data = containers.ToTNBatch(reuseBatch, common.MergeAllocator)
+		// Reuse the cached TN batch from the previous call — its TN vector wrappers
+		// still point to reuseBatch's (now-empty) CN vectors, so the scan can fill
+		// them in-place without allocating new wrappers.
+		data = task.tnDataBats[objIdx]
+		retBatch = reuseBatch
 	}
 
-	if task.nMergedBlk[objIdx] == task.blkCnt[objIdx]-1 {
+	isLast := task.nMergedBlk[objIdx] == task.blkCnt[objIdx]-1
+	if isLast {
 		releaseF = func() {
 			if data != nil {
 				data.Close()
+				task.tnDataBats[objIdx] = nil
 			}
 		}
 	} else {
@@ -268,6 +276,7 @@ func (task *mergeObjectsTask) LoadNextBatch(
 		if err != nil {
 			if data != nil {
 				data.Close()
+				task.tnDataBats[objIdx] = nil
 			}
 		}
 	}()
@@ -317,17 +326,22 @@ func (task *mergeObjectsTask) LoadNextBatch(
 	}
 	task.nMergedBlk[objIdx]++
 
-	retBatch = batch.New(task.attrs)
-	for i, idx := range task.idxs {
-		if idx == objectio.SEQNUM_COMMITTS {
-			id := slices.Index(task.attrs, objectio.TombstoneAttr_CommitTs_Attr)
-			retBatch.Vecs[id] = data.Vecs[i].GetDownstreamVector()
-		} else {
-			retBatch.Vecs[idx] = data.Vecs[i].GetDownstreamVector()
+	if retBatch == nil {
+		// First block of this object: create the CN batch and populate vector slots.
+		// Cache the TN batch so subsequent blocks can skip ToTNBatch.
+		task.tnDataBats[objIdx] = data
+		retBatch = batch.New(task.attrs)
+		for i, idx := range task.idxs {
+			if idx == objectio.SEQNUM_COMMITTS {
+				id := slices.Index(task.attrs, objectio.TombstoneAttr_CommitTs_Attr)
+				retBatch.Vecs[id] = data.Vecs[i].GetDownstreamVector()
+			} else {
+				retBatch.Vecs[idx] = data.Vecs[i].GetDownstreamVector()
+			}
 		}
 	}
 
-	// // RelLogicalID COMPAT
+	// RelLogicalID COMPAT
 	if task.tid == 2 && !task.isTombstone {
 		// reuse the rel_id column
 		logical_idx := slices.Index(task.attrs, pkgcatalog.SystemRelAttr_LogicalID)
@@ -350,10 +364,9 @@ func (task *mergeObjectsTask) GetCommitEntry() *api.MergeCommitEntry {
 }
 
 func (task *mergeObjectsTask) InitTransferMaps(blkCnt int) {
+	// Maps are allocated lazily per-block in the merger/reshaper to avoid a large
+	// upfront memory spike (blkCnt × maxRows maps all pre-sized at once).
 	task.transferMaps = make(api.TransferMaps, blkCnt)
-	for i := range task.transferMaps {
-		task.transferMaps[i] = make(api.TransferMap)
-	}
 }
 
 func (task *mergeObjectsTask) GetTransferMaps() api.TransferMaps {

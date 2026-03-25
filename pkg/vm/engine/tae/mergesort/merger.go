@@ -90,7 +90,6 @@ type merger[T comparable] struct {
 	rowIdx []uint32
 
 	objCnt           int
-	objBlkCnts       []int
 	accObjBlkCnts    []int
 	loadedObjBlkCnts []int
 
@@ -119,7 +118,6 @@ func newMerger[T comparable](host MergeTaskHost, lessFunc sort.LessFunc[T], sort
 		sortKeyIdx: sortKeyPos,
 
 		accObjBlkCnts: host.GetAccBlkCnts(),
-		objBlkCnts:    host.GetBlkCnts(),
 		rowPerBlk:     host.GetBlockMaxRows(),
 		stats: mergeStats{
 			targetObjSize: host.GetTargetObjSize(),
@@ -129,7 +127,7 @@ func newMerger[T comparable](host MergeTaskHost, lessFunc sort.LessFunc[T], sort
 		loadedObjBlkCnts: make([]int, size),
 	}
 	totalBlkCnt := 0
-	for _, cnt := range m.objBlkCnts {
+	for _, cnt := range host.GetBlkCnts() {
 		totalBlkCnt += cnt
 	}
 	if host.DoTransfer() {
@@ -171,6 +169,7 @@ func (m *merger[T]) merge(ctx context.Context) error {
 	defer releaseF()
 
 	transferMaps := m.host.GetTransferMaps()
+	mp := m.host.GetMPool()
 	bigblk := false
 	for m.heap.Len() != 0 {
 		select {
@@ -188,14 +187,19 @@ func (m *merger[T]) merge(ctx context.Context) error {
 		}
 		rowIdx := m.rowIdx[objIdx]
 		for i := range m.buffer.Vecs {
-			err := m.buffer.Vecs[i].UnionOne(m.bats[objIdx].bat.Vecs[i], int64(rowIdx), m.host.GetMPool())
+			err := m.buffer.Vecs[i].UnionOne(m.bats[objIdx].bat.Vecs[i], int64(rowIdx), mp)
 			if err != nil {
 				return err
 			}
 		}
 
 		if m.host.DoTransfer() {
-			transferMaps[m.accObjBlkCnts[objIdx]+m.loadedObjBlkCnts[objIdx]-1][rowIdx] = api.TransferDestPos{
+			idx := m.accObjBlkCnts[objIdx] + m.loadedObjBlkCnts[objIdx] - 1
+			if transferMaps[idx] == nil {
+				// Pre-size to actual block row count to avoid bucket-growth rehashing.
+				transferMaps[idx] = make(api.TransferMap, m.df.length(objIdx))
+			}
+			transferMaps[idx][rowIdx] = api.TransferDestPos{
 				ObjIdx: uint8(m.stats.objCnt),
 				BlkIdx: uint16(m.stats.objBlkCnt),
 				RowIdx: uint32(m.stats.blkRowCnt),
@@ -204,7 +208,6 @@ func (m *merger[T]) merge(ctx context.Context) error {
 
 		m.stats.blkRowCnt++
 		m.stats.objRowCnt++
-		m.stats.mergedRowCnt++
 		if m.stats.blkRowCnt%100 == 0 {
 			bigblk = m.buffer.Size() > int(m.stats.targetObjSize)*3/2
 		}

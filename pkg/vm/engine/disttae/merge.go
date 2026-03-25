@@ -226,10 +226,9 @@ func (t *cnMergeTask) GetCommitEntry() *api.MergeCommitEntry {
 }
 
 func (t *cnMergeTask) InitTransferMaps(blkCnt int) {
+	// Maps are allocated lazily per-block in the merger/reshaper to avoid a large
+	// upfront memory spike (blkCnt × maxRows maps all pre-sized at once).
 	t.transferMaps = make(api.TransferMaps, blkCnt)
-	for i := range t.transferMaps {
-		t.transferMaps[i] = make(api.TransferMap, t.GetBlockMaxRows())
-	}
 }
 
 func (t *cnMergeTask) GetTransferMaps() api.TransferMaps {

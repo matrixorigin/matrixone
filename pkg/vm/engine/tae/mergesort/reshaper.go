@@ -42,6 +42,7 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 	maxRowCnt := host.GetBlockMaxRows()
 	accObjBlkCnts := host.GetAccBlkCnts()
 	transferMaps := host.GetTransferMaps()
+	mp := host.GetMPool()
 
 	var writer *ioutil.BlockWriter
 	var buffer *batch.Batch
@@ -67,14 +68,19 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 				}
 
 				for i := range buffer.Vecs {
-					err := buffer.Vecs[i].UnionOne(nextBatch.Vecs[i], int64(j), host.GetMPool())
+					err := buffer.Vecs[i].UnionOne(nextBatch.Vecs[i], int64(j), mp)
 					if err != nil {
 						return err
 					}
 				}
 
 				if host.DoTransfer() {
-					transferMaps[accObjBlkCnts[i]+loadedBlkCnt-1][uint32(j)] = api.TransferDestPos{
+					idx := accObjBlkCnts[i] + loadedBlkCnt - 1
+					if transferMaps[idx] == nil {
+						// Pre-size to actual batch row count to avoid bucket-growth rehashing.
+						transferMaps[idx] = make(api.TransferMap, nextBatch.RowCount())
+					}
+					transferMaps[idx][uint32(j)] = api.TransferDestPos{
 						ObjIdx: uint8(stats.objCnt),
 						BlkIdx: uint16(stats.objBlkCnt),
 						RowIdx: uint32(stats.blkRowCnt),
@@ -83,7 +89,6 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 
 				stats.blkRowCnt++
 				stats.objRowCnt++
-				stats.mergedRowCnt++
 
 				if stats.blkRowCnt == int(maxRowCnt) {
 					if writer == nil {
