@@ -1454,7 +1454,7 @@ select * from (select i_manufact_id, sum(ss_sales_price) sum_sales, avg(sum(ss_s
 select group_concat(c.column_name order by ordinal_position) key_columns  from information_schema.key_column_usage c where c.table_schema='test1' and c.table_name='region' and constraint_name='PRIMARY';
 drop database test;
 
--- issue #23940: window function with ORDER BY on varchar type
+-- window function with ORDER BY on varchar type
 drop database if exists test_issue_23940;
 create database test_issue_23940;
 use test_issue_23940;
