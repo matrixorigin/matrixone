@@ -24,23 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-// vectorAppendWildly is a more efficient version of vector.AppendFixed.
-// It ignores the const and null flags check, and uses a wilder way to append (avoiding the overhead of appending one by one).
-func vectorAppendWildly[T numeric | types.Decimal64 | types.Decimal128](v *vector.Vector, mp *mpool.MPool, value T) error {
-	oldLen := v.Length()
-	if oldLen == v.Capacity() {
-		if err := v.PreExtend(10, mp); err != nil {
-			return err
-		}
-	}
-	v.SetLength(oldLen + 1)
-
-	var vs []T
-	vector.ToSlice(v, &vs)
-	vs[oldLen] = value
-	return nil
-}
-
 // vectorUnmarshal is instead of vector.UnmarshalBinary.
 // it will check if mp is nil first.
 func vectorUnmarshal(v *vector.Vector, data []byte, mp *mpool.MPool) error {
@@ -405,13 +388,6 @@ func quickSelect[T numeric | types.Decimal64 | types.Decimal128](nums []T, lessF
 	default:
 		return quickSelect(highs, lessFnFactory, k-len(lows)-len(pivots))
 	}
-}
-
-// vectorAppendWildly is a more efficient version of vector.AppendFixed.
-// It ignores the const and null flags check, and uses a wilder way to append (avoiding the overhead of appending one by one).
-func vectorsAppendWildly[T numeric | types.Decimal64 | types.Decimal128](v *Vectors[T], mp *mpool.MPool, value T) error {
-	vec := v.getAppendableVector()
-	return vectorAppendWildly(vec, mp, value)
 }
 
 func AppendMultiFixed[T numeric | types.Decimal64 | types.Decimal128](vecs *Vectors[T], vals T, isNull bool, cnt int, mp *mpool.MPool) error {

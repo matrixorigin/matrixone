@@ -363,6 +363,9 @@ func (builder *QueryBuilder) remapWindowClause(
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
 		if exprImpl.Col.RelPos == windowTag && exprImpl.Col.ColPos == windowIdx {
+			// Each Window node appends exactly one local output column, so the
+			// current window result always lands at projectionSize regardless of
+			// its global windowIdx under the shared windowTag.
 			exprImpl.Col.Name = builder.nameByColRef[[2]int32{windowTag, windowIdx}]
 			exprImpl.Col.RelPos = -1
 			exprImpl.Col.ColPos = projectionSize
