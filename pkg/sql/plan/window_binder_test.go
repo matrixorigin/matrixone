@@ -378,8 +378,10 @@ func TestBindWindowFuncExprValidationAndHelpers(t *testing.T) {
 
 	t.Run("bindFuncExpr error propagates", func(t *testing.T) {
 		binder := &stubWindowBinder{
-			bindExprFunc:     func(tree.Expr, int32, bool) (*planpb.Expr, error) { return nil, nil },
-			bindFuncExprFunc: func(string, []tree.Expr, int32) (*planpb.Expr, error) { return nil, moerr.NewInternalErrorNoCtx("fail") },
+			bindExprFunc: func(tree.Expr, int32, bool) (*planpb.Expr, error) { return nil, nil },
+			bindFuncExprFunc: func(string, []tree.Expr, int32) (*planpb.Expr, error) {
+				return nil, moerr.NewInternalErrorNoCtx("fail")
+			},
 			makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) { return nil, nil },
 		}
 		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
@@ -391,8 +393,8 @@ func TestBindWindowFuncExprValidationAndHelpers(t *testing.T) {
 
 	t.Run("partition by bind error propagates", func(t *testing.T) {
 		binder := &stubWindowBinder{
-			bindExprFunc:     func(tree.Expr, int32, bool) (*planpb.Expr, error) { return nil, moerr.NewInternalErrorNoCtx("fail") },
-			bindFuncExprFunc: func(string, []tree.Expr, int32) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			bindExprFunc:       func(tree.Expr, int32, bool) (*planpb.Expr, error) { return nil, moerr.NewInternalErrorNoCtx("fail") },
+			bindFuncExprFunc:   func(string, []tree.Expr, int32) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
 			makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) { return nil, nil },
 		}
 		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
@@ -404,8 +406,8 @@ func TestBindWindowFuncExprValidationAndHelpers(t *testing.T) {
 
 	t.Run("order by bind error propagates", func(t *testing.T) {
 		binder := &stubWindowBinder{
-			bindExprFunc:     func(tree.Expr, int32, bool) (*planpb.Expr, error) { return nil, moerr.NewInternalErrorNoCtx("fail") },
-			bindFuncExprFunc: func(string, []tree.Expr, int32) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			bindExprFunc:       func(tree.Expr, int32, bool) (*planpb.Expr, error) { return nil, moerr.NewInternalErrorNoCtx("fail") },
+			bindFuncExprFunc:   func(string, []tree.Expr, int32) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
 			makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) { return nil, nil },
 		}
 		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
@@ -417,8 +419,8 @@ func TestBindWindowFuncExprValidationAndHelpers(t *testing.T) {
 
 	t.Run("nulls first flag is set", func(t *testing.T) {
 		binder := &stubWindowBinder{
-			bindExprFunc:     func(tree.Expr, int32, bool) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
-			bindFuncExprFunc: func(string, []tree.Expr, int32) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			bindExprFunc:       func(tree.Expr, int32, bool) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			bindFuncExprFunc:   func(string, []tree.Expr, int32) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
 			makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
 		}
 		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
@@ -431,8 +433,8 @@ func TestBindWindowFuncExprValidationAndHelpers(t *testing.T) {
 
 	t.Run("frame start unbounded following is rejected", func(t *testing.T) {
 		binder := &stubWindowBinder{
-			bindExprFunc:     func(tree.Expr, int32, bool) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
-			bindFuncExprFunc: func(string, []tree.Expr, int32) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			bindExprFunc:       func(tree.Expr, int32, bool) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			bindFuncExprFunc:   func(string, []tree.Expr, int32) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
 			makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
 		}
 		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
@@ -444,8 +446,8 @@ func TestBindWindowFuncExprValidationAndHelpers(t *testing.T) {
 
 	t.Run("frame start following with end preceding is rejected", func(t *testing.T) {
 		binder := &stubWindowBinder{
-			bindExprFunc:     func(tree.Expr, int32, bool) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
-			bindFuncExprFunc: func(string, []tree.Expr, int32) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			bindExprFunc:       func(tree.Expr, int32, bool) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			bindFuncExprFunc:   func(string, []tree.Expr, int32) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
 			makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
 		}
 		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
@@ -457,8 +459,8 @@ func TestBindWindowFuncExprValidationAndHelpers(t *testing.T) {
 
 	t.Run("frame start current row with end preceding is rejected", func(t *testing.T) {
 		binder := &stubWindowBinder{
-			bindExprFunc:     func(tree.Expr, int32, bool) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
-			bindFuncExprFunc: func(string, []tree.Expr, int32) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			bindExprFunc:       func(tree.Expr, int32, bool) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			bindFuncExprFunc:   func(string, []tree.Expr, int32) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
 			makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
 		}
 		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
@@ -470,8 +472,8 @@ func TestBindWindowFuncExprValidationAndHelpers(t *testing.T) {
 
 	t.Run("frame end unbounded preceding is rejected", func(t *testing.T) {
 		binder := &stubWindowBinder{
-			bindExprFunc:     func(tree.Expr, int32, bool) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
-			bindFuncExprFunc: func(string, []tree.Expr, int32) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			bindExprFunc:       func(tree.Expr, int32, bool) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			bindFuncExprFunc:   func(string, []tree.Expr, int32) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
 			makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
 		}
 		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
@@ -483,8 +485,8 @@ func TestBindWindowFuncExprValidationAndHelpers(t *testing.T) {
 
 	t.Run("range N preceding with multiple order by is rejected", func(t *testing.T) {
 		binder := &stubWindowBinder{
-			bindExprFunc:     func(tree.Expr, int32, bool) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
-			bindFuncExprFunc: func(string, []tree.Expr, int32) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			bindExprFunc:       func(tree.Expr, int32, bool) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			bindFuncExprFunc:   func(string, []tree.Expr, int32) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
 			makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
 		}
 		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
@@ -495,7 +497,7 @@ func TestBindWindowFuncExprValidationAndHelpers(t *testing.T) {
 					tree.NewOrder(testNumVal(2), tree.Ascending, tree.DefaultNullsPosition, false),
 				},
 				HasFrame: true,
-				Frame: &tree.FrameClause{Type: tree.Range, Start: &tree.FrameBound{Type: tree.Preceding, Expr: testNumVal(1)}, End: &tree.FrameBound{Type: tree.CurrentRow}},
+				Frame:    &tree.FrameClause{Type: tree.Range, Start: &tree.FrameBound{Type: tree.Preceding, Expr: testNumVal(1)}, End: &tree.FrameBound{Type: tree.CurrentRow}},
 			},
 			testNumVal(1)), 0, true)
 		require.Error(t, err)
@@ -503,8 +505,8 @@ func TestBindWindowFuncExprValidationAndHelpers(t *testing.T) {
 
 	t.Run("frame start val bind error propagates", func(t *testing.T) {
 		binder := &stubWindowBinder{
-			bindExprFunc:     func(tree.Expr, int32, bool) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
-			bindFuncExprFunc: func(string, []tree.Expr, int32) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			bindExprFunc:       func(tree.Expr, int32, bool) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			bindFuncExprFunc:   func(string, []tree.Expr, int32) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
 			makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) { return nil, moerr.NewInternalErrorNoCtx("fail") },
 		}
 		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
