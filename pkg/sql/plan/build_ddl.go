@@ -1210,9 +1210,6 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					if isEnumPlanType(&col.Typ) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ENUM column '%s' cannot be in secondary index", name))
 					}
-					if isSetPlanType(&col.Typ) {
-						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("SET column '%s' cannot be in secondary index", name))
-					}
 				}
 
 				indexs = append(indexs, name)

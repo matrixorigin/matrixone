@@ -44,6 +44,25 @@ select * from set01 order by colors;
 1  ¦  red  𝄀
 3  ¦  red,green  𝄀
 2  ¦  red,blue
+drop table if exists set_idx;
+create table set_idx (
+id int primary key,
+colors set('red', 'green', 'blue'),
+key idx_colors (colors)
+);
+show create table set_idx;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+set_idx  ¦  CREATE TABLE `set_idx` (
+  `id` int NOT NULL,
+  `colors` set('red','green','blue') DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_colors` (`colors`)
+)
+insert into set_idx values (1, 'red'), (2, 'red,green');
+select * from set_idx where colors = 'red,green' order by id;
+➤ id[4,32,0]  ¦  colors[12,-1,0]  𝄀
+2  ¦  red,green
+drop table set_idx;
 drop table if exists set_load;
 create table set_load (
 id int primary key,
@@ -123,8 +142,8 @@ drop table set_modify2;
 select distinct colors from set01 order by colors;
 ➤ colors[12,-1,0]  𝄀
 null  𝄀
-red,blue  𝄀
-red,green
+red,green  𝄀
+red,blue
 select colors, count(*) as cnt from set01 group by colors order by colors;
 ➤ colors[12,-1,0]  ¦  cnt[-5,64,0]  𝄀
 null  ¦  1  𝄀

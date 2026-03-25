@@ -3756,30 +3756,27 @@ func (builder *QueryBuilder) bindOrderBy(
 		}
 
 		// If the ORDER BY expression references a projected cast_index_to_value(enum_str, col),
-		// replace it with the original ENUM column so that sorting uses the internal integer
-		// value (definition order) instead of the string value (alphabetical order).
-		// Skip this unwrap when DISTINCT is active, because DISTINCT inserts an AGG node
-		// whose GroupBy only covers the original projection columns; appending a new
-		// project column here would create a reference the AGG node cannot resolve.
-		// TODO: Preserve the original enum/set index ordering for DISTINCT + ORDER BY
-		// without introducing extra projection columns that the rewritten AGG cannot bind.
-		if !ctx.isDistinct {
-			if col := expr.GetCol(); col != nil && col.RelPos == ctx.projectTag {
-				if projExpr := ctx.projects[col.ColPos]; projExpr != nil {
-					if fn := projExpr.GetF(); fn != nil &&
-						(fn.Func.ObjName == moEnumCastIndexToValueFun || fn.Func.ObjName == moSetCastIndexToValueFun) {
-						enumColExpr := fn.Args[1]
-						colPos := int32(len(ctx.projects))
-						ctx.projects = append(ctx.projects, enumColExpr)
-						expr = &plan.Expr{
-							Typ: enumColExpr.Typ,
-							Expr: &plan.Expr_Col{
-								Col: &plan.ColRef{
-									RelPos: ctx.projectTag,
-									ColPos: colPos,
-								},
+		// replace it with a hidden projection of the original ENUM/SET column so that sorting
+		// uses the internal definition order instead of the visible string order.
+		// This hidden raw key is a 1:1 mapping of the visible value, so keeping it through
+		// DISTINCT preserves dedup semantics and the final result projection trims it away.
+		if col := expr.GetCol(); col != nil && col.RelPos == ctx.projectTag {
+			if projExpr := ctx.projects[col.ColPos]; projExpr != nil {
+				if fn := projExpr.GetF(); fn != nil &&
+					(fn.Func.ObjName == moEnumCastIndexToValueFun || fn.Func.ObjName == moSetCastIndexToValueFun) {
+					orderKeyExpr := DeepCopyExpr(fn.Args[1])
+					colPos, appendErr := appendOrderByProjectExpr(ctx, orderKeyExpr)
+					if appendErr != nil {
+						return nil, appendErr
+					}
+					expr = &plan.Expr{
+						Typ: orderKeyExpr.Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: ctx.projectTag,
+								ColPos: colPos,
 							},
-						}
+						},
 					}
 				}
 			}
@@ -3808,6 +3805,28 @@ func (builder *QueryBuilder) bindOrderBy(
 	}
 
 	return
+}
+
+func appendOrderByProjectExpr(ctx *BindContext, expr *plan.Expr) (int32, error) {
+	protoSz := expr.ProtoSize()
+	if protoSz < 256 {
+		exprBytes := make([]byte, protoSz)
+		if _, err := expr.MarshalToSizedBuffer(exprBytes); err != nil {
+			return 0, err
+		}
+		exprStr := string(exprBytes)
+		if colPos, ok := ctx.projectByExpr[exprStr]; ok {
+			return colPos, nil
+		}
+		colPos := int32(len(ctx.projects))
+		ctx.projectByExpr[exprStr] = colPos
+		ctx.projects = append(ctx.projects, expr)
+		return colPos, nil
+	}
+
+	colPos := int32(len(ctx.projects))
+	ctx.projects = append(ctx.projects, expr)
+	return colPos, nil
 }
 
 func (builder *QueryBuilder) bindLimit(

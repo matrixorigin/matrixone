@@ -27,6 +27,17 @@ select * from set01 order by id;
 select * from set01 where colors = 'red,green' order by id;
 select * from set01 order by colors;
 
+drop table if exists set_idx;
+create table set_idx (
+    id int primary key,
+    colors set('red', 'green', 'blue'),
+    key idx_colors (colors)
+);
+show create table set_idx;
+insert into set_idx values (1, 'red'), (2, 'red,green');
+select * from set_idx where colors = 'red,green' order by id;
+drop table set_idx;
+
 drop table if exists set_load;
 create table set_load (
     id int primary key,
