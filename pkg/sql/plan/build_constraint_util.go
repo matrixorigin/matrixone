@@ -47,7 +47,6 @@ type dmlSelectInfo struct {
 
 	onDuplicateIdx      []int32
 	onDuplicateExpr     map[string]*Expr
-	onDuplicateNeedAgg  bool // if table have pk & unique key, that will be true.
 	onDuplicateIsIgnore bool
 }
 
@@ -803,7 +802,6 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			info.rootId = newRootId
 			info.onDuplicateIdx = idxs
 			info.onDuplicateExpr = updateExprs
-			info.onDuplicateNeedAgg = len(uniqueCols) > 1
 			info.onDuplicateIsIgnore = isIgnore
 
 			// append ProjectNode

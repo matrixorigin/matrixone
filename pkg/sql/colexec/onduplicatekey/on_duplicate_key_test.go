@@ -84,6 +84,85 @@ func TestOnDuplicateKey(t *testing.T) {
 	}
 }
 
+func TestCheckConflictReturnsBatchRowIndex(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	intType := types.T_int64.ToType()
+	oldBExpr := &plan.Expr{
+		Typ: plan2.MakePlan2Type(&intType),
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: 0,
+			},
+		},
+	}
+	newBExpr := &plan.Expr{
+		Typ: plan2.MakePlan2Type(&intType),
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 1,
+				ColPos: 2,
+			},
+		},
+	}
+	oldCExpr := &plan.Expr{
+		Typ: plan2.MakePlan2Type(&intType),
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: 1,
+			},
+		},
+	}
+	newCExpr := &plan.Expr{
+		Typ: plan2.MakePlan2Type(&intType),
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 1,
+				ColPos: 3,
+			},
+		},
+	}
+
+	bExpr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "=", []*plan.Expr{oldBExpr, newBExpr})
+	require.NoError(t, err)
+	cExpr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "=", []*plan.Expr{oldCExpr, newCExpr})
+	require.NoError(t, err)
+
+	executors, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, []*plan.Expr{bExpr, cExpr})
+	require.NoError(t, err)
+	defer func() {
+		for _, executor := range executors {
+			executor.Free()
+		}
+	}()
+
+	newBatch := batch.New([]string{"b", "c"})
+	newBatch.Vecs = []*vector.Vector{
+		testutil.MakeInt64Vector([]int64{10}, nil, proc.Mp()),
+		testutil.MakeInt64Vector([]int64{21}, nil, proc.Mp()),
+	}
+	newBatch.SetRowCount(1)
+	defer newBatch.Clean(proc.Mp())
+
+	checkConflictBatch := batch.New([]string{"b", "c", "b", "c"})
+	checkConflictBatch.Vecs = []*vector.Vector{
+		testutil.MakeInt64Vector([]int64{99}, nil, proc.Mp()),
+		testutil.MakeInt64Vector([]int64{21}, nil, proc.Mp()),
+		testutil.MakeInt64Vector([]int64{0}, nil, proc.Mp()),
+		testutil.MakeInt64Vector([]int64{0}, nil, proc.Mp()),
+	}
+	checkConflictBatch.SetRowCount(1)
+	defer checkConflictBatch.Clean(proc.Mp())
+
+	conflictRowIdx, conflictMsg, err := checkConflict(proc, newBatch, checkConflictBatch, executors, []string{"b", "c"}, 2)
+	require.NoError(t, err)
+	require.Equal(t, 0, conflictRowIdx)
+	require.Equal(t, "Duplicate entry for key 'c'", conflictMsg)
+}
+
 func resetChildren(arg *OnDuplicatekey, m *mpool.MPool) {
 	bat := batch.New([]string{"a", "b", "a", "b", catalog.Row_ID})
 	vecs := make([]*vector.Vector, 5)

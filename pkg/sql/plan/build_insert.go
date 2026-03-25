@@ -129,68 +129,6 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		}
 
 		dupProjection := getProjectionByLastNode(builder, lastNodeId)
-		// if table have pk & unique key. we need append an agg node before on_duplicate_key
-		if rewriteInfo.onDuplicateNeedAgg {
-			colLen := len(tableDef.Cols)
-			aggGroupBy := make([]*Expr, 0, colLen)
-			aggList := make([]*Expr, 0, len(dupProjection)-colLen)
-			aggProject := make([]*Expr, 0, len(dupProjection))
-			for i := 0; i < len(dupProjection); i++ {
-				if i < colLen {
-					aggGroupBy = append(aggGroupBy, &Expr{
-						Typ: dupProjection[i].Typ,
-						Expr: &plan.Expr_Col{
-							Col: &ColRef{
-								ColPos: int32(i),
-							},
-						},
-					})
-					aggProject = append(aggProject, &Expr{
-						Typ: dupProjection[i].Typ,
-						Expr: &plan.Expr_Col{
-							Col: &ColRef{
-								RelPos: -1,
-								ColPos: int32(i),
-							},
-						},
-					})
-				} else {
-					aggExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "any_value", []*Expr{
-						{
-							Typ: dupProjection[i].Typ,
-							Expr: &plan.Expr_Col{
-								Col: &ColRef{
-									ColPos: int32(i),
-								},
-							},
-						},
-					})
-					if err != nil {
-						return nil, err
-					}
-					aggList = append(aggList, aggExpr)
-					aggProject = append(aggProject, &Expr{
-						Typ: dupProjection[i].Typ,
-						Expr: &plan.Expr_Col{
-							Col: &ColRef{
-								RelPos: -2,
-								ColPos: int32(i),
-							},
-						},
-					})
-				}
-			}
-
-			aggNode := &Node{
-				NodeType:    plan.Node_AGG,
-				Children:    []int32{lastNodeId},
-				GroupBy:     aggGroupBy,
-				AggList:     aggList,
-				ProjectList: aggProject,
-				SpillMem:    builder.aggSpillMem,
-			}
-			lastNodeId = builder.appendNode(aggNode, bindCtx)
-		}
 		// construct the attrs and insertColCount for on_duplicate_key node
 		attrs := make([]string, 0)
 		insertColCount := int32(0)
