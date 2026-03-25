@@ -24,6 +24,7 @@ import "C"
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"runtime"
+	"sync"
 	"unsafe"
 )
 
@@ -289,5 +290,68 @@ func GpuFreePinned(ptr unsafe.Pointer) error {
 		C.free(unsafe.Pointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
+	return nil
+}
+
+// PinnedPool is a pool of pinned memory allocations.
+// It shares the same API as sync.Pool.
+type PinnedPool struct {
+	// New optionally specifies a function to generate
+	// a value when Get would otherwise return nil.
+	New func() unsafe.Pointer
+
+	mu    sync.Mutex
+	items []unsafe.Pointer
+}
+
+// NewPinnedPool creates a new PinnedPool and sets a finalizer to
+// automatically call Destroy when the pool is garbage collected.
+// Note: If the pool is stored in a global variable, it will never be GC'd.
+func NewPinnedPool(newFunc func() unsafe.Pointer) *PinnedPool {
+	p := &PinnedPool{New: newFunc}
+	runtime.SetFinalizer(p, func(obj *PinnedPool) {
+		obj.Destroy()
+	})
+	return p
+}
+
+// Get selects an arbitrary item from the PinnedPool, removes it from the
+// PinnedPool, and returns it to the caller.
+// Get may return nil if the pool is empty and New is nil.
+func (p *PinnedPool) Get() unsafe.Pointer {
+	p.mu.Lock()
+	if len(p.items) == 0 {
+		p.mu.Unlock()
+		if p.New != nil {
+			return p.New()
+		}
+		return nil
+	}
+	item := p.items[len(p.items)-1]
+	p.items = p.items[:len(p.items)-1]
+	p.mu.Unlock()
+	return item
+}
+
+// Put adds x to the pool.
+func (p *PinnedPool) Put(x unsafe.Pointer) {
+	if x == nil {
+		return
+	}
+	p.mu.Lock()
+	p.items = append(p.items, x)
+	p.mu.Unlock()
+}
+
+// Destroy frees all pinned memory currently held in the pool.
+func (p *PinnedPool) Destroy() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, item := range p.items {
+		if err := GpuFreePinned(item); err != nil {
+			return err
+		}
+	}
+	p.items = nil
 	return nil
 }

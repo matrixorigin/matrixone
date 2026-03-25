@@ -35,7 +35,11 @@ void gpu_pairwise_distance(const void* x,
     try {
         if (!x || !y || !dist || n_x == 0 || n_y == 0 || dim == 0) return;
 
-        RAFT_CUDA_TRY(cudaSetDevice(device_id));
+        static thread_local int current_device = -1;
+        if (current_device != device_id) {
+            RAFT_CUDA_TRY(cudaSetDevice(device_id));
+            current_device = device_id;
+        }
         const raft::resources& res = matrixone::get_raft_resources();
 
         if (qtype == Quantization_F32) {
