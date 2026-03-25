@@ -86,13 +86,6 @@ func isAllDigit(s string) bool {
 	return true
 }
 
-func toNumber(s string) (result int64) {
-	for _, c := range s {
-		result = 10*result + int64(c-'0')
-	}
-	return
-}
-
 // rewrite ParseDateCast, don't use regexp, that's too slow
 // the format we need to support:
 // 1.yyyy-mm-dd hh:mm:ss.ms or yyyy-mm-dd hh:mm: or yyyy-mm-dd hh:mm

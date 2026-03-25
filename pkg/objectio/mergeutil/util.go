@@ -178,27 +178,6 @@ func (m *merge[T]) getNextPos() (batchIndex, rowIndex, size int) {
 	return
 }
 
-func (m *merge[T]) pushNext() *heapElem[T] {
-	if m.size == 0 {
-		return nil
-	}
-	data := heapPop(m.heap)
-	batchIndex := data.batIndex
-	m.rowIdx[batchIndex]++
-	if m.rowIdx[batchIndex] >= m.ds.length(batchIndex) {
-		m.rowIdx[batchIndex] = -1
-		m.size--
-	}
-	if m.rowIdx[batchIndex] != -1 {
-		heapPush(m.heap, heapElem[T]{
-			data:     m.ds.at(batchIndex, m.rowIdx[batchIndex]),
-			isNull:   m.nulls[batchIndex].Contains(uint64(m.rowIdx[batchIndex])),
-			batIndex: batchIndex,
-			rowIndex: m.rowIdx[batchIndex],
-		})
-	}
-	return &data
-}
 
 type heapSlice[T any] struct {
 	lessFunc sort.LessFunc[T]
