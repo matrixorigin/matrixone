@@ -123,6 +123,11 @@ func TestProjectionAndHavingBinderBindExprOnWindowAlias(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, bindCtx.windowTag, projExpr.GetCol().RelPos)
 	require.Equal(t, int32(0), projExpr.GetCol().ColPos)
+
+	// insideAgg=true should NOT resolve window alias via windowByAst
+	havingBinder.insideAgg = true
+	_, err = havingBinder.BindExpr(windowExpr, 0, true)
+	require.Error(t, err)
 }
 
 func TestProjectionBinderBindWinFuncCachesWindowExpr(t *testing.T) {

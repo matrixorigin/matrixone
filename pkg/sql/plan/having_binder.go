@@ -80,16 +80,18 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 		}, nil
 	}
 
-	if colPos, ok := b.ctx.windowByAst[astStr]; ok {
-		return &plan.Expr{
-			Typ: b.ctx.windows[colPos].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: b.ctx.windowTag,
-					ColPos: colPos,
+	if !b.insideAgg {
+		if colPos, ok := b.ctx.windowByAst[astStr]; ok {
+			return &plan.Expr{
+				Typ: b.ctx.windows[colPos].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: b.ctx.windowTag,
+						ColPos: colPos,
+					},
 				},
-			},
-		}, nil
+			}, nil
+		}
 	}
 
 	return b.baseBindExpr(astExpr, depth, isRoot)
