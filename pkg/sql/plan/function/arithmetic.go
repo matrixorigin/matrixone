@@ -243,6 +243,10 @@ func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 		return nil
 	}
 
+	// Result-type driven: handles cross-type promotions where inputs may not
+	// yet be decimal256 but the planner chose decimal256 as the result type
+	// (e.g. decimal128 + int64 → decimal256).  The paramType-based switch
+	// below covers the case where inputs are already decimal256.
 	if resultType.Oid == types.T_decimal256 {
 		if err := decimalArith[types.Decimal256](parameters, result, proc, length, func(v1, v2 types.Decimal256, scale1, scale2 int32) (types.Decimal256, error) {
 			r, _, err := v1.Add(v2, scale1, scale2)
