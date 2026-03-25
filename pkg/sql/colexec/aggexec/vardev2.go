@@ -70,35 +70,45 @@ func (exec *varStdDevExec[T, A]) BatchFill(offset int, groups []uint64, vectors 
 		return exec.batchFillArgs(offset, groups, vectors, true)
 	}
 
+	vec := vectors[0]
+	scale := exec.aggInfo.argTypes[0].Scale
+	lastX := -1
+	var cnts []int64
+	var sums []float64
+	var sumsqs []float64
+
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
 			continue
 		}
-
 		idx := uint64(i) + uint64(offset)
-		if vectors[0].IsNull(idx) {
+		if vec.IsNull(idx) {
 			continue
-		} else {
-			x, y := exec.getXY(grp - 1)
-			cnts := vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[0])
-			sums := vector.MustFixedColNoTypeCheck[float64](exec.state[x].vecs[1])
-			sumsqs := vector.MustFixedColNoTypeCheck[float64](exec.state[x].vecs[2])
-			val := vector.GetFixedAtNoTypeCheck[A](vectors[0], int(idx))
-			fv := exec.a2f(val, exec.aggInfo.argTypes[0].Scale)
-			s := sums[y] + fv
-			if err := float64OfCheck(0, 0, s); err != nil {
-				return err
-			}
-
-			s2 := sumsqs[y] + fv*fv
-			if err := float64OfCheck(0, 0, s2); err != nil {
-				return err
-			}
-
-			sums[y] = s
-			sumsqs[y] = s2
-			cnts[y] += 1
 		}
+
+		x, y := exec.getXY(grp - 1)
+		if x != lastX {
+			lastX = x
+			cnts = vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[0])
+			sums = vector.MustFixedColNoTypeCheck[float64](exec.state[x].vecs[1])
+			sumsqs = vector.MustFixedColNoTypeCheck[float64](exec.state[x].vecs[2])
+		}
+
+		val := vector.GetFixedAtNoTypeCheck[A](vec, int(idx))
+		fv := exec.a2f(val, scale)
+		s := sums[y] + fv
+		if err := float64OfCheck(0, 0, s); err != nil {
+			return err
+		}
+
+		s2 := sumsqs[y] + fv*fv
+		if err := float64OfCheck(0, 0, s2); err != nil {
+			return err
+		}
+
+		sums[y] = s
+		sumsqs[y] = s2
+		cnts[y] += 1
 	}
 	return nil
 }

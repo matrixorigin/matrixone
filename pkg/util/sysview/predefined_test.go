@@ -1,4 +1,4 @@
-// Copyright 2021 - 2022 Matrix Origin
+// Copyright 2025 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,14 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package plan
+package sysview
 
-const (
-	moEnumCastIndexToValueFun      = "cast_index_to_value"
-	moEnumCastValueToIndexFun      = "cast_value_to_index"
-	moEnumCastIndexValueToIndexFun = "cast_index_value_to_index"
+import (
+	"strings"
+	"testing"
 
-	moSetCastIndexToValueFun      = "cast_index_to_set_value"
-	moSetCastValueToIndexFun      = "cast_set_value_to_index"
-	moSetCastIndexValueToIndexFun = "cast_set_index_value_to_index"
+	"github.com/stretchr/testify/assert"
 )
+
+func TestInformationSchemaStatisticsDDL_ContainsIdxAlgo(t *testing.T) {
+	assert.True(t, strings.Contains(InformationSchemaStatisticsDDL, "`idx`.`algo` AS `INDEX_TYPE`"))
+	assert.False(t, strings.Contains(InformationSchemaStatisticsDDL, "NULL AS `INDEX_TYPE`"))
+}

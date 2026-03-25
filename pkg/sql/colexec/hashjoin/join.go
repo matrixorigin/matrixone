@@ -279,7 +279,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 			ctr.spillQueue = make([]spillBucket, len(spilledBuildBuckets))
 			for i, buildFile := range spilledBuildBuckets {
 				baseName := buildFile[len("join_") : len(buildFile)-len("_build")]
-				ctr.spillQueue[i] = spillBucket{buildFile: buildFile, baseName: baseName, depth: 0}
+				ctr.spillQueue[i] = spillBucket{buildFile: buildFile, baseName: baseName, depth: 1}
 			}
 
 			// Create writers for probe side (files created lazily on first write)

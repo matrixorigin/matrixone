@@ -9670,6 +9670,75 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `cast_index_to_set_value`
+	{
+		functionId: CAST_INDEX_TO_SET_VALUE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar, types.T_uint64},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CastSetIndexToValue
+				},
+			},
+		},
+	},
+
+	// function `cast_set_value_to_index`
+	{
+		functionId: CAST_SET_VALUE_TO_INDEX,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar, types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CastSetValueToIndex
+				},
+			},
+		},
+	},
+
+	// function `cast_set_index_value_to_index`
+	{
+		functionId: CAST_SET_INDEX_VALUE_TO_INDEX,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar, types.T_uint64},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CastSetIndexValueToIndex
+				},
+			},
+		},
+	},
+
 	// function `cast_nano_to_timestamp`
 	{
 		functionId: CAST_NANO_TO_TIMESTAMP,

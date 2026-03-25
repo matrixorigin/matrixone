@@ -43,9 +43,10 @@ func (ctr *container) flushBucketBuffer(proc *process.Process, bat *batch.Batch,
 	cnt := int64(bat.RowCount())
 	ctr.spillWriteBuf.Reset()
 	ctr.spillWriteBuf.Write(types.EncodeInt64(&cnt))
-	// Reserve space for batchSize
+	// Reserve space for batchSize (filled in after marshalling)
 	batchSizePos := ctr.spillWriteBuf.Len()
-	ctr.spillWriteBuf.Write(types.EncodeInt64(new(int64)))
+	var zero int64
+	ctr.spillWriteBuf.Write(types.EncodeInt64(&zero))
 
 	// Write batch data directly to spillWriteBuf
 	batchStartPos := ctr.spillWriteBuf.Len()
@@ -101,8 +102,11 @@ func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *b
 		return nil
 	}
 
-	// Evaluate hash keys using pre-initialized executors
-	keyVecs := make([]*vector.Vector, len(executors))
+	// Evaluate hash keys using pre-initialized executors (reuse cached slice)
+	if cap(ctr.spillKeyVecs) < len(executors) {
+		ctr.spillKeyVecs = make([]*vector.Vector, len(executors))
+	}
+	keyVecs := ctr.spillKeyVecs[:len(executors)]
 	for i, exec := range executors {
 		vec, err := exec.Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
@@ -128,41 +132,25 @@ func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *b
 	}
 	bucketRowIds := ctr.spillBucketRowIds[:spillNumBuckets]
 
-	// Pre-count rows per bucket to pre-allocate slices and avoid repeated append reallocations
-	var bktCounts [spillNumBuckets]int32
-	for row := 0; row < rowCount; row++ {
-		bktCounts[hashValues[row]&(spillNumBuckets-1)]++
-	}
-
-	// Pre-allocate bucket slices to exact size needed
+	// Single pass: reset and distribute row indices into buckets.
 	for i := 0; i < spillNumBuckets; i++ {
-		if bktCounts[i] > 0 {
-			if cap(bucketRowIds[i]) < int(bktCounts[i]) {
-				bucketRowIds[i] = make([]int32, 0, bktCounts[i])
-			} else {
-				bucketRowIds[i] = bucketRowIds[i][:0]
-			}
-		} else {
-			bucketRowIds[i] = bucketRowIds[i][:0]
-		}
+		bucketRowIds[i] = bucketRowIds[i][:0]
 	}
-
-	// Fill bucket slices with row indices
 	for row := 0; row < rowCount; row++ {
-		bucketId := hashValues[row] & (spillNumBuckets - 1)
-		bucketRowIds[bucketId] = append(bucketRowIds[bucketId], int32(row))
+		b := hashValues[row] & (spillNumBuckets - 1)
+		bucketRowIds[b] = append(bucketRowIds[b], int32(row))
 	}
 
-	// Collect non-empty buckets once to avoid iterating all 32 when data is sparse
-	nonEmptyBuckets := make([]int, 0, spillNumBuckets)
+	// Collect non-empty buckets (reuse cached slice).
+	ctr.spillNonEmptyBuckets = ctr.spillNonEmptyBuckets[:0]
 	for i := 0; i < spillNumBuckets; i++ {
-		if bktCounts[i] > 0 {
-			nonEmptyBuckets = append(nonEmptyBuckets, i)
+		if len(bucketRowIds[i]) > 0 {
+			ctr.spillNonEmptyBuckets = append(ctr.spillNonEmptyBuckets, i)
 		}
 	}
 
 	// Add rows to buffers and flush when needed
-	for _, bucketId := range nonEmptyBuckets {
+	for _, bucketId := range ctr.spillNonEmptyBuckets {
 		sels := bucketRowIds[bucketId]
 
 		buf := buffers[bucketId]
@@ -287,34 +275,40 @@ func (hashBuild *HashBuild) shouldSpillBatches() bool {
 	}
 }
 
-// computeXXHash computes xxhash values for partitioning
-// Encodes key vectors and hashes them directly with xxhash
+// hashCombine merges a new hash value into a running hash state (Boost-style).
+func hashCombine(h, val uint64) uint64 {
+	return h ^ (val + 0x9e3779b97f4a7c15 + (h << 6) + (h >> 2))
+}
+
+// computeXXHash computes hash values for spill-partitioning using
+// column-at-a-time processing for better cache locality.
+// Each column is processed in a tight loop over all rows, avoiding
+// per-row buffer concatenation and giving sequential vector access.
 func computeXXHash(keyVecs []*vector.Vector, hashValues []uint64) error {
 	if len(keyVecs) == 0 || len(hashValues) == 0 {
 		return nil
 	}
 
 	rowCount := len(hashValues)
-	buf := make([]byte, 0, 128)
-
 	for i := 0; i < rowCount; i++ {
-		buf = buf[:0]
+		hashValues[i] = 0
+	}
 
-		// Encode all key columns for this row
-		for _, vec := range keyVecs {
-			// For constant vectors, always use index 0
-			idx := i
-			if vec.IsConst() {
-				idx = 0
-			} else if i >= vec.Length() {
-				continue
+	for _, vec := range keyVecs {
+		if vec.IsConst() {
+			colHash := xxhash.Sum64(vec.GetRawBytesAt(0))
+			for i := 0; i < rowCount; i++ {
+				hashValues[i] = hashCombine(hashValues[i], colHash)
 			}
-
-			buf = append(buf, vec.GetRawBytesAt(idx)...)
+		} else {
+			n := rowCount
+			if vec.Length() < n {
+				n = vec.Length()
+			}
+			for i := 0; i < n; i++ {
+				hashValues[i] = hashCombine(hashValues[i], xxhash.Sum64(vec.GetRawBytesAt(i)))
+			}
 		}
-
-		// Compute xxhash
-		hashValues[i] = xxhash.Sum64(buf)
 	}
 
 	return nil

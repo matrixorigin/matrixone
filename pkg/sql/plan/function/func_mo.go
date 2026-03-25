@@ -1059,6 +1059,87 @@ func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultW
 	return nil
 }
 
+// set("a","b","c") -> CastSetIndexToValue(3) -> "a,b"
+func CastSetIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	typeSets := vector.GenerateFunctionStrParameter(ivecs[0])
+	indexes := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		typeSet, typeSetNull := typeSets.GetStrValue(i)
+		indexVal, indexNull := indexes.GetValue(i)
+		if typeSetNull || indexNull {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		setValue, err := types.ParseSetIndex(functionUtil.QuickBytesToStr(typeSet), indexVal)
+		if err != nil {
+			return err
+		}
+		if err = rs.AppendBytes([]byte(setValue), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// set("a","b","c") -> CastSetValueToIndex("a,b") -> 3
+func CastSetValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[uint64](result)
+	typeSets := vector.GenerateFunctionStrParameter(ivecs[0])
+	setValues := vector.GenerateFunctionStrParameter(ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		typeSet, typeSetNull := typeSets.GetStrValue(i)
+		setValue, setValueNull := setValues.GetStrValue(i)
+		if typeSetNull || setValueNull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		index, err := types.ParseSet(functionUtil.QuickBytesToStr(typeSet), functionUtil.QuickBytesToStr(setValue))
+		if err != nil {
+			return err
+		}
+		if err = rs.Append(index, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// set("a","b","c") -> CastSetIndexValueToIndex(3) -> 3
+func CastSetIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[uint64](result)
+	typeSets := vector.GenerateFunctionStrParameter(ivecs[0])
+	setIndexValues := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		typeSet, typeSetNull := typeSets.GetStrValue(i)
+		setIndexValue, setIndexNull := setIndexValues.GetValue(i)
+		if typeSetNull || setIndexNull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		index, err := types.ParseSetValue(functionUtil.QuickBytesToStr(typeSet), setIndexValue)
+		if err != nil {
+			return err
+		}
+		if err = rs.Append(index, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // CastNanoToTimestamp returns timestamp string according to the nano
 func CastNanoToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)

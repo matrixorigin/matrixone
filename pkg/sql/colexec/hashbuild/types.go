@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -47,10 +48,12 @@ type container struct {
 	spillThreshold  int64
 
 	// reusable buffers for spill operations
-	spillHashValues   []uint64
-	spillBucketRowIds [][]int32
-	spillWriteBuf     bytes.Buffer
-	spillBuffers      []*batch.Batch // pool of reusable bucket buffers
+	spillHashValues      []uint64
+	spillBucketRowIds    [][]int32
+	spillWriteBuf        bytes.Buffer
+	spillBuffers         []*batch.Batch // pool of reusable bucket buffers
+	spillKeyVecs         []*vector.Vector
+	spillNonEmptyBuckets []int
 
 	// cached expression executors for spill (reused across batches)
 	spillExprExecs []colexec.ExpressionExecutor

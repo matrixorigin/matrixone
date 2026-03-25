@@ -21,7 +21,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -1129,8 +1128,13 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 				},
 			},
 		}
-		if tableDef.Cols[colIdx].Typ.Id == int32(types.T_enum) {
+		if isEnumPlanType(&tableDef.Cols[colIdx].Typ) {
 			projExpr, err = funcCastForEnumType(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
+			if err != nil {
+				return 0, nil, nil, err
+			}
+		} else if isSetPlanType(&tableDef.Cols[colIdx].Typ) {
+			projExpr, err = funcCastForSetType(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
 			if err != nil {
 				return 0, nil, nil, err
 			}
@@ -1367,7 +1371,7 @@ func (builder *QueryBuilder) buildValueScan(
 			binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
 			binder.builder = builder
 			for _, r := range stmt.Rows {
-				if nv, ok := r[i].(*tree.NumVal); ok {
+				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) {
 					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp)
 					if err != nil {
 						return 0, err
@@ -1390,8 +1394,13 @@ func (builder *QueryBuilder) buildValueScan(
 					if err != nil {
 						return 0, err
 					}
-					if col.Typ.Id == int32(types.T_enum) {
+					if isEnumPlanType(&col.Typ) {
 						defExpr, err = funcCastForEnumType(builder.GetContext(), defExpr, col.Typ)
+						if err != nil {
+							return 0, err
+						}
+					} else if isSetPlanType(&col.Typ) {
+						defExpr, err = funcCastForSetType(builder.GetContext(), defExpr, col.Typ)
 						if err != nil {
 							return 0, err
 						}
