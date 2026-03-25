@@ -734,6 +734,15 @@ func (dedupJoin *DedupJoin) checkSnapshotAdvancedDuplicates(proc *process.Proces
 		// range overlap) and can produce false positives.  By triggering a
 		// statement retry the probe side will re-scan at the new snapshot
 		// and return an accurate DuplicateEntry if the conflict is real.
+		//
+		// Advance StmtSnapshotTS to the current snapshot (T₁) so that on
+		// retry InitialSnapshotTS starts from T₁, not the original T₀.
+		// prepareRetry preserves StmtSnapshotTS, so without this the retry
+		// would re-check the same [T₀, +∞) window and the probabilistic
+		// check could livelock indefinitely.  After the advance, if Lock
+		// does not push the snapshot further, InitialSnapshotTS == SnapshotTS
+		// and the check is skipped entirely.
+		proc.SetStmtSnapshotTS(currentTS)
 		return moerr.NewTxnNeedRetry(proc.Ctx)
 	}
 

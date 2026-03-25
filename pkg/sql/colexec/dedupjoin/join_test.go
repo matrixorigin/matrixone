@@ -544,6 +544,9 @@ func TestCheckSnapshotAdvancedDuplicates_ReturnsDuplicate(t *testing.T) {
 	err := arg.checkSnapshotAdvancedDuplicates(proc)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry))
+	// StmtSnapshotTS must be advanced to currentTS so that prepareRetry
+	// carries T₁ (not T₀) into the next attempt, preventing livelock.
+	require.Equal(t, currentTS, proc.GetStmtSnapshotTS())
 }
 
 // Regression test for issue #23943: sysbench false-positive duplicate entry.
@@ -600,6 +603,8 @@ func TestCheckSnapshotAdvancedDuplicates_FalsePositive(t *testing.T) {
 	// After fix: ErrTxnNeedRetry (triggers transparent retry)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry))
+	// StmtSnapshotTS must be advanced to currentTS to prevent livelock on retry.
+	require.Equal(t, currentTS, proc.GetStmtSnapshotTS())
 }
 
 func TestResolveTargetRelation_DetectsDefinitionChange(t *testing.T) {
