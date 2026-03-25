@@ -189,10 +189,10 @@ public:
         auto dataset_device_t = raft::make_device_matrix<T, int64_t>(
             *res, static_cast<int64_t>(this->count), static_cast<int64_t>(this->dimension));
         raft::copy(*res, dataset_device_t.view(), raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
-        raft::resource::sync_stream(*res);
 
         auto dataset_device_f = raft::make_device_matrix<float, int64_t>(*res, (int64_t)this->count, (int64_t)this->dimension);
         raft::copy(*res, dataset_device_f.view(), dataset_device_t.view());
+        raft::resource::sync_stream(*res);
 
         cuvs::cluster::kmeans::params kmeans_params;
         kmeans_params.n_clusters = this->build_params.k;
@@ -226,16 +226,9 @@ public:
                 auto dataset_device_t = raft::make_device_matrix<T, int64_t>(
                     *res, static_cast<int64_t>(this->count), static_cast<int64_t>(this->dimension));
                 raft::copy(*res, dataset_device_t.view(), raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
-                raft::resource::sync_stream(*res);
 
                 auto dataset_device_f = raft::make_device_matrix<float, int64_t>(*res, (int64_t)this->count, (int64_t)this->dimension);
-                if constexpr (std::is_same_v<T, float>) {
-                    raft::copy(*res, dataset_device_f.view(), dataset_device_t.view());
-                } else if constexpr (std::is_same_v<T, half>) {
-                    raft::copy(*res, dataset_device_f.view(), dataset_device_t.view());
-                } else if constexpr (sizeof(T) == 1) {
-                    raft::copy(*res, dataset_device_f.view(), dataset_device_t.view());
-                }
+                raft::copy(*res, dataset_device_f.view(), dataset_device_t.view());
                 raft::resource::sync_stream(*res);
 
                 cuvs::cluster::kmeans::params kmeans_params;
@@ -246,7 +239,7 @@ public:
 
                 centroids_ = std::make_unique<raft::device_matrix<float, int64_t>>(
                     raft::make_device_matrix<float, int64_t>(*res, (int64_t)kmeans_params.n_clusters, (int64_t)this->dimension));
-                
+        
                 float inertia;
                 int64_t n_iter;
                 cuvs::cluster::kmeans::fit(*res, kmeans_params, dataset_device_f.view(), std::nullopt, centroids_->view(), 
@@ -274,22 +267,10 @@ public:
             
             if constexpr (std::is_same_v<T, float>) {
                 raft::copy(*res, queries_device_f.view(), raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
-                raft::resource::sync_stream(*res);
             } else {
                 auto queries_device_t = raft::make_device_matrix<T, int64_t>(*res, static_cast<int64_t>(num_queries), static_cast<int64_t>(this->dimension));
                 raft::copy(*res, queries_device_t.view(), raft::make_host_matrix_view<const T, int64_t>(queries_data, num_queries, this->dimension));
-                raft::resource::sync_stream(*res);
-                
-                if constexpr (std::is_same_v<T, half>) {
-                    raft::copy(*res, queries_device_f.view(), queries_device_t.view());
-                    raft::resource::sync_stream(*res);
-                } else if constexpr (sizeof(T) == 1) {
-                    // For 1-byte quantized types, cuVS requires float inputs for kmeans predict
-                    // Unfortunately, we don't have a de-quantize method in scalar_quantizer_t easily accessible here.
-                    // For now, cast directly, though this might be inaccurate if actual dequantization is needed.
-                    raft::copy(*res, queries_device_f.view(), queries_device_t.view());
-                    raft::resource::sync_stream(*res);
-                }
+                raft::copy(*res, queries_device_f.view(), queries_device_t.view());
             }
             raft::resource::sync_stream(*res);
 
