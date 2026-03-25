@@ -20,13 +20,13 @@ INSERT INTO t_mixed_charset VALUES (
 0x48656C6C6F
 );
 SELECT * FROM t_mixed_charset ORDER BY id;
-id    col_utf8    col_utf8mb4    col_binary
-1    ASCII text    Unicode text 你好 😀    Binary data
-2    Test    テスト    Hello
+➤ id[4,32,0]  ¦  col_utf8[12,-1,0]  ¦  col_utf8mb4[12,-1,0]  ¦  col_binary[12,300,0]  𝄀
+1  ¦  ASCII text  ¦  Unicode text 你好 😀  ¦  Binary data  𝄀
+2  ¦  Test  ¦  テスト  ¦  Hello
 SELECT id, LENGTH(col_utf8), LENGTH(col_utf8mb4), LENGTH(col_binary) FROM t_mixed_charset ORDER BY id;
-id    LENGTH(col_utf8)    LENGTH(col_utf8mb4)    LENGTH(col_binary)
-1    10    24    11
-2    4    9    5
+➤ id[4,32,0]  ¦  LENGTH(col_utf8)[-5,64,0]  ¦  LENGTH(col_utf8mb4)[-5,64,0]  ¦  LENGTH(col_binary)[-5,64,0]  𝄀
+1  ¦  10  ¦  24  ¦  11  𝄀
+2  ¦  4  ¦  9  ¦  5
 CREATE TABLE t_coerce1 (
 id INT PRIMARY KEY,
 name VARCHAR(100)
@@ -38,10 +38,10 @@ name VARCHAR(100)
 INSERT INTO t_coerce1 VALUES (1, 'Apple');
 INSERT INTO t_coerce2 VALUES (1, 'apple');
 SELECT CONVERT('test' USING utf8);
-CONVERT(test, utf8)
+➤ CONVERT(test, utf8)[12,-1,0]  𝄀
 test
 SELECT CONVERT('你好世界' USING utf8mb4);
-CONVERT(你好世界, utf8mb4)
+➤ CONVERT(你好世界, utf8mb4)[12,-1,0]  𝄀
 你好世界
 CREATE TABLE t_hex_test (
 id INT PRIMARY KEY,
@@ -52,15 +52,15 @@ INSERT INTO t_hex_test VALUES (1, 'Hello', HEX('Hello'));
 INSERT INTO t_hex_test VALUES (2, '你好', HEX('你好'));
 INSERT INTO t_hex_test VALUES (3, '😀', HEX('😀'));
 SELECT * FROM t_hex_test ORDER BY id;
-id    original    hex_value
-1    Hello    48656C6C6F
-2    你好    E4BDA0E5A5BD
-3    😀    F09F9880
+➤ id[4,32,0]  ¦  original[12,-1,0]  ¦  hex_value[12,-1,0]  𝄀
+1  ¦  Hello  ¦  48656C6C6F  𝄀
+2  ¦  你好  ¦  E4BDA0E5A5BD  𝄀
+3  ¦  😀  ¦  F09F9880
 SELECT id, original, UNHEX(hex_value) as decoded FROM t_hex_test ORDER BY id;
-id    original    decoded
-1    Hello    Hello
-2    你好    你好
-3    😀    😀
+➤ id[4,32,0]  ¦  original[12,-1,0]  ¦  decoded[12,-1,0]  𝄀
+1  ¦  Hello  ¦  Hello  𝄀
+2  ¦  你好  ¦  你好  𝄀
+3  ¦  😀  ¦  😀
 CREATE TABLE t_pad_test (
 id INT PRIMARY KEY,
 data VARCHAR(100)
@@ -69,20 +69,20 @@ INSERT INTO t_pad_test VALUES (1, 'test');
 INSERT INTO t_pad_test VALUES (2, '测试');
 INSERT INTO t_pad_test VALUES (3, '😀');
 SELECT id, LPAD(data, 10, '*') as lpad_result FROM t_pad_test ORDER BY id;
-id    lpad_result
-1    ******test
-2    ********测试
-3    *********😀
+➤ id[4,32,0]  ¦  lpad_result[12,-1,0]  𝄀
+1  ¦  ******test  𝄀
+2  ¦  ********测试  𝄀
+3  ¦  *********😀
 SELECT id, RPAD(data, 10, '*') as rpad_result FROM t_pad_test ORDER BY id;
-id    rpad_result
-1    test******
-2    测试********
-3    😀*********
+➤ id[4,32,0]  ¦  rpad_result[12,-1,0]  𝄀
+1  ¦  test******  𝄀
+2  ¦  测试********  𝄀
+3  ¦  😀*********
 SELECT id, LPAD(data, 10, '中') as lpad_chinese FROM t_pad_test ORDER BY id;
-id    lpad_chinese
-1    中中中中中中test
-2    中中中中中中中中测试
-3    中中中中中中中中中😀
+➤ id[4,32,0]  ¦  lpad_chinese[12,-1,0]  𝄀
+1  ¦  中中中中中中test  𝄀
+2  ¦  中中中中中中中中测试  𝄀
+3  ¦  中中中中中中中中中😀
 CREATE TABLE t_trim_test (
 id INT PRIMARY KEY,
 data VARCHAR(100)
@@ -91,26 +91,26 @@ INSERT INTO t_trim_test VALUES (1, '  test  ');
 INSERT INTO t_trim_test VALUES (2, '中中测试中中');
 INSERT INTO t_trim_test VALUES (3, '😀😀text😀😀');
 SELECT id, TRIM(data) as trimmed FROM t_trim_test ORDER BY id;
-id    trimmed
-1    test
-2    中中测试中中
-3    😀😀text😀😀
+➤ id[4,32,0]  ¦  trimmed[12,-1,0]  𝄀
+1  ¦  test  𝄀
+2  ¦  中中测试中中  𝄀
+3  ¦  😀😀text😀😀
 SELECT id, LTRIM(data) as ltrimmed FROM t_trim_test ORDER BY id;
-id    ltrimmed
-1    test  
-2    中中测试中中
-3    😀😀text😀😀
+➤ id[4,32,0]  ¦  ltrimmed[12,-1,0]  𝄀
+1  ¦  test    𝄀
+2  ¦  中中测试中中  𝄀
+3  ¦  😀😀text😀😀
 SELECT id, RTRIM(data) as rtrimmed FROM t_trim_test ORDER BY id;
-id    rtrimmed
-1      test
-2    中中测试中中
-3    😀😀text😀😀
+➤ id[4,32,0]  ¦  rtrimmed[12,-1,0]  𝄀
+1  ¦    test  𝄀
+2  ¦  中中测试中中  𝄀
+3  ¦  😀😀text😀😀
 SELECT id, TRIM('中' FROM data) as trim_chinese FROM t_trim_test WHERE id = 2;
-id    trim_chinese
-2    测试
+➤ id[4,32,0]  ¦  trim_chinese[12,-1,0]  𝄀
+2  ¦  测试
 SELECT id, TRIM('😀' FROM data) as trim_emoji FROM t_trim_test WHERE id = 3;
-id    trim_emoji
-3    text
+➤ id[4,32,0]  ¦  trim_emoji[12,-1,0]  𝄀
+3  ¦  text
 CREATE TABLE t_replace_test (
 id INT PRIMARY KEY,
 data VARCHAR(100)
@@ -119,22 +119,22 @@ INSERT INTO t_replace_test VALUES (1, 'Hello World Hello');
 INSERT INTO t_replace_test VALUES (2, '你好世界你好');
 INSERT INTO t_replace_test VALUES (3, 'Test测试Test');
 SELECT id, REPLACE(data, 'Hello', 'Hi') as replaced FROM t_replace_test WHERE id = 1;
-id    replaced
-1    Hi World Hi
+➤ id[4,32,0]  ¦  replaced[12,-1,0]  𝄀
+1  ¦  Hi World Hi
 SELECT id, REPLACE(data, '你好', '您好') as replaced FROM t_replace_test WHERE id = 2;
-id    replaced
-2    您好世界您好
+➤ id[4,32,0]  ¦  replaced[12,-1,0]  𝄀
+2  ¦  您好世界您好
 SELECT id, REPLACE(data, 'Test', '测试') as replaced FROM t_replace_test WHERE id = 3;
-id    replaced
-3    测试测试测试
+➤ id[4,32,0]  ¦  replaced[12,-1,0]  𝄀
+3  ¦  测试测试测试
 SELECT REVERSE('Hello');
-REVERSE(Hello)
+➤ REVERSE(Hello)[12,-1,0]  𝄀
 olleH
 SELECT REVERSE('你好世界');
-REVERSE(你好世界)
+➤ REVERSE(你好世界)[12,-1,0]  𝄀
 界世好你
 SELECT REVERSE('😀😃😄');
-REVERSE(😀😃😄)
+➤ REVERSE(😀😃😄)[12,-1,0]  𝄀
 😄😃😀
 CREATE TABLE t_locate_test (
 id INT PRIMARY KEY,
@@ -144,24 +144,24 @@ INSERT INTO t_locate_test VALUES (1, 'Hello World');
 INSERT INTO t_locate_test VALUES (2, '你好世界');
 INSERT INTO t_locate_test VALUES (3, 'Test测试Test');
 SELECT id, LOCATE('World', data) as pos FROM t_locate_test WHERE id = 1;
-id    pos
-1    7
+➤ id[4,32,0]  ¦  pos[-5,64,0]  𝄀
+1  ¦  7
 SELECT id, LOCATE('世界', data) as pos FROM t_locate_test WHERE id = 2;
-id    pos
-2    3
+➤ id[4,32,0]  ¦  pos[-5,64,0]  𝄀
+2  ¦  3
 SELECT id, LOCATE('测试', data) as pos FROM t_locate_test WHERE id = 3;
-id    pos
-3    5
+➤ id[4,32,0]  ¦  pos[-5,64,0]  𝄀
+3  ¦  5
 SELECT id, POSITION('测试' IN data) as pos FROM t_locate_test WHERE id = 3;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 36 near " data) as pos FROM t_locate_test WHERE id = 3;";
 SELECT INSTR('Hello World', 'World');
-INSTR(Hello World, World)
+➤ INSTR(Hello World, World)[-5,64,0]  𝄀
 7
 SELECT INSTR('你好世界', '世界');
-INSTR(你好世界, 世界)
+➤ INSTR(你好世界, 世界)[-5,64,0]  𝄀
 3
 SELECT INSTR('Test测试Test', '测试');
-INSTR(Test测试Test, 测试)
+➤ INSTR(Test测试Test, 测试)[-5,64,0]  𝄀
 5
 CREATE TABLE t_left_right_test (
 id INT PRIMARY KEY,
@@ -171,15 +171,15 @@ INSERT INTO t_left_right_test VALUES (1, 'Hello World');
 INSERT INTO t_left_right_test VALUES (2, '你好世界');
 INSERT INTO t_left_right_test VALUES (3, '😀😃😄😁😆');
 SELECT id, LEFT(data, 5) as left_part FROM t_left_right_test ORDER BY id;
-id    left_part
-1    Hello
-2    你好世界
-3    😀😃😄😁😆
+➤ id[4,32,0]  ¦  left_part[12,-1,0]  𝄀
+1  ¦  Hello  𝄀
+2  ¦  你好世界  𝄀
+3  ¦  😀😃😄😁😆
 SELECT id, RIGHT(data, 5) as right_part FROM t_left_right_test ORDER BY id;
-id    right_part
-1    World
-2    你好世界
-3    😀😃😄😁😆
+➤ id[4,32,0]  ¦  right_part[12,-1,0]  𝄀
+1  ¦  World  𝄀
+2  ¦  你好世界  𝄀
+3  ¦  😀😃😄😁😆
 CREATE TABLE t_null_sort_ci (
 id INT PRIMARY KEY,
 name VARCHAR(100)
@@ -190,26 +190,26 @@ INSERT INTO t_null_sort_ci VALUES (3, 'Banana');
 INSERT INTO t_null_sort_ci VALUES (4, NULL);
 INSERT INTO t_null_sort_ci VALUES (5, 'Cherry');
 SELECT * FROM t_null_sort_ci ORDER BY name;
-id    name
-2    null
-4    null
-1    Apple
-3    Banana
-5    Cherry
+➤ id[4,32,0]  ¦  name[12,-1,0]  𝄀
+2  ¦  null  𝄀
+4  ¦  null  𝄀
+1  ¦  Apple  𝄀
+3  ¦  Banana  𝄀
+5  ¦  Cherry
 SELECT * FROM t_null_sort_ci ORDER BY name DESC;
-id    name
-5    Cherry
-3    Banana
-1    Apple
-4    null
-2    null
+➤ id[4,32,0]  ¦  name[12,-1,0]  𝄀
+5  ¦  Cherry  𝄀
+3  ¦  Banana  𝄀
+1  ¦  Apple  𝄀
+4  ¦  null  𝄀
+2  ¦  null
 SELECT * FROM t_null_sort_ci ORDER BY name IS NULL, name;
-id    name
-1    Apple
-3    Banana
-5    Cherry
-2    null
-4    null
+➤ id[4,32,0]  ¦  name[12,-1,0]  𝄀
+1  ¦  Apple  𝄀
+3  ¦  Banana  𝄀
+5  ¦  Cherry  𝄀
+2  ¦  null  𝄀
+4  ¦  null
 CREATE TABLE t_where_case (
 id INT PRIMARY KEY,
 code VARCHAR(50)
@@ -219,11 +219,11 @@ INSERT INTO t_where_case VALUES (2, 'abc123');
 INSERT INTO t_where_case VALUES (3, 'Abc123');
 INSERT INTO t_where_case VALUES (4, 'DEF456');
 SELECT COUNT(*) FROM t_where_case WHERE code = 'abc123';
-COUNT(*)
+➤ COUNT(*)[-5,64,0]  𝄀
 1
 SELECT * FROM t_where_case WHERE code LIKE 'abc%' ORDER BY id;
-id    code
-2    abc123
+➤ id[4,32,0]  ¦  code[12,-1,0]  𝄀
+2  ¦  abc123
 CREATE TABLE t_agg_test (
 id INT,
 category VARCHAR(50),
@@ -235,26 +235,26 @@ INSERT INTO t_agg_test VALUES (3, 'APPLE', 30);
 INSERT INTO t_agg_test VALUES (4, 'Banana', 40);
 INSERT INTO t_agg_test VALUES (5, 'banana', 50);
 SELECT category, SUM(value) as total FROM t_agg_test GROUP BY category ORDER BY category;
-category    total
-APPLE    30
-Apple    10
-Banana    40
-apple    20
-banana    50
+➤ category[12,-1,0]  ¦  total[-5,64,0]  𝄀
+APPLE  ¦  30  𝄀
+Apple  ¦  10  𝄀
+Banana  ¦  40  𝄀
+apple  ¦  20  𝄀
+banana  ¦  50
 SELECT category, AVG(value) as avg_val FROM t_agg_test GROUP BY category ORDER BY category;
-category    avg_val
-APPLE    30.0
-Apple    10.0
-Banana    40.0
-apple    20.0
-banana    50.0
+➤ category[12,-1,0]  ¦  avg_val[8,54,0]  𝄀
+APPLE  ¦  30.0  𝄀
+Apple  ¦  10.0  𝄀
+Banana  ¦  40.0  𝄀
+apple  ¦  20.0  𝄀
+banana  ¦  50.0
 SELECT category, COUNT(*) as cnt FROM t_agg_test GROUP BY category ORDER BY category;
-category    cnt
-APPLE    1
-Apple    1
-Banana    1
-apple    1
-banana    1
+➤ category[12,-1,0]  ¦  cnt[-5,64,0]  𝄀
+APPLE  ¦  1  𝄀
+Apple  ¦  1  𝄀
+Banana  ¦  1  𝄀
+apple  ¦  1  𝄀
+banana  ¦  1
 CREATE TABLE t_outer (
 id INT PRIMARY KEY,
 name VARCHAR(100)
@@ -266,9 +266,9 @@ name VARCHAR(100)
 INSERT INTO t_outer VALUES (1, 'Apple'), (2, 'Banana'), (3, 'Cherry');
 INSERT INTO t_inner VALUES (1, 'apple'), (2, 'BANANA');
 SELECT * FROM t_outer WHERE name IN (SELECT name FROM t_inner) ORDER BY id;
-id    name
+➤ id[4,32,0]  ¦  name[12,-1,0]
 SELECT * FROM t_outer WHERE EXISTS (SELECT 1 FROM t_inner WHERE t_inner.name = t_outer.name) ORDER BY id;
-id    name
+➤ id[4,32,0]  ¦  name[12,-1,0]
 CREATE TABLE t_having_test (
 id INT,
 category VARCHAR(50)
@@ -281,13 +281,13 @@ FROM t_having_test
 GROUP BY category
 HAVING COUNT(*) > 1
 ORDER BY category;
-category    cnt
+➤ category[12,-1,0]  ¦  cnt[-5,64,0]
 CREATE TABLE t_pk_ci (
 name VARCHAR(100) PRIMARY KEY
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 INSERT INTO t_pk_ci VALUES ('Apple');
 SELECT * FROM t_pk_ci;
-name
+➤ name[12,-1,0]  𝄀
 Apple
 CREATE TABLE t_pk_bin (
 name VARCHAR(100) PRIMARY KEY
@@ -296,9 +296,9 @@ INSERT INTO t_pk_bin VALUES ('Apple');
 INSERT INTO t_pk_bin VALUES ('apple');
 INSERT INTO t_pk_bin VALUES ('APPLE');
 SELECT * FROM t_pk_bin ORDER BY name;
-name
-APPLE
-Apple
+➤ name[12,-1,0]  𝄀
+APPLE  𝄀
+Apple  𝄀
 apple
 CREATE TABLE t_fk_parent (
 id INT PRIMARY KEY,
@@ -314,11 +314,11 @@ INSERT INTO t_fk_child VALUES (1, 'CODE001');
 INSERT INTO t_fk_child VALUES (2, 'code001');
 internal error: Cannot add or update a child row: a foreign key constraint fails
 SELECT * FROM t_fk_parent;
-id    code
-1    CODE001
+➤ id[4,32,0]  ¦  code[12,-1,0]  𝄀
+1  ¦  CODE001
 SELECT * FROM t_fk_child ORDER BY id;
-id    parent_code
-1    CODE001
+➤ id[4,32,0]  ¦  parent_code[12,-1,0]  𝄀
+1  ¦  CODE001
 CREATE TABLE t_view_base (
 id INT PRIMARY KEY,
 name VARCHAR(100)
@@ -327,12 +327,12 @@ INSERT INTO t_view_base VALUES (1, 'Apple'), (2, 'Banana'), (3, 'Cherry');
 CREATE VIEW v_upper AS SELECT id, UPPER(name) as upper_name FROM t_view_base;
 CREATE VIEW v_filter AS SELECT * FROM t_view_base WHERE name = 'apple';
 SELECT * FROM v_upper ORDER BY id;
-id    upper_name
-1    APPLE
-2    BANANA
-3    CHERRY
+➤ id[4,32,0]  ¦  upper_name[12,-1,0]  𝄀
+1  ¦  APPLE  𝄀
+2  ¦  BANANA  𝄀
+3  ¦  CHERRY
 SELECT * FROM v_filter;
-id    name
+➤ id[4,32,0]  ¦  name[12,-1,0]
 CREATE TABLE t_prepare (
 id INT PRIMARY KEY,
 name VARCHAR(100)
@@ -341,9 +341,9 @@ PREPARE stmt FROM 'INSERT INTO t_prepare VALUES (?, ?)';
 INSERT INTO t_prepare VALUES (1, '你好');
 INSERT INTO t_prepare VALUES (2, 'Hello');
 SELECT * FROM t_prepare ORDER BY id;
-id    name
-1    你好
-2    Hello
+➤ id[4,32,0]  ¦  name[12,-1,0]  𝄀
+1  ¦  你好  𝄀
+2  ¦  Hello
 CREATE TABLE t_concat_ws (
 id INT PRIMARY KEY,
 first_name VARCHAR(50),
@@ -353,43 +353,43 @@ INSERT INTO t_concat_ws VALUES (1, 'John', 'Doe');
 INSERT INTO t_concat_ws VALUES (2, '张', '三');
 INSERT INTO t_concat_ws VALUES (3, '田中', '太郎');
 SELECT id, CONCAT_WS(' ', first_name, last_name) as full_name FROM t_concat_ws ORDER BY id;
-id    full_name
-1    John Doe
-2    张 三
-3    田中 太郎
+➤ id[4,32,0]  ¦  full_name[12,-1,0]  𝄀
+1  ¦  John Doe  𝄀
+2  ¦  张 三  𝄀
+3  ¦  田中 太郎
 SELECT id, CONCAT_WS('-', first_name, last_name) as full_name FROM t_concat_ws ORDER BY id;
-id    full_name
-1    John-Doe
-2    张-三
-3    田中-太郎
+➤ id[4,32,0]  ¦  full_name[12,-1,0]  𝄀
+1  ¦  John-Doe  𝄀
+2  ¦  张-三  𝄀
+3  ¦  田中-太郎
 SELECT id, CONCAT_WS('、', first_name, last_name) as full_name FROM t_concat_ws ORDER BY id;
-id    full_name
-1    John、Doe
-2    张、三
-3    田中、太郎
+➤ id[4,32,0]  ¦  full_name[12,-1,0]  𝄀
+1  ¦  John、Doe  𝄀
+2  ¦  张、三  𝄀
+3  ¦  田中、太郎
 SELECT FIELD('apple', 'Apple', 'Banana', 'Cherry');
-FIELD(apple, Apple, Banana, Cherry)
+➤ FIELD(apple, Apple, Banana, Cherry)[-5,64,0]  𝄀
 1
 SELECT FIELD('Apple', 'apple', 'banana', 'cherry');
-FIELD(Apple, apple, banana, cherry)
+➤ FIELD(Apple, apple, banana, cherry)[-5,64,0]  𝄀
 1
 SELECT MAKE_SET(1|2|4, 'hello', '你好', 'こんにちは', '안녕');
-MAKE_SET(1 | 2 | 4, hello, 你好, こんにちは, 안녕)
+➤ MAKE_SET(1 | 2 | 4, hello, 你好, こんにちは, 안녕)[12,-1,0]  𝄀
 hello,你好,こんにちは
 SELECT ELT(1, 'Apple', '苹果', 'りんご');
-ELT(1, Apple, 苹果, りんご)
+➤ ELT(1, Apple, 苹果, りんご)[12,-1,0]  𝄀
 Apple
 SELECT ELT(2, 'Apple', '苹果', 'りんご');
-ELT(2, Apple, 苹果, りんご)
+➤ ELT(2, Apple, 苹果, りんご)[12,-1,0]  𝄀
 苹果
 SELECT ELT(3, 'Apple', '苹果', 'りんご');
-ELT(3, Apple, 苹果, りんご)
+➤ ELT(3, Apple, 苹果, りんご)[12,-1,0]  𝄀
 りんご
 SELECT FORMAT(12332.123456, 2);
-FORMAT(12332.123456, 2)
+➤ FORMAT(12332.123456, 2)[12,-1,0]  𝄀
 12,332.12
 SELECT FORMAT(12332.123456, 4);
-FORMAT(12332.123456, 4)
+➤ FORMAT(12332.123456, 4)[12,-1,0]  𝄀
 12,332.1235
 CREATE TABLE t_trailing_space (
 id INT PRIMARY KEY,
@@ -399,10 +399,10 @@ INSERT INTO t_trailing_space VALUES (1, 'test');
 INSERT INTO t_trailing_space VALUES (2, 'test ');
 INSERT INTO t_trailing_space VALUES (3, 'test  ');
 SELECT * FROM t_trailing_space WHERE data = 'test' ORDER BY id;
-id    data
-1    test
+➤ id[4,32,0]  ¦  data[12,-1,0]  𝄀
+1  ¦  test
 SELECT COUNT(*) FROM t_trailing_space WHERE data = 'test';
-COUNT(*)
+➤ COUNT(*)[-5,64,0]  𝄀
 1
 CREATE TABLE t_large_types (
 id INT PRIMARY KEY,
@@ -420,13 +420,13 @@ INSERT INTO t_large_types VALUES (
 0x48656C6C6F576F726C64
 );
 SELECT id, LENGTH(text_data), LENGTH(blob_data) FROM t_large_types ORDER BY id;
-id    LENGTH(text_data)    LENGTH(blob_data)
-1    1200    600
-2    44    10
+➤ id[4,32,0]  ¦  LENGTH(text_data)[-5,64,0]  ¦  LENGTH(blob_data)[-5,64,0]  𝄀
+1  ¦  1200  ¦  600  𝄀
+2  ¦  44  ¦  10
 SELECT id, CHAR_LENGTH(text_data) FROM t_large_types ORDER BY id;
-id    CHAR_LENGTH(text_data)
-1    400
-2    11
+➤ id[4,32,0]  ¦  CHAR_LENGTH(text_data)[-5,64,0]  𝄀
+1  ¦  400  𝄀
+2  ¦  11
 CREATE TABLE t_enum_charset (
 id INT PRIMARY KEY,
 status ENUM('active', 'inactive', '活动', '非活动') CHARACTER SET utf8mb4
@@ -436,32 +436,31 @@ INSERT INTO t_enum_charset VALUES (2, '活动');
 INSERT INTO t_enum_charset VALUES (3, 'inactive');
 INSERT INTO t_enum_charset VALUES (4, '非活动');
 SELECT * FROM t_enum_charset ORDER BY id;
-id    status
-1    active
-2    活动
-3    inactive
-4    非活动
+➤ id[4,32,0]  ¦  status[12,-1,0]  𝄀
+1  ¦  active  𝄀
+2  ¦  活动  𝄀
+3  ¦  inactive  𝄀
+4  ¦  非活动
 SELECT * FROM t_enum_charset WHERE status = 'active';
-id    status
-1    active
+➤ id[4,32,0]  ¦  status[12,-1,0]  𝄀
+1  ¦  active
 SELECT * FROM t_enum_charset WHERE status = '活动';
-id    status
-2    活动
+➤ id[4,32,0]  ¦  status[12,-1,0]  𝄀
+2  ¦  活动
 CREATE TABLE t_set_charset (
 id INT PRIMARY KEY,
 options SET('option1', 'option2', '选项1', '选项2') CHARACTER SET utf8mb4
 );
-data type: 'set("option1","option2","选项1","选项2")' is not yet implemented
 INSERT INTO t_set_charset VALUES (1, 'option1');
-no such table charset_advanced_test.t_set_charset
 INSERT INTO t_set_charset VALUES (2, 'option1,option2');
-no such table charset_advanced_test.t_set_charset
 INSERT INTO t_set_charset VALUES (3, '选项1');
-no such table charset_advanced_test.t_set_charset
 INSERT INTO t_set_charset VALUES (4, 'option1,选项1');
-no such table charset_advanced_test.t_set_charset
 SELECT * FROM t_set_charset ORDER BY id;
-SQL parser error: table "t_set_charset" does not exist
+➤ id[4,32,0]  ¦  options[12,-1,0]  𝄀
+1  ¦  option1  𝄀
+2  ¦  option1,option2  𝄀
+3  ¦  选项1  𝄀
+4  ¦  option1,选项1
 CREATE TABLE t_zero_width (
 id INT PRIMARY KEY,
 data VARCHAR(100)
@@ -469,9 +468,9 @@ data VARCHAR(100)
 INSERT INTO t_zero_width VALUES (1, 'test​test');
 INSERT INTO t_zero_width VALUES (2, 'test‍test');
 SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_zero_width ORDER BY id;
-id    LENGTH(data)    CHAR_LENGTH(data)
-1    11    9
-2    11    9
+➤ id[4,32,0]  ¦  LENGTH(data)[-5,64,0]  ¦  CHAR_LENGTH(data)[-5,64,0]  𝄀
+1  ¦  11  ¦  9  𝄀
+2  ¦  11  ¦  9
 CREATE TABLE t_rtl_text (
 id INT PRIMARY KEY,
 data VARCHAR(100)
@@ -480,15 +479,15 @@ INSERT INTO t_rtl_text VALUES (1, 'مرحبا بك');  -- Arabic
 INSERT INTO t_rtl_text VALUES (2, 'שלום עולם');  -- Hebrew
 INSERT INTO t_rtl_text VALUES (3, 'Hello مرحبا שלום'); -- Mixed
 SELECT * FROM t_rtl_text ORDER BY id;
-id    data
-1    مرحبا بك
-2    שלום עולם
-3    Hello مرحبا שלום
+➤ id[4,32,0]  ¦  data[12,-1,0]  𝄀
+1  ¦  مرحبا بك  𝄀
+2  ¦  שלום עולם  𝄀
+3  ¦  Hello مرحبا שלום
 SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_rtl_text ORDER BY id;
-id    LENGTH(data)    CHAR_LENGTH(data)
-1    15    8
-2    17    9
-3    25    16
+➤ id[4,32,0]  ¦  LENGTH(data)[-5,64,0]  ¦  CHAR_LENGTH(data)[-5,64,0]  𝄀
+1  ¦  15  ¦  8  𝄀
+2  ¦  17  ¦  9  𝄀
+3  ¦  25  ¦  16
 CREATE TABLE t_combining (
 id INT PRIMARY KEY,
 data VARCHAR(100)
@@ -496,9 +495,9 @@ data VARCHAR(100)
 INSERT INTO t_combining VALUES (1, 'é');  -- Single character
 INSERT INTO t_combining VALUES (2, 'é');  -- e + combining acute accent
 SELECT id, data, LENGTH(data), CHAR_LENGTH(data) FROM t_combining ORDER BY id;
-id    data    LENGTH(data)    CHAR_LENGTH(data)
-1    é    2    1
-2    é    2    1
+➤ id[4,32,0]  ¦  data[12,-1,0]  ¦  LENGTH(data)[-5,64,0]  ¦  CHAR_LENGTH(data)[-5,64,0]  𝄀
+1  ¦  é  ¦  2  ¦  1  𝄀
+2  ¦  é  ¦  2  ¦  1
 CREATE TABLE t_max_varchar_utf8 (
 id INT PRIMARY KEY,
 data VARCHAR(16383) CHARACTER SET utf8
@@ -510,11 +509,11 @@ data VARCHAR(16383) CHARACTER SET utf8mb4
 INSERT INTO t_max_varchar_utf8 VALUES (1, REPEAT('A', 100));
 INSERT INTO t_max_varchar_utf8mb4 VALUES (1, REPEAT('你', 100));
 SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_max_varchar_utf8;
-id    LENGTH(data)    CHAR_LENGTH(data)
-1    100    100
+➤ id[4,32,0]  ¦  LENGTH(data)[-5,64,0]  ¦  CHAR_LENGTH(data)[-5,64,0]  𝄀
+1  ¦  100  ¦  100
 SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_max_varchar_utf8mb4;
-id    LENGTH(data)    CHAR_LENGTH(data)
-1    300    100
+➤ id[4,32,0]  ¦  LENGTH(data)[-5,64,0]  ¦  CHAR_LENGTH(data)[-5,64,0]  𝄀
+1  ¦  300  ¦  100
 CREATE TABLE t_update_charset (
 id INT PRIMARY KEY,
 data VARCHAR(100)
@@ -524,15 +523,15 @@ INSERT INTO t_update_charset VALUES (2, '你好');
 UPDATE t_update_charset SET data = 'World' WHERE id = 1;
 UPDATE t_update_charset SET data = '世界' WHERE id = 2;
 SELECT * FROM t_update_charset ORDER BY id;
-id    data
-1    World
-2    世界
+➤ id[4,32,0]  ¦  data[12,-1,0]  𝄀
+1  ¦  World  𝄀
+2  ¦  世界
 UPDATE t_update_charset SET data = CONCAT(data, '!') WHERE id = 1;
 UPDATE t_update_charset SET data = CONCAT('欢迎', data) WHERE id = 2;
 SELECT * FROM t_update_charset ORDER BY id;
-id    data
-1    World!
-2    欢迎世界
+➤ id[4,32,0]  ¦  data[12,-1,0]  𝄀
+1  ¦  World!  𝄀
+2  ¦  欢迎世界
 CREATE TABLE t_delete_ci (
 id INT PRIMARY KEY,
 name VARCHAR(100)
@@ -543,10 +542,10 @@ INSERT INTO t_delete_ci VALUES (3, 'APPLE');
 INSERT INTO t_delete_ci VALUES (4, 'Banana');
 DELETE FROM t_delete_ci WHERE name = 'apple';
 SELECT * FROM t_delete_ci ORDER BY id;
-id    name
-1    Apple
-3    APPLE
-4    Banana
+➤ id[4,32,0]  ¦  name[12,-1,0]  𝄀
+1  ¦  Apple  𝄀
+3  ¦  APPLE  𝄀
+4  ¦  Banana
 CREATE TABLE t_transaction (
 id INT PRIMARY KEY,
 data VARCHAR(100)
@@ -556,14 +555,14 @@ INSERT INTO t_transaction VALUES (1, '事务测试1');
 INSERT INTO t_transaction VALUES (2, 'Transaction test 2');
 COMMIT;
 SELECT * FROM t_transaction ORDER BY id;
-id    data
-1    事务测试1
-2    Transaction test 2
+➤ id[4,32,0]  ¦  data[12,-1,0]  𝄀
+1  ¦  事务测试1  𝄀
+2  ¦  Transaction test 2
 BEGIN;
 INSERT INTO t_transaction VALUES (3, '事务测试3');
 ROLLBACK;
 SELECT * FROM t_transaction ORDER BY id;
-id    data
-1    事务测试1
-2    Transaction test 2
+➤ id[4,32,0]  ¦  data[12,-1,0]  𝄀
+1  ¦  事务测试1  𝄀
+2  ¦  Transaction test 2
 DROP DATABASE IF EXISTS charset_advanced_test;

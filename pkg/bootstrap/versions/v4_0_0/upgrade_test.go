@@ -113,6 +113,25 @@ func Test_upg_statistics_view_check_error(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func Test_upg_columns_view_check_error(t *testing.T) {
+	stubs := gostub.Stub(&versions.CheckViewDefinition, func(txn executor.TxnExecutor, accountId uint32, schema string, viewName string) (bool, string, error) {
+		return true, "", moerr.NewInternalErrorNoCtx("return error")
+	})
+	defer stubs.Reset()
+	_, err := upg_information_schema_columns.CheckFunc(nil, 0)
+	assert.Error(t, err)
+}
+
+func Test_upg_columns_view_check_match(t *testing.T) {
+	stubs := gostub.Stub(&versions.CheckViewDefinition, func(txn executor.TxnExecutor, accountId uint32, schema string, viewName string) (bool, string, error) {
+		return true, upg_information_schema_columns.UpgSql, nil
+	})
+	defer stubs.Reset()
+	ok, err := upg_information_schema_columns.CheckFunc(nil, 0)
+	assert.NoError(t, err)
+	assert.True(t, ok)
+}
+
 func Test_upg_statistics_view_check_match(t *testing.T) {
 	stubs := gostub.Stub(&versions.CheckViewDefinition, func(txn executor.TxnExecutor, accountId uint32, schema string, viewName string) (bool, string, error) {
 		return true, sysview.InformationSchemaStatisticsDDL, nil
@@ -121,6 +140,16 @@ func Test_upg_statistics_view_check_match(t *testing.T) {
 	ok, err := upg_information_schema_statistics.CheckFunc(nil, 0)
 	assert.NoError(t, err)
 	assert.True(t, ok)
+}
+
+func Test_upg_columns_view_check_mismatch(t *testing.T) {
+	stubs := gostub.Stub(&versions.CheckViewDefinition, func(txn executor.TxnExecutor, accountId uint32, schema string, viewName string) (bool, string, error) {
+		return true, "old_view_def", nil
+	})
+	defer stubs.Reset()
+	ok, err := upg_information_schema_columns.CheckFunc(nil, 0)
+	assert.NoError(t, err)
+	assert.False(t, ok)
 }
 
 func Test_upg_statistics_view_check_mismatch(t *testing.T) {
