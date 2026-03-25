@@ -490,7 +490,11 @@ func TestCheckSnapshotAdvancedDuplicates_SkipsWithoutEngine(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestCheckSnapshotAdvancedDuplicates_ReturnsDuplicate(t *testing.T) {
+// TestCheckSnapshotAdvancedDuplicates_TriggersRetry verifies that the
+// probabilistic snapshot-range check returns ErrTxnNeedRetry (not
+// ErrDuplicateEntry) and advances StmtSnapshotTS so that the retry
+// converges.
+func TestCheckSnapshotAdvancedDuplicates_TriggersRetry(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -523,17 +527,20 @@ func TestCheckSnapshotAdvancedDuplicates_ReturnsDuplicate(t *testing.T) {
 	arg.ctr.batches = []*batch.Batch{buildBat}
 	arg.ctr.batchRowCount = int64(buildBat.RowCount())
 
+	fromTS := types.BuildTS(initialTS.PhysicalTime, initialTS.LogicalTime)
+	toTS := types.BuildTS(currentTS.PhysicalTime, currentTS.LogicalTime)
+
 	gomock.InOrder(
 		txnOp.EXPECT().SnapshotTS().Return(currentTS),
 		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(42)).Return("testdb", "t1", rel, nil),
 		rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(42)),
-		rel.EXPECT().PrimaryKeysMayBeUpserted(gomock.Any(), types.BuildTS(1, 0), types.BuildTS(2, 0), gomock.Any(), int32(0)).DoAndReturn(
+		rel.EXPECT().PrimaryKeysMayBeUpserted(gomock.Any(), fromTS, toTS, gomock.Any(), int32(0)).DoAndReturn(
 			func(_ context.Context, _, _ types.TS, bat *batch.Batch, _ int32) (bool, error) {
 				require.Equal(t, 2, bat.RowCount())
 				return true, nil
 			},
 		),
-		rel.EXPECT().PrimaryKeysMayBeUpserted(gomock.Any(), types.BuildTS(1, 0), types.BuildTS(2, 0), gomock.Any(), int32(0)).DoAndReturn(
+		rel.EXPECT().PrimaryKeysMayBeUpserted(gomock.Any(), fromTS, toTS, gomock.Any(), int32(0)).DoAndReturn(
 			func(_ context.Context, _, _ types.TS, bat *batch.Batch, _ int32) (bool, error) {
 				require.Equal(t, 1, bat.RowCount())
 				return bat.GetVector(0).RowToString(0) == "10", nil
@@ -543,8 +550,71 @@ func TestCheckSnapshotAdvancedDuplicates_ReturnsDuplicate(t *testing.T) {
 
 	err := arg.checkSnapshotAdvancedDuplicates(proc)
 	require.Error(t, err)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
-	require.Contains(t, err.Error(), "Duplicate entry '10' for key 'id'")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry))
+	// StmtSnapshotTS must be advanced to currentTS so that prepareRetry
+	// carries T₁ (not T₀) into the next attempt, preventing livelock.
+	require.Equal(t, currentTS, proc.GetStmtSnapshotTS())
+}
+
+// Regression test for issue #23943: sysbench false-positive duplicate entry.
+// The build-side batch contains keys 10,20 (VALUES data).  Between T₀ and T₁
+// a concurrent txn modified key 10 (e.g. sysbench DELETE+INSERT), so
+// PrimaryKeysMayBeUpserted returns true.  Before the fix this produced a
+// spurious ErrDuplicateEntry; after the fix it returns ErrTxnNeedRetry so
+// the statement retries with an accurate snapshot.
+func TestCheckSnapshotAdvancedDuplicates_FalsePositive(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc := testutil.NewProcess(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	rel := mock_frontend.NewMockRelation(ctrl)
+
+	initialTS := timestamp.Timestamp{PhysicalTime: 1}
+	currentTS := timestamp.Timestamp{PhysicalTime: 2}
+	proc.Base.TxnOperator = txnOp
+	proc.GetSessionInfo().StorageEngine = eng
+
+	buildBat := batch.NewWithSize(1)
+	buildBat.Vecs[0] = testutil.MakeInt32Vector([]int32{10, 20}, nil)
+	buildBat.SetRowCount(2)
+
+	arg := &DedupJoin{
+		OnDuplicateAction: plan.Node_FAIL,
+		TargetTableID:     42,
+		InitialSnapshotTS: initialTS,
+		DedupColName:      "id",
+		DedupColTypes:     []plan.Type{{Id: int32(types.T_int32)}},
+		DelColIdx:         -1,
+		Conditions: [][]*plan.Expr{
+			nil,
+			{newRelExpr(1, 0, types.T_int32.ToType())},
+		},
+	}
+	arg.ctr.batches = []*batch.Batch{buildBat}
+	arg.ctr.batchRowCount = int64(buildBat.RowCount())
+
+	fromTS := types.BuildTS(initialTS.PhysicalTime, initialTS.LogicalTime)
+	toTS := types.BuildTS(currentTS.PhysicalTime, currentTS.LogicalTime)
+
+	gomock.InOrder(
+		txnOp.EXPECT().SnapshotTS().Return(currentTS),
+		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(42)).Return("testdb", "t1", rel, nil),
+		rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(42)),
+		// Batch-level check: range [10, 20] had changes → true
+		rel.EXPECT().PrimaryKeysMayBeUpserted(gomock.Any(), fromTS, toTS, gomock.Any(), int32(0)).Return(true, nil),
+		// Row-level: key 10 was modified by another txn → true (false positive)
+		rel.EXPECT().PrimaryKeysMayBeUpserted(gomock.Any(), fromTS, toTS, gomock.Any(), int32(0)).Return(true, nil),
+	)
+
+	err := arg.checkSnapshotAdvancedDuplicates(proc)
+	// Before fix: ErrDuplicateEntry (false positive, issue #23943)
+	// After fix: ErrTxnNeedRetry (triggers transparent retry)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry))
+	// StmtSnapshotTS must be advanced to currentTS to prevent livelock on retry.
+	require.Equal(t, currentTS, proc.GetStmtSnapshotTS())
 }
 
 func TestResolveTargetRelation_DetectsDefinitionChange(t *testing.T) {
