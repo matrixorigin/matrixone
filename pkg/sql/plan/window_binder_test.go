@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -123,6 +124,11 @@ func TestProjectionAndHavingBinderBindExprOnWindowAlias(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, bindCtx.windowTag, projExpr.GetCol().RelPos)
 	require.Equal(t, int32(0), projExpr.GetCol().ColPos)
+
+	// insideAgg=true should NOT resolve window alias via windowByAst
+	havingBinder.insideAgg = true
+	_, err = havingBinder.BindExpr(windowExpr, 0, true)
+	require.Error(t, err)
 }
 
 func TestProjectionBinderBindWinFuncCachesWindowExpr(t *testing.T) {
@@ -271,7 +277,7 @@ func TestBindWindowFuncExprValidationAndHelpers(t *testing.T) {
 		require.Error(t, err)
 	})
 
-	t.Run("range frame rejects non-numeric order by", func(t *testing.T) {
+	t.Run("range frame rejects non-numeric order by for non-WIN_ORDER func", func(t *testing.T) {
 		binder := &stubWindowBinder{
 			bindExprFunc: func(tree.Expr, int32, bool) (*planpb.Expr, error) {
 				return makePlan2StringConstExprWithType("x"), nil
@@ -289,10 +295,240 @@ func TestBindWindowFuncExprValidationAndHelpers(t *testing.T) {
 		require.Error(t, err)
 	})
 
+	t.Run("range frame allows non-numeric order by for WIN_ORDER func", func(t *testing.T) {
+		binder := &stubWindowBinder{
+			bindExprFunc: func(tree.Expr, int32, bool) (*planpb.Expr, error) {
+				return makePlan2StringConstExprWithType("x"), nil
+			},
+			bindFuncExprFunc: func(string, []tree.Expr, int32) (*planpb.Expr, error) {
+				return makePlan2Int64ConstExprWithType(1), nil
+			},
+			makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) {
+				return makePlan2Int64ConstExprWithType(1), nil
+			},
+		}
+		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
+
+		// row_number is WIN_ORDER, should succeed with varchar ORDER BY
+		_, err := bindWindowFuncExpr(
+			binder,
+			ctx,
+			"row_number",
+			testWindowFuncExpr(
+				"row_number",
+				tree.FUNC_TYPE_DEFAULT,
+				&tree.WindowSpec{
+					OrderBy: tree.OrderBy{tree.NewOrder(testNumVal(1), tree.Ascending, tree.DefaultNullsPosition, false)},
+					Frame: &tree.FrameClause{
+						Type:  tree.Range,
+						Start: &tree.FrameBound{Type: tree.Preceding, UnBounded: true},
+						End:   &tree.FrameBound{Type: tree.Following, UnBounded: true},
+					},
+				},
+			),
+			0,
+			true,
+		)
+		require.NoError(t, err)
+	})
+
+	t.Run("range unbounded frame rejects non-numeric order by for agg func", func(t *testing.T) {
+		binder := &stubWindowBinder{
+			bindExprFunc: func(tree.Expr, int32, bool) (*planpb.Expr, error) {
+				return makePlan2StringConstExprWithType("x"), nil
+			},
+			bindFuncExprFunc: func(string, []tree.Expr, int32) (*planpb.Expr, error) {
+				return makePlan2Int64ConstExprWithType(1), nil
+			},
+			makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) {
+				return makePlan2Int64ConstExprWithType(1), nil
+			},
+		}
+		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
+
+		// sum with RANGE UNBOUNDED + varchar ORDER BY should fail
+		_, err := bindWindowFuncExpr(
+			binder,
+			ctx,
+			"sum",
+			testWindowFuncExpr(
+				"sum",
+				tree.FUNC_TYPE_DEFAULT,
+				&tree.WindowSpec{
+					OrderBy: tree.OrderBy{tree.NewOrder(testNumVal(1), tree.Ascending, tree.DefaultNullsPosition, false)},
+					Frame: &tree.FrameClause{
+						Type:  tree.Range,
+						Start: &tree.FrameBound{Type: tree.Preceding, UnBounded: true},
+						End:   &tree.FrameBound{Type: tree.CurrentRow},
+					},
+				},
+				testNumVal(1),
+			),
+			0,
+			true,
+		)
+		require.Error(t, err)
+	})
+
 	t.Run("buildWindowColRefExpr keeps tag and column", func(t *testing.T) {
 		expr := buildWindowColRefExpr(&BindContext{windowTag: 17}, planpb.Type{Id: int32(types.T_int64)}, 3)
 		require.Equal(t, int32(17), expr.GetCol().RelPos)
 		require.Equal(t, int32(3), expr.GetCol().ColPos)
+	})
+
+	t.Run("bindFuncExpr error propagates", func(t *testing.T) {
+		binder := &stubWindowBinder{
+			bindExprFunc: func(tree.Expr, int32, bool) (*planpb.Expr, error) { return nil, nil },
+			bindFuncExprFunc: func(string, []tree.Expr, int32) (*planpb.Expr, error) {
+				return nil, moerr.NewInternalErrorNoCtx("fail")
+			},
+			makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) { return nil, nil },
+		}
+		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
+		_, err := bindWindowFuncExpr(binder, ctx, "sum", testWindowFuncExpr("sum", tree.FUNC_TYPE_DEFAULT,
+			&tree.WindowSpec{Frame: &tree.FrameClause{Type: tree.Rows, Start: &tree.FrameBound{Type: tree.Preceding, UnBounded: true}, End: &tree.FrameBound{Type: tree.CurrentRow}}},
+			testNumVal(1)), 0, true)
+		require.Error(t, err)
+	})
+
+	t.Run("partition by bind error propagates", func(t *testing.T) {
+		binder := &stubWindowBinder{
+			bindExprFunc:       func(tree.Expr, int32, bool) (*planpb.Expr, error) { return nil, moerr.NewInternalErrorNoCtx("fail") },
+			bindFuncExprFunc:   func(string, []tree.Expr, int32) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) { return nil, nil },
+		}
+		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
+		_, err := bindWindowFuncExpr(binder, ctx, "sum", testWindowFuncExpr("sum", tree.FUNC_TYPE_DEFAULT,
+			&tree.WindowSpec{PartitionBy: tree.Exprs{testNumVal(1)}, Frame: &tree.FrameClause{Type: tree.Rows, Start: &tree.FrameBound{Type: tree.Preceding, UnBounded: true}, End: &tree.FrameBound{Type: tree.CurrentRow}}},
+			testNumVal(1)), 0, true)
+		require.Error(t, err)
+	})
+
+	t.Run("order by bind error propagates", func(t *testing.T) {
+		binder := &stubWindowBinder{
+			bindExprFunc:       func(tree.Expr, int32, bool) (*planpb.Expr, error) { return nil, moerr.NewInternalErrorNoCtx("fail") },
+			bindFuncExprFunc:   func(string, []tree.Expr, int32) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) { return nil, nil },
+		}
+		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
+		_, err := bindWindowFuncExpr(binder, ctx, "sum", testWindowFuncExpr("sum", tree.FUNC_TYPE_DEFAULT,
+			&tree.WindowSpec{OrderBy: tree.OrderBy{tree.NewOrder(testNumVal(1), tree.Ascending, tree.DefaultNullsPosition, false)}, Frame: &tree.FrameClause{Type: tree.Rows, Start: &tree.FrameBound{Type: tree.Preceding, UnBounded: true}, End: &tree.FrameBound{Type: tree.CurrentRow}}},
+			testNumVal(1)), 0, true)
+		require.Error(t, err)
+	})
+
+	t.Run("nulls first flag is set", func(t *testing.T) {
+		binder := &stubWindowBinder{
+			bindExprFunc:       func(tree.Expr, int32, bool) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			bindFuncExprFunc:   func(string, []tree.Expr, int32) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+		}
+		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
+		_, err := bindWindowFuncExpr(binder, ctx, "sum", testWindowFuncExpr("sum", tree.FUNC_TYPE_DEFAULT,
+			&tree.WindowSpec{OrderBy: tree.OrderBy{tree.NewOrder(testNumVal(1), tree.Ascending, tree.NullsFirst, false)}, HasFrame: true, Frame: &tree.FrameClause{Type: tree.Rows, Start: &tree.FrameBound{Type: tree.Preceding, UnBounded: true}, End: &tree.FrameBound{Type: tree.CurrentRow}}},
+			testNumVal(1)), 0, true)
+		require.NoError(t, err)
+		require.True(t, ctx.windows[0].GetW().OrderBy[0].Flag&planpb.OrderBySpec_NULLS_FIRST != 0)
+	})
+
+	t.Run("frame start unbounded following is rejected", func(t *testing.T) {
+		binder := &stubWindowBinder{
+			bindExprFunc:       func(tree.Expr, int32, bool) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			bindFuncExprFunc:   func(string, []tree.Expr, int32) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+		}
+		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
+		_, err := bindWindowFuncExpr(binder, ctx, "sum", testWindowFuncExpr("sum", tree.FUNC_TYPE_DEFAULT,
+			&tree.WindowSpec{Frame: &tree.FrameClause{Type: tree.Rows, Start: &tree.FrameBound{Type: tree.Following, UnBounded: true}, End: &tree.FrameBound{Type: tree.Following, UnBounded: true}}},
+			testNumVal(1)), 0, true)
+		require.Error(t, err)
+	})
+
+	t.Run("frame start following with end preceding is rejected", func(t *testing.T) {
+		binder := &stubWindowBinder{
+			bindExprFunc:       func(tree.Expr, int32, bool) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			bindFuncExprFunc:   func(string, []tree.Expr, int32) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+		}
+		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
+		_, err := bindWindowFuncExpr(binder, ctx, "sum", testWindowFuncExpr("sum", tree.FUNC_TYPE_DEFAULT,
+			&tree.WindowSpec{Frame: &tree.FrameClause{Type: tree.Rows, Start: &tree.FrameBound{Type: tree.Following}, End: &tree.FrameBound{Type: tree.Preceding}}},
+			testNumVal(1)), 0, true)
+		require.Error(t, err)
+	})
+
+	t.Run("frame start current row with end preceding is rejected", func(t *testing.T) {
+		binder := &stubWindowBinder{
+			bindExprFunc:       func(tree.Expr, int32, bool) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			bindFuncExprFunc:   func(string, []tree.Expr, int32) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+		}
+		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
+		_, err := bindWindowFuncExpr(binder, ctx, "sum", testWindowFuncExpr("sum", tree.FUNC_TYPE_DEFAULT,
+			&tree.WindowSpec{Frame: &tree.FrameClause{Type: tree.Rows, Start: &tree.FrameBound{Type: tree.CurrentRow}, End: &tree.FrameBound{Type: tree.Preceding}}},
+			testNumVal(1)), 0, true)
+		require.Error(t, err)
+	})
+
+	t.Run("frame end unbounded preceding is rejected", func(t *testing.T) {
+		binder := &stubWindowBinder{
+			bindExprFunc:       func(tree.Expr, int32, bool) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			bindFuncExprFunc:   func(string, []tree.Expr, int32) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+		}
+		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
+		_, err := bindWindowFuncExpr(binder, ctx, "sum", testWindowFuncExpr("sum", tree.FUNC_TYPE_DEFAULT,
+			&tree.WindowSpec{Frame: &tree.FrameClause{Type: tree.Rows, Start: &tree.FrameBound{Type: tree.Preceding, UnBounded: true}, End: &tree.FrameBound{Type: tree.Preceding, UnBounded: true}}},
+			testNumVal(1)), 0, true)
+		require.Error(t, err)
+	})
+
+	t.Run("range N preceding with multiple order by is rejected", func(t *testing.T) {
+		binder := &stubWindowBinder{
+			bindExprFunc:       func(tree.Expr, int32, bool) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			bindFuncExprFunc:   func(string, []tree.Expr, int32) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+		}
+		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
+		_, err := bindWindowFuncExpr(binder, ctx, "sum", testWindowFuncExpr("sum", tree.FUNC_TYPE_DEFAULT,
+			&tree.WindowSpec{
+				OrderBy: tree.OrderBy{
+					tree.NewOrder(testNumVal(1), tree.Ascending, tree.DefaultNullsPosition, false),
+					tree.NewOrder(testNumVal(2), tree.Ascending, tree.DefaultNullsPosition, false),
+				},
+				HasFrame: true,
+				Frame:    &tree.FrameClause{Type: tree.Range, Start: &tree.FrameBound{Type: tree.Preceding, Expr: testNumVal(1)}, End: &tree.FrameBound{Type: tree.CurrentRow}},
+			},
+			testNumVal(1)), 0, true)
+		require.Error(t, err)
+	})
+
+	t.Run("frame start val bind error propagates", func(t *testing.T) {
+		binder := &stubWindowBinder{
+			bindExprFunc:       func(tree.Expr, int32, bool) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			bindFuncExprFunc:   func(string, []tree.Expr, int32) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) { return nil, moerr.NewInternalErrorNoCtx("fail") },
+		}
+		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
+		_, err := bindWindowFuncExpr(binder, ctx, "sum", testWindowFuncExpr("sum", tree.FUNC_TYPE_DEFAULT,
+			&tree.WindowSpec{HasFrame: true, Frame: &tree.FrameClause{Type: tree.Rows, Start: &tree.FrameBound{Type: tree.Preceding, Expr: testNumVal(1)}, End: &tree.FrameBound{Type: tree.CurrentRow}}},
+			testNumVal(1)), 0, true)
+		require.Error(t, err)
+	})
+
+	t.Run("frame end val bind error propagates", func(t *testing.T) {
+		binder := &stubWindowBinder{
+			bindExprFunc:     func(tree.Expr, int32, bool) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			bindFuncExprFunc: func(string, []tree.Expr, int32) (*planpb.Expr, error) { return makePlan2Int64ConstExprWithType(1), nil },
+			makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) {
+				return nil, moerr.NewInternalErrorNoCtx("fail")
+			},
+		}
+		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
+		_, err := bindWindowFuncExpr(binder, ctx, "sum", testWindowFuncExpr("sum", tree.FUNC_TYPE_DEFAULT,
+			&tree.WindowSpec{HasFrame: true, Frame: &tree.FrameClause{Type: tree.Rows, Start: &tree.FrameBound{Type: tree.Preceding, UnBounded: true}, End: &tree.FrameBound{Type: tree.Following, Expr: testNumVal(1)}}},
+			testNumVal(1)), 0, true)
+		require.Error(t, err)
 	})
 }
 

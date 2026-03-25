@@ -875,6 +875,8 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Timestamp], genericGreater[types.Timestamp])
 			}
 		}
+	default:
+		return left, moerr.NewInternalErrorNoCtxf("unsupported type %v for RANGE frame in window function", vec.GetType().Oid)
 	}
 	return left, nil
 }
@@ -1217,6 +1219,8 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Timestamp], genericGreater[types.Timestamp])
 			}
 		}
+	default:
+		return right, moerr.NewInternalErrorNoCtxf("unsupported type %v for RANGE frame in window function", vec.GetType().Oid)
 	}
 	return right + 1, nil
 }
