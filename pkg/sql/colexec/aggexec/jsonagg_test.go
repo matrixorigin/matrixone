@@ -240,8 +240,8 @@ func TestJsonAggRegistersAndHelpers(t *testing.T) {
 		retType:   types.T_json.ToType(),
 		emptyNull: true,
 	})
-	exec.ensureGroup(0)
-	exec.ensureGroup(0) // cover else branch
+	require.NoError(t, exec.GroupGrow(1))
+	require.Len(t, exec.groups, 1)
 	exec.Free()
 }
 
@@ -308,4 +308,107 @@ func TestJsonArrayAggBatchMergeSkip(t *testing.T) {
 	val.Free(mg)
 	exec1.Free()
 	exec2.Free()
+}
+
+func TestJsonAggDistinctAndMergeErrorPaths(t *testing.T) {
+	mg := mpool.MustNewZero()
+
+	arrayInfo := multiAggInfo{
+		aggID:     46,
+		distinct:  true,
+		argTypes:  []types.Type{types.T_varchar.ToType()},
+		retType:   types.T_json.ToType(),
+		emptyNull: true,
+	}
+	arrayExec := newJsonArrayAggExec(mg, arrayInfo)
+	require.NoError(t, arrayExec.GroupGrow(1))
+	require.True(t, arrayExec.IsDistinct())
+	values := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(values, []byte("x"), false, mg))
+	require.NoError(t, vector.AppendBytes(values, []byte("x"), false, mg))
+	require.NoError(t, vector.AppendBytes(values, nil, true, mg))
+	require.NoError(t, arrayExec.BatchFill(0, []uint64{1, 1, 1}, []*vector.Vector{values}))
+	require.NoError(t, arrayExec.BulkFill(0, []*vector.Vector{values}))
+	vecs, err := arrayExec.Flush()
+	require.NoError(t, err)
+	j, err := types.DecodeJson(vecs[0].GetBytesAt(0)).MarshalJSON()
+	require.NoError(t, err)
+	require.JSONEq(t, `["x",null,null]`, string(j))
+
+	objectInfo := multiAggInfo{
+		aggID:     47,
+		distinct:  true,
+		argTypes:  []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType()},
+		retType:   types.T_json.ToType(),
+		emptyNull: true,
+	}
+	left := newJsonObjectAggExec(mg, objectInfo)
+	right := newJsonObjectAggExec(mg, objectInfo)
+	require.NoError(t, left.GroupGrow(1))
+	require.NoError(t, right.GroupGrow(1))
+	require.True(t, left.IsDistinct())
+	keys := buildVarlenVec(t, mg, types.T_varchar.ToType(), []string{"k"})
+	vals := buildVarlenVec(t, mg, types.T_varchar.ToType(), []string{"v"})
+	require.NoError(t, left.Fill(0, 0, []*vector.Vector{keys, vals}))
+	require.NoError(t, right.Fill(0, 0, []*vector.Vector{keys, vals}))
+	require.NoError(t, right.BulkFill(0, []*vector.Vector{keys, vals}))
+	require.Error(t, left.Merge(right, 0, 0))
+	err = left.BatchMerge(right, 0, []uint64{1})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "distinct agg should be run in only one node")
+
+	values.Free(mg)
+	vecs[0].Free(mg)
+	keys.Free(mg)
+	vals.Free(mg)
+	arrayExec.Free()
+	left.Free()
+	right.Free()
+}
+
+func TestJsonAggNonDistinctWrapperPaths(t *testing.T) {
+	mg := mpool.MustNewZero()
+
+	arrayInfo := multiAggInfo{
+		aggID:     48,
+		distinct:  false,
+		argTypes:  []types.Type{types.T_int64.ToType()},
+		retType:   types.T_json.ToType(),
+		emptyNull: true,
+	}
+	leftArray := newJsonArrayAggExec(mg, arrayInfo)
+	rightArray := newJsonArrayAggExec(mg, arrayInfo)
+	require.NoError(t, leftArray.PreAllocateGroups(1))
+	require.NoError(t, leftArray.GroupGrow(1))
+	require.NoError(t, rightArray.GroupGrow(1))
+	ints := buildFixedVec(t, mg, types.T_int64.ToType(), []int64{1, 2})
+	require.NoError(t, leftArray.Fill(0, 0, []*vector.Vector{ints}))
+	require.NoError(t, rightArray.Fill(0, 1, []*vector.Vector{ints}))
+	require.NoError(t, leftArray.Merge(rightArray, 0, 0))
+
+	objectInfo := multiAggInfo{
+		aggID:     49,
+		distinct:  false,
+		argTypes:  []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType()},
+		retType:   types.T_json.ToType(),
+		emptyNull: true,
+	}
+	leftObject := newJsonObjectAggExec(mg, objectInfo)
+	rightObject := newJsonObjectAggExec(mg, objectInfo)
+	require.NoError(t, leftObject.PreAllocateGroups(1))
+	require.NoError(t, leftObject.GroupGrow(1))
+	require.NoError(t, rightObject.GroupGrow(1))
+	keys := buildVarlenVec(t, mg, types.T_varchar.ToType(), []string{"a", "b"})
+	vals := buildVarlenVec(t, mg, types.T_varchar.ToType(), []string{"x", "y"})
+	require.NoError(t, leftObject.Fill(0, 0, []*vector.Vector{keys, vals}))
+	require.NoError(t, rightObject.Fill(0, 1, []*vector.Vector{keys, vals}))
+	require.NoError(t, leftObject.Merge(rightObject, 0, 0))
+
+	ints.Free(mg)
+	keys.Free(mg)
+	vals.Free(mg)
+	leftArray.Free()
+	rightArray.Free()
+	leftObject.Free()
+	rightObject.Free()
 }

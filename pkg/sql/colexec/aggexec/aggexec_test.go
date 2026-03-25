@@ -24,47 +24,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// trivialGroupCtx satisfies AggGroupExecContext with no-op marshal/unmarshal.
-type trivialGroupCtx struct{}
-
-func (trivialGroupCtx) Marshal() []byte                { return nil }
-func (trivialGroupCtx) MarshalBinary() ([]byte, error) { return nil, nil }
-func (trivialGroupCtx) Unmarshal([]byte)               {}
-func (trivialGroupCtx) Size() int64                    { return 0 }
-
-// TestGrowGroupContexts exercises growGroupContexts via an agg registered with
-// a non-nil initGroupContext.
-func TestGrowGroupContexts(t *testing.T) {
+func TestMakeAggSpecialAgg(t *testing.T) {
 	mp := mpool.MustNewZero()
+	defer func() {
+		require.Equal(t, int64(0), mp.CurrNB())
+	}()
 
 	const testAggID = -9901
 	param := types.T_int64.ToType()
-	ret := types.T_int64.ToType()
+	RegisterAvgTwCache(testAggID)
 
-	RegisterAggFromFixedRetFixed(
-		MakeSingleColumnAggInformation(testAggID, param, func([]types.Type) types.Type { return ret }, true),
-		nil,
-		func(resultType types.Type, parameters ...types.Type) AggGroupExecContext { return trivialGroupCtx{} },
-		func(resultType types.Type, parameters ...types.Type) int64 { return 0 },
-		func(_ AggGroupExecContext, _ AggCommonExecContext, v int64, empty bool, get AggGetter[int64], set AggSetter[int64]) error {
-			set(get() + v)
-			return nil
-		},
-		nil, nil, nil,
-	)
+	exec, err := MakeAgg(mp, testAggID, false, param)
+	require.NoError(t, err)
 
-	info := singleAggInfo{
-		aggID:     testAggID,
-		argType:   param,
-		retType:   ret,
-		emptyNull: false,
-	}
-	impl := registeredAggFunctions[generateKeyOfSingleColumnAgg(testAggID, param)]
-	exec := newAggregatorFromFixedToFixed[int64](mp, info, impl)
-
-	// First grow allocates beyond cap.
 	require.NoError(t, exec.GroupGrow(2))
-	// PreAllocate sets cap > len, so next grow fits within cap (else branch).
 	require.NoError(t, exec.PreAllocateGroups(4))
 	require.NoError(t, exec.GroupGrow(2))
 	exec.Free()
@@ -88,14 +61,13 @@ func TestVectorsUnmarshalFromReader(t *testing.T) {
 	v.Free(mp)
 
 	var buf bytes.Buffer
-	require.NoError(t, exec.SaveIntermediateResult(2, [][]uint8{{1}, {1}}, &buf))
+	require.NoError(t, exec.SaveIntermediateResult(2, [][]uint8{{1, 1}}, &buf))
 
 	exec2, err := makeMedian(mp, 0, false, param)
 	require.NoError(t, err)
 	r := bytes.NewReader(buf.Bytes())
 	require.NoError(t, exec2.UnmarshalFromReader(r, mp))
-	// 8 trailing bytes = extra_cnt=0 written by SaveIntermediateResult, not consumed by median
-	require.LessOrEqual(t, r.Len(), 8)
+	require.Zero(t, r.Len())
 
 	exec.Free()
 	exec2.Free()

@@ -18,8 +18,60 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSuspendScanProtection_RestoresExactCount(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	const scanID int32 = 42
+
+	builder.protectedScans[scanID] = 3
+	restore := builder.suspendScanProtection(scanID)
+
+	assert.False(t, builder.isScanProtected(scanID))
+
+	restore()
+
+	assert.Equal(t, 3, builder.protectedScans[scanID])
+}
+
+func TestSuspendScanProtection_NoExistingProtection(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	const scanID int32 = 24
+
+	restore := builder.suspendScanProtection(scanID)
+	assert.False(t, builder.isScanProtected(scanID))
+
+	restore()
+
+	_, exists := builder.protectedScans[scanID]
+	assert.False(t, exists)
+}
+
+func TestWithSuspendedScanProtection_RestoresAfterPanic(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	const scanID int32 = 64
+
+	builder.protectedScans[scanID] = 2
+
+	recovered := false
+	func() {
+		defer func() {
+			if recover() != nil {
+				recovered = true
+			}
+		}()
+
+		builder.withSuspendedScanProtection(scanID, func() {
+			assert.False(t, builder.isScanProtected(scanID))
+			panic("boom")
+		})
+	}()
+
+	assert.True(t, recovered)
+	assert.Equal(t, 2, builder.protectedScans[scanID])
+}
 
 func TestCalculatePostFilterOverFetchFactor(t *testing.T) {
 	tests := []struct {
