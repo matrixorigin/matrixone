@@ -18,10 +18,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
-	"math/big"
 	"math/bits"
 	"strconv"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -2504,27 +2502,45 @@ func (x Decimal256) Format(scale int32) string {
 	if signx {
 		x = x.Minus()
 	}
-	var n big.Int
-	n.SetUint64(x.B192_255)
-	n.Lsh(&n, 64)
-	n.Add(&n, new(big.Int).SetUint64(x.B128_191))
-	n.Lsh(&n, 64)
-	n.Add(&n, new(big.Int).SetUint64(x.B64_127))
-	n.Lsh(&n, 64)
-	n.Add(&n, new(big.Int).SetUint64(x.B0_63))
 
-	a := n.String()
-	if scale > 0 {
-		if len(a) <= int(scale) {
-			a = strings.Repeat("0", int(scale)-len(a)+1) + a
+	const decimal256FormatBufSize = 80
+	var buf [decimal256FormatBufSize]byte
+	i := len(buf)
+	one := Decimal256{1, 0, 0, 0}
+	ten := Decimal256{10, 0, 0, 0}
+
+	for x.B0_63 != 0 || x.B64_127 != 0 || x.B128_191 != 0 || x.B192_255 != 0 {
+		y, _ := x.Mod256(ten)
+		i--
+		buf[i] = byte(y.B0_63) + '0'
+		x, _ = x.Div256(ten)
+		if y.B0_63 >= 5 {
+			x, _ = x.Sub256(one)
 		}
-		idx := len(a) - int(scale)
-		a = a[:idx] + "." + a[idx:]
+		scale--
+		if scale == 0 {
+			i--
+			buf[i] = '.'
+		}
+	}
+	for scale > 0 {
+		i--
+		buf[i] = '0'
+		scale--
+		if scale == 0 {
+			i--
+			buf[i] = '.'
+		}
+	}
+	if scale == 0 {
+		i--
+		buf[i] = '0'
 	}
 	if signx {
-		a = "-" + a
+		i--
+		buf[i] = '-'
 	}
-	return a
+	return string(buf[i:])
 }
 
 func (x Decimal64) Ceil(scale1, scale2 int32, isConst bool) Decimal64 {

@@ -86,6 +86,64 @@ func TestParse256(t *testing.T) {
 	}
 }
 
+func TestDecimal256Format(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		width int32
+		scale int32
+		want  string
+	}{
+		{
+			name:  "zero integer",
+			input: "0",
+			width: 65,
+			scale: 0,
+			want:  "0",
+		},
+		{
+			name:  "zero fraction",
+			input: "0",
+			width: 65,
+			scale: 4,
+			want:  "0.0000",
+		},
+		{
+			name:  "leading fractional zeros",
+			input: "0.0012",
+			width: 65,
+			scale: 4,
+			want:  "0.0012",
+		},
+		{
+			name:  "negative fraction",
+			input: "-123.4500",
+			width: 65,
+			scale: 4,
+			want:  "-123.4500",
+		},
+		{
+			name:  "large integer",
+			input: "12345678901234567890123456789012345678901234567890123456789012345",
+			width: 65,
+			scale: 0,
+			want:  "12345678901234567890123456789012345678901234567890123456789012345",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			x, err := ParseDecimal256(tc.input, tc.width, tc.scale)
+			if err != nil {
+				t.Fatalf("ParseDecimal256(%q) failed: %v", tc.input, err)
+			}
+			if got := x.Format(tc.scale); got != tc.want {
+				t.Fatalf("Format(%q, scale=%d) = %q, want %q", tc.input, tc.scale, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestDecimal256ToFloat64NegativeScale(t *testing.T) {
 	x := Decimal256FromInt64(123)
 	if got := Decimal256ToFloat64(x, -2); got != 12300 {
@@ -219,6 +277,8 @@ func decimalFormat[T DecimalWithFormat](x T, scale int32) string {
 	return x.Format(scale)
 }
 
+var decimalFormatSink string
+
 func TestDecimalFormat(t *testing.T) {
 	d64 := Decimal64(0)
 	d128 := Decimal128{0, 0}
@@ -334,5 +394,17 @@ func BenchmarkMod(b *testing.B) {
 	y := Decimal128{uint64(rand.Int()), uint64(rand.Int())}
 	for i := 0; i < b.N; i++ {
 		x.Mod128(y)
+	}
+}
+
+func BenchmarkDecimal256Format(b *testing.B) {
+	x, err := ParseDecimal256("12345678901234567890123456789012345.123456789012345678901234567890", 65, 30)
+	if err != nil {
+		b.Fatalf("ParseDecimal256 failed: %v", err)
+	}
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		decimalFormatSink = x.Format(30)
 	}
 }
