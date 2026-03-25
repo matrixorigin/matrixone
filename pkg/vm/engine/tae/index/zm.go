@@ -429,6 +429,10 @@ func (zm ZM) getValue(buf []byte) any {
 		return types.DecodeFixed[types.Decimal64](buf)
 	case types.T_decimal128:
 		return types.DecodeFixed[types.Decimal128](buf)
+	case types.T_decimal256:
+		// Decimal256 zonemaps are intentionally skipped because the fixed ZM layout
+		// cannot safely store 32-byte min/max payloads yet.
+		return nil
 	case types.T_uuid:
 		return types.DecodeFixed[types.Uuid](buf)
 	case types.T_TS:
@@ -1688,6 +1692,7 @@ func UpdateZM(zm ZM, v []byte) {
 	if zm.GetType() == types.T_decimal256 {
 		// Decimal256 values exceed the fixed raw byte budget of the current ZM layout.
 		// Keep the type usable by skipping ZM maintenance instead of panicking in flush.
+		// This means decimal256 currently has no ZM pruning/statistical min-max help.
 		return
 	}
 	if !zm.IsInited() {

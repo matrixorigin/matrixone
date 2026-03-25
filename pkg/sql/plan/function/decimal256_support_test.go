@@ -558,4 +558,13 @@ func TestDecimal256StringTypeCoercion(t *testing.T) {
 	require.GreaterOrEqual(t, right.Width, int32(65))
 	require.Equal(t, int32(4), left.Scale)
 	require.Equal(t, int32(4), right.Scale)
+
+	ok, left, right = fixedTypeCastRule2(varchar, dec4)
+	require.True(t, ok)
+	require.Equal(t, types.T_decimal256, left.Oid)
+	require.Equal(t, types.T_decimal256, right.Oid)
+	require.GreaterOrEqual(t, left.Width, int32(65))
+	require.GreaterOrEqual(t, right.Width, int32(65))
+	require.Equal(t, int32(4), left.Scale)
+	require.Equal(t, int32(4), right.Scale)
 }

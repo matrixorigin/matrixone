@@ -408,200 +408,15 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	panic("unreached code")
 }
 
-func valueDec64Compare(
-	parameters []*vector.Vector, result *vector.FunctionResult[bool], length uint64,
-	cmpFn func(a, b types.Decimal64) bool, selectList *FunctionSelectList) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](parameters[1])
-
-	m := p2.GetType().Scale - p1.GetType().Scale
-
-	rsVec := result.GetResultVector()
-	rss := vector.MustFixedColWithTypeCheck[bool](rsVec)
-
-	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
-	rsNull := rsVec.GetNulls()
-	rsAnyNull := false
-
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
-			return nil
-		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
-	if c1 && c2 {
-		v1, null1 := p1.GetValue(0)
-		v2, null2 := p2.GetValue(0)
-		if null1 || null2 {
-			nulls.AddRange(rsNull, 0, length)
-		} else {
-			if m >= 0 {
-				x, _ := v1.Scale(m)
-				for i := uint64(0); i < length; i++ {
-					rss[i] = cmpFn(x, v2)
-				}
-			} else {
-				y, _ := v2.Scale(-m)
-				for i := uint64(0); i < length; i++ {
-					rss[i] = cmpFn(v1, y)
-				}
-			}
-		}
-		return nil
-	}
-
-	if c1 {
-		v1, null1 := p1.GetValue(0)
-		if null1 {
-			nulls.AddRange(rsNull, 0, length)
-		} else {
-			if m >= 0 {
-				x, _ := v1.Scale(m)
-				if p2.WithAnyNullValue() || rsAnyNull {
-					nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
-					for i := uint64(0); i < length; i++ {
-						if rsNull.Contains(i) {
-							continue
-						}
-						v2, _ := p2.GetValue(i)
-						rss[i] = cmpFn(x, v2)
-					}
-				} else {
-					for i := uint64(0); i < length; i++ {
-						v2, _ := p2.GetValue(i)
-						rss[i] = cmpFn(x, v2)
-					}
-				}
-			} else {
-				if p2.WithAnyNullValue() || rsAnyNull {
-					nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
-					for i := uint64(0); i < length; i++ {
-						if rsNull.Contains(i) {
-							continue
-						}
-						v2, _ := p2.GetValue(i)
-						y, _ := v2.Scale(-m)
-						rss[i] = cmpFn(v1, y)
-					}
-				} else {
-					scaleMy := -m
-					for i := uint64(0); i < length; i++ {
-						v2, _ := p2.GetValue(i)
-						y, _ := v2.Scale(scaleMy)
-						rss[i] = cmpFn(v1, y)
-					}
-				}
-			}
-		}
-
-		return nil
-	}
-
-	if c2 {
-		v2, null2 := p2.GetValue(0)
-		if null2 {
-			nulls.AddRange(rsNull, 0, length)
-		} else {
-			if m >= 0 {
-				if p1.WithAnyNullValue() || rsAnyNull {
-					nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
-					for i := uint64(0); i < length; i++ {
-						if rsNull.Contains(i) {
-							continue
-						}
-						v1, _ := p1.GetValue(i)
-						x, _ := v1.Scale(m)
-						rss[i] = cmpFn(x, v2)
-					}
-				} else {
-					for i := uint64(0); i < length; i++ {
-						v1, _ := p1.GetValue(i)
-						x, _ := v1.Scale(m)
-						rss[i] = cmpFn(x, v2)
-					}
-				}
-			} else {
-				y, _ := v2.Scale(-m)
-				if p1.WithAnyNullValue() || rsAnyNull {
-					nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
-					for i := uint64(0); i < length; i++ {
-						if rsNull.Contains(i) {
-							continue
-						}
-						v1, _ := p1.GetValue(i)
-						rss[i] = cmpFn(v1, y)
-					}
-				} else {
-					for i := uint64(0); i < length; i++ {
-						v1, _ := p1.GetValue(i)
-						rss[i] = cmpFn(v1, y)
-					}
-				}
-			}
-		}
-		return nil
-	}
-
-	if p1.WithAnyNullValue() || p2.WithAnyNullValue() || rsAnyNull {
-		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
-		nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
-		if m >= 0 {
-			for i := uint64(0); i < length; i++ {
-				if rsNull.Contains(i) {
-					continue
-				}
-				v1, _ := p1.GetValue(i)
-				v2, _ := p2.GetValue(i)
-				x, _ := v1.Scale(m)
-				rss[i] = cmpFn(x, v2)
-			}
-		} else {
-			scaleMy := -m
-			for i := uint64(0); i < length; i++ {
-				if rsNull.Contains(i) {
-					continue
-				}
-				v1, _ := p1.GetValue(i)
-				v2, _ := p2.GetValue(i)
-				y, _ := v2.Scale(scaleMy)
-				rss[i] = cmpFn(v1, y)
-			}
-		}
-		return nil
-	}
-
-	if m >= 0 {
-		for i := uint64(0); i < length; i++ {
-			v1, _ := p1.GetValue(i)
-			v2, _ := p2.GetValue(i)
-			x, _ := v1.Scale(m)
-			rss[i] = cmpFn(x, v2)
-		}
-	} else {
-		scaleMy := -m
-		for i := uint64(0); i < length; i++ {
-			v1, _ := p1.GetValue(i)
-			v2, _ := p2.GetValue(i)
-			y, _ := v2.Scale(scaleMy)
-			rss[i] = cmpFn(v1, y)
-		}
-	}
-	return nil
+type valueDecimalCompareType interface {
+	types.Decimal64 | types.Decimal128 | types.Decimal256
 }
 
-func valueDec128Compare(
+func valueDecimalCompare[T valueDecimalCompareType](
 	parameters []*vector.Vector, result *vector.FunctionResult[bool], length uint64,
-	cmpFn func(a, b types.Decimal128) bool, selectList *FunctionSelectList) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](parameters[1])
+	cmpFn func(a, b T) bool, scaleValue func(v T, delta int32) (T, error), selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
 
 	m := p2.GetType().Scale - p1.GetType().Scale
 
@@ -611,198 +426,6 @@ func valueDec128Compare(
 	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
 	rsNull := rsVec.GetNulls()
 	rsAnyNull := false
-
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
-			return nil
-		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
-	if c1 && c2 {
-		v1, null1 := p1.GetValue(0)
-		v2, null2 := p2.GetValue(0)
-		if null1 || null2 {
-			nulls.AddRange(rsNull, 0, length)
-		} else {
-			if m >= 0 {
-				x, _ := v1.Scale(m)
-				for i := uint64(0); i < length; i++ {
-					rss[i] = cmpFn(x, v2)
-				}
-			} else {
-				y, _ := v2.Scale(-m)
-				for i := uint64(0); i < length; i++ {
-					rss[i] = cmpFn(v1, y)
-				}
-			}
-		}
-		return nil
-	}
-
-	if c1 {
-		v1, null1 := p1.GetValue(0)
-		if null1 {
-			nulls.AddRange(rsNull, 0, length)
-		} else {
-			if m >= 0 {
-				x, _ := v1.Scale(m)
-				if p2.WithAnyNullValue() || rsAnyNull {
-					nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
-					for i := uint64(0); i < length; i++ {
-						if rsNull.Contains(i) {
-							continue
-						}
-						v2, _ := p2.GetValue(i)
-						rss[i] = cmpFn(x, v2)
-					}
-				} else {
-					for i := uint64(0); i < length; i++ {
-						v2, _ := p2.GetValue(i)
-						rss[i] = cmpFn(x, v2)
-					}
-				}
-			} else {
-				if p2.WithAnyNullValue() {
-					nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
-					for i := uint64(0); i < length; i++ {
-						if rsNull.Contains(i) {
-							continue
-						}
-						v2, _ := p2.GetValue(i)
-						y, _ := v2.Scale(-m)
-						rss[i] = cmpFn(v1, y)
-					}
-				} else {
-					scaleMy := -m
-					for i := uint64(0); i < length; i++ {
-						v2, _ := p2.GetValue(i)
-						y, _ := v2.Scale(scaleMy)
-						rss[i] = cmpFn(v1, y)
-					}
-				}
-			}
-		}
-
-		return nil
-	}
-
-	if c2 {
-		v2, null2 := p2.GetValue(0)
-		if null2 {
-			nulls.AddRange(rsNull, 0, length)
-		} else {
-			if m >= 0 {
-				if p1.WithAnyNullValue() || rsAnyNull {
-					nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
-					for i := uint64(0); i < length; i++ {
-						if rsNull.Contains(i) {
-							continue
-						}
-						v1, _ := p1.GetValue(i)
-						x, _ := v1.Scale(m)
-						rss[i] = cmpFn(x, v2)
-					}
-				} else {
-					for i := uint64(0); i < length; i++ {
-						v1, _ := p1.GetValue(i)
-						x, _ := v1.Scale(m)
-						rss[i] = cmpFn(x, v2)
-					}
-				}
-			} else {
-				y, _ := v2.Scale(-m)
-				if p1.WithAnyNullValue() || rsAnyNull {
-					nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
-					for i := uint64(0); i < length; i++ {
-						if rsNull.Contains(i) {
-							continue
-						}
-						v1, _ := p1.GetValue(i)
-						rss[i] = cmpFn(v1, y)
-					}
-				} else {
-					for i := uint64(0); i < length; i++ {
-						v1, _ := p1.GetValue(i)
-						rss[i] = cmpFn(v1, y)
-					}
-				}
-			}
-		}
-		return nil
-	}
-
-	if p1.WithAnyNullValue() || p2.WithAnyNullValue() || rsAnyNull {
-		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
-		nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
-		if m >= 0 {
-			for i := uint64(0); i < length; i++ {
-				if rsNull.Contains(i) {
-					continue
-				}
-				v1, _ := p1.GetValue(i)
-				v2, _ := p2.GetValue(i)
-				x, _ := v1.Scale(m)
-				rss[i] = cmpFn(x, v2)
-			}
-		} else {
-			scaleMy := -m
-			for i := uint64(0); i < length; i++ {
-				if rsNull.Contains(i) {
-					continue
-				}
-				v1, _ := p1.GetValue(i)
-				v2, _ := p2.GetValue(i)
-				y, _ := v2.Scale(scaleMy)
-				rss[i] = cmpFn(v1, y)
-			}
-		}
-		return nil
-	}
-
-	if m >= 0 {
-		for i := uint64(0); i < length; i++ {
-			v1, _ := p1.GetValue(i)
-			v2, _ := p2.GetValue(i)
-			x, _ := v1.Scale(m)
-			rss[i] = cmpFn(x, v2)
-		}
-	} else {
-		scaleMy := -m
-		for i := uint64(0); i < length; i++ {
-			v1, _ := p1.GetValue(i)
-			v2, _ := p2.GetValue(i)
-			y, _ := v2.Scale(scaleMy)
-			rss[i] = cmpFn(v1, y)
-		}
-	}
-	return nil
-}
-
-func valueDec256Compare(
-	parameters []*vector.Vector, result *vector.FunctionResult[bool], length uint64,
-	cmpFn func(a, b types.Decimal256) bool, selectList *FunctionSelectList) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](parameters[1])
-
-	m := p2.GetType().Scale - p1.GetType().Scale
-
-	rsVec := result.GetResultVector()
-	rss := vector.MustFixedColWithTypeCheck[bool](rsVec)
-
-	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
-	rsNull := rsVec.GetNulls()
-	rsAnyNull := false
-	scaleValue := func(v types.Decimal256, delta int32) (types.Decimal256, error) {
-		return v.Scale(delta)
-	}
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
@@ -871,7 +494,7 @@ func valueDec256Compare(
 					}
 				}
 			} else {
-				if p2.WithAnyNullValue() {
+				if p2.WithAnyNullValue() || rsAnyNull {
 					nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
 					for i := uint64(0); i < length; i++ {
 						if rsNull.Contains(i) {
@@ -1012,6 +635,32 @@ func valueDec256Compare(
 		}
 	}
 	return nil
+}
+
+func valueDec64Compare(
+	parameters []*vector.Vector, result *vector.FunctionResult[bool], length uint64,
+	cmpFn func(a, b types.Decimal64) bool, selectList *FunctionSelectList) error {
+	return valueDecimalCompare[types.Decimal64](parameters, result, length, cmpFn, func(v types.Decimal64, delta int32) (types.Decimal64, error) {
+		scaled, _ := v.Scale(delta)
+		return scaled, nil
+	}, selectList)
+}
+
+func valueDec128Compare(
+	parameters []*vector.Vector, result *vector.FunctionResult[bool], length uint64,
+	cmpFn func(a, b types.Decimal128) bool, selectList *FunctionSelectList) error {
+	return valueDecimalCompare[types.Decimal128](parameters, result, length, cmpFn, func(v types.Decimal128, delta int32) (types.Decimal128, error) {
+		scaled, _ := v.Scale(delta)
+		return scaled, nil
+	}, selectList)
+}
+
+func valueDec256Compare(
+	parameters []*vector.Vector, result *vector.FunctionResult[bool], length uint64,
+	cmpFn func(a, b types.Decimal256) bool, selectList *FunctionSelectList) error {
+	return valueDecimalCompare[types.Decimal256](parameters, result, length, cmpFn, func(v types.Decimal256, delta int32) (types.Decimal256, error) {
+		return v.Scale(delta)
+	}, selectList)
 }
 
 func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

@@ -392,10 +392,22 @@ func (exec *sumAvgDecExec[A, S]) BulkFill(groupIndex int, vectors []*vector.Vect
 }
 
 func (exec *sumAvgDecExec[A, S]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
-	var err error
 	if exec.IsDistinct() {
 		return exec.batchFillArgs(offset, groups, vectors, true)
 	}
+	if exec.isSum {
+		return exec.batchFillSum(offset, groups, vectors)
+	}
+	return exec.batchFillAvg(offset, groups, vectors)
+}
+
+func (exec *sumAvgDecExec[A, S]) batchFillSum(offset int, groups []uint64, vectors []*vector.Vector) error {
+	var err error
+	vec := vectors[0]
+	argScale := exec.aggInfo.argTypes[0].Scale
+	lastX := -1
+	var sumVec *vector.Vector
+	var sums []S
 
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
@@ -403,33 +415,62 @@ func (exec *sumAvgDecExec[A, S]) BatchFill(offset int, groups []uint64, vectors 
 		}
 
 		idx := uint64(i) + uint64(offset)
-		if vectors[0].IsNull(idx) {
+		if vec.IsNull(idx) {
 			continue
 		}
 
 		x, y := exec.getXY(grp - 1)
-		sumVec := exec.state[x].vecs[0]
-		sums := vector.MustFixedColNoTypeCheck[S](sumVec)
-		raw := vector.GetFixedAtNoTypeCheck[A](vectors[0], int(idx))
-		val := decimalStateFromArg[A, S](raw, exec.aggInfo.argTypes[0].Scale)
+		if x != lastX {
+			lastX = x
+			sumVec = exec.state[x].vecs[0]
+			sums = vector.MustFixedColNoTypeCheck[S](sumVec)
+		}
 
-		if exec.isSum {
-			if sumVec.IsNull(uint64(y)) {
-				sumVec.UnsetNull(uint64(y))
-				sums[y] = val
-			} else {
-				if sums[y], err = decimalStateAdd[S](sums[y], val); err != nil {
-					return err
-				}
-			}
+		raw := vector.GetFixedAtNoTypeCheck[A](vec, int(idx))
+		val := decimalStateFromArg[A, S](raw, argScale)
+		if sumVec.IsNull(uint64(y)) {
+			sumVec.UnsetNull(uint64(y))
+			sums[y] = val
 		} else {
 			if sums[y], err = decimalStateAdd[S](sums[y], val); err != nil {
 				return err
 			}
-			cntVec := exec.state[x].vecs[1]
-			cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
-			cnts[y] += 1
 		}
+	}
+	return nil
+}
+
+func (exec *sumAvgDecExec[A, S]) batchFillAvg(offset int, groups []uint64, vectors []*vector.Vector) error {
+	var err error
+	vec := vectors[0]
+	argScale := exec.aggInfo.argTypes[0].Scale
+	lastX := -1
+	var sums []S
+	var cnts []int64
+
+	for i, grp := range groups {
+		if grp == GroupNotMatched {
+			continue
+		}
+
+		idx := uint64(i) + uint64(offset)
+		if vec.IsNull(idx) {
+			continue
+		}
+
+		x, y := exec.getXY(grp - 1)
+		if x != lastX {
+			lastX = x
+			sums = vector.MustFixedColNoTypeCheck[S](exec.state[x].vecs[0])
+			cnts = vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])
+		}
+
+		raw := vector.GetFixedAtNoTypeCheck[A](vec, int(idx))
+		val := decimalStateFromArg[A, S](raw, argScale)
+		if sums[y], err = decimalStateAdd[S](sums[y], val); err != nil {
+			return err
+		}
+		cnts[y]++
 	}
 	return nil
 }
