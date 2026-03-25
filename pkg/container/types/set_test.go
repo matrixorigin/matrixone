@@ -79,6 +79,16 @@ func TestParseSetIndex(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestGetSetDescriptorCache(t *testing.T) {
+	first, err := getSetDescriptor("red,blue")
+	require.NoError(t, err)
+
+	second, err := getSetDescriptor("red,blue")
+	require.NoError(t, err)
+
+	require.Same(t, first, second)
+}
+
 func TestNormalizeSetValuesMaxMembers(t *testing.T) {
 	values := make([]string, 0, MaxSetMembers+1)
 	for i := 0; i < MaxSetMembers+1; i++ {

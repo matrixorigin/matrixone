@@ -17,11 +17,14 @@ package types
 import (
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 const MaxSetMembers = 64
+
+var setDescriptorCache sync.Map
 
 func NormalizeSetValues(values []string) ([]string, error) {
 	if len(values) == 0 {
@@ -51,7 +54,7 @@ func NormalizeSetValues(values []string) ([]string, error) {
 }
 
 func ParseSet(setStr string, name string) (uint64, error) {
-	descriptor, err := buildSetDescriptor(setStr)
+	descriptor, err := getSetDescriptor(setStr)
 	if err != nil {
 		return 0, err
 	}
@@ -70,7 +73,7 @@ func ParseSet(setStr string, name string) (uint64, error) {
 }
 
 func ParseSetValue(setStr string, bits uint64) (uint64, error) {
-	descriptor, err := buildSetDescriptor(setStr)
+	descriptor, err := getSetDescriptor(setStr)
 	if err != nil {
 		return 0, err
 	}
@@ -78,7 +81,7 @@ func ParseSetValue(setStr string, bits uint64) (uint64, error) {
 }
 
 func ParseSetIndex(setStr string, bits uint64) (string, error) {
-	descriptor, err := buildSetDescriptor(setStr)
+	descriptor, err := getSetDescriptor(setStr)
 	if err != nil {
 		return "", err
 	}
@@ -90,6 +93,20 @@ type setDescriptor struct {
 	valueToBit         map[string]uint64
 	normalizedToOrigin map[string]string
 	validBitmap        uint64
+}
+
+func getSetDescriptor(setStr string) (*setDescriptor, error) {
+	if descriptor, ok := setDescriptorCache.Load(setStr); ok {
+		return descriptor.(*setDescriptor), nil
+	}
+
+	descriptor, err := buildSetDescriptor(setStr)
+	if err != nil {
+		return nil, err
+	}
+
+	actual, _ := setDescriptorCache.LoadOrStore(setStr, descriptor)
+	return actual.(*setDescriptor), nil
 }
 
 func buildSetDescriptor(setStr string) (*setDescriptor, error) {

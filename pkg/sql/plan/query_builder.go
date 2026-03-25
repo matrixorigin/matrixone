@@ -3576,19 +3576,13 @@ func (builder *QueryBuilder) bindProjection(
 
 	resultLen = len(ctx.projects)
 	for i, proj := range ctx.projects {
-		protoSz := proj.ProtoSize()
-		if protoSz < 256 {
-			exprBytes := make([]byte, protoSz)
-			_, err = proj.MarshalToSizedBuffer(exprBytes)
-			if err != nil {
-				return
-			}
-
-			exprStr := string(exprBytes)
-			if _, ok := ctx.projectByExpr[exprStr]; !ok {
-				ctx.projectByExpr[exprStr] = int32(i)
-			}
-
+		exprKey, keyErr := projectExprKey(proj)
+		if keyErr != nil {
+			err = keyErr
+			return
+		}
+		if _, ok := ctx.projectByExpr[exprKey]; !ok {
+			ctx.projectByExpr[exprKey] = int32(i)
 		}
 
 		if exprCol, ok := proj.Expr.(*plan.Expr_Col); ok {
@@ -3807,24 +3801,28 @@ func (builder *QueryBuilder) bindOrderBy(
 	return
 }
 
+// projectExprKey uses the full proto encoding so large ORDER BY expressions
+// dedupe the same way as small ones.
+func projectExprKey(expr *plan.Expr) (string, error) {
+	exprBytes := make([]byte, expr.ProtoSize())
+	if _, err := expr.MarshalToSizedBuffer(exprBytes); err != nil {
+		return "", err
+	}
+	return string(exprBytes), nil
+}
+
 func appendOrderByProjectExpr(ctx *BindContext, expr *plan.Expr) (int32, error) {
-	protoSz := expr.ProtoSize()
-	if protoSz < 256 {
-		exprBytes := make([]byte, protoSz)
-		if _, err := expr.MarshalToSizedBuffer(exprBytes); err != nil {
-			return 0, err
-		}
-		exprStr := string(exprBytes)
-		if colPos, ok := ctx.projectByExpr[exprStr]; ok {
-			return colPos, nil
-		}
-		colPos := int32(len(ctx.projects))
-		ctx.projectByExpr[exprStr] = colPos
-		ctx.projects = append(ctx.projects, expr)
+	exprKey, err := projectExprKey(expr)
+	if err != nil {
+		return 0, err
+	}
+
+	if colPos, ok := ctx.projectByExpr[exprKey]; ok {
 		return colPos, nil
 	}
 
 	colPos := int32(len(ctx.projects))
+	ctx.projectByExpr[exprKey] = colPos
 	ctx.projects = append(ctx.projects, expr)
 	return colPos, nil
 }
