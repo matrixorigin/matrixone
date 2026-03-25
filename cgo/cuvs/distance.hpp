@@ -74,8 +74,9 @@ void pairwise_distance(const raft::resources& res,
     char* d_dist = d_y + y_alloc;
 
     // 2. Async copies to Device
-    RAFT_CUDA_TRY(cudaMemcpyAsync(d_x, x, x_bytes, cudaMemcpyHostToDevice, stream));
-    RAFT_CUDA_TRY(cudaMemcpyAsync(d_y, y, y_bytes, cudaMemcpyHostToDevice, stream));
+    raft::copy(res, raft::make_device_matrix_view<T, int64_t>(reinterpret_cast<T*>(d_x), (int64_t)n_x, (int64_t)dim), raft::make_host_matrix_view<const T, int64_t>(x, (int64_t)n_x, (int64_t)dim));
+    raft::copy(res, raft::make_device_matrix_view<T, int64_t>(reinterpret_cast<T*>(d_y), (int64_t)n_y, (int64_t)dim), raft::make_host_matrix_view<const T, int64_t>(y, (int64_t)n_y, (int64_t)dim));
+    raft::resource::sync_stream(res);
 
     // 3. Prepare Views (zero allocation)
     auto x_view = raft::make_device_matrix_view<const T, int64_t>(reinterpret_cast<const T*>(d_x), (int64_t)n_x, (int64_t)dim);
@@ -86,7 +87,7 @@ void pairwise_distance(const raft::resources& res,
     cuvs::distance::pairwise_distance(res, x_view, y_view, dist_view, static_cast<cuvs::distance::DistanceType>(metric));
 
     // 5. Async copy results back to host
-    RAFT_CUDA_TRY(cudaMemcpyAsync(dist, d_dist, dist_bytes, cudaMemcpyDeviceToHost, stream));
+    raft::copy(res, raft::make_host_matrix_view<float, int64_t>(dist, (int64_t)n_x, (int64_t)n_y), dist_view);
 
     // 6. Synchronize
     raft::resource::sync_stream(res);

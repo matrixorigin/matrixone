@@ -22,7 +22,13 @@ LIBS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64/cudart -L/h
 INCLUDES := -I. -I/usr/local/cuda/include -I/home/ubuntu/miniconda/envs/go/include -I/home/ubuntu/miniconda/envs/go/include/rapids -I/home/ubuntu/miniconda/envs/go/include/raft -I/home/ubuntu/miniconda/envs/go/include/cuvs
 
 # NVCC_FLAGS are for compilation only. -x cu tells nvcc to treat .cpp as .cu
-NVCC_FLAGS := -O3 -std=c++17 -x cu -Xcompiler "-Wall -Wextra -fPIC" --extended-lambda --expt-relaxed-constexpr $(INCLUDES) -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE -DRAFT_SYSTEM_LITTLE_ENDIAN=1 -gencode arch=compute_86,code=sm_86
+NVCC_FLAGS := -O3 -std=c++17 -x cu -Xcompiler "-Wall -Wextra -fPIC" --extended-lambda --expt-relaxed-constexpr $(INCLUDES) -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE -DRAFT_SYSTEM_LITTLE_ENDIAN=1 \
+    -gencode arch=compute_75,code=sm_75 \
+    -gencode arch=compute_80,code=sm_80 \
+    -gencode arch=compute_86,code=sm_86 \
+    -gencode arch=compute_89,code=sm_89 \
+    -gencode arch=compute_90,code=sm_90 \
+    -gencode arch=compute_90,code=compute_90
 
 # LDFLAGS for linking only. DO NOT include -x cu here.
 LDFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -Wextra -fPIC"
@@ -30,7 +36,7 @@ LDFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -Wextra -fPIC"
 # Source files
 C_SRCS := brute_force_c.cpp ivf_flat_c.cpp ivf_pq_c.cpp cagra_c.cpp kmeans_c.cpp adhoc_c.cpp distance_c.cpp
 CPP_SRCS := helper.cpp
-TEST_SRCS := test/main_test.cu test/brute_force_test.cu test/ivf_flat_test.cu test/ivf_pq_test.cu test/cagra_test.cu test/kmeans_test.cu test/quantize_test.cu test/distance_test.cu test/batching_test.cu test/snmg_test.cu
+TEST_SRCS := test/main_test.cu test/brute_force_test.cu test/ivf_flat_test.cu test/ivf_pq_test.cu test/cagra_test.cu test/kmeans_test.cu test/quantize_test.cu test/distance_test.cu test/batching_test.cu test/snmg_test.cu test/verify_half_conversion.cu
 
 # Object files
 OBJS := $(C_SRCS:.cpp=.o) $(CPP_SRCS:.cpp=.o)

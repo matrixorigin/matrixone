@@ -232,17 +232,17 @@ public:
         // Create and own the device memory
         using dataset_t = raft::device_matrix<T, int64_t>;
         auto dataset_device = raft::make_device_matrix<T, int64_t>(*res, (int64_t)this->count, (int64_t)this->dimension);
-        
-        RAFT_CUDA_TRY(cudaMemcpyAsync(dataset_device.data_handle(), this->flattened_host_dataset.data(),
-                                    this->flattened_host_dataset.size() * sizeof(T), cudaMemcpyHostToDevice,
-                                    raft::resource::get_cuda_stream(*res)));
+        raft::copy(*res, dataset_device.view(), raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
+        raft::resource::sync_stream(*res);
+
+        // Move the matrix into the shared pointer FIRST to ensure it's alive and owned
+        auto shared_dataset = std::make_shared<dataset_t>(std::move(dataset_device));
+        this->dataset_device_ptr_ = shared_dataset;
 
         index_.reset(new brute_force_index(cuvs::neighbors::brute_force::build(
-            *res, raft::make_const_mdspan(dataset_device.view()), 
-            static_cast<cuvs::distance::DistanceType>(this->metric))));
+            *res, raft::make_const_mdspan(shared_dataset->view()), 
+            matrixone::convert_distance_type(this->metric))));
         
-        // Store the mdarray in shared_ptr<void> to keep it alive
-        this->dataset_device_ptr_ = std::make_shared<dataset_t>(std::move(dataset_device));
         handle.sync();
     }
 
@@ -271,6 +271,7 @@ public:
 
         auto queries_device = raft::make_device_matrix<T, int64_t>(*res, (int64_t)num_queries, (int64_t)this->dimension);
         raft::copy(*res, queries_device.view(), raft::make_host_matrix_view<const T, int64_t>(queries_data, num_queries, this->dimension));
+        raft::resource::sync_stream(*res);
 
         auto neighbors_device = raft::make_device_matrix<int64_t, int64_t>(*res, (int64_t)num_queries, (int64_t)limit);
         auto distances_device = raft::make_device_matrix<float, int64_t>(*res, (int64_t)num_queries, (int64_t)limit);
@@ -315,15 +316,21 @@ public:
         std::shared_lock<std::shared_mutex> lock(this->mutex_);
         auto res = handle.get_raft_resources();
 
-        auto q_dev_f = raft::make_device_matrix<float, int64_t>(*res, num_queries, this->dimension);
-        raft::copy(*res, q_dev_f.view(), raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
-        
         auto q_dev_t = raft::make_device_matrix<T, int64_t>(*res, num_queries, this->dimension);
-        if constexpr (sizeof(T) == 1) {
-            if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
-            this->quantizer_.template transform<T>(*res, q_dev_f.view(), q_dev_t.data_handle(), true);
+        
+        if constexpr (std::is_same_v<T, float>) {
+            raft::copy(*res, q_dev_t.view(), raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
         } else {
-            raft::copy(*res, q_dev_t.view(), q_dev_f.view());
+            auto q_dev_f = raft::make_device_matrix<float, int64_t>(*res, num_queries, this->dimension);
+            raft::copy(*res, q_dev_f.view(), raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
+            
+            if constexpr (sizeof(T) == 1) {
+                if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
+                this->quantizer_.template transform<T>(*res, q_dev_f.view(), q_dev_t.data_handle(), true);
+            } else {
+                // T is half
+                raft::copy(*res, q_dev_t.view(), q_dev_f.view());
+            }
         }
         raft::resource::sync_stream(*res);
 

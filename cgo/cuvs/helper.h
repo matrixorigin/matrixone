@@ -24,6 +24,7 @@
 #include <cuvs/distance/distance.hpp>
 #include <vector>
 #include <string>
+#include <cuda_fp16.h>
 
 namespace matrixone {
 
@@ -62,6 +63,16 @@ const raft::resources& get_raft_resources();
  * @brief Convert distance type from C enum to cuVS enum.
  */
 cuvs::distance::DistanceType convert_distance_type(distance_type_t metric_c);
+
+/**
+ * @brief Performs float to half conversion on device.
+ */
+void convert_f32_to_f16_on_device(const raft::resources& res, const float* src, half* dst, uint64_t total_elements);
+
+/**
+ * @brief Performs half to float conversion on device.
+ */
+void convert_f16_to_f32_on_device(const raft::resources& res, const half* src, float* dst, uint64_t total_elements);
 
 } // namespace matrixone
 #endif

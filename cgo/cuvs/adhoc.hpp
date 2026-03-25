@@ -84,14 +84,15 @@ void adhoc_brute_force_search(const raft::resources& res,
     char* d_distances = d_neighbors + neighbors_alloc;
 
     // 2. Async copies to Device
-    RAFT_CUDA_TRY(cudaMemcpyAsync(d_dataset, dataset, dataset_bytes, cudaMemcpyHostToDevice, stream));
-    RAFT_CUDA_TRY(cudaMemcpyAsync(d_queries, queries, queries_bytes, cudaMemcpyHostToDevice, stream));
+    raft::copy(res, raft::make_device_matrix_view<T, int64_t>(reinterpret_cast<T*>(d_dataset), (int64_t)n_rows, (int64_t)dim), raft::make_host_matrix_view<const T, int64_t>(dataset, (int64_t)n_rows, (int64_t)dim));
+    raft::copy(res, raft::make_device_matrix_view<T, int64_t>(reinterpret_cast<T*>(d_queries), (int64_t)n_queries, (int64_t)dim), raft::make_host_matrix_view<const T, int64_t>(queries, (int64_t)n_queries, (int64_t)dim));
+    raft::resource::sync_stream(res);
 
     // 3. Prepare Views (zero allocation)
-    auto dataset_view = raft::make_device_matrix_view<const T, int64_t>(reinterpret_cast<const T*>(d_dataset), n_rows, dim);
-    auto queries_view = raft::make_device_matrix_view<const T, int64_t>(reinterpret_cast<const T*>(d_queries), n_queries, dim);
-    auto neighbors_view = raft::make_device_matrix_view<int64_t, int64_t>(reinterpret_cast<int64_t*>(d_neighbors), n_queries, limit);
-    auto distances_view = raft::make_device_matrix_view<float, int64_t>(reinterpret_cast<float*>(d_distances), n_queries, limit);
+    auto dataset_view = raft::make_device_matrix_view<const T, int64_t>(reinterpret_cast<const T*>(d_dataset), (int64_t)n_rows, (int64_t)dim);
+    auto queries_view = raft::make_device_matrix_view<const T, int64_t>(reinterpret_cast<const T*>(d_queries), (int64_t)n_queries, (int64_t)dim);
+    auto neighbors_view = raft::make_device_matrix_view<int64_t, int64_t>(reinterpret_cast<int64_t*>(d_neighbors), (int64_t)n_queries, (int64_t)limit);
+    auto distances_view = raft::make_device_matrix_view<float, int64_t>(reinterpret_cast<float*>(d_distances), (int64_t)n_queries, (int64_t)limit);
 
     // 4. Build temporary index (view-based, very fast)
     cuvs::neighbors::brute_force::index_params index_params;
@@ -106,8 +107,8 @@ void adhoc_brute_force_search(const raft::resources& res,
                                          distances_view);
 
     // 6. Async copy results back to host
-    RAFT_CUDA_TRY(cudaMemcpyAsync(neighbors, d_neighbors, neighbors_bytes, cudaMemcpyDeviceToHost, stream));
-    RAFT_CUDA_TRY(cudaMemcpyAsync(distances, d_distances, distances_bytes, cudaMemcpyDeviceToHost, stream));
+    raft::copy(res, raft::make_host_matrix_view<int64_t, int64_t>(neighbors, (int64_t)n_queries, (int64_t)limit), neighbors_view);
+    raft::copy(res, raft::make_host_matrix_view<float, int64_t>(distances, (int64_t)n_queries, (int64_t)limit), distances_view);
 
     // 7. Synchronize
     raft::resource::sync_stream(res);

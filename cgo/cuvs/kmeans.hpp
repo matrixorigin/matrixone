@@ -188,9 +188,8 @@ public:
 
         auto dataset_device_t = raft::make_device_matrix<T, int64_t>(
             *res, static_cast<int64_t>(this->count), static_cast<int64_t>(this->dimension));
-        RAFT_CUDA_TRY(cudaMemcpyAsync(dataset_device_t.data_handle(), this->flattened_host_dataset.data(),
-                                    this->flattened_host_dataset.size() * sizeof(T), cudaMemcpyHostToDevice,
-                                    raft::resource::get_cuda_stream(*res)));
+        raft::copy(*res, dataset_device_t.view(), raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
+        raft::resource::sync_stream(*res);
 
         auto dataset_device_f = raft::make_device_matrix<float, int64_t>(*res, (int64_t)this->count, (int64_t)this->dimension);
         raft::copy(*res, dataset_device_f.view(), dataset_device_t.view());
@@ -227,9 +226,17 @@ public:
                 auto dataset_device_t = raft::make_device_matrix<T, int64_t>(
                     *res, static_cast<int64_t>(this->count), static_cast<int64_t>(this->dimension));
                 raft::copy(*res, dataset_device_t.view(), raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
+                raft::resource::sync_stream(*res);
 
                 auto dataset_device_f = raft::make_device_matrix<float, int64_t>(*res, (int64_t)this->count, (int64_t)this->dimension);
-                raft::copy(*res, dataset_device_f.view(), dataset_device_t.view());
+                if constexpr (std::is_same_v<T, float>) {
+                    raft::copy(*res, dataset_device_f.view(), dataset_device_t.view());
+                } else if constexpr (std::is_same_v<T, half>) {
+                    raft::copy(*res, dataset_device_f.view(), dataset_device_t.view());
+                } else if constexpr (sizeof(T) == 1) {
+                    raft::copy(*res, dataset_device_f.view(), dataset_device_t.view());
+                }
+                raft::resource::sync_stream(*res);
 
                 cuvs::cluster::kmeans::params kmeans_params;
                 kmeans_params.n_clusters = this->build_params.k;
@@ -263,12 +270,28 @@ public:
             std::shared_lock<std::shared_mutex> lock(this->mutex_);
             auto res = handle.get_raft_resources();
 
-            auto queries_device_t = raft::make_device_matrix<T, int64_t>(
-                *res, static_cast<int64_t>(num_queries), static_cast<int64_t>(this->dimension));
-            raft::copy(*res, queries_device_t.view(), raft::make_host_matrix_view<const T, int64_t>(queries_data, num_queries, this->dimension));
-
             auto queries_device_f = raft::make_device_matrix<float, int64_t>(*res, (int64_t)num_queries, (int64_t)this->dimension);
-            raft::copy(*res, queries_device_f.view(), queries_device_t.view());
+            
+            if constexpr (std::is_same_v<T, float>) {
+                raft::copy(*res, queries_device_f.view(), raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
+                raft::resource::sync_stream(*res);
+            } else {
+                auto queries_device_t = raft::make_device_matrix<T, int64_t>(*res, static_cast<int64_t>(num_queries), static_cast<int64_t>(this->dimension));
+                raft::copy(*res, queries_device_t.view(), raft::make_host_matrix_view<const T, int64_t>(queries_data, num_queries, this->dimension));
+                raft::resource::sync_stream(*res);
+                
+                if constexpr (std::is_same_v<T, half>) {
+                    raft::copy(*res, queries_device_f.view(), queries_device_t.view());
+                    raft::resource::sync_stream(*res);
+                } else if constexpr (sizeof(T) == 1) {
+                    // For 1-byte quantized types, cuVS requires float inputs for kmeans predict
+                    // Unfortunately, we don't have a de-quantize method in scalar_quantizer_t easily accessible here.
+                    // For now, cast directly, though this might be inaccurate if actual dequantization is needed.
+                    raft::copy(*res, queries_device_f.view(), queries_device_t.view());
+                    raft::resource::sync_stream(*res);
+                }
+            }
+            raft::resource::sync_stream(*res);
 
             auto labels_device = raft::make_device_vector<int64_t, int64_t>(*res, (int64_t)num_queries);
             
@@ -303,6 +326,7 @@ public:
 
             auto queries_device_f = raft::make_device_matrix<float, int64_t>(*res, (int64_t)num_queries, (int64_t)this->dimension);
             raft::copy(*res, queries_device_f.view(), raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
+            raft::resource::sync_stream(*res);
             
             auto labels_device = raft::make_device_vector<int64_t, int64_t>(*res, (int64_t)num_queries);
             float inertia;
@@ -345,6 +369,7 @@ public:
 
                 auto dataset_device_f = raft::make_device_matrix<float, int64_t>(*res, (int64_t)this->count, (int64_t)this->dimension);
                 raft::copy(*res, dataset_device_f.view(), raft::make_host_matrix_view<const float, int64_t>(dataset_data, this->count, this->dimension));
+                raft::resource::sync_stream(*res);
 
                 cuvs::cluster::kmeans::params kmeans_params;
                 kmeans_params.n_clusters = this->build_params.k;

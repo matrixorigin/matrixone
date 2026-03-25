@@ -128,6 +128,53 @@ __global__ void f32_to_f16_tail_kernel(const float* src, half* dst, uint64_t ind
     dst[index] = __float2half(src[index]);
 }
 
+__global__ void f16_to_f32_vectorized_kernel(const half2* src, float2* dst, uint64_t n_pairs) {
+    uint64_t i = blockIdx.x * (uint64_t)blockDim.x + threadIdx.x;
+    if (i < n_pairs) {
+        dst[i] = __half22float2(src[i]);
+    }
+}
+
+__global__ void f16_to_f32_tail_kernel(const half* src, float* dst, uint64_t index) {
+    dst[index] = __half2float(src[index]);
+}
+
+namespace matrixone {
+
+void convert_f32_to_f16_on_device(const raft::resources& res, const float* src, half* dst, uint64_t total_elements) {
+    if (!src || !dst || total_elements == 0) return;
+    
+    auto stream = raft::resource::get_cuda_stream(res);
+    uint64_t n_pairs = total_elements / 2;
+    if (n_pairs > 0) {
+        uint32_t threads_per_block = 256;
+        uint32_t blocks = (n_pairs + threads_per_block - 1) / threads_per_block;
+        f32_to_f16_vectorized_kernel<<<blocks, threads_per_block, 0, stream>>>((const float2*)src, (half2*)dst, n_pairs);
+    }
+    
+    if (total_elements % 2 != 0) {
+        f32_to_f16_tail_kernel<<<1, 1, 0, stream>>>(src, dst, total_elements - 1);
+    }
+}
+
+void convert_f16_to_f32_on_device(const raft::resources& res, const half* src, float* dst, uint64_t total_elements) {
+    if (!src || !dst || total_elements == 0) return;
+    
+    auto stream = raft::resource::get_cuda_stream(res);
+    uint64_t n_pairs = total_elements / 2;
+    if (n_pairs > 0) {
+        uint32_t threads_per_block = 256;
+        uint32_t blocks = (n_pairs + threads_per_block - 1) / threads_per_block;
+        f16_to_f32_vectorized_kernel<<<blocks, threads_per_block, 0, stream>>>((const half2*)src, (float2*)dst, n_pairs);
+    }
+    
+    if (total_elements % 2 != 0) {
+        f16_to_f32_tail_kernel<<<1, 1, 0, stream>>>(src, dst, total_elements - 1);
+    }
+}
+
+} // namespace matrixone
+
 extern "C" {
 
 int gpu_get_device_count() {
