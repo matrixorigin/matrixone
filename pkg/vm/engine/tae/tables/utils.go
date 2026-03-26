@@ -83,8 +83,8 @@ func LoadPersistedColumnDatas(
 	mp *mpool.MPool,
 	tsForAppendable *types.TS,
 ) ([]containers.Vector, *nulls.Nulls, error) {
-	cols := make([]uint16, 0)
-	typs := make([]types.Type, 0)
+	cols := make([]uint16, 0, len(colIdxs))
+	typs := make([]types.Type, 0, len(colIdxs))
 	vectors := make([]containers.Vector, len(colIdxs))
 	phyAddIdx := -1
 	committsIdx := -1
@@ -115,7 +115,6 @@ func LoadPersistedColumnDatas(
 		return vectors, deletes, nil
 	}
 	if tsForAppendable != nil {
-		deletes = nulls.NewWithSize(1024)
 		if committsIdx == -1 {
 			cols = append(cols, objectio.SEQNUM_COMMITTS)
 			typs = append(typs, types.T_TS.ToType())
@@ -145,6 +144,9 @@ func LoadPersistedColumnDatas(
 		commits := vector.MustFixedColNoTypeCheck[types.TS](vecs[committsIdx].GetDownstreamVector())
 		for i := range commits {
 			if commits[i].GT(tsForAppendable) {
+				if deletes == nil {
+					deletes = nulls.NewWithSize(int(location.Rows()))
+				}
 				deletes.Add(uint64(i))
 			}
 		}

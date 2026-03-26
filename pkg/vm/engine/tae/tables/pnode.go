@@ -253,11 +253,6 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 		if err != nil {
 			return err
 		}
-		defer func() {
-			for i := range vecs {
-				vecs[i].Close()
-			}
-		}()
 		var commitTSs []types.TS
 		if !persistedByCN {
 			commitTSs = vector.MustFixedColWithTypeCheck[types.TS](vecs[2].GetDownstreamVector())
@@ -291,6 +286,9 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 				}
 			}
 		}
+		for i := range vecs {
+			vecs[i].Close()
+		}
 	}
 	return
 }
@@ -323,6 +321,7 @@ func (node *persistedNode) FillBlockTombstones(
 	); err != nil {
 		return err
 	}
+	colIdxs := []int{0}
 	for tombstoneBlkID := 0; tombstoneBlkID < node.object.meta.Load().BlockCnt(); tombstoneBlkID++ {
 		buf := bf.GetBloomFilter(uint32(tombstoneBlkID))
 		bfIndex := index.NewEmptyBloomFilterWithType(index.HBF)
@@ -342,27 +341,22 @@ func (node *persistedNode) FillBlockTombstones(
 			return err
 		}
 		vecs, _, err := LoadPersistedColumnDatas(
-			ctx, readSchema, node.object.rt, id, []int{0}, location, mp, nil,
+			ctx, readSchema, node.object.rt, id, colIdxs, location, mp, nil,
 		)
 		if err != nil {
 			return err
 		}
-		defer func() {
-			for i := range vecs {
-				vecs[i].Close()
-			}
-		}()
 		var commitTSs []types.TS
 		var commitTSVec containers.Vector
 		if node.object.meta.Load().IsAppendable() {
 			commitTSVec, err = node.object.LoadPersistedCommitTS(uint16(tombstoneBlkID))
 			if err != nil {
+				for i := range vecs {
+					vecs[i].Close()
+				}
 				return err
 			}
 			commitTSs = vector.MustFixedColWithTypeCheck[types.TS](commitTSVec.GetDownstreamVector())
-		}
-		if commitTSVec != nil {
-			defer commitTSVec.Close()
 		}
 		rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
 		// TODO: biselect, check visibility
@@ -380,6 +374,12 @@ func (node *persistedNode) FillBlockTombstones(
 				offset := rowID.GetRowOffset()
 				(*deletes).Add(uint64(offset) + deleteStartOffset)
 			}
+		}
+		if commitTSVec != nil {
+			commitTSVec.Close()
+		}
+		for i := range vecs {
+			vecs[i].Close()
 		}
 	}
 	return nil

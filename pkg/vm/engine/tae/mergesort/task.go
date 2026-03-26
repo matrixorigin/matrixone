@@ -133,28 +133,33 @@ func DoMergeAndWrite(
 // not defined in api.go to avoid import cycle
 
 func CleanTransMapping(b api.TransferMaps) {
-	for i := 0; i < len(b); i++ {
-		b[i] = make(api.TransferMap)
+	for i := range b {
+		b[i] = nil
 	}
 }
 
-func AddSortPhaseMapping(m api.TransferMap, rowCnt int, mapping []int64) {
-	if mapping == nil {
-		for i := range rowCnt {
-			m[uint32(i)] = api.TransferDestPos{RowIdx: uint32(i)}
-		}
+// AddSortPhaseMapping creates and populates the transfer slice for source block mapIdx.
+// rowCnt is the number of rows in the source block.
+// mapping[sortedPos] = originalPos; nil mapping means the data is already in order.
+func AddSortPhaseMapping(b api.TransferMaps, mapIdx int, rowCnt int, mapping []int64) {
+	if rowCnt == 0 {
 		return
 	}
-
-	if len(mapping) != rowCnt {
-		panic(fmt.Sprintf("mapping length %d != originRowCnt %d", len(mapping), rowCnt))
+	m := make(api.TransferMap, rowCnt)
+	for i := range m {
+		m[i].ObjIdx = api.NoTransfer
 	}
-
-	// mapping[sortedPos] = originalPos  →  m[originalPos] = {RowIdx: sortedPos}
-	// Write the inverse permutation directly into the map; no intermediate slice needed.
-	for sortedPos, originalPos := range mapping {
-		m[uint32(originalPos)] = api.TransferDestPos{RowIdx: uint32(sortedPos)}
+	if mapping == nil {
+		for i := range rowCnt {
+			m[i] = api.TransferDestPos{RowIdx: uint32(i)}
+		}
+	} else {
+		// mapping[sortedPos] = originalPos  →  m[originalPos] = {RowIdx: sortedPos}
+		for sortedPos, originalPos := range mapping {
+			m[uint32(originalPos)] = api.TransferDestPos{RowIdx: uint32(sortedPos)}
+		}
 	}
+	b[mapIdx] = m
 }
 
 func UpdateMappingAfterMerge(b api.TransferMaps, mapping []int, toLayout []uint32) {
@@ -185,19 +190,32 @@ func UpdateMappingAfterMerge(b api.TransferMaps, mapping []int, toLayout []uint3
 	var totalHandledRows uint32
 
 	for _, m := range b {
-		size := len(m)
-		var curTotal uint32 // index in the flatten src array
-		for srcRow := range m {
-			curTotal = totalHandledRows + m[srcRow].RowIdx
+		if len(m) == 0 {
+			continue
+		}
+		// Count rows that entered the merge from this block (non-sentinel entries).
+		// This must be computed before the update loop because totalHandledRows is
+		// the cumulative offset into the merge output for the current block.
+		var size uint32
+		for _, pos := range m {
+			if pos.ObjIdx != api.NoTransfer {
+				size++
+			}
+		}
+		for srcRow, destPos := range m {
+			if destPos.ObjIdx == api.NoTransfer {
+				continue // pre-deleted row, not in merge output
+			}
+			curTotal := totalHandledRows + destPos.RowIdx
 			destTotal := mapping[curTotal]
 			if destTotal == -1 {
-				delete(m, srcRow)
+				m[srcRow] = api.TransferDestPos{ObjIdx: api.NoTransfer}
 			} else {
 				destBlkIdx, destRowIdx := bisectPinpoint(uint32(destTotal))
 				m[srcRow] = api.TransferDestPos{BlkIdx: uint16(destBlkIdx), RowIdx: destRowIdx}
 			}
 		}
-		totalHandledRows += uint32(size)
+		totalHandledRows += size
 	}
 }
 

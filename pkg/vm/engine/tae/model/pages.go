@@ -236,13 +236,14 @@ func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) 
 	v2.TransferPageTotalHitHistogram.Observe(1)
 
 	memStart := time.Now()
-	var data api.TransferDestPos
-	if m == nil {
-		ok = false
+	if m == nil || uint32(len(*m)) <= from {
+		memDuration := time.Since(memStart)
+		v2.TransferMemLatencyHistogram.Observe(memDuration.Seconds())
 		return
 	}
-	data, ok = (*m)[from]
-	if ok {
+	data := (*m)[from]
+	if data.ObjIdx != api.NoTransfer {
+		ok = true
 		objID := page.objects[data.ObjIdx]
 		dest = objectio.NewRowIDWithObjectIDBlkNumAndRowID(*objID, data.BlkIdx, data.RowIdx)
 	}
@@ -257,16 +258,26 @@ func (page *TransferHashPage) Marshal() []byte {
 		panic("empty hashmap")
 	}
 
-	b := new(bytes.Buffer)
-	size := uint64(len(*m))
+	// Count non-deleted entries to size the buffer precisely.
+	var size uint64
+	for _, v := range *m {
+		if v.ObjIdx != api.NoTransfer {
+			size++
+		}
+	}
 	if size == 0 {
 		return nil
 	}
+	b := new(bytes.Buffer)
 	marshalSize := 8 + size*(4+1+2+4)
 	b.Grow(int(marshalSize))
 	b.Write(types.EncodeUint64(&size))
 	for k, v := range *m {
-		b.Write(types.EncodeUint32(&k))
+		if v.ObjIdx == api.NoTransfer {
+			continue
+		}
+		k32 := uint32(k)
+		b.Write(types.EncodeUint32(&k32))
 		b.Write(types.EncodeUint8(&v.ObjIdx))
 		b.Write(types.EncodeUint16(&v.BlkIdx))
 		b.Write(types.EncodeUint32(&v.RowIdx))
@@ -276,23 +287,34 @@ func (page *TransferHashPage) Marshal() []byte {
 
 func (page *TransferHashPage) Unmarshal(data []byte) (*api.TransferMap, error) {
 	if len(data) == 0 {
-		emptyMap := make(api.TransferMap)
-		return &emptyMap, nil
+		empty := make(api.TransferMap, 0)
+		return &empty, nil
 	}
 	b := bytes.NewBuffer(data)
 	size := types.DecodeUint64(b.Next(8))
-	transferMap := make(api.TransferMap, size)
+	// Read all entries to find the maximum row key; the slice must cover 0..maxKey.
+	type entry struct {
+		k uint32
+		v api.TransferDestPos
+	}
+	entries := make([]entry, 0, size)
+	maxKey := uint32(0)
 	for b.Len() != 0 {
 		k := types.DecodeUint32(b.Next(4))
 		vO := types.DecodeUint8(b.Next(1))
 		vB := types.DecodeUint16(b.Next(2))
 		vR := types.DecodeUint32(b.Next(4))
-
-		transferMap[k] = api.TransferDestPos{
-			ObjIdx: vO,
-			BlkIdx: vB,
-			RowIdx: vR,
+		entries = append(entries, entry{k, api.TransferDestPos{ObjIdx: vO, BlkIdx: vB, RowIdx: vR}})
+		if k > maxKey {
+			maxKey = k
 		}
+	}
+	transferMap := make(api.TransferMap, maxKey+1)
+	for i := range transferMap {
+		transferMap[i].ObjIdx = api.NoTransfer
+	}
+	for _, e := range entries {
+		transferMap[e.k] = e.v
 	}
 	return &transferMap, nil
 }

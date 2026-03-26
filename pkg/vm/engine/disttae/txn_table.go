@@ -2839,9 +2839,14 @@ func (tbl *txnTable) getSortKeyPosAndSortKeyIsPK() (int, bool) {
 }
 
 func dumpTransferInfo(ctx context.Context, mergeTask *cnMergeTask) (*api.MergeCommitEntry, error) {
+	// Count only non-deleted (non-sentinel) rows for the size threshold check.
 	rowCnt := 0
 	for _, m := range mergeTask.transferMaps {
-		rowCnt += len(m)
+		for _, pos := range m {
+			if pos.ObjIdx != api.NoTransfer {
+				rowCnt++
+			}
+		}
 	}
 
 	// If transfer info is small, send it to tn directly.
@@ -2862,6 +2867,9 @@ func dumpTransferInfo(ctx context.Context, mergeTask *cnMergeTask) (*api.MergeCo
 
 		for i, m := range mergeTask.transferMaps {
 			for r, pos := range m {
+				if pos.ObjIdx == api.NoTransfer {
+					continue
+				}
 				mergeTask.commitEntry.Booking.Mappings[i].M[int32(r)] = api.TransDestPos{
 					ObjIdx: int32(pos.ObjIdx),
 					BlkIdx: int32(pos.BlkIdx),
@@ -2937,10 +2945,13 @@ func writeTransferMapsToS3(ctx context.Context, taskHost *cnMergeTask) (err erro
 	objRowCnt := 0
 	for blkIdx, transMap := range bookingMaps {
 		for rowIdx, destPos := range transMap {
+			if destPos.ObjIdx == api.NoTransfer {
+				continue
+			}
 			if err = vector.AppendFixed(buffer.Vecs[0], int32(blkIdx), false, taskHost.GetMPool()); err != nil {
 				return err
 			}
-			if err = vector.AppendFixed(buffer.Vecs[1], rowIdx, false, taskHost.GetMPool()); err != nil {
+			if err = vector.AppendFixed(buffer.Vecs[1], uint32(rowIdx), false, taskHost.GetMPool()); err != nil {
 				return nil
 			}
 			if err = vector.AppendFixed(buffer.Vecs[2], destPos.ObjIdx, false, taskHost.GetMPool()); err != nil {

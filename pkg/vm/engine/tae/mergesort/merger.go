@@ -196,8 +196,12 @@ func (m *merger[T]) merge(ctx context.Context) error {
 		if m.host.DoTransfer() {
 			idx := m.accObjBlkCnts[objIdx] + m.loadedObjBlkCnts[objIdx] - 1
 			if transferMaps[idx] == nil {
-				// Pre-size to actual block row count to avoid bucket-growth rehashing.
-				transferMaps[idx] = make(api.TransferMap, m.df.length(objIdx))
+				rowCnt := m.df.length(objIdx)
+				tm := make(api.TransferMap, rowCnt)
+				for i := range tm {
+					tm[i].ObjIdx = api.NoTransfer
+				}
+				transferMaps[idx] = tm
 			}
 			transferMaps[idx][rowIdx] = api.TransferDestPos{
 				ObjIdx: uint8(m.stats.objCnt),
@@ -336,6 +340,7 @@ func (m *merger[T]) syncObject(ctx context.Context) error {
 }
 
 func (m *merger[T]) release() {
+	m.writer = nil
 	for _, bat := range m.bats {
 		if bat.releaseF != nil {
 			bat.releaseF()

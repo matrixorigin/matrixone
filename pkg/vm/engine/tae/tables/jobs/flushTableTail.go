@@ -225,9 +225,7 @@ func NewFlushTableTailTask(
 	task.doTransfer = !strings.Contains(task.schema.Comment, pkgcatalog.MO_COMMENT_NO_DEL_HINT)
 	if task.doTransfer {
 		task.transMappings = make(api.TransferMaps, len(task.aObjHandles))
-		for i := range len(task.aObjHandles) {
-			task.transMappings[i] = make(api.TransferMap)
-		}
+		// entries populated lazily by AddSortPhaseMapping per source block
 	}
 
 	task.createAt = time.Now()
@@ -541,7 +539,7 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 		return
 	}
 	if task.doTransfer {
-		mergesort.AddSortPhaseMapping(task.transMappings[objIdx], totalRowCnt, sortMapping)
+		mergesort.AddSortPhaseMapping(task.transMappings, objIdx, totalRowCnt, sortMapping)
 	}
 	return
 }

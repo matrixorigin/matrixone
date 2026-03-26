@@ -238,11 +238,11 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(
 		transCnt += count
 		for i := 0; i < count; i++ {
 			row := rowid[i].GetRowOffset()
-			destpos, ok := mapping[row]
-			if !ok {
+			if uint32(len(mapping)) <= row || mapping[row].ObjIdx == api.NoTransfer {
 				err = moerr.NewInternalErrorNoCtxf("%s find no transfer mapping for row %d", obj.ID().String(), row)
 				return
 			}
+			destpos := mapping[row]
 			blkID := objectio.NewBlockidWithObjectID(entry.createdObjHandle.GetID(), destpos.BlkIdx)
 			entry.delTbls[destpos.BlkIdx] = &blkID
 			entry.rt.TransferDelsMap.SetDelsForBlk(blkID, int(destpos.RowIdx), entry.txn.GetPrepareTS(), ts[i])

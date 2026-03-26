@@ -3626,7 +3626,7 @@ func (v *Vector) Window(start, end int) (*Vector, error) {
 // CloneWindow Deep copies the content from start to end into another vector. Afterwise it's safe to destroy the original one.
 func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 	if start == end {
-		return NewVec(v.typ), nil
+		return NewOffHeapVecWithType(v.typ), nil
 	}
 	if end > v.Length() {
 		panic(fmt.Sprintf("CloneWindow end %d >= length %d", end, v.Length()))
@@ -3637,7 +3637,7 @@ func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 		if v.typ.IsVarlen() {
 			return NewConstBytes(v.typ, v.GetBytesAt(0), end-start, mp)
 		} else {
-			vec := NewVec(v.typ)
+			vec := NewOffHeapVecWithType(v.typ)
 			vec.class = v.class
 			vec.data = make([]byte, len(v.data))
 			copy(vec.data, v.data)
@@ -3648,7 +3648,7 @@ func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 			return vec, nil
 		}
 	}
-	w := NewVec(v.typ)
+	w := NewOffHeapVecWithType(v.typ)
 	if err := v.CloneWindowTo(w, start, end, mp); err != nil {
 		return nil, err
 	}

@@ -90,7 +90,7 @@ func LoadColumnsData2(
 		return
 	}
 	dataMeta := meta.MustGetMeta(objectio.SchemaData)
-	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.String(), location.ID(), cols, typs, nil, fs, policy); err != nil {
+	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.UnsafeString(), location.ID(), cols, typs, nil, fs, policy); err != nil {
 		return
 	}
 	vectors = make([]containers.Vector, len(cols))

@@ -77,8 +77,12 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 				if host.DoTransfer() {
 					idx := accObjBlkCnts[i] + loadedBlkCnt - 1
 					if transferMaps[idx] == nil {
-						// Pre-size to actual batch row count to avoid bucket-growth rehashing.
-						transferMaps[idx] = make(api.TransferMap, nextBatch.RowCount())
+						rowCnt := nextBatch.RowCount()
+						tm := make(api.TransferMap, rowCnt)
+						for k := range tm {
+							tm[k].ObjIdx = api.NoTransfer
+						}
+						transferMaps[idx] = tm
 					}
 					transferMaps[idx][uint32(j)] = api.TransferDestPos{
 						ObjIdx: uint8(stats.objCnt),

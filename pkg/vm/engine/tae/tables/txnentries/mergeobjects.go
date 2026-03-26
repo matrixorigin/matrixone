@@ -17,7 +17,6 @@ package txnentries
 import (
 	"context"
 	"fmt"
-	"math"
 	"sync"
 	"time"
 
@@ -290,21 +289,12 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 			// Note: it is possible that the block is empty, but not the object
 			continue
 		}
-		destpos, ok := mapping[row]
-		if !ok {
-			_min, _max := uint32(math.MaxUint32), uint32(0)
-			for k := range mapping {
-				if k < _min {
-					_min = k
-				}
-				if k > _max {
-					_max = k
-				}
-			}
-			err = moerr.NewInternalErrorNoCtxf("%s-%d find no transfer mapping for row %d, mapping range (%d, %d)",
-				dropped.ID().String(), blkOffsetInObj, row, _min, _max)
+		if uint32(len(mapping)) <= row || mapping[row].ObjIdx == api.NoTransfer {
+			err = moerr.NewInternalErrorNoCtxf("%s-%d find no transfer mapping for row %d (mapping len %d)",
+				dropped.ID().String(), blkOffsetInObj, row, len(mapping))
 			return
 		}
+		destpos := mapping[row]
 		if entry.delTbls[*entry.createdObjs[destpos.ObjIdx].ID()] == nil {
 			entry.delTbls[*entry.createdObjs[destpos.ObjIdx].ID()] = make(map[uint16]struct{})
 		}

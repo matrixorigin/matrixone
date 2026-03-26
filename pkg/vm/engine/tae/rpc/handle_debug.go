@@ -1020,7 +1020,11 @@ func marshalTransferMaps(
 		booking := make(api.TransferMaps, blkCnt)
 		for i := range blkCnt {
 			rowCnt := types.DecodeInt32(util.UnsafeStringToBytes(req.BookingLoc[i+1]))
-			booking[i] = make(api.TransferMap, rowCnt)
+			tm := make(api.TransferMap, rowCnt)
+			for j := range tm {
+				tm[j].ObjIdx = api.NoTransfer
+			}
+			booking[i] = tm
 		}
 		req.BookingLoc = req.BookingLoc[blkCnt+1:]
 		locations := req.BookingLoc
@@ -1055,17 +1059,30 @@ func marshalTransferMaps(
 		return booking, nil
 	} else if req.Booking != nil {
 		booking := make(api.TransferMaps, len(req.Booking.Mappings))
-		for i := range booking {
-			booking[i] = make(api.TransferMap, len(req.Booking.Mappings[i].M))
-		}
 		for i, m := range req.Booking.Mappings {
+			// Find the maximum source row key to size the dense slice correctly.
+			maxKey := int32(-1)
+			for r := range m.M {
+				if r > maxKey {
+					maxKey = r
+				}
+			}
+			sliceLen := int(maxKey) + 1
+			if maxKey < 0 {
+				sliceLen = 0
+			}
+			tm := make(api.TransferMap, sliceLen)
+			for j := range tm {
+				tm[j].ObjIdx = api.NoTransfer
+			}
 			for r, pos := range m.M {
-				booking[i][uint32(r)] = api.TransferDestPos{
+				tm[uint32(r)] = api.TransferDestPos{
 					ObjIdx: uint8(pos.ObjIdx),
 					BlkIdx: uint16(pos.BlkIdx),
 					RowIdx: uint32(pos.RowIdx),
 				}
 			}
+			booking[i] = tm
 		}
 		return booking, nil
 	}

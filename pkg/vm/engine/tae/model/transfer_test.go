@@ -42,9 +42,9 @@ func TestTransferPage(t *testing.T) {
 	memo1 := NewTransferHashPage(&src, time.Now(), false, tmpFS, ttl, diskTTL, createdObjs)
 	assert.Zero(t, memo1.RefCount())
 
-	transferMap := make(api.TransferMap)
+	transferMap := make(api.TransferMap, 10)
 	for i := 0; i < 10; i++ {
-		transferMap[uint32(i)] = api.TransferDestPos{
+		transferMap[i] = api.TransferDestPos{
 			BlkIdx: 0,
 			RowIdx: uint32(i),
 		}
@@ -63,9 +63,9 @@ func TestTransferPage(t *testing.T) {
 	defer memo2.Close()
 	assert.Zero(t, memo2.RefCount())
 
-	transferMap = make(api.TransferMap)
+	transferMap = make(api.TransferMap, 10)
 	for i := 0; i < 10; i++ {
-		transferMap[uint32(i)] = api.TransferDestPos{
+		transferMap[i] = api.TransferDestPos{
 			BlkIdx: 0,
 			RowIdx: uint32(i),
 		}
@@ -97,9 +97,9 @@ func TestTransferTable(t *testing.T) {
 	tmpFS, err := fileservice.NewTmpFileService("tmp", "tmp", fileservice.TmpFileGCInterval)
 	assert.NoError(t, err)
 	page1 := NewTransferHashPage(&id1, now, false, tmpFS, ttl, 2*time.Second, createdObjs)
-	transferMap := make(api.TransferMap)
+	transferMap := make(api.TransferMap, 10)
 	for i := 0; i < 10; i++ {
-		transferMap[uint32(i)] = api.TransferDestPos{
+		transferMap[i] = api.TransferDestPos{
 			BlkIdx: 0,
 			RowIdx: uint32(i),
 		}
