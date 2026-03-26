@@ -35,8 +35,9 @@ import (
 )
 
 type WriteArena struct {
-	data       []byte
-	usedOffset int
+	data        []byte
+	usedOffset  int
+	compressBuf []byte
 }
 
 func NewArena(size int) *WriteArena {
@@ -56,6 +57,15 @@ func (a *WriteArena) Alloc(size int) []byte {
 
 func (a *WriteArena) Reset() {
 	a.usedOffset = 0
+}
+
+// CompressBuf returns a scratch buffer for LZ4 compression, growing as needed.
+// The buffer is retained across arena Reset() calls.
+func (a *WriteArena) CompressBuf(minSize int) []byte {
+	if len(a.compressBuf) < minSize {
+		a.compressBuf = make([]byte, minSize)
+	}
+	return a.compressBuf[:minSize]
 }
 
 type objectWriterV1 struct {
@@ -641,10 +651,16 @@ func (w *objectWriterV1) GetDataStats() ObjectStats {
 func (w *objectWriterV1) WriteWithCompress(offset uint32, buf []byte) (data []byte, extent Extent, err error) {
 	dataLen := len(buf)
 	compressBlockBound := lz4.CompressBlockBound(dataLen)
-	if len(w.compressBuf) < compressBlockBound {
-		w.compressBuf = make([]byte, compressBlockBound)
+	var compressBuf []byte
+	if w.arena != nil {
+		compressBuf = w.arena.CompressBuf(compressBlockBound)
+	} else {
+		if len(w.compressBuf) < compressBlockBound {
+			w.compressBuf = make([]byte, compressBlockBound)
+		}
+		compressBuf = w.compressBuf[:compressBlockBound]
 	}
-	n, err := w.lz4c.CompressBlock(buf, w.compressBuf[:compressBlockBound])
+	n, err := w.lz4c.CompressBlock(buf, compressBuf)
 	if err != nil {
 		return
 	}
@@ -654,7 +670,7 @@ func (w *objectWriterV1) WriteWithCompress(offset uint32, buf []byte) (data []by
 	} else {
 		data = make([]byte, length)
 	}
-	copy(data, w.compressBuf[:length])
+	copy(data, compressBuf[:length])
 	extent = NewExtent(compress.Lz4, offset, length, uint32(dataLen))
 	return
 }
