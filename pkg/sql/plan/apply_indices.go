@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
 const (
@@ -38,6 +39,12 @@ const (
 type specialIndexGuard struct {
 	kinds       specialIndexKind
 	scanNodeIDs []int32
+}
+
+type regularIndexTopSortContext struct {
+	sortNode        *plan.Node
+	sortProjectNode *plan.Node
+	scanNode        *plan.Node
 }
 
 // calculatePostFilterOverFetchFactor returns the over-fetch multiplier based on limit size
@@ -440,10 +447,114 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 END0:
 	// 2. Regular Index Check
 	{
-
+		if ctx := builder.buildRegularIndexTopSortContext(projNode); ctx != nil {
+			builder.applyRegularIndexTopSort(ctx)
+		}
 	}
 
 	return nodeID, nil
+}
+
+func (builder *QueryBuilder) buildRegularIndexTopSortContext(projNode *plan.Node) *regularIndexTopSortContext {
+	sortNode := builder.resolveSortNode(projNode, 1)
+	if sortNode == nil || len(sortNode.OrderBy) != 1 || sortNode.Limit == nil || sortNode.Offset != nil || sortNode.RankOption != nil {
+		return nil
+	}
+
+	scanNode := builder.resolveScanNodeWithIndex(sortNode, 1)
+	if scanNode == nil || !scanNode.IndexScanInfo.IsIndexScan || scanNode.IndexScanInfo.IsUnique || len(scanNode.BindingTags) == 0 || len(scanNode.OrderBy) != 0 {
+		return nil
+	}
+
+	if len(scanNode.IndexScanInfo.Parts) < 2 || len(scanNode.FilterList) == 0 {
+		return nil
+	}
+
+	if len(sortNode.Children) != 1 {
+		return nil
+	}
+	sortProjectNode := builder.qry.Nodes[sortNode.Children[0]]
+	if sortProjectNode.NodeType != plan.Node_PROJECT || len(sortProjectNode.BindingTags) == 0 {
+		return nil
+	}
+
+	orderByCol := sortNode.OrderBy[0].Expr.GetCol()
+	if orderByCol == nil || orderByCol.RelPos != sortProjectNode.BindingTags[0] || int(orderByCol.ColPos) >= len(sortProjectNode.ProjectList) {
+		return nil
+	}
+
+	orderExpr := sortProjectNode.ProjectList[orderByCol.ColPos]
+	orderExprCol := orderExpr.GetCol()
+	if orderExprCol == nil || orderExprCol.RelPos != scanNode.BindingTags[0] || orderExprCol.ColPos != 1 {
+		return nil
+	}
+
+	numKeyParts := len(scanNode.IndexScanInfo.Parts) - 1
+	if !isRegularIndexFullPrefixEquality(scanNode.FilterList[0], numKeyParts) {
+		return nil
+	}
+
+	return &regularIndexTopSortContext{
+		sortNode:        sortNode,
+		sortProjectNode: sortProjectNode,
+		scanNode:        scanNode,
+	}
+}
+
+func isRegularIndexFullPrefixEquality(expr *plan.Expr, numKeyParts int) bool {
+	if numKeyParts <= 0 || expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func.ObjName != "prefix_eq" || len(fn.Args) != 2 {
+		return false
+	}
+	serialFn := fn.Args[1].GetF()
+	return serialFn != nil && serialFn.Func.ObjName == "serial" && len(serialFn.Args) == numKeyParts
+}
+
+func hasTopValueMessage(node *plan.Node) bool {
+	for i := range node.SendMsgList {
+		if node.SendMsgList[i].MsgType == int32(message.MsgTopValue) {
+			return true
+		}
+	}
+	return false
+}
+
+func (builder *QueryBuilder) applyRegularIndexTopSort(ctx *regularIndexTopSortContext) {
+	hiddenKeyName := builder.getColName(ctx.sortNode.OrderBy[0].Expr.GetCol())
+	if hiddenKeyName == "" {
+		hiddenKeyName = catalog.IndexTableIndexColName
+	}
+
+	projectHiddenKeyExpr := GetColExpr(ctx.scanNode.TableDef.Cols[0].Typ, ctx.scanNode.BindingTags[0], 0)
+	projectHiddenKeyExpr.GetCol().Name = hiddenKeyName
+
+	sortProjectTag := ctx.sortProjectNode.BindingTags[0]
+	sortProjectColPos := int32(len(ctx.sortProjectNode.ProjectList))
+	ctx.sortProjectNode.ProjectList = append(ctx.sortProjectNode.ProjectList, projectHiddenKeyExpr)
+	builder.nameByColRef[[2]int32{sortProjectTag, sortProjectColPos}] = hiddenKeyName
+
+	sortHiddenKeyExpr := GetColExpr(ctx.scanNode.TableDef.Cols[0].Typ, sortProjectTag, sortProjectColPos)
+	sortHiddenKeyExpr.GetCol().Name = hiddenKeyName
+	ctx.sortNode.OrderBy[0].Expr = sortHiddenKeyExpr
+
+	scanHiddenKeyExpr := GetColExpr(ctx.scanNode.TableDef.Cols[0].Typ, ctx.scanNode.BindingTags[0], 0)
+	scanHiddenKeyExpr.GetCol().Name = ctx.scanNode.TableDef.Cols[0].Name
+	ctx.scanNode.OrderBy = append(ctx.scanNode.OrderBy, &plan.OrderBySpec{
+		Expr: scanHiddenKeyExpr,
+		Flag: ctx.sortNode.OrderBy[0].Flag,
+	})
+
+	if !hasTopValueMessage(ctx.sortNode) {
+		msgHeader := plan.MsgHeader{
+			MsgTag:  builder.genNewMsgTag(),
+			MsgType: int32(message.MsgTopValue),
+		}
+		ctx.sortNode.SendMsgList = append([]plan.MsgHeader{msgHeader}, ctx.sortNode.SendMsgList...)
+		ctx.scanNode.RecvMsgList = append(ctx.scanNode.RecvMsgList, msgHeader)
+	}
 }
 
 func (builder *QueryBuilder) detectFullTextGuard(projNode *plan.Node) []int32 {

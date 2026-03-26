@@ -15,11 +15,16 @@
 package plan
 
 import (
+	"context"
 	"reflect"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSuspendScanProtection_RestoresExactCount(t *testing.T) {
@@ -279,6 +284,168 @@ func TestCalculatePostFilterOverFetchFactor_ActualValues(t *testing.T) {
 			}
 		})
 	}
+}
+
+func makeTestRegularIndexPrefixEq(t *testing.T, numArgs int) *planpb.Expr {
+	t.Helper()
+	args := make([]*planpb.Expr, 0, numArgs)
+	for i := 0; i < numArgs; i++ {
+		args = append(args, &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_int32)},
+			Expr: &planpb.Expr_Lit{
+				Lit: &planpb.Literal{
+					Value: &planpb.Literal_I32Val{I32Val: int32(i + 1)},
+				},
+			},
+		})
+	}
+	serialExpr, err := BindFuncExprImplByPlanExpr(context.Background(), "serial", args)
+	require.NoError(t, err)
+	prefixExpr, err := BindFuncExprImplByPlanExpr(context.Background(), "prefix_eq", []*planpb.Expr{
+		GetColExpr(planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, 100, 0),
+		serialExpr,
+	})
+	require.NoError(t, err)
+	return prefixExpr
+}
+
+func makeTestRegularIndexProjectBuilder(t *testing.T, prefixArgCount int, projectExpr *planpb.Expr) (*QueryBuilder, int32) {
+	t.Helper()
+
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder.nameByColRef[[2]int32{200, 0}] = "id"
+
+	scanNode := &planpb.Node{
+		NodeType: planpb.Node_TABLE_SCAN,
+		NodeId:   0,
+		TableDef: &planpb.TableDef{
+			Cols: []*planpb.ColDef{
+				{
+					Name: catalog.IndexTableIndexColName,
+					Typ:  planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen},
+				},
+				{
+					Name: catalog.IndexTablePrimaryColName,
+					Typ:  planpb.Type{Id: int32(types.T_int64)},
+				},
+			},
+			Indexes: []*planpb.IndexDef{{IndexName: "idx_user_active"}},
+		},
+		BindingTags: []int32{100},
+		FilterList:  []*planpb.Expr{makeTestRegularIndexPrefixEq(t, prefixArgCount)},
+		IndexScanInfo: planpb.IndexScanInfo{
+			IsIndexScan:    true,
+			IndexName:      "idx_user_active",
+			BelongToTable:  "events",
+			Parts:          []string{"user_id", "is_active", "id"},
+			IsUnique:       false,
+			IndexTableName: "__mo_index_secondary_idx_user_active",
+		},
+	}
+
+	sortProjectNode := &planpb.Node{
+		NodeType:    planpb.Node_PROJECT,
+		NodeId:      1,
+		BindingTags: []int32{200},
+		Children:    []int32{0},
+		ProjectList: []*planpb.Expr{projectExpr},
+	}
+
+	sortNode := &planpb.Node{
+		NodeType: planpb.Node_SORT,
+		NodeId:   2,
+		Children: []int32{1},
+		OrderBy: []*planpb.OrderBySpec{
+			{
+				Expr: GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 200, 0),
+				Flag: planpb.OrderBySpec_DESC,
+			},
+		},
+		Limit: &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_uint64)},
+			Expr: &planpb.Expr_Lit{
+				Lit: &planpb.Literal{
+					Value: &planpb.Literal_U64Val{U64Val: 20},
+				},
+			},
+		},
+	}
+
+	projNode := &planpb.Node{
+		NodeType: planpb.Node_PROJECT,
+		NodeId:   3,
+		Children: []int32{2},
+	}
+
+	builder.qry.Nodes = []*planpb.Node{scanNode, sortProjectNode, sortNode, projNode}
+	return builder, 3
+}
+
+func TestApplyIndicesForProjectPushesTopValueThroughRegularIndexPKOrder(t *testing.T) {
+	builder, rootNodeID := makeTestRegularIndexProjectBuilder(t, 2, GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 100, 1))
+
+	_, err := builder.applyIndicesForProject(rootNodeID, builder.qry.Nodes[rootNodeID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+
+	scanNode := builder.qry.Nodes[0]
+	sortProjectNode := builder.qry.Nodes[1]
+	sortNode := builder.qry.Nodes[2]
+
+	require.Len(t, sortNode.SendMsgList, 1)
+	assert.Equal(t, int32(message.MsgTopValue), sortNode.SendMsgList[0].MsgType)
+	require.Len(t, scanNode.RecvMsgList, 1)
+	assert.Equal(t, sortNode.SendMsgList[0], scanNode.RecvMsgList[0])
+
+	require.Len(t, scanNode.OrderBy, 1)
+	scanOrderCol := scanNode.OrderBy[0].Expr.GetCol()
+	require.NotNil(t, scanOrderCol)
+	assert.Equal(t, int32(100), scanOrderCol.RelPos)
+	assert.Equal(t, int32(0), scanOrderCol.ColPos)
+	assert.Equal(t, catalog.IndexTableIndexColName, scanOrderCol.Name)
+
+	sortOrderCol := sortNode.OrderBy[0].Expr.GetCol()
+	require.NotNil(t, sortOrderCol)
+	assert.Equal(t, int32(200), sortOrderCol.RelPos)
+	assert.Equal(t, int32(1), sortOrderCol.ColPos)
+
+	require.Len(t, sortProjectNode.ProjectList, 2)
+	hiddenKeyProjectCol := sortProjectNode.ProjectList[1].GetCol()
+	require.NotNil(t, hiddenKeyProjectCol)
+	assert.Equal(t, int32(100), hiddenKeyProjectCol.RelPos)
+	assert.Equal(t, int32(0), hiddenKeyProjectCol.ColPos)
+	assert.Equal(t, "id", builder.nameByColRef[[2]int32{200, 1}])
+}
+
+func TestApplyIndicesForProjectSkipsRegularIndexPKOrderWithoutFullPrefixEquality(t *testing.T) {
+	builder, rootNodeID := makeTestRegularIndexProjectBuilder(t, 1, GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 100, 1))
+
+	_, err := builder.applyIndicesForProject(rootNodeID, builder.qry.Nodes[rootNodeID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+
+	scanNode := builder.qry.Nodes[0]
+	sortProjectNode := builder.qry.Nodes[1]
+	sortNode := builder.qry.Nodes[2]
+
+	assert.Empty(t, sortNode.SendMsgList)
+	assert.Empty(t, scanNode.RecvMsgList)
+	assert.Empty(t, scanNode.OrderBy)
+	require.Len(t, sortProjectNode.ProjectList, 1)
+}
+
+func TestApplyIndicesForProjectSkipsRegularIndexPKOrderForNonPKSortColumn(t *testing.T) {
+	builder, rootNodeID := makeTestRegularIndexProjectBuilder(t, 2, GetColExpr(planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, 100, 0))
+
+	_, err := builder.applyIndicesForProject(rootNodeID, builder.qry.Nodes[rootNodeID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+
+	scanNode := builder.qry.Nodes[0]
+	sortProjectNode := builder.qry.Nodes[1]
+	sortNode := builder.qry.Nodes[2]
+
+	assert.Empty(t, sortNode.SendMsgList)
+	assert.Empty(t, scanNode.RecvMsgList)
+	assert.Empty(t, scanNode.OrderBy)
+	require.Len(t, sortProjectNode.ProjectList, 1)
 }
 
 // Benchmark the function to ensure it's fast
