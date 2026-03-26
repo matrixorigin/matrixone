@@ -12385,8 +12385,8 @@ decimal_type:
         yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
         goto ret1
         }
-        if $2.DisplayWith > 38 || $2.DisplayWith < 0 {
-            yylex.Error("For decimal(M), M must between 0 and 38.")
+        if $2.DisplayWith > 65 || $2.DisplayWith < 0 {
+            yylex.Error("For decimal(M), M must between 0 and 65.")
                 goto ret1
         } else if $2.DisplayWith <= 16 {
             $$ = &tree.T{
@@ -12400,12 +12400,24 @@ decimal_type:
             Scale: $2.Scale,
             },
         }
-        } else {
+        } else if $2.DisplayWith <= 38 {
             $$ = &tree.T{
             InternalType: tree.InternalType{
             Family: tree.FloatFamily,
             FamilyString: $1,
             Width:  128,
+            Locale: &locale,
+            Oid:    uint32(defines.MYSQL_TYPE_DECIMAL),
+            DisplayWith: $2.DisplayWith,
+            Scale: $2.Scale,
+            },
+                }
+        } else {
+            $$ = &tree.T{
+            InternalType: tree.InternalType{
+            Family: tree.FloatFamily,
+            FamilyString: $1,
+            Width:  256,
             Locale: &locale,
             Oid:    uint32(defines.MYSQL_TYPE_DECIMAL),
             DisplayWith: $2.DisplayWith,
@@ -12421,8 +12433,8 @@ decimal_type:
         yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
         goto ret1
         }
-        if $2.DisplayWith > 38 || $2.DisplayWith < 0 {
-            yylex.Error("For decimal(M), M must between 0 and 38.")
+        if $2.DisplayWith > 65 || $2.DisplayWith < 0 {
+            yylex.Error("For decimal(M), M must between 0 and 65.")
                 goto ret1
         } else if $2.DisplayWith <= 16 {
             $$ = &tree.T{
@@ -12436,12 +12448,24 @@ decimal_type:
             Scale: $2.Scale,
             },
         }
-        } else {
+        } else if $2.DisplayWith <= 38 {
             $$ = &tree.T{
             InternalType: tree.InternalType{
             Family: tree.FloatFamily,
             FamilyString: $1,
             Width:  128,
+            Locale: &locale,
+            Oid:    uint32(defines.MYSQL_TYPE_DECIMAL),
+            DisplayWith: $2.DisplayWith,
+            Scale: $2.Scale,
+            },
+                }
+        } else {
+            $$ = &tree.T{
+            InternalType: tree.InternalType{
+            Family: tree.FloatFamily,
+            FamilyString: $1,
+            Width:  256,
             Locale: &locale,
             Oid:    uint32(defines.MYSQL_TYPE_DECIMAL),
             DisplayWith: $2.DisplayWith,

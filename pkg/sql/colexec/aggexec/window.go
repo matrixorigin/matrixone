@@ -17,7 +17,6 @@ package aggexec
 import (
 	"bytes"
 	io "io"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -893,12 +892,12 @@ func (exec *valueWindowExec) Free() {
 
 func (exec *valueWindowExec) Size() int64 {
 	var size int64
-	var (
-		sliceHeaderSize = int64(unsafe.Sizeof([]any{}))
-		ptrSize         = int64(unsafe.Sizeof((*valueEntry)(nil)))
-		entrySize       = int64(unsafe.Sizeof(valueEntry{}))
-		intSize         = int64(unsafe.Sizeof(int(0)))
-	)
+	// Sizes on 64-bit: slice header = 24, pointer = 8, int = 8
+	// valueEntry{isNull bool, data []byte} = 1 + 7(padding) + 24(slice) = 32
+	const sliceHeaderSize = 24
+	const ptrSize = 8
+	const entrySize = 32
+	const intSize = 8
 
 	size += int64(cap(exec.frameValues)) * sliceHeaderSize
 	for _, frame := range exec.frameValues {

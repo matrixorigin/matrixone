@@ -363,7 +363,7 @@ func generalFunctionTemplateFactor[T1 templateTp1, T2 templateTr1](
 }
 
 type templateDec interface {
-	types.Decimal64 | types.Decimal128
+	types.Decimal64 | types.Decimal128 | types.Decimal256
 }
 
 func decimal128ArithArray(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
@@ -484,6 +484,9 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 					isZero = (any(v2).(types.Decimal128).B0_63 == 0 && any(v2).(types.Decimal128).B64_127 == 0)
 				case types.Decimal64:
 					isZero = (any(v2).(types.Decimal64) == 0)
+				case types.Decimal256:
+					d := any(v2).(types.Decimal256)
+					isZero = (d.B0_63 == 0 && d.B64_127 == 0 && d.B128_191 == 0 && d.B192_255 == 0)
 				}
 				if isZero {
 					if checkDivisionByZeroBehavior(proc, selectList) {
@@ -590,6 +593,9 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 					isZero = (any(v2).(types.Decimal128).B0_63 == 0 && any(v2).(types.Decimal128).B64_127 == 0)
 				case types.Decimal64:
 					isZero = (any(v2).(types.Decimal64) == 0)
+				case types.Decimal256:
+					d := any(v2).(types.Decimal256)
+					isZero = (d.B0_63 == 0 && d.B64_127 == 0 && d.B128_191 == 0 && d.B192_255 == 0)
 				}
 				if isZero {
 					if checkDivisionByZeroBehavior(proc, selectList) {
@@ -650,6 +656,9 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 					isZero = (any(v2).(types.Decimal128).B0_63 == 0 && any(v2).(types.Decimal128).B64_127 == 0)
 				case types.Decimal64:
 					isZero = (any(v2).(types.Decimal64) == 0)
+				case types.Decimal256:
+					d := any(v2).(types.Decimal256)
+					isZero = (d.B0_63 == 0 && d.B64_127 == 0 && d.B128_191 == 0 && d.B192_255 == 0)
 				}
 				if isZero {
 					if shouldError {

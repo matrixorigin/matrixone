@@ -153,7 +153,7 @@ func AddFaultPoint(
 }
 
 type mathMultiT interface {
-	constraints.Integer | constraints.Float | types.Decimal64 | types.Decimal128
+	constraints.Integer | constraints.Float | types.Decimal64 | types.Decimal128 | types.Decimal256
 }
 
 type mathMultiFun[T mathMultiT] func(T, int64) T
@@ -301,6 +301,30 @@ func CeilDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	return generalMathMulti("ceil", ivecs, result, proc, length, cb, selectList)
 }
 
+func ceilDecimal256(x types.Decimal256, digits int64, scale int32, isConst bool) types.Decimal256 {
+	if digits > 65 {
+		digits = 65
+	}
+	if digits < -65 {
+		digits = -65
+	}
+	return x.Ceil(scale, int32(digits), isConst)
+}
+
+func CeilDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	scale := ivecs[0].GetType().Scale
+	if len(ivecs) > 1 {
+		digit := vector.MustFixedColWithTypeCheck[int64](ivecs[1])
+		if len(digit) > 0 && int32(digit[0]) <= scale-65 {
+			return moerr.NewOutOfRangef(proc.Ctx, "decimal256", "ceil(decimal256(65,%v),%v)", scale, digit[0])
+		}
+	}
+	cb := func(x types.Decimal256, digits int64) types.Decimal256 {
+		return ceilDecimal256(x, digits, scale, result.GetResultVector().GetType().Scale != scale)
+	}
+	return generalMathMulti("ceil", ivecs, result, proc, length, cb, selectList)
+}
+
 var MaxUint64digits = numOfDigits(math.MaxUint64) // 20
 var MaxInt64digits = numOfDigits(math.MaxInt64)   // 19
 
@@ -433,6 +457,31 @@ func FloorDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 	}
 	cb := func(x types.Decimal128, digits int64) types.Decimal128 {
 		return floorDecimal128(x, digits, scale, result.GetResultVector().GetType().Scale != scale)
+	}
+
+	return generalMathMulti("floor", ivecs, result, proc, length, cb, selectList)
+}
+
+func floorDecimal256(x types.Decimal256, digits int64, scale int32, isConst bool) types.Decimal256 {
+	if digits > 65 {
+		digits = 65
+	}
+	if digits < -65 {
+		digits = -65
+	}
+	return x.Floor(scale, int32(digits), isConst)
+}
+
+func FloorDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	scale := ivecs[0].GetType().Scale
+	if len(ivecs) > 1 {
+		digit := vector.MustFixedColWithTypeCheck[int64](ivecs[1])
+		if len(digit) > 0 && int32(digit[0]) <= scale-65 {
+			return moerr.NewOutOfRangef(proc.Ctx, "decimal256", "floor(decimal256(65,%v),%v)", scale, digit[0])
+		}
+	}
+	cb := func(x types.Decimal256, digits int64) types.Decimal256 {
+		return floorDecimal256(x, digits, scale, result.GetResultVector().GetType().Scale != scale)
 	}
 
 	return generalMathMulti("floor", ivecs, result, proc, length, cb, selectList)
@@ -739,6 +788,39 @@ func TruncateDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	return generalMathMulti("truncate", ivecs, result, proc, length, cb, selectList)
 }
 
+func truncateDecimal256(x types.Decimal256, digits int64, scale int32, isConst bool) types.Decimal256 {
+	if digits > 65 {
+		digits = 65
+	}
+	if digits < -65 {
+		digits = -65
+	}
+	if int32(digits) >= scale {
+		return x
+	}
+	k := scale - int32(digits)
+	if k > 65 {
+		k = 65
+	}
+	y, _, _ := x.Mod(types.Decimal256{B0_63: 1}, k, 0)
+	x, _ = x.Sub256(y)
+	if isConst {
+		if int32(digits) < 0 {
+			k = scale
+		}
+		x, _ = x.Scale(-k)
+	}
+	return x
+}
+
+func TruncateDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	scale := ivecs[0].GetType().Scale
+	cb := func(x types.Decimal256, digits int64) types.Decimal256 {
+		return truncateDecimal256(x, digits, scale, result.GetResultVector().GetType().Scale != scale)
+	}
+	return generalMathMulti("truncate", ivecs, result, proc, length, cb, selectList)
+}
+
 func roundDecimal64(x types.Decimal64, digits int64, scale int32, isConst bool) types.Decimal64 {
 	if digits > 19 {
 		digits = 19
@@ -759,6 +841,16 @@ func roundDecimal128(x types.Decimal128, digits int64, scale int32, isConst bool
 	return x.Round(scale, int32(digits), isConst)
 }
 
+func roundDecimal256(x types.Decimal256, digits int64, scale int32, isConst bool) types.Decimal256 {
+	if digits > 65 {
+		digits = 65
+	}
+	if digits < -65 {
+		digits = -65
+	}
+	return x.Round(scale, int32(digits), isConst)
+}
+
 func RoundDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	scale := ivecs[0].GetType().Scale
 	cb := func(x types.Decimal64, digits int64) types.Decimal64 {
@@ -775,6 +867,14 @@ func RoundDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 	return generalMathMulti("round", ivecs, result, proc, length, cb, selectList)
 }
 
+func RoundDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	scale := ivecs[0].GetType().Scale
+	cb := func(x types.Decimal256, digits int64) types.Decimal256 {
+		return roundDecimal256(x, digits, scale, result.GetResultVector().GetType().Scale != scale)
+	}
+	return generalMathMulti("round", ivecs, result, proc, length, cb, selectList)
+}
+
 type NormalType interface {
 	bool |
 		constraints.Float |
@@ -782,6 +882,7 @@ type NormalType interface {
 		types.Datetime |
 		types.Decimal64 |
 		types.Decimal128 |
+		types.Decimal256 |
 		types.Timestamp |
 		types.Uuid |
 		constraints.Integer
@@ -5172,6 +5273,78 @@ func splitDecimalToIntAndFrac(f float64) (int64, int64) {
 	return intPart, fracPart
 }
 
+func decimal256ToInt64ForUnix(v types.Decimal256) (int64, error) {
+	if v.Sign() {
+		if v.B64_127 != ^uint64(0) || v.B128_191 != ^uint64(0) || v.B192_255 != ^uint64(0) {
+			return 0, moerr.NewOutOfRangeNoCtx("BIGINT", "")
+		}
+		if v.B0_63 < 0x8000000000000000 {
+			return 0, moerr.NewOutOfRangeNoCtx("BIGINT", "")
+		}
+		negated := v.Minus()
+		return -int64(negated.B0_63), nil
+	}
+
+	if v.B64_127 != 0 || v.B128_191 != 0 || v.B192_255 != 0 {
+		return 0, moerr.NewOutOfRangeNoCtx("BIGINT", "")
+	}
+	if v.B0_63 > 0x7FFFFFFFFFFFFFFF {
+		return 0, moerr.NewOutOfRangeNoCtx("BIGINT", "")
+	}
+	return int64(v.B0_63), nil
+}
+
+func decimal256UnixTimeParts(v types.Decimal256, scale int32) (sec int64, nsec int64, ok bool, err error) {
+	if v.Sign() {
+		return 0, 0, false, nil
+	}
+
+	whole, err := v.ScaleTruncate(-scale)
+	if err != nil {
+		return 0, 0, false, nil
+	}
+	sec, err = decimal256ToInt64ForUnix(whole)
+	if err != nil {
+		return 0, 0, false, nil
+	}
+	if sec < 0 || sec > maxUnixTimestampInt {
+		return 0, 0, false, nil
+	}
+
+	if scale <= 0 {
+		return sec, 0, true, nil
+	}
+
+	wholeScaled, err := whole.Scale(scale)
+	if err != nil {
+		return 0, 0, false, nil
+	}
+	frac, err := v.Sub256(wholeScaled)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	if frac.B0_63 == 0 && frac.B64_127 == 0 && frac.B128_191 == 0 && frac.B192_255 == 0 {
+		return sec, 0, true, nil
+	}
+
+	if scale > 9 {
+		frac, err = frac.ScaleTruncate(-(scale - 9))
+	} else if scale < 9 {
+		frac, err = frac.Scale(9 - scale)
+	}
+	if err != nil {
+		return 0, 0, false, err
+	}
+	nsec, err = decimal256ToInt64ForUnix(frac)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	if sec == maxUnixTimestampInt && nsec > 0 {
+		return 0, 0, false, nil
+	}
+	return sec, nsec, true, nil
+}
+
 func FromUnixTimeFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Datetime](result)
 	vs := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
@@ -5187,6 +5360,32 @@ func FromUnixTimeFloat64(ivecs []*vector.Vector, result vector.FunctionResultWra
 		} else {
 			x, y := splitDecimalToIntAndFrac(v)
 			if err = rs.Append(types.DatetimeFromUnixWithNsec(proc.GetSessionInfo().TimeZone, x, y), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func FromUnixTimeDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	rs := vector.MustFunctionResult[types.Datetime](result)
+	vs := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](ivecs[0])
+	scale := ivecs[0].GetType().Scale
+	rs.TempSetType(types.New(types.T_datetime, 0, 6))
+	var d types.Datetime
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := vs.GetValue(i)
+		sec, nsec, ok, convErr := decimal256UnixTimeParts(v, scale)
+		if convErr != nil {
+			return convErr
+		}
+
+		if null || !ok {
+			if err = rs.Append(d, true); err != nil {
+				return err
+			}
+		} else {
+			if err = rs.Append(types.DatetimeFromUnixWithNsec(proc.GetSessionInfo().TimeZone, sec, nsec), false); err != nil {
 				return err
 			}
 		}
@@ -5280,6 +5479,43 @@ func FromUnixTimeFloat64Format(ivecs []*vector.Vector, result vector.FunctionRes
 			buf.Reset()
 			x, y := splitDecimalToIntAndFrac(v)
 			r := types.DatetimeFromUnixWithNsec(proc.GetSessionInfo().TimeZone, x, y)
+			if err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
+				return err
+			}
+			if err = rs.AppendBytes(buf.Bytes(), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func FromUnixTimeDecimal256Format(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if !ivecs[1].IsConst() {
+		return moerr.NewInvalidArg(proc.Ctx, "from_unixtime format", "not constant")
+	}
+
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	vs := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](ivecs[0])
+	scale := ivecs[0].GetType().Scale
+	formatMask, null1 := vector.GenerateFunctionStrParameter(ivecs[1]).GetStrValue(0)
+	f := string(formatMask)
+
+	var buf bytes.Buffer
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := vs.GetValue(i)
+		sec, nsec, ok, convErr := decimal256UnixTimeParts(v, scale)
+		if convErr != nil {
+			return convErr
+		}
+
+		if null || !ok || null1 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			buf.Reset()
+			r := types.DatetimeFromUnixWithNsec(proc.GetSessionInfo().TimeZone, sec, nsec)
 			if err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
 				return err
 			}

@@ -118,6 +118,30 @@ func TestSort(t *testing.T) {
 	}
 }
 
+func TestSortDecimal256(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.New(types.T_decimal256, 65, 2))
+	defer vec.Free(mp)
+
+	v1, err := types.ParseDecimal256("3.45", 65, 2)
+	require.NoError(t, err)
+	v2, err := types.ParseDecimal256("1.23", 65, 2)
+	require.NoError(t, err)
+	v3, err := types.ParseDecimal256("2.34", 65, 2)
+	require.NoError(t, err)
+
+	err = vector.AppendFixedList(vec, []types.Decimal256{v1, v2, v3}, nil, mp)
+	require.NoError(t, err)
+
+	os := []int64{0, 1, 2}
+	Sort(false, false, false, os, vec)
+	require.Equal(t, []int64{1, 2, 0}, os)
+
+	os = []int64{0, 1, 2}
+	Sort(true, false, false, os, vec)
+	require.Equal(t, []int64{0, 2, 1}, os)
+}
+
 func BenchmarkSortInt(b *testing.B) {
 	vs := make([]int, BenchmarkRows)
 	for i := range vs {

@@ -353,6 +353,21 @@ func TestZMNull(t *testing.T) {
 	require.False(t, zm.Contains(int64(1)))
 }
 
+func TestZMDecimal256IsSkipped(t *testing.T) {
+	zm := NewZM(types.T_decimal256, 4)
+	value, err := types.ParseDecimal256("12.3400", 65, 4)
+	require.NoError(t, err)
+
+	UpdateZM(zm, types.EncodeDecimal256(&value))
+	require.False(t, zm.IsInited())
+	require.Nil(t, zm.GetMin())
+	require.Nil(t, zm.GetMax())
+
+	zm.setInited()
+	require.Nil(t, zm.GetMin())
+	require.Nil(t, zm.GetMax())
+}
+
 func TestZmStringCompose(t *testing.T) {
 	packer := types.NewPacker()
 	packer.EncodeStringType([]byte("0123456789.0123456789.0123456789."))
