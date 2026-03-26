@@ -204,19 +204,34 @@ func buildColumnAndConstraint(
 				return nil, err
 			}
 			newCol.OnUpdate = onUpdateExpr
+		case *tree.AttributeGeneratedAlways:
+			generatedCol, err := buildGeneratedExpr(specNewColumn, colType, targetTableDef.Cols, ctx.GetProcess())
+			if err != nil {
+				return nil, err
+			}
+			newCol.GeneratedCol = generatedCol
 		default:
 			return nil, moerr.NewNotSupportedf(ctx.GetContext(), "unsupport column definition %v", attribute)
 		}
 	}
-	if auto_incr && hasDefaultValue {
-		return nil, moerr.NewErrInvalidDefault(ctx.GetContext(), newColNameOrigin)
-	}
-	if !hasDefaultValue {
-		defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
-		if err != nil {
-			return nil, err
+	if newCol.GeneratedCol != nil {
+		// Generated columns get a permissive default for storage layer compatibility
+		newCol.Default = &plan.Default{
+			NullAbility:  true,
+			Expr:         nil,
+			OriginString: "",
 		}
-		newCol.Default = defaultValue
+	} else {
+		if auto_incr && hasDefaultValue {
+			return nil, moerr.NewErrInvalidDefault(ctx.GetContext(), newColNameOrigin)
+		}
+		if !hasDefaultValue {
+			defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
+			if err != nil {
+				return nil, err
+			}
+			newCol.Default = defaultValue
+		}
 	}
 
 	// If the column name of the table changes, it is necessary to check if it is associated

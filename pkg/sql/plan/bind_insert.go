@@ -1016,7 +1016,7 @@ func (builder *QueryBuilder) getInsertColsFromStmt(astCols tree.IdentifierList, 
 	}
 	if astCols == nil {
 		for _, col := range tableDef.Cols {
-			if !col.Hidden {
+			if !col.Hidden && col.GeneratedCol == nil {
 				insertColNames = append(insertColNames, col.Name)
 			}
 		}
@@ -1026,6 +1026,9 @@ func (builder *QueryBuilder) getInsertColsFromStmt(astCols tree.IdentifierList, 
 			idx, ok := colToIdx[colName]
 			if !ok {
 				return nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
+			}
+			if tableDef.Cols[idx].GeneratedCol != nil {
+				return nil, moerr.NewInvalidInputf(builder.GetContext(), "the value specified for generated column '%s' in table '%s' is not allowed", colName, tableDef.Name)
 			}
 			insertColNames = append(insertColNames, tableDef.Cols[idx].Name)
 		}
@@ -1182,9 +1185,11 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 
 	columnIsNull := make(map[string]bool)
 	hasCompClusterBy := tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name)
+	colIdxToProjPos := make(map[int32]int32)
 
 	for i, col := range tableDef.Cols {
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
+			colIdxToProjPos[int32(i)] = int32(len(projList1))
 			projList2 = append(projList2, &plan.Expr{
 				Typ: oldExpr.Typ,
 				Expr: &plan.Expr_Col{
@@ -1234,6 +1239,23 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 					},
 				},
 			})
+		} else if col.GeneratedCol != nil && col.GeneratedCol.IsStored {
+			// Compute the generated expression in projList1 so that PreInsert
+			// receives the value directly. projList2 references it via ColRef.
+			genExpr := DeepCopyExpr(col.GeneratedCol.Expr)
+			inlineGeneratedColExpr(genExpr, colIdxToProjPos, projList1)
+			projList1 = append(projList1, genExpr)
+			pos := int32(len(projList1) - 1)
+			colIdxToProjPos[int32(i)] = pos
+			projList2 = append(projList2, &plan.Expr{
+				Typ: genExpr.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: projTag1,
+						ColPos: pos,
+					},
+				},
+			})
 		} else {
 			defExpr, err := getDefaultExpr(builder.GetContext(), col)
 			if err != nil {
@@ -1248,6 +1270,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 				}
 			}
 
+			colIdxToProjPos[int32(i)] = int32(len(projList1))
 			projList2 = append(projList2, &plan.Expr{
 				Typ: defExpr.Typ,
 				Expr: &plan.Expr_Col{

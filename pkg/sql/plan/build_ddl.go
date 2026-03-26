@@ -1062,11 +1062,15 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			var pks []string
 			var comment string
 			var auto_incr bool
+			var isGenerated bool
 			colName := def.Name.ColName()
 			// only used in error message and ColDef.OriginName
 			colNameOrigin := def.Name.ColNameOrigin()
 			for _, attr := range def.Attributes {
 				switch attribute := attr.(type) {
+				case *tree.AttributeGeneratedAlways:
+					isGenerated = true
+					_ = attribute
 				case *tree.AttributePrimaryKey, *tree.AttributeKey:
 					if colType.GetId() == int32(types.T_blob) {
 						return moerr.NewNotSupported(ctx.GetContext(), "blob type in primary key")
@@ -1123,17 +1127,35 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				primaryKeys = pks
 			}
 
-			defaultValue, err := buildDefaultExpr(def, colType, ctx.GetProcess())
-			if err != nil {
-				return err
-			}
-			if auto_incr && defaultValue.Expr != nil {
-				return moerr.NewInvalidInputf(ctx.GetContext(), "invalid default value for '%s'", colNameOrigin)
-			}
+			var defaultValue *plan.Default
+			var onUpdateExpr *plan.OnUpdate
+			var generatedCol *plan.GeneratedCol
 
-			onUpdateExpr, err := buildOnUpdate(def, colType, ctx.GetProcess())
-			if err != nil {
-				return err
+			if isGenerated {
+				// Build generated column expression; validation (no DEFAULT, etc.) is inside buildGeneratedExpr
+				generatedCol, err = buildGeneratedExpr(def, colType, createTable.TableDef.Cols, ctx.GetProcess())
+				if err != nil {
+					return err
+				}
+				// Generated columns get a permissive default (NULL-able, no expr) for storage layer compatibility
+				defaultValue = &plan.Default{
+					NullAbility:  true,
+					Expr:         nil,
+					OriginString: "",
+				}
+			} else {
+				defaultValue, err = buildDefaultExpr(def, colType, ctx.GetProcess())
+				if err != nil {
+					return err
+				}
+				if auto_incr && defaultValue.Expr != nil {
+					return moerr.NewInvalidInputf(ctx.GetContext(), "invalid default value for '%s'", colNameOrigin)
+				}
+
+				onUpdateExpr, err = buildOnUpdate(def, colType, ctx.GetProcess())
+				if err != nil {
+					return err
+				}
 			}
 
 			if !checkTableColumnNameValid(colName) {
@@ -1142,13 +1164,14 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 			colType.AutoIncr = auto_incr
 			col := &ColDef{
-				Name:       colName,
-				OriginName: colNameOrigin,
-				Alg:        plan.CompressType_Lz4,
-				Typ:        colType,
-				Default:    defaultValue,
-				OnUpdate:   onUpdateExpr,
-				Comment:    comment,
+				Name:         colName,
+				OriginName:   colNameOrigin,
+				Alg:          plan.CompressType_Lz4,
+				Typ:          colType,
+				Default:      defaultValue,
+				OnUpdate:     onUpdateExpr,
+				Comment:      comment,
+				GeneratedCol: generatedCol,
 			}
 			// if same name col in asSelectCols, overwrite it; add into colMap && createTable.TableDef.Cols later
 			if idx := slices.IndexFunc(asSelectCols, func(c *ColDef) bool { return c.Name == col.Name }); idx != -1 {

@@ -1,0 +1,82 @@
+drop database if exists test_generated_col;
+create database test_generated_col;
+use test_generated_col;
+create table t1 (a int, b int, c int generated always as (a + b) stored);
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n  `a` int DEFAULT NULL,\n  `b` int DEFAULT NULL,\n  `c` int GENERATED ALWAYS AS ((a + b)) STORED\n)
+desc t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        NULL        
+b    INT(32)    YES        NULL        
+c    INT(32)    YES        NULL        
+insert into t1(a, b) values (1, 2);
+insert into t1(a, b) values (10, 20), (100, 200);
+select * from t1 order by a;
+a    b    c
+1    2    3
+10    20    30
+100    200    300
+insert into t1 values (5, 6);
+select * from t1 order by a;
+a    b    c
+1    2    3
+5    6    11
+10    20    30
+100    200    300
+insert into t1(a, b) values (null, 3);
+select * from t1 order by a;
+a    b    c
+null    3    null
+1    2    3
+5    6    11
+10    20    30
+100    200    300
+insert into t1(a, b, c) values (1, 2, 3);
+invalid input: the value specified for generated column 'c' in table 't1' is not allowed
+update t1 set c = 999 where a = 1;
+invalid input: the value specified for generated column 'c' in table 't1' is not allowed
+update t1 set a = 50, b = 60 where a = 10;
+select * from t1 order by a;
+a    b    c
+null    3    null
+1    2    3
+5    6    11
+50    60    110
+100    200    300
+create table t2 (a int, b int, c int generated always as (a + b) stored, d int generated always as (a * b) stored);
+insert into t2(a, b) values (3, 4);
+select * from t2;
+a    b    c    d
+3    4    7    12
+create table t3 (a int, b int, c int generated always as (a + b) stored, d int generated always as (c * 2) stored);
+insert into t3(a, b) values (5, 10);
+select * from t3;
+a    b    c    d
+5    10    15    30
+create table t4 (x int, y int, z int as (x - y) stored);
+show create table t4;
+Table    Create Table
+t4    CREATE TABLE `t4` (\n  `x` int DEFAULT NULL,\n  `y` int DEFAULT NULL,\n  `z` int GENERATED ALWAYS AS ((x - y)) STORED\n)
+insert into t4(x, y) values (100, 30);
+select * from t4;
+x    y    z
+100    30    70
+create table t5 (first_name varchar(50), last_name varchar(50), full_name varchar(101) generated always as (concat(first_name, ' ', last_name)) stored);
+insert into t5(first_name, last_name) values ('John', 'Doe'), ('Jane', 'Smith');
+select * from t5 order by first_name;
+first_name    last_name    full_name
+Jane    Smith    Jane Smith
+John    Doe    John Doe
+create table t6 (id int primary key, val int, doubled int generated always as (val * 2) stored);
+insert into t6(id, val) values (1, 10), (2, 20);
+select * from t6 order by id;
+id    val    doubled
+1    10    20
+2    20    40
+update t6 set val = 15 where id = 1;
+select * from t6 order by id;
+id    val    doubled
+1    15    30
+2    20    40
+drop database test_generated_col;

@@ -361,6 +361,173 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Proces
 	return ret, nil
 }
 
+// buildGeneratedExpr builds the expression for a GENERATED ALWAYS AS column.
+// existingCols contains the columns defined before this generated column, used
+// to resolve column references in the expression.
+func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []*ColDef, proc *process.Process) (*plan.GeneratedCol, error) {
+	var genAttr *tree.AttributeGeneratedAlways
+	for _, attr := range col.Attributes {
+		if ga, ok := attr.(*tree.AttributeGeneratedAlways); ok {
+			genAttr = ga
+			break
+		}
+	}
+	if genAttr == nil {
+		return nil, nil
+	}
+
+	colNameOrigin := col.Name.ColNameOrigin()
+
+	// Validate: generated column cannot have DEFAULT
+	for _, attr := range col.Attributes {
+		if _, ok := attr.(*tree.AttributeDefault); ok {
+			return nil, moerr.NewInvalidInputf(proc.Ctx, "generated column '%s' cannot have a default value", colNameOrigin)
+		}
+	}
+	// Validate: generated column cannot have ON UPDATE
+	for _, attr := range col.Attributes {
+		if _, ok := attr.(*tree.AttributeOnUpdate); ok {
+			return nil, moerr.NewInvalidInputf(proc.Ctx, "generated column '%s' cannot have ON UPDATE", colNameOrigin)
+		}
+	}
+	// Validate: generated column cannot have AUTO_INCREMENT
+	for _, attr := range col.Attributes {
+		if _, ok := attr.(*tree.AttributeAutoIncrement); ok {
+			return nil, moerr.NewInvalidInputf(proc.Ctx, "generated column '%s' cannot have AUTO_INCREMENT", colNameOrigin)
+		}
+	}
+
+	// Collect column names and types from existing (non-generated or already-defined generated) columns
+	colNames := make([]string, len(existingCols))
+	colTypes := make([]plan.Type, len(existingCols))
+	for i, c := range existingCols {
+		colNames[i] = c.Name
+		colTypes[i] = c.Typ
+	}
+
+	binder := NewGeneratedColBinder(proc.Ctx, colNames, colTypes)
+	planExpr, err := binder.BindExpr(genAttr.Expr, 0, false)
+	if err != nil {
+		return nil, err
+	}
+
+	genExpr, err := makePlan2CastExpr(proc.Ctx, planExpr, typ)
+	if err != nil {
+		return nil, err
+	}
+
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
+	fmtCtx.PrintExpr(genAttr.Expr, genAttr.Expr, false)
+	return &plan.GeneratedCol{
+		Expr:         genExpr,
+		OriginString: fmtCtx.String(),
+		IsStored:     genAttr.Stored,
+	}, nil
+}
+
+// remapGeneratedColExpr rewrites ColRef positions in a generated column expression
+// for use in INSERT/UPDATE projections. The stored expression has ColRef(0, colIdx)
+// where colIdx is the column's position in the table definition. This remaps those
+// to ColRef(newRelPos, newColPos) using the provided mapping.
+func remapGeneratedColExpr(expr *plan.Expr, newRelPos int32, colIdxToNewPos map[int32]int32) {
+	if expr == nil {
+		return
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if e.Col.RelPos == 0 {
+			if newPos, ok := colIdxToNewPos[e.Col.ColPos]; ok {
+				e.Col.RelPos = newRelPos
+				e.Col.ColPos = newPos
+			}
+		}
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			remapGeneratedColExpr(arg, newRelPos, colIdxToNewPos)
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			remapGeneratedColExpr(item, newRelPos, colIdxToNewPos)
+		}
+	}
+}
+
+// inlineGeneratedColExpr replaces ColRef(0, colIdx) in a generated column expression
+// with a deep copy of the corresponding expression from projList1.
+// colIdxToProjPos maps tableDef column index → projList1 position.
+// This is used in INSERT to compute the generated value in projList1 directly.
+func inlineGeneratedColExpr(expr *plan.Expr, colIdxToProjPos map[int32]int32, projList1 []*plan.Expr) {
+	if expr == nil {
+		return
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if e.Col.RelPos == 0 {
+			if projPos, ok := colIdxToProjPos[e.Col.ColPos]; ok {
+				if int(projPos) < len(projList1) {
+					src := DeepCopyExpr(projList1[projPos])
+					expr.Expr = src.Expr
+					expr.Typ = src.Typ
+				}
+			}
+		}
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			inlineGeneratedColExpr(arg, colIdxToProjPos, projList1)
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			inlineGeneratedColExpr(item, colIdxToProjPos, projList1)
+		}
+	}
+}
+
+// substituteColRefsInExpr replaces ColRef(0, colIdx) in a generated column expression
+// with the actual expressions from projList at offset+colIdx. This is used in UPDATE
+// to inline referenced column values into the generated expression.
+func substituteColRefsInExpr(expr *plan.Expr, projList []*plan.Expr, offset int32) *plan.Expr {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if e.Col.RelPos == 0 {
+			pos := offset + e.Col.ColPos
+			if int(pos) < len(projList) {
+				return DeepCopyExpr(projList[pos])
+			}
+		}
+		return expr
+	case *plan.Expr_F:
+		newArgs := make([]*plan.Expr, len(e.F.Args))
+		for i, arg := range e.F.Args {
+			newArgs[i] = substituteColRefsInExpr(arg, projList, offset)
+		}
+		return &plan.Expr{
+			Typ: expr.Typ,
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: e.F.Func,
+					Args: newArgs,
+				},
+			},
+		}
+	case *plan.Expr_List:
+		newItems := make([]*plan.Expr, len(e.List.List))
+		for i, item := range e.List.List {
+			newItems[i] = substituteColRefsInExpr(item, projList, offset)
+		}
+		return &plan.Expr{
+			Typ: expr.Typ,
+			Expr: &plan.Expr_List{
+				List: &plan.ExprList{List: newItems},
+			},
+		}
+	default:
+		return expr
+	}
+}
+
 func isNullExpr(expr *plan.Expr) bool {
 	if expr == nil {
 		return false

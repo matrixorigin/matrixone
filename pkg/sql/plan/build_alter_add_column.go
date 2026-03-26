@@ -179,27 +179,42 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 				return nil, err
 			}
 			newCol.OnUpdate = onUpdateExpr
+		case *tree.AttributeGeneratedAlways:
+			generatedCol, err := buildGeneratedExpr(specNewColumn, colType, alterPlan.CopyTableDef.Cols, ctx.GetProcess())
+			if err != nil {
+				return nil, err
+			}
+			newCol.GeneratedCol = generatedCol
 			//default:
 			//	return nil, moerr.NewNotSupported(ctx.GetContext(), "unsupport column definition %v", attribute)
 		}
 	}
 
-	defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
-	if err != nil {
-		return nil, err
-	}
-	newCol.Default = defaultValue
-
-	hasDefaultValue = defaultValue.Expr != nil
-	if auto_incr && hasDefaultValue {
-		return nil, moerr.NewErrInvalidDefault(ctx.GetContext(), newColNameOrigin)
-	}
-	if !hasDefaultValue {
+	if newCol.GeneratedCol != nil {
+		// Generated columns get a permissive default for storage layer compatibility
+		newCol.Default = &plan.Default{
+			NullAbility:  true,
+			Expr:         nil,
+			OriginString: "",
+		}
+	} else {
 		defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
 		if err != nil {
 			return nil, err
 		}
 		newCol.Default = defaultValue
+
+		hasDefaultValue = defaultValue.Expr != nil
+		if auto_incr && hasDefaultValue {
+			return nil, moerr.NewErrInvalidDefault(ctx.GetContext(), newColNameOrigin)
+		}
+		if !hasDefaultValue {
+			defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
+			if err != nil {
+				return nil, err
+			}
+			newCol.Default = defaultValue
+		}
 	}
 	return newCol, nil
 }

@@ -107,6 +107,13 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "update pk/uk on pub/sub table")
 			}
 
+			// Check: cannot update a generated column
+			for _, colDef := range tableDef.Cols {
+				if colDef.Name == colName && colDef.GeneratedCol != nil {
+					return 0, moerr.NewInvalidInputf(builder.compCtx.GetContext(), "the value specified for generated column '%s' in table '%s' is not allowed", colName, tableDef.Name)
+				}
+			}
+
 			if !dmlCtx.updatePartCol[i] {
 				if _, ok := useColInPartExpr[colName]; ok {
 					dmlCtx.updatePartCol[i] = true
@@ -227,6 +234,20 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					}
 				}
 			}
+		}
+
+		// Recompute STORED generated columns
+		for _, col := range tableDef.Cols {
+			if col.GeneratedCol == nil || !col.GeneratedCol.IsStored {
+				continue
+			}
+			genExpr := substituteColRefsInExpr(col.GeneratedCol.Expr, selectNode.ProjectList, colOffsets[i])
+
+			oldPos := oldColName2Idx[alias+"."+col.Name]
+			newColName2Idx[alias+"."+col.Name] = oldPos
+			oldColName2Idx[alias+"."+col.Name] = int32(len(selectNode.ProjectList))
+			selectNode.ProjectList = append(selectNode.ProjectList, selectNode.ProjectList[oldPos])
+			selectNode.ProjectList[oldPos] = genExpr
 		}
 	}
 

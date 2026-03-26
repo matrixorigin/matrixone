@@ -624,9 +624,11 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 
 	columnIsNull := make(map[string]bool)
 	hasCompClusterBy := tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name)
+	colIdxToProjPos := make(map[int32]int32)
 
 	for i, col := range tableDef.Cols {
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
+			colIdxToProjPos[int32(i)] = int32(len(projList1))
 			projList2 = append(projList2, &plan.Expr{
 				Typ: oldExpr.Typ,
 				Expr: &plan.Expr_Col{
@@ -640,13 +642,6 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 		} else if col.Name == catalog.Row_ID {
 			continue
 		} else if col.Name == catalog.CPrimaryKeyColName {
-			//args := make([]*plan.Expr, len(tableDef.Pkey.Names))
-			//
-			//for k, part := range tableDef.Pkey.Names {
-			//	args[k] = DeepCopyExpr(insertColToExpr[part])
-			//}
-			//
-			//compPkeyExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
 			compPkeyExpr = makeCompPkeyExpr(tableDef, tableDef.Name2ColIndex)
 			projList2 = append(projList2, &plan.Expr{
 				Typ: compPkeyExpr.Typ,
@@ -658,14 +653,6 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 				},
 			})
 		} else if hasCompClusterBy && col.Name == tableDef.ClusterBy.Name {
-			//names := util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
-			//args := make([]*plan.Expr, len(names))
-			//
-			//for k, part := range names {
-			//	args[k] = DeepCopyExpr(insertColToExpr[part])
-			//}
-			//
-			//clusterByExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
 			clusterByExpr = makeClusterByExpr(tableDef, tableDef.Name2ColIndex)
 			projList2 = append(projList2, &plan.Expr{
 				Typ: clusterByExpr.Typ,
@@ -673,6 +660,21 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 					Col: &plan.ColRef{
 						RelPos: preInsertTag,
 						ColPos: 0,
+					},
+				},
+			})
+		} else if col.GeneratedCol != nil && col.GeneratedCol.IsStored {
+			genExpr := DeepCopyExpr(col.GeneratedCol.Expr)
+			inlineGeneratedColExpr(genExpr, colIdxToProjPos, projList1)
+			projList1 = append(projList1, genExpr)
+			pos := int32(len(projList1) - 1)
+			colIdxToProjPos[int32(i)] = pos
+			projList2 = append(projList2, &plan.Expr{
+				Typ: genExpr.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: projTag1,
+						ColPos: pos,
 					},
 				},
 			})
@@ -690,6 +692,7 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 				}
 			}
 
+			colIdxToProjPos[int32(i)] = int32(len(projList1))
 			projList2 = append(projList2, &plan.Expr{
 				Typ: defExpr.Typ,
 				Expr: &plan.Expr_Col{
