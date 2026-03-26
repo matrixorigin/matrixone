@@ -1,10 +1,10 @@
 create account acc101 admin_name='root' identified by '123456';
 drop table if exists t1;
-No database selected
+internal error: do not have privilege to execute the statement
 drop index if exists idx1 on t1;
-No database selected
+no such table mysql.t1
 drop view if exists v1;
-No database selected
+internal error: do not have privilege to execute the statement
 create database db1;
 use db1;
 create table t1(
@@ -29,11 +29,11 @@ Tables_in_db1
 t1
 v1
 drop index if exists idx1 on t1;
-No database selected
+no such table mysql.t1
 drop table if exists t1;
-No database selected
+internal error: do not have privilege to execute the statement
 drop view if exists v1;
-No database selected
+internal error: do not have privilege to execute the statement
 use db1;
 drop index if exists idx1 on t1;
 show index from t1;

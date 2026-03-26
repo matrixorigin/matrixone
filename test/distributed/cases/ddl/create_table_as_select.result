@@ -1668,7 +1668,7 @@ internal error: do not have privilege to execute the statement
 create table t3 as select * from t2;
 internal error: do not have privilege to execute the statement
 select * from t3;
-No database selected
+SQL parser error: table "t3" does not exist
 grant create database, drop database on account * to role_r2;
 grant show databases on account * to role_r2;
 grant connect on account * to role_r2;
@@ -1791,7 +1791,7 @@ grant connect on account * to role_r1;
 grant create table, drop table on database *.* to role_r1;
 grant show tables on database * to role_r1;
 create table t2 as select * from t1;
-No database selected
+internal error: do not have privilege to execute the statement
 grant select on table * to role_r1;
 grant insert on table * to role_r1;
 drop table if exists t2;

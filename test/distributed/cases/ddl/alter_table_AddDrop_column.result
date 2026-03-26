@@ -355,12 +355,12 @@ transaction03    CREATE TABLE `transaction03` (\n  `c` int NOT NULL,\n  `d` int 
 use isolation;
 Unknown database isolation
 show create table transaction03;
-No database selected
+no such table mysql.transaction03
 commit;
 alter table transaction03 drop column d;
-no such table .transaction03
+internal error: do not have privilege to execute the statement
 show create table transaction03;
-No database selected
+no such table mysql.transaction03
 show create table transaction03;
 Table    Create Table
 transaction03    CREATE TABLE `transaction03` (\n  `c` int NOT NULL,\n  `d` int DEFAULT NULL,\n  PRIMARY KEY (`c`)\n)
@@ -381,10 +381,10 @@ use ww_conflict;
 Unknown database ww_conflict
 begin;
 alter table conflict_test drop column b;
-no such table .conflict_test
+internal error: do not have privilege to execute the statement
 commit;
 alter table conflict_test add column colf int first;
-no such table .conflict_test
+internal error: do not have privilege to execute the statement
 select * from conflict_test;
 a    b    c
 1    aaaa    2020-09-08 00:00:00
@@ -533,7 +533,7 @@ c    d
 use isolation;
 Unknown database isolation
 select * from transaction04;
-No database selected
+SQL parser error: table "transaction04" does not exist
 commit;
 select * from transaction04;
 c    d
@@ -552,10 +552,10 @@ use ww_conflict;
 Unknown database ww_conflict
 begin;
 alter table conflict_test add column colf int first;
-no such table .conflict_test
+internal error: do not have privilege to execute the statement
 commit;
 alter table conflict_test add column colf int first;
-no such table .conflict_test
+internal error: do not have privilege to execute the statement
 select * from conflict_test;
 a    b    c
 1    aaaa    2020-09-08 00:00:00
