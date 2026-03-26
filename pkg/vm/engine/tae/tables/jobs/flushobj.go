@@ -94,12 +94,21 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 	seg := task.meta.ID().Segment()
 	name := objectio.BuildObjectName(seg, 0)
 	task.name = name
-	writer, err := ioutil.NewBlockWriterNew(
+	cnBatch := containers.ToCNBatch(task.data)
+	for _, vec := range cnBatch.Vecs {
+		if vec == nil {
+			// this task has been canceled
+			return nil
+		}
+	}
+	arena := objectio.NewArena(cnBatch.Size())
+	writer, err := ioutil.NewBlockWriterWithArena(
 		task.fs,
 		name,
 		task.schemaVer,
 		task.seqnums,
 		task.meta.IsTombstone,
+		arena,
 	)
 	if err != nil {
 		return err
@@ -121,13 +130,6 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 		}
 	}
 
-	cnBatch := containers.ToCNBatch(task.data)
-	for _, vec := range cnBatch.Vecs {
-		if vec == nil {
-			// this task has been canceled
-			return nil
-		}
-	}
 	dataRows := cnBatch.RowCount()
 	inst := time.Now()
 	_, err = writer.WriteBatch(cnBatch)

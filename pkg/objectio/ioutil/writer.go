@@ -35,17 +35,26 @@ func ConstructTombstoneWriter(
 	hiddenSelection objectio.HiddenColumnSelection,
 	fs fileservice.FileService,
 ) *BlockWriter {
+	return ConstructTombstoneWriterWithArena(hiddenSelection, fs, nil)
+}
+
+func ConstructTombstoneWriterWithArena(
+	hiddenSelection objectio.HiddenColumnSelection,
+	fs fileservice.FileService,
+	arena *objectio.WriteArena,
+) *BlockWriter {
 	seqnums := objectio.GetTombstoneSeqnums(hiddenSelection)
 	sortkeyPos := objectio.TombstonePrimaryKeyIdx
 	sortkeyIsPK := true
 	isTombstone := true
-	return ConstructWriter(
+	return ConstructWriterWithArena(
 		0,
 		seqnums,
 		sortkeyPos,
 		sortkeyIsPK,
 		isTombstone,
 		fs,
+		arena,
 	)
 }
 
@@ -73,10 +82,24 @@ func ConstructWriter(
 	isTombstone bool,
 	fs fileservice.FileService,
 ) *BlockWriter {
+	return ConstructWriterWithArena(
+		ver, seqnums, sortkeyPos, sortkeyIsPK, isTombstone, fs, nil,
+	)
+}
+
+func ConstructWriterWithArena(
+	ver uint32,
+	seqnums []uint16,
+	sortkeyPos int,
+	sortkeyIsPK bool,
+	isTombstone bool,
+	fs fileservice.FileService,
+	arena *objectio.WriteArena,
+) *BlockWriter {
 	noid := objectio.NewObjectid()
 	name := objectio.BuildObjectNameWithObjectID(&noid)
 	return constructWriterWithName(name,
-		ver, seqnums, sortkeyPos, sortkeyIsPK, isTombstone, fs, nil)
+		ver, seqnums, sortkeyPos, sortkeyIsPK, isTombstone, fs, arena)
 }
 
 func constructWriterWithName(

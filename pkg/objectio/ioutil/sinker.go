@@ -86,6 +86,7 @@ var _ FileSinker = new(FSinkerImpl)
 
 type FSinkerImpl struct {
 	writer *BlockWriter
+	arena  *objectio.WriteArena
 	mp     *mpool.MPool
 	fs     fileservice.FileService
 
@@ -99,19 +100,26 @@ type FSinkerImpl struct {
 
 func (s *FSinkerImpl) Sink(ctx context.Context, b *batch.Batch) error {
 	if s.writer == nil {
+		if s.arena == nil {
+			s.arena = objectio.NewArena(8 * 1024 * 1024)
+		} else {
+			s.arena.Reset()
+		}
 		if s.isTombstone {
-			s.writer = ConstructTombstoneWriter(
+			s.writer = ConstructTombstoneWriterWithArena(
 				s.hiddenSelection,
 				s.fs,
+				s.arena,
 			)
 		} else {
-			s.writer = ConstructWriter(
+			s.writer = ConstructWriterWithArena(
 				s.schemaVersion,
 				s.seqnums,
 				s.sortKeyPos,
 				s.isPrimaryKey,
 				s.isTombstone,
 				s.fs,
+				s.arena,
 			)
 		}
 	}
@@ -148,6 +156,7 @@ func (s *FSinkerImpl) Reset() {
 func (s *FSinkerImpl) Close() error {
 	// s.writer.Reset
 	s.writer = nil
+	s.arena = nil
 	return nil
 }
 

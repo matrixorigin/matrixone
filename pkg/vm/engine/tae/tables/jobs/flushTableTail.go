@@ -683,14 +683,21 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 	}
 
 	// write!
+	arenaSize := 0
+	for _, bat := range writtenBatches {
+		arenaSize += bat.Size()
+	}
+	arena := objectio.NewArena(arenaSize)
+
 	objID := objectio.NewObjectid()
 	name := objectio.BuildObjectNameWithObjectID(&objID)
-	writer, err := ioutil.NewBlockWriterNew(
+	writer, err := ioutil.NewBlockWriterWithArena(
 		task.rt.Fs,
 		name,
 		schema.Version,
 		seqnums,
 		isTombstone,
+		arena,
 	)
 	if err != nil {
 		return err
