@@ -363,3 +363,74 @@ func newBatch2(mp *mpool.MPool) *batch.Batch {
 	}
 	return NewBatch(types, false, int(40000*2), mp)
 }
+
+func TestWriteArena(t *testing.T) {
+	t.Run("alloc within capacity", func(t *testing.T) {
+		a := NewArena(1024)
+		b1 := a.Alloc(100)
+		require.Len(t, b1, 100)
+		require.Equal(t, 100, a.usedOffset)
+
+		b2 := a.Alloc(200)
+		require.Len(t, b2, 200)
+		require.Equal(t, 300, a.usedOffset)
+
+		// b1 and b2 should be from the same backing array
+		require.Equal(t, &a.data[0], &b1[0])
+		require.Equal(t, &a.data[100], &b2[0])
+	})
+
+	t.Run("alloc overflow falls back to make", func(t *testing.T) {
+		a := NewArena(64)
+		b1 := a.Alloc(32)
+		require.Equal(t, 32, a.usedOffset)
+
+		// this exceeds remaining capacity — should allocate a new slice
+		b2 := a.Alloc(64)
+		require.Len(t, b2, 64)
+		require.Equal(t, 32, a.usedOffset) // unchanged — overflow didn't advance offset
+		_ = b1
+	})
+
+	t.Run("reset reuses capacity", func(t *testing.T) {
+		a := NewArena(256)
+		a.Alloc(100)
+		a.Alloc(100)
+		require.Equal(t, 200, a.usedOffset)
+
+		a.Reset()
+		require.Equal(t, 0, a.usedOffset)
+		require.Equal(t, 256, len(a.data)) // backing array retained
+
+		b := a.Alloc(50)
+		require.Equal(t, &a.data[0], &b[0]) // reuses from beginning
+	})
+
+	t.Run("compress buf grows and persists", func(t *testing.T) {
+		a := NewArena(64)
+
+		cb1 := a.CompressBuf(100)
+		require.Len(t, cb1, 100)
+		require.GreaterOrEqual(t, cap(a.compressBuf), 100)
+
+		// smaller request reuses same buffer
+		cb2 := a.CompressBuf(50)
+		require.Len(t, cb2, 50)
+		require.Equal(t, &cb1[0], &cb2[0])
+
+		// larger request grows
+		cb3 := a.CompressBuf(200)
+		require.Len(t, cb3, 200)
+
+		// Reset does not clear compressBuf
+		a.Reset()
+		require.GreaterOrEqual(t, len(a.compressBuf), 200)
+	})
+
+	t.Run("zero-size arena always overflows", func(t *testing.T) {
+		a := NewArena(0)
+		b := a.Alloc(10)
+		require.Len(t, b, 10)
+		require.Equal(t, 0, a.usedOffset)
+	})
+}

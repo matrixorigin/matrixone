@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/FastFilter/xorfilter"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -314,4 +315,37 @@ func TestStaticFilterString(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 40000, positive.GetCardinality())
 	require.True(t, exist)
+}
+
+func TestBloomFilterBuilderReuse(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+
+	typ := types.T_int32.ToType()
+	const rounds = 5
+	const rows = 8192
+
+	var builder xorfilter.BinaryFuseBuilder
+	var hashBuf []uint64
+	filters := make([]StaticFilter, rounds)
+
+	// Build multiple filters reusing the same builder and hash buffer
+	for i := 0; i < rounds; i++ {
+		data := containers.MockVector2(typ, rows, i*rows)
+		sf, err := NewBloomFilter(data, &hashBuf, &builder)
+		require.NoError(t, err)
+		filters[i] = sf
+		data.Close()
+	}
+
+	// Each filter must contain its own keys
+	for i := 0; i < rounds; i++ {
+		key := types.EncodeValue(int32(i*rows+1), typ.Oid)
+		ok, err := filters[i].MayContainsKey(key)
+		require.NoError(t, err)
+		require.True(t, ok, "round %d: filter should contain its own key", i)
+	}
+
+	// The hash buffer should have been reused (not reallocated to zero cap)
+	require.GreaterOrEqual(t, cap(hashBuf), rows)
 }
