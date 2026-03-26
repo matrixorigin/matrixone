@@ -178,7 +178,6 @@ func (m *merge[T]) getNextPos() (batchIndex, rowIndex, size int) {
 	return
 }
 
-
 type heapSlice[T any] struct {
 	lessFunc sort.LessFunc[T]
 	s        []heapElem[T]
