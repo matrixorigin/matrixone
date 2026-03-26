@@ -39,6 +39,7 @@ const (
 	TimestampSize  int = 8
 	Decimal64Size  int = 8
 	Decimal128Size int = 16
+	Decimal256Size int = 32
 	UuidSize       int = 16
 )
 
@@ -263,6 +264,14 @@ func DecodeDecimal128(v []byte) Decimal128 {
 	return *(*Decimal128)(unsafe.Pointer(&v[0]))
 }
 
+func EncodeDecimal256(v *Decimal256) []byte {
+	return util.UnsafeToBytes(v)
+}
+
+func DecodeDecimal256(v []byte) Decimal256 {
+	return *(*Decimal256)(unsafe.Pointer(&v[0]))
+}
+
 func EncodeUuid(v *Uuid) []byte {
 	return util.UnsafeToBytes(v)
 }
@@ -363,6 +372,8 @@ func DecodeValue(val []byte, t T) any {
 		return DecodeFixed[Decimal64](val)
 	case T_decimal128:
 		return DecodeFixed[Decimal128](val)
+	case T_decimal256:
+		return DecodeFixed[Decimal256](val)
 	case T_uuid:
 		return DecodeFixed[Uuid](val)
 	case T_TS:
@@ -523,6 +534,8 @@ func EncodeValue(val any, t T) []byte {
 		return EncodeFixed(val.(Decimal64))
 	case T_decimal128:
 		return EncodeFixed(val.(Decimal128))
+	case T_decimal256:
+		return EncodeFixed(val.(Decimal256))
 	case T_date:
 		return EncodeFixed(val.(Date))
 	case T_time:

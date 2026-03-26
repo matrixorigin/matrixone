@@ -26,6 +26,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func buildDecimal256Vector(t *testing.T, mp *mpool.MPool, typ types.Type, nulls []bool, values []types.Decimal256) *vector.Vector {
+	vec := vector.NewVec(typ)
+	for i, value := range values {
+		isNull := len(nulls) > 0 && nulls[i]
+		require.NoError(t, vector.AppendFixed(vec, value, isNull, mp))
+	}
+	return vec
+}
+
 func buildNumericTestDataVecs(t *testing.T, mp *mpool.MPool) ([]types.Type, []*vector.Vector, []*vector.Vector) {
 	nulls := []bool{false, false, false, false, true, false, false, false, false, true}
 	int8s := []int8{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
@@ -47,6 +56,20 @@ func buildNumericTestDataVecs(t *testing.T, mp *mpool.MPool) ([]types.Type, []*v
 		{B0_63: 10, B64_127: 0},
 		{B0_63: 11, B64_127: 0},
 		{B0_63: 12, B64_127: 0}}
+	d256s := []types.Decimal256{
+		types.Decimal256FromInt64(1),
+		types.Decimal256FromInt64(2),
+		types.Decimal256FromInt64(3),
+		types.Decimal256FromInt64(4),
+		types.Decimal256FromInt64(5),
+		types.Decimal256FromInt64(6),
+		types.Decimal256FromInt64(7),
+		types.Decimal256FromInt64(8),
+		types.Decimal256FromInt64(9),
+		types.Decimal256FromInt64(10),
+		types.Decimal256FromInt64(11),
+		types.Decimal256FromInt64(12),
+	}
 
 	typs := []types.Type{
 		types.T_int8.ToType(),
@@ -56,14 +79,15 @@ func buildNumericTestDataVecs(t *testing.T, mp *mpool.MPool) ([]types.Type, []*v
 		types.T_float64.ToType(),
 		types.T_decimal64.ToType(),
 		types.T_decimal128.ToType(),
+		types.T_decimal256.ToType(),
 	}
 
 	for i := range typs {
 		typs[i].Scale = 0
 	}
 
-	vecs := make([]*vector.Vector, 7)
-	nvecs := make([]*vector.Vector, 7)
+	vecs := make([]*vector.Vector, 8)
+	nvecs := make([]*vector.Vector, 8)
 	vecs[0] = testutil.NewInt8Vector(10, typs[0], mp, false, nil, int8s[:10])
 	nvecs[0] = testutil.NewInt8Vector(10, typs[0], mp, false, nulls, int8s[2:])
 	vecs[1] = testutil.NewInt32Vector(10, typs[1], mp, false, nil, int32s[:10])
@@ -78,6 +102,8 @@ func buildNumericTestDataVecs(t *testing.T, mp *mpool.MPool) ([]types.Type, []*v
 	nvecs[5] = testutil.NewDecimal64Vector(10, typs[5], mp, false, nulls, d64s[2:])
 	vecs[6] = testutil.NewDecimal128Vector(10, typs[6], mp, false, nil, d128s[:10])
 	nvecs[6] = testutil.NewDecimal128Vector(10, typs[6], mp, false, nulls, d128s[2:])
+	vecs[7] = buildDecimal256Vector(t, mp, typs[7], nil, d256s[:10])
+	nvecs[7] = buildDecimal256Vector(t, mp, typs[7], nulls, d256s[2:])
 	return typs, vecs, nvecs
 }
 
@@ -100,6 +126,11 @@ func (e *expectedResult) check(val any, scale int32) error {
 		if math.Abs(e.expected-resultFloat) > 1e-6 {
 			return moerr.NewInternalErrorNoCtxf("expected %f, got %f", e.expected, resultFloat)
 		}
+	case types.Decimal256:
+		resultFloat := types.Decimal256ToFloat64(val, scale)
+		if math.Abs(e.expected-resultFloat) > 1e-6 {
+			return moerr.NewInternalErrorNoCtxf("expected %f, got %f", e.expected, resultFloat)
+		}
 	default:
 		return moerr.NewInternalErrorNoCtxf("unsupported type %T", val)
 	}
@@ -115,6 +146,8 @@ func (e *expectedResult) checkVecAt(vec *vector.Vector, idx int) error {
 		return e.check(vector.MustFixedColNoTypeCheck[float64](vec)[idx], typ.Scale)
 	case types.T_decimal128:
 		return e.check(vector.MustFixedColNoTypeCheck[types.Decimal128](vec)[idx], typ.Scale)
+	case types.T_decimal256:
+		return e.check(vector.MustFixedColNoTypeCheck[types.Decimal256](vec)[idx], typ.Scale)
 	}
 	return moerr.NewInternalErrorNoCtxf("unsupported type %s", typ.Oid)
 }
@@ -332,6 +365,17 @@ func (e *expectedResult) checkVecSum(vecs []*vector.Vector) error {
 				}
 			}
 			fsum += types.Decimal128ToFloat64(sum, typ.Scale)
+		case types.T_decimal256:
+			vals := vector.MustFixedColNoTypeCheck[types.Decimal256](vec)
+			sum := types.Decimal256{}
+			var err error
+			for _, val := range vals {
+				sum, err = sum.Add256(val)
+				if err != nil {
+					return err
+				}
+			}
+			fsum += types.Decimal256ToFloat64(sum, typ.Scale)
 		default:
 			return moerr.NewInternalErrorNoCtxf("unsupported type %s", typ.Oid)
 		}

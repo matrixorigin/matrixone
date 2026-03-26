@@ -69,6 +69,8 @@ func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		return opBetweenFixedWithFn(parameters, rs, proc, length, types.CompareDecimal64)
 	case types.T_decimal128:
 		return opBetweenFixedWithFn(parameters, rs, proc, length, types.CompareDecimal128)
+	case types.T_decimal256:
+		return opBetweenFixedWithFn(parameters, rs, proc, length, types.CompareDecimal256)
 	case types.T_Rowid:
 		return opBetweenFixedWithFn(parameters, rs, proc, length, func(lhs, rhs types.Rowid) int {
 			return lhs.Compare(&rhs)
@@ -369,6 +371,8 @@ func inRangeImpl(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		return inRangeFixedWithFunc(parameters, rs, proc, length, types.CompareDecimal64)
 	case types.T_decimal128:
 		return inRangeFixedWithFunc(parameters, rs, proc, length, types.CompareDecimal128)
+	case types.T_decimal256:
+		return inRangeFixedWithFunc(parameters, rs, proc, length, types.CompareDecimal256)
 	case types.T_Rowid:
 		return inRangeFixedWithFunc(parameters, rs, proc, length, func(lhs, rhs types.Rowid) int {
 			return lhs.Compare(&rhs)
