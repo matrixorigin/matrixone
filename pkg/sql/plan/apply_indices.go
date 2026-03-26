@@ -501,21 +501,7 @@ func (builder *QueryBuilder) buildRegularIndexTopSortContext(projNode *plan.Node
 	}
 
 	scanNode := builder.resolveScanNodeWithIndex(sortNode, 1)
-	if scanNode == nil || !scanNode.IndexScanInfo.IsIndexScan || scanNode.IndexScanInfo.IsUnique || len(scanNode.BindingTags) == 0 || len(scanNode.OrderBy) != 0 {
-		return nil
-	}
-
-	// Non-unique regular secondary index tables are laid out as:
-	//   col0 = hidden serialized key (index parts + base-table PK)
-	//   col1 = base-table PK
-	// Only under this layout can ORDER BY PK be rewritten to the hidden key safely.
-	if len(scanNode.TableDef.Cols) < 2 ||
-		scanNode.TableDef.Cols[0].Name != catalog.IndexTableIndexColName ||
-		scanNode.TableDef.Cols[1].Name != catalog.IndexTablePrimaryColName {
-		return nil
-	}
-
-	if len(scanNode.IndexScanInfo.Parts) < 2 || len(scanNode.FilterList) == 0 {
+	if scanNode == nil || len(scanNode.OrderBy) != 0 {
 		return nil
 	}
 
@@ -534,12 +520,7 @@ func (builder *QueryBuilder) buildRegularIndexTopSortContext(projNode *plan.Node
 
 	orderExpr := sortProjectNode.ProjectList[orderByCol.ColPos]
 	orderExprCol := orderExpr.GetCol()
-	if orderExprCol == nil || orderExprCol.RelPos != scanNode.BindingTags[0] || orderExprCol.ColPos != 1 {
-		return nil
-	}
-
-	numKeyParts := len(scanNode.IndexScanInfo.Parts) - 1
-	if !isRegularIndexFullPrefixEquality(scanNode.FilterList[0], numKeyParts) {
+	if !canUseRegularIndexHiddenSortKey(scanNode, orderExprCol) {
 		return nil
 	}
 
@@ -548,6 +529,33 @@ func (builder *QueryBuilder) buildRegularIndexTopSortContext(projNode *plan.Node
 		sortProjectNode: sortProjectNode,
 		scanNode:        scanNode,
 	}
+}
+
+func canUseRegularIndexHiddenSortKey(scanNode *plan.Node, orderByCol *plan.ColRef) bool {
+	if scanNode == nil || orderByCol == nil || !scanNode.IndexScanInfo.IsIndexScan || scanNode.IndexScanInfo.IsUnique || len(scanNode.BindingTags) == 0 {
+		return false
+	}
+
+	// Non-unique regular secondary index tables are laid out as:
+	//   col0 = hidden serialized key (index parts + base-table PK)
+	//   col1 = base-table PK
+	// Only under this layout can ORDER BY PK be rewritten to the hidden key safely.
+	if len(scanNode.TableDef.Cols) < 2 ||
+		scanNode.TableDef.Cols[0].Name != catalog.IndexTableIndexColName ||
+		scanNode.TableDef.Cols[1].Name != catalog.IndexTablePrimaryColName {
+		return false
+	}
+
+	if len(scanNode.IndexScanInfo.Parts) < 2 || len(scanNode.FilterList) == 0 {
+		return false
+	}
+
+	if orderByCol.RelPos != scanNode.BindingTags[0] || orderByCol.ColPos != 1 {
+		return false
+	}
+
+	numKeyParts := len(scanNode.IndexScanInfo.Parts) - 1
+	return isRegularIndexFullPrefixEquality(scanNode.FilterList[0], numKeyParts)
 }
 
 func isRegularIndexFullPrefixEquality(expr *plan.Expr, numKeyParts int) bool {
