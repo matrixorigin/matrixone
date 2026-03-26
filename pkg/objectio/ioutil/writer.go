@@ -89,12 +89,13 @@ func constructWriterWithName(
 	fs fileservice.FileService,
 	arena *objectio.WriteArena,
 ) *BlockWriter {
-	writer, err := NewBlockWriterNew(
+	writer, err := NewBlockWriterWithArena(
 		fs,
 		name,
 		ver,
 		seqnums,
 		isTombstone,
+		arena,
 	)
 	if err != nil {
 		panic(err) // it is impossible
