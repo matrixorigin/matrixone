@@ -427,31 +427,6 @@ func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []
 
 // remapGeneratedColExpr rewrites ColRef positions in a generated column expression
 // for use in INSERT/UPDATE projections. The stored expression has ColRef(0, colIdx)
-// where colIdx is the column's position in the table definition. This remaps those
-// to ColRef(newRelPos, newColPos) using the provided mapping.
-func remapGeneratedColExpr(expr *plan.Expr, newRelPos int32, colIdxToNewPos map[int32]int32) {
-	if expr == nil {
-		return
-	}
-	switch e := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		if e.Col.RelPos == 0 {
-			if newPos, ok := colIdxToNewPos[e.Col.ColPos]; ok {
-				e.Col.RelPos = newRelPos
-				e.Col.ColPos = newPos
-			}
-		}
-	case *plan.Expr_F:
-		for _, arg := range e.F.Args {
-			remapGeneratedColExpr(arg, newRelPos, colIdxToNewPos)
-		}
-	case *plan.Expr_List:
-		for _, item := range e.List.List {
-			remapGeneratedColExpr(item, newRelPos, colIdxToNewPos)
-		}
-	}
-}
-
 // inlineGeneratedColExpr replaces ColRef(0, colIdx) in a generated column expression
 // with a deep copy of the corresponding expression from projList1.
 // colIdxToProjPos maps tableDef column index → projList1 position.

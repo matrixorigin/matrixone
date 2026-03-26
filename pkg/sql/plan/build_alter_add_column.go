@@ -387,6 +387,10 @@ func DropColumn(
 		return column.Primary, err
 	}
 
+	if err := checkDropColumnWithGeneratedCol(ctx.GetContext(), tableDef, colName); err != nil {
+		return column.Primary, err
+	}
+
 	if err := handleDropColumnPosition(ctx.GetContext(), tableDef, column); err != nil {
 		return column.Primary, err
 	}
@@ -566,6 +570,46 @@ func handleDropColumnWithClusterBy(ctx context.Context, copyTableDef *TableDef, 
 		}
 	}
 	return nil
+}
+
+// checkDropColumnWithGeneratedCol checks if the column being dropped is referenced
+// by any generated column expression. If so, the drop is rejected.
+func checkDropColumnWithGeneratedCol(ctx context.Context, tableDef *TableDef, colName string) error {
+	for _, col := range tableDef.Cols {
+		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil {
+			if exprReferencesColumn(col.GeneratedCol.Expr, colName, tableDef.Cols) {
+				return moerr.NewInternalErrorf(ctx,
+					"Column '%s' has a generated column dependency on column '%s'", colName, col.Name)
+			}
+		}
+	}
+	return nil
+}
+
+// exprReferencesColumn checks if a plan expression references a column by name.
+func exprReferencesColumn(expr *plan.Expr, colName string, cols []*ColDef) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if int(e.Col.ColPos) < len(cols) {
+			return strings.EqualFold(cols[e.Col.ColPos].Name, colName)
+		}
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			if exprReferencesColumn(arg, colName, cols) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if exprReferencesColumn(item, colName, cols) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 //----------------------------------------------------------------------------------------------------------------------

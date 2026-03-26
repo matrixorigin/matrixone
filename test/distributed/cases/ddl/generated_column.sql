@@ -126,6 +126,72 @@ insert into t10(a, b) values (5, 10);
 select * from t10;
 
 -- ============================================================
--- 14. Cleanup
+-- 14. DESC / SHOW COLUMNS shows STORED GENERATED / VIRTUAL GENERATED
+-- ============================================================
+create table t11 (a int, b int, c int generated always as (a + b) stored, d varchar(100) as (concat(cast(a as varchar), '-', cast(b as varchar))) virtual);
+desc t11;
+show full columns from t11;
+
+-- ============================================================
+-- 15. INFORMATION_SCHEMA.COLUMNS shows GENERATION_EXPRESSION
+-- ============================================================
+select column_name, extra, generation_expression from information_schema.columns where table_schema = 'test_generated_col' and table_name = 't11' and column_name in ('a','b','c','d') order by ordinal_position;
+
+-- ============================================================
+-- 16. ALTER TABLE DROP COLUMN dependency check
+-- ============================================================
+create table t12 (a int, b int, c int generated always as (a + b) stored);
+-- @pattern
+-- Column 'a' has a generated column dependency on column 'c'
+alter table t12 drop column a;
+-- dropping non-referenced column succeeds
+alter table t12 drop column b;
+
+-- ============================================================
+-- 17. ALTER TABLE ADD generated column
+-- ============================================================
+create table t13 (a int, b int);
+insert into t13 values (1,2),(3,4);
+alter table t13 add column c int generated always as (a + b) stored;
+desc t13;
+
+-- ============================================================
+-- 18. REPLACE INTO with generated column
+-- ============================================================
+create table t14 (id int primary key, a int, b int, c int generated always as (a * b) stored);
+replace into t14 (id, a, b) values (1, 3, 4);
+select * from t14;
+replace into t14 (id, a, b) values (1, 5, 6);
+select * from t14;
+
+-- ============================================================
+-- 19. CREATE TABLE LIKE preserves generated columns
+-- ============================================================
+create table t15 like t11;
+show create table t15;
+insert into t15 (a, b) values (10, 20);
+select * from t15;
+
+-- ============================================================
+-- 20. Generated column with index
+-- ============================================================
+create table t16 (a int, b int, c int generated always as (a + b) stored, index idx_c (c));
+insert into t16 (a, b) values (1,2),(3,4),(5,6);
+select * from t16 where c = 7;
+
+-- ============================================================
+-- 21. WHERE filter on generated column
+-- ============================================================
+select * from t16 where c > 5 order by c;
+
+-- ============================================================
+-- 22. Drop the generated column itself (should succeed)
+-- ============================================================
+create table t17 (a int, b int, c int, d int generated always as (a + b) stored);
+alter table t17 drop column d;
+desc t17;
+
+-- ============================================================
+-- 23. Cleanup
 -- ============================================================
 drop database test_generated_col;
