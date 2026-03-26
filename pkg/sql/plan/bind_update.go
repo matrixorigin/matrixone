@@ -238,7 +238,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 		// Recompute STORED generated columns
 		for _, col := range tableDef.Cols {
-			if col.GeneratedCol == nil || !col.GeneratedCol.IsStored {
+			if col.GeneratedCol == nil {
 				continue
 			}
 			genExpr := substituteColRefsInExpr(col.GeneratedCol.Expr, selectNode.ProjectList, colOffsets[i])

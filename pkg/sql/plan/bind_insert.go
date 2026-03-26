@@ -1239,7 +1239,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 					},
 				},
 			})
-		} else if col.GeneratedCol != nil && col.GeneratedCol.IsStored {
+		} else if col.GeneratedCol != nil {
 			// Compute the generated expression in projList1 so that PreInsert
 			// receives the value directly. projList2 references it via ColRef.
 			genExpr := DeepCopyExpr(col.GeneratedCol.Expr)

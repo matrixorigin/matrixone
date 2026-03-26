@@ -663,7 +663,7 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 					},
 				},
 			})
-		} else if col.GeneratedCol != nil && col.GeneratedCol.IsStored {
+		} else if col.GeneratedCol != nil {
 			genExpr := DeepCopyExpr(col.GeneratedCol.Expr)
 			inlineGeneratedColExpr(genExpr, colIdxToProjPos, projList1)
 			projList1 = append(projList1, genExpr)

@@ -81,6 +81,51 @@ update t6 set val = 15 where id = 1;
 select * from t6 order by id;
 
 -- ============================================================
--- 10. Cleanup
+-- 10. VIRTUAL generated columns
+-- ============================================================
+create table t7 (a int, b int, c int generated always as (a + b) virtual);
+show create table t7;
+insert into t7(a, b) values (1, 2);
+insert into t7(a, b) values (10, 20), (100, 200);
+select * from t7 order by a;
+
+-- Implicit column list with VIRTUAL
+insert into t7 values (5, 6);
+select * from t7 order by a;
+
+-- Cannot insert into VIRTUAL column
+insert into t7(a, b, c) values (1, 2, 3);
+
+-- Cannot update VIRTUAL column
+update t7 set c = 999 where a = 1;
+
+-- UPDATE recomputes VIRTUAL column
+update t7 set a = 50, b = 60 where a = 10;
+select * from t7 order by a;
+
+-- ============================================================
+-- 11. Default type is VIRTUAL (shorthand without keyword)
+-- ============================================================
+create table t8 (x int, y int, z int as (x * y));
+show create table t8;
+insert into t8(x, y) values (3, 7);
+select * from t8;
+
+-- ============================================================
+-- 12. VIRTUAL with string expression
+-- ============================================================
+create table t9 (first_name varchar(50), last_name varchar(50), full_name varchar(101) generated always as (concat(first_name, ' ', last_name)) virtual);
+insert into t9(first_name, last_name) values ('Alice', 'Bob');
+select * from t9;
+
+-- ============================================================
+-- 13. Chained VIRTUAL columns
+-- ============================================================
+create table t10 (a int, b int, c int as (a + b) virtual, d int as (c * 2) virtual);
+insert into t10(a, b) values (5, 10);
+select * from t10;
+
+-- ============================================================
+-- 14. Cleanup
 -- ============================================================
 drop database test_generated_col;
