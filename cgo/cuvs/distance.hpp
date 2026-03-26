@@ -28,7 +28,7 @@
 namespace matrixone {
 
 /**
- * @brief Performs a pairwise distance calculation on GPU.
+ * @brief Performs a pairwise distance calculation on GPU asynchronously.
  * 
  * @tparam T Data type of the vector elements (e.g., float, half).
  * @param res RAFT resources handle.
@@ -39,16 +39,17 @@ namespace matrixone {
  * @param dim Dimension of each vector.
  * @param metric Distance metric to use.
  * @param dist Host pointer to store the resulting distances (size: n_x * n_y).
+ * @return void* The device pointer for temporary buffers (must be freed with cudaFreeAsync).
  */
 template <typename T>
-void pairwise_distance(const raft::resources& res,
-                       const T* x,
-                       uint64_t n_x,
-                       const T* y,
-                       uint64_t n_y,
-                       uint32_t dim,
-                       distance_type_t metric,
-                       float* dist) {
+void* pairwise_distance_async(const raft::resources& res,
+                             const T* x,
+                             uint64_t n_x,
+                             const T* y,
+                             uint64_t n_y,
+                             uint32_t dim,
+                             distance_type_t metric,
+                             float* dist) {
     auto stream = raft::resource::get_cuda_stream(res);
 
     // Helper to align sizes to 256 bytes (CUDA default alignment)
@@ -76,7 +77,6 @@ void pairwise_distance(const raft::resources& res,
     // 2. Async copies to Device
     raft::copy(res, raft::make_device_matrix_view<T, int64_t>(reinterpret_cast<T*>(d_x), (int64_t)n_x, (int64_t)dim), raft::make_host_matrix_view<const T, int64_t>(x, (int64_t)n_x, (int64_t)dim));
     raft::copy(res, raft::make_device_matrix_view<T, int64_t>(reinterpret_cast<T*>(d_y), (int64_t)n_y, (int64_t)dim), raft::make_host_matrix_view<const T, int64_t>(y, (int64_t)n_y, (int64_t)dim));
-    raft::resource::sync_stream(res);
 
     // 3. Prepare Views (zero allocation)
     auto x_view = raft::make_device_matrix_view<const T, int64_t>(reinterpret_cast<const T*>(d_x), (int64_t)n_x, (int64_t)dim);
@@ -89,10 +89,34 @@ void pairwise_distance(const raft::resources& res,
     // 5. Async copy results back to host
     raft::copy(res, raft::make_host_matrix_view<float, int64_t>(dist, (int64_t)n_x, (int64_t)n_y), dist_view);
 
-    // 6. Synchronize
-    raft::resource::sync_stream(res);
+    return d_ptr;
+}
 
-    // 7. Async free
+/**
+ * @brief Performs a pairwise distance calculation on GPU.
+ * 
+ * @tparam T Data type of the vector elements (e.g., float, half).
+ * @param res RAFT resources handle.
+ * @param x Host pointer to the first set of vectors (X).
+ * @param n_x Number of vectors in X.
+ * @param y Host pointer to the second set of vectors (Y).
+ * @param n_y Number of vectors in Y.
+ * @param dim Dimension of each vector.
+ * @param metric Distance metric to use.
+ * @param dist Host pointer to store the resulting distances (size: n_x * n_y).
+ */
+template <typename T>
+void pairwise_distance(const raft::resources& res,
+                       const T* x,
+                       uint64_t n_x,
+                       const T* y,
+                       uint64_t n_y,
+                       uint32_t dim,
+                       distance_type_t metric,
+                       float* dist) {
+    auto stream = raft::resource::get_cuda_stream(res);
+    void* d_ptr = pairwise_distance_async(res, x, n_x, y, n_y, dim, metric, dist);
+    raft::resource::sync_stream(res);
     RAFT_CUDA_TRY(cudaFreeAsync(d_ptr, stream));
 }
 

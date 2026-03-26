@@ -40,7 +40,7 @@ func PairwiseDistance[T VectorType](
 	deviceID int,
 ) ([]float32, error) {
 	if len(x) == 0 || len(y) == 0 {
-		return nil, moerr.NewInternalErrorNoCtx("empty x or y")
+		return nil, nil
 	}
 
 	qtype := GetQuantization[T]()
@@ -70,4 +70,58 @@ func PairwiseDistance[T VectorType](
 	}
 
 	return dist, nil
+}
+
+// PairwiseDistanceLaunch launches a pairwise distance calculation on GPU asynchronously.
+func PairwiseDistanceLaunch[T VectorType](
+	x []T,
+	nX uint64,
+	y []T,
+	nY uint64,
+	dim uint32,
+	metric DistanceType,
+	deviceID int,
+	dist []float32,
+) (uint64, error) {
+	if len(x) == 0 || len(y) == 0 || len(dist) < int(nX*nY) {
+		return 0, moerr.NewInternalErrorNoCtx("invalid arguments for PairwiseDistanceLaunch")
+	}
+
+	qtype := GetQuantization[T]()
+
+	var errmsg *C.char
+	jobID := C.gpu_pairwise_distance_launch(
+		unsafe.Pointer(&x[0]),
+		C.uint64_t(nX),
+		unsafe.Pointer(&y[0]),
+		C.uint64_t(nY),
+		C.uint32_t(dim),
+		C.distance_type_t(metric),
+		C.quantization_t(qtype),
+		C.int(deviceID),
+		(*C.float)(unsafe.Pointer(&dist[0])),
+		unsafe.Pointer(&errmsg),
+	)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return 0, moerr.NewInternalErrorNoCtx(errStr)
+	}
+
+	return uint64(jobID), nil
+}
+
+// PairwiseDistanceWait waits for a pairwise distance calculation to complete.
+func PairwiseDistanceWait(jobID uint64) error {
+	var errmsg *C.char
+	C.gpu_pairwise_distance_wait(C.uint64_t(jobID), unsafe.Pointer(&errmsg))
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+
+	return nil
 }

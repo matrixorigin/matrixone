@@ -50,6 +50,19 @@ void gpu_pairwise_distance(const void* x,
                            float* dist,
                            void* errmsg);
 
+uint64_t gpu_pairwise_distance_launch(const void* x,
+                                     uint64_t n_x,
+                                     const void* y,
+                                     uint64_t n_y,
+                                     uint32_t dim,
+                                     distance_type_t metric,
+                                     quantization_t qtype,
+                                     int device_id,
+                                     float* dist,
+                                     void* errmsg);
+
+void gpu_pairwise_distance_wait(uint64_t job_id, void* errmsg);
+
 #ifdef __cplusplus
 }
 #endif
