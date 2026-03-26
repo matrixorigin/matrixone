@@ -206,6 +206,140 @@ func TestProcessValueFunc_NthValue(t *testing.T) {
 	}
 }
 
+// TestProcessValueFunc_NthValueWithN tests nth_value(expr, 3) with unbounded frame.
+func TestProcessValueFunc_NthValueWithN(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+
+	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
+	spec := makeNthValueWindowSpec()
+
+	ctr := &container{bat: bat}
+	nVec := testutil.MakeInt64Vector([]int64{3}, nil, mp)
+	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
+	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], nVec}
+
+	ap := &Window{WinSpecList: []*plan.Expr{spec}}
+
+	result, err := ctr.processValueFunc(0, ap, proc)
+	require.NoError(t, err)
+	require.Equal(t, 4, result.Length())
+
+	vals := vector.MustFixedColNoTypeCheck[int32](result)
+	// nth_value(expr, 3) with unbounded frame: always the 3rd row = 30
+	for i := 0; i < 4; i++ {
+		require.Equal(t, int32(30), vals[i])
+	}
+
+	result.Free(mp)
+	nVec.Free(mp)
+	proc.Free()
+}
+
+// TestProcessValueFunc_NthValueOutOfBounds tests nth_value with n exceeding frame size.
+func TestProcessValueFunc_NthValueOutOfBounds(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+
+	bat := makeInt32Batch(mp, []int32{10, 20})
+	spec := makeNthValueWindowSpec()
+
+	ctr := &container{bat: bat}
+	nVec := testutil.MakeInt64Vector([]int64{5}, nil, mp)
+	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
+	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], nVec}
+
+	ap := &Window{WinSpecList: []*plan.Expr{spec}}
+
+	result, err := ctr.processValueFunc(0, ap, proc)
+	require.NoError(t, err)
+	require.Equal(t, 2, result.Length())
+	// n=5 exceeds frame size=2, all NULL
+	require.True(t, result.IsNull(0))
+	require.True(t, result.IsNull(1))
+
+	result.Free(mp)
+	nVec.Free(mp)
+	proc.Free()
+}
+
+// TestProcessValueFunc_LeadWithOffset tests lead with offset=2.
+func TestProcessValueFunc_LeadWithOffset(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+
+	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
+	spec := makeLeadWindowSpec()
+
+	ctr := &container{bat: bat}
+	offsetVec := testutil.MakeInt64Vector([]int64{2}, nil, mp)
+	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
+	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], offsetVec}
+
+	ap := &Window{WinSpecList: []*plan.Expr{spec}}
+
+	result, err := ctr.processValueFunc(0, ap, proc)
+	require.NoError(t, err)
+	require.Equal(t, 4, result.Length())
+
+	vals := vector.MustFixedColNoTypeCheck[int32](result)
+	require.Equal(t, int32(30), vals[0]) // lead(10, 2) → 30
+	require.Equal(t, int32(40), vals[1]) // lead(20, 2) → 40
+	require.True(t, result.IsNull(2))    // lead(30, 2) → NULL
+	require.True(t, result.IsNull(3))    // lead(40, 2) → NULL
+
+	result.Free(mp)
+	offsetVec.Free(mp)
+	proc.Free()
+}
+
+// TestProcessValueFunc_NthValueWithFrame tests nth_value with explicit frame.
+func TestProcessValueFunc_NthValueWithFrame(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+
+	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
+	spec := makeNthValueWindowSpec()
+	w := spec.Expr.(*plan.Expr_W).W
+	// ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING
+	w.Frame = &plan.FrameClause{
+		Type: plan.FrameClause_ROWS,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 1}}}},
+		},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 1}}}},
+		},
+	}
+
+	ctr := &container{bat: bat}
+	nVec := testutil.MakeInt64Vector([]int64{2}, nil, mp)
+	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
+	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], nVec}
+
+	ap := &Window{WinSpecList: []*plan.Expr{spec}}
+
+	result, err := ctr.processValueFunc(0, ap, proc)
+	require.NoError(t, err)
+	require.Equal(t, 4, result.Length())
+
+	vals := vector.MustFixedColNoTypeCheck[int32](result)
+	// Row 0: frame [0,2), nth(2) → index 1 → 20
+	require.Equal(t, int32(20), vals[0])
+	// Row 1: frame [0,3), nth(2) → index 1 → 20
+	require.Equal(t, int32(20), vals[1])
+	// Row 2: frame [1,4), nth(2) → index 2 → 30
+	require.Equal(t, int32(30), vals[2])
+	// Row 3: frame [2,4), nth(2) → index 3 → 40
+	require.Equal(t, int32(40), vals[3])
+
+	result.Free(mp)
+	nVec.Free(mp)
+	proc.Free()
+}
+
 func TestGetInt64FromConstVec(t *testing.T) {
 	mp := mpool.MustNewZero()
 
@@ -223,6 +357,46 @@ func TestGetInt64FromConstVec(t *testing.T) {
 	v3 := testutil.MakeUint64Vector([]uint64{7}, nil, mp)
 	require.Equal(t, int64(7), getInt64FromConstVec(v3))
 	v3.Free(mp)
+
+	// int8
+	v4 := testutil.MakeInt8Vector([]int8{2}, nil, mp)
+	require.Equal(t, int64(2), getInt64FromConstVec(v4))
+	v4.Free(mp)
+
+	// int16
+	v5 := testutil.MakeInt16Vector([]int16{4}, nil, mp)
+	require.Equal(t, int64(4), getInt64FromConstVec(v5))
+	v5.Free(mp)
+
+	// uint8
+	v6 := testutil.MakeUint8Vector([]uint8{6}, nil, mp)
+	require.Equal(t, int64(6), getInt64FromConstVec(v6))
+	v6.Free(mp)
+
+	// uint16
+	v7 := testutil.MakeUint16Vector([]uint16{8}, nil, mp)
+	require.Equal(t, int64(8), getInt64FromConstVec(v7))
+	v7.Free(mp)
+
+	// uint32
+	v8 := testutil.MakeUint32Vector([]uint32{9}, nil, mp)
+	require.Equal(t, int64(9), getInt64FromConstVec(v8))
+	v8.Free(mp)
+
+	// float32
+	v9 := testutil.MakeFloat32Vector([]float32{3.0}, nil, mp)
+	require.Equal(t, int64(3), getInt64FromConstVec(v9))
+	v9.Free(mp)
+
+	// float64
+	v10 := testutil.MakeFloat64Vector([]float64{10.0}, nil, mp)
+	require.Equal(t, int64(10), getInt64FromConstVec(v10))
+	v10.Free(mp)
+
+	// default (varchar) → returns 1
+	v11 := testutil.MakeVarcharVector([]string{"x"}, nil, mp)
+	require.Equal(t, int64(1), getInt64FromConstVec(v11))
+	v11.Free(mp)
 }
 
 func TestAppendDefaultOrNull(t *testing.T) {
