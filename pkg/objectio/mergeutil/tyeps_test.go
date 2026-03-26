@@ -62,3 +62,35 @@ func TestSortColumnsByIndex(t *testing.T) {
 		}
 	}
 }
+
+func TestSortColumnsByIndexWithBuf(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	const (
+		vecNum = 3
+		vecLen = 50
+	)
+
+	// Test that the buffer is reused across multiple calls
+	var sortBuf []int64
+
+	for round := 0; round < 3; round++ {
+		vecs := make([]*vector.Vector, vecNum)
+		for i := 0; i < vecNum; i++ {
+			vecs[i] = vector.NewVec(types.T_int32.ToType())
+			for j := 0; j < vecLen; j++ {
+				x := rand.Int32N(10000)
+				err := vector.AppendFixed[int32](vecs[i], x, false, mp)
+				require.NoError(t, err)
+			}
+		}
+
+		err := SortColumnsByIndexWithBuf(vecs, 0, mp, &sortBuf)
+		require.NoError(t, err)
+
+		vals := vector.MustFixedColNoTypeCheck[int32](vecs[0])
+		require.True(t, slices.IsSorted(vals))
+		require.True(t, vecs[0].GetSorted())
+		require.GreaterOrEqual(t, cap(sortBuf), vecLen)
+	}
+}

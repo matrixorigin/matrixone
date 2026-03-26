@@ -154,9 +154,29 @@ func MergeSortBatches(
 func SortColumnsByIndex(
 	cols []*vector.Vector, sortIdx int, mp *mpool.MPool,
 ) (err error) {
+	return SortColumnsByIndexWithBuf(cols, sortIdx, mp, nil)
+}
+
+// SortColumnsByIndexWithBuf sorts all columns by the sort key column at sortIdx.
+// buf is an optional scratch buffer for the index array; pass &mySlice to reuse
+// it across calls.
+func SortColumnsByIndexWithBuf(
+	cols []*vector.Vector, sortIdx int, mp *mpool.MPool, buf *[]int64,
+) (err error) {
 	sortKey := cols[sortIdx]
-	sortedIdx := make([]int64, sortKey.Length())
-	for i := 0; i < len(sortedIdx); i++ {
+	n := sortKey.Length()
+	var sortedIdx []int64
+	if buf != nil {
+		if cap(*buf) < n {
+			*buf = make([]int64, n)
+		} else {
+			*buf = (*buf)[:n]
+		}
+		sortedIdx = *buf
+	} else {
+		sortedIdx = make([]int64, n)
+	}
+	for i := 0; i < n; i++ {
 		sortedIdx[i] = int64(i)
 	}
 	sort.Sort(false, false, true, sortedIdx, sortKey)

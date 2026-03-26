@@ -483,11 +483,13 @@ func (sinker *Sinker) trySortInMemoryStaged(ctx context.Context) error {
 	if sinker.schema.sortKeyIdx == -1 {
 		return nil
 	}
+	var sortBuf []int64
 	for _, bat := range sinker.staged.inMemory {
-		if err := mergeutil.SortColumnsByIndex(
+		if err := mergeutil.SortColumnsByIndexWithBuf(
 			bat.Vecs,
 			sinker.schema.sortKeyIdx,
 			sinker.mp,
+			&sortBuf,
 		); err != nil {
 			return err
 		}
