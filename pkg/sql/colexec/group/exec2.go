@@ -311,6 +311,7 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 				return false, err
 			}
 		}
+		group.OpAnalyzer.SetMemUsed(group.ctr.memUsed())
 		return false, nil
 	} else {
 		if group.ctr.hr.IsEmpty() {
