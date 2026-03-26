@@ -20,7 +20,7 @@ import (
 )
 
 func BenchmarkPairWiseDistance(b *testing.B) {
-	nX, nY, dim := 100, 100, 128
+	nX, nY, dim := 8192, 1, 1024
 	x := make([][]float32, nX)
 	y := make([][]float32, nY)
 	for i := range x {
@@ -50,7 +50,7 @@ func BenchmarkPairWiseDistance(b *testing.B) {
 }
 
 func BenchmarkPairWiseDistanceLarge(b *testing.B) {
-	nX, nY, dim := 10000, 5, 1024
+	nX, nY, dim := 8192, 50, 1024
 	x := make([][]float32, nX)
 	y := make([][]float32, nY)
 	for i := range x {
@@ -75,6 +75,45 @@ func BenchmarkPairWiseDistanceLarge(b *testing.B) {
 	b.Run("GoPairWiseDistance-Large", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			_, _ = GoPairWiseDistance(x, y, Metric_L2sqDistance)
+		}
+	})
+}
+
+func BenchmarkPairwiseDistanceAsync(b *testing.B) {
+	nX, nY, dim := 8192, 50, 1024
+	x := make([][]float32, nX)
+	y := make([][]float32, nY)
+	for i := range x {
+		x[i] = make([]float32, dim)
+		for j := range x[i] {
+			x[i][j] = rand.Float32()
+		}
+	}
+	for i := range y {
+		y[i] = make([]float32, dim)
+		for j := range y[i] {
+			y[i][j] = rand.Float32()
+		}
+	}
+
+	b.Run("Sync", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_, _ = PairWiseDistance(x, y, Metric_L2sqDistance, 0)
+		}
+	})
+
+	b.Run("Async", func(b *testing.B) {
+		dist := make([]float32, nX*nY)
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			jobID, err := PairwiseDistanceLaunch(x, y, Metric_L2sqDistance, 0, dist)
+			if err != nil {
+				b.Fatal(err)
+			}
+			_, err = PairwiseDistanceWait(jobID, Metric_L2sqDistance)
+			if err != nil {
+				b.Fatal(err)
+			}
 		}
 	})
 }

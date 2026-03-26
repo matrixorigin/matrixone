@@ -28,3 +28,17 @@ func PairWiseDistance[T types.RealNumbers](
 ) ([]float32, error) {
 	return GoPairWiseDistance(x, y, metric)
 }
+
+func PairwiseDistanceLaunch[T types.RealNumbers](
+	x [][]T,
+	y [][]T,
+	metric MetricType,
+	deviceID int,
+	dist []float32,
+) (uint64, error) {
+	return PairwiseDistanceLaunchCPU(x, y, metric, deviceID, dist)
+}
+
+func PairwiseDistanceWait(jobID uint64, metric MetricType) ([]float32, error) {
+	return PairwiseDistanceWaitCPU(jobID, metric)
+}
