@@ -59,12 +59,25 @@ type HashmapBuilder struct {
 }
 
 func (hb *HashmapBuilder) GetSize() int64 {
+	var sz int64
 	if hb.IntHashMap != nil {
-		return hb.IntHashMap.Size()
+		sz += hb.IntHashMap.Size()
 	} else if hb.StrHashMap != nil {
-		return hb.StrHashMap.Size()
+		sz += hb.StrHashMap.Size()
 	}
-	return 0
+	sz += hb.Sels.Size()
+	for _, v := range hb.UniqueJoinKeys {
+		if v != nil {
+			sz += int64(v.Size())
+		}
+	}
+	if hb.IgnoreRows != nil {
+		sz += int64(hb.IgnoreRows.Size())
+	}
+	if hb.DelRows != nil {
+		sz += int64(hb.DelRows.Size())
+	}
+	return sz
 }
 
 func (hb *HashmapBuilder) GetJoinMap(mp *mpool.MPool) *message.JoinMap {

@@ -63,6 +63,10 @@ func (sels *GroupSels) Free(mp *mpool.MPool) {
 	sels.tmp = nil
 }
 
+func (sels *GroupSels) Size() int64 {
+	return int64(cap(sels.vals)+cap(sels.offsets)+cap(sels.tmp)) * 4
+}
+
 func (sels *GroupSels) Insert(k, v int32) {
 	sels.tmp = append(sels.tmp, k, v)
 }
