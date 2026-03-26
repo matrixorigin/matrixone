@@ -177,6 +177,13 @@ CREATE TABLE indup_04_multi_uk(
     UNIQUE KEY uk_c_3 (c)
 );
 
+-- @ignore:0
+-- @regex("On Duplicate Key", true)
+-- @regex("Join Type: LEFT", true)
+-- @regex("any_value", false)
+EXPLAIN INSERT INTO indup_04_multi_uk VALUES (99,10,20,999)
+ON DUPLICATE KEY UPDATE value = VALUES(value);
+
 INSERT INTO indup_04_multi_uk VALUES
     (1,10,20,100),
     (2,11,21,200);
