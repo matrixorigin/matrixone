@@ -356,7 +356,7 @@ func readMetaForV12(
 			loc := it.Next().GetLocation()
 			if !loc.IsEmpty() {
 				str := loc.Name().String()
-				data[str] = loc
+				data[str] = loc.Clone()
 			}
 		}
 		tombstoneLocations := BlockLocations(tombstoneLocationsVec.GetDownstreamVector().GetBytesAt(i))
@@ -365,7 +365,7 @@ func readMetaForV12(
 			loc := it.Next().GetLocation()
 			if !loc.IsEmpty() {
 				str := loc.Name().String()
-				tombstone[str] = loc
+				tombstone[str] = loc.Clone()
 			}
 		}
 	}
@@ -413,7 +413,7 @@ func readMetaForV12WithTableID(
 			loc := it.Next().GetLocation()
 			if !loc.IsEmpty() {
 				str := loc.Name().String()
-				data[str] = loc
+				data[str] = loc.Clone()
 			}
 		}
 		tombstoneLocations := BlockLocations(tombstoneLocationsVec.GetDownstreamVector().GetBytesAt(i))
@@ -422,7 +422,7 @@ func readMetaForV12WithTableID(
 			loc := it.Next().GetLocation()
 			if !loc.IsEmpty() {
 				str := loc.Name().String()
-				tombstone[str] = loc
+				tombstone[str] = loc.Clone()
 			}
 		}
 	}
