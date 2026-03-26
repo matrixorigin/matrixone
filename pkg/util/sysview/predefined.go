@@ -178,7 +178,7 @@ var (
 		"mc.attnum AS ORDINAL_POSITION,"+
 		"mo_show_visible_bin(mc.att_default,1) as COLUMN_DEFAULT,"+
 		"(case when mc.attnotnull != 0 then 'NO' else 'YES' end) as IS_NULLABLE,"+
-		"mo_show_visible_bin(mc.atttyp,2) as DATA_TYPE,"+
+		"(case when length(mc.attr_enum) > 0 then upper(split_part(mo_show_visible_bin_enum(mc.atttyp, mc.attr_enum), '(', 1)) else mo_show_visible_bin(mc.atttyp,2) end) as DATA_TYPE,"+
 		"internal_char_length(mc.atttyp) AS CHARACTER_MAXIMUM_LENGTH,"+
 		"internal_char_size(mc.atttyp) AS CHARACTER_OCTET_LENGTH,"+
 		"internal_numeric_precision(mc.atttyp) AS NUMERIC_PRECISION,"+
@@ -186,7 +186,7 @@ var (
 		"internal_datetime_scale(mc.atttyp) AS DATETIME_PRECISION,"+
 		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,"+
 		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' else NULL end) AS COLLATION_NAME,"+
-		"mo_show_visible_bin(mc.atttyp,3) as COLUMN_TYPE,"+
+		"(case when length(mc.attr_enum) > 0 then mo_show_visible_bin_enum(mc.atttyp, mc.attr_enum) else mo_show_visible_bin(mc.atttyp,3) end) as COLUMN_TYPE,"+
 		"case when mc.att_constraint_type = 'p' then 'PRI' when mo_show_col_unique(mt.`constraint`, mc.attname) then 'UNI' else '' end as COLUMN_KEY,"+
 		"case when mc.att_is_auto_increment = 1 then 'auto_increment' else '' end as EXTRA,"+
 		"'select,insert,update,references' as `PRIVILEGES`,"+
@@ -386,7 +386,7 @@ var (
 		"NULL AS `SUB_PART`," +
 		"NULL AS `PACKED`," +
 		"if((`tcl`.`attnotnull` = 0),'YES','') AS `NULLABLE`," +
-		"NULL AS `INDEX_TYPE`," +
+		"`idx`.`algo` AS `INDEX_TYPE`," +
 		"if(((`idx`.`type` = 'PRIMARY') or (`idx`.`type` = 'UNIQUE')),'','') AS `COMMENT`," +
 		"`idx`.`comment` AS `INDEX_COMMENT`," +
 		"if(`idx`.`is_visible`,'YES','NO') AS `IS_VISIBLE`," +

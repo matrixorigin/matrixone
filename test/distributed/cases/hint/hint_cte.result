@@ -503,7 +503,74 @@ FROM test_cte_rewrite.sales
 SELECT * FROM ranked_sales
 WHERE rank_in_product = 1
 ORDER BY product;
-[unknown result because it is related to issue#23644]
+➤ product[12,-1,0]  ¦  amount[3,10,2]  ¦  product_total[3,38,2]  ¦  rank_in_product[-5,64,0]  𝄀
+Product A  ¦  180.00  ¦  430.00  ¦  1  𝄀
+Product B  ¦  250.00  ¦  670.00  ¦  1  𝄀
+Product C  ¦  350.00  ¦  650.00  ¦  1
+/*+ {
+"rewrites" : {
+"test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"
+}
+} */
+WITH ranked_sales AS (
+SELECT
+product,
+amount,
+SUM(amount) OVER (PARTITION BY product) AS product_total,
+ROW_NUMBER() OVER (PARTITION BY product ORDER BY amount DESC) AS rank_in_product
+FROM test_cte_rewrite.sales
+)
+SELECT * FROM ranked_sales
+WHERE product_total > 500
+ORDER BY product, amount;
+➤ product[12,-1,0]  ¦  amount[3,10,2]  ¦  product_total[3,38,2]  ¦  rank_in_product[-5,64,0]  𝄀
+Product B  ¦  200.00  ¦  670.00  ¦  3  𝄀
+Product B  ¦  220.00  ¦  670.00  ¦  2  𝄀
+Product B  ¦  250.00  ¦  670.00  ¦  1  𝄀
+Product C  ¦  300.00  ¦  650.00  ¦  2  𝄀
+Product C  ¦  350.00  ¦  650.00  ¦  1
+/*+ {
+"rewrites" : {
+"test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"
+}
+} */
+WITH ranked_sales AS (
+SELECT
+product,
+amount,
+SUM(amount) OVER (PARTITION BY product) AS product_total,
+ROW_NUMBER() OVER (PARTITION BY product ORDER BY amount DESC) AS rank_in_product
+FROM test_cte_rewrite.sales
+)
+SELECT product FROM ranked_sales
+WHERE rank_in_product = 1
+ORDER BY product;
+➤ product[12,-1,0]  𝄀
+Product A  𝄀
+Product B  𝄀
+Product C
+/*+ {
+"rewrites" : {
+"test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"
+}
+} */
+WITH ranked_sales AS (
+SELECT
+product,
+amount,
+SUM(amount) OVER (PARTITION BY product) AS product_total,
+ROW_NUMBER() OVER (PARTITION BY product ORDER BY amount DESC) AS rank_in_product
+FROM test_cte_rewrite.sales
+)
+SELECT product FROM ranked_sales
+WHERE product_total > 500
+ORDER BY product;
+➤ product[12,-1,0]  𝄀
+Product B  𝄀
+Product B  𝄀
+Product B  𝄀
+Product C  𝄀
+Product C
 /*+ {
 "rewrites" : {
 "test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"

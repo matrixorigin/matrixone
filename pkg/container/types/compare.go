@@ -30,6 +30,9 @@ func Decimal64AscCompare(x, y Decimal64) int {
 func Decimal128AscCompare(x, y Decimal128) int {
 	return x.Compare(y)
 }
+func Decimal256AscCompare(x, y Decimal256) int {
+	return x.Compare(y)
+}
 
 func UuidAscCompare(x, y Uuid) int {
 	return x.Compare(y)
@@ -70,6 +73,9 @@ func Decimal64DescCompare(x, y Decimal64) int {
 	return -x.Compare(y)
 }
 func Decimal128DescCompare(x, y Decimal128) int {
+	return -x.Compare(y)
+}
+func Decimal256DescCompare(x, y Decimal256) int {
 	return -x.Compare(y)
 }
 

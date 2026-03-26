@@ -870,6 +870,13 @@ func (tcc *TxnCompilerContext) doStatsHeavyWork(obj *plan2.ObjectRef, snapshot *
 	dbName := obj.GetSchemaName()
 	tableName := obj.GetObjName()
 
+	// Resolve temporary table alias: the ObjectRef may carry the original
+	// user-visible name while the real engine name is the session-scoped
+	// temp name.  Without this lookup Stats() would fail with "no such table".
+	if realName, ok := tcc.GetSession().GetTempTable(dbName, tableName); ok {
+		tableName = realName
+	}
+
 	// 1. Check database and subscription
 	checkSub := obj.PubInfo == nil
 	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, checkSub, snapshot)

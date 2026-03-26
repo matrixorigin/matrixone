@@ -108,6 +108,19 @@ func AbsDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	}, selectList)
 }
 
+func absDecimal256(v types.Decimal256) types.Decimal256 {
+	if v.Sign() {
+		v = v.Minus()
+	}
+	return v
+}
+
+func AbsDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Decimal256, types.Decimal256](ivecs, result, proc, length, func(v types.Decimal256) types.Decimal256 {
+		return absDecimal256(v)
+	}, selectList)
+}
+
 // SIGN function implementations
 // SIGN returns 1 for positive numbers, 0 for zero, -1 for negative numbers
 func SignInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -169,6 +182,21 @@ func signDecimal128(v types.Decimal128) int64 {
 
 func SignDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Decimal128, int64](ivecs, result, proc, length, signDecimal128, selectList)
+}
+
+func signDecimal256(v types.Decimal256) int64 {
+	zero := types.Decimal256{}
+	if v.Compare(zero) == 0 {
+		return 0
+	}
+	if v.Sign() {
+		return -1
+	}
+	return 1
+}
+
+func SignDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Decimal256, int64](ivecs, result, proc, length, signDecimal256, selectList)
 }
 
 func AbsArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

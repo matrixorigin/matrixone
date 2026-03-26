@@ -31,7 +31,6 @@ import (
 
 const (
 	spillNumBuckets = 32
-	spillMaxPass    = 3
 	spillMagic      = 0x12345678DEADBEEF
 	spillBufferSize = 8192 // Buffer 8192 rows before flushing
 )
@@ -44,9 +43,10 @@ func (ctr *container) flushBucketBuffer(proc *process.Process, bat *batch.Batch,
 	cnt := int64(bat.RowCount())
 	ctr.spillWriteBuf.Reset()
 	ctr.spillWriteBuf.Write(types.EncodeInt64(&cnt))
-	// Reserve space for batchSize
+	// Reserve space for batchSize (filled in after marshalling)
 	batchSizePos := ctr.spillWriteBuf.Len()
-	ctr.spillWriteBuf.Write(types.EncodeInt64(new(int64)))
+	var zero int64
+	ctr.spillWriteBuf.Write(types.EncodeInt64(&zero))
 
 	// Write batch data directly to spillWriteBuf
 	batchStartPos := ctr.spillWriteBuf.Len()
@@ -77,14 +77,14 @@ func createSpillFiles(proc *process.Process) ([]string, []*os.File, error) {
 	}
 
 	uid, _ := uuid.NewV7()
-	baseName := fmt.Sprintf("join_build_%s", uid.String())
-	logutil.Infof("creating spill files, base: %s", baseName)
+	uidStr := uid.String()
+	logutil.Infof("creating spill files, base: %s", uidStr)
 
 	buckets := make([]string, spillNumBuckets)
 	files := make([]*os.File, spillNumBuckets)
 
 	for i := 0; i < spillNumBuckets; i++ {
-		buckets[i] = fmt.Sprintf("%s_%d", baseName, i)
+		buckets[i] = fmt.Sprintf("join_%s_%d_build", uidStr, i)
 		if files[i], err = spillfs.CreateFile(proc.Ctx, buckets[i]); err != nil {
 			// Close any opened files on error
 			for j := 0; j < i; j++ {
@@ -97,28 +97,16 @@ func createSpillFiles(proc *process.Process) ([]string, []*os.File, error) {
 	return buckets, files, nil
 }
 
-func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *batch.Batch, files []*os.File, buffers []*batch.Batch, hashOnPK bool, conditions []*plan.Expr, analyzer process.Analyzer) error {
+func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *batch.Batch, files []*os.File, buffers []*batch.Batch, executors []colexec.ExpressionExecutor, analyzer process.Analyzer) error {
 	if bat.RowCount() == 0 {
 		return nil
 	}
 
-	// Evaluate hash keys
-	executors := make([]colexec.ExpressionExecutor, len(conditions))
-	var err error
-	for i, expr := range conditions {
-		if executors[i], err = colexec.NewExpressionExecutor(proc, expr); err != nil {
-			return err
-		}
+	// Evaluate hash keys using pre-initialized executors (reuse cached slice)
+	if cap(ctr.spillKeyVecs) < len(executors) {
+		ctr.spillKeyVecs = make([]*vector.Vector, len(executors))
 	}
-	defer func() {
-		for _, exec := range executors {
-			if exec != nil {
-				exec.Free()
-			}
-		}
-	}()
-
-	keyVecs := make([]*vector.Vector, len(executors))
+	keyVecs := ctr.spillKeyVecs[:len(executors)]
 	for i, exec := range executors {
 		vec, err := exec.Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
@@ -143,20 +131,27 @@ func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *b
 		ctr.spillBucketRowIds = make([][]int32, spillNumBuckets)
 	}
 	bucketRowIds := ctr.spillBucketRowIds[:spillNumBuckets]
-	for i := range bucketRowIds {
+
+	// Single pass: reset and distribute row indices into buckets.
+	for i := 0; i < spillNumBuckets; i++ {
 		bucketRowIds[i] = bucketRowIds[i][:0]
 	}
-	for row := 0; row < bat.RowCount(); row++ {
-		bucketId := hashValues[row] & (spillNumBuckets - 1)
-		bucketRowIds[bucketId] = append(bucketRowIds[bucketId], int32(row))
+	for row := 0; row < rowCount; row++ {
+		b := hashValues[row] & (spillNumBuckets - 1)
+		bucketRowIds[b] = append(bucketRowIds[b], int32(row))
+	}
+
+	// Collect non-empty buckets (reuse cached slice).
+	ctr.spillNonEmptyBuckets = ctr.spillNonEmptyBuckets[:0]
+	for i := 0; i < spillNumBuckets; i++ {
+		if len(bucketRowIds[i]) > 0 {
+			ctr.spillNonEmptyBuckets = append(ctr.spillNonEmptyBuckets, i)
+		}
 	}
 
 	// Add rows to buffers and flush when needed
-	for bucketId := 0; bucketId < spillNumBuckets; bucketId++ {
+	for _, bucketId := range ctr.spillNonEmptyBuckets {
 		sels := bucketRowIds[bucketId]
-		if len(sels) == 0 {
-			continue
-		}
 
 		buf := buffers[bucketId]
 		if buf == nil {
@@ -189,10 +184,70 @@ func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *b
 	return nil
 }
 
+// initSpillExprExecs initializes or validates spill expression executors.
+// Returns the executors slice ready for use. Called once when entering spill mode.
+func (ctr *container) initSpillExprExecs(proc *process.Process, conditions []*plan.Expr) ([]colexec.ExpressionExecutor, error) {
+	if len(ctr.spillExprExecs) != len(conditions) {
+		// Clean up old executors if count changed
+		ctr.freeSpillExprExecs()
+		ctr.spillExprExecs = make([]colexec.ExpressionExecutor, len(conditions))
+		for i, expr := range conditions {
+			var err error
+			if ctr.spillExprExecs[i], err = colexec.NewExpressionExecutor(proc, expr); err != nil {
+				// Clean up what we already created
+				for j := 0; j < i; j++ {
+					ctr.spillExprExecs[j].Free()
+				}
+				ctr.spillExprExecs = nil
+				return nil, err
+			}
+		}
+	}
+	return ctr.spillExprExecs, nil
+}
+
+// freeSpillExprExecs frees all cached spill expression executors.
+func (ctr *container) freeSpillExprExecs() {
+	for _, exec := range ctr.spillExprExecs {
+		if exec != nil {
+			exec.Free()
+		}
+	}
+	ctr.spillExprExecs = nil
+}
+
+// acquireSpillBuffers returns a slice of spillNumBuckets buffers, reusing from pool if available.
+// All returned buffers have CleanOnlyData() called to reset them for fresh use.
+func (ctr *container) acquireSpillBuffers(proc *process.Process) []*batch.Batch {
+	if len(ctr.spillBuffers) < spillNumBuckets {
+		ctr.spillBuffers = append(ctr.spillBuffers, make([]*batch.Batch, spillNumBuckets-len(ctr.spillBuffers))...)
+	}
+	bufs := ctr.spillBuffers[:spillNumBuckets]
+	for i := range bufs {
+		if bufs[i] != nil {
+			bufs[i].CleanOnlyData()
+		}
+	}
+	return bufs
+}
+
+// cleanSpillBufferPool cleans all pooled buffers.
+func (ctr *container) cleanSpillBufferPool(proc *process.Process) {
+	for _, buf := range ctr.spillBuffers {
+		if buf != nil {
+			buf.Clean(proc.Mp())
+		}
+	}
+	ctr.spillBuffers = nil
+}
+
 func (ctr *container) memUsed() int64 {
-	sz := ctr.hashmapBuilder.GetSize()
-	for _, bat := range ctr.hashmapBuilder.Batches.Buf {
-		sz += int64(bat.Size())
+	sz := ctr.hashmapBuilder.GetSize() + ctr.hashmapBuilder.Batches.MemSize
+	// If MemSize is 0 but Buf is non-empty (e.g. set directly in tests), fall back to summing.
+	if sz == 0 {
+		for _, bat := range ctr.hashmapBuilder.Batches.Buf {
+			sz += int64(bat.Size())
+		}
 	}
 	return sz
 }
@@ -220,34 +275,40 @@ func (hashBuild *HashBuild) shouldSpillBatches() bool {
 	}
 }
 
-// computeXXHash computes xxhash values for partitioning
-// Encodes key vectors and hashes them directly with xxhash
+// hashCombine merges a new hash value into a running hash state (Boost-style).
+func hashCombine(h, val uint64) uint64 {
+	return h ^ (val + 0x9e3779b97f4a7c15 + (h << 6) + (h >> 2))
+}
+
+// computeXXHash computes hash values for spill-partitioning using
+// column-at-a-time processing for better cache locality.
+// Each column is processed in a tight loop over all rows, avoiding
+// per-row buffer concatenation and giving sequential vector access.
 func computeXXHash(keyVecs []*vector.Vector, hashValues []uint64) error {
 	if len(keyVecs) == 0 || len(hashValues) == 0 {
 		return nil
 	}
 
 	rowCount := len(hashValues)
-	buf := make([]byte, 0, 128)
-
 	for i := 0; i < rowCount; i++ {
-		buf = buf[:0]
+		hashValues[i] = 0
+	}
 
-		// Encode all key columns for this row
-		for _, vec := range keyVecs {
-			// For constant vectors, always use index 0
-			idx := i
-			if vec.IsConst() {
-				idx = 0
-			} else if i >= vec.Length() {
-				continue
+	for _, vec := range keyVecs {
+		if vec.IsConst() {
+			colHash := xxhash.Sum64(vec.GetRawBytesAt(0))
+			for i := 0; i < rowCount; i++ {
+				hashValues[i] = hashCombine(hashValues[i], colHash)
 			}
-
-			buf = append(buf, vec.GetRawBytesAt(idx)...)
+		} else {
+			n := rowCount
+			if vec.Length() < n {
+				n = vec.Length()
+			}
+			for i := 0; i < n; i++ {
+				hashValues[i] = hashCombine(hashValues[i], xxhash.Sum64(vec.GetRawBytesAt(i)))
+			}
 		}
-
-		// Compute xxhash
-		hashValues[i] = xxhash.Sum64(buf)
 	}
 
 	return nil

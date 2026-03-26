@@ -1,0 +1,51 @@
+drop table if exists decimal_256_t;
+create table decimal_256_t (
+id int primary key,
+d decimal(65,30)
+);
+show create table decimal_256_t;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+decimal_256_t  ¦  CREATE TABLE `decimal_256_t` (
+  `id` int NOT NULL,
+  `d` decimal(65,30) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
+insert into decimal_256_t values
+(1, 12345678901234567890123456789012345.123456789012345678901234567890),
+(2, cast(42 as decimal(65,30))),
+(3, cast('-0.000000000000000000000000000001' as decimal(65,30)));
+select id, d from decimal_256_t order by id;
+➤ id[4,32,0]  ¦  d[3,65,30]  𝄀
+1  ¦  12345678901234567890123456789012345.123456789012345678901234567890  𝄀
+2  ¦  42.000000000000000000000000000000  𝄀
+3  ¦  -1E-30
+select cast('12345678901234567890123456789012345.123456789012345678901234567890' as decimal(65,30));
+➤ cast(12345678901234567890123456789012345.123456789012345678901234567890 as decimal(65, 30))[3,65,30]  𝄀
+12345678901234567890123456789012345.123456789012345678901234567890
+select cast('1.25' as decimal(65,30)) + '2.50' as plus_with_string;
+➤ plus_with_string[3,65,30]  𝄀
+3.750000000000000000000000000000
+select
+sum(v) as sum_v,
+avg(v) as avg_v,
+min(v) as min_v,
+max(v) as max_v
+from (
+select cast('1.250000000000000000000000000000' as decimal(65,30)) as v
+union all
+select cast('2.500000000000000000000000000000' as decimal(65,30))
+union all
+select cast('-0.750000000000000000000000000000' as decimal(65,30))
+) as decimal_256_agg;
+➤ sum_v[3,65,30]  ¦  avg_v[3,65,30]  ¦  min_v[3,65,30]  ¦  max_v[3,65,30]  𝄀
+3.000000000000000000000000000000  ¦  1.000000000000000000000000000000  ¦  -0.750000000000000000000000000000  ¦  2.500000000000000000000000000000
+select
+abs(cast('-12.3412' as decimal(65,4))) as abs_v,
+sign(cast('-12.3412' as decimal(65,4))) as sign_v,
+ceil(cast('12.3412' as decimal(65,4)), 2) as ceil_v,
+floor(cast('-12.3412' as decimal(65,4)), 2) as floor_v,
+round(cast('12.3412' as decimal(65,4)), 2) as round_v,
+truncate(cast('-12.3412' as decimal(65,4)), 2) as truncate_v;
+➤ abs_v[3,65,4]  ¦  sign_v[-5,64,0]  ¦  ceil_v[3,65,2]  ¦  floor_v[3,65,2]  ¦  round_v[3,65,2]  ¦  truncate_v[3,65,4]  𝄀
+12.3412  ¦  -1  ¦  12.35  ¦  -12.35  ¦  12.34  ¦  -12.3400
+drop table decimal_256_t;
