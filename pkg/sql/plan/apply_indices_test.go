@@ -15,15 +15,20 @@
 package plan
 
 import (
+	"context"
+	"reflect"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSuspendScanProtection_RestoresExactCount(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	const scanID int32 = 42
 
 	builder.protectedScans[scanID] = 3
@@ -37,7 +42,7 @@ func TestSuspendScanProtection_RestoresExactCount(t *testing.T) {
 }
 
 func TestSuspendScanProtection_NoExistingProtection(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	const scanID int32 = 24
 
 	restore := builder.suspendScanProtection(scanID)
@@ -49,8 +54,20 @@ func TestSuspendScanProtection_NoExistingProtection(t *testing.T) {
 	assert.False(t, exists)
 }
 
+func TestSuspendScanProtection_DoesNotDeleteNewProtection(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	const scanID int32 = 88
+
+	restore := builder.suspendScanProtection(scanID)
+	builder.protectedScans[scanID] = 1
+
+	restore()
+
+	assert.Equal(t, 1, builder.protectedScans[scanID])
+}
+
 func TestWithSuspendedScanProtection_RestoresAfterPanic(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	const scanID int32 = 64
 
 	builder.protectedScans[scanID] = 2
@@ -269,6 +286,168 @@ func TestCalculatePostFilterOverFetchFactor_ActualValues(t *testing.T) {
 	}
 }
 
+func makeTestRegularIndexPrefixEq(t *testing.T, numArgs int) *planpb.Expr {
+	t.Helper()
+	args := make([]*planpb.Expr, 0, numArgs)
+	for i := 0; i < numArgs; i++ {
+		args = append(args, &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_int32)},
+			Expr: &planpb.Expr_Lit{
+				Lit: &planpb.Literal{
+					Value: &planpb.Literal_I32Val{I32Val: int32(i + 1)},
+				},
+			},
+		})
+	}
+	serialExpr, err := BindFuncExprImplByPlanExpr(context.Background(), "serial", args)
+	require.NoError(t, err)
+	prefixExpr, err := BindFuncExprImplByPlanExpr(context.Background(), "prefix_eq", []*planpb.Expr{
+		GetColExpr(planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, 100, 0),
+		serialExpr,
+	})
+	require.NoError(t, err)
+	return prefixExpr
+}
+
+func makeTestRegularIndexProjectBuilder(t *testing.T, prefixArgCount int, projectExpr *planpb.Expr) (*QueryBuilder, int32) {
+	t.Helper()
+
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder.nameByColRef[[2]int32{200, 0}] = "id"
+
+	scanNode := &planpb.Node{
+		NodeType: planpb.Node_TABLE_SCAN,
+		NodeId:   0,
+		TableDef: &planpb.TableDef{
+			Cols: []*planpb.ColDef{
+				{
+					Name: catalog.IndexTableIndexColName,
+					Typ:  planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen},
+				},
+				{
+					Name: catalog.IndexTablePrimaryColName,
+					Typ:  planpb.Type{Id: int32(types.T_int64)},
+				},
+			},
+			Indexes: []*planpb.IndexDef{{IndexName: "idx_user_active"}},
+		},
+		BindingTags: []int32{100},
+		FilterList:  []*planpb.Expr{makeTestRegularIndexPrefixEq(t, prefixArgCount)},
+		IndexScanInfo: planpb.IndexScanInfo{
+			IsIndexScan:    true,
+			IndexName:      "idx_user_active",
+			BelongToTable:  "events",
+			Parts:          []string{"user_id", "is_active", "id"},
+			IsUnique:       false,
+			IndexTableName: "__mo_index_secondary_idx_user_active",
+		},
+	}
+
+	sortProjectNode := &planpb.Node{
+		NodeType:    planpb.Node_PROJECT,
+		NodeId:      1,
+		BindingTags: []int32{200},
+		Children:    []int32{0},
+		ProjectList: []*planpb.Expr{projectExpr},
+	}
+
+	sortNode := &planpb.Node{
+		NodeType: planpb.Node_SORT,
+		NodeId:   2,
+		Children: []int32{1},
+		OrderBy: []*planpb.OrderBySpec{
+			{
+				Expr: GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 200, 0),
+				Flag: planpb.OrderBySpec_DESC,
+			},
+		},
+		Limit: &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_uint64)},
+			Expr: &planpb.Expr_Lit{
+				Lit: &planpb.Literal{
+					Value: &planpb.Literal_U64Val{U64Val: 20},
+				},
+			},
+		},
+	}
+
+	projNode := &planpb.Node{
+		NodeType: planpb.Node_PROJECT,
+		NodeId:   3,
+		Children: []int32{2},
+	}
+
+	builder.qry.Nodes = []*planpb.Node{scanNode, sortProjectNode, sortNode, projNode}
+	return builder, 3
+}
+
+func TestApplyIndicesForProjectPushesTopValueThroughRegularIndexPKOrder(t *testing.T) {
+	builder, rootNodeID := makeTestRegularIndexProjectBuilder(t, 2, GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 100, 1))
+
+	_, err := builder.applyIndicesForProject(rootNodeID, builder.qry.Nodes[rootNodeID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+
+	scanNode := builder.qry.Nodes[0]
+	sortProjectNode := builder.qry.Nodes[1]
+	sortNode := builder.qry.Nodes[2]
+
+	require.Len(t, sortNode.SendMsgList, 1)
+	assert.Equal(t, int32(message.MsgTopValue), sortNode.SendMsgList[0].MsgType)
+	require.Len(t, scanNode.RecvMsgList, 1)
+	assert.Equal(t, sortNode.SendMsgList[0], scanNode.RecvMsgList[0])
+
+	require.Len(t, scanNode.OrderBy, 1)
+	scanOrderCol := scanNode.OrderBy[0].Expr.GetCol()
+	require.NotNil(t, scanOrderCol)
+	assert.Equal(t, int32(100), scanOrderCol.RelPos)
+	assert.Equal(t, int32(0), scanOrderCol.ColPos)
+	assert.Equal(t, catalog.IndexTableIndexColName, scanOrderCol.Name)
+
+	sortOrderCol := sortNode.OrderBy[0].Expr.GetCol()
+	require.NotNil(t, sortOrderCol)
+	assert.Equal(t, int32(200), sortOrderCol.RelPos)
+	assert.Equal(t, int32(1), sortOrderCol.ColPos)
+
+	require.Len(t, sortProjectNode.ProjectList, 2)
+	hiddenKeyProjectCol := sortProjectNode.ProjectList[1].GetCol()
+	require.NotNil(t, hiddenKeyProjectCol)
+	assert.Equal(t, int32(100), hiddenKeyProjectCol.RelPos)
+	assert.Equal(t, int32(0), hiddenKeyProjectCol.ColPos)
+	assert.Equal(t, "id", builder.nameByColRef[[2]int32{200, 1}])
+}
+
+func TestApplyIndicesForProjectSkipsRegularIndexPKOrderWithoutFullPrefixEquality(t *testing.T) {
+	builder, rootNodeID := makeTestRegularIndexProjectBuilder(t, 1, GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 100, 1))
+
+	_, err := builder.applyIndicesForProject(rootNodeID, builder.qry.Nodes[rootNodeID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+
+	scanNode := builder.qry.Nodes[0]
+	sortProjectNode := builder.qry.Nodes[1]
+	sortNode := builder.qry.Nodes[2]
+
+	assert.Empty(t, sortNode.SendMsgList)
+	assert.Empty(t, scanNode.RecvMsgList)
+	assert.Empty(t, scanNode.OrderBy)
+	require.Len(t, sortProjectNode.ProjectList, 1)
+}
+
+func TestApplyIndicesForProjectSkipsRegularIndexPKOrderForNonPKSortColumn(t *testing.T) {
+	builder, rootNodeID := makeTestRegularIndexProjectBuilder(t, 2, GetColExpr(planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, 100, 0))
+
+	_, err := builder.applyIndicesForProject(rootNodeID, builder.qry.Nodes[rootNodeID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+
+	scanNode := builder.qry.Nodes[0]
+	sortProjectNode := builder.qry.Nodes[1]
+	sortNode := builder.qry.Nodes[2]
+
+	assert.Empty(t, sortNode.SendMsgList)
+	assert.Empty(t, scanNode.RecvMsgList)
+	assert.Empty(t, scanNode.OrderBy)
+	require.Len(t, sortProjectNode.ProjectList, 1)
+}
+
 // Benchmark the function to ensure it's fast
 func BenchmarkCalculatePostFilterOverFetchFactor(b *testing.B) {
 	limits := []uint64{1, 5, 10, 20, 50, 100, 200, 500, 1000, 10000}
@@ -314,241 +493,12 @@ func TestCalculatePostFilterOverFetchFactor_MonotonicDecrease(t *testing.T) {
 	}
 }
 
-// ============================================================================
-// Tests for calculateAutoModeOverFetchFactor
-// ============================================================================
-
-func TestCalculateAutoModeOverFetchFactor(t *testing.T) {
-	tests := []struct {
-		name        string
-		limit       uint64
-		stats       *plan.Stats
-		expectedMin float64
-		expectedMax float64
-	}{
-		// Test with nil stats - should return base factor
-		{
-			name:        "nil stats, small limit",
-			limit:       5,
-			stats:       nil,
-			expectedMin: 5.0,
-			expectedMax: 5.0,
-		},
-		{
-			name:        "nil stats, medium limit",
-			limit:       50,
-			stats:       nil,
-			expectedMin: 1.5,
-			expectedMax: 1.5,
-		},
-
-		// Test with invalid selectivity values - should return base factor
-		{
-			name:        "selectivity zero",
-			limit:       10,
-			stats:       &plan.Stats{Selectivity: 0},
-			expectedMin: 2.0,
-			expectedMax: 2.0,
-		},
-		{
-			name:        "selectivity negative",
-			limit:       10,
-			stats:       &plan.Stats{Selectivity: -0.5},
-			expectedMin: 2.0,
-			expectedMax: 2.0,
-		},
-		{
-			name:        "selectivity 1.0 (no filtering)",
-			limit:       10,
-			stats:       &plan.Stats{Selectivity: 1.0},
-			expectedMin: 2.0,
-			expectedMax: 2.0,
-		},
-		{
-			name:        "selectivity > 1.0 (invalid)",
-			limit:       10,
-			stats:       &plan.Stats{Selectivity: 1.5},
-			expectedMin: 2.0,
-			expectedMax: 2.0,
-		},
-
-		// Test selectivity-based compensation
-		{
-			name:        "selectivity 0.5 (2x compensation, but base factor 5x is higher for small limit)",
-			limit:       5,
-			stats:       &plan.Stats{Selectivity: 0.5},
-			expectedMin: 5.0,
-			expectedMax: 5.0,
-		},
-		{
-			name:        "selectivity 0.1 (10x compensation)",
-			limit:       100,
-			stats:       &plan.Stats{Selectivity: 0.1},
-			expectedMin: 10.0,
-			expectedMax: 10.0,
-		},
-		{
-			name:        "selectivity 0.05 (20x compensation)",
-			limit:       100,
-			stats:       &plan.Stats{Selectivity: 0.05},
-			expectedMin: 20.0,
-			expectedMax: 20.0,
-		},
-		{
-			name:        "selectivity 0.01 (100x compensation, at cap)",
-			limit:       100,
-			stats:       &plan.Stats{Selectivity: 0.01},
-			expectedMin: MaxOverFetchFactor,
-			expectedMax: MaxOverFetchFactor,
-		},
-		{
-			name:        "selectivity 0.001 (1000x compensation, capped at 100x)",
-			limit:       100,
-			stats:       &plan.Stats{Selectivity: 0.001},
-			expectedMin: MaxOverFetchFactor,
-			expectedMax: MaxOverFetchFactor,
-		},
-
-		// Test that base factor wins when selectivity is not very low
-		{
-			name:        "selectivity 0.9 (1.1x compensation, base factor wins)",
-			limit:       5,
-			stats:       &plan.Stats{Selectivity: 0.9},
-			expectedMin: 5.0, // base factor for limit=5
-			expectedMax: 5.0,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := calculateAutoModeOverFetchFactor(tt.limit, tt.stats)
-
-			if result < tt.expectedMin || result > tt.expectedMax {
-				t.Errorf("calculateAutoModeOverFetchFactor(%d, %+v) = %f, want between %f and %f",
-					tt.limit, tt.stats, result, tt.expectedMin, tt.expectedMax)
-			}
-
-			// Verify the result is positive
-			if result <= 0 {
-				t.Errorf("calculateAutoModeOverFetchFactor(%d, %+v) = %f, want positive value",
-					tt.limit, tt.stats, result)
-			}
-
-			// Verify the result is at least 1.0
-			if result < 1.0 {
-				t.Errorf("calculateAutoModeOverFetchFactor(%d, %+v) = %f, want >= 1.0",
-					tt.limit, tt.stats, result)
-			}
-
-			// Verify the result is capped at MaxOverFetchFactor
-			if result > MaxOverFetchFactor {
-				t.Errorf("calculateAutoModeOverFetchFactor(%d, %+v) = %f, want <= %f",
-					tt.limit, tt.stats, result, MaxOverFetchFactor)
-			}
-		})
-	}
-}
-
-// Test the actual over-fetch calculation with selectivity
-func TestCalculateAutoModeOverFetchFactor_ActualValues(t *testing.T) {
-	testCases := []struct {
-		name          string
-		limit         uint64
-		selectivity   float64
-		expectedFetch uint64
-	}{
-		// Base factor wins (selectivity compensation is lower)
-		{
-			name:          "high selectivity, small limit",
-			limit:         5,
-			selectivity:   0.5,
-			expectedFetch: 25, // 5 * 5.0 (base factor wins over 2x)
-		},
-
-		// Selectivity compensation wins
-		{
-			name:          "low selectivity, large limit",
-			limit:         100,
-			selectivity:   0.1,
-			expectedFetch: 1000, // 100 * 10x
-		},
-		{
-			name:          "very low selectivity, large limit",
-			limit:         100,
-			selectivity:   0.05,
-			expectedFetch: 2000, // 100 * 20x
-		},
-
-		// Cap at MaxOverFetchFactor
-		{
-			name:          "extremely low selectivity, capped",
-			limit:         100,
-			selectivity:   0.001,
-			expectedFetch: 10000, // 100 * 100x (capped)
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			stats := &plan.Stats{Selectivity: tc.selectivity}
-			factor := calculateAutoModeOverFetchFactor(tc.limit, stats)
-			actualFetch := uint64(float64(tc.limit) * factor)
-
-			if actualFetch != tc.expectedFetch {
-				t.Errorf("For limit %d, selectivity %f: got fetch %d, want %d (factor: %f)",
-					tc.limit, tc.selectivity, actualFetch, tc.expectedFetch, factor)
-			}
-		})
-	}
-}
-
-// Test that auto mode factor is always >= base factor
-func TestCalculateAutoModeOverFetchFactor_AlwaysGteBaseFactor(t *testing.T) {
-	testCases := []struct {
-		limit       uint64
-		selectivity float64
-	}{
-		{5, 0.1},
-		{5, 0.5},
-		{5, 0.9},
-		{50, 0.1},
-		{50, 0.5},
-		{100, 0.1},
-		{100, 0.05},
-		{200, 0.1},
-	}
-
-	for _, tc := range testCases {
-		baseFactor := calculatePostFilterOverFetchFactor(tc.limit)
-		stats := &plan.Stats{Selectivity: tc.selectivity}
-		autoFactor := calculateAutoModeOverFetchFactor(tc.limit, stats)
-
-		if autoFactor < baseFactor {
-			t.Errorf("Auto factor %f should be >= base factor %f for limit=%d, selectivity=%f",
-				autoFactor, baseFactor, tc.limit, tc.selectivity)
-		}
-	}
-}
-
-// Benchmark
-func BenchmarkCalculateAutoModeOverFetchFactor(b *testing.B) {
-	limits := []uint64{5, 50, 100, 500}
-	stats := &plan.Stats{Selectivity: 0.1}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		for _, limit := range limits {
-			_ = calculateAutoModeOverFetchFactor(limit, stats)
-		}
-	}
-}
-
 func TestTryMatchMoreLeadingFiltersRequiresContiguousPrefix(t *testing.T) {
 	idxDef := &IndexDef{
 		Parts: []string{"uid", "typ", "flag", "__mo_alias_id"},
 	}
-	node := &plan.Node{
-		TableDef: &plan.TableDef{
+	node := &planpb.Node{
+		TableDef: &planpb.TableDef{
 			Name2ColIndex: map[string]int32{
 				"uid":  1,
 				"typ":  2,
@@ -557,34 +507,36 @@ func TestTryMatchMoreLeadingFiltersRequiresContiguousPrefix(t *testing.T) {
 			},
 		},
 		// Filters only on uid and flag, missing typ.
-		FilterList: []*plan.Expr{
+		FilterList: []*planpb.Expr{
 			makeEqFilterExpr(1),
 			makeEqFilterExpr(3),
 		},
 	}
 
 	leadingPos := tryMatchMoreLeadingFilters(idxDef, node, 0)
-	require.Equal(t, []int32{0}, leadingPos)
+	if !reflect.DeepEqual([]int32{0}, leadingPos) {
+		t.Fatalf("unexpected leading positions, got=%v, want=%v", leadingPos, []int32{0})
+	}
 }
 
-func makeEqFilterExpr(colPos int32) *plan.Expr {
-	return &plan.Expr{
-		Expr: &plan.Expr_F{
-			F: &plan.Function{
-				Func: &plan.ObjectRef{ObjName: "="},
-				Args: []*plan.Expr{
+func makeEqFilterExpr(colPos int32) *planpb.Expr {
+	return &planpb.Expr{
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "="},
+				Args: []*planpb.Expr{
 					{
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
+						Expr: &planpb.Expr_Col{
+							Col: &planpb.ColRef{
 								RelPos: 0,
 								ColPos: colPos,
 							},
 						},
 					},
 					{
-						Expr: &plan.Expr_Lit{
-							Lit: &plan.Literal{
-								Value: &plan.Literal_I64Val{I64Val: 1},
+						Expr: &planpb.Expr_Lit{
+							Lit: &planpb.Literal{
+								Value: &planpb.Literal_I64Val{I64Val: 1},
 							},
 						},
 					},
