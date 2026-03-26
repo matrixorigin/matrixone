@@ -309,7 +309,12 @@ func makeTestRegularIndexPrefixEq(t *testing.T, numArgs int) *planpb.Expr {
 	return prefixExpr
 }
 
-func makeTestRegularIndexProjectBuilder(t *testing.T, prefixArgCount int, projectExpr *planpb.Expr) (*QueryBuilder, int32) {
+func makeTestRegularIndexProjectBuilder(
+	t *testing.T,
+	prefixArgCount int,
+	projectExpr *planpb.Expr,
+	sortFlag planpb.OrderBySpec_OrderByFlag,
+) (*QueryBuilder, int32) {
 	t.Helper()
 
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
@@ -358,7 +363,7 @@ func makeTestRegularIndexProjectBuilder(t *testing.T, prefixArgCount int, projec
 		OrderBy: []*planpb.OrderBySpec{
 			{
 				Expr: GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 200, 0),
-				Flag: planpb.OrderBySpec_DESC,
+				Flag: sortFlag,
 			},
 		},
 		Limit: &planpb.Expr{
@@ -382,7 +387,12 @@ func makeTestRegularIndexProjectBuilder(t *testing.T, prefixArgCount int, projec
 }
 
 func TestApplyIndicesForProjectPushesTopValueThroughRegularIndexPKOrder(t *testing.T) {
-	builder, rootNodeID := makeTestRegularIndexProjectBuilder(t, 2, GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 100, 1))
+	builder, rootNodeID := makeTestRegularIndexProjectBuilder(
+		t,
+		2,
+		GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 100, 1),
+		planpb.OrderBySpec_DESC,
+	)
 
 	_, err := builder.applyIndicesForProject(rootNodeID, builder.qry.Nodes[rootNodeID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
 	require.NoError(t, err)
@@ -402,6 +412,7 @@ func TestApplyIndicesForProjectPushesTopValueThroughRegularIndexPKOrder(t *testi
 	assert.Equal(t, int32(100), scanOrderCol.RelPos)
 	assert.Equal(t, int32(0), scanOrderCol.ColPos)
 	assert.Equal(t, catalog.IndexTableIndexColName, scanOrderCol.Name)
+	assert.Equal(t, planpb.OrderBySpec_DESC, scanNode.OrderBy[0].Flag)
 
 	sortOrderCol := sortNode.OrderBy[0].Expr.GetCol()
 	require.NotNil(t, sortOrderCol)
@@ -416,8 +427,34 @@ func TestApplyIndicesForProjectPushesTopValueThroughRegularIndexPKOrder(t *testi
 	assert.Equal(t, "id", builder.nameByColRef[[2]int32{200, 1}])
 }
 
+func TestApplyIndicesForProjectPushesTopValueThroughRegularIndexPKOrderAsc(t *testing.T) {
+	builder, rootNodeID := makeTestRegularIndexProjectBuilder(
+		t,
+		2,
+		GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 100, 1),
+		0,
+	)
+
+	_, err := builder.applyIndicesForProject(rootNodeID, builder.qry.Nodes[rootNodeID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+
+	scanNode := builder.qry.Nodes[0]
+	sortNode := builder.qry.Nodes[2]
+
+	require.Len(t, sortNode.SendMsgList, 1)
+	require.Len(t, scanNode.OrderBy, 1)
+	assert.Equal(t, planpb.OrderBySpec_OrderByFlag(0), sortNode.OrderBy[0].Flag)
+	assert.Equal(t, planpb.OrderBySpec_OrderByFlag(0), scanNode.OrderBy[0].Flag)
+	assert.Equal(t, catalog.IndexTableIndexColName, scanNode.OrderBy[0].Expr.GetCol().Name)
+}
+
 func TestApplyIndicesForProjectSkipsRegularIndexPKOrderWithoutFullPrefixEquality(t *testing.T) {
-	builder, rootNodeID := makeTestRegularIndexProjectBuilder(t, 1, GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 100, 1))
+	builder, rootNodeID := makeTestRegularIndexProjectBuilder(
+		t,
+		1,
+		GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 100, 1),
+		planpb.OrderBySpec_DESC,
+	)
 
 	_, err := builder.applyIndicesForProject(rootNodeID, builder.qry.Nodes[rootNodeID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
 	require.NoError(t, err)
@@ -433,7 +470,12 @@ func TestApplyIndicesForProjectSkipsRegularIndexPKOrderWithoutFullPrefixEquality
 }
 
 func TestApplyIndicesForProjectSkipsRegularIndexPKOrderForNonPKSortColumn(t *testing.T) {
-	builder, rootNodeID := makeTestRegularIndexProjectBuilder(t, 2, GetColExpr(planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, 100, 0))
+	builder, rootNodeID := makeTestRegularIndexProjectBuilder(
+		t,
+		2,
+		GetColExpr(planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, 100, 0),
+		planpb.OrderBySpec_DESC,
+	)
 
 	_, err := builder.applyIndicesForProject(rootNodeID, builder.qry.Nodes[rootNodeID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
 	require.NoError(t, err)
