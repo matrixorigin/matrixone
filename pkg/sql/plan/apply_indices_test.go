@@ -386,6 +386,76 @@ func makeTestRegularIndexProjectBuilder(
 	return builder, 3
 }
 
+func makeTestRegularIndexMessageBuilder(
+	t *testing.T,
+	prefixArgCount int,
+	sortColPos int32,
+	sortFlag planpb.OrderBySpec_OrderByFlag,
+) (*QueryBuilder, int32) {
+	t.Helper()
+
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+
+	scanNode := &planpb.Node{
+		NodeType: planpb.Node_TABLE_SCAN,
+		NodeId:   0,
+		TableDef: &planpb.TableDef{
+			Cols: []*planpb.ColDef{
+				{
+					Name: catalog.IndexTableIndexColName,
+					Typ:  planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen},
+				},
+				{
+					Name: catalog.IndexTablePrimaryColName,
+					Typ:  planpb.Type{Id: int32(types.T_int64)},
+				},
+			},
+		},
+		BindingTags: []int32{100},
+		FilterList:  []*planpb.Expr{makeTestRegularIndexPrefixEq(t, prefixArgCount)},
+		IndexScanInfo: planpb.IndexScanInfo{
+			IsIndexScan:    true,
+			IndexName:      "idx_user_active",
+			BelongToTable:  "events",
+			Parts:          []string{"user_id", "is_active", "__mo_alias_id"},
+			IsUnique:       false,
+			IndexTableName: "__mo_index_secondary_idx_user_active",
+		},
+	}
+
+	sortExpr := GetColExpr(scanNode.TableDef.Cols[sortColPos].Typ, 100, sortColPos)
+	sortExpr.GetCol().Name = scanNode.TableDef.Cols[sortColPos].Name
+
+	sortNode := &planpb.Node{
+		NodeType: planpb.Node_SORT,
+		NodeId:   1,
+		Children: []int32{0},
+		OrderBy: []*planpb.OrderBySpec{
+			{
+				Expr: sortExpr,
+				Flag: sortFlag,
+			},
+		},
+		Limit: &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_uint64)},
+			Expr: &planpb.Expr_Lit{
+				Lit: &planpb.Literal{
+					Value: &planpb.Literal_U64Val{U64Val: 20},
+				},
+			},
+		},
+	}
+
+	projNode := &planpb.Node{
+		NodeType: planpb.Node_PROJECT,
+		NodeId:   2,
+		Children: []int32{1},
+	}
+
+	builder.qry.Nodes = []*planpb.Node{scanNode, sortNode, projNode}
+	return builder, 2
+}
+
 func TestApplyIndicesForProjectPushesTopValueThroughRegularIndexPKOrder(t *testing.T) {
 	builder, rootNodeID := makeTestRegularIndexProjectBuilder(
 		t,
@@ -446,6 +516,54 @@ func TestApplyIndicesForProjectPushesTopValueThroughRegularIndexPKOrderAsc(t *te
 	assert.Equal(t, planpb.OrderBySpec_OrderByFlag(0), sortNode.OrderBy[0].Flag)
 	assert.Equal(t, planpb.OrderBySpec_OrderByFlag(0), scanNode.OrderBy[0].Flag)
 	assert.Equal(t, catalog.IndexTableIndexColName, scanNode.OrderBy[0].Expr.GetCol().Name)
+}
+
+func TestHandleMessageFromTopToScanRewritesRegularIndexPKOrderToHiddenKey(t *testing.T) {
+	builder, rootNodeID := makeTestRegularIndexMessageBuilder(t, 2, 1, planpb.OrderBySpec_DESC)
+
+	builder.handleMessageFromTopToScan(rootNodeID)
+
+	scanNode := builder.qry.Nodes[0]
+	sortNode := builder.qry.Nodes[1]
+
+	require.Len(t, sortNode.SendMsgList, 1)
+	require.Len(t, scanNode.RecvMsgList, 1)
+	require.Len(t, scanNode.OrderBy, 1)
+
+	sortOrderCol := sortNode.OrderBy[0].Expr.GetCol()
+	require.NotNil(t, sortOrderCol)
+	assert.Equal(t, int32(100), sortOrderCol.RelPos)
+	assert.Equal(t, int32(0), sortOrderCol.ColPos)
+	assert.Equal(t, catalog.IndexTablePrimaryColName, sortOrderCol.Name)
+
+	scanOrderCol := scanNode.OrderBy[0].Expr.GetCol()
+	require.NotNil(t, scanOrderCol)
+	assert.Equal(t, int32(100), scanOrderCol.RelPos)
+	assert.Equal(t, int32(0), scanOrderCol.ColPos)
+	assert.Equal(t, catalog.IndexTableIndexColName, scanOrderCol.Name)
+}
+
+func TestHandleMessageFromTopToScanKeepsPKOrderWhenPrefixIncomplete(t *testing.T) {
+	builder, rootNodeID := makeTestRegularIndexMessageBuilder(t, 1, 1, planpb.OrderBySpec_DESC)
+
+	builder.handleMessageFromTopToScan(rootNodeID)
+
+	scanNode := builder.qry.Nodes[0]
+	sortNode := builder.qry.Nodes[1]
+
+	require.Len(t, sortNode.SendMsgList, 1)
+	require.Len(t, scanNode.RecvMsgList, 1)
+	require.Len(t, scanNode.OrderBy, 1)
+
+	sortOrderCol := sortNode.OrderBy[0].Expr.GetCol()
+	require.NotNil(t, sortOrderCol)
+	assert.Equal(t, int32(1), sortOrderCol.ColPos)
+	assert.Equal(t, catalog.IndexTablePrimaryColName, sortOrderCol.Name)
+
+	scanOrderCol := scanNode.OrderBy[0].Expr.GetCol()
+	require.NotNil(t, scanOrderCol)
+	assert.Equal(t, int32(1), scanOrderCol.ColPos)
+	assert.Equal(t, catalog.IndexTablePrimaryColName, scanOrderCol.Name)
 }
 
 func TestApplyIndicesForProjectSkipsRegularIndexPKOrderWithoutFullPrefixEquality(t *testing.T) {
