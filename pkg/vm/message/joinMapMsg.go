@@ -64,7 +64,8 @@ func (sels *GroupSels) Free(mp *mpool.MPool) {
 }
 
 func (sels *GroupSels) Size() int64 {
-	return int64(cap(sels.vals)+cap(sels.offsets)+cap(sels.tmp)) * 4
+	const int32Size = int64(4)
+	return (int64(cap(sels.vals)) + int64(cap(sels.offsets)) + int64(cap(sels.tmp))) * int32Size
 }
 
 func (sels *GroupSels) Insert(k, v int32) {
