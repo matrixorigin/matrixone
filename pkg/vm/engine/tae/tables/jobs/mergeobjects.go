@@ -253,6 +253,11 @@ func (task *mergeObjectsTask) LoadNextBatch(
 		// still point to reuseBatch's (now-empty) CN vectors, so the scan can fill
 		// them in-place without allocating new wrappers.
 		data = task.tnDataBats[objIdx]
+		if data != nil {
+			// CleanOnlyData clears vectors but not the Deletes bitmap; reset it so
+			// deletions from the previous block don't bleed into this one.
+			data.Deletes = nil
+		}
 		retBatch = reuseBatch
 	}
 
