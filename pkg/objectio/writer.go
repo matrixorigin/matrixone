@@ -42,7 +42,8 @@ type WriteArena struct {
 	data           []byte
 	usedOffset     int
 	compressBuf    []byte
-	totalRequested int // sum of all Alloc sizes in the current cycle
+	serialBuf      bytes.Buffer // reused for column serialization across write cycles
+	totalRequested int          // sum of all Alloc sizes in the current cycle
 }
 
 func NewArena(size int) *WriteArena {
@@ -733,20 +734,29 @@ func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, ba
 			}
 			logutil.Debugf("%s unmatched length, expect %d, get %d", attr, rows, vec.Length())
 		}
-		w.buf.Reset()
+		// Use the arena's serialization buffer when available so it is
+		// reused across write cycles (avoids a fresh bytes.Buffer growth
+		// for every new objectWriterV1 instance).
+		var sbuf *bytes.Buffer
+		if w.arena != nil {
+			sbuf = &w.arena.serialBuf
+		} else {
+			sbuf = &w.buf
+		}
+		sbuf.Reset()
 		// Pre-size buffer to avoid repeated growSlice during MarshalBinaryWithBuffer.
 		// vec.Size() ≈ data + area; add overhead for header, lengths, nsp, sorted flag.
-		if needed := vec.Size() + 64; needed > w.buf.Cap() {
-			w.buf.Grow(needed)
+		if needed := vec.Size() + 64; needed > sbuf.Cap() {
+			sbuf.Grow(needed)
 		}
 		h := IOEntryHeader{IOET_ColData, IOET_ColumnData_CurrVer}
-		w.buf.Write(EncodeIOEntryHeader(&h))
-		if err := vec.MarshalBinaryWithBuffer(&w.buf); err != nil {
+		sbuf.Write(EncodeIOEntryHeader(&h))
+		if err := vec.MarshalBinaryWithBuffer(sbuf); err != nil {
 			return 0, err
 		}
 		var ext Extent
 		var err error
-		if data, ext, err = w.WriteWithCompress(0, w.buf.Bytes()); err != nil {
+		if data, ext, err = w.WriteWithCompress(0, sbuf.Bytes()); err != nil {
 			return 0, err
 		}
 		size += len(data)

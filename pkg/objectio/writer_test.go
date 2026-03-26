@@ -469,4 +469,23 @@ func TestWriteArena(t *testing.T) {
 		}
 		require.Equal(t, 64, a.usedOffset)
 	})
+
+	t.Run("serial buf is reused across Reset calls", func(t *testing.T) {
+		a := NewArena(256)
+		// First use: grow serialBuf to 100 bytes.
+		a.serialBuf.Grow(100)
+		cap1 := a.serialBuf.Cap()
+		require.GreaterOrEqual(t, cap1, 100)
+
+		// Reset does not clear serialBuf capacity.
+		a.Reset()
+		require.GreaterOrEqual(t, a.serialBuf.Cap(), cap1)
+		require.Equal(t, 0, a.serialBuf.Len())
+
+		// Second use: no growth needed — same backing array.
+		ptr1 := &a.serialBuf
+		a.serialBuf.Grow(50)
+		require.Equal(t, ptr1, &a.serialBuf) // pointer identity — same struct
+		require.GreaterOrEqual(t, a.serialBuf.Cap(), cap1)
+	})
 }
