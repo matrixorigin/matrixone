@@ -466,6 +466,16 @@ func (builder *QueryBuilder) buildRegularIndexTopSortContext(projNode *plan.Node
 		return nil
 	}
 
+	// Non-unique regular secondary index tables are laid out as:
+	//   col0 = hidden serialized key (index parts + base-table PK)
+	//   col1 = base-table PK
+	// Only under this layout can ORDER BY PK be rewritten to the hidden key safely.
+	if len(scanNode.TableDef.Cols) < 2 ||
+		scanNode.TableDef.Cols[0].Name != catalog.IndexTableIndexColName ||
+		scanNode.TableDef.Cols[1].Name != catalog.IndexTablePrimaryColName {
+		return nil
+	}
+
 	if len(scanNode.IndexScanInfo.Parts) < 2 || len(scanNode.FilterList) == 0 {
 		return nil
 	}
