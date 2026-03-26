@@ -278,7 +278,7 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx) (interface{}, err
 	//!!!NOTE: the type here may be different from the one in the result vector.
 	var planExpr *plan.Expr
 	oid := resultVec.GetType().Oid
-	if oid == types.T_decimal64 || oid == types.T_decimal128 {
+	if oid == types.T_decimal64 || oid == types.T_decimal128 || oid == types.T_decimal256 {
 		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx(), false, false)
 		bindContext := plan2.NewBindContext(builder, nil)
 		binder := plan2.NewSetVarBinder(builder, bindContext)
@@ -365,6 +365,9 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, feSes FeSession
 		return val.Format(expr.Typ.Scale), nil
 	case types.T_decimal128:
 		val := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, 0)
+		return val.Format(expr.Typ.Scale), nil
+	case types.T_decimal256:
+		val := vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, 0)
 		return val.Format(expr.Typ.Scale), nil
 	case types.T_json:
 		val := vec.GetBytesAt(0)
