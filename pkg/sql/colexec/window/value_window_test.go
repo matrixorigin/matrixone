@@ -340,63 +340,38 @@ func TestProcessValueFunc_NthValueWithFrame(t *testing.T) {
 	proc.Free()
 }
 
-func TestGetInt64FromConstVec(t *testing.T) {
+func TestGetInt64FromVec(t *testing.T) {
 	mp := mpool.MustNewZero()
 
-	// int64
-	v1 := testutil.MakeInt64Vector([]int64{5}, nil, mp)
-	require.Equal(t, int64(5), getInt64FromConstVec(v1))
-	v1.Free(mp)
+	check := func(v *vector.Vector, expected int64) {
+		val, ok := getInt64FromVec(v, 0)
+		require.True(t, ok)
+		require.Equal(t, expected, val)
+		v.Free(mp)
+	}
 
-	// int32
-	v2 := testutil.MakeInt32Vector([]int32{3}, nil, mp)
-	require.Equal(t, int64(3), getInt64FromConstVec(v2))
-	v2.Free(mp)
+	check(testutil.MakeInt64Vector([]int64{5}, nil, mp), 5)
+	check(testutil.MakeInt32Vector([]int32{3}, nil, mp), 3)
+	check(testutil.MakeUint64Vector([]uint64{7}, nil, mp), 7)
+	check(testutil.MakeInt8Vector([]int8{2}, nil, mp), 2)
+	check(testutil.MakeInt16Vector([]int16{4}, nil, mp), 4)
+	check(testutil.MakeUint8Vector([]uint8{6}, nil, mp), 6)
+	check(testutil.MakeUint16Vector([]uint16{8}, nil, mp), 8)
+	check(testutil.MakeUint32Vector([]uint32{9}, nil, mp), 9)
+	check(testutil.MakeFloat32Vector([]float32{3.0}, nil, mp), 3)
+	check(testutil.MakeFloat64Vector([]float64{10.0}, nil, mp), 10)
 
-	// uint64
-	v3 := testutil.MakeUint64Vector([]uint64{7}, nil, mp)
-	require.Equal(t, int64(7), getInt64FromConstVec(v3))
-	v3.Free(mp)
-
-	// int8
-	v4 := testutil.MakeInt8Vector([]int8{2}, nil, mp)
-	require.Equal(t, int64(2), getInt64FromConstVec(v4))
-	v4.Free(mp)
-
-	// int16
-	v5 := testutil.MakeInt16Vector([]int16{4}, nil, mp)
-	require.Equal(t, int64(4), getInt64FromConstVec(v5))
-	v5.Free(mp)
-
-	// uint8
-	v6 := testutil.MakeUint8Vector([]uint8{6}, nil, mp)
-	require.Equal(t, int64(6), getInt64FromConstVec(v6))
-	v6.Free(mp)
-
-	// uint16
-	v7 := testutil.MakeUint16Vector([]uint16{8}, nil, mp)
-	require.Equal(t, int64(8), getInt64FromConstVec(v7))
-	v7.Free(mp)
-
-	// uint32
-	v8 := testutil.MakeUint32Vector([]uint32{9}, nil, mp)
-	require.Equal(t, int64(9), getInt64FromConstVec(v8))
-	v8.Free(mp)
-
-	// float32
-	v9 := testutil.MakeFloat32Vector([]float32{3.0}, nil, mp)
-	require.Equal(t, int64(3), getInt64FromConstVec(v9))
-	v9.Free(mp)
-
-	// float64
-	v10 := testutil.MakeFloat64Vector([]float64{10.0}, nil, mp)
-	require.Equal(t, int64(10), getInt64FromConstVec(v10))
-	v10.Free(mp)
-
-	// default (varchar) → returns 1
+	// unsupported type → ok=false
 	v11 := testutil.MakeVarcharVector([]string{"x"}, nil, mp)
-	require.Equal(t, int64(1), getInt64FromConstVec(v11))
+	_, ok := getInt64FromVec(v11, 0)
+	require.False(t, ok)
 	v11.Free(mp)
+
+	// NULL value → ok=false
+	v12 := testutil.MakeInt64Vector([]int64{0}, []uint64{0}, mp)
+	_, ok = getInt64FromVec(v12, 0)
+	require.False(t, ok)
+	v12.Free(mp)
 }
 
 func TestAppendDefaultOrNull(t *testing.T) {
@@ -430,7 +405,6 @@ func TestProcessValueFunc_LagWithPartition(t *testing.T) {
 	// Data: partition1=[10,20,30], partition2=[40,50] (already sorted)
 	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40, 50})
 	spec := makeLagWindowSpec()
-	w := spec.Expr.(*plan.Expr_W).W
 
 	ctr := &container{bat: bat}
 	// aggVecs: single vec for the expression column
@@ -440,7 +414,6 @@ func TestProcessValueFunc_LagWithPartition(t *testing.T) {
 	ctr.ps = []int64{0, 3, 5}
 
 	ap := &Window{WinSpecList: []*plan.Expr{spec}}
-	_ = w
 
 	result, err := ctr.processValueFunc(0, ap, proc)
 	require.NoError(t, err)

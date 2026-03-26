@@ -892,19 +892,21 @@ func (exec *valueWindowExec) Free() {
 
 func (exec *valueWindowExec) Size() int64 {
 	var size int64
-	// top-level slice header
-	size += int64(cap(exec.frameValues)) * 24 // slice header per element
+	const sliceHeaderSize = 24 // unsafe.Sizeof([]any{}) on 64-bit
+	const ptrSize = 8          // unsafe.Sizeof((*valueEntry)(nil))
+	const entrySize = 32       // unsafe.Sizeof(valueEntry{}): bool + padding + slice header
+	const intSize = 8          // unsafe.Sizeof(int(0))
+
+	size += int64(cap(exec.frameValues)) * sliceHeaderSize
 	for _, frame := range exec.frameValues {
-		// backing array of []*valueEntry
-		size += int64(cap(frame)) * 8
+		size += int64(cap(frame)) * ptrSize
 		for _, entry := range frame {
 			if entry != nil {
-				size += 24 + int64(len(entry.data)) // struct overhead + data
+				size += entrySize + int64(len(entry.data))
 			}
 		}
 	}
-	// currentRowPosition backing array
-	size += int64(cap(exec.currentRowPosition)) * 8
+	size += int64(cap(exec.currentRowPosition)) * intSize
 	return size
 }
 

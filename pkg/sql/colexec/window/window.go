@@ -366,15 +366,21 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 
 	switch funcName {
 	case "lag":
-		offset := int64(1)
+		offset, ok := int64(1), true
 		if len(ctr.aggVecs[idx].Vec) >= 2 {
-			offset = getInt64FromConstVec(ctr.aggVecs[idx].Vec[1])
+			offset, ok = getInt64FromVec(ctr.aggVecs[idx].Vec[1], 0)
 		}
 		var defaultVec *vector.Vector
 		if len(ctr.aggVecs[idx].Vec) >= 3 {
 			defaultVec = ctr.aggVecs[idx].Vec[2]
 		}
 		for j := 0; j < n; j++ {
+			if !ok || offset < 0 {
+				if err := appendDefaultOrNull(result, defaultVec, j, proc.Mp()); err != nil {
+					return nil, err
+				}
+				continue
+			}
 			start, _ := 0, n
 			if ctr.ps != nil {
 				start, _ = buildPartitionInterval(ctr.ps, j, n)
@@ -392,15 +398,21 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 		}
 
 	case "lead":
-		offset := int64(1)
+		offset, ok := int64(1), true
 		if len(ctr.aggVecs[idx].Vec) >= 2 {
-			offset = getInt64FromConstVec(ctr.aggVecs[idx].Vec[1])
+			offset, ok = getInt64FromVec(ctr.aggVecs[idx].Vec[1], 0)
 		}
 		var defaultVec *vector.Vector
 		if len(ctr.aggVecs[idx].Vec) >= 3 {
 			defaultVec = ctr.aggVecs[idx].Vec[2]
 		}
 		for j := 0; j < n; j++ {
+			if !ok || offset < 0 {
+				if err := appendDefaultOrNull(result, defaultVec, j, proc.Mp()); err != nil {
+					return nil, err
+				}
+				continue
+			}
 			_, end := 0, n
 			if ctr.ps != nil {
 				_, end = buildPartitionInterval(ctr.ps, j, n)
@@ -472,12 +484,18 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 		}
 
 	case "nth_value":
-		// nth_value(expr, n): n is the second argument
-		nthVal := int64(1)
+		// nth_value(expr, n): n is the second argument, must be >= 1
+		nthVal, ok := int64(1), true
 		if len(ctr.aggVecs[idx].Vec) >= 2 {
-			nthVal = getInt64FromConstVec(ctr.aggVecs[idx].Vec[1])
+			nthVal, ok = getInt64FromVec(ctr.aggVecs[idx].Vec[1], 0)
 		}
 		for j := 0; j < n; j++ {
+			if !ok || nthVal < 1 {
+				if err := vector.AppendAny(result, nil, true, proc.Mp()); err != nil {
+					return nil, err
+				}
+				continue
+			}
 			start, end := 0, n
 			if ctr.ps != nil {
 				start, end = buildPartitionInterval(ctr.ps, j, n)
@@ -512,31 +530,35 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 	return result, nil
 }
 
-// getInt64FromConstVec extracts an int64 value from a constant/single-row vector.
-func getInt64FromConstVec(vec *vector.Vector) int64 {
+// getInt64FromVec extracts an int64 value from a vector at the given row.
+// Returns (value, false) if the value is NULL or the type is unsupported.
+func getInt64FromVec(vec *vector.Vector, row int) (int64, bool) {
+	if vec.Length() == 0 || vec.IsNull(uint64(row)) {
+		return 0, false
+	}
 	switch vec.GetType().Oid {
 	case types.T_int8:
-		return int64(vector.MustFixedColNoTypeCheck[int8](vec)[0])
+		return int64(vector.MustFixedColNoTypeCheck[int8](vec)[row]), true
 	case types.T_int16:
-		return int64(vector.MustFixedColNoTypeCheck[int16](vec)[0])
+		return int64(vector.MustFixedColNoTypeCheck[int16](vec)[row]), true
 	case types.T_int32:
-		return int64(vector.MustFixedColNoTypeCheck[int32](vec)[0])
+		return int64(vector.MustFixedColNoTypeCheck[int32](vec)[row]), true
 	case types.T_int64:
-		return vector.MustFixedColNoTypeCheck[int64](vec)[0]
+		return vector.MustFixedColNoTypeCheck[int64](vec)[row], true
 	case types.T_uint8:
-		return int64(vector.MustFixedColNoTypeCheck[uint8](vec)[0])
+		return int64(vector.MustFixedColNoTypeCheck[uint8](vec)[row]), true
 	case types.T_uint16:
-		return int64(vector.MustFixedColNoTypeCheck[uint16](vec)[0])
+		return int64(vector.MustFixedColNoTypeCheck[uint16](vec)[row]), true
 	case types.T_uint32:
-		return int64(vector.MustFixedColNoTypeCheck[uint32](vec)[0])
+		return int64(vector.MustFixedColNoTypeCheck[uint32](vec)[row]), true
 	case types.T_uint64:
-		return int64(vector.MustFixedColNoTypeCheck[uint64](vec)[0])
+		return int64(vector.MustFixedColNoTypeCheck[uint64](vec)[row]), true
 	case types.T_float32:
-		return int64(vector.MustFixedColNoTypeCheck[float32](vec)[0])
+		return int64(vector.MustFixedColNoTypeCheck[float32](vec)[row]), true
 	case types.T_float64:
-		return int64(vector.MustFixedColNoTypeCheck[float64](vec)[0])
+		return int64(vector.MustFixedColNoTypeCheck[float64](vec)[row]), true
 	default:
-		return 1
+		return 0, false
 	}
 }
 
