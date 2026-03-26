@@ -236,7 +236,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 		}
 
-		// Recompute STORED generated columns
+		// Recompute generated columns (both STORED and VIRTUAL are computed on write)
 		for _, col := range tableDef.Cols {
 			if col.GeneratedCol == nil {
 				continue

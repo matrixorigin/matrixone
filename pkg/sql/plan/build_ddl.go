@@ -1137,9 +1137,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				if err != nil {
 					return err
 				}
-				// Generated columns get a permissive default (NULL-able, no expr) for storage layer compatibility
+				// Generated columns preserve declared nullability but use no default expr for storage layer compatibility
 				defaultValue = &plan.Default{
-					NullAbility:  true,
+					NullAbility:  getColumnNullAbility(def),
 					Expr:         nil,
 					OriginString: "",
 				}

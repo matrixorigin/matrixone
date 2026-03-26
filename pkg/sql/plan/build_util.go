@@ -364,6 +364,17 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Proces
 // buildGeneratedExpr builds the expression for a GENERATED ALWAYS AS column.
 // existingCols contains the columns defined before this generated column, used
 // to resolve column references in the expression.
+// getColumnNullAbility returns the nullability of a column based on its attributes.
+// Returns true if the column allows NULL (default), false if NOT NULL is specified.
+func getColumnNullAbility(col *tree.ColumnTableDef) bool {
+	for _, attr := range col.Attributes {
+		if s, ok := attr.(*tree.AttributeNull); ok {
+			return s.Is
+		}
+	}
+	return true
+}
+
 func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []*ColDef, proc *process.Process) (*plan.GeneratedCol, error) {
 	var genAttr *tree.AttributeGeneratedAlways
 	for _, attr := range col.Attributes {

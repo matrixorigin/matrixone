@@ -191,9 +191,9 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 	}
 
 	if newCol.GeneratedCol != nil {
-		// Generated columns get a permissive default for storage layer compatibility
+		// Generated columns preserve declared nullability but use no default expr for storage layer compatibility
 		newCol.Default = &plan.Default{
-			NullAbility:  true,
+			NullAbility:  getColumnNullAbility(specNewColumn),
 			Expr:         nil,
 			OriginString: "",
 		}
@@ -207,13 +207,6 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 		hasDefaultValue = defaultValue.Expr != nil
 		if auto_incr && hasDefaultValue {
 			return nil, moerr.NewErrInvalidDefault(ctx.GetContext(), newColNameOrigin)
-		}
-		if !hasDefaultValue {
-			defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
-			if err != nil {
-				return nil, err
-			}
-			newCol.Default = defaultValue
 		}
 	}
 	return newCol, nil

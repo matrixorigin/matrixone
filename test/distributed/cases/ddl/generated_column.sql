@@ -30,7 +30,6 @@ select * from t1 order by a;
 -- 3. Error cases
 -- ============================================================
 -- Cannot insert into generated column explicitly
--- Cannot insert into generated column explicitly
 insert into t1(a, b, c) values (1, 2, 3);
 
 -- Cannot update generated column directly
@@ -192,6 +191,21 @@ alter table t17 drop column d;
 desc t17;
 
 -- ============================================================
--- 23. Cleanup
+-- 23. NOT NULL constraint on generated column
+-- ============================================================
+create table t18 (a int, b int, c int not null generated always as (a + b) stored);
+desc t18;
+insert into t18 (a, b) values (1, 2);
+select * from t18;
+
+-- ============================================================
+-- 24. ALTER TABLE CHANGE self-reference prevention
+-- ============================================================
+create table t19 (a int, b int);
+-- Should fail: generated expression references the column being changed
+alter table t19 change column a a int generated always as (a + 1) stored;
+
+-- ============================================================
+-- 25. Cleanup
 -- ============================================================
 drop database test_generated_col;

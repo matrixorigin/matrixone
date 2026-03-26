@@ -209,15 +209,19 @@ func buildColumnAndConstraint(
 			if err != nil {
 				return nil, err
 			}
+			// Prevent self-reference: generated expression must not reference the column being changed
+			if exprReferencesColumn(generatedCol.Expr, oldCol.Name, targetTableDef.Cols) {
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "generated column '%s' cannot refer to itself", newColNameOrigin)
+			}
 			newCol.GeneratedCol = generatedCol
 		default:
 			return nil, moerr.NewNotSupportedf(ctx.GetContext(), "unsupport column definition %v", attribute)
 		}
 	}
 	if newCol.GeneratedCol != nil {
-		// Generated columns get a permissive default for storage layer compatibility
+		// Generated columns preserve declared nullability but use no default expr for storage layer compatibility
 		newCol.Default = &plan.Default{
-			NullAbility:  true,
+			NullAbility:  getColumnNullAbility(specNewColumn),
 			Expr:         nil,
 			OriginString: "",
 		}

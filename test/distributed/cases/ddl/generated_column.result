@@ -212,4 +212,17 @@ desc t17;
 a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 c  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+create table t18 (a int, b int, c int not null generated always as (a + b) stored);
+desc t18;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦  STORED GENERATED  ¦  
+insert into t18 (a, b) values (1, 2);
+select * from t18;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  2  ¦  3
+create table t19 (a int, b int);
+alter table t19 change column a a int generated always as (a + 1) stored;
+invalid input: generated column 'a' cannot refer to itself
 drop database test_generated_col;
