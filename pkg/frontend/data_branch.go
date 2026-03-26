@@ -928,10 +928,14 @@ func diffOnBase(
 
 	closeHandle := func() {
 		for _, h := range tarHandle {
-			_ = h.Close()
+			if h != nil {
+				_ = h.Close()
+			}
 		}
 		for _, h := range baseHandle {
-			_ = h.Close()
+			if h != nil {
+				_ = h.Close()
+			}
 		}
 		tarHandle = nil
 		baseHandle = nil
@@ -1231,7 +1235,9 @@ func constructChangeHandle(
 			return
 		}
 
-		tarHandle = append(tarHandle, handle)
+		if handle != nil {
+			tarHandle = append(tarHandle, handle)
+		}
 	}
 
 	for i := range baseRange.rel {
@@ -1245,16 +1251,9 @@ func constructChangeHandle(
 			return
 		}
 
-		//if branchInfo.lcaType != lcaEmpty {
-		//	// collect nothing from base
-		//	if handle != nil {
-		//		err = moerr.NewInternalErrorNoCtx("the LCA collect range is not empty")
-		//		return
-		//	}
-		//	continue
-		//}
-
-		baseHandle = append(baseHandle, handle)
+		if handle != nil {
+			baseHandle = append(baseHandle, handle)
+		}
 	}
 
 	return
@@ -1299,7 +1298,8 @@ func decideCollectRange(
 		baseSp = types.TimestampToTS(*tables.baseSnap.TS)
 	}
 
-	if tblCommitTS, err = getTablesCreationCommitTS(
+	var ctsFromFallback []bool
+	if tblCommitTS, ctsFromFallback, err = getTablesCreationCommitTS(
 		ctx, ses, tables.tarRel, tables.baseRel,
 		[]types.TS{tarSp, baseSp},
 	); err != nil {
@@ -1359,6 +1359,43 @@ func decideCollectRange(
 	// case 1: t1 and t2 have no LCA
 	//	==> t1 collect [0, sp], t2 collect [0, sp]
 	if dagInfo.lcaTableId == 0 {
+		tarCollectRange = collectRange{
+			from: []types.TS{types.MinTs()},
+			end:  []types.TS{tarSp},
+			rel:  []engine.Relation{tables.tarRel},
+		}
+		baseCollectRange = collectRange{
+			from: []types.TS{types.MinTs()},
+			end:  []types.TS{baseSp},
+			rel:  []engine.Relation{tables.baseRel},
+		}
+		return
+	}
+
+	// After GC + restart, getTableCreationCommitTS may return a synthetic
+	// commit_ts equal to the query snapshot (from VisibleStateChangesHandle).
+	// When that happens, incremental collect ranges (CTS.Next()..Sp) become
+	// empty or inverted. Fall back to full-state comparison which
+	// collects ALL visible data from both tables and compares them directly,
+	// without needing creation timestamps at all.
+	//
+	// Only trigger when the CTS came from the CollectChanges fallback
+	// (ctsFromFallback=true), meaning the primary snapshot-scan method
+	// failed.  For freshly created tables the primary method also fails
+	// but the CollectChanges CTS is still accurate via partition-state;
+	// the GE check distinguishes real CTS from synthetic ones.
+	tarCTSUnreliable := ctsFromFallback[0] && tarCTS.GE(&tarSp)
+	baseCTSUnreliable := ctsFromFallback[1] && baseCTS.GE(&baseSp)
+	if tarCTSUnreliable || baseCTSUnreliable {
+		logutil.Warn(
+			"DataBranch-UnreliableCreationTS",
+			zap.String("tarCTS", tarCTS.ToString()),
+			zap.String("baseCTS", baseCTS.ToString()),
+			zap.String("tarSp", tarSp.ToString()),
+			zap.String("baseSp", baseSp.ToString()),
+			zap.Int("original-lcaType", dagInfo.lcaType),
+		)
+		dagInfo.lcaType = lcaFullStateFallback
 		tarCollectRange = collectRange{
 			from: []types.TS{types.MinTs()},
 			end:  []types.TS{tarSp},
@@ -1498,7 +1535,7 @@ func getTablesCreationCommitTS(
 	tar engine.Relation,
 	base engine.Relation,
 	snapshot []types.TS,
-) (commitTS []types.TS, err error) {
+) (commitTS []types.TS, fromFallback []bool, err error) {
 	resolveSnapshot := func(idx int) types.TS {
 		if idx >= 0 && idx < len(snapshot) && !snapshot[idx].IsEmpty() {
 			return snapshot[idx]
@@ -1515,28 +1552,39 @@ func getTablesCreationCommitTS(
 	//
 	// Fall back to CollectChanges only when the primary method fails
 	// (e.g. no available checkpoints for newly created tables).
-	resolve := func(tableID uint64, snap types.TS) (types.TS, error) {
+	// The returned fallback flag indicates which method was used so
+	// the caller can detect genuinely unreliable timestamps.
+	resolve := func(tableID uint64, snap types.TS) (types.TS, bool, error) {
 		ts, err := getTableCreationCommitTSByID(ctx, ses, tableID, snap)
 		if err == nil {
-			return ts, nil
+			return ts, false, nil
 		}
 		logutil.Warn("getTablesCreationCommitTS: primary method failed, trying CollectChanges fallback",
 			zap.Uint64("table-id", tableID),
 			zap.String("snapshot", snap.ToString()),
 			zap.Error(err),
 		)
-		return getTableCreationCommitTSByCollectChanges(ctx, ses, tableID, snap)
+		// Try non-VisibleState first: for fresh tables the logtail provides
+		// real commit timestamps without the synthetic-CTS problem.
+		ts, err2 := getTableCreationCommitTSByCollectChanges(ctx, ses, tableID, snap, false)
+		if err2 == nil {
+			return ts, false, nil
+		}
+		// Last resort: VisibleState scan, which returns a synthetic CTS
+		// equal to the snapshot end after GC+restart.
+		ts, err2 = getTableCreationCommitTSByCollectChanges(ctx, ses, tableID, snap, true)
+		return ts, true, err2
 	}
 
-	tarCommitTS, err := resolve(tar.GetTableID(ctx), resolveSnapshot(0))
+	tarCommitTS, tarFallback, err := resolve(tar.GetTableID(ctx), resolveSnapshot(0))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	baseCommitTS, err := resolve(base.GetTableID(ctx), resolveSnapshot(1))
+	baseCommitTS, baseFallback, err := resolve(base.GetTableID(ctx), resolveSnapshot(1))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return []types.TS{tarCommitTS, baseCommitTS}, nil
+	return []types.TS{tarCommitTS, baseCommitTS}, []bool{tarFallback, baseFallback}, nil
 }
 
 func getTableCreationCommitTSByID(
@@ -1620,6 +1668,7 @@ func getTableCreationCommitTSByCollectChanges(
 	ses *Session,
 	tableID uint64,
 	snapshotTS types.TS,
+	visibleState bool,
 ) (types.TS, error) {
 	storage := ses.GetTxnHandler().GetStorage()
 	txnOp := ses.GetTxnHandler().GetTxn()
@@ -1635,13 +1684,16 @@ func getTableCreationCommitTSByCollectChanges(
 	// real per-row commit timestamps.  The checkpoint path (from.IsEmpty())
 	// replaces commit TS with a constant equal to snapshotTS, which would
 	// make the downstream collect-range empty and incorrect.
-	//
-	// Enable SnapshotReadPolicyVisibleState so that when the partition state
-	// has been truncated past BuildTS(0,1) (e.g. after checkpoints), the
-	// handler falls back through snapshot-state range → checkpoint range →
-	// visible-state exact scan instead of returning a stale-read error.
-	ctx = engine.WithSnapshotReadPolicy(ctx, engine.SnapshotReadPolicyVisibleState)
-	handle, err := rel.CollectChanges(ctx, types.BuildTS(0, 1), snapshotTS, true, mp)
+	collectCtx := ctx
+	if visibleState {
+		// Enable SnapshotReadPolicyVisibleState so that when the partition
+		// state has been truncated past BuildTS(0,1) (e.g. after GC+restart),
+		// the handler falls back through snapshot-state range → visible-state
+		// exact scan.  The synthetic commit_ts returned equals the snapshot
+		// end time; callers must handle this by checking ctsFromFallback.
+		collectCtx = engine.WithSnapshotReadPolicy(ctx, engine.SnapshotReadPolicyVisibleState)
+	}
+	handle, err := rel.CollectChanges(collectCtx, types.BuildTS(0, 1), snapshotTS, true, mp)
 	if err != nil {
 		return types.TS{}, err
 	}

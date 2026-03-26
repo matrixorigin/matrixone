@@ -68,6 +68,12 @@ const (
 	lcaOther
 	lcaLeft
 	lcaRight
+	// lcaFullStateFallback is used when the table creation commit TS is
+	// unreliable (e.g. after GC + restart, VisibleState returns synthetic
+	// commit_ts == snapshot). In this mode we collect ALL visible data from
+	// both tables and compare them directly, treating same-PK-different-value
+	// as UPDATE (not conflict).
+	lcaFullStateFallback
 )
 
 const (

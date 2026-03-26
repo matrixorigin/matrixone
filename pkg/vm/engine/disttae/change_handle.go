@@ -236,18 +236,10 @@ func (h *PartitionChangesHandle) bufferCurrentRange(ctx context.Context, mp *mpo
 					if swapErr == nil {
 						continue
 					}
-					if moerr.IsMoErrCode(swapErr, moerr.ErrStaleRead) {
-						checkpointErr := h.swapCurrentHandleToCheckpointRange(ctx, h.currentPSFrom)
-						if checkpointErr == nil {
-							continue
-						}
-						logutil.Warn("ChangesHandle-SnapshotStateRange stale, checkpoint-range rebuild failed, use visible-state exact scan",
-							zap.String("table", fmt.Sprintf("%d", h.tbl.tableId)),
-							zap.String("from", h.currentPSFrom.ToString()),
-							zap.String("to", h.currentPSTo.ToString()),
-							zap.Error(checkpointErr),
-						)
-					}
+					// Skip checkpoint-range recovery for VisibleState
+					// policy — CN-created objects carry constant
+					// commit_ts that leaks pre-range rows.
+					// Fall through to visible-state exact scan.
 					logutil.Warn("ChangesHandle-SnapshotStateRange rebuild failed, use visible-state exact scan",
 						zap.String("table", fmt.Sprintf("%d", h.tbl.tableId)),
 						zap.String("from", h.currentPSFrom.ToString()),
@@ -398,18 +390,13 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		)
 		h.handleIdx++
 		if err = h.swapCurrentHandleToSnapshotStateRange(ctx); err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrStaleRead) {
-				checkpointErr := h.swapCurrentHandleToCheckpointRange(ctx, nextFrom)
-				if checkpointErr == nil {
-					return false, nil
-				}
-				logutil.Warn("ChangesHandle-SnapshotStateRange stale, checkpoint-range init failed, switch to visible-state exact scan",
-					zap.String("table", fmt.Sprintf("%d", h.tbl.tableId)),
-					zap.String("from", h.currentPSFrom.ToString()),
-					zap.String("to", h.currentPSTo.ToString()),
-					zap.Error(checkpointErr),
-				)
-			}
+			// Skip checkpoint-range recovery for VisibleState policy.
+			// CN-created objects in checkpoint ranges carry a constant
+			// commit_ts equal to their compaction time, which causes
+			// pre-range rows to leak through the row-level timestamp
+			// filter and produce phantom INSERTs. The visible-state
+			// exact scan compares two full snapshots and is immune to
+			// this issue.
 			logutil.Warn("ChangesHandle-SnapshotStateRange init failed, switch to visible-state exact scan",
 				zap.String("table", fmt.Sprintf("%d", h.tbl.tableId)),
 				zap.String("from", h.currentPSFrom.ToString()),
