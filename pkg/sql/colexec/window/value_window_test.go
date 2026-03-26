@@ -274,11 +274,11 @@ func TestProcessValueFunc_LagWithPartition(t *testing.T) {
 
 	vals := vector.MustFixedColNoTypeCheck[int32](result)
 	// Partition 1: [10,20,30]
-	require.True(t, result.IsNull(0))  // lag(10) in partition1 → NULL
+	require.True(t, result.IsNull(0))    // lag(10) in partition1 → NULL
 	require.Equal(t, int32(10), vals[1]) // lag(20) → 10
 	require.Equal(t, int32(20), vals[2]) // lag(30) → 20
 	// Partition 2: [40,50]
-	require.True(t, result.IsNull(3))  // lag(40) in partition2 → NULL
+	require.True(t, result.IsNull(3))    // lag(40) in partition2 → NULL
 	require.Equal(t, int32(40), vals[4]) // lag(50) → 40
 
 	result.Free(mp)
