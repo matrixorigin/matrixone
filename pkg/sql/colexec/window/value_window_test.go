@@ -215,7 +215,7 @@ func TestProcessValueFunc_NthValueWithN(t *testing.T) {
 	spec := makeNthValueWindowSpec()
 
 	ctr := &container{bat: bat}
-	nVec := testutil.MakeInt64Vector([]int64{3}, nil, mp)
+	nVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(3), 1, mp)
 	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
 	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], nVec}
 
@@ -245,7 +245,7 @@ func TestProcessValueFunc_NthValueOutOfBounds(t *testing.T) {
 	spec := makeNthValueWindowSpec()
 
 	ctr := &container{bat: bat}
-	nVec := testutil.MakeInt64Vector([]int64{5}, nil, mp)
+	nVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(5), 1, mp)
 	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
 	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], nVec}
 
@@ -272,7 +272,7 @@ func TestProcessValueFunc_LeadWithOffset(t *testing.T) {
 	spec := makeLeadWindowSpec()
 
 	ctr := &container{bat: bat}
-	offsetVec := testutil.MakeInt64Vector([]int64{2}, nil, mp)
+	offsetVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(2), 1, mp)
 	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
 	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], offsetVec}
 
@@ -315,7 +315,7 @@ func TestProcessValueFunc_NthValueWithFrame(t *testing.T) {
 	}
 
 	ctr := &container{bat: bat}
-	nVec := testutil.MakeInt64Vector([]int64{2}, nil, mp)
+	nVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(2), 1, mp)
 	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
 	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], nVec}
 
@@ -358,8 +358,6 @@ func TestGetInt64FromVec(t *testing.T) {
 	check(testutil.MakeUint8Vector([]uint8{6}, nil, mp), 6)
 	check(testutil.MakeUint16Vector([]uint16{8}, nil, mp), 8)
 	check(testutil.MakeUint32Vector([]uint32{9}, nil, mp), 9)
-	check(testutil.MakeFloat32Vector([]float32{3.0}, nil, mp), 3)
-	check(testutil.MakeFloat64Vector([]float64{10.0}, nil, mp), 10)
 
 	// unsupported type → ok=false
 	v11 := testutil.MakeVarcharVector([]string{"x"}, nil, mp)
@@ -474,7 +472,7 @@ func TestProcessValueFunc_LagWithOffset(t *testing.T) {
 
 	ctr := &container{bat: bat}
 	// aggVecs[0].Vec[0] = value column, Vec[1] = offset (const 2)
-	offsetVec := testutil.MakeInt64Vector([]int64{2}, nil, mp)
+	offsetVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(2), 1, mp)
 	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
 	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], offsetVec}
 
@@ -504,7 +502,7 @@ func TestProcessValueFunc_LagWithDefault(t *testing.T) {
 	spec := makeLagWindowSpec()
 
 	ctr := &container{bat: bat}
-	offsetVec := testutil.MakeInt64Vector([]int64{1}, nil, mp)
+	offsetVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 1, mp)
 	defaultVec := testutil.MakeInt32Vector([]int32{-1}, nil, mp)
 	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
 	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], offsetVec, defaultVec}

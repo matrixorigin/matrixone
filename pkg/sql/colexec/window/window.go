@@ -16,6 +16,7 @@ package window
 
 import (
 	"bytes"
+	"math"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -366,15 +367,23 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 
 	switch funcName {
 	case "lag":
-		offset, ok := int64(1), true
+		var offsetVec *vector.Vector
+		constOffset, constOK := int64(1), true
 		if len(ctr.aggVecs[idx].Vec) >= 2 {
-			offset, ok = getInt64FromVec(ctr.aggVecs[idx].Vec[1], 0)
+			offsetVec = ctr.aggVecs[idx].Vec[1]
+			if offsetVec.IsConst() {
+				constOffset, constOK = getInt64FromVec(offsetVec, 0)
+			}
 		}
 		var defaultVec *vector.Vector
 		if len(ctr.aggVecs[idx].Vec) >= 3 {
 			defaultVec = ctr.aggVecs[idx].Vec[2]
 		}
 		for j := 0; j < n; j++ {
+			offset, ok := constOffset, constOK
+			if offsetVec != nil && !offsetVec.IsConst() {
+				offset, ok = getInt64FromVec(offsetVec, j)
+			}
 			if !ok || offset < 0 {
 				if err := appendDefaultOrNull(result, defaultVec, j, proc.Mp()); err != nil {
 					return nil, err
@@ -398,15 +407,23 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 		}
 
 	case "lead":
-		offset, ok := int64(1), true
+		var offsetVec *vector.Vector
+		constOffset, constOK := int64(1), true
 		if len(ctr.aggVecs[idx].Vec) >= 2 {
-			offset, ok = getInt64FromVec(ctr.aggVecs[idx].Vec[1], 0)
+			offsetVec = ctr.aggVecs[idx].Vec[1]
+			if offsetVec.IsConst() {
+				constOffset, constOK = getInt64FromVec(offsetVec, 0)
+			}
 		}
 		var defaultVec *vector.Vector
 		if len(ctr.aggVecs[idx].Vec) >= 3 {
 			defaultVec = ctr.aggVecs[idx].Vec[2]
 		}
 		for j := 0; j < n; j++ {
+			offset, ok := constOffset, constOK
+			if offsetVec != nil && !offsetVec.IsConst() {
+				offset, ok = getInt64FromVec(offsetVec, j)
+			}
 			if !ok || offset < 0 {
 				if err := appendDefaultOrNull(result, defaultVec, j, proc.Mp()); err != nil {
 					return nil, err
@@ -485,11 +502,19 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 
 	case "nth_value":
 		// nth_value(expr, n): n is the second argument, must be >= 1
-		nthVal, ok := int64(1), true
+		var nthVec *vector.Vector
+		constNth, constOK := int64(1), true
 		if len(ctr.aggVecs[idx].Vec) >= 2 {
-			nthVal, ok = getInt64FromVec(ctr.aggVecs[idx].Vec[1], 0)
+			nthVec = ctr.aggVecs[idx].Vec[1]
+			if nthVec.IsConst() {
+				constNth, constOK = getInt64FromVec(nthVec, 0)
+			}
 		}
 		for j := 0; j < n; j++ {
+			nthVal, ok := constNth, constOK
+			if nthVec != nil && !nthVec.IsConst() {
+				nthVal, ok = getInt64FromVec(nthVec, j)
+			}
 			if !ok || nthVal < 1 {
 				if err := vector.AppendAny(result, nil, true, proc.Mp()); err != nil {
 					return nil, err
@@ -531,7 +556,7 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 }
 
 // getInt64FromVec extracts an int64 value from a vector at the given row.
-// Returns (value, false) if the value is NULL or the type is unsupported.
+// Returns (value, false) if the value is NULL, out of range, or the type is unsupported.
 func getInt64FromVec(vec *vector.Vector, row int) (int64, bool) {
 	if vec.Length() == 0 || vec.IsNull(uint64(row)) {
 		return 0, false
@@ -552,11 +577,11 @@ func getInt64FromVec(vec *vector.Vector, row int) (int64, bool) {
 	case types.T_uint32:
 		return int64(vector.MustFixedColNoTypeCheck[uint32](vec)[row]), true
 	case types.T_uint64:
-		return int64(vector.MustFixedColNoTypeCheck[uint64](vec)[row]), true
-	case types.T_float32:
-		return int64(vector.MustFixedColNoTypeCheck[float32](vec)[row]), true
-	case types.T_float64:
-		return int64(vector.MustFixedColNoTypeCheck[float64](vec)[row]), true
+		v := vector.MustFixedColNoTypeCheck[uint64](vec)[row]
+		if v > math.MaxInt64 {
+			return 0, false
+		}
+		return int64(v), true
 	default:
 		return 0, false
 	}
@@ -841,9 +866,11 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 
 	// shuffle agg vector
 	for k := idx; k < len(ctr.aggVecs); k++ {
-		if len(ctr.aggVecs[k].Vec) > 0 {
-			if err := ctr.aggVecs[k].Vec[0].Shuffle(ctr.sels, proc.Mp()); err != nil {
-				panic(err)
+		for v := range ctr.aggVecs[k].Vec {
+			if ctr.aggVecs[k].Vec[v] != nil && !ctr.aggVecs[k].Vec[v].IsConst() {
+				if err := ctr.aggVecs[k].Vec[v].Shuffle(ctr.sels, proc.Mp()); err != nil {
+					panic(err)
+				}
 			}
 		}
 	}
