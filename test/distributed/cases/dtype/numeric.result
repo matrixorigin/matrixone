@@ -720,10 +720,10 @@ SQL parser error: You have an error in your SQL syntax; check the manual that co
 DROP TABLE numeric05;
 no such table numeric.numeric05
 DROP TABLE IF EXISTS numeric06;
-CREATE TABLE numeric06(a numeric(39,10));
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. For decimal(M), M must between 0 and 38. at line 1 column 39 near "));";
-CREATE TABLE numeric06(b numeric(40,39));
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. For decimal(M), M must between 0 and 38. at line 1 column 39 near "));";
+CREATE TABLE numeric06(a numeric(66,10));
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. For decimal(M), M must between 0 and 65. at line 1 column 39 near "));";
+CREATE TABLE numeric06(b numeric(67,39));
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. For decimal(M), M must between 0 and 65. at line 1 column 39 near "));";
 DROP TABLE numeric06;
 no such table numeric.numeric06
 DROP TABLE IF EXISTS numeric07;
