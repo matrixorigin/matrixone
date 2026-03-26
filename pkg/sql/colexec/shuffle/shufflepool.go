@@ -96,7 +96,7 @@ func (sp *ShufflePool) Size() int64 {
 		if bs != nil {
 			for j := 0; j < bs.Length(); j++ {
 				if b := bs.Get(j); b != nil {
-					sz += int64(b.Size())
+					sz += int64(b.Allocated())
 				}
 			}
 		}

@@ -68,7 +68,7 @@ func (hb *HashmapBuilder) GetSize() int64 {
 	sz += hb.Sels.Size()
 	for _, v := range hb.UniqueJoinKeys {
 		if v != nil {
-			sz += int64(v.Size())
+			sz += int64(v.Allocated())
 		}
 	}
 	if hb.IgnoreRows != nil {
