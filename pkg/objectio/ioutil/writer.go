@@ -15,6 +15,7 @@
 package ioutil
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math"
@@ -156,6 +157,7 @@ type BlockWriter struct {
 	prefix         []index.PrefixFn
 	hashBuf        []uint64                    // scratch buffer reused across WriteBatch calls for filter construction
 	fuseBuilder    xorfilter.BinaryFuseBuilder // reusable builder for BinaryFuse8 filters
+	bfMarshalBuf   bytes.Buffer                // reused across WriteBatch calls for bloom filter serialization
 
 	isTombstone bool
 }
@@ -311,12 +313,13 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		if err != nil {
 			return nil, err
 		}
-		buf, err := bf.Marshal()
-		if err != nil {
+		w.bfMarshalBuf.Reset()
+		if err = bf.MarshalWithBuffer(&w.bfMarshalBuf); err != nil {
 			return nil, err
 		}
-
-		if err = w.writer.WriteBF(int(block.GetID()), seqnums[i], buf, w.pkType); err != nil {
+		bfBytes := make([]byte, w.bfMarshalBuf.Len())
+		copy(bfBytes, w.bfMarshalBuf.Bytes())
+		if err = w.writer.WriteBF(int(block.GetID()), seqnums[i], bfBytes, w.pkType); err != nil {
 			return nil, err
 		}
 	}

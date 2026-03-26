@@ -106,38 +106,42 @@ func NewHybridBloomFilter(
 	}, nil
 }
 
-func (bf *hybridFilter) Marshal() ([]byte, error) {
-	var (
-		err              error
-		w                bytes.Buffer
-		len1, len2, len3 uint32
-	)
-	if _, err = w.Write(types.EncodeUint32(&len1)); err != nil {
-		return nil, err
+func (bf *hybridFilter) MarshalWithBuffer(w *bytes.Buffer) error {
+	startOff := w.Len()
+	var zero uint32
+	for i := 0; i < 3; i++ {
+		if _, err := w.Write(types.EncodeUint32(&zero)); err != nil {
+			return err
+		}
 	}
-	if _, err = w.Write(types.EncodeUint32(&len2)); err != nil {
-		return nil, err
+	if err := bf.prefixLevel1.MarshalWithBuffer(w); err != nil {
+		return err
 	}
-	if _, err = w.Write(types.EncodeUint32(&len3)); err != nil {
-		return nil, err
+	off1 := w.Len()
+	if err := bf.prefixLevel2.MarshalWithBuffer(w); err != nil {
+		return err
 	}
-	if err = bf.prefixLevel1.MarshalWithBuffer(&w); err != nil {
-		return nil, err
+	off2 := w.Len()
+	if err := bf.bloomFilter.MarshalWithBuffer(w); err != nil {
+		return err
 	}
-	len1 = uint32(w.Len()) - uint32(3*unsafe.Sizeof(len1))
-	if err = bf.prefixLevel2.MarshalWithBuffer(&w); err != nil {
-		return nil, err
-	}
-	len2 = uint32(w.Len()) - len1 - uint32(3*unsafe.Sizeof(len1))
-	if err = bf.bloomFilter.MarshalWithBuffer(&w); err != nil {
-		return nil, err
-	}
-	len3 = uint32(w.Len()) - len1 - len2 - uint32(3*unsafe.Sizeof(len1))
-	buf := w.Bytes()
+	off3 := w.Len()
+	buf := w.Bytes()[startOff:]
+	len1 := uint32(off1 - startOff - 12)
+	len2 := uint32(off2 - off1)
+	len3 := uint32(off3 - off2)
 	copy(buf[0:], types.EncodeUint32(&len1))
-	copy(buf[unsafe.Sizeof(len1):], types.EncodeUint32(&len2))
-	copy(buf[2*unsafe.Sizeof(len1):], types.EncodeUint32(&len3))
-	return buf, nil
+	copy(buf[4:], types.EncodeUint32(&len2))
+	copy(buf[8:], types.EncodeUint32(&len3))
+	return nil
+}
+
+func (bf *hybridFilter) Marshal() ([]byte, error) {
+	var w bytes.Buffer
+	if err := bf.MarshalWithBuffer(&w); err != nil {
+		return nil, err
+	}
+	return w.Bytes(), nil
 }
 
 func (bf *hybridFilter) Unmarshal(data []byte) error {

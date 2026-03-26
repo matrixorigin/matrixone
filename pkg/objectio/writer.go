@@ -389,7 +389,9 @@ func (w *objectWriterV1) prepareObjectMeta(blocks []blockData, objectMeta object
 	extent := NewExtent(compress.None, offset, 0, length)
 	objectMeta.BlockHeader().SetMetaLocation(extent)
 
-	var buf bytes.Buffer
+	// Pre-size to avoid repeated bytes.Buffer growth.  length already holds the exact
+	// total byte count of what we will write.
+	buf := bytes.NewBuffer(make([]byte, 0, int(length)))
 	buf.Write(objectMeta)
 	buf.Write(blockIndex)
 	// writer block metadata
@@ -432,42 +434,45 @@ func (w *objectWriterV1) prepareBlockMeta(offset uint32, blocks []blockData, col
 }
 
 func (w *objectWriterV1) prepareBloomFilter(blocks []blockData, blockCount uint32, offset uint32) ([]byte, Extent, error) {
-	buf := new(bytes.Buffer)
 	h := IOEntryHeader{IOET_BF, IOET_BloomFilter_CurrVer}
-	buf.Write(EncodeIOEntryHeader(&h))
-	bloomFilterStart := uint32(0)
 	bloomFilterIndex := BuildBlockIndex(blockCount + 1)
 	bloomFilterIndex.SetBlockCount(blockCount + 1)
-	bloomFilterStart += bloomFilterIndex.Length()
+	// bloomFilterStart tracks byte offset within the BF content area (i.e., after the header).
+	bloomFilterStart := uint32(bloomFilterIndex.Length())
 	for i, block := range blocks {
 		n := uint32(len(block.bloomFilter))
 		bloomFilterIndex.SetBlockMetaPos(uint32(i), bloomFilterStart, n)
 		bloomFilterStart += n
 	}
 	bloomFilterIndex.SetBlockMetaPos(blockCount, bloomFilterStart, uint32(len(w.bloomFilter)))
+	// Pre-size to avoid repeated bytes.Buffer growth during Write calls.
+	total := IOEntryHeaderSize + int(bloomFilterStart) + len(w.bloomFilter)
+	buf := bytes.NewBuffer(make([]byte, 0, total))
+	buf.Write(EncodeIOEntryHeader(&h))
 	buf.Write(bloomFilterIndex)
 	for _, block := range blocks {
 		buf.Write(block.bloomFilter)
 	}
 	buf.Write(w.bloomFilter)
-	length := uint32(len(buf.Bytes()))
+	length := uint32(buf.Len())
 	extent := NewExtent(compress.None, offset, length, length)
 	return buf.Bytes(), extent, nil
 }
 
 func (w *objectWriterV1) prepareZoneMapArea(blocks []blockData, blockCount uint32, offset uint32) ([]byte, Extent, error) {
-	buf := new(bytes.Buffer)
 	h := IOEntryHeader{IOET_ZM, IOET_ZoneMap_CurrVer}
-	buf.Write(EncodeIOEntryHeader(&h))
-	zoneMapAreaStart := uint32(0)
 	zoneMapAreaIndex := BuildBlockIndex(blockCount)
 	zoneMapAreaIndex.SetBlockCount(blockCount)
-	zoneMapAreaStart += zoneMapAreaIndex.Length()
+	zoneMapAreaStart := uint32(zoneMapAreaIndex.Length())
 	for i, block := range blocks {
 		n := uint32(block.meta.GetMetaColumnCount() * ZoneMapSize)
 		zoneMapAreaIndex.SetBlockMetaPos(uint32(i), zoneMapAreaStart, n)
 		zoneMapAreaStart += n
 	}
+	// Pre-size to avoid repeated bytes.Buffer growth during Write calls.
+	total := IOEntryHeaderSize + int(zoneMapAreaStart)
+	buf := bytes.NewBuffer(make([]byte, 0, total))
+	buf.Write(EncodeIOEntryHeader(&h))
 	buf.Write(zoneMapAreaIndex)
 	for _, block := range blocks {
 		for seqnum := uint16(0); seqnum < block.meta.GetMetaColumnCount(); seqnum++ {

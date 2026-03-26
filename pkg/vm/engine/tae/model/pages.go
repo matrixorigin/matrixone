@@ -45,6 +45,11 @@ var (
 	ttlLatch sync.RWMutex
 
 	backgroundGCTTL = 10 * time.Minute
+
+	// transferMarshalBufPool recycles bytes.Buffer instances used in
+	// TransferHashPage.Marshal so the internal backing arrays are reused
+	// across calls instead of being allocated and GC'd each time.
+	transferMarshalBufPool = sync.Pool{New: func() any { return &bytes.Buffer{} }}
 )
 
 func init() {
@@ -268,9 +273,12 @@ func (page *TransferHashPage) Marshal() []byte {
 	if size == 0 {
 		return nil
 	}
-	b := new(bytes.Buffer)
 	marshalSize := 8 + size*(4+1+2+4)
-	b.Grow(int(marshalSize))
+	b := transferMarshalBufPool.Get().(*bytes.Buffer)
+	b.Reset()
+	if b.Cap() < int(marshalSize) {
+		b.Grow(int(marshalSize) - b.Cap())
+	}
 	b.Write(types.EncodeUint64(&size))
 	for k, v := range *m {
 		if v.ObjIdx == api.NoTransfer {
@@ -282,7 +290,10 @@ func (page *TransferHashPage) Marshal() []byte {
 		b.Write(types.EncodeUint16(&v.BlkIdx))
 		b.Write(types.EncodeUint32(&v.RowIdx))
 	}
-	return b.Bytes()
+	result := make([]byte, b.Len())
+	copy(result, b.Bytes())
+	transferMarshalBufPool.Put(b)
+	return result
 }
 
 func (page *TransferHashPage) Unmarshal(data []byte) (*api.TransferMap, error) {
