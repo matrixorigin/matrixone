@@ -34,10 +34,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
+// arenaMaxSize caps WriteArena backing-array growth to bound memory use
+// for unusually large block write cycles.
+const arenaMaxSize = 128 * 1024 * 1024
+
 type WriteArena struct {
-	data        []byte
-	usedOffset  int
-	compressBuf []byte
+	data           []byte
+	usedOffset     int
+	compressBuf    []byte
+	totalRequested int // sum of all Alloc sizes in the current cycle
 }
 
 func NewArena(size int) *WriteArena {
@@ -46,25 +51,51 @@ func NewArena(size int) *WriteArena {
 	}
 }
 
+// Alloc returns a slice of exactly size bytes.  When the arena has
+// insufficient space it falls back to a plain make so callers are
+// never blocked.  totalRequested is always updated so that Reset can
+// grow the backing array for the next cycle, eliminating the fallback
+// for future rounds of similar demand.
 func (a *WriteArena) Alloc(size int) []byte {
+	a.totalRequested += size
 	if a.usedOffset+size > len(a.data) {
-		// Grow: replace backing array with a larger one (at least double).
-		// Old slices from previous allocs remain valid; the GC keeps the old
-		// backing array alive as long as any slice references it (e.g. block.data).
-		newCap := len(a.data) * 2
-		if newCap < size {
-			newCap = size
-		}
-		a.data = make([]byte, newCap)
-		a.usedOffset = 0
+		return make([]byte, size)
 	}
 	offset := a.usedOffset
 	a.usedOffset += size
 	return a.data[offset:a.usedOffset]
 }
 
+// Reset prepares the arena for a new write cycle.  If the previous
+// cycle overflowed (totalRequested > len(data)) and the required
+// capacity is within arenaMaxSize, the backing array is grown to a
+// power-of-two capacity large enough to hold an equivalent cycle
+// without any fallback allocations.
 func (a *WriteArena) Reset() {
+	if needed := a.totalRequested; needed > len(a.data) && needed <= arenaMaxSize {
+		newCap := arenaNextPow2(needed)
+		if newCap > arenaMaxSize {
+			newCap = arenaMaxSize
+		}
+		a.data = make([]byte, newCap)
+	}
 	a.usedOffset = 0
+	a.totalRequested = 0
+}
+
+func arenaNextPow2(n int) int {
+	if n <= 1 {
+		return 1
+	}
+	n--
+	n |= n >> 1
+	n |= n >> 2
+	n |= n >> 4
+	n |= n >> 8
+	n |= n >> 16
+	n |= n >> 32
+	n++
+	return n
 }
 
 // CompressBuf returns a scratch buffer for LZ4 compression, growing as needed.
