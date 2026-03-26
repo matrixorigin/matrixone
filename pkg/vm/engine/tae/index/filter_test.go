@@ -33,7 +33,7 @@ func TestStaticFilterNumeric(t *testing.T) {
 	typ := types.T_int32.ToType()
 	data := containers.MockVector2(typ, 40000, 0)
 	defer data.Close()
-	sf, err := NewBloomFilter(data, nil)
+	sf, err := NewBloomFilter(data, nil, nil)
 	require.NoError(t, err)
 	var positive *nulls.Bitmap
 	var res bool
@@ -75,7 +75,7 @@ func TestStaticFilterNumeric(t *testing.T) {
 
 	vec := containers.MockVector2(typ, 0, 0)
 	defer vec.Close()
-	sf1, err := NewBloomFilter(vec, nil)
+	sf1, err := NewBloomFilter(vec, nil, nil)
 	require.NoError(t, err)
 	err = sf1.Unmarshal(buf)
 	require.NoError(t, err)
@@ -93,7 +93,7 @@ func TestNewBinaryFuseFilter(t *testing.T) {
 	typ := types.T_uint32.ToType()
 	data := containers.MockVector2(typ, 2000, 0)
 	defer data.Close()
-	_, err := NewBloomFilter(data, nil)
+	_, err := NewBloomFilter(data, nil, nil)
 	require.NoError(t, err)
 }
 
@@ -103,7 +103,7 @@ func BenchmarkCreateFilter(b *testing.B) {
 	defer data.Close()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		NewBloomFilter(data, nil)
+		NewBloomFilter(data, nil, nil)
 	}
 }
 
@@ -116,13 +116,13 @@ func BenchmarkHybridBloomFilter(b *testing.B) {
 		return in
 	}
 
-	bf, err := NewBloomFilter(data, nil)
+	bf, err := NewBloomFilter(data, nil, nil)
 	require.NoError(b, err)
 	buf, err := bf.Marshal()
 	require.NoError(b, err)
 	b.Logf("buf size: %d", len(buf))
 
-	hbf, err := NewHybridBloomFilter(data, 1, prefixFn, 1, prefixFn, nil)
+	hbf, err := NewHybridBloomFilter(data, 1, prefixFn, 1, prefixFn, nil, nil)
 	require.NoError(b, err)
 	hbf_buf, err := hbf.Marshal()
 	require.NoError(b, err)
@@ -197,6 +197,7 @@ func TestHybridBloomFilter(t *testing.T) {
 		objectFnId, objectFn,
 		blockFnId, blockFn,
 		nil,
+		nil,
 	)
 	require.NoError(t, err)
 	hbf_buf, err := hbf.Marshal()
@@ -268,7 +269,7 @@ func TestStaticFilterString(t *testing.T) {
 	typ := types.T_varchar.ToType()
 	data := containers.MockVector2(typ, 40000, 0)
 	defer data.Close()
-	sf, err := NewBloomFilter(data, nil)
+	sf, err := NewBloomFilter(data, nil, nil)
 	require.NoError(t, err)
 	var positive *nulls.Bitmap
 	var res bool
@@ -302,7 +303,7 @@ func TestStaticFilterString(t *testing.T) {
 
 	query = containers.MockVector2(typ, 0, 0)
 	defer query.Close()
-	sf1, err := NewBloomFilter(query, nil)
+	sf1, err := NewBloomFilter(query, nil, nil)
 	require.NoError(t, err)
 	err = sf1.Unmarshal(buf)
 	require.NoError(t, err)

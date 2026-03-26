@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/FastFilter/xorfilter"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -153,7 +154,8 @@ type BlockWriter struct {
 	nameStr        string
 	name           objectio.ObjectName
 	prefix         []index.PrefixFn
-	hashBuf        []uint64 // scratch buffer reused across WriteBatch calls for filter construction
+	hashBuf        []uint64                    // scratch buffer reused across WriteBatch calls for filter construction
+	fuseBuilder    xorfilter.BinaryFuseBuilder // reusable builder for BinaryFuse8 filters
 
 	isTombstone bool
 }
@@ -291,20 +293,20 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		w.objMetaBuilder.AddPKData(columnData)
 		var bf index.StaticFilter
 		if w.pkType == index.BF {
-			bf, err = index.NewBloomFilter(columnData, &w.hashBuf)
+			bf, err = index.NewBloomFilter(columnData, &w.hashBuf, &w.fuseBuilder)
 		} else if w.pkType == index.PBF {
 			if len(w.prefix) < 1 {
 				return nil, index.ErrPrefix
 			}
 			prefix := w.prefix[0]
-			bf, err = index.NewPrefixBloomFilter(columnData, prefix.Id, prefix.Fn, &w.hashBuf)
+			bf, err = index.NewPrefixBloomFilter(columnData, prefix.Id, prefix.Fn, &w.hashBuf, &w.fuseBuilder)
 		} else if w.pkType == index.HBF {
 			if len(w.prefix) < 2 {
 				return nil, index.ErrPrefix
 			}
 			prefixL1 := w.prefix[0]
 			prefixL2 := w.prefix[1]
-			bf, err = index.NewHybridBloomFilter(columnData, prefixL1.Id, prefixL1.Fn, prefixL2.Id, prefixL2.Fn, &w.hashBuf)
+			bf, err = index.NewHybridBloomFilter(columnData, prefixL1.Id, prefixL1.Fn, prefixL2.Id, prefixL2.Fn, &w.hashBuf, &w.fuseBuilder)
 		}
 		if err != nil {
 			return nil, err

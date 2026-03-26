@@ -68,13 +68,22 @@ type bloomFilter struct {
 
 // NewBloomFilter builds a BinaryFuse8 bloom filter for a single vector.
 // buf is an optional scratch buffer; pass &mySlice to reuse it across calls.
-func NewBloomFilter(vec containers.Vector, buf *[]uint64) (StaticFilter, error) {
-	return NewBloomFilter2([]containers.Vector{vec}, buf)
+// builder is an optional BinaryFuseBuilder; pass &myBuilder to reuse internal
+// buffers across filter builds.
+func NewBloomFilter(vec containers.Vector, buf *[]uint64, builder *xorfilter.BinaryFuseBuilder) (StaticFilter, error) {
+	return NewBloomFilter2([]containers.Vector{vec}, buf, builder)
 }
 
 func buildFuseFilter(hashes []uint64) (*bloomFilter, error) {
-	var inners *xorfilter.BinaryFuse8
+	return buildFuseFilterReuse(nil, hashes)
+}
+
+func buildFuseFilterReuse(b *xorfilter.BinaryFuseBuilder, hashes []uint64) (*bloomFilter, error) {
 	var err error
+	if b != nil {
+		return buildWithBuilder(b, hashes)
+	}
+	var inners *xorfilter.BinaryFuse8
 	if inners, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
 		logutil.Error("BuildFuseFilter",
 			zap.String("error", err.Error()))
@@ -99,9 +108,40 @@ func buildFuseFilter(hashes []uint64) (*bloomFilter, error) {
 	return sf, nil
 }
 
+func buildWithBuilder(b *xorfilter.BinaryFuseBuilder, hashes []uint64) (*bloomFilter, error) {
+	filter, err := xorfilter.BuildBinaryFuse[uint8](b, hashes)
+	if err != nil {
+		logutil.Error("BuildFuseFilter",
+			zap.String("error", err.Error()))
+		if strings.Contains(err.Error(), FuseFilterErrorMsg) {
+			oldHashes := hashes
+			hashes = lo.Uniq(hashes)
+			logutil.Info("BuildFuseFilter",
+				zap.String("error", err.Error()),
+				zap.Uint64s("old hashes", oldHashes),
+				zap.Uint64s("hashes", hashes))
+			if filter, err = xorfilter.BuildBinaryFuse[uint8](b, hashes); err != nil {
+				return nil, err
+			}
+		} else {
+			return nil, err
+		}
+	}
+	// Copy Fingerprints — the builder owns the underlying slice and
+	// will overwrite it on the next build.
+	fp := make([]uint8, len(filter.Fingerprints))
+	copy(fp, filter.Fingerprints)
+	filter.Fingerprints = fp
+
+	sf := &bloomFilter{}
+	sf.BinaryFuse8 = xorfilter.BinaryFuse8(filter)
+	return sf, nil
+}
+
 // NewBloomFilter2 builds a BinaryFuse8 bloom filter over multiple vectors.
 // buf is an optional scratch buffer; pass &mySlice to reuse it across calls.
-func NewBloomFilter2(vectors []containers.Vector, buf *[]uint64) (StaticFilter, error) {
+// builder is an optional BinaryFuseBuilder for reusing internal buffers.
+func NewBloomFilter2(vectors []containers.Vector, buf *[]uint64, builder *xorfilter.BinaryFuseBuilder) (StaticFilter, error) {
 	totalLen := 0
 	for _, v := range vectors {
 		totalLen += v.Length()
@@ -130,7 +170,7 @@ func NewBloomFilter2(vectors []containers.Vector, buf *[]uint64) (StaticFilter, 
 	if buf != nil {
 		*buf = hashes
 	}
-	return buildFuseFilter(hashes)
+	return buildFuseFilterReuse(builder, hashes)
 }
 
 func (filter *bloomFilter) MayContainsKey(key []byte) (bool, error) {

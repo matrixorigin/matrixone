@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"unsafe"
 
+	"github.com/FastFilter/xorfilter"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -38,6 +39,7 @@ type hybridFilter struct {
 // buf is an optional scratch buffer; pass &mySlice to reuse it across calls.
 // When provided, the buffer is grown to 3×n capacity and partitioned into three
 // non-overlapping sub-slices — one allocation for all three hash arrays.
+// builder is an optional BinaryFuseBuilder for reusing internal buffers.
 func NewHybridBloomFilter(
 	data containers.Vector,
 	level1PrefixFnId uint8,
@@ -45,6 +47,7 @@ func NewHybridBloomFilter(
 	level2PrefixFnId uint8,
 	level2Prefix func([]byte) []byte,
 	buf *[]uint64,
+	builder *xorfilter.BinaryFuseBuilder,
 ) (StaticFilter, error) {
 	n := data.Length()
 	var hashes, level1Hashes, level2Hashes []uint64
@@ -78,15 +81,15 @@ func NewHybridBloomFilter(
 	if buf != nil {
 		*buf = (*buf)[:3*n]
 	}
-	bf, err := buildFuseFilter(hashes)
+	bf, err := buildFuseFilterReuse(builder, hashes)
 	if err != nil {
 		return nil, err
 	}
-	lvl1, err := buildFuseFilter(level1Hashes)
+	lvl1, err := buildFuseFilterReuse(builder, level1Hashes)
 	if err != nil {
 		return nil, err
 	}
-	lvl2, err := buildFuseFilter(level2Hashes)
+	lvl2, err := buildFuseFilterReuse(builder, level2Hashes)
 	if err != nil {
 		return nil, err
 	}

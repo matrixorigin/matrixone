@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/FastFilter/xorfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -32,11 +33,13 @@ type prefixBloomFilter struct {
 
 // NewPrefixBloomFilter builds a BinaryFuse8 bloom filter over prefix-transformed values.
 // buf is an optional scratch buffer; pass &mySlice to reuse it across calls.
+// builder is an optional BinaryFuseBuilder for reusing internal buffers.
 func NewPrefixBloomFilter(
 	data containers.Vector,
 	prefixFnId uint8,
 	prefixFn func([]byte) []byte,
 	buf *[]uint64,
+	builder *xorfilter.BinaryFuseBuilder,
 ) (StaticFilter, error) {
 	n := data.Length()
 	var hashes []uint64
@@ -62,7 +65,7 @@ func NewPrefixBloomFilter(
 	if buf != nil {
 		*buf = hashes
 	}
-	bf, err := buildFuseFilter(hashes)
+	bf, err := buildFuseFilterReuse(builder, hashes)
 	if err != nil {
 		return nil, err
 	}
