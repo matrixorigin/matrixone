@@ -293,6 +293,11 @@ type reader struct {
 
 	// cacheVectors is used for vector reuse
 	cacheVectors containers.Vectors
+
+	prefJob     *blockio.IVFFlatIndexJob
+	prefBlkInfo *objectio.BlockInfo
+	prefState   engine.DataState
+	prefBatch   *batch.Batch
 }
 
 type mergeReader struct {
@@ -444,6 +449,10 @@ func (r *reader) Close() error {
 		logutil.Fatal("cache vector is not empty")
 	}
 	r.cacheVectors = nil
+	if r.prefBatch != nil {
+		r.prefBatch.Clean(nil) // We don't have mp here, but Clean(nil) is fine if it's already empty or handled otherwise
+		r.prefBatch = nil
+	}
 	return nil
 }
 
@@ -621,6 +630,214 @@ func (r *reader) Read(
 		}
 	}()
 
+	if r.orderByLimit != nil {
+		if r.prefBatch == nil {
+			r.prefBatch = batch.NewWithSize(len(cols))
+		}
+
+		launchPref := func() (*blockio.IVFFlatIndexJob, error) {
+			if r.prefState == engine.InMem {
+				return blockio.HandleOrderByLimitOnIVFFlatIndexLaunch(
+					ctx,
+					nil,
+					r.prefBatch.Vecs[r.orderByLimit.ColPos],
+					r.orderByLimit,
+				)
+			}
+
+			// Persisted
+			filter := r.withFilterMixin.filterState.filter
+			statsCtx, numRead, numHit := ctx, int64(0), int64(0)
+			if filter.Valid {
+				// try to store the blkReadStats CounterSet into ctx, so that
+				// it can record the mem cache hit stats when call MemCache.Read() later soon.
+				statsCtx, numRead, numHit = prepareGatherStats(ctx)
+			}
+
+			var policy fileservice.Policy
+			if r.readBlockCnt > r.threshHold {
+				policy = fileservice.SkipMemoryCacheWrites
+			}
+			r.readBlockCnt++
+
+			if len(r.cacheVectors) == 0 {
+				r.cacheVectors = containers.NewVectors(len(r.columns.seqnums) + 1)
+			}
+
+			job, err := blockio.BlockDataReadLaunch(
+				statsCtx,
+				r.prefBlkInfo,
+				r.source,
+				r.columns.seqnums,
+				r.columns.colTypes,
+				r.columns.phyAddrPos,
+				r.ts,
+				r.filterState.seqnums,
+				r.filterState.colTypes,
+				filter,
+				r.orderByLimit,
+				policy,
+				r.name,
+				r.prefBatch,
+				r.cacheVectors,
+				mp,
+				r.fs,
+			)
+			if err != nil {
+				return nil, err
+			}
+
+			if filter.Valid {
+				// we collect mem cache hit related statistics info for blk read here
+				gatherStats(numRead, numHit)
+			}
+			return job, nil
+		}
+
+		if r.prefJob == nil {
+			if r.prefState == engine.End {
+				return true, nil
+			}
+			r.prefBlkInfo, r.prefState, err = r.source.Next(
+				ctx,
+				cols,
+				r.columns.colTypes,
+				r.columns.seqnums,
+				r.filterState.pkSeqNum,
+				&r.filterState.memFilter,
+				mp,
+				r.prefBatch,
+			)
+			if err != nil {
+				return false, err
+			}
+			if r.prefState == engine.End {
+				dataState = engine.End
+				return true, nil
+			}
+			r.prefJob, err = launchPref()
+			if err != nil {
+				return false, err
+			}
+		}
+
+		// 1. Wait for the current batch's distance calculation
+		if r.prefState == engine.InMem {
+			sels, dists, err := blockio.HandleOrderByLimitOnIVFFlatIndexWait(ctx, r.prefJob)
+			if err != nil {
+				return false, err
+			}
+
+			// Keep batch cardinality consistent with pushed-down vector TopN result.
+			// When sels is empty, batch.Shuffle is a no-op, so we must clear outBatch
+			// explicitly; otherwise rowCount can stay > 0 while distVec is empty.
+			if len(sels) == 0 {
+				r.prefBatch.CleanOnlyData()
+			} else if err := r.prefBatch.Shuffle(sels, mp); err != nil {
+				return false, err
+			}
+
+			// Reuse the detached distVec when possible to avoid per-batch allocation.
+			var distVec *vector.Vector
+			if len(r.prefBatch.Vecs) > len(cols) {
+				distVec = r.prefBatch.Vecs[len(cols)]
+				r.prefBatch.Vecs = r.prefBatch.Vecs[:len(cols)]
+			}
+			if distVec == nil {
+				distVec = vector.NewVec(types.T_float64.ToType())
+			}
+			distVec.CleanOnlyData()
+			if err := vector.AppendFixedList(distVec, dists, nil, mp); err != nil {
+				distVec.Free(mp)
+				return false, err
+			}
+			r.prefBatch.Vecs = append(r.prefBatch.Vecs, distVec)
+		} else {
+			err = blockio.BlockDataReadWait(
+				ctx,
+				r.prefJob,
+				r.prefBlkInfo,
+				r.columns.seqnums,
+				r.columns.phyAddrPos,
+				r.orderByLimit,
+				r.prefBatch,
+				r.cacheVectors,
+				mp,
+			)
+			if err != nil {
+				return false, err
+			}
+		}
+
+		dataState = r.prefState
+		blkInfo = r.prefBlkInfo
+
+		outBatch.Vecs, r.prefBatch.Vecs = r.prefBatch.Vecs, outBatch.Vecs
+		outBatch.SetRowCount(r.prefBatch.RowCount())
+		outBatch.SetAttributes(cols)
+		if blkInfo != nil && blkInfo.IsSorted() && r.columns.indexOfFirstSortedColumn != -1 {
+			outBatch.GetVector(int32(r.columns.indexOfFirstSortedColumn)).SetSorted(true)
+		}
+		if outBatch.RowCount() == 1 && dataState == engine.Persisted {
+			// found one row in this blk for the pk equal, record it
+			r.withFilterMixin.filterState.memFilter.RecordExactHit()
+		}
+
+		// Re-attach the detached distVec so it can be reused in the next prefetch cycle.
+		if detachedDistVec != nil {
+			r.prefBatch.Vecs = append(r.prefBatch.Vecs, detachedDistVec)
+			detachedDistVec = nil
+		}
+
+		// 2. Next to fetch the metadata/data for the next batch.
+		var prefDetachedDistVec *vector.Vector
+		if len(r.prefBatch.Vecs) > len(cols) {
+			prefDetachedDistVec = r.prefBatch.Vecs[len(cols)]
+			prefDetachedDistVec.CleanOnlyData()
+			r.prefBatch.Vecs = r.prefBatch.Vecs[:len(cols)]
+		}
+
+		nextBlkInfo, nextState, nextErr := r.source.Next(
+			ctx,
+			cols,
+			r.columns.colTypes,
+			r.columns.seqnums,
+			r.filterState.pkSeqNum,
+			&r.filterState.memFilter,
+			mp,
+			r.prefBatch,
+		)
+		if nextErr != nil {
+			if prefDetachedDistVec != nil {
+				prefDetachedDistVec.Free(mp)
+			}
+			return false, nextErr
+		}
+
+		// 3. Launch the distance calculation for the next batch.
+		if nextState != engine.End {
+			r.prefBlkInfo = nextBlkInfo
+			r.prefState = nextState
+			if prefDetachedDistVec != nil {
+				r.prefBatch.Vecs = append(r.prefBatch.Vecs, prefDetachedDistVec)
+				prefDetachedDistVec = nil
+			}
+			r.prefJob, err = launchPref()
+			if err != nil {
+				return false, err
+			}
+		} else {
+			r.prefJob = nil
+			r.prefState = engine.End
+			if prefDetachedDistVec != nil {
+				prefDetachedDistVec.Free(mp)
+			}
+		}
+
+		// 4. Return the current batch to the caller.
+		return false, nil
+	}
+
 	blkInfo, state, err := r.source.Next(
 		ctx,
 		cols,
@@ -640,33 +857,6 @@ func (r *reader) Read(
 		return true, nil
 	}
 	if state == engine.InMem {
-		if r.orderByLimit != nil {
-			sels, dists, err := blockio.HandleOrderByLimitOnIVFFlatIndex(ctx, nil, outBatch.Vecs[r.orderByLimit.ColPos], r.orderByLimit)
-			if err != nil {
-				return false, err
-			}
-
-			// Keep batch cardinality consistent with pushed-down vector TopN result.
-			// When sels is empty, batch.Shuffle is a no-op, so we must clear outBatch
-			// explicitly; otherwise rowCount can stay > 0 while distVec is empty.
-			if len(sels) == 0 {
-				outBatch.CleanOnlyData()
-			} else if err := outBatch.Shuffle(sels, mp); err != nil {
-				return false, err
-			}
-
-			// Reuse the detached distVec when possible to avoid per-batch allocation.
-			distVec := detachedDistVec
-			if distVec == nil {
-				distVec = vector.NewVec(types.T_float64.ToType())
-			}
-			detachedDistVec = nil
-			if err := vector.AppendFixedList(distVec, dists, nil, mp); err != nil {
-				return false, err
-			}
-			outBatch.Vecs = append(outBatch.Vecs, distVec)
-		}
-
 		return false, nil
 	}
 	//read block
