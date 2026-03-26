@@ -46,8 +46,7 @@ type flushObjTask struct {
 	createAt    time.Time
 	partentTask string
 
-	stats objectio.ObjectStats
-	done  bool
+	done bool
 }
 
 func NewFlushObjTask(
@@ -154,8 +153,6 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 			common.AnyField("data-rows", dataRows),
 		)
 	}
-	task.stats = writer.GetObjectStats()
-
 	task.stat = writer.Stats()
 	return err
 }

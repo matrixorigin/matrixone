@@ -74,10 +74,6 @@ func NewBloomFilter(vec containers.Vector, buf *[]uint64, builder *xorfilter.Bin
 	return NewBloomFilter2([]containers.Vector{vec}, buf, builder)
 }
 
-func buildFuseFilter(hashes []uint64) (*bloomFilter, error) {
-	return buildFuseFilterReuse(nil, hashes)
-}
-
 func buildFuseFilterReuse(b *xorfilter.BinaryFuseBuilder, hashes []uint64) (*bloomFilter, error) {
 	var err error
 	if b != nil {

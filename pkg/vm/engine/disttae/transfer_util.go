@@ -36,12 +36,6 @@ type UT_ForceTransCheck struct{}
 
 type TransferOption func(*TransferFlow)
 
-func WithTrasnferBuffer(buffer *containers.OneSchemaBatchBuffer) TransferOption {
-	return func(flow *TransferFlow) {
-		flow.buffer = buffer
-	}
-}
-
 func ConstructCNTombstoneObjectsTransferFlow(
 	ctx context.Context,
 	start, end types.TS,
