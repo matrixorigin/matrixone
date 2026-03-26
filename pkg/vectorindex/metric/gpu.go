@@ -47,12 +47,11 @@ func PairWiseDistance[T types.RealNumbers](
 	if nX == 0 || nY == 0 {
 		return nil, nil
 	}
-	//dim := len(x[0])
+	dim := len(x[0])
 
 	_, ok := MetricTypeToCuvsMetric[metric]
 	// Use GPU only for large enough workloads where overhead is justified
-	//if !ok || uint64(nX)*uint64(nY)*uint64(dim) < 200*1024*1024 {
-	if !ok {
+	if !ok || uint64(nX)*uint64(nY)*uint64(dim) < 200*1024*1024 {
 		return GoPairWiseDistance(x, y, metric)
 	}
 
@@ -116,6 +115,10 @@ func (m *gpuJobManager) pop(jobID uint64) *gpuJob {
 	return job
 }
 
+// PairwiseDistanceLaunch initiates an asynchronous GPU distance calculation.
+// It flattens the input vectors on the CPU and then launches a CUDA kernel.
+// This allows for overlapping the CPU-bound flattening work with GPU execution
+// when pipelined at the reader level.
 func PairwiseDistanceLaunch[T types.RealNumbers](
 	x [][]T,
 	y [][]T,
@@ -134,8 +137,7 @@ func PairwiseDistanceLaunch[T types.RealNumbers](
 	var zero T
 	isF32 := any(zero).(interface{}) == any(float32(0)).(interface{})
 
-	// if ok && isF32 && uint64(nX)*uint64(nY)*uint64(dim) >= 200*1024*1024 {
-	if ok && isF32 {
+	if ok && isF32 && uint64(nX)*uint64(nY)*uint64(dim) >= 200*1024*1024 {
 		allocator := malloc.NewCAllocator()
 
 		// 1. Flatten Y
@@ -188,6 +190,8 @@ func PairwiseDistanceLaunch[T types.RealNumbers](
 	return PairwiseDistanceLaunchCPU(x, y, metric, deviceID, dist)
 }
 
+// PairwiseDistanceWait waits for the completion of the asynchronous GPU distance
+// calculation initiated by Launch.
 func PairwiseDistanceWait(jobID uint64, metric MetricType) ([]float32, error) {
 	if jobID >= (1 << 60) {
 		return PairwiseDistanceWaitCPU(jobID, metric)

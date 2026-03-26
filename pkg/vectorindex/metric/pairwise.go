@@ -35,6 +35,9 @@ var (
 )
 
 // PairwiseDistanceLaunchCPU captures parameters for a pairwise distance calculation on CPU.
+// While this is currently synchronous for CPU (it performs the calculation in Launch),
+// it follows the asynchronous interface to support the pipelined execution model
+// used in the block reader.
 func PairwiseDistanceLaunchCPU[T types.RealNumbers](
 	x [][]T,
 	y [][]T,
@@ -107,7 +110,8 @@ DONE:
 	return id, nil
 }
 
-// PairwiseDistanceWaitCPU performs the actual pairwise distance calculation on the CPU sequentially.
+// PairwiseDistanceWaitCPU returns the results of the pairwise distance calculation
+// performed on the CPU.
 func PairwiseDistanceWaitCPU(jobID uint64, metric MetricType) ([]float32, error) {
 	jobMu.Lock()
 	job, ok := jobMap[jobID]
