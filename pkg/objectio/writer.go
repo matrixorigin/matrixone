@@ -695,6 +695,11 @@ func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, ba
 			logutil.Debugf("%s unmatched length, expect %d, get %d", attr, rows, vec.Length())
 		}
 		w.buf.Reset()
+		// Pre-size buffer to avoid repeated growSlice during MarshalBinaryWithBuffer.
+		// vec.Size() ≈ data + area; add overhead for header, lengths, nsp, sorted flag.
+		if needed := vec.Size() + 64; needed > w.buf.Cap() {
+			w.buf.Grow(needed)
+		}
 		h := IOEntryHeader{IOET_ColData, IOET_ColumnData_CurrVer}
 		w.buf.Write(EncodeIOEntryHeader(&h))
 		if err := vec.MarshalBinaryWithBuffer(&w.buf); err != nil {
