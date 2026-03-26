@@ -30,6 +30,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	enablePartitionTables,
 	upg_alter_mo_snapshots,
 	enableRoleRule,
+	upg_information_schema_columns,
 	upg_information_schema_statistics,
 }
 
@@ -83,6 +84,25 @@ var upg_alter_mo_snapshots = versions.UpgradeEntry{
 
 		return info.IsExits, nil
 	},
+}
+
+var upg_information_schema_columns = versions.UpgradeEntry{
+	Schema:    sysview.InformationDBConst,
+	TableName: "COLUMNS",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql:    sysview.InformationSchemaColumnsDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "COLUMNS")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == sysview.InformationSchemaColumnsDDL {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "COLUMNS"),
 }
 
 var upg_information_schema_statistics = versions.UpgradeEntry{
