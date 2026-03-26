@@ -886,17 +886,25 @@ func (exec *valueWindowExec) Free() {
 	if exec.resultVec != nil {
 		exec.resultVec.Free(exec.mp)
 	}
+	exec.frameValues = nil
+	exec.currentRowPosition = nil
 }
 
 func (exec *valueWindowExec) Size() int64 {
 	var size int64
+	// top-level slice header
+	size += int64(cap(exec.frameValues)) * 24 // slice header per element
 	for _, frame := range exec.frameValues {
+		// backing array of []*valueEntry
+		size += int64(cap(frame)) * 8
 		for _, entry := range frame {
 			if entry != nil {
-				size += int64(len(entry.data)) + 8 // data + isNull flag overhead
+				size += 24 + int64(len(entry.data)) // struct overhead + data
 			}
 		}
 	}
+	// currentRowPosition backing array
+	size += int64(cap(exec.currentRowPosition)) * 8
 	return size
 }
 

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
@@ -123,6 +124,12 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 
 			ctr.batAggs = make([]aggexec.AggFuncExec, len(window.Aggs))
 			for i, ag := range window.Aggs {
+				// Skip AggFuncExec creation for WIN_VALUE functions (lag/lead/first_value/last_value/nth_value)
+				// as they are handled directly in processValueFunc.
+				winName := window.WinSpecList[i].Expr.(*plan.Expr_W).W.Name
+				if function.GetFunctionIsWinValueFunByName(winName) {
+					continue
+				}
 				ctr.batAggs[i], err = aggexec.MakeAgg(proc.Mp(), ag.GetAggID(), ag.IsDistinct(), window.Types[i])
 				if err != nil {
 					return result, err
@@ -210,8 +217,29 @@ func (ctr *container) resetResultBatch(bat *batch.Batch, vec *vector.Vector) *ba
 func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, analyzer process.Analyzer) error {
 	var err error
 	n := ctr.bat.Vecs[0].Length()
-	funcName := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.Name
+	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
+	funcName := w.Name
 	isWinOrder := function.GetFunctionIsWinOrderFunByName(funcName)
+	isWinValue := function.GetFunctionIsWinValueFunByName(funcName)
+
+	if isWinValue {
+		// WIN_VALUE functions (lag/lead/first_value/last_value/nth_value):
+		// Direct index-based evaluation, bypassing AggFuncExec Fill/Flush entirely.
+		if ctr.vec != nil {
+			ctr.vec.Free(proc.Mp())
+		}
+		ctr.vec, err = ctr.processValueFunc(idx, ap, proc)
+		if err != nil {
+			return err
+		}
+		if ctr.vec != nil {
+			analyzer.Alloc(int64(ctr.vec.Size()))
+		}
+		ctr.os = nil
+		ctr.ps = nil
+		return nil
+	}
+
 	if isWinOrder {
 		if ctr.ps == nil {
 			ctr.ps = append(ctr.ps, 0)
@@ -263,10 +291,7 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 			}
 		}
 	} else {
-		// nullVec := vector.NewConstNull(*ctr.aggVecs[idx].Vec[0].GetType(), 1, proc.Mp())
-		// defer nullVec.Free(proc.Mp())
-
-		// plan.Function_AGG, plan.Function_WIN_VALUE
+		// plan.Function_AGG
 		for j := 0; j < n; j++ {
 
 			start, end := 0, n
@@ -281,10 +306,6 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 			}
 
 			if right < start || left > end || left >= right {
-				// todo: I commented this out because it was a waste of time to fill a null value.
-				// if err = ctr.bat.Aggs[idx].Fill(j, 0, []*vector.Vector{nullVec}); err != nil {
-				//	return err
-				// }
 				continue
 			}
 
@@ -329,6 +350,210 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 	ctr.os = nil
 	ctr.ps = nil
 	return nil
+}
+
+// processValueFunc handles WIN_VALUE functions (lag/lead/first_value/last_value/nth_value)
+// by directly computing results via index lookup, avoiding O(n²) frame materialization.
+func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Process) (*vector.Vector, error) {
+	n := ctr.bat.Vecs[0].Length()
+	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
+	funcName := w.Name
+
+	// aggVecs already evaluated by caller (eval case in Call)
+	srcVec := ctr.aggVecs[idx].Vec[0] // the expression column
+	retType := types.New(types.T(w.WindowFunc.Typ.Id), w.WindowFunc.Typ.Width, w.WindowFunc.Typ.Scale)
+	result := vector.NewVec(retType)
+
+	switch funcName {
+	case "lag":
+		offset := int64(1)
+		if len(ctr.aggVecs[idx].Vec) >= 2 {
+			offset = getInt64FromConstVec(ctr.aggVecs[idx].Vec[1])
+		}
+		var defaultVec *vector.Vector
+		if len(ctr.aggVecs[idx].Vec) >= 3 {
+			defaultVec = ctr.aggVecs[idx].Vec[2]
+		}
+		for j := 0; j < n; j++ {
+			start, _ := 0, n
+			if ctr.ps != nil {
+				start, _ = buildPartitionInterval(ctr.ps, j, n)
+			}
+			srcRow := j - int(offset)
+			if srcRow < start {
+				if err := appendDefaultOrNull(result, defaultVec, j, proc.Mp()); err != nil {
+					return nil, err
+				}
+			} else {
+				if err := result.UnionOne(srcVec, int64(srcRow), proc.Mp()); err != nil {
+					return nil, err
+				}
+			}
+		}
+
+	case "lead":
+		offset := int64(1)
+		if len(ctr.aggVecs[idx].Vec) >= 2 {
+			offset = getInt64FromConstVec(ctr.aggVecs[idx].Vec[1])
+		}
+		var defaultVec *vector.Vector
+		if len(ctr.aggVecs[idx].Vec) >= 3 {
+			defaultVec = ctr.aggVecs[idx].Vec[2]
+		}
+		for j := 0; j < n; j++ {
+			_, end := 0, n
+			if ctr.ps != nil {
+				_, end = buildPartitionInterval(ctr.ps, j, n)
+			}
+			srcRow := j + int(offset)
+			if srcRow >= end {
+				if err := appendDefaultOrNull(result, defaultVec, j, proc.Mp()); err != nil {
+					return nil, err
+				}
+			} else {
+				if err := result.UnionOne(srcVec, int64(srcRow), proc.Mp()); err != nil {
+					return nil, err
+				}
+			}
+		}
+
+	case "first_value":
+		for j := 0; j < n; j++ {
+			start, end := 0, n
+			if ctr.ps != nil {
+				start, end = buildPartitionInterval(ctr.ps, j, n)
+			}
+			left, right, err := ctr.buildInterval(j, start, end, w.Frame)
+			if err != nil {
+				return nil, err
+			}
+			if left < start {
+				left = start
+			}
+			if right > end {
+				right = end
+			}
+			if left >= right {
+				if err := vector.AppendAny(result, nil, true, proc.Mp()); err != nil {
+					return nil, err
+				}
+			} else {
+				if err := result.UnionOne(srcVec, int64(left), proc.Mp()); err != nil {
+					return nil, err
+				}
+			}
+		}
+
+	case "last_value":
+		for j := 0; j < n; j++ {
+			start, end := 0, n
+			if ctr.ps != nil {
+				start, end = buildPartitionInterval(ctr.ps, j, n)
+			}
+			left, right, err := ctr.buildInterval(j, start, end, w.Frame)
+			if err != nil {
+				return nil, err
+			}
+			if left < start {
+				left = start
+			}
+			if right > end {
+				right = end
+			}
+			if left >= right {
+				if err := vector.AppendAny(result, nil, true, proc.Mp()); err != nil {
+					return nil, err
+				}
+			} else {
+				if err := result.UnionOne(srcVec, int64(right-1), proc.Mp()); err != nil {
+					return nil, err
+				}
+			}
+		}
+
+	case "nth_value":
+		// nth_value(expr, n): n is the second argument
+		nthVal := int64(1)
+		if len(ctr.aggVecs[idx].Vec) >= 2 {
+			nthVal = getInt64FromConstVec(ctr.aggVecs[idx].Vec[1])
+		}
+		for j := 0; j < n; j++ {
+			start, end := 0, n
+			if ctr.ps != nil {
+				start, end = buildPartitionInterval(ctr.ps, j, n)
+			}
+			left, right, err := ctr.buildInterval(j, start, end, w.Frame)
+			if err != nil {
+				return nil, err
+			}
+			if left < start {
+				left = start
+			}
+			if right > end {
+				right = end
+			}
+			targetRow := left + int(nthVal) - 1
+			if left >= right || targetRow >= right {
+				if err := vector.AppendAny(result, nil, true, proc.Mp()); err != nil {
+					return nil, err
+				}
+			} else {
+				if err := result.UnionOne(srcVec, int64(targetRow), proc.Mp()); err != nil {
+					return nil, err
+				}
+			}
+		}
+
+	default:
+		result.Free(proc.Mp())
+		return nil, moerr.NewInternalErrorNoCtxf("unsupported value window function: %s", funcName)
+	}
+
+	return result, nil
+}
+
+// getInt64FromConstVec extracts an int64 value from a constant/single-row vector.
+func getInt64FromConstVec(vec *vector.Vector) int64 {
+	switch vec.GetType().Oid {
+	case types.T_int8:
+		return int64(vector.MustFixedColNoTypeCheck[int8](vec)[0])
+	case types.T_int16:
+		return int64(vector.MustFixedColNoTypeCheck[int16](vec)[0])
+	case types.T_int32:
+		return int64(vector.MustFixedColNoTypeCheck[int32](vec)[0])
+	case types.T_int64:
+		return vector.MustFixedColNoTypeCheck[int64](vec)[0]
+	case types.T_uint8:
+		return int64(vector.MustFixedColNoTypeCheck[uint8](vec)[0])
+	case types.T_uint16:
+		return int64(vector.MustFixedColNoTypeCheck[uint16](vec)[0])
+	case types.T_uint32:
+		return int64(vector.MustFixedColNoTypeCheck[uint32](vec)[0])
+	case types.T_uint64:
+		return int64(vector.MustFixedColNoTypeCheck[uint64](vec)[0])
+	case types.T_float32:
+		return int64(vector.MustFixedColNoTypeCheck[float32](vec)[0])
+	case types.T_float64:
+		return int64(vector.MustFixedColNoTypeCheck[float64](vec)[0])
+	default:
+		return 1
+	}
+}
+
+// appendDefaultOrNull appends the default value (if provided) or NULL to the result vector.
+func appendDefaultOrNull(result *vector.Vector, defaultVec *vector.Vector, rowIdx int, mp *mpool.MPool) error {
+	if defaultVec == nil {
+		return vector.AppendAny(result, nil, true, mp)
+	}
+	// Default value vector: use row 0 for const, or rowIdx for non-const
+	srcRow := int64(0)
+	if !defaultVec.IsConst() {
+		srcRow = int64(rowIdx)
+	}
+	if defaultVec.IsNull(uint64(srcRow)) {
+		return vector.AppendAny(result, nil, true, mp)
+	}
+	return result.UnionOne(defaultVec, srcRow, mp)
 }
 
 func (ctr *container) buildInterval(rowIdx, start, end int, frame *plan.FrameClause) (int, int, error) {
