@@ -48,7 +48,15 @@ func NewArena(size int) *WriteArena {
 
 func (a *WriteArena) Alloc(size int) []byte {
 	if a.usedOffset+size > len(a.data) {
-		return make([]byte, size)
+		// Grow: replace backing array with a larger one (at least double).
+		// Old slices from previous allocs remain valid; the GC keeps the old
+		// backing array alive as long as any slice references it (e.g. block.data).
+		newCap := len(a.data) * 2
+		if newCap < size {
+			newCap = size
+		}
+		a.data = make([]byte, newCap)
+		a.usedOffset = 0
 	}
 	offset := a.usedOffset
 	a.usedOffset += size

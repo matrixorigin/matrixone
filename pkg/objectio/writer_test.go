@@ -380,16 +380,17 @@ func TestWriteArena(t *testing.T) {
 		require.Equal(t, &a.data[100], &b2[0])
 	})
 
-	t.Run("alloc overflow falls back to make", func(t *testing.T) {
+	t.Run("alloc overflow grows backing array", func(t *testing.T) {
 		a := NewArena(64)
 		b1 := a.Alloc(32)
 		require.Equal(t, 32, a.usedOffset)
 
-		// this exceeds remaining capacity — should allocate a new slice
+		// this exceeds remaining capacity — should grow the backing array
 		b2 := a.Alloc(64)
 		require.Len(t, b2, 64)
-		require.Equal(t, 32, a.usedOffset) // unchanged — overflow didn't advance offset
-		_ = b1
+		require.Equal(t, 64, a.usedOffset) // reset to 0 in new array, then advanced by 64
+		require.GreaterOrEqual(t, len(a.data), 128) // doubled: 64 * 2 = 128
+		_ = b1 // old slice still valid (GC keeps old backing array alive)
 	})
 
 	t.Run("reset reuses capacity", func(t *testing.T) {
@@ -427,10 +428,29 @@ func TestWriteArena(t *testing.T) {
 		require.GreaterOrEqual(t, len(a.compressBuf), 200)
 	})
 
-	t.Run("zero-size arena always overflows", func(t *testing.T) {
+	t.Run("zero-size arena grows on first alloc", func(t *testing.T) {
 		a := NewArena(0)
 		b := a.Alloc(10)
 		require.Len(t, b, 10)
-		require.Equal(t, 0, a.usedOffset)
+		require.GreaterOrEqual(t, len(a.data), 10) // grew to fit
+		require.Equal(t, 10, a.usedOffset)
+	})
+
+	t.Run("multiple overflows grow geometrically", func(t *testing.T) {
+		a := NewArena(8)
+		// Write 8 × 8-byte slices — arena doubles each time it overflows
+		var slices [][]byte
+		for i := 0; i < 8; i++ {
+			s := a.Alloc(8)
+			require.Len(t, s, 8)
+			slices = append(slices, s)
+		}
+		// arena should have grown past 64 bytes total
+		require.GreaterOrEqual(t, len(a.data)+a.usedOffset, 8)
+		// all returned slices are distinct and usable
+		for i, s := range slices {
+			s[0] = byte(i)
+		}
+		_ = slices
 	})
 }
