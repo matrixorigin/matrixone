@@ -233,7 +233,9 @@ func TestProcessValueFunc_NthValueWithN(t *testing.T) {
 
 	result.Free(mp)
 	nVec.Free(mp)
+	bat.Clean(mp)
 	proc.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
 }
 
 // TestProcessValueFunc_NthValueOutOfBounds tests nth_value with n exceeding frame size.
@@ -260,7 +262,9 @@ func TestProcessValueFunc_NthValueOutOfBounds(t *testing.T) {
 
 	result.Free(mp)
 	nVec.Free(mp)
+	bat.Clean(mp)
 	proc.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
 }
 
 // TestProcessValueFunc_LeadWithOffset tests lead with offset=2.
@@ -290,7 +294,9 @@ func TestProcessValueFunc_LeadWithOffset(t *testing.T) {
 
 	result.Free(mp)
 	offsetVec.Free(mp)
+	bat.Clean(mp)
 	proc.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
 }
 
 // TestProcessValueFunc_NthValueWithFrame tests nth_value with explicit frame.
@@ -337,7 +343,9 @@ func TestProcessValueFunc_NthValueWithFrame(t *testing.T) {
 
 	result.Free(mp)
 	nVec.Free(mp)
+	bat.Clean(mp)
 	proc.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
 }
 
 func TestGetInt64FromVec(t *testing.T) {
@@ -427,7 +435,9 @@ func TestProcessValueFunc_LagWithPartition(t *testing.T) {
 	require.Equal(t, int32(40), vals[4]) // lag(50) → 40
 
 	result.Free(mp)
+	bat.Clean(mp)
 	proc.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
 }
 
 // TestProcessValueFunc_LeadWithPartition tests lead across partition boundaries.
@@ -459,7 +469,9 @@ func TestProcessValueFunc_LeadWithPartition(t *testing.T) {
 	require.True(t, result.IsNull(4))    // lead(50) → NULL
 
 	result.Free(mp)
+	bat.Clean(mp)
 	proc.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
 }
 
 // TestProcessValueFunc_LagWithOffset tests lag with offset=2.
@@ -490,7 +502,9 @@ func TestProcessValueFunc_LagWithOffset(t *testing.T) {
 
 	result.Free(mp)
 	offsetVec.Free(mp)
+	bat.Clean(mp)
 	proc.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
 }
 
 // TestProcessValueFunc_LagWithDefault tests lag with offset=1 and default value.
@@ -521,7 +535,9 @@ func TestProcessValueFunc_LagWithDefault(t *testing.T) {
 	result.Free(mp)
 	offsetVec.Free(mp)
 	defaultVec.Free(mp)
+	bat.Clean(mp)
 	proc.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
 }
 
 // TestProcessValueFunc_FirstValueWithFrame tests first_value with ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING.
@@ -570,7 +586,9 @@ func TestProcessValueFunc_FirstValueWithFrame(t *testing.T) {
 	require.Equal(t, int32(30), vals[3])
 
 	result.Free(mp)
+	bat.Clean(mp)
 	proc.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
 }
 
 // TestProcessValueFunc_LastValueWithFrame tests last_value with ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING.
@@ -618,7 +636,175 @@ func TestProcessValueFunc_LastValueWithFrame(t *testing.T) {
 	require.Equal(t, int32(40), vals[3])
 
 	result.Free(mp)
+	bat.Clean(mp)
 	proc.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+// TestProcessValueFunc_LagNonConstOffset tests lag with a non-const offset vector.
+func TestProcessValueFunc_LagNonConstOffset(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+
+	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
+	spec := makeLagWindowSpec()
+
+	ctr := &container{bat: bat}
+	// Non-const offset vector: [1, 2, 0, -1]
+	offsetVec := testutil.MakeInt64Vector([]int64{1, 2, 0, -1}, nil, mp)
+	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
+	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], offsetVec}
+
+	ap := &Window{WinSpecList: []*plan.Expr{spec}}
+
+	result, err := ctr.processValueFunc(0, ap, proc)
+	require.NoError(t, err)
+	require.Equal(t, 4, result.Length())
+
+	vals := vector.MustFixedColNoTypeCheck[int32](result)
+	require.True(t, result.IsNull(0))    // lag(10, 1) → NULL (no prev)
+	require.True(t, result.IsNull(1))    // lag(20, 2) → NULL (not enough rows)
+	require.Equal(t, int32(30), vals[2]) // lag(30, 0) → 30 (self)
+	require.True(t, result.IsNull(3))    // lag(40, -1) → NULL (negative offset)
+
+	result.Free(mp)
+	offsetVec.Free(mp)
+	bat.Clean(mp)
+	proc.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+// TestProcessValueFunc_LeadNonConstOffset tests lead with a non-const offset vector.
+func TestProcessValueFunc_LeadNonConstOffset(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+
+	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
+	spec := makeLeadWindowSpec()
+
+	ctr := &container{bat: bat}
+	offsetVec := testutil.MakeInt64Vector([]int64{2, 1, 0, -1}, nil, mp)
+	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
+	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], offsetVec}
+
+	ap := &Window{WinSpecList: []*plan.Expr{spec}}
+
+	result, err := ctr.processValueFunc(0, ap, proc)
+	require.NoError(t, err)
+	require.Equal(t, 4, result.Length())
+
+	vals := vector.MustFixedColNoTypeCheck[int32](result)
+	require.Equal(t, int32(30), vals[0]) // lead(10, 2) → 30
+	require.Equal(t, int32(30), vals[1]) // lead(20, 1) → 30
+	require.Equal(t, int32(30), vals[2]) // lead(30, 0) → 30 (self)
+	require.True(t, result.IsNull(3))    // lead(40, -1) → NULL (negative offset)
+
+	result.Free(mp)
+	offsetVec.Free(mp)
+	bat.Clean(mp)
+	proc.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+// TestProcessValueFunc_NthValueNonConst tests nth_value with a non-const n vector.
+func TestProcessValueFunc_NthValueNonConst(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+
+	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
+	spec := makeNthValueWindowSpec()
+
+	ctr := &container{bat: bat}
+	// Non-const n vector: [1, 2, 0, 5] — 0 and 5 are invalid/out-of-bounds
+	nVec := testutil.MakeInt64Vector([]int64{1, 2, 0, 5}, nil, mp)
+	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
+	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], nVec}
+
+	ap := &Window{WinSpecList: []*plan.Expr{spec}}
+
+	result, err := ctr.processValueFunc(0, ap, proc)
+	require.NoError(t, err)
+	require.Equal(t, 4, result.Length())
+
+	vals := vector.MustFixedColNoTypeCheck[int32](result)
+	require.Equal(t, int32(10), vals[0]) // nth_value(1) → 10
+	require.Equal(t, int32(20), vals[1]) // nth_value(2) → 20
+	require.True(t, result.IsNull(2))    // nth_value(0) → NULL (< 1)
+	require.True(t, result.IsNull(3))    // nth_value(5) → NULL (out of bounds)
+
+	result.Free(mp)
+	nVec.Free(mp)
+	bat.Clean(mp)
+	proc.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+// TestProcessValueFunc_FirstValueWithPartition tests first_value with partitions.
+func TestProcessValueFunc_FirstValueWithPartition(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+
+	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40, 50})
+	spec := makeFirstValueWindowSpec()
+
+	ctr := &container{bat: bat}
+	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
+	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0]}
+	ctr.ps = []int64{0, 3, 5}
+
+	ap := &Window{WinSpecList: []*plan.Expr{spec}}
+
+	result, err := ctr.processValueFunc(0, ap, proc)
+	require.NoError(t, err)
+	require.Equal(t, 5, result.Length())
+
+	vals := vector.MustFixedColNoTypeCheck[int32](result)
+	// Partition 1: [10,20,30] → first = 10
+	require.Equal(t, int32(10), vals[0])
+	require.Equal(t, int32(10), vals[1])
+	require.Equal(t, int32(10), vals[2])
+	// Partition 2: [40,50] → first = 40
+	require.Equal(t, int32(40), vals[3])
+	require.Equal(t, int32(40), vals[4])
+
+	result.Free(mp)
+	bat.Clean(mp)
+	proc.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+// TestProcessValueFunc_LastValueWithPartition tests last_value with partitions.
+func TestProcessValueFunc_LastValueWithPartition(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+
+	bat := makeInt32Batch(mp, []int32{10, 20, 30, 40, 50})
+	spec := makeLastValueWindowSpec()
+
+	ctr := &container{bat: bat}
+	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
+	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0]}
+	ctr.ps = []int64{0, 3, 5}
+
+	ap := &Window{WinSpecList: []*plan.Expr{spec}}
+
+	result, err := ctr.processValueFunc(0, ap, proc)
+	require.NoError(t, err)
+	require.Equal(t, 5, result.Length())
+
+	vals := vector.MustFixedColNoTypeCheck[int32](result)
+	// Partition 1: [10,20,30] → last = 30
+	require.Equal(t, int32(30), vals[0])
+	require.Equal(t, int32(30), vals[1])
+	require.Equal(t, int32(30), vals[2])
+	// Partition 2: [40,50] → last = 50
+	require.Equal(t, int32(50), vals[3])
+	require.Equal(t, int32(50), vals[4])
+
+	result.Free(mp)
+	bat.Clean(mp)
+	proc.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
 }
 
 // TestProcessValueFunc_Varchar tests lag with varchar (varlen) type.
