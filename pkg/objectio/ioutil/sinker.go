@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -29,6 +30,15 @@ import (
 )
 
 const DefaultInMemoryStagedSize = mpool.MB * 16
+
+// writeArenaPool reuses WriteArena instances across FSinkerImpl lifecycles.
+// WriteArena holds only Go-heap []byte slices (no C memory, no file handles),
+// so GC eviction of pool entries is safe — no external resources leak.
+// The pool's New func uses size 0 so the first-use overflow path warms the
+// arena; Reset() then grows it to nextPow2(totalRequested) for future rounds.
+var writeArenaPool = &sync.Pool{
+	New: func() any { return objectio.NewArena(0) },
+}
 
 type SinkerOption func(*Sinker)
 
@@ -101,10 +111,9 @@ type FSinkerImpl struct {
 func (s *FSinkerImpl) Sink(ctx context.Context, b *batch.Batch) error {
 	if s.writer == nil {
 		if s.arena == nil {
-			s.arena = objectio.NewArena(8 * 1024 * 1024)
-		} else {
-			s.arena.Reset()
+			s.arena = writeArenaPool.Get().(*objectio.WriteArena)
 		}
+		s.arena.Reset()
 		if s.isTombstone {
 			s.writer = ConstructTombstoneWriterWithArena(
 				s.hiddenSelection,
@@ -154,9 +163,15 @@ func (s *FSinkerImpl) Reset() {
 }
 
 func (s *FSinkerImpl) Close() error {
-	// s.writer.Reset
 	s.writer = nil
-	s.arena = nil
+	if s.arena != nil {
+		// Reset grows the arena if needed (adaptive sizing), then return it
+		// to the pool so the pre-warmed backing array, serialBuf and
+		// compressBuf are reused by the next FSinkerImpl.
+		s.arena.Reset()
+		writeArenaPool.Put(s.arena)
+		s.arena = nil
+	}
 	return nil
 }
 
