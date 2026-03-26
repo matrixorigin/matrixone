@@ -37,18 +37,32 @@ type windowFuncExprBinder interface {
 	GetContext() context.Context
 }
 
+func windowExprAstKey(astExpr tree.Expr) string {
+	funcExpr, ok := astExpr.(*tree.FuncExpr)
+	if !ok || funcExpr.WindowSpec == nil || funcExpr.WindowSpec.Frame == nil || funcExpr.WindowSpec.HasFrame {
+		return tree.String(astExpr, dialect.MYSQL)
+	}
+
+	funcExprCopy := *funcExpr
+	windowSpecCopy := *funcExpr.WindowSpec
+	windowSpecCopy.HasFrame = true
+	funcExprCopy.WindowSpec = &windowSpecCopy
+	return tree.String(&funcExprCopy, dialect.MYSQL)
+}
+
 func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
 	if astExpr.Type == tree.FUNC_TYPE_DISTINCT {
 		return nil, moerr.NewNYI(b.GetContext(), "DISTINCT in window function")
 	}
 
-	astStr := tree.String(astExpr, dialect.MYSQL)
-	if colPos, ok := ctx.windowByAst[astStr]; ok {
-		return buildWindowColRefExpr(ctx, ctx.windows[colPos].Typ, colPos), nil
-	}
+	astStr := windowExprAstKey(astExpr)
 
 	w := &plan.WindowSpec{}
 	ws := astExpr.WindowSpec
+	if ws != nil {
+		wsCopy := *ws
+		ws = &wsCopy
+	}
 
 	// window function
 	windowFunc, err := b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
@@ -169,6 +183,10 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 		if err != nil {
 			return nil, err
 		}
+	}
+
+	if colPos, ok := ctx.windowByAst[astStr]; ok {
+		return buildWindowColRefExpr(ctx, ctx.windows[colPos].Typ, colPos), nil
 	}
 
 	colPos := int32(len(ctx.windows))

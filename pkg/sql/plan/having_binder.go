@@ -36,7 +36,7 @@ func NewHavingBinder(builder *QueryBuilder, ctx *BindContext) *HavingBinder {
 }
 
 func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
-	astStr := tree.String(astExpr, dialect.MYSQL)
+	astStr := windowExprAstKey(astExpr)
 
 	if !b.insideAgg {
 		if colPos, ok := b.ctx.groupByAst[astStr]; ok {

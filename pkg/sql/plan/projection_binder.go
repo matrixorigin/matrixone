@@ -16,7 +16,6 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -33,7 +32,7 @@ func NewProjectionBinder(builder *QueryBuilder, ctx *BindContext, havingBinder *
 }
 
 func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
-	astStr := tree.String(astExpr, dialect.MYSQL)
+	astStr := windowExprAstKey(astExpr)
 
 	if colPos, ok := b.ctx.timeByAst[astStr]; ok {
 		if astStr != TimeWindowEnd && astStr != TimeWindowStart {
