@@ -432,8 +432,8 @@ func TestWriteArena(t *testing.T) {
 		a := NewArena(0)
 		b := a.Alloc(10)
 		require.Len(t, b, 10)
-		require.Equal(t, 0, len(a.data))   // not grown yet — happens on Reset
-		require.Equal(t, 0, a.usedOffset)  // not advanced
+		require.Equal(t, 0, len(a.data))  // not grown yet — happens on Reset
+		require.Equal(t, 0, a.usedOffset) // not advanced
 
 		// after Reset, the arena grows to accommodate future rounds
 		a.Reset()
