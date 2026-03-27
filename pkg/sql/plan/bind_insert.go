@@ -158,6 +158,17 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			colDef := tableDef.Cols[tableDef.Name2ColIndex[colName]]
 			astExpr := astUpdateExpr.Expr
 
+			if colDef.GeneratedCol != nil {
+				if _, ok := astExpr.(*tree.DefaultVal); ok {
+					// Keep generated columns out of the explicit update set.
+					// They are recomputed below from the final row image.
+					continue
+				}
+				return 0, moerr.NewInvalidInputf(builder.compCtx.GetContext(),
+					"the value specified for generated column '%s' in table '%s' is not allowed",
+					colName, tableDef.Name)
+			}
+
 			if _, ok := astExpr.(*tree.DefaultVal); ok {
 				if colDef.Typ.AutoIncr {
 					return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "auto_increment default value")
@@ -191,6 +202,34 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 
 				updateExprs[col.Name] = newDefExpr
 			}
+		}
+
+		// Recompute generated columns from the final updated row image, so
+		// ON DUPLICATE KEY UPDATE stays consistent with regular UPDATE behavior.
+		finalRowExprs := make([]*plan.Expr, len(tableDef.Cols))
+		for i, col := range tableDef.Cols {
+			if expr, ok := updateExprs[col.Name]; ok {
+				finalRowExprs[i] = expr
+				continue
+			}
+			finalRowExprs[i] = &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: scanTag,
+						ColPos: int32(i),
+						Name:   col.Name,
+					},
+				},
+			}
+		}
+		for i, col := range tableDef.Cols {
+			if col.GeneratedCol == nil {
+				continue
+			}
+			genExpr := substituteColRefsInExpr(col.GeneratedCol.Expr, finalRowExprs, 0)
+			finalRowExprs[i] = genExpr
+			updateExprs[col.Name] = genExpr
 		}
 	}
 

@@ -44,11 +44,6 @@ func RenameColumn(
 		)
 	}
 
-	// Cannot rename a column that is referenced by a generated column expression
-	if err := checkColumnWithGeneratedDependency(ctx.GetContext(), alterPlan.CopyTableDef, oldColName); err != nil {
-		return err
-	}
-
 	if err := addRenameContextToAlterCtx(
 		ctx.GetContext(),
 		alterCtx,

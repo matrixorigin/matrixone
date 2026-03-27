@@ -289,12 +289,37 @@ create table t27_fail (a int, b double generated always as (rand()) stored);
 create table t28_fail (a int, b varchar(36) generated always as (uuid()) stored);
 
 -- ============================================================
--- 33. FOREIGN KEY cannot reference a VIRTUAL generated column
+-- 33. ON DUPLICATE KEY UPDATE with generated columns
 -- ============================================================
-create table t29_parent (a int, b int generated always as (a + 1) virtual, unique key uk_b (b));
-create table t29_child (c int, constraint fk_t29 foreign key (c) references t29_parent (b));
+create table t29_dup (a int primary key, b int, c int generated always as (b + 1) stored);
+insert into t29_dup (a, b) values (1, 1);
+insert into t29_dup (a, b) values (1, 2) on duplicate key update b = values(b);
+select * from t29_dup;
+insert into t29_dup (a, b) values (1, 3) on duplicate key update c = 99;
+insert into t29_dup (a, b) values (1, 4) on duplicate key update c = default, b = values(b);
+select * from t29_dup;
 
 -- ============================================================
--- 34. Cleanup
+-- 34. Generated expression cannot refer to AUTO_INCREMENT or variables
+-- ============================================================
+create table t30_fail (id int auto_increment primary key, x int generated always as (id + 1) stored);
+create table t31_fail (a int, b varchar(200) generated always as (@@sql_mode) stored);
+
+-- ============================================================
+-- 35. FOREIGN KEY cannot reference a VIRTUAL generated column
+-- ============================================================
+create table t32_parent (a int, b int generated always as (a + 1) virtual, unique key uk_b (b));
+create table t32_child (c int, constraint fk_t32 foreign key (c) references t32_parent (b));
+
+-- ============================================================
+-- 36. LOAD DATA with generated columns
+-- ============================================================
+create table t33_load (a int, b int, c int generated always as (a + b) stored);
+load data inline format='csv', data='1,2' into table t33_load fields terminated by ',';
+select * from t33_load;
+load data inline format='csv', data='3,4,99' into table t33_load fields terminated by ',' (a, b, c);
+
+-- ============================================================
+-- 37. Cleanup
 -- ============================================================
 drop database test_generated_col;

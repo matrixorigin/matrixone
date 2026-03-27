@@ -426,6 +426,9 @@ func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []
 	if err := checkExprForVolatileFunc(proc.Ctx, planExpr); err != nil {
 		return nil, err
 	}
+	if err := checkGeneratedExprReferences(proc.Ctx, planExpr, colNameOrigin, existingCols, make(map[int32]bool)); err != nil {
+		return nil, err
+	}
 
 	genExpr, err := makePlan2CastExpr(proc.Ctx, planExpr, typ)
 	if err != nil {
@@ -439,6 +442,46 @@ func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []
 		OriginString: fmtCtx.String(),
 		IsStored:     genAttr.Stored,
 	}, nil
+}
+
+// checkGeneratedExprReferences rejects variable references and auto-increment
+// dependencies in generated-column expressions, including indirect references
+// through earlier generated columns.
+func checkGeneratedExprReferences(ctx context.Context, expr *plan.Expr, currentColName string, cols []*ColDef, visited map[int32]bool) error {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if int(e.Col.ColPos) >= len(cols) {
+			return nil
+		}
+		refCol := cols[e.Col.ColPos]
+		if refCol.Typ.AutoIncr {
+			return moerr.NewInvalidInputf(ctx, "generated column '%s' cannot refer to auto-increment column", currentColName)
+		}
+		if refCol.GeneratedCol != nil && refCol.GeneratedCol.Expr != nil && !visited[e.Col.ColPos] {
+			visited[e.Col.ColPos] = true
+			return checkGeneratedExprReferences(ctx, refCol.GeneratedCol.Expr, currentColName, cols, visited)
+		}
+	case *plan.Expr_V:
+		return moerr.NewInvalidInputf(ctx, "expression of generated column cannot refer to a variable")
+	case *plan.Expr_P:
+		return moerr.NewInvalidInputf(ctx, "expression of generated column cannot contain parameter marker")
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			if err := checkGeneratedExprReferences(ctx, arg, currentColName, cols, visited); err != nil {
+				return err
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if err := checkGeneratedExprReferences(ctx, item, currentColName, cols, visited); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // checkExprForVolatileFunc walks a plan expression tree and reports an error

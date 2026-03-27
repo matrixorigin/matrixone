@@ -1390,14 +1390,14 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 						NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
 						Enumvalues:  attr.Attr.EnumVlaues,
 					},
-					Primary:   attr.Attr.Primary,
-					Default:   attr.Attr.Default,
+					Primary:      attr.Attr.Primary,
+					Default:      attr.Attr.Default,
 					OnUpdate:     attr.Attr.OnUpdate,
 					Comment:      attr.Attr.Comment,
 					GeneratedCol: attr.Attr.GeneratedCol,
 					ClusterBy:    attr.Attr.ClusterBy,
-					Hidden:    attr.Attr.IsHidden,
-					Seqnum:    uint32(attr.Attr.Seqnum),
+					Hidden:       attr.Attr.IsHidden,
+					Seqnum:       uint32(attr.Attr.Seqnum),
 				})
 				if attr.Attr.ClusterBy {
 					clusterByDef = &plan.ClusterByDef{

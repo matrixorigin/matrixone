@@ -1046,9 +1046,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			}
 			isGen := false
 			for _, attr := range def.Attributes {
-				if _, ok := attr.(*tree.AttributeGeneratedAlways); ok {
+				switch attr.(type) {
+				case *tree.AttributeGeneratedAlways:
 					isGen = true
-					break
+				case *tree.AttributeAutoIncrement:
+					cType.AutoIncr = true
 				}
 			}
 			allColDefs = append(allColDefs, &ColDef{Name: def.Name.ColName(), Typ: cType})
