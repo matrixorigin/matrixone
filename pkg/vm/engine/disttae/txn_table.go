@@ -2759,6 +2759,7 @@ func (tbl *txnTable) MergeObjects(
 	if err != nil {
 		return nil, err
 	}
+	defer taskHost.Release()
 
 	err = mergesort.DoMergeAndWrite(ctx, tbl.getTxn().op.Txn().DebugString(), sortKeyPos, taskHost)
 	if err != nil {

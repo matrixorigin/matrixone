@@ -100,7 +100,11 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 			return nil
 		}
 	}
-	arena := objectio.NewArena(cnBatch.Size())
+	arena := objectio.GetArena()
+	defer func() {
+		arena.Reset()
+		objectio.PutArena(arena)
+	}()
 	writer, err := ioutil.NewBlockWriterWithArena(
 		task.fs,
 		name,

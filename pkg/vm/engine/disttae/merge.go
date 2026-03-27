@@ -132,7 +132,7 @@ func newCNMergeTask(
 	}
 	var arena *objectio.WriteArena
 	if arenaSize > 0 {
-		arena = objectio.NewArena(int(arenaSize))
+		arena = objectio.GetArena()
 	}
 
 	return &cnMergeTask{
@@ -246,6 +246,14 @@ func (t *cnMergeTask) GetMPool() *mpool.MPool {
 }
 
 func (t *cnMergeTask) HostHintName() string { return "CN" }
+
+func (t *cnMergeTask) Release() {
+	if t.arena != nil {
+		t.arena.Reset()
+		objectio.PutArena(t.arena)
+		t.arena = nil
+	}
+}
 
 func (t *cnMergeTask) GetTotalSize() uint64 {
 	totalSize := uint64(0)

@@ -163,7 +163,7 @@ func NewMergeObjectsTask(
 		arenaSize = uint32(totalInput)
 	}
 	if arenaSize > 0 {
-		task.arena = objectio.NewArena(int(arenaSize))
+		task.arena = objectio.GetArena()
 	}
 	return
 }
@@ -446,6 +446,11 @@ func (task *mergeObjectsTask) Name() string {
 func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 	phaseDesc := ""
 	defer func() {
+		if task.arena != nil {
+			task.arena.Reset()
+			objectio.PutArena(task.arena)
+			task.arena = nil
+		}
 		if err != nil {
 			logutil.Error("[MERGE-ERR]",
 				zap.String("task", task.Name()),

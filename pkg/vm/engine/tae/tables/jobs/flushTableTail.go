@@ -683,11 +683,11 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 	}
 
 	// write!
-	arenaSize := 0
-	for _, bat := range writtenBatches {
-		arenaSize += bat.Size()
-	}
-	arena := objectio.NewArena(arenaSize)
+	arena := objectio.GetArena()
+	defer func() {
+		arena.Reset()
+		objectio.PutArena(arena)
+	}()
 
 	objID := objectio.NewObjectid()
 	name := objectio.BuildObjectNameWithObjectID(&objID)
