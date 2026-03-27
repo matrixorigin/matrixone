@@ -76,11 +76,6 @@ func bucketFor(rowCnt int) int {
 	return bucket
 }
 
-// newTmNode allocates a tmNode wrapping a []TransferDestPos with given capacity.
-func newTmNode(capacity int) *tmNode {
-	return &tmNode{slice: make([]api.TransferDestPos, 0, capacity)}
-}
-
 // Push adds a []TransferDestPos to the free list stack.
 // If the bucket is full (>= tmMaxFree), the slice is dropped (let GC reclaim).
 // Lock-free for concurrent callers: it uses CAS on the head pointer.
@@ -88,8 +83,7 @@ func (f *tmFreeList) Push(slice []api.TransferDestPos) {
 	if cap(slice) == 0 {
 		return
 	}
-	node := newTmNode(cap(slice))
-	node.slice = slice
+	node := &tmNode{slice: slice}
 
 	// CAS loop: push onto stack head
 	for {
@@ -127,7 +121,9 @@ func (f *tmFreeList) Pop() ([]api.TransferDestPos, bool) {
 
 // GetTransferMap returns a pooled []TransferDestPos sized to rowCnt.
 // The returned slice has all entries initialized to NoTransfer sentinel.
-// If no pooled slice is available, a fresh one is allocated.
+// If no pooled slice is available, a fresh one is allocated with the
+// bucket-standard capacity (power of 2) so that all slices in the same
+// bucket share the same cap, preventing cap-mismatch leaks on Pop.
 // This function is thread-safe and lock-free for the fast path.
 func GetTransferMap(rowCnt int) []api.TransferDestPos {
 	if rowCnt == 0 {
@@ -140,13 +136,22 @@ func GetTransferMap(rowCnt int) []api.TransferDestPos {
 	if ok && cap(slice) >= rowCnt {
 		slice = slice[:rowCnt]
 		for i := range slice {
-			slice[i] = api.TransferDestPos{}
-			slice[i].ObjIdx = api.NoTransfer
+			slice[i] = api.TransferDestPos{ObjIdx: api.NoTransfer}
 		}
 		return slice
 	}
 	// Bucket empty or capacity too small; allocate fresh.
-	return make([]api.TransferDestPos, rowCnt)
+	// Round up capacity to the bucket boundary so future Put/Pop
+	// cycles never encounter a cap < rowCnt mismatch.
+	allocCap := 1024
+	for allocCap < rowCnt {
+		allocCap <<= 1
+	}
+	s := make([]api.TransferDestPos, rowCnt, allocCap)
+	for i := range s {
+		s[i].ObjIdx = api.NoTransfer
+	}
+	return s
 }
 
 // PutTransferMap returns a TransferMap to the appropriate free list for reuse.
@@ -160,7 +165,7 @@ func PutTransferMap(tm []api.TransferDestPos) {
 	if c == 0 || c > 64*1024 {
 		return
 	}
-	bucket := bucketFor(len(tm))
+	bucket := bucketFor(c)
 	f := &tmFreeLists[bucket]
 
 	f.mu.Lock()
