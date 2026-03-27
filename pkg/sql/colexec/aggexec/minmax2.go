@@ -291,6 +291,8 @@ func makeMinMaxExec(mp *mpool.MPool, aggID int64, isMin bool, param types.Type) 
 		return newDecimal64MinMaxExec(mp, aggID, isMin, param)
 	case types.T_decimal128:
 		return newDecimal128MinMaxExec(mp, aggID, isMin, param)
+	case types.T_decimal256:
+		return newDecimal256MinMaxExec(mp, aggID, isMin, param)
 	case types.T_uuid:
 		return newUuidMinMaxExec(mp, aggID, isMin, param)
 	case types.T_enum:
@@ -359,6 +361,18 @@ func newDecimal128MinMaxExec(mp *mpool.MPool, aggID int64, isMin bool, param typ
 		exec.comp = types.Decimal128AscCompare
 	} else {
 		exec.comp = types.Decimal128DescCompare
+	}
+	setupAggInfo(&exec.aggInfo, aggID, param)
+	return &exec
+}
+
+func newDecimal256MinMaxExec(mp *mpool.MPool, aggID int64, isMin bool, param types.Type) AggFuncExec {
+	var exec minMaxExecFixed[types.Decimal256]
+	exec.mp = mp
+	if isMin {
+		exec.comp = types.Decimal256AscCompare
+	} else {
+		exec.comp = types.Decimal256DescCompare
 	}
 	setupAggInfo(&exec.aggInfo, aggID, param)
 	return &exec

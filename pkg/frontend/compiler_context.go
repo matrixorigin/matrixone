@@ -354,6 +354,11 @@ func (tcc *TxnCompilerContext) getRelation(
 	if db, err = tcc.GetTxnHandler().GetStorage().Database(
 		tempCtx, dbName, txn,
 	); err != nil {
+		// ExpectedEOB means the database is not visible at this snapshot.
+		// Treat as "database not found" so callers handle it like a missing entity.
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return nil, nil, nil
+		}
 		ses.Error(
 			tempCtx,
 			"fe-get-database-failed",

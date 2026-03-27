@@ -208,6 +208,10 @@ func vectorValueToParquet(vec *vector.Vector, i int, timeZone *time.Location) (a
 		scale := vec.GetType().Scale
 		val := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, i).Format(scale)
 		return val, nil
+	case types.T_decimal256:
+		scale := vec.GetType().Scale
+		val := vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, i).Format(scale)
+		return val, nil
 	case types.T_uuid:
 		val := vector.GetFixedAtNoTypeCheck[types.Uuid](vec, i).String()
 		return val, nil

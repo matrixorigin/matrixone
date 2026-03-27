@@ -130,6 +130,9 @@ func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector
 	case types.T_decimal128:
 		scale := vec.GetType().Scale
 		row[i] = vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, rowIndex).Format(scale)
+	case types.T_decimal256:
+		scale := vec.GetType().Scale
+		row[i] = vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, rowIndex).Format(scale)
 	case types.T_uuid:
 		row[i] = vector.GetFixedAtNoTypeCheck[types.Uuid](vec, rowIndex).String()
 	case types.T_Rowid:
@@ -250,6 +253,9 @@ func extractRowFromVector2(ctx context.Context, ses FeSession, vec *vector.Vecto
 	case types.T_decimal128:
 		scale := vec.GetType().Scale
 		row[i] = colSlices.arrDecimal128[sliceIdx][rowIndex].Format(scale)
+	case types.T_decimal256:
+		scale := vec.GetType().Scale
+		row[i] = colSlices.arrDecimal256[sliceIdx][rowIndex].Format(scale)
 	case types.T_uuid:
 		row[i] = colSlices.arrUuid[sliceIdx][rowIndex].String()
 	case types.T_Rowid:
@@ -291,6 +297,7 @@ type ColumnSlices struct {
 	arrTimestamp    [][]types.Timestamp
 	arrDecimal64    [][]types.Decimal64
 	arrDecimal128   [][]types.Decimal128
+	arrDecimal256   [][]types.Decimal256
 	arrUuid         [][]types.Uuid
 	arrRowid        [][]types.Rowid
 	arrBlockid      [][]types.Blockid
@@ -324,6 +331,7 @@ func (slices *ColumnSlices) Close() {
 	slices.arrTimestamp = nil
 	slices.arrDecimal64 = nil
 	slices.arrDecimal128 = nil
+	slices.arrDecimal256 = nil
 	slices.arrUuid = nil
 	slices.arrRowid = nil
 	slices.arrBlockid = nil
@@ -460,6 +468,9 @@ func (slices *ColumnSlices) GetDecimal(r uint64, i uint64) (string, error) {
 	case types.T_decimal128:
 		scale := vec.GetType().Scale
 		return slices.arrDecimal128[sliceIdx][r].Format(scale), nil
+	case types.T_decimal256:
+		scale := vec.GetType().Scale
+		return slices.arrDecimal256[sliceIdx][r].Format(scale), nil
 	default:
 		return "", moerr.NewInternalError(slices.ctx, "invalid decimal slice")
 	}
@@ -768,6 +779,9 @@ func convertVectorToSlice(ctx context.Context, ses FeSession, vec *vector.Vector
 	case types.T_decimal128:
 		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrDecimal128)
 		colSlices.arrDecimal128 = append(colSlices.arrDecimal128, vector.ToSliceNoTypeCheck2[types.Decimal128](vec))
+	case types.T_decimal256:
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrDecimal256)
+		colSlices.arrDecimal256 = append(colSlices.arrDecimal256, vector.ToSliceNoTypeCheck2[types.Decimal256](vec))
 	case types.T_uuid:
 		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrUuid)
 		colSlices.arrUuid = append(colSlices.arrUuid, vector.ToSliceNoTypeCheck2[types.Uuid](vec))
