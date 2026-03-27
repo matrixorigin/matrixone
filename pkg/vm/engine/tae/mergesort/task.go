@@ -61,7 +61,7 @@ type tmFreeList struct {
 	count int            // rough count to bound memory usage
 }
 
-const tmMaxFree = 64 // max slices per bucket before we stop recycling
+const tmMaxFree = 256 // max slices per bucket before we stop recycling
 
 var tmFreeLists [8]tmFreeList // buckets: 1K, 2K, 4K, 8K, 16K, 32K, 64K, >64K
 
