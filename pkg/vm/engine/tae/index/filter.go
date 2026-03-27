@@ -70,14 +70,14 @@ type bloomFilter struct {
 // buf is an optional scratch buffer; pass &mySlice to reuse it across calls.
 // builder is an optional BinaryFuseBuilder; pass &myBuilder to reuse internal
 // buffers across filter builds.
-func NewBloomFilter(vec containers.Vector, buf *[]uint64, builder *xorfilter.BinaryFuseBuilder) (StaticFilter, error) {
-	return NewBloomFilter2([]containers.Vector{vec}, buf, builder)
+func NewBloomFilter(vec containers.Vector, buf *[]uint64, builder *xorfilter.BinaryFuseBuilder, alloc func(int) []byte) (StaticFilter, error) {
+	return NewBloomFilter2([]containers.Vector{vec}, buf, builder, alloc)
 }
 
-func buildFuseFilterReuse(b *xorfilter.BinaryFuseBuilder, hashes []uint64) (*bloomFilter, error) {
+func buildFuseFilterReuse(b *xorfilter.BinaryFuseBuilder, hashes []uint64, alloc func(int) []byte) (*bloomFilter, error) {
 	var err error
 	if b != nil {
-		return buildWithBuilder(b, hashes)
+		return buildWithBuilder(b, hashes, alloc)
 	}
 	var inners *xorfilter.BinaryFuse8
 	if inners, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
@@ -104,7 +104,7 @@ func buildFuseFilterReuse(b *xorfilter.BinaryFuseBuilder, hashes []uint64) (*blo
 	return sf, nil
 }
 
-func buildWithBuilder(b *xorfilter.BinaryFuseBuilder, hashes []uint64) (*bloomFilter, error) {
+func buildWithBuilder(b *xorfilter.BinaryFuseBuilder, hashes []uint64, alloc func(int) []byte) (*bloomFilter, error) {
 	filter, err := xorfilter.BuildBinaryFuse[uint8](b, hashes)
 	if err != nil {
 		logutil.Error("BuildFuseFilter",
@@ -125,7 +125,12 @@ func buildWithBuilder(b *xorfilter.BinaryFuseBuilder, hashes []uint64) (*bloomFi
 	}
 	// Copy Fingerprints — the builder owns the underlying slice and
 	// will overwrite it on the next build.
-	fp := make([]uint8, len(filter.Fingerprints))
+	var fp []uint8
+	if alloc != nil {
+		fp = alloc(len(filter.Fingerprints))
+	} else {
+		fp = make([]uint8, len(filter.Fingerprints))
+	}
 	copy(fp, filter.Fingerprints)
 	filter.Fingerprints = fp
 
@@ -137,7 +142,7 @@ func buildWithBuilder(b *xorfilter.BinaryFuseBuilder, hashes []uint64) (*bloomFi
 // NewBloomFilter2 builds a BinaryFuse8 bloom filter over multiple vectors.
 // buf is an optional scratch buffer; pass &mySlice to reuse it across calls.
 // builder is an optional BinaryFuseBuilder for reusing internal buffers.
-func NewBloomFilter2(vectors []containers.Vector, buf *[]uint64, builder *xorfilter.BinaryFuseBuilder) (StaticFilter, error) {
+func NewBloomFilter2(vectors []containers.Vector, buf *[]uint64, builder *xorfilter.BinaryFuseBuilder, alloc func(int) []byte) (StaticFilter, error) {
 	totalLen := 0
 	for _, v := range vectors {
 		totalLen += v.Length()
@@ -166,7 +171,7 @@ func NewBloomFilter2(vectors []containers.Vector, buf *[]uint64, builder *xorfil
 	if buf != nil {
 		*buf = hashes
 	}
-	return buildFuseFilterReuse(builder, hashes)
+	return buildFuseFilterReuse(builder, hashes, alloc)
 }
 
 func (filter *bloomFilter) MayContainsKey(key []byte) (bool, error) {

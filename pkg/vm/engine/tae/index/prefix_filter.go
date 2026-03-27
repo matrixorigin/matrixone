@@ -40,6 +40,7 @@ func NewPrefixBloomFilter(
 	prefixFn func([]byte) []byte,
 	buf *[]uint64,
 	builder *xorfilter.BinaryFuseBuilder,
+	alloc func(int) []byte,
 ) (StaticFilter, error) {
 	n := data.Length()
 	var hashes []uint64
@@ -65,7 +66,7 @@ func NewPrefixBloomFilter(
 	if buf != nil {
 		*buf = hashes
 	}
-	bf, err := buildFuseFilterReuse(builder, hashes)
+	bf, err := buildFuseFilterReuse(builder, hashes, alloc)
 	if err != nil {
 		return nil, err
 	}

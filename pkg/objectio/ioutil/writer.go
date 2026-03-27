@@ -294,21 +294,22 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		}
 		w.objMetaBuilder.AddPKData(columnData)
 		var bf index.StaticFilter
+		arenaAlloc := w.writer.AllocFromArena
 		if w.pkType == index.BF {
-			bf, err = index.NewBloomFilter(columnData, &w.hashBuf, &w.fuseBuilder)
+			bf, err = index.NewBloomFilter(columnData, &w.hashBuf, &w.fuseBuilder, arenaAlloc)
 		} else if w.pkType == index.PBF {
 			if len(w.prefix) < 1 {
 				return nil, index.ErrPrefix
 			}
 			prefix := w.prefix[0]
-			bf, err = index.NewPrefixBloomFilter(columnData, prefix.Id, prefix.Fn, &w.hashBuf, &w.fuseBuilder)
+			bf, err = index.NewPrefixBloomFilter(columnData, prefix.Id, prefix.Fn, &w.hashBuf, &w.fuseBuilder, arenaAlloc)
 		} else if w.pkType == index.HBF {
 			if len(w.prefix) < 2 {
 				return nil, index.ErrPrefix
 			}
 			prefixL1 := w.prefix[0]
 			prefixL2 := w.prefix[1]
-			bf, err = index.NewHybridBloomFilter(columnData, prefixL1.Id, prefixL1.Fn, prefixL2.Id, prefixL2.Fn, &w.hashBuf, &w.fuseBuilder)
+			bf, err = index.NewHybridBloomFilter(columnData, prefixL1.Id, prefixL1.Fn, prefixL2.Id, prefixL2.Fn, &w.hashBuf, &w.fuseBuilder, arenaAlloc)
 		}
 		if err != nil {
 			return nil, err

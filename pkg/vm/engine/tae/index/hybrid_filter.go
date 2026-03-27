@@ -48,6 +48,7 @@ func NewHybridBloomFilter(
 	level2Prefix func([]byte) []byte,
 	buf *[]uint64,
 	builder *xorfilter.BinaryFuseBuilder,
+	alloc func(int) []byte,
 ) (StaticFilter, error) {
 	n := data.Length()
 	var hashes, level1Hashes, level2Hashes []uint64
@@ -81,15 +82,15 @@ func NewHybridBloomFilter(
 	if buf != nil {
 		*buf = (*buf)[:3*n]
 	}
-	bf, err := buildFuseFilterReuse(builder, hashes)
+	bf, err := buildFuseFilterReuse(builder, hashes, alloc)
 	if err != nil {
 		return nil, err
 	}
-	lvl1, err := buildFuseFilterReuse(builder, level1Hashes)
+	lvl1, err := buildFuseFilterReuse(builder, level1Hashes, alloc)
 	if err != nil {
 		return nil, err
 	}
-	lvl2, err := buildFuseFilterReuse(builder, level2Hashes)
+	lvl2, err := buildFuseFilterReuse(builder, level2Hashes, alloc)
 	if err != nil {
 		return nil, err
 	}
