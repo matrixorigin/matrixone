@@ -32,6 +32,14 @@ const (
 
 const arenaSmallMax = 16 * 1024 * 1024 // small arena cap
 
+// Pre-warm sizes for freshly created arenas.  Starting at a reasonable
+// initial capacity avoids multiple geometric growth steps (0→1→2→…→N)
+// that each trigger a Reset allocation.
+const (
+	arenaSmallInit = 4 * 1024 * 1024  // 4 MB
+	arenaLargeInit = 32 * 1024 * 1024 // 32 MB
+)
+
 // arenaNode is a linked-list node for the GC-immune WriteArena free list.
 type arenaNode struct {
 	arena *WriteArena
@@ -65,18 +73,22 @@ func init() {
 }
 
 // GetArena pops a WriteArena from the requested tier's free list, or
-// creates a fresh zero-sized arena when the list is empty.
+// creates a pre-warmed arena when the list is empty.
 func GetArena(tier int) *WriteArena {
 	pool := &arenaPools[tier]
 	for {
 		head := atomic.LoadPointer(&pool.head)
 		if head == nil {
-			a := NewArena(0)
+			var initSize, limit int
 			if tier == ArenaSmall {
-				a.sizeLimit = arenaSmallMax
+				initSize = arenaSmallInit
+				limit = arenaSmallMax
 			} else {
-				a.sizeLimit = arenaMaxSize
+				initSize = arenaLargeInit
+				limit = arenaMaxSize
 			}
+			a := NewArena(initSize)
+			a.sizeLimit = limit
 			return a
 		}
 		node := (*arenaNode)(head)
