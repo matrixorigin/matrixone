@@ -101,7 +101,7 @@ type FSinkerImpl struct {
 func (s *FSinkerImpl) Sink(ctx context.Context, b *batch.Batch) error {
 	if s.writer == nil {
 		if s.arena == nil {
-			s.arena = objectio.GetArena(objectio.ArenaSmall)
+			s.arena = objectio.GetArena(objectio.ArenaLarge)
 		}
 		s.arena.Reset()
 		if s.isTombstone {

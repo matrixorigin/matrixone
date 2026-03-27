@@ -26,8 +26,8 @@ import (
 // tiers separate prevents small callers from inflating arena sizes and
 // saves ~50% of permanent RSS on large-core machines.
 const (
-	ArenaSmall = 0 // flush tasks, sinkers, general I/O
-	ArenaLarge = 1 // merge / compaction tasks
+	ArenaSmall = 0 // flush tasks (single-block writers)
+	ArenaLarge = 1 // merge, compaction, and sinker tasks
 )
 
 const arenaSmallMax = 16 * 1024 * 1024 // small arena cap
