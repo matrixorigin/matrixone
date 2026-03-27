@@ -455,6 +455,136 @@ public:
         device_deleted_bitsets_.clear();
     }
 
+    // -------------------------------------------------------------------------
+    // Manifest helpers — shared by save_dir / load_dir in all derived classes
+    // -------------------------------------------------------------------------
+
+    struct manifest_data_t {
+        std::string raw;          // full manifest.json content
+        std::string comp_json;    // "components" sub-object
+        bool has_ids       = false;
+        bool has_quantizer = false;
+        bool has_bitset    = false;
+    };
+
+    // Saves ids, quantizer, and bitset (when present) to dir.
+    // Returns comp_entry strings for each saved file.
+    std::vector<std::string> save_common_components(const std::string& dir) const {
+        bool has_ids       = !this->host_ids.empty();
+        bool has_quantizer = this->quantizer_.is_trained();
+        bool has_bitset    = !this->deleted_bitset_.empty();
+
+        if (has_ids)       this->save_ids(dir + "/ids.bin");
+        if (has_quantizer) this->quantizer_.save_to_file(dir + "/quantizer.bin");
+        if (has_bitset)    this->save_bitset(dir);
+
+        std::vector<std::string> entries;
+        if (has_ids)       entries.push_back("    \"ids\": \"ids.bin\"");
+        if (has_quantizer) entries.push_back("    \"quantizer\": \"quantizer.bin\"");
+        if (has_bitset)    entries.push_back("    \"bitset\": \"bitset.bin\"");
+        return entries;
+    }
+
+    // Returns the JSON component entry for sharded index files.
+    std::string shards_comp_entry() const {
+        std::string s = "    \"shards\": [";
+        for (int i = 0; i < static_cast<int>(this->devices_.size()); ++i) {
+            s += "\"shard_" + std::to_string(i) + ".bin\"";
+            if (i + 1 < static_cast<int>(this->devices_.size())) s += ", ";
+        }
+        s += "]";
+        return s;
+    }
+
+    // Writes manifest.json to dir.
+    // build_params_json: inner key:value lines for the "build_params" object.
+    // comp_entries: per-component JSON lines for the "components" object.
+    void write_manifest(const std::string& dir, const std::string& index_type,
+                        const std::string& build_params_json,
+                        const std::vector<std::string>& comp_entries) const {
+        bool has_ids       = !this->host_ids.empty();
+        bool has_quantizer = this->quantizer_.is_trained();
+        bool has_bitset    = !this->deleted_bitset_.empty();
+
+        std::ofstream mf(dir + "/manifest.json");
+        if (!mf) throw std::runtime_error("Failed to create manifest.json in: " + dir);
+
+        mf << "{\n";
+        mf << "  \"schema_version\": 1,\n";
+        mf << "  \"index_type\": \""    << index_type                    << "\",\n";
+        mf << "  \"element_type\": \""  << this->element_type_name()     << "\",\n";
+        mf << "  \"dimension\": "       << this->dimension               << ",\n";
+        mf << "  \"metric\": "          << static_cast<int>(this->metric) << ",\n";
+        mf << "  \"dist_mode\": "       << static_cast<int>(this->dist_mode) << ",\n";
+        mf << "  \"capacity\": "        << this->count                   << ",\n";
+        mf << "  \"length\": "          << this->current_offset_         << ",\n";
+        mf << "  \"has_ids\": "         << (has_ids       ? "true" : "false") << ",\n";
+        mf << "  \"has_quantizer\": "   << (has_quantizer ? "true" : "false") << ",\n";
+        mf << "  \"has_bitset\": "      << (has_bitset    ? "true" : "false") << ",\n";
+        mf << "  \"deleted_count\": "   << this->deleted_count_          << ",\n";
+        mf << "  \"bitset_version\": "  << this->bitset_version_.load()  << ",\n";
+        mf << "  \"devices\": [";
+        for (size_t i = 0; i < this->devices_.size(); ++i) {
+            mf << this->devices_[i];
+            if (i + 1 < this->devices_.size()) mf << ", ";
+        }
+        mf << "],\n";
+        mf << "  \"build_params\": {\n" << build_params_json << "\n  },\n";
+        mf << "  \"components\": {\n";
+        for (size_t i = 0; i < comp_entries.size(); ++i) {
+            mf << comp_entries[i];
+            if (i + 1 < comp_entries.size()) mf << ",";
+            mf << "\n";
+        }
+        mf << "  }\n}\n";
+    }
+
+    // Reads manifest.json from dir, validates schema and index_type,
+    // restores common index fields, and returns parsed manifest data.
+    manifest_data_t read_manifest(const std::string& dir, const std::string& expected_type) {
+        std::ifstream mf(dir + "/manifest.json");
+        if (!mf) throw std::runtime_error("Failed to open manifest.json in: " + dir);
+        std::string raw((std::istreambuf_iterator<char>(mf)),
+                         std::istreambuf_iterator<char>());
+
+        int64_t schema_ver = json_int(raw, "schema_version");
+        if (schema_ver != 1)
+            throw std::runtime_error("Unsupported manifest schema_version: " +
+                                     std::to_string(schema_ver));
+        std::string idx_type = json_value(raw, "index_type");
+        if (idx_type != expected_type)
+            throw std::runtime_error("manifest index_type is '" + idx_type +
+                                     "', expected '" + expected_type + "'");
+
+        this->dimension       = static_cast<uint32_t>(json_int(raw, "dimension"));
+        this->count           = static_cast<uint32_t>(json_int(raw, "capacity"));
+        this->current_offset_ = static_cast<uint64_t>(json_int(raw, "length"));
+        this->metric          = static_cast<distance_type_t>(json_int(raw, "metric"));
+        this->dist_mode       = static_cast<distribution_mode_t>(json_int(raw, "dist_mode"));
+        this->deleted_count_  = static_cast<uint64_t>(json_int(raw, "deleted_count"));
+
+        manifest_data_t m;
+        m.raw           = raw;
+        m.comp_json     = json_object(raw, "components");
+        m.has_ids       = json_bool(raw, "has_ids");
+        m.has_quantizer = json_bool(raw, "has_quantizer");
+        m.has_bitset    = json_bool(raw, "has_bitset");
+        return m;
+    }
+
+    // Loads ids, quantizer, and bitset from dir using the parsed manifest data.
+    void load_common_components(const std::string& dir, const manifest_data_t& m) {
+        if (m.has_ids) {
+            this->load_ids(dir + "/" + json_value(m.comp_json, "ids"));
+        }
+        if (m.has_quantizer) {
+            this->quantizer_.load_from_file(dir + "/" + json_value(m.comp_json, "quantizer"));
+        }
+        if (m.has_bitset) {
+            this->load_bitset_from_file(dir + "/" + json_value(m.comp_json, "bitset"));
+        }
+    }
+
     virtual std::string info() const {
         std::string json = "{";
         json += "\"element_size\": " + std::to_string(sizeof(T)) + ", ";
