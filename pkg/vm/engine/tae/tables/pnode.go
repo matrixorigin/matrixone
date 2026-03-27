@@ -168,6 +168,21 @@ func (node *persistedNode) Scan(
 				vecs[i] = tidvec
 			}
 
+			// System table COMPAT: columns added in newer versions produce
+			// const null vectors when reading old data blocks. The batch
+			// vector from the first block may be const; convert it to a
+			// regular vector so Extend (which panics on const dest) works.
+			if destVec := (*bat).GetVectorByName(attr); destVec.IsConst() {
+				destIdx := (*bat).Nameidx[attr]
+				constInner := destVec.GetDownstreamVector()
+				length := constInner.Length()
+				newInner := vector.NewVec(*constInner.GetType())
+				if err = newInner.UnionBatch(constInner, 0, length, nil, mp); err != nil {
+					return
+				}
+				destVec.Close()
+				(*bat).Vecs[destIdx] = containers.ToTNVector(newInner, mp)
+			}
 			(*bat).GetVectorByName(attr).Extend(vecs[i])
 
 			// RelLogicalID COMPAT
