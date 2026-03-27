@@ -124,6 +124,132 @@ func TestGpuCagraSaveLoad(t *testing.T) {
 	}
 }
 
+func TestGpuCagraPackUnpack(t *testing.T) {
+	dimension := uint32(2)
+	n_vectors := uint64(1000)
+	dataset := make([]float32, n_vectors*uint64(dimension))
+	for i := uint64(0); i < n_vectors; i++ {
+		dataset[i*uint64(dimension)] = float32(i)
+		dataset[i*uint64(dimension)+1] = float32(i)
+	}
+
+	devices := []int{0}
+	bp := DefaultCagraBuildParams()
+	bp.IntermediateGraphDegree = 256
+	bp.GraphDegree = 128
+	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	if err != nil {
+		t.Fatalf("Failed to create GpuCagra: %v", err)
+	}
+	if err := index.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	if err := index.Build(); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	for _, filename := range []string{"test_cagra_pack.tar", "test_cagra_pack.tar.gz"} {
+		t.Run(filename, func(t *testing.T) {
+			if err := index.Pack(filename); err != nil {
+				t.Fatalf("Pack failed: %v", err)
+			}
+			defer os.Remove(filename)
+
+			index2, err := NewGpuCagraEmpty[float32](0, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+			if err != nil {
+				t.Fatalf("NewGpuCagraEmpty failed: %v", err)
+			}
+			defer index2.Destroy()
+			if err := index2.Start(); err != nil {
+				t.Fatalf("index2 Start failed: %v", err)
+			}
+			if err := index2.Unpack(filename); err != nil {
+				t.Fatalf("Unpack failed: %v", err)
+			}
+
+			queries := []float32{1.0, 1.0, 100.0, 100.0}
+			sp := DefaultCagraSearchParams()
+			sp.ItopkSize = 128
+			sp.SearchWidth = 3
+			result, err := index2.Search(queries, 2, dimension, 1, sp)
+			if err != nil {
+				t.Fatalf("Search failed: %v", err)
+			}
+			if result.Neighbors[0] != 1 {
+				t.Errorf("Expected neighbor 1, got %d", result.Neighbors[0])
+			}
+			if result.Neighbors[1] != 100 {
+				t.Errorf("Expected neighbor 100, got %d", result.Neighbors[1])
+			}
+		})
+	}
+	index.Destroy()
+}
+
+func TestGpuCagraFromDataDirectory(t *testing.T) {
+	dimension := uint32(2)
+	n_vectors := uint64(1000)
+	dataset := make([]float32, n_vectors*uint64(dimension))
+	for i := uint64(0); i < n_vectors; i++ {
+		dataset[i*uint64(dimension)] = float32(i)
+		dataset[i*uint64(dimension)+1] = float32(i)
+	}
+
+	devices := []int{0}
+	bp := DefaultCagraBuildParams()
+	bp.IntermediateGraphDegree = 256
+	bp.GraphDegree = 128
+	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	if err != nil {
+		t.Fatalf("Failed to create GpuCagra: %v", err)
+	}
+	if err := index.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	if err := index.Build(); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	// Pack to tar, then extract to a directory, then load via NewGpuCagraFromDataDirectory
+	tarFile := "test_cagra_dir.tar"
+	if err := index.Pack(tarFile); err != nil {
+		t.Fatalf("Pack failed: %v", err)
+	}
+	defer os.Remove(tarFile)
+	index.Destroy()
+
+	tmpDir, err := os.MkdirTemp("", "cagra-dir-test-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp failed: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	if _, err := Unpack(tarFile, tmpDir); err != nil {
+		t.Fatalf("Unpack to dir failed: %v", err)
+	}
+
+	index2, err := NewGpuCagraFromDataDirectory[float32](tmpDir, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	if err != nil {
+		t.Fatalf("NewGpuCagraFromDataDirectory failed: %v", err)
+	}
+	defer index2.Destroy()
+
+	queries := []float32{1.0, 1.0, 100.0, 100.0}
+	sp := DefaultCagraSearchParams()
+	sp.ItopkSize = 128
+	sp.SearchWidth = 3
+	result, err := index2.Search(queries, 2, dimension, 1, sp)
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if result.Neighbors[0] != 1 {
+		t.Errorf("Expected neighbor 1, got %d", result.Neighbors[0])
+	}
+	if result.Neighbors[1] != 100 {
+		t.Errorf("Expected neighbor 100, got %d", result.Neighbors[1])
+	}
+}
+
 func TestGpuShardedCagra(t *testing.T) {
 	devices, err := GetGpuDeviceList()
 	if err != nil || len(devices) < 1 {

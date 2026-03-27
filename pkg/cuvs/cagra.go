@@ -161,6 +161,76 @@ func NewGpuCagraFromFile[T VectorType](filename string, dimension uint32, metric
 	}, nil
 }
 
+// NewGpuCagraFromDataDirectory loads a GpuCagra index from a directory written by save_dir.
+func NewGpuCagraFromDataDirectory[T VectorType](dir string, dimension uint32, metric DistanceType,
+	bp CagraBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuCagra[T], error) {
+	if len(devices) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("at least one device must be specified")
+	}
+
+	qtype := GetQuantization[T]()
+	cDevices := make([]C.int, len(devices))
+	for i, d := range devices {
+		cDevices[i] = C.int(d)
+	}
+
+	cBP := C.cagra_build_params_t{
+		intermediate_graph_degree: C.size_t(bp.IntermediateGraphDegree),
+		graph_degree:              C.size_t(bp.GraphDegree),
+		attach_dataset_on_build:   C.bool(bp.AttachDatasetOnBuild),
+	}
+
+	var errmsg *C.char
+	cCagra := C.gpu_cagra_new_empty(
+		0,
+		C.uint32_t(dimension),
+		C.distance_type_t(metric),
+		cBP,
+		&cDevices[0],
+		C.int(len(devices)),
+		C.uint32_t(nthread),
+		C.distribution_mode_t(mode),
+		C.quantization_t(qtype),
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(cDevices)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return nil, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	if cCagra == nil {
+		return nil, moerr.NewInternalErrorNoCtx("failed to create empty GpuCagra for loading")
+	}
+
+	C.gpu_cagra_start(cCagra, unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		C.gpu_cagra_destroy(cCagra, nil)
+		return nil, moerr.NewInternalErrorNoCtx(errStr)
+	}
+
+	cDir := C.CString(dir)
+	defer C.free(unsafe.Pointer(cDir))
+
+	C.gpu_cagra_load_dir(cCagra, cDir, unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		C.gpu_cagra_destroy(cCagra, nil)
+		return nil, moerr.NewInternalErrorNoCtx(errStr)
+	}
+
+	return &GpuCagra[T]{
+		cCagra:    cCagra,
+		dimension: dimension,
+		nthread:   nthread,
+		distMode:  mode,
+	}, nil
+}
+
 // Destroy frees the C++ gpu_cagra_t instance
 func (gi *GpuCagra[T]) Destroy() error {
 	if gi.cCagra == nil {
@@ -409,6 +479,67 @@ func (gc *GpuCagra[T]) Save(filename string) error {
 	defer C.free(unsafe.Pointer(cFilename))
 
 	C.gpu_cagra_save(gc.cCagra, cFilename, unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
+// Pack saves the index to a .tar or .tar.gz file using save_dir.
+func (gc *GpuCagra[T]) Pack(filename string) error {
+	if gc.cCagra == nil {
+		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
+	}
+
+	tmpDir, err := os.MkdirTemp("", "cagra-pack-*")
+	if err != nil {
+		return moerr.NewInternalErrorNoCtx("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	var errmsg *C.char
+	cDir := C.CString(tmpDir)
+	defer C.free(unsafe.Pointer(cDir))
+
+	C.gpu_cagra_save_dir(gc.cCagra, cDir, unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+
+	manifestBytes, err := os.ReadFile(filepath.Join(tmpDir, "manifest.json"))
+	if err != nil {
+		return moerr.NewInternalErrorNoCtx("failed to read manifest: %v", err)
+	}
+
+	return Pack(tmpDir, string(manifestBytes), filename)
+}
+
+// Unpack extracts a .tar or .tar.gz file and loads index components via load_dir.
+// The index must already be initialized and started before calling Unpack.
+func (gc *GpuCagra[T]) Unpack(filename string) error {
+	if gc.cCagra == nil {
+		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
+	}
+
+	tmpDir, err := os.MkdirTemp("", "cagra-unpack-*")
+	if err != nil {
+		return moerr.NewInternalErrorNoCtx("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	if _, err := Unpack(filename, tmpDir); err != nil {
+		return err
+	}
+
+	var errmsg *C.char
+	cDir := C.CString(tmpDir)
+	defer C.free(unsafe.Pointer(cDir))
+
+	C.gpu_cagra_load_dir(gc.cCagra, cDir, unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))

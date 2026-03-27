@@ -401,6 +401,78 @@ func NewGpuIvfPqFromFile[T VectorType](filename string, dimension uint32, metric
 	}, nil
 }
 
+// NewGpuIvfPqFromDataDirectory loads a GpuIvfPq index from a directory written by save_dir.
+func NewGpuIvfPqFromDataDirectory[T VectorType](dir string, dimension uint32, metric DistanceType,
+	bp IvfPqBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfPq[T], error) {
+	if len(devices) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("at least one device must be specified")
+	}
+
+	qtype := GetQuantization[T]()
+	cDevices := make([]C.int, len(devices))
+	for i, d := range devices {
+		cDevices[i] = C.int(d)
+	}
+
+	cBP := C.ivf_pq_build_params_t{
+		n_lists:                  C.uint32_t(bp.NLists),
+		m:                        C.uint32_t(bp.M),
+		bits_per_code:            C.uint32_t(bp.BitsPerCode),
+		add_data_on_build:        C.bool(bp.AddDataOnBuild),
+		kmeans_trainset_fraction: C.double(bp.KmeansTrainsetFraction),
+	}
+
+	var errmsg *C.char
+	cIvfPq := C.gpu_ivf_pq_new_empty(
+		0,
+		C.uint32_t(dimension),
+		C.distance_type_t(metric),
+		cBP,
+		&cDevices[0],
+		C.int(len(devices)),
+		C.uint32_t(nthread),
+		C.distribution_mode_t(mode),
+		C.quantization_t(qtype),
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(cDevices)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return nil, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	if cIvfPq == nil {
+		return nil, moerr.NewInternalErrorNoCtx("failed to create empty GpuIvfPq for loading")
+	}
+
+	C.gpu_ivf_pq_start(cIvfPq, unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		C.gpu_ivf_pq_destroy(cIvfPq, nil)
+		return nil, moerr.NewInternalErrorNoCtx(errStr)
+	}
+
+	cDir := C.CString(dir)
+	defer C.free(unsafe.Pointer(cDir))
+
+	C.gpu_ivf_pq_load_dir(cIvfPq, cDir, unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		C.gpu_ivf_pq_destroy(cIvfPq, nil)
+		return nil, moerr.NewInternalErrorNoCtx(errStr)
+	}
+
+	return &GpuIvfPq[T]{
+		cIvfPq:    cIvfPq,
+		dimension: dimension,
+		nthread:   nthread,
+		distMode:  mode,
+	}, nil
+}
+
 // Destroy frees the C++ gpu_ivf_pq_t instance
 func (gi *GpuIvfPq[T]) Destroy() error {
 	if gi.cIvfPq == nil {
@@ -474,6 +546,67 @@ func (gi *GpuIvfPq[T]) Save(filename string) error {
 	defer C.free(unsafe.Pointer(cFilename))
 
 	C.gpu_ivf_pq_save(gi.cIvfPq, cFilename, unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
+// Pack saves the index to a .tar or .tar.gz file using save_dir.
+func (gi *GpuIvfPq[T]) Pack(filename string) error {
+	if gi.cIvfPq == nil {
+		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
+	}
+
+	tmpDir, err := os.MkdirTemp("", "ivf-pq-pack-*")
+	if err != nil {
+		return moerr.NewInternalErrorNoCtx("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	var errmsg *C.char
+	cDir := C.CString(tmpDir)
+	defer C.free(unsafe.Pointer(cDir))
+
+	C.gpu_ivf_pq_save_dir(gi.cIvfPq, cDir, unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+
+	manifestBytes, err := os.ReadFile(filepath.Join(tmpDir, "manifest.json"))
+	if err != nil {
+		return moerr.NewInternalErrorNoCtx("failed to read manifest: %v", err)
+	}
+
+	return Pack(tmpDir, string(manifestBytes), filename)
+}
+
+// Unpack extracts a .tar or .tar.gz file and loads index components via load_dir.
+// The index must already be initialized and started before calling Unpack.
+func (gi *GpuIvfPq[T]) Unpack(filename string) error {
+	if gi.cIvfPq == nil {
+		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
+	}
+
+	tmpDir, err := os.MkdirTemp("", "ivf-pq-unpack-*")
+	if err != nil {
+		return moerr.NewInternalErrorNoCtx("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	if _, err := Unpack(filename, tmpDir); err != nil {
+		return err
+	}
+
+	var errmsg *C.char
+	cDir := C.CString(tmpDir)
+	defer C.free(unsafe.Pointer(cDir))
+
+	C.gpu_ivf_pq_load_dir(gi.cIvfPq, cDir, unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))

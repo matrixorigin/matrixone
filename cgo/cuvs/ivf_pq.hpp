@@ -208,6 +208,7 @@ public:
     }
 
     void build() override {
+        if (this->is_loaded_) return;
         if (!this->index_filename_.empty()) {
             load(this->index_filename_);
             return;
@@ -727,16 +728,17 @@ public:
             auto res = handle.get_raft_resources();
             auto local_idx = std::make_unique<ivf_pq_index>(*res);
             cuvs::neighbors::ivf_pq::deserialize(*res, filename, local_idx.get());
-            
+
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 this->count = static_cast<uint32_t>(local_idx->size());
                 this->dimension = static_cast<uint32_t>(local_idx->dim());
-                
+
                 if (this->dist_mode == DistributionMode_SINGLE_GPU) {
                     index_ = std::move(local_idx);
                 } else {
-                    this->replicated_indices_[handle.get_device_id()] = std::shared_ptr<ivf_pq_index>(std::move(local_idx));
+                    this->replicated_indices_[handle.get_device_id()] =
+                        std::shared_ptr<ivf_pq_index>(std::move(local_idx));
                 }
             }
             return std::any();
@@ -756,6 +758,229 @@ public:
 
         this->is_loaded_ = true;
         this->train_quantizer_if_needed();
+    }
+
+    // Save all index components to a directory with manifest.json.
+    void save_dir(const std::string& dir) const {
+        if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty()))
+            throw std::runtime_error("IVF-PQ index not built; cannot save_dir");
+
+        this->ensure_dir(dir);
+
+        bool has_ids       = !this->host_ids.empty();
+        bool has_quantizer = this->quantizer_.is_trained();
+        bool has_bitset    = !this->deleted_bitset_.empty();
+
+        if (has_ids)       this->save_ids(dir + "/ids.bin");
+        if (has_quantizer) this->quantizer_.save_to_file(dir + "/quantizer.bin");
+        if (has_bitset)    this->save_bitset(dir);
+
+        std::vector<std::string> comp_entries;
+        if (has_ids)       comp_entries.push_back("    \"ids\": \"ids.bin\"");
+        if (has_quantizer) comp_entries.push_back("    \"quantizer\": \"quantizer.bin\"");
+        if (has_bitset)    comp_entries.push_back("    \"bitset\": \"bitset.bin\"");
+
+        if (this->dist_mode == DistributionMode_SINGLE_GPU) {
+            uint64_t job_id = this->worker->submit_main(
+                [&](raft_handle_wrapper_t& handle) -> std::any {
+                    cuvs::neighbors::ivf_pq::serialize(
+                        *(handle.get_raft_resources()), dir + "/index.bin", *index_);
+                    return std::any();
+                }
+            );
+            auto wait_res = this->worker->wait(job_id).get();
+            if (wait_res.error) std::rethrow_exception(wait_res.error);
+            comp_entries.push_back("    \"index\": \"index.bin\"");
+
+        } else if (this->dist_mode == DistributionMode_REPLICATED) {
+            uint64_t job_id = this->worker->submit_main(
+                [&](raft_handle_wrapper_t& handle) -> std::any {
+                    int dev_id = handle.get_device_id();
+                    auto it = this->replicated_indices_.find(dev_id);
+                    if (it == this->replicated_indices_.end())
+                        it = this->replicated_indices_.begin();
+                    if (it == this->replicated_indices_.end())
+                        throw std::runtime_error("No replicated IVF-PQ index found to serialize");
+                    cuvs::neighbors::ivf_pq::serialize(
+                        *(handle.get_raft_resources()), dir + "/index.bin",
+                        *std::static_pointer_cast<ivf_pq_index>(it->second));
+                    return std::any();
+                }
+            );
+            auto wait_res = this->worker->wait(job_id).get();
+            if (wait_res.error) std::rethrow_exception(wait_res.error);
+            comp_entries.push_back("    \"index\": \"index.bin\"");
+
+        } else { // SHARDED
+            this->worker->submit_all_devices(
+                [&](raft_handle_wrapper_t& handle) -> std::any {
+                    int rank = handle.get_rank();
+                    std::string shard_file = dir + "/shard_" + std::to_string(rank) + ".bin";
+                    auto it = this->replicated_indices_.find(handle.get_device_id());
+                    if (it != this->replicated_indices_.end()) {
+                        cuvs::neighbors::ivf_pq::serialize(
+                            *(handle.get_raft_resources()), shard_file,
+                            *std::static_pointer_cast<ivf_pq_index>(it->second));
+                    }
+                    return std::any();
+                }
+            );
+            std::string shards_json = "    \"shards\": [";
+            for (int i = 0; i < static_cast<int>(this->devices_.size()); ++i) {
+                shards_json += "\"shard_" + std::to_string(i) + ".bin\"";
+                if (i + 1 < static_cast<int>(this->devices_.size())) shards_json += ", ";
+            }
+            shards_json += "]";
+            comp_entries.push_back(shards_json);
+        }
+
+        std::ofstream mf(dir + "/manifest.json");
+        if (!mf) throw std::runtime_error("Failed to create manifest.json in: " + dir);
+
+        mf << "{\n";
+        mf << "  \"schema_version\": 1,\n";
+        mf << "  \"index_type\": \"ivf_pq\",\n";
+        mf << "  \"element_type\": \"" << this->element_type_name() << "\",\n";
+        mf << "  \"dimension\": "      << this->dimension            << ",\n";
+        mf << "  \"metric\": "         << static_cast<int>(this->metric) << ",\n";
+        mf << "  \"dist_mode\": "      << static_cast<int>(this->dist_mode) << ",\n";
+        mf << "  \"capacity\": "       << this->count                << ",\n";
+        mf << "  \"length\": "         << this->current_offset_      << ",\n";
+        mf << "  \"has_ids\": "        << (has_ids       ? "true" : "false") << ",\n";
+        mf << "  \"has_quantizer\": "  << (has_quantizer ? "true" : "false") << ",\n";
+        mf << "  \"has_bitset\": "     << (has_bitset    ? "true" : "false") << ",\n";
+        mf << "  \"deleted_count\": "  << this->deleted_count_        << ",\n";
+        mf << "  \"bitset_version\": " << this->bitset_version_.load() << ",\n";
+        mf << "  \"devices\": [";
+        for (size_t i = 0; i < this->devices_.size(); ++i) {
+            mf << this->devices_[i];
+            if (i + 1 < this->devices_.size()) mf << ", ";
+        }
+        mf << "],\n";
+        mf << "  \"build_params\": {\n";
+        mf << "    \"n_lists\": "       << this->build_params.n_lists       << ",\n";
+        mf << "    \"m\": "             << this->build_params.m             << ",\n";
+        mf << "    \"bits_per_code\": " << this->build_params.bits_per_code << ",\n";
+        mf << "    \"kmeans_trainset_fraction\": " << this->build_params.kmeans_trainset_fraction << "\n";
+        mf << "  },\n";
+        mf << "  \"components\": {\n";
+        for (size_t i = 0; i < comp_entries.size(); ++i) {
+            mf << comp_entries[i];
+            if (i + 1 < comp_entries.size()) mf << ",";
+            mf << "\n";
+        }
+        mf << "  }\n";
+        mf << "}\n";
+    }
+
+    // Restore all index state from a directory previously written by save_dir().
+    void load_dir(const std::string& dir) {
+        std::ifstream mf(dir + "/manifest.json");
+        if (!mf) throw std::runtime_error("Failed to open manifest.json in: " + dir);
+        std::string manifest((std::istreambuf_iterator<char>(mf)),
+                              std::istreambuf_iterator<char>());
+
+        int64_t schema_ver = json_int(manifest, "schema_version");
+        if (schema_ver != 1)
+            throw std::runtime_error("Unsupported IVF-PQ manifest schema_version: " +
+                                     std::to_string(schema_ver));
+        std::string idx_type = json_value(manifest, "index_type");
+        if (idx_type != "ivf_pq")
+            throw std::runtime_error("manifest index_type is '" + idx_type + "', expected 'ivf_pq'");
+
+        this->dimension       = static_cast<uint32_t>(json_int(manifest, "dimension"));
+        this->count           = static_cast<uint32_t>(json_int(manifest, "capacity"));
+        this->current_offset_ = static_cast<uint64_t>(json_int(manifest, "length"));
+        this->metric          = static_cast<distance_type_t>(json_int(manifest, "metric"));
+        this->dist_mode       = static_cast<distribution_mode_t>(json_int(manifest, "dist_mode"));
+        this->deleted_count_  = static_cast<uint64_t>(json_int(manifest, "deleted_count"));
+
+        bool has_ids       = json_bool(manifest, "has_ids");
+        bool has_quantizer = json_bool(manifest, "has_quantizer");
+        bool has_bitset    = json_bool(manifest, "has_bitset");
+
+        std::string bp_json = json_object(manifest, "build_params");
+        this->build_params.n_lists =
+            static_cast<uint32_t>(json_int(bp_json, "n_lists", 1024));
+        this->build_params.m =
+            static_cast<uint32_t>(json_int(bp_json, "m", 16));
+        this->build_params.bits_per_code =
+            static_cast<uint32_t>(json_int(bp_json, "bits_per_code", 8));
+        this->build_params.kmeans_trainset_fraction =
+            std::stod(json_value(bp_json, "kmeans_trainset_fraction").empty()
+                      ? "0.5" : json_value(bp_json, "kmeans_trainset_fraction"));
+
+        std::string comp_json = json_object(manifest, "components");
+
+        if (has_ids) {
+            std::string ids_file = json_value(comp_json, "ids");
+            this->load_ids(dir + "/" + ids_file);
+        }
+        if (has_quantizer) {
+            std::string q_file = json_value(comp_json, "quantizer");
+            this->quantizer_.load_from_file(dir + "/" + q_file);
+        }
+
+        std::string idx_file   = json_value(comp_json, "index");
+        std::vector<std::string> shard_files = json_string_array(comp_json, "shards");
+
+        if (!idx_file.empty() && this->dist_mode == DistributionMode_SINGLE_GPU) {
+            std::string full_path = dir + "/" + idx_file;
+            auto task = [&, full_path](raft_handle_wrapper_t& handle) -> std::any {
+                auto res = handle.get_raft_resources();
+                auto local_idx = std::make_unique<ivf_pq_index>(*res);
+                cuvs::neighbors::ivf_pq::deserialize(*res, full_path, local_idx.get());
+                std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                index_ = std::move(local_idx);
+                return std::any();
+            };
+            uint64_t job_id = this->worker->submit_main(task);
+            auto wait_res = this->worker->wait(job_id).get();
+            if (wait_res.error) std::rethrow_exception(wait_res.error);
+
+        } else if (!idx_file.empty() && this->dist_mode == DistributionMode_REPLICATED) {
+            std::string full_path = dir + "/" + idx_file;
+            this->worker->submit_all_devices(
+                [&, full_path](raft_handle_wrapper_t& handle) -> std::any {
+                    auto res = handle.get_raft_resources();
+                    auto local_idx = std::make_unique<ivf_pq_index>(*res);
+                    cuvs::neighbors::ivf_pq::deserialize(*res, full_path, local_idx.get());
+                    std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                    this->replicated_indices_[handle.get_device_id()] =
+                        std::shared_ptr<ivf_pq_index>(std::move(local_idx));
+                    return std::any();
+                }
+            );
+
+        } else if (!shard_files.empty()) {
+            this->worker->submit_all_devices(
+                [&, shard_files, dir](raft_handle_wrapper_t& handle) -> std::any {
+                    int rank = handle.get_rank();
+                    if (rank >= static_cast<int>(shard_files.size()))
+                        return std::any();
+                    std::string shard_path = dir + "/" + shard_files[rank];
+                    auto res = handle.get_raft_resources();
+                    auto local_idx = std::make_unique<ivf_pq_index>(*res);
+                    cuvs::neighbors::ivf_pq::deserialize(*res, shard_path, local_idx.get());
+                    std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                    this->replicated_indices_[handle.get_device_id()] =
+                        std::shared_ptr<ivf_pq_index>(std::move(local_idx));
+                    return std::any();
+                }
+            );
+            this->count           = static_cast<uint32_t>(json_int(manifest, "capacity"));
+            this->current_offset_ = static_cast<uint64_t>(json_int(manifest, "length"));
+
+        } else {
+            throw std::runtime_error("manifest has neither 'index' nor 'shards' in components");
+        }
+
+        if (has_bitset) {
+            std::string bs_file = json_value(comp_json, "bitset");
+            this->load_bitset_from_file(dir + "/" + bs_file);
+        }
+
+        this->is_loaded_ = true;
     }
 
     search_result_t merge_sharded_results(const std::vector<search_result_t>& shard_results, uint64_t num_queries, uint32_t limit) {

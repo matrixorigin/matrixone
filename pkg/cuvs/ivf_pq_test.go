@@ -130,6 +130,117 @@ func TestGpuIvfPqSaveLoad(t *testing.T) {
 	}
 }
 
+func TestGpuIvfPqPackUnpack(t *testing.T) {
+	dimension := uint32(4)
+	n_vectors := uint64(100)
+	dataset := make([]float32, n_vectors*uint64(dimension))
+	for i := uint64(0); i < n_vectors; i++ {
+		dataset[i*uint64(dimension)] = float32(i)
+		dataset[i*uint64(dimension)+1] = float32(i)
+	}
+
+	devices := []int{0}
+	bp := DefaultIvfPqBuildParams()
+	bp.NLists = 2
+	bp.M = 2
+	index, err := NewGpuIvfPq[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	if err != nil {
+		t.Fatalf("Failed to create GpuIvfPq: %v", err)
+	}
+	index.Start()
+	if err := index.Build(); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	for _, filename := range []string{"test_ivf_pq_pack.tar", "test_ivf_pq_pack.tar.gz"} {
+		t.Run(filename, func(t *testing.T) {
+			if err := index.Pack(filename); err != nil {
+				t.Fatalf("Pack failed: %v", err)
+			}
+			defer os.Remove(filename)
+
+			index2, err := NewGpuIvfPqEmpty[float32](0, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+			if err != nil {
+				t.Fatalf("NewGpuIvfPqEmpty failed: %v", err)
+			}
+			defer index2.Destroy()
+			if err := index2.Start(); err != nil {
+				t.Fatalf("index2 Start failed: %v", err)
+			}
+			if err := index2.Unpack(filename); err != nil {
+				t.Fatalf("Unpack failed: %v", err)
+			}
+
+			query := make([]float32, dimension)
+			sp := DefaultIvfPqSearchParams()
+			result, err := index2.Search(query, 1, dimension, 1, sp)
+			if err != nil {
+				t.Fatalf("Search failed: %v", err)
+			}
+			if result.Neighbors[0] != 0 {
+				t.Errorf("Expected neighbor 0, got %d", result.Neighbors[0])
+			}
+		})
+	}
+	index.Destroy()
+}
+
+func TestGpuIvfPqFromDataDirectory(t *testing.T) {
+	dimension := uint32(4)
+	n_vectors := uint64(100)
+	dataset := make([]float32, n_vectors*uint64(dimension))
+	for i := uint64(0); i < n_vectors; i++ {
+		dataset[i*uint64(dimension)] = float32(i)
+		dataset[i*uint64(dimension)+1] = float32(i)
+	}
+
+	devices := []int{0}
+	bp := DefaultIvfPqBuildParams()
+	bp.NLists = 2
+	bp.M = 2
+	index, err := NewGpuIvfPq[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	if err != nil {
+		t.Fatalf("Failed to create GpuIvfPq: %v", err)
+	}
+	index.Start()
+	if err := index.Build(); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	tarFile := "test_ivf_pq_dir.tar"
+	if err := index.Pack(tarFile); err != nil {
+		t.Fatalf("Pack failed: %v", err)
+	}
+	defer os.Remove(tarFile)
+	index.Destroy()
+
+	tmpDir, err := os.MkdirTemp("", "ivf-pq-dir-test-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp failed: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	if _, err := Unpack(tarFile, tmpDir); err != nil {
+		t.Fatalf("Unpack to dir failed: %v", err)
+	}
+
+	index2, err := NewGpuIvfPqFromDataDirectory[float32](tmpDir, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	if err != nil {
+		t.Fatalf("NewGpuIvfPqFromDataDirectory failed: %v", err)
+	}
+	defer index2.Destroy()
+
+	query := make([]float32, dimension)
+	sp := DefaultIvfPqSearchParams()
+	result, err := index2.Search(query, 1, dimension, 1, sp)
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if result.Neighbors[0] != 0 {
+		t.Errorf("Expected neighbor 0, got %d", result.Neighbors[0])
+	}
+}
+
 func TestGpuIvfPqChunked(t *testing.T) {
 	dimension := uint32(8)
 	totalCount := uint64(100)

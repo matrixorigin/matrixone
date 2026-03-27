@@ -30,6 +30,7 @@
 #include "cuvs_types.h"
 #include "cuvs_worker.hpp"
 #include "quantize.hpp"
+#include "json.hpp"
 #include <cuvs/distance/distance.hpp>
 #include <vector>
 #include <string>
@@ -39,6 +40,8 @@
 #include <atomic>
 #include <fstream>
 #include <unordered_map>
+#include <sys/stat.h>
+#include <cerrno>
 
 namespace matrixone {
 
@@ -393,6 +396,63 @@ public:
             is.read(reinterpret_cast<char*>(temp_ids.data()), size * sizeof(IdT));
             this->set_ids(temp_ids.data(), size);
         }
+    }
+
+    // Returns a string name for the template element type T.
+    std::string element_type_name() const {
+        if constexpr (std::is_same_v<T, float>) return "float32";
+        else if constexpr (sizeof(T) == 2)      return "float16";
+        else if constexpr (std::is_same_v<T, int8_t>) return "int8";
+        else return "uint8";
+    }
+
+    // Creates a directory and all its parents. Ignores EEXIST at each level.
+    static void ensure_dir(const std::string& dir) {
+        for (size_t pos = 1; pos <= dir.size(); ++pos) {
+            if (pos == dir.size() || dir[pos] == '/') {
+                std::string partial = dir.substr(0, pos);
+                if (partial.empty() || partial == ".") continue;
+                if (::mkdir(partial.c_str(), 0755) != 0 && errno != EEXIST) {
+                    throw std::runtime_error("Failed to create directory: " + partial +
+                                             " (errno=" + std::to_string(errno) + ")");
+                }
+            }
+        }
+    }
+
+    // Writes the soft-delete bitset to {dir}/bitset.bin.
+    // Format: [uint64 n_bits][uint64 n_words][uint64 deleted_count][uint32 words...]
+    void save_bitset(const std::string& dir) const {
+        std::string filename = dir + "/bitset.bin";
+        std::ofstream os(filename, std::ios::binary);
+        if (!os) throw std::runtime_error("Failed to open bitset file for writing: " + filename);
+        uint64_t n_bits  = current_offset_;
+        uint64_t n_words = deleted_bitset_.size();
+        os.write(reinterpret_cast<const char*>(&n_bits),       sizeof(n_bits));
+        os.write(reinterpret_cast<const char*>(&n_words),      sizeof(n_words));
+        os.write(reinterpret_cast<const char*>(&deleted_count_), sizeof(deleted_count_));
+        if (n_words > 0) {
+            os.write(reinterpret_cast<const char*>(deleted_bitset_.data()),
+                     n_words * sizeof(uint32_t));
+        }
+    }
+
+    // Restores the soft-delete bitset from a file written by save_bitset().
+    void load_bitset_from_file(const std::string& filename) {
+        std::ifstream is(filename, std::ios::binary);
+        if (!is) throw std::runtime_error("Failed to open bitset file for reading: " + filename);
+        uint64_t n_bits = 0, n_words = 0;
+        is.read(reinterpret_cast<char*>(&n_bits),       sizeof(n_bits));
+        is.read(reinterpret_cast<char*>(&n_words),      sizeof(n_words));
+        is.read(reinterpret_cast<char*>(&deleted_count_), sizeof(deleted_count_));
+        deleted_bitset_.resize(n_words);
+        if (n_words > 0) {
+            is.read(reinterpret_cast<char*>(deleted_bitset_.data()),
+                    n_words * sizeof(uint32_t));
+        }
+        bitset_version_.fetch_add(1);
+        std::lock_guard<std::mutex> ds_lock(device_bitsets_mutex_);
+        device_deleted_bitsets_.clear();
     }
 
     virtual std::string info() const {

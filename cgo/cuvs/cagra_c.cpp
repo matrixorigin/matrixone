@@ -336,8 +336,39 @@ void gpu_cagra_save(gpu_cagra_c index_c, const char* filename, void* errmsg) {
             default: break;
         }
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
- "Error in gpu_cagra_save", e.what());
+        matrixone::set_errmsg(errmsg, "Error in gpu_cagra_save", e.what());
+    }
+}
+
+void gpu_cagra_save_dir(gpu_cagra_c index_c, const char* dir, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_cagra_any_t*>(index_c);
+        switch (any->qtype) {
+            case Quantization_F32:   static_cast<gpu_cagra_t<float>*>(any->ptr)->save_dir(dir); break;
+            case Quantization_F16:   static_cast<gpu_cagra_t<half>*>(any->ptr)->save_dir(dir); break;
+            case Quantization_INT8:  static_cast<gpu_cagra_t<int8_t>*>(any->ptr)->save_dir(dir); break;
+            case Quantization_UINT8: static_cast<gpu_cagra_t<uint8_t>*>(any->ptr)->save_dir(dir); break;
+            default: break;
+        }
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_cagra_save_dir", e.what());
+    }
+}
+
+void gpu_cagra_load_dir(gpu_cagra_c index_c, const char* dir, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_cagra_any_t*>(index_c);
+        switch (any->qtype) {
+            case Quantization_F32:   static_cast<gpu_cagra_t<float>*>(any->ptr)->load_dir(dir); break;
+            case Quantization_F16:   static_cast<gpu_cagra_t<half>*>(any->ptr)->load_dir(dir); break;
+            case Quantization_INT8:  static_cast<gpu_cagra_t<int8_t>*>(any->ptr)->load_dir(dir); break;
+            case Quantization_UINT8: static_cast<gpu_cagra_t<uint8_t>*>(any->ptr)->load_dir(dir); break;
+            default: break;
+        }
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_cagra_load_dir", e.what());
     }
 }
 

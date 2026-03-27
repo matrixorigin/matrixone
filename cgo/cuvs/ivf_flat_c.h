@@ -77,6 +77,13 @@ void gpu_ivf_flat_get_quantizer(gpu_ivf_flat_c index_c, float* min, float* max, 
 
 void gpu_ivf_flat_save(gpu_ivf_flat_c index_c, const char* filename, void* errmsg);
 
+// Save all components (index, IDs, quantizer, bitset) to a directory + manifest.json
+void gpu_ivf_flat_save_dir(gpu_ivf_flat_c index_c, const char* dir, void* errmsg);
+
+// Load all components from a directory previously written by gpu_ivf_flat_save_dir.
+// The index must have been created and started before calling this.
+void gpu_ivf_flat_load_dir(gpu_ivf_flat_c index_c, const char* dir, void* errmsg);
+
 // Search function
 typedef struct {
     gpu_ivf_flat_result_c result_ptr;

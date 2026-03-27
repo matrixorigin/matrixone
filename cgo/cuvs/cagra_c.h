@@ -78,6 +78,13 @@ void gpu_cagra_get_quantizer(gpu_cagra_c index_c, float* min, float* max, void* 
 
 void gpu_cagra_save(gpu_cagra_c index_c, const char* filename, void* errmsg);
 
+// Save all components (index, IDs, quantizer, bitset) to a directory + manifest.json
+void gpu_cagra_save_dir(gpu_cagra_c index_c, const char* dir, void* errmsg);
+
+// Load all components from a directory previously written by gpu_cagra_save_dir.
+// The index must have been created (e.g. via gpu_cagra_new_empty) and started before calling this.
+void gpu_cagra_load_dir(gpu_cagra_c index_c, const char* dir, void* errmsg);
+
 // Search function
 typedef struct {
     gpu_cagra_result_c result_ptr;
