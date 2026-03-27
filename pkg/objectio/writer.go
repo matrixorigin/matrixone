@@ -317,6 +317,15 @@ func (w *objectWriterV1) WriteBF(blkIdx int, seqnum uint16, buf []byte, typ uint
 	return
 }
 
+// AllocFromArena allocates size bytes from the writer's arena.
+// Falls back to make when there is no arena.
+func (w *objectWriterV1) AllocFromArena(size int) []byte {
+	if w.arena != nil {
+		return w.arena.Alloc(size)
+	}
+	return make([]byte, size)
+}
+
 func (w *objectWriterV1) SetAppendable() {
 	w.appendable = true
 }
@@ -445,18 +454,21 @@ func (w *objectWriterV1) prepareBloomFilter(blocks []blockData, blockCount uint3
 		bloomFilterStart += n
 	}
 	bloomFilterIndex.SetBlockMetaPos(blockCount, bloomFilterStart, uint32(len(w.bloomFilter)))
-	// Pre-size to avoid repeated bytes.Buffer growth during Write calls.
 	total := IOEntryHeaderSize + int(bloomFilterStart) + len(w.bloomFilter)
-	buf := bytes.NewBuffer(make([]byte, 0, total))
-	buf.Write(EncodeIOEntryHeader(&h))
-	buf.Write(bloomFilterIndex)
+	data := w.AllocFromArena(total)
+	off := 0
+	copy(data[off:], EncodeIOEntryHeader(&h))
+	off += IOEntryHeaderSize
+	copy(data[off:], bloomFilterIndex)
+	off += len(bloomFilterIndex)
 	for _, block := range blocks {
-		buf.Write(block.bloomFilter)
+		copy(data[off:], block.bloomFilter)
+		off += len(block.bloomFilter)
 	}
-	buf.Write(w.bloomFilter)
-	length := uint32(buf.Len())
+	copy(data[off:], w.bloomFilter)
+	length := uint32(total)
 	extent := NewExtent(compress.None, offset, length, length)
-	return buf.Bytes(), extent, nil
+	return data, extent, nil
 }
 
 func (w *objectWriterV1) prepareZoneMapArea(blocks []blockData, blockCount uint32, offset uint32) ([]byte, Extent, error) {

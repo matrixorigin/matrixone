@@ -317,7 +317,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		if err = bf.MarshalWithBuffer(&w.bfMarshalBuf); err != nil {
 			return nil, err
 		}
-		bfBytes := make([]byte, w.bfMarshalBuf.Len())
+		bfBytes := w.writer.AllocFromArena(w.bfMarshalBuf.Len())
 		copy(bfBytes, w.bfMarshalBuf.Bytes())
 		if err = w.writer.WriteBF(int(block.GetID()), seqnums[i], bfBytes, w.pkType); err != nil {
 			return nil, err
