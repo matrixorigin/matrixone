@@ -257,7 +257,11 @@ func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) 
 	return
 }
 
-func (page *TransferHashPage) Marshal() []byte {
+// Marshal serializes non-deleted entries into a pooled bytes.Buffer.
+// The caller MUST pass the returned buffer to ReleaseMarshalBufs
+// (or transferMarshalBufPool.Put) after buf.Bytes() is no longer
+// referenced.  Returns nil when there are no entries to serialize.
+func (page *TransferHashPage) Marshal() *bytes.Buffer {
 	m := page.hashmap.Load()
 	if m == nil {
 		panic("empty hashmap")
@@ -290,10 +294,16 @@ func (page *TransferHashPage) Marshal() []byte {
 		b.Write(types.EncodeUint16(&v.BlkIdx))
 		b.Write(types.EncodeUint32(&v.RowIdx))
 	}
-	result := make([]byte, b.Len())
-	copy(result, b.Bytes())
-	transferMarshalBufPool.Put(b)
-	return result
+	return b
+}
+
+// ReleaseMarshalBufs returns pooled bytes.Buffers obtained from Marshal
+// back to the pool.  Call after the data slices are no longer referenced
+// (e.g. after fs.Write completes).
+func ReleaseMarshalBufs(bufs []*bytes.Buffer) {
+	for _, b := range bufs {
+		transferMarshalBufPool.Put(b)
+	}
 }
 
 func (page *TransferHashPage) Unmarshal(data []byte) (*api.TransferMap, error) {
@@ -407,8 +417,13 @@ func InitTransferPageIO() *fileservice.IOVector {
 	}
 }
 
-func AddTransferPage(page *TransferHashPage, ioVector *fileservice.IOVector) error {
-	data := page.Marshal()
+func AddTransferPage(page *TransferHashPage, ioVector *fileservice.IOVector, bufs *[]*bytes.Buffer) error {
+	buf := page.Marshal()
+	var data []byte
+	if buf != nil {
+		data = buf.Bytes()
+		*bufs = append(*bufs, buf)
+	}
 	le := len(ioVector.Entries)
 	offset := int64(0)
 	if le > 0 {
@@ -425,10 +440,12 @@ func AddTransferPage(page *TransferHashPage, ioVector *fileservice.IOVector) err
 	return nil
 }
 
-func WriteTransferPage(ctx context.Context, fs fileservice.FileService, pages []*TransferHashPage, ioVector fileservice.IOVector) {
+func WriteTransferPage(ctx context.Context, fs fileservice.FileService, pages []*TransferHashPage, ioVector fileservice.IOVector, bufs []*bytes.Buffer) {
 	ctx, cancel := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseWriteTransferPage)
 	defer cancel()
 	err := fs.Write(ctx, ioVector)
+	// Data has been consumed by fs.Write; return pooled buffers.
+	ReleaseMarshalBufs(bufs)
 	if err != nil {
 		for _, page := range pages {
 			page.SetBornTS(page.BornTS().Add(time.Minute))

@@ -15,6 +15,7 @@
 package txnentries
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sync"
@@ -125,6 +126,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) error {
 	for _, obj := range entry.droppedObjs {
 		ioVector := model.InitTransferPageIO()
 		pages := make([]*model.TransferHashPage, 0, obj.BlockCnt())
+		var marshalBufs []*bytes.Buffer
 		var duration time.Duration
 		var start time.Time
 		for j := 0; j < obj.BlockCnt(); j++ {
@@ -141,7 +143,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) error {
 			page.Train(m)
 
 			start = time.Now()
-			err := model.AddTransferPage(page, ioVector)
+			err := model.AddTransferPage(page, ioVector, &marshalBufs)
 			if err != nil {
 				return err
 			}
@@ -156,7 +158,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		model.WriteTransferPage(ctx, transferFS, pages, *ioVector)
+		model.WriteTransferPage(ctx, transferFS, pages, *ioVector, marshalBufs)
 		pagesToSet = append(pagesToSet, pages)
 		duration += time.Since(start)
 		v2.TransferPageMergeLatencyHistogram.Observe(duration.Seconds())
