@@ -189,6 +189,28 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 		}
 	}
 
+	// For fulltext index table with BloomFilter, use doc_id column for BF filtering.
+	// The fulltext index table's PK is __mo_fake_pk_col (auto-increment), but the BF
+	// contains source table PK values which correspond to the doc_id column.
+	// Internal SQL queries only select doc_id/pos/word columns (not __mo_fake_pk_col),
+	// so this must be handled independently of pkPos.
+	if mixin.filterState.hasBF &&
+		catalog.IsFullTextIndexTableType(mixin.tableDef.TableType, mixin.tableDef.Name) {
+		docIdColName := strings.ToLower(catalog.FullTextIndex_TabCol_Id)
+		docIdPos := -1
+		for i, col := range cols {
+			if strings.ToLower(col) == docIdColName {
+				docIdPos = i
+				break
+			}
+		}
+		if docIdPos != -1 {
+			// Use doc_id as the only filter column for BF search.
+			mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[docIdPos]}
+			mixin.filterState.colTypes = []types.Type{mixin.columns.colTypes[docIdPos]}
+		}
+	}
+
 	if mixin.tableDef.Pkey != nil {
 		colIdx := mixin.tableDef.Name2ColIndex[mixin.tableDef.Pkey.PkeyColName]
 		colDef := mixin.tableDef.Cols[colIdx]

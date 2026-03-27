@@ -648,14 +648,22 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 				}
 			}
 		case types.T_uint64:
-			_, err := strconv.ParseUint(field.Val, 10, 64)
-			if err != nil {
-				if errors.Is(err, strconv.ErrRange) {
+			if len(col.Typ.Enumvalues) > 0 {
+				// SET column: validate as set member name or numeric bitmap
+				_, err := types.ParseSet(col.Typ.Enumvalues, field.Val)
+				if err != nil {
 					return false
 				}
-				f, err := strconv.ParseFloat(field.Val, 64)
-				if err != nil || f < 0 || f > math.MaxUint64 {
-					return false
+			} else {
+				_, err := strconv.ParseUint(field.Val, 10, 64)
+				if err != nil {
+					if errors.Is(err, strconv.ErrRange) {
+						return false
+					}
+					f, err := strconv.ParseFloat(field.Val, 64)
+					if err != nil || f < 0 || f > math.MaxUint64 {
+						return false
+					}
 				}
 			}
 		case types.T_float32:
@@ -1087,23 +1095,35 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			}
 		}
 	case types.T_uint64:
-		d, err := strconv.ParseUint(field.Val, 10, 64)
-		if err == nil {
+		if len(col.Typ.Enumvalues) > 0 {
+			// SET column: parse member names or numeric bitmap
+			d, err := types.ParseSet(col.Typ.Enumvalues, field.Val)
+			if err != nil {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return err
+			}
 			if err := vector.AppendFixed(vec, d, false, mp); err != nil {
 				return err
 			}
 		} else {
-			if errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint64 type for column %d", field.Val, colIdx)
-			}
-			f, err := strconv.ParseFloat(field.Val, 64)
-			if err != nil || f < 0 || f > math.MaxUint64 {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint64 type for column %d", field.Val, colIdx)
-			}
-			if err := vector.AppendFixed(vec, uint64(f), false, mp); err != nil {
-				return err
+			d, err := strconv.ParseUint(field.Val, 10, 64)
+			if err == nil {
+				if err := vector.AppendFixed(vec, d, false, mp); err != nil {
+					return err
+				}
+			} else {
+				if errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
+					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+					return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint64 type for column %d", field.Val, colIdx)
+				}
+				f, err := strconv.ParseFloat(field.Val, 64)
+				if err != nil || f < 0 || f > math.MaxUint64 {
+					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+					return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint64 type for column %d", field.Val, colIdx)
+				}
+				if err := vector.AppendFixed(vec, uint64(f), false, mp); err != nil {
+					return err
+				}
 			}
 		}
 	case types.T_float32:

@@ -3147,7 +3147,7 @@ func TestFormat2Or3(t *testing.T) {
 	}
 }
 
-func initFromUnixTimeTestCase() []tcTemp {
+func initFromUnixTimeTestCase(t *testing.T) []tcTemp {
 	d1, _ := types.ParseDatetime("1970-01-01 00:00:00", 6)
 	d2, _ := types.ParseDatetime("2016-01-01 00:00:00", 6)
 	d3, _ := types.ParseDatetime("2016-01-01 00:00:00.999999", 6)
@@ -3189,6 +3189,30 @@ func initFromUnixTimeTestCase() []tcTemp {
 				[]bool{false}),
 		},
 		{
+			info: "test from unix time decimal256",
+			typ:  types.T_decimal256,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.New(types.T_decimal256, 65, 6),
+					[]types.Decimal256{mustDecimal256ForUnixTime(t, "1451606400.999999", 6)},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_datetime.ToType(), false,
+				[]types.Datetime{d3},
+				[]bool{false}),
+		},
+		{
+			info: "test from unix time decimal256 large precise",
+			typ:  types.T_decimal256,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.New(types.T_decimal256, 65, 6),
+					[]types.Decimal256{mustDecimal256ForUnixTime(t, "32536771198.999999", 6)},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_datetime.ToType(), false,
+				[]types.Datetime{mustDatetimeForUnixTime(t, "3001-01-18 23:59:58.999999")},
+				[]bool{false}),
+		},
+		{
 			info: "test from unix time float64",
 			typ:  types.T_varchar,
 			inputs: []FunctionTestInput{
@@ -3206,6 +3230,20 @@ func initFromUnixTimeTestCase() []tcTemp {
 	}
 }
 
+func mustDecimal256ForUnixTime(t *testing.T, value string, scale int32) types.Decimal256 {
+	t.Helper()
+	dec, err := types.ParseDecimal256(value, 65, scale)
+	require.NoError(t, err)
+	return dec
+}
+
+func mustDatetimeForUnixTime(t *testing.T, value string) types.Datetime {
+	t.Helper()
+	dt, err := types.ParseDatetime(value, 6)
+	require.NoError(t, err)
+	return dt
+}
+
 func newTmpProcess(t *testing.T) *process.Process {
 	return newProcessWithMPool(t, mpool.MustNewZero())
 }
@@ -3217,7 +3255,7 @@ func newProcessWithMPool(t *testing.T, mp *mpool.MPool) *process.Process {
 }
 
 func TestFromUnixTime(t *testing.T) {
-	testCases := initFromUnixTimeTestCase()
+	testCases := initFromUnixTimeTestCase(t)
 
 	// do the test work.
 	proc := newTmpProcess(t)
@@ -3233,6 +3271,9 @@ func TestFromUnixTime(t *testing.T) {
 		case types.T_float64:
 			fcTC = NewFunctionTestCase(proc,
 				tc.inputs, tc.expect, FromUnixTimeFloat64)
+		case types.T_decimal256:
+			fcTC = NewFunctionTestCase(proc,
+				tc.inputs, tc.expect, FromUnixTimeDecimal256)
 		case types.T_varchar:
 			fcTC = NewFunctionTestCase(proc,
 				tc.inputs, tc.expect, FromUnixTimeInt64Format)

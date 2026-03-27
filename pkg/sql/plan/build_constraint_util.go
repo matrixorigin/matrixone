@@ -322,10 +322,16 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 
 	nowIdx := len(tblInfo.tableDefs)
 	tblInfo.isClusterTable = append(tblInfo.isClusterTable, isClusterTable)
+	objName := tblName
+	if obj != nil && obj.ObjName != "" {
+		// Use resolved object name in DML refs so INSERT/UPDATE/DELETE share
+		// the same physical-name view (especially for temporary tables).
+		objName = obj.ObjName
+	}
 	tblInfo.objRef = append(tblInfo.objRef, &ObjectRef{
 		Obj:        int64(tableDef.TblId),
 		SchemaName: dbName,
-		ObjName:    tblName,
+		ObjName:    objName,
 	})
 	tblInfo.tableDefs = append(tblInfo.tableDefs, tableDef)
 	key := dbName + "." + tblName
@@ -527,8 +533,13 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				},
 			},
 		}
-		if tableDef.Cols[colIdx].Typ.Id == int32(types.T_enum) {
+		if isEnumPlanType(&tableDef.Cols[colIdx].Typ) {
 			projExpr, err = funcCastForEnumType(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
+			if err != nil {
+				return false, nil, nil, err
+			}
+		} else if isSetPlanType(&tableDef.Cols[colIdx].Typ) {
+			projExpr, err = funcCastForSetType(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
 			if err != nil {
 				return false, nil, nil, err
 			}
@@ -1184,7 +1195,7 @@ func buildValueScan(
 			binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
 			binder.builder = builder
 			for _, r := range slt.Rows {
-				if nv, ok := r[i].(*tree.NumVal); ok {
+				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) {
 					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp)
 					if err != nil {
 						return err
@@ -1207,8 +1218,13 @@ func buildValueScan(
 					if err != nil {
 						return err
 					}
-					if col.Typ.Id == int32(types.T_enum) {
+					if isEnumPlanType(&col.Typ) {
 						defExpr, err = funcCastForEnumType(builder.GetContext(), defExpr, col.Typ)
+						if err != nil {
+							return err
+						}
+					} else if isSetPlanType(&col.Typ) {
+						defExpr, err = funcCastForSetType(builder.GetContext(), defExpr, col.Typ)
 						if err != nil {
 							return err
 						}

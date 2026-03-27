@@ -1061,13 +1061,21 @@ func appendPureInsertBranch(ctx CompilerContext, builder *QueryBuilder, bindCtx 
 		insertProjection = insertProjection[:len(tableDef.Cols)]
 	}
 
+	insertObjRef := objRef
+	if objRef != nil && tableDef.GetIsTemporary() && tableDef.Name != "" && objRef.ObjName != tableDef.Name {
+		// Use the physical temp table name in execution nodes. Runtime executors
+		// may not always carry session alias mappings.
+		insertObjRef = DeepCopyObjectRef(objRef)
+		insertObjRef.ObjName = tableDef.Name
+	}
+
 	insertNode := &Node{
 		NodeType: plan.Node_INSERT,
 		Children: []int32{lastNodeId},
-		ObjRef:   objRef,
+		ObjRef:   insertObjRef,
 		TableDef: tableDef,
 		InsertCtx: &plan.InsertCtx{
-			Ref:             objRef,
+			Ref:             insertObjRef,
 			AddAffectedRows: addAffectedRows,
 			IsClusterTable:  tableDef.TableType == catalog.SystemClusterRel,
 			TableDef:        tableDef,

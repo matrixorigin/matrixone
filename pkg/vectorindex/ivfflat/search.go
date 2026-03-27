@@ -391,7 +391,7 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 		if err != nil {
 			return err
 		}
-		sqlproc.BloomFilter = ukeybfbytes
+		sqlproc.IvfBloomFilter = ukeybfbytes
 		return nil
 	}
 
@@ -498,7 +498,7 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 	if err != nil {
 		return err
 	}
-	sqlproc.BloomFilter = bfbytes
+	sqlproc.IvfBloomFilter = bfbytes
 
 	//os.Stderr.WriteString(fmt.Sprintf("IVF BloomFilter Build: #Entries for selected centers =  %d, #UniqueKey = %d, #ExistAfterFilter = %d,  Built Time = %v\n", rowCount, keyvec.Length(), nexist, elapsed))
 

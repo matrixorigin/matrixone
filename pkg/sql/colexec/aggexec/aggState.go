@@ -49,6 +49,7 @@ type aggInfo struct {
 	stateTypes               []types.Type
 	emptyNull                bool
 	saveArg                  bool
+	opaqueArg                bool
 	makeMarshalerUnmarshaler func(mp *mpool.MPool) (MarshalerUnmarshaler, error)
 }
 
@@ -66,6 +67,10 @@ func (a *aggInfo) IsDistinct() bool {
 
 func (a *aggInfo) TypesInfo() ([]types.Type, types.Type) {
 	return a.argTypes, a.retType
+}
+
+func (a *aggInfo) usesOpaqueArgEncoding() bool {
+	return a.opaqueArg || len(a.argTypes) != 1 || !a.argTypes[0].IsFixedLen()
 }
 
 type aggState struct {
@@ -164,7 +169,7 @@ func (ag *aggState) writeStateArg(i int32, buf *bytes.Buffer, info *aggInfo) err
 		binary.BigEndian.PutUint16(lk, uint16(i))
 		binary.BigEndian.PutUint16(uk, uint16(i+1))
 		it := ag.argSkl.NewIter(lk, uk)
-		if info.argTypes[0].IsFixedLen() {
+		if !info.usesOpaqueArgEncoding() {
 			for ok, k, _ := it.SeekGE(lk); ok; ok, k, _ = it.Next() {
 				/*
 					checkI := binary.BigEndian.Uint16(k[:kAggArgPrefixSz])
@@ -210,7 +215,7 @@ func (ag *aggState) readStateArg(mp *mpool.MPool, i int32, r io.Reader, info *ag
 	}
 	// read the state arguments
 	var kbuf []byte
-	if info.argTypes[0].IsFixedLen() {
+	if !info.usesOpaqueArgEncoding() {
 		fixedLen := info.argTypes[0].GetSize()
 		if info.isDistinct {
 			kbuf = make([]byte, kAggArgPrefixSz+fixedLen)
@@ -505,10 +510,6 @@ func (ag *aggState) fillArg(mp *mpool.MPool, y uint16, val []byte, distinct bool
 		}
 		copy(k[kAggArgPrefixSz+kAggArgOrdinalSz:], val)
 		if err := ag.insertArg(mp, k); err == nil {
-			ag.argCnt[ag.length] += 1
-			if ag.argCnt[ag.length] == 0 {
-				return moerr.NewInternalErrorNoCtx("agg fillArg: too many arguments")
-			}
 			return nil
 		} else {
 			return err
@@ -557,6 +558,17 @@ func (ag *aggState) iter(idx uint16, fn func(k []byte) error) error {
 		}
 	}
 	return nil
+}
+
+func aggPayloadOffset(info *aggInfo) int {
+	if info.isDistinct {
+		return kAggArgPrefixSz
+	}
+	return kAggArgPrefixSz + kAggArgOrdinalSz
+}
+
+func aggPayloadFromKey(info *aggInfo, k []byte) []byte {
+	return k[aggPayloadOffset(info):]
 }
 
 func (ag *aggState) free(mp *mpool.MPool) {
@@ -810,6 +822,23 @@ func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.
 			if err := ae.state[x].fillArg(ae.mp, y, bs, distinct); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+func (ae *aggExec) batchFillOpaqueArgs(offset int, groups []uint64, payloads [][]byte, distinct bool) error {
+	_ = offset
+	if len(groups) != len(payloads) {
+		return moerr.NewInternalErrorNoCtx("batchFillOpaqueArgs: groups and payloads length mismatch")
+	}
+	for i, group := range groups {
+		if group == GroupNotMatched || payloads[i] == nil {
+			continue
+		}
+		x, y := ae.getXY(group - 1)
+		if err := ae.state[x].fillArg(ae.mp, y, payloads[i], distinct); err != nil {
+			return err
 		}
 	}
 	return nil

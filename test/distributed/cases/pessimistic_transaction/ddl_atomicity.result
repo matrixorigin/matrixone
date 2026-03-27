@@ -16,7 +16,7 @@ begin;
 drop database db1;
 use db1;
 create table t2(a int);
-No database selected
+Unknown database db1
 commit;
 create database db1;
 use db1;

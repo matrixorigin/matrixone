@@ -248,35 +248,49 @@ func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]bool, markTag in
 }
 
 func containsTag(expr *plan.Expr, tag int32) bool {
-	var ret bool
+	if expr == nil {
+		return false
+	}
 
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			ret = ret || containsTag(arg, tag)
+			if containsTag(arg, tag) {
+				return true
+			}
 		}
-
+	case *plan.Expr_W:
+		if containsTag(exprImpl.W.WindowFunc, tag) {
+			return true
+		}
+		for _, arg := range exprImpl.W.PartitionBy {
+			if containsTag(arg, tag) {
+				return true
+			}
+		}
+		for _, order := range exprImpl.W.OrderBy {
+			if containsTag(order.Expr, tag) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
+			if containsTag(arg, tag) {
+				return true
+			}
+		}
+	case *plan.Expr_Sub:
+		if exprImpl.Sub == nil {
+			return false
+		}
+		return containsTag(exprImpl.Sub.Child, tag)
 	case *plan.Expr_Col:
 		return exprImpl.Col.RelPos == tag
+	case *plan.Expr_Corr:
+		return exprImpl.Corr.RelPos == tag
 	}
 
-	return ret
-}
-
-func containsTagCol(expr *plan.Expr, tag, colPos int32) bool {
-	var ret bool
-
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			ret = ret || containsTagCol(arg, tag, colPos)
-		}
-
-	case *plan.Expr_Col:
-		return exprImpl.Col.RelPos == tag && exprImpl.Col.ColPos == colPos
-	}
-
-	return ret
+	return false
 }
 
 func replaceColRefs(expr *plan.Expr, tag int32, projects []*plan.Expr) *plan.Expr {

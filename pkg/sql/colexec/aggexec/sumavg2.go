@@ -54,6 +54,15 @@ func AvgReturnType(typs []types.Type) types.Type {
 			s = typs[0].Scale + 6
 		}
 		return types.New(types.T_decimal128, 38, s)
+	case types.T_decimal256:
+		s := int32(12)
+		if s < typs[0].Scale {
+			s = typs[0].Scale
+		}
+		if s > typs[0].Scale+6 {
+			s = typs[0].Scale + 6
+		}
+		return types.New(types.T_decimal256, 65, s)
 	default:
 		return types.T_float64.ToType()
 	}
@@ -71,6 +80,8 @@ func SumReturnType(typs []types.Type) types.Type {
 		return types.New(types.T_decimal128, 38, typs[0].Scale)
 	case types.T_decimal128:
 		return types.New(types.T_decimal128, 38, typs[0].Scale)
+	case types.T_decimal256:
+		return types.New(types.T_decimal256, 65, typs[0].Scale)
 	}
 	panic(moerr.NewInternalErrorNoCtxf("unsupported type '%v' for sum", typs[0]))
 }
@@ -113,37 +124,76 @@ func (exec *sumAvgExec[T, A]) BatchFill(offset int, groups []uint64, vectors []*
 	if exec.IsDistinct() {
 		return exec.batchFillArgs(offset, groups, vectors, true)
 	}
+	if exec.isSum {
+		return exec.batchFillSum(offset, groups, vectors)
+	}
+	return exec.batchFillAvg(offset, groups, vectors)
+}
+
+func (exec *sumAvgExec[T, A]) batchFillSum(offset int, groups []uint64, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	lastX := -1
+	var sums []T
+	var sumVec *vector.Vector
 
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
 			continue
 		}
-
 		idx := uint64(i) + uint64(offset)
-		if vectors[0].IsNull(idx) {
+		if vec.IsNull(idx) {
 			continue
-		} else {
-			x, y := exec.getXY(grp - 1)
-			sumVec := exec.state[x].vecs[0]
-			sums := vector.MustFixedColNoTypeCheck[T](sumVec)
-			val := vector.GetFixedAtNoTypeCheck[A](vectors[0], int(idx))
-			result := sums[y] + T(val)
-			if err := exec.ofCheck(sums[y], T(val), result); err != nil {
-				return err
-			}
-
-			if exec.isSum {
-				if sumVec.IsNull(uint64(y)) {
-					sumVec.UnsetNull(uint64(y))
-				}
-				sums[y] = result
-			} else {
-				sums[y] = result
-				cntVec := exec.state[x].vecs[1]
-				cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
-				cnts[y] += 1
-			}
 		}
+
+		x, y := exec.getXY(grp - 1)
+		if x != lastX {
+			lastX = x
+			sumVec = exec.state[x].vecs[0]
+			sums = vector.MustFixedColNoTypeCheck[T](sumVec)
+		}
+
+		val := vector.GetFixedAtNoTypeCheck[A](vec, int(idx))
+		result := sums[y] + T(val)
+		if err := exec.ofCheck(sums[y], T(val), result); err != nil {
+			return err
+		}
+		if sumVec.IsNull(uint64(y)) {
+			sumVec.UnsetNull(uint64(y))
+		}
+		sums[y] = result
+	}
+	return nil
+}
+
+func (exec *sumAvgExec[T, A]) batchFillAvg(offset int, groups []uint64, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	lastX := -1
+	var sums []T
+	var cnts []int64
+
+	for i, grp := range groups {
+		if grp == GroupNotMatched {
+			continue
+		}
+		idx := uint64(i) + uint64(offset)
+		if vec.IsNull(idx) {
+			continue
+		}
+
+		x, y := exec.getXY(grp - 1)
+		if x != lastX {
+			lastX = x
+			sums = vector.MustFixedColNoTypeCheck[T](exec.state[x].vecs[0])
+			cnts = vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])
+		}
+
+		val := vector.GetFixedAtNoTypeCheck[A](vec, int(idx))
+		result := sums[y] + T(val)
+		if err := exec.ofCheck(sums[y], T(val), result); err != nil {
+			return err
+		}
+		sums[y] = result
+		cnts[y] += 1
 	}
 	return nil
 }
@@ -285,24 +335,79 @@ func (exec *sumAvgExec[T, A]) Flush() ([]*vector.Vector, error) {
 	return vecs, nil
 }
 
-type sumAvgDecExec[A types.Decimal64 | types.Decimal128] struct {
+type sumAvgDecimalArg interface {
+	types.Decimal64 | types.Decimal128 | types.Decimal256
+}
+
+type sumAvgDecimalState interface {
+	types.Decimal128 | types.Decimal256
+}
+
+func decimalStateFromArg[A sumAvgDecimalArg, S sumAvgDecimalState](v A, argScale int32) S {
+	var state S
+	switch any(state).(type) {
+	case types.Decimal128:
+		switch value := any(v).(type) {
+		case types.Decimal64:
+			return any(types.Decimal128FromDecimal64(value, argScale)).(S)
+		case types.Decimal128:
+			return any(value).(S)
+		}
+	case types.Decimal256:
+		switch value := any(v).(type) {
+		case types.Decimal64:
+			return any(types.Decimal256FromDecimal128(types.Decimal128FromDecimal64(value, argScale))).(S)
+		case types.Decimal128:
+			return any(types.Decimal256FromDecimal128(value)).(S)
+		case types.Decimal256:
+			return any(value).(S)
+		}
+	}
+	panic(moerr.NewInternalErrorNoCtxf("unsupported decimal conversion from %T", v))
+}
+
+func decimalStateAdd[S sumAvgDecimalState](left, right S) (S, error) {
+	switch value := any(left).(type) {
+	case types.Decimal128:
+		result, err := value.Add128(any(right).(types.Decimal128))
+		return any(result).(S), err
+	case types.Decimal256:
+		result, err := value.Add256(any(right).(types.Decimal256))
+		return any(result).(S), err
+	}
+	panic(moerr.NewInternalErrorNoCtxf("unsupported decimal state type %T", left))
+}
+
+type sumAvgDecExec[A sumAvgDecimalArg, S sumAvgDecimalState] struct {
 	aggExec
 	isSum bool
 }
 
-func (exec *sumAvgDecExec[A]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
+func (exec *sumAvgDecExec[A, S]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
 	return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
 }
 
-func (exec *sumAvgDecExec[A]) BulkFill(groupIndex int, vectors []*vector.Vector) error {
+func (exec *sumAvgDecExec[A, S]) BulkFill(groupIndex int, vectors []*vector.Vector) error {
 	return exec.BatchFill(0, slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()), vectors)
 }
 
-func (exec *sumAvgDecExec[A]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
-	var err error
+func (exec *sumAvgDecExec[A, S]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
 	if exec.IsDistinct() {
 		return exec.batchFillArgs(offset, groups, vectors, true)
 	}
+	if exec.isSum {
+		return exec.batchFillSum(offset, groups, vectors)
+	}
+	return exec.batchFillAvg(offset, groups, vectors)
+}
+
+func (exec *sumAvgDecExec[A, S]) batchFillSum(offset int, groups []uint64, vectors []*vector.Vector) error {
+	var err error
+	vec := vectors[0]
+	argScale := exec.aggInfo.argTypes[0].Scale
+	lastX := -1
+	var sumVec *vector.Vector
+	var sums []S
 
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
@@ -310,49 +415,73 @@ func (exec *sumAvgDecExec[A]) BatchFill(offset int, groups []uint64, vectors []*
 		}
 
 		idx := uint64(i) + uint64(offset)
-		if vectors[0].IsNull(idx) {
+		if vec.IsNull(idx) {
 			continue
-		} else {
-			x, y := exec.getXY(grp - 1)
-			sumVec := exec.state[x].vecs[0]
-			sums := vector.MustFixedColNoTypeCheck[types.Decimal128](sumVec)
-			var val types.Decimal128
-			if exec.aggInfo.argTypes[0].Oid == types.T_decimal64 {
-				val64 := vector.GetFixedAtNoTypeCheck[types.Decimal64](vectors[0], int(idx))
-				val = types.Decimal128FromDecimal64(val64, exec.aggInfo.argTypes[0].Scale)
-			} else {
-				val = vector.GetFixedAtNoTypeCheck[types.Decimal128](vectors[0], int(idx))
-			}
+		}
 
-			if exec.isSum {
-				if sumVec.IsNull(uint64(y)) {
-					sumVec.UnsetNull(uint64(y))
-					sums[y] = val
-				} else {
-					if sums[y], err = sums[y].Add128(val); err != nil {
-						return err
-					}
-				}
-			} else {
-				if sums[y], err = sums[y].Add128(val); err != nil {
-					return err
-				}
-				cntVec := exec.state[x].vecs[1]
-				cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
-				cnts[y] += 1
+		x, y := exec.getXY(grp - 1)
+		if x != lastX {
+			lastX = x
+			sumVec = exec.state[x].vecs[0]
+			sums = vector.MustFixedColNoTypeCheck[S](sumVec)
+		}
+
+		raw := vector.GetFixedAtNoTypeCheck[A](vec, int(idx))
+		val := decimalStateFromArg[A, S](raw, argScale)
+		if sumVec.IsNull(uint64(y)) {
+			sumVec.UnsetNull(uint64(y))
+			sums[y] = val
+		} else {
+			if sums[y], err = decimalStateAdd[S](sums[y], val); err != nil {
+				return err
 			}
 		}
 	}
 	return nil
 }
 
-func (exec *sumAvgDecExec[A]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
+func (exec *sumAvgDecExec[A, S]) batchFillAvg(offset int, groups []uint64, vectors []*vector.Vector) error {
+	var err error
+	vec := vectors[0]
+	argScale := exec.aggInfo.argTypes[0].Scale
+	lastX := -1
+	var sums []S
+	var cnts []int64
+
+	for i, grp := range groups {
+		if grp == GroupNotMatched {
+			continue
+		}
+
+		idx := uint64(i) + uint64(offset)
+		if vec.IsNull(idx) {
+			continue
+		}
+
+		x, y := exec.getXY(grp - 1)
+		if x != lastX {
+			lastX = x
+			sums = vector.MustFixedColNoTypeCheck[S](exec.state[x].vecs[0])
+			cnts = vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])
+		}
+
+		raw := vector.GetFixedAtNoTypeCheck[A](vec, int(idx))
+		val := decimalStateFromArg[A, S](raw, argScale)
+		if sums[y], err = decimalStateAdd[S](sums[y], val); err != nil {
+			return err
+		}
+		cnts[y]++
+	}
+	return nil
+}
+
+func (exec *sumAvgDecExec[A, S]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
 	return exec.BatchMerge(next, groupIdx2, []uint64{uint64(groupIdx1 + 1)})
 }
 
-func (exec *sumAvgDecExec[A]) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+func (exec *sumAvgDecExec[A, S]) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
 	var err error
-	other := next.(*sumAvgDecExec[A])
+	other := next.(*sumAvgDecExec[A, S])
 	if exec.IsDistinct() {
 		return exec.batchMergeArgs(&other.aggExec, offset, groups, true)
 	}
@@ -366,8 +495,8 @@ func (exec *sumAvgDecExec[A]) BatchMerge(next AggFuncExec, offset int, groups []
 		x2, y2 := other.getXY(uint64(offset + i))
 		sumVec1 := exec.state[x1].vecs[0]
 		sumVec2 := other.state[x2].vecs[0]
-		sums1 := vector.MustFixedColNoTypeCheck[types.Decimal128](sumVec1)
-		sums2 := vector.MustFixedColNoTypeCheck[types.Decimal128](sumVec2)
+		sums1 := vector.MustFixedColNoTypeCheck[S](sumVec1)
+		sums2 := vector.MustFixedColNoTypeCheck[S](sumVec2)
 
 		if exec.isSum {
 			if sumVec2.IsNull(uint64(y2)) {
@@ -376,12 +505,12 @@ func (exec *sumAvgDecExec[A]) BatchMerge(next AggFuncExec, offset int, groups []
 				sumVec1.UnsetNull(uint64(y1))
 				sums1[y1] = sums2[y2]
 			} else {
-				if sums1[y1], err = sums1[y1].Add128(sums2[y2]); err != nil {
+				if sums1[y1], err = decimalStateAdd[S](sums1[y1], sums2[y2]); err != nil {
 					return err
 				}
 			}
 		} else {
-			if sums1[y1], err = sums1[y1].Add128(sums2[y2]); err != nil {
+			if sums1[y1], err = decimalStateAdd[S](sums1[y1], sums2[y2]); err != nil {
 				return err
 			}
 			cnts1 := vector.MustFixedColNoTypeCheck[int64](exec.state[x1].vecs[1])
@@ -392,18 +521,27 @@ func (exec *sumAvgDecExec[A]) BatchMerge(next AggFuncExec, offset int, groups []
 	return nil
 }
 
-func (exec *sumAvgDecExec[A]) SetExtraInformation(partialResult any, _ int) error {
+func (exec *sumAvgDecExec[A, S]) SetExtraInformation(partialResult any, _ int) error {
 	return nil
 }
 
-func decAvg(sum types.Decimal128, count int64, argScale, resultScale int32) types.Decimal128 {
-	cnt128 := types.Decimal128FromInt64(count)
-	a, s, _ := sum.Div(cnt128, argScale, 0)
-	a, _ = a.Scale(resultScale - s)
-	return a
+func decAvg[S sumAvgDecimalState](sum S, count int64, argScale, resultScale int32) S {
+	switch value := any(sum).(type) {
+	case types.Decimal128:
+		cnt128 := types.Decimal128FromInt64(count)
+		avg, scale, _ := value.Div(cnt128, argScale, 0)
+		avg, _ = avg.Scale(resultScale - scale)
+		return any(avg).(S)
+	case types.Decimal256:
+		cnt256 := types.Decimal256FromInt64(count)
+		avg, scale, _ := value.Div(cnt256, argScale, 0)
+		avg, _ = avg.Scale(resultScale - scale)
+		return any(avg).(S)
+	}
+	panic(moerr.NewInternalErrorNoCtxf("unsupported decimal avg state type %T", sum))
 }
 
-func (exec *sumAvgDecExec[A]) Flush() ([]*vector.Vector, error) {
+func (exec *sumAvgDecExec[A, S]) Flush() ([]*vector.Vector, error) {
 	var err error
 	resultType := exec.aggInfo.retType
 	vecs := make([]*vector.Vector, len(exec.state))
@@ -420,20 +558,14 @@ func (exec *sumAvgDecExec[A]) Flush() ([]*vector.Vector, error) {
 					vector.AppendNull(vecs[i], exec.mp)
 					continue
 				} else {
-					var sum types.Decimal128
+					var sum S
 					xcnt := 0
 
 					err = exec.state[i].iter(uint16(j), func(k []byte) error {
-						var val types.Decimal128
+						ptr := util.UnsafeFromBytes[A](k[kAggArgPrefixSz:])
+						val := decimalStateFromArg[A, S](*ptr, exec.aggInfo.argTypes[0].Scale)
 						var fnerr error
-						if exec.aggInfo.argTypes[0].Oid == types.T_decimal64 {
-							ptr := util.UnsafeFromBytes[types.Decimal64](k[kAggArgPrefixSz:])
-							val = types.Decimal128FromDecimal64(*ptr, exec.aggInfo.argTypes[0].Scale)
-						} else {
-							ptr := util.UnsafeFromBytes[types.Decimal128](k[kAggArgPrefixSz:])
-							val = *ptr
-						}
-						if sum, fnerr = sum.Add128(val); fnerr != nil {
+						if sum, fnerr = decimalStateAdd[S](sum, val); fnerr != nil {
 							return fnerr
 						}
 						xcnt++
@@ -459,7 +591,7 @@ func (exec *sumAvgDecExec[A]) Flush() ([]*vector.Vector, error) {
 	} else {
 		for i := range vecs {
 			sumVec := exec.state[i].vecs[0]
-			sums := vector.MustFixedColNoTypeCheck[types.Decimal128](sumVec)
+			sums := vector.MustFixedColNoTypeCheck[S](sumVec)
 
 			if !exec.isSum {
 				cntVec := exec.state[i].vecs[1]
@@ -520,9 +652,11 @@ func makeSumAvgExec(
 	case types.T_float64:
 		return newSumAvgExec[float64, float64](mp, float64OfCheck, isSum, aggID, isDistinct, param)
 	case types.T_decimal64:
-		return newSumAvgDecExec[types.Decimal64](mp, isSum, aggID, isDistinct, param)
+		return newSumAvgDecExec[types.Decimal64, types.Decimal128](mp, isSum, aggID, isDistinct, param)
 	case types.T_decimal128:
-		return newSumAvgDecExec[types.Decimal128](mp, isSum, aggID, isDistinct, param)
+		return newSumAvgDecExec[types.Decimal128, types.Decimal128](mp, isSum, aggID, isDistinct, param)
+	case types.T_decimal256:
+		return newSumAvgDecExec[types.Decimal256, types.Decimal256](mp, isSum, aggID, isDistinct, param)
 	default:
 		panic(moerr.NewInternalErrorNoCtxf("unsupported type '%v' for sum/avg", param.Oid))
 	}
@@ -558,8 +692,8 @@ func newSumAvgExec[T float64 | int64 | uint64, A types.Ints | types.UInts | type
 	return &exec
 }
 
-func newSumAvgDecExec[A types.Decimal64 | types.Decimal128](mp *mpool.MPool, isSum bool, aggID int64, isDistinct bool, param types.Type) AggFuncExec {
-	var exec sumAvgDecExec[A]
+func newSumAvgDecExec[A sumAvgDecimalArg, S sumAvgDecimalState](mp *mpool.MPool, isSum bool, aggID int64, isDistinct bool, param types.Type) AggFuncExec {
+	var exec sumAvgDecExec[A, S]
 	exec.mp = mp
 	exec.isSum = isSum
 	var rt types.Type

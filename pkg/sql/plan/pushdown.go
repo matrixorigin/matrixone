@@ -92,10 +92,12 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 	case plan.Node_WINDOW:
 		windowTag := node.BindingTags[0]
-		windowIdx := node.GetWindowIdx()
 
 		for _, filter := range filters {
-			if containsTagCol(filter, windowTag, windowIdx) {
+			// Keep any filter that references a window output above this window node.
+			// Pushing a filter on an earlier window output below a later window node
+			// changes the row set seen by the later window and can produce wrong results.
+			if containsTag(filter, windowTag) {
 				node.FilterList = append(node.FilterList, filter)
 			} else {
 				canPushdown = append(canPushdown, filter)

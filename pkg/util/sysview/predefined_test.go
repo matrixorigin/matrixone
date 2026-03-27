@@ -12,30 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package agg
+package sysview
 
 import (
+	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/assert"
 )
 
-func TestAvgTwCacheContext_Size(t *testing.T) {
-	ctx := AvgTwCacheContext{}
-	require.Equal(t, int64(16), ctx.Size())
-}
-
-func TestAvgTwCacheDecimalContext_Size(t *testing.T) {
-	ctx := AvgTwCacheDecimalContext{}
-	require.Equal(t, int64(32), ctx.Size())
-}
-
-func TestAvgTwResultContext_Size(t *testing.T) {
-	ctx := AvgTwResultContext{}
-	require.Equal(t, int64(16), ctx.Size())
-}
-
-func TestAvgTwResultDecimalContext_Size(t *testing.T) {
-	ctx := AvgTwResultDecimalContext{}
-	require.Equal(t, int64(32), ctx.Size())
+func TestInformationSchemaStatisticsDDL_ContainsIdxAlgo(t *testing.T) {
+	assert.True(t, strings.Contains(InformationSchemaStatisticsDDL, "`idx`.`algo` AS `INDEX_TYPE`"))
+	assert.False(t, strings.Contains(InformationSchemaStatisticsDDL, "NULL AS `INDEX_TYPE`"))
 }

@@ -315,10 +315,10 @@ func TestWindowFilterPushesDownToOwningWindowNode(t *testing.T) {
 	nodeID, cantPushdown := builder.pushdownFilters(2, []*plan.Expr{filterOnPrevWindow, filterOnCurrentWindow}, false)
 	require.Equal(t, int32(2), nodeID)
 	require.Empty(t, cantPushdown)
-	require.Len(t, builder.qry.Nodes[2].FilterList, 1)
-	require.Len(t, builder.qry.Nodes[1].FilterList, 1)
-	require.Same(t, filterOnCurrentWindow, builder.qry.Nodes[2].FilterList[0])
-	require.Same(t, filterOnPrevWindow, builder.qry.Nodes[1].FilterList[0])
+	require.Len(t, builder.qry.Nodes[2].FilterList, 2)
+	require.Empty(t, builder.qry.Nodes[1].FilterList)
+	require.Same(t, filterOnPrevWindow, builder.qry.Nodes[2].FilterList[0])
+	require.Same(t, filterOnCurrentWindow, builder.qry.Nodes[2].FilterList[1])
 }
 
 func makeVectorTopPushdownBuilder(limit uint64) (*QueryBuilder, *plan.Node, *plan.Node) {
