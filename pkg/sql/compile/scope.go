@@ -547,6 +547,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			}
 		}
 
+		readers[i].SetOrderBy(s.DataSource.OrderBy)
 		readers[i].SetBlockTop(s.DataSource.BlockOrderBy, s.DataSource.BlockLimit)
 
 		ss[i].DataSource = &Source{

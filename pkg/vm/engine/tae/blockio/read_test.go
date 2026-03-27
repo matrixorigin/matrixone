@@ -293,7 +293,7 @@ func TestHandleOrderByLimitOnSelectRows(t *testing.T) {
 		Metric: metric.Metric_L2Distance,
 	}
 
-	resSels, resDists, err := handleOrderByLimitOnSelectRows(ctx, selectRows, orderByLimit, -1, cacheVectors)
+	resSels, resDists, err := handleOrderByLimitOnSelectRows(ctx, selectRows, orderByLimit, &objectio.BlockInfo{}, -1, cacheVectors)
 	require.NoError(t, err)
 	require.Equal(t, 2, len(resSels))
 	require.Equal(t, 2, len(resDists))
@@ -301,6 +301,24 @@ func TestHandleOrderByLimitOnSelectRows(t *testing.T) {
 	// Closest should be index 1 (0.1, 0.2), then index 2 (0.5, 0.5)
 	require.Equal(t, int64(1), resSels[0])
 	require.Equal(t, int64(2), resSels[1])
+}
+
+func TestHandleOrderByLimitOnSelectRowsForOrderedLimit(t *testing.T) {
+	ctx := context.Background()
+	selectRows := []int64{2, 4, 6, 8}
+	info := &objectio.BlockInfo{ObjectFlags: objectio.ObjectFlag_Sorted}
+
+	descLimit := &objectio.BlockReadTopOp{Limit: 2, OrderedLimit: true, Desc: true}
+	descRows, descDists, err := handleOrderByLimitOnSelectRows(ctx, selectRows, descLimit, info, -1, nil)
+	require.NoError(t, err)
+	require.Nil(t, descDists)
+	require.Equal(t, []int64{6, 8}, descRows)
+
+	ascLimit := &objectio.BlockReadTopOp{Limit: 2, OrderedLimit: true}
+	ascRows, ascDists, err := handleOrderByLimitOnSelectRows(ctx, selectRows, ascLimit, info, -1, nil)
+	require.NoError(t, err)
+	require.Nil(t, ascDists)
+	require.Equal(t, []int64{2, 4}, ascRows)
 }
 
 // TestHandleOrderByLimitAllNullVectors verifies that HandleOrderByLimitOnIVFFlatIndex
