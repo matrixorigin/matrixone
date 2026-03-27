@@ -798,8 +798,17 @@ func (mp *MysqlProtocolImpl) ParseSendLongData(ctx context.Context, proc *proces
 	if !ok {
 		return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 	}
+	if stmt.getFromSendLongData == nil {
+		stmt.getFromSendLongData = make(map[int]struct{})
+	}
+	if _, ok := stmt.getFromSendLongData[int(paramIdx)]; ok {
+		val = append(append([]byte(nil), stmt.params.GetBytesAt(int(paramIdx))...), val...)
+	}
+	if err = util.SetAnyToStringVector(proc, val, stmt.params, int(paramIdx)); err != nil {
+		return err
+	}
 	stmt.getFromSendLongData[int(paramIdx)] = struct{}{}
-	return util.SetAnyToStringVector(proc, val, stmt.params, int(paramIdx))
+	return nil
 }
 
 func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
@@ -844,8 +853,12 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 		}
 
 		// new param bound flag
-		if data[pos] == 1 {
-			pos++
+		var newParamBoundFlag uint8
+		newParamBoundFlag, pos, ok = mp.io.ReadUint8(data, pos)
+		if !ok {
+			return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
+		}
+		if newParamBoundFlag == 1 {
 
 			// Just the first StmtExecute packet contain parameters type,
 			// we need save it for further use.
@@ -854,8 +867,6 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 			if !ok {
 				return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 			}
-		} else {
-			pos++
 		}
 
 		// get paramters and set value to session variables
