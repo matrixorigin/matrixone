@@ -36,7 +36,7 @@ func NewHavingBinder(builder *QueryBuilder, ctx *BindContext) *HavingBinder {
 }
 
 func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
-	astStr := tree.String(astExpr, dialect.MYSQL)
+	astStr := windowExprAstKey(astExpr)
 
 	if !b.insideAgg {
 		if colPos, ok := b.ctx.groupByAst[astStr]; ok {
@@ -74,6 +74,18 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: b.ctx.sampleTag,
+					ColPos: colPos,
+				},
+			},
+		}, nil
+	}
+
+	if colPos, ok := b.ctx.windowByAst[astStr]; ok {
+		return &plan.Expr{
+			Typ: b.ctx.windows[colPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: b.ctx.windowTag,
 					ColPos: colPos,
 				},
 			},
@@ -285,13 +297,16 @@ func (b *HavingBinder) processForceWindows(funcName string, astExpr *tree.FuncEx
 func (b *HavingBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
 	if b.insideAgg {
 		return nil, moerr.NewSyntaxError(b.GetContext(), "aggregate function calls cannot contain window function calls")
-	} else {
-		return nil, moerr.NewSyntaxErrorf(b.GetContext(), "window %s functions not allowed in having clause", funcName)
 	}
+	return bindWindowFuncExpr(b, b.ctx, funcName, astExpr, depth, isRoot)
 }
 
 func (b *HavingBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
 	return b.baseBindSubquery(astExpr, isRoot)
+}
+
+func (b *HavingBinder) makeFrameConstValue(expr tree.Expr, typ *plan.Type) (*plan.Expr, error) {
+	return makeWindowFrameConstValue(b.baseBindExpr, b.builder.compCtx.GetProcess(), b.GetContext(), expr, typ)
 }
 
 func (b *HavingBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
