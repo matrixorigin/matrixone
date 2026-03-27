@@ -179,6 +179,9 @@ func (r *TableMetaReader) SetOrderBy(specs []*plan.OrderBySpec) {
 func (r *TableMetaReader) SetIndexParam(param *plan.IndexReaderParam) {
 }
 
+func (r *TableMetaReader) SetBlockTop([]*plan.OrderBySpec, uint64) {
+}
+
 func (r *TableMetaReader) GetOrderBy() []*plan.OrderBySpec {
 	return nil
 }

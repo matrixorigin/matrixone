@@ -195,6 +195,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 				s.DataSource.R = readers[0]
 				s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
 				s.DataSource.R.SetIndexParam(s.DataSource.IndexReaderParam)
+				s.DataSource.R.SetBlockTop(s.DataSource.BlockOrderBy, s.DataSource.BlockLimit)
 			}
 
 			var tag int32
@@ -542,6 +543,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		s.DataSource.R = readers[0]
 		s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
 		s.DataSource.R.SetIndexParam(s.DataSource.IndexReaderParam)
+		s.DataSource.R.SetBlockTop(s.DataSource.BlockOrderBy, s.DataSource.BlockLimit)
 		return s, nil
 	}
 
@@ -554,6 +556,8 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			}
 		}
 
+		readers[i].SetOrderBy(s.DataSource.OrderBy)
+		readers[i].SetBlockTop(s.DataSource.BlockOrderBy, s.DataSource.BlockLimit)
 		readers[i].SetIndexParam(s.DataSource.IndexReaderParam)
 
 		ss[i].DataSource = &Source{

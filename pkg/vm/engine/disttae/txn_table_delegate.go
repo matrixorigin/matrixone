@@ -1415,6 +1415,9 @@ func (r *shardingLocalReader) SetOrderBy(orderby []*plan.OrderBySpec) {
 func (r *shardingLocalReader) SetIndexParam(param *plan.IndexReaderParam) {
 }
 
+func (r *shardingLocalReader) SetBlockTop([]*plan.OrderBySpec, uint64) {
+}
+
 func (r *shardingLocalReader) GetOrderBy() []*plan.OrderBySpec {
 	return nil
 }

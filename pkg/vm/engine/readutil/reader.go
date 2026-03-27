@@ -235,6 +235,9 @@ func (r *EmptyReader) SetOrderBy([]*plan.OrderBySpec) {
 func (r *EmptyReader) SetIndexParam(param *plan.IndexReaderParam) {
 }
 
+func (r *EmptyReader) SetBlockTop([]*plan.OrderBySpec, uint64) {
+}
+
 func (r *EmptyReader) Close() error {
 	return nil
 }
@@ -357,6 +360,12 @@ func (r *mergeReader) SetIndexParam(param *plan.IndexReaderParam) {
 	}
 }
 
+func (r *mergeReader) SetBlockTop(orderby []*plan.OrderBySpec, limit uint64) {
+	for i := range r.rds {
+		r.rds[i].SetBlockTop(orderby, limit)
+	}
+}
+
 func (r *mergeReader) Close() error {
 	return nil
 }
@@ -473,6 +482,56 @@ func (r *reader) SetOrderBy(orderby []*plan.OrderBySpec) {
 	r.source.SetOrderBy(orderby)
 }
 
+func (r *reader) SetBlockTop(orderBy []*plan.OrderBySpec, limit uint64) {
+	if len(orderBy) == 0 || limit == 0 {
+		return
+	}
+
+	if r.orderByLimit == nil {
+		r.orderByLimit = &objectio.IndexReaderTopOp{}
+	}
+
+	if col := orderBy[0].Expr.GetCol(); col != nil {
+		r.orderByLimit.Typ = types.T(orderBy[0].Expr.Typ.Id)
+		r.orderByLimit.ColPos = col.ColPos
+		r.orderByLimit.Limit = limit
+		r.orderByLimit.OrderedLimit = true
+		r.orderByLimit.Desc = orderBy[0].Flag&plan.OrderBySpec_DESC != 0
+		r.orderByLimit.NumVec = nil
+		r.orderByLimit.DistHeap = nil
+		return
+	}
+
+	orderFunc := orderBy[0].Expr.GetF()
+	if orderFunc == nil {
+		panic("order function is nil")
+	}
+
+	col := orderFunc.Args[0].GetCol()
+	if col == nil {
+		panic("column is nil")
+	}
+
+	numVec := orderFunc.Args[1].GetLit().GetVecVal()
+	if len(numVec) == 0 {
+		return
+	}
+
+	metricType, ok := metric.DistFuncNameToMetricType[orderFunc.Func.ObjName]
+	if !ok {
+		panic("unsupported order function")
+	}
+
+	r.orderByLimit.Typ = types.T(orderFunc.Args[0].Typ.Id)
+	r.orderByLimit.MetricType = metricType
+	r.orderByLimit.ColPos = col.ColPos
+	r.orderByLimit.NumVec = []byte(numVec)
+	r.orderByLimit.Limit = limit
+	r.orderByLimit.OrderedLimit = false
+	r.orderByLimit.Desc = orderBy[0].Flag&plan.OrderBySpec_DESC != 0
+	r.orderByLimit.DistHeap = make(objectio.Float64Heap, 0, r.orderByLimit.Limit)
+}
+
 func (r *reader) SetIndexParam(param *plan.IndexReaderParam) {
 	if param == nil {
 		return
@@ -501,12 +560,13 @@ func (r *reader) SetIndexParam(param *plan.IndexReaderParam) {
 	if r.orderByLimit == nil {
 		r.orderByLimit = &objectio.IndexReaderTopOp{}
 	}
-
 	r.orderByLimit.Typ = types.T(orderFunc.Args[0].Typ.Id)
 	r.orderByLimit.MetricType = metricType
 	r.orderByLimit.ColPos = col.ColPos
 	r.orderByLimit.NumVec = []byte(numVec)
 	r.orderByLimit.Limit = param.Limit.GetLit().GetU64Val()
+	r.orderByLimit.OrderedLimit = false
+	r.orderByLimit.Desc = param.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0
 
 	if param.DistRange != nil {
 		r.orderByLimit.LowerBoundType = param.DistRange.LowerBoundType
@@ -619,7 +679,7 @@ func (r *reader) Read(
 	// Read(), so detach it before source.Next() to avoid seqNums out-of-range panic in
 	// InMem paths. We keep one float64 distVec for reuse to avoid repeated allocations.
 	var detachedDistVec *vector.Vector
-	if r.orderByLimit != nil && len(outBatch.Vecs) > len(cols) {
+	if r.orderByLimit != nil && !r.orderByLimit.OrderedLimit && len(outBatch.Vecs) > len(cols) {
 		if candidate := outBatch.Vecs[len(cols)]; candidate != nil &&
 			candidate.GetType().Oid == types.T_float64 {
 			candidate.CleanOnlyData()
@@ -662,7 +722,7 @@ func (r *reader) Read(
 		return true, nil
 	}
 	if state == engine.InMem {
-		if r.orderByLimit != nil {
+		if r.orderByLimit != nil && !r.orderByLimit.OrderedLimit {
 			sels, dists, err := blockio.HandleOrderByLimitOnIVFFlatIndex(ctx, nil, outBatch.Vecs[r.orderByLimit.ColPos], r.orderByLimit)
 			if err != nil {
 				return false, err
@@ -711,7 +771,7 @@ func (r *reader) Read(
 	if len(r.cacheVectors) == 0 {
 		r.cacheVectors = containers.NewVectors(len(r.columns.seqnums) + 1)
 	}
-	if r.orderByLimit != nil && detachedDistVec != nil {
+	if r.orderByLimit != nil && !r.orderByLimit.OrderedLimit && detachedDistVec != nil {
 		// Re-attach the detached distVec so BlockDataRead can take its fast reuse branch.
 		outBatch.Vecs = append(outBatch.Vecs, detachedDistVec)
 		detachedDistVec = nil
