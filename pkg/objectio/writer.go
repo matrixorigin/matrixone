@@ -100,10 +100,11 @@ func arenaNextPow2(n int) int {
 }
 
 // CompressBuf returns a scratch buffer for LZ4 compression, growing as needed.
-// The buffer is retained across arena Reset() calls.
+// The buffer is retained across arena Reset() calls.  We round up to the next
+// power of 2 so that minor size variations don't trigger repeated allocations.
 func (a *WriteArena) CompressBuf(minSize int) []byte {
 	if len(a.compressBuf) < minSize {
-		a.compressBuf = make([]byte, minSize)
+		a.compressBuf = make([]byte, arenaNextPow2(minSize))
 	}
 	return a.compressBuf[:minSize]
 }
