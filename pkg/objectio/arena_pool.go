@@ -124,3 +124,23 @@ func PutArena(a *WriteArena) {
 		}
 	}
 }
+
+// DrainArenaPools empties both arena free lists, allowing the GC to
+// reclaim the backing memory.  Call this when merge and flush are idle
+// (e.g. after a checkpoint completes) to reduce RSS between active
+// periods.  The next GetArena call will create a fresh pre-warmed arena.
+func DrainArenaPools() {
+	for i := range arenaPools {
+		pool := &arenaPools[i]
+		for {
+			head := atomic.LoadPointer(&pool.head)
+			if head == nil {
+				break
+			}
+			if atomic.CompareAndSwapPointer(&pool.head, head, nil) {
+				pool.count.Store(0)
+				break
+			}
+		}
+	}
+}

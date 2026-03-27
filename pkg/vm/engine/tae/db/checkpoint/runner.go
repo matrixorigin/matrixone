@@ -440,6 +440,10 @@ func (r *runner) onPostCheckpointEntries(entries ...any) {
 
 		logutil.Debugf("Post %s", entry.String())
 	}
+
+	// Drain arena pools to reclaim RSS now that the checkpoint
+	// (and the preceding flush/merge cycle) is complete.
+	objectio.DrainArenaPools()
 }
 
 func (r *runner) onGCCheckpointEntries(items ...any) {
