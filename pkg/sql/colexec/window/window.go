@@ -882,8 +882,6 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 		}
 	}
 
-	ctr.ps = nil
-
 	return false, nil
 }
 
