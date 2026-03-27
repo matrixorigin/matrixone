@@ -243,3 +243,66 @@ TEST(GpuCagraTest, ManualShardedSearchWithIds) {
 
     index.destroy();
 }
+
+TEST(GpuCagraTest, SoftDeleteSearch) {
+    const uint32_t dimension = 3;
+    const uint64_t count = 3;
+    std::vector<float> dataset = {
+        1.0, 2.0, 3.0, // ID 0
+        4.0, 5.0, 6.0, // ID 1
+        7.0, 8.0, 9.0  // ID 2
+    };
+    
+    std::vector<int> devices = {0};
+    cagra_build_params_t bp = cagra_build_params_default();
+    gpu_cagra_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+    index.start();
+    index.build();
+
+    // 1. Initial search: point 1 should be the second closest to point 0
+    std::vector<float> queries = {1.0, 2.0, 3.0};
+    cagra_search_params_t sp = cagra_search_params_default();
+    auto result1 = index.search(queries.data(), 1, dimension, 2, sp);
+    ASSERT_EQ(result1.neighbors[0], 0u);
+    ASSERT_EQ(result1.neighbors[1], 1u);
+
+    // 2. Delete point 1 and search again: point 1 should be gone, point 2 should be the second neighbor
+    index.delete_id(1);
+    auto result2 = index.search(queries.data(), 1, dimension, 2, sp);
+    ASSERT_EQ(result2.neighbors[0], 0u);
+    ASSERT_EQ(result2.neighbors[1], 2u);
+
+    // 3. Delete point 0 and search: point 0 should be gone, point 2 should be first
+    index.delete_id(0);
+    auto result3 = index.search(queries.data(), 1, dimension, 1, sp);
+    ASSERT_EQ(result3.neighbors[0], 2u);
+
+    index.destroy();
+}
+
+TEST(GpuCagraTest, SoftDeleteWithCustomIds) {
+    const uint32_t dimension = 2;
+    const uint64_t count = 3;
+    std::vector<float> dataset = {10, 10, 20, 20, 30, 30};
+    std::vector<uint32_t> ids = {100, 200, 300};
+    
+    std::vector<int> devices = {0};
+    cagra_build_params_t bp = cagra_build_params_default();
+    gpu_cagra_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU, ids.data());
+    index.start();
+    index.build();
+
+    std::vector<float> query = {20, 20};
+    cagra_search_params_t sp = cagra_search_params_default();
+    auto res1 = index.search(query.data(), 1, dimension, 1, sp);
+    ASSERT_EQ(res1.neighbors[0], 200u);
+
+    // Delete by custom ID
+    index.delete_id(200);
+    auto res2 = index.search(query.data(), 1, dimension, 1, sp);
+    // Should now return the next closest point (100 or 300)
+    ASSERT_TRUE(res2.neighbors[0] == 100u || res2.neighbors[0] == 300u);
+    ASSERT_NE(res2.neighbors[0], 200u);
+
+    index.destroy();
+}

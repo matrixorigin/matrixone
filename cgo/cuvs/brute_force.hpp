@@ -113,8 +113,7 @@ public:
         }
 
         if (ids) {
-            this->host_ids.resize(this->count);
-            std::copy(ids, ids + this->count, this->host_ids.begin());
+            this->set_ids(ids, this->count);
         }
     }
 
@@ -136,8 +135,7 @@ public:
         }
 
         if (ids) {
-            this->host_ids.resize(this->count);
-            std::copy(ids, ids + this->count, this->host_ids.begin());
+            this->set_ids(ids, this->count);
         }
     }
 
@@ -155,8 +153,7 @@ public:
 
         this->flattened_host_dataset.resize(this->count * this->dimension);
         if (ids) {
-            this->host_ids.resize(this->count);
-            std::copy(ids, ids + this->count, this->host_ids.begin());
+            this->set_ids(ids, this->count);
         }
     }
 
@@ -182,8 +179,7 @@ public:
 
         this->flattened_host_dataset.resize(this->count * this->dimension);
         if (ids) {
-            this->host_ids.resize(this->count);
-            std::copy(ids, ids + this->count, this->host_ids.begin());
+            this->set_ids(ids, this->count);
         }
     }
 
@@ -221,6 +217,7 @@ public:
         auto result_wait = this->worker->wait(job_id).get();
         if (result_wait.error) std::rethrow_exception(result_wait.error);
         this->is_loaded_ = true;
+        this->init_deleted_bitset();
         this->flattened_host_dataset.clear();
         this->flattened_host_dataset.shrink_to_fit();
     }
@@ -278,9 +275,20 @@ public:
         auto distances_device = raft::make_device_matrix<float, int64_t>(*res, (int64_t)num_queries, (int64_t)limit);
 
         cuvs::neighbors::brute_force::search_params bf_sp;
-        cuvs::neighbors::brute_force::search(*res, bf_sp, *index_,
-                                            raft::make_const_mdspan(queries_device.view()),
-                                            neighbors_device.view(), distances_device.view());
+        if (this->deleted_count_ > 0) {
+            this->sync_device_bitset(handle.get_device_id(), *res);
+            auto info = this->get_device_bitset_info(handle.get_device_id());
+            using bs_t = raft::core::bitset<uint32_t, int64_t>;
+            auto* bs = static_cast<bs_t*>(info->ptr.get());
+            auto filter = cuvs::neighbors::filtering::bitset_filter(bs->view());
+            cuvs::neighbors::brute_force::search(*res, bf_sp, *index_,
+                                                raft::make_const_mdspan(queries_device.view()),
+                                                neighbors_device.view(), distances_device.view(), filter);
+        } else {
+            cuvs::neighbors::brute_force::search(*res, bf_sp, *index_,
+                                                raft::make_const_mdspan(queries_device.view()),
+                                                neighbors_device.view(), distances_device.view());
+        }
 
         raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device.view());
         raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device.view());
@@ -344,9 +352,20 @@ public:
         auto distances_device = raft::make_device_matrix<float, int64_t>(*res, (int64_t)num_queries, (int64_t)limit);
 
         cuvs::neighbors::brute_force::search_params bf_sp;
-        cuvs::neighbors::brute_force::search(*res, bf_sp, *index_,
-                                            raft::make_const_mdspan(q_dev_t.view()),
-                                            neighbors_device.view(), distances_device.view());
+        if (this->deleted_count_ > 0) {
+            this->sync_device_bitset(handle.get_device_id(), *res);
+            auto info = this->get_device_bitset_info(handle.get_device_id());
+            using bs_t = raft::core::bitset<uint32_t, int64_t>;
+            auto* bs = static_cast<bs_t*>(info->ptr.get());
+            auto filter = cuvs::neighbors::filtering::bitset_filter(bs->view());
+            cuvs::neighbors::brute_force::search(*res, bf_sp, *index_,
+                                                raft::make_const_mdspan(q_dev_t.view()),
+                                                neighbors_device.view(), distances_device.view(), filter);
+        } else {
+            cuvs::neighbors::brute_force::search(*res, bf_sp, *index_,
+                                                raft::make_const_mdspan(q_dev_t.view()),
+                                                neighbors_device.view(), distances_device.view());
+        }
 
         raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device.view());
         raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device.view());

@@ -228,6 +228,63 @@ TEST(GpuBruteForceTest, LargeLimit) {
     index.destroy();
 }
 
+TEST(GpuBruteForceTest, SoftDeleteSearch) {
+    const uint32_t dimension = 3;
+    const uint64_t count = 3;
+    std::vector<float> dataset = {
+        1.0, 2.0, 3.0, // ID 0
+        4.0, 5.0, 6.0, // ID 1
+        7.0, 8.0, 9.0  // ID 2
+    };
+    
+    gpu_brute_force_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, 1, 0);
+    index.start();
+    index.build();
+
+    // 1. Initial search: point 1 should be the second closest to point 0
+    std::vector<float> queries = {1.0, 2.0, 3.0};
+    auto result1 = index.search(queries.data(), 1, dimension, 2, brute_force_search_params_default());
+    ASSERT_EQ(result1.neighbors[0], 0);
+    ASSERT_EQ(result1.neighbors[1], 1);
+
+    // 2. Delete point 1 and search again: point 1 should be gone, point 2 should be the second neighbor
+    index.delete_id(1);
+    auto result2 = index.search(queries.data(), 1, dimension, 2, brute_force_search_params_default());
+    ASSERT_EQ(result2.neighbors[0], 0);
+    ASSERT_EQ(result2.neighbors[1], 2);
+
+    // 3. Delete point 0 (the query point itself) and search: point 0 should be gone, point 2 should be first
+    index.delete_id(0);
+    auto result3 = index.search(queries.data(), 1, dimension, 1, brute_force_search_params_default());
+    ASSERT_EQ(result3.neighbors[0], 2);
+
+    index.destroy();
+}
+
+TEST(GpuBruteForceTest, SoftDeleteWithCustomIds) {
+    const uint32_t dimension = 2;
+    const uint64_t count = 3;
+    std::vector<float> dataset = {10, 10, 20, 20, 30, 30};
+    std::vector<int64_t> ids = {100, 200, 300};
+    
+    gpu_brute_force_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, 1, 0, ids.data());
+    index.start();
+    index.build();
+
+    std::vector<float> query = {20, 20};
+    auto res1 = index.search(query.data(), 1, dimension, 1, brute_force_search_params_default());
+    ASSERT_EQ(res1.neighbors[0], 200);
+
+    // Delete by custom ID
+    index.delete_id(200);
+    auto res2 = index.search(query.data(), 1, dimension, 1, brute_force_search_params_default());
+    // Should now return the next closest point (100 or 300)
+    ASSERT_TRUE(res2.neighbors[0] == 100 || res2.neighbors[0] == 300);
+    ASSERT_NE(res2.neighbors[0], 200);
+
+    index.destroy();
+}
+
 // --- CuvsWorkerTest ---
 
 TEST(CuvsWorkerTest, BruteForceSearch) {

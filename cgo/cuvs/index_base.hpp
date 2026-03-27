@@ -16,6 +16,17 @@
 
 #pragma once
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+#include <raft/core/bitset.cuh>
+#include <raft/core/copy.cuh>
+#include <raft/core/resources.hpp>
+#include <raft/core/device_mdspan.hpp>
+#include <thrust/fill.h>
+#pragma GCC diagnostic pop
+
 #include "cuvs_types.h"
 #include "cuvs_worker.hpp"
 #include "quantize.hpp"
@@ -25,7 +36,9 @@
 #include <memory>
 #include <shared_mutex>
 #include <algorithm>
+#include <atomic>
 #include <fstream>
+#include <unordered_map>
 
 namespace matrixone {
 
@@ -59,9 +72,80 @@ public:
     std::map<int, std::shared_ptr<void>> replicated_indices_;
     std::map<int, std::shared_ptr<void>> replicated_datasets_;
 
+    // Soft-delete bitset: 1 = valid, 0 = deleted (uint32_t matches raft::core::bitset<uint32_t>)
+    std::vector<uint32_t> deleted_bitset_;
+    uint64_t deleted_count_ = 0;
+    std::atomic<uint64_t> bitset_version_{0};
+
+    struct device_bitset_cache_t {
+        std::shared_ptr<void> ptr;
+        uint64_t version = 0;
+        std::mutex mutex;
+    };
+    // Protects access to the map itself
+    std::mutex device_bitsets_mutex_;
+    std::map<int, std::shared_ptr<device_bitset_cache_t>> device_deleted_bitsets_;
+
+    // Reverse map from external ID to internal position (populated when host_ids are used)
+    std::unordered_map<IdT, uint64_t> id_to_index_;
+
     gpu_index_base_t() = default;
     virtual ~gpu_index_base_t() {
         destroy();
+    }
+    
+    // Helper to get or create a device-specific bitset cache info
+    std::shared_ptr<device_bitset_cache_t> get_device_bitset_info(int dev_id) {
+        std::lock_guard<std::mutex> lock(device_bitsets_mutex_);
+        auto it = device_deleted_bitsets_.find(dev_id);
+        if (it == device_deleted_bitsets_.end()) {
+            auto info = std::make_shared<device_bitset_cache_t>();
+            device_deleted_bitsets_[dev_id] = info;
+            return info;
+        }
+        return it->second;
+    }
+
+    // Helper to sync host bitset to device if stale. Should be called within search.
+    void sync_device_bitset(int dev_id, raft::resources const& res) {
+        auto info = get_device_bitset_info(dev_id);
+        uint64_t current_ver = bitset_version_.load();
+        
+        if (info->version < current_ver || !info->ptr) {
+            std::lock_guard<std::mutex> lock(info->mutex);
+            // Double-check after acquiring lock
+            if (info->version < current_ver || !info->ptr) {
+                // We need a read lock on the main mutex to safely read deleted_bitset_
+                std::shared_lock<std::shared_mutex> base_lock(mutex_);
+                
+                using bs_t = raft::core::bitset<uint32_t, int64_t>;
+                auto* bs = new bs_t(res, static_cast<int64_t>(current_offset_));
+                uint32_t n_words = static_cast<uint32_t>((current_offset_ + 31) / 32);
+                
+                if (deleted_bitset_.size() < n_words) {
+                    // This shouldn't happen if init/delete are used correctly, but for safety:
+                    thrust::fill_n(raft::resource::get_thrust_policy(res), bs->data(), static_cast<int64_t>(n_words), ~0U);
+                }
+                
+                raft::copy(res,
+                    raft::make_device_vector_view<uint32_t, int64_t>(bs->data(), static_cast<int64_t>(std::min<size_t>(n_words, deleted_bitset_.size()))),
+                    raft::make_host_vector_view<const uint32_t, int64_t>(deleted_bitset_.data(), static_cast<int64_t>(std::min<size_t>(n_words, deleted_bitset_.size()))));
+                
+                info->ptr = std::shared_ptr<void>(bs, [](void* p){ delete static_cast<bs_t*>(p); });
+                info->version = current_ver;
+            }
+        }
+    }
+
+    void set_ids(const IdT* ids, uint64_t count_vectors, uint64_t offset = 0) {
+        if (!ids) return;
+        if (this->host_ids.size() < offset + count_vectors) {
+            this->host_ids.resize(offset + count_vectors);
+        }
+        std::copy(ids, ids + count_vectors, this->host_ids.begin() + offset);
+        for (uint64_t i = 0; i < count_vectors; ++i) {
+            this->id_to_index_[ids[i]] = offset + i;
+        }
     }
 
     virtual void start() {}
@@ -86,7 +170,7 @@ public:
     void add_chunk(const T* chunk_data, uint64_t chunk_count, int64_t offset = -1, const IdT* ids = nullptr) {
         std::unique_lock<std::shared_mutex> lock(mutex_);
         if (is_loaded_) throw std::runtime_error("Cannot add chunk to built index");
-        
+
         uint64_t target_offset;
         if (offset == -1) {
             target_offset = current_offset_;
@@ -103,14 +187,66 @@ public:
         if (flattened_host_dataset.size() < required_elements) {
             flattened_host_dataset.resize(required_elements);
         }
-        
+
         std::copy(chunk_data, chunk_data + chunk_count * dimension, flattened_host_dataset.begin() + (target_offset * dimension));
-        
+
         if (ids) {
             if (host_ids.size() < current_offset_) {
                 host_ids.resize(current_offset_);
             }
             std::copy(ids, ids + chunk_count, host_ids.begin() + target_offset);
+            for (uint64_t i = 0; i < chunk_count; ++i) {
+                id_to_index_[ids[i]] = target_offset + i;
+            }
+        }
+    }
+
+    // Initialize (or reset) the deleted bitset after index build.
+    // All positions are marked valid (1). Must be called after is_loaded_ = true.
+    void init_deleted_bitset() {
+        std::unique_lock<std::shared_mutex> lock(mutex_);
+        uint64_t n_bits = current_offset_;
+        uint64_t n_words = (n_bits + 31) / 32;
+        // Only initialize if not already set or if size changed significantly
+        if (deleted_bitset_.size() < n_words) {
+            std::vector<uint32_t> new_bitset(n_words, ~0U);
+            if (!deleted_bitset_.empty()) {
+                std::copy(deleted_bitset_.begin(), deleted_bitset_.end(), new_bitset.begin());
+            }
+            deleted_bitset_ = std::move(new_bitset);
+        }
+        // Increment version to force GPU syncs if they exist
+        bitset_version_.fetch_add(1);
+        
+        std::lock_guard<std::mutex> ds_lock(device_bitsets_mutex_);
+        device_deleted_bitsets_.clear();
+    }
+
+    // Soft-delete by external ID (or internal position if no custom IDs).
+    void delete_id(IdT id) {
+        std::unique_lock<std::shared_mutex> lock(mutex_);
+        uint64_t pos;
+        if (!host_ids.empty()) {
+            auto it = id_to_index_.find(id);
+            if (it == id_to_index_.end()) return; // not found
+            pos = it->second;
+        } else {
+            pos = static_cast<uint64_t>(id);
+        }
+        if (pos >= current_offset_) return;
+
+        // Ensure bitset is large enough (lazy allocation)
+        uint64_t n_words = (current_offset_ + 31) / 32;
+        if (deleted_bitset_.size() < n_words) {
+            deleted_bitset_.resize(n_words, ~0U);
+        }
+
+        uint32_t word = static_cast<uint32_t>(pos / 32);
+        uint32_t bit  = static_cast<uint32_t>(pos % 32);
+        if ((deleted_bitset_[word] >> bit) & 1U) {
+            deleted_bitset_[word] &= ~(1U << bit); // clear bit: mark deleted
+            ++deleted_count_;
+            bitset_version_.fetch_add(1);
         }
     }
 
@@ -184,10 +320,7 @@ public:
                     std::copy(chunk_data, chunk_data + chunk_count * dimension, flattened_host_dataset.begin() + (target_offset * dimension));
                     
                     if (ids) {
-                        if (host_ids.size() < current_offset_) {
-                            host_ids.resize(current_offset_);
-                        }
-                        std::copy(ids, ids + chunk_count, host_ids.begin() + target_offset);
+                        this->set_ids(ids, chunk_count, target_offset);
                     }
                 }
                 return std::any();
@@ -253,9 +386,12 @@ public:
         if (!is) throw std::runtime_error("Failed to open file for loading IDs: " + filename);
         uint64_t size;
         is.read(reinterpret_cast<char*>(&size), sizeof(size));
-        host_ids.resize(size);
+        this->host_ids.clear();
+        this->id_to_index_.clear();
         if (size > 0) {
-            is.read(reinterpret_cast<char*>(host_ids.data()), size * sizeof(IdT));
+            std::vector<IdT> temp_ids(size);
+            is.read(reinterpret_cast<char*>(temp_ids.data()), size * sizeof(IdT));
+            this->set_ids(temp_ids.data(), size);
         }
     }
 

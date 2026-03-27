@@ -17,7 +17,7 @@ CC   := gcc
 CXX  := g++
 
 # Libraries
-LIBS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64/cudart -L/home/ubuntu/miniconda/envs/go/lib -lcuvs -lcuvs_c -lnccl -lucxx -lucp -luct -lucs -lucm -ldl -lrmm -lrapids_logger -Xlinker -lpthread -Xlinker -lm
+LIBS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64/cudart -L/home/ubuntu/miniconda/envs/go/include/../lib -lcuvs -lcuvs_c -lnccl -lucxx -lucp -luct -lucs -lucm -ldl -lrmm -lrapids_logger -Xlinker -lpthread -Xlinker -lm
 
 INCLUDES := -I. -I/usr/local/cuda/include -I/home/ubuntu/miniconda/envs/go/include -I/home/ubuntu/miniconda/envs/go/include/rapids -I/home/ubuntu/miniconda/envs/go/include/raft -I/home/ubuntu/miniconda/envs/go/include/cuvs
 
