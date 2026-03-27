@@ -513,6 +513,11 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 		return err
 	}
 
+	// All transfer maps have been consumed by HandleMergeEntryInTxn.
+	// Return them to the free list now so subsequent merge tasks can reuse
+	// their backing arrays instead of allocating fresh ones.
+	mergesort.CleanTransMapping(task.transferMaps)
+
 	if task.isTombstone {
 		v2.TaskTombstoneMergeDurationHistogram.Observe(time.Since(begin).Seconds())
 	} else {

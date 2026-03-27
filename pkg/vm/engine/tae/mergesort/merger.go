@@ -197,11 +197,7 @@ func (m *merger[T]) merge(ctx context.Context) error {
 			idx := m.accObjBlkCnts[objIdx] + m.loadedObjBlkCnts[objIdx] - 1
 			if transferMaps[idx] == nil {
 				rowCnt := m.df.length(objIdx)
-				tm := make(api.TransferMap, rowCnt)
-				for i := range tm {
-					tm[i].ObjIdx = api.NoTransfer
-				}
-				transferMaps[idx] = tm
+				transferMaps[idx] = GetTransferMap(rowCnt)
 			}
 			transferMaps[idx][rowIdx] = api.TransferDestPos{
 				ObjIdx: uint8(m.stats.objCnt),

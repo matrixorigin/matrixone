@@ -19,7 +19,10 @@ import (
 	"fmt"
 	"iter"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/docker/go-units"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -36,6 +39,141 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"go.uber.org/zap"
 )
+
+// tmNode is a node in the per-bucket free list. It holds a pooled []TransferDestPos
+// and a pointer to the next node. The next field is updated atomically so the free
+// list is lock-free for the common path.
+//
+// Using a linked list of tmNodes (rather than sync.Pool) makes this GC-immune:
+// sync.Pool is cleared on each GC in Go 1.21+, defeating the pooling.
+// A plain Go heap object linked list survives GC because the GC sees
+// plain [] slices with no special runtime hooks.
+type tmNode struct {
+	slice []api.TransferDestPos
+	next  unsafe.Pointer // *tmNode
+}
+
+// tmFreeList is a lock-free stack for a given capacity bucket.
+// maxFreeControls how many slices per bucket before we stop accepting more.
+type tmFreeList struct {
+	mu    sync.Mutex
+	head  unsafe.Pointer // *tmNode (top of stack)
+	count int            // rough count to bound memory usage
+}
+
+const tmMaxFree = 64 // max slices per bucket before we stop recycling
+
+var tmFreeLists [8]tmFreeList // buckets: 1K, 2K, 4K, 8K, 16K, 32K, 64K, >64K
+
+// bucketFor returns the free list bucket index for a given row count.
+func bucketFor(rowCnt int) int {
+	bucket := 0
+	cap_ := 1024
+	for bucket < 7 && cap_ < rowCnt {
+		cap_ <<= 1
+		bucket++
+	}
+	return bucket
+}
+
+// newTmNode allocates a tmNode wrapping a []TransferDestPos with given capacity.
+func newTmNode(capacity int) *tmNode {
+	return &tmNode{slice: make([]api.TransferDestPos, 0, capacity)}
+}
+
+// Push adds a []TransferDestPos to the free list stack.
+// If the bucket is full (>= tmMaxFree), the slice is dropped (let GC reclaim).
+// Lock-free for concurrent callers: it uses CAS on the head pointer.
+func (f *tmFreeList) Push(slice []api.TransferDestPos) {
+	if cap(slice) == 0 {
+		return
+	}
+	node := newTmNode(cap(slice))
+	node.slice = slice
+
+	// CAS loop: push onto stack head
+	for {
+		oldHead := atomic.LoadPointer(&f.head)
+		node.next = oldHead
+		if atomic.CompareAndSwapPointer(&f.head, oldHead, unsafe.Pointer(node)) {
+			f.mu.Lock()
+			f.count++
+			f.mu.Unlock()
+			return
+		}
+		// Contention; retry
+	}
+}
+
+// Pop removes and returns the top slice from the free list, or (nil, false) if empty.
+// Lock-free: uses CAS so concurrent Pops don't interfere with each other.
+func (f *tmFreeList) Pop() ([]api.TransferDestPos, bool) {
+	for {
+		head := atomic.LoadPointer(&f.head)
+		if head == nil {
+			return nil, false
+		}
+		node := (*tmNode)(head)
+		next := atomic.LoadPointer(&node.next)
+		if atomic.CompareAndSwapPointer(&f.head, head, next) {
+			f.mu.Lock()
+			f.count--
+			f.mu.Unlock()
+			return node.slice, true
+		}
+		// Contention; retry
+	}
+}
+
+// GetTransferMap returns a pooled []TransferDestPos sized to rowCnt.
+// The returned slice has all entries initialized to NoTransfer sentinel.
+// If no pooled slice is available, a fresh one is allocated.
+// This function is thread-safe and lock-free for the fast path.
+func GetTransferMap(rowCnt int) []api.TransferDestPos {
+	if rowCnt == 0 {
+		return nil
+	}
+	bucket := bucketFor(rowCnt)
+	f := &tmFreeLists[bucket]
+
+	slice, ok := f.Pop()
+	if ok && cap(slice) >= rowCnt {
+		slice = slice[:rowCnt]
+		for i := range slice {
+			slice[i] = api.TransferDestPos{}
+			slice[i].ObjIdx = api.NoTransfer
+		}
+		return slice
+	}
+	// Bucket empty or capacity too small; allocate fresh.
+	return make([]api.TransferDestPos, rowCnt)
+}
+
+// PutTransferMap returns a TransferMap to the appropriate free list for reuse.
+// Passing nil, zero-capacity, or >64K-capacity slices is a no-op.
+// This function is thread-safe.
+func PutTransferMap(tm []api.TransferDestPos) {
+	if tm == nil {
+		return
+	}
+	c := cap(tm)
+	if c == 0 || c > 64*1024 {
+		return
+	}
+	bucket := bucketFor(len(tm))
+	f := &tmFreeLists[bucket]
+
+	f.mu.Lock()
+	// Only pool up to tmMaxFree per bucket to bound memory usage.
+	if f.count < tmMaxFree {
+		// Slice the length to 0 to keep the capacity for reuse.
+		tm = tm[:0]
+		f.mu.Unlock()
+		f.Push(tm)
+	} else {
+		f.mu.Unlock()
+	}
+}
 
 var ErrNoMoreBlocks = moerr.NewInternalErrorNoCtx("no more blocks")
 
@@ -134,6 +272,7 @@ func DoMergeAndWrite(
 
 func CleanTransMapping(b api.TransferMaps) {
 	for i := range b {
+		PutTransferMap(b[i])
 		b[i] = nil
 	}
 }
@@ -145,10 +284,7 @@ func AddSortPhaseMapping(b api.TransferMaps, mapIdx int, rowCnt int, mapping []i
 	if rowCnt == 0 {
 		return
 	}
-	m := make(api.TransferMap, rowCnt)
-	for i := range m {
-		m[i].ObjIdx = api.NoTransfer
-	}
+	m := GetTransferMap(rowCnt)
 	if mapping == nil {
 		for i := range rowCnt {
 			m[i] = api.TransferDestPos{RowIdx: uint32(i)}
