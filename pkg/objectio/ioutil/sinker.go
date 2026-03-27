@@ -18,7 +18,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"sync"
+	"sync/atomic"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -31,13 +32,53 @@ import (
 
 const DefaultInMemoryStagedSize = mpool.MB * 16
 
-// writeArenaPool reuses WriteArena instances across FSinkerImpl lifecycles.
-// WriteArena holds only Go-heap []byte slices (no C memory, no file handles),
-// so GC eviction of pool entries is safe — no external resources leak.
-// The pool's New func uses size 0 so the first-use overflow path warms the
-// arena; Reset() then grows it to nextPow2(totalRequested) for future rounds.
-var writeArenaPool = &sync.Pool{
-	New: func() any { return objectio.NewArena(0) },
+// arenaNode is a linked-list node for the GC-immune WriteArena free list.
+// Using a plain linked list (instead of sync.Pool) prevents GC from
+// evicting warmed arenas. sync.Pool is cleared every GC cycle in Go 1.21+,
+// causing 128 MB arenas to be reallocated from scratch repeatedly.
+type arenaNode struct {
+	arena *objectio.WriteArena
+	next  unsafe.Pointer // *arenaNode
+}
+
+// arenaFreeList is a lock-free stack of WriteArena instances.
+type arenaFreeList struct {
+	head  unsafe.Pointer // *arenaNode
+	count atomic.Int32
+}
+
+const arenaMaxPooled = 16 // max arenas to keep in the free list
+
+var arenaPool arenaFreeList
+
+func getArena() *objectio.WriteArena {
+	for {
+		head := atomic.LoadPointer(&arenaPool.head)
+		if head == nil {
+			return objectio.NewArena(0)
+		}
+		node := (*arenaNode)(head)
+		next := atomic.LoadPointer(&node.next)
+		if atomic.CompareAndSwapPointer(&arenaPool.head, head, next) {
+			arenaPool.count.Add(-1)
+			return node.arena
+		}
+	}
+}
+
+func putArena(a *objectio.WriteArena) {
+	if int(arenaPool.count.Load()) >= arenaMaxPooled {
+		return
+	}
+	node := &arenaNode{arena: a}
+	for {
+		oldHead := atomic.LoadPointer(&arenaPool.head)
+		node.next = oldHead
+		if atomic.CompareAndSwapPointer(&arenaPool.head, oldHead, unsafe.Pointer(node)) {
+			arenaPool.count.Add(1)
+			return
+		}
+	}
 }
 
 type SinkerOption func(*Sinker)
@@ -111,7 +152,7 @@ type FSinkerImpl struct {
 func (s *FSinkerImpl) Sink(ctx context.Context, b *batch.Batch) error {
 	if s.writer == nil {
 		if s.arena == nil {
-			s.arena = writeArenaPool.Get().(*objectio.WriteArena)
+			s.arena = getArena()
 		}
 		s.arena.Reset()
 		if s.isTombstone {
@@ -166,10 +207,10 @@ func (s *FSinkerImpl) Close() error {
 	s.writer = nil
 	if s.arena != nil {
 		// Reset grows the arena if needed (adaptive sizing), then return it
-		// to the pool so the pre-warmed backing array, serialBuf and
+		// to the free list so the pre-warmed backing array, serialBuf and
 		// compressBuf are reused by the next FSinkerImpl.
 		s.arena.Reset()
-		writeArenaPool.Put(s.arena)
+		putArena(s.arena)
 		s.arena = nil
 	}
 	return nil
