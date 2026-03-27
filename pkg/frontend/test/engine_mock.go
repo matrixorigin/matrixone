@@ -1666,18 +1666,6 @@ func (mr *MockReaderMockRecorder) SetIndexParam(arg0 interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetIndexParam", reflect.TypeOf((*MockReader)(nil).SetIndexParam), arg0)
 }
 
-// SetBlockTop mocks base method.
-func (m *MockReader) SetBlockTop(arg0 []*plan.OrderBySpec, arg1 uint64) {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "SetBlockTop", arg0, arg1)
-}
-
-// SetBlockTop indicates an expected call of SetBlockTop.
-func (mr *MockReaderMockRecorder) SetBlockTop(arg0, arg1 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetBlockTop", reflect.TypeOf((*MockReader)(nil).SetBlockTop), arg0, arg1)
-}
-
 // SetOrderBy mocks base method.
 func (m *MockReader) SetOrderBy(arg0 []*plan.OrderBySpec) {
 	m.ctrl.T.Helper()

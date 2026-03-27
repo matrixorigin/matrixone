@@ -1110,7 +1110,6 @@ type Reader interface {
 	SetOrderBy([]*plan.OrderBySpec)
 	GetOrderBy() []*plan.OrderBySpec
 	SetIndexParam(*plan.IndexReaderParam)
-	SetBlockTop([]*plan.OrderBySpec, uint64)
 	SetFilterZM(objectio.ZoneMap)
 	//SetScanType()
 }

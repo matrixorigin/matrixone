@@ -222,9 +222,6 @@ func (t *TableReader) SetOrderBy([]*plan.OrderBySpec) {
 func (t *TableReader) SetIndexParam(param *plan.IndexReaderParam) {
 }
 
-func (t *TableReader) SetBlockTop([]*plan.OrderBySpec, uint64) {
-}
-
 func (t *TableReader) Close() error {
 	if t == nil {
 		return nil

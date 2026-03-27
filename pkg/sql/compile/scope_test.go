@@ -605,11 +605,8 @@ func (m *mockRelationForBloomFilter) BuildReaders(
 }
 
 type mockReaderForParallelOrderBy struct {
-	orderByCalls  int
-	orderBy       []*plan.OrderBySpec
-	blockTopCalls int
-	blockOrderBy  []*plan.OrderBySpec
-	blockLimit    uint64
+	orderByCalls int
+	orderBy      []*plan.OrderBySpec
 }
 
 func (m *mockReaderForParallelOrderBy) Close() error {
@@ -630,12 +627,6 @@ func (m *mockReaderForParallelOrderBy) GetOrderBy() []*plan.OrderBySpec {
 }
 
 func (m *mockReaderForParallelOrderBy) SetIndexParam(*plan.IndexReaderParam) {}
-
-func (m *mockReaderForParallelOrderBy) SetBlockTop(orderBy []*plan.OrderBySpec, limit uint64) {
-	m.blockTopCalls++
-	m.blockOrderBy = orderBy
-	m.blockLimit = limit
-}
 
 func (m *mockReaderForParallelOrderBy) SetFilterZM(objectio.ZoneMap) {}
 
@@ -907,7 +898,6 @@ func TestBuildScanParallelRunSetsOrderByOnParallelReaders(t *testing.T) {
 	scope := generateScopeWithRootOperator(c.proc, []vm.OpType{vm.Projection})
 
 	orderBy := []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}}
-	blockOrderBy := []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}}
 	reader1 := &mockReaderForParallelOrderBy{}
 	reader2 := &mockReaderForParallelOrderBy{}
 
@@ -916,8 +906,6 @@ func TestBuildScanParallelRunSetsOrderByOnParallelReaders(t *testing.T) {
 		FilterList:         []*plan.Expr{plan2.MakeFalseExpr()},
 		FilterExpr:         nil,
 		OrderBy:            orderBy,
-		BlockOrderBy:       blockOrderBy,
-		BlockLimit:         16,
 		RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
 	}
 	scope.NodeInfo = engine.Node{Mcpu: 2}
@@ -930,8 +918,5 @@ func TestBuildScanParallelRunSetsOrderByOnParallelReaders(t *testing.T) {
 	for _, reader := range []*mockReaderForParallelOrderBy{reader1, reader2} {
 		require.Equal(t, 1, reader.orderByCalls)
 		require.Equal(t, orderBy, reader.orderBy)
-		require.Equal(t, 1, reader.blockTopCalls)
-		require.Equal(t, blockOrderBy, reader.blockOrderBy)
-		require.Equal(t, uint64(16), reader.blockLimit)
 	}
 }

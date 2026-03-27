@@ -1316,8 +1316,6 @@ func (m *mockReader) GetOrderBy() []*plan.OrderBySpec {
 
 func (m *mockReader) SetIndexParam(param *plan.IndexReaderParam) {}
 
-func (m *mockReader) SetBlockTop([]*plan.OrderBySpec, uint64) {}
-
 func (m *mockReader) SetFilterZM(objectio.ZoneMap) {}
 
 type mockRelation struct {

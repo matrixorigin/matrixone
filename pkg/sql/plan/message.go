@@ -75,8 +75,7 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 	if len(scanNode.OrderBy) != 0 {
 		return
 	}
-	scanOrderBy := DeepCopyOrderBy(node.OrderBy[0])
-	enableBlockTop := false
+	scanOrderBy := DeepCopyOrderBySpec(node.OrderBy[0])
 	if canUseRegularIndexHiddenSortKey(scanNode, orderByCol) {
 		orderByName := orderByCol.Name
 		hiddenKeyExpr := GetColExpr(scanNode.TableDef.Cols[0].Typ, scanNode.BindingTags[0], 0)
@@ -90,7 +89,6 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 			Expr: scanHiddenKeyExpr,
 			Flag: node.OrderBy[0].Flag,
 		}
-		enableBlockTop = true
 	}
 	if orderByCol.RelPos != scanNode.BindingTags[0] {
 		return
@@ -101,12 +99,6 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 	node.SendMsgList = append(node.SendMsgList, msgHeader)
 	scanNode.RecvMsgList = append(scanNode.RecvMsgList, msgHeader)
 	scanNode.OrderBy = append(scanNode.OrderBy, scanOrderBy)
-	if enableBlockTop && len(scanNode.BlockOrderBy) == 0 {
-		if limitLit := node.Limit.GetLit(); limitLit != nil && limitLit.GetU64Val() > 0 {
-			scanNode.BlockOrderBy = append(scanNode.BlockOrderBy, DeepCopyOrderBy(scanOrderBy))
-			scanNode.BlockLimit = DeepCopyExpr(node.Limit)
-		}
-	}
 }
 
 func (builder *QueryBuilder) handleHashMapMessages(nodeID int32) {

@@ -541,15 +541,6 @@ func TestHandleMessageFromTopToScanRewritesRegularIndexPKOrderToHiddenKey(t *tes
 	assert.Equal(t, int32(100), scanOrderCol.RelPos)
 	assert.Equal(t, int32(0), scanOrderCol.ColPos)
 	assert.Equal(t, catalog.IndexTableIndexColName, scanOrderCol.Name)
-
-	require.Len(t, scanNode.BlockOrderBy, 1)
-	require.NotNil(t, scanNode.BlockLimit)
-	assert.Equal(t, uint64(20), scanNode.BlockLimit.GetLit().GetU64Val())
-	blockOrderCol := scanNode.BlockOrderBy[0].Expr.GetCol()
-	require.NotNil(t, blockOrderCol)
-	assert.Equal(t, int32(100), blockOrderCol.RelPos)
-	assert.Equal(t, int32(0), blockOrderCol.ColPos)
-	assert.Equal(t, catalog.IndexTableIndexColName, blockOrderCol.Name)
 }
 
 func TestHandleMessageFromTopToScanKeepsPKOrderWhenPrefixIncomplete(t *testing.T) {
@@ -573,8 +564,6 @@ func TestHandleMessageFromTopToScanKeepsPKOrderWhenPrefixIncomplete(t *testing.T
 	require.NotNil(t, scanOrderCol)
 	assert.Equal(t, int32(1), scanOrderCol.ColPos)
 	assert.Equal(t, catalog.IndexTablePrimaryColName, scanOrderCol.Name)
-	assert.Empty(t, scanNode.BlockOrderBy)
-	assert.Nil(t, scanNode.BlockLimit)
 }
 
 func TestApplyIndicesForProjectSkipsRegularIndexPKOrderWithoutFullPrefixEquality(t *testing.T) {

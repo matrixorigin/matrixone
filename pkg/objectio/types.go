@@ -84,13 +84,11 @@ func (h *Float64Heap) Pop() any {
 }
 
 type IndexReaderTopOp struct {
-	Typ          types.T
-	MetricType   metric.MetricType
-	ColPos       int32
-	NumVec       []byte
-	Limit        uint64
-	OrderedLimit bool
-	Desc         bool
+	Typ        types.T
+	MetricType metric.MetricType
+	ColPos     int32
+	NumVec     []byte
+	Limit      uint64
 
 	LowerBoundType plan.BoundType
 	UpperBoundType plan.BoundType
