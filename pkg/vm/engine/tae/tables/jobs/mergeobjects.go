@@ -163,7 +163,7 @@ func NewMergeObjectsTask(
 		arenaSize = uint32(totalInput)
 	}
 	if arenaSize > 0 {
-		task.arena = objectio.GetArena()
+		task.arena = objectio.GetArena(objectio.ArenaLarge)
 	}
 	return
 }

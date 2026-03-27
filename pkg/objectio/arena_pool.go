@@ -15,14 +15,24 @@
 package objectio
 
 import (
+	"runtime"
 	"sync/atomic"
 	"unsafe"
 )
 
+// Arena size tiers.  Small arenas serve flush tasks and sinkers that
+// process modest data volumes.  Large arenas serve merge/compaction
+// tasks that may aggregate up to arenaMaxSize (128 MB).  Keeping the
+// tiers separate prevents small callers from inflating arena sizes and
+// saves ~50% of permanent RSS on large-core machines.
+const (
+	ArenaSmall = 0 // flush tasks, sinkers, general I/O
+	ArenaLarge = 1 // merge / compaction tasks
+)
+
+const arenaSmallMax = 16 * 1024 * 1024 // small arena cap
+
 // arenaNode is a linked-list node for the GC-immune WriteArena free list.
-// Using a plain linked list (instead of sync.Pool) prevents GC from
-// evicting warmed arenas. sync.Pool is cleared every GC cycle, causing
-// 128 MB arenas to be reallocated from scratch repeatedly.
 type arenaNode struct {
 	arena *WriteArena
 	next  unsafe.Pointer // *arenaNode
@@ -30,46 +40,68 @@ type arenaNode struct {
 
 // arenaFreeList is a lock-free stack of WriteArena instances.
 type arenaFreeList struct {
-	head  unsafe.Pointer // *arenaNode
-	count atomic.Int32
+	head     unsafe.Pointer // *arenaNode
+	count    atomic.Int32
+	maxCount int32
 }
 
-const arenaMaxPooled = 16 // max arenas to keep in the free list
+var arenaPools [2]arenaFreeList
 
-var arenaPool arenaFreeList
+func init() {
+	// Each tier gets GOMAXPROCS/2 slots — merge and flush worker pools
+	// are each sized to min(GOMAXPROCS/2, 100).
+	half := int32(runtime.GOMAXPROCS(0)) / 2
+	if half < 1 {
+		half = 1
+	}
+	arenaPools[ArenaSmall].maxCount = half
+	arenaPools[ArenaLarge].maxCount = half
+}
 
-// GetArena pops a WriteArena from the GC-immune free list, or creates
-// a fresh zero-sized arena when the list is empty.
-func GetArena() *WriteArena {
+// GetArena pops a WriteArena from the requested tier's free list, or
+// creates a fresh zero-sized arena when the list is empty.
+func GetArena(tier int) *WriteArena {
+	pool := &arenaPools[tier]
 	for {
-		head := atomic.LoadPointer(&arenaPool.head)
+		head := atomic.LoadPointer(&pool.head)
 		if head == nil {
-			return NewArena(0)
+			a := NewArena(0)
+			if tier == ArenaSmall {
+				a.sizeLimit = arenaSmallMax
+			} else {
+				a.sizeLimit = arenaMaxSize
+			}
+			return a
 		}
 		node := (*arenaNode)(head)
 		next := atomic.LoadPointer(&node.next)
-		if atomic.CompareAndSwapPointer(&arenaPool.head, head, next) {
-			arenaPool.count.Add(-1)
+		if atomic.CompareAndSwapPointer(&pool.head, head, next) {
+			pool.count.Add(-1)
 			return node.arena
 		}
 	}
 }
 
-// PutArena pushes a WriteArena back into the GC-immune free list.
-// Arenas exceeding the pool capacity are silently dropped.
+// PutArena pushes a WriteArena back into its tier's free list,
+// auto-routing based on sizeLimit.
 func PutArena(a *WriteArena) {
 	if a == nil {
 		return
 	}
-	if int(arenaPool.count.Load()) >= arenaMaxPooled {
+	tier := ArenaSmall
+	if a.sizeLimit > arenaSmallMax {
+		tier = ArenaLarge
+	}
+	pool := &arenaPools[tier]
+	if pool.count.Load() >= pool.maxCount {
 		return
 	}
 	node := &arenaNode{arena: a}
 	for {
-		oldHead := atomic.LoadPointer(&arenaPool.head)
+		oldHead := atomic.LoadPointer(&pool.head)
 		node.next = oldHead
-		if atomic.CompareAndSwapPointer(&arenaPool.head, oldHead, unsafe.Pointer(node)) {
-			arenaPool.count.Add(1)
+		if atomic.CompareAndSwapPointer(&pool.head, oldHead, unsafe.Pointer(node)) {
+			pool.count.Add(1)
 			return
 		}
 	}

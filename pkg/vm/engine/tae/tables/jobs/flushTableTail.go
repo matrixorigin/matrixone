@@ -683,7 +683,7 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 	}
 
 	// write!
-	arena := objectio.GetArena()
+	arena := objectio.GetArena(objectio.ArenaSmall)
 	defer func() {
 		arena.Reset()
 		objectio.PutArena(arena)

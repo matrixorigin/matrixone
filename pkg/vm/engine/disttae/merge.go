@@ -132,7 +132,7 @@ func newCNMergeTask(
 	}
 	var arena *objectio.WriteArena
 	if arenaSize > 0 {
-		arena = objectio.GetArena()
+		arena = objectio.GetArena(objectio.ArenaLarge)
 	}
 
 	return &cnMergeTask{

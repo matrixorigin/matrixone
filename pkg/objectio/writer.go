@@ -44,6 +44,7 @@ type WriteArena struct {
 	compressBuf    []byte
 	serialBuf      bytes.Buffer // reused for column serialization across write cycles
 	totalRequested int          // sum of all Alloc sizes in the current cycle
+	sizeLimit      int          // max data growth; 0 means arenaMaxSize
 }
 
 func NewArena(size int) *WriteArena {
@@ -69,14 +70,18 @@ func (a *WriteArena) Alloc(size int) []byte {
 
 // Reset prepares the arena for a new write cycle.  If the previous
 // cycle overflowed (totalRequested > len(data)) and the required
-// capacity is within arenaMaxSize, the backing array is grown to a
+// capacity is within sizeLimit, the backing array is grown to a
 // power-of-two capacity large enough to hold an equivalent cycle
 // without any fallback allocations.
 func (a *WriteArena) Reset() {
-	if needed := a.totalRequested; needed > len(a.data) && needed <= arenaMaxSize {
+	limit := a.sizeLimit
+	if limit <= 0 {
+		limit = arenaMaxSize
+	}
+	if needed := a.totalRequested; needed > len(a.data) && needed <= limit {
 		newCap := arenaNextPow2(needed)
-		if newCap > arenaMaxSize {
-			newCap = arenaMaxSize
+		if newCap > limit {
+			newCap = limit
 		}
 		a.data = make([]byte, newCap)
 	}

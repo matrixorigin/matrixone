@@ -100,7 +100,7 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 			return nil
 		}
 	}
-	arena := objectio.GetArena()
+	arena := objectio.GetArena(objectio.ArenaSmall)
 	defer func() {
 		arena.Reset()
 		objectio.PutArena(arena)
