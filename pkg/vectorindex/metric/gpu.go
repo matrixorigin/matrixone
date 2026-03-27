@@ -29,13 +29,19 @@ import (
 // GPUThresholdSync is the minimum nX*nY*dim work size required to use the GPU
 // when there is no I/O to overlap with (e.g. in-memory blocks). Below this
 // threshold the GPU kernel-launch overhead exceeds the compute savings.
-const GPUThresholdSync = uint64(200 * 1024 * 1024)
+const GPUThresholdSync = uint64(4 * 1024 * 1024)
 
 // GPUThresholdOverlapped should be used when the GPU compute is pipelined with
 // synchronous block I/O. The GPU time is hidden inside the I/O wait, so even
 // small workloads benefit from offloading. Pass 0 to always use the GPU for
 // any supported metric.
 const GPUThresholdOverlapped = uint64(0)
+
+// GPUThresholdSQL is the threshold for SQL scalar distance functions (e.g.
+// l2_distance_sq). SQL operators are typically parallelised across ~4 threads,
+// each processing a smaller partition, so a threshold of GPUThresholdSync/4
+// better reflects the per-thread workload at which GPU offload pays off.
+const GPUThresholdSQL = GPUThresholdSync / 4
 
 var (
 	MetricTypeToCuvsMetric = map[MetricType]cuvs.DistanceType{

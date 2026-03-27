@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	fj "github.com/matrixorigin/matrixone/pkg/sql/plan/function/fault"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/floor"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/format"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/instr"
@@ -7759,16 +7760,88 @@ func SplitSingle(str, sep string, cnt uint32) (string, bool) {
 	return strSlice[cnt-1], false
 }
 
+// batchArrayDistanceSync computes a 1×N pairwise distance when exactly one input vector is
+// constant (the typical "ORDER BY distance(col, query)" SQL pattern).
+// Uses GPU for float32 workloads above GPUThresholdSync; falls back to CPU pairwise for
+// float64 or small batches. Returns (dist, true, nil) on success, or (nil, false, nil) when
+// neither (or both) inputs are const, or when null propagation requires per-row handling.
+func batchArrayDistanceSync[T types.RealNumbers](
+	ivecs []*vector.Vector,
+	length int,
+	m metric.MetricType,
+) ([]float32, bool, error) {
+	c0, c1 := ivecs[0].IsConst(), ivecs[1].IsConst()
+	if c0 == c1 {
+		return nil, false, nil // both const or neither const
+	}
+	constIdx, colIdx := 0, 1
+	if c1 {
+		constIdx, colIdx = 1, 0
+	}
+
+	// const is null → all-null result; let per-row code handle it.
+	if ivecs[constIdx].IsConstNull() {
+		return nil, false, nil
+	}
+	// column has nulls → let per-row code handle null propagation.
+	if ivecs[colIdx].GetNulls().Any() {
+		return nil, false, nil
+	}
+
+	queryBytes := ivecs[constIdx].GetBytesAt(0)
+	if len(queryBytes) == 0 {
+		return nil, false, nil
+	}
+	x := [][]T{types.BytesToArray[T](queryBytes)}
+
+	col := ivecs[colIdx]
+	y := make([][]T, length)
+	for i := range y {
+		y[i] = types.BytesToArray[T](col.GetBytesAt(i))
+	}
+
+	dist := make([]float32, length)
+	handle, err := metric.PairwiseDistanceLaunch(x, y, m, 0 /*deviceID*/, dist, metric.GPUThresholdSQL)
+	if err != nil {
+		return nil, false, err
+	}
+	dist, err = metric.PairwiseDistanceWait(handle, m)
+	if err != nil {
+		return nil, false, err
+	}
+	return dist, true, nil
+}
+
 func InnerProductArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_InnerProduct); err != nil {
+		return err
+	} else if ok {
+		rs := vector.MustFunctionResult[float64](result)
+		rss := vector.MustFixedColNoTypeCheck[float64](rs.GetResultVector())
+		for i, d := range dist {
+			rss[i] = float64(d)
+		}
+		return nil
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
 		_v1 := types.BytesToArray[T](v1)
 		_v2 := types.BytesToArray[T](v2)
-
 		return moarray.InnerProduct[T](_v1, _v2)
 	}, selectList)
 }
 
 func CosineSimilarityArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	// Use Metric_CosineDistance and convert: similarity = 1 - distance.
+	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_CosineDistance); err != nil {
+		return err
+	} else if ok {
+		rs := vector.MustFunctionResult[float64](result)
+		rss := vector.MustFixedColNoTypeCheck[float64](rs.GetResultVector())
+		for i, d := range dist {
+			rss[i] = 1.0 - float64(d)
+		}
+		return nil
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
 		_v1 := types.BytesToArray[T](v1)
 		_v2 := types.BytesToArray[T](v2)
@@ -7777,6 +7850,16 @@ func CosineSimilarityArray[T types.RealNumbers](ivecs []*vector.Vector, result v
 }
 
 func L2DistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_L2Distance); err != nil {
+		return err
+	} else if ok {
+		rs := vector.MustFunctionResult[float64](result)
+		rss := vector.MustFixedColNoTypeCheck[float64](rs.GetResultVector())
+		for i, d := range dist {
+			rss[i] = float64(d)
+		}
+		return nil
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
 		_v1 := types.BytesToArray[T](v1)
 		_v2 := types.BytesToArray[T](v2)
@@ -7785,6 +7868,16 @@ func L2DistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.
 }
 
 func L2DistanceSqArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_L2sqDistance); err != nil {
+		return err
+	} else if ok {
+		rs := vector.MustFunctionResult[float64](result)
+		rss := vector.MustFixedColNoTypeCheck[float64](rs.GetResultVector())
+		for i, d := range dist {
+			rss[i] = float64(d)
+		}
+		return nil
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
 		_v1 := types.BytesToArray[T](v1)
 		_v2 := types.BytesToArray[T](v2)
@@ -7793,6 +7886,16 @@ func L2DistanceSqArray[T types.RealNumbers](ivecs []*vector.Vector, result vecto
 }
 
 func CosineDistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_CosineDistance); err != nil {
+		return err
+	} else if ok {
+		rs := vector.MustFunctionResult[float64](result)
+		rss := vector.MustFixedColNoTypeCheck[float64](rs.GetResultVector())
+		for i, d := range dist {
+			rss[i] = float64(d)
+		}
+		return nil
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
 		_v1 := types.BytesToArray[T](v1)
 		_v2 := types.BytesToArray[T](v2)

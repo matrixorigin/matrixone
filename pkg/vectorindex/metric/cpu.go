@@ -22,8 +22,9 @@ import (
 
 // GPUThresholdSync and GPUThresholdOverlapped are defined here for non-gpu
 // builds so that callers can reference them unconditionally.
-const GPUThresholdSync = uint64(200 * 1024 * 1024)
+const GPUThresholdSync = uint64(4 * 1024 * 1024)
 const GPUThresholdOverlapped = uint64(0)
+const GPUThresholdSQL = GPUThresholdSync / 4
 
 func PairWiseDistance[T types.RealNumbers](
 	x [][]T,
@@ -44,7 +45,6 @@ func PairwiseDistanceLaunch[T types.RealNumbers](
 ) (PairwiseJobHandle, error) {
 	return PairwiseDistanceLaunchCPU(x, y, metric, deviceID, dist)
 }
-
 
 func PairwiseDistanceWait(handle PairwiseJobHandle, metric MetricType) ([]float32, error) {
 	return PairwiseDistanceWaitCPU(handle, metric)
