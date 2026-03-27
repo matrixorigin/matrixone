@@ -244,8 +244,10 @@ func (b *ProjectionBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, 
 		}
 		typ = &w.OrderBy[0].Expr.Typ
 		t := types.Type{Oid: types.T(typ.Id)}
-		if isNRange(ws.Frame) && !t.IsNumericOrTemporal() {
-			return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>' with RANGE N PRECEDING/FOLLOWING frame requires exactly one ORDER BY expression, of numeric or temporal type")
+		// WIN_ORDER functions (row_number, rank, dense_rank) don't do arithmetic
+		// on ORDER BY columns, so any type is fine. Others require numeric/temporal.
+		if !function.GetFunctionIsWinOrderFunByName(funcName) && !t.IsNumericOrTemporal() {
+			return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>' with RANGE frame requires ORDER BY expression of numeric or temporal type")
 		}
 	case tree.Groups:
 		return nil, moerr.NewNYI(b.GetContext(), "GROUPS in WINDOW FUNCTION condition")
