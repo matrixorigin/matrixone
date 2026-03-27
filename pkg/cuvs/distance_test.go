@@ -56,6 +56,7 @@ func TestPairwiseDistance(t *testing.T) {
 	// dist[0,1] = (1-0)^2 + (0-1)^2 + (0-0)^2 = 2
 	// dist[1,0] = (0-1)^2 + (1-0)^2 + (0-0)^2 = 2
 	// dist[1,1] = (0-0)^2 + (1-1)^2 + (0-0)^2 = 0
+}
 
 func TestPairwiseDistanceAsync(t *testing.T) {
 	dim := uint32(3)

@@ -23,9 +23,13 @@ package cuvs
 */
 import "C"
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // GpuIvfFlat represents the C++ gpu_ivf_flat_t object.
@@ -495,7 +499,7 @@ func (gi *GpuIvfFlat[T]) Pack(filename string) error {
 
 	tmpDir, err := os.MkdirTemp("", "ivf-flat-pack-*")
 	if err != nil {
-		return moerr.NewInternalErrorNoCtx("failed to create temp dir: %v", err)
+		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to create temp dir: %v", err))
 	}
 	defer os.RemoveAll(tmpDir)
 
@@ -512,7 +516,7 @@ func (gi *GpuIvfFlat[T]) Pack(filename string) error {
 
 	manifestBytes, err := os.ReadFile(filepath.Join(tmpDir, "manifest.json"))
 	if err != nil {
-		return moerr.NewInternalErrorNoCtx("failed to read manifest: %v", err)
+		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to read manifest: %v", err))
 	}
 
 	return Pack(tmpDir, string(manifestBytes), filename)
@@ -527,7 +531,7 @@ func (gi *GpuIvfFlat[T]) Unpack(filename string) error {
 
 	tmpDir, err := os.MkdirTemp("", "ivf-flat-unpack-*")
 	if err != nil {
-		return moerr.NewInternalErrorNoCtx("failed to create temp dir: %v", err)
+		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to create temp dir: %v", err))
 	}
 	defer os.RemoveAll(tmpDir)
 

@@ -23,6 +23,9 @@ package cuvs
 */
 import "C"
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"unsafe"
 
@@ -562,7 +565,7 @@ func (gi *GpuIvfPq[T]) Pack(filename string) error {
 
 	tmpDir, err := os.MkdirTemp("", "ivf-pq-pack-*")
 	if err != nil {
-		return moerr.NewInternalErrorNoCtx("failed to create temp dir: %v", err)
+		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to create temp dir: %v", err))
 	}
 	defer os.RemoveAll(tmpDir)
 
@@ -579,7 +582,7 @@ func (gi *GpuIvfPq[T]) Pack(filename string) error {
 
 	manifestBytes, err := os.ReadFile(filepath.Join(tmpDir, "manifest.json"))
 	if err != nil {
-		return moerr.NewInternalErrorNoCtx("failed to read manifest: %v", err)
+		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to read manifest: %v", err))
 	}
 
 	return Pack(tmpDir, string(manifestBytes), filename)
@@ -594,7 +597,7 @@ func (gi *GpuIvfPq[T]) Unpack(filename string) error {
 
 	tmpDir, err := os.MkdirTemp("", "ivf-pq-unpack-*")
 	if err != nil {
-		return moerr.NewInternalErrorNoCtx("failed to create temp dir: %v", err)
+		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to create temp dir: %v", err))
 	}
 	defer os.RemoveAll(tmpDir)
 

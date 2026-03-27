@@ -21,6 +21,7 @@ package cuvs
 import (
 	"archive/tar"
 	"compress/gzip"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -153,7 +154,7 @@ func Unpack(inputPath string, dirPath string) (string, error) {
 	manifestPath := filepath.Join(dirPath, "manifest.json")
 	manifestBytes, err := os.ReadFile(manifestPath)
 	if err != nil {
-		return "", moerr.NewInternalErrorNoCtx("failed to read manifest from tar: %v", err)
+		return "", moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to read manifest from tar: %v", err))
 	}
 
 	return string(manifestBytes), nil
