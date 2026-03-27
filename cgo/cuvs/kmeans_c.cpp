@@ -178,7 +178,7 @@ gpu_kmeans_fit_res_t gpu_kmeans_fit(gpu_kmeans_c kmeans_c, const void* X_data, u
     gpu_kmeans_fit_res_t result = {0.0f, 0};
     try {
         auto* any = static_cast<gpu_kmeans_any_t*>(kmeans_c);
-        kmeans_result_t res;
+        kmeans_result_t res = {};
         switch (any->qtype) {
             case Quantization_F32: res = static_cast<gpu_kmeans_t<float>*>(any->ptr)->fit(static_cast<const float*>(X_data), n_samples); break;
             case Quantization_F16: res = static_cast<gpu_kmeans_t<half>*>(any->ptr)->fit(static_cast<const half*>(X_data), n_samples); break;

@@ -81,6 +81,7 @@ public:
 
     // Internal index storage
     std::unique_ptr<cagra_index> index_;
+    std::string index_filename_;
 
     ~gpu_cagra_t() override {
         this->destroy();
@@ -149,6 +150,7 @@ public:
                     const cagra_build_params_t& bp, const std::vector<int>& devices,
                     uint32_t nthread, distribution_mode_t mode) {
 
+        this->index_filename_ = filename;
         this->dimension = dimension;
         this->metric = m;
         this->build_params = bp;
@@ -254,6 +256,10 @@ public:
     }
 
     void build() override {
+        if (!this->index_filename_.empty()) {
+            load(this->index_filename_);
+            return;
+        }
         this->count = static_cast<uint32_t>(this->current_offset_);
         if (this->count == 0) {
             this->is_loaded_ = true;
@@ -405,7 +411,7 @@ public:
         }
     }
 
-    search_result_t search(const T* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const cagra_search_params_t& sp) {
+    search_result_t search(const T* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/, uint32_t limit, const cagra_search_params_t& sp) {
         if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
         if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) return search_result_t{};
 
@@ -637,7 +643,7 @@ public:
         return future.get();
     }
 
-    search_result_t search_float_internal(raft_handle_wrapper_t& handle, const float* queries_data, uint64_t num_queries, uint32_t query_dimension, 
+    search_result_t search_float_internal(raft_handle_wrapper_t& handle, const float* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/,
                         uint32_t limit, const cagra_search_params_t& sp) {
         // std::shared_lock<std::shared_mutex> lock(this->mutex_);
         auto res = handle.get_raft_resources();

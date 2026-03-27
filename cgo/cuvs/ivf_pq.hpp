@@ -82,7 +82,8 @@ public:
 
     // Internal index storage
     std::unique_ptr<ivf_pq_index> index_;
-    std::string data_filename_;
+    std::string data_filename_;    // raw feature-vector file → load_host_matrix in build()
+    std::string index_filename_;   // serialized index file → load() in build()
 
     ~gpu_ivf_pq_t() override {
         this->destroy();
@@ -166,7 +167,7 @@ public:
         this->current_offset_ = 0;
     }
 
-    // Existing constructor from file with dimension
+    // Constructor for loading a serialized IVF-PQ index from file
     gpu_ivf_pq_t(const std::string& filename, uint32_t dimension, distance_type_t m,
                     const ivf_pq_build_params_t& bp, const std::vector<int>& devices,
                     uint32_t nthread, distribution_mode_t mode) {
@@ -176,6 +177,7 @@ public:
         this->build_params = bp;
         this->dist_mode = mode;
         this->devices_ = devices;
+        this->index_filename_ = filename;
 
         std::vector<int> worker_devices = this->devices_;
         if (mode == DistributionMode_SINGLE_GPU && !worker_devices.empty()) {
@@ -207,6 +209,10 @@ public:
     }
 
     void build() override {
+        if (!this->index_filename_.empty()) {
+            load(this->index_filename_);
+            return;
+        }
         if (!this->data_filename_.empty() && this->flattened_host_dataset.empty()) {
             uint64_t rows, cols;
             load_host_matrix<T>(this->data_filename_, this->flattened_host_dataset, rows, cols);
@@ -318,7 +324,7 @@ public:
         }
     }
 
-    search_result_t search(const T* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const ivf_pq_search_params_t& sp) {
+    search_result_t search(const T* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/, uint32_t limit, const ivf_pq_search_params_t& sp) {
         if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
         if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) return search_result_t{};
 
@@ -546,7 +552,7 @@ public:
         return future.get();
     }
 
-    search_result_t search_float_internal(raft_handle_wrapper_t& handle, const float* queries_data, uint64_t num_queries, uint32_t query_dimension, 
+    search_result_t search_float_internal(raft_handle_wrapper_t& handle, const float* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/,
                         uint32_t limit, const ivf_pq_search_params_t& sp) {
         auto res = handle.get_raft_resources();
         auto q_dev_t = raft::make_device_matrix<T, int64_t>(*res, num_queries, this->dimension);

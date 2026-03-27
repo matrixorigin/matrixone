@@ -239,14 +239,15 @@ public:
         auto shared_dataset = std::make_shared<dataset_t>(std::move(dataset_device));
         this->dataset_device_ptr_ = shared_dataset;
 
+        cuvs::neighbors::brute_force::index_params ip;
+        ip.metric = matrixone::convert_distance_type(this->metric);
         index_.reset(new brute_force_index(cuvs::neighbors::brute_force::build(
-            *res, raft::make_const_mdspan(shared_dataset->view()), 
-            matrixone::convert_distance_type(this->metric))));
+            *res, ip, raft::make_const_mdspan(shared_dataset->view()))));
         
         handle.sync();
     }
 
-    search_result_t search(const T* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const brute_force_search_params_t& sp) {
+    search_result_t search(const T* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/, uint32_t limit, const brute_force_search_params_t& sp) {
         if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
         if (!this->is_loaded_ || !index_) return search_result_t{};
 
@@ -261,10 +262,10 @@ public:
         return std::any_cast<search_result_t>(result_wait.result);
     }
 
-    search_result_t search_internal(raft_handle_wrapper_t& handle, const T* queries_data, uint64_t num_queries, uint32_t limit, const brute_force_search_params_t& sp) {
+    search_result_t search_internal(raft_handle_wrapper_t& handle, const T* queries_data, uint64_t num_queries, uint32_t limit, const brute_force_search_params_t& /*sp*/) {
         std::shared_lock<std::shared_mutex> lock(this->mutex_);
         auto res = handle.get_raft_resources();
-        
+
         search_result_t search_res;
         search_res.neighbors.resize(num_queries * limit);
         search_res.distances.resize(num_queries * limit);
@@ -276,8 +277,9 @@ public:
         auto neighbors_device = raft::make_device_matrix<int64_t, int64_t>(*res, (int64_t)num_queries, (int64_t)limit);
         auto distances_device = raft::make_device_matrix<float, int64_t>(*res, (int64_t)num_queries, (int64_t)limit);
 
-        cuvs::neighbors::brute_force::search(*res, *index_, 
-                                            raft::make_const_mdspan(queries_device.view()), 
+        cuvs::neighbors::brute_force::search_params bf_sp;
+        cuvs::neighbors::brute_force::search(*res, bf_sp, *index_,
+                                            raft::make_const_mdspan(queries_device.view()),
                                             neighbors_device.view(), distances_device.view());
 
         raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device.view());
@@ -312,7 +314,7 @@ public:
         return std::any_cast<search_result_t>(result_wait.result);
     }
 
-    search_result_t search_float_internal(raft_handle_wrapper_t& handle, const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const brute_force_search_params_t& sp) {
+    search_result_t search_float_internal(raft_handle_wrapper_t& handle, const float* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/, uint32_t limit, const brute_force_search_params_t& /*sp*/) {
         std::shared_lock<std::shared_mutex> lock(this->mutex_);
         auto res = handle.get_raft_resources();
 
@@ -341,8 +343,9 @@ public:
         auto neighbors_device = raft::make_device_matrix<int64_t, int64_t>(*res, (int64_t)num_queries, (int64_t)limit);
         auto distances_device = raft::make_device_matrix<float, int64_t>(*res, (int64_t)num_queries, (int64_t)limit);
 
-        cuvs::neighbors::brute_force::search(*res, *index_, 
-                                            raft::make_const_mdspan(q_dev_t.view()), 
+        cuvs::neighbors::brute_force::search_params bf_sp;
+        cuvs::neighbors::brute_force::search(*res, bf_sp, *index_,
+                                            raft::make_const_mdspan(q_dev_t.view()),
                                             neighbors_device.view(), distances_device.view());
 
         raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device.view());

@@ -63,6 +63,7 @@ public:
 
     std::unique_ptr<ivf_flat_index> index_;
     std::unique_ptr<mg_index> mg_index_;
+    std::string data_filename_;
 
     ~gpu_ivf_flat_t() override {
         destroy();
@@ -136,6 +137,7 @@ public:
         this->build_params = bp;
         this->dist_mode = mode;
         this->devices_ = devices;
+        this->data_filename_ = filename;
         
         std::vector<int> worker_devices = this->devices_;
         if (mode == DistributionMode_SINGLE_GPU && !worker_devices.empty()) {
@@ -148,7 +150,7 @@ public:
 
     void start() override {
         auto init_fn = [](raft_handle_wrapper_t&) -> std::any { return std::any(); };
-        auto stop_fn = [&](raft_handle_wrapper_t& handle) -> std::any {
+        auto stop_fn = [&](raft_handle_wrapper_t& /*handle*/) -> std::any {
             std::unique_lock<std::shared_mutex> lock(this->mutex_);
             index_.reset();
             mg_index_.reset();
@@ -162,6 +164,10 @@ public:
     }
 
     void build() override {
+        if (!this->data_filename_.empty()) {
+            load(this->data_filename_);
+            return;
+        }
         this->count = static_cast<uint32_t>(this->current_offset_);
         if (this->count == 0) {
             this->is_loaded_ = true;
@@ -264,7 +270,7 @@ public:
         }
     }
 
-    search_result_t search(const T* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const ivf_flat_search_params_t& sp) {
+    search_result_t search(const T* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/, uint32_t limit, const ivf_flat_search_params_t& sp) {
         if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
         if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) return search_result_t{};
 
@@ -496,7 +502,7 @@ public:
         return search_res;
     }
 
-    search_result_t search_float_internal(raft_handle_wrapper_t& handle, const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const ivf_flat_search_params_t& sp) {
+    search_result_t search_float_internal(raft_handle_wrapper_t& handle, const float* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/, uint32_t limit, const ivf_flat_search_params_t& sp) {
         // std::shared_lock<std::shared_mutex> lock(this->mutex_);
         auto res = handle.get_raft_resources();
 
