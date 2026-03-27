@@ -52,6 +52,29 @@ select id, LAG(val_f32) over (order by id) as prev_f32 from test_float_types;
 select id, LEAD(val_f64) over (order by id) as next_f64 from test_float_types;
 drop table if exists test_float_types;
 
+-- Test lag/lead with offset and partition
+drop table if exists t_lag_test;
+create table t_lag_test (id int primary key, val int);
+insert into t_lag_test values (1,10),(2,20),(3,30),(4,40),(5,50),(6,60),(7,70),(8,80);
+
+select id, val, lag(val, 1) over (order by id) as lag1 from t_lag_test order by id;
+select id, val, lag(val, 3) over (order by id) as lag3 from t_lag_test order by id;
+select id, val, lag(val, 5) over (order by id) as lag5 from t_lag_test order by id;
+select id, val, lag(val, 1, -1) over (order by id) as lag1_def from t_lag_test order by id;
+select id, val, lead(val, 3) over (order by id) as lead3 from t_lag_test order by id;
+select id, val, lead(val, 1, -1) over (order by id) as lead1_def from t_lag_test order by id;
+drop table if exists t_lag_test;
+
+drop table if exists t_lag_part;
+create table t_lag_part (id int primary key, grp char(1), val int);
+insert into t_lag_part values (1,'A',10),(2,'A',20),(3,'A',30),(4,'A',40),
+                              (5,'B',50),(6,'B',60),(7,'B',70),(8,'B',80);
+
+select id, grp, val, lag(val, 2) over (partition by grp order by id) as lag2 from t_lag_part order by grp, id;
+select id, grp, val, lead(val, 2) over (partition by grp order by id) as lead2 from t_lag_part order by grp, id;
+select id, grp, val, lag(val, 1, -1) over (partition by grp order by id) as lag1_def from t_lag_part order by grp, id;
+drop table if exists t_lag_part;
+
 -- Test keywords as role names
 drop role if exists lag;
 drop role if exists lead;
