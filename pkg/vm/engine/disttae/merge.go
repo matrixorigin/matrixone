@@ -253,6 +253,8 @@ func (t *cnMergeTask) Release() {
 		objectio.PutArena(t.arena)
 		t.arena = nil
 	}
+	mergesort.CleanTransMapping(t.transferMaps)
+	t.transferMaps = nil
 }
 
 func (t *cnMergeTask) GetTotalSize() uint64 {
