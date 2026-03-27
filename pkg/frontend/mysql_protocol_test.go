@@ -2484,9 +2484,13 @@ func TestParseExecuteDataWithJSONParam(t *testing.T) {
 	ctx := context.TODO()
 	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select ?")
 
-	jsonPayload := []byte(`{"k":"v"}`)
-	testData := []byte{0, 0, 0, 0, 0, 0, 1, uint8(defines.MYSQL_TYPE_JSON), 0, byte(len(jsonPayload))}
-	testData = append(testData, jsonPayload...)
+	jsonPayload := append([]byte(`{"k":"`), bytes.Repeat([]byte{'v'}, 300)...)
+	jsonPayload = append(jsonPayload, []byte(`"}`)...)
+
+	testData := make([]byte, 8+2+9+len(jsonPayload))
+	copy(testData, []byte{0, 0, 0, 0, 0, 0, 1, uint8(defines.MYSQL_TYPE_JSON), 0})
+	pos := proto.writeStringLenEnc(testData, 9, string(jsonPayload))
+	testData = testData[:pos]
 
 	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt, testData, 0))
 	require.Equal(t, string(jsonPayload), prepareStmt.params.GetStringAt(0))
