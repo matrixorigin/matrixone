@@ -400,7 +400,7 @@ func TestPreInsertPrepareRefreshesAutoIncrementTableID(t *testing.T) {
 
 	err := argument.Prepare(proc)
 	require.NoError(t, err)
-	require.Equal(t, uint64(200), argument.TableDef.TblId)
+	require.Equal(t, uint64(200), argument.ctr.tblId)
 }
 
 func TestPreInsertPrepareSkipsTemporaryTableRefresh(t *testing.T) {
@@ -445,7 +445,7 @@ func TestPreInsertPrepareSkipsTemporaryTableRefresh(t *testing.T) {
 
 	err := argument.Prepare(proc)
 	require.NoError(t, err)
-	require.Equal(t, uint64(100), argument.TableDef.TblId)
+	require.Equal(t, uint64(100), argument.ctr.tblId)
 }
 
 func TestGenAutoIncrColRefreshesStaleTableID(t *testing.T) {
@@ -499,6 +499,7 @@ func TestGenAutoIncrColRefreshesStaleTableID(t *testing.T) {
 		Attrs:             []string{catalog.FakePrimaryKeyColName},
 		EstimatedRowCount: 1,
 	}
+	preInsert.ctr.tblId = preInsert.TableDef.TblId
 
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = testutil.MakeInt64Vector([]int64{0}, nil, proc.Mp())
@@ -506,7 +507,7 @@ func TestGenAutoIncrColRefreshesStaleTableID(t *testing.T) {
 
 	err := genAutoIncrCol(bat, proc, preInsert)
 	require.NoError(t, err)
-	require.Equal(t, uint64(200), preInsert.TableDef.TblId)
+	require.Equal(t, uint64(200), preInsert.ctr.tblId)
 }
 
 func TestGenAutoIncrColReturnsRetryWhenDefinitionStillChanged(t *testing.T) {
@@ -556,6 +557,7 @@ func TestGenAutoIncrColReturnsRetryWhenDefinitionStillChanged(t *testing.T) {
 		Attrs:             []string{catalog.FakePrimaryKeyColName},
 		EstimatedRowCount: 1,
 	}
+	preInsert.ctr.tblId = preInsert.TableDef.TblId
 
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = testutil.MakeInt64Vector([]int64{0}, nil, proc.Mp())
@@ -604,6 +606,7 @@ func TestGenAutoIncrColKeepsTemporaryTableBehavior(t *testing.T) {
 		Attrs:             []string{catalog.FakePrimaryKeyColName},
 		EstimatedRowCount: 1,
 	}
+	preInsert.ctr.tblId = preInsert.TableDef.TblId
 
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = testutil.MakeInt64Vector([]int64{0}, nil, proc.Mp())
