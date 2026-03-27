@@ -25,7 +25,6 @@ import "C"
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"runtime"
 	"unsafe"
 
@@ -580,12 +579,7 @@ func (gi *GpuIvfPq[T]) Pack(filename string) error {
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 
-	manifestBytes, err := os.ReadFile(filepath.Join(tmpDir, "manifest.json"))
-	if err != nil {
-		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to read manifest: %v", err))
-	}
-
-	return Pack(tmpDir, string(manifestBytes), filename)
+	return Pack(tmpDir, filename)
 }
 
 // Unpack extracts a .tar or .tar.gz file and loads index components via load_dir.

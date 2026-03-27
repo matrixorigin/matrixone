@@ -30,16 +30,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-// Pack consolidates multiple files into a single .tar or .tar.gz file.
+// Pack archives all files in dirPath into a single .tar or .tar.gz file.
+// save_dir already writes manifest.json to dirPath, so it is included automatically.
 // If outputPath ends with .gz, gzip compression is used.
-func Pack(dirPath string, manifestJson string, outputPath string) error {
-	// 1. Write manifest.json into the directory
-	manifestPath := filepath.Join(dirPath, "manifest.json")
-	if err := os.WriteFile(manifestPath, []byte(manifestJson), 0644); err != nil {
-		return err
-	}
-
-	// 2. Create the output file
+func Pack(dirPath string, outputPath string) error {
 	outFile, err := os.Create(outputPath)
 	if err != nil {
 		return err
@@ -51,14 +45,11 @@ func Pack(dirPath string, manifestJson string, outputPath string) error {
 
 	if strings.HasSuffix(outputPath, ".gz") {
 		gw = gzip.NewWriter(outFile)
-		defer gw.Close()
 		tw = tar.NewWriter(gw)
 	} else {
 		tw = tar.NewWriter(outFile)
 	}
-	defer tw.Close()
 
-	// 3. Iterate over files in the directory and add them to the tar
 	files, err := os.ReadDir(dirPath)
 	if err != nil {
 		return err
@@ -95,6 +86,14 @@ func Pack(dirPath string, manifestJson string, outputPath string) error {
 		f.Close()
 	}
 
+	if err := tw.Close(); err != nil {
+		return err
+	}
+	if gw != nil {
+		if err := gw.Close(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
