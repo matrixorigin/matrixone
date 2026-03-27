@@ -75,7 +75,7 @@ func ReadDataByFilter(
 ) (sels []int64, err error) {
 	// PXU TODO: temporary solution, need to be refactored
 	// cannot filter by physical address column now
-	deleteMask, release, err := readBlockData(
+	deleteMask, release, _, err := readBlockData(
 		ctx,
 		columns,
 		colTypes,
@@ -148,7 +148,7 @@ func BlockDataReadNoCopy(
 	}
 
 	// read block data from storage specified by meta location
-	if deleteMask, release, err = readBlockData(
+	if deleteMask, release, _, err = readBlockData(
 		ctx, columns, colTypes, phyAddrColumnPos, info, ds, ts, policy, cacheVectors, mp, fs,
 	); err != nil {
 		return nil, nil, nil, err
@@ -374,7 +374,7 @@ func CopyBlockData(
 		cacheVectors = containers.NewVectors(len(seqnums))
 	)
 
-	if release, err = ioutil.LoadColumns(
+	if release, _, err = ioutil.LoadColumns(
 		ctx, seqnums, colTypes, fs, location, cacheVectors, mp, fileservice.Policy(0),
 	); err != nil {
 		return
@@ -763,10 +763,11 @@ func BlockDataReadInnerLaunch(
 		deletedRows []int64
 		deleteMask  objectio.Bitmap
 		release     func()
+		fromCache   bool
 	)
 
 	// read block data from storage specified by meta location
-	if deleteMask, release, err = readBlockData(
+	if deleteMask, release, fromCache, err = readBlockData(
 		ctx,
 		columns,
 		colTypes,
@@ -788,10 +789,18 @@ func BlockDataReadInnerLaunch(
 	}()
 	defer deleteMask.Release()
 
+	// When the block was served entirely from cache there is no I/O latency to
+	// overlap with GPU compute, so fall back to the same threshold used for
+	// in-memory blocks to avoid launching the GPU for small workloads.
+	threshold := minWorkSize
+	if fromCache {
+		threshold = metric.GPUThresholdSync
+	}
+
 	// len(selectRows) > 0 means it was already filtered by pk filter
 	if len(selectRows) > 0 {
 		if orderByLimit != nil {
-			job, err = handleOrderByLimitOnSelectRowsLaunch(ctx, selectRows, orderByLimit, phyAddrColumnPos, cacheVectors, minWorkSize)
+			job, err = handleOrderByLimitOnSelectRowsLaunch(ctx, selectRows, orderByLimit, phyAddrColumnPos, cacheVectors, threshold)
 			if job != nil {
 				job.Release = release
 			}
@@ -842,7 +851,7 @@ func BlockDataReadInnerLaunch(
 	// apply TopN on live rows (exclude tombstones first), then materialize selected rows.
 	if orderByLimit != nil {
 		topInputRows := buildTopInputRows(int(info.MetaLocation().Rows()), deleteMask)
-		job, err = handleOrderByLimitOnSelectRowsLaunch(ctx, topInputRows, orderByLimit, phyAddrColumnPos, cacheVectors, minWorkSize)
+		job, err = handleOrderByLimitOnSelectRowsLaunch(ctx, topInputRows, orderByLimit, phyAddrColumnPos, cacheVectors, threshold)
 		if job != nil {
 			job.Release = release
 		}
@@ -966,6 +975,7 @@ func readBlockData(
 ) (
 	deleteMask objectio.Bitmap,
 	release func(),
+	fromCache bool,
 	err error,
 ) {
 	cacheVectors.Free(m)
@@ -982,7 +992,7 @@ func readBlockData(
 			return
 		}
 
-		release, err2 = ioutil.LoadColumns(
+		release, fromCache, err2 = ioutil.LoadColumns(
 			ctx, cols, typs, fs, info.MetaLocation(), cacheVectors2, m, policy,
 		)
 		if err2 != nil {

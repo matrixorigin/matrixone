@@ -176,7 +176,7 @@ func (iter *ObjectIter) Next() (bool, error) {
 		var err error
 		loc := iter.ranges[iter.index.rangeIdx].ObjectStats.ObjectLocation().Clone()
 		loc.SetID(iter.index.blockIdx)
-		if _, iter.release, err = ioutil.LoadColumnsData(
+		if _, iter.release, _, err = ioutil.LoadColumnsData(
 			iter.ctx,
 			DataScan_ObjectEntrySeqnums,
 			DataScan_ObjectEntryTypes,
