@@ -389,6 +389,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 			zap.Int("handle idx", h.handleIdx),
 		)
 		h.handleIdx++
+		snapshotRangeStart := time.Now()
 		if err = h.swapCurrentHandleToSnapshotStateRange(ctx); err != nil {
 			// Skip checkpoint-range recovery for VisibleState policy.
 			// CN-created objects in checkpoint ranges carry a constant
@@ -401,11 +402,27 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 				zap.String("table", fmt.Sprintf("%d", h.tbl.tableId)),
 				zap.String("from", h.currentPSFrom.ToString()),
 				zap.String("to", h.currentPSTo.ToString()),
+				zap.Duration("snapshot-range-attempt", time.Since(snapshotRangeStart)),
 				zap.Error(err),
 			)
+			visibleStateStart := time.Now()
 			if err = h.swapCurrentHandleToVisibleState(ctx); err != nil {
 				return false, err
 			}
+			logutil.Info("ChangesHandle-VisibleStateExactScan-Ready",
+				zap.String("table", fmt.Sprintf("%d", h.tbl.tableId)),
+				zap.String("from", h.currentPSFrom.ToString()),
+				zap.String("to", h.currentPSTo.ToString()),
+				zap.Duration("snapshot-range-attempt", time.Since(snapshotRangeStart)),
+				zap.Duration("visible-state-init", time.Since(visibleStateStart)),
+			)
+		} else {
+			logutil.Info("ChangesHandle-SnapshotStateRange-Ready",
+				zap.String("table", fmt.Sprintf("%d", h.tbl.tableId)),
+				zap.String("from", h.currentPSFrom.ToString()),
+				zap.String("to", h.currentPSTo.ToString()),
+				zap.Duration("duration", time.Since(snapshotRangeStart)),
+			)
 		}
 		return false, nil
 	}

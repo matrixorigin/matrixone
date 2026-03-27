@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
@@ -1217,7 +1218,22 @@ func constructChangeHandle(
 		handle    engine.ChangesHandle
 		tarRange  collectRange
 		baseRange collectRange
+		start     = time.Now()
 	)
+
+	defer func() {
+		fields := []zap.Field{
+			zap.Int("target-handle-cnt", len(tarHandle)),
+			zap.Int("base-handle-cnt", len(baseHandle)),
+			zap.Duration("duration", time.Since(start)),
+		}
+		if err != nil {
+			fields = append(fields, zap.Error(err))
+			logutil.Warn("DataBranch-ConstructChangeHandle-Error", fields...)
+			return
+		}
+		logutil.Info("DataBranch-ConstructChangeHandle-Done", fields...)
+	}()
 
 	if tarRange, baseRange, err = decideCollectRange(
 		ctx, ses, bh, tables, branchInfo,
@@ -1225,6 +1241,7 @@ func constructChangeHandle(
 		return
 	}
 	for i := range tarRange.rel {
+		collectStart := time.Now()
 		if handle, err = databranchutils.CollectChanges(
 			ctx,
 			tarRange.rel[i],
@@ -1234,6 +1251,14 @@ func constructChangeHandle(
 		); err != nil {
 			return
 		}
+		logutil.Info("DataBranch-CollectChanges-Open",
+			zap.String("side", "target"),
+			zap.Uint64("table-id", tarRange.rel[i].GetTableID(ctx)),
+			zap.String("from", tarRange.from[i].ToString()),
+			zap.String("to", tarRange.end[i].ToString()),
+			zap.Bool("has-handle", handle != nil),
+			zap.Duration("duration", time.Since(collectStart)),
+		)
 
 		if handle != nil {
 			tarHandle = append(tarHandle, handle)
@@ -1241,6 +1266,7 @@ func constructChangeHandle(
 	}
 
 	for i := range baseRange.rel {
+		collectStart := time.Now()
 		if handle, err = databranchutils.CollectChanges(
 			ctx,
 			baseRange.rel[i],
@@ -1250,6 +1276,14 @@ func constructChangeHandle(
 		); err != nil {
 			return
 		}
+		logutil.Info("DataBranch-CollectChanges-Open",
+			zap.String("side", "base"),
+			zap.Uint64("table-id", baseRange.rel[i].GetTableID(ctx)),
+			zap.String("from", baseRange.from[i].ToString()),
+			zap.String("to", baseRange.end[i].ToString()),
+			zap.Bool("has-handle", handle != nil),
+			zap.Duration("duration", time.Since(collectStart)),
+		)
 
 		if handle != nil {
 			baseHandle = append(baseHandle, handle)
@@ -1512,16 +1546,51 @@ func getTablesCreationCommitTS(
 	}
 
 	resolve := func(tableID uint64, snap types.TS) (types.TS, error) {
+		totalStart := time.Now()
+		collectStart := time.Now()
 		ts, err := getTableCreationCommitTSByCollectChanges(ctx, ses, tableID, snap)
 		if err == nil {
+			logutil.Info("DataBranch-TableCTS-Resolve-Done",
+				zap.Uint64("table-id", tableID),
+				zap.String("snapshot", snap.ToString()),
+				zap.String("path", "CollectChanges"),
+				zap.String("commit-ts", ts.ToString()),
+				zap.Duration("collectchanges-cost", time.Since(collectStart)),
+				zap.Duration("total-cost", time.Since(totalStart)),
+			)
 			return ts, nil
 		}
+		collectCost := time.Since(collectStart)
 		logutil.Warn("getTablesCreationCommitTS: CollectChanges failed, trying Reader fallback",
 			zap.Uint64("table-id", tableID),
 			zap.String("snapshot", snap.ToString()),
+			zap.Duration("collectchanges-cost", collectCost),
 			zap.Error(err),
 		)
-		return getTableCreationCommitTSByID(ctx, ses, tableID, snap)
+		readerStart := time.Now()
+		ts, readerErr := getTableCreationCommitTSByID(ctx, ses, tableID, snap)
+		if readerErr != nil {
+			logutil.Warn("DataBranch-TableCTS-Resolve-Error",
+				zap.Uint64("table-id", tableID),
+				zap.String("snapshot", snap.ToString()),
+				zap.String("path", "ReaderFallback"),
+				zap.Duration("collectchanges-cost", collectCost),
+				zap.Duration("reader-cost", time.Since(readerStart)),
+				zap.Duration("total-cost", time.Since(totalStart)),
+				zap.Error(readerErr),
+			)
+			return types.TS{}, readerErr
+		}
+		logutil.Info("DataBranch-TableCTS-Resolve-Done",
+			zap.Uint64("table-id", tableID),
+			zap.String("snapshot", snap.ToString()),
+			zap.String("path", "ReaderFallback"),
+			zap.String("commit-ts", ts.ToString()),
+			zap.Duration("collectchanges-cost", collectCost),
+			zap.Duration("reader-cost", time.Since(readerStart)),
+			zap.Duration("total-cost", time.Since(totalStart)),
+		)
+		return ts, nil
 	}
 
 	tarCTS, err := resolve(tar.GetTableID(ctx), snapFor(0))
@@ -1561,7 +1630,7 @@ func getTableCreationCommitTSByID(
 	err := scanSnapshotRelationByID(
 		ctx, "table-creation-commit-ts", ses,
 		catalog.MO_TABLES_ID, snapshotTS,
-		attrs, colTypes, filterExpr,
+		attrs, colTypes, filterExpr, 1,
 		func(bat *batch.Batch) error {
 			ids := vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[0])
 			cts := vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[1])
@@ -1601,6 +1670,32 @@ func getTableCreationCommitTSByCollectChanges(
 	storage := ses.GetTxnHandler().GetStorage()
 	txnOp := ses.GetTxnHandler().GetTxn()
 	mp := ses.proc.Mp()
+	start := time.Now()
+	var (
+		found             bool
+		result            types.TS
+		dataBatchCnt      int
+		dataRowCnt        int
+		tombstoneBatchCnt int
+		tombstoneRowCnt   int
+	)
+
+	defer func() {
+		fields := []zap.Field{
+			zap.Uint64("table-id", tableID),
+			zap.String("snapshot", snapshotTS.ToString()),
+			zap.Bool("found", found),
+			zap.Int("data-batch-cnt", dataBatchCnt),
+			zap.Int("data-row-cnt", dataRowCnt),
+			zap.Int("tombstone-batch-cnt", tombstoneBatchCnt),
+			zap.Int("tombstone-row-cnt", tombstoneRowCnt),
+			zap.Duration("duration", time.Since(start)),
+		}
+		if found {
+			fields = append(fields, zap.String("commit-ts", result.ToString()))
+		}
+		logutil.Info("DataBranch-TableCTS-CollectChanges-Done", fields...)
+	}()
 
 	_, _, rel, err := storage.GetRelationById(ctx, txnOp, catalog.MO_TABLES_ID)
 	if err != nil {
@@ -1613,9 +1708,6 @@ func getTableCreationCommitTSByCollectChanges(
 	}
 	defer handle.Close()
 
-	found := false
-	result := types.TS{}
-
 	for {
 		data, tombstone, _, err := handle.Next(ctx, mp)
 		if err != nil {
@@ -1625,11 +1717,15 @@ func getTableCreationCommitTSByCollectChanges(
 			break
 		}
 		if tombstone != nil {
+			tombstoneBatchCnt++
+			tombstoneRowCnt += tombstone.RowCount()
 			tombstone.Clean(mp)
 		}
 		if data == nil {
 			continue
 		}
+		dataBatchCnt++
+		dataRowCnt += data.RowCount()
 
 		relIDIdx, commitTSIdx := locateColumnsInChangeBatch(data)
 		if relIDIdx >= len(data.Vecs) || commitTSIdx >= len(data.Vecs) {

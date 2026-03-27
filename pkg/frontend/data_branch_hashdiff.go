@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -353,6 +354,7 @@ func runLCAProbeWithReaderFallback(
 	tblStuff tableStuff,
 	snapshotTS types.TS,
 ) (sqlRet executor.Result, err error) {
+	start := time.Now()
 	sqlRet.Mp = ses.proc.Mp()
 	if tBat == nil {
 		return sqlRet, nil
@@ -371,6 +373,14 @@ func runLCAProbeWithReaderFallback(
 
 	mp := ses.proc.Mp()
 	pkVec := tBat.Vecs[0]
+	var (
+		prepareCost        time.Duration
+		scanCost           time.Duration
+		outputCost         time.Duration
+		callbackCost       time.Duration
+		callbackFilterCost time.Duration
+		callbackUnionCost  time.Duration
+	)
 	inputKeys := make(map[string]struct{}, rowCount)
 	for i := 0; i < rowCount; i++ {
 		key := string(pkVec.GetRawBytesAt(i))
@@ -387,6 +397,7 @@ func runLCAProbeWithReaderFallback(
 	}
 	filterVec.InplaceSort()
 	pkFilterExpr := readutil.ConstructInExpr(ctx, lcaTblDef.Pkey.PkeyColName, filterVec)
+	prepareCost = time.Since(start)
 
 	tmp := batch.NewWithSize(len(tblStuff.def.colNames))
 	for i, typ := range tblStuff.def.colTypes {
@@ -394,6 +405,7 @@ func runLCAProbeWithReaderFallback(
 	}
 	defer tmp.Clean(mp)
 	tmpRowByKey := make(map[string]int, rowCount)
+	var callbackMu sync.Mutex
 	var (
 		scannedBatchCnt int
 		scannedRowCnt   int
@@ -409,6 +421,34 @@ func runLCAProbeWithReaderFallback(
 		zap.String("snapshot-ts", snapshotTS.ToString()),
 	)
 
+	defer func() {
+		fields := []zap.Field{
+			zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
+			zap.String("table-name", lcaTblDef.Name),
+			zap.Int("input-pk-rows", rowCount),
+			zap.Int("input-unique-keys", len(inputKeys)),
+			zap.Int("scan-batch-cnt", scannedBatchCnt),
+			zap.Int("scan-row-cnt", scannedRowCnt),
+			zap.Int("accepted-row-cnt", acceptedRowCnt),
+			zap.Int("dedup-row-cnt", duplicateRows),
+			zap.Int("accepted-key-cnt", len(tmpRowByKey)),
+			zap.Duration("prepare-cost", prepareCost),
+			zap.Duration("scan-cost", scanCost),
+			zap.Duration("callback-cost", callbackCost),
+			zap.Duration("callback-filter-cost", callbackFilterCost),
+			zap.Duration("callback-union-cost", callbackUnionCost),
+			zap.Duration("output-cost", outputCost),
+			zap.Duration("total-cost", time.Since(start)),
+		}
+		if err != nil {
+			fields = append(fields, zap.Error(err))
+			logutil.Warn("DataBranch-LCA-ReaderFallback-Error", fields...)
+			return
+		}
+		logutil.Info("DataBranch-LCA-ReaderFallback-Done", fields...)
+	}()
+
+	scanStart := time.Now()
 	err = scanSnapshotRelationByID(
 		ctx,
 		"lca-reader-fallback",
@@ -418,12 +458,20 @@ func runLCAProbeWithReaderFallback(
 		tblStuff.def.colNames,
 		tblStuff.def.colTypes,
 		pkFilterExpr,
+		0,
 		func(readBatch *batch.Batch) error {
+			callbackStart := time.Now()
+			callbackMu.Lock()
+			defer func() {
+				callbackCost += time.Since(callbackStart)
+				callbackMu.Unlock()
+			}()
 			scannedBatchCnt++
 			scannedRowCnt += readBatch.RowCount()
 			readPK := readBatch.Vecs[tblStuff.def.pkColIdx]
 			sels := make([]int64, 0, readBatch.RowCount())
 			keys := make([]string, 0, readBatch.RowCount())
+			filterStart := time.Now()
 			for row := 0; row < readBatch.RowCount(); row++ {
 				key := string(readPK.GetRawBytesAt(row))
 				if _, ok := inputKeys[key]; !ok {
@@ -436,10 +484,12 @@ func runLCAProbeWithReaderFallback(
 				sels = append(sels, int64(row))
 				keys = append(keys, key)
 			}
+			callbackFilterCost += time.Since(filterStart)
 			if len(sels) == 0 {
 				return nil
 			}
 			base := tmp.Vecs[0].Length()
+			unionStart := time.Now()
 			for colIdx := range tblStuff.def.colNames {
 				if err = tmp.Vecs[colIdx].Union(readBatch.Vecs[colIdx], sels, mp); err != nil {
 					return err
@@ -449,9 +499,11 @@ func runLCAProbeWithReaderFallback(
 				tmpRowByKey[key] = base + i
 			}
 			acceptedRowCnt += len(sels)
+			callbackUnionCost += time.Since(unionStart)
 			return nil
 		},
 	)
+	scanCost = time.Since(scanStart)
 	if err != nil {
 		return executor.Result{}, err
 	}
@@ -477,6 +529,7 @@ func runLCAProbeWithReaderFallback(
 		}
 	}()
 
+	outputStart := time.Now()
 	orderedIdx := make([]int64, rowCount)
 	sels := make([]int64, rowCount)
 	missedRows := make([]uint64, 0)
@@ -523,6 +576,7 @@ func runLCAProbeWithReaderFallback(
 	}
 	out.SetRowCount(rowCount)
 	sqlRet.Batches = []*batch.Batch{out}
+	outputCost = time.Since(outputStart)
 	logutil.Info(
 		"DataBranch-LCA-ReaderFallback-Output",
 		zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
@@ -548,6 +602,12 @@ func hashDiff(
 ) (
 	err error,
 ) {
+	start := time.Now()
+	var (
+		buildBaseCost   time.Duration
+		buildTargetCost time.Duration
+		diffCost        time.Duration
+	)
 
 	var (
 		baseDataHashmap      databranchutils.BranchHashmap
@@ -570,20 +630,41 @@ func hashDiff(
 		if tarTombstoneHashmap != nil {
 			tarTombstoneHashmap.Close()
 		}
+
+		fields := []zap.Field{
+			zap.Int("base-handle-cnt", len(baseHandle)),
+			zap.Int("target-handle-cnt", len(tarHandle)),
+			zap.Int("lca-type", dagInfo.lcaType),
+			zap.Duration("build-base-cost", buildBaseCost),
+			zap.Duration("build-target-cost", buildTargetCost),
+			zap.Duration("diff-cost", diffCost),
+			zap.Duration("total-cost", time.Since(start)),
+		}
+		if err != nil {
+			fields = append(fields, zap.Error(err))
+			logutil.Warn("DataBranch-HashDiff-Error", fields...)
+			return
+		}
+		logutil.Info("DataBranch-HashDiff-Done", fields...)
 	}()
 
+	buildBaseStart := time.Now()
 	if baseDataHashmap, baseTombstoneHashmap, err = buildHashmapForTable(
-		ctx, ses.proc.Mp(), dagInfo.lcaType, &tblStuff, baseHandle,
+		ctx, ses.proc.Mp(), dagInfo.lcaType, &tblStuff, baseHandle, "base",
 	); err != nil {
 		return
 	}
+	buildBaseCost = time.Since(buildBaseStart)
 
+	buildTargetStart := time.Now()
 	if tarDataHashmap, tarTombstoneHashmap, err = buildHashmapForTable(
-		ctx, ses.proc.Mp(), dagInfo.lcaType, &tblStuff, tarHandle,
+		ctx, ses.proc.Mp(), dagInfo.lcaType, &tblStuff, tarHandle, "target",
 	); err != nil {
 		return
 	}
+	buildTargetCost = time.Since(buildTargetStart)
 
+	diffStart := time.Now()
 	if dagInfo.lcaType == lcaEmpty {
 		if err = hashDiffIfNoLCA(
 			ctx, ses, tblStuff, dagInfo.lcaType, copt, emit,
@@ -601,6 +682,7 @@ func hashDiff(
 			return
 		}
 	}
+	diffCost = time.Since(diffStart)
 
 	return
 }
@@ -970,24 +1052,24 @@ func hashDiffIfNoLCA(
 ) (err error) {
 
 	if err = tarTombstoneHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
-			return cursor.ForEach(func(key []byte, _ []byte) error {
-				_, err2 := tarDataHashmap.PopByEncodedKey(key, true)
-				return err2
-			})
+		return cursor.ForEach(func(key []byte, _ []byte) error {
+			_, err2 := tarDataHashmap.PopByEncodedKey(key, true)
+			return err2
+		})
 
-		}, -1); err != nil {
-			return
-		}
+	}, -1); err != nil {
+		return
+	}
 
-		if err = baseTombstoneHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
-			return cursor.ForEach(func(key []byte, _ []byte) error {
-				_, err2 := baseDataHashmap.PopByEncodedKey(key, true)
-				return err2
-			})
+	if err = baseTombstoneHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
+		return cursor.ForEach(func(key []byte, _ []byte) error {
+			_, err2 := baseDataHashmap.PopByEncodedKey(key, true)
+			return err2
+		})
 
-		}, -1); err != nil {
-			return
-		}
+	}, -1); err != nil {
+		return
+	}
 
 	return diffDataHelper(ctx, ses, lcaType, copt, tblStuff, emit, tarDataHashmap, baseDataHashmap)
 }
@@ -1041,22 +1123,6 @@ func findDeleteAndUpdateBat(
 	maxTombstoneBatchCnt := tblStuff.maxTombstoneBatchCnt
 	if maxTombstoneBatchCnt <= 0 {
 		maxTombstoneBatchCnt = maxSqlBatchCnt
-	}
-	readerProbeBatchCnt := maxTombstoneBatchCnt
-	if readerProbeBatchCnt < maxSqlBatchCnt {
-		scaled := readerProbeBatchCnt * lcaReaderProbeBatchScale
-		if scaled > maxSqlBatchCnt {
-			scaled = maxSqlBatchCnt
-		}
-		if scaled > readerProbeBatchCnt {
-			readerProbeBatchCnt = scaled
-		}
-	}
-	currentProbeBatchCnt := func() int {
-		if tblStuff.lcaReaderProbeMode != nil && tblStuff.lcaReaderProbeMode.Load() {
-			return readerProbeBatchCnt
-		}
-		return maxTombstoneBatchCnt
 	}
 
 	if err = tombstoneHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
@@ -1244,7 +1310,7 @@ func findDeleteAndUpdateBat(
 			}
 
 			tBat1.SetRowCount(tBat1.Vecs[0].Length())
-			if tBat1.RowCount() >= currentProbeBatchCnt() {
+			if tBat1.RowCount() >= maxTombstoneBatchCnt {
 				tombBat := tBat1
 				tBat1 = nil
 				if err2 = processBatch(tombBat); err2 != nil {
@@ -1595,18 +1661,21 @@ func buildHashmapForTable(
 	lcaType int,
 	tblStuff *tableStuff,
 	handles []engine.ChangesHandle,
+	side string,
 ) (
 	dataHashmap databranchutils.BranchHashmap,
 	tombstoneHashmap databranchutils.BranchHashmap,
 	err error,
 ) {
 	var (
-		atomicErr    atomic.Value
-		dataBat      *batch.Batch
-		tombstoneBat *batch.Batch
-		wg           sync.WaitGroup
-		totalRows    int64
-		totalBytes   int64
+		atomicErr          atomic.Value
+		dataBat            *batch.Batch
+		tombstoneBat       *batch.Batch
+		wg                 sync.WaitGroup
+		totalRows          int64
+		totalBytes         int64
+		totalTombstoneRows int64
+		start              = time.Now()
 	)
 
 	defer func() {
@@ -1619,6 +1688,33 @@ func buildHashmapForTable(
 		if tombstoneBat != nil {
 			tombstoneBat.Clean(mp)
 		}
+
+		fields := []zap.Field{
+			zap.String("side", side),
+			zap.Int("handle-cnt", len(handles)),
+			zap.Int64("data-row-cnt", totalRows),
+			zap.Int64("data-bytes", totalBytes),
+			zap.Int64("tombstone-row-cnt", totalTombstoneRows),
+			zap.Duration("duration", time.Since(start)),
+		}
+		if dataHashmap != nil {
+			fields = append(fields,
+				zap.Int64("data-item-cnt", dataHashmap.ItemCount()),
+				zap.Int("data-shard-cnt", dataHashmap.ShardCount()),
+			)
+		}
+		if tombstoneHashmap != nil {
+			fields = append(fields,
+				zap.Int64("tombstone-item-cnt", tombstoneHashmap.ItemCount()),
+				zap.Int("tombstone-shard-cnt", tombstoneHashmap.ShardCount()),
+			)
+		}
+		if err != nil {
+			fields = append(fields, zap.Error(err))
+			logutil.Warn("DataBranch-Hashmap-Build-Error", fields...)
+			return
+		}
+		logutil.Info("DataBranch-Hashmap-Build-Done", fields...)
 	}()
 
 	if dataHashmap, err = databranchutils.NewBranchHashmap(
@@ -1695,6 +1791,9 @@ func buildHashmapForTable(
 			if dataBat != nil && dataBat.RowCount() > 0 {
 				totalRows += int64(dataBat.RowCount())
 				totalBytes += int64(dataBat.Size())
+			}
+			if tombstoneBat != nil && tombstoneBat.RowCount() > 0 {
+				totalTombstoneRows += int64(tombstoneBat.RowCount())
 			}
 
 			if atomicErr.Load() != nil {

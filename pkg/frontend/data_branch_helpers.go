@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -229,6 +230,7 @@ func scanSnapshotRelationByID(
 	attrs []string,
 	colTypes []types.Type,
 	filterExpr *plan.Expr,
+	scanParallelism int,
 	onBatch func(*batch.Batch) error,
 ) error {
 	if len(attrs) == 0 {
@@ -253,6 +255,7 @@ func scanSnapshotRelationByID(
 		zap.String("snapshot-ts", snapshotTS.ToString()),
 		zap.Bool("has-filter-expr", filterExpr != nil),
 		zap.Int("attr-cnt", len(attrs)),
+		zap.Int("scan-parallelism", scanParallelism),
 	)
 
 	_, _, rangeRel, err := storage.GetRelationById(ctx, baseTxnOp, tableID)
@@ -296,8 +299,8 @@ func scanSnapshotRelationByID(
 	)
 
 	var (
-		readBatchCnt int
-		readRowCnt   int
+		readBatchCnt atomic.Int64
+		readRowCnt   atomic.Int64
 	)
 
 	if err = disttae.ScanSnapshotWithCurrentRanges(
@@ -309,10 +312,11 @@ func scanSnapshotRelationByID(
 		attrs,
 		colTypes,
 		filterExpr,
+		scanParallelism,
 		ses.proc.Mp(),
 		func(readBatch *batch.Batch) error {
-			readBatchCnt++
-			readRowCnt += readBatch.RowCount()
+			readBatchCnt.Add(1)
+			readRowCnt.Add(int64(readBatch.RowCount()))
 			return onBatch(readBatch)
 		},
 	); err != nil {
@@ -324,8 +328,8 @@ func scanSnapshotRelationByID(
 			zap.String("snapshot-ts", snapshotTS.ToString()),
 			zap.Int("range-data-cnt", relData.DataCnt()),
 			zap.Int("range-block-cnt", rangeBlockCnt),
-			zap.Int("read-batch-cnt", readBatchCnt),
-			zap.Int("read-row-cnt", readRowCnt),
+			zap.Int64("read-batch-cnt", readBatchCnt.Load()),
+			zap.Int64("read-row-cnt", readRowCnt.Load()),
 			zap.Error(err),
 		)
 		return err
@@ -336,8 +340,8 @@ func scanSnapshotRelationByID(
 		zap.Uint64("table-id", tableID),
 		zap.String("range-ts", rangeTS.ToString()),
 		zap.String("snapshot-ts", snapshotTS.ToString()),
-		zap.Int("read-batch-cnt", readBatchCnt),
-		zap.Int("read-row-cnt", readRowCnt),
+		zap.Int64("read-batch-cnt", readBatchCnt.Load()),
+		zap.Int64("read-row-cnt", readRowCnt.Load()),
 	)
 	return nil
 }

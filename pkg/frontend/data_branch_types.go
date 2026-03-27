@@ -76,10 +76,6 @@ const (
 	defaultRowBytes  = int64(128)
 	tombstoneRowMult = int64(3)
 	tombstoneRowDiv  = int64(2)
-	// Once LCA SQL probe is proven unreliable (for example due to post-GC
-	// FileNotFound), branch diff can switch to reader probe mode and use larger
-	// tombstone batches to reduce repeated snapshot scans.
-	lcaReaderProbeBatchScale = 5
 )
 
 type collectRange struct {
