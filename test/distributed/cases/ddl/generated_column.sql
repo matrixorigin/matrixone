@@ -139,12 +139,15 @@ select column_name, extra, generation_expression from information_schema.columns
 -- ============================================================
 -- 16. ALTER TABLE DROP COLUMN dependency check
 -- ============================================================
-create table t12 (a int, b int, c int generated always as (a + b) stored);
+create table t12 (a int, b int, d int, c int generated always as (a + b) stored);
 -- @pattern
--- Column 'a' has a generated column dependency on column 'c'
+-- Cannot modify column 'a': generated column 'c' depends on it
 alter table t12 drop column a;
--- dropping non-referenced column succeeds
+-- dropping another referenced base column should also fail
 alter table t12 drop column b;
+-- dropping a non-referenced column should succeed
+alter table t12 drop column d;
+desc t12;
 
 -- ============================================================
 -- 17. ALTER TABLE ADD generated column
@@ -153,6 +156,7 @@ create table t13 (a int, b int);
 insert into t13 values (1,2),(3,4);
 alter table t13 add column c int generated always as (a + b) stored;
 desc t13;
+select * from t13 order by a;
 
 -- ============================================================
 -- 18. REPLACE INTO with generated column
@@ -206,6 +210,91 @@ create table t19 (a int, b int);
 alter table t19 change column a a int generated always as (a + 1) stored;
 
 -- ============================================================
--- 25. Cleanup
+-- 25. ALTER TABLE RENAME COLUMN with generated dependency
+-- ============================================================
+create table t20 (a int, b int, c int generated always as (a + b) stored);
+-- Should fail: column 'a' is referenced by generated column 'c'
+alter table t20 rename column a to a2;
+-- Should succeed: column 'c' is not referenced by any other generated column
+alter table t20 rename column c to c2;
+desc t20;
+
+-- ============================================================
+-- 26. ALTER TABLE CHANGE COLUMN with generated dependency
+-- ============================================================
+create table t21 (a int, b int, c int generated always as (a + b) stored);
+-- Should fail: column 'a' is referenced by generated column 'c' (name change)
+alter table t21 change column a a2 int;
+-- Should succeed: no name change, just type change (not dependent)
+alter table t21 change column a a bigint;
+desc t21;
+
+-- ============================================================
+-- 27. ALTER TABLE CHANGE - circular dependency detection
+-- ============================================================
+create table t22 (a int, b int generated always as (a + 1) stored);
+-- Should fail: changing 'a' to reference 'b' creates a cycle (a -> b -> a)
+alter table t22 change column a a int generated always as (b + 1) stored;
+
+-- ============================================================
+-- 28. CREATE TABLE forward reference to base column
+-- ============================================================
+-- Should succeed: generated column references base column 'b' defined later
+create table t23 (a int, c int generated always as (a + b) stored, b int);
+insert into t23 (a, b) values (1, 2);
+select * from t23;
+desc t23;
+
+-- ============================================================
+-- 29. Forward reference to generated column should fail
+-- ============================================================
+-- Should fail: generated column 'c' references generated column 'd' defined later
+create table t24_fail (a int, c int generated always as (d + 1) stored, d int generated always as (a + 1) stored);
+-- Should fail: generated column cannot refer to itself
+create table t24_self_fail (a int generated always as (a + 1) stored);
+
+-- ============================================================
+-- 30. INSERT with generated column = DEFAULT
+-- ============================================================
+create table t25 (a int, b int, c int generated always as (a + b) stored);
+-- Should succeed: DEFAULT value for generated column is allowed
+insert into t25 (a, b, c) values (1, 2, default);
+select * from t25;
+-- Should succeed: multiple rows with DEFAULT
+insert into t25 (a, b, c) values (3, 4, default), (5, 6, default);
+select * from t25;
+-- Should fail: value count still needs to match the explicit column list
+insert into t25 (a, b, c) values (7, 8);
+-- Should fail: non-DEFAULT value for generated column
+insert into t25 (a, b, c) values (9, 10, 99);
+
+-- ============================================================
+-- 31. UPDATE SET generated column = DEFAULT
+-- ============================================================
+create table t26 (a int, b int, c int generated always as (a + b) stored);
+insert into t26 (a, b) values (1, 2);
+select * from t26;
+-- Should succeed: SET gen_col = DEFAULT is allowed
+update t26 set a = 10, c = default;
+select * from t26;
+-- Should fail: SET gen_col = explicit value
+update t26 set c = 99;
+
+-- ============================================================
+-- 32. Non-deterministic function in generated column
+-- ============================================================
+-- Should fail: rand() is volatile
+create table t27_fail (a int, b double generated always as (rand()) stored);
+-- Should fail: uuid() is volatile
+create table t28_fail (a int, b varchar(36) generated always as (uuid()) stored);
+
+-- ============================================================
+-- 33. FOREIGN KEY cannot reference a VIRTUAL generated column
+-- ============================================================
+create table t29_parent (a int, b int generated always as (a + 1) virtual, unique key uk_b (b));
+create table t29_child (c int, constraint fk_t29 foreign key (c) references t29_parent (b));
+
+-- ============================================================
+-- 34. Cleanup
 -- ============================================================
 drop database test_generated_col;

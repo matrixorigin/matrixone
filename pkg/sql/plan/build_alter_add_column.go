@@ -380,7 +380,7 @@ func DropColumn(
 		return column.Primary, err
 	}
 
-	if err := checkDropColumnWithGeneratedCol(ctx.GetContext(), tableDef, colName); err != nil {
+	if err := checkColumnWithGeneratedDependency(ctx.GetContext(), tableDef, colName); err != nil {
 		return column.Primary, err
 	}
 
@@ -565,14 +565,14 @@ func handleDropColumnWithClusterBy(ctx context.Context, copyTableDef *TableDef, 
 	return nil
 }
 
-// checkDropColumnWithGeneratedCol checks if the column being dropped is referenced
-// by any generated column expression. If so, the drop is rejected.
-func checkDropColumnWithGeneratedCol(ctx context.Context, tableDef *TableDef, colName string) error {
+// checkColumnWithGeneratedDependency checks if the column is referenced
+// by any generated column expression. If so, the operation is rejected.
+func checkColumnWithGeneratedDependency(ctx context.Context, tableDef *TableDef, colName string) error {
 	for _, col := range tableDef.Cols {
 		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil {
 			if exprReferencesColumn(col.GeneratedCol.Expr, colName, tableDef.Cols) {
-				return moerr.NewInternalErrorf(ctx,
-					"Column '%s' has a generated column dependency on column '%s'", colName, col.Name)
+				return moerr.NewInvalidInputf(ctx,
+					"Cannot modify column '%s': generated column '%s' depends on it", colName, col.Name)
 			}
 		}
 	}
@@ -603,6 +603,50 @@ func exprReferencesColumn(expr *plan.Expr, colName string, cols []*ColDef) bool 
 		}
 	}
 	return false
+}
+
+// checkGeneratedColCycle detects circular dependencies when a column is changed
+// to a generated column. It checks whether the expression transitively references
+// the target column through other generated columns.
+func checkGeneratedColCycle(ctx context.Context, tableDef *TableDef, targetColName string, expr *plan.Expr) error {
+	visited := make(map[string]bool)
+	return checkCycleHelper(ctx, tableDef, targetColName, expr, visited)
+}
+
+func checkCycleHelper(ctx context.Context, tableDef *TableDef, targetColName string, expr *plan.Expr, visited map[string]bool) error {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		pos := int(e.Col.ColPos)
+		if pos < len(tableDef.Cols) {
+			refColName := tableDef.Cols[pos].Name
+			if strings.EqualFold(refColName, targetColName) {
+				return moerr.NewInvalidInputf(ctx, "generated column '%s' has a circular dependency", targetColName)
+			}
+			if !visited[refColName] {
+				visited[refColName] = true
+				refCol := tableDef.Cols[pos]
+				if refCol.GeneratedCol != nil && refCol.GeneratedCol.Expr != nil {
+					return checkCycleHelper(ctx, tableDef, targetColName, refCol.GeneratedCol.Expr, visited)
+				}
+			}
+		}
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			if err := checkCycleHelper(ctx, tableDef, targetColName, arg, visited); err != nil {
+				return err
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if err := checkCycleHelper(ctx, tableDef, targetColName, item, visited); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 //----------------------------------------------------------------------------------------------------------------------

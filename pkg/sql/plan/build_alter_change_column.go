@@ -64,6 +64,13 @@ func ChangeColumn(
 		return false, moerr.NewErrDupFieldName(ctx, newColName)
 	}
 
+	// If renaming the column, check if any generated column depends on it
+	if newColName != oldColName {
+		if err := checkColumnWithGeneratedDependency(ctx, tableDef, oldColName); err != nil {
+			return false, err
+		}
+	}
+
 	//change the name of the column in the foreign key constraint
 	if newColNameOrigin != oldColNameOrigin {
 		alterCtx.UpdateSqls = append(alterCtx.UpdateSqls,
@@ -209,9 +216,9 @@ func buildColumnAndConstraint(
 			if err != nil {
 				return nil, err
 			}
-			// Prevent self-reference: generated expression must not reference the column being changed
-			if exprReferencesColumn(generatedCol.Expr, oldCol.Name, targetTableDef.Cols) {
-				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "generated column '%s' cannot refer to itself", newColNameOrigin)
+			// Check for circular dependency (includes self-reference)
+			if err := checkGeneratedColCycle(ctx.GetContext(), targetTableDef, oldCol.Name, generatedCol.Expr); err != nil {
+				return nil, err
 			}
 			newCol.GeneratedCol = generatedCol
 		default:

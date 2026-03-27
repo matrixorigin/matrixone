@@ -161,11 +161,17 @@ a  ¦    ¦    𝄀
 b  ¦    ¦    𝄀
 c  ¦  STORED GENERATED  ¦  (a + b)  𝄀
 d  ¦  VIRTUAL GENERATED  ¦  concat(cast(a as varchar), '-', cast(b as varchar))
-create table t12 (a int, b int, c int generated always as (a + b) stored);
+create table t12 (a int, b int, d int, c int generated always as (a + b) stored);
 alter table t12 drop column a;
-internal error: Column 'a' has a generated column dependency on column 'c'
+invalid input: Cannot modify column 'a': generated column 'c' depends on it
 alter table t12 drop column b;
-internal error: Column 'b' has a generated column dependency on column 'c'
+invalid input: Cannot modify column 'b': generated column 'c' depends on it
+alter table t12 drop column d;
+desc t12;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
 create table t13 (a int, b int);
 insert into t13 values (1,2),(3,4);
 alter table t13 add column c int generated always as (a + b) stored;
@@ -174,6 +180,10 @@ desc t13;
 a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 c  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
+select * from t13 order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  2  ¦  3  𝄀
+3  ¦  4  ¦  7
 create table t14 (id int primary key, a int, b int, c int generated always as (a * b) stored);
 replace into t14 (id, a, b) values (1, 3, 4);
 select * from t14;
@@ -224,5 +234,73 @@ select * from t18;
 1  ¦  2  ¦  3
 create table t19 (a int, b int);
 alter table t19 change column a a int generated always as (a + 1) stored;
+invalid input: generated column 'a' has a circular dependency
+create table t20 (a int, b int, c int generated always as (a + b) stored);
+alter table t20 rename column a to a2;
+invalid input: Cannot modify column 'a': generated column 'c' depends on it
+alter table t20 rename column c to c2;
+desc t20;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c2  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
+create table t21 (a int, b int, c int generated always as (a + b) stored);
+alter table t21 change column a a2 int;
+invalid input: Cannot modify column 'a': generated column 'c' depends on it
+alter table t21 change column a a bigint;
+desc t21;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
+create table t22 (a int, b int generated always as (a + 1) stored);
+alter table t22 change column a a int generated always as (b + 1) stored;
+invalid input: generated column 'a' has a circular dependency
+create table t23 (a int, c int generated always as (a + b) stored, b int);
+insert into t23 (a, b) values (1, 2);
+select * from t23;
+➤ a[4,32,0]  ¦  c[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  3  ¦  2
+desc t23;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦    𝄀
+b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+create table t24_fail (a int, c int generated always as (d + 1) stored, d int generated always as (a + 1) stored);
+invalid input: generated column 'c' cannot refer to generated column 'd' defined later
+create table t24_self_fail (a int generated always as (a + 1) stored);
 invalid input: generated column 'a' cannot refer to itself
+create table t25 (a int, b int, c int generated always as (a + b) stored);
+insert into t25 (a, b, c) values (1, 2, default);
+select * from t25;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  2  ¦  3
+insert into t25 (a, b, c) values (3, 4, default), (5, 6, default);
+select * from t25;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  2  ¦  3  𝄀
+3  ¦  4  ¦  7  𝄀
+5  ¦  6  ¦  11
+insert into t25 (a, b, c) values (7, 8);
+Column count doesn't match value count at row 1
+insert into t25 (a, b, c) values (9, 10, 99);
+invalid input: the value specified for generated column 'c' in table 't25' is not allowed
+create table t26 (a int, b int, c int generated always as (a + b) stored);
+insert into t26 (a, b) values (1, 2);
+select * from t26;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  2  ¦  3
+update t26 set a = 10, c = default;
+select * from t26;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+10  ¦  2  ¦  12
+update t26 set c = 99;
+invalid input: the value specified for generated column 'c' in table 't26' is not allowed
+create table t27_fail (a int, b double generated always as (rand()) stored);
+invalid input: expression of generated column cannot refer to a non-deterministic function 'rand'
+create table t28_fail (a int, b varchar(36) generated always as (uuid()) stored);
+invalid input: expression of generated column cannot refer to a non-deterministic function 'uuid'
+create table t29_parent (a int, b int generated always as (a + 1) virtual, unique key uk_b (b));
+create table t29_child (c int, constraint fk_t29 foreign key (c) references t29_parent (b));
+invalid input: foreign key cannot reference virtual generated column 'b'
 drop database test_generated_col;

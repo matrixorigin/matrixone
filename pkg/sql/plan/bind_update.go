@@ -107,11 +107,21 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "update pk/uk on pub/sub table")
 			}
 
-			// Check: cannot update a generated column
+			// Check: cannot update a generated column (unless SET gen_col = DEFAULT)
+			isGenCol := false
 			for _, colDef := range tableDef.Cols {
 				if colDef.Name == colName && colDef.GeneratedCol != nil {
-					return 0, moerr.NewInvalidInputf(builder.compCtx.GetContext(), "the value specified for generated column '%s' in table '%s' is not allowed", colName, tableDef.Name)
+					isGenCol = true
+					break
 				}
+			}
+			if isGenCol {
+				if _, ok := updateExpr.(*tree.DefaultVal); ok {
+					// SET gen_col = DEFAULT is allowed — silently remove from update set
+					delete(dmlCtx.updateCol2Expr[i], colName)
+					continue
+				}
+				return 0, moerr.NewInvalidInputf(builder.compCtx.GetContext(), "the value specified for generated column '%s' in table '%s' is not allowed", colName, tableDef.Name)
 			}
 
 			if !dmlCtx.updatePartCol[i] {

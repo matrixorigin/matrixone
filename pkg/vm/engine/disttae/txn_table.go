@@ -1392,9 +1392,10 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 					},
 					Primary:   attr.Attr.Primary,
 					Default:   attr.Attr.Default,
-					OnUpdate:  attr.Attr.OnUpdate,
-					Comment:   attr.Attr.Comment,
-					ClusterBy: attr.Attr.ClusterBy,
+					OnUpdate:     attr.Attr.OnUpdate,
+					Comment:      attr.Attr.Comment,
+					GeneratedCol: attr.Attr.GeneratedCol,
+					ClusterBy:    attr.Attr.ClusterBy,
 					Hidden:    attr.Attr.IsHidden,
 					Seqnum:    uint32(attr.Attr.Seqnum),
 				})

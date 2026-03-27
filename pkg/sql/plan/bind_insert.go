@@ -1036,6 +1036,78 @@ func (builder *QueryBuilder) getInsertColsFromStmt(astCols tree.IdentifierList, 
 	return insertColNames, nil
 }
 
+// stripGeneratedDefaultCols removes generated columns from the INSERT column list
+// when their corresponding VALUES are all DEFAULT. This supports MySQL-compatible
+// syntax: INSERT INTO t(gen_col) VALUES(DEFAULT).
+// Non-DEFAULT values for generated columns still produce an error.
+func (builder *QueryBuilder) stripGeneratedDefaultCols(astCols tree.IdentifierList, astRows *tree.Select, tableDef *plan.TableDef) (tree.IdentifierList, error) {
+	// Find positions of generated columns in the explicit column list
+	genPositions := make(map[int]bool)
+	for i, col := range astCols {
+		colName := strings.ToLower(string(col))
+		if idx, ok := tableDef.Name2ColIndex[colName]; ok {
+			if tableDef.Cols[idx].GeneratedCol != nil {
+				genPositions[i] = true
+			}
+		}
+	}
+
+	if len(genPositions) == 0 {
+		return astCols, nil
+	}
+
+	// For ValuesClause, validate that all values at generated column positions are DEFAULT
+	vc, isValues := astRows.Select.(*tree.ValuesClause)
+	if !isValues {
+		// For INSERT...SELECT with generated columns in column list, block it
+		for pos := range genPositions {
+			colName := string(astCols[pos])
+			return nil, moerr.NewInvalidInputf(builder.GetContext(),
+				"the value specified for generated column '%s' in table '%s' is not allowed",
+				colName, tableDef.Name)
+		}
+	}
+
+	for rowIdx, row := range vc.Rows {
+		if row == nil {
+			continue // all-defaults row
+		}
+		for pos := range genPositions {
+			if pos >= len(row) {
+				return nil, moerr.NewWrongValueCountOnRow(builder.GetContext(), rowIdx+1)
+			}
+			if _, ok := row[pos].(*tree.DefaultVal); !ok {
+				colName := string(astCols[pos])
+				return nil, moerr.NewInvalidInputf(builder.GetContext(),
+					"the value specified for generated column '%s' in table '%s' is not allowed",
+					colName, tableDef.Name)
+			}
+		}
+	}
+
+	// Strip generated columns from column list and values
+	newCols := make(tree.IdentifierList, 0, len(astCols)-len(genPositions))
+	for i, col := range astCols {
+		if !genPositions[i] {
+			newCols = append(newCols, col)
+		}
+	}
+	for j, row := range vc.Rows {
+		if row == nil {
+			continue
+		}
+		newRow := make(tree.Exprs, 0, len(row)-len(genPositions))
+		for i, val := range row {
+			if !genPositions[i] {
+				newRow = append(newRow, val)
+			}
+		}
+		vc.Rows[j] = newRow
+	}
+
+	return newCols, nil
+}
+
 func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows *tree.Select, astCols tree.IdentifierList, objRef *plan.ObjectRef, tableDef *plan.TableDef, isReplace bool) (int32, map[string]int32, []bool, error) {
 	var (
 		lastNodeID int32
@@ -1045,8 +1117,18 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 	// var uniqueCheckOnAutoIncr string
 	var insertColumns []string
 
+	// Strip generated columns with DEFAULT values from INSERT column list.
+	// MySQL allows INSERT INTO t(gen_col) VALUES(DEFAULT) — silently ignore those columns.
+	cleanedCols := astCols
+	if astCols != nil {
+		cleanedCols, err = builder.stripGeneratedDefaultCols(astCols, astRows, tableDef)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+	}
+
 	//var ifInsertFromUniqueColMap map[string]bool
-	if insertColumns, err = builder.getInsertColsFromStmt(astCols, tableDef); err != nil {
+	if insertColumns, err = builder.getInsertColsFromStmt(cleanedCols, tableDef); err != nil {
 		return 0, nil, nil, err
 	}
 
@@ -1186,6 +1268,9 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	columnIsNull := make(map[string]bool)
 	hasCompClusterBy := tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name)
 	colIdxToProjPos := make(map[int32]int32)
+	genColIdxToProj1Pos := make(map[int]int)
+	genColIdxToProj2Pos := make(map[int]int)
+	generatedColIdxs := make([]int, 0)
 
 	for i, col := range tableDef.Cols {
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
@@ -1240,22 +1325,13 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 				},
 			})
 		} else if col.GeneratedCol != nil {
-			// Compute the generated expression in projList1 so that PreInsert
-			// receives the value directly. projList2 references it via ColRef.
-			genExpr := DeepCopyExpr(col.GeneratedCol.Expr)
-			inlineGeneratedColExpr(genExpr, colIdxToProjPos, projList1)
-			projList1 = append(projList1, genExpr)
-			pos := int32(len(projList1) - 1)
-			colIdxToProjPos[int32(i)] = pos
-			projList2 = append(projList2, &plan.Expr{
-				Typ: genExpr.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: projTag1,
-						ColPos: pos,
-					},
-				},
-			})
+			// MatrixOne currently materializes both STORED and VIRTUAL generated columns on write.
+			// Defer them until base/default columns are in projList1 so forward references resolve.
+			genColIdxToProj1Pos[i] = len(projList1)
+			genColIdxToProj2Pos[i] = len(projList2)
+			generatedColIdxs = append(generatedColIdxs, i)
+			projList1 = append(projList1, nil)
+			projList2 = append(projList2, nil)
 		} else {
 			defExpr, err := getDefaultExpr(builder.GetContext(), col)
 			if err != nil {
@@ -1284,6 +1360,25 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 		}
 
 		colName2Idx[tableDef.Name+"."+col.Name] = int32(i)
+	}
+
+	for _, i := range generatedColIdxs {
+		col := tableDef.Cols[i]
+		genExpr := DeepCopyExpr(col.GeneratedCol.Expr)
+		inlineGeneratedColExpr(genExpr, colIdxToProjPos, projList1)
+		proj1Pos := genColIdxToProj1Pos[i]
+		projList1[proj1Pos] = genExpr
+		pos := int32(proj1Pos)
+		colIdxToProjPos[int32(i)] = pos
+		projList2[genColIdxToProj2Pos[i]] = &plan.Expr{
+			Typ: genExpr.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: projTag1,
+					ColPos: pos,
+				},
+			},
+		}
 	}
 
 	validIndexes, hasIrregularIndex := getValidIndexes(tableDef)

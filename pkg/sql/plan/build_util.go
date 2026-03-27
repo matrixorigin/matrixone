@@ -422,6 +422,11 @@ func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []
 		return nil, err
 	}
 
+	// Validate: generated column expression cannot contain non-deterministic functions
+	if err := checkExprForVolatileFunc(proc.Ctx, planExpr); err != nil {
+		return nil, err
+	}
+
 	genExpr, err := makePlan2CastExpr(proc.Ctx, planExpr, typ)
 	if err != nil {
 		return nil, err
@@ -434,6 +439,66 @@ func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []
 		OriginString: fmtCtx.String(),
 		IsStored:     genAttr.Stored,
 	}, nil
+}
+
+// checkExprForVolatileFunc walks a plan expression tree and reports an error
+// if any function call is volatile or real-time related, which is not allowed
+// in generated column expressions.
+func checkExprForVolatileFunc(ctx context.Context, expr *plan.Expr) error {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		ov, exists := function.GetFunctionByIdWithoutError(e.F.Func.Obj)
+		if exists && (ov.CannotFold() || ov.IsRealTimeRelated()) {
+			return moerr.NewInvalidInputf(ctx,
+				"expression of generated column cannot refer to a non-deterministic function '%s'", e.F.Func.ObjName)
+		}
+		for _, arg := range e.F.Args {
+			if err := checkExprForVolatileFunc(ctx, arg); err != nil {
+				return err
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if err := checkExprForVolatileFunc(ctx, item); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// validateNoForwardGenRef checks that a generated column expression does not
+// reference another generated column that is defined after it in the CREATE TABLE
+// statement. Forward references to base (non-generated) columns are allowed.
+func validateNoForwardGenRef(ctx context.Context, expr *plan.Expr, currentIdx int, allCols []*ColDef, isGenerated []bool) error {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		refIdx := int(e.Col.ColPos)
+		if refIdx > currentIdx && refIdx < len(isGenerated) && isGenerated[refIdx] {
+			return moerr.NewInvalidInputf(ctx,
+				"generated column '%s' cannot refer to generated column '%s' defined later",
+				allCols[currentIdx].Name, allCols[refIdx].Name)
+		}
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			if err := validateNoForwardGenRef(ctx, arg, currentIdx, allCols, isGenerated); err != nil {
+				return err
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if err := validateNoForwardGenRef(ctx, item, currentIdx, allCols, isGenerated); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // remapGeneratedColExpr rewrites ColRef positions in a generated column expression
