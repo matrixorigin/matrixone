@@ -60,10 +60,27 @@ func (bb *GeneralBatchBuffer) Len() int {
 func (bb *GeneralBatchBuffer) FetchWithSchema(attrs []string, types []types.Type) *batch.Batch {
 	bb.Lock()
 	defer bb.Unlock()
-	bat := batch.NewWithSchema(bb.offHeap, attrs, types)
 
-	// if no vectors in buffer, return a new batch
+	// Create the batch shell with nil vectors — we fill them below,
+	// either from the pool or by allocating fresh ones.  This avoids
+	// wasting vector allocations for positions that the pool can serve.
+	var bat *batch.Batch
+	if bb.offHeap {
+		bat = batch.NewOffHeapWithSize(len(types))
+	} else {
+		bat = batch.NewWithSize(len(types))
+	}
+	bat.Attrs = attrs
+
+	// if no vectors in buffer, allocate all fresh and return
 	if len(bb.fixedSizeVectors) == 0 && len(bb.varlenVectors) == 0 {
+		for i, t := range types {
+			if bb.offHeap {
+				bat.Vecs[i] = vector.NewOffHeapVecWithType(t)
+			} else {
+				bat.Vecs[i] = vector.NewVec(t)
+			}
+		}
 		return bat
 	}
 
@@ -128,6 +145,18 @@ func (bb *GeneralBatchBuffer) FetchWithSchema(attrs []string, types []types.Type
 			if len(bb.fixedSizeVectors)+len(bb.varlenVectors) == 0 || notReused.IsEmpty() {
 				break
 			}
+		}
+	}
+
+	// Allocate fresh vectors only for positions that were not served by the pool.
+	for i, t := range types {
+		if bat.Vecs[i] != nil {
+			continue
+		}
+		if bb.offHeap {
+			bat.Vecs[i] = vector.NewOffHeapVecWithType(t)
+		} else {
+			bat.Vecs[i] = vector.NewVec(t)
 		}
 	}
 
