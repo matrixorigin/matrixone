@@ -40,7 +40,7 @@ func AdhocBruteForceSearch[T VectorType](
 	deviceID int,
 ) ([]int64, []float32, error) {
 	if len(dataset) == 0 || len(queries) == 0 {
-		return nil, nil, moerr.NewInternalErrorNoCtx("empty dataset or queries")
+		return nil, nil, nil
 	}
 
 	qtype := GetQuantization[T]()

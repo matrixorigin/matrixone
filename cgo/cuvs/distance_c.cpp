@@ -28,7 +28,7 @@ struct gpu_job_t {
     float* host_dist;
     int64_t n_x;
     int64_t n_y;
-    const raft::resources* res;
+    cudaStream_t stream;
     void* d_ptr;
 };
 
@@ -41,6 +41,9 @@ public:
 
     uint64_t add_job(gpu_job_t job) {
         uint64_t id = next_id_++;
+        if (next_id_.load() >= (uint64_t(1) << 63)) {
+            next_id_.store(1);
+        }
         std::lock_guard<std::mutex> lock(mu_);
         jobs_[id] = std::move(job);
         return id;
@@ -125,7 +128,7 @@ uint64_t gpu_pairwise_distance_launch(const void* x,
         job.host_dist = dist;
         job.n_x = (int64_t)n_x;
         job.n_y = (int64_t)n_y;
-        job.res = &res;
+        job.stream = raft::resource::get_cuda_stream(res);
         job.d_ptr = nullptr;
 
         // 2. Launch kernels asynchronously
@@ -152,16 +155,13 @@ void gpu_pairwise_distance_wait(uint64_t job_id, void* errmsg) {
         auto job = matrixone::gpu_job_mgr_t::get().get_job(job_id);
         
         // 1. Synchronize the stream to ensure copies are finished
-        raft::resource::sync_stream(*(job.res));
+        RAFT_CUDA_TRY(cudaStreamSynchronize(job.stream));
 
         // 2. Free device buffers
         if (job.d_ptr) {
-            auto stream = raft::resource::get_cuda_stream(*(job.res));
-            RAFT_CUDA_TRY(cudaFreeAsync(job.d_ptr, stream));
-            // We should sync again if we want to be sure it's freed before returning, 
-            // but cudaFreeAsync is tied to the stream, so it's fine for subsequent jobs on same stream.
-            // For safety and to match expected "wait" behavior (all done), let's sync.
-            raft::resource::sync_stream(*(job.res));
+            RAFT_CUDA_TRY(cudaFreeAsync(job.d_ptr, job.stream));
+            // Sync again so the free is complete before returning.
+            RAFT_CUDA_TRY(cudaStreamSynchronize(job.stream));
         }
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_pairwise_distance_wait", e.what());

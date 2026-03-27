@@ -271,6 +271,7 @@ func BlockDataRead(
 		ctx, info, ds, columns, colTypes, phyAddrColumnPos, ts,
 		filterSeqnums, filterColTypes, filter, orderByLimit,
 		policy, tableName, bat, cacheVectors, mp, fs,
+		metric.GPUThresholdSync,
 	)
 	if err != nil {
 		return err
@@ -300,6 +301,7 @@ func BlockDataReadLaunch(
 	cacheVectors containers.Vectors,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
+	minWorkSize uint64,
 ) (*IVFFlatIndexJob, error) {
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 		logutil.Debugf("read block %s, columns %v, types %v", info.BlockID.String(), columns, colTypes)
@@ -353,6 +355,7 @@ func BlockDataReadLaunch(
 		cacheVectors,
 		mp,
 		fs,
+		minWorkSize,
 	)
 }
 
@@ -450,7 +453,7 @@ func BlockDataReadBackup(
 }
 
 type IVFFlatIndexJob struct {
-	JobID         uint64
+	JobHandle     metric.PairwiseJobHandle
 	SelectRows    []int64
 	PairwiseDists []float32
 	OrderByLimit  *objectio.IndexReaderTopOp
@@ -464,8 +467,8 @@ func CleanupIVFFlatIndexJob(job *IVFFlatIndexJob) {
 	if job == nil {
 		return
 	}
-	if job.JobID != 0 {
-		metric.PairwiseDistanceWait(job.JobID, job.OrderByLimit.MetricType) //nolint:errcheck
+	if job.JobHandle.IsValid() {
+		metric.PairwiseDistanceWait(job.JobHandle, job.OrderByLimit.MetricType) //nolint:errcheck
 	}
 	if job.Release != nil {
 		job.Release()
@@ -481,6 +484,7 @@ func HandleOrderByLimitOnIVFFlatIndexLaunch(
 	selectRows []int64,
 	vecCol *vector.Vector,
 	orderByLimit *objectio.IndexReaderTopOp,
+	minWorkSize uint64,
 ) (*IVFFlatIndexJob, error) {
 	if selectRows == nil {
 		selectRows = make([]int64, vecCol.Length())
@@ -514,19 +518,20 @@ func HandleOrderByLimitOnIVFFlatIndexLaunch(
 		pairwiseDists := make([]float32, nX)
 
 		// Launch asynchronously (GPU or CPU based on build tags)
-		jobID, err := metric.PairwiseDistanceLaunch(
+		handle, err := metric.PairwiseDistanceLaunch(
 			lhs,
 			[][]float32{rhs},
 			orderByLimit.MetricType,
 			0, // Default deviceID
 			pairwiseDists,
+			minWorkSize,
 		)
 		if err != nil {
 			return nil, err
 		}
 
 		return &IVFFlatIndexJob{
-			JobID:         jobID,
+			JobHandle:     handle,
 			SelectRows:    selectRows,
 			PairwiseDists: pairwiseDists,
 			OrderByLimit:  orderByLimit,
@@ -551,19 +556,20 @@ func HandleOrderByLimitOnIVFFlatIndexLaunch(
 		pairwiseDists := make([]float32, nX)
 
 		// Launch asynchronously (GPU or CPU based on build tags)
-		jobID, err := metric.PairwiseDistanceLaunch(
+		handle, err := metric.PairwiseDistanceLaunch(
 			lhs,
 			[][]float64{rhs},
 			orderByLimit.MetricType,
 			0, // Default deviceID
 			pairwiseDists,
+			minWorkSize,
 		)
 		if err != nil {
 			return nil, err
 		}
 
 		return &IVFFlatIndexJob{
-			JobID:         jobID,
+			JobHandle:     handle,
 			SelectRows:    selectRows,
 			PairwiseDists: pairwiseDists,
 			OrderByLimit:  orderByLimit,
@@ -586,7 +592,7 @@ func HandleOrderByLimitOnIVFFlatIndexWait(
 	}
 
 	// Wait for completion
-	_, err := metric.PairwiseDistanceWait(job.JobID, job.OrderByLimit.MetricType)
+	_, err := metric.PairwiseDistanceWait(job.JobHandle, job.OrderByLimit.MetricType)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -658,7 +664,7 @@ func HandleOrderByLimitOnIVFFlatIndex(
 	vecCol *vector.Vector,
 	orderByLimit *objectio.IndexReaderTopOp,
 ) ([]int64, []float64, error) {
-	job, err := HandleOrderByLimitOnIVFFlatIndexLaunch(ctx, selectRows, vecCol, orderByLimit)
+	job, err := HandleOrderByLimitOnIVFFlatIndexLaunch(ctx, selectRows, vecCol, orderByLimit, metric.GPUThresholdSync)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -751,6 +757,7 @@ func BlockDataReadInnerLaunch(
 	cacheVectors containers.Vectors,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
+	minWorkSize uint64,
 ) (job *IVFFlatIndexJob, err error) {
 	var (
 		deletedRows []int64
@@ -784,7 +791,7 @@ func BlockDataReadInnerLaunch(
 	// len(selectRows) > 0 means it was already filtered by pk filter
 	if len(selectRows) > 0 {
 		if orderByLimit != nil {
-			job, err = handleOrderByLimitOnSelectRowsLaunch(ctx, selectRows, orderByLimit, phyAddrColumnPos, cacheVectors)
+			job, err = handleOrderByLimitOnSelectRowsLaunch(ctx, selectRows, orderByLimit, phyAddrColumnPos, cacheVectors, minWorkSize)
 			if job != nil {
 				job.Release = release
 			}
@@ -835,7 +842,7 @@ func BlockDataReadInnerLaunch(
 	// apply TopN on live rows (exclude tombstones first), then materialize selected rows.
 	if orderByLimit != nil {
 		topInputRows := buildTopInputRows(int(info.MetaLocation().Rows()), deleteMask)
-		job, err = handleOrderByLimitOnSelectRowsLaunch(ctx, topInputRows, orderByLimit, phyAddrColumnPos, cacheVectors)
+		job, err = handleOrderByLimitOnSelectRowsLaunch(ctx, topInputRows, orderByLimit, phyAddrColumnPos, cacheVectors, minWorkSize)
 		if job != nil {
 			job.Release = release
 		}
@@ -1037,6 +1044,7 @@ func handleOrderByLimitOnSelectRowsLaunch(
 	orderByLimit *objectio.IndexReaderTopOp,
 	phyAddrColumnPos int,
 	cacheVectors containers.Vectors,
+	minWorkSize uint64,
 ) (*IVFFlatIndexJob, error) {
 	vecColPos := orderByLimit.ColPos
 	if phyAddrColumnPos >= 0 && vecColPos > int32(phyAddrColumnPos) {
@@ -1044,7 +1052,7 @@ func handleOrderByLimitOnSelectRowsLaunch(
 	}
 	vecCol := &cacheVectors[vecColPos]
 
-	return HandleOrderByLimitOnIVFFlatIndexLaunch(ctx, selectRows, vecCol, orderByLimit)
+	return HandleOrderByLimitOnIVFFlatIndexLaunch(ctx, selectRows, vecCol, orderByLimit, minWorkSize)
 }
 
 func handleOrderByLimitOnSelectRowsWait(
@@ -1061,7 +1069,7 @@ func handleOrderByLimitOnSelectRows(
 	phyAddrColumnPos int,
 	cacheVectors containers.Vectors,
 ) ([]int64, []float64, error) {
-	job, err := handleOrderByLimitOnSelectRowsLaunch(ctx, selectRows, orderByLimit, phyAddrColumnPos, cacheVectors)
+	job, err := handleOrderByLimitOnSelectRowsLaunch(ctx, selectRows, orderByLimit, phyAddrColumnPos, cacheVectors, metric.GPUThresholdSync)
 	if err != nil {
 		return nil, nil, err
 	}

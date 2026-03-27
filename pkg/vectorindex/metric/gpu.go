@@ -26,6 +26,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 )
 
+// GPUThresholdSync is the minimum nX*nY*dim work size required to use the GPU
+// when there is no I/O to overlap with (e.g. in-memory blocks). Below this
+// threshold the GPU kernel-launch overhead exceeds the compute savings.
+const GPUThresholdSync = uint64(200 * 1024 * 1024)
+
+// GPUThresholdOverlapped should be used when the GPU compute is pipelined with
+// synchronous block I/O. The GPU time is hidden inside the I/O wait, so even
+// small workloads benefit from offloading. Pass 0 to always use the GPU for
+// any supported metric.
+const GPUThresholdOverlapped = uint64(0)
+
 var (
 	MetricTypeToCuvsMetric = map[MetricType]cuvs.DistanceType{
 		Metric_L2sqDistance:   cuvs.L2Expanded,
@@ -51,18 +62,18 @@ func PairWiseDistance[T types.RealNumbers](
 
 	_, ok := MetricTypeToCuvsMetric[metric]
 	// Use GPU only for large enough workloads where overhead is justified
-	if !ok || uint64(nX)*uint64(nY)*uint64(dim) < 200*1024*1024 {
+	if !ok || uint64(nX)*uint64(nY)*uint64(dim) < GPUThresholdSync {
 		return GoPairWiseDistance(x, y, metric)
 	}
 
 	var zero T
-	if any(zero).(interface{}) == any(float32(0)).(interface{}) {
+	if _, isF32 := any(zero).(float32); isF32 {
 		res := make([]float32, nX*nY)
-		jobID, err := PairwiseDistanceLaunch(x, y, metric, deviceID, res)
+		handle, err := PairwiseDistanceLaunch(x, y, metric, deviceID, res, GPUThresholdSync)
 		if err != nil {
 			return nil, err
 		}
-		return PairwiseDistanceWait(jobID, metric)
+		return PairwiseDistanceWait(handle, metric)
 	}
 
 	return GoPairWiseDistance(x, y, metric)
@@ -91,7 +102,10 @@ func (m *gpuJobManager) add(dist []float32) uint64 {
 	defer m.mu.Unlock()
 	id := m.nextID
 	m.nextID++
-	m.jobs[id] = &gpuJob{dist: dist}
+	if m.nextID >= (1 << 63) {
+		m.nextID = 1
+	}
+	m.jobs[id] = &gpuJob{dist: dist, deallocators: make([]malloc.Deallocator, 0, 2)}
 	return id
 }
 
@@ -125,7 +139,8 @@ func PairwiseDistanceLaunch[T types.RealNumbers](
 	metric MetricType,
 	deviceID int,
 	dist []float32,
-) (uint64, error) {
+	minWorkSize uint64,
+) (PairwiseJobHandle, error) {
 	nX := len(x)
 	nY := len(y)
 	if nX == 0 || nY == 0 {
@@ -135,9 +150,9 @@ func PairwiseDistanceLaunch[T types.RealNumbers](
 
 	cuvsMetric, ok := MetricTypeToCuvsMetric[metric]
 	var zero T
-	isF32 := any(zero).(interface{}) == any(float32(0)).(interface{})
+	_, isF32 := any(zero).(float32)
 
-	if ok && isF32 && uint64(nX)*uint64(nY)*uint64(dim) >= 200*1024*1024 {
+	if ok && isF32 && uint64(nX)*uint64(nY)*uint64(dim) >= minWorkSize {
 		allocator := malloc.NewCAllocator()
 
 		// 1. Flatten Y
@@ -163,7 +178,11 @@ func PairwiseDistanceLaunch[T types.RealNumbers](
 			copy(xf32[i*dim:(i+1)*dim], v)
 		}
 
-		jobID := globalGpuJobManager.add(dist)
+		// Register job before launch so the slot exists if Wait is called
+		// concurrently. On launch failure, pop removes it before returning;
+		// no caller can see the job because cuvsJobID is only set by update()
+		// below, which is never reached on this error path.
+		gpuID := globalGpuJobManager.add(dist)
 
 		cuvsID, err := cuvs.PairwiseDistanceLaunch(
 			xf32,
@@ -178,13 +197,13 @@ func PairwiseDistanceLaunch[T types.RealNumbers](
 		if err != nil {
 			xDeallocator.Deallocate()
 			yDeallocator.Deallocate()
-			globalGpuJobManager.pop(jobID)
+			globalGpuJobManager.pop(gpuID)
 			return 0, err
 		}
 
-		globalGpuJobManager.update(jobID, cuvsID, xDeallocator, yDeallocator)
+		globalGpuJobManager.update(gpuID, cuvsID, xDeallocator, yDeallocator)
 
-		return jobID, nil
+		return PairwiseJobHandle(gpuID), nil
 	}
 
 	return PairwiseDistanceLaunchCPU(x, y, metric, deviceID, dist)
@@ -192,12 +211,12 @@ func PairwiseDistanceLaunch[T types.RealNumbers](
 
 // PairwiseDistanceWait waits for the completion of the asynchronous GPU distance
 // calculation initiated by Launch.
-func PairwiseDistanceWait(jobID uint64, metric MetricType) ([]float32, error) {
-	if jobID >= (1 << 60) {
-		return PairwiseDistanceWaitCPU(jobID, metric)
+func PairwiseDistanceWait(handle PairwiseJobHandle, metric MetricType) ([]float32, error) {
+	if handle&pairwiseCPUBit != 0 {
+		return PairwiseDistanceWaitCPU(handle, metric)
 	}
 
-	job := globalGpuJobManager.pop(jobID)
+	job := globalGpuJobManager.pop(uint64(handle))
 	if job == nil {
 		return nil, nil
 	}

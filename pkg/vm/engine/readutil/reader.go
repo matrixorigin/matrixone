@@ -672,14 +672,15 @@ func (r *reader) Read(
 		// for the next block, whether it is in-memory or persisted on disk.
 		launchPref := func() (*blockio.IVFFlatIndexJob, error) {
 			if r.prefState == engine.InMem {
-				// For in-memory data, we launch the distance calculation immediately.
-				// On CPU, this is synchronous but follows the async interface.
-				// On GPU (if enabled), this will offload the work.
+				// For in-memory blocks there is no I/O to overlap with, so GPU
+				// kernel-launch overhead is a pure penalty for small queries.
+				// Only use GPU if the workload is large enough to justify it.
 				return blockio.HandleOrderByLimitOnIVFFlatIndexLaunch(
 					ctx,
 					nil,
 					r.prefBatch.Vecs[r.orderByLimit.ColPos],
 					r.orderByLimit,
+					metric.GPUThresholdSync,
 				)
 			}
 
@@ -705,6 +706,10 @@ func (r *reader) Read(
 			// Swap cache vectors for the next block prefetch
 			r.cacheVectors, r.nextCacheVectors = r.nextCacheVectors, r.cacheVectors
 
+			// For persisted blocks the GPU compute is pipelined with I/O: the
+			// kernel runs while the caller processes the previous block AND while
+			// this block's data is being fetched from storage. The GPU time is
+			// effectively free, so use GPU for any supported metric (threshold=0).
 			job, err := blockio.BlockDataReadLaunch(
 				statsCtx,
 				r.prefBlkInfo,
@@ -723,6 +728,7 @@ func (r *reader) Read(
 				r.cacheVectors,
 				mp,
 				r.fs,
+				metric.GPUThresholdOverlapped,
 			)
 			if err != nil {
 				return nil, err

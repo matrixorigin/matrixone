@@ -297,7 +297,7 @@ public:
         main_tasks_.set_capacity(1000);
     }
 
-    ~cuvs_worker_t() { stop(); }
+    ~cuvs_worker_t() { try { stop(); } catch (...) {} }
 
     void start(std::function<std::any(raft_handle&)> init_fn = nullptr,
                std::function<std::any(raft_handle&)> stop_fn = nullptr) {

@@ -20,6 +20,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
+// GPUThresholdSync and GPUThresholdOverlapped are defined here for non-gpu
+// builds so that callers can reference them unconditionally.
+const GPUThresholdSync = uint64(200 * 1024 * 1024)
+const GPUThresholdOverlapped = uint64(0)
+
 func PairWiseDistance[T types.RealNumbers](
 	x [][]T,
 	y [][]T,
@@ -35,10 +40,12 @@ func PairwiseDistanceLaunch[T types.RealNumbers](
 	metric MetricType,
 	deviceID int,
 	dist []float32,
-) (uint64, error) {
+	_ uint64, // minWorkSize: ignored, CPU is always used in non-gpu builds
+) (PairwiseJobHandle, error) {
 	return PairwiseDistanceLaunchCPU(x, y, metric, deviceID, dist)
 }
 
-func PairwiseDistanceWait(jobID uint64, metric MetricType) ([]float32, error) {
-	return PairwiseDistanceWaitCPU(jobID, metric)
+
+func PairwiseDistanceWait(handle PairwiseJobHandle, metric MetricType) ([]float32, error) {
+	return PairwiseDistanceWaitCPU(handle, metric)
 }

@@ -304,15 +304,10 @@ type PinnedPool struct {
 	items []unsafe.Pointer
 }
 
-// NewPinnedPool creates a new PinnedPool and sets a finalizer to
-// automatically call Destroy when the pool is garbage collected.
-// Note: If the pool is stored in a global variable, it will never be GC'd.
+// NewPinnedPool creates a new PinnedPool.
+// The caller must call Destroy to release all pinned memory when done.
 func NewPinnedPool(newFunc func() unsafe.Pointer) *PinnedPool {
-	p := &PinnedPool{New: newFunc}
-	runtime.SetFinalizer(p, func(obj *PinnedPool) {
-		obj.Destroy()
-	})
-	return p
+	return &PinnedPool{New: newFunc}
 }
 
 // Get selects an arbitrary item from the PinnedPool, removes it from the
@@ -344,14 +339,16 @@ func (p *PinnedPool) Put(x unsafe.Pointer) {
 }
 
 // Destroy frees all pinned memory currently held in the pool.
+// All items are freed regardless of individual errors; the last non-nil error is returned.
 func (p *PinnedPool) Destroy() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	var lastErr error
 	for _, item := range p.items {
 		if err := GpuFreePinned(item); err != nil {
-			return err
+			lastErr = err
 		}
 	}
 	p.items = nil
-	return nil
+	return lastErr
 }

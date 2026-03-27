@@ -22,6 +22,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
+// PairwiseJobHandle identifies a pending pairwise-distance computation.
+// It is a plain uint64 to avoid heap allocation:
+//
+//	bit 63 = 1  →  CPU job
+//	bit 63 = 0, value ≠ 0  →  GPU job
+//	value = 0  →  invalid (zero value)
+//
+// The map key in the CPU job store is the full handle value (CPU bit included),
+// so no masking is needed on the wait side.
+type PairwiseJobHandle uint64
+
+// pairwiseCPUBit is OR'd into CPU handles to distinguish them from GPU handles.
+const pairwiseCPUBit = PairwiseJobHandle(1 << 63)
+
+// IsValid reports whether the handle refers to a real pending job.
+func (h PairwiseJobHandle) IsValid() bool { return h != 0 }
+
 type pairWiseJob struct {
 	dist []float32
 	err  error
@@ -30,8 +47,7 @@ type pairWiseJob struct {
 var (
 	jobMap = make(map[uint64]*pairWiseJob)
 	jobMu  sync.Mutex
-	// Start with a very high ID to avoid collision with C++ job IDs (which start at 1)
-	nextID uint64 = 1 << 60
+	nextID uint64 = 1
 )
 
 // PairwiseDistanceLaunchCPU captures parameters for a pairwise distance calculation on CPU.
@@ -44,7 +60,7 @@ func PairwiseDistanceLaunchCPU[T types.RealNumbers](
 	metric MetricType,
 	_ int, // deviceID (ignored on CPU)
 	dist []float32,
-) (uint64, error) {
+) (PairwiseJobHandle, error) {
 	distFn, err := ResolveDistanceFn[T](metric)
 	if err != nil {
 		return 0, err
@@ -104,22 +120,26 @@ DONE:
 	jobMu.Lock()
 	id := nextID
 	nextID++
-	jobMap[id] = job
+	if nextID >= (1 << 63) {
+		nextID = 1
+	}
+	handle := pairwiseCPUBit | PairwiseJobHandle(id)
+	jobMap[uint64(handle)] = job
 	jobMu.Unlock()
 
-	return id, nil
+	return handle, nil
 }
 
 // PairwiseDistanceWaitCPU returns the results of the pairwise distance calculation
 // performed on the CPU.
-func PairwiseDistanceWaitCPU(jobID uint64, metric MetricType) ([]float32, error) {
+func PairwiseDistanceWaitCPU(handle PairwiseJobHandle, metric MetricType) ([]float32, error) {
 	jobMu.Lock()
-	job, ok := jobMap[jobID]
+	job, ok := jobMap[uint64(handle)]
 	if !ok {
 		jobMu.Unlock()
 		return nil, moerr.NewInternalErrorNoCtx("invalid job ID")
 	}
-	delete(jobMap, jobID)
+	delete(jobMap, uint64(handle))
 	jobMu.Unlock()
 
 	if job.err != nil {

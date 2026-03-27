@@ -226,8 +226,8 @@ void gpu_convert_f32_to_f16(const float* src, void* dst, uint64_t total_elements
         RAFT_CUDA_TRY(cudaMemcpy(dst, d_dst, total_elements * sizeof(half), cudaMemcpyDeviceToHost));
 
         // Free device memory
-        cudaFree(d_src);
-        cudaFree(d_dst);
+        RAFT_CUDA_TRY(cudaFree(d_src));
+        RAFT_CUDA_TRY(cudaFree(d_dst));
 
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_convert_f32_to_f16", e.what());

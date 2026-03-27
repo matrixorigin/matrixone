@@ -106,11 +106,11 @@ func BenchmarkPairwiseDistanceAsync(b *testing.B) {
 		dist := make([]float32, nX*nY)
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			jobID, err := PairwiseDistanceLaunch(x, y, Metric_L2sqDistance, 0, dist)
+			handle, err := PairwiseDistanceLaunch(x, y, Metric_L2sqDistance, 0, dist, GPUThresholdSync)
 			if err != nil {
 				b.Fatal(err)
 			}
-			_, err = PairwiseDistanceWait(jobID, Metric_L2sqDistance)
+			_, err = PairwiseDistanceWait(handle, Metric_L2sqDistance)
 			if err != nil {
 				b.Fatal(err)
 			}

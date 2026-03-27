@@ -629,7 +629,12 @@ func MergeGpuCagra[T VectorType](indices []*GpuCagra[T], nthread uint32, devices
 		return nil, moerr.NewInternalErrorNoCtx("failed to merge GpuCagra indices")
 	}
 
-	return &GpuCagra[T]{cCagra: cCagra, dimension: indices[0].dimension}, nil
+	return &GpuCagra[T]{
+		cCagra:    cCagra,
+		dimension: indices[0].dimension,
+		nthread:   indices[0].nthread,
+		distMode:  indices[0].distMode,
+	}, nil
 }
 
 // SearchResult contains the neighbors and distances from a search.

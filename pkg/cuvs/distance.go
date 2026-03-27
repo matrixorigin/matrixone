@@ -103,6 +103,13 @@ func PairwiseDistanceLaunch[T VectorType](
 		unsafe.Pointer(&errmsg),
 	)
 
+	// x and y must remain live until PairwiseDistanceWait returns, because the
+	// GPU kernel may still be reading host memory after this call returns.
+	// The caller is responsible for keeping x and y alive until then.
+	// These KeepAlives only protect against GC within this function frame.
+	runtime.KeepAlive(x)
+	runtime.KeepAlive(y)
+
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))

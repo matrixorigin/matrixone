@@ -34,8 +34,8 @@ type GpuBruteForce[T VectorType] struct {
 }
 
 // NewGpuBruteForce creates a new GpuBruteForce instance
-func NewGpuBruteForce[T VectorType](dataset []T, count_vectors uint64, dimension uint32, metric DistanceType, nthread uint32, device_id int) (*GpuBruteForce[T], error) {
-	if len(dataset) == 0 || count_vectors == 0 || dimension == 0 {
+func NewGpuBruteForce[T VectorType](dataset []T, countVectors uint64, dimension uint32, metric DistanceType, nthread uint32, deviceID int) (*GpuBruteForce[T], error) {
+	if len(dataset) == 0 || countVectors == 0 || dimension == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("dataset, count_vectors, and dimension cannot be zero")
 	}
 
@@ -43,11 +43,11 @@ func NewGpuBruteForce[T VectorType](dataset []T, count_vectors uint64, dimension
 	var errmsg *C.char
 	cIndex := C.gpu_brute_force_new(
 		unsafe.Pointer(&dataset[0]),
-		C.uint64_t(count_vectors),
+		C.uint64_t(countVectors),
 		C.uint32_t(dimension),
 		C.distance_type_t(metric),
 		C.uint32_t(nthread),
-		C.int(device_id),
+		C.int(deviceID),
 		C.quantization_t(qtype),
 		unsafe.Pointer(&errmsg),
 	)
@@ -178,11 +178,11 @@ func (gb *GpuBruteForce[T]) AddChunkFloat(chunk []float32, chunkCount uint64) er
 }
 
 // Search performs a search operation
-func (gb *GpuBruteForce[T]) Search(queries []T, num_queries uint64, query_dimension uint32, limit uint32) ([]int64, []float32, error) {
+func (gb *GpuBruteForce[T]) Search(queries []T, numQueries uint64, queryDimension uint32, limit uint32) ([]int64, []float32, error) {
 	if gb.cIndex == nil {
 		return nil, nil, moerr.NewInternalErrorNoCtx("GpuBruteForce is not initialized")
 	}
-	if len(queries) == 0 || num_queries == 0 || query_dimension == 0 {
+	if len(queries) == 0 || numQueries == 0 || queryDimension == 0 {
 		return nil, nil, moerr.NewInternalErrorNoCtx("queries, num_queries, and query_dimension cannot be zero")
 	}
 
@@ -190,8 +190,8 @@ func (gb *GpuBruteForce[T]) Search(queries []T, num_queries uint64, query_dimens
 	cResult := C.gpu_brute_force_search(
 		gb.cIndex,
 		unsafe.Pointer(&queries[0]),
-		C.uint64_t(num_queries),
-		C.uint32_t(query_dimension),
+		C.uint64_t(numQueries),
+		C.uint32_t(queryDimension),
 		C.uint32_t(limit),
 		unsafe.Pointer(&errmsg),
 	)
@@ -207,10 +207,10 @@ func (gb *GpuBruteForce[T]) Search(queries []T, num_queries uint64, query_dimens
 	}
 
 	// Allocate slices for results
-	neighbors := make([]int64, num_queries*uint64(limit))
-	distances := make([]float32, num_queries*uint64(limit))
+	neighbors := make([]int64, numQueries*uint64(limit))
+	distances := make([]float32, numQueries*uint64(limit))
 
-	C.gpu_brute_force_get_results(cResult, C.uint64_t(num_queries), C.uint32_t(limit), (*C.int64_t)(unsafe.Pointer(&neighbors[0])), (*C.float)(unsafe.Pointer(&distances[0])))
+	C.gpu_brute_force_get_results(cResult, C.uint64_t(numQueries), C.uint32_t(limit), (*C.int64_t)(unsafe.Pointer(&neighbors[0])), (*C.float)(unsafe.Pointer(&distances[0])))
 	runtime.KeepAlive(neighbors)
 	runtime.KeepAlive(distances)
 
@@ -220,11 +220,11 @@ func (gb *GpuBruteForce[T]) Search(queries []T, num_queries uint64, query_dimens
 }
 
 // SearchFloat performs a search operation with float32 queries
-func (gb *GpuBruteForce[T]) SearchFloat(queries []float32, num_queries uint64, query_dimension uint32, limit uint32) ([]int64, []float32, error) {
+func (gb *GpuBruteForce[T]) SearchFloat(queries []float32, numQueries uint64, queryDimension uint32, limit uint32) ([]int64, []float32, error) {
 	if gb.cIndex == nil {
 		return nil, nil, moerr.NewInternalErrorNoCtx("GpuBruteForce is not initialized")
 	}
-	if len(queries) == 0 || num_queries == 0 || query_dimension == 0 {
+	if len(queries) == 0 || numQueries == 0 || queryDimension == 0 {
 		return nil, nil, moerr.NewInternalErrorNoCtx("queries, num_queries, and query_dimension cannot be zero")
 	}
 
@@ -232,8 +232,8 @@ func (gb *GpuBruteForce[T]) SearchFloat(queries []float32, num_queries uint64, q
 	cResult := C.gpu_brute_force_search_float(
 		gb.cIndex,
 		(*C.float)(unsafe.Pointer(&queries[0])),
-		C.uint64_t(num_queries),
-		C.uint32_t(query_dimension),
+		C.uint64_t(numQueries),
+		C.uint32_t(queryDimension),
 		C.uint32_t(limit),
 		unsafe.Pointer(&errmsg),
 	)
@@ -249,10 +249,10 @@ func (gb *GpuBruteForce[T]) SearchFloat(queries []float32, num_queries uint64, q
 	}
 
 	// Allocate slices for results
-	neighbors := make([]int64, num_queries*uint64(limit))
-	distances := make([]float32, num_queries*uint64(limit))
+	neighbors := make([]int64, numQueries*uint64(limit))
+	distances := make([]float32, numQueries*uint64(limit))
 
-	C.gpu_brute_force_get_results(cResult, C.uint64_t(num_queries), C.uint32_t(limit), (*C.int64_t)(unsafe.Pointer(&neighbors[0])), (*C.float)(unsafe.Pointer(&distances[0])))
+	C.gpu_brute_force_get_results(cResult, C.uint64_t(numQueries), C.uint32_t(limit), (*C.int64_t)(unsafe.Pointer(&neighbors[0])), (*C.float)(unsafe.Pointer(&distances[0])))
 	runtime.KeepAlive(neighbors)
 	runtime.KeepAlive(distances)
 
