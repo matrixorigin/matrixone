@@ -48,14 +48,20 @@ type arenaFreeList struct {
 var arenaPools [2]arenaFreeList
 
 func init() {
-	// Each tier gets GOMAXPROCS/2 slots — merge and flush worker pools
-	// are each sized to min(GOMAXPROCS/2, 100).
-	half := int32(runtime.GOMAXPROCS(0)) / 2
+	procs := int32(runtime.GOMAXPROCS(0))
+	half := procs / 2
 	if half < 1 {
 		half = 1
 	}
+	// ArenaSmall: serves flush workers only (GOMAXPROCS/2 goroutines).
 	arenaPools[ArenaSmall].maxCount = half
-	arenaPools[ArenaLarge].maxCount = half
+	// ArenaLarge: serves both TN merge workers (GOMAXPROCS/2) and CN S3
+	// writers (concurrent count ≈ GOMAXPROCS).  Use GOMAXPROCS slots to
+	// keep warm arenas available under bursty load.
+	arenaPools[ArenaLarge].maxCount = procs
+	if arenaPools[ArenaLarge].maxCount < 2 {
+		arenaPools[ArenaLarge].maxCount = 2
+	}
 }
 
 // GetArena pops a WriteArena from the requested tier's free list, or
