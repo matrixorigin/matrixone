@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -23,9 +24,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"go.uber.org/zap"
 )
@@ -74,7 +75,7 @@ func ScanSnapshotWithCurrentRanges(
 	}
 
 	logutil.Info(
-		"SnapshotScan-ResolveSnapshotState-Start",
+		"SnapshotScan-Start",
 		zap.String("caller", caller),
 		zap.Uint64("table-id", tbl.tableId),
 		zap.String("table-name", tbl.tableName),
@@ -82,48 +83,38 @@ func ScanSnapshotWithCurrentRanges(
 		zap.String("snapshot-ts", snapshotTS.ToString()),
 	)
 
-	pState, err := eng.getOrCreateSnapPartBy(ctx, tbl, snapshotTS)
+	// Strip the EmptyBlockInfo marker (signals in-memory data) that Ranges()
+	// prepends when Policy_CollectCommittedInmemData is set.  RemoteDataSource
+	// doesn't understand this marker and would try to open a zero-path file.
+	if relData.DataCnt() > 0 {
+		blk := relData.GetBlockInfo(0)
+		if blk.IsMemBlk() {
+			relData = relData.DataSlice(1, relData.DataCnt())
+		}
+	}
+	if relData.DataCnt() == 0 {
+		return nil
+	}
+
+	tombstones, err := tbl.CollectTombstones(ctx, 0, engine.Policy_CollectAllTombstones)
 	if err != nil {
-		logutil.Error(
-			"SnapshotScan-ResolveSnapshotState-Error",
-			zap.String("caller", caller),
-			zap.Uint64("table-id", tbl.tableId),
-			zap.String("table-name", tbl.tableName),
-			zap.String("db-name", tbl.db.databaseName),
-			zap.String("snapshot-ts", snapshotTS.ToString()),
-			zap.Error(err),
-		)
 		return err
 	}
-	logutil.Info(
-		"SnapshotScan-ResolveSnapshotState-Done",
-		zap.String("caller", caller),
-		zap.Uint64("table-id", tbl.tableId),
-		zap.String("table-name", tbl.tableName),
-		zap.String("db-name", tbl.db.databaseName),
-		zap.String("snapshot-ts", snapshotTS.ToString()),
-	)
-
-	source, err := newSnapshotScanDataSource(ctx, tbl, relData, pState, snapshotTS, mp)
-	if err != nil {
+	if err = relData.AttachTombstones(tombstones); err != nil {
 		return err
 	}
 
-	reader, err := readutil.NewReader(
-		ctx,
-		mp,
-		eng.packerPool,
-		eng.fs,
-		tbl.tableDef,
-		snapshotTS.ToTimestamp(),
-		filterExpr,
-		source,
-		0,
-		engine.FilterHint{},
+	source := readutil.NewRemoteDataSource(
+		ctx, eng.fs, snapshotTS.ToTimestamp(), relData,
 	)
-	if err != nil {
-		return err
-	}
+
+	seqnums := attrsToSeqnums(attrs, tbl.tableDef)
+	reader := readutil.SimpleReaderWithDataSource(
+		ctx, eng.fs,
+		source, snapshotTS.ToTimestamp(),
+		readutil.WithColumns(seqnums, colTypes),
+	)
+
 	defer reader.Close()
 
 	readBatch := batch.NewWithSize(len(attrs))
@@ -150,53 +141,6 @@ func ScanSnapshotWithCurrentRanges(
 	}
 }
 
-func newSnapshotScanDataSource(
-	ctx context.Context,
-	tbl *txnTable,
-	relData engine.RelData,
-	pState *logtailreplay.PartitionState,
-	snapshotTS types.TS,
-	mp *mpool.MPool,
-) (*LocalDisttaeDataSource, error) {
-	if pState == nil {
-		return nil, moerr.NewInternalErrorNoCtx("snapshot scan requires a non-nil partition state")
-	}
-
-	ranges := relData.GetBlockInfoSlice()
-	skipReadMem := true
-	if ranges != nil && ranges.Len() > 0 {
-		if ranges.Get(0).IsMemBlk() {
-			skipReadMem = false
-			ranges = ranges.Slice(1, ranges.Len())
-		}
-	}
-
-	source := &LocalDisttaeDataSource{
-		category:        engine.GeneralLocalDataSource,
-		extraTombstones: relData.GetTombstones(),
-		rangeSlice:      ranges,
-		pState:          pState,
-		table:           tbl,
-		mp:              mp,
-		ctx:             ctx,
-		fs:              tbl.getTxn().engine.fs,
-		snapshotTS:      snapshotTS,
-		tombstonePolicy: engine.Policy_CheckCommittedOnly,
-	}
-
-	if ranges == nil || ranges.Len() == 0 {
-		source.rc.prefetchDisabled = true
-	} else {
-		source.rc.prefetchDisabled = ranges.Len() < 4
-	}
-
-	source.iteratePhase = engine.InMem
-	if skipReadMem {
-		source.iteratePhase = engine.Persisted
-	}
-	return source, nil
-}
-
 func unwrapTxnTable(rel engine.Relation) (*txnTable, error) {
 	switch tbl := rel.(type) {
 	case *txnTable:
@@ -209,4 +153,21 @@ func unwrapTxnTable(rel engine.Relation) (*txnTable, error) {
 			rel,
 		)
 	}
+}
+
+func attrsToSeqnums(attrs []string, tableDef *plan.TableDef) []uint16 {
+	seqnums := make([]uint16, len(attrs))
+	for i, attr := range attrs {
+		col := strings.ToLower(attr)
+		if objectio.IsPhysicalAddr(col) {
+			seqnums[i] = objectio.SEQNUM_ROWID
+		} else if col == objectio.DefaultCommitTS_Attr {
+			seqnums[i] = objectio.SEQNUM_COMMITTS
+		} else {
+			colIdx := tableDef.Name2ColIndex[col]
+			colDef := tableDef.Cols[colIdx]
+			seqnums[i] = uint16(colDef.Seqnum)
+		}
+	}
+	return seqnums
 }

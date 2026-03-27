@@ -1298,8 +1298,7 @@ func decideCollectRange(
 		baseSp = types.TimestampToTS(*tables.baseSnap.TS)
 	}
 
-	var ctsFromFallback []bool
-	if tblCommitTS, ctsFromFallback, err = getTablesCreationCommitTS(
+	if tblCommitTS, err = getTablesCreationCommitTS(
 		ctx, ses, tables.tarRel, tables.baseRel,
 		[]types.TS{tarSp, baseSp},
 	); err != nil {
@@ -1359,43 +1358,6 @@ func decideCollectRange(
 	// case 1: t1 and t2 have no LCA
 	//	==> t1 collect [0, sp], t2 collect [0, sp]
 	if dagInfo.lcaTableId == 0 {
-		tarCollectRange = collectRange{
-			from: []types.TS{types.MinTs()},
-			end:  []types.TS{tarSp},
-			rel:  []engine.Relation{tables.tarRel},
-		}
-		baseCollectRange = collectRange{
-			from: []types.TS{types.MinTs()},
-			end:  []types.TS{baseSp},
-			rel:  []engine.Relation{tables.baseRel},
-		}
-		return
-	}
-
-	// After GC + restart, getTableCreationCommitTS may return a synthetic
-	// commit_ts equal to the query snapshot (from VisibleStateChangesHandle).
-	// When that happens, incremental collect ranges (CTS.Next()..Sp) become
-	// empty or inverted. Fall back to full-state comparison which
-	// collects ALL visible data from both tables and compares them directly,
-	// without needing creation timestamps at all.
-	//
-	// Only trigger when the CTS came from the CollectChanges fallback
-	// (ctsFromFallback=true), meaning the primary snapshot-scan method
-	// failed.  For freshly created tables the primary method also fails
-	// but the CollectChanges CTS is still accurate via partition-state;
-	// the GE check distinguishes real CTS from synthetic ones.
-	tarCTSUnreliable := ctsFromFallback[0] && tarCTS.GE(&tarSp)
-	baseCTSUnreliable := ctsFromFallback[1] && baseCTS.GE(&baseSp)
-	if tarCTSUnreliable || baseCTSUnreliable {
-		logutil.Warn(
-			"DataBranch-UnreliableCreationTS",
-			zap.String("tarCTS", tarCTS.ToString()),
-			zap.String("baseCTS", baseCTS.ToString()),
-			zap.String("tarSp", tarSp.ToString()),
-			zap.String("baseSp", baseSp.ToString()),
-			zap.Int("original-lcaType", dagInfo.lcaType),
-		)
-		dagInfo.lcaType = lcaFullStateFallback
 		tarCollectRange = collectRange{
 			from: []types.TS{types.MinTs()},
 			end:  []types.TS{tarSp},
@@ -1529,146 +1491,112 @@ func decideCollectRange(
 	return
 }
 
+// getTablesCreationCommitTS resolves the creation commit timestamp for
+// both tar and base tables.  It tries CollectChanges first (fast,
+// preserves real commit_ts from partition state), falling back to the
+// Reader-based snapshot scan when partition state is unavailable.
 func getTablesCreationCommitTS(
 	ctx context.Context,
 	ses *Session,
 	tar engine.Relation,
 	base engine.Relation,
 	snapshot []types.TS,
-) (commitTS []types.TS, fromFallback []bool, err error) {
-	resolveSnapshot := func(idx int) types.TS {
-		if idx >= 0 && idx < len(snapshot) && !snapshot[idx].IsEmpty() {
+) ([]types.TS, error) {
+	txnSnap := types.TimestampToTS(ses.GetTxnHandler().GetTxn().SnapshotTS())
+
+	snapFor := func(idx int) types.TS {
+		if idx < len(snapshot) && !snapshot[idx].IsEmpty() {
 			return snapshot[idx]
 		}
-		return types.TimestampToTS(ses.GetTxnHandler().GetTxn().SnapshotTS())
+		return txnSnap
 	}
 
-	// Prefer getTableCreationCommitTSByID because it reads the real
-	// commit TS stored in data blocks.  The CollectChanges approach
-	// (getTableCreationCommitTSByCollectChanges) replaces commit TS
-	// with a constant when the checkpoint fallback is used (e.g. after
-	// restart + GC), which makes the returned timestamp incorrect
-	// and causes the diff range to miss pre-checkpoint changes.
-	//
-	// Fall back to CollectChanges only when the primary method fails
-	// (e.g. no available checkpoints for newly created tables).
-	// The returned fallback flag indicates which method was used so
-	// the caller can detect genuinely unreliable timestamps.
-	resolve := func(tableID uint64, snap types.TS) (types.TS, bool, error) {
-		ts, err := getTableCreationCommitTSByID(ctx, ses, tableID, snap)
+	resolve := func(tableID uint64, snap types.TS) (types.TS, error) {
+		ts, err := getTableCreationCommitTSByCollectChanges(ctx, ses, tableID, snap)
 		if err == nil {
-			return ts, false, nil
+			return ts, nil
 		}
-		logutil.Warn("getTablesCreationCommitTS: primary method failed, trying CollectChanges fallback",
+		logutil.Warn("getTablesCreationCommitTS: CollectChanges failed, trying Reader fallback",
 			zap.Uint64("table-id", tableID),
 			zap.String("snapshot", snap.ToString()),
 			zap.Error(err),
 		)
-		// Try non-VisibleState first: for fresh tables the logtail provides
-		// real commit timestamps without the synthetic-CTS problem.
-		ts, err2 := getTableCreationCommitTSByCollectChanges(ctx, ses, tableID, snap, false)
-		if err2 == nil {
-			return ts, false, nil
-		}
-		// Last resort: VisibleState scan, which returns a synthetic CTS
-		// equal to the snapshot end after GC+restart.
-		ts, err2 = getTableCreationCommitTSByCollectChanges(ctx, ses, tableID, snap, true)
-		return ts, true, err2
+		return getTableCreationCommitTSByID(ctx, ses, tableID, snap)
 	}
 
-	tarCommitTS, tarFallback, err := resolve(tar.GetTableID(ctx), resolveSnapshot(0))
+	tarCTS, err := resolve(tar.GetTableID(ctx), snapFor(0))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	baseCommitTS, baseFallback, err := resolve(base.GetTableID(ctx), resolveSnapshot(1))
+	baseCTS, err := resolve(base.GetTableID(ctx), snapFor(1))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return []types.TS{tarCommitTS, baseCommitTS}, []bool{tarFallback, baseFallback}, nil
+	return []types.TS{tarCTS, baseCTS}, nil
 }
 
+// getTableCreationCommitTSByID scans the mo_tables snapshot at the given
+// timestamp and returns the earliest commit_ts for the specified table ID.
 func getTableCreationCommitTSByID(
 	ctx context.Context,
 	ses *Session,
 	tableID uint64,
 	snapshotTS types.TS,
 ) (types.TS, error) {
-	resolveAt := func(at types.TS) (commit types.TS, ok bool, err error) {
-		attrs := []string{
-			catalog.SystemRelAttr_ID,
-			objectio.DefaultCommitTS_Attr,
-		}
-		colTypes := []types.Type{
-			types.T_uint64.ToType(),
-			types.T_TS.ToType(),
-		}
-		filterVec := vector.NewVec(types.T_uint64.ToType())
-		defer filterVec.Free(ses.proc.Mp())
-		if err = vector.AppendFixed(filterVec, tableID, false, ses.proc.Mp()); err != nil {
-			return types.TS{}, false, err
-		}
-		filterExpr := readutil.ConstructInExpr(ctx, catalog.SystemRelAttr_ID, filterVec)
+	mp := ses.proc.Mp()
 
-		rowFound := false
-		commitFound := false
-		commitTS := types.TS{}
-
-		err = scanSnapshotRelationByID(
-			ctx,
-			"table-creation-commit-ts",
-			ses,
-			catalog.MO_TABLES_ID,
-			at,
-			attrs,
-			colTypes,
-			filterExpr,
-			func(readBatch *batch.Batch) error {
-				relIDs := vector.MustFixedColWithTypeCheck[uint64](readBatch.Vecs[0])
-				commitCol := vector.MustFixedColWithTypeCheck[types.TS](readBatch.Vecs[1])
-				for i := range relIDs {
-					if relIDs[i] != tableID {
-						continue
-					}
-					rowFound = true
-					if !readBatch.Vecs[1].IsNull(uint64(i)) {
-						if !commitFound || commitCol[i].LT(&commitTS) {
-							commitTS = commitCol[i]
-						}
-						commitFound = true
-					}
-				}
-				return nil
-			},
-		)
-		if err != nil {
-			return types.TS{}, false, err
-		}
-
-		if commitFound {
-			return commitTS, true, nil
-		}
-		return types.TS{}, rowFound, nil
-	}
-
-	if commit, ok, err := resolveAt(snapshotTS); err != nil {
+	filterVec := vector.NewVec(types.T_uint64.ToType())
+	defer filterVec.Free(mp)
+	if err := vector.AppendFixed(filterVec, tableID, false, mp); err != nil {
 		return types.TS{}, err
-	} else if ok {
-		return commit, nil
 	}
 
+	attrs := []string{catalog.SystemRelAttr_ID, objectio.DefaultCommitTS_Attr}
+	colTypes := []types.Type{types.T_uint64.ToType(), types.T_TS.ToType()}
+	filterExpr := readutil.ConstructInExpr(ctx, catalog.SystemRelAttr_ID, filterVec)
+
+	found := false
+	result := types.TS{}
+
+	err := scanSnapshotRelationByID(
+		ctx, "table-creation-commit-ts", ses,
+		catalog.MO_TABLES_ID, snapshotTS,
+		attrs, colTypes, filterExpr,
+		func(bat *batch.Batch) error {
+			ids := vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[0])
+			cts := vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[1])
+			for i, id := range ids {
+				if id != tableID || bat.Vecs[1].IsNull(uint64(i)) {
+					continue
+				}
+				if !found || cts[i].LT(&result) {
+					result = cts[i]
+				}
+				found = true
+			}
+			return nil
+		},
+	)
+	if err != nil {
+		return types.TS{}, err
+	}
+	if found {
+		return result, nil
+	}
 	return types.TS{}, moerr.NewInternalErrorNoCtxf(
 		"cannot find table %d commit ts at snapshot %s",
-		tableID,
-		snapshotTS.ToString(),
+		tableID, snapshotTS.ToString(),
 	)
 }
 
+// getTableCreationCommitTSByCollectChanges uses CollectChanges on mo_tables
+// to find the creation commit_ts.  BuildTS(0,1) forces the partition-state
+// path which preserves real per-row commit timestamps.
 func getTableCreationCommitTSByCollectChanges(
 	ctx context.Context,
 	ses *Session,
 	tableID uint64,
 	snapshotTS types.TS,
-	visibleState bool,
 ) (types.TS, error) {
 	storage := ses.GetTxnHandler().GetStorage()
 	txnOp := ses.GetTxnHandler().GetTxn()
@@ -1679,28 +1607,14 @@ func getTableCreationCommitTSByCollectChanges(
 		return types.TS{}, err
 	}
 
-	// Use BuildTS(0, 1) instead of types.TS{} so that from.IsEmpty() is false
-	// and CollectChanges takes the partition-state path, which preserves the
-	// real per-row commit timestamps.  The checkpoint path (from.IsEmpty())
-	// replaces commit TS with a constant equal to snapshotTS, which would
-	// make the downstream collect-range empty and incorrect.
-	collectCtx := ctx
-	if visibleState {
-		// Enable SnapshotReadPolicyVisibleState so that when the partition
-		// state has been truncated past BuildTS(0,1) (e.g. after GC+restart),
-		// the handler falls back through snapshot-state range → visible-state
-		// exact scan.  The synthetic commit_ts returned equals the snapshot
-		// end time; callers must handle this by checking ctsFromFallback.
-		collectCtx = engine.WithSnapshotReadPolicy(ctx, engine.SnapshotReadPolicyVisibleState)
-	}
-	handle, err := rel.CollectChanges(collectCtx, types.BuildTS(0, 1), snapshotTS, true, mp)
+	handle, err := rel.CollectChanges(ctx, types.BuildTS(0, 1), snapshotTS, true, mp)
 	if err != nil {
 		return types.TS{}, err
 	}
 	defer handle.Close()
 
-	commitFound := false
-	commitTS := types.TS{}
+	found := false
+	result := types.TS{}
 
 	for {
 		data, tombstone, _, err := handle.Next(ctx, mp)
@@ -1710,72 +1624,62 @@ func getTableCreationCommitTSByCollectChanges(
 		if data == nil && tombstone == nil {
 			break
 		}
-
-		if data == nil {
-			if tombstone != nil {
-				tombstone.Clean(mp)
-			}
-			continue
-		}
-
-		relIDIdx := -1
-		commitTSIdx := -1
-		for i, attr := range data.Attrs {
-			switch attr {
-			case catalog.SystemRelAttr_ID:
-				relIDIdx = i
-			case objectio.DefaultCommitTS_Attr:
-				commitTSIdx = i
-			}
-		}
-		if relIDIdx < 0 || commitTSIdx < 0 {
-			// Batches read from aobj (on-disk appendable objects) don't have
-			// Attrs set because ReadOneBlockAllColumns/NewWithSize only
-			// creates Vecs.  Fall back to positional access:
-			//   - rel_id is the first user column (MO_TABLES_REL_ID_IDX = 0)
-			//     after updateDataBatch strips rowid and moves commitTS to end
-			//   - commitTS is always the last vector
-			relIDIdx = catalog.MO_TABLES_REL_ID_IDX
-			commitTSIdx = len(data.Vecs) - 1
-		}
-		if relIDIdx >= len(data.Vecs) || commitTSIdx >= len(data.Vecs) {
-			data.Clean(mp)
-			if tombstone != nil {
-				tombstone.Clean(mp)
-			}
-			continue
-		}
-
-		relIDs := vector.MustFixedColWithTypeCheck[uint64](data.Vecs[relIDIdx])
-		commitCol := vector.MustFixedColWithTypeCheck[types.TS](data.Vecs[commitTSIdx])
-
-		for i := range relIDs {
-			if relIDs[i] != tableID {
-				continue
-			}
-			if !data.Vecs[commitTSIdx].IsNull(uint64(i)) {
-				if !commitFound || commitCol[i].LT(&commitTS) {
-					commitTS = commitCol[i]
-				}
-				commitFound = true
-			}
-		}
-
-		data.Clean(mp)
 		if tombstone != nil {
 			tombstone.Clean(mp)
 		}
+		if data == nil {
+			continue
+		}
+
+		relIDIdx, commitTSIdx := locateColumnsInChangeBatch(data)
+		if relIDIdx >= len(data.Vecs) || commitTSIdx >= len(data.Vecs) {
+			data.Clean(mp)
+			continue
+		}
+
+		ids := vector.MustFixedColWithTypeCheck[uint64](data.Vecs[relIDIdx])
+		cts := vector.MustFixedColWithTypeCheck[types.TS](data.Vecs[commitTSIdx])
+		for i, id := range ids {
+			if id != tableID || data.Vecs[commitTSIdx].IsNull(uint64(i)) {
+				continue
+			}
+			if !found || cts[i].LT(&result) {
+				result = cts[i]
+			}
+			found = true
+		}
+		data.Clean(mp)
 	}
 
-	if commitFound {
-		return commitTS, nil
+	if found {
+		return result, nil
 	}
-
 	return types.TS{}, moerr.NewInternalErrorNoCtxf(
-		"cannot find table %d commit ts at snapshot %s",
-		tableID,
-		snapshotTS.ToString(),
+		"cannot find table %d commit ts at snapshot %s (via CollectChanges)",
+		tableID, snapshotTS.ToString(),
 	)
+}
+
+// locateColumnsInChangeBatch finds rel_id and commit_ts column indices
+// in a CollectChanges data batch.  Named attrs are tried first; when
+// absent (aobj path), positional access is used.
+func locateColumnsInChangeBatch(data *batch.Batch) (relIDIdx, commitTSIdx int) {
+	relIDIdx, commitTSIdx = -1, -1
+	for i, attr := range data.Attrs {
+		switch attr {
+		case catalog.SystemRelAttr_ID:
+			relIDIdx = i
+		case objectio.DefaultCommitTS_Attr:
+			commitTSIdx = i
+		}
+	}
+	if relIDIdx < 0 || commitTSIdx < 0 {
+		// aobj batches lack Attrs; use positional access:
+		// rel_id at MO_TABLES_REL_ID_IDX, commit_ts at last vector.
+		relIDIdx = catalog.MO_TABLES_REL_ID_IDX
+		commitTSIdx = len(data.Vecs) - 1
+	}
+	return
 }
 
 func decideLCABranchTSFromBranchDAG(

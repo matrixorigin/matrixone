@@ -584,7 +584,7 @@ func hashDiff(
 		return
 	}
 
-	if dagInfo.lcaType == lcaEmpty || dagInfo.lcaType == lcaFullStateFallback {
+	if dagInfo.lcaType == lcaEmpty {
 		if err = hashDiffIfNoLCA(
 			ctx, ses, tblStuff, dagInfo.lcaType, copt, emit,
 			tarDataHashmap, tarTombstoneHashmap,
@@ -969,13 +969,7 @@ func hashDiffIfNoLCA(
 	baseTombstoneHashmap databranchutils.BranchHashmap,
 ) (err error) {
 
-	// For lcaFullStateFallback, skip tombstone processing. After GC and
-	// compaction, data objects already represent the correct visible state
-	// (deleted rows are absent; updated rows have new values). Applying
-	// tombstones would incorrectly remove updated rows whose PKs appear
-	// in both the new data objects and the old tombstone objects.
-	if lcaType != lcaFullStateFallback {
-		if err = tarTombstoneHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
+	if err = tarTombstoneHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
 			return cursor.ForEach(func(key []byte, _ []byte) error {
 				_, err2 := tarDataHashmap.PopByEncodedKey(key, true)
 				return err2
@@ -994,7 +988,6 @@ func hashDiffIfNoLCA(
 		}, -1); err != nil {
 			return
 		}
-	}
 
 	return diffDataHelper(ctx, ses, lcaType, copt, tblStuff, emit, tarDataHashmap, baseDataHashmap)
 }
@@ -1398,7 +1391,6 @@ func diffDataHelper(
 			err2          error
 			tarBat        *batch.Batch
 			baseBat       *batch.Batch
-			tarUpdateBat  *batch.Batch
 			baseDeleteBat *batch.Batch
 			tarTuple      types.Tuple
 			baseTuple     types.Tuple
@@ -1465,15 +1457,7 @@ func diffDataHelper(
 					}
 
 					if notSame {
-						if lcaType == lcaFullStateFallback {
-							// Full-state fallback: same PK + different values = UPDATE
-							if tarUpdateBat == nil {
-								tarUpdateBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
-							}
-							if err2 = appendTupleToBat(ses, tarUpdateBat, tarTuple, tblStuff); err2 != nil {
-								return err2
-							}
-						} else if copt.conflictOpt != nil &&
+						if copt.conflictOpt != nil &&
 							copt.conflictOpt.Opt == tree.CONFLICT_ACCEPT &&
 							copt.expandUpdate {
 							if baseDeleteBat == nil {
@@ -1513,19 +1497,6 @@ func diffDataHelper(
 				kind:  diffDelete,
 				name:  tblStuff.baseRel.GetTableName(),
 				side:  diffSideBase,
-			}, false, tblStuff.retPool); err3 != nil {
-				return err3
-			} else if stop {
-				return nil
-			}
-		}
-
-		if tarUpdateBat != nil {
-			if stop, err3 := emitBatch(emit, batchWithKind{
-				batch: tarUpdateBat,
-				kind:  diffUpdate,
-				name:  tblStuff.tarRel.GetTableName(),
-				side:  diffSideTarget,
 			}, false, tblStuff.retPool); err3 != nil {
 				return err3
 			} else if stop {
@@ -1601,29 +1572,15 @@ func diffDataHelper(
 		default:
 		}
 
-		if lcaType == lcaFullStateFallback {
-			// Full-state fallback: rows in base but not in tar = tar deleted them
-			if stop, err3 := emitBatch(emit, batchWithKind{
-				batch: bat,
-				kind:  diffDelete,
-				name:  tblStuff.tarRel.GetTableName(),
-				side:  diffSideTarget,
-			}, false, tblStuff.retPool); err3 != nil {
-				return err3
-			} else if stop {
-				return nil
-			}
-		} else {
-			if stop, err3 := emitBatch(emit, batchWithKind{
-				batch: bat,
-				kind:  diffInsert,
-				name:  tblStuff.baseRel.GetTableName(),
-				side:  diffSideBase,
-			}, false, tblStuff.retPool); err3 != nil {
-				return err3
-			} else if stop {
-				return nil
-			}
+		if stop, err3 := emitBatch(emit, batchWithKind{
+			batch: bat,
+			kind:  diffInsert,
+			name:  tblStuff.baseRel.GetTableName(),
+			side:  diffSideBase,
+		}, false, tblStuff.retPool); err3 != nil {
+			return err3
+		} else if stop {
+			return nil
 		}
 		return nil
 	}, -1); err != nil {
