@@ -423,7 +423,7 @@ func (ctx *MultiUpdateCtx) clone() *MultiUpdateCtx {
 	v := &MultiUpdateCtx{
 		InsertCols:    ctx.InsertCols,
 		DeleteCols:    ctx.DeleteCols,
-		PartitionCols: ctx.DeleteCols,
+		PartitionCols: ctx.PartitionCols,
 	}
 	objRef := *ctx.ObjRef
 	def := *ctx.TableDef

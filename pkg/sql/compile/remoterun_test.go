@@ -705,3 +705,46 @@ func Test_checkPipelineStandaloneExecutableAtRemote(t *testing.T) {
 		require.False(t, checkPipelineStandaloneExecutableAtRemote(s0))
 	}
 }
+
+// TestOnDuplicateKeyIsIgnoreSerializationRoundtrip verifies that IsIgnore is
+// properly serialized and deserialized when OnDuplicateKey operators are sent to remote CN.
+func TestOnDuplicateKeyIsIgnoreSerializationRoundtrip(t *testing.T) {
+	// Create an OnDuplicateKey operator with IsIgnore=true
+	arg := onduplicatekey.NewArgument()
+	arg.Attrs = []string{"col1", "col2"}
+	arg.InsertColCount = 2
+	arg.IsIgnore = true
+
+	// Create minimal context for serialization
+	ctx := &scopeContext{
+		id:       0,
+		plan:     &plan.Plan{},
+		scope:    &Scope{},
+		root:     &scopeContext{},
+		parent:   nil,
+		children: nil,
+		pipe:     nil,
+		regs:     make(map[*process.WaitRegister]int32),
+	}
+	ctx.root = ctx
+
+	// Serialize to pipeline instruction
+	_, in, err := convertToPipelineInstruction(arg, nil, ctx, 0)
+	require.NoError(t, err)
+	require.NotNil(t, in.OnDuplicateKey)
+	require.True(t, in.OnDuplicateKey.IsIgnore, "IsIgnore should be serialized")
+
+	// Deserialize back to operator
+	opr := &pipeline.Instruction{
+		Op:             int32(vm.OnDuplicateKey),
+		OnDuplicateKey: in.OnDuplicateKey,
+	}
+	op, err := convertToVmOperator(opr, ctx, nil)
+	require.NoError(t, err)
+	require.NotNil(t, op)
+
+	restored := op.(*onduplicatekey.OnDuplicatekey)
+	require.True(t, restored.IsIgnore, "IsIgnore should be deserialized")
+	require.Equal(t, []string{"col1", "col2"}, restored.Attrs)
+	require.Equal(t, int32(2), restored.InsertColCount)
+}

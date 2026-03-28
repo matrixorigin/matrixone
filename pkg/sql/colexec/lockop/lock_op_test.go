@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -690,4 +691,65 @@ func resetChildren(arg *LockOp, bat *batch.Batch) {
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)
+}
+
+// TestCopyTargetsFrom verifies that CopyTargetsFrom creates independent deep copies
+// of targets, preventing race conditions in parallel execution.
+func TestCopyTargetsFrom(t *testing.T) {
+	src := NewArgument()
+	defer src.Release()
+
+	// Add targets to source
+	src.AddLockTarget(
+		100,                        // tableID
+		&plan.ObjectRef{SchemaName: "test", ObjName: "t1"},
+		0,                          // primaryColumnIndexInBatch
+		types.T_int64.ToType(),     // primaryColumnType
+		-1,                         // partitionColIndexInBatch
+		1,                          // refreshTimestampIndexInBatch
+		nil,                        // lockRows
+		false,                      // lockTableAtTheEnd
+	)
+	src.AddLockTarget(
+		200,
+		&plan.ObjectRef{SchemaName: "test", ObjName: "t2"},
+		2,
+		types.T_varchar.ToType(),
+		-1,
+		3,
+		nil, // simplified - no lockRows expr
+		true,
+	)
+
+	// Copy targets to destination
+	dst := NewArgument()
+	defer dst.Release()
+	dst.CopyTargetsFrom(src)
+
+	// Verify copy is independent
+	require.Equal(t, len(src.targets), len(dst.targets), "targets length should match")
+
+	// Modify source and verify destination is unchanged
+	src.targets[0].tableID = 999
+	src.targets[0].objRef.ObjName = "modified"
+	require.Equal(t, uint64(100), dst.targets[0].tableID, "dst tableID should be unchanged")
+	require.Equal(t, "t1", dst.targets[0].objRef.ObjName, "dst objRef should be unchanged")
+
+	// Verify all fields were copied correctly
+	require.Equal(t, uint64(200), dst.targets[1].tableID)
+	require.Equal(t, "t2", dst.targets[1].objRef.ObjName)
+	require.True(t, dst.targets[1].lockTableAtTheEnd)
+}
+
+// TestCopyTargetsFromEmpty verifies CopyTargetsFrom handles empty targets correctly.
+func TestCopyTargetsFromEmpty(t *testing.T) {
+	src := NewArgument()
+	defer src.Release()
+
+	dst := NewArgument()
+	defer dst.Release()
+
+	// Copy empty targets
+	dst.CopyTargetsFrom(src)
+	require.Nil(t, dst.targets)
 }
