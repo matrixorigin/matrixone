@@ -24,6 +24,7 @@ import (
 	"net"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -2494,6 +2495,33 @@ func TestParseExecuteDataWithJSONParam(t *testing.T) {
 
 	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt, testData, 0))
 	require.Equal(t, string(jsonPayload), prepareStmt.params.GetStringAt(0))
+}
+
+func buildStringExecutePacket(proto *MysqlProtocolImpl, tp defines.MysqlType, payload string) []byte {
+	data := make([]byte, 8+2+9+len(payload))
+	copy(data, []byte{0, 0, 0, 0, 0, 0, 1, byte(tp), 0})
+	pos := proto.writeStringLenEnc(data, 9, payload)
+	return data[:pos]
+}
+
+func TestPrepareStmtClearBinaryParamStateReleasesParamArea(t *testing.T) {
+	ctx := context.TODO()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select ?")
+
+	firstPayload := strings.Repeat("a", 300)
+	secondPayload := strings.Repeat("b", 300)
+
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt, buildStringExecutePacket(proto, defines.MYSQL_TYPE_VAR_STRING, firstPayload), 0))
+	firstAreaLen := len(prepareStmt.params.GetArea())
+	require.Greater(t, firstAreaLen, 0)
+
+	prepareStmt.clearBinaryParamState(proc)
+	require.Nil(t, prepareStmt.params)
+	require.Empty(t, prepareStmt.getFromSendLongData)
+
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt, buildStringExecutePacket(proto, defines.MYSQL_TYPE_VAR_STRING, secondPayload), 0))
+	require.Equal(t, secondPayload, prepareStmt.params.GetStringAt(0))
+	require.Equal(t, firstAreaLen, len(prepareStmt.params.GetArea()))
 }
 
 /* FIXME The prepare process has undergone some modifications,
