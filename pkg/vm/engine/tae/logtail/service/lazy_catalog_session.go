@@ -17,7 +17,9 @@ package service
 import (
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 )
 
@@ -58,11 +60,15 @@ type lazyCatalogFilterState struct {
 	activatingSeqByAccount map[uint32]uint64
 }
 
+func (s *lazyCatalogFilterState) ensureActiveAccounts() {
+	if s.activeAccounts == nil {
+		s.activeAccounts = make(map[uint32]struct{})
+	}
+}
+
 func (s *lazyCatalogFilterState) configure(initialActiveAccounts []uint32) {
 	s.enabled = true
-	if s.activeAccounts == nil {
-		s.activeAccounts = make(map[uint32]struct{}, len(initialActiveAccounts))
-	}
+	s.ensureActiveAccounts()
 	for _, accountID := range initialActiveAccounts {
 		s.activeAccounts[accountID] = struct{}{}
 	}
@@ -105,9 +111,7 @@ func (s *lazyCatalogFilterState) completeActivation(accountID uint32, seq uint64
 		return false
 	}
 	delete(s.activatingSeqByAccount, accountID)
-	if s.activeAccounts == nil {
-		s.activeAccounts = make(map[uint32]struct{})
-	}
+	s.ensureActiveAccounts()
 	s.activeAccounts[accountID] = struct{}{}
 	s.storeActiveAccountsSnapshot()
 	return true
@@ -234,4 +238,18 @@ func rewriteLazyCatalogPublishWraps(
 		return wraps, nil
 	}
 	return filtered, nil
+}
+
+// --- lazy catalog scope helpers ---
+
+func isLazyCatalogTableID(table *api.TableID) bool {
+	return table != nil && catalog.IsLazyCatalogTableID(table.TbId)
+}
+
+func isLazyCatalogSubscribe(req *logtail.SubscribeRequest) bool {
+	return req != nil && req.GetLazyCatalog()
+}
+
+func isEmptyLogtail(tail logtail.TableLogtail) bool {
+	return tail.CkpLocation == "" && len(tail.Commands) == 0
 }

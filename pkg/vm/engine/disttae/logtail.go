@@ -57,7 +57,7 @@ func consumeEntry(
 	}
 
 	// Lazy catalog CN logic is scoped only to the three catalog tables.
-	if !isLazyCatalogTableID(e.TableId) || logtailreplay.IsMetaEntry(e.TableName) || e.EntryType == api.Entry_DataObject || e.EntryType == api.Entry_TombstoneObject {
+	if !catalog.IsLazyCatalogTableID(e.TableId) || logtailreplay.IsMetaEntry(e.TableName) || e.EntryType == api.Entry_DataObject || e.EntryType == api.Entry_TombstoneObject {
 		return nil
 	}
 

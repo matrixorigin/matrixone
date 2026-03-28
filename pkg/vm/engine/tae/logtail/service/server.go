@@ -17,6 +17,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
@@ -141,6 +143,77 @@ type LogtailServer struct {
 	rootCtx    context.Context
 	cancelFunc context.CancelFunc
 	stopper    *stopper.Stopper
+}
+
+// --- activation types and callback utilities ---
+
+// catalogActivation represents an in-flight activation request.
+type catalogActivation struct {
+	timeout   time.Duration
+	accountID uint32
+	seq       uint64
+	session   *Session
+}
+
+const lazyCatalogTableCount = 3
+
+// catalogActivationPhase1 carries phase-1 pull results for all three catalog
+// tables. It is sent from the pull goroutine to the logtailSender for
+// serialized phase-2 completion.
+type catalogActivationPhase1 struct {
+	activation catalogActivation
+	tails      [lazyCatalogTableCount]logtail.TableLogtail
+	closeCBs   [lazyCatalogTableCount]func()
+}
+
+// lazyCatalogTableIDs lists the three catalog tables in a fixed order that
+// aligns with the tails/closeCBs arrays in catalogActivationPhase1.
+var lazyCatalogTableIDs = [lazyCatalogTableCount]api.TableID{
+	{DbId: catalog.MO_CATALOG_ID, TbId: catalog.MO_DATABASE_ID},
+	{DbId: catalog.MO_CATALOG_ID, TbId: catalog.MO_TABLES_ID},
+	{DbId: catalog.MO_CATALOG_ID, TbId: catalog.MO_COLUMNS_ID},
+}
+
+func (p *catalogActivationPhase1) closeAll() {
+	for i := range p.closeCBs {
+		if p.closeCBs[i] != nil {
+			p.closeCBs[i]()
+			p.closeCBs[i] = nil
+		}
+	}
+}
+
+func (p *catalogActivationPhase1) takeCloseCB(idx int) func() {
+	cb := p.closeCBs[idx]
+	p.closeCBs[idx] = nil
+	return cb
+}
+
+func closeCallbacks(callbacks ...func()) {
+	for _, cb := range callbacks {
+		if cb != nil {
+			cb()
+		}
+	}
+}
+
+func composeCloseCallback(callbacks ...func()) func() {
+	var nonNil []func()
+	for _, cb := range callbacks {
+		if cb != nil {
+			nonNil = append(nonNil, cb)
+		}
+	}
+	switch len(nonNil) {
+	case 0:
+		return nil
+	case 1:
+		return nonNil[0]
+	default:
+		return func() {
+			closeCallbacks(nonNil...)
+		}
+	}
 }
 
 func defaultRPCServerFactory(
@@ -544,6 +617,14 @@ func (s *LogtailServer) pullActivationPhase1(ctx context.Context, act catalogAct
 	var result catalogActivationPhase1
 	result.activation = act
 
+	enqueued := false
+	defer func() {
+		if !enqueued {
+			result.closeAll()
+			act.session.abortLazyCatalogActivation(act.accountID, act.seq)
+		}
+	}()
+
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var firstErr error
@@ -575,8 +656,6 @@ func (s *LogtailServer) pullActivationPhase1(ctx context.Context, act catalogAct
 	wg.Wait()
 
 	if firstErr != nil {
-		result.closeAll()
-		act.session.abortLazyCatalogActivation(act.accountID, act.seq)
 		s.logger.Error("activation phase1 failed",
 			zap.Uint32("account-id", act.accountID),
 			zap.Uint64("seq", act.seq),
@@ -588,11 +667,10 @@ func (s *LogtailServer) pullActivationPhase1(ctx context.Context, act catalogAct
 	for {
 		select {
 		case <-ctx.Done():
-			result.closeAll()
-			act.session.abortLazyCatalogActivation(act.accountID, act.seq)
 			s.logger.Error("context done during activation phase1 enqueue", zap.Error(ctx.Err()))
 			return
 		case s.activationTailChan <- &result:
+			enqueued = true
 			return
 		default:
 			s.logger.Warn("activation tail chan full, retrying")
@@ -698,6 +776,15 @@ func (s *LogtailServer) sendActivation(ctx context.Context, p1 *catalogActivatio
 
 	var responseTails []logtail.TableLogtail
 	var allCloseCBs []func()
+	sent := false
+
+	defer func() {
+		if !sent {
+			p1.closeAll()
+			closeCallbacks(allCloseCBs...)
+			act.session.abortLazyCatalogActivation(act.accountID, act.seq)
+		}
+	}()
 
 	for i, table := range lazyCatalogTableIDs {
 		phase1Ts := timestamp.Timestamp{}
@@ -707,9 +794,7 @@ func (s *LogtailServer) sendActivation(ctx context.Context, p1 *catalogActivatio
 
 		phase2Tail, closeCB, err := s.pullTableLogtail(sendCtx, table, phase1Ts, targetTS, allowedAccounts)
 		if err != nil {
-			p1.closeAll()
-			closeCallbacks(append(allCloseCBs, closeCB)...)
-			act.session.abortLazyCatalogActivation(act.accountID, act.seq)
+			closeCallbacks(closeCB)
 			s.logger.Error("activation phase2 failed",
 				zap.Uint32("account-id", act.accountID),
 				zap.Uint64("seq", act.seq),
@@ -728,9 +813,9 @@ func (s *LogtailServer) sendActivation(ctx context.Context, p1 *catalogActivatio
 		}
 	}
 
-	closeCB := func() {
-		closeCallbacks(allCloseCBs...)
-	}
+	// Transfer cleanup ownership to the response path.
+	responseCB := composeCloseCallback(allCloseCBs...)
+	allCloseCBs = nil
 
 	resp := logtail.ActivateAccountForCatalogResponse{
 		AccountId: act.accountID,
@@ -738,8 +823,8 @@ func (s *LogtailServer) sendActivation(ctx context.Context, p1 *catalogActivatio
 		TargetTs:  &targetTS,
 		Tails:     responseTails,
 	}
-	if err := act.session.SendActivateAccountForCatalogResponse(sendCtx, resp, closeCB); err != nil {
-		act.session.abortLazyCatalogActivation(act.accountID, act.seq)
+	if err := act.session.SendActivateAccountForCatalogResponse(sendCtx, resp, responseCB); err != nil {
+		// SendResponse.Release already called responseCB for cleanup.
 		s.logger.Error("fail to send activation response",
 			zap.Uint32("account-id", act.accountID),
 			zap.Uint64("seq", act.seq),
@@ -747,6 +832,7 @@ func (s *LogtailServer) sendActivation(ctx context.Context, p1 *catalogActivatio
 		)
 		return
 	}
+	sent = true
 
 	// Only after the response has successfully entered the session's FIFO
 	// sendChan do we promote the account to active for steady-state push.
@@ -788,9 +874,7 @@ func (s *LogtailServer) getSubLogtailPhase(
 	})
 	if subErr != nil {
 		// if error occurs, just send the error immediately.
-		if closeCB != nil {
-			closeCB()
-		}
+		closeCallbacks(closeCB)
 		s.logger.Error("fail to fetch table total logtail", zap.Error(subErr), zap.Any("table", table))
 
 		subErrCode, ok := moerr.GetMoErrCode(subErr)
@@ -848,7 +932,6 @@ func (s *LogtailServer) publishEvent(ctx context.Context, e event) {
 			tail: tail,
 		})
 	}
-	firstLazyCatalogIndex := firstLazyCatalogWrapIndex(wraps)
 
 	// publish incremental logtail for all subscribed tables
 	sessions := s.ssmgr.ListSession()
@@ -866,6 +949,9 @@ func (s *LogtailServer) publishEvent(ctx context.Context, e event) {
 				}
 			}
 		}
+		firstLazyCatalogIndex := slices.IndexFunc(wraps, func(w wrapLogtail) bool {
+			return catalog.IsLazyCatalogTableID(w.tail.Table.TbId)
+		})
 		refcount.Add(int32(len(sessions)))
 		for _, session := range sessions {
 			publishWraps := wraps

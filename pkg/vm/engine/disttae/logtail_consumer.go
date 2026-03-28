@@ -1052,68 +1052,48 @@ func (c *PushClient) doActivateTenantCatalog(ctx context.Context, e *Engine, acc
 	seq := c.lazyCatalog.beginCatchingUp(accountID)
 	respCh := c.lazyCatalog.registerPendingResponse(accountID, seq)
 
-	if err := c.subscriber.logTailClient.ActivateAccountForCatalog(ctx, accountID, seq); err != nil {
+	// Concise event recording: builds the struct with common fields, caller
+	// supplies only the varying parts.
+	record := func(phase, result string, err error, targetTS, replayTS *timestamp.Timestamp, delayedCount int) {
+		now := time.Now()
+		evt := DebugCatalogActivationEvent{
+			AccountID: accountID, Seq: seq, Source: "activation",
+			Phase: phase, Result: result,
+			TargetTS: targetTS, ReplayTS: replayTS,
+			DelayedApplyCount: delayedCount,
+			StartedAt: &startedAt, FinishedAt: &now,
+		}
+		if err != nil {
+			evt.Error = err.Error()
+		}
+		c.lazyCatalog.recordActivationEvent(evt)
+	}
+
+	fail := func(phase string, err error, targetTS *timestamp.Timestamp) error {
 		c.lazyCatalog.cleanupFailedActivation(accountID, seq)
-		finishedAt := time.Now()
-		c.lazyCatalog.recordActivationEvent(DebugCatalogActivationEvent{
-			AccountID:  accountID,
-			Seq:        seq,
-			Source:     "activation",
-			Phase:      "request_send",
-			Result:     "error",
-			Error:      err.Error(),
-			StartedAt:  &startedAt,
-			FinishedAt: &finishedAt,
-		})
+		record(phase, "error", err, targetTS, nil, 0)
 		return err
+	}
+
+	if err := c.subscriber.logTailClient.ActivateAccountForCatalog(ctx, accountID, seq); err != nil {
+		return fail("request_send", err, nil)
 	}
 
 	logutil.Info("logtail.consumer.activation.request.sent",
 		zap.Uint32("account-id", accountID),
 		zap.Uint64("seq", seq),
 	)
-	requestSentAt := time.Now()
-	c.lazyCatalog.recordActivationEvent(DebugCatalogActivationEvent{
-		AccountID:  accountID,
-		Seq:        seq,
-		Source:     "activation",
-		Phase:      "request_sent",
-		Result:     "in_progress",
-		StartedAt:  &startedAt,
-		FinishedAt: &requestSentAt,
-	})
+	record("request_sent", "in_progress", nil, nil, nil, 0)
 
 	var resp *logtail.ActivateAccountForCatalogResponse
 	select {
 	case <-ctx.Done():
-		c.lazyCatalog.cleanupFailedActivation(accountID, seq)
-		finishedAt := time.Now()
-		c.lazyCatalog.recordActivationEvent(DebugCatalogActivationEvent{
-			AccountID:  accountID,
-			Seq:        seq,
-			Source:     "activation",
-			Phase:      "wait_response",
-			Result:     "error",
-			Error:      ctx.Err().Error(),
-			StartedAt:  &startedAt,
-			FinishedAt: &finishedAt,
-		})
-		return ctx.Err()
+		return fail("wait_response", ctx.Err(), nil)
 	case resp = <-respCh:
 	}
 	if resp == nil {
 		err := moerr.NewInternalErrorNoCtx("tenant catalog activation interrupted by reconnect")
-		finishedAt := time.Now()
-		c.lazyCatalog.recordActivationEvent(DebugCatalogActivationEvent{
-			AccountID:  accountID,
-			Seq:        seq,
-			Source:     "activation",
-			Phase:      "wait_response",
-			Result:     "interrupted",
-			Error:      err.Error(),
-			StartedAt:  &startedAt,
-			FinishedAt: &finishedAt,
-		})
+		record("wait_response", "interrupted", err, nil, nil, 0)
 		return err
 	}
 
@@ -1123,70 +1103,23 @@ func (c *PushClient) doActivateTenantCatalog(ctx context.Context, e *Engine, acc
 		tsCopy := *targetTS
 		targetTSCopy = &tsCopy
 	}
-	responseReceivedAt := time.Now()
-	c.lazyCatalog.recordActivationEvent(DebugCatalogActivationEvent{
-		AccountID:  accountID,
-		Seq:        seq,
-		Source:     "activation",
-		Phase:      "response_received",
-		Result:     "in_progress",
-		TargetTS:   targetTSCopy,
-		StartedAt:  &startedAt,
-		FinishedAt: &responseReceivedAt,
-	})
+	record("response_received", "in_progress", nil, targetTSCopy, nil, 0)
 
 	if resp.GetSeq() != seq {
-		c.lazyCatalog.cleanupFailedActivation(accountID, seq)
-		err := moerr.NewInternalErrorf(ctx, "activation seq mismatch: expected %d, got %d", seq, resp.GetSeq())
-		finishedAt := time.Now()
-		c.lazyCatalog.recordActivationEvent(DebugCatalogActivationEvent{
-			AccountID:  accountID,
-			Seq:        seq,
-			Source:     "activation",
-			Phase:      "response_received",
-			Result:     "error",
-			Error:      err.Error(),
-			TargetTS:   targetTSCopy,
-			StartedAt:  &startedAt,
-			FinishedAt: &finishedAt,
-		})
-		return err
+		return fail("response_received",
+			moerr.NewInternalErrorf(ctx, "activation seq mismatch: expected %d, got %d", seq, resp.GetSeq()),
+			targetTSCopy)
 	}
 
 	replayTS, err := e.cli.WaitLogTailAppliedAt(ctx, *targetTS)
 	if err != nil {
-		c.lazyCatalog.cleanupFailedActivation(accountID, seq)
-		finishedAt := time.Now()
-		c.lazyCatalog.recordActivationEvent(DebugCatalogActivationEvent{
-			AccountID:  accountID,
-			Seq:        seq,
-			Source:     "activation",
-			Phase:      "wait_logtail",
-			Result:     "error",
-			Error:      err.Error(),
-			TargetTS:   targetTSCopy,
-			StartedAt:  &startedAt,
-			FinishedAt: &finishedAt,
-		})
-		return err
+		return fail("wait_logtail", err, targetTSCopy)
 	}
 
 	if err := c.replayCatalogCacheForAccount(ctx, e, accountID, replayTS); err != nil {
 		c.lazyCatalog.cleanupFailedActivation(accountID, seq)
 		replayTSCopy := replayTS
-		finishedAt := time.Now()
-		c.lazyCatalog.recordActivationEvent(DebugCatalogActivationEvent{
-			AccountID:  accountID,
-			Seq:        seq,
-			Source:     "activation",
-			Phase:      "replay_catalog",
-			Result:     "error",
-			Error:      err.Error(),
-			TargetTS:   targetTSCopy,
-			ReplayTS:   &replayTSCopy,
-			StartedAt:  &startedAt,
-			FinishedAt: &finishedAt,
-		})
+		record("replay_catalog", "error", err, targetTSCopy, &replayTSCopy, 0)
 		return err
 	}
 
@@ -1199,20 +1132,9 @@ func (c *PushClient) doActivateTenantCatalog(ctx context.Context, e *Engine, acc
 		}
 		c.lazyCatalog.finishAccountReady(accountID, replayTS)
 	})
+
 	replayTSCopy := replayTS
-	finishedAt := time.Now()
-	c.lazyCatalog.recordActivationEvent(DebugCatalogActivationEvent{
-		AccountID:         accountID,
-		Seq:               seq,
-		Source:            "activation",
-		Phase:             "complete",
-		Result:            "ok",
-		TargetTS:          targetTSCopy,
-		ReplayTS:          &replayTSCopy,
-		DelayedApplyCount: delayedApplyCount,
-		StartedAt:         &startedAt,
-		FinishedAt:        &finishedAt,
-	})
+	record("complete", "ok", nil, targetTSCopy, &replayTSCopy, delayedApplyCount)
 
 	logutil.Info("logtail.consumer.activation.complete",
 		zap.Uint32("account-id", accountID),

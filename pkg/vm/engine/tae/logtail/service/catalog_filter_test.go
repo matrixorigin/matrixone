@@ -16,6 +16,7 @@ package service
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -79,7 +80,9 @@ func TestSessionPrepareLazyCatalogPublishWrapsFiltersCatalogRowsByAccount(t *tes
 			},
 		},
 	}}
-	filtered, err := ss.prepareLazyCatalogPublishWrapsFromIndex(wraps, firstLazyCatalogWrapIndex(wraps))
+	filtered, err := ss.prepareLazyCatalogPublishWrapsFromIndex(wraps, slices.IndexFunc(wraps, func(w wrapLogtail) bool {
+		return catalog.IsLazyCatalogTableID(w.tail.Table.TbId)
+	}))
 	require.NoError(t, err)
 	require.Len(t, filtered, 1)
 	require.Len(t, filtered[0].tail.Commands, 1)
@@ -124,7 +127,9 @@ func TestSessionPrepareLazyCatalogPublishWrapsLeavesNormalTableUntouched(t *test
 	}
 
 	wraps := []wrapLogtail{normal}
-	filtered, err := ss.prepareLazyCatalogPublishWrapsFromIndex(wraps, firstLazyCatalogWrapIndex(wraps))
+	filtered, err := ss.prepareLazyCatalogPublishWrapsFromIndex(wraps, slices.IndexFunc(wraps, func(w wrapLogtail) bool {
+		return catalog.IsLazyCatalogTableID(w.tail.Table.TbId)
+	}))
 	require.NoError(t, err)
 	require.Len(t, filtered, 1)
 	require.Equal(t, normal.tail.Table.String(), filtered[0].tail.Table.String())

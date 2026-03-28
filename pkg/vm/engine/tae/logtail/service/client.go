@@ -125,7 +125,7 @@ func (c *LogtailClient) Subscribe(
 func (c *LogtailClient) SubscribeCatalogTable(
 	ctx context.Context, table api.TableID, initialActiveAccounts []uint32,
 ) error {
-	if !isLazyCatalogTable(table) {
+	if !isLazyCatalogTableID(&table) {
 		return moerr.NewNotSupportedf(ctx,
 			"lazy catalog subscribe only supports mo_database/mo_tables/mo_columns, got %s",
 			table.String(),

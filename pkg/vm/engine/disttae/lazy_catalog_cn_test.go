@@ -78,7 +78,7 @@ func TestLazyCatalogCNState_CleanupFailedActivation(t *testing.T) {
 
 	seq := s.beginCatchingUp(10)
 	assert.True(t, s.hasCatchingUp())
-	assert.True(t, s.matchesPendingSeq(10, seq))
+	assert.True(t, s.isAccountCatchingUp(10))
 
 	ok := s.cleanupFailedActivation(10, seq)
 	assert.True(t, ok)
@@ -191,8 +191,11 @@ func TestLazyCatalogCNState_ResetAllStates(t *testing.T) {
 	}
 	assert.Contains(t, wantedSet, uint32(20))
 
+	// inflightActivations is NOT cleared by resetAllStates to avoid a data
+	// race with concurrent LoadOrStore. Old entries are cleaned by their
+	// activation goroutines' defer blocks.
 	_, ok := s.inflightActivations.Load(uint32(30))
-	assert.False(t, ok)
+	assert.True(t, ok)
 }
 
 func TestLazyCatalogCNState_ResetAllStatesNotifiesPendingResponses(t *testing.T) {
@@ -276,10 +279,10 @@ func TestCanServeAccount(t *testing.T) {
 }
 
 func TestIsLazyCatalogTableID(t *testing.T) {
-	require.True(t, isLazyCatalogTableID(catalog.MO_DATABASE_ID))
-	require.True(t, isLazyCatalogTableID(catalog.MO_TABLES_ID))
-	require.True(t, isLazyCatalogTableID(catalog.MO_COLUMNS_ID))
-	require.False(t, isLazyCatalogTableID(catalog.MO_TABLES_LOGICAL_ID_INDEX_ID))
+	require.True(t, catalog.IsLazyCatalogTableID(catalog.MO_DATABASE_ID))
+	require.True(t, catalog.IsLazyCatalogTableID(catalog.MO_TABLES_ID))
+	require.True(t, catalog.IsLazyCatalogTableID(catalog.MO_COLUMNS_ID))
+	require.False(t, catalog.IsLazyCatalogTableID(catalog.MO_TABLES_LOGICAL_ID_INDEX_ID))
 }
 
 func TestReconnectInitialActiveAccounts(t *testing.T) {

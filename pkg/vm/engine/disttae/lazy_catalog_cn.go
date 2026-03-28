@@ -148,6 +148,17 @@ func (s *lazyCatalogCNState) beginCatchingUp(accountID uint32) uint64 {
 	return seq
 }
 
+// getOrCreateEntry returns the existing entry or creates and stores a new one.
+// Must be called with mu held.
+func (s *lazyCatalogCNState) getOrCreateEntry(accountID uint32) *accountCatalogEntry {
+	e := s.accounts[accountID]
+	if e == nil {
+		e = &accountCatalogEntry{}
+		s.accounts[accountID] = e
+	}
+	return e
+}
+
 // setAccountReady transitions the account to ready, sets its readyTS, and
 // records it in wantedAccounts for reconnect survival. Startup/reconnect use
 // this directly because they do not rely on per-account DCA.
@@ -155,11 +166,7 @@ func (s *lazyCatalogCNState) setAccountReady(accountID uint32, readyTS timestamp
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	e := s.accounts[accountID]
-	if e == nil {
-		e = &accountCatalogEntry{}
-		s.accounts[accountID] = e
-	}
+	e := s.getOrCreateEntry(accountID)
 	if e.state == accountCatchingUp {
 		s.catchingUpCount.Add(-1)
 	}
@@ -191,11 +198,7 @@ func (s *lazyCatalogCNState) beginAccountReadyTransition(accountID uint32) []fun
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	e := s.accounts[accountID]
-	if e == nil {
-		e = &accountCatalogEntry{}
-		s.accounts[accountID] = e
-	}
+	e := s.getOrCreateEntry(accountID)
 	if e.state == accountCatchingUp {
 		s.catchingUpCount.Add(-1)
 	}
@@ -211,11 +214,7 @@ func (s *lazyCatalogCNState) finishAccountReady(accountID uint32, readyTS timest
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	e := s.accounts[accountID]
-	if e == nil {
-		e = &accountCatalogEntry{}
-		s.accounts[accountID] = e
-	}
+	e := s.getOrCreateEntry(accountID)
 	e.state = accountReady
 	e.readyTS = readyTS
 	s.wantedAccounts[accountID] = struct{}{}
@@ -242,13 +241,6 @@ func (s *lazyCatalogCNState) cleanupFailedActivation(accountID uint32, seq uint6
 		s.catchingUpCount.Add(-1)
 	}
 	return true
-}
-
-// matchesPendingSeq checks whether a pending activation seq matches.
-func (s *lazyCatalogCNState) matchesPendingSeq(accountID uint32, seq uint64) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.pendingSeq[accountID] == seq
 }
 
 // snapshotWantedAccounts returns a copy of the wantedAccounts set, suitable
@@ -292,7 +284,9 @@ func (s *lazyCatalogCNState) resetAllStates() {
 	s.accountDCA = make(map[uint32][]func())
 	s.pendingActivationResponses = make(map[activationResponseKey]chan *logtail.ActivateAccountForCatalogResponse)
 	s.catchingUpCount.Store(0)
-	s.inflightActivations = sync.Map{}
+	// Do NOT reassign inflightActivations here. sync.Map must not be
+	// overwritten after first use (data race with concurrent LoadOrStore).
+	// Old activation goroutines' defers will clean up their own entries.
 	s.mu.Unlock()
 
 	for _, ch := range pendingResponses {
@@ -338,10 +332,6 @@ func (s *lazyCatalogCNState) hasCatchingUp() bool {
 	return s.catchingUpCount.Load() > 0
 }
 
-func isLazyCatalogTableID(tableID uint64) bool {
-	return catalog.IsLazyCatalogTableID(tableID)
-}
-
 // shouldDelayCatalogCacheApplyEntry routes a pushed in-memory catalog entry by
 // account. This intentionally relies on the current lazy-catalog assumption
 // that pushed entry batches for the three catalog tables belong to a single
@@ -349,11 +339,11 @@ func isLazyCatalogTableID(tableID uint64) bool {
 func (s *lazyCatalogCNState) shouldDelayCatalogCacheApplyEntry(
 	entry api.Entry,
 ) (uint32, bool, error) {
-	if !s.isEnabled() || !isLazyCatalogTableID(entry.TableId) {
+	if !s.isEnabled() || !catalog.IsLazyCatalogTableID(entry.TableId) {
 		return 0, false, nil
 	}
 
-	accountID, ok, err := accountIDFromCatalogCacheApplyEntry(entry)
+	accountID, ok, err := catalog.LazyCatalogEntryAccountID(entry)
 	if err != nil || !ok {
 		return 0, false, err
 	}
@@ -368,8 +358,4 @@ func (s *lazyCatalogCNState) isAccountCatchingUp(accountID uint32) bool {
 	defer s.mu.RUnlock()
 	entry := s.accounts[accountID]
 	return entry != nil && entry.state == accountCatchingUp
-}
-
-func accountIDFromCatalogCacheApplyEntry(entry api.Entry) (uint32, bool, error) {
-	return catalog.LazyCatalogEntryAccountID(entry)
 }
