@@ -856,6 +856,11 @@ func (gs *GlobalStats) RefreshWithMode(ctx context.Context, key pb.StatsInfoKey,
 		return moerr.NewInternalErrorNoCtxf("failed to subscribe table: %v", err)
 	}
 
+	if !gs.canServeCatalogForAccount(key.AccId) {
+		logutil.Infof("skip stats refresh before catalog ready, key=%v", key)
+		return nil
+	}
+
 	// Get table definition
 	table := gs.engine.GetLatestCatalogCache().GetTableById(key.AccId, key.DatabaseID, key.TableID)
 	if table == nil || table.TableDef == nil {
@@ -901,7 +906,26 @@ func (gs *GlobalStats) RefreshWithMode(ctx context.Context, key pb.StatsInfoKey,
 	return nil
 }
 
+func (gs *GlobalStats) canServeCatalogForAccount(accountID uint32) bool {
+	if gs.engine.pClient.lazyCatalog == nil || !gs.engine.pClient.lazyCatalog.isEnabled() {
+		return true
+	}
+
+	latestTS := gs.engine.pClient.LatestLogtailAppliedTime()
+	if latestTS.IsEmpty() {
+		return false
+	}
+	cache := gs.engine.GetLatestCatalogCache()
+	return cache.CanServe(types.TimestampToTS(latestTS)) &&
+		gs.engine.pClient.CanServeAccount(accountID, latestTS)
+}
+
 func (gs *GlobalStats) executeStatsUpdate(ctx context.Context, ps *logtailreplay.PartitionState, key pb.StatsInfoKey, stats *pb.StatsInfo) (bool, float64) {
+	if !gs.canServeCatalogForAccount(key.AccId) {
+		logutil.Infof("skip stats update before catalog ready, key=%v", key)
+		return false, 0
+	}
+
 	table := gs.engine.GetLatestCatalogCache().GetTableById(key.AccId, key.DatabaseID, key.TableID)
 	// table or its definition is nil, means that the table is created but not committed yet.
 	if table == nil || table.TableDef == nil {

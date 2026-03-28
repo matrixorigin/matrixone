@@ -241,6 +241,10 @@ message Entry {
     Batch bat            = 7;
     // whether TN do the PK uniqueness check against txn's workspace or not.
     int32 pk_check_by_tn = 8;
+    // Presence-safe account summary for lazy-catalog push entries. Account 0 is
+    // real, so the boolean is required to distinguish "absent" from "sys".
+    uint32 lazy_catalog_account_id = 9;
+    bool has_lazy_catalog_account_id = 10;
 };
 
 // There are two kinds of checkpoint: delta checkpoint and base checkpoint,

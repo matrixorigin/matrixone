@@ -44,8 +44,9 @@ const (
 
 type testEntireEngine struct {
 	EntireEngine
-	step  int
-	state int
+	step             int
+	state            int
+	activatedAccount uint32
 }
 
 type testEngine struct {
@@ -137,6 +138,12 @@ func TestEntireEngineHints(t *testing.T) {
 
 }
 
+func TestEntireEngineActivateTenantCatalog(t *testing.T) {
+	ee := buildTestEntireEngine()
+	assert.NoError(t, ee.ActivateTenantCatalog(context.Background(), 42))
+	assert.Equal(t, uint32(42), ee.activatedAccount)
+}
+
 func buildTestEntireEngine() *testEntireEngine {
 	ee := new(testEntireEngine)
 	ee.state = 1
@@ -169,6 +176,11 @@ func (e *testEngine) New(_ context.Context, _ client.TxnOperator) error {
 		e.parent.state = e.parent.state - e.parent.step*e.parent.state
 	}
 
+	return nil
+}
+
+func (e *testEngine) ActivateTenantCatalog(_ context.Context, accountID uint32) error {
+	e.parent.activatedAccount = accountID
 	return nil
 }
 

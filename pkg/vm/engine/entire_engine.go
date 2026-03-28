@@ -104,3 +104,10 @@ func (e *EntireEngine) GetMessageCenter() any {
 func (e *EntireEngine) GetService() string {
 	return e.Engine.GetService()
 }
+
+func (e *EntireEngine) ActivateTenantCatalog(ctx context.Context, accountID uint32) error {
+	if activator, ok := e.Engine.(TenantCatalogActivator); ok {
+		return activator.ActivateTenantCatalog(ctx, accountID)
+	}
+	return nil
+}

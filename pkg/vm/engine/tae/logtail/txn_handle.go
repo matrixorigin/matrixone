@@ -24,6 +24,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -242,6 +243,7 @@ func (b *TxnLogtailRespBuilder) buildLogtailEntry(tid, dbid uint64, tableName, d
 		DatabaseName: dbName,
 		Bat:          apiBat,
 	}
+	b.annotateLazyCatalogEntryAccountSummary(entry, bat)
 	ts := b.txn.GetPrepareTS().ToTimestamp()
 	tableID := &api.TableID{
 		AccId:         b.currentAccID,
@@ -268,6 +270,99 @@ func (b *TxnLogtailRespBuilder) buildLogtailEntry(tid, dbid uint64, tableName, d
 		}
 	}
 	b.currentLogtail.Commands = append(b.currentLogtail.Commands, *entry)
+}
+
+func (b *TxnLogtailRespBuilder) annotateLazyCatalogEntryAccountSummary(
+	entry *api.Entry,
+	bat *containers.Batch,
+) {
+	if entry == nil || bat == nil || !pkgcatalog.IsLazyCatalogTableID(entry.GetTableId()) {
+		return
+	}
+
+	switch entry.GetEntryType() {
+	case api.Entry_Insert, api.Entry_Update:
+		accountID, ok := batchSingleAccountID(bat, pkgcatalog.SystemDBAttr_AccID)
+		if !ok {
+			return
+		}
+		pkgcatalog.SetLazyCatalogEntryAccountSummary(entry, accountID)
+	case api.Entry_Delete:
+		accountID, ok, err := batchSingleCPKeyAccountID(bat)
+		if err != nil {
+			panic(err)
+		}
+		if !ok {
+			return
+		}
+		pkgcatalog.SetLazyCatalogEntryAccountSummary(entry, accountID)
+	}
+}
+
+func batchSingleAccountID(bat *containers.Batch, attr string) (uint32, bool) {
+	attrIdx, ok := bat.Nameidx[attr]
+	if !ok || bat.Length() == 0 {
+		return 0, false
+	}
+
+	accounts := vector.MustFixedColWithTypeCheck[uint32](bat.Vecs[attrIdx].GetDownstreamVector())
+	if len(accounts) == 0 {
+		return 0, false
+	}
+
+	first := accounts[0]
+	for row := 1; row < len(accounts); row++ {
+		if accounts[row] != first {
+			panic(fmt.Sprintf(
+				"mixed-account lazy catalog entry batch detected: attr=%s first=%d row=%d account=%d",
+				attr, first, row, accounts[row],
+			))
+		}
+	}
+	return first, true
+}
+
+func batchSingleCPKeyAccountID(bat *containers.Batch) (uint32, bool, error) {
+	attrIdx, ok := bat.Nameidx[pkgcatalog.CPrimaryKeyColName]
+	if !ok || bat.Length() == 0 {
+		return 0, false, nil
+	}
+
+	var (
+		first       uint32
+		initialized bool
+	)
+	err := containers.ForeachWindowBytes(
+		bat.Vecs[attrIdx].GetDownstreamVector(),
+		0,
+		bat.Length(),
+		func(cpkey []byte, isNull bool, row int) error {
+			accountID, err := pkgcatalog.DecodeLazyCatalogAccountFromCPKey(cpkey)
+			if err != nil {
+				return err
+			}
+			if !initialized {
+				first = accountID
+				initialized = true
+				return nil
+			}
+			if accountID != first {
+				return fmt.Errorf(
+					"mixed-account lazy catalog delete entry batch detected: first=%d row=%d account=%d",
+					first, row, accountID,
+				)
+			}
+			return nil
+		},
+		nil,
+	)
+	if err != nil {
+		return 0, false, err
+	}
+	if !initialized {
+		return 0, false, nil
+	}
+	return first, true, nil
 }
 
 func (b *TxnLogtailRespBuilder) rotateTable(aid uint32, dbName, tableName string, dbid, tid uint64, pkSeqnum uint16) {

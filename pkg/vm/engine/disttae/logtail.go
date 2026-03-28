@@ -56,8 +56,8 @@ func consumeEntry(
 		v2.LogtailUpdatePartitonConsumeLogtailOneEntryLogtailReplayDurationHistogram.Observe(time.Since(t0).Seconds())
 	}
 
-	// Try to handle the memory records of the three tables
-	if !catalog.IsSystemTable(e.TableId) || logtailreplay.IsMetaEntry(e.TableName) || e.EntryType == api.Entry_DataObject || e.EntryType == api.Entry_TombstoneObject {
+	// Lazy catalog CN logic is scoped only to the three catalog tables.
+	if !isLazyCatalogTableID(e.TableId) || logtailreplay.IsMetaEntry(e.TableName) || e.EntryType == api.Entry_DataObject || e.EntryType == api.Entry_TombstoneObject {
 		return nil
 	}
 
@@ -65,7 +65,20 @@ func consumeEntry(
 		return nil
 	}
 
-	applyToCatalogCache(cache, e)
+	lc := engine.PushClient().lazyCatalog
+	if lc != nil {
+		accountID, shouldDelay, err := lc.shouldDelayCatalogCacheApplyEntry(*e)
+		if err != nil {
+			return err
+		}
+		if shouldDelay && lc.delayAccountCacheApply(accountID, func() { applyToCatalogCache(cache, e) }) {
+			return nil
+		}
+	}
+
+	engine.PushClient().applyCatalogCacheChange(func() {
+		applyToCatalogCache(cache, e)
+	})
 	return nil
 }
 

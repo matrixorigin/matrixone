@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -126,6 +127,10 @@ type logtailer struct {
 	tables []api.TableID
 }
 
+type tableLogtailer struct {
+	tails map[uint64]logtail.TableLogtail
+}
+
 func mockLocktailer(tables ...api.TableID) taelogtail.Logtailer {
 	return &logtailer{
 		tables: tables,
@@ -157,6 +162,36 @@ func (m *logtailer) TableLogtail(
 }
 
 func (m *logtailer) Now() (timestamp.Timestamp, timestamp.Timestamp) {
+	panic("not implemented")
+}
+
+func (m *tableLogtailer) RangeLogtail(
+	ctx context.Context, from, to timestamp.Timestamp,
+) ([]logtail.TableLogtail, []func(), error) {
+	return nil, nil, nil
+}
+
+func (m *tableLogtailer) RegisterCallback(cb func(from, to timestamp.Timestamp, closeCB func(), tails ...logtail.TableLogtail) error) {
+}
+
+func (m *tableLogtailer) TableLogtail(
+	ctx context.Context, table api.TableID, from, to timestamp.Timestamp,
+) (logtail.TableLogtail, func(), error) {
+	if tail, ok := m.tails[table.TbId]; ok {
+		tailCopy := tail
+		if tailCopy.Table == nil {
+			tailCopy.Table = &table
+		}
+		if tailCopy.Ts == nil {
+			ts := to
+			tailCopy.Ts = &ts
+		}
+		return tailCopy, func() {}, nil
+	}
+	return logtail.TableLogtail{Table: &table, Ts: &to}, func() {}, nil
+}
+
+func (m *tableLogtailer) Now() (timestamp.Timestamp, timestamp.Timestamp) {
 	panic("not implemented")
 }
 
@@ -234,4 +269,160 @@ func startLogtailServer(
 		require.NoError(t, err)
 	}
 	return stop
+}
+
+func TestOnActivateAccountForCatalogQueuesWork(t *testing.T) {
+	server, stream, session := newActivationQueueTestServer(t, 1)
+
+	err := server.onActivateAccountForCatalog(context.Background(), stream, &logtail.ActivateAccountForCatalogRequest{
+		AccountId: 10,
+		Seq:       7,
+	})
+	require.NoError(t, err)
+
+	select {
+	case act := <-server.activationReqChan:
+		require.Equal(t, uint32(10), act.accountID)
+		require.Equal(t, uint64(7), act.seq)
+		require.Same(t, session, act.session)
+	case <-time.After(time.Second):
+		t.Fatal("activation request was not queued")
+	}
+}
+
+func TestOnActivateAccountForCatalogQueueFailureCleansSessionState(t *testing.T) {
+	server, stream, session := newActivationQueueTestServer(t, 0)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := server.onActivateAccountForCatalog(ctx, stream, &logtail.ActivateAccountForCatalogRequest{
+		AccountId: 10,
+		Seq:       7,
+	})
+	require.Error(t, err)
+	_, ok := session.lazyCatalog.activatingSeqByAccount[10]
+	require.False(t, ok)
+}
+
+func TestGetSubLogtailPhaseFiltersLazyCatalogRowsEarly(t *testing.T) {
+	table := api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: catalog.MO_COLUMNS_ID}
+	server := &LogtailServer{
+		logger: mockMOLogger(),
+		logtailer: &tableLogtailer{
+			tails: map[uint64]logtail.TableLogtail{
+				catalog.MO_COLUMNS_ID: {
+					Table:       &table,
+					Ts:          &timestamp.Timestamp{PhysicalTime: 10},
+					CkpLocation: "ckp:phase1",
+					Commands: []api.Entry{
+						mustCatalogColumnInsertEntry(t, []uint32{0, 10, 20}),
+					},
+				},
+			},
+		},
+	}
+
+	session := newCatalogTestSession(t)
+	require.NoError(t, session.configureLazyCatalogSubscription(&logtail.SubscribeRequest{
+		Table:                 &table,
+		LazyCatalog:           true,
+		InitialActiveAccounts: []uint32{10},
+	}))
+
+	phase, err := server.getSubLogtailPhase(context.Background(), subscription{
+		timeout: time.Second,
+		tableID: MarshalTableID(&table),
+		req: &logtail.SubscribeRequest{
+			Table:       &table,
+			LazyCatalog: true,
+		},
+		session: session,
+	}, timestamp.Timestamp{}, timestamp.Timestamp{PhysicalTime: 10})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if phase.closeCB != nil {
+			phase.closeCB()
+		}
+	})
+	require.Empty(t, phase.tail.CkpLocation)
+	require.Len(t, phase.tail.Commands, 1)
+	require.Equal(t, []uint32{10}, mustAccountIDsFromEntry(t, phase.tail.Commands[0]))
+}
+
+func TestPullActivationPhase1FiltersRowsBeforeEnqueue(t *testing.T) {
+	table := api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: catalog.MO_COLUMNS_ID}
+	server := &LogtailServer{
+		logger: mockMOLogger(),
+		logtailer: &tableLogtailer{tails: map[uint64]logtail.TableLogtail{
+			catalog.MO_COLUMNS_ID: {
+				Table:       &table,
+				Ts:          &timestamp.Timestamp{PhysicalTime: 10},
+				CkpLocation: "ckp:phase1",
+				Commands: []api.Entry{
+					mustCatalogColumnInsertEntry(t, []uint32{0, 10, 20}),
+				},
+			},
+		}},
+		waterline:          NewWaterliner(),
+		activationTailChan: make(chan *catalogActivationPhase1, 1),
+		pullWorkerPool:     make(chan struct{}, 1),
+	}
+	server.waterline.Advance(timestamp.Timestamp{PhysicalTime: 10})
+
+	session := newCatalogTestSession(t)
+	require.NoError(t, session.configureLazyCatalogSubscription(&logtail.SubscribeRequest{
+		Table:                 &api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: catalog.MO_TABLES_ID},
+		LazyCatalog:           true,
+		InitialActiveAccounts: []uint32{0},
+	}))
+
+	server.pullActivationPhase1(context.Background(), catalogActivation{
+		timeout:   time.Second,
+		accountID: 10,
+		seq:       7,
+		session:   session,
+	})
+
+	select {
+	case phase := <-server.activationTailChan:
+		t.Cleanup(phase.closeAll)
+		require.Empty(t, phase.tails[2].CkpLocation)
+		require.Len(t, phase.tails[2].Commands, 1)
+		require.Equal(t, []uint32{10}, mustAccountIDsFromEntry(t, phase.tails[2].Commands[0]))
+	case <-time.After(time.Second):
+		t.Fatal("activation phase1 was not enqueued")
+	}
+}
+
+func newActivationQueueTestServer(t *testing.T, queueCap int) (*LogtailServer, morpcStream, *Session) {
+	t.Helper()
+
+	cfg := options.NewDefaultLogtailServerCfg()
+	server := &LogtailServer{
+		logger:            mockMOLogger(),
+		cfg:               cfg,
+		ssmgr:             NewSessionManager(),
+		rootCtx:           context.Background(),
+		activationReqChan: make(chan catalogActivation, queueCap),
+	}
+	server.pool.responses = NewLogtailResponsePool()
+
+	stream := mockMorpcStream(&normalStream{}, 1, 1024)
+	session := server.ssmgr.GetSession(
+		server.rootCtx,
+		server.logger,
+		server.pool.responses,
+		server,
+		stream,
+		server.cfg.ResponseSendTimeout,
+		server.cfg.RPCStreamPoisonTime,
+		server.cfg.LogtailCollectInterval,
+	)
+	require.NoError(t, session.configureLazyCatalogSubscription(&logtail.SubscribeRequest{
+		Table:                 &api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: catalog.MO_TABLES_ID},
+		LazyCatalog:           true,
+		InitialActiveAccounts: []uint32{0},
+	}))
+	return server, stream, session
 }

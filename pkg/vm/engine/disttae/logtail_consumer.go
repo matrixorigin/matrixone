@@ -39,8 +39,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	taeLogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
@@ -137,6 +137,12 @@ type PushClient struct {
 	// Record the subscription status of a tables.
 	subscribed subscribedTable
 
+	// lazyCatalog tracks per-account catalog readiness for lazy loading.
+	lazyCatalog *lazyCatalogCNState
+	// catalogCacheMu serializes shared CatalogCache mutation across replay,
+	// delayed flush, and steady-state push updates.
+	catalogCacheMu sync.Mutex
+
 	// timestampWaiter is used to notify the latest commit timestamp
 	timestampWaiter client.TimestampWaiter
 
@@ -176,21 +182,30 @@ type delayedCacheApply struct {
 	// and on the other goroutine, replayCatalogCache will attempt to acquire the lock only once.
 	// Therefore, the lock contention is not serious.
 	sync.Mutex
-	replayed bool
-	flist    []func()
+	phase atomic.Uint32
+	flist []func()
 }
+
+const (
+	dcaPhaseBuffering uint32 = iota
+	dcaPhaseDraining
+	dcaPhaseReplayed
+)
 
 func (c *PushClient) dcaReset() {
 	c.dca.Lock()
-	defer c.dca.Unlock()
-	c.dca.replayed = false
-	c.dca.flist = c.dca.flist[:0]
+	c.dca.phase.Store(dcaPhaseBuffering)
+	c.dca.flist = nil
+	c.dca.Unlock()
 }
 
 func (c *PushClient) dcaTryDelay(isSub bool, f func()) (delayed bool) {
+	if c.dca.phase.Load() == dcaPhaseReplayed {
+		return false
+	}
 	c.dca.Lock()
 	defer c.dca.Unlock()
-	if c.dca.replayed {
+	if c.dca.phase.Load() == dcaPhaseReplayed {
 		// replay finished, no need to delay
 		return false
 	}
@@ -202,13 +217,34 @@ func (c *PushClient) dcaTryDelay(isSub bool, f func()) (delayed bool) {
 }
 
 func (c *PushClient) dcaConfirmAndApply() {
-	c.dca.Lock()
-	defer c.dca.Unlock()
-	c.dca.replayed = true
-	for _, f := range c.dca.flist {
-		f()
+	for {
+		c.dca.Lock()
+		if c.dca.phase.Load() == dcaPhaseReplayed {
+			c.dca.Unlock()
+			return
+		}
+		c.dca.phase.Store(dcaPhaseDraining)
+		if len(c.dca.flist) == 0 {
+			c.dca.phase.Store(dcaPhaseReplayed)
+			c.dca.Unlock()
+			return
+		}
+		fns := c.dca.flist
+		c.dca.flist = nil
+		c.dca.Unlock()
+
+		c.applyCatalogCacheChange(func() {
+			for _, f := range fns {
+				f()
+			}
+		})
 	}
-	c.dca.flist = c.dca.flist[:0]
+}
+
+func (c *PushClient) applyCatalogCacheChange(fn func()) {
+	c.catalogCacheMu.Lock()
+	defer c.catalogCacheMu.Unlock()
+	fn()
 }
 
 type State struct {
@@ -327,6 +363,7 @@ func (c *PushClient) init(
 		c.consumeErrC = make(chan error, consumerNumber)
 		c.pauseC = make(chan bool, 1)
 		c.resumeC = make(chan struct{})
+		c.lazyCatalog = newLazyCatalogCNState()
 	}
 	c.initialized = true
 
@@ -510,6 +547,33 @@ func (c *PushClient) forcedSubscribeTable(
 	return moerr.NewInternalError(ctx, "forced subscribe table timeout")
 }
 
+func (c *PushClient) forcedSubscribeCatalogTable(
+	ctx context.Context,
+	dbId, tblId uint64,
+	initialActiveAccounts []uint32,
+) error {
+	s := c.subscriber
+
+	tbl := api.TableID{DbId: dbId, TbId: tblId}
+	if err := s.subscribeCatalogTable(ctx, tbl, initialActiveAccounts); err != nil {
+		return err
+	}
+	ticker := time.NewTicker(periodToCheckTableSubscribeSucceed)
+	defer ticker.Stop()
+
+	for i := 0; i < maxCheckRangeTableSubscribeSucceed; i++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if ok := c.subscribed.isSubscribed(dbId, tblId); ok {
+				return nil
+			}
+		}
+	}
+	return moerr.NewInternalError(ctx, "forced subscribe catalog table timeout")
+}
+
 func (c *PushClient) subscribeTable(
 	ctx context.Context, tblId api.TableID) error {
 	select {
@@ -529,17 +593,19 @@ func (c *PushClient) subscribeTable(
 	}
 }
 
-func (c *PushClient) subSysTables(ctx context.Context) error {
+func (c *PushClient) subSysTables(ctx context.Context, initialActiveAccounts []uint32) error {
 	if enabled, p := objectio.CNSubSysErrInjected(); enabled && rand.Intn(100000) < p {
 		return moerr.NewInternalError(ctx, "FIND_TABLE sub sys error injected")
 	}
-	// push subscription to Table `mo_database`, `mo_table`, `mo_column` of mo_catalog.
+	if c.lazyCatalog != nil {
+		c.lazyCatalog.enable()
+	}
 	databaseId := uint64(catalog.MO_CATALOG_ID)
 	tableIds := []uint64{catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID}
 
 	var err error
 	for _, ti := range tableIds {
-		err = c.forcedSubscribeTable(ctx, databaseId, ti)
+		err = c.forcedSubscribeCatalogTable(ctx, databaseId, ti, initialActiveAccounts)
 		if err != nil {
 			break
 		}
@@ -644,6 +710,8 @@ func (c *PushClient) receiveOneLogtail(ctx context.Context, e *Engine) error {
 			)
 			return err
 		}
+	} else if actResp := resp.response.GetActivateAccountForCatalogResponse(); actResp != nil {
+		c.handleActivationResponse(ctx, e, actResp, receiveAt)
 	} else if errRsp := resp.response.GetError(); errRsp != nil {
 		status := errRsp.GetStatus()
 		if uint16(status.GetCode()) == moerr.OkExpectedEOB {
@@ -653,6 +721,34 @@ func (c *PushClient) receiveOneLogtail(ctx context.Context, e *Engine) error {
 		}
 	}
 	return nil
+}
+
+// handleActivationResponse applies activation tails to shared PartitionState
+// and delivers the response to the waiting ActivateTenantCatalog caller.
+func (c *PushClient) handleActivationResponse(
+	ctx context.Context, e *Engine,
+	resp *logtail.ActivateAccountForCatalogResponse,
+	receiveAt time.Time,
+) {
+	for i := range resp.Tails {
+		tail := resp.Tails[i]
+		if err := updatePartitionOfPush(ctx, e, &tail, true, receiveAt, false); err != nil {
+			logutil.Error("logtail.consumer.activation.apply.tail.failed",
+				zap.Uint32("account-id", resp.AccountId),
+				zap.Uint64("seq", resp.Seq),
+				zap.Error(err),
+			)
+		}
+	}
+
+	if c.lazyCatalog != nil {
+		if !c.lazyCatalog.deliverActivationResponse(resp) {
+			logutil.Warn("logtail.consumer.activation.response.no.waiter",
+				zap.Uint32("account-id", resp.AccountId),
+				zap.Uint64("seq", resp.Seq),
+			)
+		}
+	}
 }
 
 func (c *PushClient) receiveLogtails(ctx context.Context, e *Engine) {
@@ -768,10 +864,110 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) (err err
 	if enabled, p := objectio.CNReplayCacheErrInjected(); enabled && rand.Intn(100000) < p {
 		return moerr.NewInternalError(ctx, "FIND_TABLE replay catalog cache error injected")
 	}
-	// replay mo_catalog cache
-	var op client.TxnOperator
-	var result executor.Result
 	ts := c.receivedLogTailTime.getTimestamp()
+	if err = c.replayCatalogCacheAt(ctx, e, ts, []uint32{0}); err != nil {
+		return err
+	}
+	c.dcaConfirmAndApply()
+	if c.lazyCatalog != nil {
+		c.lazyCatalog.setAccountReady(0, ts)
+		now := time.Now()
+		c.lazyCatalog.recordActivationEvent(DebugCatalogActivationEvent{
+			AccountID:  0,
+			Source:     "startup",
+			Phase:      "complete",
+			Result:     "ok",
+			ReplayTS:   &ts,
+			StartedAt:  &now,
+			FinishedAt: &now,
+		})
+	}
+	return nil
+}
+
+// reconnectInitialActiveAccounts builds wantedAccounts ∪ {0} for use as
+// initial_active_accounts during reconnect.
+func (c *PushClient) reconnectInitialActiveAccounts() []uint32 {
+	if c.lazyCatalog == nil {
+		return []uint32{0}
+	}
+	wanted := c.lazyCatalog.snapshotWantedAccounts()
+	accounts := make(map[uint32]struct{}, len(wanted)+1)
+	accounts[0] = struct{}{}
+	for _, id := range wanted {
+		accounts[id] = struct{}{}
+	}
+	result := make([]uint32, 0, len(accounts))
+	for id := range accounts {
+		result = append(result, id)
+	}
+	return result
+}
+
+// replayCatalogCacheForReconnect replays the catalog for sys + wanted
+// accounts after reconnect and sets them all ready.
+func (c *PushClient) replayCatalogCacheForReconnect(
+	ctx context.Context, e *Engine, accountIDs []uint32,
+) error {
+	if enabled, p := objectio.CNReplayCacheErrInjected(); enabled && rand.Intn(100000) < p {
+		return moerr.NewInternalError(ctx, "FIND_TABLE replay catalog cache error injected")
+	}
+	ts := c.receivedLogTailTime.getTimestamp()
+	if err := c.replayCatalogCacheAt(ctx, e, ts, accountIDs); err != nil {
+		return err
+	}
+	c.dcaConfirmAndApply()
+
+	if c.lazyCatalog != nil {
+		now := time.Now()
+		for _, id := range accountIDs {
+			c.lazyCatalog.setAccountReady(id, ts)
+			c.lazyCatalog.recordActivationEvent(DebugCatalogActivationEvent{
+				AccountID:  id,
+				Source:     "reconnect_restore",
+				Phase:      "complete",
+				Result:     "ok",
+				ReplayTS:   &ts,
+				StartedAt:  &now,
+				FinishedAt: &now,
+			})
+		}
+	}
+	return nil
+}
+
+// CanServeAccount returns true if the account's catalog cache is ready to
+// serve the given snapshot timestamp.
+func (c *PushClient) CanServeAccount(accountID uint32, ts timestamp.Timestamp) bool {
+	if c.lazyCatalog == nil {
+		return true
+	}
+	readyTS, ok := c.lazyCatalog.getAccountReadyTS(accountID)
+	if ok && readyTS.IsEmpty() {
+		return true
+	}
+	if !ok {
+		return false
+	}
+	return ts.GreaterEq(readyTS)
+}
+
+func (c *PushClient) replayCatalogCacheForAccount(
+	ctx context.Context, e *Engine, accountID uint32, ts timestamp.Timestamp,
+) error {
+	return c.replayCatalogCacheAt(ctx, e, ts, []uint32{accountID})
+}
+
+func (c *PushClient) replayCatalogCacheForAccounts(
+	ctx context.Context, e *Engine, accountIDs []uint32, ts timestamp.Timestamp,
+) error {
+	return c.replayCatalogCacheAt(ctx, e, ts, accountIDs)
+}
+
+func (c *PushClient) replayCatalogCacheAt(
+	ctx context.Context, e *Engine, ts timestamp.Timestamp, accountIDs []uint32,
+) (err error) {
+	var op client.TxnOperator
 	ccache := e.catalog.Load()
 	typeTs := types.TimestampToTS(ts)
 	createByOpt := client.WithTxnCreateBy(
@@ -798,74 +994,338 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) (err err
 		return err
 	}
 
-	// read databases
-	result, err = execReadSql(ctx, op, catalog.MoDatabaseBatchQuery, true)
+	if err = replayCatalogDatabaseCache(ctx, op, ccache, typeTs, accountIDs, c.applyCatalogCacheChange); err != nil {
+		return err
+	}
+	if err = replayCatalogTableCache(ctx, e, op, ccache, typeTs, accountIDs, c.applyCatalogCacheChange); err != nil {
+		return err
+	}
+	if err = replayCatalogColumnCache(ctx, op, ccache, typeTs, accountIDs, c.applyCatalogCacheChange); err != nil {
+		return err
+	}
+
+	c.applyCatalogCacheChange(func() {
+		ccache.UpdateDuration(typeTs, types.MaxTs())
+	})
+	return nil
+
+}
+
+// ActivateTenantCatalog ensures the catalog cache for the given account is
+// ready. If the account is already ready, returns immediately. Otherwise it
+// sends an activation request to TN, waits for the response, replays the
+// catalog from storage, and marks the account ready.
+func (c *PushClient) ActivateTenantCatalog(ctx context.Context, e *Engine, accountID uint32) error {
+	if c.lazyCatalog == nil || !c.lazyCatalog.isEnabled() {
+		return nil
+	}
+	if c.lazyCatalog.isAccountReady(accountID) {
+		return nil
+	}
+
+	act := &inflightActivation{done: make(chan struct{})}
+	if existing, loaded := c.lazyCatalog.inflightActivations.LoadOrStore(accountID, act); loaded {
+		inf := existing.(*inflightActivation)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-inf.done:
+			return inf.err
+		}
+	}
+
+	defer func() {
+		close(act.done)
+		c.lazyCatalog.inflightActivations.Delete(accountID)
+	}()
+
+	if c.lazyCatalog.isAccountReady(accountID) {
+		return nil
+	}
+
+	act.err = c.doActivateTenantCatalog(ctx, e, accountID)
+	return act.err
+}
+
+func (c *PushClient) doActivateTenantCatalog(ctx context.Context, e *Engine, accountID uint32) error {
+	startedAt := time.Now()
+	seq := c.lazyCatalog.beginCatchingUp(accountID)
+	respCh := c.lazyCatalog.registerPendingResponse(accountID, seq)
+
+	if err := c.subscriber.logTailClient.ActivateAccountForCatalog(ctx, accountID, seq); err != nil {
+		c.lazyCatalog.cleanupFailedActivation(accountID, seq)
+		finishedAt := time.Now()
+		c.lazyCatalog.recordActivationEvent(DebugCatalogActivationEvent{
+			AccountID:  accountID,
+			Seq:        seq,
+			Source:     "activation",
+			Phase:      "request_send",
+			Result:     "error",
+			Error:      err.Error(),
+			StartedAt:  &startedAt,
+			FinishedAt: &finishedAt,
+		})
+		return err
+	}
+
+	logutil.Info("logtail.consumer.activation.request.sent",
+		zap.Uint32("account-id", accountID),
+		zap.Uint64("seq", seq),
+	)
+	requestSentAt := time.Now()
+	c.lazyCatalog.recordActivationEvent(DebugCatalogActivationEvent{
+		AccountID:  accountID,
+		Seq:        seq,
+		Source:     "activation",
+		Phase:      "request_sent",
+		Result:     "in_progress",
+		StartedAt:  &startedAt,
+		FinishedAt: &requestSentAt,
+	})
+
+	var resp *logtail.ActivateAccountForCatalogResponse
+	select {
+	case <-ctx.Done():
+		c.lazyCatalog.cleanupFailedActivation(accountID, seq)
+		finishedAt := time.Now()
+		c.lazyCatalog.recordActivationEvent(DebugCatalogActivationEvent{
+			AccountID:  accountID,
+			Seq:        seq,
+			Source:     "activation",
+			Phase:      "wait_response",
+			Result:     "error",
+			Error:      ctx.Err().Error(),
+			StartedAt:  &startedAt,
+			FinishedAt: &finishedAt,
+		})
+		return ctx.Err()
+	case resp = <-respCh:
+	}
+	if resp == nil {
+		err := moerr.NewInternalErrorNoCtx("tenant catalog activation interrupted by reconnect")
+		finishedAt := time.Now()
+		c.lazyCatalog.recordActivationEvent(DebugCatalogActivationEvent{
+			AccountID:  accountID,
+			Seq:        seq,
+			Source:     "activation",
+			Phase:      "wait_response",
+			Result:     "interrupted",
+			Error:      err.Error(),
+			StartedAt:  &startedAt,
+			FinishedAt: &finishedAt,
+		})
+		return err
+	}
+
+	targetTS := resp.GetTargetTs()
+	var targetTSCopy *timestamp.Timestamp
+	if targetTS != nil {
+		tsCopy := *targetTS
+		targetTSCopy = &tsCopy
+	}
+	responseReceivedAt := time.Now()
+	c.lazyCatalog.recordActivationEvent(DebugCatalogActivationEvent{
+		AccountID:  accountID,
+		Seq:        seq,
+		Source:     "activation",
+		Phase:      "response_received",
+		Result:     "in_progress",
+		TargetTS:   targetTSCopy,
+		StartedAt:  &startedAt,
+		FinishedAt: &responseReceivedAt,
+	})
+
+	if resp.GetSeq() != seq {
+		c.lazyCatalog.cleanupFailedActivation(accountID, seq)
+		err := moerr.NewInternalErrorf(ctx, "activation seq mismatch: expected %d, got %d", seq, resp.GetSeq())
+		finishedAt := time.Now()
+		c.lazyCatalog.recordActivationEvent(DebugCatalogActivationEvent{
+			AccountID:  accountID,
+			Seq:        seq,
+			Source:     "activation",
+			Phase:      "response_received",
+			Result:     "error",
+			Error:      err.Error(),
+			TargetTS:   targetTSCopy,
+			StartedAt:  &startedAt,
+			FinishedAt: &finishedAt,
+		})
+		return err
+	}
+
+	replayTS, err := e.cli.WaitLogTailAppliedAt(ctx, *targetTS)
+	if err != nil {
+		c.lazyCatalog.cleanupFailedActivation(accountID, seq)
+		finishedAt := time.Now()
+		c.lazyCatalog.recordActivationEvent(DebugCatalogActivationEvent{
+			AccountID:  accountID,
+			Seq:        seq,
+			Source:     "activation",
+			Phase:      "wait_logtail",
+			Result:     "error",
+			Error:      err.Error(),
+			TargetTS:   targetTSCopy,
+			StartedAt:  &startedAt,
+			FinishedAt: &finishedAt,
+		})
+		return err
+	}
+
+	if err := c.replayCatalogCacheForAccount(ctx, e, accountID, replayTS); err != nil {
+		c.lazyCatalog.cleanupFailedActivation(accountID, seq)
+		replayTSCopy := replayTS
+		finishedAt := time.Now()
+		c.lazyCatalog.recordActivationEvent(DebugCatalogActivationEvent{
+			AccountID:  accountID,
+			Seq:        seq,
+			Source:     "activation",
+			Phase:      "replay_catalog",
+			Result:     "error",
+			Error:      err.Error(),
+			TargetTS:   targetTSCopy,
+			ReplayTS:   &replayTSCopy,
+			StartedAt:  &startedAt,
+			FinishedAt: &finishedAt,
+		})
+		return err
+	}
+
+	delayedApplyCount := 0
+	c.applyCatalogCacheChange(func() {
+		fns := c.lazyCatalog.beginAccountReadyTransition(accountID)
+		delayedApplyCount = len(fns)
+		for _, f := range fns {
+			f()
+		}
+		c.lazyCatalog.finishAccountReady(accountID, replayTS)
+	})
+	replayTSCopy := replayTS
+	finishedAt := time.Now()
+	c.lazyCatalog.recordActivationEvent(DebugCatalogActivationEvent{
+		AccountID:         accountID,
+		Seq:               seq,
+		Source:            "activation",
+		Phase:             "complete",
+		Result:            "ok",
+		TargetTS:          targetTSCopy,
+		ReplayTS:          &replayTSCopy,
+		DelayedApplyCount: delayedApplyCount,
+		StartedAt:         &startedAt,
+		FinishedAt:        &finishedAt,
+	})
+
+	logutil.Info("logtail.consumer.activation.complete",
+		zap.Uint32("account-id", accountID),
+		zap.Uint64("seq", seq),
+		zap.String("target-ts", targetTS.String()),
+		zap.String("replay-ts", replayTS.String()),
+	)
+	return nil
+}
+
+func replayCatalogDatabaseCache(
+	ctx context.Context,
+	op client.TxnOperator,
+	ccache *cache.CatalogCache,
+	typeTs types.TS,
+	accountIDs []uint32,
+	applyCatalogCacheChange func(func()),
+) (err error) {
+	result, err := execReadSql(ctx, op, catalog.BuildMoDatabaseBatchQuery(accountIDs), true)
 	if err != nil {
 		return err
 	}
-	rowCntF := func(bat []*batch.Batch) string {
-		return stringifySlice(bat, func(b any) string {
-			return fmt.Sprintf("%d", b.(*batch.Batch).RowCount())
-		})
-	}
-	logutil.Infof("FIND_TABLE read mo_catalog.mo_databases %v rows", rowCntF(result.Batches))
 	defer result.Close()
+
+	logutil.Infof("FIND_TABLE read mo_catalog.mo_databases %v rows", rowCountString(result.Batches))
 	for _, b := range result.Batches {
 		if err = fillTsVecForSysTableQueryBatch(b, typeTs, result.Mp); err != nil {
 			return err
 		}
-		ccache.InsertDatabase(b)
+		applyCatalogCacheChange(func() {
+			ccache.InsertDatabase(b)
+		})
 	}
+	return nil
+}
 
-	// read tables
-	result, err = execReadSql(ctx, op, catalog.MoTablesBatchQuery, true)
+func replayCatalogTableCache(
+	ctx context.Context,
+	e *Engine,
+	op client.TxnOperator,
+	ccache *cache.CatalogCache,
+	typeTs types.TS,
+	accountIDs []uint32,
+	applyCatalogCacheChange func(func()),
+) (err error) {
+	result, err := execReadSql(ctx, op, catalog.BuildMoTablesBatchQuery(accountIDs), true)
 	if err != nil {
 		return err
 	}
-	logutil.Infof("FIND_TABLE read mo_catalog.mo_tables %v rows", rowCntF(result.Batches))
 	defer result.Close()
+
+	logutil.Infof("FIND_TABLE read mo_catalog.mo_tables %v rows", rowCountString(result.Batches))
 	for _, b := range result.Batches {
 		if err = fillTsVecForSysTableQueryBatch(b, typeTs, result.Mp); err != nil {
 			return err
 		}
 		e.tryAdjustSysTablesCreatedTimeWithBatch(b)
-		ccache.InsertTable(b)
+		applyCatalogCacheChange(func() {
+			ccache.InsertTable(b)
+		})
 	}
+	return nil
+}
 
-	// read columns
-	result, err = execReadSql(ctx, op, catalog.MoColumnsBatchQuery, true)
+func replayCatalogColumnCache(
+	ctx context.Context,
+	op client.TxnOperator,
+	ccache *cache.CatalogCache,
+	typeTs types.TS,
+	accountIDs []uint32,
+	applyCatalogCacheChange func(func()),
+) (err error) {
+	result, err := execReadSql(ctx, op, catalog.BuildMoColumnsBatchQuery(accountIDs), true)
 	if err != nil {
 		return err
 	}
 	defer result.Close()
-	logutil.Infof("FIND_TABLE read mo_catalog.mo_columns %v rows", rowCntF(result.Batches))
+
+	logutil.Infof("FIND_TABLE read mo_catalog.mo_columns %v rows", rowCountString(result.Batches))
 
 	if isColumnsBatchPerfectlySplitted(result.Batches) {
 		for _, b := range result.Batches {
 			if err = fillTsVecForSysTableQueryBatch(b, typeTs, result.Mp); err != nil {
 				return err
 			}
-			ccache.InsertColumns(b)
+			applyCatalogCacheChange(func() {
+				ccache.InsertColumns(b)
+			})
 		}
-	} else {
-		logutil.Info("FIND_TABLE merge mo_columns results")
-		bat := result.Batches[0]
-		for _, b := range result.Batches[1:] {
-			bat, err = bat.Append(ctx, result.Mp, b)
-			if err != nil {
-				return err
-			}
-		}
-		if err = fillTsVecForSysTableQueryBatch(bat, typeTs, result.Mp); err != nil {
-			return err
-		}
-		ccache.InsertColumns(bat)
+		return nil
 	}
 
-	ccache.UpdateDuration(typeTs, types.MaxTs())
-	c.dcaConfirmAndApply()
+	logutil.Info("FIND_TABLE merge mo_columns results")
+	bat := result.Batches[0]
+	for _, b := range result.Batches[1:] {
+		bat, err = bat.Append(ctx, result.Mp, b)
+		if err != nil {
+			return err
+		}
+	}
+	if err = fillTsVecForSysTableQueryBatch(bat, typeTs, result.Mp); err != nil {
+		return err
+	}
+	applyCatalogCacheChange(func() {
+		ccache.InsertColumns(bat)
+	})
 	return nil
+}
 
+func rowCountString(batches []*batch.Batch) string {
+	return stringifySlice(batches, func(b any) string {
+		return fmt.Sprintf("%d", b.(*batch.Batch).RowCount())
+	})
 }
 
 func (c *PushClient) connect(ctx context.Context, e *Engine) {
@@ -874,7 +1334,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 
 		for {
 			c.dcaReset()
-			err := c.subSysTables(ctx)
+			err := c.subSysTables(ctx, []uint32{0})
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
 					logutil.Errorf("%s connect failed as context canceled: %v", logTag, ctx.Err())
@@ -907,6 +1367,11 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 	}
 
 	e.setPushClientStatus(false)
+
+	if c.lazyCatalog != nil {
+		c.lazyCatalog.collectWantedAccounts()
+		c.lazyCatalog.resetAllStates()
+	}
 
 	// the consumer goroutine is supposed to be stopped.
 	c.stopConsumers()
@@ -946,14 +1411,10 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 		c.resume()
 
 		c.dcaReset()
-		err = c.subSysTables(ctx)
-		if err != nil {
-			//  send on closed channel error:
-			// receive logtail error -> pause -> reconnect -------------------------> stop
-			//                   |-> forced subscribe table timeout -> continue ----> resume
-			// Any errors related to the logtail consumer should not be retried within the inner connect loop; they should be handled by the outer caller.
-			// So we break the loop here.
 
+		reconnectAccounts := c.reconnectInitialActiveAccounts()
+		err = c.subSysTables(ctx, reconnectAccounts)
+		if err != nil {
 			c.pause(true)
 			logutil.Errorf("%s subscribe system tables failed, err %v", logTag, err)
 			break
@@ -961,7 +1422,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 
 		c.waitTimestamp()
 
-		if err := c.replayCatalogCache(ctx, e); err != nil {
+		if err := c.replayCatalogCacheForReconnect(ctx, e, reconnectAccounts); err != nil {
 			c.pause(true)
 			logutil.Errorf("%s replay catalog cache failed, err %v", logTag, err)
 			break
@@ -1718,6 +2179,13 @@ func (s *logTailSubscriber) waitReady(ctx context.Context) error {
 func (s *logTailSubscriber) subscribeTable(
 	ctx context.Context, tblId api.TableID) error {
 	err := s.logTailClient.Subscribe(ctx, tblId)
+	return moerr.AttachCause(ctx, err)
+}
+
+func (s *logTailSubscriber) subscribeCatalogTable(
+	ctx context.Context, tblId api.TableID, initialActiveAccounts []uint32,
+) error {
+	err := s.logTailClient.SubscribeCatalogTable(ctx, tblId, initialActiveAccounts)
 	return moerr.AttachCause(ctx, err)
 }
 

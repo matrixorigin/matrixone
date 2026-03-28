@@ -1194,6 +1194,14 @@ type Engine interface {
 	LatestLogtailAppliedTime() timestamp.Timestamp
 }
 
+// TenantCatalogActivator is an optional interface for engines that support
+// lazy per-account catalog loading. If the engine implements this interface,
+// the frontend should call ActivateTenantCatalog during authentication before
+// the first tenant-context SQL.
+type TenantCatalogActivator interface {
+	ActivateTenantCatalog(ctx context.Context, accountID uint32) error
+}
+
 type VectorPool interface {
 	PutBatch(bat *batch.Batch)
 	GetVector(typ types.Type) *vector.Vector

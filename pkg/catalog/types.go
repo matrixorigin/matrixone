@@ -16,6 +16,7 @@ package catalog
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -797,6 +798,50 @@ var (
 		types.New(types.T_TS, 0, 0),                        // flush_point
 	}
 )
+
+func BuildMoDatabaseBatchQuery(accountIDs []uint32) string {
+	return buildAccountScopedCatalogBatchQuery(MoDatabaseBatchQuery, SystemDBAttr_AccID, accountIDs)
+}
+
+func BuildMoTablesBatchQuery(accountIDs []uint32) string {
+	return buildAccountScopedCatalogBatchQuery(MoTablesBatchQuery, SystemRelAttr_AccID, accountIDs)
+}
+
+func BuildMoColumnsBatchQuery(accountIDs []uint32) string {
+	return buildAccountScopedCatalogBatchQuery(MoColumnsBatchQuery, SystemColAttr_AccID, accountIDs)
+}
+
+func buildAccountScopedCatalogBatchQuery(baseQuery string, accountAttr string, accountIDs []uint32) string {
+	if len(accountIDs) == 0 {
+		return baseQuery
+	}
+
+	// accountIDs come from internal tenant identifiers and are rendered as
+	// decimal uint32 values by joinAccountIDs, so this builder never interpolates
+	// free-form SQL text.
+	orderBy := ""
+	query := baseQuery
+	const orderByClause = " order by "
+	if idx := strings.Index(query, orderByClause); idx >= 0 {
+		orderBy = query[idx:]
+		query = query[:idx]
+	}
+
+	return fmt.Sprintf("%s and %s in (%s)%s",
+		query,
+		accountAttr,
+		joinAccountIDs(accountIDs),
+		orderBy,
+	)
+}
+
+func joinAccountIDs(accountIDs []uint32) string {
+	parts := make([]string, 0, len(accountIDs))
+	for _, accountID := range accountIDs {
+		parts = append(parts, strconv.FormatUint(uint64(accountID), 10))
+	}
+	return strings.Join(parts, ",")
+}
 
 var (
 	QueryResultPath     string
