@@ -1023,8 +1023,24 @@ func (p *baseHandle) getObjectEntries(
 				cnObj = append(cnObj, &entryCopy)
 				continue
 			}
+			if entry.CreateTime.GT(&end) {
+				continue
+			}
+			// Keep every TN-produced non-appendable object in the create-time index so
+			// delete-chain resolution can rewrite a deleted/missing predecessor to the
+			// replacement object created at the predecessor's delete timestamp.
 			tnByCreateTS[entry.CreateTime] = append(tnByCreateTS[entry.CreateTime], &entryCopy)
 			tnKeySet[entry.CreateTime] = struct{}{}
+			// TN merge objects keep row-level commit timestamps, so they can be read
+			// through the appendable-object path and filtered by [start, end].
+			//
+			// We must also seed the visible object set with the terminal TN object that
+			// is still visible at range end. After checkpoint + GC + restart, the older
+			// appendable predecessors may already be gone, leaving no object from which
+			// delete-chain resolution can discover this live replacement object.
+			if entry.DeleteTime.IsEmpty() || entry.DeleteTime.GT(&end) {
+				aobj = append(aobj, &entryCopy)
+			}
 		}
 	}
 	tnCreateTSKeys = make([]types.TS, 0, len(tnKeySet))
@@ -1393,7 +1409,11 @@ func NewChangesHandlerWithPartitionStateRange(
 ) (changeHandle *ChangeHandler, err error) {
 	stateStart := state.GetStart()
 	if stateStart.GT(&start) {
-		return nil, moerr.NewErrStaleReadNoCtx(stateStart.ToString(), start.ToString())
+		logutil.Info("ChangesHandlerWithPartitionStateRange: stateStart > start, proceeding with range-aware scan",
+			zap.String("stateStart", stateStart.ToString()),
+			zap.String("start", start.ToString()),
+			zap.String("end", end.ToString()),
+		)
 	}
 	changeHandle = &ChangeHandler{
 		coarseMaxRow:             int(maxRow),
@@ -1637,6 +1657,16 @@ func getObjectsFromCheckpointEntries(
 	dataCNObj = checkpointObjectMapToSlice(dataCNObjMap, sortByCreateTime)
 	tombstoneAobj = checkpointObjectMapToSlice(tombstoneAobjMap, sortByCreateTime)
 	tombstoneCNObj = checkpointObjectMapToSlice(tombstoneCNObjMap, sortByCreateTime)
+	logutil.Info("classifyCheckpointObject-summary",
+		zap.Uint64("tid", tid),
+		zap.Int("dataAobj", len(dataAobj)),
+		zap.Int("dataCNObj", len(dataCNObj)),
+		zap.Int("tombstoneAobj", len(tombstoneAobj)),
+		zap.Int("tombstoneCNObj", len(tombstoneCNObj)),
+		zap.String("start", start.ToString()),
+		zap.String("end", end.ToString()),
+		zap.Int("selection", int(selection)),
+	)
 	return
 }
 
@@ -1646,40 +1676,57 @@ func classifyCheckpointObject(
 	start, end types.TS,
 	selection checkpointObjectSelection,
 ) checkpointObjectKind {
+	kindNames := [...]string{"Ignore", "RowCommitTS", "ConstantCommitTS"}
+	selNames := [...]string{"Recovery", "Range"}
+	result := func(kind checkpointObjectKind) checkpointObjectKind {
+		logutil.Info("classifyCheckpointObject",
+			zap.String("obj", obj.ObjectShortName().ShortString()),
+			zap.Bool("isTombstone", isTombstone),
+			zap.Bool("appendable", obj.GetAppendable()),
+			zap.Bool("cnCreated", obj.GetCNCreated()),
+			zap.String("createTime", obj.CreateTime.ToString()),
+			zap.String("deleteTime", obj.DeleteTime.ToString()),
+			zap.String("start", start.ToString()),
+			zap.String("end", end.ToString()),
+			zap.String("selection", selNames[selection]),
+			zap.String("kind", kindNames[kind]),
+		)
+		return kind
+	}
 	switch selection {
 	case checkpointObjectSelectionRange:
 		if obj.GetAppendable() {
 			if obj.CreateTime.GT(&end) {
-				return checkpointObjectKindIgnore
+				return result(checkpointObjectKindIgnore)
 			}
 			if !obj.DeleteTime.IsEmpty() && obj.DeleteTime.LT(&start) {
-				return checkpointObjectKindIgnore
+				return result(checkpointObjectKindIgnore)
 			}
-			return checkpointObjectKindRowCommitTS
+			return result(checkpointObjectKindRowCommitTS)
 		}
 		if obj.GetCNCreated() {
 			if obj.CreateTime.LT(&start) || obj.CreateTime.GT(&end) {
-				return checkpointObjectKindIgnore
+				return result(checkpointObjectKindIgnore)
 			}
-			return checkpointObjectKindConstantCommitTS
+			return result(checkpointObjectKindConstantCommitTS)
 		}
 		if obj.CreateTime.LT(&start) || obj.CreateTime.GT(&end) {
-			return checkpointObjectKindIgnore
+			return result(checkpointObjectKindIgnore)
 		}
 		// DN-created non-appendable objects may be rewritten by flush/merge, so
 		// object create time alone does not describe which rows belong to
 		// CollectChanges(start, end). Keep them on the row-commit-ts path and let
 		// the batch-level TS filter recover only the rows whose commit TS falls in
 		// the requested interval.
-		return checkpointObjectKindRowCommitTS
+		return result(checkpointObjectKindRowCommitTS)
 	default:
 		if obj.GetAppendable() && obj.CreateTime.GE(&start) {
-			return checkpointObjectKindRowCommitTS
+			return result(checkpointObjectKindRowCommitTS)
 		}
 		if obj.GetCNCreated() && obj.CreateTime.GE(&start) {
-			return checkpointObjectKindConstantCommitTS
+			return result(checkpointObjectKindConstantCommitTS)
 		}
-		return checkpointObjectKindIgnore
+		return result(checkpointObjectKindIgnore)
 	}
 }
 
