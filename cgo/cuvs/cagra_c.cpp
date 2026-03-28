@@ -358,6 +358,22 @@ void gpu_cagra_save_dir(gpu_cagra_c index_c, const char* dir, void* errmsg) {
     }
 }
 
+void gpu_cagra_delete_id(gpu_cagra_c index_c, uint32_t id, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_cagra_any_t*>(index_c);
+        switch (any->qtype) {
+            case Quantization_F32:   static_cast<gpu_cagra_t<float>*>(any->ptr)->delete_id(id); break;
+            case Quantization_F16:   static_cast<gpu_cagra_t<half>*>(any->ptr)->delete_id(id); break;
+            case Quantization_INT8:  static_cast<gpu_cagra_t<int8_t>*>(any->ptr)->delete_id(id); break;
+            case Quantization_UINT8: static_cast<gpu_cagra_t<uint8_t>*>(any->ptr)->delete_id(id); break;
+            default: break;
+        }
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_cagra_delete_id", e.what());
+    }
+}
+
 void gpu_cagra_load_dir(gpu_cagra_c index_c, const char* dir, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {

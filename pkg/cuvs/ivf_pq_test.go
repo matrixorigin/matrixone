@@ -531,6 +531,76 @@ func TestGpuIvfPqExtendFloat(t *testing.T) {
 	}
 }
 
+func TestGpuIvfPqDeleteId(t *testing.T) {
+	devices, err := GetGpuDeviceList()
+	if err != nil || len(devices) < 1 {
+		t.Skip("Need at least 1 GPU for deletion test")
+	}
+
+	dimension := uint32(16)
+	n_vectors := uint64(100)
+	dataset := make([]float32, n_vectors*uint64(dimension))
+	for i := uint64(0); i < n_vectors; i++ {
+		for j := uint32(0); j < dimension; j++ {
+			dataset[i*uint64(dimension)+uint64(j)] = float32(i)
+		}
+	}
+
+	bp := DefaultIvfPqBuildParams()
+	bp.NLists = 10
+	bp.M = 8
+	index, err := NewGpuIvfPq[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
+	if err != nil {
+		t.Fatalf("Failed to create GpuIvfPq: %v", err)
+	}
+	defer index.Destroy()
+
+	index.Start()
+	index.Build()
+
+	// Query exactly at vector 50
+	q50 := make([]float32, dimension)
+	for i := range q50 {
+		q50[i] = 50.0
+	}
+
+	sp := DefaultIvfPqSearchParams()
+	sp.NProbes = 10
+
+	// 1. Test Search
+	r, err := index.Search(q50, 1, dimension, 1, sp)
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	// IVF-PQ is approximate, but at query=data it should be very close to ID 50
+	if r.Neighbors[0] != 50 {
+		t.Logf("Warning: Search neighbor was %d, expected 50 (approximate search)", r.Neighbors[0])
+	}
+
+	// Delete ID 50
+	if err := index.DeleteId(50); err != nil {
+		t.Fatalf("DeleteId failed: %v", err)
+	}
+
+	// Search again
+	r, err = index.Search(q50, 1, dimension, 1, sp)
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if r.Neighbors[0] == 50 {
+		t.Errorf("Search: Neighbor 50 was deleted but still returned")
+	}
+
+	// 2. Test SearchFloat (this verifies the fix in search_float_internal)
+	r, err = index.SearchFloat(q50, 1, dimension, 1, sp)
+	if err != nil {
+		t.Fatalf("SearchFloat failed: %v", err)
+	}
+	if r.Neighbors[0] == 50 {
+		t.Errorf("SearchFloat: Neighbor 50 was deleted but still returned")
+	}
+}
+
 func BenchmarkGpuShardedIvfPq(b *testing.B) {
 	devices, err := GetGpuDeviceList()
 	if err != nil || len(devices) < 1 {

@@ -96,6 +96,9 @@ void gpu_ivf_pq_save(gpu_ivf_pq_c index_c, const char* filename, void* errmsg);
 // Save all components (index, IDs, quantizer, bitset) to a directory + manifest.json
 void gpu_ivf_pq_save_dir(gpu_ivf_pq_c index_c, const char* dir, void* errmsg);
 
+// Delete ID from index (soft delete via bitset)
+void gpu_ivf_pq_delete_id(gpu_ivf_pq_c index_c, int64_t id, void* errmsg);
+
 // Load all components from a directory previously written by gpu_ivf_pq_save_dir.
 // The index must have been created and started before calling this.
 void gpu_ivf_pq_load_dir(gpu_ivf_pq_c index_c, const char* dir, void* errmsg);

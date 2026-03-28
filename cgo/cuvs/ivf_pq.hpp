@@ -792,9 +792,20 @@ public:
             auto neighbors_device = raft::make_device_matrix<int64_t, int64_t>(*res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
             auto distances_device = raft::make_device_matrix<float, int64_t>(*res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
 
-            cuvs::neighbors::ivf_pq::search(*res, search_params, *local_index,
-                                                raft::make_const_mdspan(q_dev_t.view()), 
-                                                neighbors_device.view(), distances_device.view());
+            if (this->deleted_count_ > 0) {
+                this->sync_device_bitset(handle.get_device_id(), *res);
+                auto info = this->get_device_bitset_info(handle.get_device_id());
+                using bs_t = raft::core::bitset<uint32_t, int64_t>;
+                auto* bs = static_cast<bs_t*>(info->ptr.get());
+                auto filter = cuvs::neighbors::filtering::bitset_filter(bs->view());
+                cuvs::neighbors::ivf_pq::search(*res, search_params, *local_index,
+                                                    raft::make_const_mdspan(q_dev_t.view()), 
+                                                    neighbors_device.view(), distances_device.view(), filter);
+            } else {
+                cuvs::neighbors::ivf_pq::search(*res, search_params, *local_index,
+                                                    raft::make_const_mdspan(q_dev_t.view()), 
+                                                    neighbors_device.view(), distances_device.view());
+            }
 
             raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device.view());
             raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device.view());

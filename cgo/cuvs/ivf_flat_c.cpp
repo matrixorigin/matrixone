@@ -392,6 +392,22 @@ void gpu_ivf_flat_save_dir(gpu_ivf_flat_c index_c, const char* dir, void* errmsg
     }
 }
 
+void gpu_ivf_flat_delete_id(gpu_ivf_flat_c index_c, int64_t id, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_ivf_flat_any_t*>(index_c);
+        switch (any->qtype) {
+            case Quantization_F32:   static_cast<gpu_ivf_flat_t<float>*>(any->ptr)->delete_id(id); break;
+            case Quantization_F16:   static_cast<gpu_ivf_flat_t<half>*>(any->ptr)->delete_id(id); break;
+            case Quantization_INT8:  static_cast<gpu_ivf_flat_t<int8_t>*>(any->ptr)->delete_id(id); break;
+            case Quantization_UINT8: static_cast<gpu_ivf_flat_t<uint8_t>*>(any->ptr)->delete_id(id); break;
+            default: break;
+        }
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_flat_delete_id", e.what());
+    }
+}
+
 void gpu_ivf_flat_load_dir(gpu_ivf_flat_c index_c, const char* dir, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {

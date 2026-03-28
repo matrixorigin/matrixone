@@ -482,15 +482,15 @@ func (gi *GpuCagra[T]) GetQuantizer() (float32, float32, error) {
 }
 
 // Save serializes the index to a file
-func (gc *GpuCagra[T]) Save(filename string) error {
-	if gc.cCagra == nil {
+func (gi *GpuCagra[T]) Save(filename string) error {
+	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
 	var errmsg *C.char
 	cFilename := C.CString(filename)
 	defer C.free(unsafe.Pointer(cFilename))
 
-	C.gpu_cagra_save(gc.cCagra, cFilename, unsafe.Pointer(&errmsg))
+	C.gpu_cagra_save(gi.cCagra, cFilename, unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))
@@ -500,8 +500,8 @@ func (gc *GpuCagra[T]) Save(filename string) error {
 }
 
 // Pack saves the index to a .tar or .tar.gz file using save_dir.
-func (gc *GpuCagra[T]) Pack(filename string) error {
-	if gc.cCagra == nil {
+func (gi *GpuCagra[T]) Pack(filename string) error {
+	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
 
@@ -515,7 +515,7 @@ func (gc *GpuCagra[T]) Pack(filename string) error {
 	cDir := C.CString(tmpDir)
 	defer C.free(unsafe.Pointer(cDir))
 
-	C.gpu_cagra_save_dir(gc.cCagra, cDir, unsafe.Pointer(&errmsg))
+	C.gpu_cagra_save_dir(gi.cCagra, cDir, unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))
@@ -527,8 +527,8 @@ func (gc *GpuCagra[T]) Pack(filename string) error {
 
 // Unpack extracts a .tar or .tar.gz file and loads index components via load_dir.
 // The index must already be initialized and started before calling Unpack.
-func (gc *GpuCagra[T]) Unpack(filename string) error {
-	if gc.cCagra == nil {
+func (gi *GpuCagra[T]) Unpack(filename string) error {
+	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
 
@@ -546,7 +546,22 @@ func (gc *GpuCagra[T]) Unpack(filename string) error {
 	cDir := C.CString(tmpDir)
 	defer C.free(unsafe.Pointer(cDir))
 
-	C.gpu_cagra_load_dir(gc.cCagra, cDir, unsafe.Pointer(&errmsg))
+	C.gpu_cagra_load_dir(gi.cCagra, cDir, unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
+// DeleteId removes an ID from the index (soft delete).
+func (gi *GpuCagra[T]) DeleteId(id uint32) error {
+	if gi.cCagra == nil {
+		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
+	}
+	var errmsg *C.char
+	C.gpu_cagra_delete_id(gi.cCagra, C.uint32_t(id), unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))
@@ -556,8 +571,8 @@ func (gc *GpuCagra[T]) Unpack(filename string) error {
 }
 
 // Search performs a K-Nearest Neighbor search
-func (gc *GpuCagra[T]) Search(queries []T, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) (SearchResult, error) {
-	if gc.cCagra == nil {
+func (gi *GpuCagra[T]) Search(queries []T, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) (SearchResult, error) {
+	if gi.cCagra == nil {
 		return SearchResult{}, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
 	if len(queries) == 0 || numQueries == 0 {
@@ -571,7 +586,7 @@ func (gc *GpuCagra[T]) Search(queries []T, numQueries uint64, dimension uint32, 
 	}
 
 	res := C.gpu_cagra_search(
-		gc.cCagra,
+		gi.cCagra,
 		unsafe.Pointer(&queries[0]),
 		C.uint64_t(numQueries),
 		C.uint32_t(dimension),
@@ -609,8 +624,8 @@ func (gc *GpuCagra[T]) Search(queries []T, numQueries uint64, dimension uint32, 
 }
 
 // SearchFloat performs a K-Nearest Neighbor search with float32 queries
-func (gc *GpuCagra[T]) SearchFloat(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) (SearchResult, error) {
-	if gc.cCagra == nil {
+func (gi *GpuCagra[T]) SearchFloat(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) (SearchResult, error) {
+	if gi.cCagra == nil {
 		return SearchResult{}, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
 	if len(queries) == 0 || numQueries == 0 {
@@ -624,7 +639,7 @@ func (gc *GpuCagra[T]) SearchFloat(queries []float32, numQueries uint64, dimensi
 	}
 
 	res := C.gpu_cagra_search_float(
-		gc.cCagra,
+		gi.cCagra,
 		(*C.float)(unsafe.Pointer(&queries[0])),
 		C.uint64_t(numQueries),
 		C.uint32_t(dimension),
@@ -662,28 +677,28 @@ func (gc *GpuCagra[T]) SearchFloat(queries []float32, numQueries uint64, dimensi
 }
 
 // Cap returns the capacity of the index buffer
-func (gc *GpuCagra[T]) Cap() uint32 {
-	if gc.cCagra == nil {
+func (gi *GpuCagra[T]) Cap() uint32 {
+	if gi.cCagra == nil {
 		return 0
 	}
-	return uint32(C.gpu_cagra_cap(gc.cCagra))
+	return uint32(C.gpu_cagra_cap(gi.cCagra))
 }
 
 // Len returns current number of vectors in index
-func (gc *GpuCagra[T]) Len() uint32 {
-	if gc.cCagra == nil {
+func (gi *GpuCagra[T]) Len() uint32 {
+	if gi.cCagra == nil {
 		return 0
 	}
-	return uint32(C.gpu_cagra_len(gc.cCagra))
+	return uint32(C.gpu_cagra_len(gi.cCagra))
 }
 
 // Info returns detailed information about the index as a JSON string.
-func (gc *GpuCagra[T]) Info() (string, error) {
-	if gc.cCagra == nil {
+func (gi *GpuCagra[T]) Info() (string, error) {
+	if gi.cCagra == nil {
 		return "", moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
 	var errmsg *C.char
-	infoPtr := C.gpu_cagra_info(gc.cCagra, unsafe.Pointer(&errmsg))
+	infoPtr := C.gpu_cagra_info(gi.cCagra, unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))
@@ -702,8 +717,8 @@ func (gc *GpuCagra[T]) Info() (string, error) {
 
 // Extend adds more vectors to the index (single-GPU only).
 // newIDs may be nil to auto-assign sequential IDs starting from the current index size.
-func (gc *GpuCagra[T]) Extend(additionalData []T, numVectors uint64, newIDs []uint32) error {
-	if gc.cCagra == nil {
+func (gi *GpuCagra[T]) Extend(additionalData []T, numVectors uint64, newIDs []uint32) error {
+	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
 	if len(additionalData) == 0 || numVectors == 0 {
@@ -717,7 +732,7 @@ func (gc *GpuCagra[T]) Extend(additionalData []T, numVectors uint64, newIDs []ui
 
 	var errmsg *C.char
 	C.gpu_cagra_extend(
-		gc.cCagra,
+		gi.cCagra,
 		unsafe.Pointer(&additionalData[0]),
 		C.uint64_t(numVectors),
 		idsPtr,
@@ -734,7 +749,7 @@ func (gc *GpuCagra[T]) Extend(additionalData []T, numVectors uint64, newIDs []ui
 	return nil
 }
 
-// Merge combines multiple single-GPU GpuCagra indices into a new one.
+// MergeGpuCagra combines multiple single-GPU GpuCagra indices into a new one.
 func MergeGpuCagra[T VectorType](indices []*GpuCagra[T], nthread uint32, devices []int) (*GpuCagra[T], error) {
 	if len(indices) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("no indices to merge")
@@ -778,7 +793,7 @@ func MergeGpuCagra[T VectorType](indices []*GpuCagra[T], nthread uint32, devices
 	return &GpuCagra[T]{
 		cCagra:    cCagra,
 		dimension: indices[0].dimension,
-		nthread:   indices[0].nthread,
+		nthread:   nthread,
 		distMode:  indices[0].distMode,
 	}, nil
 }

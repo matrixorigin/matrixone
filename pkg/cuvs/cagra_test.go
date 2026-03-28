@@ -539,6 +539,61 @@ func TestGpuCagraMergeWithIds(t *testing.T) {
 	}
 }
 
+func TestGpuCagraDeleteId(t *testing.T) {
+	devices, err := GetGpuDeviceList()
+	if err != nil || len(devices) < 1 {
+		t.Skip("Need at least 1 GPU for deletion test")
+	}
+
+	dimension := uint32(16)
+	n_vectors := uint64(100)
+	dataset := make([]float32, n_vectors*uint64(dimension))
+	for i := uint64(0); i < n_vectors; i++ {
+		for j := uint32(0); j < dimension; j++ {
+			dataset[i*uint64(dimension)+uint64(j)] = float32(i)
+		}
+	}
+
+	bp := DefaultCagraBuildParams()
+	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
+	if err != nil {
+		t.Fatalf("Failed to create GpuCagra: %v", err)
+	}
+	defer index.Destroy()
+
+	index.Start()
+	index.Build()
+
+	// Query exactly at vector 50
+	q50 := make([]float32, dimension)
+	for i := range q50 {
+		q50[i] = 50.0
+	}
+
+	sp := DefaultCagraSearchParams()
+	r, err := index.Search(q50, 1, dimension, 1, sp)
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if r.Neighbors[0] != 50 {
+		t.Errorf("Expected neighbor 50, got %d", r.Neighbors[0])
+	}
+
+	// Delete ID 50
+	if err := index.DeleteId(50); err != nil {
+		t.Fatalf("DeleteId failed: %v", err)
+	}
+
+	// Search again
+	r, err = index.Search(q50, 1, dimension, 1, sp)
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if r.Neighbors[0] == 50 {
+		t.Errorf("Neighbor 50 was deleted but still returned")
+	}
+}
+
 func TestGpuReplicatedCagra(t *testing.T) {
 	devices, err := GetGpuDeviceList()
 	if err != nil || len(devices) < 1 {

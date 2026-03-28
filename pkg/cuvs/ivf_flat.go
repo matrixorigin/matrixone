@@ -555,6 +555,21 @@ func (gi *GpuIvfFlat[T]) Unpack(filename string) error {
 	return nil
 }
 
+// DeleteId removes an ID from the index (soft delete).
+func (gi *GpuIvfFlat[T]) DeleteId(id int64) error {
+	if gi.cIvfFlat == nil {
+		return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
+	}
+	var errmsg *C.char
+	C.gpu_ivf_flat_delete_id(gi.cIvfFlat, C.int64_t(id), unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
 // Search performs a K-Nearest Neighbor search
 func (gi *GpuIvfFlat[T]) Search(queries []T, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams) (SearchResultIvfFlat, error) {
 	if gi.cIvfFlat == nil {

@@ -83,6 +83,9 @@ void gpu_cagra_save(gpu_cagra_c index_c, const char* filename, void* errmsg);
 // Save all components (index, IDs, quantizer, bitset) to a directory + manifest.json
 void gpu_cagra_save_dir(gpu_cagra_c index_c, const char* dir, void* errmsg);
 
+// Delete ID from index (soft delete via bitset)
+void gpu_cagra_delete_id(gpu_cagra_c index_c, uint32_t id, void* errmsg);
+
 // Load all components from a directory previously written by gpu_cagra_save_dir.
 // The index must have been created (e.g. via gpu_cagra_new_empty) and started before calling this.
 void gpu_cagra_load_dir(gpu_cagra_c index_c, const char* dir, void* errmsg);
