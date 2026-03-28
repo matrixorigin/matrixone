@@ -1031,16 +1031,8 @@ func (p *baseHandle) getObjectEntries(
 			// replacement object created at the predecessor's delete timestamp.
 			tnByCreateTS[entry.CreateTime] = append(tnByCreateTS[entry.CreateTime], &entryCopy)
 			tnKeySet[entry.CreateTime] = struct{}{}
-			// TN merge objects keep row-level commit timestamps, so they can be read
-			// through the appendable-object path and filtered by [start, end].
-			//
-			// We must also seed the visible object set with the terminal TN object that
-			// is still visible at range end. After checkpoint + GC + restart, the older
-			// appendable predecessors may already be gone, leaving no object from which
-			// delete-chain resolution can discover this live replacement object.
-			if entry.DeleteTime.IsEmpty() || entry.DeleteTime.GT(&end) {
-				aobj = append(aobj, &entryCopy)
-			}
+			// After checkpoint + GC + restart, older appendable predecessors may be gone;
+			// resolveVisibleObjectsByDeleteChain sweeps for orphaned live TN objects.
 		}
 	}
 	tnCreateTSKeys = make([]types.TS, 0, len(tnKeySet))
@@ -1068,10 +1060,7 @@ func (p *baseHandle) resolveVisibleObjectsByDeleteChain(
 	isTombstone bool,
 	kind string,
 ) ([]*objectio.ObjectEntry, error) {
-	if len(visible) == 0 {
-		return visible, nil
-	}
-	if len(tnByCreateTS) == 0 {
+	if len(visible) == 0 && len(tnByCreateTS) == 0 {
 		return visible, nil
 	}
 	resolved := make([]*objectio.ObjectEntry, 0, len(visible))
@@ -1172,10 +1161,34 @@ func (p *baseHandle) resolveVisibleObjectsByDeleteChain(
 		}
 		queue = append(queue, next...)
 	}
+	// Sweep for orphaned TN objects whose appendable predecessors were GC'd.
+	// After checkpoint + GC + restart, no appendable seed remains in the visible
+	// set, so these live TN objects are never reached by chain walking above.
+	orphanCnt := 0
+	for _, objs := range tnByCreateTS {
+		for _, obj := range objs {
+			name := obj.ObjectShortName().ShortString()
+			if _, ok := visited[name]; ok {
+				continue
+			}
+			visited[name] = struct{}{}
+			if !obj.DeleteTime.IsEmpty() && obj.DeleteTime.LE(&end) {
+				continue
+			}
+			exists, err := p.objectFileExists(ctx, obj)
+			if err != nil {
+				return nil, err
+			}
+			if exists {
+				resolved = append(resolved, obj)
+				orphanCnt++
+			}
+		}
+	}
 	goSort.Slice(resolved, func(i, j int) bool {
 		return resolved[i].CreateTime.LT(&resolved[j].CreateTime)
 	})
-	if missingCnt > 0 {
+	if missingCnt > 0 || orphanCnt > 0 {
 		logutil.Info(
 			"ChangesHandle-DeleteChain resolved visible objects",
 			zap.String("kind", kind),
@@ -1185,6 +1198,7 @@ func (p *baseHandle) resolveVisibleObjectsByDeleteChain(
 			zap.Int("input-visible", len(visible)),
 			zap.Int("output-readable", len(resolved)),
 			zap.Int("missing", missingCnt),
+			zap.Int("orphan-tn", orphanCnt),
 			zap.Int("rewrite-hops", rewriteHopCnt),
 			zap.Int("fuzzy-hops", fuzzyHopCnt),
 		)
@@ -1657,16 +1671,6 @@ func getObjectsFromCheckpointEntries(
 	dataCNObj = checkpointObjectMapToSlice(dataCNObjMap, sortByCreateTime)
 	tombstoneAobj = checkpointObjectMapToSlice(tombstoneAobjMap, sortByCreateTime)
 	tombstoneCNObj = checkpointObjectMapToSlice(tombstoneCNObjMap, sortByCreateTime)
-	logutil.Info("classifyCheckpointObject-summary",
-		zap.Uint64("tid", tid),
-		zap.Int("dataAobj", len(dataAobj)),
-		zap.Int("dataCNObj", len(dataCNObj)),
-		zap.Int("tombstoneAobj", len(tombstoneAobj)),
-		zap.Int("tombstoneCNObj", len(tombstoneCNObj)),
-		zap.String("start", start.ToString()),
-		zap.String("end", end.ToString()),
-		zap.Int("selection", int(selection)),
-	)
 	return
 }
 
@@ -1676,57 +1680,40 @@ func classifyCheckpointObject(
 	start, end types.TS,
 	selection checkpointObjectSelection,
 ) checkpointObjectKind {
-	kindNames := [...]string{"Ignore", "RowCommitTS", "ConstantCommitTS"}
-	selNames := [...]string{"Recovery", "Range"}
-	result := func(kind checkpointObjectKind) checkpointObjectKind {
-		logutil.Info("classifyCheckpointObject",
-			zap.String("obj", obj.ObjectShortName().ShortString()),
-			zap.Bool("isTombstone", isTombstone),
-			zap.Bool("appendable", obj.GetAppendable()),
-			zap.Bool("cnCreated", obj.GetCNCreated()),
-			zap.String("createTime", obj.CreateTime.ToString()),
-			zap.String("deleteTime", obj.DeleteTime.ToString()),
-			zap.String("start", start.ToString()),
-			zap.String("end", end.ToString()),
-			zap.String("selection", selNames[selection]),
-			zap.String("kind", kindNames[kind]),
-		)
-		return kind
-	}
 	switch selection {
 	case checkpointObjectSelectionRange:
 		if obj.GetAppendable() {
 			if obj.CreateTime.GT(&end) {
-				return result(checkpointObjectKindIgnore)
+				return checkpointObjectKindIgnore
 			}
 			if !obj.DeleteTime.IsEmpty() && obj.DeleteTime.LT(&start) {
-				return result(checkpointObjectKindIgnore)
+				return checkpointObjectKindIgnore
 			}
-			return result(checkpointObjectKindRowCommitTS)
+			return checkpointObjectKindRowCommitTS
 		}
 		if obj.GetCNCreated() {
 			if obj.CreateTime.LT(&start) || obj.CreateTime.GT(&end) {
-				return result(checkpointObjectKindIgnore)
+				return checkpointObjectKindIgnore
 			}
-			return result(checkpointObjectKindConstantCommitTS)
+			return checkpointObjectKindConstantCommitTS
 		}
 		if obj.CreateTime.LT(&start) || obj.CreateTime.GT(&end) {
-			return result(checkpointObjectKindIgnore)
+			return checkpointObjectKindIgnore
 		}
 		// DN-created non-appendable objects may be rewritten by flush/merge, so
 		// object create time alone does not describe which rows belong to
 		// CollectChanges(start, end). Keep them on the row-commit-ts path and let
 		// the batch-level TS filter recover only the rows whose commit TS falls in
 		// the requested interval.
-		return result(checkpointObjectKindRowCommitTS)
+		return checkpointObjectKindRowCommitTS
 	default:
 		if obj.GetAppendable() && obj.CreateTime.GE(&start) {
-			return result(checkpointObjectKindRowCommitTS)
+			return checkpointObjectKindRowCommitTS
 		}
 		if obj.GetCNCreated() && obj.CreateTime.GE(&start) {
-			return result(checkpointObjectKindConstantCommitTS)
+			return checkpointObjectKindConstantCommitTS
 		}
-		return result(checkpointObjectKindIgnore)
+		return checkpointObjectKindIgnore
 	}
 }
 
