@@ -2376,6 +2376,7 @@ func FuzzParseExecuteData(f *testing.F) {
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
 	pu.SV.SkipCheckUser = true
 	pu.SV.KillRountinesInterval = 0
+	setSessionAlloc("", NewLeakCheckAllocator())
 	setPu("", pu)
 	ioses, err := NewIOSession(&testConn{}, pu, "")
 	if err != nil {
@@ -2431,6 +2432,42 @@ func FuzzParseExecuteData(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		proto.ParseExecuteData(ctx, proc, prepareStmt, data, 0)
+	})
+}
+
+func TestPrepareStmtCloseAfterBinaryParamParsing(t *testing.T) {
+	ctx := context.TODO()
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	require.NoError(t, err)
+
+	pu := config.NewParameterUnit(sv, nil, nil, nil)
+	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
+	setSessionAlloc("", NewLeakCheckAllocator())
+	setPu("", pu)
+	ioses, err := NewIOSession(&testConn{}, pu, "")
+	require.NoError(t, err)
+	proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+	proc := testutil.NewProcess(t)
+	st := tree.NewPrepareString(tree.Identifier(getPrepareStmtName(1)), "select ?")
+	stmts, err := mysql.Parse(ctx, st.Sql, 1)
+	require.NoError(t, err)
+	compCtx := plan.NewEmptyCompilerContext()
+	preparePlan, err := buildPlan(ctx, nil, compCtx, st)
+	require.NoError(t, err)
+
+	prepareStmt := &PrepareStmt{
+		Name:                preparePlan.GetDcl().GetPrepare().GetName(),
+		PreparePlan:         preparePlan,
+		PrepareStmt:         stmts[0],
+		getFromSendLongData: make(map[int]struct{}),
+	}
+
+	testData := []byte{0, 0, 0, 0, 0, 0, 1, uint8(defines.MYSQL_TYPE_TINY), 0, 10}
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt, testData, 0))
+	require.Same(t, proc, prepareStmt.proc)
+	require.NotPanics(t, func() {
+		prepareStmt.Close()
 	})
 }
 
