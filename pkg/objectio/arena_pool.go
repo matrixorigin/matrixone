@@ -63,12 +63,11 @@ func init() {
 	}
 	// ArenaSmall: serves flush workers only (GOMAXPROCS/2 goroutines).
 	arenaPools[ArenaSmall].maxCount = half
-	// ArenaLarge: serves both TN merge workers (GOMAXPROCS/2) and CN S3
-	// writers (concurrent count ≈ GOMAXPROCS).  Use GOMAXPROCS slots to
-	// keep warm arenas available under bursty load.
-	arenaPools[ArenaLarge].maxCount = procs
-	if arenaPools[ArenaLarge].maxCount < 2 {
-		arenaPools[ArenaLarge].maxCount = 2
+	// ArenaLarge: serves TN merge workers, CN S3 writers, and sinker tasks.
+	// Use 2×GOMAXPROCS slots to absorb bursty concurrent demand.
+	arenaPools[ArenaLarge].maxCount = procs * 2
+	if arenaPools[ArenaLarge].maxCount < 4 {
+		arenaPools[ArenaLarge].maxCount = 4
 	}
 }
 
