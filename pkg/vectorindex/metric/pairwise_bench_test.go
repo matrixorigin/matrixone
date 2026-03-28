@@ -38,7 +38,7 @@ func BenchmarkPairWiseDistance(b *testing.B) {
 
 	b.Run("PairWiseDistance", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			_, _ = PairWiseDistance(x, y, Metric_L2sqDistance, 0)
+			_, _ = PairWiseDistance(x, y, Metric_L2sqDistance)
 		}
 	})
 
@@ -68,7 +68,7 @@ func BenchmarkPairWiseDistanceLarge(b *testing.B) {
 
 	b.Run("PairWiseDistance-Large", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			_, _ = PairWiseDistance(x, y, Metric_L2sqDistance, 0)
+			_, _ = PairWiseDistance(x, y, Metric_L2sqDistance)
 		}
 	})
 
@@ -98,7 +98,7 @@ func BenchmarkPairwiseDistanceAsync(b *testing.B) {
 
 	b.Run("Sync", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			_, _ = PairWiseDistance(x, y, Metric_L2sqDistance, 0)
+			_, _ = PairWiseDistance(x, y, Metric_L2sqDistance)
 		}
 	})
 
@@ -106,7 +106,7 @@ func BenchmarkPairwiseDistanceAsync(b *testing.B) {
 		dist := make([]float32, nX*nY)
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			handle, err := PairwiseDistanceLaunch(x, y, Metric_L2sqDistance, 0, dist, GPUThresholdSync)
+			handle, err := PairwiseDistanceLaunch(x, y, Metric_L2sqDistance, dist, GPUThresholdSync)
 			if err != nil {
 				b.Fatal(err)
 			}

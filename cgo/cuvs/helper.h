@@ -55,9 +55,16 @@ void save_host_matrix(const std::string& filename, raft::host_matrix_view<const 
 void set_errmsg(void* errmsg, const char* context, const char* message);
 
 /**
- * @brief Get global raft resources (for ad-hoc operations).
+ * @brief Get raft resources for the given device (thread-local, one per device per thread).
+ * Also calls cudaSetDevice(device_id) to ensure the calling thread is on the right device.
  */
-const raft::resources& get_raft_resources();
+const raft::resources& get_raft_resources(int device_id = 0);
+
+/**
+ * @brief Returns the next GPU device ID in round-robin order across all visible devices.
+ * The device count is queried once and cached.
+ */
+int get_next_device_id();
 
 /**
  * @brief Convert distance type from C enum to cuVS enum.

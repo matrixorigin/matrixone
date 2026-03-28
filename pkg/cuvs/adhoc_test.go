@@ -39,7 +39,7 @@ func TestAdhocBruteForceSearch(t *testing.T) {
 	neighbors, distances, err := AdhocBruteForceSearch[float32](
 		dataset, nRows, dim,
 		queries, nQueries, limit,
-		L2Expanded, 0,
+		L2Expanded,
 	)
 
 	if err != nil {

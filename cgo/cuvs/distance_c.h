@@ -27,7 +27,10 @@ extern "C" {
 
 /**
  * @brief Performs a pairwise distance calculation on GPU.
- * 
+ *
+ * The GPU device is selected automatically using round-robin across all
+ * available devices, so callers do not need to specify a device ID.
+ *
  * @param x Host pointer to the first set of vectors (X).
  * @param n_x Number of vectors in X.
  * @param y Host pointer to the second set of vectors (Y).
@@ -35,7 +38,6 @@ extern "C" {
  * @param dim Dimension of each vector.
  * @param metric Distance metric to use.
  * @param qtype Quantization type (F32, F16).
- * @param device_id GPU device ID to use.
  * @param dist Host pointer to store the resulting distances (size: n_x * n_y).
  * @param errmsg Pointer to store error message if any.
  */
@@ -46,7 +48,6 @@ void gpu_pairwise_distance(const void* x,
                            uint32_t dim,
                            distance_type_t metric,
                            quantization_t qtype,
-                           int device_id,
                            float* dist,
                            void* errmsg);
 
@@ -57,7 +58,6 @@ uint64_t gpu_pairwise_distance_launch(const void* x,
                                      uint32_t dim,
                                      distance_type_t metric,
                                      quantization_t qtype,
-                                     int device_id,
                                      float* dist,
                                      void* errmsg);
 

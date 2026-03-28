@@ -27,7 +27,10 @@ extern "C" {
 
 /**
  * @brief Performs an ad-hoc brute-force search on GPU.
- * 
+ *
+ * The GPU device is selected automatically using round-robin across all
+ * available devices, so callers do not need to specify a device ID.
+ *
  * @param dataset Host pointer to the dataset vectors.
  * @param n_rows Number of vectors in the dataset.
  * @param dim Dimension of each vector.
@@ -36,7 +39,6 @@ extern "C" {
  * @param limit Number of nearest neighbors to find (k).
  * @param metric Distance metric to use.
  * @param qtype Quantization type (F32, F16).
- * @param device_id GPU device ID to use.
  * @param neighbors Host pointer to store the resulting neighbor IDs (size: n_queries * limit).
  * @param distances Host pointer to store the resulting distances (size: n_queries * limit).
  * @param errmsg Pointer to store error message if any.
@@ -49,7 +51,6 @@ void gpu_adhoc_brute_force_search(const void* dataset,
                                   uint32_t limit,
                                   distance_type_t metric,
                                   quantization_t qtype,
-                                  int device_id,
                                   int64_t* neighbors,
                                   float* distances,
                                   void* errmsg);
@@ -61,7 +62,6 @@ void gpu_adhoc_brute_force_search_float(const float* dataset,
                                         uint64_t n_queries,
                                         uint32_t limit,
                                         distance_type_t metric,
-                                        int device_id,
                                         int64_t* neighbors,
                                         float* distances,
                                         void* errmsg);

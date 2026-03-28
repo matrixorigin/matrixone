@@ -29,6 +29,7 @@ import (
 )
 
 // AdhocBruteForceSearch performs an ad-hoc brute-force search on GPU without using a worker thread.
+// The GPU device is selected automatically using round-robin across all available devices.
 func AdhocBruteForceSearch[T VectorType](
 	dataset []T,
 	nRows uint64,
@@ -37,7 +38,6 @@ func AdhocBruteForceSearch[T VectorType](
 	nQueries uint64,
 	limit uint32,
 	metric DistanceType,
-	deviceID int,
 ) ([]int64, []float32, error) {
 	if len(dataset) == 0 || len(queries) == 0 {
 		return nil, nil, nil
@@ -58,7 +58,6 @@ func AdhocBruteForceSearch[T VectorType](
 		C.uint32_t(limit),
 		C.distance_type_t(metric),
 		C.quantization_t(qtype),
-		C.int(deviceID),
 		(*C.int64_t)(unsafe.Pointer(&neighbors[0])),
 		(*C.float)(unsafe.Pointer(&distances[0])),
 		unsafe.Pointer(&errmsg),

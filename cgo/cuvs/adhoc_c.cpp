@@ -30,14 +30,12 @@ void gpu_adhoc_brute_force_search(const void* dataset,
                                   uint32_t limit,
                                   distance_type_t metric,
                                   quantization_t qtype,
-                                  int device_id,
                                   int64_t* neighbors,
                                   float* distances,
                                   void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        cudaSetDevice(device_id);
-        const auto& res = matrixone::get_raft_resources();
+        const auto& res = matrixone::get_raft_resources(matrixone::get_next_device_id());
         auto m = static_cast<cuvs::distance::DistanceType>(metric);
 
         if (qtype == Quantization_F32) {
@@ -69,11 +67,10 @@ void gpu_adhoc_brute_force_search_float(const float* dataset,
                                         uint64_t n_queries,
                                         uint32_t limit,
                                         distance_type_t metric,
-                                        int device_id,
                                         int64_t* neighbors,
                                         float* distances,
                                         void* errmsg) {
-    gpu_adhoc_brute_force_search(dataset, n_rows, dim, queries, n_queries, limit, metric, Quantization_F32, device_id, neighbors, distances, errmsg);
+    gpu_adhoc_brute_force_search(dataset, n_rows, dim, queries, n_queries, limit, metric, Quantization_F32, neighbors, distances, errmsg);
 }
 
 } // extern "C"

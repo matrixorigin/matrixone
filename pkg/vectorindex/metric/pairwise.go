@@ -58,7 +58,6 @@ func PairwiseDistanceLaunchCPU[T types.RealNumbers](
 	x [][]T,
 	y [][]T,
 	metric MetricType,
-	_ int, // deviceID (ignored on CPU)
 	dist []float32,
 ) (PairwiseJobHandle, error) {
 	distFn, err := ResolveDistanceFn[T](metric)

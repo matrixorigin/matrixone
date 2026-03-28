@@ -24,12 +24,14 @@
 
 namespace matrixone {
 
+
 struct gpu_job_t {
     float* host_dist;
     int64_t n_x;
     int64_t n_y;
     cudaStream_t stream;
     void* d_ptr;
+    int device_id;
 };
 
 class gpu_job_mgr_t {
@@ -40,11 +42,11 @@ public:
     }
 
     uint64_t add_job(gpu_job_t job) {
-        uint64_t id = next_id_++;
-        if (next_id_.load() >= (uint64_t(1) << 63)) {
-            next_id_.store(1);
-        }
         std::lock_guard<std::mutex> lock(mu_);
+        uint64_t id = next_id_++;
+        if (next_id_ >= (uint64_t(1) << 63)) {
+            next_id_ = 1;
+        }
         jobs_[id] = std::move(job);
         return id;
     }
@@ -59,7 +61,7 @@ public:
     }
 
 private:
-    std::atomic<uint64_t> next_id_{1};
+    uint64_t next_id_{1};
     std::unordered_map<uint64_t, gpu_job_t> jobs_;
     std::mutex mu_;
 };
@@ -75,19 +77,14 @@ void gpu_pairwise_distance(const void* x,
                            uint32_t dim,
                            distance_type_t metric,
                            quantization_t qtype,
-                           int device_id,
                            float* dist,
                            void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         if (!x || !y || !dist || n_x == 0 || n_y == 0 || dim == 0) return;
 
-        static thread_local int current_device = -1;
-        if (current_device != device_id) {
-            RAFT_CUDA_TRY(cudaSetDevice(device_id));
-            current_device = device_id;
-        }
-        const raft::resources& res = matrixone::get_raft_resources();
+        int device_id = matrixone::get_next_device_id();
+        const raft::resources& res = matrixone::get_raft_resources(device_id);
 
         if (qtype == Quantization_F32) {
             matrixone::pairwise_distance<float>(res, static_cast<const float*>(x), n_x, static_cast<const float*>(y), n_y, dim, metric, dist);
@@ -109,19 +106,14 @@ uint64_t gpu_pairwise_distance_launch(const void* x,
                                      uint32_t dim,
                                      distance_type_t metric,
                                      quantization_t qtype,
-                                     int device_id,
                                      float* dist,
                                      void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         if (!x || !y || !dist || n_x == 0 || n_y == 0 || dim == 0) return 0;
 
-        static thread_local int current_device = -1;
-        if (current_device != device_id) {
-            RAFT_CUDA_TRY(cudaSetDevice(device_id));
-            current_device = device_id;
-        }
-        const raft::resources& res = matrixone::get_raft_resources();
+        int device_id = matrixone::get_next_device_id();
+        const raft::resources& res = matrixone::get_raft_resources(device_id);
 
         // 1. Setup job state
         matrixone::gpu_job_t job;
@@ -130,6 +122,7 @@ uint64_t gpu_pairwise_distance_launch(const void* x,
         job.n_y = (int64_t)n_y;
         job.stream = raft::resource::get_cuda_stream(res);
         job.d_ptr = nullptr;
+        job.device_id = device_id;
 
         // 2. Launch kernels asynchronously
         if (qtype == Quantization_F32) {
@@ -153,12 +146,18 @@ void gpu_pairwise_distance_wait(uint64_t job_id, void* errmsg) {
     try {
         if (job_id == 0) return;
         auto job = matrixone::gpu_job_mgr_t::get().get_job(job_id);
-        
+
+        // cudaStreamSynchronize is device-agnostic: the stream carries its own
+        // device context so no cudaSetDevice is needed here.
         // 1. Synchronize the stream to ensure copies are finished
         RAFT_CUDA_TRY(cudaStreamSynchronize(job.stream));
 
-        // 2. Free device buffers
+        // 2. Free device buffers.
+        // cudaFreeAsync behaviour for cross-device callers is not guaranteed
+        // across all driver versions, so explicitly set the correct device
+        // before freeing for maximum compatibility.
         if (job.d_ptr) {
+            RAFT_CUDA_TRY(cudaSetDevice(job.device_id));
             RAFT_CUDA_TRY(cudaFreeAsync(job.d_ptr, job.stream));
             // Sync again so the free is complete before returning.
             RAFT_CUDA_TRY(cudaStreamSynchronize(job.stream));

@@ -57,7 +57,6 @@ func PairWiseDistance[T types.RealNumbers](
 	x [][]T,
 	y [][]T,
 	metric MetricType,
-	deviceID int,
 ) ([]float32, error) {
 	nX := len(x)
 	nY := len(y)
@@ -75,7 +74,7 @@ func PairWiseDistance[T types.RealNumbers](
 	var zero T
 	if _, isF32 := any(zero).(float32); isF32 {
 		res := make([]float32, nX*nY)
-		handle, err := PairwiseDistanceLaunch(x, y, metric, deviceID, res, GPUThresholdSync)
+		handle, err := PairwiseDistanceLaunch(x, y, metric, res, GPUThresholdSync)
 		if err != nil {
 			return nil, err
 		}
@@ -143,7 +142,6 @@ func PairwiseDistanceLaunch[T types.RealNumbers](
 	x [][]T,
 	y [][]T,
 	metric MetricType,
-	deviceID int,
 	dist []float32,
 	minWorkSize uint64,
 ) (PairwiseJobHandle, error) {
@@ -197,7 +195,6 @@ func PairwiseDistanceLaunch[T types.RealNumbers](
 			uint64(nY),
 			uint32(dim),
 			cuvsMetric,
-			deviceID,
 			dist,
 		)
 		if err != nil {
@@ -212,7 +209,7 @@ func PairwiseDistanceLaunch[T types.RealNumbers](
 		return PairwiseJobHandle(gpuID), nil
 	}
 
-	return PairwiseDistanceLaunchCPU(x, y, metric, deviceID, dist)
+	return PairwiseDistanceLaunchCPU(x, y, metric, dist)
 }
 
 // PairwiseDistanceWait waits for the completion of the asynchronous GPU distance

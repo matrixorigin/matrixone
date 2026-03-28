@@ -43,7 +43,7 @@ func TestPairWiseDistance(t *testing.T) {
 
 	for _, m := range metrics {
 		t.Run(MetricTypeToDistFuncName[m], func(t *testing.T) {
-			dist, err := PairWiseDistance(x, y, m, 0)
+			dist, err := PairWiseDistance(x, y, m)
 			require.NoError(t, err)
 			require.Equal(t, nX*nY, len(dist))
 

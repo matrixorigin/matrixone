@@ -7801,7 +7801,7 @@ func batchArrayDistanceSync[T types.RealNumbers](
 	}
 
 	dist := make([]float32, length)
-	handle, err := metric.PairwiseDistanceLaunch(x, y, m, 0 /*deviceID*/, dist, metric.GPUThresholdSQL)
+	handle, err := metric.PairwiseDistanceLaunch(x, y, m, dist, metric.GPUThresholdSQL)
 	if err != nil {
 		return nil, false, err
 	}

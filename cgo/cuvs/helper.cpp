@@ -15,6 +15,7 @@
  */
 
 #include "helper.h"
+#include <unordered_map>
 #include <raft/core/resource/comms.hpp>
 #include <raft/core/resource/nccl_comm.hpp>
 #include <raft/core/resource/multi_gpu.hpp>
@@ -79,9 +80,30 @@ void set_errmsg(void* errmsg, const char* context, const char* message) {
     *err_ptr_ptr = strdup(full_msg.c_str());
 }
 
-const raft::resources& get_raft_resources() {
-    thread_local raft::resources res;
-    return res;
+int get_next_device_id() {
+    static std::atomic<uint64_t> counter{0};
+    static const int device_count = []() {
+        int n = 0;
+        return (cudaGetDeviceCount(&n) == cudaSuccess && n > 0) ? n : 1;
+    }();
+    return static_cast<int>(counter.fetch_add(1, std::memory_order_relaxed) % static_cast<uint64_t>(device_count));
+}
+
+const raft::resources& get_raft_resources(int device_id) {
+    thread_local std::unordered_map<int, raft::resources> res_map;
+    thread_local int current_device = -1;
+    if (current_device != device_id) {
+        // Set the device before accessing (or lazily creating) resources for it,
+        // so the CUDA stream inside raft::resources is bound to the right device.
+        RAFT_CUDA_TRY(cudaSetDevice(device_id));
+        current_device = device_id;
+    }
+    // WARNING: cudaSetDevice() above leaves this thread's current CUDA device
+    // set to device_id as a side effect.  Any bare CUDA allocation or kernel
+    // launch made on this thread *after* this call (without an explicit stream
+    // or another cudaSetDevice) will silently target device_id.  Always use
+    // explicit streams for device operations after calling this function.
+    return res_map[device_id];
 }
 
 cuvs::distance::DistanceType convert_distance_type(distance_type_t metric_c) {

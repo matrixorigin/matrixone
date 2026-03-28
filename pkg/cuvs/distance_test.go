@@ -40,7 +40,7 @@ func TestPairwiseDistance(t *testing.T) {
 		x, nX,
 		y, nY,
 		dim,
-		L2Expanded, 0,
+		L2Expanded,
 	)
 
 	if err != nil {
@@ -77,7 +77,7 @@ func TestPairwiseDistanceAsync(t *testing.T) {
 		x, nX,
 		y, nY,
 		dim,
-		L2Expanded, 0,
+		L2Expanded,
 		dist,
 	)
 

@@ -522,7 +522,6 @@ func HandleOrderByLimitOnIVFFlatIndexLaunch(
 			lhs,
 			[][]float32{rhs},
 			orderByLimit.MetricType,
-			0, // Default deviceID
 			pairwiseDists,
 			minWorkSize,
 		)
@@ -560,7 +559,6 @@ func HandleOrderByLimitOnIVFFlatIndexLaunch(
 			lhs,
 			[][]float64{rhs},
 			orderByLimit.MetricType,
-			0, // Default deviceID
 			pairwiseDists,
 			minWorkSize,
 		)

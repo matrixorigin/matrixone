@@ -30,6 +30,7 @@ import (
 )
 
 // PairwiseDistance performs a pairwise distance calculation on GPU.
+// The GPU device is selected automatically using round-robin across all available devices.
 func PairwiseDistance[T VectorType](
 	x []T,
 	nX uint64,
@@ -37,7 +38,6 @@ func PairwiseDistance[T VectorType](
 	nY uint64,
 	dim uint32,
 	metric DistanceType,
-	deviceID int,
 ) ([]float32, error) {
 	if len(x) == 0 || len(y) == 0 {
 		return nil, nil
@@ -55,7 +55,6 @@ func PairwiseDistance[T VectorType](
 		C.uint32_t(dim),
 		C.distance_type_t(metric),
 		C.quantization_t(qtype),
-		C.int(deviceID),
 		(*C.float)(unsafe.Pointer(&dist[0])),
 		unsafe.Pointer(&errmsg),
 	)
@@ -73,6 +72,7 @@ func PairwiseDistance[T VectorType](
 }
 
 // PairwiseDistanceLaunch launches a pairwise distance calculation on GPU asynchronously.
+// The GPU device is selected automatically using round-robin across all available devices.
 func PairwiseDistanceLaunch[T VectorType](
 	x []T,
 	nX uint64,
@@ -80,7 +80,6 @@ func PairwiseDistanceLaunch[T VectorType](
 	nY uint64,
 	dim uint32,
 	metric DistanceType,
-	deviceID int,
 	dist []float32,
 ) (uint64, error) {
 	if len(x) == 0 || len(y) == 0 || len(dist) < int(nX*nY) {
@@ -98,7 +97,6 @@ func PairwiseDistanceLaunch[T VectorType](
 		C.uint32_t(dim),
 		C.distance_type_t(metric),
 		C.quantization_t(qtype),
-		C.int(deviceID),
 		(*C.float)(unsafe.Pointer(&dist[0])),
 		unsafe.Pointer(&errmsg),
 	)

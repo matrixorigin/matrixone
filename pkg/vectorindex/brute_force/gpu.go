@@ -152,11 +152,10 @@ func (idx *GpuAdhocBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries
 		return nil, nil, nil
 	}
 
-	deviceID := 0
 	neighbors, distances, err := cuvs.AdhocBruteForceSearch[T](
 		idx.dataset, uint64(idx.count), uint32(idx.dimension),
 		flattenedQueries, nQueries, uint32(rt.Limit),
-		resolveCuvsDistance(idx.metric), deviceID,
+		resolveCuvsDistance(idx.metric),
 	)
 	if err != nil {
 		return nil, nil, err

@@ -30,7 +30,6 @@ func PairWiseDistance[T types.RealNumbers](
 	x [][]T,
 	y [][]T,
 	metric MetricType,
-	_ int,
 ) ([]float32, error) {
 	return GoPairWiseDistance(x, y, metric)
 }
@@ -39,11 +38,10 @@ func PairwiseDistanceLaunch[T types.RealNumbers](
 	x [][]T,
 	y [][]T,
 	metric MetricType,
-	deviceID int,
 	dist []float32,
 	_ uint64, // minWorkSize: ignored, CPU is always used in non-gpu builds
 ) (PairwiseJobHandle, error) {
-	return PairwiseDistanceLaunchCPU(x, y, metric, deviceID, dist)
+	return PairwiseDistanceLaunchCPU(x, y, metric, dist)
 }
 
 func PairwiseDistanceWait(handle PairwiseJobHandle, metric MetricType) ([]float32, error) {
