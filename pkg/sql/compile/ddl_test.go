@@ -30,6 +30,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -46,6 +47,62 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func TestCloneCreateIndexForPartitionDeepCopiesIndexMetadata(t *testing.T) {
+	qry := &plan2.CreateIndex{
+		Table: "source_table",
+		Index: &plan2.CreateTable{
+			TableDef: &plan2.TableDef{
+				Name: "idx_meta",
+				Indexes: []*plan2.IndexDef{
+					{IndexTableName: "idx_table"},
+				},
+			},
+			IndexTables: []*plan2.TableDef{
+				{Name: "idx_table"},
+			},
+		},
+	}
+	partitionTableDef := &plan2.TableDef{Name: "partition_table"}
+
+	cloned := cloneCreateIndexForPartition(qry, "partition_table", "p1", partitionTableDef)
+
+	require.Equal(t, "partition_table", cloned.Table)
+	require.Same(t, partitionTableDef, cloned.TableDef)
+	require.Equal(t, "idx_table_p1", cloned.Index.IndexTables[0].Name)
+	require.Equal(t, "idx_table_p1", cloned.Index.TableDef.Indexes[0].IndexTableName)
+	require.Equal(t, "source_table", qry.Table)
+	require.Equal(t, "idx_table", qry.Index.IndexTables[0].Name)
+	require.Equal(t, "idx_table", qry.Index.TableDef.Indexes[0].IndexTableName)
+}
+
+func TestUpdateRefChildTableConstraintIDsUpdatesAllMatches(t *testing.T) {
+	ct := &engine.ConstraintDef{
+		Cts: []engine.Constraint{
+			&engine.RefChildTableDef{Tables: []uint64{10, 20, 10}},
+			&engine.RefChildTableDef{Tables: []uint64{30, 10}},
+		},
+	}
+
+	updated := updateRefChildTableConstraintIDs(ct, 10, 99)
+
+	require.True(t, updated)
+	require.Equal(t, []uint64{99, 20, 99}, ct.Cts[0].(*engine.RefChildTableDef).Tables)
+	require.Equal(t, []uint64{30, 99}, ct.Cts[1].(*engine.RefChildTableDef).Tables)
+}
+
+func TestUpdateRefChildTableConstraintIDsReturnsFalseWithoutMatch(t *testing.T) {
+	ct := &engine.ConstraintDef{
+		Cts: []engine.Constraint{
+			&engine.RefChildTableDef{Tables: []uint64{10, 20}},
+		},
+	}
+
+	updated := updateRefChildTableConstraintIDs(ct, 99, 77)
+
+	require.False(t, updated)
+	require.Equal(t, []uint64{10, 20}, ct.Cts[0].(*engine.RefChildTableDef).Tables)
+}
 
 func Test_lockIndexTable(t *testing.T) {
 	ctrl := gomock.NewController(t)

@@ -173,31 +173,10 @@ func checkPipelineStandaloneExecutableAtRemote(s *Scope) bool {
 }
 
 func prepareRemoteRunSendingData(sqlStr string, s *Scope) (scopeData []byte, withoutOutput bool, processData []byte, err error) {
-	// if simpleRun is true, it indicates that this pipeline will not produce any output.
-	withoutOutput = true
-
-	// if the last operator is a sender operator, we need to keep it in local for sending batch to its receivers correctly.
-	if lastOpType := s.RootOp.OpType(); lastOpType == vm.Connector || lastOpType == vm.Dispatch {
-		withoutOutput = false
-
-		originRoot := s.RootOp
-		if originRoot.GetOperatorBase().NumChildren() == 0 {
-			s.RootOp = nil
-		} else {
-			s.RootOp = originRoot.GetOperatorBase().GetChildren(0)
-		}
-
-		// todo: the following code to set children to nil must be a bug.
-		// 		but I kept it here because there will be an operator release twice bug once I remove this code.
-		//		I cannot find it why, maybe two scopes hold the same operator list pointer.
-		originRoot.GetOperatorBase().SetChildren(nil)
-		defer func() {
-			s.doSetRootOperator(originRoot)
-		}()
-	}
+	encodedScope, withoutOutput := getScopeForRemoteRunEncoding(s)
 
 	// Encode the ScopeList which need to be sent.
-	if scopeData, err = encodeScope(s); err != nil {
+	if scopeData, err = encodeScope(encodedScope); err != nil {
 		return nil, false, nil, err
 	}
 
@@ -283,20 +262,16 @@ func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClien
 	if err = fakeValueScanOperator.Prepare(s.Proc); err != nil {
 		return err
 	}
-
-	oldChildren := arg.Children
-	arg.Children = nil
-	arg.AppendChild(fakeValueScanOperator)
+	dispatchRunner := buildRemoteDispatchReceiverRoot(arg, fakeValueScanOperator)
 	defer func() {
-		arg.Children = oldChildren
 		fakeValueScanOperator.Batchs = nil
 		fakeValueScanOperator.Release()
 	}()
 
-	if err = s.RootOp.Prepare(s.Proc); err != nil {
+	if err = dispatchRunner.Prepare(s.Proc); err != nil {
 		return err
 	}
-	dispatchAnalyze := s.RootOp.GetOperatorBase().OpAnalyzer
+	dispatchAnalyze := dispatchRunner.GetOperatorBase().OpAnalyzer
 
 	mp := s.Proc.Mp()
 	for {
@@ -308,12 +283,47 @@ func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClien
 		dispatchAnalyze.Network(bat)
 		fakeValueScanOperator.Batchs = append(fakeValueScanOperator.Batchs, bat)
 
-		result, errCall := vm.Exec(s.RootOp, s.Proc)
+		result, errCall := vm.Exec(dispatchRunner, s.Proc)
 		bat.Clean(mp)
 		if errCall != nil || result.Status == vm.ExecStop {
 			return errCall
 		}
 	}
+}
+
+func getScopeForRemoteRunEncoding(s *Scope) (*Scope, bool) {
+	withoutOutput := true
+	if s.RootOp == nil {
+		return s, withoutOutput
+	}
+
+	if lastOpType := s.RootOp.OpType(); lastOpType == vm.Connector || lastOpType == vm.Dispatch {
+		withoutOutput = false
+		copied := *s
+		if s.RootOp.GetOperatorBase().NumChildren() == 0 {
+			copied.RootOp = nil
+		} else {
+			copied.RootOp = s.RootOp.GetOperatorBase().GetChildren(0)
+		}
+		return &copied, withoutOutput
+	}
+	return s, withoutOutput
+}
+
+func buildRemoteDispatchReceiverRoot(arg *dispatch.Dispatch, child vm.Operator) *dispatch.Dispatch {
+	copied := dispatch.NewArgument()
+	copied.IsSink = arg.IsSink
+	copied.RecSink = arg.RecSink
+	copied.RecCTE = arg.RecCTE
+	copied.ShuffleType = arg.ShuffleType
+	copied.FuncId = arg.FuncId
+	copied.LocalRegs = arg.LocalRegs
+	copied.RemoteRegs = arg.RemoteRegs
+	copied.ShuffleRegIdxLocal = arg.ShuffleRegIdxLocal
+	copied.ShuffleRegIdxRemote = arg.ShuffleRegIdxRemote
+	copied.OperatorBase.OperatorInfo = arg.OperatorBase.OperatorInfo
+	copied.AppendChild(child)
+	return copied
 }
 
 // messageSenderOnClient support a series of methods

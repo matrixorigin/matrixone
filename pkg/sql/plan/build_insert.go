@@ -297,24 +297,21 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		sourceStep = builder.appendStep(lastNodeId)
 
 		// append plans like update
-		updateBindCtx := NewBindContext(builder, nil)
-		upPlanCtx := getDmlPlanCtx()
-		upPlanCtx.objRef = objRef
-		upPlanCtx.tableDef = tableDef
-		upPlanCtx.beginIdx = 0
-		upPlanCtx.sourceStep = sourceStep
-		upPlanCtx.isMulti = false
-		upPlanCtx.updateColLength = updateColLength
-		upPlanCtx.rowIdPos = rowIdPos
-		upPlanCtx.insertColPos = insertColPos
-		upPlanCtx.updateColPosMap = updateColPosMap
-		upPlanCtx.updatePkCol = updatePkCol
-
-		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx, true)
+		err = buildInsertOnDuplicateUpdatePlans(
+			ctx,
+			builder,
+			objRef,
+			tableDef,
+			sourceStep,
+			updateColLength,
+			rowIdPos,
+			insertColPos,
+			updateColPosMap,
+			updatePkCol,
+		)
 		if err != nil {
 			return nil, err
 		}
-		putDmlPlanCtx(upPlanCtx)
 
 		query.StmtType = plan.Query_UPDATE
 	} else {
@@ -339,6 +336,40 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 			Query: query,
 		},
 	}, err
+}
+
+var buildInsertGetDmlPlanCtx = getDmlPlanCtx
+var buildInsertPutDmlPlanCtx = putDmlPlanCtx
+var buildInsertUpdatePlans = buildUpdatePlans
+
+func buildInsertOnDuplicateUpdatePlans(
+	ctx CompilerContext,
+	builder *QueryBuilder,
+	objRef *ObjectRef,
+	tableDef *TableDef,
+	sourceStep int32,
+	updateColLength int,
+	rowIdPos int,
+	insertColPos []int,
+	updateColPosMap map[string]int,
+	updatePkCol bool,
+) error {
+	updateBindCtx := NewBindContext(builder, nil)
+	upPlanCtx := buildInsertGetDmlPlanCtx()
+	defer buildInsertPutDmlPlanCtx(upPlanCtx)
+
+	upPlanCtx.objRef = objRef
+	upPlanCtx.tableDef = tableDef
+	upPlanCtx.beginIdx = 0
+	upPlanCtx.sourceStep = sourceStep
+	upPlanCtx.isMulti = false
+	upPlanCtx.updateColLength = updateColLength
+	upPlanCtx.rowIdPos = rowIdPos
+	upPlanCtx.insertColPos = insertColPos
+	upPlanCtx.updateColPosMap = updateColPosMap
+	upPlanCtx.updatePkCol = updatePkCol
+
+	return buildInsertUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx, true)
 }
 
 // ------------------- pk filter relatived -------------------
