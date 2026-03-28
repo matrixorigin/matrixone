@@ -445,6 +445,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			NBucket:      t.Nbucket,
 			// deleteCtx
 			RowIdIdx:        int32(t.DeleteCtx.RowIdIdx),
+			CanTruncate:     t.DeleteCtx.CanTruncate,
 			AddAffectedRows: t.DeleteCtx.AddAffectedRows,
 			Ref:             t.DeleteCtx.Ref,
 			PrimaryKeyIdx:   int32(t.DeleteCtx.PrimaryKeyIdx),
