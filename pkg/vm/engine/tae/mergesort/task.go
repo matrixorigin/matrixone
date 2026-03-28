@@ -40,6 +40,11 @@ import (
 
 var transferSlabPool = sync.Pool{}
 
+// maxPoolSlabBytes is the maximum slab size (in bytes) that will be returned
+// to the pool. Larger slabs are left for GC to avoid bloating inuse_space.
+// 4 MB ≈ 500 blocks × 8192 rows × 1 entry (8 bytes each) = ~500 k entries.
+const maxPoolSlabEntries = 4 * 1024 * 1024 / 8 // 4 MB / sizeof(TransferDestPos)
+
 // getTransferSlab returns a slab of at least size entries from the pool,
 // with all ObjIdx fields initialized to NoTransfer.
 func getTransferSlab(size int) []api.TransferDestPos {
@@ -60,9 +65,10 @@ func getTransferSlab(size int) []api.TransferDestPos {
 	return slab
 }
 
-// putTransferSlab returns a slab to the pool.
+// putTransferSlab returns a slab to the pool if it's small enough.
+// Large slabs are dropped to avoid bloating inuse_space in sync.Pool.
 func putTransferSlab(slab []api.TransferDestPos) {
-	if slab == nil {
+	if slab == nil || cap(slab) > maxPoolSlabEntries {
 		return
 	}
 	transferSlabPool.Put(slab)
