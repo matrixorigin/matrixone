@@ -1639,8 +1639,16 @@ func buildTablePairFromCache(
 	snapshot types.TS,
 	onlyUpdateTS bool,
 ) (tbl tablePair, ok bool) {
+	distEng := eng.(*Engine)
+	ccache := distEng.GetLatestCatalogCache()
+	snapshotTS := snapshot.ToTimestamp()
+	if distEng.pClient.lazyCatalog != nil && distEng.pClient.lazyCatalog.isEnabled() {
+		if !ccache.CanServe(snapshot) || !distEng.PushClient().CanServeAccount(uint32(accId), snapshotTS) {
+			return
+		}
+	}
 
-	item := eng.(*Engine).GetLatestCatalogCache().GetTableByIdAndTime(uint32(accId), dbId, tblId, snapshot.ToTimestamp())
+	item := ccache.GetTableByIdAndTime(uint32(accId), dbId, tblId, snapshotTS)
 	return buildTablePairFromItem(item, accId, dbId, tblId, snapshot, onlyUpdateTS)
 }
 

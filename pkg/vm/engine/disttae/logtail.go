@@ -59,7 +59,7 @@ func consumeEntry(
 	}
 
 	// Maintain catalog identities and prepared-plan metadata generations.
-	if (!catalog.IsSystemTable(e.TableId) &&
+	if (!catalog.IsLazyCatalogTableID(e.TableId) &&
 		!isPreparedMetadataTable(e.DatabaseName, e.TableName)) ||
 		logtailreplay.IsMetaEntry(e.TableName) ||
 		e.EntryType == api.Entry_DataObject ||
@@ -71,7 +71,20 @@ func consumeEntry(
 		return nil
 	}
 
-	applyToCatalogCache(cache, e)
+	lc := engine.PushClient().lazyCatalog
+	if lc != nil {
+		accountID, shouldDelay, err := lc.shouldDelayCatalogCacheApplyEntry(*e)
+		if err != nil {
+			return err
+		}
+		if shouldDelay && lc.delayAccountCacheApply(accountID, func() { applyToCatalogCache(cache, e) }) {
+			return nil
+		}
+	}
+
+	engine.PushClient().applyCatalogCacheChange(func() {
+		applyToCatalogCache(cache, e)
+	})
 	return nil
 }
 

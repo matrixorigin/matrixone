@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -58,4 +59,31 @@ func TestMoTablesLogicalIDIndexPrimaryColumnType(t *testing.T) {
 	}
 
 	t.Fatal("logical ID index primary column definition not found")
+}
+
+func TestBuildMoDatabaseBatchQuery(t *testing.T) {
+	require.Equal(t, MoDatabaseBatchQuery, BuildMoDatabaseBatchQuery(nil))
+	require.Equal(
+		t,
+		MoDatabaseBatchQuery+" and "+SystemDBAttr_AccID+" in (0,10)",
+		BuildMoDatabaseBatchQuery([]uint32{0, 10}),
+	)
+}
+
+func TestBuildMoTablesBatchQuery(t *testing.T) {
+	require.Equal(t, MoTablesBatchQuery, BuildMoTablesBatchQuery(nil))
+	require.Equal(
+		t,
+		MoTablesBatchQuery+" and "+SystemRelAttr_AccID+" in (1)",
+		BuildMoTablesBatchQuery([]uint32{1}),
+	)
+}
+
+func TestBuildMoColumnsBatchQuery(t *testing.T) {
+	require.Equal(t, MoColumnsBatchQuery, BuildMoColumnsBatchQuery(nil))
+	require.Equal(
+		t,
+		strings.Replace(MoColumnsBatchQuery, " order by ", " and "+SystemColAttr_AccID+" in (1,2) order by ", 1),
+		BuildMoColumnsBatchQuery([]uint32{1, 2}),
+	)
 }
