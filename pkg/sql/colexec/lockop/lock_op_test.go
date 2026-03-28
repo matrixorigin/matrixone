@@ -701,14 +701,14 @@ func TestCopyTargetsFrom(t *testing.T) {
 
 	// Add targets to source
 	src.AddLockTarget(
-		100,                        // tableID
+		100, // tableID
 		&plan.ObjectRef{SchemaName: "test", ObjName: "t1"},
-		0,                          // primaryColumnIndexInBatch
-		types.T_int64.ToType(),     // primaryColumnType
-		-1,                         // partitionColIndexInBatch
-		1,                          // refreshTimestampIndexInBatch
-		nil,                        // lockRows
-		false,                      // lockTableAtTheEnd
+		0,                      // primaryColumnIndexInBatch
+		types.T_int64.ToType(), // primaryColumnType
+		-1,                     // partitionColIndexInBatch
+		1,                      // refreshTimestampIndexInBatch
+		nil,                    // lockRows
+		false,                  // lockTableAtTheEnd
 	)
 	src.AddLockTarget(
 		200,
