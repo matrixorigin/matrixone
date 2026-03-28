@@ -206,6 +206,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.NonEqCond = t.NonEqCond
 		op.JoinMapTag = t.JoinMapTag
 		op.JoinType = t.JoinType
+		op.MarkPos = t.MarkPos
 		op.SetInfo(&info)
 		return op
 

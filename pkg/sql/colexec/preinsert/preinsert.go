@@ -66,6 +66,11 @@ func (preInsert *PreInsert) Prepare(proc *process.Process) (err error) {
 	if preInsert.ClusterByExpr != nil && preInsert.ctr.clusterByExecutor == nil {
 		preInsert.ctr.clusterByExecutor, err = colexec.NewExpressionExecutor(proc, preInsert.ClusterByExpr)
 		if err != nil {
+			// Clean up compPkExecutor if ClusterByExpr initialization fails
+			if preInsert.ctr.compPkExecutor != nil {
+				preInsert.ctr.compPkExecutor.Free()
+				preInsert.ctr.compPkExecutor = nil
+			}
 			return
 		}
 	}
