@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
@@ -57,6 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
@@ -299,6 +301,87 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 	proc := &process.Process{}
 	proc.Base = &process.BaseProcess{}
 
+	t.Run("OnDuplicateKey_IsIgnore", func(t *testing.T) {
+		op := &onduplicatekey.OnDuplicatekey{
+			IsIgnore:       true,
+			InsertColCount: 3,
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.True(t, pipeInstr.OnDuplicateKey.IsIgnore)
+
+		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+		require.NoError(t, err)
+		restoredOp := restored.(*onduplicatekey.OnDuplicatekey)
+		require.True(t, restoredOp.IsIgnore)
+		require.Equal(t, int32(3), restoredOp.InsertColCount)
+	})
+
+	t.Run("FuzzyFilter_BuildIdx", func(t *testing.T) {
+		op := &fuzzyfilter.FuzzyFilter{
+			N:        42.5,
+			PkName:   "pk",
+			BuildIdx: 7,
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.Equal(t, int32(7), pipeInstr.FuzzyFilter.BuildIdx)
+
+		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+		require.NoError(t, err)
+		restoredOp := restored.(*fuzzyfilter.FuzzyFilter)
+		require.Equal(t, 7, restoredOp.BuildIdx)
+		require.Equal(t, "pk", restoredOp.PkName)
+	})
+
+	t.Run("MultiUpdate_PartitionCols", func(t *testing.T) {
+		op := &multi_update.MultiUpdate{
+			MultiUpdateCtx: []*multi_update.MultiUpdateCtx{
+				{
+					ObjRef:        &plan.ObjectRef{ObjName: "t1"},
+					TableDef:      &plan.TableDef{Name: "t1"},
+					InsertCols:    []int{0, 1, 2},
+					DeleteCols:    []int{3, 4},
+					PartitionCols: []int{5, 6},
+				},
+			},
+			Action: multi_update.UpdateWriteTable,
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.Len(t, pipeInstr.MultiUpdate.UpdateCtxList[0].PartitionCols, 2)
+
+		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+		require.NoError(t, err)
+		restoredOp := restored.(*multi_update.MultiUpdate)
+		require.Equal(t, []int{5, 6}, restoredOp.MultiUpdateCtx[0].PartitionCols)
+		require.Equal(t, []int{0, 1, 2}, restoredOp.MultiUpdateCtx[0].InsertCols)
+		require.Equal(t, []int{3, 4}, restoredOp.MultiUpdateCtx[0].DeleteCols)
+		require.True(t, restoredOp.IsRemote)
+	})
+
+	t.Run("Deletion_Engine", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		op := &deletion.Deletion{
+			DeleteCtx: &deletion.DeleteCtx{
+				RowIdIdx:      2,
+				PrimaryKeyIdx: 0,
+				Ref:           &plan.ObjectRef{ObjName: "t1"},
+			},
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+
+		mockEng := mock_frontend.NewMockEngine(ctrl)
+		restored, err := convertToVmOperator(pipeInstr, ctx, mockEng)
+		require.NoError(t, err)
+		restoredOp := restored.(*deletion.Deletion)
+		require.Equal(t, mockEng, restoredOp.DeleteCtx.Engine)
+		require.Equal(t, 2, restoredOp.DeleteCtx.RowIdIdx)
+	})
+
 	t.Run("Deletion_CanTruncate", func(t *testing.T) {
 		op := &deletion.Deletion{
 			DeleteCtx: &deletion.DeleteCtx{
@@ -320,6 +403,50 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, 1, restoredOp.DeleteCtx.RowIdIdx)
 		require.Equal(t, 0, restoredOp.DeleteCtx.PrimaryKeyIdx)
 		require.True(t, restoredOp.DeleteCtx.AddAffectedRows)
+	})
+
+	t.Run("Insert_Engine", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		op := &insert.Insert{
+			InsertCtx: &insert.InsertCtx{
+				Ref:      &plan.ObjectRef{ObjName: "t1"},
+				TableDef: &plan.TableDef{Name: "t1"},
+				Attrs:    []string{"a", "b"},
+			},
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+
+		mockEng := mock_frontend.NewMockEngine(ctrl)
+		restored, err := convertToVmOperator(pipeInstr, ctx, mockEng)
+		require.NoError(t, err)
+		restoredOp := restored.(*insert.Insert)
+		require.Equal(t, mockEng, restoredOp.InsertCtx.Engine)
+		require.Equal(t, []string{"a", "b"}, restoredOp.InsertCtx.Attrs)
+	})
+
+	t.Run("MultiUpdate_Engine", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		op := &multi_update.MultiUpdate{
+			MultiUpdateCtx: []*multi_update.MultiUpdateCtx{
+				{
+					ObjRef:   &plan.ObjectRef{ObjName: "t1"},
+					TableDef: &plan.TableDef{Name: "t1"},
+				},
+			},
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+
+		mockEng := mock_frontend.NewMockEngine(ctrl)
+		restored, err := convertToVmOperator(pipeInstr, ctx, mockEng)
+		require.NoError(t, err)
+		restoredOp := restored.(*multi_update.MultiUpdate)
+		require.Equal(t, mockEng, restoredOp.Engine)
 	})
 }
 func Test_convertToProcessLimitation(t *testing.T) {
