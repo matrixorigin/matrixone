@@ -205,6 +205,40 @@ void gpu_ivf_flat_build(gpu_ivf_flat_c index_c, void* errmsg) {
     }
 }
 
+void gpu_ivf_flat_extend(gpu_ivf_flat_c index_c, const void* new_data, uint64_t n_rows,
+                         const int64_t* new_ids, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_ivf_flat_any_t*>(index_c);
+        switch (any->qtype) {
+            case Quantization_F32:  static_cast<gpu_ivf_flat_t<float>*>(any->ptr)->extend(static_cast<const float*>(new_data), n_rows, new_ids); break;
+            case Quantization_F16:  static_cast<gpu_ivf_flat_t<half>*>(any->ptr)->extend(static_cast<const half*>(new_data), n_rows, new_ids); break;
+            case Quantization_INT8: static_cast<gpu_ivf_flat_t<int8_t>*>(any->ptr)->extend(static_cast<const int8_t*>(new_data), n_rows, new_ids); break;
+            case Quantization_UINT8: static_cast<gpu_ivf_flat_t<uint8_t>*>(any->ptr)->extend(static_cast<const uint8_t*>(new_data), n_rows, new_ids); break;
+            default: break;
+        }
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_flat_extend", e.what());
+    }
+}
+
+void gpu_ivf_flat_extend_float(gpu_ivf_flat_c index_c, const float* new_data, uint64_t n_rows,
+                               const int64_t* new_ids, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_ivf_flat_any_t*>(index_c);
+        switch (any->qtype) {
+            case Quantization_F32:  static_cast<gpu_ivf_flat_t<float>*>(any->ptr)->extend_float(new_data, n_rows, new_ids); break;
+            case Quantization_F16:  static_cast<gpu_ivf_flat_t<half>*>(any->ptr)->extend_float(new_data, n_rows, new_ids); break;
+            case Quantization_INT8: static_cast<gpu_ivf_flat_t<int8_t>*>(any->ptr)->extend_float(new_data, n_rows, new_ids); break;
+            case Quantization_UINT8: static_cast<gpu_ivf_flat_t<uint8_t>*>(any->ptr)->extend_float(new_data, n_rows, new_ids); break;
+            default: break;
+        }
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_flat_extend_float", e.what());
+    }
+}
+
 void gpu_ivf_flat_add_chunk(gpu_ivf_flat_c index_c, const void* chunk_data, uint64_t chunk_count, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {

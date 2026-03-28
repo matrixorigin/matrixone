@@ -817,6 +817,74 @@ func (gi *GpuIvfPq[T]) GetDataset(totalElements uint64) []T {
 	return data
 }
 
+// Extend adds new vectors to an already-built index without rebuilding.
+// newIDs may be nil to auto-assign sequential IDs starting from the current index size.
+func (gi *GpuIvfPq[T]) Extend(newData []T, nRows uint64, newIDs []int64) error {
+	if gi.cIvfPq == nil {
+		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
+	}
+	if len(newData) == 0 || nRows == 0 {
+		return nil
+	}
+
+	var idsPtr *C.int64_t
+	if len(newIDs) > 0 {
+		idsPtr = (*C.int64_t)(unsafe.Pointer(&newIDs[0]))
+	}
+
+	var errmsg *C.char
+	C.gpu_ivf_pq_extend(
+		gi.cIvfPq,
+		unsafe.Pointer(&newData[0]),
+		C.uint64_t(nRows),
+		idsPtr,
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(newData)
+	runtime.KeepAlive(newIDs)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
+// ExtendFloat adds new float32 vectors to an already-built index, quantizing on-the-fly if needed.
+// newIDs may be nil to auto-assign sequential IDs starting from the current index size.
+func (gi *GpuIvfPq[T]) ExtendFloat(newData []float32, nRows uint64, newIDs []int64) error {
+	if gi.cIvfPq == nil {
+		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
+	}
+	if len(newData) == 0 || nRows == 0 {
+		return nil
+	}
+
+	var idsPtr *C.int64_t
+	if len(newIDs) > 0 {
+		idsPtr = (*C.int64_t)(unsafe.Pointer(&newIDs[0]))
+	}
+
+	var errmsg *C.char
+	C.gpu_ivf_pq_extend_float(
+		gi.cIvfPq,
+		(*C.float)(unsafe.Pointer(&newData[0])),
+		C.uint64_t(nRows),
+		idsPtr,
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(newData)
+	runtime.KeepAlive(newIDs)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
 // SearchResultIvfPq contains the neighbors and distances from an IVF-PQ search.
 type SearchResultIvfPq struct {
 	Neighbors []int64

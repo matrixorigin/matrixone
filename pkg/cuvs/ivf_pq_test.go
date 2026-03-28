@@ -398,6 +398,135 @@ func TestGpuReplicatedIvfPq(t *testing.T) {
 	t.Logf("Replicated Neighbors: %v, Distances: %v", result.Neighbors, result.Distances)
 }
 
+func TestGpuIvfPqExtend(t *testing.T) {
+	dimension := uint32(16)
+	nBase := uint64(100)
+	dataset := make([]float32, nBase*uint64(dimension))
+	for i := uint64(0); i < nBase; i++ {
+		for j := uint32(0); j < dimension; j++ {
+			dataset[i*uint64(dimension)+uint64(j)] = float32(i)
+		}
+	}
+
+	devices := []int{0}
+	bp := DefaultIvfPqBuildParams()
+	bp.NLists = 10
+	bp.M = 8
+	index, err := NewGpuIvfPq[float32](dataset, nBase, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	if err != nil {
+		t.Fatalf("Failed to create GpuIvfPq: %v", err)
+	}
+	defer index.Destroy()
+
+	index.Start()
+	if err := index.Build(); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	nExt := uint64(50)
+	ext := make([]float32, nExt*uint64(dimension))
+	for i := uint64(0); i < nExt; i++ {
+		for j := uint32(0); j < dimension; j++ {
+			ext[i*uint64(dimension)+uint64(j)] = 50.5 // within trained range [0..99]
+		}
+	}
+	if err := index.Extend(ext, nExt, nil); err != nil {
+		t.Fatalf("Extend failed: %v", err)
+	}
+
+	if got := index.Len(); got != uint32(nBase+nExt) {
+		t.Errorf("Len() = %d, want %d", got, nBase+nExt)
+	}
+
+	sp := DefaultIvfPqSearchParams()
+	sp.NProbes = 10
+
+	// Query near base set: expect ID 0
+	q0 := make([]float32, dimension)
+	r, err := index.Search(q0, 1, dimension, 1, sp)
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if r.Neighbors[0] != 0 {
+		t.Errorf("expected neighbor 0, got %d", r.Neighbors[0])
+	}
+
+	// Query exactly at extended cluster; expect ID in [nBase, nBase+nExt)
+	q50 := make([]float32, dimension)
+	for j := range q50 {
+		q50[j] = 50.5
+	}
+	r, err = index.Search(q50, 1, dimension, 1, sp)
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if r.Neighbors[0] < int64(nBase) || r.Neighbors[0] >= int64(nBase+nExt) {
+		t.Errorf("expected neighbor in [%d, %d), got %d", nBase, nBase+nExt, r.Neighbors[0])
+	}
+}
+
+func TestGpuIvfPqExtendFloat(t *testing.T) {
+	dimension := uint32(16)
+	nBase := uint64(100)
+	datasetF32 := make([]float32, nBase*uint64(dimension))
+	for i := uint64(0); i < nBase; i++ {
+		for j := uint32(0); j < dimension; j++ {
+			datasetF32[i*uint64(dimension)+uint64(j)] = float32(i)
+		}
+	}
+	dataset := make([]Float16, len(datasetF32))
+	if err := GpuConvertF32ToF16(datasetF32, dataset, 0); err != nil {
+		t.Fatalf("GpuConvertF32ToF16 failed: %v", err)
+	}
+
+	devices := []int{0}
+	bp := DefaultIvfPqBuildParams()
+	bp.NLists = 10
+	bp.M = 8
+	// Use Float16 so ExtendFloat exercises quantization
+	index, err := NewGpuIvfPq[Float16](dataset, nBase, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	if err != nil {
+		t.Fatalf("Failed to create GpuIvfPq[Float16]: %v", err)
+	}
+	defer index.Destroy()
+
+	index.Start()
+	if err := index.Build(); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	nExt := uint64(50)
+	ext := make([]float32, nExt*uint64(dimension))
+	for i := uint64(0); i < nExt; i++ {
+		for j := uint32(0); j < dimension; j++ {
+			ext[i*uint64(dimension)+uint64(j)] = 50.5 // within trained range [0..99]
+		}
+	}
+	if err := index.ExtendFloat(ext, nExt, nil); err != nil {
+		t.Fatalf("ExtendFloat failed: %v", err)
+	}
+
+	if got := index.Len(); got != uint32(nBase+nExt) {
+		t.Errorf("Len() = %d, want %d", got, nBase+nExt)
+	}
+
+	sp := DefaultIvfPqSearchParams()
+	sp.NProbes = 10
+
+	// Query exactly at extended cluster; expect ID in [nBase, nBase+nExt)
+	q50 := make([]float32, dimension)
+	for j := range q50 {
+		q50[j] = 50.5
+	}
+	r, err := index.SearchFloat(q50, 1, dimension, 1, sp)
+	if err != nil {
+		t.Fatalf("SearchFloat failed: %v", err)
+	}
+	if r.Neighbors[0] < int64(nBase) || r.Neighbors[0] >= int64(nBase+nExt) {
+		t.Errorf("expected neighbor in [%d, %d), got %d", nBase, nBase+nExt, r.Neighbors[0])
+	}
+}
+
 func BenchmarkGpuShardedIvfPq(b *testing.B) {
 	devices, err := GetGpuDeviceList()
 	if err != nil || len(devices) < 1 {

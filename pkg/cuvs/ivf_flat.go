@@ -715,6 +715,74 @@ func (gi *GpuIvfFlat[T]) GetNList() uint32 {
 	return uint32(C.gpu_ivf_flat_get_n_list(gi.cIvfFlat))
 }
 
+// Extend adds new vectors to an already-built index without rebuilding.
+// newIDs may be nil to auto-assign sequential IDs starting from the current index size.
+func (gi *GpuIvfFlat[T]) Extend(newData []T, nRows uint64, newIDs []int64) error {
+	if gi.cIvfFlat == nil {
+		return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
+	}
+	if len(newData) == 0 || nRows == 0 {
+		return nil
+	}
+
+	var idsPtr *C.int64_t
+	if len(newIDs) > 0 {
+		idsPtr = (*C.int64_t)(unsafe.Pointer(&newIDs[0]))
+	}
+
+	var errmsg *C.char
+	C.gpu_ivf_flat_extend(
+		gi.cIvfFlat,
+		unsafe.Pointer(&newData[0]),
+		C.uint64_t(nRows),
+		idsPtr,
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(newData)
+	runtime.KeepAlive(newIDs)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
+// ExtendFloat adds new float32 vectors to an already-built index, quantizing on-the-fly if needed.
+// newIDs may be nil to auto-assign sequential IDs starting from the current index size.
+func (gi *GpuIvfFlat[T]) ExtendFloat(newData []float32, nRows uint64, newIDs []int64) error {
+	if gi.cIvfFlat == nil {
+		return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
+	}
+	if len(newData) == 0 || nRows == 0 {
+		return nil
+	}
+
+	var idsPtr *C.int64_t
+	if len(newIDs) > 0 {
+		idsPtr = (*C.int64_t)(unsafe.Pointer(&newIDs[0]))
+	}
+
+	var errmsg *C.char
+	C.gpu_ivf_flat_extend_float(
+		gi.cIvfFlat,
+		(*C.float)(unsafe.Pointer(&newData[0])),
+		C.uint64_t(nRows),
+		idsPtr,
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(newData)
+	runtime.KeepAlive(newIDs)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
 // SearchResultIvfFlat contains the neighbors and distances from an IVF-Flat search.
 type SearchResultIvfFlat struct {
 	Neighbors []int64

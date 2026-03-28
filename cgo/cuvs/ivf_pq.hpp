@@ -325,6 +325,163 @@ public:
         }
     }
 
+    void extend_internal(raft_handle_wrapper_t& handle, const T* new_data, uint64_t n_rows,
+                         const int64_t* seq_ids) {
+        auto res = handle.get_raft_resources();
+
+        auto new_vecs_device = raft::make_device_matrix<T, int64_t>(*res, (int64_t)n_rows, (int64_t)this->dimension);
+        raft::copy(*res, new_vecs_device.view(),
+                   raft::make_host_matrix_view<const T, int64_t>(new_data, n_rows, this->dimension));
+
+        auto ids_device = raft::make_device_vector<int64_t, int64_t>(*res, (int64_t)n_rows);
+        raft::copy(*res, ids_device.view(),
+                   raft::make_host_vector_view<const int64_t, int64_t>(seq_ids, (int64_t)n_rows));
+        raft::resource::sync_stream(*res);
+        auto indices_opt = std::make_optional(raft::make_const_mdspan(ids_device.view()));
+
+        if (this->dist_mode == DistributionMode_REPLICATED) {
+            ivf_pq_index* idx_ptr;
+            {
+                std::shared_lock<std::shared_mutex> lock(this->mutex_);
+                auto it = this->replicated_indices_.find(handle.get_device_id());
+                if (it == this->replicated_indices_.end())
+                    throw std::runtime_error("extend_internal: no index for device");
+                idx_ptr = static_cast<ivf_pq_index*>(it->second.get());
+            }
+            cuvs::neighbors::ivf_pq::extend(*res,
+                raft::make_const_mdspan(new_vecs_device.view()), indices_opt, idx_ptr);
+            {
+                std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                this->replicated_datasets_.erase(handle.get_device_id());
+            }
+        } else {
+            if (!index_) throw std::runtime_error("extend_internal: index not built");
+            cuvs::neighbors::ivf_pq::extend(*res,
+                raft::make_const_mdspan(new_vecs_device.view()), indices_opt, index_.get());
+            {
+                std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                this->dataset_device_ptr_.reset();
+            }
+        }
+        handle.sync();
+    }
+
+    void extend_internal_float(raft_handle_wrapper_t& handle, const float* new_data, uint64_t n_rows,
+                               const int64_t* seq_ids) {
+        auto res = handle.get_raft_resources();
+
+        auto new_vecs_device = raft::make_device_matrix<T, int64_t>(*res, (int64_t)n_rows, (int64_t)this->dimension);
+        if constexpr (std::is_same_v<T, float>) {
+            raft::copy(*res, new_vecs_device.view(),
+                       raft::make_host_matrix_view<const float, int64_t>(new_data, n_rows, this->dimension));
+        } else {
+            auto new_vecs_float = raft::make_device_matrix<float, int64_t>(*res, (int64_t)n_rows, (int64_t)this->dimension);
+            raft::copy(*res, new_vecs_float.view(),
+                       raft::make_host_matrix_view<const float, int64_t>(new_data, n_rows, this->dimension));
+            if constexpr (sizeof(T) == 1) {
+                if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained for extend_float");
+                this->quantizer_.template transform<T>(*res, new_vecs_float.view(), new_vecs_device.data_handle(), true);
+            } else {
+                // T is half
+                raft::copy(*res, new_vecs_device.view(), new_vecs_float.view());
+            }
+        }
+
+        auto ids_device = raft::make_device_vector<int64_t, int64_t>(*res, (int64_t)n_rows);
+        raft::copy(*res, ids_device.view(),
+                   raft::make_host_vector_view<const int64_t, int64_t>(seq_ids, (int64_t)n_rows));
+        raft::resource::sync_stream(*res);
+        auto indices_opt = std::make_optional(raft::make_const_mdspan(ids_device.view()));
+
+        if (this->dist_mode == DistributionMode_REPLICATED) {
+            ivf_pq_index* idx_ptr;
+            {
+                std::shared_lock<std::shared_mutex> lock(this->mutex_);
+                auto it = this->replicated_indices_.find(handle.get_device_id());
+                if (it == this->replicated_indices_.end())
+                    throw std::runtime_error("extend_internal_float: no index for device");
+                idx_ptr = static_cast<ivf_pq_index*>(it->second.get());
+            }
+            cuvs::neighbors::ivf_pq::extend(*res,
+                raft::make_const_mdspan(new_vecs_device.view()), indices_opt, idx_ptr);
+            {
+                std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                this->replicated_datasets_.erase(handle.get_device_id());
+            }
+        } else {
+            if (!index_) throw std::runtime_error("extend_internal_float: index not built");
+            cuvs::neighbors::ivf_pq::extend(*res,
+                raft::make_const_mdspan(new_vecs_device.view()), indices_opt, index_.get());
+            {
+                std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                this->dataset_device_ptr_.reset();
+            }
+        }
+        handle.sync();
+    }
+
+    void extend(const T* new_data, uint64_t n_rows, const int64_t* new_ids) {
+        if (!this->is_loaded_) throw std::runtime_error("extend: index not built");
+        if (!new_data || n_rows == 0) return;
+        if (this->dist_mode == DistributionMode_SHARDED)
+            throw std::runtime_error("extend: SHARDED mode not supported");
+
+        std::vector<int64_t> seq_ids(n_rows);
+        std::iota(seq_ids.begin(), seq_ids.end(), (int64_t)this->count);
+
+        if (this->dist_mode == DistributionMode_REPLICATED) {
+            this->worker->submit_all_devices([&](raft_handle_wrapper_t& handle) -> std::any {
+                this->extend_internal(handle, new_data, n_rows, seq_ids.data());
+                return std::any();
+            });
+        } else {
+            uint64_t job_id = this->worker->submit_main(
+                [&](raft_handle_wrapper_t& handle) -> std::any {
+                    this->extend_internal(handle, new_data, n_rows, seq_ids.data());
+                    return std::any();
+                });
+            auto result_wait = this->worker->wait(job_id).get();
+            if (result_wait.error) std::rethrow_exception(result_wait.error);
+        }
+        {
+            std::unique_lock<std::shared_mutex> lock(this->mutex_);
+            if (new_ids) this->set_ids(new_ids, n_rows, this->count);
+            this->count += static_cast<uint32_t>(n_rows);
+            this->current_offset_ += n_rows;
+        }
+    }
+
+    void extend_float(const float* new_data, uint64_t n_rows, const int64_t* new_ids) {
+        if (!this->is_loaded_) throw std::runtime_error("extend_float: index not built");
+        if (!new_data || n_rows == 0) return;
+        if (this->dist_mode == DistributionMode_SHARDED)
+            throw std::runtime_error("extend_float: SHARDED mode not supported");
+
+        std::vector<int64_t> seq_ids(n_rows);
+        std::iota(seq_ids.begin(), seq_ids.end(), (int64_t)this->count);
+
+        if (this->dist_mode == DistributionMode_REPLICATED) {
+            this->worker->submit_all_devices([&](raft_handle_wrapper_t& handle) -> std::any {
+                this->extend_internal_float(handle, new_data, n_rows, seq_ids.data());
+                return std::any();
+            });
+        } else {
+            uint64_t job_id = this->worker->submit_main(
+                [&](raft_handle_wrapper_t& handle) -> std::any {
+                    this->extend_internal_float(handle, new_data, n_rows, seq_ids.data());
+                    return std::any();
+                });
+            auto result_wait = this->worker->wait(job_id).get();
+            if (result_wait.error) std::rethrow_exception(result_wait.error);
+        }
+        {
+            std::unique_lock<std::shared_mutex> lock(this->mutex_);
+            if (new_ids) this->set_ids(new_ids, n_rows, this->count);
+            this->count += static_cast<uint32_t>(n_rows);
+            this->current_offset_ += n_rows;
+        }
+    }
+
     search_result_t search(const T* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/, uint32_t limit, const ivf_pq_search_params_t& sp) {
         if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
         if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) return search_result_t{};

@@ -304,6 +304,120 @@ func TestGpuReplicatedIvfFlat(t *testing.T) {
 	t.Logf("Replicated Neighbors: %v, Distances: %v", result.Neighbors, result.Distances)
 }
 
+func TestGpuIvfFlatExtend(t *testing.T) {
+	dimension := uint32(2)
+	nBase := uint64(100)
+	dataset := make([]float32, nBase*uint64(dimension))
+	for i := uint64(0); i < nBase; i++ {
+		dataset[i*uint64(dimension)] = float32(i)
+		dataset[i*uint64(dimension)+1] = float32(i)
+	}
+
+	devices := []int{0}
+	bp := DefaultIvfFlatBuildParams()
+	bp.NLists = 10
+	index, err := NewGpuIvfFlat[float32](dataset, nBase, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	if err != nil {
+		t.Fatalf("Failed to create GpuIvfFlat: %v", err)
+	}
+	defer index.Destroy()
+
+	index.Start()
+	if err := index.Build(); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	// Extend with 50 new vectors well separated from the base set
+	nExt := uint64(50)
+	ext := make([]float32, nExt*uint64(dimension))
+	for i := uint64(0); i < nExt; i++ {
+		ext[i*uint64(dimension)] = float32(500 + i)
+		ext[i*uint64(dimension)+1] = float32(500 + i)
+	}
+	if err := index.Extend(ext, nExt, nil); err != nil {
+		t.Fatalf("Extend failed: %v", err)
+	}
+
+	if got := index.Len(); got != uint32(nBase+nExt) {
+		t.Errorf("Len() = %d, want %d", got, nBase+nExt)
+	}
+
+	sp := DefaultIvfFlatSearchParams()
+	sp.NProbes = 10
+
+	// Query near base set: expect ID 0
+	r, err := index.Search([]float32{0, 0}, 1, dimension, 1, sp)
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if r.Neighbors[0] != 0 {
+		t.Errorf("expected neighbor 0, got %d", r.Neighbors[0])
+	}
+
+	// Query near extended set: expect ID 100 (first extended vector)
+	r, err = index.Search([]float32{500, 500}, 1, dimension, 1, sp)
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if r.Neighbors[0] != int64(nBase) {
+		t.Errorf("expected neighbor %d, got %d", nBase, r.Neighbors[0])
+	}
+}
+
+func TestGpuIvfFlatExtendFloat(t *testing.T) {
+	dimension := uint32(2)
+	nBase := uint64(100)
+	datasetF32 := make([]float32, nBase*uint64(dimension))
+	for i := uint64(0); i < nBase; i++ {
+		datasetF32[i*uint64(dimension)] = float32(i)
+		datasetF32[i*uint64(dimension)+1] = float32(i)
+	}
+	dataset := make([]Float16, len(datasetF32))
+	if err := GpuConvertF32ToF16(datasetF32, dataset, 0); err != nil {
+		t.Fatalf("GpuConvertF32ToF16 failed: %v", err)
+	}
+
+	devices := []int{0}
+	bp := DefaultIvfFlatBuildParams()
+	bp.NLists = 10
+	// Use Float16 so ExtendFloat exercises quantization
+	index, err := NewGpuIvfFlat[Float16](dataset, nBase, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	if err != nil {
+		t.Fatalf("Failed to create GpuIvfFlat[Float16]: %v", err)
+	}
+	defer index.Destroy()
+
+	index.Start()
+	if err := index.Build(); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	nExt := uint64(50)
+	ext := make([]float32, nExt*uint64(dimension))
+	for i := uint64(0); i < nExt; i++ {
+		ext[i*uint64(dimension)] = float32(500 + i)
+		ext[i*uint64(dimension)+1] = float32(500 + i)
+	}
+	if err := index.ExtendFloat(ext, nExt, nil); err != nil {
+		t.Fatalf("ExtendFloat failed: %v", err)
+	}
+
+	if got := index.Len(); got != uint32(nBase+nExt) {
+		t.Errorf("Len() = %d, want %d", got, nBase+nExt)
+	}
+
+	sp := DefaultIvfFlatSearchParams()
+	sp.NProbes = 10
+
+	r, err := index.SearchFloat([]float32{500, 500}, 1, dimension, 1, sp)
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if r.Neighbors[0] != int64(nBase) {
+		t.Errorf("expected neighbor %d, got %d", nBase, r.Neighbors[0])
+	}
+}
+
 func BenchmarkGpuShardedIvfFlat(b *testing.B) {
 	devices, err := GetGpuDeviceList()
 	if err != nil || len(devices) < 1 {
