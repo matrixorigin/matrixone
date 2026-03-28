@@ -457,6 +457,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			UniqueCols:         t.UniqueCols,
 			OnDuplicateIdx:     t.OnDuplicateIdx,
 			OnDuplicateExpr:    t.OnDuplicateExpr,
+			IsIgnore:           t.IsIgnore,
 		}
 	case *fuzzyfilter.FuzzyFilter:
 		in.FuzzyFilter = &pipeline.FuzzyFilter{
@@ -836,6 +837,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			Ref:             t.Ref,
 			AddAffectedRows: t.AddAffectedRows,
 			PrimaryKeyIdx:   int(t.PrimaryKeyIdx),
+			Engine:          eng,
 		}
 		op = arg
 	case vm.Insert:
@@ -847,6 +849,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			AddAffectedRows: t.AddAffectedRows,
 			Attrs:           t.Attrs,
 			TableDef:        t.TableDef,
+			Engine:          eng,
 		}
 		op = arg
 	case vm.PreInsert:
@@ -903,6 +906,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.N = float64(t.N)
 		arg.PkName = t.PkName
 		arg.PkTyp = t.PkTyp
+		arg.BuildIdx = int(t.BuildIdx)
 		arg.IfInsertFromUnique = t.IfInsertFromUnique
 		op = arg
 	case vm.Shuffle:
@@ -1210,6 +1214,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.SetAffectedRows(t.AffectedRows)
 		arg.Action = multi_update.UpdateAction(t.Action)
 		arg.IsRemote = true //only remote CN use this function to rebuild MultiUpdate
+		arg.Engine = eng
 
 		arg.MultiUpdateCtx = make([]*multi_update.MultiUpdateCtx, len(t.UpdateCtxList))
 		for i, muCtx := range t.UpdateCtxList {
@@ -1227,6 +1232,11 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			arg.MultiUpdateCtx[i].DeleteCols = make([]int, len(muCtx.DeleteCols))
 			for j, pos := range muCtx.DeleteCols {
 				arg.MultiUpdateCtx[i].DeleteCols[j] = int(pos.ColPos)
+			}
+
+			arg.MultiUpdateCtx[i].PartitionCols = make([]int, len(muCtx.PartitionCols))
+			for j, pos := range muCtx.PartitionCols {
+				arg.MultiUpdateCtx[i].PartitionCols[j] = int(pos.ColPos)
 			}
 		}
 
