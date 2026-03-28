@@ -149,6 +149,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 		if oldConflictIdx > -1 {
 
 			if insertArg.IsIgnore {
+				newBatch.Clean(proc.GetMPool())
 				continue
 			}
 

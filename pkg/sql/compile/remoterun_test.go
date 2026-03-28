@@ -382,6 +382,29 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, 2, restoredOp.DeleteCtx.RowIdIdx)
 	})
 
+	t.Run("Deletion_CanTruncate", func(t *testing.T) {
+		op := &deletion.Deletion{
+			DeleteCtx: &deletion.DeleteCtx{
+				CanTruncate:     true,
+				RowIdIdx:        1,
+				PrimaryKeyIdx:   0,
+				AddAffectedRows: true,
+				Ref:             &plan.ObjectRef{ObjName: "t1"},
+			},
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.True(t, pipeInstr.Delete.CanTruncate)
+
+		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+		require.NoError(t, err)
+		restoredOp := restored.(*deletion.Deletion)
+		require.True(t, restoredOp.DeleteCtx.CanTruncate)
+		require.Equal(t, 1, restoredOp.DeleteCtx.RowIdIdx)
+		require.Equal(t, 0, restoredOp.DeleteCtx.PrimaryKeyIdx)
+		require.True(t, restoredOp.DeleteCtx.AddAffectedRows)
+	})
+
 	t.Run("Insert_Engine", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -426,7 +449,6 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, mockEng, restoredOp.Engine)
 	})
 }
-
 func Test_convertToProcessLimitation(t *testing.T) {
 	lim := pipeline.ProcessLimitation{
 		Size: 100,
@@ -841,6 +863,55 @@ func Test_checkPipelineStandaloneExecutableAtRemote(t *testing.T) {
 
 		require.False(t, checkPipelineStandaloneExecutableAtRemote(s0))
 	}
+}
+
+// TestDeletionCanTruncateSerializationRoundtrip verifies that CanTruncate is
+// properly serialized and deserialized when Deletion operators are sent to remote CN.
+func TestDeletionCanTruncateSerializationRoundtrip(t *testing.T) {
+	// Create a Deletion operator with CanTruncate=true
+	arg := deletion.NewArgument()
+	arg.DeleteCtx = &deletion.DeleteCtx{
+		CanTruncate:     true,
+		RowIdIdx:        1,
+		PrimaryKeyIdx:   0,
+		AddAffectedRows: true,
+		Ref:             &plan.ObjectRef{SchemaName: "test", ObjName: "t1"},
+	}
+
+	// Create minimal context for serialization
+	ctx := &scopeContext{
+		id:       0,
+		plan:     &plan.Plan{},
+		scope:    &Scope{},
+		root:     &scopeContext{},
+		parent:   nil,
+		children: nil,
+		pipe:     nil,
+		regs:     make(map[*process.WaitRegister]int32),
+	}
+	ctx.root = ctx
+
+	// Serialize to pipeline instruction
+	_, in, err := convertToPipelineInstruction(arg, nil, ctx, 0)
+	require.NoError(t, err)
+	require.NotNil(t, in.Delete)
+	require.True(t, in.Delete.CanTruncate, "CanTruncate should be serialized")
+
+	// Deserialize back to operator
+	opr := &pipeline.Instruction{
+		Op:     int32(vm.Deletion),
+		Delete: in.Delete,
+	}
+	op, err := convertToVmOperator(opr, ctx, nil)
+	require.NoError(t, err)
+	require.NotNil(t, op)
+
+	restored := op.(*deletion.Deletion)
+	require.NotNil(t, restored.DeleteCtx)
+	require.True(t, restored.DeleteCtx.CanTruncate, "CanTruncate should be deserialized")
+	require.Equal(t, 1, restored.DeleteCtx.RowIdIdx)
+	require.Equal(t, 0, restored.DeleteCtx.PrimaryKeyIdx)
+	require.True(t, restored.DeleteCtx.AddAffectedRows)
 }
 
 // TestOnDuplicateKeyIsIgnoreSerializationRoundtrip verifies that IsIgnore is
