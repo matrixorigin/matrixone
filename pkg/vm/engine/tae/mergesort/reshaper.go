@@ -26,13 +26,19 @@ import (
 
 func reshape(ctx context.Context, host MergeTaskHost) error {
 	var table *TransferTable
+	var slab []api.TransferDestPos
+	var blockActive []bool
+	var stride int
 	if host.DoTransfer() {
 		objBlkCnts := host.GetBlkCnts()
 		totalBlkCnt := 0
 		for _, cnt := range objBlkCnts {
 			totalBlkCnt += cnt
 		}
-		table = &TransferTable{Maps: make(api.TransferMaps, totalBlkCnt)}
+		stride = int(host.GetBlockMaxRows())
+		slab = getTransferSlab(totalBlkCnt * stride)
+		blockActive = make([]bool, totalBlkCnt)
+		table = &TransferTable{Slab: slab, Stride: stride, BlockActive: blockActive}
 	}
 	stats := mergeStats{
 		targetObjSize: host.GetTargetObjSize(),
@@ -76,11 +82,8 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 
 				if host.DoTransfer() {
 					idx := accObjBlkCnts[i] + loadedBlkCnt - 1
-					if table.Maps[idx] == nil {
-						rowCnt := nextBatch.RowCount()
-						table.Maps[idx] = GetTransferMap(rowCnt)
-					}
-					table.Maps[idx][uint32(j)] = api.TransferDestPos{
+					blockActive[idx] = true
+					slab[idx*stride+int(j)] = api.TransferDestPos{
 						ObjIdx: uint8(stats.objCnt),
 						BlkIdx: uint16(stats.objBlkCnt),
 						RowIdx: uint32(stats.blkRowCnt),
