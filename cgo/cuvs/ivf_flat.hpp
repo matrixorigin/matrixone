@@ -45,8 +45,86 @@
 
 namespace matrixone {
 
+// =============================================================================
+// gpu_ivf_flat_t — Developer Guide
+// =============================================================================
+//
+// OVERVIEW
+// --------
+// gpu_ivf_flat_t<T> implements an IVF-Flat (Inverted File with Flat storage)
+// approximate nearest-neighbor index backed by cuVS.
+//
+// cuVS type: cuvs::neighbors::ivf_flat::index<T, int64_t>
+// IdT      : int64_t
+// Supported T: float, half (__half), int8_t, uint8_t
+//
+// IVF-Flat partitions the dataset into n_lists clusters (Voronoi cells).
+// Each vector is stored uncompressed in exactly one cluster's list.
+// Search probes the n_probes nearest centroids and scans their lists exactly.
+// No approximation from compression — only from limiting the number of probes.
+//
+//
+// DISTRIBUTION MODES
+// ------------------
+// SINGLE_GPU:
+//   index_  holds the single cuVS IVF-Flat index.
+//   dataset_device_ptr_ holds the build dataset on device (reset after extend).
+//
+// REPLICATED:
+//   replicated_indices_[dev_id] holds a full copy per GPU (cast to ivf_flat_index*).
+//   replicated_datasets_[dev_id] holds the build dataset per GPU (erased after extend).
+//   Searches can run on any GPU concurrently.
+//   Extends must replicate to all GPUs via submit_all_devices(); set_ids() is
+//   called once in extend() after all GPU work completes.
+//
+// SHARDED:
+//   Each GPU holds a disjoint shard. build_internal assigns shard k the rows
+//   [k*rows_per_shard .. (k+1)*rows_per_shard) (last shard gets remainder).
+//   rows_per_shard = (count / num_shards) & ~31  (rounded down to multiple of 32).
+//   Search submits to all shards in parallel; results merged by merge_sharded_results().
+//   Extend is NOT supported in SHARDED mode (throws).
+//
+//
+// EXTEND RULES
+// ------------
+// - Can only be called after build() (is_loaded_ must be true).
+// - extend_mutex_ serializes concurrent extend() calls.
+// - Sequence IDs for cuVS are [count .. count+n_rows) (required for non-empty index).
+// - After GPU extend, call set_ids() and update count + current_offset_ under unique_lock.
+// - dataset_device_ptr_ / replicated_datasets_ become stale after extend and must be
+//   reset under unique_lock immediately after the GPU call.
+// - SHARDED mode throws std::runtime_error.
+//
+//
+// SEARCH PATH
+// -----------
+// search() dispatches to search_internal() via the worker:
+//   - Non-SHARDED: submit() (round-robin GPU assignment)
+//   - SHARDED: submit_all_devices_no_wait() → merge_sharded_results()
+//
+// search_float() is the same but accepts float32 queries and converts on the fly
+// (via quantizer for 1-byte T, via half conversion for T=half, direct for T=float).
+//
+// search_batch_internal() is an optional batching path that aggregates multiple
+// concurrent queries into a single cuVS call to improve GPU utilization.
+//
+// Soft-delete filtering (if deleted_count_ > 0):
+//   - Non-SHARDED: sync_device_bitset() → bitset_filter over full index
+//   - SHARDED: sync_shard_bitset() → bitset_filter over shard-local slice
+//     (see index_base.hpp Developer Guide for bitset details)
+//
+//
+// ID OFFSET IN SHARDED SEARCH
+// ----------------------------
+// After cuVS returns shard-local IDs (0-based within the shard), they are
+// adjusted to global IDs by adding (rank * rows_per_shard) — the same rounded
+// rows_per_shard used at build time.  If host_ids is non-empty this adjustment
+// is skipped and the ID is looked up in host_ids[] directly.
+//
+// =============================================================================
+
 /**
- * @brief Search result containing neighbor IDs and distances.
+ * @brief Search result for IVF-Flat queries.
  */
 struct ivf_flat_search_result_t {
     std::vector<int64_t> neighbors;

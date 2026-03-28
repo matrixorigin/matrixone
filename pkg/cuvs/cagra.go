@@ -56,6 +56,7 @@ func (gi *GpuCagra[T]) SetUseBatching(enable bool) error {
 }
 
 // NewGpuCagra creates a new GpuCagra instance from a dataset.
+// ids may be nil to use internal sequential IDs (0..count-1).
 func NewGpuCagra[T VectorType](dataset []T, count uint64, dimension uint32, metric DistanceType,
 	bp CagraBuildParams, devices []int, nthread uint32, mode DistributionMode, ids []uint32) (*GpuCagra[T], error) {
 	if len(devices) == 0 {

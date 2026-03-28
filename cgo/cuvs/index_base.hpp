@@ -49,52 +49,254 @@ using ::distance_type_t;
 using ::quantization_t;
 using ::distribution_mode_t;
 
+// =============================================================================
+// gpu_index_base_t — Developer Guide
+// =============================================================================
+//
+// OVERVIEW
+// --------
+// gpu_index_base_t<T, BuildParams, IdT> is the CRTP-style base class shared by
+// all three GPU index types:
+//
+//   gpu_ivf_flat_t<T>  (IdT = int64_t)
+//   gpu_ivf_pq_t<T>    (IdT = int64_t)
+//   gpu_cagra_t<T>     (IdT = uint32_t)
+//
+// It provides:
+//   - Pre-build vector buffering (flattened_host_dataset)
+//   - External-ID mapping (host_ids / id_to_index_)
+//   - Soft-delete bitset (host + per-device GPU cache)
+//   - Scalar quantizer for 1-byte types
+//   - Serialization helpers (save/load ids, bitset, manifest)
+//   - Worker lifecycle management
+//
+//
+// LIFECYCLE
+// ---------
+// Every index goes through these stages in order:
+//
+//   1. Construct   — allocates host buffers, creates worker
+//   2. start()     — starts worker threads and GPU resources
+//   3. add_chunk() / add_chunk_float()
+//                  — fills flattened_host_dataset (pre-build only)
+//   4. build()     — uploads dataset to GPU, runs cuVS build, sets is_loaded_=true,
+//                    clears flattened_host_dataset, calls init_deleted_bitset()
+//   5. search() / search_float()
+//                  — concurrent reads, no lock during GPU work
+//   6. extend() / extend_float()
+//                  — serialized by extend_mutex_; updates count+current_offset_
+//                    under unique_lock after GPU work completes
+//   7. delete_id() — soft-delete under unique_lock; increments bitset_version_
+//   8. destroy()   — stops worker, frees GPU resources
+//
+// Calling extend() or delete_id() before build() is an error (throws).
+// Calling add_chunk() after build() is an error (throws).
+//
+//
+// DISTRIBUTION MODES
+// ------------------
+// SINGLE_GPU (default)
+//   - One GPU, one cuVS index object (index_ unique_ptr).
+//   - build: submit_main() + wait()
+//   - search: submit() (round-robin load-balance across search threads)
+//   - extend: submit_main() + wait(); GPU sequential indices required for cuVS.
+//
+// REPLICATED
+//   - N GPUs, each holds a full copy of the index in replicated_indices_[dev_id].
+//   - build: submit_all_devices() — concurrent build on all GPUs.
+//   - search: submit() — dispatches to any GPU, uses per-thread cached index ptr.
+//   - extend: submit_all_devices() — concurrent extend on all GPUs; set_ids() is
+//             called ONCE (in extend(), not extend_internal()) after all GPUs done.
+//   - WARNING: dataset_device_ptr_ / replicated_datasets_ are stale after extend
+//              and must be reset immediately under unique_lock.
+//
+// SHARDED
+//   - N GPUs, each holds a disjoint slice of the index.
+//   - build: submit_all_devices() — each GPU builds its shard.
+//   - search: submit_all_devices_no_wait() — all shards searched in parallel,
+//             results merged via merge_sharded_results().
+//   - extend: NOT SUPPORTED — throws std::runtime_error.
+//   - SHARDED shard sizing: rows_per_shard is rounded DOWN to a multiple of 32
+//     (i.e., (count / num_shards) & ~31). The last shard absorbs the remainder.
+//     This is required for word-aligned bitset slicing in sync_shard_bitset().
+//     The same rounded value must be used in both build_internal and search_internal.
+//
+//
+// LOCKING RULES  (see also CLAUDE.md for the full table)
+// -------------
+// mutex_ is a std::shared_mutex covering all shared host-side state:
+//   - is_loaded_, count, current_offset_
+//   - host_ids, id_to_index_
+//   - deleted_bitset_
+//   - replicated_indices_, replicated_datasets_
+//   - dataset_device_ptr_
+//
+// Use shared_lock  for: reading a pointer, checking is_loaded_, reads in search.
+// Use unique_lock  for: any write to the above; count/current_offset_ increment.
+// NO lock during GPU operations (build, extend, search kernel launch).
+//
+// extend_mutex_ (std::mutex, in derived classes) serializes concurrent extend()
+// calls so that set_ids() offsets and GPU execution order always agree.
+// It is acquired AFTER checking is_loaded_ under unique_lock, and held across
+// the entire GPU operation + count update.
+//
+// Per-device bitset caches each have their own std::mutex (device_bitset_cache_t::mutex)
+// protected by a double-check pattern: check version, acquire device mutex, recheck.
+// The main mutex_ is acquired as shared_lock inside the device mutex to read
+// deleted_bitset_ safely.
+// Lock order: device_bitsets_mutex_ or device_shard_bitsets_mutex_  →  device mutex
+//             → main mutex_ (shared).  Never hold device mutex when acquiring unique_lock.
+//
+//
+// ID MAPPING
+// ----------
+// Two modes, cannot mix within one index:
+//
+// Sequential IDs (host_ids is empty):
+//   - Vectors are addressed by their insertion order (0, 1, 2, ...).
+//   - delete_id(k) marks internal position k.
+//   - search results are returned as raw internal positions.
+//
+// Custom IDs (host_ids non-empty, set via set_ids() or add_chunk(ids)):
+//   - host_ids[internal_pos] = external_id
+//   - id_to_index_[external_id] = internal_pos  (reverse map)
+//   - delete_id(external_id) looks up id_to_index_ to find internal pos.
+//   - search results are translated: neighbors[i] = host_ids[raw_result[i]].
+//   - set_ids() must only be called under unique_lock (or before build).
+//
+//
+// SOFT-DELETE BITSET
+// ------------------
+// deleted_bitset_ is a host vector<uint32_t> acting as a packed bit array.
+// Bit layout: bit j = (deleted_bitset_[j/32] >> (j%32)) & 1
+//   1 = alive (valid), 0 = deleted.
+//
+// Lifecycle:
+//   - init_deleted_bitset() is called from build() after is_loaded_ = true.
+//     Allocates ceil(current_offset_ / 32) words, all set to ~0U (all alive).
+//   - delete_id() clears the bit for the target position and increments
+//     deleted_count_ and bitset_version_.
+//   - Before each GPU search, if deleted_count_ > 0, the host bitset is synced
+//     to a per-device raft::core::bitset via sync_device_bitset() (non-SHARDED)
+//     or sync_shard_bitset() (SHARDED). Uses version-based double-check caching.
+//
+// SHARDED bitset slicing (sync_shard_bitset):
+//   Because SHARDED shards search shard-local IDs (0..shard_sz), the bitset
+//   passed to the cuVS filter must be indexed locally.  sync_shard_bitset()
+//   copies the word-aligned slice deleted_bitset_[start_word .. start_word+n_words)
+//   where start_word = shard_offset / 32.  This works because rows_per_shard
+//   is always a multiple of 32 (see above), so start_word is always an integer.
+//
+//
+// QUANTIZER  (1-byte types only: int8_t, uint8_t)
+// ------------------------------------------------
+// scalar_quantizer_t<float> quantizer_ maps float32 values to [min, max] range
+// and packs them into int8/uint8.  It must be trained before add_chunk_float()
+// or extend_float() is called for 1-byte types.
+//
+// Training: quantizer_.train(res, train_matrix) or train_quantizer(data, n).
+//   - Auto-training occurs in add_chunk_float if not yet trained (uses up to 500
+//     samples from the first chunk).
+//   - For extend_float, the quantizer MUST already be trained (throws otherwise).
+//
+// Extended vectors must lie within the trained [min, max] range; vectors outside
+// this range will be clamped and produce degraded search quality.
+//
+//
+// SERIALIZATION  (save_dir / load_dir)
+// ------------------------------------
+// save_dir(dir) writes:
+//   manifest.json    — metadata (type, quantization, dim, count, components list)
+//   index.<fmt>      — cuVS index serialized by the derived class
+//   ids.bin          — host_ids (omitted if sequential IDs)
+//   quantizer.bin    — quantizer params (omitted if not trained)
+//   bitset.bin       — deleted_bitset_ (omitted if no deletions)
+//
+// load_dir(dir) reads manifest.json, deserializes each component, then calls
+// init_deleted_bitset() to recreate GPU caches.
+//
+// =============================================================================
+
 /**
- * @brief Base class for GPU-based indices.
+ * @brief Base class for GPU-based vector indices (IVF-Flat, IVF-PQ, CAGRA).
+ *
+ * See the Developer Guide block above for full details on lifecycle, locking,
+ * distribution modes, ID mapping, and the soft-delete bitset system.
+ *
+ * @tparam T           Element type: float, half (__half), int8_t, uint8_t
+ * @tparam BuildParams Index-specific build parameter struct
+ * @tparam IdT         Neighbor ID type: int64_t (IVF) or uint32_t (CAGRA)
  */
 template <typename T, typename BuildParams, typename IdT = int64_t>
 class gpu_index_base_t {
 public:
-    uint32_t dimension = 0;
-    uint32_t count = 0;
-    distance_type_t metric;
-    BuildParams build_params;
-    std::vector<int> devices_;
+    // ---- Index configuration (immutable after build) ----
+    uint32_t dimension = 0;          ///< Vector dimensionality
+    distance_type_t metric;          ///< Distance metric (L2, IP, cosine, ...)
+    BuildParams build_params;        ///< Index-type-specific build parameters
+    std::vector<int> devices_;       ///< GPU device IDs to use
+    distribution_mode_t dist_mode;   ///< SINGLE_GPU / REPLICATED / SHARDED
+
+    // ---- Mutable counters (protected by mutex_) ----
+    uint32_t count = 0;              ///< cap(): total allocated slots (after build = total vectors)
+    // current_offset_: number of vectors actually inserted; len() reads this.
+    // Before build: incremented by add_chunk(). After build: incremented by extend().
+    // Invariant: current_offset_ <= count always holds after build.
+
+    // ---- Pre-build host buffer (cleared after build()) ----
+    // Holds raw T vectors [count x dimension] during the add_chunk phase.
+    // Released immediately after build_internal() completes to free host RAM.
     std::vector<T> flattened_host_dataset;
+
+    // ---- External ID mapping (immutable after is_loaded_ = true) ----
+    // If non-empty: host_ids[internal_pos] = external_id.
+    // If empty: internal positions are used directly as IDs.
+    // Safe to read in search without a lock (write only under unique_lock before/during build).
     std::vector<IdT> host_ids;
-    distribution_mode_t dist_mode;
 
-    std::unique_ptr<cuvs_worker_t> worker;
-    mutable std::shared_mutex mutex_;
-    bool is_loaded_ = false;
-    int build_device_id_ = 0;
-    // Use shared_ptr<void> to keep various RAFT resources alive
-    std::shared_ptr<void> dataset_device_ptr_; // Keep device memory alive
+    // ---- Worker and GPU resource management ----
+    std::unique_ptr<cuvs_worker_t> worker;  ///< Thread pool + CUDA stream pool
+    mutable std::shared_mutex mutex_;       ///< Guards all shared host-side state (see Locking Rules)
+    bool is_loaded_ = false;                ///< True once build() has completed successfully
+    int build_device_id_ = 0;              ///< Primary GPU used for SINGLE_GPU mode
 
-    // For REPLICATED mode: keep local resources alive for every device
+    // SINGLE_GPU: points to the device copy of the build dataset (stale after extend, reset then).
+    std::shared_ptr<void> dataset_device_ptr_;
+
+    // REPLICATED: per-device index and dataset pointers (device_id → shared_ptr<DerivedIndex>).
+    // Keyed by device id. Written under unique_lock, read under shared_lock in search.
     std::map<int, std::shared_ptr<void>> replicated_indices_;
     std::map<int, std::shared_ptr<void>> replicated_datasets_;
 
-    // Soft-delete bitset: 1 = valid, 0 = deleted (uint32_t matches raft::core::bitset<uint32_t>)
+    // ---- Soft-delete bitset (host side, protected by mutex_) ----
+    // Packed uint32 array: bit j = 1 means position j is alive, 0 means deleted.
+    // Indexed by internal position (0-based), NOT by external host_id.
+    // Bit word: deleted_bitset_[j/32], bit position: j%32.
     std::vector<uint32_t> deleted_bitset_;
-    uint64_t deleted_count_ = 0;
-    std::atomic<uint64_t> bitset_version_{0};
+    uint64_t deleted_count_ = 0;            ///< Number of soft-deleted vectors
+    std::atomic<uint64_t> bitset_version_{0}; ///< Incremented on every delete; drives cache invalidation
 
+    // Per-device GPU cache for the full bitset (non-SHARDED modes).
+    // Each entry is invalidated when bitset_version_ advances.
+    // Double-check pattern: check version → lock device mutex → recheck → rebuild if stale.
     struct device_bitset_cache_t {
-        std::shared_ptr<void> ptr;
-        uint64_t version = 0;
-        std::mutex mutex;
+        std::shared_ptr<void> ptr;  ///< raft::core::bitset<uint32_t, int64_t>* (type-erased)
+        uint64_t version = 0;       ///< Last known bitset_version_ when ptr was synced
+        std::mutex mutex;           ///< Per-device lock for rebuilding (never held during GPU build)
     };
-    // Protects access to the map itself
-    std::mutex device_bitsets_mutex_;
+    std::mutex device_bitsets_mutex_;  ///< Guards the map itself (not individual entries)
     std::map<int, std::shared_ptr<device_bitset_cache_t>> device_deleted_bitsets_;
 
-    // Per-device cache for shard-local bitset slices (SHARDED mode only).
-    // Indexed by device id; each entry covers [shard_offset, shard_offset+shard_sz).
+    // Per-device GPU cache for shard-local bitset slices (SHARDED mode only).
+    // Entry for device d covers global positions [shard_offset, shard_offset+shard_sz).
+    // bit j of the shard bitset = global bit (shard_offset + j).
+    // shard_offset is always a multiple of 32 (enforced by rows_per_shard rounding at build).
     std::mutex device_shard_bitsets_mutex_;
     std::map<int, std::shared_ptr<device_bitset_cache_t>> device_shard_bitsets_;
 
-    // Reverse map from external ID to internal position (populated when host_ids are used)
+    // ---- External-to-internal ID reverse map (protected by mutex_) ----
+    // Populated by set_ids() / add_chunk(ids). id_to_index_[external_id] = internal_pos.
+    // Used only when host_ids is non-empty.
     std::unordered_map<IdT, uint64_t> id_to_index_;
 
     gpu_index_base_t() = default;

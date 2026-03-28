@@ -63,9 +63,108 @@
 
 namespace matrixone {
 
+// =============================================================================
+// gpu_ivf_pq_t — Developer Guide
+// =============================================================================
+//
+// OVERVIEW
+// --------
+// gpu_ivf_pq_t<T> implements an IVF-PQ (Inverted File with Product Quantization)
+// approximate nearest-neighbor index backed by cuVS.
+//
+// cuVS type: cuvs::neighbors::ivf_pq::index<int64_t>
+//   Note: the cuVS IVF-PQ index type is NOT templated on T — it always stores
+//   PQ codes internally (uint8).  T is used only for the input/query element type.
+// IdT      : int64_t
+// Supported T: float, half (__half), int8_t, uint8_t
+//
+// IVF-PQ partitions the dataset into n_lists clusters (same as IVF-Flat), but
+// instead of storing vectors verbatim it encodes each residual vector using
+// Product Quantization: the residual is split into M sub-vectors, each encoded
+// with pq_bits bits from a trained codebook.  This dramatically reduces storage
+// at the cost of search precision.
+//
+// Key build parameters:
+//   n_lists  — number of IVF clusters (centroids)
+//   M        — number of PQ sub-vectors (dimension must be divisible by M)
+//   pq_bits  — bits per PQ code (typically 4 or 8)
+//
+//
+// QUANTIZER vs PQ CODEBOOK
+// ------------------------
+// The scalar quantizer (scalar_quantizer_t, from index_base) is separate from
+// the PQ codebook and is only relevant for 1-byte input types (int8/uint8):
+//   - It maps float32 inputs to the int8/uint8 range [min, max] before building.
+//   - Must be trained before add_chunk_float() or extend_float() for 1-byte T.
+//   - Extended vectors MUST fall within the trained [min, max] range; values
+//     outside this range are clamped and degrade search quality.
+//
+// The PQ codebook is trained automatically by cuVS during build().
+//
+//
+// DISTRIBUTION MODES
+// ------------------
+// SINGLE_GPU:
+//   index_ holds the single cuVS IVF-PQ index (unique_ptr).
+//   dataset_device_ptr_ holds the build dataset on device (reset after extend).
+//
+// REPLICATED:
+//   replicated_indices_[dev_id] holds a full copy per GPU (cast to ivf_pq_index*).
+//   The replicated dataset pointers (replicated_datasets_) are used during build
+//   and erased after the first extend on each device.
+//   search_internal / search_float_internal use per-thread cached index ptr
+//   (handle.get_index_ptr()) to avoid repeated map lookups.
+//
+// SHARDED:
+//   Each GPU holds a disjoint shard.
+//   rows_per_shard = (count / num_shards) & ~31  (rounded down to multiple of 32).
+//   Search results from all shards are merged by merge_sharded_results().
+//   Extend is NOT supported (throws).
+//
+//
+// EXTEND RULES
+// ------------
+// - extend() / extend_float() may only be called after build() (is_loaded_ must be true).
+// - extend_mutex_ (in derived class, defined here) serializes concurrent extends.
+// - cuVS requires explicit int64_t indices for non-empty index extend;
+//   generate sequential IDs [count .. count+n_rows) in extend() before dispatch.
+// - After GPU work, set_ids() + count + current_offset_ update happens under unique_lock.
+// - For extend_float() with 1-byte T, the quantizer must be trained and the data
+//   must fall within [quantizer.min, quantizer.max].
+// - SHARDED mode throws std::runtime_error.
+//
+//
+// SEARCH PATHS
+// ------------
+// search_internal(handle, T* queries, ...)
+//   Converts T queries to device, searches cuVS, applies bitset filter if needed.
+//   For REPLICATED: uses per-thread cached index ptr to avoid mutex on hot path.
+//   For SHARDED: called once per shard with the shard's local index.
+//
+// search_float_internal(handle, float* queries, ...)
+//   Converts float → T on device (quantize for 1-byte T, half-cast for T=half,
+//   direct copy for T=float), then searches the same way as search_internal.
+//
+// Soft-delete filtering:
+//   - Non-SHARDED: sync_device_bitset() → bitset_filter over full index
+//   - SHARDED: sync_shard_bitset() → bitset_filter over shard-local bit slice
+//     Bit j of the shard bitset = global bit (rank * rows_per_shard + j)
+//
+// search_batch_internal() aggregates multiple concurrent float queries into one
+// cuVS call via the worker's batch submission mechanism.
+//
+//
+// ID OFFSET IN SHARDED SEARCH
+// ----------------------------
+// After search returns shard-local IDs, the offset (rank * rows_per_shard) is
+// added to convert to global IDs — unless host_ids is non-empty, in which case
+// host_ids[local_id + offset] is used (but host_ids + SHARDED is unusual).
+// rows_per_shard must match the value used at build (same rounded formula).
+//
+// =============================================================================
+
 /**
- * @brief Search result containing neighbor IDs and distances.
- * Common for all IVF-PQ instantiations.
+ * @brief Search result for IVF-PQ queries.
  */
 struct ivf_pq_search_result_t {
     std::vector<int64_t> neighbors; // Indices of nearest neighbors

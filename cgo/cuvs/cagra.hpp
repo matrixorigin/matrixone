@@ -62,6 +62,129 @@
 
 namespace matrixone {
 
+// =============================================================================
+// gpu_cagra_t — Developer Guide
+// =============================================================================
+//
+// ALGORITHM
+// ---------
+// CAGRA (Concurrent And Graph-based RAG Algorithm) is a GPU-native graph-based
+// ANN index. Unlike IVF types, CAGRA builds a proximity graph (k-NN graph) and
+// navigates it during search. This gives faster query throughput than IVF on GPU
+// for many workloads, at the cost of higher build time and memory.
+//
+// DATA TYPE (T)
+// -------------
+// Supported T: float, half (fp16), int8_t, uint8_t.
+// IMPORTANT: `half` (fp16) is NOT supported for extend() — guarded by
+//   `if constexpr (!std::is_same_v<T, half>)` in extend()/extend_float().
+//   Attempting extend on a half-precision CAGRA index will throw at runtime.
+//
+// NEIGHBOR ID TYPE
+// ----------------
+// IdT = uint32_t (unlike IVF types which use int64_t).
+// All host_ids / id_to_index_ structures use uint32_t.
+// The C wrapper and Go layer also use uint32_t for CAGRA neighbor IDs.
+//
+// LIFECYCLE
+// ---------
+//   1. Construct via one of:
+//      - gpu_cagra_t(dataset, count, dim, ...)  — from in-memory dataset
+//      - gpu_cagra_t(total_count, dim, ...)     — chunked: pre-allocate, fill via add_chunk()
+//      - gpu_cagra_t(filename, dim, ...)        — load from serialized file
+//      - gpu_cagra_t(unique_ptr<index>, ...)    — private; used only by merge()
+//   2. Call start() — initializes the worker thread pool and CUDA context.
+//   3. Call build() — triggers CAGRA graph construction (or file load).
+//      If is_loaded_ is already true (private constructor path), build() is a no-op.
+//   4. Call search() / search_float() to query.
+//   5. Call extend() / extend_float() to add new vectors (SINGLE_GPU or REPLICATED).
+//   6. Destructor calls destroy() which calls stop() on the worker.
+//
+// DISTRIBUTION MODES
+// ------------------
+// SINGLE_GPU:
+//   One index on devices_[0]. Build, extend, search all dispatch to primary GPU.
+//
+// REPLICATED:
+//   Full index replicated to all GPUs. build_internal() dispatches to all devices
+//   via submit_all_devices(). extend_internal() also dispatches to all devices
+//   concurrently. search() round-robins across all GPU replicas for load balancing.
+//
+// SHARDED:
+//   Each GPU holds a disjoint slice of the dataset (a separate CAGRA sub-graph).
+//   Build dispatches each shard to its GPU. Search dispatches to all shards
+//   concurrently via submit_all_devices_no_wait(), collects results, and merges
+//   them (merge_sharded_results). Each shard returns local IDs (0..shard_sz-1);
+//   search_internal adds the shard offset before returning so callers see global IDs.
+//   Extend is NOT supported for SHARDED mode — throws std::runtime_error.
+//
+// EXTEND
+// ------
+// cuVS exposes `cuvs::neighbors::cagra::extend()` which re-runs the graph
+// construction over the existing index + new vectors. This is expensive.
+// Rules:
+//   - half (fp16) T: extend is NOT supported (compile-time guard).
+//   - extend() takes raw T* vectors; extend_float() takes float* and handles
+//     on-the-fly quantization for int8/uint8 T.
+//   - REPLICATED: extend_internal() is submitted to all devices concurrently
+//     via submit_all_devices(). set_ids() is called ONCE in extend() after
+//     the worker wait, not inside extend_internal().
+//   - count and current_offset_ are both updated together under unique_lock
+//     after all device jobs complete.
+//   - dataset_device_ptr_ / replicated_datasets_ are reset after extend.
+//
+// MERGE
+// -----
+// cuVS provides `cuvs::neighbors::cagra::merge()` which merges multiple CAGRA
+// indices at the graph level (the only ANN type cuVS can merge natively).
+// Rules:
+//   - Only SINGLE_GPU (is_loaded_ == true, index_ != nullptr) sources accepted.
+//   - A transient worker is created for the merge GPU operation.
+//   - The merged index is always SINGLE_GPU on devs[0].
+//   - host_ids merging: vectors are laid out as source[0] .. source[N-1].
+//     If any source has custom IDs, all sources are merged (synthesizing
+//     sequential IDs for sources that have none).
+//   - init_deleted_bitset() is called on the resulting index.
+//   - The private constructor (line ~169) sets is_loaded_=true and
+//     current_offset_=count, making the merged index immediately queryable.
+//
+// SOFT-DELETE BITSET
+// ------------------
+// Inherited from gpu_index_base_t. Bit j = 1 means vector j is alive.
+// SINGLE_GPU / REPLICATED: sync_device_bitset() uploads the full bitset to the
+//   device; passed as a bitset_filter to cuvs::neighbors::cagra::search().
+// SHARDED: sync_shard_bitset() uploads only the shard-local slice of the bitset
+//   so that local IDs (0..shard_sz-1) index correctly into the filter.
+//   shard_offset must be a multiple of 32 (enforced by the build-time rounding
+//   rows_per_shard = (count/num_shards) & ~31) so no bit-shifting is needed.
+//
+// SEARCH
+// ------
+// search_internal() is dispatched via submit() (round-robin) for SINGLE_GPU /
+//   REPLICATED, or submit_all_devices_no_wait() for SHARDED.
+// If deleted_count_ > 0, the appropriate bitset is synced and passed to
+//   cuvs::neighbors::cagra::search() as a bitset_filter (full bitset for
+//   SINGLE_GPU/REPLICATED; shard-local slice for SHARDED).
+// Search always returns `limit` neighbors; invalid/deleted results have
+//   neighbor ID = 0xFFFFFFFF and distance = +inf.
+//
+// SERIALIZATION
+// -------------
+// save(filename): serializes via cuvs::neighbors::cagra::serialize().
+// load(filename): deserializes into a new cagra_index; sets is_loaded_=true.
+// save_dir() / load_dir(): directory format (manifest.json + index + ids + bitset).
+//   Used by the database storage layer for persistence.
+//
+// LOCKING
+// -------
+// - shared_lock for reading index_/replicated_indices_ pointer
+// - unique_lock for writing count, current_offset_, host_ids, replicated_indices_
+// - NO lock during any GPU call (build, extend, search)
+// - extend_mutex_ (std::mutex in base) serializes concurrent extend() callers
+// - Per-device bitset cache uses its own std::mutex (not the shared_mutex)
+//
+// =============================================================================
+
 /**
  * @brief Search result containing neighbor IDs and distances.
  * Common for all CAGRA instantiations.

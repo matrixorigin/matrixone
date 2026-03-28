@@ -56,6 +56,7 @@ func (gi *GpuIvfPq[T]) SetUseBatching(enable bool) error {
 }
 
 // NewGpuIvfPq creates a new GpuIvfPq instance from a dataset.
+// ids may be nil to use internal sequential IDs (0..count-1).
 func NewGpuIvfPq[T VectorType](dataset []T, count uint64, dimension uint32, metric DistanceType,
 	bp IvfPqBuildParams, devices []int, nthread uint32, mode DistributionMode, ids []int64) (*GpuIvfPq[T], error) {
 	if len(devices) == 0 {

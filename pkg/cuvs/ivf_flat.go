@@ -56,6 +56,7 @@ func (gi *GpuIvfFlat[T]) SetUseBatching(enable bool) error {
 }
 
 // NewGpuIvfFlat creates a new GpuIvfFlat instance from a dataset.
+// ids may be nil to use internal sequential IDs (0..count-1).
 func NewGpuIvfFlat[T VectorType](dataset []T, count uint64, dimension uint32, metric DistanceType,
 	bp IvfFlatBuildParams, devices []int, nthread uint32, mode DistributionMode, ids []int64) (*GpuIvfFlat[T], error) {
 	if len(devices) == 0 {
