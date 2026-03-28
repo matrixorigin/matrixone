@@ -691,3 +691,16 @@ func resetChildren(arg *LockOp, bat *batch.Batch) {
 	arg.Children = nil
 	arg.AppendChild(op)
 }
+
+func TestCopyToPipelineTargetIncludesPartitionColIdx(t *testing.T) {
+	pkType := types.New(types.T_int32, 0, 0)
+	arg := NewArgumentByEngine(nil)
+	defer arg.Release()
+
+	// Add lock target with partition column index
+	arg.AddLockTarget(1, nil, 0, pkType, 2, -1, nil, false)
+
+	targets := arg.CopyToPipelineTarget()
+	require.Len(t, targets, 1)
+	require.Equal(t, int32(2), targets[0].PartitionColIdxInBat)
+}
