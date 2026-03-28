@@ -61,6 +61,93 @@
 
 namespace matrixone {
 
+// =============================================================================
+// gpu_brute_force_t — Developer Guide
+// =============================================================================
+//
+// ALGORITHM
+// ---------
+// Brute-force (exact) nearest-neighbor search: every query is compared against
+// every vector in the dataset.  No approximation — guaranteed to return the true
+// k nearest neighbors.  Practical only for small datasets (up to ~1M vectors)
+// because search cost is O(n * dim) per query.
+// Internally uses cuvs::neighbors::brute_force::build / search.
+//
+// DATA TYPE (T)
+// -------------
+// Supported T: float, half (fp16), int8_t, uint8_t.
+// DistT is always float — cuVS brute_force::index<T, DistT=float>.
+// IdT = int64_t (same as IVF types, unlike CAGRA which uses uint32_t).
+//
+// DISTRIBUTION MODE
+// -----------------
+// Only SINGLE_GPU is supported.  There is no REPLICATED or SHARDED path —
+// the brute_force index holds the full dataset on one GPU.
+// All build, extend, and search operations dispatch to devices_[0].
+//
+// LIFECYCLE
+// ---------
+//   1. Construct via one of:
+//      - gpu_brute_force_t(dataset, count, dim, metric, bp, devices, nthread, mode, ids)
+//        — full dataset constructor; copies data into flattened_host_dataset.
+//      - gpu_brute_force_t(dataset, count, dim, metric, nthread, device_id, ids)
+//        — compatibility constructor for tests (SINGLE_GPU only).
+//      - gpu_brute_force_t(total_count, dim, metric, nthread, device_id, ids)
+//        — chunked/empty constructor; fill via add_chunk() then build().
+//      - gpu_brute_force_t(total_count, dim, metric, bp, devices, nthread, mode, ids)
+//        — chunked constructor with full params.
+//   2. start()  — creates the worker thread; no init_fn needed (brute force has
+//                 no per-thread index cache).
+//   3. build()  — uploads dataset to device, calls brute_force::build, sets
+//                 is_loaded_=true, then clears flattened_host_dataset to free memory.
+//                 The built index holds a device pointer to the dataset via
+//                 dataset_device_ptr_ (shared_ptr kept alive by index_).
+//   4. search() / search_float() — dispatched via submit() (round-robin, but with
+//                 SINGLE_GPU there is only one device).
+//   5. Destructor calls destroy() which stops the worker and resets index_.
+//
+// BUILD DETAILS
+// -------------
+// build_internal() holds a unique_lock during the entire build (dataset upload +
+// brute_force::build call).  This is acceptable because brute_force is SINGLE_GPU
+// only and build is a one-time operation — no concurrent searches can proceed
+// before is_loaded_ is set.
+// After build(), flattened_host_dataset is cleared to release host memory because
+// brute_force keeps its own copy of the data on the GPU.
+//
+// EXTEND
+// ------
+// NOT supported — there is no cuVS brute_force::extend() API.
+// To add new vectors, rebuild the index from scratch.
+//
+// SEARCH
+// ------
+// search_internal() holds a shared_lock during the GPU search call (read-only
+// access to index_).  This is fine because brute_force is SINGLE_GPU and has no
+// concurrent extend path.
+// search_float_internal() converts float queries to T on the device before
+// searching (quantize for 1-byte T, half-cast for T=half, direct for T=float).
+//
+// SOFT-DELETE BITSET
+// ------------------
+// Inherited from gpu_index_base_t.  Only the full-index (non-sharded) bitset
+// path is used: sync_device_bitset() + bitset_filter passed to brute_force::search.
+// delete_id() marks a bit as dead; the vector remains in the index but is
+// filtered out of search results.
+//
+// HOST ID MAPPING
+// ---------------
+// If host_ids is non-empty, after search returns internal int64_t positions,
+// each valid neighbor ID is mapped through host_ids[internal_id].
+// Invalid neighbors are returned as -1.
+//
+// SERIALIZATION
+// -------------
+// Not implemented — brute_force does not have a save/load path.
+// The dataset must be re-provided and rebuilt after restart.
+//
+// =============================================================================
+
 /**
  * @brief Search result containing neighbor IDs and distances.
  * Common for all brute force instantiations.

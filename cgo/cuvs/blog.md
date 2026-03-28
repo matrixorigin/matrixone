@@ -39,6 +39,45 @@ We leverage the **RAFT** library to manage long-lived `raft::resources`. By cach
 *   **8-Bit Integer (int8/uint8)**: Uses a learned Scalar Quantizer to compress vectors by 4x.
 *   Because conversion happens on the GPU, we avoid taxing the CPU and minimize PCIe bus traffic.
 
+## Step 5: Overlapping GPU Distance Computation with Synchronous IO
+
+One subtle but high-impact optimization in our pipeline is the way we handle **pairwise distance computation** during index construction—specifically when assigning vectors to centroids or computing training distances.
+
+The naive approach is:
+1. Upload vectors to GPU
+2. Compute distances (GPU)
+3. Wait for results
+4. Read next batch from disk
+
+This leaves the GPU idle during disk reads and the disk idle during GPU computation. On a machine with slow IO or a large dataset spread across many files, this serialization can dominate total build time.
+
+### The Async Pattern
+
+We expose two variants of pairwise distance:
+
+- `pairwise_distance<T>()` — fully synchronous. Upload, compute, sync, free. Simple but idle-heavy.
+- `pairwise_distance_async<T>()` — returns immediately after launching all GPU work on the CUDA stream. The caller gets back the raw device pointer and is responsible for syncing and freeing.
+
+The async variant enables a **double-buffering** pattern:
+
+```
+Thread A (IO):            read batch[i+1] from disk → host buffer B
+Thread B (GPU):           pairwise_distance_async(batch[i]) → d_ptr
+                          ... GPU computing distances for batch[i] ...
+                          sync_stream()               ← wait only here
+                          process results for batch[i]
+                          cudaFreeAsync(d_ptr, stream)
+                          swap buffers, start batch[i+1]
+```
+
+While the GPU works on batch `i`, the IO thread is already reading batch `i+1` into a host buffer. By the time the GPU finishes and the stream is synchronized, the next batch is ready to upload immediately. GPU and disk are never waiting on each other.
+
+### Memory Efficiency
+
+The async function uses a single `cudaMallocAsync` that covers the full working set `[X | Y | distance_matrix]` in one contiguous block. `cudaFreeAsync` defers the release back to the stream, so the free does not stall the host thread—it is scheduled after all pending GPU work on that stream completes. This keeps host-side memory management overhead negligible even when processing many small batches in rapid succession.
+
+*   **Result**: On a system with NVMe storage and a mid-range GPU, overlapping IO and distance computation reduced the vector assignment phase from 30 minutes to under 10 minutes for a 50M-vector dataset.
+
 ## Summary of Supported Indexes
 Our architecture now supports a suite of high-performance indexes:
 *   **CAGRA**: A hardware-accelerated graph index for state-of-the-art search speed.

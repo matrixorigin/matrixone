@@ -27,6 +27,64 @@
 
 namespace matrixone {
 
+// =============================================================================
+// distance.hpp — Developer Guide
+// =============================================================================
+//
+// PURPOSE
+// -------
+// Provides two stateless functions for GPU pairwise distance computation between
+// two sets of vectors X (n_x × dim) and Y (n_y × dim), producing an
+// (n_x × n_y) float32 distance matrix on the host.
+// Uses cuvs::distance::pairwise_distance internally.
+//
+// FUNCTIONS
+// ---------
+// pairwise_distance_async<T>(res, x, n_x, y, n_y, dim, metric, dist)
+//   - Allocates device memory, uploads X and Y, runs pairwise_distance,
+//     copies results back to host — all asynchronously on the CUDA stream
+//     embedded in res.
+//   - Returns the raw device pointer (void*) to the caller.
+//   - The stream is NOT synchronized before returning.
+//   - The caller must: (1) sync the stream before reading dist[], then
+//     (2) call cudaFreeAsync(d_ptr, stream) to release device memory.
+//   - Use when multiple async operations are chained and the caller manages
+//     synchronization and cleanup explicitly.
+//
+// pairwise_distance<T>(res, x, n_x, y, n_y, dim, metric, dist)
+//   - Wraps pairwise_distance_async; synchronizes the stream and frees
+//     device memory before returning.
+//   - Fully synchronous from the caller's perspective.
+//   - Use for simple one-shot calls where async management is not needed.
+//
+// MEMORY LAYOUT
+// -------------
+// Single cudaMallocAsync covers:  [X | Y | dist_matrix]
+// Each region is 256-byte aligned to satisfy CUDA alignment requirements.
+// The distance matrix region (n_x * n_y * 4 bytes) is NOT padded — it is
+// the last region and exact sizing is sufficient.
+//
+// METRICS
+// -------
+// metric is distance_type_t (from cuvs_types.h); cast to
+// cuvs::distance::DistanceType before calling pairwise_distance.
+// Supported metrics depend on cuVS (L2, L2Sqrt, InnerProduct, Cosine, etc.).
+//
+// CALLER RESPONSIBILITY
+// ---------------------
+// - The caller owns the raft::resources and must set the CUDA device.
+// - dist[] must be pre-allocated on the host with size n_x * n_y * sizeof(float).
+// - For pairwise_distance_async, stream sync and cudaFreeAsync are the caller's
+//   responsibility.
+//
+// LIMITATIONS
+// -----------
+// - Only float32 input (T=float) is typical; other T types work if cuVS supports
+//   the metric for that type.
+// - No batching — the full X and Y matrices must fit in device memory.
+//
+// =============================================================================
+
 /**
  * @brief Performs a pairwise distance calculation on GPU asynchronously.
  * 

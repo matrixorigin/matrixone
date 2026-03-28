@@ -28,6 +28,59 @@
 
 namespace matrixone {
 
+// =============================================================================
+// adhoc.hpp — Developer Guide
+// =============================================================================
+//
+// PURPOSE
+// -------
+// Provides a single stateless function adhoc_brute_force_search<T>() for
+// one-shot exact nearest-neighbor search on the GPU without building or owning
+// a persistent index.  Used when the dataset changes frequently or is too small
+// to justify index construction overhead.
+//
+// DESIGN
+// ------
+// No index object, no worker threads, no lifecycle.  The caller supplies a
+// raft::resources (CUDA stream + allocators) and host pointers; the function
+// handles all device memory management internally.
+//
+// Single allocation strategy:
+//   One cudaMallocAsync covers the full working set:
+//     [dataset | queries | neighbors | distances]
+//   Each region is 256-byte aligned.  A single cudaFreeAsync at the end
+//   releases everything.  This minimizes CUDA allocator overhead for small
+//   repeated calls.
+//
+// EXECUTION SEQUENCE
+// ------------------
+//   1. cudaMallocAsync — one contiguous block.
+//   2. Async H→D copy for dataset and queries.
+//   3. sync_stream — ensure copies are done before build.
+//   4. brute_force::build — constructs a temporary view-based index (no copy).
+//   5. brute_force::search — exact k-NN on device.
+//   6. Async D→H copy for neighbors and distances.
+//   7. sync_stream — wait for results.
+//   8. cudaFreeAsync — release device memory.
+//   9. Post-process invalid IDs: cuVS returns INT64_MAX or UINT32_MAX for
+//      positions with no valid neighbor; these are normalized to -1.
+//
+// CALLER RESPONSIBILITY
+// ---------------------
+// The caller owns the raft::resources and must ensure the CUDA device is
+// set appropriately before calling.  The function is fully synchronous from
+// the caller's perspective (both sync_stream calls ensure completion before
+// return).
+//
+// LIMITATIONS
+// -----------
+// - No soft-delete filtering (no bitset).
+// - No host_id mapping — returns raw internal 0-based positions.
+// - T must be float or half; int8/uint8 quantization is not applied here.
+// - No batching or concurrency — one blocking call per invocation.
+//
+// =============================================================================
+
 /**
  * @brief Performs an ad-hoc brute-force search on GPU without using a worker thread.
  *        This is intended for scenarios where an index is not pre-built and the

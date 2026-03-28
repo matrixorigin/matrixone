@@ -43,6 +43,133 @@
 
 namespace matrixone {
 
+// =============================================================================
+// cuvs_worker_t — Developer Guide
+// =============================================================================
+//
+// PURPOSE
+// -------
+// cuvs_worker_t manages a pool of CPU threads, each pinned to a GPU device,
+// that execute GPU work (build, extend, search) asynchronously.  Each index
+// type (CAGRA, IVF-Flat, IVF-PQ) owns one cuvs_worker_t for its lifetime.
+//
+// THREAD MODEL
+// ------------
+// On start(), two categories of threads are spawned:
+//
+//   Main thread (1):
+//     - Pinned to devices_[0].
+//     - Drains main_tasks_ queue exclusively.
+//     - Used for serialized operations that must run on the primary GPU:
+//       build, extend, serialize/deserialize, merge setup.
+//     - submit_main() enqueues to this thread.
+//
+//   Device worker pool (nthread_ threads):
+//     - Distributed across devices_ round-robin: thread i → devices_[i % n].
+//     - Each thread drains device_queues_[i % n] (one queue per physical GPU).
+//     - Used for parallel/concurrent operations: search round-robin, SHARDED
+//       build/extend (one job per GPU simultaneously).
+//     - submit() enqueues to the next device queue (round-robin via next_device_idx_).
+//     - submit_all_devices_no_wait() pushes one job to EACH device queue.
+//     - submit_all_devices() = submit_all_devices_no_wait() + wait for all.
+//
+//   Each thread gets its own raft_handle_wrapper_t with its own raft::resources
+//   (and therefore its own CUDA stream) so GPU ops on different threads do not
+//   serialize on the same stream.
+//
+// TASK SUBMISSION SUMMARY
+// -----------------------
+//   submit_main(fn)               → main thread, primary GPU, serialized
+//   submit(fn)                    → round-robin device thread, load-balanced
+//   submit_all_devices_no_wait(fn)→ one task per GPU, concurrent, returns job IDs
+//   submit_all_devices(fn)        → same + blocks until all complete
+//   broadcast(fn)                 → alias for submit_all_devices (with wait)
+//
+// RESULT TRACKING
+// ---------------
+// Every submit* returns a uint64_t job ID.  call wait(id).get() to block until
+// the task completes and retrieve cuvs_task_result_t { result: std::any, error }.
+// cuvs_task_result_store_t is a sharded (64 shards) lock-striped map of
+// promise/future pairs.  If wait() is called before the task completes, a
+// placeholder promise is registered; the worker fulfills it on completion.
+// If wait() is called after the task completes, the stored result is returned
+// immediately via a pre-fulfilled future.
+//
+// LIFECYCLE
+// ---------
+//   1. Construct: cuvs_worker_t(nthread, devices, mode)
+//      - Creates one thread_safe_queue_t per GPU (capacity 1000 tasks each).
+//      - Does NOT start any threads yet.
+//   2. start(init_fn, stop_fn):
+//      - Spawns main_thread_ + nthread_ device_threads_.
+//      - init_fn (optional) is called once per thread with its raft_handle.
+//        Used by index types to register the cuVS index pointer on the handle
+//        (handle.set_index_ptr) so per-thread searches avoid map lookups.
+//      - stop_fn (optional) is called once per thread when its queue is drained
+//        and the worker is stopping.  Used to clean up device-side state.
+//   3. submit / submit_main / submit_all_devices — enqueue work.
+//   4. wait(id).get() — block until work completes, retrieve result or rethrow.
+//   5. stop():
+//      - Sets running_ = false, drains all queues by calling stop() on each.
+//      - Joins all threads (main + device pool).
+//      - Fulfills any pending placeholder futures with a "Worker stopped" error.
+//
+// raft_handle_wrapper_t
+// ---------------------
+// Wraps raft::resources (CUDA stream + allocators) with device metadata:
+//   - device_id_: physical CUDA device ID
+//   - rank_:      logical rank (index into devices_ vector)
+//   - mode_:      distribution mode (SINGLE_GPU / REPLICATED / SHARDED)
+//   - index_ptr_: std::any — used by REPLICATED mode to cache a per-thread
+//                 pointer to the local GPU index (set in init_fn, read in search)
+//                 so hot-path searches avoid taking the index map mutex.
+//   - sync():     calls raft::resource::sync_stream(); with force_all_ranks=true
+//                 also syncs all other ranks (used by build completion).
+//
+// BATCHING (submit_batched)
+// -------------------------
+// Optional path for aggregating multiple concurrent float-query search requests
+// into a single cuVS call to improve GPU utilization.
+//   - Enabled by set_use_batching(true) on the index.
+//   - submit_batched(key, req, exec_fn): groups requests under a key (per-index
+//     string), flushes when >= 16 requests accumulate or after 100 µs delay.
+//   - exec_fn receives the batched requests and a vector of per-request setters
+//     (callbacks to resolve individual futures).
+//   - The batch is flushed either eagerly (>= 16 reqs) or via a scheduled task
+//     that sleeps 100 µs to allow more requests to arrive.
+//   - For SHARDED mode, the batch flush task is sent to the main thread.
+//
+// DISTRIBUTION MODE USAGE BY INDEX TYPES
+// ----------------------------------------
+//   SINGLE_GPU:
+//     build    → submit_main
+//     extend   → submit_main
+//     search   → submit (round-robin; with multiple threads, multiple searches
+//                can overlap on the same GPU via separate streams)
+//
+//   REPLICATED:
+//     build    → submit_all_devices (each GPU builds its own full copy)
+//     extend   → submit_all_devices (each GPU extends its copy concurrently)
+//     search   → submit (round-robin across GPU replicas)
+//
+//   SHARDED:
+//     build    → submit_all_devices (each GPU builds its shard)
+//     extend   → NOT supported (throws at index level)
+//     search   → submit_all_devices_no_wait (all shards search concurrently)
+//                → results collected and merged by merge_sharded_results()
+//
+// THREAD SAFETY
+// -------------
+// - thread_safe_queue_t: all operations protected by internal mutex + condvars.
+//   Bounded capacity (1000) — push blocks if full, pop blocks if empty.
+// - cuvs_task_result_store_t: 64-shard lock-striped; each shard has its own
+//   mutex so high-concurrency wait/store calls rarely contend.
+// - next_device_idx_: atomic uint32_t, incremented without lock for round-robin.
+// - batch_mutex_: guards the batches_ map (per-key batch_t allocation only).
+//   per-batch batch_t::mu guards the request list and scheduled flag.
+//
+// =============================================================================
+
 inline std::string get_timestamp() {
     auto now = std::chrono::system_clock::now();
     auto now_c = std::chrono::system_clock::to_time_t(now);
