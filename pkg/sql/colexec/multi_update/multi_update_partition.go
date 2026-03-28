@@ -252,7 +252,6 @@ func (op *PartitionMultiUpdate) writeS3(
 			return vm.CallResult{}, err
 		}
 		if res.Empty() {
-			res.Close()
 			panic("Prune result is empty")
 		}
 
