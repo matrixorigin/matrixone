@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -229,4 +230,31 @@ func TestDeleteAffectedRows(t *testing.T) {
 
 	update.addDeleteAffectRows(UpdateMainTable, 4)
 	require.Equal(t, uint64(4), update.ctr.affectedRows, "DELETE rows should be counted")
+}
+
+func TestMultiUpdateCtxClone(t *testing.T) {
+	ctx := &MultiUpdateCtx{
+		InsertCols:    []int{1, 2, 3},
+		DeleteCols:    []int{4, 5},
+		PartitionCols: []int{6, 7, 8},
+		ObjRef:        &plan.ObjectRef{SchemaName: "test", ObjName: "t1"},
+		TableDef:      &plan.TableDef{Name: "t1"},
+	}
+
+	cloned := ctx.clone()
+
+	// Verify values are copied
+	require.Equal(t, ctx.InsertCols, cloned.InsertCols)
+	require.Equal(t, ctx.DeleteCols, cloned.DeleteCols)
+	require.Equal(t, ctx.PartitionCols, cloned.PartitionCols)
+	require.Equal(t, ctx.ObjRef.SchemaName, cloned.ObjRef.SchemaName)
+	require.Equal(t, ctx.TableDef.Name, cloned.TableDef.Name)
+
+	// Verify they are different objects (not shallow copy)
+	require.NotSame(t, ctx.ObjRef, cloned.ObjRef)
+	require.NotSame(t, ctx.TableDef, cloned.TableDef)
+
+	// Modify cloned and verify original is unchanged
+	cloned.ObjRef.ObjName = "modified"
+	require.Equal(t, "t1", ctx.ObjRef.ObjName)
 }
