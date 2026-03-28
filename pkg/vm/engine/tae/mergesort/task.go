@@ -38,40 +38,87 @@ import (
 	"go.uber.org/zap"
 )
 
-var transferSlabPool = sync.Pool{}
+var (
+	transferSlabMu    sync.Mutex
+	transferSlabFree  [][]api.TransferDestPos
+	transferSlabMPool = mpool.MustNew("transfer-slab")
+)
 
-// maxPoolSlabBytes is the maximum slab size (in bytes) that will be returned
-// to the pool. Larger slabs are left for GC to avoid bloating inuse_space.
+// maxPoolSlabEntries is the maximum slab capacity (in entries) that will be
+// cached in the free list. Larger slabs are freed immediately via mpool.
 // 4 MB ≈ 500 blocks × 8192 rows × 1 entry (8 bytes each) = ~500 k entries.
 const maxPoolSlabEntries = 4 * 1024 * 1024 / 8 // 4 MB / sizeof(TransferDestPos)
 
-// getTransferSlab returns a slab of at least size entries from the pool,
-// with all ObjIdx fields initialized to NoTransfer.
+// maxFreeListLen caps the number of idle slabs retained in the free list.
+const maxFreeListLen = 32
+
+// getTransferSlab returns a slab of at least size entries, with all ObjIdx
+// fields initialized to NoTransfer. It first checks the off-heap free list,
+// then allocates via mpool (C.calloc) if no suitable slab is available.
 func getTransferSlab(size int) []api.TransferDestPos {
-	if v := transferSlabPool.Get(); v != nil {
-		slab := v.([]api.TransferDestPos)
-		if cap(slab) >= size {
-			slab = slab[:size]
-			for i := range slab {
-				slab[i] = api.TransferDestPos{ObjIdx: api.NoTransfer}
-			}
-			return slab
+	transferSlabMu.Lock()
+	bestIdx := -1
+	bestCap := int(^uint(0) >> 1)
+	for i, s := range transferSlabFree {
+		if c := cap(s); c >= size && c < bestCap {
+			bestIdx = i
+			bestCap = c
 		}
 	}
-	slab := make([]api.TransferDestPos, size)
+	if bestIdx >= 0 {
+		slab := transferSlabFree[bestIdx]
+		last := len(transferSlabFree) - 1
+		transferSlabFree[bestIdx] = transferSlabFree[last]
+		transferSlabFree[last] = nil
+		transferSlabFree = transferSlabFree[:last]
+		transferSlabMu.Unlock()
+		slab = slab[:size]
+		for i := range slab {
+			slab[i] = api.TransferDestPos{ObjIdx: api.NoTransfer}
+		}
+		return slab
+	}
+	transferSlabMu.Unlock()
+
+	slab, err := mpool.MakeSlice[api.TransferDestPos](size, transferSlabMPool, true)
+	if err != nil {
+		panic(err)
+	}
 	for i := range slab {
 		slab[i].ObjIdx = api.NoTransfer
 	}
 	return slab
 }
 
-// putTransferSlab returns a slab to the pool if it's small enough.
-// Large slabs are dropped to avoid bloating inuse_space in sync.Pool.
+// putTransferSlab returns a slab to the off-heap free list if it's small
+// enough and the list isn't full. Otherwise the slab is freed via mpool.
 func putTransferSlab(slab []api.TransferDestPos) {
-	if slab == nil || cap(slab) > maxPoolSlabEntries {
+	if slab == nil {
 		return
 	}
-	transferSlabPool.Put(slab)
+	if cap(slab) > maxPoolSlabEntries {
+		mpool.FreeSlice(transferSlabMPool, slab)
+		return
+	}
+	transferSlabMu.Lock()
+	if len(transferSlabFree) >= maxFreeListLen {
+		transferSlabMu.Unlock()
+		mpool.FreeSlice(transferSlabMPool, slab)
+		return
+	}
+	transferSlabFree = append(transferSlabFree, slab)
+	transferSlabMu.Unlock()
+}
+
+// DrainTransferSlabPool frees all idle slabs in the free list.
+func DrainTransferSlabPool() {
+	transferSlabMu.Lock()
+	free := transferSlabFree
+	transferSlabFree = nil
+	transferSlabMu.Unlock()
+	for _, slab := range free {
+		mpool.FreeSlice(transferSlabMPool, slab)
+	}
 }
 
 // GetTransferMap allocates a []TransferDestPos of the given size

@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 )
 
 type timeBasedPolicy struct {
@@ -444,6 +445,7 @@ func (r *runner) onPostCheckpointEntries(entries ...any) {
 	// Drain arena pools to reclaim RSS now that the checkpoint
 	// (and the preceding flush/merge cycle) is complete.
 	objectio.DrainArenaPools()
+	mergesort.DrainTransferSlabPool()
 }
 
 func (r *runner) onGCCheckpointEntries(items ...any) {
