@@ -2551,6 +2551,18 @@ func TestParseSendLongDataAppendsRepeatedChunks(t *testing.T) {
 	require.True(t, ok)
 }
 
+func TestParseSendLongDataInitializesTrackingMap(t *testing.T) {
+	ctx := context.TODO()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select ?")
+	prepareStmt.getFromSendLongData = nil
+
+	chunk := append(make([]byte, 2), []byte("hello")...)
+	require.NoError(t, proto.ParseSendLongData(ctx, proc, prepareStmt, chunk, 0))
+	require.Equal(t, "hello", prepareStmt.params.GetStringAt(0))
+	_, ok := prepareStmt.getFromSendLongData[0]
+	require.True(t, ok)
+}
+
 /* FIXME The prepare process has undergone some modifications,
   	so the unit tests for prepare need to be refactored, and the subsequent pr I will resubmit a reasonable ut
 func TestParseExecuteData(t *testing.T) {
