@@ -236,21 +236,15 @@ func (h *PartitionChangesHandle) bufferCurrentRange(ctx context.Context, mp *mpo
 					if swapErr == nil {
 						continue
 					}
-					// Skip checkpoint-range recovery for VisibleState
-					// policy — CN-created objects carry constant
-					// commit_ts that leaks pre-range rows.
-					// Fall through to visible-state exact scan.
-					logutil.Warn("ChangesHandle-SnapshotStateRange rebuild failed, use visible-state exact scan",
+					logutil.Error("ChangesHandle-SnapshotStateRange rebuild failed",
 						zap.String("table", fmt.Sprintf("%d", h.tbl.tableId)),
 						zap.String("from", h.currentPSFrom.ToString()),
 						zap.String("to", h.currentPSTo.ToString()),
 						zap.Error(swapErr),
 					)
 				}
-				if err = h.swapCurrentHandleToVisibleState(ctx); err != nil {
-					return err
-				}
-				continue
+				cleanQueued()
+				return nextErr
 			}
 			cleanQueued()
 			return nextErr
@@ -391,39 +385,21 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		h.handleIdx++
 		snapshotRangeStart := time.Now()
 		if err = h.swapCurrentHandleToSnapshotStateRange(ctx); err != nil {
-			// Skip checkpoint-range recovery for VisibleState policy.
-			// CN-created objects in checkpoint ranges carry a constant
-			// commit_ts equal to their compaction time, which causes
-			// pre-range rows to leak through the row-level timestamp
-			// filter and produce phantom INSERTs. The visible-state
-			// exact scan compares two full snapshots and is immune to
-			// this issue.
-			logutil.Warn("ChangesHandle-SnapshotStateRange init failed, switch to visible-state exact scan",
+			logutil.Error("ChangesHandle-SnapshotStateRange init failed",
 				zap.String("table", fmt.Sprintf("%d", h.tbl.tableId)),
 				zap.String("from", h.currentPSFrom.ToString()),
 				zap.String("to", h.currentPSTo.ToString()),
 				zap.Duration("snapshot-range-attempt", time.Since(snapshotRangeStart)),
 				zap.Error(err),
 			)
-			visibleStateStart := time.Now()
-			if err = h.swapCurrentHandleToVisibleState(ctx); err != nil {
-				return false, err
-			}
-			logutil.Info("ChangesHandle-VisibleStateExactScan-Ready",
-				zap.String("table", fmt.Sprintf("%d", h.tbl.tableId)),
-				zap.String("from", h.currentPSFrom.ToString()),
-				zap.String("to", h.currentPSTo.ToString()),
-				zap.Duration("snapshot-range-attempt", time.Since(snapshotRangeStart)),
-				zap.Duration("visible-state-init", time.Since(visibleStateStart)),
-			)
-		} else {
-			logutil.Info("ChangesHandle-SnapshotStateRange-Ready",
-				zap.String("table", fmt.Sprintf("%d", h.tbl.tableId)),
-				zap.String("from", h.currentPSFrom.ToString()),
-				zap.String("to", h.currentPSTo.ToString()),
-				zap.Duration("duration", time.Since(snapshotRangeStart)),
-			)
+			return false, err
 		}
+		logutil.Info("ChangesHandle-SnapshotStateRange-Ready",
+			zap.String("table", fmt.Sprintf("%d", h.tbl.tableId)),
+			zap.String("from", h.currentPSFrom.ToString()),
+			zap.String("to", h.currentPSTo.ToString()),
+			zap.Duration("duration", time.Since(snapshotRangeStart)),
+		)
 		return false, nil
 	}
 
@@ -606,27 +582,6 @@ func (h *PartitionChangesHandle) closeCurrentChangeHandle() (err error) {
 		h.currentChangeHandle = nil
 	}
 	return
-}
-
-func (h *PartitionChangesHandle) swapCurrentHandleToVisibleState(ctx context.Context) (err error) {
-	if h.snapshotReadPolicy != engine.SnapshotReadPolicyVisibleState {
-		return nil
-	}
-	if err = h.closeCurrentChangeHandle(); err != nil {
-		return err
-	}
-	// Rebuild the current logical sub-range from visible snapshots so the caller
-	// still receives one consistent semantic for this range after replay fails.
-	h.currentChangeHandle, err = NewVisibleStateChangesHandle(
-		ctx,
-		h.tbl,
-		h.currentPSFrom,
-		h.currentPSTo,
-		h.skipDeletes,
-		objectio.BlockMaxRows,
-		h.mp,
-	)
-	return err
 }
 
 type CheckpointChangesHandle struct {
