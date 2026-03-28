@@ -184,6 +184,10 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) error {
 }
 
 func (entry *mergeObjectsEntry) PrepareRollback() (err error) {
+	if entry.transferTable != nil {
+		entry.transferTable.Release()
+		entry.transferTable = nil
+	}
 	for _, id := range entry.pageIds {
 		_ = entry.rt.TransferTable.DeletePage(id)
 	}
@@ -403,6 +407,12 @@ func (entry *mergeObjectsEntry) collectDelsAndTransfer(
 func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 	inst := time.Now()
 	defer func() {
+		// Release the transfer table (returns slab to pool) now that
+		// both phase-1 and phase-2 transfers are done.
+		if entry.transferTable != nil {
+			entry.transferTable.Release()
+			entry.transferTable = nil
+		}
 		if entry.isTombstone {
 			v2.TaskCommitTombstoneMergeDurationHistogram.Observe(time.Since(inst).Seconds())
 		} else {

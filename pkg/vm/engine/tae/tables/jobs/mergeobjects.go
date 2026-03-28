@@ -491,12 +491,6 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 	if task.schema.HasSortKey() {
 		sortkeyPos = task.schema.GetSingleSortKeyIdx()
 	}
-	// Ensure transfer table is released on all paths (including errors).
-	defer func() {
-		if task.transferTable != nil {
-			task.transferTable.Release()
-		}
-	}()
 	if task.HasBigDelEvent() {
 		return moerr.NewInternalErrorNoCtxf("LockMerge give up in exec %v", task.Name())
 	}
