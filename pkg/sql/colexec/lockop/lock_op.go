@@ -941,18 +941,18 @@ func (lockOp *LockOp) CopyToPipelineTarget() []*pipeline.LockTarget {
 	targets := make([]*pipeline.LockTarget, len(lockOp.targets))
 	for i, target := range lockOp.targets {
 		targets[i] = &pipeline.LockTarget{
-			TableId:               target.tableID,
-			PrimaryColIdxInBat:    target.primaryColumnIndexInBatch,
-			PrimaryColTyp:         plan.MakePlan2Type(&target.primaryColumnType),
-			RefreshTsIdxInBat:     target.refreshTimestampIndexInBatch,
-			FilterColIdxInBat:     target.filterColIndexInBatch,
-			LockTable:             target.lockTable,
-			ChangeDef:             target.changeDef,
-			Mode:                  target.mode,
-			LockRows:              plan.DeepCopyExpr(target.lockRows),
-			LockTableAtTheEnd:     target.lockTableAtTheEnd,
-			ObjRef:                plan.DeepCopyObjectRef(target.objRef),
-			PartitionColIdxInBat:  target.partitionColumnIndexInBatch,
+			TableId:              target.tableID,
+			PrimaryColIdxInBat:   target.primaryColumnIndexInBatch,
+			PrimaryColTyp:        plan.MakePlan2Type(&target.primaryColumnType),
+			RefreshTsIdxInBat:    target.refreshTimestampIndexInBatch,
+			FilterColIdxInBat:    target.filterColIndexInBatch,
+			LockTable:            target.lockTable,
+			ChangeDef:            target.changeDef,
+			Mode:                 target.mode,
+			LockRows:             plan.DeepCopyExpr(target.lockRows),
+			LockTableAtTheEnd:    target.lockTableAtTheEnd,
+			ObjRef:               plan.DeepCopyObjectRef(target.objRef),
+			PartitionColIdxInBat: target.partitionColumnIndexInBatch,
 		}
 	}
 	return targets
