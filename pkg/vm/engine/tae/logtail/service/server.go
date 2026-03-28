@@ -204,15 +204,14 @@ func composeCloseCallback(callbacks ...func()) func() {
 			nonNil = append(nonNil, cb)
 		}
 	}
-	switch len(nonNil) {
-	case 0:
+	if len(nonNil) == 0 {
 		return nil
-	case 1:
+	}
+	if len(nonNil) == 1 {
 		return nonNil[0]
-	default:
-		return func() {
-			closeCallbacks(nonNil...)
-		}
+	}
+	return func() {
+		closeCallbacks(nonNil...)
 	}
 }
 

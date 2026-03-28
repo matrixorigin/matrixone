@@ -83,7 +83,7 @@ func lazyCatalogInsertOrUpdateAccountID(
 	entry api.Entry,
 	bat *batch.Batch,
 ) (uint32, bool, error) {
-	accountIdx := findLazyCatalogBatchAttrIndex(bat.Attrs, SystemDBAttr_AccID)
+	accountIdx := FindBatchAttrIndex(bat.Attrs, SystemDBAttr_AccID)
 	if accountIdx < 0 {
 		return 0, false, moerr.NewInternalErrorNoCtxf(
 			"catalog logtail entry %s missing account_id column, attrs=%v",
@@ -100,7 +100,7 @@ func lazyCatalogInsertOrUpdateAccountID(
 }
 
 func lazyCatalogDeleteAccountID(bat *batch.Batch) (uint32, bool, error) {
-	cpkeyIdx := findLazyCatalogBatchAttrIndex(bat.Attrs, CPrimaryKeyColName)
+	cpkeyIdx := FindBatchAttrIndex(bat.Attrs, CPrimaryKeyColName)
 	if cpkeyIdx < 0 {
 		return 0, false, moerr.NewInternalErrorNoCtxf(
 			"catalog delete logtail entry missing cpkey column, attrs=%v",
@@ -115,7 +115,7 @@ func lazyCatalogDeleteAccountID(bat *batch.Batch) (uint32, bool, error) {
 	return accountID, true, nil
 }
 
-func findLazyCatalogBatchAttrIndex(attrs []string, target string) int {
+func FindBatchAttrIndex(attrs []string, target string) int {
 	for i, attr := range attrs {
 		if attr == target {
 			return i

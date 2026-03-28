@@ -277,7 +277,7 @@ func mustAccountIDsFromEntry(t *testing.T, entry api.Entry) []uint32 {
 	t.Helper()
 	bat, err := batch.ProtoBatchToBatch(entry.Bat)
 	require.NoError(t, err)
-	accountIdx := findBatchAttrIndex(bat.Attrs, catalog.SystemDBAttr_AccID)
+	accountIdx := catalog.FindBatchAttrIndex(bat.Attrs, catalog.SystemDBAttr_AccID)
 	require.GreaterOrEqual(t, accountIdx, 0)
 	return append([]uint32(nil), vector.MustFixedColWithTypeCheck[uint32](bat.GetVector(int32(accountIdx)))...)
 }
@@ -286,7 +286,7 @@ func mustCPKeyAccountsFromEntry(t *testing.T, entry api.Entry) []uint32 {
 	t.Helper()
 	bat, err := batch.ProtoBatchToBatch(entry.Bat)
 	require.NoError(t, err)
-	cpkeyIdx := findBatchAttrIndex(bat.Attrs, catalog.CPrimaryKeyColName)
+	cpkeyIdx := catalog.FindBatchAttrIndex(bat.Attrs, catalog.CPrimaryKeyColName)
 	require.GreaterOrEqual(t, cpkeyIdx, 0)
 
 	accounts := make([]uint32, 0, bat.RowCount())

@@ -154,7 +154,7 @@ func filterLazyCatalogSubscribeInsertOrUpdateEntry(
 		return entry, true, nil, nil
 	}
 
-	accountIdx := findBatchAttrIndex(bat.Attrs, catalog.SystemDBAttr_AccID)
+	accountIdx := catalog.FindBatchAttrIndex(bat.Attrs, catalog.SystemDBAttr_AccID)
 	if accountIdx < 0 {
 		return api.Entry{}, false, nil, moerr.NewInternalErrorNoCtxf(
 			"catalog logtail entry %s missing account_id column, attrs=%v",
@@ -185,7 +185,7 @@ func filterLazyCatalogSubscribeDeleteEntry(
 		return entry, true, nil, nil
 	}
 
-	cpkeyIdx := findBatchAttrIndex(bat.Attrs, catalog.CPrimaryKeyColName)
+	cpkeyIdx := catalog.FindBatchAttrIndex(bat.Attrs, catalog.CPrimaryKeyColName)
 	if cpkeyIdx < 0 {
 		return api.Entry{}, false, nil, moerr.NewInternalErrorNoCtxf(
 			"catalog delete logtail entry missing cpkey column, attrs=%v",
@@ -260,13 +260,4 @@ func mustProtoBatch(entry api.Entry) (*batch.Batch, error) {
 		)
 	}
 	return batch.ProtoBatchToBatch(entry.Bat)
-}
-
-func findBatchAttrIndex(attrs []string, target string) int {
-	for i, attr := range attrs {
-		if attr == target {
-			return i
-		}
-	}
-	return -1
 }

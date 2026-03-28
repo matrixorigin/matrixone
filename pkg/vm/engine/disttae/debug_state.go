@@ -316,7 +316,7 @@ func (s *lazyCatalogCNState) debugActivationHistory(accountFilter *uint32, limit
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	events := make([]DebugCatalogActivationEvent, 0, debugMin(limit, len(s.activationHistory)))
+	events := make([]DebugCatalogActivationEvent, 0, min(limit, len(s.activationHistory)))
 	for i := len(s.activationHistory) - 1; i >= 0 && len(events) < limit; i-- {
 		event := s.activationHistory[i]
 		if accountFilter != nil && event.AccountID != *accountFilter {
@@ -509,33 +509,18 @@ func cloneDebugCatalogActivationEvent(event DebugCatalogActivationEvent) DebugCa
 		Phase:             event.Phase,
 		Result:            event.Result,
 		Error:             event.Error,
-		TargetTS:          cloneTimestampPtr(event.TargetTS),
-		ReplayTS:          cloneTimestampPtr(event.ReplayTS),
+		TargetTS:          clonePtr(event.TargetTS),
+		ReplayTS:          clonePtr(event.ReplayTS),
 		DelayedApplyCount: event.DelayedApplyCount,
-		StartedAt:         cloneTimePtr(event.StartedAt),
-		FinishedAt:        cloneTimePtr(event.FinishedAt),
+		StartedAt:         clonePtr(event.StartedAt),
+		FinishedAt:        clonePtr(event.FinishedAt),
 	}
 }
 
-func cloneTimestampPtr(ts *timestamp.Timestamp) *timestamp.Timestamp {
-	if ts == nil {
+func clonePtr[T any](p *T) *T {
+	if p == nil {
 		return nil
 	}
-	cloned := *ts
-	return &cloned
-}
-
-func cloneTimePtr(ts *time.Time) *time.Time {
-	if ts == nil {
-		return nil
-	}
-	cloned := *ts
-	return &cloned
-}
-
-func debugMin(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
+	v := *p
+	return &v
 }

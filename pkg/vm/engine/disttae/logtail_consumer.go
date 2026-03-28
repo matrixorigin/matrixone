@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -892,16 +893,10 @@ func (c *PushClient) reconnectInitialActiveAccounts() []uint32 {
 		return []uint32{0}
 	}
 	wanted := c.lazyCatalog.snapshotWantedAccounts()
-	accounts := make(map[uint32]struct{}, len(wanted)+1)
-	accounts[0] = struct{}{}
-	for _, id := range wanted {
-		accounts[id] = struct{}{}
+	if !slices.Contains(wanted, uint32(0)) {
+		wanted = append(wanted, 0)
 	}
-	result := make([]uint32, 0, len(accounts))
-	for id := range accounts {
-		result = append(result, id)
-	}
-	return result
+	return wanted
 }
 
 // replayCatalogCacheForReconnect replays the catalog for sys + wanted
@@ -950,18 +945,6 @@ func (c *PushClient) CanServeAccount(accountID uint32, ts timestamp.Timestamp) b
 		return false
 	}
 	return ts.GreaterEq(readyTS)
-}
-
-func (c *PushClient) replayCatalogCacheForAccount(
-	ctx context.Context, e *Engine, accountID uint32, ts timestamp.Timestamp,
-) error {
-	return c.replayCatalogCacheAt(ctx, e, ts, []uint32{accountID})
-}
-
-func (c *PushClient) replayCatalogCacheForAccounts(
-	ctx context.Context, e *Engine, accountIDs []uint32, ts timestamp.Timestamp,
-) error {
-	return c.replayCatalogCacheAt(ctx, e, ts, accountIDs)
 }
 
 func (c *PushClient) replayCatalogCacheAt(
@@ -1116,7 +1099,7 @@ func (c *PushClient) doActivateTenantCatalog(ctx context.Context, e *Engine, acc
 		return fail("wait_logtail", err, targetTSCopy)
 	}
 
-	if err := c.replayCatalogCacheForAccount(ctx, e, accountID, replayTS); err != nil {
+	if err := c.replayCatalogCacheAt(ctx, e, replayTS, []uint32{accountID}); err != nil {
 		c.lazyCatalog.cleanupFailedActivation(accountID, seq)
 		replayTSCopy := replayTS
 		record("replay_catalog", "error", err, targetTSCopy, &replayTSCopy, 0)
