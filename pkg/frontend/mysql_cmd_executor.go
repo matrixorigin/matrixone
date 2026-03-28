@@ -1224,7 +1224,19 @@ func doDeallocate(ses *Session, execCtx *ExecCtx, st *tree.Deallocate) error {
 	return nil
 }
 
-func doReset(_ context.Context, _ *Session, _ *tree.Reset) error {
+func doReset(ctx context.Context, ses *Session, st *tree.Reset) error {
+	if ses == nil || st == nil {
+		return nil
+	}
+	stmtName := string(st.Name)
+	if stmtName == "" {
+		return nil
+	}
+	preStmt, ok := ses.prepareStmts[stmtName]
+	if !ok || preStmt == nil {
+		return nil
+	}
+	preStmt.resetBinaryParamState()
 	return nil
 }
 
@@ -3412,6 +3424,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		preStmt, err = ses.GetPrepareStmt(execCtx.reqCtx, stmtName)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err)
+			return resp, nil
 		}
 		prefix := ""
 		if preStmt.IsCloudNonuser {
@@ -3433,7 +3446,8 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		var preStmt *PrepareStmt
 		preStmt, err = ses.GetPrepareStmt(execCtx.reqCtx, stmtName)
 		if err != nil {
-			resp = NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err)
+			resp = NewGeneralErrorResponse(COM_STMT_RESET, ses.GetTxnHandler().GetServerStatus(), err)
+			return resp, nil
 		}
 		prefix := ""
 		if preStmt.IsCloudNonuser {
@@ -3485,7 +3499,7 @@ func parseStmtExecute(reqCtx context.Context, ses *Session, data []byte) (string
 	ses.Debug(reqCtx, "query trace", logutil.QueryField(sql))
 	err = ses.GetResponser().MysqlRrWr().ParseExecuteData(reqCtx, ses.GetProc(), preStmt, data, pos)
 	if err != nil {
-		return "", nil, err
+		return "", preStmt, err
 	}
 	return sql, preStmt, nil
 }

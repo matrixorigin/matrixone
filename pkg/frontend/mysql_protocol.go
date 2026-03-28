@@ -751,6 +751,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 
 func (mp *MysqlProtocolImpl) ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
 	var err error
+	stmt.proc = proc
 	dcPrepare, ok := stmt.PreparePlan.GetDcl().Control.(*planPb.DataControl_Prepare)
 	if !ok {
 		return moerr.NewInternalError(ctx, "can not get Prepare plan in prepareStmt")
@@ -796,6 +797,7 @@ func (mp *MysqlProtocolImpl) ParseSendLongData(ctx context.Context, proc *proces
 
 func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
 	var err error
+	stmt.proc = proc
 	dcPrepare, ok := stmt.PreparePlan.GetDcl().Control.(*planPb.DataControl_Prepare)
 	if !ok {
 		return moerr.NewInternalError(ctx, "can not get Prepare plan in prepareStmt")
@@ -2719,35 +2721,90 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 			if value, err2 := mrs.GetValue(mp.ctx, r, i); err2 != nil {
 				return err2
 			} else {
-				mp.dateEncBuffer = value.(types.Date).ToBytes(mp.dateEncBuffer[:0])
-				err = mp.appendCountOfBytesLenEnc(mp.dateEncBuffer[:types.DateToBytesLength])
-				if err != nil {
-					return err
+				if d, ok := value.(types.Date); ok {
+					var date types.Date = d
+					mp.dateEncBuffer = date.ToBytes(mp.dateEncBuffer[:0])
+					err = mp.appendCountOfBytesLenEnc(mp.dateEncBuffer[:types.DateToBytesLength])
+					if err != nil {
+						return err
+					}
+				} else {
+					return moerr.NewInternalErrorf(mp.ctx, "unsupported type %T for MYSQL_TYPE_DATE", value)
 				}
 			}
 		case defines.MYSQL_TYPE_DATETIME:
-			if value, err2 := mrs.GetString(mp.ctx, r, i); err2 != nil {
+			scale := int32(mysqlColumn.Decimal())
+			if val, err2 := mrs.GetValue(mp.ctx, r, i); err2 != nil {
 				return err2
+			} else if val != nil {
+				if dt, ok := val.(types.Datetime); ok {
+					valueStr := dt.String2(scale)
+					err = AppendStringLenEnc(mp, valueStr)
+					if err != nil {
+						return err
+					}
+				} else {
+					value, err3 := mrs.GetString(mp.ctx, r, i)
+					if err3 != nil {
+						return err3
+					}
+					err = AppendStringLenEnc(mp, value)
+					if err != nil {
+						return err
+					}
+				}
 			} else {
-				err = mp.appendStringLenEnc(value)
+				value, err2 := mrs.GetString(mp.ctx, r, i)
+				if err2 != nil {
+					return err2
+				}
+				err = AppendStringLenEnc(mp, value)
 				if err != nil {
 					return err
 				}
 			}
 		case defines.MYSQL_TYPE_TIME:
-			if value, err2 := mrs.GetString(mp.ctx, r, i); err2 != nil {
+			scale := int32(mysqlColumn.Decimal())
+			if val, err2 := mrs.GetValue(mp.ctx, r, i); err2 != nil {
 				return err2
+			} else if t, ok := val.(types.Time); ok {
+				value := t.String2(scale)
+				err = AppendStringLenEnc(mp, value)
+				if err != nil {
+					return err
+				}
 			} else {
-				err = mp.appendStringLenEnc(value)
+				value, err2 := mrs.GetString(mp.ctx, r, i)
+				if err2 != nil {
+					return err2
+				}
+				err = AppendStringLenEnc(mp, value)
 				if err != nil {
 					return err
 				}
 			}
 		case defines.MYSQL_TYPE_TIMESTAMP:
-			if value, err2 := mrs.GetString(mp.ctx, r, i); err2 != nil {
+			scale := int32(mysqlColumn.Decimal())
+			if val, err2 := mrs.GetValue(mp.ctx, r, i); err2 != nil {
 				return err2
+			} else if ts, ok := val.(types.Timestamp); ok {
+				value := ts.String2(mp.ses.GetTimeZone(), scale)
+				err = AppendStringLenEnc(mp, value)
+				if err != nil {
+					return err
+				}
+			} else if dt, ok := val.(types.Datetime); ok {
+				valueStr := dt.String2(scale)
+				err = AppendStringLenEnc(mp, valueStr)
+				if err != nil {
+					return err
+				}
 			} else {
-				err = mp.appendStringLenEnc(value)
+				value, err2 := mrs.GetString(mp.ctx, r, i)
+				if err2 != nil {
+					return err2
+				}
+				err = AppendStringLenEnc(mp, value)
 				if err != nil {
 					return err
 				}
@@ -3014,6 +3071,12 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 				if err != nil {
 					return err
 				}
+			case types.T_date:
+				d, err := GetDate(colSlices, rowIdx, i)
+				if err != nil {
+					return err
+				}
+				value = d.String()
 			default:
 				return moerr.NewInternalErrorf(mp.ctx, "unknown type %s in datetime or timestamp", typ.Oid)
 			}
