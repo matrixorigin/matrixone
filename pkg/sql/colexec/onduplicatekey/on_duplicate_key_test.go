@@ -84,6 +84,24 @@ func TestOnDuplicateKey(t *testing.T) {
 	}
 }
 
+func TestOnDuplicateKeyIgnoreCleansConflictBatch(t *testing.T) {
+	tc := newTestCase(t)
+	tc.arg.IsIgnore = true
+	tc.rowCount = 1
+
+	resetChildren(tc.arg, tc.proc.Mp())
+	err := tc.arg.Prepare(tc.proc)
+	require.NoError(t, err)
+
+	ret, execErr := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, execErr)
+	require.Equal(t, tc.rowCount, ret.Batch.RowCount())
+
+	tc.arg.Free(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+}
+
 func resetChildren(arg *OnDuplicatekey, m *mpool.MPool) {
 	bat := batch.New([]string{"a", "b", "a", "b", catalog.Row_ID})
 	vecs := make([]*vector.Vector, 5)

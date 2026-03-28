@@ -206,6 +206,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.NonEqCond = t.NonEqCond
 		op.JoinMapTag = t.JoinMapTag
 		op.JoinType = t.JoinType
+		op.MarkPos = t.MarkPos
 		op.SetInfo(&info)
 		return op
 
@@ -274,6 +275,19 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 			op.TopValueTag = t.TopValueTag + int32(index)<<16
 		}
 		op.Fs = t.Fs
+		op.SetInfo(&info)
+		return op
+	case vm.MergeTop:
+		t := sourceOp.(*mergetop.MergeTop)
+		op := mergetop.NewArgument()
+		op.Limit = t.Limit
+		op.Fs = t.Fs
+		op.SetInfo(&info)
+		return op
+	case vm.MergeOrder:
+		t := sourceOp.(*mergeorder.MergeOrder)
+		op := mergeorder.NewArgument()
+		op.OrderBySpecs = t.OrderBySpecs
 		op.SetInfo(&info)
 		return op
 	case vm.Intersect:
@@ -408,6 +422,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := dispatch.NewArgument()
 		op.IsSink = sourceArg.IsSink
 		op.RecSink = sourceArg.RecSink
+		op.RecCTE = sourceArg.RecCTE
 		op.ShuffleType = sourceArg.ShuffleType
 		op.ShuffleRegIdxLocal = sourceArg.ShuffleRegIdxLocal
 		op.ShuffleRegIdxRemote = sourceArg.ShuffleRegIdxRemote
@@ -439,6 +454,11 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := deletion.NewPartitionDeleteFrom(t)
 		op.SetInfo(&info)
 		return op
+	case vm.PartitionMultiUpdate:
+		t := sourceOp.(*multi_update.PartitionMultiUpdate)
+		op := multi_update.NewPartitionMultiUpdateFrom(t)
+		op.SetInfo(&info)
+		return op
 	case vm.PreInsert:
 		t := sourceOp.(*preinsert.PreInsert)
 		op := preinsert.NewArgument()
@@ -467,7 +487,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	case vm.LockOp:
 		t := sourceOp.(*lockop.LockOp)
 		op := lockop.NewArgument()
-		*op = *t
+		op.CopyTargetsFrom(t)
 		op.SetChildren(nil) // make sure res.arg.children is nil
 		op.SetInfo(&info)
 		return op
