@@ -30,6 +30,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -47,6 +48,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func TestConvertDBEOBToNoSuchTable(t *testing.T) {
+	err := convertDBEOBToNoSuchTable(context.Background(), moerr.GetOkExpectedEOB(), "db1", "t2")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+	require.Contains(t, err.Error(), "no such table db1.t2")
+}
+
+func TestConvertDBEOBToNoSuchTablePassThrough(t *testing.T) {
+	want := moerr.NewBadDB(context.Background(), "db1")
+	got := convertDBEOBToNoSuchTable(context.Background(), want, "db1", "t2")
+	require.Same(t, want, got)
+}
 func Test_lockIndexTable(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
