@@ -420,7 +420,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	isTemp := qry.GetTableDef().GetIsTemporary()
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
-		return convertDBEOB(c.proc.Ctx, err, dbName)
+		return convertDBEOBToNoSuchTable(c.proc.Ctx, err, dbName, tblName)
 	}
 	databaseId := dbSource.GetDatabaseId(c.proc.Ctx)
 
