@@ -282,12 +282,6 @@ public:
     cuvs_worker_t(uint32_t nthread, const std::vector<int>& devices, distribution_mode_t mode = DistributionMode_SINGLE_GPU)
         : nthread_(std::max(nthread, (uint32_t)devices.size())), devices_(devices), mode_(mode), running_(false), use_batching_(false), per_thread_device_(false), next_device_idx_(0) {
         
-
-        if (mode == DistributionMode_SHARDED) {
-            mg_resources_ = std::make_shared<raft::device_resources_snmg>(devices);
-            init_mg_comms(*mg_resources_, devices);
-        }
-        
         // One queue per physical GPU device
         for (size_t i = 0; i < devices_.size(); ++i) {
             auto q = std::make_unique<thread_safe_queue_t<cuvs_task_t>>();
@@ -308,7 +302,7 @@ public:
         main_thread_ = std::thread([this, init_fn, stop_fn] {
             int device_id = devices_.empty() ? -1 : devices_[0];
             if (device_id >= 0) cudaSetDevice(device_id);
-            raft_handle handle(device_id, 0, mg_resources_, mode_);
+            raft_handle handle(device_id, 0, nullptr, mode_);
             if (init_fn) init_fn(handle);
             this->run_main_loop(handle, stop_fn);
         });
@@ -324,10 +318,9 @@ public:
 
             device_threads_.emplace_back([this, device_id, device_idx, rank, init_fn, stop_fn] {
                 cudaSetDevice(device_id);
-                bool give_mg = (mg_resources_ != nullptr) && (mode_ != DistributionMode_SINGLE_GPU);
                 
                 // Each thread in the pool gets its own raft::resources (so separate CUDA streams)
-                raft_handle handle(device_id, rank, give_mg ? mg_resources_ : nullptr, mode_);
+                raft_handle handle(device_id, rank, nullptr, mode_);
                 
                 if (init_fn) init_fn(handle);
                 this->run_device_loop(handle, stop_fn, device_idx);
@@ -396,10 +389,6 @@ public:
 
     std::shared_future<cuvs_task_result_t> wait(uint64_t task_id) {
         return results_store_.wait(task_id);
-    }
-
-    std::shared_ptr<raft::device_resources_snmg> get_mg_resources() const {
-        return mg_resources_;
     }
 
     distribution_mode_t get_mode() const { return mode_; }
@@ -567,7 +556,6 @@ private:
 
     std::vector<std::unique_ptr<thread_safe_queue_t<cuvs_task_t>>> device_queues_;
     thread_safe_queue_t<cuvs_task_t> main_tasks_;
-    std::shared_ptr<raft::device_resources_snmg> mg_resources_;
     std::atomic<uint32_t> next_device_idx_;
 
     cuvs_task_result_store_t results_store_;

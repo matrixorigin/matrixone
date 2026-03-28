@@ -287,7 +287,10 @@ public:
             int num_shards = this->devices_.size();
             int rank = handle.get_rank();
             
-            uint64_t rows_per_shard = this->count / num_shards;
+            // Round down to a multiple of 32 so every shard offset is word-aligned in
+            // the deleted bitset, making shard-slice sync cheap (no bit-shifting needed).
+            // The last shard absorbs the remainder and may be slightly larger.
+            uint64_t rows_per_shard = (this->count / num_shards) & ~static_cast<uint64_t>(31);
             uint64_t start_row = rank * rows_per_shard;
             uint64_t num_rows = (rank == num_shards - 1) ? (this->count - start_row) : rows_per_shard;
 
@@ -615,10 +618,21 @@ public:
             auto distances_device_internal = raft::make_device_matrix<float, int64_t>(*res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
 
             if (this->deleted_count_ > 0) {
-                this->sync_device_bitset(handle.get_device_id(), *res);
-                auto info = this->get_device_bitset_info(handle.get_device_id());
                 using bs_t = raft::core::bitset<uint32_t, int64_t>;
-                auto* bs = static_cast<bs_t*>(info->ptr.get());
+                bs_t* bs;
+                if (this->dist_mode == DistributionMode_SHARDED) {
+                    int num_shards = static_cast<int>(this->devices_.size());
+                    uint64_t rows_per_shard = (this->count / num_shards) & ~static_cast<uint64_t>(31);
+                    int rank = handle.get_rank();
+                    uint64_t shard_offset = static_cast<uint64_t>(rank) * rows_per_shard;
+                    uint64_t shard_sz = (rank == num_shards - 1)
+                                        ? (this->count - shard_offset) : rows_per_shard;
+                    this->sync_shard_bitset(handle.get_device_id(), shard_offset, shard_sz, *res);
+                    bs = static_cast<bs_t*>(this->get_device_shard_bitset_info(handle.get_device_id())->ptr.get());
+                } else {
+                    this->sync_device_bitset(handle.get_device_id(), *res);
+                    bs = static_cast<bs_t*>(this->get_device_bitset_info(handle.get_device_id())->ptr.get());
+                }
                 auto filter = cuvs::neighbors::filtering::bitset_filter(bs->view());
                 cuvs::neighbors::ivf_pq::search(*res, search_params, *local_index,
                                                      raft::make_const_mdspan(queries_device.view()),
@@ -645,8 +659,9 @@ public:
                 }
             }
         } else if (this->dist_mode == DistributionMode_SHARDED) {
+            // Must match the rounded value used at build — see build_internal
             int num_shards = this->devices_.size();
-            uint64_t rows_per_shard = this->count / num_shards;
+            uint64_t rows_per_shard = (this->count / num_shards) & ~static_cast<uint64_t>(31);
             int64_t offset = (int64_t)(handle.get_rank() * rows_per_shard);
             for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
                 if (search_res.neighbors[i] != -1) {
@@ -793,17 +808,28 @@ public:
             auto distances_device = raft::make_device_matrix<float, int64_t>(*res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
 
             if (this->deleted_count_ > 0) {
-                this->sync_device_bitset(handle.get_device_id(), *res);
-                auto info = this->get_device_bitset_info(handle.get_device_id());
                 using bs_t = raft::core::bitset<uint32_t, int64_t>;
-                auto* bs = static_cast<bs_t*>(info->ptr.get());
+                bs_t* bs;
+                if (this->dist_mode == DistributionMode_SHARDED) {
+                    int num_shards = static_cast<int>(this->devices_.size());
+                    uint64_t rows_per_shard = (this->count / num_shards) & ~static_cast<uint64_t>(31);
+                    int rank = handle.get_rank();
+                    uint64_t shard_offset = static_cast<uint64_t>(rank) * rows_per_shard;
+                    uint64_t shard_sz = (rank == num_shards - 1)
+                                        ? (this->count - shard_offset) : rows_per_shard;
+                    this->sync_shard_bitset(handle.get_device_id(), shard_offset, shard_sz, *res);
+                    bs = static_cast<bs_t*>(this->get_device_shard_bitset_info(handle.get_device_id())->ptr.get());
+                } else {
+                    this->sync_device_bitset(handle.get_device_id(), *res);
+                    bs = static_cast<bs_t*>(this->get_device_bitset_info(handle.get_device_id())->ptr.get());
+                }
                 auto filter = cuvs::neighbors::filtering::bitset_filter(bs->view());
                 cuvs::neighbors::ivf_pq::search(*res, search_params, *local_index,
-                                                    raft::make_const_mdspan(q_dev_t.view()), 
+                                                    raft::make_const_mdspan(q_dev_t.view()),
                                                     neighbors_device.view(), distances_device.view(), filter);
             } else {
                 cuvs::neighbors::ivf_pq::search(*res, search_params, *local_index,
-                                                    raft::make_const_mdspan(q_dev_t.view()), 
+                                                    raft::make_const_mdspan(q_dev_t.view()),
                                                     neighbors_device.view(), distances_device.view());
             }
 
@@ -823,8 +849,9 @@ public:
                 }
             }
         } else if (this->dist_mode == DistributionMode_SHARDED) {
+            // Must match the rounded value used at build — see build_internal
             int num_shards = this->devices_.size();
-            uint64_t rows_per_shard = this->count / num_shards;
+            uint64_t rows_per_shard = (this->count / num_shards) & ~static_cast<uint64_t>(31);
             int64_t offset = (int64_t)(handle.get_rank() * rows_per_shard);
             for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
                 if (search_res.neighbors[i] != -1) {

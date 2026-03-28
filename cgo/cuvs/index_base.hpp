@@ -89,6 +89,11 @@ public:
     std::mutex device_bitsets_mutex_;
     std::map<int, std::shared_ptr<device_bitset_cache_t>> device_deleted_bitsets_;
 
+    // Per-device cache for shard-local bitset slices (SHARDED mode only).
+    // Indexed by device id; each entry covers [shard_offset, shard_offset+shard_sz).
+    std::mutex device_shard_bitsets_mutex_;
+    std::map<int, std::shared_ptr<device_bitset_cache_t>> device_shard_bitsets_;
+
     // Reverse map from external ID to internal position (populated when host_ids are used)
     std::unordered_map<IdT, uint64_t> id_to_index_;
 
@@ -98,6 +103,17 @@ public:
     }
     
     // Helper to get or create a device-specific bitset cache info
+    std::shared_ptr<device_bitset_cache_t> get_device_shard_bitset_info(int dev_id) {
+        std::lock_guard<std::mutex> lock(device_shard_bitsets_mutex_);
+        auto it = device_shard_bitsets_.find(dev_id);
+        if (it == device_shard_bitsets_.end()) {
+            auto info = std::make_shared<device_bitset_cache_t>();
+            device_shard_bitsets_[dev_id] = info;
+            return info;
+        }
+        return it->second;
+    }
+
     std::shared_ptr<device_bitset_cache_t> get_device_bitset_info(int dev_id) {
         std::lock_guard<std::mutex> lock(device_bitsets_mutex_);
         auto it = device_deleted_bitsets_.find(dev_id);
@@ -107,6 +123,47 @@ public:
             return info;
         }
         return it->second;
+    }
+
+    // Sync a shard-local slice of the deleted bitset to device (SHARDED mode).
+    // shard_offset must be a multiple of 32 (enforced at build time).
+    // Bit j of the resulting device bitset = global bit (shard_offset + j).
+    void sync_shard_bitset(int dev_id, uint64_t shard_offset, uint64_t shard_sz, raft::resources const& res) {
+        auto info = get_device_shard_bitset_info(dev_id);
+        uint64_t current_ver = bitset_version_.load();
+
+        if (info->version < current_ver || !info->ptr) {
+            std::lock_guard<std::mutex> lock(info->mutex);
+            if (info->version < current_ver || !info->ptr) {
+                std::shared_lock<std::shared_mutex> base_lock(mutex_);
+
+                using bs_t = raft::core::bitset<uint32_t, int64_t>;
+                auto* bs = new bs_t(res, static_cast<int64_t>(shard_sz));
+                uint64_t n_words   = (shard_sz + 31) / 32;
+                uint64_t start_word = shard_offset / 32; // always integer since shard_offset % 32 == 0
+
+                if (deleted_bitset_.empty() || start_word >= deleted_bitset_.size()) {
+                    // No deletions recorded in this shard's range — mark all alive
+                    thrust::fill_n(raft::resource::get_thrust_policy(res),
+                                   bs->data(), static_cast<int64_t>(n_words), ~0U);
+                } else {
+                    uint64_t avail      = deleted_bitset_.size() - start_word;
+                    uint64_t copy_words = std::min(n_words, avail);
+                    raft::copy(res,
+                        raft::make_device_vector_view<uint32_t, int64_t>(bs->data(), static_cast<int64_t>(copy_words)),
+                        raft::make_host_vector_view<const uint32_t, int64_t>(
+                            deleted_bitset_.data() + start_word, static_cast<int64_t>(copy_words)));
+                    if (copy_words < n_words) {
+                        thrust::fill_n(raft::resource::get_thrust_policy(res),
+                                       bs->data() + static_cast<int64_t>(copy_words),
+                                       static_cast<int64_t>(n_words - copy_words), ~0U);
+                    }
+                }
+
+                info->ptr     = std::shared_ptr<void>(bs, [](void* p){ delete static_cast<bs_t*>(p); });
+                info->version = current_ver;
+            }
+        }
     }
 
     // Helper to sync host bitset to device if stale. Should be called within search.
@@ -220,9 +277,11 @@ public:
         }
         // Increment version to force GPU syncs if they exist
         bitset_version_.fetch_add(1);
-        
+
         std::lock_guard<std::mutex> ds_lock(device_bitsets_mutex_);
         device_deleted_bitsets_.clear();
+        std::lock_guard<std::mutex> ss_lock(device_shard_bitsets_mutex_);
+        device_shard_bitsets_.clear();
     }
 
     // Soft-delete by external ID (or internal position if no custom IDs).
@@ -453,6 +512,8 @@ public:
         bitset_version_.fetch_add(1);
         std::lock_guard<std::mutex> ds_lock(device_bitsets_mutex_);
         device_deleted_bitsets_.clear();
+        std::lock_guard<std::mutex> ss_lock(device_shard_bitsets_mutex_);
+        device_shard_bitsets_.clear();
     }
 
     // -------------------------------------------------------------------------

@@ -475,6 +475,64 @@ func TestGpuIvfFlatDeleteId(t *testing.T) {
 	}
 }
 
+func TestGpuShardedIvfFlatDeleteId(t *testing.T) {
+	devices, err := GetGpuDeviceList()
+	if err != nil || len(devices) < 2 {
+		t.Skip("Need at least 2 GPUs for sharded deletion test")
+	}
+
+	dimension := uint32(16)
+	n_vectors := uint64(1000) // Shard size will be around 500, rounded to multiple of 32
+	dataset := make([]float32, n_vectors*uint64(dimension))
+	for i := uint64(0); i < n_vectors; i++ {
+		for j := uint32(0); j < dimension; j++ {
+			dataset[i*uint64(dimension)+uint64(j)] = float32(i)
+		}
+	}
+
+	bp := DefaultIvfFlatBuildParams()
+	bp.NLists = 10
+	index, err := NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, Sharded, nil)
+	if err != nil {
+		t.Fatalf("Failed to create sharded IvfFlat: %v", err)
+	}
+	defer index.Destroy()
+
+	index.Start()
+	index.Build()
+
+	sp := DefaultIvfFlatSearchParams()
+	sp.NProbes = 10
+
+	// Test deletion in shard 0 (e.g. ID 100)
+	q100 := make([]float32, dimension)
+	for i := range q100 { q100[i] = 100.0 }
+	
+	r, err := index.Search(q100, 1, dimension, 1, sp)
+	if err != nil { t.Fatalf("Search 100 failed: %v", err) }
+	if r.Neighbors[0] != 100 { t.Errorf("Expected neighbor 100, got %d", r.Neighbors[0]) }
+
+	if err := index.DeleteId(100); err != nil { t.Fatalf("Delete 100 failed: %v", err) }
+
+	r, err = index.Search(q100, 1, dimension, 1, sp)
+	if err != nil { t.Fatalf("Search 100 again failed: %v", err) }
+	if r.Neighbors[0] == 100 { t.Errorf("Neighbor 100 was deleted but still returned") }
+
+	// Test deletion in shard 1 (e.g. ID 800)
+	q800 := make([]float32, dimension)
+	for i := range q800 { q800[i] = 800.0 }
+
+	r, err = index.Search(q800, 1, dimension, 1, sp)
+	if err != nil { t.Fatalf("Search 800 failed: %v", err) }
+	if r.Neighbors[0] != 800 { t.Errorf("Expected neighbor 800, got %d", r.Neighbors[0]) }
+
+	if err := index.DeleteId(800); err != nil { t.Fatalf("Delete 800 failed: %v", err) }
+
+	r, err = index.Search(q800, 1, dimension, 1, sp)
+	if err != nil { t.Fatalf("Search 800 again failed: %v", err) }
+	if r.Neighbors[0] == 800 { t.Errorf("Neighbor 800 was deleted but still returned") }
+}
+
 func BenchmarkGpuShardedIvfFlat(b *testing.B) {
 	devices, err := GetGpuDeviceList()
 	if err != nil || len(devices) < 1 {

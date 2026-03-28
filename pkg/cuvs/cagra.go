@@ -798,7 +798,7 @@ func MergeGpuCagra[T VectorType](indices []*GpuCagra[T], nthread uint32, devices
 	}, nil
 }
 
-// SearchResult contains the neighbors and distances from a search.
+// SearchResult contains the neighbors and distances from a CAGRA search.
 type SearchResult struct {
 	Neighbors []uint32
 	Distances []float32
