@@ -276,6 +276,19 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.Fs = t.Fs
 		op.SetInfo(&info)
 		return op
+	case vm.MergeTop:
+		t := sourceOp.(*mergetop.MergeTop)
+		op := mergetop.NewArgument()
+		op.Limit = t.Limit
+		op.Fs = t.Fs
+		op.SetInfo(&info)
+		return op
+	case vm.MergeOrder:
+		t := sourceOp.(*mergeorder.MergeOrder)
+		op := mergeorder.NewArgument()
+		op.OrderBySpecs = t.OrderBySpecs
+		op.SetInfo(&info)
+		return op
 	case vm.Intersect:
 		op := intersect.NewArgument()
 		op.SetInfo(&info)
@@ -408,6 +421,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := dispatch.NewArgument()
 		op.IsSink = sourceArg.IsSink
 		op.RecSink = sourceArg.RecSink
+		op.RecCTE = sourceArg.RecCTE
 		op.ShuffleType = sourceArg.ShuffleType
 		op.ShuffleRegIdxLocal = sourceArg.ShuffleRegIdxLocal
 		op.ShuffleRegIdxRemote = sourceArg.ShuffleRegIdxRemote

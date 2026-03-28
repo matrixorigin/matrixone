@@ -680,10 +680,18 @@ func (ctr *container) makeAggList(aggExprs []aggexec.AggFuncExecExpression) ([]a
 		}
 		aggList[i], err = aggexec.MakeAgg(ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), typs...)
 		if err != nil {
+			// Clean up previously created aggregators
+			for k := 0; k < i; k++ {
+				aggList[k].Free()
+			}
 			return nil, err
 		}
 		if config := agExpr.GetExtraConfig(); config != nil {
 			if err := aggList[i].SetExtraInformation(config, 0); err != nil {
+				// Clean up all created aggregators including current one
+				for k := 0; k <= i; k++ {
+					aggList[k].Free()
+				}
 				return nil, err
 			}
 		}
@@ -695,6 +703,10 @@ func (ctr *container) makeAggList(aggExprs []aggexec.AggFuncExecExpression) ([]a
 		aggexec.SyncAggregatorsToChunkSize(aggList, 1)
 		for _, ag := range aggList {
 			if err := ag.GroupGrow(1); err != nil {
+				// Clean up all aggregators on GroupGrow failure
+				for _, a := range aggList {
+					a.Free()
+				}
 				return nil, err
 			}
 		}
