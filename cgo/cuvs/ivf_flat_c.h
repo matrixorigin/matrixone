@@ -35,7 +35,8 @@ typedef void* gpu_ivf_flat_result_c;
 gpu_ivf_flat_c gpu_ivf_flat_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, 
                                  distance_type_t metric, ivf_flat_build_params_t build_params,
                                  const int* devices, int device_count, uint32_t nthread, 
-                                 distribution_mode_t dist_mode, quantization_t qtype, void* errmsg);
+                                 distribution_mode_t dist_mode, quantization_t qtype, 
+                                 const int64_t* ids, void* errmsg);
 
 // Constructor for loading from file
 gpu_ivf_flat_c gpu_ivf_flat_load_file(const char* filename, uint32_t dimension, distance_type_t metric,
@@ -54,10 +55,10 @@ void gpu_ivf_flat_build(gpu_ivf_flat_c index_c, void* errmsg);
 
 // Constructor for an empty index (pre-allocates)
 gpu_ivf_flat_c gpu_ivf_flat_new_empty(uint64_t total_count, uint32_t dimension, distance_type_t metric, 
-                                           ivf_flat_build_params_t build_params,
-                                           const int* devices, int device_count, uint32_t nthread, 
-                                           distribution_mode_t dist_mode, quantization_t qtype, void* errmsg);
-
+                                        ivf_flat_build_params_t build_params,
+                                        const int* devices, int device_count, uint32_t nthread, 
+                                        distribution_mode_t dist_mode, quantization_t qtype, 
+                                        const int64_t* ids, void* errmsg);
 // Add chunk of data (same type as index quantization)
 void gpu_ivf_flat_add_chunk(gpu_ivf_flat_c index_c, const void* chunk_data, uint64_t chunk_count, void* errmsg);
 

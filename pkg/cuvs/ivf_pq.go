@@ -57,7 +57,7 @@ func (gi *GpuIvfPq[T]) SetUseBatching(enable bool) error {
 
 // NewGpuIvfPq creates a new GpuIvfPq instance from a dataset.
 func NewGpuIvfPq[T VectorType](dataset []T, count uint64, dimension uint32, metric DistanceType,
-	bp IvfPqBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfPq[T], error) {
+	bp IvfPqBuildParams, devices []int, nthread uint32, mode DistributionMode, ids []int64) (*GpuIvfPq[T], error) {
 	if len(devices) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("at least one device must be specified")
 	}
@@ -67,6 +67,11 @@ func NewGpuIvfPq[T VectorType](dataset []T, count uint64, dimension uint32, metr
 	cDevices := make([]C.int, len(devices))
 	for i, d := range devices {
 		cDevices[i] = C.int(d)
+	}
+
+	var cIds *C.int64_t
+	if len(ids) > 0 {
+		cIds = (*C.int64_t)(unsafe.Pointer(&ids[0]))
 	}
 
 	cBP := C.ivf_pq_build_params_t{
@@ -88,10 +93,12 @@ func NewGpuIvfPq[T VectorType](dataset []T, count uint64, dimension uint32, metr
 		C.uint32_t(nthread),
 		C.distribution_mode_t(mode),
 		C.quantization_t(qtype),
+		cIds,
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(dataset)
 	runtime.KeepAlive(cDevices)
+	runtime.KeepAlive(ids)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
@@ -201,6 +208,7 @@ func NewGpuIvfPqEmpty[T VectorType](totalCount uint64, dimension uint32, metric 
 		C.uint32_t(nthread),
 		C.distribution_mode_t(mode),
 		C.quantization_t(qtype),
+		nil,
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(cDevices)
@@ -435,6 +443,7 @@ func NewGpuIvfPqFromDataDirectory[T VectorType](dir string, dimension uint32, me
 		C.uint32_t(nthread),
 		C.distribution_mode_t(mode),
 		C.quantization_t(qtype),
+		nil,
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(cDevices)

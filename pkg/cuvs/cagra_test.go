@@ -36,7 +36,7 @@ func TestGpuCagra(t *testing.T) {
 	bp := DefaultCagraBuildParams()
 	bp.IntermediateGraphDegree = 256
 	bp.GraphDegree = 128
-	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
 	if err != nil {
 		t.Fatalf("Failed to create GpuCagra: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestGpuCagraSaveLoad(t *testing.T) {
 	bp := DefaultCagraBuildParams()
 	bp.IntermediateGraphDegree = 256
 	bp.GraphDegree = 128
-	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
 	if err != nil {
 		t.Fatalf("Failed to create GpuCagra: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestGpuCagraPackUnpack(t *testing.T) {
 	bp := DefaultCagraBuildParams()
 	bp.IntermediateGraphDegree = 256
 	bp.GraphDegree = 128
-	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
 	if err != nil {
 		t.Fatalf("Failed to create GpuCagra: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestGpuCagraFromDataDirectory(t *testing.T) {
 	bp := DefaultCagraBuildParams()
 	bp.IntermediateGraphDegree = 256
 	bp.GraphDegree = 128
-	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
 	if err != nil {
 		t.Fatalf("Failed to create GpuCagra: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestGpuShardedCagra(t *testing.T) {
 	bp := DefaultCagraBuildParams()
 	bp.IntermediateGraphDegree = 256
 	bp.GraphDegree = 128
-	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, Sharded)
+	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, Sharded, nil)
 	if err != nil {
 		t.Fatalf("Failed to create sharded CAGRA: %v", err)
 	}
@@ -355,7 +355,7 @@ func TestGpuCagraExtend(t *testing.T) {
 	bp := DefaultCagraBuildParams()
 	bp.IntermediateGraphDegree = 256
 	bp.GraphDegree = 128
-	index, err := NewGpuCagra[float32](dataset, count, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	index, err := NewGpuCagra[float32](dataset, count, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
 	if err != nil {
 		t.Fatalf("Failed to create GpuCagra: %v", err)
 	}
@@ -410,11 +410,11 @@ func TestGpuCagraMerge(t *testing.T) {
 	bp.IntermediateGraphDegree = 256
 	bp.GraphDegree = 128
 
-	idx1, err := NewGpuCagra[float32](ds1, count, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	idx1, err := NewGpuCagra[float32](ds1, count, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
 	if err != nil {
 		t.Fatalf("Failed to create idx1: %v", err)
 	}
-	idx2, err := NewGpuCagra[float32](ds2, count, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+	idx2, err := NewGpuCagra[float32](ds2, count, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
 	if err != nil {
 		t.Fatalf("Failed to create idx2: %v", err)
 	}
@@ -457,6 +457,88 @@ func TestGpuCagraMerge(t *testing.T) {
 	}
 }
 
+func TestGpuCagraMergeWithIds(t *testing.T) {
+	devices, err := GetGpuDeviceList()
+	if err != nil || len(devices) < 1 {
+		t.Skip("Need at least 1 GPU for CAGRA merge test")
+	}
+
+	dimension := uint32(16)
+	count := uint64(100)
+
+	// Index 1: values around 0, IDs [1000..199]
+	ds1 := make([]float32, count*uint64(dimension))
+	ids1 := make([]uint32, count)
+	for i := uint64(0); i < count; i++ {
+		ids1[i] = uint32(1000 + i)
+		for j := uint32(0); j < dimension; j++ {
+			ds1[i*uint64(dimension)+uint64(j)] = float32(i % 10)
+		}
+	}
+
+	// Index 2: values around 5000, IDs [5000..5099]
+	ds2 := make([]float32, count*uint64(dimension))
+	ids2 := make([]uint32, count)
+	for i := uint64(0); i < count; i++ {
+		ids2[i] = uint32(5000 + i)
+		for j := uint32(0); j < dimension; j++ {
+			ds2[i*uint64(dimension)+uint64(j)] = float32(5000 + (i % 10))
+		}
+	}
+
+	bp := DefaultCagraBuildParams()
+	idx1, err := NewGpuCagra[float32](ds1, count, dimension, L2Expanded, bp, devices, 1, SingleGpu, ids1)
+	if err != nil {
+		t.Fatalf("Failed to create idx1: %v", err)
+	}
+	idx1.Start()
+	idx1.Build()
+
+	idx2, err := NewGpuCagra[float32](ds2, count, dimension, L2Expanded, bp, devices, 1, SingleGpu, ids2)
+	if err != nil {
+		t.Fatalf("Failed to create idx2: %v", err)
+	}
+	idx2.Start()
+	idx2.Build()
+
+	defer idx1.Destroy()
+	defer idx2.Destroy()
+
+	merged, err := MergeGpuCagra([]*GpuCagra[float32]{idx1, idx2}, 1, devices)
+	if err != nil {
+		t.Fatalf("Merge failed: %v", err)
+	}
+	defer merged.Destroy()
+	merged.Start()
+
+	// Query for Cluster 1: expect ID in [1000, 1100)
+	q1 := make([]float32, dimension)
+	for j := range q1 {
+		q1[j] = 0.0
+	}
+	sp := DefaultCagraSearchParams()
+	r1, err := merged.Search(q1, 1, dimension, 1, sp)
+	if err != nil {
+		t.Fatalf("Search 1 failed: %v", err)
+	}
+	if r1.Neighbors[0] < 1000 || r1.Neighbors[0] >= 1100 {
+		t.Errorf("Expected neighbor from idx1 [1000, 1100), got %d", r1.Neighbors[0])
+	}
+
+	// Query for Cluster 2: expect ID in [5000, 5100)
+	q2 := make([]float32, dimension)
+	for j := range q2 {
+		q2[j] = 5000.0
+	}
+	r2, err := merged.Search(q2, 1, dimension, 1, sp)
+	if err != nil {
+		t.Fatalf("Search 2 failed: %v", err)
+	}
+	if r2.Neighbors[0] < 5000 || r2.Neighbors[0] >= 5100 {
+		t.Errorf("Expected neighbor from idx2 [5000, 5100), got %d", r2.Neighbors[0])
+	}
+}
+
 func TestGpuReplicatedCagra(t *testing.T) {
 	devices, err := GetGpuDeviceList()
 	if err != nil || len(devices) < 1 {
@@ -474,7 +556,7 @@ func TestGpuReplicatedCagra(t *testing.T) {
 	bp := DefaultCagraBuildParams()
 	bp.IntermediateGraphDegree = 256
 	bp.GraphDegree = 128
-	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, Replicated)
+	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, Replicated, nil)
 	if err != nil {
 		t.Fatalf("Failed to create replicated CAGRA: %v", err)
 	}
@@ -515,7 +597,7 @@ func BenchmarkGpuShardedCagra(b *testing.B) {
 	bp := DefaultCagraBuildParams()
 	bp.IntermediateGraphDegree = 256
 	bp.GraphDegree = 128
-	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 16, Sharded)
+	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 16, Sharded, nil)
 	if err != nil {
 		b.Fatalf("Failed to create sharded CAGRA: %v", err)
 	}
@@ -574,7 +656,7 @@ func BenchmarkGpuSingleCagra(b *testing.B) {
 	bp := DefaultCagraBuildParams()
 	bp.IntermediateGraphDegree = 256
 	bp.GraphDegree = 128
-	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, SingleGpu)
+	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, SingleGpu, nil)
 	if err != nil {
 		b.Fatalf("Failed to create single CAGRA: %v", err)
 	}
@@ -636,7 +718,7 @@ func BenchmarkGpuReplicatedCagra(b *testing.B) {
 	bp := DefaultCagraBuildParams()
 	bp.IntermediateGraphDegree = 256
 	bp.GraphDegree = 128
-	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, Replicated)
+	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 8, Replicated, nil)
 	if err != nil {
 		b.Fatalf("Failed to create replicated CAGRA: %v", err)
 	}

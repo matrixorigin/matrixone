@@ -66,29 +66,29 @@ struct gpu_ivf_pq_any_t {
 extern "C" {
 
 gpu_ivf_pq_c gpu_ivf_pq_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, 
-                               distance_type_t metric_c, ivf_pq_build_params_t build_params,
-                               const int* devices, int device_count, uint32_t nthread, 
-                               distribution_mode_t dist_mode, quantization_t qtype, void* errmsg) {
+                                 distance_type_t metric_c, ivf_pq_build_params_t build_params,
+                                 const int* devices, int device_count, uint32_t nthread, 
+                                 distribution_mode_t dist_mode, quantization_t qtype, 
+                                 const int64_t* ids, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         std::vector<int> devs(devices, devices + device_count);
         void* ptr = nullptr;
         switch (qtype) {
             case Quantization_F32:
-                ptr = new gpu_ivf_pq_t<float>(static_cast<const float*>(dataset_data), count_vectors, dimension, metric_c, build_params, devs, nthread, dist_mode);
+                ptr = new gpu_ivf_pq_t<float>(static_cast<const float*>(dataset_data), count_vectors, dimension, metric_c, build_params, devs, nthread, dist_mode, ids);
                 break;
             case Quantization_F16:
-                ptr = new gpu_ivf_pq_t<half>(static_cast<const half*>(dataset_data), count_vectors, dimension, metric_c, build_params, devs, nthread, dist_mode);
+                ptr = new gpu_ivf_pq_t<half>(static_cast<const half*>(dataset_data), count_vectors, dimension, metric_c, build_params, devs, nthread, dist_mode, ids);
                 break;
             case Quantization_INT8:
-                ptr = new gpu_ivf_pq_t<int8_t>(static_cast<const int8_t*>(dataset_data), count_vectors, dimension, metric_c, build_params, devs, nthread, dist_mode);
+                ptr = new gpu_ivf_pq_t<int8_t>(static_cast<const int8_t*>(dataset_data), count_vectors, dimension, metric_c, build_params, devs, nthread, dist_mode, ids);
                 break;
             case Quantization_UINT8:
-                ptr = new gpu_ivf_pq_t<uint8_t>(static_cast<const uint8_t*>(dataset_data), count_vectors, dimension, metric_c, build_params, devs, nthread, dist_mode);
+                ptr = new gpu_ivf_pq_t<uint8_t>(static_cast<const uint8_t*>(dataset_data), count_vectors, dimension, metric_c, build_params, devs, nthread, dist_mode, ids);
                 break;
             default: return nullptr;
-        }
-        static_cast<gpu_index_base_t<float, ivf_pq_build_params_t>*>(ptr)->start();
+        }        static_cast<gpu_index_base_t<float, ivf_pq_build_params_t>*>(ptr)->start();
         return static_cast<gpu_ivf_pq_c>(new gpu_ivf_pq_any_t(qtype, ptr));
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, 
@@ -130,29 +130,29 @@ gpu_ivf_pq_c gpu_ivf_pq_new_from_data_file(const char* data_filename, distance_t
 }
 
 gpu_ivf_pq_c gpu_ivf_pq_new_empty(uint64_t total_count, uint32_t dimension, distance_type_t metric_c, 
-                                         ivf_pq_build_params_t build_params,
-                                         const int* devices, int device_count, uint32_t nthread, 
-                                         distribution_mode_t dist_mode, quantization_t qtype, void* errmsg) {
+                                       ivf_pq_build_params_t build_params,
+                                       const int* devices, int device_count, uint32_t nthread, 
+                                       distribution_mode_t dist_mode, quantization_t qtype, 
+                                       const int64_t* ids, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         std::vector<int> devs(devices, devices + device_count);
         void* ptr = nullptr;
         switch (qtype) {
             case Quantization_F32:
-                ptr = new gpu_ivf_pq_t<float>(total_count, dimension, metric_c, build_params, devs, nthread, dist_mode);
+                ptr = new gpu_ivf_pq_t<float>(total_count, dimension, metric_c, build_params, devs, nthread, dist_mode, ids);
                 break;
             case Quantization_F16:
-                ptr = new gpu_ivf_pq_t<half>(total_count, dimension, metric_c, build_params, devs, nthread, dist_mode);
+                ptr = new gpu_ivf_pq_t<half>(total_count, dimension, metric_c, build_params, devs, nthread, dist_mode, ids);
                 break;
             case Quantization_INT8:
-                ptr = new gpu_ivf_pq_t<int8_t>(total_count, dimension, metric_c, build_params, devs, nthread, dist_mode);
+                ptr = new gpu_ivf_pq_t<int8_t>(total_count, dimension, metric_c, build_params, devs, nthread, dist_mode, ids);
                 break;
             case Quantization_UINT8:
-                ptr = new gpu_ivf_pq_t<uint8_t>(total_count, dimension, metric_c, build_params, devs, nthread, dist_mode);
+                ptr = new gpu_ivf_pq_t<uint8_t>(total_count, dimension, metric_c, build_params, devs, nthread, dist_mode, ids);
                 break;
             default: return nullptr;
-        }
-        static_cast<gpu_index_base_t<float, ivf_pq_build_params_t>*>(ptr)->start();
+        }        static_cast<gpu_index_base_t<float, ivf_pq_build_params_t>*>(ptr)->start();
         return static_cast<gpu_ivf_pq_c>(new gpu_ivf_pq_any_t(qtype, ptr));
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, 

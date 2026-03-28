@@ -57,7 +57,7 @@ func (gi *GpuIvfFlat[T]) SetUseBatching(enable bool) error {
 
 // NewGpuIvfFlat creates a new GpuIvfFlat instance from a dataset.
 func NewGpuIvfFlat[T VectorType](dataset []T, count uint64, dimension uint32, metric DistanceType,
-	bp IvfFlatBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfFlat[T], error) {
+	bp IvfFlatBuildParams, devices []int, nthread uint32, mode DistributionMode, ids []int64) (*GpuIvfFlat[T], error) {
 	if len(devices) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("at least one device must be specified")
 	}
@@ -67,6 +67,11 @@ func NewGpuIvfFlat[T VectorType](dataset []T, count uint64, dimension uint32, me
 	cDevices := make([]C.int, len(devices))
 	for i, d := range devices {
 		cDevices[i] = C.int(d)
+	}
+
+	var cIds *C.int64_t
+	if len(ids) > 0 {
+		cIds = (*C.int64_t)(unsafe.Pointer(&ids[0]))
 	}
 
 	cBP := C.ivf_flat_build_params_t{
@@ -86,10 +91,12 @@ func NewGpuIvfFlat[T VectorType](dataset []T, count uint64, dimension uint32, me
 		C.uint32_t(nthread),
 		C.distribution_mode_t(mode),
 		C.quantization_t(qtype),
+		cIds,
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(dataset)
 	runtime.KeepAlive(cDevices)
+	runtime.KeepAlive(ids)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
@@ -194,6 +201,7 @@ func NewGpuIvfFlatFromDataDirectory[T VectorType](dir string, dimension uint32, 
 		C.uint32_t(nthread),
 		C.distribution_mode_t(mode),
 		C.quantization_t(qtype),
+		nil,
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(cDevices)
@@ -327,6 +335,7 @@ func NewGpuIvfFlatEmpty[T VectorType](totalCount uint64, dimension uint32, metri
 		C.uint32_t(nthread),
 		C.distribution_mode_t(mode),
 		C.quantization_t(qtype),
+		nil,
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(cDevices)

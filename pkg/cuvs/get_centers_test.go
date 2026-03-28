@@ -33,7 +33,7 @@ func testIvfFlatGetCenters[T VectorType](t *testing.T, name string) {
 		devices := []int{0}
 		bp := DefaultIvfFlatBuildParams()
 		bp.NLists = 16
-		index, err := NewGpuIvfFlat[T](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+		index, err := NewGpuIvfFlat[T](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
 		if err != nil {
 			t.Fatalf("Failed to create GpuIvfFlat: %v", err)
 		}
@@ -91,7 +91,7 @@ func testIvfPqGetCenters[T VectorType](t *testing.T, name string) {
 		bp := DefaultIvfPqBuildParams()
 		bp.NLists = 16
 		bp.M = 8
-		index, err := NewGpuIvfPq[T](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu)
+		index, err := NewGpuIvfPq[T](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
 		if err != nil {
 			t.Fatalf("Failed to create GpuIvfPq: %v", err)
 		}

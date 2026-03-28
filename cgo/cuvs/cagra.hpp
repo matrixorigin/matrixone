@@ -180,6 +180,7 @@ public:
         this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, DistributionMode_SINGLE_GPU);
         
         this->count = static_cast<uint32_t>(index_->size());
+        this->current_offset_ = this->count;
         this->build_params.graph_degree = static_cast<size_t>(index_->graph_degree());
         this->is_loaded_ = true;
     }
@@ -251,6 +252,31 @@ public:
             std::move(merged_idx),
             dim, m, nthread, devs
         );
+
+        // Merge host_ids: the cuVS merge lays vectors as source[0]..source[N-1] in order.
+        // If any source has custom IDs, concatenate them all (synthesising sequential IDs
+        // for sources that have none) so the merged index can map back to external IDs.
+        bool any_has_ids = false;
+        for (auto* bi : base_indices) {
+            if (!bi->host_ids.empty()) { any_has_ids = true; break; }
+        }
+        if (any_has_ids) {
+            std::vector<uint32_t> merged_ids;
+            merged_ids.reserve(new_idx->count);
+            uint32_t offset = 0;
+            for (auto* bi : base_indices) {
+                uint32_t n = bi->count;
+                if (!bi->host_ids.empty()) {
+                    merged_ids.insert(merged_ids.end(), bi->host_ids.begin(), bi->host_ids.end());
+                } else {
+                    for (uint32_t i = 0; i < n; ++i) merged_ids.push_back(offset + i);
+                }
+                offset += n;
+            }
+            new_idx->set_ids(merged_ids.data(), new_idx->count, 0);
+        }
+
+        new_idx->init_deleted_bitset();
         return new_idx;
     }
 

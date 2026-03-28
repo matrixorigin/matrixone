@@ -105,16 +105,16 @@ func TestIndexInfoComprehensive(t *testing.T) {
 					bp := DefaultCagraBuildParams()
 					bp.IntermediateGraphDegree = 256
 					bp.GraphDegree = 128
-					index, err = NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode)
+					index, err = NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode, nil)
 				case "IVF-Flat":
 					bp := DefaultIvfFlatBuildParams()
 					bp.NLists = 1000
-					index, err = NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode)
+					index, err = NewGpuIvfFlat[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode, nil)
 				case "IVF-PQ":
 					bp := DefaultIvfPqBuildParams()
 					bp.NLists = 1000
 					bp.M = 16
-					index, err = NewGpuIvfPq[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode)
+					index, err = NewGpuIvfPq[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode, nil)
 				}
 			case "Float16":
 				dataset := make([]Float16, n_vectors*uint64(dimension))
@@ -127,16 +127,16 @@ func TestIndexInfoComprehensive(t *testing.T) {
 					bp := DefaultCagraBuildParams()
 					bp.IntermediateGraphDegree = 256
 					bp.GraphDegree = 128
-					index, err = NewGpuCagra[Float16](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode)
+					index, err = NewGpuCagra[Float16](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode, nil)
 				case "IVF-Flat":
 					bp := DefaultIvfFlatBuildParams()
 					bp.NLists = 1000
-					index, err = NewGpuIvfFlat[Float16](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode)
+					index, err = NewGpuIvfFlat[Float16](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode, nil)
 				case "IVF-PQ":
 					bp := DefaultIvfPqBuildParams()
 					bp.NLists = 1000
 					bp.M = 16
-					index, err = NewGpuIvfPq[Float16](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode)
+					index, err = NewGpuIvfPq[Float16](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode, nil)
 				}
 			case "int8":
 				dataset := make([]int8, n_vectors*uint64(dimension))
@@ -149,16 +149,16 @@ func TestIndexInfoComprehensive(t *testing.T) {
 					bp := DefaultCagraBuildParams()
 					bp.IntermediateGraphDegree = 256
 					bp.GraphDegree = 128
-					index, err = NewGpuCagra[int8](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode)
+					index, err = NewGpuCagra[int8](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode, nil)
 				case "IVF-Flat":
 					bp := DefaultIvfFlatBuildParams()
 					bp.NLists = 1000
-					index, err = NewGpuIvfFlat[int8](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode)
+					index, err = NewGpuIvfFlat[int8](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode, nil)
 				case "IVF-PQ":
 					bp := DefaultIvfPqBuildParams()
 					bp.NLists = 1000
 					bp.M = 16
-					index, err = NewGpuIvfPq[int8](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode)
+					index, err = NewGpuIvfPq[int8](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode, nil)
 				}
 			case "uint8":
 				dataset := make([]uint8, n_vectors*uint64(dimension))
@@ -171,16 +171,16 @@ func TestIndexInfoComprehensive(t *testing.T) {
 					bp := DefaultCagraBuildParams()
 					bp.IntermediateGraphDegree = 256
 					bp.GraphDegree = 128
-					index, err = NewGpuCagra[uint8](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode)
+					index, err = NewGpuCagra[uint8](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode, nil)
 				case "IVF-Flat":
 					bp := DefaultIvfFlatBuildParams()
 					bp.NLists = 1000
-					index, err = NewGpuIvfFlat[uint8](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode)
+					index, err = NewGpuIvfFlat[uint8](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode, nil)
 				case "IVF-PQ":
 					bp := DefaultIvfPqBuildParams()
 					bp.NLists = 1000
 					bp.M = 16
-					index, err = NewGpuIvfPq[uint8](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode)
+					index, err = NewGpuIvfPq[uint8](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, distMode, nil)
 				}
 			}
 

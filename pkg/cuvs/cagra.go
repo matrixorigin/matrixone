@@ -57,7 +57,7 @@ func (gi *GpuCagra[T]) SetUseBatching(enable bool) error {
 
 // NewGpuCagra creates a new GpuCagra instance from a dataset.
 func NewGpuCagra[T VectorType](dataset []T, count uint64, dimension uint32, metric DistanceType,
-	bp CagraBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuCagra[T], error) {
+	bp CagraBuildParams, devices []int, nthread uint32, mode DistributionMode, ids []uint32) (*GpuCagra[T], error) {
 	if len(devices) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("at least one device must be specified")
 	}
@@ -67,6 +67,11 @@ func NewGpuCagra[T VectorType](dataset []T, count uint64, dimension uint32, metr
 	cDevices := make([]C.int, len(devices))
 	for i, d := range devices {
 		cDevices[i] = C.int(d)
+	}
+
+	var cIds *C.uint32_t
+	if len(ids) > 0 {
+		cIds = (*C.uint32_t)(unsafe.Pointer(&ids[0]))
 	}
 
 	cBP := C.cagra_build_params_t{
@@ -86,10 +91,12 @@ func NewGpuCagra[T VectorType](dataset []T, count uint64, dimension uint32, metr
 		C.uint32_t(nthread),
 		C.distribution_mode_t(mode),
 		C.quantization_t(qtype),
+		cIds,
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(dataset)
 	runtime.KeepAlive(cDevices)
+	runtime.KeepAlive(ids)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
@@ -194,6 +201,7 @@ func NewGpuCagraFromDataDirectory[T VectorType](dir string, dimension uint32, me
 		C.uint32_t(nthread),
 		C.distribution_mode_t(mode),
 		C.quantization_t(qtype),
+		nil,
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(cDevices)
@@ -327,6 +335,7 @@ func NewGpuCagraEmpty[T VectorType](totalCount uint64, dimension uint32, metric 
 		C.uint32_t(nthread),
 		C.distribution_mode_t(mode),
 		C.quantization_t(qtype),
+		nil,
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(cDevices)
