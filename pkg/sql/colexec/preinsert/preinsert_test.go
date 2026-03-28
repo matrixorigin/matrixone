@@ -454,6 +454,7 @@ func TestGenAutoIncrColRefreshesStaleTableID(t *testing.T) {
 		Attrs:             []string{catalog.FakePrimaryKeyColName},
 		EstimatedRowCount: 1,
 	}
+	preInsert.ctr.tblId = preInsert.TableDef.TblId
 
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = testutil.MakeInt64Vector([]int64{0}, nil)
@@ -512,6 +513,7 @@ func TestGenAutoIncrColReturnsRetryWhenDefinitionStillChanged(t *testing.T) {
 		Attrs:             []string{catalog.FakePrimaryKeyColName},
 		EstimatedRowCount: 1,
 	}
+	preInsert.ctr.tblId = preInsert.TableDef.TblId
 
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = testutil.MakeInt64Vector([]int64{0}, nil)
@@ -560,6 +562,7 @@ func TestGenAutoIncrColKeepsTemporaryTableBehavior(t *testing.T) {
 		Attrs:             []string{catalog.FakePrimaryKeyColName},
 		EstimatedRowCount: 1,
 	}
+	preInsert.ctr.tblId = preInsert.TableDef.TblId
 
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = testutil.MakeInt64Vector([]int64{0}, nil)
