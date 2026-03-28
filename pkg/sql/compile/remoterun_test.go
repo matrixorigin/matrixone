@@ -290,6 +290,38 @@ func Test_convertToVmInstruction(t *testing.T) {
 	}
 }
 
+func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
+	ctx := &scopeContext{
+		id:     1,
+		root:   &scopeContext{},
+		parent: &scopeContext{},
+	}
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
+
+	t.Run("Deletion_CanTruncate", func(t *testing.T) {
+		op := &deletion.Deletion{
+			DeleteCtx: &deletion.DeleteCtx{
+				CanTruncate:     true,
+				RowIdIdx:        1,
+				PrimaryKeyIdx:   0,
+				AddAffectedRows: true,
+				Ref:             &plan.ObjectRef{ObjName: "t1"},
+			},
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.True(t, pipeInstr.Delete.CanTruncate)
+
+		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+		require.NoError(t, err)
+		restoredOp := restored.(*deletion.Deletion)
+		require.True(t, restoredOp.DeleteCtx.CanTruncate)
+		require.Equal(t, 1, restoredOp.DeleteCtx.RowIdIdx)
+		require.Equal(t, 0, restoredOp.DeleteCtx.PrimaryKeyIdx)
+		require.True(t, restoredOp.DeleteCtx.AddAffectedRows)
+	})
+}
 func Test_convertToProcessLimitation(t *testing.T) {
 	lim := pipeline.ProcessLimitation{
 		Size: 100,

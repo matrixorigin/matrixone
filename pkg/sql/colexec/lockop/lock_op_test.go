@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -697,10 +698,25 @@ func TestCopyToPipelineTargetIncludesPartitionColIdx(t *testing.T) {
 	arg := NewArgumentByEngine(nil)
 	defer arg.Release()
 
-	// Add lock target with partition column index
 	arg.AddLockTarget(1, nil, 0, pkType, 2, -1, nil, false)
 
 	targets := arg.CopyToPipelineTarget()
 	require.Len(t, targets, 1)
 	require.Equal(t, int32(2), targets[0].PartitionColIdxInBat)
+}
+
+func TestLockTableIfLockCountIsZeroWithLockRows(t *testing.T) {
+	runLockOpTest(t, func(proc *process.Process) {
+		pkType := types.New(types.T_int32, 0, 0)
+		arg := NewArgumentByEngine(nil)
+		arg.OperatorBase.OperatorInfo = vm.OperatorInfo{Idx: 0}
+		arg.AddLockTarget(1, nil, 0, pkType, -1, -1, plan2.MakePlan2Int32ConstExprWithType(42), false)
+
+		require.NoError(t, arg.Prepare(proc))
+		arg.ctr.hasNewVersionInRange = testFunc
+
+		require.NoError(t, lockTalbeIfLockCountIsZero(proc, arg))
+
+		arg.Free(proc, false, nil)
+	})
 }

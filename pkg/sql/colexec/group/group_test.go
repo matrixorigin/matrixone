@@ -158,7 +158,6 @@ func TestFreeAggListPartial(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
-	// Create a few mock aggregators
 	aggList := make([]aggexec.AggFuncExec, 3)
 	for i := 0; i < 3; i++ {
 		agg, err := aggexec.MakeAgg(proc.Mp(), aggexec.AggIdOfCountStar, false, types.T_int64.ToType())
@@ -166,10 +165,7 @@ func TestFreeAggListPartial(t *testing.T) {
 		aggList[i] = agg
 	}
 
-	// Free first 2 aggregators
 	freeAggListPartial(aggList, 2)
-
-	// Free all remaining
 	freeAggListPartial(aggList, 3)
 }
 
@@ -188,13 +184,20 @@ func TestFreeAggList(t *testing.T) {
 }
 
 func TestFreeAggListPartialWithNilEntries(t *testing.T) {
-	// Test with nil entries - should not panic
 	aggList := make([]aggexec.AggFuncExec, 3)
-	aggList[0] = nil
-	aggList[1] = nil
-	aggList[2] = nil
 
-	// Should not panic
 	freeAggListPartial(aggList, 3)
 	freeAggList(aggList)
+}
+
+func TestMakeAggListFreesPartialOnCreationError(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	ctr := &container{mp: proc.Mp()}
+	_, err := ctr.makeAggList([]aggexec.AggFuncExecExpression{
+		countStarAgg(),
+		aggexec.MakeAggFunctionExpression(-1, false, []*plan.Expr{colExpr(0, types.T_int32)}, nil),
+	})
+	require.Error(t, err)
 }
