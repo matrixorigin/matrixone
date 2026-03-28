@@ -3382,6 +3382,9 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		var prepareStmt *PrepareStmt
 		sql, prepareStmt, err = parseStmtExecute(execCtx.reqCtx, ses, req.GetData().([]byte))
 		if err != nil {
+			if prepareStmt != nil {
+				prepareStmt.clearBinaryParamState(ses.GetProc())
+			}
 			return NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
 		execCtx.prepareColDef = prepareStmt.ColDefData
@@ -3389,12 +3392,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err)
 		}
-		if prepareStmt.params != nil {
-			prepareStmt.params.GetNulls().Reset()
-			for k := range prepareStmt.getFromSendLongData {
-				delete(prepareStmt.getFromSendLongData, k)
-			}
-		}
+		prepareStmt.clearBinaryParamState(ses.GetProc())
 		return resp, nil
 
 	case COM_STMT_SEND_LONG_DATA:
