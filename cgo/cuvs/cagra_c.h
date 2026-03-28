@@ -114,7 +114,9 @@ uint32_t gpu_cagra_len(gpu_cagra_c index_c);
 char* gpu_cagra_info(gpu_cagra_c index_c, void* errmsg);
 
 // Extend function
-void gpu_cagra_extend(gpu_cagra_c index_c, const void* additional_data, uint64_t num_vectors, void* errmsg);
+// new_ids may be NULL to auto-assign sequential IDs starting from current index size
+void gpu_cagra_extend(gpu_cagra_c index_c, const void* additional_data, uint64_t num_vectors,
+                      const uint32_t* new_ids, void* errmsg);
 
 // Merge function
 gpu_cagra_c gpu_cagra_merge(gpu_cagra_c* indices_c, int num_indices, uint32_t nthread, const int* devices, int device_count, void* errmsg);

@@ -425,12 +425,14 @@ func TestGpuIvfPqExtend(t *testing.T) {
 
 	nExt := uint64(50)
 	ext := make([]float32, nExt*uint64(dimension))
+	extIDs := make([]int64, nExt)
 	for i := uint64(0); i < nExt; i++ {
+		extIDs[i] = int64(2000 + i)
 		for j := uint32(0); j < dimension; j++ {
-			ext[i*uint64(dimension)+uint64(j)] = 50.5 // within trained range [0..99]
+			ext[i*uint64(dimension)+uint64(j)] = 500.5
 		}
 	}
-	if err := index.Extend(ext, nExt, nil); err != nil {
+	if err := index.Extend(ext, nExt, extIDs); err != nil {
 		t.Fatalf("Extend failed: %v", err)
 	}
 
@@ -451,17 +453,17 @@ func TestGpuIvfPqExtend(t *testing.T) {
 		t.Errorf("expected neighbor 0, got %d", r.Neighbors[0])
 	}
 
-	// Query exactly at extended cluster; expect ID in [nBase, nBase+nExt)
-	q50 := make([]float32, dimension)
-	for j := range q50 {
-		q50[j] = 50.5
+	// Query exactly at extended cluster; expect ID in [2000, 2050)
+	q500 := make([]float32, dimension)
+	for j := range q500 {
+		q500[j] = 500.5
 	}
-	r, err = index.Search(q50, 1, dimension, 1, sp)
+	r, err = index.Search(q500, 1, dimension, 1, sp)
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
 	}
-	if r.Neighbors[0] < int64(nBase) || r.Neighbors[0] >= int64(nBase+nExt) {
-		t.Errorf("expected neighbor in [%d, %d), got %d", nBase, nBase+nExt, r.Neighbors[0])
+	if r.Neighbors[0] < 2000 || r.Neighbors[0] >= 2050 {
+		t.Errorf("expected neighbor in [2000, 2050), got %d", r.Neighbors[0])
 	}
 }
 
@@ -497,12 +499,14 @@ func TestGpuIvfPqExtendFloat(t *testing.T) {
 
 	nExt := uint64(50)
 	ext := make([]float32, nExt*uint64(dimension))
+	extIDs := make([]int64, nExt)
 	for i := uint64(0); i < nExt; i++ {
+		extIDs[i] = int64(3000 + i)
 		for j := uint32(0); j < dimension; j++ {
-			ext[i*uint64(dimension)+uint64(j)] = 50.5 // within trained range [0..99]
+			ext[i*uint64(dimension)+uint64(j)] = 500.5
 		}
 	}
-	if err := index.ExtendFloat(ext, nExt, nil); err != nil {
+	if err := index.ExtendFloat(ext, nExt, extIDs); err != nil {
 		t.Fatalf("ExtendFloat failed: %v", err)
 	}
 
@@ -513,17 +517,17 @@ func TestGpuIvfPqExtendFloat(t *testing.T) {
 	sp := DefaultIvfPqSearchParams()
 	sp.NProbes = 10
 
-	// Query exactly at extended cluster; expect ID in [nBase, nBase+nExt)
-	q50 := make([]float32, dimension)
-	for j := range q50 {
-		q50[j] = 50.5
+	// Query exactly at extended cluster; expect ID in [3000, 3050)
+	q500 := make([]float32, dimension)
+	for j := range q500 {
+		q500[j] = 500.5
 	}
-	r, err := index.SearchFloat(q50, 1, dimension, 1, sp)
+	r, err := index.SearchFloat(q500, 1, dimension, 1, sp)
 	if err != nil {
 		t.Fatalf("SearchFloat failed: %v", err)
 	}
-	if r.Neighbors[0] < int64(nBase) || r.Neighbors[0] >= int64(nBase+nExt) {
-		t.Errorf("expected neighbor in [%d, %d), got %d", nBase, nBase+nExt, r.Neighbors[0])
+	if r.Neighbors[0] < 3000 || r.Neighbors[0] >= 3050 {
+		t.Errorf("expected neighbor in [3000, 3050), got %d", r.Neighbors[0])
 	}
 }
 

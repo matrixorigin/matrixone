@@ -691,8 +691,9 @@ func (gc *GpuCagra[T]) Info() (string, error) {
 	return info, nil
 }
 
-// Extend adds more vectors to the index (single-GPU only)
-func (gc *GpuCagra[T]) Extend(additionalData []T, numVectors uint64) error {
+// Extend adds more vectors to the index (single-GPU only).
+// newIDs may be nil to auto-assign sequential IDs starting from the current index size.
+func (gc *GpuCagra[T]) Extend(additionalData []T, numVectors uint64, newIDs []uint32) error {
 	if gc.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -700,14 +701,21 @@ func (gc *GpuCagra[T]) Extend(additionalData []T, numVectors uint64) error {
 		return nil
 	}
 
+	var idsPtr *C.uint32_t
+	if len(newIDs) > 0 {
+		idsPtr = (*C.uint32_t)(unsafe.Pointer(&newIDs[0]))
+	}
+
 	var errmsg *C.char
 	C.gpu_cagra_extend(
 		gc.cCagra,
 		unsafe.Pointer(&additionalData[0]),
 		C.uint64_t(numVectors),
+		idsPtr,
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(additionalData)
+	runtime.KeepAlive(newIDs)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)

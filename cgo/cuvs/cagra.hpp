@@ -303,6 +303,7 @@ public:
         index_params.metric = static_cast<cuvs::distance::DistanceType>(this->metric);
         index_params.intermediate_graph_degree = this->build_params.intermediate_graph_degree;
         index_params.graph_degree = this->build_params.graph_degree;
+        index_params.attach_dataset_on_build = this->build_params.attach_dataset_on_build;
 
         if (this->dist_mode == DistributionMode_REPLICATED) {
             auto res = handle.get_raft_resources();
@@ -364,51 +365,93 @@ public:
         }
     }
 
-    void extend(const T* additional_data, uint64_t num_vectors) {
-        if (!this->is_loaded_ || !index_) {
-            uint64_t old_size = this->flattened_host_dataset.size();
-            this->flattened_host_dataset.resize(old_size + num_vectors * this->dimension);
-            std::copy(additional_data, additional_data + num_vectors * this->dimension, this->flattened_host_dataset.begin() + old_size);
-            this->count += static_cast<uint32_t>(num_vectors);
-            this->current_offset_ += static_cast<uint32_t>(num_vectors);
-            return;
+    void extend_internal(raft_handle_wrapper_t& handle, const T* additional_data, uint64_t num_vectors) {
+        if constexpr (std::is_same_v<T, half>) {
+            // cuVS cagra::extend does not support float16 — guarded in extend() but
+            // extend_internal must be constexpr-safe for all T.
+            throw std::runtime_error("CAGRA extend is not supported for float16 (half) by cuVS.");
+        } else {
+            auto res = handle.get_raft_resources();
+
+            auto additional_dataset_device = raft::make_device_matrix<T, int64_t>(
+                *res, static_cast<int64_t>(num_vectors), static_cast<int64_t>(this->dimension));
+            raft::copy(*res, additional_dataset_device.view(),
+                       raft::make_host_matrix_view<const T, int64_t>(additional_data, num_vectors, this->dimension));
+            raft::resource::sync_stream(*res);
+
+            cuvs::neighbors::cagra::extend_params params;
+
+            if (this->dist_mode == DistributionMode_REPLICATED) {
+                cagra_index* idx;
+                {
+                    std::shared_lock<std::shared_mutex> lock(this->mutex_);
+                    idx = static_cast<cagra_index*>(this->replicated_indices_.at(handle.get_device_id()).get());
+                }
+                cuvs::neighbors::cagra::extend(*res, params, raft::make_const_mdspan(additional_dataset_device.view()), *idx);
+                handle.sync();
+                {
+                    std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                    this->replicated_datasets_.erase(handle.get_device_id());
+                }
+            } else {
+                cuvs::neighbors::cagra::extend(*res, params, raft::make_const_mdspan(additional_dataset_device.view()), *index_);
+                handle.sync();
+                {
+                    std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                    this->dataset_device_ptr_.reset();
+                }
+            }
+        }
+    }
+
+    void extend(const T* additional_data, uint64_t num_vectors, const uint32_t* new_ids = nullptr) {
+        {
+            std::unique_lock<std::shared_mutex> lock(this->mutex_);
+            if (!this->is_loaded_) {
+                // Pre-build: buffer data for later build()
+                uint64_t old_size = this->flattened_host_dataset.size();
+                this->flattened_host_dataset.resize(old_size + num_vectors * this->dimension);
+                std::copy(additional_data, additional_data + num_vectors * this->dimension,
+                          this->flattened_host_dataset.begin() + old_size);
+                if (new_ids) this->set_ids(new_ids, num_vectors, this->count);
+                this->count += static_cast<uint32_t>(num_vectors);
+                this->current_offset_ += static_cast<uint32_t>(num_vectors);
+                return;
+            }
         }
 
-        if (this->dist_mode != DistributionMode_SINGLE_GPU) {
-            throw std::runtime_error("CAGRA extend is not supported for multi-GPU indices in cuVS.");
-        }
+        if (this->dist_mode == DistributionMode_SHARDED)
+            throw std::runtime_error("extend: SHARDED mode not supported for CAGRA");
 
         if constexpr (std::is_same_v<T, half>) {
-             throw std::runtime_error("CAGRA single-GPU extend is not supported for float16 (half) by cuVS.");
+            throw std::runtime_error("CAGRA extend is not supported for float16 (half) by cuVS.");
         } else {
             if (num_vectors == 0) return;
 
-            std::unique_lock<std::shared_mutex> lock(this->mutex_);
+            // Serialize concurrent extends — callers queue here rather than race
+            std::lock_guard<std::mutex> extend_lock(this->extend_mutex_);
 
-            uint64_t job_id = this->worker->submit_main(
-                [&, additional_data, num_vectors](raft_handle_wrapper_t& handle) -> std::any {
-                    auto res = handle.get_raft_resources();
-                    
-                    auto additional_dataset_device = raft::make_device_matrix<T, int64_t>(
-                        *res, static_cast<int64_t>(num_vectors), static_cast<int64_t>(this->dimension));
-                    
-                    raft::copy(*res, additional_dataset_device.view(), 
-                               raft::make_host_matrix_view<const T, int64_t>(static_cast<const T*>(additional_data), num_vectors, this->dimension));
-                    raft::resource::sync_stream(*res);
-
-                    cuvs::neighbors::cagra::extend_params params;
-                    cuvs::neighbors::cagra::extend(*res, params, raft::make_const_mdspan(additional_dataset_device.view()), *index_);
-
-                    handle.sync();
+            if (this->dist_mode == DistributionMode_REPLICATED) {
+                this->worker->submit_all_devices([&](raft_handle_wrapper_t& handle) -> std::any {
+                    this->extend_internal(handle, additional_data, num_vectors);
                     return std::any();
-                }
-            );
+                });
+            } else {
+                uint64_t job_id = this->worker->submit_main(
+                    [&](raft_handle_wrapper_t& handle) -> std::any {
+                        this->extend_internal(handle, additional_data, num_vectors);
+                        return std::any();
+                    });
+                auto result = this->worker->wait(job_id).get();
+                if (result.error) std::rethrow_exception(result.error);
+            }
 
-            auto result = this->worker->wait(job_id).get();
-            if (result.error) std::rethrow_exception(result.error);
-
-            this->count = static_cast<uint32_t>(index_->size());
-            this->current_offset_ = this->count;
+            {
+                std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                if (new_ids) this->set_ids(new_ids, num_vectors, static_cast<uint64_t>(this->count));
+                this->count += static_cast<uint32_t>(num_vectors);
+                this->current_offset_ += num_vectors;
+            }
         }
     }
 
@@ -798,6 +841,7 @@ public:
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 this->count = static_cast<uint32_t>(local_idx->size());
                 this->dimension = static_cast<uint32_t>(local_idx->dim());
+                this->current_offset_ = this->count;
 
                 if (this->dist_mode == DistributionMode_SINGLE_GPU) {
                     index_ = std::move(local_idx);

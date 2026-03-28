@@ -606,6 +606,9 @@ public:
 protected:
     scalar_quantizer_t<float> quantizer_;
     uint64_t current_offset_ = 0;
+    // Serializes concurrent extend() calls. Held across GPU work and count update so that
+    // set_ids() offsets always match the GPU execution order. Does NOT block searches.
+    std::mutex extend_mutex_;
 };
 
 } // namespace matrixone

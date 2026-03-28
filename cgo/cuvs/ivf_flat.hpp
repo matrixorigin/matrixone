@@ -368,10 +368,16 @@ public:
     }
 
     void extend(const T* new_data, uint64_t n_rows, const int64_t* new_ids) {
-        if (!this->is_loaded_) throw std::runtime_error("extend: index not built");
-        if (!new_data || n_rows == 0) return;
-        if (this->dist_mode == DistributionMode_SHARDED)
-            throw std::runtime_error("extend: SHARDED mode not supported");
+        {
+            std::unique_lock<std::shared_mutex> lock(this->mutex_);
+            if (!this->is_loaded_) throw std::runtime_error("extend: index not built");
+            if (!new_data || n_rows == 0) return;
+            if (this->dist_mode == DistributionMode_SHARDED)
+                throw std::runtime_error("extend: SHARDED mode not supported");
+        }
+
+        // Serialize concurrent extends — callers queue here rather than race
+        std::lock_guard<std::mutex> extend_lock(this->extend_mutex_);
 
         std::vector<int64_t> seq_ids(n_rows);
         std::iota(seq_ids.begin(), seq_ids.end(), (int64_t)this->count);
@@ -399,10 +405,16 @@ public:
     }
 
     void extend_float(const float* new_data, uint64_t n_rows, const int64_t* new_ids) {
-        if (!this->is_loaded_) throw std::runtime_error("extend_float: index not built");
-        if (!new_data || n_rows == 0) return;
-        if (this->dist_mode == DistributionMode_SHARDED)
-            throw std::runtime_error("extend_float: SHARDED mode not supported");
+        {
+            std::unique_lock<std::shared_mutex> lock(this->mutex_);
+            if (!this->is_loaded_) throw std::runtime_error("extend_float: index not built");
+            if (!new_data || n_rows == 0) return;
+            if (this->dist_mode == DistributionMode_SHARDED)
+                throw std::runtime_error("extend_float: SHARDED mode not supported");
+        }
+
+        // Serialize concurrent extends — callers queue here rather than race
+        std::lock_guard<std::mutex> extend_lock(this->extend_mutex_);
 
         std::vector<int64_t> seq_ids(n_rows);
         std::iota(seq_ids.begin(), seq_ids.end(), (int64_t)this->count);
@@ -806,6 +818,7 @@ public:
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 this->count = static_cast<uint32_t>(local_idx->size());
                 this->dimension = static_cast<uint32_t>(local_idx->dim());
+                this->current_offset_ = this->count;
 
                 if (this->dist_mode == DistributionMode_SINGLE_GPU) {
                     index_ = std::move(local_idx);

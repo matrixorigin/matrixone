@@ -484,20 +484,20 @@ char* gpu_cagra_info(gpu_cagra_c index_c, void* errmsg) {
     }
 }
 
-void gpu_cagra_extend(gpu_cagra_c index_c, const void* additional_data, uint64_t num_vectors, void* errmsg) {
+void gpu_cagra_extend(gpu_cagra_c index_c, const void* additional_data, uint64_t num_vectors,
+                      const uint32_t* new_ids, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         auto* any = static_cast<gpu_cagra_any_t*>(index_c);
         switch (any->qtype) {
-            case Quantization_F32: static_cast<gpu_cagra_t<float>*>(any->ptr)->extend(static_cast<const float*>(additional_data), num_vectors); break;
-            case Quantization_F16: static_cast<gpu_cagra_t<half>*>(any->ptr)->extend(static_cast<const half*>(additional_data), num_vectors); break;
-            case Quantization_INT8: static_cast<gpu_cagra_t<int8_t>*>(any->ptr)->extend(static_cast<const int8_t*>(additional_data), num_vectors); break;
-            case Quantization_UINT8: static_cast<gpu_cagra_t<uint8_t>*>(any->ptr)->extend(static_cast<const uint8_t*>(additional_data), num_vectors); break;
+            case Quantization_F32: static_cast<gpu_cagra_t<float>*>(any->ptr)->extend(static_cast<const float*>(additional_data), num_vectors, new_ids); break;
+            case Quantization_F16: static_cast<gpu_cagra_t<half>*>(any->ptr)->extend(static_cast<const half*>(additional_data), num_vectors, new_ids); break;
+            case Quantization_INT8: static_cast<gpu_cagra_t<int8_t>*>(any->ptr)->extend(static_cast<const int8_t*>(additional_data), num_vectors, new_ids); break;
+            case Quantization_UINT8: static_cast<gpu_cagra_t<uint8_t>*>(any->ptr)->extend(static_cast<const uint8_t*>(additional_data), num_vectors, new_ids); break;
             default: break;
         }
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
- "Error in gpu_cagra_extend", e.what());
+        matrixone::set_errmsg(errmsg, "Error in gpu_cagra_extend", e.what());
     }
 }
 
