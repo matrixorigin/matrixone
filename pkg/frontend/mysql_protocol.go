@@ -976,7 +976,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 				pos = newPos
 				err = util.SetAnyToStringVector(proc, val, stmt.params, i)
 
-			case defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB, defines.MYSQL_TYPE_TEXT:
+			case defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON:
 				val, newPos, ok := mp.readStringLenEnc(data, pos)
 				if !ok {
 					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
