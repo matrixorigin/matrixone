@@ -18,7 +18,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -233,7 +233,7 @@ func TestDeleteAffectedRows(t *testing.T) {
 }
 
 // TestMultiUpdateCtxClonePartitionCols verifies that clone() correctly copies
-// PartitionCols (regression test for copy-paste bug that assigned DeleteCols).
+// PartitionCols and keeps nested objects independent.
 func TestMultiUpdateCtxClonePartitionCols(t *testing.T) {
 	original := &MultiUpdateCtx{
 		InsertCols:    []int{1, 2, 3},
@@ -245,17 +245,16 @@ func TestMultiUpdateCtxClonePartitionCols(t *testing.T) {
 
 	cloned := original.clone()
 
-	// Verify PartitionCols is correctly cloned (not DeleteCols)
 	require.Equal(t, original.PartitionCols, cloned.PartitionCols,
-		"PartitionCols should match original, not DeleteCols")
+		"PartitionCols should match original")
 	require.NotEqual(t, original.DeleteCols, cloned.PartitionCols,
 		"PartitionCols should not be DeleteCols")
-
-	// Verify other fields
 	require.Equal(t, original.InsertCols, cloned.InsertCols)
 	require.Equal(t, original.DeleteCols, cloned.DeleteCols)
-
-	// Verify ObjRef and TableDef are deep copied
+	require.Equal(t, original.ObjRef.SchemaName, cloned.ObjRef.SchemaName)
+	require.Equal(t, original.TableDef.Name, cloned.TableDef.Name)
+	require.NotSame(t, original.ObjRef, cloned.ObjRef)
+	require.NotSame(t, original.TableDef, cloned.TableDef)
 	cloned.ObjRef.ObjName = "modified"
 	require.Equal(t, "t1", original.ObjRef.ObjName, "original ObjRef should be unchanged")
 }
