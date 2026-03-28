@@ -57,8 +57,8 @@ type cnMergeTask struct {
 	targets []objectio.ObjectStats
 
 	// commit things
-	commitEntry  *api.MergeCommitEntry
-	transferMaps api.TransferMaps
+	commitEntry   *api.MergeCommitEntry
+	transferTable *mergesort.TransferTable
 
 	// auxiliaries
 	fs fileservice.FileService
@@ -225,14 +225,8 @@ func (t *cnMergeTask) GetCommitEntry() *api.MergeCommitEntry {
 	return t.commitEntry
 }
 
-func (t *cnMergeTask) InitTransferMaps(blkCnt int) {
-	// Maps are allocated lazily per-block in the merger/reshaper to avoid a large
-	// upfront memory spike (blkCnt × maxRows maps all pre-sized at once).
-	t.transferMaps = make(api.TransferMaps, blkCnt)
-}
-
-func (t *cnMergeTask) GetTransferMaps() api.TransferMaps {
-	return t.transferMaps
+func (t *cnMergeTask) SetTransferTable(tt *mergesort.TransferTable) {
+	t.transferTable = tt
 }
 
 // impl DisposableVecPool
@@ -253,8 +247,10 @@ func (t *cnMergeTask) Release() {
 		objectio.PutArena(t.arena)
 		t.arena = nil
 	}
-	mergesort.CleanTransMapping(t.transferMaps)
-	t.transferMaps = nil
+	if t.transferTable != nil {
+		t.transferTable.Release()
+		t.transferTable = nil
+	}
 }
 
 func (t *cnMergeTask) GetTotalSize() uint64 {

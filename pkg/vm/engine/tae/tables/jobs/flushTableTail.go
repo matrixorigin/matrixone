@@ -647,7 +647,7 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 			}
 		}
 		if !isTombstone && task.doTransfer {
-			mergesort.CleanTransMapping(task.transMappings)
+			mergesort.ReleaseTransferMaps(task.transMappings)
 		}
 		return nil
 	}

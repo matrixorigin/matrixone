@@ -20,9 +20,7 @@ import (
 	"iter"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
-	"unsafe"
 
 	"github.com/docker/go-units"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -40,147 +38,103 @@ import (
 	"go.uber.org/zap"
 )
 
-// tmNode is a node in the per-bucket free list. It holds a pooled []TransferDestPos
-// and a pointer to the next node. The next field is updated atomically so the free
-// list is lock-free for the common path.
-//
-// Using a linked list of tmNodes (rather than sync.Pool) makes this GC-immune:
-// sync.Pool is cleared on each GC in Go 1.21+, defeating the pooling.
-// A plain Go heap object linked list survives GC because the GC sees
-// plain [] slices with no special runtime hooks.
-type tmNode struct {
-	slice []api.TransferDestPos
-	next  unsafe.Pointer // *tmNode
-}
+var transferSlabPool = sync.Pool{}
 
-// tmFreeList is a lock-free stack for a given capacity bucket.
-// maxFreeControls how many slices per bucket before we stop accepting more.
-type tmFreeList struct {
-	mu    sync.Mutex
-	head  unsafe.Pointer // *tmNode (top of stack)
-	count int            // rough count to bound memory usage
-}
-
-const tmMaxFree = 256 // max slices per bucket before we stop recycling
-
-var tmFreeLists [8]tmFreeList // buckets: 1K, 2K, 4K, 8K, 16K, 32K, 64K, >64K
-
-// bucketFor returns the free list bucket index for a given row count.
-func bucketFor(rowCnt int) int {
-	bucket := 0
-	cap_ := 1024
-	for bucket < 7 && cap_ < rowCnt {
-		cap_ <<= 1
-		bucket++
+// getTransferSlab returns a slab of at least size entries from the pool,
+// with all ObjIdx fields initialized to NoTransfer.
+func getTransferSlab(size int) []api.TransferDestPos {
+	if v := transferSlabPool.Get(); v != nil {
+		slab := v.([]api.TransferDestPos)
+		if cap(slab) >= size {
+			slab = slab[:size]
+			for i := range slab {
+				slab[i] = api.TransferDestPos{ObjIdx: api.NoTransfer}
+			}
+			return slab
+		}
 	}
-	return bucket
+	slab := make([]api.TransferDestPos, size)
+	for i := range slab {
+		slab[i].ObjIdx = api.NoTransfer
+	}
+	return slab
 }
 
-// Push adds a []TransferDestPos to the free list stack.
-// If the bucket is full (>= tmMaxFree), the slice is dropped (let GC reclaim).
-// Lock-free for concurrent callers: it uses CAS on the head pointer.
-func (f *tmFreeList) Push(slice []api.TransferDestPos) {
-	if cap(slice) == 0 {
+// putTransferSlab returns a slab to the pool.
+func putTransferSlab(slab []api.TransferDestPos) {
+	if slab == nil {
 		return
 	}
-	node := &tmNode{slice: slice}
-
-	// CAS loop: push onto stack head
-	for {
-		oldHead := atomic.LoadPointer(&f.head)
-		node.next = oldHead
-		if atomic.CompareAndSwapPointer(&f.head, oldHead, unsafe.Pointer(node)) {
-			f.mu.Lock()
-			f.count++
-			f.mu.Unlock()
-			return
-		}
-		// Contention; retry
-	}
+	transferSlabPool.Put(slab)
 }
 
-// Pop removes and returns the top slice from the free list, or (nil, false) if empty.
-// Lock-free: uses CAS so concurrent Pops don't interfere with each other.
-func (f *tmFreeList) Pop() ([]api.TransferDestPos, bool) {
-	for {
-		head := atomic.LoadPointer(&f.head)
-		if head == nil {
-			return nil, false
-		}
-		node := (*tmNode)(head)
-		next := atomic.LoadPointer(&node.next)
-		if atomic.CompareAndSwapPointer(&f.head, head, next) {
-			f.mu.Lock()
-			f.count--
-			f.mu.Unlock()
-			return node.slice, true
-		}
-		// Contention; retry
-	}
-}
-
-// GetTransferMap returns a pooled []TransferDestPos sized to rowCnt.
-// The returned slice has all entries initialized to NoTransfer sentinel.
-// If no pooled slice is available, a fresh one is allocated with the
-// bucket-standard capacity (power of 2) so that all slices in the same
-// bucket share the same cap, preventing cap-mismatch leaks on Pop.
-// This function is thread-safe and lock-free for the fast path.
+// GetTransferMap allocates a []TransferDestPos of the given size
+// with all entries initialized to the NoTransfer sentinel.
 func GetTransferMap(rowCnt int) []api.TransferDestPos {
 	if rowCnt == 0 {
 		return nil
 	}
-	bucket := bucketFor(rowCnt)
-	f := &tmFreeLists[bucket]
-
-	slice, ok := f.Pop()
-	if ok && cap(slice) >= rowCnt {
-		slice = slice[:rowCnt]
-		for i := range slice {
-			slice[i] = api.TransferDestPos{ObjIdx: api.NoTransfer}
-		}
-		return slice
-	}
-	// Bucket empty or capacity too small; allocate fresh.
-	// Round up capacity to the bucket boundary so future Put/Pop
-	// cycles never encounter a cap < rowCnt mismatch.
-	allocCap := 1024
-	for allocCap < rowCnt {
-		allocCap <<= 1
-	}
-	s := make([]api.TransferDestPos, rowCnt, allocCap)
+	s := make([]api.TransferDestPos, rowCnt)
 	for i := range s {
 		s[i].ObjIdx = api.NoTransfer
 	}
 	return s
 }
 
-// PutTransferMap returns a TransferMap to the appropriate free list for reuse.
-// Passing nil, zero-capacity, or >64K-capacity slices is a no-op.
-// This function is thread-safe.
-func PutTransferMap(tm []api.TransferDestPos) {
-	if tm == nil {
-		return
-	}
-	c := cap(tm)
-	if c == 0 || c > 64*1024 {
-		return
-	}
-	bucket := bucketFor(c)
-	f := &tmFreeLists[bucket]
+var ErrNoMoreBlocks = moerr.NewInternalErrorNoCtx("no more blocks")
 
-	f.mu.Lock()
-	// Only pool up to tmMaxFree per bucket to bound memory usage.
-	if f.count < tmMaxFree {
-		// Slice the length to 0 to keep the capacity for reuse.
-		tm = tm[:0]
-		f.mu.Unlock()
-		f.Push(tm)
-	} else {
-		f.mu.Unlock()
-	}
+// TransferTable holds the block-to-block row mapping produced by a merge or flush.
+// It supports two formats:
+//   - Slab-based (from merger): a single contiguous allocation indexed by
+//     blockIdx*Stride + rowIdx, with BlockActive tracking which blocks
+//     have any transferred rows.
+//   - Legacy (from flush / debug RPC): a plain api.TransferMaps.
+//
+// Use GetBlockMap to access a block's transfer map regardless of format.
+type TransferTable struct {
+	Slab        []api.TransferDestPos
+	Stride      int
+	BlockActive []bool
+
+	Maps api.TransferMaps
 }
 
-var ErrNoMoreBlocks = moerr.NewInternalErrorNoCtx("no more blocks")
+// GetBlockMap returns the transfer map for block idx, or nil if the block
+// was fully deleted (no rows transferred).
+func (t *TransferTable) GetBlockMap(idx int) api.TransferMap {
+	if t.Slab != nil {
+		if !t.BlockActive[idx] {
+			return nil
+		}
+		start := idx * t.Stride
+		return t.Slab[start : start+t.Stride]
+	}
+	return t.Maps[idx]
+}
+
+// Len returns the total number of block slots.
+func (t *TransferTable) Len() int {
+	if t.Slab != nil {
+		return len(t.BlockActive)
+	}
+	return len(t.Maps)
+}
+
+// Release nils all references and returns the slab to the pool.
+func (t *TransferTable) Release() {
+	putTransferSlab(t.Slab)
+	t.Slab = nil
+	t.BlockActive = nil
+	for i := range t.Maps {
+		t.Maps[i] = nil
+	}
+	t.Maps = nil
+}
+
+// NewTransferTableFromMaps wraps a legacy api.TransferMaps into a TransferTable.
+func NewTransferTableFromMaps(maps api.TransferMaps) *TransferTable {
+	return &TransferTable{Maps: maps}
+}
 
 // DisposableVecPool bridge the gap between the vector pools in cn and tn
 type DisposableVecPool interface {
@@ -195,8 +149,7 @@ type MergeTaskHost interface {
 	TaskSourceNote() string
 	GetCommitEntry() *api.MergeCommitEntry
 	HasBigDelEvent() bool
-	InitTransferMaps(blkCnt int)
-	GetTransferMaps() api.TransferMaps
+	SetTransferTable(t *TransferTable)
 	PrepareNewWriter() *ioutil.BlockWriter
 	DoTransfer() bool
 	GetObjectCnt() int
@@ -275,9 +228,9 @@ func DoMergeAndWrite(
 
 // not defined in api.go to avoid import cycle
 
-func CleanTransMapping(b api.TransferMaps) {
+// ReleaseTransferMaps nils all transfer map entries (used by flush path).
+func ReleaseTransferMaps(b api.TransferMaps) {
 	for i := range b {
-		PutTransferMap(b[i])
 		b[i] = nil
 	}
 }

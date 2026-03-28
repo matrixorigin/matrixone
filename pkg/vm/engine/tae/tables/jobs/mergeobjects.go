@@ -56,7 +56,7 @@ type mergeObjectsTask struct {
 	totalMergedBlkCnt int
 	createdBObjs      []*catalog.ObjectEntry
 	commitEntry       *api.MergeCommitEntry
-	transferMaps      api.TransferMaps
+	transferTable     *mergesort.TransferTable
 	tableEntry        *catalog.TableEntry
 	did, tid          uint64
 	isTombstone       bool
@@ -368,14 +368,8 @@ func (task *mergeObjectsTask) GetCommitEntry() *api.MergeCommitEntry {
 	return task.commitEntry
 }
 
-func (task *mergeObjectsTask) InitTransferMaps(blkCnt int) {
-	// Maps are allocated lazily per-block in the merger/reshaper to avoid a large
-	// upfront memory spike (blkCnt × maxRows maps all pre-sized at once).
-	task.transferMaps = make(api.TransferMaps, blkCnt)
-}
-
-func (task *mergeObjectsTask) GetTransferMaps() api.TransferMaps {
-	return task.transferMaps
+func (task *mergeObjectsTask) SetTransferTable(t *mergesort.TransferTable) {
+	task.transferTable = t
 }
 
 func (task *mergeObjectsTask) prepareCommitEntry() *api.MergeCommitEntry {
@@ -497,6 +491,12 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 	if task.schema.HasSortKey() {
 		sortkeyPos = task.schema.GetSingleSortKeyIdx()
 	}
+	// Ensure transfer table is released on all paths (including errors).
+	defer func() {
+		if task.transferTable != nil {
+			task.transferTable.Release()
+		}
+	}()
 	if task.HasBigDelEvent() {
 		return moerr.NewInternalErrorNoCtxf("LockMerge give up in exec %v", task.Name())
 	}
@@ -511,17 +511,12 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 		task.txn,
 		task.Name(),
 		task.commitEntry,
-		task.transferMaps,
+		task.transferTable,
 		task.rt,
 		task.isTombstone,
 	); err != nil {
 		return err
 	}
-
-	// All transfer maps have been consumed by HandleMergeEntryInTxn.
-	// Return them to the free list now so subsequent merge tasks can reuse
-	// their backing arrays instead of allocating fresh ones.
-	mergesort.CleanTransMapping(task.transferMaps)
 
 	if task.isTombstone {
 		v2.TaskTombstoneMergeDurationHistogram.Observe(time.Since(begin).Seconds())
@@ -537,7 +532,7 @@ func HandleMergeEntryInTxn(
 	txn txnif.AsyncTxn,
 	taskName string,
 	entry *api.MergeCommitEntry,
-	booking api.TransferMaps,
+	transferTable *mergesort.TransferTable,
 	rt *dbutils.Runtime,
 	isTombstone bool,
 ) ([]*catalog.ObjectEntry, error) {
@@ -611,7 +606,7 @@ func HandleMergeEntryInTxn(
 		rel,
 		mergedObjs,
 		createdObjs,
-		booking,
+		transferTable,
 		isTombstone,
 		rt,
 	)

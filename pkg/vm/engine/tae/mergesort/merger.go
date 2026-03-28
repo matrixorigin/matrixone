@@ -101,6 +101,11 @@ type merger[T comparable] struct {
 
 	rowPerBlk uint32
 	stats     mergeStats
+
+	// transferSlab is a single contiguous allocation backing all per-block
+	// transfer maps for this merge. Pooled to avoid repeated large allocs.
+	transferSlab []api.TransferDestPos
+	blockActive  []bool
 }
 
 func newMerger[T comparable](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos int, df dataFetcher[T]) Merger {
@@ -131,7 +136,11 @@ func newMerger[T comparable](host MergeTaskHost, lessFunc sort.LessFunc[T], sort
 		totalBlkCnt += cnt
 	}
 	if host.DoTransfer() {
-		host.InitTransferMaps(totalBlkCnt)
+		slabSize := totalBlkCnt * int(m.rowPerBlk)
+		if slabSize > 0 {
+			m.transferSlab = getTransferSlab(slabSize)
+			m.blockActive = make([]bool, totalBlkCnt)
+		}
 	}
 
 	return m
@@ -168,7 +177,6 @@ func (m *merger[T]) merge(ctx context.Context) error {
 	}
 	defer releaseF()
 
-	transferMaps := m.host.GetTransferMaps()
 	mp := m.host.GetMPool()
 	bigblk := false
 	for m.heap.Len() != 0 {
@@ -195,11 +203,8 @@ func (m *merger[T]) merge(ctx context.Context) error {
 
 		if m.host.DoTransfer() {
 			idx := m.accObjBlkCnts[objIdx] + m.loadedObjBlkCnts[objIdx] - 1
-			if transferMaps[idx] == nil {
-				rowCnt := m.df.length(objIdx)
-				transferMaps[idx] = GetTransferMap(rowCnt)
-			}
-			transferMaps[idx][rowIdx] = api.TransferDestPos{
+			m.blockActive[idx] = true
+			m.transferSlab[int(idx)*int(m.rowPerBlk)+int(rowIdx)] = api.TransferDestPos{
 				ObjIdx: uint8(m.stats.objCnt),
 				BlkIdx: uint16(m.stats.objBlkCnt),
 				RowIdx: uint32(m.stats.blkRowCnt),
@@ -263,6 +268,16 @@ func (m *merger[T]) merge(ctx context.Context) error {
 			return err
 		}
 	}
+
+	// Hand the slab-based transfer table to the host for downstream consumers.
+	if m.host.DoTransfer() && m.transferSlab != nil {
+		m.host.SetTransferTable(&TransferTable{
+			Slab:        m.transferSlab,
+			Stride:      int(m.rowPerBlk),
+			BlockActive: m.blockActive,
+		})
+	}
+
 	return nil
 }
 

@@ -25,13 +25,14 @@ import (
 )
 
 func reshape(ctx context.Context, host MergeTaskHost) error {
+	var table *TransferTable
 	if host.DoTransfer() {
 		objBlkCnts := host.GetBlkCnts()
 		totalBlkCnt := 0
 		for _, cnt := range objBlkCnts {
 			totalBlkCnt += cnt
 		}
-		host.InitTransferMaps(totalBlkCnt)
+		table = &TransferTable{Maps: make(api.TransferMaps, totalBlkCnt)}
 	}
 	stats := mergeStats{
 		targetObjSize: host.GetTargetObjSize(),
@@ -41,7 +42,6 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 	originalObjCnt := host.GetObjectCnt()
 	maxRowCnt := host.GetBlockMaxRows()
 	accObjBlkCnts := host.GetAccBlkCnts()
-	transferMaps := host.GetTransferMaps()
 	mp := host.GetMPool()
 
 	var writer *ioutil.BlockWriter
@@ -76,11 +76,11 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 
 				if host.DoTransfer() {
 					idx := accObjBlkCnts[i] + loadedBlkCnt - 1
-					if transferMaps[idx] == nil {
+					if table.Maps[idx] == nil {
 						rowCnt := nextBatch.RowCount()
-						transferMaps[idx] = GetTransferMap(rowCnt)
+						table.Maps[idx] = GetTransferMap(rowCnt)
 					}
-					transferMaps[idx][uint32(j)] = api.TransferDestPos{
+					table.Maps[idx][uint32(j)] = api.TransferDestPos{
 						ObjIdx: uint8(stats.objCnt),
 						BlkIdx: uint16(stats.objBlkCnt),
 						RowIdx: uint32(stats.blkRowCnt),
@@ -142,6 +142,10 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 			return err
 		}
 		writer = nil
+	}
+
+	if table != nil {
+		host.SetTransferTable(table)
 	}
 
 	return nil

@@ -2842,7 +2842,10 @@ func (tbl *txnTable) getSortKeyPosAndSortKeyIsPK() (int, bool) {
 func dumpTransferInfo(ctx context.Context, mergeTask *cnMergeTask) (*api.MergeCommitEntry, error) {
 	// Count only non-deleted (non-sentinel) rows for the size threshold check.
 	rowCnt := 0
-	for _, m := range mergeTask.transferMaps {
+	tt := mergeTask.transferTable
+	nblks := tt.Len()
+	for i := 0; i < nblks; i++ {
+		m := tt.GetBlockMap(i)
 		for _, pos := range m {
 			if pos.ObjIdx != api.NoTransfer {
 				rowCnt++
@@ -2855,18 +2858,19 @@ func dumpTransferInfo(ctx context.Context, mergeTask *cnMergeTask) (*api.MergeCo
 	// For api.TransDestPos, 5*10^5 rows is 52*5*10^5 ~= 26MB
 	// For api.TransferDestPos, 5*10^5 rows is 12*5*10^5 ~= 6MB
 	if rowCnt < 500000 {
-		size := len(mergeTask.transferMaps)
-		mappings := make([]api.BlkTransMap, size)
-		for i := 0; i < size; i++ {
+		mappings := make([]api.BlkTransMap, nblks)
+		for i := 0; i < nblks; i++ {
+			m := tt.GetBlockMap(i)
 			mappings[i] = api.BlkTransMap{
-				M: make(map[int32]api.TransDestPos, len(mergeTask.transferMaps[i])),
+				M: make(map[int32]api.TransDestPos, len(m)),
 			}
 		}
 		mergeTask.commitEntry.Booking = &api.BlkTransferBooking{
 			Mappings: mappings,
 		}
 
-		for i, m := range mergeTask.transferMaps {
+		for i := 0; i < nblks; i++ {
+			m := tt.GetBlockMap(i)
 			for r, pos := range m {
 				if pos.ObjIdx == api.NoTransfer {
 					continue
@@ -2912,16 +2916,18 @@ func writeTransferInfoToS3(ctx context.Context, taskHost *cnMergeTask) (err erro
 }
 
 func writeTransferMapsToS3(ctx context.Context, taskHost *cnMergeTask) (err error) {
-	bookingMaps := taskHost.transferMaps
+	tt := taskHost.transferTable
 
-	blkCnt := int32(len(bookingMaps))
+	nblks := tt.Len()
+	blkCnt := int32(nblks)
 	totalRows := 0
 
 	// BookingLoc layout:
 	// | blockCnt | Blk1RowCnt | Blk2RowCnt | ... | filepath1 | filepath2 | ... |
 	taskHost.commitEntry.BookingLoc = append(taskHost.commitEntry.BookingLoc,
 		commonUtil.UnsafeBytesToString(types.EncodeInt32(&blkCnt)))
-	for _, m := range bookingMaps {
+	for i := 0; i < nblks; i++ {
+		m := tt.GetBlockMap(i)
 		rowCnt := int32(len(m))
 		taskHost.commitEntry.BookingLoc = append(taskHost.commitEntry.BookingLoc,
 			commonUtil.UnsafeBytesToString(types.EncodeInt32(&rowCnt)))
@@ -2944,7 +2950,8 @@ func writeTransferMapsToS3(ctx context.Context, taskHost *cnMergeTask) (err erro
 		releases[i] = release
 	}
 	objRowCnt := 0
-	for blkIdx, transMap := range bookingMaps {
+	for blkIdx := 0; blkIdx < nblks; blkIdx++ {
+		transMap := tt.GetBlockMap(blkIdx)
 		for rowIdx, destPos := range transMap {
 			if destPos.ObjIdx == api.NoTransfer {
 				continue

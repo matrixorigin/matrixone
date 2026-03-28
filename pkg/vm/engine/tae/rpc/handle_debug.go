@@ -49,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"go.uber.org/zap"
 )
@@ -964,7 +965,7 @@ func (h *Handle) HandleCommitMerge(
 	if err != nil {
 		return err
 	}
-	_, err = jobs.HandleMergeEntryInTxn(ctx, txn, txn.String(), req, transferMaps, h.db.Runtime, false)
+	_, err = jobs.HandleMergeEntryInTxn(ctx, txn, txn.String(), req, mergesort.NewTransferTableFromMaps(transferMaps), h.db.Runtime, false)
 	if err != nil {
 		return
 	}
