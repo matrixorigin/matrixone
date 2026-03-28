@@ -428,6 +428,19 @@ func (prepareStmt *PrepareStmt) resetBinaryParamState() {
 	}
 }
 
+func (prepareStmt *PrepareStmt) clearBinaryParamState(proc *process.Process) {
+	if prepareStmt == nil {
+		return
+	}
+	if prepareStmt.params != nil && proc != nil {
+		prepareStmt.params.Free(proc.Mp())
+		prepareStmt.params = nil
+	}
+	for k := range prepareStmt.getFromSendLongData {
+		delete(prepareStmt.getFromSendLongData, k)
+	}
+}
+
 type Allocator interface {
 	// Alloc allocate a []byte with len(data) >= size, and the returned []byte cannot
 	// be expanded in use.
