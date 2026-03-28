@@ -958,6 +958,33 @@ func (lockOp *LockOp) CopyToPipelineTarget() []*pipeline.LockTarget {
 	return targets
 }
 
+// CopyTargetsFrom creates a deep copy of targets from another LockOp.
+// This is used by dupOperator to avoid sharing targets slice during parallel execution.
+func (lockOp *LockOp) CopyTargetsFrom(src *LockOp) {
+	if len(src.targets) == 0 {
+		lockOp.targets = nil
+		return
+	}
+	lockOp.targets = make([]lockTarget, len(src.targets))
+	for i, t := range src.targets {
+		lockOp.targets[i] = lockTarget{
+			tableID:                      t.tableID,
+			objRef:                       plan.DeepCopyObjectRef(t.objRef),
+			primaryColumnIndexInBatch:    t.primaryColumnIndexInBatch,
+			refreshTimestampIndexInBatch: t.refreshTimestampIndexInBatch,
+			primaryColumnType:            t.primaryColumnType,
+			partitionColumnIndexInBatch:  t.partitionColumnIndexInBatch,
+			filter:                       t.filter, // function pointer, safe to copy
+			filterColIndexInBatch:        t.filterColIndexInBatch,
+			lockTable:                    t.lockTable,
+			changeDef:                    t.changeDef,
+			mode:                         t.mode,
+			lockRows:                     plan.DeepCopyExpr(t.lockRows),
+			lockTableAtTheEnd:            t.lockTableAtTheEnd,
+		}
+	}
+}
+
 // AddLockTarget add lock target, LockMode_Exclusive will used
 func (lockOp *LockOp) AddLockTarget(
 	tableID uint64,

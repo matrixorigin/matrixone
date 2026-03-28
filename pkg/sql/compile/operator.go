@@ -487,7 +487,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	case vm.LockOp:
 		t := sourceOp.(*lockop.LockOp)
 		op := lockop.NewArgument()
-		*op = *t
+		op.CopyTargetsFrom(t)
 		op.SetChildren(nil) // make sure res.arg.children is nil
 		op.SetInfo(&info)
 		return op

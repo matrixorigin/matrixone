@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -229,4 +230,32 @@ func TestDeleteAffectedRows(t *testing.T) {
 
 	update.addDeleteAffectRows(UpdateMainTable, 4)
 	require.Equal(t, uint64(4), update.ctr.affectedRows, "DELETE rows should be counted")
+}
+
+// TestMultiUpdateCtxClonePartitionCols verifies that clone() correctly copies
+// PartitionCols (regression test for copy-paste bug that assigned DeleteCols).
+func TestMultiUpdateCtxClonePartitionCols(t *testing.T) {
+	original := &MultiUpdateCtx{
+		InsertCols:    []int{1, 2, 3},
+		DeleteCols:    []int{4, 5},
+		PartitionCols: []int{6, 7, 8, 9},
+		ObjRef:        &plan.ObjectRef{SchemaName: "test", ObjName: "t1"},
+		TableDef:      &plan.TableDef{Name: "t1"},
+	}
+
+	cloned := original.clone()
+
+	// Verify PartitionCols is correctly cloned (not DeleteCols)
+	require.Equal(t, original.PartitionCols, cloned.PartitionCols,
+		"PartitionCols should match original, not DeleteCols")
+	require.NotEqual(t, original.DeleteCols, cloned.PartitionCols,
+		"PartitionCols should not be DeleteCols")
+
+	// Verify other fields
+	require.Equal(t, original.InsertCols, cloned.InsertCols)
+	require.Equal(t, original.DeleteCols, cloned.DeleteCols)
+
+	// Verify ObjRef and TableDef are deep copied
+	cloned.ObjRef.ObjName = "modified"
+	require.Equal(t, "t1", original.ObjRef.ObjName, "original ObjRef should be unchanged")
 }

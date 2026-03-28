@@ -201,3 +201,20 @@ func TestMakeAggListFreesPartialOnCreationError(t *testing.T) {
 	})
 	require.Error(t, err)
 }
+
+func TestMakeAggListFreesPartialOnExtraConfigError(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	ctr := &container{mp: proc.Mp()}
+	_, err := ctr.makeAggList([]aggexec.AggFuncExecExpression{
+		countStarAgg(),
+		aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfMin,
+			false,
+			[]*plan.Expr{colExpr(0, types.T_int32)},
+			[]byte("bad-config"),
+		),
+	})
+	require.Error(t, err)
+}
