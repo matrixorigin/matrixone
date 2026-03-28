@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
@@ -59,9 +60,15 @@ type snapshotScanReaderConfig struct {
 }
 
 // ScanSnapshotWithCurrentRanges reads rows at snapshotTS by reusing the current
-// relation handle and its current-view ranges, while rebuilding visibility from
-// a snapshot partition state. This avoids historical catalog resolution through
-// account/db/table names or table-id re-lookup at the target timestamp.
+// relation handle and its current-view ranges.
+//
+// Serial path (parallelism ≤ 1): Uses LocalDataSource which reads both
+// in-memory partition-state rows and persisted S3 blocks, ensuring newly
+// created catalog entries that have not been flushed are still visible.
+//
+// Parallel path (parallelism > 1): Uses RemoteDataSource for disk blocks
+// only.  In-memory rows are typically flushed for the large tables that
+// trigger parallelism.
 func ScanSnapshotWithCurrentRanges(
 	ctx context.Context,
 	caller string,
@@ -75,7 +82,7 @@ func ScanSnapshotWithCurrentRanges(
 	mp *mpool.MPool,
 	onBatch func(*batch.Batch) error,
 ) error {
-	if len(attrs) == 0 || relData == nil || relData.DataCnt() == 0 {
+	if len(attrs) == 0 {
 		return nil
 	}
 	if len(attrs) != len(colTypes) {
@@ -102,6 +109,24 @@ func ScanSnapshotWithCurrentRanges(
 		)
 	}
 
+	pState, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Strip the EmptyBlockInfo marker that Ranges() may prepend.
+	if relData != nil && relData.DataCnt() > 0 {
+		blk := relData.GetBlockInfo(0)
+		if blk.IsMemBlk() {
+			relData = relData.DataSlice(1, relData.DataCnt())
+		}
+	}
+
+	diskBlockCnt := 0
+	if relData != nil {
+		diskBlockCnt = relData.DataCnt()
+	}
+
 	logutil.Info(
 		"SnapshotScan-Start",
 		zap.String("caller", caller),
@@ -109,26 +134,11 @@ func ScanSnapshotWithCurrentRanges(
 		zap.String("table-name", tbl.tableName),
 		zap.String("db-name", tbl.db.databaseName),
 		zap.String("snapshot-ts", snapshotTS.ToString()),
+		zap.Int("disk-block-cnt", diskBlockCnt),
 	)
-
-	// Strip the EmptyBlockInfo marker (signals in-memory data) that Ranges()
-	// prepends when Policy_CollectCommittedInmemData is set.  RemoteDataSource
-	// doesn't understand this marker and would try to open a zero-path file.
-	if relData.DataCnt() > 0 {
-		blk := relData.GetBlockInfo(0)
-		if blk.IsMemBlk() {
-			relData = relData.DataSlice(1, relData.DataCnt())
-		}
-	}
-	if relData.DataCnt() == 0 {
-		return nil
-	}
 
 	tombstones, err := tbl.CollectTombstones(ctx, 0, engine.Policy_CollectAllTombstones)
 	if err != nil {
-		return err
-	}
-	if err = relData.AttachTombstones(tombstones); err != nil {
 		return err
 	}
 
@@ -148,14 +158,19 @@ func ScanSnapshotWithCurrentRanges(
 
 	actualParallelism := normalizeSnapshotScanParallelism(relData, scanParallelism)
 	shards := splitSnapshotScanShards(relData, actualParallelism)
+
 	if len(shards) > 1 {
+		// Parallel path: disk-only via RemoteDataSource.
+		if err = relData.AttachTombstones(tombstones); err != nil {
+			return err
+		}
 		logutil.Info(
 			"SnapshotScan-Parallel-Start",
 			zap.String("caller", caller),
 			zap.Uint64("table-id", tbl.tableId),
 			zap.String("table-name", tbl.tableName),
 			zap.String("snapshot-ts", snapshotTS.ToString()),
-			zap.Int("block-cnt", relData.DataCnt()),
+			zap.Int("block-cnt", diskBlockCnt),
 			zap.Int("parallelism", len(shards)),
 		)
 		if err = scanSnapshotShardsParallel(
@@ -175,20 +190,16 @@ func ScanSnapshotWithCurrentRanges(
 			zap.Uint64("table-id", tbl.tableId),
 			zap.String("table-name", tbl.tableName),
 			zap.String("snapshot-ts", snapshotTS.ToString()),
-			zap.Int("block-cnt", relData.DataCnt()),
+			zap.Int("block-cnt", diskBlockCnt),
 			zap.Int("parallelism", len(shards)),
 		)
 		return nil
 	}
 
-	return scanSnapshotShard(
-		ctx,
-		eng.fs,
-		snapshotTS,
-		relData,
-		readerCfg,
-		mp,
-		onBatch,
+	// Serial path: LocalDataSource reads in-memory rows + disk blocks.
+	return scanSnapshotShardLocal(
+		ctx, eng.fs, tbl, pState, tombstones,
+		snapshotTS, relData, readerCfg, mp, onBatch,
 	)
 }
 
@@ -351,6 +362,79 @@ func scanSnapshotShard(
 		readerOpts...,
 	)
 
+	defer reader.Close()
+
+	readBatch := batch.NewWithSize(len(cfg.attrs))
+	readBatch.SetAttributes(cfg.attrs)
+	for i := range cfg.attrs {
+		readBatch.Vecs[i] = vector.NewVec(cfg.colTypes[i])
+	}
+	defer readBatch.Clean(mp)
+
+	for {
+		isEnd, err := reader.Read(ctx, cfg.attrs, nil, mp, readBatch)
+		if err != nil {
+			return err
+		}
+		if isEnd {
+			return nil
+		}
+		if readBatch.RowCount() == 0 {
+			continue
+		}
+		if err := onBatch(readBatch); err != nil {
+			return err
+		}
+	}
+}
+
+// scanSnapshotShardLocal uses LocalDataSource to read both in-memory
+// partition-state rows and persisted S3 blocks in a single serial pass.
+// The snapshotTS overrides the transaction's own snapshot so the reader
+// applies the correct visibility window.
+func scanSnapshotShardLocal(
+	ctx context.Context,
+	fs fileservice.FileService,
+	tbl *txnTable,
+	pState *logtailreplay.PartitionState,
+	tombstones engine.Tombstoner,
+	snapshotTS types.TS,
+	relData engine.RelData,
+	cfg snapshotScanReaderConfig,
+	mp *mpool.MPool,
+	onBatch func(*batch.Batch) error,
+) error {
+	var rangesSlice objectio.BlockInfoSlice
+	if relData != nil {
+		rangesSlice = relData.GetBlockInfoSlice()
+	}
+
+	source, err := NewLocalDataSource(
+		ctx, tbl,
+		0, // txnOffset: committed data only
+		pState,
+		rangesSlice,
+		tombstones,
+		false, // skipReadMem: include in-memory rows
+		0,     // tombstonePolicy: apply all
+		engine.ShardingRemoteDataSource,
+	)
+	if err != nil {
+		return err
+	}
+	source.snapshotTS = snapshotTS
+
+	readerOpts := []readutil.ReaderOption{
+		readutil.WithColumns(cfg.seqnums, cfg.colTypes),
+	}
+	if cfg.hasBlockFilter {
+		readerOpts = append(readerOpts, readutil.WithBlockFilter(cfg.blockFilter, cfg.filterSeqnum, cfg.filterType))
+	}
+	reader := readutil.SimpleReaderWithDataSource(
+		ctx, fs,
+		source, snapshotTS.ToTimestamp(),
+		readerOpts...,
+	)
 	defer reader.Close()
 
 	readBatch := batch.NewWithSize(len(cfg.attrs))
