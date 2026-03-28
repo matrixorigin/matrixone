@@ -2376,6 +2376,7 @@ func FuzzParseExecuteData(f *testing.F) {
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
 	pu.SV.SkipCheckUser = true
 	pu.SV.KillRountinesInterval = 0
+	setSessionAlloc("", NewLeakCheckAllocator())
 	setPu("", pu)
 	ioses, err := NewIOSession(&testConn{}, pu, "")
 	if err != nil {
@@ -2432,6 +2433,67 @@ func FuzzParseExecuteData(f *testing.F) {
 	f.Fuzz(func(t *testing.T, data []byte) {
 		proto.ParseExecuteData(ctx, proc, prepareStmt, data, 0)
 	})
+}
+
+func newBinaryPrepareProtocolTestCase(t *testing.T, sql string) (*MysqlProtocolImpl, *process.Process, *PrepareStmt) {
+	t.Helper()
+	ctx := context.TODO()
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	require.NoError(t, err)
+
+	pu := config.NewParameterUnit(sv, nil, nil, nil)
+	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
+	setSessionAlloc("", NewLeakCheckAllocator())
+	setPu("", pu)
+
+	ioses, err := NewIOSession(&testConn{}, pu, "")
+	require.NoError(t, err)
+
+	proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+	proc := testutil.NewProcess(t)
+
+	st := tree.NewPrepareString(tree.Identifier(getPrepareStmtName(1)), sql)
+	stmts, err := mysql.Parse(ctx, st.Sql, 1)
+	require.NoError(t, err)
+	compCtx := plan.NewEmptyCompilerContext()
+	preparePlan, err := buildPlan(ctx, nil, compCtx, st)
+	require.NoError(t, err)
+
+	prepareStmt := &PrepareStmt{
+		Name:                preparePlan.GetDcl().GetPrepare().GetName(),
+		PreparePlan:         preparePlan,
+		PrepareStmt:         stmts[0],
+		getFromSendLongData: make(map[int]struct{}),
+	}
+	return proto, proc, prepareStmt
+}
+
+func TestPrepareStmtCloseAfterBinaryParamParsing(t *testing.T) {
+	ctx := context.TODO()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select ?")
+	testData := []byte{0, 0, 0, 0, 0, 0, 1, uint8(defines.MYSQL_TYPE_TINY), 0, 10}
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt, testData, 0))
+	require.Same(t, proc, prepareStmt.proc)
+	require.NotPanics(t, func() {
+		prepareStmt.Close()
+	})
+}
+
+func TestParseExecuteDataWithJSONParam(t *testing.T) {
+	ctx := context.TODO()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select ?")
+
+	jsonPayload := append([]byte(`{"k":"`), bytes.Repeat([]byte{'v'}, 300)...)
+	jsonPayload = append(jsonPayload, []byte(`"}`)...)
+
+	testData := make([]byte, 8+2+9+len(jsonPayload))
+	copy(testData, []byte{0, 0, 0, 0, 0, 0, 1, uint8(defines.MYSQL_TYPE_JSON), 0})
+	pos := proto.writeStringLenEnc(testData, 9, string(jsonPayload))
+	testData = testData[:pos]
+
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt, testData, 0))
+	require.Equal(t, string(jsonPayload), prepareStmt.params.GetStringAt(0))
 }
 
 /* FIXME The prepare process has undergone some modifications,

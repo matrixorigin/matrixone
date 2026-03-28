@@ -416,6 +416,18 @@ func (prepareStmt *PrepareStmt) Close() {
 	}
 }
 
+func (prepareStmt *PrepareStmt) resetBinaryParamState() {
+	if prepareStmt == nil {
+		return
+	}
+	if prepareStmt.params != nil {
+		prepareStmt.params.GetNulls().Reset()
+	}
+	for k := range prepareStmt.getFromSendLongData {
+		delete(prepareStmt.getFromSendLongData, k)
+	}
+}
+
 type Allocator interface {
 	// Alloc allocate a []byte with len(data) >= size, and the returned []byte cannot
 	// be expanded in use.
