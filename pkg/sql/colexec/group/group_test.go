@@ -153,3 +153,48 @@ func TestGroupResetAndReuse(t *testing.T) {
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
+
+func TestFreeAggListPartial(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	// Create a few mock aggregators
+	aggList := make([]aggexec.AggFuncExec, 3)
+	for i := 0; i < 3; i++ {
+		agg, err := aggexec.MakeAgg(proc.Mp(), aggexec.AggIdOfCountStar, false, types.T_int64.ToType())
+		require.NoError(t, err)
+		aggList[i] = agg
+	}
+
+	// Free first 2 aggregators
+	freeAggListPartial(aggList, 2)
+
+	// Free all remaining
+	freeAggListPartial(aggList, 3)
+}
+
+func TestFreeAggList(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	aggList := make([]aggexec.AggFuncExec, 2)
+	for i := 0; i < 2; i++ {
+		agg, err := aggexec.MakeAgg(proc.Mp(), aggexec.AggIdOfCountStar, false, types.T_int64.ToType())
+		require.NoError(t, err)
+		aggList[i] = agg
+	}
+
+	freeAggList(aggList)
+}
+
+func TestFreeAggListPartialWithNilEntries(t *testing.T) {
+	// Test with nil entries - should not panic
+	aggList := make([]aggexec.AggFuncExec, 3)
+	aggList[0] = nil
+	aggList[1] = nil
+	aggList[2] = nil
+
+	// Should not panic
+	freeAggListPartial(aggList, 3)
+	freeAggList(aggList)
+}

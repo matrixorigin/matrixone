@@ -680,10 +680,12 @@ func (ctr *container) makeAggList(aggExprs []aggexec.AggFuncExecExpression) ([]a
 		}
 		aggList[i], err = aggexec.MakeAgg(ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), typs...)
 		if err != nil {
+			freeAggListPartial(aggList, i)
 			return nil, err
 		}
 		if config := agExpr.GetExtraConfig(); config != nil {
 			if err := aggList[i].SetExtraInformation(config, 0); err != nil {
+				freeAggListPartial(aggList, i+1)
 				return nil, err
 			}
 		}
@@ -695,11 +697,26 @@ func (ctr *container) makeAggList(aggExprs []aggexec.AggFuncExecExpression) ([]a
 		aggexec.SyncAggregatorsToChunkSize(aggList, 1)
 		for _, ag := range aggList {
 			if err := ag.GroupGrow(1); err != nil {
+				freeAggList(aggList)
 				return nil, err
 			}
 		}
 	}
 	return aggList, nil
+}
+
+// freeAggListPartial frees the first n aggregators in the list.
+func freeAggListPartial(aggList []aggexec.AggFuncExec, n int) {
+	for i := 0; i < n && i < len(aggList); i++ {
+		if aggList[i] != nil {
+			aggList[i].Free()
+		}
+	}
+}
+
+// freeAggList frees all aggregators in the list.
+func freeAggList(aggList []aggexec.AggFuncExec) {
+	freeAggListPartial(aggList, len(aggList))
 }
 
 func (ctr *container) sanityCheck() {

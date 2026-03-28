@@ -144,6 +144,7 @@ func (preInsert *PreInsert) constructColBuf(proc *proc, bat *batch.Batch, first 
 				typ := bat.Vecs[idx].GetType()
 				tmpVec := vector.NewVec(*typ)
 				if err = vector.GetUnionAllFunction(*typ, proc.Mp())(tmpVec, bat.Vecs[idx]); err != nil {
+					tmpVec.Free(proc.Mp())
 					return err
 				}
 				preInsert.ctr.buf.Vecs[idx] = tmpVec
