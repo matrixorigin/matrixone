@@ -213,6 +213,7 @@ func TestSession(t *testing.T) {
 	// promote state for table A
 	ss.AdvanceState(idA)
 	require.Equal(t, 1, len(ss.ListSubscribedTable()))
+	var err error
 	// promote state for non-exist table
 	ss.AdvanceState(TableID("non-exist"))
 	require.Equal(t, 1, len(ss.ListSubscribedTable()))
@@ -235,7 +236,7 @@ func TestSession(t *testing.T) {
 	require.Equal(t, 2, len(qualified))
 
 	/* ---- 5. send error response ---- */
-	err := ss.SendErrorResponse(
+	err = ss.SendErrorResponse(
 		context.Background(),
 		tableA,
 		moerr.ErrInternal,
@@ -273,6 +274,25 @@ func TestSession(t *testing.T) {
 			mockLogtail(tableB, to),
 		)
 		require.NoError(t, err)
+	}
+
+	/* ---- 8.5 send activate-account response ---- */
+	{
+		target := mockTimestamp(4, 0)
+		err = ss.SendActivateAccountForCatalogResponse(
+			context.Background(),
+			logtail.ActivateAccountForCatalogResponse{
+				AccountId: 1,
+				Seq:       10,
+				TargetTs:  &target,
+				Tails: []logtail.TableLogtail{
+					mockLogtail(tableA, target),
+				},
+			},
+			nil,
+		)
+		require.NoError(t, err)
+		require.Equal(t, 0, ss.Active())
 	}
 
 	/* ---- 9. publish update response ---- */
