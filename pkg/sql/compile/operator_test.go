@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 )
 
 func TestDupOperator(t *testing.T) {
@@ -34,6 +35,15 @@ func TestDupOperator(t *testing.T) {
 	dupOperator(
 		deletion.NewPartitionDelete(
 			&deletion.Deletion{},
+			1,
+		),
+		0,
+		0,
+	)
+
+	dupOperator(
+		multi_update.NewPartitionMultiUpdate(
+			multi_update.NewArgument(),
 			1,
 		),
 		0,

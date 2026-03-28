@@ -439,6 +439,11 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := deletion.NewPartitionDeleteFrom(t)
 		op.SetInfo(&info)
 		return op
+	case vm.PartitionMultiUpdate:
+		t := sourceOp.(*multi_update.PartitionMultiUpdate)
+		op := multi_update.NewPartitionMultiUpdateFrom(t)
+		op.SetInfo(&info)
+		return op
 	case vm.PreInsert:
 		t := sourceOp.(*preinsert.PreInsert)
 		op := preinsert.NewArgument()
