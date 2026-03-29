@@ -61,6 +61,9 @@ TEST(ThreadSafeQueueTest, StopQueue) {
 
     ASSERT_FALSE(q.pop(val)); // Should return false after stop
     ASSERT_TRUE(q.is_stopped());
+
+    // Verify push throws after stop
+    ASSERT_THROW(q.push(1), std::runtime_error);
 }
 
 TEST(ThreadSafeQueueTest, PushBlocking) {
@@ -139,18 +142,21 @@ TEST(ThreadSafeQueueTest, StopUnblocksProducer) {
     q.set_capacity(1);
     q.push(1);
 
-    std::atomic<bool> push_exited{false};
+    std::atomic<bool> caught_exception{false};
     std::thread t([&]() {
-        q.push(2); // Blocks
-        push_exited.store(true);
+        try {
+            q.push(2); // Blocks until stop()
+        } catch (const std::runtime_error& e) {
+            caught_exception.store(true);
+        }
     });
 
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    ASSERT_FALSE(push_exited.load());
+    ASSERT_FALSE(caught_exception.load());
 
     q.stop();
     t.join();
-    ASSERT_TRUE(push_exited.load());
+    ASSERT_TRUE(caught_exception.load());
 }
 
 // --- cuvs_task_result_store_t Tests ---
@@ -183,14 +189,50 @@ TEST(CuvsTaskResultStoreTest, AsyncWait) {
     t.join();
 }
 
-TEST(CuvsTaskResultStoreTest, StopStore) {
+TEST(CuvsTaskResultStoreTest, DoubleWait) {
     cuvs_task_result_store_t store;
     uint64_t id = store.get_next_job_id();
-    auto fut = store.wait(id);
 
-    store.stop();
-    
-    ASSERT_THROW(fut.get(), std::runtime_error);
+    // Both waits before store: same shared_future is returned for both calls.
+    // store() fulfills the promise and erases the placeholder — no leak.
+    auto fut1 = store.wait(id);
+    auto fut2 = store.wait(id);
+
+    store.store(id, {std::any(42), nullptr});
+
+    ASSERT_EQ(std::any_cast<int>(fut1.get().result), 42);
+    ASSERT_EQ(std::any_cast<int>(fut2.get().result), 42);
+    // No discard needed — placeholder was erased by store().
+}
+
+TEST(CuvsTaskResultStoreTest, WaitAfterStore) {
+    cuvs_task_result_store_t store;
+    uint64_t id = store.get_next_job_id();
+
+    store.store(id, {std::any(42), nullptr});
+
+    // Result is consumed on first wait() call. Multiple .get() calls on the
+    // *same* shared_future are fine; multiple wait() calls are not supported
+    // for the post-store path (would create a new unfulfilled placeholder).
+    auto fut = store.wait(id);
+    ASSERT_EQ(std::any_cast<int>(fut.get().result), 42);
+    ASSERT_EQ(std::any_cast<int>(fut.get().result), 42);  // second .get() on same future
+}
+
+TEST(CuvsTaskResultStoreTest, DiscardResult) {
+    cuvs_task_result_store_t store;
+    uint64_t id = store.get_next_job_id();
+
+    store.store(id, {std::any(42), nullptr});
+    store.discard(id);
+
+    // After discard, wait should create a NEW placeholder that is not fulfilled.
+    auto fut = store.wait(id);
+    // Use wait_for to check it's not fulfilled immediately.
+    auto status = fut.wait_for(std::chrono::milliseconds(10));
+    ASSERT_TRUE(status == std::future_status::timeout);
+
+    store.discard(id);
 }
 
 // --- raft_handle_wrapper_t and is_snmg_handle Tests ---
@@ -394,10 +436,8 @@ TEST(CuvsWorkerTest, StopUnderLoad) {
             try {
                 worker.submit(task);
             } catch (const std::runtime_error& e) {
-                if (std::string(e.what()) == "Worker is not running") {
-                    break;
-                }
-                throw;
+                // Expected when worker stops or is not running
+                break;
             } catch (...) {
                 // Expected when worker stops
                 break;
@@ -412,6 +452,100 @@ TEST(CuvsWorkerTest, StopUnderLoad) {
     
     producer_should_stop.store(true);
     if (producer.joinable()) producer.join();
+}
+
+// Verify that fire-and-forget flush tasks do not leave results in shard.results.
+// A successful flush must not cause the next wait() on a new id to time out
+// unexpectedly, which would happen if the store were polluted with stray entries.
+TEST(CuvsWorkerTest, FlushBatchNoLeak) {
+    cuvs_worker_t worker(1, std::vector<int>{0});
+    worker.start();
+    worker.set_use_batching(true);
+
+    std::atomic<int> exec_count{0};
+    auto exec_fn = [&exec_count](raft_handle_wrapper_t&,
+                                  const std::vector<std::any>& reqs,
+                                  const std::vector<std::function<void(std::any)>>& setters) {
+        exec_count++;
+        for (size_t i = 0; i < setters.size(); ++i) {
+            setters[i](std::any(int(42)));
+        }
+    };
+
+    auto fut = worker.submit_batched<int, int>("leak_test", 1, exec_fn);
+    // Force an immediate flush
+    worker.set_use_batching(false);  // triggers sync + flush
+
+    ASSERT_EQ(fut.get(), 42);
+    ASSERT_GE(exec_count.load(), 1);
+
+    // After flush + sync, submit a normal tracked task and verify it completes.
+    // If stray results from the flush task were in the store, this could corrupt
+    // the id counter or result lookup.
+    auto id = worker.submit([](raft_handle_wrapper_t&) -> std::any { return int(99); });
+    auto result = worker.wait(id).get();
+    ASSERT_EQ(std::any_cast<int>(result.result), 99);
+
+    worker.stop();
+}
+
+// Verify sync() returns promptly (does not busy-spin forever) when tasks complete.
+TEST(CuvsWorkerTest, SyncNoSpin) {
+    cuvs_worker_t worker(2, std::vector<int>{0});
+    worker.start();
+
+    std::vector<uint64_t> ids;
+    for (int i = 0; i < 20; ++i) {
+        ids.push_back(worker.submit([](raft_handle_wrapper_t&) -> std::any {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            return std::any();
+        }));
+    }
+
+    // sync() must return once all tasks complete — not hang or spin forever.
+    auto t0 = std::chrono::steady_clock::now();
+    worker.sync();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0).count();
+
+    // All tasks sleep 5ms; sync should take at least 5ms but no more than 5s.
+    ASSERT_GE(elapsed, 4);
+    ASSERT_LT(elapsed, 5000);
+
+    for (auto id : ids) worker.wait(id).get();
+    worker.stop();
+}
+
+// Verify that stop() flushes pending batches (executes them) rather than just
+// cancelling them. The batch future should resolve with the computed value, not
+// an exception, when stop() is called while a batch is pending.
+TEST(CuvsWorkerTest, StopFlushesNotCancels) {
+    cuvs_worker_t worker(1, std::vector<int>{0});
+    worker.start();
+    worker.set_use_batching(true);
+
+    std::atomic<int> exec_count{0};
+    auto exec_fn = [&exec_count](raft_handle_wrapper_t&,
+                                  const std::vector<std::any>& reqs,
+                                  const std::vector<std::function<void(std::any)>>& setters) {
+        exec_count++;
+        for (size_t i = 0; i < setters.size(); ++i) {
+            setters[i](std::any(int(7)));
+        }
+    };
+
+    // Submit one batched request — it will be pending (not yet flushed).
+    auto fut = worker.submit_batched<int, int>("stop_flush_test", 1, exec_fn);
+
+    // stop() should flush the batch before shutting down.
+    worker.stop();
+
+    // The future must be fulfilled with the value, not an exception.
+    ASSERT_NO_THROW({
+        int val = fut.get();
+        ASSERT_EQ(val, 7);
+    });
+    ASSERT_EQ(exec_count.load(), 1);
 }
 
 int main() {

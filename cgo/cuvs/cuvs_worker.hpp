@@ -83,7 +83,6 @@ namespace matrixone {
 //   submit(fn)                    → round-robin device thread, load-balanced
 //   submit_all_devices_no_wait(fn)→ one task per GPU, concurrent, returns job IDs
 //   submit_all_devices(fn)        → same + blocks until all complete
-//   broadcast(fn)                 → alias for submit_all_devices (with wait)
 //
 // RESULT TRACKING
 // ---------------
@@ -110,8 +109,10 @@ namespace matrixone {
 //   3. submit / submit_main / submit_all_devices — enqueue work.
 //   4. wait(id).get() — block until work completes, retrieve result or rethrow.
 //   5. stop():
-//      - Sets running_ = false, drains all queues by calling stop() on each.
-//      - Joins all threads (main + device pool).
+//      - Sets stopping_ = true (blocks new external submit* calls immediately).
+//      - Flushes all pending batches while threads are still running.
+//      - Waits (via condition variable) for all in-flight tasks to complete.
+//      - Sets running_ = false, stops queues, joins all threads.
 //      - Fulfills any pending placeholder futures with a "Worker stopped" error.
 //
 // raft_handle_wrapper_t
@@ -201,7 +202,7 @@ public:
     void push(T item) {
         std::unique_lock<std::mutex> lock(mu_);
         cond_can_push_.wait(lock, [this]() { return stopped_ || (capacity_ == 0 || queue_.size() < capacity_); });
-        if (stopped_) return;
+        if (stopped_) throw std::runtime_error("Queue is stopped");
         queue_.push(std::move(item));
         cond_can_pop_.notify_one();
     }
@@ -287,47 +288,102 @@ public:
 
     void store(uint64_t id, cuvs_task_result_t result) {
         auto& shard = shards_[id % num_shards];
-        std::lock_guard<std::mutex> lock(shard.mu);
-        shard.results[id] = result;
-        auto it = shard.placeholders.find(id);
-        if (it != shard.placeholders.end()) {
-            it->second.set_value(result);
-            shard.placeholders.erase(it);
+        std::shared_ptr<std::promise<cuvs_task_result_t>> promise;
+        {
+            std::lock_guard<std::mutex> lock(shard.mu);
+            if (stopped_) return; 
+
+            auto it = shard.placeholders.find(id);
+            if (it != shard.placeholders.end()) {
+                if (it->second.promise) {
+                    promise = std::move(it->second.promise);
+                }
+                shard.placeholders.erase(it);  // prevent leak: placeholder served its purpose
+            } else {
+                shard.results[id] = result;
+            }
+        }
+        if (promise) {
+            try { promise->set_value(result); } catch (...) {}
         }
     }
 
     std::shared_future<cuvs_task_result_t> wait(uint64_t id) {
         auto& shard = shards_[id % num_shards];
         std::lock_guard<std::mutex> lock(shard.mu);
-        auto it = shard.results.find(id);
-        if (it != shard.results.end()) {
-            std::promise<cuvs_task_result_t> p;
-            auto res = std::move(it->second);
-            shard.results.erase(it);
-            p.set_value(res);
-            return p.get_future().share();
+
+        if (stopped_) {
+            auto p = std::make_shared<std::promise<cuvs_task_result_t>>();
+            auto f = p->get_future().share();
+            p->set_exception(std::make_exception_ptr(std::runtime_error("Worker stopped")));
+            return f;
         }
-        return shard.placeholders[id].get_future().share();
+
+        auto pit = shard.placeholders.find(id);
+        if (pit != shard.placeholders.end()) {
+            return pit->second.future;
+        }
+
+        auto rit = shard.results.find(id);
+        if (rit != shard.results.end()) {
+            auto p = std::make_shared<std::promise<cuvs_task_result_t>>();
+            auto f = p->get_future().share();
+            p->set_value(std::move(rit->second));
+            shard.results.erase(rit);
+            // Do not cache into placeholders — result is consumed once; callers
+            // must hold the returned shared_future for multiple .get() calls.
+            return f;
+        }
+
+        auto p = std::make_shared<std::promise<cuvs_task_result_t>>();
+        auto f = p->get_future().share();
+        shard.placeholders[id] = {p, f};
+        return f;
+    }
+
+    // Releases all bookkeeping for `id`. Must be called when the result is no
+    // longer needed (e.g. fire-and-forget tasks) or when the caller abandons
+    // the future. Any subsequent wait(id) will create a new unfulfilled future.
+    void discard(uint64_t id) {
+        auto& shard = shards_[id % num_shards];
+        std::lock_guard<std::mutex> lock(shard.mu);
+        shard.results.erase(id);
+        shard.placeholders.erase(id);
     }
 
     void stop() {
         for (uint32_t i = 0; i < num_shards; ++i) {
             auto& shard = shards_[i];
-            std::lock_guard<std::mutex> lock(shard.mu);
-            for (auto& pair : shard.placeholders) {
+            decltype(shard.placeholders) phs;
+            {
+                std::lock_guard<std::mutex> lock(shard.mu);
+                stopped_ = true;
+                phs = std::move(shard.placeholders);
+                shard.results.clear();
+            }
+            for (auto& [id, ph] : phs) {
                 try {
-                    pair.second.set_exception(std::make_exception_ptr(std::runtime_error("Worker stopped")));
+                    if (ph.promise) {
+                        ph.promise->set_exception(
+                            std::make_exception_ptr(std::runtime_error("Worker stopped")));
+                    }
                 } catch (...) {}
             }
-            shard.placeholders.clear();
         }
     }
 
 private:
     static constexpr uint32_t num_shards = 64;
+    std::atomic<bool> stopped_{false};
+
+    struct placeholder_t {
+        std::shared_ptr<std::promise<cuvs_task_result_t>> promise;
+        std::shared_future<cuvs_task_result_t> future;
+    };
+
     struct shard_t {
         std::unordered_map<uint64_t, cuvs_task_result_t> results;
-        std::unordered_map<uint64_t, std::promise<cuvs_task_result_t>> placeholders;
+        std::unordered_map<uint64_t, placeholder_t> placeholders;
         std::mutex mu;
     };
 
@@ -404,10 +460,11 @@ public:
     struct cuvs_task_t {
         uint64_t id;
         task_fn_t fn;
+        bool fire_and_forget = false;  // skip results_store_ — used for internal flush tasks
     };
 
     cuvs_worker_t(uint32_t nthread, const std::vector<int>& devices, distribution_mode_t mode = DistributionMode_SINGLE_GPU)
-        : nthread_(std::max(nthread, (uint32_t)devices.size())), devices_(devices), mode_(mode), running_(false), use_batching_(false), per_thread_device_(false), next_device_idx_(0) {
+        : nthread_(std::max(nthread, (uint32_t)devices.size())), devices_(devices), mode_(mode), running_(false), stopping_(false), use_batching_(false), per_thread_device_(false), next_device_idx_(0), in_flight_tasks_(0) {
         
         // One queue per physical GPU device
         for (size_t i = 0; i < devices_.size(); ++i) {
@@ -423,6 +480,7 @@ public:
     void start(std::function<std::any(raft_handle&)> init_fn = nullptr,
                std::function<std::any(raft_handle&)> stop_fn = nullptr) {
         if (running_) return;
+        stopping_.store(false);
         running_ = true;
 
         // Start Main Thread (only for main_tasks_)
@@ -456,9 +514,43 @@ public:
     }
 
     void stop() {
-        if (!running_) return;
-        running_ = false;
+        bool was_stopping = stopping_.exchange(true);
+        if (was_stopping) return;  // already stopping or stopped
 
+        // 1. Flush all pending batches while threads are still running.
+        //    stopping_ = true blocks new external submit* calls; running_ is still
+        //    true here so flush_batch's internal submissions go through normally.
+        {
+            std::vector<std::string> keys;
+            {
+                std::lock_guard<std::mutex> lock(batch_mutex_);
+                for (auto const& [key, b] : batches_) keys.push_back(key);
+            }
+            for (auto const& key : keys) {
+                this->flush_batch(key);
+            }
+
+            // Cancel anything that still hasn't been flushed (race safety)
+            std::lock_guard<std::mutex> lock(batch_mutex_);
+            auto err = std::make_exception_ptr(std::runtime_error("Worker stopped (batch cancelled)"));
+            for (auto& [key, batch] : batches_) {
+                std::lock_guard<std::mutex> b_lock(batch->mu);
+                if (!batch->flushed) {
+                    batch->flushed = true;
+                    for (auto& setter : batch->setters) {
+                        try { setter(err); } catch (...) {}
+                    }
+                    batch->setters.clear();
+                }
+            }
+            batches_.clear();
+        }
+
+        // 2. Wait for all in-flight tasks (including flush tasks) to complete
+        this->sync();
+
+        // 3. Now block all further submissions and drain the thread queues
+        running_.store(false);
         for (auto& q : device_queues_) q->stop();
         main_tasks_.stop();
 
@@ -467,39 +559,93 @@ public:
             if (w.joinable()) w.join();
         }
         device_threads_.clear();
+
+        // 4. Drain physical queues (defensive; should be empty after sync)
+        cuvs_task_t task;
+        while (main_tasks_.try_pop(task)) {
+            if (!task.fire_and_forget) {
+                cuvs_task_result_t result;
+                result.error = std::make_exception_ptr(std::runtime_error("Worker stopped"));
+                results_store_.store(task.id, result);
+            }
+        }
+        for (auto& q : device_queues_) {
+            while (q->try_pop(task)) {
+                if (!task.fire_and_forget) {
+                    cuvs_task_result_t result;
+                    result.error = std::make_exception_ptr(std::runtime_error("Worker stopped"));
+                    results_store_.store(task.id, result);
+                }
+            }
+        }
+
         results_store_.stop();
     }
 
+    void sync() {
+        std::unique_lock<std::mutex> lock(sync_mu_);
+        sync_cv_.wait(lock, [this]() { return in_flight_tasks_.load() == 0; });
+    }
+
     uint64_t submit(task_fn_t fn) {
-        if (!running_) throw std::runtime_error("Worker is not running");
+        if (!running_ || stopping_) throw std::runtime_error("Worker is not running");
+        if (devices_.empty()) throw std::runtime_error("No devices configured");
+        in_flight_tasks_++;
         uint64_t id = results_store_.get_next_job_id();
-        uint32_t d_idx = next_device_idx_++ % devices_.size();
-        device_queues_[d_idx]->push({id, std::move(fn)});
+        try {
+            uint32_t d_idx = next_device_idx_++ % devices_.size();
+            device_queues_[d_idx]->push({id, std::move(fn)});
+        } catch (...) {
+            in_flight_tasks_--;
+            results_store_.discard(id);
+            throw;
+        }
         return id;
     }
 
     uint64_t submit_main(task_fn_t fn) {
-        if (!running_) throw std::runtime_error("Worker is not running");
+        if (!running_ || stopping_) throw std::runtime_error("Worker is not running");
+        in_flight_tasks_++;
         uint64_t id = results_store_.get_next_job_id();
-        main_tasks_.push({id, std::move(fn)});
+        try {
+            main_tasks_.push({id, std::move(fn)});
+        } catch (...) {
+            in_flight_tasks_--;
+            results_store_.discard(id);
+            throw;
+        }
         return id;
     }
 
     uint64_t submit_to_rank(size_t rank, task_fn_t fn) {
-        if (!running_) throw std::runtime_error("Worker is not running");
+        if (!running_ || stopping_) throw std::runtime_error("Worker is not running");
         if (rank >= device_queues_.size())
             throw std::runtime_error("submit_to_rank: rank out of range");
+        in_flight_tasks_++;
         uint64_t id = results_store_.get_next_job_id();
-        device_queues_[rank]->push({id, std::move(fn)});
+        try {
+            device_queues_[rank]->push({id, std::move(fn)});
+        } catch (...) {
+            in_flight_tasks_--;
+            results_store_.discard(id);
+            throw;
+        }
         return id;
     }
 
     std::vector<uint64_t> submit_all_devices_no_wait(task_fn_t fn) {
-        if (!running_) throw std::runtime_error("Worker is not running");
+        if (!running_ || stopping_) throw std::runtime_error("Worker is not running");
         std::vector<uint64_t> ids;
         for (size_t i = 0; i < devices_.size(); ++i) {
+            in_flight_tasks_++;
             uint64_t id = results_store_.get_next_job_id();
-            device_queues_[i]->push({id, fn});
+            try {
+                device_queues_[i]->push({id, fn});
+            } catch (...) {
+                in_flight_tasks_--;
+                results_store_.discard(id);
+                throw;
+            }
             ids.push_back(id);
         }
         return ids;
@@ -510,18 +656,6 @@ public:
         for (auto id : ids) wait(id).get();
     }
 
-    void broadcast(task_fn_t fn) {
-        if (!running_) throw std::runtime_error("Worker is not running");
-        std::vector<uint64_t> ids;
-        // In shared pool mode, "broadcast" means push to ALL device queues
-        // Multiple threads per queue will pick them up
-        for (size_t i = 0; i < devices_.size(); ++i) {
-            uint64_t id = results_store_.get_next_job_id();
-            device_queues_[i]->push({id, fn});
-            ids.push_back(id);
-        }
-        for (auto id : ids) wait(id).get();
-    }
 
     std::shared_future<cuvs_task_result_t> wait(uint64_t task_id) {
         return results_store_.wait(task_id);
@@ -531,62 +665,92 @@ public:
 
     uint32_t nthread() const { return nthread_; }
 
-    void set_use_batching(bool enable) { use_batching_ = enable; }
+    void set_use_batching(bool enable) {
+        // Sync and flush before changing mode
+        this->sync();
+        std::vector<std::string> keys;
+        {
+            std::lock_guard<std::mutex> lock(batch_mutex_);
+            for (auto const& [key, b] : batches_) keys.push_back(key);
+        }
+        for (auto const& key : keys) {
+            this->flush_batch(key);
+        }
+        this->sync();
+        use_batching_ = enable;
+    }
     bool use_batching() const { return use_batching_; }
     void set_per_thread_device(bool enable) { per_thread_device_ = enable; }
 
     template <typename ResT, typename ReqT>
-    std::future<ResT> submit_batched(const std::string& key, ReqT req, 
+    std::shared_future<ResT> submit_batched(const std::string& key, ReqT req, 
                                      std::function<void(raft_handle&, const std::vector<std::any>&, const std::vector<std::function<void(std::any)>>&)> exec_fn) {
         bool should_flush_now = false;
         bool should_schedule = false;
-        std::future<ResT> future;
+        std::shared_future<ResT> future;
         
-        std::shared_ptr<batch_t> batch;
-        {
-            std::lock_guard<std::mutex> lock(batch_mutex_);
-            if (!running_) throw std::runtime_error("Worker not running");
+        while (true) {
+            std::shared_ptr<batch_t> batch;
+            {
+                std::lock_guard<std::mutex> lock(batch_mutex_);
+                if (!running_ || stopping_) throw std::runtime_error("Worker not running");
 
-            auto& b = batches_[key];
-            if (!b) {
-                b = std::make_shared<batch_t>();
-                b->exec_fn = exec_fn;
-                b->scheduled = false;
-            }
-            batch = b;
-        }
-
-        {
-            std::lock_guard<std::mutex> lock(batch->mu);
-            if (!batch->scheduled) {
-                batch->scheduled = true;
-                should_schedule = true;
-            }
-
-            auto promise = std::make_shared<std::promise<ResT>>();
-            future = promise->get_future();
-            batch->reqs.push_back(req);
-            batch->setters.push_back([promise](std::any res) {
-                if (res.type() == typeid(std::exception_ptr)) {
-                    promise->set_exception(std::any_cast<std::exception_ptr>(res));
-                } else {
-                    promise->set_value(std::any_cast<ResT>(res));
+                auto& b = batches_[key];
+                if (!b) {
+                    b = std::make_shared<batch_t>();
+                    b->scheduled = false;
+                    b->flushed = false;
                 }
-            });
-
-            if (batch->reqs.size() >= 16) {
-                should_flush_now = true;
+                b->exec_fn = exec_fn;
+                batch = b;
             }
-        }
 
-        if (should_flush_now) {
-            this->flush_batch(key);
-        } else if (should_schedule) {
-            this->submit([this, key](raft_handle&) -> std::any {
-                std::this_thread::sleep_for(std::chrono::microseconds(100));
+            {
+                std::lock_guard<std::mutex> lock(batch->mu);
+                if (batch->flushed) continue; // Race: retry with new batch
+
+                if (!batch->scheduled) {
+                    batch->scheduled = true;
+                    should_schedule = true;
+                }
+
+                auto promise = std::make_shared<std::promise<ResT>>();
+                future = promise->get_future().share();
+                batch->reqs.push_back(req);
+
+                auto fulfilled = std::make_shared<std::atomic<bool>>(false);
+                batch->setters.push_back([promise, fulfilled](std::any res) {
+                    if (fulfilled->exchange(true)) return;
+                    try {
+                        if (res.type() == typeid(std::exception_ptr)) {
+                            promise->set_exception(std::any_cast<std::exception_ptr>(res));
+                        } else {
+                            promise->set_value(std::any_cast<ResT>(res));
+                        }
+                    } catch (const std::future_error& e) {
+                    } catch (...) {
+                        try { promise->set_exception(std::current_exception()); } catch (...) {}
+                    }
+                });
+                if (batch->reqs.size() >= 16) {
+                    should_flush_now = true;
+                }
+            }
+
+            if (should_flush_now) {
                 this->flush_batch(key);
-                return std::any();
-            });
+            } else if (should_schedule) {
+                try {
+                    this->submit_fire_and_forget([this, key](raft_handle&) -> std::any {
+                        std::this_thread::sleep_for(std::chrono::microseconds(100));
+                        this->flush_batch(key);
+                        return std::any();
+                    });
+                } catch (...) {
+                    this->flush_batch(key);
+                }
+            }
+            break;
         }
 
         return future;
@@ -597,8 +761,18 @@ private:
         std::vector<std::any> reqs;
         std::vector<std::function<void(std::any)>> setters;
         std::function<void(raft_handle&, const std::vector<std::any>&, const std::vector<std::function<void(std::any)>>&)> exec_fn;
-        std::atomic<bool> scheduled;
+        bool scheduled;
+        bool flushed;
         std::mutex mu;
+
+        ~batch_t() {
+            if (!setters.empty()) {
+                auto err = std::make_exception_ptr(std::runtime_error("Batch destroyed (broken promise)"));
+                for (auto& s : setters) {
+                    try { s(err); } catch (...) {}
+                }
+            }
+        }
     };
 
     void run_device_loop(raft_handle& handle, std::function<std::any(raft_handle&)> stop_fn, uint32_t d_idx) {
@@ -618,6 +792,21 @@ private:
     }
 
     void execute_task(const cuvs_task_t& task, raft_handle& handle) {
+        struct flight_guard {
+            std::atomic<int64_t>& counter;
+            std::condition_variable& cv;
+            std::mutex& mu;
+            ~flight_guard() {
+                if (--counter == 0) {
+                    // Acquire sync_mu_ before notifying to prevent the lost-wakeup
+                    // race: without it, a notify between sync()'s pred-false check
+                    // and its first cv.wait() call would fire to nobody and hang.
+                    std::lock_guard<std::mutex> lk(mu);
+                    cv.notify_all();
+                }
+            }
+        } guard{in_flight_tasks_, sync_cv_, sync_mu_};
+
         cuvs_task_result_t result;
         try {
             result.result = task.fn(handle);
@@ -628,56 +817,115 @@ private:
             std::cout << "[ERROR " << get_timestamp() << "] Worker execute_task unknown error id=" << task.id << " rank=" << handle.get_rank() << std::endl;
             result.error = std::current_exception();
         }
-        results_store_.store(task.id, result);
+        if (!task.fire_and_forget) {
+            results_store_.store(task.id, result);
+        }
     }
 
     void flush_batch(const std::string& key) {
         std::shared_ptr<batch_t> batch;
+        std::function<void(raft_handle&, const std::vector<std::any>&, const std::vector<std::function<void(std::any)>>&)> exec_fn;
         {
             std::lock_guard<std::mutex> lock(batch_mutex_);
             auto it = batches_.find(key);
             if (it == batches_.end()) return;
             batch = it->second;
+            exec_fn = batch->exec_fn;
         }
 
         std::vector<std::any> reqs;
         std::vector<std::function<void(std::any)>> setters;
         {
             std::lock_guard<std::mutex> lock(batch->mu);
-            if (batch->reqs.empty()) {
+            if (batch->flushed || batch->reqs.empty()) {
                 batch->scheduled = false;
                 return;
             }
+            batch->flushed = true;
             reqs = std::move(batch->reqs);
             setters = std::move(batch->setters);
             batch->scheduled = false;
         }
-        
-        auto exec_fn = batch->exec_fn;
-        auto task_fn = [reqs = std::move(reqs), setters = std::move(setters), exec_fn, key](raft_handle& handle) -> std::any {
-            try {
-                exec_fn(handle, reqs, setters);
-            } catch (const std::exception& e) {
-                std::cout << "[ERROR " << get_timestamp() << "] Worker batch exec_fn error key=" << key << ": " << e.what() << std::endl;
-                auto err = std::current_exception();
-                for (auto& setter : setters) setter(err);
-            } catch (...) {
-                std::cout << "[ERROR " << get_timestamp() << "] Worker batch exec_fn unknown error key=" << key << std::endl;
-                auto err = std::current_exception();
-                for (auto& setter : setters) setter(err);
+
+        {
+            std::lock_guard<std::mutex> lock(batch_mutex_);
+            if (batches_.count(key) > 0 && batches_[key] == batch) {
+                batches_.erase(key);
             }
+        }
+
+        struct setters_guard_t {
+            std::vector<std::function<void(std::any)>> setters;
+            bool fulfilled = false;
+            ~setters_guard_t() {
+                if (!fulfilled) {
+                    auto err = std::make_exception_ptr(std::runtime_error("Batch task cancelled"));
+                    for (auto& setter : setters) {
+                        try { setter(err); } catch (...) {}
+                    }
+                }
+            }
+        };
+        auto guard = std::make_shared<setters_guard_t>();
+        guard->setters = std::move(setters);
+
+        auto task_fn = [reqs = std::move(reqs), guard, exec_fn, key](raft_handle& handle) -> std::any {
+            try {
+                exec_fn(handle, reqs, guard->setters);
+            } catch (const std::exception& e) {
+                std::ostringstream oss;
+                oss << "[ERROR " << get_timestamp() << "] Worker batch exec_fn error key=" << key << ": " << e.what();
+                fprintf(stderr, "%s\n", oss.str().c_str());
+                auto err = std::current_exception();
+                for (auto& setter : guard->setters) {
+                    try { setter(err); } catch (...) {}
+                }
+            } catch (...) {
+                std::ostringstream oss;
+                oss << "[ERROR " << get_timestamp() << "] Worker batch exec_fn unknown error key=" << key;
+                fprintf(stderr, "%s\n", oss.str().c_str());
+                auto err = std::current_exception();
+                for (auto& setter : guard->setters) {
+                    try { setter(err); } catch (...) {}
+                }
+            }
+            guard->fulfilled = true;
             return std::any();
         };
 
         try {
             if (mode_ == DistributionMode_SHARDED) {
-                this->submit_main(task_fn);
+                this->submit_fire_and_forget_main(task_fn);
             } else {
-                this->submit(task_fn);
+                this->submit_fire_and_forget(task_fn);
             }
         } catch (...) {
-            auto err = std::current_exception();
-            for (auto& setter : setters) setter(err);
+        }
+    }
+
+    // Internal helpers for fire-and-forget tasks (flush tasks, scheduled batches).
+    // These bypass the results_store_ entirely — no id is allocated, no result stored.
+    void submit_fire_and_forget(task_fn_t fn) {
+        if (!running_) throw std::runtime_error("Worker is not running");
+        if (devices_.empty()) throw std::runtime_error("No devices configured");
+        in_flight_tasks_++;
+        try {
+            uint32_t d_idx = next_device_idx_++ % devices_.size();
+            device_queues_[d_idx]->push({0, std::move(fn), /*fire_and_forget=*/true});
+        } catch (...) {
+            in_flight_tasks_--;
+            throw;
+        }
+    }
+
+    void submit_fire_and_forget_main(task_fn_t fn) {
+        if (!running_) throw std::runtime_error("Worker is not running");
+        in_flight_tasks_++;
+        try {
+            main_tasks_.push({0, std::move(fn), /*fire_and_forget=*/true});
+        } catch (...) {
+            in_flight_tasks_--;
+            throw;
         }
     }
 
@@ -687,12 +935,16 @@ private:
     std::thread main_thread_;
     std::vector<std::thread> device_threads_;
     std::atomic<bool> running_;
+    std::atomic<bool> stopping_;  // set true at start of stop(); blocks new external submits
     bool use_batching_;
     bool per_thread_device_;
 
     std::vector<std::unique_ptr<thread_safe_queue_t<cuvs_task_t>>> device_queues_;
     thread_safe_queue_t<cuvs_task_t> main_tasks_;
     std::atomic<uint32_t> next_device_idx_;
+    std::atomic<int64_t> in_flight_tasks_;
+    std::mutex            sync_mu_;
+    std::condition_variable sync_cv_;
 
     cuvs_task_result_store_t results_store_;
 
