@@ -62,15 +62,16 @@ func TestUpdateCNDataBatch_RemoveTSVector(t *testing.T) {
 	newCommitTS := types.BuildTS(100, 0)
 	updateCNDataBatch(bat, newCommitTS, mp)
 
-	// Verify T_TS vector is removed and new commitTS vector is added at the end
-	require.Equal(t, 3, len(bat.Vecs))
+	// Verify new commitTS vector is appended at the end (original vectors preserved)
+	require.Equal(t, 4, len(bat.Vecs))
 	require.Equal(t, types.T_int64, bat.Vecs[0].GetType().Oid)
-	require.Equal(t, types.T_int64, bat.Vecs[1].GetType().Oid)
-	require.Equal(t, types.T_TS, bat.Vecs[2].GetType().Oid)
+	require.Equal(t, types.T_TS, bat.Vecs[1].GetType().Oid)
+	require.Equal(t, types.T_int64, bat.Vecs[2].GetType().Oid)
+	require.Equal(t, types.T_TS, bat.Vecs[3].GetType().Oid)
 
 	// Verify the new commitTS vector has the correct value
-	require.True(t, bat.Vecs[2].IsConst())
-	tsVal := vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[2])[0]
+	require.True(t, bat.Vecs[3].IsConst())
+	tsVal := vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[3])[0]
 	require.Equal(t, newCommitTS, tsVal)
 
 	bat.Clean(mp)
