@@ -398,8 +398,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 	}
 
 	var checkpointEntries []*checkpoint.CheckpointEntry
-	minTS := types.MaxTs()
-	maxTS := types.TS{}
+	var minTS, maxTS types.TS
 	checkpointEntries, minTS, maxTS, err = h.loadCheckpointEntries(ctx, nextFrom)
 	if err != nil {
 		return

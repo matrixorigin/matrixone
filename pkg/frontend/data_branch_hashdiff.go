@@ -383,8 +383,7 @@ func runLCAProbeWithReaderFallback(
 	)
 	inputKeys := make(map[string]struct{}, rowCount)
 	for i := 0; i < rowCount; i++ {
-		key := string(pkVec.GetRawBytesAt(i))
-		inputKeys[key] = struct{}{}
+		inputKeys[string(pkVec.GetRawBytesAt(i))] = struct{}{}
 	}
 	lcaTblDef := tblStuff.lcaRel.GetTableDef(ctx)
 	// Build a sorted IN vector for reader-side PK filtering.
@@ -536,8 +535,7 @@ func runLCAProbeWithReaderFallback(
 	hasAnyHit := false
 	for i := 0; i < rowCount; i++ {
 		orderedIdx[i] = int64(i)
-		key := string(pkVec.GetRawBytesAt(i))
-		if rowIdx, ok := tmpRowByKey[key]; ok {
+		if rowIdx, ok := tmpRowByKey[string(pkVec.GetRawBytesAt(i))]; ok {
 			sels[i] = int64(rowIdx)
 			hasAnyHit = true
 		} else {

@@ -16,14 +16,11 @@ package databranchutils
 
 import (
 	"context"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"go.uber.org/zap"
 )
 
 var _ engine.ChangesHandle = new(BranchChangeHandle)
@@ -76,27 +73,15 @@ var CollectChanges = func(
 	mp *mpool.MPool,
 ) (engine.ChangesHandle, error) {
 
-	var (
-		err   error
-		start = time.Now()
-	)
-
 	if end.GE(&from) {
 		handle := new(BranchChangeHandle)
 		ctx = engine.WithSnapshotReadPolicy(ctx, engine.SnapshotReadPolicyVisibleState)
+		var err error
 		if handle.handle, err = rel.CollectChanges(
 			ctx, from, end, false, mp,
 		); err != nil {
 			return nil, err
 		}
-
-		logutil.Debug("DataBranch-CollectChanges-Handle-Ready",
-			zap.Uint64("table-id", rel.GetTableID(ctx)),
-			zap.String("from", from.ToString()),
-			zap.String("to", end.ToString()),
-			zap.Duration("duration", time.Since(start)),
-		)
-
 		return handle, nil
 	}
 
