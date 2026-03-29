@@ -82,18 +82,21 @@ namespace matrixone {
 //   [k*rows_per_shard .. (k+1)*rows_per_shard) (last shard gets remainder).
 //   rows_per_shard = (count / num_shards) & ~31  (rounded down to multiple of 32).
 //   Search submits to all shards in parallel; results merged by merge_sharded_results().
-//   Extend is NOT supported in SHARDED mode (throws).
+//   Extend routes new rows to the last shard via submit_to_rank(last_rank).
+//   shard-local seq_ids = [old_last_shard_size .. old_last_shard_size+n_rows).
+//   replicated_datasets_ for other shards is NOT touched.
 //
 //
 // EXTEND RULES
 // ------------
 // - Can only be called after build() (is_loaded_ must be true).
 // - extend_mutex_ serializes concurrent extend() calls.
-// - Sequence IDs for cuVS are [count .. count+n_rows) (required for non-empty index).
+// - Sequence IDs for cuVS are [count .. count+n_rows) for SINGLE_GPU/REPLICATED,
+//   or shard-local [old_shard_size .. old_shard_size+n_rows) for SHARDED.
 // - After GPU extend, call set_ids() and update count + current_offset_ under unique_lock.
-// - dataset_device_ptr_ / replicated_datasets_ become stale after extend and must be
-//   reset under unique_lock immediately after the GPU call.
-// - SHARDED mode throws std::runtime_error.
+// - SINGLE_GPU: dataset_device_ptr_ reset after extend.
+// - REPLICATED: replicated_datasets_[dev_id] erased after extend (all devices).
+// - SHARDED: replicated_datasets_ NOT touched (other shards' entries remain valid).
 //
 //
 // SEARCH PATH
@@ -382,6 +385,23 @@ public:
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 this->replicated_datasets_.erase(handle.get_device_id());
             }
+        } else if (this->dist_mode == DistributionMode_SHARDED) {
+            // Only the last shard's device calls this; seq_ids are already shard-local.
+            ivf_flat_index* idx_ptr;
+            {
+                std::shared_lock<std::shared_mutex> lock(this->mutex_);
+                auto it = this->replicated_indices_.find(handle.get_device_id());
+                if (it == this->replicated_indices_.end())
+                    throw std::runtime_error("extend_internal: no SHARDED index for device");
+                idx_ptr = static_cast<ivf_flat_index*>(it->second.get());
+            }
+            cuvs::neighbors::ivf_flat::extend(*res,
+                raft::make_const_mdspan(new_vecs_device.view()), indices_opt, idx_ptr);
+            {
+                // Erase only the last shard's stale build dataset; other shards' entries remain valid.
+                std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                this->replicated_datasets_.erase(handle.get_device_id());
+            }
         } else {
             if (!index_) throw std::runtime_error("extend_internal: index not built");
             cuvs::neighbors::ivf_flat::extend(*res,
@@ -436,6 +456,23 @@ public:
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 this->replicated_datasets_.erase(handle.get_device_id());
             }
+        } else if (this->dist_mode == DistributionMode_SHARDED) {
+            // Only the last shard's device calls this; seq_ids are already shard-local.
+            ivf_flat_index* idx_ptr;
+            {
+                std::shared_lock<std::shared_mutex> lock(this->mutex_);
+                auto it = this->replicated_indices_.find(handle.get_device_id());
+                if (it == this->replicated_indices_.end())
+                    throw std::runtime_error("extend_internal_float: no SHARDED index for device");
+                idx_ptr = static_cast<ivf_flat_index*>(it->second.get());
+            }
+            cuvs::neighbors::ivf_flat::extend(*res,
+                raft::make_const_mdspan(new_vecs_device.view()), indices_opt, idx_ptr);
+            {
+                // Erase only the last shard's stale build dataset; other shards' entries remain valid.
+                std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                this->replicated_datasets_.erase(handle.get_device_id());
+            }
         } else {
             if (!index_) throw std::runtime_error("extend_internal_float: index not built");
             cuvs::neighbors::ivf_flat::extend(*res,
@@ -453,22 +490,37 @@ public:
             std::unique_lock<std::shared_mutex> lock(this->mutex_);
             if (!this->is_loaded_) throw std::runtime_error("extend: index not built");
             if (!new_data || n_rows == 0) return;
-            if (this->dist_mode == DistributionMode_SHARDED)
-                throw std::runtime_error("extend: SHARDED mode not supported");
         }
 
         // Serialize concurrent extends — callers queue here rather than race
         std::lock_guard<std::mutex> extend_lock(this->extend_mutex_);
 
-        std::vector<int64_t> seq_ids(n_rows);
-        std::iota(seq_ids.begin(), seq_ids.end(), (int64_t)this->count);
-
         if (this->dist_mode == DistributionMode_REPLICATED) {
+            std::vector<int64_t> seq_ids(n_rows);
+            std::iota(seq_ids.begin(), seq_ids.end(), (int64_t)this->count);
             this->worker->submit_all_devices([&](raft_handle_wrapper_t& handle) -> std::any {
                 this->extend_internal(handle, new_data, n_rows, seq_ids.data());
                 return std::any();
             });
+        } else if (this->dist_mode == DistributionMode_SHARDED) {
+            // Extend the last shard only. Compute shard-local seq_ids.
+            int num_shards = (int)this->devices_.size();
+            uint64_t rows_per_shard = (this->count / (uint64_t)num_shards) & ~static_cast<uint64_t>(31);
+            uint64_t last_shard_offset = (uint64_t)(num_shards - 1) * rows_per_shard;
+            uint64_t old_shard_size = this->count - last_shard_offset;
+            std::vector<int64_t> seq_ids(n_rows);
+            std::iota(seq_ids.begin(), seq_ids.end(), (int64_t)old_shard_size);
+            size_t last_rank = (size_t)(num_shards - 1);
+            uint64_t job_id = this->worker->submit_to_rank(last_rank,
+                [&](raft_handle_wrapper_t& handle) -> std::any {
+                    this->extend_internal(handle, new_data, n_rows, seq_ids.data());
+                    return std::any();
+                });
+            auto result_wait = this->worker->wait(job_id).get();
+            if (result_wait.error) std::rethrow_exception(result_wait.error);
         } else {
+            std::vector<int64_t> seq_ids(n_rows);
+            std::iota(seq_ids.begin(), seq_ids.end(), (int64_t)this->count);
             uint64_t job_id = this->worker->submit_main(
                 [&](raft_handle_wrapper_t& handle) -> std::any {
                     this->extend_internal(handle, new_data, n_rows, seq_ids.data());
@@ -490,22 +542,37 @@ public:
             std::unique_lock<std::shared_mutex> lock(this->mutex_);
             if (!this->is_loaded_) throw std::runtime_error("extend_float: index not built");
             if (!new_data || n_rows == 0) return;
-            if (this->dist_mode == DistributionMode_SHARDED)
-                throw std::runtime_error("extend_float: SHARDED mode not supported");
         }
 
         // Serialize concurrent extends — callers queue here rather than race
         std::lock_guard<std::mutex> extend_lock(this->extend_mutex_);
 
-        std::vector<int64_t> seq_ids(n_rows);
-        std::iota(seq_ids.begin(), seq_ids.end(), (int64_t)this->count);
-
         if (this->dist_mode == DistributionMode_REPLICATED) {
+            std::vector<int64_t> seq_ids(n_rows);
+            std::iota(seq_ids.begin(), seq_ids.end(), (int64_t)this->count);
             this->worker->submit_all_devices([&](raft_handle_wrapper_t& handle) -> std::any {
                 this->extend_internal_float(handle, new_data, n_rows, seq_ids.data());
                 return std::any();
             });
+        } else if (this->dist_mode == DistributionMode_SHARDED) {
+            // Extend the last shard only. Compute shard-local seq_ids.
+            int num_shards = (int)this->devices_.size();
+            uint64_t rows_per_shard = (this->count / (uint64_t)num_shards) & ~static_cast<uint64_t>(31);
+            uint64_t last_shard_offset = (uint64_t)(num_shards - 1) * rows_per_shard;
+            uint64_t old_shard_size = this->count - last_shard_offset;
+            std::vector<int64_t> seq_ids(n_rows);
+            std::iota(seq_ids.begin(), seq_ids.end(), (int64_t)old_shard_size);
+            size_t last_rank = (size_t)(num_shards - 1);
+            uint64_t job_id = this->worker->submit_to_rank(last_rank,
+                [&](raft_handle_wrapper_t& handle) -> std::any {
+                    this->extend_internal_float(handle, new_data, n_rows, seq_ids.data());
+                    return std::any();
+                });
+            auto result_wait = this->worker->wait(job_id).get();
+            if (result_wait.error) std::rethrow_exception(result_wait.error);
         } else {
+            std::vector<int64_t> seq_ids(n_rows);
+            std::iota(seq_ids.begin(), seq_ids.end(), (int64_t)this->count);
             uint64_t job_id = this->worker->submit_main(
                 [&](raft_handle_wrapper_t& handle) -> std::any {
                     this->extend_internal_float(handle, new_data, n_rows, seq_ids.data());

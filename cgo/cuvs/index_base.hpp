@@ -115,7 +115,9 @@ using ::distribution_mode_t;
 //   - build: submit_all_devices() — each GPU builds its shard.
 //   - search: submit_all_devices_no_wait() — all shards searched in parallel,
 //             results merged via merge_sharded_results().
-//   - extend: NOT SUPPORTED — throws std::runtime_error.
+//   - extend: routes new rows to the last shard via submit_to_rank(last_rank).
+//             shard-local seq_ids = [old_last_shard_size .. old_last_shard_size+n_rows).
+//             replicated_datasets_[last_dev_id] erased (stale); other shards' entries untouched.
 //   - SHARDED shard sizing: rows_per_shard is rounded DOWN to a multiple of 32
 //     (i.e., (count / num_shards) & ~31). The last shard absorbs the remainder.
 //     This is required for word-aligned bitset slicing in sync_shard_bitset().

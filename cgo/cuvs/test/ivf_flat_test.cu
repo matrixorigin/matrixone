@@ -473,6 +473,100 @@ TEST(GpuIvfFlatTest, ExtendReplicatedWithHostIds) {
     index.destroy();
 }
 
+TEST(GpuIvfFlatTest, ExtendShardedWithHostIds) {
+    const uint32_t dimension = 2;
+    const uint64_t n_base = 200;
+    const uint64_t n_ext  = 50;
+
+    int dev_count = gpu_get_device_count();
+    if (dev_count < 2) return; // Need at least 2 GPUs for sharded test
+    if (dev_count > 4) dev_count = 4;
+    std::vector<int> devices(dev_count);
+    gpu_get_device_list(devices.data(), dev_count);
+
+    std::vector<float> dataset(n_base * dimension);
+    std::vector<int64_t> base_ids(n_base);
+    for (uint64_t i = 0; i < n_base; ++i) {
+        dataset[i * dimension]     = (float)i;
+        dataset[i * dimension + 1] = (float)i;
+        base_ids[i] = (int64_t)(1000 + i);
+    }
+
+    ivf_flat_build_params_t bp = ivf_flat_build_params_default();
+    bp.n_lists = 10;
+    gpu_ivf_flat_t<float> index(dataset.data(), n_base, dimension,
+                                DistanceType_L2Expanded, bp, devices, 1,
+                                DistributionMode_SHARDED, base_ids.data());
+    index.start();
+    index.build();
+
+    std::vector<float> ext(n_ext * dimension);
+    std::vector<int64_t> ext_ids(n_ext);
+    for (uint64_t i = 0; i < n_ext; ++i) {
+        ext[i * dimension]     = (float)(500 + i);
+        ext[i * dimension + 1] = (float)(500 + i);
+        ext_ids[i] = (int64_t)(2000 + i);
+    }
+    index.extend(ext.data(), n_ext, ext_ids.data());
+
+    ASSERT_EQ((uint64_t)index.len(), n_base + n_ext);
+
+    ivf_flat_search_params_t sp = ivf_flat_search_params_default();
+    sp.n_probes = 10;
+
+    // Query near extended set: expect host ID 2000
+    std::vector<float> q500 = {500.0f, 500.0f};
+    auto r = index.search(q500.data(), 1, dimension, 1, sp);
+    ASSERT_EQ(r.neighbors[0], (int64_t)2000);
+
+    index.destroy();
+}
+
+TEST(GpuIvfFlatTest, ExtendShardedWithoutHostIds) {
+    const uint32_t dimension = 2;
+    const uint64_t n_base = 200;
+    const uint64_t n_ext  = 50;
+
+    int dev_count = gpu_get_device_count();
+    if (dev_count < 2) return; // Need at least 2 GPUs for sharded test
+    if (dev_count > 4) dev_count = 4;
+    std::vector<int> devices(dev_count);
+    gpu_get_device_list(devices.data(), dev_count);
+
+    std::vector<float> dataset(n_base * dimension);
+    for (uint64_t i = 0; i < n_base; ++i) {
+        dataset[i * dimension]     = (float)i;
+        dataset[i * dimension + 1] = (float)i;
+    }
+
+    ivf_flat_build_params_t bp = ivf_flat_build_params_default();
+    bp.n_lists = 10;
+    gpu_ivf_flat_t<float> index(dataset.data(), n_base, dimension,
+                                DistanceType_L2Expanded, bp, devices, 1,
+                                DistributionMode_SHARDED, nullptr);
+    index.start();
+    index.build();
+
+    std::vector<float> ext(n_ext * dimension);
+    for (uint64_t i = 0; i < n_ext; ++i) {
+        ext[i * dimension]     = (float)(500 + i);
+        ext[i * dimension + 1] = (float)(500 + i);
+    }
+    index.extend(ext.data(), n_ext, nullptr);
+
+    ASSERT_EQ((uint64_t)index.len(), n_base + n_ext);
+
+    ivf_flat_search_params_t sp = ivf_flat_search_params_default();
+    sp.n_probes = 10;
+
+    // Query near extended set: expect sequential ID n_base
+    std::vector<float> q500 = {500.0f, 500.0f};
+    auto r = index.search(q500.data(), 1, dimension, 1, sp);
+    ASSERT_EQ(r.neighbors[0], (int64_t)n_base);
+
+    index.destroy();
+}
+
 TEST(GpuIvfFlatTest, ManualShardedGetCenters) {
     const uint32_t dimension = 16;
     const uint64_t count = 1000;

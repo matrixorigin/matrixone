@@ -485,6 +485,15 @@ public:
         return id;
     }
 
+    uint64_t submit_to_rank(size_t rank, task_fn_t fn) {
+        if (!running_) throw std::runtime_error("Worker is not running");
+        if (rank >= device_queues_.size())
+            throw std::runtime_error("submit_to_rank: rank out of range");
+        uint64_t id = results_store_.get_next_job_id();
+        device_queues_[rank]->push({id, std::move(fn)});
+        return id;
+    }
+
     std::vector<uint64_t> submit_all_devices_no_wait(task_fn_t fn) {
         if (!running_) throw std::runtime_error("Worker is not running");
         std::vector<uint64_t> ids;
