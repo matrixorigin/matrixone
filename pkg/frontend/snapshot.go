@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -912,6 +913,20 @@ func shouldInvalidateTimestampSnapshotBindings(
 	return true, nil
 }
 
+// activateAccountCatalogIfNeeded ensures the lazy catalog for the given
+// account is activated before restore runs internal SQL as that account.
+// Without this, logtail entries for the target account's catalog tables
+// would be delayed and invisible to background SQL sessions.
+func activateAccountCatalogIfNeeded(ctx context.Context, ses *Session, accountID uint32) error {
+	if accountID == 0 {
+		return nil // sys account is always activated
+	}
+	if activator, ok := ses.GetTxnHandler().GetStorage().(engine.TenantCatalogActivator); ok {
+		return activator.ActivateTenantCatalog(ctx, accountID)
+	}
+	return nil
+}
+
 func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnapShot) (stats statistic.StatsArray, err error) {
 	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	bh.SetRestore(true)
@@ -1002,6 +1017,11 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			return stats, err
 		}
 		markMongoDBAccountForRetirement(&retiredMongoDBAccountIDs, toAccountId)
+		return
+	}
+
+	// activate the target account's catalog so internal SQL can see its tables
+	if err = activateAccountCatalogIfNeeded(ctx, ses, toAccountId); err != nil {
 		return
 	}
 
@@ -3977,6 +3997,11 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 		return err
 	}
 	ctx = ownershipCtx
+
+	// activate the target account's catalog so internal SQL can see its tables
+	if err = activateAccountCatalogIfNeeded(ctx, ses, uint32(toAccountId)); err != nil {
+		return
+	}
 
 	// drop foreign key related tables first
 	if isNeedToCleanToDatabase {
