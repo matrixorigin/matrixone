@@ -880,31 +880,6 @@ func TestReceiveMsgAndForward_ReturnsOnBlockedReceiverCancel(t *testing.T) {
 	}
 }
 
-func TestForwardTerminalSignalWithContext_SkipsBlockedSendAfterCancel(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	forwardCh := make(chan process.PipelineSignal, 1)
-	forwardCh <- process.NewPipelineSignalToDirectly(nil, nil, nil)
-
-	sender := &messageSenderOnClient{ctx: ctx}
-	done := make(chan bool, 1)
-	go func() {
-		done <- forwardTerminalSignalWithContext(sender, forwardCh, moerr.NewInternalErrorNoCtx("test"), nil)
-	}()
-
-	cancel()
-
-	select {
-	case ok := <-done:
-		require.False(t, ok)
-		require.Equal(t, 1, len(forwardCh))
-	case <-time.After(time.Second):
-		<-forwardCh
-		require.Fail(t, "forwardTerminalSignalWithContext did not unblock after cancellation")
-	}
-}
-
 func Test_checkPipelineStandaloneExecutableAtRemote(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.Base.TxnOperator = fakeTxnOperator{}

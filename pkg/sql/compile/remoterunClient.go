@@ -550,26 +550,6 @@ func forwardRemoteBatchWithContext(
 	}
 }
 
-func forwardTerminalSignalWithContext(
-	sender *messageSenderOnClient,
-	nextChannel chan process.PipelineSignal,
-	err error,
-	mp *mpool.MPool,
-) bool {
-	signal := process.NewPipelineSignalToDirectly(nil, err, mp)
-	if sender == nil || sender.ctx == nil {
-		nextChannel <- signal
-		return true
-	}
-
-	select {
-	case nextChannel <- signal:
-		return true
-	case <-sender.ctx.Done():
-		return false
-	}
-}
-
 // no matter how we stop the remote-run, we should get the final remote cost here.
 func (sender *messageSenderOnClient) waitingTheStopResponse() {
 	if sender.alreadyClose || sender.safeToClose {
