@@ -638,6 +638,7 @@ func (s *LogtailServer) pullActivationPhase1(ctx context.Context, act catalogAct
 				timestamp.Timestamp{},
 				waterline,
 				allowedAccounts,
+				true, // activation: strip object meta, already in partition state
 			)
 			mu.Lock()
 			defer mu.Unlock()
@@ -683,13 +684,14 @@ func (s *LogtailServer) pullTableLogtail(
 	table api.TableID,
 	from, to timestamp.Timestamp,
 	allowedAccounts *lazyCatalogAllowedAccounts,
+	stripObjectMeta bool,
 ) (logtail.TableLogtail, func(), error) {
 	tail, closeCB, err := s.logtailer.TableLogtail(ctx, table, from, to)
 	if err != nil {
 		return logtail.TableLogtail{}, closeCB, err
 	}
 
-	filtered, filterCloseCB, err := filterLazyCatalogPulledTail(tail, allowedAccounts)
+	filtered, filterCloseCB, err := filterLazyCatalogPulledTail(tail, allowedAccounts, stripObjectMeta)
 	if err != nil {
 		closeCallbacks(closeCB, filterCloseCB)
 		return logtail.TableLogtail{}, nil, err
@@ -791,7 +793,7 @@ func (s *LogtailServer) sendActivation(ctx context.Context, p1 *catalogActivatio
 			phase1Ts = *p1.tails[i].Ts
 		}
 
-		phase2Tail, closeCB, err := s.pullTableLogtail(sendCtx, table, phase1Ts, targetTS, allowedAccounts)
+		phase2Tail, closeCB, err := s.pullTableLogtail(sendCtx, table, phase1Ts, targetTS, allowedAccounts, true)
 		if err != nil {
 			closeCallbacks(closeCB)
 			s.logger.Error("activation phase2 failed",
@@ -868,7 +870,7 @@ func (s *LogtailServer) getSubLogtailPhase(
 	var tail logtail.TableLogtail
 	var closeCB func()
 	moprobe.WithRegion(ctx, moprobe.SubscriptionPullLogTail, func() {
-		tail, closeCB, subErr = s.pullTableLogtail(sendCtx, table, from, to, allowedAccounts)
+		tail, closeCB, subErr = s.pullTableLogtail(sendCtx, table, from, to, allowedAccounts, false)
 		subErr = moerr.AttachCause(sendCtx, subErr)
 	})
 	if subErr != nil {
