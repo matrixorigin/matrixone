@@ -65,6 +65,7 @@ type RunningPipelineMapForRemoteNode struct {
 	sync.Mutex
 
 	fromRpcClientToRelatedPipeline map[rpcClientItem]runningPipelineInfo
+	sessionCleanupWaiters          map[morpc.ClientSession]struct{}
 }
 
 type rpcClientItem struct {
