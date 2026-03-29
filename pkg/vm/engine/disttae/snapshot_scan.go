@@ -349,43 +349,7 @@ func scanSnapshotShard(
 	source := readutil.NewRemoteDataSource(
 		ctx, fs, snapshotTS.ToTimestamp(), relData,
 	)
-
-	readerOpts := []readutil.ReaderOption{
-		readutil.WithColumns(cfg.seqnums, cfg.colTypes),
-	}
-	if cfg.hasBlockFilter {
-		readerOpts = append(readerOpts, readutil.WithBlockFilter(cfg.blockFilter, cfg.filterSeqnum, cfg.filterType))
-	}
-	reader := readutil.SimpleReaderWithDataSource(
-		ctx, fs,
-		source, snapshotTS.ToTimestamp(),
-		readerOpts...,
-	)
-
-	defer reader.Close()
-
-	readBatch := batch.NewWithSize(len(cfg.attrs))
-	readBatch.SetAttributes(cfg.attrs)
-	for i := range cfg.attrs {
-		readBatch.Vecs[i] = vector.NewVec(cfg.colTypes[i])
-	}
-	defer readBatch.Clean(mp)
-
-	for {
-		isEnd, err := reader.Read(ctx, cfg.attrs, nil, mp, readBatch)
-		if err != nil {
-			return err
-		}
-		if isEnd {
-			return nil
-		}
-		if readBatch.RowCount() == 0 {
-			continue
-		}
-		if err := onBatch(readBatch); err != nil {
-			return err
-		}
-	}
+	return readSnapshotWithSource(ctx, fs, source, snapshotTS, cfg, mp, onBatch)
 }
 
 // scanSnapshotShardLocal uses LocalDataSource to read both in-memory
@@ -423,7 +387,20 @@ func scanSnapshotShardLocal(
 		return err
 	}
 	source.snapshotTS = snapshotTS
+	return readSnapshotWithSource(ctx, fs, source, snapshotTS, cfg, mp, onBatch)
+}
 
+// readSnapshotWithSource is the shared read loop for snapshot scanning.
+// It builds a reader from the given DataSource and streams batches to onBatch.
+func readSnapshotWithSource(
+	ctx context.Context,
+	fs fileservice.FileService,
+	source engine.DataSource,
+	snapshotTS types.TS,
+	cfg snapshotScanReaderConfig,
+	mp *mpool.MPool,
+	onBatch func(*batch.Batch) error,
+) error {
 	readerOpts := []readutil.ReaderOption{
 		readutil.WithColumns(cfg.seqnums, cfg.colTypes),
 	}

@@ -139,12 +139,10 @@ func NewPartitionChangesHandle(
 }
 
 func (h *PartitionChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
-	// The normal path keeps the existing replay behavior. The VisibleState policy
-	// only changes how snapshot-read recovery rebuilds one logical range and
-	// should not affect callers that can still read directly from partition
-	// state.
+	// The normal path keeps the existing replay behavior. The VisibleState
+	// policy enables snapshot-recovery on FileNotFound (via SnapshotStateRange).
 	if h.snapshotReadPolicy == engine.SnapshotReadPolicyVisibleState {
-		return h.nextWithVisibleState(ctx, mp)
+		return h.nextWithSnapshotRecovery(ctx, mp)
 	}
 	return h.nextReplay(ctx, mp)
 }
@@ -171,12 +169,11 @@ func (h *PartitionChangesHandle) nextReplay(ctx context.Context, mp *mpool.MPool
 	}
 }
 
-// nextWithVisibleState drains one logical sub-range at a time. The whole
+// nextWithSnapshotRecovery drains one logical sub-range at a time. The whole
 // sub-range is buffered before anything is returned so that a late
-// FileNotFound can still switch the sub-range to visible-state reconstruction
-// without exposing a mix of range-replay batches and exact visible-state
-// batches for the same time window.
-func (h *PartitionChangesHandle) nextWithVisibleState(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
+// FileNotFound can discard partial output and rebuild the same range via
+// SnapshotStateRange without exposing inconsistent batches.
+func (h *PartitionChangesHandle) nextWithSnapshotRecovery(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
 	hint = engine.ChangesHandle_Tail_done
 	for {
 		if len(h.bufferedBatches) > 0 {
@@ -201,11 +198,9 @@ func (h *PartitionChangesHandle) nextWithVisibleState(ctx context.Context, mp *m
 	}
 }
 
-// bufferCurrentRange eagerly consumes the current sub-range into memory. This
-// is only used by the visible-state policy because that policy must be able to
-// discard everything produced for the current sub-range if an object file
-// disappears in the middle of iteration and then rebuild the same range with a
-// different recovery semantic.
+// bufferCurrentRange eagerly consumes the current sub-range into memory so
+// that a mid-iteration FileNotFound can discard partial output and rebuild
+// the same range via SnapshotStateRange recovery.
 func (h *PartitionChangesHandle) bufferCurrentRange(ctx context.Context, mp *mpool.MPool) (err error) {
 	var queued []queuedChangeBatch
 	snapshotStateRangeTried := false
@@ -225,9 +220,8 @@ func (h *PartitionChangesHandle) bufferCurrentRange(ctx context.Context, mp *mpo
 			if moerr.IsMoErrCode(nextErr, moerr.ErrFileNotFound) {
 				// A late FileNotFound means the replay handle for this sub-range is
 				// no longer trustworthy. Drop buffered output for the whole range,
-				// then rebuild the same range from the end-snapshot partition
-				// state with delete-chain object rewrite. Only fall back to exact
-				// visible-state scan when range replay cannot be rebuilt.
+				// then rebuild from the end-snapshot partition state with
+				// delete-chain object rewrite.
 				cleanQueued()
 				queued = nil
 				if !snapshotStateRangeTried {
@@ -480,50 +474,6 @@ func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx conte
 	h.currentChangeHandle, err = logtailreplay.NewChangesHandlerWithPartitionStateRange(
 		ctx,
 		state,
-		h.currentPSFrom,
-		h.currentPSTo,
-		h.skipDeletes,
-		objectio.BlockMaxRows,
-		h.primarySeqnum,
-		h.mp,
-		h.fs,
-	)
-	return err
-}
-
-// swapCurrentHandleToCheckpointRange rebuilds current [from, to] from snapshot
-// checkpoint entries using range-aware object selection. It is only used as a
-// stale-read fallback for snapshot-state range replay in visible-state policy.
-func (h *PartitionChangesHandle) swapCurrentHandleToCheckpointRange(
-	ctx context.Context,
-	from types.TS,
-) (err error) {
-	if h.snapshotReadPolicy != engine.SnapshotReadPolicyVisibleState {
-		return nil
-	}
-	checkpointEntries, minTS, maxTS, err := h.loadCheckpointEntries(ctx, from)
-	if err != nil {
-		return err
-	}
-	if from.LT(&minTS) || from.GT(&maxTS) {
-		return moerr.NewErrStaleReadNoCtx(from.ToString(), maxTS.ToString())
-	}
-	// Restrict currentPSTo to checkpoint coverage so that the outer
-	// getNextChangeHandle loop will create another partition-state
-	// handler for the remaining [maxTS+1, toTs] range.  Without this,
-	// in-memory rows created after the last checkpoint (e.g. recent
-	// catalog changes) are silently skipped.
-	if maxTS.LT(&h.currentPSTo) {
-		h.currentPSTo = maxTS
-	}
-	if err = h.closeCurrentChangeHandle(); err != nil {
-		return err
-	}
-	h.currentChangeHandle, err = logtailreplay.NewChangesHandlerWithCheckpointRange(
-		ctx,
-		h.tbl.tableId,
-		h.tbl.proc.Load().GetService(),
-		checkpointEntries,
 		h.currentPSFrom,
 		h.currentPSTo,
 		h.skipDeletes,
