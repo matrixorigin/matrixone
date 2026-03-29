@@ -267,6 +267,9 @@ func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClien
 	}
 	dispatchRunner := buildRemoteDispatchReceiverRoot(arg, fakeValueScanOperator)
 	defer func() {
+		arg.AdoptCleanupState(dispatchRunner)
+		dispatchRunner.Release()
+		fakeValueScanOperator.Free(s.Proc, err != nil, err)
 		fakeValueScanOperator.Batchs = nil
 		fakeValueScanOperator.Release()
 	}()

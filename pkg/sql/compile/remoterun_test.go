@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -877,6 +878,69 @@ func TestReceiveMsgAndForward_ReturnsOnBlockedReceiverCancel(t *testing.T) {
 	case <-time.After(time.Second):
 		<-forwardCh
 		require.Fail(t, "receiveMsgAndForward did not unblock after cancellation")
+	}
+}
+
+func TestReceiveMessageFromCnServerIfDispatch_PreservesCleanupOnOriginalRoot(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	reg := &process.WaitRegister{Ch2: make(chan process.PipelineSignal, 2)}
+	d := dispatch.NewArgument()
+	d.LocalRegs = []*process.WaitRegister{reg}
+	d.FuncId = dispatch.SendToAllLocalFunc
+	s := &Scope{Proc: proc, RootOp: d}
+
+	sender := &messageSenderOnClient{
+		ctx:       context.Background(),
+		mp:        proc.Mp(),
+		receiveCh: make(chan morpc.Message, 2),
+	}
+	dataBat := batch.NewWithSize(0)
+	dataBat.SetRowCount(1)
+	sender.receiveCh <- makeRemoteBatchMessage(t, dataBat)
+	sender.receiveCh <- &pipeline.Message{Sid: pipeline.Status_MessageEnd}
+
+	err := receiveMessageFromCnServerIfDispatch(s, sender)
+	require.NoError(t, err)
+
+	ctrField := reflect.ValueOf(d).Elem().FieldByName("ctr")
+	require.False(t, ctrField.IsNil(), "receiveMessageFromCnServerIfDispatch should keep cleanup state on the original root")
+
+	select {
+	case signal := <-reg.Ch2:
+		bat, actionErr := signal.Action()
+		require.NoError(t, actionErr)
+		require.NotNil(t, bat)
+		require.Equal(t, 1, bat.RowCount())
+	case <-time.After(time.Second):
+		require.Fail(t, "dispatch runner did not send the data batch signal")
+	}
+
+	done := make(chan struct{}, 1)
+	go func() {
+		d.Reset(proc, false, nil)
+		done <- struct{}{}
+	}()
+
+	select {
+	case signal := <-reg.Ch2:
+		bat, actionErr := signal.Action()
+		require.NoError(t, actionErr)
+		require.Nil(t, bat)
+	case <-time.After(time.Second):
+		require.Fail(t, "original root cleanup did not send a terminal signal")
+	}
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.Fail(t, "original root cleanup did not finish after terminal signal consumption")
+	}
+
+	select {
+	case <-reg.Ch2:
+		require.Fail(t, "original root cleanup should not emit duplicate terminal signals")
+	default:
 	}
 }
 
