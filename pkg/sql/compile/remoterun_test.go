@@ -80,6 +80,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func makeRemoteBatchMessage(t *testing.T, bat *batch.Batch) morpc.Message {
+	t.Helper()
+	data, err := bat.MarshalBinary()
+	require.NoError(t, err)
+	return &pipeline.Message{
+		Sid:  pipeline.Status_Last,
+		Data: data,
+	}
+}
+
 func Test_EncodeProcessInfo(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
@@ -799,6 +809,99 @@ func Test_ReceiveMessageFromCnServer(t *testing.T) {
 		sender.receiveCh = ch
 
 		require.NotNil(t, receiveMessageFromCnServer(s4, false, &sender))
+	}
+}
+
+func TestReceiveMessageFromCnServerIfConnector_ReturnsOnBlockedReceiverCancel(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.BuildPipelineContext(context.Background())
+
+	s := &Scope{
+		Proc:   proc,
+		RootOp: connector.NewArgument(),
+	}
+	s.RootOp.(*connector.Connector).Reg = &process.WaitRegister{
+		Ch2: make(chan process.PipelineSignal, 1),
+	}
+	s.RootOp.(*connector.Connector).Reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, proc.Mp())
+
+	sender := &messageSenderOnClient{
+		ctx:       proc.Ctx,
+		mp:        proc.Mp(),
+		receiveCh: make(chan morpc.Message, 1),
+	}
+	sender.receiveCh <- makeRemoteBatchMessage(t, batch.NewWithSize(0))
+
+	done := make(chan error, 1)
+	go func() {
+		done <- receiveMessageFromCnServerIfConnector(s, sender)
+	}()
+
+	proc.Cancel(nil)
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+	case <-time.After(time.Second):
+		<-s.RootOp.(*connector.Connector).Reg.Ch2
+		require.Fail(t, "receiveMessageFromCnServerIfConnector did not unblock after cancellation")
+	}
+}
+
+func TestReceiveMsgAndForward_ReturnsOnBlockedReceiverCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	forwardCh := make(chan process.PipelineSignal, 1)
+	forwardCh <- process.NewPipelineSignalToDirectly(nil, nil, nil)
+
+	sender := &messageSenderOnClient{
+		ctx:       ctx,
+		mp:        mpool.MustNewZero(),
+		receiveCh: make(chan morpc.Message, 1),
+	}
+	sender.receiveCh <- makeRemoteBatchMessage(t, batch.NewWithSize(0))
+
+	done := make(chan error, 1)
+	go func() {
+		done <- receiveMsgAndForward(sender, forwardCh)
+	}()
+
+	cancel()
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+	case <-time.After(time.Second):
+		<-forwardCh
+		require.Fail(t, "receiveMsgAndForward did not unblock after cancellation")
+	}
+}
+
+func TestForwardTerminalSignalWithContext_SkipsBlockedSendAfterCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	forwardCh := make(chan process.PipelineSignal, 1)
+	forwardCh <- process.NewPipelineSignalToDirectly(nil, nil, nil)
+
+	sender := &messageSenderOnClient{ctx: ctx}
+	done := make(chan bool, 1)
+	go func() {
+		done <- forwardTerminalSignalWithContext(sender, forwardCh, moerr.NewInternalErrorNoCtx("test"), nil)
+	}()
+
+	cancel()
+
+	select {
+	case ok := <-done:
+		require.False(t, ok)
+		require.Equal(t, 1, len(forwardCh))
+	case <-time.After(time.Second):
+		<-forwardCh
+		require.Fail(t, "forwardTerminalSignalWithContext did not unblock after cancellation")
 	}
 }
 

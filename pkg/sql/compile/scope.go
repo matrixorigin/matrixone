@@ -817,7 +817,7 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
 		err = suppressRemoteRunCancelError(s.Proc.Ctx, err)
-		reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, err, s.Proc.Mp())
+		forwardTerminalSignalWithContext(sender, reg.Ch2, err, s.Proc.Mp())
 		resultChan <- notifyMessageResult{err: err, sender: sender}
 		wg.Done()
 	}
@@ -891,7 +891,9 @@ func receiveMsgAndForward(sender *messageSenderOnClient, forwardCh chan process.
 			return err
 		}
 
-		forwardCh <- process.NewPipelineSignalToDirectly(bat, nil, sender.mp)
+		if err = forwardRemoteBatchWithContext(sender, forwardCh, bat, sender.mp); err != nil {
+			return err
+		}
 	}
 }
 

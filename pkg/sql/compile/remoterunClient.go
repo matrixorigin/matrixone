@@ -249,7 +249,9 @@ func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClie
 		}
 		connectorAnalyze.Network(bat)
 
-		nextChannel <- process.NewPipelineSignalToDirectly(bat, nil, mp)
+		if err = forwardRemoteBatchWithContext(sender, nextChannel, bat, mp); err != nil {
+			return err
+		}
 	}
 }
 
@@ -525,6 +527,47 @@ func (sender *messageSenderOnClient) contextDoneError() error {
 		return moerr.NewRPCTimeout(sender.ctx)
 	}
 	return moerr.NewQueryInterrupted(sender.ctx)
+}
+
+func forwardRemoteBatchWithContext(
+	sender *messageSenderOnClient,
+	nextChannel chan process.PipelineSignal,
+	bat *batch.Batch,
+	mp *mpool.MPool,
+) error {
+	signal := process.NewPipelineSignalToDirectly(bat, nil, mp)
+	if sender == nil || sender.ctx == nil {
+		nextChannel <- signal
+		return nil
+	}
+
+	select {
+	case nextChannel <- signal:
+		return nil
+	case <-sender.ctx.Done():
+		bat.Clean(mp)
+		return sender.contextDoneError()
+	}
+}
+
+func forwardTerminalSignalWithContext(
+	sender *messageSenderOnClient,
+	nextChannel chan process.PipelineSignal,
+	err error,
+	mp *mpool.MPool,
+) bool {
+	signal := process.NewPipelineSignalToDirectly(nil, err, mp)
+	if sender == nil || sender.ctx == nil {
+		nextChannel <- signal
+		return true
+	}
+
+	select {
+	case nextChannel <- signal:
+		return true
+	case <-sender.ctx.Done():
+		return false
+	}
 }
 
 // no matter how we stop the remote-run, we should get the final remote cost here.
