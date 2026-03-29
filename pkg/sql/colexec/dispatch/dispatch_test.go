@@ -53,6 +53,33 @@ func TestPrepareRemote(t *testing.T) {
 	require.Equal(t, d.ctr.remoteInfo, c)
 }
 
+func TestDispatchAdoptCleanupState_TransfersOwnership(t *testing.T) {
+	original := &container{sendCnt: 1}
+	target := &Dispatch{ctr: &container{sendCnt: 99}}
+	source := &Dispatch{ctr: original}
+
+	target.AdoptCleanupState(source)
+
+	require.Same(t, original, target.ctr)
+	require.Nil(t, source.ctr)
+}
+
+func TestDispatchAdoptCleanupState_NilSafe(t *testing.T) {
+	source := &Dispatch{ctr: &container{sendCnt: 1}}
+
+	var nilDispatch *Dispatch
+	require.NotPanics(t, func() {
+		nilDispatch.AdoptCleanupState(source)
+	})
+	require.NotNil(t, source.ctr)
+
+	target := &Dispatch{}
+	require.NotPanics(t, func() {
+		target.AdoptCleanupState(nil)
+	})
+	require.Nil(t, target.ctr)
+}
+
 // TestReceiverDone_OldBehavior tests the old behavior (kept for backward compatibility verification)
 func TestReceiverDone_OldBehavior(t *testing.T) {
 	proc := testutil.NewProcess(t)
