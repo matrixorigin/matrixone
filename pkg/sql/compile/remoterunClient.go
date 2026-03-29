@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -331,8 +332,9 @@ func buildRemoteDispatchReceiverRoot(arg *dispatch.Dispatch, child vm.Operator) 
 type messageSenderOnClient struct {
 	// sender's context
 	// and cancel function (it exists if this context was recreated by us).
-	ctx       context.Context
-	ctxCancel context.CancelFunc
+	ctx                context.Context
+	ctxCancel          context.CancelFunc
+	useInternalTimeout bool
 
 	mp *mpool.MPool
 
@@ -380,6 +382,7 @@ func newMessageSenderOnClient(
 
 	if _, ok := ctx.Deadline(); !ok {
 		sender.ctx, sender.ctxCancel = context.WithTimeoutCause(ctx, MaxRpcTime, moerr.CauseNewMessageSenderOnClient)
+		sender.useInternalTimeout = true
 	} else {
 		sender.ctx = ctx
 	}
@@ -463,6 +466,9 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 			return nil, false, err
 		}
 		if val == nil {
+			if ctxErr := sender.contextDoneError(); ctxErr != nil {
+				return nil, false, ctxErr
+			}
 			return nil, true, nil
 		}
 
@@ -505,6 +511,20 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 		   		} */
 		return bat, false, err
 	}
+}
+
+func (sender *messageSenderOnClient) contextDoneError() error {
+	if sender.ctx == nil {
+		return nil
+	}
+	err := sender.ctx.Err()
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.DeadlineExceeded) && sender.useInternalTimeout {
+		return moerr.NewRPCTimeout(sender.ctx)
+	}
+	return moerr.NewQueryInterrupted(sender.ctx)
 }
 
 // no matter how we stop the remote-run, we should get the final remote cost here.
