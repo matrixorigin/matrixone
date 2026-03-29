@@ -22,7 +22,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-	"unsafe"
 
 	"github.com/docker/go-units"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -62,11 +61,11 @@ const (
 
 type transferSlabNode struct {
 	slab []api.TransferDestPos
-	next unsafe.Pointer // *transferSlabNode
+	next *transferSlabNode
 }
 
 type transferSlabBucket struct {
-	head    unsafe.Pointer // *transferSlabNode
+	head    atomic.Pointer[transferSlabNode]
 	count   atomic.Int32
 	maxIdle int32
 	size    int // quantised slab capacity for this tier
@@ -99,15 +98,13 @@ func getTransferSlab(size int) []api.TransferDestPos {
 	if tier >= 0 {
 		bkt := &transferSlabBuckets[tier]
 		for {
-			head := atomic.LoadPointer(&bkt.head)
+			head := bkt.head.Load()
 			if head == nil {
 				break
 			}
-			node := (*transferSlabNode)(head)
-			next := atomic.LoadPointer(&node.next)
-			if atomic.CompareAndSwapPointer(&bkt.head, head, next) {
+			if bkt.head.CompareAndSwap(head, head.next) {
 				bkt.count.Add(-1)
-				slab := node.slab[:size]
+				slab := head.slab[:size]
 				for i := range slab {
 					slab[i] = api.TransferDestPos{ObjIdx: api.NoTransfer}
 				}
@@ -145,9 +142,9 @@ func putTransferSlab(slab []api.TransferDestPos) {
 	}
 	node := &transferSlabNode{slab: slab}
 	for {
-		oldHead := atomic.LoadPointer(&bkt.head)
+		oldHead := bkt.head.Load()
 		node.next = oldHead
-		if atomic.CompareAndSwapPointer(&bkt.head, oldHead, unsafe.Pointer(node)) {
+		if bkt.head.CompareAndSwap(oldHead, node) {
 			bkt.count.Add(1)
 			return
 		}
@@ -159,13 +156,13 @@ func DrainTransferSlabPool() {
 	for i := range transferSlabBuckets {
 		bkt := &transferSlabBuckets[i]
 		for {
-			head := atomic.LoadPointer(&bkt.head)
+			head := bkt.head.Load()
 			if head == nil {
 				break
 			}
-			if atomic.CompareAndSwapPointer(&bkt.head, head, nil) {
+			if bkt.head.CompareAndSwap(head, nil) {
 				bkt.count.Store(0)
-				for node := (*transferSlabNode)(head); node != nil; node = (*transferSlabNode)(node.next) {
+				for node := head; node != nil; node = node.next {
 					mpool.FreeSlice(transferSlabMPool, node.slab)
 				}
 				break

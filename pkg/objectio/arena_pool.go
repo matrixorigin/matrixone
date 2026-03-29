@@ -19,7 +19,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 )
 
 // Arena size tiers.  Small arenas serve flush tasks and sinkers that
@@ -45,12 +44,12 @@ const (
 // arenaNode is a linked-list node for the GC-immune WriteArena free list.
 type arenaNode struct {
 	arena *WriteArena
-	next  unsafe.Pointer // *arenaNode
+	next  *arenaNode
 }
 
 // arenaFreeList is a lock-free stack of WriteArena instances.
 type arenaFreeList struct {
-	head     unsafe.Pointer // *arenaNode
+	head     atomic.Pointer[arenaNode]
 	count    atomic.Int32
 	maxCount int32
 }
@@ -78,7 +77,7 @@ func init() {
 func GetArena(tier int) *WriteArena {
 	pool := &arenaPools[tier]
 	for {
-		head := atomic.LoadPointer(&pool.head)
+		head := pool.head.Load()
 		if head == nil {
 			var initSize, limit int
 			if tier == ArenaSmall {
@@ -92,11 +91,9 @@ func GetArena(tier int) *WriteArena {
 			a.sizeLimit = limit
 			return a
 		}
-		node := (*arenaNode)(head)
-		next := atomic.LoadPointer(&node.next)
-		if atomic.CompareAndSwapPointer(&pool.head, head, next) {
+		if pool.head.CompareAndSwap(head, head.next) {
 			pool.count.Add(-1)
-			return node.arena
+			return head.arena
 		}
 	}
 }
@@ -118,9 +115,9 @@ func PutArena(a *WriteArena) {
 	}
 	node := &arenaNode{arena: a}
 	for {
-		oldHead := atomic.LoadPointer(&pool.head)
+		oldHead := pool.head.Load()
 		node.next = oldHead
-		if atomic.CompareAndSwapPointer(&pool.head, oldHead, unsafe.Pointer(node)) {
+		if pool.head.CompareAndSwap(oldHead, node) {
 			pool.count.Add(1)
 			return
 		}
@@ -158,13 +155,13 @@ func drainArenaPools() {
 	for i := range arenaPools {
 		pool := &arenaPools[i]
 		for {
-			head := atomic.LoadPointer(&pool.head)
+			head := pool.head.Load()
 			if head == nil {
 				break
 			}
-			if atomic.CompareAndSwapPointer(&pool.head, head, nil) {
+			if pool.head.CompareAndSwap(head, nil) {
 				pool.count.Store(0)
-				for node := (*arenaNode)(head); node != nil; node = (*arenaNode)(node.next) {
+				for node := head; node != nil; node = node.next {
 					node.arena.FreeBuffers()
 				}
 				break
