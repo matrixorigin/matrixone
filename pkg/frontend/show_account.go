@@ -84,19 +84,19 @@ const (
 		"		ma.created_time," +
 		"		ma.status," +
 		"		ma.suspended_time," +
-		"		db_counts.db_count," +
-		"		tbl_counts.tbl_count," +
+		"		COALESCE(db_counts.db_count, 0) AS db_count," +
+		"		COALESCE(tbl_counts.tbl_count, 0) AS tbl_count," +
 		"		CAST(0 AS DOUBLE) AS size," +
 		"		CAST(0 AS DOUBLE) AS snapshot_size," +
 		"		ma.comments" +
 		"		%s" + // possible placeholder for object count
 		"	FROM" +
 		"		mo_catalog.mo_account AS ma " +
-		"	JOIN" +
+		"	LEFT JOIN" +
 		"		db_counts " +
 		"	ON " +
 		"		ma.account_id = db_counts.account_id " +
-		"	JOIN" +
+		"	LEFT JOIN" +
 		"		tbl_counts " +
 		"	ON " +
 		"		ma.account_id = tbl_counts.account_id " +
