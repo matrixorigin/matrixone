@@ -557,7 +557,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			)
 		} else if !cache.CanServe(types.TimestampToTS(op.SnapshotTS())) {
 			// not found in cache, try storage
-			logutil.Debug(
+			logutil.Info(
 				"engine.relation.load.from.storage",
 				zap.String("txn", op.Txn().DebugString()),
 				zap.Uint64("table-id", tableId),
@@ -568,7 +568,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 				return "", "", nil, err
 			}
 			if tableName != "" {
-				logutil.Debug(
+				logutil.Info(
 					"engine.relation.resolve.by-id.storage-hit",
 					zap.Uint64("table-id", tableId),
 					zap.Uint32("account-id", accountId),

@@ -127,7 +127,7 @@ func ScanSnapshotWithCurrentRanges(
 		diskBlockCnt = relData.DataCnt()
 	}
 
-	logutil.Debug(
+	logutil.Info(
 		"SnapshotScan-Start",
 		zap.String("caller", caller),
 		zap.Uint64("table-id", tbl.tableId),
@@ -164,7 +164,7 @@ func ScanSnapshotWithCurrentRanges(
 		if err = relData.AttachTombstones(tombstones); err != nil {
 			return err
 		}
-		logutil.Debug(
+		logutil.Info(
 			"SnapshotScan-Parallel-Start",
 			zap.String("caller", caller),
 			zap.Uint64("table-id", tbl.tableId),
@@ -184,7 +184,7 @@ func ScanSnapshotWithCurrentRanges(
 		); err != nil {
 			return err
 		}
-		logutil.Debug(
+		logutil.Info(
 			"SnapshotScan-Parallel-Done",
 			zap.String("caller", caller),
 			zap.Uint64("table-id", tbl.tableId),

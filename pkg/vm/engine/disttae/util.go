@@ -688,11 +688,7 @@ func execReadSql(
 	if disableLog {
 		opts = opts.WithStatementOption(executor.StatementOption{}.WithDisableLog())
 	}
-	result, err := exec.Exec(ctx, sql, opts)
-	if err != nil {
-		return result, err
-	}
-	return result, nil
+	return exec.Exec(ctx, sql, opts)
 }
 
 func fillTsVecForSysTableQueryBatch(bat *batch.Batch, ts types.TS, m *mpool.MPool) error {

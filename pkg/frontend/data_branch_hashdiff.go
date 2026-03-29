@@ -412,7 +412,7 @@ func runLCAProbeWithReaderFallback(
 		acceptedRowCnt  int
 		duplicateRows   int
 	)
-	logutil.Debug(
+	logutil.Info(
 		"DataBranch-LCA-ReaderFallback-ScanStart",
 		zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
 		zap.String("table-name", lcaTblDef.Name),
@@ -507,7 +507,7 @@ func runLCAProbeWithReaderFallback(
 	if err != nil {
 		return executor.Result{}, err
 	}
-	logutil.Debug(
+	logutil.Info(
 		"DataBranch-LCA-ReaderFallback-ScanDone",
 		zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
 		zap.String("table-name", lcaTblDef.Name),
@@ -577,7 +577,7 @@ func runLCAProbeWithReaderFallback(
 	out.SetRowCount(rowCount)
 	sqlRet.Batches = []*batch.Batch{out}
 	outputCost = time.Since(outputStart)
-	logutil.Debug(
+	logutil.Info(
 		"DataBranch-LCA-ReaderFallback-Output",
 		zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
 		zap.String("table-name", lcaTblDef.Name),

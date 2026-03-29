@@ -1189,7 +1189,7 @@ func (p *baseHandle) resolveVisibleObjectsByDeleteChain(
 		return resolved[i].CreateTime.LT(&resolved[j].CreateTime)
 	})
 	if missingCnt > 0 || orphanCnt > 0 {
-		logutil.Debug(
+		logutil.Info(
 			"ChangesHandle-DeleteChain resolved visible objects",
 			zap.String("kind", kind),
 			zap.Bool("tombstone", isTombstone),
@@ -1423,7 +1423,7 @@ func NewChangesHandlerWithPartitionStateRange(
 ) (changeHandle *ChangeHandler, err error) {
 	stateStart := state.GetStart()
 	if stateStart.GT(&start) {
-		logutil.Debug("ChangesHandlerWithPartitionStateRange: stateStart > start, proceeding with range-aware scan",
+		logutil.Info("ChangesHandlerWithPartitionStateRange: stateStart > start, proceeding with range-aware scan",
 			zap.String("stateStart", stateStart.ToString()),
 			zap.String("start", start.ToString()),
 			zap.String("end", end.ToString()),

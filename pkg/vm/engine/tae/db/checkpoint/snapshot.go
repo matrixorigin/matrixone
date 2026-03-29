@@ -16,7 +16,6 @@ package checkpoint
 
 import (
 	"context"
-	"fmt"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -24,9 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"go.uber.org/zap"
 )
 
 // `files` should be sorted by the end-ts in the asc order
@@ -150,7 +147,6 @@ func ListSnapshotCheckpoint(
 		ctx, sid, selectedFiles, fs,
 		&snapshot,
 	)
-	logSnapshotCheckpointSelection(snapshot, metaFiles, compactedFiles, selectedFiles, entries, err)
 	return entries, err
 }
 
@@ -257,64 +253,4 @@ func filterSnapshotEntries(entries []*CheckpointEntry, snapshot *types.TS) []*Ch
 	}
 
 	return entries
-}
-
-func logSnapshotCheckpointSelection(
-	snapshot types.TS,
-	metaFiles []ioutil.TSRangeFile,
-	compactedFiles []ioutil.TSRangeFile,
-	selectedFiles []ioutil.TSRangeFile,
-	entries []*CheckpointEntry,
-	err error,
-) {
-	fields := []zap.Field{
-		zap.String("snapshot-ts", snapshot.ToString()),
-		zap.Int("meta-file-cnt", len(metaFiles)),
-		zap.Strings("meta-files", summarizeTSRangeFiles(metaFiles, 12)),
-		zap.Int("compacted-file-cnt", len(compactedFiles)),
-		zap.Strings("compacted-files", summarizeTSRangeFiles(compactedFiles, 12)),
-		zap.Int("selected-file-cnt", len(selectedFiles)),
-		zap.Strings("selected-files", summarizeTSRangeFiles(selectedFiles, 12)),
-		zap.Int("entry-cnt", len(entries)),
-		zap.Strings("entries", summarizeCheckpointEntries(entries, 12)),
-	}
-	if err != nil {
-		fields = append(fields, zap.NamedError("error", err))
-	}
-	logutil.Info("Checkpoint-Snapshot-Selection", fields...)
-}
-
-func summarizeTSRangeFiles(files []ioutil.TSRangeFile, limit int) []string {
-	summaries := make([]string, 0, min(limit, len(files)))
-	for i, file := range files {
-		if i >= limit {
-			break
-		}
-		summaries = append(
-			summaries,
-			fmt.Sprintf("%s..%s/%s", file.GetStart().ToString(), file.GetEnd().ToString(), file.GetCKPFullName()),
-		)
-	}
-	return summaries
-}
-
-func summarizeCheckpointEntries(entries []*CheckpointEntry, limit int) []string {
-	summaries := make([]string, 0, min(limit, len(entries)))
-	for i, entry := range entries {
-		if i >= limit || entry == nil {
-			break
-		}
-		summaries = append(
-			summaries,
-			fmt.Sprintf(
-				"%s..%s/type=%d/ver=%d/loc=%s",
-				entry.GetStart().ToString(),
-				entry.GetEnd().ToString(),
-				entry.GetType(),
-				entry.GetVersion(),
-				entry.GetLocation().String(),
-			),
-		)
-	}
-	return summaries
 }

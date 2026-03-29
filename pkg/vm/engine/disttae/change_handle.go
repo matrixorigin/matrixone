@@ -363,7 +363,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		}
 	}
 
-	logutil.Debug("ChangesHandle-Split request snapshot read",
+	logutil.Info("ChangesHandle-Split request snapshot read",
 		zap.String("from", nextFrom.ToString()),
 	)
 	if h.snapshotReadPolicy == engine.SnapshotReadPolicyVisibleState {
@@ -405,7 +405,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		return
 	}
 	if nextFrom.LT(&minTS) || nextFrom.GT(&maxTS) {
-		logutil.Debug("ChangesHandle-Split stale read",
+		logutil.Info("ChangesHandle-Split stale read",
 			zap.Uint64("table-id", h.tbl.tableId),
 			zap.String("nextFrom", nextFrom.ToString()),
 			zap.String("stateStart", stateStart.ToString()),
