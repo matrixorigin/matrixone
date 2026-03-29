@@ -258,7 +258,6 @@ func (h *PartitionChangesHandle) loadCheckpointEntries(
 	}
 	checkpointEntries = make([]*checkpoint.CheckpointEntry, 0, len(resp.Entries))
 	for _, entry := range resp.Entries {
-		logutil.Debug("ChangesHandle-Split-CheckpointEntry", zap.String("entry", entry.String()))
 		start := types.TimestampToTS(*entry.Start)
 		end := types.TimestampToTS(*entry.End)
 		if start.LT(&minTS) {
@@ -300,13 +299,6 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 			if err != nil {
 				return
 			}
-			logutil.Debug("ChangesHandle-Split change handles",
-				zap.String("from", h.fromTs.ToString()),
-				zap.String("to", h.toTs.ToString()),
-				zap.String("ps from", h.currentPSFrom.ToString()),
-				zap.String("ps to", h.currentPSTo.ToString()),
-				zap.Int("handle idx", h.handleIdx),
-			)
 		}
 		h.handleIdx++
 		h.currentChangeHandle, err = NewPartitionStateChangesHandler(
@@ -342,19 +334,9 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		}
 	}
 
-	logutil.Info("ChangesHandle-Split request snapshot read",
-		zap.String("from", nextFrom.ToString()),
-	)
 	if h.snapshotReadPolicy == engine.SnapshotReadPolicyVisibleState {
 		h.currentPSFrom = nextFrom
 		h.currentPSTo = h.toTs
-		logutil.Debug("ChangesHandle-Split change handles",
-			zap.String("from", h.fromTs.ToString()),
-			zap.String("to", h.toTs.ToString()),
-			zap.String("ps from", h.currentPSFrom.ToString()),
-			zap.String("ps to", h.currentPSTo.ToString()),
-			zap.Int("handle idx", h.handleIdx),
-		)
 		h.handleIdx++
 		snapshotRangeStart := time.Now()
 		if err = h.swapCurrentHandleToSnapshotStateRange(ctx); err != nil {
@@ -377,8 +359,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 	}
 
 	var checkpointEntries []*checkpoint.CheckpointEntry
-	minTS := types.MaxTs()
-	maxTS := types.TS{}
+	var minTS, maxTS types.TS
 	checkpointEntries, minTS, maxTS, err = h.loadCheckpointEntries(ctx, nextFrom)
 	if err != nil {
 		return
@@ -401,13 +382,6 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 	if h.toTs.LT(&maxTS) {
 		h.currentPSTo = h.toTs
 	}
-	logutil.Debug("ChangesHandle-Split change handles",
-		zap.String("from", h.fromTs.ToString()),
-		zap.String("to", h.toTs.ToString()),
-		zap.String("ps from", h.currentPSFrom.ToString()),
-		zap.String("ps to", h.currentPSTo.ToString()),
-		zap.Int("handle idx", h.handleIdx),
-	)
 	h.handleIdx++
 	err = h.closeCurrentChangeHandle()
 	if err != nil {

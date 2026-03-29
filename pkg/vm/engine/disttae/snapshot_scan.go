@@ -253,7 +253,6 @@ func scanSnapshotShardsParallel(
 		if shard == nil || shard.DataCnt() == 0 {
 			continue
 		}
-		shard := shard
 		wg.Add(1)
 		if err := pool.Submit(func() {
 			defer wg.Done()

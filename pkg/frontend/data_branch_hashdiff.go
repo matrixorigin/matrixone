@@ -188,21 +188,6 @@ func handleDelsOnLCA(
 		}
 		sqlBuf.WriteString(" order by pks.__idx_")
 
-		sqlPreview := sqlBuf.String()
-		if len(sqlPreview) > 512 {
-			sqlPreview = sqlPreview[:512]
-		}
-		logutil.Debug(
-			"DataBranch-LCA-SQL-Start",
-			zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
-			zap.String("db-name", lcaTblDef.DbName),
-			zap.String("table-name", lcaTblDef.Name),
-			zap.Int("input-pk-rows", tBat.RowCount()),
-			zap.String("snapshot-ts", snapshotTS.ToString()),
-			zap.Int("sql-len", sqlBuf.Len()),
-			zap.String("sql-preview", sqlPreview),
-		)
-
 		if sqlRet, err = runSql(ctx, ses, bh, sqlBuf.String(), nil, nil); err != nil {
 			logutil.Error(
 				"DataBranch-LCA-SQL-Error",
@@ -250,16 +235,6 @@ func handleDelsOnLCA(
 		}
 	}
 
-	if forceReaderProbe {
-		logutil.Debug(
-			"DataBranch-LCA-ReaderProbe-Direct",
-			zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
-			zap.String("table-name", lcaTblDef.Name),
-			zap.Int("input-pk-rows", tBat.RowCount()),
-			zap.String("snapshot-ts", snapshotTS.ToString()),
-		)
-	}
-
 	notExist := func(cols []*vector.Vector, r int) bool {
 		exist := false
 		for _, col := range cols {
@@ -276,20 +251,14 @@ func handleDelsOnLCA(
 	endIdx := dBat.VectorCount() - 1
 
 	sels := make([]int64, 0, 100)
-	joinedRows := 0
-	lcaHitRows := 0
-	lcaMissRows := 0
 	sqlRet.ReadRows(func(rowCnt int, cols []*vector.Vector) bool {
-		joinedRows += rowCnt
 		for i := range rowCnt {
 			if notExist(cols[1:], i) {
 				idx := vector.GetFixedAtNoTypeCheck[int64](cols[0], i)
 				sels = append(sels, int64(idx))
-				lcaMissRows++
 				continue
 			}
 
-			lcaHitRows++
 			for j := 1; j < len(cols); j++ {
 				if err = dBat.Vecs[j-1].UnionOne(cols[j], int64(i), ses.proc.Mp()); err != nil {
 					return false
@@ -314,16 +283,6 @@ func handleDelsOnLCA(
 	})
 
 	sqlRet.Close()
-	logutil.Debug(
-		"DataBranch-LCA-Join-Result",
-		zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
-		zap.String("table-name", lcaTblDef.Name),
-		zap.Int("joined-rows", joinedRows),
-		zap.Int("lca-hit-rows", lcaHitRows),
-		zap.Int("lca-miss-rows", lcaMissRows),
-		zap.Int("delete-candidate-rows", len(sels)),
-		zap.Int("output-dbat-rows", dBat.RowCount()),
-	)
 
 	if len(sels) == 0 {
 		tBat.Vecs[0].CleanOnlyData()
@@ -332,13 +291,6 @@ func handleDelsOnLCA(
 		tBat.Vecs[0].Shrink(sels, false)
 		tBat.SetRowCount(tBat.Vecs[0].Length())
 	}
-	logutil.Debug(
-		"DataBranch-LCA-PostProcess-Done",
-		zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
-		zap.String("table-name", lcaTblDef.Name),
-		zap.Int("remaining-tbat-rows", tBat.RowCount()),
-		zap.Int("remaining-dbat-rows", dBat.RowCount()),
-	)
 
 	return
 }
@@ -383,8 +335,7 @@ func runLCAProbeWithReaderFallback(
 	)
 	inputKeys := make(map[string]struct{}, rowCount)
 	for i := 0; i < rowCount; i++ {
-		key := string(pkVec.GetRawBytesAt(i))
-		inputKeys[key] = struct{}{}
+		inputKeys[string(pkVec.GetRawBytesAt(i))] = struct{}{}
 	}
 	lcaTblDef := tblStuff.lcaRel.GetTableDef(ctx)
 	// Build a sorted IN vector for reader-side PK filtering.
@@ -536,8 +487,7 @@ func runLCAProbeWithReaderFallback(
 	hasAnyHit := false
 	for i := 0; i < rowCount; i++ {
 		orderedIdx[i] = int64(i)
-		key := string(pkVec.GetRawBytesAt(i))
-		if rowIdx, ok := tmpRowByKey[key]; ok {
+		if rowIdx, ok := tmpRowByKey[string(pkVec.GetRawBytesAt(i))]; ok {
 			sels[i] = int64(rowIdx)
 			hasAnyHit = true
 		} else {
@@ -631,21 +581,18 @@ func hashDiff(
 			tarTombstoneHashmap.Close()
 		}
 
-		fields := []zap.Field{
-			zap.Int("base-handle-cnt", len(baseHandle)),
-			zap.Int("target-handle-cnt", len(tarHandle)),
-			zap.Int("lca-type", dagInfo.lcaType),
-			zap.Duration("build-base-cost", buildBaseCost),
-			zap.Duration("build-target-cost", buildTargetCost),
-			zap.Duration("diff-cost", diffCost),
-			zap.Duration("total-cost", time.Since(start)),
-		}
 		if err != nil {
-			fields = append(fields, zap.Error(err))
-			logutil.Warn("DataBranch-HashDiff-Error", fields...)
-			return
+			logutil.Warn("DataBranch-HashDiff-Error",
+				zap.Int("base-handle-cnt", len(baseHandle)),
+				zap.Int("target-handle-cnt", len(tarHandle)),
+				zap.Int("lca-type", dagInfo.lcaType),
+				zap.Duration("build-base-cost", buildBaseCost),
+				zap.Duration("build-target-cost", buildTargetCost),
+				zap.Duration("diff-cost", diffCost),
+				zap.Duration("total-cost", time.Since(start)),
+				zap.Error(err),
+			)
 		}
-		logutil.Info("DataBranch-HashDiff-Done", fields...)
 	}()
 
 	buildBaseStart := time.Now()
@@ -1689,32 +1636,13 @@ func buildHashmapForTable(
 			tombstoneBat.Clean(mp)
 		}
 
-		fields := []zap.Field{
-			zap.String("side", side),
-			zap.Int("handle-cnt", len(handles)),
-			zap.Int64("data-row-cnt", totalRows),
-			zap.Int64("data-bytes", totalBytes),
-			zap.Int64("tombstone-row-cnt", totalTombstoneRows),
-			zap.Duration("duration", time.Since(start)),
-		}
-		if dataHashmap != nil {
-			fields = append(fields,
-				zap.Int64("data-item-cnt", dataHashmap.ItemCount()),
-				zap.Int("data-shard-cnt", dataHashmap.ShardCount()),
-			)
-		}
-		if tombstoneHashmap != nil {
-			fields = append(fields,
-				zap.Int64("tombstone-item-cnt", tombstoneHashmap.ItemCount()),
-				zap.Int("tombstone-shard-cnt", tombstoneHashmap.ShardCount()),
-			)
-		}
 		if err != nil {
-			fields = append(fields, zap.Error(err))
-			logutil.Warn("DataBranch-Hashmap-Build-Error", fields...)
-			return
+			logutil.Warn("DataBranch-Hashmap-Build-Error",
+				zap.String("side", side),
+				zap.Duration("duration", time.Since(start)),
+				zap.Error(err),
+			)
 		}
-		logutil.Info("DataBranch-Hashmap-Build-Done", fields...)
 	}()
 
 	if dataHashmap, err = databranchutils.NewBranchHashmap(

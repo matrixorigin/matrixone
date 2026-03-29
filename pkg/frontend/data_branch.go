@@ -1046,11 +1046,6 @@ func getRelationById(
 		snapshotStr = types.TimestampToTS(*snapshot.TS).ToString()
 	}
 
-	logutil.Info(
-		"DataBranch-GetRelationByID-Start",
-		zap.Uint64("table-id", tableId),
-		zap.String("snapshot-ts", snapshotStr),
-	)
 	_, _, rel, err = ses.GetTxnHandler().GetStorage().GetRelationById(ctx, txnOp, tableId)
 	if err != nil {
 		logutil.Error(
@@ -1061,15 +1056,6 @@ func getRelationById(
 			zap.Error(err),
 		)
 		return nil, err
-	}
-	if rel != nil {
-		logutil.Info(
-			"DataBranch-GetRelationByID-Done",
-			zap.Uint64("table-id", tableId),
-			zap.String("table-name", rel.GetTableName()),
-			zap.String("db-name", rel.GetTableDef(ctx).DbName),
-			zap.String("snapshot-ts", snapshotStr),
-		)
 	}
 	return rel, err
 }
@@ -1142,16 +1128,6 @@ func getRelations(
 	if baseSnap != nil && baseSnap.TS != nil {
 		baseSnapStr = types.TimestampToTS(*baseSnap.TS).ToString()
 	}
-	logutil.Info(
-		"DataBranch-GetRelations-Start",
-		zap.String("target-db", tarDBName),
-		zap.String("target-table", tarTblName),
-		zap.String("target-snapshot-ts", tarSnapStr),
-		zap.String("base-db", baseDBName),
-		zap.String("base-table", baseTblName),
-		zap.String("base-snapshot-ts", baseSnapStr),
-	)
-
 	eng := ses.proc.GetSessionInfo().StorageEngine
 	if tarDB, err = eng.Database(ctx, tarDBName, txnOpA); err != nil {
 		logutil.Error(
@@ -1199,14 +1175,6 @@ func getRelations(
 		return
 	}
 
-	logutil.Info(
-		"DataBranch-GetRelations-Done",
-		zap.Uint64("target-table-id", tarRel.GetTableID(ctx)),
-		zap.Uint64("base-table-id", baseRel.GetTableID(ctx)),
-		zap.String("target-db", tarRel.GetTableDef(ctx).DbName),
-		zap.String("base-db", baseRel.GetTableDef(ctx).DbName),
-	)
-
 	return
 }
 
@@ -1229,17 +1197,14 @@ func constructChangeHandle(
 	)
 
 	defer func() {
-		fields := []zap.Field{
-			zap.Int("target-handle-cnt", len(tarHandle)),
-			zap.Int("base-handle-cnt", len(baseHandle)),
-			zap.Duration("duration", time.Since(start)),
-		}
 		if err != nil {
-			fields = append(fields, zap.Error(err))
-			logutil.Warn("DataBranch-ConstructChangeHandle-Error", fields...)
-			return
+			logutil.Warn("DataBranch-ConstructChangeHandle-Error",
+				zap.Int("target-handle-cnt", len(tarHandle)),
+				zap.Int("base-handle-cnt", len(baseHandle)),
+				zap.Duration("duration", time.Since(start)),
+				zap.Error(err),
+			)
 		}
-		logutil.Info("DataBranch-ConstructChangeHandle-Done", fields...)
 	}()
 
 	if tarRange, baseRange, err = decideCollectRange(
@@ -1248,7 +1213,6 @@ func constructChangeHandle(
 		return
 	}
 	for i := range tarRange.rel {
-		collectStart := time.Now()
 		if handle, err = databranchutils.CollectChanges(
 			ctx,
 			tarRange.rel[i],
@@ -1258,14 +1222,6 @@ func constructChangeHandle(
 		); err != nil {
 			return
 		}
-		logutil.Info("DataBranch-CollectChanges-Open",
-			zap.String("side", "target"),
-			zap.Uint64("table-id", tarRange.rel[i].GetTableID(ctx)),
-			zap.String("from", tarRange.from[i].ToString()),
-			zap.String("to", tarRange.end[i].ToString()),
-			zap.Bool("has-handle", handle != nil),
-			zap.Duration("duration", time.Since(collectStart)),
-		)
 
 		if handle != nil {
 			tarHandle = append(tarHandle, handle)
@@ -1273,7 +1229,6 @@ func constructChangeHandle(
 	}
 
 	for i := range baseRange.rel {
-		collectStart := time.Now()
 		if handle, err = databranchutils.CollectChanges(
 			ctx,
 			baseRange.rel[i],
@@ -1283,14 +1238,6 @@ func constructChangeHandle(
 		); err != nil {
 			return
 		}
-		logutil.Info("DataBranch-CollectChanges-Open",
-			zap.String("side", "base"),
-			zap.Uint64("table-id", baseRange.rel[i].GetTableID(ctx)),
-			zap.String("from", baseRange.from[i].ToString()),
-			zap.String("to", baseRange.end[i].ToString()),
-			zap.Bool("has-handle", handle != nil),
-			zap.Duration("duration", time.Since(collectStart)),
-		)
 
 		if handle != nil {
 			baseHandle = append(baseHandle, handle)
@@ -1557,14 +1504,6 @@ func getTablesCreationCommitTS(
 		collectStart := time.Now()
 		ts, err := getTableCreationCommitTSByCollectChanges(ctx, ses, tableID, snap)
 		if err == nil {
-			logutil.Info("DataBranch-TableCTS-Resolve-Done",
-				zap.Uint64("table-id", tableID),
-				zap.String("snapshot", snap.ToString()),
-				zap.String("path", "CollectChanges"),
-				zap.String("commit-ts", ts.ToString()),
-				zap.Duration("collectchanges-cost", time.Since(collectStart)),
-				zap.Duration("total-cost", time.Since(totalStart)),
-			)
 			return ts, nil
 		}
 		collectCost := time.Since(collectStart)
@@ -1582,14 +1521,6 @@ func getTablesCreationCommitTS(
 		eng := ses.GetTxnHandler().GetStorage()
 		ts, ccErr := disttae.GetTableCreationCommitTSFromCatalogCache(eng, tableID)
 		if ccErr == nil {
-			logutil.Info("DataBranch-TableCTS-Resolve-Done",
-				zap.Uint64("table-id", tableID),
-				zap.String("snapshot", snap.ToString()),
-				zap.String("path", "CatalogCache"),
-				zap.String("commit-ts", ts.ToString()),
-				zap.Duration("collectchanges-cost", collectCost),
-				zap.Duration("total-cost", time.Since(totalStart)),
-			)
 			return ts, nil
 		}
 		logutil.Warn("DataBranch-TableCTS-Resolve-Error",
@@ -1626,32 +1557,10 @@ func getTableCreationCommitTSByCollectChanges(
 	storage := ses.GetTxnHandler().GetStorage()
 	txnOp := ses.GetTxnHandler().GetTxn()
 	mp := ses.proc.Mp()
-	start := time.Now()
 	var (
-		found             bool
-		result            types.TS
-		dataBatchCnt      int
-		dataRowCnt        int
-		tombstoneBatchCnt int
-		tombstoneRowCnt   int
+		found  bool
+		result types.TS
 	)
-
-	defer func() {
-		fields := []zap.Field{
-			zap.Uint64("table-id", tableID),
-			zap.String("snapshot", snapshotTS.ToString()),
-			zap.Bool("found", found),
-			zap.Int("data-batch-cnt", dataBatchCnt),
-			zap.Int("data-row-cnt", dataRowCnt),
-			zap.Int("tombstone-batch-cnt", tombstoneBatchCnt),
-			zap.Int("tombstone-row-cnt", tombstoneRowCnt),
-			zap.Duration("duration", time.Since(start)),
-		}
-		if found {
-			fields = append(fields, zap.String("commit-ts", result.ToString()))
-		}
-		logutil.Info("DataBranch-TableCTS-CollectChanges-Done", fields...)
-	}()
 
 	_, _, rel, err := storage.GetRelationById(ctx, txnOp, catalog.MO_TABLES_ID)
 	if err != nil {
@@ -1673,15 +1582,11 @@ func getTableCreationCommitTSByCollectChanges(
 			break
 		}
 		if tombstone != nil {
-			tombstoneBatchCnt++
-			tombstoneRowCnt += tombstone.RowCount()
 			tombstone.Clean(mp)
 		}
 		if data == nil {
 			continue
 		}
-		dataBatchCnt++
-		dataRowCnt += data.RowCount()
 
 		relIDIdx, commitTSIdx := locateColumnsInChangeBatch(data)
 		if relIDIdx >= len(data.Vecs) || commitTSIdx >= len(data.Vecs) {

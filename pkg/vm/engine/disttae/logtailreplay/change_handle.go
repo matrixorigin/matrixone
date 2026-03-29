@@ -368,16 +368,10 @@ type aobjBlockPlan struct {
 	noCommitTSColumn bool // object has no per-row commit-ts column
 	shouldReadByBlks []bool
 	totalBlocks      int
-	evaluableBlocks  int
-	overlapBlocks    int
 	prunedBlocks     int
 	// nonEvaluableReasons counts why a block cannot be pruned by commit-ts
 	// zonemap, for example missing metadata or unsupported tail column type.
 	nonEvaluableReasons map[string]int
-	// nonEvaluableSamples stores a few representative block-level diagnostics.
-	nonEvaluableSamples []string
-	// evaluableSamples stores a few representative successful evaluations.
-	evaluableSamples []string
 }
 
 func NewAObjectHandle(ctx context.Context, p *baseHandle, isTombstone bool, start, end types.TS, objects []*objectio.ObjectEntry, fs fileservice.FileService, mp *mpool.MPool) *AObjectHandle {
@@ -467,21 +461,6 @@ func (h *AObjectHandle) shouldReadBlock(
 	}
 	if !plan.evaluable {
 		if changes.strictCommitTSBlockPrune {
-			logutil.Warn(
-				"ChangesHandle-CommitTSBlockPlan strict fallback",
-				zap.String("object", obj.ObjectShortName().ShortString()),
-				zap.Bool("tombstone", h.isTombstone),
-				zap.String("start", h.start.ToString()),
-				zap.String("end", h.end.ToString()),
-				zap.Int("total-blocks", plan.totalBlocks),
-				zap.Int("evaluable-blocks", plan.evaluableBlocks),
-				zap.Int("overlap-blocks", plan.overlapBlocks),
-				zap.Int("pruned-blocks", plan.prunedBlocks),
-				zap.Float64("prune-rate", calcPruneRate(plan.prunedBlocks, plan.totalBlocks)),
-				zap.Any("non-evaluable-reasons", plan.nonEvaluableReasons),
-				zap.Strings("non-evaluable-samples", plan.nonEvaluableSamples),
-				zap.Strings("evaluable-samples", plan.evaluableSamples),
-			)
 			return false, moerr.NewFileNotFoundNoCtx(obj.ObjectName().String())
 		}
 		return true, nil
@@ -501,12 +480,8 @@ func (h *AObjectHandle) buildBlockPlan(
 	plan.evaluable = false
 	plan.shouldReadByBlks = make([]bool, int(obj.BlkCnt()))
 	plan.totalBlocks = int(obj.BlkCnt())
-	plan.evaluableBlocks = 0
-	plan.overlapBlocks = 0
 	plan.prunedBlocks = 0
 	plan.nonEvaluableReasons = make(map[string]int, 4)
-	plan.nonEvaluableSamples = make([]string, 0, 5)
-	plan.evaluableSamples = make([]string, 0, 5)
 	for i := range plan.shouldReadByBlks {
 		plan.shouldReadByBlks[i] = true
 	}
@@ -524,40 +499,24 @@ func (h *AObjectHandle) buildBlockPlan(
 	}
 	dataMeta := meta.MustGetMeta(objectio.SchemaData)
 	evaluableBlockCnt := 0
-	overlapBlockCnt := 0
 	for i := uint16(0); i < uint16(obj.BlkCnt()); i++ {
 		blk := dataMeta.GetBlockMeta(uint32(i))
-		overlap, evaluable, reason, detail := blockCommitTSOverlapsRange(blk, h.start, h.end)
+		overlap, evaluable, reason, _ := blockCommitTSOverlapsRange(blk, h.start, h.end)
 		if !evaluable {
 			// Keep non-evaluable blocks as "read=true" (default). We can still
 			// preserve correctness by row-wise commit-ts filtering after read.
 			plan.nonEvaluableReasons[reason]++
-			if len(plan.nonEvaluableSamples) < 5 {
-				plan.nonEvaluableSamples = append(
-					plan.nonEvaluableSamples,
-					fmt.Sprintf("blk=%d reason=%s %s", i, reason, detail),
-				)
-			}
 			continue
 		}
 		evaluableBlockCnt++
 		plan.shouldReadByBlks[i] = overlap
-		if overlap {
-			overlapBlockCnt++
-		} else {
+		if !overlap {
 			plan.prunedBlocks++
-		}
-		if len(plan.evaluableSamples) < 5 {
-			plan.evaluableSamples = append(
-				plan.evaluableSamples,
-				fmt.Sprintf("blk=%d overlap=%t %s", i, overlap, detail),
-			)
 		}
 	}
 	// "evaluable" here means at least one block exposes usable commit-ts zonemap.
 	// If none does, strict mode can still choose the exact-scan fallback path.
 	plan.evaluable = evaluableBlockCnt > 0
-	plan.evaluableBlocks = evaluableBlockCnt
 
 	// Detect objects without per-row commit-ts column (e.g. TN non-appendable
 	// compacted from CN objects).  If ALL non-evaluable blocks fail with
@@ -568,33 +527,6 @@ func (h *AObjectHandle) buildBlockPlan(
 		if noTSCnt == plan.totalBlocks {
 			plan.noCommitTSColumn = true
 		}
-	}
-	plan.overlapBlocks = overlapBlockCnt
-	if evaluableBlockCnt == 0 {
-		logutil.Warn(
-			"ChangesHandle-CommitTSBlockPlan no evaluable blocks",
-			zap.String("object", obj.ObjectShortName().ShortString()),
-			zap.Bool("tombstone", h.isTombstone),
-			zap.String("start", h.start.ToString()),
-			zap.String("end", h.end.ToString()),
-			zap.Int("total-blocks", plan.totalBlocks),
-			zap.Any("non-evaluable-reasons", plan.nonEvaluableReasons),
-			zap.Strings("non-evaluable-samples", plan.nonEvaluableSamples),
-		)
-	} else {
-		logutil.Info(
-			"ChangesHandle-CommitTSBlockPlan summary",
-			zap.String("object", obj.ObjectShortName().ShortString()),
-			zap.Bool("tombstone", h.isTombstone),
-			zap.Int("total-blocks", plan.totalBlocks),
-			zap.Int("evaluable-blocks", plan.evaluableBlocks),
-			zap.Int("overlap-blocks", plan.overlapBlocks),
-			zap.Int("pruned-blocks", plan.prunedBlocks),
-			zap.Float64("prune-rate", calcPruneRate(plan.prunedBlocks, plan.totalBlocks)),
-			zap.Any("non-evaluable-reasons", plan.nonEvaluableReasons),
-			zap.Strings("non-evaluable-samples", plan.nonEvaluableSamples),
-			zap.Strings("evaluable-samples", plan.evaluableSamples),
-		)
 	}
 	return nil
 }
@@ -642,13 +574,6 @@ func blockCommitTSOverlapsRange(
 		return false, true, "", detail
 	}
 	return true, true, "", detail
-}
-
-func calcPruneRate(pruned, total int) float64 {
-	if total <= 0 {
-		return 0
-	}
-	return float64(pruned) / float64(total)
 }
 
 func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
@@ -1511,14 +1436,6 @@ func NewChangesHandlerWithPartitionStateRange(
 		changeHandle.dataHandle.aobjHandle.objects,
 		changeHandle.dataHandle.cnObjectHandle.objects,
 	)
-	logRangeReplaySelection(
-		start,
-		end,
-		changeHandle.dataHandle.aobjHandle.objects,
-		changeHandle.dataHandle.cnObjectHandle.objects,
-		changeHandle.tombstoneHandle.aobjHandle.objects,
-		changeHandle.tombstoneHandle.cnObjectHandle.objects,
-	)
 	return changeHandle, nil
 }
 
@@ -1592,38 +1509,8 @@ func newChangesHandlerWithCheckpointEntries(
 	}
 	if selection == checkpointObjectSelectionRange {
 		changeHandle.tombstoneHandle.fillInSkipTSFromObjects(start, end, dataAobj, dataCNObj)
-		logRangeReplaySelection(start, end, dataAobj, dataCNObj, tombstoneAobj, tombstoneCNObj)
 	}
 	return changeHandle, nil
-}
-
-func logRangeReplaySelection(
-	start, end types.TS,
-	dataAobj, dataCNObj, tombstoneAobj, tombstoneCNObj []*objectio.ObjectEntry,
-) {
-	sumRows := func(entries []*objectio.ObjectEntry) int {
-		total := 0
-		for _, entry := range entries {
-			if entry == nil {
-				continue
-			}
-			total += int(entry.Rows())
-		}
-		return total
-	}
-	logutil.Info(
-		"ChangesHandle-RangeReplaySelection",
-		zap.String("start", start.ToString()),
-		zap.String("end", end.ToString()),
-		zap.Int("data-aobj-count", len(dataAobj)),
-		zap.Int("data-aobj-rows", sumRows(dataAobj)),
-		zap.Int("data-cnobj-count", len(dataCNObj)),
-		zap.Int("data-cnobj-rows", sumRows(dataCNObj)),
-		zap.Int("tombstone-aobj-count", len(tombstoneAobj)),
-		zap.Int("tombstone-aobj-rows", sumRows(tombstoneAobj)),
-		zap.Int("tombstone-cnobj-count", len(tombstoneCNObj)),
-		zap.Int("tombstone-cnobj-rows", sumRows(tombstoneCNObj)),
-	)
 }
 
 func getObjectsFromCheckpointEntries(

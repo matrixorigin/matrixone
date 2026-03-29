@@ -547,15 +547,6 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 		if cacheItem != nil {
 			tableName = cacheItem.Name
 			dbName = cacheItem.DatabaseName
-			logutil.Debug(
-				"engine.relation.resolve.by-id.cache-hit",
-				zap.Uint64("table-id", tableId),
-				zap.Uint32("account-id", accountId),
-				zap.String("db-name", dbName),
-				zap.String("table-name", tableName),
-				zap.String("snapshot-ts", types.TimestampToTS(op.SnapshotTS()).ToString()),
-				zap.String("txn", op.Txn().DebugString()),
-			)
 		} else if !cache.CanServe(types.TimestampToTS(op.SnapshotTS())) {
 			// not found in cache, try storage
 			logutil.Info(
