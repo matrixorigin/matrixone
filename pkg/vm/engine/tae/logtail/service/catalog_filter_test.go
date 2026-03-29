@@ -92,17 +92,19 @@ func TestSessionPrepareLazyCatalogPublishWrapsFiltersCatalogRowsByAccount(t *tes
 func TestFilterLazyCatalogSubscribeRowsInTailCopiesMixedInsertEntry(t *testing.T) {
 	filtered, closeCB, err := filterLazyCatalogSubscribeRowsInTail(logtail.TableLogtail{
 		Table:       &api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: catalog.MO_COLUMNS_ID},
-		CkpLocation: "ckp:should-be-stripped",
+		CkpLocation: "ckp:should-be-preserved",
 		Commands: []api.Entry{
 			mustCatalogColumnInsertEntry(t, []uint32{0, 10, 20}),
 		},
-	}, &lazyCatalogAllowedAccounts{accounts: map[uint32]struct{}{10: {}}})
+	}, &lazyCatalogAllowedAccounts{accounts: map[uint32]struct{}{10: {}}}, false)
 	require.NoError(t, err)
 	require.NotNil(t, closeCB)
 	if closeCB != nil {
 		t.Cleanup(closeCB)
 	}
-	require.Empty(t, filtered.CkpLocation)
+	// CkpLocation is preserved so the CN can load checkpoint data into
+	// partition state; account filtering happens at the SQL replay layer.
+	require.Equal(t, "ckp:should-be-preserved", filtered.CkpLocation)
 	require.Len(t, filtered.Commands, 1)
 	require.Equal(t, []uint32{10}, mustAccountIDsFromEntry(t, filtered.Commands[0]))
 }
@@ -142,7 +144,7 @@ func TestFilterLazyCatalogSubscribeRowsInTailUsesCPKeyForDelete(t *testing.T) {
 		Commands: []api.Entry{
 			mustCatalogTableDeleteEntry(t, []uint32{0, 10}),
 		},
-	}, &lazyCatalogAllowedAccounts{accounts: map[uint32]struct{}{10: {}}})
+	}, &lazyCatalogAllowedAccounts{accounts: map[uint32]struct{}{10: {}}}, false)
 	require.NoError(t, err)
 	require.NotNil(t, closeCB)
 	if closeCB != nil {
@@ -150,6 +152,58 @@ func TestFilterLazyCatalogSubscribeRowsInTailUsesCPKeyForDelete(t *testing.T) {
 	}
 	require.Len(t, filtered.Commands, 1)
 	require.Equal(t, []uint32{10}, mustCPKeyAccountsFromEntry(t, filtered.Commands[0]))
+}
+
+func TestFilterLazyCatalogActivationStripsObjectMetaEntries(t *testing.T) {
+	rowEntry := mustCatalogColumnInsertEntry(t, []uint32{10})
+	// Override table ID to mo_tables for this test.
+	rowEntry.TableId = catalog.MO_TABLES_ID
+	objEntry := api.Entry{
+		EntryType:    api.Entry_DataObject,
+		TableId:      catalog.MO_TABLES_ID,
+		DatabaseId:   catalog.MO_CATALOG_ID,
+		TableName:    "mo_tables",
+		DatabaseName: "mo_catalog",
+		Bat:          &api.Batch{},
+	}
+	tombEntry := api.Entry{
+		EntryType:    api.Entry_TombstoneObject,
+		TableId:      catalog.MO_TABLES_ID,
+		DatabaseId:   catalog.MO_CATALOG_ID,
+		TableName:    "mo_tables",
+		DatabaseName: "mo_catalog",
+		Bat:          &api.Batch{},
+	}
+	// With stripObjectMeta=true (activation), object entries should be dropped.
+	filtered, closeCB, err := filterLazyCatalogSubscribeRowsInTail(logtail.TableLogtail{
+		Table: &api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: catalog.MO_TABLES_ID},
+		Commands: []api.Entry{
+			objEntry,
+			rowEntry,
+			tombEntry,
+		},
+	}, &lazyCatalogAllowedAccounts{accounts: map[uint32]struct{}{10: {}}}, true)
+	require.NoError(t, err)
+	if closeCB != nil {
+		t.Cleanup(closeCB)
+	}
+	require.Len(t, filtered.Commands, 1, "only row-level entry should survive")
+	require.Equal(t, api.Entry_Insert, filtered.Commands[0].GetEntryType())
+
+	// With stripObjectMeta=false (subscribe), object entries should be kept.
+	filtered2, closeCB2, err := filterLazyCatalogSubscribeRowsInTail(logtail.TableLogtail{
+		Table: &api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: catalog.MO_TABLES_ID},
+		Commands: []api.Entry{
+			objEntry,
+			rowEntry,
+			tombEntry,
+		},
+	}, &lazyCatalogAllowedAccounts{accounts: map[uint32]struct{}{10: {}}}, false)
+	require.NoError(t, err)
+	if closeCB2 != nil {
+		t.Cleanup(closeCB2)
+	}
+	require.Len(t, filtered2.Commands, 3, "subscribe keeps all entry types")
 }
 
 func TestFilterLazyCatalogPublishRowsInTailUsesEntryAccountSummary(t *testing.T) {
