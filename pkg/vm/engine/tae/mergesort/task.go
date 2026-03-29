@@ -18,9 +18,11 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"runtime"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/docker/go-units"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -38,48 +40,83 @@ import (
 	"go.uber.org/zap"
 )
 
-var (
-	transferSlabMu    sync.Mutex
-	transferSlabFree  [][]api.TransferDestPos
-	transferSlabMPool = mpool.MustNew("transfer-slab")
+// Transfer slab pool: two size-bucketed tiers of off-heap slabs, similar
+// to the arena pool's Small/Large tiers.  Each tier uses a lock-free stack
+// so get/put never block concurrent merge workers.
+
+const (
+	transferSlabSmall = 0 // ≤ 4 MB slabs
+	transferSlabLarge = 1 // 4 MB – 16 MB slabs
 )
 
-// maxPoolSlabEntries is the maximum slab capacity (in entries) that will be
-// cached in the free list. Larger slabs are freed immediately via mpool.
-// 4 MB ≈ 500 blocks × 8192 rows × 1 entry (8 bytes each) = ~500 k entries.
-const maxPoolSlabEntries = 4 * 1024 * 1024 / 8 // 4 MB / sizeof(TransferDestPos)
+const (
+	// transferSlabSmallMax is the upper bound (in entries) for the small tier.
+	// 4 MB / 8 bytes = 524,288 entries (~64 blocks × 8192 rows).
+	transferSlabSmallMax = 4 * 1024 * 1024 / 8
 
-// maxFreeListLen caps the number of idle slabs retained in the free list.
-const maxFreeListLen = 32
+	// transferSlabLargeMax is the upper bound (in entries) for the large tier.
+	// 16 MB / 8 bytes = 2,097,152 entries (~256 blocks × 8192 rows).
+	// Slabs exceeding this are freed immediately.
+	transferSlabLargeMax = 16 * 1024 * 1024 / 8
+)
+
+type transferSlabNode struct {
+	slab []api.TransferDestPos
+	next unsafe.Pointer // *transferSlabNode
+}
+
+type transferSlabBucket struct {
+	head    unsafe.Pointer // *transferSlabNode
+	count   atomic.Int32
+	maxIdle int32
+	size    int // quantised slab capacity for this tier
+}
+
+var (
+	transferSlabBuckets [2]transferSlabBucket
+	transferSlabMPool   = mpool.MustNew("transfer-slab")
+)
+
+func init() {
+	procs := int32(runtime.GOMAXPROCS(0))
+	idle := procs * 2
+	if idle < 4 {
+		idle = 4
+	}
+	transferSlabBuckets[transferSlabSmall] = transferSlabBucket{
+		size: transferSlabSmallMax, maxIdle: idle,
+	}
+	transferSlabBuckets[transferSlabLarge] = transferSlabBucket{
+		size: transferSlabLargeMax, maxIdle: idle,
+	}
+}
 
 // getTransferSlab returns a slab of at least size entries, with all ObjIdx
-// fields initialized to NoTransfer. It first checks the off-heap free list,
-// then allocates via mpool (C.calloc) if no suitable slab is available.
+// fields set to NoTransfer.  It pops from the appropriate tier's lock-free
+// stack, or allocates a fresh off-heap slab via mpool (C.calloc).
 func getTransferSlab(size int) []api.TransferDestPos {
-	transferSlabMu.Lock()
-	bestIdx := -1
-	bestCap := int(^uint(0) >> 1)
-	for i, s := range transferSlabFree {
-		if c := cap(s); c >= size && c < bestCap {
-			bestIdx = i
-			bestCap = c
+	tier := transferSlabTierFor(size)
+	if tier >= 0 {
+		bkt := &transferSlabBuckets[tier]
+		for {
+			head := atomic.LoadPointer(&bkt.head)
+			if head == nil {
+				break
+			}
+			node := (*transferSlabNode)(head)
+			next := atomic.LoadPointer(&node.next)
+			if atomic.CompareAndSwapPointer(&bkt.head, head, next) {
+				bkt.count.Add(-1)
+				slab := node.slab[:size]
+				for i := range slab {
+					slab[i] = api.TransferDestPos{ObjIdx: api.NoTransfer}
+				}
+				return slab
+			}
 		}
+		// stack empty – allocate at the tier's quantised size
+		size = bkt.size
 	}
-	if bestIdx >= 0 {
-		slab := transferSlabFree[bestIdx]
-		last := len(transferSlabFree) - 1
-		transferSlabFree[bestIdx] = transferSlabFree[last]
-		transferSlabFree[last] = nil
-		transferSlabFree = transferSlabFree[:last]
-		transferSlabMu.Unlock()
-		slab = slab[:size]
-		for i := range slab {
-			slab[i] = api.TransferDestPos{ObjIdx: api.NoTransfer}
-		}
-		return slab
-	}
-	transferSlabMu.Unlock()
-
 	slab, err := mpool.MakeSlice[api.TransferDestPos](size, transferSlabMPool, true)
 	if err != nil {
 		panic(err)
@@ -90,35 +127,63 @@ func getTransferSlab(size int) []api.TransferDestPos {
 	return slab
 }
 
-// putTransferSlab returns a slab to the off-heap free list if it's small
-// enough and the list isn't full. Otherwise the slab is freed via mpool.
+// putTransferSlab returns a slab to the appropriate tier's stack if it
+// fits.  Oversized or excess slabs are freed via mpool (C.free).
 func putTransferSlab(slab []api.TransferDestPos) {
 	if slab == nil {
 		return
 	}
-	if cap(slab) > maxPoolSlabEntries {
+	tier := transferSlabTierFor(cap(slab))
+	if tier < 0 {
 		mpool.FreeSlice(transferSlabMPool, slab)
 		return
 	}
-	transferSlabMu.Lock()
-	if len(transferSlabFree) >= maxFreeListLen {
-		transferSlabMu.Unlock()
+	bkt := &transferSlabBuckets[tier]
+	if bkt.count.Load() >= bkt.maxIdle {
 		mpool.FreeSlice(transferSlabMPool, slab)
 		return
 	}
-	transferSlabFree = append(transferSlabFree, slab)
-	transferSlabMu.Unlock()
+	node := &transferSlabNode{slab: slab}
+	for {
+		oldHead := atomic.LoadPointer(&bkt.head)
+		node.next = oldHead
+		if atomic.CompareAndSwapPointer(&bkt.head, oldHead, unsafe.Pointer(node)) {
+			bkt.count.Add(1)
+			return
+		}
+	}
 }
 
-// DrainTransferSlabPool frees all idle slabs in the free list.
+// DrainTransferSlabPool frees all idle slabs in every tier.
 func DrainTransferSlabPool() {
-	transferSlabMu.Lock()
-	free := transferSlabFree
-	transferSlabFree = nil
-	transferSlabMu.Unlock()
-	for _, slab := range free {
-		mpool.FreeSlice(transferSlabMPool, slab)
+	for i := range transferSlabBuckets {
+		bkt := &transferSlabBuckets[i]
+		for {
+			head := atomic.LoadPointer(&bkt.head)
+			if head == nil {
+				break
+			}
+			if atomic.CompareAndSwapPointer(&bkt.head, head, nil) {
+				bkt.count.Store(0)
+				for node := (*transferSlabNode)(head); node != nil; node = (*transferSlabNode)(node.next) {
+					mpool.FreeSlice(transferSlabMPool, node.slab)
+				}
+				break
+			}
+		}
 	}
+}
+
+// transferSlabTierFor returns the tier index for a given entry count,
+// or -1 if the slab is too large to cache.
+func transferSlabTierFor(entries int) int {
+	if entries <= transferSlabSmallMax {
+		return transferSlabSmall
+	}
+	if entries <= transferSlabLargeMax {
+		return transferSlabLarge
+	}
+	return -1
 }
 
 // GetTransferMap allocates a []TransferDestPos of the given size
