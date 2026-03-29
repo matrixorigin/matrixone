@@ -16,6 +16,27 @@ package engine
 
 import "context"
 
+// noCommitTSColumnError is returned by CollectChanges when a data object
+// lacks per-row commit-ts columns (e.g. TN merge objects on 3.0-dev that
+// predate the commit-ts-in-objects change).  The caller cannot rely on
+// row-level time-range filtering and must fall back to a full-table-scan
+// diff strategy.
+type noCommitTSColumnError struct{}
+
+func (noCommitTSColumnError) Error() string { return "object has no per-row commit-ts column" }
+
+// ErrNoCommitTSColumn is the singleton used by CollectChanges callers.
+var ErrNoCommitTSColumn error = noCommitTSColumnError{}
+
+// IsErrNoCommitTSColumn reports whether err is (or wraps) ErrNoCommitTSColumn.
+func IsErrNoCommitTSColumn(err error) bool {
+	if err == nil {
+		return false
+	}
+	_, ok := err.(noCommitTSColumnError)
+	return ok
+}
+
 // SnapshotReadPolicy controls how CollectChanges rebuilds changes once the
 // requested range can no longer be served purely from the in-memory partition
 // state and has to rely on snapshot-based recovery.

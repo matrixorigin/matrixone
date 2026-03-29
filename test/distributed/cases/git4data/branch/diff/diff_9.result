@@ -24,15 +24,7 @@ values ('base-001', 'user1', 'base content', 'semantic', 'T1', 1, 0.9, '[]',
 '2025-01-01 00:00:00.000000', '2025-01-01 00:00:00.000000', '2025-01-01 00:00:00.000000');
 select mo_ctl('dn', 'flush', 'test_gc_diff.c1_src');
 ➤ mo_ctl(dn, flush, test_gc_diff.c1_src)[12,-1,0]  𝄀
-{
-  "method": "Flush",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 data branch create table c1_tar from c1_src;
 insert into c1_tar
 (memory_id, user_id, content, memory_type, trust_tier, is_active,
@@ -40,92 +32,36 @@ initial_confidence, source_event_ids, observed_at, created_at, updated_at)
 values ('test-mem-001', 'test', 'content', 'semantic', 'T2', 1, 0.8, '[]',
 '2025-01-01 00:00:00.000000', '2025-01-01 00:00:00.000000', '2025-01-01 00:00:00.000000');
 data branch diff c1_tar against c1_src output summary;
-➤ metric[12,0,0]  ¦  c1_tar[-5,0,0]  ¦  c1_src[-5,0,0]  𝄀
-INSERTED  ¦  1  ¦  0  𝄀
-DELETED  ¦  0  ¦  0  𝄀
-UPDATED  ¦  0  ¦  0
+metric	c1_tar	c1_src
+INSERTED	1	0
+DELETED	0	0
+UPDATED	0	0
 select mo_ctl('dn', 'flush', 'test_gc_diff.c1_tar');
 ➤ mo_ctl(dn, flush, test_gc_diff.c1_tar)[12,-1,0]  𝄀
-{
-  "method": "Flush",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select mo_ctl('dn', 'flush', 'test_gc_diff.c1_src');
 ➤ mo_ctl(dn, flush, test_gc_diff.c1_src)[12,-1,0]  𝄀
-{
-  "method": "Flush",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select mo_ctl('dn', 'globalcheckpoint', '');
 ➤ mo_ctl(dn, globalcheckpoint, )[12,-1,0]  𝄀
-{
-  "method": "GlobalCheckpoint",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+{\n  "method": "GlobalCheckpoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select mo_ctl('dn', 'globalcheckpoint', '');
 ➤ mo_ctl(dn, globalcheckpoint, )[12,-1,0]  𝄀
-{
-  "method": "GlobalCheckpoint",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+{\n  "method": "GlobalCheckpoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select mo_ctl('dn', 'diskcleaner', 'force_gc');
 ➤ mo_ctl(dn, diskcleaner, force_gc)[12,-1,0]  𝄀
-{
-  "method": "DiskCleaner",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+{\n  "method": "DiskCleaner",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select mo_ctl('dn', 'globalcheckpoint', '');
 ➤ mo_ctl(dn, globalcheckpoint, )[12,-1,0]  𝄀
-{
-  "method": "GlobalCheckpoint",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+{\n  "method": "GlobalCheckpoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select mo_ctl('dn', 'diskcleaner', 'force_gc');
 ➤ mo_ctl(dn, diskcleaner, force_gc)[12,-1,0]  𝄀
-{
-  "method": "DiskCleaner",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+{\n  "method": "DiskCleaner",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 data branch diff c1_tar against c1_src output summary;
-➤ metric[12,0,0]  ¦  c1_tar[-5,0,0]  ¦  c1_src[-5,0,0]  𝄀
-INSERTED  ¦  1  ¦  0  𝄀
-DELETED  ¦  0  ¦  0  𝄀
-UPDATED  ¦  0  ¦  0
+metric	c1_tar	c1_src
+INSERTED	1	0
+DELETED	0	0
+UPDATED	0	0
 data branch merge c1_tar into c1_src when conflict accept;
 select count(*) from c1_src;
 ➤ count(*)[-5,64,0]  𝄀
@@ -137,95 +73,39 @@ insert into c2_src select *, * from generate_series(1, 200000) g;
 data branch create table c2_tar from c2_src;
 update c2_tar set b = b + 1 where a mod 1119 = 0;
 data branch diff c2_tar against c2_src output summary;
-➤ metric[12,0,0]  ¦  c2_tar[-5,0,0]  ¦  c2_src[-5,0,0]  𝄀
-INSERTED  ¦  0  ¦  0  𝄀
-DELETED  ¦  0  ¦  0  𝄀
-UPDATED  ¦  178  ¦  0
+metric	c2_tar	c2_src
+INSERTED	0	0
+DELETED	0	0
+UPDATED	178	0
 select count(*) as updated_rows_before_gc from c2_tar where b != a;
 ➤ updated_rows_before_gc[-5,64,0]  𝄀
 178
 select mo_ctl('dn', 'flush', 'test_gc_diff.c2_tar');
 ➤ mo_ctl(dn, flush, test_gc_diff.c2_tar)[12,-1,0]  𝄀
-{
-  "method": "Flush",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select mo_ctl('dn', 'flush', 'test_gc_diff.c2_src');
 ➤ mo_ctl(dn, flush, test_gc_diff.c2_src)[12,-1,0]  𝄀
-{
-  "method": "Flush",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select mo_ctl('dn', 'globalcheckpoint', '');
 ➤ mo_ctl(dn, globalcheckpoint, )[12,-1,0]  𝄀
-{
-  "method": "GlobalCheckpoint",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+{\n  "method": "GlobalCheckpoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select mo_ctl('dn', 'globalcheckpoint', '');
 ➤ mo_ctl(dn, globalcheckpoint, )[12,-1,0]  𝄀
-{
-  "method": "GlobalCheckpoint",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+{\n  "method": "GlobalCheckpoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select mo_ctl('dn', 'diskcleaner', 'force_gc');
 ➤ mo_ctl(dn, diskcleaner, force_gc)[12,-1,0]  𝄀
-{
-  "method": "DiskCleaner",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+{\n  "method": "DiskCleaner",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select mo_ctl('dn', 'globalcheckpoint', '');
 ➤ mo_ctl(dn, globalcheckpoint, )[12,-1,0]  𝄀
-{
-  "method": "GlobalCheckpoint",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+{\n  "method": "GlobalCheckpoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select mo_ctl('dn', 'diskcleaner', 'force_gc');
 ➤ mo_ctl(dn, diskcleaner, force_gc)[12,-1,0]  𝄀
-{
-  "method": "DiskCleaner",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+{\n  "method": "DiskCleaner",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 data branch diff c2_tar against c2_src output summary;
-➤ metric[12,0,0]  ¦  c2_tar[-5,0,0]  ¦  c2_src[-5,0,0]  𝄀
-INSERTED  ¦  0  ¦  0  𝄀
-DELETED  ¦  0  ¦  0  𝄀
-UPDATED  ¦  178  ¦  0
+metric	c2_tar	c2_src
+INSERTED	0	0
+DELETED	0	0
+UPDATED	178	0
 data branch diff c2_tar against c2_src output count;
 ➤ COUNT(*)[-5,0,0]  𝄀
 178
@@ -239,92 +119,36 @@ insert into c3_src select *, * from generate_series(1, 200000) g;
 data branch create table c3_tar from c3_src;
 update c3_tar set b = b + 1 where a mod 1119 = 0;
 data branch diff c3_tar against c3_src output summary;
-➤ metric[12,0,0]  ¦  c3_tar[-5,0,0]  ¦  c3_src[-5,0,0]  𝄀
-INSERTED  ¦  0  ¦  0  𝄀
-DELETED  ¦  0  ¦  0  𝄀
-UPDATED  ¦  178  ¦  0
+metric	c3_tar	c3_src
+INSERTED	0	0
+DELETED	0	0
+UPDATED	178	0
 select mo_ctl('dn', 'flush', 'test_gc_diff.c3_tar');
 ➤ mo_ctl(dn, flush, test_gc_diff.c3_tar)[12,-1,0]  𝄀
-{
-  "method": "Flush",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select mo_ctl('dn', 'flush', 'test_gc_diff.c3_src');
 ➤ mo_ctl(dn, flush, test_gc_diff.c3_src)[12,-1,0]  𝄀
-{
-  "method": "Flush",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select mo_ctl('dn', 'globalcheckpoint', '');
 ➤ mo_ctl(dn, globalcheckpoint, )[12,-1,0]  𝄀
-{
-  "method": "GlobalCheckpoint",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+{\n  "method": "GlobalCheckpoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select mo_ctl('dn', 'globalcheckpoint', '');
 ➤ mo_ctl(dn, globalcheckpoint, )[12,-1,0]  𝄀
-{
-  "method": "GlobalCheckpoint",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+{\n  "method": "GlobalCheckpoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select mo_ctl('dn', 'diskcleaner', 'force_gc');
 ➤ mo_ctl(dn, diskcleaner, force_gc)[12,-1,0]  𝄀
-{
-  "method": "DiskCleaner",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+{\n  "method": "DiskCleaner",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select mo_ctl('dn', 'globalcheckpoint', '');
 ➤ mo_ctl(dn, globalcheckpoint, )[12,-1,0]  𝄀
-{
-  "method": "GlobalCheckpoint",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+{\n  "method": "GlobalCheckpoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select mo_ctl('dn', 'diskcleaner', 'force_gc');
 ➤ mo_ctl(dn, diskcleaner, force_gc)[12,-1,0]  𝄀
-{
-  "method": "DiskCleaner",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+{\n  "method": "DiskCleaner",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 data branch diff c3_tar against c3_src output summary;
-➤ metric[12,0,0]  ¦  c3_tar[-5,0,0]  ¦  c3_src[-5,0,0]  𝄀
-INSERTED  ¦  0  ¦  0  𝄀
-DELETED  ¦  0  ¦  0  𝄀
-UPDATED  ¦  178  ¦  0
+metric	c3_tar	c3_src
+INSERTED	0	0
+DELETED	0	0
+UPDATED	178	0
 data branch diff c3_tar against c3_src output count;
 ➤ COUNT(*)[-5,0,0]  𝄀
 178

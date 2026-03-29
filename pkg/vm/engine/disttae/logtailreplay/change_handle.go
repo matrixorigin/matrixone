@@ -737,10 +737,10 @@ func (h *AObjectHandle) getNextAObject(ctx context.Context) (err error) {
 		if h.isTombstone {
 			updateTombstoneBatch(h.currentBatch, h.start, h.end, h.p.skipTS, !h.quick, h.mp)
 		} else if !constantTS.IsEmpty() {
-			// Object has no per-row commit-ts; all rows share object CreateTime.
-			// Object-level CreateTime check already passed in shouldReadBlock,
-			// so all rows are in range.  Just strip hidden columns.
-			updateDataBatchConstantTS(h.currentBatch, constantTS, h.mp)
+			// Data object has no per-row commit-ts.  Row-level filtering is
+			// impossible — signal the caller so it can fall back to a
+			// full-table-scan strategy instead of returning wrong results.
+			return engine.ErrNoCommitTSColumn
 		} else {
 			updateDataBatch(h.currentBatch, h.start, h.end, h.mp)
 		}
@@ -2423,48 +2423,6 @@ func updateDataBatch(bat *batch.Batch, start, end types.TS, mp *mpool.MPool) {
 		bat.Attrs = filteredAttrs
 	}
 	applyTSFilterForBatch(bat, len(bat.Vecs)-1, nil, start, end)
-}
-
-// updateDataBatchConstantTS processes a data batch from an object that has no
-// per-row commit-ts column (e.g. TN non-appendable compacted from CN objects).
-// Hidden columns (rowid) are stripped and a synthetic commit-ts column is
-// appended at the end so the output batch has the same layout as updateDataBatch:
-// [user columns..., __mo_commit_ts].
-func updateDataBatchConstantTS(bat *batch.Batch, constantTS types.TS, mp *mpool.MPool) {
-	filteredVecs := make([]*vector.Vector, 0, len(bat.Vecs))
-	rebuildAttrs := len(bat.Attrs) == len(bat.Vecs)
-	filteredAttrs := make([]string, 0, len(bat.Attrs))
-	rowCount := 0
-	for i, vec := range bat.Vecs {
-		switch vec.GetType().Oid {
-		case types.T_Rowid:
-			vec.Free(mp)
-		default:
-			if rowCount == 0 {
-				rowCount = vec.Length()
-			}
-			filteredVecs = append(filteredVecs, vec)
-			if rebuildAttrs {
-				filteredAttrs = append(filteredAttrs, bat.Attrs[i])
-			}
-		}
-	}
-
-	// Append a synthetic commit-ts column filled with the constant TS value
-	// so consumers always find commit-ts at the end of the batch.
-	tsVec := vector.NewVec(types.T_TS.ToType())
-	for j := 0; j < rowCount; j++ {
-		_ = vector.AppendFixed(tsVec, constantTS, false, mp)
-	}
-	filteredVecs = append(filteredVecs, tsVec)
-	if rebuildAttrs {
-		filteredAttrs = append(filteredAttrs, objectio.DefaultCommitTS_Attr)
-	}
-
-	bat.Vecs = filteredVecs
-	if rebuildAttrs {
-		bat.Attrs = filteredAttrs
-	}
 }
 
 func updateCNTombstoneBatch(bat *batch.Batch, committs types.TS, mp *mpool.MPool) {

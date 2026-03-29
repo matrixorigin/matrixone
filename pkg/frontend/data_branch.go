@@ -964,6 +964,15 @@ func diffOnBase(
 	if tarHandle, baseHandle, err = constructChangeHandle(
 		ctx, ses, bh, tblStuff, &dagInfo,
 	); err != nil {
+		if shouldFallbackToFullScan(err) {
+			logutil.Info("DataBranch-DiffOnBase falling back to full-table-scan",
+				zap.Uint64("target-id", tblStuff.tarRel.GetTableID(ctx)),
+				zap.Uint64("base-id", tblStuff.baseRel.GetTableID(ctx)),
+				zap.Error(err),
+			)
+			closeHandle()
+			return fullTableScanDiff(ctx, ses, tblStuff, copt, emit)
+		}
 		return
 	}
 
@@ -971,6 +980,15 @@ func diffOnBase(
 		ctx, ses, bh, tblStuff, dagInfo,
 		copt, emit, tarHandle, baseHandle,
 	); err != nil {
+		if shouldFallbackToFullScan(err) {
+			logutil.Info("DataBranch-HashDiff falling back to full-table-scan",
+				zap.Uint64("target-id", tblStuff.tarRel.GetTableID(ctx)),
+				zap.Uint64("base-id", tblStuff.baseRel.GetTableID(ctx)),
+				zap.Error(err),
+			)
+			closeHandle()
+			return fullTableScanDiff(ctx, ses, tblStuff, copt, emit)
+		}
 		return
 	}
 

@@ -5,42 +5,26 @@ create table c1_base (a int primary key, b int);
 insert into c1_base select *, * from generate_series(1, 100) g;
 select mo_ctl('dn', 'flush', 'sp_diff_c1.c1_base');
 ➤ mo_ctl(dn, flush, sp_diff_c1.c1_base)[12,-1,0]  𝄀
-{
-  "method": "Flush",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 create snapshot sp_c1_base for account sys;
 data branch create table c1_tar from c1_base;
 update c1_tar set b = b + 1 where a mod 7 = 0;
 select mo_ctl('dn', 'flush', 'sp_diff_c1.c1_tar');
 ➤ mo_ctl(dn, flush, sp_diff_c1.c1_tar)[12,-1,0]  𝄀
-{
-  "method": "Flush",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 create snapshot sp_c1_tar for account sys;
 data branch diff c1_tar against c1_base output summary;
-➤ metric[12,0,0]  ¦  c1_tar[-5,0,0]  ¦  c1_base[-5,0,0]  𝄀
-INSERTED  ¦  0  ¦  0  𝄀
-DELETED  ¦  0  ¦  0  𝄀
-UPDATED  ¦  14  ¦  0
+metric	c1_tar	c1_base
+INSERTED	0	0
+DELETED	0	0
+UPDATED	14	0
 drop table c1_tar;
 drop table c1_base;
 data branch diff c1_tar {snapshot = sp_c1_tar} against c1_base {snapshot = sp_c1_base} output summary;
-➤ metric[12,0,0]  ¦  c1_tar{snapshot = 'sp_c1_tar'}[-5,0,0]  ¦  c1_base{snapshot = 'sp_c1_base'}[-5,0,0]  𝄀
-INSERTED  ¦  0  ¦  0  𝄀
-DELETED  ¦  0  ¦  0  𝄀
-UPDATED  ¦  14  ¦  0
+metric	c1_tar{snapshot = 'sp_c1_tar'}	c1_base{snapshot = 'sp_c1_base'}
+INSERTED	0	0
+DELETED	0	0
+UPDATED	14	0
 drop snapshot sp_c1_tar;
 drop snapshot sp_c1_base;
 drop database sp_diff_c1;
@@ -51,43 +35,27 @@ create table c2_base (a int primary key, b int);
 insert into c2_base select *, * from generate_series(1, 100) g;
 select mo_ctl('dn', 'flush', 'sp_diff_c2.c2_base');
 ➤ mo_ctl(dn, flush, sp_diff_c2.c2_base)[12,-1,0]  𝄀
-{
-  "method": "Flush",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 create snapshot sp_c2_base for account sys;
 data branch create table c2_tar from c2_base;
 insert into c2_tar values (101, 101), (102, 102), (103, 103);
 delete from c2_tar where a <= 5;
 select mo_ctl('dn', 'flush', 'sp_diff_c2.c2_tar');
 ➤ mo_ctl(dn, flush, sp_diff_c2.c2_tar)[12,-1,0]  𝄀
-{
-  "method": "Flush",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 create snapshot sp_c2_tar for account sys;
 data branch diff c2_tar against c2_base output summary;
-➤ metric[12,0,0]  ¦  c2_tar[-5,0,0]  ¦  c2_base[-5,0,0]  𝄀
-INSERTED  ¦  3  ¦  0  𝄀
-DELETED  ¦  5  ¦  0  𝄀
-UPDATED  ¦  0  ¦  0
+metric	c2_tar	c2_base
+INSERTED	3	0
+DELETED	5	0
+UPDATED	0	0
 drop table c2_tar;
 drop table c2_base;
 data branch diff c2_tar {snapshot = sp_c2_tar} against c2_base {snapshot = sp_c2_base} output summary;
-➤ metric[12,0,0]  ¦  c2_tar{snapshot = 'sp_c2_tar'}[-5,0,0]  ¦  c2_base{snapshot = 'sp_c2_base'}[-5,0,0]  𝄀
-INSERTED  ¦  3  ¦  0  𝄀
-DELETED  ¦  5  ¦  0  𝄀
-UPDATED  ¦  0  ¦  0
+metric	c2_tar{snapshot = 'sp_c2_tar'}	c2_base{snapshot = 'sp_c2_base'}
+INSERTED	3	0
+DELETED	5	0
+UPDATED	0	0
 drop snapshot sp_c2_tar;
 drop snapshot sp_c2_base;
 drop database sp_diff_c2;
@@ -98,15 +66,7 @@ create table c3_base (a int primary key, b int);
 insert into c3_base select *, * from generate_series(1, 100) g;
 select mo_ctl('dn', 'flush', 'sp_diff_c3.c3_base');
 ➤ mo_ctl(dn, flush, sp_diff_c3.c3_base)[12,-1,0]  𝄀
-{
-  "method": "Flush",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 create snapshot sp_c3_base for account sys;
 data branch create table c3_tar from c3_base;
 update c3_tar set b = b + 1 where a mod 7 = 0;
@@ -114,28 +74,20 @@ insert into c3_tar values (101, 101), (102, 102);
 delete from c3_tar where a <= 3;
 select mo_ctl('dn', 'flush', 'sp_diff_c3.c3_tar');
 ➤ mo_ctl(dn, flush, sp_diff_c3.c3_tar)[12,-1,0]  𝄀
-{
-  "method": "Flush",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 create snapshot sp_c3_tar for account sys;
 data branch diff c3_tar against c3_base output summary;
-➤ metric[12,0,0]  ¦  c3_tar[-5,0,0]  ¦  c3_base[-5,0,0]  𝄀
-INSERTED  ¦  2  ¦  0  𝄀
-DELETED  ¦  3  ¦  0  𝄀
-UPDATED  ¦  14  ¦  0
+metric	c3_tar	c3_base
+INSERTED	2	0
+DELETED	3	0
+UPDATED	14	0
 drop table c3_tar;
 drop table c3_base;
 data branch diff c3_tar {snapshot = sp_c3_tar} against c3_base {snapshot = sp_c3_base} output summary;
-➤ metric[12,0,0]  ¦  c3_tar{snapshot = 'sp_c3_tar'}[-5,0,0]  ¦  c3_base{snapshot = 'sp_c3_base'}[-5,0,0]  𝄀
-INSERTED  ¦  2  ¦  0  𝄀
-DELETED  ¦  3  ¦  0  𝄀
-UPDATED  ¦  14  ¦  0
+metric	c3_tar{snapshot = 'sp_c3_tar'}	c3_base{snapshot = 'sp_c3_base'}
+INSERTED	2	0
+DELETED	3	0
+UPDATED	14	0
 drop snapshot sp_c3_tar;
 drop snapshot sp_c3_base;
 drop database sp_diff_c3;
@@ -146,42 +98,26 @@ create table c4_base (a int, b int);
 insert into c4_base select *, * from generate_series(1, 100) g;
 select mo_ctl('dn', 'flush', 'sp_diff_c4.c4_base');
 ➤ mo_ctl(dn, flush, sp_diff_c4.c4_base)[12,-1,0]  𝄀
-{
-  "method": "Flush",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 create snapshot sp_c4_base for account sys;
 data branch create table c4_tar from c4_base;
 update c4_tar set b = b + 1 where a mod 7 = 0;
 select mo_ctl('dn', 'flush', 'sp_diff_c4.c4_tar');
 ➤ mo_ctl(dn, flush, sp_diff_c4.c4_tar)[12,-1,0]  𝄀
-{
-  "method": "Flush",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 create snapshot sp_c4_tar for account sys;
 data branch diff c4_tar against c4_base output summary;
-➤ metric[12,0,0]  ¦  c4_tar[-5,0,0]  ¦  c4_base[-5,0,0]  𝄀
-INSERTED  ¦  0  ¦  0  𝄀
-DELETED  ¦  0  ¦  0  𝄀
-UPDATED  ¦  14  ¦  0
+metric	c4_tar	c4_base
+INSERTED	0	0
+DELETED	0	0
+UPDATED	14	0
 drop table c4_tar;
 drop table c4_base;
 data branch diff c4_tar {snapshot = sp_c4_tar} against c4_base {snapshot = sp_c4_base} output summary;
-➤ metric[12,0,0]  ¦  c4_tar{snapshot = 'sp_c4_tar'}[-5,0,0]  ¦  c4_base{snapshot = 'sp_c4_base'}[-5,0,0]  𝄀
-INSERTED  ¦  0  ¦  0  𝄀
-DELETED  ¦  0  ¦  0  𝄀
-UPDATED  ¦  14  ¦  0
+metric	c4_tar{snapshot = 'sp_c4_tar'}	c4_base{snapshot = 'sp_c4_base'}
+INSERTED	0	0
+DELETED	0	0
+UPDATED	14	0
 drop snapshot sp_c4_tar;
 drop snapshot sp_c4_base;
 drop database sp_diff_c4;

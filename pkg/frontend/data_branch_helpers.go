@@ -210,6 +210,24 @@ func shouldUseLCAReaderFallback(err error) bool {
 		moerr.IsMoErrCode(err, moerr.ErrParseError)
 }
 
+// shouldFallbackToFullScan returns true when CollectChanges or hashDiff fails
+// with an error that makes incremental change tracking unreliable, but a
+// full-table-scan comparison of the two tables' current states can still
+// produce correct results.
+//
+// Two classes of failure trigger this fallback:
+//   - ErrNoCommitTSColumn: TN merge objects on 3.0-dev lack per-row commit-ts,
+//     making row-level time filtering impossible.
+//   - ErrFileNotFound: GC deleted object files referenced by the change handle;
+//     the current table state is still readable via live objects.
+func shouldFallbackToFullScan(err error) bool {
+	if err == nil {
+		return false
+	}
+	return engine.IsErrNoCommitTSColumn(err) ||
+		moerr.IsMoErrCode(err, moerr.ErrFileNotFound)
+}
+
 // scanSnapshotRelationByID scans a relation with a split-view strategy:
 //   - current relation: resolved at the current transaction view to collect
 //     only currently valid physical objects (avoid stale/GC'ed object names).
