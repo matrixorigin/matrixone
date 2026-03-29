@@ -185,10 +185,12 @@ func filterLazyCatalogSubscribeDeleteEntry(
 		return entry, true, nil, nil
 	}
 
-	cpkeyIdx := catalog.FindBatchAttrIndex(bat.Attrs, catalog.CPrimaryKeyColName)
+	// Insert/update entries use __mo_cpkey_col; tombstone/delete entries
+	// use __mo_%1_pk_val. Both contain the same compound-key bytes.
+	cpkeyIdx := catalog.FindCatalogDeletePKIndex(bat.Attrs)
 	if cpkeyIdx < 0 {
 		return api.Entry{}, false, nil, moerr.NewInternalErrorNoCtxf(
-			"catalog delete logtail entry missing cpkey column, attrs=%v",
+			"catalog delete logtail entry missing cpkey/pk column, attrs=%v",
 			bat.Attrs,
 		)
 	}

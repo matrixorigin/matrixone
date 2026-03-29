@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 )
 
@@ -100,10 +101,12 @@ func lazyCatalogInsertOrUpdateAccountID(
 }
 
 func lazyCatalogDeleteAccountID(bat *batch.Batch) (uint32, bool, error) {
-	cpkeyIdx := FindBatchAttrIndex(bat.Attrs, CPrimaryKeyColName)
+	// Insert/update entries use __mo_cpkey_col; tombstone/delete entries
+	// use __mo_%1_pk_val. Both contain the same compound-key bytes.
+	cpkeyIdx := FindCatalogDeletePKIndex(bat.Attrs)
 	if cpkeyIdx < 0 {
 		return 0, false, moerr.NewInternalErrorNoCtxf(
-			"catalog delete logtail entry missing cpkey column, attrs=%v",
+			"catalog delete logtail entry missing cpkey/pk column, attrs=%v",
 			bat.Attrs,
 		)
 	}
@@ -113,6 +116,17 @@ func lazyCatalogDeleteAccountID(bat *batch.Batch) (uint32, bool, error) {
 		return 0, false, err
 	}
 	return accountID, true, nil
+}
+
+// FindCatalogDeletePKIndex returns the batch attribute index that carries
+// the compound primary key bytes. Insert/update entries name it
+// CPrimaryKeyColName (__mo_cpkey_col); tombstone entries name it
+// TombstoneAttr_PK_Attr (__mo_%1_pk_val). Both hold the same encoded tuple.
+func FindCatalogDeletePKIndex(attrs []string) int {
+	if idx := FindBatchAttrIndex(attrs, CPrimaryKeyColName); idx >= 0 {
+		return idx
+	}
+	return FindBatchAttrIndex(attrs, objectio.TombstoneAttr_PK_Attr)
 }
 
 func FindBatchAttrIndex(attrs []string, target string) int {
