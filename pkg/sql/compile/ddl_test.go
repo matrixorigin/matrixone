@@ -30,6 +30,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -47,6 +48,136 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func TestConvertDBEOBToNoSuchTable(t *testing.T) {
+	err := convertDBEOBToNoSuchTable(context.Background(), moerr.GetOkExpectedEOB(), "db1", "t2")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+	require.Contains(t, err.Error(), "no such table db1.t2")
+}
+
+func TestConvertDBEOBToNoSuchTablePassThrough(t *testing.T) {
+	want := moerr.NewBadDB(context.Background(), "db1")
+	got := convertDBEOBToNoSuchTable(context.Background(), want, "db1", "t2")
+	require.Same(t, want, got)
+}
+
+func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {
+	newCompileWithStubEngine := func(t *testing.T, eng *stubEngine, sql string) *Compile {
+		t.Helper()
+		proc := testutil.NewProcess(t)
+		proc.Base.SessionInfo.Buf = buffer.New()
+		proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
+		return NewCompile("test", "db1", sql, "", "", eng, proc, nil, false, nil, time.Now())
+	}
+
+	t.Run("AlterTableInplace", func(t *testing.T) {
+		eng := newStubEngine()
+		eng.dbErr = moerr.GetOkExpectedEOB()
+		s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+			Definition: &plan2.DataDefinition_AlterTable{
+				AlterTable: &plan2.AlterTable{
+					Database: "db1",
+					TableDef: &plan2.TableDef{Name: "t2"},
+				},
+			},
+		}}}}
+
+		err := s.AlterTableInplace(newCompileWithStubEngine(t, eng, "alter table t2 add b int"))
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+	})
+
+	t.Run("AlterTableCopy", func(t *testing.T) {
+		eng := newStubEngine()
+		eng.dbErr = moerr.GetOkExpectedEOB()
+		s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+			Definition: &plan2.DataDefinition_AlterTable{
+				AlterTable: &plan2.AlterTable{
+					Database: "db1",
+					TableDef: &plan2.TableDef{Name: "t2"},
+				},
+			},
+		}}}}
+
+		err := s.AlterTableCopy(newCompileWithStubEngine(t, eng, "alter table t2 add b int"))
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+	})
+
+	t.Run("CreateIndexDatabaseLookup", func(t *testing.T) {
+		eng := newStubEngine()
+		eng.dbErr = moerr.GetOkExpectedEOB()
+		s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+			Definition: &plan2.DataDefinition_CreateIndex{
+				CreateIndex: &plan2.CreateIndex{
+					Database: "db1",
+					Table:    "t2",
+					TableDef: &plan2.TableDef{Name: "t2"},
+				},
+			},
+		}}}}
+
+		lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error { return nil })
+		defer lockMoDb.Reset()
+		lockMoTbl := gostub.Stub(&lockMoTable, func(_ *Compile, _ string, _ string, _ lock.LockMode) error { return nil })
+		defer lockMoTbl.Reset()
+
+		err := s.CreateIndex(newCompileWithStubEngine(t, eng, "create index t2_idx on t2(a)"))
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+	})
+
+	t.Run("CreateIndexLockDatabase", func(t *testing.T) {
+		eng := newStubEngine()
+		s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+			Definition: &plan2.DataDefinition_CreateIndex{
+				CreateIndex: &plan2.CreateIndex{
+					Database: "db1",
+					Table:    "t2",
+					TableDef: &plan2.TableDef{Name: "t2"},
+				},
+			},
+		}}}}
+
+		lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error {
+			return moerr.GetOkExpectedEOB()
+		})
+		defer lockMoDb.Reset()
+
+		err := s.CreateIndex(newCompileWithStubEngine(t, eng, "create index t2_idx on t2(a)"))
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+	})
+
+	t.Run("DropIndex", func(t *testing.T) {
+		eng := newStubEngine()
+		eng.dbErr = moerr.GetOkExpectedEOB()
+		s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+			Definition: &plan2.DataDefinition_DropIndex{
+				DropIndex: &plan2.DropIndex{
+					Database:  "db1",
+					Table:     "t2",
+					IndexName: "t2_idx",
+				},
+			},
+		}}}}
+
+		lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error { return nil })
+		defer lockMoDb.Reset()
+
+		err := s.DropIndex(newCompileWithStubEngine(t, eng, "drop index t2_idx on t2"))
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+	})
+
+	t.Run("DropTableSingle", func(t *testing.T) {
+		eng := newStubEngine()
+		eng.dbErr = moerr.GetOkExpectedEOB()
+		c := newCompileWithStubEngine(t, eng, "drop table t2")
+		s := &Scope{}
+		lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error { return nil })
+		defer lockMoDb.Reset()
+		err := s.dropTableSingle(c, &plan2.DropTable{
+			Database: "db1",
+			Table:    "t2",
+		})
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+	})
+}
 func Test_lockIndexTable(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
