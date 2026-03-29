@@ -420,6 +420,9 @@ func (task *mergeObjectsTask) PrepareNewWriter() *ioutil.BlockWriter {
 		task.rt.Fs,
 		task.arena,
 	)
+	if !task.isTombstone && task.schema.HasFakePK() {
+		writer.SetFakePK(uint16(task.schema.GetPrimaryKey().Idx))
+	}
 	task.num++
 	return writer
 }
