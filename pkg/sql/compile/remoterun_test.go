@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -79,6 +80,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func makeRemoteBatchMessage(t *testing.T, bat *batch.Batch) morpc.Message {
+	t.Helper()
+	data, err := bat.MarshalBinary()
+	require.NoError(t, err)
+	return &pipeline.Message{
+		Sid:  pipeline.Status_Last,
+		Data: data,
+	}
+}
 
 func Test_EncodeProcessInfo(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -799,6 +810,137 @@ func Test_ReceiveMessageFromCnServer(t *testing.T) {
 		sender.receiveCh = ch
 
 		require.NotNil(t, receiveMessageFromCnServer(s4, false, &sender))
+	}
+}
+
+func TestReceiveMessageFromCnServerIfConnector_ReturnsOnBlockedReceiverCancel(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.BuildPipelineContext(context.Background())
+
+	s := &Scope{
+		Proc:   proc,
+		RootOp: connector.NewArgument(),
+	}
+	s.RootOp.(*connector.Connector).Reg = &process.WaitRegister{
+		Ch2: make(chan process.PipelineSignal, 1),
+	}
+	s.RootOp.(*connector.Connector).Reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, proc.Mp())
+
+	sender := &messageSenderOnClient{
+		ctx:       proc.Ctx,
+		mp:        proc.Mp(),
+		receiveCh: make(chan morpc.Message, 1),
+	}
+	sender.receiveCh <- makeRemoteBatchMessage(t, batch.NewWithSize(0))
+
+	done := make(chan error, 1)
+	go func() {
+		done <- receiveMessageFromCnServerIfConnector(s, sender)
+	}()
+
+	proc.Cancel(nil)
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+	case <-time.After(time.Second):
+		<-s.RootOp.(*connector.Connector).Reg.Ch2
+		require.Fail(t, "receiveMessageFromCnServerIfConnector did not unblock after cancellation")
+	}
+}
+
+func TestReceiveMsgAndForward_ReturnsOnBlockedReceiverCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	forwardCh := make(chan process.PipelineSignal, 1)
+	forwardCh <- process.NewPipelineSignalToDirectly(nil, nil, nil)
+
+	sender := &messageSenderOnClient{
+		ctx:       ctx,
+		mp:        mpool.MustNewZero(),
+		receiveCh: make(chan morpc.Message, 1),
+	}
+	sender.receiveCh <- makeRemoteBatchMessage(t, batch.NewWithSize(0))
+
+	done := make(chan error, 1)
+	go func() {
+		done <- receiveMsgAndForward(sender, forwardCh)
+	}()
+
+	cancel()
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+	case <-time.After(time.Second):
+		<-forwardCh
+		require.Fail(t, "receiveMsgAndForward did not unblock after cancellation")
+	}
+}
+
+func TestReceiveMessageFromCnServerIfDispatch_PreservesCleanupOnOriginalRoot(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	reg := &process.WaitRegister{Ch2: make(chan process.PipelineSignal, 2)}
+	d := dispatch.NewArgument()
+	d.LocalRegs = []*process.WaitRegister{reg}
+	d.FuncId = dispatch.SendToAllLocalFunc
+	s := &Scope{Proc: proc, RootOp: d}
+
+	sender := &messageSenderOnClient{
+		ctx:       context.Background(),
+		mp:        proc.Mp(),
+		receiveCh: make(chan morpc.Message, 2),
+	}
+	dataBat := batch.NewWithSize(0)
+	dataBat.SetRowCount(1)
+	sender.receiveCh <- makeRemoteBatchMessage(t, dataBat)
+	sender.receiveCh <- &pipeline.Message{Sid: pipeline.Status_MessageEnd}
+
+	err := receiveMessageFromCnServerIfDispatch(s, sender)
+	require.NoError(t, err)
+
+	ctrField := reflect.ValueOf(d).Elem().FieldByName("ctr")
+	require.False(t, ctrField.IsNil(), "receiveMessageFromCnServerIfDispatch should keep cleanup state on the original root")
+
+	select {
+	case signal := <-reg.Ch2:
+		bat, actionErr := signal.Action()
+		require.NoError(t, actionErr)
+		require.NotNil(t, bat)
+		require.Equal(t, 1, bat.RowCount())
+	case <-time.After(time.Second):
+		require.Fail(t, "dispatch runner did not send the data batch signal")
+	}
+
+	done := make(chan struct{}, 1)
+	go func() {
+		d.Reset(proc, false, nil)
+		done <- struct{}{}
+	}()
+
+	select {
+	case signal := <-reg.Ch2:
+		bat, actionErr := signal.Action()
+		require.NoError(t, actionErr)
+		require.Nil(t, bat)
+	case <-time.After(time.Second):
+		require.Fail(t, "original root cleanup did not send a terminal signal")
+	}
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.Fail(t, "original root cleanup did not finish after terminal signal consumption")
+	}
+
+	select {
+	case <-reg.Ch2:
+		require.Fail(t, "original root cleanup should not emit duplicate terminal signals")
+	default:
 	}
 }
 

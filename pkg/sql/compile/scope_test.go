@@ -249,6 +249,79 @@ func TestMessageSenderOnClientReceive(t *testing.T) {
 	}
 }
 
+func TestMessageSenderOnClientReceiveBatchContextDone(t *testing.T) {
+	t.Run("cancel returns query interrupted", func(t *testing.T) {
+		sender := new(messageSenderOnClient)
+		sender.receiveCh = make(chan morpc.Message, 1)
+		ctx, cancel := context.WithCancel(context.Background())
+		sender.ctx = ctx
+		sender.ctxCancel = cancel
+		cancel()
+
+		bat, over, err := sender.receiveBatch()
+		require.Nil(t, bat)
+		require.False(t, over)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+	})
+
+	t.Run("upstream deadline returns query interrupted", func(t *testing.T) {
+		sender := new(messageSenderOnClient)
+		sender.receiveCh = make(chan morpc.Message, 1)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+		sender.ctx = ctx
+		sender.ctxCancel = cancel
+		defer cancel()
+
+		<-ctx.Done()
+
+		bat, over, err := sender.receiveBatch()
+		require.Nil(t, bat)
+		require.False(t, over)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+	})
+
+	t.Run("internal deadline returns rpc timeout", func(t *testing.T) {
+		sender := new(messageSenderOnClient)
+		sender.receiveCh = make(chan morpc.Message, 1)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+		sender.ctx = ctx
+		sender.ctxCancel = cancel
+		sender.useInternalTimeout = true
+		defer cancel()
+
+		<-ctx.Done()
+
+		bat, over, err := sender.receiveBatch()
+		require.Nil(t, bat)
+		require.False(t, over)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrRPCTimeout))
+	})
+
+	t.Run("cancel during merge loop returns query interrupted", func(t *testing.T) {
+		sender := new(messageSenderOnClient)
+		sender.receiveCh = make(chan morpc.Message, 1)
+		ctx, cancel := context.WithCancel(context.Background())
+		sender.ctx = ctx
+		sender.ctxCancel = cancel
+		defer cancel()
+
+		sender.receiveCh <- &pipeline.Message{Sid: pipeline.Status_WaitingNext, Data: []byte("partial")}
+		go func() {
+			time.Sleep(10 * time.Millisecond)
+			cancel()
+		}()
+
+		bat, over, err := sender.receiveBatch()
+		require.Nil(t, bat)
+		require.False(t, over)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+	})
+}
+
 func TestNewParallelScope(t *testing.T) {
 	// function `newParallelScope` will dispatch one scope's work into n scopes.
 	testCompile := NewMockCompile(t)
@@ -513,6 +586,29 @@ func TestNotifyMessageClean(t *testing.T) {
 
 	n2.clean(proc)
 	require.Equal(t, 2, ff.number)
+}
+
+func TestSuppressRemoteRunCancelError(t *testing.T) {
+	t.Run("suppress query interrupted after proc cancel", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		require.NoError(t, suppressRemoteRunCancelError(ctx, moerr.NewQueryInterrupted(ctx)))
+	})
+
+	t.Run("keep rpc timeout after proc cancel", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := suppressRemoteRunCancelError(ctx, moerr.NewRPCTimeout(ctx))
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrRPCTimeout))
+	})
+
+	t.Run("keep query interrupted while proc still active", func(t *testing.T) {
+		ctx := context.Background()
+		err := suppressRemoteRunCancelError(ctx, moerr.NewQueryInterrupted(ctx))
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+	})
 }
 
 func TestScopeHoldAnyCannotRemoteOperator(t *testing.T) {

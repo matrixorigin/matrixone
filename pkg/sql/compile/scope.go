@@ -428,12 +428,10 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	sender, err := s.remoteRun(c)
 
 	runErr := err
-	if s.Proc.Ctx.Err() != nil {
-		runErr = nil
-	}
+	runErr = suppressRemoteRunCancelError(s.Proc.Ctx, runErr)
 	// this clean-up action shouldn't be called before context check.
 	// because the clean-up action will cancel the context, and error will be suppressed.
-	p.CleanRootOperator(s.Proc, err != nil, c.isPrepare, err)
+	p.CleanRootOperator(s.Proc, err != nil, c.isPrepare, runErr)
 
 	// sender should be closed after cleanup (tell the children-pipeline that query was done).
 	if sender != nil {
@@ -818,14 +816,9 @@ func (r *notifyMessageResult) clean(proc *process.Process) {
 func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMessageResult) {
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
+		err = suppressRemoteRunCancelError(s.Proc.Ctx, err)
 		reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, err, s.Proc.Mp())
-
-		select {
-		case <-s.Proc.Ctx.Done():
-			resultChan <- notifyMessageResult{err: nil, sender: sender}
-		default:
-			resultChan <- notifyMessageResult{err: err, sender: sender}
-		}
+		resultChan <- notifyMessageResult{err: err, sender: sender}
 		wg.Done()
 	}
 
@@ -881,6 +874,16 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 	}
 }
 
+func suppressRemoteRunCancelError(procCtx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if procCtx != nil && procCtx.Err() != nil && moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted) {
+		return nil
+	}
+	return err
+}
+
 func receiveMsgAndForward(sender *messageSenderOnClient, forwardCh chan process.PipelineSignal) error {
 	for {
 		bat, end, err := sender.receiveBatch()
@@ -888,7 +891,9 @@ func receiveMsgAndForward(sender *messageSenderOnClient, forwardCh chan process.
 			return err
 		}
 
-		forwardCh <- process.NewPipelineSignalToDirectly(bat, nil, sender.mp)
+		if err = forwardRemoteBatchWithContext(sender, forwardCh, bat, sender.mp); err != nil {
+			return err
+		}
 	}
 }
 

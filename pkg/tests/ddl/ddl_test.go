@@ -396,7 +396,8 @@ func TestCDCCases(t *testing.T) {
 
 			// Drop all and validate empty
 			mustExec(db, "drop cdc all internal")
-			require.Equal(t, rows("", "select * from mo_catalog.mo_cdc_task"), 0)
+			waitForTaskCount(0)
+			require.Equal(t, 0, rows("", "select * from mo_catalog.mo_cdc_task"))
 
 			// cleanup PITR
 			mustExec(db, "drop pitr pitr_db internal")
