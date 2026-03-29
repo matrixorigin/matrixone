@@ -10730,8 +10730,8 @@ func TestPersistTransferTable(t *testing.T) {
 	data := page.Marshal()
 	ioEntry := fileservice.IOEntry{
 		Offset: offset,
-		Size:   int64(len(data)),
-		Data:   data,
+		Size:   int64(data.Len()),
+		Data:   data.Bytes(),
 	}
 	ioVector.Entries = append(ioVector.Entries, ioEntry)
 
@@ -10747,7 +10747,7 @@ func TestPersistTransferTable(t *testing.T) {
 	path := model.Path{
 		Name:   ioVector.FilePath,
 		Offset: 0,
-		Size:   int64(len(data)),
+		Size:   int64(data.Len()),
 	}
 	page.SetPath(path)
 
@@ -10803,8 +10803,8 @@ func TestClearPersistTransferTable(t *testing.T) {
 			data := page.Marshal()
 			ioEntry := fileservice.IOEntry{
 				Offset: offset,
-				Size:   int64(len(data)),
-				Data:   data,
+				Size:   int64(data.Len()),
+				Data:   data.Bytes(),
 			}
 			ioVector.Entries = append(ioVector.Entries, ioEntry)
 
@@ -10820,7 +10820,7 @@ func TestClearPersistTransferTable(t *testing.T) {
 			path := model.Path{
 				Name:   ioVector.FilePath,
 				Offset: 0,
-				Size:   int64(len(data)),
+				Size:   int64(data.Len()),
 			}
 			page.SetPath(path)
 
