@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 type tableType string
@@ -525,6 +526,20 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 	return err
 }
 
+// activateAccountCatalogIfNeeded ensures the lazy catalog for the given
+// account is activated before restore runs internal SQL as that account.
+// Without this, logtail entries for the target account's catalog tables
+// would be delayed and invisible to background SQL sessions.
+func activateAccountCatalogIfNeeded(ctx context.Context, ses *Session, accountID uint32) error {
+	if accountID == 0 {
+		return nil // sys account is always activated
+	}
+	if activator, ok := ses.GetTxnHandler().GetStorage().(engine.TenantCatalogActivator); ok {
+		return activator.ActivateTenantCatalog(ctx, accountID)
+	}
+	return nil
+}
+
 func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnapShot) (stats statistic.StatsArray, err error) {
 	bh := ses.GetBackgroundExec(ctx)
 	bh.SetRestore(true)
@@ -601,6 +616,11 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		if err != nil {
 			return stats, err
 		}
+		return
+	}
+
+	// activate the target account's catalog so internal SQL can see its tables
+	if err = activateAccountCatalogIfNeeded(ctx, ses, toAccountId); err != nil {
 		return
 	}
 
@@ -2351,6 +2371,11 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 
 	getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] start to restore dropped account: %v, account id: %d to new account id: %d, restore timestamp: %d", snapshotName, account.accountName, account.accountId, toAccountId, snapshotTs))
 	fromAccount := account.accountId
+
+	// activate the target account's catalog so internal SQL can see its tables
+	if err = activateAccountCatalogIfNeeded(ctx, ses, uint32(toAccountId)); err != nil {
+		return
+	}
 
 	// drop foreign key related tables first
 	if isNeedToCleanToDatabase {
