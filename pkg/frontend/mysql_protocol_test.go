@@ -2524,6 +2524,45 @@ func TestPrepareStmtClearBinaryParamStateReleasesParamArea(t *testing.T) {
 	require.Equal(t, firstAreaLen, len(prepareStmt.params.GetArea()))
 }
 
+func TestParseExecuteDataRejectsTruncatedNewParamBoundFlag(t *testing.T) {
+	ctx := context.TODO()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select ?")
+
+	testData := []byte{0, 0, 0, 0, 0, 0}
+
+	var err error
+	require.NotPanics(t, func() {
+		err = proto.ParseExecuteData(ctx, proc, prepareStmt, testData, 0)
+	})
+	require.Error(t, err)
+}
+
+func TestParseSendLongDataAppendsRepeatedChunks(t *testing.T) {
+	ctx := context.TODO()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select ?")
+
+	firstChunk := append(make([]byte, 2), []byte("hello ")...)
+	secondChunk := append(make([]byte, 2), []byte("world")...)
+
+	require.NoError(t, proto.ParseSendLongData(ctx, proc, prepareStmt, firstChunk, 0))
+	require.NoError(t, proto.ParseSendLongData(ctx, proc, prepareStmt, secondChunk, 0))
+	require.Equal(t, "hello world", prepareStmt.params.GetStringAt(0))
+	_, ok := prepareStmt.getFromSendLongData[0]
+	require.True(t, ok)
+}
+
+func TestParseSendLongDataInitializesTrackingMap(t *testing.T) {
+	ctx := context.TODO()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select ?")
+	prepareStmt.getFromSendLongData = nil
+
+	chunk := append(make([]byte, 2), []byte("hello")...)
+	require.NoError(t, proto.ParseSendLongData(ctx, proc, prepareStmt, chunk, 0))
+	require.Equal(t, "hello", prepareStmt.params.GetStringAt(0))
+	_, ok := prepareStmt.getFromSendLongData[0]
+	require.True(t, ok)
+}
+
 /* FIXME The prepare process has undergone some modifications,
   	so the unit tests for prepare need to be refactored, and the subsequent pr I will resubmit a reasonable ut
 func TestParseExecuteData(t *testing.T) {
