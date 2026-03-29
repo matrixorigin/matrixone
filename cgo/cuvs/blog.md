@@ -65,6 +65,12 @@ Iteration i:   load list[i+1] from disk  ─────────────
 
 While the GPU computes exact distances for centroid list `i`, the host thread is already reading centroid list `i+1` from disk into a host buffer. By the time `sync_stream()` returns, the next block is ready to upload. The GPU and disk are never idle waiting on each other.
 
+### The 8,192-Vector Challenge: Saturating the GPU
+
+In the MatrixOne storage engine, data is typically managed in blocks of **8,192 vectors**. For a modern GPU, a single 8,192-row distance computation is a very "short" task—it might finish in mere microseconds. If we were to process these blocks one-by-one synchronously, the **kernel launch overhead** and **host-device synchronization stalls** would dominate the execution time, leaving the GPU vastly underutilized.
+
+Our pipelined approach turns this granularity into an advantage. By keeping multiple 8,192-vector blocks "in flight" (one being read from disk by the CPU while another is being computed by the GPU), we effectively hide the launch overhead. The GPU's streaming multiprocessors (SMs) stay saturated because there is always a new batch of work ready the moment the previous one completes.
+
 ### Why `pairwise_distance_async` Makes This Possible
 
 We expose two variants:
