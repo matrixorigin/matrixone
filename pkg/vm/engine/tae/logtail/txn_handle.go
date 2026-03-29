@@ -313,10 +313,9 @@ func batchSingleAccountID(bat *containers.Batch, attr string) (uint32, bool) {
 	first := accounts[0]
 	for row := 1; row < len(accounts); row++ {
 		if accounts[row] != first {
-			panic(fmt.Sprintf(
-				"mixed-account lazy catalog entry batch detected: attr=%s first=%d row=%d account=%d",
-				attr, first, row, accounts[row],
-			))
+			// Mixed-account batch (e.g., from restore). Don't set
+			// entry-level summary; TN filter will fall back to row-level.
+			return 0, false
 		}
 	}
 	return first, true
@@ -331,6 +330,7 @@ func batchSingleCPKeyAccountID(bat *containers.Batch) (uint32, bool, error) {
 	var (
 		first       uint32
 		initialized bool
+		mixed       bool
 	)
 	err := containers.ForeachWindowBytes(
 		bat.Vecs[attrIdx].GetDownstreamVector(),
@@ -347,15 +347,19 @@ func batchSingleCPKeyAccountID(bat *containers.Batch) (uint32, bool, error) {
 				return nil
 			}
 			if accountID != first {
-				return fmt.Errorf(
-					"mixed-account lazy catalog delete entry batch detected: first=%d row=%d account=%d",
-					first, row, accountID,
-				)
+				// Mixed-account delete batch (e.g., from restore).
+				mixed = true
+				return fmt.Errorf("break")
 			}
 			return nil
 		},
 		nil,
 	)
+	if mixed {
+		// Don't set entry-level summary; TN filter will fall back to
+		// row-level filtering for this entry.
+		return 0, false, nil
+	}
 	if err != nil {
 		return 0, false, err
 	}
