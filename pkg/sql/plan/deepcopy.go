@@ -742,13 +742,17 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 			CreateIndex: &plan.CreateIndex{
 				Database: df.CreateIndex.Database,
 				Table:    df.CreateIndex.Table,
+				TableDef: DeepCopyTableDef(df.CreateIndex.TableDef, true),
 				Index: &plan.CreateTable{
 					IfNotExists: df.CreateIndex.Index.IfNotExists,
 					Temporary:   df.CreateIndex.Index.Temporary,
 					Database:    df.CreateIndex.Index.Database,
+					Replace:     df.CreateIndex.Index.Replace,
 					TableDef:    DeepCopyTableDef(df.CreateIndex.Index.TableDef, true),
+					IndexTables: DeepCopyTableDefList(df.CreateIndex.Index.GetIndexTables()),
 				},
 				OriginTablePrimaryKey: df.CreateIndex.OriginTablePrimaryKey,
+				TableExist:            df.CreateIndex.TableExist,
 			},
 		}
 

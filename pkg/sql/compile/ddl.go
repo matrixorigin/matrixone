@@ -2026,21 +2026,13 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	}
 
 	for _, p := range metadata.Partitions {
-		q := *qry
-		q.Table = p.PartitionTableName
-		r, err := dbSource.Relation(c.proc.Ctx, q.Table, nil)
+		r, err := dbSource.Relation(c.proc.Ctx, p.PartitionTableName, nil)
 		if err != nil {
 			return err
 		}
-		q.TableDef = r.CopyTableDef(c.proc.Ctx)
-		for _, def := range q.Index.IndexTables {
-			def.Name = fmt.Sprintf("%s_%s", def.Name, p.Name)
-		}
-		for _, def := range q.Index.TableDef.Indexes {
-			def.IndexTableName = fmt.Sprintf("%s_%s", def.IndexTableName, p.Name)
-		}
+		q := cloneCreateIndexForPartition(qry, p.PartitionTableName, p.Name, r.CopyTableDef(c.proc.Ctx))
 
-		err = s.doCreateIndex(c, &q, dbSource, r)
+		err = s.doCreateIndex(c, q, dbSource, r)
 		if err != nil {
 			return err
 		}
@@ -2705,24 +2697,56 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		for _, ct := range oldCt.Cts {
-			if def, ok := ct.(*engine.RefChildTableDef); ok {
-				for idx, refTable := range def.Tables {
-					if refTable == oldID {
-						def.Tables[idx] = newID
-						break
-					}
-				}
-				break
+		if updateRefChildTableConstraintIDs(oldCt, oldID, newID) {
+			err = fkRelation.UpdateConstraint(c.proc.Ctx, oldCt)
+			if err != nil {
+				return err
 			}
-		}
-		err = fkRelation.UpdateConstraint(c.proc.Ctx, oldCt)
-		if err != nil {
-			return err
 		}
 	}
 
 	return nil
+}
+
+func cloneCreateIndexForPartition(
+	qry *plan.CreateIndex,
+	partitionTableName string,
+	partitionName string,
+	tableDef *plan.TableDef,
+) *plan.CreateIndex {
+	dd := &plan.DataDefinition{
+		DdlType: plan.DataDefinition_CREATE_INDEX,
+		Definition: &plan.DataDefinition_CreateIndex{
+			CreateIndex: qry,
+		},
+	}
+	cloned := plan2.DeepCopyDataDefinition(dd).Definition.(*plan.DataDefinition_CreateIndex).CreateIndex
+	cloned.Table = partitionTableName
+	cloned.TableDef = tableDef
+	for _, def := range cloned.Index.IndexTables {
+		def.Name = fmt.Sprintf("%s_%s", def.Name, partitionName)
+	}
+	for _, def := range cloned.Index.TableDef.Indexes {
+		def.IndexTableName = fmt.Sprintf("%s_%s", def.IndexTableName, partitionName)
+	}
+	return cloned
+}
+
+func updateRefChildTableConstraintIDs(ct *engine.ConstraintDef, oldID, newID uint64) bool {
+	updated := false
+	for _, c := range ct.Cts {
+		def, ok := c.(*engine.RefChildTableDef)
+		if !ok {
+			continue
+		}
+		for idx, refTable := range def.Tables {
+			if refTable == oldID {
+				def.Tables[idx] = newID
+				updated = true
+			}
+		}
+	}
+	return updated
 }
 
 func (s *Scope) DropSequence(c *Compile) error {

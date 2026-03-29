@@ -633,6 +633,8 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 	_, withoutOut, _, err := prepareRemoteRunSendingData("", s1)
 	require.NoError(t, err)
 	require.False(t, withoutOut)
+	require.NotNil(t, s1.RootOp)
+	require.Equal(t, vm.Connector, s1.RootOp.OpType())
 
 	// if this is a pipeline with operator list "scan -> connector / dispatch".
 	// this should return withoutOut == false.
@@ -641,9 +643,12 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 		RootOp: dispatch.NewArgument(),
 	}
 	s2.RootOp.AppendChild(value_scan.NewArgument())
+	originChild := s2.RootOp.GetOperatorBase().GetChildren(0)
 	_, withoutOut, _, err = prepareRemoteRunSendingData("", s2)
 	require.NoError(t, err)
 	require.False(t, withoutOut)
+	require.Equal(t, 1, s2.RootOp.GetOperatorBase().NumChildren())
+	require.Same(t, originChild, s2.RootOp.GetOperatorBase().GetChildren(0))
 
 	// if this is a pipeline no need to sent back message, like "scan -> scan".
 	// this should return withoutOut == true.
@@ -655,6 +660,37 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 	_, withoutOut, _, err = prepareRemoteRunSendingData("", s3)
 	require.NoError(t, err)
 	require.True(t, withoutOut)
+}
+
+func TestGetScopeForRemoteRunEncodingDoesNotMutateOriginalScope(t *testing.T) {
+	root := dispatch.NewArgument()
+	child := value_scan.NewArgument()
+	root.AppendChild(child)
+	s := &Scope{RootOp: root}
+
+	encoded, withoutOutput := getScopeForRemoteRunEncoding(s)
+
+	require.False(t, withoutOutput)
+	require.Same(t, root, s.RootOp)
+	require.Equal(t, 1, s.RootOp.GetOperatorBase().NumChildren())
+	require.Same(t, child, s.RootOp.GetOperatorBase().GetChildren(0))
+	require.NotSame(t, s, encoded)
+	require.Same(t, child, encoded.RootOp)
+}
+
+func TestBuildRemoteDispatchReceiverRootDoesNotMutateOriginalChildren(t *testing.T) {
+	origin := dispatch.NewArgument()
+	originChild := value_scan.NewArgument()
+	fakeChild := value_scan.NewArgument()
+	origin.AppendChild(originChild)
+
+	cloned := buildRemoteDispatchReceiverRoot(origin, fakeChild)
+
+	require.NotSame(t, origin, cloned)
+	require.Equal(t, 1, origin.GetOperatorBase().NumChildren())
+	require.Same(t, originChild, origin.GetOperatorBase().GetChildren(0))
+	require.Equal(t, 1, cloned.GetOperatorBase().NumChildren())
+	require.Same(t, fakeChild, cloned.GetOperatorBase().GetChildren(0))
 }
 
 func Test_MessageSenderSendPipeline(t *testing.T) {

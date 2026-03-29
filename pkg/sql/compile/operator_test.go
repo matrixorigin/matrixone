@@ -25,7 +25,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffleV2"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDupOperator(t *testing.T) {
@@ -110,4 +113,28 @@ func TestDupOperatorLoopJoinMarkPos(t *testing.T) {
 	if dupOp.MarkPos != op.MarkPos {
 		t.Errorf("MarkPos mismatch: got %d, want %d", dupOp.MarkPos, op.MarkPos)
 	}
+}
+
+func TestDupOperatorShuffleSharesPoolAcrossWorkers(t *testing.T) {
+	op := shuffle.NewArgument()
+	op.BucketNum = 4
+
+	dup1 := dupOperator(op, 0, 2).(*shuffle.Shuffle)
+	dup2 := dupOperator(op, 1, 2).(*shuffle.Shuffle)
+
+	require.NotNil(t, op.GetShufflePool())
+	require.Same(t, op.GetShufflePool(), dup1.GetShufflePool())
+	require.Same(t, op.GetShufflePool(), dup2.GetShufflePool())
+}
+
+func TestDupOperatorShuffleV2SharesPoolAcrossWorkers(t *testing.T) {
+	op := shuffleV2.NewArgument()
+	op.BucketNum = 4
+
+	dup1 := dupOperator(op, 0, 2).(*shuffleV2.ShuffleV2)
+	dup2 := dupOperator(op, 1, 2).(*shuffleV2.ShuffleV2)
+
+	require.NotNil(t, op.GetShufflePool())
+	require.Same(t, op.GetShufflePool(), dup1.GetShufflePool())
+	require.Same(t, op.GetShufflePool(), dup2.GetShufflePool())
 }
