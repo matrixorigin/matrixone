@@ -1106,3 +1106,143 @@ func TestDropDatabase_SnapshotAdvanceAndRestore(t *testing.T) {
 			"SnapshotTS must remain unchanged for non-RC txn")
 	})
 }
+
+func TestRemoveFkeysRelationshipsSkipsDeletedRelationsDuringDropDatabase(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Buf = buffer.New()
+	ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+
+	txnMeta := txn.TxnMeta{}
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txnMeta).AnyTimes()
+	txnOp.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+
+	deletedRelErr := moerr.NewNoSuchTable(ctx, "acc_test02", "aff01")
+	parentRel := mock_frontend.NewMockRelation(ctrl)
+	parentRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(11)).AnyTimes()
+
+	mockDb := mock_frontend.NewMockDatabase(ctrl)
+	mockDb.EXPECT().Relations(gomock.Any()).Return([]string{"aff01", "pri01"}, nil).Times(1)
+	mockDb.EXPECT().Relation(gomock.Any(), "aff01", gomock.Any()).Return(nil, deletedRelErr).Times(1)
+	mockDb.EXPECT().Relation(gomock.Any(), "pri01", gomock.Any()).Return(parentRel, nil).Times(1)
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "acc_test02", gomock.Any()).Return(mockDb, nil).Times(1)
+
+	getConstraintDef := gostub.Stub(&GetConstraintDef, func(_ context.Context, rel engine.Relation) (*engine.ConstraintDef, error) {
+		if rel == parentRel {
+			return &engine.ConstraintDef{Cts: []engine.Constraint{}}, nil
+		}
+		t.Fatalf("unexpected relation passed to GetConstraintDef")
+		return nil, nil
+	})
+	defer getConstraintDef.Reset()
+
+	c := NewCompile("test", "test", "drop database acc_test02", "", "", eng, proc, nil, false, nil, time.Now())
+	s := &Scope{}
+	require.NoError(t, s.removeFkeysRelationships(c, "acc_test02"))
+}
+
+func TestRemoveFkeysRelationshipsSkipsDeletedChildTableIds(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Buf = buffer.New()
+	ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+
+	txnMeta := txn.TxnMeta{}
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txnMeta).AnyTimes()
+	txnOp.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+
+	parentRel := mock_frontend.NewMockRelation(ctrl)
+	parentRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(11)).AnyTimes()
+
+	mockDb := mock_frontend.NewMockDatabase(ctrl)
+	mockDb.EXPECT().Relations(gomock.Any()).Return([]string{"pri01"}, nil).Times(1)
+	mockDb.EXPECT().Relation(gomock.Any(), "pri01", gomock.Any()).Return(parentRel, nil).Times(1)
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "acc_test02", gomock.Any()).Return(mockDb, nil).Times(1)
+	eng.EXPECT().GetRelationById(gomock.Any(), gomock.Any(), uint64(22)).
+		Return("", "", nil, moerr.NewInternalErrorf(ctx, "can not find table by id %d: accountId: %d. Deleted in txn", 22, sysAccountId)).
+		Times(1)
+
+	getConstraintDef := gostub.Stub(&GetConstraintDef, func(_ context.Context, rel engine.Relation) (*engine.ConstraintDef, error) {
+		if rel == parentRel {
+			return &engine.ConstraintDef{
+				Cts: []engine.Constraint{
+					&engine.RefChildTableDef{Tables: []uint64{22}},
+				},
+			}, nil
+		}
+		t.Fatalf("unexpected relation passed to GetConstraintDef")
+		return nil, nil
+	})
+	defer getConstraintDef.Reset()
+
+	c := NewCompile("test", "test", "drop database acc_test02", "", "", eng, proc, nil, false, nil, time.Now())
+	s := &Scope{}
+	require.NoError(t, s.removeFkeysRelationships(c, "acc_test02"))
+}
+
+func TestRemoveFkeysRelationshipsSkipsDeletedParentTableIds(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Buf = buffer.New()
+	ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+
+	txnMeta := txn.TxnMeta{}
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txnMeta).AnyTimes()
+	txnOp.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+
+	childRel := mock_frontend.NewMockRelation(ctrl)
+	childRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(11)).AnyTimes()
+
+	mockDb := mock_frontend.NewMockDatabase(ctrl)
+	mockDb.EXPECT().Relations(gomock.Any()).Return([]string{"aff01"}, nil).Times(1)
+	mockDb.EXPECT().Relation(gomock.Any(), "aff01", gomock.Any()).Return(childRel, nil).Times(1)
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "acc_test02", gomock.Any()).Return(mockDb, nil).Times(1)
+	eng.EXPECT().GetRelationById(gomock.Any(), gomock.Any(), uint64(33)).
+		Return("", "", nil, moerr.NewNoSuchTable(ctx, "acc_test02", "pri01")).
+		Times(1)
+
+	getConstraintDef := gostub.Stub(&GetConstraintDef, func(_ context.Context, rel engine.Relation) (*engine.ConstraintDef, error) {
+		if rel == childRel {
+			return &engine.ConstraintDef{
+				Cts: []engine.Constraint{
+					&engine.ForeignKeyDef{
+						Fkeys: []*plan.ForeignKeyDef{
+							{ForeignTbl: uint64(33)},
+						},
+					},
+				},
+			}, nil
+		}
+		t.Fatalf("unexpected relation passed to GetConstraintDef")
+		return nil, nil
+	})
+	defer getConstraintDef.Reset()
+
+	c := NewCompile("test", "test", "drop database acc_test02", "", "", eng, proc, nil, false, nil, time.Now())
+	s := &Scope{}
+	require.NoError(t, s.removeFkeysRelationships(c, "acc_test02"))
+}
