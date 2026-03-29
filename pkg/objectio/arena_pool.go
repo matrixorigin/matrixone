@@ -111,6 +111,7 @@ func PutArena(a *WriteArena) {
 	}
 	pool := &arenaPools[tier]
 	if pool.count.Load() >= pool.maxCount {
+		a.FreeBuffers()
 		return
 	}
 	node := &arenaNode{arena: a}
@@ -124,10 +125,10 @@ func PutArena(a *WriteArena) {
 	}
 }
 
-// DrainArenaPools empties both arena free lists, allowing the GC to
-// reclaim the backing memory.  Call this when merge and flush are idle
-// (e.g. after a checkpoint completes) to reduce RSS between active
-// periods.  The next GetArena call will create a fresh pre-warmed arena.
+// DrainArenaPools empties both arena free lists, freeing the off-heap
+// backing buffers.  Call this when merge and flush are idle (e.g. after
+// a checkpoint completes) to reduce RSS between active periods.
+// The next GetArena call will create a fresh pre-warmed arena.
 func DrainArenaPools() {
 	for i := range arenaPools {
 		pool := &arenaPools[i]
@@ -138,6 +139,9 @@ func DrainArenaPools() {
 			}
 			if atomic.CompareAndSwapPointer(&pool.head, head, nil) {
 				pool.count.Store(0)
+				for node := (*arenaNode)(head); node != nil; node = (*arenaNode)(node.next) {
+					node.arena.FreeBuffers()
+				}
 				break
 			}
 		}

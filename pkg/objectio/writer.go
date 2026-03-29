@@ -38,6 +38,11 @@ import (
 // for unusually large block write cycles.
 const arenaMaxSize = 128 * 1024 * 1024
 
+// arenaMPool is a dedicated off-heap allocator for WriteArena buffers.
+// Using mpool with offHeap=true routes through C.calloc/C.free, keeping
+// the backing arrays out of Go's heap and invisible to pprof inuse_space.
+var arenaMPool = mpool.MustNew("write-arena")
+
 type WriteArena struct {
 	data           []byte
 	usedOffset     int
@@ -48,8 +53,12 @@ type WriteArena struct {
 }
 
 func NewArena(size int) *WriteArena {
+	data, err := arenaMPool.Alloc(size, true)
+	if err != nil {
+		panic(err)
+	}
 	return &WriteArena{
-		data: make([]byte, size),
+		data: data,
 	}
 }
 
@@ -83,7 +92,12 @@ func (a *WriteArena) Reset() {
 		if newCap > limit {
 			newCap = limit
 		}
-		a.data = make([]byte, newCap)
+		arenaMPool.Free(a.data)
+		var err error
+		a.data, err = arenaMPool.Alloc(newCap, true)
+		if err != nil {
+			panic(err)
+		}
 	}
 	a.usedOffset = 0
 	a.totalRequested = 0
@@ -109,9 +123,29 @@ func arenaNextPow2(n int) int {
 // power of 2 so that minor size variations don't trigger repeated allocations.
 func (a *WriteArena) CompressBuf(minSize int) []byte {
 	if len(a.compressBuf) < minSize {
-		a.compressBuf = make([]byte, arenaNextPow2(minSize))
+		if a.compressBuf != nil {
+			arenaMPool.Free(a.compressBuf)
+		}
+		var err error
+		a.compressBuf, err = arenaMPool.Alloc(arenaNextPow2(minSize), true)
+		if err != nil {
+			panic(err)
+		}
 	}
 	return a.compressBuf[:minSize]
+}
+
+// FreeBuffers releases the off-heap data and compressBuf allocations.
+// Call this before dropping an arena that won't be returned to the pool.
+func (a *WriteArena) FreeBuffers() {
+	if a.data != nil {
+		arenaMPool.Free(a.data)
+		a.data = nil
+	}
+	if a.compressBuf != nil {
+		arenaMPool.Free(a.compressBuf)
+		a.compressBuf = nil
+	}
 }
 
 type objectWriterV1 struct {
