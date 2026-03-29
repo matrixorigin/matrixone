@@ -59,7 +59,8 @@ var (
 	MoTableStats             = strings.ToUpper("MoTableStats")
 	WorkspaceThreshold       = strings.ToUpper("WorkspaceThreshold")
 	TableExtra               = strings.ToUpper("table-extra")
-	PrefetchOnSubscribed     = strings.ToUpper("prefetch-on-subscribed")
+	PrefetchOnSubscribed         = strings.ToUpper("prefetch-on-subscribed")
+	ActivateTenantCatalogMethod  = strings.ToUpper("ActivateTenantCatalog")
 )
 
 var (
@@ -103,7 +104,8 @@ var (
 		MoTableStats:             handleMoTableStats,
 		WorkspaceThreshold:       handleWorkspaceThreshold,
 		TableExtra:               handleTableExtra,
-		PrefetchOnSubscribed:     handlePrefetchOnSubscribed,
+		PrefetchOnSubscribed:         handlePrefetchOnSubscribed,
+		ActivateTenantCatalogMethod:  handleActivateTenantCatalog,
 	}
 )
 

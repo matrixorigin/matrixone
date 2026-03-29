@@ -617,7 +617,14 @@ func (db *txnDatabase) loadTableFromStorage(
 			return
 		}
 		if row := res.Batches[0].RowCount(); row != 1 {
-			panic(fmt.Sprintf("FIND_TABLE loadTableFromStorage failed: table result row cnt: %v, sql : %s", row, tblSql))
+			// Zero or multiple rows may happen for dropped accounts whose
+			// catalog was compacted by a checkpoint or hasn't been fully
+			// activated yet.  Return nil instead of panicking so the caller
+			// can handle the missing table gracefully.
+			logutil.Warn("FIND_TABLE loadTableFromStorage unexpected row count",
+				zap.Int("rows", row),
+				zap.String("sql", tblSql))
+			return
 		}
 		bat := res.Batches[0]
 
@@ -651,12 +658,24 @@ func (db *txnDatabase) loadTableFromStorage(
 				return
 			}
 		}
+		logutil.Info("FIND_TABLE loadTableFromStorage columns",
+			zap.String("table", name),
+			zap.Uint32("accountID", accountID),
+			zap.Int("batches", len(res.Batches)),
+			zap.Int("totalRows", bat.RowCount()),
+			zap.Uint64("tableID", tblid),
+		)
 		if err := fillTsVecForSysTableQueryBatch(bat, ts, res.Mp); err != nil {
 			return nil, err
 		}
 		cache.ParseColumnsBatchAnd(bat, func(m map[cache.TableItemKey]cache.Columns) {
 			if len(m) != 1 {
-				panic(fmt.Sprintf("FIND_TABLE loadTableFromStorage failed: columns touch %d tables", len(m)))
+				logutil.Warn("FIND_TABLE loadTableFromStorage columns touch unexpected tables",
+					zap.Int("count", len(m)),
+					zap.String("table", name))
+				// Clear tableitem so the caller sees nil.
+				tableitem = nil
+				return
 			}
 			for _, v := range m {
 				cache.InitTableItemWithColumns(tableitem, v)
@@ -680,21 +699,37 @@ func (db *txnDatabase) getTableItem(
 	}
 	var err error
 	c := engine.GetLatestCatalogCache()
-	if ok := c.GetTable(&item); !ok {
-		var tableitem *cache.TableItem
-		if !c.CanServe(types.TimestampToTS(db.op.SnapshotTS())) ||
-			!engine.pClient.CanServeAccount(accountID, db.op.SnapshotTS()) {
-			logutil.Info("FIND_TABLE loadTableFromStorage", zap.String("table", name), zap.Uint32("accountID", accountID), zap.String("txn", db.op.Txn().DebugString()), zap.String("cacheTS", c.GetStartTS().ToString()))
-			if tableitem, err = db.loadTableFromStorage(ctx, accountID, name); err != nil {
-				return nil, err
-			}
+	if ok := c.GetTable(&item); ok {
+		// Guard against a transient catalog-cache window: push logtail
+		// delivers mo_tables and mo_columns entries separately, each
+		// applied under a distinct catalogCacheMu acquisition.
+		// InsertTable creates a BTree item with nil Defs; InsertColumns
+		// later replaces it with a fully-populated copy (COW).  Between
+		// the two, a concurrent GetTable reader can observe the
+		// intermediate item whose Defs is nil.  Fall through to
+		// loadTableFromStorage so callers never see a column-less
+		// table definition.
+		if item.Defs != nil {
+			return &item, nil
 		}
-		if tableitem == nil {
-			return nil, nil
-		}
-		return tableitem, nil
+		logutil.Warn("FIND_TABLE catalog-cache item has no column defs, falling through to storage",
+			zap.String("table", name),
+			zap.Uint32("accountID", accountID),
+			zap.Uint64("tableID", item.Id),
+		)
 	}
-	return &item, nil
+	var tableitem *cache.TableItem
+	if !c.CanServe(types.TimestampToTS(db.op.SnapshotTS())) ||
+		!engine.pClient.CanServeAccount(accountID, db.op.SnapshotTS()) {
+		logutil.Info("FIND_TABLE loadTableFromStorage", zap.String("table", name), zap.Uint32("accountID", accountID), zap.String("txn", db.op.Txn().DebugString()), zap.String("cacheTS", c.GetStartTS().ToString()))
+		if tableitem, err = db.loadTableFromStorage(ctx, accountID, name); err != nil {
+			return nil, err
+		}
+	}
+	if tableitem == nil {
+		return nil, nil
+	}
+	return tableitem, nil
 }
 
 // syncLogicalIdIndexInsert synchronizes the logical_id index table for INSERT/UPDATE operations

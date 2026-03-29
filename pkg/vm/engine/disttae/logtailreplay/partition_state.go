@@ -167,16 +167,15 @@ func (p *PartitionState) handleDataObjectEntry(
 
 	old, exist := p.dataObjectsNameIndex.Get(objEntry)
 	if exist {
-		// why check the deleteTime here? consider this situation:
-		// 		1. insert on an object, then these insert operations recorded into a CKP.
-		// 		2. and delete this object, this operation recorded into WAL.
-		// 		3. restart
-		// 		4. replay CKP(lazily) into partition state --> replay WAL into partition state
-		// the delete record in WAL could be overwritten by insert record in CKP,
-		// causing logic err of the objects' visibility(dead object back to life!!).
+		// Dead-object protection — see the detailed comment in
+		// HandleDataObjectList for the full explanation.
 		//
-		// if this happened, just skip this object will be fine,
-		if !old.DeleteTime.IsEmpty() {
+		// Only skip when the incoming entry is a CREATE (DeleteTime empty)
+		// and the existing entry is already dead (DeleteTime non-empty).
+		// When both are DELETEs, let it proceed so GC can clean up btree
+		// rows that may have been inserted between two arrivals of the
+		// same sealed-appendable DELETE (push-then-activation race).
+		if !old.DeleteTime.IsEmpty() && objEntry.DeleteTime.IsEmpty() {
 			return
 		}
 	} else {
@@ -244,27 +243,8 @@ func (p *PartitionState) handleDataObjectEntry(
 				}
 				numDeleted++
 			}
-
-			//it's tricky here.
-			//Due to consuming lazily the checkpoint,
-			//we have to take the following scenario into account:
-			//1. CN receives deletes for a non-appendable block from the log tail,
-			//   then apply the deletes into PartitionState.rows.
-			//2. CN receives block meta of the above non-appendable block to be inserted
-			//   from the checkpoint, then apply the block meta into PartitionState.blocks.
-			// So , if the above scenario happens, we need to set the non-appendable block into
-			// PartitionState.dirtyBlocks.
-			//if !objEntry.EntryState && !objEntry.HasDeltaLoc {
-			//	p.dirtyBlocks.Set(entry.BlockID)
-			//	break
-			//}
 		}
 		iter.Release()
-
-		// if there are no rows for the block, delete the block from the dirty
-		//if objEntry.EntryState && scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
-		//	p.dirtyBlocks.Delete(*blkID)
-		//}
 	}
 
 	p.prefetchObject(fs, objEntry)
@@ -451,16 +431,30 @@ func (p *PartitionState) HandleDataObjectList(
 
 		old, exist := p.dataObjectsNameIndex.Get(objEntry)
 		if exist {
-			// why check the deleteTime here? consider this situation:
-			// 		1. insert on an object, then these insert operations recorded into a CKP.
-			// 		2. and delete this object, this operation recorded into WAL.
-			// 		3. restart
-			// 		4. replay CKP(lazily) into partition state --> replay WAL into partition state
-			// the delete record in WAL could be overwritten by insert record in CKP,
-			// causing logic err of the objects' visibility(dead object back to life!!).
+			// Dead-object protection: when this object already exists in nameIndex
+			// with a non-empty DeleteTime (i.e. it's already dead), we must prevent
+			// a CREATE record from overwriting it.
 			//
-			// if this happened, just skip this object will be fine,
-			if !old.DeleteTime.IsEmpty() {
+			// This guards the CKP/WAL replay scenario:
+			//   1. An INSERT on this object is recorded into a CKP.
+			//   2. A DELETE on this object is recorded into WAL.
+			//   3. On restart, CKP is replayed first, then WAL.
+			//   4. Without this guard, the CKP's CREATE would overwrite the
+			//      WAL's DELETE, bringing a dead object back to life.
+			//
+			// We only skip when the incoming entry is a CREATE (DeleteTime empty).
+			// When it is also a DELETE (DeleteTime non-empty), we let it proceed
+			// so that the GC loop below can run. This matters because the same
+			// sealed-appendable DELETE can arrive twice on CN:
+			//   - First via a regular push (GC is a no-op because the btree is
+			//     still empty at that point).
+			//   - Then inside the activation response, by which time the
+			//     activation's INSERT entries have already populated the btree.
+			// The second GC pass must run to clean up those rows; skipping it
+			// would leave duplicate rows and cause "ambiguous column" errors.
+			// Index updates (nameIndex, TSIndex) are idempotent for the same
+			// data, so letting them execute again is harmless.
+			if !old.DeleteTime.IsEmpty() && objEntry.DeleteTime.IsEmpty() {
 				continue
 			}
 		} else {
@@ -486,7 +480,7 @@ func (p *PartitionState) HandleDataObjectList(
 			p.dataObjectTSIndex.Set(e)
 		}
 
-		// for appendable object, gc rows when delete object
+		// For appendable objects, gc in-memory rows when the object is sealed/deleted.
 		iter := p.rows.Copy().Iter()
 		defer iter.Release()
 		objID := objEntry.ObjectStats.ObjectName().ObjectId()
@@ -530,26 +524,7 @@ func (p *PartitionState) HandleDataObjectList(
 						blockDeleted++
 					}
 				}
-
-				//it's tricky here.
-				//Due to consuming lazily the checkpoint,
-				//we have to take the following scenario into account:
-				//1. CN receives deletes for a non-appendable block from the log tail,
-				//   then apply the deletes into PartitionState.rows.
-				//2. CN receives block meta of the above non-appendable block to be inserted
-				//   from the checkpoint, then apply the block meta into PartitionState.blocks.
-				// So , if the above scenario happens, we need to set the non-appendable block into
-				// PartitionState.dirtyBlocks.
-				//if !objEntry.EntryState && !objEntry.HasDeltaLoc {
-				//	p.dirtyBlocks.Set(entry.BlockID)
-				//	break
-				//}
 			}
-
-			// if there are no rows for the block, delete the block from the dirty
-			//if objEntry.EntryState && scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
-			//	p.dirtyBlocks.Delete(*blkID)
-			//}
 		}
 
 		p.prefetchObject(fs, objEntry)

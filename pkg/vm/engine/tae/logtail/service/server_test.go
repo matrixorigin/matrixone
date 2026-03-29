@@ -345,7 +345,7 @@ func TestGetSubLogtailPhaseFiltersLazyCatalogRowsEarly(t *testing.T) {
 			phase.closeCB()
 		}
 	})
-	require.Empty(t, phase.tail.CkpLocation)
+	require.Equal(t, "ckp:phase1", phase.tail.CkpLocation)
 	require.Len(t, phase.tail.Commands, 1)
 	require.Equal(t, []uint32{10}, mustAccountIDsFromEntry(t, phase.tail.Commands[0]))
 }
@@ -387,7 +387,7 @@ func TestPullActivationPhase1FiltersRowsBeforeEnqueue(t *testing.T) {
 	select {
 	case phase := <-server.activationTailChan:
 		t.Cleanup(phase.closeAll)
-		require.Empty(t, phase.tails[2].CkpLocation)
+		require.Equal(t, "ckp:phase1", phase.tails[2].CkpLocation)
 		require.Len(t, phase.tails[2].Commands, 1)
 		require.Equal(t, []uint32{10}, mustAccountIDsFromEntry(t, phase.tails[2].Commands[0]))
 	case <-time.After(time.Second):
