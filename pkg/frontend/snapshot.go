@@ -624,6 +624,15 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		return
 	}
 
+	// When restoring a dropped account (from != to), the source account may
+	// have never been activated on this CN. Activate it so the catalog cache
+	// contains its historical entries for table resolution at snapshot time.
+	if restoreAccount != toAccountId {
+		if err = activateAccountCatalogIfNeeded(ctx, ses, restoreAccount); err != nil {
+			return
+		}
+	}
+
 	// drop foreign key related tables first
 	if err = deleteCurFkTables(ctx, ses.GetService(), bh, dbName, tblName, toAccountId); err != nil {
 		return
@@ -2375,6 +2384,16 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 	// activate the target account's catalog so internal SQL can see its tables
 	if err = activateAccountCatalogIfNeeded(ctx, ses, uint32(toAccountId)); err != nil {
 		return
+	}
+
+	// When restoring a dropped account (from != to), the source account was
+	// never activated on this CN or its data was filtered out by TN publish.
+	// Activate it so the catalog cache and partition state contain its
+	// historical entries, allowing table resolution at the snapshot timestamp.
+	if uint64(fromAccount) != toAccountId {
+		if err = activateAccountCatalogIfNeeded(ctx, ses, uint32(fromAccount)); err != nil {
+			return
+		}
 	}
 
 	// drop foreign key related tables first
