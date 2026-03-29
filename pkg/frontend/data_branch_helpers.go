@@ -247,7 +247,7 @@ func scanSnapshotRelationByID(
 	storage := ses.GetTxnHandler().GetStorage()
 	baseTxnOp := ses.GetTxnHandler().GetTxn()
 	rangeTS := types.TimestampToTS(baseTxnOp.SnapshotTS())
-	logutil.Info(
+	logutil.Debug(
 		"DataBranch-SnapshotScan-Start",
 		zap.String("caller", caller),
 		zap.Uint64("table-id", tableID),
@@ -287,7 +287,7 @@ func scanSnapshotRelationByID(
 	}
 	rangeBlocks := relData.GetBlockInfoSlice()
 	rangeBlockCnt := rangeBlocks.Len()
-	logutil.Info(
+	logutil.Debug(
 		"DataBranch-SnapshotScan-Ranges-Done",
 		zap.String("caller", caller),
 		zap.Uint64("table-id", tableID),

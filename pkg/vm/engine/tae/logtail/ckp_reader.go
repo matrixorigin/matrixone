@@ -692,49 +692,6 @@ func (reader *CKPReader) ConsumeCheckpointWithTableID(
 	if !reader.withTableID {
 		panic("not support")
 	}
-	traceMoDatabase := reader.tid == pkgcatalog.MO_DATABASE_ID
-	var dataCnt, tombstoneCnt int
-	samples := make([]string, 0, 8)
-	wrappedForEach := func(
-		ctx context.Context,
-		fs fileservice.FileService,
-		obj objectio.ObjectEntry,
-		isTombstone bool,
-	) error {
-		if traceMoDatabase {
-			if isTombstone {
-				tombstoneCnt++
-			} else {
-				dataCnt++
-			}
-			if len(samples) < 8 {
-				samples = append(samples, fmt.Sprintf(
-					"%s[tomb=%t,appendable=%t,c=%s,d=%s,rows=%d,blk=%d,size=%d]",
-					obj.ObjectName().String(),
-					isTombstone,
-					obj.GetAppendable(),
-					obj.CreateTime.ToString(),
-					obj.DeleteTime.ToString(),
-					obj.Rows(),
-					obj.BlkCnt(),
-					obj.Size(),
-				))
-			}
-		}
-		return forEachObject(ctx, fs, obj, isTombstone)
-	}
-	defer func() {
-		if traceMoDatabase {
-			logutil.Info(
-				"CKPReader-MoDatabase-ObjectEntries",
-				zap.Uint64("table-id", reader.tid),
-				zap.Uint32("version", reader.version),
-				zap.Int("data-object-entry-cnt", dataCnt),
-				zap.Int("tombstone-object-entry-cnt", tombstoneCnt),
-				zap.Strings("samples", samples),
-			)
-		}
-	}()
 	if reader.version <= CheckpointVersion12 {
 		tmpBatch := ckputil.MakeDataScanTableIDBatch()
 		defer tmpBatch.Clean(reader.mp)
@@ -773,14 +730,14 @@ func (reader *CKPReader) ConsumeCheckpointWithTableID(
 				default:
 					panic(fmt.Sprintf("invalid object type %d", objectTypes[i]))
 				}
-				if err = wrappedForEach(ctx, reader.fs, obj, isTombstone); err != nil {
+				if err = forEachObject(ctx, reader.fs, obj, isTombstone); err != nil {
 					return
 				}
 			}
 		}
 	} else {
 		return consumeCheckpointWithTableID(
-			ctx, wrappedForEach, reader.dataRanges, reader.tombstoneRanges, reader.tid, reader.mp, reader.fs,
+			ctx, forEachObject, reader.dataRanges, reader.tombstoneRanges, reader.tid, reader.mp, reader.fs,
 		)
 	}
 }

@@ -1189,7 +1189,7 @@ func (p *baseHandle) resolveVisibleObjectsByDeleteChain(
 		return resolved[i].CreateTime.LT(&resolved[j].CreateTime)
 	})
 	if missingCnt > 0 || orphanCnt > 0 {
-		logutil.Info(
+		logutil.Debug(
 			"ChangesHandle-DeleteChain resolved visible objects",
 			zap.String("kind", kind),
 			zap.Bool("tombstone", isTombstone),
@@ -1423,7 +1423,7 @@ func NewChangesHandlerWithPartitionStateRange(
 ) (changeHandle *ChangeHandler, err error) {
 	stateStart := state.GetStart()
 	if stateStart.GT(&start) {
-		logutil.Info("ChangesHandlerWithPartitionStateRange: stateStart > start, proceeding with range-aware scan",
+		logutil.Debug("ChangesHandlerWithPartitionStateRange: stateStart > start, proceeding with range-aware scan",
 			zap.String("stateStart", stateStart.ToString()),
 			zap.String("start", start.ToString()),
 			zap.String("end", end.ToString()),
@@ -1573,24 +1573,6 @@ func logRangeReplaySelection(
 		}
 		return total
 	}
-	logEntries := func(kind string, entries []*objectio.ObjectEntry) {
-		for _, entry := range entries {
-			if entry == nil {
-				continue
-			}
-			logutil.Info(
-				"ChangesHandle-RangeReplayObject",
-				zap.String("kind", kind),
-				zap.String("name", entry.ObjectShortName().ShortString()),
-				zap.String("create", entry.CreateTime.ToString()),
-				zap.String("delete", entry.DeleteTime.ToString()),
-				zap.Bool("appendable", entry.GetAppendable()),
-				zap.Bool("cn-created", entry.GetCNCreated()),
-				zap.Uint32("rows", entry.Rows()),
-			)
-		}
-	}
-
 	logutil.Info(
 		"ChangesHandle-RangeReplaySelection",
 		zap.String("start", start.ToString()),
@@ -1604,10 +1586,6 @@ func logRangeReplaySelection(
 		zap.Int("tombstone-cnobj-count", len(tombstoneCNObj)),
 		zap.Int("tombstone-cnobj-rows", sumRows(tombstoneCNObj)),
 	)
-	logEntries("data-aobj", dataAobj)
-	logEntries("data-cnobj", dataCNObj)
-	logEntries("tombstone-aobj", tombstoneAobj)
-	logEntries("tombstone-cnobj", tombstoneCNObj)
 }
 
 func getObjectsFromCheckpointEntries(

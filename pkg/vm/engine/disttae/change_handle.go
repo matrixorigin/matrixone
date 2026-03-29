@@ -237,7 +237,7 @@ func (h *PartitionChangesHandle) bufferCurrentRange(ctx context.Context, mp *mpo
 						continue
 					}
 					logutil.Error("ChangesHandle-SnapshotStateRange rebuild failed",
-						zap.String("table", fmt.Sprintf("%d", h.tbl.tableId)),
+						zap.Uint64("table-id", h.tbl.tableId),
 						zap.String("from", h.currentPSFrom.ToString()),
 						zap.String("to", h.currentPSTo.ToString()),
 						zap.Error(swapErr),
@@ -285,7 +285,7 @@ func (h *PartitionChangesHandle) loadCheckpointEntries(
 	}
 	checkpointEntries = make([]*checkpoint.CheckpointEntry, 0, len(resp.Entries))
 	for _, entry := range resp.Entries {
-		logutil.Infof("ChangesHandle-Split get checkpoint entry: %v", entry.String())
+		logutil.Debug("ChangesHandle-Split-CheckpointEntry", zap.String("entry", entry.String()))
 		start := types.TimestampToTS(*entry.Start)
 		end := types.TimestampToTS(*entry.End)
 		if start.LT(&minTS) {
@@ -327,7 +327,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 			if err != nil {
 				return
 			}
-			logutil.Info("ChangesHandle-Split change handles",
+			logutil.Debug("ChangesHandle-Split change handles",
 				zap.String("from", h.fromTs.ToString()),
 				zap.String("to", h.toTs.ToString()),
 				zap.String("ps from", h.currentPSFrom.ToString()),
@@ -354,7 +354,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 			// the partition state's logical range doesn't cover the request.
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 				logutil.Warn("ChangesHandle-Split partition state file missing, falling back to snapshot read",
-					zap.String("table", fmt.Sprintf("%d", h.tbl.tableId)),
+					zap.Uint64("table-id", h.tbl.tableId),
 					zap.String("nextFrom", nextFrom.ToString()),
 					zap.String("stateStart", stateStart.ToString()),
 					zap.Error(err),
@@ -369,13 +369,13 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		}
 	}
 
-	logutil.Info("ChangesHandle-Split request snapshot read",
+	logutil.Debug("ChangesHandle-Split request snapshot read",
 		zap.String("from", nextFrom.ToString()),
 	)
 	if h.snapshotReadPolicy == engine.SnapshotReadPolicyVisibleState {
 		h.currentPSFrom = nextFrom
 		h.currentPSTo = h.toTs
-		logutil.Info("ChangesHandle-Split change handles",
+		logutil.Debug("ChangesHandle-Split change handles",
 			zap.String("from", h.fromTs.ToString()),
 			zap.String("to", h.toTs.ToString()),
 			zap.String("ps from", h.currentPSFrom.ToString()),
@@ -386,7 +386,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		snapshotRangeStart := time.Now()
 		if err = h.swapCurrentHandleToSnapshotStateRange(ctx); err != nil {
 			logutil.Error("ChangesHandle-SnapshotStateRange init failed",
-				zap.String("table", fmt.Sprintf("%d", h.tbl.tableId)),
+				zap.Uint64("table-id", h.tbl.tableId),
 				zap.String("from", h.currentPSFrom.ToString()),
 				zap.String("to", h.currentPSTo.ToString()),
 				zap.Duration("snapshot-range-attempt", time.Since(snapshotRangeStart)),
@@ -395,7 +395,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 			return false, err
 		}
 		logutil.Info("ChangesHandle-SnapshotStateRange-Ready",
-			zap.String("table", fmt.Sprintf("%d", h.tbl.tableId)),
+			zap.Uint64("table-id", h.tbl.tableId),
 			zap.String("from", h.currentPSFrom.ToString()),
 			zap.String("to", h.currentPSTo.ToString()),
 			zap.Duration("duration", time.Since(snapshotRangeStart)),
@@ -411,8 +411,8 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		return
 	}
 	if nextFrom.LT(&minTS) || nextFrom.GT(&maxTS) {
-		logutil.Info("ChangesHandle-Split stale read",
-			zap.String("table", fmt.Sprintf("%d", h.tbl.tableId)),
+		logutil.Debug("ChangesHandle-Split stale read",
+			zap.Uint64("table-id", h.tbl.tableId),
 			zap.String("nextFrom", nextFrom.ToString()),
 			zap.String("stateStart", stateStart.ToString()),
 			zap.String("minTS", minTS.ToString()),
@@ -428,7 +428,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 	if h.toTs.LT(&maxTS) {
 		h.currentPSTo = h.toTs
 	}
-	logutil.Info("ChangesHandle-Split change handles",
+	logutil.Debug("ChangesHandle-Split change handles",
 		zap.String("from", h.fromTs.ToString()),
 		zap.String("to", h.toTs.ToString()),
 		zap.String("ps from", h.currentPSFrom.ToString()),

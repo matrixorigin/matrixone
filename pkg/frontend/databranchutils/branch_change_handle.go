@@ -90,7 +90,7 @@ var CollectChanges = func(
 			return nil, err
 		}
 
-		logutil.Info("DataBranch-CollectChanges-Handle-Ready",
+		logutil.Debug("DataBranch-CollectChanges-Handle-Ready",
 			zap.Uint64("table-id", rel.GetTableID(ctx)),
 			zap.String("from", from.ToString()),
 			zap.String("to", end.ToString()),

@@ -192,7 +192,7 @@ func handleDelsOnLCA(
 		if len(sqlPreview) > 512 {
 			sqlPreview = sqlPreview[:512]
 		}
-		logutil.Info(
+		logutil.Debug(
 			"DataBranch-LCA-SQL-Start",
 			zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
 			zap.String("db-name", lcaTblDef.DbName),
@@ -251,7 +251,7 @@ func handleDelsOnLCA(
 	}
 
 	if forceReaderProbe {
-		logutil.Info(
+		logutil.Debug(
 			"DataBranch-LCA-ReaderProbe-Direct",
 			zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
 			zap.String("table-name", lcaTblDef.Name),
@@ -314,7 +314,7 @@ func handleDelsOnLCA(
 	})
 
 	sqlRet.Close()
-	logutil.Info(
+	logutil.Debug(
 		"DataBranch-LCA-Join-Result",
 		zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
 		zap.String("table-name", lcaTblDef.Name),
@@ -332,7 +332,7 @@ func handleDelsOnLCA(
 		tBat.Vecs[0].Shrink(sels, false)
 		tBat.SetRowCount(tBat.Vecs[0].Length())
 	}
-	logutil.Info(
+	logutil.Debug(
 		"DataBranch-LCA-PostProcess-Done",
 		zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
 		zap.String("table-name", lcaTblDef.Name),
@@ -412,7 +412,7 @@ func runLCAProbeWithReaderFallback(
 		acceptedRowCnt  int
 		duplicateRows   int
 	)
-	logutil.Info(
+	logutil.Debug(
 		"DataBranch-LCA-ReaderFallback-ScanStart",
 		zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
 		zap.String("table-name", lcaTblDef.Name),
@@ -507,7 +507,7 @@ func runLCAProbeWithReaderFallback(
 	if err != nil {
 		return executor.Result{}, err
 	}
-	logutil.Info(
+	logutil.Debug(
 		"DataBranch-LCA-ReaderFallback-ScanDone",
 		zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
 		zap.String("table-name", lcaTblDef.Name),
@@ -577,7 +577,7 @@ func runLCAProbeWithReaderFallback(
 	out.SetRowCount(rowCount)
 	sqlRet.Batches = []*batch.Batch{out}
 	outputCost = time.Since(outputStart)
-	logutil.Info(
+	logutil.Debug(
 		"DataBranch-LCA-ReaderFallback-Output",
 		zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
 		zap.String("table-name", lcaTblDef.Name),

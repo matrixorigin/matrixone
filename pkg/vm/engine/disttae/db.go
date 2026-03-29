@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -544,10 +543,6 @@ func (e *Engine) getOrCreateSnapPartBy(
 			tbl.tableId,
 			tbl.db.op.Txn().DebugString())
 	}
-	if tbl.tableId == catalog.MO_DATABASE_ID {
-		logSnapshotCheckpointPlan(tbl, ts, checkpointEntries)
-	}
-
 	// Try to find existing snapshot that can serve this timestamp
 	if ps := e.snapshotMgr.Find(tbl.db.databaseId, tbl.tableId, ts); ps != nil {
 		return ps, nil
@@ -610,10 +605,6 @@ func (e *Engine) getOrCreateSnapPartBy(
 			"snapshot partition cannot serve ts after consuming checkpoints, ts:%s, table:%s",
 			ts.ToString(), tbl.tableName)
 	}
-	if tbl.tableId == catalog.MO_DATABASE_ID {
-		logSnapshotPartitionSummary(ctx, e, tbl, ts, snap.Snapshot())
-	}
-
 	// Add the new snapshot with LRU eviction
 	ps := e.snapshotMgr.Add(
 		tbl.db.databaseId,
@@ -634,122 +625,6 @@ func (e *Engine) getOrCreateSnapPartBy(
 	e.snapshotMgr.MaybeStartGC()
 
 	return ps, nil
-}
-
-func logSnapshotCheckpointPlan(
-	tbl *txnTable,
-	ts types.TS,
-	checkpointEntries []*checkpoint.CheckpointEntry,
-) {
-	summaries := make([]string, 0, len(checkpointEntries))
-	for _, entry := range checkpointEntries {
-		summaries = append(
-			summaries,
-			fmt.Sprintf(
-				"%s..%s/%s/v%d",
-				entry.GetStart().ToString(),
-				entry.GetEnd().ToString(),
-				entry.GetLocation().String(),
-				entry.GetVersion(),
-			),
-		)
-	}
-	logutil.Info(
-		"Snapshot-MoDatabase-CheckpointPlan",
-		zap.String("table", tbl.tableName),
-		zap.Uint64("table-id", tbl.tableId),
-		zap.String("db", tbl.db.databaseName),
-		zap.Uint64("db-id", tbl.db.databaseId),
-		zap.String("snapshot-ts", ts.ToString()),
-		zap.Int("checkpoint-cnt", len(checkpointEntries)),
-		zap.Strings("checkpoints", summaries),
-	)
-}
-
-func logSnapshotPartitionSummary(
-	ctx context.Context,
-	e *Engine,
-	tbl *txnTable,
-	ts types.TS,
-	ps *logtailreplay.PartitionState,
-) {
-	dataStats, dataErr := ps.CollectDataStats(ctx, ts, e.fs, e.mp)
-	tombStats, tombErr := ps.CollectTombstoneStats(ctx, ts, e.fs)
-
-	dataObjects, dataObjectErr := collectVisibleObjectSamples(ps, ts, false)
-	tombObjects, tombObjectErr := collectVisibleObjectSamples(ps, ts, true)
-
-	fields := []zap.Field{
-		zap.String("table", tbl.tableName),
-		zap.Uint64("table-id", tbl.tableId),
-		zap.String("db", tbl.db.databaseName),
-		zap.Uint64("db-id", tbl.db.databaseId),
-		zap.String("snapshot-ts", ts.ToString()),
-		zap.String("txn", tbl.db.op.Txn().DebugString()),
-		zap.String("ps", fmt.Sprintf("%p", ps)),
-		zap.Int("visible-data-object-cnt", len(dataObjects)),
-		zap.Strings("visible-data-objects", dataObjects),
-		zap.Int("visible-tombstone-object-cnt", len(tombObjects)),
-		zap.Strings("visible-tombstone-objects", tombObjects),
-	}
-	if dataErr != nil {
-		fields = append(fields, zap.NamedError("data-stats-error", dataErr))
-	} else {
-		fields = append(fields,
-			zap.Uint64("data-rows", dataStats.Rows),
-			zap.Int("data-object-cnt", dataStats.ObjectCnt),
-			zap.Int("data-block-cnt", dataStats.BlockCnt),
-		)
-	}
-	if tombErr != nil {
-		fields = append(fields, zap.NamedError("tombstone-stats-error", tombErr))
-	} else {
-		fields = append(fields,
-			zap.Uint64("tombstone-rows", tombStats.Rows),
-			zap.Int("tombstone-object-cnt", tombStats.ObjectCnt),
-			zap.Int("tombstone-block-cnt", tombStats.BlockCnt),
-		)
-	}
-	if dataObjectErr != nil {
-		fields = append(fields, zap.NamedError("data-object-sample-error", dataObjectErr))
-	}
-	if tombObjectErr != nil {
-		fields = append(fields, zap.NamedError("tombstone-object-sample-error", tombObjectErr))
-	}
-	logutil.Info("Snapshot-MoDatabase-StateSummary", fields...)
-}
-
-func collectVisibleObjectSamples(
-	ps *logtailreplay.PartitionState,
-	ts types.TS,
-	tombstone bool,
-) ([]string, error) {
-	iter, err := ps.NewObjectsIter(ts, true, tombstone)
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
-
-	samples := make([]string, 0, 8)
-	for iter.Next() {
-		entry := iter.Entry()
-		if len(samples) >= 8 {
-			break
-		}
-		samples = append(
-			samples,
-			fmt.Sprintf(
-				"%s[c=%s,d=%s,rows=%d,blk=%d,appendable=%t]",
-				entry.ObjectName().String(),
-				entry.CreateTime.ToString(),
-				entry.DeleteTime.ToString(),
-				entry.Rows(),
-				entry.BlkCnt(),
-				entry.GetAppendable(),
-			),
-		)
-	}
-	return samples, nil
 }
 
 func (e *Engine) GetOrCreateLatestPart(

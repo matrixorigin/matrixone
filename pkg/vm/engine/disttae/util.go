@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"strings"
 
 	"go.uber.org/zap"
 
@@ -33,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -690,66 +688,11 @@ func execReadSql(
 	if disableLog {
 		opts = opts.WithStatementOption(executor.StatementOption{}.WithDisableLog())
 	}
-	traceCatalogSnapshot := shouldTraceCatalogSnapshotSQL(sql)
-	if traceCatalogSnapshot {
-		logCatalogSnapshotSQL("disttae.exec.read.sql.start", ctx, op, sql, nil)
-	}
-
 	result, err := exec.Exec(ctx, sql, opts)
 	if err != nil {
-		if traceCatalogSnapshot {
-			logCatalogSnapshotSQL("disttae.exec.read.sql.error", ctx, op, sql, err)
-		}
 		return result, err
 	}
-	if traceCatalogSnapshot {
-		logCatalogSnapshotSQLResult("disttae.exec.read.sql.done", ctx, op, sql, result)
-	}
 	return result, nil
-}
-
-func shouldTraceCatalogSnapshotSQL(sql string) bool {
-	sql = strings.ToLower(sql)
-	return strings.Contains(sql, "mo_catalog") && strings.Contains(sql, "mo_database")
-}
-
-func logCatalogSnapshotSQL(tag string, ctx context.Context, op client.TxnOperator, sql string, err error) {
-	accountID, accountErr := defines.GetAccountId(ctx)
-	fields := []zap.Field{
-		zap.String("snapshot-ts", types.TimestampToTS(op.SnapshotTS()).ToString()),
-		zap.String("txn", op.Txn().DebugString()),
-		zap.String("sql", sql),
-	}
-	if accountErr != nil {
-		fields = append(fields, zap.String("ctx-account-id", "missing"))
-	} else {
-		fields = append(fields, zap.Uint32("ctx-account-id", accountID))
-	}
-	if err != nil {
-		fields = append(fields, zap.Error(err))
-		logutil.Error(tag, fields...)
-		return
-	}
-	logutil.Info(tag, fields...)
-}
-
-func logCatalogSnapshotSQLResult(tag string, ctx context.Context, op client.TxnOperator, sql string, result executor.Result) {
-	accountID, accountErr := defines.GetAccountId(ctx)
-	fields := []zap.Field{
-		zap.String("snapshot-ts", types.TimestampToTS(op.SnapshotTS()).ToString()),
-		zap.String("txn", op.Txn().DebugString()),
-		zap.String("sql", sql),
-		zap.Int("batch-cnt", len(result.Batches)),
-		zap.String("row-counts", stringifySlice(result.Batches, func(b any) string {
-			return fmt.Sprintf("%d", b.(*batch.Batch).RowCount())
-		})),
-	}
-	if accountErr != nil {
-		fields = append(fields, zap.String("ctx-account-id", "missing"))
-	} else {
-		fields = append(fields, zap.Uint32("ctx-account-id", accountID))
-	}
-	logutil.Info(tag, fields...)
 }
 
 func fillTsVecForSysTableQueryBatch(bat *batch.Batch, ts types.TS, m *mpool.MPool) error {

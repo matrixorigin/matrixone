@@ -1036,7 +1036,7 @@ func getRelationById(
 		snapshotStr = types.TimestampToTS(*snapshot.TS).ToString()
 	}
 
-	logutil.Info(
+	logutil.Debug(
 		"DataBranch-GetRelationByID-Start",
 		zap.Uint64("table-id", tableId),
 		zap.String("snapshot-ts", snapshotStr),
@@ -1054,7 +1054,7 @@ func getRelationById(
 		return nil, err
 	}
 	if rel != nil {
-		logutil.Info(
+		logutil.Debug(
 			"DataBranch-GetRelationByID-Done",
 			zap.Uint64("table-id", tableId),
 			zap.String("table-name", rel.GetTableName()),
@@ -1133,7 +1133,7 @@ func getRelations(
 	if baseSnap != nil && baseSnap.TS != nil {
 		baseSnapStr = types.TimestampToTS(*baseSnap.TS).ToString()
 	}
-	logutil.Info(
+	logutil.Debug(
 		"DataBranch-GetRelations-Start",
 		zap.String("target-db", tarDBName),
 		zap.String("target-table", tarTblName),
@@ -1192,7 +1192,7 @@ func getRelations(
 		return
 	}
 
-	logutil.Info(
+	logutil.Debug(
 		"DataBranch-GetRelations-Done",
 		zap.Uint64("target-table-id", tarRel.GetTableID(ctx)),
 		zap.Uint64("base-table-id", baseRel.GetTableID(ctx)),
@@ -1251,7 +1251,7 @@ func constructChangeHandle(
 		); err != nil {
 			return
 		}
-		logutil.Info("DataBranch-CollectChanges-Open",
+		logutil.Debug("DataBranch-CollectChanges-Open",
 			zap.String("side", "target"),
 			zap.Uint64("table-id", tarRange.rel[i].GetTableID(ctx)),
 			zap.String("from", tarRange.from[i].ToString()),
@@ -1276,7 +1276,7 @@ func constructChangeHandle(
 		); err != nil {
 			return
 		}
-		logutil.Info("DataBranch-CollectChanges-Open",
+		logutil.Debug("DataBranch-CollectChanges-Open",
 			zap.String("side", "base"),
 			zap.Uint64("table-id", baseRange.rel[i].GetTableID(ctx)),
 			zap.String("from", baseRange.from[i].ToString()),
@@ -1694,7 +1694,7 @@ func getTableCreationCommitTSByCollectChanges(
 		if found {
 			fields = append(fields, zap.String("commit-ts", result.ToString()))
 		}
-		logutil.Info("DataBranch-TableCTS-CollectChanges-Done", fields...)
+		logutil.Debug("DataBranch-TableCTS-CollectChanges-Done", fields...)
 	}()
 
 	_, _, rel, err := storage.GetRelationById(ctx, txnOp, catalog.MO_TABLES_ID)
