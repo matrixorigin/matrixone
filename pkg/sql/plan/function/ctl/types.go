@@ -66,6 +66,7 @@ var (
 	PrefetchOnSubscribed                  = strings.ToUpper("prefetch-on-subscribed")
 	GCCatalogCacheMethod                  = strings.ToUpper("GCCatalogCache")
 	RefreshViewMetadata                   = strings.ToUpper("RefreshViewMetadata")
+	ActivateTenantCatalogMethod           = strings.ToUpper("ActivateTenantCatalog")
 )
 
 var (
@@ -115,6 +116,7 @@ var (
 		PrefetchOnSubscribed:                  handlePrefetchOnSubscribed,
 		GCCatalogCacheMethod:                  handleGCCatalogCache,
 		RefreshViewMetadata:                   handleRefreshViewMetadata,
+		ActivateTenantCatalogMethod:           handleActivateTenantCatalog,
 	}
 )
 

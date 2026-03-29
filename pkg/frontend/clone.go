@@ -1014,6 +1014,10 @@ func handleCloneTable(
 		}
 	}
 
+	if err = activateAccountCatalogIfNeeded(reqCtx, ses, toAccountId); err != nil {
+		return
+	}
+
 	ctx = cloneTargetContext(reqCtx, ses.GetTenantInfo().GetTenantID(), toAccountId)
 
 	var sql string
@@ -1301,6 +1305,10 @@ func handleCloneDatabaseWithSource(
 				err = restoreErr
 			}
 		}()
+	}
+
+	if err = activateAccountCatalogIfNeeded(reqCtx, ses, source.toAccountId); err != nil {
+		return
 	}
 
 	ctx1 = cloneTargetContext(reqCtx, ses.GetTenantInfo().GetTenantID(), source.toAccountId)

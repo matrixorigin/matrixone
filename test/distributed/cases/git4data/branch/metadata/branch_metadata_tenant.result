@@ -1,5 +1,10 @@
 drop account if exists acc_branch_meta;
 create account acc_branch_meta admin_name "root1" identified by "111";
+set @acc_id = (
+select account_id from mo_catalog.mo_account
+where account_name = 'acc_branch_meta'
+);
+set @_activate = (select mo_ctl('cn', 'ActivateTenantCatalog', cast(@acc_id as char)));
 drop database if exists br_meta_db;
 create database br_meta_db;
 use br_meta_db;
@@ -10,10 +15,6 @@ drop snapshot if exists sp_base_tbl;
 create snapshot sp_base_tbl for table br_meta_db base_tbl;
 drop table if exists branch_tbl;
 data branch create table branch_tbl from base_tbl{snapshot="sp_base_tbl"};
-set @acc_id = (
-select account_id from mo_catalog.mo_account
-where account_name = 'acc_branch_meta'
-);
 set @branch_tbl_id = (
 select rel_id from mo_catalog.mo_tables
 where account_id = @acc_id and reldatabase = 'br_meta_db' and relname = 'branch_tbl'

@@ -27,19 +27,29 @@ import (
 
 var lazyCatalogSubscribeFilterMP = mpool.MustNew("lazy-catalog-subscribe-filter")
 
+// filterLazyCatalogPulledTail filters a pulled logtail for the three lazy
+// catalog tables, keeping only rows belonging to allowedAccounts.
+//
+// When stripObjectMeta is true, object-metadata entries (Entry_DataObject,
+// Entry_TombstoneObject) are dropped entirely. This is correct for activation
+// responses because partition state already has all object metadata from the
+// earlier subscribe + steady-state push; activation only needs the row-level
+// catalog entries for the activated account.
 func filterLazyCatalogPulledTail(
 	tail logtail.TableLogtail,
 	allowedAccounts *lazyCatalogAllowedAccounts,
+	stripObjectMeta bool,
 ) (logtail.TableLogtail, func(), error) {
 	if allowedAccounts == nil || !isLazyCatalogTableID(tail.Table) {
 		return tail, nil, nil
 	}
-	return filterLazyCatalogSubscribeRowsInTail(tail, allowedAccounts)
+	return filterLazyCatalogSubscribeRowsInTail(tail, allowedAccounts, stripObjectMeta)
 }
 
 func filterLazyCatalogSubscribeRowsInTail(
 	tail logtail.TableLogtail,
 	allowedAccounts *lazyCatalogAllowedAccounts,
+	stripObjectMeta bool,
 ) (logtail.TableLogtail, func(), error) {
 	// Subscribe snapshots can still carry mixed-account api.Entry batches for the
 	// three catalog tables, so the TN side must copy only the target rows.
@@ -49,12 +59,14 @@ func filterLazyCatalogSubscribeRowsInTail(
 
 	filtered := tail
 	var closeCBs []func()
-	// Raw checkpoint locations are not account-filtered. Lazy catalog subscribe
-	// and activation responses must therefore forward only filtered row data.
-	filtered.CkpLocation = ""
+	// Keep CkpLocation as-is. Checkpoints are not account-filtered, but the
+	// CN needs them to populate partition state (object entries). Account-level
+	// filtering happens at the catalog-cache replay SQL layer via
+	// "account_id IN (...)" predicates. Stripping CkpLocation would leave
+	// partition state empty after a checkpoint, breaking replay queries.
 	filtered.Commands = make([]api.Entry, 0, len(tail.Commands))
 	for i := range tail.Commands {
-		entry, keep, closeCB, err := filterLazyCatalogSubscribeEntry(tail.Commands[i], allowedAccounts)
+		entry, keep, closeCB, err := filterLazyCatalogSubscribeEntry(tail.Commands[i], allowedAccounts, stripObjectMeta)
 		if err != nil {
 			closeCallbacks(closeCB)
 			closeCallbacks(closeCBs...)
@@ -110,14 +122,23 @@ func filterLazyCatalogPublishRowsInTail(
 func filterLazyCatalogSubscribeEntry(
 	entry api.Entry,
 	allowedAccounts *lazyCatalogAllowedAccounts,
+	stripObjectMeta bool,
 ) (api.Entry, bool, func(), error) {
 	switch entry.GetEntryType() {
 	case api.Entry_Insert, api.Entry_Update:
 		return filterLazyCatalogSubscribeInsertOrUpdateEntry(entry, allowedAccounts)
 	case api.Entry_Delete:
 		return filterLazyCatalogSubscribeDeleteEntry(entry, allowedAccounts)
+	case api.Entry_DataObject, api.Entry_TombstoneObject:
+		// Object metadata entries are table-level (not account-specific).
+		// For subscribe: keep them so CN can populate partition state.
+		// For activation: drop them because partition state already has
+		// all objects from the earlier subscribe + steady-state push.
+		if stripObjectMeta {
+			return api.Entry{}, false, nil, nil
+		}
+		return entry, true, nil, nil
 	default:
-		// Object/meta entries are not row-level tenant data; keep them untouched.
 		return entry, true, nil, nil
 	}
 }
