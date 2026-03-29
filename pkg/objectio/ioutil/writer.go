@@ -276,6 +276,9 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		if w.isSetPK && w.pk == uint16(i) {
 			isPK = true
 		}
+		if w.fakePK == uint16(i) {
+			isPK = true
+		}
 		columnData := containers.ToTNVector(vec, common.DefaultAllocator)
 		if !zmOnlyHiddenColumn {
 			// update null count and distinct value
