@@ -301,6 +301,15 @@ func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
 	for _, rel := range relations {
 		relation, err := database.Relation(c.proc.Ctx, rel, nil)
 		if err != nil {
+			if isMissingTableForFkCleanup(err) {
+				logutil.Warn(
+					"cannot open relation when drop database fk cleanup",
+					zap.String("table", fmt.Sprintf("%s-%s", dbName, rel)),
+					zap.String("txn info", c.proc.GetTxnOperator().Txn().DebugString()),
+					zap.Error(err),
+				)
+				continue
+			}
 			return err
 		}
 		tblId := relation.GetTableID(c.proc.Ctx)
@@ -326,7 +335,7 @@ func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
 				// a table refer to it?
 				// the FOREIGN_KEY_CHECKS disabled !!!
 				// so this inexistence is expected, no need to return an error.
-				if strings.Contains(err.Error(), "can not find table by id") {
+				if isMissingTableForFkCleanup(err) {
 					logutil.Warn(
 						"cannot find the referred table when drop database",
 						zap.String("table", fmt.Sprintf("%s-%s", dbName, rel)),
@@ -351,6 +360,16 @@ func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
 			}
 			_, _, childTable, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), childId)
 			if err != nil {
+				if isMissingTableForFkCleanup(err) {
+					logutil.Warn(
+						"cannot find child table when drop database fk cleanup",
+						zap.String("table", fmt.Sprintf("%s-%s", dbName, rel)),
+						zap.Int("child table id", int(childId)),
+						zap.String("txn info", c.proc.GetTxnOperator().Txn().DebugString()),
+						zap.Error(err),
+					)
+					continue
+				}
 				return err
 			}
 			err = s.removeParentTblIdFromChildTable(c, childTable, tblId)
@@ -360,6 +379,12 @@ func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
 		}
 	}
 	return nil
+}
+
+func isMissingTableForFkCleanup(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
+		(moerr.IsMoErrCode(err, moerr.ErrInternal) &&
+			strings.Contains(err.Error(), "can not find table by id"))
 }
 
 // Drop the old view, and create the new view.
@@ -420,7 +445,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	isTemp := qry.GetTableDef().GetIsTemporary()
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
-		return convertDBEOB(c.proc.Ctx, err, dbName)
+		return convertDBEOBToNoSuchTable(c.proc.Ctx, err, dbName, tblName)
 	}
 	databaseId := dbSource.GetDatabaseId(c.proc.Ctx)
 
@@ -1962,10 +1987,10 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		if qry.GetDatabase() != "" {
 			dbName = qry.GetDatabase()
 		}
-		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
-			return convertDBEOB(c.proc.Ctx, err, dbName)
-		}
 		tblName := qry.GetTableDef().GetName()
+		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+			return convertDBEOBToNoSuchTable(c.proc.Ctx, err, dbName, tblName)
+		}
 		if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 			return err
 		}
@@ -1973,7 +1998,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 
 	dbSource, err := c.e.Database(c.proc.Ctx, qry.Database, c.proc.GetTxnOperator())
 	if err != nil {
-		return convertDBEOB(c.proc.Ctx, err, qry.Database)
+		return convertDBEOBToNoSuchTable(c.proc.Ctx, err, qry.Database, qry.Table)
 	}
 
 	r, err := dbSource.Relation(c.proc.Ctx, qry.Table, nil)
@@ -2001,21 +2026,13 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	}
 
 	for _, p := range metadata.Partitions {
-		q := *qry
-		q.Table = p.PartitionTableName
-		r, err := dbSource.Relation(c.proc.Ctx, q.Table, nil)
+		r, err := dbSource.Relation(c.proc.Ctx, p.PartitionTableName, nil)
 		if err != nil {
 			return err
 		}
-		q.TableDef = r.CopyTableDef(c.proc.Ctx)
-		for _, def := range q.Index.IndexTables {
-			def.Name = fmt.Sprintf("%s_%s", def.Name, p.Name)
-		}
-		for _, def := range q.Index.TableDef.Indexes {
-			def.IndexTableName = fmt.Sprintf("%s_%s", def.IndexTableName, p.Name)
-		}
+		q := cloneCreateIndexForPartition(qry, p.PartitionTableName, p.Name, r.CopyTableDef(c.proc.Ctx))
 
-		err = s.doCreateIndex(c, &q, dbSource, r)
+		err = s.doCreateIndex(c, q, dbSource, r)
 		if err != nil {
 			return err
 		}
@@ -2298,7 +2315,7 @@ func (s *Scope) DropIndex(c *Compile) error {
 	}
 	d, err := c.e.Database(c.proc.Ctx, qry.Database, c.proc.GetTxnOperator())
 	if err != nil {
-		return convertDBEOB(c.proc.Ctx, err, qry.Database)
+		return convertDBEOBToNoSuchTable(c.proc.Ctx, err, qry.Database, qry.Table)
 	}
 	r, err := d.Relation(c.proc.Ctx, qry.Table, nil)
 	if err != nil {
@@ -2680,24 +2697,56 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		for _, ct := range oldCt.Cts {
-			if def, ok := ct.(*engine.RefChildTableDef); ok {
-				for idx, refTable := range def.Tables {
-					if refTable == oldID {
-						def.Tables[idx] = newID
-						break
-					}
-				}
-				break
+		if updateRefChildTableConstraintIDs(oldCt, oldID, newID) {
+			err = fkRelation.UpdateConstraint(c.proc.Ctx, oldCt)
+			if err != nil {
+				return err
 			}
-		}
-		err = fkRelation.UpdateConstraint(c.proc.Ctx, oldCt)
-		if err != nil {
-			return err
 		}
 	}
 
 	return nil
+}
+
+func cloneCreateIndexForPartition(
+	qry *plan.CreateIndex,
+	partitionTableName string,
+	partitionName string,
+	tableDef *plan.TableDef,
+) *plan.CreateIndex {
+	dd := &plan.DataDefinition{
+		DdlType: plan.DataDefinition_CREATE_INDEX,
+		Definition: &plan.DataDefinition_CreateIndex{
+			CreateIndex: qry,
+		},
+	}
+	cloned := plan2.DeepCopyDataDefinition(dd).Definition.(*plan.DataDefinition_CreateIndex).CreateIndex
+	cloned.Table = partitionTableName
+	cloned.TableDef = tableDef
+	for _, def := range cloned.Index.IndexTables {
+		def.Name = fmt.Sprintf("%s_%s", def.Name, partitionName)
+	}
+	for _, def := range cloned.Index.TableDef.Indexes {
+		def.IndexTableName = fmt.Sprintf("%s_%s", def.IndexTableName, partitionName)
+	}
+	return cloned
+}
+
+func updateRefChildTableConstraintIDs(ct *engine.ConstraintDef, oldID, newID uint64) bool {
+	updated := false
+	for _, c := range ct.Cts {
+		def, ok := c.(*engine.RefChildTableDef)
+		if !ok {
+			continue
+		}
+		for idx, refTable := range def.Tables {
+			if refTable == oldID {
+				def.Tables[idx] = newID
+				updated = true
+			}
+		}
+	}
+	return updated
 }
 
 func (s *Scope) DropSequence(c *Compile) error {
@@ -2806,7 +2855,7 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 		if qry.GetIfExists() {
 			return nil
 		}
-		return convertDBEOB(c.proc.Ctx, err, dbName)
+		return convertDBEOBToNoSuchTable(c.proc.Ctx, err, dbName, tblName)
 	}
 
 	if rel, err = dbSource.Relation(c.proc.Ctx, tblName, nil); err != nil {

@@ -24,6 +24,7 @@ import (
 	"net"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -2494,6 +2495,72 @@ func TestParseExecuteDataWithJSONParam(t *testing.T) {
 
 	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt, testData, 0))
 	require.Equal(t, string(jsonPayload), prepareStmt.params.GetStringAt(0))
+}
+
+func buildStringExecutePacket(proto *MysqlProtocolImpl, tp defines.MysqlType, payload string) []byte {
+	data := make([]byte, 8+2+9+len(payload))
+	copy(data, []byte{0, 0, 0, 0, 0, 0, 1, byte(tp), 0})
+	pos := proto.writeStringLenEnc(data, 9, payload)
+	return data[:pos]
+}
+
+func TestPrepareStmtClearBinaryParamStateReleasesParamArea(t *testing.T) {
+	ctx := context.TODO()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select ?")
+
+	firstPayload := strings.Repeat("a", 300)
+	secondPayload := strings.Repeat("b", 300)
+
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt, buildStringExecutePacket(proto, defines.MYSQL_TYPE_VAR_STRING, firstPayload), 0))
+	firstAreaLen := len(prepareStmt.params.GetArea())
+	require.Greater(t, firstAreaLen, 0)
+
+	prepareStmt.clearBinaryParamState(proc)
+	require.Nil(t, prepareStmt.params)
+	require.Empty(t, prepareStmt.getFromSendLongData)
+
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt, buildStringExecutePacket(proto, defines.MYSQL_TYPE_VAR_STRING, secondPayload), 0))
+	require.Equal(t, secondPayload, prepareStmt.params.GetStringAt(0))
+	require.Equal(t, firstAreaLen, len(prepareStmt.params.GetArea()))
+}
+
+func TestParseExecuteDataRejectsTruncatedNewParamBoundFlag(t *testing.T) {
+	ctx := context.TODO()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select ?")
+
+	testData := []byte{0, 0, 0, 0, 0, 0}
+
+	var err error
+	require.NotPanics(t, func() {
+		err = proto.ParseExecuteData(ctx, proc, prepareStmt, testData, 0)
+	})
+	require.Error(t, err)
+}
+
+func TestParseSendLongDataAppendsRepeatedChunks(t *testing.T) {
+	ctx := context.TODO()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select ?")
+
+	firstChunk := append(make([]byte, 2), []byte("hello ")...)
+	secondChunk := append(make([]byte, 2), []byte("world")...)
+
+	require.NoError(t, proto.ParseSendLongData(ctx, proc, prepareStmt, firstChunk, 0))
+	require.NoError(t, proto.ParseSendLongData(ctx, proc, prepareStmt, secondChunk, 0))
+	require.Equal(t, "hello world", prepareStmt.params.GetStringAt(0))
+	_, ok := prepareStmt.getFromSendLongData[0]
+	require.True(t, ok)
+}
+
+func TestParseSendLongDataInitializesTrackingMap(t *testing.T) {
+	ctx := context.TODO()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select ?")
+	prepareStmt.getFromSendLongData = nil
+
+	chunk := append(make([]byte, 2), []byte("hello")...)
+	require.NoError(t, proto.ParseSendLongData(ctx, proc, prepareStmt, chunk, 0))
+	require.Equal(t, "hello", prepareStmt.params.GetStringAt(0))
+	_, ok := prepareStmt.getFromSendLongData[0]
+	require.True(t, ok)
 }
 
 /* FIXME The prepare process has undergone some modifications,
