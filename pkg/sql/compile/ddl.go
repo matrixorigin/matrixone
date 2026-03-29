@@ -445,7 +445,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	isTemp := qry.GetTableDef().GetIsTemporary()
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
-		return convertDBEOB(c.proc.Ctx, err, dbName)
+		return convertDBEOBToNoSuchTable(c.proc.Ctx, err, dbName, tblName)
 	}
 	databaseId := dbSource.GetDatabaseId(c.proc.Ctx)
 
@@ -1987,10 +1987,10 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		if qry.GetDatabase() != "" {
 			dbName = qry.GetDatabase()
 		}
-		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
-			return convertDBEOB(c.proc.Ctx, err, dbName)
-		}
 		tblName := qry.GetTableDef().GetName()
+		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+			return convertDBEOBToNoSuchTable(c.proc.Ctx, err, dbName, tblName)
+		}
 		if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 			return err
 		}
@@ -1998,7 +1998,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 
 	dbSource, err := c.e.Database(c.proc.Ctx, qry.Database, c.proc.GetTxnOperator())
 	if err != nil {
-		return convertDBEOB(c.proc.Ctx, err, qry.Database)
+		return convertDBEOBToNoSuchTable(c.proc.Ctx, err, qry.Database, qry.Table)
 	}
 
 	r, err := dbSource.Relation(c.proc.Ctx, qry.Table, nil)
@@ -2323,7 +2323,7 @@ func (s *Scope) DropIndex(c *Compile) error {
 	}
 	d, err := c.e.Database(c.proc.Ctx, qry.Database, c.proc.GetTxnOperator())
 	if err != nil {
-		return convertDBEOB(c.proc.Ctx, err, qry.Database)
+		return convertDBEOBToNoSuchTable(c.proc.Ctx, err, qry.Database, qry.Table)
 	}
 	r, err := d.Relation(c.proc.Ctx, qry.Table, nil)
 	if err != nil {
@@ -2831,7 +2831,7 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 		if qry.GetIfExists() {
 			return nil
 		}
-		return convertDBEOB(c.proc.Ctx, err, dbName)
+		return convertDBEOBToNoSuchTable(c.proc.Ctx, err, dbName, tblName)
 	}
 
 	if rel, err = dbSource.Relation(c.proc.Ctx, tblName, nil); err != nil {
