@@ -442,9 +442,9 @@ func (r *runner) onPostCheckpointEntries(entries ...any) {
 		logutil.Debugf("Post %s", entry.String())
 	}
 
-	// Drain arena pools to reclaim RSS now that the checkpoint
-	// (and the preceding flush/merge cycle) is complete.
-	objectio.DrainArenaPools()
+	// Schedule a debounced arena drain.  The timer resets on each
+	// checkpoint, so during active operation the pools stay warm.
+	objectio.ScheduleArenaDrain()
 	mergesort.DrainTransferSlabPool()
 }
 
