@@ -301,6 +301,15 @@ func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
 	for _, rel := range relations {
 		relation, err := database.Relation(c.proc.Ctx, rel, nil)
 		if err != nil {
+			if isMissingTableForFkCleanup(err) {
+				logutil.Warn(
+					"cannot open relation when drop database fk cleanup",
+					zap.String("table", fmt.Sprintf("%s-%s", dbName, rel)),
+					zap.String("txn info", c.proc.GetTxnOperator().Txn().DebugString()),
+					zap.Error(err),
+				)
+				continue
+			}
 			return err
 		}
 		tblId := relation.GetTableID(c.proc.Ctx)
@@ -326,7 +335,7 @@ func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
 				// a table refer to it?
 				// the FOREIGN_KEY_CHECKS disabled !!!
 				// so this inexistence is expected, no need to return an error.
-				if strings.Contains(err.Error(), "can not find table by id") {
+				if isMissingTableForFkCleanup(err) {
 					logutil.Warn(
 						"cannot find the referred table when drop database",
 						zap.String("table", fmt.Sprintf("%s-%s", dbName, rel)),
@@ -351,6 +360,16 @@ func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
 			}
 			_, _, childTable, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), childId)
 			if err != nil {
+				if isMissingTableForFkCleanup(err) {
+					logutil.Warn(
+						"cannot find child table when drop database fk cleanup",
+						zap.String("table", fmt.Sprintf("%s-%s", dbName, rel)),
+						zap.Int("child table id", int(childId)),
+						zap.String("txn info", c.proc.GetTxnOperator().Txn().DebugString()),
+						zap.Error(err),
+					)
+					continue
+				}
 				return err
 			}
 			err = s.removeParentTblIdFromChildTable(c, childTable, tblId)
@@ -360,6 +379,12 @@ func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
 		}
 	}
 	return nil
+}
+
+func isMissingTableForFkCleanup(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
+		(moerr.IsMoErrCode(err, moerr.ErrInternal) &&
+			strings.Contains(err.Error(), "can not find table by id"))
 }
 
 // Drop the old view, and create the new view.
