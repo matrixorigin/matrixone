@@ -1597,6 +1597,72 @@ func TestGetObjectsFromCheckpointEntriesDedup(t *testing.T) {
 	require.Equal(t, tombstoneCN.ObjectShortName().ShortString(), tombstoneCNObjs[0].ObjectShortName().ShortString())
 }
 
+func TestGetObjectsFromCheckpointRange(t *testing.T) {
+	ioutil.RunPipelineTest(
+		func() {
+			catalog.SetupDefines("")
+
+			ctx := context.Background()
+			start := types.BuildTS(10, 0)
+			end := types.BuildTS(20, 0)
+
+			appendableOverlap := newObjectEntryForCheckpointTest(t, 1, true, false, types.BuildTS(5, 0), types.BuildTS(25, 0))
+			appendableStillVisible := newObjectEntryForCheckpointTest(t, 2, true, false, types.BuildTS(6, 0), types.TS{})
+			appendableDeletedBeforeRange := newObjectEntryForCheckpointTest(t, 3, true, false, types.BuildTS(4, 0), types.BuildTS(9, 0))
+			appendableCreatedAfterRange := newObjectEntryForCheckpointTest(t, 4, true, false, types.BuildTS(21, 0), types.TS{})
+			cnInRange := newObjectEntryForCheckpointTest(t, 5, false, true, types.BuildTS(12, 0), types.TS{})
+			cnBeforeRange := newObjectEntryForCheckpointTest(t, 6, false, true, types.BuildTS(8, 0), types.TS{})
+			mergedTNObject := newObjectEntryForCheckpointTest(t, 7, false, false, types.BuildTS(13, 0), types.TS{})
+			mergedTNTombstone := newObjectEntryForCheckpointTest(t, 8, false, false, types.BuildTS(14, 0), types.TS{})
+
+			fakeReaders := []*checkpointReaderStub{
+				{
+					objects: []checkpointObject{
+						{entry: appendableOverlap, isTombstone: false},
+						{entry: appendableStillVisible, isTombstone: false},
+						{entry: appendableDeletedBeforeRange, isTombstone: false},
+						{entry: appendableCreatedAfterRange, isTombstone: false},
+						{entry: cnInRange, isTombstone: false},
+						{entry: cnBeforeRange, isTombstone: false},
+						{entry: mergedTNObject, isTombstone: false},
+						{entry: appendableOverlap, isTombstone: true},
+						{entry: cnInRange, isTombstone: true},
+						{entry: mergedTNTombstone, isTombstone: true},
+					},
+				},
+			}
+
+			readerIdx := 0
+			restore := logtailreplay.SetCheckpointReaderFactoryForTest(func(uint32, objectio.Location, uint64, *mpool.MPool, fileservice.FileService) logtailreplay.CheckpointEntryReader {
+				r := fakeReaders[readerIdx]
+				readerIdx++
+				return r
+			})
+			defer restore()
+
+			entry := checkpoint.NewCheckpointEntry("", start, end, checkpoint.ET_Global)
+
+			dataAobjs, dataCNObjs, tombstoneAobjs, tombstoneCNObjs, err := logtailreplay.TestGetObjectsFromCheckpointRange(ctx, 1, "", start, end, []*checkpoint.CheckpointEntry{entry}, nil, nil)
+			require.NoError(t, err)
+
+			require.Len(t, dataCNObjs, 1)
+			require.Equal(t, cnInRange.ObjectShortName().ShortString(), dataCNObjs[0].ObjectShortName().ShortString())
+
+			require.Len(t, dataAobjs, 3)
+			require.Equal(t, appendableOverlap.ObjectShortName().ShortString(), dataAobjs[0].ObjectShortName().ShortString())
+			require.Equal(t, appendableStillVisible.ObjectShortName().ShortString(), dataAobjs[1].ObjectShortName().ShortString())
+			require.Equal(t, mergedTNObject.ObjectShortName().ShortString(), dataAobjs[2].ObjectShortName().ShortString())
+
+			require.Len(t, tombstoneAobjs, 2)
+			require.Equal(t, appendableOverlap.ObjectShortName().ShortString(), tombstoneAobjs[0].ObjectShortName().ShortString())
+			require.Equal(t, mergedTNTombstone.ObjectShortName().ShortString(), tombstoneAobjs[1].ObjectShortName().ShortString())
+
+			require.Len(t, tombstoneCNObjs, 1)
+			require.Equal(t, cnInRange.ObjectShortName().ShortString(), tombstoneCNObjs[0].ObjectShortName().ShortString())
+		},
+	)
+}
+
 type checkpointObject struct {
 	entry       objectio.ObjectEntry
 	isTombstone bool

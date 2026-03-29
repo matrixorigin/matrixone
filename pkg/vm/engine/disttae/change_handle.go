@@ -54,7 +54,21 @@ func (tbl *txnTable) CollectChanges(
 	if from.IsEmpty() {
 		return NewCheckpointChangesHandle(ctx, tbl, to, mp)
 	}
-	return NewPartitionChangesHandle(ctx, tbl, from, to, skipDeletes, mp)
+	return NewPartitionChangesHandle(
+		ctx,
+		tbl,
+		from,
+		to,
+		skipDeletes,
+		engine.SnapshotReadPolicyFromContext(ctx),
+		mp,
+	)
+}
+
+type queuedChangeBatch struct {
+	data      *batch.Batch
+	tombstone *batch.Batch
+	hint      engine.ChangesHandle_Hint
 }
 
 type PartitionChangesHandle struct {
@@ -68,10 +82,14 @@ type PartitionChangesHandle struct {
 	toTs   types.TS
 	tbl    *txnTable
 
-	skipDeletes   bool
-	primarySeqnum int
-	mp            *mpool.MPool
-	fs            fileservice.FileService
+	skipDeletes        bool
+	primarySeqnum      int
+	snapshotReadPolicy engine.SnapshotReadPolicy
+	mp                 *mpool.MPool
+	fs                 fileservice.FileService
+
+	bufferedBatches     []queuedChangeBatch
+	currentRangeDrained bool
 }
 
 func NewPartitionChangesHandle(
@@ -79,16 +97,18 @@ func NewPartitionChangesHandle(
 	tbl *txnTable,
 	from, to types.TS,
 	skipDeletes bool,
+	snapshotReadPolicy engine.SnapshotReadPolicy,
 	mp *mpool.MPool,
 ) (*PartitionChangesHandle, error) {
 	handle := &PartitionChangesHandle{
-		tbl:           tbl,
-		fromTs:        from,
-		toTs:          to,
-		skipDeletes:   skipDeletes,
-		primarySeqnum: tbl.primarySeqnum,
-		mp:            mp,
-		fs:            tbl.getTxn().engine.fs,
+		tbl:                tbl,
+		fromTs:             from,
+		toTs:               to,
+		skipDeletes:        skipDeletes,
+		primarySeqnum:      tbl.primarySeqnum,
+		snapshotReadPolicy: snapshotReadPolicy,
+		mp:                 mp,
+		fs:                 tbl.getTxn().engine.fs,
 	}
 	end, err := handle.getNextChangeHandle(ctx)
 	if end {
@@ -98,6 +118,15 @@ func NewPartitionChangesHandle(
 }
 
 func (h *PartitionChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
+	// The normal path keeps the existing replay behavior. The VisibleState
+	// policy enables snapshot-recovery on FileNotFound (via SnapshotStateRange).
+	if h.snapshotReadPolicy == engine.SnapshotReadPolicyVisibleState {
+		return h.nextWithSnapshotRecovery(ctx, mp)
+	}
+	return h.nextReplay(ctx, mp)
+}
+
+func (h *PartitionChangesHandle) nextReplay(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
 	for {
 		data, tombstone, hint, err = h.currentChangeHandle.Next(ctx, mp)
 		if err != nil {
@@ -117,7 +146,132 @@ func (h *PartitionChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (dat
 			return
 		}
 	}
+}
 
+// nextWithSnapshotRecovery drains one logical sub-range at a time. The whole
+// sub-range is buffered before anything is returned so that a late
+// FileNotFound can discard partial output and rebuild the same range via
+// SnapshotStateRange without exposing inconsistent batches.
+func (h *PartitionChangesHandle) nextWithSnapshotRecovery(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
+	hint = engine.ChangesHandle_Tail_done
+	for {
+		if len(h.bufferedBatches) > 0 {
+			next := h.bufferedBatches[0]
+			h.bufferedBatches = h.bufferedBatches[1:]
+			return next.data, next.tombstone, next.hint, nil
+		}
+		if h.currentRangeDrained {
+			var end bool
+			end, err = h.getNextChangeHandle(ctx)
+			if err != nil {
+				return nil, nil, hint, err
+			}
+			if end {
+				return nil, nil, hint, nil
+			}
+			h.currentRangeDrained = false
+		}
+		if err = h.bufferCurrentRange(ctx, mp); err != nil {
+			return nil, nil, hint, err
+		}
+	}
+}
+
+// bufferCurrentRange eagerly consumes the current sub-range into memory so
+// that a mid-iteration FileNotFound can discard partial output and rebuild
+// the same range via SnapshotStateRange recovery.
+func (h *PartitionChangesHandle) bufferCurrentRange(ctx context.Context, mp *mpool.MPool) (err error) {
+	var queued []queuedChangeBatch
+	snapshotStateRangeTried := false
+	cleanQueued := func() {
+		for i := range queued {
+			if queued[i].data != nil {
+				queued[i].data.Clean(mp)
+			}
+			if queued[i].tombstone != nil {
+				queued[i].tombstone.Clean(mp)
+			}
+		}
+	}
+	for {
+		data, tombstone, hint, nextErr := h.currentChangeHandle.Next(ctx, mp)
+		if nextErr != nil {
+			if moerr.IsMoErrCode(nextErr, moerr.ErrFileNotFound) {
+				// A late FileNotFound means the replay handle for this sub-range is
+				// no longer trustworthy. Drop buffered output for the whole range,
+				// then rebuild from the end-snapshot partition state with
+				// delete-chain object rewrite.
+				cleanQueued()
+				queued = nil
+				if !snapshotStateRangeTried {
+					snapshotStateRangeTried = true
+					swapErr := h.swapCurrentHandleToSnapshotStateRange(ctx)
+					if swapErr == nil {
+						continue
+					}
+					logutil.Error("ChangesHandle-SnapshotStateRange rebuild failed",
+						zap.Uint64("table-id", h.tbl.tableId),
+						zap.String("from", h.currentPSFrom.ToString()),
+						zap.String("to", h.currentPSTo.ToString()),
+						zap.Error(swapErr),
+					)
+				}
+				cleanQueued()
+				return nextErr
+			}
+			cleanQueued()
+			return nextErr
+		}
+		if data == nil && tombstone == nil {
+			h.bufferedBatches = append(h.bufferedBatches, queued...)
+			h.currentRangeDrained = true
+			return nil
+		}
+		queued = append(queued, queuedChangeBatch{
+			data:      data,
+			tombstone: tombstone,
+			hint:      hint,
+		})
+	}
+}
+
+func (h *PartitionChangesHandle) loadCheckpointEntries(
+	ctx context.Context,
+	from types.TS,
+) (
+	checkpointEntries []*checkpoint.CheckpointEntry,
+	minTS types.TS,
+	maxTS types.TS,
+	err error,
+) {
+	ctxWithDeadline, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	response, err := RequestSnapshotRead(ctxWithDeadline, h.tbl, &from)
+	if err != nil {
+		return nil, types.MaxTs(), types.TS{}, err
+	}
+	minTS = types.MaxTs()
+	maxTS = types.TS{}
+	resp, ok := response.(*cmd_util.SnapshotReadResp)
+	if !ok || !resp.Succeed || len(resp.Entries) == 0 {
+		return nil, minTS, maxTS, nil
+	}
+	checkpointEntries = make([]*checkpoint.CheckpointEntry, 0, len(resp.Entries))
+	for _, entry := range resp.Entries {
+		logutil.Debug("ChangesHandle-Split-CheckpointEntry", zap.String("entry", entry.String()))
+		start := types.TimestampToTS(*entry.Start)
+		end := types.TimestampToTS(*entry.End)
+		if start.LT(&minTS) {
+			minTS = start
+		}
+		if end.GT(&maxTS) {
+			maxTS = end
+		}
+		checkpointEntry := checkpoint.NewCheckpointEntry("", start, end, checkpoint.EntryType(entry.EntryType))
+		checkpointEntry.SetLocation(entry.Location1, entry.Location2)
+		checkpointEntries = append(checkpointEntries, checkpointEntry)
+	}
+	return checkpointEntries, minTS, maxTS, nil
 }
 
 func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end bool, err error) {
@@ -146,7 +300,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 			if err != nil {
 				return
 			}
-			logutil.Info("ChangesHandle-Split change handles",
+			logutil.Debug("ChangesHandle-Split change handles",
 				zap.String("from", h.fromTs.ToString()),
 				zap.String("to", h.toTs.ToString()),
 				zap.String("ps from", h.currentPSFrom.ToString()),
@@ -168,13 +322,12 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		)
 		if err != nil {
 			// If the partition state references GC-ed object files,
-			// fall through to the snapshot read path which reads from
-			// checkpoint files instead of the deleted object files.
+			// fall through to snapshot-read recovery for this range.
 			// Only FileNotFound is recoverable; a real ErrStaleRead means
 			// the partition state's logical range doesn't cover the request.
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 				logutil.Warn("ChangesHandle-Split partition state file missing, falling back to snapshot read",
-					zap.String("table", fmt.Sprintf("%d", h.tbl.tableId)),
+					zap.Uint64("table-id", h.tbl.tableId),
 					zap.String("nextFrom", nextFrom.ToString()),
 					zap.String("stateStart", stateStart.ToString()),
 					zap.Error(err),
@@ -192,39 +345,47 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 	logutil.Info("ChangesHandle-Split request snapshot read",
 		zap.String("from", nextFrom.ToString()),
 	)
-	ctxWithDeadline, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
-	response, err := RequestSnapshotRead(ctxWithDeadline, h.tbl, &nextFrom)
-	if err != nil {
-		return
+	if h.snapshotReadPolicy == engine.SnapshotReadPolicyVisibleState {
+		h.currentPSFrom = nextFrom
+		h.currentPSTo = h.toTs
+		logutil.Debug("ChangesHandle-Split change handles",
+			zap.String("from", h.fromTs.ToString()),
+			zap.String("to", h.toTs.ToString()),
+			zap.String("ps from", h.currentPSFrom.ToString()),
+			zap.String("ps to", h.currentPSTo.ToString()),
+			zap.Int("handle idx", h.handleIdx),
+		)
+		h.handleIdx++
+		snapshotRangeStart := time.Now()
+		if err = h.swapCurrentHandleToSnapshotStateRange(ctx); err != nil {
+			logutil.Error("ChangesHandle-SnapshotStateRange init failed",
+				zap.Uint64("table-id", h.tbl.tableId),
+				zap.String("from", h.currentPSFrom.ToString()),
+				zap.String("to", h.currentPSTo.ToString()),
+				zap.Duration("snapshot-range-attempt", time.Since(snapshotRangeStart)),
+				zap.Error(err),
+			)
+			return false, err
+		}
+		logutil.Info("ChangesHandle-SnapshotStateRange-Ready",
+			zap.Uint64("table-id", h.tbl.tableId),
+			zap.String("from", h.currentPSFrom.ToString()),
+			zap.String("to", h.currentPSTo.ToString()),
+			zap.Duration("duration", time.Since(snapshotRangeStart)),
+		)
+		return false, nil
 	}
-	resp, ok := response.(*cmd_util.SnapshotReadResp)
 
 	var checkpointEntries []*checkpoint.CheckpointEntry
 	minTS := types.MaxTs()
 	maxTS := types.TS{}
-	if ok && resp.Succeed && len(resp.Entries) > 0 {
-		checkpointEntries = make([]*checkpoint.CheckpointEntry, 0, len(resp.Entries))
-		entries := resp.Entries
-		for _, entry := range entries {
-			logutil.Infof("ChangesHandle-Split get checkpoint entry: %v", entry.String())
-			start := types.TimestampToTS(*entry.Start)
-			end := types.TimestampToTS(*entry.End)
-			if start.LT(&minTS) {
-				minTS = start
-			}
-			if end.GT(&maxTS) {
-				maxTS = end
-			}
-			entryType := entry.EntryType
-			checkpointEntry := checkpoint.NewCheckpointEntry("", start, end, checkpoint.EntryType(entryType))
-			checkpointEntry.SetLocation(entry.Location1, entry.Location2)
-			checkpointEntries = append(checkpointEntries, checkpointEntry)
-		}
+	checkpointEntries, minTS, maxTS, err = h.loadCheckpointEntries(ctx, nextFrom)
+	if err != nil {
+		return
 	}
 	if nextFrom.LT(&minTS) || nextFrom.GT(&maxTS) {
 		logutil.Info("ChangesHandle-Split stale read",
-			zap.String("table", fmt.Sprintf("%d", h.tbl.tableId)),
+			zap.Uint64("table-id", h.tbl.tableId),
 			zap.String("nextFrom", nextFrom.ToString()),
 			zap.String("stateStart", stateStart.ToString()),
 			zap.String("minTS", minTS.ToString()),
@@ -240,7 +401,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 	if h.toTs.LT(&maxTS) {
 		h.currentPSTo = h.toTs
 	}
-	logutil.Info("ChangesHandle-Split change handles",
+	logutil.Debug("ChangesHandle-Split change handles",
 		zap.String("from", h.fromTs.ToString()),
 		zap.String("to", h.toTs.ToString()),
 		zap.String("ps from", h.currentPSFrom.ToString()),
@@ -270,10 +431,72 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 	}
 	return false, nil
 }
+
+func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx context.Context) (err error) {
+	if h.snapshotReadPolicy != engine.SnapshotReadPolicyVisibleState {
+		return nil
+	}
+	snapshotTbl, err := h.getTxnTableAt(ctx, h.currentPSTo)
+	if err != nil {
+		return err
+	}
+	if snapshotTbl == nil {
+		return moerr.NewErrStaleReadNoCtx(h.currentPSTo.ToString(), h.currentPSFrom.ToString())
+	}
+	state, err := snapshotTbl.getPartitionState(ctx)
+	if err != nil {
+		return err
+	}
+	if err = h.closeCurrentChangeHandle(); err != nil {
+		return err
+	}
+	h.currentChangeHandle, err = logtailreplay.NewChangesHandlerWithPartitionStateRange(
+		ctx,
+		state,
+		h.currentPSFrom,
+		h.currentPSTo,
+		h.skipDeletes,
+		objectio.BlockMaxRows,
+		h.primarySeqnum,
+		h.mp,
+		h.fs,
+	)
+	return err
+}
+
+func (h *PartitionChangesHandle) getTxnTableAt(ctx context.Context, at types.TS) (*txnTable, error) {
+	_, _, rel, err := h.tbl.eng.GetRelationById(
+		ctx,
+		h.tbl.db.op.CloneSnapshotOp(at.ToTimestamp()),
+		h.tbl.tableId,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if rel == nil {
+		return nil, nil
+	}
+	if t, ok := rel.(*txnTable); ok {
+		return t, nil
+	}
+	if t, ok := rel.(*txnTableDelegate); ok {
+		return t.origin, nil
+	}
+	return nil, moerr.NewInternalErrorNoCtx("unexpected relation type in snapshot")
+}
 func (h *PartitionChangesHandle) Close() error {
 	if h == nil {
 		return nil
 	}
+	for i := range h.bufferedBatches {
+		if h.bufferedBatches[i].data != nil {
+			h.bufferedBatches[i].data.Clean(h.mp)
+		}
+		if h.bufferedBatches[i].tombstone != nil {
+			h.bufferedBatches[i].tombstone.Clean(h.mp)
+		}
+	}
+	h.bufferedBatches = nil
 	return h.closeCurrentChangeHandle()
 }
 
