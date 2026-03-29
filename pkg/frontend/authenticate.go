@@ -3285,6 +3285,10 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 		if accountExist {
 			// Option 1: alter the password of admin for the account
 			if aa.AuthExist {
+				// Activate target account's catalog so internal SQL can resolve its tables.
+				if rtnErr = activateAccountCatalogIfNeeded(ctx, ses, uint32(targetAccountId)); rtnErr != nil {
+					return rtnErr
+				}
 				// !!!NOTE!!!:switch into the target account's context, then update the table mo_user.
 				accountCtx := defines.AttachAccountId(ctx, uint32(targetAccountId))
 
@@ -4040,6 +4044,10 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 		// drop tables of the tenant
 		// NOTE!!!: single DDL drop statement per single transaction
 		// SWITCH TO THE CONTEXT of the deleted context
+		// Activate target account's catalog so internal SQL can resolve its tables.
+		if rtnErr = activateAccountCatalogIfNeeded(ctx, ses, uint32(accountId)); rtnErr != nil {
+			return rtnErr
+		}
 		deleteCtx = defines.AttachAccountId(ctx, uint32(accountId))
 
 		// step 2 : drop table mo_user
