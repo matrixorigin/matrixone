@@ -44,7 +44,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
 )
@@ -1550,36 +1550,39 @@ func getTablesCreationCommitTS(
 			return ts, nil
 		}
 		collectCost := time.Since(collectStart)
-		logutil.Warn("getTablesCreationCommitTS: CollectChanges failed, trying Reader fallback",
+		logutil.Warn("getTablesCreationCommitTS: CollectChanges failed, trying CatalogCache fallback",
 			zap.Uint64("table-id", tableID),
 			zap.String("snapshot", snap.ToString()),
 			zap.Duration("collectchanges-cost", collectCost),
 			zap.Error(err),
 		)
-		readerStart := time.Now()
-		ts, readerErr := getTableCreationCommitTSByID(ctx, ses, tableID, snap)
-		if readerErr != nil {
-			logutil.Warn("DataBranch-TableCTS-Resolve-Error",
+
+		// Fallback: look up the table in the catalog cache.
+		// After GC, checkpoint objects lack per-row commit-ts columns,
+		// but the catalog cache is always populated from checkpoint data
+		// with correct per-entry timestamps.
+		eng := ses.GetTxnHandler().GetStorage()
+		ts, ccErr := disttae.GetTableCreationCommitTSFromCatalogCache(eng, tableID)
+		if ccErr == nil {
+			logutil.Info("DataBranch-TableCTS-Resolve-Done",
 				zap.Uint64("table-id", tableID),
 				zap.String("snapshot", snap.ToString()),
-				zap.String("path", "ReaderFallback"),
+				zap.String("path", "CatalogCache"),
+				zap.String("commit-ts", ts.ToString()),
 				zap.Duration("collectchanges-cost", collectCost),
-				zap.Duration("reader-cost", time.Since(readerStart)),
 				zap.Duration("total-cost", time.Since(totalStart)),
-				zap.Error(readerErr),
 			)
-			return types.TS{}, readerErr
+			return ts, nil
 		}
-		logutil.Info("DataBranch-TableCTS-Resolve-Done",
+		logutil.Warn("DataBranch-TableCTS-Resolve-Error",
 			zap.Uint64("table-id", tableID),
 			zap.String("snapshot", snap.ToString()),
-			zap.String("path", "ReaderFallback"),
-			zap.String("commit-ts", ts.ToString()),
+			zap.String("path", "CatalogCache"),
 			zap.Duration("collectchanges-cost", collectCost),
-			zap.Duration("reader-cost", time.Since(readerStart)),
 			zap.Duration("total-cost", time.Since(totalStart)),
+			zap.Error(ccErr),
 		)
-		return ts, nil
+		return types.TS{}, ccErr
 	}
 
 	tarCTS, err := resolve(tar.GetTableID(ctx), snapFor(0))
@@ -1591,60 +1594,6 @@ func getTablesCreationCommitTS(
 		return nil, err
 	}
 	return []types.TS{tarCTS, baseCTS}, nil
-}
-
-// getTableCreationCommitTSByID scans the mo_tables snapshot at the given
-// timestamp and returns the earliest commit_ts for the specified table ID.
-func getTableCreationCommitTSByID(
-	ctx context.Context,
-	ses *Session,
-	tableID uint64,
-	snapshotTS types.TS,
-) (types.TS, error) {
-	mp := ses.proc.Mp()
-
-	filterVec := vector.NewVec(types.T_uint64.ToType())
-	defer filterVec.Free(mp)
-	if err := vector.AppendFixed(filterVec, tableID, false, mp); err != nil {
-		return types.TS{}, err
-	}
-
-	attrs := []string{catalog.SystemRelAttr_ID, objectio.DefaultCommitTS_Attr}
-	colTypes := []types.Type{types.T_uint64.ToType(), types.T_TS.ToType()}
-	filterExpr := readutil.ConstructInExpr(ctx, catalog.SystemRelAttr_ID, filterVec)
-
-	found := false
-	result := types.TS{}
-
-	err := scanSnapshotRelationByID(
-		ctx, "table-creation-commit-ts", ses,
-		catalog.MO_TABLES_ID, snapshotTS,
-		attrs, colTypes, filterExpr, 1,
-		func(bat *batch.Batch) error {
-			ids := vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[0])
-			cts := vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[1])
-			for i, id := range ids {
-				if id != tableID || bat.Vecs[1].IsNull(uint64(i)) {
-					continue
-				}
-				if !found || cts[i].LT(&result) {
-					result = cts[i]
-				}
-				found = true
-			}
-			return nil
-		},
-	)
-	if err != nil {
-		return types.TS{}, err
-	}
-	if found {
-		return result, nil
-	}
-	return types.TS{}, moerr.NewInternalErrorNoCtxf(
-		"cannot find table %d commit ts at snapshot %s",
-		tableID, snapshotTS.ToString(),
-	)
 }
 
 // getTableCreationCommitTSByCollectChanges uses CollectChanges on mo_tables

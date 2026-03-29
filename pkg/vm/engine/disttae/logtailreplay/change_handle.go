@@ -354,11 +354,18 @@ type AObjectHandle struct {
 	// blockPlans caches block-level commit-ts overlap decisions for objects.
 	// It is only populated when checkpoint-range mode enables block pruning.
 	blockPlans map[string]*aobjBlockPlan
+
+	// cacheConstantCommitTS records the synthetic commit-ts for each cached
+	// batch.  A non-zero entry means the batch came from an object without
+	// per-row commit-ts (e.g. a TN non-appendable compacted from CN objects)
+	// and must be updated with updateCNDataBatch instead of updateDataBatch.
+	cacheConstantCommitTS []types.TS
 }
 
 type aobjBlockPlan struct {
 	initialized      bool
 	evaluable        bool
+	noCommitTSColumn bool // object has no per-row commit-ts column
 	shouldReadByBlks []bool
 	totalBlocks      int
 	evaluableBlocks  int
@@ -448,6 +455,15 @@ func (h *AObjectHandle) shouldReadBlock(
 		if err := h.buildBlockPlan(ctx, obj, plan); err != nil {
 			return false, err
 		}
+	}
+	// Object has no per-row commit-ts column (e.g. TN non-appendable
+	// compacted from CN objects).  Use object-level CreateTime to decide.
+	if plan.noCommitTSColumn {
+		ct := obj.CreateTime
+		if ct.GE(&h.start) && ct.LE(&h.end) {
+			return true, nil
+		}
+		return false, nil
 	}
 	if !plan.evaluable {
 		if changes.strictCommitTSBlockPrune {
@@ -542,6 +558,17 @@ func (h *AObjectHandle) buildBlockPlan(
 	// If none does, strict mode can still choose the exact-scan fallback path.
 	plan.evaluable = evaluableBlockCnt > 0
 	plan.evaluableBlocks = evaluableBlockCnt
+
+	// Detect objects without per-row commit-ts column (e.g. TN non-appendable
+	// compacted from CN objects).  If ALL non-evaluable blocks fail with
+	// "tail_column_not_ts" or "no_meta_columns", the object has no commit-ts.
+	if evaluableBlockCnt == 0 {
+		noTSCnt := plan.nonEvaluableReasons["tail_column_not_ts"] +
+			plan.nonEvaluableReasons["no_meta_columns"]
+		if noTSCnt == plan.totalBlocks {
+			plan.noCommitTSColumn = true
+		}
+	}
 	plan.overlapBlocks = overlapBlockCnt
 	if evaluableBlockCnt == 0 {
 		logutil.Warn(
@@ -626,7 +653,11 @@ func calcPruneRate(pruned, total int) float64 {
 
 func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 	t0 := time.Now()
-	jobs := make([]*tasks.Job, 0)
+	type prefetchJob struct {
+		job      *tasks.Job
+		createTS types.TS // non-zero if object has no commit-ts column
+	}
+	pjobs := make([]prefetchJob, 0, LoadParallism)
 	for i := 0; i < LoadParallism; i++ {
 		obj, blk, ok, targetErr := h.nextPrefetchTarget(ctx)
 		if targetErr != nil {
@@ -639,10 +670,16 @@ func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 		}
 		stats := obj.ObjectStats
 		job := prefetchObjects(ctx, uint32(blk), h.fs, &stats, h.p.changesHandle.scheduler)
-		jobs = append(jobs, job)
+		pj := prefetchJob{job: job}
+		// Check if this object needs synthetic commit-ts.
+		key := obj.ObjectShortName().ShortString()
+		if plan, ok := h.blockPlans[key]; ok && plan.noCommitTSColumn {
+			pj.createTS = obj.CreateTime
+		}
+		pjobs = append(pjobs, pj)
 	}
-	for _, job := range jobs {
-		res := job.GetResult()
+	for _, pj := range pjobs {
+		res := pj.job.GetResult()
 		if res.Err != nil {
 			err = res.Err
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
@@ -652,9 +689,10 @@ func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 			h.p.changesHandle.readDuration += time.Since(t0)
 			return
 		}
-		putJob(job)
+		putJob(pj.job)
 		bat := res.Res.(*batch.Batch)
 		h.cache = append(h.cache, bat)
+		h.cacheConstantCommitTS = append(h.cacheConstantCommitTS, pj.createTS)
 	}
 	h.p.changesHandle.readDuration += time.Since(t0)
 	return
@@ -692,10 +730,17 @@ func (h *AObjectHandle) getNextAObject(ctx context.Context) (err error) {
 			}
 		}
 		h.currentBatch = h.cache[0]
+		constantTS := h.cacheConstantCommitTS[0]
 		h.cache = h.cache[1:]
+		h.cacheConstantCommitTS = h.cacheConstantCommitTS[1:]
 		t0 := time.Now()
 		if h.isTombstone {
 			updateTombstoneBatch(h.currentBatch, h.start, h.end, h.p.skipTS, !h.quick, h.mp)
+		} else if !constantTS.IsEmpty() {
+			// Object has no per-row commit-ts; all rows share object CreateTime.
+			// Object-level CreateTime check already passed in shouldReadBlock,
+			// so all rows are in range.  Just strip hidden columns.
+			updateDataBatchConstantTS(h.currentBatch, constantTS, h.mp)
 		} else {
 			updateDataBatch(h.currentBatch, h.start, h.end, h.mp)
 		}
@@ -2379,6 +2424,49 @@ func updateDataBatch(bat *batch.Batch, start, end types.TS, mp *mpool.MPool) {
 	}
 	applyTSFilterForBatch(bat, len(bat.Vecs)-1, nil, start, end)
 }
+
+// updateDataBatchConstantTS processes a data batch from an object that has no
+// per-row commit-ts column (e.g. TN non-appendable compacted from CN objects).
+// Hidden columns (rowid) are stripped and a synthetic commit-ts column is
+// appended at the end so the output batch has the same layout as updateDataBatch:
+// [user columns..., __mo_commit_ts].
+func updateDataBatchConstantTS(bat *batch.Batch, constantTS types.TS, mp *mpool.MPool) {
+	filteredVecs := make([]*vector.Vector, 0, len(bat.Vecs))
+	rebuildAttrs := len(bat.Attrs) == len(bat.Vecs)
+	filteredAttrs := make([]string, 0, len(bat.Attrs))
+	rowCount := 0
+	for i, vec := range bat.Vecs {
+		switch vec.GetType().Oid {
+		case types.T_Rowid:
+			vec.Free(mp)
+		default:
+			if rowCount == 0 {
+				rowCount = vec.Length()
+			}
+			filteredVecs = append(filteredVecs, vec)
+			if rebuildAttrs {
+				filteredAttrs = append(filteredAttrs, bat.Attrs[i])
+			}
+		}
+	}
+
+	// Append a synthetic commit-ts column filled with the constant TS value
+	// so consumers always find commit-ts at the end of the batch.
+	tsVec := vector.NewVec(types.T_TS.ToType())
+	for j := 0; j < rowCount; j++ {
+		_ = vector.AppendFixed(tsVec, constantTS, false, mp)
+	}
+	filteredVecs = append(filteredVecs, tsVec)
+	if rebuildAttrs {
+		filteredAttrs = append(filteredAttrs, objectio.DefaultCommitTS_Attr)
+	}
+
+	bat.Vecs = filteredVecs
+	if rebuildAttrs {
+		bat.Attrs = filteredAttrs
+	}
+}
+
 func updateCNTombstoneBatch(bat *batch.Batch, committs types.TS, mp *mpool.MPool) {
 	var pk *vector.Vector
 	for _, vec := range bat.Vecs {

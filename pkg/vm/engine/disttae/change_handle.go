@@ -684,3 +684,30 @@ func (h *CheckpointChangesHandle) initReader(ctx context.Context) (err error) {
 
 	return
 }
+
+// GetTableCreationCommitTSFromCatalogCache looks up the table in the engine's
+// catalog cache and returns its commit timestamp. The catalog cache is always
+// populated from checkpoint data, so it works reliably after GC.
+func GetTableCreationCommitTSFromCatalogCache(
+	eng engine.Engine,
+	tableID uint64,
+) (types.TS, error) {
+	// Unwrap EntireEngine if needed.
+	if ee, ok := eng.(*engine.EntireEngine); ok {
+		eng = ee.Engine
+	}
+	e, ok := eng.(*Engine)
+	if !ok {
+		return types.TS{}, moerr.NewInternalErrorNoCtxf(
+			"GetTableCreationCommitTSFromCatalogCache: engine is not *disttae.Engine (got %T)", eng)
+	}
+	cc := e.GetLatestCatalogCache()
+	// accountId=0 (sys account), databaseId=0 (scan all databases)
+	item := cc.GetTableByIdAndTime(0, 0, tableID, types.MaxTs().ToTimestamp())
+	if item == nil {
+		return types.TS{}, moerr.NewInternalErrorNoCtxf(
+			"GetTableCreationCommitTSFromCatalogCache: table %d not found in catalog cache",
+			tableID)
+	}
+	return types.TimestampToTS(item.Ts), nil
+}
