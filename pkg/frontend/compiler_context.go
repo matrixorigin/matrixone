@@ -983,7 +983,24 @@ func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan
 
 	bh := tcc.getOrCreateBackExec(tempCtx)
 	bh.ClearExecResultSet()
-	return getSubscriptionMeta(tempCtx, dbName, tcc.GetSession(), txn, bh)
+	sub, err := getSubscriptionMeta(tempCtx, dbName, tcc.GetSession(), txn, bh)
+	if err != nil {
+		return nil, err
+	}
+
+	// Lazy catalog: if this is a subscription database, ensure the
+	// publisher's account catalog is activated on this CN so that any
+	// subsequent catalog queries (show tables, desc, select) can see
+	// the publisher's table metadata.
+	if sub != nil && sub.AccountId != 0 {
+		if activator, ok := tcc.GetTxnHandler().GetStorage().(engine.TenantCatalogActivator); ok {
+			if err = activator.ActivateTenantCatalog(tempCtx, uint32(sub.AccountId)); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return sub, nil
 }
 
 func (tcc *TxnCompilerContext) CheckSubscriptionValid(subName, accName, pubName string) error {
