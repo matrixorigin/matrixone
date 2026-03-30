@@ -552,6 +552,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			}
 		}
 
+		readers[i].SetOrderBy(s.DataSource.OrderBy)
 		readers[i].SetIndexParam(s.DataSource.IndexReaderParam)
 
 		ss[i].DataSource = &Source{
