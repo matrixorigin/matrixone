@@ -102,6 +102,73 @@ func TestOnDuplicateKeyIgnoreCleansConflictBatch(t *testing.T) {
 	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 }
 
+func resetChildren(arg *OnDuplicatekey, m *mpool.MPool) {
+	bat := batch.New([]string{"a", "b", "a", "b", catalog.Row_ID})
+	vecs := make([]*vector.Vector, 5)
+	vecs[0] = testutil.MakeInt64Vector([]int64{1, 1}, nil, m)
+	vecs[1] = testutil.MakeInt64Vector([]int64{2, 2}, nil, m)
+	vecs[2] = testutil.MakeInt64Vector([]int64{1, 1}, []uint64{0, 1}, m)
+	vecs[3] = testutil.MakeInt64Vector([]int64{2, 2}, []uint64{0, 1}, m)
+	uuid1 := objectio.NewSegmentid()
+	blkId1 := objectio.NewBlockid(uuid1, 0, 0)
+	rowid1 := objectio.NewRowid(blkId1, 0)
+	rowid2 := objectio.NewRowid(blkId1, 0)
+	vecs[4] = testutil.MakeRowIdVector([]types.Rowid{rowid1, rowid2}, []uint64{0, 1}, m)
+	bat.Vecs = vecs
+	bat.SetRowCount(vecs[0].Length())
+
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.Children = nil
+	arg.AppendChild(op)
+}
+
+func newTestCase(t *testing.T) onDupTestCase {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	pkType := types.T_int64.ToType()
+	leftExpr := &plan.Expr{
+		Typ: plan2.MakePlan2Type(&pkType),
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: int32(0),
+			},
+		},
+	}
+	rightExpr := &plan.Expr{
+		Typ: plan2.MakePlan2Type(&pkType),
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 1,
+				ColPos: int32(2),
+			},
+		},
+	}
+	eqExpr, _ := plan2.BindFuncExprImplByPlanExpr(context.TODO(), "=", []*plan.Expr{leftExpr, rightExpr})
+
+	onDupMap := make(map[string]*plan.Expr)
+	onDupMap["b"] = plan2.MakePlan2Int64ConstExprWithType(10)
+
+	return onDupTestCase{
+		proc: proc,
+		arg: &OnDuplicatekey{
+			Attrs:              []string{"a", "b", "a", "b", catalog.Row_ID}, //create table t1(a int primary key, b int)
+			InsertColCount:     2,
+			UniqueColCheckExpr: []*plan.Expr{eqExpr},
+			UniqueCols:         []string{"a"},
+			OnDuplicateIdx:     []int32{3, 4, 5},
+			OnDuplicateExpr:    onDupMap, // on duplicate key update b = 10 -》 here is b = 10
+			OperatorBase: vm.OperatorBase{
+				OperatorInfo: vm.OperatorInfo{
+					Idx:     0,
+					IsFirst: false,
+					IsLast:  false,
+				},
+			},
+		},
+		rowCount: 1,
+	}
+}
+
 func TestCheckConflictReturnsBatchRowIndex(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -195,72 +262,5 @@ func newPlanColExpr(typ *types.Type, relPos, colPos int32) *plan.Expr {
 				ColPos: colPos,
 			},
 		},
-	}
-}
-
-func resetChildren(arg *OnDuplicatekey, m *mpool.MPool) {
-	bat := batch.New([]string{"a", "b", "a", "b", catalog.Row_ID})
-	vecs := make([]*vector.Vector, 5)
-	vecs[0] = testutil.MakeInt64Vector([]int64{1, 1}, nil, m)
-	vecs[1] = testutil.MakeInt64Vector([]int64{2, 2}, nil, m)
-	vecs[2] = testutil.MakeInt64Vector([]int64{1, 1}, []uint64{0, 1}, m)
-	vecs[3] = testutil.MakeInt64Vector([]int64{2, 2}, []uint64{0, 1}, m)
-	uuid1 := objectio.NewSegmentid()
-	blkId1 := objectio.NewBlockid(uuid1, 0, 0)
-	rowid1 := objectio.NewRowid(blkId1, 0)
-	rowid2 := objectio.NewRowid(blkId1, 0)
-	vecs[4] = testutil.MakeRowIdVector([]types.Rowid{rowid1, rowid2}, []uint64{0, 1}, m)
-	bat.Vecs = vecs
-	bat.SetRowCount(vecs[0].Length())
-
-	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
-	arg.Children = nil
-	arg.AppendChild(op)
-}
-
-func newTestCase(t *testing.T) onDupTestCase {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	pkType := types.T_int64.ToType()
-	leftExpr := &plan.Expr{
-		Typ: plan2.MakePlan2Type(&pkType),
-		Expr: &plan.Expr_Col{
-			Col: &plan.ColRef{
-				RelPos: 0,
-				ColPos: int32(0),
-			},
-		},
-	}
-	rightExpr := &plan.Expr{
-		Typ: plan2.MakePlan2Type(&pkType),
-		Expr: &plan.Expr_Col{
-			Col: &plan.ColRef{
-				RelPos: 1,
-				ColPos: int32(2),
-			},
-		},
-	}
-	eqExpr, _ := plan2.BindFuncExprImplByPlanExpr(context.TODO(), "=", []*plan.Expr{leftExpr, rightExpr})
-
-	onDupMap := make(map[string]*plan.Expr)
-	onDupMap["b"] = plan2.MakePlan2Int64ConstExprWithType(10)
-
-	return onDupTestCase{
-		proc: proc,
-		arg: &OnDuplicatekey{
-			Attrs:              []string{"a", "b", "a", "b", catalog.Row_ID}, //create table t1(a int primary key, b int)
-			InsertColCount:     2,
-			UniqueColCheckExpr: []*plan.Expr{eqExpr},
-			UniqueCols:         []string{"a"},
-			OnDuplicateIdx:     []int32{3, 4, 5},
-			OnDuplicateExpr:    onDupMap, // on duplicate key update b = 10 -》 here is b = 10
-			OperatorBase: vm.OperatorBase{
-				OperatorInfo: vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
-				},
-			},
-		},
-		rowCount: 1,
 	}
 }
