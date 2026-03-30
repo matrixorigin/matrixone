@@ -100,6 +100,58 @@ func TestInitStageS3Param(t *testing.T) {
 		Id:          1000}
 	err = InitStageS3Param(param, s)
 	require.Nil(t, err)
+
+	param = &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Option: []string{"format", "parquet"},
+		},
+	}
+	err = InitStageS3Param(param, s)
+	require.Nil(t, err)
+	require.Equal(t, tree.PARQUET, param.Format)
+
+	param = &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Option: []string{"format", "badfmt"},
+		},
+	}
+	err = InitStageS3Param(param, s)
+	require.NotNil(t, err)
+}
+
+func TestInitS3ParamFormatValidation(t *testing.T) {
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Option: []string{
+				"endpoint", "oss-cn-hangzhou.aliyuncs.com",
+				"region", "cn-hangzhou",
+				"access_key_id", "ak",
+				"secret_access_key", "sk",
+				"bucket", "bkt",
+				"filepath", "sjrq=20200504/a.parquet",
+				"format", "parquet",
+			},
+		},
+	}
+	err := InitS3Param(param)
+	require.Nil(t, err)
+	require.Equal(t, tree.PARQUET, param.Format)
+
+	param = &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Option: []string{
+				"endpoint", "oss-cn-hangzhou.aliyuncs.com",
+				"region", "cn-hangzhou",
+				"access_key_id", "ak",
+				"secret_access_key", "sk",
+				"bucket", "bkt",
+				"filepath", "sjrq=20200504/a.parquet",
+				"format", "badfmt",
+			},
+		},
+	}
+	err = InitS3Param(param)
+	require.NotNil(t, err)
 }
 
 func TestHandleOptimizerHints(t *testing.T) {
