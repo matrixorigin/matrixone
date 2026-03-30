@@ -41,7 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -393,10 +392,11 @@ func TestCompileWithFaults(t *testing.T) {
 
 func newTestTxnClientAndOp(ctrl *gomock.Controller) (client.TxnClient, client.TxnOperator) {
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnMeta := txn.TxnMeta{}
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
-	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOperator.EXPECT().Txn().Return(txnMeta).AnyTimes()
 	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
@@ -404,6 +404,7 @@ func newTestTxnClientAndOp(ctrl *gomock.Controller) (client.TxnClient, client.Tx
 	txnOperator.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
 	txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+	txnOperator.EXPECT().TxnRef().Return(&txnMeta).AnyTimes()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 	return txnClient, txnOperator
@@ -411,12 +412,13 @@ func newTestTxnClientAndOp(ctrl *gomock.Controller) (client.TxnClient, client.Tx
 
 func newTestTxnClientAndOpWithPessimistic(ctrl *gomock.Controller) (client.TxnClient, client.TxnOperator) {
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnMeta := txn.TxnMeta{
+		Mode: txn.TxnMode_Pessimistic,
+	}
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
-	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{
-		Mode: txn.TxnMode_Pessimistic,
-	}).AnyTimes()
+	txnOperator.EXPECT().Txn().Return(txnMeta).AnyTimes()
 	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
@@ -424,6 +426,7 @@ func newTestTxnClientAndOpWithPessimistic(ctrl *gomock.Controller) (client.TxnCl
 	txnOperator.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
 	txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+	txnOperator.EXPECT().TxnRef().Return(&txnMeta).AnyTimes()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 	return txnClient, txnOperator
