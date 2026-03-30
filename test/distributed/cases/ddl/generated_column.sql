@@ -365,6 +365,26 @@ create table t39_vpk (a int, b int generated always as (a+1) virtual, primary ke
 create table t40_qualname (a int, b int generated always as (t40_qualname.a + 1) stored);
 
 -- ============================================================
--- 42. Cleanup
+-- 42. LOAD DATA multi-row correctness
+-- ============================================================
+create table t41_load_bulk (id int, a int, b int, c int generated always as (a + b) stored);
+load data inline format='csv', data='1,10,20\n2,30,40\n3,50,60\n' into table t41_load_bulk fields terminated by ',' (id, a, b);
+select count(*) as bad_rows from t41_load_bulk where c != a + b;
+select * from t41_load_bulk order by id;
+
+-- ============================================================
+-- 43. Large-scale DML churn correctness
+-- ============================================================
+create table t42_churn (id int primary key, a int, b int, c int generated always as (a + b) stored);
+insert into t42_churn (id, a, b) select result, result, result * 2 from generate_series(1, 10000, 1) g;
+update t42_churn set a = a + 3 where id % 2 = 0;
+update t42_churn set b = b + 5 where id % 5 = 0;
+insert into t42_churn (id, a, b) values (1, 7, 8) on duplicate key update a = values(a), b = values(b);
+replace into t42_churn (id, a, b) values (2, 9, 10);
+select count(*) as bad_rows from t42_churn where c != a + b;
+select * from t42_churn where id between 1 and 5 order by id;
+
+-- ============================================================
+-- 44. Cleanup
 -- ============================================================
 drop database test_generated_col;
