@@ -51,7 +51,6 @@ import (
 )
 
 const (
-	TransferSinkerBufferSize          = common.Const1MBytes * 5
 	TransferSinkerMemorySizeThreshold = common.Const1MBytes * 50
 )
 
@@ -367,7 +366,6 @@ func (tbl *txnTable) TransferDeletes(
 						*pkType,
 						common.WorkspaceAllocator,
 						tbl.store.rt.Fs,
-						ioutil.WithBufferSizeCap(TransferSinkerBufferSize),
 						ioutil.WithMemorySizeThreshold(TransferSinkerMemorySizeThreshold))
 				}
 				sinker.Write(ctx, containers.ToCNBatch(currentTransferBatch))

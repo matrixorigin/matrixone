@@ -44,12 +44,6 @@ func WithDedupAll() SinkerOption {
 	}
 }
 
-func WithBufferSizeCap(size int) SinkerOption {
-	return func(sinker *Sinker) {
-		sinker.config.bufferSizeCap = size
-	}
-}
-
 func WithTailSizeCap(size int) SinkerOption {
 	return func(sinker *Sinker) {
 		sinker.config.tailSizeCap = size
@@ -337,7 +331,6 @@ type Sinker struct {
 	config struct {
 		allMergeSorted bool
 		dedupAll       bool
-		bufferSizeCap  int
 		tailSizeCap    int
 		offHeap        bool
 	}
@@ -374,9 +367,9 @@ func (sinker *Sinker) String() string {
 		sinker.schema.attrs, sinker.schema.attrTypes, sinker.schema.sortKeyIdx))
 
 	buf.WriteString(fmt.Sprintf(
-		"config:{allMergeSorted=%v, dedupAll=%v, bufferSizeCap=%d, tailSizeCap=%d}; ",
+		"config:{allMergeSorted=%v, dedupAll=%v, tailSizeCap=%d}; ",
 		sinker.config.allMergeSorted, sinker.config.dedupAll,
-		sinker.config.bufferSizeCap, sinker.config.tailSizeCap))
+		sinker.config.tailSizeCap))
 
 	return buf.String()
 }
@@ -384,11 +377,6 @@ func (sinker *Sinker) String() string {
 func (sinker *Sinker) fillDefaults() {
 	if sinker.staged.memorySizeThreshold == 0 {
 		sinker.staged.memorySizeThreshold = DefaultInMemoryStagedSize
-	}
-	if sinker.config.bufferSizeCap == 0 {
-		// The buffer pool must hold at least memorySizeThreshold bytes so that
-		// sorted output blocks from trySpill can be recycled instead of freed.
-		sinker.config.bufferSizeCap = sinker.staged.memorySizeThreshold * 2
 	}
 
 	sinker.staged.inMemStats.Name = "staged inmem stats"
