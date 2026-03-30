@@ -18,6 +18,7 @@ import (
 	"context"
 	"math/rand/v2"
 	"reflect"
+	"runtime"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/assertx"
@@ -106,6 +107,31 @@ func Test_NewKMeans(t *testing.T) {
 				return
 			}
 		})
+	}
+}
+
+func Test_NewKMeans_GCStress(t *testing.T) {
+	logutil.SetupMOLogger(&logutil.LogConfig{
+		Level:  "info",
+		Format: "json",
+	})
+
+	vectors := [][]float64{
+		{1, 2, 3, 4},
+		{1, 2, 4, 5},
+		{10, 2, 4, 5},
+		{10, 3, 4, 5},
+		{10, 5, 4, 5},
+		{11, 6, 4, 5},
+		{12, 7, 4, 5},
+		{13, 8, 4, 5},
+	}
+
+	for i := 0; i < 128; i++ {
+		km, err := NewKMeans[float64](vectors, 2, 10, 0.01, metric.Metric_L2Distance, kmeans.Random, false, 1)
+		require.NoError(t, err)
+		require.NoError(t, km.Close())
+		runtime.GC()
 	}
 }
 

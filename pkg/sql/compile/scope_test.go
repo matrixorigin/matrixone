@@ -26,8 +26,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -247,6 +249,79 @@ func TestMessageSenderOnClientReceive(t *testing.T) {
 		_, err := sender.receiveMessage()
 		require.NotNil(t, err)
 	}
+}
+
+func TestMessageSenderOnClientReceiveBatchContextDone(t *testing.T) {
+	t.Run("cancel returns query interrupted", func(t *testing.T) {
+		sender := new(messageSenderOnClient)
+		sender.receiveCh = make(chan morpc.Message, 1)
+		ctx, cancel := context.WithCancel(context.Background())
+		sender.ctx = ctx
+		sender.ctxCancel = cancel
+		cancel()
+
+		bat, over, err := sender.receiveBatch()
+		require.Nil(t, bat)
+		require.False(t, over)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+	})
+
+	t.Run("upstream deadline returns query interrupted", func(t *testing.T) {
+		sender := new(messageSenderOnClient)
+		sender.receiveCh = make(chan morpc.Message, 1)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+		sender.ctx = ctx
+		sender.ctxCancel = cancel
+		defer cancel()
+
+		<-ctx.Done()
+
+		bat, over, err := sender.receiveBatch()
+		require.Nil(t, bat)
+		require.False(t, over)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+	})
+
+	t.Run("internal deadline returns rpc timeout", func(t *testing.T) {
+		sender := new(messageSenderOnClient)
+		sender.receiveCh = make(chan morpc.Message, 1)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+		sender.ctx = ctx
+		sender.ctxCancel = cancel
+		sender.useInternalTimeout = true
+		defer cancel()
+
+		<-ctx.Done()
+
+		bat, over, err := sender.receiveBatch()
+		require.Nil(t, bat)
+		require.False(t, over)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrRPCTimeout))
+	})
+
+	t.Run("cancel during merge loop returns query interrupted", func(t *testing.T) {
+		sender := new(messageSenderOnClient)
+		sender.receiveCh = make(chan morpc.Message, 1)
+		ctx, cancel := context.WithCancel(context.Background())
+		sender.ctx = ctx
+		sender.ctxCancel = cancel
+		defer cancel()
+
+		sender.receiveCh <- &pipeline.Message{Sid: pipeline.Status_WaitingNext, Data: []byte("partial")}
+		go func() {
+			time.Sleep(10 * time.Millisecond)
+			cancel()
+		}()
+
+		bat, over, err := sender.receiveBatch()
+		require.Nil(t, bat)
+		require.False(t, over)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+	})
 }
 
 func TestNewParallelScope(t *testing.T) {
@@ -515,6 +590,29 @@ func TestNotifyMessageClean(t *testing.T) {
 	require.Equal(t, 2, ff.number)
 }
 
+func TestSuppressRemoteRunCancelError(t *testing.T) {
+	t.Run("suppress query interrupted after proc cancel", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		require.NoError(t, suppressRemoteRunCancelError(ctx, moerr.NewQueryInterrupted(ctx)))
+	})
+
+	t.Run("keep rpc timeout after proc cancel", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := suppressRemoteRunCancelError(ctx, moerr.NewRPCTimeout(ctx))
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrRPCTimeout))
+	})
+
+	t.Run("keep query interrupted while proc still active", func(t *testing.T) {
+		ctx := context.Background()
+		err := suppressRemoteRunCancelError(ctx, moerr.NewQueryInterrupted(ctx))
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+	})
+}
+
 func TestScopeHoldAnyCannotRemoteOperator(t *testing.T) {
 	s0 := &Scope{
 		RootOp: &dispatch.Dispatch{RecCTE: false},
@@ -600,6 +698,51 @@ func (m *mockRelationForBloomFilter) BuildReaders(
 ) ([]engine.Reader, error) {
 	m.capturedHint = filterHint
 	return []engine.Reader{}, nil
+}
+
+type mockReaderForParallelOrderBy struct {
+	orderByCalls int
+	orderBy      []*plan.OrderBySpec
+}
+
+func (m *mockReaderForParallelOrderBy) Close() error {
+	return nil
+}
+
+func (m *mockReaderForParallelOrderBy) Read(context.Context, []string, *plan.Expr, *mpool.MPool, *batch.Batch) (bool, error) {
+	return true, nil
+}
+
+func (m *mockReaderForParallelOrderBy) SetOrderBy(orderBy []*plan.OrderBySpec) {
+	m.orderByCalls++
+	m.orderBy = orderBy
+}
+
+func (m *mockReaderForParallelOrderBy) GetOrderBy() []*plan.OrderBySpec {
+	return m.orderBy
+}
+
+func (m *mockReaderForParallelOrderBy) SetIndexParam(*plan.IndexReaderParam) {}
+
+func (m *mockReaderForParallelOrderBy) SetFilterZM(objectio.ZoneMap) {}
+
+type mockRelationForParallelOrderBy struct {
+	engine.Relation
+	readers []engine.Reader
+}
+
+func (m *mockRelationForParallelOrderBy) BuildReaders(
+	context.Context,
+	any,
+	*plan.Expr,
+	engine.RelData,
+	int,
+	int,
+	bool,
+	engine.TombstoneApplyPolicy,
+	engine.FilterHint,
+) ([]engine.Reader, error) {
+	return m.readers, nil
 }
 
 func TestBuildReadersBloomFilterHint(t *testing.T) {
@@ -844,4 +987,32 @@ func TestBuildReadersBloomFilterHint(t *testing.T) {
 		require.NotNil(t, readers)
 		require.Nil(t, mockRel.capturedHint.BloomFilter)
 	})
+}
+
+func TestBuildScanParallelRunSetsOrderByOnParallelReaders(t *testing.T) {
+	c := NewMockCompile(t)
+	scope := generateScopeWithRootOperator(c.proc, []vm.OpType{vm.Projection})
+
+	orderBy := []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}}
+	reader1 := &mockReaderForParallelOrderBy{}
+	reader2 := &mockReaderForParallelOrderBy{}
+
+	scope.DataSource = &Source{
+		Rel:                &mockRelationForParallelOrderBy{readers: []engine.Reader{reader1, reader2}},
+		FilterList:         []*plan.Expr{plan2.MakeFalseExpr()},
+		FilterExpr:         nil,
+		OrderBy:            orderBy,
+		RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
+	}
+	scope.NodeInfo = engine.Node{Mcpu: 2}
+
+	mergeScope, err := buildScanParallelRun(scope, c)
+	require.NoError(t, err)
+	require.NotNil(t, mergeScope)
+	require.Len(t, mergeScope.PreScopes, 2)
+
+	for _, reader := range []*mockReaderForParallelOrderBy{reader1, reader2} {
+		require.Equal(t, 1, reader.orderByCalls)
+		require.Equal(t, orderBy, reader.orderBy)
+	}
 }

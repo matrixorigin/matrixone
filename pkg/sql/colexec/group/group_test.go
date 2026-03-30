@@ -153,3 +153,68 @@ func TestGroupResetAndReuse(t *testing.T) {
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
+
+func TestFreeAggListPartial(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	aggList := make([]aggexec.AggFuncExec, 3)
+	for i := 0; i < 3; i++ {
+		agg, err := aggexec.MakeAgg(proc.Mp(), aggexec.AggIdOfCountStar, false, types.T_int64.ToType())
+		require.NoError(t, err)
+		aggList[i] = agg
+	}
+
+	freeAggListPartial(aggList, 2)
+	freeAggListPartial(aggList, 3)
+}
+
+func TestFreeAggList(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	aggList := make([]aggexec.AggFuncExec, 2)
+	for i := 0; i < 2; i++ {
+		agg, err := aggexec.MakeAgg(proc.Mp(), aggexec.AggIdOfCountStar, false, types.T_int64.ToType())
+		require.NoError(t, err)
+		aggList[i] = agg
+	}
+
+	freeAggList(aggList)
+}
+
+func TestFreeAggListPartialWithNilEntries(t *testing.T) {
+	aggList := make([]aggexec.AggFuncExec, 3)
+
+	freeAggListPartial(aggList, 3)
+	freeAggList(aggList)
+}
+
+func TestMakeAggListFreesPartialOnCreationError(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	ctr := &container{mp: proc.Mp()}
+	_, err := ctr.makeAggList([]aggexec.AggFuncExecExpression{
+		countStarAgg(),
+		aggexec.MakeAggFunctionExpression(-1, false, []*plan.Expr{colExpr(0, types.T_int32)}, nil),
+	})
+	require.Error(t, err)
+}
+
+func TestMakeAggListFreesPartialOnExtraConfigError(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	ctr := &container{mp: proc.Mp()}
+	_, err := ctr.makeAggList([]aggexec.AggFuncExecExpression{
+		countStarAgg(),
+		aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfMin,
+			false,
+			[]*plan.Expr{colExpr(0, types.T_int32)},
+			[]byte("bad-config"),
+		),
+	})
+	require.Error(t, err)
+}

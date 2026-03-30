@@ -1021,7 +1021,7 @@ func Test_ExecRequestStmtExecuteErrorClearsPreparedBinaryState(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	require.Equal(t, ErrorResponse, resp.category)
-	require.False(t, prepareStmt.params.GetNulls().Any())
+	require.Nil(t, prepareStmt.params)
 	require.Empty(t, prepareStmt.getFromSendLongData)
 }
 
@@ -1824,6 +1824,49 @@ func Test_unsupportedCommand(t *testing.T) {
 	assert.NotNil(t, resp)
 	respErr := resp.GetData().(*moerr.Error)
 	assert.Equal(t, "internal error: unsupported command. 0x0", respErr.Error())
+}
+
+func Test_ExecRequestStmtExecuteErrorClearsPreparedParamState(t *testing.T) {
+	ctx := context.TODO()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	execCtx := &ExecCtx{
+		ses:    ses,
+		reqCtx: ctx,
+	}
+
+	st := tree.NewPrepareString(tree.Identifier(getPrepareStmtName(1)), "select ?")
+	stmts, err := mysql.Parse(ctx, st.Sql, 1)
+	require.NoError(t, err)
+
+	compCtx := plan.NewEmptyCompilerContext()
+	preparePlan, err := buildPlan(ctx, nil, compCtx, st)
+	require.NoError(t, err)
+
+	prepareStmt := &PrepareStmt{
+		Name:                preparePlan.GetDcl().GetPrepare().GetName(),
+		PreparePlan:         preparePlan,
+		PrepareStmt:         stmts[0],
+		getFromSendLongData: make(map[int]struct{}),
+	}
+	require.NoError(t, ses.SetPrepareStmt(ctx, prepareStmt.Name, prepareStmt))
+
+	payload := make([]byte, 4)
+	binary.LittleEndian.PutUint32(payload, 1)
+	payload = append(payload, 0)          // flag
+	payload = append(payload, 0, 0, 0, 0) // iteration-count
+	payload = append(payload, 0)          // null bitmap
+	payload = append(payload, 1)          // new param bound flag
+	payload = append(payload, uint8(defines.MYSQL_TYPE_VAR_STRING), 0)
+	payload = append(payload, 5, 'a', 'b') // truncated lenenc string
+
+	resp, err := ExecRequest(ses, execCtx, &Request{cmd: COM_STMT_EXECUTE, data: payload})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Nil(t, prepareStmt.params)
+	require.Empty(t, prepareStmt.getFromSendLongData)
 }
 
 func Test_panic(t *testing.T) {
