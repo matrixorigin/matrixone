@@ -17,9 +17,9 @@ CC   := gcc
 CXX  := g++
 
 # Libraries
-LIBS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64/cudart -L/home/ubuntu/miniconda/envs/go/include/../lib -lcuvs -lcuvs_c -lnccl -lucxx -lucp -luct -lucs -lucm -ldl -lrmm -lrapids_logger -Xlinker -lpthread -Xlinker -lm
+LIBS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64/cudart -L$(CONDA_PREFIX)/lib -lcuvs -lcuvs_c -lnccl -lucxx -lucp -luct -lucs -lucm -ldl -lrmm -lrapids_logger -Xlinker -lpthread -Xlinker -lm
 
-INCLUDES := -I. -I/usr/local/cuda/include -I/home/ubuntu/miniconda/envs/go/include -I/home/ubuntu/miniconda/envs/go/include/rapids -I/home/ubuntu/miniconda/envs/go/include/raft -I/home/ubuntu/miniconda/envs/go/include/cuvs
+INCLUDES := -I. -I/usr/local/cuda/include -I$(CONDA_PREFIX)/include -I$(CONDA_PREFIX)/include/rapids -I$(CONDA_PREFIX)/include/raft -I$(CONDA_PREFIX)/include/cuvs
 
 # NVCC_FLAGS are for compilation only. -x cu tells nvcc to treat .cpp as .cu
 NVCC_FLAGS := -O3 -std=c++17 -x cu -Xcompiler "-Wall -Wextra -fPIC" --extended-lambda --expt-relaxed-constexpr $(INCLUDES) -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE -DRAFT_SYSTEM_LITTLE_ENDIAN=1 \
@@ -46,7 +46,7 @@ TEST_OBJS := $(patsubst test/%.cu,obj/test/%.o,$(TEST_SRCS))
 
 all: libmocuvs.so
 
-test: test_cuvs_worker benchmark_cuvs
+test: test_cuvs_worker benchmark_cuvs test_kmeans
 
 release: all
 
@@ -74,7 +74,11 @@ benchmark_cuvs: obj/test/benchmark_cuvs.o $(OBJS)
 	@echo "Linking $@"
 	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
 
+test_kmeans: obj/test/test_kmeans.o $(OBJS)
+	@echo "Linking $@"
+	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
+
 clean:
 	@echo "Cleaning up..."
-	rm -f libmocuvs.so *.o test_cuvs_worker benchmark_cuvs
+	rm -f libmocuvs.so *.o test_cuvs_worker benchmark_cuvs test_kmeans
 	rm -rf obj
