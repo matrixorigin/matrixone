@@ -101,6 +101,27 @@ type BatchHandle struct {
 	tombstone  bool
 }
 
+func batchesShareAppendSchema(dst, src *batch.Batch) bool {
+	if dst == nil || src == nil {
+		return true
+	}
+	if len(dst.Vecs) != len(src.Vecs) {
+		return false
+	}
+	for i := range dst.Vecs {
+		if dst.Vecs[i] == nil || src.Vecs[i] == nil {
+			if dst.Vecs[i] != src.Vecs[i] {
+				return false
+			}
+			continue
+		}
+		if *dst.Vecs[i].GetType() != *src.Vecs[i].GetType() {
+			return false
+		}
+	}
+	return true
+}
+
 func NewRowHandle(data *batch.Batch, mp *mpool.MPool, baseHandle *baseHandle, ctx context.Context, tombstone bool) (handle *BatchHandle) {
 	handle = &BatchHandle{
 		mp:         mp,
@@ -184,6 +205,9 @@ func (r *BatchHandle) next(bat **batch.Batch, mp *mpool.MPool, start, end int) (
 			(*bat).Vecs = append((*bat).Vecs, newVec)
 		}
 	} else {
+		if !batchesShareAppendSchema(*bat, r.batches) {
+			return moerr.GetOkExpectedEOB()
+		}
 		for offset := start; offset < end; offset++ {
 			for i, vec := range (*bat).Vecs {
 				appendFromEntry(r.batches.Vecs[i], vec, offset, mp)
@@ -271,8 +295,6 @@ func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.
 	}
 	data := h.cache[0]
 	ts := h.TSs[0]
-	h.cache = h.cache[1:]
-	h.TSs = h.TSs[1:]
 	t0 := time.Now()
 	if h.isTombstone {
 		updateCNTombstoneBatch(
@@ -299,7 +321,11 @@ func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.
 			}
 			(*bat).Vecs = append((*bat).Vecs, newVec)
 		}
+	} else if !batchesShareAppendSchema(*bat, data) {
+		return moerr.GetOkExpectedEOB()
 	}
+	h.cache = h.cache[1:]
+	h.TSs = h.TSs[1:]
 	srcLen := data.Vecs[0].Length()
 	sels := make([]int64, srcLen)
 	for j := 0; j < srcLen; j++ {
@@ -736,6 +762,9 @@ func (h *AObjectHandle) next(ctx context.Context, bat **batch.Batch, mp *mpool.M
 			(*bat).Vecs[i] = newVec
 		}
 	} else {
+		if !batchesShareAppendSchema(*bat, h.currentBatch) {
+			return moerr.GetOkExpectedEOB()
+		}
 		for i, vec := range (*bat).Vecs {
 			for rowOffset := start; rowOffset < end; rowOffset++ {
 				appendFromEntry(h.currentBatch.Vecs[i], vec, rowOffset, mp)
@@ -1818,6 +1847,12 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 			dataEnd = true
 			err = nil
+		} else if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			err = nil
+			if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes, p.isRecoveryMode); err != nil {
+				return
+			}
+			return
 		}
 		if err != nil {
 			return
@@ -1826,6 +1861,12 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 			tombstoneEnd = true
 			err = nil
+		} else if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			err = nil
+			if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes, p.isRecoveryMode); err != nil {
+				return
+			}
+			return
 		}
 		if err != nil {
 			return
@@ -2100,6 +2141,23 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 					return
 				}
 			}
+		}
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			err = nil
+			if data != nil || tombstone != nil {
+				if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes, p.isRecoveryMode); err != nil {
+					return
+				}
+				p.totalDuration += time.Since(t0)
+				if data != nil {
+					p.dataLength += data.Vecs[0].Length()
+				}
+				if tombstone != nil {
+					p.tombstoneLength += tombstone.Vecs[0].Length()
+				}
+				return
+			}
+			continue
 		}
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 			err = nil
@@ -2389,7 +2447,7 @@ func updateDataBatch(bat *batch.Batch, start, end types.TS, mp *mpool.MPool) {
 func updateCNTombstoneBatch(bat *batch.Batch, committs types.TS, mp *mpool.MPool) {
 	var pk *vector.Vector
 	for _, vec := range bat.Vecs {
-		if vec.GetType().Oid != types.T_Rowid || vec.GetType().Oid != types.T_TS {
+		if vec.GetType().Oid != types.T_Rowid && vec.GetType().Oid != types.T_TS {
 			pk = vec
 		} else {
 			vec.Free(mp)

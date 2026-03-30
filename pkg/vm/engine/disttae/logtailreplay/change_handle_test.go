@@ -15,16 +15,101 @@
 package logtailreplay
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
+
+func TestBatchHandleNext_ReturnsEOBOnSchemaMismatch(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	src := batch.NewWithSize(1)
+	src.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(src.Vecs[0], int64(42), false, mp))
+	src.SetAttributes([]string{"value"})
+	src.SetRowCount(1)
+
+	dst := batch.NewWithSize(1)
+	dst.Vecs[0] = vector.NewVec(types.T_TS.ToType())
+	require.NoError(t, vector.AppendFixed(dst.Vecs[0], types.BuildTS(1, 0), false, mp))
+	dst.SetAttributes([]string{"value"})
+	dst.SetRowCount(1)
+	defer dst.Clean(mp)
+
+	handle := NewRowHandle(src, mp, &baseHandle{changesHandle: &ChangeHandler{}}, context.Background(), false)
+	defer handle.Close()
+
+	err := handle.Next(&dst, mp)
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
+	require.Equal(t, 0, handle.rowOffsetCursor)
+}
+
+func TestAObjectHandleNext_ReturnsEOBOnSchemaMismatch(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	current := batch.NewWithSize(1)
+	current.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(current.Vecs[0], int64(7), false, mp))
+	current.SetAttributes([]string{"value"})
+	current.SetRowCount(1)
+
+	dst := batch.NewWithSize(1)
+	dst.Vecs[0] = vector.NewVec(types.T_TS.ToType())
+	require.NoError(t, vector.AppendFixed(dst.Vecs[0], types.BuildTS(2, 0), false, mp))
+	dst.SetAttributes([]string{"value"})
+	dst.SetRowCount(1)
+	defer dst.Clean(mp)
+
+	handle := &AObjectHandle{
+		currentBatch: current,
+		batchLength:  1,
+		mp:           mp,
+		p:            &baseHandle{changesHandle: &ChangeHandler{}},
+	}
+	defer current.Clean(mp)
+
+	err := handle.Next(context.Background(), &dst, mp)
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
+	require.Equal(t, 0, handle.rowOffsetCursor)
+	require.NotNil(t, handle.currentBatch)
+}
+
+func TestUpdateCNTombstoneBatch_IsIdempotent(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	bat := batch.NewWithSize(3)
+	rowid := vector.NewVec(types.T_Rowid.ToType())
+	require.NoError(t, vector.AppendFixed(rowid, types.Rowid{}, false, mp))
+	bat.Vecs[0] = rowid
+
+	pk := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(pk, int64(1), false, mp))
+	bat.Vecs[1] = pk
+
+	commitTS := vector.NewVec(types.T_TS.ToType())
+	require.NoError(t, vector.AppendFixed(commitTS, types.BuildTS(10, 0), false, mp))
+	bat.Vecs[2] = commitTS
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+
+	updateCNTombstoneBatch(bat, types.BuildTS(20, 0), mp)
+	updateCNTombstoneBatch(bat, types.BuildTS(30, 0), mp)
+
+	require.Equal(t, 2, len(bat.Vecs))
+	require.Equal(t, types.T_int64, bat.Vecs[0].GetType().Oid)
+	require.Equal(t, types.T_TS, bat.Vecs[1].GetType().Oid)
+}
 
 func TestUpdateCNDataBatch_RemoveTSVector(t *testing.T) {
 	mp := mpool.MustNewZero()
