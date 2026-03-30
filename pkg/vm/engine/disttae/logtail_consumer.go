@@ -85,7 +85,17 @@ const (
 	defaultRPCReadTimeout = time.Second * 30
 
 	logTag = "[logtail-consumer]"
+
+	// maxActivationReconnectRetries is the number of times ActivateTenantCatalog
+	// retries when the in-flight request is interrupted by a reconnect cycle.
+	maxActivationReconnectRetries = 4
 )
+
+// errActivationInterruptedByReconnect is a sentinel error returned by
+// doActivateTenantCatalog when the pending response channel receives nil,
+// which means a reconnect cycle cleared it. The outer ActivateTenantCatalog
+// loop retries on this specific error.
+var errActivationInterruptedByReconnect = errors.New("tenant catalog activation interrupted by reconnect")
 
 type SubscribeState int32
 
@@ -998,10 +1008,45 @@ func (c *PushClient) replayCatalogCacheAt(
 // ready. If the account is already ready, returns immediately. Otherwise it
 // sends an activation request to TN, waits for the response, replays the
 // catalog from storage, and marks the account ready.
+//
+// If an in-flight activation is interrupted by a reconnect cycle, the
+// method retries up to maxActivationReconnectRetries times with exponential
+// backoff (500ms, 1s, 2s, 4s) so that a transient reconnect does not
+// surface as a frontend error.
 func (c *PushClient) ActivateTenantCatalog(ctx context.Context, e *Engine, accountID uint32) error {
 	if c.lazyCatalog == nil || !c.lazyCatalog.isEnabled() {
 		return nil
 	}
+
+	// Backoff schedule: 500ms, 1s, 2s, 4s (total ~7.5s worst case).
+	backoff := 500 * time.Millisecond
+
+	for attempt := 0; ; attempt++ {
+		err := c.tryActivateTenantCatalog(ctx, e, accountID)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, errActivationInterruptedByReconnect) ||
+			attempt >= maxActivationReconnectRetries {
+			return err
+		}
+		logutil.Info("logtail.consumer.activation.reconnect.retry",
+			zap.Uint32("account-id", accountID),
+			zap.Int("attempt", attempt+1),
+			zap.Duration("backoff", backoff),
+		)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+	}
+}
+
+// tryActivateTenantCatalog performs a single activation attempt with inflight
+// deduplication.
+func (c *PushClient) tryActivateTenantCatalog(ctx context.Context, e *Engine, accountID uint32) error {
 	if c.lazyCatalog.isAccountReady(accountID) {
 		return nil
 	}
@@ -1075,9 +1120,7 @@ func (c *PushClient) doActivateTenantCatalog(ctx context.Context, e *Engine, acc
 	case resp = <-respCh:
 	}
 	if resp == nil {
-		err := moerr.NewInternalErrorNoCtx("tenant catalog activation interrupted by reconnect")
-		record("wait_response", "interrupted", err, nil, nil, 0)
-		return err
+		return fail("wait_response", errActivationInterruptedByReconnect, nil)
 	}
 
 	targetTS := resp.GetTargetTs()
