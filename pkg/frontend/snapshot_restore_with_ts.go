@@ -69,6 +69,16 @@ func getFkDepsWithTS(ctx context.Context, bh BackgroundExec, db string, tbl stri
 
 	bh.ClearExecResultSet()
 	if err = bh.ExecRestore(ctx, sql, from, to); err != nil {
+		// With lazy catalog the source account's catalog data may not be
+		// available (e.g. a dropped account whose data was compacted by a
+		// TN checkpoint).  Treat table-resolution errors as "no FK deps"
+		// instead of aborting the entire restore — the CLONE TABLE path
+		// already bypasses FK constraint checks via the IsRestore flag.
+		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
+			moerr.IsMoErrCode(err, moerr.ErrBadDB) {
+			getLogger("").Warn(fmt.Sprintf("[%d:%d] FK dep query failed (source catalog unavailable), proceeding without FK ordering: %v", from, ts, err))
+			return make(map[string][]string), nil
+		}
 		return
 	}
 	resultSet, err := getResultSet(ctx, bh)

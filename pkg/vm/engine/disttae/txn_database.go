@@ -606,7 +606,14 @@ func (db *txnDatabase) loadTableFromStorage(
 			return
 		}
 		if row := res.Batches[0].RowCount(); row != 1 {
-			panic(fmt.Sprintf("FIND_TABLE loadTableFromStorage failed: table result row cnt: %v, sql : %s", row, tblSql))
+			// Zero or multiple rows may happen for dropped accounts whose
+			// catalog was compacted by a checkpoint or hasn't been fully
+			// activated yet.  Return nil instead of panicking so the caller
+			// can handle the missing table gracefully.
+			logutil.Warn("FIND_TABLE loadTableFromStorage unexpected row count",
+				zap.Int("rows", row),
+				zap.String("sql", tblSql))
+			return
 		}
 		bat := res.Batches[0]
 
@@ -645,7 +652,12 @@ func (db *txnDatabase) loadTableFromStorage(
 		}
 		cache.ParseColumnsBatchAnd(bat, func(m map[cache.TableItemKey]cache.Columns) {
 			if len(m) != 1 {
-				panic(fmt.Sprintf("FIND_TABLE loadTableFromStorage failed: columns touch %d tables", len(m)))
+				logutil.Warn("FIND_TABLE loadTableFromStorage columns touch unexpected tables",
+					zap.Int("count", len(m)),
+					zap.String("table", name))
+				// Clear tableitem so the caller sees nil.
+				tableitem = nil
+				return
 			}
 			for _, v := range m {
 				cache.InitTableItemWithColumns(tableitem, v)

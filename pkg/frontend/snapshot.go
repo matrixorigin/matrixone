@@ -626,9 +626,8 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		return
 	}
 
-	// When restoring a dropped account (from != to), the source account may
-	// have never been activated on this CN. Activate it so the catalog cache
-	// contains its historical entries for table resolution at snapshot time.
+	// Activate the source (restore) account's catalog — same rationale as
+	// restoreAccountUsingClusterSnapshotToNew.
 	if restoreAccount != toAccountId {
 		if err = activateAccountCatalogIfNeeded(ctx, ses, restoreAccount); err != nil {
 			return
@@ -2012,6 +2011,15 @@ func getFkDeps(
 
 	bh.ClearExecResultSet()
 	if err = bh.Exec(newCtx, sql); err != nil {
+		// With lazy catalog the source account's catalog data may not be
+		// available (e.g. a dropped account whose data was compacted by a
+		// TN checkpoint).  Treat table-resolution errors as "no FK deps"
+		// so the restore can proceed without FK ordering.
+		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
+			moerr.IsMoErrCode(err, moerr.ErrBadDB) {
+			getLogger("").Warn(fmt.Sprintf("FK dep query failed (source catalog unavailable), proceeding without FK ordering: %v", err))
+			return make(map[string][]string), nil
+		}
 		return
 	}
 
@@ -2388,10 +2396,13 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 		return
 	}
 
-	// When restoring a dropped account (from != to), the source account was
-	// never activated on this CN or its data was filtered out by TN publish.
-	// Activate it so the catalog cache and partition state contain its
-	// historical entries, allowing table resolution at the snapshot timestamp.
+	// Activate the source (from) account's catalog so restore queries
+	// (SHOW DATABASES, SHOW TABLES, CLONE TABLE, etc.) can discover the
+	// from-account's databases and tables in the partition state.
+	// If TN checkpoint has compacted the dropped account's data, the
+	// activation will return empty data — the restore will find no
+	// databases/tables and effectively do nothing for that account.
+	// The downstream FK and table-resolution code handles that gracefully.
 	if uint64(fromAccount) != toAccountId {
 		if err = activateAccountCatalogIfNeeded(ctx, ses, uint32(fromAccount)); err != nil {
 			return
