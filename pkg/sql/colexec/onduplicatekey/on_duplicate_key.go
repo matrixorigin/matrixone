@@ -141,12 +141,12 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 		}
 
 		// check if uniqueness conflict found in checkConflictBatch
-		oldConflictIdx, conflictMsg, err := checkConflict(proc, newBatch, checkConflictBatch, insertArg.ctr.uniqueCheckExes, insertArg.UniqueCols, insertColCount)
+		oldConflictRowIdx, conflictMsg, err := checkConflict(proc, newBatch, checkConflictBatch, insertArg.ctr.uniqueCheckExes, insertArg.UniqueCols, insertColCount)
 		if err != nil {
 			newBatch.Clean(proc.GetMPool())
 			return err
 		}
-		if oldConflictIdx > -1 {
+		if oldConflictRowIdx > -1 {
 
 			if insertArg.IsIgnore {
 				newBatch.Clean(proc.GetMPool())
@@ -155,7 +155,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 
 			// if conflict with origin row. and row_id is not equal row_id of insertBatch's inflict row. then throw error
 			if !newBatch.Vecs[rowIdIdx].GetNulls().Contains(0) {
-				oldRowId := vector.MustFixedColWithTypeCheck[types.Rowid](insertBatch.Vecs[rowIdIdx])[oldConflictIdx]
+				oldRowId := vector.MustFixedColWithTypeCheck[types.Rowid](insertBatch.Vecs[rowIdIdx])[oldConflictRowIdx]
 				newRowId := vector.MustFixedColWithTypeCheck[types.Rowid](newBatch.Vecs[rowIdIdx])[0]
 				if !bytes.Equal(oldRowId[:], newRowId[:]) {
 					newBatch.Clean(proc.GetMPool())
@@ -166,7 +166,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 			for j := 0; j < insertColCount; j++ {
 				fromVec := insertBatch.Vecs[j]
 				toVec := newBatch.Vecs[j+insertColCount]
-				err := toVec.Copy(fromVec, 0, int64(oldConflictIdx), proc.Mp())
+				err := toVec.Copy(fromVec, 0, int64(oldConflictRowIdx), proc.Mp())
 				if err != nil {
 					newBatch.Clean(proc.GetMPool())
 					return err
@@ -177,11 +177,11 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 				newBatch.Clean(proc.GetMPool())
 				return err
 			}
-			// update the oldConflictIdx of insertBatch by newBatch
+			// update the oldConflictRowIdx of insertBatch by newBatch
 			for j := 0; j < insertColCount; j++ {
 				fromVec := tmpBatch.Vecs[j]
 				toVec := insertBatch.Vecs[j]
-				err := toVec.Copy(fromVec, int64(oldConflictIdx), 0, proc.Mp())
+				err := toVec.Copy(fromVec, int64(oldConflictRowIdx), 0, proc.Mp())
 				if err != nil {
 					tmpBatch.Clean(proc.GetMPool())
 					newBatch.Clean(proc.GetMPool())
@@ -189,7 +189,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 				}
 
 				toVec2 := checkConflictBatch.Vecs[j]
-				err = toVec2.Copy(fromVec, int64(oldConflictIdx), 0, proc.Mp())
+				err = toVec2.Copy(fromVec, int64(oldConflictRowIdx), 0, proc.Mp())
 				if err != nil {
 					tmpBatch.Clean(proc.GetMPool())
 					newBatch.Clean(proc.GetMPool())
@@ -222,13 +222,13 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 					newBatch.Clean(proc.GetMPool())
 					return err
 				}
-				conflictIdx, conflictMsg, err := checkConflict(proc, tmpBatch, checkConflictBatch, insertArg.ctr.uniqueCheckExes, insertArg.UniqueCols, insertColCount)
+				conflictRowIdx, conflictMsg, err := checkConflict(proc, tmpBatch, checkConflictBatch, insertArg.ctr.uniqueCheckExes, insertArg.UniqueCols, insertColCount)
 				if err != nil {
 					tmpBatch.Clean(proc.GetMPool())
 					newBatch.Clean(proc.GetMPool())
 					return err
 				}
-				if conflictIdx > -1 {
+				if conflictRowIdx > -1 {
 					tmpBatch.Clean(proc.GetMPool())
 					newBatch.Clean(proc.GetMPool())
 					return moerr.NewConstraintViolation(proc.Ctx, conflictMsg)
@@ -352,12 +352,12 @@ func checkConflict(proc *process.Process, newBatch *batch.Batch, checkConflictBa
 			return 0, "", err
 		}
 
-		// run expr row by row. if result is true, break
+		// Return the conflicting row index in checkConflictBatch, not the unique key ordinal.
 		isConflict := vector.MustFixedColWithTypeCheck[bool](result)
-		for _, flag := range isConflict {
+		for rowIdx, flag := range isConflict {
 			if flag {
 				conflictMsg := fmt.Sprintf("Duplicate entry for key '%s'", uniqueCols[i])
-				return i, conflictMsg, nil
+				return rowIdx, conflictMsg, nil
 			}
 		}
 	}
