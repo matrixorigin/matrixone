@@ -120,6 +120,9 @@ func MergeSortBatches(
 	)
 	size := len(batches)
 	buffer.CleanOnlyData()
+	if err := buffer.PreExtend(mp, objectio.BlockMaxRows); err != nil {
+		return buffer, err
+	}
 	for size > 0 {
 		batchIndex, rowIndex, size = merge.getNextPos()
 		for i := range buffer.Vecs {
@@ -141,6 +144,9 @@ func MergeSortBatches(
 				return buffer, err
 			}
 			buffer.CleanOnlyData()
+			if err = buffer.PreExtend(mp, objectio.BlockMaxRows); err != nil {
+				return buffer, err
+			}
 		}
 	}
 	if lens > 0 {

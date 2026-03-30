@@ -404,7 +404,7 @@ func (sinker *Sinker) GetResult() ([]objectio.ObjectStats, []*batch.Batch) {
 	return sinker.result.persisted, sinker.result.tail
 }
 
-func (sinker *Sinker) fetchBuffer() *batch.Batch {
+func (sinker *Sinker) fetchBuffer() (*batch.Batch, error) {
 	x := sinker.buf.buffers.Len()
 	bat := sinker.buf.buffers.FetchWithSchema(sinker.schema.attrs, sinker.schema.attrTypes)
 	y := sinker.buf.buffers.Len()
@@ -414,7 +414,10 @@ func (sinker *Sinker) fetchBuffer() *batch.Batch {
 		sinker.buf.bufStats.updateBytes(-bat.Size())
 	}
 
-	return bat
+	if err := bat.PreExtend(sinker.mp, objectio.BlockMaxRows); err != nil {
+		return nil, err
+	}
+	return bat, nil
 }
 
 func (sinker *Sinker) putBackBuffer(bat *batch.Batch) {
@@ -514,7 +517,7 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 	// replacement, eliminating AppendWithCopy.
 	innersinker := func(data *batch.Batch) (*batch.Batch, error) {
 		sorted = append(sorted, data)
-		return sinker.fetchBuffer(), nil
+		return sinker.fetchBuffer()
 	}
 
 	defer func() {
@@ -529,8 +532,10 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 
 	// 1. merge sort
 	if sinker.schema.sortKeyIdx != -1 {
-		buffer := sinker.fetchBuffer()
-		var err error
+		buffer, err := sinker.fetchBuffer()
+		if err != nil {
+			return err
+		}
 		buffer, err = mergeutil.MergeSortBatches(
 			sinker.staged.inMemory,
 			sinker.schema.sortKeyIdx,
@@ -608,12 +613,16 @@ func (sinker *Sinker) Write(
 		if curr == nil {
 			curr = sinker.popStaged()
 			if curr == nil {
-				curr = sinker.fetchBuffer()
+				if curr, err = sinker.fetchBuffer(); err != nil {
+					return
+				}
 			} else if curr.RowCount() == objectio.BlockMaxRows {
 				if err = sinker.pushStaged(ctx, curr); err != nil {
 					return
 				}
-				curr = sinker.fetchBuffer()
+				if curr, err = sinker.fetchBuffer(); err != nil {
+					return
+				}
 			}
 		}
 
