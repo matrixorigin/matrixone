@@ -99,11 +99,10 @@ func LoadColumnsData2(
 			objectio.ReleaseIOVector(&ioVectors)
 			return
 		}
+		// When needCopy=false, release only frees the IOVector.
+		// Vector cleanup is the caller's responsibility (via Batch.Close).
 		release = func() {
 			objectio.ReleaseIOVector(&ioVectors)
-			for _, vec := range vectors {
-				vec.Close()
-			}
 		}
 	}()
 	var obj any

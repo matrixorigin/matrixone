@@ -31,33 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
 )
 
-//func LoadPersistedColumnData(
-//	ctx context.Context,
-//	rt *dbutils.Runtime,
-//	id *common.ID,
-//	def *catalog.ColDef,
-//	location objectio.Location,
-//	mp *mpool.MPool,
-//) (vec containers.Vector, err error) {
-//	if def.IsPhyAddr() {
-//		return model.PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
-//	}
-//	//Extend lifetime of vectors is without the function.
-//	//need to copy. closeFunc will be nil.
-//	vectors, _, err := blockio.LoadColumns2(
-//		ctx, []uint16{uint16(def.SeqNum)},
-//		[]types.Type{def.Type},
-//		rt.Fs.Service,
-//		location,
-//		fileservice.Policy(0),
-//		true,
-//		rt.VectorPool.Transient)
-//	if err != nil {
-//		return
-//	}
-//	return vectors[0], nil
-//}
-
 func PreparePhyAddrData(
 	id *objectio.Blockid, startRow, length uint32, pool *containers.VectorPool,
 ) (col containers.Vector, err error) {
@@ -73,7 +46,7 @@ func PreparePhyAddrData(
 	return
 }
 
-func LoadPersistedColumnDatas(
+func LoadPersistedColumnData(
 	ctx context.Context,
 	schema *catalog.Schema,
 	rt *dbutils.Runtime,
@@ -82,7 +55,8 @@ func LoadPersistedColumnDatas(
 	location objectio.Location,
 	mp *mpool.MPool,
 	tsForAppendable *types.TS,
-) ([]containers.Vector, *nulls.Nulls, error) {
+	needCopy bool,
+) ([]containers.Vector, *nulls.Nulls, func(), error) {
 	cols := make([]uint16, 0, len(colIdxs))
 	typs := make([]types.Type, 0, len(colIdxs))
 	vectors := make([]containers.Vector, len(colIdxs))
@@ -102,7 +76,7 @@ func LoadPersistedColumnDatas(
 		if def.IsPhyAddr() {
 			vec, err := PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
 			if err != nil {
-				return nil, deletes, err
+				return nil, deletes, nil, err
 			}
 			phyAddIdx = i
 			vectors[phyAddIdx] = vec
@@ -112,7 +86,7 @@ func LoadPersistedColumnDatas(
 		typs = append(typs, def.Type)
 	}
 	if len(cols) == 0 {
-		return vectors, deletes, nil
+		return vectors, deletes, nil, nil
 	}
 	if tsForAppendable != nil {
 		if committsIdx == -1 {
@@ -126,19 +100,18 @@ func LoadPersistedColumnDatas(
 		}
 	}
 	var vecs []containers.Vector
+	var release func()
 	var err error
-	//Extend lifetime of vectors is without the function.
-	//need to copy. closeFunc will be nil.
-	vecs, _, err = ioutil.LoadColumns2(
+	vecs, release, err = ioutil.LoadColumns2(
 		ctx, cols,
 		typs,
 		rt.Fs,
 		location,
 		fileservice.GetFileServicePolicy(ctx),
-		true,
+		needCopy,
 		rt.VectorPool.Transient)
 	if err != nil {
-		return nil, deletes, err
+		return nil, deletes, nil, err
 	}
 	if tsForAppendable != nil {
 		commits := vector.MustFixedColNoTypeCheck[types.TS](vecs[committsIdx].GetDownstreamVector())
@@ -162,7 +135,7 @@ func LoadPersistedColumnDatas(
 		}
 		vectors[idx] = vec
 	}
-	return vectors, deletes, nil
+	return vectors, deletes, release, nil
 }
 
 func MakeImmuIndex(

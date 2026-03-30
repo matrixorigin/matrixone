@@ -55,7 +55,7 @@ func (c Policy) CacheFullFile() bool {
 type contextKeyPolicy struct{}
 
 // WithFileServicePolicy attaches a read/write cache policy to ctx.
-// Callers deeper in the stack (e.g. LoadPersistedColumnDatas) will pick it
+// Callers deeper in the stack (e.g. LoadPersistedColumnData) will pick it
 // up automatically, so no interface changes are required.
 func WithFileServicePolicy(ctx context.Context, policy Policy) context.Context {
 	return context.WithValue(ctx, contextKeyPolicy{}, policy)

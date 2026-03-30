@@ -100,7 +100,9 @@ type Batch struct {
 	Deletes *nulls.Bitmap
 	Nameidx map[string]int
 	Pool    *VectorPool
-	// refidx  map[int]int
+	// DataRelease is called to free external data buffers (e.g. fileservice IOVectors)
+	// when the batch was loaded with zero-copy (needCopy=false).
+	DataRelease func()
 }
 
 // BatchSplitter is used to split a batch into several batches

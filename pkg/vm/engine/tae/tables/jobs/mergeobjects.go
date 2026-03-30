@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/txnentries"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"go.uber.org/zap"
@@ -243,46 +244,31 @@ func (task *mergeObjectsTask) LoadNextBatch(
 	var err error
 	var data *containers.Batch
 	var retBatch *batch.Batch
-	var releaseF func()
+
+	// Zero-copy mode: always get a fresh TN batch so vectors wrap
+	// fileservice buffers directly (no CloneVector allocation).
+	ctx = tables.WithScanNoCopy(ctx)
 
 	if reuseBatch != nil {
-		if reuseBatch.RowCount() != 0 {
-			panic("reuseBatch is not empty")
-		}
-		// Reuse the cached TN batch from the previous call — its TN vector wrappers
-		// still point to reuseBatch's (now-empty) CN vectors, so the scan can fill
-		// them in-place without allocating new wrappers.
-		data = task.tnDataBats[objIdx]
-		if data != nil {
-			// CleanOnlyData clears vectors but not the Deletes bitmap; reset it so
-			// deletions from the previous block don't bleed into this one.
-			data.Deletes = nil
-		}
 		retBatch = reuseBatch
 	}
 
-	isLast := task.nMergedBlk[objIdx] == task.blkCnt[objIdx]-1
-	if isLast {
-		releaseF = func() {
-			if data != nil {
-				data.Close()
-				task.tnDataBats[objIdx] = nil
+	// releaseF frees the current TN batch's IOVector buffers and closes
+	// its vectors. The merger calls this before loading the next block.
+	releaseF := func() {
+		if d := task.tnDataBats[objIdx]; d != nil {
+			if d.DataRelease != nil {
+				d.DataRelease()
+				d.DataRelease = nil
 			}
-		}
-	} else {
-		releaseF = func() {
-			if retBatch != nil {
-				retBatch.CleanOnlyData()
-			}
+			d.Close()
+			task.tnDataBats[objIdx] = nil
 		}
 	}
 
 	defer func() {
 		if err != nil {
-			if data != nil {
-				data.Close()
-				task.tnDataBats[objIdx] = nil
-			}
+			releaseF()
 		}
 	}()
 
@@ -308,6 +294,9 @@ func (task *mergeObjectsTask) LoadNextBatch(
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	// Cache the TN batch so releaseF can free it.
+	task.tnDataBats[objIdx] = data
+
 	if task.isTombstone {
 		err = data.Vecs[0].Foreach(func(v any, isNull bool, row int) error {
 			rowID := v.(types.Rowid)
@@ -332,17 +321,15 @@ func (task *mergeObjectsTask) LoadNextBatch(
 	task.nMergedBlk[objIdx]++
 
 	if retBatch == nil {
-		// First block of this object: create the CN batch and populate vector slots.
-		// Cache the TN batch so subsequent blocks can skip ToTNBatch.
-		task.tnDataBats[objIdx] = data
 		retBatch = batch.New(task.attrs)
-		for i, idx := range task.idxs {
-			if idx == objectio.SEQNUM_COMMITTS {
-				id := slices.Index(task.attrs, objectio.TombstoneAttr_CommitTs_Attr)
-				retBatch.Vecs[id] = data.Vecs[i].GetDownstreamVector()
-			} else {
-				retBatch.Vecs[idx] = data.Vecs[i].GetDownstreamVector()
-			}
+	}
+	// Re-wire CN batch vectors to the new TN batch's downstream vectors.
+	for i, idx := range task.idxs {
+		if idx == objectio.SEQNUM_COMMITTS {
+			id := slices.Index(task.attrs, objectio.TombstoneAttr_CommitTs_Attr)
+			retBatch.Vecs[id] = data.Vecs[i].GetDownstreamVector()
+		} else {
+			retBatch.Vecs[idx] = data.Vecs[i].GetDownstreamVector()
 		}
 	}
 

@@ -30,6 +30,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
+type scanNoCopyKey struct{}
+
+// WithScanNoCopy signals the scan chain to use zero-copy mode (needCopy=false).
+// Vectors will wrap fileservice buffers directly; the caller must hold the
+// returned DataRelease on the batch until the data is fully consumed.
+func WithScanNoCopy(ctx context.Context) context.Context {
+	return context.WithValue(ctx, scanNoCopyKey{}, true)
+}
+
+func isScanNoCopy(ctx context.Context) bool {
+	v, _ := ctx.Value(scanNoCopyKey{}).(bool)
+	return v
+}
+
 var _ NodeT = (*persistedNode)(nil)
 
 type persistedNode struct {
@@ -100,8 +114,9 @@ func (node *persistedNode) Scan(
 		ts := txn.GetStartTS()
 		tsForAppendable = &ts
 	}
-	vecs, deletes, err := LoadPersistedColumnDatas(
+	vecs, deletes, release, err := LoadPersistedColumnData(
 		ctx, readSchema, node.object.rt, id, colIdxes, location, mp, tsForAppendable,
+		!isScanNoCopy(ctx),
 	)
 	replaceCommitts := func(vecs []containers.Vector, i int) {
 		createTS := node.object.meta.Load().GetCreatedAt()
@@ -117,6 +132,7 @@ func (node *persistedNode) Scan(
 	if *bat == nil {
 		*bat = containers.NewBatch()
 		(*bat).Deletes = deletes
+		(*bat).DataRelease = release
 		for i, idx := range colIdxes {
 			var attr string
 			if idx == objectio.SEQNUM_COMMITTS {
@@ -247,8 +263,9 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 		if err != nil {
 			return err
 		}
-		vecs, _, err := LoadPersistedColumnDatas(
+		vecs, _, _, err := LoadPersistedColumnData(
 			ctx, readSchema, node.object.rt, id, colIdxes, location, mp, nil,
+			true,
 		)
 		if err != nil {
 			return err
@@ -340,8 +357,9 @@ func (node *persistedNode) FillBlockTombstones(
 		if err != nil {
 			return err
 		}
-		vecs, _, err := LoadPersistedColumnDatas(
+		vecs, _, _, err := LoadPersistedColumnData(
 			ctx, readSchema, node.object.rt, id, colIdxs, location, mp, nil,
+			true,
 		)
 		if err != nil {
 			return err
