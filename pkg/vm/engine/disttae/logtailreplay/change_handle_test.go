@@ -600,8 +600,8 @@ func TestBaseHandleResolveVisibleObjectsByDeleteChain(t *testing.T) {
 		types.BuildTS(30, 0),
 		[]*objectio.ObjectEntry{missing},
 		map[types.TS][]*objectio.ObjectEntry{
-			successor.CreateTime: []*objectio.ObjectEntry{successor},
-			orphan.CreateTime:    []*objectio.ObjectEntry{orphan},
+			successor.CreateTime: {successor},
+			orphan.CreateTime:    {orphan},
 		},
 		[]types.TS{successor.CreateTime, orphan.CreateTime},
 		false,
