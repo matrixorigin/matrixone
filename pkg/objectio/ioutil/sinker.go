@@ -715,6 +715,32 @@ func (sinker *Sinker) Write(
 	return
 }
 
+// WriteOwned stages a full-block batch directly without copying. The caller
+// transfers ownership: the sinker will clean the batch later.
+// If the batch is not exactly BlockMaxRows or there is a partially-filled
+// staged buffer, falls back to Write (which copies).
+func (sinker *Sinker) WriteOwned(
+	ctx context.Context,
+	data *batch.Batch,
+) (owned bool, err error) {
+	if data.RowCount() != objectio.BlockMaxRows {
+		return false, sinker.Write(ctx, data)
+	}
+	// Check if the last staged batch is partial (not full).
+	last := sinker.popStaged()
+	if last != nil {
+		if err = sinker.pushStaged(ctx, last); err != nil {
+			return false, err
+		}
+		if last.RowCount() < objectio.BlockMaxRows {
+			// Partial staged buffer exists; must copy to fill it.
+			return false, sinker.Write(ctx, data)
+		}
+	}
+	// No partial buffer; stage the batch directly.
+	return true, sinker.pushStaged(ctx, data)
+}
+
 func (sinker *Sinker) Sync(ctx context.Context) error {
 	select {
 	case <-ctx.Done():

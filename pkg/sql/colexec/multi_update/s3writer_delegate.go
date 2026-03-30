@@ -513,6 +513,19 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 
 	for i := range bats {
 		rowCount += bats[i].RowCount()
+		// When cleanBatchAfterUse is true, the batch is exclusively owned
+		// (cloned), so we can transfer it to the sinker without copying.
+		if cleanBatchAfterUse {
+			owned, writeErr := s3Writer.WriteOwned(writeCtx, bats[i])
+			if writeErr != nil {
+				err = writeErr
+				return
+			}
+			if owned {
+				bats[i] = nil
+				continue
+			}
+		}
 		if err = s3Writer.Write(writeCtx, bats[i]); err != nil {
 			return
 		}

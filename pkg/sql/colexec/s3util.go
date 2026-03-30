@@ -213,6 +213,10 @@ func (w *CNS3Writer) Write(ctx context.Context, bat *batch.Batch) error {
 	return w.sinker.Write(ctx, bat)
 }
 
+func (w *CNS3Writer) WriteOwned(ctx context.Context, bat *batch.Batch) (bool, error) {
+	return w.sinker.WriteOwned(ctx, bat)
+}
+
 func (w *CNS3Writer) Sync(ctx context.Context) (stats []objectio.ObjectStats, err error) {
 	if err = w.sinker.Sync(ctx); err != nil {
 		return
