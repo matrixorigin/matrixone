@@ -129,68 +129,6 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		}
 
 		dupProjection := getProjectionByLastNode(builder, lastNodeId)
-		// if table have pk & unique key. we need append an agg node before on_duplicate_key
-		if rewriteInfo.onDuplicateNeedAgg {
-			colLen := len(tableDef.Cols)
-			aggGroupBy := make([]*Expr, 0, colLen)
-			aggList := make([]*Expr, 0, len(dupProjection)-colLen)
-			aggProject := make([]*Expr, 0, len(dupProjection))
-			for i := 0; i < len(dupProjection); i++ {
-				if i < colLen {
-					aggGroupBy = append(aggGroupBy, &Expr{
-						Typ: dupProjection[i].Typ,
-						Expr: &plan.Expr_Col{
-							Col: &ColRef{
-								ColPos: int32(i),
-							},
-						},
-					})
-					aggProject = append(aggProject, &Expr{
-						Typ: dupProjection[i].Typ,
-						Expr: &plan.Expr_Col{
-							Col: &ColRef{
-								RelPos: -1,
-								ColPos: int32(i),
-							},
-						},
-					})
-				} else {
-					aggExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "any_value", []*Expr{
-						{
-							Typ: dupProjection[i].Typ,
-							Expr: &plan.Expr_Col{
-								Col: &ColRef{
-									ColPos: int32(i),
-								},
-							},
-						},
-					})
-					if err != nil {
-						return nil, err
-					}
-					aggList = append(aggList, aggExpr)
-					aggProject = append(aggProject, &Expr{
-						Typ: dupProjection[i].Typ,
-						Expr: &plan.Expr_Col{
-							Col: &ColRef{
-								RelPos: -2,
-								ColPos: int32(i),
-							},
-						},
-					})
-				}
-			}
-
-			aggNode := &Node{
-				NodeType:    plan.Node_AGG,
-				Children:    []int32{lastNodeId},
-				GroupBy:     aggGroupBy,
-				AggList:     aggList,
-				ProjectList: aggProject,
-				SpillMem:    builder.aggSpillMem,
-			}
-			lastNodeId = builder.appendNode(aggNode, bindCtx)
-		}
 		// construct the attrs and insertColCount for on_duplicate_key node
 		attrs := make([]string, 0)
 		insertColCount := int32(0)
@@ -297,24 +235,21 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		sourceStep = builder.appendStep(lastNodeId)
 
 		// append plans like update
-		updateBindCtx := NewBindContext(builder, nil)
-		upPlanCtx := getDmlPlanCtx()
-		upPlanCtx.objRef = objRef
-		upPlanCtx.tableDef = tableDef
-		upPlanCtx.beginIdx = 0
-		upPlanCtx.sourceStep = sourceStep
-		upPlanCtx.isMulti = false
-		upPlanCtx.updateColLength = updateColLength
-		upPlanCtx.rowIdPos = rowIdPos
-		upPlanCtx.insertColPos = insertColPos
-		upPlanCtx.updateColPosMap = updateColPosMap
-		upPlanCtx.updatePkCol = updatePkCol
-
-		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx, true)
+		err = buildInsertOnDuplicateUpdatePlans(
+			ctx,
+			builder,
+			objRef,
+			tableDef,
+			sourceStep,
+			updateColLength,
+			rowIdPos,
+			insertColPos,
+			updateColPosMap,
+			updatePkCol,
+		)
 		if err != nil {
 			return nil, err
 		}
-		putDmlPlanCtx(upPlanCtx)
 
 		query.StmtType = plan.Query_UPDATE
 	} else {
@@ -339,6 +274,40 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 			Query: query,
 		},
 	}, err
+}
+
+var buildInsertGetDmlPlanCtx = getDmlPlanCtx
+var buildInsertPutDmlPlanCtx = putDmlPlanCtx
+var buildInsertUpdatePlans = buildUpdatePlans
+
+func buildInsertOnDuplicateUpdatePlans(
+	ctx CompilerContext,
+	builder *QueryBuilder,
+	objRef *ObjectRef,
+	tableDef *TableDef,
+	sourceStep int32,
+	updateColLength int,
+	rowIdPos int,
+	insertColPos []int,
+	updateColPosMap map[string]int,
+	updatePkCol bool,
+) error {
+	updateBindCtx := NewBindContext(builder, nil)
+	upPlanCtx := buildInsertGetDmlPlanCtx()
+	defer buildInsertPutDmlPlanCtx(upPlanCtx)
+
+	upPlanCtx.objRef = objRef
+	upPlanCtx.tableDef = tableDef
+	upPlanCtx.beginIdx = 0
+	upPlanCtx.sourceStep = sourceStep
+	upPlanCtx.isMulti = false
+	upPlanCtx.updateColLength = updateColLength
+	upPlanCtx.rowIdPos = rowIdPos
+	upPlanCtx.insertColPos = insertColPos
+	upPlanCtx.updateColPosMap = updateColPosMap
+	upPlanCtx.updatePkCol = updatePkCol
+
+	return buildInsertUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx, true)
 }
 
 // ------------------- pk filter relatived -------------------

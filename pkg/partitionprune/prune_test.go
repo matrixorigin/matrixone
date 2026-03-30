@@ -335,6 +335,25 @@ func TestPrune(t *testing.T) {
 		_, err := Prune(proc, bat, metadata, -1)
 		require.Error(t, err)
 	})
+
+	t.Run("all rows miss partitions returns invalid input before empty result", func(t *testing.T) {
+		metadata := partition.PartitionMetadata{
+			Partitions: []partition.Partition{
+				{
+					Expr: &plan.Expr{
+						Typ: plan.Type{Id: int32(types.T_bool)},
+						Expr: &plan.Expr_Lit{
+							Lit: &plan.Literal{Value: &plan.Literal_Bval{Bval: false}},
+						},
+					},
+				},
+			},
+		}
+
+		_, err := Prune(proc, bat, metadata, -1)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "Table has no partition for value from column_list")
+	})
 }
 
 func batchCount(result partitionservice.PruneResult) int {

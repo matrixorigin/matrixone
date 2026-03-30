@@ -547,7 +547,8 @@ func (r *reader) SetIndexParam(param *plan.IndexReaderParam) {
 		// Squaring the bounds would compare actual_L2 vs D² which is incorrect.
 	}
 
-	r.orderByLimit.DistHeap = make(objectio.Float64Heap, 0, r.orderByLimit.Limit)
+	// Avoid eager O(limit) allocation; blockio grows the heap as rows are accepted.
+	r.orderByLimit.DistHeap = nil
 }
 
 func (r *reader) GetOrderBy() []*plan.OrderBySpec {
