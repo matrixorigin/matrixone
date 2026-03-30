@@ -259,9 +259,15 @@ func (builder *QueryBuilder) suspendScanProtection(scanID int32) func() {
 	}
 
 	return func() {
-		if wasProtected {
+		currentCount, stillProtected := builder.protectedScans[scanID]
+		switch {
+		case wasProtected && stillProtected:
+			builder.protectedScans[scanID] = originalCount + currentCount
+		case wasProtected:
 			builder.protectedScans[scanID] = originalCount
-		} else {
+		case stillProtected:
+			builder.protectedScans[scanID] = currentCount
+		default:
 			delete(builder.protectedScans, scanID)
 		}
 	}
