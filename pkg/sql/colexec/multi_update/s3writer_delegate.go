@@ -82,6 +82,7 @@ func newDeleteBlockData(inputBatch *batch.Batch, pkIdx int) *deleteBlockData {
 
 type s3WriterDelegate struct {
 	cacheBatches *batch.BatchSet
+	batchPool    []*batch.Batch // reusable buffers for cacheBatches.Extend
 	segmentMap   map[string]int32
 
 	action   actionType
@@ -189,10 +190,21 @@ func newS3Writer(
 	return writer, nil
 }
 
+func (writer *s3WriterDelegate) popReuseBuf() *batch.Batch {
+	n := len(writer.batchPool)
+	if n == 0 {
+		return nil
+	}
+	buf := writer.batchPool[n-1]
+	writer.batchPool = writer.batchPool[:n-1]
+	return buf
+}
+
 func (writer *s3WriterDelegate) cleanCachedBatches(mp *mpool.MPool) {
 	bats := writer.cacheBatches.TakeBatches()
 	for _, bat := range bats {
-		bat.Clean(mp)
+		bat.CleanOnlyData()
+		writer.batchPool = append(writer.batchPool, bat)
 	}
 
 	writer.batchSize = 0
@@ -212,11 +224,19 @@ func (writer *s3WriterDelegate) append(
 	var (
 		increment      uint64
 		acquireGranted bool
+		consumed       bool
 	)
 
-	_, err = writer.cacheBatches.Extend(proc.Mp(), inBatch, nil)
+	reuseBuf := writer.popReuseBuf()
+	consumed, err = writer.cacheBatches.Extend(proc.Mp(), inBatch, reuseBuf)
 	if err != nil {
+		if reuseBuf != nil && !consumed {
+			reuseBuf.Clean(proc.Mp())
+		}
 		return
+	}
+	if !consumed && reuseBuf != nil {
+		writer.batchPool = append(writer.batchPool, reuseBuf)
 	}
 
 	for _, idx := range writer.checkSizeCols {
@@ -732,6 +752,11 @@ func (writer *s3WriterDelegate) reset(proc *process.Process) (err error) {
 func (writer *s3WriterDelegate) free(proc *process.Process) (err error) {
 
 	writer.cleanCachedBatches(proc.Mp())
+
+	for _, bat := range writer.batchPool {
+		bat.Clean(proc.Mp())
+	}
+	writer.batchPool = nil
 
 	for _, bat := range writer.insertBlockInfo {
 		if bat != nil {
