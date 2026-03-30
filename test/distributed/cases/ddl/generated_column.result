@@ -326,4 +326,41 @@ select * from t33_load;
 1  ¦  2  ¦  3
 load data inline format='csv', data='3,4,99' into table t33_load fields terminated by ',' (a, b, c);
 invalid input: the value specified for generated column 'c' in table 't33_load' is not allowed
+create table t34_remap (a int, b int, c int generated always as (a + b) stored);
+insert into t34_remap (a, b) values (1, 2);
+alter table t34_remap add column x int default 0 first;
+insert into t34_remap (x, a, b) values (10, 3, 4);
+select * from t34_remap;
+➤ x[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+0  ¦  1  ¦  2  ¦  3  𝄀
+10  ¦  3  ¦  4  ¦  7
+create table t35_remap (a int, b int, c int generated always as (a * b) stored);
+insert into t35_remap (a, b) values (3, 5);
+alter table t35_remap add column y int default 0 after a;
+insert into t35_remap (a, y, b) values (4, 99, 6);
+select * from t35_remap;
+➤ a[4,32,0]  ¦  y[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+3  ¦  0  ¦  5  ¦  15  𝄀
+4  ¦  99  ¦  6  ¦  24
+create table t36_remap (a int, b int, d int, c int generated always as (a + b) stored);
+insert into t36_remap (a, b, d) values (1, 2, 99);
+alter table t36_remap drop column d;
+insert into t36_remap (a, b) values (5, 6);
+select * from t36_remap;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  2  ¦  3  𝄀
+5  ¦  6  ¦  11
+create table t37_odku_pk (a int, b int generated always as (a*2) stored, primary key(b));
+insert into t37_odku_pk (a) values (1);
+insert into t37_odku_pk (a) values (1) on duplicate key update a=5;
+select * from t37_odku_pk;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+5  ¦  10
+create table t38_modify (a int, b int, c int generated always as (a + b) stored);
+alter table t38_modify modify column a bigint;
+invalid input: Cannot modify column 'a': generated column 'c' depends on it
+create table t39_vpk (a int, b int generated always as (a+1) virtual, primary key(b));
+not supported: defining a virtual generated column 'b' as primary key
+create table t40_qualname (a int, b int generated always as (t40_qualname.a + 1) stored);
+invalid input: generated column expression cannot use qualified column name 'a'
 drop database test_generated_col;

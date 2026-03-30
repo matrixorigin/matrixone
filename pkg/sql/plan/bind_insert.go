@@ -235,6 +235,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 
 	for _, part := range tableDef.Pkey.Names {
 		if _, ok := updateExprs[part]; ok {
+			// Generated columns are auto-recomputed, not explicitly updated by the user.
+			// Allow them in PK even though they appear in updateExprs.
+			if idx, exists := tableDef.Name2ColIndex[part]; exists && tableDef.Cols[idx].GeneratedCol != nil {
+				continue
+			}
 			return 0, moerr.NewUnsupportedDML(builder.GetContext(), "update primary key on duplicate")
 		}
 	}
@@ -242,7 +247,12 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	idxNeedUpdate := make([]bool, len(tableDef.Indexes))
 	for i, idxDef := range tableDef.Indexes {
 		for _, part := range idxDef.Parts {
-			if _, ok := updateExprs[catalog.ResolveAlias(part)]; ok {
+			resolved := catalog.ResolveAlias(part)
+			if _, ok := updateExprs[resolved]; ok {
+				// Skip generated columns in unique key check (auto-recomputed, not user-set)
+				if idx, exists := tableDef.Name2ColIndex[resolved]; exists && tableDef.Cols[idx].GeneratedCol != nil {
+					continue
+				}
 				if idxDef.Unique {
 					return 0, moerr.NewUnsupportedDML(builder.GetContext(), "update unique key on duplicate")
 				} else {
@@ -1124,13 +1134,16 @@ func (builder *QueryBuilder) stripGeneratedDefaultCols(astCols tree.IdentifierLi
 		}
 	}
 
-	// Strip generated columns from column list and values
+	// Strip generated columns from column list and values.
+	// Build a new ValuesClause to avoid mutating the original AST
+	// (important for PREPARE + multiple EXECUTE).
 	newCols := make(tree.IdentifierList, 0, len(astCols)-len(genPositions))
 	for i, col := range astCols {
 		if !genPositions[i] {
 			newCols = append(newCols, col)
 		}
 	}
+	newRows := make([]tree.Exprs, len(vc.Rows))
 	for j, row := range vc.Rows {
 		if row == nil {
 			continue
@@ -1141,8 +1154,11 @@ func (builder *QueryBuilder) stripGeneratedDefaultCols(astCols tree.IdentifierLi
 				newRow = append(newRow, val)
 			}
 		}
-		vc.Rows[j] = newRow
+		newRows[j] = newRow
 	}
+	newVC := *vc
+	newVC.Rows = newRows
+	astRows.Select = &newVC
 
 	return newCols, nil
 }

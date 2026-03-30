@@ -82,6 +82,8 @@ func handleAddColumnPosition(ctx context.Context, tableDef *TableDef, newCol *Co
 			return err
 		}
 		tableDef.Cols = append(tableDef.Cols[:targetPos], append([]*ColDef{newCol}, tableDef.Cols[targetPos:]...)...)
+		// Remap ColPos in all generated column expressions after the insertion
+		remapGeneratedColExprsAfterInsert(tableDef, int32(targetPos))
 	} else {
 		tableDef.Cols = append(tableDef.Cols, newCol)
 	}
@@ -527,11 +529,23 @@ func checkDropColumnWithForeignKey(ctx CompilerContext, tbInfo *TableDef, target
 	return nil
 }
 
-// checkModifyNewColumn Check the position information of the newly formed column and place the new column in the target location
+// handleDropColumnPosition removes the column from the table definition and
+// remaps ColPos references in generated column expressions.
 func handleDropColumnPosition(ctx context.Context, tableDef *TableDef, col *ColDef) error {
+	// Find the position of the column being dropped BEFORE removing it
+	dropPos := int32(-1)
+	for i, c := range tableDef.Cols {
+		if c.Name == col.Name {
+			dropPos = int32(i)
+			break
+		}
+	}
 	tableDef.Cols = RemoveIf[*ColDef](tableDef.Cols, func(t *ColDef) bool {
 		return t.Name == col.Name
 	})
+	if dropPos >= 0 {
+		remapGeneratedColExprsAfterDrop(tableDef, dropPos)
+	}
 	return nil
 }
 
@@ -563,6 +577,49 @@ func handleDropColumnWithClusterBy(ctx context.Context, copyTableDef *TableDef, 
 		}
 	}
 	return nil
+}
+
+// shiftColPosInExpr adjusts ColRef.ColPos values in a generated column expression.
+// All positions >= threshold are shifted by delta (+1 for insert, -1 for drop).
+func shiftColPosInExpr(expr *plan.Expr, threshold int32, delta int32) {
+	if expr == nil {
+		return
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if e.Col.RelPos == 0 && e.Col.ColPos >= threshold {
+			e.Col.ColPos += delta
+		}
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			shiftColPosInExpr(arg, threshold, delta)
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			shiftColPosInExpr(item, threshold, delta)
+		}
+	}
+}
+
+// remapGeneratedColExprsAfterInsert adjusts all generated column expressions
+// after a new column is inserted at insertPos. ColPos >= insertPos shift up by 1.
+// The newly inserted column's own expression (if any) is also adjusted.
+func remapGeneratedColExprsAfterInsert(tableDef *TableDef, insertPos int32) {
+	for _, col := range tableDef.Cols {
+		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil {
+			shiftColPosInExpr(col.GeneratedCol.Expr, insertPos, 1)
+		}
+	}
+}
+
+// remapGeneratedColExprsAfterDrop adjusts all generated column expressions
+// after a column is removed from dropPos. ColPos > dropPos shift down by 1.
+func remapGeneratedColExprsAfterDrop(tableDef *TableDef, dropPos int32) {
+	for _, col := range tableDef.Cols {
+		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil {
+			shiftColPosInExpr(col.GeneratedCol.Expr, dropPos+1, -1)
+		}
+	}
 }
 
 // checkColumnWithGeneratedDependency checks if the column is referenced
@@ -601,6 +658,8 @@ func exprReferencesColumn(expr *plan.Expr, colName string, cols []*ColDef) bool 
 				return true
 			}
 		}
+	case *plan.Expr_Lit, *plan.Expr_Max, *plan.Expr_Vec:
+		// Leaf nodes – nothing to recurse into.
 	}
 	return false
 }
@@ -645,6 +704,8 @@ func checkCycleHelper(ctx context.Context, tableDef *TableDef, targetColName str
 				return err
 			}
 		}
+	case *plan.Expr_Lit, *plan.Expr_Max, *plan.Expr_Vec:
+		// Leaf nodes – nothing to recurse into.
 	}
 	return nil
 }

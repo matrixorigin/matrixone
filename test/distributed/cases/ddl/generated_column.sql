@@ -320,6 +320,51 @@ select * from t33_load;
 load data inline format='csv', data='3,4,99' into table t33_load fields terminated by ',' (a, b, c);
 
 -- ============================================================
--- 37. Cleanup
+-- 37. ALTER TABLE ADD COLUMN FIRST/AFTER remaps generated col ColPos
+-- ============================================================
+create table t34_remap (a int, b int, c int generated always as (a + b) stored);
+insert into t34_remap (a, b) values (1, 2);
+alter table t34_remap add column x int default 0 first;
+insert into t34_remap (x, a, b) values (10, 3, 4);
+select * from t34_remap;
+-- ADD COLUMN AFTER
+create table t35_remap (a int, b int, c int generated always as (a * b) stored);
+insert into t35_remap (a, b) values (3, 5);
+alter table t35_remap add column y int default 0 after a;
+insert into t35_remap (a, y, b) values (4, 99, 6);
+select * from t35_remap;
+-- DROP COLUMN remaps
+create table t36_remap (a int, b int, d int, c int generated always as (a + b) stored);
+insert into t36_remap (a, b, d) values (1, 2, 99);
+alter table t36_remap drop column d;
+insert into t36_remap (a, b) values (5, 6);
+select * from t36_remap;
+
+-- ============================================================
+-- 38. ODKU with generated column in PRIMARY KEY
+-- ============================================================
+create table t37_odku_pk (a int, b int generated always as (a*2) stored, primary key(b));
+insert into t37_odku_pk (a) values (1);
+insert into t37_odku_pk (a) values (1) on duplicate key update a=5;
+select * from t37_odku_pk;
+
+-- ============================================================
+-- 39. MODIFY COLUMN dependency check
+-- ============================================================
+create table t38_modify (a int, b int, c int generated always as (a + b) stored);
+alter table t38_modify modify column a bigint;
+
+-- ============================================================
+-- 40. VIRTUAL generated column cannot be PRIMARY KEY
+-- ============================================================
+create table t39_vpk (a int, b int generated always as (a+1) virtual, primary key(b));
+
+-- ============================================================
+-- 41. Qualified column names rejected in generated expression
+-- ============================================================
+create table t40_qualname (a int, b int generated always as (t40_qualname.a + 1) stored);
+
+-- ============================================================
+-- 42. Cleanup
 -- ============================================================
 drop database test_generated_col;

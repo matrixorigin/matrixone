@@ -512,6 +512,8 @@ func checkExprForVolatileFunc(ctx context.Context, expr *plan.Expr) error {
 				return err
 			}
 		}
+	case *plan.Expr_Lit, *plan.Expr_Max, *plan.Expr_Vec:
+		// Leaf nodes – nothing to recurse into.
 	}
 	return nil
 }
@@ -543,6 +545,8 @@ func validateNoForwardGenRef(ctx context.Context, expr *plan.Expr, currentIdx in
 				return err
 			}
 		}
+	case *plan.Expr_Lit, *plan.Expr_Max, *plan.Expr_Vec:
+		// Leaf nodes – nothing to recurse into.
 	}
 	return nil
 }

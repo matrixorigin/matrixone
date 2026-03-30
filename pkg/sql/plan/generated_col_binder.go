@@ -46,6 +46,9 @@ func (b *GeneratedColBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot boo
 }
 
 func (b *GeneratedColBinder) BindColRef(astExpr *tree.UnresolvedName, _ int32, _ bool) (*plan.Expr, error) {
+	if astExpr.NumParts > 1 {
+		return nil, moerr.NewInvalidInputf(b.GetContext(), "generated column expression cannot use qualified column name '%s'", astExpr.ColNameOrigin())
+	}
 	col := astExpr.ColName()
 	for i, c := range b.colNames {
 		if c == col {

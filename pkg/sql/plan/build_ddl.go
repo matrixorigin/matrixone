@@ -1443,6 +1443,12 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			if _, ok := colMap[primaryKey]; !ok {
 				return moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' doesn't exist in table", primaryKey)
 			}
+			// Reject VIRTUAL generated columns in PRIMARY KEY
+			col := colMap[primaryKey]
+			if col.GeneratedCol != nil && !col.GeneratedCol.IsStored {
+				return moerr.NewNotSupported(ctx.GetContext(),
+					fmt.Sprintf("defining a virtual generated column '%s' as primary key", col.OriginName))
+			}
 		}
 		if len(primaryKeys) == 1 {
 			pkeyName = primaryKeys[0]

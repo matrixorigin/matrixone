@@ -226,6 +226,11 @@ func buildColumnAndConstraint(
 		}
 	}
 	if newCol.GeneratedCol != nil {
+		// Reject VIRTUAL generated columns as PRIMARY KEY
+		if newCol.Primary && !newCol.GeneratedCol.IsStored {
+			return nil, moerr.NewNotSupportedf(ctx.GetContext(),
+				"defining a virtual generated column '%s' as primary key", newColNameOrigin)
+		}
 		// Generated columns preserve declared nullability but use no default expr for storage layer compatibility
 		newCol.Default = &plan.Default{
 			NullAbility:  getColumnNullAbility(specNewColumn),
