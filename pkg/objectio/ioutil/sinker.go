@@ -510,15 +510,11 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 
 	defer sinker.cleanupInMemoryStaged()
 	var sorted []*batch.Batch
-	innersinker := func(data *batch.Batch) error {
-		oneSorted := sinker.fetchBuffer()
-		_, err := oneSorted.AppendWithCopy(ctx, sinker.mp, data)
-		if err != nil {
-			sinker.putBackBuffer(oneSorted)
-			return err
-		}
-		sorted = append(sorted, oneSorted)
-		return nil
+	// The sinker takes ownership of the full buffer and returns an empty
+	// replacement, eliminating AppendWithCopy.
+	innersinker := func(data *batch.Batch) (*batch.Batch, error) {
+		sorted = append(sorted, data)
+		return sinker.fetchBuffer(), nil
 	}
 
 	defer func() {
@@ -533,16 +529,18 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 
 	// 1. merge sort
 	if sinker.schema.sortKeyIdx != -1 {
-		buffer := sinker.fetchBuffer() // note the lifecycle of buffer
-		defer sinker.putBackBuffer(buffer)
-		if err := mergeutil.MergeSortBatches(
+		buffer := sinker.fetchBuffer()
+		var err error
+		buffer, err = mergeutil.MergeSortBatches(
 			sinker.staged.inMemory,
 			sinker.schema.sortKeyIdx,
 			buffer,
 			innersinker,
 			sinker.mp,
 			sinker.putBackOneInMemory,
-		); err != nil {
+		)
+		sinker.putBackBuffer(buffer)
+		if err != nil {
 			return err
 		}
 		data = sorted
