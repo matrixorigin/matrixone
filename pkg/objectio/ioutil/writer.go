@@ -152,7 +152,6 @@ type BlockWriter struct {
 	pk             uint16
 	pkType         uint8
 	sortKeyIdx     uint16
-	fakePK         uint16 // fake PK column index, math.MaxUint16 if not set
 	nameStr        string
 	name           objectio.ObjectName
 	prefix         []index.PrefixFn
@@ -171,7 +170,6 @@ func NewBlockWriter(fs fileservice.FileService, name string) (*BlockWriter, erro
 	return &BlockWriter{
 		writer:     writer,
 		isSetPK:    false,
-		fakePK:     math.MaxUint16,
 		sortKeyIdx: math.MaxUint16,
 		nameStr:    name,
 	}, nil
@@ -203,7 +201,6 @@ func NewBlockWriterWithArena(
 	return &BlockWriter{
 		writer:      writer,
 		isSetPK:     false,
-		fakePK:      math.MaxUint16,
 		sortKeyIdx:  math.MaxUint16,
 		nameStr:     name.String(),
 		name:        name,
@@ -232,11 +229,6 @@ func (w *BlockWriter) SetPrimaryKeyWithType(idx uint16, pkType uint8, prefix ...
 
 func (w *BlockWriter) SetSortKey(idx uint16) {
 	w.sortKeyIdx = idx
-}
-
-// SetFakePK marks a fake PK column so its NDV is set to totalRows in Sync.
-func (w *BlockWriter) SetFakePK(idx uint16) {
-	w.fakePK = idx
 }
 
 func (w *BlockWriter) SetAppendable() {
@@ -274,9 +266,6 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 			(vec.GetType().Oid == types.T_Rowid || vec.GetType().Oid == types.T_TS)
 
 		if w.isSetPK && w.pk == uint16(i) {
-			isPK = true
-		}
-		if w.fakePK == uint16(i) {
 			isPK = true
 		}
 		columnData := containers.ToTNVector(vec, common.DefaultAllocator)
@@ -347,9 +336,6 @@ func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objecti
 	if w.objMetaBuilder != nil {
 		if w.isSetPK {
 			w.objMetaBuilder.SetPKNdv(w.pk, w.objMetaBuilder.GetTotalRow())
-		}
-		if w.fakePK != math.MaxUint16 {
-			w.objMetaBuilder.SetPKNdv(w.fakePK, w.objMetaBuilder.GetTotalRow())
 		}
 		cnt, meta := w.objMetaBuilder.Build()
 		w.writer.WriteObjectMeta(ctx, cnt, meta)

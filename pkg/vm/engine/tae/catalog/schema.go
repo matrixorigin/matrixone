@@ -331,10 +331,6 @@ func (s *Schema) HasPKOrFakePK() bool {
 	if s.HasPK() {
 		return true
 	}
-	return s.HasFakePK()
-}
-
-func (s *Schema) HasFakePK() bool {
 	_, ok := s.NameMap[pkgcatalog.FakePrimaryKeyColName]
 	return ok
 }
