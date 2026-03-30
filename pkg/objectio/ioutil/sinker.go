@@ -396,8 +396,7 @@ func (sinker *Sinker) fillDefaults() {
 
 	if sinker.buf.buffers == nil {
 		sinker.buf.isOwner = true
-		sinker.buf.buffers = containers.NewOneSchemaBatchBuffer(
-			sinker.config.bufferSizeCap,
+		sinker.buf.buffers = containers.NewBatchFreeList(
 			sinker.schema.attrs,
 			sinker.schema.attrTypes,
 			sinker.config.offHeap,
