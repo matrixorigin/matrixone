@@ -414,7 +414,8 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	if enabled && len(delCtx.tableDef.RefChildTbls) > 0 ||
 		delCtx.tableDef.ViewSql != nil ||
 		(util.TableIsClusterTable(delCtx.tableDef.GetTableType()) && accountId != catalog.System_Account) ||
-		delCtx.objRef.PubInfo != nil || !deleteOptToTruncate {
+		delCtx.objRef.PubInfo != nil || !deleteOptToTruncate ||
+		delCtx.tableDef.Partition != nil {
 		canTruncate = false
 	}
 
