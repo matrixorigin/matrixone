@@ -1597,11 +1597,11 @@ func TestShouldReadBlock(t *testing.T) {
 		obj := makeTestObjectEntry(t, 2, false, false, types.BuildTS(5, 0))
 		key := obj.ObjectShortName().ShortString()
 		h.blockPlans[key] = &aobjBlockPlan{
-			initialized:    true,
-			evaluable:      true,
+			initialized:      true,
+			evaluable:        true,
 			shouldReadByBlks: []bool{true, false},
-			totalBlocks:    2,
-			evaluableBlocks: 2,
+			totalBlocks:      2,
+			evaluableBlocks:  2,
 		}
 		ok, err := h.shouldReadBlock(context.Background(), obj, 0)
 		require.NoError(t, err)
@@ -1630,8 +1630,8 @@ func TestShouldReadBlock(t *testing.T) {
 		obj := makeTestObjectEntry(t, 1, false, false, types.BuildTS(5, 0))
 		key := obj.ObjectShortName().ShortString()
 		h.blockPlans[key] = &aobjBlockPlan{
-			initialized:        true,
-			evaluable:          false,
+			initialized:         true,
+			evaluable:           false,
 			nonEvaluableReasons: map[string]int{"test": 1},
 		}
 		ch.strictCommitTSBlockPrune = true
@@ -1647,8 +1647,8 @@ func TestShouldReadBlock(t *testing.T) {
 		obj := makeTestObjectEntry(t, 1, false, false, types.BuildTS(5, 0))
 		key := obj.ObjectShortName().ShortString()
 		h.blockPlans[key] = &aobjBlockPlan{
-			initialized:    true,
-			evaluable:      true,
+			initialized:      true,
+			evaluable:        true,
 			shouldReadByBlks: []bool{true},
 		}
 		ok, err := h.shouldReadBlock(context.Background(), obj, 5) // out of range
@@ -1671,11 +1671,11 @@ func TestNextPrefetchTarget(t *testing.T) {
 		objects: []*objectio.ObjectEntry{obj},
 		blockPlans: map[string]*aobjBlockPlan{
 			key: {
-				initialized:    true,
-				evaluable:      true,
+				initialized:      true,
+				evaluable:        true,
 				shouldReadByBlks: []bool{false, true}, // skip block 0, read block 1
-				totalBlocks:    2,
-				evaluableBlocks: 2,
+				totalBlocks:      2,
+				evaluableBlocks:  2,
 			},
 		},
 		start: types.BuildTS(10, 0),
@@ -1802,7 +1802,7 @@ func TestBuildBlockPlan_SuccessPath(t *testing.T) {
 		scheduler:                sched,
 	}
 	h := &AObjectHandle{
-		p: &baseHandle{changesHandle: ch},
+		p:          &baseHandle{changesHandle: ch},
 		fs:         fs,
 		start:      types.BuildTS(50, 0),
 		end:        types.BuildTS(120, 0),
@@ -1840,7 +1840,7 @@ func TestBuildBlockPlan_PrunesBlock(t *testing.T) {
 	}
 	// Range [300,400] does NOT overlap [100,200] → block should be pruned
 	h := &AObjectHandle{
-		p: &baseHandle{changesHandle: ch},
+		p:          &baseHandle{changesHandle: ch},
 		fs:         fs,
 		start:      types.BuildTS(300, 0),
 		end:        types.BuildTS(400, 0),
@@ -1876,7 +1876,7 @@ func TestShouldReadBlock_WithBuildBlockPlan(t *testing.T) {
 
 	// Overlapping range: shouldReadBlock → true
 	h := &AObjectHandle{
-		p: &baseHandle{changesHandle: ch},
+		p:          &baseHandle{changesHandle: ch},
 		fs:         fs,
 		start:      types.BuildTS(50, 0),
 		end:        types.BuildTS(120, 0),
@@ -1888,7 +1888,7 @@ func TestShouldReadBlock_WithBuildBlockPlan(t *testing.T) {
 
 	// Non-overlapping range: shouldReadBlock → false
 	h2 := &AObjectHandle{
-		p: &baseHandle{changesHandle: ch},
+		p:          &baseHandle{changesHandle: ch},
 		fs:         fs,
 		start:      types.BuildTS(300, 0),
 		end:        types.BuildTS(400, 0),
