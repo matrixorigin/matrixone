@@ -718,6 +718,9 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 	} else if schema.HasSortKey() {
 		writer.SetSortKey(uint16(schema.GetSingleSortKeyIdx()))
 	}
+	if !isTombstone && schema.HasFakePK() {
+		writer.SetFakePK(uint16(schema.GetPrimaryKey().Idx))
+	}
 	for _, bat := range writtenBatches {
 		_, err = writer.WriteBatch(bat)
 		if err != nil {

@@ -131,6 +131,9 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 		} else if task.meta.GetSchema().HasSortKey() {
 			writer.SetSortKey(uint16(task.meta.GetSchema().GetSingleSortKeyIdx()))
 		}
+		if task.meta.GetSchema().HasFakePK() {
+			writer.SetFakePK(uint16(task.meta.GetSchema().GetPrimaryKey().Idx))
+		}
 	}
 
 	dataRows := cnBatch.RowCount()
