@@ -390,6 +390,7 @@ public:
             }
         }
 
+        this->transform_distance(this->metric, search_res.distances);
         return search_res;
     }
 
@@ -467,6 +468,7 @@ public:
             }
         }
 
+        this->transform_distance(this->metric, search_res.distances);
         return search_res;
     }
 

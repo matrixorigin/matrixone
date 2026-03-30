@@ -181,8 +181,8 @@ TEST(GpuBruteForceTest, SearchWithInnerProduct) {
     ASSERT_EQ(result.neighbors[1], 1);
     
     // dot product should be 1.0 for exact match
-    ASSERT_TRUE(std::abs(result.distances[0] - 1.0) < 1e-5);
-    ASSERT_TRUE(std::abs(result.distances[1] - 0.0) < 1e-5);
+    ASSERT_TRUE(std::abs(result.distances[0] + 1.0) < 1e-5);
+    ASSERT_TRUE(std::abs(result.distances[1] + 0.0) < 1e-5);
 
     index.destroy();
 }

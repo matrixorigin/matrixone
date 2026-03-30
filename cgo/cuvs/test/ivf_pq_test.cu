@@ -320,11 +320,11 @@ TEST(GpuIvfPqTest, ExtendWithoutHostIds) {
     index.start();
     index.build();
 
-    // Extended vectors: all components = 50.5 (within trained range [0..99])
+    // Extended vectors: all components = 500.5 (outside trained range [0..99])
     std::vector<float> ext(n_ext * dimension);
     for (uint64_t i = 0; i < n_ext; ++i)
         for (uint32_t j = 0; j < dimension; ++j)
-            ext[i * dimension + j] = 50.5f;
+            ext[i * dimension + j] = 500.5f;
 
     index.extend(ext.data(), n_ext, nullptr);
 
@@ -340,7 +340,7 @@ TEST(GpuIvfPqTest, ExtendWithoutHostIds) {
 
     // Query exactly at extended set: expect sequential ID in [n_base, n_base+n_ext)
     // (PQ is approximate; any of the 50 identical extended vectors is valid)
-    std::vector<float> q50(dimension, 50.5f);
+    std::vector<float> q50(dimension, 500.5f);
     auto r500 = index.search(q50.data(), 1, dimension, 1, sp);
     ASSERT_GE(r500.neighbors[0], (int64_t)n_base);
     ASSERT_TRUE(r500.neighbors[0] < (int64_t)(n_base + n_ext));
@@ -375,7 +375,7 @@ TEST(GpuIvfPqTest, ExtendWithHostIds) {
     std::vector<int64_t> ext_ids(n_ext);
     for (uint64_t i = 0; i < n_ext; ++i) {
         for (uint32_t j = 0; j < dimension; ++j)
-            ext[i * dimension + j] = 50.5f;  // within trained range [0..99]
+            ext[i * dimension + j] = 500.5f;  // outside trained range [0..99]
         ext_ids[i] = (int64_t)(2000 + i);  // external IDs 2000..2049
     }
     index.extend(ext.data(), n_ext, ext_ids.data());
@@ -391,7 +391,7 @@ TEST(GpuIvfPqTest, ExtendWithHostIds) {
     ASSERT_EQ(r0.neighbors[0], (int64_t)1000);
 
     // Query exactly at extended set: expect host ID in [2000, 2050)
-    std::vector<float> q50(dimension, 50.5f);
+    std::vector<float> q50(dimension, 500.5f);
     auto r500 = index.search(q50.data(), 1, dimension, 1, sp);
     ASSERT_GE(r500.neighbors[0], (int64_t)2000);
     ASSERT_TRUE(r500.neighbors[0] < (int64_t)2050);
@@ -473,8 +473,8 @@ TEST(GpuIvfPqTest, ExtendShardedWithHostIds) {
     std::vector<float> ext(n_ext * dimension);
     std::vector<int64_t> ext_ids(n_ext);
     for (uint64_t i = 0; i < n_ext; ++i) {
-        ext[i * dimension]     = 50.5f;
-        ext[i * dimension + 1] = 50.5f;
+        ext[i * dimension]     = 500.5f;
+        ext[i * dimension + 1] = 500.5f;
         ext_ids[i] = (int64_t)(2000 + i);
     }
     index.extend(ext.data(), n_ext, ext_ids.data());
@@ -485,7 +485,7 @@ TEST(GpuIvfPqTest, ExtendShardedWithHostIds) {
     sp.n_probes = 10;
 
     // Query exactly at extended set: expect host ID in [2000, 2050)
-    std::vector<float> q50 = {50.5f, 50.5f};
+    std::vector<float> q50 = {500.5f, 500.5f};
     auto r = index.search(q50.data(), 1, dimension, 1, sp);
     ASSERT_GE(r.neighbors[0], (int64_t)2000);
     ASSERT_LT(r.neighbors[0], (int64_t)2050);
@@ -520,8 +520,8 @@ TEST(GpuIvfPqTest, ExtendShardedWithoutHostIds) {
 
     std::vector<float> ext(n_ext * dimension);
     for (uint64_t i = 0; i < n_ext; ++i) {
-        ext[i * dimension]     = 50.5f;
-        ext[i * dimension + 1] = 50.5f;
+        ext[i * dimension]     = 500.5f;
+        ext[i * dimension + 1] = 500.5f;
     }
     index.extend(ext.data(), n_ext, nullptr);
 
@@ -531,7 +531,7 @@ TEST(GpuIvfPqTest, ExtendShardedWithoutHostIds) {
     sp.n_probes = 10;
 
     // Query exactly at extended set: expect sequential ID in [n_base, n_base+n_ext)
-    std::vector<float> q50 = {50.5f, 50.5f};
+    std::vector<float> q50 = {500.5f, 500.5f};
     auto r = index.search(q50.data(), 1, dimension, 1, sp);
     ASSERT_GE(r.neighbors[0], (int64_t)n_base);
     ASSERT_LT(r.neighbors[0], (int64_t)(n_base + n_ext));

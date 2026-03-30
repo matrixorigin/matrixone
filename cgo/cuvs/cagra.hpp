@@ -476,7 +476,13 @@ public:
             int num_shards = this->devices_.size();
             int rank = handle.get_rank();
             
-            uint64_t rows_per_shard = this->count / num_shards;
+            // Round down to a multiple of 32 so every shard offset is word-aligned in
+            // the deleted bitset, making shard-slice sync cheap (no bit-shifting needed).
+            uint64_t rows_per_shard = (this->count / num_shards) & ~static_cast<uint64_t>(31);
+            {
+                std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                this->rows_per_shard_ = rows_per_shard;
+            }
             uint64_t start_row = rank * rows_per_shard;
             uint64_t num_rows = (rank == num_shards - 1) ? (this->count - start_row) : rows_per_shard;
 
@@ -729,10 +735,21 @@ public:
             auto distances_device = raft::make_device_matrix<float, int64_t>(*res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
 
             if (this->deleted_count_ > 0) {
-                this->sync_device_bitset(handle.get_device_id(), *res);
-                auto info = this->get_device_bitset_info(handle.get_device_id());
                 using bs_t = raft::core::bitset<uint32_t, int64_t>;
-                auto* bs = static_cast<bs_t*>(info->ptr.get());
+                bs_t* bs;
+                if (this->dist_mode == DistributionMode_SHARDED) {
+                    int num_shards = static_cast<int>(this->devices_.size());
+                    uint64_t rows_per_shard = this->rows_per_shard_;
+                    int rank = handle.get_rank();
+                    uint64_t shard_offset = static_cast<uint64_t>(rank) * rows_per_shard;
+                    uint64_t shard_sz = (rank == num_shards - 1)
+                                        ? (this->count - shard_offset) : rows_per_shard;
+                    this->sync_shard_bitset(handle.get_device_id(), shard_offset, shard_sz, *res);
+                    bs = static_cast<bs_t*>(this->get_device_shard_bitset_info(handle.get_device_id())->ptr.get());
+                } else {
+                    this->sync_device_bitset(handle.get_device_id(), *res);
+                    bs = static_cast<bs_t*>(this->get_device_bitset_info(handle.get_device_id())->ptr.get());
+                }
                 auto filter = cuvs::neighbors::filtering::bitset_filter(bs->view());
                 cuvs::neighbors::cagra::search(*res, search_params, *local_index,
                                                     raft::make_const_mdspan(queries_device.view()),
@@ -752,23 +769,30 @@ public:
         }
         handle.sync(); // Local sync
 
-        if (!this->host_ids.empty()) {
-            for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
-                if (search_res.neighbors[i] != (uint32_t)-1) {
-                    search_res.neighbors[i] = this->host_ids[search_res.neighbors[i]];
-                }
-            }
-        } else if (this->dist_mode == DistributionMode_SHARDED) {
-            int num_shards = this->devices_.size();
-            uint64_t rows_per_shard = this->count / num_shards;
+        if (this->dist_mode == DistributionMode_SHARDED) {
+            uint64_t rows_per_shard = this->rows_per_shard_;
             uint32_t offset = (uint32_t)(handle.get_rank() * rows_per_shard);
             for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
                 if (search_res.neighbors[i] != (uint32_t)-1) {
-                    search_res.neighbors[i] += offset;
+                    uint32_t global_pos = search_res.neighbors[i] + offset;
+                    if (!this->host_ids.empty()) {
+                        search_res.neighbors[i] = this->host_ids[global_pos];
+                    } else {
+                        search_res.neighbors[i] = global_pos;
+                    }
+                }
+            }
+        } else {
+            if (!this->host_ids.empty()) {
+                for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
+                    if (search_res.neighbors[i] != (uint32_t)-1) {
+                        search_res.neighbors[i] = this->host_ids[search_res.neighbors[i]];
+                    }
                 }
             }
         }
 
+        this->transform_distance(this->metric, search_res.distances);
         return search_res;
     }
 
@@ -912,10 +936,21 @@ public:
             auto distances_device = raft::make_device_matrix<float, int64_t>(*res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
 
             if (this->deleted_count_ > 0) {
-                this->sync_device_bitset(handle.get_device_id(), *res);
-                auto info = this->get_device_bitset_info(handle.get_device_id());
                 using bs_t = raft::core::bitset<uint32_t, int64_t>;
-                auto* bs = static_cast<bs_t*>(info->ptr.get());
+                bs_t* bs;
+                if (this->dist_mode == DistributionMode_SHARDED) {
+                    int num_shards = static_cast<int>(this->devices_.size());
+                    uint64_t rows_per_shard = this->rows_per_shard_;
+                    int rank = handle.get_rank();
+                    uint64_t shard_offset = static_cast<uint64_t>(rank) * rows_per_shard;
+                    uint64_t shard_sz = (rank == num_shards - 1)
+                                        ? (this->count - shard_offset) : rows_per_shard;
+                    this->sync_shard_bitset(handle.get_device_id(), shard_offset, shard_sz, *res);
+                    bs = static_cast<bs_t*>(this->get_device_shard_bitset_info(handle.get_device_id())->ptr.get());
+                } else {
+                    this->sync_device_bitset(handle.get_device_id(), *res);
+                    bs = static_cast<bs_t*>(this->get_device_bitset_info(handle.get_device_id())->ptr.get());
+                }
                 auto filter = cuvs::neighbors::filtering::bitset_filter(bs->view());
                 cuvs::neighbors::cagra::search(*res, search_params, *local_index,
                                                     raft::make_const_mdspan(q_dev_t.view()),
@@ -935,23 +970,30 @@ public:
         }
         handle.sync();
 
-        if (!this->host_ids.empty()) {
-            for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
-                if (search_res.neighbors[i] != (uint32_t)-1) {
-                    search_res.neighbors[i] = this->host_ids[search_res.neighbors[i]];
-                }
-            }
-        } else if (this->dist_mode == DistributionMode_SHARDED) {
-            int num_shards = this->devices_.size();
-            uint64_t rows_per_shard = this->count / num_shards;
+        if (this->dist_mode == DistributionMode_SHARDED) {
+            uint64_t rows_per_shard = this->rows_per_shard_;
             uint32_t offset = (uint32_t)(handle.get_rank() * rows_per_shard);
             for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
                 if (search_res.neighbors[i] != (uint32_t)-1) {
-                    search_res.neighbors[i] += offset;
+                    uint32_t global_pos = search_res.neighbors[i] + offset;
+                    if (!this->host_ids.empty()) {
+                        search_res.neighbors[i] = this->host_ids[global_pos];
+                    } else {
+                        search_res.neighbors[i] = global_pos;
+                    }
+                }
+            }
+        } else {
+            if (!this->host_ids.empty()) {
+                for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
+                    if (search_res.neighbors[i] != (uint32_t)-1) {
+                        search_res.neighbors[i] = this->host_ids[search_res.neighbors[i]];
+                    }
                 }
             }
         }
 
+        this->transform_distance(this->metric, search_res.distances);
         return search_res;
     }
 

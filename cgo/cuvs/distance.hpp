@@ -175,6 +175,13 @@ void pairwise_distance(const raft::resources& res,
     auto stream = raft::resource::get_cuda_stream(res);
     void* d_ptr = pairwise_distance_async(res, x, n_x, y, n_y, dim, metric, dist);
     raft::resource::sync_stream(res);
+    
+    if (metric == DistanceType_InnerProduct) {
+        for (uint64_t i = 0; i < n_x * n_y; ++i) {
+            dist[i] *= -1.0f;
+        }
+    }
+
     RAFT_CUDA_TRY(cudaFreeAsync(d_ptr, stream));
 }
 

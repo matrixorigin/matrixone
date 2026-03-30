@@ -261,6 +261,7 @@ public:
     mutable std::shared_mutex mutex_;       ///< Guards all shared host-side state (see Locking Rules)
     bool is_loaded_ = false;                ///< True once build() has completed successfully
     int build_device_id_ = 0;              ///< Primary GPU used for SINGLE_GPU mode
+    uint64_t rows_per_shard_ = 0;          ///< Rounded rows per shard established at build time (SHARDED mode)
 
     // SINGLE_GPU: points to the device copy of the build dataset (stale after extend, reset then).
     std::shared_ptr<void> dataset_device_ptr_;
@@ -422,6 +423,16 @@ public:
 
     void set_per_thread_device(bool enable) {
         if (worker) worker->set_per_thread_device(enable);
+    }
+
+    void transform_distance(distance_type_t metric, std::vector<float>& distances) const {
+        if (metric == DistanceType_InnerProduct) {
+            for (auto& d : distances) {
+                if (d != std::numeric_limits<float>::max() && d != -std::numeric_limits<float>::max()) {
+                    d *= -1.0f;
+                }
+            }
+        }
     }
 
     void set_use_batching(bool enable) {

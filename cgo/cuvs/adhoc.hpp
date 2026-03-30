@@ -169,6 +169,12 @@ void adhoc_brute_force_search(const raft::resources& res,
     // 8. Async free
     RAFT_CUDA_TRY(cudaFreeAsync(d_ptr, stream));
 
+    if (metric == cuvs::distance::DistanceType::InnerProduct) {
+        for (size_t i = 0; i < n_queries * limit; ++i) {
+            distances[i] *= -1.0f;
+        }
+    }
+
     // Handle invalid neighbor indices (consistent with existing brute_force.hpp)
     for (size_t i = 0; i < n_queries * limit; ++i) {
         if (neighbors[i] == std::numeric_limits<int64_t>::max() || 

@@ -98,8 +98,9 @@ TEST(PairwiseDistanceTest, InnerProductF32) {
     // dist[1,0] = 0*1 + 1*0 = 0
     // dist[1,1] = 0*0 + 1*1 = 1
 
-    ASSERT_NEAR(dist[0], 1.0f, 1e-5f);
+    // negative distance returned
+    ASSERT_NEAR(dist[0], -1.0f, 1e-5f);
     ASSERT_NEAR(dist[1], 0.0f, 1e-5f);
     ASSERT_NEAR(dist[2], 0.0f, 1e-5f);
-    ASSERT_NEAR(dist[3], 1.0f, 1e-5f);
+    ASSERT_NEAR(dist[3], -1.0f, 1e-5f);
 }

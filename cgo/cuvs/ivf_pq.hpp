@@ -390,6 +390,10 @@ public:
             // the deleted bitset, making shard-slice sync cheap (no bit-shifting needed).
             // The last shard absorbs the remainder and may be slightly larger.
             uint64_t rows_per_shard = (this->count / num_shards) & ~static_cast<uint64_t>(31);
+            {
+                std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                this->rows_per_shard_ = rows_per_shard;
+            }
             uint64_t start_row = rank * rows_per_shard;
             uint64_t num_rows = (rank == num_shards - 1) ? (this->count - start_row) : rows_per_shard;
 
@@ -557,10 +561,12 @@ public:
     }
 
     void extend(const T* new_data, uint64_t n_rows, const int64_t* new_ids) {
+        uint32_t old_count;
         {
             std::unique_lock<std::shared_mutex> lock(this->mutex_);
             if (!this->is_loaded_) throw std::runtime_error("extend: index not built");
             if (!new_data || n_rows == 0) return;
+            old_count = this->count;
         }
 
         // Serialize concurrent extends — callers queue here rather than race
@@ -568,7 +574,7 @@ public:
 
         if (this->dist_mode == DistributionMode_REPLICATED) {
             std::vector<int64_t> seq_ids(n_rows);
-            std::iota(seq_ids.begin(), seq_ids.end(), (int64_t)this->count);
+            std::iota(seq_ids.begin(), seq_ids.end(), (int64_t)old_count);
             this->worker->submit_all_devices([&](raft_handle_wrapper_t& handle) -> std::any {
                 this->extend_internal(handle, new_data, n_rows, seq_ids.data());
                 return std::any();
@@ -576,9 +582,9 @@ public:
         } else if (this->dist_mode == DistributionMode_SHARDED) {
             // Extend the last shard only. Compute shard-local seq_ids.
             int num_shards = (int)this->devices_.size();
-            uint64_t rows_per_shard = (this->count / (uint64_t)num_shards) & ~static_cast<uint64_t>(31);
+            uint64_t rows_per_shard = this->rows_per_shard_;
             uint64_t last_shard_offset = (uint64_t)(num_shards - 1) * rows_per_shard;
-            uint64_t old_shard_size = this->count - last_shard_offset;
+            uint64_t old_shard_size = old_count - last_shard_offset;
             std::vector<int64_t> seq_ids(n_rows);
             std::iota(seq_ids.begin(), seq_ids.end(), (int64_t)old_shard_size);
             size_t last_rank = (size_t)(num_shards - 1);
@@ -591,7 +597,7 @@ public:
             if (result_wait.error) std::rethrow_exception(result_wait.error);
         } else {
             std::vector<int64_t> seq_ids(n_rows);
-            std::iota(seq_ids.begin(), seq_ids.end(), (int64_t)this->count);
+            std::iota(seq_ids.begin(), seq_ids.end(), (int64_t)old_count);
             uint64_t job_id = this->worker->submit_main(
                 [&](raft_handle_wrapper_t& handle) -> std::any {
                     this->extend_internal(handle, new_data, n_rows, seq_ids.data());
@@ -602,17 +608,19 @@ public:
         }
         {
             std::unique_lock<std::shared_mutex> lock(this->mutex_);
-            if (new_ids) this->set_ids(new_ids, n_rows, this->count);
+            if (new_ids) this->set_ids(new_ids, n_rows, (uint64_t)old_count);
             this->count += static_cast<uint32_t>(n_rows);
             this->current_offset_ += n_rows;
         }
     }
 
     void extend_float(const float* new_data, uint64_t n_rows, const int64_t* new_ids) {
+        uint32_t old_count;
         {
             std::unique_lock<std::shared_mutex> lock(this->mutex_);
             if (!this->is_loaded_) throw std::runtime_error("extend_float: index not built");
             if (!new_data || n_rows == 0) return;
+            old_count = this->count;
         }
 
         // Serialize concurrent extends — callers queue here rather than race
@@ -620,7 +628,7 @@ public:
 
         if (this->dist_mode == DistributionMode_REPLICATED) {
             std::vector<int64_t> seq_ids(n_rows);
-            std::iota(seq_ids.begin(), seq_ids.end(), (int64_t)this->count);
+            std::iota(seq_ids.begin(), seq_ids.end(), (int64_t)old_count);
             this->worker->submit_all_devices([&](raft_handle_wrapper_t& handle) -> std::any {
                 this->extend_internal_float(handle, new_data, n_rows, seq_ids.data());
                 return std::any();
@@ -628,9 +636,9 @@ public:
         } else if (this->dist_mode == DistributionMode_SHARDED) {
             // Extend the last shard only. Compute shard-local seq_ids.
             int num_shards = (int)this->devices_.size();
-            uint64_t rows_per_shard = (this->count / (uint64_t)num_shards) & ~static_cast<uint64_t>(31);
+            uint64_t rows_per_shard = this->rows_per_shard_;
             uint64_t last_shard_offset = (uint64_t)(num_shards - 1) * rows_per_shard;
-            uint64_t old_shard_size = this->count - last_shard_offset;
+            uint64_t old_shard_size = old_count - last_shard_offset;
             std::vector<int64_t> seq_ids(n_rows);
             std::iota(seq_ids.begin(), seq_ids.end(), (int64_t)old_shard_size);
             size_t last_rank = (size_t)(num_shards - 1);
@@ -643,7 +651,7 @@ public:
             if (result_wait.error) std::rethrow_exception(result_wait.error);
         } else {
             std::vector<int64_t> seq_ids(n_rows);
-            std::iota(seq_ids.begin(), seq_ids.end(), (int64_t)this->count);
+            std::iota(seq_ids.begin(), seq_ids.end(), (int64_t)old_count);
             uint64_t job_id = this->worker->submit_main(
                 [&](raft_handle_wrapper_t& handle) -> std::any {
                     this->extend_internal_float(handle, new_data, n_rows, seq_ids.data());
@@ -654,7 +662,7 @@ public:
         }
         {
             std::unique_lock<std::shared_mutex> lock(this->mutex_);
-            if (new_ids) this->set_ids(new_ids, n_rows, this->count);
+            if (new_ids) this->set_ids(new_ids, n_rows, (uint64_t)old_count);
             this->count += static_cast<uint32_t>(n_rows);
             this->current_offset_ += n_rows;
         }
@@ -785,7 +793,7 @@ public:
                 bs_t* bs;
                 if (this->dist_mode == DistributionMode_SHARDED) {
                     int num_shards = static_cast<int>(this->devices_.size());
-                    uint64_t rows_per_shard = (this->count / num_shards) & ~static_cast<uint64_t>(31);
+                    uint64_t rows_per_shard = this->rows_per_shard_;
                     int rank = handle.get_rank();
                     uint64_t shard_offset = static_cast<uint64_t>(rank) * rows_per_shard;
                     uint64_t shard_sz = (rank == num_shards - 1)
@@ -798,14 +806,13 @@ public:
                 }
                 auto filter = cuvs::neighbors::filtering::bitset_filter(bs->view());
                 cuvs::neighbors::ivf_pq::search(*res, search_params, *local_index,
-                                                     raft::make_const_mdspan(queries_device.view()),
-                                                     neighbors_device_internal.view(), distances_device_internal.view(), filter);
+                                                    raft::make_const_mdspan(queries_device.view()),
+                                                    neighbors_device_internal.view(), distances_device_internal.view(), filter);
             } else {
                 cuvs::neighbors::ivf_pq::search(*res, search_params, *local_index,
                                                     raft::make_const_mdspan(queries_device.view()),
                                                     neighbors_device_internal.view(), distances_device_internal.view());
             }
-
             raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device_internal.view());
             raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device_internal.view());
         } else {
@@ -815,24 +822,30 @@ public:
         }
         handle.sync();
 
-        if (!this->host_ids.empty()) {
-            for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
-                if (search_res.neighbors[i] != -1) {
-                    search_res.neighbors[i] = (int64_t)this->host_ids[search_res.neighbors[i]];
-                }
-            }
-        } else if (this->dist_mode == DistributionMode_SHARDED) {
-            // Must match the rounded value used at build — see build_internal
-            int num_shards = this->devices_.size();
-            uint64_t rows_per_shard = (this->count / num_shards) & ~static_cast<uint64_t>(31);
+        if (this->dist_mode == DistributionMode_SHARDED) {
+            uint64_t rows_per_shard = this->rows_per_shard_;
             int64_t offset = (int64_t)(handle.get_rank() * rows_per_shard);
             for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
                 if (search_res.neighbors[i] != -1) {
-                    search_res.neighbors[i] += offset;
+                    int64_t global_pos = search_res.neighbors[i] + offset;
+                    if (!this->host_ids.empty()) {
+                        search_res.neighbors[i] = (int64_t)this->host_ids[global_pos];
+                    } else {
+                        search_res.neighbors[i] = global_pos;
+                    }
+                }
+            }
+        } else {
+            if (!this->host_ids.empty()) {
+                for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
+                    if (search_res.neighbors[i] != -1) {
+                        search_res.neighbors[i] = (int64_t)this->host_ids[search_res.neighbors[i]];
+                    }
                 }
             }
         }
 
+        this->transform_distance(this->metric, search_res.distances);
         return search_res;
     }
 
@@ -975,7 +988,7 @@ public:
                 bs_t* bs;
                 if (this->dist_mode == DistributionMode_SHARDED) {
                     int num_shards = static_cast<int>(this->devices_.size());
-                    uint64_t rows_per_shard = (this->count / num_shards) & ~static_cast<uint64_t>(31);
+                    uint64_t rows_per_shard = this->rows_per_shard_;
                     int rank = handle.get_rank();
                     uint64_t shard_offset = static_cast<uint64_t>(rank) * rows_per_shard;
                     uint64_t shard_sz = (rank == num_shards - 1)
@@ -1005,24 +1018,30 @@ public:
         }
         handle.sync();
 
-        if (!this->host_ids.empty()) {
-            for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
-                if (search_res.neighbors[i] != -1) {
-                    search_res.neighbors[i] = (int64_t)this->host_ids[search_res.neighbors[i]];
-                }
-            }
-        } else if (this->dist_mode == DistributionMode_SHARDED) {
-            // Must match the rounded value used at build — see build_internal
-            int num_shards = this->devices_.size();
-            uint64_t rows_per_shard = (this->count / num_shards) & ~static_cast<uint64_t>(31);
+        if (this->dist_mode == DistributionMode_SHARDED) {
+            uint64_t rows_per_shard = this->rows_per_shard_;
             int64_t offset = (int64_t)(handle.get_rank() * rows_per_shard);
             for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
                 if (search_res.neighbors[i] != -1) {
-                    search_res.neighbors[i] += offset;
+                    int64_t global_pos = search_res.neighbors[i] + offset;
+                    if (!this->host_ids.empty()) {
+                        search_res.neighbors[i] = (int64_t)this->host_ids[global_pos];
+                    } else {
+                        search_res.neighbors[i] = global_pos;
+                    }
+                }
+            }
+        } else {
+            if (!this->host_ids.empty()) {
+                for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
+                    if (search_res.neighbors[i] != -1) {
+                        search_res.neighbors[i] = (int64_t)this->host_ids[search_res.neighbors[i]];
+                    }
                 }
             }
         }
 
+        this->transform_distance(this->metric, search_res.distances);
         return search_res;
     }
 
