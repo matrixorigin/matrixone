@@ -800,6 +800,33 @@ func (sinker *Sinker) GetInMemoryThreshold() int {
 	return sinker.staged.memorySizeThreshold
 }
 
+// SyncAndTakeResults calls Sync, then extracts and returns the accumulated
+// results, resetting the sinker so it can accept more Write calls.
+func (sinker *Sinker) SyncAndTakeResults(ctx context.Context) ([]objectio.ObjectStats, []*batch.Batch, error) {
+	if err := sinker.Sync(ctx); err != nil {
+		return nil, nil, err
+	}
+	persisted := sinker.result.persisted
+	tail := sinker.result.tail
+	sinker.result.persisted = nil
+	sinker.result.tail = nil
+	return persisted, tail, nil
+}
+
+// TakeStagedBatches extracts the un-synced in-memory staged batches,
+// transferring ownership to the caller. The sinker's staged area is cleared.
+func (sinker *Sinker) TakeStagedBatches() []*batch.Batch {
+	bats := sinker.staged.inMemory
+	sinker.staged.inMemory = nil
+	sinker.staged.inMemorySize = 0
+	return bats
+}
+
+// StagedSize returns the current size of in-memory staged data.
+func (sinker *Sinker) StagedSize() int {
+	return sinker.staged.inMemorySize
+}
+
 func (sinker *Sinker) Close() error {
 	sinker.cleanupInMemoryStaged()
 	if sinker.buf.buffers != nil {
