@@ -1058,7 +1058,24 @@ func (tcc *TxnCompilerContext) ResolveSnapshotWithSnapshotName(snapshotName stri
 	if snapshot := tcc.GetSnapshot(); snapshot != nil && snapshot.GetTenant() != nil {
 		tenantCtx = defines.AttachAccount(tenantCtx, snapshot.Tenant.TenantID, GetAdminUserId(), GetAccountAdminRoleId())
 	}
-	return doResolveSnapshotWithSnapshotName(tenantCtx, tcc.GetSession(), snapshotName)
+	snap, err := doResolveSnapshotWithSnapshotName(tenantCtx, tcc.GetSession(), snapshotName)
+	if err != nil {
+		return nil, err
+	}
+
+	// Lazy catalog: if the snapshot targets a non-sys tenant account,
+	// activate its catalog on this CN so that cross-account snapshot
+	// reads (show databases/tables {snapshot = 'xxx'}) can see the
+	// target account's metadata.
+	if snap != nil && snap.GetTenant() != nil && snap.Tenant.TenantID != 0 {
+		if activator, ok := tcc.GetTxnHandler().GetStorage().(engine.TenantCatalogActivator); ok {
+			if err = activator.ActivateTenantCatalog(tenantCtx, snap.Tenant.TenantID); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return snap, nil
 }
 
 func (tcc *TxnCompilerContext) CheckTimeStampValid(ts int64) (bool, error) {

@@ -540,55 +540,6 @@ func activateAccountCatalogIfNeeded(ctx context.Context, ses *Session, accountID
 	return nil
 }
 
-// activateAllNonSysAccounts activates the lazy catalog for every non-sys
-// account that currently exists.  Called after RESTORE CLUSTER so that the
-// CN's catalog cache accepts logtail data for all restored accounts.
-func activateAllNonSysAccounts(ctx context.Context, ses *Session, bh BackgroundExec) error {
-	activator, ok := ses.GetTxnHandler().GetStorage().(engine.TenantCatalogActivator)
-	if !ok {
-		return nil
-	}
-
-	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-	bh.ClearExecResultSet()
-	if err := bh.Exec(ctx, "select account_id from mo_catalog.mo_account where account_id != 0"); err != nil {
-		return err
-	}
-
-	erArray, err := getResultSet(ctx, bh)
-	if err != nil {
-		return err
-	}
-
-	for _, rs := range erArray {
-		for i := uint64(0); i < rs.GetRowCount(); i++ {
-			id, err := rs.GetInt64(ctx, i, 0)
-			if err != nil {
-				return err
-			}
-			if err = activator.ActivateTenantCatalog(ctx, uint32(id)); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// activateRestoredAccountByName activates the lazy catalog for the account
-// restored by a "RESTORE ACCOUNT ... FROM CLUSTER SNAPSHOT" statement.
-func activateRestoredAccountByName(ctx context.Context, ses *Session, bh BackgroundExec, srcAccountName string, stmt *tree.RestoreSnapShot) error {
-	destAccount := string(stmt.ToAccountName)
-	name := srcAccountName
-	if len(destAccount) > 0 {
-		name = destAccount
-	}
-	accountID, err := getAccountId(ctx, bh, name)
-	if err != nil {
-		return nil // account may not exist; not fatal
-	}
-	return activateAccountCatalogIfNeeded(ctx, ses, accountID)
-}
-
 func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnapShot) (stats statistic.StatsArray, err error) {
 	bh := ses.GetBackgroundExec(ctx)
 	bh.SetRestore(true)
@@ -654,12 +605,6 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			}
 		}
 
-		// Lazy catalog: activate all restored accounts so the CN's catalog
-		// cache accepts their logtail data after the restore transaction commits.
-		if err = activateAllNonSysAccounts(ctx, ses, bh); err != nil {
-			return
-		}
-
 		getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s]restore cluster success", snapshotName))
 		return
 	}
@@ -670,11 +615,6 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 
 		err = restoreToAccountUsingCluster(ctx, ses, bh, stmt, *snapshot)
 		if err != nil {
-			return stats, err
-		}
-
-		// Lazy catalog: activate the restored account.
-		if err = activateRestoredAccountByName(ctx, ses, bh, srcAccountName, stmt); err != nil {
 			return stats, err
 		}
 
