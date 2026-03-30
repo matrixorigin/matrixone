@@ -71,7 +71,8 @@ func TestSortColumnsByIndexWithBuf(t *testing.T) {
 			vecNum = 3
 			vecLen = 50
 		)
-		var sortBuf []int64
+		var idxBuf []int64
+		var shuffleBuf []byte
 		for round := 0; round < 3; round++ {
 			vecs := make([]*vector.Vector, vecNum)
 			for i := 0; i < vecNum; i++ {
@@ -80,53 +81,46 @@ func TestSortColumnsByIndexWithBuf(t *testing.T) {
 					require.NoError(t, vector.AppendFixed[int32](vecs[i], rand.Int32N(10000), false, mp))
 				}
 			}
-			require.NoError(t, SortColumnsByIndexWithBuf(vecs, 0, mp, &sortBuf))
+			require.NoError(t, SortColumnsByIndexWithBuf(vecs, 0, mp, &idxBuf, &shuffleBuf))
 			vals := vector.MustFixedColNoTypeCheck[int32](vecs[0])
 			require.True(t, slices.IsSorted(vals))
 			require.True(t, vecs[0].GetSorted())
 		}
-		require.GreaterOrEqual(t, cap(sortBuf), 50)
-	})
-
-	t.Run("nil buf works like no reuse", func(t *testing.T) {
-		vecs := []*vector.Vector{vector.NewVec(types.T_int64.ToType())}
-		for i := 0; i < 20; i++ {
-			require.NoError(t, vector.AppendFixed[int64](vecs[0], int64(20-i), false, mp))
-		}
-		require.NoError(t, SortColumnsByIndexWithBuf(vecs, 0, mp, nil))
-		vals := vector.MustFixedColNoTypeCheck[int64](vecs[0])
-		require.True(t, slices.IsSorted(vals))
+		require.GreaterOrEqual(t, cap(idxBuf), 50)
 	})
 
 	t.Run("single element", func(t *testing.T) {
 		vecs := []*vector.Vector{vector.NewVec(types.T_int32.ToType())}
 		require.NoError(t, vector.AppendFixed[int32](vecs[0], int32(42), false, mp))
-		var buf []int64
-		require.NoError(t, SortColumnsByIndexWithBuf(vecs, 0, mp, &buf))
+		var idxBuf []int64
+		var shuffleBuf []byte
+		require.NoError(t, SortColumnsByIndexWithBuf(vecs, 0, mp, &idxBuf, &shuffleBuf))
 		require.Equal(t, int32(42), vector.MustFixedColNoTypeCheck[int32](vecs[0])[0])
-		require.GreaterOrEqual(t, cap(buf), 1)
+		require.GreaterOrEqual(t, cap(idxBuf), 1)
 	})
 
 	t.Run("buffer grows when vector is larger", func(t *testing.T) {
-		var buf []int64 = make([]int64, 4) // deliberately small
+		var idxBuf []int64 = make([]int64, 4) // deliberately small
+		var shuffleBuf []byte
 		vecs := []*vector.Vector{vector.NewVec(types.T_int32.ToType())}
 		for i := 0; i < 100; i++ {
 			require.NoError(t, vector.AppendFixed[int32](vecs[0], rand.Int32N(1000), false, mp))
 		}
-		require.NoError(t, SortColumnsByIndexWithBuf(vecs, 0, mp, &buf))
-		require.GreaterOrEqual(t, cap(buf), 100) // grew to fit
+		require.NoError(t, SortColumnsByIndexWithBuf(vecs, 0, mp, &idxBuf, &shuffleBuf))
+		require.GreaterOrEqual(t, cap(idxBuf), 100) // grew to fit
 		require.True(t, slices.IsSorted(vector.MustFixedColNoTypeCheck[int32](vecs[0])))
 	})
 
 	t.Run("buffer not reallocated when capacity sufficient", func(t *testing.T) {
 		const rows = 50
-		var buf []int64 = make([]int64, rows)
-		ptr0 := &buf[0]
+		var idxBuf []int64 = make([]int64, rows)
+		var shuffleBuf []byte
+		ptr0 := &idxBuf[0]
 		vecs := []*vector.Vector{vector.NewVec(types.T_int32.ToType())}
 		for i := 0; i < rows; i++ {
 			require.NoError(t, vector.AppendFixed[int32](vecs[0], rand.Int32N(1000), false, mp))
 		}
-		require.NoError(t, SortColumnsByIndexWithBuf(vecs, 0, mp, &buf))
-		require.Equal(t, ptr0, &buf[0]) // same backing array
+		require.NoError(t, SortColumnsByIndexWithBuf(vecs, 0, mp, &idxBuf, &shuffleBuf))
+		require.Equal(t, ptr0, &idxBuf[0]) // same backing array
 	})
 }

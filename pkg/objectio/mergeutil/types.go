@@ -163,34 +163,32 @@ func MergeSortBatches(
 func SortColumnsByIndex(
 	cols []*vector.Vector, sortIdx int, mp *mpool.MPool,
 ) (err error) {
-	return SortColumnsByIndexWithBuf(cols, sortIdx, mp, nil)
+	var idxBuf []int64
+	var shuffleBuf []byte
+	return SortColumnsByIndexWithBuf(cols, sortIdx, mp, &idxBuf, &shuffleBuf)
 }
 
 // SortColumnsByIndexWithBuf sorts all columns by the sort key column at sortIdx.
-// buf is an optional scratch buffer for the index array; pass &mySlice to reuse
-// it across calls.
+// idxBuf is a scratch buffer for the permutation index array; shuffleBuf is a
+// scratch buffer for the shuffle operation. Both are grown as needed and
+// retained across calls for reuse.
 func SortColumnsByIndexWithBuf(
-	cols []*vector.Vector, sortIdx int, mp *mpool.MPool, buf *[]int64,
+	cols []*vector.Vector, sortIdx int, mp *mpool.MPool, idxBuf *[]int64, shuffleBuf *[]byte,
 ) (err error) {
 	sortKey := cols[sortIdx]
 	n := sortKey.Length()
-	var sortedIdx []int64
-	if buf != nil {
-		if cap(*buf) < n {
-			*buf = make([]int64, n)
-		} else {
-			*buf = (*buf)[:n]
-		}
-		sortedIdx = *buf
+	if cap(*idxBuf) < n {
+		*idxBuf = make([]int64, n)
 	} else {
-		sortedIdx = make([]int64, n)
+		*idxBuf = (*idxBuf)[:n]
 	}
+	sortedIdx := *idxBuf
 	for i := 0; i < n; i++ {
 		sortedIdx[i] = int64(i)
 	}
 	sort.Sort(false, false, true, sortedIdx, sortKey)
 	for i := 0; i < len(cols); i++ {
-		err = cols[i].Shuffle(sortedIdx, mp)
+		err = cols[i].ShuffleWithBuf(sortedIdx, mp, shuffleBuf)
 		if err != nil {
 			return
 		}

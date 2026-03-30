@@ -1225,7 +1225,80 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	return err
 }
 
-// XXX Old Copy is FUBAR.
+// ShuffleWithBuf is like Shuffle but reuses a scratch buffer to avoid
+// alloc/free churn when the permutation preserves the element count.
+// buf is grown as needed and retained across calls.
+func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err error) {
+	if v.IsConst() {
+		return nil
+	}
+	// Fall back to allocating Shuffle if the vector doesn't own its data
+	// or the selection changes the element count.
+	if v.cantFreeData || len(sels) != v.length {
+		return v.Shuffle(sels, mp)
+	}
+
+	switch v.typ.Oid {
+	case types.T_bool:
+		err = shuffleFixedNoTypeCheckWithBuf[bool](v, sels, buf)
+	case types.T_bit:
+		err = shuffleFixedNoTypeCheckWithBuf[uint64](v, sels, buf)
+	case types.T_int8:
+		err = shuffleFixedNoTypeCheckWithBuf[int8](v, sels, buf)
+	case types.T_int16:
+		err = shuffleFixedNoTypeCheckWithBuf[int16](v, sels, buf)
+	case types.T_int32:
+		err = shuffleFixedNoTypeCheckWithBuf[int32](v, sels, buf)
+	case types.T_int64:
+		err = shuffleFixedNoTypeCheckWithBuf[int64](v, sels, buf)
+	case types.T_uint8:
+		err = shuffleFixedNoTypeCheckWithBuf[uint8](v, sels, buf)
+	case types.T_uint16:
+		err = shuffleFixedNoTypeCheckWithBuf[uint16](v, sels, buf)
+	case types.T_uint32:
+		err = shuffleFixedNoTypeCheckWithBuf[uint32](v, sels, buf)
+	case types.T_uint64:
+		err = shuffleFixedNoTypeCheckWithBuf[uint64](v, sels, buf)
+	case types.T_float32:
+		err = shuffleFixedNoTypeCheckWithBuf[float32](v, sels, buf)
+	case types.T_float64:
+		err = shuffleFixedNoTypeCheckWithBuf[float64](v, sels, buf)
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Varlena](v, sels, buf)
+	case types.T_date:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Date](v, sels, buf)
+	case types.T_datetime:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Datetime](v, sels, buf)
+	case types.T_time:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Time](v, sels, buf)
+	case types.T_timestamp:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Timestamp](v, sels, buf)
+	case types.T_year:
+		err = shuffleFixedNoTypeCheckWithBuf[types.MoYear](v, sels, buf)
+	case types.T_enum:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Enum](v, sels, buf)
+	case types.T_decimal64:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Decimal64](v, sels, buf)
+	case types.T_decimal128:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Decimal128](v, sels, buf)
+	case types.T_decimal256:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Decimal256](v, sels, buf)
+	case types.T_uuid:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Uuid](v, sels, buf)
+	case types.T_TS:
+		err = shuffleFixedNoTypeCheckWithBuf[types.TS](v, sels, buf)
+	case types.T_Rowid:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Rowid](v, sels, buf)
+	case types.T_Blockid:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Blockid](v, sels, buf)
+	default:
+		panic(fmt.Sprintf("unexpect type %s for function vector.ShuffleWithBuf", v.typ))
+	}
+
+	return err
+}
+
 // Copy simply does v[vi] = w[wi]
 func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 	if w.class == CONSTANT {
@@ -3624,6 +3697,32 @@ func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mp
 	} else {
 		mp.Free(olddata)
 	}
+	v.length = ns
+	return nil
+}
+
+// shuffleFixedNoTypeCheckWithBuf permutes elements using a reusable scratch
+// buffer instead of allocating a new data buffer. Only valid when
+// len(sels) == v.length and !v.cantFreeData (caller checks).
+func shuffleFixedNoTypeCheckWithBuf[T types.FixedSizeT](v *Vector, sels []int64, buf *[]byte) error {
+	sz := v.typ.TypeSize()
+	ns := len(sels)
+	needed := ns * sz
+
+	if cap(*buf) < needed {
+		*buf = make([]byte, needed)
+	} else {
+		*buf = (*buf)[:needed]
+	}
+
+	var vs []T
+	ToFixedColNoTypeCheck(v, &vs)
+	ws := util.UnsafeSliceCastToLength[T](*buf, ns)
+
+	shuffle.FixedLengthShuffle(vs, ws, sels)
+	copy(v.data[:needed], *buf)
+	nulls.Filter(&v.gsp, sels, false)
+	nulls.Filter(&v.nsp, sels, false)
 	v.length = ns
 	return nil
 }

@@ -1546,10 +1546,11 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 		txn.writes = txn.writes[:i]
 
 		var sortBuf []int64
+		var shuffleBuf []byte
 		for i = range txn.writes {
 			if txn.writes[i].typ == DELETE && txn.writes[i].bat.RowCount() > 1 {
 				if err := mergeutil.SortColumnsByIndexWithBuf(
-					txn.writes[i].bat.Vecs, 0, txn.proc.Mp(), &sortBuf); err != nil {
+					txn.writes[i].bat.Vecs, 0, txn.proc.Mp(), &sortBuf, &shuffleBuf); err != nil {
 					return err
 				}
 			}
