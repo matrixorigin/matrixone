@@ -385,6 +385,11 @@ func (sinker *Sinker) fillDefaults() {
 	if sinker.staged.memorySizeThreshold == 0 {
 		sinker.staged.memorySizeThreshold = DefaultInMemoryStagedSize
 	}
+	if sinker.config.bufferSizeCap == 0 {
+		// The buffer pool must hold at least memorySizeThreshold bytes so that
+		// sorted output blocks from trySpill can be recycled instead of freed.
+		sinker.config.bufferSizeCap = sinker.staged.memorySizeThreshold * 2
+	}
 
 	sinker.staged.inMemStats.Name = "staged inmem stats"
 	sinker.buf.bufStats.Name = "buffer stats"
