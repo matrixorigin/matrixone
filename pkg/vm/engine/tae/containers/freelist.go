@@ -50,6 +50,10 @@ func (fl *BatchFreeList) Len() int {
 }
 
 func (fl *BatchFreeList) FetchWithSchema(attrs []string, typs []types.Type) *batch.Batch {
+	if fl.attrs == nil {
+		fl.attrs = attrs
+		fl.typs = typs
+	}
 	if len(fl.pool) > 0 {
 		bat := fl.pool[len(fl.pool)-1]
 		fl.pool = fl.pool[:len(fl.pool)-1]
