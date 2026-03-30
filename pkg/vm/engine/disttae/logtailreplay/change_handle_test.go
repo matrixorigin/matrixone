@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/tidwall/btree"
@@ -438,6 +439,208 @@ func TestBaseHandleNextTS_SelectsEarliestHandle(t *testing.T) {
 	p.inMemoryHandle.batches.Clean(mp)
 }
 
+func TestBlockCommitTSOverlapsRange(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("overlap", func(t *testing.T) {
+		fs, stats := writeTestObjectWithCommitTS(t, [][]types.TS{
+			{types.BuildTS(10, 0), types.BuildTS(12, 0)},
+		})
+		blk := loadTestBlockMeta(t, ctx, fs, stats, 0)
+
+		overlap, evaluable, reason, detail := blockCommitTSOverlapsRange(blk, types.BuildTS(11, 0), types.BuildTS(20, 0))
+		require.True(t, overlap)
+		require.True(t, evaluable)
+		require.Empty(t, reason)
+		require.Contains(t, detail, "zm_min=10-0")
+	})
+
+	t.Run("pruned", func(t *testing.T) {
+		fs, stats := writeTestObjectWithCommitTS(t, [][]types.TS{
+			{types.BuildTS(1, 0), types.BuildTS(2, 0)},
+		})
+		blk := loadTestBlockMeta(t, ctx, fs, stats, 0)
+
+		overlap, evaluable, reason, _ := blockCommitTSOverlapsRange(blk, types.BuildTS(5, 0), types.BuildTS(8, 0))
+		require.False(t, overlap)
+		require.True(t, evaluable)
+		require.Empty(t, reason)
+	})
+
+	t.Run("tail column is not commit ts", func(t *testing.T) {
+		fs, stats := writeTestObjectWithoutCommitTS(t)
+		blk := loadTestBlockMeta(t, ctx, fs, stats, 0)
+
+		overlap, evaluable, reason, detail := blockCommitTSOverlapsRange(blk, types.BuildTS(5, 0), types.BuildTS(8, 0))
+		require.False(t, overlap)
+		require.False(t, evaluable)
+		require.Equal(t, "tail_column_not_ts", reason)
+		require.Contains(t, detail, "tail_col_type=")
+	})
+}
+
+func TestAObjectHandleBuildBlockPlan(t *testing.T) {
+	ctx := context.Background()
+	fs, stats := writeTestObjectWithCommitTS(t, [][]types.TS{
+		{types.BuildTS(1, 0), types.BuildTS(2, 0)},
+		{types.BuildTS(10, 0), types.BuildTS(11, 0)},
+	})
+	obj := &objectio.ObjectEntry{
+		ObjectStats: stats,
+		CreateTime:  types.BuildTS(10, 0),
+	}
+	handle := &AObjectHandle{
+		start: types.BuildTS(5, 0),
+		end:   types.BuildTS(20, 0),
+		fs:    fs,
+	}
+	plan := &aobjBlockPlan{}
+
+	require.NoError(t, handle.buildBlockPlan(ctx, obj, plan))
+	require.True(t, plan.initialized)
+	require.True(t, plan.evaluable)
+	require.False(t, plan.noCommitTSColumn)
+	require.Equal(t, []bool{false, true}, plan.shouldReadByBlks)
+	require.Equal(t, 1, plan.prunedBlocks)
+}
+
+func TestLookupDeleteChainSuccessor(t *testing.T) {
+	deleteTS := types.BuildTS(10, 0)
+	exactObj := makeNamedObjectEntry(t, 1, false, false, deleteTS, types.TS{})
+	fuzzyObj := makeNamedObjectEntry(t, 2, false, false, types.BuildTS(12, 0), types.TS{})
+
+	next, successorTS, exact := lookupDeleteChainSuccessor(
+		deleteTS,
+		map[types.TS][]*objectio.ObjectEntry{
+			deleteTS:             []*objectio.ObjectEntry{exactObj},
+			types.BuildTS(12, 0): []*objectio.ObjectEntry{fuzzyObj},
+		},
+		[]types.TS{deleteTS, types.BuildTS(12, 0)},
+	)
+	require.Equal(t, []*objectio.ObjectEntry{exactObj}, next)
+	require.Equal(t, deleteTS, successorTS)
+	require.True(t, exact)
+
+	next, successorTS, exact = lookupDeleteChainSuccessor(
+		types.BuildTS(11, 0),
+		map[types.TS][]*objectio.ObjectEntry{
+			types.BuildTS(12, 0): []*objectio.ObjectEntry{fuzzyObj},
+		},
+		[]types.TS{types.BuildTS(12, 0)},
+	)
+	require.Equal(t, []*objectio.ObjectEntry{fuzzyObj}, next)
+	require.Equal(t, types.BuildTS(12, 0), successorTS)
+	require.False(t, exact)
+}
+
+func TestClassifyResolvedObjects(t *testing.T) {
+	aobj1 := makeNamedObjectEntry(t, 1, false, false, types.BuildTS(5, 0), types.TS{})
+	aobj2 := makeNamedObjectEntry(t, 2, false, false, types.BuildTS(7, 0), types.TS{})
+	cnObj := makeNamedObjectEntry(t, 3, false, true, types.BuildTS(6, 0), types.TS{})
+
+	aobjs, cnObjs := classifyResolvedObjects(
+		[]*objectio.ObjectEntry{aobj2, cnObj},
+		[]*objectio.ObjectEntry{aobj1, cnObj, aobj2},
+	)
+	require.Equal(t, []*objectio.ObjectEntry{aobj1, aobj2}, aobjs)
+	require.Equal(t, []*objectio.ObjectEntry{cnObj}, cnObjs)
+}
+
+func TestBaseHandleObjectFileExists(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS("mem", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	existsObj := makeNamedObjectEntry(t, 1, false, false, types.BuildTS(1, 0), types.TS{})
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: existsObj.ObjectName().String(),
+		Entries: []fileservice.IOEntry{
+			{Data: []byte("ok"), Size: 2},
+		},
+	}))
+
+	base := &baseHandle{
+		changesHandle: &ChangeHandler{fs: fs},
+	}
+
+	ok, err := base.objectFileExists(ctx, existsObj)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	ok, err = base.objectFileExists(ctx, makeNamedObjectEntry(t, 2, false, false, types.BuildTS(1, 0), types.TS{}))
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
+func TestBaseHandleResolveVisibleObjectsByDeleteChain(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS("mem", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	missing := makeNamedObjectEntry(t, 1, false, false, types.BuildTS(5, 0), types.BuildTS(10, 0))
+	successor := makeNamedObjectEntry(t, 2, false, false, types.BuildTS(10, 0), types.TS{})
+	orphan := makeNamedObjectEntry(t, 3, false, false, types.BuildTS(20, 0), types.TS{})
+
+	for _, obj := range []*objectio.ObjectEntry{successor, orphan} {
+		require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+			FilePath: obj.ObjectName().String(),
+			Entries: []fileservice.IOEntry{
+				{Data: []byte("ok"), Size: 2},
+			},
+		}))
+	}
+
+	base := &baseHandle{
+		changesHandle: &ChangeHandler{fs: fs},
+	}
+
+	resolved, err := base.resolveVisibleObjectsByDeleteChain(
+		ctx,
+		types.BuildTS(1, 0),
+		types.BuildTS(30, 0),
+		[]*objectio.ObjectEntry{missing},
+		map[types.TS][]*objectio.ObjectEntry{
+			successor.CreateTime: []*objectio.ObjectEntry{successor},
+			orphan.CreateTime:    []*objectio.ObjectEntry{orphan},
+		},
+		[]types.TS{successor.CreateTime, orphan.CreateTime},
+		false,
+		"data",
+	)
+	require.NoError(t, err)
+	require.Equal(t, []*objectio.ObjectEntry{successor, orphan}, resolved)
+}
+
+func TestNewChangesHandlerWithPartitionStateRange_EmptyState(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	fs, err := fileservice.NewMemoryFS("mem", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	state := NewPartitionState("svc", true, 0, false)
+	handle, err := NewChangesHandlerWithPartitionStateRange(
+		context.Background(),
+		state,
+		types.BuildTS(5, 0),
+		types.BuildTS(20, 0),
+		false,
+		objectio.BlockMaxRows,
+		0,
+		mp,
+		fs,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, handle)
+	defer func() {
+		require.NoError(t, handle.Close())
+	}()
+	require.True(t, handle.enableCommitTSBlockPrune)
+	require.True(t, handle.strictCommitTSBlockPrune)
+	require.True(t, handle.enableDeleteChainResolve)
+	require.True(t, handle.quick)
+}
+
 func makeTestObjectEntry(
 	t *testing.T,
 	blkCnt int,
@@ -456,4 +659,114 @@ func makeTestObjectEntry(
 		ObjectStats: *stats,
 		CreateTime:  createTS,
 	}
+}
+
+func makeNamedObjectEntry(
+	t *testing.T,
+	id byte,
+	appendable bool,
+	cnCreated bool,
+	createTS types.TS,
+	deleteTS types.TS,
+) *objectio.ObjectEntry {
+	t.Helper()
+
+	var uuid types.Uuid
+	uuid[15] = id
+	seg := objectio.Segmentid(uuid)
+	name := objectio.BuildObjectName(&seg, uint16(id))
+
+	stats := objectio.NewObjectStats()
+	require.NoError(t, objectio.SetObjectStatsObjectName(stats, name))
+	if appendable {
+		objectio.WithAppendable()(stats)
+	}
+	if cnCreated {
+		objectio.WithCNCreated()(stats)
+	}
+
+	return &objectio.ObjectEntry{
+		ObjectStats: *stats,
+		CreateTime:  createTS,
+		DeleteTime:  deleteTS,
+	}
+}
+
+func writeTestObjectWithCommitTS(
+	t *testing.T,
+	blockTS [][]types.TS,
+) (fileservice.FileService, objectio.ObjectStats) {
+	t.Helper()
+
+	fs, err := fileservice.NewMemoryFS("mem", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	name := objectio.MockObjectName()
+	writer, err := objectio.NewObjectWriter(name, fs, 0, []uint16{0, objectio.SEQNUM_COMMITTS}, nil)
+	require.NoError(t, err)
+	for _, rows := range blockTS {
+		bat := batch.NewWithSize(2)
+		bat.SetAttributes([]string{"id", objectio.DefaultCommitTS_Attr})
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+		for i, ts := range rows {
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(i+1), false, mp))
+			require.NoError(t, vector.AppendFixed(bat.Vecs[1], ts, false, mp))
+		}
+		bat.SetRowCount(len(rows))
+		fd, writeErr := writer.Write(bat)
+		bat.Clean(mp)
+		require.NoError(t, writeErr)
+		zm := objectio.NewZM(types.T_TS, 0)
+		for _, ts := range rows {
+			require.NoError(t, zm.Update(ts))
+		}
+		fd.ColumnMeta(1).SetZoneMap(zm)
+	}
+	_, err = writer.WriteEnd(context.Background())
+	require.NoError(t, err)
+	return fs, writer.GetObjectStats()
+}
+
+func writeTestObjectWithoutCommitTS(
+	t *testing.T,
+) (fileservice.FileService, objectio.ObjectStats) {
+	t.Helper()
+
+	fs, err := fileservice.NewMemoryFS("mem", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	name := objectio.MockObjectName()
+	writer, err := objectio.NewObjectWriter(name, fs, 0, []uint16{0}, nil)
+	require.NoError(t, err)
+	bat := batch.NewWithSize(1)
+	bat.SetAttributes([]string{"id"})
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
+	bat.SetRowCount(1)
+	_, err = writer.Write(bat)
+	bat.Clean(mp)
+	require.NoError(t, err)
+	_, err = writer.WriteEnd(context.Background())
+	require.NoError(t, err)
+	return fs, writer.GetObjectStats()
+}
+
+func loadTestBlockMeta(
+	t *testing.T,
+	ctx context.Context,
+	fs fileservice.FileService,
+	stats objectio.ObjectStats,
+	blkIdx uint16,
+) objectio.BlockObject {
+	t.Helper()
+
+	metaLoc := stats.ObjectLocation()
+	meta, err := objectio.FastLoadObjectMeta(ctx, &metaLoc, false, fs)
+	require.NoError(t, err)
+	return meta.MustGetMeta(objectio.SchemaData).GetBlockMeta(uint32(blkIdx))
 }

@@ -2134,6 +2134,101 @@ func TestFileNotFoundFallbackToSnapshotRead(t *testing.T) {
 	}
 }
 
+func TestFileNotFoundVisibleStateFallsBackToSnapshotStateRange(t *testing.T) {
+	// VisibleState policy should rebuild the range from the end snapshot's
+	// partition state instead of switching to checkpoint replay.
+
+	catalog.SetupDefines("")
+
+	var (
+		accountId    = catalog.System_Account
+		tableName    = "test_visible_state_fallback"
+		databaseName = "db_visible_state_fallback"
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	schema := catalog2.MockSchemaAll(20, 0)
+	schema.Name = tableName
+	bat := catalog2.MockBatch(schema, 3)
+	defer bat.Close()
+	bats := bat.Split(3)
+
+	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	_, _, err := disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+
+	txn, rel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	require.Nil(t, rel.Append(ctx, bats[0]))
+	require.Nil(t, txn.Commit(ctx))
+	t1 := txn.GetCommitTS()
+
+	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	id := rel.GetMeta().(*catalog2.TableEntry).AsCommonID()
+	require.Nil(t, txn.Commit(ctx))
+
+	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	require.Nil(t, rel.Append(ctx, bats[1]))
+	require.Nil(t, txn.Commit(ctx))
+
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, databaseName, tableName, false)
+	require.Nil(t, err)
+
+	mp := common.DebugAllocator
+
+	chStub := gostub.Stub(
+		&disttae.NewPartitionStateChangesHandler,
+		func(
+			ctx context.Context,
+			state *logtailreplay.PartitionState,
+			start, end types.TS,
+			skipDeletes bool,
+			maxRow uint32,
+			primarySeqnum int,
+			mp *mpool.MPool,
+			fs fileservice.FileService,
+		) (*logtailreplay.ChangeHandler, error) {
+			return nil, moerr.NewFileNotFoundNoCtx("simulated-visible-state-gc-object")
+		},
+	)
+	defer chStub.Reset()
+
+	_, distRel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
+	require.Nil(t, err)
+
+	policyCtx := engine.WithSnapshotReadPolicy(ctx, engine.SnapshotReadPolicyVisibleState)
+	readToTS := taeHandler.GetDB().TxnMgr.Now()
+	handle, err := distRel.CollectChanges(policyCtx, t1.Prev(), readToTS, false, mp)
+	require.NoError(t, err)
+	require.NotNil(t, handle)
+	defer handle.Close()
+
+	for {
+		data, tombstone, _, nextErr := handle.Next(policyCtx, mp)
+		require.NoError(t, nextErr)
+		if data != nil {
+			data.Clean(mp)
+		}
+		if tombstone != nil {
+			tombstone.Clean(mp)
+		}
+		if data == nil && tombstone == nil {
+			break
+		}
+	}
+}
+
 func TestRealStaleReadStillReturnsError(t *testing.T) {
 	// A real ErrStaleRead (state.start > start, logical range not covered)
 	// must NOT be swallowed — it should propagate to the caller as error 22101.

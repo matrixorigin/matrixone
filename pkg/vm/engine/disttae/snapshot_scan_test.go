@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -23,9 +24,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/stretchr/testify/require"
 )
@@ -264,6 +270,89 @@ func TestUnwrapTxnTable(t *testing.T) {
 	require.Contains(t, err.Error(), "snapshot scan requires disttae relation")
 }
 
+func TestGetSnapshotScanSubmitPool(t *testing.T) {
+	pool1, err := getSnapshotScanSubmitPool()
+	require.NoError(t, err)
+	require.NotNil(t, pool1)
+
+	pool2, err := getSnapshotScanSubmitPool()
+	require.NoError(t, err)
+	require.Same(t, pool1, pool2)
+}
+
+func TestScanSnapshotShardsParallel_SkipsEmptyShards(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	err := scanSnapshotShardsParallel(
+		context.Background(),
+		nil,
+		types.BuildTS(20, 0),
+		[]engine.RelData{nil, newTestSnapshotRelData(0)},
+		snapshotScanReaderConfig{
+			attrs:    []string{"id"},
+			seqnums:  []uint16{1},
+			colTypes: []types.Type{types.T_int64.ToType()},
+		},
+		mp,
+		func(*batch.Batch) error {
+			t.Fatal("empty shards should not emit batches")
+			return nil
+		},
+	)
+	require.NoError(t, err)
+}
+
+func TestScanSnapshotShardLocal_EmptyRange(t *testing.T) {
+	tbl, fs := newSnapshotScanTxnTable(t)
+	mp := tbl.proc.Load().Mp()
+
+	pState := tbl.eng.(*Engine).GetOrCreateLatestPart(context.Background(), uint64(tbl.accountId), tbl.db.databaseId, tbl.tableId).Snapshot()
+	err := scanSnapshotShardLocal(
+		context.Background(),
+		fs,
+		tbl,
+		pState,
+		readutil.NewEmptyTombstoneData(),
+		types.BuildTS(30, 0),
+		nil,
+		snapshotScanReaderConfig{
+			attrs:    []string{"id"},
+			seqnums:  []uint16{1},
+			colTypes: []types.Type{types.T_int64.ToType()},
+		},
+		mp,
+		func(*batch.Batch) error {
+			t.Fatal("empty local scan should not emit batches")
+			return nil
+		},
+	)
+	require.NoError(t, err)
+}
+
+func TestScanSnapshotWithCurrentRanges_EmptyRange(t *testing.T) {
+	tbl, _ := newSnapshotScanTxnTable(t)
+	mp := tbl.proc.Load().Mp()
+
+	err := ScanSnapshotWithCurrentRanges(
+		context.Background(),
+		"unit-test",
+		tbl,
+		readutil.NewBlockListRelationData(0),
+		types.BuildTS(40, 0),
+		[]string{"id"},
+		[]types.Type{types.T_int64.ToType()},
+		nil,
+		0,
+		mp,
+		func(*batch.Batch) error {
+			t.Fatal("empty snapshot scan should not emit batches")
+			return nil
+		},
+	)
+	require.NoError(t, err)
+}
+
 type snapshotDataSourceStep struct {
 	state  engine.DataState
 	values []int64
@@ -345,4 +434,50 @@ func newTestSnapshotRelData(blockCnt int) *readutil.BlockListRelData {
 		relData.AppendBlockInfo(&blk)
 	}
 	return relData
+}
+
+func newSnapshotScanTxnTable(t *testing.T) (*txnTable, fileservice.FileService) {
+	t.Helper()
+
+	tbl := newTxnTableForTest()
+	proc := testutil.NewProc(t)
+	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
+	require.NoError(t, err)
+
+	eng := tbl.eng.(*Engine)
+	eng.fs = fs
+	eng.service = t.Name()
+	eng.partitions = make(map[[2]uint64]*logtailreplay.Partition)
+	eng.catalog.Store(cache.NewCatalog())
+
+	txn := tbl.db.op.GetWorkspace().(*Transaction)
+	txn.engine = eng
+	txn.proc = proc
+	txn.tableCache = &sync.Map{}
+	txn.deletedBlocks = &deletedBlocks{offsets: make(map[types.Blockid][]int64)}
+	txn.cn_flushed_s3_tombstone_object_stats_list = &sync.Map{}
+
+	tbl.proc.Store(proc)
+	tbl.accountId = 0
+	tbl.tableId = 100
+	tbl.tableName = "snapshot_scan_test"
+	tbl.fake = true
+	tbl.relKind = "V"
+	tbl.tableDef = &plan.TableDef{
+		Name: "snapshot_scan_test",
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}, Seqnum: 1},
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"id"},
+			PkeyColName: "id",
+		},
+		Name2ColIndex: map[string]int32{
+			"id": 0,
+		},
+	}
+	tbl.db.databaseId = 10
+	tbl.db.databaseName = "db_snapshot_scan_test"
+
+	return tbl, fs
 }
