@@ -177,9 +177,12 @@ namespace matrixone {
 //
 // LOCKING
 // -------
-// - shared_lock for reading index_/replicated_indices_ pointer
-// - unique_lock for writing count, current_offset_, host_ids, replicated_indices_
-// - NO lock during any GPU call (build, extend, search)
+// - shared_lock for reading index_/replicated_indices_ pointer and host_ids (ID translation)
+// - unique_lock for writing count, current_offset_, host_ids, replicated_indices_,
+//   and for snapshotting count/dataset in build()
+// - NO lock during GPU calls themselves (build, extend, search kernels)
+// - shared_lock IS held during post-GPU CPU-side ID translation in search_internal /
+//   search_float_internal (protects host_ids and shard_sizes_ against concurrent extend)
 // - extend_mutex_ (std::mutex in base) serializes concurrent extend() callers
 // - Per-device bitset cache uses its own std::mutex (not the shared_mutex)
 //
@@ -409,13 +412,15 @@ public:
             load(this->index_filename_);
             return;
         }
-        this->count = static_cast<uint32_t>(this->current_offset_);
+        {
+            std::unique_lock<std::shared_mutex> lock(this->mutex_);
+            this->count = static_cast<uint32_t>(this->current_offset_);
+            if (this->flattened_host_dataset.size() > (size_t)this->count * this->dimension)
+                this->flattened_host_dataset.resize((size_t)this->count * this->dimension);
+        }
         if (this->count == 0) {
             this->is_loaded_ = true;
             return;
-        }
-        if (this->flattened_host_dataset.size() > (size_t)this->count * this->dimension) {
-            this->flattened_host_dataset.resize((size_t)this->count * this->dimension);
         }
 
         // std::cout << "[DEBUG] CAGRA build: Starting build count=" << this->count << " dim=" << this->dimension << " metric=" << (int)this->metric << std::endl;
@@ -433,6 +438,7 @@ public:
             // The smallest shard (worst case) is the minimum of uniform and last shard.
             uint64_t min_shard_rows = std::min(rows_per_shard, last_shard_rows);
             validate_build_params(this->build_params, min_shard_rows);
+            this->shard_sizes_.assign(num_shards, 0);
         } else {
             validate_build_params(this->build_params, this->count);
         }
@@ -512,12 +518,12 @@ public:
             // Round down to a multiple of 32 so every shard offset is word-aligned in
             // the deleted bitset, making shard-slice sync cheap (no bit-shifting needed).
             uint64_t rows_per_shard = (this->count / num_shards) & ~static_cast<uint64_t>(31);
-            {
-                std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                this->rows_per_shard_ = rows_per_shard;
-            }
             uint64_t start_row = rank * rows_per_shard;
             uint64_t num_rows = (rank == num_shards - 1) ? (this->count - start_row) : rows_per_shard;
+            {
+                std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                this->shard_sizes_[rank] = num_rows;
+            }
 
             // std::cout << "[DEBUG] CAGRA build SHARDED: rank=" << rank << " start_row=" << start_row << " num_rows=" << num_rows << std::endl;
 
@@ -744,17 +750,17 @@ public:
         }
         
         if (!local_index) {
-            // Tiered fallback: Replicated -> Single
-            if (!this->replicated_indices_.empty()) {
+            // Tiered fallback: Replicated -> Single (lock covers both the map read and index_ read)
+            {
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
                 auto it = this->replicated_indices_.find(handle.get_device_id());
                 if (it != this->replicated_indices_.end()) {
                     auto shared_idx = std::static_pointer_cast<cagra_index>(it->second);
                     local_index = shared_idx.get();
                 }
-            }
-            if (!local_index) {
-                local_index = index_.get();
+                if (!local_index) {
+                    local_index = index_.get();
+                }
             }
             if (local_index) handle.set_index_ptr(static_cast<const cagra_index*>(local_index));
         }
@@ -771,12 +777,10 @@ public:
                 using bs_t = raft::core::bitset<uint32_t, int64_t>;
                 bs_t* bs;
                 if (this->dist_mode == DistributionMode_SHARDED) {
-                    int num_shards = static_cast<int>(this->devices_.size());
-                    uint64_t rows_per_shard = this->rows_per_shard_;
                     int rank = handle.get_rank();
-                    uint64_t shard_offset = static_cast<uint64_t>(rank) * rows_per_shard;
-                    uint64_t shard_sz = (rank == num_shards - 1)
-                                        ? (this->count - shard_offset) : rows_per_shard;
+                    uint64_t shard_sz = this->shard_sizes_[rank];
+                    uint64_t shard_offset = 0;
+                    for (int r = 0; r < rank; ++r) shard_offset += this->shard_sizes_[r];
                     this->sync_shard_bitset(handle.get_device_id(), shard_offset, shard_sz, *res);
                     bs = static_cast<bs_t*>(this->get_device_shard_bitset_info(handle.get_device_id())->ptr.get());
                 } else {
@@ -802,24 +806,29 @@ public:
         }
         handle.sync(); // Local sync
 
-        if (this->dist_mode == DistributionMode_SHARDED) {
-            uint64_t rows_per_shard = this->rows_per_shard_;
-            uint32_t offset = (uint32_t)(handle.get_rank() * rows_per_shard);
-            for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
-                if (search_res.neighbors[i] != (uint32_t)-1) {
-                    uint32_t global_pos = search_res.neighbors[i] + offset;
-                    if (!this->host_ids.empty()) {
-                        search_res.neighbors[i] = this->host_ids[global_pos];
-                    } else {
-                        search_res.neighbors[i] = global_pos;
-                    }
-                }
-            }
-        } else {
-            if (!this->host_ids.empty()) {
+        // GPU search is done; take shared_lock only for the CPU-side ID translation
+        // so that concurrent extend() calls (which write host_ids under unique_lock) are safe.
+        {
+            std::shared_lock<std::shared_mutex> lock(this->mutex_);
+            if (this->dist_mode == DistributionMode_SHARDED) {
+                uint32_t offset = 0;
+                for (int r = 0; r < handle.get_rank(); ++r) offset += (uint32_t)this->shard_sizes_[r];
                 for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
                     if (search_res.neighbors[i] != (uint32_t)-1) {
-                        search_res.neighbors[i] = this->host_ids[search_res.neighbors[i]];
+                        uint32_t global_pos = search_res.neighbors[i] + offset;
+                        if (!this->host_ids.empty()) {
+                            search_res.neighbors[i] = this->host_ids[global_pos];
+                        } else {
+                            search_res.neighbors[i] = global_pos;
+                        }
+                    }
+                }
+            } else {
+                if (!this->host_ids.empty()) {
+                    for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
+                        if (search_res.neighbors[i] != (uint32_t)-1) {
+                            search_res.neighbors[i] = this->host_ids[search_res.neighbors[i]];
+                        }
                     }
                 }
             }
@@ -949,17 +958,17 @@ public:
         }
         
         if (!local_index) {
-            // Tiered fallback: Replicated -> Single
-            if (!this->replicated_indices_.empty()) {
+            // Tiered fallback: Replicated -> Single (lock covers both the map read and index_ read)
+            {
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
                 auto it = this->replicated_indices_.find(handle.get_device_id());
                 if (it != this->replicated_indices_.end()) {
                     auto shared_idx = std::static_pointer_cast<cagra_index>(it->second);
                     local_index = shared_idx.get();
                 }
-            }
-            if (!local_index) {
-                local_index = index_.get();
+                if (!local_index) {
+                    local_index = index_.get();
+                }
             }
             if (local_index) handle.set_index_ptr(static_cast<const cagra_index*>(local_index));
         }
@@ -972,12 +981,10 @@ public:
                 using bs_t = raft::core::bitset<uint32_t, int64_t>;
                 bs_t* bs;
                 if (this->dist_mode == DistributionMode_SHARDED) {
-                    int num_shards = static_cast<int>(this->devices_.size());
-                    uint64_t rows_per_shard = this->rows_per_shard_;
                     int rank = handle.get_rank();
-                    uint64_t shard_offset = static_cast<uint64_t>(rank) * rows_per_shard;
-                    uint64_t shard_sz = (rank == num_shards - 1)
-                                        ? (this->count - shard_offset) : rows_per_shard;
+                    uint64_t shard_sz = this->shard_sizes_[rank];
+                    uint64_t shard_offset = 0;
+                    for (int r = 0; r < rank; ++r) shard_offset += this->shard_sizes_[r];
                     this->sync_shard_bitset(handle.get_device_id(), shard_offset, shard_sz, *res);
                     bs = static_cast<bs_t*>(this->get_device_shard_bitset_info(handle.get_device_id())->ptr.get());
                 } else {
@@ -1003,24 +1010,29 @@ public:
         }
         handle.sync();
 
-        if (this->dist_mode == DistributionMode_SHARDED) {
-            uint64_t rows_per_shard = this->rows_per_shard_;
-            uint32_t offset = (uint32_t)(handle.get_rank() * rows_per_shard);
-            for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
-                if (search_res.neighbors[i] != (uint32_t)-1) {
-                    uint32_t global_pos = search_res.neighbors[i] + offset;
-                    if (!this->host_ids.empty()) {
-                        search_res.neighbors[i] = this->host_ids[global_pos];
-                    } else {
-                        search_res.neighbors[i] = global_pos;
-                    }
-                }
-            }
-        } else {
-            if (!this->host_ids.empty()) {
+        // GPU search is done; take shared_lock only for the CPU-side ID translation
+        // so that concurrent extend() calls (which write host_ids under unique_lock) are safe.
+        {
+            std::shared_lock<std::shared_mutex> lock(this->mutex_);
+            if (this->dist_mode == DistributionMode_SHARDED) {
+                uint32_t offset = 0;
+                for (int r = 0; r < handle.get_rank(); ++r) offset += (uint32_t)this->shard_sizes_[r];
                 for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
                     if (search_res.neighbors[i] != (uint32_t)-1) {
-                        search_res.neighbors[i] = this->host_ids[search_res.neighbors[i]];
+                        uint32_t global_pos = search_res.neighbors[i] + offset;
+                        if (!this->host_ids.empty()) {
+                            search_res.neighbors[i] = this->host_ids[global_pos];
+                        } else {
+                            search_res.neighbors[i] = global_pos;
+                        }
+                    }
+                }
+            } else {
+                if (!this->host_ids.empty()) {
+                    for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
+                        if (search_res.neighbors[i] != (uint32_t)-1) {
+                            search_res.neighbors[i] = this->host_ids[search_res.neighbors[i]];
+                        }
                     }
                 }
             }
@@ -1156,6 +1168,14 @@ public:
                 std::to_string(this->build_params.intermediate_graph_degree) + ",\n" +
             "    \"graph_degree\": " +
                 std::to_string(this->build_params.graph_degree);
+        if (this->dist_mode == DistributionMode_SHARDED && !this->shard_sizes_.empty()) {
+            bp_json += ",\n    \"shard_sizes\": [";
+            for (size_t i = 0; i < this->shard_sizes_.size(); ++i) {
+                if (i) bp_json += ", ";
+                bp_json += std::to_string(this->shard_sizes_[i]);
+            }
+            bp_json += "]";
+        }
         this->write_manifest(dir, "cagra", bp_json, comp_entries);
     }
 
@@ -1170,6 +1190,14 @@ public:
             static_cast<size_t>(json_int(bp_json, "intermediate_graph_degree", 128));
         this->build_params.graph_degree =
             static_cast<size_t>(json_int(bp_json, "graph_degree", 64));
+        {
+            std::vector<int> ss = json_int_array(bp_json, "shard_sizes");
+            if (!ss.empty()) {
+                this->shard_sizes_.resize(ss.size());
+                for (size_t i = 0; i < ss.size(); ++i)
+                    this->shard_sizes_[i] = static_cast<uint64_t>(ss[i]);
+            }
+        }
 
         std::string idx_file   = json_value(m.comp_json, "index");
         std::vector<std::string> shard_files = json_string_array(m.comp_json, "shards");

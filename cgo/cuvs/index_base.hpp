@@ -261,7 +261,7 @@ public:
     mutable std::shared_mutex mutex_;       ///< Guards all shared host-side state (see Locking Rules)
     bool is_loaded_ = false;                ///< True once build() has completed successfully
     int build_device_id_ = 0;              ///< Primary GPU used for SINGLE_GPU mode
-    uint64_t rows_per_shard_ = 0;          ///< Rounded rows per shard established at build time (SHARDED mode)
+    std::vector<uint64_t> shard_sizes_;    ///< Per-shard row counts established at build time (SHARDED mode)
 
     // SINGLE_GPU: points to the device copy of the build dataset (stale after extend, reset then).
     std::shared_ptr<void> dataset_device_ptr_;

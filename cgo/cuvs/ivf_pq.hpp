@@ -312,23 +312,25 @@ public:
             load(this->index_filename_);
             return;
         }
-        if (!this->data_filename_.empty() && this->flattened_host_dataset.empty()) {
-            uint64_t rows, cols;
-            load_host_matrix<T>(this->data_filename_, this->flattened_host_dataset, rows, cols);
-            this->count = static_cast<uint32_t>(rows);
-            this->dimension = static_cast<uint32_t>(cols);
-            this->current_offset_ = this->count;
-        } else {
-            this->count = static_cast<uint32_t>(this->current_offset_);
+        {
+            std::unique_lock<std::shared_mutex> lock(this->mutex_);
+            if (!this->data_filename_.empty() && this->flattened_host_dataset.empty()) {
+                uint64_t rows, cols;
+                load_host_matrix<T>(this->data_filename_, this->flattened_host_dataset, rows, cols);
+                this->count = static_cast<uint32_t>(rows);
+                this->dimension = static_cast<uint32_t>(cols);
+                this->current_offset_ = this->count;
+            } else {
+                this->count = static_cast<uint32_t>(this->current_offset_);
+            }
+            if (this->flattened_host_dataset.size() > (size_t)this->count * this->dimension)
+                this->flattened_host_dataset.resize((size_t)this->count * this->dimension);
         }
 
         if (this->count == 0) {
             this->is_loaded_ = true;
             // std::cout << "[DEBUG] IVF-PQ build: Empty dataset, build skipped" << std::endl;
             return;
-        }
-        if (this->flattened_host_dataset.size() > (size_t)this->count * this->dimension) {
-            this->flattened_host_dataset.resize((size_t)this->count * this->dimension);
         }
         this->train_quantizer_if_needed();
         if (!this->worker) throw std::runtime_error("Worker not initialized");
@@ -344,6 +346,8 @@ public:
             if (result_wait.error) std::rethrow_exception(result_wait.error);
         } else {
             // Collective build requires participation from all GPUs (REPLICATED or SHARDED)
+            if (this->dist_mode == DistributionMode_SHARDED)
+                this->shard_sizes_.assign(this->devices_.size(), 0);
             this->worker->submit_all_devices([&](raft_handle_wrapper_t& handle) -> std::any {
                 this->build_internal(handle);
                 return std::any();
@@ -390,12 +394,12 @@ public:
             // the deleted bitset, making shard-slice sync cheap (no bit-shifting needed).
             // The last shard absorbs the remainder and may be slightly larger.
             uint64_t rows_per_shard = (this->count / num_shards) & ~static_cast<uint64_t>(31);
-            {
-                std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                this->rows_per_shard_ = rows_per_shard;
-            }
             uint64_t start_row = rank * rows_per_shard;
             uint64_t num_rows = (rank == num_shards - 1) ? (this->count - start_row) : rows_per_shard;
+            {
+                std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                this->shard_sizes_[rank] = num_rows;
+            }
 
             // std::cout << "[DEBUG] IVF-PQ build SHARDED: rank=" << rank << " start_row=" << start_row << " num_rows=" << num_rows << std::endl;
 
@@ -582,8 +586,8 @@ public:
         } else if (this->dist_mode == DistributionMode_SHARDED) {
             // Extend the last shard only. Compute shard-local seq_ids.
             int num_shards = (int)this->devices_.size();
-            uint64_t rows_per_shard = this->rows_per_shard_;
-            uint64_t last_shard_offset = (uint64_t)(num_shards - 1) * rows_per_shard;
+            uint64_t last_shard_offset = 0;
+            for (int r = 0; r < num_shards - 1; ++r) last_shard_offset += this->shard_sizes_[r];
             uint64_t old_shard_size = old_count - last_shard_offset;
             std::vector<int64_t> seq_ids(n_rows);
             std::iota(seq_ids.begin(), seq_ids.end(), (int64_t)old_shard_size);
@@ -636,8 +640,8 @@ public:
         } else if (this->dist_mode == DistributionMode_SHARDED) {
             // Extend the last shard only. Compute shard-local seq_ids.
             int num_shards = (int)this->devices_.size();
-            uint64_t rows_per_shard = this->rows_per_shard_;
-            uint64_t last_shard_offset = (uint64_t)(num_shards - 1) * rows_per_shard;
+            uint64_t last_shard_offset = 0;
+            for (int r = 0; r < num_shards - 1; ++r) last_shard_offset += this->shard_sizes_[r];
             uint64_t old_shard_size = old_count - last_shard_offset;
             std::vector<int64_t> seq_ids(n_rows);
             std::iota(seq_ids.begin(), seq_ids.end(), (int64_t)old_shard_size);
@@ -792,12 +796,10 @@ public:
                 using bs_t = raft::core::bitset<uint32_t, int64_t>;
                 bs_t* bs;
                 if (this->dist_mode == DistributionMode_SHARDED) {
-                    int num_shards = static_cast<int>(this->devices_.size());
-                    uint64_t rows_per_shard = this->rows_per_shard_;
                     int rank = handle.get_rank();
-                    uint64_t shard_offset = static_cast<uint64_t>(rank) * rows_per_shard;
-                    uint64_t shard_sz = (rank == num_shards - 1)
-                                        ? (this->count - shard_offset) : rows_per_shard;
+                    uint64_t shard_sz = this->shard_sizes_[rank];
+                    uint64_t shard_offset = 0;
+                    for (int r = 0; r < rank; ++r) shard_offset += this->shard_sizes_[r];
                     this->sync_shard_bitset(handle.get_device_id(), shard_offset, shard_sz, *res);
                     bs = static_cast<bs_t*>(this->get_device_shard_bitset_info(handle.get_device_id())->ptr.get());
                 } else {
@@ -822,24 +824,29 @@ public:
         }
         handle.sync();
 
-        if (this->dist_mode == DistributionMode_SHARDED) {
-            uint64_t rows_per_shard = this->rows_per_shard_;
-            int64_t offset = (int64_t)(handle.get_rank() * rows_per_shard);
-            for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
-                if (search_res.neighbors[i] != -1) {
-                    int64_t global_pos = search_res.neighbors[i] + offset;
-                    if (!this->host_ids.empty()) {
-                        search_res.neighbors[i] = (int64_t)this->host_ids[global_pos];
-                    } else {
-                        search_res.neighbors[i] = global_pos;
-                    }
-                }
-            }
-        } else {
-            if (!this->host_ids.empty()) {
+        // GPU search is done; take shared_lock only for the CPU-side ID translation
+        // so that concurrent extend() calls (which write host_ids under unique_lock) are safe.
+        {
+            std::shared_lock<std::shared_mutex> lock(this->mutex_);
+            if (this->dist_mode == DistributionMode_SHARDED) {
+                int64_t offset = 0;
+                for (int r = 0; r < handle.get_rank(); ++r) offset += (int64_t)this->shard_sizes_[r];
                 for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
                     if (search_res.neighbors[i] != -1) {
-                        search_res.neighbors[i] = (int64_t)this->host_ids[search_res.neighbors[i]];
+                        int64_t global_pos = search_res.neighbors[i] + offset;
+                        if (!this->host_ids.empty()) {
+                            search_res.neighbors[i] = (int64_t)this->host_ids[global_pos];
+                        } else {
+                            search_res.neighbors[i] = global_pos;
+                        }
+                    }
+                }
+            } else {
+                if (!this->host_ids.empty()) {
+                    for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
+                        if (search_res.neighbors[i] != -1) {
+                            search_res.neighbors[i] = (int64_t)this->host_ids[search_res.neighbors[i]];
+                        }
                     }
                 }
             }
@@ -987,12 +994,10 @@ public:
                 using bs_t = raft::core::bitset<uint32_t, int64_t>;
                 bs_t* bs;
                 if (this->dist_mode == DistributionMode_SHARDED) {
-                    int num_shards = static_cast<int>(this->devices_.size());
-                    uint64_t rows_per_shard = this->rows_per_shard_;
                     int rank = handle.get_rank();
-                    uint64_t shard_offset = static_cast<uint64_t>(rank) * rows_per_shard;
-                    uint64_t shard_sz = (rank == num_shards - 1)
-                                        ? (this->count - shard_offset) : rows_per_shard;
+                    uint64_t shard_sz = this->shard_sizes_[rank];
+                    uint64_t shard_offset = 0;
+                    for (int r = 0; r < rank; ++r) shard_offset += this->shard_sizes_[r];
                     this->sync_shard_bitset(handle.get_device_id(), shard_offset, shard_sz, *res);
                     bs = static_cast<bs_t*>(this->get_device_shard_bitset_info(handle.get_device_id())->ptr.get());
                 } else {
@@ -1018,24 +1023,29 @@ public:
         }
         handle.sync();
 
-        if (this->dist_mode == DistributionMode_SHARDED) {
-            uint64_t rows_per_shard = this->rows_per_shard_;
-            int64_t offset = (int64_t)(handle.get_rank() * rows_per_shard);
-            for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
-                if (search_res.neighbors[i] != -1) {
-                    int64_t global_pos = search_res.neighbors[i] + offset;
-                    if (!this->host_ids.empty()) {
-                        search_res.neighbors[i] = (int64_t)this->host_ids[global_pos];
-                    } else {
-                        search_res.neighbors[i] = global_pos;
-                    }
-                }
-            }
-        } else {
-            if (!this->host_ids.empty()) {
+        // GPU search is done; take shared_lock only for the CPU-side ID translation
+        // so that concurrent extend() calls (which write host_ids under unique_lock) are safe.
+        {
+            std::shared_lock<std::shared_mutex> lock(this->mutex_);
+            if (this->dist_mode == DistributionMode_SHARDED) {
+                int64_t offset = 0;
+                for (int r = 0; r < handle.get_rank(); ++r) offset += (int64_t)this->shard_sizes_[r];
                 for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
                     if (search_res.neighbors[i] != -1) {
-                        search_res.neighbors[i] = (int64_t)this->host_ids[search_res.neighbors[i]];
+                        int64_t global_pos = search_res.neighbors[i] + offset;
+                        if (!this->host_ids.empty()) {
+                            search_res.neighbors[i] = (int64_t)this->host_ids[global_pos];
+                        } else {
+                            search_res.neighbors[i] = global_pos;
+                        }
+                    }
+                }
+            } else {
+                if (!this->host_ids.empty()) {
+                    for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
+                        if (search_res.neighbors[i] != -1) {
+                            search_res.neighbors[i] = (int64_t)this->host_ids[search_res.neighbors[i]];
+                        }
                     }
                 }
             }
@@ -1211,6 +1221,14 @@ public:
             "    \"bits_per_code\": " + std::to_string(this->build_params.bits_per_code) + ",\n" +
             "    \"kmeans_trainset_fraction\": " +
                 std::to_string(this->build_params.kmeans_trainset_fraction);
+        if (this->dist_mode == DistributionMode_SHARDED && !this->shard_sizes_.empty()) {
+            bp_json += ",\n    \"shard_sizes\": [";
+            for (size_t i = 0; i < this->shard_sizes_.size(); ++i) {
+                if (i) bp_json += ", ";
+                bp_json += std::to_string(this->shard_sizes_[i]);
+            }
+            bp_json += "]";
+        }
         this->write_manifest(dir, "ivf_pq", bp_json, comp_entries);
     }
 
@@ -1228,6 +1246,14 @@ public:
         this->build_params.kmeans_trainset_fraction =
             std::stod(json_value(bp_json, "kmeans_trainset_fraction").empty()
                       ? "0.5" : json_value(bp_json, "kmeans_trainset_fraction"));
+        {
+            std::vector<int> ss = json_int_array(bp_json, "shard_sizes");
+            if (!ss.empty()) {
+                this->shard_sizes_.resize(ss.size());
+                for (size_t i = 0; i < ss.size(); ++i)
+                    this->shard_sizes_[i] = static_cast<uint64_t>(ss[i]);
+            }
+        }
 
         std::string idx_file   = json_value(m.comp_json, "index");
         std::vector<std::string> shard_files = json_string_array(m.comp_json, "shards");
