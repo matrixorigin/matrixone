@@ -519,14 +519,89 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 	}
 
 	defer sinker.cleanupInMemoryStaged()
+
+	fSinker := sinker.getStageFileSinker()
+	defer sinker.resetFileSinker()
+
+	data := sinker.staged.inMemory
+
+	// merge sort
+	if sinker.schema.sortKeyIdx != -1 {
+		if sinker.config.dedupAll {
+			// dedup needs all sorted blocks present, so accumulate first.
+			if err := sinker.trySpillMergeSortAccumulate(
+				ctx, fSinker,
+			); err != nil {
+				return err
+			}
+			goto sync
+		}
+
+		// stream sorted blocks directly to fSinker, reusing one buffer.
+		if err := sinker.trySpillMergeSortStreaming(
+			ctx, fSinker,
+		); err != nil {
+			return err
+		}
+		goto sync
+	}
+
+	// no sort key: spill directly
+	for _, bat := range data {
+		if err := fSinker.Sink(ctx, bat); err != nil {
+			return err
+		}
+	}
+
+sync:
+	stats, err := fSinker.Sync(ctx)
+	if err != nil {
+		return err
+	}
+
+	sinker.staged.persisted = append(sinker.staged.persisted, *stats)
+	return nil
+}
+
+// trySpillMergeSortStreaming merge-sorts staged data and streams each full
+// block directly to the file sinker, reusing a single buffer. This avoids
+// accumulating all sorted blocks in memory and eliminates PreExtend churn.
+func (sinker *Sinker) trySpillMergeSortStreaming(
+	ctx context.Context, fSinker FileSinker,
+) error {
+	buffer, err := sinker.fetchBuffer()
+	if err != nil {
+		return err
+	}
+	streamSinker := func(data *batch.Batch) (*batch.Batch, error) {
+		if err := fSinker.Sink(ctx, data); err != nil {
+			return nil, err
+		}
+		data.CleanOnlyData()
+		return data, nil
+	}
+	buffer, err = mergeutil.MergeSortBatches(
+		sinker.staged.inMemory,
+		sinker.schema.sortKeyIdx,
+		buffer,
+		streamSinker,
+		sinker.mp,
+		sinker.putBackOneInMemory,
+	)
+	sinker.putBackBuffer(buffer)
+	return err
+}
+
+// trySpillMergeSortAccumulate merge-sorts staged data, accumulates all sorted
+// blocks, runs dedup, then writes to the file sinker.
+func (sinker *Sinker) trySpillMergeSortAccumulate(
+	ctx context.Context, fSinker FileSinker,
+) error {
 	var sorted []*batch.Batch
-	// The sinker takes ownership of the full buffer and returns an empty
-	// replacement, eliminating AppendWithCopy.
 	innersinker := func(data *batch.Batch) (*batch.Batch, error) {
 		sorted = append(sorted, data)
 		return sinker.fetchBuffer()
 	}
-
 	defer func() {
 		for i, bat := range sorted {
 			sinker.putBackBuffer(bat)
@@ -535,53 +610,36 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 		sorted = sorted[:0]
 	}()
 
-	data := sinker.staged.inMemory
-
-	// 1. merge sort
-	if sinker.schema.sortKeyIdx != -1 {
-		buffer, err := sinker.fetchBuffer()
-		if err != nil {
-			return err
-		}
-		buffer, err = mergeutil.MergeSortBatches(
-			sinker.staged.inMemory,
-			sinker.schema.sortKeyIdx,
-			buffer,
-			innersinker,
-			sinker.mp,
-			sinker.putBackOneInMemory,
-		)
-		sinker.putBackBuffer(buffer)
-		if err != nil {
-			return err
-		}
-		data = sorted
+	buffer, err := sinker.fetchBuffer()
+	if err != nil {
+		return err
 	}
-
-	// 3. dedup
-	if sinker.config.dedupAll {
-		if err := containers.DedupSortedBatches(
-			sinker.schema.sortKeyIdx,
-			data,
-		); err != nil {
-			return err
-		}
-	}
-
-	// 4. spill
-	fSinker := sinker.getStageFileSinker()
-	defer sinker.resetFileSinker()
-	for _, bat := range data {
-		if err := fSinker.Sink(ctx, bat); err != nil {
-			return err
-		}
-	}
-	stats, err := fSinker.Sync(ctx)
+	buffer, err = mergeutil.MergeSortBatches(
+		sinker.staged.inMemory,
+		sinker.schema.sortKeyIdx,
+		buffer,
+		innersinker,
+		sinker.mp,
+		sinker.putBackOneInMemory,
+	)
+	sinker.putBackBuffer(buffer)
 	if err != nil {
 		return err
 	}
 
-	sinker.staged.persisted = append(sinker.staged.persisted, *stats)
+	// dedup
+	if err := containers.DedupSortedBatches(
+		sinker.schema.sortKeyIdx,
+		sorted,
+	); err != nil {
+		return err
+	}
+
+	for _, bat := range sorted {
+		if err := fSinker.Sink(ctx, bat); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
