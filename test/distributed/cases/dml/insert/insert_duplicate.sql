@@ -671,6 +671,29 @@ SET @value = 1000;
 EXECUTE stmt1 USING @id, @name, @value, @name;
 SELECT * FROM indup_06;
 
+-- 测试 10.3: 预处理语句重复执行 + DELETE 后重插（回归测试）
+DROP TABLE IF EXISTS test_lock;
+CREATE TABLE test_lock (
+    lock_key VARCHAR(255) PRIMARY KEY,
+    holder_id VARCHAR(255),
+    acquired_at TIMESTAMP,
+    expires_at TIMESTAMP
+);
+DELETE FROM test_lock WHERE lock_key = 'bug_repro';
+
+PREPARE ins FROM 'INSERT INTO test_lock (lock_key, holder_id, acquired_at, expires_at) VALUES (?, ?, NOW(), DATE_ADD(NOW(), INTERVAL 60 SECOND))';
+SET @k='bug_repro', @h='h1';
+EXECUTE ins USING @k, @h;
+SELECT COUNT(*) FROM test_lock WHERE lock_key = @k;
+DELETE FROM test_lock WHERE lock_key = @k;
+SELECT COUNT(*) FROM test_lock WHERE lock_key = @k;
+SET @h='h2';
+EXECUTE ins USING @k, @h;
+SELECT COUNT(*) FROM test_lock WHERE lock_key = @k;
+SELECT lock_key, holder_id FROM test_lock WHERE lock_key = @k;
+DEALLOCATE PREPARE ins;
+DROP TABLE test_lock;
+
 DEALLOCATE PREPARE stmt1;
 
 

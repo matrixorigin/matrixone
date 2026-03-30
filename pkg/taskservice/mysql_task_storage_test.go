@@ -16,6 +16,7 @@ package taskservice
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"slices"
 	"strings"
@@ -23,10 +24,12 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/util/json"
 )
@@ -556,4 +559,725 @@ func TestDaemonTaskInSqlMock(t *testing.T) {
 
 	mock.ExpectClose()
 	require.NoError(t, storage.Close())
+}
+
+func TestNewMysqlTaskStorage(t *testing.T) {
+	store, err := newMysqlTaskStorage("root:111@tcp(127.0.0.1:3306)/mo_task")
+	require.NoError(t, err)
+	require.NotNil(t, store)
+	require.NoError(t, store.Close())
+}
+
+func TestDeleteAsyncTaskInSqlMock(t *testing.T) {
+	storage, mock := newMockStorage(t)
+	expectedSQL := deleteAsyncTask + buildWhereClause(newConditions(WithTaskStatusCond(task.TaskStatus_Completed)))
+	mock.ExpectExec(expectedSQL).WillReturnResult(sqlmock.NewResult(0, 2))
+
+	affected, err := storage.DeleteAsyncTask(context.Background(), WithTaskStatusCond(task.TaskStatus_Completed))
+	require.NoError(t, err)
+	require.Equal(t, 2, affected)
+
+	mock.ExpectExec(expectedSQL).WillReturnError(moerr.NewInternalErrorNoCtx("delete failed"))
+	_, err = storage.DeleteAsyncTask(context.Background(), WithTaskStatusCond(task.TaskStatus_Completed))
+	require.Error(t, err)
+
+	mock.ExpectClose()
+	require.NoError(t, storage.Close())
+}
+
+func TestTaskExistsAndGetTriggerTimes(t *testing.T) {
+	storage, mock := newMockStorage(t)
+
+	mock.ExpectQuery(countTaskId).WithArgs("task-a").
+		WillReturnRows(sqlmock.NewRows([]string{"count(task_metadata_id)"}).AddRow(1))
+	ok, err := storage.taskExists(context.Background(), "task-a")
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	mock.ExpectQuery(getTriggerTimes).WithArgs("cron-a").
+		WillReturnRows(sqlmock.NewRows([]string{"trigger_times"}).AddRow(uint64(9)))
+	trigger, err := storage.getTriggerTimes(context.Background(), "cron-a")
+	require.NoError(t, err)
+	require.Equal(t, uint64(9), trigger)
+
+	mock.ExpectClose()
+	require.NoError(t, storage.Close())
+}
+
+func TestUpdateCronTaskInSqlMock(t *testing.T) {
+	storage, mock := newMockStorage(t)
+
+	cronTask := newTestCronTask("cron-task-1", "*/5 * * * * *")
+	cronTask.ID = 11
+	cronTask.TriggerTimes = 2
+	cronTask.Metadata.Executor = task.TaskCode_TestOnly
+	cronTask.Metadata.Context = []byte("cron-context")
+	cronTask.CreateAt = 100
+	cronTask.UpdateAt = 200
+	cronTask.NextTime = 300
+
+	asyncTask := newTestAsyncTask("cron-task-1")
+	asyncTask.Metadata.Executor = task.TaskCode_TestOnly
+	asyncTask.Metadata.Context = []byte("async-context")
+	asyncTask.Status = task.TaskStatus_Running
+	asyncTask.TaskRunner = "runner-1"
+	asyncTask.Epoch = 1
+	asyncTask.LastHeartbeat = 10
+	asyncTask.CreateAt = 11
+	asyncTask.CompletedAt = 12
+
+	mock.ExpectQuery(countTaskId).WithArgs(asyncTask.Metadata.ID).
+		WillReturnRows(sqlmock.NewRows([]string{"count(task_metadata_id)"}).AddRow(0))
+	mock.ExpectQuery(getTriggerTimes).WithArgs(cronTask.Metadata.ID).
+		WillReturnRows(sqlmock.NewRows([]string{"trigger_times"}).AddRow(uint64(1)))
+	mock.ExpectBegin()
+	mock.ExpectExec(insertAsyncTask+"(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+		WithArgs(
+			asyncTask.Metadata.ID,
+			asyncTask.Metadata.Executor,
+			asyncTask.Metadata.Context,
+			sqlmock.AnyArg(),
+			asyncTask.ParentTaskID,
+			asyncTask.Status,
+			asyncTask.TaskRunner,
+			asyncTask.Epoch,
+			asyncTask.LastHeartbeat,
+			asyncTask.CreateAt,
+			asyncTask.CompletedAt).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(updateCronTask).
+		WithArgs(
+			cronTask.Metadata.Executor,
+			cronTask.Metadata.Context,
+			sqlmock.AnyArg(),
+			cronTask.CronExpr,
+			cronTask.NextTime,
+			cronTask.TriggerTimes,
+			cronTask.CreateAt,
+			cronTask.UpdateAt,
+			cronTask.ID).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	affected, err := storage.UpdateCronTask(context.Background(), cronTask, asyncTask)
+	require.NoError(t, err)
+	require.Equal(t, 2, affected)
+
+	// task exists branch
+	mock.ExpectQuery(countTaskId).WithArgs(asyncTask.Metadata.ID).
+		WillReturnRows(sqlmock.NewRows([]string{"count(task_metadata_id)"}).AddRow(1))
+	affected, err = storage.UpdateCronTask(context.Background(), cronTask, asyncTask)
+	require.NoError(t, err)
+	require.Equal(t, 0, affected)
+
+	// trigger times mismatch branch
+	mock.ExpectQuery(countTaskId).WithArgs(asyncTask.Metadata.ID).
+		WillReturnRows(sqlmock.NewRows([]string{"count(task_metadata_id)"}).AddRow(0))
+	mock.ExpectQuery(getTriggerTimes).WithArgs(cronTask.Metadata.ID).
+		WillReturnRows(sqlmock.NewRows([]string{"trigger_times"}).AddRow(uint64(99)))
+	_, err = storage.UpdateCronTask(context.Background(), cronTask, asyncTask)
+	require.Error(t, err)
+
+	mock.ExpectClose()
+	require.NoError(t, storage.Close())
+}
+
+func TestRemoveDuplicateTasks(t *testing.T) {
+	asyncTasks := []task.AsyncTask{
+		{Metadata: task.TaskMetadata{ID: "a"}},
+		{Metadata: task.TaskMetadata{ID: "b"}},
+	}
+	cronTasks := []task.CronTask{
+		{Metadata: task.TaskMetadata{ID: "a"}},
+		{Metadata: task.TaskMetadata{ID: "b"}},
+	}
+	daemonTasks := []task.DaemonTask{
+		{Metadata: task.TaskMetadata{ID: "a"}},
+		{Metadata: task.TaskMetadata{ID: "b"}},
+	}
+
+	dupErr := &mysqlDriver.MySQLError{
+		Number:  moerr.ER_DUP_ENTRY,
+		Message: "Duplicate entry 'a' for key",
+	}
+	otherErr := moerr.NewInternalErrorNoCtx("not mysql err")
+
+	remainingAsync, err := removeDuplicateAsyncTasks(dupErr, asyncTasks)
+	require.NoError(t, err)
+	require.Len(t, remainingAsync, 1)
+	require.Equal(t, "b", remainingAsync[0].Metadata.ID)
+
+	remainingCron, err := removeDuplicateCronTasks(dupErr, cronTasks)
+	require.NoError(t, err)
+	require.Len(t, remainingCron, 1)
+	require.Equal(t, "b", remainingCron[0].Metadata.ID)
+
+	remainingDaemon, err := removeDuplicateDaemonTasks(dupErr, daemonTasks)
+	require.NoError(t, err)
+	require.Len(t, remainingDaemon, 1)
+	require.Equal(t, "b", remainingDaemon[0].Metadata.ID)
+
+	_, err = removeDuplicateAsyncTasks(otherErr, asyncTasks)
+	require.Error(t, err)
+	_, err = removeDuplicateCronTasks(otherErr, cronTasks)
+	require.Error(t, err)
+	_, err = removeDuplicateDaemonTasks(otherErr, daemonTasks)
+	require.Error(t, err)
+}
+
+func TestAddAsyncTaskWithDuplicateEntry(t *testing.T) {
+	storage, mock := newMockStorage(t)
+
+	tasks := []task.AsyncTask{
+		newTestAsyncTask("dup-a"),
+		newTestAsyncTask("dup-b"),
+	}
+	dupErr := &mysqlDriver.MySQLError{
+		Number:  moerr.ER_DUP_ENTRY,
+		Message: "Duplicate entry 'dup-a' for key",
+	}
+	mock.ExpectExec(insertAsyncTask + "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?),(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+		WillReturnError(dupErr)
+	mock.ExpectExec(insertAsyncTask + "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	affected, err := storage.AddAsyncTask(context.Background(), tasks...)
+	require.NoError(t, err)
+	require.Equal(t, 1, affected)
+
+	mock.ExpectClose()
+	require.NoError(t, storage.Close())
+}
+
+func TestAddCronTaskWithDuplicateEntry(t *testing.T) {
+	storage, mock := newMockStorage(t)
+
+	c1 := newTestCronTask("cron-a", "* * * * * *")
+	c2 := newTestCronTask("cron-b", "* * * * * *")
+	dupErr := &mysqlDriver.MySQLError{
+		Number:  moerr.ER_DUP_ENTRY,
+		Message: "Duplicate entry 'cron-a' for key",
+	}
+	mock.ExpectExec(insertCronTask + "(?, ?, ?, ?, ?, ?, ?, ?, ?),(?, ?, ?, ?, ?, ?, ?, ?, ?)").
+		WillReturnError(dupErr)
+	mock.ExpectExec(insertCronTask + "(?, ?, ?, ?, ?, ?, ?, ?, ?)").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	affected, err := storage.AddCronTask(context.Background(), c1, c2)
+	require.NoError(t, err)
+	require.Equal(t, 1, affected)
+
+	mock.ExpectClose()
+	require.NoError(t, storage.Close())
+}
+
+func TestMysqlTaskStorageDisabledBranch(t *testing.T) {
+	storage, mock := newMockStorage(t)
+	DebugCtlTaskFramework(true)
+	defer DebugCtlTaskFramework(false)
+
+	affected, err := storage.AddAsyncTask(context.Background(), newTestAsyncTask("x"))
+	require.NoError(t, err)
+	require.Equal(t, 0, affected)
+
+	affected, err = storage.DeleteAsyncTask(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 0, affected)
+
+	affected, err = storage.AddCronTask(context.Background(), newTestCronTask("c", "* * * * * *"))
+	require.NoError(t, err)
+	require.Equal(t, 0, affected)
+
+	affected, err = storage.AddDaemonTask(context.Background(), newDaemonTaskForTest(1, task.TaskStatus_Created, ""))
+	require.NoError(t, err)
+	require.Equal(t, 0, affected)
+
+	_, err = storage.QueryAsyncTask(context.Background())
+	require.NoError(t, err)
+	_, err = storage.QueryCronTask(context.Background())
+	require.NoError(t, err)
+	_, err = storage.QueryDaemonTask(context.Background())
+	require.NoError(t, err)
+
+	mock.ExpectClose()
+	require.NoError(t, storage.Close())
+}
+
+type mockRowsAffectedResult struct {
+	rows int64
+	err  error
+}
+
+func (r mockRowsAffectedResult) LastInsertId() (int64, error) { return 0, nil }
+
+func (r mockRowsAffectedResult) RowsAffected() (int64, error) {
+	if r.err != nil {
+		return 0, r.err
+	}
+	return r.rows, nil
+}
+
+type mockSqlExecutor struct {
+	execFn func(context.Context, string, ...interface{}) (sql.Result, error)
+}
+
+func (m *mockSqlExecutor) PrepareContext(context.Context, string) (*sql.Stmt, error) {
+	return nil, moerr.NewInternalErrorNoCtx("not implemented")
+}
+
+func (m *mockSqlExecutor) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+	if m.execFn != nil {
+		return m.execFn(ctx, query, args...)
+	}
+	return nil, moerr.NewInternalErrorNoCtx("not implemented")
+}
+
+func (m *mockSqlExecutor) QueryContext(context.Context, string, ...interface{}) (*sql.Rows, error) {
+	return nil, moerr.NewInternalErrorNoCtx("not implemented")
+}
+
+func TestBuildLimitAndOrderByClause(t *testing.T) {
+	c := newConditions(WithLimitCond(5), WithTaskIDDesc())
+	require.Equal(t, " limit 5", buildLimitClause(c))
+	require.Equal(t, " order by task_id desc", buildOrderByClause(c))
+
+	c = newConditions(WithTaskStatusCond(task.TaskStatus_Created))
+	require.Equal(t, "", buildLimitClause(c))
+	require.Equal(t, " order by task_id", buildOrderByClause(c))
+}
+
+func TestRunAddDaemonTaskBranches(t *testing.T) {
+	m := &mysqlTaskStorage{}
+	ctx := context.Background()
+
+	t.Run("empty tasks", func(t *testing.T) {
+		n, err := m.RunAddDaemonTask(ctx, &mockSqlExecutor{})
+		require.NoError(t, err)
+		require.Equal(t, 0, n)
+	})
+
+	t.Run("duplicate then retry", func(t *testing.T) {
+		d1 := newDaemonTaskForTest(1, task.TaskStatus_Created, "")
+		d1.Metadata.ID = "dup-daemon"
+		d2 := newDaemonTaskForTest(2, task.TaskStatus_Created, "")
+		d2.Metadata.ID = "keep-daemon"
+
+		calls := 0
+		exec := &mockSqlExecutor{
+			execFn: func(context.Context, string, ...interface{}) (sql.Result, error) {
+				calls++
+				if calls == 1 {
+					return nil, &mysqlDriver.MySQLError{
+						Number:  moerr.ER_DUP_ENTRY,
+						Message: "Duplicate entry 'dup-daemon' for key",
+					}
+				}
+				return mockRowsAffectedResult{rows: 1}, nil
+			},
+		}
+
+		n, err := m.RunAddDaemonTask(ctx, exec, d1, d2)
+		require.NoError(t, err)
+		require.Equal(t, 1, n)
+		require.Equal(t, 2, calls)
+	})
+
+	t.Run("non-duplicate error", func(t *testing.T) {
+		d := newDaemonTaskForTest(1, task.TaskStatus_Created, "")
+		d.Metadata.ID = "err-daemon"
+		_, err := m.RunAddDaemonTask(ctx, &mockSqlExecutor{
+			execFn: func(context.Context, string, ...interface{}) (sql.Result, error) {
+				return nil, moerr.NewInternalErrorNoCtx("exec failed")
+			},
+		}, d)
+		require.Error(t, err)
+	})
+
+	t.Run("rows affected error", func(t *testing.T) {
+		d := newDaemonTaskForTest(1, task.TaskStatus_Created, "")
+		d.Metadata.ID = "rows-daemon"
+		_, err := m.RunAddDaemonTask(ctx, &mockSqlExecutor{
+			execFn: func(context.Context, string, ...interface{}) (sql.Result, error) {
+				return mockRowsAffectedResult{err: moerr.NewInternalErrorNoCtx("rows failed")}, nil
+			},
+		}, d)
+		require.Error(t, err)
+	})
+}
+
+func TestUpdateDaemonTaskBranchesInSqlMock(t *testing.T) {
+	ctx := context.Background()
+	d := newDaemonTaskForTest(1, task.TaskStatus_Running, "r1")
+	d.Metadata.ID = "update-daemon"
+
+	t.Run("empty tasks", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		n, err := storage.UpdateDaemonTask(ctx, nil)
+		require.NoError(t, err)
+		require.Equal(t, 0, n)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+
+	t.Run("begin tx error", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		mock.ExpectBegin().WillReturnError(moerr.NewInternalErrorNoCtx("begin failed"))
+		_, err := storage.UpdateDaemonTask(ctx, []task.DaemonTask{d})
+		require.Error(t, err)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+
+	t.Run("rollback join error", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		mock.ExpectBegin()
+		mock.ExpectExec(updateDaemonTask).WillReturnError(moerr.NewInternalErrorNoCtx("exec failed"))
+		mock.ExpectRollback().WillReturnError(moerr.NewInternalErrorNoCtx("rollback failed"))
+		_, err := storage.UpdateDaemonTask(ctx, []task.DaemonTask{d})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "exec failed")
+		require.Contains(t, err.Error(), "rollback failed")
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+
+	t.Run("commit error", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		mock.ExpectBegin()
+		mock.ExpectExec(updateDaemonTask).WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit().WillReturnError(moerr.NewInternalErrorNoCtx("commit failed"))
+		_, err := storage.UpdateDaemonTask(ctx, []task.DaemonTask{d})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "commit failed")
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+}
+
+func TestRunUpdateDaemonTaskBranches(t *testing.T) {
+	m := &mysqlTaskStorage{}
+	ctx := context.Background()
+
+	d := newDaemonTaskForTest(1, task.TaskStatus_Running, "r1")
+	d.Metadata.ID = "run-update-daemon"
+	now := time.Now()
+	d.LastHeartbeat = now
+	d.UpdateAt = now
+	d.EndAt = now
+	d.LastRun = now
+
+	t.Run("success", func(t *testing.T) {
+		n, err := m.RunUpdateDaemonTask(ctx, []task.DaemonTask{d}, &mockSqlExecutor{
+			execFn: func(context.Context, string, ...interface{}) (sql.Result, error) {
+				return mockRowsAffectedResult{rows: 1}, nil
+			},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 1, n)
+	})
+
+	t.Run("exec error", func(t *testing.T) {
+		_, err := m.RunUpdateDaemonTask(ctx, []task.DaemonTask{d}, &mockSqlExecutor{
+			execFn: func(context.Context, string, ...interface{}) (sql.Result, error) {
+				return nil, moerr.NewInternalErrorNoCtx("exec failed")
+			},
+		})
+		require.Error(t, err)
+	})
+
+	t.Run("rows affected error", func(t *testing.T) {
+		_, err := m.RunUpdateDaemonTask(ctx, []task.DaemonTask{d}, &mockSqlExecutor{
+			execFn: func(context.Context, string, ...interface{}) (sql.Result, error) {
+				return mockRowsAffectedResult{err: moerr.NewInternalErrorNoCtx("rows failed")}, nil
+			},
+		})
+		require.Error(t, err)
+	})
+}
+
+func TestRunDeleteDaemonTaskBranches(t *testing.T) {
+	m := &mysqlTaskStorage{}
+	ctx := context.Background()
+
+	t.Run("exec error", func(t *testing.T) {
+		_, err := m.RunDeleteDaemonTask(ctx, &mockSqlExecutor{
+			execFn: func(context.Context, string, ...interface{}) (sql.Result, error) {
+				return nil, moerr.NewInternalErrorNoCtx("exec failed")
+			},
+		})
+		require.Error(t, err)
+	})
+
+	t.Run("rows affected panic", func(t *testing.T) {
+		require.Panics(t, func() {
+			_, _ = m.RunDeleteDaemonTask(ctx, &mockSqlExecutor{
+				execFn: func(context.Context, string, ...interface{}) (sql.Result, error) {
+					return mockRowsAffectedResult{err: moerr.NewInternalErrorNoCtx("rows failed")}, nil
+				},
+			})
+		})
+	})
+}
+
+func TestHeartbeatDaemonTaskBranchesInSqlMock(t *testing.T) {
+	ctx := context.Background()
+	d := newDaemonTaskForTest(1, task.TaskStatus_Running, "r1")
+	d.Metadata.ID = "hb-daemon"
+
+	t.Run("empty tasks", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		n, err := storage.HeartbeatDaemonTask(ctx, nil)
+		require.NoError(t, err)
+		require.Equal(t, 0, n)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+
+	t.Run("begin tx error", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		mock.ExpectBegin().WillReturnError(moerr.NewInternalErrorNoCtx("begin failed"))
+		_, err := storage.HeartbeatDaemonTask(ctx, []task.DaemonTask{d})
+		require.Error(t, err)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+
+	t.Run("rollback join error", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		mock.ExpectBegin()
+		mock.ExpectExec(heartbeatDaemonTask).WillReturnError(moerr.NewInternalErrorNoCtx("exec failed"))
+		mock.ExpectRollback().WillReturnError(moerr.NewInternalErrorNoCtx("rollback failed"))
+		_, err := storage.HeartbeatDaemonTask(ctx, []task.DaemonTask{d})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "exec failed")
+		require.Contains(t, err.Error(), "rollback failed")
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+
+	t.Run("rows affected error", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		mock.ExpectBegin()
+		mock.ExpectExec(heartbeatDaemonTask).WillReturnResult(sqlmock.NewErrorResult(moerr.NewInternalErrorNoCtx("rows failed")))
+		mock.ExpectRollback()
+		_, err := storage.HeartbeatDaemonTask(ctx, []task.DaemonTask{d})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "rows failed")
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+
+	t.Run("commit error", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		mock.ExpectBegin()
+		mock.ExpectExec(heartbeatDaemonTask).WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit().WillReturnError(moerr.NewInternalErrorNoCtx("commit failed"))
+		_, err := storage.HeartbeatDaemonTask(ctx, []task.DaemonTask{d})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "commit failed")
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+}
+
+func TestAddCDCTaskBranchesInSqlMock(t *testing.T) {
+	ctx := context.Background()
+	d := newCdcInfo(t)
+
+	t.Run("disabled", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		DebugCtlTaskFramework(true)
+		n, err := storage.AddCDCTask(ctx, d, nil)
+		DebugCtlTaskFramework(false)
+		require.NoError(t, err)
+		require.Equal(t, 0, n)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+
+	t.Run("begin tx error", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		mock.ExpectBegin().WillReturnError(moerr.NewInternalErrorNoCtx("begin failed"))
+		_, err := storage.AddCDCTask(ctx, d, nil)
+		require.Error(t, err)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+
+	t.Run("callback rollback join error", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		mock.ExpectBegin()
+		mock.ExpectRollback().WillReturnError(moerr.NewInternalErrorNoCtx("rollback failed"))
+		_, err := storage.AddCDCTask(ctx, d, func(context.Context, SqlExecutor) (int, error) {
+			return 0, moerr.NewInternalErrorNoCtx("callback failed")
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "callback failed")
+		require.Contains(t, err.Error(), "rollback failed")
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+
+	t.Run("rows affected mismatch", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		mock.ExpectBegin()
+		newInsertDaemonTaskExpect(t, mock)
+		mock.ExpectRollback()
+		_, err := storage.AddCDCTask(ctx, d, func(context.Context, SqlExecutor) (int, error) {
+			return 2, nil
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "add cdc task status failed")
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+
+	t.Run("commit error", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		mock.ExpectBegin()
+		newInsertDaemonTaskExpect(t, mock)
+		mock.ExpectCommit().WillReturnError(moerr.NewInternalErrorNoCtx("commit failed"))
+		_, err := storage.AddCDCTask(ctx, d, func(context.Context, SqlExecutor) (int, error) {
+			return 1, nil
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "commit failed")
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+}
+
+func TestUpdateCDCTaskBranchesInSqlMock(t *testing.T) {
+	ctx := context.Background()
+	base := newCdcInfo(t)
+
+	t.Run("nil collector", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		n, err := storage.UpdateCDCTask(ctx, task.TaskStatus_Canceled, nil)
+		require.NoError(t, err)
+		require.Equal(t, 0, n)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+
+	t.Run("begin tx error", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		mock.ExpectBegin().WillReturnError(moerr.NewInternalErrorNoCtx("begin failed"))
+		_, err := storage.UpdateCDCTask(ctx, task.TaskStatus_Canceled, func(context.Context, task.TaskStatus, map[CDCTaskKey]struct{}, SqlExecutor) (int, error) {
+			return 0, nil
+		})
+		require.Error(t, err)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+
+	t.Run("collector rollback join error", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		mock.ExpectBegin()
+		mock.ExpectRollback().WillReturnError(moerr.NewInternalErrorNoCtx("rollback failed"))
+		_, err := storage.UpdateCDCTask(ctx, task.TaskStatus_Canceled, func(context.Context, task.TaskStatus, map[CDCTaskKey]struct{}, SqlExecutor) (int, error) {
+			return 0, moerr.NewInternalErrorNoCtx("collector failed")
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "collector failed")
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+
+	t.Run("empty task key map", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		mock.ExpectBegin()
+		mock.ExpectCommit()
+		n, err := storage.UpdateCDCTask(ctx, task.TaskStatus_Canceled, func(context.Context, task.TaskStatus, map[CDCTaskKey]struct{}, SqlExecutor) (int, error) {
+			return 1, nil
+		})
+		require.NoError(t, err)
+		require.Equal(t, 0, n)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+
+	t.Run("query daemon task error", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		mock.ExpectBegin()
+		mock.ExpectQuery(selectDaemonTask + " order by task_id").WillReturnError(moerr.NewInternalErrorNoCtx("query failed"))
+		mock.ExpectRollback()
+		_, err := storage.UpdateCDCTask(ctx, task.TaskStatus_Canceled, func(_ context.Context, _ task.TaskStatus, keyMap map[CDCTaskKey]struct{}, _ SqlExecutor) (int, error) {
+			keyMap[CDCTaskKey{
+				AccountId: uint64(catalog.System_Account),
+				TaskId:    base.Metadata.ID,
+			}] = struct{}{}
+			return 1, nil
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "query failed")
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+
+	t.Run("non create-cdc details", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		notCdc := newDaemonTaskForTest(1, task.TaskStatus_Running, "r1")
+		notCdc.Metadata.ID = "not-cdc"
+
+		mock.ExpectBegin()
+		mock.ExpectQuery(selectDaemonTask + " order by task_id").WillReturnRows(newDaemonTaskRows(t, notCdc))
+		mock.ExpectRollback()
+		_, err := storage.UpdateCDCTask(ctx, task.TaskStatus_Canceled, func(_ context.Context, _ task.TaskStatus, keyMap map[CDCTaskKey]struct{}, _ SqlExecutor) (int, error) {
+			keyMap[CDCTaskKey{
+				AccountId: uint64(catalog.System_Account),
+				TaskId:    base.Metadata.ID,
+			}] = struct{}{}
+			return 1, nil
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "Details not a CreateCdc task type")
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+
+	t.Run("status mismatch", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		d := base
+		d.ID = 1
+		d.TaskStatus = task.TaskStatus_Paused
+
+		mock.ExpectBegin()
+		mock.ExpectQuery(selectDaemonTask + " order by task_id").WillReturnRows(newDaemonTaskRows(t, d))
+		mock.ExpectRollback()
+		_, err := storage.UpdateCDCTask(ctx, task.TaskStatus_PauseRequested, func(_ context.Context, _ task.TaskStatus, keyMap map[CDCTaskKey]struct{}, _ SqlExecutor) (int, error) {
+			keyMap[CDCTaskKey{
+				AccountId: uint64(catalog.System_Account),
+				TaskId:    d.Metadata.ID,
+			}] = struct{}{}
+			return 1, nil
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "status can not be change")
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+
+	t.Run("success transition", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		d := base
+		d.ID = 1
+		d.TaskStatus = task.TaskStatus_Running
+
+		mock.ExpectBegin()
+		mock.ExpectQuery(selectDaemonTask + " order by task_id").WillReturnRows(newDaemonTaskRows(t, d))
+		mock.ExpectExec(updateDaemonTask).WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit()
+		n, err := storage.UpdateCDCTask(ctx, task.TaskStatus_PauseRequested, func(_ context.Context, _ task.TaskStatus, keyMap map[CDCTaskKey]struct{}, _ SqlExecutor) (int, error) {
+			keyMap[CDCTaskKey{
+				AccountId: uint64(catalog.System_Account),
+				TaskId:    d.Metadata.ID,
+			}] = struct{}{}
+			return 1, nil
+		})
+		require.NoError(t, err)
+		require.Equal(t, 2, n)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
 }

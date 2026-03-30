@@ -374,6 +374,9 @@ message DedupJoin {
   repeated int32 update_col_idx_list = 14;
   repeated plan.Expr update_col_expr_list = 15;
   int32 del_col_idx = 16;
+  uint64 target_table_id = 17;
+  timestamp.Timestamp initial_snapshot_ts = 18 [(gogoproto.nullable) = false];
+  plan.ObjectRef target_table_ref = 19;
 }
 
 message RightDedupJoin {

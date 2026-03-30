@@ -32,6 +32,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -124,6 +125,11 @@ func NewCompile(
 	c.uid = uid
 	c.sql = sql
 	c.proc.SetMessageBoard(c.MessageBoard)
+	// StmtSnapshotTS is statement-scoped. Process objects are reused across
+	// statements, so a fresh compile must clear any snapshot that was only meant
+	// for a previous statement retry. prepareRetry restores the original value
+	// explicitly for same-statement retries.
+	c.proc.SetStmtSnapshotTS(timestamp.Timestamp{})
 	c.stmt = stmt
 	c.addr = addr
 	c.isInternal = isInternal
@@ -177,6 +183,9 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	// clean up the process for a new query.
 	proc.ResetQueryContext()
 	proc.ResetCloneTxnOperator()
+	// Statement snapshot timestamp is statement-scoped; clear it for every new execution
+	// when reusing a prepared Compile to avoid carrying snapshot visibility across EXECUTEs.
+	proc.SetStmtSnapshotTS(timestamp.Timestamp{})
 	c.proc = proc
 
 	c.fill = fill
@@ -1635,7 +1644,11 @@ func (c *Compile) compileExternScanParallelWrite(n *plan.Node, param *tree.Exter
 	scope := c.constructScopeForExternal("", false)
 	currentFirstFlag := c.anal.isFirst
 	extern := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
-	extern.Es.ParallelLoad = true
+	parallelLoad := true
+	if len(fileList) > 0 && external.GetCompressType(param, fileList[0]) != tree.NOCOMPRESS {
+		parallelLoad = false
+	}
+	extern.Es.ParallelLoad = parallelLoad
 	extern.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	scope.setRootOperator(extern)
 	c.anal.isFirst = false
@@ -2505,7 +2518,7 @@ func constructShuffleJoinOP(c *Compile, shuffleJoins []*Scope, node, left, right
 			}
 		} else {
 			for i := range shuffleJoins {
-				op := constructDedupJoin(node, leftTyps, rightTyps, c.proc)
+				op := constructDedupJoin(node, left, c.anal.qry, leftTyps, rightTyps, c.proc)
 				op.ShuffleIdx = int32(i)
 				if shuffleV2 {
 					op.ShuffleIdx = -1
@@ -2735,7 +2748,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
 			currentFirstFlag := c.anal.isFirst
 			for i := range rs {
-				op := constructDedupJoin(node, leftTyps, rightTyps, c.proc)
+				op := constructDedupJoin(node, left, c.anal.qry, leftTyps, rightTyps, c.proc)
 				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				rs[i].setRootOperator(op)
 			}
@@ -4766,16 +4779,41 @@ func (c *Compile) runSqlWithResult(sql string, accountId int32) (executor.Result
 	return c.runSqlWithResultAndOptions(sql, accountId, executor.StatementOption{})
 }
 
+func (c *Compile) getInternalSQLExecutor() executor.SQLExecutor {
+	// Prefer an executor built on current compile engine so follow-up SQL
+	// (for example CTAS INSERT ... SELECT on temporary tables) can see
+	// session-bound temporary engine state in the same transaction.
+	if c != nil &&
+		c.e != nil &&
+		c.proc != nil &&
+		c.proc.Base != nil &&
+		c.proc.Base.TxnClient != nil &&
+		c.proc.GetFileService() != nil &&
+		c.proc.GetQueryClient() != nil {
+		return NewSQLExecutor(
+			c.addr,
+			c.e,
+			c.proc.Mp(),
+			c.proc.Base.TxnClient,
+			c.proc.GetFileService(),
+			c.proc.GetQueryClient(),
+			c.proc.GetHaKeeper(),
+			c.proc.Base.UdfService,
+		)
+	}
+
+	v, ok := moruntime.ServiceRuntime(c.proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		panic("missing lock service")
+	}
+	return v.(executor.SQLExecutor)
+}
+
 func (c *Compile) runSqlWithResultAndOptions(
 	sql string,
 	accountId int32,
 	options executor.StatementOption,
 ) (executor.Result, error) {
-	v, ok := moruntime.ServiceRuntime(c.proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
-	if !ok {
-		panic("missing lock service")
-	}
-
 	lower := c.getLower()
 
 	if qry, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
@@ -4784,7 +4822,7 @@ func (c *Compile) runSqlWithResultAndOptions(
 		}
 	}
 
-	exec := v.(executor.SQLExecutor)
+	exec := c.getInternalSQLExecutor()
 	opts := executor.Options{}.
 		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
 		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
@@ -4797,6 +4835,14 @@ func (c *Compile) runSqlWithResultAndOptions(
 		WithResolveVariableFunc(c.proc.GetResolveVariableFunc())
 
 	ctx := c.proc.Ctx
+	// Ensure ParameterUnit is available in ctx for downstream helpers which call config.GetParameterUnit(ctx)
+	if ctx.Value(config.ParameterUnitKey) == nil {
+		if v, ok := moruntime.ServiceRuntime(c.proc.GetService()).GetGlobalVariables("parameter-unit"); ok {
+			if pu, ok2 := v.(*config.ParameterUnit); ok2 && pu != nil {
+				ctx = context.WithValue(ctx, config.ParameterUnitKey, pu)
+			}
+		}
+	}
 	if accountId >= 0 {
 		ctx = defines.AttachAccountId(c.proc.Ctx, uint32(accountId))
 	}

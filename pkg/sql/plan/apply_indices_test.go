@@ -15,8 +15,75 @@
 package plan
 
 import (
+	"reflect"
 	"testing"
+
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/stretchr/testify/assert"
 )
+
+func TestSuspendScanProtection_RestoresExactCount(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	const scanID int32 = 42
+
+	builder.protectedScans[scanID] = 3
+	restore := builder.suspendScanProtection(scanID)
+
+	assert.False(t, builder.isScanProtected(scanID))
+
+	restore()
+
+	assert.Equal(t, 3, builder.protectedScans[scanID])
+}
+
+func TestSuspendScanProtection_NoExistingProtection(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	const scanID int32 = 24
+
+	restore := builder.suspendScanProtection(scanID)
+	assert.False(t, builder.isScanProtected(scanID))
+
+	restore()
+
+	_, exists := builder.protectedScans[scanID]
+	assert.False(t, exists)
+}
+
+func TestSuspendScanProtection_DoesNotDeleteNewProtection(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	const scanID int32 = 88
+
+	restore := builder.suspendScanProtection(scanID)
+	builder.protectedScans[scanID] = 1
+
+	restore()
+
+	assert.Equal(t, 1, builder.protectedScans[scanID])
+}
+
+func TestWithSuspendedScanProtection_RestoresAfterPanic(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	const scanID int32 = 64
+
+	builder.protectedScans[scanID] = 2
+
+	recovered := false
+	func() {
+		defer func() {
+			if recover() != nil {
+				recovered = true
+			}
+		}()
+
+		builder.withSuspendedScanProtection(scanID, func() {
+			assert.False(t, builder.isScanProtected(scanID))
+			panic("boom")
+		})
+	}()
+
+	assert.True(t, recovered)
+	assert.Equal(t, 2, builder.protectedScans[scanID])
+}
 
 func TestCalculatePostFilterOverFetchFactor(t *testing.T) {
 	tests := []struct {
@@ -256,5 +323,58 @@ func TestCalculatePostFilterOverFetchFactor_MonotonicDecrease(t *testing.T) {
 		}
 
 		prevFactor = currentFactor
+	}
+}
+
+func TestTryMatchMoreLeadingFiltersRequiresContiguousPrefix(t *testing.T) {
+	idxDef := &IndexDef{
+		Parts: []string{"uid", "typ", "flag", "__mo_alias_id"},
+	}
+	node := &planpb.Node{
+		TableDef: &planpb.TableDef{
+			Name2ColIndex: map[string]int32{
+				"uid":  1,
+				"typ":  2,
+				"flag": 3,
+				"id":   0,
+			},
+		},
+		// Filters only on uid and flag, missing typ.
+		FilterList: []*planpb.Expr{
+			makeEqFilterExpr(1),
+			makeEqFilterExpr(3),
+		},
+	}
+
+	leadingPos := tryMatchMoreLeadingFilters(idxDef, node, 0)
+	if !reflect.DeepEqual([]int32{0}, leadingPos) {
+		t.Fatalf("unexpected leading positions, got=%v, want=%v", leadingPos, []int32{0})
+	}
+}
+
+func makeEqFilterExpr(colPos int32) *planpb.Expr {
+	return &planpb.Expr{
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "="},
+				Args: []*planpb.Expr{
+					{
+						Expr: &planpb.Expr_Col{
+							Col: &planpb.ColRef{
+								RelPos: 0,
+								ColPos: colPos,
+							},
+						},
+					},
+					{
+						Expr: &planpb.Expr_Lit{
+							Lit: &planpb.Literal{
+								Value: &planpb.Literal_I64Val{I64Val: 1},
+							},
+						},
+					},
+				},
+			},
+		},
 	}
 }

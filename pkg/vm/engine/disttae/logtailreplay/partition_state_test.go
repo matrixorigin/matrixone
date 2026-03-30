@@ -129,6 +129,93 @@ func TestHasTombstoneChanged(t *testing.T) {
 
 }
 
+func TestGetChangedTombstoneObjsBetween(t *testing.T) {
+	state := NewPartitionState("", true, 42, false)
+
+	// empty state
+	objs := state.GetChangedTombstoneObjsBetween(types.BuildTS(1, 0))
+	require.Empty(t, objs)
+
+	roid := func() objectio.ObjectStats {
+		nobjid := objectio.NewObjectid()
+		return *objectio.NewObjectStatsWithObjectID(&nobjid, false, true, false)
+	}
+
+	// obj1: created=5, deleted=8
+	// obj2: created=1, deleted=7
+	// obj3: created=6, deleted=12
+	// obj4: created=15, alive (no delete)
+	state.tombstoneObjectDTSIndex.Set(objectio.ObjectEntry{ObjectStats: roid(), CreateTime: types.BuildTS(5, 0), DeleteTime: types.BuildTS(8, 0)})
+	state.tombstoneObjectDTSIndex.Set(objectio.ObjectEntry{ObjectStats: roid(), CreateTime: types.BuildTS(1, 0), DeleteTime: types.BuildTS(7, 0)})
+	state.tombstoneObjectDTSIndex.Set(objectio.ObjectEntry{ObjectStats: roid(), CreateTime: types.BuildTS(6, 0), DeleteTime: types.BuildTS(12, 0)})
+	state.tombstoneObjectDTSIndex.Set(objectio.ObjectEntry{ObjectStats: roid(), CreateTime: types.BuildTS(15, 0)})
+
+	// from=13: should get obj4 (created=15>=13)
+	objs = state.GetChangedTombstoneObjsBetween(types.BuildTS(13, 0))
+	require.Len(t, objs, 1)
+	require.True(t, objs[0].CreateTime.Equal(&[]types.TS{types.BuildTS(15, 0)}[0]))
+
+	// from=6: should get obj1(deleted=8>=6), obj2(deleted=7>=6), obj3(created=6>=6, deleted=12>=6), obj4(created=15>=6)
+	objs = state.GetChangedTombstoneObjsBetween(types.BuildTS(6, 0))
+	require.Len(t, objs, 4)
+
+	// from=1: all objects match (obj2 created=1>=1, others also match)
+	objs = state.GetChangedTombstoneObjsBetween(types.BuildTS(1, 0))
+	require.Len(t, objs, 4)
+
+	// from=20: only nothing matches
+	objs = state.GetChangedTombstoneObjsBetween(types.BuildTS(20, 0))
+	require.Empty(t, objs)
+
+	// from=9: obj3(deleted=12>=9), obj4(created=15>=9) = 2
+	objs = state.GetChangedTombstoneObjsBetween(types.BuildTS(9, 0))
+	require.Len(t, objs, 2)
+}
+
+func TestGetChangedTombstoneObjsBetween_RowCount(t *testing.T) {
+	state := NewPartitionState("", true, 42, false)
+
+	roidWithRows := func(rows uint32) objectio.ObjectStats {
+		nobjid := objectio.NewObjectid()
+		stats := objectio.NewObjectStatsWithObjectID(&nobjid, false, true, false)
+		require.NoError(t, objectio.SetObjectStatsRowCnt(stats, rows))
+		return *stats
+	}
+
+	// Add tombstone objects with known row counts
+	state.tombstoneObjectDTSIndex.Set(objectio.ObjectEntry{
+		ObjectStats: roidWithRows(30000),
+		CreateTime:  types.BuildTS(10, 0),
+	})
+	state.tombstoneObjectDTSIndex.Set(objectio.ObjectEntry{
+		ObjectStats: roidWithRows(10000),
+		CreateTime:  types.BuildTS(12, 0),
+	})
+
+	// Total rows = 40000 < 50000 threshold
+	objs := state.GetChangedTombstoneObjsBetween(types.BuildTS(5, 0))
+	require.Len(t, objs, 2)
+	var totalRows uint32
+	for _, obj := range objs {
+		totalRows += obj.Rows()
+	}
+	require.Equal(t, uint32(40000), totalRows)
+
+	// Add one more to exceed threshold
+	state.tombstoneObjectDTSIndex.Set(objectio.ObjectEntry{
+		ObjectStats: roidWithRows(20000),
+		CreateTime:  types.BuildTS(14, 0),
+	})
+	objs = state.GetChangedTombstoneObjsBetween(types.BuildTS(5, 0))
+	require.Len(t, objs, 3)
+	totalRows = 0
+	for _, obj := range objs {
+		totalRows += obj.Rows()
+	}
+	require.Equal(t, uint32(60000), totalRows)
+	// Caller (tombstonePKExistsInRange) would return true conservatively when totalRows > 50000
+}
+
 func TestScanRows(t *testing.T) {
 	packer := types.NewPacker()
 	state := NewPartitionState("", true, 42, false)

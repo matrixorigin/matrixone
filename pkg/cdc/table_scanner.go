@@ -148,6 +148,10 @@ func (s *CDCStateManager) UpdateActiveRunner(tblInfo *DbTableInfo, fromTs, toTs 
 }
 
 func (s *CDCStateManager) PrintActiveRunners(slowThreshold time.Duration) {
+	if s == nil {
+		return
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

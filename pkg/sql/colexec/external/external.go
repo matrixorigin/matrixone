@@ -383,6 +383,13 @@ func readFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error
 }
 
 func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, visibleCols []*plan.ColDef) ([]int64, error) {
+	if GetCompressType(param, param.Filepath) != tree.NOCOMPRESS {
+		ctx := param.Ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		return nil, moerr.NewInvalidInputf(ctx, "parallel read is not supported for compressed file %s", param.Filepath)
+	}
 	arr := make([]int64, 0)
 
 	fs, readPath, err := plan2.GetForETLWithType(param, param.Filepath)
@@ -1526,19 +1533,25 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			return err
 		}
 	case types.T_array_float32:
-		arrBytes, err := types.StringToArrayToBytes[float32](field.Val)
+		arr, err := types.StringToArray[float32](field.Val)
 		if err != nil {
 			return err
 		}
-		if err = vector.AppendBytes(vec, arrBytes, false, mp); err != nil {
+		if int(vec.GetType().Width) != types.MaxArrayDimension && int(vec.GetType().Width) != len(arr) {
+			return moerr.NewArrayDefMismatchNoCtx(int(vec.GetType().Width), len(arr))
+		}
+		if err = vector.AppendBytes(vec, types.ArrayToBytes[float32](arr), false, mp); err != nil {
 			return err
 		}
 	case types.T_array_float64:
-		arrBytes, err := types.StringToArrayToBytes[float64](field.Val)
+		arr, err := types.StringToArray[float64](field.Val)
 		if err != nil {
 			return err
 		}
-		if err = vector.AppendBytes(vec, arrBytes, false, mp); err != nil {
+		if int(vec.GetType().Width) != types.MaxArrayDimension && int(vec.GetType().Width) != len(arr) {
+			return moerr.NewArrayDefMismatchNoCtx(int(vec.GetType().Width), len(arr))
+		}
+		if err = vector.AppendBytes(vec, types.ArrayToBytes[float64](arr), false, mp); err != nil {
 			return err
 		}
 	case types.T_json:

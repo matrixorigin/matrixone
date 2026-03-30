@@ -21,21 +21,153 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
+
+func TestLinearSearchOffsetByValFactory_Varchar(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	// Build keys vector with varchar values
+	keys := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(keys, []byte("alice"), false, mp))
+	require.NoError(t, vector.AppendBytes(keys, []byte("bob"), false, mp))
+
+	searchFn := LinearSearchOffsetByValFactory(keys)
+
+	// Target vector that does NOT contain the keys
+	target := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(target, []byte("charlie"), false, mp))
+	require.NoError(t, vector.AppendBytes(target, []byte("dave"), false, mp))
+
+	hits := searchFn(target)
+	require.Empty(t, hits, "should not match when target has different values")
+
+	// Target vector that contains one of the keys
+	target2 := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(target2, []byte("charlie"), false, mp))
+	require.NoError(t, vector.AppendBytes(target2, []byte("bob"), false, mp))
+	require.NoError(t, vector.AppendBytes(target2, []byte("dave"), false, mp))
+
+	hits2 := searchFn(target2)
+	require.Equal(t, []int64{1}, hits2, "should match 'bob' at index 1")
+
+	keys.Free(mp)
+	target.Free(mp)
+	target2.Free(mp)
+}
+
+func TestLinearSearchOffsetByValFactory_Int64(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	keys := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(keys, int64(10), false, mp))
+	require.NoError(t, vector.AppendFixed(keys, int64(20), false, mp))
+
+	searchFn := LinearSearchOffsetByValFactory(keys)
+
+	target := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(target, int64(5), false, mp))
+	require.NoError(t, vector.AppendFixed(target, int64(15), false, mp))
+
+	require.Empty(t, searchFn(target))
+
+	target2 := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(target2, int64(20), false, mp))
+	require.NoError(t, vector.AppendFixed(target2, int64(30), false, mp))
+	require.NoError(t, vector.AppendFixed(target2, int64(10), false, mp))
+
+	require.Equal(t, []int64{0, 2}, searchFn(target2))
+
+	keys.Free(mp)
+	target.Free(mp)
+	target2.Free(mp)
+}
+
+func TestTombstonePKExistsInRange(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+	defer cancel()
+
+	proc := testutil.NewProc(t)
+	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
+	require.NoError(t, err)
+
+	pState := logtailreplay.NewPartitionState("", true, 0, false)
+	int32Type := types.T_int32.ToType()
+
+	// Helper: write a CN tombstone object with given PK values, return its ObjectStats.
+	writeTombstone := func(pkValues []int32) objectio.ObjectStats {
+		writer := colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, int32Type, -1)
+		bat := readutil.NewCNTombstoneBatch(&int32Type, objectio.HiddenColumnSelection_None)
+		for _, pk := range pkValues {
+			vector.AppendFixed[types.Rowid](bat.Vecs[0], types.RandomRowid(), false, proc.GetMPool())
+			vector.AppendFixed[int32](bat.Vecs[1], pk, false, proc.GetMPool())
+		}
+		bat.SetRowCount(bat.Vecs[0].Length())
+		require.NoError(t, writer.Write(ctx, bat))
+		ss, err := writer.Sync(ctx)
+		require.NoError(t, err)
+		require.Equal(t, 1, len(ss))
+		return ss[0]
+	}
+
+	// Write tombstone with PKs [100, 200, 300]
+	stats1 := writeTombstone([]int32{100, 200, 300})
+	// Write tombstone with PKs [400, 500]
+	stats2 := writeTombstone([]int32{400, 500})
+
+	// Insert into partition state with CreateTime after 'from'
+	from := types.BuildTS(10, 0)
+	require.NoError(t, pState.HandleObjectEntry(ctx, fs, objectio.ObjectEntry{
+		ObjectStats: stats1,
+		CreateTime:  types.BuildTS(15, 0),
+	}, true))
+	require.NoError(t, pState.HandleObjectEntry(ctx, fs, objectio.ObjectEntry{
+		ObjectStats: stats2,
+		CreateTime:  types.BuildTS(20, 0),
+	}, true))
+	// Case 1: search for PK=200, should find it
+	keys1 := vector.NewVec(int32Type)
+	require.NoError(t, vector.AppendFixed[int32](keys1, 200, false, proc.GetMPool()))
+	changed, err := tombstonePKExistsInRange(ctx, pState, from, keys1, int32Type, fs)
+	require.NoError(t, err)
+	require.True(t, changed)
+
+	// Case 2: search for PK=999, should not find it
+	keys2 := vector.NewVec(int32Type)
+	require.NoError(t, vector.AppendFixed[int32](keys2, 999, false, proc.GetMPool()))
+	changed, err = tombstonePKExistsInRange(ctx, pState, from, keys2, int32Type, fs)
+	require.NoError(t, err)
+	require.False(t, changed)
+
+	// Case 3: search for PK=500, should find it in second tombstone
+	keys3 := vector.NewVec(int32Type)
+	require.NoError(t, vector.AppendFixed[int32](keys3, 500, false, proc.GetMPool()))
+	changed, err = tombstonePKExistsInRange(ctx, pState, from, keys3, int32Type, fs)
+	require.NoError(t, err)
+	require.True(t, changed)
+
+	// Case 4: no tombstone objects changed after from=25
+	changed, err = tombstonePKExistsInRange(ctx, pState, types.BuildTS(25, 0), keys1, int32Type, fs)
+	require.NoError(t, err)
+	require.False(t, changed)
+}
 
 func TestBlockMetaMarshal(t *testing.T) {
 	location := []byte("test")

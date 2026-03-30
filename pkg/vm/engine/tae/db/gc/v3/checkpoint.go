@@ -137,6 +137,23 @@ type checkpointCleaner struct {
 	}
 }
 
+func (c *checkpointCleaner) deleteFilesWithPolicy(
+	ctx context.Context,
+	taskName string,
+	files []string,
+) error {
+	if len(files) == 0 {
+		return nil
+	}
+	if taskName == "" {
+		taskName = "checkpoint-cleaner-delete"
+	}
+	if c.deleter != nil {
+		return c.deleter.DeleteMany(ctx, taskName, files)
+	}
+	return c.fs.Delete(ctx, files...)
+}
+
 func WithCanGCCacheSize(
 	size int,
 ) CheckpointCleanerOption {
@@ -738,7 +755,11 @@ func (c *checkpointCleaner) deleteStaleCKPMetaFileLocked() (err error) {
 	}
 
 	// TODO: if file is not found, it should be ignored
-	if err = c.fs.Delete(c.ctx, filesToDelete...); err != nil {
+	if err = c.deleteFilesWithPolicy(
+		c.ctx,
+		c.TaskNameLocked()+"-delete-stale-ckp-meta",
+		filesToDelete,
+	); err != nil {
 		logutil.Error(
 			"GC-DELETE-CKP-FILES-ERROR",
 			zap.Error(err),
@@ -1020,7 +1041,11 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		}
 	}
 	if c.GCCheckpointEnabled() {
-		if err = c.fs.Delete(ctx, deleteFiles...); err != nil {
+		if err = c.deleteFilesWithPolicy(
+			ctx,
+			c.TaskNameLocked()+"-merge-checkpoint-delete",
+			deleteFiles,
+		); err != nil {
 			extraErrMsg = "DelFiles failed"
 			return err
 		}

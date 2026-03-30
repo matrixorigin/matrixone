@@ -14,12 +14,15 @@
 
 package kmeans
 
+import "context"
+
 const DefaultRandSeed = 1
 
 type Clusterer interface {
-	InitCentroids() error
-	Cluster() (any, error)
+	InitCentroids(context.Context) error
+	Cluster(context.Context) (any, error)
 	SSE() (float64, error)
+	Close() error
 }
 
 type InitType uint16

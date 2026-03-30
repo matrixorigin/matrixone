@@ -124,6 +124,9 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 			mixin.columns.seqnums[i] = objectio.SEQNUM_ROWID
 			mixin.columns.colTypes[i] = objectio.RowidType
 			mixin.columns.phyAddrPos = i
+		} else if strings.EqualFold(column, objectio.DefaultCommitTS_Attr) {
+			mixin.columns.seqnums[i] = objectio.SEQNUM_COMMITTS
+			mixin.columns.colTypes[i] = types.T_TS.ToType()
 		} else {
 			if plan2.GetSortOrderByName(mixin.tableDef, column) == 0 {
 				mixin.columns.indexOfFirstSortedColumn = i
@@ -570,6 +573,35 @@ func (r *reader) Read(
 
 	r.tryUpdateColumns(cols)
 
+	// source.Next() expects outBatch.Vecs to be aligned with cols/seqnums.
+	// For vector TopN pushdown we may have an extra distVec appended in the previous
+	// Read(), so detach it before source.Next() to avoid seqNums out-of-range panic in
+	// InMem paths. We keep one float64 distVec for reuse to avoid repeated allocations.
+	var detachedDistVec *vector.Vector
+	if r.orderByLimit != nil && len(outBatch.Vecs) > len(cols) {
+		if candidate := outBatch.Vecs[len(cols)]; candidate != nil &&
+			candidate.GetType().Oid == types.T_float64 {
+			candidate.CleanOnlyData()
+			detachedDistVec = candidate
+		}
+		for i := len(cols); i < len(outBatch.Vecs); i++ {
+			vec := outBatch.Vecs[i]
+			if vec != nil && vec != detachedDistVec {
+				vec.Free(mp)
+			}
+			// Clear references in the backing array so detached vectors can be reused/freed
+			// explicitly instead of being retained implicitly by slice capacity.
+			outBatch.Vecs[i] = nil
+		}
+		outBatch.Vecs = outBatch.Vecs[:len(cols)]
+	}
+	// If Read() exits early (error/end) before re-attaching the detached distVec, release it.
+	defer func() {
+		if detachedDistVec != nil {
+			detachedDistVec.Free(mp)
+		}
+	}()
+
 	blkInfo, state, err := r.source.Next(
 		ctx,
 		cols,
@@ -595,9 +627,20 @@ func (r *reader) Read(
 				return false, err
 			}
 
-			outBatch.Shuffle(sels, mp)
+			if len(sels) == 0 {
+				// All rows were NULL vectors — mark batch as empty so the
+				// caller skips it instead of seeing a row-count / dist-vec mismatch.
+				outBatch.SetRowCount(0)
+			} else {
+				outBatch.Shuffle(sels, mp)
+			}
 
-			distVec := vector.NewVec(types.T_float64.ToType())
+			// Reuse the detached distVec when possible to avoid per-batch allocation.
+			distVec := detachedDistVec
+			if distVec == nil {
+				distVec = vector.NewVec(types.T_float64.ToType())
+			}
+			detachedDistVec = nil
 			vector.AppendFixedList(distVec, dists, nil, mp)
 			outBatch.Vecs = append(outBatch.Vecs, distVec)
 		}
@@ -623,6 +666,11 @@ func (r *reader) Read(
 
 	if len(r.cacheVectors) == 0 {
 		r.cacheVectors = containers.NewVectors(len(r.columns.seqnums) + 1)
+	}
+	if r.orderByLimit != nil && detachedDistVec != nil {
+		// Re-attach the detached distVec so BlockDataRead can take its fast reuse branch.
+		outBatch.Vecs = append(outBatch.Vecs, detachedDistVec)
+		detachedDistVec = nil
 	}
 
 	err = blockio.BlockDataRead(

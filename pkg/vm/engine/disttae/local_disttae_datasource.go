@@ -825,7 +825,17 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 				if i == physicalColumnPos {
 					continue
 				}
-				idx := 2 /*rowid and commits*/ + seqNums[i]
+
+				var idx uint16
+				switch seqNums[i] {
+				case objectio.SEQNUM_COMMITTS:
+					// in-memory committed row batch layout:
+					// [0]=rowid, [1]=commitTS, [2+seq]=user columns
+					idx = 1
+				default:
+					idx = 2 /*rowid and commits*/ + seqNums[i]
+				}
+
 				if int(idx) >= len(entry.Batch.Vecs) /*add column*/ ||
 					entry.Batch.Attrs[idx] == "" /*drop column*/ {
 					err = vector.AppendAny(
@@ -835,7 +845,7 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 						mp)
 				} else {
 					err = outBatch.Vecs[i].UnionOne(
-						entry.Batch.Vecs[int(2+seqNums[i])],
+						entry.Batch.Vecs[int(idx)],
 						entry.Offset,
 						mp,
 					)

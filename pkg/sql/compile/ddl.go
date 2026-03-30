@@ -25,6 +25,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -53,6 +54,31 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/exp/constraints"
 )
+
+func getTruncateIndexTableNames(tableDef *plan.TableDef) []string {
+	if tableDef == nil || len(tableDef.Indexes) == 0 {
+		return nil
+	}
+
+	indexTableNames := make([]string, 0, len(tableDef.Indexes))
+	for _, indexdef := range tableDef.Indexes {
+		switch {
+		case indexdef.TableExist && catalog.IsRegularIndexAlgo(indexdef.IndexAlgo):
+			indexTableNames = append(indexTableNames, indexdef.IndexTableName)
+		case indexdef.TableExist && catalog.IsIvfIndexAlgo(indexdef.IndexAlgo):
+			if indexdef.IndexAlgoTableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
+				indexTableNames = append(indexTableNames, indexdef.IndexTableName)
+			}
+		case indexdef.TableExist && catalog.IsMasterIndexAlgo(indexdef.IndexAlgo):
+			indexTableNames = append(indexTableNames, indexdef.IndexTableName)
+		case indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo):
+			indexTableNames = append(indexTableNames, indexdef.IndexTableName)
+		case indexdef.TableExist && catalog.IsHnswIndexAlgo(indexdef.IndexAlgo):
+			indexTableNames = append(indexTableNames, indexdef.IndexTableName)
+		}
+	}
+	return indexTableNames
+}
 
 func (s *Scope) CreateDatabase(c *Compile) error {
 	if s.ScopeAnalyzer == nil {
@@ -114,6 +140,33 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	if err = lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
+
+	// After acquiring the exclusive lock on mo_database, temporarily advance
+	// the transaction's snapshot so that Relations() can see all tables
+	// committed by other CNs (e.g. concurrent CLONE) before the lock was
+	// granted.
+	//
+	// We MUST restore the original SnapshotTS before returning, because
+	// UpdateSnapshot changes txn.SnapshotTS which would affect the
+	// tombstone transfer range in subsequent IncrStatementID calls.
+	// In restore-cluster scenarios (multiple DDLs in one transaction),
+	// a permanently advanced SnapshotTS causes duplicate-key errors.
+	//
+	// Within DropDatabase, all internal SQL uses WithDisableIncrStatement(),
+	// so no tombstone transfer is triggered while SnapshotTS is advanced.
+	txnOp := c.proc.GetTxnOperator()
+	origSnapshotTS := txnOp.SnapshotTS()
+	if txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
+		now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
+		if err = txnOp.UpdateSnapshot(c.proc.Ctx, now); err != nil {
+			return err
+		}
+	}
+	defer func() {
+		// Restore SnapshotTS so that tombstone transfer in subsequent
+		// statements is not affected by the temporary advancement.
+		txnOp.TxnRef().SnapshotTS = origSnapshotTS
+	}()
 
 	// handle sub
 	if db.IsSubscription(c.proc.Ctx) {
@@ -1503,33 +1556,60 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 
 	ps := c.proc.GetPartitionService()
-	if !ps.Enabled() || !features.IsPartitioned(qry.TableDef.FeatureFlag) {
-		return nil
+	if ps.Enabled() && features.IsPartitioned(qry.TableDef.FeatureFlag) {
+		// cannot has err.
+		stmt, _ := parsers.ParseOne(
+			c.proc.Ctx,
+			dialect.MYSQL,
+			qry.RawSQL,
+			c.getLower(),
+		)
+
+		err = ps.Create(
+			c.proc.Ctx,
+			qry.TableDef.TblId,
+			stmt.(*tree.CreateTable),
+			c.proc.GetTxnOperator(),
+		)
+		if err != nil {
+			return err
+		}
+
+		if err = shardservice.GetService(c.proc.GetService()).Create(
+			c.proc.Ctx,
+			qry.GetTableDef().TblId,
+			c.proc.GetTxnOperator(),
+		); err != nil {
+			return err
+		}
 	}
 
-	// cannot has err.
-	stmt, _ := parsers.ParseOne(
-		c.proc.Ctx,
-		dialect.MYSQL,
-		qry.RawSQL,
-		c.getLower(),
-	)
-
-	err = ps.Create(
-		c.proc.Ctx,
-		qry.TableDef.TblId,
-		stmt.(*tree.CreateTable),
-		c.proc.GetTxnOperator(),
-	)
-	if err != nil {
-		return err
+	if createAsSelectSql := qry.GetCreateAsSelectSql(); createAsSelectSql != "" {
+		// Mark current txn as DDL before compiling CTAS follow-up INSERT ... SELECT,
+		// so internal SQL stays on one CN and can see uncommitted table metadata.
+		c.setHaveDDL(true)
+		res, err := func() (executor.Result, error) {
+			oldCtx := c.proc.Ctx
+			// Force privilege checking for CTAS follow-up INSERT ... SELECT.
+			// Internal executor skips auth by default unless this flag is present.
+			c.proc.Ctx = attachInternalExecutorPrivilegeCheck(c.proc.Ctx)
+			defer func() {
+				c.proc.Ctx = oldCtx
+			}()
+			return c.runSqlWithResultAndOptions(
+				createAsSelectSql,
+				NoAccountId,
+				executor.StatementOption{}.WithDisableLog(),
+			)
+		}()
+		if err != nil {
+			return err
+		}
+		c.addAffectedRows(res.AffectedRows)
+		res.Close()
 	}
 
-	return shardservice.GetService(c.proc.GetService()).Create(
-		c.proc.Ctx,
-		qry.GetTableDef().TblId,
-		c.proc.GetTxnOperator(),
-	)
+	return nil
 }
 
 func (c *Compile) runSqlWithSystemTenant(sql string) error {
@@ -1758,7 +1838,7 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 		}
 	}
 
-	return maybeCreateAutoIncrement(
+	err = maybeCreateAutoIncrement(
 		c.proc.Ctx,
 		c.proc.GetService(),
 		tmpDBSource,
@@ -1767,6 +1847,36 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 		func() string {
 			return engine.GetTempTableName(dbName, tblName)
 		})
+	if err != nil {
+		return err
+	}
+
+	if createAsSelectSql := qry.GetCreateAsSelectSql(); createAsSelectSql != "" {
+		// Mark current txn as DDL before compiling CTAS follow-up INSERT ... SELECT,
+		// so internal SQL stays on one CN and can see uncommitted table metadata.
+		c.setHaveDDL(true)
+		res, err := func() (executor.Result, error) {
+			oldCtx := c.proc.Ctx
+			// Force privilege checking for CTAS follow-up INSERT ... SELECT.
+			// Internal executor skips auth by default unless this flag is present.
+			c.proc.Ctx = attachInternalExecutorPrivilegeCheck(c.proc.Ctx)
+			defer func() {
+				c.proc.Ctx = oldCtx
+			}()
+			return c.runSqlWithResultAndOptions(
+				createAsSelectSql,
+				NoAccountId,
+				executor.StatementOption{}.WithDisableLog(),
+			)
+		}()
+		if err != nil {
+			return err
+		}
+		c.addAffectedRows(res.AffectedRows)
+		res.Close()
+	}
+
+	return nil
 }
 
 func (s *Scope) CreateIndex(c *Compile) error {
@@ -2339,7 +2449,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	tqry := s.Plan.GetDdl().GetTruncateTable()
 	dbName := tqry.GetDatabase()
 	tblName := tqry.GetTable()
-	oldId := tqry.GetTableId()
+	var oldId uint64
 	keepAutoIncrement := false
 	affectedRows := uint64(0)
 
@@ -2386,6 +2496,12 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		}
 	}
 
+	oldId = rel.GetTableID(c.proc.Ctx)
+	indexTableNames := tqry.IndexTableNames
+	if !isTemp {
+		indexTableNames = getTruncateIndexTableNames(rel.GetTableDef(c.proc.Ctx))
+	}
+
 	if tqry.IsDelete {
 		keepAutoIncrement = true
 		affectedRows, err = rel.Rows(c.proc.Ctx)
@@ -2407,7 +2523,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	}
 
 	// Truncate Index Tables if needed
-	for _, name := range tqry.IndexTableNames {
+	for _, name := range indexTableNames {
 		var err error
 		var oldIndexId, newIndexId uint64
 		var idxtblname string

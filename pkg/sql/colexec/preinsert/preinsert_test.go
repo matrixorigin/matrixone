@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -300,6 +302,271 @@ func TestPreInsertIsUpdate(t *testing.T) {
 	argument1.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+}
+
+func TestPreInsertPrepareRefreshesAutoIncrementTableID(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ctx := context.TODO()
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+	txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
+
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{
+		CommitOrRollbackTimeout: time.Second,
+	}).AnyTimes()
+	db := mock_frontend.NewMockDatabase(ctrl)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "testDb", txnOperator).Return(db, nil)
+	db.EXPECT().Relation(gomock.Any(), "idx_tbl", nil).Return(rel, nil)
+	rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(200))
+
+	proc := testutil.NewProc(t)
+	proc.Ctx = ctx
+	proc.Base.TxnClient = txnClient
+	proc.Base.TxnOperator = txnOperator
+	proc.Base.SessionInfo.StorageEngine = eng
+
+	argument := PreInsert{
+		HasAutoCol: true,
+		SchemaName: "testDb",
+		TableDef: &plan.TableDef{
+			Name:  "idx_tbl",
+			TblId: 100,
+			Cols: []*plan.ColDef{
+				{Name: catalog.FakePrimaryKeyColName, Typ: i32typ},
+			},
+			Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
+		},
+		Attrs: []string{catalog.FakePrimaryKeyColName},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx: 0,
+			},
+		},
+	}
+
+	err := argument.Prepare(proc)
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), argument.TableDef.TblId)
+	require.Equal(t, uint64(200), argument.autoIncrementTableID)
+}
+
+func TestPreInsertPrepareSkipsTemporaryTableRefresh(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ctx := context.TODO()
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+	txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
+
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+
+	proc := testutil.NewProc(t)
+	proc.Ctx = ctx
+	proc.Base.TxnClient = txnClient
+	proc.Base.TxnOperator = txnOperator
+	proc.Base.SessionInfo.StorageEngine = eng
+
+	argument := PreInsert{
+		HasAutoCol: true,
+		SchemaName: "testDb",
+		TableDef: &plan.TableDef{
+			Name:        "temp_idx_tbl",
+			TblId:       100,
+			IsTemporary: true,
+			Cols: []*plan.ColDef{
+				{Name: catalog.FakePrimaryKeyColName, Typ: i32typ},
+			},
+			Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
+		},
+		Attrs: []string{catalog.FakePrimaryKeyColName},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx: 0,
+			},
+		},
+	}
+
+	err := argument.Prepare(proc)
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), argument.TableDef.TblId)
+	require.Equal(t, uint64(100), argument.getAutoIncrementTableID())
+}
+
+func TestGenAutoIncrColRefreshesStaleTableID(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ctx := context.TODO()
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+	txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
+
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{
+		CommitOrRollbackTimeout: time.Second,
+	}).AnyTimes()
+	db := mock_frontend.NewMockDatabase(ctrl)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "testDb", txnOperator).Return(db, nil)
+	db.EXPECT().Relation(gomock.Any(), "idx_tbl", nil).Return(rel, nil)
+	rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(200))
+
+	incrService := mock_frontend.NewMockAutoIncrementService(ctrl)
+	gomock.InOrder(
+		incrService.EXPECT().InsertValues(gomock.Any(), uint64(100), gomock.Any(), 1, int64(1)).
+			Return(uint64(0), moerr.NewNoSuchTableNoCtx("", "100")),
+		incrService.EXPECT().InsertValues(gomock.Any(), uint64(200), gomock.Any(), 1, int64(1)).
+			Return(uint64(111111), nil),
+	)
+
+	proc := testutil.NewProc(t)
+	proc.Ctx = ctx
+	proc.Base.TxnClient = txnClient
+	proc.Base.TxnOperator = txnOperator
+	proc.Base.IncrService = incrService
+	proc.Base.SessionInfo.StorageEngine = eng
+
+	preInsert := &PreInsert{
+		HasAutoCol: true,
+		SchemaName: "testDb",
+		TableDef: &plan.TableDef{
+			Name:  "idx_tbl",
+			TblId: 100,
+			Cols: []*plan.ColDef{
+				{Name: catalog.FakePrimaryKeyColName, Typ: i32typ},
+			},
+			Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
+		},
+		Attrs:             []string{catalog.FakePrimaryKeyColName},
+		EstimatedRowCount: 1,
+	}
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt64Vector([]int64{0}, nil)
+	bat.SetRowCount(1)
+
+	err := genAutoIncrCol(bat, proc, preInsert)
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), preInsert.TableDef.TblId)
+	require.Equal(t, uint64(200), preInsert.autoIncrementTableID)
+}
+
+func TestGenAutoIncrColReturnsRetryWhenDefinitionStillChanged(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ctx := context.TODO()
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+	txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
+
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{
+		CommitOrRollbackTimeout: time.Second,
+	}).AnyTimes()
+	db := mock_frontend.NewMockDatabase(ctrl)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "testDb", txnOperator).Return(db, nil)
+	db.EXPECT().Relation(gomock.Any(), "idx_tbl", nil).Return(rel, nil)
+	rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(100))
+
+	incrService := mock_frontend.NewMockAutoIncrementService(ctrl)
+	incrService.EXPECT().InsertValues(gomock.Any(), uint64(100), gomock.Any(), 1, int64(1)).
+		Return(uint64(0), moerr.NewNoSuchTableNoCtx("", "100"))
+
+	proc := testutil.NewProc(t)
+	proc.Ctx = ctx
+	proc.Base.TxnClient = txnClient
+	proc.Base.TxnOperator = txnOperator
+	proc.Base.IncrService = incrService
+	proc.Base.SessionInfo.StorageEngine = eng
+
+	preInsert := &PreInsert{
+		HasAutoCol: true,
+		SchemaName: "testDb",
+		TableDef: &plan.TableDef{
+			Name:  "idx_tbl",
+			TblId: 100,
+			Cols: []*plan.ColDef{
+				{Name: catalog.FakePrimaryKeyColName, Typ: i32typ},
+			},
+			Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
+		},
+		Attrs:             []string{catalog.FakePrimaryKeyColName},
+		EstimatedRowCount: 1,
+	}
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt64Vector([]int64{0}, nil)
+	bat.SetRowCount(1)
+
+	err := genAutoIncrCol(bat, proc, preInsert)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
+}
+
+func TestGenAutoIncrColKeepsTemporaryTableBehavior(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ctx := context.TODO()
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+	txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
+
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	incrService := mock_frontend.NewMockAutoIncrementService(ctrl)
+	incrService.EXPECT().InsertValues(gomock.Any(), uint64(100), gomock.Any(), 1, int64(1)).
+		Return(uint64(0), moerr.NewNoSuchTableNoCtx("", "100"))
+
+	proc := testutil.NewProc(t)
+	proc.Ctx = ctx
+	proc.Base.TxnClient = txnClient
+	proc.Base.TxnOperator = txnOperator
+	proc.Base.IncrService = incrService
+	proc.Base.SessionInfo.StorageEngine = eng
+
+	preInsert := &PreInsert{
+		HasAutoCol: true,
+		SchemaName: "testDb",
+		TableDef: &plan.TableDef{
+			Name:        "temp_idx_tbl",
+			TblId:       100,
+			IsTemporary: true,
+			Cols: []*plan.ColDef{
+				{Name: catalog.FakePrimaryKeyColName, Typ: i32typ},
+			},
+			Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
+		},
+		Attrs:             []string{catalog.FakePrimaryKeyColName},
+		EstimatedRowCount: 1,
+	}
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt64Vector([]int64{0}, nil)
+	bat.SetRowCount(1)
+
+	err := genAutoIncrCol(bat, proc, preInsert)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
 }
 
 func resetChildren(arg *PreInsert) {

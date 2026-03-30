@@ -127,7 +127,7 @@ func TestDataBranchDiffLifecycle(t *testing.T) {
 
 	stmt.TargetTable.ObjectName = Identifier("target")
 	stmt.BaseTable.ObjectName = Identifier("base")
-	stmt.OutputOpt = &DiffOutputOpt{Count: true}
+	stmt.OutputOpt = &DiffOutputOpt{Count: true, Summary: true}
 	stmt.reset()
 	require.Equal(t, Identifier(""), stmt.TargetTable.ObjectName)
 	require.Nil(t, stmt.OutputOpt)

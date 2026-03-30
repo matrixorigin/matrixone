@@ -388,10 +388,24 @@ func (c *compilerContext) getRelation(
 
 	table, err := db.Relation(ctx, tableName, nil)
 	if err != nil {
-		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+		if !moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			return nil, nil, err
+		}
+		if !c.engine.HasTempEngine() {
 			return nil, nil, nil
 		}
-		return nil, nil, err
+		tmpDB, tmpDBErr := c.engine.Database(ctx, defines.TEMPORARY_DBNAME, txnOpt)
+		if tmpDBErr != nil {
+			return nil, nil, nil
+		}
+		tmpTableName := engine.GetTempTableName(dbName, tableName)
+		table, err = tmpDB.Relation(ctx, tmpTableName, nil)
+		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+				return nil, nil, nil
+			}
+			return nil, nil, err
+		}
 	}
 	return ctx, table, nil
 }
