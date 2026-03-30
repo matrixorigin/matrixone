@@ -550,7 +550,7 @@ func (mp *MPool) alloc(detailk string, sz int64, offHeap bool) ([]byte, error) {
 	// always record the ptr, offHeap or not.
 	mp.recordPtrHdr(unsafe.Pointer(&bs[0]), hdr)
 	if offHeap {
-		profileRecordAlloc(3, unsafe.Pointer(&bs[0]), sz)
+		profileRecordAlloc(3, uintptr(unsafe.Pointer(&bs[0])), sz)
 	}
 	return bs, nil
 }
@@ -603,7 +603,7 @@ func (mp *MPool) freePtrInternal(detailk string, ptr unsafe.Pointer, hdr memHdr)
 		return
 	}
 	sz := int64(hdr.allocSz)
-	profileRecordFree(ptr, sz)
+	profileRecordFree(uintptr(ptr), sz)
 	mp.stats.RecordFree(mp.tag, sz)
 	globalStats.RecordFree("global", sz)
 	if mp.details != nil {
@@ -686,7 +686,7 @@ func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 		allocSz: int32(sz),
 		offHeap: offHeap,
 	})
-	profileRecordRealloc(3, oldptr, newptr, int64(oldcap), int64(sz))
+	profileRecordRealloc(3, uintptr(oldptr), uintptr(newptr), int64(oldcap), int64(sz))
 	globalStats.RecordFree("global", int64(oldcap))
 	mp.stats.RecordFree(mp.tag, int64(oldcap))
 	globalStats.RecordAlloc("global", int64(sz))

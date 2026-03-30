@@ -16,7 +16,6 @@ package mpool
 
 import (
 	"sync"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 )
@@ -26,19 +25,19 @@ const numProfileShards = 128
 
 type profileShard struct {
 	mu sync.Mutex
-	m  map[unsafe.Pointer]*malloc.HeapSampleValues
+	m  map[uintptr]*malloc.HeapSampleValues
 }
 
 var globalProfileShards [numProfileShards]profileShard
 
 func init() {
 	for i := range globalProfileShards {
-		globalProfileShards[i].m = make(map[unsafe.Pointer]*malloc.HeapSampleValues, 64)
+		globalProfileShards[i].m = make(map[uintptr]*malloc.HeapSampleValues, 64)
 	}
 }
 
-func getProfileShard(ptr unsafe.Pointer) *profileShard {
-	hash := uintptr(ptr) >> 4
+func getProfileShard(ptr uintptr) *profileShard {
+	hash := ptr >> 4
 	hash ^= hash >> 17
 	hash *= 0x85ebca6b
 	hash ^= hash >> 13
@@ -47,7 +46,7 @@ func getProfileShard(ptr unsafe.Pointer) *profileShard {
 	return &globalProfileShards[hash%numProfileShards]
 }
 
-func profileRecordAlloc(skip int, ptr unsafe.Pointer, sz int64) {
+func profileRecordAlloc(skip int, ptr uintptr, sz int64) {
 	profiler := malloc.GlobalProfiler()
 	values := profiler.Sample(skip, 1)
 	values.Bytes.Allocated.Add(uint64(sz))
@@ -61,7 +60,7 @@ func profileRecordAlloc(skip int, ptr unsafe.Pointer, sz int64) {
 	shard.mu.Unlock()
 }
 
-func profileRecordFree(ptr unsafe.Pointer, sz int64) {
+func profileRecordFree(ptr uintptr, sz int64) {
 	shard := getProfileShard(ptr)
 	shard.mu.Lock()
 	values, ok := shard.m[ptr]
@@ -75,7 +74,7 @@ func profileRecordFree(ptr unsafe.Pointer, sz int64) {
 	}
 }
 
-func profileRecordRealloc(skip int, oldPtr, newPtr unsafe.Pointer, oldSz, newSz int64) {
+func profileRecordRealloc(skip int, oldPtr, newPtr uintptr, oldSz, newSz int64) {
 	profileRecordFree(oldPtr, oldSz)
 	profileRecordAlloc(skip, newPtr, newSz)
 }
