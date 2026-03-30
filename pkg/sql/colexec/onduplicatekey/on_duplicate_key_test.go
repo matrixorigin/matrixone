@@ -144,6 +144,24 @@ func TestCheckConflictReturnsLaterBatchRowIndex(t *testing.T) {
 	require.Equal(t, "Duplicate entry for key 'c'", conflictMsg)
 }
 
+func TestOnDuplicateKeyIgnoreCleansConflictBatch(t *testing.T) {
+	tc := newTestCase(t)
+	tc.arg.IsIgnore = true
+	tc.rowCount = 1
+
+	resetChildren(tc.arg, tc.proc.Mp())
+	err := tc.arg.Prepare(tc.proc)
+	require.NoError(t, err)
+
+	ret, execErr := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, execErr)
+	require.Equal(t, tc.rowCount, ret.Batch.RowCount())
+
+	tc.arg.Free(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+}
+
 func newUniqueCheckExecutors(t *testing.T, proc *process.Process) []colexec.ExpressionExecutor {
 	t.Helper()
 
