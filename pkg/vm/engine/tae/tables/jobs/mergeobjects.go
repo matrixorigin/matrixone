@@ -448,6 +448,16 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 			objectio.PutArena(task.arena)
 			task.arena = nil
 		}
+		// Close any TN batches that weren't released by the last-block releaseF.
+		// On early exit (error/cancel), non-last-block releaseF only calls
+		// CleanOnlyData on the CN batch but doesn't close the TN batch,
+		// leaking its mpool memory.
+		for i, bat := range task.tnDataBats {
+			if bat != nil {
+				bat.Close()
+				task.tnDataBats[i] = nil
+			}
+		}
 		if err != nil {
 			logutil.Error("[MERGE-ERR]",
 				zap.String("task", task.Name()),
