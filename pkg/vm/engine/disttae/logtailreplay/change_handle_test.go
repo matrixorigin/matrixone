@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/tidwall/btree"
 )
 
@@ -769,4 +770,387 @@ func loadTestBlockMeta(
 	meta, err := objectio.FastLoadObjectMeta(ctx, &metaLoc, false, fs)
 	require.NoError(t, err)
 	return meta.MustGetMeta(objectio.SchemaData).GetBlockMeta(uint32(blkIdx))
+}
+
+// ---------------------------------------------------------------------------
+// Additional coverage tests for delete-chain, buildBlockPlan, and related paths
+// ---------------------------------------------------------------------------
+
+func TestResolveVisible_NoSuccessorForDeletedObject(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS("mem", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	// Non-appendable object deleted within range, but no successor in tnByCreateTS
+	deleted := makeNamedObjectEntry(t, 1, false, false,
+		types.BuildTS(5, 0), types.BuildTS(10, 0))
+
+	base := &baseHandle{changesHandle: &ChangeHandler{fs: fs}}
+	_, resolveErr := base.resolveVisibleObjectsByDeleteChain(
+		ctx,
+		types.BuildTS(1, 0), types.BuildTS(30, 0),
+		[]*objectio.ObjectEntry{deleted},
+		map[types.TS][]*objectio.ObjectEntry{},
+		nil,
+		false, "data",
+	)
+	require.Error(t, resolveErr)
+	require.True(t, moerr.IsMoErrCode(resolveErr, moerr.ErrFileNotFound))
+}
+
+func TestResolveVisible_FuzzyMatch(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS("mem", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	// Non-appendable deleted at TS=10, successor created at TS=12 (fuzzy, not exact)
+	deleted := makeNamedObjectEntry(t, 1, false, false,
+		types.BuildTS(5, 0), types.BuildTS(10, 0))
+	successor := makeNamedObjectEntry(t, 2, false, false,
+		types.BuildTS(12, 0), types.TS{})
+
+	// Write successor file so it exists
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: successor.ObjectName().String(),
+		Entries:  []fileservice.IOEntry{{Data: []byte("ok"), Size: 2}},
+	}))
+
+	base := &baseHandle{changesHandle: &ChangeHandler{fs: fs}}
+	resolved, resolveErr := base.resolveVisibleObjectsByDeleteChain(
+		ctx,
+		types.BuildTS(1, 0), types.BuildTS(30, 0),
+		[]*objectio.ObjectEntry{deleted},
+		map[types.TS][]*objectio.ObjectEntry{
+			successor.CreateTime: {successor},
+		},
+		[]types.TS{successor.CreateTime},
+		false, "data",
+	)
+	require.NoError(t, resolveErr)
+	require.Len(t, resolved, 1)
+	require.Equal(t, successor, resolved[0])
+}
+
+func TestResolveVisible_MissingFileWithoutDeleteTime(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS("mem", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	// Object file doesn't exist and has no delete time → error
+	missing := makeNamedObjectEntry(t, 1, true, false,
+		types.BuildTS(5, 0), types.TS{})
+
+	base := &baseHandle{changesHandle: &ChangeHandler{fs: fs}}
+	_, resolveErr := base.resolveVisibleObjectsByDeleteChain(
+		ctx,
+		types.BuildTS(1, 0), types.BuildTS(30, 0),
+		[]*objectio.ObjectEntry{missing},
+		map[types.TS][]*objectio.ObjectEntry{},
+		nil,
+		false, "data",
+	)
+	require.Error(t, resolveErr)
+	require.True(t, moerr.IsMoErrCode(resolveErr, moerr.ErrFileNotFound))
+}
+
+func TestResolveVisible_MissingFileNoReplacement(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS("mem", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	// Appendable object: file doesn't exist, has delete time, but no replacement
+	missing := makeNamedObjectEntry(t, 1, true, false,
+		types.BuildTS(5, 0), types.BuildTS(10, 0))
+
+	base := &baseHandle{changesHandle: &ChangeHandler{fs: fs}}
+	_, resolveErr := base.resolveVisibleObjectsByDeleteChain(
+		ctx,
+		types.BuildTS(1, 0), types.BuildTS(30, 0),
+		[]*objectio.ObjectEntry{missing},
+		map[types.TS][]*objectio.ObjectEntry{},
+		nil,
+		false, "data",
+	)
+	require.Error(t, resolveErr)
+	require.True(t, moerr.IsMoErrCode(resolveErr, moerr.ErrFileNotFound))
+}
+
+func TestResolveVisible_MissingFileFuzzyReplacement(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS("mem", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	// Appendable: file missing, deleted at TS=10, replacement at TS=12 (fuzzy)
+	missing := makeNamedObjectEntry(t, 1, true, false,
+		types.BuildTS(5, 0), types.BuildTS(10, 0))
+	replacement := makeNamedObjectEntry(t, 2, false, false,
+		types.BuildTS(12, 0), types.TS{})
+
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: replacement.ObjectName().String(),
+		Entries:  []fileservice.IOEntry{{Data: []byte("ok"), Size: 2}},
+	}))
+
+	base := &baseHandle{changesHandle: &ChangeHandler{fs: fs}}
+	resolved, resolveErr := base.resolveVisibleObjectsByDeleteChain(
+		ctx,
+		types.BuildTS(1, 0), types.BuildTS(30, 0),
+		[]*objectio.ObjectEntry{missing},
+		map[types.TS][]*objectio.ObjectEntry{
+			replacement.CreateTime: {replacement},
+		},
+		[]types.TS{replacement.CreateTime},
+		false, "data",
+	)
+	require.NoError(t, resolveErr)
+	require.Len(t, resolved, 1)
+	require.Equal(t, replacement, resolved[0])
+}
+
+func TestResolveVisible_OrphanTNObjectAdopted(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS("mem", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	// Orphan TN object: not visited by main queue, file exists, no delete time
+	orphan := makeNamedObjectEntry(t, 1, false, false,
+		types.BuildTS(20, 0), types.TS{})
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: orphan.ObjectName().String(),
+		Entries:  []fileservice.IOEntry{{Data: []byte("ok"), Size: 2}},
+	}))
+
+	base := &baseHandle{changesHandle: &ChangeHandler{fs: fs}}
+	resolved, resolveErr := base.resolveVisibleObjectsByDeleteChain(
+		ctx,
+		types.BuildTS(1, 0), types.BuildTS(30, 0),
+		nil, // no visible objects in main queue
+		map[types.TS][]*objectio.ObjectEntry{
+			orphan.CreateTime: {orphan},
+		},
+		[]types.TS{orphan.CreateTime},
+		false, "data",
+	)
+	require.NoError(t, resolveErr)
+	require.Len(t, resolved, 1)
+	require.Equal(t, orphan, resolved[0])
+}
+
+func TestBuildBlockPlan_SuccessWithOverlap(t *testing.T) {
+	// Object with commit-TS in [100, 200], query range [50, 150] → overlap
+	fs, stats := writeTestObjectWithCommitTS(t, [][]types.TS{
+		{types.BuildTS(100, 0), types.BuildTS(150, 0), types.BuildTS(200, 0)},
+	})
+	obj := &objectio.ObjectEntry{ObjectStats: stats}
+
+	sched := tasks.NewParallelJobScheduler(2)
+	defer sched.Stop()
+	h := &AObjectHandle{
+		p:          &baseHandle{changesHandle: &ChangeHandler{enableCommitTSBlockPrune: true, scheduler: sched}},
+		fs:         fs,
+		start:      types.BuildTS(50, 0),
+		end:        types.BuildTS(150, 0),
+		blockPlans: make(map[string]*aobjBlockPlan),
+	}
+
+	plan := &aobjBlockPlan{}
+	err := h.buildBlockPlan(context.Background(), obj, plan)
+	require.NoError(t, err)
+	require.True(t, plan.initialized)
+	require.True(t, plan.evaluable)
+	require.Equal(t, 1, plan.totalBlocks)
+	require.True(t, plan.shouldReadByBlks[0], "block overlaps range")
+}
+
+func TestBuildBlockPlan_PruneNonOverlapping(t *testing.T) {
+	// Object with commit-TS [100, 200], query range [300, 400] → pruned
+	fs, stats := writeTestObjectWithCommitTS(t, [][]types.TS{
+		{types.BuildTS(100, 0), types.BuildTS(150, 0), types.BuildTS(200, 0)},
+	})
+	obj := &objectio.ObjectEntry{ObjectStats: stats}
+
+	sched := tasks.NewParallelJobScheduler(2)
+	defer sched.Stop()
+	h := &AObjectHandle{
+		p:          &baseHandle{changesHandle: &ChangeHandler{enableCommitTSBlockPrune: true, scheduler: sched}},
+		fs:         fs,
+		start:      types.BuildTS(300, 0),
+		end:        types.BuildTS(400, 0),
+		blockPlans: make(map[string]*aobjBlockPlan),
+	}
+
+	plan := &aobjBlockPlan{}
+	err := h.buildBlockPlan(context.Background(), obj, plan)
+	require.NoError(t, err)
+	require.True(t, plan.evaluable)
+	require.Equal(t, 1, plan.prunedBlocks)
+	require.False(t, plan.shouldReadByBlks[0])
+}
+
+func TestBuildBlockPlan_NoCommitTSColumn(t *testing.T) {
+	// Object without commit-TS column → noCommitTSColumn = true
+	fs, stats := writeTestObjectWithoutCommitTS(t)
+	obj := &objectio.ObjectEntry{ObjectStats: stats}
+
+	sched := tasks.NewParallelJobScheduler(2)
+	defer sched.Stop()
+	h := &AObjectHandle{
+		p:          &baseHandle{changesHandle: &ChangeHandler{enableCommitTSBlockPrune: true, scheduler: sched}},
+		fs:         fs,
+		start:      types.BuildTS(1, 0),
+		end:        types.BuildTS(100, 0),
+		blockPlans: make(map[string]*aobjBlockPlan),
+	}
+
+	plan := &aobjBlockPlan{}
+	err := h.buildBlockPlan(context.Background(), obj, plan)
+	require.NoError(t, err)
+	require.False(t, plan.evaluable)
+	require.True(t, plan.noCommitTSColumn)
+}
+
+func TestShouldReadBlock_BuildPlanIntegration(t *testing.T) {
+	fs, stats := writeTestObjectWithCommitTS(t, [][]types.TS{
+		{types.BuildTS(100, 0), types.BuildTS(200, 0)},
+	})
+	obj := &objectio.ObjectEntry{
+		ObjectStats: stats,
+		CreateTime:  types.BuildTS(50, 0),
+	}
+
+	sched := tasks.NewParallelJobScheduler(2)
+	defer sched.Stop()
+	ch := &ChangeHandler{
+		enableCommitTSBlockPrune: true,
+		strictCommitTSBlockPrune: false,
+		scheduler:                sched,
+	}
+
+	// Overlapping range
+	h := &AObjectHandle{
+		p:          &baseHandle{changesHandle: ch},
+		fs:         fs,
+		start:      types.BuildTS(50, 0),
+		end:        types.BuildTS(150, 0),
+		blockPlans: make(map[string]*aobjBlockPlan),
+	}
+	read, err := h.shouldReadBlock(context.Background(), obj, 0)
+	require.NoError(t, err)
+	require.True(t, read)
+
+	// Non-overlapping range
+	h2 := &AObjectHandle{
+		p:          &baseHandle{changesHandle: ch},
+		fs:         fs,
+		start:      types.BuildTS(300, 0),
+		end:        types.BuildTS(400, 0),
+		blockPlans: make(map[string]*aobjBlockPlan),
+	}
+	read, err = h2.shouldReadBlock(context.Background(), obj, 0)
+	require.NoError(t, err)
+	require.False(t, read)
+}
+
+func TestShouldReadBlock_NoCommitTSFallsBackToCreateTime(t *testing.T) {
+	fs, stats := writeTestObjectWithoutCommitTS(t)
+	obj := &objectio.ObjectEntry{
+		ObjectStats: stats,
+		CreateTime:  types.BuildTS(50, 0),
+	}
+
+	sched := tasks.NewParallelJobScheduler(2)
+	defer sched.Stop()
+	ch := &ChangeHandler{
+		enableCommitTSBlockPrune: true,
+		strictCommitTSBlockPrune: false,
+		scheduler:                sched,
+	}
+	h := &AObjectHandle{
+		p:          &baseHandle{changesHandle: ch},
+		fs:         fs,
+		start:      types.BuildTS(40, 0),
+		end:        types.BuildTS(60, 0),
+		blockPlans: make(map[string]*aobjBlockPlan),
+	}
+
+	// CreateTime=50 is in range [40,60] → should read
+	read, err := h.shouldReadBlock(context.Background(), obj, 0)
+	require.NoError(t, err)
+	require.True(t, read)
+
+	// CreateTime=50 is NOT in range [100,200] → should not read
+	h2 := &AObjectHandle{
+		p:          &baseHandle{changesHandle: ch},
+		fs:         fs,
+		start:      types.BuildTS(100, 0),
+		end:        types.BuildTS(200, 0),
+		blockPlans: make(map[string]*aobjBlockPlan),
+	}
+	read, err = h2.shouldReadBlock(context.Background(), obj, 0)
+	require.NoError(t, err)
+	require.False(t, read)
+}
+
+func TestBlockCommitTSOverlapsRange_WithRealZonemap(t *testing.T) {
+	fs, stats := writeTestObjectWithCommitTS(t, [][]types.TS{
+		{types.BuildTS(100, 0), types.BuildTS(150, 0), types.BuildTS(200, 0)},
+	})
+	blk := loadTestBlockMeta(t, context.Background(), fs, stats, 0)
+
+	t.Run("overlap", func(t *testing.T) {
+		overlap, evaluable, _, _ := blockCommitTSOverlapsRange(
+			blk, types.BuildTS(50, 0), types.BuildTS(120, 0),
+		)
+		require.True(t, evaluable)
+		require.True(t, overlap)
+	})
+	t.Run("no overlap after", func(t *testing.T) {
+		overlap, evaluable, _, _ := blockCommitTSOverlapsRange(
+			blk, types.BuildTS(300, 0), types.BuildTS(400, 0),
+		)
+		require.True(t, evaluable)
+		require.False(t, overlap)
+	})
+	t.Run("no overlap before", func(t *testing.T) {
+		overlap, evaluable, _, _ := blockCommitTSOverlapsRange(
+			blk, types.BuildTS(1, 0), types.BuildTS(50, 0),
+		)
+		require.True(t, evaluable)
+		require.False(t, overlap)
+	})
+}
+
+func TestBlockCommitTSOverlapsRange_NoTSColumn(t *testing.T) {
+	fs, stats := writeTestObjectWithoutCommitTS(t)
+	blk := loadTestBlockMeta(t, context.Background(), fs, stats, 0)
+
+	_, evaluable, reason, _ := blockCommitTSOverlapsRange(
+		blk, types.BuildTS(1, 0), types.BuildTS(100, 0),
+	)
+	require.False(t, evaluable)
+	require.Equal(t, "tail_column_not_ts", reason)
+}
+
+func TestBuildBlockPlan_LoadMetaError(t *testing.T) {
+	// Object whose file doesn't exist → FastLoadObjectMeta returns error
+	fs, err := fileservice.NewMemoryFS("mem", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	obj := makeNamedObjectEntry(t, 1, false, false,
+		types.BuildTS(5, 0), types.TS{})
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(&obj.ObjectStats, 1))
+
+	sched := tasks.NewParallelJobScheduler(2)
+	defer sched.Stop()
+	h := &AObjectHandle{
+		p:          &baseHandle{changesHandle: &ChangeHandler{enableCommitTSBlockPrune: true, scheduler: sched}},
+		fs:         fs,
+		start:      types.BuildTS(1, 0),
+		end:        types.BuildTS(100, 0),
+		blockPlans: make(map[string]*aobjBlockPlan),
+	}
+	plan := &aobjBlockPlan{}
+	err = h.buildBlockPlan(context.Background(), obj, plan)
+	require.Error(t, err, "should fail when object file doesn't exist")
+	require.True(t, plan.initialized)
 }
