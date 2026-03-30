@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 
@@ -401,6 +402,7 @@ func newTestTxnClientAndOp(ctrl *gomock.Controller) (client.TxnClient, client.Tx
 	txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 	txnOperator.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
+	txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -420,6 +422,7 @@ func newTestTxnClientAndOpWithPessimistic(ctrl *gomock.Controller) (client.TxnCl
 	txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 	txnOperator.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
+	txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
