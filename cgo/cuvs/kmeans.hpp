@@ -110,6 +110,7 @@ public:
         this->dimension = dimension;
         this->count = static_cast<uint32_t>(count_vectors);
         this->metric = m;
+        this->build_params = kmeans_build_params_default();
         this->dist_mode = DistributionMode_SINGLE_GPU;
         this->devices_ = {device_id};
         this->current_offset_ = static_cast<uint32_t>(count_vectors);
@@ -144,9 +145,9 @@ public:
                     int max_iter, int device_id, uint32_t nthread) {
         this->dimension = dimension;
         this->metric = m;
+        this->count = 0; // Will be set in fit()
         this->build_params.k = n_clusters;
         this->build_params.max_iter = max_iter;
-        this->build_params.tol = 1e-4f;
         this->dist_mode = DistributionMode_SINGLE_GPU;
         this->devices_ = {device_id};
         this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_, this->dist_mode);
@@ -186,27 +187,26 @@ public:
         std::unique_lock<std::shared_mutex> lock(this->mutex_);
         auto res = handle.get_raft_resources();
 
-        auto dataset_device_t = raft::make_device_matrix<T, int64_t>(
-            *res, static_cast<int64_t>(this->count), static_cast<int64_t>(this->dimension));
-        raft::copy(*res, dataset_device_t.view(), raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
-
-        auto dataset_device_f = raft::make_device_matrix<float, int64_t>(*res, (int64_t)this->count, (int64_t)this->dimension);
-        raft::copy(*res, dataset_device_f.view(), dataset_device_t.view());
-        raft::resource::sync_stream(*res);
-
-        cuvs::cluster::kmeans::params kmeans_params;
-        kmeans_params.n_clusters = this->build_params.k;
+        cuvs::cluster::kmeans::balanced_params kmeans_params;
         kmeans_params.metric = static_cast<cuvs::distance::DistanceType>(this->metric);
-        kmeans_params.max_iter = this->build_params.max_iter;
-        kmeans_params.tol = this->build_params.tol;
+        kmeans_params.n_iters = static_cast<uint32_t>(this->build_params.max_iter);
 
         centroids_ = std::make_unique<raft::device_matrix<float, int64_t>>(
-            raft::make_device_matrix<float, int64_t>(*res, (int64_t)kmeans_params.n_clusters, (int64_t)this->dimension));
-        
-        float inertia;
-        int64_t n_iter;
-        cuvs::cluster::kmeans::fit(*res, kmeans_params, dataset_device_f.view(), std::nullopt, centroids_->view(), 
-                                    raft::make_host_scalar_view<float>(&inertia), raft::make_host_scalar_view<int64_t>(&n_iter));
+            raft::make_device_matrix<float, int64_t>(*res, (int64_t)this->build_params.k, (int64_t)this->dimension));
+
+        if constexpr (std::is_same_v<T, float>) {
+            auto dataset_device_f = raft::make_device_matrix<float, int64_t>(*res, (int64_t)this->count, (int64_t)this->dimension);
+            raft::copy(*res, dataset_device_f.view(), raft::make_host_matrix_view<const float, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
+            cuvs::cluster::kmeans::fit(*res, kmeans_params, dataset_device_f.view(), centroids_->view());
+        } else {
+            auto dataset_device_t = raft::make_device_matrix<T, int64_t>(*res, static_cast<int64_t>(this->count), static_cast<int64_t>(this->dimension));
+            raft::copy(*res, dataset_device_t.view(), raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
+            
+            auto dataset_device_f = raft::make_device_matrix<float, int64_t>(*res, (int64_t)this->count, (int64_t)this->dimension);
+            raft::copy(*res, dataset_device_f.view(), dataset_device_t.view());
+            
+            cuvs::cluster::kmeans::fit(*res, kmeans_params, dataset_device_f.view(), centroids_->view());
+        }
         
         handle.sync();
     }
@@ -223,44 +223,47 @@ public:
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 auto res = handle.get_raft_resources();
 
-                auto dataset_device_t = raft::make_device_matrix<T, int64_t>(
-                    *res, static_cast<int64_t>(this->count), static_cast<int64_t>(this->dimension));
-                raft::copy(*res, dataset_device_t.view(), raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
-
-                auto dataset_device_f = raft::make_device_matrix<float, int64_t>(*res, (int64_t)this->count, (int64_t)this->dimension);
-                raft::copy(*res, dataset_device_f.view(), dataset_device_t.view());
-                raft::resource::sync_stream(*res);
-
-                cuvs::cluster::kmeans::params kmeans_params;
-                kmeans_params.n_clusters = this->build_params.k;
+                cuvs::cluster::kmeans::balanced_params kmeans_params;
                 kmeans_params.metric = static_cast<cuvs::distance::DistanceType>(this->metric);
-                kmeans_params.max_iter = this->build_params.max_iter;
-                kmeans_params.tol = this->build_params.tol;
+                kmeans_params.n_iters = static_cast<uint32_t>(this->build_params.max_iter);
 
                 centroids_ = std::make_unique<raft::device_matrix<float, int64_t>>(
-                    raft::make_device_matrix<float, int64_t>(*res, (int64_t)kmeans_params.n_clusters, (int64_t)this->dimension));
+                    raft::make_device_matrix<float, int64_t>(*res, (int64_t)this->build_params.k, (int64_t)this->dimension));
         
-                float inertia;
-                int64_t n_iter;
-                cuvs::cluster::kmeans::fit(*res, kmeans_params, dataset_device_f.view(), std::nullopt, centroids_->view(), 
-                                            raft::make_host_scalar_view<float>(&inertia), raft::make_host_scalar_view<int64_t>(&n_iter));
+                if constexpr (std::is_same_v<T, float>) {
+                    auto dataset_device_f = raft::make_device_matrix<float, int64_t>(*res, (int64_t)this->count, (int64_t)this->dimension);
+                    raft::copy(*res, dataset_device_f.view(), raft::make_host_matrix_view<const float, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
+                    cuvs::cluster::kmeans::fit(*res, kmeans_params, dataset_device_f.view(), centroids_->view());
+                } else {
+                    auto dataset_device_t = raft::make_device_matrix<T, int64_t>(*res, static_cast<int64_t>(this->count), static_cast<int64_t>(this->dimension));
+                    raft::copy(*res, dataset_device_t.view(), raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
+                    
+                    auto dataset_device_f = raft::make_device_matrix<float, int64_t>(*res, (int64_t)this->count, (int64_t)this->dimension);
+                    raft::copy(*res, dataset_device_f.view(), dataset_device_t.view());
+                    
+                    cuvs::cluster::kmeans::fit(*res, kmeans_params, dataset_device_f.view(), centroids_->view());
+                }
                 
                 handle.sync();
-                return std::make_pair(inertia, n_iter);
+                return (int64_t)kmeans_params.n_iters;
             }
         );
         auto res_wait = this->worker->wait(job_id).get();
         if (res_wait.error) std::rethrow_exception(res_wait.error);
-        auto p = std::any_cast<std::pair<float, int64_t>>(res_wait.result);
+        auto n_iter = std::any_cast<int64_t>(res_wait.result);
         this->is_loaded_ = true;
-        return {std::vector<int64_t>{}, p.first, p.second};
+        this->flattened_host_dataset.clear();
+        this->flattened_host_dataset.shrink_to_fit();
+        return {std::vector<int64_t>{}, 0.0f, n_iter};
     }
 
     kmeans_result_t predict(const T* queries_data, uint64_t num_queries) {
-        if (!queries_data || num_queries == 0 || !centroids_) return {};
+        if (!queries_data || num_queries == 0) return {};
 
         auto task = [this, num_queries, queries_data](raft_handle_wrapper_t& handle) -> std::any {
             std::shared_lock<std::shared_mutex> lock(this->mutex_);
+            if (!centroids_) return kmeans_result_t{{}, 0.0f, 0};
+
             auto res = handle.get_raft_resources();
 
             auto queries_device_f = raft::make_device_matrix<float, int64_t>(*res, (int64_t)num_queries, (int64_t)this->dimension);
@@ -274,21 +277,21 @@ public:
             }
             raft::resource::sync_stream(*res);
 
-            auto labels_device = raft::make_device_vector<int64_t, int64_t>(*res, (int64_t)num_queries);
+            auto labels_device = raft::make_device_vector<uint32_t, int64_t>(*res, (int64_t)num_queries);
             
-            float inertia;
-            cuvs::cluster::kmeans::params kmeans_params;
-            kmeans_params.n_clusters = this->build_params.k;
+            cuvs::cluster::kmeans::balanced_params kmeans_params;
             kmeans_params.metric = static_cast<cuvs::distance::DistanceType>(this->metric);
 
-            cuvs::cluster::kmeans::predict(*res, kmeans_params, queries_device_f.view(), std::nullopt, centroids_->view(), 
-                                            labels_device.view(), true, raft::make_host_scalar_view<float>(&inertia));
+            cuvs::cluster::kmeans::predict(*res, kmeans_params, queries_device_f.view(), centroids_->view(), labels_device.view());
             
-            std::vector<int64_t> labels_host(num_queries);
-            raft::copy(*res, raft::make_host_vector_view<int64_t, int64_t>(labels_host.data(), (int64_t)num_queries), labels_device.view());
+            std::vector<uint32_t> labels_host_u32(num_queries);
+            raft::copy(*res, raft::make_host_vector_view<uint32_t, int64_t>(labels_host_u32.data(), (int64_t)num_queries), labels_device.view());
             handle.sync();
 
-            return kmeans_result_t{labels_host, inertia, 0};
+            std::vector<int64_t> labels_host(num_queries);
+            std::copy(labels_host_u32.begin(), labels_host_u32.end(), labels_host.begin());
+
+            return kmeans_result_t{labels_host, 0.0f, 0};
         };
 
         uint64_t job_id = this->worker->submit(task);
@@ -299,30 +302,32 @@ public:
 
     kmeans_result_t predict_float(const float* queries_data, uint64_t num_queries) {
         if constexpr (std::is_same_v<T, float>) return predict(queries_data, num_queries);
-        if (!queries_data || num_queries == 0 || !centroids_) return {};
+        if (!queries_data || num_queries == 0) return {};
 
         auto task = [this, num_queries, queries_data](raft_handle_wrapper_t& handle) -> std::any {
             std::shared_lock<std::shared_mutex> lock(this->mutex_);
+            if (!centroids_) return kmeans_result_t{{}, 0.0f, 0};
+
             auto res = handle.get_raft_resources();
 
             auto queries_device_f = raft::make_device_matrix<float, int64_t>(*res, (int64_t)num_queries, (int64_t)this->dimension);
             raft::copy(*res, queries_device_f.view(), raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
             raft::resource::sync_stream(*res);
             
-            auto labels_device = raft::make_device_vector<int64_t, int64_t>(*res, (int64_t)num_queries);
-            float inertia;
-            cuvs::cluster::kmeans::params kmeans_params;
-            kmeans_params.n_clusters = this->build_params.k;
+            auto labels_device = raft::make_device_vector<uint32_t, int64_t>(*res, (int64_t)num_queries);
+            cuvs::cluster::kmeans::balanced_params kmeans_params;
             kmeans_params.metric = static_cast<cuvs::distance::DistanceType>(this->metric);
 
-            cuvs::cluster::kmeans::predict(*res, kmeans_params, queries_device_f.view(), std::nullopt, centroids_->view(), 
-                                            labels_device.view(), true, raft::make_host_scalar_view<float>(&inertia));
+            cuvs::cluster::kmeans::predict(*res, kmeans_params, queries_device_f.view(), centroids_->view(), labels_device.view());
             
-            std::vector<int64_t> labels_host(num_queries);
-            raft::copy(*res, raft::make_host_vector_view<int64_t, int64_t>(labels_host.data(), (int64_t)num_queries), labels_device.view());
+            std::vector<uint32_t> labels_host_u32(num_queries);
+            raft::copy(*res, raft::make_host_vector_view<uint32_t, int64_t>(labels_host_u32.data(), (int64_t)num_queries), labels_device.view());
             handle.sync();
 
-            return kmeans_result_t{labels_host, inertia, 0};
+            std::vector<int64_t> labels_host(num_queries);
+            std::copy(labels_host_u32.begin(), labels_host_u32.end(), labels_host.begin());
+
+            return kmeans_result_t{labels_host, 0.0f, 0};
         };
 
         uint64_t job_id = this->worker->submit(task);
@@ -332,11 +337,56 @@ public:
     }
 
     kmeans_result_t fit_predict(const T* dataset_data, uint64_t count_vectors) {
-        auto res_fit = fit(dataset_data, count_vectors);
-        auto res_predict = predict(dataset_data, count_vectors);
-        res_predict.inertia = res_fit.inertia;
-        res_predict.n_iter = res_fit.n_iter;
-        return res_predict;
+        this->count = static_cast<uint32_t>(count_vectors);
+        this->flattened_host_dataset.resize(this->count * this->dimension);
+        std::copy(dataset_data, dataset_data + (this->count * this->dimension), this->flattened_host_dataset.begin());
+        
+        this->train_quantizer_if_needed();
+        
+        uint64_t job_id = this->worker->submit_main(
+            [&](raft_handle_wrapper_t& handle) -> std::any {
+                std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                auto res = handle.get_raft_resources();
+
+                cuvs::cluster::kmeans::balanced_params kmeans_params;
+                kmeans_params.metric = static_cast<cuvs::distance::DistanceType>(this->metric);
+                kmeans_params.n_iters = static_cast<uint32_t>(this->build_params.max_iter);
+
+                centroids_ = std::make_unique<raft::device_matrix<float, int64_t>>(
+                    raft::make_device_matrix<float, int64_t>(*res, (int64_t)this->build_params.k, (int64_t)this->dimension));
+        
+                auto labels_device = raft::make_device_vector<uint32_t, int64_t>(*res, (int64_t)this->count);
+
+                if constexpr (std::is_same_v<T, float>) {
+                    auto dataset_device_f = raft::make_device_matrix<float, int64_t>(*res, (int64_t)this->count, (int64_t)this->dimension);
+                    raft::copy(*res, dataset_device_f.view(), raft::make_host_matrix_view<const float, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
+                    cuvs::cluster::kmeans::fit_predict(*res, kmeans_params, dataset_device_f.view(), centroids_->view(), labels_device.view());
+                } else {
+                    auto dataset_device_t = raft::make_device_matrix<T, int64_t>(*res, static_cast<int64_t>(this->count), static_cast<int64_t>(this->dimension));
+                    raft::copy(*res, dataset_device_t.view(), raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
+                    
+                    auto dataset_device_f = raft::make_device_matrix<float, int64_t>(*res, (int64_t)this->count, (int64_t)this->dimension);
+                    raft::copy(*res, dataset_device_f.view(), dataset_device_t.view());
+                    
+                    cuvs::cluster::kmeans::fit_predict(*res, kmeans_params, dataset_device_f.view(), centroids_->view(), labels_device.view());
+                }
+
+                std::vector<uint32_t> labels_host_u32(this->count);
+                raft::copy(*res, raft::make_host_vector_view<uint32_t, int64_t>(labels_host_u32.data(), (int64_t)this->count), labels_device.view());
+                handle.sync();
+
+                std::vector<int64_t> labels_host(this->count);
+                std::copy(labels_host_u32.begin(), labels_host_u32.end(), labels_host.begin());
+
+                return kmeans_result_t{labels_host, 0.0f, (int64_t)kmeans_params.n_iters};
+            }
+        );
+        auto res_wait = this->worker->wait(job_id).get();
+        if (res_wait.error) std::rethrow_exception(res_wait.error);
+        this->is_loaded_ = true;
+        this->flattened_host_dataset.clear();
+        this->flattened_host_dataset.shrink_to_fit();
+        return std::any_cast<kmeans_result_t>(res_wait.result);
     }
 
     kmeans_result_t fit_predict_float(const float* dataset_data, uint64_t count_vectors) {
@@ -352,29 +402,24 @@ public:
                 raft::copy(*res, dataset_device_f.view(), raft::make_host_matrix_view<const float, int64_t>(dataset_data, this->count, this->dimension));
                 raft::resource::sync_stream(*res);
 
-                cuvs::cluster::kmeans::params kmeans_params;
-                kmeans_params.n_clusters = this->build_params.k;
+                cuvs::cluster::kmeans::balanced_params kmeans_params;
                 kmeans_params.metric = static_cast<cuvs::distance::DistanceType>(this->metric);
-                kmeans_params.max_iter = this->build_params.max_iter;
-                kmeans_params.tol = this->build_params.tol;
+                kmeans_params.n_iters = static_cast<uint32_t>(this->build_params.max_iter);
 
                 centroids_ = std::make_unique<raft::device_matrix<float, int64_t>>(
-                    raft::make_device_matrix<float, int64_t>(*res, (int64_t)kmeans_params.n_clusters, (int64_t)this->dimension));
+                    raft::make_device_matrix<float, int64_t>(*res, (int64_t)this->build_params.k, (int64_t)this->dimension));
                 
-                float inertia;
-                int64_t n_iter;
-                cuvs::cluster::kmeans::fit(*res, kmeans_params, dataset_device_f.view(), std::nullopt, centroids_->view(), 
-                                            raft::make_host_scalar_view<float>(&inertia), raft::make_host_scalar_view<int64_t>(&n_iter));
-                
-                auto labels_device = raft::make_device_vector<int64_t, int64_t>(*res, (int64_t)this->count);
-                cuvs::cluster::kmeans::predict(*res, kmeans_params, dataset_device_f.view(), std::nullopt, centroids_->view(), 
-                                                labels_device.view(), true, raft::make_host_scalar_view<float>(&inertia));
+                auto labels_device = raft::make_device_vector<uint32_t, int64_t>(*res, (int64_t)this->count);
+                cuvs::cluster::kmeans::fit_predict(*res, kmeans_params, dataset_device_f.view(), centroids_->view(), labels_device.view());
 
-                std::vector<int64_t> labels_host(this->count);
-                raft::copy(*res, raft::make_host_vector_view<int64_t, int64_t>(labels_host.data(), (int64_t)this->count), labels_device.view());
+                std::vector<uint32_t> labels_host_u32(this->count);
+                raft::copy(*res, raft::make_host_vector_view<uint32_t, int64_t>(labels_host_u32.data(), (int64_t)this->count), labels_device.view());
                 handle.sync();
 
-                return kmeans_result_t{labels_host, inertia, n_iter};
+                std::vector<int64_t> labels_host(this->count);
+                std::copy(labels_host_u32.begin(), labels_host_u32.end(), labels_host.begin());
+
+                return kmeans_result_t{labels_host, 0.0f, (int64_t)kmeans_params.n_iters};
             }
         );
         auto res_wait = this->worker->wait(job_id).get();
@@ -389,6 +434,8 @@ public:
         uint64_t job_id = this->worker->submit_main(
             [&](raft_handle_wrapper_t& handle) -> std::any {
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
+                if (!centroids_) return std::vector<T>{};
+
                 auto res = handle.get_raft_resources();
                 
                 size_t n_clusters = centroids_->extent(0);

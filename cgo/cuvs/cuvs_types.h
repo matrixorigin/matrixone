@@ -146,7 +146,6 @@ typedef struct {
 typedef struct {
     uint32_t k;
     int max_iter;
-    float tol;
 } kmeans_build_params_t;
 
 #ifdef __cplusplus
@@ -183,7 +182,7 @@ static inline brute_force_build_params_t brute_force_build_params_default() {
 }
 
 static inline kmeans_build_params_t kmeans_build_params_default() {
-    return {};
+    return {8, 20};
 }
 #endif
 

@@ -52,7 +52,6 @@ int main() {
     std::chrono::duration<double> diff = end - start;
 
     std::cout << "KMeans fit finished in " << diff.count() << " seconds." << std::endl;
-    std::cout << "Inertia: " << fit_res.inertia << ", Iterations: " << fit_res.n_iter << std::endl;
 
     kmeans.destroy();
     return 0;
