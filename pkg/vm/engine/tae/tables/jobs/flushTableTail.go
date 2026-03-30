@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -496,7 +495,6 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 	}
 
 	var obj handle.Object
-	ctx = fileservice.WithFileServicePolicy(ctx, fileservice.SkipCacheReads)
 	if isTombstone {
 		obj = task.aTombstoneHandles[objIdx]
 		err = obj.Scan(ctx, &bat, 0, idxs, common.MergeAllocator)
