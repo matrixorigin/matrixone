@@ -26,8 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sort"
 )
 
-// SinkerT takes ownership of the full buffer and returns an empty
-// replacement batch for MergeSortBatches to continue filling.
+// SinkerT takes ownership of the full buffer and returns a clean, empty
+// replacement batch (with capacity retained) for MergeSortBatches to fill.
 type SinkerT func(*batch.Batch) (*batch.Batch, error)
 
 func MergeSortBatches(
@@ -143,7 +143,6 @@ func MergeSortBatches(
 			if buffer, err = sinker(buffer); err != nil {
 				return buffer, err
 			}
-			buffer.CleanOnlyData()
 			if err = buffer.PreExtend(mp, objectio.BlockMaxRows); err != nil {
 				return buffer, err
 			}
@@ -155,7 +154,6 @@ func MergeSortBatches(
 		if buffer, err = sinker(buffer); err != nil {
 			return buffer, err
 		}
-		buffer.CleanOnlyData()
 	}
 	return buffer, nil
 }

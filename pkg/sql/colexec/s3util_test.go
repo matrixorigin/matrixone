@@ -112,6 +112,7 @@ func TestMergeSortBatches(t *testing.T) {
 			restult.Clean(pool)
 		}
 		restult, err2 = bat.Dup(pool)
+		bat.CleanOnlyData()
 		return bat, err2
 	}
 	// Test bool
