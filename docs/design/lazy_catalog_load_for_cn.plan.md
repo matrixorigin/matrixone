@@ -1,372 +1,171 @@
 ---
 name: Lazy Catalog Load for CN
-overview: "Coding-facing design reference for lazy catalog load: keep shared catalog PartitionState semantics unchanged, add account-scoped cache readiness, and make runtime activation follow the same PS-first then exact-replay model as startup."
-todos:
-  - id: proto-contract
-    content: "proto/logtail.proto + pkg/pb/logtail: add `SubscribeRequest.lazy_catalog`, `initial_active_accounts`, and dedicated `ActivateAccountForCatalogRequest/Response{account_id, seq, target_ts, tails}`; keep request_id/response_id as stream ids and use `seq` for activation correlation"
-    status: done
-  - id: stream-plumbing
-    content: "pkg/vm/engine/tae/logtail/service/{client.go,server.go,request.go,response.go}: plumb activation messages over the existing segmented logtail stream and dispatch them separately from subscribe/update"
-    status: done
-  - id: tn-session-filter
-    content: "pkg/vm/engine/tae/logtail/service/session.go + helpers: track lazyCatalogMode, activeCatalogAccounts, activatingAccounts, and reuse one catalog entry-account filter helper for subscribe/publish/activation (delete still decodes account from cpkey)"
-    status: done
-  - id: cn-replay-refactor
-    content: "pkg/catalog/types.go + pkg/vm/engine/disttae/logtail_consumer.go: split `replayCatalogCache()` into reusable startup/reconnect/account replay helpers, and add account-filtered SQL templates so replay no longer assumes a global all-account load"
-    status: done
-  - id: startup-sys-baseline
-    content: "pkg/vm/engine/disttae/logtail_consumer.go: make `subSysTables()` send `lazy_catalog=true` with `initial_active_accounts=[0]`, and change startup replay/cache ready so only sys account becomes ready after startup"
-    status: done
-  - id: tn-activation-sender
-    content: "pkg/vm/engine/tae/logtail/service/server.go: implement activation phase1 worker plus sender-serialized phase2/targetTS/response enqueue, and only add an account to `activeCatalogAccounts` after the activation response enters `sendChan`"
-    status: done
-  - id: cn-account-state
-    content: "pkg/vm/engine/disttae/{logtail_consumer.go,engine.go,types.go}: add pending(account, seq), inactive/catching_up/ready, per-account readyTS, per-account accountDCA, and wantedAccounts that survives reconnect"
-    status: done
-  - id: cn-activation-flow
-    content: "pkg/vm/engine/disttae/logtail_consumer.go + pkg/vm/engine/tae/logtail/service/client.go: send activation, apply activation tails to shared PartitionState, call `WaitLogTailAppliedAt(targetTS)`, replay one account at replayTS, flush accountDCA, and remember the account in wantedAccounts"
-    status: done
-  - id: serve-gate-audit
-    content: "pkg/vm/engine/disttae/{engine.go,txn_database.go,txn.go,mo_table_stats.go} + cache/catalog.go: replace global-only `CatalogCache.CanServe(ts)` decisions with account-aware readyTS checks and storage fallback"
-    status: done
-  - id: reconnect-restore
-    content: "pkg/vm/engine/disttae/logtail_consumer.go: preserve wantedAccounts across reconnect, send them in the first system subscribe, replay sys + wanted accounts at one reconnectReplayTS, and batch-mark the whole set ready"
-    status: done
-  - id: frontend-auth-hook
-    content: "pkg/frontend/session.go: trigger activation immediately after `tenant.SetTenantID(...)` and before the first tenant-context SQL in `Session.AuthenticateUser`; return activation errors directly"
-    status: done
-  - id: tests-audit
-    content: "Add coverage for startup sys-only baseline, activation seq/ordering, global/per-account delayed cache apply, subscribe-time mixed-entry row copying, readyTS serve gate, reconnect batch restore, auth-path failure handling, and lazy-off compatibility"
-    status: done
+overview: "Keep shared catalog PartitionState semantics unchanged, add account-scoped cache readiness, and make runtime activation follow the same PS-first then exact-replay model as startup."
 isProject: false
 ---
 
 # Lazy Catalog Load for CN（主设计文档）
 
-> 这份文档只保留做代码前必须锁死的设计约束、协议语义、状态机和落点。更细的执行时序见 `lazy_flow.md`。
+> 设计约束、协议语义、实现要点。执行时序见 `lazy_catalog_load_for_cn.flow.md`。
 
 ## 1. 目标与边界
 
-### 目标
+**目标**：startup 后 `CatalogCache` 只加载 sys account；运行中新增 account 走 activation；reconnect 按批量恢复处理。
 
-1. **startup** 保持现有系统表启动骨架，但 `CatalogCache` 在 startup 阶段只加载 sys account。
-2. **运行中新增 account** 复用 startup 语义：先把数据补进共享 `PartitionState`，再在一个确定的 snapshot ts 上做 full replay，最后再开放 cache serve。
-3. **reconnect** 按“批量恢复已 ready account”处理，而不是逐个 post-reconnect activation。
-
-### 非目标
-
-- 不优化 system-table checkpoint 内存。
-- 不把 checkpoint 改成按账户懒化。
-- 不把 catalog `PartitionState` 改成 per-account 隔离。
-- 不改普通用户表的订阅 / 推送 / 反订阅流程；lazy catalog 只针对 `mo_database` / `mo_tables` / `mo_columns`。
-
-一句话原则：
+**非目标**：不改 checkpoint 按账户懒化；不改 `PartitionState` 为 per-account 隔离；不改普通表的订阅/推送/反订阅。
 
 > **共享 `PartitionState` 保留全局基线；account 是否可见，由 per-account replay 和 per-account `readyTS` 决定。**
 
 ---
 
-## 2. 必须保留的基线语义
+## 2. 核心不变量
 
-当前 startup 的真实语义是：
-
-```text
-PS first -> exact replay ts -> full replay -> flush delayed cache apply -> ready
-```
-
-本轮实现只是在这个基线上扩展：
-
-- startup 继续走现有 `waitTimestamp()` / `replayCatalogCache()` 骨架；
-- runtime activation 改成显式拿 `targetTS`，再通过 `WaitLogTailAppliedAt(targetTS)` 取得确定的 `replayTS`；
-- reconnect 沿 startup 骨架一次性恢复 sys + wanted accounts。
+1. **不透传 raw checkpoint**：三表的 `CkpLocation` 不是 account-filtered，subscribe/activation 只转发过滤后的 row-level data。
+2. **account 在 full replay 后才能 serve**：activation response 只补 `PartitionState`，`readyTS` 在 replay 后发布。
+3. **`targetTS` 在 TN sender 路径上确定**：保证和 steady-state push 无 gap。
+4. **response 入 FIFO 后才标记 active**：不能让 post-activation update 先于 response 到达 CN。
+5. **object/metadata 全局推进，只有 row-level delta 按 account 过滤**：insert/update 按 `account_id`，delete 按 `cpkey`。
+6. **reconnect 视为批量恢复**：`wantedAccounts ∪ {0}` 一次性 subscribe + 统一 replay。
+7. **只落在三张 catalog 系统表**：`mo_database`/`mo_tables`/`mo_columns`，不污染普通表。
 
 ---
 
-## 3. 核心不变量
+## 3. 关键术语
 
-1. **lazy subscribe / activation 不直接透传 raw checkpoint**
-  - 三张系统表的 `CkpLocation` 不是按 account 过滤的；
-  - startup / reconnect subscribe 和 activation response 都只转发过滤后的 row-level data，不把 raw checkpoint 直接送到 CN。
-2. **account 只有在 full replay 完成后才能 serve**
-  - activation response 只负责把缺失 row-level delta 补进 `PartitionState`；
-  - account 真正 ready 的时点是 full replay 完成后的 `readyTS`。
-3. `**targetTS` 必须在 TN sender 路径上确定**
-  - 只有这样，`targetTS` 才是和 steady-state push 无 gap 的真实边界。
-4. **account 变 active 必须晚于 activation response 成功入 FIFO send queue**
-  - 先 response enqueue，再打开 `activeCatalogAccounts`；
-  - 不能让 post-activation update 先于 activation response 到达 CN。
-5. **object / metadata 全局推进，只有 row-level in-memory delta 按 account 过滤**
-  - insert / update 按行内容里的 account 过滤；
-  - row delete 按 `cpkey` 解出的 account 过滤；
-  - startup / reconnect subscribe、activation response、steady-state push 共用同一套过滤契约。
-6. **reconnect 视为批量恢复，不视为单账户新增**
-  - reconnect 时第一轮 subscribe 直接带 `wantedAccounts ∪ {0}`；
-  - 用一个统一 replay ts 恢复 sys + wanted accounts。
-7. **lazy catalog 逻辑必须只落在三张 catalog 系统表**
-  - `SubscribeRequest.lazy_catalog`、activation、row-level catalog filter、account readyTS 都只服务 `mo_database` / `mo_tables` / `mo_columns`；
-  - 普通表的订阅 / steady-state push / 反订阅语义不能被这轮改动污染。
+| 术语 | 含义 |
+|------|------|
+| `targetTS` | TN activation response barrier：row-level delta 已补到此点 |
+| `replayTS` | CN 调 `WaitLogTailAppliedAt(targetTS)` 后拿到的确定 snapshot ts（通常 > targetTS） |
+| `readyTS` | account 开始可 serve 的时间点 = replayTS |
+| `seq` | activation 相关键（不复用 stream id） |
+| `accountDCA` | per-account 延迟 cache apply 暂存区 |
+
+CN account 状态：`inactive → catching_up → ready`。
 
 ---
 
-## 4. 关键术语与状态
-
-### 时间戳语义
-
-- `**targetTS`**
-  - TN 在 activation response 中返回的 barrier；
-  - 只表示“目标 account 缺失的 row-level delta 已补到这个点”。
-- `**replayTS`**
-  - CN 在确认 `targetTS` 已应用后拿到的确定 snapshot ts；
-  - 用于 full replay，也作为该 account 的 `readyTS`；
-  - 按当前 waiter 语义，通常满足 `replayTS > targetTS`。
-- `**readyTS`**
-  - 某个 account 在某个 CN 上开始可以安全使用 cache serve 的时间点；
-  - sys account、新增 account、reconnect 恢复的一批 account 都各自依赖这个语义。
-
-### 相关键
-
-- `**seq**`
-  - activation 的相关键；
-  - 不能依赖 `RequestId/ResponseId`，因为它们在当前协议里承担 stream ID 角色。
-
-### CN account 状态
-
-```go
-type accountCatalogState struct {
-    state   catalogReadyState
-    readyTS timestamp.Timestamp
-}
-
-const (
-    accountInactive catalogReadyState = iota
-    accountCatchingUp
-    accountReady
-)
-```
-
-语义固定为：
-
-- `inactive`：不能 serve，也不能直接把该 account 的增量写入 cache。
-- `catching_up`：activation 中，`PartitionState` 正常推进，但 cache 更新进入 `accountDCA`。
-- `ready`：full replay 完成，`readyTS` 已确定，cache 可正常 serve / apply。
-
----
-
-## 5. 协议语义
-
-### `SubscribeRequest`
+## 4. 协议
 
 ```protobuf
 message SubscribeRequest {
   api.TableID table = 1;
   bool lazy_catalog = 2;
-  repeated uint32 initial_active_accounts = 3;
+  repeated uint32 initial_active_accounts = 3;   // startup=[0], reconnect=wanted∪{0}
 }
-```
-
-用途：
-
-- startup：`initial_active_accounts = [0]`
-- reconnect：`initial_active_accounts = wantedAccounts ∪ {0}`
-
-### `ActivateAccountForCatalogRequest/Response`
-
-```protobuf
-message ActivateAccountForCatalogRequest {
-  uint32 account_id = 1;
-  uint64 seq = 2;
-}
-
+message ActivateAccountForCatalogRequest  { uint32 account_id = 1; uint64 seq = 2; }
 message ActivateAccountForCatalogResponse {
-  uint32 account_id = 1;
-  uint64 seq = 2;
+  uint32 account_id = 1; uint64 seq = 2;
   timestamp.Timestamp target_ts = 3;
-  repeated TableLogtail tails = 4;
+  repeated TableLogtail tails = 4;                // 三表 row-level delta，不要求固定顺序
 }
 ```
 
-锁死两条语义：
+---
 
-1. activation 是 **account 级** 协议，不是 table 级协议；
-2. `tails` 只承载三张 catalog 表的 **row-level in-memory delta**，但**不要求固定顺序**；TN 内部可以并发拉取三表，CN 必须按 table identity 消费，而不是按位置消费。
+## 5. TN 侧
+
+### Session 状态
+
+`lazyCatalogMode` / `activeAccounts` / `activatingSeqByAccount`。`activeAccountsSnapshot`（copy-on-write `atomic.Pointer`）供 publish 热路径无锁读。
+
+### 过滤
+
+- **subscribe/activation（pulled batch）**：可能混合 account → 用 `batch.Union(sels)` 按 `account_id`/`cpkey` 行级复制。Phase1 在 pull 后**立即**过滤，不进串行 send 路径。Filtered batch 用 cleanup callback 保活，不做 proto-batch deep clone。`stripObjectMeta` 参数控制 object metadata 是否保留（subscribe 保留，activation 去除）。
+- **steady-state push**：entry 级单 account 假设 → `prepareLazyCatalogPublishWrapsFromIndex` 读 entry summary 整条 keep/drop。无 summary 时退回行级扫描。
+- **entry-level summary**（`txn_handle.go`）：`api.Entry` 携带 `lazy_catalog_account_id` + validity bit，仅当 batch 内所有行属于同一 account 时设置。混合 batch（如 restore）不设置。
+
+### Activation worker
+
+有界 `activationReqChan` + 固定 worker pool（默认 1）。Phase1（worker 并发拉三表）→ Phase2（sender goroutine 串行：补齐 gap、合并、发送）。`targetTS = waterline.Waterline()`，response 进入 FIFO 后才 `completeActivation`。
 
 ---
 
-## 6. TN 侧职责
+## 6. CN 侧
 
-### session 侧状态
+### 状态
+
+`lazyCatalogCNState`：per-account `{state, readyTS}`、`pendingSeq`、`accountDCA`、`wantedAccounts`、`inflightActivations`（sync.Map）、`activationHistory`（circular buffer）、`catchingUpCount`（atomic fast path）。
+
+### Activation 流程
+
+1. 已 ready → 直接返回。
+2. Inflight dedup（sync.Map leader/waiter）。
+3. `catching_up` + 初始化 `accountDCA` + 分配 `seq` + 发送 request。
+4. Response → apply tails 到 `PartitionState` → `WaitLogTailAppliedAt(targetTS)` → `replayCatalogCacheForAccount` → drain `accountDCA` → `readyTS` → `ready`。
+
+失败回退：`catching_up → inactive`，丢弃 `accountDCA`，TN `abortActivation`。
+
+### Reconnect 重试
+
+`resetAllStates()` 向 pending channel 发送 nil → sentinel `errActivationInterruptedByReconnect` → 指数退避重试（500ms/1s/2s/4s，最多 4 次）。所有 goroutine 独立重试，新 leader 自动选出。
+
+### DCA 两级架构
+
+- **Global DCA**：startup/reconnect 期间阻止 cache apply 抢跑。Replay 后 drain。
+- **Per-account DCA**：runtime activation 期间隔离一个 tenant 的 catch-up。
+
+两级互不阻塞。`consumeEntry` 路由：`PartitionState` 无条件更新 → global DCA 判断 → per-account DCA 判断 → 直接 apply。
+
+### Serve gate 与存储回退
 
 ```go
-type Session struct {
-    // existing fields...
-    lazyCatalogMode       bool
-    activeCatalogAccounts map[uint32]struct{}
-    activatingAccounts    map[uint32]uint64
-}
+CanServeAccount(X, ts) = globalCanServe(ts) && accountReadyTS[X] exists && ts >= readyTS[X]
 ```
 
-### startup / reconnect
-
-- checkpoint 继续正常返回并进入共享 `PartitionState`；
-- object / metadata 继续全局推进；
-- row-level in-memory delta 只对 `initial_active_accounts` 放行。
-
-### runtime activation
-
-activation 保持“两阶段、sender 收口”的模型：
-
-1. `onMessage()` 只做 request 分发和 session 定位；
-2. worker 执行 phase1，按表拉历史 row-level delta；
-3. `logtailSender()` 串行完成：
-  - 校验 `activatingAccounts[account] == seq`；
-  - 取 `targetTS`；
-  - 拉 `phase1To -> targetTS` 的 phase2；
-  - 合并 phase1 + phase2；
-  - 发送 response；
-  - **只有 response 成功进入 session FIFO `sendChan` 后** 才把 account 加入 `activeCatalogAccounts`。
-
-phase1 的下界固定为从 `0` 开始；实际有效下限由现有 checkpoint 处理逻辑决定，不在 activation 协议里额外维护 per-table catch-up 起点。
-
-三张 catalog 表的 catch-up 可以并发执行；response 里的 `tails` 只要求完整覆盖三表，不要求固定顺序。
-
-### steady state
-
-- `publishEvent()` 继续全局推 object / metadata；
-- row-level catalog delta 只对 `sys ∪ activeCatalogAccounts` 放行。
-
-### 过滤契约
-
-TN 侧必须复用一套 catalog filter helper，用在：
-
-- startup / reconnect subscribe response（过滤 row，且去掉 raw `CkpLocation`）
-- activation response（过滤 row，且去掉 raw `CkpLocation`）
-- steady-state `publishEvent()`
-
-过滤规则固定为：
-
-- steady-state push 的三张 catalog 表 in-memory entry batch 仍假定各自只属于一个 account，因此 TN publish 过滤和 CN `accountDCA` 路由都可以按 entry 整体 keep/drop；
-- startup / reconnect subscribe response 和 activation response 里的 pulled entry batch 仍可能混合多个 account，因此 TN 在发送前必须复制出目标行；
-- steady-state push 的 insert / update：按 entry 首行里的 `account_id` 判断整个 entry；
-- steady-state push 的 row delete：按 entry 首行 `cpkey` 解出的 account 判断整个 entry。
+回退时 `loadTableFromStorage` → `execReadSql` → 扫描 `PartitionState`（subscribe-time 快照）。安全性：
+- `mo_catalog` 数据库短路（`engine.go:369`），不查 cache。
+- 系统表强制 `accountId=0`（`txn_database.go:107-113`），sys 始终 ready。
+- login 路径在任何 tenant SQL 前激活；后台升级有版本守卫。
+- **注意**：subscribe 后 TN push 按 account 过滤，inactive account 的 `PartitionState` 不含后续增量。
 
 ---
 
-## 7. CN 侧职责
+## 7. Frontend
 
-### 需要维护的状态
+`activateAccountCatalogIfNeeded`（`snapshot.go:533`）：对 `accountID==0` 直接返回。`EntireEngine` 必须转发 `TenantCatalogActivator` 接口。
 
-- `pending(account, seq)`：request / response 关联；
-- `state[account]`：`inactive / catching_up / ready`；
-- `readyTS[account]`；
-- `accountDCA[account]`：activation 期间普通 push 的暂存区；
-- `wantedAccounts`：reconnect 时要恢复的账户集合。
-
-### startup
-
-- 继续走当前 startup 骨架；
-- `replayCatalogCache()` 仍只加载 sys account；
-- startup replay 完成后设置 `sys.readyTS = startupReplayTS`。
-
-### runtime activation
-
-同步路径固定为：
-
-1. 如果 account 已 ready，直接返回；
-2. `singleflight(key=accountID)`；
-3. 置 `state[account] = catching_up` 并初始化 `accountDCA`；
-4. 发送 `ActivateAccountForCatalogRequest{account, seq}`；
-5. 收到 response 后，先把 `tails` 应用到 `PartitionState`；
-6. 调 `WaitLogTailAppliedAt(targetTS)` 得到确定的 `replayTS`；
-7. 执行 `replayCatalogCacheForAccount(account, replayTS)`；
-8. 在 `catalogCacheMu` 下先 drain `accountDCA[account]`，再发布 `readyTS[account] = replayTS`；
-9. 最后把状态切到 `ready`。
-
-### cache apply 规则
-
-- `inactive`：不直接写 cache；
-- `catching_up`：普通 push 继续更新 `PartitionState`，cache apply 写入 `accountDCA`；
-- `ready`：正常更新 cache。
-
-这里依赖的是 steady-state push-entry 单 account 假设：CN 只对运行中收到的 pushed entry 按 entry 归属 account 决定是立即 apply 还是进入 `accountDCA`，不再按 row 拆分 batch。
-
-### serve gate
-
-最终读路径必须按 account 判断：
-
-```go
-func CanServeAccount(account uint32, ts timestamp.Timestamp) bool {
-    return globalCatalogCacheCanServe(ts) &&
-           !accountReadyTS[account].IsEmpty() &&
-           ts.GreaterEq(accountReadyTS[account])
-}
-```
-
-不能只依赖全局 `CatalogCache.CanServe(ts)`。
-
-### 失败清理
-
-如果 activation 失败或超时，且没有新的 seq 接管，必须：
-
-- 清理 `pending(account, seq)`；
-- 丢弃 `accountDCA[account]`；
-- 把 `state[account]` 从 `catching_up` 回退到 `inactive`。
+| 调用位置 | 场景 |
+|---------|------|
+| `session.go:1395` | 登录 |
+| `authenticate.go:3289/4048` | ALTER/DROP ACCOUNT |
+| `show_account.go:717` | SHOW ACCOUNTS |
+| `snapshot.go:623,631,2385,2394` | RESTORE |
+| `clone.go:257,378` | CLONE TABLE/DATABASE |
 
 ---
 
-## 8. Frontend 与 reconnect 钩子
+## 8. Debug 诊断
 
-### Frontend
-
-`pkg/frontend/session.go::(*Session).AuthenticateUser` 中：
-
-- 在 `tenant.SetTenantID(...)` 之后触发 activation；
-- 在第一个 tenant-context SQL 之前完成 activation；
-- 出错时直接返回，不能吞错后继续 tenant SQL。
-
-### reconnect
-
-- CN 记住断线前哪些 account 已 ready，记为 `wantedAccounts`；
-- reconnect 后第一次 `subSysTables()` 直接携带 `wantedAccounts ∪ {0}`；
-- 用一个 `reconnectReplayTS` 重建 sys + wanted accounts cache；
-- 为这一批 account 统一设置 `readyTS` 和 `state=ready`。
+| 端点 | 用途 |
+|------|------|
+| `/debug/status/catalog?account=X` | 全局状态 + per-account readiness |
+| `/debug/status/catalog-cache?account=X` | 直接查看 catalog cache 内容 |
+| `/debug/status/catalog-activation?account=X` | 最近 activation 事件（进程级，重启后重置） |
+| `/debug/status/partitions` | 分区状态摘要 |
 
 ---
 
-## 9. 主要实现落点
+## 9. 实现落点
 
-### 协议
-
-- `proto/logtail.proto`
-- `pkg/pb/logtail/logtail.pb.go`
-
-### TN
-
-- `pkg/vm/engine/tae/logtail/service/session.go`
-- `pkg/vm/engine/tae/logtail/service/server.go`
-- `pkg/vm/engine/tae/logtail/service/client.go`
-- `pkg/vm/engine/tae/logtail/service/` 下新增 catalog row-level filter helper
-
-### CN
-
-- `pkg/vm/engine/disttae/logtail_consumer.go`
-- `pkg/vm/engine/disttae/logtail.go`
-- `pkg/vm/engine/disttae/engine.go`
-- `pkg/vm/engine/disttae/cache/catalog.go`
-- `pkg/catalog/types.go`
-
-### Frontend
-
-- `pkg/frontend/session.go`
+**协议**：`proto/logtail.proto`、`pkg/pb/logtail/`
+**TN**：`tae/logtail/service/{server,session,lazy_catalog_session,catalog_filter}.go`、`tae/logtail/txn_handle.go`
+**CN**：`disttae/{lazy_catalog_cn,logtail_consumer,logtail,engine,txn_database,debug_state}.go`
+**Frontend**：`frontend/{session,snapshot,authenticate,show_account,clone}.go`
+**其他**：`engine/{engine,entire_engine}.go`、`catalog/types.go`、`util/status/server.go`
 
 ---
 
-## 10. 代码前最后核对项
+## 10. 核对项
 
-1. startup 后 `CatalogCache` 只有 sys account；
-2. activation response 只补 `PartitionState`，不直接宣告 cache ready；
-3. `replayTS` 是确定值，并且来自 `WaitLogTailAppliedAt(targetTS)`；
-4. activation 期间实时 cache 更新会暂存，replay 后再 flush；
-5. `CanServeAccount(account, ts)` 依赖 per-account `readyTS`；
-6. reconnect 一次性恢复 wanted accounts，而不是逐个 activation；
-7. auth 路径必须在 tenant SQL 前完成 activation；
-8. row delete 和 insert / update 一样，保持严格 account-scoped 过滤。
+1. startup 后 cache 只有 sys account
+2. activation response 只补 PS，不直接宣告 ready
+3. `replayTS` 来自 `WaitLogTailAppliedAt(targetTS)`
+4. activation 期间 cache 暂存，replay 后 drain
+5. `CanServeAccount` 依赖 per-account `readyTS`
+6. reconnect 批量恢复，不逐个 activation
+7. auth 路径在 tenant SQL 前完成 activation
+8. delete 和 insert/update 同样按 account 过滤
+9. 存储回退读 subscribe-time 快照，login 路径保证不触发
+10. TN push 对三表做 per-session account 过滤
+11. phase1 在 pull 后立即过滤，不进串行路径
+12. `EntireEngine` 必须转发 `TenantCatalogActivator`
