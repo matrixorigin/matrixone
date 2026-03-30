@@ -653,6 +653,9 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 		for _, blockData := range block {
 			name := objectio.PhysicalAddr_Attr
 			err = writer.addBatchToOutput(mp, actionDelete, i, uint64(blockData.bat.RowCount()), name, blockData.bat)
+			if err != nil {
+				return
+			}
 		}
 	}
 

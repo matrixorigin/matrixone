@@ -407,3 +407,26 @@ func TestHandleOrderByLimitAllNullVectors(t *testing.T) {
 	}
 	require.Equal(t, 0, bat.RowCount())
 }
+
+func TestHandleOrderByLimitOnSelectRowsRejectsOverflowLimit(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	vec := vector.NewVec(types.T_array_float32.ToType())
+	vector.AppendBytes(vec, types.ArrayToBytes[float32]([]float32{0.1, 0.2}), false, mp)
+
+	cacheVectors := make(containers.Vectors, 1)
+	cacheVectors[0] = *vec
+
+	orderByLimit := &objectio.IndexReaderTopOp{
+		ColPos:     0,
+		Limit:      ^uint64(0),
+		Typ:        types.T_array_float32,
+		NumVec:     types.ArrayToBytes[float32]([]float32{0.0, 0.0}),
+		MetricType: metric.Metric_L2Distance,
+	}
+
+	_, _, err := handleOrderByLimitOnSelectRows(context.Background(), []int64{0}, orderByLimit, -1, cacheVectors)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "overflows int")
+}

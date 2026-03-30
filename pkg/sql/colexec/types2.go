@@ -85,6 +85,7 @@ func (srv *Server) RecordBuiltPipeline(
 
 	// check if sender has sent a stop running message.
 	if v, ok := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]; ok && v.alreadyDone {
+		cancel()
 		return
 	}
 
@@ -121,7 +122,13 @@ func (srv *Server) CancelPipelineSending(
 				zap.Uint64("streamID", streamID))
 			v.cancelPipeline()
 		}
+		return
 	}
+
+	srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key] = runningPipelineInfo{
+		alreadyDone: true,
+	}
+	srv.ensureSessionCleanupLocked(session)
 }
 
 func (srv *Server) RemoveRelatedPipeline(session morpc.ClientSession, streamID uint64) {
@@ -133,4 +140,37 @@ func (srv *Server) RemoveRelatedPipeline(session morpc.ClientSession, streamID u
 
 func generateRecordKey(session morpc.ClientSession, streamID uint64) rpcClientItem {
 	return rpcClientItem{tcp: session, id: streamID}
+}
+
+func (srv *Server) ensureSessionCleanupLocked(session morpc.ClientSession) {
+	if session == nil || session.SessionCtx() == nil || session.SessionCtx().Done() == nil {
+		return
+	}
+	if _, ok := srv.receivedRunningPipeline.sessionCleanupWaiters[session]; ok {
+		return
+	}
+	srv.receivedRunningPipeline.sessionCleanupWaiters[session] = struct{}{}
+
+	done := session.SessionCtx().Done()
+	go func() {
+		<-done
+		srv.cleanupPipelinesForSession(session)
+	}()
+}
+
+func (srv *Server) cleanupPipelinesForSession(session morpc.ClientSession) {
+	srv.receivedRunningPipeline.Lock()
+	var infos []runningPipelineInfo
+	delete(srv.receivedRunningPipeline.sessionCleanupWaiters, session)
+	for key := range srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline {
+		if key.tcp == session {
+			infos = append(infos, srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key])
+			delete(srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline, key)
+		}
+	}
+	srv.receivedRunningPipeline.Unlock()
+
+	for i := range infos {
+		infos[i].cancelPipeline()
+	}
 }

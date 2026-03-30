@@ -24,6 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
+const maxVectorIndexTopPushdownLimit = uint64(^uint(0) >> 1)
+
 func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr, separateNonEquiConds bool) (int32, []*plan.Expr) {
 	originalNodeID := nodeID
 	// Record before pushdownFilters
@@ -680,6 +682,9 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 	}
 	limitVal := node.Limit.GetLit().GetU64Val()
 	if limitVal == 0 {
+		return
+	}
+	if limitVal > maxVectorIndexTopPushdownLimit {
 		return
 	}
 	if scanNode.TableDef.TableType != catalog.SystemSI_IVFFLAT_TblType_Entries {

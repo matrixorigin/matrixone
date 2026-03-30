@@ -941,20 +941,48 @@ func (lockOp *LockOp) CopyToPipelineTarget() []*pipeline.LockTarget {
 	targets := make([]*pipeline.LockTarget, len(lockOp.targets))
 	for i, target := range lockOp.targets {
 		targets[i] = &pipeline.LockTarget{
-			TableId:            target.tableID,
-			PrimaryColIdxInBat: target.primaryColumnIndexInBatch,
-			PrimaryColTyp:      plan.MakePlan2Type(&target.primaryColumnType),
-			RefreshTsIdxInBat:  target.refreshTimestampIndexInBatch,
-			FilterColIdxInBat:  target.filterColIndexInBatch,
-			LockTable:          target.lockTable,
-			ChangeDef:          target.changeDef,
-			Mode:               target.mode,
-			LockRows:           plan.DeepCopyExpr(target.lockRows),
-			LockTableAtTheEnd:  target.lockTableAtTheEnd,
-			ObjRef:             plan.DeepCopyObjectRef(target.objRef),
+			TableId:              target.tableID,
+			PrimaryColIdxInBat:   target.primaryColumnIndexInBatch,
+			PrimaryColTyp:        plan.MakePlan2Type(&target.primaryColumnType),
+			RefreshTsIdxInBat:    target.refreshTimestampIndexInBatch,
+			FilterColIdxInBat:    target.filterColIndexInBatch,
+			LockTable:            target.lockTable,
+			ChangeDef:            target.changeDef,
+			Mode:                 target.mode,
+			LockRows:             plan.DeepCopyExpr(target.lockRows),
+			LockTableAtTheEnd:    target.lockTableAtTheEnd,
+			ObjRef:               plan.DeepCopyObjectRef(target.objRef),
+			PartitionColIdxInBat: target.partitionColumnIndexInBatch,
 		}
 	}
 	return targets
+}
+
+// CopyTargetsFrom creates a deep copy of targets from another LockOp.
+// This is used by dupOperator to avoid sharing targets slice during parallel execution.
+func (lockOp *LockOp) CopyTargetsFrom(src *LockOp) {
+	if len(src.targets) == 0 {
+		lockOp.targets = nil
+		return
+	}
+	lockOp.targets = make([]lockTarget, len(src.targets))
+	for i, t := range src.targets {
+		lockOp.targets[i] = lockTarget{
+			tableID:                      t.tableID,
+			objRef:                       plan.DeepCopyObjectRef(t.objRef),
+			primaryColumnIndexInBatch:    t.primaryColumnIndexInBatch,
+			refreshTimestampIndexInBatch: t.refreshTimestampIndexInBatch,
+			primaryColumnType:            t.primaryColumnType,
+			partitionColumnIndexInBatch:  t.partitionColumnIndexInBatch,
+			filter:                       t.filter, // function pointer, safe to copy
+			filterColIndexInBatch:        t.filterColIndexInBatch,
+			lockTable:                    t.lockTable,
+			changeDef:                    t.changeDef,
+			mode:                         t.mode,
+			lockRows:                     plan.DeepCopyExpr(t.lockRows),
+			lockTableAtTheEnd:            t.lockTableAtTheEnd,
+		}
+	}
 }
 
 // AddLockTarget add lock target, LockMode_Exclusive will used
@@ -1107,6 +1135,7 @@ func (lockOp *LockOp) Reset(proc *process.Process, pipelineFailed bool, err erro
 	lockOp.resetParker()
 	lockOp.ctr.retryError = nil
 	lockOp.ctr.defChanged = false
+	lockOp.ctr.lockCount = 0
 }
 
 // Free free mem
@@ -1208,22 +1237,7 @@ func lockTalbeIfLockCountIsZero(
 	for idx := 0; idx < len(lockOp.targets); idx++ {
 		target := lockOp.targets[idx]
 		if target.lockRows != nil {
-			vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, target.lockRows)
-			if err != nil {
-				return err
-			}
-			defer func() {
-				free()
-			}()
-
-			bat := batch.NewWithSize(int(target.primaryColumnIndexInBatch) + 1)
-			bat.Vecs[target.primaryColumnIndexInBatch] = vec
-			bat.SetRowCount(vec.Length())
-
-			anal := lockOp.OpAnalyzer
-			anal.Start()
-			defer anal.Stop()
-			err = performLock(bat, proc, lockOp, anal, idx)
+			err := lockTargetWithRows(proc, lockOp, idx, target)
 			if err != nil {
 				return err
 			}
@@ -1240,4 +1254,26 @@ func lockTalbeIfLockCountIsZero(
 	ctr.lockCount = 1
 
 	return nil
+}
+
+func lockTargetWithRows(
+	proc *process.Process,
+	lockOp *LockOp,
+	idx int,
+	target lockTarget,
+) error {
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, target.lockRows)
+	if err != nil {
+		return err
+	}
+	defer free()
+
+	bat := batch.NewWithSize(int(target.primaryColumnIndexInBatch) + 1)
+	bat.Vecs[target.primaryColumnIndexInBatch] = vec
+	bat.SetRowCount(vec.Length())
+
+	anal := lockOp.OpAnalyzer
+	anal.Start()
+	defer anal.Stop()
+	return performLock(bat, proc, lockOp, anal, idx)
 }

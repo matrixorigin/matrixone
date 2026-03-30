@@ -46,6 +46,13 @@ func convertDBEOB(ctx context.Context, e error, name string) error {
 	return e
 }
 
+func convertDBEOBToNoSuchTable(ctx context.Context, e error, dbName, tblName string) error {
+	if moerr.IsMoErrCode(e, moerr.OkExpectedEOB) {
+		return moerr.NewNoSuchTable(ctx, dbName, tblName)
+	}
+	return e
+}
+
 func (s *Scope) AlterTableCopy(c *Compile) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
 	dbName := qry.Database
@@ -56,7 +63,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	tblName := qry.GetTableDef().GetName()
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
-		return convertDBEOB(c.proc.Ctx, err, dbName)
+		return convertDBEOBToNoSuchTable(c.proc.Ctx, err, dbName, tblName)
 	}
 
 	accountId, err := defines.GetAccountId(c.proc.Ctx)
