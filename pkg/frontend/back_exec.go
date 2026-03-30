@@ -819,6 +819,12 @@ func newBackSession(ses FeSession, txnOp TxnOperator, db string, callBack output
 	if ses.GetTxnHandler() != nil {
 		connCtx = ses.GetTxnHandler().GetConnCtx()
 	}
+	// TxnHandler.Close() clears connCtx while the handler pointer may still be non-nil
+	// (e.g. async temp-table cleanup in Session.Close). context.WithCancel(nil) panics;
+	// Background is a safe parent for the back session's txn context tree.
+	if connCtx == nil {
+		connCtx = context.Background()
+	}
 	txnHandler := InitTxnHandler(ses.GetService(), getPu(service).StorageEngine, connCtx, txnOp)
 	backSes := &backSession{}
 	backSes.initFeSes(ses, txnHandler, db, callBack)
