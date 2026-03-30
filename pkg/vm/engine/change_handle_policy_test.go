@@ -16,9 +16,9 @@ package engine
 
 import (
 	"context"
-	"errors"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,5 +36,5 @@ func TestSnapshotReadPolicyContextRoundTrip(t *testing.T) {
 func TestIsErrNoCommitTSColumn(t *testing.T) {
 	require.False(t, IsErrNoCommitTSColumn(nil))
 	require.True(t, IsErrNoCommitTSColumn(ErrNoCommitTSColumn))
-	require.False(t, IsErrNoCommitTSColumn(errors.New("other")))
+	require.False(t, IsErrNoCommitTSColumn(moerr.NewInternalErrorNoCtx("other")))
 }

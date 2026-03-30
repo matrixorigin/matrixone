@@ -16,9 +16,9 @@ package disttae
 
 import (
 	"context"
-	"errors"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -187,7 +187,7 @@ func TestReadSnapshotWithSource_PropagatesOnBatchError(t *testing.T) {
 			{state: engine.InMem, values: []int64{1}},
 		},
 	}
-	wantErr := errors.New("emit failed")
+	wantErr := moerr.NewInternalErrorNoCtx("emit failed")
 
 	err := readSnapshotWithSource(
 		context.Background(),
