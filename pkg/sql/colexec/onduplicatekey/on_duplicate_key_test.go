@@ -84,6 +84,24 @@ func TestOnDuplicateKey(t *testing.T) {
 	}
 }
 
+func TestOnDuplicateKeyIgnoreCleansConflictBatch(t *testing.T) {
+	tc := newTestCase(t)
+	tc.arg.IsIgnore = true
+	tc.rowCount = 1
+
+	resetChildren(tc.arg, tc.proc.Mp())
+	err := tc.arg.Prepare(tc.proc)
+	require.NoError(t, err)
+
+	ret, execErr := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, execErr)
+	require.Equal(t, tc.rowCount, ret.Batch.RowCount())
+
+	tc.arg.Free(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+}
+
 func TestCheckConflictReturnsBatchRowIndex(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -142,24 +160,6 @@ func TestCheckConflictReturnsLaterBatchRowIndex(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, conflictRowIdx)
 	require.Equal(t, "Duplicate entry for key 'c'", conflictMsg)
-}
-
-func TestOnDuplicateKeyIgnoreCleansConflictBatch(t *testing.T) {
-	tc := newTestCase(t)
-	tc.arg.IsIgnore = true
-	tc.rowCount = 1
-
-	resetChildren(tc.arg, tc.proc.Mp())
-	err := tc.arg.Prepare(tc.proc)
-	require.NoError(t, err)
-
-	ret, execErr := vm.Exec(tc.arg, tc.proc)
-	require.NoError(t, execErr)
-	require.Equal(t, tc.rowCount, ret.Batch.RowCount())
-
-	tc.arg.Free(tc.proc, false, nil)
-	tc.proc.Free()
-	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 }
 
 func newUniqueCheckExecutors(t *testing.T, proc *process.Process) []colexec.ExpressionExecutor {
