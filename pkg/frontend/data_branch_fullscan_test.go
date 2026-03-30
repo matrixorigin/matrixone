@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -152,6 +153,202 @@ func TestShouldFallbackToFullScan(t *testing.T) {
 			require.Equal(t, tc.want, shouldFallbackToFullScan(tc.err))
 		})
 	}
+}
+
+func TestScanSnapshotRelationByID_EarlyValidation(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	t.Run("empty attrs", func(t *testing.T) {
+		called := false
+		err := scanSnapshotRelationByID(
+			context.Background(),
+			"unit-test",
+			ses,
+			1,
+			types.BuildTS(10, 0),
+			nil,
+			nil,
+			nil,
+			0,
+			func(*batch.Batch) error {
+				called = true
+				return nil
+			},
+		)
+		require.NoError(t, err)
+		require.False(t, called)
+	})
+
+	t.Run("attrs type mismatch", func(t *testing.T) {
+		err := scanSnapshotRelationByID(
+			context.Background(),
+			"unit-test",
+			ses,
+			1,
+			types.BuildTS(10, 0),
+			[]string{"id"},
+			[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()},
+			nil,
+			0,
+			func(*batch.Batch) error { return nil },
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "attrs/colTypes length mismatch")
+	})
+
+	t.Run("range relation must be disttae relation", func(t *testing.T) {
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		rangeRel := mock_frontend.NewMockRelation(ctrl)
+		rangeRel.EXPECT().Ranges(gomock.Any(), gomock.Any()).
+			Return(readutil.NewBlockListRelationData(0), nil).
+			Times(1)
+		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(99)).
+			Return("", "", rangeRel, nil).
+			Times(1)
+
+		ses.txnHandler = &TxnHandler{
+			storage: eng,
+			txnOp:   txnOp,
+		}
+
+		err := scanSnapshotRelationByID(
+			context.Background(),
+			"unit-test",
+			ses,
+			99,
+			types.BuildTS(10, 0),
+			[]string{"id"},
+			[]types.Type{types.T_int64.ToType()},
+			nil,
+			0,
+			func(*batch.Batch) error { return nil },
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "snapshot scan requires disttae relation")
+	})
+}
+
+func TestScanTableIntoHashmap_EarlyValidation(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	t.Run("empty attrs", func(t *testing.T) {
+		tblStuff := newTestFullScanTableStuff(ctrl)
+		tblStuff.def.colNames = nil
+		tblStuff.def.colTypes = nil
+
+		hm, err := scanTableIntoHashmap(
+			context.Background(),
+			ses,
+			tblStuff,
+			1,
+			types.BuildTS(10, 0),
+			"target",
+		)
+		require.NoError(t, err)
+		require.NotNil(t, hm)
+		require.Equal(t, int64(0), hm.ItemCount())
+		require.NoError(t, hm.Close())
+	})
+
+	t.Run("attrs type mismatch", func(t *testing.T) {
+		tblStuff := newTestFullScanTableStuff(ctrl)
+		tblStuff.def.colNames = []string{"id"}
+		tblStuff.def.colTypes = []types.Type{
+			types.T_int64.ToType(),
+			types.T_varchar.ToType(),
+		}
+
+		hm, err := scanTableIntoHashmap(
+			context.Background(),
+			ses,
+			tblStuff,
+			1,
+			types.BuildTS(10, 0),
+			"target",
+		)
+		require.Error(t, err)
+		require.Nil(t, hm)
+		require.Contains(t, err.Error(), "attrs/colTypes length mismatch")
+	})
+}
+
+func TestFullTableScanDiff_PropagatesTargetScanError(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
+	ses.txnHandler = &TxnHandler{txnOp: txnOp}
+
+	tblStuff := newTestFullScanTableStuff(ctrl)
+	tblStuff.tarRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).AnyTimes()
+	tblStuff.baseRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(11)).AnyTimes()
+	tblStuff.def.colNames = []string{"id"}
+	tblStuff.def.colTypes = []types.Type{
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+	}
+
+	err := fullTableScanDiff(
+		context.Background(),
+		ses,
+		tblStuff,
+		compositeOption{},
+		func(batchWithKind) (bool, error) {
+			t.Fatal("scan error should stop before emit")
+			return false, nil
+		},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "attrs/colTypes length mismatch")
+}
+
+func TestFullTableScanDiff_PropagatesSnapshotReaderError(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	rangeRel := mock_frontend.NewMockRelation(ctrl)
+	rangeRel.EXPECT().Ranges(gomock.Any(), gomock.Any()).
+		Return(readutil.NewBlockListRelationData(0), nil).
+		Times(1)
+	eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(10)).
+		Return("", "", rangeRel, nil).
+		Times(1)
+
+	ses.txnHandler = &TxnHandler{
+		storage: eng,
+		txnOp:   txnOp,
+	}
+
+	tblStuff := newTestFullScanTableStuff(ctrl)
+	tblStuff.tarRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).AnyTimes()
+	tblStuff.baseRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(11)).AnyTimes()
+
+	err := fullTableScanDiff(
+		context.Background(),
+		ses,
+		tblStuff,
+		compositeOption{},
+		func(batchWithKind) (bool, error) {
+			t.Fatal("scan error should stop before emit")
+			return false, nil
+		},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "snapshot scan requires disttae relation")
 }
 
 func TestAppendTupleToBat_TrimsTrailingCommitTS(t *testing.T) {

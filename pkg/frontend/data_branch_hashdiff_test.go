@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -25,6 +26,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
@@ -255,6 +259,111 @@ func TestDiffDataHelper_ConflictAcceptExpandUpdate(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, [][]any{{int64(7), "after", "target"}}, got["INSERT-1"])
 	require.Equal(t, [][]any{{int64(7), "before", "base"}}, got["DELETE-2"])
+}
+
+func TestRunLCAProbeWithReaderFallback_EarlyReturns(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestFullScanTableStuff(ctrl)
+	tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
+
+	t.Run("nil batch", func(t *testing.T) {
+		ret, err := runLCAProbeWithReaderFallback(
+			context.Background(),
+			ses,
+			nil,
+			tblStuff,
+			types.BuildTS(10, 0),
+		)
+		require.NoError(t, err)
+		require.Nil(t, ret.Batches)
+	})
+
+	t.Run("empty batch", func(t *testing.T) {
+		tBat := batch.NewWithSize(1)
+		tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		defer tBat.Clean(ses.proc.Mp())
+
+		ret, err := runLCAProbeWithReaderFallback(
+			context.Background(),
+			ses,
+			tBat,
+			tblStuff,
+			types.BuildTS(10, 0),
+		)
+		require.NoError(t, err)
+		require.Len(t, ret.Batches, 1)
+		require.Equal(t, 0, ret.Batches[0].RowCount())
+		ret.Close()
+	})
+}
+
+func TestHandleDelsOnLCA_EarlyPaths(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	t.Run("invalid snapshot", func(t *testing.T) {
+		tblStuff := newTestFullScanTableStuff(ctrl)
+		tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
+
+		_, err := handleDelsOnLCA(
+			context.Background(),
+			ses,
+			nil,
+			nil,
+			tblStuff,
+			timestamp.Timestamp{},
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid branch ts")
+	})
+
+	t.Run("reader probe with empty tombstone batch", func(t *testing.T) {
+		tblStuff := newTestFullScanTableStuff(ctrl)
+		tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
+		tblStuff.lcaReaderProbeMode = &atomic.Bool{}
+		tblStuff.lcaReaderProbeMode.Store(true)
+
+		lcaDef := &plan.TableDef{
+			DbName: "db1",
+			Name:   "lca_tbl",
+			Pkey: &plan.PrimaryKeyDef{
+				Names:       []string{"id"},
+				PkeyColName: "id",
+			},
+		}
+		baseDef := &plan.TableDef{
+			Pkey: &plan.PrimaryKeyDef{
+				Names:       []string{"id"},
+				PkeyColName: "id",
+			},
+		}
+		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
+		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(77)).AnyTimes()
+		tblStuff.baseRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(baseDef).AnyTimes()
+
+		tBat := batch.NewWithSize(1)
+		tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		tBat.SetRowCount(0)
+		defer tBat.Clean(ses.proc.Mp())
+
+		dBat, err := handleDelsOnLCA(
+			context.Background(),
+			ses,
+			nil,
+			tBat,
+			tblStuff,
+			types.BuildTS(10, 0).ToTimestamp(),
+		)
+		require.NoError(t, err)
+		require.NotNil(t, dBat)
+		require.Equal(t, 0, dBat.RowCount())
+		require.Equal(t, 0, tBat.RowCount())
+		tblStuff.retPool.releaseRetBatch(dBat, false)
+	})
 }
 
 func buildVisibleComparisonBatch(t *testing.T, mp *mpool.MPool, rows [][]any) *batch.Batch {
