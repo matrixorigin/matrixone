@@ -103,6 +103,10 @@ func TestBuildSnapshotBlockFilter(t *testing.T) {
 }
 
 func TestNormalizeSnapshotScanParallelism(t *testing.T) {
+	t.Run("nil rel data", func(t *testing.T) {
+		require.Equal(t, 1, normalizeSnapshotScanParallelism(nil, 0))
+	})
+
 	t.Run("serial on small scan", func(t *testing.T) {
 		relData := newTestSnapshotRelData(snapshotScanMinBlocksPerReader*2 - 1)
 		require.Equal(t, 1, normalizeSnapshotScanParallelism(relData, 0))
@@ -123,6 +127,12 @@ func TestNormalizeSnapshotScanParallelism(t *testing.T) {
 }
 
 func TestSplitSnapshotScanShards(t *testing.T) {
+	t.Run("nil rel data", func(t *testing.T) {
+		shards := splitSnapshotScanShards(nil, 4)
+		require.Len(t, shards, 1)
+		require.Nil(t, shards[0])
+	})
+
 	relData := newTestSnapshotRelData(snapshotScanMinBlocksPerReader*4 + 3)
 	shards := splitSnapshotScanShards(relData, 4)
 	require.Len(t, shards, 4)
@@ -252,6 +262,17 @@ func TestBuildSnapshotScanReaderConfig(t *testing.T) {
 	require.True(t, cfg.hasBlockFilter)
 	require.Equal(t, uint16(5), cfg.filterSeqnum)
 	require.Equal(t, types.T_int64, cfg.filterType.Oid)
+
+	cfg, err = buildSnapshotScanReaderConfig(
+		tableDef,
+		[]string{"id", "payload"},
+		[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()},
+		nil,
+		mp,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []uint16{5, 6}, cfg.seqnums)
+	require.False(t, cfg.hasBlockFilter)
 }
 
 func TestUnwrapTxnTable(t *testing.T) {
@@ -301,6 +322,29 @@ func TestScanSnapshotShardsParallel_SkipsEmptyShards(t *testing.T) {
 		},
 	)
 	require.NoError(t, err)
+}
+
+func TestScanSnapshotShardsParallel_ContextCanceled(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := scanSnapshotShardsParallel(
+		ctx,
+		nil,
+		types.BuildTS(20, 0),
+		[]engine.RelData{newTestSnapshotRelData(1)},
+		snapshotScanReaderConfig{
+			attrs:    []string{"id"},
+			seqnums:  []uint16{1},
+			colTypes: []types.Type{types.T_int64.ToType()},
+		},
+		mp,
+		func(*batch.Batch) error { return nil },
+	)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestScanSnapshotShardLocal_EmptyRange(t *testing.T) {

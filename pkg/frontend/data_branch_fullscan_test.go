@@ -231,6 +231,70 @@ func TestScanSnapshotRelationByID_EarlyValidation(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "snapshot scan requires disttae relation")
 	})
+
+	t.Run("nil range relation", func(t *testing.T) {
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(100)).
+			Return("", "", nil, nil).
+			Times(1)
+
+		ses.txnHandler = &TxnHandler{
+			storage: eng,
+			txnOp:   txnOp,
+		}
+
+		err := scanSnapshotRelationByID(
+			context.Background(),
+			"unit-test",
+			ses,
+			100,
+			types.BuildTS(10, 0),
+			[]string{"id"},
+			[]types.Type{types.T_int64.ToType()},
+			nil,
+			0,
+			func(*batch.Batch) error { return nil },
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "cannot resolve range relation by id 100")
+	})
+
+	t.Run("ranges error", func(t *testing.T) {
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		rangeRel := mock_frontend.NewMockRelation(ctrl)
+		wantErr := moerr.NewInternalErrorNoCtx("ranges failed")
+		rangeRel.EXPECT().Ranges(gomock.Any(), gomock.Any()).
+			Return(nil, wantErr).
+			Times(1)
+		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(101)).
+			Return("", "", rangeRel, nil).
+			Times(1)
+
+		ses.txnHandler = &TxnHandler{
+			storage: eng,
+			txnOp:   txnOp,
+		}
+
+		err := scanSnapshotRelationByID(
+			context.Background(),
+			"unit-test",
+			ses,
+			101,
+			types.BuildTS(10, 0),
+			[]string{"id"},
+			[]types.Type{types.T_int64.ToType()},
+			nil,
+			0,
+			func(*batch.Batch) error { return nil },
+		)
+		require.ErrorIs(t, err, wantErr)
+	})
 }
 
 func TestScanTableIntoHashmap_EarlyValidation(t *testing.T) {
@@ -276,6 +340,38 @@ func TestScanTableIntoHashmap_EarlyValidation(t *testing.T) {
 		require.Error(t, err)
 		require.Nil(t, hm)
 		require.Contains(t, err.Error(), "attrs/colTypes length mismatch")
+	})
+
+	t.Run("snapshot reader error", func(t *testing.T) {
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		rangeRel := mock_frontend.NewMockRelation(ctrl)
+		rangeRel.EXPECT().Ranges(gomock.Any(), gomock.Any()).
+			Return(readutil.NewBlockListRelationData(0), nil).
+			Times(1)
+		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(88)).
+			Return("", "", rangeRel, nil).
+			Times(1)
+
+		ses.txnHandler = &TxnHandler{
+			storage: eng,
+			txnOp:   txnOp,
+		}
+
+		tblStuff := newTestFullScanTableStuff(ctrl)
+		hm, err := scanTableIntoHashmap(
+			context.Background(),
+			ses,
+			tblStuff,
+			88,
+			types.BuildTS(10, 0),
+			"target",
+		)
+		require.Error(t, err)
+		require.Nil(t, hm)
+		require.Contains(t, err.Error(), "snapshot scan requires disttae relation")
 	})
 }
 
@@ -443,6 +539,59 @@ func TestDiffFullScanHashmaps_ContextCanceled(t *testing.T) {
 		return false, nil
 	}, tarHashmap, baseHashmap)
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestDiffFullScanHashmaps_StopOnFirstEmit(t *testing.T) {
+	ses := newValidateSession(t)
+	mp := ses.proc.Mp()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestFullScanTableStuff(ctrl)
+	tarHashmap := buildTestBranchHashmap(
+		t, mp, tblStuff.def.colTypes,
+		[][]any{{int64(1), "tar-only", "h1"}},
+	)
+	defer func() {
+		require.NoError(t, tarHashmap.Close())
+	}()
+	baseHashmap := buildTestBranchHashmap(t, mp, tblStuff.def.colTypes, nil)
+	defer func() {
+		require.NoError(t, baseHashmap.Close())
+	}()
+
+	emitCnt := 0
+	err := diffFullScanHashmaps(
+		context.Background(),
+		ses,
+		tblStuff,
+		compositeOption{},
+		func(batchWithKind) (bool, error) {
+			emitCnt++
+			return true, nil
+		},
+		tarHashmap,
+		baseHashmap,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, emitCnt)
+}
+
+func TestRowsEqual_UsesVisibleColumnsOnly(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestFullScanTableStuff(ctrl)
+	require.True(t, rowsEqual(
+		types.Tuple{int64(1), []byte("same"), []byte("tar-hidden")},
+		types.Tuple{int64(1), []byte("same"), []byte("base-hidden")},
+		tblStuff,
+	))
+	require.False(t, rowsEqual(
+		types.Tuple{int64(1), []byte("target"), []byte("hidden")},
+		types.Tuple{int64(1), []byte("base"), []byte("hidden")},
+		tblStuff,
+	))
 }
 
 type capturedBatch struct {
