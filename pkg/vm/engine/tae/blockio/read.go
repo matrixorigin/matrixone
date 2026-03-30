@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -87,7 +88,7 @@ func ReadDataByFilter(
 ) (sels []int64, err error) {
 	// PXU TODO: temporary solution, need to be refactored
 	// cannot filter by physical address column now
-	deleteMask, release, _, err := readBlockData(
+	deleteMask, release, err := readBlockData(
 		ctx,
 		columns,
 		colTypes,
@@ -160,7 +161,7 @@ func BlockDataReadNoCopy(
 	}
 
 	// read block data from storage specified by meta location
-	if deleteMask, release, _, err = readBlockData(
+	if deleteMask, release, err = readBlockData(
 		ctx, columns, colTypes, phyAddrColumnPos, info, ds, ts, policy, cacheVectors, mp, fs,
 	); err != nil {
 		return nil, nil, nil, err
@@ -213,53 +214,7 @@ func BlockDataReadNoCopy(
 	return outputBat, retMask, release, nil
 }
 
-// BlockDataReadWait waits for the TopN calculation job initiated by Launch to complete.
-// It then materializes the selected rows and their distances into the output batch.
-func BlockDataReadWait(
-	ctx context.Context,
-	job *IVFFlatIndexJob,
-	info *objectio.BlockInfo,
-	columns []uint16,
-	phyAddrColumnPos int,
-	orderByLimit *objectio.IndexReaderTopOp,
-	bat *batch.Batch,
-	cacheVectors containers.Vectors,
-	mp *mpool.MPool,
-) error {
-	if job == nil {
-		if bat.Vecs[0].Length() > 0 {
-			bat.SetRowCount(bat.Vecs[0].Length())
-		}
-		return nil
-	}
-	if job.Release != nil {
-		defer job.Release()
-	}
-
-	selectRows, dists, err := handleOrderByLimitOnSelectRowsWait(ctx, job)
-	if err != nil {
-		return err
-	}
-
-	err = fillOutputBatchBySelectedRows(
-		info,
-		columns,
-		phyAddrColumnPos,
-		bat,
-		cacheVectors,
-		selectRows,
-		orderByLimit,
-		dists,
-		mp,
-	)
-	if err != nil {
-		return err
-	}
-	bat.SetRowCount(bat.Vecs[0].Length())
-	return nil
-}
-
-// BlockDataRead is a synchronous wrapper around BlockDataReadLaunch and BlockDataReadWait.
+// BlockDataRead only read block data from storage, don't apply deletes.
 func BlockDataRead(
 	ctx context.Context,
 	info *objectio.BlockInfo,
@@ -279,42 +234,6 @@ func BlockDataRead(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) error {
-	job, err := BlockDataReadLaunch(
-		ctx, info, ds, columns, colTypes, phyAddrColumnPos, ts,
-		filterSeqnums, filterColTypes, filter, orderByLimit,
-		policy, tableName, bat, cacheVectors, mp, fs,
-		metric.GPUThresholdSync,
-	)
-	if err != nil {
-		return err
-	}
-	return BlockDataReadWait(
-		ctx, job, info, columns, phyAddrColumnPos, orderByLimit, bat, cacheVectors, mp,
-	)
-}
-
-// BlockDataReadLaunch initiates a block read and potentially a TopN pruning job.
-// It returns an IVFFlatIndexJob handle if an asynchronous computation was launched.
-func BlockDataReadLaunch(
-	ctx context.Context,
-	info *objectio.BlockInfo,
-	ds engine.DataSource,
-	columns []uint16,
-	colTypes []types.Type,
-	phyAddrColumnPos int,
-	ts timestamp.Timestamp,
-	filterSeqnums []uint16,
-	filterColTypes []types.Type,
-	filter objectio.BlockReadFilter,
-	orderByLimit *objectio.IndexReaderTopOp,
-	policy fileservice.Policy,
-	tableName string,
-	bat *batch.Batch,
-	cacheVectors containers.Vectors,
-	mp *mpool.MPool,
-	fs fileservice.FileService,
-	minWorkSize uint64,
-) (*IVFFlatIndexJob, error) {
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 		logutil.Debugf("read block %s, columns %v, types %v", info.BlockID.String(), columns, colTypes)
 	}
@@ -342,17 +261,17 @@ func BlockDataReadLaunch(
 			mp,
 			fs,
 		); err != nil {
-			return nil, err
+			return err
 		}
 		v2.TxnSelReadFilterTotal.Observe(1.0)
 
 		if len(sels) == 0 {
 			v2.TxnSelReadFilterFiltered.Observe(1.0)
-			return nil, nil
+			return nil
 		}
 	}
 
-	return BlockDataReadInnerLaunch(
+	err = BlockDataReadInner(
 		ctx,
 		info,
 		ds,
@@ -367,8 +286,13 @@ func BlockDataReadLaunch(
 		cacheVectors,
 		mp,
 		fs,
-		minWorkSize,
 	)
+	if err != nil {
+		return err
+	}
+
+	bat.SetRowCount(bat.Vecs[0].Length())
+	return nil
 }
 
 func CopyBlockData(
@@ -464,40 +388,12 @@ func BlockDataReadBackup(
 	return
 }
 
-type IVFFlatIndexJob struct {
-	JobHandle     metric.PairwiseJobHandle
-	SelectRows    []int64
-	PairwiseDists []float32
-	OrderByLimit  *objectio.IndexReaderTopOp
-	Release       func()
-}
-
-// CleanupIVFFlatIndexJob drains a job that was launched but will never be waited on
-// (e.g. when the reader is closed mid-stream due to an error). It waits for any
-// pending GPU computation to finish before freeing the associated C memory via Release.
-func CleanupIVFFlatIndexJob(job *IVFFlatIndexJob) {
-	if job == nil {
-		return
-	}
-	if job.JobHandle.IsValid() {
-		metric.PairwiseDistanceWait(job.JobHandle, job.OrderByLimit.MetricType) //nolint:errcheck
-	}
-	if job.Release != nil {
-		job.Release()
-	}
-}
-
-// HandleOrderByLimitOnIVFFlatIndexLaunch initiates the TopN pruning and distance calculation
-// for an IVFFlat index. It returns a job handle that can be used to wait for completion.
-// This allows the caller to overlap this potentially expensive calculation (especially on GPU)
-// with other tasks like fetching the next block's metadata.
-func HandleOrderByLimitOnIVFFlatIndexLaunch(
+func HandleOrderByLimitOnIVFFlatIndex(
 	ctx context.Context,
 	selectRows []int64,
 	vecCol *vector.Vector,
 	orderByLimit *objectio.IndexReaderTopOp,
-	minWorkSize uint64,
-) (*IVFFlatIndexJob, error) {
+) ([]int64, []float64, error) {
 	if selectRows == nil {
 		selectRows = make([]int64, vecCol.Length())
 		for i := range selectRows {
@@ -510,180 +406,130 @@ func HandleOrderByLimitOnIVFFlatIndexLaunch(
 		return nullsBm.Contains(uint64(row))
 	})
 
-	switch orderByLimit.Typ {
-	case types.T_array_float32:
-		rhs := types.BytesToArray[float32](orderByLimit.NumVec)
-		dim := len(rhs)
-		if dim == 0 {
-			return nil, moerr.NewInternalError(ctx, "empty query vector")
-		}
-		nX := len(selectRows)
-		if nX == 0 {
-			return nil, nil
-		}
-
-		lhs := make([][]float32, nX)
-		for i, row := range selectRows {
-			lhs[i] = types.BytesToArray[float32](vecCol.GetBytesAt(int(row)))
-		}
-
-		pairwiseDists := make([]float32, nX)
-
-		// Launch asynchronously (GPU or CPU based on build tags)
-		handle, err := metric.PairwiseDistanceLaunch(
-			lhs,
-			[][]float32{rhs},
-			orderByLimit.MetricType,
-			pairwiseDists,
-			minWorkSize,
-		)
-		if err != nil {
-			return nil, err
-		}
-
-		return &IVFFlatIndexJob{
-			JobHandle:     handle,
-			SelectRows:    selectRows,
-			PairwiseDists: pairwiseDists,
-			OrderByLimit:  orderByLimit,
-		}, nil
-
-	case types.T_array_float64:
-		rhs := types.BytesToArray[float64](orderByLimit.NumVec)
-		dim := len(rhs)
-		if dim == 0 {
-			return nil, moerr.NewInternalError(ctx, "empty query vector")
-		}
-		nX := len(selectRows)
-		if nX == 0 {
-			return nil, nil
-		}
-
-		lhs := make([][]float64, nX)
-		for i, row := range selectRows {
-			lhs[i] = types.BytesToArray[float64](vecCol.GetBytesAt(int(row)))
-		}
-
-		pairwiseDists := make([]float32, nX)
-
-		// Launch asynchronously (GPU or CPU based on build tags)
-		handle, err := metric.PairwiseDistanceLaunch(
-			lhs,
-			[][]float64{rhs},
-			orderByLimit.MetricType,
-			pairwiseDists,
-			minWorkSize,
-		)
-		if err != nil {
-			return nil, err
-		}
-
-		return &IVFFlatIndexJob{
-			JobHandle:     handle,
-			SelectRows:    selectRows,
-			PairwiseDists: pairwiseDists,
-			OrderByLimit:  orderByLimit,
-		}, nil
-
-	default:
-		return nil, moerr.NewInternalError(ctx, fmt.Sprintf("only support float32/float64 type for topn: %s", orderByLimit.Typ))
-	}
-}
-
-// HandleOrderByLimitOnIVFFlatIndexWait waits for the completion of the TopN job
-// initiated by the Launch function. It performs the final sorting and pruning
-// of the results based on the calculated distances.
-func HandleOrderByLimitOnIVFFlatIndexWait(
-	ctx context.Context,
-	job *IVFFlatIndexJob,
-) ([]int64, []float64, error) {
-	if job == nil {
-		return nil, nil, nil
-	}
-
-	// Wait for completion
-	_, err := metric.PairwiseDistanceWait(job.JobHandle, job.OrderByLimit.MetricType)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	selectRows := job.SelectRows
-	pairwiseDists := job.PairwiseDists
-	orderByLimit := job.OrderByLimit
-	nX := len(selectRows)
-
+	searchResults := make([]vectorindex.SearchResult, 0, len(selectRows))
 	topLimit, err := vectorIndexTopLimit(ctx, orderByLimit.Limit)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	resIdx := 0
-	sels := make([]int64, nX)
-	dists := make([]float64, nX)
-
-	for i, row := range selectRows {
-		dist64 := float64(pairwiseDists[i])
-
-		if orderByLimit.LowerBoundType == plan.BoundType_INCLUSIVE {
-			if dist64 < orderByLimit.LowerBound {
-				continue
-			}
-		} else if orderByLimit.LowerBoundType == plan.BoundType_EXCLUSIVE {
-			if dist64 <= orderByLimit.LowerBound {
-				continue
-			}
-		}
-		if orderByLimit.UpperBoundType == plan.BoundType_INCLUSIVE {
-			if dist64 > orderByLimit.UpperBound {
-				continue
-			}
-		} else if orderByLimit.UpperBoundType == plan.BoundType_EXCLUSIVE {
-			if dist64 >= orderByLimit.UpperBound {
-				continue
-			}
+	switch orderByLimit.Typ {
+	case types.T_array_float32:
+		distFunc, err := metric.ResolveDistanceFn[float32](orderByLimit.MetricType)
+		if err != nil {
+			return nil, nil, err
 		}
 
-		if len(orderByLimit.DistHeap) >= topLimit {
-			if dist64 < orderByLimit.DistHeap[0] {
-				orderByLimit.DistHeap[0] = dist64
-				heap.Fix(&orderByLimit.DistHeap, 0)
+		rhs := types.BytesToArray[float32](orderByLimit.NumVec)
+
+		for _, row := range selectRows {
+			dist, err := distFunc(types.BytesToArray[float32](vecCol.GetBytesAt(int(row))), rhs)
+			if err != nil {
+				return nil, nil, err
+			}
+			dist64 := float64(dist)
+
+			if orderByLimit.LowerBoundType == plan.BoundType_INCLUSIVE {
+				if dist64 < orderByLimit.LowerBound {
+					continue
+				}
+			} else if orderByLimit.LowerBoundType == plan.BoundType_EXCLUSIVE {
+				if dist64 <= orderByLimit.LowerBound {
+					continue
+				}
+			}
+			if orderByLimit.UpperBoundType == plan.BoundType_INCLUSIVE {
+				if dist64 > orderByLimit.UpperBound {
+					continue
+				}
+			} else if orderByLimit.UpperBoundType == plan.BoundType_EXCLUSIVE {
+				if dist64 >= orderByLimit.UpperBound {
+					continue
+				}
+			}
+
+			if len(orderByLimit.DistHeap) >= topLimit {
+				if dist64 < orderByLimit.DistHeap[0] {
+					orderByLimit.DistHeap[0] = dist64
+					heap.Fix(&orderByLimit.DistHeap, 0)
+				} else {
+					continue
+				}
 			} else {
-				continue
+				heap.Push(&orderByLimit.DistHeap, dist64)
 			}
-		} else {
-			heap.Push(&orderByLimit.DistHeap, dist64)
+
+			searchResults = append(searchResults, vectorindex.SearchResult{
+				Id:       row,
+				Distance: dist64,
+			})
 		}
 
-		sels[resIdx] = row
-		dists[resIdx] = dist64
-		resIdx++
-	}
-	sels = sels[:resIdx]
-	dists = dists[:resIdx]
-
-	finalIdx := 0
-	for i := 0; i < len(sels); i++ {
-		if dists[i] <= orderByLimit.DistHeap[0] {
-			sels[finalIdx] = sels[i]
-			dists[finalIdx] = dists[i]
-			finalIdx++
+	case types.T_array_float64:
+		distFunc, err := metric.ResolveDistanceFn[float64](orderByLimit.MetricType)
+		if err != nil {
+			return nil, nil, err
 		}
-	}
-	return sels[:finalIdx], dists[:finalIdx], nil
-}
 
-// HandleOrderByLimitOnIVFFlatIndex is a synchronous wrapper around Launch and Wait.
-func HandleOrderByLimitOnIVFFlatIndex(
-	ctx context.Context,
-	selectRows []int64,
-	vecCol *vector.Vector,
-	orderByLimit *objectio.IndexReaderTopOp,
-) ([]int64, []float64, error) {
-	job, err := HandleOrderByLimitOnIVFFlatIndexLaunch(ctx, selectRows, vecCol, orderByLimit, metric.GPUThresholdSync)
-	if err != nil {
-		return nil, nil, err
+		rhs := types.BytesToArray[float64](orderByLimit.NumVec)
+
+		for _, row := range selectRows {
+			dist64, err := distFunc(types.BytesToArray[float64](vecCol.GetBytesAt(int(row))), rhs)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			if orderByLimit.LowerBoundType == plan.BoundType_INCLUSIVE {
+				if dist64 < orderByLimit.LowerBound {
+					continue
+				}
+			} else if orderByLimit.LowerBoundType == plan.BoundType_EXCLUSIVE {
+				if dist64 <= orderByLimit.LowerBound {
+					continue
+				}
+			}
+			if orderByLimit.UpperBoundType == plan.BoundType_INCLUSIVE {
+				if dist64 > orderByLimit.UpperBound {
+					continue
+				}
+			} else if orderByLimit.UpperBoundType == plan.BoundType_EXCLUSIVE {
+				if dist64 >= orderByLimit.UpperBound {
+					continue
+				}
+			}
+
+			if len(orderByLimit.DistHeap) >= topLimit {
+				if dist64 < orderByLimit.DistHeap[0] {
+					orderByLimit.DistHeap[0] = dist64
+					heap.Fix(&orderByLimit.DistHeap, 0)
+				} else {
+					continue
+				}
+			} else {
+				heap.Push(&orderByLimit.DistHeap, dist64)
+			}
+
+			searchResults = append(searchResults, vectorindex.SearchResult{
+				Id:       row,
+				Distance: dist64,
+			})
+		}
+
+	default:
+		return nil, nil, moerr.NewInternalError(ctx, fmt.Sprintf("only support float32/float64 type for topn: %s", orderByLimit.Typ))
 	}
-	return HandleOrderByLimitOnIVFFlatIndexWait(ctx, job)
+
+	searchResults = slices.DeleteFunc(searchResults, func(res vectorindex.SearchResult) bool {
+		return res.Distance > orderByLimit.DistHeap[0]
+	})
+
+	sels := make([]int64, len(searchResults))
+	dists := make([]float64, len(searchResults))
+	for i, res := range searchResults {
+		sels[i] = res.Id
+		dists[i] = res.Distance
+	}
+
+	return sels, dists, nil
 }
 
 func fillOutputBatchBySelectedRows(
@@ -700,13 +546,12 @@ func fillOutputBatchBySelectedRows(
 	// phyAddrColumnPos >= 0 means one of the columns is the physical address column.
 	// The physical address column should be generated by blockid + rowid.
 	if phyAddrColumnPos >= 0 {
-		outputBat.Vecs[phyAddrColumnPos].CleanOnlyData()
-		if len(selectRows) > 0 {
-			if err = buildRowidColumn(
-				info, outputBat.Vecs[phyAddrColumnPos], selectRows, mp,
-			); err != nil {
-				return err
-			}
+		if len(selectRows) == 0 {
+			outputBat.Vecs[phyAddrColumnPos].CleanOnlyData()
+		} else if err = buildRowidColumn(
+			info, outputBat.Vecs[phyAddrColumnPos], selectRows, mp,
+		); err != nil {
+			return err
 		}
 	}
 
@@ -717,12 +562,10 @@ func fillOutputBatchBySelectedRows(
 		if outputColPos == phyAddrColumnPos {
 			continue
 		}
-		if len(selectRows) == 0 {
-			outputBat.Vecs[outputColPos].CleanOnlyData()
+		if orderByLimit != nil && loadedColumnPos == int(orderByLimit.ColPos) {
 			loadedColumnPos++
 			continue
 		}
-		outputBat.Vecs[outputColPos].CleanOnlyData()
 		if err = outputBat.Vecs[outputColPos].PreExtendWithArea(
 			len(selectRows), 0, mp,
 		); err != nil {
@@ -740,14 +583,11 @@ func fillOutputBatchBySelectedRows(
 		if len(outputBat.Vecs) == len(columns) {
 			distVec := vector.NewVec(types.T_float64.ToType())
 			if err = vector.AppendFixedList(distVec, dists, nil, mp); err != nil {
-				distVec.Free(mp)
 				return err
 			}
 			outputBat.Vecs = append(outputBat.Vecs, distVec)
 		} else {
-			distVec := outputBat.Vecs[len(outputBat.Vecs)-1]
-			distVec.CleanOnlyData()
-			if err := vector.AppendFixedList(distVec, dists, nil, mp); err != nil {
+			if err = vector.AppendFixedList(outputBat.Vecs[len(outputBat.Vecs)-1], dists, nil, mp); err != nil {
 				return err
 			}
 		}
@@ -757,7 +597,7 @@ func fillOutputBatchBySelectedRows(
 }
 
 // BlockDataReadInner only read data,don't apply deletes.
-func BlockDataReadInnerLaunch(
+func BlockDataReadInner(
 	ctx context.Context,
 	info *objectio.BlockInfo,
 	ds engine.DataSource,
@@ -772,17 +612,15 @@ func BlockDataReadInnerLaunch(
 	cacheVectors containers.Vectors,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
-	minWorkSize uint64,
-) (job *IVFFlatIndexJob, err error) {
+) (err error) {
 	var (
 		deletedRows []int64
 		deleteMask  objectio.Bitmap
 		release     func()
-		fromCache   bool
 	)
 
 	// read block data from storage specified by meta location
-	if deleteMask, release, fromCache, err = readBlockData(
+	if deleteMask, release, err = readBlockData(
 		ctx,
 		columns,
 		colTypes,
@@ -797,32 +635,21 @@ func BlockDataReadInnerLaunch(
 	); err != nil {
 		return
 	}
-	defer func() {
-		if job == nil {
-			release()
-		}
-	}()
+	defer release()
 	defer deleteMask.Release()
-
-	// When the block was served entirely from cache there is no I/O latency to
-	// overlap with GPU compute, so fall back to the same threshold used for
-	// in-memory blocks to avoid launching the GPU for small workloads.
-	threshold := minWorkSize
-	if fromCache {
-		threshold = metric.GPUThresholdSync
-	}
 
 	// len(selectRows) > 0 means it was already filtered by pk filter
 	if len(selectRows) > 0 {
+		var dists []float64
+
 		if orderByLimit != nil {
-			job, err = handleOrderByLimitOnSelectRowsLaunch(ctx, selectRows, orderByLimit, phyAddrColumnPos, cacheVectors, threshold)
-			if job != nil {
-				job.Release = release
+			selectRows, dists, err = handleOrderByLimitOnSelectRows(ctx, selectRows, orderByLimit, phyAddrColumnPos, cacheVectors)
+			if err != nil {
+				return err
 			}
-			return
 		}
 
-		err = fillOutputBatchBySelectedRows(
+		return fillOutputBatchBySelectedRows(
 			info,
 			columns,
 			phyAddrColumnPos,
@@ -830,10 +657,9 @@ func BlockDataReadInnerLaunch(
 			cacheVectors,
 			selectRows,
 			orderByLimit,
-			nil,
+			dists,
 			mp,
 		)
-		return nil, err
 	}
 
 	tombstones, err := ds.GetTombstones(ctx, &info.BlockID)
@@ -866,11 +692,24 @@ func BlockDataReadInnerLaunch(
 	// apply TopN on live rows (exclude tombstones first), then materialize selected rows.
 	if orderByLimit != nil {
 		topInputRows := buildTopInputRows(int(info.MetaLocation().Rows()), deleteMask)
-		job, err = handleOrderByLimitOnSelectRowsLaunch(ctx, topInputRows, orderByLimit, phyAddrColumnPos, cacheVectors, threshold)
-		if job != nil {
-			job.Release = release
+
+		var dists []float64
+		selectRows, dists, err = handleOrderByLimitOnSelectRows(ctx, topInputRows, orderByLimit, phyAddrColumnPos, cacheVectors)
+		if err != nil {
+			return err
 		}
-		return
+
+		return fillOutputBatchBySelectedRows(
+			info,
+			columns,
+			phyAddrColumnPos,
+			outputBat,
+			cacheVectors,
+			selectRows,
+			orderByLimit,
+			dists,
+			mp,
+		)
 	}
 
 	// build rowid column if needed
@@ -901,7 +740,7 @@ func BlockDataReadInnerLaunch(
 			outputBat.Vecs[outputColPos].Shrink(deletedRows, true)
 		}
 	}
-	return nil, err
+	return
 }
 
 // buildTopInputRows constructs a slice of live row indices by excluding rows
@@ -990,7 +829,6 @@ func readBlockData(
 ) (
 	deleteMask objectio.Bitmap,
 	release func(),
-	fromCache bool,
 	err error,
 ) {
 	cacheVectors.Free(m)
@@ -1007,7 +845,7 @@ func readBlockData(
 			return
 		}
 
-		release, fromCache, err2 = ioutil.LoadColumns(
+		release, _, err2 = ioutil.LoadColumns(
 			ctx, cols, typs, fs, info.MetaLocation(), cacheVectors2, m, policy,
 		)
 		if err2 != nil {
@@ -1063,30 +901,6 @@ func readBlockData(
 	return
 }
 
-func handleOrderByLimitOnSelectRowsLaunch(
-	ctx context.Context,
-	selectRows []int64,
-	orderByLimit *objectio.IndexReaderTopOp,
-	phyAddrColumnPos int,
-	cacheVectors containers.Vectors,
-	minWorkSize uint64,
-) (*IVFFlatIndexJob, error) {
-	vecColPos := orderByLimit.ColPos
-	if phyAddrColumnPos >= 0 && vecColPos > int32(phyAddrColumnPos) {
-		vecColPos--
-	}
-	vecCol := &cacheVectors[vecColPos]
-
-	return HandleOrderByLimitOnIVFFlatIndexLaunch(ctx, selectRows, vecCol, orderByLimit, minWorkSize)
-}
-
-func handleOrderByLimitOnSelectRowsWait(
-	ctx context.Context,
-	job *IVFFlatIndexJob,
-) ([]int64, []float64, error) {
-	return HandleOrderByLimitOnIVFFlatIndexWait(ctx, job)
-}
-
 func handleOrderByLimitOnSelectRows(
 	ctx context.Context,
 	selectRows []int64,
@@ -1094,9 +908,11 @@ func handleOrderByLimitOnSelectRows(
 	phyAddrColumnPos int,
 	cacheVectors containers.Vectors,
 ) ([]int64, []float64, error) {
-	job, err := handleOrderByLimitOnSelectRowsLaunch(ctx, selectRows, orderByLimit, phyAddrColumnPos, cacheVectors, metric.GPUThresholdSync)
-	if err != nil {
-		return nil, nil, err
+	vecColPos := orderByLimit.ColPos
+	if phyAddrColumnPos >= 0 && vecColPos > int32(phyAddrColumnPos) {
+		vecColPos--
 	}
-	return handleOrderByLimitOnSelectRowsWait(ctx, job)
+	vecCol := &cacheVectors[vecColPos]
+
+	return HandleOrderByLimitOnIVFFlatIndex(ctx, selectRows, vecCol, orderByLimit)
 }
