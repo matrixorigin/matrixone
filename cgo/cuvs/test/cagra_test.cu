@@ -246,13 +246,18 @@ TEST(GpuCagraTest, ManualShardedSearchWithIds) {
 
 TEST(GpuCagraTest, SoftDeleteSearch) {
     const uint32_t dimension = 3;
-    const uint64_t count = 3;
-    std::vector<float> dataset = {
-        1.0, 2.0, 3.0, // ID 0
-        4.0, 5.0, 6.0, // ID 1
-        7.0, 8.0, 9.0  // ID 2
-    };
-    
+    // IDs 0-2 are the test vectors; IDs 3-129 are far-away padding so that
+    // default build params (graph_degree=64, intermediate=128) are satisfied
+    // while nearest-neighbor results for the test vectors remain correct.
+    const uint64_t count = 130;
+    std::vector<float> dataset(count * dimension);
+    dataset[0] = 1.0; dataset[1] = 2.0; dataset[2] = 3.0; // ID 0
+    dataset[3] = 4.0; dataset[4] = 5.0; dataset[5] = 6.0; // ID 1
+    dataset[6] = 7.0; dataset[7] = 8.0; dataset[8] = 9.0; // ID 2
+    for (uint64_t i = 3; i < count; ++i)
+        for (uint32_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = 1e6f + (float)i; // far away
+
     std::vector<int> devices = {0};
     cagra_build_params_t bp = cagra_build_params_default();
     gpu_cagra_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
@@ -282,10 +287,20 @@ TEST(GpuCagraTest, SoftDeleteSearch) {
 
 TEST(GpuCagraTest, SoftDeleteWithCustomIds) {
     const uint32_t dimension = 2;
-    const uint64_t count = 3;
-    std::vector<float> dataset = {10, 10, 20, 20, 30, 30};
-    std::vector<uint32_t> ids = {100, 200, 300};
-    
+    // IDs 100/200/300 are the test vectors; the rest are far-away padding so
+    // default build params (graph_degree=64, intermediate=128) are satisfied.
+    const uint64_t count = 130;
+    std::vector<float> dataset(count * dimension);
+    dataset[0] = 10; dataset[1] = 10; // ID 100
+    dataset[2] = 20; dataset[3] = 20; // ID 200
+    dataset[4] = 30; dataset[5] = 30; // ID 300
+    for (uint64_t i = 3; i < count; ++i)
+        for (uint32_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = 1e6f + (float)i; // far away
+    std::vector<uint32_t> ids(count);
+    ids[0] = 100; ids[1] = 200; ids[2] = 300;
+    for (uint64_t i = 3; i < count; ++i) ids[i] = (uint32_t)(1000 + i);
+
     std::vector<int> devices = {0};
     cagra_build_params_t bp = cagra_build_params_default();
     gpu_cagra_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU, ids.data());
@@ -309,7 +324,7 @@ TEST(GpuCagraTest, SoftDeleteWithCustomIds) {
 
 TEST(GpuCagraTest, ExtendReplicatedWithHostIds) {
     const uint32_t dimension = 16;
-    const uint64_t n_base = 100;
+    const uint64_t n_base = 200; // must be > intermediate_graph_degree (128)
     const uint64_t n_ext  = 10;
 
     int dev_count = gpu_get_device_count();
@@ -359,7 +374,10 @@ TEST(GpuCagraTest, ExtendReplicatedWithHostIds) {
 
 TEST(GpuCagraTest, ExtendShardedThrows) {
     const uint32_t dimension = 16;
-    const uint64_t n_base = 100;
+    // With default params (intermediate_graph_degree=128, graph_degree=64) and up to 4 GPUs,
+    // each shard must have >128 rows. rows_per_shard = (n/gpus) & ~31, so n=640 gives
+    // rows_per_shard=160 for 4 GPUs, safely above the threshold.
+    const uint64_t n_base = 640;
 
     int dev_count = gpu_get_device_count();
     if (dev_count < 2) {
@@ -386,9 +404,35 @@ TEST(GpuCagraTest, ExtendShardedThrows) {
     index.destroy();
 }
 
+TEST(GpuCagraTest, BuildParamsTooLargeForShardThrows) {
+    const uint32_t dimension = 16;
+    const uint64_t n_base = 100; // Too small: default params require >128 rows per shard
+
+    int dev_count = gpu_get_device_count();
+    if (dev_count < 2) {
+        TEST_LOG("Skipping BuildParamsTooLargeForShardThrows: Need at least 2 GPUs");
+        return;
+    }
+    if (dev_count > 4) dev_count = 4;
+    std::vector<int> devices(dev_count);
+    gpu_get_device_list(devices.data(), dev_count);
+
+    std::vector<float> dataset(n_base * dimension);
+    for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
+
+    cagra_build_params_t bp = cagra_build_params_default(); // intermediate=128, graph=64
+    gpu_cagra_t<float> index(dataset.data(), n_base, dimension,
+                             DistanceType_L2Expanded, bp, devices, 1,
+                             DistributionMode_SHARDED);
+    index.start();
+    ASSERT_THROW(index.build(), std::invalid_argument);
+
+    index.destroy();
+}
+
 TEST(GpuCagraTest, ExtendWithoutHostIds) {
     const uint32_t dimension = 16;
-    const uint64_t n_base = 100;
+    const uint64_t n_base = 200; // must be > intermediate_graph_degree (128)
     const uint64_t n_ext  = 10;
 
     // Base dataset: vector i has all components = (float)rand()/RAND_MAX (random in [0,1])
@@ -427,7 +471,7 @@ TEST(GpuCagraTest, ExtendWithoutHostIds) {
 
 TEST(GpuCagraTest, ExtendWithHostIds) {
     const uint32_t dimension = 16;
-    const uint64_t n_base = 100;
+    const uint64_t n_base = 200; // must be > intermediate_graph_degree (128)
     const uint64_t n_ext  = 10;
 
     std::vector<float> dataset(n_base * dimension);
@@ -435,7 +479,7 @@ TEST(GpuCagraTest, ExtendWithHostIds) {
     for (uint64_t i = 0; i < n_base; ++i) {
         for (uint32_t j = 0; j < dimension; ++j)
             dataset[i * dimension + j] = (float)rand() / RAND_MAX;
-        base_ids[i] = (uint32_t)(1000 + i);  // external IDs 1000..1099
+        base_ids[i] = (uint32_t)(1000 + i);  // external IDs 1000..1199
     }
 
     std::vector<int> devices = {0};
