@@ -756,6 +756,7 @@ func TestHashDiff_NoLCAWithStubHandles(t *testing.T) {
 	})
 
 	var got []capturedBatch
+	var mu sync.Mutex
 	err = hashDiff(
 		context.Background(),
 		ses,
@@ -765,15 +766,17 @@ func TestHashDiff_NoLCAWithStubHandles(t *testing.T) {
 		compositeOption{},
 		func(w batchWithKind) (bool, error) {
 			rows := decodeCapturedRows(t, w.batch, tblStuff.def.colTypes)
+			mu.Lock()
 			got = append(got, capturedBatch{
 				kind: w.kind,
 				side: w.side,
 				rows: rows,
 			})
-			tblStuff.retPool.releaseRetBatch(w.batch, false)
 			if len(rows) == 0 {
 				got = got[:len(got)-1]
 			}
+			mu.Unlock()
+			tblStuff.retPool.releaseRetBatch(w.batch, false)
 			return false, nil
 		},
 		[]engine.ChangesHandle{&stubEngineChangesHandle{

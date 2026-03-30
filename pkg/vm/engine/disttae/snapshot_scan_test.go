@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -286,6 +287,8 @@ func TestUnwrapTxnTable(t *testing.T) {
 }
 
 func TestGetSnapshotScanSubmitPool(t *testing.T) {
+	t.Cleanup(releaseSnapshotScanSubmitPoolForTest)
+
 	pool1, err := getSnapshotScanSubmitPool()
 	require.NoError(t, err)
 	require.NotNil(t, pool1)
@@ -296,6 +299,8 @@ func TestGetSnapshotScanSubmitPool(t *testing.T) {
 }
 
 func TestScanSnapshotShardsParallel_SkipsEmptyShards(t *testing.T) {
+	t.Cleanup(releaseSnapshotScanSubmitPoolForTest)
+
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
@@ -319,6 +324,8 @@ func TestScanSnapshotShardsParallel_SkipsEmptyShards(t *testing.T) {
 }
 
 func TestScanSnapshotShardsParallel_ContextCanceled(t *testing.T) {
+	t.Cleanup(releaseSnapshotScanSubmitPoolForTest)
+
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
@@ -559,4 +566,16 @@ func newTestSnapshotRelData(blockCnt int) *readutil.BlockListRelData {
 		relData.AppendBlockInfo(&blk)
 	}
 	return relData
+}
+
+// releaseSnapshotScanSubmitPoolForTest releases the global snapshot scan pool
+// and resets the sync.Once so that subsequent tests or leaktest checks do not
+// observe lingering goroutines from the pool.
+func releaseSnapshotScanSubmitPoolForTest() {
+	if snapshotScanSubmitPool != nil {
+		snapshotScanSubmitPool.Release()
+		snapshotScanSubmitPool = nil
+	}
+	snapshotScanSubmitPoolOnce = sync.Once{}
+	snapshotScanSubmitPoolErr = nil
 }
