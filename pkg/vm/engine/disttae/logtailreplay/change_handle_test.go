@@ -15,15 +15,19 @@
 package logtailreplay
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/tidwall/btree"
 )
 
 func TestUpdateCNDataBatch_RemoveTSVector(t *testing.T) {
@@ -151,4 +155,305 @@ func TestUpdateDataBatch_PreservesTrailingColumnsWithoutRowid(t *testing.T) {
 	require.Equal(t, updatedAtVal, vector.MustFixedColNoTypeCheck[types.Datetime](bat.Vecs[2])[0])
 
 	bat.Clean(mp)
+}
+
+func TestAObjectHandleShouldReadBlock_UsesCachedPlan(t *testing.T) {
+	obj := makeTestObjectEntry(t, 2, false, false, types.BuildTS(10, 0))
+	handle := &AObjectHandle{
+		start: types.BuildTS(5, 0),
+		end:   types.BuildTS(15, 0),
+		p: &baseHandle{changesHandle: &ChangeHandler{
+			enableCommitTSBlockPrune: true,
+		}},
+		blockPlans: map[string]*aobjBlockPlan{
+			obj.ObjectShortName().ShortString(): {
+				initialized:      true,
+				evaluable:        true,
+				shouldReadByBlks: []bool{false, true},
+			},
+		},
+	}
+
+	ok, err := handle.shouldReadBlock(context.Background(), obj, 0)
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	ok, err = handle.shouldReadBlock(context.Background(), obj, 1)
+	require.NoError(t, err)
+	require.True(t, ok)
+}
+
+func TestAObjectHandleShouldReadBlock_NoCommitTSAndStrictFallback(t *testing.T) {
+	obj := makeTestObjectEntry(t, 1, false, false, types.BuildTS(10, 0))
+	key := obj.ObjectShortName().ShortString()
+
+	t.Run("no commit ts column uses create time", func(t *testing.T) {
+		handle := &AObjectHandle{
+			start: types.BuildTS(5, 0),
+			end:   types.BuildTS(15, 0),
+			p: &baseHandle{changesHandle: &ChangeHandler{
+				enableCommitTSBlockPrune: true,
+			}},
+			blockPlans: map[string]*aobjBlockPlan{
+				key: {
+					initialized:      true,
+					noCommitTSColumn: true,
+					totalBlocks:      1,
+				},
+			},
+		}
+
+		ok, err := handle.shouldReadBlock(context.Background(), obj, 0)
+		require.NoError(t, err)
+		require.True(t, ok)
+
+		handle.start = types.BuildTS(11, 0)
+		handle.end = types.BuildTS(12, 0)
+		ok, err = handle.shouldReadBlock(context.Background(), obj, 0)
+		require.NoError(t, err)
+		require.False(t, ok)
+	})
+
+	t.Run("strict non evaluable returns file not found", func(t *testing.T) {
+		handle := &AObjectHandle{
+			p: &baseHandle{changesHandle: &ChangeHandler{
+				enableCommitTSBlockPrune: true,
+				strictCommitTSBlockPrune: true,
+			}},
+			blockPlans: map[string]*aobjBlockPlan{
+				key: {
+					initialized:      true,
+					evaluable:        false,
+					shouldReadByBlks: []bool{true},
+				},
+			},
+		}
+
+		ok, err := handle.shouldReadBlock(context.Background(), obj, 0)
+		require.False(t, ok)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+	})
+}
+
+func TestAObjectHandleNextPrefetchTarget_SkipsPrunedBlocks(t *testing.T) {
+	obj := makeTestObjectEntry(t, 3, false, false, types.BuildTS(10, 0))
+	handle := &AObjectHandle{
+		objects: []*objectio.ObjectEntry{obj},
+		p: &baseHandle{changesHandle: &ChangeHandler{
+			enableCommitTSBlockPrune: true,
+		}},
+		blockPlans: map[string]*aobjBlockPlan{
+			obj.ObjectShortName().ShortString(): {
+				initialized:      true,
+				evaluable:        true,
+				shouldReadByBlks: []bool{false, false, true},
+			},
+		},
+	}
+
+	gotObj, blk, ok, err := handle.nextPrefetchTarget(context.Background())
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, obj, gotObj)
+	require.Equal(t, uint16(2), blk)
+	require.Equal(t, 1, handle.objectOffsetCursor)
+	require.Equal(t, 0, handle.blkOffsetCursor)
+}
+
+func TestAObjectHandleGetNextAObject_ReturnsNoCommitTSColumn(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+
+	handle := &AObjectHandle{
+		mp:                    mp,
+		cache:                 []*batch.Batch{bat},
+		cacheConstantCommitTS: []types.TS{types.BuildTS(10, 0)},
+		p:                     &baseHandle{changesHandle: &ChangeHandler{}},
+	}
+
+	err := handle.getNextAObject(context.Background())
+	require.True(t, engine.IsErrNoCommitTSColumn(err))
+	require.Same(t, bat, handle.currentBatch)
+}
+
+func TestAObjectHandleShouldReadBlock_ShortCircuits(t *testing.T) {
+	t.Run("nil object", func(t *testing.T) {
+		handle := &AObjectHandle{
+			p: &baseHandle{changesHandle: &ChangeHandler{enableCommitTSBlockPrune: true}},
+		}
+		ok, err := handle.shouldReadBlock(context.Background(), nil, 0)
+		require.NoError(t, err)
+		require.False(t, ok)
+	})
+
+	t.Run("prune disabled", func(t *testing.T) {
+		obj := makeTestObjectEntry(t, 1, false, false, types.BuildTS(10, 0))
+		handle := &AObjectHandle{
+			p: &baseHandle{changesHandle: &ChangeHandler{enableCommitTSBlockPrune: false}},
+		}
+		ok, err := handle.shouldReadBlock(context.Background(), obj, 0)
+		require.NoError(t, err)
+		require.True(t, ok)
+	})
+
+	t.Run("appendable and cn-created bypass block plan", func(t *testing.T) {
+		appendable := makeTestObjectEntry(t, 1, true, false, types.BuildTS(10, 0))
+		handle := &AObjectHandle{
+			p: &baseHandle{changesHandle: &ChangeHandler{enableCommitTSBlockPrune: true}},
+		}
+		ok, err := handle.shouldReadBlock(context.Background(), appendable, 0)
+		require.NoError(t, err)
+		require.True(t, ok)
+
+		cnCreated := makeTestObjectEntry(t, 1, false, true, types.BuildTS(10, 0))
+		ok, err = handle.shouldReadBlock(context.Background(), cnCreated, 0)
+		require.NoError(t, err)
+		require.True(t, ok)
+	})
+
+	t.Run("block index out of range", func(t *testing.T) {
+		obj := makeTestObjectEntry(t, 2, false, false, types.BuildTS(10, 0))
+		handle := &AObjectHandle{
+			p: &baseHandle{changesHandle: &ChangeHandler{enableCommitTSBlockPrune: true}},
+			blockPlans: map[string]*aobjBlockPlan{
+				obj.ObjectShortName().ShortString(): {
+					initialized:      true,
+					evaluable:        true,
+					shouldReadByBlks: []bool{true},
+				},
+			},
+		}
+		ok, err := handle.shouldReadBlock(context.Background(), obj, 1)
+		require.NoError(t, err)
+		require.False(t, ok)
+	})
+}
+
+func TestBaseHandleFillInSkipTSFromObjects(t *testing.T) {
+	start := types.BuildTS(10, 0)
+	end := types.BuildTS(20, 0)
+	inRange := makeTestObjectEntry(t, 1, false, false, types.BuildTS(5, 0))
+	inRange.DeleteTime = types.BuildTS(12, 0)
+	outOfRange := makeTestObjectEntry(t, 1, false, false, types.BuildTS(5, 0))
+	outOfRange.DeleteTime = types.BuildTS(30, 0)
+	missingDeleteTS := makeTestObjectEntry(t, 1, false, false, types.BuildTS(5, 0))
+
+	handle := &baseHandle{skipTS: make(map[types.TS]struct{})}
+	handle.fillInSkipTSFromObjects(start, end, []*objectio.ObjectEntry{inRange, outOfRange, missingDeleteTS})
+
+	require.Contains(t, handle.skipTS, inRange.DeleteTime)
+	require.NotContains(t, handle.skipTS, outOfRange.DeleteTime)
+	require.Len(t, handle.skipTS, 1)
+}
+
+func TestBaseHandleGetObjectEntries_ClassifiesAndSorts(t *testing.T) {
+	tree := btree.NewBTreeGOptions(objectio.ObjectEntry.ObjectNameIndexLess, btree.Options{Degree: 8})
+
+	appendable := makeTestObjectEntry(t, 1, true, false, types.BuildTS(6, 0))
+	appendableDeletedBeforeStart := makeTestObjectEntry(t, 1, true, false, types.BuildTS(5, 0))
+	appendableDeletedBeforeStart.DeleteTime = types.BuildTS(4, 0)
+	cnCreated := makeTestObjectEntry(t, 1, false, true, types.BuildTS(8, 0))
+	cnCreatedBeforeStart := makeTestObjectEntry(t, 1, false, true, types.BuildTS(2, 0))
+	tnLate := makeTestObjectEntry(t, 1, false, false, types.BuildTS(30, 0))
+	tnCreate4 := makeTestObjectEntry(t, 1, false, false, types.BuildTS(4, 0))
+	tnCreate9 := makeTestObjectEntry(t, 1, false, false, types.BuildTS(9, 0))
+
+	for _, obj := range []objectio.ObjectEntry{
+		*tnLate,
+		*appendableDeletedBeforeStart,
+		*cnCreatedBeforeStart,
+		*tnCreate9,
+		*appendable,
+		*tnCreate4,
+		*cnCreated,
+	} {
+		tree.Set(obj)
+	}
+
+	handle := &baseHandle{}
+	aobj, cnObj, tnByCreateTS, tnKeys := handle.getObjectEntries(
+		tree.Iter(),
+		types.BuildTS(5, 0),
+		types.BuildTS(20, 0),
+	)
+
+	require.Len(t, aobj, 1)
+	require.Equal(t, appendable.ObjectShortName().ShortString(), aobj[0].ObjectShortName().ShortString())
+	require.Len(t, cnObj, 1)
+	require.Equal(t, cnCreated.ObjectShortName().ShortString(), cnObj[0].ObjectShortName().ShortString())
+	require.Equal(t, []types.TS{types.BuildTS(4, 0), types.BuildTS(9, 0)}, tnKeys)
+	require.Len(t, tnByCreateTS[types.BuildTS(4, 0)], 1)
+	require.Len(t, tnByCreateTS[types.BuildTS(9, 0)], 1)
+}
+
+func TestBaseHandleNextTS_SelectsEarliestHandle(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	makeBatchHandle := func(ts types.TS) *BatchHandle {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.T_TS.ToType())
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], ts, false, mp))
+		bat.SetRowCount(1)
+		return &BatchHandle{batches: bat, batchLength: 1}
+	}
+
+	makeAObjectHandle := func(ts types.TS) *AObjectHandle {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.T_TS.ToType())
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], ts, false, mp))
+		bat.SetRowCount(1)
+		return &AObjectHandle{currentBatch: bat, batchLength: 1}
+	}
+
+	p := &baseHandle{
+		inMemoryHandle: makeBatchHandle(types.BuildTS(8, 0)),
+		aobjHandle:     makeAObjectHandle(types.BuildTS(10, 0)),
+		cnObjectHandle: &CNObjectHandle{objects: []*objectio.ObjectEntry{{CreateTime: types.BuildTS(12, 0)}}},
+	}
+
+	ts, kind := p.nextTS()
+	require.Equal(t, types.BuildTS(8, 0), ts)
+	require.Equal(t, NextChangeHandle_InMemory, kind)
+
+	p.inMemoryHandle.rowOffsetCursor = 1
+	ts, kind = p.nextTS()
+	require.Equal(t, types.BuildTS(10, 0), ts)
+	require.Equal(t, NextChangeHandle_AObj, kind)
+
+	p.aobjHandle.rowOffsetCursor = 1
+	p.aobjHandle.batchLength = 1
+	ts, kind = p.nextTS()
+	require.Equal(t, types.BuildTS(12, 0), ts)
+	require.Equal(t, NextChangeHandle_CNObj, kind)
+
+	p.aobjHandle.currentBatch.Clean(mp)
+	p.inMemoryHandle.batches.Clean(mp)
+}
+
+func makeTestObjectEntry(
+	t *testing.T,
+	blkCnt int,
+	appendable bool,
+	cnCreated bool,
+	createTS types.TS,
+) *objectio.ObjectEntry {
+	t.Helper()
+
+	oid := types.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&oid, appendable, false, cnCreated)
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, uint32(blkCnt)))
+	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, uint32(blkCnt)))
+
+	return &objectio.ObjectEntry{
+		ObjectStats: *stats,
+		CreateTime:  createTS,
+	}
 }
