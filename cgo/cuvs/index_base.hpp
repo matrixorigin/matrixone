@@ -250,10 +250,11 @@ public:
     // Released immediately after build_internal() completes to free host RAM.
     std::vector<T> flattened_host_dataset;
 
-    // ---- External ID mapping (immutable after is_loaded_ = true) ----
+    // ---- External ID mapping ----
     // If non-empty: host_ids[internal_pos] = external_id.
     // If empty: internal positions are used directly as IDs.
-    // Safe to read in search without a lock (write only under unique_lock before/during build).
+    // Written under unique_lock (during build AND during extend() for post-build appends).
+    // Must be read under shared_lock in search (extend() may append after build).
     std::vector<IdT> host_ids;
 
     // ---- Worker and GPU resource management ----

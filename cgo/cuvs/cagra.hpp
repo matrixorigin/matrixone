@@ -544,18 +544,25 @@ public:
             }
             handle.sync();
         } else {
-            std::unique_lock<std::shared_mutex> lock(this->mutex_);
+            // Do all GPU work outside the lock — holding shared_mutex across GPU calls
+            // would block concurrent readers for the entire build duration.
             auto res = handle.get_raft_resources();
             auto dataset_device = raft::make_device_matrix<T, int64_t>(*res, (int64_t)this->count, (int64_t)this->dimension);
             raft::copy(*res, dataset_device.view(), raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
             raft::resource::sync_stream(*res);
 
-            index_.reset(new cagra_index(cuvs::neighbors::cagra::build(
-                *res, index_params, raft::make_const_mdspan(dataset_device.view()))));
-            
+            auto new_idx = std::make_unique<cagra_index>(cuvs::neighbors::cagra::build(
+                *res, index_params, raft::make_const_mdspan(dataset_device.view())));
             using dataset_t = raft::device_matrix<T, int64_t>;
-            this->dataset_device_ptr_ = std::make_shared<dataset_t>(std::move(dataset_device));
+            auto new_dataset = std::make_shared<dataset_t>(std::move(dataset_device));
             handle.sync();
+
+            // Assign results under lock
+            {
+                std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                index_ = std::move(new_idx);
+                this->dataset_device_ptr_ = std::move(new_dataset);
+            }
         }
     }
 
@@ -588,6 +595,10 @@ public:
                     this->replicated_datasets_.erase(handle.get_device_id());
                 }
             } else {
+                // index_ is accessed without mutex here. This is safe because:
+                // (a) the GPU worker serializes all tasks on the main device, so no
+                //     concurrent GPU search can be running while extend is in-flight;
+                // (b) extend_mutex_ in extend() ensures only one extend at a time.
                 cuvs::neighbors::cagra::extend(*res, params, raft::make_const_mdspan(additional_dataset_device.view()), *index_);
                 handle.sync();
                 {
@@ -651,7 +662,10 @@ public:
 
     search_result_t search(const T* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/, uint32_t limit, const cagra_search_params_t& sp) {
         if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
-        if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) return search_result_t{};
+        {
+            std::shared_lock<std::shared_mutex> lock(this->mutex_);
+            if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) return search_result_t{};
+        }
 
         if (this->dist_mode == DistributionMode_SHARDED) {
             int num_shards = this->devices_.size();
@@ -840,7 +854,10 @@ public:
 
     search_result_t search_float(const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const cagra_search_params_t& sp) {
         if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
-        if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) return search_result_t{};
+        {
+            std::shared_lock<std::shared_mutex> lock(this->mutex_);
+            if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) return search_result_t{};
+        }
 
         if (this->dist_mode == DistributionMode_SHARDED) {
             int num_shards = this->devices_.size();
@@ -1045,6 +1062,7 @@ public:
     std::string info() const override {
         std::string json = gpu_index_base_t<T, cagra_build_params_t, uint32_t>::info();
         json += ", \"type\": \"CAGRA\", \"cagra\": {";
+        std::shared_lock<std::shared_mutex> lock(this->mutex_);
         if (index_) json += "\"mode\": \"Single-GPU\", \"size\": " + std::to_string(index_->size());
         else if (!this->replicated_indices_.empty()) json += "\"mode\": \"Local-Indices\", \"ranks\": " + std::to_string(this->replicated_indices_.size());
         else json += "\"built\": false";
@@ -1053,7 +1071,10 @@ public:
     }
 
     void save(const std::string& filename) const {
-        if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) throw std::runtime_error("Index not built");
+        {
+            std::shared_lock<std::shared_mutex> lock(this->mutex_);
+            if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) throw std::runtime_error("Index not built");
+        }
         
         uint64_t job_id = this->worker->submit_main(
             [&](raft_handle_wrapper_t& handle) -> std::any {
@@ -1108,8 +1129,11 @@ public:
     // Also writes manifest.json describing all components.
     // Supports SingleGPU, REPLICATED, and SHARDED distribution modes.
     void save_dir(const std::string& dir) const {
-        if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty()))
-            throw std::runtime_error("CAGRA index not built; cannot save_dir");
+        {
+            std::shared_lock<std::shared_mutex> lock(this->mutex_);
+            if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty()))
+                throw std::runtime_error("CAGRA index not built; cannot save_dir");
+        }
 
         this->ensure_dir(dir);
         auto comp_entries = this->save_common_components(dir);
