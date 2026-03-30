@@ -17,8 +17,10 @@ package plan
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/stretchr/testify/require"
 )
 
@@ -317,4 +319,82 @@ func TestWindowFilterPushesDownToOwningWindowNode(t *testing.T) {
 	require.Empty(t, builder.qry.Nodes[1].FilterList)
 	require.Same(t, filterOnPrevWindow, builder.qry.Nodes[2].FilterList[0])
 	require.Same(t, filterOnCurrentWindow, builder.qry.Nodes[2].FilterList[1])
+}
+
+func makeVectorTopPushdownBuilder(limit uint64) (*QueryBuilder, *plan.Node, *plan.Node) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	scanTag := builder.genNewBindTag()
+
+	vectorCol := &plan.Expr{
+		Typ: Type{Id: int32(types.T_array_float32), Width: 2},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: scanTag,
+				ColPos: 1,
+			},
+		},
+	}
+	orderExpr := &plan.Expr{
+		Typ: Type{Id: int32(types.T_float64), NotNullable: true},
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &ObjectRef{ObjName: metric.DistFn_L2Distance},
+				Args: []*plan.Expr{
+					DeepCopyExpr(vectorCol),
+					MakePlan2Vecf32ConstExprWithType("[0,0]", 2),
+				},
+			},
+		},
+	}
+
+	builder.qry.Nodes = []*plan.Node{
+		{
+			NodeType:    plan.Node_TABLE_SCAN,
+			BindingTags: []int32{scanTag},
+			TableDef:    &plan.TableDef{TableType: catalog.SystemSI_IVFFLAT_TblType_Entries},
+			Stats:       &plan.Stats{BlockNum: 2},
+		},
+		{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{0},
+			ProjectList: []*plan.Expr{orderExpr},
+		},
+		{
+			NodeType: plan.Node_SORT,
+			Children: []int32{1},
+			OrderBy: []*plan.OrderBySpec{
+				{
+					Expr: &plan.Expr{
+						Typ: Type{Id: int32(types.T_float64), NotNullable: true},
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{ColPos: 0},
+						},
+					},
+				},
+			},
+			Limit: MakePlan2Uint64ConstExprWithType(limit),
+		},
+	}
+
+	return builder, builder.qry.Nodes[0], builder.qry.Nodes[1]
+}
+
+func TestPushdownVectorIndexTopToTableScanSkipsOverflowLimit(t *testing.T) {
+	builder, scanNode, projNode := makeVectorTopPushdownBuilder(maxVectorIndexTopPushdownLimit + 1)
+
+	builder.pushdownVectorIndexTopToTableScan(2)
+
+	require.Nil(t, scanNode.IndexReaderParam)
+	require.Nil(t, projNode.ProjectList[0].GetCol())
+	require.NotNil(t, projNode.ProjectList[0].GetF())
+}
+
+func TestPushdownVectorIndexTopToTableScanKeepsSupportedLimit(t *testing.T) {
+	builder, scanNode, projNode := makeVectorTopPushdownBuilder(8)
+
+	builder.pushdownVectorIndexTopToTableScan(2)
+
+	require.NotNil(t, scanNode.IndexReaderParam)
+	require.Equal(t, uint64(8), scanNode.IndexReaderParam.Limit.GetLit().GetU64Val())
+	require.NotNil(t, projNode.ProjectList[0].GetCol())
 }

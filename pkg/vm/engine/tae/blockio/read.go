@@ -41,6 +41,18 @@ import (
 	"go.uber.org/zap"
 )
 
+const maxVectorIndexTopLimit = uint64(^uint(0) >> 1)
+
+func vectorIndexTopLimit(ctx context.Context, limit uint64) (int, error) {
+	if limit == 0 {
+		return 0, moerr.NewInternalError(ctx, "vector index top limit must be positive")
+	}
+	if limit > maxVectorIndexTopLimit {
+		return 0, moerr.NewInternalError(ctx, fmt.Sprintf("vector index top limit %d overflows int", limit))
+	}
+	return int(limit), nil
+}
+
 func removeIf[T any](data []T, pred func(t T) bool) []T {
 	// from plan.RemoveIf
 	if len(data) == 0 {
@@ -395,6 +407,10 @@ func HandleOrderByLimitOnIVFFlatIndex(
 	})
 
 	searchResults := make([]vectorindex.SearchResult, 0, len(selectRows))
+	topLimit, err := vectorIndexTopLimit(ctx, orderByLimit.Limit)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	switch orderByLimit.Typ {
 	case types.T_array_float32:
@@ -431,7 +447,7 @@ func HandleOrderByLimitOnIVFFlatIndex(
 				}
 			}
 
-			if len(orderByLimit.DistHeap) >= int(orderByLimit.Limit) {
+			if len(orderByLimit.DistHeap) >= topLimit {
 				if dist64 < orderByLimit.DistHeap[0] {
 					orderByLimit.DistHeap[0] = dist64
 					heap.Fix(&orderByLimit.DistHeap, 0)
@@ -481,7 +497,7 @@ func HandleOrderByLimitOnIVFFlatIndex(
 				}
 			}
 
-			if len(orderByLimit.DistHeap) >= int(orderByLimit.Limit) {
+			if len(orderByLimit.DistHeap) >= topLimit {
 				if dist64 < orderByLimit.DistHeap[0] {
 					orderByLimit.DistHeap[0] = dist64
 					heap.Fix(&orderByLimit.DistHeap, 0)

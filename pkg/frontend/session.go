@@ -1149,6 +1149,9 @@ func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt
 		stmt.Close()
 	}
 
+	if prepareStmt != nil && prepareStmt.proc == nil {
+		prepareStmt.proc = ses.proc
+	}
 	ses.prepareStmts[name] = prepareStmt
 
 	return nil

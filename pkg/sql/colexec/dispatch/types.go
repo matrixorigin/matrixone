@@ -136,6 +136,14 @@ func (dispatch *Dispatch) Release() {
 	}
 }
 
+func (dispatch *Dispatch) AdoptCleanupState(from *Dispatch) {
+	if dispatch == nil || from == nil {
+		return
+	}
+	dispatch.ctr = from.ctr
+	from.ctr = nil
+}
+
 func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	if dispatch.ctr != nil {
 		if dispatch.ctr.isRemote {

@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -123,4 +124,53 @@ func TestBuildWithInsert(t *testing.T) {
 			require.Greater(t, len(ins.With.CTEs), 0, "WITH clause should have at least one CTE")
 		})
 	}
+}
+
+func TestBuildInsertOnDuplicateUpdatePlansReleasesDmlPlanCtxOnError(t *testing.T) {
+	oldGet := buildInsertGetDmlPlanCtx
+	oldPut := buildInsertPutDmlPlanCtx
+	oldBuild := buildInsertUpdatePlans
+	defer func() {
+		buildInsertGetDmlPlanCtx = oldGet
+		buildInsertPutDmlPlanCtx = oldPut
+		buildInsertUpdatePlans = oldBuild
+	}()
+
+	wantErr := moerr.NewInternalErrorNoCtx("build update plans failed")
+	ctxHolder := &dmlPlanCtx{}
+	putCalled := false
+
+	buildInsertGetDmlPlanCtx = func() *dmlPlanCtx {
+		return ctxHolder
+	}
+	buildInsertPutDmlPlanCtx = func(ctx *dmlPlanCtx) {
+		putCalled = true
+		require.Same(t, ctxHolder, ctx)
+	}
+	buildInsertUpdatePlans = func(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, updatePlanCtx *dmlPlanCtx, addAffectedRows bool) error {
+		require.Same(t, ctxHolder, updatePlanCtx)
+		require.Equal(t, int32(7), updatePlanCtx.sourceStep)
+		require.Equal(t, 3, updatePlanCtx.updateColLength)
+		require.Equal(t, 2, updatePlanCtx.rowIdPos)
+		require.Equal(t, []int{4, 5}, updatePlanCtx.insertColPos)
+		require.Equal(t, map[string]int{"a": 1}, updatePlanCtx.updateColPosMap)
+		require.True(t, updatePlanCtx.updatePkCol)
+		require.True(t, addAffectedRows)
+		return wantErr
+	}
+
+	err := buildInsertOnDuplicateUpdatePlans(
+		nil,
+		nil,
+		&ObjectRef{ObjName: "t"},
+		&TableDef{Name: "t"},
+		7,
+		3,
+		2,
+		[]int{4, 5},
+		map[string]int{"a": 1},
+		true,
+	)
+	require.ErrorIs(t, err, wantErr)
+	require.True(t, putCalled)
 }
