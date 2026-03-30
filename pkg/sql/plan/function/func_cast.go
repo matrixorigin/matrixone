@@ -5708,10 +5708,11 @@ func jsonToStr(
 			}
 		} else {
 			bj := types.DecodeJson(v)
-			val, err := bj.MarshalJSON()
+			str, err := bj.Unquote()
 			if err != nil {
 				return err
 			}
+			val := []byte(str)
 			if len(val) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", val, toType.Width))
