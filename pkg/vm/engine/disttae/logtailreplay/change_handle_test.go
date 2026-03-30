@@ -512,8 +512,8 @@ func TestLookupDeleteChainSuccessor(t *testing.T) {
 	next, successorTS, exact := lookupDeleteChainSuccessor(
 		deleteTS,
 		map[types.TS][]*objectio.ObjectEntry{
-			deleteTS:             []*objectio.ObjectEntry{exactObj},
-			types.BuildTS(12, 0): []*objectio.ObjectEntry{fuzzyObj},
+			deleteTS:             {exactObj},
+			types.BuildTS(12, 0): {fuzzyObj},
 		},
 		[]types.TS{deleteTS, types.BuildTS(12, 0)},
 	)
@@ -524,7 +524,7 @@ func TestLookupDeleteChainSuccessor(t *testing.T) {
 	next, successorTS, exact = lookupDeleteChainSuccessor(
 		types.BuildTS(11, 0),
 		map[types.TS][]*objectio.ObjectEntry{
-			types.BuildTS(12, 0): []*objectio.ObjectEntry{fuzzyObj},
+			types.BuildTS(12, 0): {fuzzyObj},
 		},
 		[]types.TS{types.BuildTS(12, 0)},
 	)
