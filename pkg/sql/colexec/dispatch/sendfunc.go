@@ -44,6 +44,11 @@ const (
 	FailureModeTolerant
 )
 
+var (
+	sendToAnyLocal  = sendToAnyLocalFunc
+	sendToAnyRemote = sendToAnyRemoteFunc
+)
+
 func (ctr *container) removeIdxReceiver(idx int) {
 	ctr.remoteReceivers = append(ctr.remoteReceivers[:idx], ctr.remoteReceivers[idx+1:]...)
 	ctr.remoteRegsCnt--
@@ -343,22 +348,22 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 func sendToAnyFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool, error) {
 	toLocal := (ap.ctr.sendCnt % ap.ctr.aliveRegCnt) < ap.ctr.localRegsCnt
 	if toLocal {
-		allclosed, err := sendToAnyLocalFunc(bat, ap, proc)
+		allclosed, err := sendToAnyLocal(bat, ap, proc)
 		if err != nil {
-			return false, nil
+			return false, err
 		}
 		if allclosed { // all local reg closed, change sendFunc to send remote only
 			ap.ctr.sendFunc = sendToAnyRemoteFunc
-			return ap.ctr.sendFunc(bat, ap, proc)
+			return sendToAnyRemote(bat, ap, proc)
 		}
 	} else {
-		allclosed, err := sendToAnyRemoteFunc(bat, ap, proc)
+		allclosed, err := sendToAnyRemote(bat, ap, proc)
 		if err != nil {
-			return false, nil
+			return false, err
 		}
 		if allclosed { // all remote reg closed, change sendFunc to send local only
 			ap.ctr.sendFunc = sendToAnyLocalFunc
-			return ap.ctr.sendFunc(bat, ap, proc)
+			return sendToAnyLocal(bat, ap, proc)
 		}
 	}
 	return false, nil

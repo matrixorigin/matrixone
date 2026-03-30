@@ -70,6 +70,7 @@ func (preInsert *PreInsert) Prepare(proc *process.Process) (err error) {
 		}
 	}
 	if preInsert.HasAutoCol {
+		preInsert.ctr.tblId = preInsert.TableDef.TblId
 		if err = preInsert.refreshAutoIncrementTableID(proc); err != nil {
 			return
 		}
@@ -96,7 +97,7 @@ func (preInsert *PreInsert) refreshAutoIncrementTableID(proc *proc) error {
 	if err != nil {
 		return err
 	}
-	preInsert.TableDef.TblId = rel.GetTableID(proc.Ctx)
+	preInsert.ctr.tblId = rel.GetTableID(proc.Ctx)
 	return nil
 }
 
@@ -144,6 +145,7 @@ func (preInsert *PreInsert) constructColBuf(proc *proc, bat *batch.Batch, first 
 				typ := bat.Vecs[idx].GetType()
 				tmpVec := vector.NewVec(*typ)
 				if err = vector.GetUnionAllFunction(*typ, proc.Mp())(tmpVec, bat.Vecs[idx]); err != nil {
+					tmpVec.Free(proc.Mp())
 					return err
 				}
 				preInsert.ctr.buf.Vecs[idx] = tmpVec
@@ -370,7 +372,7 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, preInsert *PreInsert) error {
 	retriedWithFreshTableID := false
 
 retryInsertValues:
-	tableID := preInsert.TableDef.TblId
+	tableID := preInsert.ctr.tblId
 	needReCheck := checkIfNeedReGenAutoIncrCol(bat, preInsert)
 
 	// FIX: Capture lastAllocateAt BEFORE InsertValues to avoid false negative bug
@@ -407,7 +409,7 @@ retryInsertValues:
 					}
 					return refreshErr
 				}
-				if preInsert.TableDef.TblId != tableID {
+				if preInsert.ctr.tblId != tableID {
 					goto retryInsertValues
 				}
 			}
