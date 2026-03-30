@@ -420,18 +420,26 @@ public:
             }
             handle.sync();
         } else {
-            std::unique_lock<std::shared_mutex> lock(this->mutex_);
+            // Do all GPU work outside the lock — holding shared_mutex across GPU calls
+            // would block concurrent readers for the entire build duration.
             auto res = handle.get_raft_resources();
             auto dataset_device = raft::make_device_matrix<T, int64_t>(*res, (int64_t)this->count, (int64_t)this->dimension);
             raft::copy(*res, dataset_device.view(), raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
             raft::resource::sync_stream(*res);
 
-            index_.reset(new ivf_pq_index(cuvs::neighbors::ivf_pq::build(
-                *res, index_params, raft::make_const_mdspan(dataset_device.view()))));
+            auto new_idx = std::make_unique<ivf_pq_index>(cuvs::neighbors::ivf_pq::build(
+                *res, index_params, raft::make_const_mdspan(dataset_device.view())));
             
             using dataset_t = raft::device_matrix<T, int64_t>;
-            this->dataset_device_ptr_ = std::make_shared<dataset_t>(std::move(dataset_device));
+            auto new_dataset = std::make_shared<dataset_t>(std::move(dataset_device));
             handle.sync();
+
+            // Assign results under lock
+            {
+                std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                index_ = std::move(new_idx);
+                this->dataset_device_ptr_ = std::move(new_dataset);
+            }
         }
     }
 
@@ -674,7 +682,10 @@ public:
 
     search_result_t search(const T* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/, uint32_t limit, const ivf_pq_search_params_t& sp) {
         if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
-        if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) return search_result_t{};
+        {
+            std::shared_lock<std::shared_mutex> lock(this->mutex_);
+            if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) return search_result_t{};
+        }
 
         if (this->dist_mode == DistributionMode_SHARDED) {
             int num_shards = this->devices_.size();
@@ -858,7 +869,10 @@ public:
 
     search_result_t search_float(const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const ivf_pq_search_params_t& sp) {
         if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
-        if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) return search_result_t{};
+        {
+            std::shared_lock<std::shared_mutex> lock(this->mutex_);
+            if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) return search_result_t{};
+        }
 
         if (this->dist_mode == DistributionMode_SHARDED) {
             int num_shards = this->devices_.size();
