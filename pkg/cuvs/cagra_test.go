@@ -238,7 +238,9 @@ func TestGpuShardedCagra(t *testing.T) {
 	}
 
 	dimension := uint32(2)
-	n_vectors := uint64(1000)
+	// Need (n/num_gpus) & ~31 > intermediate_graph_degree=256.
+	// With up to 8 GPUs: 4000/8=500, 500&~31=480 > 256. Safe for up to 8 GPUs.
+	n_vectors := uint64(4000)
 	dataset := make([]float32, n_vectors*uint64(dimension))
 	for i := uint64(0); i < n_vectors; i++ {
 		dataset[i*uint64(dimension)] = float32(i)
@@ -275,7 +277,8 @@ func TestGpuShardedCagra(t *testing.T) {
 
 func TestGpuCagraChunked(t *testing.T) {
 	dimension := uint32(8)
-	totalCount := uint64(100)
+	// Need count > intermediate_graph_degree=256.
+	totalCount := uint64(300)
 	devices := []int{0}
 	bp := DefaultCagraBuildParams()
 	bp.IntermediateGraphDegree = 256
@@ -294,7 +297,7 @@ func TestGpuCagraChunked(t *testing.T) {
 	}
 
 	// Add data in chunks (from float32, triggers on-the-fly quantization)
-	chunkSize := uint64(50)
+	chunkSize := uint64(150)
 	for i := uint64(0); i < totalCount; i += chunkSize {
 		chunk := make([]float32, chunkSize*uint64(dimension))
 		val := float32(i/chunkSize*100 + 1) // 1.0 for first chunk, 101.0 for second
@@ -325,8 +328,8 @@ func TestGpuCagraChunked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search 1 failed: %v", err)
 	}
-	if result1.Neighbors[0] == 4294967295 || result1.Neighbors[0] >= 50 {
-		t.Errorf("Expected neighbor from first chunk (0-49), got %d", result1.Neighbors[0])
+	if result1.Neighbors[0] == 4294967295 || result1.Neighbors[0] >= 150 {
+		t.Errorf("Expected neighbor from first chunk (0-149), got %d", result1.Neighbors[0])
 	}
 
 	// Search for second chunk
@@ -338,14 +341,15 @@ func TestGpuCagraChunked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search 2 failed: %v", err)
 	}
-	if result2.Neighbors[0] < 50 || result2.Neighbors[0] >= 100 {
-		t.Errorf("Expected neighbor from second chunk (50-99), got %d", result2.Neighbors[0])
+	if result2.Neighbors[0] < 150 || result2.Neighbors[0] >= 300 {
+		t.Errorf("Expected neighbor from second chunk (150-299), got %d", result2.Neighbors[0])
 	}
 }
 
 func TestGpuCagraExtend(t *testing.T) {
 	dimension := uint32(16)
-	count := uint64(100)
+	// Need count > intermediate_graph_degree=256.
+	count := uint64(300)
 	dataset := make([]float32, count*uint64(dimension))
 	for i := range dataset {
 		dataset[i] = float32(i)
@@ -385,14 +389,15 @@ func TestGpuCagraExtend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
 	}
-	if result.Neighbors[0] < 100 {
+	if result.Neighbors[0] < 300 {
 		t.Errorf("Expected neighbor from extended data, got %d", result.Neighbors[0])
 	}
 }
 
 func TestGpuCagraMerge(t *testing.T) {
 	dimension := uint32(16)
-	count := uint64(200)
+	// Need count > intermediate_graph_degree=256.
+	count := uint64(300)
 
 	// Cluster 1: values around 0
 	ds1 := make([]float32, count*uint64(dimension))
@@ -451,9 +456,9 @@ func TestGpuCagraMerge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
 	}
-	// Result should be from second index (index >= 200)
-	if result.Neighbors[0] < 200 {
-		t.Errorf("Expected neighbor from second index (>=200), got %d", result.Neighbors[0])
+	// Result should be from second index (index >= 300)
+	if result.Neighbors[0] < 300 {
+		t.Errorf("Expected neighbor from second index (>=300), got %d", result.Neighbors[0])
 	}
 }
 
@@ -464,9 +469,10 @@ func TestGpuCagraMergeWithIds(t *testing.T) {
 	}
 
 	dimension := uint32(16)
-	count := uint64(100)
+	// Need count > intermediate_graph_degree=128 (default).
+	count := uint64(200)
 
-	// Index 1: values around 0, IDs [1000..199]
+	// Index 1: values around 0, IDs [1000..1199]
 	ds1 := make([]float32, count*uint64(dimension))
 	ids1 := make([]uint32, count)
 	for i := uint64(0); i < count; i++ {
@@ -476,7 +482,7 @@ func TestGpuCagraMergeWithIds(t *testing.T) {
 		}
 	}
 
-	// Index 2: values around 5000, IDs [5000..5099]
+	// Index 2: values around 5000, IDs [5000..5199]
 	ds2 := make([]float32, count*uint64(dimension))
 	ids2 := make([]uint32, count)
 	for i := uint64(0); i < count; i++ {
@@ -511,7 +517,7 @@ func TestGpuCagraMergeWithIds(t *testing.T) {
 	defer merged.Destroy()
 	merged.Start()
 
-	// Query for Cluster 1: expect ID in [1000, 1100)
+	// Query for Cluster 1: expect ID in [1000, 1200)
 	q1 := make([]float32, dimension)
 	for j := range q1 {
 		q1[j] = 0.0
@@ -521,11 +527,11 @@ func TestGpuCagraMergeWithIds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search 1 failed: %v", err)
 	}
-	if r1.Neighbors[0] < 1000 || r1.Neighbors[0] >= 1100 {
-		t.Errorf("Expected neighbor from idx1 [1000, 1100), got %d", r1.Neighbors[0])
+	if r1.Neighbors[0] < 1000 || r1.Neighbors[0] >= 1200 {
+		t.Errorf("Expected neighbor from idx1 [1000, 1200), got %d", r1.Neighbors[0])
 	}
 
-	// Query for Cluster 2: expect ID in [5000, 5100)
+	// Query for Cluster 2: expect ID in [5000, 5200)
 	q2 := make([]float32, dimension)
 	for j := range q2 {
 		q2[j] = 5000.0
@@ -534,8 +540,8 @@ func TestGpuCagraMergeWithIds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search 2 failed: %v", err)
 	}
-	if r2.Neighbors[0] < 5000 || r2.Neighbors[0] >= 5100 {
-		t.Errorf("Expected neighbor from idx2 [5000, 5100), got %d", r2.Neighbors[0])
+	if r2.Neighbors[0] < 5000 || r2.Neighbors[0] >= 5200 {
+		t.Errorf("Expected neighbor from idx2 [5000, 5200), got %d", r2.Neighbors[0])
 	}
 }
 
@@ -546,7 +552,8 @@ func TestGpuCagraDeleteId(t *testing.T) {
 	}
 
 	dimension := uint32(16)
-	n_vectors := uint64(100)
+	// Need n_vectors > intermediate_graph_degree=128 (default).
+	n_vectors := uint64(200)
 	dataset := make([]float32, n_vectors*uint64(dimension))
 	for i := uint64(0); i < n_vectors; i++ {
 		for j := uint32(0); j < dimension; j++ {
@@ -561,8 +568,12 @@ func TestGpuCagraDeleteId(t *testing.T) {
 	}
 	defer index.Destroy()
 
-	index.Start()
-	index.Build()
+	if err := index.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	if err := index.Build(); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
 
 	// Query exactly at vector 50
 	q50 := make([]float32, dimension)
