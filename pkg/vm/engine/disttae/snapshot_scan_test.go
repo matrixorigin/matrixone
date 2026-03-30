@@ -97,6 +97,10 @@ func TestBuildSnapshotBlockFilter(t *testing.T) {
 }
 
 func TestNormalizeSnapshotScanParallelism(t *testing.T) {
+	t.Run("nil rel data", func(t *testing.T) {
+		require.Equal(t, 1, normalizeSnapshotScanParallelism(nil, 0))
+	})
+
 	t.Run("serial on small scan", func(t *testing.T) {
 		relData := newTestSnapshotRelData(snapshotScanMinBlocksPerReader*2 - 1)
 		require.Equal(t, 1, normalizeSnapshotScanParallelism(relData, 0))
@@ -117,6 +121,12 @@ func TestNormalizeSnapshotScanParallelism(t *testing.T) {
 }
 
 func TestSplitSnapshotScanShards(t *testing.T) {
+	t.Run("nil rel data", func(t *testing.T) {
+		shards := splitSnapshotScanShards(nil, 4)
+		require.Len(t, shards, 1)
+		require.Nil(t, shards[0])
+	})
+
 	relData := newTestSnapshotRelData(snapshotScanMinBlocksPerReader*4 + 3)
 	shards := splitSnapshotScanShards(relData, 4)
 	require.Len(t, shards, 4)
@@ -246,6 +256,17 @@ func TestBuildSnapshotScanReaderConfig(t *testing.T) {
 	require.True(t, cfg.hasBlockFilter)
 	require.Equal(t, uint16(5), cfg.filterSeqnum)
 	require.Equal(t, types.T_int64, cfg.filterType.Oid)
+
+	cfg, err = buildSnapshotScanReaderConfig(
+		tableDef,
+		[]string{"id", "payload"},
+		[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()},
+		nil,
+		mp,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []uint16{5, 6}, cfg.seqnums)
+	require.False(t, cfg.hasBlockFilter)
 }
 
 func TestUnwrapTxnTable(t *testing.T) {
@@ -262,6 +283,199 @@ func TestUnwrapTxnTable(t *testing.T) {
 	_, err = unwrapTxnTable(&mockRelation{})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "snapshot scan requires disttae relation")
+}
+
+func TestGetSnapshotScanSubmitPool(t *testing.T) {
+	pool1, err := getSnapshotScanSubmitPool()
+	require.NoError(t, err)
+	require.NotNil(t, pool1)
+
+	pool2, err := getSnapshotScanSubmitPool()
+	require.NoError(t, err)
+	require.Same(t, pool1, pool2)
+}
+
+func TestScanSnapshotShardsParallel_SkipsEmptyShards(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	err := scanSnapshotShardsParallel(
+		context.Background(),
+		nil,
+		types.BuildTS(20, 0),
+		[]engine.RelData{nil, newTestSnapshotRelData(0)},
+		snapshotScanReaderConfig{
+			attrs:    []string{"id"},
+			seqnums:  []uint16{1},
+			colTypes: []types.Type{types.T_int64.ToType()},
+		},
+		mp,
+		func(*batch.Batch) error {
+			t.Fatal("empty shards should not emit batches")
+			return nil
+		},
+	)
+	require.NoError(t, err)
+}
+
+func TestScanSnapshotShardsParallel_ContextCanceled(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := scanSnapshotShardsParallel(
+		ctx,
+		nil,
+		types.BuildTS(20, 0),
+		[]engine.RelData{newTestSnapshotRelData(1)},
+		snapshotScanReaderConfig{
+			attrs:    []string{"id"},
+			seqnums:  []uint16{1},
+			colTypes: []types.Type{types.T_int64.ToType()},
+		},
+		mp,
+		func(*batch.Batch) error { return nil },
+	)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestScanSnapshotWithCurrentRanges_EarlyValidation(t *testing.T) {
+	t.Run("attrs type mismatch", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
+
+		err := ScanSnapshotWithCurrentRanges(
+			context.Background(),
+			"unit-test",
+			&mockRelation{},
+			nil,
+			types.BuildTS(40, 0),
+			[]string{"id"},
+			[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()},
+			nil,
+			0,
+			mp,
+			func(*batch.Batch) error { return nil },
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "attrs/colTypes length mismatch")
+	})
+
+	t.Run("nil mpool", func(t *testing.T) {
+		err := ScanSnapshotWithCurrentRanges(
+			context.Background(),
+			"unit-test",
+			&mockRelation{},
+			nil,
+			types.BuildTS(40, 0),
+			[]string{"id"},
+			[]types.Type{types.T_int64.ToType()},
+			nil,
+			0,
+			nil,
+			func(*batch.Batch) error { return nil },
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "non-nil mpool")
+	})
+
+	t.Run("non disttae relation", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
+
+		err := ScanSnapshotWithCurrentRanges(
+			context.Background(),
+			"unit-test",
+			&mockRelation{},
+			nil,
+			types.BuildTS(40, 0),
+			[]string{"id"},
+			[]types.Type{types.T_int64.ToType()},
+			nil,
+			0,
+			mp,
+			func(*batch.Batch) error { return nil },
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "snapshot scan requires disttae relation")
+	})
+
+	t.Run("non disttae engine", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
+
+		err := ScanSnapshotWithCurrentRanges(
+			context.Background(),
+			"unit-test",
+			&txnTable{eng: &engine.EntireEngine{}},
+			nil,
+			types.BuildTS(40, 0),
+			[]string{"id"},
+			[]types.Type{types.T_int64.ToType()},
+			nil,
+			0,
+			mp,
+			func(*batch.Batch) error { return nil },
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "requires disttae engine")
+	})
+}
+
+func TestReadSnapshotWithSource_ReaderError(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	wantErr := moerr.NewInternalErrorNoCtx("reader failed")
+	source := &stubSnapshotDataSource{
+		steps: []snapshotDataSourceStep{
+			{state: engine.InMem, err: wantErr},
+		},
+	}
+
+	err := readSnapshotWithSource(
+		context.Background(),
+		nil,
+		source,
+		types.BuildTS(20, 0),
+		snapshotScanReaderConfig{
+			attrs:    []string{"id"},
+			seqnums:  []uint16{1},
+			colTypes: []types.Type{types.T_int64.ToType()},
+		},
+		mp,
+		func(*batch.Batch) error { return nil },
+	)
+	require.ErrorIs(t, err, wantErr)
+	require.True(t, source.closed)
+}
+
+func TestBuildSnapshotBlockFilter_MissingPrimaryKeyColumn(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+
+	tableDef := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"id"},
+			PkeyColName: "missing_pk",
+		},
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}, Seqnum: 1},
+		},
+		Name2ColIndex: map[string]int32{
+			"id": 0,
+		},
+	}
+
+	filterVec := vector.NewVec(types.T_int64.ToType())
+	defer filterVec.Free(mp)
+	require.NoError(t, vector.AppendFixed(filterVec, int64(3), false, mp))
+	expr := readutil.ConstructInExpr(context.Background(), "missing_pk", filterVec)
+
+	_, _, _, _, err := buildSnapshotBlockFilter(tableDef, expr, mp)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cannot resolve primary key column")
 }
 
 type snapshotDataSourceStep struct {
