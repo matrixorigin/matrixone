@@ -155,7 +155,7 @@ namespace matrixone {
 //
 //   SHARDED:
 //     build    → submit_all_devices (each GPU builds its shard)
-//     extend   → NOT supported (throws at index level)
+//     extend   → submit (only extend to last shard)
 //     search   → submit_all_devices_no_wait (all shards search concurrently)
 //                → results collected and merged by merge_sharded_results()
 //
