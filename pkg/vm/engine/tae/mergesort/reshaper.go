@@ -88,13 +88,13 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 				if host.DoTransfer() {
 					if stats.objCnt >= int(api.NoTransfer) {
 						return moerr.NewInternalErrorNoCtxf(
-							"merge output exceeds %d objects: ObjIdx would collide with NoTransfer sentinel (0x%02X)",
+							"merge output exceeds %d objects: ObjIdx would collide with NoTransfer sentinel (0x%04X)",
 							api.NoTransfer, api.NoTransfer)
 					}
 					idx := accObjBlkCnts[i] + loadedBlkCnt - 1
 					blockActive[idx] = true
 					slab[idx*stride+int(j)] = api.TransferDestPos{
-						ObjIdx: uint8(stats.objCnt),
+						ObjIdx: uint16(stats.objCnt),
 						BlkIdx: uint16(stats.objBlkCnt),
 						RowIdx: uint32(stats.blkRowCnt),
 					}

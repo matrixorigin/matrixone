@@ -232,14 +232,14 @@ type TransferMaps []TransferMap
 // TransferMap is a dense slice indexed by the original row index within its source block.
 // Entries where ObjIdx == NoTransfer are sentinel values meaning the row was deleted and
 // has no transfer destination.  Valid ObjIdx values are always < NoTransfer because the
-// number of output objects produced by a single merge is far below 255.
+// number of output objects produced by a single merge is far below 65535.
 type TransferMap []TransferDestPos
 
 // NoTransfer is the sentinel ObjIdx value that marks a deleted (non-transferred) row.
-const NoTransfer = uint8(0xFF)
+const NoTransfer = uint16(0xFFFF)
 
 type TransferDestPos struct {
-	ObjIdx uint8
+	ObjIdx uint16
 	BlkIdx uint16
 	RowIdx uint32
 }
