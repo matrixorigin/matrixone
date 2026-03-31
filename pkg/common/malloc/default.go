@@ -162,7 +162,7 @@ func newDefault(delta *Config) (allocator Allocator) {
 	}
 }
 
-var globalProfiler = NewProfiler[HeapSampleValues]()
+var globalProfiler = NewProfiler[HeapSampleValues]("malloc")
 
 // GlobalProfiler returns the global heap profiler so external packages
 // (e.g. mpool) can record off-heap allocations into the same profile.
