@@ -24,6 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
+const maxVectorIndexTopPushdownLimit = uint64(^uint(0) >> 1)
+
 func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr, separateNonEquiConds bool) (int32, []*plan.Expr) {
 	originalNodeID := nodeID
 	// Record before pushdownFilters
@@ -92,10 +94,13 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		windowTag := node.BindingTags[0]
 
 		for _, filter := range filters {
-			if !containsTag(filter, windowTag) {
-				canPushdown = append(canPushdown, replaceColRefs(filter, windowTag, node.WinSpecList))
-			} else {
+			// Keep any filter that references a window output above this window node.
+			// Pushing a filter on an earlier window output below a later window node
+			// changes the row set seen by the later window and can produce wrong results.
+			if containsTag(filter, windowTag) {
 				node.FilterList = append(node.FilterList, filter)
+			} else {
+				canPushdown = append(canPushdown, filter)
 			}
 		}
 
@@ -677,6 +682,9 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 	}
 	limitVal := node.Limit.GetLit().GetU64Val()
 	if limitVal == 0 {
+		return
+	}
+	if limitVal > maxVectorIndexTopPushdownLimit {
 		return
 	}
 	if scanNode.TableDef.TableType != catalog.SystemSI_IVFFLAT_TblType_Entries {

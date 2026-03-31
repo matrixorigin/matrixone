@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -46,6 +47,7 @@ func NewServer(client logservice.CNHAKeeperClient) *Server {
 		cnSegmentMap:  CnSegmentMap{mp: make(map[string]int32, 1024)},
 		receivedRunningPipeline: RunningPipelineMapForRemoteNode{
 			fromRpcClientToRelatedPipeline: make(map[rpcClientItem]runningPipelineInfo, 1024),
+			sessionCleanupWaiters:          make(map[morpc.ClientSession]struct{}, 128),
 		},
 	}
 	Set(s)

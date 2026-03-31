@@ -552,10 +552,10 @@ func (writer *s3WriterDelegate) fillDeleteBlockInfo(
 
 	// init buf
 	if writer.deleteBlockInfo[idx] == nil {
-		blockInfoBat := batch.NewWithSize(bat.VectorCount())
+		blockInfoBat := batch.NewOffHeapWithSize(bat.VectorCount())
 		blockInfoBat.Attrs = bat.Attrs
 		for i := 0; i < bat.VectorCount(); i++ {
-			blockInfoBat.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType())
+			blockInfoBat.Vecs[i] = vector.NewOffHeapVecWithType(*bat.Vecs[i].GetType())
 		}
 		writer.deleteBlockInfo[idx] = &deleteBlockInfo{
 			name: "",
@@ -594,10 +594,10 @@ func (writer *s3WriterDelegate) fillInsertBlockInfo(
 
 	// init buf
 	if writer.insertBlockInfo[idx] == nil {
-		blockInfoBat := batch.NewWithSize(bat.VectorCount())
+		blockInfoBat := batch.NewOffHeapWithSize(bat.VectorCount())
 		blockInfoBat.Attrs = bat.Attrs
 		for i := 0; i < bat.VectorCount(); i++ {
-			blockInfoBat.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType())
+			blockInfoBat.Vecs[i] = vector.NewOffHeapVecWithType(*bat.Vecs[i].GetType())
 		}
 		writer.insertBlockInfo[idx] = blockInfoBat
 		writer.insertBlockRowCount[idx] = 0
@@ -653,6 +653,9 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 		for _, blockData := range block {
 			name := objectio.PhysicalAddr_Attr
 			err = writer.addBatchToOutput(mp, actionDelete, i, uint64(blockData.bat.RowCount()), name, blockData.bat)
+			if err != nil {
+				return
+			}
 		}
 	}
 
@@ -807,12 +810,12 @@ func (writer *s3WriterDelegate) addBatchToOutput(
 }
 
 func makeS3OutputBatch() *batch.Batch {
-	bat := batch.NewWithSize(5)
-	bat.Vecs[0] = vector.NewVec(types.T_uint8.ToType())   // action type  0=actionInsert, 1=actionDelete
-	bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())  // tableID
-	bat.Vecs[2] = vector.NewVec(types.T_uint64.ToType())  // rowCount of s3 blocks
-	bat.Vecs[3] = vector.NewVec(types.T_varchar.ToType()) // name for delete. empty for insert
-	bat.Vecs[4] = vector.NewVec(types.T_text.ToType())    // originBatch.MarshalBinary()
+	bat := batch.NewOffHeapWithSize(5)
+	bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_uint8.ToType())   // action type  0=actionInsert, 1=actionDelete
+	bat.Vecs[1] = vector.NewOffHeapVecWithType(types.T_uint64.ToType())  // tableID
+	bat.Vecs[2] = vector.NewOffHeapVecWithType(types.T_uint64.ToType())  // rowCount of s3 blocks
+	bat.Vecs[3] = vector.NewOffHeapVecWithType(types.T_varchar.ToType()) // name for delete. empty for insert
+	bat.Vecs[4] = vector.NewOffHeapVecWithType(types.T_text.ToType())    // originBatch.MarshalBinary()
 	return bat
 }
 
@@ -917,7 +920,7 @@ func resetMergeBlockForOldCN(proc *process.Process, bat *batch.Batch) error {
 	if bat.Attrs[len(bat.Attrs)-1] != catalog.ObjectMeta_ObjectStats {
 		// bat comes from old CN, no object stats vec in it
 		bat.Attrs = append(bat.Attrs, catalog.ObjectMeta_ObjectStats)
-		bat.Vecs = append(bat.Vecs, vector.NewVec(types.T_binary.ToType()))
+		bat.Vecs = append(bat.Vecs, vector.NewOffHeapVecWithType(types.T_binary.ToType()))
 
 		blkVec := bat.Vecs[0]
 		destVec := bat.Vecs[1]

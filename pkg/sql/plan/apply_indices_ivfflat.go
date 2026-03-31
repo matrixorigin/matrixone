@@ -564,8 +564,6 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		// secondScanNode: copy original scanNode for JOIN(ivf, table)
 		secondScanNodeID := builder.copyNode(ctx, scanNode.NodeId)
 		secondScanNode := builder.qry.Nodes[secondScanNodeID]
-		baseSecondScan := secondScanNode
-
 		oldTag := secondScanNode.BindingTags[0]
 		builder.rebindScanNode(secondScanNode)
 		newTag := secondScanNode.BindingTags[0]
@@ -586,29 +584,40 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		}
 
 		if builder.canApplyRegularIndex(secondScanNode) {
-			optimizedSecondScanID := builder.applyIndicesForFilters(secondScanNodeID, secondScanNode, colRefCnt, idxColMap)
+			// Remove filters that reference the vector column (e.g. "embedding IS NOT NULL").
+			// The copied second scan only needs to produce PKs for the inner BloomFilter join;
+			// the original outer scan still keeps the full filter list as the safety net.
+			partPos := ivfCtx.partPos
+			var cleanedFilters []*plan.Expr
+			for _, expr := range secondScanNode.FilterList {
+				if refsColumn(expr, newTag, partPos) {
+					continue
+				}
+				cleanedFilters = append(cleanedFilters, expr)
+			}
+			secondScanNode.FilterList = cleanedFilters
+
+			// Build a minimal colRefCnt for the copied scan so index-only planning is still
+			// possible after removing vector-column-only filters.
+			secondColRefCnt := make(map[[2]int32]int)
+			secondColRefCnt[[2]int32{newTag, ivfCtx.pkPos}] = 1
+			for _, expr := range secondScanNode.FilterList {
+				extractColRefs(expr, newTag, secondColRefCnt)
+			}
+			optimizedSecondScanID := builder.applyIndicesForFilters(secondScanNodeID, secondScanNode, secondColRefCnt, idxColMap)
 			secondScanNodeID = optimizedSecondScanID
-			secondScanNode = builder.qry.Nodes[secondScanNodeID]
 		}
 
 		// Otherwise BloomFilter will only see the truncated primary key set, causing data loss.
-		secondScanNode.Limit = nil
-		secondScanNode.Offset = nil
+		clearLimitOffsetInSubtree(builder.qry, secondScanNodeID)
 
 		// Add a PROJECT node above secondScanNode to output only the primary key column
 		secondProjectTag := builder.genNewBindTag()
 		secondPkExpr := builder.buildPkExprFromNode(secondScanNodeID, ivfCtx.pkType, scanNode.TableDef.Pkey.PkeyColName)
 		if secondPkExpr == nil {
-			secondPkExpr = &plan.Expr{
-				Typ: ivfCtx.pkType,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: baseSecondScan.BindingTags[0],
-						ColPos: ivfCtx.pkPos,
-						Name:   scanNode.TableDef.Cols[ivfCtx.pkPos].Name,
-					},
-				},
-			}
+			// If an optimized second-scan subtree can't provide a stable PK expression,
+			// skip IVF rewrite to avoid wiring stale bindings into join/runtime-filter paths.
+			return nodeID, nil
 		}
 		secondProjectNodeID := builder.appendNode(&plan.Node{
 			NodeType:    plan.Node_PROJECT,
@@ -679,17 +688,32 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		probeSpec.UseBloomFilter = true
 		tableFuncNode.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{probeSpec}
 
-		// outer join: original table JOIN (inner ivf join)
+		// The original scan was guarded during the recursive planner pass so the vector rewrite
+		// could see the raw table scan shape. Once the IVF subtree is constructed, we can
+		// temporarily suspend that protection and apply regular secondary-index optimization
+		// to the row-fetch side of the outer join.
+		outerScanNodeID := scanNode.NodeId
+		if builder.canApplyRegularIndex(scanNode) {
+			builder.withSuspendedScanProtection(scanNode.NodeId, func() {
+				outerScanNodeID = builder.applyIndicesForFilters(scanNode.NodeId, scanNode, colRefCnt, idxColMap)
+			})
+		}
+
+		outerPkExpr := builder.buildPkExprFromNode(outerScanNodeID, ivfCtx.pkType, scanNode.TableDef.Pkey.PkeyColName)
+		if outerPkExpr == nil && outerScanNodeID != scanNode.NodeId {
+			// If a future regular-index rewrite produces an unsupported subtree shape,
+			// fall back to the original scan instead of wiring stale bindings into the IVF join.
+			logutil.Debugf("IVF outer PK fallback: optimized node %d -> original scan %d", outerScanNodeID, scanNode.NodeId)
+			outerScanNodeID = scanNode.NodeId
+			outerPkExpr = builder.buildPkExprFromNode(outerScanNodeID, ivfCtx.pkType, scanNode.TableDef.Pkey.PkeyColName)
+		}
+		if outerPkExpr == nil {
+			return nodeID, nil
+		}
+
+		// outer join: optimized outer subtree JOIN (inner ivf join)
 		outerOn, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
-			{
-				Typ: ivfCtx.pkType,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: scanNode.BindingTags[0],
-						ColPos: ivfCtx.pkPos, // tbl.pk
-					},
-				},
-			},
+			DeepCopyExpr(outerPkExpr),
 			{
 				Typ: ivfCtx.pkType,
 				Expr: &plan.Expr_Col{
@@ -703,7 +727,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 
 		outerJoinNodeID := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
-			Children: []int32{scanNode.NodeId, innerJoinNodeID},
+			Children: []int32{outerScanNodeID, innerJoinNodeID},
 			JoinType: plan.Node_INNER,
 			OnList:   []*Expr{outerOn},
 			// Don't set Limit/Offset on JOIN - they should be applied after SORT
@@ -717,18 +741,13 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		//   2) UpperLimit is set to avoid all filters being degraded to PASS due to 0.
 		rfTag2 := builder.genNewMsgTag()
 
-		// probe: primary key column from original table (scanNode left child)
-		probeExpr2 := &plan.Expr{
-			Typ: ivfCtx.pkType,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: scanNode.BindingTags[0],
-					ColPos: ivfCtx.pkPos,
-				},
-			},
+		outerHasProbeRuntimeFilter := false
+		outerProbeNodeID := builder.findScanNodeByTag(outerScanNodeID, outerPkExpr.GetCol().RelPos)
+		if outerProbeNodeID >= 0 {
+			probeSpec2 := MakeRuntimeFilter(rfTag2, false, 0, DeepCopyExpr(outerPkExpr), false)
+			builder.qry.Nodes[outerProbeNodeID].RuntimeFilterProbeList = append(builder.qry.Nodes[outerProbeNodeID].RuntimeFilterProbeList, probeSpec2)
+			outerHasProbeRuntimeFilter = true
 		}
-		probeSpec2 := MakeRuntimeFilter(rfTag2, false, 0, DeepCopyExpr(probeExpr2), false)
-		scanNode.RuntimeFilterProbeList = append(scanNode.RuntimeFilterProbeList, probeSpec2)
 
 		// build: placeholder column, HashBuild will generate IN-list based on build side join key's UniqueJoinKeys[0]
 		buildExpr2 := &plan.Expr{
@@ -746,8 +765,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		const unlimitedInFilterCard = int32(1<<31 - 1)
 		buildSpec2 := MakeRuntimeFilter(rfTag2, false, unlimitedInFilterCard, buildExpr2, false)
 
-		outerJoinNode := builder.qry.Nodes[outerJoinNodeID]
-		outerJoinNode.RuntimeFilterBuildList = append(outerJoinNode.RuntimeFilterBuildList, buildSpec2)
+		if outerHasProbeRuntimeFilter {
+			outerJoinNode := builder.qry.Nodes[outerJoinNodeID]
+			outerJoinNode.RuntimeFilterBuildList = append(outerJoinNode.RuntimeFilterBuildList, buildSpec2)
+		}
 
 		// Outer join doesn't add extra project, let global column pruning optimizer handle it
 		joinRootID = outerJoinNodeID
@@ -847,7 +868,18 @@ func (builder *QueryBuilder) buildPkExprFromNode(nodeID int32, pkType plan.Type,
 		}
 		colIdx, ok := node.TableDef.Name2ColIndex[pkName]
 		if !ok {
-			colIdx = node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
+			if node.IndexScanInfo.IsIndexScan {
+				colIdx, ok = node.TableDef.Name2ColIndex[catalog.IndexTablePrimaryColName]
+				if !ok {
+					logutil.Debugf("IVF buildPkExprFromNode: index primary column %q missing in table %q for node %d", catalog.IndexTablePrimaryColName, node.TableDef.Name, nodeID)
+					return nil
+				}
+			} else {
+				if node.TableDef.Pkey == nil {
+					return nil
+				}
+				colIdx = node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
+			}
 		}
 		return &plan.Expr{
 			Typ: pkType,
@@ -867,9 +899,9 @@ func (builder *QueryBuilder) buildPkExprFromNode(nodeID int32, pkType plan.Type,
 				}
 			}
 		}
-		if len(node.Children) > 0 {
-			return builder.buildPkExprFromNode(node.Children[0], pkType, pkName)
-		}
+		// If PROJECT doesn't expose PK, don't recurse to child: using child's binding tag here
+		// would produce stale ColRef(RelPos) for joins/runtime filters above this PROJECT.
+		return nil
 	case plan.Node_JOIN:
 		if len(node.Children) > 0 {
 			return builder.buildPkExprFromNode(node.Children[0], pkType, pkName)
@@ -880,6 +912,30 @@ func (builder *QueryBuilder) buildPkExprFromNode(nodeID int32, pkType plan.Type,
 		}
 	}
 	return nil
+}
+
+func (builder *QueryBuilder) findScanNodeByTag(nodeID, tag int32) int32 {
+	return builder.findScanNodeByTagWithVisited(nodeID, tag, make(map[int32]struct{}))
+}
+
+func (builder *QueryBuilder) findScanNodeByTagWithVisited(nodeID, tag int32, visited map[int32]struct{}) int32 {
+	if builder == nil || nodeID < 0 {
+		return -1
+	}
+	if _, seen := visited[nodeID]; seen {
+		return -1
+	}
+	visited[nodeID] = struct{}{}
+	node := builder.qry.Nodes[nodeID]
+	if node.NodeType == plan.Node_TABLE_SCAN && len(node.BindingTags) > 0 && node.BindingTags[0] == tag {
+		return nodeID
+	}
+	for _, childID := range node.Children {
+		if found := builder.findScanNodeByTagWithVisited(childID, tag, visited); found >= 0 {
+			return found
+		}
+	}
+	return -1
 }
 
 func (builder *QueryBuilder) getColName(col *plan.ColRef) string {
@@ -949,6 +1005,18 @@ func (builder *QueryBuilder) canApplyRegularIndex(node *plan.Node) bool {
 	return len(node.FilterList) > 0
 }
 
+func clearLimitOffsetInSubtree(qry *plan.Query, nodeID int32) {
+	if qry == nil || nodeID < 0 {
+		return
+	}
+	node := qry.Nodes[nodeID]
+	node.Limit = nil
+	node.Offset = nil
+	for _, childID := range node.Children {
+		clearLimitOffsetInSubtree(qry, childID)
+	}
+}
+
 func colRefsWithin(expr *plan.Expr, colCnt int) bool {
 	if expr == nil {
 		return true
@@ -973,4 +1041,51 @@ func colRefsWithin(expr *plan.Expr, colCnt int) bool {
 	default:
 		return true
 	}
+}
+
+func extractColRefs(expr *plan.Expr, tag int32, colRefCnt map[[2]int32]int) {
+	if expr == nil {
+		return
+	}
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if impl.Col.RelPos == tag {
+			colRefCnt[[2]int32{tag, impl.Col.ColPos}]++
+		}
+	case *plan.Expr_F:
+		for _, arg := range impl.F.Args {
+			extractColRefs(arg, tag, colRefCnt)
+		}
+	case *plan.Expr_Sub:
+		return
+	case *plan.Expr_List:
+		for _, sub := range impl.List.List {
+			extractColRefs(sub, tag, colRefCnt)
+		}
+	}
+}
+
+func refsColumn(expr *plan.Expr, tag int32, colPos int32) bool {
+	if expr == nil {
+		return false
+	}
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return impl.Col.RelPos == tag && impl.Col.ColPos == colPos
+	case *plan.Expr_F:
+		for _, arg := range impl.F.Args {
+			if refsColumn(arg, tag, colPos) {
+				return true
+			}
+		}
+	case *plan.Expr_Sub:
+		return false
+	case *plan.Expr_List:
+		for _, sub := range impl.List.List {
+			if refsColumn(sub, tag, colPos) {
+				return true
+			}
+		}
+	}
+	return false
 }

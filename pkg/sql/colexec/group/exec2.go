@@ -40,7 +40,10 @@ const (
 
 	// spill parameters.
 	spillNumBuckets = 32
+	spillMaskBits   = 5 // log2(spillNumBuckets)
 	spillMaxPass    = 3
+	spillIOBufSize  = 1024 * 1024 // 1 MiB read-ahead buffer for spill file reads
+	spillWrBufSize  = 64 * 1024   // 64 KiB write buffer per spill bucket
 )
 
 func (group *Group) Prepare(proc *process.Process) (err error) {
@@ -247,8 +250,11 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 			if needSpill {
 				// we need to spill the data to disk.
 				if group.NeedEval {
-					if err := group.ctr.spillDataToDisk(proc, nil); err != nil {
+					if bytes, rows, err := group.ctr.spillDataToDisk(proc, nil); err != nil {
 						return vm.CancelResult, err
+					} else {
+						group.OpAnalyzer.Spill(bytes)
+						group.OpAnalyzer.SpillRows(rows)
 					}
 					// continue the loop, to receive more data.
 				} else {
@@ -263,8 +269,11 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 
 		// spilling -- spill whatever left in memory, and load first spilled bucket.
 		if group.ctr.isSpilling() {
-			if err = group.ctr.spillDataToDisk(proc, nil); err != nil {
+			if bytes, rows, err := group.ctr.spillDataToDisk(proc, nil); err != nil {
 				return vm.CancelResult, err
+			} else {
+				group.OpAnalyzer.Spill(bytes)
+				group.OpAnalyzer.SpillRows(rows)
 			}
 			if _, err = group.ctr.loadSpilledData(proc, group.OpAnalyzer, group.Aggs); err != nil {
 				return vm.CancelResult, err
@@ -302,6 +311,7 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 				return false, err
 			}
 		}
+		group.OpAnalyzer.SetMemUsed(group.ctr.memUsed())
 		return false, nil
 	} else {
 		if group.ctr.hr.IsEmpty() {
@@ -493,37 +503,4 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 	res := vm.NewCallResult()
 	res.Batch = batch
 	return res, hasMore, nil
-}
-
-// given buckets, and a specific bucket, compute the flags for vector union.
-func computeChunkFlags(bucketIdx []uint64, bucket uint64, chunkSize int) (int64, [][]uint8) {
-	// compute the number of chunks, and last chunk size
-	nChunks := (len(bucketIdx) + chunkSize - 1) / chunkSize
-	lastChunkSize := len(bucketIdx) - (chunkSize * (nChunks - 1))
-
-	cnt := int64(0)
-	flags := make([][]uint8, nChunks)
-	for i := range flags {
-		if i+1 == nChunks {
-			flags[i] = make([]uint8, lastChunkSize)
-		} else {
-			flags[i] = make([]uint8, chunkSize)
-		}
-	}
-
-	nextX := 0
-	nextY := 0
-
-	for _, idx := range bucketIdx {
-		if idx == bucket {
-			flags[nextX][nextY] = 1
-			cnt += 1
-		}
-		nextY += 1
-		if nextY == chunkSize {
-			nextX += 1
-			nextY = 0
-		}
-	}
-	return cnt, flags
 }

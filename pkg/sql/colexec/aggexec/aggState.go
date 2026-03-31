@@ -38,6 +38,7 @@ const (
 type MarshalerUnmarshaler interface {
 	MarshalBinary() ([]byte, error)
 	UnmarshalBinary([]byte) error
+	UnmarshalFromReader(io.Reader) error
 }
 
 type aggInfo struct {
@@ -48,6 +49,7 @@ type aggInfo struct {
 	stateTypes               []types.Type
 	emptyNull                bool
 	saveArg                  bool
+	opaqueArg                bool
 	makeMarshalerUnmarshaler func(mp *mpool.MPool) (MarshalerUnmarshaler, error)
 }
 
@@ -65,6 +67,10 @@ func (a *aggInfo) IsDistinct() bool {
 
 func (a *aggInfo) TypesInfo() ([]types.Type, types.Type) {
 	return a.argTypes, a.retType
+}
+
+func (a *aggInfo) usesOpaqueArgEncoding() bool {
+	return a.opaqueArg || len(a.argTypes) != 1 || !a.argTypes[0].IsFixedLen()
 }
 
 type aggState struct {
@@ -97,7 +103,7 @@ func (ag *aggState) init(mp *mpool.MPool, l, c int32, info *aggInfo, setNulls bo
 	if !info.saveArg {
 		ag.vecs = make([]*vector.Vector, len(info.stateTypes))
 		for i, typ := range info.stateTypes {
-			ag.vecs[i] = vector.NewVec(typ)
+			ag.vecs[i] = vector.NewOffHeapVecWithType(typ)
 			if err = ag.vecs[i].PreExtend(int(c), mp); err != nil {
 				return err
 			}
@@ -163,7 +169,7 @@ func (ag *aggState) writeStateArg(i int32, buf *bytes.Buffer, info *aggInfo) err
 		binary.BigEndian.PutUint16(lk, uint16(i))
 		binary.BigEndian.PutUint16(uk, uint16(i+1))
 		it := ag.argSkl.NewIter(lk, uk)
-		if info.argTypes[0].IsFixedLen() {
+		if !info.usesOpaqueArgEncoding() {
 			for ok, k, _ := it.SeekGE(lk); ok; ok, k, _ = it.Next() {
 				/*
 					checkI := binary.BigEndian.Uint16(k[:kAggArgPrefixSz])
@@ -209,7 +215,7 @@ func (ag *aggState) readStateArg(mp *mpool.MPool, i int32, r io.Reader, info *ag
 	}
 	// read the state arguments
 	var kbuf []byte
-	if info.argTypes[0].IsFixedLen() {
+	if !info.usesOpaqueArgEncoding() {
 		fixedLen := info.argTypes[0].GetSize()
 		if info.isDistinct {
 			kbuf = make([]byte, kAggArgPrefixSz+fixedLen)
@@ -249,11 +255,6 @@ func (ag *aggState) writeStateToBuf(mp *mpool.MPool, info *aggInfo, flags []uint
 			cnt += 1
 		}
 	}
-
-	if err := types.WriteUint64(buf, magicNumber); err != nil {
-		return err
-	}
-	defer types.WriteUint64(buf, magicNumber)
 
 	types.WriteInt32(buf, cnt)
 	if cnt == 0 {
@@ -305,11 +306,6 @@ func (ag *aggState) writeStateToBuf(mp *mpool.MPool, info *aggInfo, flags []uint
 }
 
 func (ag *aggState) writeAllStatesToBuf(buf *bytes.Buffer, info *aggInfo) error {
-	if err := types.WriteUint64(buf, magicNumber); err != nil {
-		return err
-	}
-	defer types.WriteUint64(buf, magicNumber)
-
 	types.WriteInt32(buf, ag.length)
 	if ag.length == 0 {
 		return nil
@@ -344,9 +340,6 @@ func (ag *aggState) writeAllStatesToBuf(buf *bytes.Buffer, info *aggInfo) error 
 }
 
 func (ag *aggState) readState(mp *mpool.MPool, reader io.Reader, info *aggInfo) (int32, error) {
-	checkAggStateMagic(reader)
-	defer checkAggStateMagic(reader)
-
 	cnt, err := types.ReadInt32(reader)
 	if err != nil {
 		return 0, err
@@ -372,15 +365,18 @@ func (ag *aggState) readState(mp *mpool.MPool, reader io.Reader, info *aggInfo) 
 			for i := range cnt {
 				if ag.mobs[i], err = info.makeMarshalerUnmarshaler(mp); err != nil {
 					return 0, err
-				} else {
-					if sz, bs, err := types.ReadSizeBytes(reader); err != nil {
+				}
+				sz, err := types.ReadInt32(reader)
+				if err != nil {
+					return 0, err
+				}
+				if sz > 0 {
+					lr := io.LimitReader(reader, int64(sz))
+					if err := ag.mobs[i].UnmarshalFromReader(lr); err != nil {
 						return 0, err
-					} else {
-						if sz > 0 {
-							if err := ag.mobs[i].UnmarshalBinary(bs); err != nil {
-								return 0, err
-							}
-						}
+					}
+					if n, _ := io.Copy(io.Discard, lr); n > 0 {
+						return 0, moerr.NewInternalErrorNoCtxf("mob unmarshal did not consume all bytes: %d remaining", n)
 					}
 				}
 			}
@@ -514,10 +510,6 @@ func (ag *aggState) fillArg(mp *mpool.MPool, y uint16, val []byte, distinct bool
 		}
 		copy(k[kAggArgPrefixSz+kAggArgOrdinalSz:], val)
 		if err := ag.insertArg(mp, k); err == nil {
-			ag.argCnt[ag.length] += 1
-			if ag.argCnt[ag.length] == 0 {
-				return moerr.NewInternalErrorNoCtx("agg fillArg: too many arguments")
-			}
 			return nil
 		} else {
 			return err
@@ -568,6 +560,17 @@ func (ag *aggState) iter(idx uint16, fn func(k []byte) error) error {
 	return nil
 }
 
+func aggPayloadOffset(info *aggInfo) int {
+	if info.isDistinct {
+		return kAggArgPrefixSz
+	}
+	return kAggArgPrefixSz + kAggArgOrdinalSz
+}
+
+func aggPayloadFromKey(info *aggInfo, k []byte) []byte {
+	return k[aggPayloadOffset(info):]
+}
+
 func (ag *aggState) free(mp *mpool.MPool) {
 	if ag.argSkl != nil {
 		mpool.FreeSlice(mp, ag.argCnt)
@@ -586,14 +589,6 @@ type aggExec struct {
 	aggInfo
 	chunkSize int
 	state     []aggState
-}
-
-func (ae *aggExec) marshal() ([]byte, error) {
-	panic("not implemented")
-}
-
-func (ae *aggExec) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
-	panic("not implemented")
 }
 
 func (ae *aggExec) getChunkSize() int {
@@ -827,6 +822,23 @@ func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.
 			if err := ae.state[x].fillArg(ae.mp, y, bs, distinct); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+func (ae *aggExec) batchFillOpaqueArgs(offset int, groups []uint64, payloads [][]byte, distinct bool) error {
+	_ = offset
+	if len(groups) != len(payloads) {
+		return moerr.NewInternalErrorNoCtx("batchFillOpaqueArgs: groups and payloads length mismatch")
+	}
+	for i, group := range groups {
+		if group == GroupNotMatched || payloads[i] == nil {
+			continue
+		}
+		x, y := ae.getXY(group - 1)
+		if err := ae.state[x].fillArg(ae.mp, y, payloads[i], distinct); err != nil {
+			return err
 		}
 	}
 	return nil

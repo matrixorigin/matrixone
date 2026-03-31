@@ -165,15 +165,3 @@ drop table t_code_rule;
 drop database atomic_1;
 drop role role1,role2;
 commit;
-
-
-
-
-
-
-
-
-
-
-
-

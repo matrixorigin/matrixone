@@ -138,12 +138,9 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 	}
 
 	// allocate metas
-	metasBytes, err := allocSlice("metas", uint64(len(vectors))*uint64(util.UnsafeSizeOf[vectorMeta[T]]()))
-	if err != nil {
-		logutil.Errorf("kmeans allocate metas error: %v", err)
-		return nil, err
-	}
-	metas := util.UnsafeSliceCastToLength[vectorMeta[T]](metasBytes, len(vectors))
+	// Keep pointer-bearing headers on the Go heap. Writing slice headers into
+	// raw C memory lets the write barrier observe stale garbage pointers.
+	metas := make([]vectorMeta[T], len(vectors))
 
 	// allocate all meta_lower at once to reduce malloc calls and logging
 	allLowerBytes, err := allocSlice("all_meta_lower", uint64(len(vectors))*uint64(clusterCnt)*uint64(util.UnsafeSizeOf[T]()))
@@ -165,12 +162,7 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 	}
 
 	// allocate centroidDist headers
-	centroidDistBytes, err := allocSlice("centroid_dist_headers", uint64(clusterCnt)*uint64(util.UnsafeSizeOf[[]T]()))
-	if err != nil {
-		logutil.Errorf("kmeans allocate centroidDist error: %v", err)
-		return nil, err
-	}
-	centroidDist := util.UnsafeSliceCastToLength[[]T](centroidDistBytes, clusterCnt)
+	centroidDist := make([][]T, clusterCnt)
 
 	// allocate all centroid distances at once
 	allDistBytes, err := allocSlice("all_centroid_dist", uint64(clusterCnt)*uint64(clusterCnt)*uint64(util.UnsafeSizeOf[T]()))
@@ -207,12 +199,7 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 	}
 
 	// allocate centroids headers
-	centroidsBytes, err := allocSlice("centroids_headers", uint64(clusterCnt)*uint64(util.UnsafeSizeOf[[]T]()))
-	if err != nil {
-		logutil.Errorf("kmeans allocate centroids error: %v", err)
-		return nil, err
-	}
-	centroids := util.UnsafeSliceCastToLength[[]T](centroidsBytes, clusterCnt)
+	centroids := make([][]T, clusterCnt)
 
 	// allocate all centroids data at once
 	allCentroidsDataBytes, err := allocSlice("all_centroids_data", uint64(clusterCnt)*uint64(dim)*uint64(util.UnsafeSizeOf[T]()))
@@ -226,12 +213,7 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 	}
 
 	// allocate nextCentroids headers
-	nextCentroidsBytes, err := allocSlice("next_centroids_headers", uint64(clusterCnt)*uint64(util.UnsafeSizeOf[[]T]()))
-	if err != nil {
-		logutil.Errorf("kmeans allocate nextCentroids error: %v", err)
-		return nil, err
-	}
-	nextCentroids := util.UnsafeSliceCastToLength[[]T](nextCentroidsBytes, clusterCnt)
+	nextCentroids := make([][]T, clusterCnt)
 
 	// allocate all nextCentroids data at once
 	allNextCentroidsDataBytes, err := allocSlice("all_next_centroids_data", uint64(clusterCnt)*uint64(dim)*uint64(util.UnsafeSizeOf[T]()))

@@ -16,7 +16,9 @@ package hashbuild
 
 import (
 	"bytes"
+	"context"
 	"os"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -69,14 +71,14 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case BuildHashMap:
-			if err := ctr.build(hashBuild, proc, analyzer); err != nil {
+			if err := hashBuild.build(proc, analyzer); err != nil {
 				return result, err
 			}
 
 			ctr.state = HandleRuntimeFilter
 
 		case HandleRuntimeFilter:
-			if err := ctr.handleRuntimeFilter(hashBuild, proc); err != nil {
+			if err := hashBuild.handleRuntimeFilter(proc); err != nil {
 				return result, err
 			}
 
@@ -93,12 +95,23 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 			if ctr.hashmapBuilder.InputBatchRowCount > 0 {
 				if spillMode {
 					// In spill mode: send empty JoinMap with spill info, no batches
-					jm = message.NewJoinMap(message.JoinSels{}, nil, nil, nil, nil, proc.Mp())
+					jm = message.NewJoinMap(message.GroupSels{}, nil, nil, nil, nil, proc.Mp())
 					jm.Spilled = true
 					jm.SpillBuckets = ctr.spilledBuckets
+					// Register a cleanup so FreeMemory deletes the spill files even if
+					// hashjoin cancels before receiving this message. Files may already
+					// be deleted by hashjoin in the normal path — errors are ignored.
+					if spillfs, fsErr := proc.GetSpillFileService(); fsErr == nil {
+						buckets := slices.Clone(ctr.spilledBuckets)
+						jm.SetSpillCleanup(func() {
+							for _, b := range buckets {
+								_ = spillfs.RemoveFile(context.Background(), b)
+							}
+						})
+					}
 				} else {
 					// Normal mode: send hashmap and batches
-					jm = message.NewJoinMap(ctr.hashmapBuilder.MultiSels, ctr.hashmapBuilder.IntHashMap, ctr.hashmapBuilder.StrHashMap, ctr.hashmapBuilder.DelRows, ctr.hashmapBuilder.Batches.Buf, proc.Mp())
+					jm = ctr.hashmapBuilder.GetJoinMap(proc.Mp())
 					jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
 				}
 				jm.SetRowCount(int64(ctr.hashmapBuilder.InputBatchRowCount))
@@ -123,7 +136,8 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) build(hashBuild *HashBuild, proc *process.Process, analyzer process.Analyzer) error {
+func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyzer) error {
+	ctr := &hashBuild.ctr
 	spillMode := false
 	var spilledBuckets []string
 	var spillFiles []*os.File
@@ -140,6 +154,7 @@ func (ctr *container) build(hashBuild *HashBuild, proc *process.Process, analyze
 				buf.Clean(proc.Mp())
 			}
 		}
+		ctr.freeSpillExprExecs()
 	}()
 
 	for {
@@ -159,7 +174,7 @@ func (ctr *container) build(hashBuild *HashBuild, proc *process.Process, analyze
 
 		// If in spill mode, spill this batch directly to open files
 		if spillMode {
-			err := ctr.appendBuildBatchToSpillFiles(proc, result.Batch, spillFiles, spillBuffers, hashBuild.HashOnPK, hashBuild.Conditions, analyzer)
+			err := ctr.appendBuildBatchToSpillFiles(proc, result.Batch, spillFiles, spillBuffers, ctr.spillExprExecs, analyzer)
 			if err != nil {
 				return err
 			}
@@ -173,18 +188,24 @@ func (ctr *container) build(hashBuild *HashBuild, proc *process.Process, analyze
 		}
 
 		// Check if we should enter spill mode based on batch memory size
-		if hashBuild.NeedHashMap && hashBuild.shouldSpillBatches() {
+		if hashBuild.shouldSpillBatches() {
 			spillMode = true
+			// Initialize spill executors once for reuse across all batches
+			if ctr.spillExprExecs == nil {
+				if _, err := ctr.initSpillExprExecs(proc, hashBuild.Conditions); err != nil {
+					return err
+				}
+			}
 			// Create spill files once
 			spilledBuckets, spillFiles, err = createSpillFiles(proc)
 			if err != nil {
 				return err
 			}
-			spillBuffers = make([]*batch.Batch, spillNumBuckets)
+			spillBuffers = ctr.acquireSpillBuffers(proc)
 
 			// Spill all batches collected so far
 			for _, bat := range ctr.hashmapBuilder.Batches.Buf {
-				err := ctr.appendBuildBatchToSpillFiles(proc, bat, spillFiles, spillBuffers, hashBuild.HashOnPK, hashBuild.Conditions, analyzer)
+				err := ctr.appendBuildBatchToSpillFiles(proc, bat, spillFiles, spillBuffers, ctr.spillExprExecs, analyzer)
 				if err != nil {
 					return err
 				}
@@ -246,7 +267,8 @@ func calculateBloomFilterProbability(rowCount int) float64 {
 	}
 }
 
-func (ctr *container) handleRuntimeFilter(hashBuild *HashBuild, proc *process.Process) error {
+func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
+	ctr := &hashBuild.ctr
 	if hashBuild.IsShuffle {
 		//only support runtime filter pass for now in shuffle join
 		var runtimeFilter message.RuntimeFilterMessage

@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -123,6 +122,16 @@ func RegisterMedian(id int64) {
 	AggIdOfMedian = id
 }
 
+func RegisterAvgTwCache(id int64) {
+	specialAgg[id] = true
+	AggIdOfAvgTwCache = id
+}
+
+func RegisterAvgTwResult(id int64) {
+	specialAgg[id] = true
+	AggIdOfAvgTwResult = id
+}
+
 func RegisterRowNumberWin(id int64) {
 	specialAgg[id] = true
 	WinIdOfRowNumber = id
@@ -178,25 +187,8 @@ func RegisterCumeDistWin(id int64) {
 	WinIdOfCumeDist = id
 }
 
-type registeredAggInfo struct {
-	isSingleAgg          bool
-	acceptNull           bool
-	setNullForEmptyGroup bool
-}
-
-type aggKey string
-
-func generateKeyOfSingleColumnAgg(aggID int64, argType types.Type) aggKey {
-	return aggKey(fmt.Sprintf("s_%d_%d", aggID, argType.Oid))
-}
-
 var (
-	// agg type record map.
-	singleAgg  = make(map[int64]bool)
 	specialAgg = make(map[int64]bool)
-
-	// agg implementation map.
-	registeredAggFunctions = make(map[aggKey]aggImplementation)
 
 	// list of special aggregation function IDs.
 	AggIdOfCountColumn     = int64(-1)
@@ -231,8 +223,10 @@ var (
 	WinIdOfCumeDist        = int64(-30)
 	WinIdOfNtile           = int64(-31)
 	WinIdOfPercentRank     = int64(-32)
+	AggIdOfAvgTwCache      = int64(-33)
+	AggIdOfAvgTwResult     = int64(-34)
 	groupConcatSep         = ","
-	getCroupConcatRet      = func(args ...types.Type) types.Type {
+	getGroupConcatRet      = func(args ...types.Type) types.Type {
 		for _, p := range args {
 			if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
 				return types.T_blob.ToType()
@@ -242,71 +236,10 @@ var (
 	}
 )
 
-func SingleAggValuesString() string {
-	pairs := make([]string, 0, len(singleAgg))
-	for key, value := range singleAgg {
-		pairs = append(pairs, fmt.Sprintf("%d:%v", key, value))
-	}
-	return strings.Join(pairs, "; ")
-}
-
 func SpecialAggValuesString() string {
 	pairs := make([]string, 0, len(specialAgg))
 	for key, value := range specialAgg {
 		pairs = append(pairs, fmt.Sprintf("%d:%v", key, value))
 	}
 	return strings.Join(pairs, "; ")
-}
-
-func getSingleAggImplByInfo(
-	id int64, arg types.Type) (aggInfo aggImplementation, err error) {
-	key := generateKeyOfSingleColumnAgg(id, arg)
-
-	if impl, ok := registeredAggFunctions[key]; ok {
-		return impl, nil
-	}
-	return aggImplementation{}, moerr.NewInternalErrorNoCtxf("no implementation for aggID %d with argType %s", id, arg)
-}
-
-type aggImplementation struct {
-	registeredAggInfo
-	ret func([]types.Type) types.Type
-
-	ctx   aggContextImplementation
-	logic aggLogicImplementation
-}
-
-type aggContextImplementation struct {
-	hasCommonContext      bool
-	generateCommonContext AggCommonContextInit
-
-	hasGroupContext      bool
-	generateGroupContext AggGroupContextInit
-}
-
-type aggLogicImplementation struct {
-	init  any // func(result type, parameter types) result
-	fill  any // func(commonContext, groupContext, value, getter, setter) error
-	fills any // func(commonContext, groupContext, value, count, getter, setter) error
-	merge any // func(commonContext, groupContext1, groupContext2, getter1, getter2, setter) error
-	flush any // func(commonContext, groupContext, getter, setter) error
-}
-
-type SingleColumnAggInformation struct {
-	id                   int64
-	arg                  types.Type
-	ret                  func(p []types.Type) types.Type
-	setNullForEmptyGroup bool
-}
-
-func MakeSingleColumnAggInformation(
-	id int64, paramType types.Type, getRetType func(p []types.Type) types.Type,
-	setNullForEmptyGroup bool) SingleColumnAggInformation {
-	return SingleColumnAggInformation{
-		id:  id,
-		arg: paramType,
-		ret: getRetType,
-		// do not support this optimization now.
-		setNullForEmptyGroup: true,
-	}
 }

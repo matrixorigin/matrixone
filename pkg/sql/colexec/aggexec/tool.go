@@ -24,45 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-// vectorAppendWildly is a more efficient version of vector.AppendFixed.
-// It ignores the const and null flags check, and uses a wilder way to append (avoiding the overhead of appending one by one).
-func vectorAppendWildly[T numeric | types.Decimal64 | types.Decimal128](v *vector.Vector, mp *mpool.MPool, value T) error {
-	oldLen := v.Length()
-	if oldLen == v.Capacity() {
-		if err := v.PreExtend(10, mp); err != nil {
-			return err
-		}
-	}
-	v.SetLength(oldLen + 1)
-
-	var vs []T
-	vector.ToSlice(v, &vs)
-	vs[oldLen] = value
-	return nil
-}
-
-/*
-func vectorAppendBytesWildly(v *vector.Vector, mp *mpool.MPool, value []byte) error {
-	var va types.Varlena
-	if err := vector.BuildVarlenaFromByteSlice(v, &va, &value, mp); err != nil {
-		return err
-	}
-
-	oldLen := v.Length()
-	if oldLen == v.Capacity() {
-		if err := v.PreExtend(10, mp); err != nil {
-			return err
-		}
-	}
-	v.SetLength(oldLen + 1)
-
-	var vs []types.Varlena
-	vector.ToSliceNoTypeCheck(v, &vs)
-	vs[oldLen] = va
-	return nil
-}
-*/
-
 // vectorUnmarshal is instead of vector.UnmarshalBinary.
 // it will check if mp is nil first.
 func vectorUnmarshal(v *vector.Vector, data []byte, mp *mpool.MPool) error {
@@ -128,7 +89,7 @@ const (
 )
 
 func NewVectors[T numeric | types.Decimal64 | types.Decimal128](typ types.Type) *Vectors[T] {
-	vec := vector.NewVec(typ)
+	vec := vector.NewOffHeapVecWithType(typ)
 	return &Vectors[T]{vecs: []*vector.Vector{vec}}
 }
 
@@ -167,8 +128,31 @@ func (vs *Vectors[T]) Unmarshal(data []byte, typ types.Type, mp *mpool.MPool) er
 		if buf, _, err = ReadBytes(bbuf); err != nil {
 			return err
 		}
-		vec := vector.NewVec(typ)
+		vec := vector.NewOffHeapVecWithType(typ)
 		if err := vectorUnmarshal(vec, buf, mp); err != nil {
+			return err
+		}
+		vs.vecs = append(vs.vecs, vec)
+	}
+	return nil
+}
+
+func (vs *Vectors[T]) UnmarshalFromReader(r io.Reader, typ types.Type, mp *mpool.MPool) error {
+	length := int64(0)
+	if _, err := io.ReadFull(r, types.EncodeInt64(&length)); err != nil {
+		return err
+	}
+	for i := int64(0); i < length; i++ {
+		sz, err := types.ReadUint32(r)
+		if err != nil {
+			return err
+		}
+		lr := io.LimitReader(r, int64(sz))
+		vec := vector.NewOffHeapVecWithType(typ)
+		if err := vec.UnmarshalWithReader(lr, mp); err != nil {
+			return err
+		}
+		if _, err := io.Copy(io.Discard, lr); err != nil {
 			return err
 		}
 		vs.vecs = append(vs.vecs, vec)
@@ -187,7 +171,7 @@ func (vs *Vectors[T]) Length() int {
 func (vs *Vectors[T]) getAppendableVector() *vector.Vector {
 	vec := vs.vecs[len(vs.vecs)-1]
 	if vec.Length() >= MaxVectorLength {
-		vec = vector.NewVec(*vec.GetType())
+		vec = vector.NewOffHeapVecWithType(*vec.GetType())
 		vs.vecs = append(vs.vecs, vec)
 	}
 	return vec
@@ -404,13 +388,6 @@ func quickSelect[T numeric | types.Decimal64 | types.Decimal128](nums []T, lessF
 	default:
 		return quickSelect(highs, lessFnFactory, k-len(lows)-len(pivots))
 	}
-}
-
-// vectorAppendWildly is a more efficient version of vector.AppendFixed.
-// It ignores the const and null flags check, and uses a wilder way to append (avoiding the overhead of appending one by one).
-func vectorsAppendWildly[T numeric | types.Decimal64 | types.Decimal128](v *Vectors[T], mp *mpool.MPool, value T) error {
-	vec := v.getAppendableVector()
-	return vectorAppendWildly(vec, mp, value)
 }
 
 func AppendMultiFixed[T numeric | types.Decimal64 | types.Decimal128](vecs *Vectors[T], vals T, isNull bool, cnt int, mp *mpool.MPool) error {

@@ -713,7 +713,11 @@ func storageAgnosticAttrs(
 
 func buildNotNullColumnVal(col *ColDef) string {
 	var defaultValue string
-	if col.Typ.Id == int32(types.T_int8) ||
+	// SET uses T_uint64 as its underlying OID, so this check must come before
+	// the integer branch below to avoid treating SET columns as plain uint64.
+	if isSetPlanType(&col.Typ) {
+		defaultValue = "''"
+	} else if col.Typ.Id == int32(types.T_int8) ||
 		col.Typ.Id == int32(types.T_int16) ||
 		col.Typ.Id == int32(types.T_int32) ||
 		col.Typ.Id == int32(types.T_int64) ||
@@ -747,7 +751,7 @@ func buildNotNullColumnVal(col *ColDef) string {
 	} else if col.Typ.Id == int32(types.T_json) {
 		//defaultValue = "null"
 		defaultValue = "'{}'"
-	} else if col.Typ.Id == int32(types.T_enum) {
+	} else if isEnumPlanType(&col.Typ) {
 		enumvalues := strings.Split(col.Typ.Enumvalues, ",")
 		defaultValue = enumvalues[0]
 	} else if col.Typ.Id == int32(types.T_array_float32) || col.Typ.Id == int32(types.T_array_float64) {

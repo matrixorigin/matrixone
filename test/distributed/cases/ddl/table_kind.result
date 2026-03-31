@@ -216,7 +216,7 @@ ftidx    MULTIPLE    body
 ftidx    MULTIPLE    title
 select relkind from mo_catalog.mo_tables where relname in (select distinct index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and table_id in (select rel_id from mo_catalog.mo_tables where relname = 'src1'));
 relkind
-i
+fulltext
 alter table src1 add fulltext index ftidx2 (body);
 show index from src1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
@@ -229,7 +229,7 @@ name    type    column_name
 ftidx2    MULTIPLE    body
 select relkind from mo_catalog.mo_tables where relname in (select distinct index_table_name from mo_catalog.mo_indexes where name = 'ftidx2' and table_id in (select rel_id from mo_catalog.mo_tables where relname = 'src1'));
 relkind
-i
+fulltext
 select * from src1 where match(body, title) against('red');
 id    body    title
 0    color is red    t1
@@ -273,7 +273,7 @@ name    type    column_name
 PRIMARY    PRIMARY    id
 select relkind from mo_catalog.mo_tables where relname in (select distinct index_table_name from mo_catalog.mo_indexes where table_id in (select rel_id from mo_catalog.mo_tables where relname = 'src2') and name != 'PRIMARY');
 relkind
-i
+fulltext
 select * from src2 where match(body, title) against('red');
 id    body    title
 0    color is red    t1

@@ -1355,7 +1355,12 @@ func doDeallocate(ses *Session, execCtx *ExecCtx, st *tree.Deallocate) error {
 	return nil
 }
 
-func doReset(_ context.Context, _ *Session, _ *tree.Reset) error {
+func doReset(ctx context.Context, ses *Session, st *tree.Reset) error {
+	prepareStmt, err := ses.GetPrepareStmt(ctx, string(st.Name))
+	if err != nil {
+		return err
+	}
+	prepareStmt.resetBinaryParamState()
 	return nil
 }
 
@@ -3527,6 +3532,9 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		var prepareStmt *PrepareStmt
 		sql, prepareStmt, err = parseStmtExecute(execCtx.reqCtx, ses, req.GetData().([]byte))
 		if err != nil {
+			if prepareStmt != nil {
+				prepareStmt.clearBinaryParamState(ses.GetProc())
+			}
 			return NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
 		execCtx.prepareColDef = prepareStmt.ColDefData
@@ -3534,12 +3542,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err)
 		}
-		if prepareStmt.params != nil {
-			prepareStmt.params.GetNulls().Reset()
-			for k := range prepareStmt.getFromSendLongData {
-				delete(prepareStmt.getFromSendLongData, k)
-			}
-		}
+		prepareStmt.clearBinaryParamState(ses.GetProc())
 		return resp, nil
 
 	case COM_STMT_SEND_LONG_DATA:
@@ -3558,7 +3561,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		stmtName := getPrepareStmtName(stmtID)
 		preStmt, err = ses.GetPrepareStmt(execCtx.reqCtx, stmtName)
 		if err != nil {
-			resp = NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err)
+			return NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
 		prefix := ""
 		if preStmt.IsCloudNonuser {
@@ -3580,7 +3583,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		var preStmt *PrepareStmt
 		preStmt, err = ses.GetPrepareStmt(execCtx.reqCtx, stmtName)
 		if err != nil {
-			resp = NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err)
+			return NewGeneralErrorResponse(COM_STMT_RESET, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
 		prefix := ""
 		if preStmt.IsCloudNonuser {
@@ -3638,7 +3641,7 @@ func parseStmtExecute(reqCtx context.Context, ses *Session, data []byte) (string
 	ses.Debug(reqCtx, "query trace", logutil.QueryField(sql))
 	err = ses.GetResponser().MysqlRrWr().ParseExecuteData(reqCtx, ses.GetProc(), preStmt, data, pos)
 	if err != nil {
-		return "", nil, err
+		return "", preStmt, err
 	}
 	return sql, preStmt, nil
 }
@@ -3743,6 +3746,8 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 	case types.T_decimal64:
 		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
 	case types.T_decimal128:
+		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
+	case types.T_decimal256:
 		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
 	case types.T_blob:
 		col.SetColumnType(defines.MYSQL_TYPE_BLOB)

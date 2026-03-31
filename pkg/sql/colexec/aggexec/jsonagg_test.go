@@ -87,259 +87,6 @@ func fromValueListToVector(
 	return v
 }
 
-func fromIdxListToNullList(start, end int, idxList []int) []bool {
-	if len(idxList) == 0 {
-		return nil
-	}
-
-	bs := make([]bool, end-start+1)
-	for _, idx := range idxList {
-		if realIndex := idx - start; realIndex >= 0 && idx <= end {
-			bs[realIndex] = true
-		}
-	}
-	return bs
-}
-
-func TestJsonArrayAggMarshalUnmarshal(t *testing.T) {
-	mg := mpool.MustNewZero()
-	info := multiAggInfo{
-		aggID:     10,
-		distinct:  false,
-		argTypes:  []types.Type{types.T_varchar.ToType()},
-		retType:   types.T_json.ToType(),
-		emptyNull: true,
-	}
-
-	exec := newJsonArrayAggExec(mg, info)
-	require.NoError(t, exec.GroupGrow(1))
-
-	nullVec := vector.NewConstNull(types.T_varchar.ToType(), 1, mg) // nolint:staticcheck
-	require.NoError(t, exec.Fill(0, 0, []*vector.Vector{nullVec}))  // cover const null handling
-
-	vec := fromValueListToVector(mg, types.T_varchar.ToType(), []string{"x", "y"}, nil)
-	require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
-
-	data, err := exec.marshal()
-	require.NoError(t, err)
-
-	encoded := &EncodedAgg{}
-	require.NoError(t, encoded.Unmarshal(data))
-
-	execCopy := newJsonArrayAggExec(mg, info)
-	require.NoError(t, execCopy.unmarshal(nil, encoded.Result, encoded.Empties, encoded.Groups))
-
-	results, err := execCopy.Flush()
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	bj := types.DecodeJson(results[0].GetBytesAt(0))
-	jsonBytes, err := bj.MarshalJSON()
-	require.NoError(t, err)
-	var got []any
-	require.NoError(t, json.Unmarshal(jsonBytes, &got))
-	require.Equal(t, []any{nil, "x", "y"}, got)
-
-	nullVec.Free(mg)
-	vec.Free(mg)
-	exec.Free()
-	execCopy.Free()
-}
-
-func TestJsonArrayAggDistinctAndMerge(t *testing.T) {
-	mg := mpool.MustNewZero()
-	infoDistinct := multiAggInfo{
-		aggID:     11,
-		distinct:  true,
-		argTypes:  []types.Type{types.T_int64.ToType()},
-		retType:   types.T_json.ToType(),
-		emptyNull: true,
-	}
-
-	exec := newJsonArrayAggExec(mg, infoDistinct)
-	require.NoError(t, exec.GroupGrow(2))
-
-	vec := fromValueListToVector(mg, types.T_int64.ToType(), []int64{1, 1, 2}, nil)
-	require.NoError(t, exec.BatchFill(0, []uint64{GroupNotMatched, 1, 2}, []*vector.Vector{vec}))
-	require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
-	require.Greater(t, exec.Size(), int64(0))
-
-	// Cover merge path on distinct exec when no data has been added to the peer.
-	emptyPeer := newJsonArrayAggExec(mg, infoDistinct)
-	require.NoError(t, emptyPeer.GroupGrow(1))
-	require.Error(t, exec.Merge(emptyPeer, 0, 0))
-
-	vec.Free(mg)
-	exec.Free()
-	emptyPeer.Free()
-
-	infoNonDistinct := multiAggInfo{
-		aggID:     12,
-		distinct:  false,
-		argTypes:  []types.Type{types.T_varchar.ToType()},
-		retType:   types.T_json.ToType(),
-		emptyNull: true,
-	}
-
-	exec1 := newJsonArrayAggExec(mg, infoNonDistinct)
-	exec2 := newJsonArrayAggExec(mg, infoNonDistinct)
-	require.NoError(t, exec1.GroupGrow(2))
-	require.NoError(t, exec2.GroupGrow(2))
-
-	vecA := fromValueListToVector(mg, types.T_varchar.ToType(), []string{"a", "b"}, nil)
-	vecB := fromValueListToVector(mg, types.T_varchar.ToType(), []string{"c"}, nil)
-
-	require.NoError(t, exec1.BatchFill(0, []uint64{1, 2}, []*vector.Vector{vecA}))
-	require.NoError(t, exec2.Fill(0, 0, []*vector.Vector{vecB}))
-	require.NoError(t, exec2.Fill(1, 0, []*vector.Vector{vecB}))
-
-	require.NoError(t, exec1.Merge(exec2, 0, 0))
-	require.NoError(t, exec1.BatchMerge(exec2, 0, []uint64{1, 2}))
-
-	data, err := exec1.marshal()
-	require.NoError(t, err)
-
-	encoded := &EncodedAgg{}
-	require.NoError(t, encoded.Unmarshal(data))
-
-	execCopy := newJsonArrayAggExec(mg, infoNonDistinct)
-	require.NoError(t, execCopy.unmarshal(nil, encoded.Result, encoded.Empties, encoded.Groups))
-
-	rs, err := execCopy.Flush()
-	require.NoError(t, err)
-	require.Len(t, rs, 1)
-	require.Equal(t, 2, rs[0].Length())
-
-	vecA.Free(mg)
-	vecB.Free(mg)
-	exec1.Free()
-	exec2.Free()
-	execCopy.Free()
-}
-
-func TestJsonObjectAggFlow(t *testing.T) {
-	mg := mpool.MustNewZero()
-	info := multiAggInfo{
-		aggID:     20,
-		distinct:  false,
-		argTypes:  []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()},
-		retType:   types.T_json.ToType(),
-		emptyNull: true,
-	}
-
-	exec1 := newJsonObjectAggExec(mg, info)
-	exec2 := newJsonObjectAggExec(mg, info)
-	require.NoError(t, exec1.GroupGrow(2))
-	require.NoError(t, exec2.GroupGrow(2))
-
-	keyVec := fromValueListToVector(mg, types.T_varchar.ToType(), []string{"k1", "k2"}, nil)
-	valVec := fromValueListToVector(
-		mg,
-		types.T_int64.ToType(),
-		[]int64{1, 2},
-		fromIdxListToNullList(0, 1, []int{1}),
-	)
-	require.NoError(t, exec1.BatchFill(0, []uint64{1, 2}, []*vector.Vector{keyVec, valVec}))
-
-	keyVec2 := fromValueListToVector(mg, types.T_varchar.ToType(), []string{"k2"}, nil)
-	valVec2 := fromValueListToVector(mg, types.T_int64.ToType(), []int64{3}, nil)
-	require.NoError(t, exec2.Fill(0, 0, []*vector.Vector{keyVec2, valVec2}))
-	require.NoError(t, exec2.Fill(1, 0, []*vector.Vector{keyVec2, valVec2}))
-
-	require.NoError(t, exec1.Merge(exec2, 0, 0))
-	require.NoError(t, exec1.BatchMerge(exec2, 0, []uint64{1, 2}))
-
-	data, err := exec1.marshal()
-	require.NoError(t, err)
-
-	encoded := &EncodedAgg{}
-	require.NoError(t, encoded.Unmarshal(data))
-
-	execCopy := newJsonObjectAggExec(mg, info)
-	require.NoError(t, execCopy.unmarshal(nil, encoded.Result, encoded.Empties, encoded.Groups))
-
-	rs, err := execCopy.Flush()
-	require.NoError(t, err)
-	require.Len(t, rs, 1)
-
-	payload := rs[0].GetBytesAt(0)
-	bj := types.DecodeJson(payload)
-	raw, err := bj.MarshalJSON()
-	require.NoError(t, err)
-
-	var obj map[string]any
-	require.NoError(t, json.Unmarshal(raw, &obj))
-	require.Contains(t, obj, "k1")
-	require.Contains(t, obj, "k2")
-
-	keyVec.Free(mg)
-	valVec.Free(mg)
-	keyVec2.Free(mg)
-	valVec2.Free(mg)
-	exec1.Free()
-	exec2.Free()
-	execCopy.Free()
-}
-
-func TestJsonArrayAggDistinctRoundTrip(t *testing.T) {
-	mg := mpool.MustNewZero()
-	info := multiAggInfo{
-		aggID:     30,
-		distinct:  true,
-		argTypes:  []types.Type{types.T_int64.ToType()},
-		retType:   types.T_json.ToType(),
-		emptyNull: true,
-	}
-	exec := newJsonArrayAggExec(mg, info)
-	require.NoError(t, exec.GroupGrow(1))
-
-	intVec := fromValueListToVector(mg, types.T_int64.ToType(), []int64{1, 2, 2}, nil)
-	require.NoError(t, exec.BulkFill(0, []*vector.Vector{intVec}))
-
-	data, err := exec.marshal()
-	require.NoError(t, err)
-
-	encoded := &EncodedAgg{}
-	require.NoError(t, encoded.Unmarshal(data))
-
-	execCopy := newJsonArrayAggExec(mg, info)
-	require.NoError(t, execCopy.unmarshal(mg, encoded.Result, encoded.Empties, encoded.Groups))
-
-	rs, err := execCopy.Flush()
-	require.NoError(t, err)
-	require.Len(t, rs, 1)
-
-	bj := types.DecodeJson(rs[0].GetBytesAt(0))
-	raw, err := bj.MarshalJSON()
-	require.NoError(t, err)
-
-	var got []any
-	require.NoError(t, json.Unmarshal(raw, &got))
-	require.Equal(t, []any{float64(1), float64(2)}, got)
-
-	intVec.Free(mg)
-	exec.Free()
-	execCopy.Free()
-}
-
-func TestJsonArrayAggDistinctUnmarshalMissingData(t *testing.T) {
-	mg := mpool.MustNewZero()
-	info := multiAggInfo{
-		aggID:     31,
-		distinct:  true,
-		argTypes:  []types.Type{types.T_varchar.ToType()},
-		retType:   types.T_json.ToType(),
-		emptyNull: true,
-	}
-	exec := newJsonArrayAggExec(mg, info)
-	result, empties, _, err := exec.ret.marshalToBytes()
-	require.NoError(t, err)
-
-	err = exec.unmarshal(nil, result, empties, nil)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "distinct data missing")
-	exec.Free()
-}
-
 func TestJsonArrayAggBinaryUnsupported(t *testing.T) {
 	mg := mpool.MustNewZero()
 	info := multiAggInfo{
@@ -401,10 +148,6 @@ func TestJsonObjectAggPreAllocate(t *testing.T) {
 	keyVec := fromValueListToVector(mg, types.T_varchar.ToType(), []string{"k"}, nil)
 	valVec := fromValueListToVector(mg, types.T_varchar.ToType(), []string{"v"}, nil)
 	require.NoError(t, exec.Fill(0, 0, []*vector.Vector{keyVec, valVec}))
-
-	data, err := exec.marshal()
-	require.NoError(t, err)
-	require.NotEmpty(t, data)
 
 	keyVec.Free(mg)
 	valVec.Free(mg)
@@ -497,8 +240,8 @@ func TestJsonAggRegistersAndHelpers(t *testing.T) {
 		retType:   types.T_json.ToType(),
 		emptyNull: true,
 	})
-	exec.ensureGroup(0)
-	exec.ensureGroup(0) // cover else branch
+	require.NoError(t, exec.GroupGrow(1))
+	require.Len(t, exec.groups, 1)
 	exec.Free()
 }
 
@@ -543,94 +286,6 @@ func TestJsonObjectAggBulkFillAndSize(t *testing.T) {
 	exec.Free()
 }
 
-func TestJsonObjectAggDistinctPaths(t *testing.T) {
-	mg := mpool.MustNewZero()
-	info := multiAggInfo{
-		aggID:     42,
-		distinct:  true,
-		argTypes:  []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType()},
-		retType:   types.T_json.ToType(),
-		emptyNull: true,
-	}
-	exec := newJsonObjectAggExec(mg, info)
-	require.NoError(t, exec.GroupGrow(1))
-
-	keyVec := buildVarlenVec(t, mg, types.T_varchar.ToType(), []string{"k"})
-	valVec := buildVarlenVec(t, mg, types.T_varchar.ToType(), []string{"v"})
-	require.NoError(t, exec.Fill(0, 0, []*vector.Vector{keyVec, valVec}))
-
-	data, err := exec.marshal()
-	require.NoError(t, err)
-
-	encoded := &EncodedAgg{}
-	require.NoError(t, encoded.Unmarshal(data))
-
-	execCopy := newJsonObjectAggExec(mg, info)
-	require.NoError(t, execCopy.unmarshal(mg, encoded.Result, encoded.Empties, encoded.Groups))
-
-	require.Error(t, exec.Merge(execCopy, 0, 0))
-
-	keyVec.Free(mg)
-	valVec.Free(mg)
-	exec.Free()
-	execCopy.Free()
-}
-
-func TestJsonArrayAggUnmarshalWithEmptyGroups(t *testing.T) {
-	mg := mpool.MustNewZero()
-	info := multiAggInfo{
-		aggID:     43,
-		distinct:  false,
-		argTypes:  []types.Type{types.T_int64.ToType()},
-		retType:   types.T_json.ToType(),
-		emptyNull: true,
-	}
-	exec1 := newJsonArrayAggExec(mg, info)
-	require.NoError(t, exec1.GroupGrow(2))
-	vec := buildFixedVec(t, mg, types.T_int64.ToType(), []int64{1})
-	require.NoError(t, exec1.Fill(0, 0, []*vector.Vector{vec}))
-	data, err := exec1.marshal()
-	require.NoError(t, err)
-
-	encoded := &EncodedAgg{}
-	require.NoError(t, encoded.Unmarshal(data))
-
-	exec2 := newJsonArrayAggExec(mg, info)
-	require.NoError(t, exec2.unmarshal(nil, encoded.Result, encoded.Empties, encoded.Groups))
-	exec2.Free()
-	vec.Free(mg)
-	exec1.Free()
-}
-
-func TestJsonObjectAggUnmarshalWithEmptyGroups(t *testing.T) {
-	mg := mpool.MustNewZero()
-	info := multiAggInfo{
-		aggID:     44,
-		distinct:  false,
-		argTypes:  []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType()},
-		retType:   types.T_json.ToType(),
-		emptyNull: true,
-	}
-	exec1 := newJsonObjectAggExec(mg, info)
-	require.NoError(t, exec1.GroupGrow(2))
-	keyVec := buildVarlenVec(t, mg, types.T_varchar.ToType(), []string{"k"})
-	valVec := buildVarlenVec(t, mg, types.T_varchar.ToType(), []string{"v"})
-	require.NoError(t, exec1.Fill(0, 0, []*vector.Vector{keyVec, valVec}))
-	data, err := exec1.marshal()
-	require.NoError(t, err)
-
-	encoded := &EncodedAgg{}
-	require.NoError(t, encoded.Unmarshal(data))
-
-	exec2 := newJsonObjectAggExec(mg, info)
-	require.NoError(t, exec2.unmarshal(nil, encoded.Result, encoded.Empties, encoded.Groups))
-	exec2.Free()
-
-	keyVec.Free(mg)
-	valVec.Free(mg)
-	exec1.Free()
-}
-
 func TestJsonArrayAggBatchMergeSkip(t *testing.T) {
 	mg := mpool.MustNewZero()
 	info := multiAggInfo{
@@ -653,4 +308,107 @@ func TestJsonArrayAggBatchMergeSkip(t *testing.T) {
 	val.Free(mg)
 	exec1.Free()
 	exec2.Free()
+}
+
+func TestJsonAggDistinctAndMergeErrorPaths(t *testing.T) {
+	mg := mpool.MustNewZero()
+
+	arrayInfo := multiAggInfo{
+		aggID:     46,
+		distinct:  true,
+		argTypes:  []types.Type{types.T_varchar.ToType()},
+		retType:   types.T_json.ToType(),
+		emptyNull: true,
+	}
+	arrayExec := newJsonArrayAggExec(mg, arrayInfo)
+	require.NoError(t, arrayExec.GroupGrow(1))
+	require.True(t, arrayExec.IsDistinct())
+	values := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(values, []byte("x"), false, mg))
+	require.NoError(t, vector.AppendBytes(values, []byte("x"), false, mg))
+	require.NoError(t, vector.AppendBytes(values, nil, true, mg))
+	require.NoError(t, arrayExec.BatchFill(0, []uint64{1, 1, 1}, []*vector.Vector{values}))
+	require.NoError(t, arrayExec.BulkFill(0, []*vector.Vector{values}))
+	vecs, err := arrayExec.Flush()
+	require.NoError(t, err)
+	j, err := types.DecodeJson(vecs[0].GetBytesAt(0)).MarshalJSON()
+	require.NoError(t, err)
+	require.JSONEq(t, `["x",null,null]`, string(j))
+
+	objectInfo := multiAggInfo{
+		aggID:     47,
+		distinct:  true,
+		argTypes:  []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType()},
+		retType:   types.T_json.ToType(),
+		emptyNull: true,
+	}
+	left := newJsonObjectAggExec(mg, objectInfo)
+	right := newJsonObjectAggExec(mg, objectInfo)
+	require.NoError(t, left.GroupGrow(1))
+	require.NoError(t, right.GroupGrow(1))
+	require.True(t, left.IsDistinct())
+	keys := buildVarlenVec(t, mg, types.T_varchar.ToType(), []string{"k"})
+	vals := buildVarlenVec(t, mg, types.T_varchar.ToType(), []string{"v"})
+	require.NoError(t, left.Fill(0, 0, []*vector.Vector{keys, vals}))
+	require.NoError(t, right.Fill(0, 0, []*vector.Vector{keys, vals}))
+	require.NoError(t, right.BulkFill(0, []*vector.Vector{keys, vals}))
+	require.Error(t, left.Merge(right, 0, 0))
+	err = left.BatchMerge(right, 0, []uint64{1})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "distinct agg should be run in only one node")
+
+	values.Free(mg)
+	vecs[0].Free(mg)
+	keys.Free(mg)
+	vals.Free(mg)
+	arrayExec.Free()
+	left.Free()
+	right.Free()
+}
+
+func TestJsonAggNonDistinctWrapperPaths(t *testing.T) {
+	mg := mpool.MustNewZero()
+
+	arrayInfo := multiAggInfo{
+		aggID:     48,
+		distinct:  false,
+		argTypes:  []types.Type{types.T_int64.ToType()},
+		retType:   types.T_json.ToType(),
+		emptyNull: true,
+	}
+	leftArray := newJsonArrayAggExec(mg, arrayInfo)
+	rightArray := newJsonArrayAggExec(mg, arrayInfo)
+	require.NoError(t, leftArray.PreAllocateGroups(1))
+	require.NoError(t, leftArray.GroupGrow(1))
+	require.NoError(t, rightArray.GroupGrow(1))
+	ints := buildFixedVec(t, mg, types.T_int64.ToType(), []int64{1, 2})
+	require.NoError(t, leftArray.Fill(0, 0, []*vector.Vector{ints}))
+	require.NoError(t, rightArray.Fill(0, 1, []*vector.Vector{ints}))
+	require.NoError(t, leftArray.Merge(rightArray, 0, 0))
+
+	objectInfo := multiAggInfo{
+		aggID:     49,
+		distinct:  false,
+		argTypes:  []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType()},
+		retType:   types.T_json.ToType(),
+		emptyNull: true,
+	}
+	leftObject := newJsonObjectAggExec(mg, objectInfo)
+	rightObject := newJsonObjectAggExec(mg, objectInfo)
+	require.NoError(t, leftObject.PreAllocateGroups(1))
+	require.NoError(t, leftObject.GroupGrow(1))
+	require.NoError(t, rightObject.GroupGrow(1))
+	keys := buildVarlenVec(t, mg, types.T_varchar.ToType(), []string{"a", "b"})
+	vals := buildVarlenVec(t, mg, types.T_varchar.ToType(), []string{"x", "y"})
+	require.NoError(t, leftObject.Fill(0, 0, []*vector.Vector{keys, vals}))
+	require.NoError(t, rightObject.Fill(0, 1, []*vector.Vector{keys, vals}))
+	require.NoError(t, leftObject.Merge(rightObject, 0, 0))
+
+	ints.Free(mg)
+	keys.Free(mg)
+	vals.Free(mg)
+	leftArray.Free()
+	rightArray.Free()
+	leftObject.Free()
+	rightObject.Free()
 }
