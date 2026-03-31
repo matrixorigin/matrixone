@@ -314,18 +314,8 @@ type reader struct {
 	threshHold   uint64 //if read block cnt > threshold, will skip memcache write for reader
 
 	// cacheVectors is used for vector reuse
-	cacheVectors     containers.Vectors
-	nextCacheVectors containers.Vectors
-
-	prefJob     *blockio.IVFFlatIndexJob
-	prefBlkInfo *objectio.BlockInfo
-	prefState   engine.DataState
-	prefBatch   *batch.Batch
-	mp          *mpool.MPool
-
-	prefStarted bool
+	cacheVectors containers.Vectors
 }
-
 
 type mergeReader struct {
 	rds []engine.Reader
@@ -472,30 +462,12 @@ func NewReader(
 func (r *reader) Close() error {
 	r.source.Close()
 	r.withFilterMixin.reset()
-	// Drain any pending GPU job before releasing C memory.  If Read() exited early
-	// (error or context cancellation) a launched-but-not-waited job may be in flight;
-	// CleanupIVFFlatIndexJob waits for the GPU kernel and then calls job.Release to
-	// free the C-heap xf32/yf32 buffers and the file-service cache pin.
-	if r.prefJob != nil {
-		blockio.CleanupIVFFlatIndexJob(r.prefJob)
-		r.prefJob = nil
-	}
 	if r.cacheVectors.Allocated() > 0 {
 		logutil.Fatal("cache vector is not empty")
 	}
 	r.cacheVectors = nil
-	if r.nextCacheVectors.Allocated() > 0 {
-		logutil.Fatal("next cache vector is not empty")
-	}
-	r.nextCacheVectors = nil
-	if r.prefBatch != nil {
-		r.prefBatch.Clean(r.mp)
-		r.prefBatch = nil
-	}
-	r.prefStarted = false
 	return nil
 }
-
 
 func (r *reader) SetOrderBy(orderby []*plan.OrderBySpec) {
 	r.source.SetOrderBy(orderby)
@@ -541,10 +513,11 @@ func (r *reader) SetIndexParam(param *plan.IndexReaderParam) {
 		r.orderByLimit.LowerBound = param.DistRange.LowerBound.GetLit().GetDval()
 		r.orderByLimit.UpperBoundType = param.DistRange.UpperBoundType
 		r.orderByLimit.UpperBound = param.DistRange.UpperBound.GetLit().GetDval()
-		// NOTE: do NOT square the bounds for L2Distance here.
-		// PairwiseDistanceLaunchCPU and PairwiseDistanceWait both apply sqrt for
-		// Metric_L2Distance, so pairwiseDists already contains actual L2 values.
-		// Squaring the bounds would compare actual_L2 vs D² which is incorrect.
+
+		if param.OrigFuncName == metric.DistFn_L2Distance {
+			r.orderByLimit.LowerBound *= r.orderByLimit.LowerBound
+			r.orderByLimit.UpperBound *= r.orderByLimit.UpperBound
+		}
 	}
 
 	// Avoid eager O(limit) allocation; blockio grows the heap as rows are accepted.
@@ -566,7 +539,6 @@ func (r *reader) Read(
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
 ) (isEnd bool, err error) {
-	r.mp = mp
 	outBatch.CleanOnlyData()
 
 	var dataState engine.DataState
@@ -643,257 +615,34 @@ func (r *reader) Read(
 
 	r.tryUpdateColumns(cols)
 
-	if len(outBatch.Vecs) == 0 {
-		for i := range cols {
-			outBatch.Vecs = append(outBatch.Vecs, vector.NewVec(r.columns.colTypes[i]))
+	// source.Next() expects outBatch.Vecs to be aligned with cols/seqnums.
+	// For vector TopN pushdown we may have an extra distVec appended in the previous
+	// Read(), so detach it before source.Next() to avoid seqNums out-of-range panic in
+	// InMem paths. We keep one float64 distVec for reuse to avoid repeated allocations.
+	var detachedDistVec *vector.Vector
+	if r.orderByLimit != nil && len(outBatch.Vecs) > len(cols) {
+		if candidate := outBatch.Vecs[len(cols)]; candidate != nil &&
+			candidate.GetType().Oid == types.T_float64 {
+			candidate.CleanOnlyData()
+			detachedDistVec = candidate
 		}
-		// Reserve a slot for the distance vector appended by both the InMem wait path and
-		// fillOutputBatchBySelectedRows (Persisted path) when orderByLimit is set.
-		// Without this, AppendWithCopy fails due to mismatched Vecs length.
-		if r.orderByLimit != nil {
-			outBatch.Vecs = append(outBatch.Vecs, vector.NewVec(types.T_float64.ToType()))
+		for i := len(cols); i < len(outBatch.Vecs); i++ {
+			vec := outBatch.Vecs[i]
+			if vec != nil && vec != detachedDistVec {
+				vec.Free(mp)
+			}
+			// Clear references in the backing array so detached vectors can be reused/freed
+			// explicitly instead of being retained implicitly by slice capacity.
+			outBatch.Vecs[i] = nil
 		}
+		outBatch.Vecs = outBatch.Vecs[:len(cols)]
 	}
-
-	// If Read() exits early (error/end), return.
-	// Pipelined TopN execution:
-	// To minimize the impact of distance calculations (especially on GPU), we use a
-	// Wait -> Next -> Launch pipeline. This allows us to overlap the computation of the
-	// next block with the processing/returning of the current block.
-	if r.orderByLimit != nil {
-		if r.prefBatch == nil {
-			r.prefBatch = batch.NewWithSchema(false, cols, r.columns.colTypes)
-			// Pre-allocate the distVec slot so that r.prefBatch always has len(cols)+1
-			// vectors regardless of whether the first block is filtered (job==nil) or not.
-			// fillOutputBatchBySelectedRows reuses this slot on subsequent blocks.
-			r.prefBatch.Vecs = append(r.prefBatch.Vecs, vector.NewVec(types.T_float64.ToType()))
+	// If Read() exits early (error/end) before re-attaching the detached distVec, release it.
+	defer func() {
+		if detachedDistVec != nil {
+			detachedDistVec.Free(mp)
 		}
-
-		// launchPref is a helper to initiate the asynchronous distance calculation
-		// for the next block, whether it is in-memory or persisted on disk.
-		launchPref := func() (*blockio.IVFFlatIndexJob, error) {
-			if r.prefState == engine.InMem {
-				// For in-memory blocks there is no I/O to overlap with, so GPU
-				// kernel-launch overhead is a pure penalty for small queries.
-				// Only use GPU if the workload is large enough to justify it.
-				return blockio.HandleOrderByLimitOnIVFFlatIndexLaunch(
-					ctx,
-					nil,
-					r.prefBatch.Vecs[r.orderByLimit.ColPos],
-					r.orderByLimit,
-					metric.GPUThresholdSync,
-				)
-			}
-
-			// For persisted data, we use the blockio sub-system to launch the read and
-			// potential top-N pruning/distance calculation.
-			filter := r.withFilterMixin.filterState.filter
-			statsCtx, numRead, numHit := ctx, int64(0), int64(0)
-			if filter.Valid {
-				statsCtx, numRead, numHit = prepareGatherStats(ctx)
-			}
-
-			var policy fileservice.Policy
-			if r.readBlockCnt > r.threshHold {
-				policy = fileservice.SkipMemoryCacheWrites
-			}
-			r.readBlockCnt++
-
-			if len(r.cacheVectors) == 0 {
-				r.cacheVectors = containers.NewVectors(len(r.columns.seqnums) + 1)
-				r.nextCacheVectors = containers.NewVectors(len(r.columns.seqnums) + 1)
-			}
-
-			// Swap cache vectors for the next block prefetch
-			r.cacheVectors, r.nextCacheVectors = r.nextCacheVectors, r.cacheVectors
-
-			// For persisted blocks the GPU compute is pipelined with I/O: the
-			// kernel runs while the caller processes the previous block AND while
-			// this block's data is being fetched from storage. The GPU time is
-			// effectively free, so use GPU for any supported metric (threshold=0).
-			job, err := blockio.BlockDataReadLaunch(
-				statsCtx,
-				r.prefBlkInfo,
-				r.source,
-				r.columns.seqnums,
-				r.columns.colTypes,
-				r.columns.phyAddrPos,
-				r.ts,
-				r.filterState.seqnums,
-				r.filterState.colTypes,
-				filter,
-				r.orderByLimit,
-				policy,
-				r.name,
-				r.prefBatch,
-				r.cacheVectors,
-				mp,
-				r.fs,
-				metric.GPUThresholdOverlapped,
-			)
-			if err != nil {
-				return nil, err
-			}
-
-			if filter.Valid {
-				gatherStats(numRead, numHit)
-			}
-			return job, nil
-		}
-
-		// Initial prefetch: If this is the first call to Read, we need to fetch the first block
-		// and launch its computation so that subsequent steps have something to "Wait" for.
-		if !r.prefStarted {
-			if r.prefState == engine.End {
-				return true, nil
-			}
-			r.prefBlkInfo, r.prefState, err = r.source.Next(
-				ctx,
-				cols,
-				r.columns.colTypes,
-				r.columns.seqnums,
-				r.filterState.pkSeqNum,
-				&r.filterState.memFilter,
-				mp,
-				r.prefBatch,
-			)
-			if err != nil {
-				return false, err
-			}
-			if r.prefState == engine.End {
-				dataState = engine.End
-				return true, nil
-			}
-			r.prefJob, err = launchPref()
-			if err != nil {
-				return false, err
-			}
-			r.prefStarted = true
-		}
-
-		if r.prefState == engine.End {
-			return true, nil
-		}
-
-		// Step 1: Wait for the current block's distance calculation to complete.
-		// This block was launched in a previous Read() call or during the initial prefetch.
-		if r.prefState == engine.InMem {
-			sels, dists, err := blockio.HandleOrderByLimitOnIVFFlatIndexWait(ctx, r.prefJob)
-			if err != nil {
-				return false, err
-			}
-
-			if len(sels) == 0 {
-				r.prefBatch.CleanOnlyData()
-			} else if err := r.prefBatch.Shuffle(sels, mp); err != nil {
-				return false, err
-			}
-			r.prefBatch.SetRowCount(len(sels))
-
-			var distVec *vector.Vector
-			if len(r.prefBatch.Vecs) > len(cols) {
-				distVec = r.prefBatch.Vecs[len(cols)]
-				r.prefBatch.Vecs = r.prefBatch.Vecs[:len(cols)]
-			}
-			if distVec == nil {
-				distVec = vector.NewVec(types.T_float64.ToType())
-			}
-			distVec.CleanOnlyData()
-			if err := vector.AppendFixedList(distVec, dists, nil, mp); err != nil {
-				distVec.Free(mp)
-				return false, err
-			}
-			r.prefBatch.Vecs = append(r.prefBatch.Vecs, distVec)
-		} else {
-			err = blockio.BlockDataReadWait(
-				ctx,
-				r.prefJob,
-				r.prefBlkInfo,
-				r.columns.seqnums,
-				r.columns.phyAddrPos,
-				r.orderByLimit,
-				r.prefBatch,
-				r.cacheVectors,
-				mp,
-			)
-			if err != nil {
-				return false, err
-			}
-		}
-
-		dataState = r.prefState
-		blkInfo = r.prefBlkInfo
-
-		// Swap vectors to return the current block to the caller.
-		// outBatch is owned by the caller, while r.prefBatch is reused for the next block.
-		outBatch.Vecs, r.prefBatch.Vecs = r.prefBatch.Vecs, outBatch.Vecs
-		outBatch.SetRowCount(r.prefBatch.RowCount())
-
-		outBatch.SetAttributes(cols)
-		if blkInfo != nil && blkInfo.IsSorted() && r.columns.indexOfFirstSortedColumn != -1 {
-			outBatch.GetVector(int32(r.columns.indexOfFirstSortedColumn)).SetSorted(true)
-		}
-		if outBatch.RowCount() == 1 && dataState == engine.Persisted {
-			r.withFilterMixin.filterState.memFilter.RecordExactHit()
-		}
-
-		// Reset r.prefBatch for the next block. It currently has the empty vectors from outBatch.
-		r.prefBatch.CleanOnlyData()
-
-		// Step 2: Fetch metadata and launch I/O for the NEXT block.
-		// source.Next() (especially in-memory path) expects r.prefBatch.Vecs to be
-		// aligned with cols. Detach the distVec slot before calling it.
-		var prefDetachedDistVec *vector.Vector
-		if len(r.prefBatch.Vecs) > len(cols) {
-			prefDetachedDistVec = r.prefBatch.Vecs[len(cols)]
-			prefDetachedDistVec.CleanOnlyData()
-			r.prefBatch.Vecs = r.prefBatch.Vecs[:len(cols)]
-		}
-
-		nextBlkInfo, nextState, nextErr := r.source.Next(
-			ctx,
-			cols,
-			r.columns.colTypes,
-			r.columns.seqnums,
-			r.filterState.pkSeqNum,
-			&r.filterState.memFilter,
-			mp,
-			r.prefBatch,
-		)
-		if nextErr != nil {
-			if prefDetachedDistVec != nil {
-				prefDetachedDistVec.Free(mp)
-			}
-			return false, nextErr
-		}
-
-		// Step 3: Launch the asynchronous distance calculation for the next block.
-		// This will run while the caller is processing the batch we just returned.
-		if nextState != engine.End {
-			r.prefBlkInfo = nextBlkInfo
-			r.prefState = nextState
-			// Re-attach the distVec slot so launchPref (and subsequently BlockDataReadWait)
-			// can use it for distance storage.
-			if prefDetachedDistVec != nil {
-				r.prefBatch.Vecs = append(r.prefBatch.Vecs, prefDetachedDistVec)
-				prefDetachedDistVec = nil
-			}
-			r.prefJob, err = launchPref()
-			if err != nil {
-				return false, err
-			}
-		} else {
-			r.prefJob = nil
-			r.prefState = engine.End
-			if prefDetachedDistVec != nil {
-				prefDetachedDistVec.Free(mp)
-			}
-		}
-
-		// Step 4: Return current block results.
-		return false, nil
-	}
-
+	}()
 
 	blkInfo, state, err := r.source.Next(
 		ctx,
@@ -913,17 +662,37 @@ func (r *reader) Read(
 	if state == engine.End {
 		return true, nil
 	}
-
-	outBatch.SetAttributes(cols)
-	if blkInfo != nil && blkInfo.IsSorted() && r.columns.indexOfFirstSortedColumn != -1 {
-		outBatch.GetVector(int32(r.columns.indexOfFirstSortedColumn)).SetSorted(true)
-	}
-
 	if state == engine.InMem {
+		if r.orderByLimit != nil {
+			sels, dists, err := blockio.HandleOrderByLimitOnIVFFlatIndex(ctx, nil, outBatch.Vecs[r.orderByLimit.ColPos], r.orderByLimit)
+			if err != nil {
+				return false, err
+			}
+
+			// Keep batch cardinality consistent with pushed-down vector TopN result.
+			// When sels is empty, batch.Shuffle is a no-op, so we must clear outBatch
+			// explicitly; otherwise rowCount can stay > 0 while distVec is empty.
+			if len(sels) == 0 {
+				outBatch.CleanOnlyData()
+			} else if err := outBatch.Shuffle(sels, mp); err != nil {
+				return false, err
+			}
+
+			// Reuse the detached distVec when possible to avoid per-batch allocation.
+			distVec := detachedDistVec
+			if distVec == nil {
+				distVec = vector.NewVec(types.T_float64.ToType())
+			}
+			detachedDistVec = nil
+			if err := vector.AppendFixedList(distVec, dists, nil, mp); err != nil {
+				return false, err
+			}
+			outBatch.Vecs = append(outBatch.Vecs, distVec)
+		}
+
 		return false, nil
 	}
-
-	// read block
+	//read block
 	filter := r.withFilterMixin.filterState.filter
 
 	statsCtx, numRead, numHit := ctx, int64(0), int64(0)
@@ -942,6 +711,11 @@ func (r *reader) Read(
 
 	if len(r.cacheVectors) == 0 {
 		r.cacheVectors = containers.NewVectors(len(r.columns.seqnums) + 1)
+	}
+	if r.orderByLimit != nil && detachedDistVec != nil {
+		// Re-attach the detached distVec so BlockDataRead can take its fast reuse branch.
+		outBatch.Vecs = append(outBatch.Vecs, detachedDistVec)
+		detachedDistVec = nil
 	}
 
 	err = blockio.BlockDataRead(
@@ -975,6 +749,12 @@ func (r *reader) Read(
 	if filter.Valid {
 		// we collect mem cache hit related statistics info for blk read here
 		gatherStats(numRead, numHit)
+	}
+
+	outBatch.SetAttributes(cols)
+
+	if blkInfo.IsSorted() && r.columns.indexOfFirstSortedColumn != -1 {
+		outBatch.GetVector(int32(r.columns.indexOfFirstSortedColumn)).SetSorted(true)
 	}
 
 	return false, nil
