@@ -1597,6 +1597,72 @@ func TestGetObjectsFromCheckpointEntriesDedup(t *testing.T) {
 	require.Equal(t, tombstoneCN.ObjectShortName().ShortString(), tombstoneCNObjs[0].ObjectShortName().ShortString())
 }
 
+func TestGetObjectsFromCheckpointRange(t *testing.T) {
+	ioutil.RunPipelineTest(
+		func() {
+			catalog.SetupDefines("")
+
+			ctx := context.Background()
+			start := types.BuildTS(10, 0)
+			end := types.BuildTS(20, 0)
+
+			appendableOverlap := newObjectEntryForCheckpointTest(t, 1, true, false, types.BuildTS(5, 0), types.BuildTS(25, 0))
+			appendableStillVisible := newObjectEntryForCheckpointTest(t, 2, true, false, types.BuildTS(6, 0), types.TS{})
+			appendableDeletedBeforeRange := newObjectEntryForCheckpointTest(t, 3, true, false, types.BuildTS(4, 0), types.BuildTS(9, 0))
+			appendableCreatedAfterRange := newObjectEntryForCheckpointTest(t, 4, true, false, types.BuildTS(21, 0), types.TS{})
+			cnInRange := newObjectEntryForCheckpointTest(t, 5, false, true, types.BuildTS(12, 0), types.TS{})
+			cnBeforeRange := newObjectEntryForCheckpointTest(t, 6, false, true, types.BuildTS(8, 0), types.TS{})
+			mergedTNObject := newObjectEntryForCheckpointTest(t, 7, false, false, types.BuildTS(13, 0), types.TS{})
+			mergedTNTombstone := newObjectEntryForCheckpointTest(t, 8, false, false, types.BuildTS(14, 0), types.TS{})
+
+			fakeReaders := []*checkpointReaderStub{
+				{
+					objects: []checkpointObject{
+						{entry: appendableOverlap, isTombstone: false},
+						{entry: appendableStillVisible, isTombstone: false},
+						{entry: appendableDeletedBeforeRange, isTombstone: false},
+						{entry: appendableCreatedAfterRange, isTombstone: false},
+						{entry: cnInRange, isTombstone: false},
+						{entry: cnBeforeRange, isTombstone: false},
+						{entry: mergedTNObject, isTombstone: false},
+						{entry: appendableOverlap, isTombstone: true},
+						{entry: cnInRange, isTombstone: true},
+						{entry: mergedTNTombstone, isTombstone: true},
+					},
+				},
+			}
+
+			readerIdx := 0
+			restore := logtailreplay.SetCheckpointReaderFactoryForTest(func(uint32, objectio.Location, uint64, *mpool.MPool, fileservice.FileService) logtailreplay.CheckpointEntryReader {
+				r := fakeReaders[readerIdx]
+				readerIdx++
+				return r
+			})
+			defer restore()
+
+			entry := checkpoint.NewCheckpointEntry("", start, end, checkpoint.ET_Global)
+
+			dataAobjs, dataCNObjs, tombstoneAobjs, tombstoneCNObjs, err := logtailreplay.TestGetObjectsFromCheckpointRange(ctx, 1, "", start, end, []*checkpoint.CheckpointEntry{entry}, nil, nil)
+			require.NoError(t, err)
+
+			require.Len(t, dataCNObjs, 1)
+			require.Equal(t, cnInRange.ObjectShortName().ShortString(), dataCNObjs[0].ObjectShortName().ShortString())
+
+			require.Len(t, dataAobjs, 3)
+			require.Equal(t, appendableOverlap.ObjectShortName().ShortString(), dataAobjs[0].ObjectShortName().ShortString())
+			require.Equal(t, appendableStillVisible.ObjectShortName().ShortString(), dataAobjs[1].ObjectShortName().ShortString())
+			require.Equal(t, mergedTNObject.ObjectShortName().ShortString(), dataAobjs[2].ObjectShortName().ShortString())
+
+			require.Len(t, tombstoneAobjs, 2)
+			require.Equal(t, appendableOverlap.ObjectShortName().ShortString(), tombstoneAobjs[0].ObjectShortName().ShortString())
+			require.Equal(t, mergedTNTombstone.ObjectShortName().ShortString(), tombstoneAobjs[1].ObjectShortName().ShortString())
+
+			require.Len(t, tombstoneCNObjs, 1)
+			require.Equal(t, cnInRange.ObjectShortName().ShortString(), tombstoneCNObjs[0].ObjectShortName().ShortString())
+		},
+	)
+}
+
 type checkpointObject struct {
 	entry       objectio.ObjectEntry
 	isTombstone bool
@@ -2064,6 +2130,101 @@ func TestFileNotFoundFallbackToSnapshotRead(t *testing.T) {
 		assert.NoError(t, err, "expected fallback to snapshot read to succeed")
 		if handle != nil {
 			handle.Close()
+		}
+	}
+}
+
+func TestFileNotFoundVisibleStateFallsBackToSnapshotStateRange(t *testing.T) {
+	// VisibleState policy should rebuild the range from the end snapshot's
+	// partition state instead of switching to checkpoint replay.
+
+	catalog.SetupDefines("")
+
+	var (
+		accountId    = catalog.System_Account
+		tableName    = "test_visible_state_fallback"
+		databaseName = "db_visible_state_fallback"
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	schema := catalog2.MockSchemaAll(20, 0)
+	schema.Name = tableName
+	bat := catalog2.MockBatch(schema, 3)
+	defer bat.Close()
+	bats := bat.Split(3)
+
+	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	_, _, err := disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+
+	txn, rel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	require.Nil(t, rel.Append(ctx, bats[0]))
+	require.Nil(t, txn.Commit(ctx))
+	t1 := txn.GetCommitTS()
+
+	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	id := rel.GetMeta().(*catalog2.TableEntry).AsCommonID()
+	require.Nil(t, txn.Commit(ctx))
+
+	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	require.Nil(t, rel.Append(ctx, bats[1]))
+	require.Nil(t, txn.Commit(ctx))
+
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, databaseName, tableName, false)
+	require.Nil(t, err)
+
+	mp := common.DebugAllocator
+
+	chStub := gostub.Stub(
+		&disttae.NewPartitionStateChangesHandler,
+		func(
+			ctx context.Context,
+			state *logtailreplay.PartitionState,
+			start, end types.TS,
+			skipDeletes bool,
+			maxRow uint32,
+			primarySeqnum int,
+			mp *mpool.MPool,
+			fs fileservice.FileService,
+		) (*logtailreplay.ChangeHandler, error) {
+			return nil, moerr.NewFileNotFoundNoCtx("simulated-visible-state-gc-object")
+		},
+	)
+	defer chStub.Reset()
+
+	_, distRel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
+	require.Nil(t, err)
+
+	policyCtx := engine.WithSnapshotReadPolicy(ctx, engine.SnapshotReadPolicyVisibleState)
+	readToTS := taeHandler.GetDB().TxnMgr.Now()
+	handle, err := distRel.CollectChanges(policyCtx, t1.Prev(), readToTS, false, mp)
+	require.NoError(t, err)
+	require.NotNil(t, handle)
+	defer handle.Close()
+
+	for {
+		data, tombstone, _, nextErr := handle.Next(policyCtx, mp)
+		require.NoError(t, nextErr)
+		if data != nil {
+			data.Clean(mp)
+		}
+		if tombstone != nil {
+			tombstone.Clean(mp)
+		}
+		if data == nil && tombstone == nil {
+			break
 		}
 	}
 }

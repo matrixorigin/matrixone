@@ -902,6 +902,12 @@ func appendBatchRowsAsSQLValues(
 		for _, colIdx := range tblStuff.def.visibleIdxes {
 			//seenCols[colIdx] = struct{}{}
 			vec := wrapped.batch.Vecs[colIdx]
+			if rowIdx >= vec.Length() {
+				return moerr.NewInternalErrorNoCtxf(
+					"data branch output batch shape mismatch: row=%d batchRows=%d col=%d vecLen=%d type=%s",
+					rowIdx, wrapped.batch.RowCount(), colIdx, vec.Length(), vec.GetType().String(),
+				)
+			}
 			if vec.GetNulls().Contains(uint64(rowIdx)) {
 				row[colIdx] = nil
 				continue
@@ -910,8 +916,7 @@ func appendBatchRowsAsSQLValues(
 			switch vec.GetType().Oid {
 			case types.T_datetime, types.T_timestamp, types.T_decimal64,
 				types.T_decimal128, types.T_time:
-				bb := vec.GetRawBytesAt(rowIdx)
-				row[colIdx] = types.DecodeValue(bb, vec.GetType().Oid)
+				row[colIdx] = types.DecodeValue(vec.GetRawBytesAt(rowIdx), vec.GetType().Oid)
 			default:
 				if err = extractRowFromVector(
 					ctx, ses, vec, colIdx, row, rowIdx, false,

@@ -260,6 +260,66 @@ func TestDataBranchOutputWriteRowValues(t *testing.T) {
 	require.Equal(t, "(7,'alice')", alwaysTupleBuf.String())
 }
 
+func TestDataBranchOutputAppendBatchRowsAsSQLValues(t *testing.T) {
+	ses := newValidateSession(t)
+	tblStuff := tableStuff{}
+	tblStuff.def.colNames = []string{"id", "name"}
+	tblStuff.def.colTypes = []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}
+	tblStuff.def.visibleIdxes = []int{0, 1}
+	tblStuff.def.pkColIdxes = []int{0}
+	tblStuff.def.pkColIdx = 0
+
+	t.Run("insert row", func(t *testing.T) {
+		mp := ses.proc.Mp()
+		bat := batch.NewWithSize(2)
+		defer bat.Clean(mp)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(7), false, mp))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("alice"), false, mp))
+		bat.SetRowCount(1)
+
+		tmp := &bytes.Buffer{}
+		deleteCnt, insertCnt := 0, 0
+		appender := sqlValuesAppender{
+			ses:       ses,
+			tblStuff:  tblStuff,
+			deleteCnt: &deleteCnt,
+			deleteBuf: &bytes.Buffer{},
+			insertCnt: &insertCnt,
+			insertBuf: &bytes.Buffer{},
+		}
+
+		err := appendBatchRowsAsSQLValues(
+			context.Background(), ses, tblStuff,
+			batchWithKind{kind: diffInsert, batch: bat},
+			tmp, appender,
+		)
+		require.NoError(t, err)
+		require.Equal(t, 0, deleteCnt)
+		require.Equal(t, 1, insertCnt)
+		require.Equal(t, "(7,'alice')", appender.insertBuf.String())
+	})
+
+	t.Run("shape mismatch", func(t *testing.T) {
+		mp := ses.proc.Mp()
+		bat := batch.NewWithSize(2)
+		defer bat.Clean(mp)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(9), false, mp))
+		bat.SetRowCount(1)
+
+		err := appendBatchRowsAsSQLValues(
+			context.Background(), ses, tblStuff,
+			batchWithKind{kind: diffInsert, batch: bat},
+			&bytes.Buffer{}, sqlValuesAppender{},
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "batch shape mismatch")
+	})
+}
+
 func TestDataBranchOutputWriteDeleteRowSQLFull(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

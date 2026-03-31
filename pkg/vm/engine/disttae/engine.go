@@ -408,12 +408,36 @@ func (e *Engine) Database(
 			)
 			// read batch from storage
 			if item, err = e.loadDatabaseFromStorage(ctx, accountId, name, op); err != nil {
+				logutil.Error(
+					"engine.database.load.from.storage.error",
+					zap.String("name", name),
+					zap.Uint32("account-id", accountId),
+					zap.String("snapshot-ts", types.TimestampToTS(op.SnapshotTS()).ToString()),
+					zap.String("txn", op.Txn().DebugString()),
+					zap.Error(err),
+				)
 				return nil, err
 			}
 			if item == nil {
+				logutil.Warn(
+					"engine.database.not-found.at.snapshot",
+					zap.String("name", name),
+					zap.Uint32("account-id", accountId),
+					zap.String("snapshot-ts", types.TimestampToTS(op.SnapshotTS()).ToString()),
+					zap.String("cache-start", catalog.GetStartTS().ToString()),
+					zap.String("txn", op.Txn().DebugString()),
+				)
 				return nil, moerr.GetOkExpectedEOB()
 			}
 		} else {
+			logutil.Warn(
+				"engine.database.not-found.in-cache",
+				zap.String("name", name),
+				zap.Uint32("account-id", accountId),
+				zap.String("snapshot-ts", types.TimestampToTS(op.SnapshotTS()).ToString()),
+				zap.String("cache-start", catalog.GetStartTS().ToString()),
+				zap.String("txn", op.Txn().DebugString()),
+			)
 			return nil, moerr.GetOkExpectedEOB()
 		}
 	}
@@ -535,6 +559,17 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			); err != nil {
 				return "", "", nil, err
 			}
+			if tableName != "" {
+				logutil.Info(
+					"engine.relation.resolve.by-id.storage-hit",
+					zap.Uint64("table-id", tableId),
+					zap.Uint32("account-id", accountId),
+					zap.String("db-name", dbName),
+					zap.String("table-name", tableName),
+					zap.String("snapshot-ts", types.TimestampToTS(op.SnapshotTS()).ToString()),
+					zap.String("txn", op.Txn().DebugString()),
+				)
+			}
 		}
 	}
 
@@ -549,11 +584,31 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 
 	txnDb, err := e.Database(ctx, dbName, op)
 	if err != nil {
+		logutil.Error(
+			"engine.relation.resolve.by-id.database-error",
+			zap.Uint64("table-id", tableId),
+			zap.Uint32("account-id", accountId),
+			zap.String("db-name", dbName),
+			zap.String("table-name", tableName),
+			zap.String("snapshot-ts", types.TimestampToTS(op.SnapshotTS()).ToString()),
+			zap.String("txn", op.Txn().DebugString()),
+			zap.Error(err),
+		)
 		return "", "", nil, err
 	}
 
 	txnTable, err := txnDb.Relation(ctx, tableName, nil)
 	if err != nil {
+		logutil.Error(
+			"engine.relation.resolve.by-id.table-error",
+			zap.Uint64("table-id", tableId),
+			zap.Uint32("account-id", accountId),
+			zap.String("db-name", dbName),
+			zap.String("table-name", tableName),
+			zap.String("snapshot-ts", types.TimestampToTS(op.SnapshotTS()).ToString()),
+			zap.String("txn", op.Txn().DebugString()),
+			zap.Error(err),
+		)
 		return "", "", nil, err
 	}
 
