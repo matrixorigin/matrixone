@@ -255,12 +255,9 @@ func (task *mergeObjectsTask) LoadNextBatch(
 
 	// releaseF frees the current TN batch's IOVector buffers and closes
 	// its vectors. The merger calls this before loading the next block.
+	// Close() calls DataRelease automatically.
 	releaseF := func() {
 		if d := task.tnDataBats[objIdx]; d != nil {
-			if d.DataRelease != nil {
-				d.DataRelease()
-				d.DataRelease = nil
-			}
 			d.Close()
 			task.tnDataBats[objIdx] = nil
 		}

@@ -238,6 +238,10 @@ func (bat *Batch) PPString(num int) string {
 }
 
 func (bat *Batch) Close() {
+	if bat.DataRelease != nil {
+		bat.DataRelease()
+		bat.DataRelease = nil
+	}
 	for i, vec := range bat.Vecs {
 		if vec != nil {
 			vec.Close()
