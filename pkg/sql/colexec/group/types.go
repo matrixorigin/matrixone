@@ -176,22 +176,7 @@ func (ctr *container) memUsed() int64 {
 		sz += int64(bat.Allocated())
 	}
 	sz += int64(ctr.result1.Popped.Allocated())
-	for _, agg := range ctr.result1.AggList {
-		sz += safeAggSize(agg)
-	}
 	return sz
-}
-
-func safeAggSize(agg aggexec.AggFuncExec) (sz int64) {
-	if agg == nil {
-		return 0
-	}
-	defer func() {
-		if recover() != nil {
-			sz = 0
-		}
-	}()
-	return agg.Size()
 }
 
 func (group *Group) Free(proc *process.Process, _ bool, _ error) {
