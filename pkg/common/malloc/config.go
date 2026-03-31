@@ -40,6 +40,10 @@ type Config struct {
 
 	HashmapSoftLimit *uint64 `toml:"hashmap-soft-limit"`
 	HashmapHardLimit *uint64 `toml:"hashmap-hard-limit"`
+
+	// MpoolProfiling enables per-allocation stack tracking for off-heap
+	// mpool allocations. Tracked allocations appear in the malloc profiler.
+	MpoolProfiling *bool `toml:"mpool-profiling"`
 }
 
 var defaultConfig = func() *atomic.Pointer[Config] {

@@ -12,15 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build mpoolprofile
-
 package mpool
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 )
+
+var profilingEnabled atomic.Bool
+
+// EnableProfiling turns on per-allocation stack tracking for off-heap mpool
+// allocations. Tracked allocations appear in the malloc profiler output.
+func EnableProfiling() { profilingEnabled.Store(true) }
+
+// DisableProfiling turns off per-allocation stack tracking.
+func DisableProfiling() { profilingEnabled.Store(false) }
+
+// ProfilingEnabled reports whether mpool profiling is active.
+func ProfilingEnabled() bool { return profilingEnabled.Load() }
 
 // Sharded map to track per-pointer profile sample values for inuse tracking.
 const numProfileShards = 128
@@ -49,6 +60,9 @@ func getProfileShard(ptr uintptr) *profileShard {
 }
 
 func profileRecordAlloc(skip int, ptr uintptr, sz int64) {
+	if !profilingEnabled.Load() {
+		return
+	}
 	profiler := malloc.GlobalProfiler()
 	values := profiler.Sample(skip, 1)
 	values.Bytes.Allocated.Add(uint64(sz))
@@ -63,6 +77,9 @@ func profileRecordAlloc(skip int, ptr uintptr, sz int64) {
 }
 
 func profileRecordFree(ptr uintptr, sz int64) {
+	if !profilingEnabled.Load() {
+		return
+	}
 	shard := getProfileShard(ptr)
 	shard.mu.Lock()
 	values, ok := shard.m[ptr]
@@ -77,6 +94,9 @@ func profileRecordFree(ptr uintptr, sz int64) {
 }
 
 func profileRecordRealloc(skip int, oldPtr, newPtr uintptr, oldSz, newSz int64) {
+	if !profilingEnabled.Load() {
+		return
+	}
 	profileRecordFree(oldPtr, oldSz)
 	profileRecordAlloc(skip, newPtr, newSz)
 }

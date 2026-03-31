@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build mpoolprofile
-
 package mpool
 
 import (
@@ -25,6 +23,9 @@ import (
 )
 
 func TestProfileAllocFree(t *testing.T) {
+	EnableProfiling()
+	defer DisableProfiling()
+
 	mp, err := NewMPool("test-profile", 0, NoFixed)
 	require.NoError(t, err)
 	defer DeleteMPool(mp)
@@ -42,6 +43,9 @@ func TestProfileAllocFree(t *testing.T) {
 }
 
 func TestProfileOnHeapNotTracked(t *testing.T) {
+	EnableProfiling()
+	defer DisableProfiling()
+
 	mp, err := NewMPool("test-profile-onheap", 0, NoFixed)
 	require.NoError(t, err)
 	defer DeleteMPool(mp)
@@ -57,6 +61,9 @@ func TestProfileOnHeapNotTracked(t *testing.T) {
 }
 
 func TestProfileMultipleAllocs(t *testing.T) {
+	EnableProfiling()
+	defer DisableProfiling()
+
 	mp, err := NewMPool("test-profile-multi", 0, NoFixed)
 	require.NoError(t, err)
 	defer DeleteMPool(mp)
@@ -79,6 +86,9 @@ func TestProfileMultipleAllocs(t *testing.T) {
 }
 
 func TestProfileWritable(t *testing.T) {
+	EnableProfiling()
+	defer DisableProfiling()
+
 	mp, err := NewMPool("test-profile-write", 0, NoFixed)
 	require.NoError(t, err)
 	defer DeleteMPool(mp)
