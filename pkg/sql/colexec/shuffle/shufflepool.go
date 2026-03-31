@@ -91,9 +91,9 @@ func (sp *ShufflePool) Reset(m *mpool.MPool, force bool) {
 
 func (sp *ShufflePool) Size() int64 {
 	var sz int64
-	for i := range sp.batchSets {
+	for i := range sp.batches {
 		sp.locks[i].Lock()
-		bs := sp.batchSets[i]
+		bs := sp.batches[i]
 		if bs != nil {
 			for j := 0; j < bs.Length(); j++ {
 				if b := bs.Get(j); b != nil {

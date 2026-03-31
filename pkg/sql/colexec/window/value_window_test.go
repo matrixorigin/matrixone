@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/stretchr/testify/require"
@@ -90,14 +91,14 @@ func makeValueWindowAggExpr(name string) aggexec.AggFuncExecExpression {
 
 func makeInt32Batch(mp *mpool.MPool, vals []int32) *batch.Batch {
 	bat := batch.New([]string{"a"})
-	bat.Vecs[0] = testutil.MakeInt32Vector(vals, nil, mp)
+	bat.Vecs[0] = testutil.MakeInt32Vector(vals, nil)
 	bat.SetRowCount(len(vals))
 	return bat
 }
 
 func makeVarcharBatch(mp *mpool.MPool, vals []string) *batch.Batch {
 	bat := batch.New([]string{"a"})
-	bat.Vecs[0] = testutil.MakeVarcharVector(vals, nil, mp)
+	bat.Vecs[0] = testutil.MakeVarcharVector(vals, nil)
 	bat.SetRowCount(len(vals))
 	return bat
 }
@@ -216,7 +217,7 @@ func TestProcessValueFunc_NthValueWithN(t *testing.T) {
 
 	ctr := &container{bat: bat}
 	nVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(3), 1, mp)
-	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
+	ctr.aggVecs = make([]group.ExprEvalVector, 1)
 	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], nVec}
 
 	ap := &Window{WinSpecList: []*plan.Expr{spec}}
@@ -248,7 +249,7 @@ func TestProcessValueFunc_NthValueOutOfBounds(t *testing.T) {
 
 	ctr := &container{bat: bat}
 	nVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(5), 1, mp)
-	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
+	ctr.aggVecs = make([]group.ExprEvalVector, 1)
 	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], nVec}
 
 	ap := &Window{WinSpecList: []*plan.Expr{spec}}
@@ -277,7 +278,7 @@ func TestProcessValueFunc_LeadWithOffset(t *testing.T) {
 
 	ctr := &container{bat: bat}
 	offsetVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(2), 1, mp)
-	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
+	ctr.aggVecs = make([]group.ExprEvalVector, 1)
 	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], offsetVec}
 
 	ap := &Window{WinSpecList: []*plan.Expr{spec}}
@@ -322,7 +323,7 @@ func TestProcessValueFunc_NthValueWithFrame(t *testing.T) {
 
 	ctr := &container{bat: bat}
 	nVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(2), 1, mp)
-	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
+	ctr.aggVecs = make([]group.ExprEvalVector, 1)
 	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], nVec}
 
 	ap := &Window{WinSpecList: []*plan.Expr{spec}}
@@ -358,23 +359,23 @@ func TestGetInt64FromVec(t *testing.T) {
 		v.Free(mp)
 	}
 
-	check(testutil.MakeInt64Vector([]int64{5}, nil, mp), 5)
-	check(testutil.MakeInt32Vector([]int32{3}, nil, mp), 3)
-	check(testutil.MakeUint64Vector([]uint64{7}, nil, mp), 7)
-	check(testutil.MakeInt8Vector([]int8{2}, nil, mp), 2)
-	check(testutil.MakeInt16Vector([]int16{4}, nil, mp), 4)
-	check(testutil.MakeUint8Vector([]uint8{6}, nil, mp), 6)
-	check(testutil.MakeUint16Vector([]uint16{8}, nil, mp), 8)
-	check(testutil.MakeUint32Vector([]uint32{9}, nil, mp), 9)
+	check(testutil.MakeInt64Vector([]int64{5}, nil), 5)
+	check(testutil.MakeInt32Vector([]int32{3}, nil), 3)
+	check(testutil.MakeUint64Vector([]uint64{7}, nil), 7)
+	check(testutil.MakeInt8Vector([]int8{2}, nil), 2)
+	check(testutil.MakeInt16Vector([]int16{4}, nil), 4)
+	check(testutil.MakeUint8Vector([]uint8{6}, nil), 6)
+	check(testutil.MakeUint16Vector([]uint16{8}, nil), 8)
+	check(testutil.MakeUint32Vector([]uint32{9}, nil), 9)
 
 	// unsupported type → ok=false
-	v11 := testutil.MakeVarcharVector([]string{"x"}, nil, mp)
+	v11 := testutil.MakeVarcharVector([]string{"x"}, nil)
 	_, ok := getInt64FromVec(v11, 0)
 	require.False(t, ok)
 	v11.Free(mp)
 
 	// NULL value → ok=false
-	v12 := testutil.MakeInt64Vector([]int64{0}, []uint64{0}, mp)
+	v12 := testutil.MakeInt64Vector([]int64{0}, []uint64{0})
 	_, ok = getInt64FromVec(v12, 0)
 	require.False(t, ok)
 	v12.Free(mp)
@@ -392,7 +393,7 @@ func TestAppendDefaultOrNull(t *testing.T) {
 
 	// const default
 	result2 := vector.NewVec(types.T_int32.ToType())
-	defVec := testutil.MakeInt32Vector([]int32{99}, nil, mp)
+	defVec := testutil.MakeInt32Vector([]int32{99}, nil)
 	err = appendDefaultOrNull(result2, defVec, 0, mp)
 	require.NoError(t, err)
 	require.Equal(t, int32(99), vector.MustFixedColNoTypeCheck[int32](result2)[0])
@@ -414,7 +415,7 @@ func TestProcessValueFunc_LagWithPartition(t *testing.T) {
 
 	ctr := &container{bat: bat}
 	// aggVecs: single vec for the expression column
-	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
+	ctr.aggVecs = make([]group.ExprEvalVector, 1)
 	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0]}
 	// Partition boundaries: [0,3) and [3,5)
 	ctr.ps = []int64{0, 3, 5}
@@ -449,7 +450,7 @@ func TestProcessValueFunc_LeadWithPartition(t *testing.T) {
 	spec := makeLeadWindowSpec()
 
 	ctr := &container{bat: bat}
-	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
+	ctr.aggVecs = make([]group.ExprEvalVector, 1)
 	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0]}
 	ctr.ps = []int64{0, 3, 5}
 
@@ -485,7 +486,7 @@ func TestProcessValueFunc_LagWithOffset(t *testing.T) {
 	ctr := &container{bat: bat}
 	// aggVecs[0].Vec[0] = value column, Vec[1] = offset (const 2)
 	offsetVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(2), 1, mp)
-	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
+	ctr.aggVecs = make([]group.ExprEvalVector, 1)
 	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], offsetVec}
 
 	ap := &Window{WinSpecList: []*plan.Expr{spec}}
@@ -517,8 +518,8 @@ func TestProcessValueFunc_LagWithDefault(t *testing.T) {
 
 	ctr := &container{bat: bat}
 	offsetVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 1, mp)
-	defaultVec := testutil.MakeInt32Vector([]int32{-1}, nil, mp)
-	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
+	defaultVec := testutil.MakeInt32Vector([]int32{-1}, nil)
+	ctr.aggVecs = make([]group.ExprEvalVector, 1)
 	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], offsetVec, defaultVec}
 
 	ap := &Window{WinSpecList: []*plan.Expr{spec}}
@@ -566,7 +567,7 @@ func TestProcessValueFunc_FirstValueWithFrame(t *testing.T) {
 	}
 
 	ctr := &container{bat: bat}
-	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
+	ctr.aggVecs = make([]group.ExprEvalVector, 1)
 	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0]}
 
 	ap := &Window{WinSpecList: []*plan.Expr{spec}}
@@ -616,7 +617,7 @@ func TestProcessValueFunc_LastValueWithFrame(t *testing.T) {
 	}
 
 	ctr := &container{bat: bat}
-	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
+	ctr.aggVecs = make([]group.ExprEvalVector, 1)
 	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0]}
 
 	ap := &Window{WinSpecList: []*plan.Expr{spec}}
@@ -651,8 +652,8 @@ func TestProcessValueFunc_LagNonConstOffset(t *testing.T) {
 
 	ctr := &container{bat: bat}
 	// Non-const offset vector: [1, 2, 0, -1]
-	offsetVec := testutil.MakeInt64Vector([]int64{1, 2, 0, -1}, nil, mp)
-	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
+	offsetVec := testutil.MakeInt64Vector([]int64{1, 2, 0, -1}, nil)
+	ctr.aggVecs = make([]group.ExprEvalVector, 1)
 	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], offsetVec}
 
 	ap := &Window{WinSpecList: []*plan.Expr{spec}}
@@ -683,8 +684,8 @@ func TestProcessValueFunc_LeadNonConstOffset(t *testing.T) {
 	spec := makeLeadWindowSpec()
 
 	ctr := &container{bat: bat}
-	offsetVec := testutil.MakeInt64Vector([]int64{2, 1, 0, -1}, nil, mp)
-	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
+	offsetVec := testutil.MakeInt64Vector([]int64{2, 1, 0, -1}, nil)
+	ctr.aggVecs = make([]group.ExprEvalVector, 1)
 	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], offsetVec}
 
 	ap := &Window{WinSpecList: []*plan.Expr{spec}}
@@ -716,8 +717,8 @@ func TestProcessValueFunc_NthValueNonConst(t *testing.T) {
 
 	ctr := &container{bat: bat}
 	// Non-const n vector: [1, 2, 0, 5] — 0 and 5 are invalid/out-of-bounds
-	nVec := testutil.MakeInt64Vector([]int64{1, 2, 0, 5}, nil, mp)
-	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
+	nVec := testutil.MakeInt64Vector([]int64{1, 2, 0, 5}, nil)
+	ctr.aggVecs = make([]group.ExprEvalVector, 1)
 	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], nVec}
 
 	ap := &Window{WinSpecList: []*plan.Expr{spec}}
@@ -748,7 +749,7 @@ func TestProcessValueFunc_FirstValueWithPartition(t *testing.T) {
 	spec := makeFirstValueWindowSpec()
 
 	ctr := &container{bat: bat}
-	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
+	ctr.aggVecs = make([]group.ExprEvalVector, 1)
 	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0]}
 	ctr.ps = []int64{0, 3, 5}
 
@@ -782,7 +783,7 @@ func TestProcessValueFunc_LastValueWithPartition(t *testing.T) {
 	spec := makeLastValueWindowSpec()
 
 	ctr := &container{bat: bat}
-	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
+	ctr.aggVecs = make([]group.ExprEvalVector, 1)
 	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0]}
 	ctr.ps = []int64{0, 3, 5}
 

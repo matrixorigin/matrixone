@@ -167,6 +167,33 @@ func (ctr *container) isDataSourceEmpty() bool {
 	return ctr.dataSourceIsEmpty
 }
 
+func (ctr *container) memUsed() int64 {
+	var sz int64
+	if ctr.hr.Hash != nil {
+		sz += ctr.hr.Hash.Size()
+	}
+	for _, bat := range ctr.result1.ToPopped {
+		sz += int64(bat.Allocated())
+	}
+	sz += int64(ctr.result1.Popped.Allocated())
+	for _, agg := range ctr.result1.AggList {
+		sz += safeAggSize(agg)
+	}
+	return sz
+}
+
+func safeAggSize(agg aggexec.AggFuncExec) (sz int64) {
+	if agg == nil {
+		return 0
+	}
+	defer func() {
+		if recover() != nil {
+			sz = 0
+		}
+	}()
+	return agg.Size()
+}
+
 func (group *Group) Free(proc *process.Process, _ bool, _ error) {
 	group.freeCannotReuse(proc.Mp())
 
