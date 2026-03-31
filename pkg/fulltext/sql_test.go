@@ -26,7 +26,7 @@ func TestSqlPhraseBM25(t *testing.T) {
 	tests := []TestCase{
 		{
 			pattern: "\"Ma'trix Origin\"",
-			expect:  "select a.*, b.pos as doc_len from (WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'ma\\'trix'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 8 GROUP BY kw0.doc_id) a left join `__mo_index_secondary_` b on a.doc_id = b.doc_id and b.word = '__DocLen'",
+			expect:  "select a.*, CAST(COALESCE((SELECT MAX(pos) FROM `__mo_index_secondary_` WHERE doc_id = a.doc_id AND word = '__DocLen'), 0) AS INT) as doc_len from (WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'ma\\'trix'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 8 GROUP BY kw0.doc_id) a",
 		},
 	}
 
@@ -157,7 +157,7 @@ func TestSqlBooleanBM25(t *testing.T) {
 	tests := []TestCase{
 		{
 			pattern: "Ma'trix Origin",
-			expect:  "select a.*, b.pos as doc_len from (WITH t0 AS (WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'ma')), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'trix') SELECT kw0.doc_id FROM kw0, kw1 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 3 GROUP BY kw0.doc_id), t1 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'origin' GROUP BY doc_id) SELECT doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT doc_id, CAST(1 as int) FROM t1) a left join `__mo_index_secondary_` b on a.doc_id = b.doc_id and b.word = '__DocLen'",
+			expect:  "select a.*, CAST(COALESCE((SELECT MAX(pos) FROM `__mo_index_secondary_` WHERE doc_id = a.doc_id AND word = '__DocLen'), 0) AS INT) as doc_len from (WITH t0 AS (WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'ma')), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'trix') SELECT kw0.doc_id FROM kw0, kw1 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 3 GROUP BY kw0.doc_id), t1 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = 'origin' GROUP BY doc_id) SELECT doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT doc_id, CAST(1 as int) FROM t1) a",
 		},
 	}
 
@@ -216,7 +216,7 @@ func TestSqlNLBM25(t *testing.T) {
 	tests := []TestCase{
 		{
 			pattern: "Ma'trix Origin",
-			expect:  "select a.*, b.pos as doc_len from (WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'ma')), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'trix'), kw2 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1, kw2 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 3 AND kw0.doc_id = kw2.doc_id AND kw2.pos - kw0.pos = 8) a left join `__mo_index_secondary_` b on a.doc_id = b.doc_id and b.word = '__DocLen'",
+			expect:  "select a.*, CAST(COALESCE((SELECT MAX(pos) FROM `__mo_index_secondary_` WHERE doc_id = a.doc_id AND word = '__DocLen'), 0) AS INT) as doc_len from (WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'ma')), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'trix'), kw2 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1, kw2 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 3 AND kw0.doc_id = kw2.doc_id AND kw2.pos - kw0.pos = 8) a",
 		},
 	}
 
@@ -229,4 +229,109 @@ func TestSqlNLBM25(t *testing.T) {
 		//fmt.Println(result)
 		assert.Equal(t, c.expect, result)
 	}
+}
+
+func TestSingleKeywordTopKSQL(t *testing.T) {
+	tests := []struct {
+		pattern    string
+		mode       int64
+		expectOK   bool
+		expectTopK string
+	}{
+		{
+			pattern:    "Matrix",
+			mode:       int64(tree.FULLTEXT_NL),
+			expectOK:   true,
+			expectTopK: "SELECT doc_id, tf, nmatch FROM (SELECT doc_id, tf, COUNT(*) OVER() AS nmatch FROM (SELECT doc_id, CASE WHEN COUNT(*) > 255 THEN 255 ELSE COUNT(*) END AS tf FROM `__mo_index_secondary_` WHERE word = 'matrix' GROUP BY doc_id) a) ranked ORDER BY tf DESC LIMIT 5",
+		},
+		{
+			pattern:    "Matrix",
+			mode:       int64(tree.FULLTEXT_DEFAULT),
+			expectOK:   true,
+			expectTopK: "SELECT doc_id, tf, nmatch FROM (SELECT doc_id, tf, COUNT(*) OVER() AS nmatch FROM (SELECT doc_id, CASE WHEN COUNT(*) > 255 THEN 255 ELSE COUNT(*) END AS tf FROM `__mo_index_secondary_` WHERE word = 'matrix' GROUP BY doc_id) a) ranked ORDER BY tf DESC LIMIT 5",
+		},
+		{
+			pattern:  "+Matrix",
+			mode:     int64(tree.FULLTEXT_BOOLEAN),
+			expectOK: false,
+		},
+		{
+			pattern:    "读写",
+			mode:       int64(tree.FULLTEXT_NL),
+			expectOK:   true,
+			expectTopK: "SELECT doc_id, tf, nmatch FROM (SELECT doc_id, tf, COUNT(*) OVER() AS nmatch FROM (SELECT doc_id, CASE WHEN COUNT(*) > 255 THEN 255 ELSE COUNT(*) END AS tf FROM `__mo_index_secondary_` WHERE prefix_eq(word,'读写') GROUP BY doc_id) a) ranked ORDER BY tf DESC LIMIT 5",
+		},
+	}
+
+	idxTable := "`__mo_index_secondary_`"
+	for _, tc := range tests {
+		s, err := NewSearchAccum("src", "index", tc.pattern, tc.mode, "", ALGO_TFIDF)
+		require.NoError(t, err)
+
+		topKSQL, ok, err := SingleKeywordTopKSQL(s.Pattern, tc.mode, idxTable, 5)
+		require.NoError(t, err)
+		require.Equal(t, tc.expectOK, ok)
+		if !tc.expectOK {
+			assert.Empty(t, topKSQL)
+			continue
+		}
+		assert.Equal(t, tc.expectTopK, topKSQL)
+	}
+}
+
+func TestSingleKeywordTopKBM25SQL(t *testing.T) {
+	idxTable := "`__mo_index_secondary_`"
+	s, err := NewSearchAccum("src", "index", "Matrix", int64(tree.FULLTEXT_NL), "", ALGO_BM25)
+	require.NoError(t, err)
+
+	sql, ok, err := SingleKeywordTopKBM25SQL(s.Pattern, int64(tree.FULLTEXT_NL), idxTable, 10.5, 5)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t,
+		"SELECT doc_id, score, nmatch FROM (SELECT a.doc_id, (a.tf * (1.5 + 1) / (a.tf + 1.5 * (1 - 0.75 + 0.75 * (CAST(COALESCE((SELECT MAX(pos) FROM `__mo_index_secondary_` WHERE doc_id = a.doc_id AND word = '__DocLen'), 0) AS INT) / 10.5)))) AS score, COUNT(*) OVER() AS nmatch FROM (SELECT doc_id, CASE WHEN COUNT(*) > 255 THEN 255 ELSE COUNT(*) END AS tf FROM `__mo_index_secondary_` WHERE word = 'matrix' GROUP BY doc_id) a) ranked ORDER BY score DESC LIMIT 5",
+		sql,
+	)
+
+	booleanAccum, err := NewSearchAccum("src", "index", "+Matrix", int64(tree.FULLTEXT_BOOLEAN), "", ALGO_BM25)
+	require.NoError(t, err)
+
+	sql, ok, err = SingleKeywordTopKBM25SQL(booleanAccum.Pattern, int64(tree.FULLTEXT_BOOLEAN), idxTable, 10.5, 5)
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Empty(t, sql)
+}
+
+func TestPhraseTopKSQL(t *testing.T) {
+	idxTable := "`__mo_index_secondary_`"
+	s, err := NewSearchAccum("src", "index", "Matrix Origin", int64(tree.FULLTEXT_NL), "", ALGO_TFIDF)
+	require.NoError(t, err)
+
+	countSQL, ok, err := PhraseCountSQL(s.Pattern, int64(tree.FULLTEXT_NL), idxTable)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "SELECT COUNT(DISTINCT doc_id) FROM (WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'matrix'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT kw0.doc_id FROM kw0, kw1 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 7) ft", countSQL)
+
+	topKSQL, ok, err := PhraseTopKSQL(s.Pattern, int64(tree.FULLTEXT_NL), idxTable, 5)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "SELECT doc_id, CASE WHEN COUNT(*) > 255 THEN 255 ELSE COUNT(*) END AS tf FROM (WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'matrix'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT kw0.doc_id FROM kw0, kw1 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 7) ft GROUP BY doc_id ORDER BY tf DESC LIMIT 5", topKSQL)
+}
+
+func TestPhraseTopKBM25SQL(t *testing.T) {
+	idxTable := "`__mo_index_secondary_`"
+	s, err := NewSearchAccum("src", "index", "Matrix Origin", int64(tree.FULLTEXT_NL), "", ALGO_BM25)
+	require.NoError(t, err)
+
+	sql, ok, err := PhraseTopKBM25SQL(s.Pattern, int64(tree.FULLTEXT_NL), idxTable, 1.2345, 10.5, s.Nkeywords, 5)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "SELECT a.doc_id, 2 * 1.2344999999999999 * (a.tf * (1.5 + 1) / (a.tf + 1.5 * (1 - 0.75 + 0.75 * (CAST(COALESCE((SELECT MAX(pos) FROM `__mo_index_secondary_` WHERE doc_id = a.doc_id AND word = '__DocLen'), 0) AS INT) / 10.5)))) AS score FROM (SELECT doc_id, CASE WHEN COUNT(*) > 255 THEN 255 ELSE COUNT(*) END AS tf FROM (WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'matrix'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'origin') SELECT kw0.doc_id FROM kw0, kw1 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 7) ft GROUP BY doc_id) a ORDER BY score DESC LIMIT 5", sql)
+
+	single, err := NewSearchAccum("src", "index", "Matrix", int64(tree.FULLTEXT_NL), "", ALGO_BM25)
+	require.NoError(t, err)
+
+	sql, ok, err = PhraseTopKBM25SQL(single.Pattern, int64(tree.FULLTEXT_NL), idxTable, 1.2345, 10.5, single.Nkeywords, 5)
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Empty(t, sql)
 }
