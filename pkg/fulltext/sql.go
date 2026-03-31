@@ -135,10 +135,6 @@ func singleKeywordPattern(ps []*Pattern, mode int64) (*Pattern, bool) {
 	return nil, false
 }
 
-func docLenExpr(idxTable string, docIDExpr string) string {
-	return fmt.Sprintf("CAST(COALESCE((SELECT MAX(pos) FROM %s WHERE doc_id = %s AND word = '%s'), 0) AS INT)", idxTable, docIDExpr, DOC_LEN_WORD)
-}
-
 func cappedTfExpr() string {
 	return "CASE WHEN COUNT(*) > 255 THEN 255 ELSE COUNT(*) END"
 }
@@ -183,12 +179,12 @@ func SingleKeywordTopKBM25SQL(ps []*Pattern, mode int64, idxTable string, avgDoc
 	}
 
 	scoreExpr := fmt.Sprintf(
-		"(a.tf * (%.17g + 1) / (a.tf + %.17g * (1 - %.17g + %.17g * (%s / %.17g))))",
-		BM25_K1, BM25_K1, BM25_B, BM25_B, docLenExpr(idxTable, "a.doc_id"), avgDocLen,
+		"(a.tf * (%.17g + 1) / (a.tf + %.17g * (1 - %.17g + %.17g * (CAST(COALESCE(dl.pos, 0) AS INT) / %.17g))))",
+		BM25_K1, BM25_K1, BM25_B, BM25_B, avgDocLen,
 	)
 	return fmt.Sprintf(
-		"SELECT doc_id, score, nmatch FROM (SELECT a.doc_id, %s AS score, COUNT(*) OVER() AS nmatch FROM (SELECT doc_id, %s AS tf FROM %s WHERE %s GROUP BY doc_id) a) ranked ORDER BY score DESC LIMIT %d",
-		scoreExpr, cappedTfExpr(), idxTable, whereClause, limit,
+		"SELECT doc_id, score, nmatch FROM (SELECT a.doc_id, %s AS score, COUNT(*) OVER() AS nmatch FROM (SELECT doc_id, %s AS tf FROM %s WHERE %s GROUP BY doc_id) a LEFT JOIN %s dl ON a.doc_id = dl.doc_id AND dl.word = '%s') ranked ORDER BY score DESC LIMIT %d",
+		scoreExpr, cappedTfExpr(), idxTable, whereClause, idxTable, DOC_LEN_WORD, limit,
 	), true, nil
 }
 
@@ -231,11 +227,11 @@ func PhraseTopKBM25SQL(ps []*Pattern, mode int64, idxTable string, idfSq float64
 	if err != nil {
 		return "", false, err
 	}
-	scoreExpr := fmt.Sprintf("%.17g * %.17g * (a.tf * (%.17g + 1) / (a.tf + %.17g * (1 - %.17g + %.17g * (%s / %.17g))))",
-		float64(nkeywords), idfSq, BM25_K1, BM25_K1, BM25_B, BM25_B, docLenExpr(idxTable, "a.doc_id"), avgDocLen)
+	scoreExpr := fmt.Sprintf("%.17g * %.17g * (a.tf * (%.17g + 1) / (a.tf + %.17g * (1 - %.17g + %.17g * (CAST(COALESCE(dl.pos, 0) AS INT) / %.17g))))",
+		float64(nkeywords), idfSq, BM25_K1, BM25_K1, BM25_B, BM25_B, avgDocLen)
 	return fmt.Sprintf(
-		"SELECT a.doc_id, %s AS score FROM (SELECT doc_id, %s AS tf FROM (%s) ft GROUP BY doc_id) a ORDER BY score DESC LIMIT %d",
-		scoreExpr, cappedTfExpr(), baseSQL, limit,
+		"SELECT a.doc_id, %s AS score FROM (SELECT doc_id, %s AS tf FROM (%s) ft GROUP BY doc_id) a LEFT JOIN %s dl ON a.doc_id = dl.doc_id AND dl.word = '%s' ORDER BY score DESC LIMIT %d",
+		scoreExpr, cappedTfExpr(), baseSQL, idxTable, DOC_LEN_WORD, limit,
 	), true, nil
 }
 
@@ -638,7 +634,7 @@ func PatternToSql(ps []*Pattern, mode int64, idxTable string, parser string, alg
 }
 
 func genBM25SQL(sql string, idxTable string) string {
-	return fmt.Sprintf("select a.*, %s as doc_len from (%s) a", docLenExpr(idxTable, "a.doc_id"), sql)
+	return fmt.Sprintf("select a.*, CAST(COALESCE(dl.pos, 0) AS INT) as doc_len from (%s) a LEFT JOIN %s dl ON a.doc_id = dl.doc_id AND dl.word = '%s'", sql, idxTable, DOC_LEN_WORD)
 }
 
 func patternToSql(ps []*Pattern, mode int64, idxtbl string, parser string) (string, error) {

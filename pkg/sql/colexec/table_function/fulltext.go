@@ -631,8 +631,12 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 		return false, moerr.NewInternalError(proc.Ctx, "context cancelled")
 	}
 
-	bat := res.Batches[0]
 	defer res.Close()
+
+	if len(res.Batches) == 0 {
+		return false, nil
+	}
+	bat := res.Batches[0]
 
 	if len(bat.Vecs) > 3 {
 		return false, moerr.NewInternalError(proc.Ctx, "output vector columns not match")
