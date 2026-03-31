@@ -141,7 +141,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) error {
 			id := obj.AsCommonID()
 			id.SetBlockOffset(uint16(j))
 			page := model.NewTransferHashPage(id, bts, isTransient, entry.rt.TmpFS, model.GetTTL(), model.GetDiskTTL(), createdObjIDs)
-			page.Train(m)
+			page.TrainDetached(m)
 
 			start = time.Now()
 			err := model.AddTransferPage(page, ioVector, &marshalBufs)

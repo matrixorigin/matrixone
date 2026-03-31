@@ -230,6 +230,13 @@ func (page *TransferHashPage) Train(m api.TransferMap) {
 	v2.TransferPageRowHistogram.Observe(float64(len(m)))
 }
 
+// TrainDetached clones the transfer map so the page owns stable memory even if
+// the source map was backed by a pooled slab that may be recycled later.
+func (page *TransferHashPage) TrainDetached(m api.TransferMap) {
+	owned := append(api.TransferMap(nil), m...)
+	page.Train(owned)
+}
+
 func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) {
 	m := page.hashmap.Load()
 	if m == nil {
