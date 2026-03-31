@@ -19,14 +19,41 @@ import (
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"runtime"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/stretchr/testify/require"
 )
+
+func Test_NewKMeans_GCStress(t *testing.T) {
+	logutil.SetupMOLogger(&logutil.LogConfig{
+		Level:  "info",
+		Format: "json",
+	})
+
+	vectors := [][]float64{
+		{1, 2, 3, 4},
+		{1, 2, 4, 5},
+		{10, 2, 4, 5},
+		{10, 3, 4, 5},
+		{10, 5, 4, 5},
+		{11, 6, 4, 5},
+		{12, 7, 4, 5},
+		{13, 8, 4, 5},
+	}
+
+	for i := 0; i < 128; i++ {
+		km, err := NewKMeans[float64](vectors, 2, 10, 0.01, metric.Metric_L2Distance, kmeans.Random, false, 1)
+		require.NoError(t, err)
+		require.NoError(t, km.Close())
+		runtime.GC()
+	}
+}
 
 func TestNewKMeans_Validation(t *testing.T) {
 	vectors := [][]float32{{1, 2}, {3, 4}, {5, 6}}

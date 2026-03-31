@@ -84,9 +84,9 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 	allocator := malloc.NewCAllocator()
 	var deallocators []malloc.Deallocator
 
-	allocSlice := func(name string, size uint64) ([]byte, error) {
+	allocSlice := func(name string, size uint64, hints malloc.Hints) ([]byte, error) {
 		logutil.Infof("kmeans malloc: %s, %d bytes", name, size)
-		slice, deallocator, err := allocator.Allocate(size, malloc.NoClear)
+		slice, deallocator, err := allocator.Allocate(size, hints)
 		if err != nil {
 			logutil.Errorf("kmeans malloc error: %s, %d bytes, %v", name, size, err)
 			for _, d := range deallocators {
@@ -99,15 +99,15 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 		return slice, nil
 	}
 
-	// allocate centroids headers
-	centroidsBytes, err := allocSlice("centroids_headers", uint64(clusterCnt)*uint64(util.UnsafeSizeOf[[]T]()))
+	// allocate centroids headers -- pointer address has to be zero initialized so use malloc.NoHints
+	centroidsBytes, err := allocSlice("centroids_headers", uint64(clusterCnt)*uint64(util.UnsafeSizeOf[[]T]()), malloc.NoHints)
 	if err != nil {
 		return nil, err
 	}
 	centroids := util.UnsafeSliceCastToLength[[]T](centroidsBytes, clusterCnt)
 
 	// allocate all centroids data at once
-	allCentroidsDataBytes, err := allocSlice("all_centroids_data", uint64(clusterCnt)*uint64(dim)*uint64(util.UnsafeSizeOf[T]()))
+	allCentroidsDataBytes, err := allocSlice("all_centroids_data", uint64(clusterCnt)*uint64(dim)*uint64(util.UnsafeSizeOf[T]()), malloc.NoClear)
 	if err != nil {
 		return nil, err
 	}
@@ -117,40 +117,40 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 	}
 
 	// allocate assignments
-	assignmentsBytes, err := allocSlice("assignments", uint64(numVectors)*uint64(util.UnsafeSizeOf[int]()))
+	assignmentsBytes, err := allocSlice("assignments", uint64(numVectors)*uint64(util.UnsafeSizeOf[int]()), malloc.NoClear)
 	if err != nil {
 		return nil, err
 	}
 	assignments := util.UnsafeSliceCastToLength[int](assignmentsBytes, numVectors)
 
 	// allocate indices
-	indicesBytes, err := allocSlice("indices", uint64(numVectors)*uint64(util.UnsafeSizeOf[int]()))
+	indicesBytes, err := allocSlice("indices", uint64(numVectors)*uint64(util.UnsafeSizeOf[int]()), malloc.NoClear)
 	if err != nil {
 		return nil, err
 	}
 	indices := util.UnsafeSliceCastToLength[int](indicesBytes, numVectors)
 
 	// allocate c1, c2
-	c1Bytes, err := allocSlice("c1", uint64(dim)*uint64(util.UnsafeSizeOf[T]()))
+	c1Bytes, err := allocSlice("c1", uint64(dim)*uint64(util.UnsafeSizeOf[T]()), malloc.NoClear)
 	if err != nil {
 		return nil, err
 	}
 	c1 := util.UnsafeSliceCastToLength[T](c1Bytes, dim)
-	c2Bytes, err := allocSlice("c2", uint64(dim)*uint64(util.UnsafeSizeOf[T]()))
+	c2Bytes, err := allocSlice("c2", uint64(dim)*uint64(util.UnsafeSizeOf[T]()), malloc.NoClear)
 	if err != nil {
 		return nil, err
 	}
 	c2 := util.UnsafeSliceCastToLength[T](c2Bytes, dim)
 
 	// allocate diffs
-	diffsBytes, err := allocSlice("diffs", uint64(numVectors)*uint64(util.UnsafeSizeOf[pointDiff]()))
+	diffsBytes, err := allocSlice("diffs", uint64(numVectors)*uint64(util.UnsafeSizeOf[pointDiff]()), malloc.NoClear)
 	if err != nil {
 		return nil, err
 	}
 	diffs := util.UnsafeSliceCastToLength[pointDiff](diffsBytes, numVectors)
 
 	// allocate localAssign
-	localAssignBytes, err := allocSlice("localAssign", uint64(numVectors)*uint64(util.UnsafeSizeOf[int]()))
+	localAssignBytes, err := allocSlice("localAssign", uint64(numVectors)*uint64(util.UnsafeSizeOf[int]()), malloc.NoClear)
 	if err != nil {
 		return nil, err
 	}
