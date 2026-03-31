@@ -499,17 +499,31 @@ func (h *AObjectHandle) buildBlockPlan(
 	}
 	dataMeta := meta.MustGetMeta(objectio.SchemaData)
 	evaluableBlockCnt := 0
+	pkf := h.p.changesHandle.pkFilter
+	pkSeqnum := uint16(h.p.changesHandle.primarySeqnum)
 	for i := uint16(0); i < uint16(obj.BlkCnt()); i++ {
 		blk := dataMeta.GetBlockMeta(uint32(i))
 		overlap, evaluable, reason, _ := blockCommitTSOverlapsRange(blk, h.start, h.end)
 		if !evaluable {
-			// Keep non-evaluable blocks as "read=true" (default). We can still
-			// preserve correctness by row-wise commit-ts filtering after read.
 			plan.nonEvaluableReasons[reason]++
+			if pkf != nil && pkf.Vec != nil {
+				pkZM := blk.MustGetColumn(pkSeqnum).ZoneMap()
+				if pkZM.IsInited() && !pkZM.AnyIn(pkf.Vec) {
+					plan.shouldReadByBlks[i] = false
+					plan.prunedBlocks++
+				}
+			}
 			continue
 		}
 		evaluableBlockCnt++
 		plan.shouldReadByBlks[i] = overlap
+		if overlap && pkf != nil && pkf.Vec != nil {
+			pkZM := blk.MustGetColumn(pkSeqnum).ZoneMap()
+			if pkZM.IsInited() && !pkZM.AnyIn(pkf.Vec) {
+				plan.shouldReadByBlks[i] = false
+				overlap = false
+			}
+		}
 		if !overlap {
 			plan.prunedBlocks++
 		}
@@ -982,6 +996,7 @@ func (p *baseHandle) getObjectEntries(
 	cnObj = make([]*objectio.ObjectEntry, 0)
 	tnByCreateTS = make(map[types.TS][]*objectio.ObjectEntry)
 	tnKeySet := make(map[types.TS]struct{})
+	pkf := p.changesHandle.pkFilter
 	for objIter.Next() {
 		entry := objIter.Item()
 		entryCopy := entry
@@ -992,17 +1007,38 @@ func (p *baseHandle) getObjectEntries(
 			if !entry.DeleteTime.IsEmpty() && entry.DeleteTime.LT(&start) {
 				continue
 			}
+			// PK zonemap pruning: skip appendable objects whose sort-key range
+			// does not overlap with the requested PK values.
+			if pkf != nil && pkf.Vec != nil {
+				zm := entry.SortKeyZoneMap()
+				if zm.IsInited() && !zm.AnyIn(pkf.Vec) {
+					continue
+				}
+			}
 			aobj = append(aobj, &entryCopy)
 		} else {
 			if entry.ObjectStats.GetCNCreated() {
 				if entry.CreateTime.LT(&start) || entry.CreateTime.GT(&end) {
 					continue
 				}
+				if pkf != nil && pkf.Vec != nil {
+					zm := entry.SortKeyZoneMap()
+					if zm.IsInited() && !zm.AnyIn(pkf.Vec) {
+						continue
+					}
+				}
 				cnObj = append(cnObj, &entryCopy)
 				continue
 			}
 			if entry.CreateTime.GT(&end) {
 				continue
+			}
+			// PK zonemap pruning for TN non-appendable objects.
+			if pkf != nil && pkf.Vec != nil {
+				zm := entry.SortKeyZoneMap()
+				if zm.IsInited() && !zm.AnyIn(pkf.Vec) {
+					continue
+				}
 			}
 			// Keep every TN-produced non-appendable object in the create-time index so
 			// delete-chain resolution can rewrite a deleted/missing predecessor to the
@@ -1280,6 +1316,10 @@ type ChangeHandler struct {
 	// When enabled, visible objects that were already GC-ed can be rewritten
 	// through delete-time linked TN non-appendable objects before replay starts.
 	enableDeleteChainResolve bool
+
+	// pkFilter, when non-nil, enables PK-based pruning at the object, block,
+	// and row level.  Only DATA BRANCH PICK sets this; other callers leave it nil.
+	pkFilter *engine.PKFilter
 }
 
 type checkpointObjectSelection uint8
@@ -1665,6 +1705,7 @@ func NewChangesHandler(
 		primarySeqnum: primarySeqnum,
 		mp:            mp,
 		scheduler:     tasks.NewParallelJobScheduler(LoadParallism),
+		pkFilter:      engine.PKFilterFromContext(ctx),
 	}
 	defer func() {
 		if err != nil {

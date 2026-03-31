@@ -18,13 +18,16 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func handleBranchPick(
@@ -428,4 +431,135 @@ func formatExprIntoString(ses *Session, expr tree.Expr, buf *bytes.Buffer) error
 // quoteStringForKey wraps a string value in single quotes for canonical key matching.
 func quoteStringForKey(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+// buildPKFilterForPick constructs an engine.PKFilter from literal KEYS values.
+// For subquery-based KEYS, returns nil (engine-level pruning is skipped;
+// the consumer-level string filter still guarantees correctness).
+// The returned vector is sorted, as required by ZoneMap.AnyIn().
+func buildPKFilterForPick(
+	stmt *tree.DataBranchPick,
+	tblStuff tableStuff,
+	mp *mpool.MPool,
+) (*engine.PKFilter, error) {
+	if stmt.Keys == nil || stmt.Keys.Type != tree.PickKeysValues {
+		return nil, nil
+	}
+	// Only support single-column PK for engine-level pruning.
+	// Composite PK uses __mo_cpkey_col which is opaque at the engine layer.
+	if tblStuff.def.pkKind != normalKind {
+		return nil, nil
+	}
+
+	pkType := tblStuff.def.colTypes[tblStuff.def.pkColIdx]
+	vec := vector.NewVec(pkType)
+
+	for _, expr := range stmt.Keys.KeyExprs {
+		if err := appendExprToVec(vec, expr, pkType, mp); err != nil {
+			vec.Free(mp)
+			return nil, err
+		}
+	}
+
+	// Sort the vector — required by ZoneMap.AnyIn() which uses binary search.
+	vec.InplaceSort()
+
+	return &engine.PKFilter{
+		Vec:           vec,
+		PrimarySeqnum: tblStuff.def.pkColIdx,
+	}, nil
+}
+
+// appendExprToVec appends a literal AST expression value to a typed vector.
+func appendExprToVec(vec *vector.Vector, expr tree.Expr, pkType types.Type, mp *mpool.MPool) error {
+	switch e := expr.(type) {
+	case *tree.NumVal:
+		return appendNumValToVec(vec, e, pkType, mp)
+	case *tree.StrVal:
+		return vector.AppendBytes(vec, []byte(e.String()), false, mp)
+	default:
+		// For complex expressions, skip engine-level filtering.
+		return fmt.Errorf("unsupported expression type for PK filter: %T", expr)
+	}
+}
+
+// appendNumValToVec converts a numeric literal to the correct typed value
+// and appends it to the vector.
+func appendNumValToVec(vec *vector.Vector, val *tree.NumVal, pkType types.Type, mp *mpool.MPool) error {
+	s := val.String()
+	switch pkType.Oid {
+	case types.T_int8:
+		v, err := strconv.ParseInt(s, 10, 8)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, int8(v), false, mp)
+	case types.T_int16:
+		v, err := strconv.ParseInt(s, 10, 16)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, int16(v), false, mp)
+	case types.T_int32:
+		v, err := strconv.ParseInt(s, 10, 32)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, int32(v), false, mp)
+	case types.T_int64:
+		v, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, v, false, mp)
+	case types.T_uint8:
+		v, err := strconv.ParseUint(s, 10, 8)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, uint8(v), false, mp)
+	case types.T_uint16:
+		v, err := strconv.ParseUint(s, 10, 16)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, uint16(v), false, mp)
+	case types.T_uint32:
+		v, err := strconv.ParseUint(s, 10, 32)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, uint32(v), false, mp)
+	case types.T_uint64:
+		v, err := strconv.ParseUint(s, 10, 64)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, v, false, mp)
+	case types.T_float32:
+		v, err := strconv.ParseFloat(s, 32)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, float32(v), false, mp)
+	case types.T_float64:
+		v, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, v, false, mp)
+	case types.T_varchar, types.T_char, types.T_text, types.T_blob:
+		return vector.AppendBytes(vec, []byte(s), false, mp)
+	default:
+		// For other types (decimal, date, etc.), skip engine-level filtering.
+		return fmt.Errorf("unsupported PK type for engine filter: %s", pkType.Oid.String())
+	}
+}
+
+// freePKFilter safely frees the PK filter vector.
+func freePKFilter(filter *engine.PKFilter, mp *mpool.MPool) {
+	if filter != nil && filter.Vec != nil {
+		filter.Vec.Free(mp)
+		filter.Vec = nil
+	}
 }
