@@ -276,6 +276,7 @@ func (m *merger[T]) merge(ctx context.Context) error {
 			Stride:      int(m.rowPerBlk),
 			BlockActive: m.blockActive,
 		})
+		m.transferSlab = nil // ownership transferred; prevent release() from returning to pool
 	}
 
 	return nil
@@ -351,6 +352,11 @@ func (m *merger[T]) syncObject(ctx context.Context) error {
 }
 
 func (m *merger[T]) release() {
+	// Return slab to pool if ownership was not transferred to host.
+	if m.transferSlab != nil {
+		putTransferSlab(m.transferSlab)
+		m.transferSlab = nil
+	}
 	m.writer = nil
 	for _, bat := range m.bats {
 		if bat.releaseF != nil {

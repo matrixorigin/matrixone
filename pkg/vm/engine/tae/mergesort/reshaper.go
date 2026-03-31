@@ -57,6 +57,11 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 		if releaseF != nil {
 			releaseF()
 		}
+		// Return slab to pool if ownership was not transferred to host.
+		if slab != nil {
+			putTransferSlab(slab)
+			slab = nil
+		}
 	}()
 
 	var nextBatch *batch.Batch
@@ -149,6 +154,7 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 
 	if table != nil {
 		host.SetTransferTable(table)
+		slab = nil // ownership transferred; prevent defer from returning to pool
 	}
 
 	return nil
