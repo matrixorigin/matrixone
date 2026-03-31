@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -42,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
@@ -57,6 +59,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
@@ -77,6 +80,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func makeRemoteBatchMessage(t *testing.T, bat *batch.Batch) morpc.Message {
+	t.Helper()
+	data, err := bat.MarshalBinary()
+	require.NoError(t, err)
+	return &pipeline.Message{
+		Sid:  pipeline.Status_Last,
+		Data: data,
+	}
+}
 
 func Test_EncodeProcessInfo(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -290,6 +303,163 @@ func Test_convertToVmInstruction(t *testing.T) {
 	}
 }
 
+func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
+	ctx := &scopeContext{
+		id:     1,
+		root:   &scopeContext{},
+		parent: &scopeContext{},
+	}
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
+
+	t.Run("OnDuplicateKey_IsIgnore", func(t *testing.T) {
+		op := &onduplicatekey.OnDuplicatekey{
+			IsIgnore:       true,
+			InsertColCount: 3,
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.True(t, pipeInstr.OnDuplicateKey.IsIgnore)
+
+		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+		require.NoError(t, err)
+		restoredOp := restored.(*onduplicatekey.OnDuplicatekey)
+		require.True(t, restoredOp.IsIgnore)
+		require.Equal(t, int32(3), restoredOp.InsertColCount)
+	})
+
+	t.Run("FuzzyFilter_BuildIdx", func(t *testing.T) {
+		op := &fuzzyfilter.FuzzyFilter{
+			N:        42.5,
+			PkName:   "pk",
+			BuildIdx: 7,
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.Equal(t, int32(7), pipeInstr.FuzzyFilter.BuildIdx)
+
+		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+		require.NoError(t, err)
+		restoredOp := restored.(*fuzzyfilter.FuzzyFilter)
+		require.Equal(t, 7, restoredOp.BuildIdx)
+		require.Equal(t, "pk", restoredOp.PkName)
+	})
+
+	t.Run("MultiUpdate_PartitionCols", func(t *testing.T) {
+		op := &multi_update.MultiUpdate{
+			MultiUpdateCtx: []*multi_update.MultiUpdateCtx{
+				{
+					ObjRef:        &plan.ObjectRef{ObjName: "t1"},
+					TableDef:      &plan.TableDef{Name: "t1"},
+					InsertCols:    []int{0, 1, 2},
+					DeleteCols:    []int{3, 4},
+					PartitionCols: []int{5, 6},
+				},
+			},
+			Action: multi_update.UpdateWriteTable,
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.Len(t, pipeInstr.MultiUpdate.UpdateCtxList[0].PartitionCols, 2)
+
+		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+		require.NoError(t, err)
+		restoredOp := restored.(*multi_update.MultiUpdate)
+		require.Equal(t, []int{5, 6}, restoredOp.MultiUpdateCtx[0].PartitionCols)
+		require.Equal(t, []int{0, 1, 2}, restoredOp.MultiUpdateCtx[0].InsertCols)
+		require.Equal(t, []int{3, 4}, restoredOp.MultiUpdateCtx[0].DeleteCols)
+		require.True(t, restoredOp.IsRemote)
+	})
+
+	t.Run("Deletion_Engine", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		op := &deletion.Deletion{
+			DeleteCtx: &deletion.DeleteCtx{
+				RowIdIdx:      2,
+				PrimaryKeyIdx: 0,
+				Ref:           &plan.ObjectRef{ObjName: "t1"},
+			},
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+
+		mockEng := mock_frontend.NewMockEngine(ctrl)
+		restored, err := convertToVmOperator(pipeInstr, ctx, mockEng)
+		require.NoError(t, err)
+		restoredOp := restored.(*deletion.Deletion)
+		require.Equal(t, mockEng, restoredOp.DeleteCtx.Engine)
+		require.Equal(t, 2, restoredOp.DeleteCtx.RowIdIdx)
+	})
+
+	t.Run("Deletion_CanTruncate", func(t *testing.T) {
+		op := &deletion.Deletion{
+			DeleteCtx: &deletion.DeleteCtx{
+				CanTruncate:     true,
+				RowIdIdx:        1,
+				PrimaryKeyIdx:   0,
+				AddAffectedRows: true,
+				Ref:             &plan.ObjectRef{ObjName: "t1"},
+			},
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.True(t, pipeInstr.Delete.CanTruncate)
+
+		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+		require.NoError(t, err)
+		restoredOp := restored.(*deletion.Deletion)
+		require.True(t, restoredOp.DeleteCtx.CanTruncate)
+		require.Equal(t, 1, restoredOp.DeleteCtx.RowIdIdx)
+		require.Equal(t, 0, restoredOp.DeleteCtx.PrimaryKeyIdx)
+		require.True(t, restoredOp.DeleteCtx.AddAffectedRows)
+	})
+
+	t.Run("Insert_Engine", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		op := &insert.Insert{
+			InsertCtx: &insert.InsertCtx{
+				Ref:      &plan.ObjectRef{ObjName: "t1"},
+				TableDef: &plan.TableDef{Name: "t1"},
+				Attrs:    []string{"a", "b"},
+			},
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+
+		mockEng := mock_frontend.NewMockEngine(ctrl)
+		restored, err := convertToVmOperator(pipeInstr, ctx, mockEng)
+		require.NoError(t, err)
+		restoredOp := restored.(*insert.Insert)
+		require.Equal(t, mockEng, restoredOp.InsertCtx.Engine)
+		require.Equal(t, []string{"a", "b"}, restoredOp.InsertCtx.Attrs)
+	})
+
+	t.Run("MultiUpdate_Engine", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		op := &multi_update.MultiUpdate{
+			MultiUpdateCtx: []*multi_update.MultiUpdateCtx{
+				{
+					ObjRef:   &plan.ObjectRef{ObjName: "t1"},
+					TableDef: &plan.TableDef{Name: "t1"},
+				},
+			},
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+
+		mockEng := mock_frontend.NewMockEngine(ctrl)
+		restored, err := convertToVmOperator(pipeInstr, ctx, mockEng)
+		require.NoError(t, err)
+		restoredOp := restored.(*multi_update.MultiUpdate)
+		require.Equal(t, mockEng, restoredOp.Engine)
+	})
+}
 func Test_convertToProcessLimitation(t *testing.T) {
 	lim := pipeline.ProcessLimitation{
 		Size: 100,
@@ -474,6 +644,8 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 	_, withoutOut, _, err := prepareRemoteRunSendingData("", s1)
 	require.NoError(t, err)
 	require.False(t, withoutOut)
+	require.NotNil(t, s1.RootOp)
+	require.Equal(t, vm.Connector, s1.RootOp.OpType())
 
 	// if this is a pipeline with operator list "scan -> connector / dispatch".
 	// this should return withoutOut == false.
@@ -482,9 +654,12 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 		RootOp: dispatch.NewArgument(),
 	}
 	s2.RootOp.AppendChild(value_scan.NewArgument())
+	originChild := s2.RootOp.GetOperatorBase().GetChildren(0)
 	_, withoutOut, _, err = prepareRemoteRunSendingData("", s2)
 	require.NoError(t, err)
 	require.False(t, withoutOut)
+	require.Equal(t, 1, s2.RootOp.GetOperatorBase().NumChildren())
+	require.Same(t, originChild, s2.RootOp.GetOperatorBase().GetChildren(0))
 
 	// if this is a pipeline no need to sent back message, like "scan -> scan".
 	// this should return withoutOut == true.
@@ -496,6 +671,37 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 	_, withoutOut, _, err = prepareRemoteRunSendingData("", s3)
 	require.NoError(t, err)
 	require.True(t, withoutOut)
+}
+
+func TestGetScopeForRemoteRunEncodingDoesNotMutateOriginalScope(t *testing.T) {
+	root := dispatch.NewArgument()
+	child := value_scan.NewArgument()
+	root.AppendChild(child)
+	s := &Scope{RootOp: root}
+
+	encoded, withoutOutput := getScopeForRemoteRunEncoding(s)
+
+	require.False(t, withoutOutput)
+	require.Same(t, root, s.RootOp)
+	require.Equal(t, 1, s.RootOp.GetOperatorBase().NumChildren())
+	require.Same(t, child, s.RootOp.GetOperatorBase().GetChildren(0))
+	require.NotSame(t, s, encoded)
+	require.Same(t, child, encoded.RootOp)
+}
+
+func TestBuildRemoteDispatchReceiverRootDoesNotMutateOriginalChildren(t *testing.T) {
+	origin := dispatch.NewArgument()
+	originChild := value_scan.NewArgument()
+	fakeChild := value_scan.NewArgument()
+	origin.AppendChild(originChild)
+
+	cloned := buildRemoteDispatchReceiverRoot(origin, fakeChild)
+
+	require.NotSame(t, origin, cloned)
+	require.Equal(t, 1, origin.GetOperatorBase().NumChildren())
+	require.Same(t, originChild, origin.GetOperatorBase().GetChildren(0))
+	require.Equal(t, 1, cloned.GetOperatorBase().NumChildren())
+	require.Same(t, fakeChild, cloned.GetOperatorBase().GetChildren(0))
 }
 
 func Test_MessageSenderSendPipeline(t *testing.T) {
@@ -607,6 +813,137 @@ func Test_ReceiveMessageFromCnServer(t *testing.T) {
 	}
 }
 
+func TestReceiveMessageFromCnServerIfConnector_ReturnsOnBlockedReceiverCancel(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.BuildPipelineContext(context.Background())
+
+	s := &Scope{
+		Proc:   proc,
+		RootOp: connector.NewArgument(),
+	}
+	s.RootOp.(*connector.Connector).Reg = &process.WaitRegister{
+		Ch2: make(chan process.PipelineSignal, 1),
+	}
+	s.RootOp.(*connector.Connector).Reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, proc.Mp())
+
+	sender := &messageSenderOnClient{
+		ctx:       proc.Ctx,
+		mp:        proc.Mp(),
+		receiveCh: make(chan morpc.Message, 1),
+	}
+	sender.receiveCh <- makeRemoteBatchMessage(t, batch.NewWithSize(0))
+
+	done := make(chan error, 1)
+	go func() {
+		done <- receiveMessageFromCnServerIfConnector(s, sender)
+	}()
+
+	proc.Cancel(nil)
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+	case <-time.After(time.Second):
+		<-s.RootOp.(*connector.Connector).Reg.Ch2
+		require.Fail(t, "receiveMessageFromCnServerIfConnector did not unblock after cancellation")
+	}
+}
+
+func TestReceiveMsgAndForward_ReturnsOnBlockedReceiverCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	forwardCh := make(chan process.PipelineSignal, 1)
+	forwardCh <- process.NewPipelineSignalToDirectly(nil, nil, nil)
+
+	sender := &messageSenderOnClient{
+		ctx:       ctx,
+		mp:        mpool.MustNewZero(),
+		receiveCh: make(chan morpc.Message, 1),
+	}
+	sender.receiveCh <- makeRemoteBatchMessage(t, batch.NewWithSize(0))
+
+	done := make(chan error, 1)
+	go func() {
+		done <- receiveMsgAndForward(sender, forwardCh)
+	}()
+
+	cancel()
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+	case <-time.After(time.Second):
+		<-forwardCh
+		require.Fail(t, "receiveMsgAndForward did not unblock after cancellation")
+	}
+}
+
+func TestReceiveMessageFromCnServerIfDispatch_PreservesCleanupOnOriginalRoot(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	reg := &process.WaitRegister{Ch2: make(chan process.PipelineSignal, 2)}
+	d := dispatch.NewArgument()
+	d.LocalRegs = []*process.WaitRegister{reg}
+	d.FuncId = dispatch.SendToAllLocalFunc
+	s := &Scope{Proc: proc, RootOp: d}
+
+	sender := &messageSenderOnClient{
+		ctx:       context.Background(),
+		mp:        proc.Mp(),
+		receiveCh: make(chan morpc.Message, 2),
+	}
+	dataBat := batch.NewWithSize(0)
+	dataBat.SetRowCount(1)
+	sender.receiveCh <- makeRemoteBatchMessage(t, dataBat)
+	sender.receiveCh <- &pipeline.Message{Sid: pipeline.Status_MessageEnd}
+
+	err := receiveMessageFromCnServerIfDispatch(s, sender)
+	require.NoError(t, err)
+
+	ctrField := reflect.ValueOf(d).Elem().FieldByName("ctr")
+	require.False(t, ctrField.IsNil(), "receiveMessageFromCnServerIfDispatch should keep cleanup state on the original root")
+
+	select {
+	case signal := <-reg.Ch2:
+		bat, actionErr := signal.Action()
+		require.NoError(t, actionErr)
+		require.NotNil(t, bat)
+		require.Equal(t, 1, bat.RowCount())
+	case <-time.After(time.Second):
+		require.Fail(t, "dispatch runner did not send the data batch signal")
+	}
+
+	done := make(chan struct{}, 1)
+	go func() {
+		d.Reset(proc, false, nil)
+		done <- struct{}{}
+	}()
+
+	select {
+	case signal := <-reg.Ch2:
+		bat, actionErr := signal.Action()
+		require.NoError(t, actionErr)
+		require.Nil(t, bat)
+	case <-time.After(time.Second):
+		require.Fail(t, "original root cleanup did not send a terminal signal")
+	}
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.Fail(t, "original root cleanup did not finish after terminal signal consumption")
+	}
+
+	select {
+	case <-reg.Ch2:
+		require.Fail(t, "original root cleanup should not emit duplicate terminal signals")
+	default:
+	}
+}
+
 func Test_checkPipelineStandaloneExecutableAtRemote(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.Base.TxnOperator = fakeTxnOperator{}
@@ -704,4 +1041,96 @@ func Test_checkPipelineStandaloneExecutableAtRemote(t *testing.T) {
 
 		require.False(t, checkPipelineStandaloneExecutableAtRemote(s0))
 	}
+}
+
+// TestDeletionCanTruncateSerializationRoundtrip verifies that CanTruncate is
+// properly serialized and deserialized when Deletion operators are sent to remote CN.
+func TestDeletionCanTruncateSerializationRoundtrip(t *testing.T) {
+	// Create a Deletion operator with CanTruncate=true
+	arg := deletion.NewArgument()
+	arg.DeleteCtx = &deletion.DeleteCtx{
+		CanTruncate:     true,
+		RowIdIdx:        1,
+		PrimaryKeyIdx:   0,
+		AddAffectedRows: true,
+		Ref:             &plan.ObjectRef{SchemaName: "test", ObjName: "t1"},
+	}
+
+	// Create minimal context for serialization
+	ctx := &scopeContext{
+		id:       0,
+		plan:     &plan.Plan{},
+		scope:    &Scope{},
+		root:     &scopeContext{},
+		parent:   nil,
+		children: nil,
+		pipe:     nil,
+		regs:     make(map[*process.WaitRegister]int32),
+	}
+	ctx.root = ctx
+
+	// Serialize to pipeline instruction
+	_, in, err := convertToPipelineInstruction(arg, nil, ctx, 0)
+	require.NoError(t, err)
+	require.NotNil(t, in.Delete)
+	require.True(t, in.Delete.CanTruncate, "CanTruncate should be serialized")
+
+	// Deserialize back to operator
+	opr := &pipeline.Instruction{
+		Op:     int32(vm.Deletion),
+		Delete: in.Delete,
+	}
+	op, err := convertToVmOperator(opr, ctx, nil)
+	require.NoError(t, err)
+	require.NotNil(t, op)
+
+	restored := op.(*deletion.Deletion)
+	require.NotNil(t, restored.DeleteCtx)
+	require.True(t, restored.DeleteCtx.CanTruncate, "CanTruncate should be deserialized")
+	require.Equal(t, 1, restored.DeleteCtx.RowIdIdx)
+	require.Equal(t, 0, restored.DeleteCtx.PrimaryKeyIdx)
+	require.True(t, restored.DeleteCtx.AddAffectedRows)
+}
+
+// TestOnDuplicateKeyIsIgnoreSerializationRoundtrip verifies that IsIgnore is
+// properly serialized and deserialized when OnDuplicateKey operators are sent to remote CN.
+func TestOnDuplicateKeyIsIgnoreSerializationRoundtrip(t *testing.T) {
+	// Create an OnDuplicateKey operator with IsIgnore=true
+	arg := onduplicatekey.NewArgument()
+	arg.Attrs = []string{"col1", "col2"}
+	arg.InsertColCount = 2
+	arg.IsIgnore = true
+
+	// Create minimal context for serialization
+	ctx := &scopeContext{
+		id:       0,
+		plan:     &plan.Plan{},
+		scope:    &Scope{},
+		root:     &scopeContext{},
+		parent:   nil,
+		children: nil,
+		pipe:     nil,
+		regs:     make(map[*process.WaitRegister]int32),
+	}
+	ctx.root = ctx
+
+	// Serialize to pipeline instruction
+	_, in, err := convertToPipelineInstruction(arg, nil, ctx, 0)
+	require.NoError(t, err)
+	require.NotNil(t, in.OnDuplicateKey)
+	require.True(t, in.OnDuplicateKey.IsIgnore, "IsIgnore should be serialized")
+
+	// Deserialize back to operator
+	opr := &pipeline.Instruction{
+		Op:             int32(vm.OnDuplicateKey),
+		OnDuplicateKey: in.OnDuplicateKey,
+	}
+	op, err := convertToVmOperator(opr, ctx, nil)
+	require.NoError(t, err)
+	require.NotNil(t, op)
+
+	restored := op.(*onduplicatekey.OnDuplicatekey)
+	require.True(t, restored.IsIgnore, "IsIgnore should be deserialized")
+	require.Equal(t, []string{"col1", "col2"}, restored.Attrs)
+	require.Equal(t, int32(2), restored.InsertColCount)
 }

@@ -183,6 +183,9 @@ func (op *PartitionMultiUpdate) writeTable(
 			}
 
 			// mapping all main table and index table to partition's.
+			// Clone each context to avoid mutating shared plan objects
+			// that may be read concurrently by other operators.
+			cloned := make([]*MultiUpdateCtx, len(op.raw.MultiUpdateCtx))
 			for i, c := range op.raw.MultiUpdateCtx {
 				r := rel
 				if features.IsIndexTable(op.rawTableFlags[i]) {
@@ -197,9 +200,11 @@ func (op *PartitionMultiUpdate) writeTable(
 					}
 				}
 
-				c.ObjRef.ObjName = r.GetTableName()
-				c.TableDef = r.GetTableDef(proc.Ctx)
+				cloned[i] = c.clone()
+				cloned[i].ObjRef.ObjName = r.GetTableName()
+				cloned[i].TableDef = r.GetTableDef(proc.Ctx)
 			}
+			op.raw.MultiUpdateCtx = cloned
 			op.raw.resetMultiUpdateCtxs()
 			if err = op.raw.resetMultiSources(proc); err != nil {
 				return false
@@ -251,7 +256,6 @@ func (op *PartitionMultiUpdate) writeS3(
 		if err != nil {
 			return vm.CallResult{}, err
 		}
-		defer res.Close()
 		if res.Empty() {
 			panic("Prune result is empty")
 		}
@@ -307,6 +311,7 @@ func (op *PartitionMultiUpdate) writeS3(
 				return err == nil
 			},
 		)
+		res.Close()
 		if err != nil {
 			return vm.CallResult{}, err
 		}
@@ -423,7 +428,7 @@ func (ctx *MultiUpdateCtx) clone() *MultiUpdateCtx {
 	v := &MultiUpdateCtx{
 		InsertCols:    ctx.InsertCols,
 		DeleteCols:    ctx.DeleteCols,
-		PartitionCols: ctx.DeleteCols,
+		PartitionCols: ctx.PartitionCols,
 	}
 	objRef := *ctx.ObjRef
 	def := *ctx.TableDef

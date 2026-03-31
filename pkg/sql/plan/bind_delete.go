@@ -48,7 +48,8 @@ func canDeleteRewriteToTruncate(ctx CompilerContext, dmlCtx *DMLContext) (bool, 
 		if enabled && len(tableDef.RefChildTbls) > 0 ||
 			tableDef.ViewSql != nil ||
 			(dmlCtx.isClusterTable[i] && accountId != catalog.System_Account) ||
-			dmlCtx.objRefs[i].PubInfo != nil {
+			dmlCtx.objRefs[i].PubInfo != nil ||
+			tableDef.Partition != nil {
 			return false, nil
 		}
 	}

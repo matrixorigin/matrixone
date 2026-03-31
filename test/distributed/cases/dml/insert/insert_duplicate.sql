@@ -166,6 +166,98 @@ ON DUPLICATE KEY UPDATE value=value+VALUES(value);
 SELECT * FROM indup_04;
 EXECUTE check_idx;
 
+-- 测试 3.4: 多个唯一键命中同一旧行，应更新该行
+DROP TABLE IF EXISTS indup_04_multi_uk;
+CREATE TABLE indup_04_multi_uk(
+    a INT,
+    b INT,
+    c INT,
+    value INT,
+    UNIQUE KEY uk_b_3 (b),
+    UNIQUE KEY uk_c_3 (c)
+);
+
+-- @ignore:0
+-- @regex("On Duplicate Key", true)
+-- @regex("Join Type: LEFT", true)
+-- @regex("any_value", false)
+EXPLAIN INSERT INTO indup_04_multi_uk VALUES (99,10,20,999)
+ON DUPLICATE KEY UPDATE value = VALUES(value);
+
+INSERT INTO indup_04_multi_uk VALUES
+    (1,10,20,100),
+    (2,11,21,200);
+SELECT * FROM indup_04_multi_uk ORDER BY a;
+
+INSERT INTO indup_04_multi_uk VALUES (99,10,20,999)
+ON DUPLICATE KEY UPDATE value = VALUES(value);
+SELECT * FROM indup_04_multi_uk ORDER BY a;
+
+-- 测试 3.5: 多个唯一键命中不同旧行，应报错而不是任意挑一行更新
+-- @regex("Duplicate entry .* key .*", true)
+INSERT INTO indup_04_multi_uk VALUES (100,10,21,555)
+ON DUPLICATE KEY UPDATE value = VALUES(value);
+SELECT * FROM indup_04_multi_uk ORDER BY a;
+
+DROP TABLE indup_04_multi_uk;
+
+-- 测试 3.6: 复合多个唯一键命中同一旧行，应更新该行
+DROP TABLE IF EXISTS indup_04_multi_comp_uk;
+CREATE TABLE indup_04_multi_comp_uk(
+    a INT,
+    b INT,
+    c INT,
+    d INT,
+    e INT,
+    value INT,
+    UNIQUE KEY uk_bc_3 (b, c),
+    UNIQUE KEY uk_de_3 (d, e)
+);
+
+INSERT INTO indup_04_multi_comp_uk VALUES
+    (1,10,20,30,40,100),
+    (2,11,21,31,41,200);
+SELECT * FROM indup_04_multi_comp_uk ORDER BY a;
+
+INSERT INTO indup_04_multi_comp_uk VALUES (99,10,20,30,40,999)
+ON DUPLICATE KEY UPDATE value = VALUES(value);
+SELECT * FROM indup_04_multi_comp_uk ORDER BY a;
+
+-- 测试 3.7: 复合多个唯一键命中不同旧行，应报错而不是任意挑一行更新
+-- @regex("Duplicate entry .* key .*", true)
+INSERT INTO indup_04_multi_comp_uk VALUES (100,10,20,31,41,555)
+ON DUPLICATE KEY UPDATE value = VALUES(value);
+SELECT * FROM indup_04_multi_comp_uk ORDER BY a;
+
+DROP TABLE indup_04_multi_comp_uk;
+
+-- 测试 3.8: 多个唯一键含 NULL 时，不应将 NULL 误判为冲突
+DROP TABLE IF EXISTS indup_04_multi_uk_null;
+CREATE TABLE indup_04_multi_uk_null(
+    a INT,
+    b INT,
+    c INT,
+    value INT,
+    UNIQUE KEY uk_b_null_3 (b),
+    UNIQUE KEY uk_c_null_3 (c)
+);
+
+INSERT INTO indup_04_multi_uk_null VALUES
+    (1,NULL,10,100),
+    (2,20,NULL,200);
+SELECT * FROM indup_04_multi_uk_null ORDER BY a;
+
+INSERT INTO indup_04_multi_uk_null VALUES (3,NULL,NULL,300)
+ON DUPLICATE KEY UPDATE value = VALUES(value);
+SELECT * FROM indup_04_multi_uk_null ORDER BY a;
+
+-- 测试 3.9: 部分唯一键为 NULL 时，非 NULL 唯一键仍应命中对应旧行
+INSERT INTO indup_04_multi_uk_null VALUES (4,NULL,10,400)
+ON DUPLICATE KEY UPDATE value = VALUES(value);
+SELECT * FROM indup_04_multi_uk_null ORDER BY a;
+
+DROP TABLE indup_04_multi_uk_null;
+
 
 -- =====================================================
 -- 测试场景 4: 带普通索引（非唯一）的表

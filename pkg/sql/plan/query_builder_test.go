@@ -1048,8 +1048,81 @@ func TestQueryBuilder_appendAggNode(t *testing.T) {
 // TODO
 func TestQueryBuilder_appendTimeWindowNode(t *testing.T) {}
 
-// TODO
-func TestQueryBuilder_appendWindowNode(t *testing.T) {}
+func TestQueryBuilder_appendWindowNode(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	bindCtx := NewBindContext(builder, nil)
+	bindCtx.groupTag = builder.genNewBindTag()
+	bindCtx.aggregateTag = builder.genNewBindTag()
+	bindCtx.projectTag = builder.genNewBindTag()
+	bindCtx.windowTag = builder.genNewBindTag()
+	bindCtx.sampleTag = builder.genNewBindTag()
+
+	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a, lag(a) over (order by a) as prev_a from select_test.bind_select group by a having prev_a > 0", 1)
+	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
+
+	nodeID, selectList, _, notCacheable, _, havingBinder, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, true)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(boundHavingList))
+	require.Len(t, bindCtx.windows, 1)
+
+	preWindowHavingList, postWindowHavingList := splitWindowDependentHavingFilters(boundHavingList, bindCtx.windowTag)
+	require.Len(t, preWindowHavingList, 0)
+	require.Len(t, postWindowHavingList, 1)
+
+	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+	_, _, err = builder.bindProjection(bindCtx, projectionBinder, selectList, notCacheable)
+	require.NoError(t, err)
+	require.Len(t, bindCtx.windows, 1)
+
+	nodeID, err = builder.appendAggNode(bindCtx, nodeID, boundHavingList, false)
+	require.NoError(t, err)
+	require.Equal(t, plan.Node_AGG, builder.qry.Nodes[nodeID].NodeType)
+
+	nodeID, err = builder.appendWindowNode(bindCtx, nodeID, boundHavingList)
+	require.NoError(t, err)
+	require.Equal(t, plan.Node_FILTER, builder.qry.Nodes[nodeID].NodeType)
+	require.Len(t, builder.qry.Nodes[nodeID].FilterList, 1)
+	require.Equal(t, ">", builder.qry.Nodes[nodeID].FilterList[0].Expr.(*plan.Expr_F).F.Func.ObjName)
+	require.True(t, containsTag(builder.qry.Nodes[nodeID].FilterList[0], bindCtx.windowTag))
+
+	windowNodeFound := false
+	for _, node := range builder.qry.Nodes {
+		if node.NodeType == plan.Node_WINDOW {
+			windowNodeFound = true
+			break
+		}
+	}
+	require.True(t, windowNodeFound)
+}
+
+func TestSplitWindowDependentHavingFilters_WithSubqueryChild(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	bindCtx := NewBindContext(builder, nil)
+	bindCtx.groupTag = builder.genNewBindTag()
+	bindCtx.aggregateTag = builder.genNewBindTag()
+	bindCtx.projectTag = builder.genNewBindTag()
+	bindCtx.windowTag = builder.genNewBindTag()
+	bindCtx.sampleTag = builder.genNewBindTag()
+
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		"select a, lag(a) over (order by a) as prev_a from select_test.bind_select group by a having prev_a in (select 1)",
+		1,
+	)
+	require.NoError(t, err)
+
+	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
+	_, _, _, _, _, _, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, true)
+	require.NoError(t, err)
+	require.Len(t, boundHavingList, 1)
+	require.IsType(t, &plan.Expr_Sub{}, boundHavingList[0].Expr)
+	require.True(t, containsTag(boundHavingList[0], bindCtx.windowTag))
+
+	preWindowHavingList, postWindowHavingList := splitWindowDependentHavingFilters(boundHavingList, bindCtx.windowTag)
+	require.Len(t, preWindowHavingList, 0)
+	require.Len(t, postWindowHavingList, 1)
+}
 
 func TestQueryBuilder_appendProjectionNode(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
