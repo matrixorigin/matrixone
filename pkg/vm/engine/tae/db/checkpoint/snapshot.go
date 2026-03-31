@@ -142,10 +142,12 @@ func ListSnapshotCheckpoint(
 			metaFiles = append(metaFiles, meta)
 		}
 	}
-	return loadCheckpointMeta(
-		ctx, sid, getSnapshotMetaFiles(metaFiles, compactedFiles, &snapshot), fs,
+	selectedFiles := getSnapshotMetaFiles(metaFiles, compactedFiles, &snapshot)
+	entries, err := loadCheckpointMeta(
+		ctx, sid, selectedFiles, fs,
 		&snapshot,
 	)
+	return entries, err
 }
 
 func loadCheckpointMeta(
