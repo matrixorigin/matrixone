@@ -2011,12 +2011,14 @@ func getFkDeps(
 
 	bh.ClearExecResultSet()
 	if err = bh.Exec(newCtx, sql); err != nil {
-		// With lazy catalog the source account's catalog data may not be
-		// available (e.g. a dropped account whose data was compacted by a
-		// TN checkpoint).  Treat table-resolution errors as "no FK deps"
-		// so the restore can proceed without FK ordering.
+		// The source account's catalog data may not be fully available
+		// (e.g. a dropped account whose data was compacted, or a transient
+		// catalog-cache race where column definitions haven't been applied
+		// yet).  Treat table/column-resolution errors as "no FK deps" so
+		// the restore can proceed without FK ordering.
 		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
-			moerr.IsMoErrCode(err, moerr.ErrBadDB) {
+			moerr.IsMoErrCode(err, moerr.ErrBadDB) ||
+			moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
 			getLogger("").Warn(fmt.Sprintf("FK dep query failed (source catalog unavailable), proceeding without FK ordering: %v", err))
 			return make(map[string][]string), nil
 		}

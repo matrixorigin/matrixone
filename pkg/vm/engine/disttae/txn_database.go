@@ -681,21 +681,32 @@ func (db *txnDatabase) getTableItem(
 	}
 	var err error
 	c := engine.GetLatestCatalogCache()
-	if ok := c.GetTable(&item); !ok {
-		var tableitem *cache.TableItem
-		if !c.CanServe(types.TimestampToTS(db.op.SnapshotTS())) ||
-			!engine.pClient.CanServeAccount(accountID, db.op.SnapshotTS()) {
-			logutil.Info("FIND_TABLE loadTableFromStorage", zap.String("table", name), zap.Uint32("accountID", accountID), zap.String("txn", db.op.Txn().DebugString()), zap.String("cacheTS", c.GetStartTS().ToString()))
-			if tableitem, err = db.loadTableFromStorage(ctx, accountID, name); err != nil {
-				return nil, err
-			}
+	if ok := c.GetTable(&item); ok {
+		// Guard against a transient catalog-cache race where InsertTable
+		// has created the item but InsertColumns has not yet populated
+		// column definitions.  Fall through to loadTableFromStorage so
+		// callers never see a column-less table definition.
+		if item.Defs != nil {
+			return &item, nil
 		}
-		if tableitem == nil {
-			return nil, nil
-		}
-		return tableitem, nil
+		logutil.Warn("FIND_TABLE catalog-cache item has no column defs, falling through to storage",
+			zap.String("table", name),
+			zap.Uint32("accountID", accountID),
+			zap.Uint64("tableID", item.Id),
+		)
 	}
-	return &item, nil
+	var tableitem *cache.TableItem
+	if !c.CanServe(types.TimestampToTS(db.op.SnapshotTS())) ||
+		!engine.pClient.CanServeAccount(accountID, db.op.SnapshotTS()) {
+		logutil.Info("FIND_TABLE loadTableFromStorage", zap.String("table", name), zap.Uint32("accountID", accountID), zap.String("txn", db.op.Txn().DebugString()), zap.String("cacheTS", c.GetStartTS().ToString()))
+		if tableitem, err = db.loadTableFromStorage(ctx, accountID, name); err != nil {
+			return nil, err
+		}
+	}
+	if tableitem == nil {
+		return nil, nil
+	}
+	return tableitem, nil
 }
 
 // syncLogicalIdIndexInsert synchronizes the logical_id index table for INSERT/UPDATE operations
