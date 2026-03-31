@@ -49,8 +49,6 @@ const (
 	InsertWriteS3Threshold uint64 = 64 * mpool.MB
 	DeleteWriteS3Threshold uint64 = 64 * mpool.MB
 
-	TagS3SizeForMOLogger uint64 = 8 * mpool.MB
-
 	RowIDIdx = 0
 	PkIdx    = 1
 )
@@ -112,9 +110,8 @@ type s3WriterDelegate struct {
 	batchSize      uint64
 	flushThreshold uint64
 
-	checkSizeCols    []int
-	buf              bytes.Buffer
-	enforceFlushToS3 bool
+	checkSizeCols []int
+	buf           bytes.Buffer
 
 	memController struct {
 		grantedSize int64
@@ -144,7 +141,6 @@ func newS3Writer(
 		deleteBlockMap:      make([]map[types.Blockid]*deleteBlockData, tableCount),
 		insertFreeLists:     make([]*containers.BatchFreeList, tableCount),
 		isRemote:            update.IsRemote,
-		enforceFlushToS3:    update.delegated,
 	}
 	for i := range writer.insertFreeLists {
 		writer.insertFreeLists[i] = containers.NewBatchFreeList(nil, nil, true)
@@ -658,11 +654,12 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 	analyzer.AddFileServiceCacheInfo(counterSet)
 	analyzer.AddDiskIO(counterSet)
 
-	// Flush remaining deletes.
-	if writer.enforceFlushToS3 || writer.batchSize > TagS3SizeForMOLogger {
-		if err = writer.sortAndSync(proc, analyzer); err != nil {
-			return
-		}
+	// Flush remaining deletes — always call sortAndSync so that accumulated
+	// deleteBatches are processed through prepareDeleteBatches into
+	// deleteBlockMap / deleteBlockInfo. Without this, small delete batches
+	// (below TagS3SizeForMOLogger) would be silently lost.
+	if err = writer.sortAndSync(proc, analyzer); err != nil {
+		return
 	}
 
 	if writer.outputBat == nil {
