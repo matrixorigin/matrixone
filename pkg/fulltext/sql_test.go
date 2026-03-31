@@ -22,6 +22,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestEscape(t *testing.T) {
+	assert.Equal(t, `ma\'trix`, escape("ma'trix"))
+	assert.Equal(t, `back\\slash`, escape(`back\slash`))
+	assert.Equal(t, `back\\slash\'s`, escape(`back\slash's`))
+	assert.Equal(t, `normal`, escape("normal"))
+}
+
 func TestSqlPhraseBM25(t *testing.T) {
 	tests := []TestCase{
 		{

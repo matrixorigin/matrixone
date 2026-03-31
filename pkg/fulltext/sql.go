@@ -110,7 +110,8 @@ type SqlNode struct {
 }
 
 func escape(src string) string {
-	return strings.ReplaceAll(src, "'", `\'`)
+	s := strings.ReplaceAll(src, `\`, `\\`)
+	return strings.ReplaceAll(s, "'", `\'`)
 }
 
 func singleKeywordPattern(ps []*Pattern, mode int64) (*Pattern, bool) {
