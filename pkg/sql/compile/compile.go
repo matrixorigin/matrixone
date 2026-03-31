@@ -1029,22 +1029,17 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 			return nil, err
 		}
 
-		if len(node.RuntimeFilterProbeList) > 0 {
-			// RuntimeFilter present: keep current Filter + Projection operator chain.
-			// handleRuntimeFilters sets RuntimeFilterExprs on the Filter operator at execution time.
-			ss = c.compileProjection(node, c.compileRestrict(node, ss))
-		} else {
-			// No RuntimeFilter: embed static filters directly into TableScan.
-			// This keeps TableScan as RootOp so compileProjection can push ProjectList into it.
-			if len(node.FilterList) > 0 {
-				for i := range ss {
-					if ts, ok := ss[i].RootOp.(*table_scan.TableScan); ok {
-						ts.FilterExprs = plan2.DeepCopyExprList(node.FilterList)
-					}
+		// Embed all static filters directly into TableScan.
+		// handleRuntimeFilters will set TableScan.RuntimeFilterExprs at execution time (before Prepare).
+		// This keeps TableScan as RootOp so compileProjection can push ProjectList into it.
+		if len(node.FilterList) > 0 {
+			for i := range ss {
+				if ts, ok := ss[i].RootOp.(*table_scan.TableScan); ok {
+					ts.FilterExprs = plan2.DeepCopyExprList(node.FilterList)
 				}
 			}
-			ss = c.compileProjection(node, ss)
 		}
+		ss = c.compileProjection(node, ss)
 
 		if node.Offset != nil {
 			ss = c.compileOffset(node, ss)

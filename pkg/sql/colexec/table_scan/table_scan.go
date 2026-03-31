@@ -61,6 +61,24 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 		}
 	}
 
+	// runtime filters are set fresh by handleRuntimeFilters before each Prepare call
+	if len(tableScan.RuntimeFilterExprs) > 0 {
+		tableScan.ctr.runtimeFilterExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, tableScan.RuntimeFilterExprs)
+		if err != nil {
+			return
+		}
+	}
+
+	// build allFilterExecutors: runtime first (usually more selective), then static
+	if tableScan.ctr.allFilterExecutors == nil {
+		tableScan.ctr.allFilterExecutors = make([]colexec.ExpressionExecutor, 0,
+			len(tableScan.ctr.runtimeFilterExecutors)+len(tableScan.ctr.filterExecutors))
+	} else {
+		tableScan.ctr.allFilterExecutors = tableScan.ctr.allFilterExecutors[:0]
+	}
+	tableScan.ctr.allFilterExecutors = append(tableScan.ctr.allFilterExecutors, tableScan.ctr.runtimeFilterExecutors...)
+	tableScan.ctr.allFilterExecutors = append(tableScan.ctr.allFilterExecutors, tableScan.ctr.filterExecutors...)
+
 	err = tableScan.PrepareProjection(proc)
 	if tableScan.ctr.buf == nil {
 		tableScan.ctr.buf = batch.NewOffHeapWithSize(len(tableScan.Types))
@@ -169,7 +187,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		tableScan.ctr.maxAllocSize = max(tableScan.ctr.maxAllocSize, batSize)
 
 		// inline filter evaluation: filter rows before returning to caller
-		if len(tableScan.ctr.filterExecutors) > 0 {
+		if len(tableScan.ctr.allFilterExecutors) > 0 {
 			if err = tableScan.evalFilter(proc); err != nil {
 				e = err
 				return vm.CancelResult, err
@@ -195,12 +213,12 @@ func (tableScan *TableScan) evalFilter(proc *process.Process) error {
 	analyzer := tableScan.OpAnalyzer
 	var sels []int64
 
-	for i := range tableScan.ctr.filterExecutors {
+	for i := range tableScan.ctr.allFilterExecutors {
 		if bat.IsEmpty() {
 			break
 		}
 
-		vec, err := tableScan.ctr.filterExecutors[i].Eval(proc, []*batch.Batch{bat}, nil)
+		vec, err := tableScan.ctr.allFilterExecutors[i].Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
 			return err
 		}

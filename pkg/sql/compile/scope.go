@@ -706,16 +706,18 @@ func (s *Scope) handleRuntimeFilters(c *Compile, runtimeInExprList []*plan.Expr)
 
 	// reset filter
 	if len(nonPkFilters) > 0 {
-		// put expr in filter instruction
-		op := vm.GetLeafOp(s.RootOp)
-		if _, ok := op.(*table_scan.TableScan); ok {
-			op = vm.GetLeafOpParent(nil, s.RootOp)
+		// Phase 2: if the leaf op is TableScan (inline filter path), set RuntimeFilterExprs directly.
+		// Otherwise fall back to the legacy Filter operator path.
+		leafOp := vm.GetLeafOp(s.RootOp)
+		if ts, ok := leafOp.(*table_scan.TableScan); ok {
+			ts.RuntimeFilterExprs = nonPkFilters
+		} else {
+			arg, ok := leafOp.(*filter.Filter)
+			if !ok {
+				panic("missing instruction for runtime filter!")
+			}
+			arg.RuntimeFilterExprs = nonPkFilters
 		}
-		arg, ok := op.(*filter.Filter)
-		if !ok {
-			panic("missing instruction for runtime filter!")
-		}
-		arg.RuntimeFilterExprs = nonPkFilters
 	}
 
 	// reset datasource

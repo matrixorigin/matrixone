@@ -217,8 +217,8 @@ func TestInlineFilter(t *testing.T) {
 					return true, nil // end of data
 				}
 				for i := 0; i < 10; i++ {
-					require.NoError(t, vector.AppendFixed(bat.GetVector(0), int32(i+1), false, m))     // a: 1..10
-					require.NoError(t, vector.AppendFixed(bat.GetVector(1), int32((i+1)*5), false, m))  // b: 5,10,..,50
+					require.NoError(t, vector.AppendFixed(bat.GetVector(0), int32(i+1), false, m))       // a: 1..10
+					require.NoError(t, vector.AppendFixed(bat.GetVector(1), int32((i+1)*5), false, m))   // b: 5,10,..,50
 					require.NoError(t, vector.AppendFixed(bat.GetVector(2), int32((i+1)*100), false, m)) // c: 100..1000
 				}
 				bat.SetRowCount(10)
@@ -370,6 +370,119 @@ func TestInlineFilter(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, res.Batch)
 		require.Equal(t, 6, res.Batch.RowCount())
+		require.Equal(t, 2, len(res.Batch.Vecs))
+
+		arg.Free(proc, false, nil)
+		proc.Free()
+		require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+	})
+
+	// makeConstBool creates a const bool literal expression (evaluates to a const vector)
+	makeConstBool := func(v bool) *pbplan.Expr {
+		return &pbplan.Expr{
+			Typ: pbplan.Type{Id: int32(types.T_bool), NotNullable: true},
+			Expr: &pbplan.Expr_Lit{Lit: &pbplan.Literal{
+				Isnull: false,
+				Value:  &pbplan.Literal_Bval{Bval: v},
+			}},
+		}
+	}
+
+	t.Run("const false filter eliminates all rows via SetRowCount", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		proc := newTestProc(ctrl)
+
+		// Const-false filter: triggers the vec.IsConst() path in evalFilter → SetRowCount(0)
+		arg := &TableScan{
+			Reader:      getFilterTestReader(ctrl, proc.Mp()),
+			Attrs:       scanAttrs,
+			Types:       scanTypes,
+			FilterExprs: []*pbplan.Expr{makeConstBool(false)},
+		}
+		arg.ProjectList = projectList
+
+		require.NoError(t, arg.Prepare(proc))
+		res, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		// const-false: all rows eliminated → continues to next block → reader ends → nil batch
+		require.Nil(t, res.Batch)
+
+		arg.Free(proc, false, nil)
+		proc.Free()
+		require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+	})
+
+	t.Run("runtime filter exprs lifecycle: prepare, reset, re-prepare", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		proc := newTestProc(ctrl)
+
+		// RuntimeFilterExprs: col_b > 20 (set as runtime filter, not static)
+		runtimeFilter := makeGtFilter(1, "col_b", 20)
+		arg := &TableScan{
+			Reader:             getFilterTestReader(ctrl, proc.Mp()),
+			Attrs:              scanAttrs,
+			Types:              scanTypes,
+			RuntimeFilterExprs: []*pbplan.Expr{runtimeFilter},
+		}
+		arg.ProjectList = projectList
+
+		require.NoError(t, arg.Prepare(proc))
+		// After Prepare: runtimeFilterExecutors and allFilterExecutors should be built
+		require.Equal(t, 1, len(arg.ctr.runtimeFilterExecutors))
+		require.Equal(t, 1, len(arg.ctr.allFilterExecutors))
+
+		res, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.NotNil(t, res.Batch)
+		require.Equal(t, 6, res.Batch.RowCount()) // b > 20 → 6 rows
+
+		// Reset: runtimeFilterExecutors freed, allFilterExecutors nil'd
+		arg.Reset(proc, false, nil)
+		require.Nil(t, arg.ctr.runtimeFilterExecutors)
+		require.Nil(t, arg.ctr.allFilterExecutors)
+		require.Nil(t, arg.RuntimeFilterExprs)
+
+		// Re-prepare with new runtime filter (col_b > 40 → 2 rows: b=45,50)
+		arg.Reader = getFilterTestReader(ctrl, proc.Mp())
+		arg.RuntimeFilterExprs = []*pbplan.Expr{makeGtFilter(1, "col_b", 40)}
+		require.NoError(t, arg.Prepare(proc))
+		res, err = vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.NotNil(t, res.Batch)
+		require.Equal(t, 2, res.Batch.RowCount())
+
+		arg.Free(proc, false, nil)
+		proc.Free()
+		require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+	})
+
+	t.Run("static and runtime filters combined via allFilterExecutors", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		proc := newTestProc(ctrl)
+
+		// Static: col_b > 20 (6 rows pass); Runtime: col_b > 40 (2 rows pass)
+		// Combined: rows where col_b > 40 (runtime applied first in allFilterExecutors)
+		arg := &TableScan{
+			Reader:             getFilterTestReader(ctrl, proc.Mp()),
+			Attrs:              scanAttrs,
+			Types:              scanTypes,
+			FilterExprs:        []*pbplan.Expr{makeGtFilter(1, "col_b", 20)},
+			RuntimeFilterExprs: []*pbplan.Expr{makeGtFilter(1, "col_b", 40)},
+		}
+		arg.ProjectList = projectList
+
+		require.NoError(t, arg.Prepare(proc))
+		// allFilterExecutors = runtime (1) + static (1) = 2 total
+		require.Equal(t, 2, len(arg.ctr.allFilterExecutors))
+
+		res, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.NotNil(t, res.Batch)
+		// b > 40: rows b=45(row 9), b=50(row 10) → 2 rows
+		require.Equal(t, 2, res.Batch.RowCount())
 		require.Equal(t, 2, len(res.Batch.Vecs))
 
 		arg.Free(proc, false, nil)

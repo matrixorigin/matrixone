@@ -30,11 +30,13 @@ import (
 var _ vm.Operator = new(TableScan)
 
 type container struct {
-	maxAllocSize    int
-	buf             *batch.Batch
-	msgReceiver     *message.MessageReceiver
-	filterExecutors []colexec.ExpressionExecutor
-	filterBs        vector.FunctionParameterWrapper[bool]
+	maxAllocSize           int
+	buf                    *batch.Batch
+	msgReceiver            *message.MessageReceiver
+	filterExecutors        []colexec.ExpressionExecutor
+	runtimeFilterExecutors []colexec.ExpressionExecutor
+	allFilterExecutors     []colexec.ExpressionExecutor // runtime + static; elements owned by above slices
+	filterBs               vector.FunctionParameterWrapper[bool]
 }
 
 type TableScan struct {
@@ -42,10 +44,11 @@ type TableScan struct {
 	TopValueMsgTag int32
 	Reader         engine.Reader
 	// letter case: origin
-	Attrs       []string
-	Types       []plan.Type
-	TableID     uint64
-	FilterExprs []*plan.Expr // inline filter expressions (from plan.Node.FilterList)
+	Attrs              []string
+	Types              []plan.Type
+	TableID            uint64
+	FilterExprs        []*plan.Expr // static inline filters (from plan.Node.FilterList, set at compile time)
+	RuntimeFilterExprs []*plan.Expr // runtime inline filters (set by handleRuntimeFilters before Prepare)
 
 	vm.OperatorBase
 	colexec.Projection
@@ -99,6 +102,15 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 			tableScan.ctr.filterExecutors[i].ResetForNextQuery()
 		}
 	}
+	// runtime filter executors are recreated each query; free and clear them
+	for i := range tableScan.ctr.runtimeFilterExecutors {
+		if tableScan.ctr.runtimeFilterExecutors[i] != nil {
+			tableScan.ctr.runtimeFilterExecutors[i].Free()
+		}
+	}
+	tableScan.ctr.runtimeFilterExecutors = nil
+	tableScan.ctr.allFilterExecutors = nil
+	tableScan.RuntimeFilterExprs = nil
 	tableScan.ctr.maxAllocSize = 0
 	if tableScan.OpAnalyzer != nil {
 		tableScan.OpAnalyzer.Alloc(allocSize)
@@ -122,6 +134,14 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 		}
 	}
 	tableScan.ctr.filterExecutors = nil
+
+	for i := range tableScan.ctr.runtimeFilterExecutors {
+		if tableScan.ctr.runtimeFilterExecutors[i] != nil {
+			tableScan.ctr.runtimeFilterExecutors[i].Free()
+		}
+	}
+	tableScan.ctr.runtimeFilterExecutors = nil
+	tableScan.ctr.allFilterExecutors = nil
 }
 
 func (tableScan *TableScan) closeReader() {
