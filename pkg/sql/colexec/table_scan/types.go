@@ -17,6 +17,7 @@ package table_scan
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -29,18 +30,22 @@ import (
 var _ vm.Operator = new(TableScan)
 
 type container struct {
-	maxAllocSize int
-	buf          *batch.Batch
-	msgReceiver  *message.MessageReceiver
+	maxAllocSize    int
+	buf             *batch.Batch
+	msgReceiver     *message.MessageReceiver
+	filterExecutors []colexec.ExpressionExecutor
+	filterBs        vector.FunctionParameterWrapper[bool]
 }
+
 type TableScan struct {
 	ctr            container
 	TopValueMsgTag int32
 	Reader         engine.Reader
 	// letter case: origin
-	Attrs   []string
-	Types   []plan.Type
-	TableID uint64
+	Attrs       []string
+	Types       []plan.Type
+	TableID     uint64
+	FilterExprs []*plan.Expr // inline filter expressions (from plan.Node.FilterList)
 
 	vm.OperatorBase
 	colexec.Projection
@@ -89,6 +94,11 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 		allocSize += tableScan.ProjectAllocSize
 		tableScan.ResetProjection(proc)
 	}
+	for i := range tableScan.ctr.filterExecutors {
+		if tableScan.ctr.filterExecutors[i] != nil {
+			tableScan.ctr.filterExecutors[i].ResetForNextQuery()
+		}
+	}
 	tableScan.ctr.maxAllocSize = 0
 	if tableScan.OpAnalyzer != nil {
 		tableScan.OpAnalyzer.Alloc(allocSize)
@@ -105,6 +115,13 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 	if tableScan.ProjectList != nil {
 		tableScan.FreeProjection(proc)
 	}
+
+	for i := range tableScan.ctr.filterExecutors {
+		if tableScan.ctr.filterExecutors[i] != nil {
+			tableScan.ctr.filterExecutors[i].Free()
+		}
+	}
+	tableScan.ctr.filterExecutors = nil
 }
 
 func (tableScan *TableScan) closeReader() {

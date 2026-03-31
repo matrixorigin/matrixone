@@ -504,6 +504,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		t := sourceOp.(*table_scan.TableScan)
 		op := table_scan.NewArgument().WithTypes(t.Types)
 		op.ProjectList = t.ProjectList
+		op.FilterExprs = t.FilterExprs
 		op.SetInfo(&info)
 		return op
 	case vm.ValueScan:
