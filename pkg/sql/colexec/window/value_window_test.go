@@ -216,7 +216,8 @@ func TestProcessValueFunc_NthValueWithN(t *testing.T) {
 	spec := makeNthValueWindowSpec()
 
 	ctr := &container{bat: bat}
-	nVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(3), 1, mp)
+	nVec, err := vector.NewConstFixed(types.T_int64.ToType(), int64(3), 1, mp)
+	require.NoError(t, err)
 	ctr.aggVecs = make([]group.ExprEvalVector, 1)
 	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], nVec}
 

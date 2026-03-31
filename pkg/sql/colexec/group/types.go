@@ -173,9 +173,13 @@ func (ctr *container) memUsed() int64 {
 		sz += ctr.hr.Hash.Size()
 	}
 	for _, bat := range ctr.result1.ToPopped {
-		sz += int64(bat.Allocated())
+		if bat != nil {
+			sz += int64(bat.Allocated())
+		}
 	}
-	sz += int64(ctr.result1.Popped.Allocated())
+	if ctr.result1.Popped != nil {
+		sz += int64(ctr.result1.Popped.Allocated())
+	}
 	return sz
 }
 
