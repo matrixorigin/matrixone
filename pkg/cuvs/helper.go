@@ -173,12 +173,20 @@ type VectorType interface {
 	float32 | Float16 | int8 | uint8
 }
 
-// GpuIndex is an interface for all GPU-accelerated indexes.
-type GpuIndex interface {
+// GpuIndexBase is an interface for all GPU-accelerated indexes.
+type GpuIndexBase interface {
 	Start() error
 	Build() error
 	Destroy() error
 	Info() (string, error)
+}
+
+// GpuIndex is a generic interface for all GPU-accelerated indexes that support async search.
+type GpuIndex[T VectorType] interface {
+	SearchAsync(queries []T, numQueries uint64, dimension uint32, limit uint32) (uint64, error)
+	SearchFloat32Async(queries []float32, numQueries uint64, dimension uint32, limit uint32) (uint64, error)
+	SearchWait(jobID uint64, numQueries uint64, limit uint32) ([]int64, []float32, error)
+	Destroy() error
 }
 
 // GetQuantization returns the Quantization enum for a given VectorType.

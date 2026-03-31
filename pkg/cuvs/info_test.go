@@ -91,7 +91,7 @@ func TestIndexInfoComprehensive(t *testing.T) {
 		}
 		name := fmt.Sprintf("%s/%s/%s", indexType, modeName, dataType)
 		t.Run(name, func(t *testing.T) {
-			var index GpuIndex
+			var index GpuIndexBase
 			var err error
 			var elemSize int
 

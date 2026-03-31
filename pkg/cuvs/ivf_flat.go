@@ -676,7 +676,12 @@ func (gi *GpuIvfFlat[T]) SearchFloat(queries []float32, numQueries uint64, dimen
 }
 
 // SearchAsync performs a K-Nearest Neighbor search asynchronously.
-func (gi *GpuIvfFlat[T]) SearchAsync(queries []T, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams) (uint64, error) {
+func (gi *GpuIvfFlat[T]) SearchAsync(queries []T, numQueries uint64, dimension uint32, limit uint32) (uint64, error) {
+	return gi.SearchAsyncWithParams(queries, numQueries, dimension, limit, DefaultIvfFlatSearchParams())
+}
+
+// SearchAsyncWithParams performs a K-Nearest Neighbor search asynchronously with custom parameters.
+func (gi *GpuIvfFlat[T]) SearchAsyncWithParams(queries []T, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams) (uint64, error) {
 	if gi.cIvfFlat == nil {
 		return 0, moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
@@ -710,7 +715,12 @@ func (gi *GpuIvfFlat[T]) SearchAsync(queries []T, numQueries uint64, dimension u
 }
 
 // SearchFloat32Async performs a K-Nearest Neighbor search with float32 queries asynchronously.
-func (gi *GpuIvfFlat[T]) SearchFloat32Async(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams) (uint64, error) {
+func (gi *GpuIvfFlat[T]) SearchFloat32Async(queries []float32, numQueries uint64, dimension uint32, limit uint32) (uint64, error) {
+	return gi.SearchFloat32AsyncWithParams(queries, numQueries, dimension, limit, DefaultIvfFlatSearchParams())
+}
+
+// SearchFloat32AsyncWithParams performs a K-Nearest Neighbor search with float32 queries asynchronously with custom parameters.
+func (gi *GpuIvfFlat[T]) SearchFloat32AsyncWithParams(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams) (uint64, error) {
 	if gi.cIvfFlat == nil {
 		return 0, moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
@@ -744,9 +754,9 @@ func (gi *GpuIvfFlat[T]) SearchFloat32Async(queries []float32, numQueries uint64
 }
 
 // SearchWait waits for an asynchronous search to complete and returns the results.
-func (gi *GpuIvfFlat[T]) SearchWait(jobID uint64, numQueries uint64, limit uint32) (SearchResultIvfFlat, error) {
+func (gi *GpuIvfFlat[T]) SearchWait(jobID uint64, numQueries uint64, limit uint32) ([]int64, []float32, error) {
 	if gi.cIvfFlat == nil {
-		return SearchResultIvfFlat{}, moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
+		return nil, nil, moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
 
 	var errmsg *C.char
@@ -755,11 +765,11 @@ func (gi *GpuIvfFlat[T]) SearchWait(jobID uint64, numQueries uint64, limit uint3
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))
-		return SearchResultIvfFlat{}, moerr.NewInternalErrorNoCtx(errStr)
+		return nil, nil, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
 	if res.result_ptr == nil {
-		return SearchResultIvfFlat{}, moerr.NewInternalErrorNoCtx("search_wait returned nil result")
+		return nil, nil, moerr.NewInternalErrorNoCtx("search_wait returned nil result")
 	}
 
 	totalElements := uint64(numQueries) * uint64(limit)
@@ -773,10 +783,7 @@ func (gi *GpuIvfFlat[T]) SearchWait(jobID uint64, numQueries uint64, limit uint3
 
 	C.gpu_ivf_flat_free_result(res.result_ptr)
 
-	return SearchResultIvfFlat{
-		Neighbors: neighbors,
-		Distances: distances,
-	}, nil
+	return neighbors, distances, nil
 }
 
 // Cap returns the capacity of the index buffer
