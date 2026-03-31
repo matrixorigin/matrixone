@@ -2949,6 +2949,13 @@ func writeTransferMapsToS3(ctx context.Context, taskHost *cnMergeTask) (err erro
 		buffer.Vecs[i] = vec
 		releases[i] = release
 	}
+	defer func() {
+		for _, rel := range releases {
+			if rel != nil {
+				rel()
+			}
+		}
+	}()
 	objRowCnt := 0
 	for blkIdx := 0; blkIdx < nblks; blkIdx++ {
 		transMap := tt.GetBlockMap(blkIdx)
@@ -2960,16 +2967,16 @@ func writeTransferMapsToS3(ctx context.Context, taskHost *cnMergeTask) (err erro
 				return err
 			}
 			if err = vector.AppendFixed(buffer.Vecs[1], uint32(rowIdx), false, taskHost.GetMPool()); err != nil {
-				return nil
+				return err
 			}
 			if err = vector.AppendFixed(buffer.Vecs[2], destPos.ObjIdx, false, taskHost.GetMPool()); err != nil {
-				return nil
+				return err
 			}
 			if err = vector.AppendFixed(buffer.Vecs[3], destPos.BlkIdx, false, taskHost.GetMPool()); err != nil {
-				return nil
+				return err
 			}
 			if err = vector.AppendFixed(buffer.Vecs[4], destPos.RowIdx, false, taskHost.GetMPool()); err != nil {
-				return nil
+				return err
 			}
 
 			buffer.SetRowCount(buffer.RowCount() + 1)

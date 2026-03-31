@@ -197,6 +197,12 @@ func (node *persistedNode) Scan(
 		if tidvec != nil {
 			tidvec.Close()
 		}
+		// In zero-copy mode (needCopy=false), release frees the IOVector backing.
+		// Data has been Extend()ed (copied) into the existing batch, so the
+		// IOVector is no longer needed.  In copy mode release is nil.
+		if release != nil {
+			release()
+		}
 	}
 	return
 }
