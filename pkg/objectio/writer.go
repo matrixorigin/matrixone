@@ -91,6 +91,7 @@ func (a *WriteArena) Reset() {
 			newCap = limit
 		}
 		arenaMPool.Free(a.data)
+		a.data = nil // nil immediately so a panic in Alloc doesn't leave a dangling pointer
 		var err error
 		a.data, err = arenaMPool.Alloc(newCap, true)
 		if err != nil {
@@ -123,6 +124,7 @@ func (a *WriteArena) CompressBuf(minSize int) []byte {
 	if len(a.compressBuf) < minSize {
 		if a.compressBuf != nil {
 			arenaMPool.Free(a.compressBuf)
+			a.compressBuf = nil // nil immediately so a panic in Alloc doesn't leave a dangling pointer
 		}
 		var err error
 		a.compressBuf, err = arenaMPool.Alloc(arenaNextPow2(minSize), true)
