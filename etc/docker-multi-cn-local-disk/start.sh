@@ -190,6 +190,9 @@ fi
 export DOCKER_UID=$(id -u)
 export DOCKER_GID=$(id -g)
 
+# Auto-detect repo root (two levels up from this script's directory)
+export MO_REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
 # Set image name based on version
 if [ "$IMAGE_VERSION" = "local" ]; then
     export IMAGE_NAME="matrixorigin/matrixone:local"
