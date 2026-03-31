@@ -1649,4 +1649,19 @@ insert into test_pr_binary values (1, 'abc'), (2, 'def'), (3, 'xyz');
 select id, percent_rank() over (order by val) as pct_rank from test_pr_binary order by val;
 drop table test_pr_binary;
 
+-- WIN_ORDER functions with varchar ORDER BY should succeed
+drop table if exists t_win_varchar;
+create table t_win_varchar (id int, name varchar(20), score int);
+insert into t_win_varchar values(1, 'Alice', 90), (2, 'Bob', 85), (3, 'Charlie', 90), (4, 'David', 75), (5, 'Eve', 85);
+select id, name, row_number() over (order by name) from t_win_varchar;
+select id, name, rank() over (order by name) from t_win_varchar;
+select id, name, dense_rank() over (order by name) from t_win_varchar;
+select id, name, rank() over (partition by score order by name) from t_win_varchar;
+
+-- aggregate window function + varchar ORDER BY should error (RANGE frame)
+select sum(score) over (order by name) from t_win_varchar;
+select avg(score) over (order by name range between unbounded preceding and current row) from t_win_varchar;
+
+drop table t_win_varchar;
+
 drop database test;
