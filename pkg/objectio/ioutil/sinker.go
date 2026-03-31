@@ -155,6 +155,10 @@ func (s *FSinkerImpl) Close() error {
 		s.arena.Reset()
 		objectio.PutArena(s.arena)
 		s.arena = nil
+		// Debounce the idle-drain timer so pools stay warm during
+		// active CN pipeline execution.  When CN (and TN) are both
+		// idle for arenaDrainDelay the pools will drain automatically.
+		objectio.ScheduleArenaDrain()
 	}
 	return nil
 }
