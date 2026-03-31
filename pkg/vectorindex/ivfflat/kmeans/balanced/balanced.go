@@ -192,8 +192,8 @@ func validateArgs[T types.RealNumbers](vectorList [][]T, clusterCnt,
 		logutil.Errorf("kmeans validateArgs error: %v", err)
 		return err
 	}
-	if maxIterations < 0 {
-		err := moerr.NewInternalErrorNoCtxf("max iteration is out of bounds (must be >= 0)")
+	if maxIterations <= 0 {
+		err := moerr.NewInternalErrorNoCtxf("max iteration is out of bounds (must be > 0)")
 		logutil.Errorf("kmeans validateArgs error: %v", err)
 		return err
 	}
@@ -304,7 +304,7 @@ func (km *BalancedKMeans[T]) bisectBalanced(
 	// Random initial centers for the bisection
 	idx1 := rnd.IntN(n)
 	idx2 := rnd.IntN(n)
-	for idx1 == idx2 && n > 1 {
+	for retries := 0; idx1 == idx2 && n > 1 && retries < 32; retries++ {
 		idx2 = rnd.IntN(n)
 	}
 	copy(c1, km.vectorList[indices[idx1]])

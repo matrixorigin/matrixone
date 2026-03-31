@@ -226,5 +226,6 @@ func BenchmarkBalancedKMeans(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		km, _ := NewKMeans(vectors, k, 15, 0.01, metric.Metric_L2Distance, kmeans.Random, false, 8)
 		_, _ = km.Cluster(ctx)
+		_ = km.Close()
 	}
 }
