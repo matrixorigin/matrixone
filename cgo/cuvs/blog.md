@@ -34,55 +34,10 @@ Instead of launching a new CUDA kernel for every incoming request, our worker im
 We leverage the **RAFT** library to manage long-lived `raft::resources`. By caching CUDA streams and handles within persistent C++ threads, we ensure that our Go-based kernel can interact with the GPU with near-zero resource initialization overhead.
 
 ## Step 4: Staying Within 64GB with Auto-Quantization
-50 million 1024D vectors in `float32` require roughly 200GB of space—far exceeding our 64GB RAM limit. To solve this, we implemented **Automatic Type Quantization** directly on the GPU.
+50 million 1024D vectors in `float32` require roughly 200GB of space—far exceeding our 64GB RAM limit. To solve this, we implemented **Automatic Type Quantization** directly on the GPU with the cuVS quantization library.
 *   **FP16 (Half Precision)**: Reduces memory by 2x with almost zero recall loss.
 *   **8-Bit Integer (int8/uint8)**: Uses a learned Scalar Quantizer to compress vectors by 4x.
 *   Because conversion happens on the GPU, we avoid taxing the CPU and minimize PCIe bus traffic.
-
-## Step 5: Overlapping Disk IO with GPU Distance Computation During Search
-
-IVF-Flat search has a structure that most people overlook as an optimization opportunity:
-
-1. **Centroid probing** — find the `n_probes` nearest centroids to the query (fast, done on GPU).
-2. **Data block loading** — for each chosen centroid, load its inverted list (the raw vectors stored in that cluster) from disk.
-3. **Brute-force re-ranking** — compute exact distances between the query and every vector in those lists to find the true nearest neighbors.
-
-In a naive implementation, these three steps run strictly in sequence. Step 2 is the bottleneck: the GPU sits idle while the database reads multiple data blocks off NVMe or spinning disk, one centroid at a time.
-
-### The Overlap Opportunity
-
-Because we have `n_probes` centroid lists to process, we can pipeline IO and GPU computation:
-
-```
-Iteration i:   load list[i+1] from disk  ──────────────────────────┐
-               pairwise_distance_async(query, list[i]) → d_ptr      │ GPU working
-               ... GPU computing distances for list[i] ...           │
-               sync_stream()        ← wait only here                │
-               merge top-k results                                   │
-               cudaFreeAsync(d_ptr, stream)    ◄────────────────────┘
-               → next iteration uses list[i+1] already in memory
-```
-
-While the GPU computes exact distances for centroid list `i`, the host thread is already reading centroid list `i+1` from disk into a host buffer. By the time `sync_stream()` returns, the next block is ready to upload. The GPU and disk are never idle waiting on each other.
-
-### The 8,192-Vector Challenge: Saturating the GPU
-
-In the MatrixOne storage engine, data is typically managed in blocks of **8,192 vectors**. For a modern GPU, a single 8,192-row distance computation is a very "short" task—it might finish in mere microseconds. If we were to process these blocks one-by-one synchronously, the **kernel launch overhead** and **host-device synchronization stalls** would dominate the execution time, leaving the GPU vastly underutilized.
-
-Our pipelined approach turns this granularity into an advantage. By keeping multiple 8,192-vector blocks "in flight" (one being read from disk by the CPU while another is being computed by the GPU), we effectively hide the launch overhead. The GPU's streaming multiprocessors (SMs) stay saturated because there is always a new batch of work ready the moment the previous one completes.
-
-### Why `pairwise_distance_async` Makes This Possible
-
-We expose two variants:
-
-- `pairwise_distance<T>()` — fully synchronous. Uploads, computes, syncs, and frees before returning. Simple but forces serial IO→GPU→IO→GPU sequencing.
-- `pairwise_distance_async<T>()` — launches all GPU work on the CUDA stream and returns immediately with the raw device pointer. The caller drives `sync_stream()` and `cudaFreeAsync()` when it chooses.
-
-The async variant hands control back to the host thread the moment the GPU kernel is queued, giving that thread a full window to issue the next disk read while the GPU is busy. `cudaFreeAsync` is similarly non-blocking—it schedules the device memory release to happen after all in-flight GPU work on the stream completes, so there is no stall on the host side between iterations.
-
-The internal allocation is a single `cudaMallocAsync` covering `[X | Y | distance_matrix]` as one contiguous block, keeping per-iteration allocator overhead minimal even across hundreds of probed lists.
-
-*   **Result**: For queries probing 20–50 centroid lists on a dataset stored on NVMe, overlapping IO and GPU computation cuts per-query latency roughly in half compared to the synchronous approach, with no additional threads required.
 
 ## Summary of Supported Indexes
 Our architecture now supports a suite of high-performance indexes:
