@@ -58,9 +58,7 @@ Scope 1 (Magic: Remote, mcpu: 1, Receiver: [])  𝄀
   DataSource: db1.emp[empno ename job sal]  𝄀
   Pipeline: └── output  𝄀
                 └── projection  𝄀
-                    └── projection  𝄀
-                        └── filter  𝄀
-                            └── tablescan
+                    └── tablescan
 explain phyplan verbose select a.ename,b.dname from emp a left join dept b on a.deptno = b.deptno;
 -- @regex("(?s)MemoryUsage.*CPU", true)
 -- @regex("(?s)hash join\(idx:(\d+).*hash build\(idx:\1", true)
