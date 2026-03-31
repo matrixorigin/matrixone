@@ -627,6 +627,63 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		tblStuff.retPool.releaseRetBatch(dBat, false)
 	})
 
+	t.Run("recoverable sql error returns fallback error when reader probe fails", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		rangeRel := mock_frontend.NewMockRelation(ctrl)
+		rangeRel.EXPECT().Ranges(gomock.Any(), gomock.Any()).
+			Return(readutil.NewBlockListRelationData(0), nil).
+			Times(1)
+		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(781)).
+			Return("db1", "lca_tbl", rangeRel, nil).
+			Times(1)
+
+		ses.txnHandler = &TxnHandler{
+			storage: eng,
+			txnOp:   txnOp,
+		}
+
+		tblStuff := newTestBranchTableStuff(ctrl)
+		tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
+		tblStuff.lcaReaderProbeMode = &atomic.Bool{}
+		lcaDef := &plan.TableDef{
+			DbName: "db1",
+			Name:   "lca_tbl",
+			Pkey: &plan.PrimaryKeyDef{
+				Names:       []string{"id"},
+				PkeyColName: "id",
+			},
+		}
+		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
+		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(781)).AnyTimes()
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(moerr.NewBadDBNoCtx("snapshot_gc")).Times(1)
+
+		tBat := batch.NewWithSize(1)
+		tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(tBat.Vecs[0], int64(1), false, ses.proc.Mp()))
+		tBat.SetRowCount(1)
+		defer tBat.Clean(ses.proc.Mp())
+
+		_, err := handleDelsOnLCA(
+			context.Background(),
+			ses,
+			bh,
+			tBat,
+			tblStuff,
+			types.BuildTS(10, 0).ToTimestamp(),
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "snapshot scan requires disttae relation")
+		require.True(t, tblStuff.lcaReaderProbeMode.Load())
+	})
+
 	t.Run("fake pk sql builder propagates non recoverable error", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()

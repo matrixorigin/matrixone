@@ -21,7 +21,9 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -107,6 +109,147 @@ func TestRunSQL_BackgroundExecPaths(t *testing.T) {
 		_, err := runSql(context.Background(), ses, bh, "drop database bad_db", nil, nil)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "unexpected result set type")
+	})
+}
+
+func TestScanSnapshotRelationByID_EarlyAndErrorPaths(t *testing.T) {
+	ses := newValidateSession(t)
+
+	t.Run("empty attrs returns nil", func(t *testing.T) {
+		err := scanSnapshotRelationByID(
+			context.Background(),
+			"unit-test",
+			ses,
+			7,
+			types.BuildTS(20, 0),
+			nil,
+			nil,
+			nil,
+			0,
+			func(*batch.Batch) error { return nil },
+		)
+		require.NoError(t, err)
+	})
+
+	t.Run("attrs and col types mismatch", func(t *testing.T) {
+		err := scanSnapshotRelationByID(
+			context.Background(),
+			"unit-test",
+			ses,
+			7,
+			types.BuildTS(20, 0),
+			[]string{"id"},
+			[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()},
+			nil,
+			0,
+			func(*batch.Batch) error { return nil },
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "attrs/colTypes length mismatch")
+	})
+
+	t.Run("propagates get relation error", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		wantErr := moerr.NewInternalErrorNoCtx("get relation failed")
+		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(7)).
+			Return("", "", nil, wantErr).
+			Times(1)
+
+		ses.txnHandler = &TxnHandler{
+			storage: eng,
+			txnOp:   txnOp,
+		}
+
+		err := scanSnapshotRelationByID(
+			context.Background(),
+			"unit-test",
+			ses,
+			7,
+			types.BuildTS(20, 0),
+			[]string{"id"},
+			[]types.Type{types.T_int64.ToType()},
+			nil,
+			0,
+			func(*batch.Batch) error { return nil },
+		)
+		require.ErrorIs(t, err, wantErr)
+	})
+
+	t.Run("returns error when range relation is missing", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(7)).
+			Return("", "", nil, nil).
+			Times(1)
+
+		ses.txnHandler = &TxnHandler{
+			storage: eng,
+			txnOp:   txnOp,
+		}
+
+		err := scanSnapshotRelationByID(
+			context.Background(),
+			"unit-test",
+			ses,
+			7,
+			types.BuildTS(20, 0),
+			[]string{"id"},
+			[]types.Type{types.T_int64.ToType()},
+			nil,
+			0,
+			func(*batch.Batch) error { return nil },
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "cannot resolve range relation")
+	})
+
+	t.Run("propagates ranges error", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
+
+		rangeRel := mock_frontend.NewMockRelation(ctrl)
+		wantErr := moerr.NewInternalErrorNoCtx("ranges failed")
+		rangeRel.EXPECT().Ranges(gomock.Any(), gomock.Any()).
+			Return(nil, wantErr).
+			Times(1)
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(7)).
+			Return("", "", rangeRel, nil).
+			Times(1)
+
+		ses.txnHandler = &TxnHandler{
+			storage: eng,
+			txnOp:   txnOp,
+		}
+
+		err := scanSnapshotRelationByID(
+			context.Background(),
+			"unit-test",
+			ses,
+			7,
+			types.BuildTS(20, 0),
+			[]string{"id"},
+			[]types.Type{types.T_int64.ToType()},
+			nil,
+			0,
+			func(*batch.Batch) error { return nil },
+		)
+		require.ErrorIs(t, err, wantErr)
 	})
 }
 
