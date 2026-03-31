@@ -266,6 +266,17 @@ public:
         this->train_quantizer_if_needed();
         if (!this->worker) throw std::runtime_error("Worker not initialized");
 
+        if (this->dist_mode == DistributionMode_SHARDED) {
+            int num_shards = static_cast<int>(this->devices_.size());
+            uint64_t rows_per_shard = (this->count / num_shards) & ~static_cast<uint64_t>(31);
+            uint64_t last_shard_rows = this->count - rows_per_shard * (num_shards - 1);
+            uint64_t min_shard_rows = std::min(rows_per_shard, last_shard_rows);
+            validate_build_params(this->build_params, min_shard_rows);
+            this->shard_sizes_.assign(num_shards, 0);
+        } else {
+            validate_build_params(this->build_params, this->count);
+        }
+
         if (this->dist_mode == DistributionMode_SINGLE_GPU) {
             uint64_t job_id = this->worker->submit_main(
                 [&](raft_handle_wrapper_t& handle) -> std::any {
@@ -290,6 +301,14 @@ public:
         this->flattened_host_dataset.clear();
         this->flattened_host_dataset.shrink_to_fit();
         // std::cout << "[DEBUG] IVF-Flat build: Build completed successfully" << std::endl;
+    }
+
+    static void validate_build_params(const ivf_flat_build_params_t& bp, uint64_t num_rows) {
+        if (num_rows < bp.n_lists) {
+            throw std::invalid_argument(
+                "IVF-Flat build requires at least n_lists vectors (got " + std::to_string(num_rows) +
+                " vectors, n_lists=" + std::to_string(bp.n_lists) + ")");
+        }
     }
 
     void build_internal(raft_handle_wrapper_t& handle) {
