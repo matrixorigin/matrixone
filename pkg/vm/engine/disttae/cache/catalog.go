@@ -607,12 +607,18 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 				)
 				continue
 			}
-			// NB: InitTableItemWithColumns mutates *item in-place without
-			// holding the BTree's internal lock.  A concurrent GetTable
-			// reader can observe an item whose Defs field is nil or
-			// partially written.  Callers of GetTable must guard against
-			// this — see the Defs!=nil check in txnDatabase.getTableItem.
-			InitTableItemWithColumns(item, cols)
+			// Copy-on-write: create a new item and populate its columns
+			// instead of mutating the existing BTree item in-place.  This
+			// eliminates the data race where a concurrent GetTable reader
+			// (holding only the BTree read lock, not catalogCacheMu) could
+			// observe a partially-written Defs slice during in-place
+			// mutation.  After Set, readers atomically see either the old
+			// item (nil Defs) or the new item (full Defs).
+			newItem := new(TableItem)
+			*newItem = *item
+			InitTableItemWithColumns(newItem, cols)
+			cc.tables.data.Set(newItem)
+			cc.tables.cpkeyIndex.Set(newItem)
 		}
 	})
 }
