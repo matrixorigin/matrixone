@@ -109,7 +109,11 @@ func PutArena(a *WriteArena) {
 		tier = ArenaLarge
 	}
 	pool := &arenaPools[tier]
-	if pool.count.Load() >= pool.maxCount {
+	// Optimistically claim a slot before pushing: increment first, then
+	// check.  This avoids the TOCTOU race where N goroutines each read
+	// count < maxCount and all push, exceeding the soft cap.
+	if pool.count.Add(1) > pool.maxCount {
+		pool.count.Add(-1)
 		a.FreeBuffers()
 		return
 	}
@@ -118,7 +122,6 @@ func PutArena(a *WriteArena) {
 		oldHead := pool.head.Load()
 		node.next = oldHead
 		if pool.head.CompareAndSwap(oldHead, node) {
-			pool.count.Add(1)
 			return
 		}
 	}

@@ -136,7 +136,10 @@ func putTransferSlab(slab []api.TransferDestPos) {
 		return
 	}
 	bkt := &transferSlabBuckets[tier]
-	if bkt.count.Load() >= bkt.maxIdle {
+	// Optimistically claim a slot before pushing to avoid the TOCTOU
+	// race where N goroutines all read count < maxIdle and all push.
+	if bkt.count.Add(1) > bkt.maxIdle {
+		bkt.count.Add(-1)
 		mpool.FreeSlice(transferSlabMPool, slab)
 		return
 	}
@@ -145,7 +148,6 @@ func putTransferSlab(slab []api.TransferDestPos) {
 		oldHead := bkt.head.Load()
 		node.next = oldHead
 		if bkt.head.CompareAndSwap(oldHead, node) {
-			bkt.count.Add(1)
 			return
 		}
 	}
