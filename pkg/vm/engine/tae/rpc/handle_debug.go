@@ -1021,6 +1021,11 @@ func marshalTransferMaps(
 		booking := make(api.TransferMaps, blkCnt)
 		for i := range blkCnt {
 			rowCnt := types.DecodeInt32(util.UnsafeStringToBytes(req.BookingLoc[i+1]))
+			if rowCnt == 0 {
+				// fully-deleted block: leave booking[i] == nil so downstream
+				// mapping == nil checks correctly identify it as all-deleted.
+				continue
+			}
 			tm := make(api.TransferMap, rowCnt)
 			for j := range tm {
 				tm[j].ObjIdx = api.NoTransfer
@@ -1068,10 +1073,12 @@ func marshalTransferMaps(
 					maxKey = r
 				}
 			}
-			sliceLen := int(maxKey) + 1
 			if maxKey < 0 {
-				sliceLen = 0
+				// fully-deleted block: leave booking[i] == nil so downstream
+				// mapping == nil checks correctly identify it as all-deleted.
+				continue
 			}
+			sliceLen := int(maxKey) + 1
 			tm := make(api.TransferMap, sliceLen)
 			for j := range tm {
 				tm[j].ObjIdx = api.NoTransfer
