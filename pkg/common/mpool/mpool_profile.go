@@ -47,6 +47,11 @@ func init() {
 	for i := range globalProfileShards {
 		globalProfileShards[i].m = make(map[uintptr]*malloc.HeapSampleValues, 64)
 	}
+	// Register with the malloc config system so that patching MpoolProfiling
+	// via malloc.SetDefaultConfig dynamically enables/disables profiling.
+	malloc.SetMpoolProfilingHandler(func(enabled bool) {
+		profilingEnabled.Store(enabled)
+	})
 }
 
 func getProfileShard(ptr uintptr) *profileShard {

@@ -61,6 +61,17 @@ var defaultConfig = func() *atomic.Pointer[Config] {
 	return ret
 }()
 
+// mpoolProfilingHandler is called when MpoolProfiling is patched.
+// Registered by the mpool package via SetMpoolProfilingHandler.
+var mpoolProfilingHandler atomic.Pointer[func(bool)]
+
+// SetMpoolProfilingHandler registers the function to call when the
+// MpoolProfiling config field changes via SetDefaultConfig.  This
+// indirection avoids a malloc→mpool import cycle.
+func SetMpoolProfilingHandler(fn func(bool)) {
+	mpoolProfilingHandler.Store(&fn)
+}
+
 func patchConfig(config Config, delta Config) Config {
 	if delta.CheckFraction != nil {
 		config.CheckFraction = delta.CheckFraction
@@ -85,6 +96,13 @@ func patchConfig(config Config, delta Config) Config {
 	if delta.HashmapHardLimit != nil {
 		config.HashmapHardLimit = delta.HashmapHardLimit
 		logutil.Info("malloc set config", zap.Any("HashmapHardLimit", *delta.HashmapHardLimit))
+	}
+	if delta.MpoolProfiling != nil {
+		config.MpoolProfiling = delta.MpoolProfiling
+		logutil.Info("malloc set config", zap.Any("MpoolProfiling", *delta.MpoolProfiling))
+		if fn := mpoolProfilingHandler.Load(); fn != nil {
+			(*fn)(*delta.MpoolProfiling)
+		}
 	}
 	return config
 }
