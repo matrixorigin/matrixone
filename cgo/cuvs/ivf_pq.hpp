@@ -722,6 +722,45 @@ public:
         return this->search_batch_internal(queries_data, num_queries, limit, sp);
     }
 
+    uint64_t search_async(const T* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/, uint32_t limit, const ivf_pq_search_params_t& sp) {
+        if (!queries_data || num_queries == 0 || this->dimension == 0) return 0;
+        {
+            std::shared_lock<std::shared_mutex> lock(this->mutex_);
+            if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) return 0;
+        }
+
+        auto queries_copy = std::make_shared<std::vector<T>>(queries_data, queries_data + num_queries * this->dimension);
+
+        if (this->dist_mode == DistributionMode_SHARDED) {
+            auto task = [this, num_queries, limit, sp, queries_copy](raft_handle_wrapper_t& /*handle*/) -> std::any {
+                int num_shards = this->devices_.size();
+                std::vector<search_result_t> shard_results(num_shards);
+                auto shard_search_task = [this, num_queries, limit, sp, queries_copy](raft_handle_wrapper_t& gpu_handle) -> std::any {
+                    return this->search_internal(gpu_handle, queries_copy->data(), num_queries, limit, sp);
+                };
+                auto job_ids = this->worker->submit_all_devices_no_wait(shard_search_task);
+                for (int i = 0; i < num_shards; ++i) {
+                    auto res = this->worker->wait(job_ids[i]).get();
+                    if (res.error) std::rethrow_exception(res.error);
+                    shard_results[i] = std::any_cast<search_result_t>(res.result);
+                }
+                return this->merge_sharded_results(shard_results, num_queries, limit);
+            };
+            return this->worker->submit_main(task);
+        }
+
+        auto task = [this, num_queries, limit, sp, queries_copy](raft_handle_wrapper_t& handle) -> std::any {
+            return this->search_internal(handle, queries_copy->data(), num_queries, limit, sp);
+        };
+        return this->worker->submit(task);
+    }
+
+    search_result_t search_wait(uint64_t job_id) {
+        auto result_wait = this->worker->wait(job_id).get();
+        if (result_wait.error) std::rethrow_exception(result_wait.error);
+        return std::any_cast<search_result_t>(result_wait.result);
+    }
+
     search_result_t search_batch_internal(const T* queries_data, uint64_t num_queries, uint32_t limit, const ivf_pq_search_params_t& sp) {
         struct search_req_t { const T* data; uint64_t n; };
         std::string batch_key = "ivf_pq_s_" + std::to_string((uintptr_t)this) + "_" + std::to_string(limit);
@@ -907,6 +946,39 @@ public:
         }
 
         return this->search_float_batch_internal(queries_data, num_queries, limit, sp);
+    }
+
+    uint64_t search_float_async(const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const ivf_pq_search_params_t& sp) {
+        if (!queries_data || num_queries == 0 || this->dimension == 0) return 0;
+        {
+            std::shared_lock<std::shared_mutex> lock(this->mutex_);
+            if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) return 0;
+        }
+
+        auto queries_copy = std::make_shared<std::vector<float>>(queries_data, queries_data + num_queries * query_dimension);
+
+        if (this->dist_mode == DistributionMode_SHARDED) {
+            auto task = [this, num_queries, query_dimension, limit, sp, queries_copy](raft_handle_wrapper_t& /*handle*/) -> std::any {
+                int num_shards = this->devices_.size();
+                std::vector<search_result_t> shard_results(num_shards);
+                auto shard_search_task = [this, num_queries, query_dimension, limit, sp, queries_copy](raft_handle_wrapper_t& gpu_handle) -> std::any {
+                    return this->search_float_internal(gpu_handle, queries_copy->data(), num_queries, query_dimension, limit, sp);
+                };
+                auto job_ids = this->worker->submit_all_devices_no_wait(shard_search_task);
+                for (int i = 0; i < num_shards; ++i) {
+                    auto res = this->worker->wait(job_ids[i]).get();
+                    if (res.error) std::rethrow_exception(res.error);
+                    shard_results[i] = std::any_cast<search_result_t>(res.result);
+                }
+                return this->merge_sharded_results(shard_results, num_queries, limit);
+            };
+            return this->worker->submit_main(task);
+        }
+
+        auto task = [this, num_queries, query_dimension, limit, sp, queries_copy](raft_handle_wrapper_t& handle) -> std::any {
+            return this->search_float_internal(handle, queries_copy->data(), num_queries, query_dimension, limit, sp);
+        };
+        return this->worker->submit(task);
     }
 
     search_result_t search_float_batch_internal(const float* queries_data, uint64_t num_queries, uint32_t limit, const ivf_pq_search_params_t& sp) {

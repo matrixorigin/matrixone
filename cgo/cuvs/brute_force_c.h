@@ -54,6 +54,15 @@ gpu_brute_force_search_result_c gpu_brute_force_search(gpu_brute_force_c index_c
 // Performs a search operation with float32 queries
 gpu_brute_force_search_result_c gpu_brute_force_search_float(gpu_brute_force_c index_c, const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, void* errmsg);
 
+// Asynchronous search functions
+uint64_t gpu_brute_force_search_async(gpu_brute_force_c index_c, const void* queries_data, uint64_t num_queries, 
+                                         uint32_t query_dimension, uint32_t limit, void* errmsg);
+
+uint64_t gpu_brute_force_search_float_async(gpu_brute_force_c index_c, const float* queries_data, uint64_t num_queries, 
+                                              uint32_t query_dimension, uint32_t limit, void* errmsg);
+
+gpu_brute_force_search_result_c gpu_brute_force_search_wait(gpu_brute_force_c index_c, uint64_t job_id, void* errmsg);
+
 // Retrieves the results from a search operation
 void gpu_brute_force_get_results(gpu_brute_force_search_result_c result_c, uint64_t num_queries, uint32_t limit, int64_t* neighbors, float* distances);
 

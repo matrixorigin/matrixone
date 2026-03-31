@@ -100,9 +100,22 @@ gpu_cagra_search_res_t gpu_cagra_search(gpu_cagra_c index_c, const void* queries
                                             cagra_search_params_t search_params, void* errmsg);
 
 gpu_cagra_search_res_t gpu_cagra_search_float(gpu_cagra_c index_c, const float* queries_data, uint64_t num_queries, 
-                                                  uint32_t query_dimension, uint32_t limit, 
-                                                  cagra_search_params_t search_params, void* errmsg);
+                                                uint32_t query_dimension, uint32_t limit, 
+                                                cagra_search_params_t search_params, void* errmsg);
+
+// Asynchronous search functions
+uint64_t gpu_cagra_search_async(gpu_cagra_c index_c, const void* queries_data, uint64_t num_queries, 
+                                   uint32_t query_dimension, uint32_t limit, 
+                                   cagra_search_params_t search_params, void* errmsg);
+
+uint64_t gpu_cagra_search_float_async(gpu_cagra_c index_c, const float* queries_data, uint64_t num_queries, 
+                                         uint32_t query_dimension, uint32_t limit, 
+                                         cagra_search_params_t search_params, void* errmsg);
+
+gpu_cagra_search_res_t gpu_cagra_search_wait(gpu_cagra_c index_c, uint64_t job_id, void* errmsg);
+
 // Get results from result object
+
 void gpu_cagra_get_neighbors(gpu_cagra_result_c result_c, uint64_t total_elements, uint32_t* neighbors);
 void gpu_cagra_get_distances(gpu_cagra_result_c result_c, uint64_t total_elements, float* distances);
 

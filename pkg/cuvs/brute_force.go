@@ -261,6 +261,96 @@ func (gb *GpuBruteForce[T]) SearchFloat(queries []float32, numQueries uint64, qu
 	return neighbors, distances, nil
 }
 
+// SearchAsync performs a K-Nearest Neighbor search asynchronously.
+func (gb *GpuBruteForce[T]) SearchAsync(queries []T, numQueries uint64, dimension uint32, limit uint32) (uint64, error) {
+	if gb.cIndex == nil {
+		return 0, moerr.NewInternalErrorNoCtx("GpuBruteForce is not initialized")
+	}
+	if len(queries) == 0 || numQueries == 0 {
+		return 0, nil
+	}
+
+	var errmsg *C.char
+	jobID := C.gpu_brute_force_search_async(
+		gb.cIndex,
+		unsafe.Pointer(&queries[0]),
+		C.uint64_t(numQueries),
+		C.uint32_t(dimension),
+		C.uint32_t(limit),
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(queries)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return 0, moerr.NewInternalErrorNoCtx(errStr)
+	}
+
+	return uint64(jobID), nil
+}
+
+// SearchFloat32Async performs a K-Nearest Neighbor search with float32 queries asynchronously.
+func (gb *GpuBruteForce[T]) SearchFloat32Async(queries []float32, numQueries uint64, dimension uint32, limit uint32) (uint64, error) {
+	if gb.cIndex == nil {
+		return 0, moerr.NewInternalErrorNoCtx("GpuBruteForce is not initialized")
+	}
+	if len(queries) == 0 || numQueries == 0 {
+		return 0, nil
+	}
+
+	var errmsg *C.char
+	jobID := C.gpu_brute_force_search_float_async(
+		gb.cIndex,
+		(*C.float)(unsafe.Pointer(&queries[0])),
+		C.uint64_t(numQueries),
+		C.uint32_t(dimension),
+		C.uint32_t(limit),
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(queries)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return 0, moerr.NewInternalErrorNoCtx(errStr)
+	}
+
+	return uint64(jobID), nil
+}
+
+// SearchWait waits for an asynchronous search to complete and returns the results.
+func (gb *GpuBruteForce[T]) SearchWait(jobID uint64, numQueries uint64, limit uint32) ([]int64, []float32, error) {
+	if gb.cIndex == nil {
+		return nil, nil, moerr.NewInternalErrorNoCtx("GpuBruteForce is not initialized")
+	}
+
+	var errmsg *C.char
+	cResult := C.gpu_brute_force_search_wait(gb.cIndex, C.uint64_t(jobID), unsafe.Pointer(&errmsg))
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return nil, nil, moerr.NewInternalErrorNoCtx(errStr)
+	}
+
+	if cResult == nil {
+		return nil, nil, moerr.NewInternalErrorNoCtx("search_wait returned nil result")
+	}
+
+	// Allocate slices for results
+	neighbors := make([]int64, numQueries*uint64(limit))
+	distances := make([]float32, numQueries*uint64(limit))
+
+	C.gpu_brute_force_get_results(cResult, C.uint64_t(numQueries), C.uint32_t(limit), (*C.int64_t)(unsafe.Pointer(&neighbors[0])), (*C.float)(unsafe.Pointer(&distances[0])))
+	runtime.KeepAlive(neighbors)
+	runtime.KeepAlive(distances)
+
+	C.gpu_brute_force_free_search_result(cResult)
+
+	return neighbors, distances, nil
+}
+
 // Cap returns the capacity of the index buffer
 func (gb *GpuBruteForce[T]) Cap() uint32 {
 	if gb.cIndex == nil {

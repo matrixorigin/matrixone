@@ -208,6 +208,67 @@ gpu_brute_force_search_result_c gpu_brute_force_search_float(gpu_brute_force_c i
     }
 }
 
+uint64_t gpu_brute_force_search_async(gpu_brute_force_c index_c, const void* queries_data, uint64_t num_queries, 
+                                         uint32_t query_dimension, uint32_t limit, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_brute_force_any_t*>(index_c);
+        brute_force_search_params_t search_params;
+        switch (any->qtype) {
+            case Quantization_F32:   return static_cast<matrixone::gpu_brute_force_t<float>*>(any->ptr)->search_async(static_cast<const float*>(queries_data), num_queries, query_dimension, limit, search_params);
+            case Quantization_F16:   return static_cast<matrixone::gpu_brute_force_t<half>*>(any->ptr)->search_async(static_cast<const half*>(queries_data), num_queries, query_dimension, limit, search_params);
+            default: return 0;
+        }
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_brute_force_search_async", e.what());
+        return 0;
+    }
+}
+
+uint64_t gpu_brute_force_search_float_async(gpu_brute_force_c index_c, const float* queries_data, uint64_t num_queries, 
+                                              uint32_t query_dimension, uint32_t limit, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_brute_force_any_t*>(index_c);
+        brute_force_search_params_t search_params;
+        switch (any->qtype) {
+            case Quantization_F32:   return static_cast<matrixone::gpu_brute_force_t<float>*>(any->ptr)->search_float_async(queries_data, num_queries, query_dimension, limit, search_params);
+            case Quantization_F16:   return static_cast<matrixone::gpu_brute_force_t<half>*>(any->ptr)->search_float_async(queries_data, num_queries, query_dimension, limit, search_params);
+            default: return 0;
+        }
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_brute_force_search_float_async", e.what());
+        return 0;
+    }
+}
+
+gpu_brute_force_search_result_c gpu_brute_force_search_wait(gpu_brute_force_c index_c, uint64_t job_id, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_brute_force_any_t*>(index_c);
+        void* result_ptr = nullptr;
+        switch (any->qtype) {
+            case Quantization_F32: {
+                auto* cpp_res = new matrixone::gpu_brute_force_t<float>::search_result_t();
+                *cpp_res = static_cast<matrixone::gpu_brute_force_t<float>*>(any->ptr)->search_wait(job_id);
+                result_ptr = cpp_res;
+                break;
+            }
+            case Quantization_F16: {
+                auto* cpp_res = new matrixone::gpu_brute_force_t<half>::search_result_t();
+                *cpp_res = static_cast<matrixone::gpu_brute_force_t<half>*>(any->ptr)->search_wait(job_id);
+                result_ptr = cpp_res;
+                break;
+            }
+            default: break;
+        }
+        return static_cast<gpu_brute_force_search_result_c>(result_ptr);
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_brute_force_search_wait", e.what());
+        return nullptr;
+    }
+}
+
 void gpu_brute_force_get_results(gpu_brute_force_search_result_c result_c, uint64_t num_queries, uint32_t limit, int64_t* neighbors, float* distances) {
     if (!result_c) return;
     auto* search_result = static_cast<matrixone::gpu_brute_force_t<float>::search_result_t*>(result_c);

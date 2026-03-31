@@ -414,8 +414,8 @@ gpu_cagra_search_res_t gpu_cagra_search(gpu_cagra_c index_c, const void* queries
 }
 
 gpu_cagra_search_res_t gpu_cagra_search_float(gpu_cagra_c index_c, const float* queries_data, uint64_t num_queries, 
-                                                  uint32_t query_dimension, uint32_t limit, 
-                                                  cagra_search_params_t search_params, void* errmsg) {
+                                                uint32_t query_dimension, uint32_t limit, 
+                                                cagra_search_params_t search_params, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     gpu_cagra_search_res_t result = {nullptr};
     try {
@@ -430,12 +430,68 @@ gpu_cagra_search_res_t gpu_cagra_search_float(gpu_cagra_c index_c, const float* 
         }
         result.result_ptr = static_cast<gpu_cagra_result_c>(cpp_res);
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
- "Error in gpu_cagra_search_float", e.what());
+        matrixone::set_errmsg(errmsg, "Error in gpu_cagra_search_float", e.what());
     }
     return result;
 }
 
+uint64_t gpu_cagra_search_async(gpu_cagra_c index_c, const void* queries_data, uint64_t num_queries, 
+                                   uint32_t query_dimension, uint32_t limit, 
+                                   cagra_search_params_t search_params, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_cagra_any_t*>(index_c);
+        switch (any->qtype) {
+            case Quantization_F32:   return static_cast<gpu_cagra_t<float>*>(any->ptr)->search_async(static_cast<const float*>(queries_data), num_queries, query_dimension, limit, search_params);
+            case Quantization_F16:   return static_cast<gpu_cagra_t<half>*>(any->ptr)->search_async(static_cast<const half*>(queries_data), num_queries, query_dimension, limit, search_params);
+            case Quantization_INT8:  return static_cast<gpu_cagra_t<int8_t>*>(any->ptr)->search_async(static_cast<const int8_t*>(queries_data), num_queries, query_dimension, limit, search_params);
+            case Quantization_UINT8: return static_cast<gpu_cagra_t<uint8_t>*>(any->ptr)->search_async(static_cast<const uint8_t*>(queries_data), num_queries, query_dimension, limit, search_params);
+            default: return 0;
+        }
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_cagra_search_async", e.what());
+        return 0;
+    }
+}
+
+uint64_t gpu_cagra_search_float_async(gpu_cagra_c index_c, const float* queries_data, uint64_t num_queries, 
+                                         uint32_t query_dimension, uint32_t limit, 
+                                         cagra_search_params_t search_params, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_cagra_any_t*>(index_c);
+        switch (any->qtype) {
+            case Quantization_F32:   return static_cast<gpu_cagra_t<float>*>(any->ptr)->search_float_async(queries_data, num_queries, query_dimension, limit, search_params);
+            case Quantization_F16:   return static_cast<gpu_cagra_t<half>*>(any->ptr)->search_float_async(queries_data, num_queries, query_dimension, limit, search_params);
+            case Quantization_INT8:  return static_cast<gpu_cagra_t<int8_t>*>(any->ptr)->search_float_async(queries_data, num_queries, query_dimension, limit, search_params);
+            case Quantization_UINT8: return static_cast<gpu_cagra_t<uint8_t>*>(any->ptr)->search_float_async(queries_data, num_queries, query_dimension, limit, search_params);
+            default: return 0;
+        }
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_cagra_search_float_async", e.what());
+        return 0;
+    }
+}
+
+gpu_cagra_search_res_t gpu_cagra_search_wait(gpu_cagra_c index_c, uint64_t job_id, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    gpu_cagra_search_res_t result = {nullptr};
+    try {
+        auto* any = static_cast<gpu_cagra_any_t*>(index_c);
+        auto* cpp_res = new cagra_search_result_t();
+        switch (any->qtype) {
+            case Quantization_F32: *cpp_res = static_cast<gpu_cagra_t<float>*>(any->ptr)->search_wait(job_id); break;
+            case Quantization_F16: *cpp_res = static_cast<gpu_cagra_t<half>*>(any->ptr)->search_wait(job_id); break;
+            case Quantization_INT8: *cpp_res = static_cast<gpu_cagra_t<int8_t>*>(any->ptr)->search_wait(job_id); break;
+            case Quantization_UINT8: *cpp_res = static_cast<gpu_cagra_t<uint8_t>*>(any->ptr)->search_wait(job_id); break;
+            default: break;
+        }
+        result.result_ptr = static_cast<gpu_cagra_result_c>(cpp_res);
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_cagra_search_wait", e.what());
+    }
+    return result;
+}
 void gpu_cagra_get_neighbors(gpu_cagra_result_c result_c, uint64_t total_elements, uint32_t* neighbors) {
     if (!result_c) return;
     auto* neighbors_vec = &static_cast<cagra_search_result_t*>(result_c)->neighbors;

@@ -346,6 +346,24 @@ public:
         return std::any_cast<search_result_t>(result_wait.result);
     }
 
+    uint64_t search_async(const T* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/, uint32_t limit, const brute_force_search_params_t& sp) {
+        if (!queries_data || num_queries == 0 || this->dimension == 0) return 0;
+        if (!this->is_loaded_ || !index_) return 0;
+
+        auto queries_copy = std::make_shared<std::vector<T>>(queries_data, queries_data + num_queries * this->dimension);
+
+        auto task = [this, num_queries, limit, sp, queries_copy](raft_handle_wrapper_t& handle) -> std::any {
+            return this->search_internal(handle, queries_copy->data(), num_queries, limit, sp);
+        };
+        return this->worker->submit(task);
+    }
+
+    search_result_t search_wait(uint64_t job_id) {
+        auto result_wait = this->worker->wait(job_id).get();
+        if (result_wait.error) std::rethrow_exception(result_wait.error);
+        return std::any_cast<search_result_t>(result_wait.result);
+    }
+
     search_result_t search_internal(raft_handle_wrapper_t& handle, const T* queries_data, uint64_t num_queries, uint32_t limit, const brute_force_search_params_t& /*sp*/) {
         std::shared_lock<std::shared_mutex> lock(this->mutex_);
         auto res = handle.get_raft_resources();
@@ -408,6 +426,19 @@ public:
         auto result_wait = this->worker->wait(job_id).get();
         if (result_wait.error) std::rethrow_exception(result_wait.error);
         return std::any_cast<search_result_t>(result_wait.result);
+    }
+
+    uint64_t search_float_async(const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const brute_force_search_params_t& sp) {
+        if constexpr (std::is_same_v<T, float>) return search_async(queries_data, num_queries, query_dimension, limit, sp);
+        if (!queries_data || num_queries == 0 || this->dimension == 0) return 0;
+        if (!this->is_loaded_ || !index_) return 0;
+
+        auto queries_copy = std::make_shared<std::vector<float>>(queries_data, queries_data + num_queries * query_dimension);
+
+        auto task = [this, num_queries, query_dimension, limit, sp, queries_copy](raft_handle_wrapper_t& handle) -> std::any {
+            return this->search_float_internal(handle, queries_copy->data(), num_queries, query_dimension, limit, sp);
+        };
+        return this->worker->submit(task);
     }
 
     search_result_t search_float_internal(raft_handle_wrapper_t& handle, const float* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/, uint32_t limit, const brute_force_search_params_t& /*sp*/) {

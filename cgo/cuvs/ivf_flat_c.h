@@ -107,9 +107,22 @@ gpu_ivf_flat_search_res_t gpu_ivf_flat_search(gpu_ivf_flat_c index_c, const void
                                                 ivf_flat_search_params_t search_params, void* errmsg);
 
 gpu_ivf_flat_search_res_t gpu_ivf_flat_search_float(gpu_ivf_flat_c index_c, const float* queries_data, uint64_t num_queries, 
-                                                      uint32_t query_dimension, uint32_t limit, 
-                                                      ivf_flat_search_params_t search_params, void* errmsg);
+                                                    uint32_t query_dimension, uint32_t limit, 
+                                                    ivf_flat_search_params_t search_params, void* errmsg);
+
+// Asynchronous search functions
+uint64_t gpu_ivf_flat_search_async(gpu_ivf_flat_c index_c, const void* queries_data, uint64_t num_queries, 
+                                     uint32_t query_dimension, uint32_t limit, 
+                                     ivf_flat_search_params_t search_params, void* errmsg);
+
+uint64_t gpu_ivf_flat_search_float_async(gpu_ivf_flat_c index_c, const float* queries_data, uint64_t num_queries, 
+                                           uint32_t query_dimension, uint32_t limit, 
+                                           ivf_flat_search_params_t search_params, void* errmsg);
+
+gpu_ivf_flat_search_res_t gpu_ivf_flat_search_wait(gpu_ivf_flat_c index_c, uint64_t job_id, void* errmsg);
+
 // Get results from result object
+
 void gpu_ivf_flat_get_neighbors(gpu_ivf_flat_result_c result_c, uint64_t total_elements, int64_t* neighbors);
 void gpu_ivf_flat_get_distances(gpu_ivf_flat_result_c result_c, uint64_t total_elements, float* distances);
 

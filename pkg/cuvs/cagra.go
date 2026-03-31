@@ -677,7 +677,114 @@ func (gi *GpuCagra[T]) SearchFloat(queries []float32, numQueries uint64, dimensi
 	}, nil
 }
 
+// SearchAsync performs a K-Nearest Neighbor search asynchronously.
+func (gi *GpuCagra[T]) SearchAsync(queries []T, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) (uint64, error) {
+	if gi.cCagra == nil {
+		return 0, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
+	}
+	if len(queries) == 0 || numQueries == 0 {
+		return 0, nil
+	}
+
+	var errmsg *C.char
+	cSP := C.cagra_search_params_t{
+		itopk_size:   C.size_t(sp.ItopkSize),
+		search_width: C.size_t(sp.SearchWidth),
+	}
+
+	jobID := C.gpu_cagra_search_async(
+		gi.cCagra,
+		unsafe.Pointer(&queries[0]),
+		C.uint64_t(numQueries),
+		C.uint32_t(dimension),
+		C.uint32_t(limit),
+		cSP,
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(queries)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return 0, moerr.NewInternalErrorNoCtx(errStr)
+	}
+
+	return uint64(jobID), nil
+}
+
+// SearchFloat32Async performs a K-Nearest Neighbor search with float32 queries asynchronously.
+func (gi *GpuCagra[T]) SearchFloat32Async(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) (uint64, error) {
+	if gi.cCagra == nil {
+		return 0, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
+	}
+	if len(queries) == 0 || numQueries == 0 {
+		return 0, nil
+	}
+
+	var errmsg *C.char
+	cSP := C.cagra_search_params_t{
+		itopk_size:   C.size_t(sp.ItopkSize),
+		search_width: C.size_t(sp.SearchWidth),
+	}
+
+	jobID := C.gpu_cagra_search_float_async(
+		gi.cCagra,
+		(*C.float)(unsafe.Pointer(&queries[0])),
+		C.uint64_t(numQueries),
+		C.uint32_t(dimension),
+		C.uint32_t(limit),
+		cSP,
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(queries)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return 0, moerr.NewInternalErrorNoCtx(errStr)
+	}
+
+	return uint64(jobID), nil
+}
+
+// SearchWait waits for an asynchronous search to complete and returns the results.
+func (gi *GpuCagra[T]) SearchWait(jobID uint64, numQueries uint64, limit uint32) (SearchResult, error) {
+	if gi.cCagra == nil {
+		return SearchResult{}, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
+	}
+
+	var errmsg *C.char
+	res := C.gpu_cagra_search_wait(gi.cCagra, C.uint64_t(jobID), unsafe.Pointer(&errmsg))
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return SearchResult{}, moerr.NewInternalErrorNoCtx(errStr)
+	}
+
+	if res.result_ptr == nil {
+		return SearchResult{}, moerr.NewInternalErrorNoCtx("search_wait returned nil result")
+	}
+
+	totalElements := uint64(numQueries) * uint64(limit)
+	neighbors := make([]uint32, totalElements)
+	distances := make([]float32, totalElements)
+
+	C.gpu_cagra_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.uint32_t)(unsafe.Pointer(&neighbors[0])))
+	C.gpu_cagra_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(unsafe.Pointer(&distances[0])))
+	runtime.KeepAlive(neighbors)
+	runtime.KeepAlive(distances)
+
+	C.gpu_cagra_free_result(res.result_ptr)
+
+	return SearchResult{
+		Neighbors: neighbors,
+		Distances: distances,
+	}, nil
+}
+
 // Cap returns the capacity of the index buffer
+
 func (gi *GpuCagra[T]) Cap() uint32 {
 	if gi.cCagra == nil {
 		return 0
