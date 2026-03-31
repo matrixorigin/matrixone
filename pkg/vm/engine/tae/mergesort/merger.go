@@ -202,6 +202,11 @@ func (m *merger[T]) merge(ctx context.Context) error {
 		}
 
 		if m.host.DoTransfer() {
+			if m.stats.objCnt >= int(api.NoTransfer) {
+				return moerr.NewInternalErrorNoCtxf(
+					"merge output exceeds %d objects: ObjIdx would collide with NoTransfer sentinel (0x%02X)",
+					api.NoTransfer, api.NoTransfer)
+			}
 			idx := m.accObjBlkCnts[objIdx] + m.loadedObjBlkCnts[objIdx] - 1
 			m.blockActive[idx] = true
 			m.transferSlab[int(idx)*int(m.rowPerBlk)+int(rowIdx)] = api.TransferDestPos{
