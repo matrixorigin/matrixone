@@ -81,9 +81,8 @@ func profileRecordRealloc(skip int, oldPtr, newPtr uintptr, oldSz, newSz int64) 
 	profileRecordAlloc(skip, newPtr, newSz)
 }
 
-// profileTrackedCount returns the total number of tracked pointers across all shards.
-// Exported only for testing via a package-level test helper.
-func profileTrackedCount() int {
+// ProfileTrackedCount returns the total number of tracked pointers across all shards.
+func ProfileTrackedCount() int {
 	total := 0
 	for i := range globalProfileShards {
 		shard := &globalProfileShards[i]

@@ -25,4 +25,4 @@ func profileRecordFree(_ uintptr, _ int64) {}
 
 func profileRecordRealloc(_ int, _, _ uintptr, _, _ int64) {}
 
-func profileTrackedCount() int { return 0 }
+func ProfileTrackedCount() int { return 0 }

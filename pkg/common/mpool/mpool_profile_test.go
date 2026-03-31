@@ -29,16 +29,16 @@ func TestProfileAllocFree(t *testing.T) {
 	require.NoError(t, err)
 	defer DeleteMPool(mp)
 
-	before := profileTrackedCount()
+	before := ProfileTrackedCount()
 
 	// Off-heap allocation should increase tracked count
 	bs, err := mp.Alloc(4096, true)
 	require.NoError(t, err)
-	require.Equal(t, before+1, profileTrackedCount())
+	require.Equal(t, before+1, ProfileTrackedCount())
 
 	// Free should decrease tracked count
 	mp.Free(bs)
-	require.Equal(t, before, profileTrackedCount())
+	require.Equal(t, before, ProfileTrackedCount())
 }
 
 func TestProfileOnHeapNotTracked(t *testing.T) {
@@ -46,12 +46,12 @@ func TestProfileOnHeapNotTracked(t *testing.T) {
 	require.NoError(t, err)
 	defer DeleteMPool(mp)
 
-	before := profileTrackedCount()
+	before := ProfileTrackedCount()
 
 	// On-heap allocation should NOT change tracked count
 	bs, err := mp.Alloc(1024, false)
 	require.NoError(t, err)
-	require.Equal(t, before, profileTrackedCount())
+	require.Equal(t, before, ProfileTrackedCount())
 
 	mp.Free(bs)
 }
@@ -61,7 +61,7 @@ func TestProfileMultipleAllocs(t *testing.T) {
 	require.NoError(t, err)
 	defer DeleteMPool(mp)
 
-	before := profileTrackedCount()
+	before := ProfileTrackedCount()
 
 	// Multiple off-heap allocations
 	allocs := make([][]byte, 10)
@@ -69,13 +69,13 @@ func TestProfileMultipleAllocs(t *testing.T) {
 		allocs[i], err = mp.Alloc(1024, true)
 		require.NoError(t, err)
 	}
-	require.Equal(t, before+10, profileTrackedCount())
+	require.Equal(t, before+10, ProfileTrackedCount())
 
 	// Free all
 	for _, bs := range allocs {
 		mp.Free(bs)
 	}
-	require.Equal(t, before, profileTrackedCount())
+	require.Equal(t, before, ProfileTrackedCount())
 }
 
 func TestProfileWritable(t *testing.T) {
