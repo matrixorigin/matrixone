@@ -173,6 +173,7 @@ type ExParam struct {
 	Local       bool
 	Parallel    bool
 	Strict      bool
+	IgnoreError bool
 }
 
 type S3Parameter struct {

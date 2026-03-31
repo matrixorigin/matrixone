@@ -659,6 +659,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			FileList:        t.Es.FileList,
 			Filter:          t.Es.Filter.FilterExpr,
 			StrictSqlMode:   t.Es.StrictSqlMode,
+			IgnoreError:     t.Es.IgnoreError,
 		}
 		in.ProjectList = t.ProjectList
 	case *source.Source:
@@ -1104,6 +1105,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 					CreateSql:       t.CreateSql,
 					FileList:        t.FileList,
 					StrictSqlMode:   t.StrictSqlMode,
+					IgnoreError:     t.IgnoreError,
 				},
 				ExParam: external.ExParam{
 					Fileparam: new(external.ExFileparam),

@@ -223,6 +223,9 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 
 	stmt.Param.Local = stmt.Local
+	if _, ok := stmt.DuplicateHandling.(*tree.DuplicateKeyIgnore); ok {
+		stmt.Param.IgnoreError = true
+	}
 	fileName, err := checkFileExist(stmt.Param, ctx)
 	if err != nil {
 		return nil, err

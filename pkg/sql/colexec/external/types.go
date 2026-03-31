@@ -52,6 +52,7 @@ type ExternalParam struct {
 type ExParamConst struct {
 	ParallelLoad  bool
 	StrictSqlMode bool
+	IgnoreError   bool
 	Close         byte
 	maxBatchSize  uint64
 	Idx           int

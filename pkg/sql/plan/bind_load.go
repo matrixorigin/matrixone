@@ -50,6 +50,9 @@ func (builder *QueryBuilder) bindExternalScan(
 
 	ctx := builder.compCtx
 	stmt.Param.Local = stmt.Local
+	if _, ok := stmt.DuplicateHandling.(*tree.DuplicateKeyIgnore); ok {
+		stmt.Param.IgnoreError = true
+	}
 	fileName, err := checkFileExist(stmt.Param, ctx)
 	if err != nil {
 		return -1, nil, err

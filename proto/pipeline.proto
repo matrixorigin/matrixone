@@ -353,6 +353,7 @@ message ExternalScan {
   plan.Expr filter = 8;
   bool strict_sql_mode = 9;
   int32 column_list_len = 10;
+  bool ignore_error = 11;
 }
 
 message StreamScan {

@@ -350,6 +350,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 					FileOffsetTotal: t.Es.FileOffsetTotal,
 					Extern:          t.Es.Extern,
 					StrictSqlMode:   t.Es.StrictSqlMode,
+					IgnoreError:     t.Es.IgnoreError,
 				},
 				ExParam: external.ExParam{
 					Filter: &external.FilterParam{
@@ -898,6 +899,7 @@ func constructExternal(node *plan.Node, param *tree.ExternParam, ctx context.Con
 				FileSize:        FileSize,
 				ClusterTable:    node.GetClusterTable(),
 				StrictSqlMode:   strictSqlMode,
+				IgnoreError:     param.IgnoreError,
 			},
 			ExParam: external.ExParam{
 				Fileparam: new(external.ExFileparam),
