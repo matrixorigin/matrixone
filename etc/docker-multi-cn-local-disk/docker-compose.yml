@@ -70,8 +70,7 @@ services:
       - ../../mo-data:/mo-data
       - ../../logs:/logs
       - .:/etc/docker-multi-cn-local-disk:ro
-      # Note: Local mo-service mount removed due to GLIBC version mismatch
-      # Use image-built binary or build inside container for compatibility
+      - ../../test:/home/mo/matrixone/test # BVT test data (LOAD DATA + INTO OUTFILE)
     environment:
       - TZ=Asia/Shanghai
     networks:
@@ -106,8 +105,7 @@ services:
       - ../../mo-data:/mo-data
       - ../../logs:/logs
       - .:/etc/docker-multi-cn-local-disk:ro
-      # Note: Local mo-service mount removed due to GLIBC version mismatch
-      # Use image-built binary or build inside container for compatibility
+      - ../../test:/home/mo/matrixone/test # BVT test data (LOAD DATA + INTO OUTFILE)
     environment:
       - TZ=Asia/Shanghai
     networks:
@@ -140,8 +138,7 @@ services:
       - ../../mo-data:/mo-data
       - ../../logs:/logs
       - .:/etc/docker-multi-cn-local-disk:ro
-      # Note: Local mo-service mount removed due to GLIBC version mismatch
-      # Use image-built binary or build inside container for compatibility
+      - ../../test:/home/mo/matrixone/test # BVT test data (LOAD DATA + INTO OUTFILE)
     environment:
       - TZ=Asia/Shanghai
     networks:
@@ -174,8 +171,7 @@ services:
       - ../../mo-data:/mo-data
       - ../../logs:/logs
       - .:/etc/docker-multi-cn-local-disk:ro
-      # Note: Local mo-service mount removed due to GLIBC version mismatch
-      # Use image-built binary or build inside container for compatibility
+      - ../../test:/home/mo/matrixone/test # BVT test data (LOAD DATA + INTO OUTFILE)
     environment:
       - TZ=Asia/Shanghai
     networks:
@@ -200,8 +196,7 @@ services:
       - ../../mo-data:/mo-data
       - ../../logs:/logs
       - .:/etc/docker-multi-cn-local-disk:ro
-      # Note: Local mo-service mount removed due to GLIBC version mismatch
-      # Use image-built binary or build inside container for compatibility
+      - ../../test:/home/mo/matrixone/test # BVT test data (LOAD DATA + INTO OUTFILE)
     environment:
       - TZ=Asia/Shanghai
     networks:
