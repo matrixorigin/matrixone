@@ -723,6 +723,17 @@ func (writer *s3WriterDelegate) reset(proc *process.Process) (err error) {
 
 	writer.cleanDeleteBatches(proc.Mp())
 
+	// Reset persistent insert sinkers so any buffered data from a failed
+	// pipeline execution is discarded. The sinkers stay alive and reuse
+	// their buffer pools and arenas on the next append() call.  On the
+	// success path the sinkers were already flushed by
+	// flushTailAndWriteToOutput(), so Reset() is a no-op on the data side.
+	for _, s3w := range writer.insertSinkers {
+		if s3w != nil {
+			s3w.Reset()
+		}
+	}
+
 	for _, bat := range writer.insertBlockInfo {
 		if bat != nil {
 			bat.CleanOnlyData()

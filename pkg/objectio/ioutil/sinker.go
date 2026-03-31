@@ -842,3 +842,26 @@ func (sinker *Sinker) Close() error {
 	sinker.fs = nil
 	return nil
 }
+
+// Reset discards all staged and result data without tearing down the sinker.
+// It is safe to call after an aborted pipeline execution so that the next
+// Write/Sync cycle starts from a clean state. The buf pool, file-sinker
+// executor (and its arena), mpool, and fileservice references are all kept
+// alive so they can be reused without reallocation.
+func (sinker *Sinker) Reset() {
+	sinker.cleanupInMemoryStaged()
+	sinker.staged.persisted = sinker.staged.persisted[:0]
+
+	for i := range sinker.result.tail {
+		if sinker.result.tail[i] != nil {
+			sinker.result.tail[i].Clean(sinker.mp)
+			sinker.result.tail[i] = nil
+		}
+	}
+	sinker.result.tail = sinker.result.tail[:0]
+	sinker.result.persisted = sinker.result.persisted[:0]
+
+	if sinker.fSinker.executor != nil {
+		sinker.fSinker.executor.Reset()
+	}
+}
