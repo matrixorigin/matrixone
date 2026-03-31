@@ -205,6 +205,10 @@ int gpu_get_device_count() {
     return count;
 }
 
+int gpu_get_next_device_id() {
+    return matrixone::get_next_device_id();
+}
+
 void gpu_get_device_list(int* devices, int count) {
     for (int i = 0; i < count; ++i) {
         devices[i] = i;

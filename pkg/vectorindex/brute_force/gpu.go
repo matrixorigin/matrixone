@@ -267,7 +267,7 @@ func NewGpuBruteForceIndex[T cuvs.VectorType](dataset [][]T,
 		copy(flattened[i*dim:(i+1)*dim], v)
 	}
 
-	deviceID := 0 // Default to device 0
+	deviceID := cuvs.GetNextGpuDeviceId()
 	km, err := cuvs.NewGpuBruteForce[T](flattened, uint64(len(dataset)), uint32(dimension), resolveCuvsDistance(m), uint32(nthread), deviceID)
 	if err != nil {
 		return nil, err

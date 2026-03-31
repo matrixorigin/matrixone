@@ -234,6 +234,12 @@ func GpuConvertF32ToF16(src []float32, dst []Float16, deviceID int) error {
 	return nil
 }
 
+// GetNextGpuDeviceId returns the next GPU device ID in round-robin order
+// across all visible CUDA devices. Thread-safe; the counter is global.
+func GetNextGpuDeviceId() int {
+	return int(C.gpu_get_next_device_id())
+}
+
 // GetGpuDeviceCount returns the number of available CUDA devices.
 func GetGpuDeviceCount() (int, error) {
 	count := int(C.gpu_get_device_count())

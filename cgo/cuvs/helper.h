@@ -90,6 +90,7 @@ extern "C" {
 #endif
     int gpu_get_device_count();
     void gpu_get_device_list(int* devices, int count);
+    int gpu_get_next_device_id();
     void gpu_convert_f32_to_f16(const float* src, void* dst, uint64_t total_elements, int device_id, void* errmsg);
 // Pinned memory management
 void* gpu_alloc_pinned(uint64_t size, void* errmsg);
