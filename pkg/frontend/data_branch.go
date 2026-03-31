@@ -737,6 +737,15 @@ func diffMergeAgency(
 		}
 	}
 
+	// Build PK filter for PICK (nil for DIFF/MERGE).
+	var pkFilter *engine.PKFilter
+	if pickStmt != nil {
+		// Best-effort: if building the filter fails (e.g. subquery keys,
+		// composite PK), we fall back to consumer-level filtering only.
+		pkFilter, _ = buildPKFilterForPick(pickStmt, tblStuff, ses.proc.Mp())
+	}
+	defer freePKFilter(pkFilter, ses.proc.Mp())
+
 	wg.Add(2)
 
 	go func() {
@@ -769,7 +778,7 @@ func diffMergeAgency(
 	}()
 
 	if err = diffOnBase(
-		ctx, ses, bh, wg, dagInfo, tblStuff, copt, emit,
+		ctx, ses, bh, wg, dagInfo, tblStuff, copt, emit, pkFilter,
 	); err != nil {
 		return
 	}
@@ -935,6 +944,7 @@ func diffOnBase(
 	tblStuff tableStuff,
 	copt compositeOption,
 	emit emitFunc,
+	pkFilter *engine.PKFilter,
 ) (err error) {
 
 	defer func() {
@@ -989,7 +999,7 @@ func diffOnBase(
 	}
 	// has no lca
 	if tarHandle, baseHandle, err = constructChangeHandle(
-		ctx, ses, bh, tblStuff, &dagInfo,
+		ctx, ses, bh, tblStuff, &dagInfo, pkFilter,
 	); err != nil {
 		return
 	}
@@ -1225,6 +1235,7 @@ func constructChangeHandle(
 	bh BackgroundExec,
 	tables tableStuff,
 	branchInfo *branchMetaInfo,
+	pkFilter *engine.PKFilter,
 ) (
 	tarHandle []engine.ChangesHandle,
 	baseHandle []engine.ChangesHandle,
@@ -1256,9 +1267,25 @@ func constructChangeHandle(
 	); err != nil {
 		return
 	}
+
+	// collectFn dispatches to the PK-filtered or plain CollectChanges variant.
+	collectFn := func(
+		ctx context.Context,
+		rel engine.Relation,
+		from, end types.TS,
+		mp *mpool.MPool,
+	) (engine.ChangesHandle, error) {
+		if pkFilter != nil && pkFilter.Vec != nil {
+			return databranchutils.CollectChangesWithPKFilter(
+				ctx, rel, from, end, mp, pkFilter,
+			)
+		}
+		return databranchutils.CollectChanges(ctx, rel, from, end, mp)
+	}
+
 	for i := range tarRange.rel {
 		collectStart := time.Now()
-		if handle, err = databranchutils.CollectChanges(
+		if handle, err = collectFn(
 			ctx,
 			tarRange.rel[i],
 			tarRange.from[i],
@@ -1283,7 +1310,7 @@ func constructChangeHandle(
 
 	for i := range baseRange.rel {
 		collectStart := time.Now()
-		if handle, err = databranchutils.CollectChanges(
+		if handle, err = collectFn(
 			ctx,
 			baseRange.rel[i],
 			baseRange.from[i],
