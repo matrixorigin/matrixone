@@ -124,7 +124,18 @@ func TestCollectChangesRange(t *testing.T) {
 	end := types.BuildTS(2, 0)
 	fake := &fakeChangesHandle{}
 
-	rel.EXPECT().CollectChanges(gomock.Any(), from, end, false, gomock.Any()).Return(fake, nil)
+	rel.EXPECT().CollectChanges(gomock.Any(), from, end, false, gomock.Any()).DoAndReturn(
+		func(
+			ctx context.Context,
+			_ types.TS,
+			_ types.TS,
+			_ bool,
+			_ *mpool.MPool,
+		) (engine.ChangesHandle, error) {
+			require.Equal(t, engine.SnapshotReadPolicyVisibleState, engine.SnapshotReadPolicyFromContext(ctx))
+			return fake, nil
+		},
+	)
 
 	handle, err := CollectChanges(context.Background(), rel, from, end, nil)
 	require.NoError(t, err)
@@ -157,7 +168,18 @@ func TestCollectChangesPropagatesError(t *testing.T) {
 	end := types.BuildTS(3, 0)
 
 	expectedErr := moerr.NewInternalErrorNoCtx("collect failed")
-	rel.EXPECT().CollectChanges(gomock.Any(), from, end, false, gomock.Any()).Return(nil, expectedErr)
+	rel.EXPECT().CollectChanges(gomock.Any(), from, end, false, gomock.Any()).DoAndReturn(
+		func(
+			ctx context.Context,
+			_ types.TS,
+			_ types.TS,
+			_ bool,
+			_ *mpool.MPool,
+		) (engine.ChangesHandle, error) {
+			require.Equal(t, engine.SnapshotReadPolicyVisibleState, engine.SnapshotReadPolicyFromContext(ctx))
+			return nil, expectedErr
+		},
+	)
 
 	handle, err := CollectChanges(context.Background(), rel, from, end, nil)
 	require.Nil(t, handle)
