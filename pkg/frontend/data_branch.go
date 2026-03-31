@@ -293,6 +293,8 @@ func handleDataBranch(
 		return handleBranchDiff(execCtx, ses, st)
 	case *tree.DataBranchMerge:
 		return handleBranchMerge(execCtx, ses, st)
+	case *tree.DataBranchPick:
+		return handleBranchPick(execCtx, ses, st)
 	default:
 		return moerr.NewNotSupportedNoCtxf("data branch not supported: %v", st)
 	}
@@ -639,6 +641,7 @@ func diffMergeAgency(
 		ok        bool
 		diffStmt  *tree.DataBranchDiff
 		mergeStmt *tree.DataBranchMerge
+		pickStmt  *tree.DataBranchPick
 	)
 
 	defer func() {
@@ -647,7 +650,9 @@ func diffMergeAgency(
 
 	if diffStmt, ok = stmt.(*tree.DataBranchDiff); !ok {
 		if mergeStmt, ok = stmt.(*tree.DataBranchMerge); !ok {
-			return moerr.NewNotSupportedNoCtxf("data branch not supported: %v", stmt)
+			if pickStmt, ok = stmt.(*tree.DataBranchPick); !ok {
+				return moerr.NewNotSupportedNoCtxf("data branch not supported: %v", stmt)
+			}
 		}
 	}
 
@@ -664,11 +669,19 @@ func diffMergeAgency(
 		); err != nil {
 			return
 		}
-	} else {
+	} else if mergeStmt != nil {
 		copt.conflictOpt = mergeStmt.ConflictOpt
 		copt.expandUpdate = true
 		if tblStuff, err = getTableStuff(
 			ctx, ses, bh, mergeStmt.SrcTable, mergeStmt.DstTable,
+		); err != nil {
+			return
+		}
+	} else {
+		copt.conflictOpt = pickStmt.ConflictOpt
+		copt.expandUpdate = true
+		if tblStuff, err = getTableStuff(
+			ctx, ses, bh, pickStmt.SrcTable, pickStmt.DstTable,
 		); err != nil {
 			return
 		}
@@ -737,6 +750,12 @@ func diffMergeAgency(
 
 			if err2 := satisfyDiffOutputOpt(
 				ctx, cancel, stop, ses, bh, diffStmt, dagInfo, tblStuff, retBatCh,
+			); err2 != nil {
+				outputErr.Store(err2)
+			}
+		} else if pickStmt != nil {
+			if err2 := pickMergeDiffs(
+				ctx, cancel, ses, bh, pickStmt, dagInfo, tblStuff, retBatCh,
 			); err2 != nil {
 				outputErr.Store(err2)
 			}
