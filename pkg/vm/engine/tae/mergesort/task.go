@@ -161,10 +161,15 @@ func DrainTransferSlabPool() {
 				break
 			}
 			if bkt.head.CompareAndSwap(head, nil) {
-				bkt.count.Store(0)
+				// Use Add(-n) rather than Store(0) so concurrent
+				// putTransferSlab calls that raced with the CAS are
+				// not silently erased.
+				var n int32
 				for node := head; node != nil; node = node.next {
 					mpool.FreeSlice(transferSlabMPool, node.slab)
+					n++
 				}
+				bkt.count.Add(-n)
 				break
 			}
 		}

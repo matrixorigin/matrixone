@@ -160,10 +160,16 @@ func drainArenaPools() {
 				break
 			}
 			if pool.head.CompareAndSwap(head, nil) {
-				pool.count.Store(0)
+				// Count and free exactly the nodes we grabbed.
+				// Use Add(-n) rather than Store(0) so concurrent
+				// PutArena calls that incremented count after the CAS
+				// are not silently erased.
+				var n int32
 				for node := head; node != nil; node = node.next {
 					node.arena.FreeBuffers()
+					n++
 				}
+				pool.count.Add(-n)
 				break
 			}
 		}
