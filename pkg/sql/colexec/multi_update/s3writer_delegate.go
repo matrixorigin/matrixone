@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -261,9 +262,22 @@ func (writer *s3WriterDelegate) append(
 		insertAttrs := writer.updateCtxInfos[updateCtx.TableDef.Name].insertAttrs
 		projBat := inBatch.SelectColumns(updateCtx.InsertCols, insertAttrs)
 
+		tableType := writer.updateCtxInfos[updateCtx.TableDef.Name].tableType
+
+		// Check NOT NULL constraints for main table columns (mirrors insert_main_table).
+		if tableType == UpdateMainTable {
+			for insertIdx, inputIdx := range updateCtx.InsertCols {
+				col := updateCtx.TableDef.Cols[insertIdx]
+				if col.Default != nil && !col.Default.NullAbility && !strings.HasPrefix(col.Name, catalog.PrefixCBColName) {
+					if inBatch.Vecs[inputIdx].HasNull() {
+						return moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
+					}
+				}
+			}
+		}
+
 		// Index tables with a sort key need null rows stripped — the sinker
 		// sorts by this key and nulls cannot participate.
-		tableType := writer.updateCtxInfos[updateCtx.TableDef.Name].tableType
 		needNullFilter := tableType != UpdateMainTable &&
 			!writer.isClusterBys[i] &&
 			writer.sortIndexes[i] > -1
