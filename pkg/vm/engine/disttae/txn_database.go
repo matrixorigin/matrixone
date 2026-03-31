@@ -682,10 +682,17 @@ func (db *txnDatabase) getTableItem(
 	var err error
 	c := engine.GetLatestCatalogCache()
 	if ok := c.GetTable(&item); ok {
-		// Guard against a transient catalog-cache race where InsertTable
-		// has created the item but InsertColumns has not yet populated
-		// column definitions.  Fall through to loadTableFromStorage so
-		// callers never see a column-less table definition.
+		// Guard against a transient catalog-cache race: push logtail
+		// delivers mo_tables and mo_columns entries separately, each
+		// applied under a distinct catalogCacheMu acquisition.  Between
+		// the two, or during DCA (delayed-cache-apply) flush that
+		// replays buffered entries in sequence, InsertTable creates a
+		// BTree item with nil Defs; InsertColumns later populates Defs
+		// via in-place mutation.  A concurrent reader (GetTable, which
+		// only holds the BTree's internal read lock) can observe an item
+		// whose Defs are nil or partially written.  Fall through to
+		// loadTableFromStorage so callers never see a column-less
+		// table definition.
 		if item.Defs != nil {
 			return &item, nil
 		}

@@ -607,6 +607,11 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 				)
 				continue
 			}
+			// NB: InitTableItemWithColumns mutates *item in-place without
+			// holding the BTree's internal lock.  A concurrent GetTable
+			// reader can observe an item whose Defs field is nil or
+			// partially written.  Callers of GetTable must guard against
+			// this — see the Defs!=nil check in txnDatabase.getTableItem.
 			InitTableItemWithColumns(item, cols)
 		}
 	})
