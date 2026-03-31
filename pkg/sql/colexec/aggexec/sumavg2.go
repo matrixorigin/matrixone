@@ -632,7 +632,7 @@ func makeSumAvgExec(
 	case types.T_int16:
 		return newSumAvgExec[int64, int16](mp, int64OfCheck, isSum, aggID, isDistinct, param)
 	case types.T_year:
-		return newSumAvgExec[int64, int16](mp, int64OfCheck, isSum, aggID, isDistinct, param)
+		return newSumAvgExec[int64, types.MoYear](mp, int64OfCheck, isSum, aggID, isDistinct, param)
 	case types.T_int32:
 		return newSumAvgExec[int64, int32](mp, int64OfCheck, isSum, aggID, isDistinct, param)
 	case types.T_int64:
