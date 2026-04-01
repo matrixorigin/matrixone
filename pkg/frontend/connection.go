@@ -34,6 +34,17 @@ import (
 const connectionStatusActive = "active"
 
 var (
+	connectionSQLLiteralEscaper = strings.NewReplacer(
+		"\\", "\\\\",
+		"\n", "\\n",
+		"\x00", "\\0",
+		"\r", "\\r",
+		"\b", "\\b",
+		string(rune(26)), "\\Z",
+		"\t", "\\t",
+		"'", "''",
+	)
+
 	connectionTypeAliases = map[string]string{
 		"mysql":      "mysql",
 		"oracle":     "oracle",
@@ -414,5 +425,5 @@ func getSqlForDropConnection(connectionName string) string {
 }
 
 func escapeConnectionSQLLiteral(value string) string {
-	return strings.ReplaceAll(value, "'", "''")
+	return connectionSQLLiteralEscaper.Replace(value)
 }

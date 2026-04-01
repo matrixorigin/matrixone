@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -62,4 +63,29 @@ func TestBuildShowCreateConnectionSQLMasksSecrets(t *testing.T) {
 		sql,
 	)
 	require.NotContains(t, sql, "pw''1")
+}
+
+func TestEscapeConnectionSQLLiteralEscapesSpecialCharacters(t *testing.T) {
+	input := "a'b\\c\n\r\t" + string(rune(26)) + "\x00"
+	require.Equal(t, "a''b\\\\c\\n\\r\\t\\Z\\0", escapeConnectionSQLLiteral(input))
+}
+
+func TestGetSqlForInsertIntoMoConnectionsEscapesSpecialCharacters(t *testing.T) {
+	rawJSON := `{"path":"C:\\tmp\\fq","password":"a'b\n"}`
+	sql, err := getSqlForInsertIntoMoConnections(
+		context.Background(),
+		"conn1",
+		"mysql",
+		rawJSON,
+		connectionStatusActive,
+		1,
+		2,
+		3,
+		"2026-04-01 00:00:00",
+		"",
+	)
+	require.NoError(t, err)
+	require.Contains(t, sql, `C:\\\\tmp\\\\fq`)
+	require.Contains(t, sql, `a''b\\n`)
+	require.False(t, strings.Contains(sql, `C:\tmp\fq`))
 }
