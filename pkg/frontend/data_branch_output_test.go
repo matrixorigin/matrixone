@@ -733,3 +733,99 @@ func TestDataBranchOutputRemoveFileIgnoreError(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, os.IsNotExist(err))
 }
+
+func TestDataBranchOutputAppendBatchRowsAsSQLValues(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+
+	t.Run("appends insert and delete rows", func(t *testing.T) {
+		tmpValsBuffer := &bytes.Buffer{}
+		deleteCnt := 0
+		insertCnt := 0
+		deleteBuf := &bytes.Buffer{}
+		insertBuf := &bytes.Buffer{}
+		appender := sqlValuesAppender{
+			ctx:       context.Background(),
+			tblStuff:  tblStuff,
+			deleteCnt: &deleteCnt,
+			deleteBuf: deleteBuf,
+			insertCnt: &insertCnt,
+			insertBuf: insertBuf,
+		}
+
+		insertBat := buildVisibleComparisonBatch(t, ses.proc.Mp(), [][]any{
+			{int64(1), "alpha"},
+			{int64(2), "beta"},
+		})
+		defer insertBat.Clean(ses.proc.Mp())
+
+		require.NoError(t, appendBatchRowsAsSQLValues(
+			context.Background(),
+			ses,
+			tblStuff,
+			batchWithKind{kind: diffInsert, batch: insertBat},
+			tmpValsBuffer,
+			appender,
+		))
+		require.Equal(t, 2, insertCnt)
+		require.Equal(t, "(1,'alpha'),(2,'beta')", insertBuf.String())
+
+		deleteBat := buildVisibleComparisonBatch(t, ses.proc.Mp(), [][]any{
+			{int64(3), "gamma"},
+			{int64(4), "delta"},
+		})
+		defer deleteBat.Clean(ses.proc.Mp())
+
+		require.NoError(t, appendBatchRowsAsSQLValues(
+			context.Background(),
+			ses,
+			tblStuff,
+			batchWithKind{kind: diffDelete, batch: deleteBat},
+			tmpValsBuffer,
+			appender,
+		))
+		require.Equal(t, 2, deleteCnt)
+		require.Equal(t, "3,4", deleteBuf.String())
+	})
+
+	t.Run("returns shape mismatch error", func(t *testing.T) {
+		tmpValsBuffer := &bytes.Buffer{}
+		deleteCnt := 0
+		insertCnt := 0
+		deleteBuf := &bytes.Buffer{}
+		insertBuf := &bytes.Buffer{}
+		appender := sqlValuesAppender{
+			ctx:       context.Background(),
+			tblStuff:  tblStuff,
+			deleteCnt: &deleteCnt,
+			deleteBuf: deleteBuf,
+			insertCnt: &insertCnt,
+			insertBuf: insertBuf,
+		}
+
+		bat := batch.NewWithSize(2)
+		bat.SetAttributes([]string{"id", "name"})
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+		defer bat.Clean(ses.proc.Mp())
+
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, ses.proc.Mp()))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(2), false, ses.proc.Mp()))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("only-one"), false, ses.proc.Mp()))
+		bat.SetRowCount(2)
+
+		err := appendBatchRowsAsSQLValues(
+			context.Background(),
+			ses,
+			tblStuff,
+			batchWithKind{kind: diffInsert, batch: bat},
+			tmpValsBuffer,
+			appender,
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "batch shape mismatch")
+	})
+}
