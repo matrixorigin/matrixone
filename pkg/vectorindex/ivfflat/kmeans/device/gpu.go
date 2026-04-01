@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans/elkans"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans/balanced"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	cuvs "github.com/rapidsai/cuvs/go"
 	"github.com/rapidsai/cuvs/go/ivf_flat"
@@ -130,7 +130,7 @@ func resolveCuvsDistanceForDense(distance metric.MetricType) cuvs.Distance {
 
 func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 	maxIterations int, deltaThreshold float64,
-	distanceType metric.MetricType, initType kmeans.InitType,
+	distanceType metric.MetricType, _ kmeans.InitType,
 	spherical bool,
 	nworker int) (kmeans.Clusterer, error) {
 
@@ -156,7 +156,7 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 		c.indexParams = indexParams
 		return c, nil
 	default:
-		return elkans.NewKMeans(vectors, clusterCnt, maxIterations, deltaThreshold, distanceType, initType, spherical, nworker)
+		return balanced.NewKMeans(vectors, clusterCnt, maxIterations, deltaThreshold, distanceType, spherical, nworker)
 
 	}
 }
