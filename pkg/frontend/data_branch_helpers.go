@@ -168,7 +168,8 @@ func runSql(
 		WithDisableIncrStatement().
 		WithTxn(backSes.GetTxnHandler().GetTxn()).
 		WithKeepTxnAlive().
-		WithTimeZone(ses.GetTimeZone())
+		WithTimeZone(ses.GetTimeZone()).
+		WithDatabase(ses.GetDatabaseName())
 
 	if streamChan != nil && errChan != nil {
 		opts = opts.WithStreaming(streamChan, errChan)

@@ -502,25 +502,17 @@ func materializeSubqueryUnified(
 	}
 
 	pkType := tblStuff.def.colTypes[tblStuff.def.pkColIdx]
-	pkColName := tblStuff.def.colNames[tblStuff.def.pkColIdx]
 
-	// Step 1: Store subquery results in a temp table.
+	// Compose the subquery SQL: wrap the user's SELECT with ORDER BY for
+	// streaming sorted results.  No temp table needed — the SQLExecutor in
+	// runSql will execute the composed query directly with the correct
+	// database context.  We use ORDER BY 1 (positional) so the subquery's
+	// output column name doesn't need to match the table's PK column name.
 	fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
 	stmt.Keys.Select.Format(fmtCtx)
 	subquerySQL := fmtCtx.String()
 
-	const tempTable = "__mo_pick_keys"
-	createSQL := "CREATE TEMPORARY TABLE " + tempTable + " AS (" + subquerySQL + ")"
-	if err = bh.Exec(ctx, createSQL); err != nil {
-		return nil, errors.New("failed to create temp table for KEYS subquery: " + err.Error())
-	}
-	defer func() {
-		// Best-effort cleanup.
-		_ = bh.Exec(ctx, "DROP TEMPORARY TABLE IF EXISTS "+tempTable)
-	}()
-
-	// Step 2: Stream sorted results.
-	orderSQL := "SELECT `" + pkColName + "` FROM " + tempTable + " ORDER BY `" + pkColName + "`"
+	orderSQL := "SELECT * FROM (" + subquerySQL + ") AS __mo_pick_sub ORDER BY 1"
 
 	var sb *segmentBuilder
 	if canBuildSegments {
