@@ -687,6 +687,7 @@ func TestHashDiff_NoLCAWithStubHandles(t *testing.T) {
 				data: baseData,
 			}},
 		}},
+		nil, // no pickKeyHashmap for DIFF test
 	)
 	require.NoError(t, err)
 	require.Len(t, got, 2)

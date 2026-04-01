@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"math"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -26,9 +28,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 func handleBranchPick(
@@ -87,11 +92,9 @@ func pickMergeDiffs(
 		cancel()
 	}()
 
-	// Materialize the KEYS clause into a PK set for fast lookup.
-	keySet, err := materializePickKeys(ctx, ses, bh, stmt, tblStuff)
-	if err != nil {
-		return err
-	}
+	// PK membership filtering is now handled upstream in buildHashmapForTable
+	// via pickKeyHashmap.  All rows arriving through retCh are guaranteed to
+	// be in the KEYS set.  The consumer only needs to handle conflict semantics.
 
 	// skipSet tracks picked keys that should be skipped (SKIP conflict mode).
 	var skipSet map[string]struct{}
@@ -132,7 +135,7 @@ func pickMergeDiffs(
 
 		if err = appendPickedBatchRows(
 			ctx, ses, tblStuff, wrapped, tmpValsBuffer, appender,
-			keySet, stmt.ConflictOpt, skipSet,
+			stmt.ConflictOpt, skipSet,
 		); err != nil {
 			firstErr = err
 			cancel()
@@ -155,8 +158,12 @@ func pickMergeDiffs(
 	return
 }
 
-// appendPickedBatchRows filters rows from a diff batch by PK key set,
-// then applies the user's conflict semantics before appending to the SQL appender.
+// appendPickedBatchRows applies the user's conflict semantics to each row
+// in a diff batch and appends surviving rows to the SQL appender.
+//
+// PK membership filtering is already done upstream in buildHashmapForTable
+// via pickKeyHashmap — every row arriving here is guaranteed to belong to
+// the KEYS set.  This function only needs to handle conflict logic.
 //
 // hashDiff uses ACCEPT internally, so:
 //   - base DELETE batches (side=base, kind=DELETE) represent conflict victims
@@ -175,7 +182,6 @@ func appendPickedBatchRows(
 	wrapped batchWithKind,
 	tmpValsBuffer *bytes.Buffer,
 	appender sqlValuesAppender,
-	keySet map[string]struct{},
 	userConflictOpt *tree.ConflictOpt,
 	skipSet map[string]struct{},
 ) (err error) {
@@ -186,14 +192,10 @@ func appendPickedBatchRows(
 			return ctx.Err()
 		}
 
-		// Extract PK value for this row and check membership.
+		// Extract PK for conflict handling (FAIL error message, SKIP set).
 		pkKey, err2 := extractPKAsString(ses, tblStuff, wrapped.batch, rowIdx)
 		if err2 != nil {
 			return err2
-		}
-
-		if _, ok := keySet[pkKey]; !ok {
-			continue // skip rows not in the KEYS set
 		}
 
 		// Handle conflict semantics for picked keys.
@@ -354,144 +356,253 @@ func extractPKVal(vec *vector.Vector, rowIdx int) any {
 	}
 }
 
-// materializePickKeys converts the KEYS clause (values or subquery) into
-// a map[string]struct{} for O(1) PK membership testing.
-func materializePickKeys(
+// materializePickKeysAndFilter is the unified entry point for PICK key
+// materialization.  It produces two outputs:
+//
+//   - pickKeyHashmap: BranchHashmap storing all PK values for O(1) batch-level
+//     filtering inside buildHashmapForTable.  Memory-controlled via the
+//     allocator + spill-to-disk mechanism of BranchHashmap.
+//   - pkFilter: engine.PKFilter containing multi-segment ZoneMap ranges for
+//     object/block pruning inside logtailreplay/change_handle.go.  Nil when
+//     segments cannot be built (composite PK, exotic types, etc).
+//
+// Both literal KEYS and subquery KEYS converge on the same pipeline:
+//
+//  1. Build a sorted typed Vec of PK values
+//  2. PutByVectors into pickKeyHashmap
+//  3. Iterate sorted Vec through segmentBuilder → ZoneMap segments
+//
+// For subquery KEYS, the subquery is stored in a temp table and read back
+// via ORDER BY for globally sorted streaming.
+//
+// For composite PK (__mo_cpkey_col), only the hashmap is built — segment
+// construction is skipped because the opaque composite encoding cannot
+// be meaningfully range-pruned.
+func materializePickKeysAndFilter(
 	ctx context.Context,
 	ses *Session,
 	bh BackgroundExec,
 	stmt *tree.DataBranchPick,
 	tblStuff tableStuff,
-) (map[string]struct{}, error) {
+) (pickKeyHashmap databranchutils.BranchHashmap, pkFilter *engine.PKFilter, err error) {
 	if stmt.Keys == nil {
-		return nil, moerr.NewInvalidInputNoCtx("DATA BRANCH PICK requires a KEYS clause")
+		return nil, nil, moerr.NewInvalidInputNoCtx("DATA BRANCH PICK requires a KEYS clause")
 	}
+
+	// Create the pick key hashmap with the shared allocator.
+	pickKeyHashmap, err = databranchutils.NewBranchHashmap(
+		databranchutils.WithBranchHashmapAllocator(tblStuff.hashmapAllocator),
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Segment construction only works for single-column, non-composite PK
+	// with types we can put into a vector and decode back to raw bytes.
+	canBuildSegments := tblStuff.def.pkKind == normalKind
 
 	switch stmt.Keys.Type {
 	case tree.PickKeysValues:
-		return materializePickKeysFromValues(ses, stmt, tblStuff)
+		pkFilter, err = materializeValuesUnified(ses, stmt, tblStuff, canBuildSegments, pickKeyHashmap)
 	case tree.PickKeysSubquery:
-		return materializePickKeysFromSubquery(ctx, ses, bh, stmt, tblStuff)
+		pkFilter, err = materializeSubqueryUnified(ctx, ses, bh, stmt, tblStuff, canBuildSegments, pickKeyHashmap)
 	default:
-		return nil, moerr.NewInvalidInputNoCtxf("unsupported KEYS type: %d", stmt.Keys.Type)
+		err = moerr.NewInvalidInputNoCtxf("unsupported KEYS type: %d", stmt.Keys.Type)
 	}
+	if err != nil {
+		pickKeyHashmap.Close()
+		return nil, nil, err
+	}
+	return pickKeyHashmap, pkFilter, nil
 }
 
-// materializePickKeysFromValues converts literal key expressions to string keys.
-func materializePickKeysFromValues(
+// materializeValuesUnified processes literal KEYS (e.g. KEYS (1, 2, 3)):
+//
+//  1. Parse AST expressions → typed Vec (via appendExprToVec)
+//  2. Sort Vec
+//  3. PutByVectors into pickKeyHashmap
+//  4. Iterate sorted Vec → segmentBuilder → ZoneMap segments
+//
+// If any expression cannot be converted to a typed value, segment
+// construction is abandoned (graceful degradation — hashmap still works).
+func materializeValuesUnified(
 	ses *Session,
 	stmt *tree.DataBranchPick,
 	tblStuff tableStuff,
-) (map[string]struct{}, error) {
-	keySet := make(map[string]struct{}, len(stmt.Keys.KeyExprs))
-	var buf bytes.Buffer
+	canBuildSegments bool,
+	pickKeyHashmap databranchutils.BranchHashmap,
+) (pkFilter *engine.PKFilter, err error) {
+	mp := ses.proc.Mp()
+	pkType := tblStuff.def.colTypes[tblStuff.def.pkColIdx]
 
+	// Build a typed Vec from AST expressions.
+	vec := vector.NewVec(pkType)
 	for _, expr := range stmt.Keys.KeyExprs {
-		buf.Reset()
-		if err := formatPKExprIntoCanonicalString(ses, expr, tblStuff, &buf); err != nil {
-			return nil, err
+		if appendErr := appendExprToVec(vec, expr, pkType, mp); appendErr != nil {
+			vec.Free(mp)
+			return nil, appendErr
 		}
-		keySet[buf.String()] = struct{}{}
 	}
 
-	return keySet, nil
+	if vec.Length() == 0 {
+		vec.Free(mp)
+		return nil, nil
+	}
+
+	// Sort for segment construction (and deterministic hashmap ordering).
+	vec.InplaceSort()
+
+	// Put all PK values into the hashmap.  keyCols=[0] because the Vec has
+	// exactly one column (the PK).
+	if err = pickKeyHashmap.PutByVectors([]*vector.Vector{vec}, []int{0}); err != nil {
+		vec.Free(mp)
+		return nil, err
+	}
+
+	// Build ZoneMap segments from the sorted Vec.
+	if canBuildSegments {
+		pkFilter = buildPKFilterFromVec(vec, pkType, tblStuff.def.pkColIdx)
+	}
+	vec.Free(mp)
+	return pkFilter, nil
 }
 
-// materializePickKeysFromSubquery executes the subquery and collects PK values.
-func materializePickKeysFromSubquery(
+// materializeSubqueryUnified handles KEYS (SELECT ...):
+//
+//  1. Execute the user's subquery into a temp table
+//  2. Stream "SELECT pk_col FROM temp ORDER BY pk_col" via runSql streaming
+//  3. For each streamed batch: PutByVectors into pickKeyHashmap + segmentBuilder
+//  4. Finalize segments, drop temp table
+//
+// The ORDER BY ensures globally sorted streaming, which the segmentBuilder
+// requires.  Streaming avoids buffering the entire result set in memory.
+func materializeSubqueryUnified(
 	ctx context.Context,
 	ses *Session,
 	bh BackgroundExec,
 	stmt *tree.DataBranchPick,
 	tblStuff tableStuff,
-) (map[string]struct{}, error) {
+	canBuildSegments bool,
+	pickKeyHashmap databranchutils.BranchHashmap,
+) (pkFilter *engine.PKFilter, err error) {
 	if stmt.Keys.Select == nil {
 		return nil, moerr.NewInvalidInputNoCtx("KEYS subquery is nil")
 	}
 
-	// Format the subquery to SQL.
+	pkType := tblStuff.def.colTypes[tblStuff.def.pkColIdx]
+	pkColName := tblStuff.def.colNames[tblStuff.def.pkColIdx]
+
+	// Step 1: Store subquery results in a temp table.
 	fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
 	stmt.Keys.Select.Format(fmtCtx)
-	sql := fmtCtx.String()
+	subquerySQL := fmtCtx.String()
 
-	if err := bh.Exec(ctx, sql); err != nil {
-		return nil, errors.New("failed to execute KEYS subquery: " + err.Error())
+	const tempTable = "__mo_pick_keys"
+	createSQL := "CREATE TEMPORARY TABLE " + tempTable + " AS (" + subquerySQL + ")"
+	if err = bh.Exec(ctx, createSQL); err != nil {
+		return nil, errors.New("failed to create temp table for KEYS subquery: " + err.Error())
+	}
+	defer func() {
+		// Best-effort cleanup.
+		_ = bh.Exec(ctx, "DROP TEMPORARY TABLE IF EXISTS "+tempTable)
+	}()
+
+	// Step 2: Stream sorted results.
+	orderSQL := "SELECT `" + pkColName + "` FROM " + tempTable + " ORDER BY `" + pkColName + "`"
+
+	var sb *segmentBuilder
+	if canBuildSegments {
+		sb = newSegmentBuilder(pkType)
 	}
 
-	erArray, err := getResultSet(ctx, bh)
-	if err != nil {
-		return nil, errors.New("failed to get KEYS subquery results: " + err.Error())
-	}
+	streamChan := make(chan executor.Result, runtime.NumCPU())
+	errChan := make(chan error, 1)
 
-	keySet := make(map[string]struct{})
-	var buf bytes.Buffer
-
-	for _, rs := range erArray {
-		for rowIdx := uint64(0); rowIdx < rs.GetRowCount(); rowIdx++ {
-			buf.Reset()
-			if err := formatPKResultRowIntoCanonicalString(ctx, ses, rs, rowIdx, tblStuff, &buf); err != nil {
-				return nil, err
-			}
-			keySet[buf.String()] = struct{}{}
-		}
-	}
-
-	return keySet, nil
-}
-
-func formatPKExprIntoCanonicalString(
-	ses *Session,
-	expr tree.Expr,
-	tblStuff tableStuff,
-	buf *bytes.Buffer,
-) error {
-	pkColIdxes := tblStuff.def.pkColIdxes
-	pkTypes := tblStuff.def.colTypes
-	switch e := expr.(type) {
-	case *tree.Tuple:
-		if len(e.Exprs) != len(pkColIdxes) {
-			return moerr.NewInvalidInputNoCtxf("invalid composite KEYS width: got %d want %d", len(e.Exprs), len(pkColIdxes))
-		}
-		for i, sub := range e.Exprs {
-			if err := formatSinglePKExprIntoCanonicalString(ses, sub, pkTypes[pkColIdxes[i]], buf); err != nil {
-				return err
-			}
-			if i < len(e.Exprs)-1 {
-				buf.WriteByte(',')
+	// Launch the streaming SQL in a goroutine.
+	go func() {
+		defer close(streamChan)
+		defer close(errChan)
+		if _, err2 := runSql(ctx, ses, bh, orderSQL, streamChan, errChan); err2 != nil {
+			select {
+			case errChan <- err2:
+			default:
 			}
 		}
-	default:
-		if len(pkColIdxes) != 1 {
-			return moerr.NewInvalidInputNoCtxf("invalid scalar KEYS width for composite PK: got 1 want %d", len(pkColIdxes))
-		}
-		if err := formatSinglePKExprIntoCanonicalString(ses, expr, pkTypes[pkColIdxes[0]], buf); err != nil {
-			return err
+	}()
+
+	// Consume streamed batches.
+	streamOpen, errOpen := true, true
+	for streamOpen || errOpen {
+		select {
+		case <-ctx.Done():
+			err = ctx.Err()
+			return nil, err
+
+		case e, ok := <-errChan:
+			if !ok {
+				errOpen = false
+				continue
+			}
+			return nil, errors.New("KEYS subquery streaming error: " + e.Error())
+
+		case sqlRet, ok := <-streamChan:
+			if !ok {
+				streamOpen = false
+				continue
+			}
+			for _, bat := range sqlRet.Batches {
+				if bat == nil || bat.VectorCount() == 0 || bat.RowCount() == 0 {
+					continue
+				}
+				pkVec := bat.Vecs[0]
+
+				// Put into hashmap.
+				if putErr := pickKeyHashmap.PutByVectors(
+					[]*vector.Vector{pkVec}, []int{0},
+				); putErr != nil {
+					sqlRet.Close()
+					return nil, putErr
+				}
+
+				// Feed segmentBuilder (data arrives sorted from ORDER BY).
+				if sb != nil {
+					for i := 0; i < pkVec.Length(); i++ {
+						sb.observe(pkVec.GetRawBytesAt(i))
+					}
+				}
+			}
+			sqlRet.Close()
 		}
 	}
-	return nil
-}
 
-func formatSinglePKExprIntoCanonicalString(
-	ses *Session,
-	expr tree.Expr,
-	pkType types.Type,
-	buf *bytes.Buffer,
-) error {
-	vec := vector.NewVec(pkType)
-	defer vec.Free(ses.proc.Mp())
-	if err := appendExprToVec(vec, expr, pkType, ses.proc.Mp()); err != nil {
-		return err
+	// Finalize ZoneMap segments.
+	if sb != nil {
+		segments := sb.finalize()
+		if len(segments) > 0 {
+			pkFilter = &engine.PKFilter{
+				Segments:      segments,
+				PrimarySeqnum: tblStuff.def.pkColIdx,
+			}
+		}
 	}
-	val := extractPKVal(vec, 0)
-	return formatValIntoString(ses, val, pkType, buf)
+
+	return pkFilter, nil
 }
 
-func isStringLikePKType(t types.Type) bool {
-	switch t.Oid {
-	case types.T_varchar, types.T_char, types.T_text, types.T_blob, types.T_binary, types.T_varbinary:
-		return true
-	default:
-		return false
+// buildPKFilterFromVec iterates a pre-sorted vector through the segmentBuilder
+// and returns a PKFilter.  Returns nil if the vector produces no segments.
+// Does NOT free the vector — the caller is responsible.
+func buildPKFilterFromVec(vec *vector.Vector, pkType types.Type, pkColIdx int) *engine.PKFilter {
+	if vec == nil || vec.Length() == 0 {
+		return nil
+	}
+	segments := buildSegmentsFromSortedVec(vec, pkType)
+	if len(segments) == 0 {
+		return nil
+	}
+	return &engine.PKFilter{
+		Segments:      segments,
+		PrimarySeqnum: pkColIdx,
 	}
 }
 
@@ -531,116 +642,202 @@ func unescapeMySQLString(s string) string {
 	return string(buf)
 }
 
-func getExecResultPKValue(
-	ctx context.Context,
-	rs ExecResult,
-	rowIdx, colIdx uint64,
-	pkType types.Type,
-) (any, error) {
-	if typedRS, ok := rs.(ResultSet); ok {
-		val, err := typedRS.GetValue(ctx, rowIdx, colIdx)
-		if err != nil {
-			return nil, err
-		}
-		if !isStringLikePKType(pkType) {
-			return val, nil
-		}
-		switch x := val.(type) {
-		case string:
-			return unescapeMySQLString(x), nil
-		case []byte:
-			return []byte(unescapeMySQLString(string(x))), nil
-		default:
-			return val, nil
+// ---------------------------------------------------------------------------
+// Segment builder: adaptive gap-based streaming segmentation
+// ---------------------------------------------------------------------------
+//
+// The segment builder groups a stream of SORTED PK raw bytes into non-
+// overlapping ZoneMap segments.  It is fed one PK at a time (via observe)
+// and produces a compact [][]byte of 64-byte ZoneMap ranges (via finalize).
+//
+// Algorithm:
+//
+//  1. For numeric PKs — adaptive gap-based splitting.
+//     Track a running segment [curMin, curMax] and a running gap average.
+//     When the distance from curMax to the next PK exceeds
+//     GAP_RATIO × (average gap so far), start a new segment.
+//     This naturally clusters nearby values while splitting on
+//     sparse regions.
+//
+//  2. For string PKs — count-based splitting.
+//     Distance metrics for variable-length strings are unreliable, so
+//     we simply cap each segment at MAX_SEGMENT_SIZE values.
+//
+//  3. Hard cap: every segment is capped at MAX_SEGMENT_SIZE values
+//     regardless of PK type, preventing a single enormous ZoneMap that
+//     spans the entire key space and provides no pruning benefit.
+//
+// Constants:
+//   - maxSegmentSize (8192): hard cap on values per segment.
+//   - minGapSample   (4):    minimum gap observations before adaptive
+//     splitting activates (avoids splitting on noise).
+//   - gapRatio       (5.0):  gap > gapRatio × avgGap triggers a split.
+
+const (
+	maxSegmentSize = 8192
+	minGapSample   = 4
+	gapRatio       = 5.0
+)
+
+type segmentBuilder struct {
+	pkType types.Type
+
+	// Current segment state.
+	curMin   []byte  // min PK raw bytes (owned copy)
+	curMax   []byte  // max PK raw bytes (owned copy)
+	curCount int     // values in current segment
+
+	// Gap statistics (numeric PKs only).
+	gapSum    float64
+	gapCount  int
+	isNumeric bool
+
+	// Completed segments.
+	segments [][]byte
+}
+
+func newSegmentBuilder(pkType types.Type) *segmentBuilder {
+	return &segmentBuilder{
+		pkType:    pkType,
+		isNumeric: isNumericType(pkType.Oid),
+	}
+}
+
+// observe ingests one sorted PK value (raw bytes from vec.GetRawBytesAt).
+// MUST be called in ascending sort order.
+func (sb *segmentBuilder) observe(pkBytes []byte) {
+	// Copy — the source vector's memory is not guaranteed stable after sort.
+	pk := make([]byte, len(pkBytes))
+	copy(pk, pkBytes)
+
+	if sb.curMin == nil {
+		// First value: start a new segment.
+		sb.curMin = pk
+		sb.curMax = pk
+		sb.curCount = 1
+		return
+	}
+
+	shouldSplit := false
+
+	if sb.curCount >= maxSegmentSize {
+		// Hard cap — prevents one segment spanning the entire key space.
+		shouldSplit = true
+	} else if sb.isNumeric && sb.gapCount >= minGapSample {
+		// Adaptive gap-based split: the distance from curMax to this PK
+		// is compared against GAP_RATIO × the running average gap.
+		// A large gap indicates a sparse region between clusters.
+		gap := numericGap(sb.curMax, pk, sb.pkType)
+		avgGap := sb.gapSum / float64(sb.gapCount)
+		if gap > gapRatio*avgGap {
+			shouldSplit = true
 		}
 	}
+
+	if shouldSplit {
+		sb.flushSegment()
+		sb.curMin = pk
+		sb.curMax = pk
+		sb.curCount = 1
+		return
+	}
+
+	// Extend the current segment.
+	if sb.isNumeric {
+		gap := numericGap(sb.curMax, pk, sb.pkType)
+		sb.gapSum += gap
+		sb.gapCount++
+	}
+	sb.curMax = pk
+	sb.curCount++
+}
+
+// flushSegment writes the current [curMin, curMax] range as a 64-byte ZM
+// and appends it to the segments list.
+func (sb *segmentBuilder) flushSegment() {
+	if sb.curMin == nil {
+		return
+	}
+	zm := index.NewZM(sb.pkType.Oid, sb.pkType.Scale)
+	index.UpdateZM(zm, sb.curMin)
+	index.UpdateZM(zm, sb.curMax)
+	sb.segments = append(sb.segments, []byte(zm))
+}
+
+// finalize flushes any pending segment and returns the complete list.
+func (sb *segmentBuilder) finalize() [][]byte {
+	sb.flushSegment()
+	return sb.segments
+}
+
+// buildSegmentsFromSortedVec iterates a pre-sorted vector of PK values and
+// produces ZoneMap segments via the segmentBuilder.
+func buildSegmentsFromSortedVec(vec *vector.Vector, pkType types.Type) [][]byte {
+	n := vec.Length()
+	if n == 0 {
+		return nil
+	}
+	sb := newSegmentBuilder(pkType)
+	for i := 0; i < n; i++ {
+		sb.observe(vec.GetRawBytesAt(i))
+	}
+	return sb.finalize()
+}
+
+// numericGap computes |b − a| for two PK values encoded as raw bytes,
+// returned as float64 for averaging in the gap heuristic.
+func numericGap(a, b []byte, pkType types.Type) float64 {
 	switch pkType.Oid {
-	case types.T_bool:
-		v, err := rs.GetInt64(ctx, rowIdx, colIdx)
-		return v != 0, err
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		return rs.GetUint64(ctx, rowIdx, colIdx)
-	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-		return rs.GetInt64(ctx, rowIdx, colIdx)
-	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary:
-		s, err := rs.GetString(ctx, rowIdx, colIdx)
-		if err != nil {
-			return nil, err
+	case types.T_int8:
+		return math.Abs(float64(types.DecodeInt8(b)) - float64(types.DecodeInt8(a)))
+	case types.T_int16:
+		return math.Abs(float64(types.DecodeInt16(b)) - float64(types.DecodeInt16(a)))
+	case types.T_int32:
+		return math.Abs(float64(types.DecodeInt32(b)) - float64(types.DecodeInt32(a)))
+	case types.T_int64:
+		return math.Abs(float64(types.DecodeInt64(b)) - float64(types.DecodeInt64(a)))
+	case types.T_uint8:
+		va, vb := types.DecodeUint8(a), types.DecodeUint8(b)
+		if vb >= va {
+			return float64(vb - va)
 		}
-		return unescapeMySQLString(s), nil
-	case types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128, types.T_decimal256,
-		types.T_date, types.T_datetime, types.T_timestamp, types.T_time,
-		types.T_year, types.T_json, types.T_array_float32, types.T_array_float64:
-		return rs.GetString(ctx, rowIdx, colIdx)
+		return float64(va - vb)
+	case types.T_uint16:
+		va, vb := types.DecodeUint16(a), types.DecodeUint16(b)
+		if vb >= va {
+			return float64(vb - va)
+		}
+		return float64(va - vb)
+	case types.T_uint32:
+		va, vb := types.DecodeUint32(a), types.DecodeUint32(b)
+		if vb >= va {
+			return float64(vb - va)
+		}
+		return float64(va - vb)
+	case types.T_uint64:
+		va, vb := types.DecodeUint64(a), types.DecodeUint64(b)
+		if vb >= va {
+			return float64(vb - va)
+		}
+		return float64(va - vb)
+	case types.T_float32:
+		return math.Abs(float64(types.DecodeFloat32(b)) - float64(types.DecodeFloat32(a)))
+	case types.T_float64:
+		return math.Abs(types.DecodeFloat64(b) - types.DecodeFloat64(a))
 	default:
-		return rs.GetString(ctx, rowIdx, colIdx)
+		return 0
 	}
 }
 
-func formatPKResultRowIntoCanonicalString(
-	ctx context.Context,
-	ses *Session,
-	rs ExecResult,
-	rowIdx uint64,
-	tblStuff tableStuff,
-	buf *bytes.Buffer,
-) error {
-	pkColIdxes := tblStuff.def.pkColIdxes
-	if rs.GetColumnCount() != uint64(len(pkColIdxes)) {
-		return moerr.NewInvalidInputNoCtxf("invalid KEYS subquery column count: got %d want %d", rs.GetColumnCount(), len(pkColIdxes))
+func isNumericType(oid types.T) bool {
+	switch oid {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64:
+		return true
+	default:
+		return false
 	}
-	for i, pkColIdx := range pkColIdxes {
-		pkType := tblStuff.def.colTypes[pkColIdx]
-		val, err := getExecResultPKValue(ctx, rs, rowIdx, uint64(i), pkType)
-		if err != nil {
-			return errors.New("failed to read KEYS subquery result: " + err.Error())
-		}
-		if err := formatValIntoString(ses, val, pkType, buf); err != nil {
-			return err
-		}
-		if i < len(pkColIdxes)-1 {
-			buf.WriteByte(',')
-		}
-	}
-	return nil
-}
-
-// buildPKFilterForPick constructs an engine.PKFilter from literal KEYS values.
-// For subquery-based KEYS, returns nil (engine-level pruning is skipped;
-// the consumer-level string filter still guarantees correctness).
-// The returned vector is sorted, as required by ZoneMap.AnyIn().
-func buildPKFilterForPick(
-	stmt *tree.DataBranchPick,
-	tblStuff tableStuff,
-	mp *mpool.MPool,
-) (*engine.PKFilter, error) {
-	if stmt.Keys == nil || stmt.Keys.Type != tree.PickKeysValues {
-		return nil, nil
-	}
-	// Only support single-column PK for engine-level pruning.
-	// Composite PK uses __mo_cpkey_col which is opaque at the engine layer.
-	if tblStuff.def.pkKind != normalKind {
-		return nil, nil
-	}
-
-	pkType := tblStuff.def.colTypes[tblStuff.def.pkColIdx]
-	vec := vector.NewVec(pkType)
-
-	for _, expr := range stmt.Keys.KeyExprs {
-		if err := appendExprToVec(vec, expr, pkType, mp); err != nil {
-			vec.Free(mp)
-			return nil, err
-		}
-	}
-
-	// Sort the vector — required by ZoneMap.AnyIn() which uses binary search.
-	vec.InplaceSort()
-
-	return &engine.PKFilter{
-		Vec:           vec,
-		PrimarySeqnum: tblStuff.def.pkColIdx,
-	}, nil
 }
 
 // appendExprToVec appends a literal AST expression value to a typed vector.
@@ -666,7 +863,7 @@ func appendExprToVec(vec *vector.Vector, expr tree.Expr, pkType types.Type, mp *
 	case *tree.StrVal:
 		return vector.AppendBytes(vec, []byte(unescapeMySQLString(e.String())), false, mp)
 	default:
-		// For complex expressions, skip engine-level filtering.
+		// For complex expressions, skip ZoneMap pruning in CollectChanges.
 		return moerr.NewInvalidInputNoCtxf("unsupported expression type for PK filter: %T", expr)
 	}
 }
@@ -742,15 +939,12 @@ func appendNumericStringToVec(vec *vector.Vector, s string, pkType types.Type, m
 	case types.T_varchar, types.T_char, types.T_text, types.T_blob:
 		return vector.AppendBytes(vec, []byte(s), false, mp)
 	default:
-		// For other types (decimal, date, etc.), skip engine-level filtering.
+		// For other types (decimal, date, etc.), skip ZoneMap pruning in CollectChanges.
 		return moerr.NewInvalidInputNoCtxf("unsupported PK type for engine filter: %s", pkType.Oid.String())
 	}
 }
 
-// freePKFilter safely frees the PK filter vector.
-func freePKFilter(filter *engine.PKFilter, mp *mpool.MPool) {
-	if filter != nil && filter.Vec != nil {
-		filter.Vec.Free(mp)
-		filter.Vec = nil
-	}
-}
+// freePKFilter is a no-op retained for call-site compatibility.
+// The new PKFilter.Segments are plain [][]byte slices that require no
+// explicit deallocation — they are garbage-collected normally.
+func freePKFilter(_ *engine.PKFilter, _ *mpool.MPool) {}

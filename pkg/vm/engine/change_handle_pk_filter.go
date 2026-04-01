@@ -16,33 +16,43 @@ package engine
 
 import (
 	"context"
-
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-// PKFilter carries a sorted vector of primary key values that
-// CollectChanges implementations can use to prune objects, blocks,
-// and individual rows.  Only the DATA BRANCH PICK path attaches
-// this to the context; CDC, ISCP and other callers leave it nil
-// so their behavior is completely unchanged.
+// PKFilter carries a set of ZoneMap segments that CollectChanges
+// implementations use to prune objects and blocks whose sort-key
+// range does not overlap with the requested PK values.
+//
+// Only the DATA BRANCH PICK path attaches this to the context;
+// CDC, ISCP and other callers leave it nil so their behavior is
+// completely unchanged.
 type PKFilter struct {
-	// Vec is a sorted vector of PK values (typed to match the table's
-	// sort-key column).  Engine code can pass this to ZoneMap.AnyIn()
+	// Segments is a sorted, non-overlapping list of ZoneMap ranges.
+	// Each element is a 64-byte ZoneMap (index.ZM encoding) stored as
+	// raw []byte to avoid an import cycle between the engine and index
+	// packages.
+	//
+	// Constructed by the streaming PK materializer during PICK key
+	// ingestion.  The gap-based segmentation algorithm ensures high
+	// density (few false-positive object/block matches) while keeping
+	// the list compact (one ZM per cluster of nearby PKs).
+	//
+	// Used by logtailreplay/change_handle.go via index.AnySegmentOverlaps()
 	// for object-level and block-level pruning.
-	Vec *vector.Vector
+	Segments [][]byte
 
 	// PrimarySeqnum is the sequence number of the primary key column
-	// in the table schema, used for block-level zonemap access.
+	// in the table schema, used for block-level ZoneMap access.
 	PrimarySeqnum int
 }
 
 type pkFilterContextKey struct{}
 
 // WithPKFilter attaches a PK filter to the context so that
-// CollectChanges can apply object/block/row pruning.
-// Passing nil is a no-op and returns the original context.
+// CollectChanges can apply object/block pruning via ZoneMap segments.
+// Passing nil or a filter with no segments is a no-op and returns
+// the original context.
 func WithPKFilter(ctx context.Context, filter *PKFilter) context.Context {
-	if ctx == nil || filter == nil || filter.Vec == nil {
+	if ctx == nil || filter == nil || len(filter.Segments) == 0 {
 		return ctx
 	}
 	return context.WithValue(ctx, pkFilterContextKey{}, filter)

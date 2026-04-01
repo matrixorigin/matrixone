@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
@@ -368,10 +369,16 @@ type aobjBlockPlan struct {
 	noCommitTSColumn bool // object has no per-row commit-ts column
 	shouldReadByBlks []bool
 	totalBlocks      int
+	evaluableBlocks  int
+	overlapBlocks    int
 	prunedBlocks     int
 	// nonEvaluableReasons counts why a block cannot be pruned by commit-ts
 	// zonemap, for example missing metadata or unsupported tail column type.
 	nonEvaluableReasons map[string]int
+	// nonEvaluableSamples stores a few representative block-level diagnostics.
+	nonEvaluableSamples []string
+	// evaluableSamples stores a few representative successful evaluations.
+	evaluableSamples []string
 }
 
 func NewAObjectHandle(ctx context.Context, p *baseHandle, isTombstone bool, start, end types.TS, objects []*objectio.ObjectEntry, fs fileservice.FileService, mp *mpool.MPool) *AObjectHandle {
@@ -480,8 +487,12 @@ func (h *AObjectHandle) buildBlockPlan(
 	plan.evaluable = false
 	plan.shouldReadByBlks = make([]bool, int(obj.BlkCnt()))
 	plan.totalBlocks = int(obj.BlkCnt())
+	plan.evaluableBlocks = 0
+	plan.overlapBlocks = 0
 	plan.prunedBlocks = 0
 	plan.nonEvaluableReasons = make(map[string]int, 4)
+	plan.nonEvaluableSamples = make([]string, 0, 5)
+	plan.evaluableSamples = make([]string, 0, 5)
 	for i := range plan.shouldReadByBlks {
 		plan.shouldReadByBlks[i] = true
 	}
@@ -499,16 +510,24 @@ func (h *AObjectHandle) buildBlockPlan(
 	}
 	dataMeta := meta.MustGetMeta(objectio.SchemaData)
 	evaluableBlockCnt := 0
+	overlapBlockCnt := 0
 	pkf := h.p.changesHandle.pkFilter
 	pkSeqnum := uint16(h.p.changesHandle.primarySeqnum)
 	for i := uint16(0); i < uint16(obj.BlkCnt()); i++ {
 		blk := dataMeta.GetBlockMeta(uint32(i))
-		overlap, evaluable, reason, _ := blockCommitTSOverlapsRange(blk, h.start, h.end)
+		overlap, evaluable, reason, detail := blockCommitTSOverlapsRange(blk, h.start, h.end)
 		if !evaluable {
 			plan.nonEvaluableReasons[reason]++
-			if pkf != nil && pkf.Vec != nil {
+			if len(plan.nonEvaluableSamples) < 5 {
+				plan.nonEvaluableSamples = append(
+					plan.nonEvaluableSamples,
+					fmt.Sprintf("blk=%d reason=%s %s", i, reason, detail),
+				)
+			}
+			// Even for non-evaluable blocks, PK pruning can still skip them.
+			if pkf != nil && len(pkf.Segments) > 0 {
 				pkZM := blk.MustGetColumn(pkSeqnum).ZoneMap()
-				if pkZM.IsInited() && !pkZM.AnyIn(pkf.Vec) {
+				if pkZM.IsInited() && !index.AnySegmentOverlaps(pkZM, pkf.Segments) {
 					plan.shouldReadByBlks[i] = false
 					plan.prunedBlocks++
 				}
@@ -517,20 +536,32 @@ func (h *AObjectHandle) buildBlockPlan(
 		}
 		evaluableBlockCnt++
 		plan.shouldReadByBlks[i] = overlap
-		if overlap && pkf != nil && pkf.Vec != nil {
+		// Apply PK pruning as a secondary filter on blocks that survived commit-TS check.
+		if overlap && pkf != nil && len(pkf.Segments) > 0 {
 			pkZM := blk.MustGetColumn(pkSeqnum).ZoneMap()
-			if pkZM.IsInited() && !pkZM.AnyIn(pkf.Vec) {
+			if pkZM.IsInited() && !index.AnySegmentOverlaps(pkZM, pkf.Segments) {
 				plan.shouldReadByBlks[i] = false
 				overlap = false
 			}
 		}
+		if overlap {
+			overlapBlockCnt++
+		}
 		if !overlap {
 			plan.prunedBlocks++
+		}
+		if len(plan.evaluableSamples) < 5 {
+			plan.evaluableSamples = append(
+				plan.evaluableSamples,
+				fmt.Sprintf("blk=%d overlap=%t %s", i, overlap, detail),
+			)
 		}
 	}
 	// "evaluable" here means at least one block exposes usable commit-ts zonemap.
 	// If none does, strict mode can still choose the exact-scan fallback path.
 	plan.evaluable = evaluableBlockCnt > 0
+	plan.evaluableBlocks = evaluableBlockCnt
+	plan.overlapBlocks = overlapBlockCnt
 
 	// Detect objects without per-row commit-ts column (e.g. TN non-appendable
 	// compacted from CN objects).  If ALL non-evaluable blocks fail with
@@ -1009,9 +1040,9 @@ func (p *baseHandle) getObjectEntries(
 			}
 			// PK zonemap pruning: skip appendable objects whose sort-key range
 			// does not overlap with the requested PK values.
-			if pkf != nil && pkf.Vec != nil {
+			if pkf != nil && len(pkf.Segments) > 0 {
 				zm := entry.SortKeyZoneMap()
-				if zm.IsInited() && !zm.AnyIn(pkf.Vec) {
+				if zm.IsInited() && !index.AnySegmentOverlaps(zm, pkf.Segments) {
 					continue
 				}
 			}
@@ -1021,9 +1052,9 @@ func (p *baseHandle) getObjectEntries(
 				if entry.CreateTime.LT(&start) || entry.CreateTime.GT(&end) {
 					continue
 				}
-				if pkf != nil && pkf.Vec != nil {
+				if pkf != nil && len(pkf.Segments) > 0 {
 					zm := entry.SortKeyZoneMap()
-					if zm.IsInited() && !zm.AnyIn(pkf.Vec) {
+					if zm.IsInited() && !index.AnySegmentOverlaps(zm, pkf.Segments) {
 						continue
 					}
 				}
@@ -1034,9 +1065,9 @@ func (p *baseHandle) getObjectEntries(
 				continue
 			}
 			// PK zonemap pruning for TN non-appendable objects.
-			if pkf != nil && pkf.Vec != nil {
+			if pkf != nil && len(pkf.Segments) > 0 {
 				zm := entry.SortKeyZoneMap()
-				if zm.IsInited() && !zm.AnyIn(pkf.Vec) {
+				if zm.IsInited() && !index.AnySegmentOverlaps(zm, pkf.Segments) {
 					continue
 				}
 			}
