@@ -410,6 +410,8 @@ func init() {
 		"rlike":                      REGEXP,
 		"rollback":                   ROLLBACK,
 		"role":                       ROLE,
+		"rule":                       RULE,
+		"rules":                      RULES,
 		"routine":                    ROUTINE,
 		"row":                        ROW,
 		"row_format":                 ROW_FORMAT,

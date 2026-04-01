@@ -1956,6 +1956,14 @@ var (
 			input:  "alter role 'role1' rename to 'role2'",
 			output: "alter role role1 rename to role2",
 		}, {
+			input:  `alter role role_name add rule "SELECT * FROM db1.tbl1 WHERE age > 28" on table db1.tbl1`,
+			output: "alter role role_name add rule 'SELECT * FROM db1.tbl1 WHERE age > 28' on table db1.tbl1",
+		}, {
+			input:  `alter role role_name drop rule on table db1.tbl1`,
+			output: "alter role role_name drop rule on table db1.tbl1",
+		}, {
+			input: "show rules on role role_name",
+		}, {
 			input: "grant all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a to u1, u2 with grant option",
 		}, {
 			input: "grant all, all(a, b) on table *.* to u1, u2 with grant option",

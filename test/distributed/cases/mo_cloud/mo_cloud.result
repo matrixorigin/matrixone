@@ -634,6 +634,7 @@ mo_catalog    mo_mysql_compatibility_mode    r    accountadmin
 mo_catalog    mo_role    r    accountadmin
 mo_catalog    mo_role_grant    r    accountadmin
 mo_catalog    mo_role_privs    r    accountadmin
+mo_catalog    mo_role_rule    r    accountadmin
 mo_catalog    mo_sessions    v    accountadmin
 mo_catalog    mo_snapshots    r    accountadmin
 mo_catalog    mo_stages    r    accountadmin

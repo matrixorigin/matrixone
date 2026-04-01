@@ -147,6 +147,7 @@ mo_pubs
 mo_role
 mo_role_grant
 mo_role_privs
+mo_role_rule
 mo_sessions
 mo_shards
 mo_shards_metadata
@@ -194,6 +195,7 @@ mo_pubs
 mo_role
 mo_role_grant
 mo_role_privs
+mo_role_rule
 mo_sessions
 mo_shards
 mo_shards_metadata
