@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 
@@ -430,12 +431,12 @@ func materializePickKeysFromSubquery(
 	sql := fmtCtx.String()
 
 	if err := bh.Exec(ctx, sql); err != nil {
-		return nil, moerr.NewInternalErrorNoCtxf("failed to execute KEYS subquery: %v", err)
+		return nil, errors.New("failed to execute KEYS subquery: " + err.Error())
 	}
 
 	erArray, err := getResultSet(ctx, bh)
 	if err != nil {
-		return nil, moerr.NewInternalErrorNoCtxf("failed to get KEYS subquery results: %v", err)
+		return nil, errors.New("failed to get KEYS subquery results: " + err.Error())
 	}
 
 	keySet := make(map[string]struct{})
@@ -449,7 +450,7 @@ func materializePickKeysFromSubquery(
 			for colIdx := uint64(0); colIdx < colCnt; colIdx++ {
 				val, err2 := rs.GetString(ctx, rowIdx, colIdx)
 				if err2 != nil {
-					return nil, moerr.NewInternalErrorNoCtxf("failed to read KEYS subquery result: %v", err2)
+					return nil, errors.New("failed to read KEYS subquery result: " + err2.Error())
 				}
 				buf.WriteString(quoteStringForKey(val))
 				if colIdx < colCnt-1 {

@@ -775,7 +775,13 @@ func diffMergeAgency(
 		ctx, ses, bh, wg, dagInfo, tblStuff, copt, emit, pkFilter,
 	); err != nil {
 		// If the consumer cancelled the context (e.g., PICK conflict FAIL),
-		// the real error is in outputErr, not the context.Canceled from diffOnBase.
+		// wait for it to finish and prefer its real error over context.Canceled.
+		if retBatCh != nil {
+			close(retBatCh)
+			retBatCh = nil
+		}
+		waited = true
+		wg.Wait()
 		if outputErr.Load() != nil {
 			err = outputErr.Load().(error)
 		}
