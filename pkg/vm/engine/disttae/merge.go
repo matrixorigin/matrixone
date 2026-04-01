@@ -303,7 +303,7 @@ func (t *cnMergeTask) readblock(ctx context.Context, info *objectio.BlockInfo) (
 	// read data
 	bat, dels, release, err = blockio.BlockDataReadNoCopy(
 		ctx, info, t.ds, t.host.seqnums, t.host.typs,
-		t.snapshot, fileservice.Policy(0), t.mp, t.fs)
+		t.snapshot, fileservice.SkipAllCache, t.mp, t.fs)
 	if err != nil {
 		logutil.Infof("read block data failed: %v", err.Error())
 		return

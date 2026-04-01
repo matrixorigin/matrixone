@@ -266,7 +266,7 @@ func (task *mergeObjectsTask) LoadNextBatch(
 	}()
 
 	obj := task.mergedObjsHandle[objIdx]
-	ctx = fileservice.WithFileServicePolicy(ctx, fileservice.SkipCacheReads)
+	ctx = fileservice.WithFileServicePolicy(ctx, fileservice.SkipAllCache)
 	if task.isTombstone {
 		err = obj.Scan(
 			ctx,
