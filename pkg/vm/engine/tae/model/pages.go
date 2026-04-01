@@ -45,6 +45,11 @@ var (
 	ttlLatch sync.RWMutex
 
 	backgroundGCTTL = 10 * time.Minute
+
+	// transferMarshalBufPool recycles bytes.Buffer instances used in
+	// TransferHashPage.Marshal so the internal backing arrays are reused
+	// across calls instead of being allocated and GC'd each time.
+	transferMarshalBufPool = sync.Pool{New: func() any { return &bytes.Buffer{} }}
 )
 
 func init() {
@@ -225,6 +230,13 @@ func (page *TransferHashPage) Train(m api.TransferMap) {
 	v2.TransferPageRowHistogram.Observe(float64(len(m)))
 }
 
+// TrainDetached clones the transfer map so the page owns stable memory even if
+// the source map was backed by a pooled slab that may be recycled later.
+func (page *TransferHashPage) TrainDetached(m api.TransferMap) {
+	owned := append(api.TransferMap(nil), m...)
+	page.Train(owned)
+}
+
 func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) {
 	m := page.hashmap.Load()
 	if m == nil {
@@ -236,13 +248,14 @@ func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) 
 	v2.TransferPageTotalHitHistogram.Observe(1)
 
 	memStart := time.Now()
-	var data api.TransferDestPos
-	if m == nil {
-		ok = false
+	if m == nil || uint32(len(*m)) <= from {
+		memDuration := time.Since(memStart)
+		v2.TransferMemLatencyHistogram.Observe(memDuration.Seconds())
 		return
 	}
-	data, ok = (*m)[from]
-	if ok {
+	data := (*m)[from]
+	if data.ObjIdx != api.NoTransfer {
+		ok = true
 		objID := page.objects[data.ObjIdx]
 		dest = objectio.NewRowIDWithObjectIDBlkNumAndRowID(*objID, data.BlkIdx, data.RowIdx)
 	}
@@ -251,48 +264,85 @@ func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) 
 	return
 }
 
-func (page *TransferHashPage) Marshal() []byte {
+// Marshal serializes non-deleted entries into a pooled bytes.Buffer.
+// The caller MUST pass the returned buffer to ReleaseMarshalBufs
+// (or transferMarshalBufPool.Put) after buf.Bytes() is no longer
+// referenced.  Returns nil when there are no entries to serialize.
+func (page *TransferHashPage) Marshal() *bytes.Buffer {
 	m := page.hashmap.Load()
 	if m == nil {
 		panic("empty hashmap")
 	}
 
-	b := new(bytes.Buffer)
-	size := uint64(len(*m))
+	// Count non-deleted entries to size the buffer precisely.
+	var size uint64
+	for _, v := range *m {
+		if v.ObjIdx != api.NoTransfer {
+			size++
+		}
+	}
 	if size == 0 {
 		return nil
 	}
 	marshalSize := 8 + size*(4+1+2+4)
-	b.Grow(int(marshalSize))
+	b := transferMarshalBufPool.Get().(*bytes.Buffer)
+	b.Reset()
+	if b.Cap() < int(marshalSize) {
+		b.Grow(int(marshalSize))
+	}
 	b.Write(types.EncodeUint64(&size))
 	for k, v := range *m {
-		b.Write(types.EncodeUint32(&k))
+		if v.ObjIdx == api.NoTransfer {
+			continue
+		}
+		k32 := uint32(k)
+		b.Write(types.EncodeUint32(&k32))
 		b.Write(types.EncodeUint8(&v.ObjIdx))
 		b.Write(types.EncodeUint16(&v.BlkIdx))
 		b.Write(types.EncodeUint32(&v.RowIdx))
 	}
-	return b.Bytes()
+	return b
+}
+
+// ReleaseMarshalBufs returns pooled bytes.Buffers obtained from Marshal
+// back to the pool.  Call after the data slices are no longer referenced
+// (e.g. after fs.Write completes).
+func ReleaseMarshalBufs(bufs []*bytes.Buffer) {
+	for _, b := range bufs {
+		transferMarshalBufPool.Put(b)
+	}
 }
 
 func (page *TransferHashPage) Unmarshal(data []byte) (*api.TransferMap, error) {
 	if len(data) == 0 {
-		emptyMap := make(api.TransferMap)
-		return &emptyMap, nil
+		empty := make(api.TransferMap, 0)
+		return &empty, nil
 	}
 	b := bytes.NewBuffer(data)
 	size := types.DecodeUint64(b.Next(8))
-	transferMap := make(api.TransferMap, size)
+	// Read all entries to find the maximum row key; the slice must cover 0..maxKey.
+	type entry struct {
+		k uint32
+		v api.TransferDestPos
+	}
+	entries := make([]entry, 0, size)
+	maxKey := uint32(0)
 	for b.Len() != 0 {
 		k := types.DecodeUint32(b.Next(4))
 		vO := types.DecodeUint8(b.Next(1))
 		vB := types.DecodeUint16(b.Next(2))
 		vR := types.DecodeUint32(b.Next(4))
-
-		transferMap[k] = api.TransferDestPos{
-			ObjIdx: vO,
-			BlkIdx: vB,
-			RowIdx: vR,
+		entries = append(entries, entry{k, api.TransferDestPos{ObjIdx: vO, BlkIdx: vB, RowIdx: vR}})
+		if k > maxKey {
+			maxKey = k
 		}
+	}
+	transferMap := make(api.TransferMap, maxKey+1)
+	for i := range transferMap {
+		transferMap[i].ObjIdx = api.NoTransfer
+	}
+	for _, e := range entries {
+		transferMap[e.k] = e.v
 	}
 	return &transferMap, nil
 }
@@ -374,8 +424,13 @@ func InitTransferPageIO() *fileservice.IOVector {
 	}
 }
 
-func AddTransferPage(page *TransferHashPage, ioVector *fileservice.IOVector) error {
-	data := page.Marshal()
+func AddTransferPage(page *TransferHashPage, ioVector *fileservice.IOVector, bufs *[]*bytes.Buffer) error {
+	buf := page.Marshal()
+	var data []byte
+	if buf != nil {
+		data = buf.Bytes()
+		*bufs = append(*bufs, buf)
+	}
 	le := len(ioVector.Entries)
 	offset := int64(0)
 	if le > 0 {
@@ -392,10 +447,12 @@ func AddTransferPage(page *TransferHashPage, ioVector *fileservice.IOVector) err
 	return nil
 }
 
-func WriteTransferPage(ctx context.Context, fs fileservice.FileService, pages []*TransferHashPage, ioVector fileservice.IOVector) {
+func WriteTransferPage(ctx context.Context, fs fileservice.FileService, pages []*TransferHashPage, ioVector fileservice.IOVector, bufs []*bytes.Buffer) {
 	ctx, cancel := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseWriteTransferPage)
 	defer cancel()
 	err := fs.Write(ctx, ioVector)
+	// Data has been consumed by fs.Write; return pooled buffers.
+	ReleaseMarshalBufs(bufs)
 	if err != nil {
 		for _, page := range pages {
 			page.SetBornTS(page.BornTS().Add(time.Minute))

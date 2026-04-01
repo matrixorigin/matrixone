@@ -314,7 +314,10 @@ func (idx *simpleTableIndex) BatchInsert(
 			break
 		}
 		for i := start; i < start+count; i++ {
-			v := vec.UnsafeGetStringAt(i)
+			// Use GetStringAt (copies bytes) instead of UnsafeGetStringAt to avoid
+			// dangling pointers: the vector's C-allocated area may be freed after the
+			// caller closes the batch, while map keys in idx.tree must outlive it.
+			v := vec.GetStringAt(i)
 			if _, ok := idx.tree[v]; ok {
 				entry := common.TypeStringValue(*colType, []byte(v), false)
 				return newDuplicateEntryWithLog(attr, entry, "txnimpl.BatchInsert.string.tree")

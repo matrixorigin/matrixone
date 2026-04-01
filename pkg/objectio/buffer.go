@@ -15,7 +15,6 @@
 package objectio
 
 import (
-	"bytes"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -26,7 +25,6 @@ import (
 // to be filled in it, and then written to the object
 // file at one time
 type ObjectBuffer struct {
-	buf    bytes.Buffer
 	vector fileservice.IOVector
 }
 
@@ -34,9 +32,9 @@ func NewObjectBuffer(name string) *ObjectBuffer {
 	buffer := &ObjectBuffer{
 		vector: fileservice.IOVector{
 			FilePath: name,
+			Entries:  make([]fileservice.IOEntry, 0, 256),
 		},
 	}
-	buffer.vector.Entries = make([]fileservice.IOEntry, 0)
 	return buffer
 }
 
@@ -54,10 +52,6 @@ func (b *ObjectBuffer) Write(buf []byte, items ...WriteOptions) (int, int) {
 	}
 	b.vector.Entries = append(b.vector.Entries, entry)
 	return int(offset), len(buf)
-}
-
-func (b *ObjectBuffer) Length() int {
-	return b.buf.Len()
 }
 
 func (b *ObjectBuffer) GetData() fileservice.IOVector {

@@ -10712,9 +10712,9 @@ func TestPersistTransferTable(t *testing.T) {
 	now := time.Now()
 	page := model.NewTransferHashPage(&id1, now, false, tae.Runtime.TmpFS, time.Second, time.Minute, createdObjs)
 	ids := make([]types.Rowid, 10)
-	transferMap := make(api.TransferMap)
+	transferMap := make(api.TransferMap, 10)
 	for i := 0; i < 10; i++ {
-		transferMap[uint32(i)] = api.TransferDestPos{
+		transferMap[i] = api.TransferDestPos{
 			RowIdx: uint32(i),
 		}
 		rowID := objectio.NewRowid(&id2.BlockID, uint32(i))
@@ -10730,8 +10730,8 @@ func TestPersistTransferTable(t *testing.T) {
 	data := page.Marshal()
 	ioEntry := fileservice.IOEntry{
 		Offset: offset,
-		Size:   int64(len(data)),
-		Data:   data,
+		Size:   int64(data.Len()),
+		Data:   data.Bytes(),
 	}
 	ioVector.Entries = append(ioVector.Entries, ioEntry)
 
@@ -10747,7 +10747,7 @@ func TestPersistTransferTable(t *testing.T) {
 	path := model.Path{
 		Name:   ioVector.FilePath,
 		Offset: 0,
-		Size:   int64(len(data)),
+		Size:   int64(data.Len()),
 	}
 	page.SetPath(path)
 
@@ -10784,9 +10784,9 @@ func TestClearPersistTransferTable(t *testing.T) {
 			now := time.Now()
 			page := model.NewTransferHashPage(&id1, now, false, tae.Runtime.TmpFS, time.Second, 2*time.Second, createdObjs)
 			ids := make([]types.Rowid, 10)
-			transferMap := make(api.TransferMap)
+			transferMap := make(api.TransferMap, 10)
 			for i := 0; i < 10; i++ {
-				transferMap[uint32(i)] = api.TransferDestPos{
+				transferMap[i] = api.TransferDestPos{
 					BlkIdx: 0,
 					RowIdx: uint32(i),
 				}
@@ -10803,8 +10803,8 @@ func TestClearPersistTransferTable(t *testing.T) {
 			data := page.Marshal()
 			ioEntry := fileservice.IOEntry{
 				Offset: offset,
-				Size:   int64(len(data)),
-				Data:   data,
+				Size:   int64(data.Len()),
+				Data:   data.Bytes(),
 			}
 			ioVector.Entries = append(ioVector.Entries, ioEntry)
 
@@ -10820,7 +10820,7 @@ func TestClearPersistTransferTable(t *testing.T) {
 			path := model.Path{
 				Name:   ioVector.FilePath,
 				Offset: 0,
-				Size:   int64(len(data)),
+				Size:   int64(data.Len()),
 			}
 			page.SetPath(path)
 

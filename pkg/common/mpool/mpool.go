@@ -288,6 +288,7 @@ func (mp *MPool) deallocateAllPtrs() {
 	for ptr, hdr := range mp.ptrs {
 		if hdr.offHeap {
 			sz := int(hdr.allocSz)
+			profileRecordFree(uintptr(ptr), int64(sz))
 			simpleCAllocator().Deallocate(unsafe.Slice((*byte)(ptr), sz), uint64(sz))
 		}
 	}
@@ -549,6 +550,9 @@ func (mp *MPool) alloc(detailk string, sz int64, offHeap bool) ([]byte, error) {
 
 	// always record the ptr, offHeap or not.
 	mp.recordPtrHdr(unsafe.Pointer(&bs[0]), hdr)
+	if offHeap {
+		profileRecordAlloc(3, uintptr(unsafe.Pointer(&bs[0])), sz)
+	}
 	return bs, nil
 }
 
@@ -580,10 +584,14 @@ func (mp *MPool) freePtr(detailk string, ptr unsafe.Pointer) {
 		otherPool, ok := globalPools.Load(hdr.poolId)
 		if !ok {
 			logutil.Errorf("invalid mpool id %d", hdr.poolId)
-			// Pool already deleted, we still need to free the memory
+			// Pool already deleted, we still need to free the memory.
+			// Call profileRecordFree and the full globalStats.RecordFree
+			// (not just NumCurrBytes.Add) so NumFree/NumFreeBytes stay
+			// consistent with freePtrInternal.
 			if hdr.offHeap {
 				sz := int64(hdr.allocSz)
-				globalStats.NumCurrBytes.Add(-sz)
+				profileRecordFree(uintptr(ptr), sz)
+				globalStats.RecordFree("global", sz)
 				simpleCAllocator().Deallocate(unsafe.Slice((*byte)(ptr), sz), uint64(sz))
 			}
 		} else {
@@ -600,6 +608,7 @@ func (mp *MPool) freePtrInternal(detailk string, ptr unsafe.Pointer, hdr memHdr)
 		return
 	}
 	sz := int64(hdr.allocSz)
+	profileRecordFree(uintptr(ptr), sz)
 	mp.stats.RecordFree(mp.tag, sz)
 	globalStats.RecordFree("global", sz)
 	if mp.details != nil {
@@ -682,6 +691,7 @@ func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 		allocSz: int32(sz),
 		offHeap: offHeap,
 	})
+	profileRecordRealloc(3, uintptr(oldptr), uintptr(newptr), int64(oldcap), int64(sz))
 	globalStats.RecordFree("global", int64(oldcap))
 	mp.stats.RecordFree(mp.tag, int64(oldcap))
 	globalStats.RecordAlloc("global", int64(sz))

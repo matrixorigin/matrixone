@@ -85,7 +85,7 @@ func (e *vectorPoolElement) tryReuse(t *types.Type) bool {
 
 func (e *vectorPoolElement) put() {
 	if e.vec.Allocated() > e.pool.maxAlloc {
-		newVec := vector.NewVec(*e.vec.GetType())
+		newVec := vector.NewOffHeapVecWithType(*e.vec.GetType())
 		e.vec.Free(e.mp)
 		e.vec = newVec
 		e.pool.resetStats.Add(1)
@@ -292,7 +292,7 @@ func (p *VectorPool) Destory() {
 }
 
 func newVectorElement(pool *VectorPool, t *types.Type, mp *mpool.MPool) *vectorPoolElement {
-	vec := vector.NewVec(*t)
+	vec := vector.NewOffHeapVecWithType(*t)
 	element := &vectorPoolElement{
 		pool: pool,
 		mp:   mp,
