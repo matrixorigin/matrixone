@@ -388,25 +388,9 @@ func materializePickKeysFromValues(
 
 	for _, expr := range stmt.Keys.KeyExprs {
 		buf.Reset()
-
-		switch e := expr.(type) {
-		case *tree.Tuple:
-			// Composite PK: (val1, val2, ...)
-			for i, sub := range e.Exprs {
-				if err := formatExprIntoString(ses, sub, &buf); err != nil {
-					return nil, err
-				}
-				if i < len(e.Exprs)-1 {
-					buf.WriteByte(',')
-				}
-			}
-		default:
-			// Single PK value
-			if err := formatExprIntoString(ses, expr, &buf); err != nil {
-				return nil, err
-			}
+		if err := formatPKExprIntoCanonicalString(ses, expr, tblStuff, &buf); err != nil {
+			return nil, err
 		}
-
 		keySet[buf.String()] = struct{}{}
 	}
 
@@ -445,19 +429,9 @@ func materializePickKeysFromSubquery(
 	for _, rs := range erArray {
 		for rowIdx := uint64(0); rowIdx < rs.GetRowCount(); rowIdx++ {
 			buf.Reset()
-			colCnt := rs.GetColumnCount()
-
-			for colIdx := uint64(0); colIdx < colCnt; colIdx++ {
-				val, err2 := rs.GetString(ctx, rowIdx, colIdx)
-				if err2 != nil {
-					return nil, errors.New("failed to read KEYS subquery result: " + err2.Error())
-				}
-				buf.WriteString(quoteStringForKey(val))
-				if colIdx < colCnt-1 {
-					buf.WriteByte(',')
-				}
+			if err := formatPKResultRowIntoCanonicalString(ctx, ses, rs, rowIdx, tblStuff, &buf); err != nil {
+				return nil, err
 			}
-
 			keySet[buf.String()] = struct{}{}
 		}
 	}
@@ -465,30 +439,171 @@ func materializePickKeysFromSubquery(
 	return keySet, nil
 }
 
-// formatExprIntoString converts an AST expression (literal) to its canonical
-// string form for key matching.
-func formatExprIntoString(ses *Session, expr tree.Expr, buf *bytes.Buffer) error {
+func formatPKExprIntoCanonicalString(
+	ses *Session,
+	expr tree.Expr,
+	tblStuff tableStuff,
+	buf *bytes.Buffer,
+) error {
+	pkColIdxes := tblStuff.def.pkColIdxes
+	pkTypes := tblStuff.def.colTypes
 	switch e := expr.(type) {
-	case *tree.NumVal:
-		buf.WriteString(e.String())
-		return nil
-	case *tree.StrVal:
-		buf.WriteString(quoteStringForKey(e.String()))
-		return nil
-	case *tree.UnresolvedName:
-		buf.WriteString(e.ColName())
-		return nil
+	case *tree.Tuple:
+		if len(e.Exprs) != len(pkColIdxes) {
+			return moerr.NewInvalidInputNoCtxf("invalid composite KEYS width: got %d want %d", len(e.Exprs), len(pkColIdxes))
+		}
+		for i, sub := range e.Exprs {
+			if err := formatSinglePKExprIntoCanonicalString(ses, sub, pkTypes[pkColIdxes[i]], buf); err != nil {
+				return err
+			}
+			if i < len(e.Exprs)-1 {
+				buf.WriteByte(',')
+			}
+		}
 	default:
-		fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
-		expr.Format(fmtCtx)
-		buf.WriteString(fmtCtx.String())
-		return nil
+		if len(pkColIdxes) != 1 {
+			return moerr.NewInvalidInputNoCtxf("invalid scalar KEYS width for composite PK: got 1 want %d", len(pkColIdxes))
+		}
+		if err := formatSinglePKExprIntoCanonicalString(ses, expr, pkTypes[pkColIdxes[0]], buf); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func formatSinglePKExprIntoCanonicalString(
+	ses *Session,
+	expr tree.Expr,
+	pkType types.Type,
+	buf *bytes.Buffer,
+) error {
+	vec := vector.NewVec(pkType)
+	defer vec.Free(ses.proc.Mp())
+	if err := appendExprToVec(vec, expr, pkType, ses.proc.Mp()); err != nil {
+		return err
+	}
+	val := extractPKVal(vec, 0)
+	return formatValIntoString(ses, val, pkType, buf)
+}
+
+func isStringLikePKType(t types.Type) bool {
+	switch t.Oid {
+	case types.T_varchar, types.T_char, types.T_text, types.T_blob, types.T_binary, types.T_varbinary:
+		return true
+	default:
+		return false
 	}
 }
 
-// quoteStringForKey wraps a string value in single quotes for canonical key matching.
-func quoteStringForKey(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+func unescapeMySQLString(s string) string {
+	if strings.IndexByte(s, '\\') < 0 && strings.Index(s, "''") < 0 {
+		return s
+	}
+	buf := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			i++
+			switch s[i] {
+			case '0':
+				buf = append(buf, 0)
+			case 'b':
+				buf = append(buf, '\b')
+			case 'n':
+				buf = append(buf, '\n')
+			case 'r':
+				buf = append(buf, '\r')
+			case 't':
+				buf = append(buf, '\t')
+			case 'Z':
+				buf = append(buf, 0x1a)
+			default:
+				buf = append(buf, s[i])
+			}
+			continue
+		}
+		if s[i] == '\'' && i+1 < len(s) && s[i+1] == '\'' {
+			buf = append(buf, '\'')
+			i++
+			continue
+		}
+		buf = append(buf, s[i])
+	}
+	return string(buf)
+}
+
+func getExecResultPKValue(
+	ctx context.Context,
+	rs ExecResult,
+	rowIdx, colIdx uint64,
+	pkType types.Type,
+) (any, error) {
+	if typedRS, ok := rs.(ResultSet); ok {
+		val, err := typedRS.GetValue(ctx, rowIdx, colIdx)
+		if err != nil {
+			return nil, err
+		}
+		if !isStringLikePKType(pkType) {
+			return val, nil
+		}
+		switch x := val.(type) {
+		case string:
+			return unescapeMySQLString(x), nil
+		case []byte:
+			return []byte(unescapeMySQLString(string(x))), nil
+		default:
+			return val, nil
+		}
+	}
+	switch pkType.Oid {
+	case types.T_bool:
+		v, err := rs.GetInt64(ctx, rowIdx, colIdx)
+		return v != 0, err
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		return rs.GetUint64(ctx, rowIdx, colIdx)
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+		return rs.GetInt64(ctx, rowIdx, colIdx)
+	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary:
+		s, err := rs.GetString(ctx, rowIdx, colIdx)
+		if err != nil {
+			return nil, err
+		}
+		return unescapeMySQLString(s), nil
+	case types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_date, types.T_datetime, types.T_timestamp, types.T_time,
+		types.T_year, types.T_json, types.T_array_float32, types.T_array_float64:
+		return rs.GetString(ctx, rowIdx, colIdx)
+	default:
+		return rs.GetString(ctx, rowIdx, colIdx)
+	}
+}
+
+func formatPKResultRowIntoCanonicalString(
+	ctx context.Context,
+	ses *Session,
+	rs ExecResult,
+	rowIdx uint64,
+	tblStuff tableStuff,
+	buf *bytes.Buffer,
+) error {
+	pkColIdxes := tblStuff.def.pkColIdxes
+	if rs.GetColumnCount() != uint64(len(pkColIdxes)) {
+		return moerr.NewInvalidInputNoCtxf("invalid KEYS subquery column count: got %d want %d", rs.GetColumnCount(), len(pkColIdxes))
+	}
+	for i, pkColIdx := range pkColIdxes {
+		pkType := tblStuff.def.colTypes[pkColIdx]
+		val, err := getExecResultPKValue(ctx, rs, rowIdx, uint64(i), pkType)
+		if err != nil {
+			return errors.New("failed to read KEYS subquery result: " + err.Error())
+		}
+		if err := formatValIntoString(ses, val, pkType, buf); err != nil {
+			return err
+		}
+		if i < len(pkColIdxes)-1 {
+			buf.WriteByte(',')
+		}
+	}
+	return nil
 }
 
 // buildPKFilterForPick constructs an engine.PKFilter from literal KEYS values.
@@ -533,8 +648,23 @@ func appendExprToVec(vec *vector.Vector, expr tree.Expr, pkType types.Type, mp *
 	switch e := expr.(type) {
 	case *tree.NumVal:
 		return appendNumValToVec(vec, e, pkType, mp)
+	case *tree.UnaryExpr:
+		num, ok := e.Expr.(*tree.NumVal)
+		if !ok {
+			return moerr.NewInvalidInputNoCtxf("unsupported unary expression type for PK filter: %T", e.Expr)
+		}
+		s := num.String()
+		switch e.Op {
+		case tree.UNARY_MINUS:
+			s = "-" + s
+		case tree.UNARY_PLUS:
+			s = "+" + s
+		default:
+			return moerr.NewInvalidInputNoCtxf("unsupported unary operator for PK filter: %v", e.Op)
+		}
+		return appendNumericStringToVec(vec, s, pkType, mp)
 	case *tree.StrVal:
-		return vector.AppendBytes(vec, []byte(e.String()), false, mp)
+		return vector.AppendBytes(vec, []byte(unescapeMySQLString(e.String())), false, mp)
 	default:
 		// For complex expressions, skip engine-level filtering.
 		return moerr.NewInvalidInputNoCtxf("unsupported expression type for PK filter: %T", expr)
@@ -544,7 +674,10 @@ func appendExprToVec(vec *vector.Vector, expr tree.Expr, pkType types.Type, mp *
 // appendNumValToVec converts a numeric literal to the correct typed value
 // and appends it to the vector.
 func appendNumValToVec(vec *vector.Vector, val *tree.NumVal, pkType types.Type, mp *mpool.MPool) error {
-	s := val.String()
+	return appendNumericStringToVec(vec, val.String(), pkType, mp)
+}
+
+func appendNumericStringToVec(vec *vector.Vector, s string, pkType types.Type, mp *mpool.MPool) error {
 	switch pkType.Oid {
 	case types.T_int8:
 		v, err := strconv.ParseInt(s, 10, 8)

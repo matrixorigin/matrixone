@@ -15,13 +15,16 @@ select * from t1 order by name asc;
 ➤ name[12,-1,0]  ¦  val[4,32,0]  𝄀
 alice  ¦  1  𝄀
 bob  ¦  2  𝄀
-charlie  ¦  3
+charlie  ¦  3  𝄀
+dave  ¦  4
 data branch pick t2 into t1 keys('eve');
 select * from t1 order by name asc;
 ➤ name[12,-1,0]  ¦  val[4,32,0]  𝄀
 alice  ¦  1  𝄀
 bob  ¦  2  𝄀
-charlie  ¦  3
+charlie  ¦  3  𝄀
+dave  ¦  4  𝄀
+eve  ¦  5
 drop table t1;
 drop table t2;
 create table t1 (id bigint, data varchar(10), primary key(id));
