@@ -284,7 +284,7 @@ func (page *TransferHashPage) Marshal() *bytes.Buffer {
 	if size == 0 {
 		return nil
 	}
-	marshalSize := 8 + size*(4+2+2+4)
+	marshalSize := 8 + size*(4+1+2+4)
 	b := transferMarshalBufPool.Get().(*bytes.Buffer)
 	b.Reset()
 	if b.Cap() < int(marshalSize) {
@@ -297,7 +297,7 @@ func (page *TransferHashPage) Marshal() *bytes.Buffer {
 		}
 		k32 := uint32(k)
 		b.Write(types.EncodeUint32(&k32))
-		b.Write(types.EncodeUint16(&v.ObjIdx))
+		b.Write(types.EncodeUint8(&v.ObjIdx))
 		b.Write(types.EncodeUint16(&v.BlkIdx))
 		b.Write(types.EncodeUint32(&v.RowIdx))
 	}
@@ -329,7 +329,7 @@ func (page *TransferHashPage) Unmarshal(data []byte) (*api.TransferMap, error) {
 	maxKey := uint32(0)
 	for b.Len() != 0 {
 		k := types.DecodeUint32(b.Next(4))
-		vO := types.DecodeUint16(b.Next(2))
+		vO := types.DecodeUint8(b.Next(1))
 		vB := types.DecodeUint16(b.Next(2))
 		vR := types.DecodeUint32(b.Next(4))
 		entries = append(entries, entry{k, api.TransferDestPos{ObjIdx: vO, BlkIdx: vB, RowIdx: vR}})

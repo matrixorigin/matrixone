@@ -204,13 +204,13 @@ func (m *merger[T]) merge(ctx context.Context) error {
 		if m.host.DoTransfer() {
 			if m.stats.objCnt >= int(api.NoTransfer) {
 				return moerr.NewInternalErrorNoCtxf(
-					"merge output exceeds %d objects: ObjIdx would collide with NoTransfer sentinel (0x%04X)",
+					"merge output exceeds %d objects: ObjIdx would collide with NoTransfer sentinel (0x%02X)",
 					api.NoTransfer, api.NoTransfer)
 			}
 			idx := m.accObjBlkCnts[objIdx] + m.loadedObjBlkCnts[objIdx] - 1
 			m.blockActive[idx] = true
 			m.transferSlab[int(idx)*int(m.rowPerBlk)+int(rowIdx)] = api.TransferDestPos{
-				ObjIdx: uint16(m.stats.objCnt),
+				ObjIdx: uint8(m.stats.objCnt),
 				BlkIdx: uint16(m.stats.objBlkCnt),
 				RowIdx: uint32(m.stats.blkRowCnt),
 			}
@@ -218,7 +218,7 @@ func (m *merger[T]) merge(ctx context.Context) error {
 
 		m.stats.blkRowCnt++
 		m.stats.objRowCnt++
-		if m.stats.blkRowCnt%100 == 0 {
+		if m.stats.blkRowCnt%100 == 0 && m.stats.targetObjSize > 0 {
 			bigblk = m.buffer.Size() > int(m.stats.targetObjSize)*3/2
 		}
 		// write new block

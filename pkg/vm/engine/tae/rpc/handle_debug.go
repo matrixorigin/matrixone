@@ -1048,7 +1048,7 @@ func marshalTransferMaps(
 				for i := range bat.RowCount() {
 					srcBlk := vector.GetFixedAtNoTypeCheck[int32](bat.Vecs[0], i)
 					srcRow := vector.GetFixedAtNoTypeCheck[uint32](bat.Vecs[1], i)
-					destObj := vector.GetFixedAtNoTypeCheck[uint16](bat.Vecs[2], i)
+					destObj := vector.GetFixedAtNoTypeCheck[uint8](bat.Vecs[2], i)
 					destBlk := vector.GetFixedAtNoTypeCheck[uint16](bat.Vecs[3], i)
 					destRow := vector.GetFixedAtNoTypeCheck[uint32](bat.Vecs[4], i)
 
@@ -1085,7 +1085,7 @@ func marshalTransferMaps(
 			}
 			for r, pos := range m.M {
 				tm[uint32(r)] = api.TransferDestPos{
-					ObjIdx: uint16(pos.ObjIdx),
+					ObjIdx: uint8(pos.ObjIdx),
 					BlkIdx: uint16(pos.BlkIdx),
 					RowIdx: uint32(pos.RowIdx),
 				}
