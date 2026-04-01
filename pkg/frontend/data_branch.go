@@ -748,7 +748,7 @@ func diffMergeAgency(
 	// launched.
 	var pkFilter *engine.PKFilter
 	var pickKeyHashmap databranchutils.BranchHashmap
-	if pickStmt != nil {
+	if pickStmt != nil && pickStmt.Keys != nil {
 		var err2 error
 		pickKeyHashmap, pkFilter, err2 = materializePickKeysAndFilter(ctx, ses, bh, pickStmt, tblStuff)
 		if err2 != nil {
@@ -762,6 +762,17 @@ func diffMergeAgency(
 			pickKeyHashmap.Close()
 		}
 	}()
+
+	// Resolve BETWEEN SNAPSHOT timestamps for PICK.
+	// These are passed to constructChangeHandle which intersects them with the
+	// target collect range computed by decideCollectRange.
+	var betweenFrom, betweenTo *types.TS
+	if pickStmt != nil && pickStmt.BetweenFrom != "" && pickStmt.BetweenTo != "" {
+		betweenFrom, betweenTo, err = resolveBetweenSnapshots(ses, pickStmt.BetweenFrom, pickStmt.BetweenTo)
+		if err != nil {
+			return
+		}
+	}
 
 	wg.Add(2)
 
@@ -796,6 +807,7 @@ func diffMergeAgency(
 
 	if err = diffOnBase(
 		ctx, ses, bh, wg, dagInfo, tblStuff, copt, emit, pkFilter, pickKeyHashmap,
+		betweenFrom, betweenTo,
 	); err != nil {
 		// If the consumer cancelled the context (e.g., PICK conflict FAIL),
 		// wait for it to finish and prefer its real error over context.Canceled.
@@ -974,6 +986,7 @@ func diffOnBase(
 	emit emitFunc,
 	pkFilter *engine.PKFilter,
 	pickKeyHashmap databranchutils.BranchHashmap,
+	betweenFrom, betweenTo *types.TS,
 ) (err error) {
 
 	defer func() {
@@ -1028,7 +1041,7 @@ func diffOnBase(
 	}
 	// has no lca
 	if tarHandle, baseHandle, err = constructChangeHandle(
-		ctx, ses, bh, tblStuff, &dagInfo, pkFilter,
+		ctx, ses, bh, tblStuff, &dagInfo, pkFilter, betweenFrom, betweenTo,
 	); err != nil {
 		return
 	}
@@ -1265,6 +1278,7 @@ func constructChangeHandle(
 	tables tableStuff,
 	branchInfo *branchMetaInfo,
 	pkFilter *engine.PKFilter,
+	betweenFrom, betweenTo *types.TS,
 ) (
 	tarHandle []engine.ChangesHandle,
 	baseHandle []engine.ChangesHandle,
@@ -1295,6 +1309,35 @@ func constructChangeHandle(
 		ctx, ses, bh, tables, branchInfo,
 	); err != nil {
 		return
+	}
+
+	// BETWEEN SNAPSHOT: intersect the target collect range with [betweenFrom.Next(), betweenTo].
+	// This narrows the time window on the source side so only changes within the
+	// snapshot range are collected.  The base (destination) side is not narrowed.
+	if betweenFrom != nil && betweenTo != nil {
+		bFrom := betweenFrom.Next()
+		bTo := *betweenTo
+		j := 0
+		for i := range tarRange.rel {
+			// Intersect: from = max(original, bFrom), end = min(original, bTo)
+			f := tarRange.from[i]
+			e := tarRange.end[i]
+			if bFrom.GT(&f) {
+				f = bFrom
+			}
+			if bTo.LT(&e) {
+				e = bTo
+			}
+			if f.LE(&e) {
+				tarRange.from[j] = f
+				tarRange.end[j] = e
+				tarRange.rel[j] = tarRange.rel[i]
+				j++
+			}
+		}
+		tarRange.from = tarRange.from[:j]
+		tarRange.end = tarRange.end[:j]
+		tarRange.rel = tarRange.rel[:j]
 	}
 
 	// collectFn dispatches to the PK-filtered or plain CollectChanges variant.

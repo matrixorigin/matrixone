@@ -36,6 +36,41 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
+// resolveBetweenSnapshots resolves two snapshot names to types.TS values.
+// Used by BETWEEN SNAPSHOT sp1 AND sp2 to produce timestamps for the
+// collect range intersection in constructChangeHandle.
+func resolveBetweenSnapshots(ses *Session, fromName, toName string) (from, to *types.TS, err error) {
+	fromAtTs := &tree.AtTimeStamp{
+		Type:         tree.ATTIMESTAMPSNAPSHOT,
+		SnapshotName: fromName,
+		Expr:         tree.NewNumVal(fromName, fromName, false, tree.P_char),
+	}
+	toAtTs := &tree.AtTimeStamp{
+		Type:         tree.ATTIMESTAMPSNAPSHOT,
+		SnapshotName: toName,
+		Expr:         tree.NewNumVal(toName, toName, false, tree.P_char),
+	}
+
+	fromSnap, err := resolveSnapshot(ses, fromAtTs)
+	if err != nil {
+		return nil, nil, moerr.NewInvalidInputNoCtxf("cannot resolve snapshot '%s': %v", fromName, err)
+	}
+	toSnap, err := resolveSnapshot(ses, toAtTs)
+	if err != nil {
+		return nil, nil, moerr.NewInvalidInputNoCtxf("cannot resolve snapshot '%s': %v", toName, err)
+	}
+	if fromSnap == nil || fromSnap.TS == nil {
+		return nil, nil, moerr.NewInvalidInputNoCtxf("snapshot '%s' not found", fromName)
+	}
+	if toSnap == nil || toSnap.TS == nil {
+		return nil, nil, moerr.NewInvalidInputNoCtxf("snapshot '%s' not found", toName)
+	}
+
+	fromTS := types.TimestampToTS(*fromSnap.TS)
+	toTS := types.TimestampToTS(*toSnap.TS)
+	return &fromTS, &toTS, nil
+}
+
 func handleBranchPick(
 	execCtx *ExecCtx,
 	ses *Session,
@@ -45,6 +80,16 @@ func handleBranchPick(
 		stmt.ConflictOpt = &tree.ConflictOpt{
 			Opt: tree.CONFLICT_FAIL,
 		}
+	}
+
+	hasBetween := stmt.BetweenFrom != "" && stmt.BetweenTo != ""
+	hasKeys := stmt.Keys != nil
+	if !hasBetween && !hasKeys {
+		return moerr.NewInvalidInputNoCtx("DATA BRANCH PICK requires a KEYS or BETWEEN SNAPSHOT clause")
+	}
+	if hasBetween && stmt.SrcTable.AtTsExpr != nil {
+		return moerr.NewInvalidInputNoCtx(
+			"BETWEEN SNAPSHOT and source table snapshot option cannot be used together")
 	}
 
 	return diffMergeAgency(ses, execCtx, stmt)
