@@ -647,6 +647,13 @@ func (db *txnDatabase) loadTableFromStorage(
 				return
 			}
 		}
+		logutil.Info("FIND_TABLE loadTableFromStorage columns",
+			zap.String("table", name),
+			zap.Uint32("accountID", accountID),
+			zap.Int("batches", len(res.Batches)),
+			zap.Int("totalRows", bat.RowCount()),
+			zap.Uint64("tableID", tblid),
+		)
 		if err := fillTsVecForSysTableQueryBatch(bat, ts, res.Mp); err != nil {
 			return nil, err
 		}

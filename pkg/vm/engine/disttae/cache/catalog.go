@@ -15,6 +15,7 @@
 package cache
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -576,7 +577,36 @@ func ParseColumnsBatchAnd(bat *batch.Batch, f func(map[TableItemKey]Columns)) {
 
 func InitTableItemWithColumns(item *TableItem, cols Columns) {
 	sort.Sort(cols)
-	cols = deduplicateColumns(cols, item)
+	// Detection-only: log duplicate column names WITHOUT removing them so the
+	// downstream "ambiguous column" error is still exposed for root-cause tracing.
+	if len(cols) > 1 {
+		seen := make(map[string]int, len(cols))
+		var duplicates []string
+		for _, col := range cols {
+			seen[col.Name]++
+			if seen[col.Name] == 2 {
+				duplicates = append(duplicates, col.Name)
+			}
+		}
+		if len(duplicates) > 0 {
+			colDetails := make([]string, 0, len(cols))
+			for _, col := range cols {
+				colDetails = append(colDetails, fmt.Sprintf(
+					"%s(seqnum=%d,num=%d,typ=%d)", col.Name, col.Seqnum, col.Num, col.Typ.Id))
+			}
+			logutil.Error("catalog-cache: DUPLICATE COLUMNS DETECTED in table definition",
+				zap.Uint32("account-id", item.AccountId),
+				zap.Uint64("database-id", item.DatabaseId),
+				zap.Uint64("table-id", item.Id),
+				zap.String("table-name", item.Name),
+				zap.String("ts", item.Ts.String()),
+				zap.Int("total-columns", len(cols)),
+				zap.Strings("duplicate-names", duplicates),
+				zap.Strings("all-columns", colDetails),
+				zap.Stack("stack"),
+			)
+		}
+	}
 	coldefs := make([]engine.TableDef, 0, len(cols))
 	for i, col := range cols {
 		if col.ConstraintType == catalog.SystemColPKConstraint {
@@ -589,39 +619,6 @@ func InitTableItemWithColumns(item *TableItem, cols Columns) {
 		coldefs = append(coldefs, genTableDefOfColumn(col))
 	}
 	item.TableDef, item.Defs = getTableDef(item, coldefs)
-}
-
-// deduplicateColumns removes duplicate column names from a sorted Columns
-// slice, keeping the first occurrence of each name. If duplicates are found,
-// it logs a detailed warning to aid root-cause diagnosis.
-func deduplicateColumns(cols Columns, item *TableItem) Columns {
-	if len(cols) <= 1 {
-		return cols
-	}
-	seen := make(map[string]struct{}, len(cols))
-	var duplicates []string
-	out := cols[:0]
-	for _, col := range cols {
-		if _, exists := seen[col.Name]; exists {
-			duplicates = append(duplicates, col.Name)
-			continue
-		}
-		seen[col.Name] = struct{}{}
-		out = append(out, col)
-	}
-	if len(duplicates) > 0 {
-		logutil.Warn("catalog-cache: deduplicated columns in table definition",
-			zap.Uint32("account-id", item.AccountId),
-			zap.Uint64("database-id", item.DatabaseId),
-			zap.Uint64("table-id", item.Id),
-			zap.String("table-name", item.Name),
-			zap.String("ts", item.Ts.String()),
-			zap.Int("original-count", len(cols)),
-			zap.Int("deduplicated-count", len(out)),
-			zap.Strings("duplicate-names", duplicates),
-		)
-	}
-	return out
 }
 
 func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
