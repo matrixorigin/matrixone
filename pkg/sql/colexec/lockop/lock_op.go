@@ -166,7 +166,7 @@ func callNonBlocking(
 func getVec(proc *process.Process, vec *vector.Vector) (*vector.Vector, error) {
 	if vec.HasNull() {
 		nulls := vec.GetNulls()
-		newVec := vector.NewVec(*vec.GetType())
+		newVec := vector.NewOffHeapVecWithType(*vec.GetType())
 		for i := 0; i < vec.Length(); i++ {
 			if !nulls.Contains(uint64(i)) {
 				if err := vector.AppendBytes(newVec, nil, true, proc.Mp()); err != nil {

@@ -167,7 +167,7 @@ func (external *External) Prepare(proc *process.Process) error {
 		for i, attr := range param.Attrs {
 			attrs[i] = attr.ColName
 		}
-		external.ctr.buf = batch.New(attrs)
+		external.ctr.buf = batch.NewOffHeap(attrs)
 		flag := param.ParallelLoad
 		if param.Extern.Format == tree.PARQUET {
 			flag = false
@@ -175,7 +175,7 @@ func (external *External) Prepare(proc *process.Process) error {
 		//alloc space for vector
 		for i := range param.Attrs {
 			typ := makeType(&param.Cols[i].Typ, flag)
-			external.ctr.buf.Vecs[i] = vector.NewVec(typ)
+			external.ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(typ)
 		}
 	}
 	return nil
@@ -372,6 +372,7 @@ func filterByAccountAndFilename(ctx context.Context, node *plan.Node, proc *proc
 	if err != nil {
 		return nil, nil, err
 	}
+	defer bat.Clean(proc.Mp())
 	filter := colexec.RewriteFilterExprList(filterList)
 
 	executor, err := colexec.NewExpressionExecutor(proc, filter)
@@ -437,6 +438,7 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, visibleCo
 	var r io.ReadCloser
 	vec := fileservice.IOVector{
 		FilePath: readPath,
+		Policy:   fileservice.SkipAllCache,
 		Entries: []fileservice.IOEntry{
 			0: {
 				Offset:            0,

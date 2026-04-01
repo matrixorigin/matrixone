@@ -90,7 +90,6 @@ type merger[T comparable] struct {
 	rowIdx []uint32
 
 	objCnt           int
-	objBlkCnts       []int
 	accObjBlkCnts    []int
 	loadedObjBlkCnts []int
 
@@ -102,6 +101,11 @@ type merger[T comparable] struct {
 
 	rowPerBlk uint32
 	stats     mergeStats
+
+	// transferSlab is a single contiguous allocation backing all per-block
+	// transfer maps for this merge. Pooled to avoid repeated large allocs.
+	transferSlab []api.TransferDestPos
+	blockActive  []bool
 }
 
 func newMerger[T comparable](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos int, df dataFetcher[T]) Merger {
@@ -119,7 +123,6 @@ func newMerger[T comparable](host MergeTaskHost, lessFunc sort.LessFunc[T], sort
 		sortKeyIdx: sortKeyPos,
 
 		accObjBlkCnts: host.GetAccBlkCnts(),
-		objBlkCnts:    host.GetBlkCnts(),
 		rowPerBlk:     host.GetBlockMaxRows(),
 		stats: mergeStats{
 			targetObjSize: host.GetTargetObjSize(),
@@ -129,11 +132,15 @@ func newMerger[T comparable](host MergeTaskHost, lessFunc sort.LessFunc[T], sort
 		loadedObjBlkCnts: make([]int, size),
 	}
 	totalBlkCnt := 0
-	for _, cnt := range m.objBlkCnts {
+	for _, cnt := range host.GetBlkCnts() {
 		totalBlkCnt += cnt
 	}
 	if host.DoTransfer() {
-		host.InitTransferMaps(totalBlkCnt)
+		slabSize := totalBlkCnt * int(m.rowPerBlk)
+		if slabSize > 0 {
+			m.transferSlab = getTransferSlab(slabSize)
+			m.blockActive = make([]bool, totalBlkCnt)
+		}
 	}
 
 	return m
@@ -170,7 +177,7 @@ func (m *merger[T]) merge(ctx context.Context) error {
 	}
 	defer releaseF()
 
-	transferMaps := m.host.GetTransferMaps()
+	mp := m.host.GetMPool()
 	bigblk := false
 	for m.heap.Len() != 0 {
 		select {
@@ -188,14 +195,21 @@ func (m *merger[T]) merge(ctx context.Context) error {
 		}
 		rowIdx := m.rowIdx[objIdx]
 		for i := range m.buffer.Vecs {
-			err := m.buffer.Vecs[i].UnionOne(m.bats[objIdx].bat.Vecs[i], int64(rowIdx), m.host.GetMPool())
+			err := m.buffer.Vecs[i].UnionOne(m.bats[objIdx].bat.Vecs[i], int64(rowIdx), mp)
 			if err != nil {
 				return err
 			}
 		}
 
 		if m.host.DoTransfer() {
-			transferMaps[m.accObjBlkCnts[objIdx]+m.loadedObjBlkCnts[objIdx]-1][rowIdx] = api.TransferDestPos{
+			if m.stats.objCnt >= int(api.NoTransfer) {
+				return moerr.NewInternalErrorNoCtxf(
+					"merge output exceeds %d objects: ObjIdx would collide with NoTransfer sentinel (0x%02X)",
+					api.NoTransfer, api.NoTransfer)
+			}
+			idx := m.accObjBlkCnts[objIdx] + m.loadedObjBlkCnts[objIdx] - 1
+			m.blockActive[idx] = true
+			m.transferSlab[int(idx)*int(m.rowPerBlk)+int(rowIdx)] = api.TransferDestPos{
 				ObjIdx: uint8(m.stats.objCnt),
 				BlkIdx: uint16(m.stats.objBlkCnt),
 				RowIdx: uint32(m.stats.blkRowCnt),
@@ -204,8 +218,7 @@ func (m *merger[T]) merge(ctx context.Context) error {
 
 		m.stats.blkRowCnt++
 		m.stats.objRowCnt++
-		m.stats.mergedRowCnt++
-		if m.stats.blkRowCnt%100 == 0 {
+		if m.stats.blkRowCnt%100 == 0 && m.stats.targetObjSize > 0 {
 			bigblk = m.buffer.Size() > int(m.stats.targetObjSize)*3/2
 		}
 		// write new block
@@ -260,6 +273,17 @@ func (m *merger[T]) merge(ctx context.Context) error {
 			return err
 		}
 	}
+
+	// Hand the slab-based transfer table to the host for downstream consumers.
+	if m.host.DoTransfer() && m.transferSlab != nil {
+		m.host.SetTransferTable(&TransferTable{
+			Slab:        m.transferSlab,
+			Stride:      int(m.rowPerBlk),
+			BlockActive: m.blockActive,
+		})
+		m.transferSlab = nil // ownership transferred; prevent release() from returning to pool
+	}
+
 	return nil
 }
 
@@ -333,6 +357,12 @@ func (m *merger[T]) syncObject(ctx context.Context) error {
 }
 
 func (m *merger[T]) release() {
+	// Return slab to pool if ownership was not transferred to host.
+	if m.transferSlab != nil {
+		putTransferSlab(m.transferSlab)
+		m.transferSlab = nil
+	}
+	m.writer = nil
 	for _, bat := range m.bats {
 		if bat.releaseF != nil {
 			bat.releaseF()

@@ -71,7 +71,6 @@ type mergeStats struct {
 	writtenBytes uint32 // object written bytes
 
 	blkRowCnt, objRowCnt, objBlkCnt, objCnt int
-	mergedRowCnt                            int
 }
 
 func (s *mergeStats) needNewObject() bool {

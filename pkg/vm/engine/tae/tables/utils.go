@@ -22,42 +22,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
-
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
 )
-
-//func LoadPersistedColumnData(
-//	ctx context.Context,
-//	rt *dbutils.Runtime,
-//	id *common.ID,
-//	def *catalog.ColDef,
-//	location objectio.Location,
-//	mp *mpool.MPool,
-//) (vec containers.Vector, err error) {
-//	if def.IsPhyAddr() {
-//		return model.PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
-//	}
-//	//Extend lifetime of vectors is without the function.
-//	//need to copy. closeFunc will be nil.
-//	vectors, _, err := blockio.LoadColumns2(
-//		ctx, []uint16{uint16(def.SeqNum)},
-//		[]types.Type{def.Type},
-//		rt.Fs.Service,
-//		location,
-//		fileservice.Policy(0),
-//		true,
-//		rt.VectorPool.Transient)
-//	if err != nil {
-//		return
-//	}
-//	return vectors[0], nil
-//}
 
 func PreparePhyAddrData(
 	id *objectio.Blockid, startRow, length uint32, pool *containers.VectorPool,
@@ -74,7 +46,7 @@ func PreparePhyAddrData(
 	return
 }
 
-func LoadPersistedColumnDatas(
+func LoadPersistedColumnData(
 	ctx context.Context,
 	schema *catalog.Schema,
 	rt *dbutils.Runtime,
@@ -83,9 +55,10 @@ func LoadPersistedColumnDatas(
 	location objectio.Location,
 	mp *mpool.MPool,
 	tsForAppendable *types.TS,
-) ([]containers.Vector, *nulls.Nulls, error) {
-	cols := make([]uint16, 0)
-	typs := make([]types.Type, 0)
+	needCopy bool,
+) ([]containers.Vector, *nulls.Nulls, func(), error) {
+	cols := make([]uint16, 0, len(colIdxs))
+	typs := make([]types.Type, 0, len(colIdxs))
 	vectors := make([]containers.Vector, len(colIdxs))
 	phyAddIdx := -1
 	committsIdx := -1
@@ -103,7 +76,7 @@ func LoadPersistedColumnDatas(
 		if def.IsPhyAddr() {
 			vec, err := PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
 			if err != nil {
-				return nil, deletes, err
+				return nil, deletes, nil, err
 			}
 			phyAddIdx = i
 			vectors[phyAddIdx] = vec
@@ -113,10 +86,9 @@ func LoadPersistedColumnDatas(
 		typs = append(typs, def.Type)
 	}
 	if len(cols) == 0 {
-		return vectors, deletes, nil
+		return vectors, deletes, nil, nil
 	}
 	if tsForAppendable != nil {
-		deletes = nulls.NewWithSize(1024)
 		if committsIdx == -1 {
 			cols = append(cols, objectio.SEQNUM_COMMITTS)
 			typs = append(typs, types.T_TS.ToType())
@@ -128,24 +100,26 @@ func LoadPersistedColumnDatas(
 		}
 	}
 	var vecs []containers.Vector
+	var release func()
 	var err error
-	//Extend lifetime of vectors is without the function.
-	//need to copy. closeFunc will be nil.
-	vecs, _, err = ioutil.LoadColumns2(
+	vecs, release, err = ioutil.LoadColumns2(
 		ctx, cols,
 		typs,
 		rt.Fs,
 		location,
-		fileservice.Policy(0),
-		true,
+		fileservice.GetFileServicePolicy(ctx),
+		needCopy,
 		rt.VectorPool.Transient)
 	if err != nil {
-		return nil, deletes, err
+		return nil, deletes, nil, err
 	}
 	if tsForAppendable != nil {
 		commits := vector.MustFixedColNoTypeCheck[types.TS](vecs[committsIdx].GetDownstreamVector())
 		for i := range commits {
 			if commits[i].GT(tsForAppendable) {
+				if deletes == nil {
+					deletes = nulls.NewWithSize(int(location.Rows()))
+				}
 				deletes.Add(uint64(i))
 			}
 		}
@@ -161,7 +135,7 @@ func LoadPersistedColumnDatas(
 		}
 		vectors[idx] = vec
 	}
-	return vectors, deletes, nil
+	return vectors, deletes, release, nil
 }
 
 func MakeImmuIndex(

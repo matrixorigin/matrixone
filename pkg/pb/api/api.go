@@ -228,7 +228,16 @@ func (m *CheckpointResp) UnmarshalBinary(data []byte) error {
 // To reduce memory consumption
 
 type TransferMaps []TransferMap
-type TransferMap map[uint32]TransferDestPos
+
+// TransferMap is a dense slice indexed by the original row index within its source block.
+// Entries where ObjIdx == NoTransfer are sentinel values meaning the row was deleted and
+// has no transfer destination.  Valid ObjIdx values are always < NoTransfer because the
+// number of output objects produced by a single merge is far below 255.
+type TransferMap []TransferDestPos
+
+// NoTransfer is the sentinel ObjIdx value that marks a deleted (non-transferred) row.
+const NoTransfer = uint8(0xFF)
+
 type TransferDestPos struct {
 	ObjIdx uint8
 	BlkIdx uint16

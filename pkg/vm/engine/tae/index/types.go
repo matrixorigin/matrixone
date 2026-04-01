@@ -15,6 +15,8 @@
 package index
 
 import (
+	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -69,6 +71,9 @@ type StaticFilter interface {
 	) bool
 
 	Marshal() ([]byte, error)
+	// MarshalWithBuffer marshals the filter into an existing, reusable buffer.
+	// The caller must copy buf.Bytes() before the next Reset/reuse of buf.
+	MarshalWithBuffer(buf *bytes.Buffer) error
 	Unmarshal(buf []byte) error
 	String() string
 	PrefixFnId(level uint8) uint8
