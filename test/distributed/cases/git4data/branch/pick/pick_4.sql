@@ -75,4 +75,85 @@ select * from t1 order by a asc;
 drop table t1;
 drop table t2;
 
+-- ----------------------------------------------------------------
+-- case 5: snapshot-based pick with varchar PK
+-- ----------------------------------------------------------------
+
+drop snapshot if exists sp_str;
+
+create table t1 (name varchar(50), val int, primary key(name));
+insert into t1 values ('alice',1),('bob',2),('charlie',3);
+
+create snapshot sp_str for account sys;
+
+-- modify after snapshot
+update t1 set val = 999 where name = 'alice';
+insert into t1 values ('dave', 4);
+
+create table t2 (name varchar(50), val int, primary key(name));
+
+-- pick from snapshot: alice should have val=1 (snapshot), dave doesn't exist yet
+data branch pick t1{snapshot=sp_str} into t2 keys('alice', 'bob', 'dave');
+select * from t2 order by name;
+-- expect: (alice,1),(bob,2) — dave not in snapshot
+
+drop snapshot sp_str;
+drop table t1;
+drop table t2;
+
+-- ----------------------------------------------------------------
+-- case 6: decimal and date types
+-- ----------------------------------------------------------------
+
+create table t1 (
+    id int primary key,
+    amount decimal(10,2),
+    created date,
+    note varchar(50)
+);
+insert into t1 values
+    (1, 99.99, '2025-01-01', 'first'),
+    (2, 200.50, '2025-02-15', 'second');
+
+create table t2 (
+    id int primary key,
+    amount decimal(10,2),
+    created date,
+    note varchar(50)
+);
+insert into t2 values
+    (1, 99.99, '2025-01-01', 'first'),
+    (3, 1234.56, '2025-03-20', 'third'),
+    (4, 0.01, '2025-12-31', 'tiny');
+
+data branch pick t2 into t1 keys(3, 4);
+select * from t1 order by id;
+-- expect: 4 rows with correct decimal and date values
+
+-- verify decimal precision
+select id, amount from t1 where id in (3, 4) order by id;
+
+drop table t1;
+drop table t2;
+
+-- ----------------------------------------------------------------
+-- case 7: large varchar values + special characters
+-- ----------------------------------------------------------------
+
+create table t1 (a int, b varchar(200), primary key(a));
+insert into t1 values (1, 'short');
+
+create table t2 (a int, b varchar(200), primary key(a));
+insert into t2 values
+    (1, 'short'),
+    (2, 'this is a moderately long string with numbers 12345 and special chars !@#$%'),
+    (3, ''),
+    (4, 'line1\nline2');
+
+data branch pick t2 into t1 keys(2, 3, 4);
+select a, length(b) from t1 order by a;
+
+drop table t1;
+drop table t2;
+
 drop database test;

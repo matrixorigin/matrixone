@@ -89,4 +89,92 @@ select * from t1 order by a asc;
 drop table t1;
 drop table t2;
 
+-- ----------------------------------------------------------------
+-- case 5: snapshot-based src picking with LCA
+-- ----------------------------------------------------------------
+-- Take a snapshot of t2, then modify t2 further.
+-- Pick from t2{snapshot=sp1} to freeze the source state.
+
+drop snapshot if exists sp_src;
+
+create table t0 (a int, b int, primary key(a));
+insert into t0 values (1,1),(2,2),(3,3);
+
+data branch create table t1 from t0;
+data branch create table t2 from t0;
+
+insert into t2 values (4,4),(5,5);
+create snapshot sp_src for account sys;
+
+-- further changes on t2 after snapshot
+update t2 set b = 50 where a = 5;
+insert into t2 values (6,6);
+
+-- pick from snapshot: t2 at sp_src has (5,5) not (5,50), and no pk=6
+data branch pick t2{snapshot=sp_src} into t1 keys(4,5,6);
+select * from t1 order by a asc;
+-- expect: {1,2,3,4,5} — pk=5 has b=5 (snapshot value), pk=6 absent
+
+drop snapshot sp_src;
+drop table t0;
+drop table t1;
+drop table t2;
+
+-- ----------------------------------------------------------------
+-- case 6: medium-scale pick — 100 rows, selective keys
+-- ----------------------------------------------------------------
+
+create table t0 (a int, b varchar(20), primary key(a));
+insert into t0 select *, 'base' from generate_series(1, 50) g;
+
+data branch create table t1 from t0;
+data branch create table t2 from t0;
+
+-- t2: insert 50 new rows + update 10 existing
+insert into t2 select *, 'new' from generate_series(51, 100) g;
+update t2 set b = 'changed' where a <= 10;
+
+-- pick only pk=55,60,65,70,75,80,85,90,95,100 (10 new rows)
+data branch pick t2 into t1 keys(55,60,65,70,75,80,85,90,95,100);
+select count(*) from t1;
+-- expect: 60
+
+-- pick one of the updates
+data branch pick t2 into t1 keys(5);
+select * from t1 where a = 5;
+-- expect: (5,'changed')
+
+-- verify diff still has remaining rows
+data branch diff t2 against t1;
+
+drop table t0;
+drop table t1;
+drop table t2;
+
+-- ----------------------------------------------------------------
+-- case 7: no-LCA with snapshot src, larger data
+-- ----------------------------------------------------------------
+
+drop snapshot if exists sp_freeze;
+
+create table t1 (a int, b int, primary key(a));
+insert into t1 select *, result * 10 from generate_series(1, 30) g;
+
+create snapshot sp_freeze for account sys;
+
+-- modify after snapshot
+delete from t1 where a > 25;
+update t1 set b = 999 where a = 1;
+
+create table t2 (a int, b int, primary key(a));
+
+-- pick from frozen snapshot: should have all 30 rows, original values
+data branch pick t1{snapshot=sp_freeze} into t2 keys(1,10,20,30);
+select * from t2 order by a asc;
+-- expect: (1,10),(10,100),(20,200),(30,300) — original values
+
+drop snapshot sp_freeze;
+drop table t1;
+drop table t2;
+
 drop database test;
