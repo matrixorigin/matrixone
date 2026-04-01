@@ -95,12 +95,15 @@ func LoadColumnsData2(
 	}
 	vectors = make([]containers.Vector, len(cols))
 	defer func() {
-		if needCopy {
+		if needCopy || err != nil {
+			// needCopy: caller owns copied vectors; IOVector can be freed now.
+			// err != nil: clean up IOVector internally so callers don't have
+			// to call release on error paths.
 			objectio.ReleaseIOVector(&ioVectors)
 			return
 		}
-		// When needCopy=false, release only frees the IOVector.
-		// Vector cleanup is the caller's responsibility (via Batch.Close).
+		// needCopy=false, success: caller must call release to free IOVector
+		// after it is done with the zero-copy vectors.
 		release = func() {
 			objectio.ReleaseIOVector(&ioVectors)
 		}
@@ -109,6 +112,12 @@ func LoadColumnsData2(
 	for i := range cols {
 		obj, err = objectio.Decode(ioVectors.Entries[i].CachedData.Bytes())
 		if err != nil {
+			for _, col := range vectors {
+				if col != nil {
+					col.Close()
+				}
+			}
+			vectors = nil
 			return
 		}
 
@@ -119,20 +128,18 @@ func LoadColumnsData2(
 				vPool.GetMPool(),
 				vPool,
 			); err != nil {
+				for _, col := range vectors {
+					if col != nil {
+						col.Close()
+					}
+				}
+				vectors = nil
 				return
 			}
 		} else {
 			vec = containers.ToTNVector(obj.(*vector.Vector), nil)
 		}
 		vectors[i] = vec
-	}
-	if err != nil {
-		for _, col := range vectors {
-			if col != nil {
-				col.Close()
-			}
-		}
-		return nil, release, err
 	}
 	return
 }
