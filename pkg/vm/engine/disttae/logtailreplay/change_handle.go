@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
@@ -541,9 +542,9 @@ func (h *AObjectHandle) buildBlockPlan(
 				)
 			}
 			// Even for non-evaluable blocks, PK pruning can still skip them.
-			if pkf != nil && pkf.Vec != nil {
+			if pkf != nil && len(pkf.Segments) > 0 {
 				pkZM := blk.MustGetColumn(pkSeqnum).ZoneMap()
-				if pkZM.IsInited() && !pkZM.AnyIn(pkf.Vec) {
+				if pkZM.IsInited() && !index.AnySegmentOverlaps(pkZM, pkf.Segments) {
 					plan.shouldReadByBlks[i] = false
 					plan.prunedBlocks++
 				}
@@ -553,9 +554,9 @@ func (h *AObjectHandle) buildBlockPlan(
 		evaluableBlockCnt++
 		plan.shouldReadByBlks[i] = overlap
 		// Apply PK pruning as a secondary filter on blocks that survived commit-TS check.
-		if overlap && pkf != nil && pkf.Vec != nil {
+		if overlap && pkf != nil && len(pkf.Segments) > 0 {
 			pkZM := blk.MustGetColumn(pkSeqnum).ZoneMap()
-			if pkZM.IsInited() && !pkZM.AnyIn(pkf.Vec) {
+			if pkZM.IsInited() && !index.AnySegmentOverlaps(pkZM, pkf.Segments) {
 				plan.shouldReadByBlks[i] = false
 				overlap = false
 			}
@@ -1062,9 +1063,9 @@ func (p *baseHandle) getObjectEntries(
 			}
 			// PK zonemap pruning: skip appendable objects whose sort-key range
 			// does not overlap with the requested PK values.
-			if pkf != nil && pkf.Vec != nil {
+			if pkf != nil && len(pkf.Segments) > 0 {
 				zm := entry.SortKeyZoneMap()
-				if zm.IsInited() && !zm.AnyIn(pkf.Vec) {
+				if zm.IsInited() && !index.AnySegmentOverlaps(zm, pkf.Segments) {
 					continue
 				}
 			}
@@ -1074,9 +1075,9 @@ func (p *baseHandle) getObjectEntries(
 				if entry.CreateTime.LT(&start) || entry.CreateTime.GT(&end) {
 					continue
 				}
-				if pkf != nil && pkf.Vec != nil {
+				if pkf != nil && len(pkf.Segments) > 0 {
 					zm := entry.SortKeyZoneMap()
-					if zm.IsInited() && !zm.AnyIn(pkf.Vec) {
+					if zm.IsInited() && !index.AnySegmentOverlaps(zm, pkf.Segments) {
 						continue
 					}
 				}
@@ -1087,9 +1088,9 @@ func (p *baseHandle) getObjectEntries(
 				continue
 			}
 			// PK zonemap pruning for TN non-appendable objects.
-			if pkf != nil && pkf.Vec != nil {
+			if pkf != nil && len(pkf.Segments) > 0 {
 				zm := entry.SortKeyZoneMap()
-				if zm.IsInited() && !zm.AnyIn(pkf.Vec) {
+				if zm.IsInited() && !index.AnySegmentOverlaps(zm, pkf.Segments) {
 					continue
 				}
 			}

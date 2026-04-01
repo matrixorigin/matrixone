@@ -597,6 +597,7 @@ func hashDiff(
 	emit emitFunc,
 	tarHandle []engine.ChangesHandle,
 	baseHandle []engine.ChangesHandle,
+	pickKeyHashmap databranchutils.BranchHashmap,
 ) (
 	err error,
 ) {
@@ -648,7 +649,7 @@ func hashDiff(
 
 	buildBaseStart := time.Now()
 	if baseDataHashmap, baseTombstoneHashmap, err = buildHashmapForTable(
-		ctx, ses.proc.Mp(), dagInfo.lcaType, &tblStuff, baseHandle, "base",
+		ctx, ses.proc.Mp(), dagInfo.lcaType, &tblStuff, baseHandle, "base", pickKeyHashmap,
 	); err != nil {
 		return
 	}
@@ -656,7 +657,7 @@ func hashDiff(
 
 	buildTargetStart := time.Now()
 	if tarDataHashmap, tarTombstoneHashmap, err = buildHashmapForTable(
-		ctx, ses.proc.Mp(), dagInfo.lcaType, &tblStuff, tarHandle, "target",
+		ctx, ses.proc.Mp(), dagInfo.lcaType, &tblStuff, tarHandle, "target", pickKeyHashmap,
 	); err != nil {
 		return
 	}
@@ -1660,6 +1661,7 @@ func buildHashmapForTable(
 	tblStuff *tableStuff,
 	handles []engine.ChangesHandle,
 	side string,
+	pickKeyHashmap databranchutils.BranchHashmap,
 ) (
 	dataHashmap databranchutils.BranchHashmap,
 	tombstoneHashmap databranchutils.BranchHashmap,
@@ -1750,11 +1752,43 @@ func buildHashmapForTable(
 			case <-ctx.Done():
 				taskErr = ctx.Err()
 			default:
+				// When a pickKeyHashmap is provided (PICK operation), filter
+				// the batch to keep only rows whose PK exists in the hashmap.
+				// This moves the precise PK filtering from the consumer
+				// (appendPickedBatchRows) into the producer, reducing the
+				// data that flows through hashDiff and the channel.
+				if pickKeyHashmap != nil {
+					pkIdx := tblStuff.def.pkColIdx
+					if isTombstone {
+						// After updateTombstoneBatch, tombstone PK is at Vec[0].
+						pkIdx = 0
+					}
+					var results []databranchutils.GetResult
+					results, taskErr = pickKeyHashmap.GetByVectors(
+						[]*vector.Vector{bat.Vecs[pkIdx]},
+					)
+					if taskErr != nil {
+						atomicErr.Store(taskErr)
+						return
+					}
+					var sels []int64
+					for i, r := range results {
+						if r.Exists {
+							sels = append(sels, int64(i))
+						}
+					}
+					if len(sels) == 0 {
+						return // all rows filtered out
+					}
+					if len(sels) < bat.RowCount() {
+						bat.Shrink(sels, false)
+						ll = bat.VectorCount()
+					}
+				}
+
 				if isTombstone {
-					// keep the commit ts
 					taskErr = tombstoneHashmap.PutByVectors(bat.Vecs[:ll], []int{0})
 				} else {
-					// keep the commit ts
 					taskErr = dataHashmap.PutByVectors(bat.Vecs[:ll], []int{tblStuff.def.pkColIdx})
 				}
 			}

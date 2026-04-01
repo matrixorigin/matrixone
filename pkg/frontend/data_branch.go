@@ -741,12 +741,27 @@ func diffMergeAgency(
 		}
 	}
 
-	// Build PK filter for PICK (nil for DIFF/MERGE).
+	// Materialize PICK keys and build PK filter in one unified pass.
+	// Both pickKeyHashmap (for producer-side precise batch filtering in
+	// buildHashmapForTable) and pkFilter (for object/block ZoneMap pruning
+	// inside CollectChanges) are produced here, BEFORE the goroutines are
+	// launched.
 	var pkFilter *engine.PKFilter
+	var pickKeyHashmap databranchutils.BranchHashmap
 	if pickStmt != nil {
-		pkFilter, _ = buildPKFilterForPick(pickStmt, tblStuff, ses.proc.Mp())
+		var err2 error
+		pickKeyHashmap, pkFilter, err2 = materializePickKeysAndFilter(ctx, ses, bh, pickStmt, tblStuff)
+		if err2 != nil {
+			err = err2
+			return
+		}
 	}
 	defer freePKFilter(pkFilter, ses.proc.Mp())
+	defer func() {
+		if pickKeyHashmap != nil {
+			pickKeyHashmap.Close()
+		}
+	}()
 
 	wg.Add(2)
 
@@ -780,7 +795,7 @@ func diffMergeAgency(
 	}()
 
 	if err = diffOnBase(
-		ctx, ses, bh, wg, dagInfo, tblStuff, copt, emit, pkFilter,
+		ctx, ses, bh, wg, dagInfo, tblStuff, copt, emit, pkFilter, pickKeyHashmap,
 	); err != nil {
 		// If the consumer cancelled the context (e.g., PICK conflict FAIL),
 		// wait for it to finish and prefer its real error over context.Canceled.
@@ -958,6 +973,7 @@ func diffOnBase(
 	copt compositeOption,
 	emit emitFunc,
 	pkFilter *engine.PKFilter,
+	pickKeyHashmap databranchutils.BranchHashmap,
 ) (err error) {
 
 	defer func() {
@@ -1019,7 +1035,7 @@ func diffOnBase(
 
 	if err = hashDiff(
 		ctx, ses, bh, tblStuff, dagInfo,
-		copt, emit, tarHandle, baseHandle,
+		copt, emit, tarHandle, baseHandle, pickKeyHashmap,
 	); err != nil {
 		return
 	}
@@ -1288,7 +1304,7 @@ func constructChangeHandle(
 		from, end types.TS,
 		mp *mpool.MPool,
 	) (engine.ChangesHandle, error) {
-		if pkFilter != nil && pkFilter.Vec != nil {
+		if pkFilter != nil && len(pkFilter.Segments) > 0 {
 			return databranchutils.CollectChangesWithPKFilter(
 				ctx, rel, from, end, mp, pkFilter,
 			)
