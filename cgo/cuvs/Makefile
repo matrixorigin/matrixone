@@ -17,7 +17,7 @@ CC   := gcc
 CXX  := g++
 
 # Libraries
-LIBS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64/cudart -L$(CONDA_PREFIX)/lib -lcuvs -lcuvs_c -lnccl -lucxx -lucp -luct -lucs -lucm -ldl -lrmm -lrapids_logger -Xlinker -lpthread -Xlinker -lm
+LIBS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64/cudart -L$(CONDA_PREFIX)/lib -lcuvs -lcuvs_c -ldl -lrmm -lrapids_logger -Xlinker -lpthread -Xlinker -lm
 
 INCLUDES := -I. -I/usr/local/cuda/include -I$(CONDA_PREFIX)/include -I$(CONDA_PREFIX)/include/rapids -I$(CONDA_PREFIX)/include/raft -I$(CONDA_PREFIX)/include/cuvs
 

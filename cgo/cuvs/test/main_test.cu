@@ -235,31 +235,6 @@ TEST(CuvsTaskResultStoreTest, DiscardResult) {
     store.discard(id);
 }
 
-// --- raft_handle_wrapper_t and is_snmg_handle Tests ---
-
-TEST(RaftHandleWrapperTest, DetectSingleGpu) {
-    raft_handle_wrapper_t wrapper(0, 0, nullptr); // device_id=0, rank=0, mg_res=nullptr
-    ASSERT_FALSE(is_snmg_handle(*wrapper.get_raft_resources()));
-}
-
-/*
-// Sharded mode is currently disabled due to a suspected bug in cuVS or its integration.
-// In gdb output, the mdspan extents showed 18446744073709551615ul (SIZE_MAX). 
-// This usually means a dynamic extent wasn't initialized correctly or a 
-// calculation for the number of rows/columns overflowed/underflowed.
-// Action: Check the dimensions of your input query matrix and indices. 
-// If n_queries or k is being passed as a negative number or uninitialized variable, 
-// cuvs might be trying to allocate a workspace based on a massive, invalid number.
-TEST(RaftHandleWrapperTest, DetectMultiGpu) {
-    std::vector<int> devices = {0, 1}; // Distinct devices for simulation
-    auto mg_res = std::make_shared<raft::device_resources_snmg>(devices);
-    init_mg_comms(*mg_res, devices);
-    raft_handle_wrapper_t wrapper(0, 0, mg_res); 
-    
-    ASSERT_TRUE(is_snmg_handle(*wrapper.get_raft_resources()));
-}
-*/
-
 // --- cuvs_worker_t Tests ---
 
 TEST(CuvsWorkerTest, BasicLifecycle) {

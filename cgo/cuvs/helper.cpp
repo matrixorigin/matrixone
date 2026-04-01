@@ -16,10 +16,6 @@
 
 #include "helper.h"
 #include <unordered_map>
-#include <raft/core/resource/comms.hpp>
-#include <raft/core/resource/nccl_comm.hpp>
-#include <raft/core/resource/multi_gpu.hpp>
-#include <raft/comms/std_comms.hpp>
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #include <fstream>
@@ -28,39 +24,6 @@
 #include <raft/util/cudart_utils.hpp>
 
 namespace matrixone {
-
-bool is_snmg_handle(const raft::resources& res) {
-    if (raft::resource::comms_initialized(res)) {
-        return raft::resource::get_comms(res).get_size() > 1;
-    }
-    return false;
-}
-
-void init_mg_comms(raft::resources& mg_res, const std::vector<int>& devices) {
-    int world_size = static_cast<int>(devices.size());
-    if (world_size <= 1) return;
-
-    std::vector<ncclComm_t> comms(world_size);
-
-    // ncclCommInitAll is the most robust way to initialize multiple GPUs 
-    // from a single thread in a single process.
-    ncclResult_t res = ncclCommInitAll(comms.data(), world_size, devices.data());
-    if (res != ncclSuccess) {
-        throw std::runtime_error("ncclCommInitAll failed with error code " + std::to_string(res));
-    }
-
-    for (int i = 0; i < world_size; ++i) {
-        raft::resources& rank_res = const_cast<raft::resources&>(
-            raft::resource::get_device_resources_for_rank(mg_res, i));
-        
-        raft::comms::build_comms_nccl_only(&rank_res, comms[i], world_size, i);
-    }
-}
-
-void inject_nccl_comm(raft::resources* res, void* nccl_comm, int size, int rank) {
-    ncclComm_t comm = static_cast<ncclComm_t>(nccl_comm);
-    raft::comms::build_comms_nccl_only(res, comm, size, rank);
-}
 
 void save_host_matrix(const std::string& filename, raft::host_matrix_view<const float, int64_t, raft::row_major> view) {
     std::ofstream out(filename, std::ios::binary);

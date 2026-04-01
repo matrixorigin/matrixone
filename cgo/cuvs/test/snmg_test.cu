@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+/*
 #include "test_framework.hpp"
 #include "helper.h"
 #include <raft/core/device_resources_snmg.hpp>
@@ -27,7 +28,6 @@
 
 using namespace matrixone;
 
-/*
 // Sharded mode is currently disabled due to a suspected bug in cuVS or its integration.
 // GDB trace showed mdspan extents being set to 18446744073709551615ul (SIZE_MAX),
 // which suggests a dynamic extent initialization failure or dimension overflow/underflow

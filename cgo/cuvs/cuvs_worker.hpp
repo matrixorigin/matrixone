@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <raft/core/device_resources_snmg.hpp>
 #include <raft/core/resource/comms.hpp>
 #include <raft/core/resources.hpp>
 #include "helper.h"
@@ -396,12 +395,10 @@ private:
  */
 class raft_handle_wrapper_t {
 public:
-    raft_handle_wrapper_t(int device_id, int rank = 0, std::shared_ptr<raft::device_resources_snmg> mg_res = nullptr,
+    raft_handle_wrapper_t(int device_id, int rank = 0, 
                          distribution_mode_t mode = DistributionMode_SINGLE_GPU) 
-        : device_id_(device_id), rank_(rank), mg_res_(mg_res), mode_(mode) {
-        if (mg_res) {
-            res_ = std::make_shared<raft::resources>(raft::resource::get_device_resources_for_rank(*mg_res, rank));
-        } else if (device_id >= 0) {
+        : device_id_(device_id), rank_(rank), mode_(mode) {
+        if (device_id >= 0) {
             res_ = std::make_shared<raft::resources>();
         } else {
             // CPU Context
@@ -418,27 +415,10 @@ public:
      * @brief Performs synchronization.
      * @param force_all_ranks If true, performs a collective sync across all ranks.
      */
-    void sync(bool force_all_ranks = false) {
+    void sync() {
         if (!res_) return;
         raft::resource::sync_stream(*res_);
-
-        if (force_all_ranks && mg_res_ && rank_ == 0) {
-            int num_ranks = 0;
-            if (raft::resource::comms_initialized(*res_)) {
-                num_ranks = raft::resource::get_comms(*res_).get_size();
-            } else {
-                num_ranks = raft::resource::get_num_ranks(*res_);
-            }
-
-            for (int i = 1; i < num_ranks; ++i) {
-                auto rank_res = raft::resource::get_device_resources_for_rank(*mg_res_, i);
-                raft::resource::sync_stream(rank_res);
-            }
-        }
     }
-
-    // Deprecated: use sync()
-    void sync_all_devices() { sync(true); }
 
     void set_index_ptr(std::any ptr) { index_ptr_ = ptr; }
     std::any get_index_ptr() const { return index_ptr_; }
@@ -446,7 +426,6 @@ public:
 private:
     int device_id_;
     int rank_;
-    std::shared_ptr<raft::device_resources_snmg> mg_res_;
     std::shared_ptr<raft::resources> res_;
     distribution_mode_t mode_;
     std::any index_ptr_;
@@ -487,7 +466,7 @@ public:
         main_thread_ = std::thread([this, init_fn, stop_fn] {
             int device_id = devices_.empty() ? -1 : devices_[0];
             if (device_id >= 0) cudaSetDevice(device_id);
-            raft_handle handle(device_id, 0, nullptr, mode_);
+            raft_handle handle(device_id, 0, mode_);
             if (init_fn) init_fn(handle);
             this->run_main_loop(handle, stop_fn);
         });
@@ -505,7 +484,7 @@ public:
                 cudaSetDevice(device_id);
                 
                 // Each thread in the pool gets its own raft::resources (so separate CUDA streams)
-                raft_handle handle(device_id, rank, nullptr, mode_);
+                raft_handle handle(device_id, rank, mode_);
                 
                 if (init_fn) init_fn(handle);
                 this->run_device_loop(handle, stop_fn, device_idx);
