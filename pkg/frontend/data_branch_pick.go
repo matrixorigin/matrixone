@@ -364,7 +364,7 @@ func materializePickKeys(
 	tblStuff tableStuff,
 ) (map[string]struct{}, error) {
 	if stmt.Keys == nil {
-		return nil, fmt.Errorf("DATA BRANCH PICK requires a KEYS clause")
+		return nil, moerr.NewInvalidInputNoCtx("DATA BRANCH PICK requires a KEYS clause")
 	}
 
 	switch stmt.Keys.Type {
@@ -373,7 +373,7 @@ func materializePickKeys(
 	case tree.PickKeysSubquery:
 		return materializePickKeysFromSubquery(ctx, ses, bh, stmt, tblStuff)
 	default:
-		return nil, fmt.Errorf("unsupported KEYS type: %d", stmt.Keys.Type)
+		return nil, moerr.NewInvalidInputNoCtxf("unsupported KEYS type: %d", stmt.Keys.Type)
 	}
 }
 
@@ -422,7 +422,7 @@ func materializePickKeysFromSubquery(
 	tblStuff tableStuff,
 ) (map[string]struct{}, error) {
 	if stmt.Keys.Select == nil {
-		return nil, fmt.Errorf("KEYS subquery is nil")
+		return nil, moerr.NewInvalidInputNoCtx("KEYS subquery is nil")
 	}
 
 	// Format the subquery to SQL.
@@ -431,12 +431,12 @@ func materializePickKeysFromSubquery(
 	sql := fmtCtx.String()
 
 	if err := bh.Exec(ctx, sql); err != nil {
-		return nil, fmt.Errorf("failed to execute KEYS subquery: %w", err)
+		return nil, moerr.NewInternalErrorNoCtxf("failed to execute KEYS subquery: %v", err)
 	}
 
 	erArray, err := getResultSet(ctx, bh)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get KEYS subquery results: %w", err)
+		return nil, moerr.NewInternalErrorNoCtxf("failed to get KEYS subquery results: %v", err)
 	}
 
 	keySet := make(map[string]struct{})
@@ -450,7 +450,7 @@ func materializePickKeysFromSubquery(
 			for colIdx := uint64(0); colIdx < colCnt; colIdx++ {
 				val, err2 := rs.GetString(ctx, rowIdx, colIdx)
 				if err2 != nil {
-					return nil, fmt.Errorf("failed to read KEYS subquery result: %w", err2)
+					return nil, moerr.NewInternalErrorNoCtxf("failed to read KEYS subquery result: %v", err2)
 				}
 				buf.WriteString(quoteStringForKey(val))
 				if colIdx < colCnt-1 {
@@ -537,7 +537,7 @@ func appendExprToVec(vec *vector.Vector, expr tree.Expr, pkType types.Type, mp *
 		return vector.AppendBytes(vec, []byte(e.String()), false, mp)
 	default:
 		// For complex expressions, skip engine-level filtering.
-		return fmt.Errorf("unsupported expression type for PK filter: %T", expr)
+		return moerr.NewInvalidInputNoCtxf("unsupported expression type for PK filter: %T", expr)
 	}
 }
 
@@ -610,7 +610,7 @@ func appendNumValToVec(vec *vector.Vector, val *tree.NumVal, pkType types.Type, 
 		return vector.AppendBytes(vec, []byte(s), false, mp)
 	default:
 		// For other types (decimal, date, etc.), skip engine-level filtering.
-		return fmt.Errorf("unsupported PK type for engine filter: %s", pkType.Oid.String())
+		return moerr.NewInvalidInputNoCtxf("unsupported PK type for engine filter: %s", pkType.Oid.String())
 	}
 }
 
