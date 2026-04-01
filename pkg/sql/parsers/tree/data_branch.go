@@ -412,7 +412,6 @@ type PickKeysType int
 const (
 	PickKeysValues   PickKeysType = iota // KEYS (1, 2, 3) or KEYS ((1,'a'), (2,'b'))
 	PickKeysSubquery                     // KEYS (SELECT pk FROM ...)
-	PickKeysBetween                      // BETWEEN SNAPSHOT sp1 AND sp2
 )
 
 // PickKeys represents the KEYS clause of a PICK statement.
