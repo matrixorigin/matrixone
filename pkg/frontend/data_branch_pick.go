@@ -17,7 +17,6 @@ package frontend
 import (
 	"bytes"
 	"context"
-	"errors"
 	"math"
 	"runtime"
 	"strconv"
@@ -592,7 +591,7 @@ func materializeSubqueryUnified(
 				errOpen = false
 				continue
 			}
-			return nil, errors.New("KEYS subquery streaming error: " + e.Error())
+			return nil, moerr.NewInternalErrorNoCtxf("KEYS subquery streaming error: %v", e)
 
 		case sqlRet, ok := <-streamChan:
 			if !ok {
