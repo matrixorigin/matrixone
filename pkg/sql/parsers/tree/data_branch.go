@@ -412,6 +412,7 @@ type PickKeysType int
 const (
 	PickKeysValues   PickKeysType = iota // KEYS (1, 2, 3) or KEYS ((1,'a'), (2,'b'))
 	PickKeysSubquery                     // KEYS (SELECT pk FROM ...)
+	PickKeysBetween                      // BETWEEN SNAPSHOT sp1 AND sp2
 )
 
 // PickKeys represents the KEYS clause of a PICK statement.
@@ -424,13 +425,16 @@ type PickKeys struct {
 // DataBranchPick represents:
 //
 //	DATA BRANCH PICK <src_table> INTO <dst_table>
-//	  KEYS ( <value_list> | <subquery> )
+//	  [ KEYS ( <value_list> | <subquery> ) ]
+//	  [ BETWEEN SNAPSHOT sp1 AND sp2 ]
 //	  [WHEN CONFLICT FAIL|SKIP|ACCEPT]
 type DataBranchPick struct {
 	statementImpl
 	SrcTable    TableName
 	DstTable    TableName
 	Keys        *PickKeys
+	BetweenFrom string // snapshot name for BETWEEN SNAPSHOT sp1 AND sp2
+	BetweenTo   string // snapshot name for BETWEEN SNAPSHOT sp1 AND sp2
 	ConflictOpt *ConflictOpt
 }
 
@@ -455,6 +459,12 @@ func (s *DataBranchPick) Format(ctx *FmtCtx) {
 	s.SrcTable.Format(ctx)
 	ctx.WriteString(" into ")
 	s.DstTable.Format(ctx)
+	if s.BetweenFrom != "" && s.BetweenTo != "" {
+		ctx.WriteString(" between snapshot ")
+		ctx.WriteString(s.BetweenFrom)
+		ctx.WriteString(" and ")
+		ctx.WriteString(s.BetweenTo)
+	}
 	if s.Keys != nil {
 		ctx.WriteString(" keys (")
 		if s.Keys.Type == PickKeysSubquery && s.Keys.Select != nil {
