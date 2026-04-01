@@ -10,49 +10,49 @@ insert into feature_tbl values (6,'feature-c');
 update feature_tbl set b = 'fix-1' where a = 1;
 update feature_tbl set b = 'fix-2' where a = 2;
 data branch diff feature_tbl against main_tbl;
-diff feature_tbl against main_tbl    flag    a    b
-feature_tbl    UPDATE    1    fix-1
-feature_tbl    UPDATE    2    fix-2
-feature_tbl    INSERT    4    feature-a
-feature_tbl    INSERT    5    feature-b
-feature_tbl    INSERT    6    feature-c
+➤ diff feature_tbl against main_tbl[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[12,0,0]  𝄀
+feature_tbl  ¦  UPDATE  ¦  1  ¦  fix-1  𝄀
+feature_tbl  ¦  UPDATE  ¦  2  ¦  fix-2  𝄀
+feature_tbl  ¦  INSERT  ¦  4  ¦  feature-a  𝄀
+feature_tbl  ¦  INSERT  ¦  5  ¦  feature-b  𝄀
+feature_tbl  ¦  INSERT  ¦  6  ¦  feature-c
 data branch pick feature_tbl into main_tbl keys(4);
 select * from main_tbl order by a asc;
-a    b
-1    init
-2    init
-3    init
-4    feature-a
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  init  𝄀
+2  ¦  init  𝄀
+3  ¦  init  𝄀
+4  ¦  feature-a
 data branch pick feature_tbl into main_tbl keys(1);
 select * from main_tbl order by a asc;
-a    b
-1    fix-1
-2    init
-3    init
-4    feature-a
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  fix-1  𝄀
+2  ¦  init  𝄀
+3  ¦  init  𝄀
+4  ¦  feature-a
 data branch pick feature_tbl into main_tbl keys(6);
 select * from main_tbl order by a asc;
-a    b
-1    fix-1
-2    init
-3    init
-4    feature-a
-6    feature-c
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  fix-1  𝄀
+2  ¦  init  𝄀
+3  ¦  init  𝄀
+4  ¦  feature-a  𝄀
+6  ¦  feature-c
 data branch diff feature_tbl against main_tbl;
-diff feature_tbl against main_tbl    flag    a    b
-feature_tbl    UPDATE    2    fix-2
-feature_tbl    INSERT    5    feature-b
+➤ diff feature_tbl against main_tbl[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[12,0,0]  𝄀
+feature_tbl  ¦  UPDATE  ¦  2  ¦  fix-2  𝄀
+feature_tbl  ¦  INSERT  ¦  5  ¦  feature-b
 data branch pick feature_tbl into main_tbl keys(2,5);
 select * from main_tbl order by a asc;
-a    b
-1    fix-1
-2    fix-2
-3    init
-4    feature-a
-5    feature-b
-6    feature-c
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  fix-1  𝄀
+2  ¦  fix-2  𝄀
+3  ¦  init  𝄀
+4  ¦  feature-a  𝄀
+5  ¦  feature-b  𝄀
+6  ¦  feature-c
 data branch diff feature_tbl against main_tbl;
-diff feature_tbl against main_tbl    flag    a    b
+➤ diff feature_tbl against main_tbl[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[12,0,0]
 drop table main_tbl;
 drop table feature_tbl;
 drop database test;

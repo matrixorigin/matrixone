@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -45,8 +46,16 @@ func handleBranchPick(
 }
 
 // pickMergeDiffs is the consumer goroutine for PICK. It receives diff batches
-// from the hashDiff producer, filters rows whose PK is in the KEYS set,
-// and applies INSERT/DELETE SQL to the destination table.
+// from the hashDiff producer (which uses ACCEPT internally), filters rows whose
+// PK is in the KEYS set, and applies INSERT/DELETE SQL to the destination table.
+//
+// The user's conflict option is enforced here:
+//   - ACCEPT: base DELETE + target INSERT are both applied (source value wins).
+//   - SKIP:   base DELETE rows mark keys to skip; corresponding target INSERTs are ignored.
+//   - FAIL:   base DELETE for a picked key means conflict → return error.
+//
+// Within each hashDiff shard, base DELETE batches are emitted before target INSERT
+// batches, so the skipSet is populated before the corresponding INSERTs arrive.
 func pickMergeDiffs(
 	ctx context.Context,
 	cancel context.CancelFunc,
@@ -84,6 +93,12 @@ func pickMergeDiffs(
 		return err
 	}
 
+	// skipSet tracks picked keys that should be skipped (SKIP conflict mode).
+	var skipSet map[string]struct{}
+	if stmt.ConflictOpt != nil && stmt.ConflictOpt.Opt == tree.CONFLICT_SKIP {
+		skipSet = make(map[string]struct{})
+	}
+
 	appender := sqlValuesAppender{
 		ctx:             ctx,
 		ses:             ses,
@@ -116,7 +131,8 @@ func pickMergeDiffs(
 		}
 
 		if err = appendPickedBatchRows(
-			ctx, ses, tblStuff, wrapped, tmpValsBuffer, appender, keySet,
+			ctx, ses, tblStuff, wrapped, tmpValsBuffer, appender,
+			keySet, stmt.ConflictOpt, skipSet,
 		); err != nil {
 			firstErr = err
 			cancel()
@@ -140,7 +156,18 @@ func pickMergeDiffs(
 }
 
 // appendPickedBatchRows filters rows from a diff batch by PK key set,
-// then appends matching rows to the SQL appender.
+// then applies the user's conflict semantics before appending to the SQL appender.
+//
+// hashDiff uses ACCEPT internally, so:
+//   - base DELETE batches (side=base, kind=DELETE) represent conflict victims
+//     (old base rows being replaced by source values).
+//   - target INSERT batches (side=target, kind=INSERT) contain both new rows
+//     and conflict-winning source rows.
+//
+// The consumer enforces the user's actual conflict choice:
+//   - ACCEPT: apply both DELETE and INSERT (source wins). Same as hashDiff output.
+//   - SKIP:   record conflicting keys in skipSet; skip both DELETE and INSERT.
+//   - FAIL:   return error when a base DELETE exists for a picked key.
 func appendPickedBatchRows(
 	ctx context.Context,
 	ses *Session,
@@ -149,6 +176,8 @@ func appendPickedBatchRows(
 	tmpValsBuffer *bytes.Buffer,
 	appender sqlValuesAppender,
 	keySet map[string]struct{},
+	userConflictOpt *tree.ConflictOpt,
+	skipSet map[string]struct{},
 ) (err error) {
 	row := make([]any, len(tblStuff.def.colNames))
 
@@ -167,11 +196,40 @@ func appendPickedBatchRows(
 			continue // skip rows not in the KEYS set
 		}
 
-		// Row is in KEYS set — extract all visible column values.
+		// Handle conflict semantics for picked keys.
+		if wrapped.side == diffSideBase && wrapped.kind == diffDelete {
+			// A base DELETE for a picked key means the key exists in both
+			// source and destination with different values (a conflict).
+			if userConflictOpt != nil {
+				switch userConflictOpt.Opt {
+				case tree.CONFLICT_FAIL:
+					return moerr.NewInternalErrorNoCtxf(
+						"conflict: %s %s and %s %s on pk(%v) with different values",
+						tblStuff.tarRel.GetTableName(), diffInsert,
+						tblStuff.baseRel.GetTableName(), diffInsert,
+						pkKey,
+					)
+				case tree.CONFLICT_SKIP:
+					skipSet[pkKey] = struct{}{}
+					continue // do not apply the DELETE
+				case tree.CONFLICT_ACCEPT:
+					// fall through — apply the DELETE (source value wins)
+				}
+			}
+		}
+
+		// For SKIP mode: skip target INSERTs for conflicting keys.
+		if skipSet != nil {
+			if _, skipped := skipSet[pkKey]; skipped {
+				continue
+			}
+		}
+
+		// Row is in KEYS set and passed conflict checks — extract all visible column values.
 		for _, colIdx := range tblStuff.def.visibleIdxes {
 			vec := wrapped.batch.Vecs[colIdx]
 			if rowIdx >= vec.Length() {
-				return fmt.Errorf(
+				return moerr.NewInternalErrorNoCtxf(
 					"data branch pick batch shape mismatch: row=%d batchRows=%d col=%d vecLen=%d",
 					rowIdx, wrapped.batch.RowCount(), colIdx, vec.Length(),
 				)

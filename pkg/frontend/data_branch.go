@@ -678,7 +678,11 @@ func diffMergeAgency(
 			return
 		}
 	} else {
-		copt.conflictOpt = pickStmt.ConflictOpt
+		// Always use ACCEPT at hashDiff level for PICK so that conflicts on
+		// non-picked keys do not abort the operation.  The user's actual
+		// conflict choice (FAIL/SKIP/ACCEPT) is enforced in the consumer
+		// (pickMergeDiffs), where only picked-key conflicts are considered.
+		copt.conflictOpt = &tree.ConflictOpt{Opt: tree.CONFLICT_ACCEPT}
 		copt.expandUpdate = true
 		if tblStuff, err = getTableStuff(
 			ctx, ses, bh, pickStmt.SrcTable, pickStmt.DstTable,
@@ -740,8 +744,6 @@ func diffMergeAgency(
 	// Build PK filter for PICK (nil for DIFF/MERGE).
 	var pkFilter *engine.PKFilter
 	if pickStmt != nil {
-		// Best-effort: if building the filter fails (e.g. subquery keys,
-		// composite PK), we fall back to consumer-level filtering only.
 		pkFilter, _ = buildPKFilterForPick(pickStmt, tblStuff, ses.proc.Mp())
 	}
 	defer freePKFilter(pkFilter, ses.proc.Mp())
@@ -780,6 +782,11 @@ func diffMergeAgency(
 	if err = diffOnBase(
 		ctx, ses, bh, wg, dagInfo, tblStuff, copt, emit, pkFilter,
 	); err != nil {
+		// If the consumer cancelled the context (e.g., PICK conflict FAIL),
+		// the real error is in outputErr, not the context.Canceled from diffOnBase.
+		if outputErr.Load() != nil {
+			err = outputErr.Load().(error)
+		}
 		return
 	}
 

@@ -115,8 +115,9 @@ var CollectChangesWithPKFilter = func(
 			ctx = engine.WithPKFilter(ctx, pkFilter)
 			// Data batches: PK is at index 0 (sort key column).
 			handle.filterData = buildPKFilterFunc(pkFilter, 0)
-			// Tombstone batches: index 0 = Rowid, index 1 = PK.
-			handle.filterTombstone = buildPKFilterFunc(pkFilter, 1)
+			// Tombstone batches: after updateTombstoneBatch(), Rowid is freed
+			// and PK moves to index 0 (CommitTS is at index 1).
+			handle.filterTombstone = buildPKFilterFunc(pkFilter, 0)
 		}
 		var err error
 		if handle.handle, err = rel.CollectChanges(
