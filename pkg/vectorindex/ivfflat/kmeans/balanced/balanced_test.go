@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/stretchr/testify/require"
 )
@@ -48,7 +47,7 @@ func Test_NewKMeans_GCStress(t *testing.T) {
 	}
 
 	for i := 0; i < 128; i++ {
-		km, err := NewKMeans[float64](vectors, 2, 10, 0.01, metric.Metric_L2Distance, kmeans.Random, false, 1)
+		km, err := NewKMeans[float64](vectors, 2, 10, 0.01, metric.Metric_L2Distance, false, 1)
 		require.NoError(t, err)
 		require.NoError(t, km.Close())
 		runtime.GC()
@@ -59,20 +58,20 @@ func TestNewKMeans_Validation(t *testing.T) {
 	vectors := [][]float32{{1, 2}, {3, 4}, {5, 6}}
 
 	// Valid
-	_, err := NewKMeans(vectors, 2, 10, 0.01, metric.Metric_L2Distance, kmeans.Random, false, 1)
+	_, err := NewKMeans(vectors, 2, 10, 0.01, metric.Metric_L2Distance, false, 1)
 	require.NoError(t, err)
 
 	// Cluster count too high
-	_, err = NewKMeans(vectors, 4, 10, 0.01, metric.Metric_L2Distance, kmeans.Random, false, 1)
+	_, err = NewKMeans(vectors, 4, 10, 0.01, metric.Metric_L2Distance, false, 1)
 	require.Error(t, err)
 
 	// Dimension mismatch
 	mismatch := [][]float32{{1, 2}, {3, 4, 5}}
-	_, err = NewKMeans(mismatch, 2, 10, 0.01, metric.Metric_L2Distance, kmeans.Random, false, 1)
+	_, err = NewKMeans(mismatch, 2, 10, 0.01, metric.Metric_L2Distance, false, 1)
 	require.Error(t, err)
 
 	// Empty vectors
-	_, err = NewKMeans([][]float32{}, 2, 10, 0.01, metric.Metric_L2Distance, kmeans.Random, false, 1)
+	_, err = NewKMeans([][]float32{}, 2, 10, 0.01, metric.Metric_L2Distance, false, 1)
 	require.Error(t, err)
 }
 
@@ -84,7 +83,7 @@ func TestBalancedKMeans_Basic(t *testing.T) {
 		{10, 10}, {10.1, 10.1}, {9.9, 9.9}, {10, 9.9},
 	}
 
-	km, err := NewKMeans(vectors, 2, 10, 0.01, metric.Metric_L2Distance, kmeans.Random, false, 2)
+	km, err := NewKMeans(vectors, 2, 10, 0.01, metric.Metric_L2Distance, false, 2)
 	require.NoError(t, err)
 
 	res, err := km.Cluster(ctx)
@@ -113,7 +112,7 @@ func TestBalancedKMeans_Basic(t *testing.T) {
 func TestBalancedKMeans_K1(t *testing.T) {
 	ctx := context.Background()
 	vectors := [][]float32{{1, 1}, {2, 2}, {3, 3}}
-	km, err := NewKMeans(vectors, 1, 10, 0.01, metric.Metric_L2Distance, kmeans.Random, false, 1)
+	km, err := NewKMeans(vectors, 1, 10, 0.01, metric.Metric_L2Distance, false, 1)
 	require.NoError(t, err)
 
 	res, err := km.Cluster(ctx)
@@ -126,7 +125,7 @@ func TestBalancedKMeans_K1(t *testing.T) {
 func TestBalancedKMeans_KN(t *testing.T) {
 	ctx := context.Background()
 	vectors := [][]float32{{1, 1}, {2, 2}, {3, 3}}
-	km, err := NewKMeans(vectors, 3, 10, 0.01, metric.Metric_L2Distance, kmeans.Random, false, 1)
+	km, err := NewKMeans(vectors, 3, 10, 0.01, metric.Metric_L2Distance, false, 1)
 	require.NoError(t, err)
 
 	res, err := km.Cluster(ctx)
@@ -142,7 +141,7 @@ func TestBalancedKMeans_Spherical(t *testing.T) {
 		{1, 0}, {0.99, 0.1},
 		{0, 1}, {0.1, 0.99},
 	}
-	km, err := NewKMeans(vectors, 2, 10, 0.01, metric.Metric_CosineDistance, kmeans.Random, true, 1)
+	km, err := NewKMeans(vectors, 2, 10, 0.01, metric.Metric_CosineDistance, true, 1)
 	require.NoError(t, err)
 
 	res, err := km.Cluster(ctx)
@@ -166,7 +165,7 @@ func FakeErrorDistance[T types.RealNumbers](v1, v2 []T) (T, error) {
 func TestBalancedKMeans_DistanceError(t *testing.T) {
 	ctx := context.Background()
 	vectors := [][]float32{{1, 1}, {2, 2}, {3, 3}, {4, 4}}
-	km, err := NewKMeans(vectors, 2, 10, 0.01, metric.Metric_L2Distance, kmeans.Random, false, 1)
+	km, err := NewKMeans(vectors, 2, 10, 0.01, metric.Metric_L2Distance, false, 1)
 	require.NoError(t, err)
 
 	bkm := km.(*BalancedKMeans[float32])
@@ -190,7 +189,7 @@ func TestBalancedKMeans_LargeBalanced(t *testing.T) {
 		}
 	}
 
-	km, err := NewKMeans(vectors, k, 20, 0.01, metric.Metric_L2Distance, kmeans.Random, false, 8)
+	km, err := NewKMeans(vectors, k, 20, 0.01, metric.Metric_L2Distance, false, 8)
 	require.NoError(t, err)
 
 	_, err = km.Cluster(ctx)
@@ -224,7 +223,7 @@ func BenchmarkBalancedKMeans(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		km, _ := NewKMeans(vectors, k, 15, 0.01, metric.Metric_L2Distance, kmeans.Random, false, 8)
+		km, _ := NewKMeans(vectors, k, 15, 0.01, metric.Metric_L2Distance, false, 8)
 		_, _ = km.Cluster(ctx)
 		_ = km.Close()
 	}

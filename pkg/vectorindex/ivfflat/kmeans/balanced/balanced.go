@@ -56,12 +56,12 @@ var _ kmeans.Clusterer = new(BalancedKMeans[float32])
 
 func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 	maxIterations int, deltaThreshold float64,
-	distanceType metric.MetricType, initType kmeans.InitType,
+	distanceType metric.MetricType,
 	spherical bool,
 	nworker int,
 ) (kmeans.Clusterer, error) {
 
-	err := validateArgs[T](vectors, clusterCnt, maxIterations, deltaThreshold, distanceType, initType)
+	err := validateArgs[T](vectors, clusterCnt, maxIterations, deltaThreshold, distanceType)
 	if err != nil {
 		logutil.Errorf("kmeans validateArgs error: %v", err)
 		return nil, err
@@ -176,7 +176,7 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 
 func validateArgs[T types.RealNumbers](vectorList [][]T, clusterCnt,
 	maxIterations int, deltaThreshold float64,
-	distanceType metric.MetricType, initType kmeans.InitType) error {
+	distanceType metric.MetricType) error {
 	if len(vectorList) == 0 || len(vectorList[0]) == 0 {
 		err := moerr.NewInternalErrorNoCtx("input vectors is empty")
 		logutil.Errorf("kmeans validateArgs error: %v", err)
@@ -420,8 +420,12 @@ func computeMeanFromIndicesAndAssignInPlace[T types.RealNumbers](data [][]T, ind
 		out[j] = 0
 	}
 	count := 0
+	firstIdx := -1
 	for i, a := range assignments {
 		if a == target {
+			if firstIdx == -1 {
+				firstIdx = indices[i]
+			}
 			vIdx := indices[i]
 			for j := 0; j < dim; j++ {
 				out[j] += data[vIdx][j]
@@ -430,8 +434,15 @@ func computeMeanFromIndicesAndAssignInPlace[T types.RealNumbers](data [][]T, ind
 		}
 	}
 	if count > 0 {
+		isZero := true
 		for j := 0; j < dim; j++ {
 			out[j] /= T(count)
+			if out[j] != 0 {
+				isZero = false
+			}
+		}
+		if isZero && firstIdx != -1 {
+			copy(out, data[firstIdx])
 		}
 	}
 }
@@ -449,8 +460,15 @@ func computeMeanFromIndicesInPlace[T types.RealNumbers](data [][]T, indices []in
 			out[j] += data[vIdx][j]
 		}
 	}
+	isZero := true
 	for j := 0; j < dim; j++ {
 		out[j] /= T(len(indices))
+		if out[j] != 0 {
+			isZero = false
+		}
+	}
+	if isZero {
+		copy(out, data[indices[0]])
 	}
 }
 
