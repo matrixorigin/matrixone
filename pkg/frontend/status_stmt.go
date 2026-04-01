@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"math"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -286,6 +287,9 @@ func (resper *MysqlResp) respStatus(ses *Session,
 				localFileName = st.Param.Filepath
 			}
 			if w := execCtx.proc.Base.Warnings.Load(); w > 0 {
+				if w > math.MaxUint16 {
+					w = math.MaxUint16
+				}
 				res.warnings = uint16(w)
 			}
 		}
