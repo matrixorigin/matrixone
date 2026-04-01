@@ -43,6 +43,19 @@ func (js *JoinSels) Free() {
 	js.sels = nil
 }
 
+func (js *JoinSels) Size() int64 {
+	const int32Size = int64(4)
+
+	var sz int64
+	for _, bucket := range js.sels {
+		sz += int64(cap(bucket)) * int32Size * 3
+		for _, rows := range bucket {
+			sz += int64(cap(rows)) * int32Size
+		}
+	}
+	return sz
+}
+
 func (js *JoinSels) InsertSel(k, v int32) {
 	i := k / selsDivideLength
 	j := k % selsDivideLength
