@@ -196,11 +196,12 @@ const (
 	MO_SQL_STMT_CU    = "sql_statement_cu"
 
 	// default database name for catalog
-	MO_CATALOG  = "mo_catalog"
-	MO_DATABASE = "mo_database"
-	MO_TABLES   = "mo_tables"
-	MO_COLUMNS  = "mo_columns"
-	MO_USER     = "mo_user"
+	MO_CATALOG   = "mo_catalog"
+	MO_DATABASE  = "mo_database"
+	MO_TABLES    = "mo_tables"
+	MO_COLUMNS   = "mo_columns"
+	MO_USER      = "mo_user"
+	MO_ROLE_RULE = "mo_role_rule"
 
 	// 'mo_database' table
 	SystemDBAttr_ID          = "dat_id"

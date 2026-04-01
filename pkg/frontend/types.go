@@ -117,6 +117,9 @@ const (
 	FPDropUser
 	FPAlterUser
 	FPAlterRole
+	FPAlterRoleAddRule
+	FPAlterRoleDropRule
+	FPShowRules
 	FPCreateRole
 	FPDropRole
 	FPCreateFunction
@@ -1117,6 +1120,16 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		err = def.UpdateSessVar(ctx, ses, ses.sesSysVars, name, val)
 	} else {
 		ses.sesSysVars.Set(name, val)
+	}
+	if err == nil && name == "sql_mode" {
+		ses.updateSqlModeNoAutoValueOnZero(val)
+	}
+
+	// Update rewriteEnabled cache when enable_remap_hint is changed
+	if err == nil && name == "enable_remap_hint" {
+		if on, convErr := valueIsBoolTrue(val); convErr == nil {
+			ses.rewriteEnabled.Store(on)
+		}
 	}
 	return
 }
