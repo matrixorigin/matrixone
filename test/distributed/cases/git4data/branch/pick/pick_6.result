@@ -8,15 +8,15 @@ data branch create table t2 from t0;
 insert into t2 values (3,3);
 data branch pick t2 into t1 keys(99);
 select * from t1 order by a asc;
-a    b
-1    1
-2    2
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2
 data branch pick t2 into t1 keys(3);
 select * from t1 order by a asc;
-a    b
-1    1
-2    2
-3    3
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3
 drop table t0;
 drop table t1;
 drop table t2;
@@ -27,14 +27,14 @@ data branch create table t2 from t0;
 insert into t2 values (3,3),(4,4),(5,5);
 data branch pick t2 into t1 keys(3,4,5);
 select * from t1 order by a asc;
-a    b
-1    1
-2    2
-3    3
-4    4
-5    5
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4  𝄀
+5  ¦  5
 data branch diff t2 against t1;
-diff t2 against t1    flag    a    b
+➤ diff t2 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]
 drop table t0;
 drop table t1;
 drop table t2;
@@ -44,9 +44,9 @@ create table t2 (a int, b int, primary key(a));
 insert into t2 values (1,1),(2,2),(3,3);
 data branch pick t2 into t1 keys(2);
 select * from t1 order by a asc;
-a    b
-1    1
-2    2
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2
 drop table t1;
 drop table t2;
 create table t0 (a int, b int, primary key(a));
@@ -56,16 +56,16 @@ data branch create table t2 from t0;
 insert into t2 values (3,3);
 data branch pick t2 into t1 keys(3);
 select * from t1 order by a asc;
-a    b
-1    1
-2    2
-3    3
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3
 data branch pick t2 into t1 keys(3) when conflict skip;
 select * from t1 order by a asc;
-a    b
-1    1
-2    2
-3    3
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3
 drop table t0;
 drop table t1;
 drop table t2;
@@ -77,11 +77,11 @@ insert into t2 values (1,'a'),(2,'b'),(4,'d'),(5,'e');
 create snapshot sp2 for table test t2;
 data branch pick t2{snapshot="sp2"} into t1{snapshot="sp1"} keys(4);
 select * from t1 order by a asc;
-a    b
-1    a
-2    b
-3    c
-4    d
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  b  𝄀
+3  ¦  c  𝄀
+4  ¦  d
 drop snapshot sp1;
 drop snapshot sp2;
 drop table t1;

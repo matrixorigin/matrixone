@@ -9,29 +9,29 @@ insert into t2 values (6,6),(7,7);
 update t2 set b = 20 where a = 2;
 update t2 set b = 40 where a = 4;
 data branch diff t2 against t1;
-diff t2 against t1    flag    a    b
-t2    UPDATE    2    20
-t2    UPDATE    4    40
-t2    INSERT    6    6
-t2    INSERT    7    7
+➤ diff t2 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
+t2  ¦  UPDATE  ¦  2  ¦  20  𝄀
+t2  ¦  UPDATE  ¦  4  ¦  40  𝄀
+t2  ¦  INSERT  ¦  6  ¦  6  𝄀
+t2  ¦  INSERT  ¦  7  ¦  7
 data branch pick t2 into t1 keys(2,4);
 select * from t1 order by a asc;
-a    b
-1    1
-2    20
-3    3
-4    40
-5    5
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  20  𝄀
+3  ¦  3  𝄀
+4  ¦  40  𝄀
+5  ¦  5
 data branch pick t2 into t1 keys(6,7);
 select * from t1 order by a asc;
-a    b
-1    1
-2    20
-3    3
-4    40
-5    5
-6    6
-7    7
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  20  𝄀
+3  ¦  3  𝄀
+4  ¦  40  𝄀
+5  ¦  5  𝄀
+6  ¦  6  𝄀
+7  ¦  7
 drop table t0;
 drop table t1;
 drop table t2;
@@ -42,22 +42,22 @@ data branch create table t2 from t0;
 update t2 set b = 'updated' where a in (1,3,5,7,9);
 data branch pick t2 into t1 keys(1,5);
 select * from t1 order by a asc;
-a    b
-1    updated
-2    base
-3    base
-4    base
-5    updated
-6    base
-7    base
-8    base
-9    base
-10    base
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  updated  𝄀
+2  ¦  base  𝄀
+3  ¦  base  𝄀
+4  ¦  base  𝄀
+5  ¦  updated  𝄀
+6  ¦  base  𝄀
+7  ¦  base  𝄀
+8  ¦  base  𝄀
+9  ¦  base  𝄀
+10  ¦  base
 data branch diff t2 against t1;
-diff t2 against t1    flag    a    b
-t2    UPDATE    3    updated
-t2    UPDATE    7    updated
-t2    UPDATE    9    updated
+➤ diff t2 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[12,0,0]  𝄀
+t2  ¦  UPDATE  ¦  3  ¦  updated  𝄀
+t2  ¦  UPDATE  ¦  7  ¦  updated  𝄀
+t2  ¦  UPDATE  ¦  9  ¦  updated
 drop table t0;
 drop table t1;
 drop table t2;
@@ -67,19 +67,19 @@ create table t2 (a int, b int, primary key(a));
 insert into t2 values (1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(10,10);
 data branch pick t2 into t1 keys(2,4,6,8,10);
 select * from t1 order by a asc;
-a    b
-1    1
-2    2
-4    4
-6    6
-8    8
-10    10
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+4  ¦  4  𝄀
+6  ¦  6  𝄀
+8  ¦  8  𝄀
+10  ¦  10
 data branch diff t2 against t1;
-diff t2 against t1    flag    a    b
-t2    INSERT    3    3
-t2    INSERT    5    5
-t2    INSERT    7    7
-t2    INSERT    9    9
+➤ diff t2 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
+t2  ¦  INSERT  ¦  3  ¦  3  𝄀
+t2  ¦  INSERT  ¦  5  ¦  5  𝄀
+t2  ¦  INSERT  ¦  7  ¦  7  𝄀
+t2  ¦  INSERT  ¦  9  ¦  9
 drop table t1;
 drop table t2;
 drop database test;
