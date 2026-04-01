@@ -285,6 +285,9 @@ func (resper *MysqlResp) respStatus(ses *Session,
 				isIssue3482 = true
 				localFileName = st.Param.Filepath
 			}
+			if w := execCtx.proc.Base.Warnings.Load(); w > 0 {
+				res.warnings = uint16(w)
+			}
 		}
 
 		if err2 := resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {

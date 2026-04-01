@@ -314,6 +314,9 @@ type BaseProcess struct {
 	// DivByZeroErrorMode caches whether division by zero should error (true) or return NULL (false)
 	// -1: not initialized, 0: return NULL, 1: return error
 	DivByZeroErrorMode int32
+
+	// Warnings is an atomic counter for warnings generated during execution (e.g., ignored error rows in LOAD DATA).
+	Warnings atomic.Uint32
 }
 
 // Process contains context used in query execution

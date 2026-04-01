@@ -138,6 +138,7 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 					finish = true
 				} else if ignoreError {
 					logutil.Warnf("load data ignore error: read csv row failed: %v", err)
+					proc.Base.Warnings.Add(1)
 					i--
 					continue
 				} else {
@@ -181,6 +182,7 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 				}
 				if ignoreError {
 					logutil.Warnf("load data ignore error: parse json line failed: %v", err)
+					proc.Base.Warnings.Add(1)
 					i--
 					continue
 				}
@@ -191,6 +193,7 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 		if err = getOneRowData(proc, bat, row, rowIdx, param); err != nil {
 			if ignoreError {
 				logutil.Warnf("load data ignore error: convert row data failed: %v", err)
+				proc.Base.Warnings.Add(1)
 				// rollback partially appended columns
 				for j := 0; j < bat.VectorCount(); j++ {
 					vec := bat.GetVector(int32(j))
