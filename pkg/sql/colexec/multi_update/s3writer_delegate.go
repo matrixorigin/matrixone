@@ -540,6 +540,11 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 				bats[i] = nil
 				continue
 			}
+			// WriteOwned returned false: data was already copied inside
+			// WriteOwned via Write(), so skip the Write() call below.
+			bats[i].Clean(proc.GetMPool())
+			bats[i] = nil
+			continue
 		}
 		if err = s3Writer.Write(writeCtx, bats[i]); err != nil {
 			return
