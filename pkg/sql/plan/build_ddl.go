@@ -1655,6 +1655,14 @@ func validateCreateForeignTableStmt(ctx context.Context, stmt *tree.CreateTable)
 		}
 	}
 
+	for _, option := range stmt.Options {
+		switch option.(type) {
+		case *tree.TableOptionComment:
+		default:
+			return moerr.NewNotSupportedf(ctx, "create foreign table does not support table option %T", option)
+		}
+	}
+
 	return nil
 }
 

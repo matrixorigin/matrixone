@@ -158,6 +158,19 @@ func TestBuildCreateForeignTableRejectsIndexDefinitions(t *testing.T) {
 	}
 }
 
+func TestBuildCreateForeignTableRejectsUnsupportedTableOptions(t *testing.T) {
+	setupForeignTablePlanTestRuntime()
+
+	mock := NewMockOptimizer(false)
+	_, err := buildSingleStmt(mock, t, "create foreign table orders_ext (id int) connection = 'remote_conn'")
+	if err == nil {
+		t.Fatalf("expected create foreign table with unsupported table option to fail")
+	}
+	if !strings.Contains(err.Error(), "create foreign table does not support table option") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestBuildAlterForeignTableRejected(t *testing.T) {
 	setupForeignTablePlanTestRuntime()
 
