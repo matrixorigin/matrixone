@@ -159,11 +159,7 @@ func NewMergeObjectsTask(
 	task.attrs = append(task.attrs, objectio.TombstoneAttr_CommitTs_Attr)
 	task.BaseTask = tasks.NewBaseTask(task, tasks.DataCompactionTask, ctx)
 
-	arenaSize := task.targetObjSize
-	if totalInput := task.GetTotalSize(); totalInput < uint64(arenaSize) {
-		arenaSize = uint32(totalInput)
-	}
-	if arenaSize > 0 {
+	if task.targetObjSize > 0 {
 		task.arena = objectio.GetArena(objectio.ArenaLarge)
 	}
 	return

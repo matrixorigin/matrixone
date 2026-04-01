@@ -126,12 +126,8 @@ func newCNMergeTask(
 		blkIters[i] = objectio.NewStatsBlkIter(&objStats, meta.MustDataMeta())
 	}
 
-	arenaSize := targetObjSize
-	if totalInputSize < uint64(arenaSize) {
-		arenaSize = uint32(totalInputSize)
-	}
 	var arena *objectio.WriteArena
-	if arenaSize > 0 {
+	if targetObjSize > 0 {
 		arena = objectio.GetArena(objectio.ArenaLarge)
 	}
 
