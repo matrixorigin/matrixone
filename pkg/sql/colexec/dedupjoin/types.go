@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -56,6 +57,9 @@ type container struct {
 	joinBat2 *batch.Batch
 	cfs2     []func(*vector.Vector, *vector.Vector, int64, int) error
 
+	savedVecs      []*vector.Vector
+	updateExprVecs []*vector.Vector
+
 	evecs []evalVector
 	vecs  []*vector.Vector
 
@@ -88,6 +92,9 @@ type DedupJoin struct {
 	OnDuplicateAction plan.Node_OnDuplicateAction
 	DedupColName      string
 	DedupColTypes     []plan.Type
+	TargetTableID     uint64
+	TargetTableRef    *plan.ObjectRef
+	InitialSnapshotTS timestamp.Timestamp
 	DelColIdx         int32
 	UpdateColIdxList  []int32
 	UpdateColExprList []*plan.Expr
@@ -162,6 +169,7 @@ func (ctr *container) resetExprExecutor() {
 	for i := range ctr.exprExecs {
 		ctr.exprExecs[i].ResetForNextQuery()
 	}
+	ctr.updateExprVecs = nil
 }
 
 func (ctr *container) cleanExprExecutor() {
@@ -169,6 +177,7 @@ func (ctr *container) cleanExprExecutor() {
 		ctr.exprExecs[i].Free()
 		ctr.exprExecs[i] = nil
 	}
+	ctr.updateExprVecs = nil
 }
 
 func (ctr *container) cleanBuf(proc *process.Process) {

@@ -186,3 +186,527 @@ func TestApplyIndicesForSortUsingIvfflat_PushdownOptimization(t *testing.T) {
 		assert.Equal(t, plan.Node_JOIN, innerJoinNode.NodeType, "With filter, right child should be nested JOIN")
 	})
 }
+
+func TestApplyIndicesForSortUsingIvfflat_OuterScanRegularIndexPreservesProtection(t *testing.T) {
+	baseMockCtx := NewMockCompilerContext(false)
+	mockCtx := &customMockCompilerContext{
+		MockCompilerContext: baseMockCtx,
+		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
+			switch varName {
+			case "enable_vector_prefilter_by_default":
+				return int8(1), nil
+			case "ivf_threads_search":
+				return int64(4), nil
+			case "probe_limit":
+				return int64(10), nil
+			}
+			return baseMockCtx.ResolveVariable(varName, isSystem, isGlobal)
+		},
+	}
+
+	const (
+		tableName  = "t_idx"
+		indexTable = "__mo_index_status"
+		schemaName = "db"
+	)
+
+	tableDef := &plan.TableDef{
+		Name: tableName,
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "status", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "v", Typ: plan.Type{Id: int32(types.T_array_float32)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: "id",
+			Names:       []string{"id"},
+		},
+		Name2ColIndex: map[string]int32{
+			"id":     0,
+			"status": 1,
+			"v":      2,
+		},
+		Indexes: []*plan.IndexDef{
+			{
+				IndexName:      "idx_status",
+				IndexAlgo:      "btree",
+				IndexTableName: indexTable,
+				Unique:         true,
+				TableExist:     true,
+				Parts:          []string{"status"},
+			},
+		},
+	}
+
+	idxTableDef := &plan.TableDef{
+		Name: indexTable,
+		Cols: []*plan.ColDef{
+			{Name: "__mo_index_idx_col", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "__mo_index_pk_col", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+		Name2ColIndex: map[string]int32{
+			"__mo_index_idx_col": 0,
+			"__mo_index_pk_col":  1,
+		},
+	}
+	mockCtx.tables[indexTable] = idxTableDef
+	mockCtx.objects[indexTable] = &plan.ObjectRef{SchemaName: schemaName, ObjName: indexTable}
+
+	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`
+	multiTableIndex := &MultiTableIndex{
+		IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(),
+		IndexDefs: map[string]*plan.IndexDef{
+			catalog.SystemSI_IVFFLAT_TblType_Metadata: {
+				IndexTableName:  "meta",
+				IndexAlgoParams: idxAlgoParams,
+			},
+			catalog.SystemSI_IVFFLAT_TblType_Centroids: {
+				IndexTableName:  "centroids",
+				Parts:           []string{"v"},
+				IndexAlgoParams: idxAlgoParams,
+			},
+			catalog.SystemSI_IVFFLAT_TblType_Entries: {
+				IndexTableName: "entries",
+			},
+		},
+	}
+
+	builder := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
+	ctx := NewBindContext(builder, nil)
+
+	scanNode := &plan.Node{
+		NodeType:    plan.Node_TABLE_SCAN,
+		TableDef:    tableDef,
+		ObjRef:      &plan.ObjectRef{SchemaName: schemaName, ObjName: tableName},
+		BindingTags: []int32{builder.genNewBindTag()},
+		FilterList: []*plan.Expr{
+			{
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "="},
+						Args: []*plan.Expr{
+							{
+								Typ:  plan.Type{Id: int32(types.T_int32)},
+								Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1, Name: "status"}},
+							},
+							{
+								Typ:  plan.Type{Id: int32(types.T_int32)},
+								Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I32Val{I32Val: 1}}},
+							},
+						},
+					},
+				},
+				Selectivity: 0.01,
+			},
+		},
+		Stats: &plan.Stats{
+			TableCnt:    1000,
+			Selectivity: 0.01,
+			Outcnt:      10,
+			Cost:        1000,
+		},
+	}
+	scanNode.FilterList[0].GetF().Args[0].GetCol().RelPos = scanNode.BindingTags[0]
+	scanNodeID := builder.appendNode(scanNode, ctx)
+
+	for int(scanNodeID) >= len(builder.ctxByNode) {
+		builder.ctxByNode = append(builder.ctxByNode, ctx)
+	}
+	// Preallocate enough BindContexts for all plan nodes appended by the IVF rewrite
+	// path in this test (function scan, nested joins, projects, sort, and index join).
+	for i := 0; i < 40; i++ {
+		builder.ctxByNode = append(builder.ctxByNode, ctx)
+	}
+
+	float32Typ := plan.Type{Id: int32(types.T_array_float32)}
+	distFnExpr := &plan.Function{
+		Func: &ObjectRef{ObjName: "l2_distance"},
+		Args: []*plan.Expr{
+			{Typ: float32Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanNode.BindingTags[0], ColPos: 2}}},
+			{Typ: float32Typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: "[1,1,1]"}}}},
+		},
+	}
+
+	vecCtx := &vectorSortContext{
+		scanNode:   scanNode,
+		sortNode:   &plan.Node{NodeType: plan.Node_SORT},
+		projNode:   &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{scanNodeID}},
+		distFnExpr: distFnExpr,
+		limit:      &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}}}},
+		rankOption: &plan.RankOption{Mode: "pre"},
+	}
+
+	colRefCnt := map[[2]int32]int{
+		{scanNode.BindingTags[0], 0}: 1,
+		{scanNode.BindingTags[0], 1}: 1,
+		{scanNode.BindingTags[0], 2}: 1,
+	}
+	idxColMap := make(map[[2]int32]*plan.Expr)
+
+	builder.protectedScans[scanNode.NodeId] = 2
+
+	_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, colRefCnt, idxColMap)
+	require.NoError(t, err)
+
+	sortNode := builder.qry.Nodes[vecCtx.projNode.Children[0]]
+	outerJoinNode := builder.qry.Nodes[sortNode.Children[0]]
+	outerLeft := builder.qry.Nodes[outerJoinNode.Children[0]]
+
+	require.Equal(t, plan.Node_SORT, sortNode.NodeType)
+	require.Equal(t, plan.Node_JOIN, outerJoinNode.NodeType)
+	assert.Equal(t, plan.Node_JOIN, outerLeft.NodeType)
+	assert.Equal(t, plan.Node_INDEX, outerLeft.JoinType)
+	assert.Equal(t, 2, builder.protectedScans[scanNode.NodeId])
+	assert.NotEmpty(t, scanNode.RuntimeFilterProbeList)
+}
+
+func TestApplyIndicesForSortUsingIvfflat_SecondScanIndexOnlyKeepsPk(t *testing.T) {
+	baseMockCtx := NewMockCompilerContext(false)
+	mockCtx := &customMockCompilerContext{
+		MockCompilerContext: baseMockCtx,
+		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
+			switch varName {
+			case "enable_vector_prefilter_by_default":
+				return int8(1), nil
+			case "ivf_threads_search":
+				return int64(4), nil
+			case "probe_limit":
+				return int64(10), nil
+			}
+			return baseMockCtx.ResolveVariable(varName, isSystem, isGlobal)
+		},
+	}
+
+	const (
+		tableName  = "t_file_idx"
+		indexTable = "__mo_index_file_id"
+		schemaName = "db"
+	)
+
+	tableDef := &plan.TableDef{
+		Name: tableName,
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "file_id", Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: "v", Typ: plan.Type{Id: int32(types.T_array_float32)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: "id",
+			Names:       []string{"id"},
+		},
+		Name2ColIndex: map[string]int32{
+			"id":      0,
+			"file_id": 1,
+			"v":       2,
+		},
+		Indexes: []*plan.IndexDef{
+			{
+				IndexName:      "idx_file_id",
+				IndexAlgo:      "btree",
+				IndexTableName: indexTable,
+				TableExist:     true,
+				Parts:          []string{"file_id", "id"},
+			},
+		},
+	}
+
+	idxTableDef := &plan.TableDef{
+		Name: indexTable,
+		Cols: []*plan.ColDef{
+			{Name: catalog.IndexTableIndexColName, Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: catalog.IndexTablePrimaryColName, Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+		Name2ColIndex: map[string]int32{
+			catalog.IndexTableIndexColName:   0,
+			catalog.IndexTablePrimaryColName: 1,
+		},
+	}
+	mockCtx.tables[indexTable] = idxTableDef
+	mockCtx.objects[indexTable] = &plan.ObjectRef{SchemaName: schemaName, ObjName: indexTable}
+
+	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`
+	multiTableIndex := &MultiTableIndex{
+		IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(),
+		IndexDefs: map[string]*plan.IndexDef{
+			catalog.SystemSI_IVFFLAT_TblType_Metadata: {
+				IndexTableName:  "meta",
+				IndexAlgoParams: idxAlgoParams,
+			},
+			catalog.SystemSI_IVFFLAT_TblType_Centroids: {
+				IndexTableName:  "centroids",
+				Parts:           []string{"v"},
+				IndexAlgoParams: idxAlgoParams,
+			},
+			catalog.SystemSI_IVFFLAT_TblType_Entries: {
+				IndexTableName: "entries",
+			},
+		},
+	}
+
+	builder := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
+	ctx := NewBindContext(builder, nil)
+
+	scanNode := &plan.Node{
+		NodeType:    plan.Node_TABLE_SCAN,
+		TableDef:    tableDef,
+		ObjRef:      &plan.ObjectRef{SchemaName: schemaName, ObjName: tableName},
+		BindingTags: []int32{builder.genNewBindTag()},
+		FilterList: []*plan.Expr{
+			{
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "="},
+						Args: []*plan.Expr{
+							{
+								Typ:  plan.Type{Id: int32(types.T_varchar)},
+								Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1, Name: "file_id"}},
+							},
+							{
+								Typ:  plan.Type{Id: int32(types.T_varchar)},
+								Expr: makePlan2StringConstExprWithType("file01").Expr,
+							},
+						},
+					},
+				},
+				Selectivity: 0.2,
+			},
+		},
+		Stats: &plan.Stats{
+			TableCnt:    1000,
+			Selectivity: 0.2,
+			Outcnt:      200,
+			Cost:        1000,
+		},
+	}
+	scanNode.FilterList[0].GetF().Args[0].GetCol().RelPos = scanNode.BindingTags[0]
+	scanNodeID := builder.appendNode(scanNode, ctx)
+
+	for int(scanNodeID) >= len(builder.ctxByNode) {
+		builder.ctxByNode = append(builder.ctxByNode, ctx)
+	}
+	for i := 0; i < 40; i++ {
+		builder.ctxByNode = append(builder.ctxByNode, ctx)
+	}
+
+	float32Typ := plan.Type{Id: int32(types.T_array_float32)}
+	distFnExpr := &plan.Function{
+		Func: &ObjectRef{ObjName: "l2_distance"},
+		Args: []*plan.Expr{
+			{Typ: float32Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanNode.BindingTags[0], ColPos: 2}}},
+			{Typ: float32Typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: "[1,1,1]"}}}},
+		},
+	}
+
+	vecCtx := &vectorSortContext{
+		scanNode:   scanNode,
+		sortNode:   &plan.Node{NodeType: plan.Node_SORT},
+		projNode:   &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{scanNodeID}},
+		distFnExpr: distFnExpr,
+		limit:      &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}}}},
+		rankOption: &plan.RankOption{Mode: "pre"},
+	}
+
+	colRefCnt := map[[2]int32]int{
+		{scanNode.BindingTags[0], 0}: 1,
+		{scanNode.BindingTags[0], 1}: 1,
+		{scanNode.BindingTags[0], 2}: 1,
+	}
+	idxColMap := make(map[[2]int32]*plan.Expr)
+
+	_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, colRefCnt, idxColMap)
+	require.NoError(t, err)
+
+	sortNode := builder.qry.Nodes[vecCtx.projNode.Children[0]]
+	outerJoinNode := builder.qry.Nodes[sortNode.Children[0]]
+	innerJoinNode := builder.qry.Nodes[outerJoinNode.Children[1]]
+	secondProjectNode := builder.qry.Nodes[innerJoinNode.Children[1]]
+
+	require.Equal(t, plan.Node_PROJECT, secondProjectNode.NodeType)
+	require.Len(t, secondProjectNode.ProjectList, 1)
+	secondPkCol := secondProjectNode.ProjectList[0].GetCol()
+	require.NotNil(t, secondPkCol)
+	assert.Equal(t, int32(1), secondPkCol.ColPos)
+
+	secondScanNode := builder.qry.Nodes[secondProjectNode.Children[0]]
+	require.Equal(t, plan.Node_TABLE_SCAN, secondScanNode.NodeType)
+	assert.True(t, secondScanNode.IndexScanInfo.IsIndexScan)
+}
+
+func TestApplyIndicesForSortUsingIvfflat_OuterScanIndexOnlyUsesOptimizedPk(t *testing.T) {
+	baseMockCtx := NewMockCompilerContext(false)
+	mockCtx := &customMockCompilerContext{
+		MockCompilerContext: baseMockCtx,
+		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
+			switch varName {
+			case "enable_vector_prefilter_by_default":
+				return int8(1), nil
+			case "ivf_threads_search":
+				return int64(4), nil
+			case "probe_limit":
+				return int64(10), nil
+			}
+			return baseMockCtx.ResolveVariable(varName, isSystem, isGlobal)
+		},
+	}
+
+	const (
+		tableName  = "t_outer_file_idx"
+		indexTable = "__mo_index_outer_file_id"
+		schemaName = "db"
+	)
+
+	tableDef := &plan.TableDef{
+		Name: tableName,
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "file_id", Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: "v", Typ: plan.Type{Id: int32(types.T_array_float32)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: "id",
+			Names:       []string{"id"},
+		},
+		Name2ColIndex: map[string]int32{
+			"id":      0,
+			"file_id": 1,
+			"v":       2,
+		},
+		Indexes: []*plan.IndexDef{
+			{
+				IndexName:      "idx_file_id",
+				IndexAlgo:      "btree",
+				IndexTableName: indexTable,
+				TableExist:     true,
+				Parts:          []string{"file_id", "id"},
+			},
+		},
+	}
+
+	idxTableDef := &plan.TableDef{
+		Name: indexTable,
+		Cols: []*plan.ColDef{
+			{Name: catalog.IndexTableIndexColName, Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: catalog.IndexTablePrimaryColName, Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+		Name2ColIndex: map[string]int32{
+			catalog.IndexTableIndexColName:   0,
+			catalog.IndexTablePrimaryColName: 1,
+		},
+	}
+	mockCtx.tables[indexTable] = idxTableDef
+	mockCtx.objects[indexTable] = &plan.ObjectRef{SchemaName: schemaName, ObjName: indexTable}
+
+	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`
+	multiTableIndex := &MultiTableIndex{
+		IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(),
+		IndexDefs: map[string]*plan.IndexDef{
+			catalog.SystemSI_IVFFLAT_TblType_Metadata: {
+				IndexTableName:  "meta",
+				IndexAlgoParams: idxAlgoParams,
+			},
+			catalog.SystemSI_IVFFLAT_TblType_Centroids: {
+				IndexTableName:  "centroids",
+				Parts:           []string{"v"},
+				IndexAlgoParams: idxAlgoParams,
+			},
+			catalog.SystemSI_IVFFLAT_TblType_Entries: {
+				IndexTableName: "entries",
+			},
+		},
+	}
+
+	builder := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
+	ctx := NewBindContext(builder, nil)
+
+	scanNode := &plan.Node{
+		NodeType:    plan.Node_TABLE_SCAN,
+		TableDef:    tableDef,
+		ObjRef:      &plan.ObjectRef{SchemaName: schemaName, ObjName: tableName},
+		BindingTags: []int32{builder.genNewBindTag()},
+		FilterList: []*plan.Expr{
+			{
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "="},
+						Args: []*plan.Expr{
+							{
+								Typ:  plan.Type{Id: int32(types.T_varchar)},
+								Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1, Name: "file_id"}},
+							},
+							{
+								Typ:  plan.Type{Id: int32(types.T_varchar)},
+								Expr: makePlan2StringConstExprWithType("file01").Expr,
+							},
+						},
+					},
+				},
+				Selectivity: 0.2,
+			},
+		},
+		Stats: &plan.Stats{
+			TableCnt:    1000,
+			Selectivity: 0.2,
+			Outcnt:      200,
+			Cost:        1000,
+		},
+	}
+	scanNode.FilterList[0].GetF().Args[0].GetCol().RelPos = scanNode.BindingTags[0]
+	scanNodeID := builder.appendNode(scanNode, ctx)
+
+	for int(scanNodeID) >= len(builder.ctxByNode) {
+		builder.ctxByNode = append(builder.ctxByNode, ctx)
+	}
+	for i := 0; i < 40; i++ {
+		builder.ctxByNode = append(builder.ctxByNode, ctx)
+	}
+
+	float32Typ := plan.Type{Id: int32(types.T_array_float32)}
+	distFnExpr := &plan.Function{
+		Func: &ObjectRef{ObjName: "l2_distance"},
+		Args: []*plan.Expr{
+			{Typ: float32Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanNode.BindingTags[0], ColPos: 2}}},
+			{Typ: float32Typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: "[1,1,1]"}}}},
+		},
+	}
+
+	vecCtx := &vectorSortContext{
+		scanNode:   scanNode,
+		sortNode:   &plan.Node{NodeType: plan.Node_SORT},
+		projNode:   &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{scanNodeID}},
+		distFnExpr: distFnExpr,
+		limit:      &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}}}},
+		rankOption: &plan.RankOption{Mode: "pre"},
+	}
+
+	colRefCnt := map[[2]int32]int{
+		{scanNode.BindingTags[0], 0}: 1,
+		{scanNode.BindingTags[0], 1}: 1,
+	}
+	idxColMap := make(map[[2]int32]*plan.Expr)
+
+	builder.protectedScans[scanNode.NodeId] = 1
+
+	_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, colRefCnt, idxColMap)
+	require.NoError(t, err)
+
+	sortNode := builder.qry.Nodes[vecCtx.projNode.Children[0]]
+	outerJoinNode := builder.qry.Nodes[sortNode.Children[0]]
+	outerLeft := builder.qry.Nodes[outerJoinNode.Children[0]]
+
+	require.Equal(t, plan.Node_TABLE_SCAN, outerLeft.NodeType)
+	assert.True(t, outerLeft.IndexScanInfo.IsIndexScan)
+
+	joinLeftPk := outerJoinNode.OnList[0].GetF().Args[0].GetCol()
+	require.NotNil(t, joinLeftPk)
+	assert.Equal(t, outerLeft.BindingTags[0], joinLeftPk.RelPos)
+	assert.Equal(t, int32(1), joinLeftPk.ColPos)
+
+	require.NotEmpty(t, outerLeft.RuntimeFilterProbeList)
+	outerProbe := outerLeft.RuntimeFilterProbeList[0].Expr.GetCol()
+	require.NotNil(t, outerProbe)
+	assert.Equal(t, outerLeft.BindingTags[0], outerProbe.RelPos)
+	assert.Equal(t, int32(1), outerProbe.ColPos)
+
+	assert.Empty(t, scanNode.RuntimeFilterProbeList)
+	assert.Equal(t, 1, builder.protectedScans[scanNode.NodeId])
+}

@@ -80,6 +80,20 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 		}, nil
 	}
 
+	if !b.insideAgg {
+		if colPos, ok := b.ctx.windowByAst[astStr]; ok {
+			return &plan.Expr{
+				Typ: b.ctx.windows[colPos].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: b.ctx.windowTag,
+						ColPos: colPos,
+					},
+				},
+			}, nil
+		}
+	}
+
 	return b.baseBindExpr(astExpr, depth, isRoot)
 }
 
@@ -330,13 +344,16 @@ func getFrame(ws *tree.WindowSpec) *plan.FrameClause {
 func (b *HavingBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
 	if b.insideAgg {
 		return nil, moerr.NewSyntaxError(b.GetContext(), "aggregate function calls cannot contain window function calls")
-	} else {
-		return nil, moerr.NewSyntaxErrorf(b.GetContext(), "window %s functions not allowed in having clause", funcName)
 	}
+	return bindWindowFuncExpr(b, b.ctx, funcName, astExpr, depth, isRoot)
 }
 
 func (b *HavingBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
 	return b.baseBindSubquery(astExpr, isRoot)
+}
+
+func (b *HavingBinder) makeFrameConstValue(expr tree.Expr, typ *plan.Type) (*plan.Expr, error) {
+	return makeWindowFrameConstValue(b.baseBindExpr, b.builder.compCtx.GetProcess(), b.GetContext(), expr, typ)
 }
 
 func (b *HavingBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {

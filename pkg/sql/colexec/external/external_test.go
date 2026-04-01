@@ -26,13 +26,16 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -846,4 +849,92 @@ func Test_getMOCSVReader(t *testing.T) {
 	param.Fileparam.Filepath = "/noexistsfile.gz"
 	_, err := getMOCSVReader(param, case1.proc)
 	require.Equal(t, nil, err)
+}
+
+// Test_getColData_VecDimensionCheck tests that getColData correctly validates
+// vector dimension against the column definition vecf32(N)/vecf64(N) during LOAD DATA.
+// This is the regression test for the external.go part of https://github.com/matrixorigin/matrixone/issues/23872
+func Test_getColData_VecDimensionCheck(t *testing.T) {
+	mp := testutil.TestUtilMp
+
+	tests := []struct {
+		name    string
+		typId   types.T
+		width   int32
+		val     string
+		wantErr bool
+	}{
+		{
+			name:    "vecf32(3) match 3-dim",
+			typId:   types.T_array_float32,
+			width:   3,
+			val:     "[1,2,3]",
+			wantErr: false,
+		},
+		{
+			name:    "vecf32(3) mismatch 5-dim",
+			typId:   types.T_array_float32,
+			width:   3,
+			val:     "[1,2,3,4,5]",
+			wantErr: true,
+		},
+		{
+			name:    "vecf64(4) match 4-dim",
+			typId:   types.T_array_float64,
+			width:   4,
+			val:     "[1,2,3,4]",
+			wantErr: false,
+		},
+		{
+			name:    "vecf64(4) mismatch 2-dim",
+			typId:   types.T_array_float64,
+			width:   4,
+			val:     "[5,6]",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vecTyp := types.New(tt.typId, tt.width, 0)
+
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(vecTyp)
+
+			line := []csvparser.Field{
+				{Val: tt.val},
+			}
+
+			param := &ExternalParam{
+				ExParamConst: ExParamConst{
+					Cols: []*plan.ColDef{
+						{
+							Typ: plan.Type{
+								Id:    int32(tt.typId),
+								Width: tt.width,
+							},
+						},
+					},
+					Ctx:    context.Background(),
+					Extern: &tree.ExternParam{},
+				},
+			}
+
+			attr := plan.ExternAttr{
+				ColIndex:      0,
+				ColName:       "v",
+				ColFieldIndex: 0,
+			}
+
+			err := getColData(bat, line, 0, param, mp, attr, nil)
+			if tt.wantErr {
+				require.Error(t, err, "expected dimension mismatch error")
+				require.Contains(t, err.Error(), "expected vector dimension")
+			} else {
+				require.NoError(t, err)
+			}
+
+			bat.Vecs[0].Free(mp)
+		})
+	}
 }

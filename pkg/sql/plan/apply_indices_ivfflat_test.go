@@ -690,6 +690,36 @@ func TestBuildPkExprFromNode_TableScan_Success(t *testing.T) {
 	assert.Equal(t, "id", col.Name)
 }
 
+func TestBuildPkExprFromNode_IndexTableScan_UsesIndexPrimaryColumn(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+
+	scanNode := &plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		TableDef: &plan.TableDef{
+			Name2ColIndex: map[string]int32{
+				catalog.IndexTableIndexColName:   0,
+				catalog.IndexTablePrimaryColName: 1,
+			},
+		},
+		BindingTags: []int32{101},
+		IndexScanInfo: plan.IndexScanInfo{
+			IsIndexScan: true,
+		},
+	}
+
+	builder.qry.Nodes = append(builder.qry.Nodes, scanNode)
+
+	pkType := plan.Type{Id: int32(types.T_int64)}
+	result := builder.buildPkExprFromNode(0, pkType, "id")
+
+	require.NotNil(t, result)
+	col := result.GetCol()
+	require.NotNil(t, col)
+	assert.Equal(t, int32(101), col.RelPos)
+	assert.Equal(t, int32(1), col.ColPos)
+	assert.Equal(t, "id", col.Name)
+}
+
 // TestBuildPkExprFromNode_TableScan_NilTableDef tests TABLE_SCAN with nil TableDef
 func TestBuildPkExprFromNode_TableScan_NilTableDef(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
@@ -774,7 +804,7 @@ func TestBuildPkExprFromNode_Project_Recursive(t *testing.T) {
 	builder.qry.Nodes = append(builder.qry.Nodes, scanNode, projNode)
 
 	result := builder.buildPkExprFromNode(1, plan.Type{Id: int32(types.T_int64)}, "id")
-	require.NotNil(t, result)
+	assert.Nil(t, result)
 }
 
 // TestBuildPkExprFromNode_Join_Recursive tests JOIN node
@@ -799,6 +829,78 @@ func TestBuildPkExprFromNode_Join_Recursive(t *testing.T) {
 
 	result := builder.buildPkExprFromNode(1, plan.Type{Id: int32(types.T_int64)}, "id")
 	require.NotNil(t, result)
+}
+
+func TestBuildPkExprFromNode_Project_ExposesPk_Success(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder.nameByColRef = make(map[[2]int32]string)
+	builder.nameByColRef[[2]int32{200, 1}] = "id"
+
+	projNode := &plan.Node{
+		NodeType: plan.Node_PROJECT,
+		ProjectList: []*plan.Expr{
+			{
+				Typ: plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 200,
+						ColPos: 1,
+						Name:   "id",
+					},
+				},
+			},
+		},
+		Children: []int32{0},
+	}
+	builder.qry.Nodes = append(builder.qry.Nodes, &plan.Node{}, projNode)
+
+	result := builder.buildPkExprFromNode(1, plan.Type{Id: int32(types.T_int64)}, "id")
+	require.NotNil(t, result)
+	col := result.GetCol()
+	require.NotNil(t, col)
+	assert.Equal(t, int32(200), col.RelPos)
+	assert.Equal(t, int32(1), col.ColPos)
+}
+
+// ============================================================================
+// Tests for findScanNodeByTag
+// ============================================================================
+
+func TestFindScanNodeByTag_FindsMatchingScan(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+
+	scanNode := &plan.Node{
+		NodeType:    plan.Node_TABLE_SCAN,
+		BindingTags: []int32{321},
+	}
+	projNode := &plan.Node{
+		NodeType: plan.Node_PROJECT,
+		Children: []int32{0},
+	}
+
+	builder.qry.Nodes = append(builder.qry.Nodes, scanNode, projNode)
+
+	result := builder.findScanNodeByTag(1, 321)
+	assert.Equal(t, int32(0), result)
+}
+
+func TestFindScanNodeByTag_CycleDoesNotLoop(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+
+	// Create a malformed graph cycle: node0 -> node1 -> node0.
+	node0 := &plan.Node{
+		NodeType: plan.Node_PROJECT,
+		Children: []int32{1},
+	}
+	node1 := &plan.Node{
+		NodeType: plan.Node_JOIN,
+		Children: []int32{0},
+	}
+
+	builder.qry.Nodes = append(builder.qry.Nodes, node0, node1)
+
+	result := builder.findScanNodeByTag(0, 999)
+	assert.Equal(t, int32(-1), result)
 }
 
 // ============================================================================
@@ -1126,6 +1228,49 @@ func TestCanApplyRegularIndex_Success(t *testing.T) {
 	}
 	result := builder.canApplyRegularIndex(node)
 	assert.True(t, result)
+}
+
+func TestExtractColRefs_SubqueryNoop(t *testing.T) {
+	colRefCnt := make(map[[2]int32]int)
+	expr := &plan.Expr{
+		Expr: &plan.Expr_Sub{
+			Sub: &plan.SubqueryRef{
+				NodeId: 1,
+				Child: &plan.Expr{
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 10,
+							ColPos: 3,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	extractColRefs(expr, 10, colRefCnt)
+
+	assert.Empty(t, colRefCnt)
+}
+
+func TestRefsColumn_SubqueryReturnsFalse(t *testing.T) {
+	expr := &plan.Expr{
+		Expr: &plan.Expr_Sub{
+			Sub: &plan.SubqueryRef{
+				NodeId: 1,
+				Child: &plan.Expr{
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 10,
+							ColPos: 3,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	assert.False(t, refsColumn(expr, 10, 3))
 }
 
 // ============================================================================

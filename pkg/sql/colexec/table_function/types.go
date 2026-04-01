@@ -104,20 +104,32 @@ type container struct {
 }
 
 func (tableFunction *TableFunction) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	if tableFunction == nil {
+		return
+	}
 	tableFunction.ctr.nextRow = 0
 	tableFunction.ctr.inputBatch = nil
 	for i := range tableFunction.ctr.executorsForArgs {
 		if tableFunction.ctr.executorsForArgs[i] != nil {
-			tableFunction.ctr.argVecs[i] = nil
+			if i < len(tableFunction.ctr.argVecs) {
+				tableFunction.ctr.argVecs[i] = nil
+			}
 			tableFunction.ctr.executorsForArgs[i].ResetForNextQuery()
 		}
 	}
-	tableFunction.ctr.state.reset(tableFunction, proc)
+	if tableFunction.ctr.state != nil {
+		tableFunction.ctr.state.reset(tableFunction, proc)
+	}
 }
 
 func (tableFunction *TableFunction) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if tableFunction == nil {
+		return
+	}
 	tableFunction.ctr.cleanExecutors()
-	tableFunction.ctr.state.free(tableFunction, proc, pipelineFailed, err)
+	if tableFunction.ctr.state != nil {
+		tableFunction.ctr.state.free(tableFunction, proc, pipelineFailed, err)
+	}
 }
 
 func (tableFunction *TableFunction) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
@@ -127,10 +139,13 @@ func (tableFunction *TableFunction) ExecProjection(proc *process.Process, input 
 func (ctr *container) cleanExecutors() {
 	for i := range ctr.executorsForArgs {
 		if ctr.executorsForArgs[i] != nil {
-			ctr.argVecs[i] = nil
+			if i < len(ctr.argVecs) {
+				ctr.argVecs[i] = nil
+			}
 			ctr.executorsForArgs[i].Free()
 		}
 	}
+	ctr.argVecs = nil
 	ctr.executorsForArgs = nil
 }
 

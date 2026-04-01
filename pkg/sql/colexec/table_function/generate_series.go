@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -172,6 +173,12 @@ func generateSeriesPrepare(proc *process.Process, tableFunction *TableFunction) 
 	st := new(generateSeriesArg)
 	var err error
 	tableFunction.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, tableFunction.Args)
+	if err != nil {
+		return st, err
+	}
+	if _, sarg, ok := fault.TriggerFault("fj/cn/generate_series_partial_prepare"); ok {
+		return st, moerr.NewInvalidStatef(proc.Ctx, "generate_series partial prepare fault: %s", sarg)
+	}
 	tableFunction.ctr.argVecs = make([]*vector.Vector, len(tableFunction.Args))
 	return st, err
 }

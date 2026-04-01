@@ -286,6 +286,34 @@ func TestColumnExpressionExecutor_RelIndexOutOfRange(t *testing.T) {
 	require.Equal(t, 5, vec.Length())
 }
 
+func TestColumnExpressionExecutor_RelIndexNilBatch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	col := &plan.Expr{
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 1,
+				ColPos: 0,
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_int32),
+			NotNullable: true,
+		},
+	}
+	executor, err := NewExpressionExecutor(proc, col)
+	require.NoError(t, err)
+	defer executor.Free()
+
+	bat := testutil.NewBatch(
+		[]types.Type{types.T_int32.ToType()},
+		true, 3, proc.Mp())
+
+	_, err = executor.Eval(proc, []*batch.Batch{bat, nil}, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "batch at relIndex 1 is nil")
+}
+
 func TestFunctionExpressionExecutor(t *testing.T) {
 	{
 		proc := testutil.NewProcess(t)
@@ -398,6 +426,82 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 		proc.Free()
 		require.Equal(t, currNb, proc.Mp().CurrNB())
 	}
+}
+
+func TestFunctionExpressionExecutor_NilFirstBatch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	bat := testutil.NewBatchWithVectors(
+		[]*vector.Vector{
+			testutil.NewVector(3, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2, 3}),
+		}, make([]int64, 3))
+
+	fExprExecutor := &FunctionExpressionExecutor{}
+	err := fExprExecutor.Init(proc, 2, types.T_int64.ToType())
+	require.NoError(t, err)
+	fExprExecutor.evalFn = func(params []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, _ *function.FunctionSelectList) error {
+		v1 := vector.GenerateFunctionFixedTypeParameter[int64](params[0])
+		v2 := vector.GenerateFunctionFixedTypeParameter[int64](params[1])
+		rs := vector.MustFunctionResult[int64](result)
+		for i := 0; i < length; i++ {
+			v11, null11 := v1.GetValue(uint64(i))
+			v22, null22 := v2.GetValue(uint64(i))
+			if null11 || null22 {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+			} else {
+				if err := rs.Append(v11+v22, false); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	col1 := &plan.Expr{
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 1,
+				ColPos: 0,
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_int64),
+			NotNullable: true,
+		},
+	}
+	col2 := makePlan2Int64ConstExprWithType(100)
+	executor1, err := NewExpressionExecutor(proc, col1)
+	require.NoError(t, err)
+	executor2, err := NewExpressionExecutor(proc, col2)
+	require.NoError(t, err)
+	fExprExecutor.SetParameter(0, executor1)
+	fExprExecutor.SetParameter(1, executor2)
+	defer fExprExecutor.Free()
+
+	vec, err := fExprExecutor.Eval(proc, []*batch.Batch{nil, bat}, nil)
+	require.NoError(t, err)
+	require.Equal(t, 3, vec.Length())
+	require.Equal(t, int64(101), vector.MustFixedColWithTypeCheck[int64](vec)[0])
+	require.Equal(t, int64(103), vector.MustFixedColWithTypeCheck[int64](vec)[2])
+}
+
+func TestFixedExpressionExecutor_NilFirstBatch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	con := makePlan2Int64ConstExprWithType(7)
+	conExprExecutor, err := NewExpressionExecutor(proc, con)
+	require.NoError(t, err)
+	defer conExprExecutor.Free()
+
+	bat := &batch.Batch{}
+	bat.SetRowCount(4)
+
+	vec, err := conExprExecutor.Eval(proc, []*batch.Batch{nil, bat}, nil)
+	require.NoError(t, err)
+	require.Equal(t, 4, vec.Length())
+	require.Equal(t, int64(7), vector.MustFixedColWithTypeCheck[int64](vec)[0])
 }
 
 func TestExpressionReset(t *testing.T) {

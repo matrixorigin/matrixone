@@ -255,6 +255,15 @@ type ColumnExpressionExecutor struct {
 	nullVecCache *vector.Vector
 }
 
+func getRowCountFromBatches(batches []*batch.Batch) int {
+	for _, bat := range batches {
+		if bat != nil {
+			return bat.RowCount()
+		}
+	}
+	return 0
+}
+
 func (expr *ColumnExpressionExecutor) GetRelIndex() int {
 	return expr.relIndex
 }
@@ -497,12 +506,11 @@ func (expr *FunctionExpressionExecutor) Init(
 	return err
 }
 
-func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches []*batch.Batch, selectList []bool) (err error) {
+func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches []*batch.Batch, selectList []bool, rowCount int) (err error) {
 	expr.parameterResults[0], err = expr.parameterExecutor[0].Eval(proc, batches, selectList)
 	if err != nil {
 		return err
 	}
-	rowCount := batches[0].RowCount()
 	if len(expr.selectList1) < rowCount {
 		expr.selectList1 = make([]bool, rowCount)
 		expr.selectList2 = make([]bool, rowCount)
@@ -532,8 +540,7 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 	return err
 }
 
-func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches []*batch.Batch, selectList []bool) (err error) {
-	rowCount := batches[0].RowCount()
+func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches []*batch.Batch, selectList []bool, rowCount int) (err error) {
 	if len(expr.selectList1) < rowCount {
 		expr.selectList1 = make([]bool, rowCount)
 		expr.selectList2 = make([]bool, rowCount)
@@ -579,19 +586,20 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 	}
 	if expr.folded.canFold {
 		if len(batches) > 0 {
-			return expr.getFoldedVector(batches[0].RowCount()), nil
+			return expr.getFoldedVector(getRowCountFromBatches(batches)), nil
 		}
 		return expr.getFoldedVector(1), nil
 	}
+	rowCount := getRowCountFromBatches(batches)
 
 	var err error
 	if expr.fid == function.IFF {
-		err = expr.EvalIff(proc, batches, selectList)
+		err = expr.EvalIff(proc, batches, selectList, rowCount)
 		if err != nil {
 			return nil, err
 		}
 	} else if expr.fid == function.CASE {
-		err = expr.EvalCase(proc, batches, selectList)
+		err = expr.EvalCase(proc, batches, selectList, rowCount)
 		if err != nil {
 			return nil, err
 		}
@@ -604,12 +612,12 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		}
 	}
 
-	if err = expr.resultVector.PreExtendAndReset(batches[0].RowCount()); err != nil {
+	if err = expr.resultVector.PreExtendAndReset(rowCount); err != nil {
 		return nil, err
 	}
 
-	if selectList != nil && len(expr.selectList.SelectList) < batches[0].RowCount() {
-		expr.selectList.SelectList = make([]bool, batches[0].RowCount())
+	if selectList != nil && len(expr.selectList.SelectList) < rowCount {
+		expr.selectList.SelectList = make([]bool, rowCount)
 	}
 	if selectList == nil {
 		expr.selectList.AnyNull = false
@@ -631,7 +639,7 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 	}
 
 	if err = expr.evalFn(
-		expr.parameterResults, expr.resultVector, proc, batches[0].RowCount(), &expr.selectList); err != nil {
+		expr.parameterResults, expr.resultVector, proc, rowCount, &expr.selectList); err != nil {
 		return nil, err
 	}
 
@@ -692,6 +700,11 @@ func (expr *ColumnExpressionExecutor) Eval(_ *process.Process, batches []*batch.
 			"column expression eval: relIndex %d out of range, batches length %d",
 			relIndex, len(batches))
 	}
+	if batches[relIndex] == nil {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"column expression eval: batch at relIndex %d is nil",
+			relIndex)
+	}
 
 	vec := batches[relIndex].Vecs[expr.colIndex]
 	if vec.IsConstNull() {
@@ -735,7 +748,7 @@ func (expr *ColumnExpressionExecutor) IsColumnExpr() bool {
 
 func (expr *FixedVectorExpressionExecutor) Eval(_ *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
 	if !expr.noNeedToSetLength {
-		expr.resultVector.SetLength(batches[0].RowCount())
+		expr.resultVector.SetLength(getRowCountFromBatches(batches))
 	}
 	return expr.resultVector, nil
 }

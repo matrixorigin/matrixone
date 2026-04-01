@@ -119,7 +119,7 @@ func BatchDataNotNullCheck(vecs []*vector.Vector, attrs []string, tableDef *plan
 	return nil
 }
 
-func getRelationByObjRef(ctx context.Context, proc *process.Process, eg engine.Engine, ref *plan.ObjectRef) (engine.Relation, error) {
+func GetRelationByObjRef(ctx context.Context, proc *process.Process, eg engine.Engine, ref *plan.ObjectRef) (engine.Relation, error) {
 	dbSource, err := eg.Database(ctx, ref.SchemaName, proc.GetTxnOperator())
 	if err != nil {
 		return nil, err
@@ -144,7 +144,7 @@ func GetRelAndPartitionRelsByObjRef(
 	eng engine.Engine,
 	ref *plan.ObjectRef,
 ) (source engine.Relation, err error) {
-	source, err = getRelationByObjRef(proc.Ctx, proc, eng, ref)
+	source, err = GetRelationByObjRef(proc.Ctx, proc, eng, ref)
 	if err != nil {
 		return
 	}

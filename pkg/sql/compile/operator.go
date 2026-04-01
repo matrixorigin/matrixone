@@ -1219,7 +1219,7 @@ func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *si
 	return arg
 }
 
-func constructDedupJoin(n *plan.Node, leftTypes, rightTypes []types.Type, proc *process.Process) *dedupjoin.DedupJoin {
+func constructDedupJoin(n, left *plan.Node, qry *plan.Query, leftTypes, rightTypes []types.Type, proc *process.Process) *dedupjoin.DedupJoin {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
@@ -1237,6 +1237,17 @@ func constructDedupJoin(n *plan.Node, leftTypes, rightTypes []types.Type, proc *
 	arg.OnDuplicateAction = n.OnDuplicateAction
 	arg.DedupColName = n.DedupColName
 	arg.DedupColTypes = n.DedupColTypes
+	arg.InitialSnapshotTS = proc.GetStmtSnapshotTS()
+	if arg.InitialSnapshotTS.IsEmpty() {
+		arg.InitialSnapshotTS = proc.GetTxnOperator().SnapshotTS()
+		proc.SetStmtSnapshotTS(arg.InitialSnapshotTS)
+	}
+	if scanNode := findProbeTableScan(left, qry); scanNode != nil {
+		arg.TargetTableRef = scanNode.ObjRef
+		if scanNode.TableDef != nil {
+			arg.TargetTableID = scanNode.TableDef.TblId
+		}
+	}
 	arg.DelColIdx = -1
 	if n.DedupJoinCtx != nil {
 		arg.UpdateColIdxList = n.DedupJoinCtx.UpdateColIdxList
@@ -1255,6 +1266,27 @@ func constructDedupJoin(n *plan.Node, leftTypes, rightTypes []types.Type, proc *
 		panic("wrong joinmap tag!")
 	}
 	return arg
+}
+
+func findProbeTableScan(node *plan.Node, qry *plan.Query) *plan.Node {
+	if node == nil {
+		return nil
+	}
+	if node.NodeType == plan.Node_TABLE_SCAN {
+		return node
+	}
+	if qry == nil {
+		return nil
+	}
+	for _, childID := range node.Children {
+		if childID < 0 || int(childID) >= len(qry.Nodes) {
+			continue
+		}
+		if scanNode := findProbeTableScan(qry.Nodes[childID], qry); scanNode != nil {
+			return scanNode
+		}
+	}
+	return nil
 }
 
 func constructRightDedupJoin(n *plan.Node, leftTypes, rightTypes []types.Type, proc *process.Process) *rightdedupjoin.RightDedupJoin {

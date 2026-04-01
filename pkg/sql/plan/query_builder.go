@@ -3821,11 +3821,12 @@ func (builder *QueryBuilder) appendAggNode(
 		}, ctx)
 	}
 
-	if len(boundHavingList) > 0 {
+	preWindowHavingList, _ := splitWindowDependentHavingFilters(boundHavingList, ctx.windowTag)
+	if len(preWindowHavingList) > 0 {
 		var newFilterList []*plan.Expr
 		var expr *plan.Expr
 
-		for _, cond := range boundHavingList {
+		for _, cond := range preWindowHavingList {
 			if nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx); err != nil {
 				return
 			}
@@ -3940,29 +3941,49 @@ func (builder *QueryBuilder) appendWindowNode(
 		builder.nameByColRef[[2]int32{ctx.windowTag, id}] = name
 	}
 
-	if ctx.forceWindows {
-		if len(boundHavingList) > 0 {
-			var newFilterList []*plan.Expr
-			var expr *plan.Expr
+	_, postWindowHavingList := splitWindowDependentHavingFilters(boundHavingList, ctx.windowTag)
+	if len(postWindowHavingList) > 0 {
+		var newFilterList []*plan.Expr
+		var expr *plan.Expr
 
-			for _, cond := range boundHavingList {
-				if nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx); err != nil {
-					return
-				}
-
-				newFilterList = append(newFilterList, expr)
+		for _, cond := range postWindowHavingList {
+			if nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx); err != nil {
+				return
 			}
 
-			nodeID = builder.appendNode(&plan.Node{
-				NodeType:   plan.Node_FILTER,
-				Children:   []int32{nodeID},
-				FilterList: newFilterList,
-			}, ctx)
+			newFilterList = append(newFilterList, expr)
 		}
+
+		nodeID = builder.appendNode(&plan.Node{
+			NodeType:   plan.Node_FILTER,
+			Children:   []int32{nodeID},
+			FilterList: newFilterList,
+		}, ctx)
 	}
 
 	newNodeID = nodeID
 	return
+}
+
+func splitWindowDependentHavingFilters(boundHavingList []*plan.Expr, windowTag int32) (preWindow []*plan.Expr, postWindow []*plan.Expr) {
+	if len(boundHavingList) == 0 {
+		return nil, nil
+	}
+	if windowTag <= 0 {
+		return boundHavingList, nil
+	}
+
+	preWindow = make([]*plan.Expr, 0, len(boundHavingList))
+	postWindow = make([]*plan.Expr, 0, len(boundHavingList))
+	for _, cond := range boundHavingList {
+		if containsTag(cond, windowTag) {
+			postWindow = append(postWindow, cond)
+			continue
+		}
+		preWindow = append(preWindow, cond)
+	}
+
+	return preWindow, postWindow
 }
 
 func (builder *QueryBuilder) appendProjectionNode(

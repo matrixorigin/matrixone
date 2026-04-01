@@ -125,6 +125,11 @@ func NewCompile(
 	c.uid = uid
 	c.sql = sql
 	c.proc.SetMessageBoard(c.MessageBoard)
+	// StmtSnapshotTS is statement-scoped. Process objects are reused across
+	// statements, so a fresh compile must clear any snapshot that was only meant
+	// for a previous statement retry. prepareRetry restores the original value
+	// explicitly for same-statement retries.
+	c.proc.SetStmtSnapshotTS(timestamp.Timestamp{})
 	c.stmt = stmt
 	c.addr = addr
 	c.isInternal = isInternal
@@ -178,6 +183,9 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	// clean up the process for a new query.
 	proc.ResetQueryContext()
 	proc.ResetCloneTxnOperator()
+	// Statement snapshot timestamp is statement-scoped; clear it for every new execution
+	// when reusing a prepared Compile to avoid carrying snapshot visibility across EXECUTEs.
+	proc.SetStmtSnapshotTS(timestamp.Timestamp{})
 	c.proc = proc
 
 	c.fill = fill
@@ -2510,7 +2518,7 @@ func constructShuffleJoinOP(c *Compile, shuffleJoins []*Scope, node, left, right
 			}
 		} else {
 			for i := range shuffleJoins {
-				op := constructDedupJoin(node, leftTyps, rightTyps, c.proc)
+				op := constructDedupJoin(node, left, c.anal.qry, leftTyps, rightTyps, c.proc)
 				op.ShuffleIdx = int32(i)
 				if shuffleV2 {
 					op.ShuffleIdx = -1
@@ -2740,7 +2748,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
 			currentFirstFlag := c.anal.isFirst
 			for i := range rs {
-				op := constructDedupJoin(node, leftTyps, rightTyps, c.proc)
+				op := constructDedupJoin(node, left, c.anal.qry, leftTyps, rightTyps, c.proc)
 				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				rs[i].setRootOperator(op)
 			}
