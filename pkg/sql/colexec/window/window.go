@@ -355,7 +355,7 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 
 // processValueFunc handles WIN_VALUE functions (lag/lead/first_value/last_value/nth_value)
 // by directly computing results via index lookup, avoiding O(n²) frame materialization.
-func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Process) (*vector.Vector, error) {
+func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Process) (result *vector.Vector, err error) {
 	n := ctr.bat.Vecs[0].Length()
 	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
 	funcName := w.Name
@@ -363,7 +363,13 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 	// aggVecs already evaluated by caller (eval case in Call)
 	srcVec := ctr.aggVecs[idx].Vec[0] // the expression column
 	retType := types.New(types.T(w.WindowFunc.Typ.Id), w.WindowFunc.Typ.Width, w.WindowFunc.Typ.Scale)
-	result := vector.NewVec(retType)
+	result = vector.NewVec(retType)
+	defer func() {
+		if err != nil && result != nil {
+			result.Free(proc.Mp())
+			result = nil
+		}
+	}()
 
 	switch funcName {
 	case "lag":
@@ -386,7 +392,7 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 			}
 			if !ok || offset < 0 {
 				if err := appendDefaultOrNull(result, defaultVec, j, proc.Mp()); err != nil {
-					return nil, err
+					return result, err
 				}
 				continue
 			}
@@ -397,11 +403,11 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 			srcRow := j - int(offset)
 			if srcRow < start {
 				if err := appendDefaultOrNull(result, defaultVec, j, proc.Mp()); err != nil {
-					return nil, err
+					return result, err
 				}
 			} else {
 				if err := result.UnionOne(srcVec, int64(srcRow), proc.Mp()); err != nil {
-					return nil, err
+					return result, err
 				}
 			}
 		}
@@ -426,7 +432,7 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 			}
 			if !ok || offset < 0 {
 				if err := appendDefaultOrNull(result, defaultVec, j, proc.Mp()); err != nil {
-					return nil, err
+					return result, err
 				}
 				continue
 			}
@@ -437,11 +443,11 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 			srcRow := j + int(offset)
 			if srcRow >= end {
 				if err := appendDefaultOrNull(result, defaultVec, j, proc.Mp()); err != nil {
-					return nil, err
+					return result, err
 				}
 			} else {
 				if err := result.UnionOne(srcVec, int64(srcRow), proc.Mp()); err != nil {
-					return nil, err
+					return result, err
 				}
 			}
 		}
@@ -454,7 +460,7 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 			}
 			left, right, err := ctr.buildInterval(j, start, end, w.Frame)
 			if err != nil {
-				return nil, err
+				return result, err
 			}
 			if left < start {
 				left = start
@@ -464,11 +470,11 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 			}
 			if left >= right {
 				if err := vector.AppendAny(result, nil, true, proc.Mp()); err != nil {
-					return nil, err
+					return result, err
 				}
 			} else {
 				if err := result.UnionOne(srcVec, int64(left), proc.Mp()); err != nil {
-					return nil, err
+					return result, err
 				}
 			}
 		}
@@ -481,7 +487,7 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 			}
 			left, right, err := ctr.buildInterval(j, start, end, w.Frame)
 			if err != nil {
-				return nil, err
+				return result, err
 			}
 			if left < start {
 				left = start
@@ -491,11 +497,11 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 			}
 			if left >= right {
 				if err := vector.AppendAny(result, nil, true, proc.Mp()); err != nil {
-					return nil, err
+					return result, err
 				}
 			} else {
 				if err := result.UnionOne(srcVec, int64(right-1), proc.Mp()); err != nil {
-					return nil, err
+					return result, err
 				}
 			}
 		}
@@ -517,7 +523,7 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 			}
 			if !ok || nthVal < 1 {
 				if err := vector.AppendAny(result, nil, true, proc.Mp()); err != nil {
-					return nil, err
+					return result, err
 				}
 				continue
 			}
@@ -527,7 +533,7 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 			}
 			left, right, err := ctr.buildInterval(j, start, end, w.Frame)
 			if err != nil {
-				return nil, err
+				return result, err
 			}
 			if left < start {
 				left = start
@@ -538,18 +544,18 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 			targetRow := left + int(nthVal) - 1
 			if left >= right || targetRow >= right {
 				if err := vector.AppendAny(result, nil, true, proc.Mp()); err != nil {
-					return nil, err
+					return result, err
 				}
 			} else {
 				if err := result.UnionOne(srcVec, int64(targetRow), proc.Mp()); err != nil {
-					return nil, err
+					return result, err
 				}
 			}
 		}
 
 	default:
-		result.Free(proc.Mp())
-		return nil, moerr.NewInternalErrorNoCtxf("unsupported value window function: %s", funcName)
+		err = moerr.NewInternalErrorNoCtxf("unsupported value window function: %s", funcName)
+		return result, err
 	}
 
 	return result, nil

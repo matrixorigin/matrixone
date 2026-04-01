@@ -206,6 +206,57 @@ func TestProcessValueFunc_NthValue(t *testing.T) {
 	}
 }
 
+func TestProcessValueFunc_ErrorPathFreesLocalResult(t *testing.T) {
+	mp := mpool.MustNewZero()
+	resultMP, err := mpool.NewMPool("value-window-error", 1<<20, mpool.NoFixed)
+	require.NoError(t, err)
+
+	proc := testutil.NewProcessWithMPool(t, "", resultMP)
+
+	bat := makeInt32Batch(mp, []int32{10, 20})
+	spec := makeFirstValueWindowSpec()
+	spec.Expr.(*plan.Expr_W).W.Frame = &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val: &plan.Expr{
+				Expr: &plan.Expr_List{
+					List: &plan.ExprList{
+						List: []*plan.Expr{
+							{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: types.IntervalNumMAX + 1}}}},
+							{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: int64(types.Day)}}}},
+						},
+					},
+				},
+			},
+		},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_CURRENT_ROW,
+		},
+	}
+	orderVec := testutil.MakeDateVector([]string{"2024-01-01", "2024-01-02"}, []uint64{0}, mp)
+
+	ctr := &container{bat: bat}
+	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
+	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0]}
+	ctr.orderVecs = make([]colexec.ExprEvalVector, 1)
+	ctr.orderVecs[0].Vec = []*vector.Vector{orderVec}
+
+	ap := &Window{WinSpecList: []*plan.Expr{spec}}
+
+	result, err := ctr.processValueFunc(0, ap, proc)
+	require.Error(t, err)
+	require.Nil(t, result)
+	require.Equal(t, int64(0), resultMP.CurrNB())
+
+	orderVec.Free(mp)
+	bat.Clean(mp)
+	proc.Free()
+	require.Equal(t, int64(0), resultMP.CurrNB())
+	require.Equal(t, int64(0), mp.CurrNB())
+	mpool.DeleteMPool(resultMP)
+}
+
 // TestProcessValueFunc_NthValueWithN tests nth_value(expr, 3) with unbounded frame.
 func TestProcessValueFunc_NthValueWithN(t *testing.T) {
 	mp := mpool.MustNewZero()
