@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 )
@@ -65,9 +66,17 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 	}()
 
 	var nextBatch *batch.Batch
+	var nextReleaseF func()
+	defer func() {
+		if nextReleaseF != nil {
+			nextReleaseF()
+		}
+	}()
 	for i := 0; i < originalObjCnt; i++ {
 		loadedBlkCnt := 0
-		nextBatch, del, nextReleaseF, err := host.LoadNextBatch(ctx, uint32(i), nextBatch)
+		var del *nulls.Nulls
+		var err error
+		nextBatch, del, nextReleaseF, err = host.LoadNextBatch(ctx, uint32(i), nextBatch)
 		for err == nil {
 			if buffer == nil {
 				buffer, releaseF = getSimilarBatch(nextBatch, int(maxRowCnt), host)

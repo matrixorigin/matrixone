@@ -227,7 +227,7 @@ func (t *cnMergeTask) SetTransferTable(tt *mergesort.TransferTable) {
 
 // impl DisposableVecPool
 func (t *cnMergeTask) GetVector(typ *types.Type) (*vector.Vector, func()) {
-	v := vector.NewVec(*typ)
+	v := vector.NewOffHeapVecWithType(*typ)
 	return v, func() { v.Free(t.mp) }
 }
 
