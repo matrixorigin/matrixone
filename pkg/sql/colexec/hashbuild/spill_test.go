@@ -733,3 +733,71 @@ func TestSetSpillThreshold(t *testing.T) {
 	ctr.setSpillThreshold(0)
 	require.Greater(t, ctr.spillThreshold, int64(0))
 }
+
+func TestAcquireSpillBuffers(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	ctr := &container{}
+
+	// First call should create buffers
+	bufs1 := ctr.acquireSpillBuffers(proc)
+	require.Equal(t, spillNumBuckets, len(bufs1))
+
+	// Second call should reuse the same slice
+	bufs2 := ctr.acquireSpillBuffers(proc)
+	require.Equal(t, spillNumBuckets, len(bufs2))
+	// Same slice reference
+	require.Equal(t, cap(bufs1), cap(bufs2))
+}
+
+func TestAcquireSpillBuffersWithExistingBuffers(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	ctr := &container{}
+
+	// Pre-populate with some buffers
+	ctr.spillBuffers = make([]*batch.Batch, 5)
+	for i := range ctr.spillBuffers {
+		ctr.spillBuffers[i] = batch.NewWithSize(1)
+	}
+
+	// Acquire should return spillNumBuckets buffers
+	bufs := ctr.acquireSpillBuffers(proc)
+	require.Equal(t, spillNumBuckets, len(bufs))
+}
+
+func TestCleanSpillBufferPool(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	ctr := &container{}
+
+	// Pre-populate with some buffers with data
+	ctr.spillBuffers = make([]*batch.Batch, 3)
+	for i := range ctr.spillBuffers {
+		ctr.spillBuffers[i] = batch.NewWithSize(1)
+		ctr.spillBuffers[i].Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, proc.Mp())
+		ctr.spillBuffers[i].SetRowCount(3)
+	}
+
+	// Clean should free all buffers
+	ctr.cleanSpillBufferPool(proc)
+	require.Nil(t, ctr.spillBuffers)
+}
+
+func TestCleanSpillBufferPoolWithNil(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	ctr := &container{}
+
+	// Pre-populate with mixed nil and non-nil buffers
+	ctr.spillBuffers = make([]*batch.Batch, 3)
+	ctr.spillBuffers[0] = batch.NewWithSize(1)
+	ctr.spillBuffers[2] = batch.NewWithSize(1)
+
+	ctr.cleanSpillBufferPool(proc)
+	require.Nil(t, ctr.spillBuffers)
+}

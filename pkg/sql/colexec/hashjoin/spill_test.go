@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -1277,4 +1278,176 @@ func TestHashValuesBufferGrowth(t *testing.T) {
 	for _, h := range largeHashValues {
 		require.NotEqual(t, uint64(0), h)
 	}
+}
+
+func TestSetSpillThresholdAutoConfig(t *testing.T) {
+	ctr := &container{}
+
+	// threshold == 0 triggers auto config path
+	ctr.setSpillThreshold(0)
+	require.Greater(t, ctr.spillThreshold, int64(0))
+
+	// Verify minimum of 128MB
+	require.GreaterOrEqual(t, ctr.spillThreshold, int64(128*1024*1024))
+}
+
+func TestSetSpillThresholdExplicit(t *testing.T) {
+	ctr := &container{}
+
+	// Non-zero threshold should be used directly
+	ctr.setSpillThreshold(1024 * 1024)
+	require.Equal(t, int64(1024*1024), ctr.spillThreshold)
+}
+
+func TestCleanupSpillFilesWithNonEmptyQueue(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+
+	// Create files for build and probe
+	buildFile, err := spillfs.CreateFile(context.Background(), "test_cleanup_build")
+	require.NoError(t, err)
+	probeFile, err := spillfs.CreateFile(context.Background(), "test_cleanup_probe")
+	require.NoError(t, err)
+
+	// Write some data so files have content
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, proc.Mp())
+	bat.SetRowCount(3)
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	ctr := &container{}
+	file_sw := spillBucketWriter{file: buildFile}
+	_, err = ctr.flushBucketBuffer(proc, bat, &file_sw, analyzer)
+	require.NoError(t, err)
+	buildFile.Close()
+
+	file_sw = spillBucketWriter{file: probeFile}
+	_, err = ctr.flushBucketBuffer(proc, bat, &file_sw, analyzer)
+	require.NoError(t, err)
+	probeFile.Close()
+
+	// Create a spillBucket with both buildFd and probeFd set
+	buildFd, err := spillfs.OpenFile(context.Background(), "test_cleanup_build")
+	require.NoError(t, err)
+	probeFd, err := spillfs.OpenFile(context.Background(), "test_cleanup_probe")
+	require.NoError(t, err)
+
+	ctr.spillQueue = []spillBucket{
+		{baseName: "test_cleanup", buildFd: buildFd, probeFd: probeFd},
+	}
+
+	// Cleanup should close both file descriptors
+	ctr.cleanupSpillFiles(proc)
+
+	require.Nil(t, ctr.spillQueue)
+
+	// Verify files are closed by trying to use them
+	_, err = buildFd.Stat()
+	require.Error(t, err) // file should be closed
+	_, err = probeFd.Stat()
+	require.Error(t, err) // file should be closed
+
+	spillfs.RemoveFile(context.Background(), "test_cleanup_build")
+	spillfs.RemoveFile(context.Background(), "test_cleanup_probe")
+}
+
+func TestCleanupSpillFilesWithEmptyQueue(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	ctr := &container{}
+	ctr.spillQueue = []spillBucket{} // empty queue
+
+	// Should return early without error - queue remains as empty slice
+	ctr.cleanupSpillFiles(proc)
+	// When spillQueue is empty, function returns early without modifying spillQueue
+	require.Equal(t, 0, len(ctr.spillQueue))
+}
+
+func TestCleanupSpillFilesWithActiveProbeReader(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+
+	bucketName := "test_probe_cleanup"
+	file, err := spillfs.CreateFile(context.Background(), bucketName)
+	require.NoError(t, err)
+	file.Close()
+
+	reader := &spillBucketReader{}
+	err = reader.resetForFile(proc.Ctx, spillfs, bucketName)
+	require.NoError(t, err)
+
+	ctr := &container{}
+	ctr.probeBucketReader = reader
+	ctr.probeBucketActive = true
+	ctr.spillQueue = []spillBucket{}
+
+	ctr.cleanupSpillFiles(proc)
+
+	require.False(t, ctr.probeBucketActive)
+
+	spillfs.RemoveFile(context.Background(), bucketName)
+}
+
+func TestCleanSpillBufferPoolWithData(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	ctr := &container{}
+
+	// Pre-populate with buffers containing data
+	ctr.spillBuildSubBufs = make([]*batch.Batch, 3)
+	ctr.spillProbeSubBufs = make([]*batch.Batch, 3)
+
+	for i := range ctr.spillBuildSubBufs {
+		ctr.spillBuildSubBufs[i] = batch.NewWithSize(1)
+		ctr.spillBuildSubBufs[i].Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, proc.Mp())
+		ctr.spillBuildSubBufs[i].SetRowCount(3)
+	}
+
+	for i := range ctr.spillProbeSubBufs {
+		ctr.spillProbeSubBufs[i] = batch.NewWithSize(1)
+		ctr.spillProbeSubBufs[i].Vecs[0] = testutil.MakeInt32Vector([]int32{4, 5}, nil, proc.Mp())
+		ctr.spillProbeSubBufs[i].SetRowCount(2)
+	}
+
+	ctr.cleanSpillBufferPool(proc)
+
+	require.Nil(t, ctr.spillBuildSubBufs)
+	require.Nil(t, ctr.spillProbeSubBufs)
+}
+
+func TestShouldReSpillByRowCount(t *testing.T) {
+	ctr := &container{}
+
+	// Set a small threshold so we use the row-count-based path
+	ctr.setSpillThreshold(10) // 10 rows
+
+	builder := &hashbuild.HashmapBuilder{}
+	builder.InputBatchRowCount = 5
+
+	// Row count below threshold
+	require.False(t, ctr.shouldReSpill(builder))
+
+	builder.InputBatchRowCount = 15
+	// Row count above threshold
+	require.True(t, ctr.shouldReSpill(builder))
+}
+
+func TestShouldReSpillNoThreshold(t *testing.T) {
+	ctr := &container{}
+
+	// Zero threshold - should never spill
+	ctr.spillThreshold = 0
+
+	builder := &hashbuild.HashmapBuilder{}
+	builder.InputBatchRowCount = 1000000
+
+	require.False(t, ctr.shouldReSpill(builder))
 }
