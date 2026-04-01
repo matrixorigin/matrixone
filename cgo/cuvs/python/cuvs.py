@@ -162,6 +162,8 @@ if _lib:
     _lib.gpu_ivf_flat_build.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     _lib.gpu_ivf_flat_add_chunk_float.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.c_uint64, ctypes.c_void_p]
     _lib.gpu_ivf_flat_save.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_void_p]
+    _lib.gpu_ivf_flat_save_dir.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_void_p]
+    _lib.gpu_ivf_flat_load_dir.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_void_p]
     _lib.gpu_ivf_flat_delete_id.argtypes = [ctypes.c_void_p, ctypes.c_int64, ctypes.c_void_p]
     _lib.gpu_ivf_flat_search_float.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.c_uint64, ctypes.c_uint32, ctypes.c_uint32, IvfFlatSearchParams, ctypes.c_void_p]
     _lib.gpu_ivf_flat_search_float.restype = IvfFlatSearchRes
@@ -174,31 +176,54 @@ if _lib:
     # IVF-PQ
     _lib.gpu_ivf_pq_new.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32, ctypes.c_int, IvfPqBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
     _lib.gpu_ivf_pq_new.restype = ctypes.c_void_p
+    _lib.gpu_ivf_pq_new_empty.argtypes = [ctypes.c_uint64, ctypes.c_uint32, ctypes.c_int, IvfPqBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
+    _lib.gpu_ivf_pq_new_empty.restype = ctypes.c_void_p
     _lib.gpu_ivf_pq_destroy.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     _lib.gpu_ivf_pq_start.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     _lib.gpu_ivf_pq_build.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    _lib.gpu_ivf_pq_add_chunk_float.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.c_uint64, ctypes.c_void_p]
+    _lib.gpu_ivf_pq_save.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_void_p]
+    _lib.gpu_ivf_pq_save_dir.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_void_p]
+    _lib.gpu_ivf_pq_load_dir.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_void_p]
+    _lib.gpu_ivf_pq_delete_id.argtypes = [ctypes.c_void_p, ctypes.c_int64, ctypes.c_void_p]
     _lib.gpu_ivf_pq_search_float.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.c_uint64, ctypes.c_uint32, ctypes.c_uint32, IvfPqSearchParams, ctypes.c_void_p]
     _lib.gpu_ivf_pq_search_float.restype = IvfPqSearchRes
     _lib.gpu_ivf_pq_get_neighbors.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.POINTER(ctypes.c_int64)]
     _lib.gpu_ivf_pq_get_distances.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.POINTER(ctypes.c_float)]
     _lib.gpu_ivf_pq_free_result.argtypes = [ctypes.c_void_p]
+    _lib.gpu_ivf_pq_len.argtypes = [ctypes.c_void_p]
+    _lib.gpu_ivf_pq_len.restype = ctypes.c_uint32
+    _lib.gpu_ivf_pq_cap.argtypes = [ctypes.c_void_p]
+    _lib.gpu_ivf_pq_cap.restype = ctypes.c_uint32
+    _lib.gpu_ivf_pq_info.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    _lib.gpu_ivf_pq_info.restype = ctypes.c_char_p
 
     # Brute Force
     _lib.gpu_brute_force_new.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
     _lib.gpu_brute_force_new.restype = ctypes.c_void_p
+    _lib.gpu_brute_force_new_empty.argtypes = [ctypes.c_uint64, ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+    _lib.gpu_brute_force_new_empty.restype = ctypes.c_void_p
     _lib.gpu_brute_force_destroy.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     _lib.gpu_brute_force_start.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     _lib.gpu_brute_force_build.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    _lib.gpu_brute_force_add_chunk_float.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.c_uint64, ctypes.c_void_p]
     _lib.gpu_brute_force_search_float.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.c_uint64, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
     _lib.gpu_brute_force_search_float.restype = ctypes.c_void_p
     _lib.gpu_brute_force_get_results.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32, ctypes.POINTER(ctypes.c_int64), ctypes.POINTER(ctypes.c_float)]
     _lib.gpu_brute_force_free_search_result.argtypes = [ctypes.c_void_p]
+    _lib.gpu_brute_force_len.argtypes = [ctypes.c_void_p]
+    _lib.gpu_brute_force_len.restype = ctypes.c_uint32
+    _lib.gpu_brute_force_cap.argtypes = [ctypes.c_void_p]
+    _lib.gpu_brute_force_cap.restype = ctypes.c_uint32
+    _lib.gpu_brute_force_info.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    _lib.gpu_brute_force_info.restype = ctypes.c_char_p
 
     # KMeans
     _lib.gpu_kmeans_new.argtypes = [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_void_p]
     _lib.gpu_kmeans_new.restype = ctypes.c_void_p
     _lib.gpu_kmeans_destroy.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     _lib.gpu_kmeans_start.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    _lib.gpu_kmeans_fit.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_void_p]
     _lib.gpu_kmeans_fit_predict_float.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.c_uint64, ctypes.c_void_p]
     _lib.gpu_kmeans_fit_predict_float.restype = KMeansFitPredictRes
     _lib.gpu_kmeans_predict_float.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.c_uint64, ctypes.c_void_p]
@@ -206,6 +231,10 @@ if _lib:
     _lib.gpu_kmeans_get_labels.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.POINTER(ctypes.c_int64)]
     _lib.gpu_kmeans_free_result.argtypes = [ctypes.c_void_p]
     _lib.gpu_kmeans_get_centroids.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+    _lib.gpu_kmeans_info.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    _lib.gpu_kmeans_info.restype = ctypes.c_char_p
+    _lib.gpu_kmeans_predict.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_void_p]
+    _lib.gpu_kmeans_predict.restype = KMeansPredictRes
 
     # Utils
     _lib.gpu_get_device_count.restype = ctypes.c_int
@@ -310,6 +339,15 @@ class IvfFlatIndex:
         h = _lib.gpu_ivf_flat_new(dataset.ctypes.data_as(ctypes.c_void_p), count, dim, int(metric), build_params, dev_arr, len(devices), nthread, int(dist_mode), int(qtype), id_ptr, ctypes.byref(errmsg))
         _check_error(errmsg); return cls(h)
 
+    @classmethod
+    def create_empty(cls, total_count, dimension, metric=DistanceType.L2Expanded, build_params=None, devices=[0], nthread=4, dist_mode=DistributionMode.SINGLE_GPU, qtype=Quantization.F32, ids=None):
+        if build_params is None: build_params = IvfFlatBuildParams.default()
+        dev_arr = (ctypes.c_int * len(devices))(*devices)
+        id_ptr = ids.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)) if ids is not None else None
+        errmsg = ctypes.c_char_p()
+        h = _lib.gpu_ivf_flat_new_empty(total_count, dimension, int(metric), build_params, dev_arr, len(devices), nthread, int(dist_mode), int(qtype), id_ptr, ctypes.byref(errmsg))
+        _check_error(errmsg); return cls(h)
+
     def start(self):
         errmsg = ctypes.c_char_p(); _lib.gpu_ivf_flat_start(self.handle, ctypes.byref(errmsg)); _check_error(errmsg)
     def build(self):
@@ -321,6 +359,10 @@ class IvfFlatIndex:
         errmsg = ctypes.c_char_p(); _lib.gpu_ivf_flat_delete_id(self.handle, id_val, ctypes.byref(errmsg)); _check_error(errmsg)
     def save(self, filename):
         errmsg = ctypes.c_char_p(); _lib.gpu_ivf_flat_save(self.handle, filename.encode('utf-8'), ctypes.byref(errmsg)); _check_error(errmsg)
+    def save_dir(self, directory):
+        errmsg = ctypes.c_char_p(); _lib.gpu_ivf_flat_save_dir(self.handle, directory.encode('utf-8'), ctypes.byref(errmsg)); _check_error(errmsg)
+    def load_dir(self, directory):
+        errmsg = ctypes.c_char_p(); _lib.gpu_ivf_flat_load_dir(self.handle, directory.encode('utf-8'), ctypes.byref(errmsg)); _check_error(errmsg)
 
     def search(self, queries, k, search_params=None):
         if search_params is None: search_params = IvfFlatSearchParams.default()
@@ -356,10 +398,30 @@ class IvfPqIndex:
         h = _lib.gpu_ivf_pq_new(dataset.ctypes.data_as(ctypes.c_void_p), count, dim, int(metric), build_params, dev_arr, len(devices), nthread, int(dist_mode), int(qtype), id_ptr, ctypes.byref(errmsg))
         _check_error(errmsg); return cls(h)
 
+    @classmethod
+    def create_empty(cls, total_count, dimension, metric=DistanceType.L2Expanded, build_params=None, devices=[0], nthread=4, dist_mode=DistributionMode.SINGLE_GPU, qtype=Quantization.F32, ids=None):
+        if build_params is None: build_params = IvfPqBuildParams.default()
+        dev_arr = (ctypes.c_int * len(devices))(*devices)
+        id_ptr = ids.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)) if ids is not None else None
+        errmsg = ctypes.c_char_p()
+        h = _lib.gpu_ivf_pq_new_empty(total_count, dimension, int(metric), build_params, dev_arr, len(devices), nthread, int(dist_mode), int(qtype), id_ptr, ctypes.byref(errmsg))
+        _check_error(errmsg); return cls(h)
+
     def start(self):
         errmsg = ctypes.c_char_p(); _lib.gpu_ivf_pq_start(self.handle, ctypes.byref(errmsg)); _check_error(errmsg)
     def build(self):
         errmsg = ctypes.c_char_p(); _lib.gpu_ivf_pq_build(self.handle, ctypes.byref(errmsg)); _check_error(errmsg)
+    def add_chunk(self, chunk):
+        chunk = np.ascontiguousarray(chunk, dtype=np.float32)
+        errmsg = ctypes.c_char_p(); _lib.gpu_ivf_pq_add_chunk_float(self.handle, chunk.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), len(chunk), ctypes.byref(errmsg)); _check_error(errmsg)
+    def delete_id(self, id_val):
+        errmsg = ctypes.c_char_p(); _lib.gpu_ivf_pq_delete_id(self.handle, id_val, ctypes.byref(errmsg)); _check_error(errmsg)
+    def save(self, filename):
+        errmsg = ctypes.c_char_p(); _lib.gpu_ivf_pq_save(self.handle, filename.encode('utf-8'), ctypes.byref(errmsg)); _check_error(errmsg)
+    def save_dir(self, directory):
+        errmsg = ctypes.c_char_p(); _lib.gpu_ivf_pq_save_dir(self.handle, directory.encode('utf-8'), ctypes.byref(errmsg)); _check_error(errmsg)
+    def load_dir(self, directory):
+        errmsg = ctypes.c_char_p(); _lib.gpu_ivf_pq_load_dir(self.handle, directory.encode('utf-8'), ctypes.byref(errmsg)); _check_error(errmsg)
 
     def search(self, queries, k, search_params=None):
         if search_params is None: search_params = IvfPqSearchParams.default()
@@ -373,6 +435,12 @@ class IvfPqIndex:
         _lib.gpu_ivf_pq_get_neighbors(res.result_ptr, num_q * k, neighbors.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)))
         _lib.gpu_ivf_pq_get_distances(res.result_ptr, num_q * k, distances.ctypes.data_as(ctypes.POINTER(ctypes.c_float)))
         _lib.gpu_ivf_pq_free_result(res.result_ptr); return neighbors, distances
+
+    def __len__(self): return _lib.gpu_ivf_pq_len(self.handle)
+    def capacity(self): return _lib.gpu_ivf_pq_cap(self.handle)
+    def info(self):
+        errmsg = ctypes.c_char_p(); s = _lib.gpu_ivf_pq_info(self.handle, ctypes.byref(errmsg))
+        _check_error(errmsg); return s.decode('utf-8') if s else ""
 
     def __del__(self):
         if hasattr(self, 'handle') and self.handle:
@@ -389,10 +457,19 @@ class BruteForceIndex:
         h = _lib.gpu_brute_force_new(dataset.ctypes.data_as(ctypes.c_void_p), count, dim, int(metric), nthread, device_id, int(qtype), ctypes.byref(errmsg))
         _check_error(errmsg); return cls(h)
 
+    @classmethod
+    def create_empty(cls, total_count, dimension, metric=DistanceType.L2Expanded, nthread=4, device_id=0, qtype=Quantization.F32):
+        errmsg = ctypes.c_char_p()
+        h = _lib.gpu_brute_force_new_empty(total_count, dimension, int(metric), nthread, device_id, int(qtype), ctypes.byref(errmsg))
+        _check_error(errmsg); return cls(h)
+
     def start(self):
         errmsg = ctypes.c_char_p(); _lib.gpu_brute_force_start(self.handle, ctypes.byref(errmsg)); _check_error(errmsg)
     def build(self):
         errmsg = ctypes.c_char_p(); _lib.gpu_brute_force_build(self.handle, ctypes.byref(errmsg)); _check_error(errmsg)
+    def add_chunk(self, chunk):
+        chunk = np.ascontiguousarray(chunk, dtype=np.float32)
+        errmsg = ctypes.c_char_p(); _lib.gpu_brute_force_add_chunk_float(self.handle, chunk.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), len(chunk), ctypes.byref(errmsg)); _check_error(errmsg)
 
     def search(self, queries, k):
         queries = np.ascontiguousarray(queries, dtype=np.float32)
@@ -404,6 +481,12 @@ class BruteForceIndex:
         distances = np.zeros((num_q, k), dtype=np.float32)
         _lib.gpu_brute_force_get_results(res_ptr, num_q, k, neighbors.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)), distances.ctypes.data_as(ctypes.POINTER(ctypes.c_float)))
         _lib.gpu_brute_force_free_search_result(res_ptr); return neighbors, distances
+
+    def __len__(self): return _lib.gpu_brute_force_len(self.handle)
+    def capacity(self): return _lib.gpu_brute_force_cap(self.handle)
+    def info(self):
+        errmsg = ctypes.c_char_p(); s = _lib.gpu_brute_force_info(self.handle, ctypes.byref(errmsg))
+        _check_error(errmsg); return s.decode('utf-8') if s else ""
 
     def __del__(self):
         if hasattr(self, 'handle') and self.handle:
@@ -417,6 +500,12 @@ class KMeans:
         _lib.gpu_kmeans_start(self.handle, ctypes.byref(errmsg)); _check_error(errmsg)
         self.n_clusters, self.dimension = n_clusters, dimension
 
+    def fit(self, X):
+        X = np.ascontiguousarray(X, dtype=np.float32)
+        errmsg = ctypes.c_char_p()
+        _lib.gpu_kmeans_fit(self.handle, X.ctypes.data_as(ctypes.c_void_p), len(X), ctypes.byref(errmsg))
+        _check_error(errmsg)
+
     def fit_predict(self, X):
         X = np.ascontiguousarray(X, dtype=np.float32)
         errmsg = ctypes.c_char_p()
@@ -429,6 +518,15 @@ class KMeans:
     def predict(self, X):
         X = np.ascontiguousarray(X, dtype=np.float32)
         errmsg = ctypes.c_char_p()
+        res = _lib.gpu_kmeans_predict(self.handle, X.ctypes.data_as(ctypes.c_void_p), len(X), ctypes.byref(errmsg))
+        _check_error(errmsg)
+        labels = np.zeros(len(X), dtype=np.int64)
+        _lib.gpu_kmeans_get_labels(res.result_ptr, len(X), labels.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)))
+        _lib.gpu_kmeans_free_result(res.result_ptr); return labels, res.inertia
+
+    def predict_float(self, X):
+        X = np.ascontiguousarray(X, dtype=np.float32)
+        errmsg = ctypes.c_char_p()
         res = _lib.gpu_kmeans_predict_float(self.handle, X.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), len(X), ctypes.byref(errmsg))
         _check_error(errmsg)
         labels = np.zeros(len(X), dtype=np.int64)
@@ -439,6 +537,14 @@ class KMeans:
         centroids = np.zeros((self.n_clusters, self.dimension), dtype=np.float32)
         errmsg = ctypes.c_char_p(); _lib.gpu_kmeans_get_centroids(self.handle, centroids.ctypes.data_as(ctypes.c_void_p), ctypes.byref(errmsg))
         _check_error(errmsg); return centroids
+
+    def train_quantizer(self, train_data):
+        train_data = np.ascontiguousarray(train_data, dtype=np.float32)
+        errmsg = ctypes.c_char_p(); _lib.gpu_kmeans_train_quantizer(self.handle, train_data.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), len(train_data), ctypes.byref(errmsg)); _check_error(errmsg)
+
+    def info(self):
+        errmsg = ctypes.c_char_p(); s = _lib.gpu_kmeans_info(self.handle, ctypes.byref(errmsg))
+        _check_error(errmsg); return s.decode('utf-8') if s else ""
 
     def __del__(self):
         if hasattr(self, 'handle') and self.handle:
