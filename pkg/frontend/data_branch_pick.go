@@ -185,6 +185,18 @@ func appendPickedBatchRows(
 	userConflictOpt *tree.ConflictOpt,
 	skipSet map[string]struct{},
 ) (err error) {
+	// PICK only cares about two kinds of batches from hashDiff:
+	//   1. target INSERT (side=target, kind=INSERT) — source rows to add/replace
+	//   2. base DELETE  (side=base, kind=DELETE)   — conflict victims in destination
+	//
+	// base INSERT batches represent destination-only new rows that hashDiff
+	// would keep in a MERGE result.  For PICK these are irrelevant — the
+	// rows already exist in the destination.  Applying them would cause a
+	// duplicate-key error.
+	if wrapped.side == diffSideBase && wrapped.kind != diffDelete {
+		return nil
+	}
+
 	row := make([]any, len(tblStuff.def.colNames))
 
 	for rowIdx := range wrapped.batch.RowCount() {
