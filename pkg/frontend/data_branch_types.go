@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -110,6 +111,10 @@ type tableStuff struct {
 	worker               *ants.Pool
 	hashmapAllocator     *branchHashmapAllocator
 	maxTombstoneBatchCnt int
+	// lcaReaderProbeMode is shared across copies of tableStuff in a single diff
+	// request. When enabled, LCA probing skips SQL and directly uses reader
+	// fallback.
+	lcaReaderProbeMode *atomic.Bool
 
 	retPool *retBatchList
 
