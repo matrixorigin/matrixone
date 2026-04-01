@@ -2858,29 +2858,25 @@ func dumpTransferInfo(ctx context.Context, mergeTask *cnMergeTask) (*api.MergeCo
 	// For api.TransDestPos, 5*10^5 rows is 52*5*10^5 ~= 26MB
 	// For api.TransferDestPos, 5*10^5 rows is 12*5*10^5 ~= 6MB
 	if rowCnt < 500000 {
+		avgPerBlk := rowCnt / nblks
 		mappings := make([]api.BlkTransMap, nblks)
 		for i := 0; i < nblks; i++ {
 			m := tt.GetBlockMap(i)
-			mappings[i] = api.BlkTransMap{
-				M: make(map[int32]api.TransDestPos, len(m)),
-			}
-		}
-		mergeTask.commitEntry.Booking = &api.BlkTransferBooking{
-			Mappings: mappings,
-		}
-
-		for i := 0; i < nblks; i++ {
-			m := tt.GetBlockMap(i)
+			mapping := make(map[int32]api.TransDestPos, avgPerBlk)
 			for r, pos := range m {
 				if pos.ObjIdx == api.NoTransfer {
 					continue
 				}
-				mergeTask.commitEntry.Booking.Mappings[i].M[int32(r)] = api.TransDestPos{
+				mapping[int32(r)] = api.TransDestPos{
 					ObjIdx: int32(pos.ObjIdx),
 					BlkIdx: int32(pos.BlkIdx),
 					RowIdx: int32(pos.RowIdx),
 				}
 			}
+			mappings[i] = api.BlkTransMap{M: mapping}
+		}
+		mergeTask.commitEntry.Booking = &api.BlkTransferBooking{
+			Mappings: mappings,
 		}
 		return mergeTask.commitEntry, nil
 	}

@@ -288,7 +288,7 @@ func (page *TransferHashPage) Marshal() *bytes.Buffer {
 	b := transferMarshalBufPool.Get().(*bytes.Buffer)
 	b.Reset()
 	if b.Cap() < int(marshalSize) {
-		b.Grow(int(marshalSize) - b.Cap())
+		b.Grow(int(marshalSize))
 	}
 	b.Write(types.EncodeUint64(&size))
 	for k, v := range *m {
