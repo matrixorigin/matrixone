@@ -16,7 +16,7 @@ package hashbuild
 
 import (
 	"bytes"
-	"context"
+	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -44,7 +44,9 @@ type container struct {
 	state           int
 	runtimeFilterIn bool
 	hashmapBuilder  HashmapBuilder
-	spilledBuckets  []string
+	spilledFds      []*os.File // anonymous build-side spill fds (ownership transferred to JoinMap)
+	spillFS         fileservice.MutableFileService
+	spillUID        string // unique prefix for anonymous file paths
 	spillThreshold  int64
 
 	// reusable buffers for spill operations
@@ -129,7 +131,7 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 	if !mapSucceed {
 		hashBuild.cleanupSpillFiles(proc)
 	}
-	hashBuild.ctr.spilledBuckets = nil
+	hashBuild.ctr.spilledFds = nil
 	hashBuild.ctr.state = BuildHashMap
 	hashBuild.ctr.runtimeFilterIn = false
 	message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, runtimeSucceed, proc.GetMessageBoard())
@@ -142,18 +144,13 @@ func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err
 }
 
 func (hashBuild *HashBuild) cleanupSpillFiles(proc *process.Process) {
-	if len(hashBuild.ctr.spilledBuckets) == 0 {
-		return
+	for i, fd := range hashBuild.ctr.spilledFds {
+		if fd != nil {
+			fd.Close()
+			hashBuild.ctr.spilledFds[i] = nil
+		}
 	}
-	spillfs, err := proc.GetSpillFileService()
-	if err != nil {
-		return
-	}
-	for _, bucket := range hashBuild.ctr.spilledBuckets {
-		// Use context.Background() so cleanup succeeds even when proc.Ctx is cancelled
-		// (e.g. client disconnected abnormally).
-		spillfs.RemoveFile(context.Background(), bucket)
-	}
+	hashBuild.ctr.spilledFds = nil
 }
 
 func (hashBuild *HashBuild) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

@@ -19,11 +19,10 @@ import (
 	"os"
 
 	"github.com/cespare/xxhash/v2"
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -70,31 +69,34 @@ func (ctr *container) flushBucketBuffer(proc *process.Process, bat *batch.Batch,
 	return cnt, nil
 }
 
-func createSpillFiles(proc *process.Process) ([]string, []*os.File, error) {
-	spillfs, err := proc.GetSpillFileService()
+func (ctr *container) getSpillFS(proc *process.Process) (fileservice.MutableFileService, error) {
+	if ctr.spillFS != nil {
+		return ctr.spillFS, nil
+	}
+	fs, err := proc.GetSpillFileService()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
+	ctr.spillFS = fs
+	return fs, nil
+}
 
-	uid, _ := uuid.NewV7()
-	uidStr := uid.String()
-	logutil.Infof("creating spill files, base: %s", uidStr)
-
-	buckets := make([]string, spillNumBuckets)
-	files := make([]*os.File, spillNumBuckets)
-
-	for i := 0; i < spillNumBuckets; i++ {
-		buckets[i] = fmt.Sprintf("join_%s_%d_build", uidStr, i)
-		if files[i], err = spillfs.CreateFile(proc.Ctx, buckets[i]); err != nil {
-			// Close any opened files on error
-			for j := 0; j < i; j++ {
-				files[j].Close()
-			}
-			return nil, nil, err
-		}
+// ensureSpillFile lazily creates an anonymous spill file for the given bucket.
+func (ctr *container) ensureSpillFile(proc *process.Process, files []*os.File, bucket int) (*os.File, error) {
+	if files[bucket] != nil {
+		return files[bucket], nil
 	}
-
-	return buckets, files, nil
+	spillfs, err := ctr.getSpillFS(proc)
+	if err != nil {
+		return nil, err
+	}
+	name := fmt.Sprintf("join_%s_%d_build", ctr.spillUID, bucket)
+	f, err := spillfs.CreateAndRemoveFile(proc.Ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	files[bucket] = f
+	return f, nil
 }
 
 func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *batch.Batch, files []*os.File, buffers []*batch.Batch, executors []colexec.ExpressionExecutor, analyzer process.Analyzer) error {
@@ -174,7 +176,11 @@ func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *b
 
 		// Flush if buffer is full
 		if buf.RowCount() >= spillBufferSize {
-			if _, err := ctr.flushBucketBuffer(proc, buf, files[bucketId], analyzer); err != nil {
+			file, err := ctr.ensureSpillFile(proc, files, bucketId)
+			if err != nil {
+				return err
+			}
+			if _, err := ctr.flushBucketBuffer(proc, buf, file, analyzer); err != nil {
 				return err
 			}
 			buf.CleanOnlyData()

@@ -44,14 +44,14 @@ func TestRebuildHashmapForBucket(t *testing.T) {
 
 	// Write build batch to spill file
 	buildBucketName := "test_rebuild_build"
-	buildFile, err := spillfs.CreateFile(context.Background(), buildBucketName)
+	buildFile, err := spillfs.CreateAndRemoveFile(context.Background(), buildBucketName)
 	require.NoError(t, err)
 
 	ctr := &container{}
 	buildFile_sw := spillBucketWriter{file: buildFile}
 	_, err = ctr.flushBucketBuffer(proc, buildBat, &buildFile_sw, analyzer)
 	require.NoError(t, err)
-	buildFile.Close()
+	buildFd := buildFile_sw.handOffFd()
 
 	// Setup HashJoin with EqConds
 	hashJoin := &HashJoin{
@@ -75,9 +75,9 @@ func TestRebuildHashmapForBucket(t *testing.T) {
 	}
 
 	bucket := spillBucket{
-		buildFile: buildBucketName,
-		probeFd:   nil, // empty probe
-		depth:     1,
+		buildFd: buildFd,
+		probeFd: nil, // empty probe
+		depth:   1,
 	}
 
 	// Call rebuildHashmapForBucket
@@ -97,11 +97,6 @@ func TestRebuildHashmapForBucket(t *testing.T) {
 	require.Equal(t, 100, totalRows)
 
 	jm.Free()
-
-	// Verify build file was deleted
-	_, err = spillfs.OpenFile(context.Background(), buildBucketName)
-	require.Error(t, err, "build file should be deleted after rebuild")
-
 }
 
 // TestReSpillBucket tests the re-spilling logic when memory threshold is exceeded
@@ -125,14 +120,14 @@ func TestReSpillBucket(t *testing.T) {
 
 	// Write build and probe batches to spill files
 	buildBucketName := "test_respill_build"
-	buildFile, err := spillfs.CreateFile(context.Background(), buildBucketName)
+	buildFile, err := spillfs.CreateAndRemoveFile(context.Background(), buildBucketName)
 	require.NoError(t, err)
 
 	ctr := &container{}
 	buildFile_sw := spillBucketWriter{file: buildFile}
 	_, err = ctr.flushBucketBuffer(proc, buildBat, &buildFile_sw, analyzer)
 	require.NoError(t, err)
-	buildFile.Close()
+	buildFd := buildFile_sw.handOffFd()
 
 	probeBucketName := "test_respill_probe"
 	probeFile, err := spillfs.CreateAndRemoveFile(context.Background(), probeBucketName)
@@ -176,9 +171,9 @@ func TestReSpillBucket(t *testing.T) {
 	}
 
 	bucket := spillBucket{
-		buildFile: buildBucketName,
-		probeFd:   probeFd,
-		depth:     1,
+		buildFd: buildFd,
+		probeFd: probeFd,
+		depth:   1,
 	}
 
 	// Set a very low threshold to force re-spilling
@@ -229,14 +224,14 @@ func TestReSpillBucketDepthLimit(t *testing.T) {
 
 	// Write to spill files
 	buildBucketName := "test_depth_limit_build"
-	buildFile, err := spillfs.CreateFile(context.Background(), buildBucketName)
+	buildFile, err := spillfs.CreateAndRemoveFile(context.Background(), buildBucketName)
 	require.NoError(t, err)
 
 	ctr := &container{}
 	buildFile_sw := spillBucketWriter{file: buildFile}
 	_, err = ctr.flushBucketBuffer(proc, buildBat, &buildFile_sw, analyzer)
 	require.NoError(t, err)
-	buildFile.Close()
+	buildFd := buildFile_sw.handOffFd()
 
 	probeBucketName := "test_depth_limit_probe"
 	probeFile, err := spillfs.CreateAndRemoveFile(context.Background(), probeBucketName)
@@ -271,9 +266,9 @@ func TestReSpillBucketDepthLimit(t *testing.T) {
 
 	// Bucket at max depth
 	bucket := spillBucket{
-		buildFile: buildBucketName,
-		probeFd:   depthProbeFd,
-		depth:     spillMaxPass, // at max depth
+		buildFd: buildFd,
+		probeFd: depthProbeFd,
+		depth:   spillMaxPass, // at max depth
 	}
 
 	// Set low threshold - but should NOT re-spill because we're at max depth
@@ -319,14 +314,14 @@ func TestMultiLevelSpillIntegration(t *testing.T) {
 
 	// Write to spill files
 	buildBucketName := "test_multilevel_build"
-	buildFile, err := spillfs.CreateFile(context.Background(), buildBucketName)
+	buildFile, err := spillfs.CreateAndRemoveFile(context.Background(), buildBucketName)
 	require.NoError(t, err)
 
 	ctr := &container{}
 	buildFile_sw := spillBucketWriter{file: buildFile}
 	_, err = ctr.flushBucketBuffer(proc, buildBat, &buildFile_sw, analyzer)
 	require.NoError(t, err)
-	buildFile.Close()
+	buildFd := buildFile_sw.handOffFd()
 
 	probeBucketName := "test_multilevel_probe"
 	probeFile, err := spillfs.CreateAndRemoveFile(context.Background(), probeBucketName)
@@ -360,9 +355,9 @@ func TestMultiLevelSpillIntegration(t *testing.T) {
 	}
 
 	bucket := spillBucket{
-		buildFile: buildBucketName,
-		probeFd:   multiProbeFd,
-		depth:     1,
+		buildFd: buildFd,
+		probeFd: multiProbeFd,
+		depth:   1,
 	}
 
 	// Set very low threshold to force multiple levels of spilling

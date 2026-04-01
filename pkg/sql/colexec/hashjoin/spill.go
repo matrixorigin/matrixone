@@ -47,11 +47,10 @@ const (
 	// balances memory pressure vs write-syscall frequency.
 	spillRowBufferSize = 8192
 	// spillIOBufferSize is the size of the bufio.Reader read-ahead buffer used
-	// when reading spill files. A large buffer (4 MiB) dramatically reduces the
-	// number of read() syscalls when scanning multi-hundred-MB spill files during
-	// multi-level re-spill, which is the primary source of IO-related performance
-	// degradation reported by users.
-	spillIOBufferSize = 1024 * 1024
+	// when reading spill files. A large buffer reduces the number of read()
+	// syscalls when scanning multi-hundred-MB spill files during multi-level
+	// re-spill.
+	spillIOBufferSize = 4 * 1024 * 1024
 )
 
 // getSpillFS returns the cached spill file service, initialising it on first call.
@@ -469,32 +468,10 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket 
 	}
 
 	// Stream batches from build file — reuse the cached reader (and its 4 MiB buffer).
-	spillfs, fsErr := ctr.getSpillFS(proc)
-	if fsErr != nil {
-		cleanupBuilder()
-		return nil, false, fsErr
-	}
-
-	// Delete the named build file on any exit path (normal or error).
-	// The bucket was already popped from spillQueue, so cleanupSpillFiles won't find it.
-	// fd-based build files are closed by reader.close() (deferred below).
-	// Use context.Background() so cleanup succeeds even when proc.Ctx is cancelled.
-	ownsBuildFile := bucket.buildFile != ""
-	defer func() {
-		if ownsBuildFile && bucket.buildFile != "" {
-			spillfs.RemoveFile(context.Background(), bucket.buildFile)
-		}
-	}()
-
 	if ctr.spillBuildReader == nil {
 		ctr.spillBuildReader = &spillBucketReader{}
 	}
-	if bucket.buildFd != nil {
-		ctr.spillBuildReader.resetForFd(bucket.buildFd)
-	} else if rdErr := ctr.spillBuildReader.resetForFile(proc.Ctx, spillfs, bucket.buildFile); rdErr != nil {
-		cleanupBuilder()
-		return nil, false, rdErr
-	}
+	ctr.spillBuildReader.resetForFd(bucket.buildFd)
 	reader := ctr.spillBuildReader
 	defer reader.close()
 
@@ -523,15 +500,11 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket 
 
 		// Check threshold mid-build (only if we can go deeper)
 		if bucket.depth < spillMaxPass && ctr.shouldReSpill(builder) {
-			// Transfer build file ownership to reSpillBucket.
-			ownsBuildFile = false
 			_, reSpillErr := hashJoin.reSpillBucket(proc, bucket, builder, reader, nextDepth, analyzer)
 			cleanupBuilder()
 			return nil, true, reSpillErr
 		}
 	}
-
-	// Build file will be deleted by the defer above.
 
 	// Build hashmap
 	if buildErr := builder.BuildHashmap(hashJoin.HashOnPK, !hashJoin.HashOnPK, false, proc); buildErr != nil {
@@ -571,8 +544,7 @@ func (hashJoin *HashJoin) reSpillBucket(proc *process.Process, bucket spillBucke
 	ctr := &hashJoin.ctr
 	logutil.Infof("re-spilling bucket: %s, depth: %d -> %d", bucket.baseName, bucket.depth, nextDepth)
 
-	spillfs, err := ctr.getSpillFS(proc)
-	if err != nil {
+	if _, err := ctr.getSpillFS(proc); err != nil {
 		return nil, err
 	}
 
@@ -592,11 +564,6 @@ func (hashJoin *HashJoin) reSpillBucket(proc *process.Process, bucket spillBucke
 			subProbeWriters[i].close()
 		}
 		ctr.freeSpillBuildExprExecs()
-		// Delete named build file on any exit path. Use context.Background() so
-		// cleanup succeeds even when proc.Ctx is cancelled.
-		if bucket.buildFile != "" {
-			spillfs.RemoveFile(context.Background(), bucket.buildFile)
-		}
 	}()
 
 	// Initialize spill executors once for reuse across all batches

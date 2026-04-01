@@ -16,6 +16,8 @@ package hashbuild
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -27,6 +29,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func createTestSpillFiles(proc *process.Process) ([]*os.File, error) {
+	spillfs, err := proc.GetSpillFileService()
+	if err != nil {
+		return nil, err
+	}
+	files := make([]*os.File, spillNumBuckets)
+	for i := 0; i < spillNumBuckets; i++ {
+		name := fmt.Sprintf("test_spill_%d", i)
+		f, err := spillfs.CreateAndRemoveFile(proc.Ctx, name)
+		if err != nil {
+			for j := 0; j < i; j++ {
+				files[j].Close()
+			}
+			return nil, err
+		}
+		files[i] = f
+	}
+	return files, nil
+}
 
 func TestComputeXXHashBuild(t *testing.T) {
 	mp := mpool.MustNewZero()
@@ -103,16 +125,13 @@ func TestCreateSpillFiles(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	buckets, files, err := createSpillFiles(proc)
+	files, err := createTestSpillFiles(proc)
 	require.NoError(t, err)
-	require.Equal(t, spillNumBuckets, len(buckets))
 	require.Equal(t, spillNumBuckets, len(files))
 
-	spillfs, _ := proc.GetSpillFileService()
-	for i, file := range files {
+	for _, file := range files {
 		require.NotNil(t, file)
 		file.Close()
-		spillfs.RemoveFile(context.Background(), buckets[i])
 	}
 }
 
@@ -280,13 +299,13 @@ func TestAppendBatchToSpillFilesPartitioning(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	buckets, files, err := createSpillFiles(proc)
+	files, err := createTestSpillFiles(proc)
 	require.NoError(t, err)
 	defer func() {
-		spillfs, _ := proc.GetSpillFileService()
-		for i, file := range files {
-			file.Close()
-			spillfs.RemoveFile(context.Background(), buckets[i])
+		for _, file := range files {
+			if file != nil {
+				file.Close()
+			}
 		}
 	}()
 
@@ -326,13 +345,13 @@ func TestEmptyBatchSpill(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	buckets, files, err := createSpillFiles(proc)
+	files, err := createTestSpillFiles(proc)
 	require.NoError(t, err)
 	defer func() {
-		spillfs, _ := proc.GetSpillFileService()
-		for i, file := range files {
-			file.Close()
-			spillfs.RemoveFile(context.Background(), buckets[i])
+		for _, file := range files {
+			if file != nil {
+				file.Close()
+			}
 		}
 	}()
 
@@ -363,13 +382,13 @@ func TestAppendBuildBatchMultipleFlushes(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	buckets, files, err := createSpillFiles(proc)
+	files, err := createTestSpillFiles(proc)
 	require.NoError(t, err)
 	defer func() {
-		spillfs, _ := proc.GetSpillFileService()
-		for i, file := range files {
-			file.Close()
-			spillfs.RemoveFile(context.Background(), buckets[i])
+		for _, file := range files {
+			if file != nil {
+				file.Close()
+			}
 		}
 	}()
 
@@ -415,13 +434,13 @@ func TestAppendBuildBatchWithNulls(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	buckets, files, err := createSpillFiles(proc)
+	files, err := createTestSpillFiles(proc)
 	require.NoError(t, err)
 	defer func() {
-		spillfs, _ := proc.GetSpillFileService()
-		for i, file := range files {
-			file.Close()
-			spillfs.RemoveFile(context.Background(), buckets[i])
+		for _, file := range files {
+			if file != nil {
+				file.Close()
+			}
 		}
 	}()
 
@@ -460,13 +479,13 @@ func TestAppendBuildBatchMultiColumn(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	buckets, files, err := createSpillFiles(proc)
+	files, err := createTestSpillFiles(proc)
 	require.NoError(t, err)
 	defer func() {
-		spillfs, _ := proc.GetSpillFileService()
-		for i, file := range files {
-			file.Close()
-			spillfs.RemoveFile(context.Background(), buckets[i])
+		for _, file := range files {
+			if file != nil {
+				file.Close()
+			}
 		}
 	}()
 
@@ -586,15 +605,12 @@ func TestCreateSpillFilesError(t *testing.T) {
 	defer proc.Free()
 
 	// Normal case
-	buckets, files, err := createSpillFiles(proc)
+	files, err := createTestSpillFiles(proc)
 	require.NoError(t, err)
-	require.Equal(t, spillNumBuckets, len(buckets))
 	require.Equal(t, spillNumBuckets, len(files))
 
-	spillfs, _ := proc.GetSpillFileService()
-	for i, file := range files {
+	for _, file := range files {
 		file.Close()
-		spillfs.RemoveFile(context.Background(), buckets[i])
 	}
 }
 
@@ -659,13 +675,13 @@ func TestAppendBuildBatchSingleBucket(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	buckets, files, err := createSpillFiles(proc)
+	files, err := createTestSpillFiles(proc)
 	require.NoError(t, err)
 	defer func() {
-		spillfs, _ := proc.GetSpillFileService()
-		for i, file := range files {
-			file.Close()
-			spillfs.RemoveFile(context.Background(), buckets[i])
+		for _, file := range files {
+			if file != nil {
+				file.Close()
+			}
 		}
 	}()
 
@@ -706,13 +722,13 @@ func TestBufferReuse(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	buckets, files, err := createSpillFiles(proc)
+	files, err := createTestSpillFiles(proc)
 	require.NoError(t, err)
 	defer func() {
-		spillfs, _ := proc.GetSpillFileService()
-		for i, file := range files {
-			file.Close()
-			spillfs.RemoveFile(context.Background(), buckets[i])
+		for _, file := range files {
+			if file != nil {
+				file.Close()
+			}
 		}
 	}()
 
