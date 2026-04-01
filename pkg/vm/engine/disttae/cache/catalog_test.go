@@ -280,6 +280,42 @@ func TestTableInsert(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+func TestDeduplicateColumns(t *testing.T) {
+	item := &TableItem{
+		AccountId:  1,
+		DatabaseId: 100,
+		Id:         200,
+		Name:       "test_table",
+	}
+
+	// No duplicates — unchanged.
+	cols := Columns{
+		{Name: "a", Num: 0, Seqnum: 0},
+		{Name: "b", Num: 1, Seqnum: 1},
+		{Name: "c", Num: 2, Seqnum: 2},
+	}
+	out := deduplicateColumns(cols, item)
+	require.Equal(t, 3, len(out))
+
+	// Duplicates present — second occurrence removed.
+	cols = Columns{
+		{Name: "a", Num: 0, Seqnum: 0},
+		{Name: "b", Num: 1, Seqnum: 1},
+		{Name: "b", Num: 2, Seqnum: 2}, // dup
+		{Name: "c", Num: 3, Seqnum: 3},
+	}
+	out = deduplicateColumns(cols, item)
+	require.Equal(t, 3, len(out))
+	require.Equal(t, "a", out[0].Name)
+	require.Equal(t, "b", out[1].Name)
+	require.Equal(t, "c", out[2].Name)
+
+	// Empty and single — no-op.
+	require.Equal(t, 0, len(deduplicateColumns(nil, item)))
+	single := Columns{{Name: "x", Num: 0}}
+	require.Equal(t, 1, len(deduplicateColumns(single, item)))
+}
+
 func newTestTableBatch(mp *mpool.MPool) *batch.Batch {
 	var typs []types.Type
 
