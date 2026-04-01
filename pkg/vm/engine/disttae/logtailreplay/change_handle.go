@@ -1050,7 +1050,10 @@ func (p *baseHandle) getObjectEntries(
 	cnObj = make([]*objectio.ObjectEntry, 0)
 	tnByCreateTS = make(map[types.TS][]*objectio.ObjectEntry)
 	tnKeySet := make(map[types.TS]struct{})
-	pkf := p.changesHandle.pkFilter
+	var pkf *engine.PKFilter
+	if p.changesHandle != nil {
+		pkf = p.changesHandle.pkFilter
+	}
 	for objIter.Next() {
 		entry := objIter.Item()
 		entryCopy := entry
