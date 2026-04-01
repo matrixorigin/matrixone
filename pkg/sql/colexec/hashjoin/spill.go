@@ -378,11 +378,14 @@ func (ctr *container) flushBucketBuffer(proc *process.Process, bat *batch.Batch,
 	return cnt, nil
 }
 
-func createRootProbeSpillBucketFiles() []spillBucketWriter {
-	uid, _ := uuid.NewV7()
+func createRootProbeSpillBucketFiles() ([]spillBucketWriter, error) {
+	uid, err := uuid.NewV7()
+	if err != nil {
+		return nil, err
+	}
 	uidStr := uid.String()
-	logutil.Infof("creating probe spill files, base: %s", uidStr)
-	return makeSpillBucketWriters(uidStr, "probe")
+	logutil.Debugf("creating probe spill files, base: %s", uidStr)
+	return makeSpillBucketWriters(uidStr, "probe"), nil
 }
 
 func (ctr *container) appendProbeBatchToSpillFiles(proc *process.Process, bat *batch.Batch, writers []spillBucketWriter, buffers []*batch.Batch, analyzer process.Analyzer, seed uint64) error {
@@ -455,7 +458,7 @@ func (ctr *container) shouldReSpill(builder *hashbuild.HashmapBuilder) bool {
 // it re-spills into sub-buckets (prepended to spillQueue) and returns nil, nil.
 func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket spillBucket, analyzer process.Analyzer) (jm *message.JoinMap, reSpilled bool, err error) {
 	ctr := &hashJoin.ctr
-	logutil.Infof("rebuilding hashmap for spill bucket: %s, depth: %d", bucket.baseName, bucket.depth)
+	logutil.Debugf("rebuilding hashmap for spill bucket: %s, depth: %d", bucket.baseName, bucket.depth)
 
 	// Create a temporary hashmap builder
 	builder := &hashbuild.HashmapBuilder{}
@@ -542,7 +545,7 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket 
 // Sub-bucket files are created lazily: a file is only written when it actually receives data.
 func (hashJoin *HashJoin) reSpillBucket(proc *process.Process, bucket spillBucket, builder *hashbuild.HashmapBuilder, reader *spillBucketReader, nextDepth int, analyzer process.Analyzer) (*message.JoinMap, error) {
 	ctr := &hashJoin.ctr
-	logutil.Infof("re-spilling bucket: %s, depth: %d -> %d", bucket.baseName, bucket.depth, nextDepth)
+	logutil.Debugf("re-spilling bucket: %s, depth: %d -> %d", bucket.baseName, bucket.depth, nextDepth)
 
 	if _, err := ctr.getSpillFS(proc); err != nil {
 		return nil, err

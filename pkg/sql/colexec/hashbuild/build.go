@@ -187,7 +187,10 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 				}
 			}
 			// Generate unique prefix for anonymous file paths
-			uid, _ := uuid.NewV7()
+			uid, err := uuid.NewV7()
+			if err != nil {
+				return err
+			}
 			ctr.spillUID = uid.String()
 			logutil.Infof("entering spill mode, uid: %s", ctr.spillUID)
 
@@ -222,7 +225,9 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		// Seek all files to beginning for reading by hashjoin
 		for _, f := range spillFiles {
 			if f != nil {
-				f.Seek(0, io.SeekStart)
+				if _, err := f.Seek(0, io.SeekStart); err != nil {
+					return err
+				}
 			}
 		}
 		// Transfer ownership to container; nil local slice so defer won't close

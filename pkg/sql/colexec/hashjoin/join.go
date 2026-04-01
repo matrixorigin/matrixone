@@ -277,7 +277,10 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 			// Register build fds in spillQueue immediately so cleanupSpillFiles
 			// can close them even if we return early (e.g. context cancelled).
 			// Generate unique baseNames for sub-bucket naming during re-spill.
-			uid, _ := uuid.NewV7()
+			uid, err := uuid.NewV7()
+			if err != nil {
+				return err
+			}
 			uidStr := uid.String()
 			ctr.spillQueue = make([]spillBucket, len(spilledBuildFds))
 			for i, fd := range spilledBuildFds {
@@ -289,7 +292,10 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 			}
 
 			// Create writers for probe side (files created lazily on first write)
-			spillWriters := createRootProbeSpillBucketFiles()
+			spillWriters, err := createRootProbeSpillBucketFiles()
+			if err != nil {
+				return err
+			}
 			spillBuffers := make([]*batch.Batch, spillNumBuckets)
 
 			defer func() {

@@ -20,6 +20,7 @@ import (
 	"io"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -106,11 +107,76 @@ func TestFlushBucketBuffer(t *testing.T) {
 }
 
 func TestCreateProbeSpillFiles(t *testing.T) {
-	writers := createRootProbeSpillBucketFiles()
+	writers, err := createRootProbeSpillBucketFiles()
+	require.NoError(t, err)
 	require.Equal(t, spillNumBuckets, len(writers))
 
 	for i := range writers {
 		require.NotEmpty(t, writers[i].name)
+		writers[i].close()
+	}
+}
+
+// TestLazySpillFileCreation verifies that files are only created when data is written.
+// Untouched buckets should have nil files, while buckets with data should get a file
+// created on first flush.
+func TestLazySpillFileCreation(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+
+	// Create writers without creating any files
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+	writers := makeSpillBucketWriters(uid.String(), "lazy_test")
+
+	// All files should be nil before any write
+	for i := range writers {
+		require.Nil(t, writers[i].file, "bucket %d should have nil file before any write", i)
+	}
+
+	// Create a batch with values that will hash to various buckets
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, proc.Mp())
+	bat.SetRowCount(3)
+
+	ctr := &container{eqCondVecs: []*vector.Vector{bat.Vecs[0]}}
+	buffers := make([]*batch.Batch, spillNumBuckets)
+
+	// Write the batch (this will populate some buckets)
+	err = ctr.appendProbeBatchToSpillFiles(proc, bat, writers, buffers, analyzer, 0)
+	require.NoError(t, err)
+
+	// Find which buckets got data
+	var populatedBucket int
+	populated := false
+	for i := range buffers {
+		if buffers[i] != nil && buffers[i].RowCount() > 0 {
+			populated = true
+			populatedBucket = i
+			break
+		}
+	}
+	require.True(t, populated, "at least one bucket should have data")
+
+	// Flush the populated bucket's buffer (should create the file lazily)
+	writer := &writers[populatedBucket]
+	require.NotNil(t, buffers[populatedBucket], "buffer should exist before flush")
+	cnt, err := ctr.flushBucketBuffer(proc, buffers[populatedBucket], writer, analyzer)
+	require.NoError(t, err)
+	require.Greater(t, cnt, int64(0))
+	require.NotNil(t, writer.file, "file should be created on first flush")
+
+	// Untouched buckets should still have nil files
+	for i := range buffers {
+		if buffers[i] == nil || buffers[i].RowCount() == 0 {
+			require.Nil(t, writers[i].file, "untouched bucket %d should still have nil file", i)
+		}
+	}
+
+	// Clean up
+	for i := range writers {
 		writers[i].close()
 	}
 }
@@ -406,7 +472,8 @@ func TestAppendProbeBatchToSpillFiles(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	writers := createRootProbeSpillBucketFiles()
+	writers, err := createRootProbeSpillBucketFiles()
+	require.NoError(t, err)
 	defer func() {
 		for i := range writers {
 			writers[i].close()
@@ -426,7 +493,7 @@ func TestAppendProbeBatchToSpillFiles(t *testing.T) {
 		eqCondVecs: []*vector.Vector{bat.Vecs[0]},
 	}
 
-	err := ctr.appendProbeBatchToSpillFiles(proc, bat, writers, buffers, analyzer, 0)
+	err = ctr.appendProbeBatchToSpillFiles(proc, bat, writers, buffers, analyzer, 0)
 	require.NoError(t, err)
 
 	// Flush remaining buffers
@@ -462,7 +529,8 @@ func TestAppendProbeBatchMultipleFlushes(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	writers := createRootProbeSpillBucketFiles()
+	writers, err := createRootProbeSpillBucketFiles()
+	require.NoError(t, err)
 	defer func() {
 		for i := range writers {
 			writers[i].close()
@@ -487,7 +555,7 @@ func TestAppendProbeBatchMultipleFlushes(t *testing.T) {
 		eqCondVecs: []*vector.Vector{bat.Vecs[0]},
 	}
 
-	err := ctr.appendProbeBatchToSpillFiles(proc, bat, writers, buffers, analyzer, 0)
+	err = ctr.appendProbeBatchToSpillFiles(proc, bat, writers, buffers, analyzer, 0)
 	require.NoError(t, err)
 
 	// Flush remaining
@@ -503,7 +571,8 @@ func TestAppendProbeBatchEmptyBatch(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	writers := createRootProbeSpillBucketFiles()
+	writers, err := createRootProbeSpillBucketFiles()
+	require.NoError(t, err)
 	defer func() {
 		for i := range writers {
 			writers[i].close()
@@ -521,7 +590,7 @@ func TestAppendProbeBatchEmptyBatch(t *testing.T) {
 		eqCondVecs: []*vector.Vector{bat.Vecs[0]},
 	}
 
-	err := ctr.appendProbeBatchToSpillFiles(proc, bat, writers, buffers, analyzer, 0)
+	err = ctr.appendProbeBatchToSpillFiles(proc, bat, writers, buffers, analyzer, 0)
 	require.NoError(t, err)
 }
 
@@ -746,7 +815,8 @@ func TestAppendProbeBatchSkipEmptyBuckets(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	writers := createRootProbeSpillBucketFiles()
+	writers, err := createRootProbeSpillBucketFiles()
+	require.NoError(t, err)
 	defer func() {
 		for i := range writers {
 			writers[i].close()
@@ -765,7 +835,7 @@ func TestAppendProbeBatchSkipEmptyBuckets(t *testing.T) {
 		eqCondVecs: []*vector.Vector{bat.Vecs[0]},
 	}
 
-	err := ctr.appendProbeBatchToSpillFiles(proc, bat, writers, buffers, analyzer, 0)
+	err = ctr.appendProbeBatchToSpillFiles(proc, bat, writers, buffers, analyzer, 0)
 	require.NoError(t, err)
 
 	// Most buffers should be nil
@@ -884,7 +954,8 @@ func TestAppendProbeBatchWithNulls(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	writers := createRootProbeSpillBucketFiles()
+	writers, err := createRootProbeSpillBucketFiles()
+	require.NoError(t, err)
 	defer func() {
 		for i := range writers {
 			writers[i].close()
@@ -903,7 +974,7 @@ func TestAppendProbeBatchWithNulls(t *testing.T) {
 		eqCondVecs: []*vector.Vector{bat.Vecs[0]},
 	}
 
-	err := ctr.appendProbeBatchToSpillFiles(proc, bat, writers, buffers, analyzer, 0)
+	err = ctr.appendProbeBatchToSpillFiles(proc, bat, writers, buffers, analyzer, 0)
 	require.NoError(t, err)
 
 	// Flush remaining
@@ -989,7 +1060,8 @@ func TestAppendProbeBatchLargeData(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	writers := createRootProbeSpillBucketFiles()
+	writers, err := createRootProbeSpillBucketFiles()
+	require.NoError(t, err)
 	defer func() {
 		for i := range writers {
 			writers[i].close()
@@ -1014,7 +1086,7 @@ func TestAppendProbeBatchLargeData(t *testing.T) {
 		eqCondVecs: []*vector.Vector{bat.Vecs[0]},
 	}
 
-	err := ctr.appendProbeBatchToSpillFiles(proc, bat, writers, buffers, analyzer, 0)
+	err = ctr.appendProbeBatchToSpillFiles(proc, bat, writers, buffers, analyzer, 0)
 	require.NoError(t, err)
 
 	// Flush remaining
@@ -1083,7 +1155,8 @@ func TestAppendProbeBatchAllBuckets(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	writers := createRootProbeSpillBucketFiles()
+	writers, err := createRootProbeSpillBucketFiles()
+	require.NoError(t, err)
 	defer func() {
 		for i := range writers {
 			writers[i].close()
@@ -1108,7 +1181,7 @@ func TestAppendProbeBatchAllBuckets(t *testing.T) {
 		eqCondVecs: []*vector.Vector{bat.Vecs[0]},
 	}
 
-	err := ctr.appendProbeBatchToSpillFiles(proc, bat, writers, buffers, analyzer, 0)
+	err = ctr.appendProbeBatchToSpillFiles(proc, bat, writers, buffers, analyzer, 0)
 	require.NoError(t, err)
 
 	// Flush all buffers
