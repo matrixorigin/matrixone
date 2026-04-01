@@ -141,6 +141,9 @@ const (
 	// MOStages if the table name of mo_stages table in mo_cataglog.
 	MO_STAGES = "mo_stages"
 
+	// MO_CONNECTIONS connection meta table
+	MO_CONNECTIONS = "mo_connections"
+
 	// MO_PUBS publication meta table
 	MO_PUBS = "mo_pubs"
 
@@ -308,6 +311,7 @@ const (
 	SystemViewRel         = "v"
 	SystemMaterializedRel = "m"
 	SystemExternalRel     = plan.SystemExternalRel
+	SystemForeignRel      = "f"
 	SystemSourceRel       = "s"
 	//the cluster table created by the sys account
 	//and read only by the general account

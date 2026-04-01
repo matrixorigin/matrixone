@@ -432,6 +432,9 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if objRef.PubInfo != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter table in subscription database")
 	}
+	if tableDef.TableType == catalog.SystemForeignRel {
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "alter foreign table")
+	}
 	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
 	accountId, err := ctx.GetAccountId()
 	if err != nil {

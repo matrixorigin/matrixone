@@ -1402,6 +1402,7 @@ func Test_StatementClassify(t *testing.T) {
 		{&tree.ShowAccountUpgrade{}, true},
 		{&tree.ShowPublications{}, true},
 		{&tree.ShowCreatePublications{}, true},
+		{&tree.ShowCreateConnection{}, true},
 		{&tree.ShowBackendServers{}, true},
 	}
 	ses := &Session{

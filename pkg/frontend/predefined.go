@@ -225,6 +225,20 @@ var (
 				primary key(stage_id)
 			)`
 
+	MoCatalogMoConnectionsDDL = fmt.Sprintf(`create table %s.%s (
+				connection_id bigint unsigned auto_increment,
+				connection_name varchar(256) unique key,
+				connection_type varchar(32),
+				connection_options text,
+				connection_status varchar(32),
+				owner bigint unsigned,
+				creator bigint unsigned,
+				account_id bigint unsigned,
+				created_time timestamp,
+				comment text,
+				primary key(connection_id)
+			)`, catalog.MO_CATALOG, catalog.MO_CONNECTIONS)
+
 	MoCatalogMoCdcTaskDDL = `create table mo_catalog.mo_cdc_task (
     			account_id bigint unsigned,			
     			task_id uuid,

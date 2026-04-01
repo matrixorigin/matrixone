@@ -919,10 +919,11 @@ type CreateTable struct {
 	statementImpl
 	/*
 		it is impossible to be the temporary table, the cluster table,
-		the normal table and the external table at the same time.
+		the normal table, the external table and the foreign table at the same time.
 	*/
 	Temporary          bool
 	IsClusterTable     bool
+	IsForeignTable     bool
 	IfNotExists        bool
 	Table              TableName
 	Defs               TableDefs
@@ -950,6 +951,9 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 	}
 	if node.IsClusterTable {
 		ctx.WriteString(" cluster")
+	}
+	if node.IsForeignTable {
+		ctx.WriteString(" foreign")
 	}
 	if node.Param != nil {
 		ctx.WriteString(" external")

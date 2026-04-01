@@ -53,8 +53,8 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	if t == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
-	if t.TableType == catalog.SystemSourceRel {
-		return nil, moerr.NewNYIf(ctx.GetContext(), "insert stream %s", tblName)
+	if err = checkInsertTargetTableType(ctx.GetContext(), t.TableType, tblName); err != nil {
+		return nil, err
 	}
 
 	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, stmt.With, nil, "insert")
@@ -274,6 +274,17 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 			Query: query,
 		},
 	}, err
+}
+
+func checkInsertTargetTableType(ctx context.Context, tableType, tblName string) error {
+	switch tableType {
+	case catalog.SystemSourceRel:
+		return moerr.NewNYIf(ctx, "insert stream %s", tblName)
+	case catalog.SystemForeignRel:
+		return moerr.NewInvalidInput(ctx, "cannot insert into foreign table")
+	default:
+		return nil
+	}
 }
 
 var buildInsertGetDmlPlanCtx = getDmlPlanCtx

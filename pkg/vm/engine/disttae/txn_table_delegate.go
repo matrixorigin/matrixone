@@ -105,6 +105,14 @@ type txnTableDelegate struct {
 	isLocal func() (bool, error)
 }
 
+func (tbl *txnTableDelegate) isForeignTable() bool {
+	return tbl != nil && tbl.origin != nil && tbl.origin.relKind == catalog.SystemForeignRel
+}
+
+func newForeignTableNotImplementedError(ctx context.Context, op string) error {
+	return moerr.NewNotSupportedf(ctx, "federated foreign table %s is not implemented", op)
+}
+
 func MockTableDelegate(
 	tableDelegate engine.Relation,
 	service shardservice.ShardService,
@@ -146,6 +154,9 @@ func (tbl *txnTableDelegate) Stats(
 	ctx context.Context,
 	sync bool,
 ) (*pb.StatsInfo, error) {
+	if tbl.isForeignTable() {
+		return nil, newForeignTableNotImplementedError(ctx, "stats")
+	}
 	if tbl.combined.is {
 		return tbl.combined.tbl.Stats(ctx, sync)
 	}
@@ -194,6 +205,9 @@ func (tbl *txnTableDelegate) Stats(
 func (tbl *txnTableDelegate) Rows(
 	ctx context.Context,
 ) (uint64, error) {
+	if tbl.isForeignTable() {
+		return 0, newForeignTableNotImplementedError(ctx, "row counting")
+	}
 	if tbl.combined.is {
 		return tbl.combined.tbl.Rows(ctx)
 	}
@@ -228,6 +242,9 @@ func (tbl *txnTableDelegate) Size(
 	ctx context.Context,
 	columnName string,
 ) (uint64, error) {
+	if tbl.isForeignTable() {
+		return 0, newForeignTableNotImplementedError(ctx, "size estimation")
+	}
 	if tbl.combined.is {
 		return tbl.combined.tbl.Size(ctx, columnName)
 	}
@@ -261,6 +278,9 @@ func (tbl *txnTableDelegate) Size(
 }
 
 func (tbl *txnTableDelegate) Ranges(ctx context.Context, rangesParam engine.RangesParam) (engine.RelData, error) {
+	if tbl.isForeignTable() {
+		return nil, newForeignTableNotImplementedError(ctx, "range planning")
+	}
 	if tbl.combined.is {
 		return tbl.combined.tbl.Ranges(ctx, rangesParam)
 	}
@@ -336,6 +356,9 @@ func (tbl *txnTableDelegate) Ranges(ctx context.Context, rangesParam engine.Rang
 }
 
 func (tbl *txnTableDelegate) StarCount(ctx context.Context) (uint64, error) {
+	if tbl.isForeignTable() {
+		return 0, newForeignTableNotImplementedError(ctx, "count(*) optimization")
+	}
 	if tbl.combined.is {
 		return tbl.combined.tbl.StarCount(ctx)
 	}
@@ -352,6 +375,9 @@ func (tbl *txnTableDelegate) StarCount(ctx context.Context) (uint64, error) {
 }
 
 func (tbl *txnTableDelegate) EstimateCommittedTombstoneCount(ctx context.Context) (int, error) {
+	if tbl.isForeignTable() {
+		return 0, newForeignTableNotImplementedError(ctx, "tombstone estimation")
+	}
 	if tbl.combined.is {
 		return tbl.combined.tbl.EstimateCommittedTombstoneCount(ctx)
 	}
@@ -372,6 +398,9 @@ func (tbl *txnTableDelegate) CollectTombstones(
 	txnOffset int,
 	policy engine.TombstoneCollectPolicy,
 ) (engine.Tombstoner, error) {
+	if tbl.isForeignTable() {
+		return nil, newForeignTableNotImplementedError(ctx, "tombstone collection")
+	}
 	if tbl.combined.is {
 		return tbl.combined.tbl.CollectTombstones(ctx, txnOffset, policy)
 	}
@@ -423,6 +452,9 @@ func (tbl *txnTableDelegate) GetColumMetadataScanInfo(
 	name string,
 	visitTombstone bool,
 ) ([]*plan.MetadataScanInfo, error) {
+	if tbl.isForeignTable() {
+		return nil, newForeignTableNotImplementedError(ctx, "metadata scan info")
+	}
 	if tbl.combined.is {
 		return tbl.combined.tbl.GetColumMetadataScanInfo(ctx, name, visitTombstone)
 	}
@@ -463,6 +495,9 @@ func (tbl *txnTableDelegate) GetColumMetadataScanInfo(
 func (tbl *txnTableDelegate) ApproxObjectsNum(
 	ctx context.Context,
 ) int {
+	if tbl.isForeignTable() {
+		return 0
+	}
 	if tbl.combined.is {
 		return tbl.combined.tbl.ApproxObjectsNum(ctx)
 	}
@@ -507,6 +542,9 @@ func (tbl *txnTableDelegate) BuildReaders(
 	policy engine.TombstoneApplyPolicy,
 	filterHint engine.FilterHint,
 ) ([]engine.Reader, error) {
+	if tbl.isForeignTable() {
+		return nil, newForeignTableNotImplementedError(ctx, "reader construction")
+	}
 	if tbl.combined.is {
 		return tbl.combined.tbl.BuildReaders(
 			ctx,
@@ -560,6 +598,9 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 	orderBy bool,
 	policy engine.TombstoneApplyPolicy,
 ) ([]engine.Reader, error) {
+	if tbl.isForeignTable() {
+		return nil, newForeignTableNotImplementedError(ctx, "sharding reader construction")
+	}
 	if tbl.combined.is {
 		return tbl.combined.tbl.BuildShardingReaders(
 			ctx,

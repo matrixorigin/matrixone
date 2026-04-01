@@ -50,7 +50,9 @@ func ConstructCreateTableSQL(
 		dbTblName = fmt.Sprintf("`%s`.`%s`", formatStr(schemaName), formatStr(tblName))
 	}
 
-	if tableDef.TableType == catalog.SystemExternalRel {
+	if tableDef.TableType == catalog.SystemForeignRel {
+		createStr = fmt.Sprintf("CREATE FOREIGN TABLE %s (", dbTblName)
+	} else if tableDef.TableType == catalog.SystemExternalRel {
 		createStr = fmt.Sprintf("CREATE EXTERNAL TABLE %s (", dbTblName)
 	} else if tableDef.TableType == catalog.SystemClusterRel {
 		createStr = fmt.Sprintf("CREATE CLUSTER TABLE %s (", dbTblName)

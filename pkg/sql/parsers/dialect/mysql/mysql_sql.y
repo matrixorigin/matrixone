@@ -65,6 +65,8 @@ import (
     tailParam *tree.TailParameter
     connectorOption *tree.ConnectorOption
     connectorOptions []*tree.ConnectorOption
+    connectionOption *tree.ConnectionOption
+    connectionOptions []*tree.ConnectionOption
 
     functionName *tree.FunctionName
     funcArg tree.FunctionArg
@@ -514,11 +516,11 @@ import (
 %type <statements> stmt_list stmt_list_return
 %type <statement> create_stmt insert_stmt insert_no_with_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt upgrade_stmt
 %type <statement> delete_without_using_stmt delete_with_using_stmt
-%type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt drop_connector_stmt drop_function_stmt drop_procedure_stmt drop_sequence_stmt
+%type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt drop_connector_stmt drop_connection_stmt drop_function_stmt drop_procedure_stmt drop_sequence_stmt
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_procedure_stmt create_sequence_stmt
-%type <statement> create_source_stmt create_connector_stmt pause_daemon_task_stmt cancel_daemon_task_stmt resume_daemon_task_stmt
+%type <statement> create_source_stmt create_connector_stmt create_connection_stmt pause_daemon_task_stmt cancel_daemon_task_stmt resume_daemon_task_stmt
 %type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt show_snapshots_stmt show_upgrade_stmt show_rules_on_role_stmt
 %type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_procedure_status_stmt show_function_status_stmt show_node_list_stmt show_locks_stmt
@@ -651,6 +653,8 @@ import (
 %type <tableOption> table_option source_option
 %type <connectorOption> connector_option
 %type <connectorOptions> connector_option_list
+%type <connectionOption> connection_option
+%type <connectionOptions> connection_option_list
 %type <from> from_clause from_opt
 %type <where> where_expression_opt having_opt
 %type <groupBy> group_by_opt
@@ -674,7 +678,7 @@ import (
 %type <str> non_reserved_keyword
 %type <str> equal_opt column_keyword_opt
 %type <str> as_opt_id name_string
-%type <cstr> ident as_name_opt db_name_ident
+%type <cstr> ident as_name_opt db_name_ident connection_options_keyword
 %type <str> table_alias explain_sym prepare_sym deallocate_sym stmt_name reset_sym
 %type <unresolvedObjectName> unresolved_object_name table_column_name
 %type <unresolvedObjectName> table_name_unresolved
@@ -4753,6 +4757,10 @@ show_create_stmt:
     {
 	    $$ = &tree.ShowCreatePublications{Name: $4}
     }
+|   SHOW CREATE CONNECTION ident
+    {
+	    $$ = &tree.ShowCreateConnection{Name: $4.Compare()}
+    }
 
 show_servers_stmt:
     SHOW BACKEND SERVERS
@@ -4823,6 +4831,7 @@ drop_ddl_stmt:
 |   drop_publication_stmt
 |   drop_procedure_stmt
 |   drop_stage_stmt
+|   drop_connection_stmt
 |   drop_connector_stmt
 |   drop_snapshot_stmt
 |   drop_pitr_stmt
@@ -6669,6 +6678,7 @@ create_stmt:
 |   create_account_stmt
 |   create_publication_stmt
 |   create_stage_stmt
+|   create_connection_stmt
 |   create_snapshot_stmt
 |   create_pitr_stmt
 |   create_cdc_stmt
@@ -7395,6 +7405,14 @@ drop_stage_stmt:
         var ifNotExists = $3
         var name = tree.Identifier($4.Compare())
         $$ = tree.NewDropStage(ifNotExists, name)
+    }
+
+drop_connection_stmt:
+    DROP CONNECTION exists_opt ident
+    {
+        var ifExists = $3
+        var name = tree.Identifier($4.Compare())
+        $$ = tree.NewDropConnection(ifExists, name)
     }
 
 remove_stage_files_stmt:
@@ -8142,6 +8160,16 @@ create_connector_stmt:
         )
     }
 
+create_connection_stmt:
+    CREATE CONNECTION not_exists_opt ident TYPE '=' STRING connection_options_keyword '(' connection_option_list ')'
+    {
+        var ifNotExists = $3
+        var name = tree.Identifier($4.Compare())
+        var connType = $7
+        var options = $10
+        $$ = tree.NewCreateConnection(ifNotExists, name, connType, options)
+    }
+
 show_connectors_stmt:
     SHOW CONNECTORS
     {
@@ -8369,6 +8397,16 @@ create_table_stmt:
         t.Table = *$5
         t.Defs = $7
         t.Param = $9
+        $$ = t
+    }
+|   CREATE FOREIGN TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list_opt
+    {
+        t := tree.NewCreateTable()
+        t.IsForeignTable = true
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.Defs = $7
+        t.Options = $9
         $$ = t
     }
 |   CREATE CLUSTER TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list_opt partition_by_opt cluster_by_opt
@@ -9085,6 +9123,32 @@ connector_option:
                 Val,
             )
         }
+
+connection_options_keyword:
+    ident
+    {
+        if !strings.EqualFold($1.Compare(), "options") {
+            yylex.Error("expected OPTIONS")
+            return 1
+        }
+        $$ = $1
+    }
+
+connection_option_list:
+    connection_option
+    {
+        $$ = []*tree.ConnectionOption{$1}
+    }
+|   connection_option_list ',' connection_option
+    {
+        $$ = append($1, $3)
+    }
+
+connection_option:
+    ident equal_opt STRING
+    {
+        $$ = tree.NewConnectionOption(tree.Identifier($1.Compare()), $3)
+    }
 
 source_option_list_opt:
     {

@@ -446,6 +446,10 @@ func (node *ShowCreatePublications) StmtKind() StmtKind {
 	return defaultResRowTyp
 }
 
+func (node *ShowCreateConnection) StmtKind() StmtKind {
+	return compositeResRowType
+}
+
 func (node *ShowPublications) StmtKind() StmtKind {
 	return compositeResRowType
 }
@@ -495,6 +499,10 @@ func (node *RenameTable) StmtKind() StmtKind {
 }
 
 func (node *CreateConnector) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *CreateConnection) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
 
@@ -591,6 +599,10 @@ func (node *Reset) StmtKind() StmtKind {
 }
 
 func (node *DropConnector) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *DropConnection) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
 

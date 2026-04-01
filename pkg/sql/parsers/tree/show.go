@@ -792,6 +792,19 @@ func (node *ShowCreatePublications) Format(ctx *FmtCtx) {
 func (node *ShowCreatePublications) GetStatementType() string { return "Show Create Publication" }
 func (node *ShowCreatePublications) GetQueryType() string     { return QueryTypeOth }
 
+type ShowCreateConnection struct {
+	showImpl
+	Name string
+}
+
+func (node *ShowCreateConnection) Format(ctx *FmtCtx) {
+	ctx.WriteString("show create connection ")
+	ctx.WriteString(node.Name)
+}
+
+func (node *ShowCreateConnection) GetStatementType() string { return "Show Create Connection" }
+func (node *ShowCreateConnection) GetQueryType() string     { return QueryTypeOth }
+
 type ShowTableSize struct {
 	showImpl
 	Table  *UnresolvedObjectName

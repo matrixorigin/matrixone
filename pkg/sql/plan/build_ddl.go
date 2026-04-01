@@ -759,7 +759,9 @@ func buildCreateTable(
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 		}
 		// TODO WHY?
-		if tableDef.TableType == catalog.SystemViewRel || tableDef.TableType == catalog.SystemExternalRel {
+		if tableDef.TableType == catalog.SystemViewRel ||
+			tableDef.TableType == catalog.SystemExternalRel ||
+			tableDef.TableType == catalog.SystemForeignRel {
 			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "%s.%s is not BASE TABLE", dbName, tblName)
 		}
 
@@ -787,6 +789,9 @@ func buildCreateTable(
 		TableDef: &TableDef{
 			Name: string(stmt.Table.ObjectName),
 		},
+	}
+	if stmt.IsForeignTable {
+		createTable.TableDef.TableType = catalog.SystemForeignRel
 	}
 
 	if stmt.PartitionOption != nil {
@@ -834,6 +839,10 @@ func buildCreateTable(
 		if asSelectCols, err = genAsSelectCols(ctx, stmt.AsSource); err != nil {
 			return nil, err
 		}
+	}
+
+	if err = validateCreateForeignTableStmt(ctx.GetContext(), stmt); err != nil {
+		return nil, err
 	}
 
 	if err = buildTableDefs(stmt, ctx, createTable, asSelectCols); err != nil {
@@ -939,6 +948,24 @@ func buildCreateTable(
 			},
 		}
 		createTable.TableDef.TableType = catalog.SystemExternalRel
+		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{
+					Properties: properties,
+				},
+			}})
+	} else if stmt.IsForeignTable {
+		properties := []*plan.Property{
+			{
+				Key:   catalog.SystemRelAttr_Kind,
+				Value: catalog.SystemForeignRel,
+			},
+			{
+				Key:   catalog.SystemRelAttr_CreateSQL,
+				Value: ctx.GetRootSql(),
+			},
+		}
+		createTable.TableDef.TableType = catalog.SystemForeignRel
 		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
 			Def: &plan.TableDef_DefType_Properties{
 				Properties: &plan.PropertiesDef{
@@ -1421,7 +1448,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		// If table does not have a explicit primary key in the ddl statement, a new hidden primary key column will be add,
 		// which will not be sorted or used for any other purpose, but will only be used to add
 		// locks to the Lock operator in pessimistic transaction mode.
-		if !createTable.IsSystemExternalRel() {
+		if !createTable.IsSystemExternalRel() && createTable.TableDef.TableType != catalog.SystemForeignRel {
 			pkeyName = catalog.FakePrimaryKeyColName
 			colDef := &ColDef{
 				ColId:  uint64(len(createTable.TableDef.Cols)),
@@ -1596,6 +1623,34 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					Def:          data.Def,
 				}
 				createTable.FksReferToMe = append(createTable.FksReferToMe, info)
+			}
+		}
+	}
+
+	return nil
+}
+
+func validateCreateForeignTableStmt(ctx context.Context, stmt *tree.CreateTable) error {
+	if !stmt.IsForeignTable {
+		return nil
+	}
+
+	if stmt.Temporary || stmt.IsClusterTable || stmt.Param != nil || stmt.IsDynamicTable ||
+		stmt.IsAsSelect || stmt.IsAsLike || stmt.PartitionOption != nil || stmt.ClusterByOption != nil {
+		return moerr.NewNotSupported(ctx, "unsupported create foreign table variant")
+	}
+
+	for _, def := range stmt.Defs {
+		colDef, ok := def.(*tree.ColumnTableDef)
+		if !ok {
+			return moerr.NewNotSupported(ctx, "create foreign table only supports column definitions")
+		}
+
+		for _, attr := range colDef.Attributes {
+			switch attr.(type) {
+			case *tree.AttributeNull, *tree.AttributeDefault, *tree.AttributeComment, *tree.AttributeOnUpdate:
+			default:
+				return moerr.NewNotSupportedf(ctx, "create foreign table does not support column attribute %T", attr)
 			}
 		}
 	}
@@ -2988,6 +3043,8 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 	} else {
 		if tableDef.TableType == catalog.SystemSourceRel {
 			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "can not truncate source '%v' ", truncateTable.Table)
+		} else if tableDef.TableType == catalog.SystemForeignRel {
+			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "can not truncate foreign table '%v' ", truncateTable.Table)
 		}
 
 		if len(tableDef.RefChildTbls) > 0 {

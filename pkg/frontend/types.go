@@ -89,11 +89,14 @@ const (
 	FPPrepareStmt
 	FPPrepareString
 	FPCreateConnector
+	FPCreateConnection
 	FPPauseDaemonTask
 	FPCancelDaemonTask
 	FPResumeDaemonTask
 	FPDropConnector
+	FPDropConnection
 	FPShowConnectors
+	FPShowCreateConnection
 	FPDeallocate
 	FPReset
 	FPSetVar

@@ -1390,12 +1390,24 @@ func handleCreateStage(ses FeSession, execCtx *ExecCtx, cs *tree.CreateStage) er
 	return doCreateStage(execCtx.reqCtx, ses.(*Session), cs)
 }
 
+func handleCreateConnection(ses FeSession, execCtx *ExecCtx, cs *tree.CreateConnection) error {
+	return doCreateConnection(execCtx.reqCtx, ses.(*Session), cs)
+}
+
 func handleAlterStage(ses FeSession, execCtx *ExecCtx, as *tree.AlterStage) error {
 	return doAlterStage(execCtx.reqCtx, ses.(*Session), as)
 }
 
 func handleDropStage(ses FeSession, execCtx *ExecCtx, ds *tree.DropStage) error {
 	return doDropStage(execCtx.reqCtx, ses.(*Session), ds)
+}
+
+func handleDropConnection(ses FeSession, execCtx *ExecCtx, ds *tree.DropConnection) error {
+	return doDropConnection(execCtx.reqCtx, ses.(*Session), ds)
+}
+
+func handleShowCreateConnection(ses FeSession, execCtx *ExecCtx, sc *tree.ShowCreateConnection) error {
+	return doShowCreateConnection(execCtx.reqCtx, ses.(*Session), sc)
 }
 
 func handleRemoveStageFiles(ses FeSession, execCtx *ExecCtx, rs *tree.RemoveStageFiles) error {

@@ -96,6 +96,12 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err != nil {
 			return
 		}
+	case *tree.CreateConnection:
+		ses.EnterFPrint(FPCreateConnection)
+		defer ses.ExitFPrint(FPCreateConnection)
+		if err = handleCreateConnection(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.PauseDaemonTask:
 		ses.EnterFPrint(FPPauseDaemonTask)
 		defer ses.ExitFPrint(FPPauseDaemonTask)
@@ -124,10 +130,22 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err != nil {
 			return
 		}
+	case *tree.DropConnection:
+		ses.EnterFPrint(FPDropConnection)
+		defer ses.ExitFPrint(FPDropConnection)
+		if err = handleDropConnection(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.ShowConnectors:
 		ses.EnterFPrint(FPShowConnectors)
 		defer ses.ExitFPrint(FPShowConnectors)
 		if err = handleShowConnectors(execCtx.reqCtx, ses); err != nil {
+			return
+		}
+	case *tree.ShowCreateConnection:
+		ses.EnterFPrint(FPShowCreateConnection)
+		defer ses.ExitFPrint(FPShowCreateConnection)
+		if err = handleShowCreateConnection(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.Deallocate:

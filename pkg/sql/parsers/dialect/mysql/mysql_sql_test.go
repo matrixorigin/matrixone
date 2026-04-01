@@ -103,6 +103,41 @@ func TestDataBranchDiffOutputModes(t *testing.T) {
 	require.True(t, diffStmt.OutputOpt.Count)
 }
 
+func TestCreateForeignTable(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), "create foreign table if not exists db1.t1 (a int not null default 1 comment 'id') comment 'foreign'", 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateTable)
+	require.True(t, ok)
+	require.True(t, createStmt.IsForeignTable)
+	require.Equal(t, "create foreign table if not exists db1.t1 (a int not null default 1 comment id) comment = 'foreign'", tree.String(createStmt, dialect.MYSQL))
+}
+
+func TestConnectionStatements(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), "create connection if not exists conn_pg type = 'pg' options (host = '127.0.0.1', port = '5432', user = 'mo', password = 'pw''1')", 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateConnection)
+	require.True(t, ok)
+	require.True(t, createStmt.IfNotExists)
+	require.Equal(t, "create connection if not exists conn_pg type = 'pg' options (host = '127.0.0.1', port = '5432', user = 'mo', password = 'pw''1')", tree.String(createStmt, dialect.MYSQL))
+
+	stmt, err = ParseOne(context.TODO(), "drop connection if exists conn_pg", 1)
+	require.NoError(t, err)
+
+	dropStmt, ok := stmt.(*tree.DropConnection)
+	require.True(t, ok)
+	require.True(t, dropStmt.IfExists)
+	require.Equal(t, "drop connection if exists conn_pg", tree.String(dropStmt, dialect.MYSQL))
+
+	stmt, err = ParseOne(context.TODO(), "show create connection conn_pg", 1)
+	require.NoError(t, err)
+
+	showStmt, ok := stmt.(*tree.ShowCreateConnection)
+	require.True(t, ok)
+	require.Equal(t, "show create connection conn_pg", tree.String(showStmt, dialect.MYSQL))
+}
+
 var (
 	partitionSQL = struct {
 		input  string
@@ -974,16 +1009,16 @@ var (
 			input:  "load data local infile 'data' replace into table db.a (a, b, @vc, @vd) set a = @vc != 0, d = @vd != 1",
 			output: "load data local infile data replace into table db.a (a, b, @vc, @vd) set a = @vc != 0, d = @vd != 1",
 		}, {
-			input:  "load data local infile 'data' replace into table db.a lines starting by '#' terminated by '\t' ignore 2 lines",
+			input: "load data local infile 'data' replace into table db.a lines starting by '#' terminated by '\t' ignore 2 lines",
 			output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
 		}, {
-			input:  "load data local infile 'data' replace into table db.a lines starting by '#' terminated by '\t' ignore 2 rows",
+			input: "load data local infile 'data' replace into table db.a lines starting by '#' terminated by '\t' ignore 2 rows",
 			output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
 		}, {
-			input:  "load data local infile 'data' replace into table db.a lines terminated by '\t' starting by '#' ignore 2 lines",
+			input: "load data local infile 'data' replace into table db.a lines terminated by '\t' starting by '#' ignore 2 lines",
 			output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
 		}, {
-			input:  "load data local infile 'data' replace into table db.a lines terminated by '\t' starting by '#' ignore 2 rows",
+			input: "load data local infile 'data' replace into table db.a lines terminated by '\t' starting by '#' ignore 2 rows",
 			output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
 		}, {
 			input:  "load data infile 'data.txt' into table db.a fields terminated by '\t' escaped by '\t'",

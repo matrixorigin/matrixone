@@ -148,11 +148,20 @@ func (db *txnDatabase) relation(ctx context.Context, name string, proc any) (eng
 		return nil, nil
 	}
 
-	tbl, err := newTxnTable(
-		ctx,
-		db,
-		*item,
-	)
+	var tbl engine.Relation
+	if item.Kind == catalog.SystemForeignRel {
+		tbl, err = newForeignTxnTable(
+			ctx,
+			db,
+			*item,
+		)
+	} else {
+		tbl, err = newTxnTable(
+			ctx,
+			db,
+			*item,
+		)
+	}
 	if err != nil {
 		return nil, err
 	}
