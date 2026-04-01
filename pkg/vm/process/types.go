@@ -373,6 +373,7 @@ func (proc *Process) SetStmtProfile(sp *StmtProfile) {
 	// Reset division by zero cache for new statement
 	// Each statement must recompute based on its own type and sql_mode
 	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, -1)
+	proc.Base.Warnings.Store(0)
 }
 
 func (proc *Process) GetStmtProfile() *StmtProfile {
