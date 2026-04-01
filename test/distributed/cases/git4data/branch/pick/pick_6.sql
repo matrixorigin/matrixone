@@ -99,4 +99,98 @@ drop snapshot sp2;
 drop table t1;
 drop table t2;
 
+-- ----------------------------------------------------------------
+-- case 6: snapshot chain — pick from historical state
+-- ----------------------------------------------------------------
+
+drop snapshot if exists sp_v1;
+drop snapshot if exists sp_v2;
+drop snapshot if exists sp_v3;
+
+create table t1 (a int, b varchar(20), primary key(a));
+insert into t1 values (1, 'v0'), (2, 'v0'), (3, 'v0');
+
+create snapshot sp_v1 for account sys;
+
+update t1 set b = 'v1' where a = 1;
+insert into t1 values (4, 'v1');
+
+create snapshot sp_v2 for account sys;
+
+update t1 set b = 'v2' where a = 2;
+delete from t1 where a = 3;
+insert into t1 values (5, 'v2');
+
+create snapshot sp_v3 for account sys;
+
+-- current state: {(1,'v1'),(2,'v2'),(4,'v1'),(5,'v2')} — pk=3 deleted
+
+create table t2 (a int, b varchar(20), primary key(a));
+
+-- pick from v1 snapshot: all values are 'v0'
+data branch pick t1{snapshot=sp_v1} into t2 keys(1, 2, 3);
+select * from t2 order by a;
+-- expect: (1,'v0'),(2,'v0'),(3,'v0')
+
+drop table t2;
+
+-- pick from v2 snapshot: pk=1 is 'v1', pk=4 exists
+create table t2 (a int, b varchar(20), primary key(a));
+data branch pick t1{snapshot=sp_v2} into t2 keys(1, 4);
+select * from t2 order by a;
+-- expect: (1,'v1'),(4,'v1')
+
+drop snapshot sp_v1;
+drop snapshot sp_v2;
+drop snapshot sp_v3;
+drop table t1;
+drop table t2;
+
+-- ----------------------------------------------------------------
+-- case 7: larger scale with snapshot — 100 rows
+-- ----------------------------------------------------------------
+
+drop snapshot if exists sp_100;
+
+create table t1 (a int, b int, primary key(a));
+insert into t1 select *, result * 3 from generate_series(1, 100) g;
+
+create snapshot sp_100 for account sys;
+
+-- modify heavily after snapshot
+delete from t1 where a > 80;
+update t1 set b = 0 where a <= 20;
+
+create table t2 (a int, b int, primary key(a));
+
+-- pick from snapshot: should get original values
+data branch pick t1{snapshot=sp_100} into t2 keys(1, 50, 100);
+select * from t2 order by a;
+-- expect: (1,3),(50,150),(100,300) — original values before modifications
+
+drop snapshot sp_100;
+drop table t1;
+drop table t2;
+
+-- ----------------------------------------------------------------
+-- case 8: pick into table with existing data — no conflicts
+-- ----------------------------------------------------------------
+
+create table t1 (a int, b int, primary key(a));
+insert into t1 values (1,1),(2,2),(3,3),(4,4),(5,5);
+
+create table t2 (a int, b int, primary key(a));
+insert into t2 values (10,10),(20,20),(30,30);
+
+-- pick from t1 into t2 — different PKs, no conflicts
+data branch pick t1 into t2 keys(1, 3, 5);
+select * from t2 order by a;
+-- expect: {1,3,5,10,20,30}
+
+select count(*) from t2;
+-- expect: 6
+
+drop table t1;
+drop table t2;
+
 drop database test;

@@ -76,4 +76,68 @@ select * from t1 order by a asc;
 0  ¦  3
 drop table t1;
 drop table t2;
+drop snapshot if exists sp_str;
+create table t1 (name varchar(50), val int, primary key(name));
+insert into t1 values ('alice',1),('bob',2),('charlie',3);
+create snapshot sp_str for account sys;
+update t1 set val = 999 where name = 'alice';
+insert into t1 values ('dave', 4);
+create table t2 (name varchar(50), val int, primary key(name));
+data branch pick t1{snapshot=sp_str} into t2 keys('alice', 'bob', 'dave');
+select * from t2 order by name;
+➤ name[12,-1,0]  ¦  val[4,32,0]  𝄀
+alice  ¦  1  𝄀
+bob  ¦  2
+drop snapshot sp_str;
+drop table t1;
+drop table t2;
+create table t1 (
+id int primary key,
+amount decimal(10,2),
+created date,
+note varchar(50)
+);
+insert into t1 values
+(1, 99.99, '2025-01-01', 'first'),
+(2, 200.50, '2025-02-15', 'second');
+create table t2 (
+id int primary key,
+amount decimal(10,2),
+created date,
+note varchar(50)
+);
+insert into t2 values
+(1, 99.99, '2025-01-01', 'first'),
+(3, 1234.56, '2025-03-20', 'third'),
+(4, 0.01, '2025-12-31', 'tiny');
+data branch pick t2 into t1 keys(3, 4);
+select * from t1 order by id;
+➤ id[4,32,0]  ¦  amount[3,10,2]  ¦  created[91,64,0]  ¦  note[12,-1,0]  𝄀
+1  ¦  99.99  ¦  2025-01-01  ¦  first  𝄀
+2  ¦  200.50  ¦  2025-02-15  ¦  second  𝄀
+3  ¦  1234.56  ¦  2025-03-20  ¦  third  𝄀
+4  ¦  0.01  ¦  2025-12-31  ¦  tiny
+select id, amount from t1 where id in (3, 4) order by id;
+➤ id[4,32,0]  ¦  amount[3,10,2]  𝄀
+3  ¦  1234.56  𝄀
+4  ¦  0.01
+drop table t1;
+drop table t2;
+create table t1 (a int, b varchar(200), primary key(a));
+insert into t1 values (1, 'short');
+create table t2 (a int, b varchar(200), primary key(a));
+insert into t2 values
+(1, 'short'),
+(2, 'this is a moderately long string with numbers 12345 and special chars !@#$%'),
+(3, ''),
+(4, 'line1\nline2');
+data branch pick t2 into t1 keys(2, 3, 4);
+select a, length(b) from t1 order by a;
+➤ a[4,32,0]  ¦  length(b)[-5,64,0]  𝄀
+1  ¦  5  𝄀
+2  ¦  75  𝄀
+3  ¦  0  𝄀
+4  ¦  11
+drop table t1;
+drop table t2;
 drop database test;

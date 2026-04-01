@@ -73,4 +73,60 @@ data branch diff t2 against t1;
 drop table t1;
 drop table t2;
 
+-- ----------------------------------------------------------------
+-- case 4: DELETE + INSERT + UPDATE mix — medium scale
+-- ----------------------------------------------------------------
+
+create table t0 (a int, b varchar(20), primary key(a));
+insert into t0 select *, 'orig' from generate_series(1, 30) g;
+
+data branch create table t1 from t0;
+data branch create table t2 from t0;
+
+-- t2: mixed operations
+delete from t2 where a in (5, 10, 15, 20, 25, 30);
+update t2 set b = 'modified' where a in (1, 2, 3, 4);
+insert into t2 values (31, 'new31'), (32, 'new32'), (33, 'new33');
+
+-- pick the deletes + one insert + one update
+data branch pick t2 into t1 keys(5, 10, 15, 31, 1);
+select * from t1 where a in (1, 5, 10, 15, 31) order by a asc;
+-- expect: (1,'modified'), (31,'new31'); pk=5,10,15 deleted
+
+select count(*) from t1;
+-- expect: 28 (30 original - 3 deleted + 1 inserted)
+
+-- verify remaining diff
+data branch diff t2 against t1;
+
+drop table t0;
+drop table t1;
+drop table t2;
+
+-- ----------------------------------------------------------------
+-- case 5: large batch pick — 200 rows, pick 50
+-- ----------------------------------------------------------------
+
+create table t1 (a int, b int, primary key(a));
+insert into t1 select *, 0 from generate_series(1, 100) g;
+
+create table t2 (a int, b int, primary key(a));
+insert into t2 select *, result * 2 from generate_series(1, 200) g;
+
+-- pick every 4th row from the extension range
+data branch pick t2 into t1 keys(
+    104, 108, 112, 116, 120, 124, 128, 132, 136, 140,
+    144, 148, 152, 156, 160, 164, 168, 172, 176, 180,
+    184, 188, 192, 196, 200
+);
+select count(*) from t1;
+-- expect: 125 (100 + 25 picked)
+
+-- verify a specific picked row
+select * from t1 where a = 200;
+-- expect: (200, 400)
+
+drop table t1;
+drop table t2;
+
 drop database test;

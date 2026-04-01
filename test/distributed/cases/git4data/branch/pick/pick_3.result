@@ -82,4 +82,49 @@ t2  ¦  INSERT  ¦  7  ¦  7  𝄀
 t2  ¦  INSERT  ¦  9  ¦  9
 drop table t1;
 drop table t2;
+create table t0 (a int, b varchar(20), primary key(a));
+insert into t0 select *, 'orig' from generate_series(1, 30) g;
+data branch create table t1 from t0;
+data branch create table t2 from t0;
+delete from t2 where a in (5, 10, 15, 20, 25, 30);
+update t2 set b = 'modified' where a in (1, 2, 3, 4);
+insert into t2 values (31, 'new31'), (32, 'new32'), (33, 'new33');
+data branch pick t2 into t1 keys(5, 10, 15, 31, 1);
+select * from t1 where a in (1, 5, 10, 15, 31) order by a asc;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  modified  𝄀
+31  ¦  new31
+select count(*) from t1;
+➤ count(*)[-5,64,0]  𝄀
+28
+data branch diff t2 against t1;
+➤ diff t2 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[12,0,0]  𝄀
+t2  ¦  UPDATE  ¦  2  ¦  modified  𝄀
+t2  ¦  UPDATE  ¦  3  ¦  modified  𝄀
+t2  ¦  UPDATE  ¦  4  ¦  modified  𝄀
+t2  ¦  DELETE  ¦  20  ¦  orig  𝄀
+t2  ¦  DELETE  ¦  25  ¦  orig  𝄀
+t2  ¦  DELETE  ¦  30  ¦  orig  𝄀
+t2  ¦  INSERT  ¦  32  ¦  new32  𝄀
+t2  ¦  INSERT  ¦  33  ¦  new33
+drop table t0;
+drop table t1;
+drop table t2;
+create table t1 (a int, b int, primary key(a));
+insert into t1 select *, 0 from generate_series(1, 100) g;
+create table t2 (a int, b int, primary key(a));
+insert into t2 select *, result * 2 from generate_series(1, 200) g;
+data branch pick t2 into t1 keys(
+104, 108, 112, 116, 120, 124, 128, 132, 136, 140,
+144, 148, 152, 156, 160, 164, 168, 172, 176, 180,
+184, 188, 192, 196, 200
+);
+select count(*) from t1;
+➤ count(*)[-5,64,0]  𝄀
+125
+select * from t1 where a = 200;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+200  ¦  400
+drop table t1;
+drop table t2;
 drop database test;

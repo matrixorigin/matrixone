@@ -82,4 +82,64 @@ drop table t0;
 drop table t1;
 drop table t2;
 
+-- ----------------------------------------------------------------
+-- case 4: conflict with NULL values in non-PK columns
+-- ----------------------------------------------------------------
+
+create table t0 (a int, b int, c varchar(20), primary key(a));
+insert into t0 values (1, 10, 'hello'), (2, 20, NULL), (3, NULL, 'world');
+
+data branch create table t1 from t0;
+data branch create table t2 from t0;
+
+-- both sides insert pk=4 with different NULL patterns
+insert into t1 values (4, 100, NULL);
+insert into t2 values (4, NULL, 'new');
+
+-- conflict: same PK, different values
+data branch pick t2 into t1 keys(4) when conflict fail;
+
+data branch pick t2 into t1 keys(4) when conflict skip;
+select * from t1 where a = 4;
+-- expect: (4, 100, NULL) — kept t1 value
+
+data branch pick t2 into t1 keys(4) when conflict accept;
+select * from t1 where a = 4;
+-- expect: (4, NULL, 'new') — took t2 value
+
+drop table t0;
+drop table t1;
+drop table t2;
+
+-- ----------------------------------------------------------------
+-- case 5: larger scale conflicts — batch with mixed outcomes
+-- ----------------------------------------------------------------
+
+create table t0 (a int, b int, primary key(a));
+insert into t0 select *, 0 from generate_series(1, 20) g;
+
+data branch create table t1 from t0;
+data branch create table t2 from t0;
+
+-- t1: update even numbers
+update t1 set b = a * 10 where a % 2 = 0;
+
+-- t2: update multiples of 3 + insert new rows
+update t2 set b = a * 100 where a % 3 = 0;
+insert into t2 values (21, 21), (22, 22), (23, 23);
+
+-- pk=6,12,18: both sides updated — source wins (update conflicts not detected)
+-- pk=21,22,23: new inserts from t2
+data branch pick t2 into t1 keys(6, 12, 18, 21, 22, 23) when conflict skip;
+select * from t1 where a in (6, 12, 18, 21, 22, 23) order by a asc;
+-- expect: 6→600, 12→1200, 18→1800 (src wins), 21→21, 22→22, 23→23
+
+data branch pick t2 into t1 keys(6) when conflict accept;
+select * from t1 where a = 6;
+-- expect: (6, 600) — already t2's value
+
+drop table t0;
+drop table t1;
+drop table t2;
+
 drop database test;
