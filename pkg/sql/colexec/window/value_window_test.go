@@ -15,6 +15,7 @@
 package window
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -205,6 +206,37 @@ func TestProcessValueFunc_NthValue(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		require.Equal(t, int32(10), vector.MustFixedColNoTypeCheck[int32](result)[i])
 	}
+}
+
+func TestProcessValueFunc_ErrorPathFreesLocalResult(t *testing.T) {
+	srcMP := mpool.MustNewZero()
+	resultMP, err := mpool.NewMPool("value-window-error", 1<<20, mpool.NoFixed)
+	require.NoError(t, err)
+
+	proc := testutil.NewProcessWithMPool(t, "", resultMP)
+
+	large := strings.Repeat("x", 700*1024)
+	bat := makeVarcharBatch(srcMP, []string{large, large, large, large})
+	spec := makeLeadWindowSpec()
+	spec.Typ = plan.Type{Id: int32(types.T_varchar)}
+	spec.Expr.(*plan.Expr_W).W.WindowFunc.Typ = plan.Type{Id: int32(types.T_varchar)}
+
+	ctr := &container{bat: bat}
+	ctr.aggVecs = make([]group.ExprEvalVector, 1)
+	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0]}
+
+	ap := &Window{WinSpecList: []*plan.Expr{spec}}
+
+	result, err := ctr.processValueFunc(0, ap, proc)
+	require.Error(t, err)
+	require.Nil(t, result)
+	require.Equal(t, int64(0), resultMP.CurrNB())
+
+	bat.Clean(srcMP)
+	proc.Free()
+	require.Equal(t, int64(0), resultMP.CurrNB())
+	require.Equal(t, int64(0), srcMP.CurrNB())
+	mpool.DeleteMPool(resultMP)
 }
 
 // TestProcessValueFunc_NthValueWithN tests nth_value(expr, 3) with unbounded frame.
