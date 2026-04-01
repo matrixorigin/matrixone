@@ -750,11 +750,16 @@ func TestSubQuery(t *testing.T) {
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
+	// should pass: aggregation with non-equal predicate in scalar subquery
+	sqls = []string{
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY)",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+
 	// should error
 	sqls = []string{
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION222)",                                 // table not exist
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY222)", // column not exist
-		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY)",    // related
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION) for update",                         // not support
 	}
 	runTestShouldError(mock, t, sqls)
