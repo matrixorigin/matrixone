@@ -53,6 +53,14 @@ func AnySegmentOverlaps(objZM ZM, segments [][]byte) bool {
 	}
 
 	t := objZM.GetType()
+
+	// Guard: if the object ZoneMap type differs from the segment type,
+	// skip pruning and include conservatively.  This happens when
+	// tombstone objects (T_Rowid sort key) are compared against PK
+	// filter segments of a different type (e.g., T_int32).
+	if segZM := ZM(segments[0]); segZM.IsInited() && segZM.GetType() != t {
+		return true
+	}
 	scale := objZM.GetScale()
 	objMin := objZM.GetMinBuf()
 	objMax := objZM.GetMaxBuf()
