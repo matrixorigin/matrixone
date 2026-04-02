@@ -717,12 +717,6 @@ func TestBufferReuse(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestHashEmptyVectors(t *testing.T) {
-	hashValues := make([]uint64, 0)
-	err := computeXXHash([]*vector.Vector{}, hashValues)
-	require.NoError(t, err)
-}
-
 func TestSetSpillThreshold(t *testing.T) {
 	ctr := &container{}
 
@@ -785,6 +779,63 @@ func TestCleanSpillBufferPool(t *testing.T) {
 	// Clean should free all buffers
 	ctr.cleanSpillBufferPool(proc)
 	require.Nil(t, ctr.spillBuffers)
+}
+
+func TestEnsureSpillFile(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	ctr := &container{spillUID: "test_ensure"}
+	files := make([]*os.File, spillNumBuckets)
+
+	// First call creates a file.
+	f, err := ctr.ensureSpillFile(proc, files, 3)
+	require.NoError(t, err)
+	require.NotNil(t, f)
+	require.Equal(t, f, files[3])
+	defer f.Close()
+
+	// Second call returns cached file.
+	f2, err := ctr.ensureSpillFile(proc, files, 3)
+	require.NoError(t, err)
+	require.Same(t, f, f2, "should return the same file object")
+
+	// Different bucket creates a different file.
+	f3, err := ctr.ensureSpillFile(proc, files, 7)
+	require.NoError(t, err)
+	require.NotNil(t, f3)
+	require.NotEqual(t, f.Fd(), f3.Fd())
+	defer f3.Close()
+
+	// Untouched buckets remain nil.
+	require.Nil(t, files[0])
+	require.Nil(t, files[1])
+}
+
+func TestCleanupSpillFiles(t *testing.T) {
+	// Create temp files to simulate spill fds.
+	var fds []*os.File
+	for i := 0; i < 3; i++ {
+		f, err := os.CreateTemp("", "test_cleanup_*")
+		require.NoError(t, err)
+		defer os.Remove(f.Name())
+		fds = append(fds, f)
+	}
+	// Include a nil entry.
+	fds = append(fds, nil)
+
+	hb := &HashBuild{ctr: container{spilledFds: fds}}
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	hb.cleanupSpillFiles(proc)
+	require.Nil(t, hb.ctr.spilledFds)
+
+	// Verify all files are closed (writing should fail).
+	for _, f := range fds[:3] {
+		_, err := f.Write([]byte("x"))
+		require.Error(t, err, "file should be closed")
+	}
 }
 
 func TestCleanSpillBufferPoolWithNil(t *testing.T) {

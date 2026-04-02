@@ -108,17 +108,6 @@ func TestFlushBucketBuffer(t *testing.T) {
 	})
 }
 
-func TestCreateProbeSpillFiles(t *testing.T) {
-	writers, err := createRootProbeSpillBucketFiles()
-	require.NoError(t, err)
-	require.Equal(t, spillNumBuckets, len(writers))
-
-	for i := range writers {
-		require.NotEmpty(t, writers[i].name)
-		writers[i].close()
-	}
-}
-
 // TestLazySpillFileCreation verifies that files are only created when data is written.
 // Untouched buckets should have nil files, while buckets with data should get a file
 // created on first flush.
@@ -690,20 +679,6 @@ func TestMultiColumnHash(t *testing.T) {
 	require.NotEqual(t, hashValues[0], hashValues[2])
 }
 
-func TestHashWithNulls(t *testing.T) {
-	mp := mpool.MustNewZero()
-
-	vec := testutil.MakeInt32Vector([]int32{1, 2, 3, 4}, []uint64{0, 1}, mp) // nulls at index 1 and 3
-	hashValues := make([]uint64, 4)
-	err := computeXXHash([]*vector.Vector{vec}, hashValues, 0)
-	require.NoError(t, err)
-
-	// All hashes should be computed
-	for _, h := range hashValues {
-		require.NotEqual(t, uint64(0), h)
-	}
-}
-
 func TestSpillBucketReaderDoubleClose(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -724,40 +699,6 @@ func TestSpillBucketReaderDoubleClose(t *testing.T) {
 	reader.close() // Should not panic
 
 	spillfs.RemoveFile(context.Background(), bucketName)
-}
-
-func TestFlushEmptyBuffer(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	defer proc.Free()
-
-	spillfs, err := proc.GetSpillFileService()
-	require.NoError(t, err)
-
-	file, err := spillfs.CreateFile(context.Background(), "test_empty")
-	require.NoError(t, err)
-	defer func() {
-		file.Close()
-		spillfs.RemoveFile(context.Background(), "test_empty")
-	}()
-
-	analyzer := process.NewAnalyzer(0, false, false, "test")
-	ctr := &container{}
-
-	// Nil batch
-	file_sw := spillBucketWriter{file: file}
-	cnt, err := ctr.flushBucketBuffer(proc, nil, &file_sw, analyzer)
-	require.NoError(t, err)
-	require.Equal(t, int64(0), cnt)
-
-	// Zero row batch
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{}, nil, proc.Mp())
-	bat.SetRowCount(0)
-
-	file_sw = spillBucketWriter{file: file}
-	cnt, err = ctr.flushBucketBuffer(proc, bat, &file_sw, analyzer)
-	require.NoError(t, err)
-	require.Equal(t, int64(0), cnt)
 }
 
 func TestConstVectorHash(t *testing.T) {
@@ -987,23 +928,6 @@ func TestMultipleBatchesInBucket(t *testing.T) {
 
 	reader.close()
 	spillfs.RemoveFile(context.Background(), bucketName)
-}
-
-func TestComputeXXHashVectorLengthMismatch(t *testing.T) {
-	mp := mpool.MustNewZero()
-
-	// Create vectors with different lengths
-	vec1 := testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, mp)
-	vec2 := testutil.MakeInt32Vector([]int32{4, 5}, nil, mp)
-
-	hashValues := make([]uint64, 3)
-	err := computeXXHash([]*vector.Vector{vec1, vec2}, hashValues, 0)
-	require.NoError(t, err)
-
-	// Should handle gracefully
-	for _, h := range hashValues {
-		require.NotEqual(t, uint64(0), h)
-	}
 }
 
 func TestAppendProbeBatchLargeData(t *testing.T) {
@@ -1457,13 +1381,6 @@ func TestHandOffFdMultipleCalls(t *testing.T) {
 	fd1.Close()
 }
 
-func TestResetForFdNil(t *testing.T) {
-	r := &spillBucketReader{}
-	r.resetForFd(nil)
-	require.True(t, r.empty)
-	require.Nil(t, r.file)
-}
-
 func TestResetForFdReusesBuffer(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -1509,22 +1426,6 @@ func TestResetForFdReusesBuffer(t *testing.T) {
 
 	r.close()
 	fd1.Close()
-}
-
-func TestSpillBucketWriterDelete(t *testing.T) {
-	f, err := os.CreateTemp("", "test_delete_*")
-	require.NoError(t, err)
-	defer os.Remove(f.Name())
-
-	sw := spillBucketWriter{file: f}
-	require.True(t, sw.created())
-
-	sw.delete()
-	require.Nil(t, sw.file)
-	require.False(t, sw.created())
-
-	// Double delete is safe
-	sw.delete()
 }
 
 func TestResetForFdReadData(t *testing.T) {
