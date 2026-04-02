@@ -287,20 +287,10 @@ public:
     }
 
     void start() override {
-        auto init_fn = [&](raft_handle_wrapper_t& handle) -> std::any {
-            std::shared_lock<std::shared_mutex> lock(this->mutex_);
-            if (index_) {
-                handle.set_index_ptr(static_cast<const ivf_pq_index*>(index_.get()));
-            }
+        auto init_fn = [&](raft_handle_wrapper_t&) -> std::any {
             return std::any();
         };
         auto stop_fn = [&](raft_handle_wrapper_t&) -> std::any {
-            std::unique_lock<std::shared_mutex> lock(this->mutex_);
-            index_.reset();
-            this->replicated_indices_.clear();
-            this->replicated_datasets_.clear();
-            this->quantizer_.reset();
-            this->dataset_device_ptr_.reset();
             return std::any();
         };
         this->worker->start(init_fn, stop_fn);

@@ -486,8 +486,8 @@ public:
                 // Each thread in the pool gets its own raft::resources (so separate CUDA streams)
                 raft_handle handle(device_id, rank, mode_);
                 
-                if (init_fn) init_fn(handle);
-                this->run_device_loop(handle, stop_fn, device_idx);
+		// only main thread will run init_fn and stop_fn
+                this->run_device_loop(handle, nullptr, device_idx);
             });
         }
     }
@@ -542,6 +542,7 @@ public:
         // 4. Drain physical queues (defensive; should be empty after sync)
         cuvs_task_t task;
         while (main_tasks_.try_pop(task)) {
+            in_flight_tasks_--;
             if (!task.fire_and_forget) {
                 cuvs_task_result_t result;
                 result.error = std::make_exception_ptr(std::runtime_error("Worker stopped"));
@@ -550,6 +551,7 @@ public:
         }
         for (auto& q : device_queues_) {
             while (q->try_pop(task)) {
+                in_flight_tasks_--;
                 if (!task.fire_and_forget) {
                     cuvs_task_result_t result;
                     result.error = std::make_exception_ptr(std::runtime_error("Worker stopped"));

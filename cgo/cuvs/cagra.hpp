@@ -312,20 +312,10 @@ public:
     }
 
     void start() override {
-        auto init_fn = [&](raft_handle_wrapper_t& handle) -> std::any {
-            std::shared_lock<std::shared_mutex> lock(this->mutex_);
-            if (index_) {
-                handle.set_index_ptr(static_cast<const cagra_index*>(index_.get()));
-            }
+        auto init_fn = [&](raft_handle_wrapper_t&) -> std::any {
             return std::any();
         };
         auto stop_fn = [&](raft_handle_wrapper_t&) -> std::any {
-            std::unique_lock<std::shared_mutex> lock(this->mutex_);
-            index_.reset();
-            this->replicated_indices_.clear();
-            this->replicated_datasets_.clear();
-            this->quantizer_.reset();
-            this->dataset_device_ptr_.reset();
             return std::any();
         };
         this->worker->start(init_fn, stop_fn);
@@ -787,8 +777,9 @@ public:
         search_res.neighbors.resize(num_queries * limit);
         search_res.distances.resize(num_queries * limit);
 
-        cuvs::neighbors::cagra::search_params search_params;
+        cuvs::neighbors::cagra::search_params search_params{};
         search_params.itopk_size = sp.itopk_size;
+        search_params.search_width = sp.search_width;
 
         const cagra_index* local_index = nullptr;
         std::any cached_ptr = handle.get_index_ptr();
@@ -1031,8 +1022,9 @@ public:
         search_res.neighbors.resize(num_queries * limit);
         search_res.distances.resize(num_queries * limit);
 
-        cuvs::neighbors::cagra::search_params search_params;
+        cuvs::neighbors::cagra::search_params search_params{};
         search_params.itopk_size = sp.itopk_size;
+        search_params.search_width = sp.search_width;
 
         const cagra_index* local_index = nullptr;
         std::any cached_ptr = handle.get_index_ptr();

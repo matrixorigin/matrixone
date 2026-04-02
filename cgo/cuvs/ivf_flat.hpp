@@ -145,7 +145,6 @@ public:
     using search_result_t = ivf_flat_search_result_t;
 
     std::unique_ptr<ivf_flat_index> index_;
-    std::unique_ptr<mg_index> mg_index_;
     std::string data_filename_;
 
     ~gpu_ivf_flat_t() override {
@@ -232,13 +231,6 @@ public:
     void start() override {
         auto init_fn = [](raft_handle_wrapper_t&) -> std::any { return std::any(); };
         auto stop_fn = [&](raft_handle_wrapper_t& /*handle*/) -> std::any {
-            std::unique_lock<std::shared_mutex> lock(this->mutex_);
-            index_.reset();
-            mg_index_.reset();
-            this->replicated_indices_.clear();
-            this->replicated_datasets_.clear();
-            this->quantizer_.reset();
-            this->dataset_device_ptr_.reset();
             return std::any();
         };
         this->worker->start(init_fn, stop_fn);
@@ -1104,8 +1096,7 @@ public:
     }
 
     void save(const std::string& filename) const {
-        if (!this->is_loaded_ || (!index_ && !mg_index_)) throw std::runtime_error("Index not built");
-        if (mg_index_) throw std::runtime_error("Saving multi-GPU index not supported yet");
+        if (!this->is_loaded_ || (!index_)) throw std::runtime_error("Index not built");
         
         uint64_t job_id = this->worker->submit_main(
             [&](raft_handle_wrapper_t& handle) -> std::any {
@@ -1163,9 +1154,8 @@ public:
 
     // Save all index components to a directory with manifest.json.
     void save_dir(const std::string& dir) const {
-        if (!this->is_loaded_ || (!index_ && !mg_index_ && this->replicated_indices_.empty()))
+        if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty()))
             throw std::runtime_error("IVF-Flat index not built; cannot save_dir");
-        if (mg_index_) throw std::runtime_error("Saving multi-GPU index not supported yet");
 
         this->ensure_dir(dir);
         auto comp_entries = this->save_common_components(dir);
@@ -1350,7 +1340,6 @@ public:
         if (this->worker) this->worker->stop();
         std::unique_lock<std::shared_mutex> lock(this->mutex_);
         index_.reset();
-        mg_index_.reset();
         this->replicated_indices_.clear();
         this->replicated_datasets_.clear();
         this->quantizer_.reset();

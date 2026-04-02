@@ -156,9 +156,6 @@ public:
     void start() override {
         auto init_fn = [](raft_handle_wrapper_t&) -> std::any { return std::any(); };
         auto stop_fn = [&](raft_handle_wrapper_t&) -> std::any {
-            std::unique_lock<std::shared_mutex> lock(this->mutex_);
-            centroids_.reset();
-            this->quantizer_.reset();
             return std::any();
         };
         this->worker->start(init_fn, stop_fn);

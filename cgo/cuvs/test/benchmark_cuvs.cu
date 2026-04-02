@@ -27,6 +27,7 @@
 #include <atomic>
 #include <iomanip>
 #include <string>
+#include <cuda_runtime.h>
 #include <cuda_fp16.h>
 
 using namespace matrixone;
@@ -164,8 +165,8 @@ void benchmark_all_indices(const std::vector<float>& dataset, const benchmark_co
     // CAGRA
     {
         cagra_build_params_t bp = cagra_build_params_default();
-        bp.intermediate_graph_degree = 256;
-        bp.graph_degree = 128;
+        // bp.intermediate_graph_degree = 256;
+        // bp.graph_degree = 32;
         
         for (auto mode : modes) {
             std::vector<int> active_devices = (mode == DistributionMode_SINGLE_GPU) ? 
@@ -179,8 +180,10 @@ void benchmark_all_indices(const std::vector<float>& dataset, const benchmark_co
             
             cagra_search_params_t sp = cagra_search_params_default();
             sp.itopk_size = 128;
+            sp.search_width = 1;
             run_benchmark<gpu_cagra_t<T>, cagra_search_params_t, T>("Cagra", mode, index, recall_queries, recall_expected_ids, cfg, sp);
             index.destroy();
+            cudaDeviceSynchronize();
         }
     }
 
