@@ -17,10 +17,11 @@
 package brute_force
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/malloc"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -28,6 +29,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
+
+// gpuSearchF32Pool pools temporary float32 distance buffers used by Search when
+// converting from the native float32 GPU output to the float64 interface return type.
+var gpuSearchF32Pool = sync.Pool{New: func() any { s := make([]float32, 0); return &s }}
 
 type GpuAdhocBruteForceIndex[T cuvs.VectorType] struct {
 	dataset   []T
@@ -125,7 +130,8 @@ func (idx *GpuAdhocBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return nil
 }
 
-func (idx *GpuAdhocBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig) (retkeys any, retdistances []float64, err error) {
+// SearchFloat32 implements VectorIndexSearchIf — writes results into caller-provided slices.
+func (idx *GpuAdhocBruteForceIndex[T]) SearchFloat32(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
 	var flattenedQueries []T
 	var nQueries uint64
 
@@ -135,7 +141,7 @@ func (idx *GpuAdhocBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries
 		nQueries = uint64(len(queries) / int(idx.dimension))
 	case [][]T:
 		if len(queries) == 0 {
-			return nil, nil, nil
+			return nil
 		}
 		dim := int(idx.dimension)
 		reqSize := len(queries) * dim
@@ -145,28 +151,55 @@ func (idx *GpuAdhocBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries
 		}
 		nQueries = uint64(len(queries))
 	default:
-		return nil, nil, moerr.NewInternalErrorNoCtx("queries type invalid")
+		return moerr.NewInternalErrorNoCtx("queries type invalid")
 	}
 
+	if nQueries == 0 {
+		return nil
+	}
+
+	return cuvs.AdhocBruteForceSearchInto[T](
+		idx.dataset, uint64(idx.count), uint32(idx.dimension),
+		flattenedQueries, nQueries, uint32(rt.Limit),
+		resolveCuvsDistance(idx.metric),
+		outKeys, outDists,
+	)
+}
+
+func (idx *GpuAdhocBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig) (retkeys any, retdistances []float64, err error) {
+	var nQueries uint64
+	switch queries := _queries.(type) {
+	case []T:
+		nQueries = uint64(len(queries) / int(idx.dimension))
+	case [][]T:
+		nQueries = uint64(len(queries))
+	default:
+		return nil, nil, moerr.NewInternalErrorNoCtx("queries type invalid")
+	}
 	if nQueries == 0 {
 		return nil, nil, nil
 	}
 
-	neighbors, distances, err := cuvs.AdhocBruteForceSearch[T](
-		idx.dataset, uint64(idx.count), uint32(idx.dimension),
-		flattenedQueries, nQueries, uint32(rt.Limit),
-		resolveCuvsDistance(idx.metric),
-	)
-	if err != nil {
+	n := nQueries * uint64(rt.Limit)
+	keys := make([]int64, n)
+
+	f32Ptr := gpuSearchF32Pool.Get().(*[]float32)
+	if uint64(cap(*f32Ptr)) < n {
+		*f32Ptr = make([]float32, n)
+	} else {
+		*f32Ptr = (*f32Ptr)[:n]
+	}
+	defer gpuSearchF32Pool.Put(f32Ptr)
+
+	if err = idx.SearchFloat32(proc, _queries, rt, keys, *f32Ptr); err != nil {
 		return nil, nil, err
 	}
 
-	retdistances = make([]float64, len(distances))
-	for i, d := range distances {
+	retdistances = make([]float64, n)
+	for i, d := range *f32Ptr {
 		retdistances[i] = float64(d)
 	}
-
-	retkeys = neighbors
+	retkeys = keys
 	return
 }
 
@@ -288,14 +321,15 @@ func (idx *GpuBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) (err error) 
 	return idx.index.Build()
 }
 
-func (idx *GpuBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig) (retkeys any, retdistances []float64, err error) {
+// SearchFloat32 implements VectorIndexSearchIf — writes results into caller-provided slices.
+// This is the hot path: no intermediate allocations for the output buffers.
+func (idx *GpuBruteForceIndex[T]) SearchFloat32(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
 	queriesvec, ok := _queries.([][]T)
 	if !ok {
-		return nil, nil, moerr.NewInternalErrorNoCtx("queries type invalid")
+		return moerr.NewInternalErrorNoCtx("queries type invalid")
 	}
-
 	if len(queriesvec) == 0 {
-		return nil, nil, nil
+		return nil
 	}
 
 	dim := int(idx.dimension)
@@ -310,7 +344,7 @@ func (idx *GpuBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any,
 		allocator := malloc.NewCAllocator()
 		slice, dealloc, err2 := allocator.Allocate(uint64(reqSize)*4, malloc.NoClear)
 		if err2 != nil {
-			return nil, nil, err2
+			return err2
 		}
 		queryDeallocator = dealloc
 		f32Slice := util.UnsafeSliceCastToLength[float32](slice, reqSize)
@@ -319,15 +353,13 @@ func (idx *GpuBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any,
 		allocator := malloc.NewCAllocator()
 		slice, dealloc, err2 := allocator.Allocate(uint64(reqSize)*2, malloc.NoClear)
 		if err2 != nil {
-			return nil, nil, err2
+			return err2
 		}
 		queryDeallocator = dealloc
 		f16Slice := util.UnsafeSliceCastToLength[cuvs.Float16](slice, reqSize)
 		flattenedQueries = any(f16Slice).([]T)
 	default:
-		// Not pooling other types, although T is likely only float32 for CUVS
-		ds := make([]T, reqSize)
-		flattenedQueries = ds
+		flattenedQueries = make([]T, reqSize)
 	}
 
 	for i, v := range queriesvec {
@@ -338,17 +370,38 @@ func (idx *GpuBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any,
 		defer queryDeallocator.Deallocate()
 	}
 
-	neighbors, distances, err := idx.index.Search(flattenedQueries, uint64(len(queriesvec)), uint32(idx.dimension), uint32(rt.Limit))
-	if err != nil {
+	return idx.index.SearchInto(flattenedQueries, uint64(len(queriesvec)), uint32(idx.dimension), uint32(rt.Limit), outKeys, outDists)
+}
+
+func (idx *GpuBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig) (retkeys any, retdistances []float64, err error) {
+	queriesvec, ok := _queries.([][]T)
+	if !ok {
+		return nil, nil, moerr.NewInternalErrorNoCtx("queries type invalid")
+	}
+	if len(queriesvec) == 0 {
+		return nil, nil, nil
+	}
+
+	n := uint64(len(queriesvec)) * uint64(rt.Limit)
+	keys := make([]int64, n)
+
+	f32Ptr := gpuSearchF32Pool.Get().(*[]float32)
+	if uint64(cap(*f32Ptr)) < n {
+		*f32Ptr = make([]float32, n)
+	} else {
+		*f32Ptr = (*f32Ptr)[:n]
+	}
+	defer gpuSearchF32Pool.Put(f32Ptr)
+
+	if err = idx.SearchFloat32(proc, _queries, rt, keys, *f32Ptr); err != nil {
 		return nil, nil, err
 	}
 
-	retdistances = make([]float64, len(distances))
-	for i, d := range distances {
+	retdistances = make([]float64, n)
+	for i, d := range *f32Ptr {
 		retdistances[i] = float64(d)
 	}
-
-	retkeys = neighbors
+	retkeys = keys
 	return
 }
 

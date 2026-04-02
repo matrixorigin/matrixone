@@ -48,6 +48,10 @@ func (m *MockSearch) Load(*sqlexec.SqlProcess) error {
 	return nil
 }
 
+func (m *MockSearch) SearchFloat32(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
+	return nil
+}
+
 func (m *MockSearch) UpdateConfig(newalgo VectorIndexSearchIf) error {
 	return nil
 }
@@ -67,6 +71,10 @@ func (m *MockAnySearch) Destroy() {
 
 func (m *MockAnySearch) Load(*sqlexec.SqlProcess) error {
 	//time.Sleep(6 * time.Second)
+	return nil
+}
+
+func (m *MockAnySearch) SearchFloat32(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
 	return nil
 }
 
@@ -92,6 +100,10 @@ func (m *MockSearchLoadError) Load(*sqlexec.SqlProcess) error {
 	return moerr.NewInternalErrorNoCtx("Load from database error")
 }
 
+func (m *MockSearchLoadError) SearchFloat32(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
+	return nil
+}
+
 func (m *MockSearchLoadError) UpdateConfig(newalgo VectorIndexSearchIf) error {
 	return nil
 }
@@ -111,6 +123,10 @@ func (m *MockSearchSearchError) Destroy() {
 }
 
 func (m *MockSearchSearchError) Load(*sqlexec.SqlProcess) error {
+	return nil
+}
+
+func (m *MockSearchSearchError) SearchFloat32(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
 	return nil
 }
 

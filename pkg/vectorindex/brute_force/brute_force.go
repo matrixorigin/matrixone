@@ -161,6 +161,23 @@ func (idx *UsearchBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return nil
 }
 
+func (idx *UsearchBruteForceIndex[T]) SearchFloat32(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
+	keys, dists, err := idx.Search(proc, _queries, rt)
+	if err != nil {
+		return err
+	}
+	if keys == nil {
+		return nil
+	}
+	for i, k := range keys.([]int64) {
+		outKeys[i] = k
+	}
+	for i, d := range dists {
+		outDists[i] = float32(d)
+	}
+	return nil
+}
+
 func (idx *UsearchBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	var flatten []T
 	var queryDeallocator malloc.Deallocator
@@ -272,6 +289,88 @@ func (idx *GoBruteForceIndex[T]) UpdateConfig(sif cache.VectorIndexSearchIf) err
 }
 
 func (idx *GoBruteForceIndex[T]) Destroy() {
+}
+
+// SearchFloat32 implements VectorIndexSearchIf — writes results directly into caller-provided
+// slices, eliminating the intermediate []int64 and []float64 heap allocations of Search.
+func (idx *GoBruteForceIndex[T]) SearchFloat32(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
+	queries, ok := _queries.([][]T)
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("queries type invalid")
+	}
+
+	distfn, err := metric.ResolveDistanceFn[T](idx.Metric)
+	if err != nil {
+		return err
+	}
+
+	nthreads := rt.NThreads
+	nqueries := len(queries)
+	limit := int(rt.Limit)
+
+	if limit == 0 {
+		return nil
+	}
+
+	exec := concurrent.NewThreadPoolExecutor(int(nthreads))
+	return exec.Execute(
+		proc.GetContext(),
+		nqueries,
+		func(ctx context.Context, thread_id int, start, end int) error {
+			var heapKeysBuf []int64
+			var heapDistBuf []T
+			if limit > 1 {
+				heapKeysBuf = make([]int64, limit)
+				heapDistBuf = make([]T, limit)
+			}
+
+			for k := start; k < end; k++ {
+				q := queries[k]
+				if k%100 == 0 && ctx.Err() != nil {
+					return ctx.Err()
+				}
+
+				if limit == 1 {
+					minDist := metric.MaxFloat[T]()
+					minIdx := -1
+					for j := range idx.Dataset {
+						dist, err2 := distfn(q, idx.Dataset[j])
+						if err2 != nil {
+							return err2
+						}
+						if dist < minDist {
+							minDist = dist
+							minIdx = j
+						}
+					}
+					outKeys[k] = int64(minIdx)
+					outDists[k] = float32(minDist)
+					continue
+				}
+
+				h := vectorindex.NewFastMaxHeap(limit, heapKeysBuf, heapDistBuf)
+				for j := range idx.Dataset {
+					dist, err2 := distfn(q, idx.Dataset[j])
+					if err2 != nil {
+						return err2
+					}
+					h.Push(int64(j), dist)
+				}
+
+				offset := k * limit
+				for j := limit - 1; j >= 0; j-- {
+					key, dist, ok := h.Pop()
+					if !ok {
+						outKeys[offset+j] = -1
+						outDists[offset+j] = 0
+						continue
+					}
+					outKeys[offset+j] = key
+					outDists[offset+j] = float32(dist)
+				}
+			}
+			return nil
+		})
 }
 
 func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {

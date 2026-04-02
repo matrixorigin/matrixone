@@ -114,6 +114,10 @@ func (m *MockSearch) Load(*sqlexec.SqlProcess) error {
 	return nil
 }
 
+func (m *MockSearch) SearchFloat32(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
+	return nil
+}
+
 func (m *MockSearch) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
 	return nil
 }

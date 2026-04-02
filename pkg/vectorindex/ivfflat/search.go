@@ -678,6 +678,23 @@ func (s *IvfflatSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 }
 
 // check config and update some parameters such as ef_search
+func (s *IvfflatSearch[T]) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
+	keys, dists, err := s.Search(proc, query, rt)
+	if err != nil {
+		return err
+	}
+	if keys == nil {
+		return nil
+	}
+	for i, k := range keys.([]int64) {
+		outKeys[i] = k
+	}
+	for i, d := range dists {
+		outDists[i] = float32(d)
+	}
+	return nil
+}
+
 func (s *IvfflatSearch[T]) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
 	return nil
 }

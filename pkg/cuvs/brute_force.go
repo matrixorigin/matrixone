@@ -177,13 +177,14 @@ func (gb *GpuBruteForce[T]) AddChunkFloat(chunk []float32, chunkCount uint64) er
 	return nil
 }
 
-// Search performs a search operation
-func (gb *GpuBruteForce[T]) Search(queries []T, numQueries uint64, queryDimension uint32, limit uint32) ([]int64, []float32, error) {
+// SearchInto performs a search and writes results into caller-provided slices (no internal allocation).
+// neighbors and distances must be pre-allocated to at least numQueries*limit elements.
+func (gb *GpuBruteForce[T]) SearchInto(queries []T, numQueries uint64, queryDimension uint32, limit uint32, neighbors []int64, distances []float32) error {
 	if gb.cIndex == nil {
-		return nil, nil, moerr.NewInternalErrorNoCtx("GpuBruteForce is not initialized")
+		return moerr.NewInternalErrorNoCtx("GpuBruteForce is not initialized")
 	}
 	if len(queries) == 0 || numQueries == 0 || queryDimension == 0 {
-		return nil, nil, moerr.NewInternalErrorNoCtx("queries, num_queries, and query_dimension cannot be zero")
+		return moerr.NewInternalErrorNoCtx("queries, num_queries, and query_dimension cannot be zero")
 	}
 
 	var errmsg *C.char
@@ -200,32 +201,37 @@ func (gb *GpuBruteForce[T]) Search(queries []T, numQueries uint64, queryDimensio
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))
-		return nil, nil, moerr.NewInternalErrorNoCtx(errStr)
+		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	if cResult == nil {
-		return nil, nil, moerr.NewInternalErrorNoCtx("search returned nil result")
+		return moerr.NewInternalErrorNoCtx("search returned nil result")
 	}
-
-	// Allocate slices for results
-	neighbors := make([]int64, numQueries*uint64(limit))
-	distances := make([]float32, numQueries*uint64(limit))
 
 	C.gpu_brute_force_get_results(cResult, C.uint64_t(numQueries), C.uint32_t(limit), (*C.int64_t)(unsafe.Pointer(&neighbors[0])), (*C.float)(unsafe.Pointer(&distances[0])))
 	runtime.KeepAlive(neighbors)
 	runtime.KeepAlive(distances)
-
 	C.gpu_brute_force_free_search_result(cResult)
+	return nil
+}
 
+// Search performs a search operation
+func (gb *GpuBruteForce[T]) Search(queries []T, numQueries uint64, queryDimension uint32, limit uint32) ([]int64, []float32, error) {
+	neighbors := make([]int64, numQueries*uint64(limit))
+	distances := make([]float32, numQueries*uint64(limit))
+	if err := gb.SearchInto(queries, numQueries, queryDimension, limit, neighbors, distances); err != nil {
+		return nil, nil, err
+	}
 	return neighbors, distances, nil
 }
 
-// SearchFloat performs a search operation with float32 queries
-func (gb *GpuBruteForce[T]) SearchFloat(queries []float32, numQueries uint64, queryDimension uint32, limit uint32) ([]int64, []float32, error) {
+// SearchFloatInto performs a search with float32 queries and writes results into caller-provided slices.
+// neighbors and distances must be pre-allocated to at least numQueries*limit elements.
+func (gb *GpuBruteForce[T]) SearchFloatInto(queries []float32, numQueries uint64, queryDimension uint32, limit uint32, neighbors []int64, distances []float32) error {
 	if gb.cIndex == nil {
-		return nil, nil, moerr.NewInternalErrorNoCtx("GpuBruteForce is not initialized")
+		return moerr.NewInternalErrorNoCtx("GpuBruteForce is not initialized")
 	}
 	if len(queries) == 0 || numQueries == 0 || queryDimension == 0 {
-		return nil, nil, moerr.NewInternalErrorNoCtx("queries, num_queries, and query_dimension cannot be zero")
+		return moerr.NewInternalErrorNoCtx("queries, num_queries, and query_dimension cannot be zero")
 	}
 
 	var errmsg *C.char
@@ -242,22 +248,26 @@ func (gb *GpuBruteForce[T]) SearchFloat(queries []float32, numQueries uint64, qu
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))
-		return nil, nil, moerr.NewInternalErrorNoCtx(errStr)
+		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	if cResult == nil {
-		return nil, nil, moerr.NewInternalErrorNoCtx("search returned nil result")
+		return moerr.NewInternalErrorNoCtx("search returned nil result")
 	}
-
-	// Allocate slices for results
-	neighbors := make([]int64, numQueries*uint64(limit))
-	distances := make([]float32, numQueries*uint64(limit))
 
 	C.gpu_brute_force_get_results(cResult, C.uint64_t(numQueries), C.uint32_t(limit), (*C.int64_t)(unsafe.Pointer(&neighbors[0])), (*C.float)(unsafe.Pointer(&distances[0])))
 	runtime.KeepAlive(neighbors)
 	runtime.KeepAlive(distances)
-
 	C.gpu_brute_force_free_search_result(cResult)
+	return nil
+}
 
+// SearchFloat performs a search operation with float32 queries
+func (gb *GpuBruteForce[T]) SearchFloat(queries []float32, numQueries uint64, queryDimension uint32, limit uint32) ([]int64, []float32, error) {
+	neighbors := make([]int64, numQueries*uint64(limit))
+	distances := make([]float32, numQueries*uint64(limit))
+	if err := gb.SearchFloatInto(queries, numQueries, queryDimension, limit, neighbors, distances); err != nil {
+		return nil, nil, err
+	}
 	return neighbors, distances, nil
 }
 

@@ -24,9 +24,54 @@ package cuvs
 */
 import "C"
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"runtime"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
+
+// AdhocBruteForceSearchInto performs an ad-hoc brute-force search and writes results into
+// caller-provided slices (no internal allocation).
+// neighbors and distances must be pre-allocated to at least nQueries*limit elements.
+func AdhocBruteForceSearchInto[T VectorType](
+	dataset []T,
+	nRows uint64,
+	dim uint32,
+	queries []T,
+	nQueries uint64,
+	limit uint32,
+	metric DistanceType,
+	neighbors []int64,
+	distances []float32,
+) error {
+	qtype := GetQuantization[T]()
+
+	var errmsg *C.char
+	C.gpu_adhoc_brute_force_search(
+		unsafe.Pointer(&dataset[0]),
+		C.uint64_t(nRows),
+		C.uint32_t(dim),
+		unsafe.Pointer(&queries[0]),
+		C.uint64_t(nQueries),
+		C.uint32_t(limit),
+		C.distance_type_t(metric),
+		C.quantization_t(qtype),
+		(*C.int64_t)(unsafe.Pointer(&neighbors[0])),
+		(*C.float)(unsafe.Pointer(&distances[0])),
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(dataset)
+	runtime.KeepAlive(queries)
+	runtime.KeepAlive(neighbors)
+	runtime.KeepAlive(distances)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
 
 // AdhocBruteForceSearch performs an ad-hoc brute-force search on GPU without using a worker thread.
 // The GPU device is selected automatically using round-robin across all available devices.
@@ -43,31 +88,10 @@ func AdhocBruteForceSearch[T VectorType](
 		return nil, nil, nil
 	}
 
-	qtype := GetQuantization[T]()
-
 	neighbors := make([]int64, nQueries*uint64(limit))
 	distances := make([]float32, nQueries*uint64(limit))
-
-	var errmsg *C.char
-	C.gpu_adhoc_brute_force_search(
-		unsafe.Pointer(&dataset[0]),
-		C.uint64_t(nRows),
-		C.uint32_t(dim),
-		unsafe.Pointer(&queries[0]),
-		C.uint64_t(nQueries),
-		C.uint32_t(limit),
-		C.distance_type_t(metric),
-		C.quantization_t(qtype),
-		(*C.int64_t)(unsafe.Pointer(&neighbors[0])),
-		(*C.float)(unsafe.Pointer(&distances[0])),
-		unsafe.Pointer(&errmsg),
-	)
-
-	if errmsg != nil {
-		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
-		return nil, nil, moerr.NewInternalErrorNoCtx(errStr)
+	if err := AdhocBruteForceSearchInto(dataset, nRows, dim, queries, nQueries, limit, metric, neighbors, distances); err != nil {
+		return nil, nil, err
 	}
-
 	return neighbors, distances, nil
 }
