@@ -534,11 +534,9 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 	}
 	defer func() {
 		if err != nil {
+			usearchidx.Destroy()
 			if idx.Index == usearchidx {
-				idx.Index.Destroy()
 				idx.Index = nil
-			} else {
-				usearchidx.Destroy()
 			}
 		}
 	}()
@@ -765,11 +763,9 @@ func (idx *HnswModel[T]) LoadIndex(
 	}
 	defer func() {
 		if err != nil {
+			usearchidx.Destroy()
 			if idx.Index == usearchidx {
-				idx.Index.Destroy()
 				idx.Index = nil
-			} else {
-				usearchidx.Destroy()
 			}
 		}
 	}()

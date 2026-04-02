@@ -559,3 +559,51 @@ func TestTempFileCleanup_ChecksumMismatch(t *testing.T) {
 	require.Equal(t, len(before), len(after),
 		"temp file leaked after LoadIndex checksum mismatch (view=false)")
 }
+
+// TestCorruptedIndexFile covers the usearchidx cleanup defer and
+// View/Load error paths when a file has valid checksum but is not a
+// valid usearch index (e.g. disk corruption, truncated write).
+func TestCorruptedIndexFile(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	idxcfg.Usearch.Metric = usearch.L2sq
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src",
+		MetadataTable: "__secondary_meta", IndexTable: "__secondary_index",
+		IndexCapacity: 64}
+
+	garbage := []byte{}
+
+	// Helper: create an empty file with matching checksum.
+	makeEmptyFile := func(t *testing.T) (string, string) {
+		t.Helper()
+		p := filepath.Join(t.TempDir(), "empty.hnsw")
+		require.NoError(t, os.WriteFile(p, garbage, 0644))
+		cs, err := vectorindex.CheckSum(p)
+		require.NoError(t, err)
+		return p, cs
+	}
+
+	// LoadIndexFromBuffer: checksum passes, View() fails → usearchidx cleanup.
+	p0, cs0 := makeEmptyFile(t)
+	idx0 := &HnswModel[float32]{Path: p0, FileSize: int64(len(garbage)), Checksum: cs0}
+	err := idx0.LoadIndexFromBuffer(sqlproc, idxcfg, tblcfg, 0, true)
+	require.Error(t, err, "View() should fail on empty file")
+	require.Nil(t, idx0.Index)
+
+	// LoadIndex (view=true): Load() fails → usearchidx cleanup.
+	p1, cs1 := makeEmptyFile(t)
+	idx1 := &HnswModel[float32]{Path: p1, FileSize: int64(len(garbage)), Checksum: cs1}
+	err = idx1.LoadIndex(sqlproc, idxcfg, tblcfg, 0, true)
+	require.Error(t, err, "Load() should fail on empty file (view=true)")
+	require.Nil(t, idx1.Index)
+
+	// LoadIndex (view=false): Load() fails → usearchidx cleanup.
+	p2, cs2 := makeEmptyFile(t)
+	idx2 := &HnswModel[float32]{Path: p2, FileSize: int64(len(garbage)), Checksum: cs2}
+	err = idx2.LoadIndex(sqlproc, idxcfg, tblcfg, 0, false)
+	require.Error(t, err, "Load() should fail on empty file (view=false)")
+	require.Nil(t, idx2.Index)
+}
