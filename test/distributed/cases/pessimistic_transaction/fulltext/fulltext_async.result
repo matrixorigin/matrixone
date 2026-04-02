@@ -10,8 +10,8 @@ insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy ca
 (10, NULL, NULL);
 create table src2 (id1 varchar, id2 bigint, body char(128), title text, primary key (id1, id2), FULLTEXT ftidx(body, title) ASYNC);
 insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('id2', 2, 'blue', 't3'), ('id3', 3, 'blue red', 't4'),  ('id4', 4, 'bright red null', NULL);
-select sleep(20);
-sleep(20)
+select sleep(40);
+sleep(40)
 0
 select * from src where match(body, title) against('red');
 id    body    title
