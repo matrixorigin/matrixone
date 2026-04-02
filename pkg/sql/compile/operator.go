@@ -1781,9 +1781,17 @@ func constructApply(n, right *plan.Node, applyType int, proc *process.Process) *
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
-	rightTyps := make([]types.Type, len(right.TableDef.Cols))
-	for i, expr := range right.TableDef.Cols {
-		rightTyps[i] = dupType(&expr.Typ)
+	var rightTyps []types.Type
+	if right.NodeType == plan.Node_FUNCTION_SCAN {
+		rightTyps = make([]types.Type, len(right.TableDef.Cols))
+		for i, expr := range right.TableDef.Cols {
+			rightTyps[i] = dupType(&expr.Typ)
+		}
+	} else {
+		rightTyps = make([]types.Type, len(right.ProjectList))
+		for i, expr := range right.ProjectList {
+			rightTyps[i] = dupType(&expr.Typ)
+		}
 	}
 	arg := apply.NewArgument()
 	arg.ApplyType = applyType
