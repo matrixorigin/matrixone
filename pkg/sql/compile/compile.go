@@ -503,6 +503,9 @@ func (c *Compile) runOnce() (err error) {
 	if err = detectReplaceSelfReferDelete(c); err != nil {
 		return err
 	}
+	if err = executeReplaceDeleteForIrregularIndexes(c); err != nil {
+		return err
+	}
 
 	if c.IsTpQuery() && len(c.scopes) == 1 {
 		if err = c.run(c.scopes[0]); err != nil {
@@ -4844,6 +4847,52 @@ func detectReplaceSelfReferDelete(c *Compile) error {
 			c.debugLogFor19288(err, sql)
 			return err
 		}
+	}
+	return nil
+}
+
+func executeReplaceDeleteForIrregularIndexes(c *Compile) error {
+	query := c.pn.GetQuery()
+	if query == nil || len(query.GetSteps()) == 0 {
+		return nil
+	}
+
+	rootNode := query.GetNodes()[query.GetSteps()[len(query.GetSteps())-1]]
+	if rootNode == nil || rootNode.GetNodeType() == plan.Node_MULTI_UPDATE {
+		return nil
+	}
+
+	var tableDef *plan.TableDef
+	var objRef *plan.ObjectRef
+	if rootNode.GetNodeType() == plan.Node_INSERT {
+		tableDef = rootNode.GetTableDef()
+		objRef = rootNode.GetObjRef()
+	}
+	if tableDef == nil || objRef == nil || !plan2.HasIrregularIndexes(tableDef) {
+		return nil
+	}
+
+	stmts, err := mysql.Parse(c.proc.Ctx, c.sql, 1)
+	if err != nil {
+		return err
+	}
+	if len(stmts) != 1 {
+		return nil
+	}
+	stmt, ok := stmts[0].(*tree.Replace)
+	if !ok {
+		return nil
+	}
+
+	deleteCond := plan2.BuildReplaceDeleteCondition(tableDef, stmt)
+	if deleteCond == "" {
+		return nil
+	}
+
+	sql := fmt.Sprintf("delete from `%s`.`%s` where %s", objRef.GetSchemaName(), tableDef.GetName(), deleteCond)
+	if err = c.runSql(sql); err != nil {
+		c.debugLogFor19288(err, sql)
+		return err
 	}
 	return nil
 }

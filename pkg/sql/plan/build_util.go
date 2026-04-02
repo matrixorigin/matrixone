@@ -1047,6 +1047,18 @@ func GenSqlsForCheckReplaceSelfReferParentDelete(
 	return ret, nil
 }
 
+func HasIrregularIndexes(tableDef *plan.TableDef) bool {
+	if tableDef == nil {
+		return false
+	}
+	for _, idxDef := range tableDef.Indexes {
+		if !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
+			return true
+		}
+	}
+	return false
+}
+
 func getAllReplaceKeys(tableDef *plan.TableDef) []map[string]struct{} {
 	n := 0
 	for _, index := range tableDef.Indexes {

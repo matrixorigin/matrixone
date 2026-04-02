@@ -99,6 +99,17 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 		v2.TxnStatementBuildInsertHistogram.Observe(time.Since(start).Seconds())
 	}()
 
+	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "replace")
+	if err != nil {
+		return nil, err
+	}
+	if len(tblInfo.tableDefs) != 1 {
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "replace does not support multi-table")
+	}
+	if HasIrregularIndexes(tblInfo.tableDefs[0]) {
+		return buildInsert(rewriteReplaceAsInsert(stmt), ctx, false, isPrepareStmt)
+	}
+
 	builder := NewQueryBuilder(plan.Query_INSERT, ctx, isPrepareStmt, true)
 	builder.parseOptimizeHints()
 	bindCtx := NewBindContext(builder, nil)
@@ -118,13 +129,6 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 	if err != nil {
 		return nil, err
 	}
-	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "replace")
-	if err != nil {
-		return nil, err
-	}
-	if len(tblInfo.tableDefs) != 1 {
-		return nil, moerr.NewInvalidInput(ctx.GetContext(), "replace does not support multi-table")
-	}
 	sqls, err := genSqlsForCheckFKSelfRefer(
 		ctx.GetContext(),
 		tblInfo.objRef[0].SchemaName,
@@ -141,6 +145,15 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 			Query: query,
 		},
 	}, err
+}
+
+func rewriteReplaceAsInsert(stmt *tree.Replace) *tree.Insert {
+	return &tree.Insert{
+		Table:          stmt.Table,
+		PartitionNames: stmt.PartitionNames,
+		Columns:        stmt.Columns,
+		Rows:           stmt.Rows,
+	}
 }
 
 func bindAndOptimizeLoadQuery(ctx CompilerContext, stmt *tree.Load, isPrepareStmt bool, skipStats bool) (*Plan, error) {

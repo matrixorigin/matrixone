@@ -1336,3 +1336,66 @@ func TestBindAndOptimizeReplaceKeepsSelfReferDetectSqls(t *testing.T) {
 	assert.NotNil(t, query)
 	assert.NotEmpty(t, query.GetDetectSqls())
 }
+
+func TestBindAndOptimizeReplaceWithHnswIndexUsesInsertPlan(t *testing.T) {
+	ctx := NewEmptyCompilerContext()
+	ctx.ctx = context.Background()
+	ctx.isDml = true
+	ctx.objects["vectors"] = &ObjectRef{
+		SchemaName: "db",
+		ObjName:    "vectors",
+	}
+	ctx.tables["vectors"] = &TableDef{
+		TblId:     2,
+		DbName:    "db",
+		Name:      "vectors",
+		TableType: catalog.SystemOrdinaryRel,
+		Name2ColIndex: map[string]int32{
+			"id":           0,
+			"embedding":    1,
+			catalog.Row_ID: 2,
+		},
+		Cols: []*ColDef{
+			{Name: "id", ColId: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "embedding", ColId: 2, Typ: plan.Type{Id: int32(types.T_array_float32), Width: 3}},
+			{Name: catalog.Row_ID, ColId: 3, Typ: plan.Type{Id: int32(types.T_Rowid)}, Hidden: true},
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: "id",
+			Names:       []string{"id"},
+		},
+		Indexes: []*plan.IndexDef{
+			{
+				IndexName:  "idx_hnsw",
+				IndexAlgo:  "hnsw",
+				Parts:      []string{"embedding"},
+				TableExist: true,
+			},
+		},
+	}
+
+	stmts, err := mysql.Parse(ctx.GetContext(), "replace into db.vectors(id, embedding) values (1, '[1,2,3]')", 1)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+
+	stmt, ok := stmts[0].(*tree.Replace)
+	assert.True(t, ok)
+	if !ok {
+		return
+	}
+
+	plan0, err := bindAndOptimizeReplaceQuery(ctx, stmt, false, true)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+
+	query := plan0.GetQuery()
+	assert.NotNil(t, query)
+	assert.Equal(t, plan.Query_INSERT, query.GetStmtType())
+	for _, node := range query.GetNodes() {
+		assert.NotEqual(t, plan.Node_MULTI_UPDATE, node.GetNodeType())
+	}
+}
